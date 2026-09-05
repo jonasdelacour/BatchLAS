@@ -1,20 +1,14 @@
 // Bidiagonal divide-and-conquer SVD. This does NOT port LAPACK's dlasd0/2/3/4/8:
 // it reduces the bidiagonal SVD to a symmetric tridiagonal eigenproblem that
 // `stedc` already solves. For B upper bidiagonal with diagonal d and
-// superdiagonal e, the Golub-Kahan-Jordan-Wielandt matrix [0 B^T; B 0] has
-// eigenvalues +/- sigma_i, and under the perfect shuffle
-// y = (v_0, u_0, v_1, u_1, ...) it is TRIDIAGONAL with a zero diagonal and
-// off-diagonal (d_0, e_0, d_1, e_1, ..., e_{n-2}, d_{n-1}), 2n-1 entries.
-// Nothing is squared, so the condition number is not either; the price is that
-// the eigenvector matrix is 2n x 2n.
-//
-// The extraction is exact, not heuristic: for sigma != 0 the eigenvector of T is
-// forced to the interleaved form (alpha v; beta u), so splitting it into even and
-// odd rows and normalising each half recovers v and u even when the +/- pair is
-// numerically mixed. The exception is the null space, where the whole degenerate
-// subspace mixes and the columns come back full-norm and individually plausible
-// while being parallel to each other; those are rebuilt by Gram-Schmidt, safe
-// because any orthonormal completion satisfies B = U S V^T to within 2*sigma.
+// superdiagonal e, the Golub-Kahan matrix [0 B^T; B 0] has eigenvalues
+// +/- sigma_i, and under the perfect shuffle y = (v_0, u_0, v_1, u_1, ...) it is
+// TRIDIAGONAL with a zero diagonal and off-diagonal
+// (d_0, e_0, d_1, e_1, ..., e_{n-2}, d_{n-1}), 2n-1 entries. Nothing is squared,
+// so the condition number is not either; the price is a 2n x 2n eigenvector
+// matrix. Splitting an eigenvector into its even (-> v) and odd (-> u) rows and
+// normalising each half is exact, not heuristic: for sigma != 0 the eigenvector
+// is forced to the interleaved form (alpha v; beta u).
 
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/backend_config.h>
@@ -83,8 +77,7 @@ BdsdcWorkspace<T> bdsdc_layout(Queue& ctx,
     ws.lambda = VectorView<T>(l_span, N, batch, 1, N);
 
     // Z is allocated even when only values are wanted: stedc unconditionally clears
-    // the eigenvector view it is handed, so a null view would fault, and D&C needs
-    // the sub-problem eigenvectors to form the secular vector regardless.
+    // the eigenvector view it is handed, so a null view would fault.
     static_cast<void>(want_vectors);
     auto z_span = pool.allocate<T>(ctx, static_cast<size_t>(N) * static_cast<size_t>(N) * nb);
     ws.Z = MatrixView<T, MatrixFormat::Dense>(z_span.data(), N, N, N,
@@ -168,8 +161,7 @@ void bdsdc_extract_values(Queue& ctx,
 }
 
 // One work-group per (batch item, output column): split the eigenvector into its
-// even rows (-> v) and odd rows (-> u) and normalise each half. The trailing
-// sigma ~ 0 columns are rebuilt by the repair pass that follows.
+// even rows (-> v) and odd rows (-> u) and normalise each half.
 template <Backend B, typename T>
 void bdsdc_extract_vectors(Queue& ctx,
                            const BdsdcWorkspace<T>& ws,
@@ -224,11 +216,10 @@ void bdsdc_extract_vectors(Queue& ctx,
                 sig[static_cast<size_t>(b) * static_cast<size_t>(nn) + i] = sycl::fmax(L(src, b), T(0));
             }
 
-            // Guard the amplification, not just division by zero. The exact half-norm is
-            // 1/sqrt(2); a half that has been rotated away can come back at 1e-20, and
-            // 1/1e-20 writes +-inf into the column, which turns every later dot product
-            // into NaN and makes the repair below reject all n candidate axes. Below this
-            // bound the half has vanished, so zero it and let the repair rebuild.
+            // Guard the amplification, not just division by zero: the exact half-norm is
+            // 1/sqrt(2), but a half rotated away comes back at ~1e-20, and 1/1e-20 writes
+            // +-inf into the column, NaNing every later dot product so the repair below
+            // rejects all n candidate axes. Below this bound, zero it and let repair rebuild.
             const T half_present = T(0.0625);
             const T pinv = (pn > half_present) ? (T(1) / pn) : T(0);
             const T qinv = (qn > half_present) ? (T(1) / qn) : T(0);
@@ -249,11 +240,10 @@ void bdsdc_extract_vectors(Queue& ctx,
 //
 // The criterion is sigma, not the shape of the extracted column: a degenerate
 // block comes back full-norm and individually plausible while its columns are
-// parallel to each other, so nothing local sees it. The candidate axis is ranked,
-// not searched -- the residual of e_c against an orthonormal set Q is exactly
-// 1 - sum_t Q(c,t)^2, so one pass ranks every axis, where a cursor walk rejects
-// most of them one full n-projection at a time. The serial j loop runs only for
-// degenerate columns: a bidiagonal of full numerical rank reads sigma and exits.
+// parallel to each other, so nothing local sees it. Candidate axes are ranked in
+// one pass, using the fact that the residual of e_c against an orthonormal set Q
+// is exactly 1 - sum_t Q(c,t)^2. The serial j loop runs only for degenerate
+// columns: a bidiagonal of full numerical rank reads sigma and exits.
 template <Backend B, typename T>
 void bdsdc_repair_degenerate(Queue& ctx,
                              const MatrixView<T, MatrixFormat::Dense>& u,
@@ -274,15 +264,13 @@ void bdsdc_repair_degenerate(Queue& ctx,
         const int32_t nn = n;
         const bool wu = want_u;
         const bool wv = want_vh;
-        // +sigma and -sigma stop being resolvable once 2*sigma reaches the eigenvalue
-        // noise floor of the 2n problem, and both halves then normalise to the same
-        // (v, u), leaving U with two parallel columns. Column i contributes
-        // orthogonality error ~eps*sigma_max/(2*sigma_i), so holding that below a
-        // target tau requires sigma_i >= eps*sigma_max/(2*tau): the multiplier is
-        // derived from tau, not tuned, and must NOT carry a factor of n -- an
-        // n-scaled tolerance discards singular values that still carry information
-        // and fires on ordinary random matrices. It does not fix the singular
-        // VALUES, which keep gebrd's own eps*||A|| floor; use one-sided Jacobi.
+        // Once 2*sigma reaches the noise floor of the 2n eigenproblem, both halves of
+        // the +/- pair normalise to the same (v, u) and U gets two parallel columns.
+        // Column i contributes orthogonality error ~eps*sigma_max/(2*sigma_i), so a
+        // target tau needs sigma_i >= eps*sigma_max/(2*tau). The factor must NOT carry
+        // an n: an n-scaled tolerance discards singular values that still carry
+        // information. This does not fix the singular VALUES, which keep gebrd's own
+        // eps*||A|| floor; use one-sided Jacobi for those.
         constexpr T kOrthTarget = T(1e-3);
         const T tol_factor =
             (T(1) / (T(2) * kOrthTarget)) * std::numeric_limits<T>::epsilon();
@@ -312,11 +300,9 @@ void bdsdc_repair_degenerate(Queue& ctx,
                 for (int32_t j = 0; j < nn; ++j) {
                     if (sb[j] > tol) continue;
 
-                    // Rank every candidate axis by the residual it would leave against the
-                    // columns already final: the earlier rebuilt ones (t < j) and ALL
-                    // non-degenerate ones, including those after j. Skipping the latter leaves
-                    // the rebuilt vectors orthogonal to each other but not to the good columns
-                    // whenever the degenerate block is not at the end, i.e. ascending order.
+                    // Rank against every column already final: the earlier rebuilt ones
+                    // (t < j) and ALL non-degenerate ones, including those after j. Skipping
+                    // the latter loses orthogonality against them under ascending order.
                     T best = std::numeric_limits<T>::max();
                     int32_t best_c = lid;
                     for (int32_t c = lid; c < nn; c += kGroup) {
@@ -367,9 +353,9 @@ void bdsdc_repair_degenerate(Queue& ctx,
                         acc += wr * wr;
                     }
                     const T nrm2 = sycl::reduce_over_group(grp, acc, sycl::plus<T>());
-                    // c_star is the best axis available, so a residual too small to
-                    // normalise means the final columns already span the space. Leave the
-                    // column as extracted rather than amplifying noise.
+                    // c_star is the best axis available, so a residual too small to normalise
+                    // means the final columns already span the space; leave the column as
+                    // extracted rather than amplifying noise.
                     if (nrm2 > std::numeric_limits<T>::min()) {
                         const T inv = T(1) / sycl::sqrt(nrm2);
                         for (int32_t r = lid; r < nn; r += kGroup) {

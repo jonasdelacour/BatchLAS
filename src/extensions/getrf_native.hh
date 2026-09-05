@@ -1,15 +1,13 @@
 #pragma once
 
 // Native batched GETRF: capability queries, workspace sizing, the routed seams
-// the blocked driver injects, and direct-call entry points. The blocked
-// driver's panel leaf IS the CTA tier's device function, so both TUs must sit
-// in one device-code cluster. evidence: docs/perf/lu.md#getrf-window-evidence
-//
-// PIVOT CONTRACT: the span is int64_t but the physical format on CUDA and ROCm
-// is packed 1-based int32 in its first half (as_span<int>()), holding an
-// interchange list, not a permutation; NETLIB is genuinely int64, hence its
-// supports() rejection. Complex deliberately pivots on cabs1, not cuBLAS's
-// modulus. evidence: docs/perf/lu.md#correctness-findings
+// the blocked driver injects, and direct-call entry points. The blocked driver's
+// panel leaf IS the CTA tier's device function, so both TUs must sit in one
+// device-code cluster. PIVOT CONTRACT: the int64_t span physically holds packed
+// 1-based int32 in its first half (as_span<int>()) -- an interchange list, not a
+// permutation -- which is why supports() rejects the genuinely-int64 NETLIB arm;
+// complex pivots on cabs1, not cuBLAS's modulus.
+// evidence: docs/perf/lu.md#getrf-window-evidence
 
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>
@@ -33,9 +31,8 @@ int getrf_cta_max_n();
 template <typename T>
 bool getrf_blocked_available();
 
-// Replay the layout through BumpAllocator::measuring(); a hand-summed figure
-// fails the allocator's own capacity check. Zero is a legitimate answer, and
-// neither query may dereference A.data_ptr() -- both run under measuring().
+// Size by replaying the layout through BumpAllocator::measuring(), never by
+// hand-summing; zero is legitimate, and neither query may touch A.data_ptr().
 template <typename T>
 std::size_t getrf_cta_buffer_size(Queue& ctx,
                                   const MatrixView<T, MatrixFormat::Dense>& A);
@@ -66,7 +63,6 @@ using GetrfPanelSolveTrsm = std::function<Event(
     const MatrixView<T, MatrixFormat::Dense>&,
     T, Side, Uplo, Transpose, Diag)>;
 
-// Direct calls cannot be served by a vendor; each re-checks supports() itself.
 template <typename T>
 Event getrf_cta_dispatch(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& A,
@@ -83,9 +79,8 @@ Event getrf_blocked_dispatch(Queue& ctx,
                              GetrfTrailingGemm<T> trailing_gemm = {},
                              GetrfPanelSolveTrsm<T> panel_trsm = {});
 
-// Pivot-search must use an explicit SLM tree argmax: sycl::reduce_over_group
-// fails to launch at specific byte counts near 48 KB, wider for 8/16-byte
-// scalars. evidence: docs/perf/lu.md#the-48-kb-launch-hole
+// Budgets an explicit SLM tree argmax: sycl::reduce_over_group fails to launch
+// at specific byte counts near 48 KB. evidence: docs/perf/lu.md#the-48-kb-launch-hole
 template <typename T>
 bool getrf_cta_fits(int n, std::size_t slm_budget_bytes);
 

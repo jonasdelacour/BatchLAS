@@ -131,8 +131,7 @@ Event getrf_panel_resident_launch(Queue& ctx,
                 const std::size_t used =
                     static_cast<std::size_t>(m) * static_cast<std::size_t>(n);
 
-                // Logical m x n extent scattered into the padded tile ld, hence
-                // `used`. The 64-bit divisions stay; a power-of-two split lost.
+                // Logical m x n extent scattered into the padded tile ld, hence `used`.
                 for (std::size_t e = static_cast<std::size_t>(tid); e < used;
                      e += static_cast<std::size_t>(lwg)) {
                     const int r = static_cast<int>(e % static_cast<std::size_t>(m));

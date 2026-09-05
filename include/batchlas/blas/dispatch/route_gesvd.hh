@@ -1,24 +1,9 @@
 #pragma once
 
-// GESVD's routing table.
-//
-// gesvd's chooser was already the most careful of the three Provider-based
-// ones -- it checked a forced provider against its support predicate, which
-// ormqr's did not -- so this is mostly a translation. The one thing it does
-// change is where a measured judgement lives.
-//
-// THE WIDE-BAND RULE WAS A PREFERENCE SITTING INSIDE AN ORDER WALK.
-// choose_gesvd_provider's loop carried, in the middle of its Jacobi arm, a
-// `wide_band` test that declined Jacobi for REAL input above max(m,n) = 32
-// even though gesvd_supports_jacobi accepts it. That is a speed/accuracy
-// judgement, not a capability one, and it was indistinguishable from the
-// support checks around it. Here it is `preferred`, so it can never make the
-// Jacobi route ineligible -- which matters directly for vendor independence:
-// with no vendor compiled in, a real 33..64 matrix must still be served, and
-// Jacobi is what serves it.
-//
-// The measurements behind the rule are kept verbatim; see the comment on
-// preferred() below.
+// GESVD's routing table: order walk, the three native support predicates, and
+// the wide-band preference (which lives in preferred(), not supports(), so a
+// vendor-free build still serves a real 33..64 matrix).
+// evidence: docs/design/vendor-free-status.md#what-has-a-native-kernel-and-what-routes-to-it-by-default
 
 #include <optional>
 
@@ -27,26 +12,18 @@
 
 namespace batchlas::dispatch {
 
-// gesvd's routing reads two things OpShape has no field for. Rather than grow
-// OpShape into a union of every op's arguments, the op extends it.
 struct GesvdShape : OpShape {
     SvdVectors jobu = SvdVectors::All;
     SvdVectors jobvh = SvdVectors::All;
     std::optional<Uplo> hermitian_uplo;   // engaged => Hermitian input
 
-    // Both predicates below want the canonicalised jobs; the caller does that
-    // once, before building this, exactly as gesvd_dispatch does.
+    // Precondition: the caller canonicalises jobu/jobvh before building this.
     bool want_vectors() const {
         return jobu != SvdVectors::None || jobvh != SvdVectors::None;
     }
 };
 
-// Jacobi first. That ordering is not arbitrary and its measurement is recorded
-// in full on the git history of dispatch/env.hh's default_order_gesvd (deleted
-// with the rest of the Provider mechanism): the one-sided Jacobi kernel
-// dominates the older CTA path on accuracy across the whole conditioning sweep,
-// and on speed wherever U is requested, and the shared order had buried it
-// behind exactly the path it replaces.
+// Jacobi first: it beats the CTA path it replaces on accuracy, and on speed where U is wanted.
 inline constexpr Route kGesvdOrder[] = {
     {Origin::Native, Algorithm::Jacobi},
     {Origin::Native, Algorithm::CTA},
@@ -54,14 +31,8 @@ inline constexpr Route kGesvdOrder[] = {
     {Origin::Vendor, Algorithm::Auto},
 };
 
-// Largest max(m, n) gesvdj_cta accepts, per scalar type. Mirrors
-// gesvdj_cta_max_dim in src/extensions/gesvdj_cta.cc.
-//
-// The kernel keeps P = 32 lanes above n = 32 and grows the tile capacity C to
-// 64, so each lane owns two rows. The limit is local memory: per problem with
-// the V tile resident, C=64 costs 37,952 B for float, 71,744 B for double and
-// complex<float>, and 138,816 B for complex<double>, against a measured device
-// limit of 101,376 B. Values-only drops the V tile and halves it.
+// Largest max(m, n) gesvdj_cta accepts; must match gesvdj_cta_max_dim in
+// src/extensions/gesvdj_cta.cc. The bound is local memory for the V tile.
 template <typename T>
 inline constexpr int64_t gesvd_jacobi_max_dim(bool want_vectors) {
     if constexpr (std::is_same_v<T, std::complex<double>>) {
@@ -73,8 +44,6 @@ inline constexpr int64_t gesvd_jacobi_max_dim(bool want_vectors) {
 
 template <typename T>
 struct RouteTable<Op::gesvd, T> {
-    // ---- CORRECTNESS ------------------------------------------------------
-    // The three gesvd_supports_* predicates, transcribed and nothing more.
     static bool supports(Route r, const GesvdShape& s) {
         if (is_vendor(r)) return true;
         if (!is_native(r)) return false;
@@ -83,21 +52,14 @@ struct RouteTable<Op::gesvd, T> {
 
         switch (r.algo) {
             case Algorithm::Jacobi: {
-                // gesvdj_cta supports complex GENERAL input natively, unlike
-                // the two below, which both return false for non-real T outside
-                // the Hermitian branch. That is the Tier 4 coverage gap: complex
-                // general SVD on GPU used to fall through to Vendor and throw.
-                // Do NOT copy the RealScalar gate here.
+                // gesvdj_cta handles complex GENERAL input; the two arms below
+                // do not. Do NOT copy their RealScalar gate here.
                 if (s.hermitian_uplo.has_value()) return false;   // no Hermitian shortcut
                 if (!s.is_gpu) return false;
                 if (s.max_sub_group < 32) return false;
                 if (s.m < 1 || s.n < 1 || s.batch < 1) return false;
                 if (max_dim > gesvd_jacobi_max_dim<T>(s.want_vectors())) return false;
-                // Every job combination is served, Thin included: one-sided
-                // Jacobi produces the thin U natively -- it IS the rotated,
-                // normalised A -- and the full-U columns are the extra work,
-                // manufactured by an in-kernel Gram-Schmidt that a Thin request
-                // skips outright.
+                // Thin needs no gate: one-sided Jacobi produces the thin U natively.
                 return true;
             }
             case Algorithm::CTA: {
@@ -105,9 +67,8 @@ struct RouteTable<Op::gesvd, T> {
                 if (s.max_sub_group < 32) return false;
                 if (s.m < 1 || s.n < 1 || s.batch < 1) return false;
                 if (max_dim > 32) return false;
-                // A genuinely thin factor is out of reach for this route: mode
-                // CTA always takes the normal-equations branch, whose
-                // patch_zero_left_vectors writes m columns of U unconditionally.
+                // Thin is unreachable here: mode CTA takes the normal-equations
+                // branch, whose patch_zero_left_vectors always writes m U columns.
                 if (s.jobu == SvdVectors::Thin || s.jobvh == SvdVectors::Thin) return false;
                 if (s.hermitian_uplo.has_value()) {
                     if (s.m != s.n) return false;
@@ -119,9 +80,6 @@ struct RouteTable<Op::gesvd, T> {
                 return true;
             }
             case Algorithm::Blocked: {
-                // Real matrices with optional full, thin, or absent U and/or
-                // V^H backtransforms via ORMBR. Hermitian support remains
-                // square-only, where Thin canonicalises to All anyway.
                 if (!s.is_gpu) return false;
                 if (s.m < 1 || s.n < 1 || s.batch < 1) return false;
                 if (s.hermitian_uplo.has_value()) {
@@ -134,44 +92,19 @@ struct RouteTable<Op::gesvd, T> {
                 return true;
             }
             default:
-                // Including Algorithm::Auto: gesvd has three native routes, so
-                // a bare "native" names none of them. resolve_route walks the
-                // order to pick one -- see the note there.
+                // Auto included: with three native routes, a bare "native" names none.
                 return false;
         }
     }
 
-    // ---- MEASURED WINDOW --------------------------------------------------
     static bool preferred(Route r, const GesvdShape& s) {
         if (!is_native(r)) return false;
         if (!supports(r, s)) return false;
 
         if (r.algo == Algorithm::Jacobi) {
-            // THE WIDE-BAND RULE, moved here verbatim from the order walk.
-            //
-            // The 33..64 band is served by Jacobi only where the alternative
-            // cannot serve it at all -- that is, complex GENERAL input, which
-            // the blocked route declines, leaving Vendor and a throw.
-            //
-            // For REAL input in that band the blocked path is the better
-            // default, and this is the one place the two disagree. Measured at
-            // n=64, batch=4096, float, full vectors: blocked 4.86 us/matrix
-            // against Jacobi's 7.25, and at low conditioning blocked is also
-            // the more accurate of the two (kappa=1e1: 1.1e-6 vs 1.2e-5).
-            //
-            // Jacobi wins decisively at HIGH conditioning -- kappa=1e6, n=64:
-            // singular-value relative error 6.2e-3 vs 0.526, orthogonality
-            // 3.7e-5 vs 0.144, i.e. the blocked path returns no correct digits
-            // and a U that is not a basis. But which regime a caller is in is
-            // not knowable from the shape, and unlike the n <= 32 case (where
-            // the CTA path was worse from kappa=1e2 up) blocked is genuinely
-            // better below ~1e4. So the default stays blocked and the accurate
-            // route is opt-in via BATCHLAS_GESVD_PROVIDER=jacobi -- which is a
-            // FORCED request and so never consults this function.
-            //
-            // Being un-preferred rather than unsupported is the whole point of
-            // the split: with no vendor available, a real 33..64 matrix still
-            // has to be served, and Jacobi is what serves it.
+            // Wide-band rule: for REAL input Jacobi is preferred only at
+            // max(m, n) <= 32; above that blocked is the better default except at
+            // high conditioning. Force it with BATCHLAS_GESVD_PROVIDER=jacobi.
             const bool wide_band = (s.m > s.n ? s.m : s.n) > 32;
             if constexpr (RealScalar<T>) {
                 return !wide_band;
@@ -180,8 +113,6 @@ struct RouteTable<Op::gesvd, T> {
             }
         }
 
-        // CTA and Blocked were preferred wherever they were supported: the old
-        // loop tested only their support predicates.
         return true;
     }
 

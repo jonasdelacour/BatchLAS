@@ -1,24 +1,18 @@
 #pragma once
 
 // The native batched GETRF panel factorisation: all of its device code.
-// `getf2_panel_device` is LAPACK ?GETF2 -- unblocked right-looking LU with
-// partial pivoting -- written against a `Tile` supplying `at(r, c)`, instantiated
-// over a local_accessor (the resident CTA tier) and over a raw global pointer
-// (the blocked tier's panel leaf). Windows: docs/perf/lu.md#getrf-window-evidence.
+// `getf2_panel_device` is LAPACK ?GETF2 -- unblocked right-looking LU with partial
+// pivoting -- over a `Tile` supplying `at(r, c)`, instantiated on a local_accessor
+// (resident CTA tier) and on a raw global pointer (blocked tier's panel leaf).
+// Windows: docs/perf/lu.md#getrf-window-evidence.
 //
-// The pivot search is a sub-group butterfly plus a scan over 32 SLM slots and NOT
-// sycl::reduce_over_group: the collective fails to launch, deterministically, in a
-// narrow band around 48 KB of local memory (docs/perf/lu.md#the-48-kb-launch-hole).
-//
-// The pivot metric is LAPACK's cabs1, |Re| + |Im|; cuBLAS pivots on the modulus for
-// complex, and no residual can separate the two, so a test comparing pivots
-// elementwise must use the HOST as oracle (docs/perf/lu.md#correctness-findings).
-//
-// info is exact-zero, 1-based, global, first-failure-wins, and the factorisation
-// continues. There is deliberately no epsilon pivot floor: flagging |pivot| < eps
-// would report non-zero where cuBLAS, rocSOLVER and LAPACK report zero.
-//
-// Barriers B1..B4 all sit at the top level of the k loop, whose trip count is
+// The pivot search is a sub-group butterfly plus a scan over 32 SLM slots, not
+// sycl::reduce_over_group: the collective fails to launch, deterministically, near
+// 48 KB of local memory (docs/perf/lu.md#the-48-kb-launch-hole).
+// The pivot metric is LAPACK's cabs1, not the modulus cuBLAS uses for complex, so a
+// pivot test must use the HOST as oracle (docs/perf/lu.md#correctness-findings).
+// info is exact-zero, 1-based, global, first-failure-wins; no epsilon pivot floor.
+// Barriers B1..B4 sit at the top level of the k loop, whose trip count is
 // kernel-uniform; the launchers add B0 after the tile load and B5 before store-back.
 
 #include "../sycl/device_scalar.hh"
@@ -68,8 +62,8 @@ template <typename D, typename LocalAcc>
 struct LuLocalTile {
     LocalAcc a;
     int ld;
-    // ld IS PADDED ODD by the launcher: the row exchange walks a row, i.e. `wg`
-    // work-items at stride ld, and an even ld puts them all in one SLM bank.
+    // ld IS PADDED ODD by the launcher: a row exchange walks `wg` work-items at
+    // stride ld, and an even ld puts them all in one SLM bank.
     auto& at(int r, int c) const {
         return a[static_cast<std::size_t>(r) +
                  static_cast<std::size_t>(c) * static_cast<std::size_t>(ld)];
@@ -81,9 +75,8 @@ struct LuLocalTile {
 inline constexpr int kLuRedSlots = 32;
 
 // LAPACK ?GETF2 on an m x n tile, in place, for `kmax` (not min(m, n)) steps.
-// `piv_base` is the panel's first GLOBAL row index, so ipiv and info come out
-// global and 1-based with no fix-up pass. `piv_item`/`info_item` are already
-// offset to this matrix and panel, and `info_item` is READ as well as written
+// `piv_base` is the panel's first GLOBAL row index, so ipiv and info come out global
+// and 1-based with no fix-up pass. `info_item` is READ as well as written
 // (first-failure-wins across panels), so both launchers zero it beforehand.
 template <typename D, typename Tile, typename ValAcc, typename IdxAcc>
 inline void getf2_panel_device(sycl::nd_item<1> it, Tile A, int m, int n, int kmax,
@@ -103,7 +96,6 @@ inline void getf2_panel_device(sycl::nd_item<1> it, Tile A, int m, int n, int km
     int32_t info_local = (tid == 0) ? *info_item : 0;
 
     for (int k = 0; k < kmax; ++k) {
-        // Strided by row: coalesced, and increasing i keeps the LOWEST index.
         R bv = R(-1);
         int bi = m;                       // "no candidate" -- never wins a tie
         for (int i = k + tid; i < m; i += wg) {
@@ -111,7 +103,6 @@ inline void getf2_panel_device(sycl::nd_item<1> it, Tile A, int m, int n, int km
             if (v > bv) { bv = v; bi = i; }
         }
 
-        // Registers only; the index rides along so the lowest-index tie-break survives.
         for (uint32_t off = static_cast<uint32_t>(nlanes) / 2; off > 0; off >>= 1) {
             const R ov = sycl::permute_group_by_xor(sg, bv, off);
             const int oi = sycl::permute_group_by_xor(sg, bi, off);
@@ -151,7 +142,7 @@ inline void getf2_panel_device(sycl::nd_item<1> it, Tile A, int m, int n, int km
 
         const D d = A.at(k, k);
         if (batchlas::sycl_device::dev_is_zero(d)) {
-            // EXACT zero, no epsilon: the column is left alone, keeping a failed item finite.
+            // EXACT zero, no epsilon: the column is left alone, keeping the item finite.
             if (tid == 0 && info_local == 0) {
                 info_local = static_cast<int32_t>(piv_base + k + 1);
             }
@@ -172,10 +163,8 @@ inline void getf2_panel_device(sycl::nd_item<1> it, Tile A, int m, int n, int km
         }
         sycl::group_barrier(g);                                        // B3
 
-        // Flattened over the whole trailing block so the work-group saturates
-        // even when one extent is short. The two runtime divisions are
-        // deliberate: a division-free power-of-two split measured slower, because
-        // mm is close to wg at the resident shape (docs/perf/lu.md#negative-results).
+        // Flattened so the work-group saturates when one extent is short; the two
+        // runtime divisions beat a power-of-two split (docs/perf/lu.md#negative-results).
         const int mm = m - k - 1;
         const int nn = n - k - 1;
         if (mm > 0 && nn > 0) {

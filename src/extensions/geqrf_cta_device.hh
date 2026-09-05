@@ -3,22 +3,13 @@
 // The native batched GEQRF panel factorisation -- all of its device code.
 // `geqr2_panel_device` is LAPACK ?GEQR2 over a `Tile` supplying `at(r, c)`,
 // instantiated against a local_accessor (the CTA tier) and against a raw global
-// pointer (the blocked tier's panel leaf). See docs/perf/qr.md.
+// pointer (the blocked tier's panel leaf). One work-group per matrix; the
+// required barriers are marked B1..B3 (B0/B4 are in the launcher).
 //
 // Deliberately NOT internal::larfg: that helper preserves alpha's phase, while
 // clarfg/zlarfg -- and the vendors this must be a drop-in for -- return a REAL
-// beta, and tau is a contract consumed by ormqr/orgqr/ormbr/sy2sb. It also
-// returns tau = 0 for len <= 1 even for complex, where zlarfg returns a nonzero
-// tau, so a short-final-panel test on a square REAL matrix guards nothing.
+// beta; tau is a contract consumed by ormqr/orgqr/ormbr/sy2sb.
 // evidence: docs/perf/qr.md#a-residual-test-cannot-guard-a-convention
-//
-// Overflow is handled by ONE COMMON SCALE, s = max over the column of
-// max(|Re|, |Im|), not xLARFG's rescaling loop: tau is scale-invariant, beta is
-// s * O(1), and the reciprocal in v = x/(alpha-beta) has a division fallback.
-//
-// One work-group per matrix; the apply maps TEAM -> trailing column and LANE ->
-// row over distinct columns, so it needs -- and must not have -- a work-group
-// barrier. The required barriers are marked B1..B3 (B0/B4 are in the launcher).
 
 #include "../sycl/device_scalar.hh"
 
@@ -88,10 +79,9 @@ inline real_of<D> dev_abs2_scaled(D a, real_of<D> s) {
 }
 
 // The Householder scalars, LAPACK ?LARFG exactly. `s` scales the WHOLE column
-// (alpha included); `ssq` is the TAIL's sum of |x/s|^2. Postcondition:
-//   identity == true   ->  tau = 0, H = I, A(j,j) unchanged, v not written.
-//   identity == false  ->  A(j,j) := beta (REAL even for complex),
-//                          A(j+1:m, j) := x / (alpha - beta) = v's tail.
+// (alpha included); `ssq` is the TAIL's sum of |x/s|^2. identity == true means
+// tau = 0, H = I, A(j,j) unchanged and v unwritten; otherwise A(j,j) := beta
+// (REAL even for complex) and A(j+1:m, j) := x / (alpha - beta).
 template <typename D>
 struct LarfgScalars {
     D tau;
@@ -113,11 +103,10 @@ inline LarfgScalars<D> geqrf_larfg_scalars(D alpha, real_of<D> s, real_of<D> ssq
 
     const R alphi = dev_imag(alpha);
 
-    // xLARFG's early out: a zero tail AND a real alpha means H = I. For complex,
-    // a nonzero Im(alpha) still needs a reflector and zlarfg returns a tau here.
+    // xLARFG's early out: a zero tail and a REAL alpha means H = I; a complex
+    // alpha with nonzero imaginary part still needs a reflector.
     if (ssq == R(0) && alphi == R(0)) return out;
-    // Redundant in exact arithmetic; it makes the divisions below safe by
-    // construction.
+    // Redundant in exact arithmetic; it makes the divisions below safe.
     if (!(s > R(0))) return out;
 
     const R alphr = batchlas::sycl_device::dev_real(alpha);
@@ -138,8 +127,6 @@ inline LarfgScalars<D> geqrf_larfg_scalars(D alpha, real_of<D> s, real_of<D> ssq
         out.beta = beta_s * s;
     }
 
-    // Formed FROM out.beta, not re-derived from beta_s: one source for beta, so
-    // changing it cannot silently scale v by another reflector's divisor.
     const D d = batchlas::sycl_device::dev_sub(alpha, out.beta);
 
     const D r = batchlas::sycl_device::dev_recip(d);
@@ -150,7 +137,6 @@ inline LarfgScalars<D> geqrf_larfg_scalars(D alpha, real_of<D> s, real_of<D> ssq
     return out;
 }
 
-// Tile accessors -- the only difference between the two residencies.
 template <typename D>
 struct GeqrfGlobalTile {
     D* p;
@@ -195,9 +181,7 @@ inline D geqrf_sg_sum(const sycl::sub_group& sg, D v) {
 }
 
 // LAPACK ?GEQR2 on an m x n tile, in place. The apply's conj(tau) is zgeqr2's,
-// not a transcription slip -- the factorisation applies H^H while ormqr/orgqr
-// reconstruct Q -- and dropping it passes every float and double test.
-//
+// not a transcription slip: dropping it still passes every real-typed test.
 // `tau_ptr` is a GLOBAL pointer already offset to this matrix; reflector j lands
 // at tau_ptr[j]. kmax lets a caller factor fewer reflectors than min(m, n).
 template <typename D, typename Tile>
@@ -262,8 +246,8 @@ inline void geqr2_panel_device(sycl::nd_item<1> it, Tile A, int m, int n, int km
         // B3 -- beta and v are published to the teams about to read them.
         sycl::group_barrier(g);
 
-        // `h.identity` is work-group-uniform (both its inputs are replicated by
-        // the reductions), so this `continue` cannot desync B1/B2/B3.
+        // `h.identity` is work-group-uniform, so this `continue` cannot desync
+        // B1/B2/B3.
         if (h.identity) continue;
 
         const D ctau = batchlas::sycl_device::dev_conj(h.tau);

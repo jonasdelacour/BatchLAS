@@ -57,9 +57,8 @@ struct RouteTable<Op::getrs, T> {
 
         if (s.order() < 1 || s.nrhs() < 1 || s.batch < 1) return false;
 
-        // Pivot format: the GPU vendor arms and the native kernels pack 1-based int32
-        // into the low half of the int64 span, netlib writes genuine int64 -- mixing
-        // arms under a NETLIB queue misreads it (||A*C - I||_F/n = 0.53, info == 0).
+        // Pivot format: the GPU arms pack 1-based int32 into the low half of the int64
+        // span, netlib writes true int64; mixing them is silently wrong (info stays 0).
         if (s.backend == Backend::NETLIB) return false;
 
         switch (r.algo) {
@@ -98,9 +97,8 @@ struct RouteTable<Op::getrs, T> {
         return false;
     }
 
-    // Native-vs-native tie-break, consulted only in the vendor-free walk. CTA leads the
-    // composition everywhere inside its capability; raising kGetrsFusedMaxRhs needs a
-    // window here -- the crossover is at nrhs = 16, which supports() currently refuses.
+    // Native-vs-native tie-break for the vendor-free walk: CTA leads the composition
+    // everywhere inside supports(); raising kGetrsFusedMaxRhs needs a window here.
     static bool native_tier_preferred(Route r, const GetrsShape& s) {
         if (!is_native(r)) return true;
         static_cast<void>(s);

@@ -33,13 +33,13 @@ inline constexpr Route kTrsmOrder[] = {
 template <typename T>
 struct RouteTable<Op::trsm, T> {
     static bool supports(Route r, const TrsmShape& s) {
-        if (is_vendor(r)) return true;   // the vendor serves everything it is given
+        if (is_vendor(r)) return true;
         if (!is_native(r)) return false;
 
         if (!s.is_gpu) return false;
 
-        // A correctness gate, not a preference: one launch covers the batch with a
-        // single (order, q, ld, stride) tuple, and gemm's batch walker has no twin.
+        // Correctness, not preference: one launch covers the batch with a single
+        // (order, q, ld, stride) tuple, and gemm's batch walker has no twin here.
         if (s.heterogeneous_batch) return false;
 
         const int64_t order = s.tri_order();
@@ -59,8 +59,7 @@ struct RouteTable<Op::trsm, T> {
         }
     }
 
-    // Native at batch >= 8 for every type, side and order, except float +
-    // Side::Right below batch 128, which is preferred only up to order 32.
+    // Native at batch >= 8, except float + Side::Right below batch 128 (order <= 32).
     // evidence: docs/perf/trsm.md#the-preferred-window-as-implemented
     static bool preferred(Route r, const TrsmShape& s) {
         if (!is_native(r)) return false;

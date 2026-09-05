@@ -74,13 +74,12 @@ protected:
         }
     }
 
-    // Helper function to compute expected y = alpha*A*x + beta*y
     void computeExpectedGemv(ScalarType alpha, ScalarType beta, Transpose transA) {
         for (int b = 0; b < this->batch_size; ++b) {
             const ScalarType* A_batch = this->A_data.data() + b * this->rows * this->cols;
             const ScalarType* x_batch = this->x_data.data() + b * std::max(this->rows, this->cols);
             ScalarType* y_batch_expected = this->y_expected.data() + b * this->rows;
-            const ScalarType* y_batch_initial = this->y_data.data() + b * this->rows; // Initial y for beta calculation
+            const ScalarType* y_batch_initial = this->y_data.data() + b * this->rows; // beta operand
 
             if (transA == Transpose::NoTrans) {
                 for (int i = 0; i < this->rows; ++i) {
@@ -279,18 +278,15 @@ TYPED_TEST(GemvMatrixViewTest, BatchedGemvWithAlphaBeta) {
 
 
 
-// Coverage fixture. GemvMatrixViewTest above is fixed at 10x10, ld == rows,
-// inc == 1, NoTrans/Trans only, and its complex data has an identically zero
-// imaginary part, so a kernel that dropped every complex cross-term or got
-// ConjTrans backwards passes all forty of its cases. This fixture covers those
-// gaps: non-square, ld-padded, inc-strided, ConjTrans, genuinely complex data.
+// Coverage fixture. GemvMatrixViewTest above is fixed at 10x10 with ld == rows,
+// inc == 1, NoTrans/Trans only and an identically zero imaginary part; this one
+// covers non-square, ld-padded, inc-strided, ConjTrans and genuinely complex data.
 // evidence: docs/perf/gemv.md#blind-guards-found-and-closed
 
 namespace {
 
-// Deterministic, and for complex WITH A NON-ZERO IMAGINARY PART -- the one
-// property the fixture above lacks. Magnitudes stay in [-1, 1] so a reduction
-// of ~100 terms cannot lose the relative tolerance to cancellation.
+// Deterministic, and complex values here have a NON-ZERO imaginary part. Magnitudes
+// stay in [-1, 1] so a ~100-term reduction cannot lose the tolerance to cancellation.
 template <typename T>
 T gemv_cov_value(int seed) {
     using R = typename batchlas::base_type<T>::type;
@@ -317,27 +313,24 @@ protected:
         int m = 0;
         int n = 0;
         int batch = 1;
-        int ld = 0;          // >= m; the padded case is what catches an ld-blind kernel
+        int ld = 0;          // >= m; 0 means "use m"
         int xinc = 1;
         int yinc = 1;
         Transpose transA = Transpose::NoTrans;
         ScalarType alpha = ScalarType(1);
         ScalarType beta = ScalarType(0);
         bool y_starts_nan = false;   // only meaningful with beta == 0
-        // Poisons the LIVE elements of A with NaN. Only meaningful with
-        // alpha == 0, where reference ?GEMV never reads A -- it is what makes
-        // "alpha == 0 does not touch A" observable rather than an identity.
+        // Poisons the LIVE elements of A with NaN; only meaningful with alpha == 0,
+        // where reference ?GEMV never reads A.
         bool a_starts_nan = false;
-        // Pushes every batch stride past its natural value, so stride != ld*cols
-        // for A and != size*inc for x and y. A kernel that DERIVES the stride
-        // instead of reading it from the view passes every natural-stride case;
-        // ortho.cc hands gemv exactly such a view on every CGS iteration.
+        // Pushes every batch stride past its natural value, so stride != ld*cols for
+        // A and != size*inc for x and y -- a kernel that DERIVES the stride instead
+        // of reading it from the view passes every natural-stride case.
         int stride_pad = 0;
     };
 
-    // Runs one case through the public gemv and checks every element of every
-    // batch item against a host reference written from the BLAS definition --
-    // not transcribed from either backend, which fold transA the same way.
+    // Runs one case through the public gemv and checks every element against a host
+    // reference written from the BLAS definition, not transcribed from either backend.
     void run_case(const Case& c) {
         if (!this->ctx) return;
 
@@ -352,17 +345,13 @@ protected:
 
         UnifiedVector<ScalarType> A(std::max(1, a_stride * c.batch));
         UnifiedVector<ScalarType> x(std::max(1, x_stride * c.batch));
-        // Guard band past the end of y. Three breaks against body 5's tail mask
-        // were green over 376 cases because an out-of-range write landed past
-        // this allocation, where nothing was looking. Poisoned before the call
-        // and asserted untouched after.
-        // evidence: docs/perf/gemv.md#blind-guards-found-and-closed
+        // Guard band past the end of y: an out-of-range write otherwise lands in
+        // unallocated slack where nothing is looking. Poisoned here, checked below.
         constexpr int kGuard = 64;
         UnifiedVector<ScalarType> y(std::max(1, y_stride * c.batch) + kGuard);
 
-        // A's pad rows (m..ld-1) hold a large poison value: a kernel that walked
-        // a column by ld instead of m, or that mixed the pad into a reduction,
-        // cannot come back with a right answer by luck.
+        // A's pad rows (m..ld-1) hold a large poison value, so a kernel that walked a
+        // column by ld instead of m cannot come back with a right answer by luck.
         const ScalarType poison = static_cast<ScalarType>(RealType(1e3));
         for (int b = 0; b < c.batch; ++b) {
             for (int j = 0; j < c.n; ++j) {
@@ -375,8 +364,7 @@ protected:
                     A[b * a_stride + j * ld + i] = (i < c.m) ? live : poison;
                 }
             }
-            // The stride pad itself; the loop above stops at ld*n, so without
-            // this the padded tail would be uninitialised rather than poisoned.
+            // The loop above stops at ld*n, so the stride pad needs poisoning too.
             for (int t = ld * c.n; t < a_stride; ++t) A[b * a_stride + t] = poison;
         }
         // The x gaps (the xinc-1 slots between live elements) are poisoned too.
@@ -408,9 +396,8 @@ protected:
         VectorView<ScalarType> x_vec(x.data(), red, c.batch, c.xinc, x_stride);
         VectorView<ScalarType> y_vec(y.data(), out, c.batch, c.yinc, y_stride);
 
-        // Asserted rather than trusted: VectorView takes (data, size, batch, inc,
-        // stride) while Vector takes (size, batch, stride, inc) -- positions 3
-        // and 4 swapped, both plain int, and both fit the same buffer length.
+        // Asserted, not trusted: VectorView takes (data, size, batch, inc, stride)
+        // while Vector takes (size, batch, stride, inc) -- positions 3 and 4 swapped.
         ASSERT_EQ(x_vec.inc(), c.xinc);
         ASSERT_EQ(x_vec.stride(), x_stride);
         ASSERT_EQ(y_vec.inc(), c.yinc);
@@ -426,16 +413,14 @@ protected:
         for (int b = 0; b < c.batch; ++b) {
             for (int o = 0; o < out; ++o) {
                 ScalarType sum = ScalarType(0);
-                // alpha == 0 never reads A, in the reference as in the kernel:
-                // a reference that summed a NaN-filled A would predict NaN.
+                // alpha == 0 never reads A, here as in the kernel: a reference
+                // that summed a NaN-filled A would predict NaN.
                 const bool skip_a = (c.alpha == ScalarType(0));
-                // Backward-error denominator. Comparing against |expected|
-                // alone is a cancellation detector, not a tolerance; the BLAS
-                // bound is relative to sum|a_r||x_r|, floored at 1.
+                // Backward-error denominator: the BLAS bound is relative to
+                // sum|a_r||x_r|, floored at 1, not to |expected| alone.
                 RealType absum = RealType(0);
                 for (int r = 0; skip_a ? false : (r < red); ++r) {
-                    // op(A)(o, r), conjugated for ConjTrans. Getting this
-                    // backwards is the classic silent complex gemv bug.
+                    // op(A)(o, r), conjugated for ConjTrans.
                     ScalarType a;
                     if (c.transA == Transpose::NoTrans) {
                         a = A[b * a_stride + r * ld + o];
@@ -483,7 +468,6 @@ protected:
             }
         }
 
-        // Nothing may write past the last batch item of y.
         for (int t = 0; t < kGuard; ++t) {
             EXPECT_EQ(y[y_stride * c.batch + t], guard_v)
                 << "y guard band element " << t << " past the end of batch "
@@ -495,8 +479,7 @@ protected:
 TYPED_TEST_SUITE(GemvCoverageTest, MyTypes);
 
 // --- the three transA arms, on non-square, ld-padded, inc-strided data ------
-// m = 70 is deliberately not a multiple of 32: the CTA body strides its
-// reduction by 32, so 70 = 2*32 + 6 exercises the partial final round.
+// m = 70 is not a multiple of 32: the CTA body strides its reduction by 32.
 
 TYPED_TEST(GemvCoverageTest, NoTransposePaddedStrided) {
     using S = typename TestFixture::ScalarType;
@@ -516,9 +499,8 @@ TYPED_TEST(GemvCoverageTest, TransposePaddedStrided) {
     this->run_case(c);
 }
 
-// ConjTrans is the live production path -- ortho.cc selects it for all four
-// complex types -- and had no test in this tree. It runs on the real types too,
-// where ConjTrans == Trans, to catch a kernel that conjugates a real value.
+// ConjTrans is the live production path (ortho.cc) and had no test in this tree. It
+// runs on the real types too, where ConjTrans == Trans, to catch a conjugated real.
 // evidence: docs/perf/gemv.md#correctness-findings
 TYPED_TEST(GemvCoverageTest, ConjTransposePaddedStrided) {
     using S = typename TestFixture::ScalarType;
@@ -529,8 +511,7 @@ TYPED_TEST(GemvCoverageTest, ConjTransposePaddedStrided) {
     this->run_case(c);
 }
 
-// A complex alpha and beta: every scalar in the fixture above is real, so its
-// alpha/beta multiplies never mix components either.
+// A complex alpha and beta: every scalar in the fixture above is real.
 TYPED_TEST(GemvCoverageTest, ComplexAlphaBetaConjTranspose) {
     using S = typename TestFixture::ScalarType;
     typename TestFixture::Case c;
@@ -546,8 +527,7 @@ TYPED_TEST(GemvCoverageTest, ComplexAlphaBetaConjTranspose) {
     this->run_case(c);
 }
 
-// A reduction length that is not a multiple of the sub-group: m = 97 = 3*32 + 1,
-// so exactly one lane contributes in the final round.
+// m = 97 = 3*32 + 1: exactly one lane contributes in the final round.
 TYPED_TEST(GemvCoverageTest, SubGroupTailTranspose) {
     using S = typename TestFixture::ScalarType;
     typename TestFixture::Case c;
@@ -557,8 +537,7 @@ TYPED_TEST(GemvCoverageTest, SubGroupTailTranspose) {
     this->run_case(c);
 }
 
-// Batch 1, which takes a different vendor entry (cublasXgemv, not
-// XgemvStridedBatched) and, natively, a launch whose only extent is out_len.
+// Batch 1 takes a different vendor entry (cublasXgemv, not XgemvStridedBatched).
 TYPED_TEST(GemvCoverageTest, SingleBatchNonSquareTranspose) {
     using S = typename TestFixture::ScalarType;
     typename TestFixture::Case c;
@@ -569,7 +548,7 @@ TYPED_TEST(GemvCoverageTest, SingleBatchNonSquareTranspose) {
 }
 
 // beta == 0 means y is not read: reference ?GEMV writes Y(I) = ZERO rather than
-// scaling, so a y full of NaN must come back finite. 0 * NaN = NaN otherwise.
+// scaling, so a y full of NaN must come back finite.
 TYPED_TEST(GemvCoverageTest, BetaZeroDoesNotReadY) {
     using S = typename TestFixture::ScalarType;
     typename TestFixture::Case c;
@@ -580,24 +559,21 @@ TYPED_TEST(GemvCoverageTest, BetaZeroDoesNotReadY) {
     this->run_case(c);
 }
 
-// alpha == 0 with beta != 1 IS NOT a quick return: reference ?GEMV falls
-// through to the beta scaling and returns y = beta*y.
+// alpha == 0 with beta != 1 is NOT a quick return: reference ?GEMV falls through to
+// the beta scaling and returns y = beta*y.
 TYPED_TEST(GemvCoverageTest, AlphaZeroScalesY) {
     using S = typename TestFixture::ScalarType;
     typename TestFixture::Case c;
     c.m = 30; c.n = 24; c.batch = 3; c.ld = 30; c.xinc = 1; c.yinc = 1;
     c.transA = Transpose::NoTrans;
     c.alpha = static_cast<S>(0.0); c.beta = static_cast<S>(0.5);
-    // A is all NaN: reference ?GEMV never reads it when alpha == 0, which is
-    // what makes the kernel's `if (!alpha_zero)` guard observable.
     c.a_starts_nan = true;
     this->run_case(c);
 }
 
 // --- THE OTHER ORIENTATION: m < n ------------------------------------------
-// Everything above is m > n. m < n is a different failure mode: a launcher that
-// used the wrong OUTPUT extent under-launches on one orientation, and one that
-// used the wrong REDUCTION extent truncates on the other.
+// Everything above is m > n; a launcher with the wrong OUTPUT extent under-launches on
+// one orientation, one with the wrong REDUCTION extent truncates on the other.
 
 TYPED_TEST(GemvCoverageTest, WideNoTranspose) {
     using S = typename TestFixture::ScalarType;
@@ -618,8 +594,8 @@ TYPED_TEST(GemvCoverageTest, WideTranspose) {
 }
 
 // --- beta == 0 and alpha == 0 on the NoTrans body too -----------------------
-// The arms are different kernel bodies with their own copies of the
-// `if (!beta_zero)` and `if (!alpha_zero)` guards; these watch the other copies.
+// Each arm is a separate kernel body with its own `if (!beta_zero)` and
+// `if (!alpha_zero)` guards; these watch the NoTrans copies.
 
 TYPED_TEST(GemvCoverageTest, BetaZeroDoesNotReadYNoTranspose) {
     using S = typename TestFixture::ScalarType;
@@ -642,9 +618,8 @@ TYPED_TEST(GemvCoverageTest, AlphaZeroScalesYConjTranspose) {
 }
 
 // --- a realistic batch, and the launch geometry it alone reaches ------------
-// Everything above runs at batch <= 40, and the work-group ladder picks its
-// geometry from out_len * batch, so nothing else in this file reaches a
-// work-group holding more than one or two sub-groups.
+// The work-group ladder picks its geometry from out_len * batch; nothing else in this
+// file reaches a work-group holding more than one or two sub-groups.
 
 TYPED_TEST(GemvCoverageTest, LargeBatchTallNoTranspose) {
     using S = typename TestFixture::ScalarType;
@@ -665,9 +640,8 @@ TYPED_TEST(GemvCoverageTest, LargeBatchConjTranspose) {
 }
 
 // --- the quick-return contract, checked for EXACT non-modification ----------
-// Reference ?GEMV returns on (M == 0) || (N == 0) || (ALPHA == 0 && BETA == 1)
-// with y COMPLETELY UNTOUCHED -- it is not scaled by beta. These tests compare
-// bit patterns, not tolerances: the claim is "not written".
+// Reference ?GEMV returns on (M == 0) || (N == 0) || (ALPHA == 0 && BETA == 1) with y
+// COMPLETELY UNTOUCHED -- not scaled by beta. These compare bit patterns.
 
 TYPED_TEST(GemvCoverageTest, ZeroReductionLeavesYUntouched) {
     using S = typename TestFixture::ScalarType;
@@ -689,8 +663,7 @@ TYPED_TEST(GemvCoverageTest, ZeroReductionLeavesYUntouched) {
     VectorView<S> x_vec(x.data(), 0, batch, 1, 0);
     VectorView<S> y_vec(y.data(), m, batch, 1, m);
 
-    // alpha != 0 and beta != 1, so only the n == 0 clause can quick-return here;
-    // drop it and the kernel computes y = beta*y and every element moves.
+    // alpha != 0 and beta != 1, so only the n == 0 clause can quick-return here.
     gemv(*(this->ctx), A_view, x_vec, y_vec,
          {.alpha = static_cast<S>(2.0), .beta = static_cast<S>(0.5),
           .transA = Transpose::NoTrans});
@@ -701,10 +674,8 @@ TYPED_TEST(GemvCoverageTest, ZeroReductionLeavesYUntouched) {
     }
 }
 
-// m == 0 has to be tested on the TRANSPOSED arm: red_len == 0 while
-// out_len == n > 0, so the launch is non-empty and a kernel that dropped the
-// `m == 0` clause writes y = beta*y over all of it. Under NoTrans the launch is
-// empty and nothing could move, so the test would be vacuous.
+// m == 0 has to be tested on the TRANSPOSED arm: red_len == 0 while out_len == n > 0,
+// so the launch is non-empty. Under NoTrans the launch is empty and the test is vacuous.
 TYPED_TEST(GemvCoverageTest, ZeroRowsLeavesYUntouched) {
     using S = typename TestFixture::ScalarType;
     if (!this->ctx) return;
@@ -749,7 +720,7 @@ TYPED_TEST(GemvCoverageTest, AlphaZeroBetaOneLeavesYUntouched) {
     UnifiedVector<S> y(m * batch);
     std::vector<S> before(static_cast<size_t>(m * batch));
     // A is all NaN: with a finite A the quick return is arithmetically
-    // indistinguishable from computing 0*A*x + 1*y, so no break could move it.
+    // indistinguishable from computing 0*A*x + 1*y.
     for (int t = 0; t < m * n * batch; ++t)
         A[t] = static_cast<S>(std::numeric_limits<typename batchlas::base_type<S>::type>::quiet_NaN());
     for (int t = 0; t < n * batch; ++t) x[t] = gemv_cov_value<S>(t * 3 + 2);
@@ -767,19 +738,16 @@ TYPED_TEST(GemvCoverageTest, AlphaZeroBetaOneLeavesYUntouched) {
           .transA = Transpose::NoTrans});
     this->ctx->wait();
 
-    // Exact, and against a NaN-filled A: a kernel that fell through gets NaN.
     for (int t = 0; t < m * batch; ++t) {
         EXPECT_EQ(y[t], before[t]) << "y[" << t << "] moved under alpha=0, beta=1";
     }
 }
 
 // --- body 4, the segmented NoTrans body ------------------------------------
-// gemv_native_direct picks body 4 over body 1 when out_len <= 16 and the device
-// enumerates a sub-group size of 32. That choice is INVISIBLE to the route table
-// -- both are {Native, Direct} -- so only a test that is red for one body and
-// green for the other can tell you which ran. The four cases below walk the
-// segment-width ladder W = gemv_seg_width(m) at m = 1, 4, 10 and 16, each W
-// being a separate template instantiation; m = 10 is the partial-lane case.
+// Body 4 is chosen over body 1 when out_len <= 16 and the device enumerates a
+// sub-group size of 32. That choice is INVISIBLE to the route table -- both read
+// {Native, Direct} -- so only a test red for one body and green for the other says
+// which ran. The cases below walk W = gemv_seg_width(m) at m = 1, 4, 10 and 16.
 // evidence: docs/perf/gemv.md#the-body-4-gate
 
 TYPED_TEST(GemvCoverageTest, SegmentedSingleRowNoTranspose) {
@@ -818,9 +786,8 @@ TYPED_TEST(GemvCoverageTest, SegmentedFullLanesNoTranspose) {
     this->run_case(c);
 }
 
-// One element above the gate: m = 17 gives W = 1, so body 1 must take the call
-// back. It is also the only out_len for which 32 < 2*out_len <= 34, so an
-// off-by-one in gemv_seg_width's `w * 2 * out_len <= 32` shows up here alone.
+// One element above the gate: m = 17 gives W = 1, so body 1 must take the call back,
+// and it is the only out_len for which 32 < 2*out_len <= 34.
 TYPED_TEST(GemvCoverageTest, SegmentGateBoundaryNoTranspose) {
     using S = typename TestFixture::ScalarType;
     typename TestFixture::Case c;
@@ -830,8 +797,7 @@ TYPED_TEST(GemvCoverageTest, SegmentGateBoundaryNoTranspose) {
     this->run_case(c);
 }
 
-// Body 4 carries its own copies of the `if (!alpha_zero)` and `if (!beta_zero)`
-// guards; NaN in the operand each leaves unread is what makes them observable.
+// Body 4 carries its own copies of the alpha == 0 and beta == 0 guards.
 TYPED_TEST(GemvCoverageTest, SegmentedBetaZeroDoesNotReadY) {
     using S = typename TestFixture::ScalarType;
     typename TestFixture::Case c;
@@ -852,10 +818,8 @@ TYPED_TEST(GemvCoverageTest, SegmentedAlphaZeroScalesY) {
     this->run_case(c);
 }
 
-// Non-natural batch strides. Every case above uses the natural stride, so a
-// kernel that DERIVED each stride rather than reading it from the view passed
-// the whole suite. ortho.cc is the live caller that defeats a derived stride.
-// One case per kernel body, so no single body can satisfy the guard alone.
+// Non-natural batch strides. Every case above uses the natural stride, so a kernel
+// that DERIVED each stride passed the whole suite. One case per kernel body.
 TYPED_TEST(GemvCoverageTest, PaddedBatchStrideNoTranspose) {
     using S = typename TestFixture::ScalarType;
     typename TestFixture::Case c;
@@ -899,29 +863,23 @@ TYPED_TEST(GemvCoverageTest, PaddedBatchStrideSegmented) {
 
 
 // ===========================================================================
-// Body 5 -- the segmented TRANSPOSED CTA kernel, GemvSegTKernel<T, W>. Its gate
-// is on red_len (= m under Trans/ConjTrans), not out_len as body 4's is, so a
-// case copied from the body-4 section reaches body 3 and proves nothing. The
-// gate is also PER SCALAR TYPE (float <= 32, cfloat <= 16, double <= 48,
-// cdouble <= 64), so one case reaches body 5 for all four types only if m <= 16.
-// The resolved route reads native:cta for bodies 3 and 5 alike, so a break must
-// be run in build-novendor or under an explicit route pin.
+// Body 5 -- the segmented TRANSPOSED CTA kernel, GemvSegTKernel<T, W>. Its gate is on
+// red_len (= m under Trans/ConjTrans), not out_len as body 4's is, and it is PER
+// SCALAR TYPE (float <= 32, cfloat <= 16, double <= 48, cdouble <= 64). The resolved
+// route reads native:cta for bodies 3 and 5 alike, so a break must be run in
+// build-novendor or under an explicit route pin.
 // evidence: docs/perf/gemv.md#the-body-5-gates
 // ===========================================================================
 
-// evidence: docs/perf/gemv.md#breaks-that-stayed-green
-
-// The decision surface: a claim about WHICH KERNEL RUNS, asserted at every
-// boundary of the two per-type tables and on both sides, plus the two ways the
-// launcher declines after the gate says yes (no sub-group 32; red_len <= 0).
+// The decision surface: which kernel runs, asserted at every boundary of the two
+// per-type tables, on both sides, plus the launcher's two post-gate declines.
 TYPED_TEST(GemvCoverageTest, SegTransWidthDecisionSurface) {
     using S = typename TestFixture::ScalarType;
     if (!this->ctx) return;
     const bool sg32 = this->ctx->device().supports_sub_group_size(32);
 
-    // (red_len, expected W) transcribed from the two tables in
-    // src/sycl/gemv_native.cc, including the cell one past each edge. kItems is
-    // large enough to clear both rows of gate 3's parallelism floor.
+    // (red_len, expected W) transcribed from the tables in src/sycl/gemv_native.cc,
+    // including the cell one past each edge. kItems clears gate 3's parallelism floor.
     const int64_t kItems = 1 << 20;
     std::vector<std::pair<int, int>> want;
     if constexpr (std::is_same_v<S, float>) {
@@ -935,8 +893,7 @@ TYPED_TEST(GemvCoverageTest, SegTransWidthDecisionSurface) {
     }
     for (const auto& [rl, w] : want) {
         const int got = batchlas::sycl_gemv::gemv_seg_trans_width_debug<S>(*this->ctx, rl, kItems);
-        // A device with no enumerated sub-group 32 declines everything, which
-        // is what keeps the Direct route's no-GPU-gate promise intact.
+        // A device with no enumerated sub-group 32 declines everything.
         EXPECT_EQ(got, sg32 ? w : 1) << "red_len " << rl << " sg32 " << sg32;
     }
     // Degenerate reduction lengths take body 3.
@@ -951,10 +908,8 @@ TYPED_TEST(GemvCoverageTest, SegTransCasesAreReachable) {
     if (!this->ctx) return;
     if (!this->ctx->device().supports_sub_group_size(32)) return;
 
-    // The out_len*batch the body-5 cases below actually use, per W band, against
-    // gate 3's floors of 16*CU and 64*CU. On a bigger device the floors rise
-    // above them, every body-5 case silently becomes a body-3 case and the whole
-    // section proves nothing -- so it reports rather than passing quietly.
+    // Gate 3's floors (16*CU and 64*CU) rise with the device: on a bigger GPU every
+    // body-5 case below silently becomes a body-3 case, so report rather than pass.
     const int64_t kItems8 = 2385;
     const int64_t kItems4 = 8288;
     const int cu = static_cast<int>(
@@ -979,8 +934,7 @@ TYPED_TEST(GemvCoverageTest, SegTransCasesAreReachable) {
               << dispatch::to_string(rt.origin) << ":" << dispatch::to_string(rt.algo)
               << std::endl;
 
-    // Every m used by a body-5 case below. m = 1, 3, 5 and 16 are inside every
-    // type's gate; 40 and 44 are inside double's and complex<double>'s only.
+    // Every m used by a body-5 case below; 40 and 44 are inside the double gates only.
     for (int m : {1, 3, 5, 16}) {
         EXPECT_GT(batchlas::sycl_gemv::gemv_seg_trans_width_debug<S>(*this->ctx, m, kItems), 1)
             << "body 5 must serve red_len " << m << " for every scalar type";
@@ -997,11 +951,10 @@ TYPED_TEST(GemvCoverageTest, SegTransCasesAreReachable) {
 }
 
 // --- the cases -------------------------------------------------------------
-// Every one has ld > m, xinc > 1, yinc > 1 and batch > 1, because body 5 reads
-// all four and a case at their natural values cannot fail when they are ignored.
+// Every one has ld > m, xinc > 1, yinc > 1 and batch > 1: body 5 reads all four, and a
+// case at their natural values cannot fail when they are ignored.
 
-// L = 4 lanes and only one of them has work: red_len = 1 < L, so three lanes of
-// every group carry a zero into the fold.
+// red_len = 1 < L = 4 lanes, so three lanes of every group carry a zero into the fold.
 TYPED_TEST(GemvCoverageTest, SegTransMinimalReduction) {
     using S = typename TestFixture::ScalarType;
     typename TestFixture::Case c;
@@ -1011,9 +964,9 @@ TYPED_TEST(GemvCoverageTest, SegTransMinimalReduction) {
     this->run_case(c);
 }
 
-// Partial lanes and a tail sub-group at once: out_len*batch = 2385 is 1 mod 8,
-// so the last sub-group is mostly past the end. Body 5's early exit is NOT
-// sub-group uniform and must be MASKED, never returned, or the fold is torn.
+// Partial lanes and a tail sub-group at once: out_len*batch = 2385 is 1 mod 8. Body 5's
+// early exit is NOT sub-group uniform and must be MASKED, never returned, or the fold
+// is torn.
 TYPED_TEST(GemvCoverageTest, SegTransPartialLanesAndTail) {
     using S = typename TestFixture::ScalarType;
     typename TestFixture::Case c;
@@ -1023,9 +976,8 @@ TYPED_TEST(GemvCoverageTest, SegTransPartialLanesAndTail) {
     this->run_case(c);
 }
 
-// The W outputs of one sub-group straddle a batch boundary: out_len = 5 with
-// W = 8, so no sub-group's outputs lie inside one matrix. A kernel that computed
-// b once per sub-group instead of once per lane group is wrong only here.
+// out_len = 5 with W = 8, so no sub-group's outputs lie inside one matrix: a kernel
+// that computed b once per sub-group instead of once per lane group is wrong only here.
 TYPED_TEST(GemvCoverageTest, SegTransOutputsStraddleBatchItems) {
     using S = typename TestFixture::ScalarType;
     typename TestFixture::Case c;
@@ -1035,8 +987,7 @@ TYPED_TEST(GemvCoverageTest, SegTransOutputsStraddleBatchItems) {
     this->run_case(c);
 }
 
-// The W = 8 upper edge for every type: red_len = 16 is complex<float>'s whole
-// gate and inside all three others, and is exactly 4*L -- no partial round.
+// The W = 8 upper edge: red_len = 16 is exactly 4*L, and inside every type's gate.
 TYPED_TEST(GemvCoverageTest, SegTransFullLanesConjTranspose) {
     using S = typename TestFixture::ScalarType;
     typename TestFixture::Case c;
@@ -1046,9 +997,8 @@ TYPED_TEST(GemvCoverageTest, SegTransFullLanesConjTranspose) {
     this->run_case(c);
 }
 
-// The W = 4 band is a separate template instantiation and therefore a separate
-// kernel, sharing no code with W = 8. red_len = 40 is inside double's and
-// complex<double>'s gates only; for the other two this runs on body 3.
+// The W = 4 band is a separate template instantiation sharing no code with W = 8.
+// red_len = 40 is inside the double gates only; elsewhere this runs on body 3.
 TYPED_TEST(GemvCoverageTest, SegTransWideBandTranspose) {
     using S = typename TestFixture::ScalarType;
     typename TestFixture::Case c;
@@ -1058,8 +1008,7 @@ TYPED_TEST(GemvCoverageTest, SegTransWideBandTranspose) {
     this->run_case(c);
 }
 
-// One element above complex<float>'s gate and inside the other three: m = 17 is
-// the smallest red_len at which the four types disagree.
+// m = 17 is the smallest red_len at which the four types disagree.
 TYPED_TEST(GemvCoverageTest, SegTransGateBoundaryConjTranspose) {
     using S = typename TestFixture::ScalarType;
     typename TestFixture::Case c;
@@ -1069,8 +1018,7 @@ TYPED_TEST(GemvCoverageTest, SegTransGateBoundaryConjTranspose) {
     this->run_case(c);
 }
 
-// Body 5's own copies of the alpha == 0 and beta == 0 guards -- the fifth pair,
-// one per body. NaN in the operand each leaves unread makes them observable.
+// Body 5's own copies of the alpha == 0 and beta == 0 guards.
 TYPED_TEST(GemvCoverageTest, SegTransBetaZeroDoesNotReadY) {
     using S = typename TestFixture::ScalarType;
     typename TestFixture::Case c;
@@ -1091,8 +1039,7 @@ TYPED_TEST(GemvCoverageTest, SegTransAlphaZeroScalesY) {
     this->run_case(c);
 }
 
-// The batch stride on body 5: it reads A/X/Y.stride() in its own code, and none
-// of the four PaddedBatchStride cases above has an m that reaches it.
+// The batch stride on body 5; none of the four PaddedBatchStride cases reaches it.
 TYPED_TEST(GemvCoverageTest, SegTransPaddedBatchStride) {
     using S = typename TestFixture::ScalarType;
     typename TestFixture::Case c;
@@ -1114,9 +1061,8 @@ TYPED_TEST(GemvCoverageTest, SegTransPaddedBatchStrideWideBand) {
 }
 
 
-// Gate 3, the parallelism condition, on both sides. Body 5 launches
-// (out_len*batch)/W sub-groups against body 3's out_len*batch, so below
-// 8*MAX_COMPUTE_UNITS outputs it gives away parallelism the shape cannot spare.
+// Gate 3, the parallelism condition, on both sides: body 5 launches
+// (out_len*batch)/W sub-groups against body 3's out_len*batch.
 // evidence: docs/perf/gemv.md#the-body-5-gates
 TYPED_TEST(GemvCoverageTest, SegTransParallelismGate) {
     using S = typename TestFixture::ScalarType;
@@ -1127,21 +1073,19 @@ TYPED_TEST(GemvCoverageTest, SegTransParallelismGate) {
     auto w = [&](int red_len, int64_t items) {
         return batchlas::sycl_gemv::gemv_seg_trans_width_debug<S>(*this->ctx, red_len, items);
     };
-    // THE W = 8 ROW, floor 16*CU, probed at a red_len every type puts in that band.
+    // The W = 8 row, floor 16*CU, at a red_len every type puts in that band.
     const int64_t f8 = static_cast<int64_t>(16) * cu;
     EXPECT_EQ(w(8, f8 - 1), 1) << "one output short of the W = 8 floor must take body 3";
     EXPECT_EQ(w(8, f8), 8) << "exactly at the W = 8 floor body 5 must serve the call";
     EXPECT_EQ(w(8, 0), 1);
     EXPECT_EQ(w(8, 1), 1);
 
-    // The W = 4 row, floor 64*CU -- four times higher, which is the point of the
-    // floor being a table. Only double and complex<double> have a W = 4 band.
+    // The W = 4 row, floor 64*CU. Only double and complex<double> have a W = 4 band.
     const int64_t f4 = static_cast<int64_t>(64) * cu;
     if constexpr (std::is_same_v<S, double> || std::is_same_v<S, std::complex<double>>) {
         EXPECT_EQ(w(40, f4 - 1), 1) << "one output short of the W = 4 floor must take body 3";
         EXPECT_EQ(w(40, f4), 4) << "exactly at the W = 4 floor body 5 must serve the call";
-        // AND THE TWO ROWS ARE DIFFERENT. At f8 the W = 8 band is admitted and
-        // the W = 4 band is not; a single-number floor cannot produce this.
+        // And the two rows differ: at f8 the W = 8 band is admitted and W = 4 is not.
         EXPECT_EQ(w(8, f8), 8);
         EXPECT_EQ(w(40, f8), 1) << "the W = 4 band's floor is FOUR TIMES the W = 8 band's";
     } else {
@@ -1150,9 +1094,8 @@ TYPED_TEST(GemvCoverageTest, SegTransParallelismGate) {
     EXPECT_GT(w(8, f8 * 64), 1);
 }
 
-// The env knob bypasses all three gates. BATCHLAS_GEMV_SEGT is re-read per call
-// and never latched, precisely so an earlier gemv call in the same process
-// cannot defeat this assertion.
+// BATCHLAS_GEMV_SEGT bypasses all three gates. It is re-read per call and never
+// latched, so an earlier gemv in the same process cannot defeat this assertion.
 TYPED_TEST(GemvCoverageTest, SegTransSpellingKnobIsNotLatched) {
     using S = typename TestFixture::ScalarType;
     if (!this->ctx) return;

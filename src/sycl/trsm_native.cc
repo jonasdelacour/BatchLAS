@@ -1,11 +1,9 @@
 // Native batched TRSM: the register-resident CTA solver (V1) and the
 // host-blocked driver (V2). See docs/perf/trsm.md.
 //
-// V1 puts one work-group on (matrix, block of solves) and one thread on each
-// INDEPENDENT solve. That thread's x[N] must stay in registers: N is a
-// compile-time bucket >= n and both loops are fully unrolled, because an array
-// indexed by a runtime induction variable is placed in local memory and voids
-// the design. Rows n..N-1 are zero-padded (Lc(s,s)=1) so the tail computes zeros.
+// V1 puts one thread on each independent solve; x[N] must stay in registers, so N
+// is a compile-time bucket >= n and the loops are fully unrolled (indexing x by a
+// runtime variable moves it to local memory). Rows n..N-1 pad with Lc(s,s)=1.
 
 #include "trsm_native.hh"
 
@@ -48,9 +46,8 @@ inline Canonical canonicalise(Side side, Uplo uplo, Transpose transA, Diag diag)
     return c;
 }
 
-// The smallest compile-time bucket >= n, or 0 if there is none. Returning 0
-// rather than the next power of two is the point: a narrower bucket silently
-// solves the leading NxN system. evidence: docs/perf/trsm.md#the-bucket-ladder-that-truncated
+// Smallest compile-time bucket >= n, or 0 for none: a narrower bucket would
+// silently solve the leading NxN system. evidence: docs/perf/trsm.md#the-bucket-ladder-that-truncated
 inline int smallest_bucket_ge(int n) {
     if (n <= 8) return 8;
     if (n <= 16) return 16;
@@ -76,8 +73,7 @@ constexpr int trsm_stage_rows() {
     return sizeof(D) <= 4 ? 16 : 8;
 }
 
-// Only the real types stage: staging moves complex's x[] into local memory, and
-// a 16-byte scalar can over-fetch by at most 2x anyway.
+// Only the real types stage: staging would move complex's x[] into local memory.
 template <typename D>
 constexpr bool trsm_stage_left() {
     return sizeof(D) <= 8 && !sycl_device::dev_is_complex_v<D>;
@@ -136,9 +132,8 @@ Event trsm_native_v1(Queue& ctx,
         sycl::local_accessor<int, 1> use_div(sycl::range<1>(1), h);
 
         // Nothing is staged for Side::Right; its reads are already coalesced.
-        // The row stride is TILE_ROWS + 1, not TILE_ROWS: with the odd stride the
-        // 32 lanes reading their own column land in 32 distinct banks; with
-        // TILE_ROWS itself every read would be 2-way conflicted.
+        // Row stride is TILE_ROWS + 1, not TILE_ROWS: the odd stride puts the 32
+        // lanes' column reads in 32 distinct banks instead of 2-way conflicts.
         constexpr bool kStageLeft = (SideV == Side::Left) && trsm_stage_left<D>();
         constexpr int NB_STAGE  = trsm_stage_rows<D>();
         constexpr int TILE_ROWS = (NB_STAGE < N) ? NB_STAGE : N;
@@ -184,11 +179,9 @@ Event trsm_native_v1(Queue& ctx,
 
                 if (lane == 0) sDiv[0] = 0;
 
-                // ---- Cooperative staging of the canonical triangle ---------
-                // rho(s) = fwd ? s : n-1-s maps canonical to stored index, and
-                // the operand order of Lc is swapped between the two sides.
-                // Conjugate iff transA == ConjTrans, INCLUDING THE DIAGONAL, so
-                // the reciprocal below is taken of the conjugated value.
+                // rho(s) = fwd ? s : n-1-s maps canonical to stored index, and the
+                // operand order of Lc is swapped between the sides. ConjTrans
+                // conjugates INCLUDING THE DIAGONAL, so rd below inverts conj(d).
                 for (size_t idx = lane; idx < tri_elems; idx += static_cast<size_t>(wg)) {
                     int s = 0;
                     while (tri_idx(s + 1, 0) <= static_cast<int>(idx)) ++s;
@@ -210,19 +203,16 @@ Event trsm_native_v1(Queue& ctx,
                     sLc[idx] = v;
                 }
 
-                // REQUIRED; without it the solve returns WRONG ANSWERS. sLc is
-                // written strided by lane and read below by a different lane,
-                // and sDiv[0] is zeroed by lane 0 while any lane may store 1
-                // into it. The race cannot express itself at wg == 32, i.e.
-                // every shape below roughly q*batch = 65k -- the whole suite.
+                // REQUIRED; without it the solve returns WRONG ANSWERS: sLc is
+                // written strided by lane and read by a different lane, and lane 0
+                // zeroes sDiv[0] while any lane may store 1. The race cannot show
+                // at wg == 32, i.e. below roughly q*batch = 65k -- the whole suite.
                 // evidence: docs/perf/trsm.md#the-missing-group-barrier
                 sycl::group_barrier(it.get_group());
 
-                // ---- Diagonal reciprocals, guarded -------------------------
-                // The recurrence multiplies by rd[s] = 1/Lc(s,s), which yields
-                // inf where a division would stay finite, so any thread seeing a
-                // non-finite reciprocal flips a work-group-uniform flag that
-                // reverts the group to division. Complex uses Smith's algorithm.
+                // The recurrence multiplies by rd[s] = 1/Lc(s,s), which is inf
+                // where a division would stay finite; a thread seeing a non-finite
+                // reciprocal flips a group-uniform flag back to division.
                 for (int s = lane; s < N; s += wg) {
                     D r = sycl_device::dev_one<D>();
                     if (s < n && !unit) {
@@ -263,10 +253,9 @@ Event trsm_native_v1(Queue& ctx,
 #pragma unroll
                 for (int k = 0; k < ROUNDS; ++k) {
                     if constexpr (kStageLeft) {
-                        // Barrier BEFORE overwriting the tile: last round's
-                        // reads must have retired. Both barriers sit outside
-                        // every `live` test -- a barrier only some lanes reach
-                        // is undefined, and u >= q is what `live` would drop.
+                        // Barrier BEFORE overwriting the tile: last round's reads
+                        // must have retired. Both barriers sit outside every `live`
+                        // test -- a barrier only some lanes reach is undefined.
                         sycl::group_barrier(it.get_group());
                         // r varies fastest: lanes read consecutive ROWS.
                         for (int i = lane; i < TILE_ROWS * wg; i += wg) {
@@ -359,8 +348,6 @@ Event trsm_native_v1_buckets(Queue& ctx,
         default: break;
     }
     {
-            // The router caps the order via supports(); a direct caller that
-            // exceeds it must throw, not silently solve a leading submatrix.
             throw std::runtime_error(
                 "BatchLAS: trsm_native_v1 called with triangular order " +
                 std::to_string(A.rows()) +
@@ -371,27 +358,20 @@ Event trsm_native_v1_buckets(Queue& ctx,
     }
 }
 
-// V2 -- the host-blocked driver, for orders above V1's register capacity.
-// rho is a BIJECTION on [0,n), so a canonical block and the already-solved set
-// are both contiguous runs in STORED indices, and fwd enters only through the
-// two offsets stored_off computes.
+// V2 -- the host-blocked driver, for orders above V1's register capacity. rho is
+// a BIJECTION on [0,n), so a canonical block and the already-solved set are both
+// contiguous runs in STORED indices; fwd enters only through stored_off.
 //
 // ALPHA IS APPLIED EXACTLY ONCE per element of B: by the V1 solve on the first
-// block, or as the trailing GEMM's BETA on every later one. The natural beta=1
-// there is a wrong answer for every alpha != 1 and passes any alpha == 1 test.
-// Sub-views use the explicit 6-arg constructor, never operator()(Slice,Slice):
-// that constructor defaults stride to ld*cols when 0 is passed, so every call
-// below passes the parent's ld AND stride explicitly.
-//
-// The OUTER block width is NOT the CTA capacity -- tying the trailing update to
-// the diagonal solver's register capacity pins one GEMM dimension at 32 and
-// makes large orders lose. BATCHLAS_TRSM_OUTER_NB is a tuning override only.
-// evidence: docs/perf/trsm.md#the-two-level-blocked-driver
+// block, or as the trailing GEMM's BETA on every later one. beta=1 there is wrong
+// for every alpha != 1 and still passes any alpha == 1 test. Sub-views pass ld AND
+// stride explicitly; the 6-arg constructor defaults stride to ld*cols when 0.
+// The outer block width is deliberately NOT the CTA capacity, which would pin one
+// GEMM dimension at 32. evidence: docs/perf/trsm.md#the-two-level-blocked-driver
 inline int trsm_outer_block_default() { return 128; }
 
-// Widening helps Side::Left at every large order and HURTS Side::Right, whose
-// trailing update puts the width on the other GEMM dimension, so Right keeps the
-// single-level schedule. evidence: docs/perf/trsm.md#rejected-outer_nb-of-128-for-sideright
+// Widening helps Side::Left and HURTS Side::Right, whose trailing update puts the
+// width on the other GEMM dimension. evidence: docs/perf/trsm.md#rejected-outer_nb-of-128-for-sideright
 inline int trsm_outer_block(int cta_nb, Side side) {
     static const int env = [] {
         const char* raw = std::getenv("BATCHLAS_TRSM_OUTER_NB");
@@ -473,8 +453,8 @@ Event trsm_native_blocked(Queue& ctx,
                           ComputePrecision::Default);
         } else {
             // C(q x m) := -X(q x k) * op(Aoff)(k x m) + beta*C. X GOES IN THE A
-            // POSITION: the form with the A block first produces a C of at most
-            // nb rows against the required q and conforms for no transpose.
+            // POSITION: with the A block first, C would have at most nb rows
+            // against the required q.
             trailing_gemm(ctx, X, Aoff, C, T(-1), beta,
                           Transpose::NoTrans, transA,
                           ComputePrecision::Default);
@@ -490,10 +470,8 @@ Event trsm_native_blocked(Queue& ctx,
         trsm_native_v1_dispatch<T>(ctx, Adiag, Bblk, alpha_eff, side, uplo, transA, diag);
     };
 
-    // TWO LEVELS. The outer applies the whole solved prefix to a panel in one
-    // fat GEMM; the inner is the old right-looking loop, against a prefix at
-    // most OUTER_NB - nb wide. Alpha lands on each element of B on its FIRST
-    // touch only, which is what the beta arguments below encode.
+    // TWO LEVELS: the outer applies the whole solved prefix to a panel in one fat
+    // GEMM; the inner is a right-looking loop against a prefix < OUTER_NB wide.
     for (int LO = 0; LO < n; LO += outer_nb) {
         const int HI = std::min(n, LO + outer_nb);
 
@@ -546,9 +524,8 @@ template Event trsm_native_v1_dispatch<std::complex<double>>(
     const MatrixView<std::complex<double>, MatrixFormat::Dense>&, std::complex<double>,
     Side, Uplo, Transpose, Diag);
 
-// Measured CTA capacity per type; the gate is stack frame == 0, zero spill, and
-// registers x work-group <= 65536.
-// evidence: docs/perf/trsm.md#the-register-gate-and-the-cta-capacity
+// Measured CTA capacity per type; the gate is stack frame == 0, zero spill and
+// registers x work-group <= 65536. evidence: docs/perf/trsm.md#the-register-gate-and-the-cta-capacity
 template <> int trsm_cta_max_n<float>()                { return 32; }
 template <> int trsm_cta_max_n<double>()               { return 32; }
 template <> int trsm_cta_max_n<std::complex<float>>()  { return 32; }

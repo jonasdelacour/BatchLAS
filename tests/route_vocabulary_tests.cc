@@ -1,10 +1,9 @@
-// The dispatch vocabulary, and the legacy environment spellings that must keep
-// meaning what they meant.
+// The dispatch vocabulary: Route parsing, the legacy environment spellings, and
+// the per-op RouteTable supports()/preferred() windows.
 //
-// The legacy variables appear in committed benchmark scripts and in the
-// provenance of recorded results under output/. If BATCHLAS_GEMM_VARIANT=sycl
-// silently stopped selecting the register-tiled kernel, every number recorded
-// with it would quietly become uncomparable. These tests pin the mapping.
+// The legacy spellings appear in committed benchmark scripts and in the provenance
+// of recorded results, so their mapping is pinned here rather than reimplemented.
+// evidence: docs/perf/dispatch.md
 
 #include <gtest/gtest.h>
 
@@ -29,8 +28,7 @@ using namespace batchlas::dispatch;
 
 namespace {
 
-// Sets an env var for the lifetime of the object and restores it after, so the
-// cases cannot leak into each other.
+// Sets an env var for the object's lifetime and restores it, so cases cannot leak.
 class ScopedEnv {
 public:
     ScopedEnv(std::string key, const char* value) : key_(std::move(key)) {
@@ -74,9 +72,6 @@ struct ClearRouteEnv {
 // --- the two axes are actually separate -----------------------------------
 
 TEST(RouteVocabulary, OriginAndAlgorithmAreIndependent) {
-    // The defect this whole change addresses: Provider could not say "native"
-    // without also naming an algorithm, nor name an algorithm without implying
-    // an origin.
     const Route a{Origin::Native, Algorithm::Auto};
     const Route b{Origin::Native, Algorithm::CTA};
     const Route c{Origin::Vendor, Algorithm::CTA};
@@ -101,9 +96,6 @@ TEST(RouteVocabulary, LibraryIsOutputNotIdentity) {
 }
 
 TEST(RouteVocabulary, VendorPredicateCoversNetlib) {
-    // Provider::Netlib was an ORIGIN masquerading as a peer of the algorithm
-    // values, which is why three separate normalize_*_vendor_like() helpers
-    // existed. The gate must catch it without enumerating names.
     EXPECT_TRUE(is_vendor(*parse_origin_word("netlib")));
     EXPECT_TRUE(is_vendor(*parse_origin_word("vendor")));
     EXPECT_FALSE(is_vendor(*parse_origin_word("native")));
@@ -133,8 +125,7 @@ TEST(RouteVocabulary, BareAlgorithmImpliesNative) {
 }
 
 TEST(RouteVocabulary, DeviceLibraryAlgorithmImpliesVendor) {
-    // cuBLASDx compiles into our .so but is NVIDIA's source and NVIDIA-only, so
-    // it can never be the portable path. Naming it must not claim Native.
+    // cuBLASDx is NVIDIA's source compiled into our .so; naming it must not claim Native.
     const auto r = parse_route_value("cublasdx");
     ASSERT_TRUE(r.has_value());
     EXPECT_EQ(r->algo, Algorithm::FusedDevice);
@@ -142,8 +133,6 @@ TEST(RouteVocabulary, DeviceLibraryAlgorithmImpliesVendor) {
 }
 
 TEST(RouteVocabulary, UnknownValueIsRejectedNotSilentlyAuto) {
-    // The legacy parsers returned Auto for anything they did not recognise,
-    // which turned a typo into a silent routing change.
     EXPECT_FALSE(parse_route_value("nonsense").has_value());
     EXPECT_FALSE(parse_route_value("native:nonsense").has_value());
     EXPECT_FALSE(parse_route_value("").has_value());
@@ -165,16 +154,9 @@ TEST(RouteVocabulary, LegacyGemmVariantSyclSelectsRegisterTiled) {
 }
 
 TEST(RouteVocabulary, LegacyGemmNativeMeansRawCudaNotBatchLAS) {
-    // THE TRAP. BATCHLAS_GEMM_VARIANT=native is gemm_variant.hh's alias for
-    // cuda-native / direct-cuda -- the RAW CUDA path. GemmVariantRequest::Native
-    // is consumed purely as an exclusion (both gemm_use_sycl_custom and
-    // gemm_use_cublasdx_custom return false for it), so the call lands in
-    // gemm_vendor_impl. The same word means the opposite thing in the canonical
-    // vocabulary, where "native" is BatchLAS's own kernel.
-    //
-    // Routing it through the canonical parser would silently flip GEMM from
-    // vendor to native for anyone who had set it. Caught by the route
-    // equivalence diff; pinned here so it cannot come back.
+    // THE TRAP: legacy BATCHLAS_GEMM_VARIANT=native names the RAW CUDA path, so it
+    // must map to Origin::Vendor -- the opposite of what "native" means in the
+    // canonical vocabulary. evidence: docs/perf/dispatch.md#the-environment-vocabulary
     for (const char* spelling : {"native", "cuda-native", "direct-cuda"}) {
         const auto legacy = parse_legacy_route_value(Op::gemm, spelling);
         ASSERT_TRUE(legacy.has_value()) << spelling;
@@ -194,11 +176,9 @@ TEST(RouteVocabulary, LegacyGemmNativeMeansRawCudaNotBatchLAS) {
 }
 
 TEST(RouteVocabulary, LegacyLevel3CustomMeansTheFusedKernelNotRegisterTiled) {
-    // THE SECOND COLLISION. In symm/syrk/syr2k/trmm, "custom" was
-    // parse_cublasdx_variant_request's custom_variant -- the FUSED cuBLASDx
-    // kernel. The canonical parser reads "custom" as an alias for the
-    // register-tiled GEMM family. Different kernel, same word, so the level-3
-    // ops must not go through the generic parser for it.
+    // THE SECOND COLLISION: in symm/syrk/syr2k/trmm the legacy "custom" names the
+    // FUSED cuBLASDx kernel, while canonical "custom" is our register-tiled family.
+    // Different kernel, same word, so these ops must not use the generic parser.
     for (Op op : {Op::symm, Op::syrk, Op::syr2k, Op::trmm}) {
         const auto legacy = parse_legacy_route_value(op, "custom");
         ASSERT_TRUE(legacy.has_value()) << op_env_stem(op);
@@ -212,8 +192,6 @@ TEST(RouteVocabulary, LegacyLevel3CustomMeansTheFusedKernelNotRegisterTiled) {
     EXPECT_EQ(canonical->algo, Algorithm::RegisterTiled);
     EXPECT_TRUE(is_native(*canonical));
 
-    // ...and the collision does not leak into gemm, whose "custom" really is
-    // the register-tiled kernel.
     const auto gemm_custom = parse_legacy_route_value(Op::gemm, "custom");
     ASSERT_TRUE(gemm_custom.has_value());
     EXPECT_EQ(gemm_custom->algo, Algorithm::RegisterTiled);
@@ -251,11 +229,6 @@ TEST(RouteVocabulary, LegacyLevel3GemmIsTheVendorMeasurementRoute) {
 }
 
 TEST(RouteVocabulary, LegacyTrmmTriangularIsOneValueNotTwoReadings) {
-    // BATCHLAS_TRMM_VARIANT was read by two parsers that disagreed about its
-    // vocabulary: one understood vendor/cublasdx/auto and answered Auto for
-    // anything else, the other looked only for triangular|tiles. So this value
-    // was simultaneously "no opinion" and "pin the tile kernel", and the pair
-    // had to be consulted together to mean anything.
     ClearRouteEnv clear(Op::trmm);
     ScopedEnv set("BATCHLAS_TRMM_VARIANT", "triangular");
 
@@ -312,28 +285,19 @@ TEST(RouteVocabulary, CanonicalSpellingWinsOverLegacy) {
     EXPECT_FALSE(parsed.source.legacy);
 }
 
-// --- the unset default, which used to be asymmetric ------------------------
+// --- the unset default -----------------------------------------------------
 
 TEST(RouteVocabulary, UnsetDefaultsAreAutoForEveryOp) {
-    // This test used to be called UnsetDefaultsDifferBetweenGemmAndLevel3 and
-    // asserted the opposite for GEMM: gemm_variant_request() returned Vendor
-    // when its variable was unset while parse_cublasdx_variant_request()
-    // returned Auto, which is why the level-3 native tile kernels ran by
-    // default and GEMM's never did.
-    //
-    // WP2 E6 removed that asymmetry, after E3 and E4 measured every window
-    // preferred() claims. Keeping the assertion and inverting it -- rather than
-    // deleting it -- is deliberate: an absent assertion cannot detect a silent
-    // revert, and this particular default is one line that changes the route of
-    // every GEMM call in the library.
+    // Auto for every op. GEMM's unset default was Vendor until its window was
+    // measured, and this one line changes the route of every GEMM call.
+    // evidence: docs/perf/gemm.md#the-auto-flip
     EXPECT_EQ(legacy_unset_default(Op::gemm).origin, Origin::Auto);
     EXPECT_EQ(legacy_unset_default(Op::syrk).origin, Origin::Auto);
     EXPECT_EQ(legacy_unset_default(Op::symm).origin, Origin::Auto);
     EXPECT_EQ(legacy_unset_default(Op::trmm).origin, Origin::Auto);
 
-    // Auto is not "always native": it defers to preferred(), and an explicitly
-    // named route still wins. Those are covered in
-    // tests/route_gemm_equivalence_tests.cc.
+    // Auto is not "always native": it defers to preferred(), and a named route
+    // still wins. Covered in tests/route_gemm_equivalence_tests.cc.
     EXPECT_EQ(legacy_unset_default(Op::gemm).algo, Algorithm::Auto);
 }
 
@@ -367,16 +331,10 @@ TEST(RouteVocabulary, ShapeClassCollapsesIterationsButNotRegimes) {
 
 
 // ---------------------------------------------------------------------------
-// WP3 step 1 -- RouteTable<Op::trsm, T>.
-//
-// These pin the one property the vendor-free build depends on and which a
-// single-boolean predicate cannot express: a route may be SUPPORTED while not
-// being PREFERRED. resolve_route (route_resolve.hh:60-63) implements the
-// vendor-off fallback by re-walking the candidate order testing supports()
-// ALONE, so if a speed threshold ever migrates into supports(), trsm stops
-// having any route at all without a vendor and level3.cc throws. That is the
-// exact regression docs/perf/trsm.md#what-the-spec-got-wrong finding 3 is about, and it
-// would otherwise only show up as a vendor-free suite going red much later.
+// RouteTable<Op::trsm, T>. A route may be SUPPORTED while not PREFERRED: the
+// vendor-off fallback re-walks the candidate order testing supports() ALONE, so
+// a speed threshold placed in supports() leaves trsm with no route at all in a
+// vendor-free build. evidence: docs/perf/trsm.md#what-the-spec-got-wrong
 // ---------------------------------------------------------------------------
 namespace {
 
@@ -405,12 +363,8 @@ constexpr Route kAuto{Origin::Auto, Algorithm::Auto};
 } // namespace
 
 TEST(RouteTrsm, SupportedButNotPreferredIsTheWholePoint) {
-    // The supports/preferred split must stay visible even now that float wins
-    // everywhere measured, so this names a cell that is structurally supported
-    // and un-preferred for a NON-speed reason: batch below the measured floor.
-    // At batch=1 the native kernel measured 0.40-0.86x (docs/perf/trsm.md#the-step-9-grid),
-    // and that floor lives in preferred(), so a vendor-free build still routes
-    // it natively rather than throwing.
+    // A cell that is supported and un-preferred for a NON-speed reason: batch below
+    // the measured floor. evidence: docs/perf/trsm.md#the-batch-floor
     const auto s = trsm_shape(/*tri_order=*/32, /*q=*/1024, /*batch=*/1, /*cta_max=*/32,
                               Side::Left);
     EXPECT_TRUE(TrsmTable::supports(kCta, s))
@@ -424,30 +378,17 @@ TEST(RouteTrsm, SupportedButNotPreferredIsTheWholePoint) {
 }
 
 // ---------------------------------------------------------------------------
-// The measured window (WP3 step 9). These replace a pair of tests that pinned
-// preferred() as all-false -- correct while nothing had been measured, and
-// actively wrong now: the point of step 9 was to move traffic, so a test
-// asserting that no traffic moves would have to be deleted or the flip
-// abandoned. What is pinned instead is the SHAPE of the measurement, so that a
-// later edit widening a window has to come with its own numbers.
+// The shipped preferred() window. evidence: docs/perf/trsm.md#the-measured-grid
 // ---------------------------------------------------------------------------
 
 TEST(RouteTrsm, FloatLeftIsPreferredAtEveryOrder) {
-    // This test used to pin the boundary at 16, which is where it sat while
-    // Side::Left read B's columns one scattered lane at a time. WP3 step 12
-    // built the SLM staging tile and the boundary moved to 128: orders 32, 64
-    // and 128 went from 0.70-0.79x to 1.19-3.20x. Order 256 did NOT follow
-    // (0.76-0.93x), so there is still a window and it still has a top.
+    // float Side::Left is preferred at every order: CTA up to the CTA capacity,
+    // the blocked driver above it.
     for (int64_t order : {8, 16, 32, 64, 128}) {
         const Route r = (order <= 32) ? kCta : kBlocked;
         EXPECT_TRUE(TrsmTable::preferred(r, trsm_shape(order, 1024, 2048, 32, Side::Left)))
             << "float Side::Left order " << order << " wins after the staging tile";
     }
-    // THE WORK THRESHOLD IS GONE (WP3 step 16). It existed because the large
-    // cells lost, and they lost on the trailing-update GEMM rather than on the
-    // solve; routing that GEMM turned 0.76-0.92x into 1.21-1.32x, so Side::Left
-    // is preferred at every order and every size. These two cells are the ones
-    // the old threshold excluded.
     EXPECT_TRUE(TrsmTable::preferred(kBlocked, trsm_shape(256, 1024, 512, 32, Side::Left)))
         << "float Side::Left order 256 at q*batch=524288 now measures 1.32x";
     EXPECT_TRUE(TrsmTable::preferred(kBlocked, trsm_shape(512, 1024, 512, 32, Side::Left)))
@@ -455,9 +396,7 @@ TEST(RouteTrsm, FloatLeftIsPreferredAtEveryOrder) {
     EXPECT_TRUE(TrsmTable::preferred(kBlocked, trsm_shape(512, 256, 128, 32, Side::Left)))
         << "and the small-work cells it always won stay won";
 
-    // Same orders, other side: all preferred, and untouched by the tile --
-    // Side::Right never stages, and its register counts are byte-identical
-    // before and after (114/153/144/226 at N=32).
+    // Side::Right is preferred at every order the CTA arm serves.
     for (int64_t order : {8, 16, 32}) {
         EXPECT_TRUE(TrsmTable::preferred(kCta, trsm_shape(order, 1024, 2048, 32, Side::Right)))
             << "float Side::Right order " << order << " measured 1.54-4.59x";
@@ -465,9 +404,8 @@ TEST(RouteTrsm, FloatLeftIsPreferredAtEveryOrder) {
 }
 
 TEST(RouteTrsm, BatchFloorIsSpeedNotCorrectness) {
-    // batch=1 measured 0.40-0.86x at order >= 32; batch=8 already wins. The
-    // floor therefore sits at 8 -- and it lives in preferred(), so a vendor-free
-    // build at batch=1 still routes native rather than throwing.
+    // The floor is batch 8, and it lives in preferred(): a vendor-free build at
+    // batch=1 still routes native rather than throwing.
     const auto tiny = trsm_shape(16, 1024, 1, 32, Side::Right);
     EXPECT_FALSE(TrsmTable::preferred(kCta, tiny));
     EXPECT_TRUE(TrsmTable::supports(kCta, tiny));
@@ -478,10 +416,8 @@ TEST(RouteTrsm, BatchFloorIsSpeedNotCorrectness) {
 }
 
 TEST(RouteTrsm, DoubleAndComplexWinEveryMeasuredCell) {
-    // 32/32, 30/30 and 30/30 cells respectively, both sides, order 8..256.
-    // Spelled as three separate instantiations because the predicate is
-    // `if constexpr` on T -- s.scalar is NOT what it reads, so a test that only
-    // varied s.scalar would pass while testing float three times.
+    // preferred() switches on the TABLE's T, never on s.scalar, so each type needs
+    // its own instantiation -- a sweep over s.scalar would test float three times.
     for (int64_t order : {8, 32}) {
         for (Side sd : {Side::Left, Side::Right}) {
             const auto s = trsm_shape(order, 1024, 2048, 32, sd);
@@ -499,9 +435,8 @@ TEST(RouteTrsm, DoubleAndComplexWinEveryMeasuredCell) {
 }
 
 TEST(RouteTrsm, VendorIsNeverItselfPreferred) {
-    // The vendor route is LAST in kTrsmOrder, so returning true for it would be
-    // indistinguishable from falling through -- until someone reorders the list
-    // and every native cell silently loses.
+    // The vendor route is LAST in kTrsmOrder, so a true here is indistinguishable
+    // from falling through -- until someone reorders the list.
     const auto s = trsm_shape(16, 1024, 2048, 32, Side::Right);
     EXPECT_FALSE(TrsmTable::preferred(Route{Origin::Vendor, Algorithm::Auto}, s));
 }
@@ -522,9 +457,8 @@ TEST(RouteTrsm, VendorFreeStillFindsANativeRouteAtEveryOrder) {
 }
 
 TEST(RouteTrsm, AbsentKernelIsUnsupportedRatherThanSelectable) {
-    // cta_max_n == 0 is the state until the kernel TU lands. Both native routes
-    // must report UNSUPPORTED, so this table can be merged before the kernel
-    // exists without ever selecting a launch that is not there.
+    // cta_max_n == 0 is what a build without the kernel reports: both native routes
+    // must be UNSUPPORTED, never selectable.
     const auto s = trsm_shape(32, 128, 4096, /*cta_max=*/0);
     EXPECT_FALSE(TrsmTable::supports(kCta, s));
     EXPECT_FALSE(TrsmTable::supports(kBlocked, s));
@@ -572,41 +506,22 @@ TEST(RouteTrsm, RhsCountFollowsSide) {
 }
 
 // ---------------------------------------------------------------------------
-// POTRF's table (WP4 step 0.4). Same discipline as the RouteTrsm block above,
-// and for the same reason: docs/perf/potrf.md#what-the-spec-got-wrong:559/:567 put two BATCH thresholds
-// inside supports() and then claimed at :574 that the native routes would be
-// "reachable only by force". Both halves are wrong, and both are load-bearing:
-//
-//   * a batch threshold in supports() removes potrf's vendor-free route
-//     entirely (route_resolve.hh:60-63 re-walks the order testing supports()
-//     ALONE), which is the failure WP4 exists to remove; and
-//   * a forced route bypasses preferred() but NEVER supports()
-//     (route_resolve.hh:101), so "reachable only by force" would silently run
-//     cuSOLVER and pass green over an untested kernel.
-//
-// These cases pin the SPLIT, not any numbers -- there are no measured numbers
-// for potrf yet, which is what PotrfPreferredIsFalseEverywhere says out loud.
+// POTRF's table. Same split as RouteTrsm above: a batch threshold in supports()
+// would remove potrf's vendor-free route entirely, and a forced route bypasses
+// preferred() but NEVER supports(). evidence: docs/perf/potrf.md
 // ---------------------------------------------------------------------------
 namespace {
 
-// PERMISSIVE DEFAULTS, one hostile field per case. If the fixture left
-// cta_max_n at 0 or has_sg32 at false, every "supports() is false" case below
-// would pass for the wrong reason -- the "test that cannot fail by
-// construction" family this repo has hit three times (trmm uplo/diag; a
-// conjugation test blind by construction; a ConjTrans test too small to reach
-// the tile it guarded).
+// PERMISSIVE DEFAULTS, one hostile field per case: with cta_max_n at 0 or has_sg32
+// false, every "supports() is false" case below would pass for the wrong reason.
 PotrfShape potrf_shape(int64_t order, int64_t batch, int cta_max,
                        Uplo uplo = Uplo::Lower) {
     PotrfShape s;
     s.op = Op::potrf;
     s.scalar = ScalarKind::F32;
-    // AUTO, deliberately. resolve_potrf_route is the INSTRUMENTED entry point
-    // (route_resolve.hh:130-152), so every shape built here lands in the
-    // coverage table and shows up in a scripts/route_diff.sh capture. The real
-    // builder sets s.backend = B (potrf_route.hh), so leaving this at AUTO is
-    // what keeps a synthetic unit-test row distinguishable from a row a library
-    // call actually produced -- otherwise the burn-down would read as though
-    // potrf had reached a native route on CUDA, which it has not.
+    // AUTO, deliberately: resolve_potrf_route is the INSTRUMENTED entry point, so
+    // every shape built here lands in the coverage table. The real builder sets
+    // s.backend = B, so AUTO keeps a synthetic row distinguishable from a real call.
     s.backend = Backend::AUTO;
     s.m = order;                 // square: m == n == k == the order
     s.n = order;
@@ -629,12 +544,9 @@ constexpr Route kPotrfAuto{Origin::Auto, Algorithm::Auto};
 } // namespace
 
 TEST(RoutePotrf, SupportedButNotPreferredIsTheWholePoint) {
-    // The one case the whole split exists for. 155 is the CTA fit ceiling WP4
-    // step 0.2 MEASURED for float (docs/perf/potrf.md#the-slm-budget-and-the-fit-ceilings;
-    // the spec's 105 came from a 45,056 B budget that the runtime query --
-    // sycl::info::device::local_mem_size == 101,376 B -- refutes), and batch=1
-    // is exactly the shape a spec-faithful supports() would have made
-    // UNSUPPORTED.
+    // 155 is the measured float CTA fit ceiling, and batch=1 is exactly the shape a
+    // spec-faithful supports() would have made UNSUPPORTED.
+    // evidence: docs/perf/potrf.md#the-slm-budget-and-the-fit-ceilings
     const auto s = potrf_shape(/*order=*/128, /*batch=*/1, /*cta_max=*/155);
 
     EXPECT_TRUE(PotrfTable::supports(kPotrfCta, s))
@@ -667,9 +579,8 @@ TEST(RoutePotrf, VendorFreeFallbackPicksTheNativeRoute) {
         << "an order above the SLM capacity must fall to the blocked driver, "
            "not vanish";
 
-    // A BARE ORIGIN must also resolve to a specific algorithm: potrf has two
-    // native routes, so {Native, Auto} names neither and no dispatch tail can
-    // map it to a kernel (route_resolve.hh:87-98).
+    // A BARE ORIGIN must resolve to a specific algorithm: potrf has two native
+    // routes, so {Native, Auto} names neither and no dispatch tail can map it.
     const Route rbare = resolve_potrf_route<float>(kPotrfNativeBare, small,
                                                    /*vendor_available=*/true);
     EXPECT_EQ(rbare.origin, Origin::Native);
@@ -677,11 +588,8 @@ TEST(RoutePotrf, VendorFreeFallbackPicksTheNativeRoute) {
 }
 
 TEST(RoutePotrf, PreferredIsFalseEverywhere) {
-    // The merge state, asserted rather than assumed. This is what makes step
-    // 0.7's route_diff a real gate: with preferred() all-false, Origin::Auto
-    // takes the vendor for every shape, so no existing decision can move.
-    // Delete this test when the spec 10.3 grid is measured -- and replace it
-    // with clauses citing the cells, as route_trsm.hh:188-325 does.
+    // preferred() is all-false for potrf, so Origin::Auto takes the vendor for every
+    // shape. Replace this with clauses citing cells when a grid is measured.
     for (int64_t order : {1, 8, 63, 64, 77, 109, 155, 156, 512, 4096}) {
         for (int64_t batch : {1, 8, 128, 2048}) {
             for (Uplo up : {Uplo::Lower, Uplo::Upper}) {
@@ -695,9 +603,8 @@ TEST(RoutePotrf, PreferredIsFalseEverywhere) {
             }
         }
     }
-    // ...and the other three scalar types, spelled out: were the table ever to
-    // become `if constexpr (is_same_v<T, float>)`, a loop that only varied
-    // s.scalar would test float three times.
+    // ...and the other three scalar types, spelled out: preferred() reads the
+    // table's T, so a loop varying s.scalar would test float three times.
     const auto s = potrf_shape(64, 512, 155);
     EXPECT_FALSE((RouteTable<Op::potrf, double>::preferred(kPotrfCta, s)));
     EXPECT_FALSE((RouteTable<Op::potrf, std::complex<float>>::preferred(kPotrfCta, s)));
@@ -738,8 +645,7 @@ TEST(RoutePotrf, CorrectnessGatesAreNotSpeedGates) {
     auto no_blocked = over;  no_blocked.blocked_available = false;
     EXPECT_FALSE(PotrfTable::supports(kPotrfBlocked, no_blocked));
 
-    // THE THREE THINGS THAT ARE *NOT* CORRECTNESS GATES. Each is what the spec
-    // put in supports(); each must stay SUPPORTED.
+    // THE THREE THINGS THAT ARE *NOT* CORRECTNESS GATES; each must stay SUPPORTED.
     auto tiny_batch = ok;  tiny_batch.batch = 1;
     EXPECT_TRUE(PotrfTable::supports(kPotrfCta, tiny_batch))
         << "spec:559's kPotrfCtaMinBatch belongs in preferred()";
@@ -752,15 +658,10 @@ TEST(RoutePotrf, CorrectnessGatesAreNotSpeedGates) {
 }
 
 TEST(RoutePotrf, Sg32GatesBothNativeArms) {
-    // The gate trsm does not have, so it cannot arrive by copying trsm's table.
-    // A device whose sub_group_sizes lack 32 REJECTS the launch of a kernel
-    // carrying [[sycl::reqd_sub_group_size(32)]], and the blocked driver's
-    // diagonal leaf IS that same device function -- so one missing capability
-    // must close BOTH arms, not just the CTA one.
-    //
-    // The order is above the CTA ceiling so that the blocked arm is the one
-    // actually under test; at order 64 the CTA arm would answer first and the
-    // second assertion could not distinguish the two.
+    // A device whose sub_group_sizes lack 32 REJECTS the launch of a kernel carrying
+    // [[sycl::reqd_sub_group_size(32)]], and the blocked driver's diagonal leaf IS
+    // that same device function, so one missing capability must close BOTH arms. The
+    // order is above the CTA ceiling so the blocked arm is the one under test.
     auto s = potrf_shape(/*order=*/200, /*batch=*/256, /*cta_max=*/155);
     ASSERT_TRUE(PotrfTable::supports(kPotrfBlocked, s))
         << "guard: the blocked arm must be OPEN before we close it, or the "
@@ -782,10 +683,9 @@ TEST(RoutePotrf, Sg32GatesBothNativeArms) {
 }
 
 TEST(RoutePotrf, UpperIsUnsupportedByTheBlockedDriver) {
-    // Uplo::Upper on the blocked arm is a CORRECTNESS gate, not a preference:
-    // the driver implements the Lower recurrence only and would read and
-    // overwrite the wrong triangle. Contrast syev, whose blocked arms accept
-    // Upper because they MIRROR first (syev.hh:840-847, uplo_mirror.hh).
+    // Uplo::Upper on the blocked arm is a CORRECTNESS gate: the driver implements
+    // the Lower recurrence only and would overwrite the wrong triangle. Contrast
+    // syev, whose blocked arms accept Upper because they MIRROR first.
     const auto lower = potrf_shape(/*order=*/512, /*batch=*/64, /*cta_max=*/155,
                                    Uplo::Lower);
     const auto upper = potrf_shape(/*order=*/512, /*batch=*/64, /*cta_max=*/155,
@@ -793,21 +693,15 @@ TEST(RoutePotrf, UpperIsUnsupportedByTheBlockedDriver) {
     ASSERT_TRUE(PotrfTable::supports(kPotrfBlocked, lower));
     EXPECT_FALSE(PotrfTable::supports(kPotrfBlocked, upper));
 
-    // ...so a vendor-free build has no native route for an Upper order above
-    // the CTA ceiling, and must say so.
     EXPECT_TRUE(is_vendor(resolve_potrf_route<float>(kPotrfAuto, upper,
                                                      /*vendor_available=*/false)))
         << "no native route can serve it; the honest answer is 'needs a vendor'";
 }
 
 TEST(RoutePotrf, AbsentKernelIsUnsupportedRatherThanSelectable) {
-    // cta_max_n == 0 / blocked_available == false is what a build WITHOUT the
-    // kernel reports. blocked_available is exactly that state today
-    // (src/extensions/potrf_cta.cc returns false for every type -- the driver is
-    // Phase 2), and cta_max_n is that state on any device whose local memory
-    // cannot hold even a 1x1 tile. Both native routes must then report
-    // UNSUPPORTED, so a capability that is absent can never select a launch that
-    // is not there. This is what let the table merge ahead of the kernel.
+    // cta_max_n == 0 / blocked_available == false is what a build WITHOUT the kernel
+    // reports. Both native routes must then be UNSUPPORTED, so an absent capability
+    // can never select a launch that is not there.
     const auto s = potrf_shape(/*order=*/64, /*batch=*/256, /*cta_max=*/0);
     EXPECT_FALSE(PotrfTable::supports(kPotrfCta, s));
     EXPECT_FALSE(PotrfTable::supports(kPotrfBlocked, s));
@@ -816,20 +710,15 @@ TEST(RoutePotrf, AbsentKernelIsUnsupportedRatherThanSelectable) {
         << "vendor-free with nothing supported must say 'needs a vendor', not "
            "invent a native route";
 
-    // AND FORCING MUST NOT ESCAPE IT. route_resolve.hh:101 gates the forced
-    // route on supports() and falls through to automatic() -- which is why a
-    // green forced-route test is not by itself evidence that a native kernel
-    // ran.
+    // AND FORCING MUST NOT ESCAPE IT: a forced route is gated on supports() and
+    // falls through to automatic(), so a green forced-route test proves nothing.
     EXPECT_TRUE(is_vendor(resolve_potrf_route<float>(kPotrfCta, s, true)));
     EXPECT_TRUE(is_vendor(resolve_potrf_route<float>(kPotrfNativeBare, s, true)));
 }
 
 TEST(RoutePotrf, BatchlasPotrfRouteIsActuallyRead) {
-    // The spec's BATCHLAS_POTRF_PROVIDER is read by NOTHING in this tree, so
-    // "pin the native path with it" would have pinned nothing. The canonical
-    // spelling needs no registry entry -- parse_route_env synthesises
-    // "BATCHLAS_" + op_env_stem(op) + "_ROUTE" (route_env.hh:214-217) -- but
-    // that is a claim about a code path nobody had exercised for potrf.
+    // No registry entry is needed: parse_route_env synthesises
+    // "BATCHLAS_" + op_env_stem(op) + "_ROUTE".
     ClearRouteEnv clear(Op::potrf);
 
     EXPECT_EQ(op_env_stem(Op::potrf), "POTRF");
@@ -873,108 +762,22 @@ TEST(RoutePotrf, BatchlasPotrfRouteIsActuallyRead) {
 }
 
 // ---------------------------------------------------------------------------
-// GEQRF's table (WP5 scaffolding). Same discipline as the RoutePotrf block
-// above, plus gates that have no potrf analogue at all.
-//
-// WHY THESE CASES EXIST AT A POINT WHERE NO KERNEL DOES. Every one of them pins
-// a property that is invisible while the capabilities report absent and becomes
-// load-bearing the instant one comes off zero:
-//
-//   * a speed threshold in supports() would remove geqrf's vendor-free route
-//     entirely (route_resolve.hh:60-63 re-walks the order testing supports()
-//     ALONE), and geqrf is the op the vendor-free burn-down is blocked on;
-//   * a forced route bypasses preferred() but NEVER supports()
-//     (route_resolve.hh:101), so a table with one gate wrong makes
-//     BATCHLAS_GEQRF_ROUTE=cta silently run cuSOLVER and pass green;
-//   * copying potrf's `m == n` gate here would strip geqrf of rectangular A,
-//     which is the entire point of the op (options.hh:727-730).
-//
-// THE BREAKS THAT WERE RUN AGAINST THESE CASES, AND WHAT EACH DID, recorded in
-// the shape of tests/potrf_tests.cc:28-70 -- because this repository has now
-// shipped FIVE tests that could not fail by construction, the most recent
-// written in the same change as the fix it guarded. Every break below was
-// applied to the source, REBUILT, and run; the two that turned nothing red are
-// reported, not hidden.
-//
-//   B1  a speed threshold in supports() (`if (s.batch < 64) return false;`)
-//         -> RED: VendorFreeFallbackHandsOverTheNativeRoute,
-//                 CorrectnessGatesAreNotSpeedGates
-//   B2  preferred() replaced by route_ormqr.hh:78-79's
-//       `is_native(r) && supports(r, s)`
-//         -> RED: PreferredIsFalseEverywhere,
-//                 VendorFreeFallbackHandsOverTheNativeRoute
-//   B3  the `m >= n` gate deleted
-//         -> RED: WideIsUnsupportedByEveryNativeArm
-//   B4  the CTA area test replaced by a per-extent bound
-//       (`s.n <= s.cta_max_elems` instead of `s.m * s.n <= s.cta_max_elems`)
-//         -> RED: CtaCapacityIsAnAreaAndAHeightNotTwoExtentBounds
-//   B5  the `cta_max_* < 1` absent-kernel guards deleted from both arms
-//         -> RED: AbsentKernelIsUnsupportedRatherThanSelectable
-//   B6  `case Op::geqrf/orgqr:` added to legacy_variable_for (route_env.hh:109)
-//         -> RED: BatchlasGeqrfRouteIsActuallyRead,
-//                 BatchlasOrgqrRouteIsActuallyRead
-//   B7  route_orgqr.hh's INHERITED complex + Transpose::Trans gate deleted
-//         -> RED: CorrectnessGatesIncludeTheOnesInheritedFromOrmqr
-//
-// AND THE TWO THAT NOTHING HERE CAN SEE, which is the more useful half:
-//
-//   B8  geqrf_cta_max_m_for_slm/geqrf_cta_max_elems_for_slm made non-zero with
-//       NO kernel behind them
-//         -> NOTHING in this file turned red, and nothing could: every case
-//            above builds its own GeqrfShape and never asks the build what its
-//            capabilities are. It was verified at the FACADE instead --
-//            build-novendor's orgqr_tests then failed with
-//            "geqrf_buffer_size: resolved to a native route (native:cta) but no
-//            native geqrf kernel is linked into this build", i.e. the whole
-//            chain (env read -> builder -> table -> vendor-free fallback ->
-//            facade native arm -> internal-consistency throw) is live.
-//   B9  B8 plus the facade's geqrf native arm and its buffer-size native terms
-//       deleted
-//         -> NOTHING turned red anywhere. build-novendor went straight back to
-//            the ordinary "no route for geqrf<float> ... built without cuBLAS"
-//            NoRouteError. THAT is the defect this scaffolding exists to
-//            prevent: without the native arm, a capability coming off zero is
-//            absorbed in silence, and in a vendor-PRESENT build the same
-//            deletion would quietly hand every call to cuSOLVER
-//            (route_compiled.hh:1-24). No unit test can catch it; only writing
-//            the arm before the kernel can.
-//
-// UPDATE, WP5 KERNELS: the kernels have since landed
-// (src/extensions/geqrf_cta_device.hh + geqrf_cta.cc + geqrf_blocked.cc, and
-// orgqr_blocked.cc), so the capacities now answer from the device's real
-// local_mem_size and geqrf_blocked_available/orgqr_blocked_available are true.
-// NONE of the cases below changed: each builds its own GeqrfShape/OrgqrShape by
-// hand and never asks the build what its capabilities are -- which is exactly
-// what B8 records. The kernels' own correctness is verified in
-// docs/perf/qr.md#break-sweeps (a residual + orthogonality + ELEMENTWISE-vs-vendor
-// harness, five reference breaks and seven kernel breaks). preferred() is still
-// false for both ops, so PreferredIsFalseEverywhere is still the merge state and
-// still the thing to delete when a measured grid says otherwise.
-//
-// ONE PROPERTY DELIBERATELY LEFT UNGUARDED, stated so it is not mistaken for
-// covered: geqrf_op_shape/orgqr_op_shape set `s.backend = B` (the line trsm's
-// and ormqr's builders omit, which is why their coverage rows all read
-// Backend::AUTO). Deleting it turns nothing red here, because these cases build
-// their shapes by hand. It is only observable in a -DBATCHLAS_ENABLE_COVERAGE
-// build's CSV.
+// GEQRF's table. Same split as the RoutePotrf block, plus two gates with no potrf
+// analogue: the CTA capacity is an AREA and a height, and copying potrf's
+// `m == n` gate here would strip geqrf of rectangular A, which is the point of
+// the op. evidence: docs/perf/qr.md
 // ---------------------------------------------------------------------------
 namespace {
 
-// PERMISSIVE DEFAULTS, one hostile field per case. If the fixture left the
-// capacities at 0 or has_sg32 at false, every "supports() is false" case below
-// would pass for the wrong reason -- the "test that cannot fail by construction"
-// family this repo has hit five times.
+// PERMISSIVE DEFAULTS, one hostile field per case: with the capacities at 0 or
+// has_sg32 false, every "supports() is false" case below passes for the wrong reason.
 GeqrfShape geqrf_shape(int64_t rows, int64_t cols, int64_t batch,
                        int cta_max_m, int64_t cta_max_elems) {
     GeqrfShape s;
     s.op = Op::geqrf;
     s.scalar = ScalarKind::F32;
-    // AUTO, deliberately -- the same reason as potrf_shape's: resolve_geqrf_route
-    // is the INSTRUMENTED entry point (route_resolve.hh:130-152), so every shape
-    // built here lands in the coverage table and shows up in a route_diff
-    // capture. The real builder sets s.backend = B (src/backends/geqrf_route.hh),
-    // so leaving this at AUTO keeps a synthetic unit-test row distinguishable
-    // from a row a library call actually produced.
+    // AUTO, deliberately -- the same reason as potrf_shape's: it keeps a synthetic
+    // unit-test coverage row distinguishable from one a library call produced.
     s.backend = Backend::AUTO;
     s.m = rows;
     s.n = cols;
@@ -997,11 +800,8 @@ constexpr Route kGeqrfAuto{Origin::Auto, Algorithm::Auto};
 } // namespace
 
 TEST(RouteGeqrf, VendorFreeFallbackHandsOverTheNativeRoute) {
-    // THE TEST THAT FAILS IF A SPEED THRESHOLD EVER LANDS IN supports(). batch=1
-    // and a tiny panel are exactly the shapes a "minimum batch" or "minimum n"
-    // gate would make UNSUPPORTED, and route_resolve.hh:60-63 tests supports()
-    // alone -- so such a gate turns a vendor-free geqrf back into the
-    // NoRouteError that four ormqr/orgqr suites already die on.
+    // THE TEST THAT FAILS IF A SPEED THRESHOLD EVER LANDS IN supports(): the
+    // vendor-free walk tests supports() alone, so such a gate removes the route.
     const auto s = geqrf_shape(/*rows=*/64, /*cols=*/16, /*batch=*/1,
                                /*cta_max_m=*/256, /*cta_max_elems=*/8192);
 
@@ -1021,9 +821,8 @@ TEST(RouteGeqrf, VendorFreeFallbackHandsOverTheNativeRoute) {
 }
 
 TEST(RouteGeqrf, RectangularIsSupportedAndSquarenessIsNotAGate) {
-    // The single most likely wrong edit in this file is copying
-    // route_potrf.hh:213's `if (s.m != s.n) return false;`. A tall panel is what
-    // band_reduction.cc:595 and sytrd_sy2sb.cc:504 actually issue.
+    // The most likely wrong edit here is copying potrf's `if (s.m != s.n)`: a tall
+    // panel is what band_reduction.cc and sytrd_sy2sb.cc actually issue.
     const auto tall   = geqrf_shape(1024, 32, 128, 2048, 1 << 20);
     const auto square = geqrf_shape(64, 64, 128, 2048, 1 << 20);
     EXPECT_TRUE(GeqrfTable::supports(kGeqrfCta, tall))
@@ -1039,11 +838,9 @@ TEST(RouteGeqrf, RectangularIsSupportedAndSquarenessIsNotAGate) {
 }
 
 TEST(RouteGeqrf, WideIsUnsupportedByEveryNativeArm) {
-    // m < n IS a correctness gate: both planned drivers are panel-oriented
-    // right-looking schedules over columns, and a wide view walks the trailing
-    // update past the bottom of the panel. It is also the conservative direction
-    // -- a superfluous gate sends the call to the vendor (loud in a vendor-free
-    // build), a missing one returns wrong numbers quietly.
+    // m < n IS a correctness gate: both drivers are panel-oriented right-looking
+    // schedules over columns, and a wide view walks the trailing update past the
+    // bottom of the panel.
     const auto wide = geqrf_shape(/*rows=*/32, /*cols=*/1024, /*batch=*/128,
                                   /*cta_max_m=*/2048, /*cta_max_elems=*/1 << 20);
     EXPECT_FALSE(GeqrfTable::supports(kGeqrfCta, wide));
@@ -1059,11 +856,8 @@ TEST(RouteGeqrf, WideIsUnsupportedByEveryNativeArm) {
 }
 
 TEST(RouteGeqrf, CtaCapacityIsAnAreaAndAHeightNotTwoExtentBounds) {
-    // The CTA tile holds the whole m x n panel, so what fits is governed by m*n.
-    // A table that checked only per-extent ceilings would accept a panel whose
-    // tile is many times the budget -- an unlaunchable route, which is exactly
-    // what supports() exists to exclude.
-    //
+    // The CTA tile holds the whole m x n panel, so the fit is governed by m*n; a
+    // table checking only per-extent ceilings would accept an unlaunchable panel.
     // cta_max_m = 256, cta_max_elems = 8192.
     const auto fits = geqrf_shape(/*rows=*/256, /*cols=*/32, /*batch=*/64, 256, 8192);
     ASSERT_TRUE(GeqrfTable::supports(kGeqrfCta, fits))
@@ -1081,9 +875,8 @@ TEST(RouteGeqrf, CtaCapacityIsAnAreaAndAHeightNotTwoExtentBounds) {
         << "512*8 == 4096 fits the tile, but one Householder vector spans 512 "
            "rows and the reduction has its own ceiling";
 
-    // The BLOCKED arm inherits the PRESENCE of the leaf but not its capacity --
-    // it splits the panel itself. That is what makes the two-tier ladder a
-    // capability ladder rather than a tuned guess.
+    // The BLOCKED arm inherits the PRESENCE of the leaf but not its capacity -- it
+    // splits the panel itself.
     EXPECT_TRUE(GeqrfTable::supports(kGeqrfBlocked, over_area));
     EXPECT_TRUE(GeqrfTable::supports(kGeqrfBlocked, over_height));
 
@@ -1119,8 +912,7 @@ TEST(RouteGeqrf, CorrectnessGatesAreNotSpeedGates) {
     auto no_batch = ok;  no_batch.batch = 0;
     EXPECT_FALSE(GeqrfTable::supports(kGeqrfCta, no_batch));
 
-    // THE THINGS THAT ARE *NOT* CORRECTNESS GATES. Each must stay SUPPORTED, and
-    // each is what a spec-shaped supports() would have refused.
+    // THE THINGS THAT ARE *NOT* CORRECTNESS GATES; each must stay SUPPORTED.
     auto tiny_batch = ok;  tiny_batch.batch = 1;
     EXPECT_TRUE(GeqrfTable::supports(kGeqrfCta, tiny_batch))
         << "a minimum-batch threshold belongs in preferred()";
@@ -1134,13 +926,9 @@ TEST(RouteGeqrf, CorrectnessGatesAreNotSpeedGates) {
 }
 
 TEST(RouteGeqrf, Sg32GatesBothNativeArms) {
-    // A device whose sub_group_sizes lack 32 REJECTS the launch of a kernel
-    // carrying [[sycl::reqd_sub_group_size(32)]], and the blocked driver's panel
-    // leaf IS that same device function -- so one missing capability must close
-    // BOTH arms, not just the CTA one.
-    //
-    // The panel is chosen ABOVE the CTA area so the blocked arm is the one
-    // actually under test; at a fitting size the CTA arm would answer first.
+    // The blocked driver's panel leaf IS the reqd_sub_group_size(32) device function,
+    // so one missing capability must close BOTH arms. The panel is above the CTA
+    // area so the blocked arm is the one under test.
     auto big = geqrf_shape(/*rows=*/1024, /*cols=*/1024, /*batch=*/64, 256, 8192);
     ASSERT_FALSE(GeqrfTable::supports(kGeqrfCta, big))
         << "guard: this panel must NOT fit the CTA tile, or the next assertions "
@@ -1156,17 +944,12 @@ TEST(RouteGeqrf, Sg32GatesBothNativeArms) {
     small.has_sg32 = false;
     EXPECT_FALSE(GeqrfTable::supports(kGeqrfCta, small));
 
-    // And a vendor-free build must then say "needs a vendor" rather than handing
-    // back a route whose launch the device would reject.
     EXPECT_TRUE(is_vendor(resolve_geqrf_route<float>(kGeqrfAuto, small, false)));
 }
 
 TEST(RouteGeqrf, PreferredIsFalseEverywhere) {
-    // The merge state, asserted rather than assumed. With preferred() all-false,
-    // Origin::Auto takes the vendor for every shape, so no existing decision can
-    // move -- which is what makes the scaffolding gate ("same passes, same
-    // failures, same messages") a real gate. Delete this test when a measured
-    // window lands, and replace it with clauses citing the cells.
+    // preferred() is all-false for geqrf, so Origin::Auto takes the vendor for every
+    // shape. Replace with clauses citing cells when a measured window lands.
     for (int64_t rows : {1, 32, 128, 512, 1024, 4096}) {
         for (int64_t cols : {1, 16, 32, 128, 512}) {
             if (cols > rows) continue;
@@ -1181,9 +964,8 @@ TEST(RouteGeqrf, PreferredIsFalseEverywhere) {
             }
         }
     }
-    // ...and the other three scalar types, spelled out: were the table ever to
-    // become `if constexpr (is_same_v<T, float>)`, a loop that only varied
-    // s.scalar would test float three times.
+    // ...and the other three scalar types, spelled out: preferred() reads the
+    // table's T, so a loop varying s.scalar would test float three times.
     const auto s = geqrf_shape(256, 64, 512, 4096, 1 << 24);
     EXPECT_FALSE((RouteTable<Op::geqrf, double>::preferred(kGeqrfCta, s)));
     EXPECT_FALSE((RouteTable<Op::geqrf, std::complex<float>>::preferred(kGeqrfCta, s)));
@@ -1194,10 +976,8 @@ TEST(RouteGeqrf, PreferredIsFalseEverywhere) {
 }
 
 TEST(RouteGeqrf, BareOriginResolvesToASpecificAlgorithm) {
-    // geqrf has TWO native routes, so {Native, Auto} names neither and no
-    // dispatch tail can map it to a kernel (route_resolve.hh:87-98). Below the
-    // CTA capacity -> CTA; above it -> Blocked. Never {Native, Auto}, never "no
-    // route".
+    // geqrf has TWO native routes, so {Native, Auto} names neither. Below the CTA
+    // capacity -> CTA; above it -> Blocked. Never "no route".
     const auto small = geqrf_shape(128, 64, 256, 256, 8192);
     const auto big   = geqrf_shape(1024, 1024, 64, 256, 8192);
 
@@ -1215,12 +995,8 @@ TEST(RouteGeqrf, BareOriginResolvesToASpecificAlgorithm) {
 }
 
 TEST(RouteGeqrf, AbsentKernelIsUnsupportedRatherThanSelectable) {
-    // ZERO CAPACITY / blocked_available == false is what THIS BUILD reports
-    // today: src/extensions/geqrf_cta.cc returns 0 from both capacity functions
-    // and geqrf_blocked.cc returns false for every type. Both native routes must
-    // then be UNSUPPORTED, so a capability that is absent can never select a
-    // launch that is not there. This is what lets the tables merge ahead of the
-    // kernels.
+    // Zero capacity / blocked_available == false is what a build without the kernels
+    // reports: both native routes must then be UNSUPPORTED.
     const auto s = geqrf_shape(/*rows=*/128, /*cols=*/64, /*batch=*/256,
                                /*cta_max_m=*/0, /*cta_max_elems=*/0);
     EXPECT_FALSE(GeqrfTable::supports(kGeqrfCta, s));
@@ -1230,9 +1006,8 @@ TEST(RouteGeqrf, AbsentKernelIsUnsupportedRatherThanSelectable) {
         << "vendor-free with nothing supported must say 'needs a vendor', not "
            "invent a native route";
 
-    // AND FORCING MUST NOT ESCAPE IT. route_resolve.hh:101 gates the forced route
-    // on supports() and falls through to automatic() -- which is why a green
-    // forced-route test is not by itself evidence that a native kernel ran.
+    // AND FORCING MUST NOT ESCAPE IT: a forced route is gated on supports(), so a
+    // green forced-route test is not evidence that a native kernel ran.
     EXPECT_TRUE(is_vendor(resolve_geqrf_route<float>(kGeqrfCta, s, true)));
     EXPECT_TRUE(is_vendor(resolve_geqrf_route<float>(kGeqrfBlocked, s, true)));
     EXPECT_TRUE(is_vendor(resolve_geqrf_route<float>(kGeqrfNativeBare, s, true)));
@@ -1251,12 +1026,8 @@ TEST(RouteGeqrf, AbsentKernelIsUnsupportedRatherThanSelectable) {
 }
 
 TEST(RouteGeqrf, BatchlasGeqrfRouteIsActuallyRead) {
-    // geqrf had NO route resolution at all before WP5 -- the facade was four
-    // `if constexpr (!vendor) throw; else vendor;` bodies -- so "pin the native
-    // path with BATCHLAS_GEQRF_ROUTE" was a claim about a code path nobody had
-    // exercised for this op. The canonical spelling needs no registry entry
-    // (parse_route_env synthesises it, route_env.hh:214-217), but that is exactly
-    // the sort of claim that turns out to be false.
+    // The canonical spelling needs no registry entry -- parse_route_env synthesises
+    // it -- but nothing had exercised that path for geqrf.
     ClearRouteEnv clear(Op::geqrf);
 
     EXPECT_EQ(op_env_stem(Op::geqrf), "GEQRF");
@@ -1293,9 +1064,8 @@ TEST(RouteGeqrf, BatchlasGeqrfRouteIsActuallyRead) {
         EXPECT_EQ(p.route, (Route{Origin::Native, Algorithm::Blocked}));
     }
     {
-        // AN UNRECOGNISED VALUE IS SILENTLY {Auto, Auto}, WHICH IS THE VENDOR.
-        // This is the measurement trap the campaign has hit before: a "native"
-        // run that looks identical to the vendor probably IS the vendor.
+        // AN UNRECOGNISED VALUE IS SILENTLY {Auto, Auto}, WHICH IS THE VENDOR: a
+        // "native" run that looks identical to the vendor probably IS the vendor.
         ScopedEnv e("BATCHLAS_GEQRF_ROUTE", "not-a-route");
         const auto p = parse_route_env(Op::geqrf);
         EXPECT_FALSE(p.found);
@@ -1304,13 +1074,9 @@ TEST(RouteGeqrf, BatchlasGeqrfRouteIsActuallyRead) {
 }
 
 // ---------------------------------------------------------------------------
-// ORGQR's table (WP5 scaffolding).
-//
-// orgqr ships as ORMQR APPLIED TO AN IDENTITY, so its supports() is
-// RouteTable<Op::ormqr,T>::supports()' gates TRANSCRIBED plus orgqr's own --
-// because that table is what will actually serve the call, and silently omitting
-// an inherited gate is the wrong-answer class. These cases pin the transcription
-// as well as the split.
+// ORGQR's table. orgqr ships as ORMQR APPLIED TO AN IDENTITY, so its supports()
+// TRANSCRIBES RouteTable<Op::ormqr,T>'s gates plus its own -- that table is what
+// serves the call, and omitting an inherited gate is the wrong-answer class.
 // ---------------------------------------------------------------------------
 namespace {
 
@@ -1342,11 +1108,9 @@ constexpr Route kOrgqrAuto{Origin::Auto, Algorithm::Auto};
 } // namespace
 
 TEST(RouteOrgqr, VendorFreeFallbackHandsOverTheNativeRoute) {
-    // The same speed-threshold guard as geqrf's. It matters more here than the
-    // ratios suggest: the vendor orgqr is NOT batched (cublas.cc:1413-1420 loops
-    // cusolverDnXorgqr per batch item), so a gate that pushed orgqr back to the
-    // vendor would also restore a workspace of single_ws * batch
-    // (cublas.cc:1447).
+    // The same speed-threshold guard as geqrf's, and it matters more: the vendor
+    // orgqr is a per-item loop, so a gate back to it also restores a workspace of
+    // single_ws * batch.
     const auto s = orgqr_shape(/*rows=*/64, /*cols=*/64, /*batch=*/1);
 
     EXPECT_TRUE(OrgqrTable::supports(kOrgqrBlocked, s));
@@ -1358,10 +1122,8 @@ TEST(RouteOrgqr, VendorFreeFallbackHandsOverTheNativeRoute) {
 }
 
 TEST(RouteOrgqr, PreferredIsFalseEverywhere) {
-    // NOT route_ormqr.hh:78-79's `is_native(r) && supports(r, s)`. Copying that
-    // spelling would make native the default on every supported shape with no
-    // measured window at all -- and there IS a measured losing cell to respect
-    // (cfloat n=2048 loses at every batch that fits in 24 GB).
+    // NOT `is_native(r) && supports(r, s)`: that spelling would make native the
+    // default on every supported shape, and cfloat n=2048 is a measured loss.
     for (int64_t n : {1, 32, 64, 256, 1024, 2048}) {
         for (int64_t batch : {1, 8, 128, 2048}) {
             const auto s = orgqr_shape(n, n, batch);
@@ -1384,16 +1146,12 @@ TEST(RouteOrgqr, CorrectnessGatesIncludeTheOnesInheritedFromOrmqr) {
         << "guard: the permissive shape must be supported, or every EXPECT_FALSE "
            "below passes for the wrong reason";
 
-    // INHERITED from route_ormqr.hh:59 -- the native apply is GPU-only, which is
-    // also why the four ormqr/orgqr suites' Backend::NETLIB rows are NOT closable
-    // by WP5 (test_utils::backend_types instantiates them against Device("cpu")).
+    // INHERITED from route_ormqr.hh -- the native apply is GPU-only.
     auto cpu = ok;  cpu.is_gpu = false;
     EXPECT_FALSE(OrgqrTable::supports(kOrgqrBlocked, cpu));
 
-    // INHERITED from route_ormqr.hh:63-66 -- complex with a plain Trans. It
-    // cannot fire through the builder, which pins transA to NoTrans, but the gate
-    // is transcribed rather than dropped, and this case is what proves the
-    // transcription is present and applies only to complex.
+    // INHERITED from route_ormqr.hh -- complex with a plain Trans. It cannot fire
+    // through the builder, but the gate is transcribed rather than dropped.
     auto complex_trans = ok;  complex_trans.transA = Transpose::Trans;
     EXPECT_FALSE(OrgqrTableC::supports(kOrgqrBlocked, complex_trans))
         << "route_ormqr.hh:63-66's exclusion must be inherited, not silently "
@@ -1429,10 +1187,8 @@ TEST(RouteOrgqr, CorrectnessGatesIncludeTheOnesInheritedFromOrmqr) {
 }
 
 TEST(RouteOrgqr, AbsentDriverIsUnsupportedRatherThanSelectable) {
-    // blocked_available == false is what THIS BUILD reports today
-    // (src/extensions/orgqr_blocked.cc). It is NOT "is ormqr_blocked compiled" --
-    // that is already true, and answering with it would hand a vendor-free caller
-    // a route the facade cannot service.
+    // blocked_available is orgqr's OWN driver flag, not "is ormqr_blocked compiled";
+    // answering with the latter hands back a route the facade cannot service.
     const auto s = orgqr_shape(/*rows=*/256, /*cols=*/256, /*batch=*/128,
                                /*blocked_available=*/false);
     EXPECT_FALSE(OrgqrTable::supports(kOrgqrBlocked, s));
@@ -1450,9 +1206,8 @@ TEST(RouteOrgqr, AbsentDriverIsUnsupportedRatherThanSelectable) {
 
 TEST(RouteOrgqr, BareOriginResolvesToASpecificAlgorithm) {
     // orgqr has ONE native route, but {Native, Auto} must still come back as
-    // {Native, Blocked} rather than verbatim -- no dispatch tail can map an Auto
-    // algorithm to a kernel. Note the departure from route_ormqr.hh:57, which
-    // accepts Algorithm::Auto inside supports() as if it were Blocked.
+    // {Native, Blocked} -- no dispatch tail can map an Auto algorithm to a kernel.
+    // Note the departure from route_ormqr.hh, which accepts Auto inside supports().
     const auto s = orgqr_shape(256, 256, 128);
     const Route r = resolve_orgqr_route<float>(kOrgqrNativeBare, s,
                                                /*vendor_available=*/true);
@@ -1471,10 +1226,8 @@ TEST(RouteOrgqr, BatchlasOrgqrRouteIsActuallyRead) {
         << "no legacy orgqr variable ever shipped; a case in legacy_variable_for "
            "would INVENT a legacy spelling";
 
-    // AND THE OP IT DELEGATES TO IS PINNED BY A DIFFERENT VARIABLE. orgqr's
-    // native arm re-enters routed ormqr, which reads its own canonical spelling
-    // AND a legacy one. Pinning one and not the other is how a measurement ends
-    // up describing something other than what was intended.
+    // AND THE OP IT DELEGATES TO IS PINNED BY A DIFFERENT VARIABLE: orgqr's native
+    // arm re-enters routed ormqr, which reads its own canonical and legacy names.
     EXPECT_EQ(legacy_variable_for(Op::ormqr), "BATCHLAS_ORMQR_PROVIDER");
 
     {
@@ -1506,52 +1259,21 @@ TEST(RouteOrgqr, BatchlasOrgqrRouteIsActuallyRead) {
 }
 
 // ---------------------------------------------------------------------------
-// WP6 -- the LU family: getrf, getrs, getri.
-//
-// These cases are SYNTHETIC: they call supports()/preferred() on hand-built
-// shapes, so they exercise the tables and not the kernels -- which is why they
-// keep working now that all three ops have live native arms. tests/getrf_tests.cc
-// is where the real device shapes are asserted.
-//
-// Same discipline as the RoutePotrf and RouteGeqrf blocks above. Every case here
-// pins a property that was invisible while the capabilities reported absent and
-// is load-bearing now that they do not:
-//
-//   * a speed threshold in supports() would remove the vendor-free route
-//     entirely (route_resolve.hh:113-127 re-walks the order testing supports()
-//     ALONE), and for getrf/getri that is the route inverse_tests needs;
-//   * a forced route bypasses preferred() but NEVER supports()
-//     (route_resolve.hh:165), so a table with one gate wrong makes
-//     BATCHLAS_GETRF_ROUTE=cta silently run cuBLAS and pass green;
-//   * getrf/getri DO take potrf's `m == n` gate, unlike geqrf where copying it was
-//     the recorded wrong edit -- and a case below pins that the two families
-//     differ on purpose rather than by accident;
-//   * getrs's transA is a LIVE routing input and the only field in this family
-//     that separates a coverage row from its neighbour.
-//
-// THE BREAKS THAT WERE RUN AGAINST THESE CASES, AND WHAT EACH DID, recorded in the
-// shape of the RouteGeqrf block above -- because this repository has now shipped
-// SIX tests that could not fail by construction, one of them written in the same
-// change as the fix it guarded. Every break below was applied to the source,
-// REBUILT, and run; the ones that turned nothing red are reported, not hidden.
-// The results are in the WP6 record.
+// The LU family: getrf, getrs, getri. These cases are SYNTHETIC -- they call
+// supports()/preferred() on hand-built shapes and never reach a kernel;
+// tests/getrf_tests.cc is where the real device shapes are asserted. getrf and
+// getri DO take potrf's `m == n` gate, unlike geqrf. evidence: docs/perf/lu.md
 // ---------------------------------------------------------------------------
 namespace {
 
-// PERMISSIVE DEFAULTS, one hostile field per case. If the fixture left cta_max_n
-// at 0 or has_sg32 at false, every "supports() is false" case below would pass for
-// the wrong reason -- the "test that cannot fail by construction" family this repo
-// has now hit six times.
+// PERMISSIVE DEFAULTS, one hostile field per case: with cta_max_n at 0 or has_sg32
+// false, every "supports() is false" case below passes for the wrong reason.
 GetrfShape getrf_shape(int64_t order, int64_t batch, int cta_max_n) {
     GetrfShape s;
     s.op = Op::getrf;
     s.scalar = ScalarKind::F32;
-    // AUTO, deliberately -- the same reason as potrf_shape's and geqrf_shape's:
-    // resolve_getrf_route is the INSTRUMENTED entry point
-    // (route_resolve.hh:178-217), so every shape built here lands in the coverage
-    // table and shows up in a route_diff capture. The real builder sets
-    // s.backend = B (src/backends/getrf_route.hh), so leaving this at AUTO keeps a
-    // synthetic unit-test row distinguishable from one a library call produced.
+    // AUTO, deliberately -- the same reason as potrf_shape's and geqrf_shape's: it
+    // keeps a synthetic coverage row distinguishable from one a library call made.
     s.backend = Backend::AUTO;
     s.m = order;
     s.n = order;
@@ -1564,24 +1286,11 @@ GetrfShape getrf_shape(int64_t order, int64_t batch, int cta_max_n) {
     return s;
 }
 
-// THE FUSED TIER'S TWO CAPACITIES, AND THEY DEFAULT TO PRESENT.
-//
-// This is a REPAIR, and the defect it repairs is the exact shape this file exists
-// to catch. The helper below used to set neither field, so both defaulted to 0,
-// so RouteTable<getrs>::supports({Native, CTA}, s) returned false on EVERY shape
-// in this file -- which meant every `is_vendor(resolve(...))` assertion about
-// getrs held no matter what preferred() said, and the whole fused tier plus its
-// measured nrhs window could land, or be inverted, with this suite reporting
-// 78/78 either way. A helper that quietly describes a device on which the tier
-// under test cannot run is a BLIND GUARD, and the campaign has now recorded eight.
-//
-// The values are what this box actually reports for a 4-byte scalar: local memory
-// 101,376 B, less the 4 KB the launcher holds back, less the largest diagonal
-// block the tier ever charges (32 x 33 floats = 4,224 B), over sizeof(float) --
-// 23,264 elements -- and kGetrsFusedMaxRhs = 8. They are CONSTANTS here rather
-// than a device query because this file is the PURE layer: getrf_tests.cc's
-// RouteTableAndTheVendorFreeFallback is what asks the real builder on the real
-// device whether it agrees. Two files, two halves of the same claim.
+// THE FUSED TIER'S TWO CAPACITIES, AND THEY DEFAULT TO PRESENT. A helper that left
+// them at 0 makes RouteTable<getrs>::supports({Native, CTA}, s) false on every
+// shape here, and every getrs assertion below then holds vacuously whatever the
+// table says. The values are what this box reports for a 4-byte scalar;
+// getrf_tests.cc is what asks the real builder on the real device whether it agrees.
 constexpr int64_t kFusedMaxElemsF32 = 23264;
 constexpr int64_t kFusedMaxNrhs     = 8;
 
@@ -1624,13 +1333,8 @@ GetriShape getri_shape(int64_t order, int64_t batch,
 }
 
 // "Does this table DECLARE the optional third predicate?" -- the same detection
-// route_resolve.hh:76-83 performs, spelled once here.
-//
-// IT HAS TO BE A TEMPLATE. Written inline against a concrete table
-// (`requires { GetrfTable::native_tier_preferred(r, s); }`) the name lookup is a
-// HARD ERROR rather than a substitution failure, because nothing is dependent --
-// which is exactly how route_resolve.hh gets it right: its check sits inside a
-// template whose `Table` is a parameter.
+// route_resolve.hh performs. IT HAS TO BE A TEMPLATE: written against a concrete
+// table the name lookup is a hard error rather than a substitution failure.
 template <typename Tbl, typename Shape>
 inline constexpr bool declares_native_tier_preferred =
     requires(Route r, const Shape& s) { Tbl::native_tier_preferred(r, s); };
@@ -1655,22 +1359,9 @@ constexpr Route kGetriAuto{Origin::Auto, Algorithm::Auto};
 constexpr Route kVendorAuto{Origin::Vendor, Algorithm::Auto};
 
 // ---- THE OTHER THREE SCALAR TYPES, NAMED ONCE ------------------------------
-//
-// WHY THIS BLOCK EXISTS, AND IT IS A REPAIR OF THE SAME CLASS THE FILE ALREADY
-// RECORDS TWICE. Every LU helper above builds a shape with `s.scalar =
-// ScalarKind::F32` and every alias above instantiates the table at `float`.
-// preferred() decides on the TABLE's T (`if constexpr (std::is_same_v<T, ...>)`)
-// and NOT on s.scalar, so a per-type clause -- and WP8 lands three of them --
-// has its cfloat, double and cdouble boundaries checked by NOTHING unless the
-// table is instantiated at those types. A sweep that varies s.scalar tests float
-// three times and reports green through an inverted double clause.
-//
-// NOTE that the helpers still build shapes carrying `scalar = F32`. That is
-// harmless for the DECISION -- preferred() reads the table's T and never
-// s.scalar -- but it means a route_diff capture reads F32 on every synthetic row
-// in this file, whatever type the table was instantiated at. Filter those rows
-// on `backend == AUTO` and read them as "the pure layer ran", not as "the
-// library routed a float".
+// preferred() decides on the TABLE's T and NOT on s.scalar, so a per-type clause
+// has its cfloat, double and cdouble boundaries checked by nothing unless the
+// table is instantiated at those types.
 using GetrfTableD  = RouteTable<Op::getrf, double>;
 using GetrfTableCF = RouteTable<Op::getrf, std::complex<float>>;
 using GetrfTableCD = RouteTable<Op::getrf, std::complex<double>>;
@@ -1684,15 +1375,9 @@ using GetriTableCD = RouteTable<Op::getri, std::complex<double>>;
 } // namespace
 
 TEST(RouteGetrf, VendorFreeFallbackHandsOverTheNativeRoute) {
-    // THE TEST THAT FAILS IF A SPEED THRESHOLD EVER LANDS IN supports(). batch=2
-    // and a small order are exactly the shapes a "minimum batch" or "minimum n"
-    // gate would make UNSUPPORTED, and route_resolve.hh:113-127 tests supports()
-    // ALONE -- so such a gate turns a vendor-free getrf back into the NoRouteError
-    // that inverse_tests dies on today.
-    //
-    // batch=2 AND order=40 ARE inverse_tests' ACTUAL EXTENTS
-    // (tests/inverse_tests.cc:10-39). That suite is the one WP6 can close
-    // outright, and it closes if and only if these values stay supported.
+    // THE TEST THAT FAILS IF A SPEED THRESHOLD EVER LANDS IN supports(): the
+    // vendor-free walk tests supports() ALONE. order=40 and batch=2 are
+    // inverse_tests' own extents, so that suite closes only if they stay supported.
     const auto s = getrf_shape(/*order=*/40, /*batch=*/2, /*cta_max_n=*/128);
 
     EXPECT_TRUE(GetrfTable::supports(kGetrfCta, s))
@@ -1716,15 +1401,9 @@ TEST(RouteGetrf, VendorFreeFallbackHandsOverTheNativeRoute) {
 }
 
 TEST(RouteGetrf, SquarenessIsAGateHereAndDeliberatelyNotInGeqrf) {
-    // getrf takes route_potrf.hh:213's `m != n` line and geqrf refuses it, and the
-    // two are one edit apart. This case pins BOTH halves so that copying either
-    // file's supports() into the other turns something red.
-    //
-    // The justification is not "LU is square" in the abstract -- LAPACK's xGETRF is
-    // defined for rectangular A. It is that BatchLAS's public getrf is square:
-    // options.hh:615 calls require_square on every arena spelling and cuBLAS's
-    // getrfBatched takes one `n`. Widening it is an API change, not a routing
-    // decision.
+    // getrf takes potrf's `m != n` line and geqrf refuses it; the two are one edit
+    // apart, so both halves are pinned here. The justification is that BatchLAS's
+    // public getrf is square -- widening it is an API change, not a routing one.
     auto wide = getrf_shape(/*order=*/64, /*batch=*/128, /*cta_max_n=*/256);
     wide.n = 1024;                    // m=64, n=1024, k=64
     EXPECT_FALSE(GetrfTable::supports(kGetrfCta, wide));
@@ -1740,9 +1419,8 @@ TEST(RouteGetrf, SquarenessIsAGateHereAndDeliberatelyNotInGeqrf) {
     const auto square = getrf_shape(64, 128, 256);
     ASSERT_TRUE(GetrfTable::supports(kGetrfCta, square));
 
-    // ...and the sibling table must still NOT have the gate. A wrong edit in the
-    // other direction -- deleting geqrf's rectangular support -- is the recorded
-    // one (route_geqrf.hh:55-64), so it is pinned from here too.
+    // ...and the sibling table must still NOT have the gate: deleting geqrf's
+    // rectangular support is the recorded wrong edit in the other direction.
     GeqrfShape g;
     g.op = Op::geqrf;
     g.scalar = ScalarKind::F32;
@@ -1762,8 +1440,7 @@ TEST(RouteGetrf, SquarenessIsAGateHereAndDeliberatelyNotInGeqrf) {
 
 TEST(RouteGetrf, CtaCapacityIsTheOrderAndBlockedInheritsOnlyThePresence) {
     // The CTA tile holds the whole n x n matrix PLUS the pivot-search scratch, so
-    // the capacity is a hard launch limit and not a tuning knob. A single number
-    // suffices here where geqrf needs two, because the operand is square.
+    // the capacity is a hard launch limit and not a tuning knob.
     const auto fits = getrf_shape(/*order=*/128, /*batch=*/64, /*cta_max_n=*/128);
     ASSERT_TRUE(GetrfTable::supports(kGetrfCta, fits))
         << "guard: order 128 is exactly the capacity";
@@ -1772,8 +1449,7 @@ TEST(RouteGetrf, CtaCapacityIsTheOrderAndBlockedInheritsOnlyThePresence) {
     EXPECT_FALSE(GetrfTable::supports(kGetrfCta, over));
 
     // The BLOCKED arm inherits the PRESENCE of the leaf but not its capacity -- it
-    // splits the matrix into panels the leaf can hold itself. That is what makes
-    // the two-tier ladder a capability ladder rather than a tuned guess.
+    // splits the matrix into panels the leaf can hold.
     EXPECT_TRUE(GetrfTable::supports(kGetrfBlocked, over));
 
     // ...but only when it exists.
@@ -1781,12 +1457,9 @@ TEST(RouteGetrf, CtaCapacityIsTheOrderAndBlockedInheritsOnlyThePresence) {
     no_blocked.blocked_available = false;
     EXPECT_FALSE(GetrfTable::supports(kGetrfBlocked, no_blocked));
 
-    // AND THE BLOCKED ARM CARRIES NO LOWER BOUND. "order <= the CTA capacity so
-    // blocked should be false" is a FIT judgement between two native routes, and
-    // route_potrf.hh:284-296 records what putting it in supports() costs: per
-    // route_resolve.hh:165 a forced `blocked` at a small order falls through to
-    // automatic() at :175, which at merge returns {Vendor, Auto} -- so the test
-    // that pinned the blocked driver measures cuBLAS and passes green.
+    // AND THE BLOCKED ARM CARRIES NO LOWER BOUND: "order <= the CTA capacity so
+    // blocked should be false" is a fit judgement between two native routes, and in
+    // supports() it makes a forced `blocked` fall through and measure the vendor.
     const auto tiny = getrf_shape(/*order=*/1, /*batch=*/256, /*cta_max_n=*/128);
     EXPECT_TRUE(GetrfTable::supports(kGetrfBlocked, tiny));
 }
@@ -1816,8 +1489,7 @@ TEST(RouteGetrf, CorrectnessGatesAreNotSpeedGates) {
     EXPECT_FALSE(GetrfTable::supports(kGetrfCta, no_batch));
     EXPECT_FALSE(GetrfTable::supports(kGetrfBlocked, no_batch));
 
-    // THE THINGS THAT ARE *NOT* CORRECTNESS GATES. Each must stay SUPPORTED, and
-    // each is what a spec-shaped supports() would have refused.
+    // THE THINGS THAT ARE *NOT* CORRECTNESS GATES; each must stay SUPPORTED.
     auto tiny_batch = ok;  tiny_batch.batch = 1;
     EXPECT_TRUE(GetrfTable::supports(kGetrfCta, tiny_batch))
         << "a minimum-batch threshold belongs in preferred()";
@@ -1830,13 +1502,9 @@ TEST(RouteGetrf, CorrectnessGatesAreNotSpeedGates) {
 }
 
 TEST(RouteGetrf, Sg32GatesBothNativeArms) {
-    // A device whose sub_group_sizes lack 32 REJECTS the launch of a kernel
-    // carrying [[sycl::reqd_sub_group_size(32)]], and the blocked driver's
-    // diagonal-panel leaf IS that same device function -- so one missing capability
-    // must close BOTH arms, not just the CTA one.
-    //
-    // The order is chosen ABOVE the CTA capacity so the blocked arm is the one
-    // actually under test; at a fitting size the CTA arm would answer first.
+    // The blocked driver's diagonal-panel leaf IS the reqd_sub_group_size(32) device
+    // function, so one missing capability must close BOTH arms. The order is above
+    // the CTA capacity so the blocked arm is the one under test.
     auto big = getrf_shape(/*order=*/1024, /*batch=*/64, /*cta_max_n=*/128);
     ASSERT_FALSE(GetrfTable::supports(kGetrfCta, big))
         << "guard: this order must NOT fit the CTA tile, or the next assertions "
@@ -1852,31 +1520,17 @@ TEST(RouteGetrf, Sg32GatesBothNativeArms) {
     small.has_sg32 = false;
     EXPECT_FALSE(GetrfTable::supports(kGetrfCta, small));
 
-    // And a vendor-free build must then say "needs a vendor" rather than handing
-    // back a route whose launch the device would reject.
     EXPECT_TRUE(is_vendor(resolve_getrf_route<float>(kGetrfAuto, small, false)));
 }
 
 // ---------------------------------------------------------------------------
-// THE PIVOT-FORMAT GATE. This is the one route test in the file with a BACKEND
-// axis, and it exists because the omission it guards was a SILENT WRONG ANSWER
-// that shipped: supports() gated on s.is_gpu and never on s.backend, so on a GPU
-// queue constructed with Backend::NETLIB the native getrf was selectable, wrote
-// PACKED 1-based int32 into the first half of the caller's int64 pivot span, and
-// netlib's getri/getrs read the same bytes as GENUINE int64
-// (netlib_lapack.cc:1235, :1312-1320, :1361). Measured before the gate:
-// ||A*C - I||_F / n = 5.32e-01 with getri info == 0, against 5.15e-07 when both
-// arms agreed. Nothing threw and nothing in the suite fired -- tests/
-// getrf_tests.cc skips every NETLIB row because its fixture queue is a CPU
-// queue, and every other case in THIS file leaves s.backend at AUTO, which is
-// exactly why the defect was invisible from both sides.
-//
-// THE ASSERTIONS ARE ANTI-VACUOUS BY CONSTRUCTION: each op first ASSERTs that
-// the same shape with the SAME extents is supported at Backend::CUDA, so
-// "supported becomes false" cannot pass because the shape was unsupported for an
-// unrelated reason. It is a CORRECTNESS gate, so it belongs in supports() and
-// not preferred(): a forced route bypasses preferred() and never supports()
-// (route_resolve.hh:8-10, :101, :165).
+// THE PIVOT-FORMAT GATE, the one route test here with a BACKEND axis. The native
+// kernels write PACKED 1-based int32 into the first half of the caller's int64
+// pivot span; netlib writes genuine int64. On a GPU queue built with
+// Backend::NETLIB the two arms silently disagree and getri returns wrong numbers
+// with info == 0, so this is a CORRECTNESS gate and lives in supports().
+// evidence: docs/perf/lu.md#correctness-findings
+// ---------------------------------------------------------------------------
 TEST(RouteLuPivotFormat, NetlibOnAGpuQueueIsNotANativeShape) {
     // --- getrf, both tiers ---------------------------------------------
     auto f = getrf_shape(/*order=*/40, /*batch=*/2, /*cta_max_n=*/128);
@@ -1900,9 +1554,7 @@ TEST(RouteLuPivotFormat, NetlibOnAGpuQueueIsNotANativeShape) {
     f.backend = Backend::ROCM;
     EXPECT_TRUE(GetrfTable::supports(kGetrfCta, f));
 
-    // A forced route must be REFUSED, not silently honoured. This is the path
-    // that actually produced the wrong answer: BATCHLAS_GETRF_ROUTE=blocked with
-    // getri left to resolve on its own.
+    // A forced route must be REFUSED, not silently honoured.
     f.backend = Backend::NETLIB;
     EXPECT_TRUE(is_vendor(resolve_getrf_route<float>(kGetrfBlocked, f, true)))
         << "route_resolve.hh:165 honours a forced route only if supports() says "
@@ -1926,29 +1578,15 @@ TEST(RouteLuPivotFormat, NetlibOnAGpuQueueIsNotANativeShape) {
         << "the native getri READS packed int32; a netlib getrf wrote int64";
     EXPECT_TRUE(is_vendor(resolve_getri_route<float>(kGetriBlocked, ri, true)));
 
-    // AND THE GATE MUST NOT SWALLOW THE VENDOR-FREE FALLBACK BY ACCIDENT. With
-    // no vendor at all there is nothing to disagree with -- but there is also no
-    // route, and "throws NoRouteError" is the honest answer for a configuration
-    // whose pivot format the native kernel cannot serve. Asserted so that a
-    // later widening of this gate is a deliberate change and not a discovery.
+    // With no vendor at all there is no route, and "throws NoRouteError" is the
+    // honest answer for a pivot format the native kernel cannot serve.
     EXPECT_FALSE(is_native(resolve_getrf_route<float>(kGetrfAuto, f, false)));
 }
 
-// THE MEASURED ORDER WINDOW (WP8 routing pass), replacing the all-false sweep.
-// Its own note said "delete this test when a measured window lands, and replace
-// it with clauses citing the cells"; this is that replacement, and the cells are
-// in route_getrf.hh beside the clause.
-//
-// TWO STRUCTURAL POINTS THIS CASE PINS, BOTH OF WHICH A SIMPLER SWEEP MISSES.
-//  1. THE CLAUSE NAMES Algorithm::Blocked, NOT "native". The CTA arm is a
-//     different kernel and it LOSES where it serves (float n=128 reads
-//     0.773-0.872 of cuBLAS). cta_max_n is passed large here on purpose, so CTA
-//     is SUPPORTED at every order in the loop and a clause that forgot the algo
-//     test would be caught by the resolved-route assertion rather than hidden by
-//     supports().
-//  2. IT IS PER TYPE. float's boundary is 256 and cfloat's is 512; a loop that
-//     only varied s.scalar would test float four times, because preferred()
-//     reads the TABLE's T.
+// THE MEASURED ORDER WINDOW. The clause names Algorithm::Blocked, NOT "native":
+// cta_max_n is passed large below so CTA is SUPPORTED at every order in the loop
+// and a clause that forgot the algo test is caught. The boundary is per type.
+// evidence: docs/perf/lu.md#getrf-window-evidence
 TEST(RouteGetrf, PreferredIsTheMeasuredOrderWindowPerTypeAndBlockedOnly) {
     for (int64_t batch : {1, 2, 128, 8192}) {
         for (int64_t order : {256, 257, 512, 2048}) {
@@ -1973,8 +1611,7 @@ TEST(RouteGetrf, PreferredIsTheMeasuredOrderWindowPerTypeAndBlockedOnly) {
             EXPECT_TRUE(is_vendor(resolve_getrf_route<float>(kGetrfAuto, s, true)))
                 << "order " << order << " batch " << batch;
         }
-        // cfloat: 512, not 256. I1's grid puts cfloat n=256 batch=128 at 0.884,
-        // which is why the two boundaries differ by one grid step.
+        // cfloat's boundary is 512, not float's 256.
         for (int64_t order : {512, 513, 2048}) {
             const auto s = getrf_shape(order, batch, 4096);
             EXPECT_TRUE(GetrfTableCF::preferred(kGetrfBlocked, s)) << "cfloat order " << order;
@@ -1988,9 +1625,7 @@ TEST(RouteGetrf, PreferredIsTheMeasuredOrderWindowPerTypeAndBlockedOnly) {
             EXPECT_TRUE(is_vendor(
                 resolve_getrf_route<std::complex<float>>(kGetrfAuto, s, true)));
         }
-        // double and cdouble: nothing, at any order. double's best cell anywhere
-        // is 1.067 and cdouble's is 1.012; `double order >= 512` would admit
-        // 0.933 / 0.813 / 0.743 at batch 256 / 512 / 1024.
+        // double and cdouble: nothing, at any order.
         for (int64_t order : {1, 128, 256, 512, 1024, 2048}) {
             const auto s = getrf_shape(order, batch, 4096);
             EXPECT_FALSE(GetrfTableD::preferred(kGetrfBlocked, s)) << "double order " << order;
@@ -2010,9 +1645,8 @@ TEST(RouteGetrf, PreferredIsTheMeasuredOrderWindowPerTypeAndBlockedOnly) {
 }
 
 TEST(RouteGetrf, BareOriginResolvesToASpecificAlgorithm) {
-    // getrf has TWO native routes, so {Native, Auto} names neither and no dispatch
-    // tail can map it to a kernel (route_resolve.hh:146-163). Below the CTA
-    // capacity -> CTA; above it -> Blocked. Never {Native, Auto}, never "no route".
+    // getrf has TWO native routes, so {Native, Auto} names neither. Below the CTA
+    // capacity -> CTA; above it -> Blocked. Never "no route".
     const auto small = getrf_shape(64, 256, 128);
     const auto big   = getrf_shape(1024, 64, 128);
 
@@ -2030,11 +1664,8 @@ TEST(RouteGetrf, BareOriginResolvesToASpecificAlgorithm) {
 }
 
 TEST(RouteGetrf, AbsentKernelIsUnsupportedRatherThanSelectable) {
-    // ZERO CAPACITY / blocked_available == false is what THIS BUILD reports today:
-    // src/extensions/getrf_cta.cc returns 0 from the capacity function and
-    // getrf_blocked.cc returns false for every type. Both native routes must then
-    // be UNSUPPORTED, so a capability that is absent can never select a launch that
-    // is not there. This is what lets the tables merge ahead of the kernels.
+    // Zero capacity / blocked_available == false is what a build without the kernels
+    // reports: both native routes must then be UNSUPPORTED.
     const auto s = getrf_shape(/*order=*/64, /*batch=*/256, /*cta_max_n=*/0);
     EXPECT_FALSE(GetrfTable::supports(kGetrfCta, s));
     EXPECT_FALSE(GetrfTable::supports(kGetrfBlocked, s));
@@ -2043,17 +1674,15 @@ TEST(RouteGetrf, AbsentKernelIsUnsupportedRatherThanSelectable) {
         << "vendor-free with nothing supported must say 'needs a vendor', not "
            "invent a native route";
 
-    // AND FORCING MUST NOT ESCAPE IT. route_resolve.hh:165 gates the forced route
-    // on supports() and falls through to automatic() -- which is why a green
-    // forced-route test is not by itself evidence that a native kernel ran.
+    // AND FORCING MUST NOT ESCAPE IT: a forced route is gated on supports(), so a
+    // green forced-route test is not evidence that a native kernel ran.
     EXPECT_TRUE(is_vendor(resolve_getrf_route<float>(kGetrfCta, s, true)));
     EXPECT_TRUE(is_vendor(resolve_getrf_route<float>(kGetrfBlocked, s, true)));
     EXPECT_TRUE(is_vendor(resolve_getrf_route<float>(kGetrfNativeBare, s, true)));
     EXPECT_TRUE(is_vendor(resolve_getrf_route<float>(kGetrfCta, s, false)));
 
-    // Half a capability is still absent: a build reporting the blocked driver but
-    // no CTA leaf must not select the blocked arm, because the leaf IS the CTA
-    // device function.
+    // Half a capability is still absent: the blocked driver's diagonal-panel leaf IS
+    // the CTA device function, so it inherits the presence gate.
     auto half = getrf_shape(64, 256, /*cta_max_n=*/0);
     half.blocked_available = true;
     EXPECT_FALSE(GetrfTable::supports(kGetrfBlocked, half))
@@ -2062,26 +1691,14 @@ TEST(RouteGetrf, AbsentKernelIsUnsupportedRatherThanSelectable) {
 }
 
 TEST(RouteGetrf, NativeTierPreferredIsDeclaredAndPinsTheMeasuredTierChoice) {
-    // The scaffolding pinned this hook's DELIBERATE ABSENCE and said in as many
-    // words: "Delete this case when the tier sweep lands and the predicate is
-    // declared; replace it with one that pins the measured crossover." The sweep
-    // has landed (docs/perf/lu.md#native_tier_preferred, run_tier.sh: both arms
-    // pinned, every pin verified to have taken, double re-run across four
-    // batches), so this is that replacement.
-    //
-    // THE MEASURED ANSWER, blocked_ms / cta_ms, so > 1 means CTA is ahead:
-    //   float   n=64 1.74  n=76 1.48  n=96 1.49  n=100 1.68  n=128 1.13
-    //   cfloat  n=64 1.39  n=76 1.59  n=96 1.30  n=100 1.33
-    //   cdouble n=64 1.37  n=76 1.09
-    //   double  n=64 0.98  n=76 0.85  n=96 0.77  n=100 1.00
-    // i.e. DOUBLE alone prefers the blocked driver below its own CTA ceiling.
+    // native_tier_preferred() is the third predicate, consulted ONLY in the
+    // vendor-free branch. DOUBLE alone prefers the blocked driver below its own CTA
+    // ceiling. evidence: docs/perf/lu.md#native_tier_preferred
     EXPECT_TRUE((declares_native_tier_preferred<GetrfTable, GetrfShape>))
         << "the tier sweep has run; an undeclared hook now costs 1.18-1.29x at "
            "double n=76..96 in the vendor-free build";
 
-    // float: CTA below the capacity ceiling, from the hook rather than from the
-    // order array -- the two are only distinguishable on the type where they
-    // disagree, which is why the double case below is the load-bearing one.
+    // float: CTA below the capacity ceiling, from the hook and not the order array.
     const auto small_f = getrf_shape(64, 8192, 128);
     EXPECT_TRUE((GetrfTable::native_tier_preferred(kGetrfCta, small_f)));
     EXPECT_FALSE((GetrfTable::native_tier_preferred(kGetrfBlocked, small_f)));
@@ -2102,10 +1719,8 @@ TEST(RouteGetrf, NativeTierPreferredIsDeclaredAndPinsTheMeasuredTierChoice) {
         << "double's vendor-free tier choice must come from the measured hook, "
            "not from kGetrfOrder's CTA-first ladder";
 
-    // ...and at n <= 32 double goes back to CTA, because there the blocked
-    // driver's nb is min(32, n) = n and it runs ONE panel whose leaf IS the CTA
-    // device function -- the same code, measured identical (1.8126 vs 1.8113 ms
-    // at n=32 batch 8192), so CTA is the cheaper spelling of it.
+    // ...and at n <= 32 double goes back to CTA: the blocked driver runs ONE panel
+    // whose leaf IS the CTA device function, so CTA is the cheaper spelling of it.
     auto tiny_d = getrf_shape(32, 8192, 128);
     tiny_d.scalar = ScalarKind::F64;
     EXPECT_TRUE((GetrfTableD::native_tier_preferred(kGetrfCta, tiny_d)));
@@ -2113,54 +1728,36 @@ TEST(RouteGetrf, NativeTierPreferredIsDeclaredAndPinsTheMeasuredTierChoice) {
                                           /*vendor_available=*/false).algo,
               Algorithm::CTA);
 
-    // IT IS NOT A CORRECTNESS GATE. Both arms stay supports()-able at every shape
-    // the window moves, which is what keeps a pinned `cta` at double n=64 running
-    // CTA instead of falling through to automatic() (route_resolve.hh:165 -> :175)
-    // and measuring the very arm it was pinned away from.
+    // IT IS NOT A CORRECTNESS GATE: both arms stay supports()-able wherever the
+    // window moves, so a pinned `cta` still runs CTA instead of falling through.
     EXPECT_TRUE((GetrfTableD::supports(kGetrfCta, small_d)));
     EXPECT_TRUE((GetrfTableD::supports(kGetrfBlocked, small_d)));
     EXPECT_EQ(resolve_getrf_route<double>(kGetrfCta, small_d,
                                           /*vendor_available=*/false).algo,
               Algorithm::CTA);
 
-    // AND IT MOVES NOTHING IN A VENDOR-PRESENT BUILD, which is the whole reason
-    // this is the third predicate and not a preferred() window: the hook is
-    // consulted only inside the `!vendor_available` branch (route_resolve.hh:
-    // 119-127).
+    // AND IT MOVES NOTHING IN A VENDOR-PRESENT BUILD: the hook is consulted only
+    // inside the `!vendor_available` branch.
     EXPECT_TRUE(is_vendor(resolve_getrf_route<double>(kGetrfAuto, small_d,
                                                       /*vendor_available=*/true)));
 
-    // For contrast, geqrf declares it too -- so a copy-paste that dropped geqrf's
-    // predicate moves this assertion and not the ones above.
+    // For contrast, geqrf declares it too.
     EXPECT_TRUE((declares_native_tier_preferred<RouteTable<Op::geqrf, float>, GeqrfShape>))
         << "geqrf's measured tier window must not be deleted by a WP6 copy-paste";
 
-    // getrs DECLARES IT NOW, and that assertion flipped when the op gained a
-    // second native arm. It used to read EXPECT_FALSE on the ground that "with one
-    // native route there is no native-vs-native question" -- true while
-    // kGetrsOrder held a single {Native, Blocked}. It now holds {Native, CTA}
-    // (the FUSED narrow-RHS kernel, src/extensions/getrs_fused.cc) ahead of it,
-    // and the two are 7.9x apart at nrhs = 1, so the hook is the ONLY instrument
-    // that can carry that window without also dragging vendor-present traffic
-    // (route_resolve.hh:40-70).
+    // getrs declares it too: kGetrsOrder holds the fused {Native, CTA} ahead of the
+    // composition, and the two are 7.9x apart at nrhs = 1.
     EXPECT_TRUE((declares_native_tier_preferred<GetrsTable, GetrsShape>))
         << "getrs has two native tiers; the order array alone cannot follow a "
            "crossover between them";
 
-    // getri is still single-arm and must NOT declare it: with one native route
-    // there is no native-vs-native question, and route_orgqr.hh sets the precedent
-    // of simply not having the member.
+    // getri is single-arm and must NOT declare it: with one native route there is no
+    // native-vs-native question.
     EXPECT_FALSE((declares_native_tier_preferred<GetriTable, GetriShape>));
 }
 
 TEST(RouteGetrf, BatchlasGetrfRouteIsActuallyRead) {
-    // getrf had NO route resolution at all before WP6 -- the facade was six
-    // `if constexpr (!vendor) throw; else vendor;` bodies
-    // (factorization.cc:464-541) -- so "pin the native path with
-    // BATCHLAS_GETRF_ROUTE" was a claim about a code path nobody had exercised for
-    // this op. The canonical spelling needs no registry entry (parse_route_env
-    // synthesises it, route_env.hh:205-217), but that is exactly the sort of claim
-    // that turns out to be false.
+    // The canonical spelling needs no registry entry; parse_route_env synthesises it.
     ClearRouteEnv clear(Op::getrf);
 
     EXPECT_EQ(op_env_stem(Op::getrf), "GETRF");
@@ -2197,9 +1794,8 @@ TEST(RouteGetrf, BatchlasGetrfRouteIsActuallyRead) {
         EXPECT_EQ(p.route, (Route{Origin::Vendor, Algorithm::Auto}));
     }
     {
-        // AN UNRECOGNISED VALUE IS SILENTLY {Auto, Auto}, WHICH IS THE VENDOR.
-        // This is the measurement trap the campaign has hit before: a "native" run
-        // that looks identical to the vendor probably IS the vendor.
+        // AN UNRECOGNISED VALUE IS SILENTLY {Auto, Auto}, WHICH IS THE VENDOR: a
+        // "native" run that looks identical to the vendor probably IS the vendor.
         ScopedEnv e("BATCHLAS_GETRF_ROUTE", "not-a-route");
         const auto p = parse_route_env(Op::getrf);
         EXPECT_FALSE(p.found);
@@ -2208,16 +1804,13 @@ TEST(RouteGetrf, BatchlasGetrfRouteIsActuallyRead) {
 }
 
 // ---------------------------------------------------------------------------
-// GETRS. One native arm, and the one op in this family with a live variant.
+// GETRS: the fused narrow-RHS CTA tier and the composition over the routed trsm.
 // ---------------------------------------------------------------------------
 
 TEST(RouteGetrs, VendorFreeFallbackHandsOverTheNativeRoute) {
-    // The speed-threshold guard again, and it matters here for a reason getrf's
-    // does not: getrs's composed arm is a MEASURED LOSS at nrhs=1 (geomean 0.36x
-    // over 28 cells, 25 losses). The temptation to write `if (s.nrhs() < 8) return
-    // false;` in supports() is therefore concrete rather than hypothetical -- and
-    // it would remove the vendor-free route at exactly the shape a vendor-free
-    // build has no alternative for. That threshold belongs in preferred().
+    // The speed-threshold guard again, and here the temptation is concrete: the
+    // composed arm is a measured loss at nrhs=1. That threshold belongs in
+    // preferred() -- in supports() it removes the vendor-free route.
     const auto s = getrs_shape(/*order=*/32, /*nrhs=*/1, /*batch=*/1);
 
     EXPECT_TRUE(GetrsTable::supports(kGetrsBlocked, s))
@@ -2229,13 +1822,8 @@ TEST(RouteGetrs, VendorFreeFallbackHandsOverTheNativeRoute) {
 
     EXPECT_TRUE(is_native(resolve_getrs_route<float>(kGetrsAuto, s, false)));
 
-    // AND WITH A VENDOR PRESENT IT IS NOW NATIVE TOO, at this shape, because
-    // nrhs = 1 is inside the measured window (2.26x geomean over 111 cells, min
-    // 1.24x, flat across every batch ladder at five orders). This assertion used
-    // to read is_vendor and it was RIGHT to, at the time: preferred() was all
-    // false. It is written the other way round now, and the pairing is the point
-    // -- supports() is unchanged by the window, so the vendor-free line above
-    // still passes for its own reason.
+    // With a vendor present this shape is native too: nrhs = 1 is inside the
+    // measured window, and supports() is unchanged by the window.
     const Route with_vendor = resolve_getrs_route<float>(kGetrsAuto, s, true);
     EXPECT_TRUE(is_native(with_vendor));
     EXPECT_EQ(with_vendor.algo, Algorithm::CTA);
@@ -2249,18 +1837,10 @@ TEST(RouteGetrs, VendorFreeFallbackHandsOverTheNativeRoute) {
 }
 
 TEST(RouteGetrs, AllThreeTransposeModesAreSupportedAndTransAReachesTheShape) {
-    // transA is a LIVE routing input for this op -- the only field in the LU family
-    // that separates a coverage row from its neighbour (coverage.cc:52-58's
-    // variant_key carries transA; getrf and getri set none of variant_key's fields
-    // at all). It is also a genuine algorithm fork: NoTrans applies P first and
-    // solves L then U, while Trans/ConjTrans solves U^T/U^H then L^T/L^H and
-    // applies P^T LAST, on the output, in reverse.
-    //
-    // All three must be SUPPORTED. The natural wrong edit is to refuse
-    // Trans/ConjTrans "until the reversed path is written", which is a gate that
-    // goes stale silently the moment it IS written -- and the vendor is measured
-    // correct in all three modes, so a native arm that cannot serve one must say so
-    // with a test that fails without it, at the moment it lands.
+    // transA is a LIVE routing input for this op and a genuine algorithm fork:
+    // NoTrans applies P first and solves L then U, while Trans/ConjTrans solve
+    // U^T/U^H then L^T/L^H and apply P^T LAST, on the output, in reverse. All three
+    // must be SUPPORTED.
     for (Transpose t : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans}) {
         const auto s = getrs_shape(/*order=*/64, /*nrhs=*/8, /*batch=*/128,
                                    /*blocked_available=*/true, t);
@@ -2312,20 +1892,12 @@ TEST(RouteGetrs, CorrectnessGatesAreNotSpeedGates) {
            "read as live";
 }
 
-// THE MEASURED nrhs WINDOW, both sides of it, and the ABSENT DRIVER.
-//
-// REPLACES PreferredIsFalseEverywhereAndAbsentDriverIsUnsupported, which asserted
-// that preferred() is false for every route at every shape. That was true when it
-// was written and is now the OPPOSITE of the shipped table, so it is rewritten
-// rather than deleted: the property it guarded -- "a preferred() window may not
-// appear without the grid that justifies it" -- still needs a guard, and the way
-// to guard a window is to pin BOTH of its sides.
-//
-// THE WINDOW (docs/perf/lu.md#getrs-fused-window-evidence, 354 + 134 measured cells):
+// THE MEASURED nrhs WINDOW, pinned from BOTH sides:
 //     nrhs <= 2  for every type and order   -- clause A
 //   + nrhs <= 4  for float only             -- clause B
-// and NOTHING else. Everything wider is a measured loss somewhere on its batch
-// ladder, and the composition is never preferred at any width at all.
+// plus clause C for the composition below. The composition is never preferred at
+// any width the fused tier serves.
+// evidence: docs/perf/lu.md#getrs-fused-window-evidence
 TEST(RouteGetrs, PreferredIsTheMeasuredNrhsWindowAndNothingWider) {
     // ---- clause A: every type, every order, nrhs <= 2 ----------------------
     for (int64_t order : {1, 32, 128, 2048}) {
@@ -2352,8 +1924,8 @@ TEST(RouteGetrs, PreferredIsTheMeasuredNrhsWindowAndNothingWider) {
         }
     }
 
-    // ---- clause B is FLOAT ONLY, and that is the half most likely to be
-    // widened by someone who reads "nrhs <= 4" and drops the type test ------
+    // ---- clause B is FLOAT ONLY, the half most likely to be widened by someone
+    // who reads "nrhs <= 4" and drops the type test ------------------------
     for (int64_t order : {32, 128, 1024, 2048}) {
         const auto s = getrs_shape(order, /*nrhs=*/4, /*batch=*/256);
         EXPECT_TRUE(GetrsTable::preferred(kGetrsCta, s))
@@ -2368,10 +1940,6 @@ TEST(RouteGetrs, PreferredIsTheMeasuredNrhsWindowAndNothingWider) {
     }
 
     // ---- outside EVERY window, EVERY type takes the vendor ------------------
-    // nrhs 64 USED TO BE IN THIS LOOP and is not any more: WP8 lands clause C,
-    // which prefers the COMPOSITION for float at nrhs >= 64. That is the whole
-    // point of an armed guard -- this loop went red when the clause landed and
-    // had to be moved, rather than the clause landing unnoticed.
     for (int64_t nrhs : {5, 8, 16, 32, 63}) {
         const auto s = getrs_shape(/*order=*/256, nrhs, /*batch=*/512);
         EXPECT_FALSE(GetrsTable::preferred(kGetrsCta, s)) << "float nrhs " << nrhs;
@@ -2384,26 +1952,12 @@ TEST(RouteGetrs, PreferredIsTheMeasuredNrhsWindowAndNothingWider) {
         EXPECT_FALSE((GetrsTableCD::preferred(kGetrsCta, s)));
     }
 
-    // ---- CLAUSE C: THE WIDE-nrhs COMPOSITION WINDOW (WP8 routing pass) ------
-    //
-    // AXIS: GetrsShape::nrhs(), which is B.cols(). NOT order(). A predicate on
-    // the wrong extent inverts this window -- it would admit the wide-ORDER
-    // narrow-RHS calls where the composition measures 0.09-0.36x of the vendor
-    // -- and that error was caught twice in WP7. The order loop below exists to
-    // prove the clause does NOT read order: every order gives the same answer.
-    //
-    // THE BOUNDARY IS PER TYPE and comes from docs/perf/lu.md#getrs-collapsed-permutation
-    // clause_summary.txt, two native passes and two vendor passes, quoted at the
-    // worse pass: float >= 64 (30 cells, geomean 2.837, min 1.765) and double
-    // >= 128 (15 cells, geomean 1.865, min 1.279). cfloat and cdouble earn
-    // nothing at any width and each has its refuting cell in route_getrs.hh.
-    //
-    // AND CLAUSE C CARRIES A BATCH FLOOR, WHICH CLAUSES A AND B DO NOT. It is
-    // CONSERVATIVE and known to be: at nrhs = 128 the composition still wins by
-    // 3.56x-5.96x at batch 32 and 64, so the floor gives up measured wins rather
-    // than excluding measured losses. It is set at the campaign's saturation
-    // rung because below 32 the region is ragged and the only readings there
-    // came from a contaminated sweep. Both sides of it are pinned below.
+    // ---- CLAUSE C: THE WIDE-nrhs COMPOSITION WINDOW ------------------------
+    // AXIS: GetrsShape::nrhs(), which is B.cols(), NOT order(). A predicate on the
+    // wrong extent inverts the window, and the order loop below is what proves it is
+    // not read. The boundary is per type, and clause C carries a batch floor that
+    // clauses A and B do not -- deliberately conservative, and pinned on both sides.
+    // evidence: docs/perf/lu.md#getrs-composition-window-evidence
     for (int64_t order : {32, 64, 128, 512, 1024, 2048}) {
         for (int64_t batch : {128, 129, 4096}) {
             // float: IN at 64, OUT at 63.
@@ -2421,9 +1975,8 @@ TEST(RouteGetrs, PreferredIsTheMeasuredNrhsWindowAndNothingWider) {
                 << "float nrhs=64 order " << order << " batch " << batch;
             EXPECT_TRUE(is_vendor(resolve_getrs_route<float>(kGetrsAuto, f_out, true)));
 
-            // double: IN at 128, OUT at 127 AND OUT at 64 -- the half most
-            // likely to be widened by someone who reads "nrhs >= 64" and drops
-            // the type test. Its refuting cell is 0.9984 at n=64 nrhs=64 b=2048.
+            // double: IN at 128, OUT at 127 AND at 64 -- the half most likely to be
+            // widened by someone who reads "nrhs >= 64" and drops the type test.
             const auto d_in  = getrs_shape(order, /*nrhs=*/128, batch);
             const auto d_127 = getrs_shape(order, /*nrhs=*/127, batch);
             const auto d_64  = getrs_shape(order, /*nrhs=*/64,  batch);
@@ -2433,12 +1986,8 @@ TEST(RouteGetrs, PreferredIsTheMeasuredNrhsWindowAndNothingWider) {
             EXPECT_TRUE(is_native(resolve_getrs_route<double>(kGetrsAuto, d_in, true)));
             EXPECT_TRUE(is_vendor(resolve_getrs_route<double>(kGetrsAuto, d_64, true)));
 
-            // cfloat and cdouble: NOTHING, at any width. cfloat scored a clean
-            // 15 cells / geomean 1.974 / min 1.482 on the directly measured
-            // rungs and was in the clause until the gap sweep found 0.9944 at
-            // n=64 nrhs=128 b=1024 -- a dip in the MIDDLE of its ladder, with
-            // 1.2901 at b=512 and 1.4824 at b=2048 on either side of it, which
-            // no boundary in batch, order or nrhs can exclude.
+            // cfloat and cdouble: NOTHING, at any width -- each has a mid-ladder dip
+            // that no boundary in batch, order or nrhs can exclude.
             for (int64_t q : {64, 128, 256}) {
                 const auto s = getrs_shape(order, q, batch);
                 EXPECT_FALSE(GetrsTableCF::preferred(kGetrsBlocked, s))
@@ -2454,9 +2003,8 @@ TEST(RouteGetrs, PreferredIsTheMeasuredNrhsWindowAndNothingWider) {
         }
     }
 
-    // THE CLAUSE IS ON nrhs AND NOT ON order, PROVED BY CONSTRUCTION. Hold nrhs
-    // and sweep order over four decades: the answer may not move. If the
-    // predicate were spelled `s.order() >= 64` this loop is what goes red.
+    // THE CLAUSE IS ON nrhs AND NOT ON order, PROVED BY CONSTRUCTION: hold nrhs and
+    // sweep order over four decades; the answer may not move.
     {
         bool in_all = true, out_all = false;
         for (int64_t order : {1, 2, 8, 63, 64, 65, 1000, 100000}) {
@@ -2479,11 +2027,8 @@ TEST(RouteGetrs, PreferredIsTheMeasuredNrhsWindowAndNothingWider) {
                                  "true here means the predicate is reading order()";
     }
 
-    // THE WINDOW IS NOT A CORRECTNESS GATE, and this is the pairing that keeps a
-    // pinned route honest: at nrhs = 8 the fused tier is NOT preferred but IS
-    // supported, so `BATCHLAS_GETRS_ROUTE=native:cta` still runs the fused kernel
-    // there rather than falling through automatic() to cuBLAS and measuring the
-    // route it was pinned away from (route_resolve.hh:165 -> :175).
+    // THE WINDOW IS NOT A CORRECTNESS GATE: at nrhs = 8 the fused tier is not
+    // preferred but IS supported, so a pinned native:cta still runs it there.
     {
         const auto s = getrs_shape(/*order=*/256, /*nrhs=*/8, /*batch=*/512);
         EXPECT_TRUE(GetrsTable::supports(kGetrsCta, s));
@@ -2492,9 +2037,8 @@ TEST(RouteGetrs, PreferredIsTheMeasuredNrhsWindowAndNothingWider) {
         EXPECT_TRUE(is_native(pinned) && pinned.algo == Algorithm::CTA);
     }
 
-    // ---- and the window may not outrun the CAPACITY -----------------------
-    // Inside the window by nrhs, outside it by elements: supports() refuses, so
-    // preferred() never gets to select an unlaunchable route.
+    // ---- and the window may not outrun the CAPACITY: inside by nrhs, outside by
+    // elements, supports() refuses so preferred() cannot select an absent launch.
     {
         auto s = getrs_shape(/*order=*/kFusedMaxElemsF32 + 1, /*nrhs=*/1, /*batch=*/8);
         EXPECT_TRUE(GetrsTable::preferred(kGetrsCta, s))
@@ -2548,18 +2092,9 @@ TEST(RouteGetrs, PreferredIsTheMeasuredNrhsWindowAndNothingWider) {
 
 TEST(RouteGetrs, BareOriginResolvesToASpecificAlgorithm) {
     // {Native, Auto} must not come back verbatim: no dispatch tail can map it to a
-    // driver (route_resolve.hh:146-163).
-    //
-    // AND THE ANSWER CHANGED WHEN THE FUSED TIER LANDED, which is a fact about the
-    // ENV VARIABLE and not only about this function: `BATCHLAS_GETRS_ROUTE=native`
-    // used to mean the composition, because it was the only native route in
-    // kGetrsOrder; CTA is now listed first, so the bare origin means the FUSED
-    // KERNEL wherever the right-hand side is resident. Any baseline recorded with
-    // a bare `native` pin -- docs/perf/lu.md#negative-results:37 and
-    // kernels/run_grid.sh:39 export it into all three LU variables at once -- is
-    // measuring a different getrs today than when it was recorded. That is a
-    // measurement-comparability trap, not a correctness one, and this test is
-    // where it is written down.
+    // driver. AND THE ANSWER CHANGED WHEN THE FUSED TIER LANDED -- a bare `native`
+    // pin used to mean the composition and now means the fused kernel, so any
+    // baseline recorded with one is measuring a different getrs today.
     const auto s = getrs_shape(64, 8, 256);
     ASSERT_TRUE(GetrsTable::supports(kGetrsCta, s))
         << "guard: 64 x 8 = 512 elements is well inside the capacity, so the "
@@ -2617,15 +2152,12 @@ TEST(RouteGetrs, BatchlasGetrsRouteIsActuallyRead) {
 }
 
 // ---------------------------------------------------------------------------
-// GETRI. One native arm, a composition over the routed trsm, and the LU op with a
-// measured win to go and get.
+// GETRI. One native arm: a composition over the routed trsm.
 // ---------------------------------------------------------------------------
 
 TEST(RouteGetri, VendorFreeFallbackHandsOverTheNativeRoute) {
-    // n=40, batch=2 are inverse_tests' ACTUAL extents (tests/inverse_tests.cc:10-39),
-    // and inverse_tests fails today on "no route for getri<float>" -- getri is the
-    // first LU op inv.cc's layout asks about (inv.cc:35 sizes getri before :36 sizes
-    // getrf). That suite closes if and only if these extents stay supported.
+    // n=40, batch=2 are inverse_tests' actual extents, and getri is the first LU op
+    // inv.cc sizes; that suite closes only if these extents stay supported.
     const auto s = getri_shape(/*order=*/40, /*batch=*/2);
 
     EXPECT_TRUE(GetriTable::supports(kGetriBlocked, s))
@@ -2638,10 +2170,8 @@ TEST(RouteGetri, VendorFreeFallbackHandsOverTheNativeRoute) {
 }
 
 TEST(RouteGetri, CorrectnessGatesIncludeTheOnesInheritedFromTrsm) {
-    // getri's native arm is a composition over the ROUTED trsm, so
-    // RouteTable<Op::trsm,T>::supports()' structural gates (route_trsm.hh:132-160)
-    // are TRANSCRIBED here -- silently omitting an inherited gate is the
-    // wrong-answer class route_orgqr.hh:41-49 records.
+    // getri's native arm is a composition over the ROUTED trsm, so trsm's structural
+    // gates are TRANSCRIBED here; omitting one is the wrong-answer class.
     const auto ok = getri_shape(/*order=*/64, /*batch=*/256);
     ASSERT_TRUE(GetriTable::supports(kGetriBlocked, ok))
         << "guard: the permissive shape must be supported, or every EXPECT_FALSE "
@@ -2685,15 +2215,10 @@ TEST(RouteGetri, CorrectnessGatesIncludeTheOnesInheritedFromTrsm) {
            "transcribed ceiling here could not fire and would read as live";
 }
 
-// THE MEASURED ORDER WINDOW (WP8 routing pass), replacing the all-false sweep
-// this case used to be. The old sweep varied order x batch for SCALAR FLOAT ONLY
-// and checked the other three types at ONE shape; a per-type clause needs a
-// per-type sweep or its cfloat and double boundaries are guarded by nothing.
-//
-// THE AXIS IS GetriShape::order(), which is `k`. There is NO batch term, and
-// that is measured rather than omitted: at batch 1..32 the native driver beats
-// cuBLAS by 1.7x-28x for every type at every order measured, because cuBLAS's
-// batched getri is a per-item loop there.
+// THE MEASURED ORDER WINDOW, per type. THE AXIS IS GetriShape::order(), which is
+// `k`, and there is NO batch term: at batch 1..32 the native driver beats cuBLAS
+// everywhere because cuBLAS's batched getri is a per-item loop there.
+// evidence: docs/perf/lu.md#getri-window-evidence
 TEST(RouteGetri, PreferredIsTheMeasuredOrderWindowPerType) {
     for (int64_t batch : {1, 2, 4, 128, 8192}) {
         // ---- float: IN at 128, OUT at 127 and at 64 -----------------------
@@ -2716,9 +2241,6 @@ TEST(RouteGetri, PreferredIsTheMeasuredOrderWindowPerType) {
         }
 
         // ---- cfloat: IN at 256, OUT at 255 and at 128 ---------------------
-        // The old header put the crossover at 128 for cfloat as well as float.
-        // It is wrong: cfloat n=128 is an OUTRIGHT LOSS at 0.71 in the middle of
-        // its own ladder, which is why the boundary is per type and not shared.
         for (int64_t order : {256, 257, 512, 2048}) {
             const auto s = getri_shape(order, batch);
             EXPECT_TRUE(GetriTableCF::preferred(kGetriBlocked, s))
@@ -2735,13 +2257,6 @@ TEST(RouteGetri, PreferredIsTheMeasuredOrderWindowPerType) {
         }
 
         // ---- double and cdouble: NOTHING, at any order --------------------
-        // double is the near-miss and the one most likely to be widened: n=512
-        // is clean at 1.296-1.311, but n=256 is 1.12-1.16 (below the bar without
-        // losing), n=1024 is 1.1551-1.1619 and FALLING with the last rung
-        // measured being the lowest, and n=2048 is 1.085 outright. A clause
-        // admitting exactly one order is the leg predicate this campaign has
-        // already found twice. cdouble loses at n=512 (0.954) and tops out at
-        // 1.136 anywhere.
         for (int64_t order : {1, 64, 128, 256, 512, 1024, 2048}) {
             const auto s = getri_shape(order, batch);
             EXPECT_FALSE(GetriTableD::preferred(kGetriBlocked, s))
@@ -2764,10 +2279,8 @@ TEST(RouteGetri, AbsentDriverIsUnsupported) {
     EXPECT_TRUE(is_vendor(resolve_getri_route<float>(kGetriBlocked, absent, true)));
     EXPECT_TRUE(is_vendor(resolve_getri_route<float>(kGetriNativeBare, absent, true)));
 
-    // ...AND INSIDE THE WINDOW, WHICH IS THE HALF THAT ONLY MATTERS NOW THAT
-    // THERE IS ONE. preferred() must still say yes -- it is a SPEED predicate and
-    // repeating the capability test in it is the defect route_resolve.hh:60-70
-    // records -- while supports() says no and the vendor takes the shape.
+    // ...AND INSIDE THE WINDOW: preferred() must still say yes -- it is a SPEED
+    // predicate and must not repeat the capability test -- while supports() says no.
     const auto in_window_absent = getri_shape(512, 256, /*blocked_available=*/false);
     EXPECT_TRUE(GetriTable::preferred(kGetriBlocked, in_window_absent));
     EXPECT_FALSE(GetriTable::supports(kGetriBlocked, in_window_absent));
@@ -2830,22 +2343,16 @@ TEST(RouteGetri, BatchlasGetriRouteIsActuallyRead) {
 }
 
 // ---------------------------------------------------------------------------
-// THE THREE LU OPS ARE PINNED BY THREE INDEPENDENT VARIABLES, and that is the
-// silent-wrong-answer channel WP6's kernel step has to close.
+// THE THREE LU OPS ARE PINNED BY THREE INDEPENDENT VARIABLES, which is the
+// silent-wrong-answer channel the pivot contract has to close.
 // ---------------------------------------------------------------------------
 TEST(RouteLuFamily, TheThreeOpsResolveIndependentlyAndThatIsThePivotHazard) {
-    // Measured, through the public API against a host LAPACKE oracle: the physical
-    // pivot format is BACKEND-DEPENDENT. cublas.cc:1508 / rocsolver.cc:227 do
-    // pivots.as_span<int>() and store PACKED 1-BASED INT32 in the first half of the
-    // caller's int64 buffer (0/18 mismatches against LAPACKE read that way, 18/18
-    // read as int64), while netlib_lapack.cc:1312-1320 WIDENS an int scratch into
-    // genuine int64.
-    //
-    // A native getrf must therefore agree with WHATEVER SERVES getri on the same
-    // call -- and this case exists to show that the mixture is reachable through
-    // ordinary configuration, not through misuse. Three independent variables,
-    // three independent tables, no shape field able to express "the op downstream
-    // of me resolved differently".
+    // The physical pivot format is BACKEND-DEPENDENT: the vendors store PACKED
+    // 1-BASED INT32 in the first half of the caller's int64 buffer, while netlib
+    // widens an int scratch into genuine int64. A native getrf must agree with
+    // WHATEVER SERVES getri on the same call, and the mixture is reachable through
+    // ordinary configuration -- three variables, three tables, no shape field able
+    // to express "the op downstream of me resolved differently".
     ClearRouteEnv clear_f(Op::getrf);
     ClearRouteEnv clear_s(Op::getrs);
     ClearRouteEnv clear_i(Op::getri);
@@ -2858,9 +2365,8 @@ TEST(RouteLuFamily, TheThreeOpsResolveIndependentlyAndThatIsThePivotHazard) {
     EXPECT_FALSE(parse_route_env(Op::getrs).found)
         << "and the third is untouched -- the three do not share a variable";
 
-    // With capabilities present, that pin really does produce a mixed pair. (Today
-    // both resolve to the vendor because nothing is linked, which is why this
-    // asserts on the PARSED routes and on supports(), not on the resolved pair.)
+    // With capabilities present that pin produces a mixed pair; today both resolve to
+    // the vendor, which is why this asserts on the PARSED routes and on supports().
     const auto fs = getrf_shape(/*order=*/64, /*batch=*/128, /*cta_max_n=*/128);
     const auto is_ = getri_shape(/*order=*/64, /*batch=*/128);
     EXPECT_TRUE(GetrfTable::supports(kGetrfCta, fs));
@@ -2873,70 +2379,13 @@ TEST(RouteLuFamily, TheThreeOpsResolveIndependentlyAndThatIsThePivotHazard) {
 }
 
 // ===========================================================================
-// WP7 -- gemv. THE ROUTE TABLE'S SELECTION BEHAVIOUR, WHICH HAD NO TEST AT ALL.
+// gemv. The Direct arm has NO is_gpu clause, so a native_cpu queue can take it;
+// without that the vendor-free walk finds no route for a CPU queue at all.
 //
-// WP7 landed a native gemv, a route table and 232 kernel-level cases, and added
-// ZERO assertions here. That is the same class of hole as the getrs blind guard
-// recorded above, one step earlier: not a vacuous assertion, but no assertion.
-//
-// AND THE HOLE WAS PROVED NON-INVASIVELY BEFORE THESE WERE WRITTEN, from two
-// directions:
-//   * VENDOR-PRESENT: all 114 gemv decisions in a full `ctest -LE slow` capture
-//     resolve to vendor:auto. No vendor-present test can observe supports(),
-//     preferred() or kGemvOrder at all.
-//   * VENDOR-FREE: `BATCHLAS_GEMV_ROUTE=native:direct ./tests/gemv_tests` takes
-//     the CTA kernel out of EVERY decision -- zero cta rows in the coverage
-//     dump -- and all 232 cases still pass. Nothing asserted WHICH native route
-//     was chosen.
-//
-// THE ONE STRUCTURAL PROPERTY WP7 EXISTS FOR -- Direct having NO is_gpu clause,
-// so a native_cpu queue can take it -- was already guarded behaviourally, by
-// the 20 Backend::NETLIB rows of gemv_tests.cc going red if it were added. It is
-// stated here as an ASSERTION as well, because a behavioural guard in another
-// binary is not where someone editing this table will look.
-//
-// THE V1 TRAP, AVOIDED DELIBERATELY. gemv_shape() below sets direct_available,
-// cta_available, has_sg32 AND is_gpu. Leave any of them at its default and
-// supports() is false on every shape, every assertion in this section holds
-// vacuously, and the section reports green through a flip and its inverse --
-// which is exactly how getrs's 78/78 survived. That the helper is ARMED is
-// itself checked, by RouteGemv.HelperIsArmed below: it forces the capabilities
-// false and requires the supports() answers to CHANGE.
-//
-// AND THE ARMING WAS MEASURED, NOT ASSERTED. Seven breaks, each applied to the
-// named file, rebuilt and run, then reverted (91 cases total):
-//
-//   break      file            red   named cases turned red
-//   --------------------------------------------------------------------------
-//   unarmed    this file        7    the helper stops setting direct_available
-//                                    and cta_available -- i.e. THE V1 TRAP
-//                                    ITSELF. HelperIsArmed catches it, and so do
-//                                    six others, so the section cannot go
-//                                    vacuous quietly.
-//   nosg32     this file        4    the helper stops setting has_sg32
-//   gpugate    route_gemv.hh    2    `if (!s.is_gpu) return false;` added to the
-//                                    Direct arm -- THE WP7 DELIVERABLE FLIPPED.
-//                                    DirectHasNoGpuGate... goes red here, and in
-//                                    the real build the 20 Backend::NETLIB rows
-//                                    of gemv_tests.cc go red with it.
-//   order      route_gemv.hh    3    kGemvOrder reordered to Direct-before-CTA
-//   clause     route_gemv.hh    2    a preferred() clause lands (the exact one
-//                                    the perf audit refuted)
-//   sg32gate   route_gemv.hh    2    CTA stops requiring an enumerated 32
-//   zeroext    route_gemv.hh    1    m == 0 / n == 0 refused instead of
-//                                    quick-returned -- ZeroExtentIsSupported...
-//                                    ALONE, which is what a single-purpose case
-//                                    should do
-//
-// A NOTE FOR WHOEVER READS THE NEXT route_diff. The cases below call
-// `resolve_gemv_route`, which is the INSTRUMENTED resolver, so each one writes a
-// row into the coverage table with `backend = AUTO` -- six of them. They are
-// fabricated shapes from a pure-layer test, not decisions the library made, and
-// three of them read `native:direct` even in a vendor-present capture because
-// they pass `vendor_available = false` explicitly. This is the file's existing
-// practice, not a gemv invention: the capture already carries AUTO rows for
-// eleven ops (gemm 2542, ormqr 152, trsm 93, potrf 59 ...). Filter on
-// `backend != AUTO` before concluding anything about what the library routes.
+// gemv_shape() sets direct_available, cta_available, has_sg32 AND is_gpu: leave
+// any of them at its default and supports() is false on every shape, so every
+// assertion here holds vacuously. RouteGemv.HelperIsArmed is what checks that.
+// evidence: docs/perf/gemv.md
 // ===========================================================================
 
 namespace {
@@ -2992,10 +2441,8 @@ TEST(RouteGemv, HelperIsArmed) {
         << "direct_available is not reaching supports()";
 }
 
-// THE WP7 DELIVERABLE, AS AN ASSERTION. Adding `if (!s.is_gpu) return false;` to
-// the Direct arm turns this red -- and, in the real build, turns the 20
-// Backend::NETLIB rows of gemv_tests.cc red with it, because the vendor-free
-// walk then finds NO route for a native_cpu queue and the facade throws.
+// THE DELIVERABLE, AS AN ASSERTION: adding `if (!s.is_gpu) return false;` to the
+// Direct arm turns this red, and the Backend::NETLIB rows of gemv_tests.cc with it.
 TEST(RouteGemv, DirectHasNoGpuGateAndThatIsTheWholeWorkPackage) {
     for (Transpose t : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans}) {
         const auto cpu = gemv_shape(64, 48, 6, t, /*is_gpu=*/false, /*has_sg32=*/false);
@@ -3029,17 +2476,15 @@ TEST(RouteGemv, CtaRequiresTransposedGpuWithAnEnumeratedSubGroup32) {
 
     // 3. The body carries [[sycl::reqd_sub_group_size(32)]]; a device that does
     //    not ENUMERATE 32 aborts the launch. has_sg32 must come from
-    //    sub_group_sizes, never from MAX_SUB_GROUP_SIZE -- that returns
-    //    sub_group_sizes()[0] and is wrong in both directions.
+    //    sub_group_sizes, never from MAX_SUB_GROUP_SIZE.
     EXPECT_FALSE(GemvTable::supports(
         kGemvCta, gemv_shape(256, 256, 512, Transpose::Trans, /*is_gpu=*/true,
                              /*has_sg32=*/false)));
 }
 
-// A HETEROGENEOUS BATCH IS A CORRECTNESS GATE FOR GEMV, not merely un-preferred:
-// one launch covers the whole batch with a single (m, n, ld, stride) tuple, and
-// VectorView has no active-size concept at all, so there is nothing to walk on
-// the x and y side. It must be refused for BOTH native tiers.
+// A HETEROGENEOUS BATCH IS A CORRECTNESS GATE FOR GEMV: one launch covers the
+// batch with a single (m, n, ld, stride) tuple, and VectorView has no active-size
+// concept, so there is nothing to walk on the x and y side. Both tiers refuse it.
 TEST(RouteGemv, HeterogeneousBatchIsRefusedByBothNativeTiers) {
     const auto het = gemv_shape(256, 256, 512, Transpose::Trans,
                                 /*is_gpu=*/true, /*has_sg32=*/true,
@@ -3050,17 +2495,10 @@ TEST(RouteGemv, HeterogeneousBatchIsRefusedByBothNativeTiers) {
     EXPECT_TRUE(is_vendor(resolve_gemv_route<float>(kGemvAuto, het, true)));
 }
 
-// preferred() SHIPS ALL-FALSE, AND THAT IS A MEASURED RESULT RATHER THAN AN
-// OMISSION -- cuBLAS gemvStridedBatched is at 94-105% of the achievable DRAM
-// roof on 90 of 92 reproducing cells. This case is what makes a future clause
-// VISIBLE: land one and this goes red, and whoever lands it has to come here and
-// say which cells it is for.
-// THE float TABLE IS STILL ALL-FALSE EVERYWHERE, AND THAT IS NOW A CLAUSE OF ITS
-// OWN RATHER THAN THE DEFAULT. WP8 lands a complex<double> window; this case
-// pins that it did not leak into the other three types. It cannot see the window
-// at all -- GemvTable is RouteTable<Op::gemv, float> -- which is exactly why the
-// cdouble cases below had to be written separately, and why a suite that only
-// counts 91/91 is not evidence about a per-type clause.
+// float, double and cfloat earn NO window: cuBLAS gemvStridedBatched sits at
+// 94-105% of the achievable DRAM roof. This case pins that the complex<double>
+// clause below did not leak into the other three types -- GemvTable is the float
+// table and cannot see it. evidence: docs/perf/gemv.md
 TEST(RouteGemv, PreferredIsAllFalseForTheThreeTypesThatDidNotEarnAWindow) {
     using GemvTableD  = RouteTable<Op::gemv, double>;
     using GemvTableCF = RouteTable<Op::gemv, std::complex<float>>;
@@ -3084,12 +2522,11 @@ TEST(RouteGemv, PreferredIsAllFalseForTheThreeTypesThatDidNotEarnAWindow) {
     }
 }
 
-// ---- THE complex<double> TRANSPOSED WINDOW (WP8 routing pass) ---------------
-//
-// THE AXES ARE out_len() AND red_len(), AND THE WHOLE POINT OF SPELLING THEM
-// THAT WAY IS THAT THEY SWAP WITH transA. gemv_shape() takes (m, n), so every
-// case below converts ONCE, here, and never reasons in m and n again:
-// under Trans and ConjTrans, out_len == n == cols and red_len == m == rows.
+// ---- THE complex<double> TRANSPOSED WINDOW ---------------------------------
+// THE AXES ARE out_len() AND red_len(), AND THEY SWAP WITH transA. gemv_shape()
+// takes (m, n), so gemv_band() converts ONCE, here: under Trans and ConjTrans,
+// out_len == n == cols and red_len == m == rows.
+// evidence: docs/perf/gemv.md#the-cdouble-window-boundaries
 namespace {
 GemvShape gemv_band(int64_t out_len, int64_t red_len, int64_t batch, Transpose t) {
     return gemv_shape(/*m=*/red_len, /*n=*/out_len, batch, t);
@@ -3100,9 +2537,8 @@ using GemvTableCD = RouteTable<Op::gemv, std::complex<double>>;
 TEST(RouteGemv, CdoubleTransposedBandIsPreferredAndEveryBoundaryIsPinned) {
     const Transpose trs[2] = {Transpose::Trans, Transpose::ConjTrans};
 
-    // INSIDE, both transposed spellings. ortho.cc issues ConjTrans for every
-    // complex type, so C is the LIVE path and pinning only T would guard the
-    // wrong half of a clause that says `transA != NoTrans`.
+    // INSIDE, both transposed spellings: ortho.cc issues ConjTrans for every complex
+    // type, so pinning only Trans would guard the wrong half of the clause.
     for (Transpose t : trs) {
         for (int64_t out : {256, 512, 1024, 4096}) {
             for (int64_t red : {64, 128, 256, 352}) {
@@ -3125,28 +2561,21 @@ TEST(RouteGemv, CdoubleTransposedBandIsPreferredAndEveryBoundaryIsPinned) {
 
     // ---- EVERY BOUNDARY, FROM BOTH SIDES, EACH WITH ITS MEASURED CELL ------
     for (Transpose t : trs) {
-        // red_len lower edge: 64 in, 63 out. Below it the vendor is only
-        // PARTIALLY dipped and the margin falls under the 1.15x bar
-        // (1.1028 at red_len 40) or inverts (0.9515 at red_len 32).
+        // red_len lower edge: 64 in, 63 out.
         EXPECT_TRUE (GemvTableCD::preferred(kGemvCta, gemv_band(512,  64, 512, t)));
         EXPECT_FALSE(GemvTableCD::preferred(kGemvCta, gemv_band(512,  63, 512, t)));
         EXPECT_FALSE(GemvTableCD::preferred(kGemvCta, gemv_band(512,  48, 512, t)));
         EXPECT_FALSE(GemvTableCD::preferred(kGemvCta, gemv_band(512,  32, 512, t)));
-        // red_len upper edge: 352 in, 353 out. cuBLAS is back at the roof
-        // (901-906 GB/s) at 384 and the ratio there is 1.0304 / 1.0314.
+        // red_len upper edge: 352 in, 353 out.
         EXPECT_TRUE (GemvTableCD::preferred(kGemvCta, gemv_band(512, 352, 512, t)));
         EXPECT_FALSE(GemvTableCD::preferred(kGemvCta, gemv_band(512, 353, 512, t)));
         EXPECT_FALSE(GemvTableCD::preferred(kGemvCta, gemv_band(512, 384, 512, t)));
-        // out_len lower edge: 256 in, 255 out. At out_len 192 the ratio is
-        // 0.9988; at 64 and 32 cuBLAS reads 1777 and 1597 GB/s, above this
-        // device's DRAM peak, because it is converting L2 residency into
-        // bandwidth -- the family route_gemv.hh declines to chase.
+        // out_len lower edge: 256 in, 255 out.
         EXPECT_TRUE (GemvTableCD::preferred(kGemvCta, gemv_band(256, 128, 512, t)));
         EXPECT_FALSE(GemvTableCD::preferred(kGemvCta, gemv_band(255, 128, 512, t)));
         EXPECT_FALSE(GemvTableCD::preferred(kGemvCta, gemv_band(192, 128, 512, t)));
-        // batch floor: 320 in, 319 out. This is cuBLAS's own kernel-selection
-        // threshold, not a fitted constant: at out_len 512 red_len 128 it runs
-        // 930.1 GB/s at batch 256 and 360.4 at batch 320.
+        // batch floor: 320 in, 319 out -- cuBLAS's own kernel-selection threshold,
+        // not a fitted constant.
         EXPECT_TRUE (GemvTableCD::preferred(kGemvCta, gemv_band(512, 128, 320, t)));
         EXPECT_FALSE(GemvTableCD::preferred(kGemvCta, gemv_band(512, 128, 319, t)));
         EXPECT_FALSE(GemvTableCD::preferred(kGemvCta, gemv_band(512, 128, 256, t)));
@@ -3158,10 +2587,8 @@ TEST(RouteGemv, CdoubleTransposedBandIsPreferredAndEveryBoundaryIsPinned) {
         }
     }
 
-    // NoTrans IS EXCLUDED, and by the clause itself rather than only by
-    // supports(). Under NoTrans out_len and red_len SWAP, so a shape that is
-    // inside the band transposed is a different shape entirely untransposed --
-    // this is the pairing that catches a predicate written on the wrong extent.
+    // NoTrans IS EXCLUDED by the clause itself, not only by supports(): under NoTrans
+    // out_len and red_len SWAP, so the same extents are a different shape entirely.
     for (int64_t out : {256, 512, 1024}) {
         for (int64_t red : {64, 128, 256}) {
             const auto s = gemv_shape(/*m=*/out, /*n=*/red, 512, Transpose::NoTrans);
@@ -3173,16 +2600,9 @@ TEST(RouteGemv, CdoubleTransposedBandIsPreferredAndEveryBoundaryIsPinned) {
     }
 }
 
-// THE CLAUSE READS red_len() AND out_len(), NOT m AND n -- PROVED BY TRANSPOSING
-// A SINGLE SHAPE AND REQUIRING THE ANSWER TO MOVE.
-//
-// This is the case that would have caught the WP7 defect twice over. Take the
-// physical matrix A with 128 rows and 512 columns. Transposed it is red_len 128,
-// out_len 512 -- INSIDE the band. Untransposed it is out_len 128, red_len 512 --
-// outside on BOTH terms. A predicate spelled `s.m >= 64 && s.m <= 352 &&
-// s.n >= 256` returns the same answer for both and this case stays green; the
-// clause as written returns different answers, which is the whole content of
-// "name the axis explicitly".
+// THE CLAUSE READS red_len() AND out_len(), NOT m AND n -- PROVED BY TRANSPOSING A
+// SINGLE SHAPE AND REQUIRING THE ANSWER TO MOVE. A predicate spelled on m and n
+// returns the same answer for both and this case would stay green.
 TEST(RouteGemv, TheBandIsOnRedLenAndInvertsUnderNoTrans) {
     auto A = gemv_shape(/*m=*/128, /*n=*/512, /*batch=*/512, Transpose::Trans);
     EXPECT_EQ(A.red_len(), 128);
@@ -3194,9 +2614,8 @@ TEST(RouteGemv, TheBandIsOnRedLenAndInvertsUnderNoTrans) {
     EXPECT_EQ(B.out_len(), 128);
     EXPECT_FALSE(GemvTableCD::preferred(kGemvCta, B));
 
-    // And the mirror image: 512 rows by 128 columns is OUTSIDE transposed
-    // (red_len 512 > 352, out_len 128 < 256) although its m and n are exactly
-    // A's swapped.
+    // And the mirror image: 512 rows by 128 columns is OUTSIDE transposed although
+    // its m and n are exactly A's swapped.
     auto C = gemv_shape(/*m=*/512, /*n=*/128, /*batch=*/512, Transpose::Trans);
     EXPECT_EQ(C.red_len(), 512);
     EXPECT_EQ(C.out_len(), 128);
@@ -3204,10 +2623,8 @@ TEST(RouteGemv, TheBandIsOnRedLenAndInvertsUnderNoTrans) {
 }
 
 // THE WINDOW IS NOT A CORRECTNESS GATE, AND A CAPABILITY THE BUILD DOES NOT HAVE
-// STILL WINS OVER IT. Inside the band but on a device that does not enumerate a
-// sub-group size of 32, or in a build with no CTA kernel linked, supports() must
-// refuse and the vendor must take it -- otherwise the clause selects a launch
-// that is not there.
+// STILL WINS OVER IT: inside the band on a device that does not enumerate 32, or
+// with no CTA kernel linked, supports() must refuse and the vendor must take it.
 TEST(RouteGemv, TheWindowNeverOutrunsTheCapability) {
     const auto ok = gemv_band(512, 128, 512, Transpose::Trans);
     EXPECT_TRUE(GemvTableCD::preferred(kGemvCta, ok));
@@ -3231,10 +2648,8 @@ TEST(RouteGemv, TheWindowNeverOutrunsTheCapability) {
     EXPECT_TRUE(is_native(f) && f.algo == Algorithm::Direct);
 }
 
-// WITH preferred() ALL-FALSE, AN AUTO GEMV IS THE VENDOR WHEREVER THERE IS ONE
-// AND THE NATIVE LADDER WHEREVER THERE IS NOT. Both halves matter: the first is
-// WP7's route-neutrality claim in the vendor-present build (0 moved decisions in
-// route_diff), the second is the burn-down.
+// AN AUTO GEMV IS THE VENDOR WHEREVER THERE IS ONE AND THE NATIVE LADDER WHEREVER
+// THERE IS NOT. Both halves matter: route-neutrality, and the vendor-free burn-down.
 TEST(RouteGemv, AutoTakesTheVendorWhenPresentAndTheLadderWhenNot) {
     const auto tr = gemv_shape(256, 256, 512, Transpose::Trans);
     const auto no = gemv_shape(256, 256, 512, Transpose::NoTrans);
@@ -3242,18 +2657,15 @@ TEST(RouteGemv, AutoTakesTheVendorWhenPresentAndTheLadderWhenNot) {
     EXPECT_TRUE(is_vendor(resolve_gemv_route<float>(kGemvAuto, tr, true)));
     EXPECT_TRUE(is_vendor(resolve_gemv_route<float>(kGemvAuto, no, true)));
 
-    // Vendor-free: the ladder is CTA, then Direct, then the vendor -- tighter
-    // first, so a transposed GPU shape gets the coalesced body and everything
-    // else gets Direct.
+    // Vendor-free: the ladder is CTA, then Direct, then the vendor -- tightest first,
+    // so a transposed GPU shape gets the coalesced body and everything else Direct.
     EXPECT_EQ(resolve_gemv_route<float>(kGemvAuto, tr, false).algo, Algorithm::CTA);
     EXPECT_EQ(resolve_gemv_route<float>(kGemvAuto, no, false).algo, Algorithm::Direct);
 }
 
-// A BARE `native` DOES NOT MEAN CTA. route_gemv.hh's env note said it did, and
-// measurement disagreed: the walk picks the first SUPPORTED native route, so a
-// bare pin lands on Direct for NoTrans, for a CPU device and for a GPU without
-// an enumerated 32 -- 76 of 104 decisions in gemv_tests. This case is the note's
-// guard, so the two cannot drift apart again.
+// A BARE `native` DOES NOT MEAN CTA: the walk picks the first SUPPORTED native
+// route, so a bare pin lands on Direct for NoTrans, for a CPU device and for a GPU
+// without an enumerated 32.
 TEST(RouteGemv, BareNativeResolvesToTheFirstSUPPORTEDRouteNotToCta) {
     EXPECT_EQ(resolve_gemv_route<float>(
                   kGemvNativeBare, gemv_shape(256, 256, 512, Transpose::Trans), true).algo,
@@ -3273,10 +2685,9 @@ TEST(RouteGemv, BareNativeResolvesToTheFirstSUPPORTEDRouteNotToCta) {
               Algorithm::Direct);
 }
 
-// PINNING A ROUTE THE SHAPE CANNOT TAKE IS SILENT, AND ITS OUTCOME DEPENDS ON
-// THE BUILD. This is not a bug being asserted as correct -- it is the campaign's
-// standing fall-through behaviour -- but it has cost time twice and it is worth
-// having in a test so nobody re-derives it from a benchmark that lies.
+// PINNING A ROUTE THE SHAPE CANNOT TAKE IS SILENT, AND ITS OUTCOME DEPENDS ON THE
+// BUILD. Not a bug asserted as correct -- it is the standing fall-through
+// behaviour -- but it has cost time twice, so it is written down here.
 TEST(RouteGemv, PinningCtaOnAShapeCtaCannotServeFallsThroughSilently) {
     const auto no = gemv_shape(256, 256, 512, Transpose::NoTrans);
 
@@ -3293,12 +2704,9 @@ TEST(RouteGemv, PinningCtaOnAShapeCtaCannotServeFallsThroughSilently) {
            "you which arm actually ran";
 }
 
-// out_len() AND red_len() SWAP WITH transA, AND THAT IS THE TRAP B3 NAMED. The
-// one measured cuBLAS slow region is a band on **m**, which under a transposed
-// transA is red_len(), NOT out_len(). A predicate written on out_len() would test
-// n and invert the window. Nothing in the shipped table reads them -- preferred()
-// is all-false -- so this is here to make the mapping WRONG-PROOF for whoever
-// adds the first clause.
+// out_len() AND red_len() SWAP WITH transA. The one measured cuBLAS slow region is
+// a band on **m**, which under a transposed transA is red_len(), NOT out_len(); a
+// predicate written on out_len() would test n and invert the window.
 TEST(RouteGemv, OutLenAndRedLenSwapWithTransA) {
     const auto no = gemv_shape(/*m=*/64, /*n=*/2048, /*batch=*/1, Transpose::NoTrans);
     EXPECT_EQ(no.out_len(), 64);
@@ -3312,12 +2720,10 @@ TEST(RouteGemv, OutLenAndRedLenSwapWithTransA) {
     }
 }
 
-// B2, IN THE PURE LAYER. GemvShape must not re-declare transA or is_gpu:
-// resolve_route SLICES it to OpShape on the way into the coverage table, so a
-// shadowing member would be written by the shape builder and then not copied,
-// every gemv coverage row would report NoTrans, and gemv's two arms -- which are
-// different KERNELS, not different flags -- would collapse into one
-// first-writer-wins row.
+// GemvShape must not re-declare transA or is_gpu: resolve_route SLICES it to
+// OpShape on the way into the coverage table, so a shadowing member would be
+// written by the builder and then not copied, collapsing the two arms -- different
+// KERNELS, not different flags -- into one first-writer-wins row.
 TEST(RouteGemv, ShapeDoesNotShadowOpShapeFields) {
     GemvShape s = gemv_shape(64, 48, 6, Transpose::ConjTrans, /*is_gpu=*/true);
     const OpShape& sliced = static_cast<const OpShape&>(s);
@@ -3329,10 +2735,9 @@ TEST(RouteGemv, ShapeDoesNotShadowOpShapeFields) {
     EXPECT_TRUE(sliced.is_gpu);
 }
 
-// DEGENERATE EXTENTS. m == 0 or n == 0 is a LEGAL call that the native kernel
-// serves by quick-returning without touching y, exactly as reference ?GEMV and
-// both vendors do -- so it must stay SUPPORTED. A negative extent or an empty
-// batch has no launch geometry and goes to the vendor.
+// DEGENERATE EXTENTS. m == 0 or n == 0 is a LEGAL call the native kernel serves by
+// quick-returning without touching y, so it must stay SUPPORTED. A negative extent
+// or an empty batch has no launch geometry and goes to the vendor.
 TEST(RouteGemv, ZeroExtentIsSupportedButNegativeExtentIsNot) {
     EXPECT_TRUE(GemvTable::supports(kGemvDirect, gemv_shape(0, 6, 3, Transpose::Trans)));
     EXPECT_TRUE(GemvTable::supports(kGemvDirect, gemv_shape(5, 0, 3, Transpose::NoTrans)));
@@ -3342,10 +2747,9 @@ TEST(RouteGemv, ZeroExtentIsSupportedButNegativeExtentIsNot) {
     EXPECT_TRUE(is_vendor(resolve_gemv_route<float>(kGemvAuto, gemv_shape(6, 6, 0), true)));
 }
 
-// Algorithm::Auto IS NOT A NATIVE GEMV ROUTE. gemv has two native tiers, so a
-// bare "native" names neither; resolve_route walks the order restricted to the
-// origin to pick one. supports() must say false, or the walk would stop on a
-// route with no kernel behind it.
+// Algorithm::Auto IS NOT A NATIVE GEMV ROUTE: gemv has two native tiers, so a bare
+// "native" names neither and supports() must say false, or the walk would stop on
+// a route with no kernel behind it.
 TEST(RouteGemv, NativeAutoIsNotItselfASupportedRoute) {
     const auto s = gemv_shape(256, 256, 512, Transpose::Trans);
     EXPECT_FALSE(GemvTable::supports(kGemvNativeBare, s));
@@ -3353,10 +2757,8 @@ TEST(RouteGemv, NativeAutoIsNotItselfASupportedRoute) {
     EXPECT_TRUE(GemvTable::supports(kVendorAuto, s));
 }
 
-// THE ORDER ARRAY IS A CAPABILITY LADDER, TIGHTEST FIRST. It is asserted rather
-// than assumed because it is the only thing that decides the vendor-free
-// outcome: with preferred() all-false, the vendor-off walk takes the FIRST
-// supported route in this order and nothing else influences it.
+// THE ORDER ARRAY IS A CAPABILITY LADDER, TIGHTEST FIRST, and it is the only thing
+// that decides the vendor-free outcome while preferred() is all-false.
 TEST(RouteGemv, OrderIsCtaThenDirectThenVendor) {
     ASSERT_EQ(GemvTable::order_end() - GemvTable::order_begin(), 3);
     EXPECT_EQ(GemvTable::order_begin()[0].origin, Origin::Native);
@@ -3367,87 +2769,18 @@ TEST(RouteGemv, OrderIsCtaThenDirectThenVendor) {
 }
 
 // ===========================================================================
-// WP8 -- spmm. THE FIRST ROUTING TABLE THIS OP HAS EVER HAD, AND THE FIRST
-// ASSERTIONS ANY spmm DECISION HAS EVER CARRIED.
+// spmm. The Direct arm has NO is_gpu clause, so a native_cpu queue can take the
+// route -- build-novendor's Backend::NETLIB rows depend on it.
 //
-// Before WP8 the sparse facade had no route table at all: entry_points/sparse.cc
-// called the vendor unconditionally where one existed and threw NoRouteError
-// where one did not. So there is no prior behaviour to preserve here, only a new
-// decision surface to pin -- and the whole of it is invisible to every other
-// binary in the tree, for the same two reasons the gemv section above records:
-//   * VENDOR-PRESENT: preferred() SHIPPED ALL-FALSE and no longer is. The WP8
-//     clause (route_spmm.hh's preferred(), evidence in
-//     docs/perf/spmm.md#raw-evidence) moves the transA == NoTrans gather -- minus
-//     complex<float> with a transposed dense operand -- onto native:direct in
-//     EVERY build. The transposed scatter and every refused corner still
-//     resolve to vendor:auto. tests/spmm_tests.cc now exercises the native arm
-//     by default for the admitted shapes, which is what makes its unpinned
-//     vendor-present run the one that matters.
-//   * VENDOR-FREE: {Native, Direct} is the only native route, so a coverage row
-//     saying `native:direct` cannot distinguish the three kernel bodies behind
-//     it -- the launcher picks between them on transA, below the vocabulary.
+// TWO CAPABILITY FLAGS, NOT ONE, and they are not interchangeable: transA ==
+// NoTrans is served by the gather body, transA != NoTrans by the scale+scatter
+// PAIR. They are separate kernels, so a build can have one and not the other, and
+// supports() consults exactly the flag for the body that would actually run.
 //
-// THE ONE STRUCTURAL PROPERTY WP8 EXISTS FOR is the same one WP7's Direct arm
-// has: NO is_gpu CLAUSE, so a native_cpu queue can take the route. It is worth
-// more here than it was for gemv. build-novendor has BATCHLAS_HAS_HOST_BACKEND 1
-// while BATCHLAS_HAS_LAPACKE and BATCHLAS_HAS_CBLAS are both 0
-// (cmake/BatchLASDependencies.cmake:310-318 sets the host backend from the
-// LIBRARIES being found while the other two additionally require their ENABLE
-// options), so the Backend::NETLIB spmm symbol EXISTS in that build and throws
-// NoRouteError today. Add `if (!s.is_gpu) return false;` to the Direct arm and
-// the vendor-free walk finds no route for those rows, the facade keeps throwing,
-// and half the burn-down this work package exists for moves by ZERO.
-//
-// THE V1 TRAP, AVOIDED DELIBERATELY AND CHECKED RATHER THAN ASSERTED.
-// spmm_shape() below sets format, gather_available AND scatter_available. Leave
-// any of them at its default and supports() is false on every shape, every
-// assertion in this section holds vacuously, and the section reports green
-// through a flip and its inverse -- which is exactly how getrs's 78/78 survived
-// a capability flip (:2943-2993). RouteSpmm.HelperIsArmed is written first and
-// must be read first: it takes each of the four gates away ONE AT A TIME and
-// requires the supports() answer to MOVE.
-//
-// AND THE ARMING WAS MEASURED, NOT ASSERTED. Seven breaks, each applied to the
-// named file, recompiled and run, then reverted:
-//
-//   break      file             red   named cases turned red
-//   --------------------------------------------------------------------------
-//   unarmed    this file        10    the helper stops setting gather_available
-//                                     and scatter_available -- i.e. THE V1 TRAP
-//                                     ITSELF. HelperIsArmed catches it, and so
-//                                     do nine others, so the section cannot go
-//                                     vacuous quietly.
-//   noformat   this file        10    the helper stops setting format
-//   gpugate    route_spmm.hh     2    `if (!s.is_gpu) return false;` added to
-//                                     the Direct arm -- THE WP8 DELIVERABLE
-//                                     FLIPPED. NoGpuGateOnDirect goes red, and
-//                                     in build-novendor every Backend::NETLIB
-//                                     spmm goes back to throwing NoRouteError.
-//   orflags    route_spmm.hh     2    the two capabilities collapsed into
-//                                     `gather_available || scatter_available`
-//   zeroext    route_spmm.hh     1    m == 0 / n == 0 refused instead of
-//                                     quick-returned -- ZeroExtentsAre...
-//                                     ALONE, which is what a single-purpose
-//                                     case should do
-//   clause     route_spmm.hh     3    a preferred() clause lands
-//                                     (`batch >= 128`, the shape of the first
-//                                     one anybody will try)
-//   order      route_spmm.hh     1    kSpmmOrder reversed
-//
-// TWO CAPABILITY FLAGS, NOT ONE, and they are not interchangeable. transA ==
-// NoTrans is served by the gather body; transA != NoTrans is served by the
-// scale+scatter PAIR. They are separate kernels with separate instantiations, so
-// a build can have one and not the other, and supports() consults exactly the
-// flag for the body that would actually run.
-//
-// A NOTE FOR WHOEVER READS THE NEXT route_diff. The cases below call
-// `resolve_spmm_route`, the INSTRUMENTED resolver, so each writes a coverage row
-// with `backend = AUTO`. They are fabricated shapes from a pure-layer test, not
-// decisions the library made, and several read `native:direct` even in a
-// vendor-present capture because they pass `vendor_available = false`
-// explicitly. Filter on `backend != AUTO` before concluding anything about what
-// the library routes. This is the file's existing practice, not an spmm
-// invention.
+// spmm_shape() sets format, gather_available AND scatter_available: leave any at
+// its default and supports() is false on every shape, so every assertion here
+// holds vacuously. RouteSpmm.HelperIsArmed is what checks that.
+// evidence: docs/perf/spmm.md
 // ===========================================================================
 
 namespace {
@@ -3464,10 +2797,9 @@ SpmmShape spmm_shape(int64_t m, int64_t k, int64_t nrhs, int64_t batch,
     s.op = Op::spmm;
     s.scalar = ScalarKind::F32;
     s.backend = Backend::AUTO;
-    // THE FIELD MAPPING, ONCE, HERE: m = A.rows(), k = A.cols(), n = C.cols(),
-    // i.e. nrhs. Which of m and k is the OUTPUT extent swaps with transA, which
-    // is why the shape carries out_rows() and red_rows() and why no case below
-    // reasons in m and k again.
+    // THE FIELD MAPPING, ONCE, HERE: m = A.rows(), k = A.cols(), n = C.cols(), i.e.
+    // nrhs. Which of m and k is the OUTPUT extent swaps with transA, which is why
+    // the shape carries out_rows() and red_rows().
     s.m = m;
     s.k = k;
     s.n = nrhs;
@@ -3493,12 +2825,10 @@ constexpr Transpose kAllTrans[3] = {Transpose::NoTrans, Transpose::Trans,
 
 } // namespace
 
-// THE HELPER IS ARMED. RUN THIS FIRST: if it fails, every other spmm assertion
-// in this file is vacuous and none of them means anything.
-//
-// Four gates, taken away ONE AT A TIME, each required to MOVE the answer. Taking
-// them away together would not distinguish "all four reach supports()" from "one
-// of them does", which is the precise shape of the getrs hole.
+// THE HELPER IS ARMED. RUN THIS FIRST: if it fails, every other spmm assertion in
+// this file is vacuous. Four gates, taken away ONE AT A TIME, each required to MOVE
+// the answer -- taking them away together would not distinguish which one reaches
+// supports().
 TEST(RouteSpmm, HelperIsArmed) {
     const auto gather  = spmm_shape(/*m=*/4096, /*k=*/4096, /*nrhs=*/25, /*batch=*/64);
     const auto scatter = spmm_shape(4096, 4096, 25, 64, Transpose::Trans);
@@ -3539,16 +2869,10 @@ TEST(RouteSpmm, HelperIsArmed) {
         << "heterogeneous_batch is not reaching supports()";
 }
 
-// THE WP8 DELIVERABLE, AS AN ASSERTION, AND THE ONLY ASSERTION IN THE TREE THAT
-// GUARDS IT DIRECTLY. Adding `if (!s.is_gpu) return false;` to the Direct arm
-// turns this red -- and, in build-novendor, leaves every Backend::NETLIB spmm
-// call throwing NoRouteError exactly as it does today.
-//
-// It is asserted for ALL NINE transpose pairs because all three bodies are plain
-// loops: zero local memory, no work-group or sub-group collective, no required
-// sub-group size, nothing a CPU device cannot execute. A gate added to only the
-// scatter half would be just as fatal to the burn-down and would survive a
-// NoTrans-only case.
+// THE DELIVERABLE, AS AN ASSERTION: adding `if (!s.is_gpu) return false;` to the
+// Direct arm turns this red. It is asserted for all nine transpose pairs because
+// all three bodies are plain loops -- no local memory, no group collective, no
+// required sub-group size -- so a gate added to only one half would still be fatal.
 TEST(RouteSpmm, NoGpuGateOnDirect) {
     for (Transpose ta : kAllTrans) {
         for (Transpose tb : kAllTrans) {
@@ -3567,12 +2891,9 @@ TEST(RouteSpmm, NoGpuGateOnDirect) {
     }
 }
 
-// ALL NINE (transA, transB) COMBINATIONS ARE SERVED. This is what keeps the
-// transB == Trans layout lever available to callers: a caller holding B in the
-// other layout can pass it transposed instead of materialising a copy, and a
-// future "simplification" that refuses transB != NoTrans in the table would take
-// that away silently -- the pin would fall through to the vendor with no
-// diagnostic.
+// ALL NINE (transA, transB) COMBINATIONS ARE SERVED, which keeps the transB ==
+// Trans layout lever available: a caller holding B in the other layout can pass it
+// transposed instead of materialising a copy.
 TEST(RouteSpmm, AllNineTransposeCombinationsSupported) {
     for (Transpose ta : kAllTrans) {
         for (Transpose tb : kAllTrans) {
@@ -3589,13 +2910,10 @@ TEST(RouteSpmm, AllNineTransposeCombinationsSupported) {
     }
 }
 
-// THE TWO FLAGS ARE INDEPENDENT AND SERVE DISJOINT HALVES OF THE transA AXIS.
-// A table that ORed them -- or that consulted only one -- would pass a shape to
-// a kernel this build does not contain, which is the TrsmShape::cta_max_n == 0
-// failure mode: selectable-but-unimplemented rather than unsupported.
-//
-// transB is swept inside both halves because it must NOT influence the choice:
-// the gather/scatter split is on transA alone.
+// THE TWO FLAGS ARE INDEPENDENT AND SERVE DISJOINT HALVES OF THE transA AXIS. A
+// table that ORed them would pass a shape to a kernel this build does not contain:
+// selectable-but-unimplemented rather than unsupported. transB is swept inside both
+// halves because it must NOT influence the choice.
 TEST(RouteSpmm, GatherAndScatterUseDifferentCapabilities) {
     for (Transpose tb : kAllTrans) {
         // Gather only: NoTrans is served, the two transposed spellings are not.
@@ -3627,10 +2945,9 @@ TEST(RouteSpmm, GatherAndScatterUseDifferentCapabilities) {
     }
 }
 
-// ONLY CSR HAS BODIES. This is a correctness gate, not a bet on sparse.cc's
-// instantiation list staying as it is: a Dense or COO view reaching a CSR kernel
-// reads row offsets that are not there, which is a wrong answer or a fault, not
-// a slow route.
+// ONLY CSR HAS BODIES, and this is a correctness gate: a Dense or COO view reaching
+// a CSR kernel reads row offsets that are not there, which is a wrong answer or a
+// fault, not a slow route.
 TEST(RouteSpmm, NonCsrFormatRefused) {
     for (MatrixFormat f : {MatrixFormat::Dense, MatrixFormat::CSC, MatrixFormat::COO,
                            MatrixFormat::SELL, MatrixFormat::BSR,
@@ -3642,9 +2959,7 @@ TEST(RouteSpmm, NonCsrFormatRefused) {
             EXPECT_TRUE(SpmmTable::supports(kVendorAuto, s));
             EXPECT_TRUE(is_vendor(resolve_spmm_route<float>(kSpmmAuto, s, true)));
             // And vendor-free there is nothing to fall back to, so the resolver
-            // returns the vendor as its honest "this needs one and there isn't
-            // one" signal (route_resolve.hh's automatic() tail) and the facade
-            // turns that into a diagnostic rather than a wrong answer.
+            // returns the vendor as its honest "this needs one" signal.
             EXPECT_TRUE(is_vendor(resolve_spmm_route<float>(kSpmmAuto, s, false)));
         }
     }
@@ -3654,16 +2969,10 @@ TEST(RouteSpmm, NonCsrFormatRefused) {
                                 Transpose::NoTrans, MatrixFormat::CSR)));
 }
 
-// A HETEROGENEOUS BATCH IS A CORRECTNESS GATE, not merely un-preferred: one
-// launch covers the batch with a single (ld, stride) tuple per DENSE operand, so
-// per-item extents on B or C would be read at the wrong addresses. spmm has no
-// analogue of gemm's heterogeneous walker.
-//
-// Note what this gate is NOT about. Per-item variation on the SPARSE side is
-// expressible only as nnz(b), every body handles that exactly through the
-// row-offset array, and a CSR MatrixView is never heterogeneous in the
-// active_rows_/active_cols_ sense at all (matrix.hh:1036-1042) -- so this gate
-// can only ever fire on the dense operands, which is what it is for.
+// A HETEROGENEOUS BATCH IS A CORRECTNESS GATE: one launch covers the batch with a
+// single (ld, stride) tuple per DENSE operand. Per-item variation on the SPARSE
+// side is expressible only as nnz(b), which every body handles through the
+// row-offset array, so this gate can only ever fire on the dense operands.
 TEST(RouteSpmm, HeterogeneousBatchRefused) {
     for (Transpose ta : kAllTrans) {
         const auto het = spmm_shape(1024, 1024, 12, 64, ta, Transpose::NoTrans,
@@ -3676,14 +2985,10 @@ TEST(RouteSpmm, HeterogeneousBatchRefused) {
     }
 }
 
-// DEGENERATE EXTENTS, AND THIS CASE IS HALF OF A CONTRACT WITH THE LAUNCHER.
-//
-// m == 0 and n == 0 are LEGAL calls that stay SUPPORTED, so spmm_native_csr MUST
-// quick-return on the HOST -- before any submit -- when out_rows == 0 ||
-// nrhs == 0 || batch <= 0. Refusing them here instead would be the easy fix and
-// the wrong one: it sends a legal call to the vendor in one build and to nothing
-// at all in the other. A NEGATIVE extent or an empty batch has no launch
-// geometry and is refused.
+// DEGENERATE EXTENTS, AND HALF OF A CONTRACT WITH THE LAUNCHER. m == 0 and n == 0
+// are LEGAL calls that stay SUPPORTED, so spmm_native_csr MUST quick-return on the
+// HOST -- before any submit -- when out_rows == 0 || nrhs == 0 || batch <= 0. A
+// NEGATIVE extent or an empty batch has no launch geometry and is refused.
 TEST(RouteSpmm, ZeroExtentsAreSupportedNegativeAreNot) {
     EXPECT_TRUE(SpmmTable::supports(kSpmmDirect, spmm_shape(0, 512, 12, 8)));
     EXPECT_TRUE(SpmmTable::supports(kSpmmDirect, spmm_shape(512, 512, 0, 8)));
@@ -3704,14 +3009,9 @@ TEST(RouteSpmm, ZeroExtentsAreSupportedNegativeAreNot) {
         resolve_spmm_route<float>(kSpmmAuto, spmm_shape(512, 512, 12, 0), true)));
 }
 
-// Algorithm::Auto IS NOT ITSELF A NATIVE SPMM ROUTE. A bare `native` names no
-// body -- it is the `default:` arm -- so supports() must say false, or the walk
-// would stop on a route no dispatch tail can map to a kernel.
-//
-// The bare pin still RESOLVES, though, and to the one native route there is:
-// resolve_route walks the order restricted to the requested origin
-// (route_resolve.hh:153-163). Both halves are asserted, because the first
-// without the second would read as "a bare native pin is broken".
+// Algorithm::Auto IS NOT ITSELF A NATIVE SPMM ROUTE: a bare `native` names no body,
+// so supports() must say false. It still RESOLVES, to the one native route there
+// is, and both halves are asserted.
 TEST(RouteSpmm, BareNativeAutoIsNotSupported) {
     const auto s = spmm_shape(4096, 4096, 25, 64);
     EXPECT_FALSE(SpmmTable::supports(kSpmmNativeBare, s));
@@ -3731,16 +3031,7 @@ TEST(RouteSpmm, BareNativeAutoIsNotSupported) {
 }
 
 // ===========================================================================
-// preferred() IS NO LONGER ALL-FALSE, AND THESE CASES PIN THE ACTUAL PREDICATE.
-//
-// The case that used to live here (RouteSpmm.PreferredIsAllFalse) asserted that
-// EVERY route, type and shape was un-preferred, and said in its own comment that
-// landing a clause must turn it red and force whoever landed it to come here and
-// name the cells with the CSV path. That is what happened; this block is the
-// replacement, not a deletion.
-//
-// THE SHIPPED CLAUSE, in words, so a reader of this file need not open the
-// header:
+// THE SHIPPED preferred() CLAUSE, in words:
 //
 //     preferred(r, s) ==   is_native(r)
 //                       && r.algo == Algorithm::Direct
@@ -3748,36 +3039,11 @@ TEST(RouteSpmm, BareNativeAutoIsNotSupported) {
 //                       && s.transA == Transpose::NoTrans
 //                       && !(T is complex<float> && s.transB != NoTrans)
 //
-// and NOTHING else -- no batch term, no extent term, no is_gpu term, no nnz
-// term. Evidence and the refuted alternatives are in route_spmm.hh's comment and
-// in docs/perf/spmm.md#the-evidence-for-each-boundary.
-//
-// WHY THIS IS ASSERTED AT BOTH LEVELS. Every case below checks the PREDICATE and
-// then the RESOLVED ROUTE with vendor_available = true, because the two can come
-// apart: a preferred() that answered true for {Vendor, Auto} would pin cuSPARSE
-// as "preferred" and make the native route unreachable while every
-// predicate-only assertion below still passed. Checking only the resolution, in
-// the other direction, would not distinguish "preferred" from "merely supported
-// with no vendor around".
-//
-// WHAT THIS PAIRING DOES *NOT* CATCH, MEASURED RATHER THAN GUESSED: reversing
-// kSpmmOrder. preferred() is false for the vendor entry, so the first walk skips
-// it wherever it sits and the decision is unchanged; the reversal was applied,
-// rebuilt and run, and only RouteSpmm.OrderIsExactlyTwoEntries goes red.
-//
-// EVERY BOUNDARY THE CLAUSE DRAWS IS ASSERTED FROM BOTH SIDES:
-//   origin/algo   native:direct accepted; vendor:auto, native:auto, native:cta,
-//                 native:blocked all refused
-//   format        CSR accepted; Dense/CSC/COO/SELL/BSR/BLOCKED_ELL refused
-//   transA        NoTrans accepted; Trans and ConjTrans refused -- A MEASURED
-//                 REFUSAL (169 of 458 saturated scatter cells over the 1.10
-//                 gate, worst 3.011), not an unmeasured corner
-//   type x transB complex<float> with transB != NoTrans refused, while the SAME
-//                 shape is accepted for float, double and complex<double>, and
-//                 complex<float> with transB == NoTrans is accepted
-//   batch         accepted at 1 and at 4096 alike -- the absence of a floor is
-//                 itself a measured decision (sb1/sb2) and is pinned so that
-//                 adding one turns this red
+// and NOTHING else -- no batch, extent, is_gpu or nnz term. Each case below pins
+// the predicate AND the resolved route, because the two come apart: a preferred()
+// that answered true for {Vendor, Auto} would make the native route unreachable
+// while every predicate-only assertion still passed.
+// evidence: docs/perf/spmm.md#the-evidence-for-each-boundary
 // ===========================================================================
 
 namespace {
@@ -3791,14 +3057,9 @@ constexpr Route kSpmmBlocked{Origin::Native, Algorithm::Blocked};
 
 } // namespace
 
-// THE CLAUSE ACCEPTS THE GATHER, FOR ALL FOUR TYPES, ACROSS THE WHOLE MEASURED
-// GRID AND BEYOND IT.
-//
-// The extents and batches swept here are the ones the measurement actually
-// covered (m 1024/2048/4096, nrhs 1..50, batch 1..4096 -- pass{1,2}, scl{1,2},
-// sb{1,2}) plus deliberate outliers on both ends, because the clause carries no
-// extent or batch term and a future one must turn this red rather than pass
-// unnoticed.
+// THE CLAUSE ACCEPTS THE GATHER FOR ALL FOUR TYPES, across the measured grid and
+// beyond it: the clause carries no extent or batch term, so a future one must turn
+// this red rather than pass unnoticed.
 TEST(RouteSpmm, PreferredAcceptsTheGatherForEveryType) {
     for (int64_t m : {1, 64, 512, 1024, 2048, 4096, 65536}) {
         for (int64_t nrhs : {1, 2, 3, 12, 25, 50}) {
@@ -3811,8 +3072,7 @@ TEST(RouteSpmm, PreferredAcceptsTheGatherForEveryType) {
                 EXPECT_TRUE(SpmmTableCF::preferred(kSpmmDirect, s))
                     << "complex<float> is refused only with transB != NoTrans";
 
-                // ...and the decision that follows from it, WITH a vendor
-                // present. This is the half that a reversed kSpmmOrder breaks.
+                // ...and the decision that follows, WITH a vendor present.
                 EXPECT_TRUE(is_native(resolve_spmm_route<float>(kSpmmAuto, s, true)))
                     << "float m " << m << " nrhs " << nrhs << " batch " << batch
                     << ": the gather must now win against a present vendor";
@@ -3834,18 +3094,9 @@ TEST(RouteSpmm, PreferredAcceptsTheGatherForEveryType) {
     }
 }
 
-// THE BATCH AXIS HAS NO FLOOR, AND ITS ABSENCE IS A MEASURED DECISION.
-//
-// preferred() is consulted on EVERY call while the acceptance gate is stated at
-// batch >= 128, so the batch 1..64 corner was swept separately
-// (docs/perf/spmm.md#the-batch-axis-has-no-floor, sb1/, sb2/, smallbatch.txt): 0 of
-// 174 admitted rows at batch <= 64 exceed the 1.10 gate in both passes, and the
-// worst cell anywhere in that region is 1.078, INSIDE the gate. A floor needs a
-// measured non-winner outside the gate to bracket it and there is none.
-//
-// This case exists so that adding `s.batch >= N` -- the shape of the first
-// "obvious" tightening anybody will try, and the one the deliberate-break
-// exercise used -- goes red with a message that says where to look.
+// THE BATCH AXIS HAS NO FLOOR, AND ITS ABSENCE IS A MEASURED DECISION: no cell at
+// batch <= 64 exceeds the 1.10 gate, so a floor has no measured non-winner to
+// bracket it. evidence: docs/perf/spmm.md#the-batch-axis-has-no-floor
 TEST(RouteSpmm, PreferredHasNoBatchFloor) {
     for (int64_t batch : {1, 2, 4, 8, 16, 32, 64, 127, 128, 129, 512, 4096}) {
         const auto s = spmm_shape(/*m=*/4096, /*k=*/4096, /*nrhs=*/50, batch);
@@ -3860,18 +3111,10 @@ TEST(RouteSpmm, PreferredHasNoBatchFloor) {
     }
 }
 
-// THE TRANSPOSED REFUSAL, WHICH IS MEASURED AND NOT AN OMISSION.
-//
-// 169 of 458 saturated batch >= 128 scatter cells are above the 1.10 gate,
-// median 1.030, worst 3.011 (docs/perf/spmm.md#the-gather-window). Every
-// narrower candidate was tried and refuted there too: nrhs <= 4 fails 11 of 204,
-// nrhs <= 2 fails 5 of 151, nrhs <= 1 fails 2 of 60, and the one that passes
-// (nrhs <= 2 AND type != complex<double>) is rejected because its true axis is
-// nnz/row, which SpmmShape deliberately cannot see.
-//
-// Both sides of the boundary are asserted on the SAME shape, so this cannot pass
-// by refusing everything: NoTrans is preferred, Trans and ConjTrans are not, and
-// with a vendor present the transposed shapes still resolve to it.
+// THE TRANSPOSED REFUSAL, WHICH IS MEASURED AND NOT AN OMISSION, and every narrower
+// candidate was refuted too. Both sides of the boundary are asserted on the SAME
+// shape, so this cannot pass by refusing everything.
+// evidence: docs/perf/spmm.md#the-gather-window
 TEST(RouteSpmm, PreferredRefusesEveryTransposedA) {
     for (int64_t nrhs : {1, 2, 4, 12, 25, 50}) {
         for (int64_t batch : {8, 128, 512, 1024}) {
@@ -3898,9 +3141,8 @@ TEST(RouteSpmm, PreferredRefusesEveryTransposedA) {
                     EXPECT_TRUE(is_vendor(resolve_spmm_route<float>(kSpmmAuto, s, true)))
                         << "vendor-present, a transposed spmm must still go to "
                            "the vendor";
-                    // ...and vendor-FREE it must still reach the native bodies,
-                    // which is the entire burn-down. Un-preferred is not
-                    // unsupported.
+                    // ...and vendor-FREE it must still reach the native bodies:
+                    // un-preferred is not unsupported.
                     const Route free_route =
                         resolve_spmm_route<float>(kSpmmAuto, s, false);
                     EXPECT_TRUE(is_native(free_route));
@@ -3911,26 +3153,11 @@ TEST(RouteSpmm, PreferredRefusesEveryTransposedA) {
     }
 }
 
-// THE ONE TYPE-CONDITIONAL BOUNDARY, ASSERTED FROM ALL FOUR SIDES.
-//
-// complex<float> with a transposed dense operand runs 1.71-1.73x slower than
-// cuSPARSE on a banded column pattern at nrhs >= 17
-// (docs/perf/spmm.md#the-cfloat-transb-exclusion), and it is what refutes the
-// unconditional gather clause: cfloat tA=0 m=2048 nnz/row=16 nrhs=25 b=128 tB=1
-// beta=0 banded measures 1.934 / 1.872 (verdict.txt).
-//
-// The exclusion is (type AND transB) TOGETHER, so all four corners are pinned:
-//   complex<float> + transB != NoTrans   refused
-//   complex<float> + transB == NoTrans   accepted
-//   other types    + transB != NoTrans   accepted
-//   other types    + transB == NoTrans   accepted
-// Drop either half of the conjunction and one of these goes red.
-//
-// It is deliberately NOT narrowed by nrhs even though `nrhs >= 16` passes on
-// verdict.txt's grid: the threshold is a property of the BANDED column pattern
-// (the same family on the scattered pattern is 0.79-1.02 at every nrhs) and
-// SpmmShape has no column-pattern field and cannot acquire one. The nrhs sweep
-// below is what makes such a narrowing visible if anyone adds it.
+// THE ONE TYPE-CONDITIONAL BOUNDARY, ASSERTED FROM ALL FOUR SIDES. The exclusion is
+// (type AND transB) TOGETHER -- drop either half of the conjunction and one of these
+// goes red. It is deliberately NOT narrowed by nrhs: the threshold is a property of
+// the BANDED column pattern, which SpmmShape has no field for and cannot acquire.
+// evidence: docs/perf/spmm.md#the-cfloat-transb-exclusion
 TEST(RouteSpmm, PreferredRefusesComplexFloatWithTransposedB) {
     for (int64_t nrhs : {1, 2, 8, 12, 16, 17, 25, 32, 50}) {
         for (int64_t batch : {1, 4, 128, 512}) {
@@ -3972,16 +3199,10 @@ TEST(RouteSpmm, PreferredRefusesComplexFloatWithTransposedB) {
         resolve_spmm_route<std::complex<float>>(kSpmmAuto, cf_tb, false)));
 }
 
-// THE CLAUSE SPEAKS ONLY FOR {Native, Direct} AND ONLY FOR CSR.
-//
-// The route half matters because preferred() is asked about EVERY entry in
-// kSpmmOrder by automatic()'s first walk: a clause that answered true for
-// {Vendor, Auto} would pin the vendor as "preferred" and make the native route
-// unreachable in the vendor-present build no matter what the order says.
-//
-// The format half is the same correctness boundary supports() draws, restated
-// here because preferred() is consulted BEFORE supports() has any say in the
-// walk order and a reader should not have to prove the conjunction by hand.
+// THE CLAUSE SPEAKS ONLY FOR {Native, Direct} AND ONLY FOR CSR. The route half
+// matters because preferred() is asked about EVERY entry in kSpmmOrder: a clause
+// answering true for {Vendor, Auto} would pin the vendor as "preferred" and make
+// the native route unreachable whatever the order says.
 TEST(RouteSpmm, PreferredIsFalseForEveryOtherRouteAndFormat) {
     const auto s = spmm_shape(4096, 4096, 25, 512);
     ASSERT_TRUE(SpmmTable::preferred(kSpmmDirect, s))
@@ -4007,11 +3228,10 @@ TEST(RouteSpmm, PreferredIsFalseForEveryOtherRouteAndFormat) {
     }
 }
 
-// THE CLAUSE HAS NO is_gpu TERM EITHER, AND THAT IS THE OTHER HALF OF WP8's
-// DELIVERABLE. supports() has no GPU gate (RouteSpmm.NoGpuGateOnDirect); if
-// preferred() acquired one, a native_cpu queue would still be SERVED in a
-// vendor-free build but would go back to netlib -- which refuses every transpose
-// -- in a vendor-present one, silently.
+// THE CLAUSE HAS NO is_gpu TERM EITHER. supports() has no GPU gate; if preferred()
+// acquired one, a native_cpu queue would still be served in a vendor-free build but
+// would go back to netlib -- which refuses every transpose -- in a vendor-present
+// one, silently.
 TEST(RouteSpmm, PreferredHasNoGpuTerm) {
     for (int64_t batch : {1, 8, 128, 512}) {
         const auto cpu = spmm_shape(1024, 1024, 12, batch, Transpose::NoTrans,
@@ -4025,14 +3245,9 @@ TEST(RouteSpmm, PreferredHasNoGpuTerm) {
     }
 }
 
-// UN-PREFERRED IS NOT UNSUPPORTED, AND A PIN MUST STILL REACH THE SCATTER.
-//
-// This is the property that keeps BATCHLAS_SPMM_ROUTE=native honest after the
-// clause: the transposed bodies are refused by preferred() and served by
-// supports(), so a forced native route reaches them in BOTH builds. If the
-// refusal had been written into supports() instead -- the tempting
-// simplification -- the pin would fall through to the vendor with no diagnostic
-// and every transposed measurement would silently be cuSPARSE.
+// UN-PREFERRED IS NOT UNSUPPORTED, AND A PIN MUST STILL REACH THE SCATTER. Had the
+// refusal been written into supports() instead, the pin would fall through to the
+// vendor with no diagnostic and every transposed measurement would be cuSPARSE.
 TEST(RouteSpmm, ForcedNativeStillReachesTheRefusedScatter) {
     for (Transpose ta : {Transpose::Trans, Transpose::ConjTrans}) {
         const auto s = spmm_shape(2048, 2048, 50, 512, ta);
@@ -4060,17 +3275,9 @@ TEST(RouteSpmm, ForcedNativeStillReachesTheRefusedScatter) {
     EXPECT_EQ(pinned.algo, Algorithm::Direct);
 }
 
-// AN AUTO SPMM IS THE NATIVE ROUTE WHEREVER THE CLAUSE FIRES, THE VENDOR
-// WHEREVER IT DOES NOT, AND THE NATIVE ROUTE EVERYWHERE ONCE THE VENDOR IS GONE.
-//
-// THIS CASE USED TO ASSERT ROUTE-NEUTRALITY IN THE VENDOR-PRESENT BUILD. That
-// claim was true only while preferred() was all-false and is now FALSE BY
-// DESIGN: the WP8 clause exists precisely to move the gather off cuSPARSE. What
-// survives unchanged is the vendor-free half -- the entire burn-down -- and the
-// transposed half of the vendor-present build, which the measurement refused.
-//
-// The moved decisions are enumerated by scripts/route_diff.sh: spmm gather rows
-// move from vendor:auto to native:direct, and NOTHING ELSE in the tree moves.
+// AN AUTO SPMM IS THE NATIVE ROUTE WHEREVER THE CLAUSE FIRES, THE VENDOR WHEREVER
+// IT DOES NOT, AND THE NATIVE ROUTE EVERYWHERE ONCE THE VENDOR IS GONE. The moved
+// decisions are enumerated by scripts/route_diff.sh.
 TEST(RouteSpmm, AutoTakesNativeWhereTheClauseFiresAndVendorWhereItDoesNot) {
     for (Transpose ta : kAllTrans) {
         for (bool gpu : {true, false}) {
@@ -4095,22 +3302,12 @@ TEST(RouteSpmm, AutoTakesNativeWhereTheClauseFiresAndVendorWhereItDoesNot) {
     }
 }
 
-// PINNING A ROUTE THE TABLE CANNOT SERVE IS SILENT, AND ITS OUTCOME DEPENDS ON
-// THE BUILD. This is not a bug being asserted as correct -- it is the campaign's
-// standing fall-through behaviour, and it has cost time repeatedly -- but it is
-// worth having in a test so nobody re-derives it from a benchmark that lies.
-//
-// BATCHLAS_SPMM_ROUTE=cta parses fine (route_env.hh's parse_algorithm_word knows
-// the word), supports() rejects it because there is no CTA body, and the run then
-// measures cuSPARSE while the operator believes it measured the native kernel. A
-// MISSPELLED value behaves the same way and is worse: ParsedRouteEnv::unparsed is
-// discarded at spmm_route.hh's `parsed.found ? parsed.route : legacy_unset_default`.
-//
-// SINCE THE preferred() CLAUSE LANDED THE FALL-THROUGH HAS TWO OUTCOMES IN THE
-// VENDOR-PRESENT BUILD, not one, and that makes the trap WORSE rather than
-// better: an unserviceable pin now lands on native:direct inside the preferred
-// window and on the vendor outside it. Both are asserted below, on shapes that
-// differ only in transA.
+// PINNING A ROUTE THE TABLE CANNOT SERVE IS SILENT, AND ITS OUTCOME DEPENDS ON THE
+// BUILD. BATCHLAS_SPMM_ROUTE=cta parses fine, supports() rejects it because there
+// is no CTA body, and the run then measures cuSPARSE while the operator believes it
+// measured the native kernel; a MISSPELLED value behaves the same way, because
+// `unparsed` is discarded. Inside the preferred window the same pin lands on
+// native:direct instead -- one trap with two outcomes.
 TEST(RouteSpmm, SilentPinFallThrough) {
     const auto s = spmm_shape(4096, 4096, 25, 128);
     ASSERT_TRUE(SpmmTable::supports(kSpmmDirect, s))
@@ -4136,10 +3333,8 @@ TEST(RouteSpmm, SilentPinFallThrough) {
            "build-dependent, so only the resolved-route column can tell you "
            "which arm actually ran";
 
-    // INSIDE it, the same unserviceable pin now lands on the NATIVE gather --
-    // still silently, and still not what was asked for. A benchmark that pinned
-    // `cta` and read a fast number would now be reading native:direct rather
-    // than cuSPARSE, which is a different wrong conclusion from the same bug.
+    // INSIDE it, the same unserviceable pin lands on the NATIVE gather -- still
+    // silently, and still not what was asked for.
     const Route inside = resolve_spmm_route<float>(kSpmmCta, s,
                                                    /*vendor_available=*/true);
     EXPECT_TRUE(is_native(inside));
@@ -4147,15 +3342,10 @@ TEST(RouteSpmm, SilentPinFallThrough) {
 }
 
 // SpmmShape MUST NOT RE-DECLARE ANY OpShape FIELD. resolve_route SLICES it to
-// OpShape on the way into the coverage table (route_resolve.hh:212), so a
-// shadowing member would be written by the shape builder and then NOT copied:
-// every spmm coverage row and every route_diff row would report the default, the
-// gather and scatter arms -- which are different KERNELS, not different flags --
-// would collapse into ONE first-writer-wins row, and the collapse would be
-// invisible because the table itself would still behave correctly.
-//
-// transA and transB are both checked because both are in coverage's variant_key
-// (coverage.cc:52-58), and m because it is half of shape_class.
+// OpShape on the way into the coverage table, so a shadowing member would be
+// written by the builder and then NOT copied: the gather and scatter arms -- which
+// are different KERNELS, not different flags -- would collapse into ONE
+// first-writer-wins row while the table itself still behaved correctly.
 TEST(RouteSpmm, ShapeDoesNotShadowOpShapeFields) {
     SpmmShape s = spmm_shape(/*m=*/4096, /*k=*/2048, /*nrhs=*/25, /*batch=*/64,
                              Transpose::ConjTrans, Transpose::Trans,
@@ -4181,13 +3371,10 @@ TEST(RouteSpmm, ShapeDoesNotShadowOpShapeFields) {
            "by supports(); it still has to SURVIVE the slice";
 }
 
-// out_rows() AND red_rows() SWAP WITH transA. The shipped table still reads
-// NEITHER -- the WP8 preferred() clause is expressed in transA, transB, format
-// and type alone, with no extent term. This case is here to make the mapping
-// WRONG-PROOF for whoever adds the first clause or the first staged tier: the
-// design review rejected one whose staged B slab was sized over `m` when B has
-// red_rows() rows, which reads past the operand for every non-square A and is
-// invisible in a worked example because every worked example was square.
+// out_rows() AND red_rows() SWAP WITH transA. The shipped clause reads NEITHER, so
+// this is here to make the mapping wrong-proof for whoever adds the first extent
+// clause or staged tier: the design review rejected one whose staged B slab was
+// sized over `m` when B has red_rows() rows.
 TEST(RouteSpmm, OutRowsAndRedRowsSwapWithTransA) {
     const auto no = spmm_shape(/*m=*/4096, /*k=*/64, /*nrhs=*/25, /*batch=*/8);
     EXPECT_EQ(no.out_rows(), 4096);
@@ -4203,24 +3390,11 @@ TEST(RouteSpmm, OutRowsAndRedRowsSwapWithTransA) {
     }
 }
 
-// THE ORDER ARRAY HAS EXACTLY TWO ENTRIES, AND IT IS ASSERTED RATHER THAN
-// ASSUMED. Vendor-free, the vendor-off walk takes the FIRST supported native
-// route; vendor-present, automatic()'s first walk takes the first route that is
-// both supported AND preferred.
-//
-// A MEASURED CORRECTION, because the obvious thing to write here is wrong.
-// Reversing this array does NOT send the WP8-admitted shapes back to cuSPARSE:
-// preferred() returns false for {Vendor, Auto}, so the first walk skips that
-// entry wherever it sits, and the vendor-free walk filters on is_native() and
-// has exactly one candidate. The reversal was applied, rebuilt and run, and
-// THIS CASE IS THE ONLY ONE THAT GOES RED -- structurally, not through any
-// decision. Which is precisely why it has to exist: nothing else in the file
-// can see the array at all.
-//
-// A third entry would mean a second native tier, which would also need
-// native_tier_preferred() to arbitrate it -- the hook route_spmm.hh deliberately
-// does not declare, because a predicate with one candidate has no decision
-// behind it.
+// THE ORDER ARRAY HAS EXACTLY TWO ENTRIES, ASSERTED RATHER THAN ASSUMED -- and this
+// case is the ONLY one that reversing the array turns red, because preferred() is
+// false for the vendor entry and the vendor-free walk has exactly one native
+// candidate. A third entry would mean a second native tier, which would also need
+// native_tier_preferred() to arbitrate it.
 TEST(RouteSpmm, OrderIsExactlyTwoEntries) {
     ASSERT_EQ(SpmmTable::order_end() - SpmmTable::order_begin(), 2);
     EXPECT_EQ(SpmmTable::order_begin()[0].origin, Origin::Native);
@@ -4230,11 +3404,8 @@ TEST(RouteSpmm, OrderIsExactlyTwoEntries) {
     EXPECT_TRUE(is_vendor(SpmmTable::order_begin()[1]));
 }
 
-// THE ENV VARIABLE EXISTS WITHOUT A SINGLE LINE OF route_env.hh CHANGING, AND
-// THAT IS WORTH PINNING. parse_route_env synthesises the name from
-// op_env_stem(Op::spmm), whose stem comes from op_name and already spells
-// "spmm". A case in legacy_variable_for would INVENT a legacy spelling that
-// never shipped.
+// THE ENV VARIABLE EXISTS WITHOUT A LINE OF route_env.hh CHANGING: parse_route_env
+// synthesises the name from op_env_stem(Op::spmm).
 TEST(RouteSpmm, BatchlasSpmmRouteIsActuallyRead) {
     ClearRouteEnv clear(Op::spmm);
 
@@ -4280,10 +3451,9 @@ TEST(RouteSpmm, BatchlasSpmmRouteIsActuallyRead) {
         EXPECT_EQ(p.route, (Route{Origin::Vendor, Algorithm::Auto}));
     }
     {
-        // THE TYPO PATH. parse_route_env reports it, and every adapter in the
-        // tree -- spmm_route.hh included -- then DISCARDS `unparsed` and uses the
-        // unset default, so the run goes to the vendor with no message. The
-        // report is the only place the mistake is visible at all.
+        // THE TYPO PATH: parse_route_env reports it, and every adapter in the tree
+        // then DISCARDS `unparsed` and uses the unset default, so the run goes to the
+        // vendor with no message.
         ScopedEnv e("BATCHLAS_SPMM_ROUTE", "not-a-route");
         const auto p = parse_route_env(Op::spmm);
         EXPECT_FALSE(p.found);

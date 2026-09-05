@@ -1,11 +1,10 @@
 // Native batched GEQRF and the ORGQR that consumes its output.
 //
-// The oracle is never the vendor: a vendor reference is inert in a vendor-free
-// build, and a forced route that supports() rejects silently falls through to the
-// vendor (route_resolve.hh:101). So every numerical test calls the native entry
-// points directly and checks a host reference computed in double regardless of T.
+// The oracle is never the vendor: a forced route that supports() rejects falls
+// through to the vendor silently (route_resolve.hh:101), so every numerical test
+// calls the native entry points directly against a host reference in double.
 // Residuals are blind to the tau/beta convention -- geqrf's real contract -- which
-// is why the convention tests exist. Evidence: docs/perf/qr.md
+// is why the convention tests exist. evidence: docs/perf/qr.md
 #include <gtest/gtest.h>
 
 #include <batchlas/blas/functions/geqrf.hh>
@@ -44,8 +43,7 @@ namespace {
 template <typename T>
 using RealOf = typename batchlas::base_type<T>::type;
 
-// Every reference computation promotes to double before it accumulates, so a
-// float residual measures the KERNEL's error and not the reference's.
+// References accumulate in double, so a float residual measures the KERNEL's error.
 template <class T> struct Prom { using type = double; };
 template <class R> struct Prom<std::complex<R>> { using type = std::complex<double>; };
 
@@ -163,8 +161,7 @@ std::vector<typename Prom<T>::type> promote_Q(const T* Q, int m, int k, int ld) 
     return out;
 }
 
-// Householder QR's backward error is O(m k) eps ||A||. The constant is the worst
-// value MEASURED over this file rounded up one binary order, not a comfortable one.
+// Householder QR's backward error is O(m k) eps ||A||; this constant is tight, not slack.
 template <typename T>
 double residual_tol(int m, int k) {
     return 0.5 * double(m + k) * double(std::numeric_limits<RealOf<T>>::epsilon());
@@ -183,11 +180,10 @@ struct GeqrfConfig {
     static constexpr Backend BackendVal = B;
 };
 
-// A batch of DISTINCT random matrices at ld != rows and stride != ld*cols, so that
-// the 6-arg MatrixView constructor defaulting stride to ld*cols when 0 is passed --
-// after which every batch item but the first reads the wrong matrix -- is
-// falsifiable by DEFAULT. The pad carries a large POISON, so an out-of-window read
-// is a wrong answer rather than a near one.
+// DISTINCT matrices per item at ld != rows and stride != ld*cols, so a view built on
+// the stride-defaulting constructor -- after which every item but the first reads the
+// wrong matrix -- is falsifiable by DEFAULT. The pad carries a large POISON, so an
+// out-of-window read is a wrong answer rather than a near one.
 template <typename T>
 struct Problem {
     int m = 0, n = 0, k = 0, batch = 0, ld = 0, stride = 0;
@@ -259,7 +255,7 @@ protected:
     }
 
     // The DEVICE's local-memory budget, spelled as src/backends/geqrf_route.hh spells
-    // it -- NOT device_limits.hh's hardcoded 49152, which is 2.06x wrong on this box.
+    // it -- NOT device_limits.hh's hardcoded 49152.
     std::size_t budget() const {
         const std::size_t lm = static_cast<std::size_t>(
             this->ctx->device().get_property(DeviceProperty::LOCAL_MEM_SIZE));
@@ -281,10 +277,9 @@ protected:
     }
 };
 
-// The two residuals plus finiteness and batch-distinctness, on EVERY batch item.
-// Item 0 sits at offset 0, so a wrong batch stride cannot move it and a suite that
-// checks only item 0 is blind to that whole class. The distinctness assertion is
-// what makes "the kernel broadcast item 0 over the batch" a failure, not a pass.
+// Both residuals plus finiteness and batch-distinctness, on EVERY batch item: item 0
+// sits at offset 0, so a wrong batch stride cannot move it, and the distinctness
+// assertion is what makes "the kernel broadcast item 0" a failure rather than a pass.
 template <typename T>
 void check_one(const Problem<T>& p, const char* what) {
     for (int b = 0; b < p.batch; ++b) {
@@ -361,15 +356,11 @@ TYPED_TEST_SUITE(GeqrfTest, GeqrfTestTypes);
 // G0. THE 48 KB LAUNCH HOLE. DECLARED FIRST ON PURPOSE.
 //
 // A resident-leaf launch asking for EXACTLY 49,152 B of local memory is refused by
-// the CUDA backend; geqrf's leaf sat in that band and shipped without the pad.
+// the CUDA backend. DO NOT MOVE THIS TEST, and do not add a resident-leaf launch
+// above it: the shared-memory cap the adapter raises is STICKY PER CUfunction, so an
+// earlier launch of a larger panel raises it for the rest of the process and this
+// guard can never fail again. GoogleTest runs a suite in declaration order.
 // evidence: docs/perf/qr.md#the-48-kib-launch-hole
-//
-// DO NOT MOVE THIS TEST, and do not add a resident-leaf launch above it. The
-// shared-memory cap the adapter raises is STICKY PER CUfunction, so any earlier
-// launch of a larger panel raises it for the rest of the process and this guard can
-// never fail again -- which is how the defect escaped. GoogleTest runs a suite in
-// declaration order, so being first here is the guard. Cold, by hand:
-//     ./build/tests/geqrf_tests --gtest_filter='GeqrfTest/7.LaunchHole*'
 TYPED_TEST(GeqrfTest, ResidentLeafLaunchHoleAt48KiB) {
     using T = typename TestFixture::T;
 
@@ -428,8 +419,6 @@ TYPED_TEST(GeqrfTest, CtaResidualAndOrthogonality) {
         check_one(p, "cta");
         if (this->HasFailure()) return;
     }
-    // Anti-vacuity: a capacity change that silently emptied the ladder would otherwise
-    // leave this test green having exercised nothing.
     ASSERT_GE(ran, 6) << "only " << ran << " of the CTA shapes fit; this test has stopped "
                          "covering the tier it names";
 }
@@ -437,9 +426,9 @@ TYPED_TEST(GeqrfTest, CtaResidualAndOrthogonality) {
 TYPED_TEST(GeqrfTest, BlockedResidualAndOrthogonality) {
     using T = typename TestFixture::T;
     struct S { int m, n, b; };
-    // 96x96's leading cdouble panel is exactly 49,152 B, the byte size G0 guards, but
-    // this is NOT a substitute for G0: 100x32 has already raised the sticky per-
-    // CUfunction cap by the time this test reaches it. That is how the defect shipped.
+    // 96x96's leading cdouble panel is exactly the 49,152 B G0 guards, but this is NOT
+    // a substitute for G0: an earlier row has already raised the sticky per-CUfunction
+    // cap by the time this test reaches it.
     const S shapes[] = {{64, 64, 4},  {65, 65, 4},   {66, 66, 4}, {100, 64, 3},
                         {129, 33, 3}, {130, 130, 2}, {96, 96, 2}, {112, 80, 3}};
     for (const S& s : shapes) {
@@ -455,15 +444,14 @@ TYPED_TEST(GeqrfTest, BlockedResidualAndOrthogonality) {
     }
 }
 
-// G3. The block boundary, straddled on purpose and ASSERTED to be straddled -- the
-// sy2sb short-final-panel class produced wrong numbers with a green suite. The rows
-// are m > n deliberately: on a square REAL matrix larfg returns tau = 0 for the
-// final 1x1 reflector, so dropping it changes nothing and the test guards nothing.
+// G3. The block boundary, straddled on purpose and ASSERTED to be straddled. The rows
+// are m > n deliberately: on a square REAL matrix larfg returns tau = 0 for the final
+// 1x1 reflector, so dropping it changes nothing and the test guards nothing.
 TYPED_TEST(GeqrfTest, ShortFinalPanelStraddlesTheBlockWidth) {
     using T = typename TestFixture::T;
 
-    // Ask at a shape large enough that the answer is the type's own width and not the
-    // min(nb, k) clamp, then assert the clamp does not move it at the shapes used.
+    // Ask at a shape large enough that the answer is the type's own width, not the
+    // min(nb, k) clamp.
     const int w = this->nb(512, 512);
     ASSERT_GE(w, 2) << "a block width of " << w << " cannot straddle anything";
 
@@ -495,9 +483,8 @@ TYPED_TEST(GeqrfTest, ShortFinalPanelStraddlesTheBlockWidth) {
 }
 
 // G4. Both panel leaves. The blocked driver picks a local_accessor tile or a raw
-// global pointer per panel, so this test ASSERTS which one it got before believing
-// any residual, and SEARCHES for the height that leaves the resident path -- a
-// hardcoded height stops exercising the global leaf the day the budget changes.
+// global pointer per panel, so this test ASSERTS which one it got before believing any
+// residual, and SEARCHES for the height that leaves the resident path.
 TYPED_TEST(GeqrfTest, BothPanelLeavesFactoriseCorrectly) {
     using T = typename TestFixture::T;
     const int w = this->nb(4096, 64);
@@ -580,10 +567,9 @@ TYPED_TEST(GeqrfTest, RankDeficientColumnsStillFactorise) {
     }
 }
 
-// G6. The complex convention, which no residual can see. LAPACK's clarfg/zlarfg
-// return a REAL beta; internal::larfg is phase-preserving. Swapping the two leaves
-// qr, orth and the explicit-Q residual GREEN for every type -- a phase-preserving
-// factorisation is a valid QR, just not the one geqrf's consumers assume.
+// G6. The complex convention, which no residual can see: LAPACK's clarfg/zlarfg return
+// a REAL beta, internal::larfg is phase-preserving, and swapping the two leaves qr,
+// orth and the explicit-Q residual GREEN for every type.
 TYPED_TEST(GeqrfTest, ComplexRDiagonalIsExactlyReal) {
     using T = typename TestFixture::T;
     if constexpr (!test_utils::is_complex<T>::value) {
@@ -617,10 +603,9 @@ TYPED_TEST(GeqrfTest, ComplexRDiagonalIsExactlyReal) {
     }
 }
 
-// G7. The interface contract, in both directions. geqrf's output is not a number,
-// it is a CONVENTION consumed by ormqr, orgqr, ormbr, sy2sb and band_reduction, and
-// crossing an implementation boundary is the only way to see a convention error.
-// Direction A -- NATIVE geqrf -> the ROUTED ormqr, whichever implementation that is.
+// G7. The interface contract, in both directions: geqrf's output is a CONVENTION that
+// ormqr, orgqr, ormbr, sy2sb and band_reduction consume, and only crossing an
+// implementation boundary sees a convention error. A -- NATIVE geqrf -> ROUTED ormqr.
 TYPED_TEST(GeqrfTest, TauConventionSurvivesTheRoutedOrmqr) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::BackendType;
@@ -662,9 +647,8 @@ TYPED_TEST(GeqrfTest, TauConventionSurvivesTheRoutedOrmqr) {
     }
 }
 
-// Direction B -- the VENDOR's geqrf -> the NATIVE orgqr. `if constexpr` over a
-// dependent expression discards the body, which is what keeps this file compiling
-// with no cuBLAS in the link.
+// Direction B -- the VENDOR's geqrf -> the NATIVE orgqr. The `if constexpr` over a
+// dependent expression discards the body, which keeps this compiling with no cuBLAS.
 TYPED_TEST(GeqrfTest, VendorFactorFeedsTheNativeOrgqr) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::BackendType;
@@ -713,18 +697,11 @@ TYPED_TEST(GeqrfTest, VendorFactorFeedsTheNativeOrgqr) {
     }
 }
 
-// G8b. THE CONVENTION, GUARDED WITHOUT A VENDOR.
-//
-// NativeFactorMatchesTheVendorElementwise is the only test here that compares
-// against another implementation, and it skips in a vendor-free build -- so without
-// this test the REAL scalar types had no guard on geqrf's tau/beta convention
-// there. No residual can cover it: flipping LAPACK's sign choice leaves qr, orth
-// and qrQ green for every type, and ormqr merely applies I - tau v v^H to whatever
-// it is handed. evidence: docs/perf/qr.md#a-residual-test-cannot-guard-a-convention
-//
-// The oracle is an independent host xGEQR2 written from the LAPACK reference
-// (beta = -SIGN(||x||, Re(alpha)), tau = (beta - alpha)/beta), in double. Compared:
-// sign(Re(R(j,j))) EXACTLY for the real types, tau elementwise, and |R(j,j)|.
+// G8b. THE CONVENTION, GUARDED WITHOUT A VENDOR. No residual can cover it: flipping
+// LAPACK's sign choice leaves qr, orth and qrQ green for every type, and ormqr merely
+// applies I - tau v v^H to whatever it is handed. The oracle is an independent host
+// xGEQR2 in double (beta = -SIGN(||x||, Re(alpha)), tau = (beta - alpha)/beta).
+// evidence: docs/perf/qr.md#a-residual-test-cannot-guard-a-convention
 TYPED_TEST(GeqrfTest, ConventionMatchesReferenceLapackWithoutAVendor) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
@@ -774,12 +751,10 @@ TYPED_TEST(GeqrfTest, ConventionMatchesReferenceLapackWithoutAVendor) {
                 for (int i = j + 1; i < m; ++i)
                     w += hconj(W[static_cast<size_t>(j) * m + i]) *
                          W[static_cast<size_t>(c) * m + i];
-                // conj(TAU), NOT TAU, AND THIS IS LAPACK'S OWN ASYMMETRY: zgeqr2 forms
-                // the reflector with zlarfg and applies it with DCONJG(TAU), because
-                // reducing A from the left applies H^H. Writing `tau * w` here disagrees
-                // with the kernel by 1-4% for the complex types while leaving float and
-                // double EXACT -- for a real T hconj is the identity, so half the type
-                // list cannot see this line.
+                // conj(TAU), NOT TAU, and this is LAPACK's own asymmetry: zgeqr2 forms the
+                // reflector with zlarfg and applies it with DCONJG(TAU), because reducing A
+                // from the left applies H^H. For a real T hconj is the identity, so half
+                // the type list cannot see this line.
                 const D f = hconj(tau) * w;
                 W[static_cast<size_t>(c) * m + j] -= f;
                 for (int i = j + 1; i < m; ++i)
@@ -855,13 +830,11 @@ TYPED_TEST(GeqrfTest, ConventionMatchesReferenceLapackWithoutAVendor) {
 //     out.use_mul = dev_isfinite(r) && !dev_is_zero(r);   // r = 1/(alpha-beta)
 //     out.vfactor = out.use_mul ? r : d;   // multiply by 1/d, or DIVIDE by d
 //
-// The `false` arm had never executed anywhere in this tree, so a "simplify this to
-// a plain reciprocal-multiply" edit would turn every such column's v into
-// infinities with nothing going red. It is reachable ONLY on SUBNORMAL input, which
-// is why this test asserts FINITENESS and a LOOSE, scale-invariant orthogonality
-// rather than a residual: ||A||_F^2 itself underflows to zero at this magnitude and
-// the oracle returns nan. The `!dev_is_zero(r)` half is deliberately not covered
-// (docs/perf/qr.md#open-debts).
+// The `false` arm is reachable ONLY on SUBNORMAL input, so a "simplify this to a plain
+// reciprocal-multiply" edit would fill every such column's v with infinities and
+// nothing would go red. Hence FINITENESS and a loose, scale-invariant orthogonality
+// rather than a residual: ||A||_F^2 underflows to zero at this magnitude and the
+// oracle returns nan. The `!dev_is_zero(r)` half is uncovered: docs/perf/qr.md#open-debts
 TYPED_TEST(GeqrfTest, SubnormalScaleColumnsTakeTheDivisionPath) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
@@ -894,9 +867,8 @@ TYPED_TEST(GeqrfTest, SubnormalScaleColumnsTakeTheDivisionPath) {
                 biggest = std::max(biggest, habs(up(p.buf[static_cast<size_t>(j) * p.ld + i])));
         ASSERT_GT(biggest, 0.0)
             << "the rescaled problem flushed to all zeros; this test would prove nothing";
-        // The branch keys on 1/(alpha - beta) overflowing in R. If this reciprocal
-        // is finite the kernel never leaves the multiply path and the assertions
-        // below are guarding nothing.
+        // The branch keys on 1/(alpha - beta) overflowing in R; if this reciprocal is
+        // finite the kernel never leaves the multiply path and the assertions are vacuous.
         ASSERT_FALSE(std::isfinite(R(1) / static_cast<R>(biggest * 16.0)))
             << "1/(" << biggest * 16.0 << ") is finite in this scalar type, so "
             << "geqrf_larfg_scalars keeps use_mul == true and the DIVISION path is never "
@@ -932,10 +904,9 @@ TYPED_TEST(GeqrfTest, SubnormalScaleColumnsTakeTheDivisionPath) {
                         << b << " -- 1/(alpha-beta) overflowed and was used anyway";
                 }
 
-            // (2) ORTHOGONALITY, at a tolerance set by the INPUT's precision rather
-            //     than the kernel's: a subnormal at this magnitude carries ~5 bits for
-            //     float and ~35 for double. 1e-2 is still far tighter than the inf, nan
-            //     or all-zero v a missing division arm produces, and v is scale-invariant.
+            // (2) ORTHOGONALITY at a tolerance set by the INPUT's precision, not the
+            //     kernel's: a subnormal here carries ~5 bits for float, ~35 for double,
+            //     and v is scale-invariant.
             const auto Q = host_form_Q<T>(F, tau, p.m, p.k, p.ld);
             const double orth = orth_of_promoted(Q, p.m, p.k);
             if (verbose()) {
@@ -984,10 +955,8 @@ TYPED_TEST(GeqrfTest, NativeFactorMatchesTheVendorElementwise) {
                 sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span());
             this->ctx->wait();
 
-            // A RELATIVE elementwise bound scaled by the vendor factor's own largest
-            // entry: the two implementations do not share a reduction order, so
-            // bit-exactness is not the claim -- agreement to the same algorithm's
-            // rounding is.
+            // A RELATIVE elementwise bound: the two implementations do not share a
+            // reduction order, so bit-exactness is not the claim.
             double scale = 0.0, worst = 0.0, tworst = 0.0, tscale = 0.0;
             for (size_t i = 0; i < Fv.size(); ++i) scale = std::max(scale, habs(up(Fv[i])));
             for (size_t i = 0; i < Fv.size(); ++i)
@@ -1011,10 +980,9 @@ TYPED_TEST(GeqrfTest, NativeFactorMatchesTheVendorElementwise) {
     }
 }
 
-// G8. m < n, m == n, m > n. route_geqrf.hh gate 2 refuses m < n as a CORRECTNESS
-// gate, not a speed one: a wide view walks the trailing update past the bottom of
-// the panel. The table saying so and the kernel enforcing it are two different
-// facts, and the direct entry points are reachable without the table, so both.
+// G8. m < n, m == n, m > n. route_geqrf.hh gate 2 refuses m < n as a CORRECTNESS gate,
+// not a speed one: a wide view walks the trailing update past the bottom of the panel.
+// The direct entry points are reachable without the table, so both are checked.
 TYPED_TEST(GeqrfTest, WideIsRefusedAndTallAndSquareAreNot) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::BackendType;
@@ -1086,10 +1054,8 @@ TYPED_TEST(GeqrfTest, DirectEntryPointsRefuseWhatSupportsRefuses) {
                  std::invalid_argument);
 }
 
-// G9. The route table and the vendor-free fallback. The pure table has its own unit
-// tests (tests/route_vocabulary_tests.cc); this one goes through the SHAPE BUILDER
-// against a real device, which is the half those cannot see -- a builder that read
-// the wrong property gives an answer self-consistent and wrong about this machine.
+// G9. The route table and the vendor-free fallback, through the SHAPE BUILDER against
+// a real device -- the half tests/route_vocabulary_tests.cc cannot see.
 TYPED_TEST(GeqrfTest, RouteTableAndTheVendorFreeFallback) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::BackendType;
@@ -1124,26 +1090,20 @@ TYPED_TEST(GeqrfTest, RouteTableAndTheVendorFreeFallback) {
 }
 
 // G9b. THE NATIVE-VS-NATIVE TIE-BREAK, AND THAT IT IS NOT A supports() GATE.
-//
-// supports() admits the CTA arm anywhere the tile fits SLM, well past the shape
-// where the blocked driver overtakes it, so the vendor-free walk needs a tie-break:
-// RouteTable::native_tier_preferred.
+// supports() admits the CTA arm anywhere the tile fits SLM, past the shape where the
+// blocked driver overtakes it, so the vendor-free walk tie-breaks on
+// RouteTable::native_tier_preferred. Both arms must stay supports()-true on both sides:
+// a speed threshold moved into supports() makes a pinned `cta` fall through to
+// automatic() (route_resolve.hh:101) and measure something else, and the same window in
+// preferred() would flip the vendor-present answer too.
 // evidence: docs/perf/qr.md#cta-vs-blocked-crossover
-//
-// THE SECOND HALF IS THE IMPORTANT HALF. Both arms must stay supports()-true on
-// both sides of the crossover: a forced route bypasses preferred() but NEVER
-// supports() (route_resolve.hh:101), so a speed threshold moved into supports()
-// makes a pinned `cta` fall through to automatic() and measure something else. And
-// native_tier_preferred is consulted only on the vendor-free walk -- the same
-// window in preferred() would flip the vendor-present answer too.
 TYPED_TEST(GeqrfTest, NativeTierTieBreakPicksTheFasterNativeVendorFree) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
     static constexpr Backend B = TestFixture::BackendType;
 
-    // The crossover this type's table declares (route_geqrf.hh). Only float and double
-    // have a measured one; both complex types stay on CTA to the top of their capacity,
-    // so for them the test degrades to the supports()-neutrality half.
+    // The crossover this type's table declares (route_geqrf.hh); both complex types stay
+    // on CTA to the top of their capacity, so for them only the supports() half runs.
     const bool has_crossover =
         std::is_same_v<T, float> || (std::is_same_v<T, double> && !test_utils::is_complex<T>::value);
     const int nc = std::is_same_v<R, float> ? 96 : 48;   // last n that prefers CTA
@@ -1154,8 +1114,7 @@ TYPED_TEST(GeqrfTest, NativeTierTieBreakPicksTheFasterNativeVendorFree) {
                         "complex types stay on CTA to the top of their SLM capacity)";
     }
 
-    // Both shapes must be CTA-ELIGIBLE, or "blocked was chosen" proves nothing about
-    // the tie-break -- CTA was never a candidate.
+    // Both shapes must be CTA-ELIGIBLE, or "blocked was chosen" proves nothing.
     ASSERT_TRUE(this->cta_fits(nc, nc))
         << "the below-crossover shape " << nc << "x" << nc << " does not fit the CTA tile on this "
         << "device, so this test cannot see the tie-break";
@@ -1212,13 +1171,10 @@ TYPED_TEST(GeqrfTest, NativeTierTieBreakPicksTheFasterNativeVendorFree) {
     }
 }
 
-// G10. THE FACADE REACHES THE KERNEL.
-//
-// The guard is BIT-EXACTNESS against the direct entry point, NOT a residual: a
-// residual bound is satisfied by either implementation, and such a test here once
-// stayed green across all four scalar types while every number in it came from
-// cuSOLVER. The blocked arm injects the SAME routed gemm the facade injects, or the
-// two differ in the low bits for a reason that is not a defect.
+// G10. THE FACADE REACHES THE KERNEL. The guard is BIT-EXACTNESS against the direct
+// entry point, NOT a residual: a residual bound is satisfied by either implementation,
+// and such a test here once stayed green on all four types while every number came from
+// cuSOLVER. The blocked arm must inject the SAME routed gemm the facade injects.
 TYPED_TEST(GeqrfTest, FacadeReachesTheCtaKernel) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::BackendType;
@@ -1321,9 +1277,8 @@ TYPED_TEST(GeqrfTest, FacadeReachesTheBlockedDriver) {
     check_one(p, "blocked/facade");
 }
 
-// The facade's ORGQR arm, same discipline: the native driver is ormqr on an
-// identity, so a facade that fell through to cuSOLVER would still produce an
-// orthonormal Q -- only a bit-exact comparison says which code ran.
+// The facade's ORGQR arm, same discipline: the native driver is ormqr on an identity,
+// so a facade that fell through to cuSOLVER would still produce an orthonormal Q.
 TYPED_TEST(GeqrfTest, FacadeReachesTheNativeOrgqr) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::BackendType;
@@ -1349,7 +1304,6 @@ TYPED_TEST(GeqrfTest, FacadeReachesTheNativeOrgqr) {
     this->ctx->wait();
     const std::vector<T> facade(p.buf.begin(), p.buf.end());
 
-    // Rebuild the factor and run the direct entry point on it.
     std::copy(F.begin(), F.end(), p.buf.begin());
     auto apply = [](Queue& c, const MatrixView<T, MatrixFormat::Dense>& oa,
                     const MatrixView<T, MatrixFormat::Dense>& oc, Side os, Transpose ot,
@@ -1391,12 +1345,10 @@ TYPED_TEST(GeqrfTest, FacadeReachesTheNativeOrgqr) {
 }
 
 // G11. THE WORKSPACE CONTRACTS, both geqrf-specific.
-//
-//   (a) Neither query may dereference A.data_ptr() or tau.data(): band_reduction
-//       sizes against a MatrixView built on nullptr, so a read there segfaults.
-//   (b) The sizes must be MONOTONE non-decreasing in (rows, cols, batch): the query
-//       and the call are made against DIFFERENT shapes -- band_reduction sizes at
-//       (m_max x nb_max) and calls at an m x r sub-view -- so a non-monotone query
+//   (a) Neither query may dereference A.data_ptr() or tau.data(): band_reduction sizes
+//       against a MatrixView built on nullptr, so a read there segfaults.
+//   (b) The sizes must be MONOTONE in (rows, cols, batch): band_reduction queries at
+//       (m_max x nb_max) and calls at an m x r sub-view, so a non-monotone query
 //       silently under-allocates sytrd.
 TYPED_TEST(GeqrfTest, BufferSizeIsMonotoneAndNeverDereferencesTheData) {
     using T = typename TestFixture::T;
@@ -1433,8 +1385,7 @@ TYPED_TEST(GeqrfTest, BufferSizeIsMonotoneAndNeverDereferencesTheData) {
 
 // The facade's query must cover EVERY supported native tier, not the tier this
 // resolution happened to choose: a chosen-only size turns a query/call disagreement
-// into an UNDER-allocation, which is the recorded ormqr failure (2560 B queried,
-// 276480 demanded).
+// into an UNDER-allocation.
 TYPED_TEST(GeqrfTest, BufferSizeCoversEverySupportedNativeTier) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::BackendType;
@@ -1457,9 +1408,7 @@ TYPED_TEST(GeqrfTest, BufferSizeCoversEverySupportedNativeTier) {
     }
 }
 
-// Every test above was run against a deliberately damaged library -- nine kernel
-// breaks and a tightened-bound sweep, each rebuilt and re-run, including the two
-// breaks that turned nothing red. evidence: docs/perf/qr.md#break-sweeps
+// Break-sweep evidence for these tests: docs/perf/qr.md#break-sweeps
 
 int main(int argc, char** argv) {
     ::testing::InitGoogleTest(&argc, argv);

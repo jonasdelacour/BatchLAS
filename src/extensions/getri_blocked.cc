@@ -30,9 +30,8 @@ namespace {
 template <typename T> class GetriZeroKernel;
 template <typename T> class GetriPermKernel;
 
-// C := 0 over the LOGICAL rows x cols x batch region only, NOT a fill over
-// stride*batch: C may be a view into a larger buffer, and writing its padding or
-// a neighbour's rows is a corruption no residual on C could see.
+// C := 0 over the LOGICAL n x n x batch region only: C may be a view into a
+// larger buffer, so a stride*batch fill would corrupt padding or a neighbour.
 template <typename T>
 Event getri_zero_c_launch(Queue& ctx, T* c_ptr, int ldc, int stride_c,
                           int n, int batch) {
@@ -94,9 +93,8 @@ Event getri_perm_launch(Queue& ctx,
                 D* const Cb = cp + static_cast<std::ptrdiff_t>(b) * stride_c;
 
                 for (int i = tid; i < n; i += lwg) {
-                    // Walk position i back through the interchange list from
-                    // the LAST transposition to the first; each is its own
-                    // inverse, so only the ORDER reverses.
+                    // Walk i back through the interchanges from the LAST to the
+                    // first; each is its own inverse, so only the ORDER reverses.
                     int r = i;
                     for (int k = n - 1; k >= 0; --k) {
                         const int p = ip[k] - 1;        // 1-BASED on the wire
@@ -111,9 +109,8 @@ Event getri_perm_launch(Queue& ctx,
                         sycl_device::dev_one<D>();
 
                     if (want_info) {
-                        // EXACT zero, no epsilon: ?GETRI reports the first
-                        // U(i,i) that is a true binary zero; |u| < eps would
-                        // diverge from the vendor invisibly.
+                        // EXACT zero, no epsilon: ?GETRI reports the first U(i,i)
+                        // that is a true binary zero, not |u| < eps.
                         const D u = Ab[static_cast<std::ptrdiff_t>(i) * lda + i];
                         if (sycl_device::dev_is_zero(u)) {
                             sycl::atomic_ref<int, sycl::memory_order::relaxed,
@@ -140,15 +137,13 @@ Event getri_perm_launch(Queue& ctx,
 
 }  // namespace
 
-// True for all four types. Defined beside the driver so that "the flag is true"
-// and "the file is compiled" are the same fact.
 template <> bool getri_blocked_available<float>()                { return true; }
 template <> bool getri_blocked_available<double>()               { return true; }
 template <> bool getri_blocked_available<std::complex<float>>()  { return true; }
 template <> bool getri_blocked_available<std::complex<double>>() { return true; }
 
-// Workspace: none. Called from inside a layout function under measuring(), so
-// per mempool.hh:180-186 it must not dereference A.data_ptr(); it reads nothing.
+// No workspace. Called from a layout function under mempool's measuring(), so it
+// must not dereference A.data_ptr().
 template <typename T>
 std::size_t getri_blocked_buffer_size(Queue&, const MatrixView<T, MatrixFormat::Dense>&) {
     return 0;
@@ -167,10 +162,9 @@ Event getri_blocked_dispatch(Queue& ctx,
     const int n = static_cast<int>(A.rows());
     const int batch = static_cast<int>(A.batch_size());
 
-    // Every RouteTable<Op::getri,T>::supports() gate is re-applied, because this
-    // entry point is reachable WITHOUT the table and route_resolve.hh:165 falls
-    // through to automatic() when a forced route is unsupported -- so a gate that
-    // is wrong here makes a pinned-route test silently measure cuBLAS and pass.
+    // Every RouteTable<Op::getri,T>::supports() gate is re-applied: this entry point
+    // is reachable without the table, and an unsupported forced route falls through
+    // to automatic() -- a wrong gate here makes a pinned-route test measure cuBLAS.
     if (n < 1 || batch < 1) {
         throw std::invalid_argument("getri_blocked: degenerate extents");
     }
@@ -189,8 +183,7 @@ Event getri_blocked_dispatch(Queue& ctx,
         throw std::runtime_error("getri_blocked: device does not offer sub-group size 32");
     }
 
-    // Not expressible in GetriShape and so ungateable by the route:
-    // getri_buffer_size(ctx, A) has no C, so the shape is a function of A alone.
+    // Ungateable by the route: GetriShape is a function of A alone, so C is unchecked.
     if (C.rows() != n || C.cols() != n) {
         throw std::invalid_argument("getri_blocked: C must be square of A's order");
     }
@@ -198,8 +191,8 @@ Event getri_blocked_dispatch(Queue& ctx,
         throw std::invalid_argument("getri_blocked: A and C must agree on batch size");
     }
     if (C.data_ptr() == A.data_ptr()) {
-        // Refused, matching cuBLAS, and a hard requirement here: C is zeroed
-        // before the solves read A's triangles, so aliasing destroys the factor.
+        // Aliasing is fatal, not merely unsupported: C is zeroed before the solves
+        // read A's triangles.
         throw std::invalid_argument(
             "getri_blocked: in-place (C aliasing A) is not supported, as it is not by "
             "cublas<t>getriBatched");
@@ -209,8 +202,6 @@ Event getri_blocked_dispatch(Queue& ctx,
         throw std::invalid_argument("getri_blocked: pivot span is shorter than n * batch");
     }
     if (!solve_trsm) {
-        // Deliberately no native fallback: the router, not this file, chooses
-        // the trsm arm, so an empty seam throws rather than reaching for one.
         throw std::invalid_argument(
             "getri_blocked: the solve seam is empty. Inject the ROUTED batchlas::trsm "
             "(the facade does; a direct caller must too) -- this driver deliberately has "
@@ -218,15 +209,13 @@ Event getri_blocked_dispatch(Queue& ctx,
             "arm.");
     }
 
-    // PACKED 1-BASED int32 inside the caller's int64 span, the format cuBLAS,
-    // rocSOLVER and native getrf agree on; getrf and getri route independently,
-    // so every mixture of arms is reachable and must agree bit for bit.
+    // PACKED 1-BASED int32 inside the caller's int64 span -- the format cuBLAS,
+    // rocSOLVER and native getrf agree on, and getri routes independently of getrf.
     auto piv_i32 = pivots.as_span<int>();
 
     const bool want_info = info_out.size() >= static_cast<std::size_t>(batch);
 
-    // Derived from n rather than hardcoded as a portability choice, not a
-    // performance claim: it measures as noise (docs/perf/lu.md#negative-results).
+    // wg is derived from n for portability, not speed (docs/perf/lu.md#negative-results).
     const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
     int wg = 32;
     while (wg < n && wg < 256) wg <<= 1;

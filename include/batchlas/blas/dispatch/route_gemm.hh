@@ -1,50 +1,14 @@
 #pragma once
 
-// GEMM's routing table, as the three-way split the WP0 spec mandates.
-//
-// WHY A SPLIT AT ALL
-//
-// `gemm_use_sycl_custom` (src/backends/gemm_variant.hh) is three different
-// things welded into one predicate, and that is what makes it dangerous to move:
-//
-//   1. an ENVIRONMENT READ   -- it opens by calling gemm_variant_request() and
-//                               returns false for Vendor/Native/CuBLASDx;
-//   2. a CORRECTNESS GATE    -- gemm_custom_problem_supported(): dimensions
-//                               agree, batch sizes agree, homogeneous, default
-//                               precision. If this is false the kernel computes
-//                               the WRONG ANSWER;
-//   3. a MEASURED WINDOW     -- GPU-only, real-types-only, square, batch >= 64,
-//                               and the per-type max_dim ranges. If this is
-//                               false the kernel is merely SLOWER.
-//
-// Conflating 2 and 3 is the trap. Move the window into `supports` and a 1024^3
-// float GEMM at batch 256 suddenly has no supported route at all, which breaks
-// an op that works today the moment vendor is unavailable. Move the env read
-// into `supports` and forcing a route stops working. So:
-//
-//   supports()   == correctness only, and nothing else. Never a speed cutoff.
-//   preferred()  == the measured window. Returning false never makes a route
-//                   ineligible, only un-preferred.
-//   the env read  == lives in the alias table (route_env.hh), not here.
-//
-// Everything here is PURE -- it reads only its arguments. No getenv, no SYCL
-// query. That is what makes `gemm` and `gemm_buffer_size` reach the same route
-// by construction rather than by a hand-written comment asking them to.
-//
-// STATUS: live. gemm_use_sycl_custom (src/backends/gemm_variant.hh) is now a
-// two-line adapter over resolve_gemm_route, so cublas.cc, mkl.cc and rocblas.cc
-// all route through this. tests/route_gemm_equivalence_tests.cc pins it against
-// the behaviour it replaced. See docs/perf/dispatch.md#what-ships S4.
+// GEMM's routing table. supports() is correctness only -- a speed cutoff here
+// strands shapes with no route at all in a vendor-free build; preferred() is the
+// measured window. Pure: the env read lives in route_env.hh. docs/perf/dispatch.md
 
 #include <batchlas/blas/dispatch/route.hh>
 #include <batchlas/blas/dispatch/route_resolve.hh>
 
 namespace batchlas::dispatch {
 
-// The candidate order for GEMM. Auto-terminated and of natural length, which
-// removes the truncation hazard of the four hand-counted std::array<Provider,6>
-// sites (provider.hh:26, env.hh:58/99/111) -- a missed one there silently
-// truncates an order rather than failing to compile.
 inline constexpr Route kGemmOrder[] = {
     {Origin::Native, Algorithm::RegisterTiled},
     {Origin::Vendor, Algorithm::Auto},
@@ -52,12 +16,9 @@ inline constexpr Route kGemmOrder[] = {
 
 template <typename T>
 struct RouteTable<Op::gemm, T> {
-    // ---- 2. CORRECTNESS ---------------------------------------------------
-    // Verbatim gemm_custom_problem_supported, and nothing else. A route whose
-    // supports() is false cannot produce the right answer for this shape.
     static bool supports(Route r, const OpShape& s) {
         if (r.origin == Origin::Vendor) {
-            return true;  // the vendor serves everything it is given
+            return true;
         }
         if (r.origin != Origin::Native) {
             return false;
@@ -65,144 +26,42 @@ struct RouteTable<Op::gemm, T> {
         if (r.algo != Algorithm::RegisterTiled && r.algo != Algorithm::Auto) {
             return false;
         }
-        // --- gemm_custom_problem_supported ---
         if (s.precision != ComputePrecision::Default) return false;
-        // WP2 C2: heterogeneous batch is no longer a correctness gap. The
-        // facade walks the batch (gemm_heterogeneous.hh) and each member is
-        // HOMOGENEOUS by construction, so a native route can serve it.
-        //
-        // It stays rejected by preferred() below, deliberately: the per-item
-        // loop is one launch per batch member, which is a cost, not a win. This
-        // is exactly the supports()/preferred() split doing its job -- "can
-        // produce the right answer" and "is the right choice" are different
-        // questions, and conflating them is the defect this vocabulary exists
-        // to prevent.
+        // Heterogeneous batch is correct here; preferred() excludes it, not supports().
         return s.m > 0 && s.n > 0 && s.k > 0;
     }
 
-    // ---- 3. MEASURED WINDOW ----------------------------------------------
-    // Everything from `ctx.device().type != GPU` downward in the original,
-    // preserved cell for cell. These are speed judgements, not correctness
-    // ones; every threshold here was measured and none should be "tidied".
     static bool preferred(Route r, const OpShape& s) {
         if (r.origin != Origin::Native) return false;
         if (!supports(r, s)) return false;
 
         if (!s.is_gpu) return false;
 
-        // WP2 C2. This test used to live in supports() and is now stated here
-        // explicitly, because loosening supports() would otherwise have let a
-        // heterogeneous batch through preferred() and MOVED A VENDOR-PRESENT
-        // ROUTE -- a silent perf change riding on a correctness fix. The
-        // per-item loop is one launch per batch member; correct, but not a
-        // reason to leave the vendor.
         if (s.heterogeneous_batch) return false;
 
-        // COMPLEX IS NOT MERELY UNPREFERRED HERE -- IT HAS NO REGISTER KERNEL.
-        // The note that used to sit here said the WP2 measurement shows
-        // wide-scalar tiles beating cuBLAS "so this exclusion is expected to be
-        // revisited". Acting on that sentence alone is a REGRESSION: the second
-        // gate is select_kernel_variant (src/sycl/gemm_kernels.cc:466), whose
-        // entire register ladder is inside `if constexpr (is_same_v<T,float>)`,
-        // so complex falls to `max_dim <= 64 ? Direct : Tiled16` (:514) --
-        // measured at 3.2-7.1x SLOWER than cuBLAS in
-        // docs/perf/gemm.md#the-wide-scalar-kernel. Widening here without first porting
-        // the 64x64x16 t4x4 tile into src/ and wiring the selector routes
-        // complex to Tiled16, not to a register kernel. Order: port ->
-        // selector -> predicate. See docs/perf/gemm.md#evidence-for-each-boundary.
+        // Complex has no register kernel -- select_kernel_variant's ladder is
+        // float-only -- so relaxing this routes complex to Tiled16, not to a
+        // register tile. evidence: docs/perf/gemm.md#complex-is-refused
         if constexpr (is_std_complex_v<T>) {
             return false;
         } else {
             const int64_t max_dim = s.max_dim();
 
-            // Enough batch to fill the device. This one is common to both real
-            // types; SQUARENESS is not, and used to be tested here -- WP2 E5
-            // moved it into the float branch, because it was never a property
-            // of the kernels, only of the shapes anyone had measured.
             if (s.batch < 64) return false;
 
             if constexpr (std::is_same_v<T, float>) {
                 if (s.m != s.n || s.n != s.k) return false;
-                // WP2 E4 NARROWED float, and the direction is the interesting
-                // part: this predicate is what the flip (E6) would act on, and
-                // measured against cuBLAS it was claiming windows the native
-                // kernels lose. Every cell below is RTX 4090, square, median of
-                // 3, both betas, at saturation; see docs/perf/gemm.md#float-nn-at-max_dim-32.
-                //
-                // TRANSPOSED: the whole window is gone. It claimed
-                // batch >= 128 && 128 <= max_dim <= 512, and native loses every
-                // cell of it -- 30 of 30, across TN, NT and TT:
-                //
-                //   n=128  TN 0.40x  NT 0.44x  TT 0.45x
-                //   n=256  TN 0.37x  NT 0.40x  TT 0.40x
-                //   n=512  TN 0.34x  NT 0.35x  TT 0.36x
-                //
-                // That is not a tuning gap in a fallback: TN runs its dedicated
-                // register_128x32_k32_tn kernel, traced and confirmed. The
-                // transposed register family simply plateaus near 15-18 TFLOP/s
-                // while cuBLAS SGEMM reaches 45+.
+                // float: NN, square, max_dim <= 32; native loses transposed and
+                // 128..512. evidence: docs/perf/gemm.md#float-nn-at-max_dim-32
                 if (s.transA != Transpose::NoTrans || s.transB != Transpose::NoTrans) {
                     return false;
                 }
-                // NN, SMALL: kept. Native wins here and cuBLAS is at its worst.
-                //   n=8 1.46x, n=16 1.31x, n=32 1.08x
                 if (max_dim <= 32) return true;
-                // NN, 128..512: also gone. It looked like the most defensible
-                // window in the table and it loses in every cell:
-                //   n=128 0.97x, n=192 0.40x, n=256 0.87x, n=384 0.79x,
-                //   n=512 0.91x -- flat across batch 128 / 512 / 1024, so this
-                //   is not an unsaturated artefact.
-                //
-                // Note register_128x128.hh's header still records "43.6 vs
-                // cuBLAS 43.9" at 512^3 b512, i.e. parity. The native half
-                // reproduces exactly (43.5); the cuBLAS half does not -- it now
-                // measures 47.3. The vendor moved, presumably a cuBLAS upgrade,
-                // and the claim of parity aged out with it.
-                //
-                // This costs a vendor-free build NOTHING: preferred() only
-                // orders routes that both exist, and resolve_route falls back to
-                // any supported native route when the vendor is absent
-                // (route_resolve.hh:60-62). It only stops a vendor-PRESENT build
-                // from choosing a slower kernel.
                 return false;
             } else if constexpr (std::is_same_v<T, double>) {
-                // WP2 E5 WIDENED double: no squareness requirement, no upper
-                // size bound, any transpose form. What is left is a single
-                // lower bound on k, and that one IS measured.
-                //
-                // The old predicate was `max_dim <= 512` AND square. Both were
-                // artefacts of what had been benchmarked, not of what the
-                // kernels can do, and together they excluded essentially all of
-                // BatchLAS's own GEMM: the dominant internal shape is a PANEL
-                // UPDATE -- large m, large n, small k -- which is neither
-                // square nor small. Measured on exactly the shapes the demand
-                // table says the library issues (RTX 4090, batch 128, NN/NT/TN,
-                // both betas, median of 3, spreads under 5%):
-                //
-                //   992x992x32  1.10-1.14x     288x288x32  1.21-1.22x
-                //   480x480x32  1.14-1.17x     248x248x8   1.34-1.41x
-                //   312x312x8   1.21-1.25x     224x224x32  1.24-1.25x
-                //
-                // 36 of 36 cells win. The edges agree: 1024^3 1.13x, 2048^3
-                // 1.14x, 4096x64x64 1.04-1.06x, 64x4096x64 1.04-1.05x.
-                //
-                // WHY k >= 2 AND NOT k >= 1. k=1 is the one shape in this whole
-                // work package where double loses: 512x512x1 measures 0.49x at
-                // beta=0 (cuBLAS 230 vs native 112). A rank-1 update is not
-                // really a GEMM and cuBLAS has a path for it. k=2 already wins
-                // 1.64x, so the boundary sits exactly there rather than at a
-                // rounder number. k=1 is not hypothetical -- it is 761 calls in
-                // the demand table.
-                //
-                // NO UPPER BOUND, deliberately, and this is the one place here
-                // that reaches past its measurements. The largest measured is
-                // 2048^3; above that the same kernel runs with more tiles and
-                // nothing changes in kind. The limit is an FP64 ISSUE RATE --
-                // a 4090 is 1/64 FP32, ceiling ~1.44 TFLOP/s -- and native sits
-                // at 88-98% of it while cuBLAS sits at 78-87%, at every size
-                // from 4 to 2048. A gap produced by a size-independent
-                // mechanism does not need a size cutoff; a cliff at 2048 would
-                // itself be the unjustified number.
+                // double: any transpose, any size, k >= 2; k=1 is a rank-1
+                // update, the one shape the vendor wins.
+                // evidence: docs/perf/gemm.md#double-the-only-fully-native-window
                 return s.k >= 2;
             } else {
                 return false;
@@ -216,19 +75,7 @@ struct RouteTable<Op::gemm, T> {
     }
 };
 
-// ---------------------------------------------------------------------------
-// Resolution for one call. Pure.
-//
-// The body now lives in route_resolve.hh, shared with every other op: the
-// forced-bypasses-preferred-but-not-supports rule, the requested-vendor-must-
-// exist rule, and the vendor-off degradation are not GEMM-specific. This name
-// stays as the spelling GEMM's callers and tests already use.
-//
-// `forced` is what the environment (or an explicit policy) asked for; pass a
-// default-constructed Route for "no opinion". The unset default differs per op
-// and is supplied by the caller -- see legacy_unset_default() in route_env.hh,
-// and note that GEMM's is Vendor while the level-3 ops' is Auto.
-// ---------------------------------------------------------------------------
+// Pure. A default-constructed `forced` means "no opinion"; see route_env.hh.
 template <typename T>
 inline Route resolve_gemm_route(Route forced, const OpShape& s,
                                 bool vendor_available = true) {

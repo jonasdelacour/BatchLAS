@@ -13,8 +13,7 @@
 namespace batchlas::dispatch {
 
 struct GeqrfShape : OpShape {
-    // Capacity is the AREA m*n -- the panel is resident in local memory -- and is
-    // asked of the device, never of device_limits.hh (whose 49152 is 2.06x wrong).
+    // Capacity is the AREA m*n and must come from the device, not device_limits.hh.
     int cta_max_m = 0;
     int64_t cta_max_elems = 0;
 
@@ -27,7 +26,7 @@ struct GeqrfShape : OpShape {
 
     int64_t rows() const { return m; }
     int64_t cols() const { return n; }
-    // min(rows, cols): the only spelling of k here, so a predicate cannot mean m.
+    // k is min(rows, cols).
     int64_t reflectors() const { return k; }
 };
 
@@ -40,19 +39,17 @@ inline constexpr Route kGeqrfOrder[] = {
 template <typename T>
 struct RouteTable<Op::geqrf, T> {
     static bool supports(Route r, const GeqrfShape& s) {
-        if (is_vendor(r)) return true;   // the vendor serves everything
+        if (is_vendor(r)) return true;
         if (!is_native(r)) return false;
 
-        // No squareness gate, deliberately -- rectangular A is the point of
-        // geqrf. But on a wide view the trailing update runs off the panel.
+        // Only m < n is rejected: on a wide view the trailing update runs off the panel.
         if (s.m < s.n) return false;
 
         if (!s.is_gpu) return false;
 
         if (!s.has_sg32) return false;
 
-        // One launch, one (m, n, ld, stride) tuple, no batch walker: per-item
-        // active dims would factorise the wrong extents for every item but the first.
+        // One launch, one (m, n, ld, stride) tuple: per-item dims break all but item 0.
         if (s.heterogeneous_batch) return false;
 
         if (s.m < 1 || s.n < 1 || s.batch < 1) return false;
@@ -64,8 +61,7 @@ struct RouteTable<Op::geqrf, T> {
                        s.m * s.n <= s.cta_max_elems;
 
             case Algorithm::Blocked:
-                // Inherits CTA's presence gate (its leaf IS that kernel), not its
-                // capacity. No lower bound: one sends a forced `blocked` to the vendor.
+                // Inherits CTA's presence gate (its leaf IS that kernel), not its capacity.
                 return s.blocked_available && s.cta_max_m >= 1 && s.cta_max_elems >= 1;
 
             default:
@@ -73,27 +69,25 @@ struct RouteTable<Op::geqrf, T> {
         }
     }
 
-    // All-false, deliberately: Auto still takes the vendor. Un-preferred is not
-    // unroutable -- vendor-free builds still resolve to a supported native arm.
+    // All-false deliberately: Auto takes the vendor; vendor-free still routes native.
     static bool preferred(Route r, const GeqrfShape& s) {
         static_cast<void>(r);
         static_cast<void>(s);
         return false;
     }
 
-    // Native-vs-native, and only on the vendor-free walk; both arms stay supported().
     static bool native_tier_preferred(Route r, const GeqrfShape& s) {
         if (!is_native(r)) return true;
 
-        // Crossover in n, not m*n: the work-group comes from n alone. Square-only
-        // sweep. evidence: docs/perf/qr.md#cta-vs-blocked-crossover
+        // Crossover in n, not m*n: the work-group comes from n alone.
+        // evidence: docs/perf/qr.md#cta-vs-blocked-crossover
         const int64_t cta_max_cols = [] () -> int64_t {
             if constexpr (std::is_same_v<T, float>) {
-                return 96;      // bracketed on both sides
+                return 96;
             } else if constexpr (std::is_same_v<T, double>) {
-                return 48;      // a tie, given to CTA: its workspace is zero
+                return 48;
             } else {
-                // No measured crossover for either complex type; the fit gate rules.
+                // No measured crossover for complex; the fit gate rules.
                 return 1 << 30;
             }
         }();
@@ -114,8 +108,8 @@ struct RouteTable<Op::geqrf, T> {
     }
 };
 
-// Pass `vendor_available` EXPLICITLY -- it is factorization_vendor_available<B>,
-// not solver_vendor_available, and the `= true` default skips the vendor-free walk.
+// Pass `vendor_available` explicitly: it is factorization_vendor_available<B>, and
+// the `= true` default skips the vendor-free walk.
 template <typename T>
 inline Route resolve_geqrf_route(Route forced, const GeqrfShape& s,
                                  bool vendor_available = true) {

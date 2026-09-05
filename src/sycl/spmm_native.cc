@@ -1,7 +1,6 @@
 // Native batched CSR SpMM kernels: gather (transA == NoTrans), plus scale and
-// scatter (transposed). spmm_native.hh carries the CSR indexing contract, the
-// beta == 0 / alpha == 0 semantics, and the aliasing rule that forbids
-// __restrict__. evidence: docs/perf/spmm.md
+// scatter (transposed). spmm_native.hh carries the CSR indexing contract and the
+// beta == 0 / alpha == 0 semantics. evidence: docs/perf/spmm.md
 
 #include "spmm_native.hh"
 
@@ -26,10 +25,8 @@ using sycl_device::fma_acc;
 
 namespace {
 
-// Body-for-body gemv_wg_ladder (gemv_native.cc), kept diffable -- hence the
-// `units_per_wg_shift` parameter that every caller here passes 0 for. Takes the
-// largest candidate work-group that still leaves >= 4 groups per compute unit,
-// and falls back to the smallest so a small problem stays spread over the device.
+// Body-for-body copy of gemv_wg_ladder (gemv_native.cc), kept diffable -- hence
+// the `units_per_wg_shift` parameter that every caller here passes 0 for.
 inline int spmm_wg_ladder(int64_t work_units, int max_wg, int cu,
                           int units_per_wg_shift) {
     int wg = 32;
@@ -41,25 +38,23 @@ inline int spmm_wg_ladder(int64_t work_units, int max_wg, int cu,
         const int64_t groups = (work_units + per_wg - 1) / per_wg;
         if (groups >= static_cast<int64_t>(4) * cu) break;
     }
-    // If no candidate was admissible, `wg` is still its initial 32, which may
-    // exceed the device limit: that is an INVALID nd_range, not just a slow one.
+    // No admissible candidate leaves `wg` at its initial 32, which may exceed the
+    // device limit: that is an INVALID nd_range, not merely a slow one.
     if (max_wg > 0 && wg > max_wg) wg = max_wg;
     return wg;
 }
 
 // 64 bytes of accumulator for every scalar type, so the register block shrinks as
-// the scalar widens. Two widths are instantiated, {2, kNCmax}; 2 serves nrhs <= 2.
-// evidence: docs/perf/spmm.md#the-gather-window
+// the scalar widens. evidence: docs/perf/spmm.md#the-gather-window
 template <typename D>
 inline constexpr int kNCmax = 64 / static_cast<int>(sizeof(D));
 
 static_assert(kNCmax<float> == 16 && kNCmax<double> == 8, "64-byte register block");
 static_assert(kNCmax<Cx<float>> == 8 && kNCmax<Cx<double>> == 4, "64-byte register block");
 
-// Device-scope, global-address-space atomic add. The FP64 forms carry a
-// `sycl_used_aspects` atomic64 requirement the FP32 forms do not (see the header).
-// The complex overload is two independent scalar atomics, NOT an atomic complex
-// add: safe only because nothing reads C between the scatter's first and last one.
+// The complex overload below is two independent scalar atomics, NOT an atomic
+// complex add: safe only because nothing reads C between the scatter's first
+// atomic and its last.
 template <typename R>
 inline void spmm_atomic_add(R* p, R v) {
     sycl::atomic_ref<R, sycl::memory_order::relaxed, sycl::memory_scope::device,
@@ -78,11 +73,9 @@ template <typename T, int NC> class SpmmGatherKernel;
 template <typename T> class SpmmScaleKernel;
 template <typename T> class SpmmScatterKernel;
 
-// THE GATHER -- {Native, Direct}, transA == NoTrans.
-//
+// Gather arm (transA == NoTrans):
 //   C[i, c] = alpha * sum_{p in row i of A} A_val[p] * op(B)[A_ci[p], c]
 //             + beta * C[i, c]
-//
 // One work-item per (batch item, row i, block of NC output columns), flattened
 // rows-fastest. The item owns every element it writes: no atomic, no barrier.
 template <typename T, int NC>
@@ -116,8 +109,7 @@ Event spmm_gather(Queue& ctx,
         const int* a_ro = A.row_offsets().data();
         const int* a_ci = A.col_indices().data();
 
-        // Two strides, both widened: row_offsets is indexed by offset_stride()
-        // and values/col_indices by matrix_stride(); b*stride overflows an int.
+        // Two distinct strides, both widened: b*stride overflows an int.
         const int64_t a_os = A.offset_stride();
         const int64_t a_ms = A.matrix_stride();
 
@@ -134,8 +126,8 @@ Event spmm_gather(Queue& ctx,
         __builtin_memcpy(&alpha_d, &alpha, sizeof(D));
         __builtin_memcpy(&beta_d, &beta, sizeof(D));
 
-        // Launch-uniform branches. beta == 0 means C is NOT read -- the contract,
-        // not an optimisation: callers pass unzeroed BumpAllocator memory as C.
+        // beta == 0 means C is NOT read -- the contract, not an optimisation:
+        // callers pass unzeroed BumpAllocator memory as C.
         const bool alpha_zero = (alpha == T(0));
         const bool beta_zero = (beta == T(0));
         const bool b_notrans = (transB == Transpose::NoTrans);
@@ -159,16 +151,15 @@ Event spmm_gather(Queue& ctx,
                 const int i = static_cast<int>(rem - cb * static_cast<int64_t>(out_rows));
                 const int c0 = static_cast<int>(cb) * NC;
 
-                // Four separate bases, widened: KernelMatrixView::get computes
-                // its own in plain int and wraps, so no body here calls get().
+                // Bases widened by hand: KernelMatrixView::get computes its own
+                // in plain int and wraps, so no body here calls get().
                 const int64_t ro = b * a_os;   // indexes a_ro ONLY
                 const int64_t vb = b * a_ms;   // indexes a_val AND a_ci
                 const D* Bb = b_ptr + b * sb;
                 D* Cb = c_ptr + b * sc;
 
                 // The only legal bound. Never A.nnz(): that is the per-item
-                // capacity (the batch maximum), and the slots above each item's
-                // own count are uninitialised. Row offsets are item-local.
+                // capacity, and slots above each item's own count are garbage.
                 const int rs = a_ro[ro + i];
                 const int re = a_ro[ro + i + 1];
 
@@ -184,9 +175,8 @@ Event spmm_gather(Queue& ctx,
                         for (int t = 0; t < NC; ++t) {
                             const int c = c0 + t;
                             if (c < width) {
-                                // op(B)[j, c]: NoTrans   -> B[j,c] = Bb[c*ldb+j]
-                                //              Trans     -> B[c,j] = Bb[j*ldb+c]
-                                //              ConjTrans -> conj of the Trans one
+                                // op(B)[j,c]: NoTrans -> Bb[c*ldb+j], else
+                                // Bb[j*ldb+c] (conjugated for ConjTrans).
                                 D bv = b_notrans
                                            ? Bb[static_cast<int64_t>(c) * ldb + j]
                                            : Bb[static_cast<int64_t>(j) * ldb + c];
@@ -216,10 +206,9 @@ Event spmm_gather(Queue& ctx,
     return ctx.get_event();
 }
 
-// THE SCALE -- launched only on the transposed arm, immediately before the
-// scatter: a scatter cannot fold beta into its accumulation, because no item owns
-// an output element and beta*C_old must land exactly once before any atomic.
-// At beta == 0 it stores zero rather than reading the uninitialised C.
+// Scale arm: runs only ahead of the scatter, which cannot fold beta into its
+// accumulation -- no item owns an output element, so beta*C_old must land exactly
+// once before any atomic. At beta == 0 it stores zero rather than reading C.
 template <typename T>
 Event spmm_scale(Queue& ctx,
                  const MatrixView<T, MatrixFormat::Dense>& C,
@@ -271,15 +260,12 @@ Event spmm_scale(Queue& ctx,
     return ctx.get_event();
 }
 
-// THE SCATTER -- {Native, Direct}, transA == Trans or ConjTrans.
-//
+// Scatter arm (transA == Trans or ConjTrans):
 //   C[A_ci[p], c] += alpha * conj?(A_val[p]) * op(B)[i, c]
-//
-// One work-item per (batch item, row i of the STORED A) -- a column of op(A): the
-// item reads one row of op(B) and pushes into many rows of C. NCS is fixed at 4
-// because this arm has no in-tree callers. The unsigned range guard on j is not
-// optional: out of range here is an out-of-range ATOMIC WRITE, and the padding
-// above each item's nnz is genuinely uninitialised.
+// One work-item per (batch item, row i of the STORED A) -- a column of op(A): it
+// reads one row of op(B) and pushes into many rows of C. NCS is fixed at 4; this
+// arm has no in-tree callers. The unsigned range guard on j is not optional: out
+// of range here is an out-of-range ATOMIC WRITE into uninitialised nnz padding.
 template <typename T>
 Event spmm_scatter(Queue& ctx,
                    const MatrixView<T, MatrixFormat::CSR>& A,
@@ -297,9 +283,8 @@ Event spmm_scatter(Queue& ctx,
     const int64_t items = static_cast<int64_t>(red_rows) * batch;
     if (items <= 0 || nrhs <= 0) return ctx.get_event();
 
-    // alpha == 0 is a host-side skip, NOT an in-kernel early return: the scale has
-    // already written C = beta*C and this body's only contribution is the alpha
-    // term. C is not left untouched -- unlike reference ?GEMV's quick return.
+    // A host-side skip, not an in-kernel early return: the scale has already
+    // written C = beta*C, and this body only ever adds the alpha term.
     if (alpha == T(0)) return ctx.get_event();
 
     const auto dev = ctx.device();
@@ -362,8 +347,7 @@ Event spmm_scatter(Queue& ctx,
                         const int c = c0 + t;
                         ab[t] = D{};
                         if (c < width) {
-                            // op(B)[i, c]: NoTrans -> B[i,c] = Bb[c*ldb+i]
-                            //              Trans   -> B[c,i] = Bb[i*ldb+c]
+                            // op(B)[i,c]: NoTrans -> Bb[c*ldb+i], else Bb[i*ldb+c].
                             D bv = b_notrans ? Bb[static_cast<int64_t>(c) * ldb + i]
                                              : Bb[static_cast<int64_t>(i) * ldb + c];
                             if constexpr (dev_is_complex_v<D>) {
@@ -412,9 +396,8 @@ Event spmm_native_csr(Queue& ctx,
     const int nrhs = C.cols();
     const int batch = A.batch_size();
 
-    // Quick return on the host, before any submit: nothing to write, C untouched.
-    // Deliberately NOT reference ?GEMV's (alpha == 0 && beta == 1) case -- at
-    // alpha == 0 the answer is C = beta*C, and skipping it would be route-dependent.
+    // Deliberately NOT reference ?GEMV's (alpha == 0 && beta == 1) quick return:
+    // at alpha == 0 the answer is still C = beta*C, which the arms below write.
     if (out_rows == 0 || nrhs == 0 || batch <= 0) return ctx.get_event();
 
     if (a_notrans) {
@@ -425,17 +408,17 @@ Event spmm_native_csr(Queue& ctx,
         return spmm_gather<T, kNCmax<D>>(ctx, A, B_mat, C, alpha, beta, transB);
     }
 
-    // Two submits, ordered: the scale must complete before the first atomic. The
-    // default queue is in_order; an out-of-order one pays one host wait here.
+    // Ordered: the scale must complete before the first atomic. The default queue
+    // is in_order; an out-of-order one pays one host wait here.
     (void)spmm_scale<T>(ctx, C, beta, out_rows, batch);
     if (!ctx.in_order()) ctx.wait();
     return spmm_scatter<T>(ctx, A, B_mat, C, alpha, out_rows,
                            transA == Transpose::ConjTrans, transB);
 }
 
-// Capability flags as full explicit specialisations in the same TU as the kernels,
-// so a build that drops this file cannot advertise an unlinked kernel. They are
-// statements about the BUILD, not the device: there is deliberately no is_gpu gate.
+// Specialised in the same TU as the kernels, so a build that drops this file
+// cannot advertise an unlinked kernel. A statement about the BUILD, not the
+// device: there is deliberately no is_gpu gate.
 template <> bool spmm_gather_available<float>()                { return true; }
 template <> bool spmm_gather_available<double>()               { return true; }
 template <> bool spmm_gather_available<std::complex<float>>()  { return true; }

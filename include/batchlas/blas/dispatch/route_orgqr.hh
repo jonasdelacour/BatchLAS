@@ -55,9 +55,8 @@ struct RouteTable<Op::orgqr, T> {
         }
     }
 
-    // Route-neutral: false everywhere, so Origin::Auto keeps the vendor and only a
-    // vendor-free build resolves to the native arm. Not `is_native(r) && supports(r, s)`
-    // -- there are measured losing cells. evidence: docs/perf/qr.md#orgqr-grid
+    // False everywhere, so only a vendor-free build resolves to the native arm;
+    // `is_native && supports` would admit losing cells. evidence: docs/perf/qr.md#orgqr-grid
     static bool preferred(Route r, const OrgqrShape& s) {
         static_cast<void>(r);
         static_cast<void>(s);

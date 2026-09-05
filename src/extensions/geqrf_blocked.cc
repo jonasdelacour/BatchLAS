@@ -1,9 +1,7 @@
 // Native batched GEQRF -- the BLOCKED tier: a right-looking blocked Householder QR.
-// Per panel, with ib = min(nb, k - j0), A22 = A(j0:m, j0+ib:n) and V = (m-j0) x ib:
-// geqr2 leaf, pack V, larft T, then W1 = V^H A22; W2 = T^H W1; A22 -= V W2.
-// The update is (I - V T^H V^H), not (I - V T V^H): the factorisation applies
-// Q_block^H. Identical for real scalars, so the wrong one only breaks complex.
-// Design and evidence: docs/perf/qr.md
+// Per panel: geqr2 leaf, pack V, larft T, then W1 = V^H A22; W2 = T^H W1; A22 -= V W2.
+// The update applies (I - V T^H V^H), not (I - V T V^H); identical for real scalars, so
+// the wrong one only breaks complex. Design and evidence: docs/perf/qr.md
 
 #include "geqrf_native.hh"
 #include "larft_wy.hh"
@@ -37,10 +35,9 @@ template <typename T>
 inline constexpr Transpose kConjT =
     batchlas::internal::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
 
-// Block width: 16 for double, 32 otherwise, clamped to k. One pure function so the
-// driver, the size query and debug_params cannot disagree. Keep it a multiple of 16
-// and never below 32 for complex: the complex wide-scalar GEMM gates on min_dim >= 32
-// and min_dim of the trailing NN update IS the block width. docs/perf/qr.md#block-width-evidence
+// Keep a multiple of 16, and never below 32 for complex: the wide-scalar GEMM gates on
+// min_dim >= 32, and min_dim of the trailing NN update IS the block width.
+// evidence: docs/perf/qr.md#block-width-evidence
 template <typename T>
 constexpr int geqrf_nb_for_type() {
     if constexpr (std::is_same_v<T, double>) {
@@ -56,9 +53,8 @@ inline int geqrf_blocked_nb(int m, int n) {
     return std::max(1, std::min(geqrf_nb_for_type<T>(), k));
 }
 
-// Described once here and replayed by both the query and the call. The total must be
-// monotone non-decreasing in (rows, cols, batch) and read no element of A or tau:
-// band_reduction.cc sizes against a null view, then calls geqrf with a sub-view of it.
+// The total must be monotone non-decreasing in (rows, cols, batch) and must read no element
+// of A or tau: band_reduction.cc sizes against a null view, then calls geqrf with a sub-view.
 template <typename T>
 struct GeqrfBlockedWs {
     Span<T> v;
@@ -89,9 +85,9 @@ GeqrfBlockedWs<T> geqrf_blocked_layout(Queue& ctx, BumpAllocator& pool,
 
 }  // namespace
 
-// Co-located with the driver so "the flag is true" and "this TU is compiled" are one
-// fact. It moves no vendor-present traffic: RouteTable<Op::geqrf,T>::preferred() is
-// still false everywhere. evidence: docs/perf/qr.md#route-arms
+// Co-located with the driver so "the flag is true" and "this TU is compiled" are one fact.
+// RouteTable<Op::geqrf,T>::preferred() is still false everywhere.
+// evidence: docs/perf/qr.md#route-arms
 template <> bool geqrf_blocked_available<float>()                { return true; }
 template <> bool geqrf_blocked_available<double>()               { return true; }
 template <> bool geqrf_blocked_available<std::complex<float>>()  { return true; }
@@ -149,9 +145,9 @@ Event geqrf_blocked_dispatch(Queue& ctx,
     const int batch = static_cast<int>(A.batch_size());
     const int k = std::min(m, n);
 
-    // Re-applies every gate RouteTable<Op::geqrf,T>::supports() applies: this entry point
-    // is reachable without the table, and route resolution falls back to automatic() on an
-    // unsupported forced route, so a wrong gate here silently measures the vendor.
+    // Re-applies every gate supports() applies: this entry point is reachable without the
+    // table, and an unsupported forced route falls back to automatic(), so a gate that is
+    // wrong here silently measures the vendor instead.
     if (m < 1 || n < 1 || batch < 1) {
         throw std::invalid_argument("geqrf_blocked: degenerate extents");
     }
@@ -186,10 +182,8 @@ Event geqrf_blocked_dispatch(Queue& ctx,
     T* const a_ptr = A.data_ptr();
     T* const tau_ptr = tau.data();
 
-    // Explicit 6-argument construction, never operator()(Slice, Slice): a slice propagates
-    // the parent's pointer array, and stride defaults to ld*cols when 0 is passed, so an
-    // ib-column sub-view silently gets stride = ld*ib. `ptrs = nullptr` so a backend
-    // regenerates the array for this view.
+    // Never operator()(Slice, Slice): a slice propagates the parent's pointer array, and a
+    // 0 stride defaults to ld*cols, so an ib-column sub-view silently gets stride = ld*ib.
     auto sub = [&](int r0, int nr, int c0, int nc) {
         return MatrixView<T, MatrixFormat::Dense>(
             a_ptr + static_cast<std::ptrdiff_t>(c0) * ld + r0,
@@ -215,10 +209,10 @@ Event geqrf_blocked_dispatch(Queue& ctx,
         // Each dependent boundary guards itself; a caller may pass an out-of-order queue.
         if (!ctx.in_order()) ctx.wait();
 
-        // V is packed contiguously at ld = mp, not the parent ld = m: at ld = m both
-        // trailing GEMMs get a short operand with a long stride, the shape the native GEMM
-        // collapses on (docs/perf/gemm.md#the-strided-ld-defect-and-the-routing-fix).
-        // mp*ib <= m*nb always fits ws.v; pack, larft and both GEMM views must agree here.
+        // V is packed contiguously at ld = mp, not the parent ld = m: at ld = m both trailing
+        // GEMMs get a short operand with a long stride, which the native GEMM collapses on.
+        // pack, larft and both GEMM views must agree on ld_v/stride_v.
+        // evidence: docs/perf/gemm.md#the-strided-ld-defect-and-the-routing-fix
         const int ld_v = mp;
         const int stride_v = mp * ib;
 
@@ -231,8 +225,8 @@ Event geqrf_blocked_dispatch(Queue& ctx,
 
         MatrixView<T, MatrixFormat::Dense> Tblk(ws.t.data(), ib, ib, nb,
                                                 nb * nb, batch);
-        // The compile-time `false` form: a runtime literal also instantiates the
-        // device-BLAS larft for GeqrfWyTag, 32 entry functions that can never launch.
+        // Compile-time `false`: a runtime literal also instantiates the device-BLAS larft
+        // for GeqrfWyTag, 32 entry functions that can never launch.
         (void)wy::larft_forward_columnwise_batched_t<GeqrfWyTag, T, false>(
             ctx, ws.t.data(), nb, nb * nb,
             ws.v.data(), ld_v, stride_v,

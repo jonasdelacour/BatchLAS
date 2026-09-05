@@ -18,8 +18,7 @@ struct GetrfShape : OpShape {
 
     bool blocked_available = false;
 
-    // From sycl::info::device::sub_group_sizes -- OpShape::max_sub_group reports
-    // entry [0] rather than the maximum, and is wrong in both directions.
+    // From sycl::info::device::sub_group_sizes; OpShape::max_sub_group reports entry [0], not the max.
     bool has_sg32 = false;
 
     int64_t order() const { return k; }
@@ -48,9 +47,9 @@ struct RouteTable<Op::getrf, T> {
 
         if (s.order() < 1 || s.batch < 1) return false;
 
-        // The pivot Span<int64_t> has a backend-dependent PHYSICAL layout: CUDA,
-        // ROCm and the native kernels pack 1-based int32 into its first half,
-        // netlib writes genuine int64. Mixing them returns garbage with info == 0.
+        // Pivot Span<int64_t> layout is backend-dependent: CUDA/ROCm and the native
+        // kernels pack 1-based int32 into its first half, netlib writes real int64;
+        // mixing them returns garbage with info == 0.
         if (s.backend == Backend::NETLIB) return false;
 
         switch (r.algo) {
@@ -59,8 +58,7 @@ struct RouteTable<Op::getrf, T> {
                 return s.order() <= static_cast<int64_t>(s.cta_max_n);
 
             case Algorithm::Blocked:
-                // Deliberately no lower bound on the order: a floor here makes a
-                // forced `blocked` fall through to automatic() and measure cuBLAS.
+                // No lower order bound: a floor makes a forced `blocked` fall through to automatic().
                 return s.blocked_available && s.cta_max_n >= 1;
 
             default:
@@ -68,8 +66,7 @@ struct RouteTable<Op::getrf, T> {
         }
     }
 
-    // Blocked only, at batch >= 128: float order >= 256, cfloat order >= 512; the
-    // double families earn nothing, and the CTA arm loses where it serves.
+    // Blocked only, at batch >= 128: float order >= 256, cfloat order >= 512; double families never.
     // evidence: docs/perf/lu.md#getrf-window-evidence
     static bool preferred(Route r, const GetrfShape& s) {
         if (!is_native(r)) return false;
@@ -88,8 +85,6 @@ struct RouteTable<Op::getrf, T> {
 
         const int64_t cta_max_order = [] () -> int64_t {
             if constexpr (std::is_same_v<T, double>) {
-                // At n <= 32 blocked's nb is n, so its one panel's leaf IS the CTA
-                // device function and CTA is the cheaper spelling of it.
                 return 32;
             } else {
                 return 1 << 30;
@@ -112,8 +107,7 @@ struct RouteTable<Op::getrf, T> {
     }
 };
 
-// Pure. Pass `vendor_available` explicitly: it is
-// dispatch::factorization_vendor_available<B>, not solver_vendor_available.
+// Pass vendor_available = dispatch::factorization_vendor_available<B>, not solver_vendor_available.
 template <typename T>
 inline Route resolve_getrf_route(Route forced, const GetrfShape& s,
                                  bool vendor_available = true) {

@@ -54,8 +54,8 @@ T spmm_value(std::uint64_t h) {
 }
 
 // Banded CSR, EXACTLY nnz_per_row sorted entries per row: boundary rows reuse the
-// first/last band rather than being short, keeping nnz at r*m and the per-row work
-// uniform. Written straight into the USM buffers, which nothing has enqueued against.
+// first/last band rather than being short, so nnz stays m*r and per-row work uniform.
+// Host-written straight into the USM buffers -- safe only because nothing is enqueued yet.
 template <typename T>
 Matrix<T, MatrixFormat::CSR> make_banded_csr(int m, int nnz_per_row, int batch) {
     const int r = std::clamp(nnz_per_row, 1, m);
@@ -88,8 +88,7 @@ Matrix<T, MatrixFormat::CSR> make_banded_csr(int m, int nnz_per_row, int batch) 
     return A;
 }
 
-// density = nnz_per_row / m targets nnz_per_row entries per row (landing within one);
-// shared_pattern gives the whole batch one column pattern, as an eigensolve does.
+// RandomSparseHermitian targets a density, so nnz per row lands within one of the request.
 template <typename T>
 Matrix<T, MatrixFormat::CSR> make_random_csr(int m, int nnz_per_row, int batch) {
     const float density = static_cast<float>(nnz_per_row) / static_cast<float>(m);
@@ -104,9 +103,8 @@ Matrix<T, MatrixFormat::CSR> make_csr(int m, int nnz_per_row, int batch, int pat
                               : make_random_csr<T>(m, nnz_per_row, batch);
 }
 
-// Ideal traffic for one batch item, one pass over A: nnz*(s + 4) for values and
-// 32-bit column indices, (m + 1)*4 for row offsets, m*nrhs*s each for the B gather
-// and the C write, and a third m*nrhs*s for the C read when beta != 0.
+// Ideal traffic for one item, one pass over A: values plus 32-bit column indices, the row
+// offsets, and m*nrhs*s each for the B gather, the C write, and the C read when beta != 0.
 double ideal_bytes_per_item(std::size_t elem_size, int m, int nnz, int nrhs,
                             bool beta_nonzero) {
     const double s = static_cast<double>(elem_size);
@@ -130,9 +128,8 @@ void run_spmm(minibench::State& state) {
     const auto transB = state.range(4) == 0 ? Transpose::NoTrans : Transpose::Trans;
     const T beta = T(static_cast<batchlas::float_t<T>>(state.range(5)));
     const int pattern = state.range(6);
-    // state.range() returns 0 for an index no sizer supplied, so the sizers below --
-    // none of which pass arg7 -- all keep meaning NoTrans. A is SQUARE here, so
-    // transposing it changes no extent and no metric, only which native body runs.
+    // state.range() returns 0 for an index no sizer supplied, so arg7 -- which no sizer
+    // passes -- stays NoTrans; A is square, so transA changes no extent, only which body runs.
     const auto transA = state.range(7) == 0   ? Transpose::NoTrans
                       : state.range(7) == 1   ? Transpose::Trans
                                               : Transpose::ConjTrans;
@@ -148,8 +145,7 @@ void run_spmm(minibench::State& state) {
                                      : Matrix<T>::Random(nrhs, m, false, batch));
     auto Cmat = std::make_shared<Matrix<T>>(Matrix<T>::Zeros(m, nrhs, batch));
 
-    // The warm arm reuses these on every call, so the lazily-created cuSPARSE
-    // descriptors are built once, on the untimed call below.
+    // The warm arm reuses these, so the lazy cuSPARSE descriptors are built once below.
     auto Av = std::make_shared<MatrixView<T, MatrixFormat::CSR>>(Amat->view());
     auto Bv = std::make_shared<MatrixView<T>>(Bmat->view());
     auto Cv = std::make_shared<MatrixView<T>>(Cmat->view());
@@ -163,9 +159,8 @@ void run_spmm(minibench::State& state) {
             spmm<Bk, T, MatrixFormat::CSR>(*q, *Av, *Bv, *Cv, alpha, beta,
                                            transA, transB, ws->to_span());
         } else {
-            // The Matrix overload builds a fresh MatrixView -- and so a fresh
-            // descriptor triple that is never destroyed -- per call. Keep this arm's
-            // cell list short, and never compare a native kernel against it.
+            // The Matrix overload builds a fresh MatrixView -- and so a fresh descriptor
+            // triple that is never destroyed -- per call. Never compare a native kernel to it.
             spmm<Bk, T, MatrixFormat::CSR>(*q, *Amat, *Bmat, *Cmat, alpha, beta,
                                            transA, transB, ws->to_span());
         }
@@ -180,9 +175,7 @@ void run_spmm(minibench::State& state) {
         kernel_once();
         q->wait();
 
-        // Warm for a wall-clock budget, not a call count: the SM clock ramp is a
-        // per-PROCESS cost landing on whichever row runs first, and a call count
-        // cannot price it across cells three orders of magnitude apart. Untimed.
+        // Untimed wall-clock warm-up, not a call count: the clock ramp is a per-PROCESS cost.
         static const double warm_ms = [] {
             const char* p = std::getenv("BATCHLAS_SPMM_WARM_MS");
             return p ? std::atof(p) : 400.0;
@@ -199,8 +192,7 @@ void run_spmm(minibench::State& state) {
     state.SetBeforeEachRun(managed.make_before_each_run());
     state.SetKernel(std::function<void()>(kernel_once));
     state.SetBatchEndWait(q);
-    // No SetTimedKernelMs on purpose: the event timer costs ~0.36 ms per call,
-    // against a ~23 us ideal-traffic roof on the cheapest cell.
+    // No SetTimedKernelMs on purpose: the event timer costs ~15x the cheapest cell's roof.
 
     // The real per-item non-zero count; Matrix::nnz() with no argument is a capacity.
     const int nnz = Amat->nnz(0);
@@ -219,9 +211,8 @@ void run_spmm(minibench::State& state) {
     state.SetMetric("nnz/row", static_cast<double>(nnz) / static_cast<double>(m),
                     minibench::Normal);
 
-    // The no-op detector: cusparseSpMM's status is never checked, so a rejected
-    // argument combination looks like a very fast kernel. chk == 0 on a beta = 0 row
-    // means the call did nothing; throw the row away.
+    // The no-op detector: cusparseSpMM's status is never checked, so a rejected argument
+    // combination looks like a very fast kernel. chk == 0 on a beta = 0 row means no work.
     state.SetMetricsFunc([q, Cmat, m, nrhs](minibench::Result& res) {
         q->wait();
         auto c = Cmat->data();
@@ -270,8 +261,7 @@ inline void SpmmCellSizes(minibench::Benchmark* b) {
     }
 }
 
-// The largest row (m = 4096, 32 nnz/row, nrhs = 50, batch = 512) allocates ~4.7 GB
-// for complex<double>, so run one type per process.
+// The largest row allocates ~4.7 GB for complex<double>: run one type per process.
 inline void SpmmGridSizes(minibench::Benchmark* b) {
     for (int m : {512, 1024, 2048, 4096}) {
         for (int nnzrow : {3, 8, 16, 32}) {
@@ -284,10 +274,8 @@ inline void SpmmGridSizes(minibench::Benchmark* b) {
     }
 }
 
-// Cell L over batch and over nrhs 1 vs 2: lanczos pads its operand to two columns
-// purely to defeat a vendor SpMV fallback, so nrhs = 1 prices that padding. The
-// batch ladder runs below saturation on purpose -- quote no ratio from there, but
-// measuring only at saturation is what hides batch-only-parallelism defects.
+// Cell L over batch and over nrhs 1 vs 2: lanczos pads its operand to two columns to
+// defeat a vendor SpMV fallback. The batch ladder runs below saturation on purpose.
 inline void SpmmLanczosSizes(minibench::Benchmark* b) {
     for (int batch : {8, 32, 64, 128, 256, 512, 1024}) {
         for (int nrhs : {1, 2}) {

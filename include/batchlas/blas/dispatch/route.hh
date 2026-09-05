@@ -1,38 +1,9 @@
 #pragma once
 
-// The dispatch vocabulary: two orthogonal axes, one spelling.
-//
-// WHY THIS EXISTS
-//
-// `Provider` (dispatch/provider.hh) flattens two independent questions into one
-// enum. `Provider::Vendor` and `Provider::Netlib` answer "whose code is it";
-// `Provider::BatchLAS_CTA`, `_Blocked`, `_TwoStage`, `_Jacobi` answer "which
-// algorithm". Because they share one list, every consumer has to normalise the
-// origin values away by hand before it can reason about the algorithm ones --
-// `normalize_vendor_like()` in syev.hh, `normalize_gesvd_vendor_like()` in
-// gesvd.hh, `normalize_ormqr_vendor_like()` in ormqr.hh, three copies of the
-// same fixup for the same reason.
-//
-// It also could not express the state this whole work package exists to reach.
-// "Run natively on an NVIDIA GPU that has no cuBLAS installed" is a statement
-// about ORIGIN (native) and about a LIBRARY being absent (cuBLAS). It is not a
-// statement about the device, and it is not an algorithm.
-//
-// Separating the axes:
-//
-//     Origin     whose code runs            Native | Vendor
-//     Algorithm  what the code does         CTA | Blocked | ExpandGemm | ...
-//     Backend    which device family        CUDA | ROCM | ... (enums.hh, unchanged)
-//     BackendLibrary  which vendor library  CUBLAS | CUSOLVER | ... (enums.hh)
-//
-// Deliberately NOT added: a `Backend::SYCL` or an `Origin::SYCL`. Every route in
-// this library is SYCL; naming one of them "SYCL" would carry no information and
-// would collide with the device-family axis. See docs/design/vendor-independence.md §3.1.
-//
-// STATUS: live. This is the only routing vocabulary in the tree. `Provider`,
-// DispatchPolicy and the three dispatch/{provider,env,context}.hh headers are
-// gone; every op that has a routing decision now makes it through a
-// RouteTable<Op, T> and dispatch::resolve_route. See docs/design/vendor-independence.md S4.
+// The routing vocabulary: a Route is an {Origin, Algorithm} pair -- whose code
+// runs, and which strategy it uses. Device family (Backend) and vendor library
+// (BackendLibrary) are separate axes and stay in enums.hh.
+// See docs/design/vendor-independence.md#the-three-axes.
 
 #include <cstdint>
 #include <string>
@@ -43,27 +14,16 @@
 
 namespace batchlas::dispatch {
 
-// ---------------------------------------------------------------------------
 // Axis 1 -- ORIGIN: whose code is it.
-// ---------------------------------------------------------------------------
 enum class Origin : uint8_t {
     Auto,    // let the resolver decide
     Native,  // a kernel in this repository
-    Vendor,  // third-party math code: cuBLAS/cuSOLVER/cuSPARSE, roc*, oneMKL,
-             // CBLAS/LAPACKE -- and the MathDx device libraries cuBLASDx and
-             // cuSolverDx. Those two count as Vendor even though their kernels
-             // compile into our .so: the source is NVIDIA's, it ships only for
-             // NVIDIA, and so it can never be the portable path. Vendor
-             // independence has to be measurable without them.
+    Vendor,  // third-party math code; the MathDx device libraries (cuBLASDx,
+             // cuSolverDx) count as Vendor too -- NVIDIA source, never portable.
 };
 
-// ---------------------------------------------------------------------------
-// Axis 2 -- ALGORITHM: what the code does.
-//
-// Orthogonal to Origin: the same strategy can in principle be reached natively
-// or through a vendor device library, which is exactly why these cannot live in
-// one enum with the origins.
-// ---------------------------------------------------------------------------
+// Axis 2 -- ALGORITHM: what the code does. Orthogonal to Origin: the same
+// strategy can in principle be reached natively or via a vendor device library.
 enum class Algorithm : uint8_t {
     Auto,
     Direct,           // one vendor call, or one monolithic kernel
@@ -78,24 +38,19 @@ enum class Algorithm : uint8_t {
     GramTiles,        // narrow-n single-tile rank-k kernel
     FusedDevice,      // one fused device-library kernel (cuBLASDx / cuSolverDx)
 
-    // A deliberately WRONG route kept only so the arithmetic it saves can be
-    // measured: it computes and stores BOTH triangles, which is not what SYRK
-    // or SYR2K mean -- the half the caller did not name is the caller's
-    // storage. See syrk_custom_dispatch.cc. Auto must never select it; it is
-    // reachable only by naming it explicitly.
+    // Deliberately WRONG, kept only as a measurement baseline: it stores BOTH
+    // triangles, clobbering the half the caller owns. Auto must never select
+    // it; it is reachable only by naming it explicitly.
     DiagFullGemm,
 };
 
-// ---------------------------------------------------------------------------
-// A selection is a PAIR. `library` is an OUTPUT: the resolver fills it in on
-// the way back so a caller (or a coverage table, or a throw) can say which
-// third-party library a Vendor route actually landed on. It is not part of
-// equality, because a request never specifies it.
-// ---------------------------------------------------------------------------
+// A selection is a PAIR; `library` is a resolver output and so is excluded from
+// equality. Known wrong, deliberately left: nothing in the tree ever writes
+// `library`/`library_valid`, so a resolved Route still reads CBLAS/false.
 struct Route {
     Origin origin = Origin::Auto;
     Algorithm algo = Algorithm::Auto;
-    BackendLibrary library = BackendLibrary::CBLAS;  // output; see note above
+    BackendLibrary library = BackendLibrary::CBLAS;  // resolver output
     bool library_valid = false;                      // false until resolved
 
     friend constexpr bool operator==(const Route& a, const Route& b) {
@@ -104,34 +59,24 @@ struct Route {
     friend constexpr bool operator!=(const Route& a, const Route& b) { return !(a == b); }
 };
 
-// The question the vendor-independence gate actually asks. Expressed as a
-// predicate rather than by enumerating names, so that adding an Algorithm can
-// never accidentally escape the gate.
+// The vendor gate question, as a predicate rather than a list of names, so that
+// adding an Algorithm can never accidentally escape the gate.
 inline constexpr bool is_vendor(Origin o) { return o == Origin::Vendor; }
 inline constexpr bool is_vendor(const Route& r) { return is_vendor(r.origin); }
 
-// "The ordinary vendor library call", as distinct from any vendor route.
-//
-// A TRAP WORTH NAMING. The MathDx device libraries are Origin::Vendor (their
-// source is NVIDIA's), so {Vendor, FusedDevice} satisfies is_vendor -- but the
-// level-3 dispatchers' old `request == Vendor` tests meant specifically "call
-// cublasSsyrk", and a fused-kernel request was emphatically NOT that. Rendering
-// those as is_vendor() inverts them: a forced cublasdx request starts answering
-// yes to "did the caller ask for the vendor?". Use this instead wherever the
-// question is about the plain library call rather than about origin.
+// "The ordinary vendor library call", as distinct from any vendor route: the
+// MathDx routes are Origin::Vendor too, so writing an old `request == Vendor`
+// test as is_vendor() makes a forced cuBLASDx request answer yes to "did the
+// caller ask for cublasSsyrk?". Use this wherever that is the question.
 inline constexpr bool is_plain_vendor(const Route& r) {
     return r.origin == Origin::Vendor && r.algo == Algorithm::Auto;
 }
 inline constexpr bool is_native(Origin o) { return o == Origin::Native; }
 inline constexpr bool is_native(const Route& r) { return is_native(r.origin); }
 
-// ---------------------------------------------------------------------------
 // The dispatchable leaf ops -- one per include/batchlas/blas/functions/*.hh.
-//
-// extensions.hh's entry points are deliberately absent: they are BatchLAS
-// algorithms with no vendor alternative to choose between, and they keep
-// dispatching through BATCHLAS_DISPATCH_ON_QUEUE unchanged.
-// ---------------------------------------------------------------------------
+// extensions.hh's entry points are absent on purpose: no vendor alternative to
+// choose between, so they still dispatch through BATCHLAS_DISPATCH_ON_QUEUE.
 enum class Op : uint8_t {
     gemm, gemv, trsm, trmm, symm, hemm, syrk, herk, syr2k, her2k,
     potrf, getrf, getrs, getri, geqrf, orgqr, ormqr, syev, gesvd, spmm, iluk,
@@ -202,23 +147,15 @@ inline constexpr std::string_view op_name(Op o) {
     return "?";
 }
 
-// The uppercase stem of this op's environment variables, i.e. the <OP> in
-// BATCHLAS_<OP>_ROUTE.
+// The <OP> in BATCHLAS_<OP>_ROUTE.
 inline std::string op_env_stem(Op o) {
     std::string s(op_name(o));
     for (char& c : s) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
     return s;
 }
 
-// ---------------------------------------------------------------------------
-// Everything the routing predicates in this tree actually read, and nothing
-// more. POD, no allocation, cheap to build per call.
-//
-// The device facts are FIELDS rather than queries. dispatch/context.hh's
-// query_caps() performs three SYCL get_info round-trips plus a std::string heap
-// allocation on every op invocation; a routing decision has no business paying
-// that, and caching it on the Queue makes the resolver pure.
-// ---------------------------------------------------------------------------
+// Everything the routing predicates read, and nothing more. The device facts are
+// cached FIELDS rather than SYCL get_info queries, keeping the resolver pure.
 struct OpShape {
     Op op = Op::COUNT;
     ScalarKind scalar = ScalarKind::F32;
@@ -248,9 +185,8 @@ struct OpShape {
                " T=" + std::string(to_string(scalar));
     }
 
-    // Power-of-two bucket on max(m,n,k), power-of-two bucket on batch. A
-    // 10,000-iteration test therefore collapses to a handful of coverage rows
-    // rather than 10,000.
+    // Power-of-two bucket on max(m,n,k) and on batch, so a 10,000-iteration
+    // test collapses to a handful of coverage rows rather than 10,000.
     uint32_t shape_class() const {
         auto log2b = [](int64_t v) -> uint32_t {
             uint32_t r = 0;
@@ -261,11 +197,9 @@ struct OpShape {
     }
 };
 
-// ---------------------------------------------------------------------------
 // Where a forced selection came from, so a diagnostic can quote the exact
-// spelling the caller typed rather than the canonical one. Load-bearing:
-// tests/trmm_tests.cc asserts on the literal text "BATCHLAS_TRMM_VARIANT".
-// ---------------------------------------------------------------------------
+// spelling the caller typed. Load-bearing: tests/trmm_tests.cc asserts on the
+// literal text "BATCHLAS_TRMM_VARIANT".
 struct RouteRequestSource {
     std::string variable;   // "BATCHLAS_TRMM_VARIANT" / "BATCHLAS_TRMM_ROUTE"
     std::string value;      // "cublasdx"

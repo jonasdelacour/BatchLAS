@@ -1,8 +1,7 @@
 #pragma once
 
-// GEMV's routing table: pure predicates over GemvShape (device- and env-dependent
-// facts are built in src/backends/gemv_route.hh). supports() is correctness only,
-// preferred() the measured window; see docs/perf/gemv.md.
+// GEMV's routing table: pure predicates over GemvShape (device- and env-dependent facts
+// live in src/backends/gemv_route.hh). Windows and evidence: docs/perf/gemv.md.
 
 #include <batchlas/blas/dispatch/route.hh>
 #include <batchlas/blas/dispatch/route_resolve.hh>
@@ -15,8 +14,7 @@ struct GemvShape : OpShape {
     bool direct_available = false;   // not linked => unsupported, not unimplemented
     bool cta_available = false;
 
-    // From sycl::info::device::sub_group_sizes, never
-    // get_property(MAX_SUB_GROUP_SIZE), which reports sub_group_sizes()[0].
+    // Enumerated from sub_group_sizes; MAX_SUB_GROUP_SIZE reports sub_group_sizes()[0].
     bool has_sg32 = false;
 
     // Predicates must use these: which of m and n is which swaps with transA.
@@ -24,8 +22,7 @@ struct GemvShape : OpShape {
     int64_t red_len() const { return transA == Transpose::NoTrans ? n : m; }
 };
 
-// A capability ladder, tighter first, not a preference: CTA serves only the
-// transposed GPU shapes it supports, Direct serves everything else.
+// A capability ladder, tighter first, not a preference list.
 inline constexpr Route kGemvOrder[] = {
     {Origin::Native, Algorithm::CTA},
     {Origin::Native, Algorithm::Direct},
@@ -38,21 +35,18 @@ struct RouteTable<Op::gemv, T> {
         if (is_vendor(r)) return true;   // vendor serves everything
         if (!is_native(r)) return false;
 
-        // Correctness, not speed: one launch serves the batch from a single
-        // (m, n, ld, stride) tuple and gemv has no heterogeneous walker.
+        // Correctness, not speed: gemv has no heterogeneous-batch walker.
         if (s.heterogeneous_batch) return false;
 
         if (s.m < 0 || s.n < 0 || s.batch < 1) return false;
 
         switch (r.algo) {
             case Algorithm::Direct:
-                // No GPU gate, deliberately: both bodies are serial dot products
-                // with no collective, and vendor-free builds need them on native_cpu.
+                // No GPU gate, deliberately: vendor-free builds need it on native_cpu.
                 return s.direct_available;
 
             case Algorithm::CTA:
-                // Body 3 carries [[sycl::reqd_sub_group_size(32)]] -- a device
-                // not enumerating 32 aborts the launch -- and has no NoTrans body.
+                // Body 3 needs sub-group 32 (else the launch aborts); no NoTrans body.
                 return s.cta_available && s.is_gpu && s.has_sg32 &&
                        s.transA != Transpose::NoTrans;
 
@@ -82,7 +76,6 @@ struct RouteTable<Op::gemv, T> {
     }
 };
 
-// Pure. resolve_route is also what records gemv in the coverage table.
 template <typename T>
 inline Route resolve_gemv_route(Route forced, const GemvShape& s,
                                 bool vendor_available = true) {

@@ -1,11 +1,9 @@
-// Native batched GETRF, BLOCKED tier: the right-looking driver. Per panel --
-// (P) factorise the diagonal panel with the getrf_panel_factorize CTA device
-// function, (S) apply its interchanges left and right, (T) solve L11 \ A12,
-// (G) update A22 -= L21 U12. evidence: docs/perf/lu.md#getrf-window-evidence
-// This TU must stay in EXTENSIONS_CTA_SOURCES: (P) calls a device symbol defined
-// in getrf_cta.cc, so the two must share one device-code cluster. Sub-views use the
-// explicit 6-arg constructor with the parent ld/stride, never operator()(Slice,
-// Slice), which propagates the parent's pointer array.
+// Native batched GETRF, BLOCKED tier: right-looking driver. Per panel -- (P)
+// factorise the diagonal panel via getrf_panel_factorize, (S) apply its
+// interchanges left and right, (T) solve L11 \ A12, (G) update A22 -= L21 U12.
+// This TU must stay in EXTENSIONS_CTA_SOURCES: (P) calls a device symbol from
+// getrf_cta.cc, so the two must share one device-code cluster.
+// evidence: docs/perf/lu.md#getrf-window-evidence
 
 #include "getrf_native.hh"
 #include "lu_laswp.hh"
@@ -34,9 +32,9 @@ namespace {
 // Per-TU tag: gives this cluster its own instantiation of the shared LASWP kernel.
 struct GetrfBlockedLaswpTag {};
 
-// The block width, shared by the driver, the workspace query and the debug query.
-// It IS the trailing GEMM's k: a multiple of 16, and never below 32 for complex
-// (gemm_kernels.cc:700 gates the wide-scalar kernel on min_dim >= 32). Untuned.
+// Block width, shared by the driver, the workspace query and the debug query. It
+// IS the trailing GEMM's k: a multiple of 16, and never below 32 (the wide-scalar
+// complex gemm kernel is gated on min_dim >= 32).
 template <typename T>
 constexpr int getrf_nb_for_type() {
     return 32;
@@ -47,9 +45,9 @@ inline int getrf_blocked_nb(int n) {
     return std::max(1, std::min(getrf_nb_for_type<T>(), n));
 }
 
-// Three spellings of one composition of the left-hand interchange (lu_laswp.hh
-// carries the identity); DeferGather ships. The knob's PRESENCE latches in a
-// static, but its value is re-read per call so a harness can flip arms mid-run.
+// Three spellings of one left-hand interchange; DeferGather ships. The knob's
+// presence latches in a static, but its value is re-read per call, so a harness
+// can swap arms mid-run.
 enum class LeftLaswp { InLoop, DeferWalk, DeferGather };
 
 inline LeftLaswp getrf_left_laswp_mode() {
@@ -63,12 +61,9 @@ inline LeftLaswp getrf_left_laswp_mode() {
 }
 
 // Workspace layout, replayed by both the query and the call. No matrix scratch:
-// panel, interchange, solve and update all work in place on A. `info` is the
-// fallback status span for a caller that supplied none. ONE POINTER ARRAY PER
-// ROLE, never nullptr and never shared -- a 6-arg MatrixView has an empty
-// data_ptrs_ span, so a vendor-routed call throws "data_ptrs target is null",
-// and init_data_ptr_array rebases from each view's own data_ptr()/stride, so a
-// shared array would lose the first view's bases.
+// panel, interchange, solve and update work in place on A. ONE POINTER ARRAY PER
+// ROLE, never nullptr and never shared -- init_data_ptr_array rebases from each
+// view's own data_ptr()/stride, so a shared array loses the first view's bases.
 template <typename T>
 struct GetrfBlockedWs {
     Span<int32_t> info;
@@ -92,9 +87,8 @@ GetrfBlockedWs<T> getrf_blocked_layout(Queue& ctx, BumpAllocator& pool, int batc
 
 }  // namespace
 
-// Available for all four types, but RouteTable<Op::getrf,T>::preferred() is false
-// everywhere: only a vendor-free build or a forced route reaches this driver. The
-// flag sits beside the driver so it cannot advertise a tier this TU did not build.
+// RouteTable<Op::getrf,T>::preferred() is false everywhere: only a vendor-free
+// build or a forced route reaches this driver.
 template <> bool getrf_blocked_available<float>()                { return true; }
 template <> bool getrf_blocked_available<double>()               { return true; }
 template <> bool getrf_blocked_available<std::complex<float>>()  { return true; }
@@ -112,8 +106,7 @@ std::size_t getrf_blocked_buffer_size(Queue& ctx,
 
 // Blocking query. Low 16 bits: block width; bits 16-23: the leading panel's leaf
 // (1 = local-memory resident, 2 = global); bits 24+: the resolved LeftLaswp mode;
-// 0 means absent or degenerate. Every field comes from the functions the driver
-// itself calls, so it cannot report a blocking the call does not use.
+// 0 means absent or degenerate.
 template <typename T>
 unsigned getrf_blocked_debug_params(Queue& ctx, int n) {
     if (n < 1) return 0u;
@@ -137,9 +130,8 @@ Event getrf_blocked_dispatch(Queue& ctx,
                              Span<int32_t> info_out,
                              GetrfTrailingGemm<T> trailing_gemm,
                              GetrfPanelSolveTrsm<T> panel_trsm) {
-    // The gemm seam defaults to the native kernel so a direct caller needs no
-    // dispatch dependency; the facade injects the ROUTED gemm, because calling
-    // gemm_custom unconditionally would bypass RouteTable<Op::gemm>.
+    // Defaults to the native kernel so a direct caller needs no dispatch
+    // dependency; the facade injects the ROUTED gemm instead.
     if (!trailing_gemm) {
         trailing_gemm = [](Queue& c,
                            const MatrixView<T, MatrixFormat::Dense>& ga,
@@ -156,8 +148,8 @@ Event getrf_blocked_dispatch(Queue& ctx,
     const int batch = static_cast<int>(A.batch_size());
 
     // Every RouteTable<Op::getrf,T>::supports() gate, re-applied because this entry
-    // point is reachable without the table: route_resolve.hh:165 falls through to
-    // automatic() for an unsupported forced route, so a wrong gate measures cuBLAS.
+    // point is reachable without the table: a forced route the table refuses falls
+    // through to automatic(), so a wrong gate here silently measures cuBLAS.
     if (m < 1 || n < 1 || batch < 1) {
         throw std::invalid_argument("getrf_blocked: degenerate extents");
     }
@@ -212,10 +204,9 @@ Event getrf_blocked_dispatch(Queue& ctx,
                              ? info_out
                              : ws.info;
 
-    // The guard belongs HERE, not after the first panel: getf2_panel_device READS
-    // info[b], so fill -> panel is a real read-after-write. Unguarded, the first
-    // panel read the caller's garbage back and `info[b] != 0` reported a false
-    // singularity.
+    // The fill belongs HERE, not after the first panel: getf2_panel_device READS
+    // info[b], so this is a real read-after-write. Unguarded, the first panel reads
+    // the caller's garbage back and reports a false singularity.
     ctx->fill(info.data(), int32_t(0), static_cast<std::size_t>(batch));
     if (!ctx.in_order()) ctx.wait();
 
@@ -228,7 +219,8 @@ Event getrf_blocked_dispatch(Queue& ctx,
     const int stride = A.stride();
     T* const a_ptr = A.data_ptr();
 
-    // The per-role pointer array is passed, never nullptr -- see the layout note.
+    // The explicit 6-arg constructor, never operator()(Slice, Slice), which would
+    // propagate the parent's pointer array; each role passes its own, never nullptr.
     auto sub = [&](int r0, int nr, int c0, int nc, Span<T*> ptrs) {
         return MatrixView<T, MatrixFormat::Dense>(
             a_ptr + static_cast<std::ptrdiff_t>(c0) * ld + r0,
@@ -242,8 +234,8 @@ Event getrf_blocked_dispatch(Queue& ctx,
         const int n2 = n - j2;                 // trailing columns; ZERO on the last panel
         const int m2 = mp - ib;                // trailing rows;    ZERO on the last panel
 
-        // (P) The panel. piv_stride is n and piv_base is j0, which is what makes
-        // ipiv global 1-based and info a global column index with no fix-up.
+        // (P) piv_stride is n and piv_base is j0, which is what makes ipiv global
+        // 1-based and info a global column index with no fix-up.
         (void)getrf_panel_factorize<T>(ctx,
                                        a_ptr + static_cast<std::ptrdiff_t>(j0) * ld + j0,
                                        ld, stride, mp, ib, batch,
@@ -252,9 +244,8 @@ Event getrf_blocked_dispatch(Queue& ctx,
         // A caller may build an out-of-order queue, so every dependent edge guards itself.
         if (!ctx.in_order()) ctx.wait();
 
-        // (S-left) The panel's interchanges on the already-factorised columns [0, j0).
-        // Skipping it is the classic silently-wrong blocked LU: P A = L U only holds
-        // if the finished columns of L travel with the exchange.
+        // (S-left) The panel's interchanges on the finished columns [0, j0). Skip it
+        // and P A = L U silently stops holding: L's finished columns must travel too.
         if (mode == LeftLaswp::InLoop && j0 > 0) {
             (void)lu_native::lu_laswp_launch<GetrfBlockedLaswpTag, T>(
                 ctx, a_ptr, ld, stride, /*ncols=*/j0, batch,
@@ -280,8 +271,8 @@ Event getrf_blocked_dispatch(Queue& ctx,
         if (!ctx.in_order()) ctx.wait();
 
         if (m2 > 0) {
-            // (G) A22 -= L21 U12. beta = 1 and every GEMM here loads the prior value
-            // whatever beta is, so A22 must already hold the trailing block -- it does.
+            // (G) A22 -= L21 U12. Every GEMM here loads the prior value whatever
+            // beta is, so A22 must already hold the trailing block -- it does.
             const auto L21 = sub(j2, m2, j0, ib, ws.p21);
             const auto A22 = sub(j2, m2, j2, n2, ws.p22);
             (void)trailing_gemm(ctx, L21, A12, A22, T(-1), T(1),
@@ -291,8 +282,7 @@ Event getrf_blocked_dispatch(Queue& ctx,
         }
     }
 
-    // (S-left), DEFERRED. Block r receives the suffix [j0_{r+1}, n) in increasing k,
-    // the in-order concatenation of the per-panel lists (identity in lu_laswp.hh).
+    // (S-left), DEFERRED. Block r receives the suffix [j0_{r+1}, n) in increasing k.
     // Extents come from ib and j0, never nb: a loop written from the block COUNT
     // reads past the pivot list at n = 129.
     if (mode != LeftLaswp::InLoop) {

@@ -1,12 +1,11 @@
-// Native batched GETRS -- the fused narrow-RHS tier. One kernel per matrix: the row
-// permutation, the forward substitution and the back substitution, with no GEMM and
-// no separate laswp launch. One work-group per matrix; the RHS block and one nb x nb
-// diagonal block are resident, L and U are streamed. getrs_native.cc's composed tier
-// serves the wide-nrhs end.
+// Native batched GETRS -- the fused narrow-RHS tier. One work-group per matrix does
+// the row permutation, the forward substitution and the back substitution in a single
+// kernel; the RHS and one nb x nb diagonal block are resident, L and U are streamed.
+// getrs_native.cc's composed tier serves the wide-nrhs end.
 // evidence: docs/perf/lu.md#the-fused-narrow-rhs-getrs
 //
-// It sits in EXTENSIONS_FACTORIZATION_SOURCES because it calls no getrf CTA device
-// function. If it ever does it must move, or the link fails with `ptxas fatal`.
+// Belongs in EXTENSIONS_FACTORIZATION_SOURCES: calling a getrf CTA device function
+// from here fails the device link with `ptxas fatal`.
 
 #include "getrs_native.hh"
 
@@ -29,12 +28,8 @@ namespace {
 
 using namespace batchlas::sycl_device;
 
-// GEOMETRY. It lives here so the ceiling route_getrs.hh advertises and the
-// allocation this launcher makes cannot disagree.
-
-// The resident diagonal block. nb must not exceed the sub-group size: the block
-// solve is a sub-group shuffle recurrence with lane i owning row i.
-// evidence: docs/perf/lu.md#the-fused-narrow-rhs-getrs
+// nb must not exceed the sub-group size: the block solve is a sub-group shuffle
+// recurrence with lane i owning row i.
 constexpr int kGetrsFusedNbSmall = 16;
 constexpr int kGetrsFusedNbLarge = 32;
 constexpr int kGetrsFusedNbMax   = 32;
@@ -44,25 +39,19 @@ inline int getrs_fused_nb(int n) {
     return (nb > n) ? n : nb;
 }
 
-// The block's leading dimension is nb + 1: the transposed block solve reads
-// blk[s + t*ldb], stride ldb across lanes, so an unpadded 16 or 32 is a full bank
-// conflict on every step of that recurrence. Measured inert on this device
-// (docs/perf/lu.md#the-fused-narrow-rhs-getrs), kept for portability.
+// The block is padded to nb + 1: the transposed block solve reads blk[s + t*ldb],
+// stride ldb across lanes, so an unpadded 16 or 32 is a full bank conflict on every
+// step of that recurrence. Inert on this device, kept for portability.
 inline int getrs_fused_blk_ld(int nb) { return nb + 1; }
 
-// THE REGISTER GATE. registers-per-work-item x work-group-size must not exceed
-// 65,536, the per-block register-file limit; over it the launch ABORTS ("Exceeded
-// the number of registers available on the hardware") rather than merely slowing
-// down. It is reachable: float n=2048 nrhs=8 transA=Trans wants wg = 1024 at 68
-// registers. The table is per (type, body, width) rather than a max over them, and
-// is measured with scripts/register_probe.sh -- re-run that probe if ptxas moves a
-// cell by more than kGetrsFusedRegMargin. Guarded by tests/getrf_tests.cc
-// FusedGetrsLaunchHoleAt48KiB.
+// The register gate. registers-per-work-item x work-group-size must not exceed 65,536
+// or the launch ABORTS rather than merely slowing down. The table is per (type, body,
+// width) rather than a max over them, and is measured with scripts/register_probe.sh
+// -- re-run that probe if ptxas moves a cell by more than kGetrsFusedRegMargin.
 constexpr int kGetrsFusedRegMargin = 8;
 
-// The accumulator-width bucket. It MUST agree with fused_dispatch_nr's ladder below
-// (nrhs <= 1 -> NR 1, <= 2 -> 2, <= 4 -> 4, else 8): a cap computed for a bucket
-// other than the one launched is a cap for a different kernel.
+// The accumulator-width bucket. It MUST agree with fused_dispatch_nr's ladder below:
+// a cap computed for one bucket is a cap for a different kernel.
 constexpr int getrs_fused_nr_bucket(int nrhs) {
     return (nrhs <= 1) ? 0 : (nrhs <= 2) ? 1 : (nrhs <= 4) ? 2 : 3;
 }
@@ -91,8 +80,7 @@ constexpr int getrs_fused_regs_for(int nrhs, bool trans) {
     return trans ? GetrsFusedRegs<T>::trans[i] : GetrsFusedRegs<T>::notrans[i];
 }
 
-// The work-group width, ~ n/2 clamped to [64, 1024], then capped by the register
-// gate above. evidence: docs/perf/lu.md#the-fused-narrow-rhs-getrs
+// The work-group width: ~ n/2 clamped to [64, 1024], then capped by the register gate.
 template <typename T>
 inline int getrs_fused_wg(int n, int nrhs, int max_wg, bool trans) {
     int wg = 32;
@@ -109,11 +97,10 @@ inline int getrs_fused_wg(int n, int nrhs, int max_wg, bool trans) {
     return wg;
 }
 
-// THE 48 KB LAUNCH HOLE, carried verbatim from potrf_cta.cc so the two agree: a
-// dynamic local-memory request in (49152 - static_shared, 49152] fails with
-// CUDA_ERROR_INVALID_VALUE at enqueue, and is STICKY PER CUfunction -- a larger
-// earlier launch hides it by execution order, so a warm test suite cannot see it.
-// evidence: docs/perf/lu.md#the-48-kb-launch-hole
+// The 48 KB launch hole, carried verbatim from potrf_cta.cc so the two agree: a dynamic
+// local-memory request in (49152 - static_shared, 49152] fails at enqueue with
+// CUDA_ERROR_INVALID_VALUE, and is STICKY PER CUfunction, so a larger earlier launch
+// hides it from a warm test suite. evidence: docs/perf/lu.md#the-48-kb-launch-hole
 constexpr std::size_t kGetrsHoleLo    = 47104;
 constexpr std::size_t kGetrsHoleHi    = 49664;
 constexpr std::size_t kGetrsHolePadTo = 49920;
@@ -122,7 +109,6 @@ constexpr std::size_t getrs_hole_padded(std::size_t bytes) {
     return (bytes > kGetrsHoleLo && bytes <= kGetrsHoleHi) ? kGetrsHolePadTo : bytes;
 }
 
-// The local-memory request, in bytes, for one work-group.
 constexpr std::size_t getrs_fused_slm(std::size_t rhs_elems, int nb,
                                       std::size_t scalar_bytes) {
     return getrs_hole_padded(
@@ -131,9 +117,8 @@ constexpr std::size_t getrs_fused_slm(std::size_t rhs_elems, int nb,
 }
 
 // A sub-group sum, hand-rolled with shift_group_left rather than
-// sycl::reduce_over_group, which puts static shared into a kernel and reopens the
-// 48 KB hole. After the shift-down steps LANE 0 holds the total, and no other
-// lane's value is used.
+// sycl::reduce_over_group, which puts static shared into the kernel and reopens the
+// 48 KB hole. Afterwards only LANE 0 holds the total.
 template <typename SG, typename D>
 inline D sg_sum(const SG& sg, D v) {
     if constexpr (dev_is_complex_v<D>) {
@@ -196,7 +181,6 @@ Event fused_launch_notrans(Queue& ctx,
                 D* const y = &slm[0];
                 D* const blk = &slm[rhs_elems];
 
-                // the RHS, loaded coalesced
                 for (int e = tid; e < n * nrhs; e += wg) {
                     const int i = e % n, c = e / n;
                     y[e] = Bb[static_cast<std::size_t>(i) +
@@ -227,10 +211,10 @@ Event fused_launch_notrans(Queue& ctx,
                     }
                     it.barrier(sycl::access::fence_space::local_space);
 
-                    // The block solve runs inside ONE sub-group: lane i owns row
-                    // j+i in a register and the recurrence takes no work-group
-                    // barrier. group_broadcast is a collective and must not be called
-                    // under divergence -- the lane guards are INSIDE it, not around.
+                    // The block solve runs inside ONE sub-group: lane i owns row j+i in
+                    // a register and the recurrence takes no work-group barrier.
+                    // group_broadcast is a collective and must not be called under
+                    // divergence -- the lane guards are INSIDE it, not around.
                     if (sgid == 0 && jb > 1) {
                         for (int c = 0; c < nrhs; ++c) {
                             D* const yc = y + static_cast<std::size_t>(c) * static_cast<std::size_t>(n);
@@ -344,9 +328,9 @@ Event fused_launch_notrans(Queue& ctx,
     return ctx.get_event();
 }
 
-// Trans / ConjTrans: solve op(U) z = b, solve op(L) w = z, then w = F^{-1} w -- the
-// SAME interchange list walked BACKWARDS. A^T = U^T L^T F, so the permutation moves
-// to the OUTPUT and reverses; getting that wrong is the classic silently-wrong getrs.
+// Trans / ConjTrans: solve op(U) z = b, solve op(L) w = z, then w = F^{-1} w -- the SAME
+// interchange list walked BACKWARDS, because A^T = U^T L^T F moves the permutation to
+// the OUTPUT and reverses it; getting that wrong is the classic silently-wrong getrs.
 // Both solves are the DOT form, because op(U)[i][j] = op(U[j][i]): the reduction runs
 // down a CONTIGUOUS COLUMN of A.
 template <typename T, int NR>
@@ -412,9 +396,8 @@ Event fused_launch_trans(Queue& ctx,
                             ld_a(j + i, j + c);
                     }
 
-                    // The PAST contribution: y[j+t] -= sum_{i<j} op(A[i, j+t]) y[i].
-                    // ONE SUB-GROUP PER COLUMN, so its 32 lanes read 32 consecutive
-                    // elements.
+                    // The PAST contribution: y[j+t] -= sum_{i<j} op(A[i, j+t]) y[i]. ONE
+                    // SUB-GROUP PER COLUMN, so its 32 lanes read 32 consecutive elements.
                     for (int t = sgid; t < jb; t += nsg) {
                         D acc[NR];
                         #pragma unroll
@@ -522,8 +505,7 @@ Event fused_launch_trans(Queue& ctx,
                 }
 
                 // F^{-1} on the OUTPUT: the SAME list walked BACKWARDS. Every
-                // transposition is its own inverse, so only the ORDER changes -- and
-                // this is the half of the transposed case no NoTrans test can see.
+                // transposition is its own inverse, so only the ORDER changes.
                 if (tid < nrhs) {
                     D* const yc = y + static_cast<std::size_t>(tid) * static_cast<std::size_t>(n);
                     for (int k = n - 1; k >= 0; --k) {
@@ -543,8 +525,8 @@ Event fused_launch_trans(Queue& ctx,
     return ctx.get_event();
 }
 
-// Runtime nrhs -> the compile-time accumulator width. The ladder stops at 8 because
-// the tier's window does (kGetrsFusedMaxRhs, route_getrs.hh).
+// Runtime nrhs -> the compile-time accumulator width. The ladder must match
+// getrs_fused_nr_bucket, and stops at kGetrsFusedMaxRhs (route_getrs.hh).
 template <typename T>
 Event fused_dispatch_nr(Queue& ctx, bool trans, bool conj,
                         const T* A, int lda, int sA, T* B, int ldb, int sB,
@@ -565,23 +547,16 @@ Event fused_dispatch_nr(Queue& ctx, bool trans, bool conj,
 
 }  // namespace
 
-// The capability flag, TRUE for all four types. These are full explicit
-// specialisations, so defining them beside the kernel is what makes "the flag is
-// true" and "the file is compiled" the same fact.
 template <> bool getrs_fused_available<float>()                { return true; }
 template <> bool getrs_fused_available<double>()               { return true; }
 template <> bool getrs_fused_available<std::complex<float>>()  { return true; }
 template <> bool getrs_fused_available<std::complex<double>>() { return true; }
 
 // THE CAPACITY, IN RHS ELEMENTS (n * nrhs). The RHS vector is resident, so this is a
-// HARD launch ceiling -- a supports() question and not a preferred() one. The budget
-// is asked of the DEVICE, never of device_limits.hh's hardcoded 49152 (2x wrong on
-// this box). The largest nb the tier ever uses is charged, not this call's.
-//
-// getrs_hole_padded is NOT monotone, so the largest admissible request is
-//   budget                       when budget >  kGetrsHoleHi
-//   min(budget, kGetrsHoleLo)    otherwise
-// -- a request landing inside the band is raised to kGetrsHolePadTo and then fails.
+// HARD launch ceiling -- a supports() question and not a preferred() one. The budget is
+// asked of the DEVICE, and the largest nb the tier ever uses is charged, not this
+// call's. getrs_hole_padded is NOT monotone, so the largest admissible request is the
+// budget when it exceeds kGetrsHoleHi and min(budget, kGetrsHoleLo) otherwise.
 template <typename T>
 std::size_t getrs_fused_max_rhs_elems(std::size_t slm_budget_bytes) {
     using D = typename sycl_device::DevMap<T>::type;
@@ -594,11 +569,9 @@ std::size_t getrs_fused_max_rhs_elems(std::size_t slm_budget_bytes) {
     if (admissible <= blk_bytes) return 0;
     const std::size_t elems = (admissible - blk_bytes) / sizeof(D);
 
-    // The floor division above can round the implied request BACK DOWN INTO the
-    // band, where the pad raises it again and it no longer fits -- a capacity whose
-    // launch the runtime then refuses. Everything below the band is admissible, so
-    // the exact repair is the request that ends AT kGetrsHoleLo.
-    // evidence: docs/perf/lu.md#correctness-findings
+    // The floor division above can round the implied request BACK DOWN INTO the band,
+    // where the pad raises it again and the launch is refused; the exact repair is the
+    // request that ends AT kGetrsHoleLo. evidence: docs/perf/lu.md#correctness-findings
     if (getrs_fused_slm(elems, kGetrsFusedNbMax, sizeof(D)) > slm_budget_bytes) {
         if (kGetrsHoleLo <= blk_bytes) return 0;
         return (kGetrsHoleLo - blk_bytes) / sizeof(D);
@@ -606,8 +579,8 @@ std::size_t getrs_fused_max_rhs_elems(std::size_t slm_budget_bytes) {
     return elems;
 }
 
-// WORKSPACE: ZERO -- the RHS is permuted and solved in local memory and written back
-// in place. Nothing is dereferenced; a measuring pass hands this null data pointers.
+// WORKSPACE: ZERO -- the RHS is permuted and solved in local memory and written back in
+// place. Nothing is dereferenced; a measuring pass hands this null data pointers.
 template <typename T>
 std::size_t getrs_fused_buffer_size(Queue&,
                                     const MatrixView<T, MatrixFormat::Dense>&,
@@ -616,10 +589,9 @@ std::size_t getrs_fused_buffer_size(Queue&,
     return 0;
 }
 
-// THE DRIVER. Every gate RouteTable<Op::getrs,T>::supports() applies is RE-APPLIED
-// here, because this entry point is reachable WITHOUT the table: route_resolve.hh
-// falls through to automatic() when a forced route is unsupported, so a pinned-route
-// test wrong about one gate silently measures cuBLAS and passes green.
+// Every gate RouteTable<Op::getrs,T>::supports() applies is RE-APPLIED here, because
+// this entry point is reachable WITHOUT the table: route_resolve.hh falls through to
+// automatic() when a forced route is unsupported.
 template <typename T>
 Event getrs_fused_dispatch(Queue& ctx,
                            const MatrixView<T, MatrixFormat::Dense>& A,
@@ -653,10 +625,10 @@ Event getrs_fused_dispatch(Queue& ctx,
         throw std::invalid_argument("getrs_fused: GPU queues only");
     }
     if (!dev.supports_sub_group_size(32)) {
-        // ENUMERATED, never get_property(MAX_SUB_GROUP_SIZE) >= 32: that
-        // property returns sub_group_sizes()[0], so the weak test refuses a
-        // {8,16,32} device and ACCEPTS a {64} one -- where this kernel's
-        // [[sycl::reqd_sub_group_size(32)]] block solve is a launch abort.
+        // ENUMERATED, never get_property(MAX_SUB_GROUP_SIZE) >= 32: that property
+        // returns sub_group_sizes()[0], so the weak test refuses a {8,16,32} device
+        // and ACCEPTS a {64} one -- where this kernel's reqd_sub_group_size(32)
+        // block solve is a launch abort.
         throw std::runtime_error(
             "getrs_fused: device does not offer sub-group size 32");
     }
@@ -702,8 +674,6 @@ Event getrs_fused_dispatch(Queue& ctx,
         n, nrhs, batch, wg, nb);
 }
 
-// Instantiation: PER SCALAR TYPE ONLY. This tier injects nothing -- unlike the
-// composed one, which takes the routed trsm -- so there is no Backend to cross.
 #define BATCHLAS_GETRS_FUSED_INSTANTIATE(T)                                                \
     template std::size_t getrs_fused_max_rhs_elems<T>(std::size_t);                        \
     template std::size_t getrs_fused_buffer_size<T>(                                       \

@@ -1,21 +1,19 @@
 #pragma once
 
-// The native batched POTRF CTA kernel -- all of its device code. One matrix is
-// staged whole into local memory and factorised there by a right-looking blocked
-// recurrence; global memory is touched exactly twice. evidence: docs/perf/potrf.md
+// The native batched POTRF CTA kernel: one matrix is staged whole into local
+// memory and factorised by a right-looking blocked recurrence, touching global
+// memory exactly twice. evidence: docs/perf/potrf.md
 //
 // Three invariants a maintainer can silently break:
-// * Phase barriers follow the `Scope` template parameter -- sub-group when one
-//   32-wide sub-group owns a matrix, work-group when 2 or 4 do. Getting it wrong
-//   races (P1)->(P2)->(P3) on the tile: no crash, a plausible wrong factor. Scope
-//   is DERIVED by potrf_cta_launch_params (potrf_cta.cc), never chosen by hand.
+// * Phase barriers follow `Scope`, which potrf_cta_launch_params (potrf_cta.cc)
+//   derives; the wrong scope races (P1)->(P2)->(P3) into a plausible wrong
+//   factor rather than a crash.
 // * Every phase barrier sits at the top level, outside the `if` guarding its
-//   phase, and failure is a predicated skip and never a `break`, so the barrier
-//   count is identical on the failure and success paths.
-// * d[NB], x[NB] and acc[TS][TS] must stay in registers: never a parameter (an
-//   accumulator array whose address is taken spills), never a dynamic index (that
-//   moves the array to local memory with ZERO reported spill). Hence the
-//   unrolled, predicated loops. evidence: docs/perf/potrf.md#register-gate
+//   phase, and failure is a predicated skip, never a `break`, so both paths
+//   execute the same barrier count.
+// * d[NB], x[NB] and acc[TS][TS] must stay in registers: never a parameter,
+//   never a dynamic index (which silently relocates them to local memory).
+//   evidence: docs/perf/potrf.md#register-gate
 
 #include "../sycl/device_scalar.hh"
 
@@ -37,8 +35,7 @@ inline void potrf_phase_barrier(const sycl::nd_item<1>& it) {
     }
 }
 
-// (P1) -- the ib x ib diagonal block, one lane per row, on ONE sub-group. Lane r
-// owns row j+r in registers d[0..NB).
+// (P1) -- the ib x ib diagonal block on ONE sub-group; lane r owns row j+r.
 template <typename D, typename R, int NB>
 inline void potrf_diag_block_subgroup(const sycl::sub_group& sg,
                                       D* __restrict S, int lda,
@@ -47,7 +44,7 @@ inline void potrf_diag_block_subgroup(const sycl::sub_group& sg,
                                       int* __restrict fail) {
     const int lane = static_cast<int>(sg.get_local_linear_id());
 
-    // Out-of-range entries are ZEROED, not left indeterminate: lanes ib..31 still
+    // Out-of-range entries are zeroed, not left indeterminate: lanes ib..31 still
     // take part in every select_from_group below.
     D d[NB];
 #pragma unroll
@@ -60,17 +57,15 @@ inline void potrf_diag_block_subgroup(const sycl::sub_group& sg,
     bool alive = true;
 #pragma unroll
     for (int k = 0; k < NB; ++k) {
-        // THE PIVOT IS A REGISTER, NOT THE TILE: the updated Schur diagonal is
-        // lane k's d[k]; S(j+k, j+k) still holds the ORIGINAL value, so reading
-        // it there gives wrong columns and `info == 0` for any matrix failing at
-        // a leading minor > 1 (tests/potrf_tests.cc InfoIndexIsExact).
+        // The pivot is lane k's register d[k], not S(j+k, j+k), which still holds
+        // the ORIGINAL value: reading the tile gives wrong columns and `info == 0`
+        // for any matrix failing at a leading minor > 1 (InfoIndexIsExact).
         const R akk = sycl::select_from_group(sg, sycl_device::dev_real(d[k]),
                                               static_cast<uint32_t>(k));
 
         bool active = alive && (k < ib);
 
-        // `!(akk > 0)`, not `akk <= 0`, so NaN is caught too -- LAPACK's
-        // AJJ.LE.ZERO .OR. SISNAN(AJJ). It precedes the sqrt and the reciprocal.
+        // `!(akk > 0)`, not `akk <= 0`, so NaN is rejected too, as LAPACK does.
         if (active && !(akk > R(0))) {
             if (lane == 0) *fail = j + k + 1;  // 1-based GLOBAL column
             active = false;
@@ -87,21 +82,19 @@ inline void potrf_diag_block_subgroup(const sycl::sub_group& sg,
                 d[k] = sycl_device::dev_mul_real(d[k], r);
             }
 
-            // `lane < ib` is load-bearing: unguarded, lanes ib..31 write into
-            // the A21 panel (P2) is about to read, and past the tile entirely on
-            // the ragged last panel -- into a NEIGHBOURING MATRIX when G > 1.
+            // `lane < ib` is load-bearing: unguarded, lanes ib..31 clobber the A21
+            // panel (P2) reads, and on the ragged last panel a neighbouring matrix.
             if (lane < ib && lane >= k) {
                 S[(j + lane) + static_cast<std::ptrdiff_t>(j + k) * lda] = d[k];
             }
             if (lane == 0) diag[k] = dkk;
         }
 
-        // B1'. ALWAYS the sub-group, and unconditional; (P1) may run inside
+        // B1'. ALWAYS the sub-group and unconditional: (P1) may run inside
         // `if (sg_id == 0)`, where a work-group barrier would diverge.
         sycl::group_barrier(sg);
 
-        // No WAR hazard, hence no second barrier: this reads column k, and step
-        // k+1 publishes column k+1.
+        // No WAR hazard, hence no second barrier: step k+1 publishes a later column.
         if (active) {
 #pragma unroll
             for (int c = k + 1; c < NB; ++c) {
@@ -118,8 +111,7 @@ inline void potrf_diag_block_subgroup(const sycl::sub_group& sg,
     }
 }
 
-// (P2) -- the panel solve L21 = A21 * L11^-H (Side::Right, Lower, ConjTrans,
-// NonUnit, alpha = 1). Rows of A21 are independent, so there is no barrier here.
+// (P2) -- the panel solve L21 = A21 * L11^-H; rows are independent, no barrier.
 template <typename D, typename R, int NB>
 inline void potrf_panel_solve_rows(int tid, int L,
                                    D* __restrict S, int lda,
@@ -149,9 +141,8 @@ inline void potrf_panel_solve_rows(int tid, int L,
                                     S[(j + c) + static_cast<std::ptrdiff_t>(j + p) * lda])));
                     }
                 }
-                // A DIVIDE, as reference ?trsm divides -- (P1) scales by a
-                // reciprocal because ?potf2 does. diag[c] is real, so complex D
-                // takes two divides, not Smith's algorithm.
+                // A DIVIDE, as reference ?trsm divides; (P1) scales by a
+                // reciprocal because ?potf2 does.
                 x[c] = sycl_device::dev_div_real(s, diag[c]);
             }
         }
@@ -163,9 +154,9 @@ inline void potrf_panel_solve_rows(int tid, int L,
     }
 }
 
-// (P3) -- the trailing update A22 -= L21 L21^H, TS x TS register tiles, triangle
-// at TILE granularity with `ra >= cb` trimming the diagonal tiles. `off` is the
-// Rt0-based prefix table; `dR = Rt0 - Rt` rescales it here. No barrier.
+// (P3) -- the trailing update A22 -= L21 L21^H in TS x TS register tiles, the
+// triangle trimmed at TILE granularity by `ra >= cb`. `off` is the Rt0-based
+// prefix table, rescaled here by `dR = Rt0 - Rt`. No barrier.
 template <typename D, typename R, int TS>
 inline void potrf_trailing_tiles(int tid, int L,
                                  D* __restrict S, int lda,
@@ -230,10 +221,8 @@ inline void potrf_trailing_tiles(int tid, int L,
                     D v = sycl_device::dev_sub(
                         S[(base + ra) + static_cast<std::ptrdiff_t>(base + cb) * lda],
                         acc[a][b]);
-                    // Force the Hermitian diagonal real. Nothing fails today
-                    // without it -- (P1) rewrites every output diagonal from a
-                    // real sqrt -- but the residue goes live the moment anything
-                    // reads a trailing-update diagonal directly.
+                    // Force the Hermitian diagonal real: dead today ((P1) rewrites
+                    // every output diagonal), live if anything ever reads one here.
                     if constexpr (sycl_device::dev_is_complex_v<D>) {
                         if (ra == cb) {
                             v = sycl_device::dev_from_real<D>(sycl_device::dev_real(v));
@@ -248,8 +237,7 @@ inline void potrf_trailing_tiles(int tid, int L,
 
 // The whole body for ONE matrix; S, diag, fail, off and Ag are already offset to
 // it. `upper` is a LOAD/STORE TRANSFORM, not a second algorithm: A = U^H U is the
-// same recurrence on S(i,c) = conj(A(c,i)), so this compiles once per
-// (D, NB, TS, Scope) rather than once per (..., Uplo).
+// same recurrence on S(i,c) = conj(A(c,i)), so Uplo costs no extra instantiation.
 template <typename D, typename R, int NB, int TS, PotrfScope SC>
 inline void potrf_cta_body(const sycl::nd_item<1>& it,
                            const sycl::sub_group& sg,
@@ -263,10 +251,8 @@ inline void potrf_cta_body(const sycl::nd_item<1>& it,
     const int m2_0 = (n > NB) ? (n - NB) : 0;
     const int Rt0 = (m2_0 + TS - 1) / TS;
 
-    // ONE FUSED LOAD, not a fill then a triangular load whose differing index
-    // maps let a fill store land after a load store and zero a live element.
-    // Every element of the lda x n tile is written exactly once here, pad rows
-    // included -- which is why (P3) may read through its `< m2` guards.
+    // One fused load writes every element of the lda x n tile exactly once, pad
+    // rows included -- which is why (P3) may read through its `< m2` guards.
     for (int c = 0; c < n; ++c) {
         for (int i = tid; i < lda; i += L) {
             D v{};
@@ -282,9 +268,8 @@ inline void potrf_cta_body(const sycl::nd_item<1>& it,
         }
     }
     for (int c = tid; c < NB; c += L) diag[c] = R(0);
-    // off[] is (P3)'s tile-index prefix table: Rt0 + 1 entries per matrix,
-    // published by B0 and NEVER rewritten per panel -- no barrier slot exists for
-    // that, so (P3) rescales by dR. The sentinel off[Rt0] bounds its search.
+    // off[] is (P3)'s tile-index prefix table, published once at B0 and NEVER
+    // rewritten per panel -- hence (P3)'s dR rescale. off[Rt0] is its sentinel.
     for (int c = tid; c <= Rt0; c += L) off[c] = c * Rt0 - ((c * (c - 1)) >> 1);
     if (tid == 0) *fail = 0;
 

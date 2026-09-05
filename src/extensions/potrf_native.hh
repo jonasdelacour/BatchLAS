@@ -1,9 +1,9 @@
 #pragma once
 
-// Native batched POTRF -- declarations only, free of device code so the route
-// table and the vendor-free facade need no <sycl/sycl.hpp>. Two tiers: CTA (one
-// matrix resident in local memory) and Blocked (right-looking driver whose leaf
-// is that CTA kernel). preferred() is false for both. evidence: docs/perf/potrf.md
+// Native batched POTRF -- declarations only, so the route table and the vendor-free
+// facade need no <sycl/sycl.hpp>. Two tiers: CTA (one matrix resident in local
+// memory) and Blocked (its leaf is that CTA kernel). preferred() is false for both.
+// evidence: docs/perf/potrf.md
 
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>
@@ -37,8 +37,8 @@ std::size_t potrf_cta_buffer_size(Queue& ctx,
 template <typename T>
 unsigned potrf_cta_debug_launch(Queue& ctx, int n, int batch);
 
-// Direct-call entry point. Tests need it: a forced route that supports() rejects
-// falls back to automatic() and silently runs the vendor instead.
+// Direct-call entry: a forced route that supports() rejects falls back to
+// automatic() and silently runs the vendor, so tests bypass the gate here.
 template <typename T>
 Event potrf_cta_dispatch(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& A,
@@ -74,10 +74,9 @@ std::size_t potrf_blocked_buffer_size(Queue& ctx,
 template <typename T>
 unsigned potrf_blocked_debug_params(Queue& ctx, int n);
 
-// Uplo::LOWER ONLY, and a correctness gate rather than a fit one: the right-looking
-// schedule would overwrite the wrong triangle for Upper, so it throws. `info` is
-// LAPACK's, 1-based and GLOBAL with first failure winning; the leaf writes a
-// sub-view-LOCAL index unconditionally, so the driver translates and merges.
+// Uplo::LOWER ONLY -- the right-looking schedule would overwrite the wrong triangle
+// for Upper, so it throws. `info` is LAPACK's: 1-based, GLOBAL, first failure wins;
+// the leaf writes a sub-view-LOCAL index, so the driver translates and merges.
 template <typename T>
 Event potrf_blocked_dispatch(Queue& ctx,
                              const MatrixView<T, MatrixFormat::Dense>& A,

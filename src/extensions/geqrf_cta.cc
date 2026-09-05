@@ -1,8 +1,8 @@
 // Native batched GEQRF: the CTA tier, and the panel leaf both native tiers share.
-// The device body is in geqrf_cta_device.hh because geqrf_blocked.cc's panel step
+// The device body lives in geqrf_cta_device.hh because geqrf_blocked.cc's panel step
 // runs the SAME code against a global accessor -- correctness fixes belong there.
-// Route-neutral: preferred() is false for both native arms, so this is reachable
-// only via BATCHLAS_GEQRF_ROUTE or a vendor-free build (docs/perf/qr.md#route-arms).
+// Reachable only via BATCHLAS_GEQRF_ROUTE or a vendor-free build; preferred() is false
+// for both native arms. evidence: docs/perf/qr.md#route-arms
 
 #include "geqrf_native.hh"
 #include "geqrf_cta_device.hh"
@@ -26,23 +26,20 @@ namespace {
 
 namespace gn = ::batchlas::geqrf_native;
 
-// Reference budget for the convenience capacity overloads only; every real
-// decision reads local_mem_size from the device. NOT device_limits.hh's 49152,
-// which cmake hardcodes for any nvidia_gpu_sm_* target and is 2.06x wrong here.
+// Used only by the convenience capacity overloads; every real decision reads
+// LOCAL_MEM_SIZE from the device, not device_limits.hh's hardcoded 49152.
 constexpr std::size_t kGeqrfReferenceSlmBudget = 97280;
 
-// Exactly m*n scalars, with NO leading-dimension padding: both hot access patterns
-// are bank-conflict-free at any ld, and the absence of a pad is what keeps
-// geqrf_cta_max_elems_for_slm monotone.
+// Exactly m*n scalars with NO leading-dimension padding: both hot access patterns are
+// bank-conflict-free at any ld, and the missing pad keeps the element ceiling monotone.
 template <typename T>
 constexpr std::size_t geqrf_slm_bytes(int64_t m, int64_t n) {
     return static_cast<std::size_t>(m) * static_cast<std::size_t>(n) * sizeof(T);
 }
 
-// The 48 KiB launch hole: an allocation in (kGeqrfHoleLo, kGeqrfHoleHi] fails to
-// launch once geqr2_panel_device's two reduce_over_group calls add static shared,
-// so such a request is padded past the band. Order-dependent -- the attribute is
-// sticky per CUfunction -- so a suite can be green by launch order alone.
+// Allocations in (kGeqrfHoleLo, kGeqrfHoleHi] fail to launch once geqr2_panel_device's
+// reduce_over_group calls add static shared, so such a request is padded past the band.
+// The attribute is sticky per CUfunction, so a suite can be green by launch order alone.
 // evidence: docs/perf/qr.md#the-48-kib-launch-hole
 constexpr std::size_t kGeqrfHoleLo = 47104;
 constexpr std::size_t kGeqrfHoleHi = 49664;
@@ -52,14 +49,14 @@ constexpr std::size_t geqrf_hole_padded(std::size_t bytes) {
     return (bytes > kGeqrfHoleLo && bytes <= kGeqrfHoleHi) ? kGeqrfHolePadTo : bytes;
 }
 
-// A budget inside the band cannot host a tile inside it, so clamp to just below --
-// the table's `m*n <= cta_max_elems` gate and geqrf_cta_fits must not disagree.
+// A budget inside the band cannot host a tile inside it, so clamp to just below: the
+// table's `m*n <= cta_max_elems` gate and geqrf_cta_fits must not disagree.
 constexpr std::size_t geqrf_hole_safe_budget(std::size_t budget) {
     return (budget > kGeqrfHoleLo && budget < kGeqrfHolePadTo) ? kGeqrfHoleLo : budget;
 }
 
-// 32 * teams work-items, one work-group per matrix; teams track COLUMNS and lanes
-// track ROWS, matching the apply in geqrf_cta_device.hh. Not a tuned number.
+// One work-group per matrix, 32 * teams work-items; teams track COLUMNS and lanes track
+// ROWS, matching the apply in geqrf_cta_device.hh.
 inline int geqrf_panel_wg(int n, int max_wg) {
     int teams = 1;
     while (teams < 8 && teams < n) teams *= 2;
@@ -89,8 +86,7 @@ Event geqrf_panel_resident_launch(Queue& ctx,
     const std::size_t tile_elems =
         static_cast<std::size_t>(m) * static_cast<std::size_t>(n);
 
-    // The allocation steps over the launch hole; the body still indexes only
-    // tile_elems, so the pad is capacity and never data.
+    // The allocation steps over the launch hole; the body indexes only tile_elems.
     const std::size_t tile_alloc_elems =
         geqrf_hole_padded(tile_elems * sizeof(D)) / sizeof(D);
 
@@ -134,10 +130,9 @@ Event geqrf_panel_resident_launch(Queue& ctx,
     return ctx.get_event();
 }
 
-// The GLOBAL leaf: the same device body streamed from global memory, for panels too
-// tall to hold resident. NO LOCAL STAGING OF v: every team re-reads column j, which
-// looks redundant but is an L1 broadcast of one contiguous column read by all teams
-// at once; staging it would need a chunked SLM pipeline of an unbounded column.
+// The GLOBAL leaf: the same device body streamed from global memory, for panels too tall
+// to hold resident. Deliberately does NOT stage v in SLM -- every team re-reading column
+// j is an L1 broadcast, and the column has no bounded size to stage.
 template <typename T>
 Event geqrf_panel_global_launch(Queue& ctx,
                                 T* a_ptr, int ld, int stride,
@@ -170,11 +165,9 @@ Event geqrf_panel_global_launch(Queue& ctx,
 
 }  // namespace
 
-// CAPABILITY. The capacity is an AREA: the tile is m*n scalars, so per-extent
-// ceilings would admit a 155 x 155 float panel needing many times the budget.
-// cta_max_m is that same bound at n = 1 today, kept separate because it is what
-// moves if a per-row resident array is added; a speed threshold in supports() would
-// remove the vendor-free route above it. evidence: docs/perf/qr.md#cta-capacity
+// CAPABILITY. The capacity is an AREA -- the tile is m*n scalars, so per-extent ceilings
+// would admit panels needing many times the budget. A speed threshold here rather than in
+// preferred() would remove the vendor-free route. evidence: docs/perf/qr.md#cta-capacity
 template <typename T>
 int64_t geqrf_cta_max_elems_for_slm(std::size_t slm_budget_bytes) {
     return static_cast<int64_t>(geqrf_hole_safe_budget(slm_budget_bytes) / sizeof(T));
@@ -206,10 +199,8 @@ bool geqrf_cta_fits(int m, int n, std::size_t slm_budget_bytes) {
            geqrf_hole_padded(geqrf_slm_bytes<T>(m, n)) <= slm_budget_bytes;
 }
 
-// WORKSPACE. This tier needs none. Zero still comes from a measuring() replay, not
-// a literal, so the facade's max(native, vendor) compares required_bytes figures.
-// Must stay monotone in (rows, cols, batch) and must dereference neither A nor tau:
-// both are null when band_reduction.cc sizes.
+// WORKSPACE. This tier needs none, but the size must stay monotone in (rows, cols, batch)
+// and must dereference neither A nor tau: both are null when band_reduction.cc sizes.
 template <typename T>
 std::size_t geqrf_cta_buffer_size(Queue& ctx,
                                   const MatrixView<T, MatrixFormat::Dense>& A) {
@@ -244,14 +235,13 @@ Event geqrf_panel_factorize(Queue& ctx,
 }
 
 // The CTA tier's direct entry point. Every gate supports() applies to the CTA arm is
-// re-applied here, because this is reachable WITHOUT the table: a forced route whose
-// gate disagrees falls through to the vendor and passes green over a dead kernel.
+// re-applied here, because a forced route reaches this without the table.
 template <typename T>
 Event geqrf_cta_dispatch(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& A,
                          Span<T> tau,
                          Span<std::byte> workspace) {
-    static_cast<void>(workspace);   // this tier needs none
+    static_cast<void>(workspace);
 
     const int m = static_cast<int>(A.rows());
     const int n = static_cast<int>(A.cols());
@@ -261,14 +251,11 @@ Event geqrf_cta_dispatch(Queue& ctx,
         throw std::invalid_argument("geqrf_cta: degenerate extents");
     }
     if (m < n) {
-        // Correctness, not fit: supports() refuses m < n for both native arms and
-        // the two must agree, or a forced route reaches a shape promised the vendor.
         throw std::invalid_argument(
             "geqrf_cta: m < n is not supported (route_geqrf.hh's supports() refuses it)");
     }
     if (A.is_heterogeneous()) {
-        // One launch covers the batch with a single (m, n, ld, stride) tuple, so
-        // per-item active dims would factorise the wrong extents after item 0.
+        // One launch covers the batch with a single (m, n, ld, stride) tuple.
         throw std::invalid_argument("geqrf_cta: heterogeneous batch is not supported");
     }
     const auto dev = ctx.device();
@@ -276,9 +263,8 @@ Event geqrf_cta_dispatch(Queue& ctx,
         throw std::invalid_argument("geqrf_cta: GPU queues only");
     }
     if (!dev.supports_sub_group_size(32)) {
-        // ENUMERATED, never get_property(MAX_SUB_GROUP_SIZE) >= 32: that returns the
-        // FIRST supported size, so the weak test accepts a {64} device, which is a
-        // launch abort for a kernel carrying reqd_sub_group_size(32).
+        // ENUMERATED, not MAX_SUB_GROUP_SIZE >= 32: that returns the FIRST supported
+        // size, so the weak test accepts a {64} device and the launch aborts.
         throw std::runtime_error(
             "geqrf_cta: device does not offer sub-group size 32, which the kernel requires");
     }
@@ -303,8 +289,7 @@ Event geqrf_cta_dispatch(Queue& ctx,
     Event e = geqrf_panel_factorize<T>(ctx, A.data_ptr(), A.ld(), A.stride(), m, n, batch,
                                        tau.data(), static_cast<int>(k), 0, &resident);
     if (!resident) {
-        // Unreachable: geqrf_cta_fits was just checked with the same budget and
-        // arithmetic. Asserted because a silent tier swap passes a pinned-route test.
+        // Unreachable; asserted because a silent tier swap passes a pinned-route test.
         throw std::logic_error(
             "geqrf_cta: the panel leaf did not take the resident path after the fit "
             "check passed -- geqrf_cta_fits and geqrf_panel_factorize disagree");

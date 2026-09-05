@@ -28,7 +28,6 @@ Matrix<float, MatrixFormat::Dense> filled(int n, int batch, float scale) {
     return m;
 }
 
-// Symmetric positive definite, so potrf/syev have something well-posed to chew.
 Matrix<float, MatrixFormat::Dense> spd(int n, int batch) {
     Matrix<float, MatrixFormat::Dense> m(n, n, batch);
     auto v = m.view();
@@ -54,18 +53,14 @@ void expect_same(const MatrixView<float, MatrixFormat::Dense>& a,
             }
 }
 
-// Overload resolution, pinned at compile time.
-//
-// The dispatch macro's variadic overload used to accept any argument list at
-// all. That made it beat these option-struct overloads and then fail inside its
-// own body, on calls it should never have claimed -- so the constraint below is
-// load-bearing, and a silent regression of it would only show up as a confusing
-// error deep in a header.
+// Overload resolution, pinned at compile time. The constraint on the dispatch
+// macro's variadic overload is load-bearing: without it that overload beats these
+// option-struct overloads and then fails inside its own body.
+// See docs/extending.md#keep-the-requires-clause-on-the-queue-dispatch-overload
 namespace resolution {
 
 using M = MatrixView<float, MatrixFormat::Dense>;
 
-// The arena spelling exists and is callable...
 static_assert(requires(Queue& q, M A, Span<float> tau) { geqrf(q, A, tau); },
               "geqrf(ctx, A, tau) should lease its workspace from the arena");
 static_assert(requires(Queue& q, M A, Span<float> tau, Span<std::byte> w) { geqrf(q, A, tau, w); },
@@ -78,19 +73,12 @@ static_assert(requires(Queue& q, M A, M B, M C) {
               },
               "the positional spelling should still deduce its backend from the queue");
 
-// Note these are positive assertions only. The matching negative form --
-// asserting that a *wrong* call is rejected -- cannot be written with an
-// explicit template argument list, because a mismatch there is a hard error
-// rather than something a requires-expression absorbs. The negative direction
-// is covered instead by the fact that this file compiles at all: before the
-// constraint was added to BATCHLAS_DISPATCH_ON_QUEUE, the calls above resolved
-// to the variadic overload and failed to compile.
+// Positive assertions only: with an explicit template argument list a mismatch is a
+// hard error rather than something a requires-expression absorbs. The negative
+// direction is covered by the fact that this file compiles at all.
 
-// hemm is the one level-3 entry point constrained to complex scalars: BLAS has
-// no real ?hemm, and for a real matrix "Hermitian" and "symmetric" are the same
-// statement. Here both directions *are* assertable, because a concept is a
-// template: inside one the call is a dependent expression, so a mismatch makes
-// the concept false instead of ending the translation unit.
+// hemm is complex-only: BLAS has no real ?hemm. Both directions are assertable here
+// because inside a concept the call is dependent, so a mismatch is false, not an error.
 template <typename T>
 concept HemmTakesOptions = requires(Queue& q, MatrixView<T, MatrixFormat::Dense> A) {
     hemm(q, A, A, A, HemmOptions<T>{});
@@ -107,10 +95,8 @@ static_assert(HemmTakesPositional<std::complex<float>>,
 static_assert(!HemmTakesOptions<float>, "hemm must not accept real operands");
 static_assert(!HemmTakesPositional<float>, "hemm must not accept real operands");
 
-// herk and her2k are constrained the same way, and additionally take a real
-// alpha (herk) or a real beta (both) while their operands stay complex -- the
-// classic ?herk mistake is to give alpha type T, which compiles and computes
-// something that is not Hermitian.
+// herk and her2k keep complex operands but take a real alpha (herk) or real beta
+// (both); giving alpha type T compiles and computes something that is not Hermitian.
 template <typename T>
 concept HerkTakesOptions = requires(Queue& q, MatrixView<T, MatrixFormat::Dense> A) {
     herk(q, A, A, HerkOptions<T>{});
@@ -146,8 +132,7 @@ static_assert(!Her2kTakesOptions<float>, "her2k must not accept real operands");
 
 }  // namespace
 
-// Every option struct must default to exactly what the positional call defaults
-// to. If one drifts, the concise spelling quietly computes something else.
+// Every option struct must default to exactly what the positional call defaults to.
 TEST(OptionsApi, DefaultsMatchPositionalDefaults) {
     Queue q;
     const int n = 16, batch = 2;
@@ -177,7 +162,6 @@ TEST(OptionsApi, DesignatedInitialisersSetOnlyWhatTheyName) {
     C_pos.view().fill_zeros(q);
     q.wait();
 
-    // alpha and transA named; beta, transB and precision must keep their defaults.
     gemm(q, A.view(), B.view(), C_opts.view(),
          {.alpha = 2.5f, .transA = Transpose::Trans});
     gemm(q, A.view(), B.view(), C_pos.view(), 2.5f, 0.0f, Transpose::Trans,
@@ -239,8 +223,6 @@ TEST(OptionsApi, Blas3OptionsMatchPositional) {
     }
 }
 
-// The arena payoff: omitting the workspace must give the same answer as sizing
-// and allocating it by hand.
 TEST(OptionsApi, OmittedWorkspaceMatchesExplicitWorkspace) {
     Queue q;
     const int n = 24, batch = 3;
@@ -280,8 +262,6 @@ TEST(OptionsApi, OmittedWorkspaceMatchesExplicitWorkspace) {
     }
 }
 
-// Repeating an arena-backed call must not grow the arena without bound -- the
-// lease has to actually come back at the end of each call.
 TEST(OptionsApi, ArenaBackedCallsDoNotLeak) {
     Queue q;
     const int n = 20, batch = 2;
@@ -324,33 +304,18 @@ TEST(OptionsApi, CoexistsWithPositionalAndExplicitBackendSpellings) {
     SUCCEED();
 }
 
-// An explicitly-passed empty workspace must be passed through, NOT treated as
-// "no workspace given, lease one".
-//
-// This is a regression test for a real corruption. The option overloads once
-// shared a single body with `Span<std::byte> ws = {}` and an
-// `if (ws.data() != nullptr)` to decide whether to lease from the arena. That
-// makes an empty span mean "I did not pass one" -- but library code that
-// sub-allocates from a BumpAllocator runs its algorithm once in sizing mode,
-// where every pool allocation legitimately yields an empty span while the input
-// matrices stay real. Under the old body the sizing pass therefore leased real
-// memory and really ran the factorisation over live data, silently destroying
-// it. `ortho`'s Cholesky and SVQB paths both did this, which showed up only as
-// LOBPCG failing to converge much further downstream.
-//
-// A backend call with a genuinely too-small workspace must fail rather than
-// quietly succeed by allocating behind the caller's back.
+// An explicitly passed empty workspace must be forwarded, NOT read as "none given,
+// lease one": a BumpAllocator sizing pass legitimately yields empty spans while the
+// input matrices stay real, so the old shared body leased memory and really ran the
+// factorisation over live data (ortho's Cholesky and SVQB paths; it surfaced only as
+// LOBPCG failing to converge). See docs/extending.md#write-two-overloads-not-one-defaulted-empty-span
 TEST(OptionsApi, EmptyWorkspaceIsUsedNotReplacedByALease) {
     Queue q;
     const int n = 32, batch = 2;
     auto A = spd(n, batch);
 
-    // The discriminating case is an *explicitly passed empty* span. Under the
-    // old shared body this took the "no workspace given" branch and leased from
-    // the arena; under the split overloads it is forwarded as given. The arena's
-    // capacity is the observable difference, so assert on that. Whether the
-    // backend then rejects the empty workspace is beside the point and is not
-    // asserted -- only that the call did not go allocating behind our back.
+    // The discriminating case is an explicitly passed empty span; the arena's
+    // capacity is the observable difference, so assert on that.
     const size_t before = q.workspace_capacity();
     try {
         potrf(q, A.view(), {.uplo = Uplo::Lower}, Span<std::byte>{});
@@ -361,8 +326,6 @@ TEST(OptionsApi, EmptyWorkspaceIsUsedNotReplacedByALease) {
     EXPECT_EQ(q.workspace_capacity(), before)
         << "an explicitly passed empty workspace was silently replaced by an arena lease";
 
-    // And the omitted-workspace spelling must still lease, or the arena-backed
-    // convenience would be doing nothing at all.
     Queue fresh;
     auto A2 = spd(n, batch);
     const size_t fresh_before = fresh.workspace_capacity();
@@ -373,20 +336,10 @@ TEST(OptionsApi, EmptyWorkspaceIsUsedNotReplacedByALease) {
 }
 
 
-// WP4 step 0.6. potrf validated NOTHING on the positional path.
-//
-// require_square / require_info_span are attached only to the OPTION overloads
-// (options.hh:548-549, :557-558, :565-566); the workspace-taking <Backend B>
-// overload at :539-543 -- the spelling src/extensions/ortho.cc:200 uses -- has
-// neither, and there was no potrf_validate_params anywhere in the tree. So a
-// non-square view reached the backend and cuSOLVER factorised A.rows() x
-// A.rows() out of it, reading past the columns it was given.
-//
-// The facade now validates before it resolves a route, because the shape
-// builder reads A.rows()/A.cols() and must not describe a non-conforming view.
-// Both entry points do it, and they must agree: potrf_buffer_size resolves the
-// route a second time (options.hh:550 then :551), and the two disagreeing is
-// the ormqr defect class -- buffer size 2560 bytes, call demanded 276480.
+// The positional potrf overload validated nothing: a non-square view reached the
+// backend, which factorised A.rows() x A.rows() out of it and read past the columns
+// it was given. Both entry points validate now, and they must agree --
+// potrf_buffer_size resolves the route a second time.
 TEST(OptionsApi, PotrfRejectsANonSquareViewOnEveryEntryPoint) {
     Queue q;
     Matrix<float, MatrixFormat::Dense> oblong(8, 5, 2);
@@ -400,9 +353,8 @@ TEST(OptionsApi, PotrfRejectsANonSquareViewOnEveryEntryPoint) {
                  std::invalid_argument)
         << "the POSITIONAL overload is the one that had no validation at all";
 
-    // GUARD: the same calls on a square view must NOT throw, or the two
-    // assertions above would pass for a reason that has nothing to do with
-    // squareness.
+    // GUARD: the same calls on a square view must NOT throw, or the assertions
+    // above could pass for a reason unrelated to squareness.
     auto square = spd(8, 2);
     size_t bytes = 0;
     EXPECT_NO_THROW(bytes = potrf_buffer_size(q, square.view(), Uplo::Lower));
@@ -412,21 +364,9 @@ TEST(OptionsApi, PotrfRejectsANonSquareViewOnEveryEntryPoint) {
 }
 
 // An empty option struct must be written with its type named, never as `{}`.
-//
-// Regression test for a silent wrong answer. `potrf`'s option overload
-//     potrf<B>(ctx, A, const PotrfOptions&, Span<std::byte>)
-// has the SAME ARITY as the positional one
-//     potrf<B>(ctx, A, Uplo,               Span<std::byte>)
-// and a braced-init-list converts to both. Overload resolution picks the
-// positional one, so `potrf<B>(ctx, A, {}, ws)` means `Uplo{}` -- and because
-// Uplo is `{Upper, Lower}`, `Uplo{}` is Upper while `PotrfOptions{}.uplo` is
-// Lower. The call therefore factorises the opposite triangle and returns a
-// confidently wrong answer. `ortho`'s Cholesky path did exactly this, and it
-// surfaced only as LOBPCG failing to converge several layers up.
-//
-// This is the one arity collision in the surface; the other option overloads
-// differ in arity or in argument type from their positional twins. Naming the
-// type is the rule, and this test is what enforces it.
+// `potrf<B>(ctx, A, {}, ws)` has the same arity as the positional overload, so it
+// deduces `Uplo{}` == Upper while `PotrfOptions{}.uplo` is Lower: the opposite
+// triangle, silently. See docs/extending.md#name-the-option-type-when-you-pass-an-empty-option-struct
 TEST(OptionsApi, NamedEmptyOptionsSelectTheOptionOverload) {
     Queue q;
     const int n = 24, batch = 2;
@@ -446,12 +386,8 @@ TEST(OptionsApi, NamedEmptyOptionsSelectTheOptionOverload) {
     });
     q.wait();
 
-    // PotrfOptions{} defaults to Lower, so the named spelling must match the
-    // explicit Lower call...
     expect_same(A_named.view(), A_uplo.view(), n, batch, "PotrfOptions{} == Uplo::Lower");
 
-    // ...and Lower must be distinguishable from Upper, or the assertion above
-    // would hold no matter which overload had been selected.
     bool differs = false;
     for (int b = 0; b < batch && !differs; ++b)
         for (int j = 0; j < n && !differs; ++j)
@@ -466,16 +402,9 @@ TEST(OptionsApi, NamedEmptyOptionsSelectTheOptionOverload) {
                             "test could not detect the wrong triangle being used";
 }
 
-// A bare `{}` in potrf's 4-argument form used to select the positional overload
-// -- Uplo{} == Upper -- and silently factorise the wrong triangle. A deleted
-// overload taking a dedicated enum type now puts a third candidate at the same
-// exact-match rank, so the call is ambiguous and fails to compile.
-//
-// The negative is checked by static_assert rather than by a compile-fail
-// fixture: overload resolution on `{}` cannot be probed with a requires-clause,
-// because a braced-init-list is not an expression that can be deduced. What can
-// be checked is that the trap type exists and that neither legitimate spelling
-// converts to it, which is the property that keeps the fix from breaking callers.
+// A deleted overload taking a dedicated trap type now makes a bare `{}` ambiguous
+// instead of silently selecting the positional overload. Neither legitimate spelling
+// may convert to that type, or the fix would break callers.
 static_assert(!std::is_convertible_v<PotrfOptions, detail::EmptyBracesAreAmbiguous>,
               "PotrfOptions must not convert to the trap type, or the named "
               "spelling would become ambiguous too");
@@ -483,31 +412,15 @@ static_assert(!std::is_convertible_v<Uplo, detail::EmptyBracesAreAmbiguous>,
               "Uplo must not convert to the trap type, or the positional "
               "spelling would become ambiguous too");
 
-// ---------------------------------------------------------------------------
-// Per-item factorisation status (issue #73).
-//
-// potrf, getrf and getri all had somewhere to put LAPACK's `info` -- every
-// backend allocated the array the vendor call demands -- and every backend then
-// dropped it. A batch containing one rank-deficient item returned an ordinary
-// Event, no throw and no flag, so the caller could not tell "the batch
-// factorised" from "item 1 is garbage and everything downstream of it is noise".
-// There was no workaround at the public API.
-//
-// The batches below are deliberately mixed: item 0 is well-conditioned and item
-// 1 is not, so the test fails both if status is never reported (bad item reads
-// 0) and if it is reported indiscriminately (good item reads non-zero). The
-// `info` buffers start at a sentinel rather than 0, because 0 is the success
-// value -- a buffer the backend never touched would otherwise look like "all
-// items factorised", which is exactly the bug.
-//
-// Values are asserted only as zero / non-zero. LAPACK, cuSOLVER, cuBLAS and
-// rocSOLVER agree on the sign convention but not always on which index they
-// name first, and the API's contract is the zero/non-zero distinction.
-// ---------------------------------------------------------------------------
+// Per-item factorisation status (issue #73): potrf, getrf and getri dropped LAPACK's
+// `info`, so a batch with one rank-deficient item was indistinguishable from a clean
+// one. The batches below are mixed on purpose, and the `info` buffers start at a
+// sentinel rather than 0 because 0 is the success value -- an untouched buffer would
+// otherwise read "all items factorised". Values are asserted only as zero / non-zero:
+// the backends agree on the sign convention but not on which index they name first.
 namespace {
 
-// Item 0: diagonally dominant, so Cholesky succeeds. Item 1: the negative of
-// it, so the very first leading minor is not positive definite.
+// Item 0 is diagonally dominant, so Cholesky succeeds; item 1 is its negative.
 Matrix<float, MatrixFormat::Dense> spd_then_negative_definite(int n) {
     Matrix<float, MatrixFormat::Dense> m(n, n, 2);
     auto v = m.view();
@@ -521,8 +434,7 @@ Matrix<float, MatrixFormat::Dense> spd_then_negative_definite(int n) {
     return m;
 }
 
-// Item 0: a well-conditioned diagonal. Item 1: all zeros, so the first pivot is
-// exactly zero and U is singular.
+// Item 0 is a well-conditioned diagonal; item 1 is all zeros, so U is singular.
 Matrix<float, MatrixFormat::Dense> nonsingular_then_singular(int n) {
     Matrix<float, MatrixFormat::Dense> m(n, n, 2);
     auto v = m.view();
@@ -578,10 +490,7 @@ TEST(OptionsApi, FactorisationsReportPerItemStatus) {
     }
 }
 
-// The whole change is additive, so the spellings that existed before must still
-// compile and still run. If `info` had been made a required parameter -- or a
-// defaulted one on a signature the sig:: aliases have to restate, which function
-// types cannot carry -- every one of these would have broken instead.
+// info is additive: every spelling that existed before must still compile and run.
 TEST(OptionsApi, FactorisationsStillWorkWithoutAnInfoSpan) {
     Queue q;
     constexpr int n = 8;
@@ -607,12 +516,10 @@ TEST(OptionsApi, FactorisationsStillWorkWithoutAnInfoSpan) {
     SUCCEED();
 }
 
-// An `info` span shorter than the batch is rejected up front rather than
-// silently ignored. That direction matters more than it looks: a backend handed
-// a short span falls back to its own scratch and writes nothing to the caller's
-// buffer, so the caller would read stale zeros -- "every item factorised" -- on
-// precisely the batch it was trying to diagnose. An EMPTY span stays legal; it
-// is the API's spelling for "do not report".
+// A short `info` span is rejected up front: a backend handed one falls back to its own
+// scratch and writes nothing to the caller's buffer, so the caller would read stale
+// zeros -- "every item factorised" -- on the batch it was diagnosing. An empty span
+// stays legal; it is the API's spelling for "do not report".
 TEST(OptionsApi, ShortInfoSpanIsRejected) {
     Queue q;
     constexpr int n = 8;
@@ -631,10 +538,9 @@ TEST(OptionsApi, ShortInfoSpanIsRejected) {
     q.wait();
 }
 
-// The USM contract used to be documented and unenforced: handing ordinary host
-// memory to a GPU queue reached the device as a wild address and aborted the
-// process from inside the SYCL runtime during teardown, where no catch block
-// could help -- while the identical code was correct on the host backend.
+// Host memory handed to a device queue used to reach the device as a wild address and
+// abort from inside the SYCL runtime, where no catch block could help.
+// contract: docs/cpp-api.md#where-the-memory-has-to-live-the-usm-contract
 TEST(OptionsApi, HostPointerToDeviceQueueThrowsInsteadOfAborting) {
     Queue q;
     if (q.device().type == DeviceType::CPU) {
@@ -648,10 +554,8 @@ TEST(OptionsApi, HostPointerToDeviceQueueThrowsInsteadOfAborting) {
     EXPECT_FALSE(q.is_device_accessible(host.data()));
     EXPECT_THROW(gemm(q, A, A, A, GemmOptions<float>{}), std::invalid_argument);
 
-    // The message has to name the entry point and pin the argument down, or it
-    // sends the reader hunting. Which of the two labellings appears depends on
-    // which overload wins: the variadic dispatch overload forwards an unnamed
-    // pack ("argument 1"), the option-struct overload knows the name ("A").
+    // Which labelling appears depends on which overload wins: the variadic dispatch
+    // overload forwards an unnamed pack ("argument 1"), the option overload knows "A".
     try {
         gemm(q, A, A, A, GemmOptions<float>{});
         FAIL() << "expected the pointer check to throw";
@@ -665,8 +569,7 @@ TEST(OptionsApi, HostPointerToDeviceQueueThrowsInsteadOfAborting) {
     }
 }
 
-// The check must not reject the allocations that genuinely work, or it would
-// trade a crash for a false alarm.
+// The check must not reject the allocations that genuinely work.
 TEST(OptionsApi, DeviceAccessibleMemoryIsAccepted) {
     Queue q;
     const int n = 4;
@@ -675,7 +578,6 @@ TEST(OptionsApi, DeviceAccessibleMemoryIsAccepted) {
     EXPECT_TRUE(q.is_device_accessible(owned.view().data_ptr()));
     EXPECT_FALSE(q.is_device_accessible(nullptr));
 
-    // And a real call through the checked path still runs.
     Matrix<float, MatrixFormat::Dense> B(n, n, 1), C(n, n, 1);
     auto a = owned.view(), b = B.view(), c = C.view();
     for (int j = 0; j < n; ++j)
@@ -689,14 +591,9 @@ TEST(OptionsApi, DeviceAccessibleMemoryIsAccepted) {
     EXPECT_NEAR(c.data_ptr()[0], 6.0f, 1e-5f);
 }
 
-// A default-constructed view is how this API spells "this optional matrix is not
-// in use": `syevx(ctx, A, W, k, ws, JobType::NoEigenVectors,
-// MatrixView<T, MatrixFormat::Dense>(), params)` is the documented call and ~50
-// call sites in this repo write it. It owns no memory, so the USM check has
-// nothing to reach and must let it through. When it did not, every such call
-// threw "the pointer is null" and four iluk_tests failed -- and iluk_tests is
-// `slow`-labelled, so the usual `-LE slow` run could not see it. Hence this
-// cheap guard in a `util`-labelled test.
+// A default-constructed view is how this API spells "this optional matrix is not in
+// use", and ~50 call sites here write it. It owns no memory, so the USM check must let
+// it through; when it did not, every such call threw "the pointer is null".
 TEST(OptionsApi, EmptyViewSentinelIsNotRejected) {
     Queue q;
 
@@ -705,8 +602,7 @@ TEST(OptionsApi, EmptyViewSentinelIsNotRejected) {
     EXPECT_NO_THROW(detail::require_arg_accessible(q, absent_matrix, "syevx: V"));
     EXPECT_NO_THROW(detail::require_arg_accessible(q, absent_vector, "syevx: v"));
 
-    // ...while a view that does address elements is still checked, or the
-    // exemption would have swallowed the contract it is carved out of.
+    // ...while a view that does address elements is still checked.
     if (q.device().type != DeviceType::CPU) {
         std::vector<float> host(16, 0.0f);
         MatrixView<float, MatrixFormat::Dense> host_backed(host.data(), 4, 4);
@@ -715,22 +611,11 @@ TEST(OptionsApi, EmptyViewSentinelIsNotRejected) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Every backend-deducing option overload checks its pointers.
-//
-// The option struct is written as a braced initialiser on purpose. That is the
-// spelling that makes the variadic queue-dispatch overload drop out (Args cannot
-// be deduced from a braced-init-list), so the call lands on the overload in
-// options.hh and nothing else can supply the check on its behalf. `getrs`'s
-// workspace-taking overload was the one that had no BATCHLAS_CHECK_ARGS: with a
-// braced option struct it reached the backend with a host pointer, while its
-// siblings -- potrf and syev in the same shape -- threw.
-//
-// A missing check here does not fail cleanly: the call reaches the device with a
-// wild address and aborts the process. That is the failure this test exists to
-// keep from coming back; see also OptionsHeaderKeepsEveryDeducingOverloadChecked
-// below, which catches it without running anything.
-// ---------------------------------------------------------------------------
+// Every backend-deducing option overload checks its pointers. The option struct is
+// written as a braced initialiser on purpose: Args cannot be deduced from a
+// braced-init-list, so the variadic queue-dispatch overload drops out and the call has
+// to land on the options.hh overload that carries the check. A missing check does not
+// fail cleanly -- the call reaches the device with a wild address and aborts.
 TEST(OptionsApi, EveryDeducingOptionOverloadRejectsHostMemory) {
     Queue q;
     if (q.device().type == DeviceType::CPU) {
@@ -782,13 +667,11 @@ TEST(OptionsApi, EveryDeducingOptionOverloadRejectsHostMemory) {
     EXPECT_THROW(syev(q, A, W, {.jobz = JobType::EigenVectors}, ws), std::invalid_argument);
 }
 
-// The behavioural test above can only cover the entry points that exist today,
-// and a new one added without BATCHLAS_CHECK_ARGS would sail past it. This reads
-// options.hh itself and holds every backend-deducing overload -- the ones a
-// caller reaches by writing `f(ctx, ...)` -- to the rule. The Backend-explicit
-// `f<B>(ctx, ...)` overloads are deliberately exempt: they are the library's own
-// inner-loop spelling (src/extensions/*.cc calls them inside iteration loops),
-// where a sycl::get_pointer_type per argument per call is not worth paying.
+// The behavioural test above can only cover the entry points that exist today. This
+// one reads options.hh itself and holds every backend-deducing overload to the rule.
+// The Backend-explicit `f<B>(ctx, ...)` overloads are deliberately exempt: they are
+// the library's own inner-loop spelling, where a pointer query per argument per call
+// is not worth paying.
 TEST(OptionsApi, OptionsHeaderKeepsEveryDeducingOverloadChecked) {
 #ifndef BATCHLAS_OPTIONS_HH_PATH
     GTEST_SKIP() << "options.hh path not passed in by the build";
@@ -806,8 +689,7 @@ TEST(OptionsApi, OptionsHeaderKeepsEveryDeducingOverloadChecked) {
         if (lines[i].find("inline Event ") == std::string::npos) continue;
         if (lines[i].find("(Queue& ctx") == std::string::npos) continue;
 
-        // Walk back over the template head; `template <Backend B, ...` marks the
-        // Backend-explicit forms.
+        // Walk back over the template head; `Backend B` marks the explicit forms.
         bool backend_explicit = false;
         for (size_t k = i; k-- > 0;) {
             if (lines[k].find("template <") != std::string::npos) {
@@ -831,8 +713,8 @@ TEST(OptionsApi, OptionsHeaderKeepsEveryDeducingOverloadChecked) {
                "the process aborts inside the runtime instead of throwing:\n  "
             << lines[i];
     }
-    // Guards the scan itself: if the parse stops matching the file, this drops
-    // to zero and the loop above silently passes.
+    // Guards the scan itself: if the parse stops matching the file this drops to zero
+    // and the loop above silently passes.
     EXPECT_GE(deducing_overloads, 20) << "only found " << deducing_overloads
                                       << " backend-deducing overloads; the scan is stale";
 #endif

@@ -22,8 +22,8 @@
 
 namespace batchlas {
 
-// Signature aliases for explicit instantiation; see BATCHLAS_INSTANTIATE in
-// src/util/template-instantiations.hh. Keep in sync with the declarations below.
+// Signature aliases for explicit instantiation (BATCHLAS_INSTANTIATE, in
+// src/util/template-instantiations.hh); keep in sync with the declarations below.
 namespace sig {
 template <typename T>
 using syev = Event(Queue&,
@@ -102,8 +102,8 @@ size_t syev_vendor_buffer_size(Queue& ctx,
 
 namespace batchlas::blas::dispatch::detail {
 
-// The vendor call, gated on the vendor being compiled in: as an `if constexpr` it
-// is not compiled at all when the library is absent, so there is no symbol to link.
+// `if constexpr`, not a runtime check: with the vendor absent the call is never
+// compiled, so there is no symbol to link.
 template <Backend B, typename T, typename... Args>
 Event syev_vendor_or_throw(Args&&... args) {
     if constexpr (!batchlas::dispatch::solver_vendor_available<B>) {
@@ -148,8 +148,8 @@ inline bool syev_supports_blocked(const Queue& ctx, const MatrixView<T, MatrixFo
 template <typename T>
 inline bool syev_supports_two_stage(const Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo);
 
-// Superseded by the saturated per-n rules below; preferred() now reaches this only
-// for n <= 32, where it returns false.
+// Reachable only for n <= 32, where it always returns false; the per-n rules below
+// decide everything above that.
 inline bool syev_prefer_vendor(bool is_gpu, int64_t n, int64_t batch) {
     if (!is_gpu) return false;
     if (n <= 32) return false;
@@ -157,27 +157,23 @@ inline bool syev_prefer_vendor(bool is_gpu, int64_t n, int64_t batch) {
     return true;
 }
 
-// --- Small n: where does the vendor overtake the CTA solver? ---------------
-// CTA supports every n <= 32 and is checked first, but with eigenvectors the
-// vendor is faster over the top of that range. BATCHLAS_SYEV_CTA_MAX_N=<n>
-// (0..32) overrides the per-type default below; a forced native:cta still wins.
+// Largest n for which CTA is preferred over the vendor with eigenvectors.
+// BATCHLAS_SYEV_CTA_MAX_N=<n> (0..32) overrides it; a forced native:cta still wins.
 template <typename T>
 inline constexpr int64_t syev_cta_max_n_default_for() {
     using Real = typename base_type<T>::type;
     constexpr bool kReal = std::is_same_v<T, Real>;
     constexpr bool kDouble = std::is_same_v<Real, double>;
-    // complex<double> ONLY: the vendor takes over at n = 25, not 33 -- an FP64-rate
-    // artifact (this card runs FP64 at 1/64). complex<float> does NOT cross over, so
-    // this deliberately does not generalise to "complex".
+    // complex<double> only, deliberately not "complex": the crossover at 25 rather
+    // than 33 tracks this card's 1/64 FP64 rate, and complex<float> does not cross.
     if constexpr (!kReal && kDouble) return 24;
     return 32;
 }
 
 template <typename T>
 inline int64_t syev_cta_max_n_for_vectors() {
-    // Default 32 == OFF for every type but complex<double>. Lowering it is a measured
-    // 1.03x - 1.15x for LOBPCG's projected solve, but it also flips a marginal case in
-    // ILUKTests.SyevxInstrumentationAndPreconditioner, so it stays off by default.
+    // 32 == off: lowering it speeds up LOBPCG's projected solve but flips a marginal
+    // case in ILUKTests.SyevxInstrumentationAndPreconditioner, so it is opt-in.
     constexpr int64_t kDefault = syev_cta_max_n_default_for<T>();
     const char* v = std::getenv("BATCHLAS_SYEV_CTA_MAX_N");
     if (!v || !*v) return kDefault;
@@ -187,11 +183,8 @@ inline int64_t syev_cta_max_n_for_vectors() {
     return static_cast<int64_t>(parsed);
 }
 
-// --- Which small-n kernel? -------------------------------------------------
-// Chosen per type and n; BATCHLAS_SYEV_SMALL_KERNEL=cta|fused|jacobi overrides it
-// wholesale. FP64 runs at 1/64 rate on this card, which inflates Jacobi's margin,
-// so re-measure the `double` rule on a 1:2 FP64 GPU.
-// evidence: SYEV_RETUNE_RESULTS.md
+// The small-n (CTA) kernel, per type and n; BATCHLAS_SYEV_SMALL_KERNEL=cta|fused|jacobi
+// overrides it. The `double` rule is tuned on a 1/64-rate FP64 card; re-measure on a 1:2 one.
 enum class SyevSmallKernel { Cta, CtaFused, Jacobi };
 
 inline SyevSmallKernel syev_small_kernel_env(bool& forced) {
@@ -213,13 +206,11 @@ inline SyevSmallKernel syev_choose_small_kernel(const MatrixView<T, MatrixFormat
     const SyevSmallKernel env = syev_small_kernel_env(forced);
     if (forced) return env;
 
-    // `internal::is_complex` (src/math-helpers.hh) is not visible from this public
-    // header, so detect complex via base_type: for a real T, base_type<T>::type IS T.
+    // `internal::is_complex` is private to src/, so detect complex via base_type:
+    // for a real T, base_type<T>::type IS T.
     constexpr bool kReal = std::is_same_v<T, typename base_type<T>::type>;
     if constexpr (!kReal) {
-        // Complex keeps the historical Cta from n >= 9: the float rule below is wrong
-        // here, jacobi running 4x - 6x off the pace at n >= 20. complex<double> is not
-        // split at all.
+        // Complex does not follow the real rule below: Jacobi loses badly at n >= 20.
         constexpr bool is_double_c = std::is_same_v<typename base_type<T>::type, double>;
         if constexpr (is_double_c) {
             return SyevSmallKernel::Cta;
@@ -229,16 +220,16 @@ inline SyevSmallKernel syev_choose_small_kernel(const MatrixView<T, MatrixFormat
     } else {
         constexpr bool is_double = std::is_same_v<typename base_type<T>::type, double>;
         if constexpr (is_double) {
-            return SyevSmallKernel::Jacobi;      // wins at every measured n <= 32
+            return SyevSmallKernel::Jacobi;
         } else {
-            return A.rows() <= 8 ? SyevSmallKernel::Jacobi   // 2.2x - 4.6x
-                                 : SyevSmallKernel::CtaFused; // 1.03x - 1.25x
+            return A.rows() <= 8 ? SyevSmallKernel::Jacobi
+                                 : SyevSmallKernel::CtaFused;
         }
     }
 }
 
-// Takes the shape facts directly rather than a DeviceCaps + MatrixView, so it can
-// be called from RouteTable<Op::syev, T>::preferred, which is pure.
+// Takes shape facts rather than a DeviceCaps + MatrixView so that the pure
+// RouteTable<Op::syev, T>::preferred can call it.
 template <typename T>
 inline bool syev_prefer_vendor_over_cta(bool is_gpu,
                                         int64_t n,
@@ -251,50 +242,43 @@ inline bool syev_prefer_vendor_over_cta(bool is_gpu,
 }
 
 
-// --- Eigenvector routing, decided AT SATURATION and keyed on n alone ----------
-// Keyed on n only: the earlier batch-keyed rules were measured on ladders that
-// never reached saturation and routed five of nine sizes wrong. Boundaries are per
-// scalar type; complex<double>'s is the most hardware-specific (FP64 at 1/64 here).
-// evidence: tag perf-evidence/vendor-independence (see docs/perf/README.md)
+// Eigenvector routing window, keyed on n alone (never on batch) and per scalar type.
+// evidence: docs/perf/README.md#the-raw-data
 template <typename T>
 inline batchlas::dispatch::Algorithm syev_saturated_algorithm_for_n(int64_t n) {
-    // Algorithm::Auto here means "no native algorithm is preferred at this n"; the
-    // resolver, not this function, decides the origin.
+    // Auto means "no native algorithm preferred at this n"; the resolver, not this
+    // function, then picks the origin.
     using A = batchlas::dispatch::Algorithm;
     using Real = typename base_type<T>::type;
     constexpr bool kReal = std::is_same_v<T, Real>;
     constexpr bool kDouble = std::is_same_v<Real, double>;
 
-    // complex<double>: blocked only to 256.
     if constexpr (!kReal && kDouble) {
         return n <= 256 ? A::Blocked : A::Auto;
     } else if constexpr (!kReal) {
-        // complex<float>: blocked to 512.
         return n <= 512 ? A::Blocked : A::Auto;
     } else {
-        // Real types: blocked to 448.
         if (n <= 448) return A::Blocked;
         if constexpr (!kDouble) {
             if (n <= 1024) return A::TwoStage;
-            return A::Auto;                        // 2048+
+            return A::Auto;
         } else {
-            return A::Auto;                        // double
+            return A::Auto;
         }
     }
 }
 
-// --- The same, for EIGENVALUES-ONLY -----------------------------------------
-// Keyed on n alone. The predicate this replaced also required batch >= 256, so an
-// n = 1024 solve at batch 254 fell through to the vendor and paid 2.75x.
-// evidence: tag perf-evidence/vendor-independence (see docs/perf/README.md)
+// The same window for eigenvalues-only. Keyed on n alone: adding a batch floor here
+// drops large-n solves at moderate batch onto the vendor at up to 2.75x the cost.
+// evidence: docs/perf/README.md#the-raw-data
 inline batchlas::dispatch::Algorithm syev_saturated_algorithm_for_n_values(int64_t n) {
     using A = batchlas::dispatch::Algorithm;
-    if (n <= 320) return A::Blocked;   // 64..320, 1.05x - 1.21x
-    return A::TwoStage;                // 512..2048, 1.29x - 2.75x
+    if (n <= 320) return A::Blocked;
+    return A::TwoStage;
 }
 
-// The routing inputs, in one place so the call and its buffer-size query cannot
-// build different ones. syev's routing reads `jobtype`; OpShape has no field for it.
+// Routing inputs in one place, so the call and its buffer-size query cannot build
+// different ones. syev routes on `jobtype`, which OpShape has no field for.
 struct SyevShape : batchlas::dispatch::OpShape {
     JobType jobtype = JobType::EigenVectors;
 };
@@ -318,7 +302,7 @@ inline SyevShape syev_op_shape(const Queue& ctx,
     try {
         s.is_gpu = ctx.device().type == DeviceType::GPU;
     } catch (...) {
-        // best-effort: query_caps never threw, and that contract is kept.
+        // best-effort; leave default
     }
     try {
         s.max_sub_group =
@@ -334,8 +318,7 @@ inline SyevShape syev_op_shape(const Queue& ctx,
 
 namespace batchlas::dispatch {
 
-// SYEV's routing table. Unlike gemm/ormqr/gesvd it lives in the op's own header
-// rather than in dispatch/route_syev.hh, next to the predicates `preferred` uses.
+// SYEV's routing table lives here, not in dispatch/, next to `preferred`'s predicates.
 inline constexpr Route kSyevOrder[] = {
     {Origin::Native, Algorithm::CTA},
     {Origin::Native, Algorithm::Blocked},
@@ -347,7 +330,7 @@ template <typename T>
 struct RouteTable<Op::syev, T> {
     using Shape = batchlas::blas::dispatch::detail::SyevShape;
 
-    // ---- CORRECTNESS ------------------------------------------------------
+    // What each route can compute at all.
     static bool supports(Route r, const Shape& s) {
         if (is_vendor(r)) return true;
         if (!is_native(r)) return false;
@@ -360,39 +343,38 @@ struct RouteTable<Op::syev, T> {
                 return s.max_sub_group >= 32;
             case Algorithm::Blocked:
             case Algorithm::TwoStage:
-                // Uplo::Upper is supported: both paths mirror the upper triangle into
-                // the lower one (src/extensions/uplo_mirror.hh) and run the Lower path.
+                // Uplo::Upper is supported: both paths mirror into the lower triangle
+                // (src/extensions/uplo_mirror.hh) and run the Lower path.
                 return s.n >= 1 && s.batch >= 1;
             default:
-                // Including Auto: syev has three native routes, so a bare "native"
-                // names none of them; resolve_route walks the order.
+                // Auto included: with three native routes a bare "native" names none
+                // of them, so resolve_route walks the order instead.
                 return false;
         }
     }
 
-    // ---- MEASURED WINDOW --------------------------------------------------
+    // The measured window; evidence: docs/perf/README.md#the-raw-data
     static bool preferred(Route r, const Shape& s) {
         namespace det = batchlas::blas::dispatch::detail;
         if (!is_native(r)) return false;
         if (!supports(r, s)) return false;
 
-        // CUDA only: the grids were measured on no other backend.
+        // CUDA only: no other backend was measured.
         if (s.backend == Backend::CUDA) {
             if (s.n > 32) {
-                // Eigenvalues-only first: its grid overlaps the vendor-preferred region.
+                // Eigenvalues-only first: its window overlaps the vendor's.
                 const Algorithm want = (s.jobtype != JobType::EigenVectors)
                     ? det::syev_saturated_algorithm_for_n_values(s.n)
                     : det::syev_saturated_algorithm_for_n<T>(s.n);
-                // Auto == no native route preferred, so the resolver takes the vendor.
                 return r.algo == want;
             }
 
-            // Only reachable for n <= 32, where it returns false by construction.
-            // Kept so that changing the branches above cannot silently drop it.
+            // Dead for n <= 32 by construction; kept so widening the branch above
+            // cannot silently drop the rule.
             if (det::syev_prefer_vendor(s.is_gpu, s.n, s.batch)) return false;
 
-            // Small n with eigenvectors: this declines the CALL, not just the CTA
-            // route, so no native route is preferred and the vendor runs.
+            // Declines the CALL, not just the CTA route: no native route is then
+            // preferred and the vendor runs.
             if (det::syev_prefer_vendor_over_cta<T>(s.is_gpu, s.n, s.max_sub_group,
                                                     s.jobtype)) {
                 return false;
@@ -413,7 +395,7 @@ struct RouteTable<Op::syev, T> {
 namespace batchlas::blas::dispatch {
 namespace detail {
 
-// Introspection wrappers: they ask the resolver's `supports` and cannot drift.
+// Introspection wrappers; they ask the resolver's `supports`, so they cannot drift.
 template <typename T>
 inline bool syev_supports_cta(const Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
     namespace d = batchlas::dispatch;
@@ -496,8 +478,8 @@ inline Event syev_dispatch(Queue& ctx,
                                                  uplo,
                                                  StedcParams<typename base_type<T>::type>{});
     } else {
-        // Unreachable. A hard failure rather than a silent reset to Vendor, which is
-        // what let ormqr's buffer size and call disagree (see route_ormqr.hh).
+        // Unreachable. Throw rather than silently reset to Vendor: a silent reset is
+        // how a buffer-size query and its call come to disagree.
         throw std::logic_error("syev: resolver returned a route with no dispatch arm");
     }
 
@@ -505,10 +487,9 @@ inline Event syev_dispatch(Queue& ctx,
         throw std::runtime_error("syev: insufficient workspace for chosen provider");
     }
 
-    // std::optional, not a plain `Queue`: the default Queue constructor is not inert -- it
-    // builds a real sycl::queue on Device::default_device(), so a by-value declaration would
-    // pay that (and touch device 0) on every call. It also cannot be sunk into the
-    // if-block: run_q escapes to the calls below.
+    // std::optional, not a plain `Queue`: the default Queue constructor builds a real
+    // sycl::queue on device 0, which a by-value declaration would pay on every call.
+    // It cannot be sunk into the if-block either -- run_q escapes to the calls below.
     Queue* run_q = &ctx;
     std::optional<Queue> in_order_q;
     if (!ctx.in_order()) {
@@ -522,8 +503,8 @@ inline Event syev_dispatch(Queue& ctx,
     if (d::is_vendor(chosen)) {
         e = detail::syev_vendor_or_throw<B, T>(*run_q, descrA, eigenvalues, jobtype, uplo, workspace);
     } else if (chosen.algo == d::Algorithm::CTA) {
-        // The workspace query above MUST take the same branch: the selector reads its
-        // env override fresh, so it must not be flipped between the query and the call.
+        // Must take the same branch as the workspace query above: the selector re-reads
+        // its env override, so flipping it mid-call under-allocates.
         switch (detail::syev_choose_small_kernel<T>(descrA)) {
             case detail::SyevSmallKernel::Jacobi:
                 e = syev_jacobi_cta<B, T>(*run_q, descrA, eigenvalues, jobtype, uplo, workspace);
@@ -586,8 +567,8 @@ inline size_t syev_buffer_size_dispatch(Queue& ctx,
         return detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, descrA, eigenvalues, jobtype, uplo);
     }
     if (chosen.algo == d::Algorithm::CTA) {
-        // Must mirror syev_dispatch: sizing here and running a different small-n
-        // kernel would under-allocate.
+        // Must mirror syev_dispatch: sizing one small-n kernel and running another
+        // under-allocates.
         switch (detail::syev_choose_small_kernel<T>(descrA)) {
             case detail::SyevSmallKernel::Jacobi:
                 return syev_jacobi_cta_buffer_size<B, T>(ctx, descrA, jobtype);
@@ -641,7 +622,6 @@ inline size_t syev_buffer_size(Queue& ctx,
 namespace batchlas {
 
 // Backend-deducing overloads: `f(ctx, ...)` uses ctx.backend().
-// See BATCHLAS_DISPATCH_ON_QUEUE in blas/queue-dispatch.hh.
 
 BATCHLAS_DISPATCH_ON_QUEUE(syev)
 BATCHLAS_DISPATCH_ON_QUEUE(syev_buffer_size)

@@ -1,8 +1,7 @@
-// Native batched GETRS: the row interchange plus two ROUTED trsm solves, which
-// the facade injects. The composition ships ROUTE-NEUTRAL (preferred() is false
-// at every shape); it exists so that a vendor-free build has a getrs. This TU
-// must share no device symbol with the getrf pair -- hence
-// EXTENSIONS_FACTORIZATION_SOURCES, and hence lu_laswp.hh's tag template.
+// Native batched GETRS: the row interchange plus two ROUTED trsm solves the
+// facade injects. Ships ROUTE-NEUTRAL (preferred() is false at every shape) so a
+// vendor-free build has a getrs. This TU must share no device symbol with the
+// getrf pair -- hence EXTENSIONS_FACTORIZATION_SOURCES and lu_laswp.hh's tag.
 // evidence: docs/perf/lu.md#getrs-composition-window-evidence
 
 #include "getrs_native.hh"
@@ -31,11 +30,10 @@ struct GetrsLaswpTag {};
 
 template <typename T> class GetrsPermGatherKernel;
 
-// The collapsed permutation: apply the transposition list once to an identity
-// index array, after which dst[i] = src[idxs[i]] is coalesced on both sides. It
-// stages in LOCAL memory and writes back to B's own addresses, so
-// getrs_blocked_buffer_size stays 0 at every shape and width; on capacity it
-// falls back to the walk instead of throwing.
+// Collapsed permutation: apply the transposition list once to an identity index
+// array, after which dst[i] = src[idxs[i]] is coalesced on both sides. It stages
+// in LOCAL memory and writes back to B's own addresses, so
+// getrs_blocked_buffer_size stays 0 at every shape and width.
 // evidence: docs/perf/lu.md#getrs-collapsed-permutation
 
 constexpr std::size_t kGetrsPermTileCap = 24576;
@@ -50,7 +48,6 @@ constexpr std::size_t getrs_perm_hole_padded(std::size_t bytes) {
                                                                   : bytes;
 }
 
-// The capacity test in ONE place: launcher and debug query must not drift.
 template <typename T>
 bool getrs_perm_gather_fits(int n, std::size_t slm_budget) {
     if (n <= 0) return false;
@@ -93,8 +90,6 @@ bool getrs_perm_gather_launch(Queue& ctx,
     std::size_t tile_elems = static_cast<std::size_t>(Cs) * static_cast<std::size_t>(ldt);
     const std::size_t raw = int_bytes + tile_elems * sizeof(D);
     const std::size_t padded = getrs_perm_hole_padded(raw);
-    // The pad target is absolute, so it defers to the budget: a device with less
-    // local memory launches unpadded and merely sits in the hole.
     if (padded > raw && padded <= slm_budget) {
         tile_elems = (padded - int_bytes + sizeof(D) - 1) / sizeof(D);
     }
@@ -154,7 +149,6 @@ bool getrs_perm_gather_launch(Queue& ctx,
                 for (int cb = 0; cb < nrhs; cb += Cs) {
                     const int cw = ((nrhs - cb) < Cs) ? (nrhs - cb) : Cs;
 
-                    // Row fastest: consecutive work-items take consecutive rows.
                     int col = lid / n;
                     int row = lid - col * n;
                     while (col < cw) {
@@ -182,7 +176,7 @@ bool getrs_perm_gather_launch(Queue& ctx,
 }
 
 // BATCHLAS_GETRS_LASWP=walk|gather: the only way to reach the walk once the
-// gather is the default, and to interleave both spellings in one process.
+// gather is the default.
 enum class PermSpelling { kDefault, kWalk, kGather };
 
 // Deliberately NOT latched: once a presence check latches false, a later setenv
@@ -195,8 +189,6 @@ PermSpelling perm_spelling() {
     return PermSpelling::kDefault;
 }
 
-// The gather/walk decision in ONE place: only the debug query below is
-// observable, so a second copy of this comparison can invert unnoticed.
 bool getrs_perm_use_gather(PermSpelling sp, int nrhs) {
     if (sp == PermSpelling::kWalk) return false;
     if (sp == PermSpelling::kGather) return true;
@@ -217,9 +209,8 @@ int getrs_perm_spelling_debug(Queue& ctx, int n, int nrhs) {
     return getrs_perm_gather_fits<T>(n, budget) ? 1 : 0;
 }
 
-// Capability flag, true for all four types; preferred() is false everywhere, so
-// a vendor-present build still takes cublas?getrsBatched. Defined beside the
-// driver so "the flag is true" and "the file is compiled" are one fact.
+// Capability flag, true for all four types; preferred() is false at every shape,
+// so a vendor-present build still takes cublas?getrsBatched.
 template <> bool getrs_blocked_available<float>()                { return true; }
 template <> bool getrs_blocked_available<double>()               { return true; }
 template <> bool getrs_blocked_available<std::complex<float>>()  { return true; }
@@ -235,13 +226,10 @@ std::size_t getrs_blocked_buffer_size(Queue&,
     return 0;
 }
 
-// The driver. ?GETRF returns ipiv such that F A = L U, with F applied FORWARDS.
-//   NoTrans : L U x = F b -- apply F to B, solve L (unit lower), then U.
-//   Trans   : A^T = U^T L^T F, since F^{-T} = F; solve U^T, solve L^T, then
-//             x = F^{-1} w -- the SAME list walked BACKWARDS.
-//   ConjTrans is identical with H for T; F is real, so it is unchanged.
-// The solves swap order AND the permutation moves to the output, reversed;
-// either half wrong is a silently wrong answer that no NoTrans test can see.
+// ?GETRF returns ipiv such that F A = L U, with F applied FORWARDS. NoTrans
+// permutes B, then solves L (unit lower) and U. Trans/ConjTrans solve U then L
+// and apply the SAME list REVERSED to the output; either half wrong is a
+// silently wrong Trans answer that no NoTrans test can see.
 template <typename T>
 Event getrs_blocked_dispatch(Queue& ctx,
                              const MatrixView<T, MatrixFormat::Dense>& A,
@@ -250,15 +238,14 @@ Event getrs_blocked_dispatch(Queue& ctx,
                              Span<int64_t> pivots,
                              Span<std::byte> workspace,
                              GetrsSolveTrsm<T> solve_trsm) {
-    static_cast<void>(workspace);   // this arm needs none; see the query above
+    static_cast<void>(workspace);   // this arm needs none
 
     const int n = static_cast<int>(A.rows());
     const int nrhs = static_cast<int>(B.cols());
     const int batch = static_cast<int>(A.batch_size());
 
-    // supports()'s gates, re-applied because this entry point is reachable
-    // WITHOUT the table: an unsupported forced route falls through to
-    // automatic(), so a pinned-route test would silently measure cuBLAS.
+    // supports()'s gates, re-applied: this entry point is reachable WITHOUT the
+    // table, and an unsupported forced route falls through to automatic().
     if (n < 1 || nrhs < 1 || batch < 1) {
         throw std::invalid_argument("getrs_blocked: degenerate extents");
     }
@@ -280,8 +267,7 @@ Event getrs_blocked_dispatch(Queue& ctx,
     }
     if (!dev.supports_sub_group_size(32)) {
         // Enumerated, never MAX_SUB_GROUP_SIZE >= 32: that property returns
-        // sub_group_sizes()[0], so the weak test refuses a {8,16,32} device and
-        // ACCEPTS a {64} one. This kernel needs no sub-group size; the trsm does.
+        // sub_group_sizes()[0], so it would ACCEPT a {64}-only device.
         throw std::runtime_error(
             "getrs_blocked: device does not offer sub-group size 32");
     }
@@ -289,8 +275,6 @@ Event getrs_blocked_dispatch(Queue& ctx,
         throw std::invalid_argument("getrs_blocked: pivot span is shorter than n * batch");
     }
     if (!solve_trsm) {
-        // An absent injection THROWS rather than reaching for a native trsm
-        // here: the router, and not this file, chooses the trsm arm.
         throw std::invalid_argument(
             "getrs_blocked: the solve seam is empty. Inject the ROUTED batchlas::trsm "
             "(the facade does; a direct caller must too) -- this driver deliberately has "
@@ -338,7 +322,6 @@ Event getrs_blocked_dispatch(Queue& ctx,
     (void)solve_trsm(ctx, A, B, T(1), Side::Left, Uplo::Lower, transA, Diag::Unit);
     if (!ctx.in_order()) ctx.wait();
 
-    // F^{-1}: the SAME list, REVERSED -- invisible to a NoTrans test.
     return apply_perm(/*forward=*/false);
 }
 

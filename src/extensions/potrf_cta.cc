@@ -1,8 +1,7 @@
-// Native batched POTRF, Phase 1: the CTA kernel's launcher and capability
-// surface; all device code is in potrf_cta_device.hh. This TU must stay in
-// EXTENSIONS_CTA_SOURCES next to potrf_blocked.cc, whose diagonal leaf is
-// potrf_cta_body -- splitting a device-code cluster across libraries is a
-// `ptxas fatal: Unresolved extern function`.
+// Native batched POTRF: the CTA kernel's launcher and capability surface; the
+// device code is in potrf_cta_device.hh. This TU must stay in EXTENSIONS_CTA_SOURCES
+// next to potrf_blocked.cc, whose diagonal leaf is potrf_cta_body -- splitting a
+// device-code cluster across libraries is a `ptxas fatal: Unresolved extern function`.
 // evidence: docs/perf/potrf.md
 
 #include "potrf_native.hh"
@@ -32,9 +31,8 @@ namespace {
 
 using potrf_native::PotrfScope;
 
-// The (NB, TS) ladder per scalar type: NB is the panel width and the length of
-// the d[]/x[] register arrays, TS the (P3) thread tile. Both are measured, and
-// NB = 16 is slower. evidence: docs/perf/potrf.md#register-gate
+// Per scalar type: NB is the panel width and the length of the d[]/x[] register
+// arrays, TS the thread tile. evidence: docs/perf/potrf.md#register-gate
 template <typename T>
 struct PotrfCtaConst;
 template <> struct PotrfCtaConst<float>                { static constexpr int NB = 8;  static constexpr int TS = 4; };
@@ -42,24 +40,22 @@ template <> struct PotrfCtaConst<double>               { static constexpr int NB
 template <> struct PotrfCtaConst<std::complex<float>>  { static constexpr int NB = 8;  static constexpr int TS = 4; };
 template <> struct PotrfCtaConst<std::complex<double>> { static constexpr int NB = 8;  static constexpr int TS = 2; };
 
-// Runtime local_mem_size minus the 4096 B reserve every other device-BLAS sizing
-// decision here applies. NOT device_limits.hh's 49152, which is wrong here by 2.06x.
+// Runtime local_mem_size minus the usual 4096 B reserve; deliberately not
+// device_limits.hh's 49152, which understates this device.
 constexpr std::size_t kPotrfReferenceSlmBudget = 97280;
 
 // Soft occupancy target for matrices per work-group: 4 resident blocks/SM on sm_89.
 constexpr std::size_t kPotrfSlmSoftTarget = 24576;
 
-// The L ladder's two knobs; shared memory, not registers or threads, binds these launches.
+// The L ladder's two knobs.
 constexpr int kPotrfMaxL = 256;
 constexpr int kPotrfElemsPerItem = 24;
 
-// THE SLM FORMULA, called by BOTH the capability query and the launcher, so the
-// ceiling supports() advertises and the allocation the kernel makes cannot
-// disagree. lda = n | 1 is odd, so a stride-lda row read is conflict-free; the
-// 256 covers *fail plus inter-accessor alignment slack and is a deliberate
-// over-estimate -- at 64 it fell 60 B short at the float ceiling, and short here
-// means supports() advertises an order whose launch fails at enqueue.
-// evidence: docs/perf/potrf.md#the-slm-budget-and-the-fit-ceilings
+// Called by BOTH the capability query and the launcher, so the ceiling supports()
+// advertises cannot disagree with what the kernel allocates; under-estimating here
+// advertises an order whose launch fails at enqueue. lda = n | 1 is odd so a
+// stride-lda row read is conflict-free, and the 256 deliberately over-covers *fail
+// plus alignment slack. evidence: docs/perf/potrf.md#the-slm-budget-and-the-fit-ceilings
 constexpr std::size_t potrf_slm_per_matrix(int n, int NB, int TS,
                                            std::size_t sz_d, std::size_t sz_r) {
     const std::size_t lda = static_cast<std::size_t>(n | 1);
@@ -71,11 +67,9 @@ constexpr std::size_t potrf_slm_per_matrix(int n, int NB, int TS,
          + 4 * static_cast<std::size_t>(Rt0 + 1);
 }
 
-// The 48 KB launch hole: a dynamic local-memory request in
-// (49152 - static_shared, 49152] fails at enqueue with CUDA_ERROR_INVALID_VALUE,
-// and only on a process's first launch. Inert while these kernels have zero
-// static shared, but one group algorithm in the body reintroduces it.
-// evidence: docs/perf/potrf.md#the-48-kb-launch-hole
+// A dynamic local-memory request in (49152 - static_shared, 49152] fails at enqueue
+// with CUDA_ERROR_INVALID_VALUE, on a process's first launch only. Inert only while
+// these kernels have zero static shared. evidence: docs/perf/potrf.md#the-48-kb-launch-hole
 constexpr std::size_t kPotrfHoleLo = 47104;
 constexpr std::size_t kPotrfHoleHi = 49664;
 constexpr std::size_t kPotrfHolePadTo = 49920;
@@ -90,8 +84,7 @@ inline int prev_pow2(int v) {
     return r;
 }
 
-// Everything the launch needs, computed once. Scope is DERIVED here and nowhere
-// else, so no caller can assert one the L ladder disagrees with.
+// Scope is derived here and nowhere else, so no caller can assert one the L ladder disagrees with.
 struct PotrfCtaLaunch {
     int L = 32;               // work-items per matrix
     int G = 1;                // matrices per work-group; > 1 only when L == 32
@@ -114,10 +107,8 @@ PotrfCtaLaunch potrf_cta_launch_params(int n, int batch, std::size_t sz_d, std::
     p.Rt0 = (m2_0 + TS - 1) / TS;
     const long long Ntiles_0 = static_cast<long long>(p.Rt0) * (p.Rt0 + 1) / 2;
 
-    // L is derived from m2_0 = n - NB, the FIRST trailing update, not from n:
-    // ceil(n/TS) counts a triangle that is never updated. The ladder counts
-    // ELEMENTS per work-item, not tiles, since TS varies across the type ladder;
-    // kPotrfElemsPerItem is fitted. evidence: docs/perf/potrf.md#the-l-ladder
+    // L follows m2_0 = n - NB, the first trailing update, not n, and counts elements
+    // rather than tiles because TS varies. evidence: docs/perf/potrf.md#the-l-ladder
     {
         const long long work_elems = Ntiles_0 * static_cast<long long>(TS) * TS;
         int want = 32;
@@ -131,7 +122,7 @@ PotrfCtaLaunch potrf_cta_launch_params(int n, int batch, std::size_t sz_d, std::
 
     p.slm_per_matrix = potrf_slm_per_matrix(n, NB, TS, sz_d, sz_r);
 
-    // G > 1 only at L == 32, capped so wg_size <= 128; wg 256 is register-limited.
+    // G > 1 only at L == 32, capped so wg_size <= 128.
     if (p.L == 32 && p.slm_per_matrix > 0) {
         const std::size_t target = std::min(kPotrfSlmSoftTarget, slm_budget);
         const int by_slm = static_cast<int>(target / p.slm_per_matrix);
@@ -167,10 +158,9 @@ int potrf_cta_max_n_for_slm(std::size_t slm_budget_bytes) {
     constexpr std::size_t sz_d = sizeof(typename DM::type);
     constexpr std::size_t sz_r = sizeof(typename DM::real);
 
-    // Monotone in n, so a linear walk is exact; 4096 is a bound, not a capability.
-    // The pad is applied HERE too, so this ceiling and the launcher's p.fits test
-    // are one predicate. The `break` is load-bearing: potrf_hole_padded is NOT
-    // monotone, and supports() advertises `order <= cta_max_n`, a contiguous range.
+    // The pad is applied here too, so this ceiling and the launcher's p.fits test are one
+    // predicate. The `break` is load-bearing: potrf_hole_padded is NOT monotone, while
+    // supports() advertises `order <= cta_max_n`, a contiguous range.
     int best = 0;
     for (int n = 1; n <= 4096; ++n) {
         if (potrf_hole_padded(potrf_slm_per_matrix(n, C::NB, C::TS, sz_d, sz_r))
@@ -202,7 +192,7 @@ std::size_t potrf_cta_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::
     });
 }
 
-// The launch geometry, for tests. See potrf_native.hh for why this exists.
+// The launch geometry, for tests; see potrf_native.hh.
 template <typename T>
 unsigned potrf_cta_debug_launch(Queue& ctx, int n, int batch) {
     using C = PotrfCtaConst<T>;
@@ -226,8 +216,8 @@ Event potrf_cta_launch(Queue& ctx,
                        Span<int32_t> info,
                        const PotrfCtaLaunch& p,
                        int n, int batch) {
-    // std::complex is re-typed to the POD device scalar HERE, at the pointer
-    // boundary: its Annex-G operator* costs an isnan branch and a __mulsc3 call.
+    // std::complex is re-typed to the POD device scalar at the pointer boundary: its
+    // Annex-G operator* costs an isnan branch and a __mulsc3 call in device code.
     using DM = sycl_device::DevMap<T>;
     using D = typename DM::type;
     using R = typename DM::real;
@@ -244,8 +234,7 @@ Event potrf_cta_launch(Queue& ctx,
     const int num_wg = p.num_wg;
     int32_t* info_ptr = info.data();
 
-    // Pad the TILE accessor rather than adding a fifth, unused one: an unused
-    // local_accessor is a plausible dead-code elimination.
+    // Padded into the TILE accessor: a fifth, unused local_accessor is plausibly eliminated.
     const std::size_t tile_elems_used = static_cast<std::size_t>(G) *
                                         static_cast<std::size_t>(lda) * static_cast<std::size_t>(n);
     const std::size_t natural = static_cast<std::size_t>(G) * p.slm_per_matrix;
@@ -276,8 +265,7 @@ Event potrf_cta_launch(Queue& ctx,
                     slot = sg_id;
                     tid = static_cast<int>(sg.get_local_linear_id());
                     p1_active = true;
-                    // Sub-group-uniform, and this scope uses only the
-                    // sub-group's own barriers, so returning here strands nobody.
+                    // Sub-group-uniform, and this scope uses only sub-group barriers.
                     if (matrix_id >= batch) return;
                 } else {
                     matrix_id = wg_id;   // G == 1 => num_wg == batch, cannot exceed
@@ -291,8 +279,8 @@ Event potrf_cta_launch(Queue& ctx,
                 int* fl = &fail[0] + slot;
                 int* of = &off[0] + static_cast<std::ptrdiff_t>(slot) * (Rt0 + 1);
 
-                // Built EXPLICITLY from data_ptr() + b*stride, never MatrixView::operator()(Slice,Slice):
-                // its 6-arg constructor defaults stride to ld*cols when 0 is passed, after which
+                // Built from data_ptr() + b*stride, never MatrixView::operator()(Slice,Slice):
+                // its 6-arg ctor defaults stride to ld*cols when 0 is passed, after which
                 // every batch item but the first reads the wrong matrix.
                 D* Ag = a_ptr + static_cast<std::ptrdiff_t>(matrix_id) * stride_a;
 
@@ -331,8 +319,7 @@ Event potrf_cta_dispatch(Queue& ctx,
         throw std::invalid_argument("potrf_cta: degenerate extents");
     }
     if (A.is_heterogeneous()) {
-        // One launch covers the batch with one (order, ld, stride) tuple and reads
-        // the CAPACITY extents, so per-item active dims would factorise the wrong order.
+        // One launch, one (order, ld, stride) tuple read from the capacity extents.
         throw std::invalid_argument("potrf_cta: heterogeneous batch is not supported");
     }
     const auto dev = ctx.device();
@@ -340,9 +327,8 @@ Event potrf_cta_dispatch(Queue& ctx,
         throw std::invalid_argument("potrf_cta: GPU queues only");
     }
     if (!dev.supports_sub_group_size(32)) {
-        // ENUMERATED, never get_property(MAX_SUB_GROUP_SIZE) >= 32: that returns the
-        // FIRST supported size, so the weak test refuses a {8,16,32} device and
-        // ACCEPTS a {64} one -- a launch abort under reqd_sub_group_size(32).
+        // Enumerated, never get_property(MAX_SUB_GROUP_SIZE) >= 32: that returns the first
+        // supported size, so it accepts a {64} device -- a launch abort under reqd_sub_group_size(32).
         throw std::runtime_error(
             "potrf_cta: device does not offer sub-group size 32, which the kernel requires");
     }
@@ -362,9 +348,8 @@ Event potrf_cta_dispatch(Queue& ctx,
     }
 
     BumpAllocator pool(workspace);
-    // detail::info_target's rule, inlined so this TU need not include
-    // src/linalg-impl.hh: an empty or SHORT caller span means "not requested" and
-    // draws pool scratch instead, which keeps potrf_cta_buffer_size correct in both.
+    // detail::info_target's rule, inlined to avoid including src/linalg-impl.hh: an empty
+    // or short caller span means "not requested" and draws pool scratch instead.
     Span<int32_t> info = (info_out.size() >= static_cast<std::size_t>(batch))
                              ? info_out
                              : potrf_cta_layout<T>(ctx, pool, batch);
@@ -379,8 +364,7 @@ Event potrf_cta_dispatch(Queue& ctx,
         ctx, A, upper, info, p, n, batch);
 }
 
-// Instantiation is per scalar type only, no Backend cross-product: the kernel has
-// no Backend parameter, and a 3x device-compiled family is pure cost here.
+// Per scalar type only, no Backend cross-product: the kernel has no Backend parameter.
 #define BATCHLAS_POTRF_CTA_INSTANTIATE(T)                                                   \
     template int potrf_cta_max_n_for_slm<T>(std::size_t);                                   \
     template int potrf_cta_max_n<T>();                                                      \

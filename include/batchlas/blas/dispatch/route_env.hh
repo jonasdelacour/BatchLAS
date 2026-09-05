@@ -1,31 +1,10 @@
 #pragma once
 
-// One environment vocabulary for route selection, and the legacy spellings that
-// map onto it.
-//
-// There used to be five non-communicating mechanisms, each with its own parser
-// and its own idea of what an unset variable meant:
-//
-//   BATCHLAS_<OP>_PROVIDER          syev, gesvd, ormqr only   (dispatch/env.hh)
-//   BATCHLAS_GEMM_VARIANT           gemm                      (gemm_variant.hh)
-//   BATCHLAS_{SYMM,SYRK,SYR2K,TRMM}_VARIANT                   (*_custom_dispatch.cc)
-//   ad-hoc per-op knobs             BATCHLAS_ORTHO_GRAM, BATCHLAS_ORMQR_IMPL, ...
-//   (and Backend itself, chosen once per Queue)
-//
-// The first three are now this file. The ad-hoc knobs are not yet folded in.
-//
-// The canonical spelling becomes BATCHLAS_<OP>_ROUTE, taking either an origin
-// ("vendor", "native"), an algorithm ("cta", "expand_gemm", ...), or both
-// joined by a colon ("native:register_tiled").
-//
-// THE LEGACY SPELLINGS MUST KEEP WORKING. They appear in committed benchmark
-// scripts and in the provenance of recorded results under output/; silently
-// changing what they mean would invalidate measurements that are still being
-// compared against. Each therefore maps onto a Route here, and
-// parse_route_env() reports which variable it honoured so a diagnostic can
-// quote it back.
-//
-// STATUS: live. Every op with a legacy variable reads it through here.
+// One environment vocabulary for route selection: BATCHLAS_<OP>_ROUTE, taking an
+// origin, an algorithm, or both joined by a colon. The legacy per-op spellings
+// map onto it and must keep working -- they appear in committed benchmark
+// scripts and in the provenance of recorded results under output/.
+// evidence: docs/perf/dispatch.md#the-environment-vocabulary
 
 #include <cctype>
 #include <cstdlib>
@@ -42,9 +21,7 @@ inline std::string route_lowercase(std::string s) {
     return s;
 }
 
-// Origin words. Note "netlib" maps to Vendor, not to an algorithm: netlib
-// LAPACK is somebody else's code. Provider::Netlib had to be normalised to
-// Provider::Vendor by hand in all three consumers for exactly this reason.
+// "netlib" is an origin, not an algorithm: netlib LAPACK is somebody else's code.
 inline std::optional<Origin> parse_origin_word(std::string_view w) {
     if (w == "auto") return Origin::Auto;
     if (w == "vendor" || w == "netlib") return Origin::Vendor;
@@ -70,9 +47,7 @@ inline std::optional<Algorithm> parse_algorithm_word(std::string_view w) {
     return std::nullopt;
 }
 
-// "native:cta" / "vendor" / "cta" -> Route. Unknown text yields nullopt so the
-// caller can decide between ignoring it and throwing; the legacy parsers
-// silently fell back to Auto, which hid typos.
+// Unrecognised text yields nullopt rather than Auto, so a typo is visible.
 inline std::optional<Route> parse_route_value(std::string_view raw) {
     const std::string v = route_lowercase(std::string(raw));
     if (v.empty()) return std::nullopt;
@@ -86,26 +61,16 @@ inline std::optional<Route> parse_route_value(std::string_view raw) {
     }
 
     if (const auto o = parse_origin_word(v)) {
-        // A bare origin leaves the algorithm free.
         return Route{*o, Algorithm::Auto};
     }
     if (const auto a = parse_algorithm_word(v)) {
-        // A bare algorithm implies Native, EXCEPT the device-library ones,
-        // which are vendor code by definition.
+        // Bare algorithms imply Native, except device-library ones.
         const Origin o = (*a == Algorithm::FusedDevice) ? Origin::Vendor : Origin::Native;
         return Route{o, *a};
     }
     return std::nullopt;
 }
 
-// The legacy variable for an op, if it had one, and how its values map.
-//
-// The mappings are NOT guesses -- each reproduces what the old parser did:
-//   * gemm_variant_request() (gemm_variant.hh) returns Vendor when UNSET, and
-//     recognises sycl|custom, native|cuda-native|direct-cuda, cublasdx|dx, auto.
-//   * parse_cublasdx_variant_request() (route_common.hh) returns AUTO when
-//     unset, and recognises vendor, cublasdx|dx|custom, auto.
-//   * syrk_route_request() additionally recognises triangular, gram and gemm.
 inline std::string_view legacy_variable_for(Op op) {
     switch (op) {
         case Op::gemm:  return "BATCHLAS_GEMM_VARIANT";
@@ -120,54 +85,19 @@ inline std::string_view legacy_variable_for(Op op) {
     }
 }
 
-// What an UNSET variable means. GEMM used to be the odd one out -- it defaulted
-// to Vendor while the four level-3 ops defaulted to Auto, so the level-3 native
-// tile kernels ran by default and GEMM's never did. WP2 E6 removed that
-// asymmetry: every op now defaults to Auto, i.e. to whatever preferred() says.
-//
-// The flip is only as good as preferred(), so it was made LAST, after E3 and E4
-// had measured every window preferred() claims. What it actually turns on, all
-// on a GPU, square, batch >= 64, and homogeneous:
-//
-//   double,  n=4..512, ALL transpose forms   1.01-4.51x over cuBLAS DGEMM
-//   float,   NN, max_dim <= 32               1.03-1.46x over cuBLAS SGEMM
-//
-// and nothing else -- complex is refused outright, and E4 removed float's
-// 128..512 NN window and its entire transposed window because both measured as
-// losses. See docs/perf/gemm.md#evidence-for-each-boundary and docs/perf/gemm.md#the-auto-flip.
-//
-// Two things this flip is NOT. It does not change the vendor-free build at all:
-// there, resolve_route already fell back to any supported native route
-// (route_resolve.hh:60-62), so Vendor-as-default was never reached. And it does
-// not touch a call that names a route explicitly -- BATCHLAS_GEMM_VARIANT=vendor
-// still means vendor, which is the escape hatch if a future cuBLAS turns any of
-// the cells above around.
+// Every op's unset default is Auto, i.e. whatever preferred() says. GEMM used to
+// default to Vendor; an explicit BATCHLAS_GEMM_VARIANT=vendor still pins it.
+// evidence: docs/perf/gemm.md#the-auto-flip
 inline Route legacy_unset_default(Op op) {
     static_cast<void>(op);
     return Route{Origin::Auto, Algorithm::Auto};
 }
 
-// Legacy values whose meaning does NOT match the canonical vocabulary.
-//
-// THE TRAP: `BATCHLAS_GEMM_VARIANT=native` does not mean "BatchLAS's own
-// kernel". It is gemm_variant.hh's alias for `cuda-native` / `direct-cuda` --
-// the raw CUDA path -- and GemmVariantRequest::Native is consumed only as an
-// EXCLUSION: both gemm_use_sycl_custom and gemm_use_cublasdx_custom return
-// false for it, so the call falls through to gemm_vendor_impl. In the canonical
-// vocabulary that is Origin::Vendor.
-//
-// So the same word means opposite things in the two vocabularies. Mapping it
-// through the generic parser would flip GEMM from vendor to native for anyone
-// who had set it -- silently, and only for that one spelling. Caught by
-// tests/route_gemm_equivalence_tests.cc; do not "simplify" this away.
-// The second collision, in the four level-3 ops: "custom" means their FUSED
-// cuBLASDx kernel (parse_cublasdx_variant_request's custom_variant), whereas
-// the canonical parser reads it as an alias for the register-tiled GEMM family.
-// Different kernel, same word.
-//
-// Two more spellings exist only in these ops' private parsers and have no
-// canonical equivalent: "tiles" for the tile-masked triangular kernel and
-// "narrow" for syrk's single-tile Gram kernel.
+// Legacy values whose meaning does NOT match the canonical vocabulary; these
+// collisions are load-bearing. `BATCHLAS_GEMM_VARIANT=native` means the raw CUDA
+// VENDOR path (consumed only as an exclusion from both custom arms), the opposite
+// of canonical "native"; "custom" means the fused cuBLASDx kernel here but the
+// register-tiled GEMM family to the canonical parser. Pinned by tests/route_*.cc.
 inline bool is_level3_tile_op(Op op) {
     return op == Op::symm || op == Op::syrk || op == Op::syr2k || op == Op::trmm;
 }
@@ -188,12 +118,9 @@ inline std::optional<Route> parse_legacy_route_value(Op op, std::string_view raw
             return Route{Origin::Native, Algorithm::GramTiles};
         }
         if ((op == Op::syrk || op == Op::syr2k) && v == "gemm") {
-            // The deliberately WRONG route, kept only so the arithmetic the
-            // triangular kernel saves can be measured against it: it computes
-            // and stores BOTH triangles, which is not what syrk/syr2k mean. It
-            // runs through gemm_cublasdx, a cuBLASDx entry point, so its origin
-            // is Vendor rather than the Native the bare-algorithm rule would
-            // otherwise give it.
+            // Deliberately WRONG: it computes and stores BOTH triangles, kept
+            // only as a measurement baseline for what the triangular kernel
+            // saves. Vendor because it runs through the cuBLASDx entry point.
             return Route{Origin::Vendor, Algorithm::DiagFullGemm};
         }
     }
@@ -208,9 +135,8 @@ struct ParsedRouteEnv {
     bool unparsed = false;   // a variable was set but its value was not understood
 };
 
-// Canonical variable first, then the legacy one. Returns found=false when
-// neither is set -- the CALLER supplies the default, because that default
-// differs per op (see legacy_unset_default).
+// Canonical variable first, then the legacy one. found=false when neither is
+// set; the CALLER supplies the default.
 inline ParsedRouteEnv parse_route_env(Op op) {
     ParsedRouteEnv out;
 
@@ -231,8 +157,7 @@ inline ParsedRouteEnv parse_route_env(Op op) {
         const std::string key(legacy);
         if (const char* raw = std::getenv(key.c_str()); raw && *raw) {
             out.source = {key, raw, true};
-            // The LEGACY parser, not the canonical one -- see the note on
-            // parse_legacy_route_value: "native" means opposite things.
+            // The LEGACY parser, not the canonical one: see above.
             if (const auto r = parse_legacy_route_value(op, raw)) {
                 out.route = *r;
                 out.found = true;

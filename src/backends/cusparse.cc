@@ -14,26 +14,17 @@
 #include <type_traits>
 #include <vector>
 
-// This file contains cuSPARSE primitives implementation using MatrixView
+// cuSPARSE spmm over MatrixView. Route evidence, and the vendor defects fixed
+// here: docs/perf/spmm.md
 namespace batchlas {
 
     namespace backend {
 
         namespace {
-            // ConjTrans on a REAL scalar is the SAME operation as Trans: conjugation
-            // of a real number is the identity, so `op(A) = conj(A)^T = A^T`. This is
-            // the correct spelling of the operation, not a capability workaround for
-            // a cuSPARSE limitation -- the two enum values denote one operation here,
-            // and CUSPARSE_OPERATION_TRANSPOSE is the one cuSPARSE actually honours
-            // for the real data types. Passing CUSPARSE_OPERATION_CONJUGATE_TRANSPOSE
-            // with CUDA_R_32F / CUDA_R_64F silently produced wrong results (the whole
-            // ConjTrans family of spmm_tests, float and double only -- the complex
-            // arms, where CONJUGATE_TRANSPOSE is the distinct and correct operation,
-            // always passed).
-            //
-            // Applied to transA AND transB: cusparseSpMM takes an op for the sparse
-            // operand and one for the dense operand, and the dense one was wrong on
-            // its own (NineNoTransConjTrans has transA = NoTrans).
+            // On a REAL scalar ConjTrans *is* Trans, and cuSPARSE silently returns
+            // wrong results for CUDA_R_32F/CUDA_R_64F under the conjugating enum.
+            // Applies to the dense operand too, not just the sparse one.
+            // evidence: docs/perf/spmm.md#three-vendor-defects-found-here-and-fixed
             template <typename T>
             constexpr cusparseOperation_t cusparse_op(Transpose trans) {
                 constexpr bool is_complex_scalar =
@@ -47,67 +38,24 @@ namespace batchlas {
                 return enum_convert<BackendLibrary::CUSPARSE>(trans);
             }
 
-            // ===============================================================
-            // THE STRIDED-BATCH nnz CONTRACT.
-            //
-            // cusparseCreateCsr takes ONE nnz, and cusparseCsrSetStridedBatch
-            // adds only a batch count and two strides -- there is no per-item
-            // nnz anywhere in the descriptor. cuSPARSE's CSR contract is that
-            // nnz == rowOffsets[rows], so a strided batch can only describe a
-            // batch whose items ALL store the same number of nonzeros.
-            //
-            // backend_handle_impl.hh:63 hands it A.nnz(), which is the per-item
-            // CAPACITY (matrix.hh:1069-1073): convert_to<MatrixFormat::CSR>
-            // sizes every item by the batch MAXIMUM (src/matrix.cc:473-478) and
-            // zeroes only row_offsets (:489), so for every item that stores
-            // fewer nonzeros than the maximum the descriptor claims values and
-            // column indices that the conversion never wrote. cuSPARSE reads
-            // them. The failure was MEASURED, not deduced:
-            //   * spmm_tests HeterogeneousNnzAcrossBatch -- the over-read slots
-            //     belong to the item's LAST row, and it is exactly the last row
-            //     of exactly the short items that came back wrong;
-            //   * spmm_tests PaddingAboveNnzIsNotRead, whose padding carries an
-            //     out-of-range column index -- CUDA_ERROR_ILLEGAL_ADDRESS and a
-            //     dead process.
-            // A homogeneous batch has never been affected, which is why every
-            // in-tree caller (lanczos, LOBPCG, the benchmark) was unharmed and
-            // why this survived until a suite covered the axis.
-            //
-            // THE FIX IS TO STOP LYING TO THE DESCRIPTOR, in the only two ways
-            // the API allows:
-            //   * uniform batch -- one batched call, with nnz taken from the
-            //     items' own row offsets instead of from the capacity;
-            //   * non-uniform batch -- ONE cusparseSpMM PER ITEM, each with its
-            //     own single-item descriptor and its own nnz. Serialising the
-            //     batch is a real cost and batching is the whole reason the
-            //     vendor path exists, but it is the only shape cuSPARSE offers,
-            //     and correct-and-serial beats fast-and-wrong. The native route
-            //     (src/sycl/spmm_native.cc) bounds its loop by each item's own
-            //     row offsets inside the kernel and needs none of this.
-            //
-            // The fast path is UNCHANGED from what shipped before: when every
-            // item's nnz already equals A.nnz() we use the cached descriptors
-            // built by backend_handle_impl.hh and issue exactly one call.
-            // ===============================================================
+            // The strided-batch nnz contract: cusparseCreateCsr takes ONE nnz and
+            // cusparseCsrSetStridedBatch adds no per-item one, but A.nnz() is the
+            // per-item CAPACITY, sized by the batch maximum. Trusting it makes a
+            // short item's descriptor cover padding the conversion never wrote:
+            // wrong last rows, or CUDA_ERROR_ILLEGAL_ADDRESS. The plan therefore
+            // takes nnz from the items' own row offsets, and a non-uniform batch is
+            // issued as one cusparseSpMM per item -- the only shape the API offers.
+            // evidence: docs/perf/spmm.md#three-vendor-defects-found-here-and-fixed
             struct SpmmCsrBatchPlan {
                 std::vector<int> item_nnz;      // what each item actually stores
                 bool uniform = true;            // ... and they are all equal
                 bool matches_capacity = true;   // ... and equal to A.nnz()
             };
 
-            // Reads the row offsets ON THE HOST. Two ints per batch item, and no
-            // queue synchronisation on the common path -- this is the same
-            // precondition MatrixView::nnz(b) already documents
-            // (matrix.hh:1078-1090): whatever kernel FILLED the offsets must
-            // have completed. A CSR structure is built once and then reused
-            // across many spmm calls, so that is the existing caller contract
-            // for a CSR view and not a new requirement invented here.
-            //
-            // A view over sycl::malloc_device memory is NOT host-reachable
-            // (matrix.hh:1081-1083). That case is detected rather than assumed,
-            // and pays one staging copy of the offsets array plus a wait. No
-            // caller in this tree takes that path: every CSR matrix here is
-            // backed by UnifiedVector, which is USM shared.
+            // Reads the row offsets ON THE HOST: whatever kernel filled them must
+            // have completed, the same precondition MatrixView::nnz(b) documents.
+            // Device-only memory is not host-reachable, so that case is detected and
+            // staged rather than assumed; no caller in this tree takes it.
             template <typename T>
             SpmmCsrBatchPlan spmm_csr_batch_plan(Queue& ctx,
                                                  const MatrixView<T, MatrixFormat::CSR>& A) {
@@ -115,9 +63,8 @@ namespace batchlas {
                 const int m = A.rows();
                 const int bs = A.batch_size();
                 const int os = A.offset_stride();
-                // A shape this degenerate is not one this file can plan for;
-                // leaving matches_capacity true hands it to the pre-existing
-                // single batched call, which is exactly today's behaviour.
+                // Degenerate shape: leaving matches_capacity true hands it to the
+                // single batched call, which is the pre-existing behaviour.
                 if (bs <= 0 || m < 0 || os < m + 1) return plan;
                 const int* ro = A.row_offsets().data();
                 if (ro == nullptr) return plan;
@@ -146,11 +93,9 @@ namespace batchlas {
                 return plan;
             }
 
-            // Descriptors built and destroyed HERE rather than borrowed from the
-            // view's cached BackendMatrixHandle. That handle's destructor is
-            // `= default` (backend_handle_impl.hh:24) -- it never calls
-            // cusparseDestroySpMat -- so borrowing it per batch item would leak
-            // one descriptor per item per call. These own what they create.
+            // Owns its descriptors: BackendMatrixHandle's destructor is `= default`
+            // and never calls cusparseDestroySpMat, so borrowing the view's cached
+            // descriptor per batch item would leak one descriptor per item per call.
             template <typename T>
             struct LocalCsrDescr {
                 cusparseSpMatDescr_t d = nullptr;
@@ -198,9 +143,8 @@ namespace batchlas {
                 operator cusparseDnMatDescr_t() const { return d; }
             };
 
-            // The raw cuSPARSE query, for whichever descriptor triple the plan
-            // selects. Every sizing path in this file goes through here, so a
-            // size and the call it sizes cannot describe different descriptors.
+            // Every sizing path funnels through here, so a size and the call it
+            // sizes cannot describe different descriptors.
             template <Backend B, typename T>
             size_t spmm_query_buffer(LinalgHandle<B>& handle,
                                      cusparseSpMatDescr_t a,
@@ -220,10 +164,8 @@ namespace batchlas {
                 return size;
             }
 
-            // The buffer the PLANNED shape needs. For the per-item path that is
-            // the MAXIMUM over items: one buffer is allocated and reused by every
-            // item, and no per-item query can exceed a max taken over exactly
-            // those queries.
+            // For the per-item path this is the MAXIMUM over items: one buffer is
+            // allocated once and reused by every item.
             template <Backend B, typename T, MatrixFormat MFormat>
             size_t spmm_planned_buffer_size(LinalgHandle<B>& handle,
                                             const MatrixView<T, MFormat>& A,
@@ -281,7 +223,6 @@ namespace batchlas {
                Transpose transA,
                Transpose transB,
                Span<std::byte> workspace) {
-        // Call cuSPARSE
         static LinalgHandle<B> handle;
         handle.setStream(ctx);
 
@@ -291,10 +232,8 @@ namespace batchlas {
         }
 
         BumpAllocator pool(workspace);
-        // ONE plan sizes the buffer and issues the call, so the query and the
-        // call cannot describe different descriptors. spmm_vendor_buffer_size
-        // below builds an identical plan from the same views, which is what
-        // keeps the CALLER's workspace big enough for whichever shape fires.
+        // spmm_vendor_buffer_size below must build an identical plan from the same
+        // views, or the caller's workspace can be too small for the shape that fires.
         auto buffer_size = BumpAllocator::allocation_size<std::byte>(
             ctx, spmm_planned_buffer_size<B, T, MFormat>(
                      handle, A, B_mat, C, alpha, beta, transA, transB, plan));
@@ -304,8 +243,6 @@ namespace batchlas {
             if (!plan.matches_capacity) {
                 const int bs = A.batch_size();
                 if (plan.uniform) {
-                    // One batched call, with the nnz the items actually store
-                    // rather than the capacity the cached descriptor carries.
                     LocalCsrDescr<T> a(A, 0, bs, plan.item_nnz.front());
                     LocalDnDescr<T> b(B_mat, 0, bs);
                     LocalDnDescr<T> c(C, 0, bs);
@@ -314,8 +251,8 @@ namespace batchlas {
                                  BackendScalar<T, BackendLibrary::CUSPARSE>::type,
                                  CUSPARSE_SPMM_ALG_DEFAULT, buffer.data());
                 } else {
-                    // ONE CALL PER ITEM. This batch is genuinely inexpressible
-                    // as a single cuSPARSE descriptor; see the note above.
+                    // One call per item: this batch is inexpressible as a single
+                    // cuSPARSE descriptor.
                     for (int i = 0; i < bs; ++i) {
                         LocalCsrDescr<T> a(A, i, 1,
                                            plan.item_nnz[static_cast<std::size_t>(i)]);
@@ -357,7 +294,6 @@ namespace batchlas {
                           T beta,
                           Transpose transA,
                           Transpose transB) {
-        // Call cuSPARSE
         static LinalgHandle<B> handle;
         handle.setStream(ctx);
 
@@ -392,11 +328,9 @@ namespace batchlas {
         SPMM_INSTANTIATE(fp, F) \
         SPMM_BUFFER_SIZE_INSTANTIATE(fp, F)
 
-    // Instantiate for all supported sparse formats
     #define CUSPARSE_INSTANTIATE_FOR_FP(fp) \
         CUSPARSE_INSTANTIATE(fp, MatrixFormat::CSR)
 
-    // Instantiate for the floating-point types of interest
     CUSPARSE_INSTANTIATE_FOR_FP(float)
     CUSPARSE_INSTANTIATE_FOR_FP(double)
     CUSPARSE_INSTANTIATE_FOR_FP(std::complex<float>)

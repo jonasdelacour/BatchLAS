@@ -15,17 +15,12 @@
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
 
-// Option-struct spellings of the public entry points:
-//
-//     gemm(ctx, A, B, C, {.alpha = 2.0f, .transA = Transpose::Trans});
-//     syev(ctx, A, W, {.jobz = JobType::EigenVectors});
-//
-// The backend comes from the Queue, the workspace may be omitted, and T is
-// deduced from the matrix arguments, never from the option struct -- an option
-// struct in a deduced position would make `{.alpha = 2.0f}` ill-formed. The
-// *Params structs in blas/extensions.hh and blas/functions/iluk.hh are a
-// different thing; see docs/cpp-api.md, "*Options and *Params are two different
-// things".
+// Option-struct spellings of the public entry points, e.g.
+// `gemm(ctx, A, B, C, {.alpha = 2.0f, .transA = Transpose::Trans})`. The backend
+// comes from the Queue; T is deduced from the matrix arguments, never from the
+// option struct -- an option struct in a deduced position would make
+// `{.alpha = 2.0f}` ill-formed. The *Params structs are a different thing; see
+// docs/cpp-api.md.
 namespace batchlas {
 
 namespace detail {
@@ -64,22 +59,17 @@ inline void require_args_accessible(const Queue& ctx, const char* fn,
 
 namespace detail {
 
-// Shape preconditions for the LAPACK-style entry points. They throw
-// std::invalid_argument (caller error); std::runtime_error is reserved for
-// environment and backend failures. They are not cosmetic: netlib getrf
-// factorises an A.rows() x A.rows() block, so an unchecked rectangular A was
-// read and written past the end of its allocation.
+// Shape preconditions for the LAPACK-style entry points; they throw
+// std::invalid_argument (caller error), never std::runtime_error, which is
+// reserved for environment and backend failures.
 //
-// Repeating them on BOTH the backend-deducing overloads and the
-// `template <Backend B, ...>` ones looks redundant and is not: for
-// `getrf(ctx, A.view(), pivots)` the variadic `NAME(Queue&, Args&&...)` from
-// BATCHLAS_DISPATCH_ON_QUEUE binds the prvalue better than `const MA&`, so it
-// wins and forwards to the <Backend> overload past every check on the deducing
-// one.
-//
-// The positional primaries in blas/functions/*.hh that take an explicit
-// workspace stay unchecked deliberately: src/extensions/ calls them per
-// iteration and they must not pay a host-side branch.
+// Repeating them on BOTH the deducing and the `template <Backend B, ...>`
+// overloads is deliberate: BATCHLAS_DISPATCH_ON_QUEUE's variadic
+// `NAME(Queue&, Args&&...)` binds a prvalue better than `const MA&`, so
+// `getrf(ctx, A.view(), pivots)` reaches the <Backend> overload past every check
+// on the deducing one. The positional primaries in blas/functions/*.hh that take
+// an explicit workspace stay unchecked deliberately: src/extensions/ calls them
+// per iteration and they must not pay a host-side branch.
 template <typename MV>
 inline void require_square(const char* fn, const char* name, const MV& A) {
     if (A.rows() != A.cols())
@@ -113,10 +103,9 @@ inline void require_span_at_least(const char* fn, const char* name, size_t have,
             std::to_string(have) + " elements, needs at least " + std::to_string(need));
 }
 
-// An EMPTY `info` span is the API's spelling for "no status wanted", so only a
-// non-empty one is measured. A too-short one fails silently: the backend falls
-// back to its own scratch and the caller reads stale bytes -- most often zeros,
-// i.e. "every item factorised".
+// An EMPTY `info` span spells "no status wanted", so only a non-empty one is
+// measured. A too-short one fails silently: the backend falls back to its own
+// scratch and the caller reads stale bytes, most often zeros ("all factorised").
 inline void require_info_span(const char* fn, size_t have, size_t batch_size) {
     if (have != 0) require_span_at_least(fn, "info", have, batch_size);
 }
@@ -149,7 +138,6 @@ struct SymmOptions {
     Uplo uplo = Uplo::Lower;
 };
 
-// hemm's A is Hermitian rather than symmetric; see blas/functions/hemm.hh.
 template <typename T>
 struct HemmOptions {
     T alpha = T(1);
@@ -212,16 +200,10 @@ struct TrsmOptions {
     Diag diag = Diag::NonUnit;
 };
 
-// Each entry point gets two option-struct spellings:
-//
-//   gemm(ctx, A, B, C, {...})       backend from the queue        (callers)
-//   gemm<B>(ctx, A, B, C, {...})    backend fixed at compile time (library internals)
-//
-// src/extensions/ is templated on Backend and must use the second: going through
-// the queue there would re-dispatch at runtime and, worse, silently use
-// ctx.backend() instead of the B the algorithm was instantiated for. The runtime
-// spelling is written in terms of the compile-time one. Neither is ambiguous
-// with the positional forms -- nothing converts implicitly to an option struct.
+// Each entry point has two spellings: `gemm(ctx, ...)` takes the backend from the
+// queue, `gemm<B>(ctx, ...)` fixes it at compile time. src/extensions/ is
+// templated on Backend and must use the second -- the runtime one would silently
+// use ctx.backend() instead of the B the algorithm was instantiated for.
 
 namespace detail {
 template <typename M>
@@ -242,15 +224,12 @@ concept DenseMatrixLike = requires { typename dense_scalar<std::remove_cvref_t<M
 
 }  // namespace detail
 
-// ---- why "workspace given" is an overload, not a null check -----------------
-//
 // Do not collapse the two workspace spellings into one function with
 // `Span<std::byte> ws = {}` and a null check. A null span is not a synonym for
-// "not passed": code sub-allocating from a BumpAllocator runs the algorithm
-// twice, and in the sizing pass every pool allocation hands back an empty span
-// while the input matrices stay real -- so a null check would run the real
-// factorisation over the caller's live data during sizing. Nothing crashes; the
-// corrupted matrix surfaces later as an algorithm that stops converging.
+// "not passed": in a BumpAllocator sizing pass every pool allocation hands back
+// an empty span while the input matrices stay real, so a null check would run the
+// real factorisation over the caller's live data. Nothing crashes; the corrupted
+// matrix surfaces later as an algorithm that stops converging.
 
 #define BATCHLAS_DENSE_VIEW(T) MatrixView<T, MatrixFormat::Dense>
 
@@ -410,19 +389,16 @@ inline Event trsm(Queue& ctx, const MA& A, const MB& B, const TrsmOptions<T>& op
 
 // ---- dense LAPACK ----------------------------------------------------------
 //
-// These take workspace. Leaving it out leases from the queue's arena, sized by
-// the matching *_buffer_size. The lease is released when the call returns, and
-// on an OUT-OF-ORDER queue releasing it drains the queue -- so every arena
-// spelling below blocks until the device is idle, where the positional
-// (caller-supplied span) spelling does not. Pass your own span to keep the call
-// asynchronous. See batchlas/util/workspace.hh.
+// Omitting the workspace leases scratch from the queue's arena, sized by the matching
+// *_buffer_size. Releasing that lease on an OUT-OF-ORDER queue drains the queue,
+// so every arena spelling below blocks until the device is idle; pass your own
+// span to keep the call asynchronous. See batchlas/util/workspace.hh.
 
 struct PotrfOptions {
     Uplo uplo = Uplo::Lower;
     // Per-item LAPACK status, one int32 per batch item: 0 = factorised, >0 = the
-    // leading minor at which the item stopped being positive definite. Empty
-    // (the default) reports nothing. Must be device-accessible (USM); the vendor
-    // writes it in place.
+    // leading minor at which positive-definiteness failed. Empty (the default)
+    // reports nothing. Must be device-accessible (USM); written in place.
     Span<int32_t> info = {};
 };
 
@@ -467,13 +443,12 @@ inline Event potrf(Queue& ctx, const MA& A, const PotrfOptions& opts = {}) {
 }
 
 namespace detail {
-// `potrf` is the one entry point whose option and positional overloads have the
-// same arity and both accept `{}` -- and `{}` matches the enum exactly but the
-// option struct only by a user-defined conversion, so `potrf(ctx, A, {}, ws)`
-// silently meant Uplo{} == Upper and factorised the opposite triangle. Giving the
-// trap its own enum type adds a third exact-match candidate, so the bare-`{}`
-// call is ambiguous instead. `PotrfOptions{}` and `Uplo::Lower` still resolve as
-// before; neither converts to this type.
+// `potrf`'s option and positional overloads have the same arity and both accept
+// `{}`, which matches the enum exactly but the option struct only by a
+// user-defined conversion -- so `potrf(ctx, A, {}, ws)` silently meant
+// Uplo{} == Upper and factorised the opposite triangle. This third exact-match
+// candidate makes the bare-`{}` call ambiguous instead; `PotrfOptions{}` and
+// `Uplo::Lower` still resolve as before, and neither converts to this type.
 enum class EmptyBracesAreAmbiguous {};
 }  // namespace detail
 
@@ -483,15 +458,11 @@ Event potrf(Queue&, const MA&, detail::EmptyBracesAreAmbiguous, Span<std::byte>)
 template <detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
 Event potrf(Queue&, const MA&, detail::EmptyBracesAreAmbiguous, Span<std::byte>) = delete;
 
-// getrf, getri, geqrf and orgqr have no options to carry, so their only new
-// spelling is the arena-backed one. They deliberately take no workspace
-// parameter -- an overload with one would be ambiguous with the positional call;
-// use that spelling to manage the workspace yourself.
-//
-// getrf's and getri's trailing `info` is the per-item LAPACK status (one int32
-// per batch item, 0 = success); empty, the default, reports nothing. Passing it
-// is free: the backends already allocate that array, so a non-empty span
-// replaces the scratch rather than adding to it.
+// getrf, getri, geqrf and orgqr carry no options, so their only new spelling is
+// the arena-backed one. They deliberately take no workspace parameter -- such an
+// overload would be ambiguous with the positional call. The trailing `info` is
+// the per-item LAPACK status (one int32 per batch item, 0 = success); empty, the
+// default, reports nothing.
 template <Backend B, detail::DenseMatrixLike MA, typename T = detail::dense_scalar_t<MA>>
 inline Event getrf(Queue& ctx, const MA& A, Span<int64_t> pivots, Span<int32_t> info = {}) {
     using V = BATCHLAS_DENSE_VIEW(T);
@@ -673,8 +644,7 @@ inline Event syev(Queue& ctx, const MA& A, Span<typename base_type<T>::type> W,
 struct OrmqrOptions {
     Side side = Side::Left;
     Transpose trans = Transpose::NoTrans;
-    // 0 lets the tuning table pick the WY panel width
-    // (src/extensions/ormqr_blocked.cc).
+    // 0 lets the tuning table pick the WY panel width (ormqr_blocked.cc).
     int32_t block_size_hint = 0;
 };
 
@@ -691,8 +661,8 @@ template <Backend B, detail::DenseMatrixLike MA, detail::DenseMatrixLike MC,
 inline Event ormqr(Queue& ctx, const MA& A, const MC& C, Span<T> tau,
                    const OrmqrOptions& opts) {
     using V = BATCHLAS_DENSE_VIEW(T);
-    // Size with the same hint the call gets: the hint picks the panel width the
-    // workspace is sized for, so a mismatch under-sizes the buffer.
+    // Must size with the same hint the call uses: the hint picks the panel width
+    // the workspace is sized for, so a mismatch under-sizes the buffer.
     auto lease = ctx.workspace(ormqr_buffer_size<B, T>(ctx, V(A), V(C), opts.side, opts.trans,
                                                        tau, opts.block_size_hint));
     return ormqr<B, T>(ctx, V(A), V(C), opts.side, opts.trans, tau, lease.span(),
@@ -715,9 +685,8 @@ template <detail::DenseMatrixLike MA, detail::DenseMatrixLike MC,
 inline Event ormqr(Queue& ctx, const MA& A, const MC& C, Span<T> tau,
                    const OrmqrOptions& opts = {}) {
     BATCHLAS_CHECK_ARGS(ctx, "ormqr", A, C, tau);
-    // Mirrors validate_ormqr_dims (src/extensions/ormqr_blocked.cc): every path
-    // indexes tau at a stride of min(A.rows(), A.cols()), so a short tau is read
-    // out of bounds.
+    // Every path indexes tau at a stride of min(A.rows(), A.cols()), so a short
+    // tau is read out of bounds (mirrors validate_ormqr_dims, ormqr_blocked.cc).
     detail::require_same_batch("ormqr", "A", A, "C", C);
     detail::require_span_at_least("ormqr", "tau", tau.size(),
                                   static_cast<size_t>(std::min(A.rows(), A.cols())) * A.batch_size());
@@ -748,8 +717,8 @@ template <Backend B, detail::DenseMatrixLike MA, detail::DenseMatrixLike MU,
 inline Event gesvd(Queue& ctx, const MA& A, Span<typename base_type<T>::type> singular_values,
                    const MU& U, const MV& Vh, const GesvdOptions& opts) {
     using V = BATCHLAS_DENSE_VIEW(T);
-    // The Hermitian and general branches pick providers independently and can
-    // need different scratch, so the query must take the same branch as the call.
+    // The two branches pick providers independently and can need different
+    // scratch, so the query must take the same branch as the call.
     const size_t bytes =
         opts.hermitian_uplo
             ? gesvd_buffer_size<B, T>(ctx, V(A), singular_values, V(U), V(Vh), opts.jobu,
