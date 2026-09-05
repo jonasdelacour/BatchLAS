@@ -1,15 +1,10 @@
-// Does the Route-based GEMM split choose the same thing the current code does?
+// Equivalence test for the Route-based GEMM dispatch: it diffs the CHOSEN ROUTE,
+// not the timing, against a replica of the legacy gemm_use_sycl_custom() decision,
+// and pins the intended divergences.
 //
-// This is the acceptance test the WP0 spec demands for its Risk 2: diff the
-// CHOSEN ROUTE, not the timing, across the whole input space. Any differing
-// case is a bug, not a tuning question.
-//
-// `gemm_use_sycl_custom` is replicated below rather than called, deliberately.
-// It lives in src/backends/gemm_variant.hh, takes MatrixViews and a live Queue,
-// and reads getenv internally -- none of which a pure decision test should need.
-// The replica is transcribed from that source; `ReplicaIsFaithful` below pins
-// the transcription itself against the handful of behaviours that are easy to
-// get wrong, so a drift in the replica cannot silently make the diff pass.
+// The replica is transcribed from src/backends/gemm_variant.hh rather than called;
+// `ReplicaIsFaithful` pins it, so a drift in the replica cannot make the diff pass
+// vacuously. Window and evidence: docs/perf/gemm.md#the-preferred-window-as-implemented
 
 #include <gtest/gtest.h>
 
@@ -26,14 +21,11 @@ using namespace batchlas::dispatch;
 
 namespace {
 
-// ---------------------------------------------------------------------------
-// Faithful replica of the CURRENT decision, from src/backends/gemm_variant.hh.
-// ---------------------------------------------------------------------------
+// Replica of the legacy decision, transcribed from src/backends/gemm_variant.hh.
 
 enum class LegacyRequest { Vendor, Sycl, Native, CuBLASDx, Auto };
 
-// gemm_variant_request(): note the default when the variable is UNSET is
-// Vendor, not Auto. That asymmetry against the level-3 ops is load-bearing.
+// gemm_variant_request(): UNSET means Vendor for gemm, not Auto.
 LegacyRequest legacy_request_from(const char* raw) {
     if (!raw) return LegacyRequest::Vendor;
     std::string v(raw);
@@ -87,16 +79,11 @@ bool legacy_use_sycl_custom(LegacyRequest request, const OpShape& s) {
     }
 }
 
-// ---------------------------------------------------------------------------
 // The new decision, expressed as the same boolean so the two are comparable.
-// ---------------------------------------------------------------------------
 template <typename T>
 bool new_uses_native(const char* env_value, const OpShape& s) {
-    Route forced = legacy_unset_default(Op::gemm);   // Vendor when unset
+    Route forced = legacy_unset_default(Op::gemm);   // Auto, not the legacy Vendor
     if (env_value) {
-        // The legacy parser: these values arrive through
-        // BATCHLAS_GEMM_VARIANT, where "native" means the raw CUDA path rather
-        // than a BatchLAS kernel.
         if (const auto parsed = parse_legacy_route_value(Op::gemm, env_value)) {
             forced = *parsed;
         } else {
@@ -107,8 +94,7 @@ bool new_uses_native(const char* env_value, const OpShape& s) {
     return is_native(chosen);
 }
 
-// The env spellings that appear in benchmark scripts and recorded provenance,
-// plus unset.
+// The env spellings benchmark scripts use; nullptr is unset.
 const std::vector<const char*> kEnvValues = {
     nullptr, "vendor", "sycl", "custom", "auto", "cublasdx", "dx",
     "native", "cuda-native", "direct-cuda",
@@ -139,8 +125,7 @@ std::vector<OpShape> shape_grid(ScalarKind scalar) {
             }
         }
     }
-    // Non-square, heterogeneous and non-default-precision cells, which is where
-    // a correctness gate and a speed window are most easily confused.
+    // Cells where a correctness gate and a speed window are most easily confused.
     for (int64_t d : dims) {
         OpShape s;
         s.op = Op::gemm; s.scalar = scalar;
@@ -160,15 +145,62 @@ std::vector<OpShape> shape_grid(ScalarKind scalar) {
     return out;
 }
 
+// The intended divergences. Deliberately an exception list rather than an edit to
+// the replica: editing the replica would make the two agree by construction. Each
+// divergence is counted separately below so none can quietly stop being reached.
+// evidence: docs/perf/gemm.md#evidence-for-each-boundary
+enum class Divergence { None, HeterogeneousWidened, FloatWindowNarrowed, DefaultFlipped,
+                        DoubleWindowWidened };
+
+template <typename T>
+Divergence classify_divergence(const char* env, const OpShape& s,
+                               bool old_native, bool new_native) {
+    const bool forced_native = env != nullptr &&
+        (std::string_view(env) == "sycl" || std::string_view(env) == "custom");
+    if (s.heterogeneous_batch && forced_native && !old_native && new_native) {
+        return Divergence::HeterogeneousWidened;
+    }
+    // Narrow on purpose: only an unset env, and only in the flip's direction.
+    if (env == nullptr && !old_native && new_native) {
+        return Divergence::DefaultFlipped;
+    }
+    if constexpr (std::is_same_v<T, float>) {
+        if (old_native && !new_native) {
+            const bool transposed =
+                s.transA != Transpose::NoTrans || s.transB != Transpose::NoTrans;
+            const int64_t max_dim = s.max_dim();
+            if (transposed || (max_dim >= 128 && max_dim <= 512)) {
+                return Divergence::FloatWindowNarrowed;
+            }
+        }
+    }
+    if constexpr (std::is_same_v<T, double>) {
+        if (!old_native && new_native) {
+            const bool non_square = (s.m != s.n || s.n != s.k);
+            if (non_square || s.max_dim() > 512) {
+                return Divergence::DoubleWindowWidened;
+            }
+        }
+    }
+    return Divergence::None;
+}
+
 template <typename T>
 void expect_equivalent(ScalarKind kind, const char* type_name) {
-    size_t compared = 0, native_cases = 0;
+    size_t compared = 0, native_cases = 0, het_widened = 0, float_narrowed = 0,
+           default_flipped = 0, double_widened = 0;
     for (const char* env : kEnvValues) {
         for (const OpShape& s : shape_grid(kind)) {
             const bool old_native = legacy_use_sycl_custom<T>(legacy_request_from(env), s);
             const bool new_native = new_uses_native<T>(env, s);
             ++compared;
             if (old_native) ++native_cases;
+
+            const Divergence d = classify_divergence<T>(env, s, old_native, new_native);
+            if (d == Divergence::HeterogeneousWidened) { ++het_widened; continue; }
+            if (d == Divergence::FloatWindowNarrowed)  { ++float_narrowed; continue; }
+            if (d == Divergence::DefaultFlipped)       { ++default_flipped; continue; }
+            if (d == Divergence::DoubleWindowWidened)  { ++double_widened; continue; }
 
             ASSERT_EQ(old_native, new_native)
                 << "route diverged for " << type_name
@@ -182,9 +214,63 @@ void expect_equivalent(ScalarKind kind, const char* type_name) {
         }
     }
     EXPECT_GT(compared, 1000u) << "grid too small to be meaningful";
-    // Guards against the degenerate pass where the new code never picks native
-    // and the old code never did either because the grid missed the window.
     EXPECT_GT(native_cases, 0u) << "grid never exercised the native route for " << type_name;
+
+    EXPECT_GT(het_widened, 0u)
+        << "grid no longer reaches the intended heterogeneous divergence for "
+        << type_name << " -- the exception is now vacuous";
+
+    if constexpr (std::is_same_v<T, float>) {
+        EXPECT_GT(float_narrowed, 0u)
+            << "grid no longer reaches the WP2 E4 float narrowing -- the "
+               "exception is now vacuous";
+    } else {
+        EXPECT_EQ(float_narrowed, 0u)
+            << "the E4 narrowing is float-only but fired for " << type_name;
+    }
+
+    if constexpr (is_std_complex_v<T>) {
+        EXPECT_EQ(default_flipped, 0u)
+            << "complex must not route native by default: preferred() refuses it, "
+               "and the register ladder for complex needs min_dim >= 256 and an "
+               "aligned NN shape (see docs/perf/gemm.md#evidence-for-each-boundary)";
+    } else {
+        EXPECT_GT(default_flipped, 0u)
+            << "grid no longer reaches the WP2 E6 default flip for " << type_name
+            << " -- the exception is now vacuous";
+    }
+
+    if constexpr (std::is_same_v<T, double>) {
+        EXPECT_GT(double_widened, 0u)
+            << "grid no longer reaches the WP2 E5 double widening -- the "
+               "exception is now vacuous";
+    } else {
+        EXPECT_EQ(double_widened, 0u)
+            << "the E5 widening is double-only but fired for " << type_name;
+    }
+}
+
+// The positive form of the DefaultFlipped exception: unset must decide as "auto".
+template <typename T>
+void expect_unset_equals_auto(ScalarKind kind, const char* type_name) {
+    size_t compared = 0, native_cases = 0;
+    for (const OpShape& s : shape_grid(kind)) {
+        const bool unset = new_uses_native<T>(nullptr, s);
+        const bool automatic = new_uses_native<T>("auto", s);
+        ++compared;
+        if (unset) ++native_cases;
+        ASSERT_EQ(unset, automatic)
+            << "unset and \"auto\" disagree for " << type_name << "  " << s.describe()
+            << "  transA=" << static_cast<int>(s.transA)
+            << " transB=" << static_cast<int>(s.transB)
+            << "  gpu=" << s.is_gpu;
+    }
+    EXPECT_GT(compared, 100u) << "grid too small to be meaningful";
+    if constexpr (!is_std_complex_v<T>) {
+        EXPECT_GT(native_cases, 0u)
+            << "unset never chose native for " << type_name
+            << " -- the flip would be a no-op and this test vacuous";
+    }
 }
 
 } // namespace
@@ -194,17 +280,18 @@ TEST(RouteGemmEquivalence, Double)        { expect_equivalent<double>(ScalarKind
 TEST(RouteGemmEquivalence, ComplexFloat)  { expect_equivalent<std::complex<float>>(ScalarKind::C32, "complex<float>"); }
 TEST(RouteGemmEquivalence, ComplexDouble) { expect_equivalent<std::complex<double>>(ScalarKind::C64, "complex<double>"); }
 
-// --- the replica itself must be faithful ----------------------------------
+TEST(RouteGemmEquivalence, UnsetNowMeansAutoFloat)         { expect_unset_equals_auto<float>(ScalarKind::F32, "float"); }
+TEST(RouteGemmEquivalence, UnsetNowMeansAutoDouble)        { expect_unset_equals_auto<double>(ScalarKind::F64, "double"); }
+TEST(RouteGemmEquivalence, UnsetNowMeansAutoComplexFloat)  { expect_unset_equals_auto<std::complex<float>>(ScalarKind::C32, "complex<float>"); }
+TEST(RouteGemmEquivalence, UnsetNowMeansAutoComplexDouble) { expect_unset_equals_auto<std::complex<double>>(ScalarKind::C64, "complex<double>"); }
 
 TEST(RouteGemmEquivalence, ReplicaIsFaithful) {
     // Behaviours transcribed from gemm_variant.hh that are easy to get wrong.
-    // If the replica drifts, the diff above would pass vacuously.
     OpShape s; s.op = Op::gemm; s.scalar = ScalarKind::F32;
     s.m = s.n = s.k = 256; s.batch = 512; s.is_gpu = true;
 
     // UNSET means Vendor for gemm -- not Auto.
     EXPECT_FALSE(legacy_use_sycl_custom<float>(legacy_request_from(nullptr), s));
-    // ...and "auto" does reach the window.
     EXPECT_TRUE(legacy_use_sycl_custom<float>(legacy_request_from("auto"), s));
     // "sycl" bypasses the GPU check and the window entirely.
     OpShape cpu = s; cpu.is_gpu = false; cpu.m = cpu.n = cpu.k = 4096;
@@ -222,12 +309,9 @@ TEST(RouteGemmEquivalence, ReplicaIsFaithful) {
     EXPECT_TRUE(legacy_use_sycl_custom<double>(legacy_request_from("auto"), d));
 }
 
-// --- the split itself is meaningful ---------------------------------------
-
 TEST(RouteGemmEquivalence, SupportsIsCorrectnessOnlyNotSpeed) {
-    // The trap the spec names: if the measured window leaked into supports(), a
-    // large float GEMM would have NO supported native route, and vendor-off
-    // would break an op that works today.
+    // If the measured window leaked into supports(), a large float GEMM would have
+    // NO supported native route and a vendor-off build would break a working op.
     using Table = RouteTable<Op::gemm, float>;
     OpShape big; big.op = Op::gemm; big.scalar = ScalarKind::F32;
     big.m = big.n = big.k = 1024; big.batch = 256; big.is_gpu = true;
@@ -242,22 +326,32 @@ TEST(RouteGemmEquivalence, SupportsIsCorrectnessOnlyNotSpeed) {
 
 TEST(RouteGemmEquivalence, CorrectnessGateSurvivesForcing) {
     using Table = RouteTable<Op::gemm, float>;
+
+    // Forcing bypasses preferred(), never supports(), so it cannot select a route
+    // that computes the WRONG ANSWER. Here the unsupported shape is a non-Default
+    // ComputePrecision: select_kernel_variant has no TF32 path.
+    OpShape unsupported; unsupported.op = Op::gemm; unsupported.scalar = ScalarKind::F32;
+    unsupported.m = unsupported.n = unsupported.k = 256;
+    unsupported.batch = 512; unsupported.is_gpu = true;
+    unsupported.precision = ComputePrecision::F32;
+
+    const Route native{Origin::Native, Algorithm::RegisterTiled};
+    EXPECT_FALSE(Table::supports(native, unsupported));
+    const Route chosen = resolve_gemm_route<float>(native, unsupported);
+    EXPECT_TRUE(is_vendor(chosen));
+
     OpShape het; het.op = Op::gemm; het.scalar = ScalarKind::F32;
     het.m = het.n = het.k = 256; het.batch = 512; het.is_gpu = true;
     het.heterogeneous_batch = true;
-
-    const Route native{Origin::Native, Algorithm::RegisterTiled};
-    EXPECT_FALSE(Table::supports(native, het));
-    // Forcing must not be able to select a route that computes the wrong answer.
-    const Route chosen = resolve_gemm_route<float>(native, het);
-    EXPECT_TRUE(is_vendor(chosen));
+    EXPECT_TRUE(Table::supports(native, het))
+        << "WP2 C2: the facade walks a heterogeneous batch, so native supports it";
+    EXPECT_FALSE(Table::preferred(native, het))
+        << "...but a per-item loop is a cost, so it is never the preferred choice";
 }
 
 TEST(RouteGemmEquivalence, SupportedButUnpreferredIsReachedOnlyWithoutVendor) {
-    // The bug this test caught on first run. 8x8x8 at batch 1 is SUPPORTED by
-    // the native kernel (it computes the right answer) but is far outside the
-    // measured window. Taking "the first supported route" would pick native --
-    // the order lists it first -- and silently invert GEMM's vendor-by-default.
+    // 8x8x8 at batch 1 is SUPPORTED but far outside the measured window. Taking
+    // "the first supported route" would pick native and invert vendor-by-default.
     OpShape tiny; tiny.op = Op::gemm; tiny.scalar = ScalarKind::F32;
     tiny.m = tiny.n = tiny.k = 8; tiny.batch = 1; tiny.is_gpu = true;
     const Route automatic{Origin::Auto, Algorithm::Auto};
@@ -265,50 +359,52 @@ TEST(RouteGemmEquivalence, SupportedButUnpreferredIsReachedOnlyWithoutVendor) {
     EXPECT_TRUE(is_vendor(resolve_gemm_route<float>(automatic, tiny, /*vendor_available=*/true)))
         << "with a vendor present, an unpreferred native route must not be chosen";
 
-    // With no vendor compiled in, correctness beats preference: a supported
-    // route is better than no route at all. This is the vendor-off
-    // configuration the work package is building toward.
     const Route chosen = resolve_gemm_route<float>(automatic, tiny, /*vendor_available=*/false);
     EXPECT_TRUE(is_native(chosen))
         << "with no vendor available, the supported native route must be chosen";
 
-    // ...but only when it is actually supported. A heterogeneous batch is a
-    // correctness failure, so vendor-off must not manufacture a wrong answer.
-    OpShape het = tiny; het.heterogeneous_batch = true;
-    EXPECT_TRUE(is_vendor(resolve_gemm_route<float>(automatic, het, /*vendor_available=*/false)))
+    OpShape unsupported = tiny;
+    unsupported.precision = ComputePrecision::F32;
+    // Aliased because the comma in RouteTable<Op::gemm, float> is a macro
+    // argument separator to the preprocessor, not a template argument.
+    using GemmTable = RouteTable<Op::gemm, float>;
+    ASSERT_FALSE(GemmTable::supports(
+                     Route{Origin::Native, Algorithm::RegisterTiled}, unsupported))
+        << "the premise: this shape must actually be unsupported";
+    EXPECT_TRUE(is_vendor(resolve_gemm_route<float>(automatic, unsupported, /*vendor_available=*/false)))
         << "an unsupported route must never be selected, even with no alternative";
+
+    OpShape het = tiny; het.heterogeneous_batch = true;
+    EXPECT_TRUE(is_native(resolve_gemm_route<float>(automatic, het, /*vendor_available=*/false)))
+        << "WP2 C2: heterogeneous batch is supported natively via the facade loop";
 }
 
-TEST(RouteGemmEquivalence, DefaultedVendorAlsoDegradesWhenThereIsNoVendor) {
-    // The gap the test above did NOT close, found only once the adapter was
-    // wired up: it passes Origin::Auto, which the real call path never produces
-    // for an unset environment. GEMM's unset default is Vendor
-    // (legacy_unset_default), so an ordinary call arrives as a FORCED Vendor
-    // request and used to be returned verbatim -- making the degradation above
-    // unreachable outside this file.
+TEST(RouteGemmEquivalence, ForcedVendorStillDegradesWhenThereIsNoVendor) {
     OpShape tiny; tiny.op = Op::gemm; tiny.scalar = ScalarKind::F32;
     tiny.m = tiny.n = tiny.k = 8; tiny.batch = 1; tiny.is_gpu = true;
-    const Route defaulted = legacy_unset_default(Op::gemm);
-    ASSERT_TRUE(is_vendor(defaulted)) << "the premise of this test";
 
+    const Route defaulted = legacy_unset_default(Op::gemm);
+    EXPECT_EQ(defaulted.origin, Origin::Auto)
+        << "WP2 E6: GEMM's unset default is Auto, like every other op";
+
+    // 8x8 at batch 1 is outside every measured window, so Auto defers to a vendor.
     EXPECT_TRUE(is_vendor(resolve_gemm_route<float>(defaulted, tiny, /*vendor_available=*/true)));
     EXPECT_TRUE(is_native(resolve_gemm_route<float>(defaulted, tiny, /*vendor_available=*/false)))
         << "a vendor that is not compiled in cannot be the answer";
 
-    // And an explicitly forced vendor degrades the same way. Silently running
-    // native is the better failure than dispatching to a library that is not
-    // there; announcing it is the job of the S6 gate, not of the resolver.
+    // A forced vendor degrades the same way: running native is a better failure than
+    // dispatching to a library that is not there.
     const Route explicit_vendor{Origin::Vendor, Algorithm::Auto};
     EXPECT_TRUE(is_native(resolve_gemm_route<float>(explicit_vendor, tiny, /*vendor_available=*/false)));
 
     // Still never at the cost of correctness.
-    OpShape het = tiny; het.heterogeneous_batch = true;
-    EXPECT_TRUE(is_vendor(resolve_gemm_route<float>(defaulted, het, /*vendor_available=*/false)));
+    OpShape unsupported = tiny;
+    unsupported.precision = ComputePrecision::F32;
+    EXPECT_TRUE(is_vendor(resolve_gemm_route<float>(defaulted, unsupported, /*vendor_available=*/false)));
 }
 
 TEST(RouteGemmEquivalence, ResolutionIsPureAndRepeatable) {
-    // gemm and gemm_buffer_size must reach the same route by construction. A
-    // pure resolver gives that for free; the current code relies on a comment.
+    // gemm and gemm_buffer_size must reach the same route by construction.
     OpShape s; s.op = Op::gemm; s.scalar = ScalarKind::F32;
     s.m = s.n = s.k = 256; s.batch = 512; s.is_gpu = true;
     const Route a = resolve_gemm_route<float>(Route{Origin::Auto, Algorithm::Auto}, s);
