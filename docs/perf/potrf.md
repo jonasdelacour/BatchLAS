@@ -14,7 +14,7 @@ All numbers: RTX 4090 (sm_89, 128 SM), one card held per campaign, under `experi
 | `{Native, Blocked}` | `src/extensions/potrf_blocked.cc` | any | **Lower only** |
 | `{Vendor, Auto}` | cuSOLVER | any | both |
 
-All four scalar types on every arm. The candidate order (`route_potrf.hh:23-182`) is *mostly* a capability ladder:
+All four scalar types on every arm. The candidate order (`route_potrf.hh:23-27`) is *mostly* a capability ladder:
 the blocked driver's diagonal leaf *is* the CTA kernel on a sub-view, so above `cta_max_n` only Blocked can serve.
 **Below it the two arms overlap and the static array decides** — `supports(Blocked)` carries no lower order bound, so
 for `Uplo::Lower` at `n <= cta_max_n` both are supported and the vendor-free walk takes CTA because it is listed
@@ -25,9 +25,9 @@ exists (float n=128 b=512: CTA 0.293 ms against blocked 0.301 ms). Env var `BATC
 
 | | float | double | complex\<float\> | complex\<double\> |
 |---|---|---|---|---|
-| CTA `NB`/`TS` (`potrf_cta.cc:38-174`) | 8/4 | 8/4 | 8/4 | 8/2 |
+| CTA `NB`/`TS` (`potrf_cta.cc:38`) | 8/4 | 8/4 | 8/4 | 8/2 |
 | CTA fit ceiling at 97,280 B | 155 | 109 | 109 | 77 |
-| blocked `nb` (`potrf_blocked.cc:44-189`) | 128 | 96 | 96 | 64 |
+| blocked `nb` (`potrf_blocked.cc:44`) | 128 | 96 | 96 | 64 |
 | blocked `W` | **128** | 32 | 32 | 16 |
 
 No `nb` equals the fit ceiling. Sizing `nb` from the fit ceiling — what the spec does — is measurably wrong for
@@ -35,7 +35,7 @@ every type.
 
 ### Route arms and the `supports()` gates
 
-`supports()` (`route_potrf.hh:32-302`) is correctness-only; every gate means "wrong answer or cannot launch":
+`supports()` (`route_potrf.hh:32-61`) is correctness-only; every gate means "wrong answer or cannot launch":
 
 | line | gate | why it is correctness |
 |---|---|---|
@@ -52,14 +52,14 @@ load/store transform, swept under both `Uplo` by `ResidualBothTriangles` and
 `OtherTriangleIsNeitherReadNorWritten`. Deliberately **no** lower order bound on the Blocked arm: in `supports()` it
 would make a forced `blocked` at small `n` fall through `automatic()` to cuSOLVER and measure nothing. `PotrfShape`
 adds `cta_max_n` (asked of the *device*), `blocked_available` (does the driver exist in this *build*) and
-`has_sg32`; the builder is `src/backends/potrf_route.hh:20-118`, so the table stays pure.
+`has_sg32`; the builder is `src/backends/potrf_route.hh:20-55`, so the table stays pure.
 
 ### `preferred()` is false everywhere
 
-`preferred()` returns `false` unconditionally (`route_potrf.hh:65-342`). Un-preferred is not unroutable:
-`route_resolve.hh:38-127` still hands a **vendor-free** caller any supported native route, while `Origin::Auto` in a
+`preferred()` returns `false` unconditionally (`route_potrf.hh:65-69`). Un-preferred is not unroutable:
+`route_resolve.hh:38-49` still hands a **vendor-free** caller any supported native route, while `Origin::Auto` in a
 vendor-present build keeps taking cuSOLVER. `route_diff.sh` across both landings shows zero changed non-potrf rows;
-what changed is potrf's `native_route_supported` column, 0 → 1 (`route_potrf.hh:5`), and the Phase 2 capture is
+what changed is potrf's `native_route_supported` column, 0 → 1 (`route_potrf.hh:3-4`), and the Phase 2 capture is
 +28 additions / 0 removals. **The Phase 2 triage delta's route diff was never re-run** — the capture needs
 `-DBATCHLAS_ENABLE_COVERAGE=ON`, i.e. two device-link-bound rebuilds — and was argued instead from the diff touching
 no routing predicate (one `group_barrier`, two `fill`s, four in-order guards, one tuning constant, comments).
@@ -82,7 +82,7 @@ sharedMemPerBlockOptin` agrees). `device_limits.hh`'s 49,152 is **hardcoded** by
 | `complex<float>` | **109** | 95,444 | 110 → 98,076 |
 | `complex<double>` | **77** | 95,328 | 78 → 99,056 |
 
-Those bytes are the **shipped** `potrf_slm_per_matrix` (`potrf_cta.cc:58-256`), i.e. with the 256 B slack term.
+Those bytes are the **shipped** `potrf_slm_per_matrix` (`potrf_cta.cc:58-67`), i.e. with the 256 B slack term.
 `slm/README.md`'s table (96,368 / 95,336 / 95,272 / 95,132) and its "first miss" column predate that correction and
 are the 64 B formula; `README.md` §2 carries the corrected ceiling column but its first-miss column is still the old
 one. The **ceilings are identical under both formulas**, which is the point of the correction below.
@@ -200,7 +200,7 @@ cuSOLVER runtime they replaced.
 ### The `L` ladder
 
 `L` (work-items per matrix) derives from the **elements** the first trailing update touches, `Ntiles_0 * TS^2`, at
-24 elements per work-item, capped at 256 (`potrf_cta.cc:50-199, :383-392`). It was a *tile*-count ladder justified
+24 elements per work-item, capped at 256 (`potrf_cta.cc:50-67, :383-392`). It was a *tile*-count ladder justified
 by a thread-limit argument `ncu` refutes — the thread limit never binds — and a tile count is the wrong unit anyway,
 since `TS` varies across the type ladder: `complex<double>` at `TS = 2` has 4x the tiles at 1/4 the work each, so a
 tile rule over-shoots it by two rungs.
@@ -317,7 +317,7 @@ vendor-free build's 15.784 — 0.02%, so the forced-vs-resolved trap does not bi
 * **Vendor-free float beats cuSOLVER at `n >= 1024`** — 1.108x at 1024, 1.396x at 2048, bracketed below by 0.614 at
   n=512. double is at parity across n=512..2048 (0.988-1.057). The WP4 goal, met for the real types.
 * **Complex is not there**, 0.311-0.509 vendor-free, and the gap *widens* with `n` (cdouble 0.44 at n=128 → 0.28 at
-  n=2048). Cause is outside this driver: `route_gemm.hh:43-114` returns false for complex and
+  n=2048). Cause is outside this driver: `route_gemm.hh:43-45` returns false for complex and
   `gemm_kernels.cc:465` keeps the register ladder inside `if constexpr (is_same_v<T,float>)`, so every complex
   trailing gemm lands on `Tiled16`. At cdouble n=1024 that gemm is **97.6%** of the call and 2.95x slower than
   cuBLAS (0.40 TFLOP/s against 1.18, on a card whose FP64 ceiling is ~1.29). Substituting cuBLAS's gemm time into
@@ -434,7 +434,7 @@ BATCHLAS_POTRF_ROUTE=blocked BATCHLAS_GEMM_ROUTE=native -> 8/8 bad, rel resid 9.
 The second line is the vendor-free build; with cuBLAS injected it survived by luck. **No Phase 2 test saw it**
 because every one allocated a fresh `UnifiedVector<std::byte>`, whose `malloc_shared` pages come back **zeroed**.
 Fix: one `ctx->fill(ws.product.data(), T(0), ws.product.size())` before the panel loop
-(`potrf_blocked.cc:283-655`), fire-and-forget rather than the `fill().wait()` the review also flagged. Guarded by
+(`potrf_blocked.cc:283-285`), fire-and-forget rather than the `fill().wait()` the review also flagged. Guarded by
 `PotrfBlockedTest.BlockedDoesNotReadUninitialisedWorkspace` — the only test of 101 that turns red without the fill.
 
 **3. The facade test asserted on a route re-resolution, not on execution.** The previous `FacadeReachesTheCtaKernel`

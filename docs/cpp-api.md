@@ -277,10 +277,10 @@ half defined, not symmetric — mirror it as well.
 carry differing `active_rows`/`active_cols`, `gemm` detects that and routes to
 the heterogeneous path itself, on every backend — there is no separate entry
 point to reach for, and there has never been a `gemm` that could not do this.
-(A `gemm_heterogeneous` alias used to exist in the C++ headers; it forwarded to
-`gemm` with an unchanged argument list and has been removed. The Python
-`gemm_heterogeneous` remains, because it does something `gemm` does not: it
-accepts a list of differently-shaped arrays.)
+(A `gemm_heterogeneous` alias also exists in the C++ headers; it forwards to
+`gemm` with an unchanged argument list, so it buys you nothing — call `gemm`.
+The Python `gemm_heterogeneous` is a different thing, and does something `gemm`
+does not: it accepts a list of differently-shaped arrays.)
 
 `symm`, `syrk` and `syr2k` are constrained to **real** `T` and do not instantiate
 for `std::complex`; `hemm`, `herk` and `her2k` are constrained to **complex** `T`
@@ -330,9 +330,9 @@ What to write at the call site, by owning type:
 
 | you hold | parameter is `Span<T>` | parameter is `VectorView<T>` |
 | --- | --- | --- |
-| `UnifiedVector<T>` | pass it directly (implicit), or `.to_span()` | `VectorView<T>(v, size, batch, Inc{i}, Stride{s})` |
+| `UnifiedVector<T>` | pass it directly (implicit), or `.to_span()` | `VectorView<T>(v, size, batch, inc, stride)` |
 | `Vector<T>` | `.data()` — the whole allocation, so only when `inc == 1` and it is packed | `.view()`, always |
-| raw pointer | `Span<T>(p, n)` | `VectorView<T>(p, size, batch, Inc{i}, Stride{s})` |
+| raw pointer | `Span<T>(p, n)` | `VectorView<T>(p, size, batch, inc, stride)` |
 
 `Vector<T>::view()` is required whenever `T` has to be *deduced* from the
 argument, which is every templated entry point: the implicit
@@ -355,24 +355,15 @@ Vector<float> x(n, /*batch_size=*/batch), y(m, batch);   // owning USM vectors
 gemv(ctx, A.view(), x.view(), y.view(), {.alpha = 1.0f});
 ```
 
-**`Vector` names `inc` and `stride`; `VectorView` still takes them positionally,
-in the opposite order.** Write `Vector<T>(size, batch_size, Stride{s}, Inc{i})`.
-The bare-int spellings `Vector<T>(size, batch_size, stride, inc)` and
-`Vector<T>(size, batch_size, stride)` are `= delete`d and no longer compile.
-`VectorView<T>(ptr, size, batch_size, inc, stride)` keeps its positional form —
-138 call sites use it and all of them are correct — and gains
-`VectorView<T>(ptr, size, batch_size, Inc{i}, Stride{s})` alongside it. The tags
-exist because the two orders are otherwise indistinguishable: both parameters are
-`int`, both default, and `(inc = n, stride = 1)` fits exactly the same buffer as
-`(inc = 1, stride = n)`, so a pair passed in the other order used to compile and
-read the wrong elements with no diagnostic. Prefer the tagged spelling on both
-types. `Stride`, `Inc`, `Ld` and `BatchSize` live in `batchlas/blas/matrix.hh`
-next to `NonZeros`; like `NonZeros` they are explicit in and do not decay back to
-`int`.
+**`Vector` and `VectorView` take `inc` and `stride` in opposite orders.** It is
+`Vector<T>(size, batch_size, stride, inc)` and
+`VectorView<T>(ptr, size, batch_size, inc, stride)`. Both parameters are `int`
+and both default — `inc` to 1, `stride` to `size * inc` — so a pair passed in
+the other order compiles and reads the wrong elements. Read the argument order
+off the constructor you are calling, every time.
 
-`Vector<T>::zeros(size, batch_size, Stride{s}, Inc{i})`, `::ones(...)`,
-`::random(...)` and `::standard_basis(size, index, batch_size, Stride{s})` build
-one directly; their bare-int forms are deleted the same way.
+`Vector<T>::zeros(size, batch_size, stride, inc)`, `::ones(...)` and
+`::standard_basis(size, index, batch_size, stride)` build one directly.
 
 ## Options are structs with defaults
 
