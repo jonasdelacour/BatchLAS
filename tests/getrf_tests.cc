@@ -1,86 +1,10 @@
-// Native batched LU -- GETRF, GETRS and GETRI. The WP6 tests.
-//
-// ---------------------------------------------------------------------------
-// THE ORACLE IS NEVER THE VENDOR, AND THE ROUTE IS NEVER TRUSTED
-// ---------------------------------------------------------------------------
-// The first two rules are inherited verbatim from tests/potrf_tests.cc:1-25 and
-// tests/geqrf_tests.cc:1-31. The third is specific to LU and was MEASURED during
-// WP6.
-//
-//   * A VENDOR REFERENCE IS INERT IN A VENDOR-FREE BUILD. resolve_route falls
-//     back to a supported NATIVE route when no vendor exists -- which is the code
-//     under test -- so a "compare against cuBLAS" test compares the kernel with
-//     itself in exactly the build this campaign exists for.
-//
-//   * A FORCED ROUTE THAT supports() REJECTS SILENTLY BECOMES THE VENDOR.
-//     route_resolve.hh:165 tests `if (Table::supports(forced, s)) return forced;`
-//     and falls through to automatic() at :175, so a test that sets
-//     BATCHLAS_GETRF_ROUTE=cta and gets one gate wrong runs cuBLAS and passes
-//     GREEN over a kernel nothing executed.
-//
-//   * THE VENDOR IS NOT A VALID PIVOT ORACLE EVEN WHERE IT EXISTS.
-//     cublas{C,Z}getrfBatched selects its pivot on the MODULUS; LAPACK, netlib
-//     and this kernel select on cabs1 = |Re| + |Im| (WP6's measured finding,
-//     experiments/wp6_lu/kernels/README.md section 3). On a matrix built to
-//     separate the two rules the vendor and the host DISAGREE, for both complex
-//     types. An elementwise native-vs-vendor pivot comparison is therefore a
-//     WRONG test, and PivotSelectionUsesCabs1AndNotTheModulus below is what pins
-//     the rule this library actually implements.
-//
-// So every numerical test in this file calls sycl_getrf::getrf_cta_dispatch<T> /
-// getrf_blocked_dispatch<T> / sycl_getrs::getrs_blocked_dispatch<T> /
-// sycl_getri::getri_blocked_dispatch<T> DIRECTLY -- calls no vendor can serve --
-// and checks a HOST reference built here from the input this file generated.
-//
-// ---------------------------------------------------------------------------
-// THE FOUR HOST ORACLES, AND WHY A RESIDUAL ALONE IS NOT ENOUGH
-// ---------------------------------------------------------------------------
-// 1. ||P A - L U||_F / ||A||_F, with P RECONSTRUCTED ON THE HOST from the
-//    returned pivot array in the base and direction the contract claims
-//    (1-based, an INTERCHANGE LIST applied FORWARDS: for k = 0..n-1 swap rows k
-//    and ipiv[k]-1). Getting that reconstruction right IS the pivot-contract
-//    test: a 0-based array, a permutation vector, or a backwards walk each make
-//    this residual O(1).
-//
-// 2. THE PIVOT SEQUENCE ELEMENTWISE, against a sequence known EXACTLY and
-//    without arithmetic. A random matrix cannot support that check across the
-//    blocked tier, because a blocked LU rounds its trailing update in a different
-//    order from any host getf2 and a near-tie can legitimately flip. So the
-//    pivot-equality tests run on a STRICTLY COLUMN-DIAGONALLY-DOMINANT matrix
-//    that has then been ROW-PERMUTED: dominance is preserved by elimination, so
-//    at step k the winner is the row carrying the dominant entry, ahead by a
-//    factor of order 4n, and the expected interchange list follows from integer
-//    bookkeeping alone. That sequence is stable under ANY rounding and identical
-//    for both tiers and all four scalar types.
-//
-// 3. |L(i,j)| <= 1. The defining property of PARTIAL pivoting and the one thing
-//    a residual cannot see: an unpivoted (Doolittle) factorization satisfies
-//    ||PA - LU|| perfectly with ipiv = identity, and WP6's baseline measured that
-//    on the obvious diagonally dominant matrix DROPPING THE INTERCHANGE ENTIRELY
-//    leaves the residual bit-identical. This one runs on the RANDOM matrix, where
-//    it has something to say.
-//
-// 4. THE SOLVE AND THE INVERSE against the ORIGINAL A: ||op(A) X - B|| and
-//    ||A C - I||, in double regardless of T.
-//
-// ---------------------------------------------------------------------------
-// EVERY TEST IN THIS FILE WAS BROKEN ON PURPOSE, AND THE RESULTS ARE RECORDED
-// AT THE BOTTOM OF THIS FILE -- INCLUDING THE BREAKS THAT TURNED NOTHING RED.
-//
-// THERE ARE TWO SUCH RECORDS AT THE BOTTOM, in this order: the FUSED-GETRS one
-// (L0b plus the F-series, fourteen breaks) and then the original WP6 one (L0
-// through L15, fourteen breaks). They are separate because they corrupt separate
-// files -- src/extensions/getrs_fused.cc against src/extensions/getrf_*.cc -- and
-// because their tooling is separate: experiments/wp6_getrs/tests/ against
-// experiments/wp6_lu/tests/.
-//
-// THE FUSED NARROW-RHS GETRS TIER (src/extensions/getrs_fused.cc) IS THE SECOND
-// NATIVE getrs ARM and it is what a vendor-free build now takes at every width
-// its right-hand side is resident for. It is covered by L0b (the 48 KB ladder,
-// declared early ON PURPOSE) and by F1-F7 near the end of this file; the composed
-// tier's own tests (L8, L10, L11) are unchanged and still pin the arm the fused
-// one hands back to.
-// ---------------------------------------------------------------------------
+// Native batched LU -- getrf, getrs and getri: both getrf tiers (CTA and
+// blocked), both getrs arms (composed and fused narrow-RHS), and getri.
+// Every numerical test drives the native dispatch entry points DIRECTLY against a
+// HOST reference; the vendor is never a pivot oracle, because
+// cublas{C,Z}getrfBatched pivots on the modulus where this library and LAPACK
+// pivot on cabs1 = |Re| + |Im|.
+// evidence: docs/perf/lu.md
 #include <gtest/gtest.h>
 
 #include <batchlas/blas/functions/getrf.hh>
@@ -120,11 +44,8 @@ namespace {
 template <typename T>
 using RealOf = typename batchlas::base_type<T>::type;
 
-// ---------------------------------------------------------------------------
-// Host arithmetic. EVERY reference computation below promotes to double (or
-// complex<double>) before it accumulates, so a float residual measures the
-// KERNEL's error and not the reference's.
-// ---------------------------------------------------------------------------
+// Host arithmetic: every reference promotes to double (or complex<double>)
+// before it accumulates, so a float residual measures the KERNEL's error.
 template <class T> struct Prom { using type = double; };
 template <class R> struct Prom<std::complex<R>> { using type = std::complex<double>; };
 
@@ -137,8 +58,7 @@ inline double hconj(double x) { return x; }
 inline std::complex<double> hconj(std::complex<double> x) { return std::conj(x); }
 inline double habs(double x) { return std::fabs(x); }
 inline double habs(std::complex<double> x) { return std::abs(x); }
-// cabs1, LAPACK's |Re| + |Im|. THE metric ?GETRF's I?AMAX pivots on, and NOT the
-// modulus -- see the note at the top of this file.
+// cabs1 = |Re| + |Im|: the metric ?GETRF's I?AMAX pivots on, not the modulus.
 inline double hcabs1(double x) { return std::fabs(x); }
 inline double hcabs1(std::complex<double> x) { return std::fabs(x.real()) + std::fabs(x.imag()); }
 inline bool hfinite(double x) { return std::isfinite(x); }
@@ -154,8 +74,7 @@ template <> inline std::complex<double> mk<std::complex<double>>(double re, doub
     return {re, im};
 }
 
-// Scale a scalar of either kind by a real factor, without naming .real()/.imag()
-// on a type that has neither.
+// Scale by a real factor without naming .real()/.imag() on a type without them.
 template <class T> inline T scale(T v, double f) { return T(v * static_cast<RealOf<T>>(f)); }
 template <class R> inline std::complex<R> scale(std::complex<R> v, double f) {
     return std::complex<R>(v.real() * static_cast<R>(f), v.imag() * static_cast<R>(f));
@@ -167,10 +86,8 @@ constexpr double eps_of() {
     else return 2.220446049250313e-16;
 }
 
-// Backward-error bounds. LU with partial pivoting is backward stable, so the
-// factorization and solve bounds scale with n * eps and NOT with conditioning.
-// The inverse residual DOES carry cond(A), which is why every getri and getrs
-// test runs on the dominant matrix, whose condition number is O(1).
+// LU with partial pivoting is backward stable, so these bounds scale with n * eps
+// and not with conditioning; only the inverse residual carries cond(A).
 template <typename T> double lu_tol(int n)    { return 200.0 * double(n) * eps_of<T>(); }
 template <typename T> double solve_tol(int n) { return 400.0 * double(n) * eps_of<T>(); }
 template <typename T> double inv_tol(int n)   { return 800.0 * double(n) * eps_of<T>(); }
@@ -180,9 +97,8 @@ bool verbose() {
     return v;
 }
 
-// A deterministic LCG rather than <random>: the same stream must come out on
-// every platform and every rerun, because several tests below assert that two
-// batch items DIFFER and that assertion has to be about the data, not luck.
+// A deterministic LCG rather than <random>: several tests below assert that two
+// batch items DIFFER, and that must be a fact about the data, not about luck.
 struct Rng {
     uint64_t s;
     explicit Rng(uint64_t seed) : s(seed * 6364136223846793005ULL + 1442695040888963407ULL) {}
@@ -198,24 +114,10 @@ struct LuConfig {
     static constexpr Backend BackendVal = B;
 };
 
-// ---------------------------------------------------------------------------
-// A batch of DISTINCT square matrices in a buffer with a PADDED ld and a stride
-// that is NOT ld*cols, with the pad POISONED.
-//
-// None of that is decoration. trsm_native.cc:590-599 records the failure it
-// guards: the 6-arg MatrixView constructor DEFAULTS stride to ld*cols when 0 is
-// passed, after which every batch item but the first reads the wrong matrix;
-// there is a standing memory entry for the GEMM twin ("Native GEMM collapses on
-// strided ld"). Every shape test in this file therefore runs at ld != n and
-// stride != ld*n, so the two most consequential lines in each launcher are
-// falsifiable BY DEFAULT rather than in one dedicated test.
-//
-// THE POINTER ARRAY IS NOT OPTIONAL EITHER. getrf_blocked.cc:152-165 records the
-// measurement: a MatrixView built by the 6-arg constructor has an EMPTY
-// data_ptrs_ span, and every vendor batched call dereferences it and throws
-// "data_ptrs target is null". The drop-in tests below cross to the vendor, and
-// the blocked driver's own routed gemm reaches the vendor for float and double.
-// ---------------------------------------------------------------------------
+// A batch of DISTINCT matrices with a PADDED ld and a stride that is NOT ld*cols,
+// with the pad POISONED, so a launcher that lets MatrixView default the stride to
+// ld*cols is falsifiable by default. The pointer array is not optional either:
+// every vendor batched call dereferences data_ptrs_ and throws when it is empty.
 template <typename T>
 struct Lu {
     int n = 0, batch = 0, ld = 0, stride = 0;
@@ -247,8 +149,8 @@ void alloc(Lu<T>& p, int n, int batch, int ld_pad, int stride_pad) {
     p.info = UnifiedVector<int32_t>(static_cast<size_t>(batch), int32_t(0));
 }
 
-// A RANDOM matrix. Well-scaled but structureless, so the pivot sequence is
-// data-dependent and only the residual and |L| <= 1 oracles apply.
+// A RANDOM matrix: the pivot sequence is data-dependent, so only the residual and
+// pivot-ratio oracles apply.
 template <typename T>
 Lu<T> make_random(int n, int batch, unsigned seed, int ld_pad = 5, int stride_pad = 11) {
     Lu<T> p;
@@ -263,24 +165,11 @@ Lu<T> make_random(int n, int batch, unsigned seed, int ld_pad = 5, int stride_pa
     return p;
 }
 
-// ---------------------------------------------------------------------------
-// THE MATRIX WITH A KNOWN-EXACT PIVOT SEQUENCE.
-//
-// Build a STRICTLY COLUMN-DIAGONALLY-DOMINANT B (|B(k,k)| = 4n, |B(i,k)| <= 1)
-// and then move B's row r to position sigma(r). Two facts make the interchange
-// list exact and rounding-independent:
-//
-//   * column diagonal dominance is PRESERVED by Gaussian elimination, so at step
-//     k the largest cabs1 in column k over rows k..n-1 is the one carrying B's
-//     row k, ahead of every other by a factor of order 4n/3 -- far outside any
-//     rounding of any of the four scalar types;
-//   * therefore the pivot at step k is simply "wherever B's row k currently is",
-//     which is pure integer bookkeeping.
-//
-// It is also the matrix every getrs/getri residual runs on, because its
-// condition number is O(1) and ||A C - I|| carries cond(A) where ||PA - LU||
-// does not.
-// ---------------------------------------------------------------------------
+// THE MATRIX WITH A KNOWN-EXACT PIVOT SEQUENCE. A strictly column-diagonally-
+// dominant B (|B(k,k)| = 4n, |B(i,k)| <= 1) whose rows are then permuted: column
+// dominance survives elimination, so the winner at step k is known exactly and the
+// expected interchange list is pure integer bookkeeping. cond(A) is O(1), which is
+// why every getrs and getri residual runs on it too.
 template <typename T>
 Lu<T> make_dominant_permuted(int n, int batch, unsigned seed,
                              int ld_pad = 5, int stride_pad = 11) {
@@ -288,19 +177,9 @@ Lu<T> make_dominant_permuted(int n, int batch, unsigned seed,
     alloc(p, n, batch, ld_pad, stride_pad);
     Rng rg(seed);
 
-    // sigma: B's row r ends up at position sigma[r]. A CYCLIC SHIFT, and the
-    // choice is load-bearing rather than arbitrary.
-    //
-    // THIS WAS A REVERSAL, AND THE REVERSAL WAS A BLIND GUARD. A reversal is its
-    // OWN INVERSE, so the permutation the interchange list composes to satisfies
-    // F = F^{-1} -- and every test of a DIRECTION (getrs's transposed walk,
-    // getri's backward trace) is then satisfied by the wrong direction too.
-    // Measured: break `getrs_forward`, which walks the transposed permutation
-    // forwards instead of backwards, turned NOTHING red on the reversal (62
-    // passed, 0 failed) and turns the transposed getrs red on this shift.
-    //
-    // A cyclic shift composes to an n-cycle, which is self-inverse only for
-    // n <= 2. interchange_is_involution() below asserts that at every use.
+    // sigma: B's row r ends up at position sigma[r]. A CYCLIC SHIFT and not a
+    // reversal: a reversal is its own inverse, so every test of a permutation
+    // DIRECTION would be satisfied by the wrong direction too.
     std::vector<int> sigma(n);
     for (int r = 0; r < n; ++r) sigma[r] = (r + 1) % n;
 
@@ -375,21 +254,15 @@ MatrixView<T, MatrixFormat::Dense> view_of(Rhs<T>& r) {
                                               r.ptrs.data());
 }
 
-// The PACKED int32 view of the public int64 pivot span, for ONE batch item.
-// This spelling -- not a widening read of the int64 values -- IS the pivot
-// contract on CUDA and ROCm: cublas.cc:1508 and rocsolver.cc:227 both do
-// pivots.as_span<int>(), and the native kernels write the same layout.
+// The PACKED int32 view of the public int64 pivot span, for ONE batch item. This
+// spelling -- not a widening read -- IS the pivot contract on CUDA and ROCm.
 template <typename T>
 const int* piv_item(const Lu<T>& p, int b) {
     return reinterpret_cast<const int*>(p.piv.data()) + size_t(b) * p.n;
 }
 
-// ---------------------------------------------------------------------------
-// ORACLE 1: ||P A - L U||_F / ||A||_F, rectangular-capable (m >= n).
-//
-// P is reconstructed HERE, on the host, in the base and direction the contract
-// claims: a 1-based INTERCHANGE LIST applied FORWARDS.
-// ---------------------------------------------------------------------------
+// ORACLE 1: ||P A - L U||_F / ||A||_F, rectangular-capable (m >= n). P is rebuilt
+// here from a 1-based INTERCHANGE LIST applied FORWARDS, as the contract claims.
 template <typename T>
 double pa_lu_residual(const T* A0, const T* F, const int* ipiv,
                       int m, int n, int ld) {
@@ -409,8 +282,6 @@ double pa_lu_residual(const T* A0, const T* F, const int* ipiv,
     double num = 0.0, den = 0.0;
     for (int j = 0; j < n; ++j) {
         for (int i = 0; i < m; ++i) {
-            // (L U)(i,j) = sum_t L(i,t) U(t,j) with L unit-lower and U upper, so
-            // t runs to min(i, j, k-1) and the t == i term carries L = 1.
             D acc = D(0);
             const int tmax = std::min(std::min(i, j), k - 1);
             for (int t = 0; t <= tmax; ++t) {
@@ -426,29 +297,10 @@ double pa_lu_residual(const T* A0, const T* F, const int* ipiv,
     return (den > 0.0) ? std::sqrt(num / den) : std::sqrt(num);
 }
 
-// ORACLE 3: THE PARTIAL-PIVOTING PROPERTY ITSELF, IN THE METRIC THE LIBRARY
-// PIVOTS ON, recovered from the factor alone.
-//
-// The naive form of this oracle is "max |L(i,j)| <= 1", which is what a real
-// ?GETRF guarantees. IT IS WRONG FOR COMPLEX: LAPACK selects on cabs1 =
-// |Re| + |Im|, and cabs1(z) <= sqrt(2)|z|, so a perfectly correct zgetrf can and
-// does return |L| up to sqrt(2) (measured here at 1.051 on the first random
-// cfloat matrix this file generated). A test written to the real-only bound is
-// red on half the type list for no defect at all.
-//
-// The exact statement is recoverable instead. L(i,k) = a_ik / a_kk with a_kk the
-// CHOSEN PIVOT, and a_kk survives in the factor as U(k,k) -- so the selection
-// rule "cabs1(a_ik) <= cabs1(a_kk) for every i > k" is
-//
-//     cabs1( L(i,k) * U(k,k) ) <= cabs1( U(k,k) )
-//
-// which is checkable elementwise, is uniform over the four scalar types, and --
-// unlike the |L| <= 1 form -- IS SENSITIVE TO THE METRIC: a kernel that pivoted
-// on the modulus satisfies |a_ik| <= |a_kk| but can violate the line above by up
-// to sqrt(2), and does so on ordinary random complex data.
-//
-// Returns the worst ratio; 1 is the bound, an unpivoted factorization is
-// unbounded.
+// ORACLE 3: the partial-pivoting property, in the metric the library pivots on.
+// "max |L(i,j)| <= 1" is WRONG for complex (cabs1(z) <= sqrt(2)|z|); the exact
+// statement is cabs1(L(i,k) U(k,k)) <= cabs1(U(k,k)), which a kernel pivoting on
+// the modulus violates. Returns the worst ratio; 1 is the bound.
 template <typename T>
 double worst_pivot_ratio(const T* F, int m, int n, int ld) {
     const int k = std::min(m, n);
@@ -513,9 +365,7 @@ double inverse_residual(const T* A0, const T* C, int n, int lda, int ldc) {
     return std::sqrt(num) / double(n);
 }
 
-// ---------------------------------------------------------------------------
-// THE FIXTURE.
-// ---------------------------------------------------------------------------
+// The fixture.
 template <typename Config>
 class LuTest : public test_utils::BatchLASTest<Config> {
 protected:
@@ -526,9 +376,6 @@ protected:
         test_utils::BatchLASTest<Config>::SetUp();
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
         if (!this->ctx) GTEST_SKIP() << "no queue";
-        // supports()' own correctness gates, not a convenience: route_getrf.hh
-        // gate 2 (GPU only) and gate 3 (sub-group 32) reject everything else, and
-        // every direct entry point re-applies them.
         if (this->ctx->device().type != DeviceType::GPU)
             GTEST_SKIP() << "the native LU kernels are GPU-only (route_getrf.hh gate 2)";
         if (!this->ctx->device().supports_sub_group_size(32))
@@ -536,9 +383,7 @@ protected:
     }
 
     // The DEVICE's local-memory budget, spelled exactly as
-    // src/backends/getrf_route.hh spells it. NOT device_limits.hh's 49152, which
-    // cmake/BatchLASDetectSYCL.cmake:44-45 hardcodes for any nvidia_gpu_sm_*
-    // pattern and which is 2.06x wrong on this box (WP4's finding W1).
+    // src/backends/getrf_route.hh spells it, NOT device_limits.hh's hardcoded 49152.
     std::size_t budget() const {
         const std::size_t lm = static_cast<std::size_t>(
             this->ctx->device().get_property(DeviceProperty::LOCAL_MEM_SIZE));
@@ -547,21 +392,22 @@ protected:
     int cta_max_n() const { return sycl_getrf::getrf_cta_max_n_for_slm<T>(budget()); }
     bool leaf_fits(int m, int n) const { return sycl_getrf::getrf_leaf_fits<T>(m, n, budget()); }
 
-    // The blocked driver's OWN block width and OWN leading-panel leaf choice.
-    // QUERIED, never hardcoded: potrf_native.hh:246-266 records why a test that
-    // must straddle a block boundary and cannot see where the boundary is stops
-    // testing anything the moment the width moves.
+    // The blocked driver's OWN block width and leading-panel leaf choice, QUERIED and
+    // never hardcoded: a straddle test that cannot see the boundary tests nothing.
     int nb(int n) const {
         return int(sycl_getrf::getrf_blocked_debug_params<T>(*this->ctx, n) & 0xffffu);
     }
     unsigned leaf(int n) const {
-        return sycl_getrf::getrf_blocked_debug_params<T>(*this->ctx, n) >> 16;
+        return (sycl_getrf::getrf_blocked_debug_params<T>(*this->ctx, n) >> 16) & 0xffu;
+    }
+    // Bits 24+: the deferred left-hand interchange spelling (0 in-loop, 1 deferred
+    // walk, 2 deferred gather). MASKED, so a field added above cannot move leaf().
+    unsigned left_mode(int n) const {
+        return (sycl_getrf::getrf_blocked_debug_params<T>(*this->ctx, n) >> 24) & 0xffu;
     }
 
-    // The ROUTED gemm and trsm, exactly as src/dispatch/entry_points/
-    // factorization.cc injects them. A direct caller MUST inject them itself --
-    // the blocked driver throws on an empty trsm seam rather than reaching for a
-    // native kernel, which is WP3 step 16's defect refused by construction.
+    // The ROUTED gemm and trsm, exactly as the factorization entry points inject them.
+    // A direct caller MUST inject them: the blocked driver throws on an empty seam.
     sycl_getrf::GetrfTrailingGemm<T> gemm_seam() const {
         return [](Queue& c, const MatrixView<T, MatrixFormat::Dense>& ga,
                   const MatrixView<T, MatrixFormat::Dense>& gb,
@@ -613,12 +459,9 @@ protected:
     }
 };
 
-// ---------------------------------------------------------------------------
-// EVERY BATCH ITEM IS CHECKED, NOT ITEM 0. Item 0 sits at offset 0, so a wrong
-// batch stride cannot move it and a suite that checks only item 0 is blind to
-// the whole class. The distinctness assertion is what makes "the kernel
-// broadcast item 0 over the batch" a failure rather than a pass.
-// ---------------------------------------------------------------------------
+// EVERY BATCH ITEM IS CHECKED, NOT ITEM 0: item 0 sits at offset 0, so a wrong
+// batch stride cannot move it. The distinctness assertion is what makes "the
+// kernel broadcast item 0 over the batch" a failure rather than a pass.
 template <typename T>
 void check_factor(const Lu<T>& p, const char* what, bool check_L = true) {
     for (int b = 0; b < p.batch; ++b) {
@@ -674,13 +517,9 @@ void check_factor(const Lu<T>& p, const char* what, bool check_L = true) {
     }
 }
 
-// ANTI-VACUITY FOR EVERY TEST OF A PERMUTATION *DIRECTION*.
-//
-// Compose the interchange list into the permutation it denotes and ask whether
-// that permutation is SELF-INVERSE. If it is, a backwards walk and a forwards
-// walk produce the same answer and no residual can tell them apart -- which is
-// exactly what this file's first test matrix did, and what the `getrs_forward`
-// break exposed by turning nothing red.
+// ANTI-VACUITY FOR EVERY TEST OF A PERMUTATION *DIRECTION*: if the permutation the
+// interchange list denotes is SELF-INVERSE, a backwards walk and a forwards walk
+// produce the same answer and no residual can tell them apart.
 inline bool interchange_is_involution(const std::vector<int>& ipiv) {
     const int n = int(ipiv.size());
     std::vector<int> p(n);
@@ -692,8 +531,7 @@ inline bool interchange_is_involution(const std::vector<int>& ipiv) {
 
 // Anti-vacuity for the pivot oracle: the construction must actually MOVE rows.
 // On a plain diagonally dominant matrix partial pivoting picks the diagonal at
-// every step and every pivot assertion in this file would be vacuous -- a
-// recorded WP6 baseline finding.
+// every step and every pivot assertion in this file would be vacuous.
 template <typename T>
 int non_diagonal_pivots(const Lu<T>& p, int b) {
     const int* ip = piv_item(p, b);
@@ -715,28 +553,14 @@ struct EnvGuard {
     }
 };
 
-// ===========================================================================
-// THE FUSED NARROW-RHS GETRS TIER -- SHARED SCAFFOLDING.
-//
-// src/extensions/getrs_fused.cc is a SECOND native getrs arm: one work-group per
-// matrix, the interchange walk and BOTH substitutions in ONE kernel, no GEMM and
-// no separate laswp. It is reachable three ways and every one of them is
-// exercised below: the direct entry point getrs_fused_dispatch, the facade under
-// BATCHLAS_GETRS_ROUTE=cta, and -- in a vendor-free build -- the AUTOMATIC route,
-// because native_tier_preferred puts {Native, CTA} ahead of {Native, Blocked}
-// wherever supports() admits it.
-// ===========================================================================
+// THE FUSED NARROW-RHS GETRS TIER -- SHARED SCAFFOLDING. getrs_fused.cc is a
+// SECOND native getrs arm: one work-group per matrix, the interchange walk and
+// BOTH substitutions in ONE kernel. All three ways in are exercised below.
+// evidence: docs/perf/lu.md#the-fused-narrow-rhs-getrs
 
-// The tier's local-memory request, RESTATED here and then PINNED against the
-// library's own capacity query rather than trusted. Both halves are copied from
-// src/extensions/getrs_fused.cc:
-//
-//   * the request is (n * nrhs + nb * (nb + 1)) scalars, and the CAPACITY QUERY
-//     charges the LARGEST nb the tier ever uses (32) rather than the nb this
-//     call would pick, so a caller can compare against one conservative ceiling;
-//   * a request landing in the 48 KB launch hole -- (47104, 49664] BYTES -- is
-//     raised to 49920, which is why the inversion in getrs_fused_max_rhs_elems
-//     is NOT the obvious one: getrs_hole_padded is not monotone.
+// The tier's local-memory request, PINNED below against the library's own capacity
+// query. A request landing in the 48 KB launch hole -- (47104, 49664] BYTES -- is
+// raised to 49920, so the pad is NOT monotone and its inversion is not obvious.
 constexpr std::size_t kFusedHoleLo    = 47104;
 constexpr std::size_t kFusedHoleHi    = 49664;
 constexpr std::size_t kFusedHolePadTo = 49920;
@@ -762,9 +586,7 @@ inline std::size_t fused_capacity_bytes(std::size_t rhs_elems, std::size_t sz) {
 }
 
 // The order n whose RAW (pre-pad) launch request is exactly `want` bytes at this
-// nrhs, or -1 when no such order exists. Solved rather than tabulated because nb
-// itself depends on n, so both candidate block widths have to be tried and only
-// the one the launcher would actually choose kept.
+// nrhs, or -1. Solved rather than tabulated because nb itself depends on n.
 inline int fused_order_for_raw_bytes(std::size_t want, int nrhs, std::size_t sz) {
     if (want % sz) return -1;
     const std::size_t total = want / sz;
@@ -781,25 +603,10 @@ inline int fused_order_for_raw_bytes(std::size_t want, int nrhs, std::size_t sz)
     return -1;
 }
 
-// ---------------------------------------------------------------------------
-// A FABRICATED LU FACTOR, built directly on the host, with NO getrf.
-//
-// The 48 KB ladder below runs at orders of 334-1428 to hit the byte thresholds
-// exactly, and a ||PA - LU|| oracle there is O(n^3) -- seconds per rung per type.
-// Fabricating the factor removes getrf from that test entirely AND makes an
-// EXACT O(n^2) residual available (see fused_factor_residual): the getrs contract
-// is stated in terms of L, U and the interchange list, so a reference that never
-// forms A can still check the whole of it.
-//
-// U is strongly diagonally dominant (|U(k,k)| = 4n against off-diagonals <= 1)
-// and L is near-identity (|L(i,k)| <= 1/4), so the solve is well conditioned and
-// a backward-stable answer is a small residual.
-//
-// The pivot list is a genuine INTERCHANGE LIST -- ipiv[k] in [k+1, n], 1-BASED,
-// PACKED int32 into the public int64 span -- and interchange_is_involution is
-// asserted false at the use site, so the transposed arm's backwards walk is
-// falsifiable here too.
-// ---------------------------------------------------------------------------
+// A FABRICATED LU FACTOR, built on the host with NO getrf: the 48 KB ladder runs at
+// orders of 334-1428, where a ||PA - LU|| oracle is O(n^3), and this makes an exact
+// O(n^2) residual available instead. The pivot list is a genuine INTERCHANGE LIST
+// -- ipiv[k] in [k+1, n], 1-BASED, PACKED int32 into the public int64 span.
 template <typename T>
 Lu<T> make_fabricated_factor(int n, int batch, unsigned seed,
                              int ld_pad = 5, int stride_pad = 11) {
@@ -827,26 +634,12 @@ Lu<T> make_fabricated_factor(int n, int batch, unsigned seed,
     return p;
 }
 
-// ---------------------------------------------------------------------------
-// THE O(n^2) GETRS RESIDUAL, straight from the contract.
+// THE O(n^2) GETRS RESIDUAL, straight from the contract:
 //
-//   NoTrans   b = F^{-1}( L ( U x ) )          F^{-1} = the list walked BACKWARDS
-//   Trans/CT  b = op(U) ( op(L) ( F x ) )      F      = the list walked FORWARDS
+//   NoTrans   b = F^{-1}( L ( U x ) )      F^{-1} = the list walked BACKWARDS
+//   Trans/CT  b = op(U) ( op(L) ( F x ) )  F      = the list walked FORWARDS
 //
-// Both are two triangular products and one permutation walk, so this is O(n^2)
-// per right-hand side where forming A and multiplying is O(n^3). Returns
-// ||b_ref - b|| / (||U||_F ||x||_F).
-//
-// NOTE what this oracle can and cannot see, MEASURED rather than assumed. It is
-// exact for the arithmetic and the pivot base, and the break record at the
-// bottom of this file records it going RED for `trans_perm_forward`,
-// `perm_wrong_side`, `swap_solves`, `piv_base` and `rhs_ld` -- so a direction
-// flip IN THE KERNEL is caught here, contrary to the first reading of this
-// comment. What it cannot see is a flip of the CONVENTION ITSELF: it never forms
-// A, so if the library and this reference both changed "forwards" to
-// "backwards" they would still agree. That last property is what the tests
-// running against a real getrf factor and the ||op(A)X - B|| oracle carry.
-// ---------------------------------------------------------------------------
+// It never forms A, so it cannot see a flip of the CONVENTION itself.
 template <typename T>
 double fused_factor_residual(const T* F, const int* ipiv, const T* X, const T* B0,
                              int n, int nrhs, int ldf, int ldb, Transpose op) {
@@ -919,10 +712,8 @@ double fused_factor_residual(const T* F, const int* ipiv, const T* X, const T* B
     return (sc > 0.0) ? std::sqrt(num) / sc : std::sqrt(num);
 }
 
-// The RHS pad and the inter-item gap must come back BIT-IDENTICAL. The fused
-// kernel writes B[i + c*ldb] for i < n and c < nrhs and nothing else, so a wrong
-// ld, a wrong stride, or a loop that runs to ld instead of n shows up here and in
-// nothing else -- a residual over the live block cannot see it.
+// The RHS pad and the inter-item gap must come back BIT-IDENTICAL: the fused
+// kernel writes B[i + c*ldb] for i < n and c < nrhs and nothing else.
 template <typename T>
 void check_rhs_pad_intact(const Rhs<T>& r, const char* what) {
     for (int b = 0; b < r.batch; ++b)
@@ -960,57 +751,19 @@ using LuTestTypes = typename test_utils::backend_types<LuConfig>::type;
 
 TYPED_TEST_SUITE(LuTest, LuTestTypes);
 
-// ===========================================================================
-// L0. THE 48 KB LAUNCH HOLE. DECLARED FIRST ON PURPOSE.
+// L0. THE 48 KB LAUNCH HOLE: a resident-leaf launch asking for a local-memory
+// size in (47104, 49664] BYTES is refused, so the launcher pads it to 49,920 B.
 //
-// A resident-leaf launch that asks for EXACTLY 49,152 B of local memory is
-// refused by the CUDA backend -- too big for the non-opt-in 48 KB limit once the
-// kernel's static shared is added, not big enough for the UR adapter to raise
-// MaxDynamicSharedMemorySize. WP4 found the band and padded potrf over it
-// (potrf_cta.cc:258-296); WP5 walked into it anyway; WP6 re-measured it from
-// scratch with a PAD= knob holding kernel, shape and work-group fixed:
-//     49,024 B PASS   49,152 B FAIL   49,280 B PASS
-// 5/5 deterministic across five processes and independent of work-group width,
-// with 48,896 B additionally failing for double and cdouble. A BYTE threshold,
-// not a shape and not a type.
-//
-// WHY THIS TEST IS DECLARED FIRST, AND WHY THAT IS LOAD-BEARING RATHER THAN
-// TIDINESS. The attribute the adapter sets is STICKY PER CUfunction, and one
-// instantiation of GetrfPanelResidentKernel<T> serves every panel shape of a
-// type. Any earlier launch of a LARGER panel raises the cap for the rest of the
-// process and this test can never fail again. GoogleTest runs a suite's tests in
-// declaration order, so being first in this file is what keeps the guard cold.
-// DO NOT MOVE IT, and do not add a resident-leaf launch above it.
-//
-// The cold check by hand:
-//     ./build/tests/getrf_tests --gtest_filter='*LaunchHole*'
-//
-// MEASURED RESULT OF THE `hole_pad` BREAK ON THIS BOX, recorded because it
-// changes what this test is worth. Removing the pad turns layer (a) RED for
-// every in-band row and every scalar type -- and leaves layer (b) GREEN: the
-// 49,152 B resident launch SUCCEEDS here without the pad. That is consistent
-// with getrf_cta.cc:124-129's own reading (WP6 attributed the hole to
-// sycl::reduce_over_group alone, and this kernel uses no group collective, only
-// permute_group_by_xor). So on this device the pad is DEFENSIVE and the
-// arithmetic assertion is the one carrying the guard. Layer (b) is kept because
-// it is the layer that would fire if a group algorithm were ever added to the
-// body -- which is precisely the condition WP4 wrote down and WP5 walked into.
-//
-// WHAT IT ASSERTS, IN TWO INDEPENDENT LAYERS:
-//   (a) the PAD ARITHMETIC, through the library's own getrf_leaf_fits: a shape
-//       whose raw footprint lands in (47104, 49664] must need a budget of
-//       49,920 B, not its raw size. This is a pure-function assertion and does
-//       not depend on the device refusing anything.
-//   (b) the LAUNCH ITSELF, through getrf_panel_factorize, with the resident leaf
-//       ASSERTED (used_resident_out) so a silent fall-through to the global leaf
-//       cannot pass, plus the full host factorization oracle on the result.
-// ===========================================================================
+// DECLARED FIRST ON PURPOSE: the raised cap is STICKY PER CUfunction and one
+// GetrfPanelResidentKernel<T> serves every panel shape of a type, so any earlier
+// launch of a LARGER panel warms the cap and this test can never fail again. DO
+// NOT MOVE IT, and add no resident-leaf launch above it.
+// evidence: docs/perf/lu.md#the-48-kb-launch-hole
 TYPED_TEST(LuTest, ResidentLeafLaunchHoleAt48KiB) {
     using T = typename TestFixture::T;
 
-    // getrf_cta.cc's getrf_scratch_bytes: kLuRedSlots (32) argmax slots, each a
-    // real plus an int. Restated here and then PINNED against the library's own
-    // predicate below rather than trusted.
+    // getrf_cta.cc's getrf_scratch_bytes: 32 argmax slots, each a real plus an
+    // int. Restated here and then PINNED against the library's own predicate.
     const std::size_t sz = sizeof(T);
     const std::size_t scratch = 32u * (sizeof(RealOf<T>) + sizeof(int));
     auto raw_bytes = [&](int m, int n) {
@@ -1027,9 +780,7 @@ TYPED_TEST(LuTest, ResidentLeafLaunchHoleAt48KiB) {
         return hi;
     };
 
-    // ANTI-VACUITY 1: the byte formula above must be the library's. Checked at a
-    // shape far BELOW the hole band, where no pad can apply, so the answer is the
-    // raw footprint itself.
+    // ANTI-VACUITY 1: the byte formula must be the library's, checked below the band.
     ASSERT_EQ(min_budget(16, 8), raw_bytes(16, 8))
         << "this test's local-memory formula is not the library's; every byte "
            "count below names some other size and the ladder proves nothing";
@@ -1061,9 +812,7 @@ TYPED_TEST(LuTest, ResidentLeafLaunchHoleAt48KiB) {
         if (found.m) rows.push_back(found);
     }
 
-    // ANTI-VACUITY 2: the ONE byte count measured to fail for every scalar type
-    // must be represented. Without it this test is a ladder that steps over the
-    // hole -- which is exactly how an n-ladder misses the defect entirely.
+    // ANTI-VACUITY 2: the row that fails for every scalar type must be present.
     bool has_49152 = false;
     for (const Row& r : rows) if (r.bytes == 49152) has_49152 = true;
     ASSERT_TRUE(has_49152) << "no (m, n) with a 49,152 B footprint was constructible for this "
@@ -1073,10 +822,8 @@ TYPED_TEST(LuTest, ResidentLeafLaunchHoleAt48KiB) {
         ASSERT_EQ(raw_bytes(r.m, r.n), r.bytes) << "row does not ask for " << r.bytes << " B";
         const bool in_band = (r.bytes > kLo && r.bytes <= kHi);
 
-        // (a) THE PAD ARITHMETIC. EXPECT and not ASSERT, deliberately: ASSERT
-        // returns from the whole test, so a failure here would MASK (b) and the
-        // break record could not say which of the two halves is carrying the
-        // guard. They are independent claims and both must be reachable.
+        // (a) THE PAD ARITHMETIC. EXPECT and not ASSERT, deliberately: an ASSERT returns
+        // from the whole test and would MASK (b), which is an independent claim.
         EXPECT_EQ(min_budget(r.m, r.n), in_band ? kPadTo : r.bytes)
             << "the " << r.bytes << " B leaf (" << r.m << "x" << r.n << ") "
             << (in_band ? "is inside the 48 KB hole band but is not padded over it"
@@ -1123,58 +870,19 @@ TYPED_TEST(LuTest, ResidentLeafLaunchHoleAt48KiB) {
     }
 }
 
-// ===========================================================================
 // L0b. THE 48 KB LAUNCH HOLE, FOR THE **FUSED GETRS** KERNELS.
 //
-// DECLARED HERE, SECOND IN THE FILE AND AHEAD OF EVERY OTHER FUSED-GETRS TEST,
-// AND THAT IS LOAD-BEARING RATHER THAN TIDINESS -- the same rule L0 above states
-// for GetrfPanelResidentKernel, applied to a different pair of CUfunctions.
-// MaxDynamicSharedMemorySize is raised STICKILY PER CUfunction, and the fused
-// tier's kernels are GetrsFusedNKernel<T, NR> / GetrsFusedTKernel<T, NR> with NR
-// the compile-time accumulator width (1, 2, 4 or 8, chosen by nrhs). Every rung
-// below runs at nrhs = 8, i.e. NR = 8, so ANY earlier test issuing a getrs with
-// 4 < nrhs <= 8 would warm those two functions and this guard could never fail
-// again. DO NOT MOVE IT BELOW THE F-SERIES.
-//
-// The cold check by hand:
-//     ./build/tests/getrf_tests --gtest_filter='*FusedGetrsLaunchHole*'
-//
-// TWO INDEPENDENT LAYERS, as L0 has:
-//
-//   (a) THE CAPACITY INVERSION, a pure-function assertion that needs no device.
-//       getrs_fused_max_rhs_elems<T>(budget) answers "how many RHS elements fit",
-//       and its inverse is NOT the obvious one because getrs_hole_padded is NOT
-//       MONOTONE: a request landing in (47104, 49664] is RAISED to 49920, so a
-//       naive floor division can advertise a capacity whose launch then asks for
-//       MORE than the budget. The sweep below is dense over the whole band and
-//       past it, one byte at a time, and asserts the only thing that matters:
-//       THE ADVERTISED CAPACITY MUST BE LAUNCHABLE WITHIN THE BUDGET IT WAS
-//       ASKED ABOUT. This layer found a real defect -- see the break record.
-//
-//   (b) THE LAUNCH ITSELF, on a ladder of orders whose RAW request is exactly
-//       47104 / 48896 / 49152 / 49664 / 49920 bytes, crossing the band from both
-//       sides, in BOTH kernels (NoTrans and Trans are separate CUfunctions).
-//       Each rung is checked against an EXACT O(n^2) host residual built from
-//       the contract itself, so a rung that launches but computes nothing
-//       sensible is still red.
-//
-// The orders are SOLVED for, not tabulated, because the block width the launcher
-// picks depends on n. On this box they come out as, at nrhs = 8:
-//     float             1340 1396 1404 1420 1428   (nb = 32)
-//     double / cfloat    702  730  734  742  746   (nb = 16)
-//     cdouble            334  348  350  354  356   (nb = 16)
-// ===========================================================================
+// DECLARED AHEAD OF EVERY OTHER FUSED-GETRS TEST, for the sticky-per-CUfunction
+// reason L0 states: the tier's kernels are templated on the compile-time
+// accumulator width NR, every rung below runs at nrhs = 8, and any earlier getrs
+// with 4 < nrhs <= 8 would warm them. DO NOT MOVE IT BELOW THE F-SERIES.
 TYPED_TEST(LuTest, FusedGetrsLaunchHoleAt48KiB) {
     using T = typename TestFixture::T;
     const std::size_t sz = sizeof(T);
 
     // ---- layer (a): the capacity inversion --------------------------------
-    //
-    // Every budget from below the band to well past the pad target, one byte at
-    // a time. `cap` is what the library advertises; fused_capacity_bytes is this
-    // file's restatement of what a caller sized by that capacity would then ask
-    // the runtime for. The second must never exceed the budget the first was
-    // asked about.
+    // The advertised capacity, once a caller sizes by it, must still be launchable
+    // within the budget it was asked about; getrs_hole_padded is NOT monotone.
     for (std::size_t budget = kFusedHoleLo - 2048; budget <= kFusedHolePadTo + 2048; ++budget) {
         const std::size_t cap = sycl_getrs::getrs_fused_max_rhs_elems<T>(budget);
         if (cap == 0) continue;
@@ -1186,8 +894,7 @@ TYPED_TEST(LuTest, FusedGetrsLaunchHoleAt48KiB) {
                "route_getrs.hh's fused_max_elems and therefore a supports() that promises a "
                "route the facade cannot service";
     }
-    // Coarse ladder past the band, including this device's own budget, so a
-    // regression that only shows up at realistic sizes is caught too.
+    // Coarse ladder past the band, including this device's own budget.
     for (std::size_t budget : {std::size_t(4096), std::size_t(16384), std::size_t(32768),
                                std::size_t(65536), std::size_t(98304), std::size_t(163840),
                                std::size_t(232448), this->budget()}) {
@@ -1274,10 +981,8 @@ TYPED_TEST(LuTest, FusedGetrsLaunchHoleAt48KiB) {
     EXPECT_EQ(rungs_run, 5) << "the ladder did not cross the band from both sides";
 }
 
-// ===========================================================================
 // L1. THE CTA TIER: the residual, the partial-pivoting property, and the
 // EXACT interchange list.
-// ===========================================================================
 TYPED_TEST(LuTest, CtaFactorisesAndPivotsExactly) {
     using T = typename TestFixture::T;
     const int cap = this->cta_max_n();
@@ -1307,10 +1012,8 @@ TYPED_TEST(LuTest, CtaFactorisesAndPivotsExactly) {
     ASSERT_GT(ran, 0);
 }
 
-// ===========================================================================
 // L2. THE BLOCKED DRIVER, same two oracles, over orders that straddle its own
 // block width in both directions.
-// ===========================================================================
 TYPED_TEST(LuTest, BlockedFactorisesAndPivotsExactly) {
     using T = typename TestFixture::T;
     for (int n : {5, 31, 32, 33, 64, 96, 100, 129}) {
@@ -1330,18 +1033,71 @@ TYPED_TEST(LuTest, BlockedFactorisesAndPivotsExactly) {
     }
 }
 
-// ===========================================================================
-// L3. THE BLOCK BOUNDARY IS QUERIED, NOT ASSUMED.
-//
-// potrf_native.hh:246-266 records the failure this guards: a test that must
-// straddle a block boundary and cannot see where the boundary is keeps passing
-// after the width moves while silently no longer testing a short final panel.
-// This family has produced exactly that failure before (the sy2sb stage-1
-// short-final-panel bug: wrong numbers, green suite).
-//
-// It also pins the debug query itself to the predicate the driver uses, so the
-// query cannot report a leaf choice the call does not make.
-// ===========================================================================
+// L2b. THE THREE SPELLINGS OF THE LEFT-HAND INTERCHANGE AGREE BIT FOR BIT -- the
+// SAME transposition list in the SAME order, so the assertion is BITWISE and not
+// "both residuals are small". n = 129 leaves a ONE-COLUMN final panel, where the
+// deferred pass's extents must come from ib and never from nb.
+// getrf_blocked.cc latches its environment read in a function-local static, so the
+// file-scope object below is what makes the latch land on "present" before main.
+// evidence: docs/perf/lu.md#getrf-deferred-left-gather
+namespace {
+struct LeftLaswpKnobPresent {
+    LeftLaswpKnobPresent() { ::setenv("BATCHLAS_GETRF_LASWP", "defer_gather", /*overwrite=*/0); }
+};
+const LeftLaswpKnobPresent kLeftLaswpKnobPresent;
+}  // namespace
+
+TYPED_TEST(LuTest, LeftInterchangeSpellingsAgreeBitForBit) {
+    using T = typename TestFixture::T;
+    struct Arm { const char* env; unsigned mode; };
+    const Arm arms[] = {{"inloop", 0u}, {"defer_walk", 1u}, {"defer_gather", 2u}};
+
+    for (int n : {33, 64, 96, 129, 160}) {
+        std::vector<std::vector<T>> facs;
+        std::vector<std::vector<int>> pivs;
+        for (const Arm& a : arms) {
+            ::setenv("BATCHLAS_GETRF_LASWP", a.env, 1);
+            ASSERT_EQ(this->left_mode(n), a.mode)
+                << "n=" << n << ": the driver did not resolve the '" << a.env
+                << "' spelling, so every comparison below would be between two copies of the "
+                   "SAME arm. The environment read latched before this test ran.";
+
+            auto p = make_random<T>(n, 3, 4441u + unsigned(n));
+            this->run_blocked(p);
+            check_factor(p, a.env);
+            for (int b = 0; b < p.batch; ++b)
+                ASSERT_EQ(p.info[b], 0) << a.env << " n=" << n << " b=" << b;
+
+            facs.emplace_back(p.buf.data(), p.buf.data() + p.buf.size());
+            std::vector<int> pv;
+            for (int b = 0; b < p.batch; ++b) {
+                const int* ip = piv_item(p, b);
+                pv.insert(pv.end(), ip, ip + p.n);
+            }
+            pivs.push_back(std::move(pv));
+            if (this->HasFailure()) { ::setenv("BATCHLAS_GETRF_LASWP", "defer_gather", 1); return; }
+        }
+
+        for (std::size_t a = 1; a < facs.size(); ++a) {
+            ASSERT_EQ(facs[a].size(), facs[0].size());
+            std::size_t diff = 0;
+            for (std::size_t i = 0; i < facs[0].size(); ++i)
+                if (std::memcmp(&facs[a][i], &facs[0][i], sizeof(T)) != 0) ++diff;
+            EXPECT_EQ(diff, std::size_t(0))
+                << "n=" << n << ": '" << arms[a].env << "' differs from '" << arms[0].env
+                << "' in " << diff << " of " << facs[0].size()
+                << " elements -- the deferred pass is not the same composition";
+            EXPECT_EQ(pivs[a], pivs[0])
+                << "n=" << n << ": '" << arms[a].env << "' produced a different interchange list";
+        }
+        ::setenv("BATCHLAS_GETRF_LASWP", "defer_gather", 1);
+        if (this->HasFailure()) return;
+    }
+}
+
+// L3. THE BLOCK BOUNDARY IS QUERIED, NOT ASSUMED. A straddle test that cannot
+// see where the boundary is keeps passing after the width moves while silently
+// no longer testing a short final panel.
 TYPED_TEST(LuTest, BlockWidthStraddleIsQueriedNotAssumed) {
     using T = typename TestFixture::T;
 
@@ -1363,8 +1119,8 @@ TYPED_TEST(LuTest, BlockWidthStraddleIsQueriedNotAssumed) {
     ASSERT_NE(n_mid % nb0, 0);
     ASSERT_EQ(n_short % nb0, 1) << "the short final panel is not the narrowest one available";
 
-    // The leaf choice the query reports must be the one getrf_leaf_fits makes for
-    // the leading panel -- the potrf_cta_launch_params discipline.
+    // The leaf choice the query reports must be the one getrf_leaf_fits makes for the
+    // leading panel.
     for (int n : {n_exact, n_short, n_mid}) {
         const unsigned lf = this->leaf(n);
         ASSERT_TRUE(lf == 1u || lf == 2u) << "n=" << n << ": leaf tag " << lf;
@@ -1383,26 +1139,16 @@ TYPED_TEST(LuTest, BlockWidthStraddleIsQueriedNotAssumed) {
     }
 }
 
-// ===========================================================================
-// L4. BOTH PANEL RESIDENCIES FACTORISE CORRECTLY.
-//
-// getrf_panel_factorize is the ONE decision site between the local-memory leaf
-// and the global-memory one, and a build in which only one of them is ever
-// exercised is a build in which half the panel code is untested. Driving it
-// directly with a TALL panel is what makes the global leaf reachable for every
-// scalar type: through the blocked driver the crossover is at n ~ 760 for float,
-// where the host oracle alone would cost seconds.
-//
-// The residency is ASSERTED from the launcher's own out-parameter, not inferred.
-// ===========================================================================
+// L4. BOTH PANEL RESIDENCIES FACTORISE CORRECTLY. getrf_panel_factorize is the ONE
+// decision site between the local-memory leaf and the global one; the residency is
+// ASSERTED from the launcher's own out-parameter.
 TYPED_TEST(LuTest, BothPanelLeavesFactoriseCorrectly) {
     using T = typename TestFixture::T;
     const int nbw = this->nb(4096);
     ASSERT_GE(nbw, 1);
 
-    // A panel that fits, and one that provably cannot: grow m until the predicate
-    // says no, rather than picking a number that stops being large enough when a
-    // constant moves.
+    // A panel that fits and one that provably cannot: grow m until the predicate
+    // says no, rather than picking a number that stops being large enough.
     int m_small = 64, m_big = 128;
     while (m_big < (1 << 20) && this->leaf_fits(m_big, nbw)) m_big *= 2;
     ASSERT_FALSE(this->leaf_fits(m_big, nbw))
@@ -1450,22 +1196,12 @@ TYPED_TEST(LuTest, BothPanelLeavesFactoriseCorrectly) {
     }
 }
 
-// ===========================================================================
-// L5. A SINGULAR MATRIX: `info` is EXACT-ZERO, 1-BASED, GLOBAL, per item, and
-// FIRST-FAILURE-WINS -- with the other batch items unaffected and the failed
-// item still FINITE.
-//
-// The failure is planted as an EXACTLY ZERO COLUMN, which is the only
-// construction whose zero survives every rounding: column c is zero on input, so
-// U(t,c) = 0 for every t and the column is never updated away from zero. The
-// pivot search over it returns cabs1 = 0 at the lowest index, i.e. ipiv[c] = c+1
-// (I?AMAX's convention), and ?GETF2 records the failure and SKIPS the reciprocal
-// scale -- which is what keeps the item finite instead of Inf/NaN.
-//
-// THE COLUMNS ARE CHOSEN INSIDE THE SECOND AND THIRD PANELS on purpose. A
-// block-local info offset reports the panel-relative column and passes every
-// single-panel test; only a failure planted beyond the first panel can see it.
-// ===========================================================================
+// L5. A SINGULAR MATRIX: `info` is EXACT-ZERO, 1-BASED, GLOBAL, per item and
+// FIRST-FAILURE-WINS, with the other batch items unaffected and the failed item
+// still FINITE (?GETF2 records the failure and SKIPS the reciprocal scale). The
+// failure is planted as an EXACTLY ZERO COLUMN inside the SECOND AND THIRD PANELS:
+// a block-local info offset reports the panel-relative column and passes every
+// single-panel test.
 TYPED_TEST(LuTest, SingularColumnGivesGlobalOneBasedInfoFirstFailureWins) {
     using T = typename TestFixture::T;
     const int nbw = this->nb(256);
@@ -1503,8 +1239,7 @@ TYPED_TEST(LuTest, SingularColumnGivesGlobalOneBasedInfoFirstFailureWins) {
                 ASSERT_TRUE(hfinite(up(F[size_t(j) * p.ld + i])))
                     << "item " << b << " left F(" << i << "," << j << ") non-finite; a failed "
                        "item must stay finite, as LAPACK's and cuBLAS's do";
-        // The healthy items must still be a correct factorization -- a failure in
-        // one item must not corrupt the others.
+        // A failure in one item must not corrupt the others.
         if (b != bad) {
             const int* ip = piv_item(p, b);
             EXPECT_LE(pa_lu_residual<T>(p.a0.data() + size_t(b) * p.stride, F, ip, n, n, p.ld),
@@ -1529,43 +1264,17 @@ TYPED_TEST(LuTest, SingularColumnGivesGlobalOneBasedInfoFirstFailureWins) {
     }
 }
 
-// ===========================================================================
 // L5b. THE `info` ZERO PRE-PASS IS ORDERED AHEAD OF THE PANEL THAT READS IT, ON
-// AN OUT-OF-ORDER QUEUE.
+// AN OUT-OF-ORDER QUEUE -- the only test here not on the fixture's queue.
 //
-// It is the ONLY test in this file that does not run on the fixture's queue, and
-// that is the whole point: every other case here -- and every call anywhere in
-// src/ and tests/ -- uses the DEFAULT in-order queue
-// (sycl-device-queue.hh:254), which orders the fill ahead of the kernel for
-// free. Out-of-order queues are nonetheless public API
-// (sycl-device-queue.hh:258, `Queue(const Queue& base, bool in_order)`), and on
-// one of them the fill and the first panel were concurrent in both native tiers.
-//
-// WHY IT IS A WRONG ANSWER AND NOT A TIDINESS QUESTION: getf2_panel_device READS
-// info[b] (getrf_cta_device.hh) to implement first-failure-wins across the
-// blocked driver's panels, so the fill is a true read-after-write dependence
-// rather than a pure output. Unordered, the panel loads the CALLER's pre-call
-// garbage, concludes an earlier panel already failed, never records the real
-// failure, and writes the garbage back. Measured before the fix: 6,979 items of
-// 1,638,400 came back holding the caller's own -12345 sentinel and NONE reported
-// the real singular column; the blocked tier, 3,743 of 983,040. A caller testing
-// `info[b] != 0` therefore saw a FALSE singularity, and a caller whose garbage
-// happened to be 0 would have seen a masked one.
-//
-// THE BATCH IS LARGE ON PURPOSE. This is a race, so the test can only be as
-// falsifiable as the window it opens; the counts above are the calibration. The
-// assertion is on EVERY item of EVERY repetition, so a single unordered read
-// anywhere in the sweep fails it.
-// ===========================================================================
+// getf2_panel_device READS info[b] to implement first-failure-wins across the
+// blocked driver's panels, so the fill is a true read-after-write dependence.
+// Unordered, the panel loads the caller's pre-call garbage and never records the
+// real failure. The batch is large on purpose: this is a race.
 TYPED_TEST(LuTest, InfoFillIsOrderedAheadOfThePanelOnAnOutOfOrderQueue) {
     using T = typename TestFixture::T;
-    // ONE SCALAR TYPE, DELIBERATELY, AND IT IS NOT A SHORTCUT. What is under test
-    // is a HOST-SIDE SUBMISSION ORDER -- whether the fill is ordered ahead of the
-    // launch that reads its result -- which is identical for every scalar type and
-    // every backend; the driver code is one line, shared. What DOES vary with the
-    // type is the cost: the sweep below is 1.6M factorisations, and running it four
-    // times over would add minutes to a suite that otherwise finishes in under a
-    // second while re-testing the same line.
+    // ONE SCALAR TYPE, DELIBERATELY: what is under test is a HOST-SIDE SUBMISSION
+    // ORDER, identical for every scalar type and backend; the sweep's cost is not.
     if constexpr (!std::is_same_v<T, float>) {
         GTEST_SKIP() << "the submission-order defect is type-independent; float carries it";
     } else {
@@ -1579,15 +1288,10 @@ TYPED_TEST(LuTest, InfoFillIsOrderedAheadOfThePanelOnAnOutOfOrderQueue) {
 
     const int zc = 7;                   // the planted singular column, 0-based
 
-    // THE LOOP SHAPE IS PART OF THE CALIBRATION, not incidental. Only `info` is
-    // re-seeded between repetitions: re-copying the 300 MB matrix from the host
-    // instead -- the obvious thing to write -- touches managed memory hard enough
-    // to serialise the queue, and MEASURED, it closes the window completely (the
-    // first draft of this test did exactly that and stayed GREEN with both guards
-    // deleted). The matrix is therefore staged once and re-factorised in place,
-    // which is stable: the planted zero column survives the factorisation, so
-    // every repetition must report the same info, and the in-order control below
-    // asserts precisely that rather than assuming it.
+    // THE LOOP SHAPE IS PART OF THE CALIBRATION: re-copying the matrix from the host
+    // between repetitions -- the obvious thing to write -- touches managed memory hard
+    // enough to serialise the queue and close the window, so the matrix is staged once
+    // and re-factorised in place; the planted zero column survives the factorisation.
     auto seed_info = [](Lu<T>& q) {
         std::fill(q.info.begin(), q.info.end(), int32_t(-12345));
     };
@@ -1609,10 +1313,8 @@ TYPED_TEST(LuTest, InfoFillIsOrderedAheadOfThePanelOnAnOutOfOrderQueue) {
         poison(p);                                   // stage the matrix ONCE
         auto V = view_of(p);
 
-        // THE IN-ORDER CONTROL, and it is what makes the sweep's oracle legitimate:
-        // it establishes that repeated in-place factorisation reports zc+1 every
-        // time, so a miss in the sweep is an ORDERING failure and not the oracle
-        // drifting. 5 x 65536 items.
+        // THE IN-ORDER CONTROL, which makes the sweep's oracle legitimate: a miss is then
+        // an ORDERING failure and not the oracle drifting.
         long cw = 0, cp = 0;
         for (int r = 0; r < 5; ++r) {
             seed_info(p);
@@ -1689,23 +1391,15 @@ TYPED_TEST(LuTest, InfoFillIsOrderedAheadOfThePanelOnAnOutOfOrderQueue) {
     }
 }
 
-// ===========================================================================
 // L6. A NEARLY singular matrix is NOT flagged. The `info` predicate is a TRUE
-// BINARY ZERO, never a tolerance, and that is a PUBLIC CONTRACT shared with
-// LAPACK and cuBLAS rather than an internal choice: an epsilon floor would make
-// this library report a failure where both of the implementations a caller might
-// swap in report success. WP6 declined to implement the floor the ground brief
-// suggested for exactly this reason, and this is the test that pins the
-// decision.
-// ===========================================================================
+// BINARY ZERO, never a tolerance, and that is a PUBLIC CONTRACT shared with LAPACK
+// and cuBLAS: an epsilon floor would report a failure where neither of them does.
 TYPED_TEST(LuTest, NearlySingularIsNotFlagged) {
     using T = typename TestFixture::T;
     const int n = 48, c = 19;
     auto p = make_dominant_permuted<T>(n, 2, 4242u);
-    // Scale one whole column to ~1e-30, which makes U(c,c) tiny but exactly
-    // representable and NON-ZERO for all four scalar types. The pivot list is
-    // unchanged (column scaling does not move an argmax), so the exact pivot
-    // oracle still applies.
+    // Scale one whole column to ~1e-30: U(c,c) is then tiny but exactly representable
+    // and NON-ZERO for all four types, and column scaling does not move an argmax.
     for (int b = 0; b < p.batch; ++b)
         for (int i = 0; i < n; ++i) {
             T& v = p.a0[size_t(b) * p.stride + size_t(c) * p.ld + i];
@@ -1717,8 +1411,7 @@ TYPED_TEST(LuTest, NearlySingularIsNotFlagged) {
     for (int b = 0; b < p.batch; ++b) {
         const T* F = p.buf.data() + size_t(b) * p.stride;
         const double diag = hcabs1(up(F[size_t(c) * p.ld + c]));
-        // ANTI-VACUITY: the pivot really is tiny. Without this the test is
-        // "info == 0 on an ordinary matrix", which every test above already says.
+        // ANTI-VACUITY: the pivot really is tiny, or this is just "info == 0".
         ASSERT_GT(diag, 0.0) << "U(c,c) is exactly zero, so this is the SINGULAR case";
         ASSERT_LT(diag, 1e-20) << "U(c,c) = " << diag << " is not nearly singular at all";
         EXPECT_EQ(p.info[b], 0)
@@ -1729,19 +1422,10 @@ TYPED_TEST(LuTest, NearlySingularIsNotFlagged) {
     check_factor(p, "blocked/near-singular", /*check_L=*/true);
 }
 
-// ===========================================================================
-// L7. THE PIVOT METRIC IS cabs1, NOT THE MODULUS.
-//
-// WP6's measured finding: cublas{C,Z}getrfBatched pivots on |z| while LAPACK,
-// netlib and this kernel pivot on |Re| + |Im|. On the matrix below the two rules
-// SELECT DIFFERENT ROWS, and substituting the modulus into the kernel reproduces
-// cuBLAS's answer exactly.
-//
-// This test exists because the ordinary sweep is BLIND to it: WP6's own
-// `pivot_metric` break (cabs1 -> modulus) turned NOTHING red on random and
-// dominant matrices, where the two rules agree at every step. An oracle can be
-// correct, necessary, and still blind; only a break says which.
-// ===========================================================================
+// L7. THE PIVOT METRIC IS cabs1, NOT THE MODULUS. cublas{C,Z}getrfBatched pivots
+// on |z| while LAPACK and this kernel pivot on |Re| + |Im|; on the matrix below the
+// two rules SELECT DIFFERENT ROWS, which they do not on random or dominant data.
+// evidence: docs/perf/lu.md#correctness-findings
 TYPED_TEST(LuTest, PivotSelectionUsesCabs1AndNotTheModulus) {
     using T = typename TestFixture::T;
     if constexpr (!test_utils::is_complex_type_v<T>) {
@@ -1752,9 +1436,9 @@ TYPED_TEST(LuTest, PivotSelectionUsesCabs1AndNotTheModulus) {
         p.expect_piv.clear();
         for (int b = 0; b < batch; ++b) {
             T* A = p.a0.data() + size_t(b) * p.stride;
-            // The per-item factor keeps the batch items DISTINCT -- without it the
-            // batch-stride assertion in check_factor is unsatisfiable -- while
-            // leaving column 0's two decisive entries untouched below.
+            // The per-item factor keeps the batch items DISTINCT -- without it check_factor's
+            // batch-stride assertion is unsatisfiable -- and leaves column 0's two decisive
+            // entries untouched.
             const double f = 1.0 + 0.25 * double(b);
             for (int j = 0; j < n; ++j)
                 for (int i = 0; i < n; ++i)
@@ -1768,8 +1452,7 @@ TYPED_TEST(LuTest, PivotSelectionUsesCabs1AndNotTheModulus) {
         }
         poison(p);
 
-        // ANTI-VACUITY: the two functionals must genuinely disagree on the data
-        // this test actually put in the buffer.
+        // ANTI-VACUITY: the two functionals must genuinely disagree on this data.
         const auto z0 = up(p.a0[0]);
         const auto z1 = up(p.a0[1]);
         ASSERT_LT(hcabs1(z0), hcabs1(z1)) << "cabs1 does not prefer row 1 on this matrix";
@@ -1795,17 +1478,12 @@ TYPED_TEST(LuTest, PivotSelectionUsesCabs1AndNotTheModulus) {
     }
 }
 
-// ===========================================================================
-// L8. GETRS, ALL THREE transA MODES.
-//
-// The permutation SIDE changes with the transpose, and getting it wrong is a
-// silently wrong answer no NoTrans test can see:
-//   NoTrans   : apply F to B, then solve L, then U.
-//   Trans/CT  : solve U^T then L^T, then apply F^{-1} -- the SAME list walked
-//               BACKWARDS -- to the OUTPUT.
-// WP6's scaffolding measured that no test in this suite issued a Trans getrs at
-// all before this one.
-// ===========================================================================
+// L8. GETRS, ALL THREE transA MODES. The permutation SIDE changes with the
+// transpose, and getting it wrong is a silently wrong answer no NoTrans test can
+// see:
+//   NoTrans  : apply F to B, then solve L, then U.
+//   Trans/CT : solve U^T then L^T, then apply F^{-1} -- the SAME list walked
+//              BACKWARDS -- to the OUTPUT.
 TYPED_TEST(LuTest, GetrsSolvesAllThreeTransposeModes) {
     using T = typename TestFixture::T;
     const int n = 96, batch = 3;
@@ -1849,10 +1527,8 @@ TYPED_TEST(LuTest, GetrsSolvesAllThreeTransposeModes) {
             if (this->HasFailure()) return;
         }
 
-        // ANTI-VACUITY. NoTrans must differ from Trans (otherwise the mode is not
-        // being read at all), and for a complex type ConjTrans must differ from
-        // Trans -- without which conj(A) is untested on half the type list, which
-        // is precisely the class WP5's zgeqr2 tau defect belonged to.
+        // ANTI-VACUITY. NoTrans must differ from Trans, or the mode is not read at all,
+        // and for a complex type ConjTrans must differ from Trans, or conj(A) is untested.
         EXPECT_NE(solutions[0], solutions[1])
             << "NoTrans and Trans produced identical solutions; transA is not being read";
         if constexpr (test_utils::is_complex_type_v<T>) {
@@ -1863,14 +1539,167 @@ TYPED_TEST(LuTest, GetrsSolvesAllThreeTransposeModes) {
     }
 }
 
-// ===========================================================================
-// L9. GETRI: the inverse, and the promise that A SURVIVES.
-//
-// cublas<t>getriBatched takes `const T* const A[]` (cublas_api.h:5568-5576) and
-// WP6's interface probe measured max |A_after - A_factored| = 0.0 for all four
-// types. A native arm that wrote through A would be a drop-in failure invisible
-// to every residual, so the survival is asserted BIT-EXACTLY.
-// ===========================================================================
+// L8b. GETRS, THE TWO PERMUTATION SPELLINGS, AGREE BIT FOR BIT. Which one runs is
+// a SPEED decision and never a correctness one, so the two arms must agree BIT FOR
+// BIT -- strictly stronger than the residual, which both arms pass with the SAME
+// wrong permutation. The spelling is READ BACK per arm, because the gather FALLS
+// BACK to the walk silently when the tile does not fit local memory.
+// evidence: docs/perf/lu.md#getrs-collapsed-permutation
+TYPED_TEST(LuTest, GetrsPermutationSpellingsAgreeBitForBit) {
+    using T = typename TestFixture::T;
+    const int batch = 3;
+
+    for (int n : {96, 257}) {
+        for (int nrhs : {5, 70}) {
+            auto p = make_dominant_permuted<T>(n, batch, 4242u + unsigned(n + nrhs));
+            this->run_blocked(p);
+            ASSERT_GE(non_diagonal_pivots(p, 0), n / 4);
+            ASSERT_FALSE(interchange_is_involution(p.expect_piv))
+                << "this matrix's permutation is SELF-INVERSE, so the gather's REVERSED "
+                   "index walk is indistinguishable from its forward one and the Trans and "
+                   "ConjTrans rows below prove nothing";
+            check_factor(p, "getrs/spellings/factor");
+            if (this->HasFailure()) return;
+
+            auto rhs = make_rhs<T>(n, nrhs, batch, 1313u + unsigned(n + nrhs));
+
+            for (Transpose op : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans}) {
+                std::vector<std::vector<T>> answer;
+                for (const char* spelling : {"walk", "gather"}) {
+                    setenv("BATCHLAS_GETRS_LASWP", spelling, 1);
+
+                    // GUARD (1). The driver's own resolution, for THIS shape on
+                    // THIS queue, so a fallback the caller cannot see is visible.
+                    const int got =
+                        sycl_getrs::getrs_perm_spelling_debug<T>(*this->ctx, n, nrhs);
+                    const int want = (std::strcmp(spelling, "gather") == 0) ? 1 : 0;
+                    ASSERT_EQ(got, want)
+                        << "BATCHLAS_GETRS_LASWP=" << spelling << " at n=" << n
+                        << " nrhs=" << nrhs << " resolved spelling " << got
+                        << ". A gather that fell back to the walk would make the "
+                           "bit-identity assertion below compare the walk with itself.";
+
+                    reset_rhs(rhs);
+                    auto A = view_of(p);
+                    auto Bv = view_of(rhs);
+                    // The query must stay 0 under BOTH spellings: the gather is in place.
+                    UnifiedVector<std::byte> ws(std::max<std::size_t>(
+                        1, sycl_getrs::getrs_blocked_buffer_size<T>(*this->ctx, A, Bv, op)));
+                    ASSERT_NO_THROW(sycl_getrs::getrs_blocked_dispatch<T>(
+                        *this->ctx, A, Bv, op, p.piv.to_span(), ws.to_span(),
+                        this->getrs_seam()));
+                    this->ctx->wait();
+
+                    for (int b = 0; b < batch; ++b) {
+                        const double res = solve_residual<T>(
+                            p.a0.data() + size_t(b) * p.stride,
+                            rhs.buf.data() + size_t(b) * rhs.stride,
+                            rhs.b0.data() + size_t(b) * rhs.stride,
+                            n, nrhs, p.ld, rhs.ld, op);
+                        EXPECT_LE(res, solve_tol<T>(n))
+                            << "getrs spelling=" << spelling << " transA=" << int(op)
+                            << " n=" << n << " nrhs=" << nrhs << " b=" << b;
+                    }
+                    answer.emplace_back(rhs.buf.begin(), rhs.buf.end());
+                    if (this->HasFailure()) { unsetenv("BATCHLAS_GETRS_LASWP"); return; }
+                }
+                unsetenv("BATCHLAS_GETRS_LASWP");
+
+                // THE STRONG ASSERTION: the same permutation and the same two solves, so the
+                // answers must be identical to the last bit.
+                size_t diff = 0;
+                for (size_t i = 0; i < answer[0].size(); ++i)
+                    if (std::memcmp(&answer[0][i], &answer[1][i], sizeof(T)) != 0) ++diff;
+                EXPECT_EQ(diff, size_t(0))
+                    << "the walk and the collapsed gather disagree in " << diff
+                    << " of " << answer[0].size() << " elements at transA=" << int(op)
+                    << " n=" << n << " nrhs=" << nrhs
+                    << ". They apply the SAME permutation to the SAME buffer and then run "
+                       "the SAME two trsm calls, so any difference is a defect.";
+                if (this->HasFailure()) return;
+            }
+        }
+    }
+}
+
+// L8c. THE SPELLING DECISION SURFACE, WITHOUT RUNNING A KERNEL: the default nrhs
+// boundary kGetrsPermGatherMinNrhs, and the CAPACITY REFUSAL above which the
+// gather enqueues NOTHING and the driver re-schedules the walk. That fallback is
+// silent by design and invisible to every other test in this suite.
+TYPED_TEST(LuTest, GetrsPermSpellingDecisionSurface) {
+    using T = typename TestFixture::T;
+    if (this->ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "the gather is GPU-only";
+
+    unsetenv("BATCHLAS_GETRS_LASWP");
+    constexpr int kMin = sycl_getrs::kGetrsPermGatherMinNrhs;
+    ASSERT_GE(kMin, 1) << "a boundary below 1 would make the walk unreachable by default";
+
+    // THE DEFAULT nrhs BOUNDARY, both sides.
+    if (kMin > 1) {
+        EXPECT_EQ(sycl_getrs::getrs_perm_spelling_debug<T>(*this->ctx, 128, kMin - 1), 0)
+            << "nrhs just below kGetrsPermGatherMinNrhs must take the WALK by default";
+    }
+    EXPECT_EQ(sycl_getrs::getrs_perm_spelling_debug<T>(*this->ctx, 128, kMin), 1)
+        << "nrhs at kGetrsPermGatherMinNrhs must take the GATHER by default";
+    EXPECT_EQ(sycl_getrs::getrs_perm_spelling_debug<T>(*this->ctx, 128, 4 * kMin), 1);
+
+    // linalg::solve issues getrs at nrhs = 1 and is the only caller in the tree;
+    // it must keep the walk.
+    EXPECT_EQ(sycl_getrs::getrs_perm_spelling_debug<T>(*this->ctx, 512, 1), kMin <= 1 ? 1 : 0);
+
+    // THE OVERRIDES beat the boundary in both directions.
+    setenv("BATCHLAS_GETRS_LASWP", "walk", 1);
+    EXPECT_EQ(sycl_getrs::getrs_perm_spelling_debug<T>(*this->ctx, 128, 4 * kMin), 0)
+        << "BATCHLAS_GETRS_LASWP=walk must force the walk above the boundary";
+    setenv("BATCHLAS_GETRS_LASWP", "gather", 1);
+    EXPECT_EQ(sycl_getrs::getrs_perm_spelling_debug<T>(*this->ctx, 128, 1), 1)
+        << "BATCHLAS_GETRS_LASWP=gather must force the gather below the boundary";
+
+    // THE CAPACITY REFUSAL, forced on, at an order no tile can hold. This is the
+    // only assertion in the suite that the fallback branch is reachable at all.
+    EXPECT_EQ(sycl_getrs::getrs_perm_spelling_debug<T>(*this->ctx, 1 << 20, 4 * kMin), 0)
+        << "the gather must REFUSE (and fall back to the walk) at an order whose column "
+           "cannot fit local memory, rather than launching a kernel that cannot run";
+
+    // ...and it must NOT refuse at an order the suite reaches: a capacity that fires
+    // early is a lever that never runs.
+    EXPECT_EQ(sycl_getrs::getrs_perm_spelling_debug<T>(*this->ctx, 1024, 4 * kMin), 1)
+        << "the gather must still fit at n = 1024, the largest order this pass measured";
+    unsetenv("BATCHLAS_GETRS_LASWP");
+}
+
+// L8d. THE GATHER BUYS NO WORKSPACE, AT ANY WIDTH. The facade takes the workspace
+// maximum over EVERY NATIVE TIER THAT supports() the shape, not over the tier the
+// route named, so a gather that bought an out-of-place RHS here would bill every
+// narrow call that routes to the FUSED tier and needs nothing.
+TYPED_TEST(LuTest, GetrsPermGatherBuysNoWorkspace) {
+    using T = typename TestFixture::T;
+    const int n = 96, batch = 3;
+    auto p = make_dominant_permuted<T>(n, batch, 606u);
+
+    for (int nrhs : {1, 8, 128}) {
+        auto rhs = make_rhs<T>(n, nrhs, batch, 707u + unsigned(nrhs));
+        auto A = view_of(p);
+        auto Bv = view_of(rhs);
+        for (const char* spelling : {"walk", "gather"}) {
+            setenv("BATCHLAS_GETRS_LASWP", spelling, 1);
+            for (Transpose op : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans}) {
+                EXPECT_EQ(sycl_getrs::getrs_blocked_buffer_size<T>(*this->ctx, A, Bv, op),
+                          std::size_t(0))
+                    << "the composed getrs must stay workspace-free at nrhs=" << nrhs
+                    << " spelling=" << spelling << " transA=" << int(op)
+                    << ". A buffer bought here is charged to every narrow call that "
+                       "routes to the FUSED tier, because the facade maxes over every "
+                       "SUPPORTED native tier and not over the routed one.";
+            }
+        }
+    }
+    unsetenv("BATCHLAS_GETRS_LASWP");
+}
+
+// L9. GETRI: the inverse, and the promise that A SURVIVES. cublas<t>getriBatched
+// takes `const T* const A[]`, so a native arm that wrote through A would be a
+// drop-in failure invisible to every residual; the survival is asserted BIT-EXACTLY.
 TYPED_TEST(LuTest, GetriInvertsAndLeavesTheFactorUntouched) {
     using T = typename TestFixture::T;
     const int n = 80, batch = 3;
@@ -1914,8 +1743,8 @@ TYPED_TEST(LuTest, GetriInvertsAndLeavesTheFactorUntouched) {
             << "getri wrote through A at element " << i
             << "; cublas<t>getriBatched takes A as const and a caller may reuse it";
 
-    // The LAST batch item is distinct from the first, so a wrong output stride
-    // cannot pass by broadcasting item 0.
+    // The LAST batch item differs from the first, so a wrong output stride cannot pass
+    // by broadcasting item 0.
     bool differ = false;
     for (int j = 0; j < n && !differ; ++j)
         for (int i = 0; i < n && !differ; ++i)
@@ -1925,21 +1754,11 @@ TYPED_TEST(LuTest, GetriInvertsAndLeavesTheFactorUntouched) {
     EXPECT_TRUE(differ) << "the first and last inverses are identical";
 }
 
-// ===========================================================================
-// L10 / L11. THE DROP-IN CONTRACT, BOTH DIRECTIONS.
-//
-// This is the highest-value test in the package and the direct analogue of WP5's
-// tau cross-check. getrf, getrs and getri carry INDEPENDENT env variables and
-// INDEPENDENT preferred() windows, so every mixture of native and vendor arms is
-// reachable in a shipped build. A factor and a pivot list produced by one must be
-// consumable by the other, in both directions.
-//
-// Note what is NOT asserted: that the two getrf implementations produce the same
-// pivots. They do not, and must not be required to -- cuBLAS pivots on the
-// modulus for complex types. What must hold is that each consumer works with the
-// factor its producer actually returned, which is what a residual against the
-// ORIGINAL A measures.
-// ===========================================================================
+// L10 / L11. THE DROP-IN CONTRACT, BOTH DIRECTIONS. getrf, getrs and getri carry
+// INDEPENDENT env variables and INDEPENDENT preferred() windows, so every mixture
+// of native and vendor arms is reachable in a shipped build. The two getrf
+// implementations are NOT required to agree on the PIVOTS they choose: cuBLAS
+// pivots on the modulus for complex.
 TYPED_TEST(LuTest, NativeFactorFeedsTheVendorSolvers) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::BackendType;
@@ -2007,10 +1826,8 @@ TYPED_TEST(LuTest, VendorFactorFeedsTheNativeSolvers) {
                                                          ws.to_span(), p.info.to_span())));
             this->ctx->wait();
             for (int b = 0; b < batch; ++b) ASSERT_EQ(p.info[b], 0);
-            // The vendor's own factor must satisfy the same host reconstruction --
-            // which is what proves the two implementations agree on the pivot
-            // FORMAT (packed 1-based int32 interchange list) even where they
-            // disagree on the pivot CHOICE.
+            // The vendor's own factor must satisfy the same host reconstruction, which proves
+            // the two agree on the pivot FORMAT even where they differ on the pivot CHOICE.
             check_factor(p, "dropin/vendor-factor", /*check_L=*/false);
             if (this->HasFailure()) return;
         }
@@ -2056,15 +1873,10 @@ TYPED_TEST(LuTest, VendorFactorFeedsTheNativeSolvers) {
     }
 }
 
-// ===========================================================================
 // L12. THE ROUTE TABLE AND THE VENDOR-FREE FALLBACK, asked of the REAL shape
-// builder on the REAL device.
-//
-// tests/route_vocabulary_tests.cc already exercises the table against SYNTHETIC
-// shapes with cta_max_n handed in. What it cannot see is whether the builder
-// reports a capacity at all on this device -- which is the difference between a
-// vendor-free build having an LU and throwing NoRouteError.
-// ===========================================================================
+// builder on the REAL device. route_vocabulary_tests.cc exercises the table
+// against SYNTHETIC shapes; what it cannot see is whether the builder reports a
+// capacity at all here -- an LU versus a NoRouteError in a vendor-free build.
 TYPED_TEST(LuTest, RouteTableAndTheVendorFreeFallback) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::BackendType;
@@ -2101,32 +1913,52 @@ TYPED_TEST(LuTest, RouteTableAndTheVendorFreeFallback) {
         EXPECT_TRUE(dispatch::is_native(ri)) << "getri has no vendor-free route";
     }
 
-    // getrf AND getri ARE STILL ROUTE-NEUTRAL. preferred() is false everywhere for
-    // both (WP6 ships them that way), so a vendor-present build must still take the
-    // vendor at every shape. This is the assertion that catches a window landing on
-    // either of them without the measured grid that justifies it -- and it is
-    // deliberately left as it was, because WP6-PERF moved getrs ALONE. If a getrf
-    // window ever lands, this is the test to rewrite, the way the getrs half below
-    // was rewritten rather than deleted.
+    // THE SHIPPED WINDOWS, met here at BATCH 2; neither carries a batch term.
+    //   getrf: native:blocked for float at order >= 256, cfloat at >= 512.
+    //   getri: native:blocked for float at order >= 128, cfloat at >= 256.
+    //   double and cdouble earn no window in either op, at any order.
+    // evidence: docs/perf/lu.md#getrf-window-evidence
+    //           docs/perf/lu.md#getri-window-evidence
     if constexpr (dispatch::factorization_vendor_available<B>) {
-        for (auto* V : {&Vs, &Vl})
-            EXPECT_TRUE(dispatch::is_vendor(
-                backend::getrf_route<B, T>(*this->ctx, *V, /*vendor_available=*/true)))
-                << "getrf routed NATIVE with a vendor present at n=" << V->rows()
-                << "; preferred() moved without a measurement";
+        constexpr bool kF  = std::is_same_v<T, float>;
+        constexpr bool kCF = std::is_same_v<T, std::complex<float>>;
+
+        // Vs (order <= 40) is below EVERY boundary of both windows, for every
+        // type: this is what catches a window that forgets its lower bound.
         EXPECT_TRUE(dispatch::is_vendor(
-            backend::getri_route<B, T>(*this->ctx, Vl, /*vendor_available=*/true)));
+            backend::getrf_route<B, T>(*this->ctx, Vs, /*vendor_available=*/true)))
+            << "getrf routed NATIVE at n=" << Vs.rows()
+            << ", below every measured boundary";
+        EXPECT_TRUE(dispatch::is_vendor(
+            backend::getri_route<B, T>(*this->ctx, Vs, /*vendor_available=*/true)));
+
+        // Vl is n = 512: inside both windows for float and cfloat, outside for the doubles.
+        const auto rf512 = backend::getrf_route<B, T>(*this->ctx, Vl, true);
+        const auto ri512 = backend::getri_route<B, T>(*this->ctx, Vl, true);
+        if constexpr (kF || kCF) {
+            EXPECT_TRUE(dispatch::is_native(rf512) &&
+                        rf512.algo == dispatch::Algorithm::Blocked)
+                << "getrf n=512 batch=2 is inside the measured window for this type "
+                   "and must resolve native:blocked";
+            EXPECT_TRUE(dispatch::is_native(ri512) &&
+                        ri512.algo == dispatch::Algorithm::Blocked)
+                << "getri n=512 batch=2 is inside the measured window for this type";
+        } else {
+            EXPECT_TRUE(dispatch::is_vendor(rf512))
+                << "double and cdouble earned NO getrf window: their best cell "
+                   "anywhere is 1.067 and 1.012";
+            EXPECT_TRUE(dispatch::is_vendor(ri512))
+                << "double and cdouble earned NO getri window: cdouble n=512 LOSES "
+                   "at 0.954 and double n=1024 is 1.155 and falling";
+        }
     }
 
     // ---- GETRS'S MEASURED WINDOW, ASKED OF THE REAL SHAPE BUILDER ----------
-    //
-    // route_vocabulary_tests.cc pins the same window against SYNTHETIC shapes with
-    // the two fused capacities handed in. What it cannot see -- and what made its
-    // getrs assertions blind guards until this pass -- is whether the BUILDER on
-    // THIS DEVICE reports capacities at all. A builder that returns 0 for
-    // fused_max_elems turns supports({Native, CTA}) false everywhere, and then
-    // every window assertion in the pure suite passes for a reason that has
-    // nothing to do with the window. So: the capacities first, then the window.
+    // route_vocabulary_tests.cc pins the same window against SYNTHETIC shapes. What it
+    // cannot see is whether the BUILDER on THIS DEVICE reports capacities at all: one
+    // returning 0 for fused_max_elems makes every window assertion there hold
+    // vacuously. So the capacities first, then the window.
+    // evidence: docs/perf/lu.md#getrs-fused-window-evidence
     {
         auto rhs1 = make_rhs<T>(large.n, 1, large.batch, 5151u);
         auto V1 = view_of(rhs1);
@@ -2185,16 +2017,10 @@ TYPED_TEST(LuTest, RouteTableAndTheVendorFreeFallback) {
     }
 }
 
-// ===========================================================================
-// L13. THE FACADE REACHES THE NATIVE KERNELS, ASSERTED BIT-EXACTLY.
-//
-// tests/potrf_tests.cc:895-908 records this repository's fifth blind guard: a
-// route-assertion-plus-residual test "stayed GREEN across all four scalar types
-// while every number in it came from cuSOLVER", because a residual bound is
-// satisfied by either implementation. So the comparison here is BIT-EXACT
-// against the direct entry point -- factor AND pivots -- which no vendor can
-// reproduce (and, for complex, provably does not: cuBLAS pivots on the modulus).
-// ===========================================================================
+// L13. THE FACADE REACHES THE NATIVE KERNELS, ASSERTED BIT-EXACTLY. A route
+// assertion plus a residual can stay GREEN while every number in it comes from the
+// vendor, so the comparison here is BIT-EXACT against the direct entry point --
+// factor AND pivots -- which no vendor can reproduce.
 TYPED_TEST(LuTest, FacadeReachesTheNativeKernelsBitExactly) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::BackendType;
@@ -2206,9 +2032,8 @@ TYPED_TEST(LuTest, FacadeReachesTheNativeKernelsBitExactly) {
         auto direct = make_dominant_permuted<T>(n, batch, 1234u);
         auto viafac = make_dominant_permuted<T>(n, batch, 1234u);
 
-        // THE PIN IS VERIFIED, NEVER ASSUMED: an unrecognised value, or one
-        // supports() refuses, silently resolves to the VENDOR (route_resolve.hh:
-        // 165 -> :175) and this test would then compare cuBLAS with itself.
+        // THE PIN IS VERIFIED, NEVER ASSUMED: an unrecognised value, or one supports()
+        // refuses, silently resolves to the VENDOR and this test compares it with itself.
         auto Vf = view_of(viafac);
         const auto route = backend::getrf_route<B, T>(
             *this->ctx, Vf, dispatch::factorization_vendor_available<B>);
@@ -2301,15 +2126,9 @@ TYPED_TEST(LuTest, FacadeReachesTheNativeKernelsBitExactly) {
     }
 }
 
-// ===========================================================================
-// L14. THE DIRECT ENTRY POINTS REFUSE WHAT supports() REFUSES.
-//
-// They are reachable WITHOUT the table, so every gate has to be re-applied there
-// or a pinned-route caller walks straight into an unlaunchable configuration.
-// The injected-seam refusals are here too: an empty trsm seam must THROW rather
-// than reach for a native kernel, which is WP3 step 16's defect refused by
-// construction.
-// ===========================================================================
+// L14. THE DIRECT ENTRY POINTS REFUSE WHAT supports() REFUSES. They are reachable
+// WITHOUT the table, so every gate has to be re-applied there or a pinned-route
+// caller walks into an unlaunchable configuration.
 TYPED_TEST(LuTest, DirectEntryPointsRefuseWhatSupportsRefuses) {
     using T = typename TestFixture::T;
     const int n = 24, batch = 2;
@@ -2385,20 +2204,10 @@ TYPED_TEST(LuTest, DirectEntryPointsRefuseWhatSupportsRefuses) {
     }
 }
 
-// ===========================================================================
 // L15. THE WORKSPACE QUERY COVERS EVERY SUPPORTED ROUTE, AND DEREFERENCES
-// NOTHING.
-//
-// getrf_buffer_size and getri_buffer_size are reached from INSIDE a layout
-// function under BumpAllocator::measuring() (src/extensions/inv.cc:35-36, from
-// inv_buffer_size at :54-57), where A arrives with a NULL data pointer. A query
-// that reads the data is an immediate segfault in a sizing path -- and it is the
-// path tests/inverse_tests.cc actually takes.
-//
-// The facade's figure is max(native, vendor), so a call served with exactly that
-// many bytes must succeed for EVERY pin: the ormqr defect (query 2560 bytes, call
-// demanded 276480) is what this pins shut.
-// ===========================================================================
+// NOTHING: getrf_buffer_size and getri_buffer_size are reached from inside a
+// layout function under BumpAllocator::measuring() (src/extensions/inv.cc), where
+// A arrives with a NULL data pointer. The facade's figure is max(native, vendor).
 TYPED_TEST(LuTest, BufferSizeCoversEveryRouteAndNeverDereferences) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::BackendType;
@@ -2432,8 +2241,7 @@ TYPED_TEST(LuTest, BufferSizeCoversEveryRouteAndNeverDereferences) {
         EXPECT_GE(need, native_need)
             << "pin '" << pin << "': the facade's figure is smaller than the arm it resolved to";
 
-        // Serve EXACTLY that many bytes. A short workspace is a silent heap
-        // overflow, not a throw.
+        // Serve EXACTLY that many bytes: a short workspace is a silent heap overflow.
         UnifiedVector<std::byte> ws(std::max<std::size_t>(1, need));
         ASSERT_NO_THROW((getrf<B, T>(*this->ctx, V, p.piv.to_span(), ws.to_span(),
                                      p.info.to_span())));
@@ -2443,27 +2251,13 @@ TYPED_TEST(LuTest, BufferSizeCoversEveryRouteAndNeverDereferences) {
     }
 }
 
-// ===========================================================================
 // F1. THE FUSED TIER SOLVES ALL THREE transA MODES AT EVERY INSTANTIATED WIDTH.
 //
-// The permutation SIDE changes with the transpose and the two substitutions SWAP
-// ORDER, and getting either wrong is a silently wrong answer no NoTrans test can
-// see. Measured on this tier (break record at the bottom of this file): B1
-// (transposed permutation walked forwards) and B4 (transposed output permutation
-// dropped) turn ONLY Trans and ConjTrans red; B3 (NoTrans interchange walk
-// dropped) turns ONLY NoTrans red; B6 (ConjTrans stops conjugating) turns ONLY
-// ConjTrans red AND only by 1e-1, far subtler than the rest.
-//
-// EVERY nrhs THE TIER SERVES, not a sample: the accumulator width NR is a
-// COMPILE-TIME template parameter chosen by a runtime ladder (nrhs <= 1 -> 1,
-// <= 2 -> 2, <= 4 -> 4, else 8), so 1, 2, 4 and 8 are four different kernels and
-// 3 and 5 are the shapes where the `if (c < nrhs)` guards inside a WIDER
-// accumulator are the only thing keeping a lane from writing a column that does
-// not exist.
-//
-// n = 97 is 6 full nb = 16 blocks plus a FINAL BLOCK OF ONE, which is the shape
-// that exercises the jb == 1 guards in both substitutions and both kernels.
-// ===========================================================================
+// The accumulator width NR is a COMPILE-TIME template parameter chosen by a
+// runtime ladder (nrhs <= 1 -> 1, <= 2 -> 2, <= 4 -> 4, else 8), so 1, 2, 4 and 8
+// are four different kernels, and 3 and 5 are the shapes where the `if (c < nrhs)`
+// guards inside a WIDER accumulator are all that keeps a lane out of a column that
+// does not exist. n = 97 is six full nb = 16 blocks plus a FINAL BLOCK OF ONE.
 TYPED_TEST(LuTest, FusedGetrsSolvesEveryTransposeAtEveryInstantiatedWidth) {
     using T = typename TestFixture::T;
     const int n = 97, batch = 3;
@@ -2492,10 +2286,9 @@ TYPED_TEST(LuTest, FusedGetrsSolvesEveryTransposeAtEveryInstantiatedWidth) {
                 *this->ctx, A, Bv, op, p.piv.to_span(), ws.to_span()));
             this->ctx->wait();
 
-            // THE ORACLE IS ||op(A) X - B|| AGAINST THE **ORIGINAL** A, in double
-            // regardless of T, and NOT the L/U-based one used by the hole ladder:
-            // only this form is sensitive to the permutation DIRECTION, because
-            // only this form knows what A was before it was factored.
+            // THE ORACLE IS ||op(A) X - B|| AGAINST THE **ORIGINAL** A, and not the L/U-based
+            // one the hole ladder uses: only this form is sensitive to the permutation
+            // DIRECTION, because only this form knows what A was before it was factored.
             for (int b = 0; b < batch; ++b) {
                 const double res = solve_residual<T>(p.a0.data() + size_t(b) * p.stride,
                                                      rhs.buf.data() + size_t(b) * rhs.stride,
@@ -2524,27 +2317,12 @@ TYPED_TEST(LuTest, FusedGetrsSolvesEveryTransposeAtEveryInstantiatedWidth) {
     }
 }
 
-// ===========================================================================
-// F2. ORDERS: ONE, THE BLOCK BOUNDARIES, AND THE nb SWITCH AT 1024.
-//
-// The fused launcher's geometry is a set of thresholds and every one of them is
-// an off-by-one waiting to happen:
-//   * nb = 16 below order 1024 and 32 at or above it, then clamped to n, so
-//     1023 / 1024 / 1025 straddle a change of BOTH the block width and the
-//     resident block's leading dimension;
-//   * jb = n - j on the FINAL block, so 15 / 17 / 31 / 33 / 65 / 97 each leave a
-//     short tail, and jb == 1 disables the unit-diagonal recurrence entirely
-//     (`sgid == 0 && jb > 1`) in two of the four substitutions;
-//   * n = 1 is the whole op reduced to one division, with every trailing-update
-//     loop empty.
-//
-// ORDER 1 AND 2 SKIP THE INVOLUTION ASSERTION, and that is a statement about the
-// construction rather than an exemption: make_dominant_permuted's cyclic shift
-// is an n-cycle, and an n-cycle IS self-inverse for n <= 2. There is no
-// permutation of one or two rows that can distinguish a forwards walk from a
-// backwards one, so those two orders are testing the arithmetic and the tails,
-// not the direction.
-// ===========================================================================
+// F2. ORDERS: ONE, THE BLOCK BOUNDARIES, AND THE nb SWITCH AT 1024. nb = 16 below
+// order 1024 and 32 at or above it, then clamped to n, so 1023/1024/1025 straddle a
+// change of BOTH the block width and the resident block's leading dimension, and
+// jb == 1 on the final block disables the unit-diagonal recurrence entirely in two
+// of the four substitutions. ORDERS 1 AND 2 SKIP THE INVOLUTION ASSERTION: an
+// n-cycle IS self-inverse for n <= 2.
 TYPED_TEST(LuTest, FusedGetrsAtBlockBoundariesAndTheNbSwitch) {
     using T = typename TestFixture::T;
     const int batch = 2;
@@ -2593,29 +2371,11 @@ TYPED_TEST(LuTest, FusedGetrsAtBlockBoundariesAndTheNbSwitch) {
     }
 }
 
-// ===========================================================================
-// F3. THE TWO CEILINGS: THE WIDTH THE BUILD INSTANTIATED, AND THE DEVICE'S
-// RESIDENT-RHS CAPACITY. BOTH MUST HAND BACK, NOT PRODUCE GARBAGE.
-//
-// They are DIFFERENT KINDS of ceiling and route_getrs.hh keeps them separate for
-// that reason: fused_max_nrhs is what this BUILD compiled (kGetrsFusedMaxRhs = 8;
-// above it no instantiation exists), fused_max_elems is what THIS DEVICE's local
-// memory holds. Both live in supports(), never in preferred(), because above
-// either of them the kernel does not launch -- and a speed threshold in
-// supports() would make a pinned `native:cta` fall through to automatic()
-// (route_resolve.hh:165 -> :175) and the test that pinned it would measure the
-// vendor and pass green.
-//
-// WHAT IS CHECKED AT EACH CEILING:
-//   * supports() says yes AT the boundary and no ONE PAST it;
-//   * the DIRECT entry point throws one past it rather than launching;
-//   * the FACADE one past it still returns the RIGHT ANSWER, from some other
-//     route, and that route is NOT {Native, CTA}.
-//
-// The capacity half uses NULL-DATA views: the entry point refuses on metadata
-// alone, before it dereferences anything, so proving that costs no allocation at
-// orders of ~3000.
-// ===========================================================================
+// F3. THE TWO CEILINGS: THE WIDTH THE BUILD INSTANTIATED (kGetrsFusedMaxRhs = 8)
+// AND THE DEVICE'S RESIDENT-RHS CAPACITY. BOTH MUST HAND BACK, NOT PRODUCE
+// GARBAGE. Both live in supports() and never in preferred(), because above either
+// the kernel does not launch -- and a SPEED threshold in supports() would make a
+// pinned `native:cta` fall through to automatic() and measure the vendor instead.
 TYPED_TEST(LuTest, FusedGetrsHandsBackAtBothCeilings) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::BackendType;
@@ -2656,9 +2416,8 @@ TYPED_TEST(LuTest, FusedGetrsHandsBackAtBothCeilings) {
         this->ctx->wait();
     }
 
-    // ONE PAST THE WIDTH, THROUGH THE FACADE, MUST STILL BE RIGHT. This is the
-    // half a supports() test cannot reach: the route has to fall to a tier that
-    // can serve it and the answer has to survive the handover.
+    // ONE PAST THE WIDTH, THROUGH THE FACADE, MUST STILL BE RIGHT: the route has to
+    // fall to a tier that can serve it and the answer has to survive the handover.
     {
         const int nrhs = maxr + 1;
         auto rhs = make_rhs<T>(n, nrhs, batch, 1212u);
@@ -2722,22 +2481,11 @@ TYPED_TEST(LuTest, FusedGetrsHandsBackAtBothCeilings) {
     }
 }
 
-// ===========================================================================
-// F4. THE DROP-IN CONTRACT FOR THE FUSED TIER, BOTH DIRECTIONS AND BOTH
-// PRODUCERS.
-//
-// getrf and getrs carry INDEPENDENT env variables and INDEPENDENT preferred()
-// windows, so a vendor getrf feeding a native getrs is a shipped configuration
-// and not a hypothetical. The fused tier reads the pivot buffer DIRECTLY --
-// pivots.as_span<int>(), packed 1-BASED int32, an INTERCHANGE LIST -- so it is
-// the arm most exposed to a format disagreement, and it re-derives the walk in
-// its own kernel rather than delegating to the shared laswp the composed tier
-// uses.
-//
-// BOTH NATIVE PRODUCERS ARE USED, not just one: getrf's CTA tier and its blocked
-// tier write the pivot list from different code, and n = 40 is inside the CTA
-// tier's capacity on this device.
-// ===========================================================================
+// F4. THE DROP-IN CONTRACT FOR THE FUSED TIER, BOTH DIRECTIONS AND BOTH PRODUCERS.
+// The fused tier reads the pivot buffer DIRECTLY -- pivots.as_span<int>(), packed
+// 1-BASED int32, an INTERCHANGE LIST -- and re-derives the walk in its own kernel
+// rather than delegating to the shared laswp, so it is the arm most exposed to a
+// format disagreement.
 TYPED_TEST(LuTest, FusedGetrsConsumesEveryFactorProducer) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::BackendType;
@@ -2781,10 +2529,8 @@ TYPED_TEST(LuTest, FusedGetrsConsumesEveryFactorProducer) {
         solve_and_check(p, "NATIVE CTA getrf's");
     }
     if constexpr (dispatch::factorization_vendor_available<B>) {
-        // VENDOR getrf. Its pivot CHOICE differs from ours for complex types
-        // (cuBLAS pivots on the modulus, this library on cabs1), which is exactly
-        // why the oracle is a residual against the ORIGINAL A and never an
-        // elementwise comparison of the two factors.
+        // VENDOR getrf. Its pivot CHOICE differs from ours for complex types, which is why
+        // the oracle is a residual against the ORIGINAL A and not a factor comparison.
         auto p = make_dominant_permuted<T>(n, batch, 3737u);
         {
             auto A = view_of(p);
@@ -2799,9 +2545,8 @@ TYPED_TEST(LuTest, FusedGetrsConsumesEveryFactorProducer) {
         }
         solve_and_check(p, "VENDOR getrf's");
 
-        // AND THE OTHER DIRECTION, on the same factor: the vendor getrs must
-        // still consume it. That is what makes the pivot FORMAT -- as opposed to
-        // the pivot CHOICE -- a shared fact rather than an internal convention.
+        // AND THE OTHER DIRECTION, on the same factor: the vendor getrs must still consume
+        // it, which is what makes the pivot FORMAT a shared fact and not our convention.
         auto A = view_of(p);
         auto rhs = make_rhs<T>(n, nrhs, batch, 2626u);
         auto Bv = view_of(rhs);
@@ -2820,26 +2565,12 @@ TYPED_TEST(LuTest, FusedGetrsConsumesEveryFactorProducer) {
     }
 }
 
-// ===========================================================================
-// F5. A SINGULAR AND A NEARLY-SINGULAR FACTOR.
-//
-// getrs has no info output and no singularity contract: LAPACK's ?GETRS divides
-// by U(k,k) unconditionally and the caller is expected to have looked at getrf's
-// info. What must NOT happen is the two failure modes this repository has already
-// shipped once elsewhere -- an EPSILON FLOOR that silently perturbs the answer
-// (getrf's `info_epsilon_floor` break) and a guard that SKIPS the division and
-// returns a plausible-looking wrong number.
-//
-// So the assertions are:
-//   * NEARLY singular (a diagonal scaled down by 1e-6 / 1e-12) must still be
-//     SOLVED, to a BACKWARD-error bound. The residual used here normalises by
-//     ||X||, so conditioning cancels and the bound is legitimately tight.
-//   * EXACTLY singular must PROPAGATE: the answer must contain a non-finite
-//     value. A finite answer means something floored the division.
-// Both diagonals probed are boundaries in their own right: k = 0 is the first
-// step of the back substitution's LAST block and k = n-1 is the last row of its
-// FIRST, which is where an off-by-one in the reverse loop lands.
-// ===========================================================================
+// F5. A SINGULAR AND A NEARLY-SINGULAR FACTOR. getrs has no info output and no
+// singularity contract: ?GETRS divides by U(k,k) unconditionally. So NEARLY
+// singular must still be SOLVED to a backward-error bound, and EXACTLY singular
+// must PROPAGATE: a finite answer means an EPSILON FLOOR or a SKIPPED division
+// returned a plausible-looking wrong number. k = 0 and k = n-1 are where an
+// off-by-one in the reverse loop lands.
 TYPED_TEST(LuTest, FusedGetrsOnSingularAndNearlySingularFactors) {
     using T = typename TestFixture::T;
     const int n = 64, nrhs = 2, batch = 2;
@@ -2921,26 +2652,11 @@ TYPED_TEST(LuTest, FusedGetrsOnSingularAndNearlySingularFactors) {
     }
 }
 
-// ===========================================================================
 // F6. THE FACADE REACHES THE FUSED KERNEL, ASSERTED BIT-EXACTLY, AND THE
-// VENDOR-FREE DEFAULT LANDS ON IT.
-//
-// tests/potrf_tests.cc:895-908 records this repository's fifth blind guard: a
-// route-assertion-plus-residual test "stayed GREEN across all four scalar types
-// while every number in it came from cuSOLVER", because a residual bound is
-// satisfied by either implementation. So the comparison is BIT-EXACT against the
-// direct entry point, which no vendor and no other native tier can reproduce.
-//
-// The route half is what pins the ROUTING change this tier landed with:
-//   * pinned `cta`   -> {Native, CTA};
-//   * pinned `blocked` -> {Native, Blocked} and NOT CTA, which is what keeps the
-//     composed tier reachable for its own tests (route_resolve.hh:165 -> :175
-//     would otherwise hand it to automatic() and it would measure the other arm);
-//   * UNPINNED in a VENDOR-FREE build -> {Native, CTA} inside the capability and
-//     {Native, Blocked} outside it, which is native_tier_preferred's only job;
-//   * UNPINNED in a VENDOR-PRESENT build -> the VENDOR, because preferred() is
-//     still all-false and this tier did not move it.
-// ===========================================================================
+// VENDOR-FREE DEFAULT LANDS ON IT. The comparison is BIT-EXACT against the direct
+// entry point, which no vendor and no other native tier can reproduce; the route
+// half also pins that a pinned `blocked` still reaches the COMPOSED tier.
+// evidence: docs/perf/lu.md#getrs-fused-window-evidence
 TYPED_TEST(LuTest, FacadeReachesTheFusedGetrsBitExactly) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::BackendType;
@@ -2982,8 +2698,8 @@ TYPED_TEST(LuTest, FacadeReachesTheFusedGetrsBitExactly) {
                    "entry point at element " << i << " -- something else served this call";
     }
 
-    // The other pin must still reach the COMPOSED tier, not be swallowed by the
-    // new route sitting ahead of it in kGetrsOrder.
+    // The other pin must still reach the COMPOSED tier, not the fused route ahead of
+    // it in kGetrsOrder.
     {
         EnvGuard g("BATCHLAS_GETRS_ROUTE", "blocked");
         auto rhs = make_rhs<T>(n, nrhs, batch, 7272u);
@@ -3013,14 +2729,9 @@ TYPED_TEST(LuTest, FacadeReachesTheFusedGetrsBitExactly) {
             << "a vendor-free build routed nrhs=" << (sycl_getrs::kGetrsFusedMaxRhs + 1)
             << " to the fused tier, which is not instantiated that wide";
 
-        // THE VENDOR-PRESENT ROUTE, AND THIS ASSERTION IS THE INVERSE OF THE ONE
-        // IT REPLACES. It used to read is_vendor at nrhs = 1, and it was right to:
-        // preferred() was all-false, WP6 shipped route-neutral, and the assertion
-        // existed to catch a window landing without a grid. The grid landed
-        // (experiments/wp6_perf/bench/, 488 cells over six sweeps), so the window
-        // did, and the guard is rewritten around the window rather than deleted --
-        // BOTH sides of it, because an assertion that only pins the inside cannot
-        // fail when someone widens the clause.
+        // THE VENDOR-PRESENT ROUTE, BOTH sides of the window: an assertion that only pins
+        // the inside cannot fail when someone widens the clause.
+        // evidence: docs/perf/lu.md#getrs-fused-window-evidence
         if constexpr (dispatch::factorization_vendor_available<B>) {
             const auto rv = backend::getrs_route<B, T>(
                 *this->ctx, A, Vn, Transpose::NoTrans, /*vendor_available=*/true);
@@ -3029,9 +2740,8 @@ TYPED_TEST(LuTest, FacadeReachesTheFusedGetrsBitExactly) {
                    "min 1.24x, flat across every batch ladder at seven orders) and must "
                    "route to the fused tier even with cuBLAS present";
 
-            // OUTSIDE the window, the vendor still takes it. nrhs = 8 is inside the
-            // tier's CAPABILITY and outside its measured WINDOW, which is exactly
-            // the pair of facts a speed test in supports() would destroy.
+            // OUTSIDE the window, the vendor still takes it: nrhs = 8 is inside the tier's
+            // CAPABILITY and outside its measured WINDOW, a pair supports() must not merge.
             auto w8 = make_rhs<T>(n, int(sycl_getrs::kGetrsFusedMaxRhs), batch, 7575u);
             auto V8 = view_of(w8);
             EXPECT_TRUE(dispatch::is_vendor(backend::getrs_route<B, T>(
@@ -3039,9 +2749,8 @@ TYPED_TEST(LuTest, FacadeReachesTheFusedGetrsBitExactly) {
                 << "nrhs=" << sycl_getrs::kGetrsFusedMaxRhs << " is OUTSIDE the window "
                    "(geomean 0.819x over 24 cells, 13 losses) and must take the vendor";
 
-            // ... and clause B is FLOAT ONLY. nrhs = 4 splits by type, which is the
-            // half of the window most likely to be widened by someone who reads
-            // "nrhs <= 4" and drops the type test.
+            // ... and clause B is FLOAT ONLY. nrhs = 4 splits by type, the half of the window
+            // most likely to be widened by someone who drops the type test.
             auto w4 = make_rhs<T>(n, 4, batch, 7676u);
             auto V4 = view_of(w4);
             const auto r4 = backend::getrs_route<B, T>(
@@ -3060,22 +2769,11 @@ TYPED_TEST(LuTest, FacadeReachesTheFusedGetrsBitExactly) {
     }
 }
 
-// ===========================================================================
 // F7. THE FUSED DIRECT ENTRY POINT REFUSES WHAT supports() REFUSES, AND ITS
-// WORKSPACE QUERY DEREFERENCES NOTHING.
-//
-// It is reachable WITHOUT the table -- that is why it exists (potrf_native.hh:
-// 126-141) -- so every gate has to be re-applied there or a pinned-route caller
-// walks straight into an unlaunchable configuration.
-//
-// The workspace half is ZERO in every mode for this tier, and that is a
-// consequence of the design rather than a coincidence: the RHS is permuted and
-// solved in LOCAL memory and written back in place. The facade's figure is a max
-// over BOTH native tiers, and it is asserted here because the query and the call
-// resolve INDEPENDENTLY (options.hh:651 sizes, :652 calls, two getenv reads
-// inside one API call), so a lease sized for one tier is a lease the other can
-// overrun.
-// ===========================================================================
+// WORKSPACE QUERY DEREFERENCES NOTHING. The workspace is ZERO in every mode for
+// this tier by design (the RHS is permuted and solved in LOCAL memory, in place),
+// and the facade's figure is a max over BOTH native tiers; the query and the call
+// resolve INDEPENDENTLY, so a lease sized for one tier is one the other overruns.
 TYPED_TEST(LuTest, FusedGetrsDirectEntryPointRefusesWhatSupportsRefuses) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::BackendType;
@@ -3161,252 +2859,8 @@ TYPED_TEST(LuTest, FusedGetrsDirectEntryPointRefusesWhatSupportsRefuses) {
     }
 }
 
-// ===========================================================================
-// THE FUSED-GETRS BREAK RECORD (the F-series and L0b).
-//
-// SIXTEEN guarded properties, each corrupted at its source, the .so REBUILT,
-// and the whole binary re-run. FIFTEEN of the sixteen went RED; the one that did
-// not is a finding rather than a gap. Tooling:
-// experiments/wp6_getrs/tests/ (break.py, break2.py, runbreak.sh).
-//
-// COUNT THE ROWS, NOT THIS SENTENCE. An earlier version of this paragraph said
-// "fourteen ... thirteen of the fourteen" over a table that already had sixteen
-// rows and fifteen REDs, and a reader who trusted the prose would have concluded
-// that exactly one property is unguarded when in fact TWO breaks turned nothing
-// red -- `cap_band` here and `B5` (the +1 bank-conflict pad) recorded in
-// src/extensions/getrs_fused.cc, in a different file. The table below is the
-// record; this sentence is a summary of it and has been wrong once already. This
-// is the same misreading class the campaign records for WP5's "zero suites
-// closed", which was three.
-//
-// TYPE INDICES BELOW ARE THE GPU SUITES: 4 = float, 5 = double, 6 = cfloat,
-// 7 = cdouble. Suites 0-3 are the NETLIB rows and SKIP (CPU queue, gate 2).
-//
-// | break               | property corrupted                              | outcome (of 95)
-// |---------------------|-------------------------------------------------|-----------------
-// | piv_base            | ipiv read 0-based instead of 1-based            | RED, 28, 7 of 8 F-tests x 4 types
-// | rhs_ld              | the RHS write-back uses n instead of ldb        | RED, 24, 6 F-tests x 4 types
-// | unit_u              | a UNIT-DIAGONAL assumption on U, both kernels   | RED, 24, 6 F-tests x 4 types
-// | trans_perm_forward  | the transposed output permutation walked FORWARDS | RED, 20, 5 F-tests x 4 types
-// | perm_wrong_side     | the transposed permutation moved to the INPUT   | RED, 20, 5 F-tests x 4 types
-// | swap_solves         | the two NoTrans substitutions SWAPPED (U before L) | RED, 19, all 4 types
-// | last_row            | off-by-one at the LAST ROW of the trailing update | RED, 13, all 4 types
-// | conj                | ConjTrans stops conjugating                     | RED, 6, cfloat and cdouble ONLY
-// | cap_inversion       | the capacity-inversion repair reverted          | RED, 4, LaunchHole layer (a), all 4 types
-// | hole_pad            | the 48 KB pad removed from the launcher         | RED, 4, LaunchHole layer (a) ONLY
-// | reg_cap             | the register cap on the work-group width removed | RED, 1, LaunchHole, float ONLY -- a LAUNCH ABORT (RE-VERIFIED, see below)
-// | facade_arm          | the facade's CTA arm routed to the composed tier | RED, 4, FacadeReaches..., all 4 types
-// | tier_pref           | native_tier_preferred inverted                  | RED, 4, FacadeReaches..., all 4 types
-// | supports_gates      | supports() stops checking the two CTA ceilings  | RED, 8, HandsBack... + FacadeReaches..., all 4
-// | dispatch_gates      | the direct entry point stops re-checking them   | RED as a PROCESS ABORT inside HandsBack...
-// | cap_band            | the hole band dropped from the capacity query   | NOTHING RED -- see below
-//
-// ---------------------------------------------------------------------------
-// THE WP6-PERF WINDOW BREAK RECORD -- five more, run when preferred() landed.
-//
-// The window is a claim spanning TWO files (this one, on the real device, and
-// route_vocabulary_tests.cc, on synthetic shapes), so each break is reported
-// against BOTH. Same method: patch the source, rebuild the .so, re-run the whole
-// binary.
-//
-// | break     | what was corrupted                  | getrf_tests | route_vocabulary_tests
-// |-----------|-------------------------------------|-------------|----------------------
-// | W1        | clause A (nrhs <= 2) switched off    | RED, 6      | RED, 1
-// | W2        | clause B widened to EVERY type      | RED, 3      | RED, 2
-// | W3        | the COMPOSITION also made preferred | green       | RED, 2
-// | V1        | the fused capacities in route_vocabulary_tests' getrs_shape()
-// |           | helper returned to 0, i.e. the blind-guard state
-// |           |                                     | n/a         | RED, 3
-// | R1        | the register cap removed entirely   | RED, 1      | n/a
-//
-// FOUR OF THE FIVE OUTCOMES ARE THEMSELVES FINDINGS:
-//
-// * W1 LEAVES FLOAT GREEN, and that is correct rather than a hole: with clause A
-//   off, float nrhs = 1 is still inside clause B (nrhs <= 4 for float), so the
-//   float route does not move. Only double, cfloat and cdouble go red. A reader
-//   who expects "all four types" from a window break would mis-read this.
-//
-// * W3 TURNS NOTHING RED IN THIS FILE, and that is what the pure suite is for.
-//   Making the composition preferred does not change any RESOLVED route, because
-//   CTA is listed first in kGetrsOrder and automatic() returns the first route
-//   that is both supported and preferred. Only a direct assertion on preferred()
-//   itself can see it, and route_vocabulary_tests carries two.
-//
-// * V1 IS THE BLIND GUARD MADE VISIBLE. Before this pass, getrs_shape() set
-//   neither fused capacity, so supports({Native, CTA}) was false on every shape
-//   in route_vocabulary_tests and every getrs routing assertion in it held no
-//   matter what the table said -- 78/78 through the flip and through its
-//   inverse. Re-arming that (V1) turns three tests red, which is the proof that
-//   the repair is load-bearing and that the file is no longer blind here.
-//
-// * R1 REPRODUCES A HARD LAUNCH ABORT, not a wrong answer:
-//       "Exceeded the number of registers available on the hardware.
-//        The kernel uses 68 registers per work-item for a total of 1024
-//        work-items per work-group."
-//   in LuTest/4 (float) FusedGetrsLaunchHoleAt48KiB. A review of this change
-//   asserted that NO test in the suite reaches a shape where the cap can bite;
-//   it does -- the 48 KB ladder's top rung is n = 1428 at nrhs = 8 and picks
-//   wg = 1024, and it runs transA = Trans. The review had looked only at the two
-//   tests with "Width"/"Boundaries" in their names.
-//
-// ---------------------------------------------------------------------------
-// THE RESULTS THAT ARE FINDINGS RATHER THAN CONFIRMATIONS
-// ---------------------------------------------------------------------------
-//
-// 1. `cap_inversion` IS A REAL DEFECT THIS TEST FOUND, not a re-confirmation.
-//    getrs_fused_max_rhs_elems originally answered a budget with a plain floor
-//    division. getrs_hole_padded is NOT MONOTONE, so for a budget a few bytes
-//    above kGetrsHoleHi the division rounds the implied request back DOWN INTO
-//    the band, where it is then RAISED to 49,920 and no longer fits: at 49,665 B
-//    the query advertised a capacity needing 49,920 B, for all four scalar
-//    types. That is a supports() promising a route whose launch the runtime
-//    refuses -- exactly what potrf_cta.cc:445-470's `break` exists to prevent.
-//    The window is only sizeof(T) bytes wide and needs a device with 53,761 B of
-//    local memory, so it is UNREACHABLE on this box and no launch test could
-//    ever have found it; the byte-by-byte sweep of a PURE FUNCTION could, and
-//    did. Repaired in src/extensions/getrs_fused.cc; the break re-confirms the
-//    repair is load-bearing.
-//
-// 2. `cap_band` TURNED NOTHING RED, AND THAT IS CORRECT: the two mechanisms are
-//    REDUNDANT after the repair above. Clamping `admissible` to kGetrsHoleLo and
-//    re-checking the implied request against the budget close the same hole from
-//    opposite ends, so removing either one alone leaves the other doing the
-//    whole job. Verified by hand across the sweep: with the clamp gone, a budget
-//    of 49,152 B still yields 10,720 float elements, the same answer. It is a
-//    genuinely unfalsifiable-in-isolation line and is kept as the cheap common
-//    case, not as the guard.
-//
-// 3. `hole_pad` GOES RED ON LAYER (a) AND GREEN ON LAYER (b) -- the same split
-//    L0's own `hole_pad` produced for getrf, and for the same reason: the
-//    49,920 B launch this device is asked for succeeds without the pad too, so
-//    the 48 KB hole does not reproduce here for these kernels either. Note that
-//    layer (a) catches it only INDIRECTLY -- this file keeps its own restatement
-//    of the pad, so removing the library's makes the two disagree. That is still
-//    a guard, but it is a "the two copies of the rule diverged" guard rather
-//    than a device-behaviour one, and the launch half remains the layer that
-//    would fire if the hole ever reproduced.
-//
-// 4. `reg_cap` IS A LAUNCH ABORT, NOT A WRONG ANSWER, and only ONE cell in the
-//    whole binary reaches it: float, transA=Trans, nrhs=8, n=1428 -- the top
-//    rung of the 48 KB ladder, which picks wg = 1024 against a 68-register
-//    kernel for 69,632 registers per work-group against a 65,536 limit. The
-//    exception text is quoted verbatim by the runtime. Nothing else in this file
-//    is wide enough AND deep enough at once to hit it, which is worth knowing
-//    before anyone trims the ladder for runtime.
-//
-// 5. THE THREE BREAKS THAT SEPARATE THE TRANSPOSED ARM FROM THE NoTrans ONE --
-//    `trans_perm_forward`, `perm_wrong_side` and `conj` -- leave
-//    FusedGetrsHandsBackAtBothCeilings GREEN, correctly: that test asserts
-//    routing and refusals, and checks numbers only on the path that has already
-//    handed BACK to another tier.
-//
-// 6. `last_row` and `swap_solves` LEAVE FusedGetrsSolvesEveryTransposeAtEvery-
-//    InstantiatedWidth GREEN FOR FLOAT and are caught only by
-//    FusedGetrsAtBlockBoundariesAndTheNbSwitch. At n = 97 in float the dropped
-//    last row sits under 400 n eps; at the small orders it does not. The order
-//    sweep is not decoration -- for two of these breaks it is the only thing
-//    that fires on all four types.
-//
-// 7. `unit_u` LEAVES FacadeReachesTheFusedGetrsBitExactly GREEN, correctly and
-//    by construction: both sides of that comparison are the same corrupted
-//    kernel. A bit-exactness test pins WHICH CODE RAN and can never pin what
-//    that code computes -- which is why it sits beside the residual tests and
-//    not instead of them.
-//
-// 8. `dispatch_gates` IS THE ONLY BREAK IN THIS SET THAT TAKES THE PROCESS DOWN
-//    (SIGABRT, exit 134, inside FusedGetrsHandsBackAtBothCeilings on the FIRST
-//    GPU type). That is the point of the ceiling test's null-data half: with the
-//    re-check gone, the entry point launches an order of ~2900 whose resident RHS
-//    the device cannot hold, and there is no graceful failure mode left. Because
-//    it aborts, the three later types never run -- so if this break is ever
-//    repeated, run it FILTERED, once per scalar type, the way L0's break record
-//    says `short_final` and `piv_stride_nb` have to be run.
-//
-// 9. `supports_gates` TURNS **TWO** TESTS RED, AND THE SECOND ONE IS THE POINT.
-//    FusedGetrsHandsBackAtBothCeilings goes red on the supports() assertions, as
-//    designed. FacadeReachesTheFusedGetrsBitExactly ALSO goes red -- because with
-//    the ceilings gone, the nrhs = 9 shape now resolves to {Native, CTA} and the
-//    facade reaches a kernel that does not exist at that width. That is the
-//    supports()/preferred() confusion route_getrs.hh's CTA clause warns about,
-//    caught from the route side rather than the numeric side.
-// ===========================================================================
-
-// ===========================================================================
-// THE BREAK RECORD.
-//
-// Fourteen guarded properties, each corrupted at its source, the .so REBUILT,
-// and tests/getrf_tests run ONCE PER SCALAR TYPE -- four filtered runs, not one,
-// because a corrupted kernel can take the process down and a single run then
-// reports nothing about the three types that never executed (`short_final` and
-// `piv_stride_nb` both abort). Tooling and raw output:
-// experiments/wp6_lu/tests/break.py, run_break.sh, breaks.txt, break_*.txt.
-//
-// | break              | property corrupted                          | outcome
-// |--------------------|---------------------------------------------|--------
-// | piv_base_zero      | ipiv written 0-based instead of 1-based      | RED, 12-13 of 16 per type
-// | getrs_forward      | transposed permutation walked forwards       | RED, GetrsSolvesAllThreeTransposeModes, all 4 types -- BUT SEE BELOW
-// | info_block_local   | info offset made panel-local, not global     | RED, SingularColumn..., all 4
-// | short_final        | panel loop stops at the last FULL panel      | RED + SIGSEGV (exit 139), all 4
-// | subview_ld         | sub-view built with rows, not the parent ld  | RED, 9 of 16 per type
-// | getrs_perm_first   | transposed permutation moved to the INPUT    | RED, GetrsSolves..., all 4
-// | hole_pad           | the 48 KB pad removed                        | RED, ResidentLeafLaunchHole..., all 4 -- ARITHMETIC HALF ONLY, see below
-// | pivot_metric       | cabs1 -> the modulus (cuBLAS's rule)         | RED for cfloat (5) and cdouble (4); NOTHING for float/double, correctly
-// | laswp_left         | interchanges not applied to columns [0, j0)  | RED, 9 of 16 per type
-// | getri_forward      | getri's backward trace run forwards          | RED, Getri... and VendorFactorFeedsTheNative..., all 4
-// | leaf_swap_right    | leaf row exchange restricted to columns >= k | RED, 12 of 16 per type
-// | info_epsilon_floor | an epsilon floor in the singularity test     | RED, NearlySingularIsNotFlagged, all 4
-// | piv_stride_nb      | pivot stride nb instead of the matrix order  | RED + SIGABRT (OUT_OF_RESOURCES), all 4
-// | getri_perm_t       | F written transposed into C                  | RED, Getri... and VendorFactorFeedsTheNative..., all 4
-//
-// ---------------------------------------------------------------------------
-// THE TWO RESULTS THAT ARE FINDINGS RATHER THAN CONFIRMATIONS
-// ---------------------------------------------------------------------------
-//
-// 1. `getrs_forward` TURNED NOTHING RED ON THE FIRST VERSION OF THIS FILE --
-//    62 passed, 0 failed -- AND THE CAUSE WAS THIS FILE'S TEST MATRIX.
-//
-//    make_dominant_permuted originally permuted rows by a REVERSAL. A reversal
-//    is its own inverse, so the permutation the interchange list composes to
-//    satisfies F = F^{-1}, and getrs's transposed arm -- whose whole content is
-//    "the SAME list walked BACKWARDS" -- gives the identical answer walked
-//    forwards. Three tests of a permutation DIRECTION (getrs Trans, getrs
-//    ConjTrans, getri's backward trace) were unfalsifiable, on every scalar
-//    type, while looking like the strongest tests in the file.
-//
-//    Fixed by permuting with a CYCLIC SHIFT, which composes to an n-cycle, plus
-//    interchange_is_involution() asserted at every direction-sensitive use so
-//    the property cannot silently regress. On the shift the break is RED for all
-//    four types, and so are getrs_perm_first, getri_forward and getri_perm_t.
-//    This is the sixth-plus instance of this repository's blind-guard class and
-//    the first one caught in the test file rather than in the kernel.
-//
-// 2. `hole_pad` GOES RED ON THE ARITHMETIC HALF AND GREEN ON THE LAUNCH HALF.
-//    Removing the pad makes getrf_leaf_fits admit a 49,152 B tile at a 49,152 B
-//    budget -- caught -- and the resulting resident launch then SUCCEEDS on this
-//    box. So on this device, for this kernel, the 48 KB hole does not reproduce,
-//    which agrees with getrf_cta.cc:124-129's own reading: WP6 attributed the
-//    hole to sycl::reduce_over_group alone and this body uses no group
-//    collective. The pad is DEFENSIVE and layer (a) is the guard that has teeth;
-//    layer (b) is kept for the day a group algorithm enters the body, which is
-//    the condition WP4 wrote down and WP5 walked into anyway.
-//
-// ---------------------------------------------------------------------------
-// THREE THINGS THE BREAKS ALSO SETTLED, worth stating because each was a guess
-// before it was measured:
-//
-//   * ORACLE 3 IS METRIC-SENSITIVE. `pivot_metric` turns the ordinary complex
-//     sweeps red -- CtaFactorises, BlockedFactorises, BothPanelLeaves -- and not
-//     just the dedicated probe, because the pivot-ratio form of the oracle asks
-//     the question in cabs1. WP6's kernel-side campaign recorded that this break
-//     "turned NOTHING red on the ordinary sweep" against a |L| <= 1 oracle. It
-//     does now.
-//   * `pivot_metric` turns NOTHING red for float and double, and that is
-//     correct, not a gap: cabs1 and the modulus are the same function there and
-//     PivotSelectionUsesCabs1AndNotTheModulus SKIPs.
-//   * `subview_ld` and `laswp_left` leave CtaFactorises and BothPanelLeaves
-//     GREEN, correctly: neither the CTA tier nor the panel leaf builds a
-//     sub-view or issues an interchange outside its own tile.
-// ===========================================================================
+// The break record for every guarded property, including the breaks that turned
+// nothing red: docs/perf/lu.md#blind-guards-and-what-made-them-blind
 
 int main(int argc, char** argv) {
     ::testing::InitGoogleTest(&argc, argv);
