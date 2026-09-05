@@ -8,24 +8,24 @@ DGEMM must never exceed ~1.45 TFLOP/s, since a 4090 is 1/64 FP64.
 
 ### The route arms
 
-`kGemmOrder` (`include/batchlas/blas/dispatch/route_gemm.hh:48-51`) has exactly two arms:
+`kGemmOrder` (`include/batchlas/blas/dispatch/route_gemm.hh:12-51`) has exactly two arms:
 
 | Origin | Algorithm | notes |
 |---|---|---|
 | `Native` | `RegisterTiled` | the SYCL kernel family in `src/sycl/gemm/`; `Algorithm::Auto` is also accepted by `supports()` |
 | `Vendor` | `Auto` | cuBLAS / rocBLAS / MKL; `supports()` is unconditionally true |
 
-`supports()` (`route_gemm.hh:58-81`) is **correctness only**: `precision == Default`, `m,n,k > 0`. Since WP2 C2 a heterogeneous batch is
+`supports()` (`route_gemm.hh:19-81`) is **correctness only**: `precision == Default`, `m,n,k > 0`. Since WP2 C2 a heterogeneous batch is
 *supported* natively — the facade walks the batch (`src/backends/gemm_heterogeneous.hh`), each member homogeneous by construction — and is
-refused by `preferred()` instead. Conflating correctness with speed is the trap the split at `route_gemm.hh:3-37` prevents: a window inside
+refused by `preferred()` instead. Conflating correctness with speed is the trap the split at `route_gemm.hh:6-37` prevents: a window inside
 `supports()` leaves a 1024³ float GEMM at batch 256 with no route at all vendor-free.
 
-The unset default is `{Origin::Auto, Algorithm::Auto}` for every op (`route_env.hh:145-148`). GEMM used to be the one op defaulting to a *forced*
+The unset default is `{Origin::Auto, Algorithm::Auto}` for every op (`route_env.hh:88-148`). GEMM used to be the one op defaulting to a *forced*
 Vendor; WP2 E6 removed that asymmetry.
 
 ### The preferred window as implemented
 
-Quoted from `include/batchlas/blas/dispatch/route_gemm.hh:87-211`, in order of evaluation:
+Quoted from `include/batchlas/blas/dispatch/route_gemm.hh:34-211`, in order of evaluation:
 
 ```
 r.origin == Native, supports(r,s), s.is_gpu, !s.heterogeneous_batch      :91-99
@@ -40,17 +40,17 @@ anything else                                -> false                    :208
 
 Read plainly: **native is preferred only for `double` (any shape, any transpose form, `k >= 2`, `batch >= 64`, GPU, homogeneous) and for `float`
 NN squares with `max_dim <= 32`.** Complex is `false` at every shape. `preferred()` returning false never makes a route ineligible — vendor-free,
-`resolve_route` still falls back to any *supported* native route (`route_resolve.hh:60-62`), so every narrowing below costs a vendor-free build
+`resolve_route` still falls back to any *supported* native route (`route_resolve.hh:18-62`), so every narrowing below costs a vendor-free build
 nothing.
 
-Two sources disagree with the shipped predicate, and the code wins: `experiments/wp2_e6/README.md` and `route_env.hh:130` describe the flip's
+Two sources disagree with the shipped predicate, and the code wins: `experiments/wp2_e6/README.md` and `route_env.hh:88` describe the flip's
 double half as "square, n=4..512", and `scripts/gemm_demand.py:50-68` transcribes `m == n == k && max_dim <= 512` with no `k >= 2`. Both are the
 pre-E5 predicate; E5 landed after E6 and removed squareness and the bound. The `gemm_demand.py` copy is a live defect — see [Open
 debts](#open-debts).
 
 ### The kernel selector is the second gate
 
-`preferred()` picks an *Origin*; `select_kernel_variant` (`src/sycl/gemm_kernels.cc:456-729`) picks the kernel, and it is the gate that decides
+`preferred()` picks an *Origin*; `select_kernel_variant` (`src/sycl/gemm_kernels.cc:450-729`) picks the kernel, and it is the gate that decides
 throughput. Its whole register ladder for float sits inside `if constexpr (is_same_v<T,float>)`. Reachable exits:
 
 | condition | variant | line |
@@ -115,7 +115,7 @@ The contrast with float is a **ceiling argument, not luck**: cuBLAS DGEMM sits a
 88–98%, at every size from 4 to 2048. That is also why the window has no upper size bound — a gap from a size-independent mechanism needs no size
 cutoff, and a cliff at 2048 would itself be the unjustified number.
 
-**The `max_dim <= 24` Direct/Tiled16 boundary** (`gemm_kernels.cc:725`), double, GFLOP/s:
+**The `max_dim <= 24` Direct/Tiled16 boundary** (`gemm_kernels.cc:553`), double, GFLOP/s:
 
 | n | batch | Direct | Tiled16 | winner |
 |---|---|---|---|---|
@@ -157,7 +157,7 @@ kernel, traced and confirmed. The transposed register family plateaus near 15–
 
 ### Complex is refused
 
-`preferred()` returns false for complex at every shape (`route_gemm.hh:113-114`). The reason is the selector: the only complex register arm is
+`preferred()` returns false for complex at every shape (`route_gemm.hh:43-114`). The reason is the selector: the only complex register arm is
 `Tiled64x64RegisterK16Wide`, reachable at `min_dim >= 256` + aligned NN or through the CTA gate below; everything else falls to `Tiled16`,
 measured 3.2–7.1× slower than cuBLAS (cdouble 0.386–0.392 vs 1.238–1.246 TFLOP/s; cfloat 6.6–6.9 vs 45–49 TFLOP/s). The route equivalence test
 asserts complex never moves under the flip.
@@ -174,7 +174,7 @@ The flip changes nothing in a vendor-free build (the Vendor default was never re
 explicit requests — `BATCHLAS_GEMM_VARIANT=vendor` still means vendor, which is the escape hatch if a future cuBLAS turns a cell around. That is
 not hypothetical; see the aged-out parity claim below.
 
-Vocabulary trap (`route_env.hh:150-160`): `BATCHLAS_GEMM_VARIANT=native` does **not** mean BatchLAS's own kernel — it aliases
+Vocabulary trap (`route_env.hh:97-160`): `BATCHLAS_GEMM_VARIANT=native` does **not** mean BatchLAS's own kernel — it aliases
 `cuda-native`/`direct-cuda`, is consumed only as an exclusion, and is `Origin::Vendor` in the canonical vocabulary.
 
 ### The 128x128 float kernel
@@ -254,7 +254,7 @@ relaxation rescues it: zero calls are blocked by the k floor alone.**
 
 ### The CTA count gate for complex
 
-`gemm_kernels.cc:694-703` admits complex NN to the wide kernel on `min_dim >= 32 && ctas >= kMinCtas`, with `kMinCtas` 64 for `complex<float>`
+`gemm_kernels.cc:539-703` admits complex NN to the wide kernel on `min_dim >= 32 && ctas >= kMinCtas`, with `kMinCtas` 64 for `complex<float>`
 and 128 for `complex<double>`, where `ctas = ceil(m/64)*ceil(n/64)*batch`.
 
 Forced-wide vs the route it replaces, at saturation, both betas, geomean over 116 refused cells: **cfloat 3.98×, cdouble 2.90×**, null controls
@@ -314,7 +314,7 @@ the full 1.57×.
 
 **The fix that worked was routing, not a kernel change.** `can_use_128x128_fast_path` is a *leg* predicate — the dispatcher re-evaluates it and
 picks `<true>`/`<false>` itself — but the selector used it as a *routing* gate, so failing it did not demote a call to the predicated leg, it
-handed the call to an entirely different, much slower kernel. Routing by what the kernel can run (`gemm_kernels.cc:578`) is worth **geomean 1.74×
+handed the call to an entirely different, much slower kernel. Routing by what the kernel can run (`gemm_kernels.cc:501`) is worth **geomean 1.74×
 / 1.75×** (pad 0 / pad 384) over 12 shapes, moving native from 0.58× → 0.99× of cuBLAS at `ld == rows` and 0.54× → 0.93× strided:
 
 1024×1024×64 b128 ld1408 3.187 → 1.337 ms (2.38×), 1000×1024×128 b128 ld1384 2.954 → 1.569 ms (1.88×), 1024×1024×16 b128 2.622 → 1.232 ms

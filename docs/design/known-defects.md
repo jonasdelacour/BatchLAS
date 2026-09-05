@@ -135,7 +135,7 @@ This is the same defect that was **found and fixed** in cuSPARSE. On a real scal
 `CUSPARSE_OPERATION_CONJUGATE_TRANSPOSE` with `CUDA_R_32F`/`CUDA_R_64F` silently produced wrong
 results across the whole real `ConjTrans` family, on **both** operands (a call with
 `transA = NoTrans, transB = ConjTrans` was wrong on the dense operand alone). The fix is the
-type-conditional `cusparse_op<T>` helper at `src/backends/cusparse.cc:38-47`; the complex arms,
+type-conditional `cusparse_op<T>` helper at `src/backends/cusparse.cc:29-47`; the complex arms,
 where the conjugating enum is the distinct and correct operation, were always right and stayed
 untouched.
 
@@ -186,12 +186,12 @@ fixed. The correct form is the per-column `std::copy_n` already used 400 lines a
 
 ## 7. `trsm`'s heterogeneous-batch rejection can never fire
 
-`route_trsm.hh:151` rejects a heterogeneous batch (`if (s.heterogeneous_batch) return false;`) —
+`route_trsm.hh:43` rejects a heterogeneous batch (`if (s.heterogeneous_batch) return false;`) —
 correctly, since one `trsm` launch covers the whole batch with a single `(order, q, ld, stride)`
 tuple. But `trsm_op_shape` (`src/backends/trsm_route.hh:40-56`) never writes the field, so it
-keeps `OpShape`'s default of `false` (`include/batchlas/blas/dispatch/route.hh:236`).
+keeps `OpShape`'s default of `false` (`include/batchlas/blas/dispatch/route.hh:162`).
 `MatrixView::is_heterogeneous()` exists and `getrf`'s builder calls it
-(`src/backends/getrf_route.hh:105`); `trsm`'s does not.
+(`src/backends/getrf_route.hh:45`); `trsm`'s does not.
 
 The gate is a documented intention, not an enforced one. No measurement either way, and no test
 constructs a heterogeneous `trsm`.
@@ -235,7 +235,7 @@ happen to catch it": could not.
 
 | the guard | what made it blind | how it was proved | the fix |
 |---|---|---|---|
-| the `trsm` barrier's own regression test | it drove V1 directly at n=16 and *asserted* it had cleared the work-group ladder. Clearing the ladder is necessary and not sufficient — the race needs more than one sub-group, and a final V1 block landing in the `N=16` bucket | applied with the barrier deleted and the library rebuilt: **green, twice** | drive V2 at order 48, q=976, batch=128 (`tests/trsm_tests.cc:630`); orders 48/77/80/109 fail 90-128 of 128 items deterministically, 32/33/64/65/96/155 are clean |
+| the `trsm` barrier's own regression test | it drove V1 directly at n=16 and *asserted* it had cleared the work-group ladder. Clearing the ladder is necessary and not sufficient — the race needs more than one sub-group, and a final V1 block landing in the `N=16` bucket | applied with the barrier deleted and the library rebuilt: **green, twice** | drive V2 at order 48, q=976, batch=128 (`tests/trsm_tests.cc:538`); orders 48/77/80/109 fail 90-128 of 128 items deterministically, 32/33/64/65/96/155 are clean |
 | all 232 `gemv` cases, on batch stride | every case used the **natural** stride (`a_stride == ld*n`, `x_stride == size*inc`), so a kernel deriving each stride instead of reading it passed the whole suite — while `ortho.cc:218-222` hands it an `A.stride()` its `ld*cols` does not equal, every CGS iteration | break `padstride`: exactly 32 cases red, all four of them new | four `stride_pad` cases, one per kernel body |
 | `spmm`'s transposed `nnz` bound | the poison was a NaN at an **out-of-range** column, and the scatter's own range guard `continue`s *before* the multiply — poison and value went in the bin together, so the test was green because of a kernel guard, not the property it named | break `scatterBound` came back green over all 352 cases; two control runs then isolated it (broken bound + guard deleted → segfault; correct bound + guard deleted → 352/352 green) | poison with an **in-range** column and a large **finite** sentinel — an entry the scatter accepts and accumulates. Finite, not NaN: NaN is absorbing under atomic addition, says nothing about where it landed, and a fast-math build may fold the assertion away |
 | `gemv`'s tail sub-group | out-of-range writes landed past the end of the allocation, where nothing was looking. **Three separate breaks came back green over 376 cases** | after adding 64 elements of poisoned guard band, `segTtailwrite` and `segTclampoff2` turn exactly the three partial-tail cases red | allocate guard, poison before the call, assert untouched after |

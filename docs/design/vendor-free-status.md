@@ -53,10 +53,10 @@ therefore fail entirely on host rows while every CUDA case in it passes. Two dem
   byte-identical to the post-WP7 set. Read alone, the number says WP8 did nothing.
 
 The structural reason every native tier in this campaign is invisible to the host half:
-`supports()` carries `if (!s.is_gpu) return false;` for `geqrf` (`route_geqrf.hh:244`), `orgqr`
-(`route_orgqr.hh:127`), `ormqr` (`route_ormqr.hh:59`), `getrf` (`route_getrf.hh:215`), `getrs`
-(`route_getrs.hh:276`), `getri` (`route_getri.hh:157`), `potrf` (`route_potrf.hh:207`), `trsm`
-(`route_trsm.hh:142`) and `gemm` (`route_gemm.hh:87-92`). **`gemv`'s `Direct` arm and `spmm`'s
+`supports()` carries `if (!s.is_gpu) return false;` for `geqrf` (`route_geqrf.hh:48`), `orgqr`
+(`route_orgqr.hh:32`), `ormqr` (`route_ormqr.hh:59`), `getrf` (`route_getrf.hh:41`), `getrs`
+(`route_getrs.hh:52`), `getri` (`route_getri.hh:39`), `potrf` (`route_potrf.hh:38`), `trsm`
+(`route_trsm.hh:39`) and `gemm` (`route_gemm.hh:34-92`). **`gemv`'s `Direct` arm and `spmm`'s
 gather are the only two exceptions in the tree** — both run on a `native_cpu` `Device("cpu")`
 queue, which is exactly why `gemv_tests` went 40 failed → 0 vendor-free when nothing else did.
 
@@ -87,7 +87,7 @@ failing *set* of suite names; do not diff the pass count.
 
 The static `linked` half of the coverage instrument is not a substitute. It answers "does this
 build have a native route *registered* for this (op, scalar, backend)", not "is there a native
-kernel", and it is stale in both directions: `src/dispatch/coverage.cc:252` still reports
+kernel", and it is stale in both directions: `src/dispatch/coverage.cc:168` still reports
 `trsm` as having no native route, two work packages after WP3 shipped one. Read the `reached`
 rows and the resolved route.
 
@@ -96,34 +96,34 @@ rows and the resolved route.
 Every public dense op and `spmm` now has a native SYCL kernel. What differs is whether
 `preferred()` sends traffic to it in a **vendor-present** build. Vendor-free, an un-preferred
 native route still runs: `automatic()` accepts a merely *supported* native route when
-`vendor_available == false` (`route_resolve.hh:109-130`).
+`vendor_available == false` (`route_resolve.hh:34-130`).
 
 | op | native arms (`order` sequence) | `preferred()` in a vendor-present build | where |
 |---|---|---|---|
-| `gemm` | `RegisterTiled` | GPU, homogeneous, `batch >= 64`; **`double` at `k >= 2`**; `float` NN square `max_dim <= 32`; **complex never** | `route_gemm.hh:87-155` |
-| `gemv` | `CTA`, `Direct` | one window: `complex<double>`, transposed, `64 <= red_len <= 352`, `out_len >= 256`, `batch >= 320` | `route_gemv.hh:469-481` |
-| `trsm` | `CTA`, `Blocked` | native from `batch >= 8`; `float`/`Side::Right` additionally needs `batch >= 128 \|\| order <= 32`; everything else true | `route_trsm.hh:224-306` |
-| `potrf` | `CTA`, `Blocked` | **false everywhere** | `route_potrf.hh:338-342` |
-| `geqrf` | `CTA`, `Blocked` | **false everywhere**; tier choice via `native_tier_preferred` (`:443`) | `route_geqrf.hh:363-367` |
-| `orgqr` | `Blocked` | **false everywhere** | `route_orgqr.hh:231-235` |
+| `gemm` | `RegisterTiled` | GPU, homogeneous, `batch >= 64`; **`double` at `k >= 2`**; `float` NN square `max_dim <= 32`; **complex never** | `route_gemm.hh:34-155` |
+| `gemv` | `CTA`, `Direct` | one window: `complex<double>`, transposed, `64 <= red_len <= 352`, `out_len >= 256`, `batch >= 320` | `route_gemv.hh:60-481` |
+| `trsm` | `CTA`, `Blocked` | native from `batch >= 8`; `float`/`Side::Right` additionally needs `batch >= 128 \|\| order <= 32`; everything else true | `route_trsm.hh:64-306` |
+| `potrf` | `CTA`, `Blocked` | **false everywhere** | `route_potrf.hh:65-342` |
+| `geqrf` | `CTA`, `Blocked` | **false everywhere**; tier choice via `native_tier_preferred` (`:443`) | `route_geqrf.hh:73-367` |
+| `orgqr` | `Blocked` | **false everywhere** | `route_orgqr.hh:60-235` |
 | `ormqr` | `Blocked` | `is_native(r) && supports(r, s)` — native-first, and predates WP5 | `route_ormqr.hh:77-79` |
-| `getrf` | `CTA`, `Blocked` | `float` order ≥ 256, `cfloat` order ≥ 512 | `route_getrf.hh:499-506` |
-| `getrs` | `CTA`, `Blocked` | CTA at `nrhs <= 2` (all types) and `nrhs <= 4` (`float`); Blocked at `batch >= 128` with `float nrhs >= 64` / `double nrhs >= 128` | `route_getrs.hh:683-700` |
-| `getri` | `Blocked` | `float` order ≥ 128, `cfloat` order ≥ 256 | `route_getri.hh:347-355` |
-| `spmm` | `Direct` | CSR and `transA == NoTrans`, minus `complex<float>` with `transB != NoTrans` | `route_spmm.hh:292-305` |
-| `syev` | `CTA`, `Blocked`, `TwoStage` | a measured per-`n` grid, `Backend::CUDA` only | `syev.hh:855-880` |
-| `gesvd` | `Jacobi`, `CTA`, `Blocked` | the wide-band rule | `route_gesvd.hh:145` |
+| `getrf` | `CTA`, `Blocked` | `float` order ≥ 256, `cfloat` order ≥ 512 | `route_getrf.hh:67-506` |
+| `getrs` | `CTA`, `Blocked` | CTA at `nrhs <= 2` (all types) and `nrhs <= 4` (`float`); Blocked at `batch >= 128` with `float nrhs >= 64` / `double nrhs >= 128` | `route_getrs.hh:79-700` |
+| `getri` | `Blocked` | `float` order ≥ 128, `cfloat` order ≥ 256 | `route_getri.hh:65-355` |
+| `spmm` | `Direct` | CSR and `transA == NoTrans`, minus `complex<float>` with `transB != NoTrans` | `route_spmm.hh:65-305` |
+| `syev` | `CTA`, `Blocked`, `TwoStage` | a measured per-`n` grid, `Backend::CUDA` only | `syev.hh:357-880` |
+| `gesvd` | `Jacobi`, `CTA`, `Blocked` | the wide-band rule | `route_gesvd.hh:100` |
 
 Two families sit outside this table and must not be read from it:
 
 * **`symm`, `syrk`, `syr2k`, `trmm` have no `RouteTable` and never call `resolve_route`.** Their
   thresholds are hand-rolled `if`-chains in the facade, guarded
-  `Back == Backend::CUDA && std::is_same_v<T, float>` (`entry_points/level3.cc:294`, `:380`,
+  `Back == Backend::CUDA && std::is_same_v<T, float>` (`entry_points/level3.cc:189`, `:380`,
   `:418`, `:457`), and they run **before** the vendor-available test — so anything below that
   gate is unreachable vendor-free. `symm` has no tile kernel at all; its portable arm is a
   mirrored expansion feeding the public `gemm`.
 * **`hemm`, `herk`, `her2k` have no native arm in the facade whatsoever** — vendor or throw
-  (`entry_points/level3.cc:316-361`). Their expansion routes are reachable only from inside
+  (`entry_points/level3.cc:210-361`). Their expansion routes are reachable only from inside
   `cublas.cc`.
 
 ### Vendor-first by measurement, not by absence
@@ -178,7 +178,7 @@ And these are vendor-first because **no decision was taken**, which is a differe
    than a missing kernel.** Four call sites reach into `dispatch::detail` and demand the
    *vendor* `syev` instead of resolving a route, so they throw vendor-free by construction
    regardless of what `syev`'s three native tiers support: `src/extra/cond.cc:52`,
-   `src/extra/norm.cc:45`, `src/extensions/syevx_lobpcg.cc:652` and `:1282`. The recorded
+   `src/extra/norm.cc:45`, `src/extensions/syevx_lobpcg.cc:532` and `:1282`. The recorded
    measurement attributes 6 of `cond_tests`' 30 vendor-free failures to the `cond.cc` one. The
    fix is to call the routed `syev` and let `resolve_route` decide.
 3. **`hemm` 12, `herk` 16, `her2k` 12 — no native arm exists.** The facade is vendor-or-throw for
@@ -189,7 +189,7 @@ And these are vendor-first because **no decision was taken**, which is a differe
    the tree, inside the float-only dispatcher. `double` `symm` has no expansion route at all.
 5. **`geqrf` 44, `ormqr` 24, `getri` 16** — host rows as above, plus the shapes each table's
    `supports()` refuses.
-6. **`potrf` refuses `Uplo::Upper`** in the blocked driver (`route_potrf.hh:292`), and that is
+6. **`potrf` refuses `Uplo::Upper`** in the blocked driver (`route_potrf.hh:55`), and that is
    the correctness kind of false, not the slower kind. `syev` shows the cheap route: mirror the
    upper triangle and run the Lower pipeline.
 
@@ -264,7 +264,7 @@ measurement:
 * **`symm` has no `expansion_fits()` ceiling** where `hemm`/`herk`/`her2k` all have one, so a
   large enough `symm` hits the 2³¹-element SYCL range failure instead of falling back.
 * **`trsm`'s heterogeneous-batch correctness gate can never fire.** `supports()` rejects the
-  field at `route_trsm.hh:151`, but `trsm_op_shape` never *writes* it, so it keeps `OpShape`'s
+  field at `route_trsm.hh:43`, but `trsm_op_shape` never *writes* it, so it keeps `OpShape`'s
   default `false`. A documented intention, not an enforced one.
 * **`resolve_ormqr_route` is called with two arguments** (`ormqr.hh:209`), taking
   `vendor_available = true`, so `ormqr` never reaches the vendor-free fallback. It gets away

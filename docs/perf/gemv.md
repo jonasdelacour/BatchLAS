@@ -10,13 +10,13 @@ achievable roof**; two cards in the chassis, device 0 drives the display. Ratio 
 
 ### The route arms
 
-`kGemvOrder` (`include/batchlas/blas/dispatch/route_gemv.hh:147-151`) is a **capability ladder, tighter first**, not a
+`kGemvOrder` (`include/batchlas/blas/dispatch/route_gemv.hh:26-151`) is a **capability ladder, tighter first**, not a
 preference list:
 
 | order | Route | `supports()` — correctness only, never a speed cutoff |
 |---|---|---|
-| 1 | `{Native, CTA}` | `cta_available && is_gpu && has_sg32 && transA != NoTrans` (`route_gemv.hh:217-218`) |
-| 2 | `{Native, Direct}` | `direct_available` — **and no `is_gpu` clause at all** (`route_gemv.hh:203`) |
+| 1 | `{Native, CTA}` | `cta_available && is_gpu && has_sg32 && transA != NoTrans` (`route_gemv.hh:50-218`) |
+| 2 | `{Native, Direct}` | `direct_available` — **and no `is_gpu` clause at all** (`route_gemv.hh:46`) |
 | 3 | `{Vendor, Auto}` | everything |
 
 Both native arms are additionally refused for `heterogeneous_batch` (one launch covers the batch with a single
@@ -76,7 +76,7 @@ correctly. The closure pass re-searched the clause family with `batch` as a firs
 The code is the authority:
 
 ```cpp
-// include/batchlas/blas/dispatch/route_gemv.hh:469-486
+// include/batchlas/blas/dispatch/route_gemv.hh:60-486
 static bool preferred(Route r, const GemvShape& s) {
     if (!is_native(r) || r.algo != Algorithm::CTA) return false;
     if constexpr (std::is_same_v<T, std::complex<double>>) {
@@ -96,10 +96,10 @@ written on `out_len()` tests the wrong extent and *inverts* the window — an er
 
 ### The sub-route gates
 
-Body 4 (`src/sycl/gemv_native.cc:175-180`): `W = gemv_seg_width(out_len)`, the largest power of two with
+Body 4 (`src/sycl/gemv_native.cc:75-180`): `W = gemv_seg_width(out_len)`, the largest power of two with
 `W*out_len <= 32`; `W == 1` means "no segmentation available", so **body 4 serves `out_len <= 16`** and body 1 takes
 17 and above. It also requires `Device::supports_sub_group_size(32)` — false on `native_cpu`, which is why the 20
-NETLIB rows keep body 1. Body 5 (`src/sycl/gemv_native.cc:281-387`) has three gates, all on `red_len()` and never on
+NETLIB rows keep body 1. Body 5 (`src/sycl/gemv_native.cc:88-387`) has three gates, all on `red_len()` and never on
 `out_len()`, all transcribed cell by cell from a CSV rather than derived from an inequality:
 
 | gate | float | complex&lt;float&gt; | double | complex&lt;double&gt; |
@@ -290,7 +290,7 @@ bandwidth that a streaming kernel never sees.
   `m=96, n=192, batch=1024` (0.97/0.97, cuBLAS 925 GB/s).
 * **`A >= 256 MB` instead of a batch term. REFUTED by a cell** — 0.9628 at `out 512, red 128, batch 256`, which *is*
   256 MB; that is the answer to "isn't batch just a proxy for size". An **L2-residency gate is separately forbidden**
-  (`route_gemv.hh:279-284`) and the data agrees: the dip switches on at 537 MB for one shape and 134 MB for another,
+  (`route_gemv.hh:60-284`) and the data agrees: the dip switches on at 537 MB for one shape and 134 MB for another,
   while 268 MB shows none — all far above the 72 MB L2.
 * **`64 <= m <= 320 && A >= 512 MB`: survives "do no harm" and fails the gate anyway.** On both the fitted grid
   (admits 34) and the auditor's out-of-sample grid (admits 18) its worst cell is **1.01×** and nothing is below
@@ -478,7 +478,7 @@ the `NoTrans` body a short *reduction*.
   against a 72 MB L2) body 5 at `W = 4` measures **1.40×–2.09×** for cfloat at `red_len 24..64`, **2.62×** for double
   at `red_len 64` and **1.22×–1.71×** for float at `red_len 48..128` — all *above* their gates, while the same
   `red_len` at `out_len 2048` measures 0.986×–0.996×. Separating them needs a **footprint** term, which is the
-  L2-residency reasoning `route_gemv.hh:279-284` forbids and which would be no better founded in a launcher.
+  L2-residency reasoning `route_gemv.hh:60-284` forbids and which would be no better founded in a launcher.
 * **`17 <= out_len <= 31` on the `NoTrans` arm is unmeasured** — body 4 declines it by arithmetic (`W == 1`), and no
   timing brackets that side of its gate. **`complex<double>` transposed at short reduction is cleared, not solved**:
   body 5 lifted the last two sub-0.50× cells to 0.862/0.861, which is not parity and cannot be.

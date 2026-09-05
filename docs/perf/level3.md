@@ -25,7 +25,7 @@ is absent (`BATCHLAS_HAS_CUBLASDX 0`), so `cublasdx_variant_needs_fallback` is u
 true (`level3_fused.hh:14-18`) and every "cublasdx" route ever measured here is its fallback.
 `{Vendor, DiagFullGemm}` is a deliberately **wrong** route that stores both triangles, kept only
 so the arithmetic the triangular kernels save is measurable; `Auto` must never select it
-(`route.hh:81-86`).
+(`route.hh:38-86`).
 
 ### The shipped predicates
 
@@ -58,7 +58,7 @@ global memory.
 
 ### Where the decision actually happens
 
-**The four gates are float-and-CUDA only** — `src/dispatch/entry_points/level3.cc:293, 379, 417,
+**The four gates are float-and-CUDA only** — `src/dispatch/entry_points/level3.cc:188, 379, 417,
 456` each wrap the gate in `if constexpr (Back == Backend::CUDA && std::is_same_v<T, float>)`.
 **And the thresholds above are GATE-ONLY, so the effective route is wider than the predicate
 reads**: once `syrk_use_cuda_custom` returns true for any reason, `syrk_cuda_custom`'s `Auto` arm
@@ -272,7 +272,7 @@ against `BATCHLAS_ORMQR_WY=gemm` (ABBA-ordered, `Side::Left`, `ConjTrans`, batch
 | `netlib float` | 0.336x–1.199x | 0.34x at n=128 ib=16 — excluded |
 | `netlib double` | 0.379x–1.064x | 0.38x at n=128 ib=16 — excluded |
 
-`wy_trmm_applicable` (`src/extensions/ormqr_blocked.cc:109`) is therefore per-**type**, not
+`wy_trmm_applicable` (`src/extensions/ormqr_blocked.cc:50`) is therefore per-**type**, not
 per-precision, plus `ib <= 64` (past it the tile kernel measured 0.83x–0.97x in float). netlib is
 out because its trmm and its gemm are both per-batch cblas loops; ROCm because `rocblas_?trmm` is
 a per-batch loop against a strided-batched GEMM. **And it barely moves syev**: 1.036x at n=64
@@ -296,9 +296,9 @@ hole closes from 0.958x to 0.996x, confirming it was the masked-off half tile. B
 
 ### Rejected on inspection, and the transcription that was killed
 
-* `X^H A X` (`syevx_lobpcg.cc:647,1225`, `syevx_filtered.cc:418`) — symmetric result, but a
+* `X^H A X` (`syevx_lobpcg.cc:528,1225`, `syevx_filtered.cc:418`) — symmetric result, but a
   product of two *different* matrices; no BLAS op expresses it, and `syr2k` is not this.
-* `A X` with symmetric A (`syevx_lobpcg.cc:624,638,1212`, `lanczos.cc:112`, `ritz_values.cc:59`)
+* `A X` with symmetric A (`syevx_lobpcg.cc:509,638,1212`, `lanczos.cc:112`, `ritz_values.cc:59`)
   — nominally `symm`/`hemm`, but symm here expands then GEMMs and A is already stored full, so it
   would add a copy to reach the identical GEMM. Worse by construction.
 * `gebrd_blocked.cc:364,365` — looks like syr2k, is not: bidiagonal reduction of a *general*
@@ -415,7 +415,7 @@ none of BatchLAS present; fixed with `alignas(16) T alpha_aligned = alpha` (`cub
 6. **`trmm`'s tile kernel is `Side::Left` only** — the right-side branch still expands. syev uses
    Left only; `ormbr` has the same WY update, is not wired, and feeds gesvd.
 7. **ROCm has no `symm`, `hemm`, `herk` or `her2k`** — `rocblas.cc` instantiates only gemm, gemv,
-   trsm, syrk, syr2k, trmm (`entry_points/level3.cc:523-535`); wiring the trmm tile kernel there
+   trsm, syrk, syr2k, trmm (`entry_points/level3.cc:398-535`); wiring the trmm tile kernel there
    is where `wy_trmm_applicable` would be re-measured.
 8. **`her2k_gemm_preferred` was swept over square rank-k shapes**, but `sytrd_blocked`'s panel
    loop issues a narrow one — k = nb in {16,24,32} against n2 up to 480 — where the GEMM is near
