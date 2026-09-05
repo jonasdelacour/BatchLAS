@@ -1,6 +1,17 @@
 set(EXTENSIONS_CTA_SOURCES
     gebrd_cta.cc
     ormqr_cta.cc
+    # WP4 Phases 1 and 2. THIS list and no other (W12): the blocked driver's
+    # diagonal leaf IS potrf_cta_body, shared through potrf_cta_device.hh, so
+    # potrf_blocked.cc lands here too. While every helper stays an inline
+    # template a split would link by duplicating the body into both TUs and break
+    # only when someone marks one SYCL_EXTERNAL -- ":53-57 below: a source must
+    # sit with the sources whose device symbols it calls". This library is also
+    # the only one configured NO_CPU_TARGETS (src/CMakeLists.txt:67-71), and
+    # potrf's native route is GPU-only, so a native_cpu image of these templates
+    # would be dead weight.
+    potrf_cta.cc
+    potrf_blocked.cc
     steqr_cta.cc
     stedc_merge_cta.cc
     sytrd_cta.cc

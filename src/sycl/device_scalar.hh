@@ -188,4 +188,47 @@ inline Cx<R> dev_div(Cx<R> a, Cx<R> b) {
 inline float dev_div(float a, float b) { return a / b; }
 inline double dev_div(double a, double b) { return a / b; }
 
+// --- real component, real construction, real scaling, real division --------
+//
+// POTRF needs these and a GEMM does not: a Cholesky diagonal is REAL by
+// construction (it is a sqrt of a real), so scaling and dividing by it must not
+// go through the complex paths. dev_div(a, Cx{d,0}) would run Smith's algorithm
+// -- three divisions and two fmas to compute what is two divisions -- and
+// dev_mul(a, Cx{s,0}) is four fmas for two multiplies. They are also the
+// shared spelling of a `real_part` that exists PRIVATELY in at least eight
+// translation units in this tree (ritz_values.cc:67, syev_jacobi_cta.cc:85,
+// syev_cta_fused.cc:80, ortho.cc:191, sytrd_sb2st.cc:97, lanczos.cc:46,
+// band_reduction.cc:41, sytrd_sb2st_cta.cc:98); potrf is not adding a ninth.
+//
+// dev_div_real is a DIVISION and dev_mul_real is a RECIPROCAL-MULTIPLY, and
+// that asymmetry is deliberate, not an oversight: reference ?trsm divides
+// (B(i,j)/A(j,j)) while reference ?potf2 scales by a precomputed reciprocal
+// (sscal(1/ajj, ...)). potrf's (P2) panel solve is the trsm and (P1)'s column
+// scale is the potf2. Unifying them would change the rounding of one of the
+// two away from its LAPACK reference.
+
+inline float  dev_real(float x)  { return x; }
+inline double dev_real(double x) { return x; }
+template <typename R>
+inline R dev_real(Cx<R> x) { return x.re; }
+
+template <typename D, typename R>
+inline D dev_from_real(R x) {
+    if constexpr (std::is_same_v<D, R>) {
+        return x;
+    } else {
+        return D{x, R(0)};
+    }
+}
+
+inline float  dev_mul_real(float a, float s)   { return a * s; }
+inline double dev_mul_real(double a, double s) { return a * s; }
+template <typename R>
+inline Cx<R> dev_mul_real(Cx<R> a, R s) { return Cx<R>{a.re * s, a.im * s}; }
+
+inline float  dev_div_real(float a, float d)   { return a / d; }
+inline double dev_div_real(double a, double d) { return a / d; }
+template <typename R>
+inline Cx<R> dev_div_real(Cx<R> a, R d) { return Cx<R>{a.re / d, a.im / d}; }
+
 }  // namespace batchlas::sycl_device
