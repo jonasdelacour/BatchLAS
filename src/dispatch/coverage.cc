@@ -257,9 +257,14 @@ void append_static_rows(std::ostringstream& out) {
         // "the default moved" would be exactly the misreading the note warns of.
         {"geqrf", factorization_vendor_available<B>, true},   // geqrf_cta + geqrf_blocked
         {"orgqr", factorization_vendor_available<B>, true},   // orgqr_blocked (ormqr on I)
-        {"getrf", factorization_vendor_available<B>, false},
-        {"getrs", factorization_vendor_available<B>, false},
-        {"getri", factorization_vendor_available<B>, false},
+        // WP6 landed the kernels behind these three. Same reading rule as the
+        // two rows above: this column answers "is the kernel IN THE BUILD", not
+        // "does traffic reach it". preferred() is still false for all three, so
+        // a vendor-present build sends them nothing and a vendor-free build now
+        // reaches them through route_resolve.hh:60-63 instead of throwing.
+        {"getrf", factorization_vendor_available<B>, true},   // getrf_cta + getrf_blocked
+        {"getrs", factorization_vendor_available<B>, true},   // getrs_native (laswp + 2 routed trsm)
+        {"getri", factorization_vendor_available<B>, true},   // getri_blocked (P into C + 2 routed trsm)
         {"ormqr", factorization_vendor_available<B>, true},   // ormqr_blocked
         {"potrf", solver_vendor_available<B>,        true},   // potrf_cta (Phase 1) + potrf_blocked (Phase 2)
         {"syev",  solver_vendor_available<B>,        true},   // cta/blocked/two_stage

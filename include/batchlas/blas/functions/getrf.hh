@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <stdexcept>
+#include <string>
 
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
@@ -37,6 +39,35 @@ template <typename T>
 using getrf_vendor_buffer_size = size_t(Queue&,
                                         const MatrixView<T, MatrixFormat::Dense>&);
 }  // namespace sig
+
+
+// WP6: the one thing that is invalid for EVERY route, checked once, hoisted above
+// the shape builder in src/dispatch/entry_points/factorization.cc because the
+// builder reads A.rows()/A.cols(). Modelled on geqrf_validate_params
+// (geqrf.hh:71-77) and potrf_validate_params, and it obeys geqrf.hh:55-70's rule:
+// validate only what no route could serve.
+//
+// TWO THINGS IT DELIBERATELY DOES NOT CHECK, and both omissions are load-bearing:
+//
+//   * NO SQUARENESS CHECK, although RouteTable<Op::getrf,T>::supports() carries
+//     one and the arena spellings check it (options.hh:615's require_square).
+//     supports() saying "the native drivers cannot serve this" ROUTES the call to
+//     the vendor; it does not say the CALL is invalid. A validator that threw here
+//     would turn a currently-working positional call into an error -- a
+//     user-visible behaviour change that belongs in its own commit with its own
+//     test, which is exactly the rule potrf.hh:59-65 states.
+//
+//   * NO pivots LENGTH CHECK. options.hh:616-617 already does require_span_at_least
+//     on the arena spellings; turning a currently-tolerated short span into a throw
+//     on the positional one is the same class of behaviour change.
+template <typename T>
+inline void getrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
+    if (A.rows() < 0 || A.cols() < 0) {
+        throw std::invalid_argument(
+            "GETRF: Matrix dimensions cannot be negative (rows=" +
+            std::to_string(A.rows()) + ", cols=" + std::to_string(A.cols()) + ")");
+    }
+}
 
 
 // `info` is the LAPACK per-item status: one int32 per batch item, 0 on success

@@ -25,6 +25,21 @@ set(EXTENSIONS_CTA_SOURCES
     # follows ormqr_blocked.cc for exactly that reason.
     geqrf_cta.cc
     geqrf_blocked.cc
+    # WP6 scaffolding, and THIS list for the same W12 reason as the potrf and
+    # geqrf pairs: the blocked getrf driver's diagonal-panel leaf will BE the CTA
+    # device function, shared through a getrf_cta_device.hh, so the two sources
+    # must sit in ONE device-code cluster (":77-86 below: a source must sit with
+    # the sources whose device symbols it calls"). Neither file contains device
+    # code YET -- both currently hold only the capability answers, which report
+    # the kernels absent -- but the grouping is decided here so landing a kernel
+    # is not also a CMake decision. NOTE that getrs_native.cc and
+    # getri_blocked.cc are NOT here: both are a permutation kernel plus ROUTED
+    # trsm calls and share no device symbol with this pair, so they follow
+    # orgqr_blocked.cc into EXTENSIONS_FACTORIZATION_SOURCES. If either ever
+    # calls the getrf CTA device body it moves here, and the failure mode of
+    # getting that wrong is a hard link error, never a silent miscompile (:81-83).
+    getrf_cta.cc
+    getrf_blocked.cc
     steqr_cta.cc
     stedc_merge_cta.cc
     sytrd_cta.cc
@@ -64,6 +79,14 @@ set(EXTENSIONS_FACTORIZATION_SOURCES
     # above and shares device symbols with neither geqrf TU. The grouping rule is
     # the cluster, not the topic (see :53-57 below).
     orgqr_blocked.cc
+    # WP6 scaffolding. HERE and not in EXTENSIONS_CTA_SOURCES: getrs is a row
+    # permutation plus two ROUTED trsm calls and getri is "write P into C" plus
+    # two ROUTED trsm calls, so neither shares a device symbol with the getrf
+    # pair. The grouping rule is the cluster, not the topic (see :77-86 below),
+    # and this is the same reason orgqr_blocked.cc sits here rather than beside
+    # geqrf_cta.cc. If either ever calls the getrf CTA device body it MOVES.
+    getrs_native.cc
+    getri_blocked.cc
     lascl.cc
 )
 
