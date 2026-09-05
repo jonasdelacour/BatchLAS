@@ -1,0 +1,112 @@
+#pragma once
+
+// One resolver, shared by every op's RouteTable.
+//
+// The body was written for GEMM (route_gemm.hh) and factored out here, because
+// the questions it answers are not GEMM-specific:
+//
+//   * a forced route bypasses `preferred` -- that is what forcing is for --
+//     but never bypasses `supports`, because that hands back a wrong answer
+//     rather than a slow one;
+//   * a forced route that cannot serve the shape falls back to the ORDINARY
+//     automatic choice, not straight to the vendor;
+//   * a requested VENDOR still has to exist;
+//   * "supported but not preferred" is reached only when there is nothing
+//     better left, which is the vendor-off configuration this work package is
+//     building toward.
+//
+// Each op supplies a RouteTable<Op, T> with `supports`, `preferred`, and an
+// order. Everything here reads only its arguments -- no getenv, no SYCL query
+// -- which is what makes an op and its *_buffer_size query reach the same route
+// by construction rather than by a comment asking them to.
+
+#include <batchlas/blas/dispatch/route.hh>
+
+namespace batchlas::dispatch {
+
+// Declared here so every per-op header specialises the same template.
+template <Op O, typename T>
+struct RouteTable;
+
+// `Shape` is deduced. Most ops pass OpShape; an op whose routing reads
+// something OpShape has no field for -- gesvd needs jobu/jobvh and the
+// Hermitian flag -- passes a struct deriving from it, rather than growing
+// OpShape into a union of every op's arguments.
+template <Op O, typename T, typename Shape>
+inline Route resolve_route(Route forced, const Shape& s, bool vendor_available = true) {
+    using Table = RouteTable<O, T>;
+
+    // The choice with nobody forcing anything.
+    //
+    // Preference decides first: a native route wins only where it is BOTH able
+    // to serve the shape and measured to be the better choice for it.
+    //
+    // Then -- and only if there is no vendor left to fall back to -- a merely
+    // SUPPORTED native route. Reaching for that unconditionally is wrong, and
+    // the GEMM equivalence test catches it: the orders list the native routes
+    // first, so a tiny problem far outside every measured window would select a
+    // native kernel where today it goes to the vendor, silently inverting the
+    // default.
+    //
+    // Returning Vendor when nothing at all can serve the shape is deliberate:
+    // it is the honest "this needs a vendor and there isn't one" signal, which
+    // the caller turns into a diagnostic rather than a wrong answer.
+    auto automatic = [&]() -> Route {
+        for (const Route* r = Table::order_begin(); r != Table::order_end(); ++r) {
+            if (Table::supports(*r, s) && Table::preferred(*r, s)) return *r;
+        }
+        if (!vendor_available) {
+            for (const Route* r = Table::order_begin(); r != Table::order_end(); ++r) {
+                if (is_native(*r) && Table::supports(*r, s)) return *r;
+            }
+        }
+        return Route{Origin::Vendor, Algorithm::Auto};
+    };
+
+    if (forced.origin == Origin::Auto) {
+        return automatic();
+    }
+
+    // A REQUESTED VENDOR STILL HAS TO EXIST. Not hypothetical: GEMM's unset
+    // default IS Vendor (legacy_unset_default), so an ordinary call with
+    // nothing set arrives here rather than at `automatic` above. Honouring the
+    // request unconditionally made the vendor-off degradation unreachable
+    // through the real call path -- provable only at the pure layer, on an
+    // Origin::Auto input the adapter never produces.
+    if (is_vendor(forced)) {
+        return vendor_available ? forced : automatic();
+    }
+
+    // A BARE ORIGIN LEAVES THE ALGORITHM FREE, so "native" has to resolve to a
+    // specific one. For gemm and ormqr there is only one native route and the
+    // distinction is invisible; gesvd has three, and returning {Native, Auto}
+    // verbatim would hand the caller a route no dispatch tail can map to a
+    // kernel. Walk the order restricted to the requested origin -- preference
+    // first, then mere support, since the caller has already said it wants this
+    // origin whatever the cost.
+    if (forced.algo == Algorithm::Auto) {
+        for (const Route* r = Table::order_begin(); r != Table::order_end(); ++r) {
+            if (r->origin == forced.origin && Table::supports(*r, s) && Table::preferred(*r, s)) {
+                return *r;
+            }
+        }
+        for (const Route* r = Table::order_begin(); r != Table::order_end(); ++r) {
+            if (r->origin == forced.origin && Table::supports(*r, s)) return *r;
+        }
+        return automatic();
+    }
+
+    if (Table::supports(forced, s)) return forced;
+
+    // FORCED, BUT UNABLE TO SERVE THIS SHAPE. It falls back to the ordinary
+    // automatic choice rather than to the vendor. That distinction is real and
+    // came from choose_gesvd_provider, whose forced arm ended in
+    // `chosen = Provider::Auto;` and re-entered the order walk: a forced `cta`
+    // on a real 64x64 matrix is unsupported by the CTA path but must still
+    // reach the blocked one, not the vendor. GEMM is unaffected -- with a
+    // vendor present its automatic choice for an unsupported shape IS the
+    // vendor -- which is why the equivalence test still holds.
+    return automatic();
+}
+
+} // namespace batchlas::dispatch

@@ -9,6 +9,11 @@
 // vector type the staging rides on live here so the two kernels cannot drift
 // apart on which half of the grid they visit.
 
+// std::conj below needs <complex>. It compiled without it only because every
+// consumer in the CUDA build happens to include <complex> earlier through
+// linalg-impl.hh; including this header first, or from a non-CUDA translation
+// unit, fails with "no member named 'conj' in namespace 'std'".
+#include <complex>
 #include <sycl/sycl.hpp>
 
 namespace batchlas::backend::detail {

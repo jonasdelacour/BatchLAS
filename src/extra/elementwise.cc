@@ -19,6 +19,9 @@ struct ElementwiseBinaryKernel {};
 template <typename T>
 struct AxpbyKernel {};
 
+template <typename T>
+struct TriangularMaskKernel {};
+
 template <typename T, BinaryOp Op>
 inline T apply(const T& a, const T& b) {
     if constexpr (Op == BinaryOp::Add) return a + b;
@@ -112,6 +115,48 @@ Event axpby_into(Queue& ctx,
 }
 
 template <typename T>
+Event triangular_mask_into(Queue& ctx,
+                           const MatrixView<T, MatrixFormat::Dense>& A,
+                           const MatrixView<T, MatrixFormat::Dense>& C,
+                           Uplo uplo,
+                           int64_t k) {
+    check_same_shape(A, C, "linalg::triangular_mask_into");
+
+    const size_t rows = static_cast<size_t>(A.rows());
+    const size_t cols = static_cast<size_t>(A.cols());
+    const size_t total = rows * cols * static_cast<size_t>(A.batch_size());
+    if (total == 0) return ctx.get_event();
+
+    auto [global_size, local_size] =
+        compute_nd_range_sizes(total, ctx.device(), KernelType::ELEMENTWISE);
+
+    // Same reasoning as elementwise_into: kernel views so that a submatrix
+    // (linalg::qr masks a row slice of the factored array) is indexed correctly,
+    // and A may alias C because each work-item touches one element of each.
+    auto Av = A.kernel_view();
+    auto Cv = C.kernel_view();
+    const bool upper = (uplo == Uplo::Upper);
+
+    ctx->parallel_for<TriangularMaskKernel<T>>(
+        sycl::nd_range<1>(global_size, local_size), [=](sycl::nd_item<1> item) {
+            const size_t stride = item.get_global_range(0);
+            for (size_t flat = item.get_global_id(0); flat < total; flat += stride) {
+                const size_t b = flat / (rows * cols);
+                const size_t rem = flat % (rows * cols);
+                const size_t col = rem / rows;
+                const size_t row = rem % rows;
+                // Signed: the diagonal offset is negative below the main
+                // diagonal, and an unsigned difference would wrap there and keep
+                // exactly the elements the mask is meant to drop.
+                const int64_t d = static_cast<int64_t>(col) - static_cast<int64_t>(row);
+                const bool keep = upper ? (d >= k) : (d <= k);
+                Cv(row, col, b) = keep ? Av(row, col, b) : T(0);
+            }
+        });
+    return ctx.get_event();
+}
+
+template <typename T>
 Event scale(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, T alpha) {
     // beta = 0 with B = A, so the second term contributes nothing and A is
     // read and written in place by the same work-item.
@@ -133,7 +178,9 @@ Event scale(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, T alpha) {
                          elementwise_into, BATCHLAS_UNPAREN fp, BinaryOp::Divide)          \
     BATCHLAS_INSTANTIATE(sig::axpby_into<BATCHLAS_UNPAREN fp>, axpby_into,                 \
                          BATCHLAS_UNPAREN fp)                                              \
-    BATCHLAS_INSTANTIATE(sig::scale<BATCHLAS_UNPAREN fp>, scale, BATCHLAS_UNPAREN fp)
+    BATCHLAS_INSTANTIATE(sig::scale<BATCHLAS_UNPAREN fp>, scale, BATCHLAS_UNPAREN fp)         \
+    BATCHLAS_INSTANTIATE(sig::triangular_mask_into<BATCHLAS_UNPAREN fp>,                      \
+                         triangular_mask_into, BATCHLAS_UNPAREN fp)
 
 BATCHLAS_FOR_EACH_SCALAR_TYPE(ELEMENTWISE_INSTANTIATE)
 

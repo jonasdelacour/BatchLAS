@@ -13,9 +13,9 @@
 
 #include <batchlas/backend_config.h>
 
-#include <batchlas/blas/dispatch/context.hh>
-#include <batchlas/blas/dispatch/env.hh>
-#include <batchlas/blas/dispatch/provider.hh>
+#include <batchlas/blas/dispatch/route.hh>
+#include <batchlas/blas/dispatch/route_env.hh>
+#include <batchlas/blas/dispatch/route_gesvd.hh>
 #include <batchlas/blas/queue-dispatch.hh>
 
 namespace batchlas {
@@ -200,165 +200,58 @@ namespace batchlas::blas::dispatch {
 
 namespace detail {
 
-inline Provider normalize_gesvd_vendor_like(Provider p) {
-    if (p == Provider::Netlib) return Provider::Vendor;
-    return p;
-}
-
-template <typename T>
-inline bool gesvd_supports_cta(const DeviceCaps& caps,
-                               const MatrixView<T, MatrixFormat::Dense>& A,
-                               SvdVectors jobu,
-                               SvdVectors jobvh,
-                               std::optional<Uplo> hermitian_uplo = std::nullopt) {
-    if (!caps.is_gpu) return false;
-    if (caps.max_sub_group < 32) return false;
-    if (A.rows() < 1 || A.cols() < 1 || A.batch_size() < 1) return false;
-    if (std::max(A.rows(), A.cols()) > 32) return false;
-    // Canonicalise here too, not only at the dispatch entry point: these
-    // predicates are the contract, and one that disagreed with the caller about
-    // what "Thin" means would reject shapes it can serve.
-    {
-        const int64_t k = std::min<int64_t>(A.rows(), A.cols());
-        jobu = canonical_jobu(jobu, A.rows(), k);
-        jobvh = canonical_jobvh(jobvh, A.cols(), k);
-    }
-    // A genuinely thin factor is out of reach for this route: mode CTA always
-    // takes the normal-equations branch, whose patch_zero_left_vectors writes m
-    // columns of U unconditionally.
-    if (jobu == SvdVectors::Thin || jobvh == SvdVectors::Thin) return false;
-    if (hermitian_uplo.has_value()) {
-        if (A.rows() != A.cols()) return false;
-        return *hermitian_uplo == Uplo::Lower || *hermitian_uplo == Uplo::Upper;
-    }
-    if constexpr (!RealScalar<T>) {
-        return false;
-    }
-    return true;
-}
-
-// Largest max(m, n) gesvdj_cta accepts, per scalar type. Mirrors
-// gesvdj_cta_max_dim in src/extensions/gesvdj_cta.cc.
+// The routing inputs, in one place so the call and its buffer-size query cannot
+// build different ones.
 //
-// The kernel keeps P = 32 lanes above n = 32 and grows the tile capacity C to
-// 64, so each lane owns two rows. The limit is local memory: per problem with
-// the V tile resident, C=64 costs 37,952 B for float, 71,744 B for double and
-// complex<float>, and 138,816 B for complex<double>, against a measured device
-// limit of 101,376 B. Values-only drops the V tile and halves it.
+// `jobu`/`jobvh` must already be canonicalised -- both entry points do that
+// first, and the old predicates re-canonicalised internally precisely because
+// one that disagreed with the caller about what "Thin" means would reject
+// shapes it can serve. Doing it once, before the shape exists, removes the
+// possibility of disagreement rather than papering over it.
 template <typename T>
-inline constexpr int64_t gesvd_jacobi_max_dim(bool want_vectors) {
-    if constexpr (std::is_same_v<T, std::complex<double>>) {
-        return want_vectors ? 32 : 64;
-    } else {
-        return 64;
+inline batchlas::dispatch::GesvdShape gesvd_op_shape(const Queue& ctx,
+                                                     const MatrixView<T, MatrixFormat::Dense>& A,
+                                                     SvdVectors jobu,
+                                                     SvdVectors jobvh,
+                                                     std::optional<Uplo> hermitian_uplo) {
+    batchlas::dispatch::GesvdShape s;
+    s.op = batchlas::dispatch::Op::gesvd;
+    s.scalar = batchlas::dispatch::scalar_kind_of<T>;
+    s.m = A.rows();
+    s.n = A.cols();
+    s.k = std::min<int64_t>(A.rows(), A.cols());
+    s.batch = A.batch_size();
+    s.jobu = jobu;
+    s.jobvh = jobvh;
+    s.hermitian_uplo = hermitian_uplo;
+    try {
+        s.is_gpu = ctx.device().type == DeviceType::GPU;
+    } catch (...) {
+        // query_caps was best-effort and never threw; keep that contract.
     }
+    try {
+        s.max_sub_group =
+            static_cast<int>(ctx.device().get_property(DeviceProperty::MAX_SUB_GROUP_SIZE));
+    } catch (...) {
+        // leave default
+    }
+    return s;
 }
 
-// gesvdj_cta supports complex GENERAL input natively, unlike the two predicates
-// below, which both return false for non-real T outside the Hermitian branch.
-// That is the Tier 4 coverage gap: complex general SVD on GPU used to fall
-// through to Vendor and throw. Do NOT copy the RealScalar gate here.
+// One resolution per call, shared by gesvd_dispatch and its buffer-size query.
+// Replaces choose_gesvd_provider; the wide-band Jacobi rule it carried is now
+// `preferred` in route_gesvd.hh, so it can no longer make a route ineligible.
 template <typename T>
-inline bool gesvd_supports_jacobi(const DeviceCaps& caps,
-                                  const MatrixView<T, MatrixFormat::Dense>& A,
-                                  SvdVectors jobu,
-                                  SvdVectors jobvh,
-                                  std::optional<Uplo> hermitian_uplo = std::nullopt) {
-    if (hermitian_uplo.has_value()) return false;   // no Hermitian shortcut
-    if (!caps.is_gpu) return false;
-    if (caps.max_sub_group < 32) return false;
-    if (A.rows() < 1 || A.cols() < 1 || A.batch_size() < 1) return false;
-    const bool want_vectors = (jobu != SvdVectors::None) || (jobvh != SvdVectors::None);
-    if (std::max(A.rows(), A.cols()) > gesvd_jacobi_max_dim<T>(want_vectors)) return false;
-    // Every job combination is served, Thin included: one-sided Jacobi produces
-    // the thin U natively -- it IS the rotated, normalised A -- and the full-U
-    // columns are the extra work, manufactured by an in-kernel Gram-Schmidt
-    // that a Thin request skips outright.
-    return true;
-}
-
-template <typename T>
-inline bool gesvd_supports_blocked(const DeviceCaps& caps,
-                                   const MatrixView<T, MatrixFormat::Dense>& A,
-                                   SvdVectors jobu,
-                                   SvdVectors jobvh,
-                                   std::optional<Uplo> hermitian_uplo = std::nullopt) {
-    // Current native path supports real matrices with optional full, thin, or
-    // absent U and/or V^H backtransforms via ORMBR. Hermitian support remains
-    // square-only, where Thin canonicalises to All anyway.
-    if (!caps.is_gpu) return false;
-    if (A.rows() < 1 || A.cols() < 1 || A.batch_size() < 1) return false;
-    if (hermitian_uplo.has_value()) {
-        if (A.rows() != A.cols()) return false;
-        return *hermitian_uplo == Uplo::Lower;
-    }
-    if constexpr (!RealScalar<T>) {
-        return false;
-    }
-    return true;
-}
-
-template <typename T>
-inline Provider choose_gesvd_provider(const DispatchPolicy& policy,
-                                      const DeviceCaps& caps,
-                                      const MatrixView<T, MatrixFormat::Dense>& A,
-                                      SvdVectors jobu,
-                                      SvdVectors jobvh,
-                                      std::optional<Uplo> hermitian_uplo = std::nullopt) {
-    Provider chosen = normalize_gesvd_vendor_like(policy.forced);
-    if (chosen != Provider::Auto) {
-        if (chosen == Provider::BatchLAS_Jacobi && gesvd_supports_jacobi(caps, A, jobu, jobvh, hermitian_uplo)) {
-            return chosen;
-        }
-        if (chosen == Provider::BatchLAS_CTA && gesvd_supports_cta(caps, A, jobu, jobvh, hermitian_uplo)) {
-            return chosen;
-        }
-        if (chosen == Provider::BatchLAS_Blocked && gesvd_supports_blocked(caps, A, jobu, jobvh, hermitian_uplo)) {
-            return chosen;
-        }
-        if (chosen == Provider::Vendor) return Provider::Vendor;
-        chosen = Provider::Auto;
-    }
-
-    for (Provider p : policy.order) {
-        p = normalize_gesvd_vendor_like(p);
-        if (p == Provider::BatchLAS_Jacobi && gesvd_supports_jacobi(caps, A, jobu, jobvh, hermitian_uplo)) {
-            // The 33..64 band is served by Jacobi only where the alternative
-            // cannot serve it at all -- that is, complex GENERAL input, which
-            // gesvd_supports_blocked declines, leaving Vendor and a throw.
-            //
-            // For REAL input in that band the blocked path is the better
-            // default, and this is the one place the two disagree. Measured at
-            // n=64, batch=4096, float, full vectors: blocked 4.86 us/matrix
-            // against Jacobi's 7.25, and at low conditioning blocked is also
-            // the more accurate of the two (kappa=1e1: 1.1e-6 vs 1.2e-5).
-            //
-            // Jacobi wins decisively at HIGH conditioning -- kappa=1e6, n=64:
-            // singular-value relative error 6.2e-3 vs 0.526, orthogonality
-            // 3.7e-5 vs 0.144, i.e. the blocked path returns no correct digits
-            // and a U that is not a basis. But which regime a caller is in is
-            // not knowable from the shape, and unlike the n <= 32 case (where
-            // the CTA path was worse from kappa=1e2 up) blocked is genuinely
-            // better below ~1e4. So the default stays blocked and the accurate
-            // route is opt-in via BATCHLAS_GESVD_PROVIDER=jacobi, which is
-            // checked ahead of this loop and so is unaffected by this rule.
-            const bool wide_band = std::max(A.rows(), A.cols()) > 32;
-            if constexpr (RealScalar<T>) {
-                if (!wide_band) return p;
-            } else {
-                return p;
-            }
-        }
-        if (p == Provider::BatchLAS_CTA && gesvd_supports_cta(caps, A, jobu, jobvh, hermitian_uplo)) {
-            return p;
-        }
-        if (p == Provider::BatchLAS_Blocked && gesvd_supports_blocked(caps, A, jobu, jobvh, hermitian_uplo)) {
-            return p;
-        }
-        if (p == Provider::Vendor) return Provider::Vendor;
-    }
-
-    return Provider::Vendor;
+inline batchlas::dispatch::Route gesvd_route(const Queue& ctx,
+                                             const MatrixView<T, MatrixFormat::Dense>& A,
+                                             SvdVectors jobu,
+                                             SvdVectors jobvh,
+                                             std::optional<Uplo> hermitian_uplo) {
+    namespace d = batchlas::dispatch;
+    const auto parsed = d::parse_route_env(d::Op::gesvd);
+    const d::Route forced = parsed.found ? parsed.route : d::legacy_unset_default(d::Op::gesvd);
+    return d::resolve_gesvd_route<T>(
+        forced, gesvd_op_shape<T>(ctx, A, jobu, jobvh, hermitian_uplo));
 }
 
 } // namespace detail
@@ -383,20 +276,19 @@ inline Event gesvd_dispatch(Queue& ctx,
         jobvh = canonical_jobvh(jobvh, A.cols(), k);
     }
 
-    const DeviceCaps caps = query_caps(ctx);
-    const DispatchPolicy policy = policy_from_env("GESVD");
-    Provider chosen = detail::choose_gesvd_provider(policy, caps, A, jobu, jobvh, hermitian_uplo);
-
-    if constexpr (B == Backend::NETLIB) {
-        chosen = Provider::Vendor;
-    }
+    namespace d = batchlas::dispatch;
+    // NETLIB has no native gesvd route at all, so the resolution is skipped
+    // rather than overridden after the fact.
+    const d::Route chosen = (B == Backend::NETLIB)
+        ? d::Route{d::Origin::Vendor, d::Algorithm::Auto}
+        : detail::gesvd_route<T>(ctx, A, jobu, jobvh, hermitian_uplo);
 
     size_t need_ws = 0;
-    if (chosen == Provider::Vendor) {
+    if (d::is_vendor(chosen)) {
         need_ws = backend::gesvd_vendor_buffer_size<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh);
-    } else if (chosen == Provider::BatchLAS_Jacobi) {
+    } else if (chosen.algo == d::Algorithm::Jacobi) {
         need_ws = gesvdj_cta_buffer_size<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh);
-    } else if (chosen == Provider::BatchLAS_CTA) {
+    } else if (chosen.algo == d::Algorithm::CTA) {
         need_ws = hermitian_uplo.has_value()
             ? gesvd_cta_buffer_size<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh, *hermitian_uplo)
             : gesvd_cta_buffer_size<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh);
@@ -407,7 +299,7 @@ inline Event gesvd_dispatch(Queue& ctx,
     }
 
     if (workspace.size() < need_ws) {
-        throw std::runtime_error("gesvd: insufficient workspace for chosen provider");
+        throw std::invalid_argument("gesvd: insufficient workspace for chosen provider");
     }
 
     // std::optional, not a plain `Queue`: the default Queue constructor is not inert, it
@@ -425,7 +317,7 @@ inline Event gesvd_dispatch(Queue& ctx,
         run_q = &*in_order_q;
     }
 
-    if (chosen == Provider::Vendor) {
+    if (d::is_vendor(chosen)) {
         return backend::gesvd_vendor<B, T>(*run_q, A, singular_values, U, Vh, jobu, jobvh, workspace);
     }
 
@@ -433,11 +325,11 @@ inline Event gesvd_dispatch(Queue& ctx,
     // unguarded `return gesvd_blocked(...)`, so a provider without its own
     // branch silently executes the blocked normal-equation path -- the exact
     // defect this kernel exists to remove -- while every label says otherwise.
-    if (chosen == Provider::BatchLAS_Jacobi) {
+    if (chosen.algo == d::Algorithm::Jacobi) {
         return gesvdj_cta<B, T>(*run_q, A, singular_values, U, Vh, jobu, jobvh, workspace);
     }
 
-    if (chosen == Provider::BatchLAS_CTA) {
+    if (chosen.algo == d::Algorithm::CTA) {
         return hermitian_uplo.has_value()
             ? gesvd_cta<B, T>(*run_q, A, singular_values, U, Vh, jobu, jobvh, *hermitian_uplo, workspace)
             : gesvd_cta<B, T>(*run_q, A, singular_values, U, Vh, jobu, jobvh, workspace);
@@ -464,23 +356,22 @@ inline size_t gesvd_buffer_size_dispatch(Queue& ctx,
         jobvh = canonical_jobvh(jobvh, A.cols(), k);
     }
 
-    const DeviceCaps caps = query_caps(ctx);
-    const DispatchPolicy policy = policy_from_env("GESVD");
-    Provider chosen = detail::choose_gesvd_provider(policy, caps, A, jobu, jobvh, hermitian_uplo);
+    namespace d = batchlas::dispatch;
+    // NETLIB has no native gesvd route at all, so the resolution is skipped
+    // rather than overridden after the fact.
+    const d::Route chosen = (B == Backend::NETLIB)
+        ? d::Route{d::Origin::Vendor, d::Algorithm::Auto}
+        : detail::gesvd_route<T>(ctx, A, jobu, jobvh, hermitian_uplo);
 
-    if constexpr (B == Backend::NETLIB) {
-        chosen = Provider::Vendor;
-    }
-
-    if (chosen == Provider::Vendor) {
+    if (d::is_vendor(chosen)) {
         return backend::gesvd_vendor_buffer_size<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh);
     }
 
-    if (chosen == Provider::BatchLAS_Jacobi) {
+    if (chosen.algo == d::Algorithm::Jacobi) {
         return gesvdj_cta_buffer_size<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh);
     }
 
-    if (chosen == Provider::BatchLAS_CTA) {
+    if (chosen.algo == d::Algorithm::CTA) {
         return hermitian_uplo.has_value()
             ? gesvd_cta_buffer_size<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh, *hermitian_uplo)
             : gesvd_cta_buffer_size<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh);

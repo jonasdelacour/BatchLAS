@@ -7,6 +7,9 @@
 #include "syrk_triangular_tiles.hh"
 #include "cublasdx_dispatch_common.hh"
 
+#include <batchlas/blas/dispatch/route.hh>
+#include <batchlas/blas/dispatch/route_env.hh>
+
 #include "../util/kernel-trace.hh"
 
 #include <algorithm>
@@ -32,42 +35,21 @@ constexpr int kSyrkCublasDxTile = 32;
 // half the caller did not name is the caller's storage. It exists to measure
 // the arithmetic the triangular route saves, and the automatic choice never
 // selects it -- reaching it takes naming it here.
-enum class SyrkRoute {
-    Auto,
-    Vendor,
-    Fused,
-    Triangular,
-    Gram,
-    Gemm,
-};
+// The private SyrkRoute enum this used to declare is gone: it named the same
+// six things dispatch::Route names, in a spelling only this file understood.
+// The legacy values are unchanged and pinned by tests/route_vocabulary_tests.cc
+// -- including the two that do NOT mean what the canonical vocabulary would
+// read them as: "custom" is the fused cuBLASDx kernel here (not the
+// register-tiled GEMM family), and "gemm" is a vendor route (it runs through
+// gemm_cublasdx). See parse_legacy_route_value.
+dispatch::Route syrk_route_request() {
+    const auto parsed = dispatch::parse_route_env(dispatch::Op::syrk);
+    return parsed.found ? parsed.route
+                        : dispatch::legacy_unset_default(dispatch::Op::syrk);
+}
 
-SyrkRoute syrk_route_request() {
-    const char* raw = std::getenv("BATCHLAS_SYRK_VARIANT");
-    if (!raw) {
-        return SyrkRoute::Auto;
-    }
-
-    std::string value(raw);
-    for (char& ch : value) {
-        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-    }
-
-    if (value == "vendor") {
-        return SyrkRoute::Vendor;
-    }
-    if (value == "cublasdx" || value == "dx" || value == "custom") {
-        return SyrkRoute::Fused;
-    }
-    if (value == "triangular" || value == "tiles") {
-        return SyrkRoute::Triangular;
-    }
-    if (value == "gram" || value == "narrow") {
-        return SyrkRoute::Gram;
-    }
-    if (value == "gemm") {
-        return SyrkRoute::Gemm;
-    }
-    return SyrkRoute::Auto;
+bool syrk_route_is(dispatch::Algorithm a) {
+    return syrk_route_request().algo == a;
 }
 
 bool syrk_problem_supported(const MatrixView<float, MatrixFormat::Dense>& A,
@@ -169,11 +151,14 @@ Event syrk_cublasdx_fallback_gemm(Queue& ctx,
 } // namespace
 
 bool syrk_route_prefers_vendor() {
-    return syrk_route_request() == SyrkRoute::Vendor;
+    const auto r = syrk_route_request();
+    // The DiagFullGemm measurement route is a vendor route but is emphatically
+    // NOT "prefer the vendor syrk": it exists to run the full n x n GEMM.
+    return dispatch::is_plain_vendor(r);
 }
 
 bool syrk_route_requests_gram() {
-    return syrk_route_request() == SyrkRoute::Gram;
+    return syrk_route_is(dispatch::Algorithm::GramTiles);
 }
 
 bool syrk_use_cuda_custom(const Queue& ctx,
@@ -182,10 +167,10 @@ bool syrk_use_cuda_custom(const Queue& ctx,
                           Uplo,
                           Transpose transA) {
     const auto route = syrk_route_request();
-    if (route != SyrkRoute::Auto && route != SyrkRoute::Vendor) {
+    if (route.origin != dispatch::Origin::Auto && !dispatch::is_plain_vendor(route)) {
         return true;
     }
-    if (route == SyrkRoute::Vendor || !detail::is_gpu_queue(ctx) ||
+    if (dispatch::is_plain_vendor(route) || !detail::is_gpu_queue(ctx) ||
         !syrk_problem_supported(A, C, transA) || !syrk_triangular_supported(A, C)) {
         return false;
     }
@@ -215,23 +200,24 @@ Event syrk_cuda_custom(Queue& ctx,
     }
 
     const auto route = syrk_route_request();
-    if (route == SyrkRoute::Gemm) {
+    if (route.algo == dispatch::Algorithm::DiagFullGemm) {
         return syrk_cublasdx_fallback_gemm(ctx, A, C, alpha, beta, transA);
     }
     if (syrk_triangular_supported(A, C)) {
         // A narrow C is one tile wide, so the triangular grid has nothing to
         // skip and would charge a full 128-wide tile for it. Auto splits the
         // range at that point; either kernel can still be pinned by name.
-        const bool gram = route == SyrkRoute::Gram ||
-            (route == SyrkRoute::Auto && syrk_prefer_gram_tiles(C));
+        const bool gram = route.algo == dispatch::Algorithm::GramTiles ||
+            (route.origin == dispatch::Origin::Auto && syrk_prefer_gram_tiles(C));
         if (gram) {
             return detail::syrk_gram_tiles(ctx, A, C, alpha, beta, uplo, transA);
         }
-        if (route == SyrkRoute::Triangular || route == SyrkRoute::Auto) {
+        if (route.algo == dispatch::Algorithm::TriangularTiles ||
+            route.origin == dispatch::Origin::Auto) {
             return detail::syrk_triangular_tiles(ctx, A, C, alpha, beta, uplo, transA);
         }
     }
-    if (route == SyrkRoute::Auto) {
+    if (route.origin == dispatch::Origin::Auto) {
         return syrk_vendor_cuda_raw(ctx, A, C, alpha, beta, uplo, transA);
     }
 

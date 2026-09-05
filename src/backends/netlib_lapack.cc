@@ -405,11 +405,11 @@ namespace batchlas{
     Event trsm(Queue& ctx,
         const MatrixView<T, MatrixFormat::Dense>& descrA,
         const MatrixView<T, MatrixFormat::Dense>& descrB,
+        T alpha,
         Side side,
         Uplo uplo,
         Transpose transA,
-        Diag diag,
-        T alpha) {
+        Diag diag) {
         auto A_view = descrA;
         auto B_view = descrB;
         return detail::submit_host_task<T>(ctx, "netlib.trsm", [=] {
@@ -944,21 +944,31 @@ namespace batchlas{
     Event potrf(Queue& ctx,
                     const MatrixView<T, MatrixFormat::Dense>& descrA,
                     Uplo uplo,
-                    Span<std::byte> workspace) {
+                    Span<std::byte> workspace,
+                    Span<int32_t> info_out) {
         static_cast<void>(workspace);
         auto A_view = descrA;
+        // LAPACKE reports failure only through its return value, and this loop
+        // used to drop it on the floor (issue #73): an indefinite item came back
+        // looking exactly like a factorised one. There is no pool fallback to
+        // pick here -- unlike the vendor backends netlib needs no status array of
+        // its own -- so an empty span simply means "do not record".
+        auto info = info_out;
+        const bool want_info = info.size() >= static_cast<size_t>(descrA.batch_size());
         return detail::submit_host_task<T>(ctx, "netlib.potrf", [=] {
             if (A_view.batch_size() == 1) {
-                call_backend_nh<T, BackendLibrary::LAPACKE>(
+                auto st = call_backend_nh_r<T, BackendLibrary::LAPACKE>(
                     LAPACKE_spotrf, LAPACKE_dpotrf, LAPACKE_cpotrf, LAPACKE_zpotrf,
                     Layout::ColMajor, uplo,
                     A_view.rows(), A_view.data_ptr(), A_view.ld());
+                if (want_info) info[0] = static_cast<int32_t>(st);
             } else {
                 for (int i = 0; i < A_view.batch_size(); ++i) {
-                    call_backend_nh<T, BackendLibrary::LAPACKE>(
+                    auto st = call_backend_nh_r<T, BackendLibrary::LAPACKE>(
                         LAPACKE_spotrf, LAPACKE_dpotrf, LAPACKE_cpotrf, LAPACKE_zpotrf,
                         Layout::ColMajor, uplo,
                         A_view[i].rows(), A_view[i].data_ptr(), A_view[i].ld());
+                    if (want_info) info[i] = static_cast<int32_t>(st);
                 }
             }
         });
@@ -1201,17 +1211,22 @@ namespace batchlas{
     Event getrf(Queue& ctx,
                 const MatrixView<T, MatrixFormat::Dense>& A,
                 Span<int64_t> pivots,
-                Span<std::byte> workspace) {
+                Span<std::byte> workspace,
+                Span<int32_t> info_out) {
         BumpAllocator pool(workspace);
         auto A_view = A;
         auto piv = pivots;
         const int n = A_view.rows();
         const int batch = A_view.batch_size();
         auto piv_i32 = pool.allocate<int>(ctx, n * batch);
+        // See potrf above: the LAPACKE return was discarded, so a singular item
+        // was indistinguishable from a factorised one (issue #73).
+        auto info = info_out;
+        const bool want_info = info.size() >= static_cast<size_t>(batch);
 
         Event getrf_event = detail::submit_host_task<T>(ctx, "netlib.getrf", [=] {
             for (int i = 0; i < batch; ++i) {
-                call_backend_nh<T, BackendLibrary::LAPACKE>(
+                auto st = call_backend_nh_r<T, BackendLibrary::LAPACKE>(
                     LAPACKE_sgetrf, LAPACKE_dgetrf, LAPACKE_cgetrf, LAPACKE_zgetrf,
                     Layout::ColMajor,
                     n,
@@ -1219,6 +1234,7 @@ namespace batchlas{
                     A_view[i].data_ptr(),
                     A_view.ld(),
                     piv_i32.data() + i * n);
+                if (want_info) info[i] = static_cast<int32_t>(st);
             }
         });
         ctx.enqueue(getrf_event);
@@ -1249,7 +1265,8 @@ namespace batchlas{
                 const MatrixView<T, MatrixFormat::Dense>& A,
                 const MatrixView<T, MatrixFormat::Dense>& C,
                 Span<int64_t> pivots,
-                Span<std::byte> workspace) {
+                Span<std::byte> workspace,
+                Span<int32_t> info_out) {
         BumpAllocator pool(workspace);
         auto A_view = A;
         auto C_view = C;
@@ -1257,6 +1274,10 @@ namespace batchlas{
         const int n = A_view.rows();
         const int batch = A_view.batch_size();
         auto piv_i32 = pool.allocate<int>(ctx, n * batch);
+        // See potrf above: the LAPACKE return was discarded, so an item with no
+        // inverse was indistinguishable from one that inverted (issue #73).
+        auto info = info_out;
+        const bool want_info = info.size() >= static_cast<size_t>(batch);
         return detail::submit_host_task<T>(ctx, "netlib.getri", [=] {
             auto piv_in = piv.as_span<int64_t>();
             for (int b = 0; b < batch; ++b) {
@@ -1267,13 +1288,14 @@ namespace batchlas{
                     piv_i32[b * n + i] = static_cast<int>(piv_in[b * n + i]);
                 }
 
-                call_backend_nh<T, BackendLibrary::LAPACKE>(
+                auto st = call_backend_nh_r<T, BackendLibrary::LAPACKE>(
                     LAPACKE_sgetri, LAPACKE_dgetri, LAPACKE_cgetri, LAPACKE_zgetri,
                     Layout::ColMajor,
                     n,
                     Cb.data_ptr(),
                     Cb.ld(),
                     piv_i32.data() + b * n);
+                if (want_info) info[b] = static_cast<int32_t>(st);
             }
         });
     }

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/blas/matrix.hh>
@@ -15,7 +17,7 @@ template <typename T>
 using getri = Event(Queue&,
                     const MatrixView<T, MatrixFormat::Dense>&,
                     const MatrixView<T, MatrixFormat::Dense>&,
-                    Span<int64_t>, Span<std::byte>);
+                    Span<int64_t>, Span<std::byte>, Span<int32_t>);
 
 template <typename T>
 using getri_buffer_size = size_t(Queue&,
@@ -23,12 +25,46 @@ using getri_buffer_size = size_t(Queue&,
 }  // namespace sig
 
 
+// `info` is the LAPACK per-item status: one int32 per batch item, 0 on success
+// and >0 for the diagonal of U that was exactly zero, so the item has no
+// inverse. The vendor call already writes it and every backend discarded it
+// (see issue #73), leaving the caller to consume a matrix of infinities.
+//
+// An EMPTY span means "not requested" and is exactly today's behaviour: the
+// backend falls back to its own scratch allocation. The workspace size is
+// deliberately the same either way, so getri_buffer_size stays correct whether
+// or not a caller asks for status.
 template <Backend B, typename T>
 Event getri(Queue& ctx,
             const MatrixView<T, MatrixFormat::Dense>& A,
             const MatrixView<T, MatrixFormat::Dense>& C,
             Span<int64_t> pivots,
-            Span<std::byte> work_space);
+            Span<std::byte> work_space,
+            Span<int32_t> info);
+
+// Old-arity forwarder. `info` cannot be a defaulted trailing parameter: the
+// sig:: alias above is a function *type* and function types cannot carry
+// default arguments (see src/util/template-instantiations.hh), so a default
+// would not be part of the instantiated signature. A separate overload keeps
+// every existing five-argument call site compiling unchanged.
+template <Backend B, typename T>
+inline Event getri(Queue& ctx,
+            const MatrixView<T, MatrixFormat::Dense>& A,
+            const MatrixView<T, MatrixFormat::Dense>& C,
+            Span<int64_t> pivots,
+            Span<std::byte> work_space) {
+        return getri<B,T>(ctx, A, C, pivots, work_space, Span<int32_t>{});
+}
+
+template <Backend B, typename T>
+inline Event getri(Queue& ctx,
+                        const Matrix<T, MatrixFormat::Dense>& A,
+                        const Matrix<T, MatrixFormat::Dense>& Cmat,
+                        Span<int64_t> pivots,
+                        Span<std::byte> work_space,
+                        Span<int32_t> info) {
+        return getri<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), MatrixView<T, MatrixFormat::Dense>(Cmat), pivots, work_space, info);
+}
 
 template <Backend B, typename T>
 inline Event getri(Queue& ctx,
@@ -36,7 +72,7 @@ inline Event getri(Queue& ctx,
                         const Matrix<T, MatrixFormat::Dense>& Cmat,
                         Span<int64_t> pivots,
                         Span<std::byte> work_space) {
-        return getri<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), MatrixView<T, MatrixFormat::Dense>(Cmat), pivots, work_space);
+        return getri<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), MatrixView<T, MatrixFormat::Dense>(Cmat), pivots, work_space, Span<int32_t>{});
 }
 
 template <Backend B, typename T>

@@ -2,7 +2,7 @@
 
 #include "../expansion_budget.hh"
 #include "../queue.hh"
-#include "cublasdx_dispatch_common.hh"
+#include "route_common.hh"
 
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>

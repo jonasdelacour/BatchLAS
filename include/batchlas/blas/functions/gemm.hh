@@ -43,39 +43,17 @@ inline Event gemm(Queue& ctx,
         return gemm<Back,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), MatrixView<T, MatrixFormat::Dense>(Bmat), MatrixView<T, MatrixFormat::Dense>(Cmat), alpha, beta, transA, transB, precision);
 }
 
-template <Backend Back, typename T>
-inline Event gemm_heterogeneous(Queue& ctx,
-                                const MatrixView<T, MatrixFormat::Dense>& A,
-                                const MatrixView<T, MatrixFormat::Dense>& B,
-                                const MatrixView<T, MatrixFormat::Dense>& C,
-                                T alpha,
-                                T beta,
-                                Transpose transA,
-                                Transpose transB,
-                                ComputePrecision precision = ComputePrecision::Default) {
-        return gemm<Back, T>(ctx, A, B, C, alpha, beta, transA, transB, precision);
-}
-
-template <Backend Back, typename T>
-inline Event gemm_heterogeneous(Queue& ctx,
-                                const Matrix<T, MatrixFormat::Dense>& A,
-                                const Matrix<T, MatrixFormat::Dense>& B,
-                                const Matrix<T, MatrixFormat::Dense>& C,
-                                T alpha,
-                                T beta,
-                                Transpose transA,
-                                Transpose transB,
-                                ComputePrecision precision = ComputePrecision::Default) {
-        return gemm_heterogeneous<Back, T>(ctx,
-                                           MatrixView<T, MatrixFormat::Dense>(A),
-                                           MatrixView<T, MatrixFormat::Dense>(B),
-                                           MatrixView<T, MatrixFormat::Dense>(C),
-                                           alpha,
-                                           beta,
-                                           transA,
-                                           transB,
-                                           precision);
-}
+// There is no separate gemm_heterogeneous entry point. `gemm` handles a
+// heterogeneous batch -- one where the items carry differing active_rows /
+// active_cols -- natively on every backend: each of them tests
+// gemm_has_heterogeneous_batch(A, B, C) and routes accordingly. The alias that
+// used to live here forwarded to `gemm` with an unchanged argument list, so the
+// only thing the second name added was the impression that plain `gemm` did not
+// support heterogeneous batches.
+//
+// (The Python binding keeps a `gemm_heterogeneous` name, and that one is not
+// redundant: it coerces a list of differently-shaped arrays, which `gemm` does
+// not.)
 
 }  // namespace batchlas
 
@@ -85,6 +63,5 @@ namespace batchlas {
 // See BATCHLAS_DISPATCH_ON_QUEUE in blas/queue-dispatch.hh.
 
 BATCHLAS_DISPATCH_ON_QUEUE(gemm)
-BATCHLAS_DISPATCH_ON_QUEUE(gemm_heterogeneous)
 
 }  // namespace batchlas

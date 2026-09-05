@@ -477,6 +477,17 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshol
         // 2. Create row offsets using exclusive scan within each batch
         Matrix<T, MatrixFormat::CSR> result(rows, cols, NonZeros{max_nnz}, batch_size);
 
+        // The scan below writes offsets 1..rows of each batch item and never element 0,
+        // and the CSR allocating constructor reaches the buffer through
+        // UnifiedVector::resize, which does not zero. So row_offsets()[b * (rows + 1)]
+        // was left uninitialised for every item, and anything reading an item's non-zero
+        // count as offsets[end] - offsets[start] read garbage. The CSR Random path writes
+        // that element explicitly; this path did not. Zeroing the whole array also makes
+        // the value/index padding above each item's own count deterministic: max_nnz is
+        // the batch MAXIMUM, so on a heterogeneous batch every smaller item has slots the
+        // population kernel never touches.
+        std::fill(result.row_offsets().begin(), result.row_offsets().end(), 0);
+
         // Initialize batch offset counters
         UnifiedVector<int> batch_offsets(batch_size + 1, 0);
         
@@ -1825,10 +1836,54 @@ template <typename U, MatrixFormat M>
     requires DenseMatrixFormat<M>
 MatrixView<T, MType>::MatrixView(T* data, int rows, int cols, int ld,
                   int stride, int batch_size, T** data_ptrs) :
-                data_(data, (stride > 0 ? stride : 
+                data_(data, (stride > 0 ? stride :
                             ld > 0 ? ld * cols : rows * cols) * batch_size),
                 rows_(rows), cols_(cols), batch_size_(batch_size),
-                ld_(ld > 0 ? ld : rows), stride_(stride > 0 ? stride : ld > 0 ? ld * cols : rows * cols), data_ptrs_(data_ptrs, (data_ptrs ? batch_size : 0)) {}
+                ld_(ld > 0 ? ld : rows), stride_(stride > 0 ? stride : ld > 0 ? ld * cols : rows * cols), data_ptrs_(data_ptrs, (data_ptrs ? batch_size : 0)) {
+    // This constructor performed no validation at all -- it was an init list with an
+    // empty body -- while the allocating Matrix constructor above has checked the same
+    // invariant for a while. That asymmetry is what makes the argument-order trap silent:
+    // Matrix takes (rows, cols, batch_size, ld, stride) but MatrixView takes
+    // (data, rows, cols, ld, stride, batch_size), so a caller who learned the order from
+    // `Matrix A(n, n, batch)` writes `MatrixView<float> V(p, n, n, batch)` and gets
+    // ld = batch, stride = batch * n, batch_size = 1 -- a view over a wrongly strided
+    // buffer, with no throw and plausible-looking numbers. `ld_ < rows` catches exactly
+    // that whenever batch < n, and the message names the intended spelling.
+    //
+    // What this deliberately does NOT check:
+    //   * a null `data` pointer, or rows == 0 / cols == 0. Roughly 37 in-repo sites build
+    //     `MatrixView<T, Dense>(nullptr, ...)` as a shape-only stand-in for a workspace
+    //     query, several of them with the shape (nullptr, 0, 0, 1, 1, batch).
+    //   * stride_ >= ld_ * cols, which the Matrix constructor does check. Two live call
+    //     sites violate it -- src/extensions/ortho.cc's transposed CGS view
+    //     `(A.data_ptr(), i, m, m, A.stride(), batch)`, where A is k x m with k <= m so
+    //     A.stride() is k*m against an ld*cols of m*m, and syevx_lobpcg's workspace-sizing
+    //     dummy `(p, 3*bv, 3*bv, 3*bv, 3*bv*bv, batch)`. Both look like real bugs in those
+    //     files, but a throw here would take out ortho and syevx_lobpcg_buffer_size, and
+    //     the check adds nothing against the trap this constructor is being hardened
+    //     against: for `V(p, n, n, batch)` the resolved stride equals ld * cols exactly.
+    const std::string prefix = "MatrixView(data, rows, cols, ld, stride, batch_size): ";
+    if (rows < 0 || cols < 0) {
+        throw std::invalid_argument(prefix + "invalid matrix dimensions " +
+                                    std::to_string(rows) + "x" + std::to_string(cols));
+    }
+    if (batch_size < 0) {
+        throw std::invalid_argument(prefix + "invalid batch size " + std::to_string(batch_size));
+    }
+    if (ld < 0) {
+        throw std::invalid_argument(prefix + "invalid leading dimension " + std::to_string(ld));
+    }
+    if (stride < 0) {
+        throw std::invalid_argument(prefix + "invalid stride " + std::to_string(stride));
+    }
+    if (ld_ < rows) {
+        throw std::invalid_argument(prefix + "leading dimension " + std::to_string(ld_) +
+                                    " is smaller than the row count " + std::to_string(rows) +
+                                    " (did you mean MatrixView(data, rows, cols, /*ld=*/" +
+                                    std::to_string(rows) + ", /*stride=*/0, /*batch_size=*/" +
+                                    std::to_string(ld_) + ")?)");
+    }
+}
 
 
 //----------------------------------------------------------------------
@@ -1933,7 +1988,9 @@ T& MatrixView<T, MType>::at(int row, int col, int batch) {
     if (row < 0 || row >= batch_rows || col < 0 || col >= batch_cols) {
         throw std::out_of_range("Matrix indices out of range");
     }
-    return data_[batch * stride_ + col * ld_ + row];
+    // The batch term in int64_t: batch * stride_ in int wraps at batch sizes this
+    // library targets (a 512x512 float item has stride 262144, so it wraps at b = 8192).
+    return data_[static_cast<int64_t>(batch) * stride_ + col * ld_ + row];
 }
 
 template <typename T, MatrixFormat MType>
@@ -1948,7 +2005,9 @@ const T& MatrixView<T, MType>::at(int row, int col, int batch) const {
     if (row < 0 || row >= batch_rows || col < 0 || col >= batch_cols) {
         throw std::out_of_range("Matrix indices out of range");
     }
-    return data_[batch * stride_ + col * ld_ + row];
+    // The batch term in int64_t: batch * stride_ in int wraps at batch sizes this
+    // library targets (a 512x512 float item has stride 262144, so it wraps at b = 8192).
+    return data_[static_cast<int64_t>(batch) * stride_ + col * ld_ + row];
 }
 
 // Create a view of a single batch item
@@ -1959,17 +2018,19 @@ MatrixView<T, MType> MatrixView<T, MType>::batch_item(int batch_index) const {
     }
     
     if constexpr (MType == MatrixFormat::Dense) {
-        // Calculate offset to the start of the batch
-        size_t offset = batch_index * stride_;
-        
+        // Calculate offset to the start of the batch. In int64_t, not int: the product is
+        // being widened to size_t anyway, and computing it in int wraps before the widening
+        // at batch sizes this library targets.
+        int64_t offset = static_cast<int64_t>(batch_index) * stride_;
+
         // Create a new view with batch_size = 1
         return MatrixView<T, MType>(
             data_.data() + offset,
             rows(batch_index), cols(batch_index), ld_);
     } else if constexpr (MType == MatrixFormat::CSR) {
-        // Calculate offsets to the start of the batch
-        size_t val_offset = batch_index * matrix_stride_;
-        size_t row_offset = batch_index * offset_stride_;
+        // Calculate offsets to the start of the batch (int64_t for the same reason).
+        int64_t val_offset = static_cast<int64_t>(batch_index) * matrix_stride_;
+        int64_t row_offset = static_cast<int64_t>(batch_index) * offset_stride_;
         
         // Create a new view with batch_size = 1, keeping the parent's strides so the
         // spans cover the slots this item actually owns.

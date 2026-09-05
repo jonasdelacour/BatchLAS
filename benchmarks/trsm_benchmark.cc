@@ -17,11 +17,11 @@ static void BM_TRSM(minibench::State& state) {
     state.SetKernel(q,
                     std::move(A),
                     bench::pristine(Bm),
+                    T(1),
                     Side::Left,
                     Uplo::Lower,
                     Transpose::NoTrans,
                     Diag::NonUnit,
-                    T(1),
                     [](Queue& q, auto&&... xs) {
                         trsm(q, std::forward<decltype(xs)>(xs)...);
                     });

@@ -26,7 +26,7 @@ namespace batchlas {
                Transpose transB,
                ComputePrecision precision) {
         if (!gemm_batch_dimensions_compatible(A, B, C, transA, transB)) {
-            throw std::runtime_error("GEMM: incompatible matrix dimensions");
+            throw std::invalid_argument("GEMM: incompatible matrix dimensions");
         }
 
         if (gemm_has_heterogeneous_batch(A, B, C)) {
@@ -121,7 +121,7 @@ namespace batchlas {
         auto stride_tau = std::min(m, n);
         size_t scratch = geqrf_buffer_size<Back>(ctx, A, tau);
         if (workspace.size() < scratch) {
-            throw std::runtime_error("Insufficient workspace for MKL geqrf");
+            throw std::invalid_argument("Insufficient workspace for MKL geqrf");
         }
         auto* scratch_ptr = reinterpret_cast<T*>(workspace.data());
         oneapi::mkl::lapack::geqrf_batch(

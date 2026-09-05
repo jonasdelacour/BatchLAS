@@ -514,6 +514,99 @@ static_assert(!std::is_convertible_v<NonZeros, int>, "NonZeros must not decay to
 static_assert(std::is_trivially_copyable_v<NonZeros>);
 static_assert(NonZeros{7}.value == 7);
 
+// The layout tags get the same treatment. If either of these ever decays back to int the
+// Vector/VectorView inc-stride swap becomes writable again, silently.
+static_assert(!std::is_convertible_v<int, Inc>, "Inc must be explicit");
+static_assert(!std::is_convertible_v<Inc, int>, "Inc must not decay to int");
+static_assert(!std::is_convertible_v<int, Stride>, "Stride must be explicit");
+static_assert(!std::is_convertible_v<Stride, int>, "Stride must not decay to int");
+static_assert(!std::is_convertible_v<int, Ld>, "Ld must be explicit");
+static_assert(!std::is_convertible_v<Ld, int>, "Ld must not decay to int");
+static_assert(!std::is_convertible_v<int, BatchSize>, "BatchSize must be explicit");
+static_assert(!std::is_convertible_v<BatchSize, int>, "BatchSize must not decay to int");
+static_assert(Stride{7}.value == 7 && Inc{3}.value == 3);
+
+// Vector's four-argument spelling now names stride and inc; the bare-int order it used to
+// accept -- the one that transliterates into VectorView's opposite order -- is deleted.
+static_assert(!std::is_constructible_v<Vector<float>, int, int, int, int>,
+              "Vector(size, batch, stride, inc) with bare ints must not compile");
+static_assert(std::is_constructible_v<Vector<float>, int, int, Stride, Inc>,
+              "Vector(size, batch, Stride, Inc) must compile");
+static_assert(std::is_constructible_v<Vector<float>, int, int>,
+              "the two-argument Vector(size, batch) spelling must keep working");
+// VectorView keeps its positional constructors (138 correct call sites) and gains tagged
+// ones alongside them.
+static_assert(std::is_constructible_v<VectorView<float>, float*, int, int, int, int>,
+              "VectorView's positional constructor must keep working");
+static_assert(std::is_constructible_v<VectorView<float>, float*, int, int, Inc, Stride>,
+              "VectorView must accept the tagged spelling");
+
+TEST(VectorLayoutTagTest, TaggedArgumentsLandInTheRightFields) {
+    constexpr int size = 5, batch = 3, stride = 7, inc = 2;
+    // stride and inc deliberately distinct and non-default, so a swap changes an
+    // observable number rather than landing on an equal one.
+    Vector<float> v(size, batch, Stride{stride}, Inc{inc});
+    EXPECT_EQ(v.size(), size);
+    EXPECT_EQ(v.batch_size(), batch);
+    EXPECT_EQ(v.stride(), stride);
+    EXPECT_EQ(v.inc(), inc);
+
+    // The view spelled with the tags means the same layout, even though its positional
+    // order is the reverse of Vector's.
+    VectorView<float> view(v.data_ptr(), size, batch, Inc{inc}, Stride{stride});
+    EXPECT_EQ(view.stride(), stride);
+    EXPECT_EQ(view.inc(), inc);
+
+    auto z = Vector<float>::zeros(size, batch, Stride{stride}, Inc{inc});
+    EXPECT_EQ(z.stride(), stride);
+    EXPECT_EQ(z.inc(), inc);
+    EXPECT_EQ(Vector<float>::zeros(size, batch).stride(), size);
+    EXPECT_EQ(Vector<float>::zeros(size, batch).inc(), 1);
+}
+
+TEST(MatrixViewTrapTest, LeadingDimensionSmallerThanRowsThrows) {
+    // The trap this guards: MatrixView takes (data, rows, cols, ld, stride, batch_size)
+    // while Matrix takes (rows, cols, batch_size, ld, stride), so a caller who learned the
+    // order from Matrix writes the batch count into ld. It used to be accepted silently.
+    constexpr int n = 8, batch = 2;
+    std::vector<float> buffer(static_cast<size_t>(n) * n * batch, 0.0f);
+    EXPECT_THROW((MatrixView<float, MatrixFormat::Dense>(buffer.data(), n, n, batch)),
+                 std::invalid_argument);
+    // The spelling the error message names must be accepted.
+    EXPECT_NO_THROW((MatrixView<float, MatrixFormat::Dense>(buffer.data(), n, n, n, 0, batch)));
+    // And the innocent shorthands must stay innocent: a shape-only stand-in for a
+    // workspace query, and the three-argument spelling.
+    EXPECT_NO_THROW((MatrixView<float, MatrixFormat::Dense>(nullptr, 0, 0, 1, 1, batch)));
+    EXPECT_NO_THROW((MatrixView<float, MatrixFormat::Dense>(buffer.data(), n, n)));
+}
+
+TEST(MatrixCSRTest, ConvertToSeparatesPerItemCountFromCapacity) {
+    // A heterogeneous batch is the normal result of a dense -> CSR conversion, and the
+    // conversion sizes the whole batch by its largest item. nnz() is that capacity;
+    // nnz(b) is what item b actually stored.
+    constexpr int n = 4, batch = 2;
+    Matrix<float, MatrixFormat::Dense> dense(n, n, batch);
+    std::fill(dense.data().begin(), dense.data().end(), 0.0f);
+
+    // Item 0: three non-zeros. Item 1: six.
+    dense(0, 0, 0) = 1.0f; dense(1, 2, 0) = 2.0f; dense(3, 3, 0) = 3.0f;
+    for (int i = 0; i < 3; ++i) { dense(i, i, 1) = 1.0f; dense(i, i + 1, 1) = 2.0f; }
+    constexpr int nnz0 = 3, nnz1 = 6;
+
+    auto csr = dense.convert_to<MatrixFormat::CSR>();
+    EXPECT_EQ(csr.nnz(), std::max(nnz0, nnz1));      // capacity, the batch maximum
+    EXPECT_EQ(csr.nnz_capacity(), std::max(nnz0, nnz1));
+    EXPECT_EQ(csr.nnz(0), nnz0);                     // what item 0 actually stored
+    EXPECT_EQ(csr.nnz(1), nnz1);
+
+    // Regression guard: the scan writes offsets 1..rows of each item and never element 0,
+    // and the allocation does not zero, so this used to be uninitialised memory -- which
+    // is exactly what nnz(b) subtracts.
+    for (int b = 0; b < batch; ++b) {
+        EXPECT_EQ(csr.row_offsets()[static_cast<size_t>(b) * csr.offset_stride()], 0);
+    }
+}
+
 TEST(MatrixCSRTest, NonZerosSpellingAllocatesAndRoundTrips) {
     // rows/cols/nnz/batch deliberately all distinct, so a swapped argument would
     // change an observable number rather than land on an equal one.

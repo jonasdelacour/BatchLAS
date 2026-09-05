@@ -276,7 +276,7 @@ size_t gesvd_solver_workspace_size(Queue& ctx,
     if (mode == GesvdNativeMode::CTA) {
         return steqr_cta_buffer_size<T>(ctx, diag_dummy, offdiag_dummy, evals_dummy, jobz, gesvd_cta_steqr_params<T>());
     }
-    return stedc_workspace_size<B, T>(ctx,
+    return stedc_buffer_size<B, T>(ctx,
                                       static_cast<size_t>(n),
                                       static_cast<size_t>(batch),
                                       JobType::EigenVectors,

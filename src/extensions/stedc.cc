@@ -954,7 +954,7 @@ Event stedc(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, const Ve
 }
 
 template <Backend B, typename T>
-size_t stedc_workspace_size(Queue& ctx, size_t n, size_t batch_size, JobType jobz, StedcParams<T> params) {
+size_t stedc_buffer_size(Queue& ctx, size_t n, size_t batch_size, JobType jobz, StedcParams<T> params) {
     if (n <= 0 || batch_size <= 0) {
         return 0;
     }
@@ -1029,7 +1029,7 @@ size_t stedc_internal_workspace_size(Queue& ctx, size_t n, size_t batch_size, Jo
 
 #define STEDC_INSTANTIATE(back, fp) \
 template Event stedc<back, BATCHLAS_UNPAREN fp>(Queue& ctx, const VectorView<BATCHLAS_UNPAREN fp>& d, const VectorView<BATCHLAS_UNPAREN fp>& e, const VectorView<BATCHLAS_UNPAREN fp>& eigenvalues, const Span<std::byte>& ws, JobType jobz, StedcParams<BATCHLAS_UNPAREN fp> params, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>& eigvects); \
-template size_t stedc_workspace_size<back, BATCHLAS_UNPAREN fp>(Queue& ctx, size_t n, size_t batch_size, JobType jobz, StedcParams<BATCHLAS_UNPAREN fp> params);
+template size_t stedc_buffer_size<back, BATCHLAS_UNPAREN fp>(Queue& ctx, size_t n, size_t batch_size, JobType jobz, StedcParams<BATCHLAS_UNPAREN fp> params);
 
 #define STEDC_INSTANTIATE_FOR_BACKEND(back) \
     BATCHLAS_FOR_EACH_REAL_TYPE_1(STEDC_INSTANTIATE, back)

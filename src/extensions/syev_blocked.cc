@@ -288,7 +288,7 @@ Event syev_blocked(Queue& ctx,
         // backtransform/store vectors when requested by the public API.
         const JobType internal_jobz = JobType::EigenVectors;
         {
-            auto stedc_ws_bytes = stedc_workspace_size<B, Real>(ctx, static_cast<std::size_t>(n), static_cast<std::size_t>(batch), internal_jobz, stedc_params);
+            auto stedc_ws_bytes = stedc_buffer_size<B, Real>(ctx, static_cast<std::size_t>(n), static_cast<std::size_t>(batch), internal_jobz, stedc_params);
             auto stedc_ws = pool.allocate<std::byte>(ctx, stedc_ws_bytes);
             stedc<B, Real>(ctx, d_view, e_view, evals_view, stedc_ws, internal_jobz, stedc_params, z_view);
         }
@@ -427,7 +427,7 @@ Event syev_blocked(Queue& ctx,
 
         const JobType internal_jobz = JobType::EigenVectors;
         {
-            auto stedc_ws_bytes = stedc_workspace_size<B, T>(ctx, static_cast<std::size_t>(n), static_cast<std::size_t>(batch), internal_jobz, stedc_params);
+            auto stedc_ws_bytes = stedc_buffer_size<B, T>(ctx, static_cast<std::size_t>(n), static_cast<std::size_t>(batch), internal_jobz, stedc_params);
             auto stedc_ws = pool.allocate<std::byte>(ctx, stedc_ws_bytes);
             stedc<B, T>(ctx, d_view, e_view, evals_view, stedc_ws, internal_jobz, stedc_params, z_view);
         }
@@ -544,7 +544,7 @@ size_t syev_blocked_buffer_size(Queue& ctx,
         bytes += sytrd_blocked_buffer_size<B, T>(ctx, a, d_c_dummy, e_c_dummy, tau_c_dummy, uplo, sytrd_block_size);
 
         if (want_vectors) {
-            bytes += stedc_workspace_size<B, Real>(ctx, static_cast<std::size_t>(n), static_cast<std::size_t>(batch), JobType::EigenVectors, stedc_params);
+            bytes += stedc_buffer_size<B, Real>(ctx, static_cast<std::size_t>(n), static_cast<std::size_t>(batch), JobType::EigenVectors, stedc_params);
 
             MatrixView<T, MatrixFormat::Dense> aq_dummy(nullptr, p, p, p, static_cast<int64_t>(p) * static_cast<int64_t>(p), batch);
             MatrixView<T, MatrixFormat::Dense> c_dummy(nullptr, p, n, p, static_cast<int64_t>(p) * static_cast<int64_t>(n), batch);
@@ -588,7 +588,7 @@ size_t syev_blocked_buffer_size(Queue& ctx,
         bytes += sytrd_blocked_buffer_size<B, T>(ctx, a, d_dummy, e_dummy, tau_dummy, uplo, sytrd_block_size);
 
         if (want_vectors) {
-            bytes += stedc_workspace_size<B, T>(ctx, static_cast<std::size_t>(n), static_cast<std::size_t>(batch), JobType::EigenVectors, stedc_params);
+            bytes += stedc_buffer_size<B, T>(ctx, static_cast<std::size_t>(n), static_cast<std::size_t>(batch), JobType::EigenVectors, stedc_params);
 
             MatrixView<T, MatrixFormat::Dense> aq_dummy(nullptr, p, p, p, static_cast<int64_t>(p) * static_cast<int64_t>(p), batch);
             MatrixView<T, MatrixFormat::Dense> c_dummy(nullptr, p, n, p, static_cast<int64_t>(p) * static_cast<int64_t>(n), batch);

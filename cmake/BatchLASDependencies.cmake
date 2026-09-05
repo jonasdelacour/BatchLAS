@@ -18,6 +18,12 @@ if(BATCHLAS_ENABLE_MKL)
             target_link_libraries(batchlas_mkl INTERFACE "${_MKL_SYCL_TARGET}")
             target_compile_definitions(batchlas_mkl INTERFACE MKL_ILP64)
             set(BATCHLAS_HAS_MKL_BACKEND TRUE)
+            # axis 3: oneMKL the LIBRARY, as distinct from Backend::MKL the
+            # device family. linalg-impl.hh:20 already uses the family flag to
+            # mean "oneMKL supplies cblas.h", which is a library question.
+            if(BATCHLAS_ENABLE_ONEMKL)
+                set(BATCHLAS_HAS_ONEMKL TRUE)
+            endif()
         endif()
     else()
         message(STATUS "MKL not found via CMake package, falling back to manual search")
@@ -117,9 +123,46 @@ function(find_nvidia_libs)
 
     if(CUBLAS_LIBRARY)
         message(STATUS "Found cuBLAS: ${CUBLAS_LIBRARY}")
+        # NOTE (WP0 S1): this line is the family/library conflation itself --
+        # "we found cuBLAS" is being used to answer "is there a CUDA backend".
+        # It stays for now so S1 is bit-identical; S2 replaces it with a
+        # derivation from the hardware. The library axis is recorded alongside.
         set(BATCHLAS_HAS_CUDA_BACKEND TRUE PARENT_SCOPE)
     else()
         message(WARNING "NVIDIA GPU detected but cuBLAS library not found. Add its path to CMAKE_PREFIX_PATH if needed.")
+    endif()
+
+    # ---- axis 3: which NVIDIA math libraries are actually present ----------
+    #
+    # cuSOLVER and cuSPARSE were never probed. They are pulled in blind via
+    # CUDA::cusolver / CUDA::cusparse on a flag they did not influence, so a
+    # toolkit missing either one fails at link time rather than at configure
+    # time, and nothing can ask "is cuSOLVER available?" in order to route
+    # around it. Probe them separately now.
+    if(BATCHLAS_ENABLE_CUBLAS AND CUBLAS_LIBRARY)
+        set(BATCHLAS_HAS_CUBLAS TRUE PARENT_SCOPE)
+    endif()
+
+    find_library(CUSOLVER_LIBRARY
+        NAMES cusolver
+        PATHS ${BATCHLAS_CUDA_PATH}/lib64 ${BATCHLAS_CUDA_PATH}/lib
+              ${CUDA_TOOLKIT_ROOT_DIR}/lib64 ${CUDA_TOOLKIT_ROOT_DIR}/lib
+        PATH_SUFFIXES lib64 lib targets/x86_64-linux/lib
+        DOC "NVIDIA cuSOLVER library")
+    if(BATCHLAS_ENABLE_CUSOLVER AND CUSOLVER_LIBRARY)
+        message(STATUS "Found cuSOLVER: ${CUSOLVER_LIBRARY}")
+        set(BATCHLAS_HAS_CUSOLVER TRUE PARENT_SCOPE)
+    endif()
+
+    find_library(CUSPARSE_LIBRARY
+        NAMES cusparse
+        PATHS ${BATCHLAS_CUDA_PATH}/lib64 ${BATCHLAS_CUDA_PATH}/lib
+              ${CUDA_TOOLKIT_ROOT_DIR}/lib64 ${CUDA_TOOLKIT_ROOT_DIR}/lib
+        PATH_SUFFIXES lib64 lib targets/x86_64-linux/lib
+        DOC "NVIDIA cuSPARSE library")
+    if(BATCHLAS_ENABLE_CUSPARSE AND CUSPARSE_LIBRARY)
+        message(STATUS "Found cuSPARSE: ${CUSPARSE_LIBRARY}")
+        set(BATCHLAS_HAS_CUSPARSE TRUE PARENT_SCOPE)
     endif()
 endfunction()
 
@@ -163,7 +206,30 @@ function(find_rocm_libs)
             message(STATUS "Found rocSOLVER: ${ROCSOLVER_LIBRARY}")
         endif()
 
-        set(_rocm_link_libs ${ROCBLAS_LIBRARY} ${HIPSPARSE_LIBRARY} ${ROCSOLVER_LIBRARY})
+        # ---- axis 3: which ROCm math libraries are present -----------------
+        if(BATCHLAS_ENABLE_ROCBLAS AND ROCBLAS_LIBRARY)
+            set(BATCHLAS_HAS_ROCBLAS TRUE PARENT_SCOPE)
+        endif()
+        if(BATCHLAS_ENABLE_ROCSOLVER AND ROCSOLVER_LIBRARY)
+            set(BATCHLAS_HAS_ROCSOLVER TRUE PARENT_SCOPE)
+        endif()
+        if(BATCHLAS_ENABLE_ROCSPARSE AND HIPSPARSE_LIBRARY)
+            set(BATCHLAS_HAS_ROCSPARSE TRUE PARENT_SCOPE)
+        endif()
+
+        # find_library() leaves <VAR>-NOTFOUND in the cache variable when it
+        # fails, so an unqualified ${ROCSOLVER_LIBRARY} here appended the
+        # literal string "ROCSOLVER_LIBRARY-NOTFOUND" to the link line and
+        # turned a missing optional library into a link error. Only append the
+        # ones that were actually found. (Cannot be verified on this machine --
+        # there is no AMD GPU here -- but the failure mode is unambiguous.)
+        set(_rocm_link_libs)
+        foreach(_rocm_lib ROCBLAS_LIBRARY HIPSPARSE_LIBRARY ROCSOLVER_LIBRARY)
+            if(${_rocm_lib})
+                list(APPEND _rocm_link_libs "${${_rocm_lib}}")
+            endif()
+        endforeach()
+        unset(_rocm_lib)
 
         set(BATCHLAS_ROCM_LINK_LIBRARIES ${_rocm_link_libs} PARENT_SCOPE)
         set(BATCHLAS_HAS_ROCM_BACKEND TRUE PARENT_SCOPE)
@@ -227,6 +293,18 @@ function(find_netlib_libs)
     endif()
     if(NOT CBLAS_LIBRARY)
         find_library(CBLAS_LIBRARY NAMES cblas blas)
+    endif()
+
+    # ---- axis 3: LAPACKE and CBLAS are independent libraries ---------------
+    # They are found separately above, so record them separately. The host
+    # DEVICE family is a different question -- a CPU SYCL device exists whether
+    # or not netlib is installed -- but that decoupling is S2; here the family
+    # flag keeps its current derivation so the build stays bit-identical.
+    if(BATCHLAS_ENABLE_LAPACKE AND LAPACKE_LIBRARY)
+        set(BATCHLAS_HAS_LAPACKE TRUE PARENT_SCOPE)
+    endif()
+    if(BATCHLAS_ENABLE_CBLAS AND CBLAS_LIBRARY)
+        set(BATCHLAS_HAS_CBLAS TRUE PARENT_SCOPE)
     endif()
 
     if(LAPACKE_LIBRARY AND CBLAS_LIBRARY)
@@ -343,9 +421,15 @@ if(BATCHLAS_HAS_CUDA_BACKEND)
     set(BATCHLAS_MATHDX_TARGETS "")
     if(TARGET mathdx::cublasdx)
         list(APPEND BATCHLAS_MATHDX_TARGETS mathdx::cublasdx)
+        if(BATCHLAS_ENABLE_CUBLASDX)
+            set(BATCHLAS_HAS_CUBLASDX TRUE PARENT_SCOPE)
+        endif()
     endif()
     if(TARGET mathdx::cusolverdx)
         list(APPEND BATCHLAS_MATHDX_TARGETS mathdx::cusolverdx)
+        if(BATCHLAS_ENABLE_CUSOLVERDX)
+            set(BATCHLAS_HAS_CUSOLVERDX TRUE PARENT_SCOPE)
+        endif()
     endif()
 
     set(BATCHLAS_ENABLE_CUBLASDX_WRAPPER OFF)

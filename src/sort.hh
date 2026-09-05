@@ -460,7 +460,7 @@ Event sort(Queue& ctx, const VectorView<T>& eigs, const MatrixView<T, MatrixForm
     // Ensure contiguous unit-inc views for argsort
     VectorView<T> eigs_unit = eigs;
     if (eigs.inc() != 1) {
-        auto tmp = Vector<T>(eigs.size(), eigs.batch_size(), eigs.size(), 1);
+        auto tmp = Vector<T>(eigs.size(), eigs.batch_size(), Stride{eigs.size()}, Inc{1});
         VectorView<T>::copy(ctx, tmp, eigs);
         eigs_unit = VectorView<T>(tmp);
     }
