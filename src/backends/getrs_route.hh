@@ -95,6 +95,26 @@ inline std::optional<dispatch::GetrsShape> getrs_op_shape(
     // gets {Vendor, Auto} everywhere, because preferred() is all-false, not
     // because the arm is missing.
     s.blocked_available = sycl_getrs::getrs_blocked_available<T>();
+
+    // THE FUSED TIER'S TWO CAPACITY NUMBERS, and the local-memory one is ASKED OF
+    // THE DEVICE rather than taken from a constant -- route_potrf.hh:114-127's
+    // rule, and getrf_route.hh does the same for cta_max_n. The 4096 B reserve is
+    // the one cmake/BatchLASDetectSYCL.cmake:57-67 applies to every other
+    // device-BLAS sizing decision in this library, and the formula behind the
+    // number lives in src/extensions/getrs_fused.cc beside the launcher so the
+    // ceiling this table advertises and the allocation that launcher makes cannot
+    // disagree (route_trsm.hh:62-72).
+    //
+    // BOTH ARE ZERO WHEN THE KERNEL IS ABSENT, which correctly makes the CTA route
+    // unsupported rather than selectable-but-unimplemented -- TrsmShape::cta_max_n's
+    // convention.
+    if (sycl_getrs::getrs_fused_available<T>()) {
+        const std::size_t local_mem = ctx.device().get_property(DeviceProperty::LOCAL_MEM_SIZE);
+        const std::size_t budget = (local_mem > 4096) ? (local_mem - 4096) : 0;
+        s.fused_max_elems =
+            static_cast<int64_t>(sycl_getrs::getrs_fused_max_rhs_elems<T>(budget));
+        s.fused_max_nrhs = sycl_getrs::kGetrsFusedMaxRhs;
+    }
     return s;
 }
 
