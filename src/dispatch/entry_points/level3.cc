@@ -30,6 +30,8 @@
 #include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/blas/functions/gemv.hh>
 #include <batchlas/blas/functions/trsm.hh>
+
+#include "../../backends/trsm_route.hh"
 #include <batchlas/blas/functions/symm.hh>
 #include <batchlas/blas/functions/hemm.hh>
 #include <batchlas/blas/functions/herk.hh>
@@ -162,6 +164,71 @@ Event trsm(Queue& ctx,
            Uplo uplo,
            Transpose transA,
            Diag diag) {
+    // VALIDATION FIRST, and hoisted to here on purpose. The facade validated
+    // nothing before, so cublas.cc:1104 and rocblas.cc:148 each called
+    // trsm_validate_params themselves and netlib_lapack.cc never did at all.
+    // One call here covers every backend and fixes netlib's long-missing check;
+    // the two backend calls become harmless duplicates of a throw-only test.
+    // It must precede the shape builder, which reads A.rows()/B.rows()/B.cols()
+    // and would otherwise index a non-conforming shape.
+    trsm_validate_params(A, B, side, uplo, transA, diag);
+
+    // THE GATE RUNS BEFORE THE VENDOR-AVAILABLE TEST, for the reason recorded
+    // at the top of this file: anything below that test is unreachable in the
+    // vendor-free build, which is the build WP3 exists for.
+    const dispatch::Route route = backend::trsm_route<T>(
+        ctx, A, B, side, uplo, transA, diag,
+        /*vendor_available=*/dispatch::level3_vendor_available<Back>);
+
+    // All four scalar types now have a native kernel. The guard that used to
+    // stand here excluded complex, which had no kernel to link against.
+    {
+        if (dispatch::is_native(route)) {
+            if (route.algo == dispatch::Algorithm::CTA) {
+                return sycl_trsm::trsm_native_v1_dispatch<T>(
+                    ctx, A, B, alpha, side, uplo, transA, diag);
+            }
+            if (route.algo == dispatch::Algorithm::Blocked) {
+                // THE TRAILING UPDATE GOES THROUGH THE ROUTER, not straight to
+                // the native kernel. V2 used to call sycl_gemm::gemm_custom
+                // itself, which bypasses RouteTable<Op::gemm> -- so the blocked
+                // driver always got the native GEMM even on the shapes WP2 had
+                // already measured it losing.
+                //
+                // It loses them badly, because of a property of the shapes trsm
+                // issues that a square-matrix GEMM benchmark never sees: every
+                // operand is a SUB-VIEW carrying its parent's leading dimension.
+                // Measured on the six shapes V2 issues at order 512 (float,
+                // q=1024, batch=512), with those real leading dimensions:
+                //
+                //   outer  m=128 n=1024 k=128/256/384  native 8.05 ms  vendor 3.89 ms
+                //   inner  m=32  n=1024 k=32/64/96     native 7.89 ms  vendor 3.98 ms
+                //
+                // The same shapes with ld == rows are near parity (0.86-0.98x on
+                // the inner three). The native GEMM collapses on a strided ld
+                // and cuBLAS does not, and strided is the ONLY case trsm issues.
+                //
+                // Injection rather than an include: the kernel TU stays free of
+                // the dispatch layer, tests keep calling it directly and get the
+                // native GEMM, and a VENDOR-FREE build is unaffected because
+                // resolve_route falls back to the native GEMM there anyway
+                // (route_resolve.hh:60-63). The signatures of gemm_custom and
+                // this gemm are identical, so nothing adapts.
+                return sycl_trsm::trsm_native_blocked<T>(
+                    ctx, A, B, alpha, side, uplo, transA, diag,
+                    [](Queue& c,
+                       const MatrixView<T, MatrixFormat::Dense>& ga,
+                       const MatrixView<T, MatrixFormat::Dense>& gb,
+                       const MatrixView<T, MatrixFormat::Dense>& gc,
+                       T galpha, T gbeta, Transpose gta, Transpose gtb,
+                       ComputePrecision gp) {
+                        return gemm<Back, T>(c, ga, gb, gc, galpha, gbeta,
+                                             gta, gtb, gp);
+                    });
+            }
+        }
+    }
+
     if constexpr (!dispatch::level3_vendor_available<Back>) {
         dispatch::throw_no_vendor_route<T>(
             dispatch::Op::trsm, Back, dispatch::kLevel3Library<Back>);
