@@ -16,7 +16,7 @@ This PR implements a utility function `ritz_values` that computes Ritz values (e
 ### Header Declarations (92 lines added)
 - **`include/blas/extensions.hh`**: Function declarations
   - Main `ritz_values` function template
-  - `ritz_values_workspace` function for memory allocation
+  - `ritz_values_buffer_size` function for memory allocation
   - Multiple forwarding overloads for convenience (owning Matrix/Vector types)
   - Comprehensive documentation comments
 
@@ -71,7 +71,7 @@ Matrix<float, MatrixFormat::Dense> V = /* trial vectors */;
 Vector<float> ritz_vals(k, batch);
 
 // 2. Compute workspace size
-size_t ws_size = ritz_values_workspace<Backend::SYCL, float, MatrixFormat::CSR>(
+size_t ws_size = ritz_values_buffer_size<Backend::SYCL, float, MatrixFormat::CSR>(
     *ctx, A.view(), V.view(), ritz_vals.view());
 
 // 3. Allocate workspace
@@ -103,7 +103,7 @@ All tests:
 
 ### Workspace Management
 Following the repository pattern, the function requires pre-allocated workspace:
-- `ritz_values_workspace()` computes required memory
+- `ritz_values_buffer_size()` computes required memory
 - User allocates workspace buffer
 - `ritz_values()` uses the workspace for temporary storage
 

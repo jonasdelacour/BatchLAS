@@ -264,7 +264,7 @@ py::object stedc_common(const DenseVector& d_wrapper,
     Queue& queue = acquire_queue(device_name, backend);
     const std::size_t workspace_size = visit_backend(queue, [&](auto backend_tag) {
         constexpr Backend B = decltype(backend_tag)::value;
-        return batchlas::stedc_workspace_size<B, T>(queue, d.size(), d.batch_size(), jobz, params);
+        return batchlas::stedc_buffer_size<B, T>(queue, d.size(), d.batch_size(), jobz, params);
     });
     UnifiedVector<std::byte> workspace(workspace_size);
     visit_backend(queue, [&](auto backend_tag) {

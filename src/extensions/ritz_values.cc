@@ -163,7 +163,7 @@ namespace batchlas {
      * @return size_t Required workspace size in bytes
      */
     template <Backend B, typename T, MatrixFormat MFormat>
-    size_t ritz_values_workspace(Queue& ctx,
+    size_t ritz_values_buffer_size(Queue& ctx,
                                  const MatrixView<T, MFormat>& A,
                                  const MatrixView<T, MatrixFormat::Dense>& V,
                                  const VectorView<typename base_type<T>::type>& ritz_vals) {
@@ -190,7 +190,7 @@ namespace batchlas {
     // Explicit template instantiations for common types
     #define RITZ_VALUES_INSTANTIATE(back, fp, fmt) \
         template Event ritz_values<back, BATCHLAS_UNPAREN fp, fmt>(Queue&, const MatrixView<BATCHLAS_UNPAREN fp, fmt>&, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, const VectorView<typename base_type<BATCHLAS_UNPAREN fp>::type>&, Span<std::byte>); \
-        template size_t ritz_values_workspace<back, BATCHLAS_UNPAREN fp, fmt>(Queue&, const MatrixView<BATCHLAS_UNPAREN fp, fmt>&, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, const VectorView<typename base_type<BATCHLAS_UNPAREN fp>::type>&);
+        template size_t ritz_values_buffer_size<back, BATCHLAS_UNPAREN fp, fmt>(Queue&, const MatrixView<BATCHLAS_UNPAREN fp, fmt>&, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, const VectorView<typename base_type<BATCHLAS_UNPAREN fp>::type>&);
 
     #define RITZ_VALUES_INSTANTIATE_FOR_BACKEND_TYPE(back, fp) \
         BATCHLAS_FOR_EACH_MATRIX_FORMAT_2(RITZ_VALUES_INSTANTIATE, back, fp)

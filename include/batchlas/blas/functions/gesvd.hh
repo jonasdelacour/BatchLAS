@@ -407,7 +407,7 @@ inline Event gesvd_dispatch(Queue& ctx,
     }
 
     if (workspace.size() < need_ws) {
-        throw std::runtime_error("gesvd: insufficient workspace for chosen provider");
+        throw std::invalid_argument("gesvd: insufficient workspace for chosen provider");
     }
 
     // std::optional, not a plain `Queue`: the default Queue constructor is not inert, it

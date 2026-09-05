@@ -24,7 +24,7 @@ namespace batchlas {
                Transpose transB,
                ComputePrecision precision) {
         if (!gemm_batch_dimensions_compatible(A, B, C, transA, transB)) {
-            throw std::runtime_error("GEMM: incompatible matrix dimensions");
+            throw std::invalid_argument("GEMM: incompatible matrix dimensions");
         }
 
         if (gemm_has_heterogeneous_batch(A, B, C)) {
@@ -138,11 +138,11 @@ namespace batchlas {
     Event trsm(Queue& ctx,
                const MatrixView<T,MatrixFormat::Dense>& A,
                const MatrixView<T,MatrixFormat::Dense>& Bmat,
+               T alpha,
                Side side,
                Uplo uplo,
                Transpose transA,
-               Diag diag,
-               T alpha) {
+               Diag diag) {
         static LinalgHandle<B> handle;
         handle.setStream(ctx);
         auto [kB, n] = get_effective_dims(Bmat, Transpose::NoTrans);
@@ -175,17 +175,17 @@ namespace batchlas {
         handle.setStream(ctx);
 
         if (C.rows() != C.cols()) {
-            throw std::runtime_error("SYRK: C must be square");
+            throw std::invalid_argument("SYRK: C must be square");
         }
         if (A.batch_size() != C.batch_size()) {
-            throw std::runtime_error("SYRK: batch size mismatch");
+            throw std::invalid_argument("SYRK: batch size mismatch");
         }
 
         const int n = C.rows();
         const int k = transA == Transpose::NoTrans ? A.cols() : A.rows();
         const int expected_n = transA == Transpose::NoTrans ? A.rows() : A.cols();
         if (expected_n != n || k <= 0) {
-            throw std::runtime_error("SYRK: incompatible matrix dimensions");
+            throw std::invalid_argument("SYRK: incompatible matrix dimensions");
         }
 
         const auto roc_uplo = enum_convert<BackendLibrary::ROCBLAS>(uplo);
@@ -243,10 +243,10 @@ namespace batchlas {
         handle.setStream(ctx);
 
         if (C.rows() != C.cols()) {
-            throw std::runtime_error("SYR2K: C must be square");
+            throw std::invalid_argument("SYR2K: C must be square");
         }
         if (A.batch_size() != Bmat.batch_size() || A.batch_size() != C.batch_size()) {
-            throw std::runtime_error("SYR2K: batch size mismatch");
+            throw std::invalid_argument("SYR2K: batch size mismatch");
         }
 
         const int n = C.rows();
@@ -255,7 +255,7 @@ namespace batchlas {
         const int k = transA == Transpose::NoTrans ? A.cols() : A.rows();
         const int b_k = transA == Transpose::NoTrans ? Bmat.cols() : Bmat.rows();
         if (expected_n != n || expected_b_n != n || b_k != k || k <= 0) {
-            throw std::runtime_error("SYR2K: incompatible matrix dimensions");
+            throw std::invalid_argument("SYR2K: incompatible matrix dimensions");
         }
 
         const auto roc_uplo = enum_convert<BackendLibrary::ROCBLAS>(uplo);
@@ -319,17 +319,17 @@ namespace batchlas {
         handle.setStream(ctx);
 
         if (A.rows() != A.cols()) {
-            throw std::runtime_error("TRMM: A must be square");
+            throw std::invalid_argument("TRMM: A must be square");
         }
         if (A.batch_size() != Bmat.batch_size() || A.batch_size() != C.batch_size()) {
-            throw std::runtime_error("TRMM: batch size mismatch");
+            throw std::invalid_argument("TRMM: batch size mismatch");
         }
 
         const int m = C.rows();
         const int n = C.cols();
         const int expected_dim = side == Side::Left ? m : n;
         if (A.rows() != expected_dim || Bmat.rows() != m || Bmat.cols() != n) {
-            throw std::runtime_error("TRMM: incompatible matrix dimensions");
+            throw std::invalid_argument("TRMM: incompatible matrix dimensions");
         }
 
         const auto roc_side = enum_convert<BackendLibrary::ROCBLAS>(side);
@@ -423,7 +423,7 @@ namespace batchlas {
     #define GEMV_INSTANTIATE(fp) \
     template Event gemv<Backend::ROCM, fp>(Queue&, const MatrixView<fp,MatrixFormat::Dense>&, const VectorView<fp>&, const VectorView<fp>&, fp, fp, Transpose);
     #define TRSM_INSTANTIATE(fp) \
-    template Event trsm<Backend::ROCM, fp>(Queue&, const MatrixView<fp,MatrixFormat::Dense>&, const MatrixView<fp,MatrixFormat::Dense>&, Side, Uplo, Transpose, Diag, fp);
+    template Event trsm<Backend::ROCM, fp>(Queue&, const MatrixView<fp,MatrixFormat::Dense>&, const MatrixView<fp,MatrixFormat::Dense>&, fp, Side, Uplo, Transpose, Diag);
     #define TRMM_INSTANTIATE(fp) \
     template Event trmm<Backend::ROCM, fp>(Queue&, const MatrixView<fp,MatrixFormat::Dense>&, const MatrixView<fp,MatrixFormat::Dense>&, const MatrixView<fp,MatrixFormat::Dense>&, fp, Side, Uplo, Transpose, Diag);
     #define SYRK_INSTANTIATE(fp) \

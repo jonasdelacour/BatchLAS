@@ -54,7 +54,7 @@ void run_stedc(miniacc::State& state) {
         try {
             StedcParams<Real> params{};
             UnifiedVector<std::byte> ws(
-                stedc_workspace_size<B, Real>(*q, n, cur_batch, JobType::EigenVectors, params));
+                stedc_buffer_size<B, Real>(*q, n, cur_batch, JobType::EigenVectors, params));
             stedc<B, Real>(*q, d, e, evals, ws.to_span(), JobType::EigenVectors, params, evecs);
             q->wait();
         } catch (const std::exception& ex) {

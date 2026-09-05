@@ -291,7 +291,7 @@ int run_accuracy(const Options& opt) {
                     auto eigvects = Matrix<Real>::Identity(n, cur_batch);
                     StedcParams<Real> stedc_params{};
                     UnifiedVector<std::byte> ws(
-                        stedc_workspace_size<B, Real>(*q, n, cur_batch, JobType::EigenVectors, stedc_params));
+                        stedc_buffer_size<B, Real>(*q, n, cur_batch, JobType::EigenVectors, stedc_params));
                     stedc<B, Real>(*q,
                                    d_work,
                                    e_work,

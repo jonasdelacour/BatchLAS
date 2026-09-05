@@ -15,8 +15,8 @@ static void BM_STEQR(minibench::State& state) {
     const size_t inc = state.range(2);
     const size_t stride = state.range(3);
     const size_t n_writes = state.range(4);
-    auto vec1 = Vector<T>::random(n, batch, stride, inc);
-    auto vec2 = Vector<T>::random(n, batch, stride, inc);
+    auto vec1 = Vector<T>::random(n, batch, Stride(static_cast<int>(stride)), Inc(static_cast<int>(inc)));
+    auto vec2 = Vector<T>::random(n, batch, Stride(static_cast<int>(stride)), Inc(static_cast<int>(inc)));
 
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
 

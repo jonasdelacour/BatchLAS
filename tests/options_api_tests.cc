@@ -232,8 +232,8 @@ TEST(OptionsApi, Blas3OptionsMatchPositional) {
         auto Bp = filled(n, batch, 0.6f);
         auto Tri = spd(n, batch);
         trsm(q, Tri.view(), Bo.view(), {.alpha = 1.0f, .diag = Diag::NonUnit});
-        trsm(q, Tri.view(), Bp.view(), Side::Left, Uplo::Lower, Transpose::NoTrans,
-             Diag::NonUnit, 1.0f);
+        trsm(q, Tri.view(), Bp.view(), 1.0f, Side::Left, Uplo::Lower, Transpose::NoTrans,
+             Diag::NonUnit);
         q.wait();
         expect_same(Bo.view(), Bp.view(), n, batch, "trsm");
     }
@@ -443,6 +443,154 @@ static_assert(!std::is_convertible_v<PotrfOptions, detail::EmptyBracesAreAmbiguo
 static_assert(!std::is_convertible_v<Uplo, detail::EmptyBracesAreAmbiguous>,
               "Uplo must not convert to the trap type, or the positional "
               "spelling would become ambiguous too");
+
+// ---------------------------------------------------------------------------
+// Per-item factorisation status (issue #73).
+//
+// potrf, getrf and getri all had somewhere to put LAPACK's `info` -- every
+// backend allocated the array the vendor call demands -- and every backend then
+// dropped it. A batch containing one rank-deficient item returned an ordinary
+// Event, no throw and no flag, so the caller could not tell "the batch
+// factorised" from "item 1 is garbage and everything downstream of it is noise".
+// There was no workaround at the public API.
+//
+// The batches below are deliberately mixed: item 0 is well-conditioned and item
+// 1 is not, so the test fails both if status is never reported (bad item reads
+// 0) and if it is reported indiscriminately (good item reads non-zero). The
+// `info` buffers start at a sentinel rather than 0, because 0 is the success
+// value -- a buffer the backend never touched would otherwise look like "all
+// items factorised", which is exactly the bug.
+//
+// Values are asserted only as zero / non-zero. LAPACK, cuSOLVER, cuBLAS and
+// rocSOLVER agree on the sign convention but not always on which index they
+// name first, and the API's contract is the zero/non-zero distinction.
+// ---------------------------------------------------------------------------
+namespace {
+
+// Item 0: diagonally dominant, so Cholesky succeeds. Item 1: the negative of
+// it, so the very first leading minor is not positive definite.
+Matrix<float, MatrixFormat::Dense> spd_then_negative_definite(int n) {
+    Matrix<float, MatrixFormat::Dense> m(n, n, 2);
+    auto v = m.view();
+    for (int b = 0; b < 2; ++b) {
+        const float sign = (b == 0) ? 1.0f : -1.0f;
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < n; ++i)
+                v.data_ptr()[b * v.stride() + j * v.ld() + i] =
+                    sign * ((i == j) ? float(n + 2) : 0.25f);
+    }
+    return m;
+}
+
+// Item 0: a well-conditioned diagonal. Item 1: all zeros, so the first pivot is
+// exactly zero and U is singular.
+Matrix<float, MatrixFormat::Dense> nonsingular_then_singular(int n) {
+    Matrix<float, MatrixFormat::Dense> m(n, n, 2);
+    auto v = m.view();
+    for (int b = 0; b < 2; ++b)
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < n; ++i)
+                v.data_ptr()[b * v.stride() + j * v.ld() + i] =
+                    (b == 1) ? 0.0f : ((i == j) ? float(i + 2) : 0.5f);
+    return m;
+}
+
+constexpr int32_t kNeverWritten = -12345;
+
+}  // namespace
+
+TEST(OptionsApi, FactorisationsReportPerItemStatus) {
+    Queue q;
+    constexpr int n = 8;
+    constexpr int batch = 2;
+
+    {   // potrf: item 1 is not positive definite
+        auto A = spd_then_negative_definite(n);
+        UnifiedVector<int32_t> info(batch, kNeverWritten);
+        potrf(q, A.view(), {.uplo = Uplo::Lower, .info = info.to_span()});
+        q.wait();
+        EXPECT_EQ(info[0], 0) << "potrf reported failure on a positive definite item";
+        EXPECT_NE(info[0], kNeverWritten) << "potrf never wrote info at all";
+        EXPECT_GT(info[1], 0) << "potrf did not report the indefinite item";
+    }
+
+    {   // getrf: item 1 is singular
+        auto A = nonsingular_then_singular(n);
+        UnifiedVector<int64_t> pivots(static_cast<size_t>(n) * batch);
+        UnifiedVector<int32_t> info(batch, kNeverWritten);
+        getrf(q, A.view(), pivots.to_span(), info.to_span());
+        q.wait();
+        EXPECT_EQ(info[0], 0) << "getrf reported failure on a nonsingular item";
+        EXPECT_NE(info[0], kNeverWritten) << "getrf never wrote info at all";
+        EXPECT_GT(info[1], 0) << "getrf did not report the singular item";
+    }
+
+    {   // getri: same batch, inverted from its own LU
+        auto A = nonsingular_then_singular(n);
+        Matrix<float, MatrixFormat::Dense> Ainv(n, n, batch);
+        UnifiedVector<int64_t> pivots(static_cast<size_t>(n) * batch);
+        UnifiedVector<int32_t> info(batch, kNeverWritten);
+        getrf(q, A.view(), pivots.to_span());
+        getri(q, A.view(), Ainv.view(), pivots.to_span(), info.to_span());
+        q.wait();
+        EXPECT_EQ(info[0], 0) << "getri reported failure on an invertible item";
+        EXPECT_NE(info[0], kNeverWritten) << "getri never wrote info at all";
+        EXPECT_GT(info[1], 0) << "getri did not report the singular item";
+    }
+}
+
+// The whole change is additive, so the spellings that existed before must still
+// compile and still run. If `info` had been made a required parameter -- or a
+// defaulted one on a signature the sig:: aliases have to restate, which function
+// types cannot carry -- every one of these would have broken instead.
+TEST(OptionsApi, FactorisationsStillWorkWithoutAnInfoSpan) {
+    Queue q;
+    constexpr int n = 8;
+    constexpr int batch = 2;
+
+    auto A = spd(n, batch);
+    potrf(q, A.view(), {.uplo = Uplo::Lower});
+    auto Aw = spd(n, batch);
+    with_backend(q, [&](auto Back) {
+        constexpr Backend Bk = Back.value;
+        auto ws = q.workspace(potrf_buffer_size<Bk, float>(q, Aw.view(), Uplo::Lower));
+        // The four-argument positional spelling: the arity that had to survive.
+        potrf<Bk, float>(q, Aw.view(), Uplo::Lower, ws.span());
+    });
+
+    auto B = nonsingular_then_singular(n);
+    UnifiedVector<int64_t> pivots(static_cast<size_t>(n) * batch);
+    getrf(q, B.view(), pivots.to_span());
+
+    Matrix<float, MatrixFormat::Dense> Binv(n, n, batch);
+    getri(q, B.view(), Binv.view(), pivots.to_span());
+    q.wait();
+    SUCCEED();
+}
+
+// An `info` span shorter than the batch is rejected up front rather than
+// silently ignored. That direction matters more than it looks: a backend handed
+// a short span falls back to its own scratch and writes nothing to the caller's
+// buffer, so the caller would read stale zeros -- "every item factorised" -- on
+// precisely the batch it was trying to diagnose. An EMPTY span stays legal; it
+// is the API's spelling for "do not report".
+TEST(OptionsApi, ShortInfoSpanIsRejected) {
+    Queue q;
+    constexpr int n = 8;
+    constexpr int batch = 4;
+
+    auto A = spd(n, batch);
+    UnifiedVector<int32_t> too_short(batch - 1, 0);
+    EXPECT_THROW(potrf(q, A.view(), {.uplo = Uplo::Lower, .info = too_short.to_span()}),
+                 std::invalid_argument);
+
+    UnifiedVector<int64_t> pivots(static_cast<size_t>(n) * batch);
+    EXPECT_THROW(getrf(q, A.view(), pivots.to_span(), too_short.to_span()),
+                 std::invalid_argument);
+
+    EXPECT_NO_THROW(potrf(q, A.view(), {.uplo = Uplo::Lower, .info = Span<int32_t>{}}));
+    q.wait();
+}
 
 // The USM contract used to be documented and unenforced: handing ordinary host
 // memory to a GPU queue reached the device as a wild address and aborted the
