@@ -15,13 +15,7 @@
 
 namespace batchlas::dispatch::coverage {
 
-// One definition, in one TU, so the library and every consumer necessarily
-// agree -- which the -DBATCHLAS_ENABLE_COVERAGE macro could not guarantee, and
-// in practice did not (see coverage.hh).
-//
-// Keyed on the SAME variable that emit() reads. Recording into a table that
-// will never be written, or writing a table nothing recorded into, are both
-// states worth making unrepresentable.
+// One definition in one TU, keyed on the same variable emit() reads.
 bool g_dynamic_enabled = [] {
     const char* p = std::getenv("BATCHLAS_COVERAGE_OUT");
     return p != nullptr && *p != '\0';
@@ -40,15 +34,8 @@ struct Row {
     uint64_t calls = 0;
 };
 
-// The structural flags that change WHICH TRIANGLE or which operand a level-3
-// op touches. Part of the key, not just of the row.
-//
-// Without this, two calls differing only in `uplo` collapse into one row and
-// whichever ran first decides what the table reports. For trmm that is not a
-// rounding error: this project has a documented incident where the tempting 8x
-// "fix" was the wrong-answer one and the test guarding it could not fail by
-// construction. An instrument that cannot distinguish uplo cannot catch that
-// class of defect coming back, which is most of why it exists.
+// Structural flags belong in the KEY; without them calls differing only in
+// `uplo` collapse into one row. evidence: docs/perf/dispatch.md#instrument-defects
 uint32_t variant_key(const OpShape& s) {
     return (static_cast<uint32_t>(s.uplo)   << 12) |
            (static_cast<uint32_t>(s.side)   <<  9) |
@@ -57,9 +44,8 @@ uint32_t variant_key(const OpShape& s) {
            (static_cast<uint32_t>(s.transB));
 }
 
-// Keyed on shape_class, not on the exact shape: shape_class() buckets
-// max(m,n,k) and batch by power of two, so a 10,000-iteration test collapses to
-// a handful of rows instead of 10,000.
+// Keyed on shape_class, not the exact shape: it buckets max(m,n,k) and batch by
+// power of two, so a 10,000-iteration test collapses to a handful of rows.
 uint64_t key_of(Op op, ScalarKind s, Backend b, uint32_t shape_class,
                 uint32_t variant = 0) {
     return (static_cast<uint64_t>(op) << 56) | (static_cast<uint64_t>(s) << 48) |
@@ -72,19 +58,9 @@ std::mutex& table_mutex() {
     return *m;
 }
 
-// DELIBERATELY LEAKED, and this is not laziness.
-//
-// The atexit handler below reads these maps. atexit handlers and static
-// destructors are interleaved in reverse registration order, so a
-// function-local static map constructed AFTER the installer is DESTROYED
-// BEFORE emit() runs -- and emit() then walks a dead container. That is
-// undefined behaviour, and the way it actually presented was worse than a
-// crash: the file was written, with a correct header and correct static rows,
-// and simply no `miss` rows at all. A silently empty measurement is the one
-// failure mode a coverage tool must not have.
-//
-// Never destroying them removes the ordering question entirely. The memory is
-// reclaimed by process exit, which is when this runs anyway.
+// DELIBERATELY LEAKED: emit() runs from atexit, and a function-local static
+// constructed after the installer is destroyed before it runs -- which showed
+// up not as a crash but as an output file with no `miss` rows at all.
 std::unordered_map<uint64_t, Row>& table() {
     static auto* t = new std::unordered_map<uint64_t, Row>();
     return *t;
@@ -109,12 +85,8 @@ const char* backend_name(Backend b) {
         case Backend::ROCM:   return "ROCM";
         case Backend::NETLIB: return "NETLIB";
         case Backend::MKL:    return "MKL";
-        // Expected, not a defect. The adapters that build an OpShape (gemm's
-        // gemm_op_shape, ormqr_op_shape, and the rest) do not set `backend`:
-        // the backend is a TEMPLATE parameter at the call site, so the shape
-        // never learns it. `reached` rows therefore read AUTO, and the row is
-        // still keyed uniquely by op x scalar x shape_class. Naming it AUTO
-        // rather than "?" keeps that visible instead of looking like a bug.
+        // Expected, not a defect: adapters that build an OpShape leave `backend`
+        // unset (it is a template parameter), so `reached` rows read AUTO.
         case Backend::AUTO:   return "AUTO";
         default:              return "?";
     }
@@ -126,25 +98,12 @@ void emit() {
         return;
     }
 
-    // ONE FILE PER PROCESS, and this is not tidiness -- the single-file version
-    // was wrong in a way that silently destroyed almost all of the data.
-    //
-    // A ctest run is 53 separate BINARIES, each with its own atexit handler.
-    // Opening $BATCHLAS_COVERAGE_OUT with "w" meant every process TRUNCATED the
-    // previous one's table, so `batchlas_coverage` -- whose whole job is to run
-    // the suite and report what it reached -- emitted the rows of whichever
-    // binary happened to finish last, and looked entirely healthy doing it.
-    // Caught by noticing that a four-test run reported rows for exactly one op.
-    //
-    // Appending instead would fix the truncation but not the interleaving under
-    // `ctest -j`, where two processes can tear each other's lines. A file per
-    // pid has neither problem, and merging is a `cat` -- see
-    // scripts/coverage_merge.sh and the batchlas_coverage target.
+    // ONE FILE PER PROCESS: a shared path is truncated by the next process, and
+    // appending tears lines under `ctest -j`. Merge with scripts/coverage_merge.sh.
     const std::string out = std::string(path) + "." + std::to_string(::getpid());
 
-    // Deliberately FILE* and no SYCL object: this runs from atexit, where any
-    // SYCL handle is already a use-after-free risk. See the standing rule in
-    // this tree about static destruction.
+    // FILE* and no SYCL object: this runs from atexit, where any SYCL handle is
+    // already a use-after-free risk.
     std::FILE* f = std::fopen(out.c_str(), "w");
     if (!f) {
         return;
@@ -198,102 +157,36 @@ void append_static_rows(std::ostringstream& out) {
         bool vendor;
         bool native;
     };
-    // `native` here is "BatchLAS has a kernel for this op that is LINKED in this
-    // build". gemm's register-tiled family lives in the vendor-free
-    // batchlas_sycl component, so it is always present; the four level-3 tile
-    // routes are still gated with cuBLAS (WP1); everything else has no native
-    // kernel yet at all.
-    //
-    // LINKED IS NOT REACHABLE, and the difference is not academic. In a
-    // vendor-free build gemm reports native=1 here and still throws on every
-    // call: the facade (entry_points/level3.cc:60-64) throws before reaching
-    // any route, because the three-way GEMM decision lives in
-    // backend::gemm_vendor inside the cuBLAS-gated cublas.cc. Measured --
-    // build-novendor gemm_tests is 48/184, and all 48 passes are pure
-    // route-resolution tests that never run a kernel.
-    //
-    // So this table answers "is the kernel in the build", which is the right
-    // PLANNING question, and the `reached` rows answer "did a call actually get
-    // there", which is the right BURN-DOWN question. Reading either as the
-    // other is how VENDOR_FREE_BASELINE.md came to claim a working vendor-free
-    // gemm.
-    // WP1 S7: the tile routes' availability is per (backend, SCALAR), not per
-    // backend, so this column is reported FOR FLOAT and the scalar column now
-    // says so. double and complex differ: syrk's non-float gram branch and
-    // trmm's non-float tile branch are reachable only when cuBLAS is compiled,
-    // and syr2k has no non-float tile route at all. A single type-blind column
-    // here would have re-stated exactly the overclaim S7 exists to prevent.
+    // `native` means a kernel is LINKED in this build, not that traffic reaches
+    // it; the `reached` rows answer that. Float is reported because tile-route
+    // availability is per (backend, scalar).
+    // evidence: docs/perf/dispatch.md#the-coverage-instrument
     const bool tiles_f32 = level3_tile_route_available<B, float>;
     const Entry entries[] = {
-        // gemm's `true` is now REACHABLE and not merely linked -- WP1 S5 gave
-        // the facade a native arm. Before that this row said `true` while every
-        // vendor-free gemm call threw.
         {"gemm",  level3_vendor_available<B>,        true},
-        // WP7 landed src/sycl/gemv_native.cc: bodies 1 and 2 behind
-        // {Native, Direct} and body 3 behind {Native, CTA}, all four scalar
-        // types. FLIPPED IN THE SAME STEP AS THE ENTRY-POINT WIRING
-        // (entry_points/level3.cc's gemv), never before it -- flipping it while
-        // the kernel was merely linked would restate the overclaim this whole
-        // note exists to prevent.
-        //
-        // Same reading rule as the rows below: this column answers "is the
-        // kernel IN THE BUILD", not "does traffic reach it". preferred() is
-        // all-false for gemv and that is a MEASURED result, not a placeholder
-        // -- cuBLAS gemvStridedBatched runs at 94-105% of the achievable DRAM
-        // roof on 90 of 92 reproducing cells, so a vendor-present build sends
-        // gemv nothing. A vendor-free build now reaches the kernels through
-        // route_resolve.hh:60-63 instead of throwing.
-        //
-        // AND UNLIKE EVERY OTHER NATIVE TIER IN THIS CAMPAIGN, gemv's Direct
-        // route has NO GPU GATE, so this `true` covers the native_cpu queue as
-        // well: half of tests/gemv_tests.cc runs on Backend::NETLIB over
-        // Device("cpu"), and that half is the reason the row moved.
         {"gemv",  level3_vendor_available<B>,        true},
         {"trsm",  level3_vendor_available<B>,        false},
         {"trmm",  level3_vendor_available<B>,        tiles_f32},
-        // symm has NO tile kernel. Its only portable kernel is the mirrored
-        // expansion (triangular_expand.hh); everything after it is a GEMM. The
-        // plan and this table both called it a tile route -- it is an
-        // expand-then-gemm route, and the distinction matters because the
-        // expansion alone does not make symm vendor-free, the GEMM it feeds
-        // has to be too (WP1 S2 + S5).
+        // symm has no tile kernel; its portable path is the mirrored expansion
+        // (triangular_expand.hh) feeding a GEMM, which must itself be native.
         {"symm",  level3_vendor_available<B>,        tiles_f32},
         {"syrk",  level3_vendor_available<B>,        tiles_f32},
         {"syr2k", level3_vendor_available<B>,        tiles_f32},
         {"hemm",  level3_vendor_available<B>,        false},
         {"herk",  level3_vendor_available<B>,        false},
         {"her2k", level3_vendor_available<B>,        false},
-        // WP5 landed the kernels behind these two. geqrf has both native tiers
-        // (geqrf_cta.cc's resident panel and geqrf_blocked.cc's WY driver) and
-        // orgqr has its blocked driver (orgqr_blocked.cc: ormqr on an identity).
-        //
-        // This column answers "is the kernel IN THE BUILD" and NOT "does traffic
-        // reach it" -- the distinction at :207-219, which is how
-        // VENDOR_FREE_BASELINE.md came to claim a working vendor-free gemm.
-        // preferred() is still false for both ops, so a vendor-present build
-        // sends them nothing; a vendor-free build now reaches them through
-        // route_resolve.hh:60-63 instead of throwing. Reading `true` here as
-        // "the default moved" would be exactly the misreading the note warns of.
         {"geqrf", factorization_vendor_available<B>, true},   // geqrf_cta + geqrf_blocked
         {"orgqr", factorization_vendor_available<B>, true},   // orgqr_blocked (ormqr on I)
-        // WP6 landed the kernels behind these three. Same reading rule as the
-        // two rows above: this column answers "is the kernel IN THE BUILD", not
-        // "does traffic reach it". preferred() is still false for all three, so
-        // a vendor-present build sends them nothing and a vendor-free build now
-        // reaches them through route_resolve.hh:60-63 instead of throwing.
         {"getrf", factorization_vendor_available<B>, true},   // getrf_cta + getrf_blocked
         {"getrs", factorization_vendor_available<B>, true},   // getrs_native (laswp + 2 routed trsm)
         {"getri", factorization_vendor_available<B>, true},   // getri_blocked (P into C + 2 routed trsm)
         {"ormqr", factorization_vendor_available<B>, true},   // ormqr_blocked
-        {"potrf", solver_vendor_available<B>,        true},   // potrf_cta (Phase 1) + potrf_blocked (Phase 2)
+        {"potrf", solver_vendor_available<B>,        true},   // potrf_cta + potrf_blocked
         {"syev",  solver_vendor_available<B>,        true},   // cta/blocked/two_stage
         {"gesvd", solver_vendor_available<B>,        true},   // jacobi/cta/blocked
-        {"spmm",  sparse_vendor_available<B>,        false},
+        {"spmm",  sparse_vendor_available<B>,        true},   // spmm_native_csr (gather + atomic scatter)
     };
     for (const auto& e : entries) {
-        // The scalar column was blank, which read as "all types". It is not:
-        // the level-3 tile routes are float-only outside a cuBLAS build. Saying
-        // `float` is the honest width of this row.
         out << "linked," << e.op << ",float,"
             << backend_name(B) << ",,,,,,"
             << (e.native ? "native" : "-") << ","

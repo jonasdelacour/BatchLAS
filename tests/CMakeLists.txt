@@ -48,6 +48,7 @@ set(TEST_TARGETS
     orgqr_tests
     transpose_tests
     iluk_tests
+    spmm_tests
     symm_tests
     hemm_tests
     herk_tests
@@ -153,7 +154,7 @@ set(BATCHLAS_TEST_LABELS_eig
     syev_cta_fused_tests syev_blocked_tests syev_two_stage_tests
     lanczos_tests ritz_values_tests gesvd_tests gesvdj_cta_tests bdsqr_tests bdsdc_tests)
 set(BATCHLAS_TEST_LABELS_sparse
-    iluk_tests)
+    iluk_tests spmm_tests)
 
 # Binaries that dominate the suite. Measured serially on this machine.
 #
@@ -299,7 +300,7 @@ endif()
 # scripts/route_diff.sh captures and diffs the `reached` rows, which is how a
 # change is held to "no dispatch decision moved".
 #
-# Run it against a vendor-free build to turn VENDOR_FREE_BASELINE.md's list of
+# Run it against a vendor-free build to turn docs/design/vendor-free-status.md's list of
 # failing SUITES into a list of missing OPS -- one missing trsm fails a dozen
 # suites, and the suite list cannot tell you that.
 add_custom_target(batchlas_coverage

@@ -235,6 +235,17 @@ namespace batchlas{
         return detail::submit_host_task(ctx, "netlib.spmm", [=] {
             if constexpr (MFormat == MatrixFormat::CSR) {
                 int batch = A_view.batch_size();
+                // alpha == 0 means A is NOT READ -- not its values, not its
+                // column indices, and not its row offsets. Callers hand spmm an
+                // A-adjacent BumpAllocator allocation that is not zeroed
+                // (mempool.hh), and 0 * NaN is NaN, so multiplying an unread A
+                // by a zero alpha poisons the result instead of dropping it.
+                // The native bodies in src/sycl/spmm_native.cc make the same
+                // guarantee (gather skips the nonzero loop, scatter skips the
+                // launch outright); this is the host arm agreeing. Note this is
+                // a skip of the alpha TERM only: C is still written below, so
+                // alpha == 0 && beta == 0 zeroes C rather than leaving it alone.
+                const bool alpha_zero = (alpha == T(0));
                 for (int b = 0; b < batch; ++b) {
                     auto A_b = A_view[b];
                     auto B_b = B_view[b];
@@ -251,10 +262,23 @@ namespace batchlas{
 
                     for (int row = 0; row < m; ++row) {
                         for (int col = 0; col < n; ++col) {
-                            T sum = beta * C_b.at(row, col);
-                            for (int idx = A_b.row_offsets()[row]; idx < A_b.row_offsets()[row + 1]; ++idx) {
-                                int a_col = A_b.col_indices()[idx];
-                                sum += alpha * A_b.data()[idx] * B_b.at(a_col, col);
+                            // beta == 0 means C is NOT READ. Every in-library
+                            // caller passes beta = 0 into a BumpAllocator
+                            // allocation, which is not zeroed (mempool.hh), so
+                            // reading C here propagates whatever was in that
+                            // memory -- NaN included -- into the result. The
+                            // native bodies in src/sycl/spmm_native.cc make the
+                            // same guarantee; this is the host arm agreeing.
+                            T sum = (beta == T(0)) ? T(0)
+                                                   : beta * C_b.at(row, col);
+                            if (!alpha_zero) {
+                                for (int idx = A_b.row_offsets()[row]; idx < A_b.row_offsets()[row + 1]; ++idx) {
+                                    int a_col = A_b.col_indices()[idx];
+                                    // B is only ever touched from inside this
+                                    // loop, so guarding the loop is also what
+                                    // keeps B unread at alpha == 0.
+                                    sum += alpha * A_b.data()[idx] * B_b.at(a_col, col);
+                                }
                             }
                             C_b.at(row, col) = sum;
                         }
