@@ -20,12 +20,12 @@ The superseded root documents these were filed in are preserved at the git tag
 |---|---|---|---|
 | 1 | `src/extensions/ortho.cc:218-224` | the transposed arm builds a view whose extents and `ld` do not describe the memory, against a vector of the wrong length | latent — a shape check routes it to the vendor |
 | 2 | `src/extra/cond.cc:46,52,127` | reaches into `dispatch::detail` and demands the **vendor** `syev` instead of resolving a route | throws in a vendor-free build |
-| 3 | `src/extensions/lanczos.cc:107-112` | the level-3 call carries two right-hand-side columns and one is consumed | 2x work, right answer |
+| 3 | `src/extensions/lanczos.cc:107-111` | the level-3 call carries two right-hand-side columns and one is consumed | 2x work, right answer |
 | 4 | `src/backends/rocsparse.cc:30-31,62-63` | `ConjTrans` maps to the conjugating enum for **real** scalars | inferred wrong answers on AMD; unobservable here |
 | 5 | `src/backends/netlib_lapack.cc:508,520,537,549` | `trsm` reads `B` when `alpha == 0` | `NaN` from unwritten workspace |
 | 6 | `src/backends/netlib_lapack.cc:1389` | `getri` copies `n*n` contiguous elements and ignores both `ld`s | wrong answer at padded `ld` |
 | 7 | `src/backends/trsm_route.hh:40-56` | the heterogeneous-batch rejection has no writer, so the gate cannot fire | a stated safety property that is not enforced |
-| 8 | `src/backends/syrk_custom_dispatch.cc:261-262` | a forced native `syrk` lands on a route that writes both triangles | wrong answer, forced routes only |
+| 8 | `src/backends/syrk_custom_dispatch.cc:261` | a forced native `syrk` lands on a route that writes both triangles | wrong answer, forced routes only |
 | 9 | `src/backends/syr2k_custom_dispatch.cc:210` | a forced native `syr2k` throws a cuBLASDx message it did not ask for | misleading diagnostic |
 
 ## 1. `ortho`'s transposed arm builds a view that does not describe the memory
@@ -52,7 +52,7 @@ Under `transA = Trans` or `ConjTrans`, `is_A_trans` is true and `inv_trans` is `
 
 The lengths coincide only when `A.rows() == m`.
 
-**Why it is not live.** `gemv_op_shape` (`src/backends/gemv_route.hh:75-76`) returns
+**Why it is not live.** `gemv_op_shape` (`src/backends/gemv_route.hh:75-78`) returns
 `std::nullopt` when `X.size() != red_len` or `Y.size() != out_len`, which resolves to
 `{Vendor, Auto}`. The call therefore goes to cuBLAS/OpenBLAS exactly as it did before a native
 `gemv` existed, and the native kernel never sees it.
@@ -94,7 +94,7 @@ same build, so half a fix is no fix.
 
 ## 3. `lanczos` issues a two-column multiply and consumes one column
 
-`src/extensions/lanczos.cc:107-112`:
+`src/extensions/lanczos.cc:107-111`:
 
 ```cpp
 auto padded_vector = MatrixView(Vmem.data() + it*n, n, 2, n, (n+1)*n, batch_size);
@@ -135,7 +135,7 @@ This is the same defect that was **found and fixed** in cuSPARSE. On a real scal
 `CUSPARSE_OPERATION_CONJUGATE_TRANSPOSE` with `CUDA_R_32F`/`CUDA_R_64F` silently produced wrong
 results across the whole real `ConjTrans` family, on **both** operands (a call with
 `transA = NoTrans, transB = ConjTrans` was wrong on the dense operand alone). The fix is the
-type-conditional `cusparse_op<T>` helper at `src/backends/cusparse.cc:29-47`; the complex arms,
+type-conditional `cusparse_op<T>` helper at `src/backends/cusparse.cc:29-39`; the complex arms,
 where the conjugating enum is the distinct and correct operation, were always right and stayed
 untouched.
 
@@ -204,7 +204,7 @@ are reachable only through an environment pin.
 * **`BATCHLAS_SYRK_ROUTE=native` returns a wrong answer.** `{Native, Auto}` passes
   `syrk_use_cuda_custom`, then matches no arm inside `syrk_cuda_custom` (the gram arm needs
   `origin == Auto`, the tile arm needs `algo == TriangularTiles || origin == Auto`) and falls
-  through to `syrk_cublasdx_fallback_gemm` at `src/backends/syrk_custom_dispatch.cc:261-262` —
+  through to `syrk_cublasdx_fallback_gemm` at `src/backends/syrk_custom_dispatch.cc:261` —
   the `DiagFullGemm` route, which **writes both triangles**, clobbering the one the caller did
   not name. **No test in the tree sets `BATCHLAS_SYRK_ROUTE`.**
 * **`BATCHLAS_SYR2K_ROUTE=native` throws a cuBLASDx message it did not ask for.** The throw at
@@ -236,7 +236,7 @@ happen to catch it": could not.
 | the guard | what made it blind | how it was proved | the fix |
 |---|---|---|---|
 | the `trsm` barrier's own regression test | it drove V1 directly at n=16 and *asserted* it had cleared the work-group ladder. Clearing the ladder is necessary and not sufficient — the race needs more than one sub-group, and a final V1 block landing in the `N=16` bucket | applied with the barrier deleted and the library rebuilt: **green, twice** | drive V2 at order 48, q=976, batch=128 (`tests/trsm_tests.cc:538`); orders 48/77/80/109 fail 90-128 of 128 items deterministically, 32/33/64/65/96/155 are clean |
-| all 232 `gemv` cases, on batch stride | every case used the **natural** stride (`a_stride == ld*n`, `x_stride == size*inc`), so a kernel deriving each stride instead of reading it passed the whole suite — while `ortho.cc:218-222` hands it an `A.stride()` its `ld*cols` does not equal, every CGS iteration | break `padstride`: exactly 32 cases red, all four of them new | four `stride_pad` cases, one per kernel body |
+| all 232 `gemv` cases, on batch stride | every case used the **natural** stride (`a_stride == ld*n`, `x_stride == size*inc`), so a kernel deriving each stride instead of reading it passed the whole suite — while `ortho.cc:218-220` hands it an `A.stride()` its `ld*cols` does not equal, every CGS iteration | break `padstride`: exactly 32 cases red, all four of them new | four `stride_pad` cases, one per kernel body |
 | `spmm`'s transposed `nnz` bound | the poison was a NaN at an **out-of-range** column, and the scatter's own range guard `continue`s *before* the multiply — poison and value went in the bin together, so the test was green because of a kernel guard, not the property it named | break `scatterBound` came back green over all 352 cases; two control runs then isolated it (broken bound + guard deleted → segfault; correct bound + guard deleted → 352/352 green) | poison with an **in-range** column and a large **finite** sentinel — an entry the scatter accepts and accumulates. Finite, not NaN: NaN is absorbing under atomic addition, says nothing about where it landed, and a fast-math build may fold the assertion away |
 | `gemv`'s tail sub-group | out-of-range writes landed past the end of the allocation, where nothing was looking. **Three separate breaks came back green over 376 cases** | after adding 64 elements of poisoned guard band, `segTtailwrite` and `segTclampoff2` turn exactly the three partial-tail cases red | allocate guard, poison before the call, assert untouched after |
 | `geqrf`'s tau/beta convention | the only test that could see it opened with `GTEST_SKIP` in a vendor-free build — a **null** in exactly the build the work exists for | break K3 shipped green vendor-free | an independent host `xGEQR2` reference (`ConventionMatchesReferenceLapackWithoutAVendor`); K3 is now red for all four types |
