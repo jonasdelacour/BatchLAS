@@ -5,11 +5,8 @@
 #include <utility>
 
 #include <batchlas/blas/enums.hh>
-// extensions.hh (inv) and extra.hh (norm, transpose, cond) are needed here, not
-// merely by whoever includes this header: the forwarding wrappers below name
-// their targets with a QUALIFIED ::batchlas:: id, and qualified lookup happens
-// at template-definition context, so the declarations have to be visible now.
-// Neither costs measurable parse time -- both are declaration-only.
+// Needed here, not merely by our includers: the qualified ids in the forwards
+// below bind at template-definition context.
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/extra.hh>
 #include <batchlas/blas/matrix.hh>
@@ -18,58 +15,11 @@
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
 
-// batchlas::linalg -- the convenience layer.
-//
-// Everything below is a free function; there are no operator overloads. Two
-// kinds of thing live here:
-//
-//   * elementwise operations, which the BLAS/LAPACK surface has no place for;
-//   * value-returning wrappers, which allocate their own result so the caller
-//     writes `auto C = linalg::matmul(ctx, A, B);` instead of sizing an output,
-//     zeroing it, and threading it through as an out-parameter.
-//
-// The value-returning forms are for code where clarity matters more than
-// controlling allocation -- setup, tests, exploration, the Python bindings. In
-// an inner loop, keep using the out-parameter forms in `batchlas`, which let the
-// caller own and reuse the output.
-//
-// The rule that decides which namespace an operation belongs in:
-//
-//   value-returning, backend from the Queue, workspace from the arena => linalg::
-//   out-parameter, workspace yours                                    => batchlas::
-//
-// So every entry point here takes its backend from the Queue and its workspace
-// from the queue's arena; none of them is templated on Backend and none takes a
-// workspace. Several are one-line forwards to a `batchlas::` entry point that
-// already satisfies the rule -- they are here so that a caller reaching for the
-// convenience layer finds the whole of it in one namespace, rather than having
-// to know which of two namespaces a given convenience form happens to live in.
-//
-// Three exceptions, each documented again at the entry point:
-//
-//   * `norm` and `cond` WAIT. Their `batchlas::` implementations call .wait()
-//     internally (src/extra/norm.cc, src/extra/cond.cc), so unlike everything
-//     else here they do not merely enqueue. Fixing that belongs with those
-//     implementations, not with a wrapper that would hide it.
-//   * `svd` WAITS, for a different reason: it holds local scratch the caller
-//     never sees, and a Matrix's destructor frees its USM without waiting, so
-//     returning early would hand those pages back underneath kernels that have
-//     only been enqueued. The wait is what keeps the scratch alive; it is not a
-//     synchronisation convenience. `eigvalsh` (`work`) and `solve` (`LU`) have
-//     the same shape and no wait -- they survive on a shorter kernel chain
-//     rather than by construction, and want the same treatment or an
-//     arena-owned scratch. Left as they were so this change stays scoped to
-//     what it verifies.
-//   * `transpose` is real-only. transpose_impl moves data without conjugating,
-//     so the complex instantiations are deliberately switched off in
-//     src/extra/transpose.cc rather than hand callers a non-conjugating
-//     "transpose" under a name most read as the adjoint.
-//   * `cond` is float/double only, for the same instantiation reason.
-//
-// The two scalar-type restrictions are spelled as `requires` clauses so that a
-// rejected type is a compile error naming the constraint, rather than an
-// undefined symbol at link time -- which is what the unconstrained wrapper
-// would have produced, and the worst place to learn it.
+// batchlas::linalg -- the convenience layer: elementwise operations, and
+// value-returning wrappers that allocate their own result. Free functions only.
+// Membership rule: value-returning, backend from the Queue, workspace from the
+// arena => linalg::; out-parameter, workspace yours => batchlas::.
+// See docs/cpp-api.md#the-linalg-convenience-layer.
 namespace batchlas::linalg {
 
 // ---- elementwise -----------------------------------------------------------
@@ -106,16 +56,13 @@ using triangular_mask_into = Event(Queue&,
 
 // C = op(A, B), elementwise, for matching shapes. Aliasing C with A or B is
 // allowed: each work-item reads and writes one element.
-//
-// Declared here and instantiated in src/extra/elementwise.cc rather than being
-// a header-only template, matching how the rest of the library handles kernels.
 template <typename T, BinaryOp Op>
 Event elementwise_into(Queue& ctx,
                        const MatrixView<T, MatrixFormat::Dense>& A,
                        const MatrixView<T, MatrixFormat::Dense>& B,
                        const MatrixView<T, MatrixFormat::Dense>& C);
 
-// C = alpha*A + beta*B. Covers scaling (beta = 0) and accumulation.
+// C = alpha*A + beta*B.
 template <typename T>
 Event axpby_into(Queue& ctx,
                  T alpha,
@@ -124,21 +71,12 @@ Event axpby_into(Queue& ctx,
                  const MatrixView<T, MatrixFormat::Dense>& B,
                  const MatrixView<T, MatrixFormat::Dense>& C);
 
-// A <- alpha * A.
 template <typename T>
 Event scale(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, T alpha);
 
-// C = A with everything outside the requested triangle set to zero. `k` follows
-// NumPy: k = 0 keeps the main diagonal, k > 0 moves the boundary toward the
-// upper right, k < 0 toward the lower left. Aliasing C with A is allowed: each
-// work-item reads and writes one element.
-//
-// This is a *mask* over an existing matrix, which is what MatrixView's
-// fill_triangular does not do -- that one generates a triangular matrix from
-// scalars. Masking is what lets an in-place LAPACK factorisation be split into
-// its factors -- recovering R from a geqrf result before orgqr overwrites it is
-// what this was written for. See the note further down about why the qr wrapper
-// that would have used it is not here.
+// C = A with everything outside the requested triangle zeroed. `k` follows
+// NumPy: 0 keeps the main diagonal, > 0 moves the boundary toward the upper
+// right, < 0 toward the lower left. Aliasing C with A is allowed.
 template <typename T>
 Event triangular_mask_into(Queue& ctx,
                            const MatrixView<T, MatrixFormat::Dense>& A,
@@ -233,14 +171,8 @@ inline Matrix<T, MatrixFormat::Dense> scaled(Queue& ctx,
 
 // ---- value-returning wrappers ---------------------------------------------
 
-// matmul's own options -- deliberately NOT GemmOptions. matmul allocates C, so
-// `beta` has no meaning here: any non-zero value would read uninitialised
-// memory, and the wrapper used to overwrite the field silently, so
-// `{.alpha = 2, .beta = 1}` compiled and quietly computed 2*A*B. Omitting the
-// field makes naming it a compile error instead.
-//
-// This lives here, not in blas/options.hh, because it is a linalg-layer type:
-// nothing in batchlas:: takes it.
+// Deliberately NOT GemmOptions: matmul allocates C, so a caller-supplied `beta`
+// would read uninitialised memory. Omitting it makes naming it a compile error.
 template <typename T>
 struct MatmulOptions {
     T alpha = T(1);
@@ -249,8 +181,7 @@ struct MatmulOptions {
     ComputePrecision precision = ComputePrecision::Default;
 };
 
-// C = alpha * op(A) * op(B). The result is allocated here and fully written, so
-// it is never read before it is set and needs no zeroing.
+// C = alpha * op(A) * op(B), allocated here and fully written.
 template <typename T>
 inline Matrix<T, MatrixFormat::Dense> matmul(Queue& ctx,
                                              const MatrixView<T, MatrixFormat::Dense>& A,
@@ -261,21 +192,18 @@ inline Matrix<T, MatrixFormat::Dense> matmul(Queue& ctx,
     const auto m = ta ? A.cols() : A.rows();
     const auto n = tb ? B.rows() : B.cols();
     Matrix<T, MatrixFormat::Dense> C(m, n, A.batch_size());
-    // The designated initialisers are in GemmOptions' declaration order, which
-    // C++20 requires; a field reorder there is a compile error here, not a
-    // silent argument swap.
     gemm(ctx, A, B, C.view(),
          GemmOptions<T>{.alpha = opts.alpha,
-                        .beta = T(0),  // C is fresh; anything else would read uninitialised memory
+                        .beta = T(0),  // C is fresh
                         .transA = opts.transA,
                         .transB = opts.transB,
                         .precision = opts.precision});
     return C;
 }
 
-// Cholesky factor of A, as a new matrix. A is not modified.
 inline constexpr Uplo kDefaultUplo = Uplo::Lower;
 
+// Cholesky factor of A, as a new matrix. A is not modified.
 template <typename T>
 inline Matrix<T, MatrixFormat::Dense> cholesky(Queue& ctx,
                                                const MatrixView<T, MatrixFormat::Dense>& A,
@@ -293,7 +221,6 @@ inline UnifiedVector<typename base_type<T>::type> eigvalsh(Queue& ctx,
                                                            Uplo uplo = kDefaultUplo) {
     UnifiedVector<typename base_type<T>::type> W(static_cast<size_t>(A.rows()) *
                                                  static_cast<size_t>(A.batch_size()));
-    // syev overwrites its input, so it gets a copy rather than the caller's A.
     auto work = detail::like(A);
     MatrixView<T, MatrixFormat::Dense>::copy(ctx, work.view(), A);
     syev(ctx, work.view(), W.to_span(), {.jobz = JobType::NoEigenVectors, .uplo = uplo});
@@ -306,8 +233,7 @@ struct Eigh {
     Matrix<T, MatrixFormat::Dense> vectors;
 };
 
-// Eigenvalues and eigenvectors of a symmetric/Hermitian A. A is not modified;
-// the eigenvectors come back in their own matrix.
+// Eigenvalues and eigenvectors of a symmetric/Hermitian A. A is not modified.
 template <typename T>
 inline Eigh<T> eigh(Queue& ctx,
                     const MatrixView<T, MatrixFormat::Dense>& A,
@@ -320,11 +246,8 @@ inline Eigh<T> eigh(Queue& ctx,
     return Eigh<T>{std::move(W), std::move(V)};
 }
 
-// Solve A X = B for X by LU factorisation. Neither A nor B is modified.
-//
-// The pivots come from the queue's arena rather than a local UnifiedVector: a
-// local would be freed when this function returns, which is before the kernels
-// using it have necessarily run.
+// Solve A X = B for X by LU factorisation. Neither A nor B is modified. The
+// pivots come from the arena: a local would be freed before the kernels run.
 template <typename T>
 inline Matrix<T, MatrixFormat::Dense> solve(Queue& ctx,
                                             const MatrixView<T, MatrixFormat::Dense>& A,
@@ -345,8 +268,7 @@ inline Matrix<T, MatrixFormat::Dense> solve(Queue& ctx,
     return X;
 }
 
-// A with everything below (triu) or above (tril) the k-th diagonal zeroed. A is
-// not modified.
+// A with everything below (triu) or above (tril) the k-th diagonal zeroed.
 template <typename T>
 inline Matrix<T, MatrixFormat::Dense> triu(Queue& ctx,
                                            const MatrixView<T, MatrixFormat::Dense>& A,
@@ -366,13 +288,8 @@ inline Matrix<T, MatrixFormat::Dense> tril(Queue& ctx,
 }
 
 // ---- forwarding aliases ----------------------------------------------------
-//
-// Every call below is EXPLICITLY qualified with ::batchlas::. batchlas::linalg
-// is nested inside batchlas, so unqualified lookup finds the linalg:: name
-// first and stops: `return inv(ctx, A);` written here is infinite recursion,
-// and there is no diagnostic for it -- the call matches, so nothing is
-// ill-formed. The wrappers above get away with unqualified `gemm`/`getrf`/
-// `syev` only because no linalg:: name shadows those.
+// Every call below must stay EXPLICITLY qualified with ::batchlas::: linalg is
+// nested inside batchlas, so `return inv(ctx, A);` here is infinite recursion.
 
 // A^-1, as a new matrix. A is not modified. Square only (getrf's precondition).
 template <typename T>
@@ -381,13 +298,8 @@ inline Matrix<T, MatrixFormat::Dense> inv(Queue& ctx,
     return ::batchlas::inv(ctx, A);
 }
 
-// Plain transpose, NOT the conjugate transpose. Real scalars only: the complex
-// instantiations of ::batchlas::transpose are commented out in
-// src/extra/transpose.cc because transpose_impl moves data without conjugating,
-// so a complex call would either be an undefined symbol at link time or -- if
-// those lines were uncommented -- silently compute a non-conjugating adjoint.
-// The constraint turns the first failure into a compile error and refuses to
-// make the second one possible.
+// Plain transpose, NOT the conjugate transpose. Real only: transpose_impl does
+// not conjugate, so the `requires` makes a complex call a compile error.
 template <typename T>
     requires RealScalar<T>
 inline Matrix<T, MatrixFormat::Dense> transpose(Queue& ctx,
@@ -395,10 +307,8 @@ inline Matrix<T, MatrixFormat::Dense> transpose(Queue& ctx,
     return ::batchlas::transpose<T, MatrixFormat::Dense>(ctx, A);
 }
 
-// One norm per batch item. THIS ONE WAITS: the value-returning
-// ::batchlas::norm calls .wait() internally (src/extra/norm.cc), so unlike the
-// rest of this header it has returned only once the result is readable. Use the
-// out-parameter ::batchlas::norm(ctx, A, norm_type, norms) to stay asynchronous.
+// One norm per batch item. THIS ONE WAITS: ::batchlas::norm calls .wait()
+// internally; its out-parameter form stays asynchronous.
 template <typename T>
 inline UnifiedVector<typename base_type<T>::type> norm(
         Queue& ctx,
@@ -407,15 +317,8 @@ inline UnifiedVector<typename base_type<T>::type> norm(
     return ::batchlas::norm<T, MatrixFormat::Dense>(ctx, A, norm_type);
 }
 
-// Condition number per batch item, as ||A|| * ||A^-1|| (or the eigenvalue ratio
-// for NormType::Spectral). WAITS, for the same reason norm does
-// (src/extra/cond.cc).
-//
-// Real scalars only. ::batchlas::cond is instantiated for float and double on
-// Dense alone (COND_INSTANTIATE in src/extra/cond.cc) because there is no
-// complex implementation behind it; without the constraint a complex call would
-// compile here and fail at link time with an undefined symbol, which is the
-// worst place to learn it.
+// Condition number per batch item, ||A|| * ||A^-1|| (eigenvalue ratio for
+// Spectral). WAITS, like norm. Real only.
 template <typename T>
     requires RealScalar<T>
 inline UnifiedVector<T> cond(Queue& ctx,
@@ -434,19 +337,8 @@ struct Svd {
 };
 
 // Singular value decomposition. A is not modified -- gesvd overwrites its input,
-// so it gets a copy.
-//
-// `vectors` sizes U and Vh through the same helpers the shape check uses
-// (svd_u_cols/svd_vh_rows in blas/enums.hh), so the two cannot disagree.
-// SvdVectors::None is rejected here rather than silently returning empty
-// matrices: a values-only spelling would need default-constructed views for U
-// and Vh, and that path is not exercised by this layer.
-//
-// Complex input can throw std::runtime_error rather than fail to compile: the
-// blocked provider's complex native path is not implemented
-// (src/extensions/gesvd_blocked.cc) and the cta provider rejects
-// max(m, n) > 32, so whether a given complex shape is served depends on the
-// dispatch heuristic and on BATCHLAS_GESVD_PROVIDER.
+// so it gets a copy. Complex input can throw at run time: no blocked route has a
+// complex path, and the cta route rejects max(m, n) > 32.
 template <typename T>
 inline Svd<T> svd(Queue& ctx,
                   const MatrixView<T, MatrixFormat::Dense>& A,
@@ -474,9 +366,8 @@ inline Svd<T> svd(Queue& ctx,
     ::batchlas::gesvd(ctx, work.view(), S.to_span(), U.view(), Vh.view(),
                       GesvdOptions{.jobu = vectors, .jobvh = vectors});
 
-    // `work` is local scratch that gesvd both reads and overwrites, and a
-    // Matrix's destructor frees its USM without waiting -- see the longer note
-    // in qr() for the failure this produces once the queue is under load.
+    // `work` is local scratch gesvd reads and overwrites, and ~Matrix frees its
+    // USM without waiting: returning early frees it under enqueued kernels.
     ctx.wait();
     return Svd<T>{std::move(U), std::move(S), std::move(Vh)};
 }
@@ -487,12 +378,8 @@ struct Lu {
     UnifiedVector<int64_t> pivots;           // rows * batch_size, LAPACK ipiv convention
 };
 
-// LU factorisation with partial pivoting. A is not modified. Square only, which
-// is getrf's own precondition.
-//
-// The pivots are a UnifiedVector rather than an arena lease -- the deliberate
-// opposite of `solve` above. solve's pivots die with the call, so a lease is
-// right; these are returned to the caller, so they have to outlive it.
+// LU factorisation with partial pivoting. A is not modified. Square only. The
+// pivots are a UnifiedVector, not an arena lease as in `solve`: they outlive it.
 template <typename T>
 inline Lu<T> lu(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
     auto LU = detail::like(A);
@@ -503,25 +390,9 @@ inline Lu<T> lu(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
     return Lu<T>{std::move(LU), std::move(pivots)};
 }
 
-// linalg::qr is deliberately absent.
-//
-// It was implemented (geqrf, mask R out of the factored array with
-// triangular_mask_into, then orgqr for Q) and it is WRONG under conditions the
-// test suite reaches: with another linalg::qr-using test having run earlier in
-// the same process, Q R != A by four orders of magnitude, at the same value
-// every time, in 2-4 of 4 concurrent runs of the test binary -- and it passes
-// every time the test runs alone or the suite runs serially.
-//
-// What it is NOT: the answer is deterministic rather than random, so it is not
-// reading freed pages; zero-filling Q and R before use does not change it, so it
-// is not reading them uninitialised; and draining the queue before the local
-// scratch dies does not change it either. It looks like arena state left by an
-// earlier call, but that was not established, and shipping a factorisation that
-// returns confident wrong numbers is worse than not shipping one.
-//
-// triangular_mask_into / triu / tril below were built for it and are correct and
-// tested on their own, so whoever picks this up has the piece that was missing.
-// Reproducer: tests/linalg_layer_tests.cc, run the binary four times at once.
+// linalg::qr is deliberately absent: geqrf + triangular_mask_into + orgqr
+// returned Q R != A once an earlier linalg::qr test had run in the same process,
+// and passed alone; cause unknown (repro: tests/linalg_layer_tests.cc, 4x).
 
 
 }  // namespace batchlas::linalg

@@ -24,6 +24,8 @@ set(TEST_TARGETS
     mempool_tests
     backend_dispatch_tests
     options_api_tests
+    route_vocabulary_tests
+    route_gemm_equivalence_tests
     linalg_layer_tests
     gemm_tests
     syevx_tests
@@ -33,6 +35,9 @@ set(TEST_TARGETS
     matrix_tests
     matrix_view_tests
     trsm_tests
+    potrf_tests
+    geqrf_tests
+    getrf_tests
     ortho_tests
     inverse_tests
     norm_tests
@@ -43,6 +48,7 @@ set(TEST_TARGETS
     orgqr_tests
     transpose_tests
     iluk_tests
+    spmm_tests
     symm_tests
     hemm_tests
     herk_tests
@@ -85,6 +91,12 @@ set(BATCHLAS_SMOKE_TEST_TARGETS
     # is wrong in a way that is hard to trace back here.
     backend_dispatch_tests
     options_api_tests
+    # The route vocabulary pins the legacy BATCHLAS_*_VARIANT / _PROVIDER
+    # spellings onto the new Route type. Those spellings appear in committed
+    # benchmark scripts and in the provenance of recorded results, so a silent
+    # change of meaning would invalidate measurements rather than fail loudly.
+    route_vocabulary_tests
+    route_gemm_equivalence_tests
     linalg_layer_tests
 )
 
@@ -125,11 +137,12 @@ endif()
 set(BATCHLAS_TEST_LABELS_util
     sg_compat_tests util_span_tests util_vector_tests util_device_queue_tests
     mempool_tests matrix_tests matrix_view_tests minibench_cli_tests
-    backend_dispatch_tests options_api_tests linalg_layer_tests)
+    backend_dispatch_tests options_api_tests route_vocabulary_tests
+    route_gemm_equivalence_tests linalg_layer_tests)
 set(BATCHLAS_TEST_LABELS_blas
     device_blas_tests gemm_tests gemv_tests symm_tests hemm_tests herk_tests her2k_tests
     syrk_tests syr2k_tests
-    trmm_tests trsm_tests transpose_tests norm_tests cond_tests inverse_tests)
+    trmm_tests trsm_tests potrf_tests geqrf_tests getrf_tests transpose_tests norm_tests cond_tests inverse_tests)
 set(BATCHLAS_TEST_LABELS_ortho
     ortho_tests ormqr_tests ormqr_cta_tests ormqr_blocked_tests orgqr_tests)
 set(BATCHLAS_TEST_LABELS_tridiag
@@ -141,7 +154,7 @@ set(BATCHLAS_TEST_LABELS_eig
     syev_cta_fused_tests syev_blocked_tests syev_two_stage_tests
     lanczos_tests ritz_values_tests gesvd_tests gesvdj_cta_tests bdsqr_tests bdsdc_tests)
 set(BATCHLAS_TEST_LABELS_sparse
-    iluk_tests)
+    iluk_tests spmm_tests)
 
 # Binaries that dominate the suite. Measured serially on this machine.
 #
@@ -263,6 +276,46 @@ endforeach()
 if(BATCHLAS_SMOKE_TEST_TARGETS)
     add_custom_target(batchlas_smoke_tests DEPENDS ${BATCHLAS_SMOKE_TEST_TARGETS})
 endif()
+
+# ---------------------------------------------------------------------------
+# batchlas_coverage: what this build can do, and what a run reached.
+#
+#   cmake --build build --target batchlas_coverage
+#
+# Writes build/coverage.csv. Two kinds of row:
+#
+#   linked,<op>,,<backend>,...   -- STATIC. What is compiled in. Exact, needs no
+#                                   GPU and no test run, and is the planning
+#                                   input: it names the ops with no native
+#                                   kernel at all.
+#   miss,<op>,<scalar>,...       -- a call that found no route, with the library
+#                                   that would have served it.
+#   reached,<op>,...             -- DYNAMIC, per shape_class: the route the
+#                                   resolver actually returned. Recorded by any
+#                                   build whenever BATCHLAS_COVERAGE_OUT is set,
+#                                   which this target sets. No special configure
+#                                   step -- see dispatch/coverage.hh for why the
+#                                   compile-time option was removed.
+#
+# scripts/route_diff.sh captures and diffs the `reached` rows, which is how a
+# change is held to "no dispatch decision moved".
+#
+# Run it against a vendor-free build to turn docs/design/vendor-free-status.md's list of
+# failing SUITES into a list of missing OPS -- one missing trsm fails a dozen
+# suites, and the suite list cannot tell you that.
+add_custom_target(batchlas_coverage
+    COMMAND ${CMAKE_COMMAND} -E env
+            BATCHLAS_COVERAGE_OUT=${CMAKE_BINARY_DIR}/coverage.csv
+            ${CMAKE_CTEST_COMMAND} --test-dir ${CMAKE_BINARY_DIR} -LE slow || ${CMAKE_COMMAND} -E true
+    # Each test BINARY writes its own shard. Merging is not optional: a single
+    # shared file meant every process truncated the last, so this target used to
+    # report the rows of whichever binary finished last.
+    COMMAND ${PROJECT_SOURCE_DIR}/scripts/coverage_merge.sh ${CMAKE_BINARY_DIR}/coverage.csv
+    COMMAND ${CMAKE_COMMAND} -E echo "coverage table: ${CMAKE_BINARY_DIR}/coverage.csv"
+    DEPENDS ${TEST_TARGETS}
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    VERBATIM
+)
 
 # ---------------------------------------------------------------------------
 # consumer_package_tests: the outside-in guard.

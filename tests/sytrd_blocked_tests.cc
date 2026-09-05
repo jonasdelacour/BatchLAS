@@ -33,10 +33,10 @@ UnifiedVector<double> netlib_ref_eigs_dense(const MatrixView<Real, MatrixFormat:
     auto A_d = A.template astype<double>();
 
     UnifiedVector<double> ref_eigs(static_cast<std::size_t>(n) * static_cast<std::size_t>(batch));
-    const size_t ws_bytes = backend::syev_vendor_buffer_size<Backend::NETLIB, double>(
+    const size_t ws_bytes = batchlas::blas::dispatch::detail::syev_vendor_buffer_size_or_throw<Backend::NETLIB, double>(
         ctx_cpu, A_d.view(), ref_eigs.to_span(), JobType::NoEigenVectors, Uplo::Lower);
     UnifiedVector<std::byte> ws(ws_bytes, std::byte{0});
-    backend::syev_vendor<Backend::NETLIB, double>(
+    batchlas::blas::dispatch::detail::syev_vendor_or_throw<Backend::NETLIB, double>(
         ctx_cpu, A_d.view(), ref_eigs.to_span(), JobType::NoEigenVectors, Uplo::Lower, ws.to_span()).wait();
     ctx_cpu.wait();
 
@@ -51,10 +51,10 @@ UnifiedVector<typename base_type<Scalar>::type> netlib_ref_eigs_dense_native(con
 
     Queue ctx_cpu("cpu");
     UnifiedVector<Real> ref_eigs(static_cast<std::size_t>(A.rows()) * static_cast<std::size_t>(A.batch_size()));
-    const size_t ws_bytes = backend::syev_vendor_buffer_size<Backend::NETLIB, Scalar>(
+    const size_t ws_bytes = batchlas::blas::dispatch::detail::syev_vendor_buffer_size_or_throw<Backend::NETLIB, Scalar>(
         ctx_cpu, A, ref_eigs.to_span(), JobType::NoEigenVectors, Uplo::Lower);
     UnifiedVector<std::byte> ws(ws_bytes, std::byte{0});
-    backend::syev_vendor<Backend::NETLIB, Scalar>(
+    batchlas::blas::dispatch::detail::syev_vendor_or_throw<Backend::NETLIB, Scalar>(
         ctx_cpu, A, ref_eigs.to_span(), JobType::NoEigenVectors, Uplo::Lower, ws.to_span()).wait();
     ctx_cpu.wait();
 

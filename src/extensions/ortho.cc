@@ -1,4 +1,5 @@
 #include "../linalg-impl.hh"
+#include <batchlas/blas/dispatch/route_compiled.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
@@ -106,7 +107,12 @@ namespace batchlas {
         handle.setStream(ctx);
         BumpAllocator pool(workspace);
         auto [m, k] = get_effective_dims(A, transA);
-        if constexpr (B == Backend::NETLIB) {
+        // `B == Backend::NETLIB` meant "there are no device kernels here", which
+        // is a property of the DEVICE, not of the backend enum. Asked directly it
+        // stays correct for a host queue reached through any backend. Today's
+        // outcome is unchanged: NETLIB is the only backend that runs on a host
+        // device in this tree.
+        if (ctx.device().type != DeviceType::GPU) {
             algo = OrthoAlgorithm::Householder;
         }
         bool is_A_trans = transA == Transpose::Trans || transA == Transpose::ConjTrans;
@@ -168,10 +174,12 @@ namespace batchlas {
             return raw != nullptr && std::string(raw) == "gemm";
         }();
         constexpr int gram_max_k = std::is_same_v<T, float> ? 64 : 128;
+        // "syrk reaches the gram tile kernel on this route", not "this is NVIDIA".
         const bool gram_via_syrk =
-            (B == Backend::CUDA) && gram_is_real && k <= gram_max_k && !gram_pinned_to_gemm;
+            dispatch::level3_tile_route_available<B, T> && gram_is_real &&
+            k <= gram_max_k && !gram_pinned_to_gemm;
         auto gram_into_C = [&](const auto& in_mat) {
-            if constexpr (B == Backend::CUDA && gram_is_real) {
+            if constexpr (dispatch::level3_tile_route_available<B, T> && gram_is_real) {
                 if (gram_via_syrk) {
                     return syrk<B, T>(ctx, in_mat, C, T(1), T(0), Uplo::Lower, inv_trans);
                 }

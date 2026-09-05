@@ -1,5 +1,8 @@
 #pragma once
 
+#include <stdexcept>
+#include <string>
+
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/blas/matrix.hh>
@@ -20,7 +23,44 @@ template <typename T>
 using orgqr_buffer_size = size_t(Queue&,
                                  const MatrixView<T, MatrixFormat::Dense>&,
                                  Span<T>);
+
+// backend::orgqr_vendor's signature, spelled out from the definition rather than
+// aliased to sig::orgqr: a vendor parameter list can differ from the public one.
+template <typename T>
+using orgqr_vendor = Event(Queue&,
+                           const MatrixView<T, MatrixFormat::Dense>&,
+                           Span<T>,
+                           Span<std::byte>);
+
+// backend::orgqr_vendor_buffer_size's signature, spelled out from the definition rather than
+// aliased to sig::orgqr_buffer_size: a vendor parameter list can differ from the public one.
+template <typename T>
+using orgqr_vendor_buffer_size = size_t(Queue&,
+                                        const MatrixView<T, MatrixFormat::Dense>&,
+                                        Span<T>);
 }  // namespace sig
+
+// Validation for the POSITIONAL entry point, which had none.
+//
+// Runs in the facade ahead of the shape builder, for the same reason as
+// geqrf_validate_params and potrf_validate_params (potrf.hh:66-84).
+//
+// SCOPE IS DELIBERATELY MINIMAL. In particular this does NOT check `n <= m`,
+// although RouteTable<Op::orgqr,T>::supports() does. Q's columns live in R^m, so
+// n > m is meaningless -- but every backend in this tree currently accepts such a
+// view and hands it to a vendor, and turning that into a throw is a user-visible
+// behaviour change that belongs in its own commit with its own test
+// (potrf.hh:59-65). In supports() the same condition merely routes the view to
+// the vendor, which is what happens today. It also does not check tau's length:
+// options.hh:731-732 already does require_span_at_least on the arena spellings.
+template <typename T>
+inline void orgqr_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
+    if (A.rows() < 0 || A.cols() < 0) {
+        throw std::invalid_argument(
+            "ORGQR: Matrix dimensions cannot be negative (rows=" +
+            std::to_string(A.rows()) + ", cols=" + std::to_string(A.cols()) + ")");
+    }
+}
 
 
 template <Backend B, typename T>
@@ -50,6 +90,30 @@ inline size_t orgqr_buffer_size(Queue& ctx,
 }
 
 }  // namespace batchlas
+
+
+namespace batchlas::backend {
+
+// The vendor path for orgqr.
+//
+// DECLARATION ONLY -- see the note on gemm_vendor in gemm.hh. The public
+// `orgqr` used to be defined inside each vendor TU, so dropping a vendor library
+// dropped the public entry point with it; WP0 S5 moves that definition to
+// src/dispatch/entry_points/factorization.cc and leaves the vendor
+// implementation here, named as such.
+template <Backend B, typename T>
+Event orgqr_vendor(Queue& ctx,
+                   const MatrixView<T, MatrixFormat::Dense>& A,
+                   Span<T> tau,
+                   Span<std::byte> workspace);
+
+
+template <Backend B, typename T>
+size_t orgqr_vendor_buffer_size(Queue& ctx,
+                                const MatrixView<T, MatrixFormat::Dense>& A,
+                                Span<T> tau);
+
+}  // namespace batchlas::backend
 
 namespace batchlas {
 

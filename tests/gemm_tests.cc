@@ -11,6 +11,7 @@
 #include <batchlas/backend_config.h>
 #if BATCHLAS_HAS_CUDA_BACKEND
 #include "../src/backends/gemm_cublasdx_dispatch.hh"
+#include "../src/backends/gemm_variant.hh"
 #endif
 #include "../src/sycl/gemm_kernels.hh"
 #include "test_utils.hh"
@@ -326,9 +327,21 @@ TEST(GemmDispatchPolicyTest, Selects128x128K8ForPaddedLeadingDimensionFloatNN) {
 
 // An ld that breaks 16-byte alignment must still fall back, since the
 // unpredicated path's 128-bit accesses would be misaligned.
-TEST(GemmDispatchPolicyTest, SelectsGenericS2U1ForUnalignedLeadingDimensionFloatNN) {
+// WP2 E4 moved this. It used to pin the generic 128x32x32 route, on the
+// grounds that the 128x128 kernel's PREDICATED path had never been benchmarked
+// against it. Measured now, at exactly this shape class -- dimensions that tile
+// perfectly but a leading dimension that does not, so both kernels are in their
+// slow mode -- the predicated path wins by a very large margin:
+//
+//   n=256 ld+2  generic 7 237 -> predicated 23 966  (3.31x)
+//   n=512 ld+2  generic 8 399 -> predicated 36 862  (4.39x)
+//
+// This is the shape class that matters most for it, too: a panel is a sub-view
+// carrying its parent's leading dimension, so unaligned ld is what BatchLAS's
+// own factorisations hand to gemm. See docs/perf/gemm.md#float-nn-at-max_dim-32.
+TEST(GemmDispatchPolicyTest, SelectsPredicated128x128ForUnalignedLeadingDimensionFloatNN) {
     EXPECT_EQ(SelectSyclKernelVariantForTest(256, 256, 256, Transpose::NoTrans, Transpose::NoTrans, 258),
-              batchlas::sycl_gemm::KernelVariant::Tiled128x32RegisterK32S2U1Generic);
+              batchlas::sycl_gemm::KernelVariant::Tiled128x128RegisterK8);
 }
 
 TEST(GemmDispatchPolicyTest, KeepsTransposeHeavyCasesOnK32TransposeAlias) {
@@ -341,7 +354,9 @@ TEST(GemmDispatchPolicyTest, KeepsSkinnyTallNNOnLegacyK16PathUntilBenchmarked) {
               batchlas::sycl_gemm::KernelVariant::Tiled128x32RegisterK16);
 }
 
-#if BATCHLAS_HAS_CUDA_BACKEND
+// Guarded on the LIBRARY, not the family: cublasdx_gemm_select_variant lives
+// in gemm_cublasdx_dispatch.cc, which is compiled only when cuBLAS is found.
+#if BATCHLAS_HAS_CUBLAS
 TEST(GemmCuBLASDxDispatchPolicyTest, SelectsCuBLASDxNNWhenRequested) {
     Matrix<float> A(128, 128, 1);
     Matrix<float> B(128, 128, 1);
@@ -349,7 +364,7 @@ TEST(GemmCuBLASDxDispatchPolicyTest, SelectsCuBLASDxNNWhenRequested) {
     EXPECT_EQ(batchlas::backend::cublasdx_gemm_select_variant(A.view(), B.view(), C.view(), Transpose::NoTrans, Transpose::NoTrans),
               batchlas::backend::cublasdx_gemm::CuBLASDxGemmVariant::CuBLASDx32x32x32NN);
 }
-#endif // BATCHLAS_HAS_CUDA_BACKEND
+#endif // BATCHLAS_HAS_CUBLAS
 
 // Test GEMM operation using identity matrix (C = A * I = A)
 TYPED_TEST(GemmTest, GemmWithIdentityMatrix) {
@@ -2032,6 +2047,87 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x128K8KernelRagged) {
     ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, m, n, batch_size, tol));
 }
 
+// The 64x64x16 wide-scalar kernel, which unlike every other register-tiled
+// variant serves ALL FOUR scalar types -- that is the whole point of it, so
+// there is deliberately no float-only skip here.
+//
+// The oracle is Tiled16, not the vendor. Every other forced-kernel test in
+// this file compares against BATCHLAS_GEMM_VARIANT=vendor, which is the
+// stronger oracle where a vendor exists -- but this kernel's entire reason to
+// exist is the vendor-free build, and there the forced-vendor arm degrades
+// back to a native route. A test whose reference silently becomes the thing
+// under test still passes; it just stops testing. Tiled16 is an independent
+// implementation (one accumulator per thread, std::complex operator*,
+// scalar epilogue) that is present in both builds, so this comparison means
+// the same thing either way.
+TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister64x64K16WideAligned) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    // Exact multiple of 64 in m and n and of 16 in k, so the unpredicated
+    // fast path is the one that runs.
+    constexpr int size = 256;
+    constexpr int batch_size = 2;
+    auto A = Matrix<ScalarType>::Random(size, size, false, batch_size);
+    auto B = Matrix<ScalarType>::Random(size, size, false, batch_size);
+    auto C = Matrix<ScalarType>::Random(size, size, false, batch_size);
+    auto C_ref = C.clone();
+
+    {
+        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "64x64x16wide");
+        gemm(*(this->ctx), A.view(), B.view(), C.view(),
+             {.alpha = ScalarType(2), .beta = ScalarType(-1)});
+    }
+    {
+        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "tiled16");
+        gemm(*(this->ctx), A.view(), B.view(), C_ref.view(),
+             {.alpha = ScalarType(2), .beta = ScalarType(-1)});
+    }
+    this->ctx->wait();
+
+    auto tol = test_utils::tolerance<ScalarType>() * 100;
+    ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, size, size, batch_size, tol));
+}
+
+TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister64x64K16WideRagged) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    // Deliberately ragged in all three dimensions: m and n are not multiples
+    // of 64 and k is not a multiple of 16, so every tile edge is predicated
+    // and the k loop has a partial final step.
+    constexpr int m = 200;
+    constexpr int n = 130;
+    constexpr int k = 70;
+    constexpr int batch_size = 3;
+    auto A = Matrix<ScalarType>::Random(m, k, false, batch_size);
+    auto B = Matrix<ScalarType>::Random(k, n, false, batch_size);
+    auto C = Matrix<ScalarType>::Random(m, n, false, batch_size);
+    auto C_ref = C.clone();
+
+    // alpha != 1 and beta != 0 on purpose: a beta == 0 test structurally
+    // cannot see an epilogue defect, and the epilogue is where the two paths
+    // differ most.
+    {
+        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "64x64x16wide");
+        gemm(*(this->ctx), A.view(), B.view(), C.view(),
+             {.alpha = ScalarType(2), .beta = ScalarType(-1)});
+    }
+    {
+        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "tiled16");
+        gemm(*(this->ctx), A.view(), B.view(), C_ref.view(),
+             {.alpha = ScalarType(2), .beta = ScalarType(-1)});
+    }
+    this->ctx->wait();
+
+    auto tol = test_utils::tolerance<ScalarType>() * 100;
+    ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, m, n, batch_size, tol));
+}
+
 TYPED_TEST(GemmTest, BatchedGemmForcedSyclVariantConjugateTranspose) {
     using ScalarType = typename TestFixture::ScalarType;
     constexpr Backend BackendType = TestFixture::BackendType;
@@ -2067,6 +2163,404 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclVariantConjugateTranspose) {
     this->ctx->wait();
 
     auto tol = test_utils::tolerance<ScalarType>() * 50;
+    ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, m, n, batch_size, tol));
+}
+
+// ---------------------------------------------------------------------------
+// The Route adapter, on live views.
+//
+// tests/route_gemm_equivalence_tests.cc proves the DECISION -- resolve_gemm_route
+// over an OpShape -- matches what gemm_use_sycl_custom used to compute. It says
+// nothing about the step that now feeds it: gemm_op_shape(), which turns three
+// MatrixViews and a Queue into that OpShape. These tests cover exactly that
+// seam, because a bug there would be silent: the numerical comparisons above
+// force BATCHLAS_GEMM_VARIANT=sycl and diff against vendor, so an adapter that
+// wrongly returned Vendor for both arms would compare vendor with vendor and
+// still pass.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+template <typename ScalarType>
+batchlas::dispatch::Route route_for(Queue& ctx, int m, int n, int k, int batch,
+                                    Transpose transA = Transpose::NoTrans,
+                                    Transpose transB = Transpose::NoTrans,
+                                    ComputePrecision precision = ComputePrecision::Default,
+                                    bool vendor_available = true) {
+    const int a_rows = transA == Transpose::NoTrans ? m : k;
+    const int a_cols = transA == Transpose::NoTrans ? k : m;
+    const int b_rows = transB == Transpose::NoTrans ? k : n;
+    const int b_cols = transB == Transpose::NoTrans ? n : k;
+    Matrix<ScalarType> A(a_rows, a_cols, batch);
+    Matrix<ScalarType> B(b_rows, b_cols, batch);
+    Matrix<ScalarType> C(m, n, batch);
+    return batchlas::backend::gemm_route<ScalarType>(
+        ctx, A.view(), B.view(), C.view(), transA, transB, precision, vendor_available);
+}
+
+} // namespace
+
+TYPED_TEST(GemmTest, RouteAdapterUnsetTakesVendorForTinyShape) {
+    using ScalarType = typename TestFixture::ScalarType;
+    ScopedEnvVar clear_canonical("BATCHLAS_GEMM_ROUTE", "");
+    ScopedEnvVar clear_legacy("BATCHLAS_GEMM_VARIANT", "");
+
+    // 8x8x8 at batch 1 is far outside every measured window, and GEMM's unset
+    // default is Vendor. This is the cell that caught the order-walk fallback
+    // bug: taking "first merely supported" would answer Native here.
+    EXPECT_TRUE(batchlas::dispatch::is_vendor(
+        route_for<ScalarType>(*(this->ctx), 8, 8, 8, 1)));
+}
+
+TYPED_TEST(GemmTest, RouteAdapterAutoHonoursTheMeasuredWindow) {
+    using ScalarType = typename TestFixture::ScalarType;
+    if (this->ctx->device().type != DeviceType::GPU) {
+        GTEST_SKIP() << "the measured window is GPU-only";
+    }
+    ScopedEnvVar clear_canonical("BATCHLAS_GEMM_ROUTE", "");
+    ScopedEnvVar request("BATCHLAS_GEMM_VARIANT", "auto");
+
+    // The in-window shape differs per type, and after WP2 E4 that difference is
+    // the point rather than an inconvenience: float's window is now only
+    // max_dim <= 32, while double's still runs to 512.
+    if constexpr (test_utils::is_complex<ScalarType>::value) {
+        // Complex is excluded outright, and this is NOT merely an unmeasured
+        // window. select_kernel_variant's register ladder for complex is
+        // reachable only through Tiled64x64RegisterK16Wide, which requires
+        // min_dim >= 256 and an aligned NN shape; widening preferred() without
+        // that gate firing routes complex to Tiled16, measured 3.2-7.1x slower
+        // than cuBLAS. See docs/perf/gemm.md#evidence-for-each-boundary.
+        EXPECT_TRUE(batchlas::dispatch::is_vendor(
+            route_for<ScalarType>(*(this->ctx), 256, 256, 256, 128)));
+    } else if constexpr (std::is_same_v<ScalarType, float>) {
+        const auto in_window = route_for<ScalarType>(*(this->ctx), 32, 32, 32, 128);
+        EXPECT_TRUE(batchlas::dispatch::is_native(in_window));
+        EXPECT_EQ(in_window.algo, batchlas::dispatch::Algorithm::RegisterTiled);
+
+        // WP2 E4 retired float's 128..512 NN window and its whole transposed
+        // window. Both are asserted here in their NEW direction, so the change
+        // is pinned rather than merely absent -- a removed assertion cannot
+        // detect a silent revert. Measured 0.40-0.98x (NN) and 0.34-0.55x
+        // (transposed) of cuBLAS; see docs/perf/gemm.md#float-nn-at-max_dim-32.
+        EXPECT_TRUE(batchlas::dispatch::is_vendor(
+            route_for<ScalarType>(*(this->ctx), 256, 256, 256, 128)));
+        EXPECT_TRUE(batchlas::dispatch::is_vendor(
+            route_for<ScalarType>(*(this->ctx), 256, 256, 256, 128, Transpose::Trans,
+                                  Transpose::NoTrans)));
+    } else {
+        const auto in_window = route_for<ScalarType>(*(this->ctx), 256, 256, 256, 128);
+        EXPECT_TRUE(batchlas::dispatch::is_native(in_window));
+        EXPECT_EQ(in_window.algo, batchlas::dispatch::Algorithm::RegisterTiled);
+    }
+
+    // 1024^3 used to be outside the window for every type. WP2 E5 removed
+    // double's upper bound -- measured 1.13x at 1024^3 and 1.14x at 2048^3, and
+    // the gap comes from an FP64 issue-rate ceiling that does not vary with
+    // size -- so double now claims it and everything else still declines.
+    if constexpr (std::is_same_v<ScalarType, double>) {
+        EXPECT_TRUE(batchlas::dispatch::is_native(
+            route_for<ScalarType>(*(this->ctx), 1024, 1024, 1024, 128)));
+
+        // E5 also dropped the squareness requirement for double: a panel update
+        // (large m and n, small k) is the shape BatchLAS itself issues most,
+        // measured 1.10-1.41x. And the one shape it must still decline is k=1,
+        // a rank-1 update, where cuBLAS has a dedicated path and native is
+        // 0.49x.
+        EXPECT_TRUE(batchlas::dispatch::is_native(
+            route_for<ScalarType>(*(this->ctx), 992, 992, 32, 128)));
+        EXPECT_TRUE(batchlas::dispatch::is_vendor(
+            route_for<ScalarType>(*(this->ctx), 512, 512, 1, 128)));
+    } else {
+        EXPECT_TRUE(batchlas::dispatch::is_vendor(
+            route_for<ScalarType>(*(this->ctx), 1024, 1024, 1024, 128)));
+    }
+}
+
+TYPED_TEST(GemmTest, RouteAdapterForcedSyclBypassesTheWindowButNotCorrectness) {
+    using ScalarType = typename TestFixture::ScalarType;
+    ScopedEnvVar clear_canonical("BATCHLAS_GEMM_ROUTE", "");
+    ScopedEnvVar request("BATCHLAS_GEMM_VARIANT", "sycl");
+
+    // Non-square, batch 1, possibly not even a GPU: every speed condition is
+    // false and the route is still Native, because forcing is what `preferred`
+    // exists to be overridden by.
+    EXPECT_TRUE(batchlas::dispatch::is_native(
+        route_for<ScalarType>(*(this->ctx), 7, 5, 3, 1)));
+
+    // But a non-default precision is a CORRECTNESS condition, and forcing must
+    // not be able to run the kernel where it would compute the wrong answer.
+    EXPECT_TRUE(batchlas::dispatch::is_vendor(
+        route_for<ScalarType>(*(this->ctx), 7, 5, 3, 1, Transpose::NoTrans,
+                              Transpose::NoTrans, ComputePrecision::F32)));
+}
+
+TYPED_TEST(GemmTest, RouteAdapterLegacyNativeStillMeansTheRawVendorPath) {
+    using ScalarType = typename TestFixture::ScalarType;
+    if (this->ctx->device().type != DeviceType::GPU) {
+        GTEST_SKIP() << "the measured window is GPU-only";
+    }
+    ScopedEnvVar clear_canonical("BATCHLAS_GEMM_ROUTE", "");
+    ScopedEnvVar request("BATCHLAS_GEMM_VARIANT", "native");
+
+    // The collision documented on parse_legacy_route_value, reaching all the
+    // way through the adapter: on a shape that Auto would send to the native
+    // kernel, the legacy spelling "native" must still land on the vendor.
+    EXPECT_TRUE(batchlas::dispatch::is_vendor(
+        route_for<ScalarType>(*(this->ctx), 256, 256, 256, 128)));
+}
+
+TYPED_TEST(GemmTest, RouteAdapterMismatchedViewsTakeVendor) {
+    using ScalarType = typename TestFixture::ScalarType;
+    ScopedEnvVar clear_canonical("BATCHLAS_GEMM_ROUTE", "");
+    ScopedEnvVar request("BATCHLAS_GEMM_VARIANT", "sycl");
+
+    // OpShape is a POD of scalars and cannot say "these views disagree", so
+    // gemm_op_shape returns nullopt instead. Even a forced native request has
+    // to yield here -- this is the batch-size / k==k_b / m==C.rows() arm of the
+    // old gemm_custom_problem_supported.
+    {
+        Matrix<ScalarType> A(64, 64, 4);
+        Matrix<ScalarType> B(64, 64, 4);
+        Matrix<ScalarType> C(32, 64, 4);   // wrong rows
+        EXPECT_TRUE(batchlas::dispatch::is_vendor(batchlas::backend::gemm_route<ScalarType>(
+            *(this->ctx), A.view(), B.view(), C.view(), Transpose::NoTrans, Transpose::NoTrans,
+            ComputePrecision::Default)));
+    }
+    {
+        Matrix<ScalarType> A(64, 64, 4);
+        Matrix<ScalarType> B(64, 64, 8);   // batch mismatch
+        Matrix<ScalarType> C(64, 64, 4);
+        EXPECT_TRUE(batchlas::dispatch::is_vendor(batchlas::backend::gemm_route<ScalarType>(
+            *(this->ctx), A.view(), B.view(), C.view(), Transpose::NoTrans, Transpose::NoTrans,
+            ComputePrecision::Default)));
+    }
+}
+
+TYPED_TEST(GemmTest, RouteAdapterWithoutAVendorFallsBackToSupportedNative) {
+    using ScalarType = typename TestFixture::ScalarType;
+    ScopedEnvVar clear_canonical("BATCHLAS_GEMM_ROUTE", "");
+    ScopedEnvVar clear_legacy("BATCHLAS_GEMM_VARIANT", "");
+
+    // The configuration this whole work package is building toward. The same
+    // 8x8x8 that takes the vendor above has to be served natively once there is
+    // no vendor to take -- supported-but-unpreferred means slower, not wrong.
+    EXPECT_TRUE(batchlas::dispatch::is_native(
+        route_for<ScalarType>(*(this->ctx), 8, 8, 8, 1, Transpose::NoTrans,
+                              Transpose::NoTrans, ComputePrecision::Default,
+                              /*vendor_available=*/false)));
+
+    // ...but not where it would be wrong. A non-default precision has no native
+    // route at all, so even with no vendor available the answer stays Vendor,
+    // which is the honest "there is nothing that can serve this" signal.
+    EXPECT_TRUE(batchlas::dispatch::is_vendor(
+        route_for<ScalarType>(*(this->ctx), 8, 8, 8, 1, Transpose::NoTrans,
+                              Transpose::NoTrans, ComputePrecision::F32,
+                              /*vendor_available=*/false)));
+}
+
+// ---------------------------------------------------------------------------
+// The 128x128x8 kernel on genuine SUB-VIEWS.
+//
+// Every operand a blocked/panel algorithm hands to gemm is a sub-view carrying
+// its PARENT's leading dimension: a 128-row A with lda=512. No other test in
+// this file produces one -- they all build standalone Matrix objects, where
+// ld == rows by construction. That matters for two separate reasons:
+//
+//   * can_use_128x128_fast_path (register_128x128.hh:71-91) tests ld % 4 and a
+//     16-byte base pointer, NOT contiguity, so the ALIGNED leg can and does
+//     fire on a strided sub-view. Nothing has ever checked that it is right
+//     there.
+//   * MatrixView::operator()(Slice, Slice) offsets the base by
+//     c_start*ld + r_start (matrix.hh:1129-1141), so an odd r_start breaks the
+//     16-byte alignment and drops the same call onto the PREDICATED leg.
+//
+// Both legs are exercised below, and the comparison is over the WHOLE parent,
+// not just the sub-block, so a write that escapes the view's logical extent
+// fails the test rather than going unnoticed.
+// ---------------------------------------------------------------------------
+TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x128K8SubViewAlignedLeg) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "128x128x8 SYCL register kernel is float-only";
+    } else {
+
+    constexpr int P = 512;          // parent order
+    constexpr int batch_size = 2;
+    constexpr int m = 128, n = 128, k = 128;
+    constexpr int r0 = 128;         // multiple of 4: base stays 16-byte aligned
+
+    auto PA = Matrix<ScalarType>::Random(P, P, false, batch_size);
+    auto PB = Matrix<ScalarType>::Random(P, P, false, batch_size);
+    auto PC = Matrix<ScalarType>::Random(P, P, false, batch_size);
+    auto PC_ref = PC.clone();
+
+    auto Asub = [&](Matrix<ScalarType>& M) { return M.view()(Slice(r0, r0 + m), Slice(0, k)); };
+    auto Bsub = [&](Matrix<ScalarType>& M) { return M.view()(Slice(0, k), Slice(0, n)); };
+    auto Csub = [&](Matrix<ScalarType>& M) { return M.view()(Slice(r0, r0 + m), Slice(0, n)); };
+
+    ASSERT_EQ(Asub(PA).ld(), P);    // the point of the test
+    ASSERT_NE(Asub(PA).ld(), Asub(PA).rows());
+
+    {
+        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "128x128x8");
+        gemm(*(this->ctx), Asub(PA), Bsub(PB), Csub(PC),
+             {.alpha = ScalarType(2), .beta = ScalarType(-1)});
+    }
+    {
+        ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
+        gemm(*(this->ctx), Asub(PA), Bsub(PB), Csub(PC_ref),
+             {.alpha = ScalarType(2), .beta = ScalarType(-1)});
+    }
+    this->ctx->wait();
+
+    auto tol = test_utils::tolerance<ScalarType>() * 100;
+    ASSERT_TRUE(AssertBatchedMatrixNear(PC, PC_ref, P, P, batch_size, tol));
+    }
+}
+
+TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x128K8SubViewPredicatedLeg) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "128x128x8 SYCL register kernel is float-only";
+    } else {
+
+    constexpr int P = 512;
+    constexpr int batch_size = 2;
+    constexpr int m = 200, n = 130, k = 70;   // ragged in all three
+    constexpr int r0 = 3;                     // NOT a multiple of 4
+
+    auto PA = Matrix<ScalarType>::Random(P, P, false, batch_size);
+    auto PB = Matrix<ScalarType>::Random(P, P, false, batch_size);
+    auto PC = Matrix<ScalarType>::Random(P, P, false, batch_size);
+    auto PC_ref = PC.clone();
+
+    auto Asub = [&](Matrix<ScalarType>& M) { return M.view()(Slice(r0, r0 + m), Slice(0, k)); };
+    auto Bsub = [&](Matrix<ScalarType>& M) { return M.view()(Slice(0, k), Slice(0, n)); };
+    auto Csub = [&](Matrix<ScalarType>& M) { return M.view()(Slice(r0, r0 + m), Slice(0, n)); };
+
+    {
+        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "128x128x8");
+        gemm(*(this->ctx), Asub(PA), Bsub(PB), Csub(PC),
+             {.alpha = ScalarType(2), .beta = ScalarType(-1)});
+    }
+    {
+        ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
+        gemm(*(this->ctx), Asub(PA), Bsub(PB), Csub(PC_ref),
+             {.alpha = ScalarType(2), .beta = ScalarType(-1)});
+    }
+    this->ctx->wait();
+
+    auto tol = test_utils::tolerance<ScalarType>() * 100;
+    ASSERT_TRUE(AssertBatchedMatrixNear(PC, PC_ref, P, P, batch_size, tol));
+    }
+}
+
+
+// The wide-scalar kernel's predicated leg on a SUB-VIEW: ragged extents AND a
+// leading dimension inherited from a 512-wide parent, with a row offset of 3 so
+// neither the base pointer nor the ld is 16-byte aligned for any scalar. This
+// is the shape a panel update actually hands to gemm, and it is the leg the
+// router would have to reach for complex. The Ragged test above is contiguous
+// (ld == rows), so it cannot see an ld-dependent staging defect.
+TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister64x64K16WideSubViewPredicatedLeg) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    constexpr int P = 512;
+    constexpr int batch_size = 2;
+    constexpr int m = 200, n = 130, k = 70;   // ragged in all three
+    constexpr int r0 = 3;                     // unaligned base for every scalar
+
+    auto PA = Matrix<ScalarType>::Random(P, P, false, batch_size);
+    auto PB = Matrix<ScalarType>::Random(P, P, false, batch_size);
+    auto PC = Matrix<ScalarType>::Random(P, P, false, batch_size);
+    auto PC_ref = PC.clone();
+
+    auto Asub = [&](Matrix<ScalarType>& M) { return M.view()(Slice(r0, r0 + m), Slice(0, k)); };
+    auto Bsub = [&](Matrix<ScalarType>& M) { return M.view()(Slice(0, k), Slice(0, n)); };
+    auto Csub = [&](Matrix<ScalarType>& M) { return M.view()(Slice(r0, r0 + m), Slice(0, n)); };
+
+    {
+        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "64x64x16wide");
+        gemm(*(this->ctx), Asub(PA), Bsub(PB), Csub(PC),
+             {.alpha = ScalarType(2), .beta = ScalarType(-1)});
+    }
+    {
+        // Reference is Tiled16, NOT the vendor -- matching WideAligned (:2063)
+        // and WideRagged (:2094). A vendor reference is INERT in exactly the
+        // vendor-free build this kernel exists for: resolve_route falls back to
+        // a supported native route when no vendor is present, which for this
+        // shape is the kernel under test, so the test would compare it against
+        // itself and pass over any defect.
+        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "tiled16");
+        gemm(*(this->ctx), Asub(PA), Bsub(PB), Csub(PC_ref),
+             {.alpha = ScalarType(2), .beta = ScalarType(-1)});
+    }
+    this->ctx->wait();
+
+    auto tol = test_utils::tolerance<ScalarType>() * 100;
+    ASSERT_TRUE(AssertBatchedMatrixNear(PC, PC_ref, P, P, batch_size, tol));
+}
+
+// ---------------------------------------------------------------------------
+// The transposed register launchers hard-wire OpA/OpB, so forcing one with a
+// DIFFERENT transpose combination than it was instantiated for silently
+// computes the wrong answer. ConjTrans is the dangerous case: it is a distinct
+// enum value (NoTrans=0, Trans=1, ConjTrans=2), so a launcher instantiated with
+// `Trans` drops the conjugation entirely and still returns a plausible matrix.
+//
+// This test forces 64x64x16tn -- instantiated <Trans, NoTrans> -- on a
+// ConjTrans/NoTrans (CN) shape, which is the single most common transposed form
+// in real complex demand (789 of 2245 complex<float> calls). Without the
+// dispatch guard it runs the TN kernel unconjugated and FAILS for complex; with
+// the guard it falls back to Tiled16 and passes.
+//
+// The extents are >= 64x64 deliberately: the pre-existing ConjTrans test at
+// :2130 is 18x14x12 and cannot reach a 64x64 macro tile at all, so it was
+// structurally unable to catch this -- the same "blind by construction" failure
+// this project has hit twice before.
+//
+// The reference is Tiled16, never the vendor: a vendor reference is inert in a
+// vendor-free build, where the fallback would be the kernel under test.
+// ---------------------------------------------------------------------------
+TYPED_TEST(GemmTest, ForcedTransposedLauncherRejectsMismatchedTransposeForm) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Backend BackendType = TestFixture::BackendType;
+
+    constexpr int m = 96, n = 96, k = 80;   // large enough to reach a 64x64 tile
+    constexpr int batch_size = 2;
+
+    // C = alpha * conj(A)^T * B + beta * C, with A stored k x m.
+    auto A = Matrix<ScalarType>::Random(k, m, false, batch_size);
+    auto B = Matrix<ScalarType>::Random(k, n, false, batch_size);
+    auto C = Matrix<ScalarType>::Random(m, n, false, batch_size);
+    auto C_ref = C.clone();
+
+    {
+        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "64x64x16tn");
+        gemm(*(this->ctx), A.view(), B.view(), C.view(),
+             {.alpha = ScalarType(2), .beta = ScalarType(-1),
+              .transA = Transpose::ConjTrans, .transB = Transpose::NoTrans});
+    }
+    {
+        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "tiled16");
+        gemm(*(this->ctx), A.view(), B.view(), C_ref.view(),
+             {.alpha = ScalarType(2), .beta = ScalarType(-1),
+              .transA = Transpose::ConjTrans, .transB = Transpose::NoTrans});
+    }
+    this->ctx->wait();
+
+    auto tol = test_utils::tolerance<ScalarType>() * 100;
     ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, m, n, batch_size, tol));
 }
 

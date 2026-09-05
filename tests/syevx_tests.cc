@@ -144,17 +144,17 @@ TEST_F(SyevxOperationsTest, RandomMatrix) {
     auto syevx_workspace = UnifiedVector<std::byte>(syevx_buffer_size(
         *ctx, dense.view(), W_lobpcg, neig, JobType::NoEigenVectors, MatrixView<float, MatrixFormat::Dense>(), params));
     ctx ->wait();
-    auto syev_workspace = UnifiedVector<std::byte>(backend::syev_vendor_buffer_size<test_utils::gpu_backend>(
+    auto syev_workspace = UnifiedVector<std::byte>(batchlas::blas::dispatch::detail::syev_vendor_buffer_size_or_throw<test_utils::gpu_backend, float>(
         *ctx, dense.view(), W_syev, JobType::NoEigenVectors, Uplo::Lower));
 
     syevx(
         *ctx, dense.view(), W_lobpcg, neig, syevx_workspace, JobType::NoEigenVectors, MatrixView<float, MatrixFormat::Dense>(), params);
 #if BATCHLAS_HAS_HOST_BACKEND
-    backend::syev_vendor<Backend::NETLIB>(
+    batchlas::blas::dispatch::detail::syev_vendor_or_throw<Backend::NETLIB, float>(
         *ctx, dense.view(), W_syev, JobType::NoEigenVectors, Uplo::Lower, syev_workspace);
 #else
     // No host (NETLIB) backend available; use GPU vendor solver as reference.
-    backend::syev_vendor<test_utils::gpu_backend>(
+    batchlas::blas::dispatch::detail::syev_vendor_or_throw<test_utils::gpu_backend, float>(
         *ctx, dense.view(), W_syev, JobType::NoEigenVectors, Uplo::Lower, syev_workspace);
 #endif
     ctx->wait();

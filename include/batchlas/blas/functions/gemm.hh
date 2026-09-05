@@ -17,6 +17,10 @@ using gemm = Event(Queue&,
                    const MatrixView<T, MatrixFormat::Dense>&,
                    const MatrixView<T, MatrixFormat::Dense>&,
                    T, T, Transpose, Transpose, ComputePrecision);
+
+// backend::gemm_vendor shares gemm's signature.
+template <typename T>
+using gemm_vendor = gemm<T>;
 }  // namespace sig
 
 template <Backend Back, typename T>
@@ -56,6 +60,35 @@ inline Event gemm(Queue& ctx,
 // not.)
 
 }  // namespace batchlas
+
+namespace batchlas::backend {
+
+// The vendor path for gemm.
+//
+// DECLARATION ONLY, and that is the point of WP0 S5. Until now the *public*
+// `gemm<Back, T>` was DEFINED inside each vendor TU -- cublas.cc:1568,
+// rocblas.cc:99, netlib_lapack.cc:288 -- so dropping a vendor TU dropped the
+// public entry point with it. No amount of enum or CMake work fixes that: the
+// definition has to leave the vendor file. It now lives in
+// src/dispatch/entry_points/level3.cc, and what remains behind is this: one
+// vendor implementation per backend, named as such.
+//
+// Each vendor wrapper TU defines this primary template for its own Backend
+// value and explicitly instantiates it there -- the same mechanism
+// syev_vendor (functions/syev.hh) and ormqr_vendor (functions/ormqr.hh) have
+// used all along.
+template <Backend Back, typename T>
+Event gemm_vendor(Queue& ctx,
+                  const MatrixView<T, MatrixFormat::Dense>& A,
+                  const MatrixView<T, MatrixFormat::Dense>& B,
+                  const MatrixView<T, MatrixFormat::Dense>& C,
+                  T alpha,
+                  T beta,
+                  Transpose transA,
+                  Transpose transB,
+                  ComputePrecision precision);
+
+}  // namespace batchlas::backend
 
 namespace batchlas {
 
