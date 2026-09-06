@@ -288,9 +288,12 @@ set(BATCHLAS_ROUTE_PINNED_TESTS
     gemv_tests   "BATCHLAS_GEMV_ROUTE=native"
     trsm_tests   "BATCHLAS_TRSM_ROUTE=native"
     potrf_tests  "BATCHLAS_POTRF_ROUTE=native"
-    geqrf_tests  "BATCHLAS_GEQRF_ROUTE=native;BATCHLAS_ORMQR_ROUTE=native"
-    orgqr_tests  "BATCHLAS_ORGQR_ROUTE=native;BATCHLAS_ORMQR_ROUTE=native"
-    getrf_tests  "BATCHLAS_GETRF_ROUTE=native;BATCHLAS_GETRS_ROUTE=native;BATCHLAS_GETRI_ROUTE=native"
+    # '|' separates several pins for one suite, NOT ';': a semicolon inside a
+    # quoted entry is a list separator, so it flattens into this list and breaks
+    # the name/value pairing below.
+    geqrf_tests  "BATCHLAS_GEQRF_ROUTE=native|BATCHLAS_ORMQR_ROUTE=native"
+    orgqr_tests  "BATCHLAS_ORGQR_ROUTE=native|BATCHLAS_ORMQR_ROUTE=native"
+    getrf_tests  "BATCHLAS_GETRF_ROUTE=native|BATCHLAS_GETRS_ROUTE=native|BATCHLAS_GETRI_ROUTE=native"
     spmm_tests   "BATCHLAS_SPMM_ROUTE=native"
 )
 
@@ -301,7 +304,7 @@ function(batchlas_add_route_pinned_test test_name env)
     set(_pinned "${test_name}_native")
     add_test(NAME ${_pinned} COMMAND ${test_name})
     batchlas_test_component(_component ${test_name})
-    set(_env "${env}")
+    string(REPLACE "|" ";" _env "${env}")
     if(BATCHLAS_OPENBLAS_CORETYPE)
         list(APPEND _env "OPENBLAS_CORETYPE=${BATCHLAS_OPENBLAS_CORETYPE}")
     endif()
