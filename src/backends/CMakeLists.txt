@@ -65,13 +65,27 @@ endif()
 # tests/test_utils.hh and across the benchmarks, so retiring it is a separate,
 # wider change (the spec's Backend-narrowing), not part of the facade move.
 
-if(BATCHLAS_HAS_CUBLAS)
+# cublas.cc is NOT cuBLAS-only, despite the name: geqrf_vendor, ormqr_vendor,
+# orgqr_vendor and getrs_vendor's batch<=1 arm are cusolverDn* calls, and the
+# LinalgHandle<Backend::CUDA> it uses only exists when all three CUDA libraries
+# are present (linalg-impl.hh). Gated on cuBLAS alone, `-DBATCHLAS_ENABLE_CUSOLVER=OFF`
+# still compiled it and failed on cusolverDnXgeqrf and on the handle conversion,
+# so only all-on and all-off actually configured -- the per-library axis was not
+# real yet. Splitting the TU per library is the right end state and is left as
+# debt; requiring what it actually calls is the correct gate meanwhile.
+if(BATCHLAS_HAS_CUBLAS AND BATCHLAS_HAS_CUSOLVER AND BATCHLAS_HAS_CUSPARSE)
     list(APPEND BACKEND_CUDA_SOURCES cublas.cc)
 endif()
-if(BATCHLAS_HAS_CUSOLVER)
+if(BATCHLAS_HAS_CUBLAS AND BATCHLAS_HAS_CUSOLVER AND BATCHLAS_HAS_CUSPARSE)
     list(APPEND BACKEND_CUDA_SOURCES cusolver.cc)
 endif()
-if(BATCHLAS_HAS_CUSPARSE)
+# cusparse.cc joins the same group for one concrete reason: it instantiates
+# enum_convert<BackendLibrary::CUSPARSE, T>(ComputePrecision), whose only arm
+# returns CUBLAS_COMPUTE_* and is guarded by #if BATCHLAS_HAS_CUBLAS. With cuBLAS
+# off it falls through to static_assert(always_false<B>). Giving CUSPARSE an arm
+# that does not borrow cuBLAS's enum is the real fix and is part of the same
+# per-TU split.
+if(BATCHLAS_HAS_CUBLAS AND BATCHLAS_HAS_CUSOLVER AND BATCHLAS_HAS_CUSPARSE)
     list(APPEND BACKEND_CUDA_SOURCES cusparse.cc)
 endif()
 
@@ -133,12 +147,24 @@ endif()
 # Compiling them everywhere does not yet make them REACHABLE anywhere: their
 # only callers are the four gates in cublas.cc, which is still cuBLAS-gated.
 # That is S6.
-list(APPEND BACKEND_COMMON_SOURCES
-    symm_custom_dispatch.cc
-    syrk_custom_dispatch.cc
-    syr2k_custom_dispatch.cc
-    trmm_custom_dispatch.cc
-)
+#
+# ...but not on a box with no CUDA device backend at all. Three of the four name
+# ::batchlas::gemm<Backend::CUDA, float> for their expansion's terminal GEMM, and
+# that instantiation lives behind #if BATCHLAS_HAS_CUDA_BACKEND in
+# dispatch/entry_points/level3.cc -- so compiling them into the always-built
+# object library left batchlas_backends.so carrying an undefined reference on any
+# CPU-only or ROCm-only configure. The gate below is the DEVICE FAMILY, not the
+# library: the vendor-free build WP1 exists for is HAS_CUDA_BACKEND=1 with
+# HAS_CUBLAS=0, so it still compiles all four. Their only callers are gates that
+# are themselves guarded on Backend::CUDA, so nothing loses a route.
+if(BATCHLAS_HAS_CUDA_BACKEND)
+    list(APPEND BACKEND_COMMON_SOURCES
+        symm_custom_dispatch.cc
+        syrk_custom_dispatch.cc
+        syr2k_custom_dispatch.cc
+        trmm_custom_dispatch.cc
+    )
+endif()
 
 if(BATCHLAS_HAS_ROCBLAS)
     list(APPEND BACKEND_ROCM_SOURCES rocblas.cc)

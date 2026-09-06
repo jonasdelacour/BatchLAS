@@ -211,8 +211,16 @@ Event syr2k_cuda_custom(Queue& ctx,
     }
 
     // DeviceUnsupported only: the kernel existed but the device refused it.
-    rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::DiagFullGemm}, true);
-    return syr2k_cublasdx_fallback_gemm(ctx, A, B, C, alpha, beta, transA);
+    //
+    // This must NOT fall back to syr2k_cublasdx_fallback_gemm. That routine takes
+    // no uplo and writes BOTH triangles of C (see its header), which is not what
+    // SYR2K means -- it is reachable only by naming Algorithm::DiagFullGemm above,
+    // as a deliberate opt-in. Reaching it from a refusal the caller did not ask
+    // for silently overwrites the triangle the caller owns, and every level-3 test
+    // uses a single uplo per call, so nothing would catch it. Throw, as before.
+    throw_forced_syr2k_unavailable(
+        "the fused kernel exists but this device refused to launch it; "
+        "no uplo-respecting fused fallback exists, so the request cannot be served");
 }
 
 } // namespace batchlas::backend

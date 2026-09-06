@@ -56,7 +56,7 @@ inline std::optional<dispatch::GetrsShape> getrs_op_shape(
     // SET. trsm's builder (trsm_route.hh:40-56) and ormqr's (ormqr.hh:182-192) do
     // not, which is why every trsm and every ormqr coverage row reads
     // Backend::AUTO and the burn-down is unreadable for them. resolve_route slices
-    // this straight into the coverage table (route_resolve.hh:190-192).
+    // this straight into the coverage table (route_resolve.hh).
     s.backend = B;
 
     // FIELD MAPPING -- getrs's own. m is the ORDER of the factored matrix, n is
@@ -69,7 +69,7 @@ inline std::optional<dispatch::GetrsShape> getrs_op_shape(
     // THE ONE LU OP WITH A LIVE VARIANT, AND THE LINE THAT MAKES ITS COVERAGE ROWS
     // SEPARABLE. coverage.cc:52-58's variant_key carries uplo/side/diag/transA/
     // transB; getrf and getri set NONE of them, so their rows collapse to
-    // shape_class alone (first-writer-wins, coverage.cc:284-292) and route_diff
+    // shape_class alone (first-writer-wins, coverage.cc) and route_diff
     // cannot tell one LU call from another. transA is the only field in this family
     // that separates anything. Dropping this line would be silent.
     //
@@ -84,7 +84,7 @@ inline std::optional<dispatch::GetrsShape> getrs_op_shape(
     // MAX_SUB_GROUP_SIZE is wrong in both directions.
     s.has_sg32 = ctx.device().supports_sub_group_size(32);
 
-    // THE GATE AND ITS WRITER LAND TOGETHER (potrf_route.hh:83-96). Both views
+    // THE GATE AND ITS WRITER LAND TOGETHER (potrf_route.hh). Both views
     // are asked, because either one being heterogeneous breaks the single-tuple
     // launch -- and OpShape has one flag, so the honest reduction is OR.
     s.heterogeneous_batch = A.is_heterogeneous() || Bmat.is_heterogeneous();
@@ -97,7 +97,7 @@ inline std::optional<dispatch::GetrsShape> getrs_op_shape(
     s.blocked_available = sycl_getrs::getrs_blocked_available<T>();
 
     // THE FUSED TIER'S TWO CAPACITY NUMBERS, and the local-memory one is ASKED OF
-    // THE DEVICE rather than taken from a constant -- route_potrf.hh:114-127's
+    // THE DEVICE rather than taken from a constant -- route_potrf.hh's
     // rule, and getrf_route.hh does the same for cta_max_n. The 4096 B reserve is
     // the one cmake/BatchLASDetectSYCL.cmake:57-67 applies to every other
     // device-BLAS sizing decision in this library, and the formula behind the
@@ -122,7 +122,7 @@ inline std::optional<dispatch::GetrsShape> getrs_op_shape(
 // comes from the builder above.
 //
 // THE ENV READ IS HERE AND ONLY HERE. parse_route_env(Op::getrs) synthesises
-// "BATCHLAS_GETRS_ROUTE" from op_env_stem (route_env.hh:214-217) -- no registry
+// "BATCHLAS_GETRS_ROUTE" from op_env_stem (route_env.hh) -- no registry
 // entry exists or is needed, and legacy_variable_for(Op::getrs) correctly falls to
 // `default: return {}` (route_env.hh:119) because no legacy getrs variable ever
 // shipped. Adding a case there would INVENT a legacy spelling.

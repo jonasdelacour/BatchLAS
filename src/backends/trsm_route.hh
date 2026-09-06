@@ -46,6 +46,9 @@ inline std::optional<dispatch::TrsmShape> trsm_op_shape(
     s.n = B.cols();
     s.k = A.rows();
     s.batch = A.batch_size();
+    // supports() refuses a heterogeneous batch; without this the field keeps
+    // OpShape's default false and that correctness gate can never fire.
+    s.heterogeneous_batch = A.is_heterogeneous() || B.is_heterogeneous();
     s.side = side;
     s.uplo = uplo;
     s.transA = transA;

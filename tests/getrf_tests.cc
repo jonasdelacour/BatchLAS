@@ -1881,6 +1881,15 @@ TYPED_TEST(LuTest, RouteTableAndTheVendorFreeFallback) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::BackendType;
 
+    // This test asserts what the tables do with NO route pinned, so it has to say
+    // so: an inherited BATCHLAS_GET*_ROUTE -- exported in a shell, or set by the
+    // route-pinned ctest rerun -- otherwise forces the answer and the test reports
+    // a window defect that is really just its own environment. Empty reads as
+    // unset in parse_route_env.
+    EnvGuard clear_getrf("BATCHLAS_GETRF_ROUTE", "");
+    EnvGuard clear_getrs("BATCHLAS_GETRS_ROUTE", "");
+    EnvGuard clear_getri("BATCHLAS_GETRI_ROUTE", "");
+
     auto small = make_dominant_permuted<T>(std::min(40, std::max(2, this->cta_max_n())), 2, 5u);
     auto large = make_dominant_permuted<T>(512, 2, 6u);
     auto Vs = view_of(small);
@@ -2197,10 +2206,19 @@ TYPED_TEST(LuTest, DirectEntryPointsRefuseWhatSupportsRefuses) {
                                                            this->getri_seam()),
                      std::invalid_argument)
             << "getri must refuse C aliasing A: C is zeroed before A's triangles are read";
-        EXPECT_THROW(sycl_getri::getri_blocked_dispatch<T>(*this->ctx, A, A, p.piv.to_span(),
+        // A DISTINCT C, so the alias gate above cannot fire first. Passing A as
+        // both operands made this assertion vacuous: it threw on the aliasing
+        // check at getri_blocked.cc:193 and never reached the empty-seam refusal
+        // at :204, so deleting that refusal entirely left the test green -- and a
+        // direct caller that forgot the injection would then call an empty
+        // std::function rather than getting a diagnostic.
+        auto cbuf = make_dominant_permuted<T>(n, batch, 71u);
+        auto Cv = view_of(cbuf);
+        EXPECT_THROW(sycl_getri::getri_blocked_dispatch<T>(*this->ctx, A, Cv, p.piv.to_span(),
                                                            ws.to_span(), ci.to_span(),
                                                            sycl_getri::GetriSolveTrsm<T>{}),
-                     std::invalid_argument);
+                     std::invalid_argument)
+            << "getri must refuse an empty solve seam rather than call an empty std::function";
     }
 }
 
@@ -2661,6 +2679,11 @@ TYPED_TEST(LuTest, FacadeReachesTheFusedGetrsBitExactly) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::BackendType;
     const int n = 64, nrhs = 3, batch = 3;
+
+    // As above: this asserts which tier the facade picks by DEFAULT, so a pinned
+    // route in the environment has to be cleared or it decides the answer.
+    EnvGuard clear_getrs("BATCHLAS_GETRS_ROUTE", "");
+    EnvGuard clear_getrf("BATCHLAS_GETRF_ROUTE", "");
 
     auto p = make_dominant_permuted<T>(n, batch, 6161u);
     this->run_blocked(p);

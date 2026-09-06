@@ -138,7 +138,11 @@ bool lu_laswp_deferred_left_launch(Queue& ctx,
     std::size_t tile_elems = static_cast<std::size_t>(Cs) * static_cast<std::size_t>(ldt);
     const std::size_t raw = int_bytes + tile_elems * sizeof(D);
     const std::size_t padded = lu_laswp_hole_padded(raw);
-    if (padded > raw) {
+    // Only pad if the padded size still FITS. Unguarded, a device whose budget
+    // lands just above the hole grows the tile past its own local-memory limit and
+    // the local_accessor throws at enqueue, instead of taking the `return false`
+    // that hands the caller its walk fallback. The getrs twin already guards this.
+    if (padded > raw && padded <= slm_budget) {
         tile_elems = (padded - int_bytes + sizeof(D) - 1) / sizeof(D);
     }
 

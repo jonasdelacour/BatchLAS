@@ -4,6 +4,8 @@
 // and which strategy it uses. Backend (device family) and BackendLibrary are separate
 // axes and stay in enums.hh. See docs/design/vendor-independence.md#the-three-axes.
 
+#include <cctype>     // std::toupper in op_env_stem; libstdc++'s <string> happens
+                      // to pull this in, which is not a guarantee
 #include <cstdint>
 #include <string>
 #include <string_view>

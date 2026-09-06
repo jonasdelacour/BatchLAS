@@ -37,10 +37,16 @@ inline constexpr bool level3_vendor_available =
     B == Backend::ROCM   ? bool(BATCHLAS_HAS_ROCBLAS) :
     B == Backend::NETLIB ? kHasNetlib : false;
 
-// geqrf/orgqr/getrf/getrs/getri/ormqr -- cuBLAS on NVIDIA, rocSOLVER on AMD.
+// geqrf/orgqr/getrf/getrs/getri/ormqr. NOT one library on NVIDIA: getrf and getri
+// are cublas<t>getrfBatched/getriBatched, while geqrf, orgqr, ormqr and getrs's
+// batch<=1 arm are cuSOLVER (cusolverDnXgeqrf, cusolverDnSormqr, ...). Keyed on
+// cuBLAS alone this predicate claimed a geqrf vendor route whenever cuBLAS was on,
+// and told a vendor-free user to "re-enable cuBLAS" to get geqrf back -- which
+// does not restore it. The group spans both libraries, so it needs both; a
+// finer per-op split would have to move every call site and is left as debt.
 template <Backend B>
 inline constexpr bool factorization_vendor_available =
-    B == Backend::CUDA   ? bool(BATCHLAS_HAS_CUBLAS)    :
+    B == Backend::CUDA   ? bool(BATCHLAS_HAS_CUBLAS) && bool(BATCHLAS_HAS_CUSOLVER) :
     B == Backend::ROCM   ? bool(BATCHLAS_HAS_ROCSOLVER) :
     B == Backend::NETLIB ? kHasNetlib : false;
 
@@ -64,7 +70,8 @@ inline constexpr const char* kLevel3Library =
     B == Backend::CUDA ? "cuBLAS" : B == Backend::ROCM ? "rocBLAS" : "netlib CBLAS/LAPACKE";
 template <Backend B>
 inline constexpr const char* kFactorizationLibrary =
-    B == Backend::CUDA ? "cuBLAS" : B == Backend::ROCM ? "rocSOLVER" : "netlib CBLAS/LAPACKE";
+    B == Backend::CUDA ? "cuBLAS and cuSOLVER" : B == Backend::ROCM ? "rocSOLVER"
+                                               : "netlib CBLAS/LAPACKE";
 template <Backend B>
 inline constexpr const char* kSolverLibrary =
     B == Backend::CUDA ? "cuSOLVER" : B == Backend::ROCM ? "rocSOLVER" : "netlib CBLAS/LAPACKE";

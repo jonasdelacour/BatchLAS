@@ -54,7 +54,10 @@ Event spmm(Queue& ctx,
         ctx, A, B_mat, C, transA, transB,
         /*vendor_available=*/dispatch::sparse_vendor_available<B>);
 
-    // preferred() is false for every spmm route, shape and type: forced only.
+    // preferred() takes the transA == NoTrans CSR gather natively for every scalar
+    // type in EVERY build (complex<float> excepted when transB is transposed); the
+    // transposed arm stays vendor-first by measurement. This is not a forced-only
+    // route -- it moves the default.
     // evidence: docs/perf/spmm.md#the-preferred-window-as-implemented
     if (dispatch::is_native(route)) {
         // supports() refuses every non-CSR format, forced routes included.
@@ -119,6 +122,16 @@ size_t spmm_buffer_size(Queue& ctx,
         }
         return native_need;
     } else {
+        // A NATIVE-routed call does not ask the vendor to size it. The vendor
+        // sizer builds an SpmmCsrBatchPlan, which walks the CSR row offsets from
+        // the host -- on device USM a blocking full-array copy plus a queue drain,
+        // on shared USM an unsynchronised read that also migrates the offsets.
+        // Running it here made the sizing query for a route with a zero-byte
+        // workspace touch device memory, contradicting the contract three lines
+        // above it and leaving the vendor-free path dependent on cuSPARSE.
+        if (dispatch::is_native(route) && native_fired) {
+            return native_need;
+        }
         return std::max(native_need,
                         backend::spmm_vendor_buffer_size<B, T, MFormat>(ctx, A, B_mat, C, alpha, beta, transA, transB));
     }

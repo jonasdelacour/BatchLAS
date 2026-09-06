@@ -68,7 +68,7 @@ inline std::optional<dispatch::OrgqrShape> orgqr_op_shape(
 
     s.is_gpu = (ctx.device().type == DeviceType::GPU);
 
-    // THE GATE AND ITS WRITER LAND TOGETHER (potrf_route.hh:83-96). ormqr's table
+    // THE GATE AND ITS WRITER LAND TOGETHER (potrf_route.hh). ormqr's table
     // has no heterogeneous_batch gate and its builder never sets the field, so
     // ormqr's routing is blind to per-item extents today; orgqr's is not.
     s.heterogeneous_batch = A.is_heterogeneous();
@@ -76,11 +76,13 @@ inline std::optional<dispatch::OrgqrShape> orgqr_op_shape(
     // NO has_sg32 AND NO SLM CAPACITY. Deliberate, and the reason is in
     // route_orgqr.hh: ormqr_blocked carries no [[sycl::reqd_sub_group_size(32)]]
     // and holds nothing resident, so a sub-group field or a capacity here would
-    // be a DECORATIVE input -- the state route_potrf.hh:83-96 criticises trsm
+    // be a DECORATIVE input -- the state route_potrf.hh criticises trsm
     // for. They arrive with the arm that needs them.
     //
-    // FALSE today: no native driver is linked, so the native arm is unsupported
-    // for every shape and resolve_orgqr_route always returns {Vendor, Auto}.
+    // TRUE for all four scalar types: orgqr_blocked.cc ships the identity fill
+    // plus a routed ormqr, so the native arm is supported and a vendor-free build
+    // (or an explicit route pin) reaches {Native, Blocked}. preferred() is still
+    // false everywhere, so a vendor-present build's default does not move.
     s.blocked_available = sycl_orgqr::orgqr_blocked_available<T>();
     return s;
 }
@@ -88,7 +90,7 @@ inline std::optional<dispatch::OrgqrShape> orgqr_op_shape(
 // Resolve a route for one call. Reads the environment.
 //
 // THE ENV READ IS HERE AND ONLY HERE. parse_route_env(Op::orgqr) synthesises
-// "BATCHLAS_ORGQR_ROUTE" (route_env.hh:214-217) and legacy_variable_for(Op::orgqr)
+// "BATCHLAS_ORGQR_ROUTE" (route_env.hh) and legacy_variable_for(Op::orgqr)
 // correctly returns empty (route_env.hh:119) -- no legacy orgqr variable ever
 // shipped, and adding a case would invent one.
 //
