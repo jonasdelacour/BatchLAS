@@ -1881,6 +1881,15 @@ TYPED_TEST(LuTest, RouteTableAndTheVendorFreeFallback) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::BackendType;
 
+    // This test asserts what the tables do with NO route pinned, so it has to say
+    // so: an inherited BATCHLAS_GET*_ROUTE -- exported in a shell, or set by the
+    // route-pinned ctest rerun -- otherwise forces the answer and the test reports
+    // a window defect that is really just its own environment. Empty reads as
+    // unset in parse_route_env.
+    EnvGuard clear_getrf("BATCHLAS_GETRF_ROUTE", "");
+    EnvGuard clear_getrs("BATCHLAS_GETRS_ROUTE", "");
+    EnvGuard clear_getri("BATCHLAS_GETRI_ROUTE", "");
+
     auto small = make_dominant_permuted<T>(std::min(40, std::max(2, this->cta_max_n())), 2, 5u);
     auto large = make_dominant_permuted<T>(512, 2, 6u);
     auto Vs = view_of(small);
@@ -2670,6 +2679,11 @@ TYPED_TEST(LuTest, FacadeReachesTheFusedGetrsBitExactly) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::BackendType;
     const int n = 64, nrhs = 3, batch = 3;
+
+    // As above: this asserts which tier the facade picks by DEFAULT, so a pinned
+    // route in the environment has to be cleared or it decides the answer.
+    EnvGuard clear_getrs("BATCHLAS_GETRS_ROUTE", "");
+    EnvGuard clear_getrf("BATCHLAS_GETRF_ROUTE", "");
 
     auto p = make_dominant_permuted<T>(n, batch, 6161u);
     this->run_blocked(p);
