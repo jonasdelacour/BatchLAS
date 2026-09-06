@@ -275,6 +275,16 @@ size_t orgqr_buffer_size(Queue& ctx,
         }
         return native_need;
     } else {
+        // A native-routed call is not sized by the vendor. orgqr's vendor arm is a
+        // per-item loop, so its buffer size is batch-LINEAR (single * batch_size):
+        // at cdouble n=64 batch=8192 that is the ~4.6 GB the comment on the vendor
+        // sizer names, and the caller allocates whatever this returns -- so the
+        // native arm could OOM on a shape it serves in a few megabytes. The query
+        // and the call share one orgqr_route() with identical arguments, so the
+        // max() was only ever guarding a getenv change between the two.
+        if (dispatch::is_native(route) && native_fired) {
+            return native_need;
+        }
         return std::max(native_need,
                         backend::orgqr_vendor_buffer_size<B, T>(ctx, A, tau));
     }

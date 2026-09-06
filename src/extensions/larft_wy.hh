@@ -24,7 +24,7 @@
 // it instantiate the same closure types; if those TUs sit in DIFFERENT
 // device-code clusters (ormqr_blocked.cc is in EXTENSIONS_FACTORIZATION_SOURCES,
 // geqrf_blocked.cc in EXTENSIONS_CTA_SOURCES -- see src/extensions/
-// CMakeLists.txt:70-85) the same SYCL kernel name would be emitted into two
+// CMakeLists.txt) the same SYCL kernel name would be emitted into two
 // device images of one shared library. The `Tag` parameter makes each caller's
 // kernels distinct types, which removes the question rather than answering it.
 //

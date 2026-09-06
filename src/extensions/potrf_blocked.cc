@@ -252,7 +252,7 @@ Event potrf_blocked_dispatch(Queue& ctx,
     if (uplo != Uplo::Lower) {
         throw std::invalid_argument(
             "potrf_blocked: Uplo::Upper is not implemented; the driver factors the "
-            "lower triangle only (route_potrf.hh:270-278)");
+            "lower triangle only; see RouteTable<Op::potrf, T>::supports, Blocked arm)");
     }
     if (A.is_heterogeneous()) {
         throw std::invalid_argument("potrf_blocked: heterogeneous batch is not supported");

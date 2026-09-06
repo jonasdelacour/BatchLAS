@@ -50,7 +50,7 @@ using getri_vendor_buffer_size = size_t(Queue&,
 // route could serve.
 //
 // IT COMES IN TWO ARITIES, AND THAT IS FORCED BY THE SIGNATURES RATHER THAN A
-// CONVENIENCE. getri_buffer_size takes A ALONE (getri.hh:342-344) while the call
+// CONVENIENCE. getri_buffer_size takes A ALONE (getri.hh) while the call
 // takes A and C, so a single two-argument validator could not be used by both --
 // and the query must validate exactly the view its route is built from, because
 // the route builder itself is a function of A alone (see the header note in

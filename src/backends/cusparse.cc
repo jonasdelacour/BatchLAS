@@ -70,9 +70,17 @@ namespace batchlas {
                 const int* host_ro = ro;
                 if (sycl::get_pointer_type(ro, ctx->get_context()) ==
                     sycl::usm::alloc::device) {
-                    staged.resize(static_cast<std::size_t>(os) *
-                                  static_cast<std::size_t>(bs));
-                    ctx->memcpy(staged.data(), ro, staged.size() * sizeof(int)).wait();
+                    // Only up to the LAST item's row m, not os*bs. A view built
+                    // over a tightly sized offsets buffer holds
+                    // os*(bs-1) + m + 1 ints -- nothing may read past index m of
+                    // an item -- so copying os*bs over-reads the final pad, which
+                    // on a page-boundary allocation is an illegal device access
+                    // inside what is only a sizing query.
+                    const std::size_t need =
+                        static_cast<std::size_t>(os) * static_cast<std::size_t>(bs - 1) +
+                        static_cast<std::size_t>(m) + 1;
+                    staged.resize(need);
+                    ctx->memcpy(staged.data(), ro, need * sizeof(int)).wait();
                     host_ro = staged.data();
                 }
 

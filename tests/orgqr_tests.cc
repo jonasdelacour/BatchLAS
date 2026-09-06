@@ -102,7 +102,7 @@ TYPED_TEST(OrgqrTest, BatchedMatrices) {
 //
 //   * ld == rows AND stride == ld*cols. Matrix<T>(n, n, batch) has both, so the
 //     two lines of every launcher that read A.ld() and A.stride() were
-//     structurally unfalsifiable here. trsm_native.cc:590-599 records that exact
+//     structurally unfalsifiable here. trsm_native.cc records that exact
 //     failure: the 6-arg MatrixView constructor defaults stride to ld*cols, after
 //     which every batch item but the first reads the wrong matrix.
 //

@@ -16,10 +16,12 @@ set(EXTENSIONS_CTA_SOURCES
     # blocked geqrf driver's panel leaf will BE the CTA device function, shared
     # through a geqrf_cta_device.hh, so the two sources must sit in ONE
     # device-code cluster (":53-57 below: a source must sit with the sources
-    # whose device symbols it calls"). Neither file contains device code YET --
-    # both currently hold only the capability answers, which report the kernels
-    # absent -- but the grouping is decided here so landing a kernel is not also
-    # a CMake decision. NOTE the counter-example NOT to copy: ormqr_cta.cc is in
+    # whose device symbols it calls"). Both files now DO contain device code --
+    # getrf_cta.cc defines GetrfPanelResidentKernel and GetrfPanelGlobalKernel,
+    # and getrf_blocked_available<T>() is true for all four types -- so this
+    # grouping is load-bearing, not speculative: getting it wrong is the
+    # `ptxas fatal: Unresolved extern function` this comment warns about.
+    # NOTE the counter-example NOT to copy: ormqr_cta.cc is in
     # this list while ormqr_blocked.cc is in EXTENSIONS_FACTORIZATION_SOURCES,
     # which works only because those two share no device symbol. orgqr_blocked.cc
     # follows ormqr_blocked.cc for exactly that reason.

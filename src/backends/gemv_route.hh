@@ -82,7 +82,7 @@ inline std::optional<dispatch::GemvShape> gemv_op_shape(
     // SET. trsm's builder (trsm_route.hh:40-56) does not, which is why every
     // trsm coverage row reads Backend::AUTO and the burn-down is unreadable for
     // it. resolve_route slices this straight into the coverage table
-    // (route_resolve.hh:190-192).
+    // (route_resolve.hh).
     s.backend = B;
 
     // FIELD MAPPING. m and n are A's extents as STORED, not as transposed --
@@ -113,7 +113,7 @@ inline std::optional<dispatch::GemvShape> gemv_op_shape(
     // no 32" direction is a launch abort.
     s.has_sg32 = ctx.device().supports_sub_group_size(32);
 
-    // THE GATE AND ITS WRITER LAND TOGETHER (potrf_route.hh:83-96). Only A can
+    // THE GATE AND ITS WRITER LAND TOGETHER (potrf_route.hh). Only A can
     // be heterogeneous -- VectorView has no active-size concept at all, which
     // is itself why gemv cannot have gemm's heterogeneous walker.
     s.heterogeneous_batch = A.is_heterogeneous();
@@ -129,7 +129,7 @@ inline std::optional<dispatch::GemvShape> gemv_op_shape(
 // comes from the builder above.
 //
 // THE ENV READ IS HERE AND ONLY HERE. parse_route_env(Op::gemv) synthesises
-// "BATCHLAS_GEMV_ROUTE" from op_env_stem (route_env.hh:214-217) -- no registry
+// "BATCHLAS_GEMV_ROUTE" from op_env_stem (route_env.hh) -- no registry
 // entry exists or is needed, and legacy_variable_for(Op::gemv) correctly falls
 // to `default: return {}` (route_env.hh:119) because no legacy gemv variable
 // ever shipped. Adding a case there would INVENT a legacy spelling.
