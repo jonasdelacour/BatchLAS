@@ -30,4 +30,8 @@ if(BATCHLAS_BUILD_PYTHON)
     add_subdirectory(python)
 endif()
 
+if(BATCHLAS_BUILD_EXAMPLES)
+    add_subdirectory(examples)
+endif()
+
 batchlas_install_package()
