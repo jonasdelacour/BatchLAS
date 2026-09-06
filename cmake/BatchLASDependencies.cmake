@@ -422,13 +422,17 @@ if(BATCHLAS_HAS_CUDA_BACKEND)
     if(TARGET mathdx::cublasdx)
         list(APPEND BATCHLAS_MATHDX_TARGETS mathdx::cublasdx)
         if(BATCHLAS_ENABLE_CUBLASDX)
-            set(BATCHLAS_HAS_CUBLASDX TRUE PARENT_SCOPE)
+            # No PARENT_SCOPE: this block is at DIRECTORY scope (the last
+            # endfunction() is far above), and the top-level project includes this
+            # file, so there is no parent directory scope to write into -- the
+            # value was discarded and BATCHLAS_HAS_CUBLASDX could never be true.
+            set(BATCHLAS_HAS_CUBLASDX TRUE)
         endif()
     endif()
     if(TARGET mathdx::cusolverdx)
         list(APPEND BATCHLAS_MATHDX_TARGETS mathdx::cusolverdx)
         if(BATCHLAS_ENABLE_CUSOLVERDX)
-            set(BATCHLAS_HAS_CUSOLVERDX TRUE PARENT_SCOPE)
+            set(BATCHLAS_HAS_CUSOLVERDX TRUE)   # directory scope; see above
         endif()
     endif()
 

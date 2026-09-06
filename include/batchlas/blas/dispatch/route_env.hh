@@ -6,8 +6,10 @@
 // evidence: docs/perf/dispatch.md#the-environment-vocabulary
 
 #include <cctype>
+#include <cstdio>
 #include <cstdlib>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 
@@ -130,6 +132,23 @@ struct ParsedRouteEnv {
     bool unparsed = false;   // a variable was set but its value was not understood
 };
 
+// A set-but-unrecognised route word is reported HERE rather than by each adapter.
+// Every one of the ten call sites spells the fallback `parsed.found ? parsed.route
+// : legacy_unset_default(op)`, which collapses "set but not understood" into
+// "unset" -- so BATCHLAS_GEMM_ROUTE=regsiter_tiled silently resolves to the vendor
+// and an A/B driven by that variable measures the vendor on both sides with no
+// diagnostic. That is precisely the failure this vocabulary was introduced to end.
+// Warn once per variable: these are read per call, and gemv reads one per gemv.
+inline void warn_unparsed_route_env(const RouteRequestSource& src) {
+    static std::set<std::string> warned;
+    if (!warned.insert(src.variable).second) return;
+    std::fprintf(stderr,
+                 "batchlas: %s=\"%s\" is not a recognised route; ignoring it and "
+                 "using the default. Expected an origin (auto|native|vendor), an "
+                 "algorithm, or origin:algorithm.\n",
+                 src.variable.c_str(), src.value.c_str());
+}
+
 // Canonical variable first, then the legacy one; on found=false the CALLER supplies
 // the default.
 inline ParsedRouteEnv parse_route_env(Op op) {
@@ -143,6 +162,7 @@ inline ParsedRouteEnv parse_route_env(Op op) {
             out.found = true;
         } else {
             out.unparsed = true;
+            warn_unparsed_route_env(out.source);
         }
         return out;
     }
@@ -157,6 +177,7 @@ inline ParsedRouteEnv parse_route_env(Op op) {
                 out.found = true;
             } else {
                 out.unparsed = true;
+                warn_unparsed_route_env(out.source);
             }
         }
     }

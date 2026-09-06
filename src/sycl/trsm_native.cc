@@ -79,13 +79,6 @@ constexpr bool trsm_stage_left() {
     return sizeof(D) <= 8 && !sycl_device::dev_is_complex_v<D>;
 }
 
-template <typename T>
-inline bool finite_recip(T d, T& out) {
-    const T r = T(1) / d;
-    out = r;
-    return sycl::isfinite(r);
-}
-
 template <typename T, int N, Side SideV>
 class TrsmCtaKernel;
 
@@ -112,11 +105,15 @@ Event trsm_native_v1(Queue& ctx,
     const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
     const int cu = static_cast<int>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS));
 
-    static_assert(256 * 226 <= 65536,
+    // Both operands are named so the assert is driven by the ladder it guards:
+    // adding a rung above kMaxWg now fails to compile instead of aborting at launch.
+    constexpr int kMaxWg = 256;
+    constexpr int kWorstRegsPerThread = 226;   // complex<double>, N=32
+    static_assert(kMaxWg * kWorstRegsPerThread <= 65536,
                   "the work-group ceiling is set by registers per block, not by occupancy; "
                   "re-run scripts/register_probe.sh before raising it");
     int wg = 32;
-    for (int cand : {256, 128, 64, 32}) {
+    for (int cand : {kMaxWg, 128, 64, 32}) {
         if (cand > max_wg) continue;
         wg = cand;
         const int64_t groups_c = (q + cand - 1) / cand;
@@ -373,7 +370,10 @@ inline int trsm_outer_block_default() { return 128; }
 // Widening helps Side::Left and HURTS Side::Right, whose trailing update puts the
 // width on the other GEMM dimension. evidence: docs/perf/trsm.md#rejected-outer_nb-of-128-for-sideright
 inline int trsm_outer_block(int cta_nb, Side side) {
-    static const int env = [] {
+    // Read per call, not latched: once a function-local static caches the first
+    // process-wide answer, a later setenv is invisible and an A/B harness (or the
+    // knob's own test) silently measures the default arm twice and passes.
+    const int env = [] {
         const char* raw = std::getenv("BATCHLAS_TRSM_OUTER_NB");
         if (!raw || !*raw) return 0;
         const int v = std::atoi(raw);

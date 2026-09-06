@@ -2179,6 +2179,12 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclVariantConjugateTranspose) {
 // still pass.
 // ---------------------------------------------------------------------------
 
+// gemm_variant.hh, which declares backend::gemm_route<>, is included only inside
+// the BATCHLAS_HAS_CUDA_BACKEND block at the top of this file. Without this guard
+// the helper and the six tests below are a hard compile error on any CPU-only or
+// ROCm-only configure, taking the whole gemm_tests target -- including its
+// pre-existing numerical coverage -- with them.
+#if BATCHLAS_HAS_CUDA_BACKEND
 namespace {
 
 template <typename ScalarType>
@@ -2357,6 +2363,7 @@ TYPED_TEST(GemmTest, RouteAdapterWithoutAVendorFallsBackToSupportedNative) {
                               Transpose::NoTrans, ComputePrecision::F32,
                               /*vendor_available=*/false)));
 }
+#endif // BATCHLAS_HAS_CUDA_BACKEND
 
 // ---------------------------------------------------------------------------
 // The 128x128x8 kernel on genuine SUB-VIEWS.

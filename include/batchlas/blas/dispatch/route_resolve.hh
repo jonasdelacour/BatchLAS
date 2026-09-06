@@ -56,14 +56,34 @@ inline Route resolve_route_uninstrumented(Route forced, const Shape& s,
 
     // A requested vendor still has to exist: GEMM's unset default IS Vendor, so
     // an ordinary call arrives here rather than at `automatic` above.
+    //
+    // supports() is consulted here too. The rule at the top of this file is that a
+    // forced route bypasses preferred() but NEVER supports(); every table happens
+    // to open its vendor arm with an unconditional `return true`, so this was
+    // harmless -- but is_vendor() is also true for {Vendor, FusedDevice}, which
+    // already reaches the dispatch tail unchecked, and the first table to grow a
+    // real vendor-side capability gate would otherwise have forcing select a route
+    // that cannot run.
     if (is_vendor(forced)) {
-        return vendor_available ? forced : automatic();
+        return (vendor_available && Table::supports(forced, s)) ? forced : automatic();
     }
 
     // A bare origin must resolve to a concrete route: {Native, Auto} maps to no kernel.
     if (forced.algo == Algorithm::Auto) {
         for (const Route* r = Table::order_begin(); r != Table::order_end(); ++r) {
             if (r->origin == forced.origin && Table::supports(*r, s) && Table::preferred(*r, s)) {
+                return *r;
+            }
+        }
+        // The native-tier tie-break belongs here too, not only in the vendor-free
+        // walk. Without it, pinning a bare `native` on a vendor-present box picks
+        // the FIRST merely-supported arm, which for an op whose preferred() is
+        // all-false (geqrf, orgqr, potrf) is a different tier than the vendor-free
+        // build actually takes -- so benchmarking or bisecting the native path
+        // with the env var measures a route that never ships.
+        for (const Route* r = Table::order_begin(); r != Table::order_end(); ++r) {
+            if (r->origin == forced.origin && Table::supports(*r, s) &&
+                native_tier_preferred_or_default<Table>(*r, s)) {
                 return *r;
             }
         }

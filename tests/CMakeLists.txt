@@ -269,8 +269,59 @@ function(batchlas_add_test_target test_name)
     endif()
 endfunction()
 
+# ---------------------------------------------------------------------------
+# Route-pinned reruns.
+#
+# preferred() decides the DEFAULT route, so on a vendor-present box a suite for an
+# op whose window is narrow -- or, like potrf and geqrf/orgqr, deliberately empty
+# -- measures the vendor and validates none of the native kernel it was written
+# for. That is how spmm's whole transposed arm (two of its three kernel bodies)
+# and every one of gemv's 264 cases came to run cuSPARSE/cuBLAS under ctest while
+# the coverage table reported a native route available: LINKED IS NOT REACHABLE.
+#
+# Each entry below reruns one suite with its op pinned native. The pins are a
+# bare origin, so an op with two native arms resolves through its own order walk
+# rather than naming an arm that may not serve the shape. Labelled route-native
+# so `ctest -LE route-native` gets the old, shorter run.
+set(BATCHLAS_ROUTE_PINNED_TESTS
+    gemm_tests   "BATCHLAS_GEMM_ROUTE=native"
+    gemv_tests   "BATCHLAS_GEMV_ROUTE=native"
+    trsm_tests   "BATCHLAS_TRSM_ROUTE=native"
+    potrf_tests  "BATCHLAS_POTRF_ROUTE=native"
+    geqrf_tests  "BATCHLAS_GEQRF_ROUTE=native;BATCHLAS_ORMQR_ROUTE=native"
+    orgqr_tests  "BATCHLAS_ORGQR_ROUTE=native;BATCHLAS_ORMQR_ROUTE=native"
+    getrf_tests  "BATCHLAS_GETRF_ROUTE=native;BATCHLAS_GETRS_ROUTE=native;BATCHLAS_GETRI_ROUTE=native"
+    spmm_tests   "BATCHLAS_SPMM_ROUTE=native"
+)
+
+function(batchlas_add_route_pinned_test test_name env)
+    if(NOT TARGET ${test_name})
+        return()
+    endif()
+    set(_pinned "${test_name}_native")
+    add_test(NAME ${_pinned} COMMAND ${test_name})
+    batchlas_test_component(_component ${test_name})
+    set(_env "${env}")
+    if(BATCHLAS_OPENBLAS_CORETYPE)
+        list(APPEND _env "OPENBLAS_CORETYPE=${BATCHLAS_OPENBLAS_CORETYPE}")
+    endif()
+    set_tests_properties(${_pinned} PROPERTIES
+        LABELS "${_component};route-native"
+        ENVIRONMENT "${_env}")
+endfunction()
+
 foreach(test ${TEST_TARGETS})
     batchlas_add_test_target(${test})
+endforeach()
+
+list(LENGTH BATCHLAS_ROUTE_PINNED_TESTS _rp_len)
+math(EXPR _rp_last "${_rp_len} / 2 - 1")
+foreach(_i RANGE ${_rp_last})
+    math(EXPR _name_i "${_i} * 2")
+    math(EXPR _env_i "${_i} * 2 + 1")
+    list(GET BATCHLAS_ROUTE_PINNED_TESTS ${_name_i} _rp_name)
+    list(GET BATCHLAS_ROUTE_PINNED_TESTS ${_env_i} _rp_env)
+    batchlas_add_route_pinned_test(${_rp_name} "${_rp_env}")
 endforeach()
 
 if(BATCHLAS_SMOKE_TEST_TARGETS)

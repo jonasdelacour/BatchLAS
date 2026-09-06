@@ -928,10 +928,24 @@ TYPED_TEST(GeqrfTest, NativeFactorMatchesTheVendorElementwise) {
             this->ctx->wait();
 
             // A RELATIVE elementwise bound: the two do not share a reduction order.
+            //
+            // Scan ONLY the m x n window of each item. p.buf is allocated with the
+            // poison fill and only that window is written, so a scan over the whole
+            // buffer takes its maximum from the ld/stride padding (|-9.75e3|), not
+            // from the factor -- whose entries are O(1). That turned this relative
+            // bound into an absolute one ~1000x looser than it reads, admitting a
+            // float disagreement of ~0.07 on the very property this test exists for.
+            // The padding is bit-identical in both runs, so it contributes 0 to
+            // `worst` and cannot compensate.
             double scale = 0.0, worst = 0.0, tworst = 0.0, tscale = 0.0;
-            for (size_t i = 0; i < Fv.size(); ++i) scale = std::max(scale, habs(up(Fv[i])));
-            for (size_t i = 0; i < Fv.size(); ++i)
-                worst = std::max(worst, habs(up(Fv[i]) - up(p.buf[i])));
+            for (int b = 0; b < p.batch; ++b)
+                for (int j = 0; j < p.n; ++j)
+                    for (int i = 0; i < p.m; ++i) {
+                        const size_t idx = static_cast<size_t>(b) * p.stride +
+                                           static_cast<size_t>(j) * p.ld + i;
+                        scale = std::max(scale, habs(up(Fv[idx])));
+                        worst = std::max(worst, habs(up(Fv[idx]) - up(p.buf[idx])));
+                    }
             for (size_t i = 0; i < tv.size(); ++i) tscale = std::max(tscale, habs(up(tv[i])));
             for (size_t i = 0; i < tv.size(); ++i)
                 tworst = std::max(tworst, habs(up(tv[i]) - up(p.tau[i])));

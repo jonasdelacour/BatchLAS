@@ -133,12 +133,24 @@ endif()
 # Compiling them everywhere does not yet make them REACHABLE anywhere: their
 # only callers are the four gates in cublas.cc, which is still cuBLAS-gated.
 # That is S6.
-list(APPEND BACKEND_COMMON_SOURCES
-    symm_custom_dispatch.cc
-    syrk_custom_dispatch.cc
-    syr2k_custom_dispatch.cc
-    trmm_custom_dispatch.cc
-)
+#
+# ...but not on a box with no CUDA device backend at all. Three of the four name
+# ::batchlas::gemm<Backend::CUDA, float> for their expansion's terminal GEMM, and
+# that instantiation lives behind #if BATCHLAS_HAS_CUDA_BACKEND in
+# dispatch/entry_points/level3.cc -- so compiling them into the always-built
+# object library left batchlas_backends.so carrying an undefined reference on any
+# CPU-only or ROCm-only configure. The gate below is the DEVICE FAMILY, not the
+# library: the vendor-free build WP1 exists for is HAS_CUDA_BACKEND=1 with
+# HAS_CUBLAS=0, so it still compiles all four. Their only callers are gates that
+# are themselves guarded on Backend::CUDA, so nothing loses a route.
+if(BATCHLAS_HAS_CUDA_BACKEND)
+    list(APPEND BACKEND_COMMON_SOURCES
+        symm_custom_dispatch.cc
+        syrk_custom_dispatch.cc
+        syr2k_custom_dispatch.cc
+        trmm_custom_dispatch.cc
+    )
+endif()
 
 if(BATCHLAS_HAS_ROCBLAS)
     list(APPEND BACKEND_ROCM_SOURCES rocblas.cc)

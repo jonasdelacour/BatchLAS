@@ -47,10 +47,17 @@
 # not against the spec's stale ~30 s figure.
 #
 # Usage: scripts/register_probe.sh <out.log> [grep-pattern] [cmake-target]
-set -uo pipefail
-cd /home/jonaslacour/BatchLAS/.claude/worktrees/vendor-independence-plan/build/src
-OUT="${1:-/home/jonaslacour/.claude/jobs/20812aa0/tmp/regprobe.log}"
+#   BATCHLAS_BUILD_DIR overrides the build tree (default: <repo>/build).
+# Paths are derived, not hardcoded: this script implements a correctness gate, and
+# a gate nobody else can run is not a gate. `set -e` so a failed cd cannot silently
+# replay link.txt from whatever directory happens to be current.
+set -euo pipefail
+REPO="$(git rev-parse --show-toplevel)"
+BUILD="${BATCHLAS_BUILD_DIR:-$REPO/build}"
+cd "$BUILD/src"
+OUT="${1:-$(mktemp -t regprobe.XXXXXX.log)}"
 PAT="${2:-}"
+ARTIFACT="$(mktemp -t regprobe.XXXXXX.so)"
 
 TARGET="${3:-${BATCHLAS_PROBE_TARGET:-batchlas_sycl}}"
 LINKTXT="CMakeFiles/${TARGET}.dir/link.txt"
@@ -62,11 +69,11 @@ if [[ ! -f "$LINKTXT" ]]; then
 fi
 LINE=$(cat "$LINKTXT")
 # Redirect the artifact away from the real build tree and add the ptxas verbosity.
-LINE=${LINE/-o lib${TARGET}.so/-o \/tmp\/claude-1000\/regprobe.so}
+LINE=${LINE/-o lib${TARGET}.so/-o $ARTIFACT}
 LINE="$LINE -Xsycl-target-backend=nvptx64-nvidia-cuda -Xcuda-ptxas -v"
 
-/usr/bin/time -f 'LINK %e s real, %U s user' bash -c "$LINE" > "$OUT" 2>&1
-rc=$?
+rc=0
+/usr/bin/time -f 'LINK %e s real, %U s user' bash -c "$LINE" > "$OUT" 2>&1 || rc=$?
 echo "exit=$rc  target=$TARGET  log=$OUT"
 grep -c 'Compiling entry function' "$OUT" | sed 's/^/entry functions: /'
 # ENTRY FUNCTIONS AND EVERYTHING ELSE, COUNTED SEPARATELY. ptxas emits

@@ -2197,10 +2197,19 @@ TYPED_TEST(LuTest, DirectEntryPointsRefuseWhatSupportsRefuses) {
                                                            this->getri_seam()),
                      std::invalid_argument)
             << "getri must refuse C aliasing A: C is zeroed before A's triangles are read";
-        EXPECT_THROW(sycl_getri::getri_blocked_dispatch<T>(*this->ctx, A, A, p.piv.to_span(),
+        // A DISTINCT C, so the alias gate above cannot fire first. Passing A as
+        // both operands made this assertion vacuous: it threw on the aliasing
+        // check at getri_blocked.cc:193 and never reached the empty-seam refusal
+        // at :204, so deleting that refusal entirely left the test green -- and a
+        // direct caller that forgot the injection would then call an empty
+        // std::function rather than getting a diagnostic.
+        auto cbuf = make_dominant_permuted<T>(n, batch, 71u);
+        auto Cv = view_of(cbuf);
+        EXPECT_THROW(sycl_getri::getri_blocked_dispatch<T>(*this->ctx, A, Cv, p.piv.to_span(),
                                                            ws.to_span(), ci.to_span(),
                                                            sycl_getri::GetriSolveTrsm<T>{}),
-                     std::invalid_argument);
+                     std::invalid_argument)
+            << "getri must refuse an empty solve seam rather than call an empty std::function";
     }
 }
 

@@ -53,18 +53,27 @@ def preferred(t, m, n, k, batch, tA, tB):
         return False
     if t.startswith("complex"):
         return False                       # rejected outright
-    if not (m == n == k) or batch < 64:    # square only, enough batch to fill the device
+    if batch < 64:                         # enough batch to fill the device
         return False
     mx = max(m, n, k)
     if t == "float":
         # WP2 E4 narrowed float to NN and max_dim <= 32. The transposed window
         # (0.34-0.55x of cuBLAS) and the 128..512 NN window (0.40-0.98x) were
         # both measured losses; see docs/perf/gemm.md#float-nn-at-max_dim-32.
+        # Squareness is a FLOAT-ONLY gate -- E5 removed it for double.
+        if m != n or n != k:
+            return False
         if tA != NOTRANS or tB != NOTRANS:
             return False
         return mx <= 32
     if t == "double":
-        return mx <= 512
+        # E5 landed after E6 and removed BOTH the squareness test and the
+        # max_dim <= 512 bound, adding k >= 2 instead (k == 1 is the rank-1
+        # shape cuBLAS has a dedicated path for -- the only losing double cell).
+        # This replica carried the pre-E5 clause and so under-counted double by
+        # every non-square and every max_dim > 512 row, which is the panel-update
+        # population the demand table is mostly made of.
+        return k >= 2
     return False
 
 
