@@ -374,6 +374,8 @@ Event trsm_native_v1(Queue& ctx,
                     sLc[idx] = v;
                 }
 
+                sycl::group_barrier(it.get_group());
+
                 // ---- Diagonal reciprocals, guarded -------------------------
                 // The recurrence multiplies by rd[s] = 1/Lc(s,s) rather than
                 // dividing, which is the only arithmetic deviation from the

@@ -575,6 +575,43 @@ void RunTrsmBlocked(const TrsmNativeCase<T>& tc) {
 }
 }  // namespace
 
+// Guards the group barrier between V1's SLM staging loop and the reciprocal loop
+// that reads another lane's write. Without it the answers are wrong only when the
+// work-group ladder picks more than one sub-group; every other case in this file
+// lands on wg=32, one sub-group in lock step, where the race cannot express itself.
+// evidence: docs/perf/trsm.md#the-missing-group-barrier
+namespace {
+int trsm_expected_wg(const Queue& ctx, int q, int bs) {
+    const auto dev = ctx.device();
+    const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
+    const int cu = static_cast<int>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS));
+    int wg = 32;
+    for (int cand : {256, 128, 64, 32}) {
+        if (cand > max_wg) continue;
+        wg = cand;
+        const int64_t groups_c = (q + cand - 1) / cand;
+        if (static_cast<int64_t>(bs) * groups_c >= static_cast<int64_t>(4) * cu) break;
+    }
+    return wg;
+}
+}  // namespace
+
+TEST(TrsmNativeBlocked, MultiSubGroupWorkGroupStagesItsTriangleCorrectly) {
+    auto probe = std::make_shared<Queue>(Device("gpu"), Backend::CUDA);
+    const int q = 976, bs = 128;
+    ASSERT_GT(trsm_expected_wg(*probe, q, bs), 32)
+        << "this device's ladder still picks a single sub-group at q=" << q
+        << " batch=" << bs << ", so this test cannot see the defect it exists "
+           "for; raise q or batch";
+
+    // Order 48 is one full N=32 block plus a ragged N=16 one; orders that
+    // divide evenly into the CTA capacity do not reproduce the race.
+    RunTrsmBlocked<float>({48, q, bs, Side::Right, Uplo::Lower,
+                           Transpose::Trans, Diag::NonUnit, 1.0f});
+    RunTrsmBlocked<double>({48, q, bs, Side::Right, Uplo::Lower,
+                            Transpose::Trans, Diag::NonUnit, 1.0});
+}
+
 // The crossover and the block structure. 33 is one past the capacity (two
 // blocks, the second of width 1 -- the short-final-block case); 64 is exactly
 // two full blocks; 96 is three; 100 is three plus a ragged 4.
