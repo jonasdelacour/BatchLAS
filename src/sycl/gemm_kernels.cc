@@ -46,8 +46,6 @@ inline bool is_experimental_kernel_variant(KernelVariant variant) {
     }
 }
 
-inline bool has_forced_kernel_variant();
-
 inline bool is_squareish_shape(int m, int n, int k) {
     const int max_dim = std::max({m, n, k});
     const int min_dim = std::min({m, n, k});
@@ -60,22 +58,6 @@ inline bool is_large_square_bucket(int m, int n, int k) {
 
 inline bool is_full_512_square_bucket(int m, int n, int k) {
     return std::min({m, n, k}) >= 512;
-}
-
-template <typename T>
-KernelVariant choose_runtime_kernel_variant(const Queue& ctx,
-                                           const MatrixView<T, MatrixFormat::Dense>& A,
-                                           const MatrixView<T, MatrixFormat::Dense>& B,
-                                           const MatrixView<T, MatrixFormat::Dense>& C,
-                                           Transpose transA,
-                                           Transpose transB) {
-    static_cast<void>(ctx);
-    const KernelVariant selected = select_kernel_variant(A, B, C, transA, transB);
-    if (has_forced_kernel_variant()) {
-        return selected;
-    }
-
-    return selected;
 }
 
 template <typename T>
@@ -535,7 +517,7 @@ Event gemm_custom(Queue& ctx,
         throw std::runtime_error("GEMM SYCL custom path received incompatible matrix dimensions");
     }
 
-    const KernelVariant variant = choose_runtime_kernel_variant(ctx, A, B, C, transA, transB);
+    const KernelVariant variant = select_kernel_variant(A, B, C, transA, transB);
     if (is_experimental_kernel_variant(variant) && !experimental_kernel_variants_enabled()) {
         throw std::runtime_error(
             "Requested experimental GEMM SYCL kernel variant without BATCHLAS_GEMM_EXPERIMENTAL enabled");

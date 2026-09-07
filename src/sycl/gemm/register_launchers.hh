@@ -121,17 +121,6 @@ Event launch_register_128x32_k16_tt(Queue& ctx,
 }
 
 template <typename T>
-Event launch_register_128x32_k32_variant(Queue& ctx,
-                                         const MatrixView<T, MatrixFormat::Dense>& A,
-                                         const MatrixView<T, MatrixFormat::Dense>& B,
-                                         const MatrixView<T, MatrixFormat::Dense>& C,
-                                         T alpha,
-                                         T beta,
-                                         const char* (*kernel_trace_name)(KernelVariant)) {
-    return launch_register_tiled<T, 128, 32, 32, 4, 4, 4, 4, 1, 1>(ctx, A, B, C, alpha, beta, kernel_trace_name);
-}
-
-template <typename T>
 Event launch_register_128x32_k32(Queue& ctx,
                                  const MatrixView<T, MatrixFormat::Dense>& A,
                                  const MatrixView<T, MatrixFormat::Dense>& B,

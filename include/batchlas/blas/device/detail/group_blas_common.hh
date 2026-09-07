@@ -136,9 +136,6 @@ struct SymmetricRankKTransform {
 };
 
 template <typename T>
-using GemvOperand = MatrixVectorOperand<T>;
-
-template <typename T>
 inline constexpr MatrixVectorOperand<T> make_matvec_operand(const VectorView<T>& x,
                                                             const VectorView<T>& y,
                                                             T alpha = T(1),
@@ -166,14 +163,6 @@ inline constexpr Rank1UpdateOperand<T> make_rank1_update_operand(const VectorVie
                                                                  const KernelMatrixView<T, MatrixFormat::Dense>& a,
                                                                  T alpha = T(1)) {
     return Rank1UpdateOperand<T>{y, a, alpha};
-}
-
-template <typename T>
-inline constexpr GemvOperand<T> make_gemv_operand(const VectorView<T>& x,
-                                                  const VectorView<T>& y,
-                                                  T alpha = T(1),
-                                                  T beta = T(0)) {
-    return make_matvec_operand(x, y, alpha, beta);
 }
 
 namespace detail {
@@ -549,99 +538,6 @@ inline constexpr void validate_hadamard_operands(const VectorView<T>& z,
      ...);
 }
 
-template <typename Group, typename T, std::size_t... I>
-inline constexpr void reduce_partials_impl(const Group& group,
-                                           std::array<T, sizeof...(I)>& values,
-                                           std::index_sequence<I...>) {
-    ((values[I] = reduce_sum_group(group, values[I])), ...);
-}
-
-template <typename Group, typename T, typename... Ops>
-inline constexpr void reduce_partials(const Group& group,
-                                      std::array<T, sizeof...(Ops)>& values,
-                                      const std::tuple<Ops...>&) {
-    reduce_partials_impl(group, values, std::index_sequence_for<Ops...>{});
-}
-
-template <typename T, typename Tuple, std::size_t... I>
-inline constexpr void validate_operands_impl(const KernelMatrixView<T, MatrixFormat::Dense>& a,
-                                             const Tuple& operands,
-                                             Transpose trans,
-                                             std::index_sequence<I...>) {
-    (validate_operand(a, std::get<I>(operands), trans), ...);
-}
-
-template <typename T, typename... Ops>
-inline constexpr void validate_operands(const KernelMatrixView<T, MatrixFormat::Dense>& a,
-                                        const std::tuple<Ops...>& operands,
-                                        Transpose trans) {
-    validate_operands_impl(a, operands, trans, std::index_sequence_for<Ops...>{});
-}
-
-template <typename T, typename Tuple, std::size_t... I>
-inline constexpr void validate_triangular_operands_impl(const KernelMatrixView<T, MatrixFormat::Dense>& a,
-                                                        const Tuple& operands,
-                                                        TriangularTransform transform,
-                                                        std::index_sequence<I...>) {
-    (validate_triangular_operand(a, std::get<I>(operands), transform), ...);
-}
-
-template <typename T, typename... Ops>
-inline constexpr void validate_triangular_operands(const KernelMatrixView<T, MatrixFormat::Dense>& a,
-                                                   const std::tuple<Ops...>& operands,
-                                                   TriangularTransform transform) {
-    validate_triangular_operands_impl(a, operands, transform, std::index_sequence_for<Ops...>{});
-}
-
-template <typename T, typename Tuple, std::size_t... I>
-inline constexpr void validate_symmetric_operands_impl(const KernelMatrixView<T, MatrixFormat::Dense>& a,
-                                                       const Tuple& operands,
-                                                       SymmetricTransform transform,
-                                                       std::index_sequence<I...>) {
-    (validate_symmetric_operand(a, std::get<I>(operands), transform), ...);
-}
-
-template <typename T, typename... Ops>
-inline constexpr void validate_symmetric_operands(const KernelMatrixView<T, MatrixFormat::Dense>& a,
-                                                  const std::tuple<Ops...>& operands,
-                                                  SymmetricTransform transform) {
-    validate_symmetric_operands_impl(a, operands, transform, std::index_sequence_for<Ops...>{});
-}
-
-template <typename T, typename Tuple, std::size_t... I>
-inline constexpr void accumulate_impl(std::array<T, sizeof...(I)>& partials,
-                                      const Tuple& operands,
-                                      const T& a_ij,
-                                      int input_index,
-                                      std::index_sequence<I...>) {
-    ((partials[I] += a_ij * std::get<I>(operands).x(input_index)), ...);
-}
-
-template <typename T, typename... Ops>
-inline constexpr void accumulate(std::array<T, sizeof...(Ops)>& partials,
-                                 const std::tuple<Ops...>& operands,
-                                 const T& a_ij,
-                                 int input_index) {
-    accumulate_impl(partials, operands, a_ij, input_index, std::index_sequence_for<Ops...>{});
-}
-
-template <typename T, typename Tuple, std::size_t... I>
-inline constexpr void write_outputs_impl(const Tuple& operands,
-                                         int output_index,
-                                         const std::array<T, sizeof...(I)>& values,
-                                         std::index_sequence<I...>) {
-    ((std::get<I>(operands).y(output_index) =
-          std::get<I>(operands).alpha * values[I] + std::get<I>(operands).beta * std::get<I>(operands).y(output_index)),
-     ...);
-}
-
-template <typename T, typename... Ops>
-inline constexpr void write_outputs(const std::tuple<Ops...>& operands,
-                                    int output_index,
-                                    const std::array<T, sizeof...(Ops)>& values) {
-    write_outputs_impl(operands, output_index, values, std::index_sequence_for<Ops...>{});
-}
-
 template <Side SideV, Uplo UploV, Transpose TransposeV, Diag DiagV>
 struct TriangularTransformTag {
     static constexpr Side side = SideV;
@@ -787,36 +683,6 @@ inline constexpr void accumulate_rank1_output(const Rank1UpdateOperand<T>& opera
 }
 
 template <typename Tag>
-inline constexpr int triangular_begin(int index, int extent) {
-    if constexpr (Tag::side == Side::Left) {
-        if constexpr (Tag::trans == Transpose::NoTrans) {
-            return Tag::uplo == Uplo::Lower ? 0 : index;
-        }
-        return Tag::uplo == Uplo::Lower ? index : 0;
-    }
-
-    if constexpr (Tag::trans == Transpose::NoTrans) {
-        return Tag::uplo == Uplo::Lower ? index : 0;
-    }
-    return Tag::uplo == Uplo::Lower ? 0 : index;
-}
-
-template <typename Tag>
-inline constexpr int triangular_end(int index, int extent) {
-    if constexpr (Tag::side == Side::Left) {
-        if constexpr (Tag::trans == Transpose::NoTrans) {
-            return Tag::uplo == Uplo::Lower ? index + 1 : extent;
-        }
-        return Tag::uplo == Uplo::Lower ? extent : index + 1;
-    }
-
-    if constexpr (Tag::trans == Transpose::NoTrans) {
-        return Tag::uplo == Uplo::Lower ? extent : index + 1;
-    }
-    return Tag::uplo == Uplo::Lower ? index + 1 : extent;
-}
-
-template <typename Tag>
 inline constexpr Transpose rank2k_rhs_transform() {
     if constexpr (Tag::trans == Transpose::NoTrans) {
         return Tag::hermitian ? Transpose::ConjTrans : Transpose::Trans;
@@ -857,164 +723,6 @@ inline constexpr T secondary_rank2k_alpha(const T& alpha) {
 template <typename T>
 inline constexpr T secondary_rank2k_alpha(const T& alpha, bool hermitian) {
     return hermitian ? conj(alpha) : alpha;
-}
-
-template <typename Fn>
-inline constexpr decltype(auto) dispatch_triangular_transform(TriangularTransform transform, Fn&& fn) {
-    switch (transform.side) {
-    case Side::Left:
-        switch (transform.uplo) {
-        case Uplo::Lower:
-            switch (transform.trans) {
-            case Transpose::NoTrans:
-                return transform.diag == Diag::Unit
-                    ? std::forward<Fn>(fn)(TriangularTransformTag<Side::Left, Uplo::Lower, Transpose::NoTrans, Diag::Unit>{})
-                    : std::forward<Fn>(fn)(TriangularTransformTag<Side::Left, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit>{});
-            case Transpose::Trans:
-                return transform.diag == Diag::Unit
-                    ? std::forward<Fn>(fn)(TriangularTransformTag<Side::Left, Uplo::Lower, Transpose::Trans, Diag::Unit>{})
-                    : std::forward<Fn>(fn)(TriangularTransformTag<Side::Left, Uplo::Lower, Transpose::Trans, Diag::NonUnit>{});
-            case Transpose::ConjTrans:
-                return transform.diag == Diag::Unit
-                    ? std::forward<Fn>(fn)(TriangularTransformTag<Side::Left, Uplo::Lower, Transpose::ConjTrans, Diag::Unit>{})
-                    : std::forward<Fn>(fn)(TriangularTransformTag<Side::Left, Uplo::Lower, Transpose::ConjTrans, Diag::NonUnit>{});
-            }
-            break;
-        case Uplo::Upper:
-            switch (transform.trans) {
-            case Transpose::NoTrans:
-                return transform.diag == Diag::Unit
-                    ? std::forward<Fn>(fn)(TriangularTransformTag<Side::Left, Uplo::Upper, Transpose::NoTrans, Diag::Unit>{})
-                    : std::forward<Fn>(fn)(TriangularTransformTag<Side::Left, Uplo::Upper, Transpose::NoTrans, Diag::NonUnit>{});
-            case Transpose::Trans:
-                return transform.diag == Diag::Unit
-                    ? std::forward<Fn>(fn)(TriangularTransformTag<Side::Left, Uplo::Upper, Transpose::Trans, Diag::Unit>{})
-                    : std::forward<Fn>(fn)(TriangularTransformTag<Side::Left, Uplo::Upper, Transpose::Trans, Diag::NonUnit>{});
-            case Transpose::ConjTrans:
-                return transform.diag == Diag::Unit
-                    ? std::forward<Fn>(fn)(TriangularTransformTag<Side::Left, Uplo::Upper, Transpose::ConjTrans, Diag::Unit>{})
-                    : std::forward<Fn>(fn)(TriangularTransformTag<Side::Left, Uplo::Upper, Transpose::ConjTrans, Diag::NonUnit>{});
-            }
-            break;
-        }
-        break;
-    case Side::Right:
-        switch (transform.uplo) {
-        case Uplo::Lower:
-            switch (transform.trans) {
-            case Transpose::NoTrans:
-                return transform.diag == Diag::Unit
-                    ? std::forward<Fn>(fn)(TriangularTransformTag<Side::Right, Uplo::Lower, Transpose::NoTrans, Diag::Unit>{})
-                    : std::forward<Fn>(fn)(TriangularTransformTag<Side::Right, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit>{});
-            case Transpose::Trans:
-                return transform.diag == Diag::Unit
-                    ? std::forward<Fn>(fn)(TriangularTransformTag<Side::Right, Uplo::Lower, Transpose::Trans, Diag::Unit>{})
-                    : std::forward<Fn>(fn)(TriangularTransformTag<Side::Right, Uplo::Lower, Transpose::Trans, Diag::NonUnit>{});
-            case Transpose::ConjTrans:
-                return transform.diag == Diag::Unit
-                    ? std::forward<Fn>(fn)(TriangularTransformTag<Side::Right, Uplo::Lower, Transpose::ConjTrans, Diag::Unit>{})
-                    : std::forward<Fn>(fn)(TriangularTransformTag<Side::Right, Uplo::Lower, Transpose::ConjTrans, Diag::NonUnit>{});
-            }
-            break;
-        case Uplo::Upper:
-            switch (transform.trans) {
-            case Transpose::NoTrans:
-                return transform.diag == Diag::Unit
-                    ? std::forward<Fn>(fn)(TriangularTransformTag<Side::Right, Uplo::Upper, Transpose::NoTrans, Diag::Unit>{})
-                    : std::forward<Fn>(fn)(TriangularTransformTag<Side::Right, Uplo::Upper, Transpose::NoTrans, Diag::NonUnit>{});
-            case Transpose::Trans:
-                return transform.diag == Diag::Unit
-                    ? std::forward<Fn>(fn)(TriangularTransformTag<Side::Right, Uplo::Upper, Transpose::Trans, Diag::Unit>{})
-                    : std::forward<Fn>(fn)(TriangularTransformTag<Side::Right, Uplo::Upper, Transpose::Trans, Diag::NonUnit>{});
-            case Transpose::ConjTrans:
-                return transform.diag == Diag::Unit
-                    ? std::forward<Fn>(fn)(TriangularTransformTag<Side::Right, Uplo::Upper, Transpose::ConjTrans, Diag::Unit>{})
-                    : std::forward<Fn>(fn)(TriangularTransformTag<Side::Right, Uplo::Upper, Transpose::ConjTrans, Diag::NonUnit>{});
-            }
-            break;
-        }
-        break;
-    }
-    assert(false && "unreachable triangular transform");
-    return std::forward<Fn>(fn)(TriangularTransformTag<Side::Left, Uplo::Upper, Transpose::NoTrans, Diag::NonUnit>{});
-}
-
-template <typename Fn>
-inline constexpr decltype(auto) dispatch_symmetric_transform(SymmetricTransform transform, Fn&& fn) {
-    switch (transform.side) {
-    case Side::Left:
-        switch (transform.uplo) {
-        case Uplo::Lower:
-            return transform.hermitian
-                ? std::forward<Fn>(fn)(SymmetricTransformTag<Side::Left, Uplo::Lower, true>{})
-                : std::forward<Fn>(fn)(SymmetricTransformTag<Side::Left, Uplo::Lower, false>{});
-        case Uplo::Upper:
-            return transform.hermitian
-                ? std::forward<Fn>(fn)(SymmetricTransformTag<Side::Left, Uplo::Upper, true>{})
-                : std::forward<Fn>(fn)(SymmetricTransformTag<Side::Left, Uplo::Upper, false>{});
-        }
-        break;
-    case Side::Right:
-        switch (transform.uplo) {
-        case Uplo::Lower:
-            return transform.hermitian
-                ? std::forward<Fn>(fn)(SymmetricTransformTag<Side::Right, Uplo::Lower, true>{})
-                : std::forward<Fn>(fn)(SymmetricTransformTag<Side::Right, Uplo::Lower, false>{});
-        case Uplo::Upper:
-            return transform.hermitian
-                ? std::forward<Fn>(fn)(SymmetricTransformTag<Side::Right, Uplo::Upper, true>{})
-                : std::forward<Fn>(fn)(SymmetricTransformTag<Side::Right, Uplo::Upper, false>{});
-        }
-        break;
-    }
-    assert(false && "unreachable symmetric transform");
-    return std::forward<Fn>(fn)(SymmetricTransformTag<Side::Left, Uplo::Upper, false>{});
-}
-
-template <typename Fn>
-inline constexpr decltype(auto) dispatch_rank_transform(SymmetricRank2kTransform transform, Fn&& fn) {
-    switch (transform.uplo) {
-    case Uplo::Lower:
-        switch (transform.trans) {
-        case Transpose::NoTrans:
-            return transform.hermitian
-                ? std::forward<Fn>(fn)(SymmetricRankTransformTag<Uplo::Lower, Transpose::NoTrans, true>{})
-                : std::forward<Fn>(fn)(SymmetricRankTransformTag<Uplo::Lower, Transpose::NoTrans, false>{});
-        case Transpose::Trans:
-            return transform.hermitian
-                ? std::forward<Fn>(fn)(SymmetricRankTransformTag<Uplo::Lower, Transpose::Trans, true>{})
-                : std::forward<Fn>(fn)(SymmetricRankTransformTag<Uplo::Lower, Transpose::Trans, false>{});
-        case Transpose::ConjTrans:
-            return transform.hermitian
-                ? std::forward<Fn>(fn)(SymmetricRankTransformTag<Uplo::Lower, Transpose::ConjTrans, true>{})
-                : std::forward<Fn>(fn)(SymmetricRankTransformTag<Uplo::Lower, Transpose::ConjTrans, false>{});
-        }
-        break;
-    case Uplo::Upper:
-        switch (transform.trans) {
-        case Transpose::NoTrans:
-            return transform.hermitian
-                ? std::forward<Fn>(fn)(SymmetricRankTransformTag<Uplo::Upper, Transpose::NoTrans, true>{})
-                : std::forward<Fn>(fn)(SymmetricRankTransformTag<Uplo::Upper, Transpose::NoTrans, false>{});
-        case Transpose::Trans:
-            return transform.hermitian
-                ? std::forward<Fn>(fn)(SymmetricRankTransformTag<Uplo::Upper, Transpose::Trans, true>{})
-                : std::forward<Fn>(fn)(SymmetricRankTransformTag<Uplo::Upper, Transpose::Trans, false>{});
-        case Transpose::ConjTrans:
-            return transform.hermitian
-                ? std::forward<Fn>(fn)(SymmetricRankTransformTag<Uplo::Upper, Transpose::ConjTrans, true>{})
-                : std::forward<Fn>(fn)(SymmetricRankTransformTag<Uplo::Upper, Transpose::ConjTrans, false>{});
-        }
-        break;
-    }
-    assert(false && "unreachable rank transform");
-    return std::forward<Fn>(fn)(SymmetricRankTransformTag<Uplo::Upper, Transpose::NoTrans, false>{});
-}
-
-template <typename Fn>
-inline constexpr decltype(auto) dispatch_rank_transform(SymmetricRankKTransform transform, Fn&& fn) {
-    return dispatch_rank_transform(SymmetricRank2kTransform{.uplo = transform.uplo, .trans = transform.trans, .hermitian = transform.hermitian},
-                                   std::forward<Fn>(fn));
 }
 
 template <typename T>

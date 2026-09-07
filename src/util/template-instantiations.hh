@@ -30,10 +30,6 @@
 // with every parameter spelled out and no `= default` clauses.
 #define BATCHLAS_INSTANTIATE(SIG, FN, ...) template SIG FN<__VA_ARGS__>;
 
-// The class-template equivalent, for the handful of `template struct X<...>;`
-// instantiations (e.g. backend_handle_instantiations.cc).
-#define BATCHLAS_INSTANTIATE_CLASS(C, ...) template struct C<__VA_ARGS__>;
-
 #define BATCHLAS_FOR_EACH_REAL_TYPE(INVOKE) \
     INVOKE((float)) \
     INVOKE((double))
