@@ -6,6 +6,7 @@
 #include <complex>
 #include <algorithm>
 #include <batchlas/blas/linalg.hh>
+#include "../util/template-instantiations.hh"
 
 #include <batchlas/blas/functions/syev.hh>
 #include <batchlas/blas/functions/ormqr.hh>
@@ -383,102 +384,34 @@ namespace batchlas {
 
     } // namespace backend
 
-    #define GESVD_VENDOR_INSTANTIATE(fp) \
-    template Event backend::gesvd_vendor<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Span<typename base_type<fp>::type>, const MatrixView<fp, MatrixFormat::Dense>&, const MatrixView<fp, MatrixFormat::Dense>&, SvdVectors, SvdVectors, Span<std::byte>);
-    #define GESVD_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) \
-    template size_t backend::gesvd_vendor_buffer_size<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Span<typename base_type<fp>::type>, const MatrixView<fp, MatrixFormat::Dense>&, const MatrixView<fp, MatrixFormat::Dense>&, SvdVectors, SvdVectors);
+    // Explicit instantiations. Signatures live in the `sig` namespace beside each
+    // public declaration (include/batchlas/blas/functions/*.hh), so changing one is a single
+    // header edit rather than one edit per backend TU.
+    #define ROCSOLVER_OPS(B, fp) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, potrf) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, potrf_buffer_size) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, syev) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, syev_buffer_size) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, syev_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, syev_vendor_buffer_size) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, gesvd_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, gesvd_vendor_buffer_size) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, geqrf) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, geqrf_buffer_size) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, getrf) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, getrf_buffer_size) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, getrs) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, getrs_buffer_size) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, getri) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, getri_buffer_size) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, ormqr) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, ormqr_buffer_size) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, ormqr_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, ormqr_vendor_buffer_size) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, orgqr) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, orgqr_buffer_size)
 
-    #define POTRF_INSTANTIATE(fp) \
-    template Event potrf<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Uplo, Span<std::byte>, Span<int32_t>);
-    #define POTRF_BUFFER_SIZE_INSTANTIATE(fp) \
-    template size_t potrf_buffer_size<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Uplo);
-    #define SYEV_INSTANTIATE(fp) \
-    template Event syev<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Span<typename base_type<fp>::type>, JobType, Uplo, Span<std::byte>);
-    #define SYEV_BUFFER_SIZE_INSTANTIATE(fp) \
-    template size_t syev_buffer_size<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Span<typename base_type<fp>::type>, JobType, Uplo);
-    #define SYEV_VENDOR_INSTANTIATE(fp) \
-    template Event backend::syev_vendor<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Span<typename base_type<fp>::type>, JobType, Uplo, Span<std::byte>);
-    #define SYEV_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) \
-    template size_t backend::syev_vendor_buffer_size<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Span<typename base_type<fp>::type>, JobType, Uplo);
-    #define GEQRF_INSTANTIATE(fp) \
-    template Event geqrf<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Span<fp>, Span<std::byte>);
-    #define GEQRF_BUFFER_SIZE_INSTANTIATE(fp) \
-    template size_t geqrf_buffer_size<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Span<fp>);
-    #define ORMQR_INSTANTIATE(fp) \
-    template Event ormqr<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, const MatrixView<fp, MatrixFormat::Dense>&, Side, Transpose, Span<fp>, Span<std::byte>, int32_t);
-    #define ORMQR_BUFFER_SIZE_INSTANTIATE(fp) \
-    template size_t ormqr_buffer_size<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, const MatrixView<fp, MatrixFormat::Dense>&, Side, Transpose, Span<fp>, int32_t);
-    #define ORMQR_VENDOR_INSTANTIATE(fp) \
-    template Event backend::ormqr_vendor<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, const MatrixView<fp, MatrixFormat::Dense>&, Side, Transpose, Span<fp>, Span<std::byte>);
-    #define ORMQR_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) \
-    template size_t backend::ormqr_vendor_buffer_size<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, const MatrixView<fp, MatrixFormat::Dense>&, Side, Transpose, Span<fp>);
-    #define ORGQR_INSTANTIATE(fp) \
-    template Event orgqr<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Span<fp>, Span<std::byte>);
-    #define ORGQR_BUFFER_SIZE_INSTANTIATE(fp) \
-    template size_t orgqr_buffer_size<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Span<fp>);
-    #define GETRF_INSTANTIATE(fp) \
-    template Event getrf<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Span<int64_t>, Span<std::byte>, Span<int32_t>);
-    #define GETRF_BUFFER_SIZE_INSTANTIATE(fp) \
-    template size_t getrf_buffer_size<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&);
-    #define GETRS_INSTANTIATE(fp) \
-    template Event getrs<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, const MatrixView<fp, MatrixFormat::Dense>&, Transpose, Span<int64_t>, Span<std::byte>);
-    #define GETRS_BUFFER_SIZE_INSTANTIATE(fp) \
-    template size_t getrs_buffer_size<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, const MatrixView<fp, MatrixFormat::Dense>&, Transpose);
-    #define GETRI_INSTANTIATE(fp) \
-    template Event getri<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, const MatrixView<fp, MatrixFormat::Dense>&, Span<int64_t>, Span<std::byte>, Span<int32_t>);
-    #define GETRI_BUFFER_SIZE_INSTANTIATE(fp) \
-    template size_t getri_buffer_size<Backend::ROCM, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&);
+    BATCHLAS_FOR_EACH_SCALAR_TYPE_1(ROCSOLVER_OPS, Backend::ROCM)
 
-    #define ROCSOLVER_INSTANTIATE(fp) \
-        POTRF_INSTANTIATE(fp) \
-        POTRF_BUFFER_SIZE_INSTANTIATE(fp) \
-        SYEV_INSTANTIATE(fp) \
-        SYEV_BUFFER_SIZE_INSTANTIATE(fp) \
-        SYEV_VENDOR_INSTANTIATE(fp) \
-        SYEV_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) \
-        GESVD_VENDOR_INSTANTIATE(fp) \
-        GESVD_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) \
-        GEQRF_INSTANTIATE(fp) \
-        GEQRF_BUFFER_SIZE_INSTANTIATE(fp) \
-        GETRF_INSTANTIATE(fp) \
-        GETRF_BUFFER_SIZE_INSTANTIATE(fp) \
-        GETRS_INSTANTIATE(fp) \
-        GETRS_BUFFER_SIZE_INSTANTIATE(fp) \
-        GETRI_INSTANTIATE(fp) \
-        GETRI_BUFFER_SIZE_INSTANTIATE(fp) \
-        ORMQR_INSTANTIATE(fp) \
-        ORMQR_BUFFER_SIZE_INSTANTIATE(fp) \
-        ORMQR_VENDOR_INSTANTIATE(fp) \
-        ORMQR_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) \
-        ORGQR_INSTANTIATE(fp) \
-        ORGQR_BUFFER_SIZE_INSTANTIATE(fp)
-
-    ROCSOLVER_INSTANTIATE(float)
-    ROCSOLVER_INSTANTIATE(double)
-    ROCSOLVER_INSTANTIATE(std::complex<float>)
-    ROCSOLVER_INSTANTIATE(std::complex<double>)
-
-    #undef POTRF_INSTANTIATE
-    #undef POTRF_BUFFER_SIZE_INSTANTIATE
-    #undef SYEV_INSTANTIATE
-    #undef SYEV_BUFFER_SIZE_INSTANTIATE
-    #undef SYEV_VENDOR_INSTANTIATE
-    #undef SYEV_VENDOR_BUFFER_SIZE_INSTANTIATE
-    #undef GESVD_VENDOR_INSTANTIATE
-    #undef GESVD_VENDOR_BUFFER_SIZE_INSTANTIATE
-    #undef GEQRF_INSTANTIATE
-    #undef GEQRF_BUFFER_SIZE_INSTANTIATE
-    #undef ORMQR_INSTANTIATE
-    #undef ORMQR_BUFFER_SIZE_INSTANTIATE
-    #undef ORMQR_VENDOR_INSTANTIATE
-    #undef ORMQR_VENDOR_BUFFER_SIZE_INSTANTIATE
-    #undef ORGQR_INSTANTIATE
-    #undef ORGQR_BUFFER_SIZE_INSTANTIATE
-    #undef GETRF_INSTANTIATE
-    #undef GETRF_BUFFER_SIZE_INSTANTIATE
-    #undef GETRS_INSTANTIATE
-    #undef GETRS_BUFFER_SIZE_INSTANTIATE
-    #undef GETRI_INSTANTIATE
-    #undef GETRI_BUFFER_SIZE_INSTANTIATE
-    #undef ROCSOLVER_INSTANTIATE
+    #undef ROCSOLVER_OPS
 }

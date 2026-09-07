@@ -1770,96 +1770,44 @@ namespace batchlas {
     // header edit rather than one edit per backend TU.
     #define B_ Backend::CUDA
 
-    #define GEMM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::gemm<fp>, gemm, B_, fp)
-    #define GEMV_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::gemv<fp>, gemv, B_, fp)
-    #define TRSM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::trsm<fp>, trsm, B_, fp)
-    #define TRMM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::trmm<fp>, trmm, B_, fp)
-    #define SYMM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::symm<fp>, symm, B_, fp)
-    #define HEMM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::hemm<fp>, hemm, B_, fp)
-    #define SYRK_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::syrk<fp>, syrk, B_, fp)
-    #define HERK_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::herk<fp>, herk, B_, fp)
-    #define HER2K_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::her2k<fp>, her2k, B_, fp)
-    #define SYR2K_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::syr2k<fp>, syr2k, B_, fp)
-    #define GEQRF_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::geqrf<fp>, geqrf, B_, fp)
-    #define GEQRF_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::geqrf_buffer_size<fp>, geqrf_buffer_size, B_, fp)
-    #define GETRS_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::getrs<fp>, getrs, B_, fp)
-    #define GETRS_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::getrs_buffer_size<fp>, getrs_buffer_size, B_, fp)
-    #define GETRF_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::getrf<fp>, getrf, B_, fp)
-    #define GETRF_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::getrf_buffer_size<fp>, getrf_buffer_size, B_, fp)
-    #define GETRI_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::getri<fp>, getri, B_, fp)
-    #define GETRI_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::getri_buffer_size<fp>, getri_buffer_size, B_, fp)
-    #define ORMQR_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::ormqr<fp>, ormqr, B_, fp)
-    #define ORMQR_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::ormqr_buffer_size<fp>, ormqr_buffer_size, B_, fp)
-    #define ORMQR_VENDOR_INSTANTIATE(fp)        BATCHLAS_INSTANTIATE(sig::ormqr_vendor<fp>, backend::ormqr_vendor, B_, fp)
-    #define ORMQR_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) BATCHLAS_INSTANTIATE(sig::ormqr_vendor_buffer_size<fp>, backend::ormqr_vendor_buffer_size, B_, fp)
-    #define ORGQR_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::orgqr<fp>, orgqr, B_, fp)
-    #define ORGQR_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::orgqr_buffer_size<fp>, orgqr_buffer_size, B_, fp)
+    #define CUBLAS_OPS(B, fp) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, gemm) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, gemv) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, trsm) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, trmm) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, geqrf) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, geqrf_buffer_size) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, getrs) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, getrs_buffer_size) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, getrf) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, getrf_buffer_size) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, getri) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, getri_buffer_size) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, ormqr) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, ormqr_buffer_size) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, ormqr_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, ormqr_vendor_buffer_size) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, orgqr) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, orgqr_buffer_size)
 
-    #define BLAS_LEVEL3_INSTANTIATE(fp)\
-        GEMM_INSTANTIATE(fp)\
-        GEMV_INSTANTIATE(fp)\
-        TRSM_INSTANTIATE(fp)\
-        GEQRF_INSTANTIATE(fp)\
-        GEQRF_BUFFER_SIZE_INSTANTIATE(fp)\
-        GETRS_INSTANTIATE(fp)\
-        GETRS_BUFFER_SIZE_INSTANTIATE(fp)\
-        GETRF_INSTANTIATE(fp)\
-        GETRF_BUFFER_SIZE_INSTANTIATE(fp)\
-        GETRI_INSTANTIATE(fp)\
-        GETRI_BUFFER_SIZE_INSTANTIATE(fp)\
-        ORMQR_INSTANTIATE(fp)\
-        ORMQR_BUFFER_SIZE_INSTANTIATE(fp)\
-        ORMQR_VENDOR_INSTANTIATE(fp)\
-        ORMQR_VENDOR_BUFFER_SIZE_INSTANTIATE(fp)\
-        ORGQR_INSTANTIATE(fp)\
-        ORGQR_BUFFER_SIZE_INSTANTIATE(fp)
+    // symm/syrk/syr2k are real-only and hemm/herk/her2k are complex-only, so the
+    // narrower domains get their own tables rather than one blanket loop.
+    #define CUBLAS_REAL_OPS(B, fp) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, symm) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, syrk) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, syr2k)
 
+    #define CUBLAS_COMPLEX_OPS(B, fp) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, hemm) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, herk) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, her2k)
 
-    BLAS_LEVEL3_INSTANTIATE(float)
-    BLAS_LEVEL3_INSTANTIATE(double)
-    BLAS_LEVEL3_INSTANTIATE(std::complex<float>)
-    BLAS_LEVEL3_INSTANTIATE(std::complex<double>)
-    TRMM_INSTANTIATE(float)
-    TRMM_INSTANTIATE(double)
-    TRMM_INSTANTIATE(std::complex<float>)
-    TRMM_INSTANTIATE(std::complex<double>)
-    SYMM_INSTANTIATE(float)
-    SYMM_INSTANTIATE(double)
-    HEMM_INSTANTIATE(std::complex<float>)
-    HEMM_INSTANTIATE(std::complex<double>)
-    HERK_INSTANTIATE(std::complex<float>)
-    HERK_INSTANTIATE(std::complex<double>)
-    HER2K_INSTANTIATE(std::complex<float>)
-    HER2K_INSTANTIATE(std::complex<double>)
-    SYRK_INSTANTIATE(float)
-    SYRK_INSTANTIATE(double)
-    SYR2K_INSTANTIATE(float)
-    SYR2K_INSTANTIATE(double)
+    BATCHLAS_FOR_EACH_SCALAR_TYPE_1(CUBLAS_OPS, B_)
+    BATCHLAS_FOR_EACH_REAL_TYPE_1(CUBLAS_REAL_OPS, B_)
+    BATCHLAS_FOR_EACH_COMPLEX_TYPE_1(CUBLAS_COMPLEX_OPS, B_)
 
-    #undef GEMM_INSTANTIATE
-    #undef GEMV_INSTANTIATE
-    #undef SYMM_INSTANTIATE
-    #undef HEMM_INSTANTIATE
-    #undef HERK_INSTANTIATE
-    #undef HER2K_INSTANTIATE
-    #undef SYRK_INSTANTIATE
-    #undef SYR2K_INSTANTIATE
-    #undef TRSM_INSTANTIATE
-    #undef TRMM_INSTANTIATE
-    #undef GEQRF_INSTANTIATE
-    #undef GEQRF_BUFFER_SIZE_INSTANTIATE
-    #undef GETRS_INSTANTIATE
-    #undef GETRS_BUFFER_SIZE_INSTANTIATE
-    #undef GETRF_INSTANTIATE
-    #undef GETRF_BUFFER_SIZE_INSTANTIATE
-    #undef GETRI_INSTANTIATE
-    #undef GETRI_BUFFER_SIZE_INSTANTIATE
-    #undef ORMQR_INSTANTIATE
-    #undef ORMQR_BUFFER_SIZE_INSTANTIATE
-    #undef ORMQR_VENDOR_INSTANTIATE
-    #undef ORMQR_VENDOR_BUFFER_SIZE_INSTANTIATE
-    #undef ORGQR_INSTANTIATE
-    #undef ORGQR_BUFFER_SIZE_INSTANTIATE
+    #undef CUBLAS_OPS
+    #undef CUBLAS_REAL_OPS
+    #undef CUBLAS_COMPLEX_OPS
     #undef B_
-    #undef BLAS_LEVEL3_INSTANTIATE
 }

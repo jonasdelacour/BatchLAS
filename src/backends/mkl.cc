@@ -1,4 +1,5 @@
 #include <batchlas/blas/linalg.hh>
+#include "../util/template-instantiations.hh"
 #include "../linalg-impl.hh"
 #include "../queue.hh"
 #include <batchlas/util/sycl-vector.hh>
@@ -145,32 +146,16 @@ namespace batchlas {
             *ctx, m, n, A.ld(), stride_a, stride_tau, A.batch_size()) * sizeof(T);
     }
 
-#define GEMM_INSTANTIATE(fp) \
-    template Event gemm<Backend::MKL, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, const MatrixView<fp, MatrixFormat::Dense>&, const MatrixView<fp, MatrixFormat::Dense>&, fp, fp, Transpose, Transpose, ComputePrecision);
+// Explicit instantiations. Signatures live in the `sig` namespace beside each
+// public declaration (include/batchlas/blas/functions/*.hh), so changing one is a single
+// header edit rather than one edit per backend TU.
+#define MKL_OPS(B, fp) \
+    BATCHLAS_INSTANTIATE_OP(B, fp, gemm) \
+    BATCHLAS_INSTANTIATE_OP(B, fp, geqrf) \
+    BATCHLAS_INSTANTIATE_OP(B, fp, geqrf_buffer_size)
 
-#define GEQRF_INSTANTIATE(fp) \
-    template Event geqrf<Backend::MKL, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Span<fp>, Span<std::byte>);
+BATCHLAS_FOR_EACH_SCALAR_TYPE_1(MKL_OPS, Backend::MKL)
 
-#define GEQRF_BUFFER_SIZE_INSTANTIATE(fp) \
-    template size_t geqrf_buffer_size<Backend::MKL, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Span<fp>);
-
-GEMM_INSTANTIATE(float)
-GEMM_INSTANTIATE(double)
-GEMM_INSTANTIATE(std::complex<float>)
-GEMM_INSTANTIATE(std::complex<double>)
-
-GEQRF_INSTANTIATE(float)
-GEQRF_INSTANTIATE(double)
-GEQRF_INSTANTIATE(std::complex<float>)
-GEQRF_INSTANTIATE(std::complex<double>)
-
-GEQRF_BUFFER_SIZE_INSTANTIATE(float)
-GEQRF_BUFFER_SIZE_INSTANTIATE(double)
-GEQRF_BUFFER_SIZE_INSTANTIATE(std::complex<float>)
-GEQRF_BUFFER_SIZE_INSTANTIATE(std::complex<double>)
-
-#undef GEMM_INSTANTIATE
-#undef GEQRF_INSTANTIATE
-#undef GEQRF_BUFFER_SIZE_INSTANTIATE
+#undef MKL_OPS
 
 } // namespace batchlas

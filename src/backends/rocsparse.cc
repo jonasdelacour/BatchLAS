@@ -4,6 +4,7 @@
 #include "../queue.hh"
 #include <sycl/sycl.hpp>
 #include <batchlas/blas/linalg.hh>
+#include "../util/template-instantiations.hh"
 #include <complex>
 #include "backend_handle_impl.hh"
 
@@ -68,25 +69,15 @@ namespace batchlas {
         return size;
     }
 
-    #define SPMM_INSTANTIATE(fp, F) \
-    template Event spmm<Backend::ROCM, fp, F>(Queue&, const MatrixView<fp, F>&, const MatrixView<fp, MatrixFormat::Dense>&, const MatrixView<fp, MatrixFormat::Dense>&, fp, fp, Transpose, Transpose, Span<std::byte>);
-    #define SPMM_BUFFER_SIZE_INSTANTIATE(fp, F) \
-    template size_t spmm_buffer_size<Backend::ROCM, fp, F>(Queue&, const MatrixView<fp, F>&, const MatrixView<fp, MatrixFormat::Dense>&, const MatrixView<fp, MatrixFormat::Dense>&, fp, fp, Transpose, Transpose);
+    // Explicit instantiations. Signatures live in the `sig` namespace beside each
+    // public declaration (include/batchlas/blas/functions/*.hh), so changing one is a single
+    // header edit rather than one edit per backend TU. CSR is the only sparse
+    // format rocSPARSE is wired up for here.
+    #define ROCSPARSE_OPS(B, fp) \
+        BATCHLAS_INSTANTIATE_FORMAT_OP(B, fp, MatrixFormat::CSR, spmm) \
+        BATCHLAS_INSTANTIATE_FORMAT_OP(B, fp, MatrixFormat::CSR, spmm_buffer_size)
 
-    #define ROCSPARSE_INSTANTIATE(fp, F) \
-        SPMM_INSTANTIATE(fp, F) \
-        SPMM_BUFFER_SIZE_INSTANTIATE(fp, F)
+    BATCHLAS_FOR_EACH_SCALAR_TYPE_1(ROCSPARSE_OPS, Backend::ROCM)
 
-    #define ROCSPARSE_INSTANTIATE_FOR_FP(fp) \
-        ROCSPARSE_INSTANTIATE(fp, MatrixFormat::CSR)
-
-    ROCSPARSE_INSTANTIATE_FOR_FP(float)
-    ROCSPARSE_INSTANTIATE_FOR_FP(double)
-    ROCSPARSE_INSTANTIATE_FOR_FP(std::complex<float>)
-    ROCSPARSE_INSTANTIATE_FOR_FP(std::complex<double>)
-
-    #undef SPMM_INSTANTIATE
-    #undef SPMM_BUFFER_SIZE_INSTANTIATE
-    #undef ROCSPARSE_INSTANTIATE
-    #undef ROCSPARSE_INSTANTIATE_FOR_FP
+    #undef ROCSPARSE_OPS
 }

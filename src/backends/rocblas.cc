@@ -4,6 +4,7 @@
 #include "../queue.hh"
 #include <sycl/sycl.hpp>
 #include <batchlas/blas/functions.hh>
+#include "../util/template-instantiations.hh"
 #include <complex>
 
 #include "gemm_variant.hh"
@@ -418,40 +419,23 @@ namespace batchlas {
 
     // Add further solver routines analogous to cuBLAS implementations using rocSOLVER
 
-    #define GEMM_INSTANTIATE(fp) \
-    template Event gemm<Backend::ROCM, fp>(Queue&, const MatrixView<fp,MatrixFormat::Dense>&, const MatrixView<fp,MatrixFormat::Dense>&, const MatrixView<fp,MatrixFormat::Dense>&, fp, fp, Transpose, Transpose, ComputePrecision);
-    #define GEMV_INSTANTIATE(fp) \
-    template Event gemv<Backend::ROCM, fp>(Queue&, const MatrixView<fp,MatrixFormat::Dense>&, const VectorView<fp>&, const VectorView<fp>&, fp, fp, Transpose);
-    #define TRSM_INSTANTIATE(fp) \
-    template Event trsm<Backend::ROCM, fp>(Queue&, const MatrixView<fp,MatrixFormat::Dense>&, const MatrixView<fp,MatrixFormat::Dense>&, fp, Side, Uplo, Transpose, Diag);
-    #define TRMM_INSTANTIATE(fp) \
-    template Event trmm<Backend::ROCM, fp>(Queue&, const MatrixView<fp,MatrixFormat::Dense>&, const MatrixView<fp,MatrixFormat::Dense>&, const MatrixView<fp,MatrixFormat::Dense>&, fp, Side, Uplo, Transpose, Diag);
-    #define SYRK_INSTANTIATE(fp) \
-    template Event syrk<Backend::ROCM, fp>(Queue&, const MatrixView<fp,MatrixFormat::Dense>&, const MatrixView<fp,MatrixFormat::Dense>&, fp, fp, Uplo, Transpose);
-    #define SYR2K_INSTANTIATE(fp) \
-    template Event syr2k<Backend::ROCM, fp>(Queue&, const MatrixView<fp,MatrixFormat::Dense>&, const MatrixView<fp,MatrixFormat::Dense>&, const MatrixView<fp,MatrixFormat::Dense>&, fp, fp, Uplo, Transpose);
+    // Explicit instantiations. Signatures live in the `sig` namespace beside each
+    // public declaration (include/batchlas/blas/functions/*.hh), so changing one is a single
+    // header edit rather than one edit per backend TU.
+    #define ROCBLAS_OPS(B, fp) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, gemm) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, gemv) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, trsm) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, trmm)
 
-    // syrk is constrained to RealScalar T — only instantiate for real types.
-    #define BLAS_INSTANTIATE(fp) \
-        GEMM_INSTANTIATE(fp) \
-        GEMV_INSTANTIATE(fp) \
-        TRSM_INSTANTIATE(fp) \
-        TRMM_INSTANTIATE(fp)
+    // syrk/syr2k are constrained to RealScalar T -- only instantiate for real types.
+    #define ROCBLAS_REAL_OPS(B, fp) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, syrk) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, syr2k)
 
-    BLAS_INSTANTIATE(float)
-    BLAS_INSTANTIATE(double)
-    BLAS_INSTANTIATE(std::complex<float>)
-    BLAS_INSTANTIATE(std::complex<double>)
-    SYRK_INSTANTIATE(float)
-    SYRK_INSTANTIATE(double)
-    SYR2K_INSTANTIATE(float)
-    SYR2K_INSTANTIATE(double)
+    BATCHLAS_FOR_EACH_SCALAR_TYPE_1(ROCBLAS_OPS, Backend::ROCM)
+    BATCHLAS_FOR_EACH_REAL_TYPE_1(ROCBLAS_REAL_OPS, Backend::ROCM)
 
-    #undef GEMM_INSTANTIATE
-    #undef GEMV_INSTANTIATE
-    #undef TRSM_INSTANTIATE
-    #undef TRMM_INSTANTIATE
-    #undef SYRK_INSTANTIATE
-    #undef SYR2K_INSTANTIATE
-    #undef BLAS_INSTANTIATE
+    #undef ROCBLAS_OPS
+    #undef ROCBLAS_REAL_OPS
 }

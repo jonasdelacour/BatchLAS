@@ -30,6 +30,34 @@
 // with every parameter spelled out and no `= default` clauses.
 #define BATCHLAS_INSTANTIATE(SIG, FN, ...) template SIG FN<__VA_ARGS__>;
 
+// Name an op once instead of five times.
+//
+// The signature alias and the function it describes share a spelling, so a
+// single op token drives both halves of BATCHLAS_INSTANTIATE:
+//
+//   BATCHLAS_INSTANTIATE_OP(Backend::CUDA, (float), potrf)
+//     ==> template sig::potrf<float> potrf<Backend::CUDA, float>;
+//
+// `fp` arrives parenthesised so these compose directly with the
+// BATCHLAS_FOR_EACH_*_TYPE_1 drivers below, which hand out (float), (double),
+// (std::complex<float>), (std::complex<double>); BATCHLAS_UNPAREN strips the
+// parentheses again on both uses. That is what replaces the old per-TU
+// `#define X_INSTANTIATE` / aggregate-list-line / `#undef` triple: a backend TU
+// now writes one line per instantiated op and lets the driver supply the type.
+//
+// _BACKEND_OP is for the `backend::`-qualified vendor entry points
+// (syev_vendor, gesvd_vendor, ormqr_vendor, ...) whose aliases still live in
+// `sig`, not `backend::sig`. _FORMAT_OP carries the second template argument
+// that the sparse ops (spmm) take, using the comma escape above.
+#define BATCHLAS_INSTANTIATE_OP(B, fp, OP) \
+    BATCHLAS_INSTANTIATE(sig::OP<BATCHLAS_UNPAREN fp>, OP, B, BATCHLAS_UNPAREN fp)
+
+#define BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, OP) \
+    BATCHLAS_INSTANTIATE(sig::OP<BATCHLAS_UNPAREN fp>, backend::OP, B, BATCHLAS_UNPAREN fp)
+
+#define BATCHLAS_INSTANTIATE_FORMAT_OP(B, fp, F, OP) \
+    BATCHLAS_INSTANTIATE(sig::OP<BATCHLAS_UNPAREN fp BATCHLAS_COMMA F>, OP, B, BATCHLAS_UNPAREN fp, F)
+
 #define BATCHLAS_FOR_EACH_REAL_TYPE(INVOKE) \
     INVOKE((float)) \
     INVOKE((double))
@@ -43,10 +71,16 @@
     INVOKE((std::complex<float>)) \
     INVOKE((std::complex<double>))
 
-#define BATCHLAS_FOR_EACH_SCALAR_TYPE_1(INVOKE, arg1) \
-    BATCHLAS_FOR_EACH_REAL_TYPE_1(INVOKE, arg1) \
+// Several ops have a narrower scalar domain than "all four": symm/syrk/syr2k are
+// real-only and hemm/herk/her2k are complex-only, so each backend needs a driver
+// for each of the three domains rather than one blanket loop.
+#define BATCHLAS_FOR_EACH_COMPLEX_TYPE_1(INVOKE, arg1) \
     INVOKE(arg1, (std::complex<float>)) \
     INVOKE(arg1, (std::complex<double>))
+
+#define BATCHLAS_FOR_EACH_SCALAR_TYPE_1(INVOKE, arg1) \
+    BATCHLAS_FOR_EACH_REAL_TYPE_1(INVOKE, arg1) \
+    BATCHLAS_FOR_EACH_COMPLEX_TYPE_1(INVOKE, arg1)
 
 #define BATCHLAS_FOR_EACH_MATRIX_FORMAT_1(INVOKE, arg1) \
     INVOKE(arg1, MatrixFormat::Dense) \
