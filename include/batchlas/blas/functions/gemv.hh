@@ -28,26 +28,16 @@ Event gemv(Queue& ctx,
            T beta,
            Transpose transA);
 
-template <Backend B, typename T>
-inline Event gemv(Queue& ctx,
-            const MatrixView<T, MatrixFormat::Dense>& A,
-            const Vector<T>& X,
-            const Vector<T>& Y,
-            T alpha,
-            T beta,
-            Transpose transA) {
-    return gemv<B, T>(ctx, A,
-                         static_cast<VectorView<T>>(X),
-                         static_cast<VectorView<T>>(Y),
-                         alpha, beta, transA);
-}
-
 }  // namespace batchlas
 
 namespace batchlas {
 
-// Backend-deducing overloads: `f(ctx, ...)` uses ctx.backend().
-// See BATCHLAS_DISPATCH_ON_QUEUE in blas/queue-dispatch.hh.
+// Owning-argument and backend-deducing overloads: `f(ctx, Matrix, ...)` accepts
+// owning containers where the primary takes views, and `f(ctx, ...)` uses
+// ctx.backend(). See BATCHLAS_ACCEPT_OWNING and BATCHLAS_DISPATCH_ON_QUEUE in
+// blas/queue-dispatch.hh.
+
+BATCHLAS_ACCEPT_OWNING(gemv)
 
 BATCHLAS_DISPATCH_ON_QUEUE(gemv)
 

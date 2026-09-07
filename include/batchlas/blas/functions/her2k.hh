@@ -41,31 +41,16 @@ Event her2k(Queue& ctx,
             Uplo uplo,
             Transpose transA);
 
-template <Backend Ba, ComplexScalar T>
-inline Event her2k(Queue& ctx,
-                   const Matrix<T, MatrixFormat::Dense>& A,
-                   const Matrix<T, MatrixFormat::Dense>& Bmat,
-                   const Matrix<T, MatrixFormat::Dense>& Cmat,
-                   T alpha,
-                   float_t<T> beta,
-                   Uplo uplo,
-                   Transpose transA) {
-    return her2k<Ba, T>(ctx,
-                        MatrixView<T, MatrixFormat::Dense>(A),
-                        MatrixView<T, MatrixFormat::Dense>(Bmat),
-                        MatrixView<T, MatrixFormat::Dense>(Cmat),
-                        alpha,
-                        beta,
-                        uplo,
-                        transA);
-}
-
 } // namespace batchlas
 
 namespace batchlas {
 
-// Backend-deducing overloads: `f(ctx, ...)` uses ctx.backend().
-// See BATCHLAS_DISPATCH_ON_QUEUE in blas/queue-dispatch.hh.
+// Owning-argument and backend-deducing overloads: `f(ctx, Matrix, ...)` accepts
+// owning containers where the primary takes views, and `f(ctx, ...)` uses
+// ctx.backend(). See BATCHLAS_ACCEPT_OWNING and BATCHLAS_DISPATCH_ON_QUEUE in
+// blas/queue-dispatch.hh.
+
+BATCHLAS_ACCEPT_OWNING(her2k)
 
 BATCHLAS_DISPATCH_ON_QUEUE(her2k)
 

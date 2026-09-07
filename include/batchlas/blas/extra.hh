@@ -15,28 +15,11 @@ namespace batchlas
               const NormType norm_type,
               const Span<float_t<T>> norms);
 
-    // Forwarding overload (owning A)
-    template <typename T, MatrixFormat MF>
-    inline Event norm(Queue &ctx,
-              const Matrix<T, MF> &A,
-              const NormType norm_type,
-              const Span<float_t<T>> norms) {
-        return norm<T,MF>(ctx, MatrixView<T,MF>(A), norm_type, norms);
-    }
-
     // Convenience function which allocates and returns the results stored in an array.
     template <typename T, MatrixFormat MF>
     UnifiedVector<float_t<T>> norm(Queue &ctx,
                           const MatrixView<T, MF> &A,
                           const NormType norm_type = NormType::Frobenius);
-
-    // Forwarding overload (owning A)
-    template <typename T, MatrixFormat MF>
-    inline UnifiedVector<float_t<T>> norm(Queue &ctx,
-                          const Matrix<T, MF> &A,
-                          const NormType norm_type = NormType::Frobenius) {
-        return norm<T,MF>(ctx, MatrixView<T,MF>(A), norm_type);
-    }
 
     //Memory passed from outside
     template <Backend B, typename T, MatrixFormat MF>
@@ -45,16 +28,6 @@ namespace batchlas
               const NormType norm_type,
               const Span<T> conds,
               const Span<std::byte> workspace);
-
-    // Forwarding overload (owning A)
-    template <Backend B, typename T, MatrixFormat MF>
-    inline Event cond(Queue &ctx,
-              const Matrix<T, MF> &A,
-              const NormType norm_type,
-              const Span<T> conds,
-              const Span<std::byte> workspace) {
-        return cond<B,T,MF>(ctx, MatrixView<T,MF>(A), norm_type, conds, workspace);
-    }
 
     // Workspace size for the `cond` overload above.
     //
@@ -72,27 +45,11 @@ namespace batchlas
                             const MatrixView<T, MF> &A,
                             const NormType norm_type);
 
-    // Forwarding overload (owning A)
-    template <Backend B, typename T, MatrixFormat MF>
-    inline size_t cond_buffer_size(Queue &ctx,
-                            const Matrix<T, MF> &A,
-                            const NormType norm_type) {
-        return cond_buffer_size<B,T,MF>(ctx, MatrixView<T,MF>(A), norm_type);
-    }
-
     //Convenience function which allocates memory internally
     template <Backend B, typename T, MatrixFormat MF>
     UnifiedVector<T> cond(Queue &ctx,
                           const MatrixView<T, MF> &A,
                           const NormType norm_type);
-
-    // Forwarding overload (owning A)
-    template <Backend B, typename T, MatrixFormat MF>
-    inline UnifiedVector<T> cond(Queue &ctx,
-                          const Matrix<T, MF> &A,
-                          const NormType norm_type) {
-        return cond<B,T,MF>(ctx, MatrixView<T,MF>(A), norm_type);
-    }
 
     // Create a batch of random dense matrices with a specified log10 conditioning metric.
     // log10_kappa is log10(κ2) or log10(κF) depending on metric (Spectral or Frobenius only).
@@ -200,31 +157,21 @@ namespace batchlas
                     const MatrixView<T, MF> &A,
                     const MatrixView<T, MF> &B);
 
-    // Forwarding overload (owning A and B)
-    template <typename T, MatrixFormat MF>
-    inline Event transpose(Queue &ctx,
-                    const Matrix<T, MF> &A,
-                    const Matrix<T, MF> &B) {
-        return transpose<T,MF>(ctx, MatrixView<T,MF>(A), MatrixView<T,MF>(B));
-    }
-
     // Convenience overload allocating the output matrix
     template <typename T, MatrixFormat MF>
     Matrix<T, MF> transpose(Queue &ctx,
                             const MatrixView<T, MF> &A);
 
-    // Forwarding overload (owning A)
-    template <typename T, MatrixFormat MF>
-    inline Matrix<T, MF> transpose(Queue &ctx,
-                            const Matrix<T, MF> &A) {
-        return transpose<T,MF>(ctx, MatrixView<T,MF>(A));
-    }
-
-    // Backend-deducing overloads: `f(ctx, ...)` takes its backend from the
-    // queue. See BATCHLAS_DISPATCH_ON_QUEUE in blas/queue-dispatch.hh.
+    // Owning-argument and backend-deducing overloads. See
+    // BATCHLAS_ACCEPT_OWNING and BATCHLAS_DISPATCH_ON_QUEUE in
+    // blas/queue-dispatch.hh: the first lets every entry point below take an
+    // owning `Matrix` where its declaration takes a `MatrixView`, the second
+    // takes the backend from the queue.
     //
     // `norm` and `transpose` above are not Backend-templated, so they need no
-    // dispatch overload -- they already work as written.
+    // dispatch overload -- they already work as written. They still need the
+    // owning-argument one, which is why they use its _NB spelling: the problem
+    // it solves is deduction of `T` and `MF`, and that is there either way.
     //
     // The six random_*_with_log10_cond_metric generators are deliberately
     // absent. Their scalar type appears only as `float_t<T>` -- an alias
@@ -234,6 +181,11 @@ namespace batchlas
     // if the generators were dispatchable when they are not. They keep the
     // explicit f<Backend, T>(...) spelling, for the same reason
     // tridiagonal_solver_buffer_size does.
+    BATCHLAS_ACCEPT_OWNING(cond)
+    BATCHLAS_ACCEPT_OWNING(cond_buffer_size)
+    BATCHLAS_ACCEPT_OWNING_NB(norm)
+    BATCHLAS_ACCEPT_OWNING_NB(transpose)
+
     BATCHLAS_DISPATCH_ON_QUEUE(cond)
     BATCHLAS_DISPATCH_ON_QUEUE(cond_buffer_size)
 

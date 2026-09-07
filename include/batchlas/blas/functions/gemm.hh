@@ -30,19 +30,6 @@ Event gemm(Queue& ctx,
            Transpose transB,
            ComputePrecision precision = ComputePrecision::Default);
 
-template <Backend Back, typename T>
-inline Event gemm(Queue& ctx,
-                   const Matrix<T, MatrixFormat::Dense>& A,
-                   const Matrix<T, MatrixFormat::Dense>& Bmat,
-                   const Matrix<T, MatrixFormat::Dense>& Cmat,
-                   T alpha,
-                   T beta,
-                   Transpose transA,
-                   Transpose transB,
-                   ComputePrecision precision = ComputePrecision::Default) {
-        return gemm<Back,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), MatrixView<T, MatrixFormat::Dense>(Bmat), MatrixView<T, MatrixFormat::Dense>(Cmat), alpha, beta, transA, transB, precision);
-}
-
 // There is no separate gemm_heterogeneous entry point. `gemm` handles a
 // heterogeneous batch -- one where the items carry differing active_rows /
 // active_cols -- natively on every backend: each of them tests
@@ -59,8 +46,12 @@ inline Event gemm(Queue& ctx,
 
 namespace batchlas {
 
-// Backend-deducing overloads: `f(ctx, ...)` uses ctx.backend().
-// See BATCHLAS_DISPATCH_ON_QUEUE in blas/queue-dispatch.hh.
+// Owning-argument and backend-deducing overloads: `f(ctx, Matrix, ...)` accepts
+// owning containers where the primary takes views, and `f(ctx, ...)` uses
+// ctx.backend(). See BATCHLAS_ACCEPT_OWNING and BATCHLAS_DISPATCH_ON_QUEUE in
+// blas/queue-dispatch.hh.
+
+BATCHLAS_ACCEPT_OWNING(gemm)
 
 BATCHLAS_DISPATCH_ON_QUEUE(gemm)
 
