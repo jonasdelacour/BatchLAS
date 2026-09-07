@@ -1,5 +1,7 @@
 #include "../linalg-impl.hh"
 
+#include "../util/template-instantiations.hh"
+
 #include <batchlas/blas/functions/iluk.hh>
 #include <batchlas/util/mempool.hh>
 #include <optional>
@@ -1478,32 +1480,13 @@ ILUK_INSTANTIATE_COMMON(std::complex<double>)
 #undef ILUK_INSTANTIATE_COMMON
 
 #define ILUK_INSTANTIATE(BACK, FP) \
-    template ILUKPreconditioner<FP> iluk_factorize<BACK, FP>(Queue&, const MatrixView<FP, MatrixFormat::CSR>&, const ILUKParams<FP>&); \
-    template ILUKView<FP> iluk_factorize<BACK, FP>(Queue&, const MatrixView<FP, MatrixFormat::CSR>&, Span<std::byte>, const ILUKParams<FP>&, size_t*); \
-    template size_t iluk_buffer_size<BACK, FP>(Queue&, const MatrixView<FP, MatrixFormat::CSR>&, const ILUKParams<FP>&); \
-    template Event iluk_apply<BACK, FP>(Queue&, const ILUKView<FP>&, const MatrixView<FP, MatrixFormat::Dense>&, const MatrixView<FP, MatrixFormat::Dense>&, Span<std::byte>); \
-    template size_t iluk_apply_buffer_size<BACK, FP>(Queue&, const ILUKView<FP>&, const MatrixView<FP, MatrixFormat::Dense>&, const MatrixView<FP, MatrixFormat::Dense>&);
+    template ILUKPreconditioner<BATCHLAS_UNPAREN FP> iluk_factorize<BACK, BATCHLAS_UNPAREN FP>(Queue&, const MatrixView<BATCHLAS_UNPAREN FP, MatrixFormat::CSR>&, const ILUKParams<BATCHLAS_UNPAREN FP>&); \
+    template ILUKView<BATCHLAS_UNPAREN FP> iluk_factorize<BACK, BATCHLAS_UNPAREN FP>(Queue&, const MatrixView<BATCHLAS_UNPAREN FP, MatrixFormat::CSR>&, Span<std::byte>, const ILUKParams<BATCHLAS_UNPAREN FP>&, size_t*); \
+    template size_t iluk_buffer_size<BACK, BATCHLAS_UNPAREN FP>(Queue&, const MatrixView<BATCHLAS_UNPAREN FP, MatrixFormat::CSR>&, const ILUKParams<BATCHLAS_UNPAREN FP>&); \
+    template Event iluk_apply<BACK, BATCHLAS_UNPAREN FP>(Queue&, const ILUKView<BATCHLAS_UNPAREN FP>&, const MatrixView<BATCHLAS_UNPAREN FP, MatrixFormat::Dense>&, const MatrixView<BATCHLAS_UNPAREN FP, MatrixFormat::Dense>&, Span<std::byte>); \
+    template size_t iluk_apply_buffer_size<BACK, BATCHLAS_UNPAREN FP>(Queue&, const ILUKView<BATCHLAS_UNPAREN FP>&, const MatrixView<BATCHLAS_UNPAREN FP, MatrixFormat::Dense>&, const MatrixView<BATCHLAS_UNPAREN FP, MatrixFormat::Dense>&);
 
-#if BATCHLAS_HAS_CUDA_BACKEND
-ILUK_INSTANTIATE(Backend::CUDA, float)
-ILUK_INSTANTIATE(Backend::CUDA, double)
-ILUK_INSTANTIATE(Backend::CUDA, std::complex<float>)
-ILUK_INSTANTIATE(Backend::CUDA, std::complex<double>)
-#endif
-
-#if BATCHLAS_HAS_ROCM_BACKEND
-ILUK_INSTANTIATE(Backend::ROCM, float)
-ILUK_INSTANTIATE(Backend::ROCM, double)
-ILUK_INSTANTIATE(Backend::ROCM, std::complex<float>)
-ILUK_INSTANTIATE(Backend::ROCM, std::complex<double>)
-#endif
-
-#if BATCHLAS_HAS_HOST_BACKEND
-ILUK_INSTANTIATE(Backend::NETLIB, float)
-ILUK_INSTANTIATE(Backend::NETLIB, double)
-ILUK_INSTANTIATE(Backend::NETLIB, std::complex<float>)
-ILUK_INSTANTIATE(Backend::NETLIB, std::complex<double>)
-#endif
+BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(ILUK_INSTANTIATE)
 
 #undef ILUK_INSTANTIATE
 

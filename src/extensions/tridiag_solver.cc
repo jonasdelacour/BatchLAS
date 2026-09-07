@@ -265,25 +265,14 @@ size_t tridiagonal_solver_buffer_size(Queue& ctx, size_t n, size_t batch_size, J
     template Event tridiagonal_solver<back, BATCHLAS_UNPAREN fp>(Queue&, Span<BATCHLAS_UNPAREN fp>, Span<BATCHLAS_UNPAREN fp>, Span<typename base_type<BATCHLAS_UNPAREN fp>::type>, Span<std::byte>, JobType, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, size_t, size_t); \
     template size_t tridiagonal_solver_buffer_size<back, BATCHLAS_UNPAREN fp>(Queue&, size_t, size_t, JobType);
 
-#define TRIDIAG_INSTANTIATE_FOR_BACKEND(back) \
-    BATCHLAS_FOR_EACH_REAL_TYPE_1(TRIDAG_INSTANTIATE, back) \
-    //TRIDAG_INSTANTIATE(back, std::complex<float>) \
-    //TRIDAG_INSTANTIATE(back, std::complex<double>)
-
-#if BATCHLAS_HAS_HOST_BACKEND
-    TRIDIAG_INSTANTIATE_FOR_BACKEND(Backend::NETLIB)
-#endif
-#if BATCHLAS_HAS_CUDA_BACKEND
-    TRIDIAG_INSTANTIATE_FOR_BACKEND(Backend::CUDA)
-    #endif
-#if BATCHLAS_HAS_ROCM_BACKEND
-    TRIDIAG_INSTANTIATE_FOR_BACKEND(Backend::ROCM)
-#endif
+// Real only. The complex arms below have never been enabled:
+//   TRIDAG_INSTANTIATE(back, std::complex<float>)
+//   TRIDAG_INSTANTIATE(back, std::complex<double>)
+BATCHLAS_INSTANTIATE_REAL_ALL_BACKENDS(TRIDAG_INSTANTIATE)
 
 //TRIDAG_INSTANTIATE(Backend::CUDA, std::complex<float>)
 //TRIDAG_INSTANTIATE(Backend::CUDA, std::complex<double>)
 
-#undef TRIDIAG_INSTANTIATE_FOR_BACKEND
 #undef TRIDAG_INSTANTIATE
 
 } // namespace batchlas

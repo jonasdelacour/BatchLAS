@@ -4,6 +4,8 @@
 
 #include <batchlas/backend_config.h>
 
+#include "../util/template-instantiations.hh"
+
 #include "../math-helpers.hh"
 #include "../queue.hh"
 
@@ -1387,45 +1389,26 @@ Event latrd_lower_panel(Queue& ctx,
 }
 
 #define LATRD_LOWER_PANEL_INSTANTIATE(back, fp) \
-    template Event latrd_lower_panel<back, fp>( \
+    template Event latrd_lower_panel<back, BATCHLAS_UNPAREN fp>( \
         Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const VectorView<fp>&, \
-        const VectorView<fp>&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        const VectorView<BATCHLAS_UNPAREN fp>&, \
+        const VectorView<BATCHLAS_UNPAREN fp>&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
         int32_t, \
         bool); \
-    template Event latrd_lower_panel<back, fp>( \
+    template Event latrd_lower_panel<back, BATCHLAS_UNPAREN fp>( \
         Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const VectorView<fp>&, \
-        const VectorView<fp>&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        const VectorView<BATCHLAS_UNPAREN fp>&, \
+        const VectorView<BATCHLAS_UNPAREN fp>&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
         int32_t, \
         int32_t, \
         int32_t, \
         bool);
 
-#if BATCHLAS_HAS_CUDA_BACKEND
-LATRD_LOWER_PANEL_INSTANTIATE(Backend::CUDA, float)
-LATRD_LOWER_PANEL_INSTANTIATE(Backend::CUDA, double)
-LATRD_LOWER_PANEL_INSTANTIATE(Backend::CUDA, std::complex<float>)
-LATRD_LOWER_PANEL_INSTANTIATE(Backend::CUDA, std::complex<double>)
-#endif
-
-#if BATCHLAS_HAS_ROCM_BACKEND
-LATRD_LOWER_PANEL_INSTANTIATE(Backend::ROCM, float)
-LATRD_LOWER_PANEL_INSTANTIATE(Backend::ROCM, double)
-LATRD_LOWER_PANEL_INSTANTIATE(Backend::ROCM, std::complex<float>)
-LATRD_LOWER_PANEL_INSTANTIATE(Backend::ROCM, std::complex<double>)
-#endif
-
-#if BATCHLAS_HAS_HOST_BACKEND
-LATRD_LOWER_PANEL_INSTANTIATE(Backend::NETLIB, float)
-LATRD_LOWER_PANEL_INSTANTIATE(Backend::NETLIB, double)
-LATRD_LOWER_PANEL_INSTANTIATE(Backend::NETLIB, std::complex<float>)
-LATRD_LOWER_PANEL_INSTANTIATE(Backend::NETLIB, std::complex<double>)
-#endif
+BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(LATRD_LOWER_PANEL_INSTANTIATE)
 
 #undef LATRD_LOWER_PANEL_INSTANTIATE
 

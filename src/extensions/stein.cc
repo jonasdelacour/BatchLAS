@@ -403,20 +403,8 @@ size_t stein_buffer_size(Queue& ctx, size_t n, size_t k, size_t batch_size, Stei
         SteinParams<BATCHLAS_UNPAREN fp>); \
     template size_t stein_buffer_size<back, BATCHLAS_UNPAREN fp>(Queue&, size_t, size_t, size_t, SteinParams<BATCHLAS_UNPAREN fp>);
 
-#define STEIN_INSTANTIATE_FOR_BACKEND(back) \
-    BATCHLAS_FOR_EACH_REAL_TYPE_1(STEIN_INSTANTIATE, back)
+    BATCHLAS_INSTANTIATE_REAL_ALL_BACKENDS(STEIN_INSTANTIATE)
 
-#if BATCHLAS_HAS_HOST_BACKEND
-    STEIN_INSTANTIATE_FOR_BACKEND(Backend::NETLIB)
-#endif
-#if BATCHLAS_HAS_CUDA_BACKEND
-    STEIN_INSTANTIATE_FOR_BACKEND(Backend::CUDA)
-#endif
-#if BATCHLAS_HAS_ROCM_BACKEND
-    STEIN_INSTANTIATE_FOR_BACKEND(Backend::ROCM)
-#endif
-
-#undef STEIN_INSTANTIATE_FOR_BACKEND
 #undef STEIN_INSTANTIATE
 
 } // namespace batchlas

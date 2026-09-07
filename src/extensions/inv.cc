@@ -75,20 +75,8 @@ namespace batchlas {
     template size_t inv_buffer_size<back, BATCHLAS_UNPAREN fp>(Queue&, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&); \
     template Matrix<BATCHLAS_UNPAREN fp, MatrixFormat::Dense> inv<back, BATCHLAS_UNPAREN fp>(Queue&, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&);
 
-#define INV_INSTANTIATE_FOR_BACK(back)\
-    BATCHLAS_FOR_EACH_SCALAR_TYPE_1(INV_INSTANTIATE, back)
+    BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(INV_INSTANTIATE)
 
-#if BATCHLAS_HAS_CUDA_BACKEND
-    INV_INSTANTIATE_FOR_BACK(Backend::CUDA)
-#endif
-#if BATCHLAS_HAS_ROCM_BACKEND
-    INV_INSTANTIATE_FOR_BACK(Backend::ROCM)
-#endif
-#if BATCHLAS_HAS_HOST_BACKEND
-    INV_INSTANTIATE_FOR_BACK(Backend::NETLIB)
-#endif
-
-#undef INV_INSTANTIATE_FOR_BACK
 #undef INV_INSTANTIATE
 
 }

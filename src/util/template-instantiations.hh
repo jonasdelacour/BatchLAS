@@ -55,3 +55,62 @@
 #define BATCHLAS_FOR_EACH_MATRIX_FORMAT_2(INVOKE, arg1, arg2) \
     INVOKE(arg1, arg2, MatrixFormat::Dense) \
     INVOKE(arg1, arg2, MatrixFormat::CSR)
+
+// The backend member of the FOR_EACH family.
+//
+// Every backend-parameterised entry point has to be instantiated once per
+// backend that this build actually compiled, so each .cc carried three
+// hand-written `#if BATCHLAS_HAS_*_BACKEND` blocks -- plus, usually, a one-off
+// `X_INSTANTIATE_FOR_BACKEND` binder macro whose only job was to bridge this
+// loop and the scalar-type loop above. That is the same eleven lines in more
+// than forty translation units.
+//
+// The arms are pre-guarded rather than tested inside the loop because the
+// preprocessor cannot emit an `#if` from a macro expansion: a backend that was
+// not compiled has to expand to nothing at all. backend_config.h already ships
+// BATCHLAS_IF_CUDA / _ROCM / _MKL in exactly that shape; only the host arm was
+// missing, so it is supplied here.
+//
+// Deliberately absent: MKL. The files that carry an MKL arm (ritz_values.cc,
+// symm.cc, syrk.cc, syr2k.cc, trmm.cc) do not instantiate the same set as the
+// {CUDA, ROCM, HOST} triple, and steqr_legacy.cc has no ROCM arm; folding any of
+// them into a blanket loop would silently add or drop exported symbols. Those
+// files keep their hand-written blocks.
+#include <batchlas/backend_config.h>
+
+#if BATCHLAS_HAS_HOST_BACKEND
+  #define BATCHLAS_IF_HOST(x) x
+#else
+  #define BATCHLAS_IF_HOST(x)
+#endif
+
+// INVOKE is called once per compiled backend with the Backend enumerator last,
+// matching the argument order of the type loops above (fixed arguments first).
+#define BATCHLAS_FOR_EACH_ENABLED_BACKEND(INVOKE) \
+    BATCHLAS_IF_CUDA(INVOKE(Backend::CUDA)) \
+    BATCHLAS_IF_ROCM(INVOKE(Backend::ROCM)) \
+    BATCHLAS_IF_HOST(INVOKE(Backend::NETLIB))
+
+#define BATCHLAS_FOR_EACH_ENABLED_BACKEND_1(INVOKE, arg1) \
+    BATCHLAS_IF_CUDA(INVOKE(arg1, Backend::CUDA)) \
+    BATCHLAS_IF_ROCM(INVOKE(arg1, Backend::ROCM)) \
+    BATCHLAS_IF_HOST(INVOKE(arg1, Backend::NETLIB))
+
+// Combined backend x scalar-type drivers, so the per-file binder disappears too.
+// LEAF is a two-argument `LEAF(back, fp)` instantiation macro that takes its type
+// parenthesised, i.e. one that spells the type as `BATCHLAS_UNPAREN fp`.
+//
+//   BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(GEBRD_BLOCKED_INSTANTIATE)
+//
+// replaces the binder, the three #if/#endif pairs and the three invocations.
+#define BATCHLAS_TYPES_ON_BACKEND_REAL_(LEAF, back) \
+    BATCHLAS_FOR_EACH_REAL_TYPE_1(LEAF, back)
+
+#define BATCHLAS_TYPES_ON_BACKEND_SCALAR_(LEAF, back) \
+    BATCHLAS_FOR_EACH_SCALAR_TYPE_1(LEAF, back)
+
+#define BATCHLAS_INSTANTIATE_REAL_ALL_BACKENDS(LEAF) \
+    BATCHLAS_FOR_EACH_ENABLED_BACKEND_1(BATCHLAS_TYPES_ON_BACKEND_REAL_, LEAF)
+
+#define BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(LEAF) \
+    BATCHLAS_FOR_EACH_ENABLED_BACKEND_1(BATCHLAS_TYPES_ON_BACKEND_SCALAR_, LEAF)

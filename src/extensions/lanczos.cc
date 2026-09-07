@@ -1,5 +1,6 @@
 //Implementation file for Lanczos algorithm
 #include "../linalg-impl.hh"
+#include "../util/template-instantiations.hh"
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
 #include "../queue.hh"
@@ -261,27 +262,16 @@ namespace batchlas {
         const MatrixView<fp, MatrixFormat::Dense>&, \
         const LanczosParams<fp>&); \
     
-    #define LANCZOS_INSTANTIATE_FOR_BACKEND(back)\
-        LANCZOS_INSTANTIATE(back, float, MatrixFormat::CSR)\
-        LANCZOS_INSTANTIATE(back, float, MatrixFormat::Dense)\
-        LANCZOS_INSTANTIATE(back, double, MatrixFormat::CSR)\
-        LANCZOS_INSTANTIATE(back, double, MatrixFormat::Dense)
+    #define LANCZOS_INSTANTIATE_FOR_TYPE(back, fp) \
+        BATCHLAS_FOR_EACH_MATRIX_FORMAT_2(LANCZOS_INSTANTIATE, back, BATCHLAS_UNPAREN fp)
 
-    #if BATCHLAS_HAS_CUDA_BACKEND
-        LANCZOS_INSTANTIATE_FOR_BACKEND(Backend::CUDA)
-    #endif
-    #if BATCHLAS_HAS_ROCM_BACKEND
-        LANCZOS_INSTANTIATE_FOR_BACKEND(Backend::ROCM)
-    #endif
-    #if BATCHLAS_HAS_HOST_BACKEND
-        LANCZOS_INSTANTIATE_FOR_BACKEND(Backend::NETLIB)
-    #endif
+    BATCHLAS_INSTANTIATE_REAL_ALL_BACKENDS(LANCZOS_INSTANTIATE_FOR_TYPE)
 
     //LANCZOS_INSTANTIATE_FOR_FP(std::complex<float>)
     //LANCZOS_INSTANTIATE_FOR_FP(std::complex<double>)
 
     #undef LANCZOS_INSTANTIATE
-    #undef LANCZOS_INSTANTIATE_FOR_BACKEND
+    #undef LANCZOS_INSTANTIATE_FOR_TYPE
 
 
 }

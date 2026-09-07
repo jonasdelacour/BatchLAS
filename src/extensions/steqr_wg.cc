@@ -418,20 +418,7 @@ size_t steqr_wg_buffer_size(Queue& ctx,
 #define STEQR_WG_INSTANTIATE(back, fp) \
 template Event steqr_wg<back, BATCHLAS_UNPAREN fp>(Queue&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, const Span<std::byte>&, JobType, SteqrParams<BATCHLAS_UNPAREN fp>, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&);
 
-#define STEQR_WG_INSTANTIATE_FOR_BACKEND(back) \
-    BATCHLAS_FOR_EACH_REAL_TYPE_1(STEQR_WG_INSTANTIATE, back)
-
-#if BATCHLAS_HAS_CUDA_BACKEND
-STEQR_WG_INSTANTIATE_FOR_BACKEND(Backend::CUDA)
-#endif
-
-#if BATCHLAS_HAS_ROCM_BACKEND
-STEQR_WG_INSTANTIATE_FOR_BACKEND(Backend::ROCM)
-#endif
-
-#if BATCHLAS_HAS_HOST_BACKEND
-STEQR_WG_INSTANTIATE_FOR_BACKEND(Backend::NETLIB)
-#endif
+BATCHLAS_INSTANTIATE_REAL_ALL_BACKENDS(STEQR_WG_INSTANTIATE)
 
 #define STEQR_WG_BUFFER_SIZE_INSTANTIATE(fp) \
 template size_t steqr_wg_buffer_size<BATCHLAS_UNPAREN fp>(Queue&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, JobType, SteqrParams<BATCHLAS_UNPAREN fp>);
@@ -439,7 +426,6 @@ template size_t steqr_wg_buffer_size<BATCHLAS_UNPAREN fp>(Queue&, const VectorVi
 BATCHLAS_FOR_EACH_REAL_TYPE(STEQR_WG_BUFFER_SIZE_INSTANTIATE)
 
 #undef STEQR_WG_BUFFER_SIZE_INSTANTIATE
-#undef STEQR_WG_INSTANTIATE_FOR_BACKEND
 #undef STEQR_WG_INSTANTIATE
 
 } // namespace batchlas

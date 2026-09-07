@@ -643,22 +643,8 @@ size_t syev_jacobi_cta_buffer_size(Queue& ctx,
     template size_t syev_jacobi_cta_buffer_size<back, BATCHLAS_UNPAREN fp>(Queue&, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
                                                                            JobType, JacobiParams<BATCHLAS_UNPAREN fp>);
 
-#define SYEV_JACOBI_CTA_INSTANTIATE_FOR_BACKEND(back) \
-    BATCHLAS_FOR_EACH_SCALAR_TYPE_1(SYEV_JACOBI_CTA_INSTANTIATE, back)
+    BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(SYEV_JACOBI_CTA_INSTANTIATE)
 
-#if BATCHLAS_HAS_CUDA_BACKEND
-    SYEV_JACOBI_CTA_INSTANTIATE_FOR_BACKEND(Backend::CUDA)
-#endif
-
-#if BATCHLAS_HAS_ROCM_BACKEND
-    SYEV_JACOBI_CTA_INSTANTIATE_FOR_BACKEND(Backend::ROCM)
-#endif
-
-#if BATCHLAS_HAS_HOST_BACKEND
-    SYEV_JACOBI_CTA_INSTANTIATE_FOR_BACKEND(Backend::NETLIB)
-#endif
-
-#undef SYEV_JACOBI_CTA_INSTANTIATE_FOR_BACKEND
 #undef SYEV_JACOBI_CTA_INSTANTIATE
 
 } // namespace batchlas
