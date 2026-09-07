@@ -31,35 +31,11 @@ namespace batchlas {
         }
 
         if (gemm_has_heterogeneous_batch(A, B, C)) {
-            Event last_event;
-            bool launched = false;
-            for (int batch_index = 0; batch_index < A.batch_size(); ++batch_index) {
-                const auto [m, k] = get_effective_dims(A, transA, batch_index);
-                const auto [k_b, n] = get_effective_dims(B, transB, batch_index);
-                static_cast<void>(k_b);
-                if (m == 0 || n == 0) {
-                    continue;
-                }
-                if (k == 0) {
-                    last_event = scale(ctx, beta, C.batch_item(batch_index));
-                    launched = true;
-                    continue;
-                }
-                last_event = gemm_vendor<Back, T>(ctx,
-                                                  A.batch_item(batch_index),
-                                                  B.batch_item(batch_index),
-                                                  C.batch_item(batch_index),
-                                                  alpha,
-                                                  beta,
-                                                  transA,
-                                                  transB,
-                                                  precision);
-                launched = true;
-            }
-            if (launched) {
-                return std::move(last_event);
-            }
-            return ctx.get_event();
+            return gemm_over_heterogeneous_batch(ctx, A, B, C, beta, transA, transB,
+                [&](const auto& A_i, const auto& B_i, const auto& C_i) {
+                    return gemm_vendor<Back, T>(ctx, A_i, B_i, C_i, alpha, beta, transA, transB, precision);
+                },
+                [&] { return ctx.get_event(); });
         }
 
         if (gemm_use_sycl_custom(ctx, A, B, C, transA, transB, precision)) {

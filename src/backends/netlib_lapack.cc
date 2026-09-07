@@ -1,5 +1,6 @@
 #include <batchlas/blas/linalg.hh>
 #include "../linalg-impl.hh"
+#include "level3_shape.hh"
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
 #include "../queue.hh"
@@ -521,52 +522,29 @@ namespace batchlas{
         auto B_view = Bmat;
         auto C_view = Cmat;
         return detail::submit_host_task<T>(ctx, "netlib.symm", [=] {
-            if (A_view.rows() != A_view.cols()) {
-                throw std::runtime_error("SYMM: A must be square");
-            }
-            if (A_view.batch_size() != B_view.batch_size() || A_view.batch_size() != C_view.batch_size()) {
-                throw std::runtime_error("SYMM: batch size mismatch");
-            }
+            const auto [m, n, k] = backend::shape::validate_product<std::runtime_error>("SYMM", A_view, B_view, C_view, side);
+            static_cast<void>(k);  // cblas_?symm takes A's order from side, not as an argument
 
-            const int m = C_view.rows();
-            const int n = C_view.cols();
-            const int expected_a = side == Side::Left ? B_view.rows() : B_view.cols();
-            if (A_view.rows() != expected_a || B_view.rows() != m || B_view.cols() != n) {
-                throw std::runtime_error("SYMM: incompatible matrix dimensions");
-            }
-
+            // The two complex slots have no callee because this overload is
+            // constrained to a real T; a complex caller reaches hemm below.
             auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
                                      const MatrixView<T, MatrixFormat::Dense>& B_i,
                                      const MatrixView<T, MatrixFormat::Dense>& C_i) {
-                if constexpr (std::is_same_v<T, float>) {
-                    cblas_ssymm(CblasColMajor,
-                                enum_convert<BackendLibrary::CBLAS>(side),
-                                enum_convert<BackendLibrary::CBLAS>(uplo),
-                                m,
-                                n,
-                                alpha,
-                                A_i.data_ptr(),
-                                A_i.ld(),
-                                B_i.data_ptr(),
-                                B_i.ld(),
-                                beta,
-                                C_i.data_ptr(),
-                                C_i.ld());
-                } else if constexpr (std::is_same_v<T, double>) {
-                    cblas_dsymm(CblasColMajor,
-                                enum_convert<BackendLibrary::CBLAS>(side),
-                                enum_convert<BackendLibrary::CBLAS>(uplo),
-                                m,
-                                n,
-                                alpha,
-                                A_i.data_ptr(),
-                                A_i.ld(),
-                                B_i.data_ptr(),
-                                B_i.ld(),
-                                beta,
-                                C_i.data_ptr(),
-                                C_i.ld());
-                }
+                call_backend_nh<T, BackendLibrary::CBLAS>(
+                    cblas_ssymm, cblas_dsymm, nullptr, nullptr,
+                    Layout::ColMajor,
+                    side,
+                    uplo,
+                    m,
+                    n,
+                    alpha,
+                    A_i.data_ptr(),
+                    A_i.ld(),
+                    B_i.data_ptr(),
+                    B_i.ld(),
+                    beta,
+                    C_i.data_ptr(),
+                    C_i.ld());
             };
 
             for (int batch = 0; batch < A_view.batch_size(); ++batch) {
@@ -588,19 +566,8 @@ namespace batchlas{
         auto B_view = Bmat;
         auto C_view = Cmat;
         return detail::submit_host_task<T>(ctx, "netlib.hemm", [=] {
-            if (A_view.rows() != A_view.cols()) {
-                throw std::runtime_error("HEMM: A must be square");
-            }
-            if (A_view.batch_size() != B_view.batch_size() || A_view.batch_size() != C_view.batch_size()) {
-                throw std::runtime_error("HEMM: batch size mismatch");
-            }
-
-            const int m = C_view.rows();
-            const int n = C_view.cols();
-            const int expected_a = side == Side::Left ? B_view.rows() : B_view.cols();
-            if (A_view.rows() != expected_a || B_view.rows() != m || B_view.cols() != n) {
-                throw std::runtime_error("HEMM: incompatible matrix dimensions");
-            }
+            const auto [m, n, k] = backend::shape::validate_product<std::runtime_error>("HEMM", A_view, B_view, C_view, side);
+            static_cast<void>(k);  // cblas_?hemm takes A's order from side, not as an argument
 
             // The two real slots have no callee because BLAS has no real ?hemm;
             // T is constrained to complex, so they are never selected.
@@ -642,25 +609,7 @@ namespace batchlas{
         auto A_view = A;
         auto C_view = Cmat;
         return detail::submit_host_task<T>(ctx, "netlib.herk", [=] {
-            if (C_view.rows() != C_view.cols()) {
-                throw std::runtime_error("HERK: C must be square");
-            }
-            if (A_view.batch_size() != C_view.batch_size()) {
-                throw std::runtime_error("HERK: batch size mismatch");
-            }
-            // Transpose::Trans would ask for A * A^T, which is
-            // complex-symmetric rather than Hermitian; that operation is
-            // syrk's, and BLAS does not spell it here.
-            if (transA != Transpose::NoTrans && transA != Transpose::ConjTrans) {
-                throw std::runtime_error("HERK: transA must be NoTrans or ConjTrans");
-            }
-
-            const int n = C_view.rows();
-            const int k = transA == Transpose::NoTrans ? A_view.cols() : A_view.rows();
-            const int expected_n = transA == Transpose::NoTrans ? A_view.rows() : A_view.cols();
-            if (expected_n != n || k <= 0) {
-                throw std::runtime_error("HERK: incompatible matrix dimensions");
-            }
+            const auto [n, k] = backend::shape::validate_rank_k<std::runtime_error>("HERK", A_view, C_view, transA, /*hermitian=*/true);
 
             // The two real slots have no callee because BLAS has no real
             // ?herk -- that is syrk; T is constrained to complex, so they are
@@ -701,26 +650,7 @@ namespace batchlas{
         auto B_view = Bmat;
         auto C_view = Cmat;
         return detail::submit_host_task<T>(ctx, "netlib.her2k", [=] {
-            if (C_view.rows() != C_view.cols()) {
-                throw std::runtime_error("HER2K: C must be square");
-            }
-            if (A_view.batch_size() != B_view.batch_size() ||
-                A_view.batch_size() != C_view.batch_size()) {
-                throw std::runtime_error("HER2K: batch size mismatch");
-            }
-            if (transA != Transpose::NoTrans && transA != Transpose::ConjTrans) {
-                throw std::runtime_error("HER2K: transA must be NoTrans or ConjTrans");
-            }
-
-            const int n = C_view.rows();
-            const bool no_trans = transA == Transpose::NoTrans;
-            const int k = no_trans ? A_view.cols() : A_view.rows();
-            const int expected_n = no_trans ? A_view.rows() : A_view.cols();
-            const int b_n = no_trans ? B_view.rows() : B_view.cols();
-            const int b_k = no_trans ? B_view.cols() : B_view.rows();
-            if (expected_n != n || b_n != n || b_k != k || k <= 0) {
-                throw std::runtime_error("HER2K: incompatible matrix dimensions");
-            }
+            const auto [n, k] = backend::shape::validate_rank_2k<std::runtime_error>("HER2K", A_view, B_view, C_view, transA, /*hermitian=*/true);
 
             auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
                                      const MatrixView<T, MatrixFormat::Dense>& B_i,
@@ -759,47 +689,25 @@ namespace batchlas{
         auto A_view = A;
         auto C_view = Cmat;
         return detail::submit_host_task<T>(ctx, "netlib.syrk", [=] {
-            if (C_view.rows() != C_view.cols()) {
-                throw std::runtime_error("SYRK: C must be square");
-            }
-            if (A_view.batch_size() != C_view.batch_size()) {
-                throw std::runtime_error("SYRK: batch size mismatch");
-            }
+            const auto [n, k] = backend::shape::validate_rank_k<std::runtime_error>("SYRK", A_view, C_view, transA, /*hermitian=*/false);
 
-            const int n = C_view.rows();
-            const int k = transA == Transpose::NoTrans ? A_view.cols() : A_view.rows();
-            const int expected_n = transA == Transpose::NoTrans ? A_view.rows() : A_view.cols();
-            if (expected_n != n || k <= 0) {
-                throw std::runtime_error("SYRK: incompatible matrix dimensions");
-            }
-
+            // The two complex slots have no callee because this overload is
+            // constrained to a real T; the complex rank-k update is herk.
             auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
                                      const MatrixView<T, MatrixFormat::Dense>& C_i) {
-                if constexpr (std::is_same_v<T, float>) {
-                    cblas_ssyrk(CblasColMajor,
-                                enum_convert<BackendLibrary::CBLAS>(uplo),
-                                enum_convert<BackendLibrary::CBLAS>(transA),
-                                n,
-                                k,
-                                alpha,
-                                A_i.data_ptr(),
-                                A_i.ld(),
-                                beta,
-                                C_i.data_ptr(),
-                                C_i.ld());
-                } else if constexpr (std::is_same_v<T, double>) {
-                    cblas_dsyrk(CblasColMajor,
-                                enum_convert<BackendLibrary::CBLAS>(uplo),
-                                enum_convert<BackendLibrary::CBLAS>(transA),
-                                n,
-                                k,
-                                alpha,
-                                A_i.data_ptr(),
-                                A_i.ld(),
-                                beta,
-                                C_i.data_ptr(),
-                                C_i.ld());
-                }
+                call_backend_nh<T, BackendLibrary::CBLAS>(
+                    cblas_ssyrk, cblas_dsyrk, nullptr, nullptr,
+                    Layout::ColMajor,
+                    uplo,
+                    transA,
+                    n,
+                    k,
+                    alpha,
+                    A_i.data_ptr(),
+                    A_i.ld(),
+                    beta,
+                    C_i.data_ptr(),
+                    C_i.ld());
             };
 
             for (int batch = 0; batch < A_view.batch_size(); ++batch) {
@@ -821,54 +729,28 @@ namespace batchlas{
         auto B_view = Bmat;
         auto C_view = Cmat;
         return detail::submit_host_task<T>(ctx, "netlib.syr2k", [=] {
-            if (C_view.rows() != C_view.cols()) {
-                throw std::runtime_error("SYR2K: C must be square");
-            }
-            if (A_view.batch_size() != B_view.batch_size() || A_view.batch_size() != C_view.batch_size()) {
-                throw std::runtime_error("SYR2K: batch size mismatch");
-            }
+            const auto [n, k] = backend::shape::validate_rank_2k<std::runtime_error>("SYR2K", A_view, B_view, C_view, transA, /*hermitian=*/false);
 
-            const int n = C_view.rows();
-            const int expected_n = transA == Transpose::NoTrans ? A_view.rows() : A_view.cols();
-            const int expected_b_n = transA == Transpose::NoTrans ? B_view.rows() : B_view.cols();
-            const int k = transA == Transpose::NoTrans ? A_view.cols() : A_view.rows();
-            const int b_k = transA == Transpose::NoTrans ? B_view.cols() : B_view.rows();
-            if (expected_n != n || expected_b_n != n || b_k != k || k <= 0) {
-                throw std::runtime_error("SYR2K: incompatible matrix dimensions");
-            }
-
+            // The two complex slots have no callee because this overload is
+            // constrained to a real T; the complex rank-2k update is her2k.
             auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
                                      const MatrixView<T, MatrixFormat::Dense>& B_i,
                                      const MatrixView<T, MatrixFormat::Dense>& C_i) {
-                if constexpr (std::is_same_v<T, float>) {
-                    cblas_ssyr2k(CblasColMajor,
-                                 enum_convert<BackendLibrary::CBLAS>(uplo),
-                                 enum_convert<BackendLibrary::CBLAS>(transA),
-                                 n,
-                                 k,
-                                 alpha,
-                                 A_i.data_ptr(),
-                                 A_i.ld(),
-                                 B_i.data_ptr(),
-                                 B_i.ld(),
-                                 beta,
-                                 C_i.data_ptr(),
-                                 C_i.ld());
-                } else if constexpr (std::is_same_v<T, double>) {
-                    cblas_dsyr2k(CblasColMajor,
-                                 enum_convert<BackendLibrary::CBLAS>(uplo),
-                                 enum_convert<BackendLibrary::CBLAS>(transA),
-                                 n,
-                                 k,
-                                 alpha,
-                                 A_i.data_ptr(),
-                                 A_i.ld(),
-                                 B_i.data_ptr(),
-                                 B_i.ld(),
-                                 beta,
-                                 C_i.data_ptr(),
-                                 C_i.ld());
-                }
+                call_backend_nh<T, BackendLibrary::CBLAS>(
+                    cblas_ssyr2k, cblas_dsyr2k, nullptr, nullptr,
+                    Layout::ColMajor,
+                    uplo,
+                    transA,
+                    n,
+                    k,
+                    alpha,
+                    A_i.data_ptr(),
+                    A_i.ld(),
+                    B_i.data_ptr(),
+                    B_i.ld(),
+                    beta,
+                    C_i.data_ptr(),
+                    C_i.ld());
             };
 
             for (int batch = 0; batch < A_view.batch_size(); ++batch) {
@@ -891,19 +773,8 @@ namespace batchlas{
         auto B_view = Bmat;
         auto C_view = Cmat;
         return detail::submit_host_task<T>(ctx, "netlib.trmm", [=] {
-            if (A_view.rows() != A_view.cols()) {
-                throw std::runtime_error("TRMM: A must be square");
-            }
-            if (A_view.batch_size() != B_view.batch_size() || A_view.batch_size() != C_view.batch_size()) {
-                throw std::runtime_error("TRMM: batch size mismatch");
-            }
-
-            const int m = C_view.rows();
-            const int n = C_view.cols();
-            const int expected_dim = side == Side::Left ? m : n;
-            if (A_view.rows() != expected_dim || B_view.rows() != m || B_view.cols() != n) {
-                throw std::runtime_error("TRMM: incompatible matrix dimensions");
-            }
+            const auto [m, n, k] = backend::shape::validate_product<std::runtime_error>("TRMM", A_view, B_view, C_view, side);
+            static_cast<void>(k);  // cblas_?trmm takes A's order from side, not as an argument
 
             // CBLAS ?trmm works in place, so the operand has to arrive in C.
             // Going through cblas_?gemm instead would be a plain dense product
