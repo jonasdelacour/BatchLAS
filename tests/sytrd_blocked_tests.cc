@@ -4,6 +4,7 @@
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/matrix.hh>
+#include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
 
@@ -66,30 +67,6 @@ template <typename T, Backend B>
 struct SytrdBlockedConfig {
     using ScalarType = T;
     static constexpr Backend BackendVal = B;
-};
-
-class ScopedEnvVar {
-public:
-    ScopedEnvVar(const char* name, const char* value) : name_(name) {
-        if (const char* old = std::getenv(name_)) {
-            old_value_ = old;
-            had_old_value_ = true;
-        }
-        setenv(name_, value, 1);
-    }
-
-    ~ScopedEnvVar() {
-        if (had_old_value_) {
-            setenv(name_, old_value_.c_str(), 1);
-        } else {
-            unsetenv(name_);
-        }
-    }
-
-private:
-    const char* name_;
-    std::string old_value_;
-    bool had_old_value_ = false;
 };
 
 } // namespace

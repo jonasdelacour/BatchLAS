@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/blas/extra.hh>
+#include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 
 #include <cstdlib>
@@ -27,30 +28,6 @@ template <typename Config>
 class TrmmTest : public test_utils::BatchLASTest<Config> {
 protected:
     Transpose trans = test_utils::is_complex<typename Config::ScalarType>() ? Transpose::ConjTrans : Transpose::Trans;
-};
-
-class ScopedEnvVar {
-public:
-    ScopedEnvVar(const char* name, const char* value) : name_(name) {
-        if (const char* old = std::getenv(name_)) {
-            old_value_ = old;
-            had_old_value_ = true;
-        }
-        setenv(name_, value, 1);
-    }
-
-    ~ScopedEnvVar() {
-        if (had_old_value_) {
-            setenv(name_, old_value_.c_str(), 1);
-        } else {
-            unsetenv(name_);
-        }
-    }
-
-private:
-    const char* name_;
-    std::string old_value_;
-    bool had_old_value_ = false;
 };
 
 TYPED_TEST_SUITE(TrmmTest, TrmmTestTypes);

@@ -9,6 +9,7 @@
 #include <string>
 
 #include <batchlas/backend_config.h>
+#include <batchlas/util/env.hh>
 #if BATCHLAS_HAS_CUDA_BACKEND
 #include "../src/backends/gemm_cublasdx_dispatch.hh"
 #endif
@@ -18,31 +19,6 @@
 using namespace batchlas;
 
 namespace {
-
-class ScopedEnvVar {
-public:
-    ScopedEnvVar(const char* name, const char* value) : name_(name) {
-        const char* old = std::getenv(name_);
-        if (old) {
-            had_old_ = true;
-            old_value_ = old;
-        }
-        setenv(name_, value, 1);
-    }
-
-    ~ScopedEnvVar() {
-        if (had_old_) {
-            setenv(name_, old_value_.c_str(), 1);
-        } else {
-            unsetenv(name_);
-        }
-    }
-
-private:
-    const char* name_;
-    bool had_old_ = false;
-    std::string old_value_;
-};
 
 template <typename T>
 ::testing::AssertionResult AssertBatchedBufferNear(const UnifiedVector<T>& actual,

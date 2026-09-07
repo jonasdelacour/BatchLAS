@@ -79,4 +79,66 @@ inline std::string env_string_or(const char* name, const std::string& fallback) 
     return std::string(v);
 }
 
+// ---------------------------------------------------------------------------
+// The WRITE side of the same knob contract.
+//
+// Sixteen near-identical copies of this RAII class had accumulated across
+// tests/ and benchmarks/ -- one per op whose route is pinned by an env knob --
+// plus a single-key variant in syevx_tests.cc and two hand-rolled
+// save/setenv/restore blocks in syev_blocked_tests.cc. They agreed on
+// everything except one point: three of them treated a null value as "unset
+// for the duration" and the other thirteen passed it straight to setenv, which
+// is undefined behaviour. The null-aware reading is a strict superset of the
+// other -- nothing that compiled against the thirteen changes meaning -- so it
+// is the one kept here.
+//
+// setenv/unsetenv rather than putenv: putenv keeps the caller's buffer alive
+// inside the environment, which is a lifetime trap in a scope that restores on
+// exit.
+//
+// PRECONDITION: `name` must outlive the object -- in practice a string literal,
+// which is what every call site passes. It is borrowed, not copied, because two
+// of the gemm family benchmarks construct these inside the timed lambda, and a
+// std::string member would put a heap allocation per construction into a
+// measured region for no benefit any current caller can use. A caller that has
+// to compose its key must keep the buffer alive itself.
+//
+// Not thread-safe, because the process environment is not: construct these
+// from a test body or a benchmark setup, never from inside a parallel region.
+class ScopedEnvVar {
+public:
+    // A null `value` UNSETS the variable for the duration, which is how a
+    // caller asks for the automatic route regardless of what the surrounding
+    // environment already said.
+    ScopedEnvVar(const char* name, const char* value) : name_(name) {
+        if (const char* old = std::getenv(name_)) {
+            old_value_ = old;
+            had_old_value_ = true;
+        }
+        if (value) {
+            ::setenv(name_, value, 1);
+        } else {
+            ::unsetenv(name_);
+        }
+    }
+
+    ~ScopedEnvVar() {
+        if (had_old_value_) {
+            ::setenv(name_, old_value_.c_str(), 1);
+        } else {
+            ::unsetenv(name_);
+        }
+    }
+
+    // Copying would restore the same variable twice, the second time from a
+    // snapshot that the first restore has already invalidated.
+    ScopedEnvVar(const ScopedEnvVar&) = delete;
+    ScopedEnvVar& operator=(const ScopedEnvVar&) = delete;
+
+private:
+    const char* name_;
+    std::string old_value_;
+    bool had_old_value_ = false;
+};
+
 }  // namespace batchlas
