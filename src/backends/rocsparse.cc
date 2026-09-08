@@ -4,6 +4,7 @@
 #include "../queue.hh"
 #include <sycl/sycl.hpp>
 #include <batchlas/blas/linalg.hh>
+#include "../util/template-instantiations.hh"
 #include <complex>
 #include "backend_handle_impl.hh"
 
@@ -76,25 +77,26 @@ namespace batchlas {
 
     } // namespace backend
 
-    #define SPMM_INSTANTIATE(fp, F) \
-    template Event backend::spmm_vendor<Backend::ROCM, fp, F>(Queue&, const MatrixView<fp, F>&, const MatrixView<fp, MatrixFormat::Dense>&, const MatrixView<fp, MatrixFormat::Dense>&, fp, fp, Transpose, Transpose, Span<std::byte>);
-    #define SPMM_BUFFER_SIZE_INSTANTIATE(fp, F) \
-    template size_t backend::spmm_vendor_buffer_size<Backend::ROCM, fp, F>(Queue&, const MatrixView<fp, F>&, const MatrixView<fp, MatrixFormat::Dense>&, const MatrixView<fp, MatrixFormat::Dense>&, fp, fp, Transpose, Transpose);
+    // Explicit instantiations. Signatures live in the `sig` namespace beside each
+    // public declaration (include/batchlas/blas/functions/*.hh), so changing one is a single
+    // header edit rather than one edit per backend TU. CSR is the only sparse
+    // format rocSPARSE is wired up for here.
+    //
+    // Only the `backend::`-qualified vendor entry points are named here: the
+    // public spmm / spmm_buffer_size are defined and instantiated in
+    // src/dispatch/entry_points/sparse.cc, so a vendor TU that instantiated them
+    // too would collide at link time. There is no BATCHLAS_INSTANTIATE_BACKEND_
+    // FORMAT_OP -- _FORMAT_OP expands to an unqualified op and so cannot spell
+    // `backend::spmm_vendor` -- hence the raw BATCHLAS_INSTANTIATE below, with
+    // BATCHLAS_COMMA smuggling the format argument past macro splitting and
+    // BATCHLAS_UNPAREN stripping the parentheses the type driver hands out.
+    #define ROCSPARSE_OPS(B, fp) \
+        BATCHLAS_INSTANTIATE(sig::spmm_vendor<BATCHLAS_UNPAREN fp BATCHLAS_COMMA MatrixFormat::CSR>, \
+                             backend::spmm_vendor, B, BATCHLAS_UNPAREN fp, MatrixFormat::CSR) \
+        BATCHLAS_INSTANTIATE(sig::spmm_vendor_buffer_size<BATCHLAS_UNPAREN fp BATCHLAS_COMMA MatrixFormat::CSR>, \
+                             backend::spmm_vendor_buffer_size, B, BATCHLAS_UNPAREN fp, MatrixFormat::CSR)
 
-    #define ROCSPARSE_INSTANTIATE(fp, F) \
-        SPMM_INSTANTIATE(fp, F) \
-        SPMM_BUFFER_SIZE_INSTANTIATE(fp, F)
+    BATCHLAS_FOR_EACH_SCALAR_TYPE_1(ROCSPARSE_OPS, Backend::ROCM)
 
-    #define ROCSPARSE_INSTANTIATE_FOR_FP(fp) \
-        ROCSPARSE_INSTANTIATE(fp, MatrixFormat::CSR)
-
-    ROCSPARSE_INSTANTIATE_FOR_FP(float)
-    ROCSPARSE_INSTANTIATE_FOR_FP(double)
-    ROCSPARSE_INSTANTIATE_FOR_FP(std::complex<float>)
-    ROCSPARSE_INSTANTIATE_FOR_FP(std::complex<double>)
-
-    #undef SPMM_INSTANTIATE
-    #undef SPMM_BUFFER_SIZE_INSTANTIATE
-    #undef ROCSPARSE_INSTANTIATE
-    #undef ROCSPARSE_INSTANTIATE_FOR_FP
+    #undef ROCSPARSE_OPS
 }

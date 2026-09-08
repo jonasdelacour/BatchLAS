@@ -334,13 +334,22 @@ What to write at the call site, by owning type:
 | `Vector<T>` | `.data()` — the whole allocation, so only when `inc == 1` and it is packed | `.view()`, always |
 | raw pointer | `Span<T>(p, n)` | `VectorView<T>(p, size, batch, Inc{i}, Stride{s})` |
 
-`Vector<T>::view()` is required whenever `T` has to be *deduced* from the
+`Vector<T>::view()` used to be required whenever `T` had to be *deduced* from the
 argument, which is every templated entry point: the implicit
 `VectorView(const Vector<T>&)` conversion exists but template argument deduction
-never considers user-defined conversions. Several entry points also ship an
-owning-`Vector` forwarding overload so the bare `Vector` works — `stebz`,
-`stein`, `steqr`, `steqr_cta` and `stedc` all do — but `.view()` is the spelling
-that works everywhere.
+never considers user-defined conversions. A bare `Vector` now works at every
+entry point instead of at a handful of them, because each name carries one
+generated forwarder that converts owning arguments before the deducing call
+(`BATCHLAS_ACCEPT_OWNING`, `blas/queue-dispatch.hh`). Owning and view arguments
+may be mixed in one call. `.view()` is still correct everywhere and is what the
+examples below write.
+
+Two spellings the generated forwarder cannot take, both of which fail to compile
+rather than doing something else: a bare `{}` in any argument position (name the
+type — `stein_all_counts`, `OrthoOptions{}`), and a call that gives some template
+arguments explicitly while leaving others to deduction, such as
+`spmm<Backend::CUDA, float>(ctx, A, ...)` with an owning `A` whose `MatrixFormat`
+is still deduced. Write `spmm<Backend::CUDA>(ctx, A, ...)` and let both deduce.
 
 `pivots` is `int64_t`, `tau` is `T`, and `W` is the real counterpart of `T`
 (`float` for `std::complex<float>`).

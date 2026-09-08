@@ -120,30 +120,6 @@ inline Event potrf(Queue& ctx,
         return potrf<B,T>(ctx, descrA, uplo, workspace, Span<int32_t>{});
 }
 
-template <Backend B, typename T>
-inline size_t potrf_buffer_size(Queue& ctx,
-                                        const Matrix<T, MatrixFormat::Dense>& A,
-                                        Uplo uplo) {
-        return potrf_buffer_size<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), uplo);
-}
-
-template <Backend B, typename T>
-inline Event potrf(Queue& ctx,
-                const Matrix<T, MatrixFormat::Dense>& descrA,
-                Uplo uplo,
-                Span<std::byte> workspace,
-                Span<int32_t> info) {
-        return potrf<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(descrA), uplo, workspace, info);
-}
-
-template <Backend B, typename T>
-inline Event potrf(Queue& ctx,
-                const Matrix<T, MatrixFormat::Dense>& descrA,
-                Uplo uplo,
-                Span<std::byte> workspace) {
-        return potrf<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(descrA), uplo, workspace, Span<int32_t>{});
-}
-
 }  // namespace batchlas
 
 
@@ -173,8 +149,13 @@ size_t potrf_vendor_buffer_size(Queue& ctx,
 
 namespace batchlas {
 
-// Backend-deducing overloads: `f(ctx, ...)` uses ctx.backend().
-// See BATCHLAS_DISPATCH_ON_QUEUE in blas/queue-dispatch.hh.
+// Owning-argument and backend-deducing overloads: `f(ctx, Matrix, ...)` accepts
+// owning containers where the primary takes views, and `f(ctx, ...)` uses
+// ctx.backend(). See BATCHLAS_ACCEPT_OWNING and BATCHLAS_DISPATCH_ON_QUEUE in
+// blas/queue-dispatch.hh.
+
+BATCHLAS_ACCEPT_OWNING(potrf)
+BATCHLAS_ACCEPT_OWNING(potrf_buffer_size)
 
 BATCHLAS_DISPATCH_ON_QUEUE(potrf)
 BATCHLAS_DISPATCH_ON_QUEUE(potrf_buffer_size)

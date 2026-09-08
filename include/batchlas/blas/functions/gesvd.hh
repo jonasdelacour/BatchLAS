@@ -85,82 +85,6 @@ size_t gesvd_buffer_size(Queue& ctx,
                          SvdVectors jobvh,
                          Uplo hermitian_uplo);
 
-template <Backend B, typename T>
-inline Event gesvd(Queue& ctx,
-                   const Matrix<T, MatrixFormat::Dense>& A,
-                   Span<typename base_type<T>::type> singular_values,
-                   const Matrix<T, MatrixFormat::Dense>& U,
-                   const Matrix<T, MatrixFormat::Dense>& Vh,
-                   SvdVectors jobu,
-                   SvdVectors jobvh,
-                   Span<std::byte> workspace) {
-    return gesvd<B, T>(ctx,
-                       MatrixView<T, MatrixFormat::Dense>(A),
-                       singular_values,
-                       MatrixView<T, MatrixFormat::Dense>(U),
-                       MatrixView<T, MatrixFormat::Dense>(Vh),
-                       jobu,
-                       jobvh,
-                       workspace);
-}
-
-template <Backend B, typename T>
-inline Event gesvd(Queue& ctx,
-                   const Matrix<T, MatrixFormat::Dense>& A,
-                   Span<typename base_type<T>::type> singular_values,
-                   const Matrix<T, MatrixFormat::Dense>& U,
-                   const Matrix<T, MatrixFormat::Dense>& Vh,
-                   SvdVectors jobu,
-                   SvdVectors jobvh,
-                   Uplo hermitian_uplo,
-                   Span<std::byte> workspace) {
-    return gesvd<B, T>(ctx,
-                       MatrixView<T, MatrixFormat::Dense>(A),
-                       singular_values,
-                       MatrixView<T, MatrixFormat::Dense>(U),
-                       MatrixView<T, MatrixFormat::Dense>(Vh),
-                       jobu,
-                       jobvh,
-                       hermitian_uplo,
-                       workspace);
-}
-
-template <Backend B, typename T>
-inline size_t gesvd_buffer_size(Queue& ctx,
-                                const Matrix<T, MatrixFormat::Dense>& A,
-                                Span<typename base_type<T>::type> singular_values,
-                                const Matrix<T, MatrixFormat::Dense>& U,
-                                const Matrix<T, MatrixFormat::Dense>& Vh,
-                                SvdVectors jobu,
-                                SvdVectors jobvh) {
-    return gesvd_buffer_size<B, T>(ctx,
-                                   MatrixView<T, MatrixFormat::Dense>(A),
-                                   singular_values,
-                                   MatrixView<T, MatrixFormat::Dense>(U),
-                                   MatrixView<T, MatrixFormat::Dense>(Vh),
-                                   jobu,
-                                   jobvh);
-}
-
-template <Backend B, typename T>
-inline size_t gesvd_buffer_size(Queue& ctx,
-                                const Matrix<T, MatrixFormat::Dense>& A,
-                                Span<typename base_type<T>::type> singular_values,
-                                const Matrix<T, MatrixFormat::Dense>& U,
-                                const Matrix<T, MatrixFormat::Dense>& Vh,
-                                SvdVectors jobu,
-                                SvdVectors jobvh,
-                                Uplo hermitian_uplo) {
-    return gesvd_buffer_size<B, T>(ctx,
-                                   MatrixView<T, MatrixFormat::Dense>(A),
-                                   singular_values,
-                                   MatrixView<T, MatrixFormat::Dense>(U),
-                                   MatrixView<T, MatrixFormat::Dense>(Vh),
-                                   jobu,
-                                   jobvh,
-                                   hermitian_uplo);
-}
-
 } // namespace batchlas
 
 namespace batchlas::backend {
@@ -470,8 +394,13 @@ inline size_t gesvd_buffer_size(Queue& ctx,
 
 namespace batchlas {
 
-// Backend-deducing overloads: `f(ctx, ...)` uses ctx.backend().
-// See BATCHLAS_DISPATCH_ON_QUEUE in blas/queue-dispatch.hh.
+// Owning-argument and backend-deducing overloads: `f(ctx, Matrix, ...)` accepts
+// owning containers where the primary takes views, and `f(ctx, ...)` uses
+// ctx.backend(). See BATCHLAS_ACCEPT_OWNING and BATCHLAS_DISPATCH_ON_QUEUE in
+// blas/queue-dispatch.hh.
+
+BATCHLAS_ACCEPT_OWNING(gesvd)
+BATCHLAS_ACCEPT_OWNING(gesvd_buffer_size)
 
 BATCHLAS_DISPATCH_ON_QUEUE(gesvd)
 BATCHLAS_DISPATCH_ON_QUEUE(gesvd_buffer_size)

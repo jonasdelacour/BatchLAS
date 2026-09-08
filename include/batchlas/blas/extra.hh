@@ -15,24 +15,9 @@ namespace batchlas
               const Span<float_t<T>> norms);
 
     template <typename T, MatrixFormat MF>
-    inline Event norm(Queue &ctx,
-              const Matrix<T, MF> &A,
-              const NormType norm_type,
-              const Span<float_t<T>> norms) {
-        return norm<T,MF>(ctx, MatrixView<T,MF>(A), norm_type, norms);
-    }
-
-    template <typename T, MatrixFormat MF>
     UnifiedVector<float_t<T>> norm(Queue &ctx,
                           const MatrixView<T, MF> &A,
                           const NormType norm_type = NormType::Frobenius);
-
-    template <typename T, MatrixFormat MF>
-    inline UnifiedVector<float_t<T>> norm(Queue &ctx,
-                          const Matrix<T, MF> &A,
-                          const NormType norm_type = NormType::Frobenius) {
-        return norm<T,MF>(ctx, MatrixView<T,MF>(A), norm_type);
-    }
 
     template <Backend B, typename T, MatrixFormat MF>
     Event cond(Queue &ctx,
@@ -40,15 +25,6 @@ namespace batchlas
               const NormType norm_type,
               const Span<T> conds,
               const Span<std::byte> workspace);
-
-    template <Backend B, typename T, MatrixFormat MF>
-    inline Event cond(Queue &ctx,
-              const Matrix<T, MF> &A,
-              const NormType norm_type,
-              const Span<T> conds,
-              const Span<std::byte> workspace) {
-        return cond<B,T,MF>(ctx, MatrixView<T,MF>(A), norm_type, conds, workspace);
-    }
 
     // Workspace size for the `cond` overload above. Instantiated only for T in
     // {float, double} with MF == MatrixFormat::Dense (COND_INSTANTIATE in
@@ -59,23 +35,9 @@ namespace batchlas
                             const NormType norm_type);
 
     template <Backend B, typename T, MatrixFormat MF>
-    inline size_t cond_buffer_size(Queue &ctx,
-                            const Matrix<T, MF> &A,
-                            const NormType norm_type) {
-        return cond_buffer_size<B,T,MF>(ctx, MatrixView<T,MF>(A), norm_type);
-    }
-
-    template <Backend B, typename T, MatrixFormat MF>
     UnifiedVector<T> cond(Queue &ctx,
                           const MatrixView<T, MF> &A,
                           const NormType norm_type);
-
-    template <Backend B, typename T, MatrixFormat MF>
-    inline UnifiedVector<T> cond(Queue &ctx,
-                          const Matrix<T, MF> &A,
-                          const NormType norm_type) {
-        return cond<B,T,MF>(ctx, MatrixView<T,MF>(A), norm_type);
-    }
 
     // log10_kappa is log10(κ2) or log10(κF) depending on metric (Spectral or Frobenius only).
     // `algo` defaults to CGS2 deliberately: Chol-QR squares the condition number of an
@@ -141,26 +103,28 @@ namespace batchlas
                     const MatrixView<T, MF> &B);
 
     template <typename T, MatrixFormat MF>
-    inline Event transpose(Queue &ctx,
-                    const Matrix<T, MF> &A,
-                    const Matrix<T, MF> &B) {
-        return transpose<T,MF>(ctx, MatrixView<T,MF>(A), MatrixView<T,MF>(B));
-    }
-
-    template <typename T, MatrixFormat MF>
     Matrix<T, MF> transpose(Queue &ctx,
                             const MatrixView<T, MF> &A);
 
-    template <typename T, MatrixFormat MF>
-    inline Matrix<T, MF> transpose(Queue &ctx,
-                            const Matrix<T, MF> &A) {
-        return transpose<T,MF>(ctx, MatrixView<T,MF>(A));
-    }
+    // Owning-argument and backend-deducing overloads: `f(ctx, Matrix, ...)` accepts
+    // owning containers where the primary takes views, and `f(ctx, ...)` uses
+    // ctx.backend(). See BATCHLAS_ACCEPT_OWNING and BATCHLAS_DISPATCH_ON_QUEUE in
+    // blas/queue-dispatch.hh.
+    //
+    // `norm` and `transpose` are not Backend-templated, so they need no dispatch
+    // overload, but they do need the owning-argument one -- hence its _NB spelling,
+    // which solves deduction of `T` and `MF` either way.
+    //
+    // The random_*_with_log10_cond_metric generators are deliberately absent from
+    // both: their `T` is non-deduced (it appears only as `float_t<T>` and in the
+    // return type), so either macro would expand to nothing at all, reading as if
+    // they were dispatchable when they are not. They keep the explicit
+    // f<Backend, T>(...) spelling. See docs/cpp-api.md#which-spelling-each-entry-point-takes.
+    BATCHLAS_ACCEPT_OWNING(cond)
+    BATCHLAS_ACCEPT_OWNING(cond_buffer_size)
+    BATCHLAS_ACCEPT_OWNING_NB(norm)
+    BATCHLAS_ACCEPT_OWNING_NB(transpose)
 
-    // Backend-deducing overloads. The random_*_with_log10_cond_metric generators are
-    // deliberately absent: their `T` is non-deduced (it appears only as `float_t<T>`
-    // and in the return type), so the macro would expand to nothing.
-    // See docs/cpp-api.md#which-spelling-each-entry-point-takes.
     BATCHLAS_DISPATCH_ON_QUEUE(cond)
     BATCHLAS_DISPATCH_ON_QUEUE(cond_buffer_size)
 

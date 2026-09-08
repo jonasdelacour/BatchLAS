@@ -10,6 +10,8 @@
 #include <batchlas/util/group-invoke.hh>
 #include "sg_compat.hh"
 #include <batchlas/backend_config.h>
+
+#include "../util/template-instantiations.hh"
 #include "../math-helpers.hh"
 #include "../queue.hh"
 
@@ -589,25 +591,11 @@ Event ormqx_cta(Queue& ctx,
     return ctx.get_event();
 }
 
-#if BATCHLAS_HAS_CUDA_BACKEND
-    template Event ormqx_cta<Backend::CUDA, float>(Queue&, const MatrixView<float, MatrixFormat::Dense>&, const VectorView<float>&, const MatrixView<float, MatrixFormat::Dense>&, Uplo, Side, Transpose, int32_t, const Span<std::byte>&, size_t);
-    template Event ormqx_cta<Backend::CUDA, double>(Queue&, const MatrixView<double, MatrixFormat::Dense>&, const VectorView<double>&, const MatrixView<double, MatrixFormat::Dense>&, Uplo, Side, Transpose, int32_t, const Span<std::byte>&, size_t);
-    template Event ormqx_cta<Backend::CUDA, std::complex<float>>(Queue&, const MatrixView<std::complex<float>, MatrixFormat::Dense>&, const VectorView<std::complex<float>>&, const MatrixView<std::complex<float>, MatrixFormat::Dense>&, Uplo, Side, Transpose, int32_t, const Span<std::byte>&, size_t);
-    template Event ormqx_cta<Backend::CUDA, std::complex<double>>(Queue&, const MatrixView<std::complex<double>, MatrixFormat::Dense>&, const VectorView<std::complex<double>>&, const MatrixView<std::complex<double>, MatrixFormat::Dense>&, Uplo, Side, Transpose, int32_t, const Span<std::byte>&, size_t);
-#endif
+#define ORMQX_CTA_INSTANTIATE(back, fp) \
+    template Event ormqx_cta<back, BATCHLAS_UNPAREN fp>(Queue&, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, const VectorView<BATCHLAS_UNPAREN fp>&, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, Uplo, Side, Transpose, int32_t, const Span<std::byte>&, size_t);
 
-#if BATCHLAS_HAS_ROCM_BACKEND
-    template Event ormqx_cta<Backend::ROCM, float>(Queue&, const MatrixView<float, MatrixFormat::Dense>&, const VectorView<float>&, const MatrixView<float, MatrixFormat::Dense>&, Uplo, Side, Transpose, int32_t, const Span<std::byte>&, size_t);
-    template Event ormqx_cta<Backend::ROCM, double>(Queue&, const MatrixView<double, MatrixFormat::Dense>&, const VectorView<double>&, const MatrixView<double, MatrixFormat::Dense>&, Uplo, Side, Transpose, int32_t, const Span<std::byte>&, size_t);
-    template Event ormqx_cta<Backend::ROCM, std::complex<float>>(Queue&, const MatrixView<std::complex<float>, MatrixFormat::Dense>&, const VectorView<std::complex<float>>&, const MatrixView<std::complex<float>, MatrixFormat::Dense>&, Uplo, Side, Transpose, int32_t, const Span<std::byte>&, size_t);
-    template Event ormqx_cta<Backend::ROCM, std::complex<double>>(Queue&, const MatrixView<std::complex<double>, MatrixFormat::Dense>&, const VectorView<std::complex<double>>&, const MatrixView<std::complex<double>, MatrixFormat::Dense>&, Uplo, Side, Transpose, int32_t, const Span<std::byte>&, size_t);
-#endif
+BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(ORMQX_CTA_INSTANTIATE)
 
-#if BATCHLAS_HAS_HOST_BACKEND
-    template Event ormqx_cta<Backend::NETLIB, float>(Queue&, const MatrixView<float, MatrixFormat::Dense>&, const VectorView<float>&, const MatrixView<float, MatrixFormat::Dense>&, Uplo, Side, Transpose, int32_t, const Span<std::byte>&, size_t);
-    template Event ormqx_cta<Backend::NETLIB, double>(Queue&, const MatrixView<double, MatrixFormat::Dense>&, const VectorView<double>&, const MatrixView<double, MatrixFormat::Dense>&, Uplo, Side, Transpose, int32_t, const Span<std::byte>&, size_t);
-    template Event ormqx_cta<Backend::NETLIB, std::complex<float>>(Queue&, const MatrixView<std::complex<float>, MatrixFormat::Dense>&, const VectorView<std::complex<float>>&, const MatrixView<std::complex<float>, MatrixFormat::Dense>&, Uplo, Side, Transpose, int32_t, const Span<std::byte>&, size_t);
-    template Event ormqx_cta<Backend::NETLIB, std::complex<double>>(Queue&, const MatrixView<std::complex<double>, MatrixFormat::Dense>&, const VectorView<std::complex<double>>&, const MatrixView<std::complex<double>, MatrixFormat::Dense>&, Uplo, Side, Transpose, int32_t, const Span<std::byte>&, size_t);
-#endif
+#undef ORMQX_CTA_INSTANTIATE
 
 } // namespace batchlas

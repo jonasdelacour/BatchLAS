@@ -9,6 +9,7 @@
 #include <batchlas/blas/linalg.hh>
 
 #include <batchlas/blas/functions/syev.hh>
+#include "../util/template-instantiations.hh"
 #include <batchlas/blas/dispatch/op.hh>
 
 // This file contains cuSOLVER primitives implementation
@@ -507,78 +508,27 @@ namespace batchlas {
 
     } // namespace backend
 
-    #define POTRF_INSTANTIATE(fp) \
-    template Event backend::potrf_vendor<Backend::CUDA, fp>( \
-        Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        Uplo, \
-        Span<std::byte>, \
-        Span<int32_t>);
-    
-    #define POTRF_BUFFER_SIZE_INSTANTIATE(fp) \
-    template size_t backend::potrf_vendor_buffer_size<Backend::CUDA, fp>( \
-        Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        Uplo);
-
-    #define SYEV_VENDOR_INSTANTIATE(fp) \
-    template Event backend::syev_vendor<Backend::CUDA, fp>( \
-        Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        Span<typename base_type<fp>::type>, \
-        JobType, \
-        Uplo, \
-        Span<std::byte>);
-
-    #define SYEV_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) \
-    template size_t backend::syev_vendor_buffer_size<Backend::CUDA, fp>( \
-        Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        Span<typename base_type<fp>::type>, \
-        JobType, \
-        Uplo);
-
-    #define GESVD_VENDOR_INSTANTIATE(fp) \
-    template Event backend::gesvd_vendor<Backend::CUDA, fp>( \
-        Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        Span<typename base_type<fp>::type>, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        SvdVectors, \
-        SvdVectors, \
-        Span<std::byte>);
-
-    #define GESVD_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) \
-    template size_t backend::gesvd_vendor_buffer_size<Backend::CUDA, fp>( \
-        Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        Span<typename base_type<fp>::type>, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        SvdVectors, \
-        SvdVectors);
-
-    #define CUSOLVER_INSTANTIATE(fp) \
-        POTRF_INSTANTIATE(fp) \
-        POTRF_BUFFER_SIZE_INSTANTIATE(fp) \
-        SYEV_VENDOR_INSTANTIATE(fp) \
-        SYEV_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) \
-        GESVD_VENDOR_INSTANTIATE(fp) \
-        GESVD_VENDOR_BUFFER_SIZE_INSTANTIATE(fp)
+    // Explicit instantiations. Signatures live in the `sig` namespace beside each
+    // public declaration (include/batchlas/blas/functions/*.hh), so changing one is a single
+    // header edit rather than one edit per backend TU.
+    //
+    // Every row names a `backend::`-qualified `_vendor` symbol, and that is the
+    // invariant: WP0b moved the public potrf / potrf_buffer_size / syev /
+    // syev_buffer_size definitions out of this TU into
+    // src/dispatch/entry_points/{factorization,eigen}.cc, so instantiating an
+    // unqualified public op here would be a duplicate symbol against them.
+    // gesvd needs no entry-point TU -- its public forms are inline in
+    // functions/gesvd.hh -- so only its vendor arm appears anywhere.
+    #define CUSOLVER_OPS(B, fp) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, potrf_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, potrf_vendor_buffer_size) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, syev_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, syev_vendor_buffer_size) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, gesvd_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, gesvd_vendor_buffer_size)
 
     // Instantiate for the floating-point types of interest
-    CUSOLVER_INSTANTIATE(float)
-    CUSOLVER_INSTANTIATE(double)
-    CUSOLVER_INSTANTIATE(std::complex<float>)
-    CUSOLVER_INSTANTIATE(std::complex<double>)
+    BATCHLAS_FOR_EACH_SCALAR_TYPE_1(CUSOLVER_OPS, Backend::CUDA)
 
-    #undef POTRF_INSTANTIATE
-    #undef POTRF_BUFFER_SIZE_INSTANTIATE
-    #undef SYEV_VENDOR_INSTANTIATE
-    #undef SYEV_VENDOR_BUFFER_SIZE_INSTANTIATE
-    #undef GESVD_VENDOR_INSTANTIATE
-    #undef GESVD_VENDOR_BUFFER_SIZE_INSTANTIATE
-    #undef CUSOLVER_INSTANTIATE
-    #undef CUSOLVER_INSTANTIATE_FOR_FP
+    #undef CUSOLVER_OPS
 }

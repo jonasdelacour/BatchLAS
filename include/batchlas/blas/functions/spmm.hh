@@ -45,19 +45,6 @@ Event spmm(Queue& ctx,
     Span<std::byte> workspace);
 
 template <Backend B, typename T, MatrixFormat MFormat>
-inline Event spmm(Queue& ctx,
-        const Matrix<T, MFormat>& A,
-        const Matrix<T, MatrixFormat::Dense>& Bmat,
-        const Matrix<T, MatrixFormat::Dense>& Cmat,
-        T alpha,
-        T beta,
-        Transpose transA,
-        Transpose transB,
-        Span<std::byte> workspace) {
-        return spmm<B,T,MFormat>(ctx, MatrixView<T,MFormat>(A), MatrixView<T, MatrixFormat::Dense>(Bmat), MatrixView<T, MatrixFormat::Dense>(Cmat), alpha, beta, transA, transB, workspace);
-}
-
-template <Backend B, typename T, MatrixFormat MFormat>
 size_t spmm_buffer_size(Queue& ctx,
                         const MatrixView<T, MFormat>& A,
                         const MatrixView<T, MatrixFormat::Dense>& B_mat,
@@ -66,18 +53,6 @@ size_t spmm_buffer_size(Queue& ctx,
                         T beta,
                         Transpose transA,
                         Transpose transB);
-
-template <Backend B, typename T, MatrixFormat MFormat>
-inline size_t spmm_buffer_size(Queue& ctx,
-                                                const Matrix<T, MFormat>& A,
-                                                const Matrix<T, MatrixFormat::Dense>& Bmat,
-                                                const Matrix<T, MatrixFormat::Dense>& Cmat,
-                                                T alpha,
-                                                T beta,
-                                                Transpose transA,
-                                                Transpose transB) {
-        return spmm_buffer_size<B,T,MFormat>(ctx, MatrixView<T,MFormat>(A), MatrixView<T, MatrixFormat::Dense>(Bmat), MatrixView<T, MatrixFormat::Dense>(Cmat), alpha, beta, transA, transB);
-}
 
 }  // namespace batchlas
 
@@ -112,8 +87,13 @@ size_t spmm_vendor_buffer_size(Queue& ctx,
 
 namespace batchlas {
 
-// Backend-deducing overloads: `f(ctx, ...)` uses ctx.backend().
-// See BATCHLAS_DISPATCH_ON_QUEUE in blas/queue-dispatch.hh.
+// Owning-argument and backend-deducing overloads: `f(ctx, Matrix, ...)` accepts
+// owning containers where the primary takes views, and `f(ctx, ...)` uses
+// ctx.backend(). See BATCHLAS_ACCEPT_OWNING and BATCHLAS_DISPATCH_ON_QUEUE in
+// blas/queue-dispatch.hh.
+
+BATCHLAS_ACCEPT_OWNING(spmm)
+BATCHLAS_ACCEPT_OWNING(spmm_buffer_size)
 
 BATCHLAS_DISPATCH_ON_QUEUE(spmm)
 BATCHLAS_DISPATCH_ON_QUEUE(spmm_buffer_size)

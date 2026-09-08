@@ -3,6 +3,8 @@
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/backend_config.h>
 
+#include "../util/template-instantiations.hh"
+
 #include <batchlas/util/group-invoke.hh>
 #include "sg_compat.hh"
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
@@ -1147,19 +1149,11 @@ void stedc_merge_fused_cta(Queue& ctx,
     }
 }
 
-#if BATCHLAS_HAS_HOST_BACKEND
-template void stedc_merge_fused_cta<Backend::NETLIB, float>(Queue&, const VectorView<float>&, const VectorView<float>&, const Span<float>&, const Span<int32_t>&, const MatrixView<float, MatrixFormat::Dense>&, const VectorView<float>&, const StedcParams<float>&);
-template void stedc_merge_fused_cta<Backend::NETLIB, double>(Queue&, const VectorView<double>&, const VectorView<double>&, const Span<double>&, const Span<int32_t>&, const MatrixView<double, MatrixFormat::Dense>&, const VectorView<double>&, const StedcParams<double>&);
-#endif
+#define STEDC_MERGE_FUSED_CTA_INSTANTIATE(back, fp) \
+    template void stedc_merge_fused_cta<back, BATCHLAS_UNPAREN fp>(Queue&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, const Span<BATCHLAS_UNPAREN fp>&, const Span<int32_t>&, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, const VectorView<BATCHLAS_UNPAREN fp>&, const StedcParams<BATCHLAS_UNPAREN fp>&);
 
-#if BATCHLAS_HAS_CUDA_BACKEND
-template void stedc_merge_fused_cta<Backend::CUDA, float>(Queue&, const VectorView<float>&, const VectorView<float>&, const Span<float>&, const Span<int32_t>&, const MatrixView<float, MatrixFormat::Dense>&, const VectorView<float>&, const StedcParams<float>&);
-template void stedc_merge_fused_cta<Backend::CUDA, double>(Queue&, const VectorView<double>&, const VectorView<double>&, const Span<double>&, const Span<int32_t>&, const MatrixView<double, MatrixFormat::Dense>&, const VectorView<double>&, const StedcParams<double>&);
-#endif
+BATCHLAS_INSTANTIATE_REAL_ALL_BACKENDS(STEDC_MERGE_FUSED_CTA_INSTANTIATE)
 
-#if BATCHLAS_HAS_ROCM_BACKEND
-template void stedc_merge_fused_cta<Backend::ROCM, float>(Queue&, const VectorView<float>&, const VectorView<float>&, const Span<float>&, const Span<int32_t>&, const MatrixView<float, MatrixFormat::Dense>&, const VectorView<float>&, const StedcParams<float>&);
-template void stedc_merge_fused_cta<Backend::ROCM, double>(Queue&, const VectorView<double>&, const VectorView<double>&, const Span<double>&, const Span<int32_t>&, const MatrixView<double, MatrixFormat::Dense>&, const VectorView<double>&, const StedcParams<double>&);
-#endif
+#undef STEDC_MERGE_FUSED_CTA_INSTANTIATE
 
 } // namespace batchlas

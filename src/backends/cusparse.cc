@@ -6,6 +6,7 @@
 #include "../queue.hh"
 #include <sycl/sycl.hpp>
 #include <batchlas/blas/linalg.hh>
+#include "../util/template-instantiations.hh"
 #include "backend_handle_impl.hh"
 #include <algorithm>
 #include <complex>
@@ -312,36 +313,27 @@ namespace batchlas {
 
     } // namespace backend
 
-    #define SPMM_INSTANTIATE(fp, F) \
-    template Event backend::spmm_vendor<Backend::CUDA, fp, F>( \
-        Queue&, \
-        const MatrixView<fp, F>&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        fp, fp, Transpose, Transpose, Span<std::byte>);
-    
-    #define SPMM_BUFFER_SIZE_INSTANTIATE(fp, F) \
-    template size_t backend::spmm_vendor_buffer_size<Backend::CUDA, fp, F>( \
-        Queue&, \
-        const MatrixView<fp, F>&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        fp, fp, Transpose, Transpose);
+    // Explicit instantiations: ONLY the `backend::`-qualified vendor entry
+    // points. The public spmm / spmm_buffer_size definitions and their
+    // instantiations live in src/dispatch/entry_points/sparse.cc, so naming them
+    // here would be a duplicate symbol.
+    //
+    // Signatures come from the `sig` namespace beside the public declaration
+    // (include/batchlas/blas/functions/spmm.hh), so changing one is a single
+    // header edit rather than one edit per backend TU. Spelled with the raw
+    // BATCHLAS_INSTANTIATE rather than BATCHLAS_INSTANTIATE_FORMAT_OP: that
+    // macro names an *unqualified* op and there is no `backend::` + format form
+    // of it. CSR is the only sparse format cuSPARSE is wired up for here.
+    #define CUSPARSE_OPS(B, fp)                                                                       \
+        BATCHLAS_INSTANTIATE(sig::spmm_vendor<BATCHLAS_UNPAREN fp BATCHLAS_COMMA MatrixFormat::CSR>,   \
+                             backend::spmm_vendor, B, BATCHLAS_UNPAREN fp, MatrixFormat::CSR)         \
+        BATCHLAS_INSTANTIATE(sig::spmm_vendor_buffer_size<BATCHLAS_UNPAREN fp                          \
+                                                          BATCHLAS_COMMA MatrixFormat::CSR>,          \
+                             backend::spmm_vendor_buffer_size, B, BATCHLAS_UNPAREN fp,                \
+                             MatrixFormat::CSR)
 
-    #define CUSPARSE_INSTANTIATE(fp, F) \
-        SPMM_INSTANTIATE(fp, F) \
-        SPMM_BUFFER_SIZE_INSTANTIATE(fp, F)
+    // Instantiate for the floating-point types of interest
+    BATCHLAS_FOR_EACH_SCALAR_TYPE_1(CUSPARSE_OPS, Backend::CUDA)
 
-    #define CUSPARSE_INSTANTIATE_FOR_FP(fp) \
-        CUSPARSE_INSTANTIATE(fp, MatrixFormat::CSR)
-
-    CUSPARSE_INSTANTIATE_FOR_FP(float)
-    CUSPARSE_INSTANTIATE_FOR_FP(double)
-    CUSPARSE_INSTANTIATE_FOR_FP(std::complex<float>)
-    CUSPARSE_INSTANTIATE_FOR_FP(std::complex<double>)
-
-    #undef SPMM_INSTANTIATE
-    #undef SPMM_BUFFER_SIZE_INSTANTIATE
-    #undef CUSPARSE_INSTANTIATE
-    #undef CUSPARSE_INSTANTIATE_FOR_FP
+    #undef CUSPARSE_OPS
 }

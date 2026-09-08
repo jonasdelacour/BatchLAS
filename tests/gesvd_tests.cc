@@ -2,6 +2,7 @@
 
 #include <batchlas/backend_config.h>
 #include <batchlas/blas/linalg.hh>
+#include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
 
@@ -25,32 +26,6 @@
 #include "test_utils.hh"
 
 using namespace batchlas;
-
-namespace {
-
-struct ScopedEnvVar {
-    std::string key;
-    bool had_old = false;
-    std::string old;
-
-    ScopedEnvVar(const char* k, const char* v) : key(k) {
-        if (const char* prev = std::getenv(k)) {
-            had_old = true;
-            old = prev;
-        }
-        ::setenv(k, v, 1);
-    }
-
-    ~ScopedEnvVar() {
-        if (had_old) {
-            ::setenv(key.c_str(), old.c_str(), 1);
-        } else {
-            ::unsetenv(key.c_str());
-        }
-    }
-};
-
-} // namespace
 
 template <typename T, Backend B>
 struct GesvdConfig {

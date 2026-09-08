@@ -536,19 +536,7 @@ namespace batchlas {
         size_t);
 
     // Instantiate for the floating-point types of interest
-    #define INSTANTIATE_ORTHO_FOR_BACKEND(back)\
-        BATCHLAS_FOR_EACH_SCALAR_TYPE_1(ORTHO_INSTANTIATE, back)
+    BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(ORTHO_INSTANTIATE)
 
-    #if BATCHLAS_HAS_CUDA_BACKEND
-        INSTANTIATE_ORTHO_FOR_BACKEND(Backend::CUDA)
-    #endif
-    #if BATCHLAS_HAS_ROCM_BACKEND 
-        INSTANTIATE_ORTHO_FOR_BACKEND(Backend::ROCM)
-    #endif
-    #if BATCHLAS_HAS_HOST_BACKEND 
-        INSTANTIATE_ORTHO_FOR_BACKEND(Backend::NETLIB)
-    #endif
-
-    #undef INSTANTIATE_ORTHO_FOR_BACKEND
     #undef ORTHO_INSTANTIATE
 }

@@ -10,8 +10,6 @@ namespace detail::subgroup {
 
 inline constexpr int kMaxSupportedSubgroupSize = 32;
 inline constexpr int kMaxSubgroupsPerWorkGroup = 8;
-inline constexpr int kVectorTileK = 64;
-inline constexpr int kMaxVectorRowsPerSubgroup = 4;
 inline constexpr int kMaxMatrixRowsPerSubgroup = 8;
 inline constexpr int kRegisterMatrixTileM = 128;
 inline constexpr int kRegisterMatrixTileN = 64;
@@ -75,12 +73,6 @@ inline constexpr int subgroup_limit_for_workspace_v = []() {
 }();
 
 template <typename T>
-inline constexpr int kVectorWorkspaceMaxSubgroupsPerWorkGroup = subgroup_limit_for_workspace_v<0, 2 * kVectorTileK, T>;
-
-template <typename T>
-inline constexpr int kColumnSweepWorkspaceMaxSubgroupsPerWorkGroup = subgroup_limit_for_workspace_v<kVectorTileK, kVectorTileK, T>;
-
-template <typename T>
 inline constexpr int kRegisterMatrixWorkspaceMaxSubgroupsPerWorkGroup = subgroup_limit_for_workspace_v<
     kRegisterMatrixRhsStages * kRegisterMatrixTileK * kRegisterMatrixTileBStride,
     kRegisterMatrixLhsStages * kRegisterMatrixSubgroupTileM * kRegisterMatrixTileAStride,
@@ -107,22 +99,6 @@ template <int Count, typename Fn>
 inline constexpr void static_for(Fn&& fn) {
     static_for_impl<Count>(std::forward<Fn>(fn), std::make_index_sequence<Count>{});
 }
-
-template <typename T>
-struct VectorWorkspace {
-    T operand_tiles[2][kVectorWorkspaceMaxSubgroupsPerWorkGroup<T> * kVectorTileK];
-};
-
-template <typename T>
-struct DenseGemvWorkspace {
-    T x_tile[kVectorTileK];
-};
-
-template <typename T>
-struct ColumnSweepVectorWorkspace {
-    T x_tile[kVectorTileK];
-    T accum[kColumnSweepWorkspaceMaxSubgroupsPerWorkGroup<T> * kVectorTileK];
-};
 
 template <typename T>
 struct RegisterMatrixAccumTile {
@@ -192,15 +168,6 @@ struct GemmWorkspace {
         OptimizedGemmWorkspace<T> optimized_workspace;
     };
 };
-
-template <typename T>
-inline constexpr bool vector_workspace_supported_v = sizeof(VectorWorkspace<T>) <= kSubgroupWorkspaceBudgetBytes;
-
-template <typename T>
-inline constexpr bool dense_gemv_workspace_supported_v = sizeof(DenseGemvWorkspace<T>) <= kSubgroupWorkspaceBudgetBytes;
-
-template <typename T>
-inline constexpr bool column_sweep_workspace_supported_v = sizeof(ColumnSweepVectorWorkspace<T>) <= kSubgroupWorkspaceBudgetBytes;
 
 template <typename T>
 inline constexpr bool register_matrix_workspace_supported_v = sizeof(RegisterMatrixWorkspace<T>) <= kSubgroupWorkspaceBudgetBytes;
@@ -320,41 +287,12 @@ inline constexpr int subgroup_count(const DeviceBlasLaunchInfo& launch) {
 }
 
 template <typename Exec>
-inline constexpr bool is_nd_item_1d_launch(const Exec&) {
-    return std::is_same_v<std::remove_cvref_t<Exec>, sycl::nd_item<1>>;
-}
-
-inline constexpr bool is_nd_item_1d_launch(const DeviceBlasLaunchInfo& launch) {
-    return launch.kind == DeviceBlasLaunchKind::NdItem1D;
-}
-
-template <typename Exec>
 inline constexpr bool is_nd_item_3d_launch(const Exec&) {
     return std::is_same_v<std::remove_cvref_t<Exec>, sycl::nd_item<3>>;
 }
 
 inline constexpr bool is_nd_item_3d_launch(const DeviceBlasLaunchInfo& launch) {
     return launch.kind == DeviceBlasLaunchKind::NdItem3D;
-}
-
-template <typename Item, typename Fn>
-inline constexpr void for_each_subgroup_vector_index(const Item& item, int extent, Fn&& fn) {
-    const int sg_size = subgroup_size(item);
-    const int lane = subgroup_local_id(item);
-    const int sg_id = subgroup_group_id(item);
-    const int total_sg = subgroup_count(item);
-    const int block = 2 * sg_size;
-
-    for (int base = sg_id * block; base < extent; base += total_sg * block) {
-        const int index0 = base + lane;
-        if (index0 < extent) {
-            fn(index0);
-        }
-        const int index1 = index0 + sg_size;
-        if (index1 < extent) {
-            fn(index1);
-        }
-    }
 }
 
 inline constexpr int rows_per_subgroup(int extent, int total_sg, int max_rows) {
@@ -402,34 +340,6 @@ inline constexpr bool subgroup_policy_matches(DeviceBlasPolicy policy, int actua
     return false;
 }
 
-template <typename T, typename... Ops, typename Item>
-inline constexpr bool can_use_vector_fast_path(const Item& item,
-                                               const KernelMatrixView<T, MatrixFormat::Dense>& a,
-                                               MatrixVectorTransform transform,
-                                               DeviceBlasPolicy policy) {
-    if constexpr (!vector_workspace_supported_v<T>) {
-        return false;
-    }
-    if constexpr (!std::is_same_v<T, float>) {
-        return false;
-    }
-    if constexpr (sizeof...(Ops) == 0 || sizeof...(Ops) > 2) {
-        return false;
-    }
-
-    const int sg_size = subgroup_size(item);
-    if (!subgroup_policy_matches(policy, sg_size)) {
-        return false;
-    }
-    if (sg_size > kMaxSupportedSubgroupSize || subgroup_count(item) > kVectorWorkspaceMaxSubgroupsPerWorkGroup<T>) {
-        return false;
-    }
-
-    const int inner_extent = detail::input_size(a, transform.trans);
-    const int outer_extent = detail::output_size(a, transform.trans);
-    return inner_extent >= sg_size && outer_extent >= 2;
-}
-
 template <typename T, typename Item>
 inline constexpr bool can_use_matrix_fast_path(const Item& item,
                                                int row_extent,
@@ -474,40 +384,6 @@ inline constexpr bool can_use_matrix_register_fast_path(const Item& item,
     return row_extent >= kRegisterMatrixThreadTileRows &&
         col_extent >= kRegisterMatrixThreadTileCols &&
         contract_extent >= kRegisterMatrixTileK;
-}
-
-template <typename T, typename Item>
-inline constexpr bool can_use_rankk_fast_path(const Item& item,
-                                              const KernelMatrixView<T, MatrixFormat::Dense>& a,
-                                              const RankKOperand<T>& operand,
-                                              SymmetricRankKTransform transform,
-                                              DeviceBlasPolicy policy) {
-    if constexpr (!std::is_same_v<T, float>) {
-        return false;
-    }
-
-    if (policy == DeviceBlasPolicy::Generic) {
-        return false;
-    }
-
-    const int sg_size = subgroup_size(item);
-    if (policy == DeviceBlasPolicy::Auto) {
-        if (transform.trans != Transpose::NoTrans || sg_size != 16) {
-            return false;
-        }
-    } else if (!subgroup_policy_matches(policy, sg_size)) {
-        return false;
-    }
-    const int sg_count = subgroup_count(item);
-    if (sg_size > kMaxSupportedSubgroupSize || sg_count > kMaxSubgroupsPerWorkGroup) {
-        return false;
-    }
-
-    return detail::output_size(a, transform.trans) > 0 &&
-        detail::input_size(a, transform.trans) > 0 &&
-        operand.c.rows() > 0 &&
-        detail::output_size(a, transform.trans) <= 256 &&
-        detail::input_size(a, transform.trans) <= 32;
 }
 
 template <typename T, typename Item>
@@ -587,41 +463,6 @@ inline constexpr bool can_use_matrix_aligned_nn_large_fast_path(const Item& item
     }
 
     return true;
-}
-
-template <typename T, typename Item>
-inline constexpr bool can_use_complex_rankk_in_kernel_fast_path(const Item& item,
-                                                                const KernelMatrixView<T, MatrixFormat::Dense>& a,
-                                                                const RankKOperand<T>& operand,
-                                                                SymmetricRankKTransform transform,
-                                                                DeviceBlasPolicy policy) {
-    if constexpr (!std::is_same_v<T, std::complex<float>>) {
-        return false;
-    }
-
-    if (!is_nd_item_1d_launch(item)) {
-        return false;
-    }
-
-    if (policy != DeviceBlasPolicy::Auto) {
-        return false;
-    }
-    if (detail::group_local_linear_range(item) != kComplexRank2kThreadsPerGroup) {
-        return false;
-    }
-
-    const int sg_size = subgroup_size(item);
-    const int sg_count = subgroup_count(item);
-    if (sg_size != kMaxSupportedSubgroupSize || sg_count > kMaxSubgroupsPerWorkGroup) {
-        return false;
-    }
-
-    const int extent = detail::output_size(a, transform.trans);
-    const int contract_extent = detail::input_size(a, transform.trans);
-    return extent >= kComplexRank2kTileN &&
-        contract_extent >= 16 &&
-        operand.c.rows() == extent &&
-        operand.c.cols() == extent;
 }
 
 template <typename T, typename Item>
@@ -1187,20 +1028,6 @@ inline constexpr void write_complex_rank2k_tile(MatrixMatrixOperand<T> operand,
             operand.c(row, col) = value;
         });
     });
-}
-
-template <typename T, typename... Ops>
-inline constexpr void accumulate_cached_operands(std::array<T, sizeof...(Ops)>& partials,
-                                                 const std::tuple<Ops...>& operands,
-                                                 int input_index,
-                                                 const T& a_ij,
-                                                 const T& x0,
-                                                 const T& x1) {
-    static_cast<void>(input_index);
-    partials[0] += a_ij * x0;
-    if constexpr (sizeof...(Ops) == 2) {
-        partials[1] += a_ij * x1;
-    }
 }
 
 template <typename Item, typename T, typename LhsLoader, typename RhsLoader>

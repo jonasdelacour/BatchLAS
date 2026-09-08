@@ -1,6 +1,7 @@
 #include <batchlas/blas/extra.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/extensions.hh>
+#include "../util/template-instantiations.hh"
 #include <batchlas/util/mempool.hh>
 #include <complex>
 #include <limits>
@@ -171,19 +172,10 @@ namespace batchlas
         const MatrixView<fp, fmt>&,\
         const NormType);
 
-    #define COND_INSTANTIATE_FOR_BACKEND(back) \
-        COND_INSTANTIATE(back, float, MatrixFormat::Dense) \
-        COND_INSTANTIATE(back, double, MatrixFormat::Dense) 
+    #define COND_INSTANTIATE_FOR_TYPE(back, fp) \
+        COND_INSTANTIATE(back, BATCHLAS_UNPAREN fp, MatrixFormat::Dense)
 
-    #if BATCHLAS_HAS_CUDA_BACKEND
-        COND_INSTANTIATE_FOR_BACKEND(Backend::CUDA)
-    #endif
-    #if BATCHLAS_HAS_ROCM_BACKEND
-        COND_INSTANTIATE_FOR_BACKEND(Backend::ROCM)
-    #endif
-    #if BATCHLAS_HAS_HOST_BACKEND
-        COND_INSTANTIATE_FOR_BACKEND(Backend::NETLIB)
-    #endif
+    BATCHLAS_INSTANTIATE_REAL_ALL_BACKENDS(COND_INSTANTIATE_FOR_TYPE)
     
 
 } // namespace batchlas

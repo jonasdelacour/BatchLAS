@@ -1041,23 +1041,9 @@ size_t stedc_internal_workspace_size(Queue& ctx, size_t n, size_t batch_size, Jo
 template Event stedc<back, BATCHLAS_UNPAREN fp>(Queue& ctx, const VectorView<BATCHLAS_UNPAREN fp>& d, const VectorView<BATCHLAS_UNPAREN fp>& e, const VectorView<BATCHLAS_UNPAREN fp>& eigenvalues, const Span<std::byte>& ws, JobType jobz, StedcParams<BATCHLAS_UNPAREN fp> params, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>& eigvects); \
 template size_t stedc_buffer_size<back, BATCHLAS_UNPAREN fp>(Queue& ctx, size_t n, size_t batch_size, JobType jobz, StedcParams<BATCHLAS_UNPAREN fp> params);
 
-#define STEDC_INSTANTIATE_FOR_BACKEND(back) \
-    BATCHLAS_FOR_EACH_REAL_TYPE_1(STEDC_INSTANTIATE, back)
-
-#if BATCHLAS_HAS_HOST_BACKEND
-STEDC_INSTANTIATE_FOR_BACKEND(Backend::NETLIB)
-#endif
-
-#if BATCHLAS_HAS_CUDA_BACKEND
-STEDC_INSTANTIATE_FOR_BACKEND(Backend::CUDA)
-#endif
-
-#if BATCHLAS_HAS_ROCM_BACKEND
-STEDC_INSTANTIATE_FOR_BACKEND(Backend::ROCM)
-#endif
+BATCHLAS_INSTANTIATE_REAL_ALL_BACKENDS(STEDC_INSTANTIATE)
 
 
-#undef STEDC_INSTANTIATE_FOR_BACKEND
 #undef STEDC_INSTANTIATE
 
 

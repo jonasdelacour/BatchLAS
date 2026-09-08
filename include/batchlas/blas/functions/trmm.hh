@@ -44,19 +44,6 @@ Event trmm(Queue& ctx,
                 Transpose transA,
                 Diag diag);
 
-template <Backend Ba, typename T>
-inline Event trmm(Queue& ctx,
-                                 const Matrix<T, MatrixFormat::Dense>& A,
-                                 const Matrix<T, MatrixFormat::Dense>& Bmat,
-                                 const Matrix<T, MatrixFormat::Dense>& Cmat,
-                                 T alpha,
-                                 Side side,
-                                 Uplo uplo,
-                                 Transpose transA,
-                                 Diag diag) {
-        return trmm<Ba,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), MatrixView<T, MatrixFormat::Dense>(Bmat), MatrixView<T, MatrixFormat::Dense>(Cmat), alpha, side, uplo, transA, diag);
-}
-
 }  // namespace batchlas
 
 
@@ -85,8 +72,12 @@ Event trmm_vendor(Queue& ctx,
 
 namespace batchlas {
 
-// Backend-deducing overloads: `f(ctx, ...)` uses ctx.backend().
-// See BATCHLAS_DISPATCH_ON_QUEUE in blas/queue-dispatch.hh.
+// Owning-argument and backend-deducing overloads: `f(ctx, Matrix, ...)` accepts
+// owning containers where the primary takes views, and `f(ctx, ...)` uses
+// ctx.backend(). See BATCHLAS_ACCEPT_OWNING and BATCHLAS_DISPATCH_ON_QUEUE in
+// blas/queue-dispatch.hh.
+
+BATCHLAS_ACCEPT_OWNING(trmm)
 
 BATCHLAS_DISPATCH_ON_QUEUE(trmm)
 

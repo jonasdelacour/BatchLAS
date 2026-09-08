@@ -1,3 +1,4 @@
+#include <batchlas/util/env.hh>
 #include <batchlas/util/minibench.hh>
 #include <batchlas/util/bench_structured.hh>
 
@@ -11,31 +12,6 @@
 using namespace batchlas;
 
 namespace {
-
-class ScopedEnvVar {
-public:
-    ScopedEnvVar(const char* name, const char* value) : name_(name) {
-        const char* old = std::getenv(name_);
-        if (old) {
-            had_old_ = true;
-            old_value_ = old;
-        }
-        setenv(name_, value, 1);
-    }
-
-    ~ScopedEnvVar() {
-        if (had_old_) {
-            setenv(name_, old_value_.c_str(), 1);
-        } else {
-            unsetenv(name_);
-        }
-    }
-
-private:
-    const char* name_;
-    bool had_old_ = false;
-    std::string old_value_;
-};
 
 struct HeterogeneousPattern {
     UnifiedVector<int> a_rows;

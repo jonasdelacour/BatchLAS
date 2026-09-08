@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include <batchlas/blas/linalg.hh>
+#include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 
 #include <complex>
@@ -22,30 +23,6 @@ using HemmTestTypes = typename test_utils::backend_types_complex<HemmConfig>::ty
 
 template <typename Config>
 class HemmTest : public test_utils::BatchLASTest<Config> {};
-
-class ScopedEnvVar {
-public:
-    ScopedEnvVar(const char* name, const char* value) : name_(name) {
-        if (const char* old = std::getenv(name_)) {
-            old_value_ = old;
-            had_old_value_ = true;
-        }
-        setenv(name_, value, 1);
-    }
-
-    ~ScopedEnvVar() {
-        if (had_old_value_) {
-            setenv(name_, old_value_.c_str(), 1);
-        } else {
-            unsetenv(name_);
-        }
-    }
-
-private:
-    const char* name_;
-    std::string old_value_;
-    bool had_old_value_ = false;
-};
 
 TYPED_TEST_SUITE(HemmTest, HemmTestTypes);
 

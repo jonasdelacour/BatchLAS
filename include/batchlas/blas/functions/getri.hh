@@ -118,33 +118,8 @@ inline Event getri(Queue& ctx,
 }
 
 template <Backend B, typename T>
-inline Event getri(Queue& ctx,
-                        const Matrix<T, MatrixFormat::Dense>& A,
-                        const Matrix<T, MatrixFormat::Dense>& Cmat,
-                        Span<int64_t> pivots,
-                        Span<std::byte> work_space,
-                        Span<int32_t> info) {
-        return getri<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), MatrixView<T, MatrixFormat::Dense>(Cmat), pivots, work_space, info);
-}
-
-template <Backend B, typename T>
-inline Event getri(Queue& ctx,
-                        const Matrix<T, MatrixFormat::Dense>& A,
-                        const Matrix<T, MatrixFormat::Dense>& Cmat,
-                        Span<int64_t> pivots,
-                        Span<std::byte> work_space) {
-        return getri<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), MatrixView<T, MatrixFormat::Dense>(Cmat), pivots, work_space, Span<int32_t>{});
-}
-
-template <Backend B, typename T>
 size_t getri_buffer_size(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& A);
-
-template <Backend B, typename T>
-inline size_t getri_buffer_size(Queue& ctx,
-                                                 const Matrix<T, MatrixFormat::Dense>& A) {
-        return getri_buffer_size<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A));
-}
 
 }  // namespace batchlas
 
@@ -175,8 +150,13 @@ size_t getri_vendor_buffer_size(Queue& ctx,
 
 namespace batchlas {
 
-// Backend-deducing overloads: `f(ctx, ...)` uses ctx.backend().
-// See BATCHLAS_DISPATCH_ON_QUEUE in blas/queue-dispatch.hh.
+// Owning-argument and backend-deducing overloads: `f(ctx, Matrix, ...)` accepts
+// owning containers where the primary takes views, and `f(ctx, ...)` uses
+// ctx.backend(). See BATCHLAS_ACCEPT_OWNING and BATCHLAS_DISPATCH_ON_QUEUE in
+// blas/queue-dispatch.hh.
+
+BATCHLAS_ACCEPT_OWNING(getri)
+BATCHLAS_ACCEPT_OWNING(getri_buffer_size)
 
 BATCHLAS_DISPATCH_ON_QUEUE(getri)
 BATCHLAS_DISPATCH_ON_QUEUE(getri_buffer_size)

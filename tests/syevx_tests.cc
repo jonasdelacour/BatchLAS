@@ -7,6 +7,7 @@
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/extra.hh>
 #include <batchlas/backend_config.h>
+#include <batchlas/util/env.hh>
 #include <batchlas/util/mempool.hh>
 #include "test_utils.hh"
 #include <tuple>
@@ -2841,26 +2842,6 @@ TEST(SyevxRangeValidationTest, SolverEntryPointsKeepTheirMLessOverloads) {
 // ---------------------------------------------------------------------------
 namespace {
 
-// Sets BATCHLAS_SYEVX_ALGORITHM for the duration of a scope and restores whatever
-// was there before, including "not set at all".
-class ScopedSyevxAlgorithmEnv {
-public:
-    explicit ScopedSyevxAlgorithmEnv(const char* value) {
-        const char* prev = std::getenv("BATCHLAS_SYEVX_ALGORITHM");
-        had_prev_ = (prev != nullptr);
-        if (had_prev_) prev_ = prev;
-        if (value) setenv("BATCHLAS_SYEVX_ALGORITHM", value, 1);
-        else       unsetenv("BATCHLAS_SYEVX_ALGORITHM");
-    }
-    ~ScopedSyevxAlgorithmEnv() {
-        if (had_prev_) setenv("BATCHLAS_SYEVX_ALGORITHM", prev_.c_str(), 1);
-        else           unsetenv("BATCHLAS_SYEVX_ALGORITHM");
-    }
-private:
-    bool had_prev_ = false;
-    std::string prev_;
-};
-
 SyevxAlgorithm pick_range(MatrixFormat format, SyevxAlgorithm requested, SyevxSelect select,
                           int64_t n = 1024, int64_t batch = 128) {
     return syevx_select_algorithm(format, n, /*neigs=*/8, requested,
@@ -2883,7 +2864,7 @@ TEST(SyevxRangeRoutingTest, SparseRejectsEveryNonExtremalRange) {
     EXPECT_THROW(pick_range(MatrixFormat::CSR, SyevxAlgorithm::Auto, SyevxSelect::Value),
                  std::invalid_argument);
 
-    ScopedSyevxAlgorithmEnv forced("lobpcg");
+    ScopedEnvVar forced("BATCHLAS_SYEVX_ALGORITHM", "lobpcg");
     EXPECT_THROW(pick_range(MatrixFormat::CSR, SyevxAlgorithm::Auto, SyevxSelect::Index),
                  std::invalid_argument);
 }
@@ -2907,7 +2888,7 @@ TEST(SyevxRangeRoutingTest, SparseHonoursExplicitFilteredRequest) {
     EXPECT_EQ(pick_range(MatrixFormat::CSR, SyevxAlgorithm::Filtered, SyevxSelect::Extremal),
               SyevxAlgorithm::Filtered);
     {
-        ScopedSyevxAlgorithmEnv forced("filtered");
+        ScopedEnvVar forced("BATCHLAS_SYEVX_ALGORITHM", "filtered");
         EXPECT_EQ(pick_range(MatrixFormat::CSR, SyevxAlgorithm::Auto, SyevxSelect::Extremal),
                   SyevxAlgorithm::Filtered);
     }
@@ -2962,7 +2943,7 @@ TEST(SyevxRangeRoutingTest, ExplicitIterativeMethodRejectsNonExtremalRange) {
 TEST(SyevxRangeRoutingTest, EnvironmentOverrideDegradesInsteadOfThrowing) {
     for (const char* forced : {"lobpcg", "filtered"}) {
         SCOPED_TRACE(forced);
-        ScopedSyevxAlgorithmEnv env(forced);
+        ScopedEnvVar env("BATCHLAS_SYEVX_ALGORITHM", forced);
         // Extremal: the override is honoured, as it always was.
         EXPECT_NE(pick_range(MatrixFormat::Dense, SyevxAlgorithm::Auto, SyevxSelect::Extremal),
                   SyevxAlgorithm::Direct);
@@ -3016,7 +2997,7 @@ TEST(SyevxRangeRoutingTest, EnvironmentDegradeAppliesToSizingAndSolvingAlike) {
     params.il = il;
     params.iu = iu;
 
-    ScopedSyevxAlgorithmEnv env("lobpcg");
+    ScopedEnvVar env("BATCHLAS_SYEVX_ALGORITHM", "lobpcg");
     size_t bytes = 0;
     ASSERT_NO_THROW(bytes = syevx_buffer_size<test_utils::gpu_backend>(
         *ctx, A.view(), W.to_span(), size_t(k), JobType::NoEigenVectors, no_V, params));

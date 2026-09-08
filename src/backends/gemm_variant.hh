@@ -58,6 +58,68 @@ inline bool gemm_batch_dimensions_compatible(const MatrixView<T, MatrixFormat::D
     return true;
 }
 
+// The host loop a batch whose members do not share a shape falls back to.
+//
+// No vendor GEMM -- strided-batched or pointer-batched -- can be handed such a
+// batch at all, because every one of them takes a single m/n/k for the whole
+// call, so the batch becomes one single-matrix GEMM per member. cuBLAS, rocBLAS
+// and oneMKL each wrote that loop out; what actually differs between them is
+// only two things, and both are parameters here rather than something this
+// helper decides:
+//
+//   gemm_one   -- which single-matrix GEMM to issue. The backends do not agree:
+//                 cuBLAS calls its vendor_impl directly (recursing through
+//                 gemm_vendor would re-run the route selection per member),
+//                 while rocBLAS and MKL recurse into gemm_vendor on purpose so
+//                 that a member can still reach the SYCL kernel.
+//   on_empty   -- which Event a batch that launched nothing hands back. cuBLAS
+//                 and rocBLAS fabricate one with
+//                 create_event_after_external_work() because their work leaves
+//                 the SYCL queue; MKL, whose GEMM is submitted to the queue,
+//                 hands back the queue's own get_event(). Unifying the two
+//                 would change what a caller may wait on, so it stays a
+//                 per-backend decision.
+//
+// A member with m or n zero has nothing to compute and is skipped outright; a
+// member with k zero is a pure scaling of C, which no GEMM spells, so it goes
+// to scale(). Both are carried over verbatim from the three loops this
+// replaces, including the "launched nothing at all" case they all guard.
+template <typename T, typename GemmOne, typename OnEmpty>
+inline Event gemm_over_heterogeneous_batch(Queue& ctx,
+                                           const MatrixView<T, MatrixFormat::Dense>& A,
+                                           const MatrixView<T, MatrixFormat::Dense>& B,
+                                           const MatrixView<T, MatrixFormat::Dense>& C,
+                                           T beta,
+                                           Transpose transA,
+                                           Transpose transB,
+                                           GemmOne&& gemm_one,
+                                           OnEmpty&& on_empty) {
+    Event last_event;
+    bool launched = false;
+    for (int batch_index = 0; batch_index < A.batch_size(); ++batch_index) {
+        const auto [m, k] = get_effective_dims(A, transA, batch_index);
+        const auto [k_b, n] = get_effective_dims(B, transB, batch_index);
+        static_cast<void>(k_b);
+        if (m == 0 || n == 0) {
+            continue;
+        }
+        if (k == 0) {
+            last_event = scale(ctx, beta, C.batch_item(batch_index));
+            launched = true;
+            continue;
+        }
+        last_event = gemm_one(A.batch_item(batch_index),
+                              B.batch_item(batch_index),
+                              C.batch_item(batch_index));
+        launched = true;
+    }
+
+    if (launched) {
+        return std::move(last_event);
+    }
+    return on_empty();
+}
+
 enum class GemmVariantRequest {
     Vendor,
     Sycl,

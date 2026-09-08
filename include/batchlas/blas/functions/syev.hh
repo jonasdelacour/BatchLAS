@@ -58,25 +58,6 @@ size_t syev_buffer_size(Queue& ctx,
                         JobType jobtype,
                         Uplo uplo);
 
-template <Backend B, typename T>
-inline Event syev(Queue& ctx,
-                  const Matrix<T, MatrixFormat::Dense>& descrA,
-                  Span<typename base_type<T>::type> eigenvalues,
-                  JobType jobtype,
-                  Uplo uplo,
-                  Span<std::byte> workspace) {
-    return syev<B, T>(ctx, MatrixView<T, MatrixFormat::Dense>(descrA), eigenvalues, jobtype, uplo, workspace);
-}
-
-template <Backend B, typename T>
-inline size_t syev_buffer_size(Queue& ctx,
-                               const Matrix<T, MatrixFormat::Dense>& A,
-                               Span<typename base_type<T>::type> eigenvalues,
-                               JobType jobtype,
-                               Uplo uplo) {
-    return syev_buffer_size<B, T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), eigenvalues, jobtype, uplo);
-}
-
 } // namespace batchlas
 
 namespace batchlas::backend {
@@ -228,7 +209,8 @@ inline SyevSmallKernel syev_choose_small_kernel(const MatrixView<T, MatrixFormat
     }
 }
 
-// Takes shape facts rather than a DeviceCaps + MatrixView so that the pure
+// Takes shape facts rather than a MatrixView plus the old DeviceCaps (deleted
+// with dispatch/context.hh in WP0a) so that the pure
 // RouteTable<Op::syev, T>::preferred can call it.
 template <typename T>
 inline bool syev_prefer_vendor_over_cta(bool is_gpu,
@@ -621,7 +603,13 @@ inline size_t syev_buffer_size(Queue& ctx,
 
 namespace batchlas {
 
-// Backend-deducing overloads: `f(ctx, ...)` uses ctx.backend().
+// Owning-argument and backend-deducing overloads: `f(ctx, Matrix, ...)` accepts
+// owning containers where the primary takes views, and `f(ctx, ...)` uses
+// ctx.backend(). See BATCHLAS_ACCEPT_OWNING and BATCHLAS_DISPATCH_ON_QUEUE in
+// blas/queue-dispatch.hh.
+
+BATCHLAS_ACCEPT_OWNING(syev)
+BATCHLAS_ACCEPT_OWNING(syev_buffer_size)
 
 BATCHLAS_DISPATCH_ON_QUEUE(syev)
 BATCHLAS_DISPATCH_ON_QUEUE(syev_buffer_size)

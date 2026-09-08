@@ -50,25 +50,6 @@ Event hemm(Queue& ctx,
            Side side,
            Uplo uplo);
 
-template <Backend Ba, ComplexScalar T>
-inline Event hemm(Queue& ctx,
-                  const Matrix<T, MatrixFormat::Dense>& A,
-                  const Matrix<T, MatrixFormat::Dense>& Bmat,
-                  const Matrix<T, MatrixFormat::Dense>& Cmat,
-                  T alpha,
-                  T beta,
-                  Side side,
-                  Uplo uplo) {
-    return hemm<Ba, T>(ctx,
-                       MatrixView<T, MatrixFormat::Dense>(A),
-                       MatrixView<T, MatrixFormat::Dense>(Bmat),
-                       MatrixView<T, MatrixFormat::Dense>(Cmat),
-                       alpha,
-                       beta,
-                       side,
-                       uplo);
-}
-
 }  // namespace batchlas
 
 
@@ -96,8 +77,12 @@ Event hemm_vendor(Queue& ctx,
 
 namespace batchlas {
 
-// Backend-deducing overloads: `f(ctx, ...)` uses ctx.backend().
-// See BATCHLAS_DISPATCH_ON_QUEUE in blas/queue-dispatch.hh.
+// Owning-argument and backend-deducing overloads: `f(ctx, Matrix, ...)` accepts
+// owning containers where the primary takes views, and `f(ctx, ...)` uses
+// ctx.backend(). See BATCHLAS_ACCEPT_OWNING and BATCHLAS_DISPATCH_ON_QUEUE in
+// blas/queue-dispatch.hh.
+
+BATCHLAS_ACCEPT_OWNING(hemm)
 
 BATCHLAS_DISPATCH_ON_QUEUE(hemm)
 

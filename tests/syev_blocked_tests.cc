@@ -4,6 +4,7 @@
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/matrix.hh>
+#include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
@@ -301,11 +302,8 @@ TYPED_TEST(SyevBlockedTest, TwoStageProviderEigenvaluesOnlySmoke) {
 	Matrix<Scalar, MatrixFormat::Dense> A_two_stage = A0;
 	auto W_two_stage = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
 
-	const char* old_provider = std::getenv("BATCHLAS_SYEV_PROVIDER");
-	const std::string old_provider_value = old_provider ? std::string(old_provider) : std::string();
-	setenv("BATCHLAS_SYEV_PROVIDER", "two_stage", 1);
-
 	{
+		ScopedEnvVar provider("BATCHLAS_SYEV_PROVIDER", "two_stage");
 		auto ws_two_stage = UnifiedVector<std::byte>(syev_buffer_size(*this->ctx,
 																								  A_two_stage.view(),
 																								  W_two_stage.to_span(),
@@ -316,12 +314,6 @@ TYPED_TEST(SyevBlockedTest, TwoStageProviderEigenvaluesOnlySmoke) {
                                  W_two_stage.to_span(),
                                  {.jobz = JobType::NoEigenVectors},
                                  ws_two_stage.to_span()).wait();
-	}
-
-	if (old_provider) {
-		setenv("BATCHLAS_SYEV_PROVIDER", old_provider_value.c_str(), 1);
-	} else {
-		unsetenv("BATCHLAS_SYEV_PROVIDER");
 	}
 
 	for (int j = 0; j < batch; ++j) {
@@ -347,11 +339,8 @@ TYPED_TEST(SyevBlockedTest, TwoStageProviderEigenvectorsSmoke) {
 	Matrix<Scalar, MatrixFormat::Dense> A_two_stage = A0;
 	auto W_two_stage = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
 
-	const char* old_provider = std::getenv("BATCHLAS_SYEV_PROVIDER");
-	const std::string old_provider_value = old_provider ? std::string(old_provider) : std::string();
-	setenv("BATCHLAS_SYEV_PROVIDER", "two_stage", 1);
-
 	{
+		ScopedEnvVar provider("BATCHLAS_SYEV_PROVIDER", "two_stage");
 		auto ws_two_stage = UnifiedVector<std::byte>(syev_buffer_size(*this->ctx,
 															  A_two_stage.view(),
 															  W_two_stage.to_span(),
@@ -362,12 +351,6 @@ TYPED_TEST(SyevBlockedTest, TwoStageProviderEigenvectorsSmoke) {
                                  W_two_stage.to_span(),
                                  {},
                                  ws_two_stage.to_span()).wait();
-	}
-
-	if (old_provider) {
-		setenv("BATCHLAS_SYEV_PROVIDER", old_provider_value.c_str(), 1);
-	} else {
-		unsetenv("BATCHLAS_SYEV_PROVIDER");
 	}
 
 	for (int i = 0; i < n; ++i) {

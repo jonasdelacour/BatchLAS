@@ -6,6 +6,8 @@
 
 #include <batchlas/backend_config.h>
 
+#include "../util/template-instantiations.hh"
+
 #include "../math-helpers.hh"
 #include "../queue.hh"
 
@@ -907,46 +909,27 @@ Event sytrd_sb2st(Queue& ctx,
 }
 
 #define SYTRD_SB2ST_INSTANTIATE(back, fp) \
-    template Event sytrd_sb2st<back, fp>( \
+    template Event sytrd_sb2st<back, BATCHLAS_UNPAREN fp>( \
         Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const VectorView<typename base_type<fp>::type>&, \
-        const VectorView<typename base_type<fp>::type>&, \
-        const VectorView<fp>&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        const VectorView<typename base_type<BATCHLAS_UNPAREN fp>::type>&, \
+        const VectorView<typename base_type<BATCHLAS_UNPAREN fp>::type>&, \
+        const VectorView<BATCHLAS_UNPAREN fp>&, \
         Uplo, \
         int32_t, \
         const Span<std::byte>&, \
         int32_t); \
-    template size_t sytrd_sb2st_buffer_size<back, fp>( \
+    template size_t sytrd_sb2st_buffer_size<back, BATCHLAS_UNPAREN fp>( \
         Queue&, \
-        const MatrixView<fp, MatrixFormat::Dense>&, \
-        const VectorView<typename base_type<fp>::type>&, \
-        const VectorView<typename base_type<fp>::type>&, \
-        const VectorView<fp>&, \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
+        const VectorView<typename base_type<BATCHLAS_UNPAREN fp>::type>&, \
+        const VectorView<typename base_type<BATCHLAS_UNPAREN fp>::type>&, \
+        const VectorView<BATCHLAS_UNPAREN fp>&, \
         Uplo, \
         int32_t, \
         int32_t);
 
-#if BATCHLAS_HAS_CUDA_BACKEND
-SYTRD_SB2ST_INSTANTIATE(Backend::CUDA, float)
-SYTRD_SB2ST_INSTANTIATE(Backend::CUDA, double)
-SYTRD_SB2ST_INSTANTIATE(Backend::CUDA, std::complex<float>)
-SYTRD_SB2ST_INSTANTIATE(Backend::CUDA, std::complex<double>)
-#endif
-
-#if BATCHLAS_HAS_ROCM_BACKEND
-SYTRD_SB2ST_INSTANTIATE(Backend::ROCM, float)
-SYTRD_SB2ST_INSTANTIATE(Backend::ROCM, double)
-SYTRD_SB2ST_INSTANTIATE(Backend::ROCM, std::complex<float>)
-SYTRD_SB2ST_INSTANTIATE(Backend::ROCM, std::complex<double>)
-#endif
-
-#if BATCHLAS_HAS_HOST_BACKEND
-SYTRD_SB2ST_INSTANTIATE(Backend::NETLIB, float)
-SYTRD_SB2ST_INSTANTIATE(Backend::NETLIB, double)
-SYTRD_SB2ST_INSTANTIATE(Backend::NETLIB, std::complex<float>)
-SYTRD_SB2ST_INSTANTIATE(Backend::NETLIB, std::complex<double>)
-#endif
+BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(SYTRD_SB2ST_INSTANTIATE)
 
 #undef SYTRD_SB2ST_INSTANTIATE
 
