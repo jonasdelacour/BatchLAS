@@ -14,6 +14,7 @@
 #include <batchlas/util/workspace.hh>
 #include <batchlas/blas/enums.hh>
 
+namespace batchlas {
 
 enum class Policy
 {
@@ -39,8 +40,9 @@ enum class Vendor
     OTHER
 };
 
-// These enums live in the GLOBAL namespace, so their to_string() overloads must
-// too, or ADL will not find them. Same pattern as <batchlas/blas/enums.hh>.
+// These enums live in namespace batchlas, so their to_string() overloads must
+// too, or ADL will not find them. Exactly the pattern of <batchlas/blas/enums.hh>,
+// whose namespace these now share.
 inline constexpr std::string_view to_string(Policy v) {
     switch (v) {
         case Policy::SYNC: return "SYNC";
@@ -71,8 +73,11 @@ inline constexpr std::string_view to_string(Vendor v) {
     return "Vendor(?)";
 }
 
-// One overload per enum, not a constrained template: a template would tie with
-// batchlas' and make every enum stream ambiguous.
+// One overload per enum, not a constrained template. These now share a namespace
+// with the constrained enum-streaming template in <batchlas/blas/enums.hh>; a
+// concrete second parameter wins partial ordering against its deduced `E`, so the
+// specific form is what keeps `os << policy` unambiguous. A constrained template
+// here would tie with that one instead.
 template <typename CharT, typename Traits>
 std::basic_ostream<CharT, Traits>& operator<<(std::basic_ostream<CharT, Traits>& os, Policy value) {
     return os << to_string(value);
@@ -278,3 +283,29 @@ struct Queue{
         mutable batchlas::Backend resolved_backend_ = batchlas::Backend::AUTO;
 };
 
+}  // namespace batchlas
+
+// Transitional compatibility shim. These names used to be declared at global
+// scope; they now live in namespace batchlas, and these using-declarations keep
+// the old unqualified spellings working for existing code. A consumer that owns
+// a name of its own here defines BATCHLAS_NO_GLOBAL_NAMES to switch the block
+// off; the block goes away entirely once nothing in tree depends on it.
+#ifndef BATCHLAS_NO_GLOBAL_NAMES
+using batchlas::Device;
+using batchlas::DeviceProperty;
+using batchlas::DeviceType;
+using batchlas::Event;
+using batchlas::EventImpl;
+using batchlas::Policy;
+using batchlas::Queue;
+using batchlas::QueueImpl;
+using batchlas::Vendor;
+// str_to_vendor takes a std::string, so ADL associates only namespace std and
+// never reaches batchlas; its one caller (src/util/queue-impl.cc) calls it
+// unqualified. to_string and operator<< are deliberately NOT shimmed: naming
+// either would drag the whole batchlas overload set -- every to_string in
+// blas/enums.hh, and that header's constrained enum-streaming template -- into
+// the consumer's global namespace, i.e. a larger global footprint than the one
+// this move removes. ADL covers both for their enums.
+using batchlas::str_to_vendor;
+#endif

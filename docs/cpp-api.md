@@ -26,10 +26,26 @@ int main() {
 }
 ```
 
-`Matrix`, `MatrixView`, `gemm`, `potrf` and the rest of the numerical surface are
-in namespace `batchlas`. `Queue`, `Device`, `Event`, `Span` and `UnifiedVector`
-are in the **global** namespace: they need no qualification and no
-`using namespace batchlas;`.
+**Everything BatchLAS declares is in namespace `batchlas`** — `Matrix`,
+`MatrixView`, `gemm`, `potrf` and the rest of the numerical surface, and also
+`Queue`, `Device`, `Event`, `Span`, `UnifiedVector` and `BumpAllocator`. Write
+`using namespace batchlas;`, or qualify.
+
+Those last six used to be declared at *global* scope, which meant BatchLAS
+claimed six of the most collision-prone names in GPU C++ in every consumer that
+included a header. They moved in v0.2. For one release each of the affected
+headers still ends with a compatibility block that re-exports its own names
+globally, so existing code keeps compiling unchanged:
+
+```cpp
+#ifndef BATCHLAS_NO_GLOBAL_NAMES
+using batchlas::Queue;
+// ...
+#endif
+```
+
+Define `BATCHLAS_NO_GLOBAL_NAMES` to switch it off and get the namespace
+guarantee today; the block is removed in the release after next.
 
 ### The short template spelling
 

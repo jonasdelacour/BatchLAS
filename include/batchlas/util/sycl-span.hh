@@ -5,6 +5,8 @@
 #include <type_traits>
 #include <batchlas/util/sycl-device-queue.hh>
 
+namespace batchlas {
+
 template <typename T>
 struct is_std_array : std::false_type {};
 
@@ -80,4 +82,18 @@ Span(T*, T*) -> Span<T>;
 
 template <typename T>
 Span(T&) -> Span<T>;
+
+}  // namespace batchlas
+
+// Transitional compatibility shim: Span and is_std_array used to be declared at
+// global scope and now live in namespace batchlas. These using-declarations keep
+// the old unqualified spellings working; a consumer with a name of its own here
+// defines BATCHLAS_NO_GLOBAL_NAMES to switch the block off, and the block goes
+// away entirely once nothing in tree depends on it. CTAD still works through it:
+// the deduction guides above are looked up in Span's own namespace, not where
+// the using-declaration introduced the name.
+#ifndef BATCHLAS_NO_GLOBAL_NAMES
+using batchlas::Span;
+using batchlas::is_std_array;
+#endif
 

@@ -58,6 +58,19 @@
         "with Queue::attach_to_current_thread() while no other thread is using it.");
 }
 
+// Everything from here to the end of the file is namespace batchlas. QueueImpl
+// and EventImpl are DEFINED below, and they are declared in
+// <batchlas/util/sycl-device-queue.hh>, which now declares them inside batchlas;
+// defining them at global scope would define two unrelated types and leave
+// Queue::impl_ pointing at an incomplete one. The same goes for the out-of-line
+// Queue members near the bottom. This header is private and never installed, so
+// the compatibility shim in the public header does not reach it at all.
+//
+// batchlas_throw_queue_wrong_thread above stays at global scope on purpose: its
+// name already carries the prefix, nothing outside this header calls it, and the
+// call in QueueThreadOwner::check below still finds it by ordinary lookup.
+namespace batchlas {
+
 struct QueueThreadOwner {
     std::thread::id owner_ = std::this_thread::get_id();
 
@@ -559,8 +572,6 @@ BATCHLAS_QUEUE_EXPORTED_INLINE void* Queue::native_handle() const {
             return nullptr;
     }
 }
-
-namespace batchlas {
 
 BATCHLAS_QUEUE_EXPORTED_INLINE sycl::queue& sycl_queue(const Queue& ctx) { return *ctx.impl_; }
 

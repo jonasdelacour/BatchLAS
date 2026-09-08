@@ -6,12 +6,18 @@
 // util/sycl-device-queue.hh, which includes this one. Span is only needed as a
 // return type here, so a forward declaration is enough and the accessors that
 // mention it are defined out of line.
+//
+// Both forward declarations must stay INSIDE namespace batchlas, alongside the
+// definitions they stand in for (util/sycl-span.hh, util/sycl-device-queue.hh).
+// A forward declaration in another namespace declares a DIFFERENT type, and the
+// error then surfaces far from here -- as an incomplete type or a failed
+// conversion in blas/options.hh or src/util/queue-impl.cc.
+namespace batchlas {
+
 template <typename T>
 struct Span;
 
 struct Queue;
-
-namespace batchlas {
 
 // A borrow of scratch memory from a Queue's workspace arena, released when the
 // handle goes out of scope.
@@ -160,7 +166,7 @@ public:
     void release() noexcept;
 
 private:
-    friend struct ::Queue;
+    friend struct Queue;
     // `diagnose_out_of_order` is forwarded to the arena; false suppresses the
     // debug assert for the one caller that cannot avoid returning out of order.
     void release_(bool diagnose_out_of_order) noexcept;

@@ -84,3 +84,15 @@ jobs:
         # The only other guard is consumer_package_tests, which is slow-labelled
         # and needs a full install.
         run: python3 .github/ci/check_no_unprefixed_includes.py
+      - name: No type declared in the consumer's global namespace
+        # The same guarantee one level down: `batchlas` is the only name we
+        # claim in a consumer's C++ namespace, not just in their include root.
+        # Six installed headers declared 14 types -- Queue, Span, Event, Device,
+        # Vendor, Policy among them -- at global scope, which is an ambiguity or
+        # an ODR violation for any consumer that owns one of those names. No
+        # build here can see it: in-tree code all says `using namespace
+        # batchlas;` or lives inside the namespace, so global and batchlas
+        # spellings are indistinguishable from within the project. A text scan
+        # is the only cheap oracle, and the sanctioned
+        # `#ifndef BATCHLAS_NO_GLOBAL_NAMES` shim is allowed explicitly.
+        run: python3 .github/ci/check_no_global_names.py

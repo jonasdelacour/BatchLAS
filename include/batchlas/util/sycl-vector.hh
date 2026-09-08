@@ -2,6 +2,9 @@
 #include <cassert>
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-device-queue.hh>
+
+namespace batchlas {
+
 template <typename T>
 struct UnifiedVector
 {   
@@ -104,3 +107,16 @@ template <typename T>
 inline constexpr void swap(UnifiedVector<T> &lhs, UnifiedVector<T> &rhs) {
     lhs.swap(rhs);
 }
+
+}  // namespace batchlas
+
+// Transitional compatibility shim: UnifiedVector used to be declared at global
+// scope and now lives in namespace batchlas. A consumer with a name of its own
+// here defines BATCHLAS_NO_GLOBAL_NAMES to switch the block off; the block goes
+// away entirely once nothing in tree depends on it. The free swap() above is
+// deliberately NOT shimmed -- ADL on UnifiedVector finds it, including through
+// the `using std::swap; swap(a, b);` idiom, and a global `swap` is exactly the
+// kind of collision this move exists to remove.
+#ifndef BATCHLAS_NO_GLOBAL_NAMES
+using batchlas::UnifiedVector;
+#endif

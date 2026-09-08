@@ -16,6 +16,27 @@
 
 using namespace sycl;
 
+// Everything from here to the end of the file is namespace batchlas, and all of
+// it has to be. Three separate rules force it, and only the first fails loudly:
+//
+//   - the out-of-line members of UnifiedVector<T> and Span<T> must be defined in
+//     the namespace their class was declared in;
+//   - so must the explicit instantiations below, which name their templates by an
+//     unqualified-id;
+//   - the operator<< for ReferenceWrapper/UnifiedVector/Span are declared ONLY as
+//     in-class friend templates, so each one is a member of the namespace
+//     enclosing the class that befriends it. Those classes moved into batchlas,
+//     so these definitions must too. Left at global scope they would silently
+//     define an unrelated ::operator<< that nothing can call, and the explicit
+//     instantiations at the bottom would instantiate the wrong template -- an
+//     undefined reference in a consumer, with nothing failing here.
+//
+// The std::array operator<< below comes along for the ride. It is used only from
+// inside this file (by the Span element loop), where ordinary lookup still finds
+// it; note that it is no longer reachable by ADL on std::array, which is why it
+// must not be relied on from another TU.
+namespace batchlas {
+
 template <typename U>
 constexpr std::ostream& operator<<(std::ostream& os, const ReferenceWrapper<U>& ref) {
     os << ref.get();
@@ -402,3 +423,5 @@ template std::ostream& operator<<(std::ostream& os, const ReferenceWrapper<size_
 template std::ostream& operator<<(std::ostream& os, const ReferenceWrapper<float>& ref);
 template std::ostream& operator<<(std::ostream& os, const ReferenceWrapper<double>& ref);
 template std::ostream& operator<<(std::ostream& os, const ReferenceWrapper<uint16_t>& ref);
+
+}  // namespace batchlas

@@ -7,6 +7,8 @@
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
 
+namespace batchlas {
+
 struct BumpAllocator {
     template <typename T>
     BumpAllocator(T* data, size_t byte_size): data(data), byte_size(byte_size){}
@@ -188,3 +190,23 @@ inline size_t workspace_bytes(Fn&& layout) {
     (void)layout(sizer);
     return sizer.required_bytes();
 }
+
+}  // namespace batchlas
+
+// Transitional compatibility shim: these used to be declared at global scope
+// and now live in namespace batchlas. A consumer with a name of its own here
+// defines BATCHLAS_NO_GLOBAL_NAMES to switch the block off; the block goes away
+// entirely once nothing in tree depends on it.
+//
+// workspace_bytes is shimmed even though it is a function rather than a type,
+// and it is the one name in this header that HAS to be: every other unqualified
+// spelling a consumer might use survives the move through ADL on its argument,
+// but workspace_bytes takes only a lambda, whose associated namespace is
+// wherever the consumer wrote it. Without the using-declaration below,
+// `workspace_bytes([](auto& s){ ... })` at global scope stops compiling -- and
+// the doc comment above sells exactly that spelling as the way to write a
+// *_buffer_size entry point.
+#ifndef BATCHLAS_NO_GLOBAL_NAMES
+using batchlas::BumpAllocator;
+using batchlas::workspace_bytes;
+#endif

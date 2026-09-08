@@ -11,6 +11,18 @@ class QueueEnqueueNoopKernel;
 class QueueExternalWorkBarrierKernel;
 }
 
+// Everything from here to the end of the file is namespace batchlas. These are
+// the out-of-line definitions of Queue/Event/Device, declared in
+// <batchlas/util/sycl-device-queue.hh>, and a member can only be defined out of
+// line in the namespace its class was declared in -- the compatibility shim at
+// the bottom of that header introduces the NAME into the global namespace, which
+// is enough to spell the type but not to define its members.
+//
+// The anonymous namespace above deliberately stays at global scope: it holds
+// SYCL kernel name tags, and moving them renames every kernel mangled from them
+// for no benefit. They are still found from in here by ordinary lookup.
+namespace batchlas {
+
 Event::Event() : impl_(std::make_unique<EventImpl>(sycl::event())) {}
 Event::Event(EventImpl&& impl) : impl_(std::make_unique<EventImpl>(std::move(impl))) {}
 Event& Event::operator=(Event&& other) {
@@ -176,8 +188,6 @@ size_t Queue::workspace_capacity() const { return impl_->arena_.capacity(); }
 
 bool Queue::trim_workspace() { return impl_->arena_.trim(*impl_); }
 
-namespace batchlas {
-
 Span<std::byte> WorkspaceLease::span() const & { return Span<std::byte>(ptr_, size_); }
 WorkspaceLease::operator Span<std::byte>() const & { return span(); }
 
@@ -221,8 +231,6 @@ void WorkspaceLease::release_(bool diagnose_out_of_order) noexcept {
     size_ = 0;
     seq_ = 0;
 }
-
-}  // namespace batchlas
 
 
 QueueImpl* Queue::operator->() const {
@@ -343,3 +351,5 @@ bool Device::supports_sub_group_size(size_t size) const {
     }
     return false;
 }
+
+}  // namespace batchlas
