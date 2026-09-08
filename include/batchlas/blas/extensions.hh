@@ -170,16 +170,6 @@ namespace batchlas {
             Span<std::byte> workspace,
             OrthoAlgorithm algo = OrthoAlgorithm::Chol2);
 
-    // Forwarding overload accepting owning Matrix A
-    template <Backend B, typename T>
-    inline Event ortho(Queue& ctx,
-            const Matrix<T, MatrixFormat::Dense>& A,
-            Transpose transA,
-            Span<std::byte> workspace,
-            OrthoAlgorithm algo = OrthoAlgorithm::Chol2) {
-        return ortho<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), transA, workspace, algo);
-    }
-
     /**
      * @brief Orthogonalizes a matrix with respect to another matrix in-place
      * 
@@ -203,22 +193,6 @@ namespace batchlas {
             OrthoAlgorithm algo = OrthoAlgorithm::Chol2,
             size_t iterations = 2);
 
-    // Forwarding overload accepting owning Matrices A and M
-    template <Backend B, typename T>
-    inline Event ortho(Queue& ctx,
-            const Matrix<T, MatrixFormat::Dense>& A,
-            const Matrix<T, MatrixFormat::Dense>& M,
-            Transpose transA,
-            Transpose transM,
-            Span<std::byte> workspace,
-            OrthoAlgorithm algo = OrthoAlgorithm::Chol2,
-            size_t iterations = 2) {
-        return ortho<B,T>(ctx,
-                          MatrixView<T, MatrixFormat::Dense>(A),
-                          MatrixView<T, MatrixFormat::Dense>(M),
-                          transA, transM, workspace, algo, iterations);
-    }
-    
     /**
      * @brief Get required buffer size for orthogonalization
      * 
@@ -233,15 +207,6 @@ namespace batchlas {
             const MatrixView<T, MatrixFormat::Dense>& A,
             Transpose transA,
             OrthoAlgorithm algo = OrthoAlgorithm::Chol2);
-
-    // Forwarding overload (owning A)
-    template <Backend B, typename T>
-    inline size_t ortho_buffer_size(Queue& ctx,
-            const Matrix<T, MatrixFormat::Dense>& A,
-            Transpose transA,
-            OrthoAlgorithm algo = OrthoAlgorithm::Chol2) {
-        return ortho_buffer_size<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), transA, algo);
-    }
 
     /**
      * @brief Get required buffer size for orthogonalization with external metric
@@ -263,21 +228,6 @@ namespace batchlas {
             Transpose transM,
             OrthoAlgorithm algo = OrthoAlgorithm::Chol2,
             size_t iterations = 2);
-
-    // Forwarding overload (owning A and M)
-    template <Backend B, typename T>
-    inline size_t ortho_buffer_size(Queue& ctx,
-            const Matrix<T, MatrixFormat::Dense>& A,
-            const Matrix<T, MatrixFormat::Dense>& M,
-            Transpose transA,
-            Transpose transM,
-            OrthoAlgorithm algo = OrthoAlgorithm::Chol2,
-            size_t iterations = 2) {
-        return ortho_buffer_size<B,T>(ctx,
-                                      MatrixView<T, MatrixFormat::Dense>(A),
-                                      MatrixView<T, MatrixFormat::Dense>(M),
-                                      transA, transM, algo, iterations);
-    }
 
     /**
      * @brief Computes selected eigenvalues and optionally eigenvectors of a
@@ -329,19 +279,6 @@ namespace batchlas {
                 JobType jobz = JobType::NoEigenVectors,
                 const SyevxParams<T>& params = SyevxParams<T>()) {
         return syevx<B,T,MFormat>(ctx, MatrixView<T, MFormat>(A), W, neigs, workspace, jobz, MatrixView<T, MatrixFormat::Dense>(), params);
-    }
-
-    // Forwarding overload (owning A and V)
-    template <Backend B, typename T, MatrixFormat MFormat>
-    inline Event syevx(Queue& ctx,
-                const Matrix<T, MFormat>& A,
-                Span<typename base_type<T>::type> W,
-                size_t neigs,
-                Span<std::byte> workspace,
-                JobType jobz,
-                const Matrix<T, MatrixFormat::Dense>& V,
-                const SyevxParams<T>& params = SyevxParams<T>()) {
-        return syevx<B,T,MFormat>(ctx, MatrixView<T, MFormat>(A), W, neigs, workspace, jobz, MatrixView<T, MatrixFormat::Dense>(V), params);
     }
 
     /**
@@ -417,20 +354,6 @@ namespace batchlas {
         return syevx<B,T,MFormat>(ctx, MatrixView<T, MFormat>(A), W, m, neigs, workspace, jobz, MatrixView<T, MatrixFormat::Dense>(), params);
     }
 
-    // Forwarding overload (owning A and V)
-    template <Backend B, typename T, MatrixFormat MFormat>
-    inline Event syevx(Queue& ctx,
-                const Matrix<T, MFormat>& A,
-                Span<typename base_type<T>::type> W,
-                Span<int32_t> m,
-                size_t neigs,
-                Span<std::byte> workspace,
-                JobType jobz,
-                const Matrix<T, MatrixFormat::Dense>& V,
-                const SyevxParams<T>& params = SyevxParams<T>()) {
-        return syevx<B,T,MFormat>(ctx, MatrixView<T, MFormat>(A), W, m, neigs, workspace, jobz, MatrixView<T, MatrixFormat::Dense>(V), params);
-    }
-
     /**
      * @brief Get required buffer size for the syevx operation
      *
@@ -469,18 +392,6 @@ namespace batchlas {
         return syevx_buffer_size<B,T,MFormat>(ctx, MatrixView<T, MFormat>(A), W, neigs, jobz, MatrixView<T, MatrixFormat::Dense>(), params);
     }
 
-    // Forwarding overload (owning A and V)
-    template <Backend B, typename T, MatrixFormat MFormat>
-    inline size_t syevx_buffer_size(Queue& ctx,
-                const Matrix<T, MFormat>& A,
-                Span<typename base_type<T>::type> W,
-                size_t neigs,
-                JobType jobz,
-                const Matrix<T, MatrixFormat::Dense>& V,
-                const SyevxParams<T>& params = SyevxParams<T>()) {
-        return syevx_buffer_size<B,T,MFormat>(ctx, MatrixView<T, MFormat>(A), W, neigs, jobz, MatrixView<T, MatrixFormat::Dense>(V), params);
-    }
-
     // `m`-taking sizing forms. `m` is ACCEPTED AND IGNORED -- sizing writes no
     // counts and needs none; these exist only so that a value-range caller can
     // write the sizing call and the solve call with the same argument list
@@ -513,19 +424,6 @@ namespace batchlas {
                 const SyevxParams<T>& params = SyevxParams<T>()) {
         (void)m;
         return syevx_buffer_size<B,T,MFormat>(ctx, MatrixView<T, MFormat>(A), W, neigs, jobz, MatrixView<T, MatrixFormat::Dense>(), params);
-    }
-
-    template <Backend B, typename T, MatrixFormat MFormat>
-    inline size_t syevx_buffer_size(Queue& ctx,
-                const Matrix<T, MFormat>& A,
-                Span<typename base_type<T>::type> W,
-                Span<int32_t> m,
-                size_t neigs,
-                JobType jobz,
-                const Matrix<T, MatrixFormat::Dense>& V,
-                const SyevxParams<T>& params = SyevxParams<T>()) {
-        (void)m;
-        return syevx_buffer_size<B,T,MFormat>(ctx, MatrixView<T, MFormat>(A), W, neigs, jobz, MatrixView<T, MatrixFormat::Dense>(V), params);
     }
 
     /**
@@ -910,18 +808,6 @@ namespace batchlas {
         return lanczos<B,T,MFormat>(ctx, MatrixView<T,MFormat>(A), W, workspace, jobz, MatrixView<T, MatrixFormat::Dense>(), params);
     }
 
-    // Forwarding overload (owning A and V)
-    template <Backend B, typename T, MatrixFormat MFormat>
-    inline Event lanczos(Queue& ctx,
-        const Matrix<T, MFormat>& A,
-        Span<typename base_type<T>::type> W,
-        Span<std::byte> workspace,
-        JobType jobz,
-        const Matrix<T, MatrixFormat::Dense>& V,
-        const LanczosParams<T>& params = LanczosParams<T>()) {
-        return lanczos<B,T,MFormat>(ctx, MatrixView<T,MFormat>(A), W, workspace, jobz, MatrixView<T, MatrixFormat::Dense>(V), params);
-    }
-
     /**
      * @brief Get required buffer size for the Lanczos algorithm
      * 
@@ -952,34 +838,11 @@ namespace batchlas {
         size_t n,
         size_t batch_size);
 
-    // Forwarding overload (owning Q)
-    template <Backend B, typename T>
-    inline Event tridiagonal_solver(Queue& ctx,
-         Span<T> alphas,
-         Span<T> betas,
-         Span<typename base_type<T>::type> W,
-         Span<std::byte> workspace,
-         JobType jobz,
-         const Matrix<T, MatrixFormat::Dense>& Q,
-         size_t n,
-         size_t batch_size) {
-        return tridiagonal_solver<B,T>(ctx, alphas, betas, W, workspace, jobz, MatrixView<T, MatrixFormat::Dense>(Q), n, batch_size);
-    }
-
     template <Backend B, typename T>
     size_t tridiagonal_solver_buffer_size(Queue& ctx, size_t n, size_t batch_size, JobType jobz);
 
     template <typename T>
     Event francis_sweep(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, const MatrixView<std::array<T,2>, MatrixFormat::Dense>& givens_rotations = {}, size_t n_sweeps = 1, T zero_threshold = std::numeric_limits<T>::epsilon());
-
-    // Forwarding overloads to allow passing owning Vector<T> directly
-    template <typename T>
-    inline Event francis_sweep(Queue& ctx, const Vector<T>& d, const Vector<T>& e,
-                               const MatrixView<std::array<T,2>, MatrixFormat::Dense>& givens_rotations = {},
-                               size_t n_sweeps = 1,
-                               T zero_threshold = std::numeric_limits<T>::epsilon()) {
-        return francis_sweep<T>(ctx, static_cast<VectorView<T>>(d), static_cast<VectorView<T>>(e), givens_rotations, n_sweeps, zero_threshold);
-    }
 
     // Vector-typed parameters in the tridiagonal group below (`stebz`, `stein`,
     // `steqr`, `steqr_cta`, `stedc`) follow one rule, and the mixture inside a
@@ -1065,22 +928,6 @@ namespace batchlas {
                              size_t n,
                              size_t batch_size,
                              StebzParams<T> params);
-
-    // Forwarding overload taking owning Vectors.
-    template <Backend B, typename T>
-    inline Event stebz(Queue& ctx,
-                       const Vector<T>& d,
-                       const Vector<T>& e,
-                       const Vector<T>& w,
-                       Span<int32_t> m,
-                       const Span<std::byte>& ws,
-                       StebzParams<T> params = StebzParams<T>()) {
-        return stebz<B, T>(ctx,
-                           static_cast<VectorView<T>>(d),
-                           static_cast<VectorView<T>>(e),
-                           static_cast<VectorView<T>>(w),
-                           m, ws, params);
-    }
 
     /**
      * @brief Parameters for `stein` (inverse iteration on a symmetric tridiagonal).
@@ -1176,52 +1023,6 @@ namespace batchlas {
                 const Span<std::byte>& ws,
                 SteinParams<T> params = SteinParams<T>());
 
-    // Forwarding overloads taking owning Vectors, one per primary above. `stebz`,
-    // `steqr`, `steqr_cta` and `stedc` all ship these and `stein` was the only
-    // member of the group without them, so a caller holding owning `Vector`s had to
-    // spell `.view()` on exactly one call in an otherwise uniform sequence.
-    //
-    // These cannot collide with the primaries: template argument deduction does not
-    // consider the implicit `VectorView(const Vector<T>&)` conversion, so a `Vector`
-    // argument makes the primaries non-deducible and a `VectorView` argument makes
-    // these non-deducible. Exactly one set is ever viable. The two overloads here
-    // are held apart from each other by parameter 6 (`MatrixView` vs
-    // `Span<const int32_t>`), the same discriminator the primaries already rely on
-    // -- so the warning above about spelling a bare `{}` at `counts` (use
-    // `stein_all_counts`) applies to these identically.
-    template <Backend B, typename T>
-    inline Event stein(Queue& ctx,
-                       const Vector<T>& d,
-                       const Vector<T>& e,
-                       const Vector<T>& w,
-                       size_t k,
-                       const MatrixView<T, MatrixFormat::Dense>& Z,
-                       const Span<std::byte>& ws,
-                       SteinParams<T> params = SteinParams<T>()) {
-        return stein<B, T>(ctx,
-                           static_cast<VectorView<T>>(d),
-                           static_cast<VectorView<T>>(e),
-                           static_cast<VectorView<T>>(w),
-                           k, Z, ws, params);
-    }
-
-    template <Backend B, typename T>
-    inline Event stein(Queue& ctx,
-                       const Vector<T>& d,
-                       const Vector<T>& e,
-                       const Vector<T>& w,
-                       size_t k,
-                       Span<const int32_t> counts,
-                       const MatrixView<T, MatrixFormat::Dense>& Z,
-                       const Span<std::byte>& ws,
-                       SteinParams<T> params = SteinParams<T>()) {
-        return stein<B, T>(ctx,
-                           static_cast<VectorView<T>>(d),
-                           static_cast<VectorView<T>>(e),
-                           static_cast<VectorView<T>>(w),
-                           k, counts, Z, ws, params);
-    }
-
     /**
      * @brief Required workspace size, in bytes, for `stein`.
      *
@@ -1304,70 +1105,6 @@ namespace batchlas {
                     SteqrParams<T> params = SteqrParams<T>(),
                     const MatrixView<T, MatrixFormat::Dense>& eigvects = MatrixView<T, MatrixFormat::Dense>());
   
-    // Forwarding overload for steqr taking owning Vectors
-    template <Backend B, typename T>
-    inline Event steqr(Queue& ctx, const Vector<T>& d, const Vector<T>& e,
-                       const Vector<T>& eigenvalues, const Span<std::byte>& ws,
-                       JobType jobz = JobType::NoEigenVectors,
-                       SteqrParams<T> params = SteqrParams<T>()) {
-        return steqr<B, T>(ctx,
-                        static_cast<VectorView<T>>(d),
-                        static_cast<VectorView<T>>(e),
-                        static_cast<VectorView<T>>(eigenvalues),
-                        ws,
-                        jobz,
-                        params,
-                        MatrixView<T, MatrixFormat::Dense>());
-    }
-
-    template <Backend B, typename T>
-    inline Event steqr(Queue& ctx, const Vector<T>& d, const Vector<T>& e,
-                       const Vector<T>& eigenvalues, const Span<std::byte>& ws,
-                       JobType jobz,
-                       SteqrParams<T> params,
-                       const Matrix<T, MatrixFormat::Dense>& eigvects) {
-        return steqr<B, T>(ctx,
-                        static_cast<VectorView<T>>(d),
-                        static_cast<VectorView<T>>(e),
-                        static_cast<VectorView<T>>(eigenvalues),
-                        ws,
-                        jobz,
-                        params,
-                        MatrixView<T, MatrixFormat::Dense>(eigvects));
-    }
-
-    // Forwarding overload for steqr_cta taking owning Vectors
-    template <Backend B, typename T>
-    inline Event steqr_cta(Queue& ctx, const Vector<T>& d, const Vector<T>& e,
-                           const Vector<T>& eigenvalues, const Span<std::byte>& ws,
-                           JobType jobz = JobType::NoEigenVectors,
-                           SteqrParams<T> params = SteqrParams<T>()) {
-        return steqr_cta<B, T>(ctx,
-                               static_cast<VectorView<T>>(d),
-                               static_cast<VectorView<T>>(e),
-                               static_cast<VectorView<T>>(eigenvalues),
-                               ws,
-                               jobz,
-                               params,
-                               MatrixView<T, MatrixFormat::Dense>());
-    }
-
-    template <Backend B, typename T>
-    inline Event steqr_cta(Queue& ctx, const Vector<T>& d, const Vector<T>& e,
-                           const Vector<T>& eigenvalues, const Span<std::byte>& ws,
-                           JobType jobz,
-                           SteqrParams<T> params,
-                           const Matrix<T, MatrixFormat::Dense>& eigvects) {
-        return steqr_cta<B, T>(ctx,
-                               static_cast<VectorView<T>>(d),
-                               static_cast<VectorView<T>>(e),
-                               static_cast<VectorView<T>>(eigenvalues),
-                               ws,
-                               jobz,
-                               params,
-                               MatrixView<T, MatrixFormat::Dense>(eigvects));
-    }
-
     template <typename T>
     size_t steqr_buffer_size(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e,
                             const VectorView<T>& eigenvalues, JobType jobz = JobType::NoEigenVectors, SteqrParams<T> params = SteqrParams<T>());
@@ -2277,34 +2014,6 @@ namespace batchlas {
                    const Span<std::byte>& ws,
                    size_t cta_wg_size_multiplier = 1);
 
-    // Forwarding overload for steqr_buffer_size taking owning Vectors
-    template <typename T>
-    inline size_t steqr_buffer_size(Queue& ctx, const Vector<T>& d, const Vector<T>& e,
-                                    const Vector<T>& eigenvalues,
-                                    JobType jobz = JobType::NoEigenVectors,
-                                    SteqrParams<T> params = SteqrParams<T>()) {
-        return steqr_buffer_size<T>(ctx,
-                                    static_cast<VectorView<T>>(d),
-                                    static_cast<VectorView<T>>(e),
-                                    static_cast<VectorView<T>>(eigenvalues),
-                                    jobz,
-                                    params);
-    }
-
-    // Forwarding overload for steqr_cta_buffer_size taking owning Vectors
-    template <typename T>
-    inline size_t steqr_cta_buffer_size(Queue& ctx, const Vector<T>& d, const Vector<T>& e,
-                                        const Vector<T>& eigenvalues,
-                                        JobType jobz = JobType::NoEigenVectors,
-                                        SteqrParams<T> params = SteqrParams<T>()) {
-        return steqr_cta_buffer_size<T>(ctx,
-                                        static_cast<VectorView<T>>(d),
-                                        static_cast<VectorView<T>>(e),
-                                        static_cast<VectorView<T>>(eigenvalues),
-                                        jobz,
-                                        params);
-    }
-
 
     enum class StedcSecularSolver {
         Rocm,
@@ -2347,12 +2056,6 @@ namespace batchlas {
             JobType jobz, StedcParams<T> params, const MatrixView<T, MatrixFormat::Dense>& eigvects);
 
     template <Backend B, typename T>
-    inline Event stedc(Queue& ctx, const Vector<T>& d, const Vector<T>& e, const Vector<T>& eigenvalues, const Span<std::byte>& ws,
-            JobType jobz, StedcParams<T> params, const Matrix<T, MatrixFormat::Dense>& eigvects) {
-        return stedc<B,T>(ctx, static_cast<VectorView<T>>(d), static_cast<VectorView<T>>(e), static_cast<VectorView<T>>(eigenvalues), ws, jobz, params, MatrixView<T, MatrixFormat::Dense>(eigvects));
-    }
-
-    template <Backend B, typename T>
     size_t stedc_buffer_size(Queue& ctx, size_t n, size_t batch_size, JobType jobz, StedcParams<T> params);
 
     // Deprecated spelling, kept so an out-of-tree caller gets a warning and not a
@@ -2387,16 +2090,6 @@ namespace batchlas {
                       const VectorView<typename base_type<T>::type>& ritz_vals,
                       Span<std::byte> workspace);
 
-    // Forwarding overload (owning A, V, and ritz_vals)
-    template <Backend B, typename T, MatrixFormat MFormat>
-    inline Event ritz_values(Queue& ctx,
-                            const Matrix<T, MFormat>& A,
-                            const Matrix<T, MatrixFormat::Dense>& V,
-                            const Vector<typename base_type<T>::type>& ritz_vals,
-                            Span<std::byte> workspace) {
-        return ritz_values<B,T,MFormat>(ctx, MatrixView<T, MFormat>(A), MatrixView<T, MatrixFormat::Dense>(V), static_cast<VectorView<typename base_type<T>::type>>(ritz_vals), workspace);
-    }
-
     //Convenience overload allocating workspace internally
     template <Backend B, typename T, MatrixFormat MFormat>
     inline auto ritz_values(Queue& ctx,
@@ -2413,6 +2106,19 @@ namespace batchlas {
         return ritz_vals;
     }
 
+    // The one owning-argument twin BATCHLAS_ACCEPT_OWNING cannot replace, and the
+    // reason is worth keeping because it applies to every entry point whose
+    // parameter list ends in a deduced MatrixFormat.
+    //
+    // The generated forwarder is `template <Backend Back, typename... Args>`, so
+    // a call that supplies SOME template arguments explicitly and leaves the rest
+    // to deduction -- `ritz_values<B, float_type>(ctx, A, V)`, which stedc_tests
+    // writes -- puts `float_type` into the pack, where it has to match the first
+    // *argument*, and the forwarder drops out. The primary cannot take the call
+    // either: `MFormat` is still deduced, and deduction does not see
+    // `Matrix -> MatrixView`. Spelling `ritz_values<B>(ctx, A, V)` reaches the
+    // forwarder and needs no overload here; this one keeps the two-argument
+    // spelling compiling.
     template <Backend B, typename T, MatrixFormat MFormat>
     inline auto ritz_values(Queue& ctx,
                             const Matrix<T, MFormat>& A,
@@ -2435,15 +2141,6 @@ namespace batchlas {
                                  const MatrixView<T, MFormat>& A,
                                  const MatrixView<T, MatrixFormat::Dense>& V,
                                  const VectorView<typename base_type<T>::type>& ritz_vals);
-
-    // Forwarding overload (owning A, V, and ritz_vals)
-    template <Backend B, typename T, MatrixFormat MFormat>
-    inline size_t ritz_values_buffer_size(Queue& ctx,
-                                       const Matrix<T, MFormat>& A,
-                                       const Matrix<T, MatrixFormat::Dense>& V,
-                                       const Vector<typename base_type<T>::type>& ritz_vals) {
-        return ritz_values_buffer_size<B,T,MFormat>(ctx, MatrixView<T, MFormat>(A), MatrixView<T, MatrixFormat::Dense>(V), static_cast<VectorView<typename base_type<T>::type>>(ritz_vals));
-    }
 
     // Deprecated spellings, one per overload above. See the note on
     // `stedc_workspace_size`: the `*_buffer_size` suffix is the convention every
@@ -2481,15 +2178,6 @@ namespace batchlas {
         const MatrixView<T, MatrixFormat::Dense>& Ainv,
         Span<std::byte> workspace);
 
-    // Forwarding overload (owning A and Ainv)
-    template <Backend B, typename T>
-    inline Event inv(Queue& ctx,
-        const Matrix<T, MatrixFormat::Dense>& A,
-        const Matrix<T, MatrixFormat::Dense>& Ainv,
-        Span<std::byte> workspace) {
-        return inv<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), MatrixView<T, MatrixFormat::Dense>(Ainv), workspace);
-    }
-
     /**
      * @brief Get required workspace size for matrix inversion
      *
@@ -2500,13 +2188,6 @@ namespace batchlas {
     template <Backend B, typename T>
     size_t inv_buffer_size(Queue& ctx,
         const MatrixView<T, MatrixFormat::Dense>& A);
-
-    // Forwarding overload (owning A)
-    template <Backend B, typename T>
-    inline size_t inv_buffer_size(Queue& ctx,
-        const Matrix<T, MatrixFormat::Dense>& A) {
-        return inv_buffer_size<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A));
-    }
 
     /**
      * @brief Convenience overload allocating output matrix internally
@@ -2544,6 +2225,33 @@ namespace batchlas {
 // The macro is constrained, so a name whose remaining template parameters are
 // not deducible from the arguments simply gets no overload here rather than an
 // ill-formed one; those keep their explicit-backend spelling.
+//
+// BATCHLAS_ACCEPT_OWNING is the same idea one level down: it lets an entry point
+// declared with `MatrixView`/`VectorView` parameters take the owning `Matrix`
+// and `Vector` a caller is likely to be holding. The two compose -- the
+// dispatch overload supplies the Backend, this one converts the containers --
+// so `f(ctx, A, ...)` with owning arguments and no backend works through both.
+// A name absent from this list has an arity-changing forwarder of its own that
+// no pack can express; see the two `syevx` and `lanczos` A-only overloads above.
+
+BATCHLAS_ACCEPT_OWNING(ortho)
+BATCHLAS_ACCEPT_OWNING(ortho_buffer_size)
+BATCHLAS_ACCEPT_OWNING(syevx)
+BATCHLAS_ACCEPT_OWNING(syevx_buffer_size)
+BATCHLAS_ACCEPT_OWNING(lanczos)
+BATCHLAS_ACCEPT_OWNING(tridiagonal_solver)
+BATCHLAS_ACCEPT_OWNING(stebz)
+BATCHLAS_ACCEPT_OWNING(stein)
+BATCHLAS_ACCEPT_OWNING(steqr)
+BATCHLAS_ACCEPT_OWNING(steqr_cta)
+BATCHLAS_ACCEPT_OWNING(stedc)
+BATCHLAS_ACCEPT_OWNING(ritz_values)
+BATCHLAS_ACCEPT_OWNING(ritz_values_buffer_size)
+BATCHLAS_ACCEPT_OWNING(inv)
+BATCHLAS_ACCEPT_OWNING(inv_buffer_size)
+BATCHLAS_ACCEPT_OWNING_NB(francis_sweep)
+BATCHLAS_ACCEPT_OWNING_NB(steqr_buffer_size)
+BATCHLAS_ACCEPT_OWNING_NB(steqr_cta_buffer_size)
 
 BATCHLAS_DISPATCH_ON_QUEUE(ortho)
 BATCHLAS_DISPATCH_ON_QUEUE(ortho_buffer_size)

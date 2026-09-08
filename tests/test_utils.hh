@@ -82,33 +82,6 @@ inline bool should_run_float_type() {
     return false;  // Filter doesn't match, skip
 }
 
-// Deprecated: non-template version kept for backward compatibility
-inline bool should_run_float_type(const std::string& type_name) {
-    const char* env = std::getenv("BATCHLAS_TEST_FLOAT_TYPE");
-    if (!env) return true;  // No filter, run all
-    
-    std::string type_filter(env);
-    std::transform(type_filter.begin(), type_filter.end(), type_filter.begin(), ::tolower);
-    
-    // typeid().name() returns mangled names (compiler-specific):
-    // GCC/Clang: f, d, St7complexIfE, St7complexIdE
-    // MSVC: float, double, complex<float>, complex<double> (different format)
-    // This fallback supports GCC/Clang but may not work on all compilers
-    
-    if (type_filter == "float") {
-        return type_name == "f" || type_name == "St7complexIfE" ||
-               type_name.find("complex<float>") != std::string::npos;
-    } else if (type_filter == "double") {
-        return type_name == "d" || type_name == "St7complexIdE" ||
-               type_name.find("complex<double>") != std::string::npos;
-    } else if (type_filter == "complex") {
-        return type_name == "St7complexIfE" || type_name == "St7complexIdE" ||
-               type_name.find("complex") != std::string::npos;
-    }
-    
-    return false;  // Filter doesn't match, skip
-}
-
 // Helper to gather types for all enabled backends (runtime filtering via environment variables)
 template <template <typename, batchlas::Backend> class Config>
 struct backend_types {

@@ -148,7 +148,9 @@ Event launch_register_128x32_k32_split_k4(Queue& ctx,
                 partials_view.stride(),
                 batch_size);
 
-            launch_register_128x32_k32_s2_u2(ctx, a_slice, b_slice, partial_view, T(1), T(0), kernel_trace_name);
+            launch_reg<T, RegTile{128, 32, 32, 4, 4, 4, 4, 2, 2}>(
+                ctx, a_slice, b_slice, partial_view, T(1), T(0),
+                kernel_trace_name(KernelVariant::Tiled128x32RegisterK32S2U2));
         }
 
         reduce_split_k_partials(ctx, partials_view, C, kExperimentalSplitKPartitions, alpha, beta);

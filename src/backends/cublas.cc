@@ -16,6 +16,8 @@
 #include <complex>
 
 #include "gemm_cublasdx_dispatch.hh"
+#include "batch_launch.hh"
+#include "level3_shape.hh"
 #include "gemm_variant.hh"
 #include "symm_custom_dispatch.hh"
 #include "syr2k_custom_dispatch.hh"
@@ -44,64 +46,6 @@ namespace batchlas {
         size_t orgqr_vendor_buffer_size(Queue& ctx,
                                         const MatrixView<T, MatrixFormat::Dense>& A,
                                         Span<T> tau);
-
-        template <Backend Back, typename T>
-        Event gemm_vendor_impl(Queue& ctx,
-                       const MatrixView<T,MatrixFormat::Dense>& A,
-                       const MatrixView<T,MatrixFormat::Dense>& B,
-                       const MatrixView<T,MatrixFormat::Dense>& C,
-                       T alpha,
-                       T beta,
-                       Transpose transA,
-                       Transpose transB,
-                       ComputePrecision precision);
-
-    template <Backend Back, typename T>
-    Event gemm_heterogeneous_vendor_impl(Queue& ctx,
-                                         const MatrixView<T, MatrixFormat::Dense>& A,
-                                         const MatrixView<T, MatrixFormat::Dense>& B,
-                                         const MatrixView<T, MatrixFormat::Dense>& C,
-                                         T alpha,
-                                         T beta,
-                                         Transpose transA,
-                                         Transpose transB,
-                                         ComputePrecision precision) {
-        if (!gemm_batch_dimensions_compatible(A, B, C, transA, transB)) {
-            throw std::invalid_argument("GEMM: incompatible per-batch matrix dimensions for heterogeneous dispatch");
-        }
-
-        bool launched = false;
-        Event last_event;
-        for (int batch_index = 0; batch_index < A.batch_size(); ++batch_index) {
-            const auto [m, k] = get_effective_dims(A, transA, batch_index);
-            const auto [k_b, n] = get_effective_dims(B, transB, batch_index);
-            static_cast<void>(k_b);
-            if (m == 0 || n == 0) {
-                continue;
-            }
-            if (k == 0) {
-                last_event = scale(ctx, beta, C.batch_item(batch_index));
-                launched = true;
-                continue;
-            }
-
-            last_event = gemm_vendor_impl<Back, T>(ctx,
-                                                   A.batch_item(batch_index),
-                                                   B.batch_item(batch_index),
-                                                   C.batch_item(batch_index),
-                                                   alpha,
-                                                   beta,
-                                                   transA,
-                                                   transB,
-                                                   precision);
-            launched = true;
-        }
-
-        if (launched) {
-            return std::move(last_event);
-        }
-        return ctx.create_event_after_external_work();
-    }
 
     template <Backend Back, typename T>
     Event gemm_vendor_impl(Queue& ctx,
@@ -168,7 +112,14 @@ namespace batchlas {
         }
 
         if (gemm_has_heterogeneous_batch(A, B, C)) {
-            return gemm_heterogeneous_vendor_impl<Back, T>(ctx, A, B, C, alpha, beta, transA, transB, precision);
+            if (!gemm_batch_dimensions_compatible(A, B, C, transA, transB)) {
+                throw std::invalid_argument("GEMM: incompatible per-batch matrix dimensions for heterogeneous dispatch");
+            }
+            return gemm_over_heterogeneous_batch(ctx, A, B, C, beta, transA, transB,
+                [&](const auto& A_i, const auto& B_i, const auto& C_i) {
+                    return gemm_vendor_impl<Back, T>(ctx, A_i, B_i, C_i, alpha, beta, transA, transB, precision);
+                },
+                [&] { return ctx.create_event_after_external_work(); });
         }
 
         if (gemm_use_sycl_custom(ctx, A, B, C, transA, transB, precision)) {
@@ -190,67 +141,23 @@ namespace batchlas {
         static LinalgHandle<Back> handle;
         handle.setStream(ctx);
 
-        if (A.rows() != A.cols()) {
-            throw std::invalid_argument("SYMM: A must be square");
-        }
-        if (A.batch_size() != B.batch_size() || A.batch_size() != C.batch_size()) {
-            throw std::invalid_argument(
-                "SYMM: batch size mismatch (A=" + std::to_string(A.batch_size()) +
-                ", B=" + std::to_string(B.batch_size()) +
-                ", C=" + std::to_string(C.batch_size()) + ")");
-        }
+        const auto [m, n, k] = shape::validate_product<std::invalid_argument>("SYMM", A, B, C, side);
+        static_cast<void>(k);  // cublas?symm takes A's order from side, not as an argument
 
-        const int m = C.rows();
-        const int n = C.cols();
-        const int expected_a = side == Side::Left ? B.rows() : B.cols();
-        if (A.rows() != expected_a || B.rows() != m || B.cols() != n) {
-            throw std::invalid_argument("SYMM: incompatible matrix dimensions");
-        }
-
-        const auto side_cublas = enum_convert<BackendLibrary::CUBLAS>(side);
-        const auto uplo_cublas = enum_convert<BackendLibrary::CUBLAS>(uplo);
-
+        // The two complex slots have no callee because symm is instantiated
+        // only for float and double here -- a complex caller reaches the
+        // Hermitian sibling hemm_vendor below instead -- so, exactly as hemm
+        // does for the two real slots, they are never selected.
         auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
                                  const MatrixView<T, MatrixFormat::Dense>& B_i,
                                  const MatrixView<T, MatrixFormat::Dense>& C_i) {
-            if constexpr (std::is_same_v<T, float>) {
-                cublasSsymm(handle,
-                            side_cublas,
-                            uplo_cublas,
-                            m,
-                            n,
-                            &alpha,
-                            A_i.data_ptr(),
-                            A_i.ld(),
-                            B_i.data_ptr(),
-                            B_i.ld(),
-                            &beta,
-                            C_i.data_ptr(),
-                            C_i.ld());
-            } else if constexpr (std::is_same_v<T, double>) {
-                cublasDsymm(handle,
-                            side_cublas,
-                            uplo_cublas,
-                            m,
-                            n,
-                            &alpha,
-                            A_i.data_ptr(),
-                            A_i.ld(),
-                            B_i.data_ptr(),
-                            B_i.ld(),
-                            &beta,
-                            C_i.data_ptr(),
-                            C_i.ld());
-            }
+            call_backend<T, BackendLibrary::CUBLAS, Back>(cublasSsymm, cublasDsymm, nullptr, nullptr,
+                handle, side, uplo, m, n, &alpha,
+                A_i.data_ptr(), A_i.ld(), B_i.data_ptr(), B_i.ld(), &beta,
+                C_i.data_ptr(), C_i.ld());
         };
 
-        if (A.batch_size() <= 1) {
-            launch_single(A, B, C);
-        } else {
-            for (int batch = 0; batch < A.batch_size(); ++batch) {
-                launch_single(A[batch], B[batch], C[batch]);
-            }
-        }
+        for_each_batch_item(launch_single, A, B, C);
 
         return ctx.create_event_after_external_work();
     }
@@ -292,24 +199,7 @@ namespace batchlas {
         static LinalgHandle<Back> handle;
         handle.setStream(ctx);
 
-        if (A.rows() != A.cols()) {
-            throw std::invalid_argument("HEMM: A must be square");
-        }
-        if (A.batch_size() != B.batch_size() || A.batch_size() != C.batch_size()) {
-            throw std::invalid_argument(
-                "HEMM: batch size mismatch (A=" + std::to_string(A.batch_size()) +
-                ", B=" + std::to_string(B.batch_size()) +
-                ", C=" + std::to_string(C.batch_size()) + ")");
-        }
-
-        const int m = C.rows();
-        const int n = C.cols();
-        // A multiplies from whichever side the caller asked for, so it is m x m
-        // on the left and n x n on the right.
-        const int k = side == Side::Left ? m : n;
-        if (A.rows() != k || B.rows() != m || B.cols() != n) {
-            throw std::invalid_argument("HEMM: incompatible matrix dimensions");
-        }
+        const auto [m, n, k] = shape::validate_product<std::invalid_argument>("HEMM", A, B, C, side);
 
         // Unlike cublas?trmm, cublas?hemm is quick enough that a per-batch loop
         // over it beats the expansion on a launch-bound call, so the shape has
@@ -366,13 +256,7 @@ namespace batchlas {
                 C_i.data_ptr(), C_i.ld());
         };
 
-        if (A.batch_size() <= 1) {
-            launch_single(A, B, C);
-        } else {
-            for (int batch = 0; batch < A.batch_size(); ++batch) {
-                launch_single(A[batch], B[batch], C[batch]);
-            }
-        }
+        for_each_batch_item(launch_single, A, B, C);
 
         return ctx.create_event_after_external_work();
     }
@@ -498,28 +382,8 @@ namespace batchlas {
         static LinalgHandle<Back> handle;
         handle.setStream(ctx);
 
-        if (C.rows() != C.cols()) {
-            throw std::invalid_argument("HERK: C must be square");
-        }
-        if (A.batch_size() != C.batch_size()) {
-            throw std::invalid_argument(
-                "HERK: batch size mismatch (A=" + std::to_string(A.batch_size()) +
-                ", C=" + std::to_string(C.batch_size()) + ")");
-        }
-        // Transpose::Trans would ask for A * A^T, which is complex-symmetric
-        // rather than Hermitian; that operation is syrk's, and BLAS does not
-        // spell it here.
-        if (transA != Transpose::NoTrans && transA != Transpose::ConjTrans) {
-            throw std::invalid_argument("HERK: transA must be NoTrans or ConjTrans");
-        }
-
-        const int n = C.rows();
+        const auto [n, k] = shape::validate_rank_k<std::invalid_argument>("HERK", A, C, transA, /*hermitian=*/true);
         const int batch = C.batch_size();
-        const int k = transA == Transpose::NoTrans ? A.cols() : A.rows();
-        const int expected_n = transA == Transpose::NoTrans ? A.rows() : A.cols();
-        if (expected_n != n || k <= 0) {
-            throw std::invalid_argument("HERK: incompatible matrix dimensions");
-        }
 
         // The same single-tile Gram kernel as syrk, with the ^H conjugating
         // whichever operand carries it. Opt-in only: see syrk_route_requests_gram
@@ -577,13 +441,7 @@ namespace batchlas {
                 C_i.data_ptr(), C_i.ld());
         };
 
-        if (batch <= 1) {
-            launch_single(A, C);
-        } else {
-            for (int b = 0; b < batch; ++b) {
-                launch_single(A[b], C[b]);
-            }
-        }
+        for_each_batch_item(launch_single, A, C);
 
         return ctx.create_event_after_external_work();
     }
@@ -604,29 +462,9 @@ namespace batchlas {
         static LinalgHandle<Back> handle;
         handle.setStream(ctx);
 
-        if (C.rows() != C.cols()) {
-            throw std::invalid_argument("HER2K: C must be square");
-        }
-        if (A.batch_size() != B.batch_size() || A.batch_size() != C.batch_size()) {
-            throw std::invalid_argument(
-                "HER2K: batch size mismatch (A=" + std::to_string(A.batch_size()) +
-                ", B=" + std::to_string(B.batch_size()) +
-                ", C=" + std::to_string(C.batch_size()) + ")");
-        }
-        if (transA != Transpose::NoTrans && transA != Transpose::ConjTrans) {
-            throw std::invalid_argument("HER2K: transA must be NoTrans or ConjTrans");
-        }
-
-        const int n = C.rows();
+        const auto [n, k] = shape::validate_rank_2k<std::invalid_argument>("HER2K", A, B, C, transA, /*hermitian=*/true);
         const int batch = C.batch_size();
         const bool no_trans = transA == Transpose::NoTrans;
-        const int k = no_trans ? A.cols() : A.rows();
-        const int expected_n = no_trans ? A.rows() : A.cols();
-        const int b_n = no_trans ? B.rows() : B.cols();
-        const int b_k = no_trans ? B.cols() : B.rows();
-        if (expected_n != n || b_n != n || b_k != k || k <= 0) {
-            throw std::invalid_argument("HER2K: incompatible matrix dimensions");
-        }
 
         const std::size_t product_bytes = detail::expanded_workspace_bytes<T>(ctx, n, batch);
         if (her2k_gemm_preferred(n, batch) && detail::expansion_fits(ctx, n, batch, product_bytes)) {
@@ -669,13 +507,7 @@ namespace batchlas {
                 C_i.data_ptr(), C_i.ld());
         };
 
-        if (batch <= 1) {
-            launch_single(A, B, C);
-        } else {
-            for (int b = 0; b < batch; ++b) {
-                launch_single(A[b], B[b], C[b]);
-            }
-        }
+        for_each_batch_item(launch_single, A, B, C);
 
         return ctx.create_event_after_external_work();
     }
@@ -691,61 +523,20 @@ namespace batchlas {
         static LinalgHandle<Back> handle;
         handle.setStream(ctx);
 
-        if (C.rows() != C.cols()) {
-            throw std::invalid_argument("SYRK: C must be square");
-        }
-        if (A.batch_size() != C.batch_size()) {
-            throw std::invalid_argument(
-                "SYRK: batch size mismatch (A=" + std::to_string(A.batch_size()) +
-                ", C=" + std::to_string(C.batch_size()) + ")");
-        }
+        const auto [n, k] = shape::validate_rank_k<std::invalid_argument>("SYRK", A, C, transA, /*hermitian=*/false);
 
-        const int n = C.rows();
-        const int k = transA == Transpose::NoTrans ? A.cols() : A.rows();
-        const int expected_n = transA == Transpose::NoTrans ? A.rows() : A.cols();
-        if (expected_n != n || k <= 0) {
-            throw std::invalid_argument("SYRK: incompatible matrix dimensions");
-        }
-
-        const auto uplo_cublas = enum_convert<BackendLibrary::CUBLAS>(uplo);
-        const auto trans_cublas = enum_convert<BackendLibrary::CUBLAS>(transA);
-
+        // The two complex slots have no callee because syrk is instantiated
+        // only for float and double here; the complex rank-k update is herk,
+        // which is a separate routine above.
         auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
                                  const MatrixView<T, MatrixFormat::Dense>& C_i) {
-            if constexpr (std::is_same_v<T, float>) {
-                cublasSsyrk(handle,
-                            uplo_cublas,
-                            trans_cublas,
-                            n,
-                            k,
-                            &alpha,
-                            A_i.data_ptr(),
-                            A_i.ld(),
-                            &beta,
-                            C_i.data_ptr(),
-                            C_i.ld());
-            } else if constexpr (std::is_same_v<T, double>) {
-                cublasDsyrk(handle,
-                            uplo_cublas,
-                            trans_cublas,
-                            n,
-                            k,
-                            &alpha,
-                            A_i.data_ptr(),
-                            A_i.ld(),
-                            &beta,
-                            C_i.data_ptr(),
-                            C_i.ld());
-            }
+            call_backend<T, BackendLibrary::CUBLAS, Back>(cublasSsyrk, cublasDsyrk, nullptr, nullptr,
+                handle, uplo, transA, n, k, &alpha,
+                A_i.data_ptr(), A_i.ld(), &beta,
+                C_i.data_ptr(), C_i.ld());
         };
 
-        if (A.batch_size() <= 1) {
-            launch_single(A, C);
-        } else {
-            for (int batch = 0; batch < A.batch_size(); ++batch) {
-                launch_single(A[batch], C[batch]);
-            }
-        }
+        for_each_batch_item(launch_single, A, C);
 
         return ctx.create_event_after_external_work();
     }
@@ -794,69 +585,21 @@ namespace batchlas {
         static LinalgHandle<Back> handle;
         handle.setStream(ctx);
 
-        if (C.rows() != C.cols()) {
-            throw std::invalid_argument("SYR2K: C must be square");
-        }
-        if (A.batch_size() != B.batch_size() || A.batch_size() != C.batch_size()) {
-            throw std::invalid_argument(
-                "SYR2K: batch size mismatch (A=" + std::to_string(A.batch_size()) +
-                ", B=" + std::to_string(B.batch_size()) +
-                ", C=" + std::to_string(C.batch_size()) + ")");
-        }
+        const auto [n, k] = shape::validate_rank_2k<std::invalid_argument>("SYR2K", A, B, C, transA, /*hermitian=*/false);
 
-        const int n = C.rows();
-        const int expected_n = transA == Transpose::NoTrans ? A.rows() : A.cols();
-        const int k = transA == Transpose::NoTrans ? A.cols() : A.rows();
-        const int expected_b_n = transA == Transpose::NoTrans ? B.rows() : B.cols();
-        const int b_k = transA == Transpose::NoTrans ? B.cols() : B.rows();
-        if (expected_n != n || expected_b_n != n || b_k != k || k <= 0) {
-            throw std::invalid_argument("SYR2K: incompatible matrix dimensions");
-        }
-
-        const auto uplo_cublas = enum_convert<BackendLibrary::CUBLAS>(uplo);
-        const auto trans_cublas = enum_convert<BackendLibrary::CUBLAS>(transA);
-
+        // The two complex slots have no callee because syr2k is instantiated
+        // only for float and double here; the complex rank-2k update is her2k,
+        // which is a separate routine above.
         auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
                                  const MatrixView<T, MatrixFormat::Dense>& B_i,
                                  const MatrixView<T, MatrixFormat::Dense>& C_i) {
-            if constexpr (std::is_same_v<T, float>) {
-                cublasSsyr2k(handle,
-                             uplo_cublas,
-                             trans_cublas,
-                             n,
-                             k,
-                             &alpha,
-                             A_i.data_ptr(),
-                             A_i.ld(),
-                             B_i.data_ptr(),
-                             B_i.ld(),
-                             &beta,
-                             C_i.data_ptr(),
-                             C_i.ld());
-            } else if constexpr (std::is_same_v<T, double>) {
-                cublasDsyr2k(handle,
-                             uplo_cublas,
-                             trans_cublas,
-                             n,
-                             k,
-                             &alpha,
-                             A_i.data_ptr(),
-                             A_i.ld(),
-                             B_i.data_ptr(),
-                             B_i.ld(),
-                             &beta,
-                             C_i.data_ptr(),
-                             C_i.ld());
-            }
+            call_backend<T, BackendLibrary::CUBLAS, Back>(cublasSsyr2k, cublasDsyr2k, nullptr, nullptr,
+                handle, uplo, transA, n, k, &alpha,
+                A_i.data_ptr(), A_i.ld(), B_i.data_ptr(), B_i.ld(), &beta,
+                C_i.data_ptr(), C_i.ld());
         };
 
-        if (A.batch_size() <= 1) {
-            launch_single(A, B, C);
-        } else {
-            for (int batch = 0; batch < A.batch_size(); ++batch) {
-                launch_single(A[batch], B[batch], C[batch]);
-            }
-        }
+        for_each_batch_item(launch_single, A, B, C);
 
         return ctx.create_event_after_external_work();
     }
@@ -901,24 +644,7 @@ namespace batchlas {
         static LinalgHandle<Back> handle;
         handle.setStream(ctx);
 
-        if (A.rows() != A.cols()) {
-            throw std::invalid_argument("TRMM: A must be square");
-        }
-        if (A.batch_size() != B.batch_size() || A.batch_size() != C.batch_size()) {
-            throw std::invalid_argument(
-                "TRMM: batch size mismatch (A=" + std::to_string(A.batch_size()) +
-                ", B=" + std::to_string(B.batch_size()) +
-                ", C=" + std::to_string(C.batch_size()) + ")");
-        }
-
-        const int m = C.rows();
-        const int n = C.cols();
-        // A multiplies from whichever side the caller asked for, so it is m x m
-        // on the left and n x n on the right.
-        const int k = side == Side::Left ? m : n;
-        if (A.rows() != k || B.rows() != m || B.cols() != n) {
-            throw std::invalid_argument("TRMM: incompatible matrix dimensions");
-        }
+        const auto [m, n, k] = shape::validate_product<std::invalid_argument>("TRMM", A, B, C, side);
 
         // One expansion plus one strided-batched GEMM beats the per-batch
         // cublas?trmm loop everywhere it fits. Measured in float on sm_89 over
@@ -972,13 +698,7 @@ namespace batchlas {
                 A_i.data_ptr(), A_i.ld(), B_i.data_ptr(), B_i.ld(), C_i.data_ptr(), C_i.ld());
         };
 
-        if (A.batch_size() <= 1) {
-            launch_single(A, B, C);
-        } else {
-            for (int batch = 0; batch < A.batch_size(); ++batch) {
-                launch_single(A[batch], B[batch], C[batch]);
-            }
-        }
+        for_each_batch_item(launch_single, A, B, C);
 
         return ctx.create_event_after_external_work();
     }
@@ -1770,96 +1490,44 @@ namespace batchlas {
     // header edit rather than one edit per backend TU.
     #define B_ Backend::CUDA
 
-    #define GEMM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::gemm<fp>, gemm, B_, fp)
-    #define GEMV_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::gemv<fp>, gemv, B_, fp)
-    #define TRSM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::trsm<fp>, trsm, B_, fp)
-    #define TRMM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::trmm<fp>, trmm, B_, fp)
-    #define SYMM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::symm<fp>, symm, B_, fp)
-    #define HEMM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::hemm<fp>, hemm, B_, fp)
-    #define SYRK_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::syrk<fp>, syrk, B_, fp)
-    #define HERK_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::herk<fp>, herk, B_, fp)
-    #define HER2K_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::her2k<fp>, her2k, B_, fp)
-    #define SYR2K_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::syr2k<fp>, syr2k, B_, fp)
-    #define GEQRF_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::geqrf<fp>, geqrf, B_, fp)
-    #define GEQRF_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::geqrf_buffer_size<fp>, geqrf_buffer_size, B_, fp)
-    #define GETRS_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::getrs<fp>, getrs, B_, fp)
-    #define GETRS_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::getrs_buffer_size<fp>, getrs_buffer_size, B_, fp)
-    #define GETRF_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::getrf<fp>, getrf, B_, fp)
-    #define GETRF_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::getrf_buffer_size<fp>, getrf_buffer_size, B_, fp)
-    #define GETRI_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::getri<fp>, getri, B_, fp)
-    #define GETRI_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::getri_buffer_size<fp>, getri_buffer_size, B_, fp)
-    #define ORMQR_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::ormqr<fp>, ormqr, B_, fp)
-    #define ORMQR_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::ormqr_buffer_size<fp>, ormqr_buffer_size, B_, fp)
-    #define ORMQR_VENDOR_INSTANTIATE(fp)        BATCHLAS_INSTANTIATE(sig::ormqr_vendor<fp>, backend::ormqr_vendor, B_, fp)
-    #define ORMQR_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) BATCHLAS_INSTANTIATE(sig::ormqr_vendor_buffer_size<fp>, backend::ormqr_vendor_buffer_size, B_, fp)
-    #define ORGQR_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::orgqr<fp>, orgqr, B_, fp)
-    #define ORGQR_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::orgqr_buffer_size<fp>, orgqr_buffer_size, B_, fp)
+    #define CUBLAS_OPS(B, fp) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, gemm) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, gemv) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, trsm) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, trmm) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, geqrf) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, geqrf_buffer_size) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, getrs) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, getrs_buffer_size) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, getrf) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, getrf_buffer_size) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, getri) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, getri_buffer_size) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, ormqr) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, ormqr_buffer_size) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, ormqr_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, ormqr_vendor_buffer_size) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, orgqr) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, orgqr_buffer_size)
 
-    #define BLAS_LEVEL3_INSTANTIATE(fp)\
-        GEMM_INSTANTIATE(fp)\
-        GEMV_INSTANTIATE(fp)\
-        TRSM_INSTANTIATE(fp)\
-        GEQRF_INSTANTIATE(fp)\
-        GEQRF_BUFFER_SIZE_INSTANTIATE(fp)\
-        GETRS_INSTANTIATE(fp)\
-        GETRS_BUFFER_SIZE_INSTANTIATE(fp)\
-        GETRF_INSTANTIATE(fp)\
-        GETRF_BUFFER_SIZE_INSTANTIATE(fp)\
-        GETRI_INSTANTIATE(fp)\
-        GETRI_BUFFER_SIZE_INSTANTIATE(fp)\
-        ORMQR_INSTANTIATE(fp)\
-        ORMQR_BUFFER_SIZE_INSTANTIATE(fp)\
-        ORMQR_VENDOR_INSTANTIATE(fp)\
-        ORMQR_VENDOR_BUFFER_SIZE_INSTANTIATE(fp)\
-        ORGQR_INSTANTIATE(fp)\
-        ORGQR_BUFFER_SIZE_INSTANTIATE(fp)
+    // symm/syrk/syr2k are real-only and hemm/herk/her2k are complex-only, so the
+    // narrower domains get their own tables rather than one blanket loop.
+    #define CUBLAS_REAL_OPS(B, fp) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, symm) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, syrk) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, syr2k)
 
+    #define CUBLAS_COMPLEX_OPS(B, fp) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, hemm) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, herk) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, her2k)
 
-    BLAS_LEVEL3_INSTANTIATE(float)
-    BLAS_LEVEL3_INSTANTIATE(double)
-    BLAS_LEVEL3_INSTANTIATE(std::complex<float>)
-    BLAS_LEVEL3_INSTANTIATE(std::complex<double>)
-    TRMM_INSTANTIATE(float)
-    TRMM_INSTANTIATE(double)
-    TRMM_INSTANTIATE(std::complex<float>)
-    TRMM_INSTANTIATE(std::complex<double>)
-    SYMM_INSTANTIATE(float)
-    SYMM_INSTANTIATE(double)
-    HEMM_INSTANTIATE(std::complex<float>)
-    HEMM_INSTANTIATE(std::complex<double>)
-    HERK_INSTANTIATE(std::complex<float>)
-    HERK_INSTANTIATE(std::complex<double>)
-    HER2K_INSTANTIATE(std::complex<float>)
-    HER2K_INSTANTIATE(std::complex<double>)
-    SYRK_INSTANTIATE(float)
-    SYRK_INSTANTIATE(double)
-    SYR2K_INSTANTIATE(float)
-    SYR2K_INSTANTIATE(double)
+    BATCHLAS_FOR_EACH_SCALAR_TYPE_1(CUBLAS_OPS, B_)
+    BATCHLAS_FOR_EACH_REAL_TYPE_1(CUBLAS_REAL_OPS, B_)
+    BATCHLAS_FOR_EACH_COMPLEX_TYPE_1(CUBLAS_COMPLEX_OPS, B_)
 
-    #undef GEMM_INSTANTIATE
-    #undef GEMV_INSTANTIATE
-    #undef SYMM_INSTANTIATE
-    #undef HEMM_INSTANTIATE
-    #undef HERK_INSTANTIATE
-    #undef HER2K_INSTANTIATE
-    #undef SYRK_INSTANTIATE
-    #undef SYR2K_INSTANTIATE
-    #undef TRSM_INSTANTIATE
-    #undef TRMM_INSTANTIATE
-    #undef GEQRF_INSTANTIATE
-    #undef GEQRF_BUFFER_SIZE_INSTANTIATE
-    #undef GETRS_INSTANTIATE
-    #undef GETRS_BUFFER_SIZE_INSTANTIATE
-    #undef GETRF_INSTANTIATE
-    #undef GETRF_BUFFER_SIZE_INSTANTIATE
-    #undef GETRI_INSTANTIATE
-    #undef GETRI_BUFFER_SIZE_INSTANTIATE
-    #undef ORMQR_INSTANTIATE
-    #undef ORMQR_BUFFER_SIZE_INSTANTIATE
-    #undef ORMQR_VENDOR_INSTANTIATE
-    #undef ORMQR_VENDOR_BUFFER_SIZE_INSTANTIATE
-    #undef ORGQR_INSTANTIATE
-    #undef ORGQR_BUFFER_SIZE_INSTANTIATE
+    #undef CUBLAS_OPS
+    #undef CUBLAS_REAL_OPS
+    #undef CUBLAS_COMPLEX_OPS
     #undef B_
-    #undef BLAS_LEVEL3_INSTANTIATE
 }

@@ -239,20 +239,8 @@ size_t stebz_buffer_size(Queue& ctx, size_t n, size_t batch_size, StebzParams<T>
         StebzParams<BATCHLAS_UNPAREN fp>); \
     template size_t stebz_buffer_size<back, BATCHLAS_UNPAREN fp>(Queue&, size_t, size_t, StebzParams<BATCHLAS_UNPAREN fp>);
 
-#define STEBZ_INSTANTIATE_FOR_BACKEND(back) \
-    BATCHLAS_FOR_EACH_REAL_TYPE_1(STEBZ_INSTANTIATE, back)
+    BATCHLAS_INSTANTIATE_REAL_ALL_BACKENDS(STEBZ_INSTANTIATE)
 
-#if BATCHLAS_HAS_HOST_BACKEND
-    STEBZ_INSTANTIATE_FOR_BACKEND(Backend::NETLIB)
-#endif
-#if BATCHLAS_HAS_CUDA_BACKEND
-    STEBZ_INSTANTIATE_FOR_BACKEND(Backend::CUDA)
-#endif
-#if BATCHLAS_HAS_ROCM_BACKEND
-    STEBZ_INSTANTIATE_FOR_BACKEND(Backend::ROCM)
-#endif
-
-#undef STEBZ_INSTANTIATE_FOR_BACKEND
 #undef STEBZ_INSTANTIATE
 
 } // namespace batchlas

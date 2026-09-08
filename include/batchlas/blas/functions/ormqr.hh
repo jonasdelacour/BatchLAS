@@ -75,42 +75,6 @@ size_t ormqr_buffer_size(Queue& ctx,
                          Span<T> tau,
                          int32_t block_size_hint = 0);
 
-template <Backend B, typename T>
-inline Event ormqr(Queue& ctx,
-                   const Matrix<T, MatrixFormat::Dense>& A,
-                   const Matrix<T, MatrixFormat::Dense>& Cmat,
-                   Side side,
-                   Transpose trans,
-                   Span<T> tau,
-                   Span<std::byte> workspace,
-                   int32_t block_size_hint = 0) {
-    return ormqr<B, T>(ctx,
-                       MatrixView<T, MatrixFormat::Dense>(A),
-                       MatrixView<T, MatrixFormat::Dense>(Cmat),
-                       side,
-                       trans,
-                       tau,
-                       workspace,
-                       block_size_hint);
-}
-
-template <Backend B, typename T>
-inline size_t ormqr_buffer_size(Queue& ctx,
-                                const Matrix<T, MatrixFormat::Dense>& A,
-                                const Matrix<T, MatrixFormat::Dense>& Cmat,
-                                Side side,
-                                Transpose trans,
-                                Span<T> tau,
-                                int32_t block_size_hint = 0) {
-    return ormqr_buffer_size<B, T>(ctx,
-                                  MatrixView<T, MatrixFormat::Dense>(A),
-                                  MatrixView<T, MatrixFormat::Dense>(Cmat),
-                                  side,
-                                  trans,
-                                  tau,
-                                  block_size_hint);
-}
-
 } // namespace batchlas
 
 namespace batchlas::backend {
@@ -299,8 +263,13 @@ inline size_t ormqr_buffer_size(Queue& ctx,
 
 namespace batchlas {
 
-// Backend-deducing overloads: `f(ctx, ...)` uses ctx.backend().
-// See BATCHLAS_DISPATCH_ON_QUEUE in blas/queue-dispatch.hh.
+// Owning-argument and backend-deducing overloads: `f(ctx, Matrix, ...)` accepts
+// owning containers where the primary takes views, and `f(ctx, ...)` uses
+// ctx.backend(). See BATCHLAS_ACCEPT_OWNING and BATCHLAS_DISPATCH_ON_QUEUE in
+// blas/queue-dispatch.hh.
+
+BATCHLAS_ACCEPT_OWNING(ormqr)
+BATCHLAS_ACCEPT_OWNING(ormqr_buffer_size)
 
 BATCHLAS_DISPATCH_ON_QUEUE(ormqr)
 BATCHLAS_DISPATCH_ON_QUEUE(ormqr_buffer_size)

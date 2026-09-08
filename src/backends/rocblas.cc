@@ -4,8 +4,11 @@
 #include "../queue.hh"
 #include <sycl/sycl.hpp>
 #include <batchlas/blas/functions.hh>
+#include "../util/template-instantiations.hh"
 #include <complex>
 
+#include "batch_launch.hh"
+#include "level3_shape.hh"
 #include "gemm_variant.hh"
 #include "../sycl/gemm_kernels.hh"
 
@@ -28,35 +31,11 @@ namespace batchlas {
         }
 
         if (gemm_has_heterogeneous_batch(A, B, C)) {
-            Event last_event;
-            bool launched = false;
-            for (int batch_index = 0; batch_index < A.batch_size(); ++batch_index) {
-                const auto [m, k] = get_effective_dims(A, transA, batch_index);
-                const auto [k_b, n] = get_effective_dims(B, transB, batch_index);
-                static_cast<void>(k_b);
-                if (m == 0 || n == 0) {
-                    continue;
-                }
-                if (k == 0) {
-                    last_event = scale(ctx, beta, C.batch_item(batch_index));
-                    launched = true;
-                    continue;
-                }
-                last_event = gemm_vendor<Back, T>(ctx,
-                                                  A.batch_item(batch_index),
-                                                  B.batch_item(batch_index),
-                                                  C.batch_item(batch_index),
-                                                  alpha,
-                                                  beta,
-                                                  transA,
-                                                  transB,
-                                                  precision);
-                launched = true;
-            }
-            if (launched) {
-                return std::move(last_event);
-            }
-            return ctx.create_event_after_external_work();
+            return gemm_over_heterogeneous_batch(ctx, A, B, C, beta, transA, transB,
+                [&](const auto& A_i, const auto& B_i, const auto& C_i) {
+                    return gemm_vendor<Back, T>(ctx, A_i, B_i, C_i, alpha, beta, transA, transB, precision);
+                },
+                [&] { return ctx.create_event_after_external_work(); });
         }
 
         if (gemm_use_sycl_custom(ctx, A, B, C, transA, transB, precision)) {
@@ -174,59 +153,19 @@ namespace batchlas {
         static LinalgHandle<B> handle;
         handle.setStream(ctx);
 
-        if (C.rows() != C.cols()) {
-            throw std::invalid_argument("SYRK: C must be square");
-        }
-        if (A.batch_size() != C.batch_size()) {
-            throw std::invalid_argument("SYRK: batch size mismatch");
-        }
+        const auto [n, k] = backend::shape::validate_rank_k<std::invalid_argument>("SYRK", A, C, transA, /*hermitian=*/false);
 
-        const int n = C.rows();
-        const int k = transA == Transpose::NoTrans ? A.cols() : A.rows();
-        const int expected_n = transA == Transpose::NoTrans ? A.rows() : A.cols();
-        if (expected_n != n || k <= 0) {
-            throw std::invalid_argument("SYRK: incompatible matrix dimensions");
-        }
-
-        const auto roc_uplo = enum_convert<BackendLibrary::ROCBLAS>(uplo);
-        const auto roc_trans = enum_convert<BackendLibrary::ROCBLAS>(transA);
-
+        // The two complex slots have no callee because this overload is
+        // constrained to a real T; the complex rank-k update is herk.
         auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
                                  const MatrixView<T, MatrixFormat::Dense>& C_i) {
-            if constexpr (std::is_same_v<T, float>) {
-                rocblas_ssyrk(handle,
-                              roc_uplo,
-                              roc_trans,
-                              n,
-                              k,
-                              &alpha,
-                              A_i.data_ptr(),
-                              A_i.ld(),
-                              &beta,
-                              C_i.data_ptr(),
-                              C_i.ld());
-            } else if constexpr (std::is_same_v<T, double>) {
-                rocblas_dsyrk(handle,
-                              roc_uplo,
-                              roc_trans,
-                              n,
-                              k,
-                              &alpha,
-                              A_i.data_ptr(),
-                              A_i.ld(),
-                              &beta,
-                              C_i.data_ptr(),
-                              C_i.ld());
-            }
+            call_backend<T, BackendLibrary::ROCBLAS, B>(rocblas_ssyrk, rocblas_dsyrk, nullptr, nullptr,
+                handle, uplo, transA, n, k, &alpha,
+                A_i.data_ptr(), A_i.ld(), &beta,
+                C_i.data_ptr(), C_i.ld());
         };
 
-        if (A.batch_size() <= 1) {
-            launch_single(A, C);
-        } else {
-            for (int batch = 0; batch < A.batch_size(); ++batch) {
-                launch_single(A[batch], C[batch]);
-            }
-        }
+        backend::for_each_batch_item(launch_single, A, C);
         return ctx.create_event_after_external_work();
     }
 
@@ -242,66 +181,20 @@ namespace batchlas {
         static LinalgHandle<B> handle;
         handle.setStream(ctx);
 
-        if (C.rows() != C.cols()) {
-            throw std::invalid_argument("SYR2K: C must be square");
-        }
-        if (A.batch_size() != Bmat.batch_size() || A.batch_size() != C.batch_size()) {
-            throw std::invalid_argument("SYR2K: batch size mismatch");
-        }
+        const auto [n, k] = backend::shape::validate_rank_2k<std::invalid_argument>("SYR2K", A, Bmat, C, transA, /*hermitian=*/false);
 
-        const int n = C.rows();
-        const int expected_n = transA == Transpose::NoTrans ? A.rows() : A.cols();
-        const int expected_b_n = transA == Transpose::NoTrans ? Bmat.rows() : Bmat.cols();
-        const int k = transA == Transpose::NoTrans ? A.cols() : A.rows();
-        const int b_k = transA == Transpose::NoTrans ? Bmat.cols() : Bmat.rows();
-        if (expected_n != n || expected_b_n != n || b_k != k || k <= 0) {
-            throw std::invalid_argument("SYR2K: incompatible matrix dimensions");
-        }
-
-        const auto roc_uplo = enum_convert<BackendLibrary::ROCBLAS>(uplo);
-        const auto roc_trans = enum_convert<BackendLibrary::ROCBLAS>(transA);
-
+        // The two complex slots have no callee because this overload is
+        // constrained to a real T; the complex rank-2k update is her2k.
         auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
                                  const MatrixView<T, MatrixFormat::Dense>& B_i,
                                  const MatrixView<T, MatrixFormat::Dense>& C_i) {
-            if constexpr (std::is_same_v<T, float>) {
-                rocblas_ssyr2k(handle,
-                               roc_uplo,
-                               roc_trans,
-                               n,
-                               k,
-                               &alpha,
-                               A_i.data_ptr(),
-                               A_i.ld(),
-                               B_i.data_ptr(),
-                               B_i.ld(),
-                               &beta,
-                               C_i.data_ptr(),
-                               C_i.ld());
-            } else if constexpr (std::is_same_v<T, double>) {
-                rocblas_dsyr2k(handle,
-                               roc_uplo,
-                               roc_trans,
-                               n,
-                               k,
-                               &alpha,
-                               A_i.data_ptr(),
-                               A_i.ld(),
-                               B_i.data_ptr(),
-                               B_i.ld(),
-                               &beta,
-                               C_i.data_ptr(),
-                               C_i.ld());
-            }
+            call_backend<T, BackendLibrary::ROCBLAS, B>(rocblas_ssyr2k, rocblas_dsyr2k, nullptr, nullptr,
+                handle, uplo, transA, n, k, &alpha,
+                A_i.data_ptr(), A_i.ld(), B_i.data_ptr(), B_i.ld(), &beta,
+                C_i.data_ptr(), C_i.ld());
         };
 
-        if (A.batch_size() <= 1) {
-            launch_single(A, Bmat, C);
-        } else {
-            for (int batch = 0; batch < A.batch_size(); ++batch) {
-                launch_single(A[batch], Bmat[batch], C[batch]);
-            }
-        }
+        backend::for_each_batch_item(launch_single, A, Bmat, C);
         return ctx.create_event_after_external_work();
     }
 
@@ -318,140 +211,49 @@ namespace batchlas {
         static LinalgHandle<B> handle;
         handle.setStream(ctx);
 
-        if (A.rows() != A.cols()) {
-            throw std::invalid_argument("TRMM: A must be square");
-        }
-        if (A.batch_size() != Bmat.batch_size() || A.batch_size() != C.batch_size()) {
-            throw std::invalid_argument("TRMM: batch size mismatch");
-        }
+        const auto [m, n, k] = backend::shape::validate_product<std::invalid_argument>("TRMM", A, Bmat, C, side);
+        static_cast<void>(k);  // rocblas_?trmm takes A's order from side, not as an argument
 
-        const int m = C.rows();
-        const int n = C.cols();
-        const int expected_dim = side == Side::Left ? m : n;
-        if (A.rows() != expected_dim || Bmat.rows() != m || Bmat.cols() != n) {
-            throw std::invalid_argument("TRMM: incompatible matrix dimensions");
-        }
-
-        const auto roc_side = enum_convert<BackendLibrary::ROCBLAS>(side);
-        const auto roc_uplo = enum_convert<BackendLibrary::ROCBLAS>(uplo);
-        const auto roc_trans = enum_convert<BackendLibrary::ROCBLAS>(transA);
-        const auto roc_diag = enum_convert<BackendLibrary::ROCBLAS>(diag);
-
+        // ROCm 6.3 changed rocblas_[sdcz]trmm to the 14-arg out-of-place form:
+        //   ..., A, lda, B, ldb, C, ldc   (B=input, C=output)
+        // The old 16-arg variant (with a duplicate output pair) was removed.
+        //
+        // The rocblas_float_complex / rocblas_double_complex casts the two
+        // complex arms used to spell out by hand are what ptr_convert already
+        // emits for BackendLibrary::ROCBLAS (linalg-impl.hh), so all four arms
+        // are the same call.
         auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
                                  const MatrixView<T, MatrixFormat::Dense>& B_i,
                                  const MatrixView<T, MatrixFormat::Dense>& C_i) {
-            // ROCm 6.3 changed rocblas_[sdcz]trmm to the 14-arg out-of-place form:
-            //   ..., A, lda, B, ldb, C, ldc   (B=input, C=output)
-            // The old 16-arg variant (with a duplicate output pair) was removed.
-            if constexpr (std::is_same_v<T, float>) {
-                rocblas_strmm(handle,
-                              roc_side,
-                              roc_uplo,
-                              roc_trans,
-                              roc_diag,
-                              m,
-                              n,
-                              &alpha,
-                              A_i.data_ptr(),
-                              A_i.ld(),
-                              B_i.data_ptr(),
-                              B_i.ld(),
-                              C_i.data_ptr(),
-                              C_i.ld());
-            } else if constexpr (std::is_same_v<T, double>) {
-                rocblas_dtrmm(handle,
-                              roc_side,
-                              roc_uplo,
-                              roc_trans,
-                              roc_diag,
-                              m,
-                              n,
-                              &alpha,
-                              A_i.data_ptr(),
-                              A_i.ld(),
-                              B_i.data_ptr(),
-                              B_i.ld(),
-                              C_i.data_ptr(),
-                              C_i.ld());
-            } else if constexpr (std::is_same_v<T, std::complex<float>>) {
-                rocblas_ctrmm(handle,
-                              roc_side,
-                              roc_uplo,
-                              roc_trans,
-                              roc_diag,
-                              m,
-                              n,
-                              reinterpret_cast<const rocblas_float_complex*>(&alpha),
-                              reinterpret_cast<const rocblas_float_complex*>(A_i.data_ptr()),
-                              A_i.ld(),
-                              reinterpret_cast<const rocblas_float_complex*>(B_i.data_ptr()),
-                              B_i.ld(),
-                              reinterpret_cast<rocblas_float_complex*>(C_i.data_ptr()),
-                              C_i.ld());
-            } else if constexpr (std::is_same_v<T, std::complex<double>>) {
-                rocblas_ztrmm(handle,
-                              roc_side,
-                              roc_uplo,
-                              roc_trans,
-                              roc_diag,
-                              m,
-                              n,
-                              reinterpret_cast<const rocblas_double_complex*>(&alpha),
-                              reinterpret_cast<const rocblas_double_complex*>(A_i.data_ptr()),
-                              A_i.ld(),
-                              reinterpret_cast<const rocblas_double_complex*>(B_i.data_ptr()),
-                              B_i.ld(),
-                              reinterpret_cast<rocblas_double_complex*>(C_i.data_ptr()),
-                              C_i.ld());
-            }
+            call_backend<T, BackendLibrary::ROCBLAS, B>(rocblas_strmm, rocblas_dtrmm, rocblas_ctrmm, rocblas_ztrmm,
+                handle, side, uplo, transA, diag, m, n, &alpha,
+                A_i.data_ptr(), A_i.ld(), B_i.data_ptr(), B_i.ld(),
+                C_i.data_ptr(), C_i.ld());
         };
 
-        if (A.batch_size() <= 1) {
-            launch_single(A, Bmat, C);
-        } else {
-            for (int batch = 0; batch < A.batch_size(); ++batch) {
-                launch_single(A[batch], Bmat[batch], C[batch]);
-            }
-        }
+        backend::for_each_batch_item(launch_single, A, Bmat, C);
         return ctx.create_event_after_external_work();
     }
 
     // Add further solver routines analogous to cuBLAS implementations using rocSOLVER
 
-    #define GEMM_INSTANTIATE(fp) \
-    template Event gemm<Backend::ROCM, fp>(Queue&, const MatrixView<fp,MatrixFormat::Dense>&, const MatrixView<fp,MatrixFormat::Dense>&, const MatrixView<fp,MatrixFormat::Dense>&, fp, fp, Transpose, Transpose, ComputePrecision);
-    #define GEMV_INSTANTIATE(fp) \
-    template Event gemv<Backend::ROCM, fp>(Queue&, const MatrixView<fp,MatrixFormat::Dense>&, const VectorView<fp>&, const VectorView<fp>&, fp, fp, Transpose);
-    #define TRSM_INSTANTIATE(fp) \
-    template Event trsm<Backend::ROCM, fp>(Queue&, const MatrixView<fp,MatrixFormat::Dense>&, const MatrixView<fp,MatrixFormat::Dense>&, fp, Side, Uplo, Transpose, Diag);
-    #define TRMM_INSTANTIATE(fp) \
-    template Event trmm<Backend::ROCM, fp>(Queue&, const MatrixView<fp,MatrixFormat::Dense>&, const MatrixView<fp,MatrixFormat::Dense>&, const MatrixView<fp,MatrixFormat::Dense>&, fp, Side, Uplo, Transpose, Diag);
-    #define SYRK_INSTANTIATE(fp) \
-    template Event syrk<Backend::ROCM, fp>(Queue&, const MatrixView<fp,MatrixFormat::Dense>&, const MatrixView<fp,MatrixFormat::Dense>&, fp, fp, Uplo, Transpose);
-    #define SYR2K_INSTANTIATE(fp) \
-    template Event syr2k<Backend::ROCM, fp>(Queue&, const MatrixView<fp,MatrixFormat::Dense>&, const MatrixView<fp,MatrixFormat::Dense>&, const MatrixView<fp,MatrixFormat::Dense>&, fp, fp, Uplo, Transpose);
+    // Explicit instantiations. Signatures live in the `sig` namespace beside each
+    // public declaration (include/batchlas/blas/functions/*.hh), so changing one is a single
+    // header edit rather than one edit per backend TU.
+    #define ROCBLAS_OPS(B, fp) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, gemm) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, gemv) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, trsm) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, trmm)
 
-    // syrk is constrained to RealScalar T — only instantiate for real types.
-    #define BLAS_INSTANTIATE(fp) \
-        GEMM_INSTANTIATE(fp) \
-        GEMV_INSTANTIATE(fp) \
-        TRSM_INSTANTIATE(fp) \
-        TRMM_INSTANTIATE(fp)
+    // syrk/syr2k are constrained to RealScalar T -- only instantiate for real types.
+    #define ROCBLAS_REAL_OPS(B, fp) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, syrk) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, syr2k)
 
-    BLAS_INSTANTIATE(float)
-    BLAS_INSTANTIATE(double)
-    BLAS_INSTANTIATE(std::complex<float>)
-    BLAS_INSTANTIATE(std::complex<double>)
-    SYRK_INSTANTIATE(float)
-    SYRK_INSTANTIATE(double)
-    SYR2K_INSTANTIATE(float)
-    SYR2K_INSTANTIATE(double)
+    BATCHLAS_FOR_EACH_SCALAR_TYPE_1(ROCBLAS_OPS, Backend::ROCM)
+    BATCHLAS_FOR_EACH_REAL_TYPE_1(ROCBLAS_REAL_OPS, Backend::ROCM)
 
-    #undef GEMM_INSTANTIATE
-    #undef GEMV_INSTANTIATE
-    #undef TRSM_INSTANTIATE
-    #undef TRMM_INSTANTIATE
-    #undef SYRK_INSTANTIATE
-    #undef SYR2K_INSTANTIATE
-    #undef BLAS_INSTANTIATE
+    #undef ROCBLAS_OPS
+    #undef ROCBLAS_REAL_OPS
 }

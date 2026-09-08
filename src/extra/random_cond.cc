@@ -2,6 +2,8 @@
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/util/sycl-vector.hh>
+
+#include "../util/template-instantiations.hh"
 #include <cmath>
 #include <complex>
 #include <random>
@@ -516,106 +518,34 @@ Matrix<T, MatrixFormat::Dense> random_hermitian_tridiagonal_with_log10_cond_metr
 }
 
 #define RANDOM_LOGCOND_METRIC_INSTANTIATE(back, fp) \
-    template Matrix<fp, MatrixFormat::Dense> random_with_log10_cond_metric<back, fp>( \
-        Queue&, int, float_t<fp>, NormType, int, unsigned int, OrthoAlgorithm);
+    template Matrix<BATCHLAS_UNPAREN fp, MatrixFormat::Dense> random_with_log10_cond_metric<back, BATCHLAS_UNPAREN fp>( \
+        Queue&, int, float_t<BATCHLAS_UNPAREN fp>, NormType, int, unsigned int, OrthoAlgorithm);
 
 #define RANDOM_HERMITIAN_LOGCOND_METRIC_INSTANTIATE(back, fp) \
-    template Matrix<fp, MatrixFormat::Dense> random_hermitian_with_log10_cond_metric<back, fp>( \
-        Queue&, int, float_t<fp>, NormType, int, unsigned int, OrthoAlgorithm);
+    template Matrix<BATCHLAS_UNPAREN fp, MatrixFormat::Dense> random_hermitian_with_log10_cond_metric<back, BATCHLAS_UNPAREN fp>( \
+        Queue&, int, float_t<BATCHLAS_UNPAREN fp>, NormType, int, unsigned int, OrthoAlgorithm);
 
 #define RANDOM_BANDED_LOGCOND_METRIC_INSTANTIATE(back, fp) \
-    template Matrix<fp, MatrixFormat::Dense> random_banded_with_log10_cond_metric<back, fp>( \
-        Queue&, int, int, float_t<fp>, NormType, int, unsigned int);
+    template Matrix<BATCHLAS_UNPAREN fp, MatrixFormat::Dense> random_banded_with_log10_cond_metric<back, BATCHLAS_UNPAREN fp>( \
+        Queue&, int, int, float_t<BATCHLAS_UNPAREN fp>, NormType, int, unsigned int);
 
 #define RANDOM_HERMITIAN_BANDED_LOGCOND_METRIC_INSTANTIATE(back, fp) \
-    template Matrix<fp, MatrixFormat::Dense> random_hermitian_banded_with_log10_cond_metric<back, fp>( \
-        Queue&, int, int, float_t<fp>, NormType, int, unsigned int);
+    template Matrix<BATCHLAS_UNPAREN fp, MatrixFormat::Dense> random_hermitian_banded_with_log10_cond_metric<back, BATCHLAS_UNPAREN fp>( \
+        Queue&, int, int, float_t<BATCHLAS_UNPAREN fp>, NormType, int, unsigned int);
 
 #define RANDOM_TRIDIAG_LOGCOND_METRIC_INSTANTIATE(back, fp) \
-    template Matrix<fp, MatrixFormat::Dense> random_tridiagonal_with_log10_cond_metric<back, fp>( \
-        Queue&, int, float_t<fp>, NormType, int, unsigned int);
+    template Matrix<BATCHLAS_UNPAREN fp, MatrixFormat::Dense> random_tridiagonal_with_log10_cond_metric<back, BATCHLAS_UNPAREN fp>( \
+        Queue&, int, float_t<BATCHLAS_UNPAREN fp>, NormType, int, unsigned int);
 
 #define RANDOM_HERMITIAN_TRIDIAG_LOGCOND_METRIC_INSTANTIATE(back, fp) \
-    template Matrix<fp, MatrixFormat::Dense> random_hermitian_tridiagonal_with_log10_cond_metric<back, fp>( \
-        Queue&, int, float_t<fp>, NormType, int, unsigned int);
+    template Matrix<BATCHLAS_UNPAREN fp, MatrixFormat::Dense> random_hermitian_tridiagonal_with_log10_cond_metric<back, BATCHLAS_UNPAREN fp>( \
+        Queue&, int, float_t<BATCHLAS_UNPAREN fp>, NormType, int, unsigned int);
 
-#if BATCHLAS_HAS_CUDA_BACKEND
-    RANDOM_LOGCOND_METRIC_INSTANTIATE(Backend::CUDA, float)
-    RANDOM_LOGCOND_METRIC_INSTANTIATE(Backend::CUDA, double)
-    RANDOM_LOGCOND_METRIC_INSTANTIATE(Backend::CUDA, std::complex<float>)
-    RANDOM_LOGCOND_METRIC_INSTANTIATE(Backend::CUDA, std::complex<double>)
-    RANDOM_HERMITIAN_LOGCOND_METRIC_INSTANTIATE(Backend::CUDA, float)
-    RANDOM_HERMITIAN_LOGCOND_METRIC_INSTANTIATE(Backend::CUDA, double)
-    RANDOM_HERMITIAN_LOGCOND_METRIC_INSTANTIATE(Backend::CUDA, std::complex<float>)
-    RANDOM_HERMITIAN_LOGCOND_METRIC_INSTANTIATE(Backend::CUDA, std::complex<double>)
-    RANDOM_BANDED_LOGCOND_METRIC_INSTANTIATE(Backend::CUDA, float)
-    RANDOM_BANDED_LOGCOND_METRIC_INSTANTIATE(Backend::CUDA, double)
-    RANDOM_BANDED_LOGCOND_METRIC_INSTANTIATE(Backend::CUDA, std::complex<float>)
-    RANDOM_BANDED_LOGCOND_METRIC_INSTANTIATE(Backend::CUDA, std::complex<double>)
-    RANDOM_HERMITIAN_BANDED_LOGCOND_METRIC_INSTANTIATE(Backend::CUDA, float)
-    RANDOM_HERMITIAN_BANDED_LOGCOND_METRIC_INSTANTIATE(Backend::CUDA, double)
-    RANDOM_HERMITIAN_BANDED_LOGCOND_METRIC_INSTANTIATE(Backend::CUDA, std::complex<float>)
-    RANDOM_HERMITIAN_BANDED_LOGCOND_METRIC_INSTANTIATE(Backend::CUDA, std::complex<double>)
-    RANDOM_TRIDIAG_LOGCOND_METRIC_INSTANTIATE(Backend::CUDA, float)
-    RANDOM_TRIDIAG_LOGCOND_METRIC_INSTANTIATE(Backend::CUDA, double)
-    RANDOM_TRIDIAG_LOGCOND_METRIC_INSTANTIATE(Backend::CUDA, std::complex<float>)
-    RANDOM_TRIDIAG_LOGCOND_METRIC_INSTANTIATE(Backend::CUDA, std::complex<double>)
-    RANDOM_HERMITIAN_TRIDIAG_LOGCOND_METRIC_INSTANTIATE(Backend::CUDA, float)
-    RANDOM_HERMITIAN_TRIDIAG_LOGCOND_METRIC_INSTANTIATE(Backend::CUDA, double)
-    RANDOM_HERMITIAN_TRIDIAG_LOGCOND_METRIC_INSTANTIATE(Backend::CUDA, std::complex<float>)
-    RANDOM_HERMITIAN_TRIDIAG_LOGCOND_METRIC_INSTANTIATE(Backend::CUDA, std::complex<double>)
-#endif
-#if BATCHLAS_HAS_ROCM_BACKEND
-    RANDOM_LOGCOND_METRIC_INSTANTIATE(Backend::ROCM, float)
-    RANDOM_LOGCOND_METRIC_INSTANTIATE(Backend::ROCM, double)
-    RANDOM_LOGCOND_METRIC_INSTANTIATE(Backend::ROCM, std::complex<float>)
-    RANDOM_LOGCOND_METRIC_INSTANTIATE(Backend::ROCM, std::complex<double>)
-    RANDOM_HERMITIAN_LOGCOND_METRIC_INSTANTIATE(Backend::ROCM, float)
-    RANDOM_HERMITIAN_LOGCOND_METRIC_INSTANTIATE(Backend::ROCM, double)
-    RANDOM_HERMITIAN_LOGCOND_METRIC_INSTANTIATE(Backend::ROCM, std::complex<float>)
-    RANDOM_HERMITIAN_LOGCOND_METRIC_INSTANTIATE(Backend::ROCM, std::complex<double>)
-    RANDOM_BANDED_LOGCOND_METRIC_INSTANTIATE(Backend::ROCM, float)
-    RANDOM_BANDED_LOGCOND_METRIC_INSTANTIATE(Backend::ROCM, double)
-    RANDOM_BANDED_LOGCOND_METRIC_INSTANTIATE(Backend::ROCM, std::complex<float>)
-    RANDOM_BANDED_LOGCOND_METRIC_INSTANTIATE(Backend::ROCM, std::complex<double>)
-    RANDOM_HERMITIAN_BANDED_LOGCOND_METRIC_INSTANTIATE(Backend::ROCM, float)
-    RANDOM_HERMITIAN_BANDED_LOGCOND_METRIC_INSTANTIATE(Backend::ROCM, double)
-    RANDOM_HERMITIAN_BANDED_LOGCOND_METRIC_INSTANTIATE(Backend::ROCM, std::complex<float>)
-    RANDOM_HERMITIAN_BANDED_LOGCOND_METRIC_INSTANTIATE(Backend::ROCM, std::complex<double>)
-    RANDOM_TRIDIAG_LOGCOND_METRIC_INSTANTIATE(Backend::ROCM, float)
-    RANDOM_TRIDIAG_LOGCOND_METRIC_INSTANTIATE(Backend::ROCM, double)
-    RANDOM_TRIDIAG_LOGCOND_METRIC_INSTANTIATE(Backend::ROCM, std::complex<float>)
-    RANDOM_TRIDIAG_LOGCOND_METRIC_INSTANTIATE(Backend::ROCM, std::complex<double>)
-    RANDOM_HERMITIAN_TRIDIAG_LOGCOND_METRIC_INSTANTIATE(Backend::ROCM, float)
-    RANDOM_HERMITIAN_TRIDIAG_LOGCOND_METRIC_INSTANTIATE(Backend::ROCM, double)
-    RANDOM_HERMITIAN_TRIDIAG_LOGCOND_METRIC_INSTANTIATE(Backend::ROCM, std::complex<float>)
-    RANDOM_HERMITIAN_TRIDIAG_LOGCOND_METRIC_INSTANTIATE(Backend::ROCM, std::complex<double>)
-#endif
-#if BATCHLAS_HAS_HOST_BACKEND
-    RANDOM_LOGCOND_METRIC_INSTANTIATE(Backend::NETLIB, float)
-    RANDOM_LOGCOND_METRIC_INSTANTIATE(Backend::NETLIB, double)
-    RANDOM_LOGCOND_METRIC_INSTANTIATE(Backend::NETLIB, std::complex<float>)
-    RANDOM_LOGCOND_METRIC_INSTANTIATE(Backend::NETLIB, std::complex<double>)
-    RANDOM_HERMITIAN_LOGCOND_METRIC_INSTANTIATE(Backend::NETLIB, float)
-    RANDOM_HERMITIAN_LOGCOND_METRIC_INSTANTIATE(Backend::NETLIB, double)
-    RANDOM_HERMITIAN_LOGCOND_METRIC_INSTANTIATE(Backend::NETLIB, std::complex<float>)
-    RANDOM_HERMITIAN_LOGCOND_METRIC_INSTANTIATE(Backend::NETLIB, std::complex<double>)
-    RANDOM_BANDED_LOGCOND_METRIC_INSTANTIATE(Backend::NETLIB, float)
-    RANDOM_BANDED_LOGCOND_METRIC_INSTANTIATE(Backend::NETLIB, double)
-    RANDOM_BANDED_LOGCOND_METRIC_INSTANTIATE(Backend::NETLIB, std::complex<float>)
-    RANDOM_BANDED_LOGCOND_METRIC_INSTANTIATE(Backend::NETLIB, std::complex<double>)
-    RANDOM_HERMITIAN_BANDED_LOGCOND_METRIC_INSTANTIATE(Backend::NETLIB, float)
-    RANDOM_HERMITIAN_BANDED_LOGCOND_METRIC_INSTANTIATE(Backend::NETLIB, double)
-    RANDOM_HERMITIAN_BANDED_LOGCOND_METRIC_INSTANTIATE(Backend::NETLIB, std::complex<float>)
-    RANDOM_HERMITIAN_BANDED_LOGCOND_METRIC_INSTANTIATE(Backend::NETLIB, std::complex<double>)
-    RANDOM_TRIDIAG_LOGCOND_METRIC_INSTANTIATE(Backend::NETLIB, float)
-    RANDOM_TRIDIAG_LOGCOND_METRIC_INSTANTIATE(Backend::NETLIB, double)
-    RANDOM_TRIDIAG_LOGCOND_METRIC_INSTANTIATE(Backend::NETLIB, std::complex<float>)
-    RANDOM_TRIDIAG_LOGCOND_METRIC_INSTANTIATE(Backend::NETLIB, std::complex<double>)
-    RANDOM_HERMITIAN_TRIDIAG_LOGCOND_METRIC_INSTANTIATE(Backend::NETLIB, float)
-    RANDOM_HERMITIAN_TRIDIAG_LOGCOND_METRIC_INSTANTIATE(Backend::NETLIB, double)
-    RANDOM_HERMITIAN_TRIDIAG_LOGCOND_METRIC_INSTANTIATE(Backend::NETLIB, std::complex<float>)
-    RANDOM_HERMITIAN_TRIDIAG_LOGCOND_METRIC_INSTANTIATE(Backend::NETLIB, std::complex<double>)
-#endif
+BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(RANDOM_LOGCOND_METRIC_INSTANTIATE)
+BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(RANDOM_HERMITIAN_LOGCOND_METRIC_INSTANTIATE)
+BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(RANDOM_BANDED_LOGCOND_METRIC_INSTANTIATE)
+BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(RANDOM_HERMITIAN_BANDED_LOGCOND_METRIC_INSTANTIATE)
+BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(RANDOM_TRIDIAG_LOGCOND_METRIC_INSTANTIATE)
+BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(RANDOM_HERMITIAN_TRIDIAG_LOGCOND_METRIC_INSTANTIATE)
 
 } // namespace batchlas

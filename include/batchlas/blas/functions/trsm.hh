@@ -94,18 +94,6 @@ Event trsm(Queue& ctx,
            Transpose transA,
            Diag diag);
 
-template <Backend Back, typename T>
-inline Event trsm(Queue& ctx,
-                   const Matrix<T, MatrixFormat::Dense>& A,
-                   const Matrix<T, MatrixFormat::Dense>& Bmat,
-                   T alpha,
-                   Side side,
-                   Uplo uplo,
-                   Transpose transA,
-                   Diag diag) {
-        return trsm<Back,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), MatrixView<T, MatrixFormat::Dense>(Bmat), alpha, side, uplo, transA, diag);
-}
-
 // Tombstones for the pre-reorder argument order. Side/Uplo/Transpose/Diag are
 // all enum class, so nothing implicitly converts to or from T and a stale call
 // could never have silently compiled into a wrong answer -- but without these
@@ -128,8 +116,12 @@ Event trsm(Queue&,
 
 namespace batchlas {
 
-// Backend-deducing overloads: `f(ctx, ...)` uses ctx.backend().
-// See BATCHLAS_DISPATCH_ON_QUEUE in blas/queue-dispatch.hh.
+// Owning-argument and backend-deducing overloads: `f(ctx, Matrix, ...)` accepts
+// owning containers where the primary takes views, and `f(ctx, ...)` uses
+// ctx.backend(). See BATCHLAS_ACCEPT_OWNING and BATCHLAS_DISPATCH_ON_QUEUE in
+// blas/queue-dispatch.hh.
+
+BATCHLAS_ACCEPT_OWNING(trsm)
 
 BATCHLAS_DISPATCH_ON_QUEUE(trsm)
 

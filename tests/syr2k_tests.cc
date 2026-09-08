@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <batchlas/blas/linalg.hh>
+#include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 
 #include <cstdlib>
@@ -26,37 +27,6 @@ using Syr2kTestTypes = typename test_utils::backend_types_filtered<Syr2kConfig, 
 
 template <typename Config>
 class Syr2kTest : public test_utils::BatchLASTest<Config> {};
-
-class ScopedEnvVar {
-public:
-    // A null value unsets the variable for the duration, which is how a test
-    // asks for the automatic route regardless of what the environment already
-    // said.
-    ScopedEnvVar(const char* name, const char* value) : name_(name) {
-        if (const char* old = std::getenv(name_)) {
-            old_value_ = old;
-            had_old_value_ = true;
-        }
-        if (value) {
-            setenv(name_, value, 1);
-        } else {
-            unsetenv(name_);
-        }
-    }
-
-    ~ScopedEnvVar() {
-        if (had_old_value_) {
-            setenv(name_, old_value_.c_str(), 1);
-        } else {
-            unsetenv(name_);
-        }
-    }
-
-private:
-    const char* name_;
-    std::string old_value_;
-    bool had_old_value_ = false;
-};
 
 TYPED_TEST_SUITE(Syr2kTest, Syr2kTestTypes);
 

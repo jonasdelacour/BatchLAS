@@ -7,6 +7,7 @@
 
 #include <batchlas/backend_config.h>
 #include <batchlas/blas/enums.hh>
+#include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 
 namespace batchlas {
@@ -169,6 +170,60 @@ inline constexpr Backend kProbeBackend =
 #else
     Backend::NETLIB;
 #endif
+
+// ---- owning arguments, accepted once ---------------------------------------
+//
+// `Matrix` converts implicitly to `MatrixView` and `Vector` to `VectorView`
+// (blas/matrix.hh), which is enough wherever the parameter type is already
+// concrete. It is NOT enough when the scalar has to be deduced from it:
+// template argument deduction does not consider user-defined conversions, so
+// `gemm<Backend::CUDA>(ctx, A, B, C, ...)` with owning matrices deduces nothing
+// from A, the primary drops out, and the caller gets "no matching function".
+//
+// Every entry point used to carry a hand-written twin whose entire body was one
+// cast per matrix argument -- one per *overload* rather than one per name, so a
+// name with four positional spellings paid for four of them, and each one
+// restated every defaulted argument the primary already had.
+//
+// `view_of` names the view a parameter should become. Anything that is not an
+// owning container passes through as itself, which is what lets the forwarder
+// below be variadic and still touch only the arguments that need converting --
+// and is also what makes a mixed call like
+// `stein(ctx, Vector d, VectorView e, ...)` work, which no hand-written twin
+// covered.
+template <class A>
+struct view_of {
+    using type = const A&;
+};
+template <class T, MatrixFormat F>
+struct view_of<Matrix<T, F>> {
+    using type = MatrixView<T, F>;
+};
+template <class T>
+struct view_of<Vector<T>> {
+    using type = VectorView<T>;
+};
+template <class A>
+using view_t = typename view_of<std::remove_cvref_t<A>>::type;
+
+// True for exactly the argument types view_of rewrites.
+template <class A>
+inline constexpr bool is_owning_arg_v =
+    !std::is_same_v<view_t<A>, const std::remove_cvref_t<A>&>;
+
+// The gate on the forwarder. Without it the forwarder would be an unconstrained
+// variadic that claims every call and only then fails inside its own body --
+// the mistake BATCHLAS_DISPATCH_ON_QUEUE's requires-clause already exists to
+// avoid. With it, a call whose arguments are all views never considers the
+// forwarder at all and binds to the primary exactly as before.
+template <class... A>
+concept AnyOwning = (is_owning_arg_v<A> || ...);
+
+template <class A>
+inline view_t<A> as_view(const A& a) {
+    return static_cast<view_t<A>>(a);
+}
+
 }  // namespace detail
 
 }  // namespace batchlas
@@ -209,4 +264,75 @@ inline constexpr Backend kProbeBackend =
         return ::batchlas::with_backend(ctx, [&](auto Back) {                   \
             return NAME<Back.value>(ctx, std::forward<Args>(args)...);          \
         });                                                                     \
+    }
+
+// Accept owning `Matrix` / `Vector` arguments on an entry point whose primary
+// takes `MatrixView` / `VectorView`, for every overload of that name at once.
+//
+// One line beside BATCHLAS_DISPATCH_ON_QUEUE replaces the family of
+// hand-written twins described at detail::view_of above. The pack is converted
+// argument by argument and the INNER call does the deducing, so this forwarder
+// carries no copy of any signature: a new overload, a new defaulted argument or
+// a reordered parameter needs no change here, which is the whole point.
+//
+// It is a last resort in overload resolution, by construction. detail::AnyOwning
+// keeps it out of every all-view call, and the requires-clause keeps it out of
+// argument lists the view spelling would not accept -- so it applies only where
+// the alternative today is a compile error. Where a more specific overload is
+// also viable (the option-struct spellings in blas/options.hh, or an
+// arity-changing forwarder such as getrf's four-argument form), partial ordering
+// prefers that one, because a fixed parameter list is more specialised than a
+// trailing pack.
+//
+// The pack is `const Args&...`, NEVER `Args&&...`. A forwarding-reference pack
+// binds a prvalue BETTER than `const MatrixView&` does, so it would beat the
+// checked convenience overloads in blas/options.hh for a call like
+// `getrf(ctx, A.view(), pivots)` -- which is exactly how an 8x4 matrix once
+// sailed through a squareness check (see the note above detail::require_square
+// in blas/options.hh). With `const Args&...` the two rank equally on conversion
+// and partial ordering picks the more specialised overload, the one carrying the
+// checks. Nothing is moved through here, so nothing is lost by not forwarding:
+// every parameter downstream is a view, a span, an enum or a small option
+// struct.
+//
+// Two argument lists it deliberately does NOT reach, both because a pack cannot
+// deduce them, and in both cases the alternative is a diagnostic rather than a
+// wrong answer:
+//
+//   - a bare `{}` or other braced-init-list in any position. A parameter pack
+//     deduces nothing from one, so the forwarder drops out and the call has to
+//     name the type it means (`stein_all_counts`, `OrthoOptions{}`). This is the
+//     same property that keeps BATCHLAS_DISPATCH_ON_QUEUE out of potrf's
+//     option-struct calls, and it is why the deleted bare-`{}` guards in
+//     blas/options.hh and blas/extensions.hh still fire.
+//   - a call that supplies SOME template arguments explicitly and leaves the
+//     rest to deduction, e.g. `spmm<Back, T>(ctx, Matrix, ...)` where the
+//     MatrixFormat is still deduced: `T` lands in the pack and has to match the
+//     first argument. Write `spmm<Back>(ctx, ...)` and let both deduce. The one
+//     in-tree call that needed the old spelling keeps a hand-written twin; see
+//     ritz_values in blas/extensions.hh.
+#define BATCHLAS_ACCEPT_OWNING(NAME)                                            \
+    template <Backend Back, typename... Args>                                   \
+        requires ::batchlas::detail::AnyOwning<Args...> &&                      \
+                 requires(Queue& probe_ctx, const Args&... probe_args) {        \
+                     NAME<Back>(probe_ctx,                                      \
+                                ::batchlas::detail::as_view(probe_args)...);    \
+                 }                                                              \
+    inline auto NAME(Queue& ctx, const Args&... args) {                         \
+        return NAME<Back>(ctx, ::batchlas::detail::as_view(args)...);           \
+    }
+
+// The same thing for an entry point that is NOT templated on Backend -- `norm`
+// and `transpose` in blas/extra.hh, `francis_sweep` and the `steqr_*_buffer_size`
+// pair in blas/extensions.hh. Those have no BATCHLAS_DISPATCH_ON_QUEUE overload
+// either, for the same reason: there is no backend to deduce.
+#define BATCHLAS_ACCEPT_OWNING_NB(NAME)                                         \
+    template <typename... Args>                                                 \
+        requires ::batchlas::detail::AnyOwning<Args...> &&                      \
+                 requires(Queue& probe_ctx, const Args&... probe_args) {        \
+                     NAME(probe_ctx,                                            \
+                          ::batchlas::detail::as_view(probe_args)...);          \
+                 }                                                              \
+    inline auto NAME(Queue& ctx, const Args&... args) {                         \
+        return NAME(ctx, ::batchlas::detail::as_view(args)...);                 \
     }

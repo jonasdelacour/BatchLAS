@@ -55,38 +55,20 @@ inline Event getrf(Queue& ctx,
 }
 
 template <Backend B, typename T>
-inline Event getrf(Queue& ctx,
-                        const Matrix<T, MatrixFormat::Dense>& A,
-                        Span<int64_t> pivots,
-                        Span<std::byte> work_space,
-                        Span<int32_t> info) {
-        return getrf<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), pivots, work_space, info);
-}
-
-template <Backend B, typename T>
-inline Event getrf(Queue& ctx,
-                        const Matrix<T, MatrixFormat::Dense>& A,
-                        Span<int64_t> pivots,
-                        Span<std::byte> work_space) {
-        return getrf<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), pivots, work_space, Span<int32_t>{});
-}
-
-template <Backend B, typename T>
 size_t getrf_buffer_size(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& A);
-
-template <Backend B, typename T>
-inline size_t getrf_buffer_size(Queue& ctx,
-                                                 const Matrix<T, MatrixFormat::Dense>& A) {
-        return getrf_buffer_size<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A));
-}
 
 }  // namespace batchlas
 
 namespace batchlas {
 
-// Backend-deducing overloads: `f(ctx, ...)` uses ctx.backend().
-// See BATCHLAS_DISPATCH_ON_QUEUE in blas/queue-dispatch.hh.
+// Owning-argument and backend-deducing overloads: `f(ctx, Matrix, ...)` accepts
+// owning containers where the primary takes views, and `f(ctx, ...)` uses
+// ctx.backend(). See BATCHLAS_ACCEPT_OWNING and BATCHLAS_DISPATCH_ON_QUEUE in
+// blas/queue-dispatch.hh.
+
+BATCHLAS_ACCEPT_OWNING(getrf)
+BATCHLAS_ACCEPT_OWNING(getrf_buffer_size)
 
 BATCHLAS_DISPATCH_ON_QUEUE(getrf)
 BATCHLAS_DISPATCH_ON_QUEUE(getrf_buffer_size)

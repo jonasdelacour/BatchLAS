@@ -1,5 +1,6 @@
 #include <batchlas/blas/linalg.hh>
 #include "../linalg-impl.hh"
+#include "level3_shape.hh"
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
 #include "../queue.hh"
@@ -521,52 +522,29 @@ namespace batchlas{
         auto B_view = Bmat;
         auto C_view = Cmat;
         return detail::submit_host_task<T>(ctx, "netlib.symm", [=] {
-            if (A_view.rows() != A_view.cols()) {
-                throw std::runtime_error("SYMM: A must be square");
-            }
-            if (A_view.batch_size() != B_view.batch_size() || A_view.batch_size() != C_view.batch_size()) {
-                throw std::runtime_error("SYMM: batch size mismatch");
-            }
+            const auto [m, n, k] = backend::shape::validate_product<std::runtime_error>("SYMM", A_view, B_view, C_view, side);
+            static_cast<void>(k);  // cblas_?symm takes A's order from side, not as an argument
 
-            const int m = C_view.rows();
-            const int n = C_view.cols();
-            const int expected_a = side == Side::Left ? B_view.rows() : B_view.cols();
-            if (A_view.rows() != expected_a || B_view.rows() != m || B_view.cols() != n) {
-                throw std::runtime_error("SYMM: incompatible matrix dimensions");
-            }
-
+            // The two complex slots have no callee because this overload is
+            // constrained to a real T; a complex caller reaches hemm below.
             auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
                                      const MatrixView<T, MatrixFormat::Dense>& B_i,
                                      const MatrixView<T, MatrixFormat::Dense>& C_i) {
-                if constexpr (std::is_same_v<T, float>) {
-                    cblas_ssymm(CblasColMajor,
-                                enum_convert<BackendLibrary::CBLAS>(side),
-                                enum_convert<BackendLibrary::CBLAS>(uplo),
-                                m,
-                                n,
-                                alpha,
-                                A_i.data_ptr(),
-                                A_i.ld(),
-                                B_i.data_ptr(),
-                                B_i.ld(),
-                                beta,
-                                C_i.data_ptr(),
-                                C_i.ld());
-                } else if constexpr (std::is_same_v<T, double>) {
-                    cblas_dsymm(CblasColMajor,
-                                enum_convert<BackendLibrary::CBLAS>(side),
-                                enum_convert<BackendLibrary::CBLAS>(uplo),
-                                m,
-                                n,
-                                alpha,
-                                A_i.data_ptr(),
-                                A_i.ld(),
-                                B_i.data_ptr(),
-                                B_i.ld(),
-                                beta,
-                                C_i.data_ptr(),
-                                C_i.ld());
-                }
+                call_backend_nh<T, BackendLibrary::CBLAS>(
+                    cblas_ssymm, cblas_dsymm, nullptr, nullptr,
+                    Layout::ColMajor,
+                    side,
+                    uplo,
+                    m,
+                    n,
+                    alpha,
+                    A_i.data_ptr(),
+                    A_i.ld(),
+                    B_i.data_ptr(),
+                    B_i.ld(),
+                    beta,
+                    C_i.data_ptr(),
+                    C_i.ld());
             };
 
             for (int batch = 0; batch < A_view.batch_size(); ++batch) {
@@ -588,19 +566,8 @@ namespace batchlas{
         auto B_view = Bmat;
         auto C_view = Cmat;
         return detail::submit_host_task<T>(ctx, "netlib.hemm", [=] {
-            if (A_view.rows() != A_view.cols()) {
-                throw std::runtime_error("HEMM: A must be square");
-            }
-            if (A_view.batch_size() != B_view.batch_size() || A_view.batch_size() != C_view.batch_size()) {
-                throw std::runtime_error("HEMM: batch size mismatch");
-            }
-
-            const int m = C_view.rows();
-            const int n = C_view.cols();
-            const int expected_a = side == Side::Left ? B_view.rows() : B_view.cols();
-            if (A_view.rows() != expected_a || B_view.rows() != m || B_view.cols() != n) {
-                throw std::runtime_error("HEMM: incompatible matrix dimensions");
-            }
+            const auto [m, n, k] = backend::shape::validate_product<std::runtime_error>("HEMM", A_view, B_view, C_view, side);
+            static_cast<void>(k);  // cblas_?hemm takes A's order from side, not as an argument
 
             // The two real slots have no callee because BLAS has no real ?hemm;
             // T is constrained to complex, so they are never selected.
@@ -642,25 +609,7 @@ namespace batchlas{
         auto A_view = A;
         auto C_view = Cmat;
         return detail::submit_host_task<T>(ctx, "netlib.herk", [=] {
-            if (C_view.rows() != C_view.cols()) {
-                throw std::runtime_error("HERK: C must be square");
-            }
-            if (A_view.batch_size() != C_view.batch_size()) {
-                throw std::runtime_error("HERK: batch size mismatch");
-            }
-            // Transpose::Trans would ask for A * A^T, which is
-            // complex-symmetric rather than Hermitian; that operation is
-            // syrk's, and BLAS does not spell it here.
-            if (transA != Transpose::NoTrans && transA != Transpose::ConjTrans) {
-                throw std::runtime_error("HERK: transA must be NoTrans or ConjTrans");
-            }
-
-            const int n = C_view.rows();
-            const int k = transA == Transpose::NoTrans ? A_view.cols() : A_view.rows();
-            const int expected_n = transA == Transpose::NoTrans ? A_view.rows() : A_view.cols();
-            if (expected_n != n || k <= 0) {
-                throw std::runtime_error("HERK: incompatible matrix dimensions");
-            }
+            const auto [n, k] = backend::shape::validate_rank_k<std::runtime_error>("HERK", A_view, C_view, transA, /*hermitian=*/true);
 
             // The two real slots have no callee because BLAS has no real
             // ?herk -- that is syrk; T is constrained to complex, so they are
@@ -701,26 +650,7 @@ namespace batchlas{
         auto B_view = Bmat;
         auto C_view = Cmat;
         return detail::submit_host_task<T>(ctx, "netlib.her2k", [=] {
-            if (C_view.rows() != C_view.cols()) {
-                throw std::runtime_error("HER2K: C must be square");
-            }
-            if (A_view.batch_size() != B_view.batch_size() ||
-                A_view.batch_size() != C_view.batch_size()) {
-                throw std::runtime_error("HER2K: batch size mismatch");
-            }
-            if (transA != Transpose::NoTrans && transA != Transpose::ConjTrans) {
-                throw std::runtime_error("HER2K: transA must be NoTrans or ConjTrans");
-            }
-
-            const int n = C_view.rows();
-            const bool no_trans = transA == Transpose::NoTrans;
-            const int k = no_trans ? A_view.cols() : A_view.rows();
-            const int expected_n = no_trans ? A_view.rows() : A_view.cols();
-            const int b_n = no_trans ? B_view.rows() : B_view.cols();
-            const int b_k = no_trans ? B_view.cols() : B_view.rows();
-            if (expected_n != n || b_n != n || b_k != k || k <= 0) {
-                throw std::runtime_error("HER2K: incompatible matrix dimensions");
-            }
+            const auto [n, k] = backend::shape::validate_rank_2k<std::runtime_error>("HER2K", A_view, B_view, C_view, transA, /*hermitian=*/true);
 
             auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
                                      const MatrixView<T, MatrixFormat::Dense>& B_i,
@@ -759,47 +689,25 @@ namespace batchlas{
         auto A_view = A;
         auto C_view = Cmat;
         return detail::submit_host_task<T>(ctx, "netlib.syrk", [=] {
-            if (C_view.rows() != C_view.cols()) {
-                throw std::runtime_error("SYRK: C must be square");
-            }
-            if (A_view.batch_size() != C_view.batch_size()) {
-                throw std::runtime_error("SYRK: batch size mismatch");
-            }
+            const auto [n, k] = backend::shape::validate_rank_k<std::runtime_error>("SYRK", A_view, C_view, transA, /*hermitian=*/false);
 
-            const int n = C_view.rows();
-            const int k = transA == Transpose::NoTrans ? A_view.cols() : A_view.rows();
-            const int expected_n = transA == Transpose::NoTrans ? A_view.rows() : A_view.cols();
-            if (expected_n != n || k <= 0) {
-                throw std::runtime_error("SYRK: incompatible matrix dimensions");
-            }
-
+            // The two complex slots have no callee because this overload is
+            // constrained to a real T; the complex rank-k update is herk.
             auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
                                      const MatrixView<T, MatrixFormat::Dense>& C_i) {
-                if constexpr (std::is_same_v<T, float>) {
-                    cblas_ssyrk(CblasColMajor,
-                                enum_convert<BackendLibrary::CBLAS>(uplo),
-                                enum_convert<BackendLibrary::CBLAS>(transA),
-                                n,
-                                k,
-                                alpha,
-                                A_i.data_ptr(),
-                                A_i.ld(),
-                                beta,
-                                C_i.data_ptr(),
-                                C_i.ld());
-                } else if constexpr (std::is_same_v<T, double>) {
-                    cblas_dsyrk(CblasColMajor,
-                                enum_convert<BackendLibrary::CBLAS>(uplo),
-                                enum_convert<BackendLibrary::CBLAS>(transA),
-                                n,
-                                k,
-                                alpha,
-                                A_i.data_ptr(),
-                                A_i.ld(),
-                                beta,
-                                C_i.data_ptr(),
-                                C_i.ld());
-                }
+                call_backend_nh<T, BackendLibrary::CBLAS>(
+                    cblas_ssyrk, cblas_dsyrk, nullptr, nullptr,
+                    Layout::ColMajor,
+                    uplo,
+                    transA,
+                    n,
+                    k,
+                    alpha,
+                    A_i.data_ptr(),
+                    A_i.ld(),
+                    beta,
+                    C_i.data_ptr(),
+                    C_i.ld());
             };
 
             for (int batch = 0; batch < A_view.batch_size(); ++batch) {
@@ -821,54 +729,28 @@ namespace batchlas{
         auto B_view = Bmat;
         auto C_view = Cmat;
         return detail::submit_host_task<T>(ctx, "netlib.syr2k", [=] {
-            if (C_view.rows() != C_view.cols()) {
-                throw std::runtime_error("SYR2K: C must be square");
-            }
-            if (A_view.batch_size() != B_view.batch_size() || A_view.batch_size() != C_view.batch_size()) {
-                throw std::runtime_error("SYR2K: batch size mismatch");
-            }
+            const auto [n, k] = backend::shape::validate_rank_2k<std::runtime_error>("SYR2K", A_view, B_view, C_view, transA, /*hermitian=*/false);
 
-            const int n = C_view.rows();
-            const int expected_n = transA == Transpose::NoTrans ? A_view.rows() : A_view.cols();
-            const int expected_b_n = transA == Transpose::NoTrans ? B_view.rows() : B_view.cols();
-            const int k = transA == Transpose::NoTrans ? A_view.cols() : A_view.rows();
-            const int b_k = transA == Transpose::NoTrans ? B_view.cols() : B_view.rows();
-            if (expected_n != n || expected_b_n != n || b_k != k || k <= 0) {
-                throw std::runtime_error("SYR2K: incompatible matrix dimensions");
-            }
-
+            // The two complex slots have no callee because this overload is
+            // constrained to a real T; the complex rank-2k update is her2k.
             auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
                                      const MatrixView<T, MatrixFormat::Dense>& B_i,
                                      const MatrixView<T, MatrixFormat::Dense>& C_i) {
-                if constexpr (std::is_same_v<T, float>) {
-                    cblas_ssyr2k(CblasColMajor,
-                                 enum_convert<BackendLibrary::CBLAS>(uplo),
-                                 enum_convert<BackendLibrary::CBLAS>(transA),
-                                 n,
-                                 k,
-                                 alpha,
-                                 A_i.data_ptr(),
-                                 A_i.ld(),
-                                 B_i.data_ptr(),
-                                 B_i.ld(),
-                                 beta,
-                                 C_i.data_ptr(),
-                                 C_i.ld());
-                } else if constexpr (std::is_same_v<T, double>) {
-                    cblas_dsyr2k(CblasColMajor,
-                                 enum_convert<BackendLibrary::CBLAS>(uplo),
-                                 enum_convert<BackendLibrary::CBLAS>(transA),
-                                 n,
-                                 k,
-                                 alpha,
-                                 A_i.data_ptr(),
-                                 A_i.ld(),
-                                 B_i.data_ptr(),
-                                 B_i.ld(),
-                                 beta,
-                                 C_i.data_ptr(),
-                                 C_i.ld());
-                }
+                call_backend_nh<T, BackendLibrary::CBLAS>(
+                    cblas_ssyr2k, cblas_dsyr2k, nullptr, nullptr,
+                    Layout::ColMajor,
+                    uplo,
+                    transA,
+                    n,
+                    k,
+                    alpha,
+                    A_i.data_ptr(),
+                    A_i.ld(),
+                    B_i.data_ptr(),
+                    B_i.ld(),
+                    beta,
+                    C_i.data_ptr(),
+                    C_i.ld());
             };
 
             for (int batch = 0; batch < A_view.batch_size(); ++batch) {
@@ -891,19 +773,8 @@ namespace batchlas{
         auto B_view = Bmat;
         auto C_view = Cmat;
         return detail::submit_host_task<T>(ctx, "netlib.trmm", [=] {
-            if (A_view.rows() != A_view.cols()) {
-                throw std::runtime_error("TRMM: A must be square");
-            }
-            if (A_view.batch_size() != B_view.batch_size() || A_view.batch_size() != C_view.batch_size()) {
-                throw std::runtime_error("TRMM: batch size mismatch");
-            }
-
-            const int m = C_view.rows();
-            const int n = C_view.cols();
-            const int expected_dim = side == Side::Left ? m : n;
-            if (A_view.rows() != expected_dim || B_view.rows() != m || B_view.cols() != n) {
-                throw std::runtime_error("TRMM: incompatible matrix dimensions");
-            }
+            const auto [m, n, k] = backend::shape::validate_product<std::runtime_error>("TRMM", A_view, B_view, C_view, side);
+            static_cast<void>(k);  // cblas_?trmm takes A's order from side, not as an argument
 
             // CBLAS ?trmm works in place, so the operand has to arrive in C.
             // Going through cblas_?gemm instead would be a plain dense product
@@ -1452,126 +1323,55 @@ namespace batchlas{
     // header edit rather than one edit per backend TU.
     #define B_ Backend::NETLIB
 
-    #define SPMM_INSTANTIATE(fp, F)             BATCHLAS_INSTANTIATE(sig::spmm<fp BATCHLAS_COMMA F>, spmm, B_, fp, F)
-    #define SPMM_BUFFER_SIZE_INSTANTIATE(fp, F) BATCHLAS_INSTANTIATE(sig::spmm_buffer_size<fp BATCHLAS_COMMA F>, spmm_buffer_size, B_, fp, F)
-    #define GEMM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::gemm<fp>, gemm, B_, fp)
-    #define GEMV_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::gemv<fp>, gemv, B_, fp)
-    #define TRSM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::trsm<fp>, trsm, B_, fp)
-    #define SYMM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::symm<fp>, symm, B_, fp)
-    #define HEMM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::hemm<fp>, hemm, B_, fp)
-    #define SYRK_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::syrk<fp>, syrk, B_, fp)
-    #define HERK_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::herk<fp>, herk, B_, fp)
-    #define HER2K_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::her2k<fp>, her2k, B_, fp)
-    #define SYR2K_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::syr2k<fp>, syr2k, B_, fp)
-    #define TRMM_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::trmm<fp>, trmm, B_, fp)
-    #define GEQRF_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::geqrf<fp>, geqrf, B_, fp)
-    #define GEQRF_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::geqrf_buffer_size<fp>, geqrf_buffer_size, B_, fp)
-    #define ORGQR_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::orgqr<fp>, orgqr, B_, fp)
-    #define ORGQR_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::orgqr_buffer_size<fp>, orgqr_buffer_size, B_, fp)
-    #define GETRS_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::getrs<fp>, getrs, B_, fp)
-    #define GETRS_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::getrs_buffer_size<fp>, getrs_buffer_size, B_, fp)
-    #define GETRF_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::getrf<fp>, getrf, B_, fp)
-    #define GETRF_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::getrf_buffer_size<fp>, getrf_buffer_size, B_, fp)
-    #define GETRI_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::getri<fp>, getri, B_, fp)
-    #define GETRI_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::getri_buffer_size<fp>, getri_buffer_size, B_, fp)
-    #define ORMQR_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::ormqr<fp>, ormqr, B_, fp)
-    #define ORMQR_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::ormqr_buffer_size<fp>, ormqr_buffer_size, B_, fp)
-    #define ORMQR_VENDOR_INSTANTIATE(fp)        BATCHLAS_INSTANTIATE(sig::ormqr_vendor<fp>, backend::ormqr_vendor, B_, fp)
-    #define ORMQR_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) BATCHLAS_INSTANTIATE(sig::ormqr_vendor_buffer_size<fp>, backend::ormqr_vendor_buffer_size, B_, fp)
-    #define POTRF_INSTANTIATE(fp)               BATCHLAS_INSTANTIATE(sig::potrf<fp>, potrf, B_, fp)
-    #define POTRF_BUFFER_SIZE_INSTANTIATE(fp)   BATCHLAS_INSTANTIATE(sig::potrf_buffer_size<fp>, potrf_buffer_size, B_, fp)
-    #define SYEV_INSTANTIATE(fp)                BATCHLAS_INSTANTIATE(sig::syev<fp>, syev, B_, fp)
-    #define SYEV_BUFFER_SIZE_INSTANTIATE(fp)    BATCHLAS_INSTANTIATE(sig::syev_buffer_size<fp>, syev_buffer_size, B_, fp)
-    #define SYEV_VENDOR_INSTANTIATE(fp)         BATCHLAS_INSTANTIATE(sig::syev_vendor<fp>, backend::syev_vendor, B_, fp)
-    #define SYEV_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) BATCHLAS_INSTANTIATE(sig::syev_vendor_buffer_size<fp>, backend::syev_vendor_buffer_size, B_, fp)
-    #define GESVD_VENDOR_INSTANTIATE(fp)        BATCHLAS_INSTANTIATE(sig::gesvd_vendor<fp>, backend::gesvd_vendor, B_, fp)
-    #define GESVD_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) BATCHLAS_INSTANTIATE(sig::gesvd_vendor_buffer_size<fp>, backend::gesvd_vendor_buffer_size, B_, fp)
+    #define NETLIB_OPS(B, fp) \
+        BATCHLAS_INSTANTIATE_FORMAT_OP(B, fp, MatrixFormat::CSR, spmm) \
+        BATCHLAS_INSTANTIATE_FORMAT_OP(B, fp, MatrixFormat::CSR, spmm_buffer_size) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, gemm) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, gemv) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, trsm) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, trmm) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, geqrf) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, geqrf_buffer_size) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, getrs) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, getrs_buffer_size) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, getrf) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, getrf_buffer_size) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, getri) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, getri_buffer_size) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, ormqr) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, ormqr_buffer_size) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, ormqr_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, ormqr_vendor_buffer_size) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, orgqr) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, orgqr_buffer_size) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, potrf) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, potrf_buffer_size) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, syev) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, syev_buffer_size) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, syev_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, syev_vendor_buffer_size) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, gesvd_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, gesvd_vendor_buffer_size)
 
-    #define BLAS_LEVEL3_INSTANTIATE(fp) \
-        SPMM_INSTANTIATE(fp, MatrixFormat::CSR) \
-        SPMM_BUFFER_SIZE_INSTANTIATE(fp, MatrixFormat::CSR) \
-        GEMM_INSTANTIATE(fp) \
-        GEMV_INSTANTIATE(fp) \
-        TRSM_INSTANTIATE(fp) \
-        GEQRF_INSTANTIATE(fp) \
-        GEQRF_BUFFER_SIZE_INSTANTIATE(fp) \
-        GETRS_INSTANTIATE(fp) \
-        GETRS_BUFFER_SIZE_INSTANTIATE(fp) \
-        GETRF_INSTANTIATE(fp) \
-        GETRF_BUFFER_SIZE_INSTANTIATE(fp) \
-        GETRI_INSTANTIATE(fp) \
-        GETRI_BUFFER_SIZE_INSTANTIATE(fp) \
-        ORMQR_INSTANTIATE(fp) \
-        ORMQR_BUFFER_SIZE_INSTANTIATE(fp) \
-        ORMQR_VENDOR_INSTANTIATE(fp) \
-        ORMQR_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) \
-        ORGQR_INSTANTIATE(fp) \
-        ORGQR_BUFFER_SIZE_INSTANTIATE(fp) \
-        POTRF_INSTANTIATE(fp) \
-        POTRF_BUFFER_SIZE_INSTANTIATE(fp) \
-        SYEV_INSTANTIATE(fp) \
-        SYEV_BUFFER_SIZE_INSTANTIATE(fp) \
-        SYEV_VENDOR_INSTANTIATE(fp) \
-        SYEV_VENDOR_BUFFER_SIZE_INSTANTIATE(fp) \
-        GESVD_VENDOR_INSTANTIATE(fp) \
-        GESVD_VENDOR_BUFFER_SIZE_INSTANTIATE(fp)
+    // symm/syrk/syr2k are real-only and hemm/herk/her2k are complex-only, so the
+    // narrower domains get their own tables rather than one blanket loop.
+    #define NETLIB_REAL_OPS(B, fp) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, symm) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, syrk) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, syr2k)
+
+    #define NETLIB_COMPLEX_OPS(B, fp) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, hemm) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, herk) \
+        BATCHLAS_INSTANTIATE_OP(B, fp, her2k)
 
     // Instantiate for the floating-point types of interest.
-    BLAS_LEVEL3_INSTANTIATE(float)
-    BLAS_LEVEL3_INSTANTIATE(double)
-    BLAS_LEVEL3_INSTANTIATE(std::complex<float>)
-    BLAS_LEVEL3_INSTANTIATE(std::complex<double>)
-    TRMM_INSTANTIATE(float)
-    TRMM_INSTANTIATE(double)
-    TRMM_INSTANTIATE(std::complex<float>)
-    TRMM_INSTANTIATE(std::complex<double>)
-    SYMM_INSTANTIATE(float)
-    SYMM_INSTANTIATE(double)
-    HEMM_INSTANTIATE(std::complex<float>)
-    HEMM_INSTANTIATE(std::complex<double>)
-    HERK_INSTANTIATE(std::complex<float>)
-    HERK_INSTANTIATE(std::complex<double>)
-    HER2K_INSTANTIATE(std::complex<float>)
-    HER2K_INSTANTIATE(std::complex<double>)
-    SYRK_INSTANTIATE(float)
-    SYRK_INSTANTIATE(double)
-    SYR2K_INSTANTIATE(float)
-    SYR2K_INSTANTIATE(double)
+    BATCHLAS_FOR_EACH_SCALAR_TYPE_1(NETLIB_OPS, B_)
+    BATCHLAS_FOR_EACH_REAL_TYPE_1(NETLIB_REAL_OPS, B_)
+    BATCHLAS_FOR_EACH_COMPLEX_TYPE_1(NETLIB_COMPLEX_OPS, B_)
 
-    #undef SPMM_INSTANTIATE
-    #undef SPMM_BUFFER_SIZE_INSTANTIATE
-    #undef GEMM_INSTANTIATE
-    #undef GEMV_INSTANTIATE
-    #undef SYMM_INSTANTIATE
-    #undef HEMM_INSTANTIATE
-    #undef HERK_INSTANTIATE
-    #undef HER2K_INSTANTIATE
-    #undef SYRK_INSTANTIATE
-    #undef SYR2K_INSTANTIATE
-    #undef TRSM_INSTANTIATE
-    #undef TRMM_INSTANTIATE
-    #undef GEQRF_INSTANTIATE
-    #undef GEQRF_BUFFER_SIZE_INSTANTIATE
-    #undef GETRS_INSTANTIATE
-    #undef GETRS_BUFFER_SIZE_INSTANTIATE
-    #undef GETRF_INSTANTIATE
-    #undef GETRF_BUFFER_SIZE_INSTANTIATE
-    #undef GETRI_INSTANTIATE
-    #undef GETRI_BUFFER_SIZE_INSTANTIATE
-    #undef ORMQR_INSTANTIATE
-    #undef ORMQR_BUFFER_SIZE_INSTANTIATE
-    #undef ORMQR_VENDOR_INSTANTIATE
-    #undef ORMQR_VENDOR_BUFFER_SIZE_INSTANTIATE
-    #undef ORGQR_INSTANTIATE
-    #undef ORGQR_BUFFER_SIZE_INSTANTIATE
-    #undef POTRF_INSTANTIATE
-    #undef POTRF_BUFFER_SIZE_INSTANTIATE
-    #undef SYEV_INSTANTIATE
-    #undef SYEV_BUFFER_SIZE_INSTANTIATE
-    #undef SYEV_VENDOR_INSTANTIATE
-    #undef SYEV_VENDOR_BUFFER_SIZE_INSTANTIATE
-    #undef GESVD_VENDOR_INSTANTIATE
-    #undef GESVD_VENDOR_BUFFER_SIZE_INSTANTIATE
-    #undef BLAS_LEVEL3_INSTANTIATE
+    #undef NETLIB_OPS
+    #undef NETLIB_REAL_OPS
+    #undef NETLIB_COMPLEX_OPS
     #undef B_
 }

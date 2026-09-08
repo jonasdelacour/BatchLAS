@@ -30,31 +30,21 @@ Event orgqr(Queue& ctx,
             Span<std::byte> workspace);
 
 template <Backend B, typename T>
-inline Event orgqr(Queue& ctx,
-                        const Matrix<T, MatrixFormat::Dense>& A,
-                        Span<T> tau,
-                        Span<std::byte> workspace) {
-        return orgqr<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), tau, workspace);
-}
-
-template <Backend B, typename T>
 size_t orgqr_buffer_size(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& A,
                          Span<T> tau);
-
-template <Backend B, typename T>
-inline size_t orgqr_buffer_size(Queue& ctx,
-                                                 const Matrix<T, MatrixFormat::Dense>& A,
-                                                 Span<T> tau) {
-        return orgqr_buffer_size<B,T>(ctx, MatrixView<T, MatrixFormat::Dense>(A), tau);
-}
 
 }  // namespace batchlas
 
 namespace batchlas {
 
-// Backend-deducing overloads: `f(ctx, ...)` uses ctx.backend().
-// See BATCHLAS_DISPATCH_ON_QUEUE in blas/queue-dispatch.hh.
+// Owning-argument and backend-deducing overloads: `f(ctx, Matrix, ...)` accepts
+// owning containers where the primary takes views, and `f(ctx, ...)` uses
+// ctx.backend(). See BATCHLAS_ACCEPT_OWNING and BATCHLAS_DISPATCH_ON_QUEUE in
+// blas/queue-dispatch.hh.
+
+BATCHLAS_ACCEPT_OWNING(orgqr)
+BATCHLAS_ACCEPT_OWNING(orgqr_buffer_size)
 
 BATCHLAS_DISPATCH_ON_QUEUE(orgqr)
 BATCHLAS_DISPATCH_ON_QUEUE(orgqr_buffer_size)

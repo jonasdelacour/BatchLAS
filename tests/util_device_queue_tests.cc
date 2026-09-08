@@ -175,27 +175,6 @@ TEST(QueueTest, WaitAndThrow) {
     }
 }
 
-namespace {
-// setenv/unsetenv rather than putenv: putenv keeps the caller's buffer alive in
-// the environment, which is a lifetime trap in a test that restores on scope
-// exit.
-struct ScopedEnvVar {
-    std::string key;
-    std::string prev;
-    bool had_prev;
-
-    ScopedEnvVar(const char* k, const char* v) : key(k) {
-        const char* old = std::getenv(k);
-        had_prev = old != nullptr;
-        if (had_prev) prev = old;
-        if (v) setenv(k, v, 1); else unsetenv(k);
-    }
-    ~ScopedEnvVar() {
-        if (had_prev) setenv(key.c_str(), prev.c_str(), 1); else unsetenv(key.c_str());
-    }
-};
-}  // namespace
-
 // Pins the contract that every kernel-geometry knob in src/extensions now
 // depends on. These call sites each used to carry their own atoi-plus-`> 0`
 // parser; the shared helper only preserves them if it agrees on the whole input
@@ -207,33 +186,33 @@ TEST(EnvHelpers, PositiveIntOrClampsAndFallsBack) {
     const char* kKey = "BATCHLAS_TEST_ENV_POSITIVE_INT";
 
     {   // unset
-        ScopedEnvVar v(kKey, nullptr);
+        batchlas::ScopedEnvVar v(kKey, nullptr);
         EXPECT_EQ(batchlas::env_positive_int_or(kKey, 7), 7);
     }
     {   // empty string: stoi throws, so fallback
-        ScopedEnvVar v(kKey, "");
+        batchlas::ScopedEnvVar v(kKey, "");
         EXPECT_EQ(batchlas::env_positive_int_or(kKey, 7), 7);
     }
     {   // zero and negatives are "meaningless geometry", i.e. unset
-        ScopedEnvVar v(kKey, "0");
+        batchlas::ScopedEnvVar v(kKey, "0");
         EXPECT_EQ(batchlas::env_positive_int_or(kKey, 7), 7);
     }
     {
-        ScopedEnvVar v(kKey, "-3");
+        batchlas::ScopedEnvVar v(kKey, "-3");
         EXPECT_EQ(batchlas::env_positive_int_or(kKey, 7), 7);
     }
     {   // unparseable falls back rather than silently reading as 0
-        ScopedEnvVar v(kKey, "abc");
+        batchlas::ScopedEnvVar v(kKey, "abc");
         EXPECT_EQ(batchlas::env_positive_int_or(kKey, 7), 7);
     }
     {   // stoi takes the leading integer and ignores the tail -- documented here
         // because atoi did the same, so routing the old call sites through this
         // did not change them.
-        ScopedEnvVar v(kKey, "8junk");
+        batchlas::ScopedEnvVar v(kKey, "8junk");
         EXPECT_EQ(batchlas::env_positive_int_or(kKey, 7), 8);
     }
     {
-        ScopedEnvVar v(kKey, "16");
+        batchlas::ScopedEnvVar v(kKey, "16");
         EXPECT_EQ(batchlas::env_positive_int_or(kKey, 7), 16);
     }
 }

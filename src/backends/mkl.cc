@@ -1,4 +1,5 @@
 #include <batchlas/blas/linalg.hh>
+#include "../util/template-instantiations.hh"
 #include "../linalg-impl.hh"
 #include "../queue.hh"
 #include <batchlas/util/sycl-vector.hh>
@@ -30,35 +31,11 @@ namespace batchlas {
         }
 
         if (gemm_has_heterogeneous_batch(A, B, C)) {
-            Event last_event;
-            bool launched = false;
-            for (int batch_index = 0; batch_index < A.batch_size(); ++batch_index) {
-                const auto [m, k] = get_effective_dims(A, transA, batch_index);
-                const auto [k_b, n] = get_effective_dims(B, transB, batch_index);
-                static_cast<void>(k_b);
-                if (m == 0 || n == 0) {
-                    continue;
-                }
-                if (k == 0) {
-                    last_event = scale(ctx, beta, C.batch_item(batch_index));
-                    launched = true;
-                    continue;
-                }
-                last_event = gemm_vendor<Back, T>(ctx,
-                                                  A.batch_item(batch_index),
-                                                  B.batch_item(batch_index),
-                                                  C.batch_item(batch_index),
-                                                  alpha,
-                                                  beta,
-                                                  transA,
-                                                  transB,
-                                                  precision);
-                launched = true;
-            }
-            if (launched) {
-                return std::move(last_event);
-            }
-            return ctx.get_event();
+            return gemm_over_heterogeneous_batch(ctx, A, B, C, beta, transA, transB,
+                [&](const auto& A_i, const auto& B_i, const auto& C_i) {
+                    return gemm_vendor<Back, T>(ctx, A_i, B_i, C_i, alpha, beta, transA, transB, precision);
+                },
+                [&] { return ctx.get_event(); });
         }
 
         if (gemm_use_sycl_custom(ctx, A, B, C, transA, transB, precision)) {
@@ -145,32 +122,16 @@ namespace batchlas {
             *ctx, m, n, A.ld(), stride_a, stride_tau, A.batch_size()) * sizeof(T);
     }
 
-#define GEMM_INSTANTIATE(fp) \
-    template Event gemm<Backend::MKL, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, const MatrixView<fp, MatrixFormat::Dense>&, const MatrixView<fp, MatrixFormat::Dense>&, fp, fp, Transpose, Transpose, ComputePrecision);
+// Explicit instantiations. Signatures live in the `sig` namespace beside each
+// public declaration (include/batchlas/blas/functions/*.hh), so changing one is a single
+// header edit rather than one edit per backend TU.
+#define MKL_OPS(B, fp) \
+    BATCHLAS_INSTANTIATE_OP(B, fp, gemm) \
+    BATCHLAS_INSTANTIATE_OP(B, fp, geqrf) \
+    BATCHLAS_INSTANTIATE_OP(B, fp, geqrf_buffer_size)
 
-#define GEQRF_INSTANTIATE(fp) \
-    template Event geqrf<Backend::MKL, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Span<fp>, Span<std::byte>);
+BATCHLAS_FOR_EACH_SCALAR_TYPE_1(MKL_OPS, Backend::MKL)
 
-#define GEQRF_BUFFER_SIZE_INSTANTIATE(fp) \
-    template size_t geqrf_buffer_size<Backend::MKL, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Span<fp>);
-
-GEMM_INSTANTIATE(float)
-GEMM_INSTANTIATE(double)
-GEMM_INSTANTIATE(std::complex<float>)
-GEMM_INSTANTIATE(std::complex<double>)
-
-GEQRF_INSTANTIATE(float)
-GEQRF_INSTANTIATE(double)
-GEQRF_INSTANTIATE(std::complex<float>)
-GEQRF_INSTANTIATE(std::complex<double>)
-
-GEQRF_BUFFER_SIZE_INSTANTIATE(float)
-GEQRF_BUFFER_SIZE_INSTANTIATE(double)
-GEQRF_BUFFER_SIZE_INSTANTIATE(std::complex<float>)
-GEQRF_BUFFER_SIZE_INSTANTIATE(std::complex<double>)
-
-#undef GEMM_INSTANTIATE
-#undef GEQRF_INSTANTIATE
-#undef GEQRF_BUFFER_SIZE_INSTANTIATE
+#undef MKL_OPS
 
 } // namespace batchlas

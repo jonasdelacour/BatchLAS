@@ -14,12 +14,6 @@ struct DeviceCaps {
     std::string name;
 };
 
-struct DispatchContext {
-    Queue& q;
-    DeviceCaps caps;
-    DispatchPolicy policy;
-};
-
 // Best-effort querying: never throws.
 inline DeviceCaps query_caps(Queue& q) {
     DeviceCaps out;

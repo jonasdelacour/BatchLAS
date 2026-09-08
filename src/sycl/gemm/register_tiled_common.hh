@@ -97,118 +97,6 @@ inline bool can_use_aligned_nn_fast_path(const MatrixView<T, MatrixFormat::Dense
     }
 }
 
-template <int TileM,
-          int TileN,
-          int TileK,
-          int ThreadTileRows,
-          int ThreadTileCols,
-          int VecA,
-          int VecB,
-          int UnrollK,
-          int Stages,
-          bool AlignedFastPath,
-          Transpose OpA,
-          Transpose OpB>
-constexpr KernelVariant register_kernel_variant() {
-    if constexpr (TileM == 128 && TileN == 64 && TileK == 32 && ThreadTileRows == 8 && ThreadTileCols == 4) {
-        if constexpr (UnrollK == 2 && Stages == 2) {
-            return KernelVariant::Tiled128x64RegisterK32LargeU2;
-        }
-        return KernelVariant::Tiled128x64RegisterK32Large;
-    }
-    if constexpr (TileM == 128 && TileN == 64 && TileK == 32 && ThreadTileRows == 4 && ThreadTileCols == 8) {
-        if constexpr (UnrollK == 2 && Stages == 2) {
-            return KernelVariant::Tiled128x64RegisterK32LargeTT4x8U2;
-        }
-        return KernelVariant::Tiled128x64RegisterK32LargeTT4x8;
-    }
-    if constexpr (TileM == 128 && TileN == 32 && TileK == 32 && OpA == Transpose::NoTrans && OpB == Transpose::NoTrans) {
-        if constexpr (Stages == 1 && UnrollK == 1 && ThreadTileRows == 4 && ThreadTileCols == 4 && VecA == 4 && VecB == 4) {
-            return KernelVariant::Tiled128x32RegisterK32S1U1;
-        }
-        if constexpr (Stages == 2 && UnrollK == 1 && ThreadTileRows == 4 && ThreadTileCols == 4 && VecA == 4 && VecB == 4) {
-            if constexpr (AlignedFastPath) {
-                return KernelVariant::Tiled128x32RegisterK32S2U1Aligned;
-            }
-            return KernelVariant::Tiled128x32RegisterK32S2U1Generic;
-        }
-        if constexpr (Stages == 2 && UnrollK == 2 && ThreadTileRows == 4 && ThreadTileCols == 4 && VecA == 4 && VecB == 4) {
-            return KernelVariant::Tiled128x32RegisterK32S2U2;
-        }
-        if constexpr (Stages == 2 && UnrollK == 2 && ThreadTileRows == 8 && ThreadTileCols == 4 && VecA == 4 && VecB == 4) {
-            return KernelVariant::Tiled128x32RegisterK32S2U2TT8x4;
-        }
-        if constexpr (Stages == 2 && UnrollK == 2 && ThreadTileRows == 4 && ThreadTileCols == 8 && VecA == 4 && VecB == 4) {
-            return KernelVariant::Tiled128x32RegisterK32S2U2TT4x8;
-        }
-        if constexpr (Stages == 1 && UnrollK == 4) {
-            return KernelVariant::Tiled128x32RegisterK32S1U4;
-        }
-    }
-    if constexpr (TileM == 64 && TileN == 64 && TileK == 16 && OpA == Transpose::Trans && OpB == Transpose::NoTrans) {
-        return KernelVariant::Tiled64x64RegisterK16TN;
-    }
-    if constexpr (TileM == 64 && TileN == 64 && TileK == 16 && OpA == Transpose::NoTrans && OpB == Transpose::Trans) {
-        return KernelVariant::Tiled64x64RegisterK16NT;
-    }
-    if constexpr (TileM == 64 && TileN == 64 && TileK == 16 && OpA == Transpose::Trans && OpB == Transpose::Trans) {
-        return KernelVariant::Tiled64x64RegisterK16TT;
-    }
-    if constexpr (TileM == 128 && TileN == 64 && TileK == 16 && OpA == Transpose::Trans && OpB == Transpose::NoTrans) {
-        return KernelVariant::Tiled128x64RegisterK16TN;
-    }
-    if constexpr (TileM == 128 && TileN == 64 && TileK == 16 && OpA == Transpose::NoTrans && OpB == Transpose::Trans) {
-        return KernelVariant::Tiled128x64RegisterK16NT;
-    }
-    if constexpr (TileM == 128 && TileN == 64 && TileK == 16 && OpA == Transpose::Trans && OpB == Transpose::Trans) {
-        return KernelVariant::Tiled128x64RegisterK16TT;
-    }
-    if constexpr (TileM == 128 && TileN == 32 && TileK == 32 && OpA == Transpose::Trans && OpB == Transpose::NoTrans) {
-        return KernelVariant::Tiled128x32RegisterK32TN;
-    }
-    if constexpr (TileM == 128 && TileN == 32 && TileK == 32 && OpA == Transpose::NoTrans && OpB == Transpose::Trans) {
-        return KernelVariant::Tiled128x32RegisterK32NT;
-    }
-    if constexpr (TileM == 128 && TileN == 32 && TileK == 32 && OpA == Transpose::Trans && OpB == Transpose::Trans) {
-        return KernelVariant::Tiled128x32RegisterK32TT;
-    }
-    if constexpr (TileM == 128 && TileN == 32 && TileK == 16 && OpA == Transpose::Trans && OpB == Transpose::NoTrans) {
-        return KernelVariant::Tiled128x32RegisterK16TN;
-    }
-    if constexpr (TileM == 32 && TileN == 128 && TileK == 16 && OpA == Transpose::Trans && OpB == Transpose::NoTrans) {
-        return KernelVariant::Tiled32x128RegisterK16TN;
-    }
-    if constexpr (TileM == 128 && TileN == 32 && TileK == 16 && OpA == Transpose::NoTrans && OpB == Transpose::Trans) {
-        return KernelVariant::Tiled128x32RegisterK16NT;
-    }
-    if constexpr (TileM == 128 && TileN == 32 && TileK == 16 && OpA == Transpose::Trans && OpB == Transpose::Trans) {
-        return KernelVariant::Tiled128x32RegisterK16TT;
-    }
-    if constexpr (TileM == 32 && TileN == 128 && TileK == 16 && OpA == Transpose::Trans && OpB == Transpose::Trans) {
-        return KernelVariant::Tiled32x128RegisterK16TT;
-    }
-    if constexpr (TileM == 32 && TileN == 32 && TileK == 8) {
-        return KernelVariant::Tiled32x32Register;
-    }
-    if constexpr (TileM == 64 && TileN == 64 && TileK == 8) {
-        return KernelVariant::Tiled64x64Register;
-    }
-    if constexpr (TileM == 64 && TileN == 64 && TileK == 16) {
-        return KernelVariant::Tiled64x64RegisterK16;
-    }
-    if constexpr (TileM == 128 && TileN == 32 && TileK == 16) {
-        return KernelVariant::Tiled128x32RegisterK16;
-    }
-    if constexpr (TileM == 128 && TileN == 32 && TileK == 32) {
-        return KernelVariant::Tiled128x32RegisterK32;
-    }
-    if constexpr (TileM == 32 && TileN == 128 && TileK == 16) {
-        return KernelVariant::Tiled32x128RegisterK16;
-    }
-
-    return KernelVariant::Tiled32x32Register;
-}
-
 template <typename T,
           int TileM,
           int TileN,
@@ -228,11 +116,10 @@ Event launch_register_tiled(Queue& ctx,
                             const MatrixView<T, MatrixFormat::Dense>& C,
                             T alpha,
                             T beta,
-                            const char* (*kernel_trace_name)(KernelVariant)) {
+                            const char* kernel_trace_name) {
     using Policy = RegisterTilePolicy<TileM, TileN, TileK, ThreadTileRows, ThreadTileCols, VecA, VecB, UnrollK, Stages>;
 
-    BATCHLAS_KERNEL_TRACE_SCOPE(kernel_trace_name(
-        register_kernel_variant<TileM, TileN, TileK, ThreadTileRows, ThreadTileCols, VecA, VecB, UnrollK, Stages, AlignedFastPath, OpA, OpB>()));
+    BATCHLAS_KERNEL_TRACE_SCOPE(kernel_trace_name);
 
     static_assert(TileM % ThreadTileRows == 0, "TileM must divide evenly by ThreadTileRows");
     static_assert(TileN % ThreadTileCols == 0, "TileN must divide evenly by ThreadTileCols");

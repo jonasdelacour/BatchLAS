@@ -147,49 +147,6 @@ inline int32_t choose_two_stage_sb2st_block_size() {
 }
 
 template <typename T>
-inline void pack_sytrd_lower_to_qsub_qr_layout(Queue& ctx,
-                                                const MatrixView<T, MatrixFormat::Dense>& a_sytrd,
-                                                const MatrixView<T, MatrixFormat::Dense>& a_qsub_qr,
-                                                const VectorView<T>& tau_sytrd,
-                                                const VectorView<T>& tau_qsub,
-                                                int32_t n) {
-    const int32_t batch = static_cast<int32_t>(a_sytrd.batch_size());
-    const int32_t p = std::max<int32_t>(0, n - 1);
-    if (p == 0) return;
-
-    ctx->submit([&](sycl::handler& cgh) {
-        auto A = a_sytrd.kernel_view();
-        auto AQ = a_qsub_qr.kernel_view();
-        const int64_t total = static_cast<int64_t>(batch) * static_cast<int64_t>(p) * static_cast<int64_t>(p);
-        cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(total)), [=](sycl::id<1> tid) {
-            const int64_t idx = static_cast<int64_t>(tid[0]);
-            const int32_t b = static_cast<int32_t>(idx / (static_cast<int64_t>(p) * p));
-            const int64_t rem = idx - static_cast<int64_t>(b) * p * p;
-            const int32_t row = static_cast<int32_t>(rem % p);
-            const int32_t col = static_cast<int32_t>(rem / p);
-
-            T val = T(0);
-            if (row > col) {
-                val = A(row + 1, col, b);
-            }
-            AQ(row, col, b) = val;
-        });
-    });
-
-    ctx->submit([&](sycl::handler& cgh) {
-        auto TAU = tau_sytrd;
-        auto TAUQ = tau_qsub;
-        const int64_t total = static_cast<int64_t>(batch) * static_cast<int64_t>(p);
-        cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(total)), [=](sycl::id<1> tid) {
-            const int64_t idx = static_cast<int64_t>(tid[0]);
-            const int32_t b = static_cast<int32_t>(idx / p);
-            const int32_t i = static_cast<int32_t>(idx - static_cast<int64_t>(b) * p);
-            TAUQ(i, b) = TAU(i, b);
-        });
-    });
-}
-
-template <typename T>
 inline void build_phase_from_kd1_band(Queue& ctx,
                                        const MatrixView<T, MatrixFormat::Dense>& ab_kd1,
                                        const VectorView<T>& phase) {
@@ -247,9 +204,10 @@ inline void apply_phase_rows(Queue& ctx,
     });
 }
 
-// Same as lift_real_eigvecs_with_phase but also valid for real T, where the
-// phase is just a sign. Used by the eigenvector path, which is now shared
-// between the real and complex cases.
+// Applies the per-row phase to a real eigenvector block, writing the result in
+// T's own scalar type: for complex T the real column is lifted to (x, 0)
+// before scaling, for real T the phase is just a sign. Used by the
+// eigenvector path, which is now shared between the real and complex cases.
 template <typename T>
 inline void lift_eigvecs_with_phase(Queue& ctx,
                                     const MatrixView<typename base_type<T>::type, MatrixFormat::Dense>& z_real,
@@ -274,30 +232,6 @@ inline void lift_eigvecs_with_phase(Queue& ctx,
             } else {
                 Zo(row, col, b) = P(row, b) * Zr(row, col, b);
             }
-        });
-    });
-}
-
-template <typename T>
-inline void lift_real_eigvecs_with_phase(Queue& ctx,
-                                         const MatrixView<typename base_type<T>::type, MatrixFormat::Dense>& z_real,
-                                         const VectorView<T>& phase,
-                                         const MatrixView<T, MatrixFormat::Dense>& z_complex) {
-    using Real = typename base_type<T>::type;
-    const int32_t n = static_cast<int32_t>(z_real.rows());
-    const int32_t batch = static_cast<int32_t>(z_real.batch_size());
-    const int64_t total = static_cast<int64_t>(batch) * static_cast<int64_t>(n) * static_cast<int64_t>(n);
-    ctx->submit([&](sycl::handler& cgh) {
-        auto Zr = z_real.kernel_view();
-        auto Zc = z_complex.kernel_view();
-        auto P = phase;
-        cgh.parallel_for(sycl::range<1>(static_cast<std::size_t>(total)), [=](sycl::id<1> tid) {
-            const int64_t idx = static_cast<int64_t>(tid[0]);
-            const int32_t b = static_cast<int32_t>(idx / (static_cast<int64_t>(n) * n));
-            const int64_t rem = idx - static_cast<int64_t>(b) * n * n;
-            const int32_t row = static_cast<int32_t>(rem % n);
-            const int32_t col = static_cast<int32_t>(rem / n);
-            Zc(row, col, b) = P(row, b) * T(Zr(row, col, b), Real(0));
         });
     });
 }

@@ -445,6 +445,39 @@ static_assert(!std::is_convertible_v<Uplo, detail::EmptyBracesAreAmbiguous>,
               "spelling would become ambiguous too");
 
 // ---------------------------------------------------------------------------
+// BATCHLAS_ACCEPT_OWNING (blas/queue-dispatch.hh) replaced ~80 hand-written
+// owning-argument twins with one forwarder per name. These assert the two
+// properties that replacement has to preserve and the one it adds. They are
+// compile-time only on purpose: what is at stake is overload resolution, and a
+// runtime call would not distinguish "resolved to the right overload" from
+// "resolved at all".
+using MDense = Matrix<float, MatrixFormat::Dense>;
+using VDense = MatrixView<float, MatrixFormat::Dense>;
+
+// Preserved: every owning spelling the twins accepted still resolves, with the
+// backend explicit and with it taken from the queue.
+static_assert(requires(Queue& q, MDense& A, Span<std::byte> ws) {
+    gemm<Backend::CUDA>(q, A, A, A, 1.0f, 0.0f, Transpose::NoTrans, Transpose::NoTrans);
+    gemm(q, A, A, A, 1.0f, 0.0f, Transpose::NoTrans, Transpose::NoTrans);
+    potrf<Backend::CUDA>(q, A, Uplo::Lower, ws);
+});
+
+// Added: mixing owning and view arguments in one call. No twin covered this --
+// each was written with every matrix parameter owning -- so this was a compile
+// error before, which is why nothing in the tree spells it.
+static_assert(requires(Queue& q, MDense& A, VDense& V) {
+    gemm(q, A, V, A, 1.0f, 0.0f, Transpose::NoTrans, Transpose::NoTrans);
+});
+
+// Unchanged: an all-view call must not reach the forwarder at all. AnyOwning is
+// the gate that keeps it out of overload resolution, so that the checked
+// convenience overloads above still win.
+static_assert(!detail::AnyOwning<VDense, Span<std::byte>>);
+static_assert(detail::AnyOwning<VDense, MDense>);
+static_assert(detail::is_owning_arg_v<Vector<float>>);
+static_assert(!detail::is_owning_arg_v<VectorView<float>>);
+
+// ---------------------------------------------------------------------------
 // Per-item factorisation status (issue #73).
 //
 // potrf, getrf and getri all had somewhere to put LAPACK's `info` -- every
