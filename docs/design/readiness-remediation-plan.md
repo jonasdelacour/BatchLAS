@@ -11,12 +11,21 @@ commands, and what it must NOT do. Read the whole of §0 before starting any WP.
 
 | ref | what it is |
 |---|---|
-| `main` (`ab6319d`) | what ships. Has NO routing machinery (`Route`, `RouteTable`, `resolve_route`), no native trsm/gemv/spmm/potrf/lu/qr kernels, no `BATCHLAS_ENABLE_VENDOR_BLAS`. Still carries the legacy `Provider`/`DispatchPolicy` headers (`include/batchlas/blas/dispatch/{provider,env,context}.hh`). |
-| `consolidate-vendor-independence` (`e3f679c`) | `main` + 101 commits, 205 files, +36,590/−7,202. Contains every path that `docs/perf/`, `docs/design/known-defects.md` and `docs/design/vendor-free-status.md` cite; 28 of those 53 paths do not exist on `main`. Deletes `provider.hh`/`env.hh`/`context.hh`. Adds `scripts/rocm_syntax_check.sh`, `scripts/route_diff.sh`, `src/dispatch/`. `git merge-tree` against `main` reports **0 conflicts**. Open stacked PRs #95–#105 and #107 are slices of it. |
+| `origin/main` (`ab6319d`, fetched 2026-09-08) | what ships. Has NO routing machinery (`Route`, `RouteTable`, `resolve_route`), no native trsm/gemv/spmm/potrf/lu/qr kernels, no `BATCHLAS_ENABLE_VENDOR_BLAS`. Still carries the legacy `Provider`/`DispatchPolicy` headers (`include/batchlas/blas/dispatch/{provider,env,context}.hh`). Last merges into it: #94 (docs), #106 (doc citations), #108 (code reduction, 2026-09-08). |
+| `origin/stack/pr11-wp8-spmm` (`7dbdfc1`, 2026-09-06) | **the landing candidate.** Tip of the stacked PRs #95–#105 plus #107's review fixes. Per the GitHub API every one of #95–#107 is `merged=True`, but each merged into the *previous stack branch* (#95 → `stack/pr00-docs`, #96 → `stack/pr01-wp0-route`, … #107 → `stack/pr11-wp8-spmm`); none has `base=main`. 40 commits ahead of `main`, 10 behind (= #108). Has 19 `route_*` files, `src/dispatch/`, `scripts/rocm_syntax_check.sh`, `scripts/route_diff.sh`; deletes `provider.hh`/`env.hh`/`context.hh`. |
+| `consolidate-vendor-independence` (`e3f679c`, 2026-09-05) | **stale — do not land from it.** A Sep-5 snapshot that predates #107 (two build breaks, one wrong answer) and #108. 42 files differ from the stack tip. Kept only as a reference. |
 
-**The docs on `main` describe the branch, not `main`.** Do not "fix" a doc
-by deleting a citation that is absent on `main`; it is present on the branch.
-WP0 lands the branch first; everything after WP0 is done on top of it.
+**The docs on `main` describe the stack, not `main`.** 28 of the 53 source
+paths cited by `docs/perf/*.md`, `docs/design/known-defects.md` and
+`docs/design/vendor-free-status.md` do not exist on `main`. Do not "fix" a
+doc by deleting a citation that is absent on `main`; it is present on the
+stack tip. WP0 lands the stack first; everything after WP0 is done on top of it.
+
+**Do not trust a local `main`.** The audit that produced this plan first
+compared against a session-start `main` snapshot and mis-stated the PR
+state. Always `git fetch origin` and compare against `origin/main`; for PR
+state use the GitHub API (`https://api.github.com/repos/jonasdelacour/BatchLAS/pulls/<n>`
+→ `merged`, `base.ref`), not `merge-base --is-ancestor` on a local ref.
 
 **Branch and PR discipline.** One branch per WP, named `readiness/wpN-<slug>`,
 based on `main` after WP0 has merged. Small WPs may be one PR; WP3, WP4, WP5,
@@ -78,23 +87,60 @@ WP1 and WP3 both touch `include/batchlas/util/*.hh` — do WP1 first, rebase WP3
 
 ---
 
-## WP0 — Land the vendor-independence branch
+## WP0 — Land the vendor-independence stack on `main`
 
 **Why first.** `docs/` on `main` cites 28 source paths that only exist on
-`consolidate-vendor-independence`. Every routing/perf finding in the audit
-(P-2, A-4, half of P-3) is about code that has not shipped. Nothing in
-`docs/perf/` is true of `main` until this lands.
+the stack tip. Every routing/perf finding in the audit (P-2, A-4, half of
+P-3) is about code that has not shipped. Nothing in `docs/perf/` is true of
+`main` until this lands. The stack was reviewed and merged PR-by-PR into
+itself; the missing step is the final merge of its tip into `main`, which
+#108 has since made non-trivial.
 
-**Input.** `consolidate-vendor-independence` @ `e3f679c`; open PRs #95–#105, #107.
+**Input.** `origin/stack/pr11-wp8-spmm` @ `7dbdfc1` (contains #95–#107);
+`origin/main` @ `ab6319d` (contains #108).
+
+**Measured 2026-09-08:** `git merge origin/main` into the stack tip conflicts
+in exactly these 14 files (probe merge, aborted):
+
+```
+include/batchlas/blas/dispatch/context.hh     deleted by the stack; #108 edited it → DELETE
+include/batchlas/blas/extensions.hh           stack: routed entry points; #108: generated forwarder
+include/batchlas/blas/extra.hh                same shape as extensions.hh
+include/batchlas/blas/functions/syev.hh       stack: syev's RouteTable lives here; #108: forwarder macros
+src/backends/cublas.cc                        #108 collapsed the 4 Level-3 vendor-wrapper mechanisms and
+src/backends/cusolver.cc                        the 8 instantiation epilogues into op-name tables/one macro
+src/backends/cusparse.cc                        (de69e33, 0889f9b, 1c3aef8); the stack moved the public
+src/backends/mkl.cc                             entry points OUT of these TUs into src/dispatch/entry_points/
+src/backends/netlib_lapack.cc                   and gated them on vendor_available<>. Both are wanted.
+src/backends/rocblas.cc
+src/backends/rocsolver.cc
+src/backends/rocsparse.cc
+src/sycl/gemm_kernels.cc                      #108: 33 forwarders → one NTTP launcher table (a511f84);
+                                              stack WP2: new kernel variants (predicated 128x128, 64x64_k16_wide)
+tests/options_api_tests.cc                    both sides added tests → keep both
+```
+
+**Resolution rule, per file.** The stack owns *what is called* (routing,
+entry-point location, `vendor_available` gates, `supports`/`preferred`
+tables). #108 owns *how the vendor TUs are spelled* (one instantiation macro,
+op-name tables, the single `ScopedEnvVar`, the generated owning-argument
+forwarder). Re-apply #108's mechanism on top of the stack's structure; never
+the reverse. Concretely for the eight backend TUs: start from the stack's
+version (entry points already removed), then port #108's macro collapse to
+what remains. For `gemm_kernels.cc`: keep #108's NTTP launcher table and add
+the stack's new variants as rows. For `syev.hh`/`extensions.hh`/`extra.hh`:
+the stack's declarations + #108's `BATCHLAS_ACCEPT_OWNING` form. Memory
+notes `pr93-stacked-split` and `stale-main-ref-trap` describe the earlier
+round of exactly this conflict.
 
 **Steps.**
-1. `git checkout -b readiness/wp0-land-vendor-independence consolidate-vendor-independence && git merge main` — expect a clean merge (0 conflicts measured 2026-09-08). If `main` moved and conflicts appear, resolve favouring the branch for `src/dispatch/**`, `src/backends/route_*`, `docs/**`; favour `main` for anything from PR #108 (code-reduction: `ScopedEnvVar`, the generated forwarder, Level-3 wrapper collapse).
-2. Configure `dev-tests`, build, run `ctest -LE slow`. Then the full suite once. Record the failing-name set; it must be a subset of the `main` baseline above plus whatever PR #107's description names as intentionally changed.
+1. `git fetch origin && git checkout -b readiness/wp0-land-stack origin/stack/pr11-wp8-spmm && git merge origin/main`. Resolve the 14 files per the rule above. Commit the merge with a message that lists, per file, which side's mechanism won and why.
+2. Configure `dev-tests`, build, run `ctest -LE slow`. Then the full suite once. Record the failing-name set; it must be a subset of the `main` baseline above plus whatever PR #107's description names as intentionally changed. `tests/route_vocabulary_tests.cc` and the 24 forced-kernel gemm tests #108 rerouted (`575007d`) must both pass — they are the two sides' own regression guards for this merge.
 3. Re-run the vendor-free configuration once: `-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF -DBATCHLAS_ENABLE_CUDA=ON`, build, `ctest -LE slow`. Expected ≈ 35/57 suites (host rows fail by design — `docs/design/vendor-free-status.md` §"Why the ctest pass count is the wrong instrument"). Confirm the GPU rows of `trsm_tests`, `spmm_tests`, `gemv_tests` pass.
 4. Run `.github/ci/run_local_checks.sh` and, after `cmake --install build --prefix /tmp/inst`, `run_local_checks.sh /tmp/inst`.
-5. Open ONE PR that supersedes #95–#105 and #107 (link them in the body; close them after merge). Body: the failing-name diff from step 2, the vendor-free summary from step 3.
+5. Open ONE PR against `main` titled "Vendor independence 12/11: land the stack on main" (link #95–#107 in the body; they are already merged into the stack and need no action). Body: the per-file merge decisions from step 1, the failing-name diff from step 2, the vendor-free summary from step 3. After it merges, delete the twelve `stack/*` branches and `consolidate-vendor-independence`.
 
-**Acceptance.** Merge into `main`; `git ls-files | grep -c route_` ≥ 20;
+**Acceptance.** Merge into `main`; `git ls-files | grep -c route_` ≥ 19;
 `include/batchlas/blas/dispatch/provider.hh` gone; every path cited in
 `docs/` resolves:
 ```
@@ -415,7 +461,7 @@ with κ = 1e3) reaches `double` accuracy in ≤ 5 iterations; κ = 1e9 sets
 
 All small; one PR.
 1. **Root working documents.** `git mv` the 19 non-README/AGENTS `*.md` at the repo root into `docs/archive/` with an `index.md` that gives each one line and the tag/PR it fed. Do not delete — they are cited by memory and by `docs/perf/`. Update any relative link that breaks (`grep -rn "\](\.\./\|\](SYEV\|\](GESVD" docs README.md`).
-2. **Provider doc drift (A-4).** After WP0 the three `Provider`-carrying headers are gone; verify with `grep -rn Provider include/` (expect only comments in `dispatch.md`'s history section). If any survives, migrate it to `Route` per `docs/perf/dispatch.md`.
+2. **Provider doc drift (A-4).** After WP0 the three `Provider`-carrying headers are gone (WP0's merge deletes `context.hh`; `provider.hh`/`env.hh` are already absent on the stack tip); verify with `grep -rn Provider include/` (expect only comments in `dispatch.md`'s history section). If any survives, migrate it to `Route` per `docs/perf/dispatch.md`.
 3. **`scripts/rocm_syntax_check.sh`** arrives with WP0. Run it once (`/opt/rocm*` headers are on this box per memory) and make it a `-LE slow` ctest (`rocm_syntax_check`, label `packaging`) so it cannot vanish again unnoticed.
 4. **Project furniture.** `CONTRIBUTING.md` (build presets, test scoping rule, the blind-guard checklist, comment-density norm, PR expectations incl. failing-name diff), `SECURITY.md` (contact + "no untrusted input hardening claimed"), `.github/CODEOWNERS` (`* @jonasdelacour`), `.github/ISSUE_TEMPLATE/bug.yml` (asks for `sycl-ls`, compiler realpath, CUDA version, the configure line, and the failing test name).
 5. **README "Tested platforms"** — add the CI rows from WP2 so the table describes what is enforced.
