@@ -135,7 +135,14 @@ namespace batchlas {
             } else {
                 Queue sub_queue(ctx.device(), false);
                 for (int i = 0; i < A.batch_size(); ++i) {
-                    ormqr_vendor<B, T>(sub_queue,
+                    // (void) on an Event: deliberate, but NOT because of queue ordering --
+                    // Queue(device, false) above is explicitly OUT-OF-ORDER, so these
+                    // per-item submissions are not ordered against each other and must
+                    // not be assumed to be. What makes dropping the Events safe is the
+                    // explicit sub_queue.wait() after the loop: it joins all of them
+                    // before this function returns, and the caller's ordering then comes
+                    // from create_event_after_external_work().
+                    (void)ormqr_vendor<B, T>(sub_queue,
                                        A.batch_item(i),
                                        C.batch_item(i),
                                        side,
@@ -190,7 +197,7 @@ namespace batchlas {
         } else {
             Queue sub_queue(ctx.device(), false);
             for (int i = 0; i < A.batch_size(); ++i) {
-                orgqr<B>(sub_queue, A.batch_item(i), tau.subspan(i * k, k), {});
+                (void)orgqr<B>(sub_queue, A.batch_item(i), tau.subspan(i * k, k), {});
             }
             sub_queue.wait();
         }
@@ -368,12 +375,18 @@ namespace batchlas {
                       Span<typename base_type<T>::type> eigenvalues,
                       JobType jobtype,
                       Uplo uplo,
-                      Span<std::byte> workspace) {
+                      Span<std::byte> workspace,
+                      Span<int32_t> info_out) {
         return op_external("rocsolver.syev_vendor", [&] {
             static LinalgHandle<B> handle;
             handle.setStream(ctx);
             BumpAllocator pool(workspace);
-            auto info = pool.allocate<int>(ctx, A.batch_size());
+            // rocSOLVER's info is documented per-item LAPACK semantics (see the note
+            // on potrf_vendor above, which already uses info_target). It was
+            // allocated, passed and dropped. Routing the caller's span in only ever
+            // REMOVES a pool draw, so syev_vendor_buffer_size keeps its
+            // unconditional int term and its result does not change.
+            auto info = detail::info_target(ctx, pool, info_out, static_cast<size_t>(A.batch_size()));
             auto ws = pool.allocate<typename base_type<T>::type>(ctx, A.rows() * A.batch_size());
             if (A.batch_size() == 1) {
                 call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_ssyev, rocsolver_dsyev, rocsolver_cheev, rocsolver_zheev,
@@ -415,8 +428,9 @@ namespace batchlas {
                        const MatrixView<T, MatrixFormat::Dense>& /*Vh*/,
                        SvdVectors /*jobu*/,
                        SvdVectors /*jobvh*/,
-                       Span<std::byte> /*workspace*/) {
-        throw std::runtime_error("gesvd_vendor (ROCSOLVER): not implemented");
+                       Span<std::byte> /*workspace*/,
+                       Span<int32_t> /*info_out*/) {
+        throw batchlas::unsupported("gesvd_vendor (ROCSOLVER): not implemented");
     }
 
     template <Backend B, typename T>
@@ -427,7 +441,7 @@ namespace batchlas {
                                     const MatrixView<T, MatrixFormat::Dense>& /*Vh*/,
                                     SvdVectors /*jobu*/,
                                     SvdVectors /*jobvh*/) {
-        throw std::runtime_error("gesvd_vendor_buffer_size (ROCSOLVER): not implemented");
+        throw batchlas::unsupported("gesvd_vendor_buffer_size (ROCSOLVER): not implemented");
     }
 
     } // namespace backend

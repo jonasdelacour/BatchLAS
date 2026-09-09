@@ -103,7 +103,7 @@ bool Queue::backend_available(batchlas::Backend backend) {
 
 void Queue::set_backend(batchlas::Backend backend) {
     if (backend != batchlas::Backend::AUTO && !backend_available(backend)) {
-        throw std::runtime_error(
+        throw batchlas::unsupported(
             std::string("Queue::set_backend: backend ") + std::string(batchlas::to_string(backend)) +
             " is not compiled into this build of BatchLAS.");
     }
@@ -133,7 +133,7 @@ batchlas::Backend Queue::backend() const {
         choice = Backend::NETLIB;
     }
     if (choice == Backend::AUTO) {
-        throw std::runtime_error("Queue::backend: no backend compiled into this build can serve this device.");
+        throw batchlas::unsupported("Queue::backend: no backend compiled into this build can serve this device.");
     }
     resolved_backend_ = choice;
     return choice;
@@ -196,7 +196,7 @@ void Queue::require_device_accessible(const void* ptr, const char* what) const {
            "  - allocate with sycl::malloc_device/malloc_shared/malloc_host, or\n"
            "    cudaMalloc/cudaMallocManaged on CUDA.\n"
            "See 'Where the memory has to live: the USM contract' in docs/cpp-api.md.";
-    throw std::invalid_argument(msg);
+    throw batchlas::invalid_argument(msg);
 }
 
 size_t Queue::workspace_capacity() const { return impl_->arena_.capacity(); }

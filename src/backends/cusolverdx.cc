@@ -25,23 +25,23 @@ inline void validate_htev_args(const VectorView<T>& d,
                                JobType jobz,
                                const MatrixView<T, MatrixFormat::Dense>& eigvects) {
     if (d.size() < 1) {
-        throw std::invalid_argument("cusolverdx::htev: d must have positive length");
+        throw batchlas::invalid_argument("cusolverdx::htev: d must have positive length");
     }
     if (e.size() != d.size() - 1) {
-        throw std::invalid_argument("cusolverdx::htev: e size must be n-1");
+        throw batchlas::invalid_argument("cusolverdx::htev: e size must be n-1");
     }
     if (eigenvalues.size() != d.size()) {
-        throw std::invalid_argument("cusolverdx::htev: eigenvalues size must match d size");
+        throw batchlas::invalid_argument("cusolverdx::htev: eigenvalues size must match d size");
     }
     if (e.batch_size() != d.batch_size() || eigenvalues.batch_size() != d.batch_size()) {
-        throw std::invalid_argument("cusolverdx::htev: d/e/eigenvalues batch sizes must match");
+        throw batchlas::invalid_argument("cusolverdx::htev: d/e/eigenvalues batch sizes must match");
     }
     if (jobz == JobType::EigenVectors) {
         if (eigvects.rows() != d.size() || eigvects.cols() != d.size()) {
-            throw std::invalid_argument("cusolverdx::htev: eigvects must be n x n when eigenvectors are requested");
+            throw batchlas::invalid_argument("cusolverdx::htev: eigvects must be n x n when eigenvectors are requested");
         }
         if (eigvects.batch_size() != d.batch_size()) {
-            throw std::invalid_argument("cusolverdx::htev: eigvects batch size must match d batch size");
+            throw batchlas::invalid_argument("cusolverdx::htev: eigvects batch size must match d batch size");
         }
     }
 }
@@ -92,7 +92,7 @@ inline cudaStream_t cuda_stream_from_queue(const Queue& ctx) {
 
 inline void throw_on_cuda_error(cudaError_t status, const char* where) {
     if (status != cudaSuccess) {
-        throw std::runtime_error(std::string(where) + ": " + cudaGetErrorString(status));
+        throw batchlas::device_error(std::string(where) + ": " + cudaGetErrorString(status));
     }
 }
 
@@ -226,7 +226,7 @@ Event heev(Queue& ctx,
     static_cast<void>(jobz);
     static_cast<void>(uplo);
     static_cast<void>(workspace);
-    throw std::runtime_error("cusolverdx::heev requires CUDA backend support");
+    throw batchlas::unsupported("cusolverdx::heev requires CUDA backend support");
 #endif
 }
 
@@ -246,7 +246,7 @@ size_t heev_buffer_size(Queue& ctx,
     static_cast<void>(eigenvalues);
     static_cast<void>(jobz);
     static_cast<void>(uplo);
-    throw std::runtime_error("cusolverdx::heev_buffer_size requires CUDA backend support");
+    throw batchlas::unsupported("cusolverdx::heev_buffer_size requires CUDA backend support");
 #endif
 }
 
@@ -275,7 +275,9 @@ Event htev(Queue& ctx,
         const size_t syev_ws = backend::syev_vendor_buffer_size<Backend::CUDA, T>(ctx, dense, lambda, jobz, uplo);
         auto syev_workspace = pool.allocate<std::byte>(ctx, syev_ws);
 
-        backend::syev_vendor<Backend::CUDA, T>(ctx, dense, lambda, jobz, uplo, syev_workspace);
+        // (void) on an Event: deliberate. This Queue is in-order, so the next submission
+        // is already ordered after this one and the Event carries nothing the caller needs.
+        (void)backend::syev_vendor<Backend::CUDA, T>(ctx, dense, lambda, jobz, uplo, syev_workspace);
 
         if (jobz == JobType::EigenVectors) {
             MatrixView<T, MatrixFormat::Dense>::copy(ctx, eigvects, dense);
@@ -291,7 +293,7 @@ Event htev(Queue& ctx,
     static_cast<void>(eigvects);
     static_cast<void>(workspace);
     static_cast<void>(uplo);
-    throw std::runtime_error("cusolverdx::htev requires CUDA backend support");
+    throw batchlas::unsupported("cusolverdx::htev requires CUDA backend support");
 #endif
 }
 
@@ -304,7 +306,7 @@ size_t htev_buffer_size(Queue& ctx,
 #if BATCHLAS_HAS_CUDA_BACKEND
     return op_external("cusolverdx.htev_buffer_size", [&] {
         if (d.size() < 1 || e.size() != d.size() - 1 || e.batch_size() != d.batch_size()) {
-            throw std::invalid_argument("cusolverdx::htev_buffer_size: invalid d/e sizes");
+            throw batchlas::invalid_argument("cusolverdx::htev_buffer_size: invalid d/e sizes");
         }
         const int n = d.size();
         const int batch = d.batch_size();
@@ -326,7 +328,7 @@ size_t htev_buffer_size(Queue& ctx,
     static_cast<void>(e);
     static_cast<void>(jobz);
     static_cast<void>(uplo);
-    throw std::runtime_error("cusolverdx::htev_buffer_size requires CUDA backend support");
+    throw batchlas::unsupported("cusolverdx::htev_buffer_size requires CUDA backend support");
 #endif
 }
 

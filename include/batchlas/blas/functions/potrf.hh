@@ -67,17 +67,17 @@ template <typename T>
 inline void potrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
                                   Uplo uplo) {
     if (A.rows() < 0 || A.cols() < 0) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "POTRF: Matrix dimensions cannot be negative (rows=" +
             std::to_string(A.rows()) + ", cols=" + std::to_string(A.cols()) + ")");
     }
     if (A.rows() != A.cols()) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "POTRF: A must be square, got " + std::to_string(A.rows()) + "x" +
             std::to_string(A.cols()));
     }
     if (uplo != Uplo::Lower && uplo != Uplo::Upper) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "POTRF: Invalid uplo parameter: " +
             std::to_string(static_cast<int>(uplo)));
     }

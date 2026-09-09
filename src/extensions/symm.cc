@@ -13,10 +13,10 @@ void validate_symm_arguments(const MatrixView<T, MatrixFormat::Dense>& A,
                              const MatrixView<T, MatrixFormat::Dense>& C,
                              Side side) {
     if (A.rows() != A.cols()) {
-        throw std::invalid_argument("symm requires A to be square");
+        throw batchlas::invalid_argument("symm requires A to be square");
     }
     if (A.batch_size() != B.batch_size() || B.batch_size() != C.batch_size()) {
-        throw std::invalid_argument("symm requires matching batch sizes");
+        throw batchlas::invalid_argument("symm requires matching batch sizes");
     }
 
     const int expected_rows = side == Side::Left ? A.rows() : B.rows();
@@ -24,10 +24,10 @@ void validate_symm_arguments(const MatrixView<T, MatrixFormat::Dense>& A,
     const int shared_dim = side == Side::Left ? B.rows() : B.cols();
 
     if (shared_dim != A.rows()) {
-        throw std::invalid_argument("symm dimension mismatch between A and B");
+        throw batchlas::invalid_argument("symm dimension mismatch between A and B");
     }
     if (C.rows() != expected_rows || C.cols() != expected_cols) {
-        throw std::invalid_argument("symm output matrix has incompatible dimensions");
+        throw batchlas::invalid_argument("symm output matrix has incompatible dimensions");
     }
 }
 

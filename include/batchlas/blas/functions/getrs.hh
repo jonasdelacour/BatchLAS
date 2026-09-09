@@ -64,7 +64,7 @@ template <typename T>
 inline void getrs_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
                                   const MatrixView<T, MatrixFormat::Dense>& B) {
     if (A.rows() < 0 || A.cols() < 0 || B.rows() < 0 || B.cols() < 0) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "GETRS: Matrix dimensions cannot be negative (A: rows=" +
             std::to_string(A.rows()) + ", cols=" + std::to_string(A.cols()) +
             "; B: rows=" + std::to_string(B.rows()) +

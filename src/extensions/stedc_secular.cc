@@ -7,6 +7,7 @@
 #include <batchlas/backend_config.h>
 #include "../math-helpers.hh"
 #include "stedc_secular.hh"
+#include "info_span.hh"
 
 namespace batchlas {
 
@@ -145,7 +146,8 @@ template <typename T>
 SYCL_EXTERNAL T sec_solve_ext_roc(const int32_t dd,
                                   const VectorView<T>& D,
                                   const VectorView<T>& z,
-                                  const T p)
+                                  const T p,
+                                  bool& converged_out)
 {
     bool converged = false;
     T lower_bound, upper_bound, quadratic_a, quadratic_b, quadratic_c, root;
@@ -349,12 +351,14 @@ SYCL_EXTERNAL T sec_solve_ext_roc(const int32_t dd,
                                    + rho_inverse;
         }
     }
-    (void)converged;
+    // Was `(void)converged;` -- the flag was computed by both exit paths and then
+    // explicitly discarded. It is now the caller's to report.
+    converged_out = converged;
     return root;
 }
 
 template <typename T>
-SYCL_EXTERNAL T sec_solve_roc(int32_t dd, const VectorView<T>& d, const VectorView<T>& z, const T& rho, const int32_t k){
+SYCL_EXTERNAL T sec_solve_roc(int32_t dd, const VectorView<T>& d, const VectorView<T>& z, const T& rho, const int32_t k, bool& converged_out){
     bool converged = false;
     bool origin_at_lower_pole = false;
     bool use_fixed_weight_update = false;
@@ -619,18 +623,26 @@ SYCL_EXTERNAL T sec_solve_roc(int32_t dd, const VectorView<T>& d, const VectorVi
                 use_fixed_weight_update = !use_fixed_weight_update;
         }
     }
-    assert(converged && "sec_solve_roc did not converge!");
+    // Was `assert(converged && ...)`. An assert in device code is compiled out in a
+    // release build, so on the path that actually ships this was not a diagnostic
+    // at all -- a root that hit the iteration cap returned a wrong eigenvalue and
+    // nothing said so. Report it instead.
+    converged_out = converged;
     return root; // return the computed root (k^{th} eigenvalue)
 }
 
 template <typename T>
-Event secular_solver(Queue& ctx, const VectorView<T>& d, const VectorView<T>& v, const MatrixView<T, MatrixFormat::Dense>& Qprime, const VectorView<T>& lambdas, const Span<int32_t>& n_reduced, const Span<T> rho, const T& tol_factor) {
+Event secular_solver(Queue& ctx, const VectorView<T>& d, const VectorView<T>& v, const MatrixView<T, MatrixFormat::Dense>& Qprime, const VectorView<T>& lambdas, const Span<int32_t>& n_reduced, const Span<T> rho, const T& tol_factor, int32_t* info, int64_t info_nodes_per_item) {
     //Solve the secular equation for each row in d and v
     auto N_max = d.size();
     const T safe_min = std::numeric_limits<T>::min();
     const T safe_denorm = std::numeric_limits<T>::denorm_min() > T(0) ? std::numeric_limits<T>::denorm_min() : safe_min;
     const T log_upper_bound = static_cast<T>(std::log(static_cast<double>(std::numeric_limits<T>::max())));
     const T log_lower_bound = static_cast<T>(std::log(static_cast<double>(safe_denorm)));
+    // A local of the submit lambda so the kernel's `[=]` copies a pointer;
+    // nullptr when status was not requested, which makes info_report a no-op.
+    int32_t* const info_dev = info;
+    const int64_t nodes_per_item = info_nodes_per_item;
     ctx -> submit([&](sycl::handler& h) {
         auto Qview = Qprime.kernel_view();
         auto shared_mem = sycl::local_accessor<T, 1>(sycl::range<1>(N_max), h);
@@ -679,8 +691,19 @@ Event secular_solver(Queue& ctx, const VectorView<T>& d, const VectorView<T>& v,
                     auto new_lam = lam + eta;
 
                     auto stop_threshold = tol_factor * std::numeric_limits<T>::epsilon() * n * (1 + std::abs(psi1) + std::abs(psi2));
-                    if (std::abs(eta) <= stop_threshold || iter >= 100) {
+                    // The two exit reasons used to be one condition, so a root that
+                    // ran out of budget was indistinguishable from one that met the
+                    // tolerance. Split them: only the tolerance arm is convergence.
+                    // (The 100 is a hardcoded literal on this arm -- StedcParams::
+                    // max_sec_iter does not reach it. Noted in `deferred`.)
+                    const bool tol_met = std::abs(eta) <= stop_threshold;
+                    if (tol_met || iter >= 100) {
                         lam = new_lam;
+                        if (!tol_met) {
+                            detail::info_report(info_dev,
+                                                detail::info_item(static_cast<int64_t>(bid), nodes_per_item),
+                                                1);
+                        }
                         break;
                     } else if (!std::isfinite(new_lam)) {
                         //Fall back to Newton's method
@@ -767,22 +790,26 @@ Event secular_solver(Queue& ctx, const VectorView<T>& d, const VectorView<T>& v,
 template float sec_solve_ext_roc<float>(const int32_t dd,
                                         const VectorView<float>& D,
                                         const VectorView<float>& z,
-                                        const float p);
+                                        const float p,
+                                        bool& converged_out);
 template double sec_solve_ext_roc<double>(const int32_t dd,
                                           const VectorView<double>& D,
                                           const VectorView<double>& z,
-                                          const double p);
+                                          const double p,
+                                          bool& converged_out);
 
 template float sec_solve_roc<float>(int32_t dd,
                                     const VectorView<float>& d,
                                     const VectorView<float>& z,
                                     const float& rho,
-                                    const int32_t k);
+                                    const int32_t k,
+                                    bool& converged_out);
 template double sec_solve_roc<double>(int32_t dd,
                                       const VectorView<double>& d,
                                       const VectorView<double>& z,
                                       const double& rho,
-                                      const int32_t k);
+                                      const int32_t k,
+                                      bool& converged_out);
 
 template Event secular_solver<float>(Queue& ctx,
                                      const VectorView<float>& d,
@@ -791,7 +818,9 @@ template Event secular_solver<float>(Queue& ctx,
                                      const VectorView<float>& lambdas,
                                      const Span<int32_t>& n_reduced,
                                      const Span<float> rho,
-                                     const float& tol_factor);
+                                     const float& tol_factor,
+                                     int32_t* info,
+                                     int64_t info_nodes_per_item);
 
 template Event secular_solver<double>(Queue& ctx,
                                       const VectorView<double>& d,
@@ -800,6 +829,8 @@ template Event secular_solver<double>(Queue& ctx,
                                       const VectorView<double>& lambdas,
                                       const Span<int32_t>& n_reduced,
                                       const Span<double> rho,
-                                      const double& tol_factor);
+                                      const double& tol_factor,
+                                      int32_t* info,
+                                      int64_t info_nodes_per_item);
 
 } // namespace batchlas

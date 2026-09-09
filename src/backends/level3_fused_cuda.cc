@@ -84,7 +84,7 @@ FusedResult symm_fused_try(Queue& ctx,
         return unsupported();
     }
     if (status != cudaSuccess) {
-        throw std::runtime_error(std::string("cuBLASDx fused SYMM launch failed: ") + cudaGetErrorString(status));
+        throw batchlas::device_error(std::string("cuBLASDx fused SYMM launch failed: ") + cudaGetErrorString(status));
     }
     return FusedResult{ctx.create_event_after_external_work(), FusedResult::Outcome::Ran};
 }
@@ -125,7 +125,7 @@ FusedResult syrk_fused_try(Queue& ctx,
         return unsupported();
     }
     if (status != cudaSuccess) {
-        throw std::runtime_error(std::string("cuBLASDx fused SYRK launch failed: ") + cudaGetErrorString(status));
+        throw batchlas::device_error(std::string("cuBLASDx fused SYRK launch failed: ") + cudaGetErrorString(status));
     }
     return FusedResult{ctx.create_event_after_external_work(), FusedResult::Outcome::Ran};
 }
@@ -170,7 +170,7 @@ FusedResult syr2k_fused_try(Queue& ctx,
         return unsupported();
     }
     if (status != cudaSuccess) {
-        throw std::runtime_error(std::string("cuBLASDx fused SYR2K launch failed: ") + cudaGetErrorString(status));
+        throw batchlas::device_error(std::string("cuBLASDx fused SYR2K launch failed: ") + cudaGetErrorString(status));
     }
     return FusedResult{ctx.create_event_after_external_work(), FusedResult::Outcome::Ran};
 }
@@ -221,7 +221,7 @@ FusedResult trmm_fused_try(Queue& ctx,
         return unsupported();
     }
     if (status != cudaSuccess) {
-        throw std::runtime_error(std::string("cuBLASDx fused TRMM launch failed: ") + cudaGetErrorString(status));
+        throw batchlas::device_error(std::string("cuBLASDx fused TRMM launch failed: ") + cudaGetErrorString(status));
     }
     return FusedResult{ctx.create_event_after_external_work(), FusedResult::Outcome::Ran};
 }

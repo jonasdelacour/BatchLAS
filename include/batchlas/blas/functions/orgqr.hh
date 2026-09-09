@@ -56,7 +56,7 @@ using orgqr_vendor_buffer_size = size_t(Queue&,
 template <typename T>
 inline void orgqr_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
     if (A.rows() < 0 || A.cols() < 0) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "ORGQR: Matrix dimensions cannot be negative (rows=" +
             std::to_string(A.rows()) + ", cols=" + std::to_string(A.cols()) + ")");
     }

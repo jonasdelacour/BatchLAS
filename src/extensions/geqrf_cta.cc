@@ -248,36 +248,36 @@ Event geqrf_cta_dispatch(Queue& ctx,
     const int batch = static_cast<int>(A.batch_size());
 
     if (m < 1 || n < 1 || batch < 1) {
-        throw std::invalid_argument("geqrf_cta: degenerate extents");
+        throw batchlas::invalid_argument("geqrf_cta: degenerate extents");
     }
     if (m < n) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "geqrf_cta: m < n is not supported (route_geqrf.hh's supports() refuses it)");
     }
     if (A.is_heterogeneous()) {
         // One launch covers the batch with a single (m, n, ld, stride) tuple.
-        throw std::invalid_argument("geqrf_cta: heterogeneous batch is not supported");
+        throw batchlas::invalid_argument("geqrf_cta: heterogeneous batch is not supported");
     }
     const auto dev = ctx.device();
     if (dev.type != DeviceType::GPU) {
-        throw std::invalid_argument("geqrf_cta: GPU queues only");
+        throw batchlas::invalid_argument("geqrf_cta: GPU queues only");
     }
     if (!dev.supports_sub_group_size(32)) {
         // ENUMERATED, not MAX_SUB_GROUP_SIZE >= 32: that returns the FIRST supported
         // size, so the weak test accepts a {64} device and the launch aborts.
-        throw std::runtime_error(
+        throw batchlas::unsupported(
             "geqrf_cta: device does not offer sub-group size 32, which the kernel requires");
     }
 
     const std::size_t k = static_cast<std::size_t>(std::min(m, n));
     if (tau.size() < k * static_cast<std::size_t>(batch)) {
-        throw std::invalid_argument("geqrf_cta: tau span is shorter than k * batch");
+        throw batchlas::invalid_argument("geqrf_cta: tau span is shorter than k * batch");
     }
 
     const std::size_t local_mem = dev.get_property(DeviceProperty::LOCAL_MEM_SIZE);
     const std::size_t budget = (local_mem > 4096) ? (local_mem - 4096) : 0;
     if (!geqrf_cta_fits<T>(m, n, budget)) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "geqrf_cta: " + std::to_string(m) + " x " + std::to_string(n) +
             " does not fit this device's local memory (needs " +
             std::to_string(geqrf_slm_bytes<T>(m, n)) + " B of " + std::to_string(budget) +
@@ -290,7 +290,7 @@ Event geqrf_cta_dispatch(Queue& ctx,
                                        tau.data(), static_cast<int>(k), 0, &resident);
     if (!resident) {
         // Unreachable; asserted because a silent tier swap passes a pinned-route test.
-        throw std::logic_error(
+        throw batchlas::internal_error(
             "geqrf_cta: the panel leaf did not take the resident path after the fit "
             "check passed -- geqrf_cta_fits and geqrf_panel_factorize disagree");
     }

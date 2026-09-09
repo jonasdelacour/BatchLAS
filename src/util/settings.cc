@@ -11,6 +11,10 @@
 // header, so the two read side by side.
 
 #include <batchlas/settings.hh>
+// Direct, not inherited: this is the one throwing TU that never reaches
+// <batchlas/util/sycl-device-queue.hh>, which is where every other one picks
+// the exception hierarchy up.
+#include <batchlas/error.hh>
 
 #include <batchlas/backend_config.h>
 #include <batchlas/blas/dispatch/route_env.hh>  // legacy_variable_for
@@ -365,7 +369,7 @@ const Settings& settings() {
 
 void configure(const Settings& s) {
     if (detail::queue_constructed()) {
-        throw std::runtime_error(
+        throw batchlas::api_misuse(
             "BatchLAS: batchlas::configure() was called after a Queue had already been "
             "constructed. Routing and geometry settings are read by *_buffer_size() queries "
             "as well as by the matching solve, and several of them change how much scratch a "

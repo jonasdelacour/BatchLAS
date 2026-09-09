@@ -606,41 +606,41 @@ Event getrs_fused_dispatch(Queue& ctx,
     const int batch = static_cast<int>(A.batch_size());
 
     if (n < 1 || nrhs < 1 || batch < 1) {
-        throw std::invalid_argument("getrs_fused: degenerate extents");
+        throw batchlas::invalid_argument("getrs_fused: degenerate extents");
     }
     if (A.rows() != A.cols()) {
-        throw std::invalid_argument("getrs_fused: A must be square");
+        throw batchlas::invalid_argument("getrs_fused: A must be square");
     }
     if (A.rows() != B.rows()) {
-        throw std::invalid_argument("getrs_fused: B must have A.rows() rows");
+        throw batchlas::invalid_argument("getrs_fused: B must have A.rows() rows");
     }
     if (A.batch_size() != B.batch_size()) {
-        throw std::invalid_argument("getrs_fused: A and B must agree on batch size");
+        throw batchlas::invalid_argument("getrs_fused: A and B must agree on batch size");
     }
     if (A.is_heterogeneous() || B.is_heterogeneous()) {
-        throw std::invalid_argument("getrs_fused: heterogeneous batch is not supported");
+        throw batchlas::invalid_argument("getrs_fused: heterogeneous batch is not supported");
     }
     const auto dev = ctx.device();
     if (dev.type != DeviceType::GPU) {
-        throw std::invalid_argument("getrs_fused: GPU queues only");
+        throw batchlas::invalid_argument("getrs_fused: GPU queues only");
     }
     if (!dev.supports_sub_group_size(32)) {
         // ENUMERATED, never get_property(MAX_SUB_GROUP_SIZE) >= 32: that property
         // returns sub_group_sizes()[0], so the weak test refuses a {8,16,32} device
         // and ACCEPTS a {64} one -- where this kernel's reqd_sub_group_size(32)
         // block solve is a launch abort.
-        throw std::runtime_error(
+        throw batchlas::unsupported(
             "getrs_fused: device does not offer sub-group size 32");
     }
     if (pivots.size() < static_cast<std::size_t>(n) * static_cast<std::size_t>(batch)) {
-        throw std::invalid_argument("getrs_fused: pivot span is shorter than n * batch");
+        throw batchlas::invalid_argument("getrs_fused: pivot span is shorter than n * batch");
     }
 
     const std::size_t local_mem = dev.get_property(DeviceProperty::LOCAL_MEM_SIZE);
     const std::size_t budget = (local_mem > 4096) ? (local_mem - 4096) : 0;
     const std::size_t need = static_cast<std::size_t>(n) * static_cast<std::size_t>(nrhs);
     if (need > getrs_fused_max_rhs_elems<T>(budget)) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "getrs_fused: n * nrhs = " + std::to_string(need) +
             " exceeds this device's resident-RHS capacity (" +
             std::to_string(getrs_fused_max_rhs_elems<T>(budget)) +
@@ -648,7 +648,7 @@ Event getrs_fused_dispatch(Queue& ctx,
             "call to Algorithm::Blocked instead.");
     }
     if (nrhs > kGetrsFusedMaxRhs) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "getrs_fused: nrhs = " + std::to_string(nrhs) + " is above the widest "
             "instantiated accumulator (" + std::to_string(kGetrsFusedMaxRhs) +
             "). Route to Algorithm::Blocked.");

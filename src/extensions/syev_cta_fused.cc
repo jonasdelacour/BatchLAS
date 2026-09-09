@@ -9,6 +9,7 @@
 #include <batchlas/backend_config.h>
 #include "../math-helpers.hh"
 #include "../queue.hh"
+#include "info_span.hh"
 #include "../util/template-instantiations.hh"
 
 #include "sytrd_cta_device.hh"
@@ -94,7 +95,8 @@ inline void syev_cta_fused_impl(Queue& ctx,
                                 int32_t n,
                                 bool upper,
                                 const SteqrParams<T>& params,
-                                size_t cta_wg_size_multiplier) {
+                                size_t cta_wg_size_multiplier,
+                                int32_t* info) {
     using Real = typename base_type<T>::type;
     constexpr bool kComplex = internal::is_complex<T>::value;
 
@@ -179,6 +181,10 @@ inline void syev_cta_fused_impl(Queue& ctx,
         const bool ascending = (params.sort_order == SortOrder::Ascending);
 
         Real* W = w_ptr;
+        // Same reason as W: a local of the submit lambda, so the kernel's `[=]`
+        // copies a pointer rather than reaching through the enclosing `[&]`.
+        // nullptr when status was not requested, which makes info_store a no-op.
+        int32_t* const info_dev = info;
 
         cgh.parallel_for<SyevCtaFusedKernel<T, P, ComputeVectors>>(
             sycl::nd_range<1>(global_size, wg_size),
@@ -282,9 +288,15 @@ inline void syev_cta_fused_impl(Queue& ctx,
                 if constexpr (!ComputeVectors) {
                     // ---- Stage 2: eigenvalues only, no accumulator. ----
                     QSharedCache<Real, P, LDQ, false, decltype(Q_local)> qcache(Q_local, base_q, lane, nn);
-                    steqr_cta_solve<Real, P>(part, diag, offdiag, qcache, nn,
+                    const bool failed = steqr_cta_solve<Real, P>(part, diag, offdiag, qcache, nn,
                                              max_sweeps, zero_threshold,
                                              shift_strategy, update_scheme);
+                    // The bool steqr_cta_solve has always returned and this tier has
+                    // always dropped one line later. A STORE, not a raise: exactly one
+                    // of the three arms below runs per problem, so this kernel is the
+                    // single writer for the item and needs no separate clear (which
+                    // would be a second submission, and racy on an out-of-order queue).
+                    if (lane == 0) detail::info_store(info_dev, prob_id, failed ? 1 : 0);
 
                     const int32_t dst = slot_of(diag);
                     if (lane < nn) {
@@ -390,9 +402,10 @@ inline void syev_cta_fused_impl(Queue& ctx,
 
                     // ---- Stage 2b: sweeps, accumulating onto Q_house. ----
                     QSharedCache<Real, P, LDQ, true, decltype(A_local)> qcache(A_local, base_a, lane, nn);
-                    steqr_cta_solve<Real, P>(part, diag, offdiag, qcache, nn,
+                    const bool failed = steqr_cta_solve<Real, P>(part, diag, offdiag, qcache, nn,
                                              max_sweeps, zero_threshold,
                                              shift_strategy, update_scheme);
+                    if (lane == 0) detail::info_store(info_dev, prob_id, failed ? 1 : 0);
 
                     const int32_t dst = slot_of(diag);
                     if (lane < nn) {
@@ -415,9 +428,10 @@ inline void syev_cta_fused_impl(Queue& ctx,
                     }
                     group_barrier(part);
 
-                    steqr_cta_solve<Real, P>(part, diag, offdiag, qcache, nn,
+                    const bool failed = steqr_cta_solve<Real, P>(part, diag, offdiag, qcache, nn,
                                              max_sweeps, zero_threshold,
                                              shift_strategy, update_scheme);
+                    if (lane == 0) detail::info_store(info_dev, prob_id, failed ? 1 : 0);
 
                     const int32_t dst = slot_of(diag);
                     if (lane < nn) {
@@ -511,24 +525,25 @@ Event syev_cta_fused(Queue& ctx,
                      Uplo uplo,
                      const Span<std::byte>& ws,
                      SteqrParams<T> steqr_params,
-                     size_t cta_wg_size_multiplier) {
+                     size_t cta_wg_size_multiplier,
+                     Span<int32_t> info) {
     (void)ws;
 
     if (a_in.rows() != a_in.cols()) {
-        throw std::invalid_argument("syev_cta_fused: A must be square.");
+        throw batchlas::invalid_argument("syev_cta_fused: A must be square.");
     }
     if (jobz != JobType::NoEigenVectors && jobz != JobType::EigenVectors) {
-        throw std::invalid_argument("syev_cta_fused: invalid JobType.");
+        throw batchlas::invalid_argument("syev_cta_fused: invalid JobType.");
     }
 
     const int64_t n64 = a_in.rows();
     const int64_t batch64 = a_in.batch_size();
 
     if (n64 < 1 || n64 > 32) {
-        throw std::invalid_argument("syev_cta_fused currently supports 1 <= n <= 32.");
+        throw batchlas::invalid_argument("syev_cta_fused currently supports 1 <= n <= 32.");
     }
     if (eigenvalues.size() < static_cast<std::size_t>(n64) * static_cast<std::size_t>(batch64)) {
-        throw std::invalid_argument("syev_cta_fused: eigenvalues span too small for n*batch.");
+        throw batchlas::invalid_argument("syev_cta_fused: eigenvalues span too small for n*batch.");
     }
 
     // CTA backend: requires subgroup size 32 on NVIDIA-like devices.
@@ -543,7 +558,7 @@ Event syev_cta_fused(Queue& ctx,
             }
         }
         if (!has32) {
-            throw std::runtime_error("syev_cta_fused: device does not support subgroup size 32 required for CTA kernels.");
+            throw batchlas::unsupported("syev_cta_fused: device does not support subgroup size 32 required for CTA kernels.");
         }
     }
 
@@ -565,12 +580,17 @@ Event syev_cta_fused(Queue& ctx,
     const bool upper = (uplo == Uplo::Upper);
     const bool vectors = (jobz == JobType::EigenVectors);
 
+    // No clear: the kernel STORES every item's status, converged or not (see the
+    // note at the solve sites). `info` is the caller's USM and needs no workspace,
+    // which is why syev_cta_fused_buffer_size still returns 0.
+    int32_t* info_ptr = detail::info_ptr(info, batch64);
+
     auto launch = [&](auto P_tag) {
         constexpr size_t P = decltype(P_tag)::value;
         if (vectors) {
-            syev_cta_fused_impl<T, P, true>(ctx, a, w_ptr, n, upper, steqr_params, cta_wg_size_multiplier);
+            syev_cta_fused_impl<T, P, true>(ctx, a, w_ptr, n, upper, steqr_params, cta_wg_size_multiplier, info_ptr);
         } else {
-            syev_cta_fused_impl<T, P, false>(ctx, a, w_ptr, n, upper, steqr_params, cta_wg_size_multiplier);
+            syev_cta_fused_impl<T, P, false>(ctx, a, w_ptr, n, upper, steqr_params, cta_wg_size_multiplier, info_ptr);
         }
     };
 
@@ -597,10 +617,10 @@ size_t syev_cta_fused_buffer_size(Queue& ctx,
     (void)steqr_params;
 
     if (a.rows() != a.cols()) {
-        throw std::invalid_argument("syev_cta_fused_buffer_size: A must be square.");
+        throw batchlas::invalid_argument("syev_cta_fused_buffer_size: A must be square.");
     }
     if (a.rows() < 1 || a.rows() > 32) {
-        throw std::invalid_argument("syev_cta_fused_buffer_size currently supports 1 <= n <= 32.");
+        throw batchlas::invalid_argument("syev_cta_fused_buffer_size currently supports 1 <= n <= 32.");
     }
 
     // Nothing is spilled to global memory: the whole solve is partition-resident.
@@ -610,7 +630,7 @@ size_t syev_cta_fused_buffer_size(Queue& ctx,
 #define SYEV_CTA_FUSED_INSTANTIATE(back, fp) \
     template Event syev_cta_fused<back, BATCHLAS_UNPAREN fp>(Queue&, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
                                                              Span<typename base_type<BATCHLAS_UNPAREN fp>::type>, JobType, Uplo, \
-                                                             const Span<std::byte>&, SteqrParams<BATCHLAS_UNPAREN fp>, size_t); \
+                                                             const Span<std::byte>&, SteqrParams<BATCHLAS_UNPAREN fp>, size_t, Span<int32_t>); \
     template size_t syev_cta_fused_buffer_size<back, BATCHLAS_UNPAREN fp>(Queue&, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
                                                                           JobType, SteqrParams<BATCHLAS_UNPAREN fp>);
 

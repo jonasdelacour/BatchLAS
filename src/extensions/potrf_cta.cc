@@ -143,7 +143,7 @@ PotrfCtaLaunch potrf_cta_launch_params(int n, int batch, std::size_t sz_d, std::
     // Under Scope::WorkGroup the phase barriers are work-group barriers, which is
     // correct only when the work-group holds exactly one matrix.
     if (p.scope == PotrfScope::WorkGroup && p.G != 1) {
-        throw std::logic_error("potrf_cta: Scope::WorkGroup with G != 1 is a race by construction");
+        throw batchlas::internal_error("potrf_cta: Scope::WorkGroup with G != 1 is a race by construction");
     }
     return p;
 }
@@ -312,23 +312,23 @@ Event potrf_cta_dispatch(Queue& ctx,
 
     // supports()'s gates, re-applied: this entry point is reachable without the table.
     if (A.rows() != A.cols()) {
-        throw std::invalid_argument("potrf_cta: A must be square");
+        throw batchlas::invalid_argument("potrf_cta: A must be square");
     }
     if (n < 1 || batch < 1) {
-        throw std::invalid_argument("potrf_cta: degenerate extents");
+        throw batchlas::invalid_argument("potrf_cta: degenerate extents");
     }
     if (A.is_heterogeneous()) {
         // One launch, one (order, ld, stride) tuple read from the capacity extents.
-        throw std::invalid_argument("potrf_cta: heterogeneous batch is not supported");
+        throw batchlas::invalid_argument("potrf_cta: heterogeneous batch is not supported");
     }
     const auto dev = ctx.device();
     if (dev.type != DeviceType::GPU) {
-        throw std::invalid_argument("potrf_cta: GPU queues only");
+        throw batchlas::invalid_argument("potrf_cta: GPU queues only");
     }
     if (!dev.supports_sub_group_size(32)) {
         // Enumerated, never get_property(MAX_SUB_GROUP_SIZE) >= 32: that returns the first
         // supported size, so it accepts a {64} device -- a launch abort under reqd_sub_group_size(32).
-        throw std::runtime_error(
+        throw batchlas::unsupported(
             "potrf_cta: device does not offer sub-group size 32, which the kernel requires");
     }
 
@@ -338,7 +338,7 @@ Event potrf_cta_dispatch(Queue& ctx,
 
     const auto p = potrf_cta_launch_params<C::NB, C::TS>(n, batch, sz_d, sz_r, budget, max_wg);
     if (!p.fits) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "potrf_cta: order " + std::to_string(n) +
             " does not fit this device's local memory (needs " +
             std::to_string(p.slm_total) + " B of " + std::to_string(budget) +

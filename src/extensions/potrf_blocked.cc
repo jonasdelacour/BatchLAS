@@ -244,22 +244,22 @@ Event potrf_blocked_dispatch(Queue& ctx,
     const int batch = static_cast<int>(A.batch_size());
 
     if (A.rows() != A.cols()) {
-        throw std::invalid_argument("potrf_blocked: A must be square");
+        throw batchlas::invalid_argument("potrf_blocked: A must be square");
     }
     if (n < 1 || batch < 1) {
-        throw std::invalid_argument("potrf_blocked: degenerate extents");
+        throw batchlas::invalid_argument("potrf_blocked: degenerate extents");
     }
     if (uplo != Uplo::Lower) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "potrf_blocked: Uplo::Upper is not implemented; the driver factors the "
             "lower triangle only; see RouteTable<Op::potrf, T>::supports, Blocked arm)");
     }
     if (A.is_heterogeneous()) {
-        throw std::invalid_argument("potrf_blocked: heterogeneous batch is not supported");
+        throw batchlas::invalid_argument("potrf_blocked: heterogeneous batch is not supported");
     }
     const auto dev = ctx.device();
     if (dev.type != DeviceType::GPU) {
-        throw std::invalid_argument("potrf_blocked: GPU queues only");
+        throw batchlas::invalid_argument("potrf_blocked: GPU queues only");
     }
 
     const auto p = potrf_blocked_params<T>(ctx, n);
@@ -310,12 +310,14 @@ Event potrf_blocked_dispatch(Queue& ctx,
         const int m2 = n - j - ib;
 
         const auto A11 = sub(j, ib, j, ib, ws.a11_ptrs.data());
-        potrf_cta_dispatch<T>(ctx, A11, Uplo::Lower, ws.leaf_ws, ws.leaf_info);
+        // (void) on an Event: deliberate. This Queue is in-order, so the next submission
+        // is already ordered after this one and the Event carries nothing the caller needs.
+        (void)potrf_cta_dispatch<T>(ctx, A11, Uplo::Lower, ws.leaf_ws, ws.leaf_info);
 
         // Unguarded: stale leaf_info, and a solve dividing by a pivot the quench has not replaced.
         if (!ctx.in_order()) ctx.wait();
 
-        potrf_blocked_panel_fixup<T>(ctx, a_ptr, ld, stride, j, ib, m2, batch,
+        (void)potrf_blocked_panel_fixup<T>(ctx, a_ptr, ld, stride, j, ib, m2, batch,
                                      info.data(), ws.leaf_info.data(), fixup_wg);
 
         if (m2 == 0) break;

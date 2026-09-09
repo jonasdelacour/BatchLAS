@@ -179,7 +179,7 @@ namespace batchlas{
 
         const std::string msg = host_blas_double_health_message(health);
         if (host_blas_health_mode() == batchlas::UnsafeSettings::BlasHealth::Error) {
-            throw std::runtime_error(msg);
+            throw batchlas::device_error(msg);
         }
         // Warn once, loudly.
         static const bool warned = [&] {
@@ -267,7 +267,7 @@ namespace batchlas{
 
                     // Only handle no transpose cases for now
                     if (transA != Transpose::NoTrans || transB != Transpose::NoTrans) {
-                        throw std::runtime_error("NETLIB spmm only supports NoTrans for now");
+                        throw batchlas::unsupported("NETLIB spmm only supports NoTrans for now");
                     }
 
                     for (int row = 0; row < m; ++row) {
@@ -295,7 +295,7 @@ namespace batchlas{
                     }
                 }
             } else {
-                throw std::runtime_error("Unsupported sparse format for NETLIB spmm");
+                throw batchlas::unsupported("Unsupported sparse format for NETLIB spmm");
             }
         });
     }
@@ -348,7 +348,7 @@ namespace batchlas{
         auto C_view = descrC;
         return detail::submit_host_task<T>(ctx, "netlib.gemm", [=] {
             if (!backend::gemm_batch_dimensions_compatible(A_view, B_view, C_view, transA, transB)) {
-                throw std::runtime_error("GEMM: incompatible matrix dimensions");
+                throw batchlas::invalid_argument("GEMM: incompatible matrix dimensions");
             }
 
             if (A_view.batch_size() == 1) {
@@ -947,26 +947,39 @@ namespace batchlas{
                       Span<typename base_type<T>::type> eigenvalues,
                       JobType jobtype,
                       Uplo uplo,
-                      Span<std::byte> /*workspace*/) {
+                      Span<std::byte> /*workspace*/,
+                      Span<int32_t> info_out) {
         auto A_view = descrA;
         auto eig = eigenvalues;
-        return op_external("lapacke.syev", [&, A_view, eig, jobtype, uplo] {
+        // call_backend_nh_r, not call_backend_nh: `_nh` DISCARDS the return value,
+        // and LAPACKE_?syev's return value IS the LAPACK info -- > 0 means that many
+        // off-diagonal elements failed to converge, which is exactly the contract
+        // `info` documents. It was one macro away from potrf's working pattern in
+        // this same file (see potrf_vendor above) and was being dropped for free.
+        //
+        // No pool fallback and no workspace: this arm takes none, so
+        // syev_vendor_buffer_size still returns 0 whether or not status is asked for.
+        auto info = info_out;
+        const bool want_info = info.size() >= static_cast<size_t>(descrA.batch_size());
+        return op_external("lapacke.syev", [&, A_view, eig, jobtype, uplo, info, want_info] {
             return detail::submit_host_task<T>(ctx, "lapacke.syev", [=] {
                 if (A_view.batch_size() == 1) {
-                    call_backend_nh<T, BackendLibrary::LAPACKE>(
+                    auto st = call_backend_nh_r<T, BackendLibrary::LAPACKE>(
                         LAPACKE_ssyev, LAPACKE_dsyev, LAPACKE_cheev, LAPACKE_zheev,
                         Layout::ColMajor, jobtype, uplo,
                         A_view.rows(), A_view.data_ptr(), A_view.ld(),
                         base_float_ptr_convert(eig.data()));
+                    if (want_info) info[0] = static_cast<int32_t>(st);
                 } else {
                     for (int i = 0; i < A_view.batch_size(); ++i) {
-                        call_backend_nh<T, BackendLibrary::LAPACKE>(
+                        auto st = call_backend_nh_r<T, BackendLibrary::LAPACKE>(
                             LAPACKE_ssyev, LAPACKE_dsyev, LAPACKE_cheev, LAPACKE_zheev,
                             Layout::ColMajor, jobtype, uplo,
                             A_view[i].rows(),
                             A_view[i].data_ptr(),
                             A_view[i].ld(),
                             base_float_ptr_convert(eig.subspan(i * A_view.rows()).data()));
+                        if (want_info) info[i] = static_cast<int32_t>(st);
                     }
                 }
             });
@@ -996,7 +1009,8 @@ namespace batchlas{
                        const MatrixView<T, MatrixFormat::Dense>& Vh,
                        SvdVectors jobu,
                        SvdVectors jobvh,
-                       Span<std::byte> workspace) {
+                       Span<std::byte> workspace,
+                       Span<int32_t> info_out) {
         static_cast<void>(workspace);
 
         // This path calls LAPACKE directly rather than going through
@@ -1005,7 +1019,7 @@ namespace batchlas{
         detail::host_blas_double_guard<T>();
 
         if (A.batch_size() < 1 || A.rows() < 1 || A.cols() < 1) {
-            throw std::invalid_argument("gesvd_vendor (NETLIB): invalid matrix shape or batch size");
+            throw batchlas::invalid_argument("gesvd_vendor (NETLIB): invalid matrix shape or batch size");
         }
 
         const int m = static_cast<int>(A.rows());
@@ -1014,7 +1028,7 @@ namespace batchlas{
         const int batch = static_cast<int>(A.batch_size());
         const std::size_t need_s = static_cast<std::size_t>(k) * static_cast<std::size_t>(batch);
         if (singular_values.size() < need_s) {
-            throw std::invalid_argument("gesvd_vendor (NETLIB): singular_values span too small");
+            throw batchlas::invalid_argument("gesvd_vendor (NETLIB): singular_values span too small");
         }
 
         // NETLIB implements Thin rather than refusing it. gesvd_dispatch pins
@@ -1037,14 +1051,14 @@ namespace batchlas{
         if (jobu != SvdVectors::None) {
             const int want_cols = static_cast<int>(svd_u_cols(jobu, m, k));
             if (U.rows() != m || U.cols() != want_cols || U.batch_size() != batch) {
-                throw std::invalid_argument("gesvd_vendor (NETLIB): U must be (m x " +
+                throw batchlas::invalid_argument("gesvd_vendor (NETLIB): U must be (m x " +
                                             std::to_string(want_cols) + ") with matching batch");
             }
         }
         if (jobvh != SvdVectors::None) {
             const int want_rows = static_cast<int>(svd_vh_rows(jobvh, n, k));
             if (Vh.rows() != want_rows || Vh.cols() != n || Vh.batch_size() != batch) {
-                throw std::invalid_argument("gesvd_vendor (NETLIB): Vh must be (" +
+                throw batchlas::invalid_argument("gesvd_vendor (NETLIB): Vh must be (" +
                                             std::to_string(want_rows) + " x n) with matching batch");
             }
         }
@@ -1093,11 +1107,18 @@ namespace batchlas{
                                       (jobvh != SvdVectors::None) ? Vhb.ld() : 1,
                                       superb.data());
             } else {
-                throw std::runtime_error("gesvd_vendor (NETLIB): unsupported scalar type");
+                throw batchlas::unsupported("gesvd_vendor (NETLIB): unsupported scalar type");
             }
 
-            if (info != 0) {
-                throw std::runtime_error("gesvd_vendor (NETLIB): LAPACKE gesvd failed");
+            // The per-item status existed inside this loop and the throw destroyed
+            // it: a batch-wide exception says nothing about WHICH item failed.
+            // Record it first, and when the caller asked for status let the call
+            // return normally so it can read every item rather than just the first
+            // failure.
+            if (info_out.size() >= static_cast<size_t>(batch)) {
+                info_out[static_cast<size_t>(b)] = static_cast<int32_t>(info);
+            } else if (info != 0) {
+                throw batchlas::convergence_error("gesvd_vendor (NETLIB): LAPACKE gesvd failed");
             }
         }
 

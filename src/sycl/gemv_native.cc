@@ -727,7 +727,7 @@ Event gemv_native_cta(Queue& ctx,
                       const VectorView<T>& Y,
                       T alpha, T beta, Transpose transA) {
     if (transA == Transpose::NoTrans) {
-        throw std::runtime_error(
+        throw batchlas::unsupported(
             "BatchLAS: gemv_native_cta called with transA = NoTrans. The CTA body "
             "reduces down a column and serves only Trans/ConjTrans; NoTrans is "
             "already fully coalesced with one work-item per output row and is the "

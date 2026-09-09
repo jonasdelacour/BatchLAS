@@ -190,7 +190,8 @@ namespace batchlas {
                 Span<std::byte> workspace,
                 JobType jobz = JobType::NoEigenVectors,
                 const MatrixView<T, MatrixFormat::Dense>& V = MatrixView<T, MatrixFormat::Dense>(),
-                const SyevxParams<T>& params = SyevxParams<T>());
+                const SyevxParams<T>& params = SyevxParams<T>(),
+                Span<int32_t> info = Span<int32_t>());
 
     template <Backend B, typename T, MatrixFormat MFormat>
     inline Event syevx(Queue& ctx,
@@ -199,8 +200,9 @@ namespace batchlas {
                 size_t neigs,
                 Span<std::byte> workspace,
                 JobType jobz = JobType::NoEigenVectors,
-                const SyevxParams<T>& params = SyevxParams<T>()) {
-        return syevx<B,T,MFormat>(ctx, MatrixView<T, MFormat>(A), W, neigs, workspace, jobz, MatrixView<T, MatrixFormat::Dense>(), params);
+                const SyevxParams<T>& params = SyevxParams<T>(),
+                Span<int32_t> info = Span<int32_t>()) {
+        return syevx<B,T,MFormat>(ctx, MatrixView<T, MFormat>(A), W, neigs, workspace, jobz, MatrixView<T, MatrixFormat::Dense>(), params, info);
     }
 
     /**
@@ -226,7 +228,8 @@ namespace batchlas {
                 Span<std::byte> workspace,
                 JobType jobz = JobType::NoEigenVectors,
                 const MatrixView<T, MatrixFormat::Dense>& V = MatrixView<T, MatrixFormat::Dense>(),
-                const SyevxParams<T>& params = SyevxParams<T>());
+                const SyevxParams<T>& params = SyevxParams<T>(),
+                Span<int32_t> info = Span<int32_t>());
 
     template <Backend B, typename T, MatrixFormat MFormat>
     inline Event syevx(Queue& ctx,
@@ -236,8 +239,9 @@ namespace batchlas {
                 size_t neigs,
                 Span<std::byte> workspace,
                 JobType jobz = JobType::NoEigenVectors,
-                const SyevxParams<T>& params = SyevxParams<T>()) {
-        return syevx<B,T,MFormat>(ctx, MatrixView<T, MFormat>(A), W, m, neigs, workspace, jobz, MatrixView<T, MatrixFormat::Dense>(), params);
+                const SyevxParams<T>& params = SyevxParams<T>(),
+                Span<int32_t> info = Span<int32_t>()) {
+        return syevx<B,T,MFormat>(ctx, MatrixView<T, MFormat>(A), W, m, neigs, workspace, jobz, MatrixView<T, MatrixFormat::Dense>(), params, info);
     }
 
     /**
@@ -394,7 +398,8 @@ namespace batchlas {
                 Span<std::byte> workspace,
                 JobType jobz,
                 const MatrixView<T, MatrixFormat::Dense>& V,
-                const SyevxParams<T>& params);
+                const SyevxParams<T>& params,
+                Span<int32_t> info = Span<int32_t>());
 
     /**
      * @brief `syevx_direct` without the `m` output; `Extremal` and `Index` only.
@@ -408,9 +413,10 @@ namespace batchlas {
                 Span<std::byte> workspace,
                 JobType jobz,
                 const MatrixView<T, MatrixFormat::Dense>& V,
-                const SyevxParams<T>& params) {
+                const SyevxParams<T>& params,
+                Span<int32_t> info = Span<int32_t>()) {
         return syevx_direct<B, T, MFormat>(ctx, A, W, Span<int32_t>(), neigs, workspace,
-                                           jobz, V, params);
+                                           jobz, V, params, info);
     }
 
     // No `m` parameter: sizing writes no counts, and this is range-independent anyway.
@@ -441,7 +447,8 @@ namespace batchlas {
                 Span<std::byte> workspace,
                 JobType jobz,
                 const MatrixView<T, MatrixFormat::Dense>& V,
-                const SyevxParams<T>& params);
+                const SyevxParams<T>& params,
+                Span<int32_t> info = Span<int32_t>());
 
     /** @brief `syevx_direct_subset` without the `m` output; arity-disambiguated as above. */
     template <Backend B, typename T, MatrixFormat MFormat>
@@ -452,9 +459,10 @@ namespace batchlas {
                 Span<std::byte> workspace,
                 JobType jobz,
                 const MatrixView<T, MatrixFormat::Dense>& V,
-                const SyevxParams<T>& params) {
+                const SyevxParams<T>& params,
+                Span<int32_t> info = Span<int32_t>()) {
         return syevx_direct_subset<B, T, MFormat>(ctx, A, W, Span<int32_t>(), neigs, workspace,
-                                                  jobz, V, params);
+                                                  jobz, V, params, info);
     }
 
     // Sizing writes no counts, but it is NOT range-independent: a Value range needs room
@@ -483,7 +491,8 @@ namespace batchlas {
                 Span<std::byte> workspace,
                 JobType jobz,
                 const MatrixView<T, MatrixFormat::Dense>& V,
-                const SyevxParams<T>& params);
+                const SyevxParams<T>& params,
+                Span<int32_t> info = Span<int32_t>());
 
     template <Backend B, typename T, MatrixFormat MFormat>
     size_t syevx_lobpcg_buffer_size(Queue& ctx,
@@ -506,7 +515,8 @@ namespace batchlas {
                 Span<std::byte> workspace,
                 JobType jobz,
                 const MatrixView<T, MatrixFormat::Dense>& V,
-                const SyevxParams<T>& params);
+                const SyevxParams<T>& params,
+                Span<int32_t> info = Span<int32_t>());
 
     template <Backend B, typename T, MatrixFormat MFormat>
     size_t syevx_filtered_buffer_size(Queue& ctx,
@@ -753,10 +763,38 @@ namespace batchlas {
         SteqrUpdateScheme cta_update_scheme = SteqrUpdateScheme::EXP;
     };
 
+
+    // ---- per-item convergence status (`info`) ---------------------------------
+    //
+    // `steqr`, `stedc`, `syev`, `syevx` and `gesvd` -- and every tier below them --
+    // take a trailing `Span<int32_t> info`. It is one int32 per batch item: 0 means
+    // the item converged, > 0 is LAPACK-like (the number of off-diagonal elements
+    // that failed to converge, or 1 where the tier tracks only the fact of failure).
+    // These are exactly the routines where LAPACK returns info > 0, and until now a
+    // non-converged item at batch 16384 was invisible -- the call returned, the wait
+    // returned, and the caller read eigenvalues that were simply wrong.
+    //
+    // An EMPTY span means "not requested" and costs nothing: `info` is the CALLER's
+    // USM, written in place by the kernel that already knows the answer, so no tier
+    // needs workspace for it and NO *_buffer_size() result changes either way.
+    //
+    // The span is an ACCUMULATOR: it is zeroed once, by the entry point the caller
+    // invoked, and producers below only ever raise a value. src/extensions/info_span.hh
+    // states the full contract and holds the three helpers that implement it.
+    //
+    // Unlike potrf, these declarations take `info` as a DEFAULTED trailing parameter
+    // rather than gaining an old-arity forwarder overload. potrf needs the forwarder
+    // because its signature is mirrored by a `sig::` function-type alias and function
+    // types cannot carry default arguments; these are instantiated from hand-written
+    // macros that spell the parameter list out, and they already default `jobz`,
+    // `params` and `eigvects` -- so a forwarder here would be AMBIGUOUS with the
+    // primary rather than additive.
+
     template <Backend B, typename T>
     Event steqr(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e,
                 const VectorView<T>& eigenvalues, const Span<std::byte>& ws, JobType jobz = JobType::NoEigenVectors, SteqrParams<T> params = SteqrParams<T>(),
-                const MatrixView<T, MatrixFormat::Dense>& eigvects = MatrixView<T, MatrixFormat::Dense>());
+                const MatrixView<T, MatrixFormat::Dense>& eigvects = MatrixView<T, MatrixFormat::Dense>(),
+                Span<int32_t> info = Span<int32_t>());
 
     // CTA-optimized STEQR for small power-of-two N (runtime-dispatched, compile-time specialized kernels).
     template <Backend B, typename T>
@@ -764,7 +802,8 @@ namespace batchlas {
                     const VectorView<T>& eigenvalues, const Span<std::byte>& ws,
                     JobType jobz = JobType::NoEigenVectors,
                     SteqrParams<T> params = SteqrParams<T>(),
-                    const MatrixView<T, MatrixFormat::Dense>& eigvects = MatrixView<T, MatrixFormat::Dense>());
+                    const MatrixView<T, MatrixFormat::Dense>& eigvects = MatrixView<T, MatrixFormat::Dense>(),
+                    Span<int32_t> info = Span<int32_t>());
   
     template <typename T>
     size_t steqr_buffer_size(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e,
@@ -1058,7 +1097,8 @@ namespace batchlas {
                    Uplo uplo,
                    const Span<std::byte>& ws,
                    SteqrParams<T> steqr_params = SteqrParams<T>(),
-                   size_t cta_wg_size_multiplier = 1);
+                   size_t cta_wg_size_multiplier = 1,
+                   Span<int32_t> info = Span<int32_t>());
 
     template <Backend B, typename T>
     size_t syev_cta_buffer_size(Queue& ctx,
@@ -1081,7 +1121,8 @@ namespace batchlas {
                          Uplo uplo,
                          const Span<std::byte>& ws = Span<std::byte>(),
                          SteqrParams<T> steqr_params = SteqrParams<T>(),
-                         size_t cta_wg_size_multiplier = 1);
+                         size_t cta_wg_size_multiplier = 1,
+                         Span<int32_t> info = Span<int32_t>());
 
     template <Backend B, typename T>
     size_t syev_cta_fused_buffer_size(Queue& ctx,
@@ -1127,7 +1168,8 @@ namespace batchlas {
                           JobType jobz,
                           Uplo uplo,
                           const Span<std::byte>& ws = Span<std::byte>(),
-                          JacobiParams<T> params = JacobiParams<T>());
+                          JacobiParams<T> params = JacobiParams<T>(),
+                          Span<int32_t> info = Span<int32_t>());
 
     template <Backend B, typename T>
     size_t syev_jacobi_cta_buffer_size(Queue& ctx,
@@ -1147,7 +1189,8 @@ namespace batchlas {
                        JobType jobz,
                        Uplo uplo,
                        const Span<std::byte>& ws,
-                       StedcParams<typename base_type<T>::type> stedc_params = StedcParams<typename base_type<T>::type>());
+                       StedcParams<typename base_type<T>::type> stedc_params = StedcParams<typename base_type<T>::type>(),
+                       Span<int32_t> info = Span<int32_t>());
 
     template <Backend B, typename T>
     size_t syev_blocked_buffer_size(Queue& ctx,
@@ -1169,7 +1212,8 @@ namespace batchlas {
                          JobType jobz,
                          Uplo uplo,
                          const Span<std::byte>& ws,
-                         StedcParams<typename base_type<T>::type> stedc_params = StedcParams<typename base_type<T>::type>());
+                         StedcParams<typename base_type<T>::type> stedc_params = StedcParams<typename base_type<T>::type>(),
+                         Span<int32_t> info = Span<int32_t>());
 
     template <Backend B, typename T>
     size_t syev_two_stage_buffer_size(Queue& ctx,
@@ -1234,7 +1278,8 @@ namespace batchlas {
                 const VectorView<T>& e,
                 Span<T> singular_values_out,
                 const Span<std::byte>& ws,
-                bool sort_desc = true);
+                bool sort_desc = true,
+                Span<int32_t> info = Span<int32_t>());
 
     template <Backend B, typename T>
     Event bdsqr(Queue& ctx,
@@ -1244,7 +1289,8 @@ namespace batchlas {
                 const Span<std::byte>& ws,
                 const MatrixView<T, MatrixFormat::Dense>& u,
                 const MatrixView<T, MatrixFormat::Dense>& vh,
-                bool sort_desc = true);
+                bool sort_desc = true,
+                Span<int32_t> info = Span<int32_t>());
 
     template <typename T>
     size_t bdsqr_buffer_size(Queue& ctx,
@@ -1280,7 +1326,8 @@ namespace batchlas {
                 const VectorView<T>& e,
                 Span<T> singular_values_out,
                 const Span<std::byte>& ws,
-                bool sort_desc = true);
+                bool sort_desc = true,
+                Span<int32_t> info = Span<int32_t>());
 
     template <Backend B, typename T>
     Event bdsdc(Queue& ctx,
@@ -1290,7 +1337,8 @@ namespace batchlas {
                 const Span<std::byte>& ws,
                 const MatrixView<T, MatrixFormat::Dense>& u,
                 const MatrixView<T, MatrixFormat::Dense>& vh,
-                bool sort_desc = true);
+                bool sort_desc = true,
+                Span<int32_t> info = Span<int32_t>());
 
     template <Backend B, typename T>
     size_t bdsdc_buffer_size(Queue& ctx,
@@ -1339,7 +1387,8 @@ namespace batchlas {
                         const MatrixView<T, MatrixFormat::Dense>& vh_out,
                         SvdVectors jobu,
                         SvdVectors jobvh,
-                        const Span<std::byte>& ws);
+                        const Span<std::byte>& ws,
+                        Span<int32_t> info = Span<int32_t>());
 
     template <Backend B, typename T>
     Event gesvd_blocked(Queue& ctx,
@@ -1350,7 +1399,8 @@ namespace batchlas {
                         SvdVectors jobu,
                         SvdVectors jobvh,
                         Uplo hermitian_uplo,
-                        const Span<std::byte>& ws);
+                        const Span<std::byte>& ws,
+                        Span<int32_t> info = Span<int32_t>());
 
     template <Backend B, typename T>
     size_t gesvd_blocked_buffer_size(Queue& ctx,
@@ -1383,7 +1433,8 @@ namespace batchlas {
                     const MatrixView<T, MatrixFormat::Dense>& vh_out,
                     SvdVectors jobu,
                     SvdVectors jobvh,
-                    const Span<std::byte>& ws);
+                    const Span<std::byte>& ws,
+                    Span<int32_t> info = Span<int32_t>());
 
     template <Backend B, typename T>
     Event gesvd_cta(Queue& ctx,
@@ -1394,7 +1445,8 @@ namespace batchlas {
                     SvdVectors jobu,
                     SvdVectors jobvh,
                     Uplo hermitian_uplo,
-                    const Span<std::byte>& ws);
+                    const Span<std::byte>& ws,
+                    Span<int32_t> info = Span<int32_t>());
 
     template <Backend B, typename T>
     size_t gesvd_cta_buffer_size(Queue& ctx,
@@ -1465,7 +1517,8 @@ namespace batchlas {
                      SvdVectors jobu,
                      SvdVectors jobvh,
                      const Span<std::byte>& ws = Span<std::byte>(),
-                     GesvdjParams<T> params = GesvdjParams<T>());
+                     GesvdjParams<T> params = GesvdjParams<T>(),
+                     Span<int32_t> info = Span<int32_t>());
 
     template <Backend B, typename T>
     size_t gesvdj_cta_buffer_size(Queue& ctx,
@@ -1533,7 +1586,8 @@ namespace batchlas {
 
     template <Backend B, typename T>
     Event stedc(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, const VectorView<T>& eigenvalues, const Span<std::byte>& ws,
-            JobType jobz, StedcParams<T> params, const MatrixView<T, MatrixFormat::Dense>& eigvects);
+            JobType jobz, StedcParams<T> params, const MatrixView<T, MatrixFormat::Dense>& eigvects,
+            Span<int32_t> info = Span<int32_t>());
 
     template <Backend B, typename T>
     size_t stedc_buffer_size(Queue& ctx, size_t n, size_t batch_size, JobType jobz, StedcParams<T> params);
@@ -1577,7 +1631,9 @@ namespace batchlas {
         size_t workspace_size = ritz_values_buffer_size<B,T,MFormat>(ctx, A, V, static_cast<VectorView<float_type>>(ritz_vals));
         UnifiedVector<std::byte> workspace(workspace_size);
         ctx.wait();
-        ritz_values<B,T,MFormat>(ctx, A, V, static_cast<VectorView<float_type>>(ritz_vals), workspace);
+        // (void) on an Event: deliberate. This Queue is in-order, so the next submission
+        // is already ordered after this one and the Event carries nothing the caller needs.
+        (void)ritz_values<B,T,MFormat>(ctx, A, V, static_cast<VectorView<float_type>>(ritz_vals), workspace);
         ctx.wait();
         return ritz_vals;
     }

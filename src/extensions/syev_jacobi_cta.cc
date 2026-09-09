@@ -9,6 +9,7 @@
 #include <batchlas/backend_config.h>
 #include "../math-helpers.hh"
 #include "../queue.hh"
+#include "info_span.hh"
 #include "../util/template-instantiations.hh"
 #include <complex>
 #include <limits>
@@ -133,12 +134,13 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
                                  MatrixView<T, MatrixFormat::Dense>& a,
                                  typename base_type<T>::type* w_ptr,
                                  int32_t n,
-                                 JacobiParams<T> params) {
+                                 JacobiParams<T> params,
+                                 int32_t* info) {
     using Real = typename base_type<T>::type;
 
     const auto batch_size = a.batch_size();
     if (n < 1 || n > static_cast<int32_t>(P) || a.rows() != n || a.cols() != n) {
-        throw std::runtime_error("syev_jacobi_cta_impl: invalid n or matrix sizes for CTA partition.");
+        throw batchlas::invalid_argument("syev_jacobi_cta_impl: invalid n or matrix sizes for CTA partition.");
     }
 
     // Pivot index space is padded to an even size so the round-robin schedule is
@@ -249,6 +251,10 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
         const Real tau_big = Real(1) / sycl::sqrt(std::numeric_limits<Real>::epsilon());
 
         Real* W = w_ptr;
+        // A local of the submit lambda for the same reason as W, so the kernel's
+        // `[=]` copies a pointer. nullptr when status was not requested, which
+        // makes info_store below a no-op.
+        int32_t* const info_dev = info;
 
         cgh.parallel_for<SyevJacobiCTAKernel<T, P, ComputeVectors, Upper>>(
             sycl::nd_range<1>(global_size, wg_size),
@@ -320,6 +326,13 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
                 const bool row_lane = (lane < nn);
 
                 // ---- Sweeps ----
+                //
+                // The loop had no convergence record at all: it either broke on a
+                // zero-rotation sweep or ran out of max_sweeps, and afterwards the
+                // two were indistinguishable. `converged` is that missing bit --
+                // unlike gesvdj_cta this kernel terminates on ONE clean sweep, so
+                // `rot_count == 0` is the whole predicate.
+                bool converged = false;
                 for (int32_t sweep = 0; sweep < max_sweeps; ++sweep) {
                     int32_t rot_count = 0;
 
@@ -504,8 +517,14 @@ inline void syev_jacobi_cta_impl(Queue& ctx,
 
                     // Converged when a full sweep applied no rotation, i.e. all
                     // n(n-1)/2 pivot pairs passed the relative threshold test.
-                    if (rot_count == 0) break;
+                    if (rot_count == 0) { converged = true; break; }
                 }
+                // rot_count is already partition-uniform (it is reduced across the
+                // partition inside the round loop), so every lane agrees and lane 0
+                // may report for the item. A STORE, not a raise: this kernel is the
+                // single writer for the item, so a converged item is set to 0 here
+                // rather than by a separate clear kernel that could race with it.
+                if (lane == 0) detail::info_store(info_dev, prob_id, converged ? 0 : 1);
 
                 // ---- Sort by rank and write back. ----
                 // Rank is computed in parallel (one lane per eigenvalue) rather
@@ -547,27 +566,28 @@ Event syev_jacobi_cta(Queue& ctx,
                       JobType jobz,
                       Uplo uplo,
                       const Span<std::byte>& ws,
-                      JacobiParams<T> params) {
+                      JacobiParams<T> params,
+                      Span<int32_t> info) {
     (void)ws;
 
     if (a_in.rows() != a_in.cols()) {
-        throw std::invalid_argument("syev_jacobi_cta: A must be square.");
+        throw batchlas::invalid_argument("syev_jacobi_cta: A must be square.");
     }
     if (jobz != JobType::NoEigenVectors && jobz != JobType::EigenVectors) {
-        throw std::invalid_argument("syev_jacobi_cta: invalid JobType.");
+        throw batchlas::invalid_argument("syev_jacobi_cta: invalid JobType.");
     }
 
     const int64_t n64 = a_in.rows();
     const int64_t batch64 = a_in.batch_size();
 
     if (n64 < 1 || n64 > 32) {
-        throw std::invalid_argument("syev_jacobi_cta currently supports 1 <= n <= 32.");
+        throw batchlas::invalid_argument("syev_jacobi_cta currently supports 1 <= n <= 32.");
     }
 
     const int32_t n = static_cast<int32_t>(n64);
 
     if (eigenvalues.size() < static_cast<std::size_t>(n64) * static_cast<std::size_t>(batch64)) {
-        throw std::invalid_argument("syev_jacobi_cta: eigenvalues span too small for n*batch.");
+        throw batchlas::invalid_argument("syev_jacobi_cta: eigenvalues span too small for n*batch.");
     }
 
     // CTA backend: requires subgroup size 32 on NVIDIA-like devices.
@@ -582,7 +602,7 @@ Event syev_jacobi_cta(Queue& ctx,
             }
         }
         if (!has32) {
-            throw std::runtime_error("syev_jacobi_cta: device does not support subgroup size 32 required for CTA kernels.");
+            throw batchlas::unsupported("syev_jacobi_cta: device does not support subgroup size 32 required for CTA kernels.");
         }
     }
 
@@ -592,14 +612,18 @@ Event syev_jacobi_cta(Queue& ctx,
     const bool upper = (uplo == Uplo::Upper);
     const bool vectors = (jobz == JobType::EigenVectors);
 
+    // No clear: the kernel STORES every item's status. `info` is caller USM -- no
+    // workspace, which is why syev_jacobi_cta_buffer_size still returns 0.
+    int32_t* info_ptr = detail::info_ptr(info, batch64);
+
     auto launch = [&](auto P_tag) {
         constexpr size_t P = decltype(P_tag)::value;
         if (vectors) {
-            if (upper) syev_jacobi_cta_impl<T, P, true, true>(ctx, a, w_ptr, n, params);
-            else       syev_jacobi_cta_impl<T, P, true, false>(ctx, a, w_ptr, n, params);
+            if (upper) syev_jacobi_cta_impl<T, P, true, true>(ctx, a, w_ptr, n, params, info_ptr);
+            else       syev_jacobi_cta_impl<T, P, true, false>(ctx, a, w_ptr, n, params, info_ptr);
         } else {
-            if (upper) syev_jacobi_cta_impl<T, P, false, true>(ctx, a, w_ptr, n, params);
-            else       syev_jacobi_cta_impl<T, P, false, false>(ctx, a, w_ptr, n, params);
+            if (upper) syev_jacobi_cta_impl<T, P, false, true>(ctx, a, w_ptr, n, params, info_ptr);
+            else       syev_jacobi_cta_impl<T, P, false, false>(ctx, a, w_ptr, n, params, info_ptr);
         }
     };
 
@@ -626,10 +650,10 @@ size_t syev_jacobi_cta_buffer_size(Queue& ctx,
     (void)params;
 
     if (a.rows() != a.cols()) {
-        throw std::invalid_argument("syev_jacobi_cta_buffer_size: A must be square.");
+        throw batchlas::invalid_argument("syev_jacobi_cta_buffer_size: A must be square.");
     }
     if (a.rows() < 1 || a.rows() > 32) {
-        throw std::invalid_argument("syev_jacobi_cta_buffer_size currently supports 1 <= n <= 32.");
+        throw batchlas::invalid_argument("syev_jacobi_cta_buffer_size currently supports 1 <= n <= 32.");
     }
 
     // Everything is resident in local memory for the lifetime of the kernel.
@@ -639,7 +663,7 @@ size_t syev_jacobi_cta_buffer_size(Queue& ctx,
 #define SYEV_JACOBI_CTA_INSTANTIATE(back, fp) \
     template Event syev_jacobi_cta<back, BATCHLAS_UNPAREN fp>(Queue&, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
                                                               Span<typename base_type<BATCHLAS_UNPAREN fp>::type>, JobType, Uplo, \
-                                                              const Span<std::byte>&, JacobiParams<BATCHLAS_UNPAREN fp>); \
+                                                              const Span<std::byte>&, JacobiParams<BATCHLAS_UNPAREN fp>, Span<int32_t>); \
     template size_t syev_jacobi_cta_buffer_size<back, BATCHLAS_UNPAREN fp>(Queue&, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
                                                                            JobType, JacobiParams<BATCHLAS_UNPAREN fp>);
 

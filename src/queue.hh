@@ -50,7 +50,7 @@
 // leases within one block and still corrupt them -- a lock would hide the design
 // constraint rather than satisfy it.
 [[noreturn]] inline void batchlas_throw_queue_wrong_thread(const char* what) {
-    throw std::runtime_error(
+    throw batchlas::api_misuse(
         std::string("BatchLAS: ") + what +
         " was called from a thread other than the one that owns this Queue. A Queue is "
         "single-threaded: its workspace arena and its cached last event are unsynchronised, and "
@@ -548,7 +548,7 @@ BATCHLAS_QUEUE_EXPORTED_INLINE void Queue::attach_to_current_thread() {
     // A lease released on the new thread would rewind an arena the old thread is
     // still carving from, which is the corruption this guard exists to stop.
     if (impl_->arena_.has_outstanding_loans()) {
-        throw std::runtime_error(
+        throw batchlas::api_misuse(
             "Queue::attach_to_current_thread: a workspace lease is still outstanding. Release every "
             "lease before transferring the queue to another thread.");
     }

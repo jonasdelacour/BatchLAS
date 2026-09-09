@@ -63,7 +63,7 @@ namespace batchlas {
 template <typename T>
 [[noreturn]] inline void geqrf_throw_native_unimplemented(dispatch::Route route,
                                                           const char* who) {
-    throw std::logic_error(
+    throw batchlas::internal_error(
         std::string(who) + ": resolved to a native route (" +
         std::string(dispatch::to_string(route.origin)) + ":" +
         std::string(dispatch::to_string(route.algo)) +
@@ -76,7 +76,7 @@ template <typename T>
 template <typename T>
 [[noreturn]] inline void orgqr_throw_native_unimplemented(dispatch::Route route,
                                                           const char* who) {
-    throw std::logic_error(
+    throw batchlas::internal_error(
         std::string(who) + ": resolved to a native route (" +
         std::string(dispatch::to_string(route.origin)) + ":" +
         std::string(dispatch::to_string(route.algo)) +
@@ -297,7 +297,7 @@ size_t orgqr_buffer_size(Queue& ctx,
 template <typename T>
 [[noreturn]] inline void getrf_throw_native_unimplemented(dispatch::Route route,
                                                           const char* who) {
-    throw std::logic_error(
+    throw batchlas::internal_error(
         std::string(who) + ": resolved to a native route (" +
         std::string(dispatch::to_string(route.origin)) + ":" +
         std::string(dispatch::to_string(route.algo)) +
@@ -309,7 +309,7 @@ template <typename T>
 template <typename T>
 [[noreturn]] inline void getrs_throw_native_unimplemented(dispatch::Route route,
                                                           const char* who) {
-    throw std::logic_error(
+    throw batchlas::internal_error(
         std::string(who) + ": resolved to a native route (" +
         std::string(dispatch::to_string(route.origin)) + ":" +
         std::string(dispatch::to_string(route.algo)) +
@@ -321,7 +321,7 @@ template <typename T>
 template <typename T>
 [[noreturn]] inline void getri_throw_native_unimplemented(dispatch::Route route,
                                                           const char* who) {
-    throw std::logic_error(
+    throw batchlas::internal_error(
         std::string(who) + ": resolved to a native route (" +
         std::string(dispatch::to_string(route.origin)) + ":" +
         std::string(dispatch::to_string(route.algo)) +
@@ -609,7 +609,7 @@ size_t getri_buffer_size(Queue& ctx,
 template <typename T>
 [[noreturn]] inline void potrf_throw_native_unimplemented(dispatch::Route route,
                                                           const char* who) {
-    throw std::logic_error(
+    throw batchlas::internal_error(
         std::string(who) + ": resolved to a native route (" +
         std::string(dispatch::to_string(route.origin)) + ":" +
         std::string(dispatch::to_string(route.algo)) +

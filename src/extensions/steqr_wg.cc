@@ -10,6 +10,7 @@
 #include "../queue.hh"
 #include "../util/template-instantiations.hh"
 #include "../sort.hh"
+#include "info_span.hh"
 
 namespace batchlas {
 
@@ -145,7 +146,9 @@ Event steqr_wg_impl(Queue& ctx,
 
     {
         BATCHLAS_KERNEL_TRACE_SCOPE("steqr_wg:deflation_scan");
-        internal::scan_inclusive_inplace<int32_t>(ctx, scan_view);
+        // (void) on an Event: deliberate. This Queue is in-order, so the next submission
+        // is already ordered after this one and the Event carries nothing the caller needs.
+        (void)internal::scan_inclusive_inplace<int32_t>(ctx, scan_view);
     }
 
     {
@@ -312,19 +315,20 @@ Event steqr_wg(Queue& ctx,
                const Span<std::byte>& ws,
                JobType jobz,
                SteqrParams<T> params,
-               const MatrixView<T, MatrixFormat::Dense>& eigvects) {
+               const MatrixView<T, MatrixFormat::Dense>& eigvects,
+               Span<int32_t> info) {
     const int64_t n = d_in.size();
     const int64_t batch_size = d_in.batch_size();
 
     if (jobz == JobType::EigenVectors) {
         if (eigvects.rows() != eigvects.cols()) {
-            throw std::invalid_argument("Matrix must be square for eigenvector computation.");
+            throw batchlas::invalid_argument("Matrix must be square for eigenvector computation.");
         }
         if (eigvects.rows() != n || eigvects.batch_size() != batch_size) {
-            throw std::invalid_argument("Eigenvector matrix has incompatible dimensions.");
+            throw batchlas::invalid_argument("Eigenvector matrix has incompatible dimensions.");
         }
         if (!params.back_transform) {
-            eigvects.fill_identity(ctx);
+            (void)eigvects.fill_identity(ctx);
         }
     }
 
@@ -354,9 +358,9 @@ Event steqr_wg(Queue& ctx,
 
     for (int64_t i = 0; i < n - 1; ++i) {
         if (jobz == JobType::EigenVectors) {
-            givens_rotations.fill(ctx, std::array<T, 2>{1, 0});
+            (void)givens_rotations.fill(ctx, std::array<T, 2>{1, 0});
         }
-        steqr_wg_impl(ctx,
+        (void)steqr_wg_impl(ctx,
                       d,
                       e,
                       jobz,
@@ -369,6 +373,34 @@ Event steqr_wg(Queue& ctx,
                       params.zero_threshold);
     }
 
+    // Per-item convergence status.
+    //
+    // steqr_wg has never recorded whether it actually finished: the inner sweep
+    // loop in steqr_wg_impl exits early on `deflatable` and silently otherwise,
+    // and this driver runs a FIXED n-1 passes with no test at all. So the honest
+    // predicate is the post-hoc one steqr_legacy already computes -- an
+    // off-diagonal that survived every pass -- except counted per item rather
+    // than reduced into one batch-global flag. The count is what LAPACK's
+    // `info` means for ?steqr: the number of off-diagonal elements that did not
+    // converge to zero.
+    //
+    // It costs no workspace and does not change steqr_wg_buffer_size: `info` is
+    // the caller's USM, written in place, and an empty span skips the launch.
+    // No zeroing here: `steqr` (and `stedc`, for a leaf solve) has already cleared
+    // the span, and info_report only ever raises. See info_span.hh.
+    if (int32_t* info_out = detail::info_ptr(info, batch_size)) {
+        ctx->submit([&](sycl::handler& cgh) {
+            cgh.parallel_for(sycl::range<1>(static_cast<size_t>(batch_size)), [=](sycl::id<1> id) {
+                auto e_item = e.batch_item(id[0]);
+                int32_t unconverged = 0;
+                for (int64_t j = 0; j < n - 1; ++j) {
+                    if (e_item(j) != T(0)) ++unconverged;
+                }
+                detail::info_report(info_out, static_cast<int64_t>(id[0]), unconverged);
+            });
+        });
+    }
+
     ctx->submit([&](sycl::handler& cgh) {
         cgh.parallel_for(sycl::nd_range(sycl::range(batch_size * n), sycl::range(n)), [=](sycl::nd_item<1> item) {
             auto bid = item.get_group_linear_id();
@@ -379,7 +411,7 @@ Event steqr_wg(Queue& ctx,
 
     if (params.sort) {
         auto ws_sort = pool.allocate<std::byte>(ctx, sort_buffer_size<T>(ctx, eigenvalues.data(), eigvects, jobz));
-        sort(ctx, eigenvalues, eigvects, jobz, params.sort_order, ws_sort);
+        (void)sort(ctx, eigenvalues, eigvects, jobz, params.sort_order, ws_sort);
     }
     return ctx.get_event();
 }
@@ -416,7 +448,7 @@ size_t steqr_wg_buffer_size(Queue& ctx,
 }
 
 #define STEQR_WG_INSTANTIATE(back, fp) \
-template Event steqr_wg<back, BATCHLAS_UNPAREN fp>(Queue&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, const Span<std::byte>&, JobType, SteqrParams<BATCHLAS_UNPAREN fp>, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&);
+template Event steqr_wg<back, BATCHLAS_UNPAREN fp>(Queue&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, const Span<std::byte>&, JobType, SteqrParams<BATCHLAS_UNPAREN fp>, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, Span<int32_t>);
 
 BATCHLAS_INSTANTIATE_REAL_ALL_BACKENDS(STEQR_WG_INSTANTIATE)
 

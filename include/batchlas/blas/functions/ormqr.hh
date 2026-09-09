@@ -214,7 +214,7 @@ inline Event ormqr_dispatch(Queue& ctx,
         : ormqr_blocked_buffer_size<B, T>(ctx, A, C, side, trans, tau, block_size);
 
     if (workspace.size() < need_ws) {
-        throw std::invalid_argument("ormqr: insufficient workspace for chosen provider");
+        throw batchlas::workspace_error("ormqr: insufficient workspace for chosen provider");
     }
 
     // std::optional, not a plain `Queue`: the default Queue constructor is not inert, it

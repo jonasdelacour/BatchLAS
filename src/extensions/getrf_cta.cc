@@ -308,38 +308,38 @@ Event getrf_cta_dispatch(Queue& ctx,
     const int batch = static_cast<int>(A.batch_size());
 
     if (m < 1 || n < 1 || batch < 1) {
-        throw std::invalid_argument("getrf_cta: degenerate extents");
+        throw batchlas::invalid_argument("getrf_cta: degenerate extents");
     }
     if (m != n) {
         // Contract, not fit: supports() refuses m != n and the two must agree.
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "getrf_cta: A must be square (route_getrf.hh's supports() refuses m != n)");
     }
     if (A.is_heterogeneous()) {
         // One (n, ld, stride) tuple at CAPACITY extents covers the whole batch.
-        throw std::invalid_argument("getrf_cta: heterogeneous batch is not supported");
+        throw batchlas::invalid_argument("getrf_cta: heterogeneous batch is not supported");
     }
     const auto dev = ctx.device();
     if (dev.type != DeviceType::GPU) {
-        throw std::invalid_argument("getrf_cta: GPU queues only");
+        throw batchlas::invalid_argument("getrf_cta: GPU queues only");
     }
     if (!dev.supports_sub_group_size(32)) {
         // ENUMERATED, never MAX_SUB_GROUP_SIZE >= 32: that property reports the
         // FIRST supported size, so the weak test accepts a {64}-only device here.
-        throw std::runtime_error(
+        throw batchlas::unsupported(
             "getrf_cta: device does not offer sub-group size 32, which the kernel requires");
     }
 
     // int64 ON THE WIRE, PACKED 1-BASED int32 IN THE BUFFER: cuBLAS and rocSOLVER
     // reinterpret_cast this span, so any other format is silent garbage downstream.
     if (pivots.size() < static_cast<std::size_t>(n) * static_cast<std::size_t>(batch)) {
-        throw std::invalid_argument("getrf_cta: pivot span is shorter than n * batch");
+        throw batchlas::invalid_argument("getrf_cta: pivot span is shorter than n * batch");
     }
 
     const std::size_t local_mem = dev.get_property(DeviceProperty::LOCAL_MEM_SIZE);
     const std::size_t budget = (local_mem > 4096) ? (local_mem - 4096) : 0;
     if (!getrf_cta_fits<T>(n, budget)) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "getrf_cta: order " + std::to_string(n) +
             " does not fit this device's local memory (needs " +
             std::to_string(getrf_slm_bytes<T>(n, n)) + " B of " +
@@ -367,7 +367,7 @@ Event getrf_cta_dispatch(Queue& ctx,
     if (!resident) {
         // Unreachable: same budget and same arithmetic as the check above. Asserted
         // because a tier silently becoming the other is what a pinned test misses.
-        throw std::logic_error(
+        throw batchlas::internal_error(
             "getrf_cta: the panel leaf did not take the resident path after the fit "
             "check passed -- getrf_cta_fits and getrf_panel_factorize disagree");
     }

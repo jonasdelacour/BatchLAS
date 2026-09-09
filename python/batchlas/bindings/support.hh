@@ -1211,6 +1211,28 @@ inline DenseVector make_vector(int size, int batch_size) {
     return wrap_vector(Vector<T>(size, batch_size));
 }
 
+// Per-item status (`info`) as a NumPy int32 array.
+//
+// Not a DenseVector: DenseVectorVariant holds the four floating scalar types
+// only, and `info` is int32 for every one of them -- 0 for an item that
+// converged, a positive LAPACK-like value for one that did not. It is
+// batch_size entries long, so copying it out costs nothing next to the solve
+// that produced it.
+//
+// Empty in, None out: an empty UnifiedVector is how the bindings spell "status
+// was not requested", and that is exactly the empty span the C++ layer treats as
+// not-requested. Returning None rather than a zero-length array keeps a caller
+// from mistaking "nothing asked" for "nothing failed".
+inline py::object info_to_python(const UnifiedVector<std::int32_t>& info, int batch_size) {
+    if (info.size() == 0 || batch_size <= 0) return py::none();
+    py::array_t<std::int32_t> out({static_cast<py::ssize_t>(batch_size)});
+    auto view = out.mutable_unchecked<1>();
+    for (int b = 0; b < batch_size; ++b) {
+        view(static_cast<py::ssize_t>(b)) = info[static_cast<std::size_t>(b)];
+    }
+    return out;
+}
+
 template <typename T>
 inline DenseVector wrap_vector_copy(const UnifiedVector<T>& values, int size, int batch_size) {
     Vector<T> vector(size, batch_size);

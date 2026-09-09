@@ -322,6 +322,17 @@ These take a workspace. Leave it out and it is leased from the queue's arena; se
 
 `getri`, like `trmm`, writes a second matrix operand and leaves its input alone.
 
+**Per-item status.** `potrf`, `getrf` and `getri` optionally report a
+factorisation status, and the five routines whose answer is *iterated* rather
+than computed in one pass — `syev`, `syevx`, `gesvd`, and the tridiagonal
+solvers `steqr` and `stedc` from the extension surface — optionally report a
+convergence status. One `Span<int32_t>`, one entry per batch item, `0` for a
+good item and a positive LAPACK-like value otherwise; empty (the default) reports
+nothing and costs nothing. This is the only way to find out that item 37 of a
+16384-item batch did not converge — the call returns and `ctx.wait()` returns
+either way. See *What gets thrown → Convergence status* for the full convention
+and its two current gaps.
+
 ### Which type each parameter takes
 
 - **Matrix parameters** take `Matrix<T>` or `MatrixView<T>`, mixed freely, on
@@ -942,23 +953,81 @@ that item's row range into slots the conversion never wrote. Three accessors, on
 
 ## What gets thrown
 
-The split is by *cause*, not by site: `std::invalid_argument` for anything
-determined by the caller's arguments — shapes, `ld`, workspace size, pointer
-reachability — and `std::runtime_error` only for environment and backend
-failures, such as a backend that is not compiled into this build or a vendor
-route with no implementation for the requested arguments. Code that used to
-catch `std::runtime_error` on a shape mismatch must now catch
-`std::invalid_argument`; through the Python bindings the same paths changed from
-`RuntimeError` to `ValueError`.
+Every exception BatchLAS raises is a `batchlas::` type from
+`batchlas/error.hh`, and each one derives from **both** the `std::` exception
+that site used to throw **and** an empty tag base, `batchlas::exception`. So
+three different catches work, and they answer three different questions:
 
-| exception | thrown for |
-| --- | --- |
-| `std::invalid_argument` | everything the caller controls: a pointer that is not reachable from the queue's device (from the queue-dispatching entry points); shape and batch-size mismatches from the dense BLAS backends (`"GEMM: incompatible matrix dimensions"`, `"SYMM: batch size mismatch (A=…, B=…, C=…)"`) and `trsm`'s shape, `lda` and `ldb` checks; the LAPACK-style shape preconditions (`"getrf: A must be square, got 100x50"`, `"getrs: A.rows() (8) must equal B.rows() (4)"`, `"geqrf: tau holds 4 elements, needs at least 16"`); a workspace or output span too short for the chosen provider; `Matrix`/`MatrixView` construction and slicing — null data, non-positive dimensions, an `ld` that is neither `0` nor at least `rows`, too short a source span, a `to_column_major` row pitch that does not fit or a defaulted one on a matrix that is not packed; shape errors from `gesvd` and the extension routines |
-| `std::runtime_error` | environment and backend failures only: a backend that is not compiled into this build; a route with no implementation for the requested arguments (`"BATCHLAS_TRMM_VARIANT=cublasdx only supports float"`, `gesvd`'s vendor route on thin singular vectors); a `Queue` used from a thread other than its owner; a raw-pointer view with no `data_ptrs` array |
-| `std::out_of_range` | `V.at(i, j, b)` / `V(i, j, b)` outside the view |
+```cpp
+#include <batchlas/error.hh>
 
-Catch `std::exception` at the boundary; the message names the routine and the
-numbers.
+try {
+    syev(ctx, A.view(), W.to_span());
+} catch (const batchlas::workspace_error& e) {
+    // the recoverable one: re-query *_buffer_size, or halve the batch and retry
+} catch (const batchlas::exception& e) {
+    // anything BatchLAS itself diagnosed, whatever the cause. e.message(), not e.what()
+} catch (const std::exception& e) {
+    // that, plus std::bad_alloc and sycl::exception. e.what()
+}
+```
+
+**Nothing about existing code changes.** A handler for `std::invalid_argument`
+still catches what is now `batchlas::invalid_argument`; one for
+`std::runtime_error` still catches every runtime failure. Through the Python
+bindings the same call raises the same Python type it always did: pybind11's
+default translator dispatches on the `std::` base, and BatchLAS registers no
+exception translator of its own.
+
+What the new types buy is **discrimination**. Before them, "your shapes are
+wrong", "no route serves this device", "the workspace is too small" and "the
+iteration did not converge" were three `std::runtime_error`s and one
+`std::invalid_argument`, told apart only by reading the message. In a batched
+solver that is the difference between *retry this batch smaller* and *abort the
+run*.
+
+| class | derives from | means | does retrying help? |
+| --- | --- | --- | --- |
+| `batchlas::invalid_argument` | `std::invalid_argument` | The call violates the API contract: a non-square view where a square one is required, mismatched batch sizes, a span shorter than the batch, a negative dimension, a null or non-USM pointer, an `ld` that is neither `0` nor at least `rows`, an enum value with no meaning here. | **No.** Nothing about the machine or the data will make these arguments legal. |
+| `batchlas::out_of_range` | `std::out_of_range` | An index is outside its container: `V.at(i, j, b)`, `V(i, j, b)`, `batch_item(b)`. Kept separate from the row above only so Python element access keeps raising `IndexError`. | **No.** |
+| `batchlas::error` | `std::runtime_error` | Base of the five below. Catch it for "the call failed at runtime, for some reason that is not a bad argument". | — |
+| `batchlas::unsupported` | `batchlas::error` | No route, kernel or backend **in this build on this device** serves the request: a complex type on a real-only native path, `Uplo::Upper` where only `Lower` is implemented, a device with no sub-group 32 under a CTA kernel, a backend that was not compiled in, an order past a kernel's register capacity. | **Not as asked** — but a different route, backend, scalar type or shape may work. This is the one to catch when you want to fall back. |
+| `batchlas::device_error` | `batchlas::error` | The device or its vendor runtime failed: a cuBLAS/cuSOLVER/rocBLAS status code, a launch failure, a handle that would not initialise, a `sycl::malloc_device` that returned null, no device of the requested type. | **Sometimes** — and this is the only class where a retry is ever right. A transient launch failure or an allocation lost to another process can clear; a status code that repeats will not. |
+| `batchlas::workspace_error` | `batchlas::error` | The scratch handed in is too small, or the arena ran out of it. Every routine's `*_buffer_size()` is the contract; this is what fires when the buffer actually passed does not honour it. | **Yes — retry smaller.** Re-query `*_buffer_size()` and pass that many bytes, or halve the batch: a batched solve's workspace scales with the batch. |
+| `batchlas::convergence_error` | `batchlas::error` | An iterative kernel did not converge, or a factorisation broke down on the data: an eigen/SVD sweep budget exhausted, a bidiagonal QR that never deflated, an ILU(k) pivot that was zero with no usable shift. LAPACK's `info > 0`. | **With different parameters, not with the same ones.** A looser tolerance, a higher sweep cap, a different algorithm or rescaled input may converge; the identical call will not. Prefer the per-item `info` spans below, which say *which* item failed. |
+| `batchlas::internal_error` | `batchlas::error` | BatchLAS is internally inconsistent: a resolver picked a native route no linked kernel serves, a capability query and the facade that reads it disagree, a branch documented "unreachable" was reached. | **No**, and it is not fixable from the call site. It is a bug here; report it with the message, which names the two things that disagreed. |
+| `batchlas::api_misuse` | `batchlas::error` | The call is well-formed but arrives in the wrong state or order: a `Queue` used from a thread other than its owner, `attach_to_current_thread()` with a workspace lease outstanding, `configure()` after a `Queue` already exists, a sizing-mode `BumpAllocator` query asked of a real pool. | **No.** Reorder the calls, or confine the object to one thread. |
+
+Three properties of `batchlas::exception` are load-bearing, and each of them
+fails *silently* if broken — which is why `tests/error_model_tests.cc` asserts
+all three rather than trusting the compiler:
+
+- **It does not derive from `std::exception`.** Every leaf already carries one
+  `std::exception` subobject through its `std::` base; a second one would make
+  `catch (const std::exception&)` ambiguous, and an ambiguous base in a catch
+  clause is not diagnosed — the handler simply stops matching and the exception
+  runs to `std::terminate`.
+- **It is a virtual base.** Otherwise a future class deriving from two arms would
+  get two tag subobjects and `catch (const batchlas::exception&)` would stop
+  matching *it*, again with no diagnostic.
+- **It has no `what()`.** `std::exception::what()` lives in a different base
+  subobject and would not override one declared here, so adding it makes every
+  leaf abstract. Read the message through `e.message()` from a tag handler, or
+  catch `std::exception` and use `what()`.
+
+Two failure classes stay **outside** the hierarchy on purpose, so
+`catch (const batchlas::exception&)` will not see them:
+
+- **`std::bad_alloc`**, from the three sites where a `sycl::malloc_*` returned
+  null. It is the standard type for allocation failure and is what pybind11 maps
+  to `MemoryError`; wrapping it would lose that and gain nothing.
+- **`sycl::exception`**, raised by the SYCL runtime itself — including everything
+  the device reports asynchronously at `ctx.wait_and_throw()`. It is not ours to
+  reclassify.
+
+A boundary that must let nothing escape therefore still needs a
+`catch (const std::exception&)` behind the BatchLAS one. Every message names the
+routine and the numbers.
 
 Errors that the device reports asynchronously surface at
 `ctx.wait_and_throw()`, not at the call that enqueued the work.
@@ -968,8 +1037,8 @@ checks every batch item, `symm`, `hemm`, `herk`, `her2k`, `syrk`, `syr2k` and
 `trmm` check shapes and batch sizes, and `trsm` checks shapes, `lda` and `ldb`.
 The queue-dispatching LAPACK-style calls — `potrf`, `getrf`, `getrs`, `getri`,
 `geqrf`, `orgqr`, `syev` written without an explicit `<Backend>` — check their
-shapes host-side before any device work, and throw `std::invalid_argument` on a
-mismatch. `potrf`, `getrf`, `getri` and `syev` require a square `A`; `getrs`
+shapes host-side before any device work, and throw `batchlas::invalid_argument`
+on a mismatch. `potrf`, `getrf`, `getri` and `syev` require a square `A`; `getrs`
 additionally requires `A.rows() == B.rows()` and a matching batch size, and
 `getri` the same of `Ainv`. The output spans must be long enough: `pivots` at
 least `A.rows() * batch_size`, `tau` at least
@@ -988,12 +1057,12 @@ case. Now all three reject it the same way.
 The `f<Backend::CUDA>(ctx, …)` spelling is the library's own inner-loop form and
 skips these checks by design, so the cost stays off the hot path.
 
-**Factorisation status is opt-in, and only `potrf`, `getrf` and `getri` have
-it.** Each takes an optional `Span<int32_t> info`, one entry per batch item, with
-LAPACK's convention: `0` means the item factorised, and a positive value names
-the leading minor (`potrf`) or the zero pivot (`getrf`, `getri`) at which it
-failed. It is a field on `PotrfOptions` and a trailing parameter on
-`getrf`/`getri`:
+**Per-item status is opt-in, and eight routines have it**: `potrf`, `getrf`,
+`getri` report a *factorisation* status, and `syev`, `syevx`, `gesvd`, `steqr`
+and `stedc` report a *convergence* status. All eight use one `Span<int32_t>`,
+one entry per batch item, with LAPACK's convention: `0` means the item is good,
+and a positive value says what went wrong with it. It is a field on
+`PotrfOptions` and a trailing parameter everywhere else:
 
 ```cpp
 UnifiedVector<int32_t> info(batch);
@@ -1019,13 +1088,63 @@ rather than a per-item device array (it spells the per-item form `devInfoArray`,
 as on `gelsBatched`); and rocSOLVER's `geqrf` has no info parameter at all. A
 per-item `geqrf` info would be all zeros by construction.
 
-`syev`, `gesvd` and the solve-style calls (`getrs`, `linalg::solve`) still report
-nothing. A batch item whose pivot is zero to working precision produces numbers
-rather than an exception: `linalg::solve` on a near-singular `A` returns a
-plausible-looking result and nothing in the table above fires. Where the inputs
-are not known to be well-conditioned, check afterwards — compute the residual
-`‖A·X − B‖`, or scan the factor's diagonal for zeros and NaNs — and decide per
-batch item.
+### Convergence status: `syev`, `syevx`, `gesvd`, `steqr`, `stedc`
+
+These five are the routines where LAPACK returns `info > 0` for *this matrix did
+not converge*, and until recently none of them said so. At batch 16384 a single
+non-converged item was invisible: the call returned, `ctx.wait()` returned, and
+the caller read eigenvalues that were simply wrong for that item with nothing
+anywhere recording it. Several tiers computed the answer and threw it away —
+`bdsqr` filled a per-item `fail_flags` array and then collapsed it into one
+batch-wide throw; `steqr_cta` wrote a per-item status readable only under a
+diagnostics environment variable; cuSOLVER's `syevj` returns an `info` array that
+was allocated, passed and dropped.
+
+Each of the five now takes a trailing `Span<int32_t> info`, defaulted to empty:
+
+```cpp
+UnifiedVector<int32_t> info(batch);
+syev<Backend::CUDA>(ctx, A.view(), W.to_span(),
+                    JobType::EigenVectors, Uplo::Lower, ws.to_span(), info.to_span());
+ctx.wait();
+for (int b = 0; b < batch; ++b) {
+    if (info[b] != 0) { /* item b's eigenvalues are not to be trusted */ }
+}
+```
+
+The semantics are the same for all five: **`0` means the item converged**, and a
+value **greater than zero is LAPACK-like** — the number of off-diagonal elements
+that failed to converge where the tier tracks a count, and `1` where it tracks
+only the fact of failure. It is never negative.
+
+Three properties are worth relying on:
+
+- **An empty span means "not requested" and costs nothing.** `info` is *your*
+  USM, written in place by the kernel that already knows the answer, so no tier
+  needs workspace for it and **no `*_buffer_size()` result changes** whether or
+  not you ask. None of the five sizing queries even takes an `info` argument.
+- **The span is an accumulator, not an output register.** It is zeroed exactly
+  once, by the entry point *you* called, and everything below only ever raises a
+  value. That is what makes a nested solve — `syev` → `syev_blocked` → `stedc`,
+  or one `stedc` running many merges over the same items — report *did any of
+  them fail* rather than *did the last one*.
+- **Poison it before the call if you want the check to be honest.** A span you
+  leave at zero cannot distinguish "the solver wrote 0" from "nothing wrote it";
+  fill it with `-1` and a surviving `-1` is a defect rather than a silent pass.
+
+Two limits to know about. `stedc`'s status covers its own merges, not the leaf
+`steqr` solves underneath it — a leaf that runs out of sweeps is not reported
+through `stedc`'s `info` today. And `stein` (inverse iteration, reached through
+`syevx`'s `DirectSubset` route) runs a fixed iteration count with no convergence
+test at all, so it has nothing to report; LAPACK's `?stein` counts the vectors
+that failed, and BatchLAS does not measure it.
+
+The solve-style calls (`getrs`, `linalg::solve`) still report nothing. A batch
+item whose pivot is zero to working precision produces numbers rather than an
+exception: `linalg::solve` on a near-singular `A` returns a plausible-looking
+result and nothing in the table above fires. Where the inputs are not known to be
+well-conditioned, check afterwards — compute the residual `‖A·X − B‖`, or scan
+the factor's diagonal for zeros and NaNs — and decide per batch item.
 
 ## Synchronisation and threading
 

@@ -11,6 +11,10 @@
 #include <string_view>
 #include <type_traits>
 
+// First, so every public header that reaches a Queue also sees the exception
+// hierarchy: <batchlas/error.hh> is dependency-free (only <stdexcept> and
+// <string>), so this costs nothing and cannot form a cycle.
+#include <batchlas/error.hh>
 #include <batchlas/util/workspace.hh>
 #include <batchlas/blas/enums.hh>
 
@@ -134,7 +138,7 @@ struct Device{
     Device(std::string type) {
         std::transform(type.begin(), type.end(), type.begin(), ::tolower);
         auto pick = [](std::vector<Device> devs, const std::string& name) -> Device {
-            if (devs.empty()) throw std::runtime_error("No " + name + " device available");
+            if (devs.empty()) throw batchlas::device_error("No " + name + " device available");
             return devs.at(0);
         };
         if(type == "cpu") {
@@ -144,7 +148,7 @@ struct Device{
         } else if(type == "accelerator") {
             *this = pick(get_devices(DeviceType::ACCELERATOR), "accelerator");
         } else {
-            throw std::runtime_error("Invalid device type: " + type);
+            throw batchlas::invalid_argument("Invalid device type: " + type);
         }
     }
 
@@ -177,7 +181,21 @@ struct Device{
 
 struct EventImpl;
 
-struct Event {
+// [[nodiscard]] on the TYPE, not on each of the ~279 functions that return one:
+// the operations live in include/batchlas/blas/functions/*.hh behind generated
+// forwarders and dispatch macros, and marking the class is the only way to reach
+// every one of them from a single place.
+//
+// WHY IT MATTERS. An Event is how a caller orders work that the library cannot
+// order for it: an out-of-order Queue, a second Queue sharing the context, or a
+// hand-off to raw SYCL. Dropping it there is a silent race, and it used to be
+// invisible. It is a WARNING, not an error -- the default Queue is in-order, so
+// the overwhelmingly common case of chaining calls on one Queue is correct
+// without ever touching the Event. That is exactly why the in-tree discards
+// below are spelled `(void)`: each one is a claim that the queue's own ordering
+// is enough, and the cast is what makes the claim deliberate and greppable
+// instead of accidental.
+struct [[nodiscard]] Event {
     std::unique_ptr<EventImpl> impl_;
 
     Event();

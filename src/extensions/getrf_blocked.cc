@@ -157,39 +157,39 @@ Event getrf_blocked_dispatch(Queue& ctx,
     // point is reachable without the table: a forced route the table refuses falls
     // through to automatic(), so a wrong gate here silently measures cuBLAS.
     if (m < 1 || n < 1 || batch < 1) {
-        throw std::invalid_argument("getrf_blocked: degenerate extents");
+        throw batchlas::invalid_argument("getrf_blocked: degenerate extents");
     }
     if (m != n) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "getrf_blocked: A must be square (route_getrf.hh's supports() refuses m != n)");
     }
     if (A.is_heterogeneous()) {
-        throw std::invalid_argument("getrf_blocked: heterogeneous batch is not supported");
+        throw batchlas::invalid_argument("getrf_blocked: heterogeneous batch is not supported");
     }
     const auto dev = ctx.device();
     if (dev.type != DeviceType::GPU) {
-        throw std::invalid_argument("getrf_blocked: GPU queues only");
+        throw batchlas::invalid_argument("getrf_blocked: GPU queues only");
     }
     if (!dev.supports_sub_group_size(32)) {
-        throw std::runtime_error(
+        throw batchlas::unsupported(
             "getrf_blocked: device does not offer sub-group size 32, which the panel leaf "
             "requires");
     }
     if (pivots.size() < static_cast<std::size_t>(n) * static_cast<std::size_t>(batch)) {
-        throw std::invalid_argument("getrf_blocked: pivot span is shorter than n * batch");
+        throw batchlas::invalid_argument("getrf_blocked: pivot span is shorter than n * batch");
     }
     {
         const std::size_t local_mem = dev.get_property(DeviceProperty::LOCAL_MEM_SIZE);
         const std::size_t budget = (local_mem > 4096) ? (local_mem - 4096) : 0;
         if (getrf_cta_max_n_for_slm<T>(budget) < 1) {
-            throw std::runtime_error(
+            throw batchlas::unsupported(
                 "getrf_blocked: this device's local-memory budget cannot host the panel "
                 "leaf's argmax slots, so the tier is unavailable (route_getrf.hh's "
                 "supports() refuses the Blocked arm when cta_max_n is 0)");
         }
     }
     if (!panel_trsm) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "getrf_blocked: the panel-solve trsm seam is empty. Inject the ROUTED "
             "batchlas::trsm (the facade does; a direct caller must too) -- this driver "
             "deliberately has no native fallback for it, so that the router, and not this "

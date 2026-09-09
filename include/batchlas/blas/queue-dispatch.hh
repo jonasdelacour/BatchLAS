@@ -54,7 +54,7 @@ inline auto with_backend(Queue& ctx, F&& f) {
         default:
             break;
     }
-    throw std::runtime_error(
+    throw batchlas::unsupported(
         std::string("BatchLAS: backend ") + std::string(to_string(ctx.backend())) +
         " has no implementation in this build. "
         "Check Queue::backend_available() before pinning a backend.");

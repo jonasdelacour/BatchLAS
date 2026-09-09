@@ -150,10 +150,10 @@ Event sytrd_sb2st_hh(Queue& ctx,
     using Real = typename base_type<T>::type;
 
     if (!ctx.in_order()) {
-        throw std::runtime_error("sytrd_sb2st_hh: requires an in-order Queue");
+        throw batchlas::invalid_argument("sytrd_sb2st_hh: requires an in-order Queue");
     }
     if (uplo != Uplo::Lower) {
-        throw std::runtime_error("sytrd_sb2st_hh: only Uplo::Lower is implemented");
+        throw batchlas::unsupported("sytrd_sb2st_hh: only Uplo::Lower is implemented");
     }
 
     const int32_t n = static_cast<int32_t>(ab_in.cols());
@@ -802,7 +802,7 @@ Event unmqr_hb2st(Queue& ctx,
                   Span<const int32_t> lens,
                   Span<const int32_t> waves) {
     if (!ctx.in_order()) {
-        throw std::runtime_error("unmqr_hb2st: requires an in-order Queue");
+        throw batchlas::invalid_argument("unmqr_hb2st: requires an in-order Queue");
     }
     const int32_t nrefl = static_cast<int32_t>(starts.size());
     const int32_t batch = static_cast<int32_t>(z_io.batch_size());

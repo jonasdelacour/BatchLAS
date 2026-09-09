@@ -31,7 +31,7 @@ using gesvd_vendor = Event(Queue&,
                            Span<typename base_type<T>::type>,
                            const MatrixView<T, MatrixFormat::Dense>&,
                            const MatrixView<T, MatrixFormat::Dense>&,
-                           SvdVectors, SvdVectors, Span<std::byte>);
+                           SvdVectors, SvdVectors, Span<std::byte>, Span<int32_t>);
 
 template <typename T>
 using gesvd_vendor_buffer_size = size_t(Queue&,
@@ -45,6 +45,16 @@ using gesvd_vendor_buffer_size = size_t(Queue&,
 // A is overwritten during factorization. General real-matrix support accepts
 // rectangular inputs with full-vector outputs (U and V^H). Hermitian overloads
 // remain square-only.
+// `info` is the per-item convergence status: one int32 per batch item, 0 when the
+// item converged and > 0 LAPACK-like (the number of off-diagonal elements that
+// failed to converge, or 1 where the tier that ran tracks only the fact of
+// failure). gesvd is one of the routines where LAPACK returns info > 0, and until
+// now a non-converged item in a large batch was invisible -- the call returned,
+// ctx.wait() returned, and the caller read singular values that were simply wrong.
+//
+// An EMPTY span means "not requested" and costs nothing: `info` is the CALLER's
+// USM, written in place by whichever kernel already knows the answer, so no tier
+// needs workspace for it and gesvd_buffer_size is the same either way.
 template <Backend B, typename T>
 Event gesvd(Queue& ctx,
             const MatrixView<T, MatrixFormat::Dense>& A,
@@ -53,7 +63,8 @@ Event gesvd(Queue& ctx,
             const MatrixView<T, MatrixFormat::Dense>& Vh,
             SvdVectors jobu,
             SvdVectors jobvh,
-            Span<std::byte> workspace);
+            Span<std::byte> workspace,
+            Span<int32_t> info);
 
 template <Backend B, typename T>
 Event gesvd(Queue& ctx,
@@ -64,7 +75,42 @@ Event gesvd(Queue& ctx,
             SvdVectors jobu,
             SvdVectors jobvh,
             Uplo hermitian_uplo,
-            Span<std::byte> workspace);
+            Span<std::byte> workspace,
+            Span<int32_t> info);
+
+// Old-arity forwarders, one per overload, rather than a defaulted trailing
+// parameter -- the same shape as potrf.hh:110 and functions/syev.hh, and for the
+// same reason: sig::gesvd_vendor below is a function *type* and cannot carry a
+// default, so leaving the declarations default-free too keeps alias and
+// declaration parameter-for-parameter identical. The two forwarders keep every
+// existing eight- and nine-argument call site -- the GesvdOptions spellings in
+// blas/options.hh among them -- compiling unchanged. Arity plus the Uplo/Span
+// type difference at parameter 8 keeps all four overloads unambiguous.
+template <Backend B, typename T>
+inline Event gesvd(Queue& ctx,
+            const MatrixView<T, MatrixFormat::Dense>& A,
+            Span<typename base_type<T>::type> singular_values,
+            const MatrixView<T, MatrixFormat::Dense>& U,
+            const MatrixView<T, MatrixFormat::Dense>& Vh,
+            SvdVectors jobu,
+            SvdVectors jobvh,
+            Span<std::byte> workspace) {
+    return gesvd<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh, workspace, Span<int32_t>{});
+}
+
+template <Backend B, typename T>
+inline Event gesvd(Queue& ctx,
+            const MatrixView<T, MatrixFormat::Dense>& A,
+            Span<typename base_type<T>::type> singular_values,
+            const MatrixView<T, MatrixFormat::Dense>& U,
+            const MatrixView<T, MatrixFormat::Dense>& Vh,
+            SvdVectors jobu,
+            SvdVectors jobvh,
+            Uplo hermitian_uplo,
+            Span<std::byte> workspace) {
+    return gesvd<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh, hermitian_uplo, workspace,
+                       Span<int32_t>{});
+}
 
 template <Backend B, typename T>
 size_t gesvd_buffer_size(Queue& ctx,
@@ -101,6 +147,13 @@ namespace batchlas::backend {
 // redefinition error rather than an override, which is why there was never a
 // cuSOLVER SVD binding. The LAPACKE body now lives in
 // src/backends/netlib_lapack.cc.
+// `info_out` is the caller's per-item status span, or empty. cuSOLVER's
+// gesvdjBatched already returns an info array and this library dropped it; netlib
+// captured LAPACKE's scalar info per item and threw it away in a batch-wide
+// exception. Defaulted rather than forwarded, exactly as syev_vendor's is and for
+// the reason spelled out there (functions/syev.hh): a default is a property of
+// the declaration, not of the function type, so sig::gesvd_vendor still names the
+// full nine-parameter signature that the vendor TUs instantiate.
 template <Backend B, typename T>
 Event gesvd_vendor(Queue& ctx,
                    const MatrixView<T, MatrixFormat::Dense>& A,
@@ -109,7 +162,8 @@ Event gesvd_vendor(Queue& ctx,
                    const MatrixView<T, MatrixFormat::Dense>& Vh,
                    SvdVectors jobu,
                    SvdVectors jobvh,
-                   Span<std::byte> workspace);
+                   Span<std::byte> workspace,
+                   Span<int32_t> info_out = Span<int32_t>());
 
 template <Backend B, typename T>
 size_t gesvd_vendor_buffer_size(Queue& ctx,
@@ -221,7 +275,8 @@ inline Event gesvd_dispatch(Queue& ctx,
                             SvdVectors jobu,
                             SvdVectors jobvh,
                             std::optional<Uplo> hermitian_uplo,
-                            Span<std::byte> workspace) {
+                            Span<std::byte> workspace,
+                            Span<int32_t> info) {
     // Canonicalise before anything else, and identically to
     // gesvd_buffer_size_dispatch below: these two independently repeat the
     // provider choice, and a divergence in what they think "Thin" means sizes
@@ -255,7 +310,7 @@ inline Event gesvd_dispatch(Queue& ctx,
     }
 
     if (workspace.size() < need_ws) {
-        throw std::invalid_argument("gesvd: insufficient workspace for chosen provider");
+        throw batchlas::workspace_error("gesvd: insufficient workspace for chosen provider");
     }
 
     // std::optional, not a plain `Queue`: the default Queue constructor is not inert, it
@@ -274,7 +329,9 @@ inline Event gesvd_dispatch(Queue& ctx,
     }
 
     if (d::is_vendor(chosen)) {
-        return detail::gesvd_vendor_or_throw<B, T>(*run_q, A, singular_values, U, Vh, jobu, jobvh, workspace);
+        // Every arm clears `info` itself, and exactly one arm runs, so
+        // gesvd_dispatch adds no clear of its own.
+        return detail::gesvd_vendor_or_throw<B, T>(*run_q, A, singular_values, U, Vh, jobu, jobvh, workspace, info);
     }
 
     // The explicit branch is not optional: the tail of this function is an
@@ -282,18 +339,19 @@ inline Event gesvd_dispatch(Queue& ctx,
     // branch silently executes the blocked normal-equation path -- the exact
     // defect this kernel exists to remove -- while every label says otherwise.
     if (chosen.algo == d::Algorithm::Jacobi) {
-        return gesvdj_cta<B, T>(*run_q, A, singular_values, U, Vh, jobu, jobvh, workspace);
+        return gesvdj_cta<B, T>(*run_q, A, singular_values, U, Vh, jobu, jobvh, workspace,
+                                GesvdjParams<T>(), info);
     }
 
     if (chosen.algo == d::Algorithm::CTA) {
         return hermitian_uplo.has_value()
-            ? gesvd_cta<B, T>(*run_q, A, singular_values, U, Vh, jobu, jobvh, *hermitian_uplo, workspace)
-            : gesvd_cta<B, T>(*run_q, A, singular_values, U, Vh, jobu, jobvh, workspace);
+            ? gesvd_cta<B, T>(*run_q, A, singular_values, U, Vh, jobu, jobvh, *hermitian_uplo, workspace, info)
+            : gesvd_cta<B, T>(*run_q, A, singular_values, U, Vh, jobu, jobvh, workspace, info);
     }
 
     return hermitian_uplo.has_value()
-        ? gesvd_blocked<B, T>(*run_q, A, singular_values, U, Vh, jobu, jobvh, *hermitian_uplo, workspace)
-        : gesvd_blocked<B, T>(*run_q, A, singular_values, U, Vh, jobu, jobvh, workspace);
+        ? gesvd_blocked<B, T>(*run_q, A, singular_values, U, Vh, jobu, jobvh, *hermitian_uplo, workspace, info)
+        : gesvd_blocked<B, T>(*run_q, A, singular_values, U, Vh, jobu, jobvh, workspace, info);
 }
 
 template <Backend B, typename T>
@@ -350,8 +408,9 @@ inline Event gesvd(Queue& ctx,
                    const MatrixView<T, MatrixFormat::Dense>& Vh,
                    SvdVectors jobu,
                    SvdVectors jobvh,
-                   Span<std::byte> workspace) {
-    return blas::dispatch::gesvd_dispatch<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh, std::nullopt, workspace);
+                   Span<std::byte> workspace,
+                   Span<int32_t> info) {
+    return blas::dispatch::gesvd_dispatch<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh, std::nullopt, workspace, info);
 }
 
 template <Backend B, typename T>
@@ -363,8 +422,9 @@ inline Event gesvd(Queue& ctx,
                    SvdVectors jobu,
                    SvdVectors jobvh,
                    Uplo hermitian_uplo,
-                   Span<std::byte> workspace) {
-    return blas::dispatch::gesvd_dispatch<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh, hermitian_uplo, workspace);
+                   Span<std::byte> workspace,
+                   Span<int32_t> info) {
+    return blas::dispatch::gesvd_dispatch<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh, hermitian_uplo, workspace, info);
 }
 
 template <Backend B, typename T>

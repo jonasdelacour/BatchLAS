@@ -228,17 +228,17 @@ namespace batchlas {
 
             if (active_rows.size() != static_cast<std::size_t>(batch_size) ||
                 active_cols.size() != static_cast<std::size_t>(batch_size)) {
-                throw std::invalid_argument("Dense heterogeneous metadata must provide rows and cols for every batch item");
+                throw batchlas::invalid_argument("Dense heterogeneous metadata must provide rows and cols for every batch item");
             }
 
             for (int batch_index = 0; batch_index < batch_size; ++batch_index) {
                 const int rows = active_rows[batch_index];
                 const int cols = active_cols[batch_index];
                 if (rows < 0 || cols < 0) {
-                    throw std::invalid_argument("Dense heterogeneous metadata cannot contain negative dimensions");
+                    throw batchlas::invalid_argument("Dense heterogeneous metadata cannot contain negative dimensions");
                 }
                 if (rows > rows_capacity || cols > cols_capacity) {
-                    throw std::invalid_argument("Dense heterogeneous metadata exceeds the matrix storage capacity");
+                    throw batchlas::invalid_argument("Dense heterogeneous metadata exceeds the matrix storage capacity");
                 }
             }
         }
@@ -572,7 +572,7 @@ namespace batchlas {
             auto [r_start, r_len] = detail::normalize_slice_component(rows, rows_);
             auto [c_start, c_len] = detail::normalize_slice_component(cols, cols_);
             if (r_len <= 0 || c_len <= 0) {
-                throw std::invalid_argument("Invalid slice dimensions on Matrix: " + std::to_string(r_len) + "x" + std::to_string(c_len));
+                throw batchlas::invalid_argument("Invalid slice dimensions on Matrix: " + std::to_string(r_len) + "x" + std::to_string(c_len));
             }
             auto offset = c_start * ld_ + r_start;
             return MatrixView<T, MType>(data_.data() + offset, static_cast<int>(r_len), static_cast<int>(c_len), ld_, stride_, batch_size_, data_ptrs_.data());
@@ -1000,7 +1000,7 @@ namespace batchlas {
             auto [r_start, r_len] = detail::normalize_slice_component(rows, rows_);
             auto [c_start, c_len] = detail::normalize_slice_component(cols, cols_);
             if (r_len <= 0 || c_len <= 0) {
-                throw std::invalid_argument("Invalid slice dimensions: " + std::to_string(r_len) + "x" + std::to_string(c_len));
+                throw batchlas::invalid_argument("Invalid slice dimensions: " + std::to_string(r_len) + "x" + std::to_string(c_len));
             }
             auto offset = c_start * ld_ + r_start;
             // The parent pointer-array refers to the *unsliced* base addresses, which a
@@ -1019,7 +1019,7 @@ namespace batchlas {
         VectorView<T> operator()(int32_t row, Slice cols) const {
             auto [c_start, c_len] = detail::normalize_slice_component(cols, cols_);
             if (c_len <= 0) {
-                throw std::invalid_argument("Invalid slice dimensions for row vector: " + std::to_string(c_len));
+                throw batchlas::invalid_argument("Invalid slice dimensions for row vector: " + std::to_string(c_len));
             }
             auto offset = c_start * ld_ + row;
             return VectorView<T>(data_ptr() + offset, static_cast<int>(c_len), batch_size_, ld_, stride_);
@@ -1030,7 +1030,7 @@ namespace batchlas {
         VectorView<T> operator()(Slice rows, int32_t col) const {
             auto [r_start, r_len] = detail::normalize_slice_component(rows, rows_);
             if (r_len <= 0) {
-                throw std::invalid_argument("Invalid slice dimensions for column vector: " + std::to_string(r_len));
+                throw batchlas::invalid_argument("Invalid slice dimensions for column vector: " + std::to_string(r_len));
             }
             auto offset = col * ld_ + r_start;
             return VectorView<T>(data_ptr() + offset, static_cast<int>(r_len), batch_size_, 1, stride_);
@@ -1163,8 +1163,10 @@ namespace batchlas {
             requires DenseMatrixFormat<M>
         Event fill_tridiag(const Queue& ctx, VectorView<T> sub_diag, 
                             VectorView<T> diag, VectorView<T> super_diag) const {
-                                fill_diagonal(ctx, diag);
-                                fill_diagonal(ctx, sub_diag, -1);
+                                // (void) on an Event: deliberate. This Queue is in-order, so the next submission
+                                // is already ordered after this one and the Event carries nothing the caller needs.
+                                (void)fill_diagonal(ctx, diag);
+                                (void)fill_diagonal(ctx, sub_diag, -1);
                                 return fill_diagonal(ctx, super_diag, 1);
                             }
 

@@ -36,6 +36,7 @@
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
 #include "../queue.hh"
+#include "info_span.hh"
 #include <batchlas/util/mempool.hh>
 #include <sycl/sycl.hpp>
 #include <algorithm>
@@ -106,7 +107,8 @@ Event syevx_filtered(Queue& ctx,
                      Span<std::byte> workspace,
                      JobType jobz,
                      const MatrixView<T, MatrixFormat::Dense>& V,
-                     const SyevxParams<T>& params) {
+                     const SyevxParams<T>& params,
+                     Span<int32_t> info) {
     using Real = typename base_type<T>::type;
 
     const int64_t n = A.rows();
@@ -114,8 +116,8 @@ Event syevx_filtered(Queue& ctx,
     const int64_t k = static_cast<int64_t>(neigs);
     const bool want_vectors = (jobz == JobType::EigenVectors);
 
-    if (A.rows() != A.cols()) throw std::runtime_error("syevx_filtered: A must be square");
-    if (k < 1 || k > n) throw std::runtime_error("syevx_filtered: invalid neigs");
+    if (A.rows() != A.cols()) throw batchlas::invalid_argument("syevx_filtered: A must be square");
+    if (k < 1 || k > n) throw batchlas::invalid_argument("syevx_filtered: invalid neigs");
     // The Chebyshev filter is a HIGH-PASS: it is built by mapping the unwanted
     // interval into [-1,1], where |T_m| <= 1, and letting the wanted END fall
     // outside. An interior interval has unwanted spectrum on both sides, which that
@@ -123,7 +125,7 @@ Event syevx_filtered(Queue& ctx,
     // instead of failing. `syevx` never routes a non-extremal request here, but
     // this is also a public entry point. See SYEVX_RANGE_PLAN.md §2.5, §12.2.
     if (params.select != SyevxSelect::Extremal) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "syevx_filtered: only SyevxSelect::Extremal is supported; the Chebyshev filter is a "
             "high-pass and cannot express an interior interval. Use syevx_direct or "
             "syevx_direct_subset for an index or value range");
@@ -245,9 +247,11 @@ Event syevx_filtered(Queue& ctx,
     auto matvec = [&](const MatrixView<T, MatrixFormat::Dense>& in,
                       const MatrixView<T, MatrixFormat::Dense>& out) {
         if constexpr (MFormat == MatrixFormat::Dense) {
-            gemm<B>(ctx, A, in, out, GemmOptions<T>{});
+            // (void) on an Event: deliberate. This Queue is in-order, so the next submission
+            // is already ordered after this one and the Event carries nothing the caller needs.
+            (void)gemm<B>(ctx, A, in, out, GemmOptions<T>{});
         } else {
-            spmm<B>(ctx, A, in, out, T(1), T(0), Transpose::NoTrans, Transpose::NoTrans, spmm_ws);
+            (void)spmm<B>(ctx, A, in, out, T(1), T(0), Transpose::NoTrans, Transpose::NoTrans, spmm_ws);
         }
     };
 
@@ -416,17 +420,17 @@ Event syevx_filtered(Queue& ctx,
         });
     }
 
-    ortho<B>(ctx, X, Transpose::NoTrans, ortho_ws, params.algorithm);
+    (void)ortho<B>(ctx, X, Transpose::NoTrans, ortho_ws, params.algorithm);
 
     // Rayleigh-Ritz on the current block: X <- X Z, AX <- AX Z, theta <- eigenvalues.
     auto rayleigh_ritz = [&](const MatrixView<T, MatrixFormat::Dense>& blk,
                              const MatrixView<T, MatrixFormat::Dense>& ablk) {
         matvec(blk, ablk);
-        gemm<B>(ctx, blk, ablk, H, {.transA = conj_t});
-        syev<B>(ctx, H, theta_span, SyevOptions{}, syev_ws);
-        gemm<B>(ctx, blk, H, Tmp, GemmOptions<T>{});
+        (void)gemm<B>(ctx, blk, ablk, H, {.transA = conj_t});
+        (void)syev<B>(ctx, H, theta_span, SyevOptions{}, syev_ws);
+        (void)gemm<B>(ctx, blk, H, Tmp, GemmOptions<T>{});
         MatrixView<T, MatrixFormat::Dense>::copy(ctx, blk, Tmp);
-        gemm<B>(ctx, ablk, H, Tmp, GemmOptions<T>{});
+        (void)gemm<B>(ctx, ablk, H, Tmp, GemmOptions<T>{});
         MatrixView<T, MatrixFormat::Dense>::copy(ctx, ablk, Tmp);
     };
 
@@ -735,7 +739,7 @@ Event syevx_filtered(Queue& ctx,
             std::swap(Y, Yprev);
         }
 
-        ortho<B>(ctx, Y, Transpose::NoTrans, ortho_ws, params.algorithm);
+        (void)ortho<B>(ctx, Y, Transpose::NoTrans, ortho_ws, params.algorithm);
         MatrixView<T, MatrixFormat::Dense>::copy(ctx, X, Y);
         rayleigh_ritz(X, AX);
     }
@@ -775,6 +779,24 @@ Event syevx_filtered(Queue& ctx,
         });
     }
 
+    // The per-item flag this routine has always computed and then collapsed into
+    // one `all_converged` bool. Three things it is easy to get wrong here:
+    //   * POLARITY IS INVERTED versus LAPACK -- `converged[b] == 1` means the item
+    //     DID converge -- so one_means_converged flips it. Copying it verbatim
+    //     would report failure on every healthy item and success on every broken
+    //     one, and a one-directional test would not catch that.
+    //   * It is read AFTER the loop, not from mid-loop state: the loop breaks
+    //     either on all-converged or on the iteration cap, and in the second case
+    //     the last kernel's flags are the ones that matter.
+    //   * `converged` is a UnifiedVector local to this function, NOT a pool draw,
+    //     so the kernel reading it must complete before the destructor frees it --
+    //     hence the wait, paid only when status was actually requested. (It is also
+    //     why syevx_filtered_buffer_size is unaffected by any of this: the array is
+    //     outside the workspace entirely.)
+    if (detail::info_ptr(info, batch) != nullptr) {
+        detail::info_from_flags(ctx, info, converged.data(), batch, /*one_means_converged=*/true);
+        ctx.wait();
+    }
     return ctx.get_event();
 }
 
@@ -799,7 +821,7 @@ size_t syevx_filtered_buffer_size(Queue& ctx,
     // Must reject exactly what the solver rejects: a sizing call that returns a
     // number for a request the solve will refuse is a caller-visible inconsistency.
     if (params.select != SyevxSelect::Extremal) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "syevx_filtered_buffer_size: only SyevxSelect::Extremal is supported; see "
             "syevx_filtered");
     }
@@ -853,7 +875,8 @@ size_t syevx_filtered_buffer_size(Queue& ctx,
         Span<std::byte>,\
         JobType,\
         const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&,\
-        const SyevxParams<BATCHLAS_UNPAREN fp>&);\
+        const SyevxParams<BATCHLAS_UNPAREN fp>&,\
+        Span<int32_t>);\
     template size_t syevx_filtered_buffer_size<back, BATCHLAS_UNPAREN fp, fmt>(\
         Queue&,\
         const MatrixView<BATCHLAS_UNPAREN fp, fmt>&,\

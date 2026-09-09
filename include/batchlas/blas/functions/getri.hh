@@ -68,7 +68,7 @@ using getri_vendor_buffer_size = size_t(Queue&,
 template <typename T>
 inline void getri_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
     if (A.rows() < 0 || A.cols() < 0) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "GETRI: Matrix dimensions cannot be negative (A: rows=" +
             std::to_string(A.rows()) + ", cols=" + std::to_string(A.cols()) + ")");
     }
@@ -79,7 +79,7 @@ inline void getri_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
                                   const MatrixView<T, MatrixFormat::Dense>& C) {
     getri_validate_params<T>(A);
     if (C.rows() < 0 || C.cols() < 0) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "GETRI: Matrix dimensions cannot be negative (C: rows=" +
             std::to_string(C.rows()) + ", cols=" + std::to_string(C.cols()) + ")");
     }

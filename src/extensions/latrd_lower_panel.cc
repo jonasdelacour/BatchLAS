@@ -343,7 +343,7 @@ inline void* acquire_grid_scratch(Queue& q, size_t bytes) {
     if (!ptr) {
         ptr = sycl::malloc_device(bytes, q->get_device(), cur_ctx);
         if (!ptr) {
-            throw std::runtime_error("latrd_lower_panel(grid): device scratch allocation failed");
+            throw batchlas::device_error("latrd_lower_panel(grid): device scratch allocation failed");
         }
         cap = bytes;
         cached_ctx = cur_ctx;
@@ -1287,26 +1287,26 @@ inline void validate_latrd_lower_panel_panel_dims(const MatrixView<T, MatrixForm
                                                   const VectorView<T>& tau,
                                                   const MatrixView<T, MatrixFormat::Dense>& w) {
     if (a.rows() != a.cols()) {
-        throw std::invalid_argument("latrd_lower_panel(panel): A must be square");
+        throw batchlas::invalid_argument("latrd_lower_panel(panel): A must be square");
     }
     if (w.rows() != a.rows()) {
-        throw std::invalid_argument("latrd_lower_panel(panel): W must have same number of rows as A");
+        throw batchlas::invalid_argument("latrd_lower_panel(panel): W must have same number of rows as A");
     }
     const int ib = w.cols();
     if (ib < 0) {
-        throw std::invalid_argument("latrd_lower_panel(panel): invalid W dimensions");
+        throw batchlas::invalid_argument("latrd_lower_panel(panel): invalid W dimensions");
     }
     if (e.size() != ib || tau.size() != ib) {
-        throw std::invalid_argument("latrd_lower_panel(panel): e/tau must have size equal to W.cols()");
+        throw batchlas::invalid_argument("latrd_lower_panel(panel): e/tau must have size equal to W.cols()");
     }
     if (a.batch_size() != e.batch_size() || a.batch_size() != tau.batch_size() || a.batch_size() != w.batch_size()) {
-        throw std::invalid_argument("latrd_lower_panel(panel): batch size mismatch");
+        throw batchlas::invalid_argument("latrd_lower_panel(panel): batch size mismatch");
     }
     if (a.batch_size() < 1) {
-        throw std::invalid_argument("latrd_lower_panel(panel): invalid batch size");
+        throw batchlas::invalid_argument("latrd_lower_panel(panel): invalid batch size");
     }
     if (ib > std::max(0, a.rows() - 1)) {
-        throw std::invalid_argument("latrd_lower_panel(panel): W.cols() must be <= A.rows()-1");
+        throw batchlas::invalid_argument("latrd_lower_panel(panel): W.cols() must be <= A.rows()-1");
     }
 }
 
@@ -1318,29 +1318,29 @@ inline void validate_latrd_lower_panel_dims(const MatrixView<T, MatrixFormat::De
                                             int32_t j0,
                                             int32_t ib) {
     if (a.rows() != a.cols()) {
-        throw std::invalid_argument("latrd_lower_panel: A must be square");
+        throw batchlas::invalid_argument("latrd_lower_panel: A must be square");
     }
     const int n = a.rows();
     if (e.size() != std::max(0, n - 1) || tau.size() != std::max(0, n - 1)) {
-        throw std::invalid_argument("latrd_lower_panel: invalid e/tau sizes");
+        throw batchlas::invalid_argument("latrd_lower_panel: invalid e/tau sizes");
     }
     if (w.rows() != n) {
-        throw std::invalid_argument("latrd_lower_panel: W must have n rows");
+        throw batchlas::invalid_argument("latrd_lower_panel: W must have n rows");
     }
     if (w.cols() < ib) {
-        throw std::invalid_argument("latrd_lower_panel: W must have at least ib columns");
+        throw batchlas::invalid_argument("latrd_lower_panel: W must have at least ib columns");
     }
     if (j0 < 0 || ib < 0) {
-        throw std::invalid_argument("latrd_lower_panel: j0/ib must be non-negative");
+        throw batchlas::invalid_argument("latrd_lower_panel: j0/ib must be non-negative");
     }
     if (j0 > n) {
-        throw std::invalid_argument("latrd_lower_panel: j0 out of range");
+        throw batchlas::invalid_argument("latrd_lower_panel: j0 out of range");
     }
     if (a.batch_size() != e.batch_size() || a.batch_size() != tau.batch_size() || a.batch_size() != w.batch_size()) {
-        throw std::invalid_argument("latrd_lower_panel: batch size mismatch");
+        throw batchlas::invalid_argument("latrd_lower_panel: batch size mismatch");
     }
     if (a.batch_size() < 1) {
-        throw std::invalid_argument("latrd_lower_panel: invalid batch size");
+        throw batchlas::invalid_argument("latrd_lower_panel: invalid batch size");
     }
 }
 

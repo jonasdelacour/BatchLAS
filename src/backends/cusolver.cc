@@ -88,7 +88,8 @@ namespace batchlas {
                           Span<typename base_type<T>::type> eigenvalues,
                           JobType jobtype,
                           Uplo uplo,
-                          Span<std::byte> workspace) {
+                          Span<std::byte> workspace,
+                          Span<int32_t> info_out) {
             return op_external("cusolver.syev_vendor", [&] {
                 static LinalgHandle<B> handle;
                 handle.setStream(ctx);
@@ -121,7 +122,13 @@ namespace batchlas {
                     auto host_workspace = pool.allocate<std::byte>(ctx, l_work_host_bytes);
                     auto device_workspace_bytes = pool.allocate<std::byte>(ctx, l_work_device_bytes);
 
-                    auto info = pool.allocate<int>(ctx, descrA.batch_size());
+                    // cuSOLVER has always written a per-item status here and this
+                    // library has always thrown it away. info_target routes the
+                    // CALLER's span in when one was supplied and falls back to the
+                    // pool otherwise, so supplying `info` only ever REMOVES a pool
+                    // draw -- which is why the int term in syev_vendor_buffer_size
+                    // stays unconditional and the size does not change.
+                    auto info = detail::info_target(ctx, pool, info_out, static_cast<size_t>(descrA.batch_size()));
                     for (int i = 0; i < descrA.batch_size(); ++i) {
                         check_status(cusolverDnXsyevd(handle,
                                                      params,
@@ -153,7 +160,7 @@ namespace batchlas {
 
                         auto host_workspace = pool.allocate<std::byte>(ctx, l_work_host_bytes);
                         auto device_workspace_bytes = pool.allocate<std::byte>(ctx, l_work_device_bytes);
-                        auto info = pool.allocate<int>(ctx, descrA.batch_size());
+                        auto info = detail::info_target(ctx, pool, info_out, static_cast<size_t>(descrA.batch_size()));
                         check_status(cusolverDnXsyevBatched(handle,
                                                            params,
                                                            eig_mode,
@@ -178,7 +185,9 @@ namespace batchlas {
                             handle, eig_mode, fill_mode, descrA.rows(), descrA.data_ptr(), descrA.ld(), base_float_ptr_convert(eigenvalues.data()), &l_work_device_elems, syevj_info, descrA.batch_size());
 
                         auto device_workspace_elems = pool.allocate<T>(ctx, static_cast<size_t>(l_work_device_elems));
-                        auto info = pool.allocate<int>(ctx, descrA.batch_size());
+                        // syevj's info IS LAPACK-like (> 0 == did not converge), so
+                        // it needs no translation into the contract `info` documents.
+                        auto info = detail::info_target(ctx, pool, info_out, static_cast<size_t>(descrA.batch_size()));
                         call_backend<T, BackendLibrary::CUSOLVER, B>(cusolverDnSsyevjBatched, cusolverDnDsyevjBatched, cusolverDnCheevjBatched, cusolverDnZheevjBatched,
                             handle, eig_mode, fill_mode, descrA.rows(), descrA.data_ptr(), descrA.ld(), base_float_ptr_convert(eigenvalues.data()), device_workspace_elems.data(), l_work_device_elems, info.data(), syevj_info, descrA.batch_size());
                         check_status(cusolverDnDestroySyevjInfo(syevj_info));
@@ -326,7 +335,7 @@ namespace batchlas {
                     // different algorithm with a different cost, and reporting it under the
                     // same name would corrupt the very comparison this path exists to make.
                     // See GESVD_PLAN.md Tier 0.
-                    throw std::runtime_error(
+                    throw batchlas::unsupported(
                         "gesvd_vendor (CUSOLVER): only the gesvdjBatched route is implemented "
                         "(requires m <= 32, n <= 32 and a tightly packed batch)");
                 }
@@ -346,7 +355,7 @@ namespace batchlas {
                 // this route caps at 32x32, where canonicalisation has already
                 // rewritten Thin to All for every square case.
                 if (jobu == SvdVectors::Thin || jobvh == SvdVectors::Thin) {
-                    throw std::runtime_error(
+                    throw batchlas::unsupported(
                         "gesvd_vendor (CUSOLVER): thin singular vectors are not supported by the "
                         "gesvdjBatched route");
                 }
@@ -399,10 +408,11 @@ namespace batchlas {
                            const MatrixView<T, MatrixFormat::Dense>& Vh,
                            SvdVectors jobu,
                            SvdVectors jobvh,
-                           Span<std::byte> workspace) {
+                           Span<std::byte> workspace,
+                           Span<int32_t> info_out) {
             return op_external("cusolver.gesvd_vendor", [&] {
                 if (!gesvd_detail::batched_route_ok(A)) {
-                    throw std::runtime_error(
+                    throw batchlas::unsupported(
                         "gesvd_vendor (CUSOLVER): only the gesvdjBatched route is implemented "
                         "(requires m <= 32, n <= 32 and a tightly packed batch)");
                 }
@@ -420,7 +430,7 @@ namespace batchlas {
                 // this route caps at 32x32, where canonicalisation has already
                 // rewritten Thin to All for every square case.
                 if (jobu == SvdVectors::Thin || jobvh == SvdVectors::Thin) {
-                    throw std::runtime_error(
+                    throw batchlas::unsupported(
                         "gesvd_vendor (CUSOLVER): thin singular vectors are not supported by the "
                         "gesvdjBatched route");
                 }
@@ -429,16 +439,16 @@ namespace batchlas {
                 const bool vectors = want_u || want_vh;
 
                 if (singular_values.size() < static_cast<size_t>(k) * static_cast<size_t>(batch)) {
-                    throw std::invalid_argument("gesvd_vendor (CUSOLVER): singular_values span too small");
+                    throw batchlas::invalid_argument("gesvd_vendor (CUSOLVER): singular_values span too small");
                 }
                 if (want_u && (U.rows() != m || U.cols() != m || U.batch_size() != batch)) {
-                    throw std::invalid_argument("gesvd_vendor (CUSOLVER): U must be (m x m) with matching batch");
+                    throw batchlas::invalid_argument("gesvd_vendor (CUSOLVER): U must be (m x m) with matching batch");
                 }
                 if (want_vh && (Vh.rows() != n || Vh.cols() != n || Vh.batch_size() != batch)) {
-                    throw std::invalid_argument("gesvd_vendor (CUSOLVER): Vh must be (n x n) with matching batch");
+                    throw batchlas::invalid_argument("gesvd_vendor (CUSOLVER): Vh must be (n x n) with matching batch");
                 }
                 if (want_u && !gesvd_detail::packed(U)) {
-                    throw std::runtime_error("gesvd_vendor (CUSOLVER): U must be a tightly packed batch");
+                    throw batchlas::invalid_argument("gesvd_vendor (CUSOLVER): U must be a tightly packed batch");
                 }
 
                 static LinalgHandle<B> handle;
@@ -465,9 +475,17 @@ namespace batchlas {
                     A.data_ptr(), n,
                     &lwork, params, batch);
 
-                // Allocation order must mirror gesvd_vendor_buffer_size exactly.
+                // Allocation ORDER must mirror gesvd_vendor_buffer_size exactly.
+                // Note the qualifier: with a caller-supplied `info` the draw here is
+                // skipped and every later allocation lands earlier, so the sized
+                // total becomes an over-estimate. That is safe in the only direction
+                // that matters -- supplying `info` never needs MORE workspace -- and
+                // it is why the int term in the sizing function stays unconditional.
+                //
+                // gesvdjBatched's info is LAPACK-like (> 0 == did not converge) and
+                // was allocated, passed and dropped until now.
                 auto work = pool.allocate<T>(ctx, static_cast<size_t>(lwork));
-                auto info = pool.allocate<int>(ctx, static_cast<size_t>(batch));
+                auto info = detail::info_target(ctx, pool, info_out, static_cast<size_t>(batch));
 
                 T* v_ptr = nullptr;
                 T* u_ptr = nullptr;

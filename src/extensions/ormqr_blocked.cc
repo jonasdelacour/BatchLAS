@@ -75,19 +75,19 @@ inline void validate_ormqr_dims(const MatrixView<T, MatrixFormat::Dense>& a,
                                Side side,
                                Span<T> tau) {
     if (a.batch_size() != c.batch_size()) {
-        throw std::runtime_error("ormqr_blocked: expected A.batch_size() == C.batch_size()");
+        throw batchlas::invalid_argument("ormqr_blocked: expected A.batch_size() == C.batch_size()");
     }
     if (a.batch_size() < 1) {
-        throw std::runtime_error("ormqr_blocked: invalid batch_size");
+        throw batchlas::invalid_argument("ormqr_blocked: invalid batch_size");
     }
     const int k = std::min(a.rows(), a.cols());
     const int nq = (side == Side::Left) ? c.rows() : c.cols();
     if (a.rows() != nq) {
-        throw std::runtime_error("ormqr_blocked: expected A.rows() == nq (order of Q)");
+        throw batchlas::invalid_argument("ormqr_blocked: expected A.rows() == nq (order of Q)");
     }
     const size_t need_tau = static_cast<size_t>(k) * static_cast<size_t>(a.batch_size());
     if (tau.size() < need_tau) {
-        throw std::runtime_error("ormqr_blocked: tau too small for batch");
+        throw batchlas::invalid_argument("ormqr_blocked: tau too small for batch");
     }
 }
 
@@ -194,19 +194,21 @@ Event ormqr_blocked_impl(Queue& ctx,
             auto W1 = W1full({0, ib}, Slice());
             auto W2 = W2full({0, ib}, Slice());
 
-            gemm<B>(q, Vblk, Csub, W1, {.transA = Transpose::ConjTrans});
+            // (void) on an Event: deliberate. This Queue is in-order, so the next submission
+            // is already ordered after this one and the Event carries nothing the caller needs.
+            (void)gemm<B>(q, Vblk, Csub, W1, {.transA = Transpose::ConjTrans});
 
             const Transpose t_eff = transpose_apply ? Transpose::ConjTrans : Transpose::NoTrans;
             // W2 = op(T) W1. The trmm substitution is valid only because every
             // trmm route ormqr can reach writes C with beta = 0, as this GEMM does.
             if (wy_trmm_applicable<B, T>(ib)) {
-                trmm<B, T>(q, Tblk, W1, W2, T(1),
+                (void)trmm<B, T>(q, Tblk, W1, W2, T(1),
                            Side::Left, Uplo::Upper, t_eff, Diag::NonUnit);
             } else {
-                gemm<B>(q, Tblk, W1, W2, {.transA = t_eff});
+                (void)gemm<B>(q, Tblk, W1, W2, {.transA = t_eff});
             }
 
-            gemm<B>(q, Vblk, W2, Csub, {.alpha = T(-1), .beta = T(1)});
+            (void)gemm<B>(q, Vblk, W2, Csub, {.alpha = T(-1), .beta = T(1)});
         } else {
             auto Csub = c(Slice(), {i0, SliceEnd()});
             auto Vblk = Vmat({0, m}, {0, ib});
@@ -217,12 +219,12 @@ Event ormqr_blocked_impl(Queue& ctx,
             auto W1 = W1full(Slice(), {0, ib});
             auto W2 = W2full(Slice(), {0, ib});
 
-            gemm<B>(q, Csub, Vblk, W1, GemmOptions<T>{});
+            (void)gemm<B>(q, Csub, Vblk, W1, GemmOptions<T>{});
 
             const Transpose t_eff = transpose_apply ? Transpose::ConjTrans : Transpose::NoTrans;
-            gemm<B>(q, W1, Tblk, W2, {.transB = t_eff});
+            (void)gemm<B>(q, W1, Tblk, W2, {.transB = t_eff});
 
-            gemm<B>(q,
+            (void)gemm<B>(q,
                     W2,
                     Vblk,
                     Csub,
@@ -282,12 +284,12 @@ Event ormqr_blocked(Queue& ctx,
     validate_ormqr_dims(a, c, side, tau);
 
     if (!ctx.in_order()) {
-        throw std::runtime_error("ormqr_blocked: requires an in-order Queue");
+        throw batchlas::invalid_argument("ormqr_blocked: requires an in-order Queue");
     }
 
     if constexpr (internal::is_complex<T>::value) {
         if (trans == Transpose::Trans) {
-            throw std::runtime_error("ormqr_blocked: Trans not supported for complex; use ConjTrans");
+            throw batchlas::unsupported("ormqr_blocked: Trans not supported for complex; use ConjTrans");
         }
     }
 

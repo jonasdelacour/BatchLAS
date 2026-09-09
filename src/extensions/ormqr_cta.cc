@@ -154,16 +154,16 @@ inline void ormqx_cta_impl(Queue& ctx,
     const auto batch_size = a.batch_size();
 
     if (n < 0 || n > static_cast<int32_t>(P) || a.rows() != n || a.cols() != n || c.rows() != n || c.cols() != n) {
-        throw std::runtime_error("ormqx_cta_impl: currently requires square A and C with n <= P.");
+        throw batchlas::invalid_argument("ormqx_cta_impl: currently requires square A and C with n <= P.");
     }
     if (k < 0 || k > n) {
-        throw std::runtime_error("ormqx_cta_impl: invalid k.");
+        throw batchlas::invalid_argument("ormqx_cta_impl: invalid k.");
     }
     if (tau.size() < k) {
-        throw std::runtime_error("ormqx_cta_impl: tau too small for k.");
+        throw batchlas::invalid_argument("ormqx_cta_impl: tau too small for k.");
     }
     if (tau.batch_size() != batch_size || c.batch_size() != batch_size) {
-        throw std::runtime_error("ormqx_cta_impl: batch size mismatch.");
+        throw batchlas::invalid_argument("ormqx_cta_impl: batch size mismatch.");
     }
 
     ctx->submit([&](sycl::handler& cgh) {
@@ -514,15 +514,15 @@ Event ormqx_cta(Queue& ctx,
     const bool ql = (factorization == Uplo::Lower);
 
     if (a_in.rows() != a_in.cols() || c_in.rows() != c_in.cols() || a_in.rows() != c_in.rows()) {
-        throw std::invalid_argument("ormqx_cta: currently requires square A and C of the same order.");
+        throw batchlas::invalid_argument("ormqx_cta: currently requires square A and C of the same order.");
     }
 
     const int32_t n = static_cast<int32_t>(a_in.rows());
     if (n < 0 || n > 32) {
-        throw std::invalid_argument("ormqx_cta: currently supports 0 <= n <= 32.");
+        throw batchlas::invalid_argument("ormqx_cta: currently supports 0 <= n <= 32.");
     }
     if (k < 0 || k > n) {
-        throw std::invalid_argument("ormqx_cta: invalid k.");
+        throw batchlas::invalid_argument("ormqx_cta: invalid k.");
     }
 
     auto& a = const_cast<MatrixView<T, MatrixFormat::Dense>&>(a_in);
@@ -541,7 +541,7 @@ Event ormqx_cta(Queue& ctx,
             }
         }
         if (!has32) {
-            throw std::runtime_error("ormqx_cta: device does not support subgroup size 32 required for CTA kernels.");
+            throw batchlas::unsupported("ormqx_cta: device does not support subgroup size 32 required for CTA kernels.");
         }
     }
 

@@ -346,7 +346,7 @@ Event trsm_native_v1_buckets(Queue& ctx,
         default: break;
     }
     {
-            throw std::runtime_error(
+            throw batchlas::unsupported(
                 "BatchLAS: trsm_native_v1 called with triangular order " +
                 std::to_string(A.rows()) +
                 ", which exceeds this scalar's CTA register capacity of " +
@@ -468,7 +468,9 @@ Event trsm_native_blocked(Queue& ctx,
         const auto Adiag = sub(A, r0, m, r0, m, lda, sa, bs);
         const auto Bblk = (side == Side::Left) ? sub(B, r0, m, 0, q, ldb, sb, bs)
                                                : sub(B, 0, q, r0, m, ldb, sb, bs);
-        trsm_native_v1_dispatch<T>(ctx, Adiag, Bblk, alpha_eff, side, uplo, transA, diag);
+        // (void) on an Event: deliberate. This Queue is in-order, so the next submission
+        // is already ordered after this one and the Event carries nothing the caller needs.
+        (void)trsm_native_v1_dispatch<T>(ctx, Adiag, Bblk, alpha_eff, side, uplo, transA, diag);
     };
 
     // TWO LEVELS: the outer applies the whole solved prefix to a panel in one fat

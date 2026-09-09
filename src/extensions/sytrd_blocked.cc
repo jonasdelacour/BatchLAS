@@ -633,17 +633,17 @@ inline void validate_sytrd_dims(const MatrixView<T, MatrixFormat::Dense>& a,
                                const VectorView<T>& e,
                                const VectorView<T>& tau) {
     if (a.rows() != a.cols()) {
-        throw std::invalid_argument("sytrd_blocked: A must be square");
+        throw batchlas::invalid_argument("sytrd_blocked: A must be square");
     }
     const int n = a.rows();
     if (d.size() != n || e.size() != std::max(0, n - 1) || tau.size() != std::max(0, n - 1)) {
-        throw std::invalid_argument("sytrd_blocked: invalid d/e/tau sizes");
+        throw batchlas::invalid_argument("sytrd_blocked: invalid d/e/tau sizes");
     }
     if (a.batch_size() != d.batch_size() || a.batch_size() != e.batch_size() || a.batch_size() != tau.batch_size()) {
-        throw std::invalid_argument("sytrd_blocked: batch size mismatch");
+        throw batchlas::invalid_argument("sytrd_blocked: batch size mismatch");
     }
     if (a.batch_size() < 1) {
-        throw std::invalid_argument("sytrd_blocked: invalid batch size");
+        throw batchlas::invalid_argument("sytrd_blocked: invalid batch size");
     }
 }
 
@@ -704,7 +704,7 @@ Event sytrd_blocked_impl(Queue& ctx,
     const int nb = resolved_nb_sytrd(block_size, NB);
 
     if (uplo != Uplo::Lower) {
-        throw std::runtime_error("sytrd_blocked: only Uplo::Lower is implemented");
+        throw batchlas::unsupported("sytrd_blocked: only Uplo::Lower is implemented");
     }
 
     const bool is_legacy = !use_device_sytrd();
@@ -909,13 +909,15 @@ Event sytrd_blocked_impl(Queue& ctx,
                                 backend::detail::expanded_workspace_bytes<T>(ctx, n2, batch);
                             if (backend::detail::her2k_takes_gemm_route(ctx, n2, batch, her2k_scratch_bytes)) {
                                 BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.update_vw_her2k");
-                                her2k<B>(ctx, V2, W2, A22,
+                                // (void) on an Event: deliberate. This Queue is in-order, so the next submission
+                                // is already ordered after this one and the Event carries nothing the caller needs.
+                                (void)her2k<B>(ctx, V2, W2, A22,
                                          {.alpha = T(-1), .beta = float_t<T>(1)});
                                 rank2k_issued = true;
                             }
                         } else {
                             BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.update_vw_syr2k");
-                            syr2k<B>(ctx, V2, W2, A22, {.alpha = T(-1), .beta = T(1)});
+                            (void)syr2k<B>(ctx, V2, W2, A22, {.alpha = T(-1), .beta = T(1)});
                             rank2k_issued = true;
                         }
                         // No symmetrize: nothing downstream reads A's upper
@@ -952,7 +954,7 @@ Event sytrd_blocked_impl(Queue& ctx,
                 if (!rank2k_issued) {
                     {
                         BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.update_vw_gemm_vw");
-                        gemm<B>(ctx,
+                        (void)gemm<B>(ctx,
                                 V2,
                                 W2,
                                 A22,
@@ -960,7 +962,7 @@ Event sytrd_blocked_impl(Queue& ctx,
                     }
                     {
                         BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.update_vw_gemm_wv");
-                        gemm<B>(ctx,
+                        (void)gemm<B>(ctx,
                                 W2,
                                 V2,
                                 A22,
@@ -1016,7 +1018,7 @@ Event sytrd_blocked(Queue& ctx,
     validate_sytrd_dims(a_in, d_out, e_out, tau_out);
 
     if (!ctx.in_order()) {
-        throw std::runtime_error("sytrd_blocked: requires an in-order Queue");
+        throw batchlas::invalid_argument("sytrd_blocked: requires an in-order Queue");
     }
 
     const int nb = std::max<int>(1, block_size);

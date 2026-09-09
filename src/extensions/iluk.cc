@@ -67,7 +67,7 @@ inline T stabilize_pivot_or_mark(const T& pivot,
     if (status != nullptr) {
         *status = 1;
     }
-    throw std::runtime_error(
+    throw batchlas::convergence_error(
         "ILU(k): encountered a zero or effectively zero pivot without a usable diagonal shift");
 }
 
@@ -329,26 +329,26 @@ template <typename T>
 void validate_iluk_params_or_throw(const MatrixView<T, MatrixFormat::CSR>& A, const ILUKParams<T>& params,
                                    bool check_batch_sparsity = true) {
     if (A.rows() != A.cols()) {
-        throw std::invalid_argument("ILU(k): matrix must be square");
+        throw batchlas::invalid_argument("ILU(k): matrix must be square");
     }
     if (params.levels_of_fill < 0) {
-        throw std::invalid_argument("ILU(k): levels_of_fill must be >= 0");
+        throw batchlas::invalid_argument("ILU(k): levels_of_fill must be >= 0");
     }
     if (params.drop_tolerance < RealT<T>(0)) {
-        throw std::invalid_argument("ILU(k): drop_tolerance must be >= 0");
+        throw batchlas::invalid_argument("ILU(k): drop_tolerance must be >= 0");
     }
     if (params.fill_factor < RealT<T>(1)) {
-        throw std::invalid_argument("ILU(k): fill_factor must be >= 1");
+        throw batchlas::invalid_argument("ILU(k): fill_factor must be >= 1");
     }
     if (params.diag_pivot_threshold < RealT<T>(0)) {
-        throw std::invalid_argument("ILU(k): diag_pivot_threshold must be >= 0");
+        throw batchlas::invalid_argument("ILU(k): diag_pivot_threshold must be >= 0");
     }
     if (!params.validate_batch_sparsity && A.batch_size() > 1) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "ILU(k): disabling batch sparsity validation is not supported; current implementation requires identical CSR sparsity across the batch");
     }
     if (check_batch_sparsity && A.batch_size() > 1 && !has_identical_batch_sparsity(A)) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "ILU(k): heterogeneous batch sparsity is not supported; batches must share an identical CSR pattern");
     }
 }
@@ -394,7 +394,7 @@ HostFactor<T> compute_iluk(const MatrixView<T, MatrixFormat::CSR>& A, const ILUK
             if (sym_ci[static_cast<std::size_t>(p)] == i) { pos = p - rs; break; }
         }
         if (pos < 0) {
-            throw std::runtime_error("ILU(k): symbolic phase produced a row without diagonal");
+            throw batchlas::internal_error("ILU(k): symbolic phase produced a row without diagonal");
         }
         diag_local[static_cast<std::size_t>(i)] = pos;
     }
@@ -494,7 +494,7 @@ HostFactor<T> compute_iluk(const MatrixView<T, MatrixFormat::CSR>& A, const ILUK
 
     for (int b = 0; b < batch_size; ++b) {
         if (factor_status[static_cast<std::size_t>(b)] != 0) {
-            throw std::runtime_error(
+            throw batchlas::convergence_error(
                 "ILU(k): encountered a zero or effectively zero pivot without a usable diagonal shift");
         }
     }
@@ -693,7 +693,7 @@ ILUKSymbolic build_iluk_symbolic(const Span<int>& ro, const Span<int>& ci, int n
             }
         }
         if (s.diag_abs[static_cast<std::size_t>(i)] < 0) {
-            throw std::runtime_error("ILU(k): symbolic phase produced a row without diagonal");
+            throw batchlas::internal_error("ILU(k): symbolic phase produced a row without diagonal");
         }
     }
 
@@ -814,7 +814,7 @@ void check_batch_sparsity_on_device(Queue& ctx, const MatrixView<T, MatrixFormat
     });
     ctx.wait_and_throw();
     if (mismatch[0] != 0) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "ILU(k): heterogeneous batch sparsity is not supported; batches must share an identical CSR pattern");
     }
 }
@@ -1010,7 +1010,7 @@ DeviceFactorOut<T> run_device_numeric(Queue& ctx,
     q.wait_and_throw();
 
     if (status[0] != 0) {
-        throw std::runtime_error(
+        throw batchlas::convergence_error(
             "ILU(k): encountered a zero or effectively zero pivot without a usable diagonal shift");
     }
 
@@ -1150,7 +1150,7 @@ template <typename T>
 void iluk_build_level_schedule(ILUKPreconditioner<T>& M) {
     const int n = M.n;
     if (n <= 0) {
-        throw std::invalid_argument("ILU(k): cannot build a level schedule for an empty factor");
+        throw batchlas::invalid_argument("ILU(k): cannot build a level schedule for an empty factor");
     }
     auto lu = M.lu.view();
     const auto ro = lu.row_offsets();
@@ -1359,23 +1359,23 @@ Event iluk_apply(Queue& ctx,
                  const MatrixView<T, MatrixFormat::Dense>& out,
                  Span<std::byte>) {
     if (rhs.rows() != M.n || out.rows() != M.n) {
-        throw std::invalid_argument("ILU(k) apply: rhs/out row dimension must match factor rows");
+        throw batchlas::invalid_argument("ILU(k) apply: rhs/out row dimension must match factor rows");
     }
     if (rhs.cols() != out.cols()) {
-        throw std::invalid_argument("ILU(k) apply: rhs and out must have same column count");
+        throw batchlas::invalid_argument("ILU(k) apply: rhs and out must have same column count");
     }
     if (rhs.batch_size() != M.batch_size || out.batch_size() != M.batch_size) {
-        throw std::invalid_argument("ILU(k) apply: rhs/out batch size must match factor batch size");
+        throw batchlas::invalid_argument("ILU(k) apply: rhs/out batch size must match factor batch size");
     }
     if (M.l_levels <= 0 || M.u_levels <= 0 ||
         M.l_rows.size() != static_cast<std::size_t>(M.n) ||
         M.u_rows.size() != static_cast<std::size_t>(M.n)) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "ILU(k) apply: preconditioner has no triangular-solve level schedule; "
             "call iluk_build_level_schedule() when constructing one by hand");
     }
     if (!M.u_diagonals_usable) {
-        throw std::runtime_error(
+        throw batchlas::convergence_error(
             "ILU(k) apply: encountered a zero or effectively zero U diagonal without a usable diagonal shift");
     }
 

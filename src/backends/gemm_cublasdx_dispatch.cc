@@ -260,11 +260,11 @@ Event gemm_cublasdx(Queue& ctx,
     }
 
     if (A.batch_size() != B.batch_size() || A.batch_size() != C.batch_size()) {
-        throw std::runtime_error("cuBLASDx GEMM path requires matching batch sizes");
+        throw batchlas::invalid_argument("cuBLASDx GEMM path requires matching batch sizes");
     }
 
     if (!gemm_batch_dimensions_compatible(A, B, C, transA, transB)) {
-        throw std::runtime_error("cuBLASDx GEMM path received incompatible matrix dimensions");
+        throw batchlas::invalid_argument("cuBLASDx GEMM path received incompatible matrix dimensions");
     }
 
     Event last_event;
@@ -308,7 +308,7 @@ Event gemm_cublasdx(Queue& ctx,
     }
 
     if (!variant_compatible_with_ops(variant, transA, transB)) {
-        throw std::runtime_error("Requested cuBLASDx GEMM variant is incompatible with the transpose operands");
+        throw batchlas::unsupported("Requested cuBLASDx GEMM variant is incompatible with the transpose operands");
     }
 
     cublasdx_gemm::GemmLaunchDescriptor desc{};
@@ -350,7 +350,7 @@ Event gemm_cublasdx(Queue& ctx,
         return gemm_vendor_cuda_raw(ctx, A, B, C, alpha, beta, transA, transB, precision);
     }
     if (status != cudaSuccess) {
-        throw std::runtime_error(std::string("cuBLASDx GEMM launch failed: ") + cudaGetErrorString(status));
+        throw batchlas::device_error(std::string("cuBLASDx GEMM launch failed: ") + cudaGetErrorString(status));
     }
 
     return ctx.create_event_after_external_work();

@@ -85,7 +85,7 @@ std::size_t orgqr_apply_bytes(Queue& ctx,
                               int m, int n, int batch,
                               const OrgqrApplyQBufferSize<T>& q) {
     if (!q) {
-        throw std::logic_error(
+        throw batchlas::internal_error(
             "sycl_orgqr: the apply-Q workspace query was not injected. orgqr's native arm "
             "is ormqr applied to an identity, and only the facade can name the ROUTED "
             "ormqr_buffer_size -- this driver is instantiated per scalar type with no "
@@ -145,23 +145,23 @@ Event orgqr_blocked_dispatch(Queue& ctx,
     // supports()'s gates are re-applied here: a forced route that is unsupported
     // falls through to automatic(), so a wrong gate silently measures the vendor.
     if (m < 1 || n < 1 || batch < 1) {
-        throw std::invalid_argument("orgqr_blocked: degenerate extents");
+        throw batchlas::invalid_argument("orgqr_blocked: degenerate extents");
     }
     if (m < n) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "orgqr_blocked: n > m is not supported (route_orgqr.hh's supports() refuses it)");
     }
     if (A.is_heterogeneous()) {
-        throw std::invalid_argument("orgqr_blocked: heterogeneous batch is not supported");
+        throw batchlas::invalid_argument("orgqr_blocked: heterogeneous batch is not supported");
     }
     if (ctx.device().type != DeviceType::GPU) {
-        throw std::invalid_argument("orgqr_blocked: GPU queues only");
+        throw batchlas::invalid_argument("orgqr_blocked: GPU queues only");
     }
     if (tau.size() < static_cast<std::size_t>(k) * static_cast<std::size_t>(batch)) {
-        throw std::invalid_argument("orgqr_blocked: tau span is shorter than k * batch");
+        throw batchlas::invalid_argument("orgqr_blocked: tau span is shorter than k * batch");
     }
     if (!apply_q) {
-        throw std::logic_error(
+        throw batchlas::internal_error(
             "sycl_orgqr::orgqr_blocked_dispatch: the apply-Q seam was not injected. orgqr's "
             "native arm is ormqr applied to an identity, and only a layer that can name a "
             "Backend can reach the ROUTED ormqr (see the note at the top of "

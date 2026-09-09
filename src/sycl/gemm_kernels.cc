@@ -558,18 +558,18 @@ Event gemm_custom(Queue& ctx,
                   ComputePrecision precision) {
     static_cast<void>(precision);
     if (A.batch_size() != B.batch_size() || A.batch_size() != C.batch_size()) {
-        throw std::runtime_error("GEMM SYCL custom path requires matching batch sizes");
+        throw batchlas::invalid_argument("GEMM SYCL custom path requires matching batch sizes");
     }
 
     const auto [m, k] = get_effective_dims(A, transA);
     const auto [k_b, n] = get_effective_dims(B, transB);
     if (k != k_b || C.rows() != m || C.cols() != n) {
-        throw std::runtime_error("GEMM SYCL custom path received incompatible matrix dimensions");
+        throw batchlas::invalid_argument("GEMM SYCL custom path received incompatible matrix dimensions");
     }
 
     const KernelVariant variant = select_kernel_variant(A, B, C, transA, transB);
     if (is_experimental_kernel_variant(variant) && !experimental_kernel_variants_enabled()) {
-        throw std::runtime_error(
+        throw batchlas::unsupported(
             "Requested experimental GEMM SYCL kernel variant without BATCHLAS_GEMM_EXPERIMENTAL enabled");
     }
 
