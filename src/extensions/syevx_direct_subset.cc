@@ -1,50 +1,15 @@
 // syevx_direct_subset: partial symmetric eigensolve via reduction to tridiagonal
-// form, a subset tridiagonal solve, and a narrowed back-transform.
-//
-// This is SYEVX_PLAN.md Tier 2. Structure (compare syev_two_stage.cc):
+// form, a subset tridiagonal solve, and back-transforms narrowed to the selected
+// columns. Compare syev_two_stage.cc.
 //
 //     sytrd_sy2sb    dense -> band
 //     sytrd_sb2st_hh band  -> tridiagonal (d, e), retaining Q2
-//     stebz          selected eigenvalues only          <- replaces full stedc
-//     stein          selected eigenvectors only         <- replaces full stedc
-//     unmqr_hb2st    Q2 back-transform, k columns not n <- narrowed
-//     ormqr_blocked  Q1 back-transform, k columns not n <- narrowed
+//     stebz          selected eigenvalues only
+//     stein          selected eigenvectors only
+//     unmqr_hb2st    Q2 back-transform, k columns not n
+//     ormqr_blocked  Q1 back-transform, k columns not n
 //
-// Where the saving comes from, relative to a full syev:
-//
-//   * the O(n^3) tridiagonal divide-and-conquer is replaced by an O(n*k) subset
-//     solve, and
-//   * both back-transforms drop from O(n^3) to O(n^2*k).
-//
-// The reduction to tridiagonal form is O(n^3) either way and is not saved. That
-// is what caps the achievable speedup at roughly 3x (SYEVX_PLAN.md §2.2).
-//
-// On kd: this path used to pin kd = 1 when eigenvectors were wanted, because the
-// Givens sytrd_sb2st discards Q2 and a kd = 1 band makes stage 2 a pure extract.
-// That made stage 1 an unblocked BLAS-2 reduction -- the dominant cost here, done
-// the slow way. sytrd_sb2st_hh retains Q2, so the clamp is gone and both modes now
-// reduce at a real band width.
-//
-// On the stage-2 chase: BOTH modes now use the Householder chase. This file used
-// to say eigenvalue-only solves "keep the cheaper Givens chase". The Givens chase
-// is not cheaper -- profiled at n = 1024 on an RTX 4090 it is 348.4 ms/call
-// against 62.4 ms for sytrd_sb2st_hh. The cause is occupancy, not arithmetic:
-// both chases are sequential per matrix and parallel only over the batch, but
-// sytrd_sb2st_hh got a 256-thread 2D lane mapping while the Givens path still
-// runs one 32-lane sub-group per matrix. This is the same fix already applied to
-// syev_two_stage.cc; see the long note at its call site and
-// two_stage_common.hh::two_stage_use_givens_chase_for_values.
-//
-// Eigenvalues-only therefore also allocates the stage-2 reflectors V and their
-// tau, and discards them. That is the same workspace the eigenvector path has
-// always allocated, and syevx_direct_subset_buffer_size below is updated in
-// lockstep. Only the *phase* chain stays eigenvector-only: it converts
-// eigenvectors of the tridiagonal built from |e| back to those of the signed one,
-// and the eigenvalues of the two are identical (a diagonal +-1 similarity), so
-// stebz does not need it.
-//
-// BATCHLAS_SYEV_TWO_STAGE_CHASE=givens restores the old eigenvalues-only path,
-// making this an intra-run A/B rather than a comparison across builds.
+// Design and evidence: SYEVX_PLAN.md (Tier 2).
 
 #include "../linalg-impl.hh"
 #include <batchlas/util/sycl-vector.hh>
@@ -73,19 +38,11 @@ struct SyevxSubsetFinalizeKernel;
 
 namespace {
 
-// Per-item length of the internal stebz eigenvalue buffer.
-//
-// For an index block stebz produces exactly `rr.max_count` values, which is what
-// the caller's capacity already covers. For a value range the count is
-// data-dependent and bounded only by n, and stebz throws outright unless its `w`
-// holds n entries per item (src/extensions/stebz.cc:94-98) -- so the internal
-// buffer is widened to max(n, capacity) independently of the caller's capacity.
-// The max() with capacity keeps `stein`'s `w.size() >= k` precondition satisfied
-// when a caller declares a capacity above n.
-//
-// THIS EXPRESSION IS DUPLICATED in syevx_direct_subset_buffer_size below and the
-// two must stay identical -- it is a BumpAllocator size, and this repo's memory
-// records that an under-computed workspace size is the failure mode here.
+// Per-item length of the internal stebz eigenvalue buffer. A value range needs n
+// entries per item whatever the caller's capacity (stebz throws otherwise); the
+// max() with capacity keeps stein's `w.size() >= k` precondition. Duplicated in
+// syevx_direct_subset_buffer_size below and the two must stay identical -- this
+// is a BumpAllocator size, and an under-computed one is the failure mode here.
 inline size_t subset_w_sub_len(int64_t n, int64_t capacity, bool value_range) {
     return value_range ? static_cast<size_t>(std::max<int64_t>(n, capacity))
                        : static_cast<size_t>(capacity);
@@ -113,30 +70,23 @@ Event syevx_direct_subset(Queue& ctx,
     } else {
         const int32_t n = static_cast<int32_t>(A.rows());
         const int32_t batch = static_cast<int32_t>(A.batch_size());
-        // `capacity` is the caller's declared room per item: the stride of W and
-        // the column count of V. It is deliberately NOT the number of eigenvalues
-        // produced (that is the per-item `count` the finalize kernel reads out of
-        // m_span) nor the stride of the internal stebz buffer (`w_sub_len`).
-        // Conflating those three -- they used to be one `k` -- is how a batched
-        // solver writes item b's answers into item b+1's slots.
+        // The caller's declared room per item: the stride of W and the column count
+        // of V. Not the number of eigenvalues produced (the per-item `count` in
+        // m_span) and not the internal stebz stride (`w_sub_len`); conflating the
+        // three is how a batched solver writes item b's answers into item b+1's slots.
         const int64_t capacity = static_cast<int64_t>(neigs);
         const bool want_eigenvectors = (jobz == JobType::EigenVectors);
 
         if (A.rows() != A.cols()) throw std::runtime_error("syevx_direct_subset: A must be square");
-        // A capacity above n is no longer rejected: `neigs` is a capacity now, so
-        // an over-large one just leaves the tail of W and V unwritten. The work
-        // count is clamped to n inside syevx_resolve_range instead. Zero capacity
-        // is still rejected -- stein requires k >= 1 and the finalize geometry is
-        // untested at zero.
+        // A capacity above n just leaves the tail of W and V unwritten (the work
+        // count is clamped inside syevx_resolve_range); zero is rejected because
+        // stein requires k >= 1.
         if (capacity < 1) throw std::runtime_error("syevx_direct_subset: invalid neigs");
         if (!m.empty() && static_cast<int64_t>(m.size()) < batch) {
             throw std::runtime_error("syevx_direct_subset: m must cover every batch item");
         }
-        // Same range checks as syevx_direct, for the same reason: this is a public
-        // entry point, not only a routing destination. An out-of-range index block
-        // would otherwise be caught by stebz -- but two layers down, as a
-        // std::runtime_error naming stebz, after the whole O(n^3) reduction has
-        // already run.
+        // Validated here rather than left to stebz, which would otherwise reject the
+        // range two layers down, after the whole O(n^3) reduction has already run.
         if (params.select == SyevxSelect::Index) {
             const int64_t iu = (params.iu < 0) ? (int64_t(n) - 1) : params.iu;
             if (params.il < 0 || iu >= n || params.il > iu) {
@@ -155,8 +105,7 @@ Event syevx_direct_subset(Queue& ctx,
             throw std::runtime_error("syevx_direct_subset: requires an in-order Queue");
         }
 
-        // Resolved once, here, and used for both the stebz range and the workspace
-        // sizes so that this function and syevx_direct_subset_buffer_size can never
+        // Resolved once so this function and syevx_direct_subset_buffer_size cannot
         // disagree about what was asked for.
         const auto rr = syevx_resolve_range(n, neigs, params);
         const size_t w_sub_len = subset_w_sub_len(n, capacity, rr.value_range);
@@ -167,22 +116,18 @@ Event syevx_direct_subset(Queue& ctx,
         const int32_t sb2st_block_size = choose_two_stage_sb2st_block_size();
         const int32_t ormqr_block_size = tuning::ormqr_block_size_for_n(n);
 
-        // Which stage-2 chase? Householder unless the A/B env var asks for the
-        // old Givens path, which is only legal without eigenvectors (it discards
-        // Q2). See the note at the top of this file.
+        // The Givens chase is legal only without eigenvectors: it discards Q2.
         const bool use_givens =
             !want_eigenvectors && two_stage_use_givens_chase_for_values();
 
-        // Stage-2 reflector schedule. Depends only on (n, kd) -- never on the
-        // matrix values -- so it is identical for every batch item and can be
-        // replayed on the host.
+        // Stage-2 reflector schedule. Depends only on (n, kd) -- never on the matrix
+        // values -- so it is identical for every batch item and replayable on the host.
         const auto sb2st_sched = use_givens
                                      ? std::vector<internal::Sb2stHhRefl>{}
                                      : internal::build_sb2st_hh_schedule(n, kd);
         const int32_t nrefl = static_cast<int32_t>(sb2st_sched.size());
-        // starts/lens/waves are consumed only by the Q2 back-transform, which
-        // exists only in eigenvector mode. Eigenvalues-only runs the same chase
-        // but never reads the schedule on the device.
+        // Only the Q2 back-transform reads the schedule on the device, so an
+        // eigenvalues-only run uploads nothing.
         const int32_t nrefl_dev = want_eigenvectors ? nrefl : 0;
         UnifiedVector<int32_t> sb2st_starts(static_cast<size_t>(nrefl_dev));
         UnifiedVector<int32_t> sb2st_lens(static_cast<size_t>(nrefl_dev));
@@ -228,10 +173,8 @@ Event syevx_direct_subset(Queue& ctx,
             sytrd_sy2sb<B, T>(ctx, a, ab_view, tau_sy2sb_view, Uplo::Lower, kd, sy2sb_ws);
         }
 
-        // Stage 2: band -> tridiagonal. Both modes use the Householder chase --
-        // eigenvector mode needs Q2 to apply to the selected vectors, and
-        // eigenvalues-only uses it because it is ~5x faster than the Givens chase
-        // even though it then throws Q2 away. See the top of this file.
+        // Stage 2: band -> tridiagonal. Both modes run the Householder chase;
+        // eigenvalues-only then discards Q2.
         auto d_span = pool.allocate<Real>(ctx, static_cast<size_t>(n) * batch);
         auto e_span = pool.allocate<Real>(ctx, static_cast<size_t>(std::max(0, n - 1)) * batch);
         VectorView<Real> d_view(d_span, n, batch, 1, n);
@@ -259,12 +202,10 @@ Event syevx_direct_subset(Queue& ctx,
                                            v_sb2st_view, tau_sb2st_hh_view, Uplo::Lower, kd,
                                            hh_ws);
 
-            // The phase comes from stage 2's *output* tridiagonal, not from the
-            // stage-1 band: it converts eigenvectors of the real tridiagonal
-            // built from |e| back to those of the signed one. stebz works on |e|
-            // directly -- the two tridiagonals are a diagonal +-1 similarity and
-            // have identical eigenvalues -- so eigenvalues-only skips it, along
-            // with V/tau, which only the back-transform reads.
+            // The phase comes from stage 2's *output* tridiagonal: it converts
+            // eigenvectors of the tridiagonal built from |e| back to those of the signed
+            // one. The two are a diagonal +-1 similarity with identical eigenvalues, so
+            // stebz works on |e| directly and eigenvalues-only skips this.
             if (want_eigenvectors) {
                 build_phase_from_kd1_band<T>(ctx, ab_tri_view, phase_view);
             }
@@ -280,12 +221,10 @@ Event syevx_direct_subset(Queue& ctx,
                               sb2st_ws, sb2st_block_size);
         }
 
-        // Subset tridiagonal solve. Internally always ascending: stein's cluster
-        // detection walks consecutive eigenvalues and requires that order, so
-        // bp.order is pinned to Ascending for EVERY range and params.order is
-        // honoured only by the finalize kernel at the bottom of this function.
-        // Asking stebz for Descending mid-chain would silently corrupt stein's
-        // cluster grouping.
+        // Subset tridiagonal solve, internally always ascending: stein's cluster
+        // detection walks consecutive eigenvalues and requires that order, so bp.order
+        // is pinned for EVERY range and params.order is honoured only by the finalize
+        // kernel below. Asking stebz for Descending here corrupts stein's clustering.
         auto w_sub_span = pool.allocate<Real>(ctx, w_sub_len * batch);
         auto m_span = pool.allocate<int32_t>(ctx, static_cast<size_t>(batch));
         VectorView<Real> w_sub(w_sub_span, static_cast<int>(w_sub_len), batch, 1,
@@ -306,24 +245,15 @@ Event syevx_direct_subset(Queue& ctx,
         }
 
         if (want_eigenvectors) {
-            // stein writes straight into V, so the only extra pass is the
-            // ordering fix-up at the end.
             SteinParams<Real> sp;
             {
                 const size_t bytes = stein_buffer_size<B, Real>(ctx, n, static_cast<size_t>(capacity), batch, sp);
                 auto stein_ws = pool.allocate<std::byte>(ctx, bytes);
                 auto V_sub = V({0, n}, {0, capacity});
-                // Per-item counts, straight from the m stebz just wrote -- read on
-                // the device, so no host sync is introduced between the two calls.
-                // Span has no Span<T> -> Span<const T> converting constructor, so
-                // this must be spelled explicitly (same as the reflector schedule
-                // spans below).
-                //
-                // For an index range every count equals the block size and this is
-                // exactly the old uniform-k behaviour; for a value range it stops
-                // inverse iteration at m[b] and, critically, makes stein ZERO the
-                // columns [m[b], capacity) rather than leave stale workspace there.
-                // The back-transforms below rely on that.
+                // Per-item counts read on the device, so no host sync is introduced
+                // between the two calls. Critically, stein ZEROES columns
+                // [m[b], capacity) rather than leaving stale workspace there; the
+                // back-transforms below rely on that.
                 stein<B, Real>(ctx, d_view, e_view, w_sub, static_cast<size_t>(capacity),
                                Span<const int32_t>(m_span.data(), m_span.size()),
                                V_sub, stein_ws, sp);
@@ -331,20 +261,10 @@ Event syevx_direct_subset(Queue& ctx,
                 apply_phase_rows<Real>(ctx, V_sub,
                                        VectorView<Real>(phase_span.data(), n, batch, 1, n));
 
-                // V := Q2 V, over `capacity` columns rather than n.
-                //
-                // Both back-transforms stay at the UNIFORM column count even for a
-                // value range where item b found only m[b] < capacity eigenvalues.
-                // Columns [m[b], capacity) hold the zeros stein wrote and an
-                // orthogonal transform maps zero to zero, so nothing propagates.
-                //
-                // The tradeoff, stated because it is real: if one item finds 3 and
-                // another finds 200, every item pays the 200-column transform. The
-                // alternative -- reading max_b m[b] back to the host to shape the
-                // call -- would add a device->host sync per call, which is exactly
-                // the defect SYEVX_PLAN.md §7.1 catalogues in LOBPCG. Uniform shape
-                // across the batch is also what keeps these two kernels fast. A
-                // caller who cares should use an index range or split the batch.
+                // V := Q2 V, over `capacity` columns rather than n, and at that uniform
+                // count even when item b found only m[b] < capacity: the trailing
+                // columns hold stein's zeros and an orthogonal transform maps zero to
+                // zero. Shaping the call per item would cost a device->host sync.
                 if (nrefl > 0) {
                     internal::unmqr_hb2st<B, T>(
                         ctx, v_sb2st_view, tau_sb2st_hh_view, V_sub, n, kd,
@@ -353,13 +273,9 @@ Event syevx_direct_subset(Queue& ctx,
                         Span<const int32_t>(sb2st_waves.data(), sb2st_waves.size()));
                 }
 
-                // V(kd:, :) := Q1 V(kd:, :), again over `capacity` columns rather
-                // than n. Narrowing these two back-transforms from n to capacity
-                // columns is the term Tier 2 exists to shrink.
-                //
-                // sy2sb factors panel i with GEQRF starting at row i+kd, so
-                // a(kd:, 0:n-kd) is already a GEQRF-style reflector layout and the
-                // sliced view suffices -- no packed copy, matching syev_two_stage.
+                // V(kd:, :) := Q1 V(kd:, :). sy2sb factors panel i with GEQRF starting
+                // at row i+kd, so a(kd:, 0:n-kd) is already a GEQRF-style reflector
+                // layout and the sliced view suffices -- no packed copy.
                 if (tau_sy2sb_n > 0) {
                     auto v1_view = a({kd, SliceEnd()}, {0, tau_sy2sb_n});
                     auto v_sub_rows = V_sub({kd, SliceEnd()}, Slice{});
@@ -368,7 +284,7 @@ Event syevx_direct_subset(Queue& ctx,
 
                     size_t bytes_ormqr = 0;
                     if constexpr (B == Backend::NETLIB) {
-                        bytes_ormqr = backend::ormqr_vendor_buffer_size<B, T>(
+                        bytes_ormqr = blas::dispatch::detail::ormqr_vendor_buffer_size_or_throw<B, T>(
                             ctx, v1_view, v_sub_rows, Side::Left, Transpose::NoTrans, tau1_flat);
                     } else {
                         bytes_ormqr = ormqr_blocked_buffer_size<B, T>(
@@ -377,7 +293,7 @@ Event syevx_direct_subset(Queue& ctx,
                     }
                     auto ormqr_ws = pool.allocate<std::byte>(ctx, bytes_ormqr);
                     if constexpr (B == Backend::NETLIB) {
-                        backend::ormqr_vendor<B, T>(ctx, v1_view, v_sub_rows, Side::Left,
+                        blas::dispatch::detail::ormqr_vendor_or_throw<B, T>(ctx, v1_view, v_sub_rows, Side::Left,
                                                     Transpose::NoTrans, tau1_flat, ormqr_ws);
                     } else {
                         ormqr_blocked<B, T>(ctx, v1_view, v_sub_rows, Side::Left,
@@ -388,24 +304,18 @@ Event syevx_direct_subset(Queue& ctx,
             }
         }
 
-        // Write the eigenvalues out in the requested order, reversing V's columns
-        // in place when a descending block was asked for.
-        //
-        // `reverse` comes from the RESOLVED range, not from params.find_largest:
-        // find_largest is meaningful only for SyevxSelect::Extremal, and an Index
-        // or Value range takes its order from params.order. Deriving it from
-        // find_largest here -- as this kernel used to -- is a second, independent
-        // place the extremal assumption was baked in, and it would have quietly
-        // returned an interior block in the wrong order.
+        // Write the eigenvalues out in the requested order, reversing V's columns in
+        // place for a descending block. `reverse` comes from the RESOLVED range, not
+        // from params.find_largest, which is meaningful only for SyevxSelect::Extremal:
+        // deriving it there returns an interior block in the wrong order.
         const bool reverse = rr.reverse;
         auto* w_out = W.data();
         const auto* w_in = w_sub_span.data();
         T* v_ptr = want_eigenvectors ? V.data_ptr() : nullptr;
         const int64_t v_ld = want_eigenvectors ? V.ld() : 0;
         const int64_t v_stride = want_eigenvectors ? V.stride() : 0;
-        // Two strides that used to be one `k` and must not be re-merged: the output
-        // side keeps the caller's capacity, the input side uses the internal
-        // (possibly wider) stebz buffer.
+        // Two strides that must not be merged: the output side keeps the caller's
+        // capacity, the input side uses the internal (possibly wider) stebz buffer.
         const int64_t w_in_stride = static_cast<int64_t>(w_sub_len);
         const int32_t* m_in = m_span.data();
         int32_t* m_out = m.empty() ? nullptr : m.data();
@@ -419,18 +329,14 @@ Event syevx_direct_subset(Queue& ctx,
                     const int64_t bid = static_cast<int64_t>(item.get_group_linear_id());
                     const int64_t local_size = static_cast<int64_t>(item.get_local_range(0));
 
-                    // True count for this item, as stebz found it. For an index
-                    // block this is the block size; for a value range it is data
-                    // dependent and may exceed the capacity. Read with signed
-                    // arithmetic and clamped at zero: stebz does not itself clamp a
-                    // Sturm-count difference, so a swapped interval can leave a
-                    // negative here and an unsigned loop bound would be an enormous
-                    // write.
+                    // True count for this item, as stebz found it; for a value range it is
+                    // data dependent and may exceed the capacity. Signed and clamped at
+                    // zero because stebz does not clamp a Sturm-count difference, and a
+                    // negative count as an unsigned loop bound would be an enormous write.
                     const int64_t raw_count = static_cast<int64_t>(m_in[bid]);
                     const int64_t count = (raw_count > 0) ? raw_count : int64_t(0);
-                    // Only the VALID PREFIX is written and reversed; slots
-                    // [write, capacity) of W are left untouched, and so are the
-                    // matching columns of V (which stein already zeroed).
+                    // Only the valid prefix is written and reversed; slots [write, capacity)
+                    // of W are left untouched, as are the matching columns of V.
                     const int64_t write = (count < capacity) ? count : capacity;
 
                     for (int64_t i = tid; i < write; i += local_size) {
@@ -453,16 +359,14 @@ Event syevx_direct_subset(Queue& ctx,
                     }
 
                     if (m_out != nullptr && tid == 0) {
-                        // The TRUE count, not `write`: m[b] > capacity is the
-                        // caller's truncation signal.
+                        // The TRUE count, not `write`: m[b] > capacity is the truncation signal.
                         m_out[bid] = static_cast<int32_t>(count);
                     }
                 });
         });
 
-        // sb2st_starts/lens/waves are read by unmqr_hb2st's kernels, not copied,
-        // and their UnifiedVector destructors sycl::free immediately. Returning
-        // without waiting would free them out from under a kernel still in flight.
+        // unmqr_hb2st's kernels read sb2st_starts/lens/waves rather than copying them,
+        // and their UnifiedVector destructors sycl::free the moment this returns.
         if (nrefl_dev > 0) ctx.wait();
 
         return ctx.get_event();
@@ -489,10 +393,9 @@ size_t syevx_direct_subset_buffer_size(Queue& ctx,
         const int64_t capacity = static_cast<int64_t>(neigs);
         const bool want_eigenvectors = (jobz == JobType::EigenVectors);
 
-        // Same resolution, same expression, as the solver above. A Value range
-        // widens the internal stebz buffer to n entries per item independently of
-        // the caller's capacity, so this function is NOT range-independent and
-        // must not be simplified back to `neigs`.
+        // Same expression as the solver above: a Value range widens the internal
+        // stebz buffer independently of the caller's capacity, so this is NOT
+        // range-independent and must not be simplified back to `neigs`.
         const auto rr = syevx_resolve_range(n, neigs, params);
         const size_t w_sub_len = subset_w_sub_len(n, capacity, rr.value_range);
 
@@ -501,9 +404,7 @@ size_t syevx_direct_subset_buffer_size(Queue& ctx,
         const int32_t tau_sy2sb_n = std::max<int32_t>(0, n - kd);
         const int32_t sb2st_block_size = choose_two_stage_sb2st_block_size();
         const int32_t ormqr_block_size = tuning::ormqr_block_size_for_n(n);
-        // Must mirror the runtime chase selection exactly: eigenvalues-only also
-        // runs the Householder chase now (unless BATCHLAS_SYEV_TWO_STAGE_CHASE=
-        // givens), so it allocates V/tau/ab_tri too.
+        // Must mirror the runtime chase selection exactly, env-var override included.
         const bool use_givens =
             !want_eigenvectors && two_stage_use_givens_chase_for_values();
         const int32_t nrefl = use_givens ? 0 : internal::sb2st_hh_num_reflectors(n, kd);
@@ -557,14 +458,12 @@ size_t syevx_direct_subset_buffer_size(Queue& ctx,
 
         if (want_eigenvectors) {
             SteinParams<Real> sp;
-            // Sized on the CAPACITY, which is what the solver passes as stein's k:
-            // stein's scratch grid is n * k * batch whether or not a column ends up
-            // used, so per-item counts do not shrink it.
+            // Sized on the CAPACITY, which is what the solver passes as stein's k: its
+            // scratch grid is n * k * batch whether or not a column ends up used.
             bytes += BumpAllocator::allocation_size<std::byte>(
                 ctx, stein_buffer_size<B, Real>(ctx, n, static_cast<size_t>(capacity), batch, sp));
 
-            // Q1 back-transform. Shapes mirror the runtime slices exactly:
-            // v1 = a(kd:, 0:n-kd) and the target is V(kd:, 0:capacity).
+            // Q1 back-transform; shapes mirror the runtime slices exactly.
             if (tau_sy2sb_n > 0) {
                 const int32_t rows_below_kd = std::max<int32_t>(0, n - kd);
                 MatrixView<T, MatrixFormat::Dense> v1_dummy(nullptr, rows_below_kd, tau_sy2sb_n, n,
@@ -575,7 +474,7 @@ size_t syevx_direct_subset_buffer_size(Queue& ctx,
                 Span<T> tau1_flat(nullptr, static_cast<size_t>(tau_sy2sb_n) * batch);
                 size_t bytes_ormqr = 0;
                 if constexpr (B == Backend::NETLIB) {
-                    bytes_ormqr = backend::ormqr_vendor_buffer_size<B, T>(
+                    bytes_ormqr = blas::dispatch::detail::ormqr_vendor_buffer_size_or_throw<B, T>(
                         ctx, v1_dummy, c_dummy, Side::Left, Transpose::NoTrans, tau1_flat);
                 } else {
                     bytes_ormqr = ormqr_blocked_buffer_size<B, T>(

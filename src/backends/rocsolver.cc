@@ -14,8 +14,10 @@
 
 namespace batchlas {
 
+    namespace backend {
+
     template <Backend B, typename T>
-    size_t potrf_buffer_size(Queue& ctx,
+    size_t potrf_vendor_buffer_size(Queue& ctx,
                             const MatrixView<T,MatrixFormat::Dense>& A,
                             Uplo uplo) {
         static LinalgHandle<B> handle;
@@ -29,8 +31,12 @@ namespace batchlas {
         return size;
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, typename T>
-    Event potrf(Queue& ctx,
+    Event potrf_vendor(Queue& ctx,
                 const MatrixView<T, MatrixFormat::Dense>& A,
                 Uplo uplo,
                 Span<std::byte> workspace,
@@ -53,8 +59,12 @@ namespace batchlas {
         return ctx.create_event_after_external_work();
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, typename T>
-    Event geqrf(Queue& ctx,
+    Event geqrf_vendor(Queue& ctx,
                 const MatrixView<T, MatrixFormat::Dense>& A,
                 Span<T> tau,
                 Span<std::byte> workspace) {
@@ -79,8 +89,12 @@ namespace batchlas {
         return ctx.create_event_after_external_work();
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, typename T>
-    size_t geqrf_buffer_size(Queue& ctx,
+    size_t geqrf_vendor_buffer_size(Queue& ctx,
                              const MatrixView<T, MatrixFormat::Dense>& A,
                              Span<T> tau) {
         static_cast<void>(ctx);
@@ -88,6 +102,8 @@ namespace batchlas {
         static_cast<void>(tau);
         return 0;
     }
+
+    } // namespace backend
 
     namespace backend {
 
@@ -153,8 +169,10 @@ namespace batchlas {
 
     } // namespace backend
 
+    namespace backend {
+
     template <Backend B, typename T>
-    Event orgqr(Queue& ctx,
+    Event orgqr_vendor(Queue& ctx,
                 const MatrixView<T, MatrixFormat::Dense>& A,
                 Span<T> tau,
                 Span<std::byte> workspace) {
@@ -179,8 +197,12 @@ namespace batchlas {
         return ctx.create_event_after_external_work();
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, typename T>
-    size_t orgqr_buffer_size(Queue& ctx,
+    size_t orgqr_vendor_buffer_size(Queue& ctx,
                              const MatrixView<T, MatrixFormat::Dense>& A,
                              Span<T> tau) {
         static_cast<void>(ctx);
@@ -189,8 +211,12 @@ namespace batchlas {
         return 0;
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, typename T>
-    Event getrf(Queue& ctx,
+    Event getrf_vendor(Queue& ctx,
                 const MatrixView<T, MatrixFormat::Dense>& A,
                 Span<int64_t> pivots,
                 Span<std::byte> workspace,
@@ -220,14 +246,22 @@ namespace batchlas {
         return ctx.create_event_after_external_work();
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, typename T>
-    size_t getrf_buffer_size(Queue& ctx,
+    size_t getrf_vendor_buffer_size(Queue& ctx,
                              const MatrixView<T, MatrixFormat::Dense>& A) {
         return BumpAllocator::allocation_size<int>(ctx, A.batch_size());
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend Back, typename T>
-    Event getrs(Queue& ctx,
+    Event getrs_vendor(Queue& ctx,
                 const MatrixView<T, MatrixFormat::Dense>& A,
                 const MatrixView<T, MatrixFormat::Dense>& B,
                 Transpose transA,
@@ -261,8 +295,12 @@ namespace batchlas {
         return ctx.create_event_after_external_work();
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend Back, typename T>
-    size_t getrs_buffer_size(Queue& ctx,
+    size_t getrs_vendor_buffer_size(Queue& ctx,
                              const MatrixView<T, MatrixFormat::Dense>& A,
                              const MatrixView<T, MatrixFormat::Dense>& B,
                              Transpose transA) {
@@ -273,8 +311,12 @@ namespace batchlas {
         return 0;
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, typename T>
-    Event getri(Queue& ctx,
+    Event getri_vendor(Queue& ctx,
                 const MatrixView<T, MatrixFormat::Dense>& A,
                 const MatrixView<T, MatrixFormat::Dense>& C,
                 Span<int64_t> pivots,
@@ -306,11 +348,17 @@ namespace batchlas {
         return ctx.create_event_after_external_work();
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, typename T>
-    size_t getri_buffer_size(Queue& ctx,
+    size_t getri_vendor_buffer_size(Queue& ctx,
                              const MatrixView<T, MatrixFormat::Dense>& A) {
         return BumpAllocator::allocation_size<int>(ctx, A.batch_size());
     }
+
+    } // namespace backend
 
     namespace backend {
 
@@ -387,29 +435,34 @@ namespace batchlas {
     // Explicit instantiations. Signatures live in the `sig` namespace beside each
     // public declaration (include/batchlas/blas/functions/*.hh), so changing one is a single
     // header edit rather than one edit per backend TU.
+    //
+    // Every row names a `backend::`-qualified `_vendor` symbol, and that is the
+    // WP0b invariant rather than an oversight: the public potrf/syev/geqrf/
+    // getrf/getrs/getri/ormqr/orgqr definitions moved out of the vendor TUs into
+    // src/dispatch/entry_points/{factorization,eigen}.cc, which instantiate them
+    // keyed on the device family instead of on any vendor library. A
+    // BATCHLAS_INSTANTIATE_OP row for a public op here would collide with those.
+    // _BACKEND_OP still looks the alias up as `sig::OP` -- only the FUNCTION is
+    // backend-qualified.
     #define ROCSOLVER_OPS(B, fp) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, potrf) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, potrf_buffer_size) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, syev) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, syev_buffer_size) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, potrf_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, potrf_vendor_buffer_size) \
         BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, syev_vendor) \
         BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, syev_vendor_buffer_size) \
         BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, gesvd_vendor) \
         BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, gesvd_vendor_buffer_size) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, geqrf) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, geqrf_buffer_size) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, getrf) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, getrf_buffer_size) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, getrs) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, getrs_buffer_size) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, getri) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, getri_buffer_size) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, ormqr) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, ormqr_buffer_size) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, geqrf_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, geqrf_vendor_buffer_size) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, getrf_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, getrf_vendor_buffer_size) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, getrs_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, getrs_vendor_buffer_size) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, getri_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, getri_vendor_buffer_size) \
         BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, ormqr_vendor) \
         BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, ormqr_vendor_buffer_size) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, orgqr) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, orgqr_buffer_size)
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, orgqr_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, orgqr_vendor_buffer_size)
 
     BATCHLAS_FOR_EACH_SCALAR_TYPE_1(ROCSOLVER_OPS, Backend::ROCM)
 

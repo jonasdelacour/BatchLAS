@@ -20,8 +20,7 @@ namespace batchlas {
     template <Backend B, typename T, MatrixFormat MFormat>
     struct SyevxResidualsKernel;
 
-    // Only used by the params.iterations == 0 cold path; the per-iteration column
-    // reversals it used to serve are folded into the X_best snapshot (SYEVX_PLAN.md 7.8).
+    // Only used by the params.iterations == 0 cold path (SYEVX_PLAN.md 7.8).
     template <Backend B, typename T, MatrixFormat MFormat>
     struct SyevxReverseEigenvectorsKernel;
 
@@ -36,16 +35,10 @@ namespace batchlas {
 
 namespace {
 
-// Block power-iteration steps applied to the random start (SYEVX_PLAN.md §7.9).
-// Only meaningful when searching for the largest eigenpairs -- see the block that
-// uses this for the measurements that set the default.
-//
-// 4 rather than a larger number: the gain keeps growing with the step count on the
-// matrices measured, but every step compresses the block further toward the
-// dominant directions, and an over-compressed block is rank-deficient in floating
-// point, at which point the Cholesky-based ortho returns NaN rather than an error
-// (the failure mode documented in syevx_filtered.cc). 4 buys most of the win with
-// margin; BATCHLAS_SYEVX_INIT_POWER exists for A/B-ing that choice.
+// Block power-iteration steps applied to the random start; meaningful only when
+// searching for the largest eigenpairs. Kept small deliberately: an over-compressed
+// block is rank-deficient in floating point, at which point the Cholesky-based ortho
+// returns NaN rather than an error. Evidence: SYEVX_PLAN.md §7.9.
 constexpr int kDefaultInitPowerIterations = 4;
 
 inline int lobpcg_init_power_iterations(int from_params, bool find_largest) {
@@ -54,28 +47,18 @@ inline int lobpcg_init_power_iterations(int from_params, bool find_largest) {
         const int parsed = std::atoi(v);
         if (parsed >= 0) steps = parsed;
     }
-    // Powers of A amplify the *largest* eigendirections. With find_largest = false
-    // that drives the start away from what is wanted, so the steps are dropped
-    // rather than applied backwards.
+    // Powers of A amplify the *largest* eigendirections, so the steps are dropped
+    // rather than applied backwards when the smallest are wanted.
     return find_largest ? steps : 0;
 }
 
-// Search-space width. `extra_directions == 0` means "choose one", matching the
-// convention SyevxParams::filter_degree uses.
-//
-// Running LOBPCG with exactly `neigs` vectors and no guard block is a known way
-// to converge slowly: the last wanted pair has nothing above it to separate
-// against. A guard of ~25% of neigs is standard practice and usually cuts the
-// iteration count for a cost only linear in the extra width. A caller that
-// genuinely wants no guard can still say so by asking for a width explicitly.
-//
-// The search space is n x 3*block_vectors; letting that exceed n would make the
-// block rank-deficient by construction and break the Cholesky-based
-// orthogonalization, so the guard is dropped rather than allowed to push past it.
+// Search-space width. `extra_directions == 0` means "choose one" (a ~25% guard block),
+// matching the convention SyevxParams::filter_degree uses. The search space is
+// n x 3*block_vectors; letting that exceed n makes the block rank-deficient by
+// construction and breaks the Cholesky-based ortho, so the guard is dropped instead.
 inline int64_t lobpcg_block_vectors(size_t neigs, size_t extra_directions, int64_t n) {
     const int64_t k = static_cast<int64_t>(neigs);
     if (extra_directions > 0) return k + static_cast<int64_t>(extra_directions);
-    // Escape hatch for A/B-ing the guard itself; 0 reproduces the old behaviour.
     int64_t extra = std::max<int64_t>(2, k / 4);
     if (const char* v = std::getenv("BATCHLAS_SYEVX_EXTRA_DIRECTIONS")) {
         const int parsed = std::atoi(v);
@@ -87,8 +70,8 @@ inline int64_t lobpcg_block_vectors(size_t neigs, size_t extra_directions, int64
     return guarded;
 }
 
-// How often the host reads back the convergence flags. Every iteration -- the
-// old behaviour -- costs a full pipeline drain each time; see SYEVX_PLAN.md §7.1.
+// How often the host reads back the convergence flags; each check is a full pipeline
+// drain (SYEVX_PLAN.md §7.1).
 inline int64_t lobpcg_check_every() {
     if (const char* v = std::getenv("BATCHLAS_SYEVX_CHECK_EVERY")) {
         const int parsed = std::atoi(v);
@@ -97,20 +80,10 @@ inline int64_t lobpcg_check_every() {
     return 4;
 }
 
-// Instrumentation staging plan -- SYEVX_PLAN.md §7.2.
-//
-// The SyevxInstrumentation spans and `iterations_done` are caller-supplied and
-// carry no guarantee of being device-accessible (the Python binding, for one,
-// hands us a plain std::vector<int32_t> for iterations_done). Writing to them
-// from a kernel would crash such callers. So the residual kernel stores into a
-// compact, pool-allocated staging buffer instead, and a single host pass after
-// the iteration loop scatters it into the caller's spans honouring their
-// strides. One host round-trip per solve instead of one per iteration, and the
-// caller's memory is only ever touched from the host, exactly as before.
-//
-// convergence_rate_history is derived from the previous sample, so it is not
-// staged at all: the scatter computes it from the staged best-residual series,
-// which is the same series the old code read back out of the caller's span.
+// Instrumentation staging plan (SYEVX_PLAN.md §7.2). The caller-supplied
+// SyevxInstrumentation spans are not guaranteed device-accessible -- the Python binding
+// hands us a plain std::vector -- so NO kernel may write them. The residual kernel stores
+// here instead, and one host pass after the loop scatters into the caller's spans.
 struct LobpcgInstrumentationPlan {
     bool active = false;         // instrumentation requested at all
     size_t samples = 0;          // upper bound on stored samples
@@ -118,8 +91,7 @@ struct LobpcgInstrumentationPlan {
     bool stage_current = false;  // current_residual_history wanted
     bool stage_ritz = false;     // ritz_value_history wanted
 
-    // Bytes the staging buffers need. Must be identical in syevx_lobpcg and
-    // syevx_lobpcg_buffer_size -- see the allocation-mirroring warning there.
+    // Must be identical in syevx_lobpcg and syevx_lobpcg_buffer_size.
     template <typename Real>
     size_t staging_bytes(Queue& ctx) const {
         if (!active) return 0;
@@ -128,8 +100,7 @@ struct LobpcgInstrumentationPlan {
     }
 };
 
-// Escape hatch for A/B-ing the two instrumentation paths against each other; the
-// device-staged path is meant to produce exactly the values the host path did,
+// A/B escape hatch: the device-staged path must produce exactly the host path's values,
 // and tests/syevx_tests.cc checks that by running both.
 inline bool lobpcg_instrumentation_force_host() {
     const char* v = std::getenv("BATCHLAS_SYEVX_INSTR_HOST");
@@ -154,25 +125,9 @@ LobpcgInstrumentationPlan lobpcg_instrumentation_plan(const SyevxParams<T>& para
     return plan;
 }
 
-// Soft locking (SYEVX_PLAN.md §7.5, variant (a): column masking).
-//
-// OFF by default, deliberately. The mechanism is implemented and correct, but it
-// does not pay for itself on any configuration that could be measured here:
-//
-//  * It saves no flops. The block shapes are fixed, so a masked column is still
-//    multiplied by A and still occupies its row/column of StAS. Only the
-//    batch-wide staircase (§7.5 variant (b)) would recover the flops.
-//  * Its claimed benefit is conditioning of [X,P,R] under the Cholesky-based
-//    ortho algorithms -- and Backend::NETLIB forces OrthoAlgorithm::Householder
-//    (src/extensions/ortho.cc:42-44, 337-339), which is exactly the algorithm
-//    that handles a near-null column gracefully. The regime where masking should
-//    help is therefore unreachable on a CPU-only build.
-//  * Measured cost on an 8-case sweep (n = 128..512, k = 8..32, batch 2..8):
-//    0 extra iterations on 6 cases and +1 on 2, versus locking disabled.
-//
-// So: no measured benefit, small measured cost, benefit unverifiable on this
-// hardware. Enable with BATCHLAS_SYEVX_SOFT_LOCK=1 to A/B it on a GPU backend
-// with Chol2; if it wins there, flip this default.
+// Soft locking, variant (a): column masking. OFF by default and deliberately so -- the
+// mechanism is implemented and correct, but it saves no flops (the block shapes are
+// fixed) and measured no benefit. Evidence: SYEVX_PLAN.md §7.5.
 inline bool lobpcg_soft_locking() {
     if (const char* v = std::getenv("BATCHLAS_SYEVX_SOFT_LOCK")) {
         return !(v[0] == '0' || v[0] == 'n' || v[0] == 'N' || v[0] == 'f' || v[0] == 'F');
@@ -180,17 +135,10 @@ inline bool lobpcg_soft_locking() {
     return false;
 }
 
-// Safety factor on the locking threshold: a column is masked only once its
-// residual is `lobpcg_lock_factor()` times the requested tolerance.
-//
-// Locking exactly at `tol` is a bad idea here. A masked column is not frozen --
-// its Ritz vector is still recombined every iteration -- so a column sitting
-// right at the boundary loses its correction direction, drifts back above `tol`,
-// unlocks, and oscillates. Measured on the ILU(k) convergence sweep
-// (tests/iluk_tests.cc, tol = 1e-6, final residuals ~1e-6), locking at `tol`
-// made the final residual worse on 3 of 8 cases. A factor of 0.1 masks only
-// columns that are converged with a decade to spare, and on the iteration-count
-// sweep costs 0-1 iterations where a factor of 1.0 costs 0-3.
+// Safety factor on the locking threshold: a column is masked only once its residual is
+// this multiple of the requested tolerance. Locking exactly at `tol` oscillates -- a
+// masked column is not frozen, its Ritz vector is still recombined every iteration, so a
+// column at the boundary loses its correction direction and drifts back above `tol`.
 inline double lobpcg_lock_factor() {
     if (const char* v = std::getenv("BATCHLAS_SYEVX_LOCK_FACTOR")) {
         const double parsed = std::atof(v);
@@ -199,28 +147,21 @@ inline double lobpcg_lock_factor() {
     return 0.1;
 }
 
-// Relative floor below which a Jacobi shift is treated as singular and the column
-// entry is left unpreconditioned. `d_ii - lambda` genuinely reaches zero: for a
-// nearly diagonal A the wanted Ritz value converges *to* some d_ii, so the entry
-// the preconditioner would amplify most is exactly the one whose divisor vanishes.
-// Passing the residual through unchanged there costs one badly-scaled entry;
-// dividing by it costs the whole block, since the subsequent Cholesky-based ortho
-// returns NaN on a rank-deficient input rather than failing loudly.
+// Relative floor below which a Jacobi shift is treated as singular and the column entry
+// is left unpreconditioned. `d_ii - lambda` genuinely reaches zero: for a nearly diagonal
+// A the wanted Ritz value converges *to* some d_ii. Dividing by it costs the whole block,
+// since the Cholesky-based ortho returns NaN on a rank-deficient input rather than
+// failing loudly.
 template <typename R>
 inline constexpr R jacobi_singular_tolerance() {
     return std::sqrt(std::numeric_limits<R>::epsilon());
 }
 
-// The unshifted diag(A)^{-1} is a valid LOBPCG preconditioner only where it is SPD,
-// i.e. where every diagonal entry is strictly positive. A random symmetric matrix is
-// not, and applying it anyway does not merely fail to help: every such case in the
-// sweep went from ~20 iterations to the 300-iteration cap.
-//
-// Positivity is the real condition; this floor exists only to keep the amplification
-// finite when some d_ii is positive but negligible against the largest. It is
-// deliberately loose (1e-6, i.e. up to a 10^6 spread is accepted) because tightening
-// it to 1e-3 also disabled the preconditioner on graded matrices whose diagonal is
-// perfectly positive, throwing away a measured 6x.
+// The unshifted diag(A)^{-1} is a valid LOBPCG preconditioner only where it is SPD, i.e.
+// where every diagonal entry is strictly positive; applying it anyway drives the solve to
+// the iteration cap. Positivity is the real condition -- this floor merely keeps the
+// amplification finite, and is deliberately loose because tightening it also disables the
+// preconditioner on graded matrices whose diagonal is perfectly positive.
 template <typename R>
 inline constexpr R jacobi_definiteness_floor() {
     return R(1e-6);
@@ -240,12 +181,11 @@ inline constexpr R jacobi_definiteness_floor() {
         ) {
         using float_type = typename base_type<T>::type;
 
-        // LOBPCG's Rayleigh-Ritz converges to whichever EXTREME the trial block is
-        // biased toward; there is no il/iu for it to honour and no interval it can
-        // target. `syevx` never routes a non-extremal request here, but this is a
-        // public entry point in its own right, and silently returning the extremal
-        // eigenpairs to someone who asked for an interior block is the one failure
-        // mode no downstream check can catch. See SYEVX_RANGE_PLAN.md §2.5, §12.1.
+        // LOBPCG converges to whichever EXTREME the trial block is biased toward; it has
+        // no il/iu to honour. `syevx` never routes a non-extremal request here, but this
+        // is a public entry point too, and silently returning extremal eigenpairs to an
+        // interior request is the one failure mode no downstream check can catch.
+        // See SYEVX_RANGE_PLAN.md §2.5.
         if (params.select != SyevxSelect::Extremal) {
             throw std::invalid_argument(
                 "syevx_lobpcg: only SyevxSelect::Extremal is supported; LOBPCG converges to an "
@@ -284,11 +224,8 @@ inline constexpr R jacobi_definiteness_floor() {
             (precond_kind == SyevxPreconditioner::ILUK) && iluk_configured;
         const bool jacobi_shifted = (precond_kind == SyevxPreconditioner::JacobiShifted);
         const bool use_jacobi = (precond_kind == SyevxPreconditioner::Jacobi) || jacobi_shifted;
-        // An ILU(k) factorization approximates A^{-1}. Applying it to the LOBPCG
-        // residual accelerates convergence toward the smallest eigenpairs, but for
-        // the largest eigenpairs it suppresses the wanted directions and boosts the
-        // unwanted ones -- measurably worse than running unpreconditioned. Reject the
-        // combination instead of silently degrading.
+        // An ILU(k) factorization approximates A^{-1}: for the largest eigenpairs it
+        // suppresses the wanted directions. Reject rather than silently degrade.
         if (use_preconditioner && params.find_largest) {
             throw std::invalid_argument(
                 "syevx: an ILU(k) preconditioner approximates A^{-1} and is only valid when "
@@ -303,8 +240,6 @@ inline constexpr R jacobi_definiteness_floor() {
             }
         }
 
-        // Implementation of the syevx function
-        // This function computes the eigenvalues and eigenvectors of a symmetric matrix
         int64_t block_vectors = lobpcg_block_vectors(neigs, params.extra_directions, A.rows_);
         const int64_t convergence_check_every = lobpcg_check_every();
         const bool soft_locking = lobpcg_soft_locking();
@@ -324,9 +259,8 @@ inline constexpr R jacobi_definiteness_floor() {
         auto best_residuals = pool.allocate<typename base_type<T>::type>(ctx, neigs * batch_size);
         auto best_quality = pool.allocate<typename base_type<T>::type>(ctx, batch_size);
         auto converged_flags = pool.allocate<int32_t>(ctx, batch_size);
-        // Per-column convergence state for soft locking; 1 == column i of batch
-        // bid met the tolerance on the *current* iterate. Written by the residual
-        // kernel, consumed on-device only -- no host readback.
+        // Per-column convergence state for soft locking; 1 == column i of batch bid met
+        // the tolerance on the *current* iterate. Consumed on-device only.
         auto col_converged = pool.allocate<int32_t>(ctx, neigs * batch_size);
 
         auto S =    MatrixView(Sdata.data(), n, block_vectors * 3, n, n * block_vectors * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
@@ -341,9 +275,8 @@ inline constexpr R jacobi_definiteness_floor() {
         auto AR =   AS({0,n}, {2 * block_vectors, 3 * block_vectors});  //Last block of AS
 
         auto StAS_base = MatrixView(StASdata.data(), block_vectors * 3, block_vectors * 3, block_vectors * 3, block_vectors * block_vectors * 3 * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
-        // XtAX is a per-batch (block_vectors x block_vectors) matrix. It lives in the
-        // top-left corner of the backing StAS_base buffer for each batch.
-        // IMPORTANT: keep StAS_base's stride so batches do not overlap.
+        // XtAX is the top-left (block_vectors x block_vectors) corner of StAS_base's
+        // backing buffer. IMPORTANT: keep StAS_base's ld/stride so batches do not overlap.
         auto XtAX = StAS_base({0, block_vectors}, {0, block_vectors});
         auto C_p =  MatrixView(C_pdata.data(), block_vectors * 3, block_vectors, block_vectors*3, block_vectors * block_vectors * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
         auto S_new = MatrixView(S_newdata.data(), n, block_vectors * 3, n, n * block_vectors * 3, batch_size, pool.allocate<T*>(ctx, batch_size).data());
@@ -373,20 +306,16 @@ inline constexpr R jacobi_definiteness_floor() {
             precond = params.preconditioner->view();
         } else if (params.build_preconditioner) {
             if constexpr (MFormat == MatrixFormat::CSR) {
-                // Hand ILU(k) the unclaimed tail of the pool and take back only what
-                // it used. Asking iluk_buffer_size first would work, but it costs a
-                // second symbolic factorization on the critical path for a number
-                // the factorization is about to compute anyway.
+                // Hand ILU(k) the unclaimed tail of the pool and take back only what it
+                // used; asking iluk_buffer_size first costs a second symbolic pass.
                 size_t iluk_bytes = 0;
                 precond = iluk_factorize<B, T>(ctx, A, pool.remaining(), params.iluk_params, &iluk_bytes);
                 pool.consume(iluk_bytes);
             }
         }
 
-        // No staging buffer for the preconditioner input: iluk_apply indexes its
-        // operands as b*stride_ + col*ld_ (src/extensions/iluk.cc), so it reads R's
-        // n x 3k slice directly. Repacking R into a packed-batch copy first was a
-        // full n x k x batch copy per iteration, plus the allocation, for nothing.
+        // No staging buffer for the preconditioner input: iluk_apply indexes its operands
+        // as b*stride_ + col*ld_, so it reads R's strided n x 3k slice directly.
 
         auto R_preconditioned_data = pool.allocate<T>(ctx, n * block_vectors * batch_size);
         auto R_preconditioned = MatrixView(
@@ -398,10 +327,8 @@ inline constexpr R jacobi_definiteness_floor() {
             batch_size,
             pool.allocate<T*>(ctx, batch_size).data());
 
-        // diag(A), extracted once. For CSR this is a search through each row, which is
-        // not something to repeat every iteration; for dense it is a strided gather.
-        // Kept as T (not float_type) so the Hermitian complex case needs no special
-        // storage -- the imaginary part is zero for a valid input and the shift
+        // diag(A), extracted once (a per-row search for CSR). Kept as T rather than
+        // float_type so the Hermitian complex case needs no special storage; the shift
         // arithmetic below is done in T anyway.
         Span<T> jacobi_diag;
         Span<int32_t> jacobi_usable;
@@ -420,9 +347,7 @@ inline constexpr R jacobi_definiteness_floor() {
               spmm_workspace = pool.allocate<std::byte>(ctx, spmm_buffer_size<B>(ctx, A, X, AX, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans));
         }
 
-        // NOTE: SYEVX repeatedly solves *tiny* dense eigenproblems (XtAX, StAS).
-        // For diagnosis and benchmarking, allow opting into/out of using the vendor
-        // implementation for these projected solves.
+        // Diagnostic escape hatch for the tiny projected solves (XtAX, StAS).
         const bool prefer_vendor_projected_syev =
             (B != Backend::NETLIB) &&
             ([]() {
@@ -432,15 +357,9 @@ inline constexpr R jacobi_definiteness_floor() {
                 return false;
             })();
 
-        // NOTE: syevx relies on repeated small eigenproblems (XtAX, StAS).
-        // The chosen SYEV provider can change with matrix size (e.g. CTA for n<=32
-        // but blocked/vendor for larger n), so a single pre-sized workspace must cover
-        // the maximum of the internal problems.
-        // Restart iterations solve a 2*block_vectors projected problem rather than the
-        // full 3*block_vectors one (see Nvecs below). Because the provider is chosen
-        // from the shape, that intermediate size can demand *more* workspace than
-        // either the block_vectors or 3*block_vectors problem, so it has to be sized
-        // explicitly instead of assumed to be bounded by them.
+        // syev picks its provider from the matrix shape, so workspace demand is NOT
+        // monotone in the problem size: the 2*block_vectors restart problem can demand
+        // more than either the block_vectors or the 3*block_vectors one. Size all three.
         auto StAS_restart = MatrixView(StAS_base, block_vectors * 2, block_vectors * 2,
                                        StAS_base.ld(), StAS_base.stride());
         const size_t ws_xtax = syev_buffer_size<B>(ctx, XtAX, lambdas, JobType::EigenVectors, Uplo::Lower);
@@ -448,29 +367,25 @@ inline constexpr R jacobi_definiteness_floor() {
         const size_t ws_stas = syev_buffer_size<B>(ctx, StAS_base, lambdas, JobType::EigenVectors, Uplo::Lower);
         size_t ws_projected = std::max(ws_xtax, std::max(ws_stas_restart, ws_stas));
         if (prefer_vendor_projected_syev) {
-            const size_t ws_xtax_vendor = backend::syev_vendor_buffer_size<B, T>(ctx, XtAX, lambdas, JobType::EigenVectors, Uplo::Lower);
-            const size_t ws_stas_restart_vendor = backend::syev_vendor_buffer_size<B, T>(ctx, StAS_restart, lambdas, JobType::EigenVectors, Uplo::Lower);
-            const size_t ws_stas_vendor = backend::syev_vendor_buffer_size<B, T>(ctx, StAS_base, lambdas, JobType::EigenVectors, Uplo::Lower);
+            const size_t ws_xtax_vendor = blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, XtAX, lambdas, JobType::EigenVectors, Uplo::Lower);
+            const size_t ws_stas_restart_vendor = blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, StAS_restart, lambdas, JobType::EigenVectors, Uplo::Lower);
+            const size_t ws_stas_vendor = blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, StAS_base, lambdas, JobType::EigenVectors, Uplo::Lower);
             ws_projected = std::max(ws_projected,
                                     std::max(ws_xtax_vendor, std::max(ws_stas_restart_vendor, ws_stas_vendor)));
         }
         auto syev_workspace = pool.allocate<std::byte>(ctx, ws_projected);
-        // Three distinct ortho calls share this buffer: the single-matrix ortho(X)
-        // below, and the two external-metric variants inside the loop. The
-        // single-matrix one was missing from this max, so its workspace was
-        // whatever the other two happened to need -- fine until a shape came along
-        // where it needed more (n = 64, block_vectors = 20 was one).
+        // Three distinct ortho calls share this buffer: the single-matrix ortho(X) below
+        // and the two external-metric variants inside the loop. All three must be in this
+        // max, or a shape needing more than the others get is silently under-sized.
         auto ortho_workspace = pool.allocate<std::byte>(ctx, std::max(
                           ortho_buffer_size<B>(ctx, X, Transpose::NoTrans, params.algorithm),
                           std::max(ortho_buffer_size<B>(ctx, R, XP, Transpose::NoTrans, Transpose::NoTrans, params.algorithm),
                           ortho_buffer_size<B>(ctx, C_p, StAS_base, Transpose::NoTrans, Transpose::NoTrans, params.algorithm))));
 
-        // Device-side instrumentation staging (§7.2). Allocated last so that the
-        // "does it fit?" test below sees everything else already claimed. A caller
-        // that filled in params.instrumentation only *after* calling
-        // syevx_lobpcg_buffer_size would otherwise hit a hard allocation failure;
-        // instead we notice there is no room and fall back to the old host-read
-        // path, which is correct but pays a pipeline drain per iteration.
+        // Allocated last so the "does it fit?" test sees everything else already claimed.
+        // A caller that filled in params.instrumentation only *after* calling
+        // syevx_lobpcg_buffer_size then falls back to the host-read path (correct, but a
+        // pipeline drain per iteration) instead of failing to allocate.
         const auto instr_plan = lobpcg_instrumentation_plan(params, neigs, batch_size);
         Span<float_type> stage_best, stage_current, stage_ritz;
         bool stage_device_side = false;
@@ -523,16 +438,14 @@ inline constexpr R jacobi_definiteness_floor() {
                             if constexpr (MFormat == MatrixFormat::Dense) {
                                 d = Ab(int(i), int(i));
                             } else {
-                                // Absent diagonal entry reads back as 0, which both
-                                // the definiteness test and the singularity guard
-                                // then treat as unusable -- the right outcome for a
-                                // structural zero on the diagonal.
+                                // An absent entry reads back as 0, which both the
+                                // definiteness test and the singularity guard then
+                                // treat as unusable.
                                 d = Ab.get(int(i), int(i));
                             }
                             dst[i] = d;
-                            // Real part only: a Hermitian A has a real diagonal, and
-                            // the sign of that real part is what decides whether
-                            // diag(A)^{-1} is positive definite.
+                            // Real part only: a Hermitian A has a real diagonal, and its
+                            // sign decides whether diag(A)^{-1} is positive definite.
                             float_type dr;
                             if constexpr (internal::is_complex<T>::value) dr = d.real();
                             else                                          dr = d;
@@ -542,11 +455,9 @@ inline constexpr R jacobi_definiteness_floor() {
                         const float_type dmax = sycl::reduce_over_group(cta, local_max, sycl::maximum<float_type>());
                         const float_type dmin = sycl::reduce_over_group(cta, local_min, sycl::minimum<float_type>());
                         if (tid == 0) {
-                            // diag(A)^{-1} is a valid (SPD) LOBPCG preconditioner only
-                            // if every diagonal entry is positive and not negligible
-                            // against the largest one. Decided once per batch item,
-                            // not per entry: a mixed-sign diagonal makes the whole
-                            // operator indefinite, which no per-entry guard repairs.
+                            // Decided once per batch item, not per entry: a mixed-sign
+                            // diagonal makes the whole operator indefinite, which no
+                            // per-entry guard repairs.
                             usable_ptr[bid] = (dmax > float_type(0) && dmin > def_floor * dmax) ? 1 : 0;
                         }
                     });
@@ -554,16 +465,10 @@ inline constexpr R jacobi_definiteness_floor() {
             trace_wait("syevx: diag(A) extracted");
         }
 
-        // Only the X block of S is read before the rest is overwritten (P and R are
-        // both recomputed from the first Rayleigh-Ritz onwards), so filling all of
-        // S was 3x the random generation and 3x the write traffic for nothing.
-        //
-        // The linear index below reproduces MatrixView::fill_random's exactly --
-        // fill_random ignores ld/stride and walks the buffer flat, so for the X
-        // block of a contiguous S that index is b*(3k*n) + c*n + r. Keeping it
-        // identical means the starting block is bit-for-bit what it used to be:
-        // this change is pure waste elimination, not a behaviour change, and stays
-        // reproducible across runs.
+        // Only the X block of S is filled: P and R are recomputed from the first
+        // Rayleigh-Ritz onwards. The linear index below reproduces fill_random's exactly
+        // -- fill_random ignores ld/stride and walks the buffer flat -- so the starting
+        // block stays bit-for-bit reproducible.
         {
             auto Xk = X.kernel_view();
             const int64_t nn = n;
@@ -592,30 +497,10 @@ inline constexpr R jacobi_definiteness_floor() {
             });
         }
 
-        // Block power-iteration start (SYEVX_PLAN.md §7.9): X <- ortho(A X), a few
-        // times. Powers of A amplify the largest eigendirections, so this is a valid
-        // improvement *only* for find_largest; lobpcg_init_power_iterations returns 0
-        // otherwise and the block below does not run.
-        //
-        // MEASURED (NETLIB/CPU, double, dense random Hermitian, batch 4, tol 1e-5,
-        // BATCHLAS_SYEVX_CHECK_EVERY=1, mean iterations over 3 seeds), p = steps:
-        //
-        //   n    k   find_largest      p=0    p=1    p=2    p=4    p=8
-        //   64   4   true            22.67  20.67  20.00  18.67  16.00
-        //   64  16   true             8.33   7.00   6.00   4.67   3.00
-        //  128  16   true            19.00  17.33  16.00  15.00  12.67
-        //  256   8   true            36.00  35.33  34.33  31.00  27.33
-        //  256  16   true            27.67  26.33  25.33  24.00  21.00
-        //
-        // i.e. 12-44% fewer iterations at p = 4, and wall time moved the same way
-        // (n=64,k=16: 23.4 -> 11.3 ms; n=256,k=16: 146.6 -> 124.7 ms).
-        //
-        // The smallest end was measured too, using sigma*I - A with sigma a Gershgorin
-        // upper bound (whose largest eigenpairs are A's smallest). It was flat --
-        // 23.00 -> 21.67 at n=64,k=4 and unchanged at 8.00 / 19.00 / 26.33 elsewhere,
-        // inside run-to-run noise -- because the amplification ratio
-        // (sigma - l_1)/(sigma - l_{k+1}) is ~1 for a wide spectrum. That variant paid
-        // matvecs for nothing, so it is not implemented; the restriction above stands.
+        // Block power-iteration start: X <- ortho(A X), a few times. Powers of A amplify
+        // the largest eigendirections, so this is valid *only* for find_largest;
+        // lobpcg_init_power_iterations returns 0 otherwise and this loop does not run.
+        // Evidence: SYEVX_PLAN.md §7.9.
         const int init_power_steps =
             lobpcg_init_power_iterations(params.init_power_iterations, params.find_largest);
         for (int step = 0; step < init_power_steps; ++step) {
@@ -628,42 +513,32 @@ inline constexpr R jacobi_definiteness_floor() {
             MatrixView<T, MatrixFormat::Dense>::copy(ctx, X, AX);
         }
 
-        //Orthonormalize initial vectors
         trace("syevx: ortho init");
         ortho<B>(ctx, X, Transpose::NoTrans, ortho_workspace, params.algorithm);
         trace_wait("syevx: ortho init done");
-        //Compute AX
         if constexpr (MFormat == MatrixFormat::Dense) {
             trace("syevx: gemm A*X");
             gemm<B>(ctx, A, X, AX, GemmOptions<T>{});
         } else {
-            //For sparse matrices we use the spmm function
             trace("syevx: spmm A*X");
             spmm<B>(ctx, A, X, AX, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans, spmm_workspace);
         }
         trace_wait("syevx: A*X done");
-        //Compute X^T AX
         trace("syevx: gemm X^T*(A*X)");
         gemm<B>(ctx, X, AX, XtAX, {.transA = trans});
         trace_wait("syevx: XtAX gemm done");
-        //Solve the eigenvalue problem
         trace("syevx: syev XtAX");
         if (prefer_vendor_projected_syev) {
-            backend::syev_vendor<B>(ctx, XtAX, lambdas, JobType::EigenVectors, Uplo::Lower, syev_workspace);
+            blas::dispatch::detail::syev_vendor_or_throw<B, T>(ctx, XtAX, lambdas, JobType::EigenVectors, Uplo::Lower, syev_workspace);
         } else {
             syev<B>(ctx, XtAX, lambdas, SyevOptions{}, syev_workspace);
         }
         trace_wait("syevx: syev XtAX done");
 
-        // NOTE (SYEVX_PLAN.md 7.8): the search block `X` is deliberately kept in the
-        // ascending order `syev` produces, even when `find_largest`. Nothing inside the
-        // iteration cares about the order of X's columns -- they are a basis -- so the
-        // two batch-wide column-reversal kernels that used to run here and on the
-        // selected StAS block every iteration were pure launch overhead. The
-        // largest-first presentation is applied exactly once, where the wanted block is
-        // snapshotted into `X_best` (a copy the residual kernel already performs), via
-        // `reported_col()` below.
-        //Update X and corresponding implicit update of AX
+        // The search block `X` is deliberately left in the ascending order `syev`
+        // produces, even when `find_largest`: nothing inside the iteration cares about
+        // the order of X's columns, they are a basis. The largest-first presentation is
+        // applied exactly once, in the `X_best` snapshot, via `reported_col()` below.
         trace("syevx: gemm X*Z (update X)");
         gemm<B>(ctx, X, XtAX, X_new, GemmOptions<T>{});
         trace_wait("syevx: update X done");
@@ -675,15 +550,13 @@ inline constexpr R jacobi_definiteness_floor() {
         swap_subspace();
         bool restart = true;
 
-        // Tracks how many eigenvalues are currently stored per batch in `lambdas`.
-        // After the initial XtAX solve, this is `block_vectors`. After subsequent StAS
-        // solves it becomes 2*block_vectors (restart step) or 3*block_vectors.
+        // Eigenvalues currently stored per batch in `lambdas`: block_vectors after the
+        // initial XtAX solve, then 2*block_vectors (restart) or 3*block_vectors.
         int64_t current_num_eigvals = block_vectors;
         int32_t completed_iterations = 0;
 
         size_t residual_wg_size = std::min(get_kernel_max_wg_size<SyevxResidualsKernel<B,T,MFormat>>(ctx), size_t(n));
 
-        //Compute R = AX - X * diag(lambdas)
         for(int it = 0; it < params.iterations; it++){
             completed_iterations = static_cast<int32_t>(it + 1);
             int Nvecs = restart ? block_vectors * 2 : block_vectors * 3;
@@ -693,9 +566,8 @@ inline constexpr R jacobi_definiteness_floor() {
             const float_type rel_tol = static_cast<float_type>(std::abs(params.relative_tolerance));
             const float_type tol = std::max(abs_tol, rel_tol);
 
-            // Is this iteration a stored instrumentation sample? Purely a function
-            // of `it`, so it is decided on the host and handed to the kernel as
-            // pre-offset pointers -- null means "do not store".
+            // Decided on the host and handed to the kernel as pre-offset pointers; null
+            // means "do not store".
             const bool store_this_iteration =
                 stage_device_side &&
                 (static_cast<size_t>(it) % params.instrumentation->store_every) == 0 &&
@@ -720,18 +592,16 @@ inline constexpr R jacobi_definiteness_floor() {
                 auto best_quality_data = best_quality.data();
                 auto Xbest_data = want_eigenvectors ? X_best.data_ptr() : nullptr;
                 auto update_best = sycl::local_accessor<int32_t, 1>(1, h);
-                // Per-column partials for ||r||, ||x|| and ||Ax||, accumulated in
-                // one pass instead of 2*neigs sequential group reductions (each of
-                // which is a full work-group barrier -- 128 of them at neigs = 64).
+                // Per-column partials for ||r||, ||x|| and ||Ax||, accumulated in one
+                // pass instead of 2*neigs sequential (barriering) group reductions.
                 auto lsums = sycl::local_accessor<float_type, 1>(3 * neigs, h);
                 const bool find_largest = params.find_largest;
                 h.parallel_for<SyevxResidualsKernel<B,T,MFormat>>(sycl::nd_range<1>(sycl::range{size_t(batch_size*residual_wg_size)}, sycl::range{size_t(residual_wg_size)}), [=](sycl::nd_item<1> item){
                     auto num_eigvals = it < 2 ? (it+1) * block_vectors : 3*block_vectors;
 
                     // X's columns are in the ascending order syev returned them in, so
-                    // column j of X pairs with lambda[eig_offset + j]. For find_largest
-                    // the selected block is the *top* block_vectors of num_eigvals, hence
-                    // the offset; the wanted neigs pairs are then the *last* neigs columns.
+                    // column j of X pairs with lambda[eig_offset + j]. For find_largest the
+                    // selected block is the *top* block_vectors, hence the offset.
                     const int64_t eig_offset = find_largest ? (int64_t(num_eigvals) - block_vectors) : 0;
                     // Reported slot i (largest-first when find_largest) <- column of X.
                     const auto reported_col = [=](int64_t i) {
@@ -761,12 +631,9 @@ inline constexpr R jacobi_definiteness_floor() {
                     }
                     sycl::group_barrier(cta);
 
-                    // Form R and accumulate the three per-column norms in the same
-                    // sweep. The block is column-major with n contiguous entries per
-                    // column, so a work-item stays inside one column for long runs;
-                    // keeping a running partial and flushing only on a column change
-                    // turns what would be one atomic per element into roughly one per
-                    // thread per column.
+                    // Form R and accumulate the three per-column norms in one sweep. The
+                    // block is column-major, so flushing a running partial only on a
+                    // column change turns one atomic per element into one per column.
                     {
                         int cur_col = -1;
                         float_type acc_r = 0, acc_x = 0, acc_ax = 0;
@@ -802,13 +669,10 @@ inline constexpr R jacobi_definiteness_floor() {
                     sycl::group_barrier(cta);
 
                     // Backward-stable convergence measure: ||r|| / (||Ax|| + |lambda|*||x||).
-                    //
-                    // The previous denominator was ||x||*|lambda| alone, which
-                    // collapses as lambda -> 0: a perfectly good eigenpair with a
-                    // near-zero eigenvalue has its residual divided by something
-                    // approaching zero and can never register as converged. Adding
-                    // ||Ax|| keeps the denominator bounded away from zero for any
-                    // nonzero A (Duersch et al.).
+                    // ||x||*|lambda| alone collapses as lambda -> 0, so a perfectly good
+                    // eigenpair with a near-zero eigenvalue could never register as
+                    // converged; ||Ax|| keeps the denominator bounded away from zero for
+                    // any nonzero A (Duersch et al.).
                     for (size_t i = tid; i < neigs; i += local_size){
                         const float_type r_norm  = sycl::sqrt(lsums[i]);
                         const float_type x_norm  = sycl::sqrt(lsums[neigs + i]);
@@ -817,9 +681,8 @@ inline constexpr R jacobi_definiteness_floor() {
                         const float_type denom = ax_norm + sycl::fabs(eigval) * x_norm;
                         const float_type rel = (denom > float_type(0)) ? (r_norm / denom) : r_norm;
                         blockresiduals[i] = rel;
-                        // Per-column locking state for this iterate. Deliberately
-                        // the *current* residual, not the running best: it labels
-                        // the residual block that was just written into R.
+                        // Deliberately the *current* residual, not the running best: it
+                        // labels the residual block just written into R.
                         col_conv[bid * neigs + i] = (rel <= lock_tol) ? 1 : 0;
                     }
 
@@ -844,11 +707,7 @@ inline constexpr R jacobi_definiteness_floor() {
                     }
 
                     sycl::group_barrier(cta);
-                    // Instrumentation history, stored device-side (§7.2). The
-                    // values are exactly what the host loop used to read back:
-                    // best_residuals / residuals as this kernel just wrote them,
-                    // and the Ritz value under the same find_largest indexing the
-                    // residual above used.
+                    // Instrumentation history, staged device-side (SYEVX_PLAN.md §7.2).
                     if (stage_best_ptr != nullptr) {
                         for (size_t i = tid; i < neigs; i += local_size) {
                             const size_t dst = static_cast<size_t>(bid) * neigs + i;
@@ -861,10 +720,9 @@ inline constexpr R jacobi_definiteness_floor() {
                     }
                     if (want_eigenvectors && update_best[0] != 0) {
                         auto* blockXbest = Xbest_data + bid * (n * neigs);
-                        // This copy is where the largest-first presentation happens: slot
-                        // i of the snapshot takes column reported_col(i) of X. Folding the
-                        // permutation into a copy that already touches every one of these
-                        // elements is what makes the two reversal kernels unnecessary.
+                        // Where the largest-first presentation happens: slot i of the
+                        // snapshot takes column reported_col(i) of X, folded into a copy
+                        // that already touches every one of these elements.
                         for (int i = int(tid); i < int(n * neigs); i += int(local_size)) {
                             const int64_t slot = i / int(n);
                             const int64_t row = i - slot * int(n);
@@ -889,13 +747,10 @@ inline constexpr R jacobi_definiteness_floor() {
                 ++staged_samples;
             }
 
-            // Only drain the pipeline when a host-side reader actually needs the
-            // results this iteration: the convergence check (every check_every
-            // iterations), or instrumentation when it could not be staged on the
-            // device (SYEVX_PLAN.md §7.2). Previously this waited unconditionally,
-            // so a 30-iteration solve paid 30 full round-trips; for small n and
-            // large batch that dominated the run. Overshooting the stopping point
-            // by a few iterations is far cheaper than the drains it replaces.
+            // Drain only when a host-side reader needs the results this iteration: the
+            // convergence check, or instrumentation that could not be staged on the
+            // device. Overshooting the stopping point by a few iterations is far cheaper
+            // than a drain per iteration (SYEVX_PLAN.md §7.1).
             const bool instrumentation_host_readback = instr_plan.active && !stage_device_side;
             const bool last_iteration = (it + 1 >= static_cast<int64_t>(params.iterations));
             const bool check_convergence =
@@ -905,9 +760,8 @@ inline constexpr R jacobi_definiteness_floor() {
             }
             trace("syevx: residual kernel done");
 
-            // Fallback path only: the device staging buffer did not fit, so the
-            // histories are filled the old way, with a host read of unified memory
-            // (and the forced drain above) every stored iteration.
+            // Fallback path only: the device staging buffer did not fit, so the histories
+            // are filled by a host read of unified memory every stored iteration.
             if (instrumentation_host_readback &&
                 (static_cast<size_t>(it) % params.instrumentation->store_every) == 0) {
                 const auto& instr = *params.instrumentation;
@@ -952,8 +806,7 @@ inline constexpr R jacobi_definiteness_floor() {
                 }
             }
 
-            // Early exit once all batches have converged for the requested eigenpairs.
-            // This is intentionally conservative: it checks the best residual so far.
+            // Intentionally conservative: this checks the best residual seen so far.
             bool all_converged = false;
             if (check_convergence) {
                 all_converged = true;
@@ -970,11 +823,9 @@ inline constexpr R jacobi_definiteness_floor() {
 
             if (use_preconditioner) {
                 trace("syevx: ILU(k) apply on residuals");
-                // R_preconditioned stays a distinct destination: the forward solve
+                // R_preconditioned must stay a distinct destination: the forward solve
                 // writes into `out` as its temporary y while still reading `rhs`, so
-                // aliasing them would corrupt the solve. The two wait_and_throw calls
-                // that used to bracket this were full pipeline drains per iteration
-                // on top of §7.1; the queue ordering already sequences these.
+                // aliasing them corrupts the solve. Queue ordering sequences the copy.
                 iluk_apply<B, T>(ctx, precond, R, R_preconditioned);
                 MatrixView<T, MatrixFormat::Dense>::copy(ctx, R, R_preconditioned);
                 trace("syevx: ILU(k) apply done");
@@ -982,44 +833,20 @@ inline constexpr R jacobi_definiteness_floor() {
 
             // ---- Soft locking, variant (a): column masking (SYEVX_PLAN.md §7.5)
             //
-            // Take the converged residual columns out of the trial subspace, so a
-            // converged eigenpair stops contributing an all-but-noise direction to
-            // [X,P,R] and to the projected problem.
+            // The masking happens in two places, and the reason is the one non-obvious
+            // thing about the feature: `ortho` MIXES COLUMNS. Householder QR and the
+            // Chol/Chol2 triangular solve both replace R by R * (upper triangular)^-1, so
+            // column j of the orthonormalised block spans r_0..r_j. Masking only *after*
+            // ortho therefore deletes span content the unconverged columns were
+            // orthogonalised against and convergence freezes; masking only *before* it
+            // leaves zero columns, which make R^T R singular and make the Cholesky-based
+            // algorithms (Chol2 is the default) silently produce NaN from potrf.
             //
-            // This has to happen in two places, and the reason is the single
-            // non-obvious thing about the whole feature: `ortho` MIXES COLUMNS.
-            // Householder QR and the Chol/Chol2 triangular solve both replace R by
-            // R * (upper triangular)^-1, so column j of the orthonormalised block
-            // spans r_0..r_j, not r_j. Consequences:
-            //
-            //  * Masking only *after* ortho is wrong. Deleting column j then
-            //    deletes span(r_0..r_j) content that the *unconverged* columns were
-            //    orthogonalised against, and they lose their correction directions.
-            //    Measured on n=128, k=8, tol=1e-4: convergence froze completely at
-            //    the first locking iteration (residuals stuck at their it-13 values
-            //    for the rest of the run) and went NaN by iteration 26, where the
-            //    unlocked run converged at iteration 14.
-            //
-            //  * Masking only *before* ortho is also wrong, and dangerous. Zero
-            //    columns make R^T R singular, and the Cholesky-based algorithms --
-            //    Chol2 is the default -- silently produce NaN from potrf rather
-            //    than raising. A batch member that has converged every column would
-            //    hand ortho an all-zero block on every remaining iteration.
-            //
-            // So: before ortho, *replace* each converged column with a fresh
-            // pseudo-random vector scaled to the largest surviving residual column.
-            // The block keeps full rank (no Cholesky breakdown, and no all-zero
-            // block even when every column has converged), and the mixing that ortho
-            // does now mixes in a generic direction instead of a dead one. After
-            // ortho, zero those same columns: the injected directions have served
-            // their purpose as rank filler and must not reach AR/StAS. What the
-            // unconverged columns lose is their component along a handful of random
-            // directions in an n-dimensional space -- O(#locked / n), negligible --
-            // instead of the span of the locked residuals.
-            //
-            // Skipped on the restart iteration: there P is a copy of R taken just
-            // below, so masking would put permanent zero columns into P as well,
-            // and nothing has converged at it == 0 in any realistic case.
+            // So: before ortho, *replace* each converged column with a pseudo-random
+            // vector scaled to the largest surviving residual column, keeping the block
+            // full rank; after ortho, zero those same columns so the injected directions
+            // never reach AR/StAS. Skipped on the restart iteration, where P is a copy of
+            // R taken just below and would keep the zero columns permanently.
             const bool mask_this_iteration = soft_locking && !restart;
             if (mask_this_iteration) {
                 trace("syevx: soft-lock fill converged residual columns");
@@ -1046,10 +873,10 @@ inline constexpr R jacobi_definiteness_floor() {
                             if (tid == 0) scale_acc[0] = float_type(0);
                             sycl::group_barrier(cta);
 
-                            // Norm of every column that is *not* being replaced, so
-                            // the filler matches the scale of the live block. A
-                            // unit-norm filler next to 1e-6 residual columns would
-                            // hand Chol2 a Gram matrix with condition ~1e12.
+                            // Norm of every column that is *not* being replaced, so the
+                            // filler matches the live block's scale: a unit-norm filler
+                            // beside 1e-6 residual columns hands Chol2 a Gram matrix
+                            // with condition ~1e12.
                             for (int64_t j = 0; j < nblk; ++j) {
                                 const bool locked = (j < int64_t(nlock)) && (col_conv[bid * nlock + size_t(j)] != 0);
                                 if (locked) continue;
@@ -1064,16 +891,15 @@ inline constexpr R jacobi_definiteness_floor() {
                             if (tid == 0) {
                                 float_type mx = 0;
                                 for (int64_t j = 0; j < nblk; ++j) mx = sycl::fmax(mx, colnorm[j]);
-                                // Every column locked (possible when the caller asks
-                                // for no guard block): fall back to a unit scale so
-                                // the filler still produces a full-rank block.
+                                // Every column locked (possible when the caller asks for
+                                // no guard block): fall back to a unit scale so the
+                                // filler still produces a full-rank block.
                                 scale_acc[0] = (mx > float_type(0)) ? mx : float_type(1);
                             }
                             sycl::group_barrier(cta);
 
                             // Deterministic per (iteration, batch, column, row) hash
-                            // rather than a stateful RNG: reproducible runs, and no
-                            // extra allocation.
+                            // rather than a stateful RNG: reproducible, no allocation.
                             const float_type amp =
                                 scale_acc[0] * sycl::sqrt(float_type(3) / float_type(n));
                             for (size_t j = 0; j < nlock; ++j) {
@@ -1098,14 +924,10 @@ inline constexpr R jacobi_definiteness_floor() {
             if (use_jacobi) {
                 trace("syevx: Jacobi apply on residuals");
                 // In-place on R: the operator is diagonal, so unlike the ILU(k) solve
-                // there is no read-after-write hazard and no staging buffer is needed.
-                //
-                // For JacobiShifted the shift is the Ritz value of the column being
-                // preconditioned, so the operator differs per column and per batch
-                // item. Column j's Ritz value sits at the same index the residual
-                // kernel uses -- mirrored here rather than shared, because the two
-                // kernels run at different points in the iteration and `lambdas`
-                // holds a different number of values early on.
+                // there is no read-after-write hazard. For JacobiShifted the shift is the
+                // Ritz value of the column being preconditioned; that index mirrors the
+                // residual kernel's rather than sharing it, because the two kernels run at
+                // different points and `lambdas` holds fewer values early on.
                 const int64_t num_eigvals = it < 2 ? int64_t(it + 1) * block_vectors : 3 * block_vectors;
                 const bool find_largest = params.find_largest;
                 const bool shifted = jacobi_shifted;
@@ -1122,11 +944,10 @@ inline constexpr R jacobi_definiteness_floor() {
                             const int64_t tid = int64_t(item.get_local_linear_id());
                             const int64_t bid = int64_t(item.get_group_linear_id());
                             const int64_t local_size = int64_t(item.get_local_range(0));
-                            // R is the third block of S; R.data_ptr() already carries
-                            // that offset, so only the batch stride is applied here.
-                            // Unshifted diag(A)^{-1} needs a positive definite
-                            // diagonal; where it is not, leave the residual alone
-                            // rather than applying an indefinite operator.
+                            // R.data_ptr() already carries R's offset within S, so only
+                            // the batch stride is applied here. Unshifted diag(A)^{-1}
+                            // needs a positive definite diagonal; where it is not, leave
+                            // the residual alone rather than apply an indefinite operator.
                             if (!shifted && usable_ptr[bid] == 0) return;
                             T* blockR = Rdata + bid * block_vectors * n * 3;
                             const T* blockD = diag_ptr + bid * n;
@@ -1161,8 +982,8 @@ inline constexpr R jacobi_definiteness_floor() {
             ortho<B>(ctx, R, restart ? X : XP, Transpose::NoTrans, Transpose::NoTrans, ortho_workspace, params.algorithm, params.ortho_iterations);
             trace_wait("syevx: ortho R done");
 
-            // Second half of the masking: drop the rank-filler directions before
-            // they can reach AR and StAS. See the comment above the fill kernel.
+            // Second half of the masking: drop the rank-filler directions before they can
+            // reach AR and StAS. See the comment above the fill kernel.
             if (mask_this_iteration) {
                 trace("syevx: soft-lock zero converged residual columns");
                 ctx->submit([&](sycl::handler& h) {
@@ -1206,7 +1027,6 @@ inline constexpr R jacobi_definiteness_floor() {
                 });
                 trace_wait("syevx: restart shift done");
             }
-            //Compute AR
             if constexpr (MFormat == MatrixFormat::Dense) {
                 trace("syevx: gemm A*(P or R)");
                 gemm<B>(ctx, A, restart ? P : R, restart ? AP : AR, GemmOptions<T>{});
@@ -1216,27 +1036,19 @@ inline constexpr R jacobi_definiteness_floor() {
             }
             trace_wait("syevx: A*(P or R) done");
 
-            // StAS is stored in a backing buffer sized for (3*block_vectors)x(3*block_vectors).
-            // When taking a logical Nvecs x Nvecs view we must preserve the backing ld/stride,
-            // otherwise batched matrices overlap and cuSolver/BLAS will read/write out of bounds.
+            // A logical Nvecs x Nvecs view of a (3*block_vectors)^2 backing buffer MUST
+            // keep the backing ld/stride, or batched matrices overlap and the BLAS reads
+            // and writes out of bounds.
             auto StAS = MatrixView(StAS_base, Nvecs, Nvecs, StAS_base.ld(), StAS_base.stride());
-            //Compute S^T A S
             trace("syevx: gemm S^T*(A*S) (StAS)");
             gemm<B>(ctx, S({0,n}, {0,Nvecs}), AS({0,n}, {0,Nvecs}), StAS, {.transA = trans});
             trace_wait("syevx: StAS gemm done");
 
-            // A masked residual column makes the corresponding row and column of
-            // StAS exactly zero, so the projected problem gains a spurious
-            // eigenvalue 0 with eigenvector e_j. For find_largest = false and a
-            // positive-definite A those zeros sort *below* the wanted spectrum and
-            // would be selected as Ritz pairs, giving zero columns in X_new -- a
-            // hard breakdown. Push each locked index to the unwanted end instead
-            // by planting a sentinel on its diagonal.
-            //
-            // ||StAS||_F bounds |lambda| for every eigenvalue of StAS and of any
-            // principal submatrix of it, so normF + 1 is strictly outside the real
-            // spectrum. The masked rows/cols are zero and contribute nothing to
-            // the norm, so the sentinel is scale-aware and cannot be swamped.
+            // A masked residual column zeroes the corresponding row and column of StAS,
+            // so the projected problem gains a spurious eigenvalue 0 that can be selected
+            // as a Ritz pair -- zero columns in X_new, a hard breakdown. Plant a sentinel
+            // on its diagonal instead: ||StAS||_F + 1 is strictly outside the real
+            // spectrum, and the masked rows contribute nothing to that norm.
             if (mask_this_iteration) {
                 trace("syevx: soft-lock StAS deflation submit");
                 ctx->submit([&](sycl::handler& h) {
@@ -1276,10 +1088,9 @@ inline constexpr R jacobi_definiteness_floor() {
                 });
                 trace_wait("syevx: soft-lock StAS deflation done");
             }
-            //Solve the eigenvalue problem
             trace("syevx: syev StAS");
             if (prefer_vendor_projected_syev) {
-                backend::syev_vendor<B>(ctx, StAS, lambdas, JobType::EigenVectors, Uplo::Lower, syev_workspace);
+                blas::dispatch::detail::syev_vendor_or_throw<B, T>(ctx, StAS, lambdas, JobType::EigenVectors, Uplo::Lower, syev_workspace);
             } else {
                 syev<B>(ctx, StAS, lambdas, SyevOptions{}, syev_workspace);
             }
@@ -1288,18 +1099,16 @@ inline constexpr R jacobi_definiteness_floor() {
 
             trace("syevx: post syev StAS (host)");
 
-            // syev returns eigenvalues in ascending order. For find_largest=true we take
-            // the last `block_vectors` Ritz vectors; they stay in ascending order (see the
-            // note after the initial XtAX solve). The residual kernel knows that column j
-            // of the resulting X pairs with lambda[Nvecs - block_vectors + j], and it is
-            // the X_best snapshot -- not a separate kernel -- that flips the wanted block
-            // to largest-first on the way out.
+            // syev returns eigenvalues ascending. For find_largest we take the last
+            // `block_vectors` Ritz vectors and leave them ascending; the residual kernel
+            // pairs column j with lambda[Nvecs - block_vectors + j], and the X_best
+            // snapshot is what flips the wanted block to largest-first on the way out.
             const int64_t eig_col_start = params.find_largest ? (Nvecs - block_vectors) : 0;
             auto Z = StAS({0, Nvecs}, {eig_col_start, eig_col_start + block_vectors});
-            // X(i+1) = S * C_x. For the next search block, keep only the non-X
-            // coefficient rows of the selected Ritz vectors, which avoids the
-            // fragile difference direction X(i+1)-X(i) while preserving the
-            // locally-optimal combination of the P/R parts of the trial basis.
+            // X(i+1) = S * C_x. For the next search block keep only the non-X coefficient
+            // rows of the selected Ritz vectors: that avoids the fragile difference
+            // direction X(i+1)-X(i) while preserving the locally-optimal combination of
+            // the P/R parts of the trial basis.
             auto C_p_active = MatrixView(C_p, Nvecs, block_vectors, C_p.ld(), C_p.stride());
             auto Z_search = Z({block_vectors, Nvecs}, {0, block_vectors});
 
@@ -1312,19 +1121,15 @@ inline constexpr R jacobi_definiteness_floor() {
             trace_wait("syevx: build search-direction coefficients done");
 
 
-            //Compute new search directions
-            //X = [X, P, R] * C_x
+            // X = [X, P, R] * C_x, and AX = [AX, AP, AR] * C_x implicitly.
             trace("syevx: update X/AX submit");
             gemm<B>(ctx, S({0,n}, {0,Nvecs}), Z, X_new, GemmOptions<T>{});
-            //Make an implicit update of AX: AX = [AX, AP, AR] * C_x
             gemm<B>(ctx, AS({0,n}, {0,Nvecs}), Z, AX_new, GemmOptions<T>{});
-            //Orthonormalize C_p against the best eigenvectors
             trace("syevx: ortho C_p vs Z submit");
             ortho<B>(ctx, C_p_active, Z, Transpose::NoTrans, Transpose::NoTrans, ortho_workspace, params.algorithm, params.ortho_iterations);
-            //Compute P = [X, P, R] * C_p
+            // P = [X, P, R] * C_p, and AP likewise.
             trace("syevx: update P/AP submit");
             gemm<B>(ctx, S({0,n}, {0,Nvecs}), C_p_active, P_new, GemmOptions<T>{});
-            //Make an implicit update of AP
             gemm<B>(ctx, AS({0,n}, {0,Nvecs}), C_p_active, AP_new, GemmOptions<T>{});
 
             swap_subspace(); //AX <=> AX_new, AP <=> AP_new, X <=> X_new, P <=> P_new ...
@@ -1340,16 +1145,15 @@ inline constexpr R jacobi_definiteness_floor() {
         // The residual kernel snapshots the best Ritz block seen during the iteration.
         if (want_eigenvectors){
             if (completed_iterations > 0) {
-                // X_best is already largest-first (the residual kernel's snapshot applies
-                // the permutation).
+                // X_best is already largest-first; the snapshot applied the permutation.
                 MatrixView<T, MatrixFormat::Dense>::copy(ctx, V({0,n}, {0,int64_t(neigs)}), X_best);
             } else if (!params.find_largest) {
                 MatrixView<T, MatrixFormat::Dense>::copy(
                     ctx, V({0,n}, {0,int64_t(neigs)}), X({0, n}, {0, static_cast<int64_t>(neigs)}));
             } else {
                 // params.iterations == 0: the loop never ran, so no snapshot exists and X
-                // is still in ascending order. The wanted block is its *last* neigs
-                // columns, reversed. One cold-path launch, outside any loop.
+                // is still ascending. The wanted block is its *last* neigs columns,
+                // reversed.
                 auto Vslice = V({0,n}, {0,int64_t(neigs)});
                 auto* Vptr = Vslice.data_ptr();
                 const int64_t V_ld = Vslice.ld();
@@ -1379,9 +1183,9 @@ inline constexpr R jacobi_definiteness_floor() {
             }
         }
 
-        // One host round-trip for the whole run: drain once, then scatter the
-        // staged history into the caller's spans. The caller's memory is only
-        // ever written from the host, so it may be a plain std::vector.
+        // One host round-trip for the whole run: drain once, then scatter the staged
+        // history into the caller's spans. The caller's memory is only ever written from
+        // the host, so it may be a plain std::vector.
         if (stage_device_side && staged_samples > 0) {
             ctx.wait_and_throw();
             const auto& instr = *params.instrumentation;
@@ -1404,13 +1208,9 @@ inline constexpr R jacobi_definiteness_floor() {
                         if (!stage_ritz.empty() && instr.ritz_value_history.size() > dst) {
                             instr.ritz_value_history[dst] = stage_ritz[src];
                         }
-                        // Cross-iteration term: the rate is this sample's best over
-                        // the previous sample's best. It reads the staged series
-                        // rather than the caller's span, which is the same series
-                        // the old code read back -- unless the caller sized
-                        // best_residual_history smaller than convergence_rate_history,
-                        // in which case the old code was reading whatever the caller
-                        // had left in an unwritten slot.
+                        // Cross-iteration term: this sample's best over the previous
+                        // sample's best, read from the staged series rather than from
+                        // the caller's span.
                         if (instr.store_convergence_rate && instr.convergence_rate_history.size() > dst) {
                             float_type rate = float_type(1);
                             if (sample_id > 0 && instr.best_residual_history.size() > (dst - iter_stride)) {
@@ -1437,9 +1237,8 @@ inline constexpr R jacobi_definiteness_floor() {
                 JobType jobz,
                 const MatrixView<T, MatrixFormat::Dense>& V,
                 const SyevxParams<T>& params){
-        // Must reject exactly what the solver rejects: a sizing call that returns a
-        // number for a request the solve will refuse is a caller-visible
-        // inconsistency.
+        // Must reject exactly what the solver rejects: a sizing call that returns a number
+        // for a request the solve will refuse is a caller-visible inconsistency.
         if (params.select != SyevxSelect::Extremal) {
             throw std::invalid_argument(
                 "syevx_lobpcg_buffer_size: only SyevxSelect::Extremal is supported; see "
@@ -1460,13 +1259,11 @@ inline constexpr R jacobi_definiteness_floor() {
                     static_cast<int>(block_vectors * 3),
                     static_cast<int>(3 * 3 * block_vectors * block_vectors),
                     static_cast<int>(batch_size), nullptr);
-                // The projected problem is Nvecs x Nvecs with Nvecs = 2*block_vectors on
-                // restart iterations and 3*block_vectors otherwise, always viewed with the
-                // backing buffer's ld. Both must be sized: syev picks its provider from the
-                // matrix shape, so workspace demand is not monotone in Nvecs and the
-                // 3*block_vectors figure does not bound the 2*block_vectors one. Omitting
-                // the restart shape made syevx throw "insufficient workspace for chosen
-                // provider" at, for instance, block_vectors = 12 and 16.
+                // Nvecs = 2*block_vectors on restart iterations and 3*block_vectors
+                // otherwise, always viewed with the backing buffer's ld. Both must be
+                // sized: syev picks its provider from the shape, so workspace demand is
+                // not monotone in Nvecs and 3*block_vectors does not bound the
+                // 2*block_vectors case.
                 auto projected_dummy = [&](int64_t nvecs) {
                     return MatrixView<T, MatrixFormat::Dense>(nullptr,
                         static_cast<int>(nvecs), static_cast<int>(nvecs),
@@ -1484,9 +1281,9 @@ inline constexpr R jacobi_definiteness_floor() {
 
                 // Match the runtime behavior: projected problems prefer the vendor SYEV path on GPUs.
                 if constexpr (B != Backend::NETLIB) {
-                    const size_t ws_xtax_vendor = backend::syev_vendor_buffer_size<B, T>(ctx, XtAX_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
-                    const size_t ws_stas_restart_vendor = backend::syev_vendor_buffer_size<B, T>(ctx, StAS_restart_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
-                    const size_t ws_stas_vendor = backend::syev_vendor_buffer_size<B, T>(ctx, StAS_base_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
+                    const size_t ws_xtax_vendor = blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, XtAX_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
+                    const size_t ws_stas_restart_vendor = blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, StAS_restart_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
+                    const size_t ws_stas_vendor = blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx, StAS_base_dummy, Span<typename base_type<T>::type>(), JobType::EigenVectors, Uplo::Lower);
                     ws_projected = std::max(ws_projected,
                                             std::max(ws_xtax_vendor, std::max(ws_stas_restart_vendor, ws_stas_vendor)));
                 }
@@ -1494,13 +1291,10 @@ inline constexpr R jacobi_definiteness_floor() {
                 work_size += BumpAllocator::allocation_size<std::byte>(ctx, ws_projected);
             }
 
-            // Must mirror the runtime max exactly, including the single-matrix
-            // ortho(X) term -- see the comment at the runtime allocation.
-            //
-            // The C_p stand-in also has to carry the real batch size and stride.
-            // Built with only (data, rows, cols, ld) it defaulted to batch_size = 1,
-            // so this term came back sized for one item while the runtime call is
-            // batched -- an under-allocation that grew with the batch.
+            // Must mirror the runtime max exactly, including the single-matrix ortho(X)
+            // term. Every stand-in must carry the real batch size and stride: built with
+            // only (data, rows, cols, ld) a MatrixView defaults to batch_size = 1, which
+            // under-allocates by a factor that grows with the batch.
             work_size += BumpAllocator::allocation_size<std::byte>(ctx,std::max(
                                                                                     ortho_buffer_size<B>(ctx, Xview, Transpose::NoTrans, params.algorithm),
                                                                                     std::max(ortho_buffer_size<B>(ctx, Xview, MatrixView<T,MatrixFormat::Dense>(A.data_ptr(),n, block_vectors*2, n, n * block_vectors * 3, batch_size, nullptr), Transpose::NoTrans, Transpose::NoTrans, params.algorithm),
@@ -1509,12 +1303,9 @@ inline constexpr R jacobi_definiteness_floor() {
                 work_size += BumpAllocator::allocation_size<std::byte>(ctx,spmm_buffer_size<B>(ctx, A, Xview, AXview, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans));
             }
                         
-            // R_contiguous is gone: iluk_apply reads R's strided slice directly.
             if constexpr (MFormat == MatrixFormat::CSR) {
-                // This runs ILU(k)'s symbolic phase to get an upper bound on the fill.
-                // syevx itself does not repeat it -- it sub-allocates from the pool tail
-                // and reports back what it took -- so the cost lands here, on the sizing
-                // call a caller makes once and amortizes over every solve.
+                // Runs ILU(k)'s symbolic phase for an upper bound on the fill; the solve
+                // does not repeat it, it sub-allocates from the pool tail.
                 if (params.build_preconditioner) {
                     work_size += BumpAllocator::allocation_size<std::byte>(ctx, iluk_buffer_size<B, T>(ctx, A, params.iluk_params));
                 }
@@ -1530,8 +1321,8 @@ inline constexpr R jacobi_definiteness_floor() {
             work_size += BumpAllocator::allocation_size<T>(ctx, block_vectors * block_vectors * 3 * 3 * batch_size);        //StASdata
             work_size += BumpAllocator::allocation_size<T>(ctx, block_vectors * block_vectors * 3 * batch_size);            //C_pdata
             work_size += BumpAllocator::allocation_size<T>(ctx, n * block_vectors * batch_size);                            //R_preconditioned_data
-            // Mirrors the runtime `if (use_jacobi)` allocations. Resolved through the
-            // same function, on the same inputs, so the two cannot drift apart.
+            // Mirrors the runtime `if (use_jacobi)` allocations, resolved through the same
+            // function on the same inputs so the two cannot drift apart.
             {
                 const auto precond_kind = syevx_select_preconditioner(
                     params.preconditioner_type,
@@ -1547,9 +1338,8 @@ inline constexpr R jacobi_definiteness_floor() {
             work_size += BumpAllocator::allocation_size<typename base_type<T>::type>(ctx, neigs * batch_size);              //residuals
             work_size += BumpAllocator::allocation_size<typename base_type<T>::type>(ctx, neigs * batch_size);              //best residuals
             work_size += BumpAllocator::allocation_size<typename base_type<T>::type>(ctx, batch_size);                      //best block quality
-            // Instrumentation staging (§7.2). Mirrors the conditional allocation in
-            // syevx_lobpcg exactly -- same plan, same per-channel predicates. Zero
-            // when no instrumentation is attached to params.
+            // Mirrors the conditional staging allocation in syevx_lobpcg exactly -- same
+            // plan, same per-channel predicates. Zero when no instrumentation is attached.
             work_size += lobpcg_instrumentation_plan(params, neigs, batch_size)
                              .template staging_bytes<typename base_type<T>::type>(ctx);
 

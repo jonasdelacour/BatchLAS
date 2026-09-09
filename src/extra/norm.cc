@@ -36,13 +36,13 @@ namespace batchlas
         UnifiedVector<Real> eigenvalues(static_cast<size_t>(batch_size) * n);
         auto eigen_span = eigenvalues.to_span();
 
-        const size_t ws_bytes = backend::syev_vendor_buffer_size<B, T>(ctx,
+        const size_t ws_bytes = blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, T>(ctx,
                                                                         A_copy.view(),
                                                                         eigen_span,
                                                                         JobType::NoEigenVectors,
                                                                         Uplo::Lower);
         auto workspace = ctx.workspace(ws_bytes);
-        Event e = backend::syev_vendor<B, T>(ctx,
+        Event e = blas::dispatch::detail::syev_vendor_or_throw<B, T>(ctx,
                                              A_copy.view(),
                                              eigen_span,
                                              JobType::NoEigenVectors,

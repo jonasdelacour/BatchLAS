@@ -1,10 +1,13 @@
 #include "trmm_custom_dispatch.hh"
 
-#include "gemm_cublasdx_dispatch.hh"
-#include "gemm_variant.hh"
-#include "trmm_cublasdx_fused.hh"
 #include "trmm_triangular_tiles.hh"
-#include "cublasdx_dispatch_common.hh"
+#include "route_common.hh"
+#include "level3_coverage.hh"
+#include "level3_fused.hh"
+#include "level3_vendor_fallback.hh"
+
+#include <batchlas/blas/dispatch/route.hh>
+#include <batchlas/blas/dispatch/route_env.hh>
 
 #include "../util/kernel-trace.hh"
 
@@ -20,31 +23,27 @@ namespace {
 
 constexpr int kTrmmCublasDxTile = 32;
 
-enum class TrmmVariantRequest {
-    Vendor,
-    CuBLASDx,
-    Auto,
-};
-
-TrmmVariantRequest trmm_variant_request() {
-    return detail::parse_cublasdx_variant_request("BATCHLAS_TRMM_VARIANT",
-                                                  TrmmVariantRequest::Vendor,
-                                                  TrmmVariantRequest::CuBLASDx,
-                                                  TrmmVariantRequest::Auto);
+// ONE VARIABLE, TWO PARSERS. BATCHLAS_TRMM_VARIANT used to be read twice, by
+// parsers that did not agree on its vocabulary: parse_cublasdx_variant_request
+// understood vendor / cublasdx|dx|custom / auto and returned Auto for anything
+// else, while trmm_triangular_requested separately looked for triangular|tiles.
+// So `=triangular` was simultaneously "no opinion" to one reader and "pin the
+// tile kernel" to the other, and the two had to be consulted together at four
+// call sites for the pair to mean anything. That is the mangling this work
+// package is named after, in its smallest form.
+//
+// Now there is one parse and one value. Legacy spellings are unchanged and
+// pinned by tests/route_vocabulary_tests.cc.
+dispatch::Route trmm_route_request() {
+    const auto parsed = dispatch::parse_route_env(dispatch::Op::trmm);
+    return parsed.found ? parsed.route
+                        : dispatch::legacy_unset_default(dispatch::Op::trmm);
 }
 
 // BATCHLAS_TRMM_VARIANT=triangular pins the tile kernel, =vendor the expansion
 // plus GEMM it replaces, so the two stay independently measurable.
 bool trmm_triangular_requested() {
-    const char* raw = std::getenv("BATCHLAS_TRMM_VARIANT");
-    if (raw == nullptr) {
-        return false;
-    }
-    std::string value(raw);
-    for (char& ch : value) {
-        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-    }
-    return value == "triangular" || value == "tiles";
+    return trmm_route_request().algo == dispatch::Algorithm::TriangularTiles;
 }
 
 // Every left-side float problem with a homogeneous batch. The kernel indexes
@@ -131,11 +130,12 @@ bool trmm_prefer_cuda_custom_heuristic(const MatrixView<float, MatrixFormat::Den
 } // namespace
 
 bool trmm_route_prefers_vendor() {
-    return trmm_variant_request() == TrmmVariantRequest::Vendor && !trmm_triangular_requested();
+    const auto r = trmm_route_request();
+    return dispatch::is_plain_vendor(r);
 }
 
 bool trmm_cuda_custom_forced() {
-    return trmm_variant_request() == TrmmVariantRequest::CuBLASDx;
+    return trmm_route_request().algo == dispatch::Algorithm::FusedDevice;
 }
 
 bool trmm_use_cuda_custom(const Queue& ctx,
@@ -152,15 +152,15 @@ bool trmm_use_cuda_custom(const Queue& ctx,
     // new route as the old one.
     if (detail::is_gpu_queue(ctx) && trmm_triangular_supported(A, B, C, side) &&
         (trmm_triangular_requested() ||
-         trmm_variant_request() != TrmmVariantRequest::Vendor)) {
+         !dispatch::is_plain_vendor(trmm_route_request()))) {
         return true;
     }
-    const auto request = trmm_variant_request();
+    const auto request = trmm_route_request();
     const bool problem_supported = trmm_problem_supported(A, B, C, side, uplo, transA);
     return detail::should_use_cublasdx(ctx,
                                        request,
-                                       TrmmVariantRequest::Vendor,
-                                       TrmmVariantRequest::CuBLASDx,
+                                       dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto},
+                                       dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::FusedDevice},
                                        problem_supported,
                                        problem_supported && trmm_prefer_cuda_custom_heuristic(A, B));
 }
@@ -174,70 +174,62 @@ Event trmm_cuda_custom(Queue& ctx,
                        Uplo uplo,
                        Transpose transA,
                        Diag diag) {
+    // WP1 S0 instrumentation -- beside every return, never in place of one, and
+    // inert unless BATCHLAS_COVERAGE_OUT is set. See level3_coverage.hh.
+    //
+    // trmm is the op with the documented prior incident where the tempting 8x
+    // "fix" was the wrong-answer one and the guarding test could not fail by
+    // construction, so uplo/diag are deliberately carried into the shape here:
+    // a route row that cannot distinguish uplo is a row that cannot catch that
+    // class of defect coming back.
+    const auto rec = [&](dispatch::Route taken, bool native_supported) {
+        detail::record_level3_route(dispatch::Op::trmm, taken,
+                                    C.rows(), C.cols(), A.rows(),
+                                    A.batch_size(), native_supported,
+                                    {uplo, side, diag, transA});
+    };
+
     const bool forced = trmm_cuda_custom_forced();
     if (!detail::is_gpu_queue(ctx)) {
         if (forced) {
             throw_forced_trmm_unavailable("the active queue is not a GPU queue");
         }
-        return trmm_vendor_cuda_raw(ctx, A, B, C, alpha, side, uplo, transA, diag);
+        rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto}, false);
+        return detail::trmm_vendor_fallback(ctx, A, B, C, alpha, side, uplo, transA, diag);
     }
     // The tile kernel is the only route that respects the triangle rather than
     // expanding it, so it is what the automatic choice takes wherever it fits.
     if (trmm_triangular_supported(A, B, C, side) &&
         (trmm_triangular_requested() ||
-         (!forced && trmm_variant_request() != TrmmVariantRequest::Vendor))) {
+         (!forced && !dispatch::is_plain_vendor(trmm_route_request())))) {
+        rec(dispatch::Route{dispatch::Origin::Native, dispatch::Algorithm::TriangularTiles}, true);
         return detail::trmm_triangular_tiles(ctx, A, B, C, alpha, uplo, transA, diag);
     }
     if (!trmm_problem_supported(A, B, C, side, uplo, transA)) {
         if (forced) {
             throw_forced_trmm_unavailable("only left/lower/notrans float problems with matching dense batches are currently supported");
         }
-        return trmm_vendor_cuda_raw(ctx, A, B, C, alpha, side, uplo, transA, diag);
+        rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto}, false);
+        return detail::trmm_vendor_fallback(ctx, A, B, C, alpha, side, uplo, transA, diag);
     }
 
-    const auto variant = cublasdx_gemm_select_variant(A,
-                                                      B,
-                                                      C,
-                                                      Transpose::NoTrans,
-                                                      Transpose::NoTrans);
-    if (detail::cublasdx_variant_needs_fallback(variant, trmm_cublasdx::available())) {
-        if (forced) {
+    // The fused tail lives in level3_fused_cuda.cc now (WP1 S3). trmm is the op
+    // whose two non-Ran outcomes differ from each other: both fall back to the
+    // vendor, but each throws a DIFFERENT message when the route was forced.
+    auto fused = detail::trmm_fused_try(ctx, A, B, C, alpha, side, uplo, transA, diag);
+    if (fused.outcome == detail::FusedResult::Outcome::Ran) {
+        rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::FusedDevice}, true);
+        return std::move(fused.event);
+    }
+    if (forced) {
+        if (fused.outcome == detail::FusedResult::Outcome::NoKernel) {
             throw_forced_trmm_unavailable("no compatible fused kernel is available in this build for the requested problem");
         }
-        return trmm_vendor_cuda_raw(ctx, A, B, C, alpha, side, uplo, transA, diag);
+        throw_forced_trmm_unavailable("the current device or matrix layout does not satisfy the fused kernel requirements");
     }
 
-    trmm_cublasdx::TrmmLaunchDescriptor desc{};
-    desc.a_ptr = A.data_ptr();
-    desc.b_ptr = B.data_ptr();
-    desc.c_ptr = C.data_ptr();
-    desc.lda = A.ld();
-    desc.ldb = B.ld();
-    desc.ldc = C.ld();
-    desc.stride_a = A.stride();
-    desc.stride_b = B.stride();
-    desc.stride_c = C.stride();
-    desc.m = C.rows();
-    desc.n = C.cols();
-    desc.batch = A.batch_size();
-    desc.alpha = alpha;
-
-    BATCHLAS_KERNEL_TRACE_SCOPE("trmm_cuda_custom.fused");
-    const cudaError_t status = trmm_cublasdx::launch_float(variant,
-                                                           desc,
-                                                           diag,
-                                                           detail::cuda_stream_from_queue(ctx));
-    if (status == cudaErrorNotSupported) {
-        if (forced) {
-            throw_forced_trmm_unavailable("the current device or matrix layout does not satisfy the fused kernel requirements");
-        }
-        return trmm_vendor_cuda_raw(ctx, A, B, C, alpha, side, uplo, transA, diag);
-    }
-    if (status != cudaSuccess) {
-        throw std::runtime_error(std::string("cuBLASDx fused TRMM launch failed: ") + cudaGetErrorString(status));
-    }
-
-    return ctx.create_event_after_external_work();
+    rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto}, true);
+    return detail::trmm_vendor_fallback(ctx, A, B, C, alpha, side, uplo, transA, diag);
 }
 
 } // namespace batchlas::backend

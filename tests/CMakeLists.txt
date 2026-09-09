@@ -24,6 +24,8 @@ set(TEST_TARGETS
     mempool_tests
     backend_dispatch_tests
     options_api_tests
+    route_vocabulary_tests
+    route_gemm_equivalence_tests
     linalg_layer_tests
     gemm_tests
     syevx_tests
@@ -33,6 +35,9 @@ set(TEST_TARGETS
     matrix_tests
     matrix_view_tests
     trsm_tests
+    potrf_tests
+    geqrf_tests
+    getrf_tests
     ortho_tests
     inverse_tests
     norm_tests
@@ -43,6 +48,7 @@ set(TEST_TARGETS
     orgqr_tests
     transpose_tests
     iluk_tests
+    spmm_tests
     symm_tests
     hemm_tests
     herk_tests
@@ -85,6 +91,12 @@ set(BATCHLAS_SMOKE_TEST_TARGETS
     # is wrong in a way that is hard to trace back here.
     backend_dispatch_tests
     options_api_tests
+    # The route vocabulary pins the legacy BATCHLAS_*_VARIANT / _PROVIDER
+    # spellings onto the new Route type. Those spellings appear in committed
+    # benchmark scripts and in the provenance of recorded results, so a silent
+    # change of meaning would invalidate measurements rather than fail loudly.
+    route_vocabulary_tests
+    route_gemm_equivalence_tests
     linalg_layer_tests
 )
 
@@ -125,11 +137,12 @@ endif()
 set(BATCHLAS_TEST_LABELS_util
     sg_compat_tests util_span_tests util_vector_tests util_device_queue_tests
     mempool_tests matrix_tests matrix_view_tests minibench_cli_tests
-    backend_dispatch_tests options_api_tests linalg_layer_tests)
+    backend_dispatch_tests options_api_tests route_vocabulary_tests
+    route_gemm_equivalence_tests linalg_layer_tests)
 set(BATCHLAS_TEST_LABELS_blas
     device_blas_tests gemm_tests gemv_tests symm_tests hemm_tests herk_tests her2k_tests
     syrk_tests syr2k_tests
-    trmm_tests trsm_tests transpose_tests norm_tests cond_tests inverse_tests)
+    trmm_tests trsm_tests potrf_tests geqrf_tests getrf_tests transpose_tests norm_tests cond_tests inverse_tests)
 set(BATCHLAS_TEST_LABELS_ortho
     ortho_tests ormqr_tests ormqr_cta_tests ormqr_blocked_tests orgqr_tests)
 set(BATCHLAS_TEST_LABELS_tridiag
@@ -141,7 +154,7 @@ set(BATCHLAS_TEST_LABELS_eig
     syev_cta_fused_tests syev_blocked_tests syev_two_stage_tests
     lanczos_tests ritz_values_tests gesvd_tests gesvdj_cta_tests bdsqr_tests bdsdc_tests)
 set(BATCHLAS_TEST_LABELS_sparse
-    iluk_tests)
+    iluk_tests spmm_tests)
 
 # Binaries that dominate the suite. Measured serially on this machine.
 #
@@ -256,13 +269,107 @@ function(batchlas_add_test_target test_name)
     endif()
 endfunction()
 
+# ---------------------------------------------------------------------------
+# Route-pinned reruns.
+#
+# preferred() decides the DEFAULT route, so on a vendor-present box a suite for an
+# op whose window is narrow -- or, like potrf and geqrf/orgqr, deliberately empty
+# -- measures the vendor and validates none of the native kernel it was written
+# for. That is how spmm's whole transposed arm (two of its three kernel bodies)
+# and every one of gemv's 264 cases came to run cuSPARSE/cuBLAS under ctest while
+# the coverage table reported a native route available: LINKED IS NOT REACHABLE.
+#
+# Each entry below reruns one suite with its op pinned native. The pins are a
+# bare origin, so an op with two native arms resolves through its own order walk
+# rather than naming an arm that may not serve the shape. Labelled route-native
+# so `ctest -LE route-native` gets the old, shorter run.
+set(BATCHLAS_ROUTE_PINNED_TESTS
+    gemm_tests   "BATCHLAS_GEMM_ROUTE=native"
+    gemv_tests   "BATCHLAS_GEMV_ROUTE=native"
+    trsm_tests   "BATCHLAS_TRSM_ROUTE=native"
+    potrf_tests  "BATCHLAS_POTRF_ROUTE=native"
+    # '|' separates several pins for one suite, NOT ';': a semicolon inside a
+    # quoted entry is a list separator, so it flattens into this list and breaks
+    # the name/value pairing below.
+    geqrf_tests  "BATCHLAS_GEQRF_ROUTE=native|BATCHLAS_ORMQR_ROUTE=native"
+    orgqr_tests  "BATCHLAS_ORGQR_ROUTE=native|BATCHLAS_ORMQR_ROUTE=native"
+    getrf_tests  "BATCHLAS_GETRF_ROUTE=native|BATCHLAS_GETRS_ROUTE=native|BATCHLAS_GETRI_ROUTE=native"
+    spmm_tests   "BATCHLAS_SPMM_ROUTE=native"
+)
+
+function(batchlas_add_route_pinned_test test_name env)
+    if(NOT TARGET ${test_name})
+        return()
+    endif()
+    set(_pinned "${test_name}_native")
+    add_test(NAME ${_pinned} COMMAND ${test_name})
+    batchlas_test_component(_component ${test_name})
+    string(REPLACE "|" ";" _env "${env}")
+    if(BATCHLAS_OPENBLAS_CORETYPE)
+        list(APPEND _env "OPENBLAS_CORETYPE=${BATCHLAS_OPENBLAS_CORETYPE}")
+    endif()
+    set_tests_properties(${_pinned} PROPERTIES
+        LABELS "${_component};route-native"
+        ENVIRONMENT "${_env}")
+endfunction()
+
 foreach(test ${TEST_TARGETS})
     batchlas_add_test_target(${test})
+endforeach()
+
+list(LENGTH BATCHLAS_ROUTE_PINNED_TESTS _rp_len)
+math(EXPR _rp_last "${_rp_len} / 2 - 1")
+foreach(_i RANGE ${_rp_last})
+    math(EXPR _name_i "${_i} * 2")
+    math(EXPR _env_i "${_i} * 2 + 1")
+    list(GET BATCHLAS_ROUTE_PINNED_TESTS ${_name_i} _rp_name)
+    list(GET BATCHLAS_ROUTE_PINNED_TESTS ${_env_i} _rp_env)
+    batchlas_add_route_pinned_test(${_rp_name} "${_rp_env}")
 endforeach()
 
 if(BATCHLAS_SMOKE_TEST_TARGETS)
     add_custom_target(batchlas_smoke_tests DEPENDS ${BATCHLAS_SMOKE_TEST_TARGETS})
 endif()
+
+# ---------------------------------------------------------------------------
+# batchlas_coverage: what this build can do, and what a run reached.
+#
+#   cmake --build build --target batchlas_coverage
+#
+# Writes build/coverage.csv. Two kinds of row:
+#
+#   linked,<op>,,<backend>,...   -- STATIC. What is compiled in. Exact, needs no
+#                                   GPU and no test run, and is the planning
+#                                   input: it names the ops with no native
+#                                   kernel at all.
+#   miss,<op>,<scalar>,...       -- a call that found no route, with the library
+#                                   that would have served it.
+#   reached,<op>,...             -- DYNAMIC, per shape_class: the route the
+#                                   resolver actually returned. Recorded by any
+#                                   build whenever BATCHLAS_COVERAGE_OUT is set,
+#                                   which this target sets. No special configure
+#                                   step -- see dispatch/coverage.hh for why the
+#                                   compile-time option was removed.
+#
+# scripts/route_diff.sh captures and diffs the `reached` rows, which is how a
+# change is held to "no dispatch decision moved".
+#
+# Run it against a vendor-free build to turn docs/design/vendor-free-status.md's list of
+# failing SUITES into a list of missing OPS -- one missing trsm fails a dozen
+# suites, and the suite list cannot tell you that.
+add_custom_target(batchlas_coverage
+    COMMAND ${CMAKE_COMMAND} -E env
+            BATCHLAS_COVERAGE_OUT=${CMAKE_BINARY_DIR}/coverage.csv
+            ${CMAKE_CTEST_COMMAND} --test-dir ${CMAKE_BINARY_DIR} -LE slow || ${CMAKE_COMMAND} -E true
+    # Each test BINARY writes its own shard. Merging is not optional: a single
+    # shared file meant every process truncated the last, so this target used to
+    # report the rows of whichever binary finished last.
+    COMMAND ${PROJECT_SOURCE_DIR}/scripts/coverage_merge.sh ${CMAKE_BINARY_DIR}/coverage.csv
+    COMMAND ${CMAKE_COMMAND} -E echo "coverage table: ${CMAKE_BINARY_DIR}/coverage.csv"
+    DEPENDS ${TEST_TARGETS}
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    VERBATIM
+)
 
 # ---------------------------------------------------------------------------
 # consumer_package_tests: the outside-in guard.

@@ -1,69 +1,14 @@
-// Bidiagonal divide-and-conquer SVD.
-//
-// This does NOT port LAPACK's dlasd0/2/3/4/8. It reduces the bidiagonal SVD to a
-// symmetric tridiagonal eigenproblem that `stedc` already solves, via the
-// Golub-Kahan-Jordan-Wielandt form. For B upper bidiagonal with diagonal d and
-// superdiagonal e,
-//
-//     T = [ 0    B^T ]      is symmetric with eigenvalues +/- sigma_i,
-//         [ B    0   ]
-//
-// and under the perfect-shuffle permutation y = (v_0, u_0, v_1, u_1, ...) it is
+// Bidiagonal divide-and-conquer SVD. This does NOT port LAPACK's dlasd0/2/3/4/8:
+// it reduces the bidiagonal SVD to a symmetric tridiagonal eigenproblem that
+// `stedc` already solves. For B upper bidiagonal with diagonal d and
+// superdiagonal e, the Golub-Kahan matrix [0 B^T; B 0] has eigenvalues
+// +/- sigma_i, and under the perfect shuffle y = (v_0, u_0, v_1, u_1, ...) it is
 // TRIDIAGONAL with a zero diagonal and off-diagonal
-//
-//     (d_0, e_0, d_1, e_1, ..., e_{n-2}, d_{n-1})        (2n-1 entries).
-//
-// Why this and not a real dlasd4:
-//
-//   * It never squares anything. The n > 32 accuracy defect this replaces came
-//     from forming the tridiagonal of B^T B, which squares the condition number;
-//     T's eigenvalues are +/- sigma, not sigma^2.
-//   * `stedc` here is the tuned, tested, batched D&C the library already ships.
-//     A native dlasd4 would need its own secular equation (the factored
-//     (d_j - sigma)(d_j + sigma) form), its own two-kind deflation, its own
-//     Loewner vector recomputation -- ~2000 lines of new device code with no
-//     reuse, to solve a problem of half the size.
-//   * The cost of the 2n problem is the point. Measured, batch=512, float,
-//     eigenvectors, RTX 4090: stedc at 2n costs 0.85 ms (n=64), 3.19 ms
-//     (n=128), 11.1 ms (n=256) -- against bdsqr's 643 / 3255 / 24388 ms for the
-//     same bidiagonal problems. Solving twice the size with the right algorithm
-//     beats solving the right size with a sequential one by ~1000x.
-//
-// The price is memory: the eigenvector matrix is 2n x 2n, so 4x what a native
-// bdsdc would allocate.
-//
-// EXACTNESS OF THE EXTRACTION. For sigma != 0 the eigenvector of T for +sigma is
-// exactly (v; u)/sqrt(2) interleaved -- there is no freedom, because
-// T(av; bu) = (b sigma v; a sigma u) forces a = b. So splitting the computed
-// eigenvector into its even and odd rows and normalising each half is exact, not
-// a heuristic. It stays exact even when +sigma and -sigma are numerically mixed:
-// a mixed vector is cos(t)(v;u)/sqrt2 + sin(t)(v;-u)/sqrt2 = ((c+s)v; (c-s)u)/sqrt2,
-// still of the form (alpha v; beta u), so half-normalisation recovers v and u
-// exactly. The only residue is a possible sign flip on u when |t| > 45 deg, which
-// costs at most 2*sigma in the residual -- and |t| only approaches 45 deg when
-// sigma is at the level of eps*||B||, where 2*sigma is negligible.
-//
-// The one real failure mode is the NULL SPACE. At sigma ~ 0 the +/- pair is
-// degenerate, and with k zero singular values the whole 2k-dimensional space
-// span{(v_j;0), (0;u_j)} is degenerate at once: its computed basis is
-// [N_v 0; 0 N_u] W for an arbitrary orthogonal W, so the k columns we select
-// carry halves N_v*W_top and N_u*W_bot whose columns need NOT be mutually
-// orthogonal. Two things follow, both learned the hard way:
-//
-//   * Detecting this by a vanishing half-norm does not work. Measured, n=16 with
-//     two zero singular values: every column came back with norm exactly 1.000
-//     and both halves healthy, yet U(14).U(15) = 1.0 -- two identical columns,
-//     with V perfectly orthogonal. Nothing vanished; orthogonality was lost
-//     BETWEEN the degenerate columns. The criterion has to be sigma itself.
-//   * Repairing from the partner (-sigma) column does not work either. It is
-//     wrong for well-separated sigma (both partners have equal half-norms, so the
-//     tie-break flips u's sign and destroys the reconstruction -- measured 1.18
-//     relative on a matrix with no zero singular values at all), and it still
-//     fails once the null space has dimension >= 3.
-//
-// So every column with sigma <= tol is rebuilt by Gram-Schmidt against the
-// columns that are already final. Those vectors are arbitrary anyway: any
-// orthonormal completion satisfies B = U S V^T to within 2*sigma <= 2*tol.
+// (d_0, e_0, d_1, e_1, ..., e_{n-2}, d_{n-1}), 2n-1 entries. Nothing is squared,
+// so the condition number is not either; the price is a 2n x 2n eigenvector
+// matrix. Splitting an eigenvector into its even (-> v) and odd (-> u) rows and
+// normalising each half is exact, not heuristic: for sigma != 0 the eigenvector
+// is forced to the interleaved form (alpha v; beta u).
 
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/backend_config.h>
@@ -88,12 +33,10 @@ template <Backend B, typename T> class BdsdcValuesOnly;
 template <Backend B, typename T> class BdsdcExtract;
 template <Backend B, typename T> class BdsdcRepair;
 
-// stedc is happier with a non-negative off-diagonal, and the Blocked gesvd path
-// already normalises that way before calling it. A tridiagonal with signed
+// stedc wants a non-negative off-diagonal. A tridiagonal with signed
 // off-diagonals is similar to the |.| one through S = diag(s), s_0 = 1,
-// s_{i+1} = s_i * sign(f_i): T' = S T S has the same eigenvalues and z = S z'.
-// Here the sign vector is folded straight into the extraction, so it costs no
-// extra pass over the eigenvector matrix.
+// s_{i+1} = s_i * sign(f_i), and that sign vector is folded into the extraction
+// so it costs no extra pass over the eigenvector matrix.
 template <typename T>
 StedcParams<T> bdsdc_stedc_params() {
     StedcParams<T> params{};
@@ -133,10 +76,8 @@ BdsdcWorkspace<T> bdsdc_layout(Queue& ctx,
     ws.gk_sign = VectorView<T>(s_span, N, batch, 1, N);
     ws.lambda = VectorView<T>(l_span, N, batch, 1, N);
 
-    // Z is allocated on both paths. stedc unconditionally clears the eigenvector
-    // view it is handed, so a null view would fault; and divide-and-conquer needs
-    // the sub-problem eigenvectors to form the secular vector even when only
-    // eigenvalues are wanted, so there is nothing to save by omitting it.
+    // Z is allocated even when only values are wanted: stedc unconditionally clears
+    // the eigenvector view it is handed, so a null view would fault.
     static_cast<void>(want_vectors);
     auto z_span = pool.allocate<T>(ctx, static_cast<size_t>(N) * static_cast<size_t>(N) * nb);
     ws.Z = MatrixView<T, MatrixFormat::Dense>(z_span.data(), N, N, N,
@@ -220,9 +161,7 @@ void bdsdc_extract_values(Queue& ctx,
 }
 
 // One work-group per (batch item, output column): split the eigenvector into its
-// even rows (-> v) and odd rows (-> u) and normalise each half. Exact for every
-// sigma above the noise floor; the trailing sigma ~ 0 columns are rebuilt by the
-// repair pass that follows.
+// even rows (-> v) and odd rows (-> u) and normalise each half.
 template <Backend B, typename T>
 void bdsdc_extract_vectors(Queue& ctx,
                            const BdsdcWorkspace<T>& ws,
@@ -277,16 +216,10 @@ void bdsdc_extract_vectors(Queue& ctx,
                 sig[static_cast<size_t>(b) * static_cast<size_t>(nn) + i] = sycl::fmax(L(src, b), T(0));
             }
 
-            // Guard the amplification, not just division by zero. The exact
-            // half-norm is 1/sqrt(2); a half that has been rotated away can come
-            // back at 1e-20, and 1/1e-20 writes +-inf into the column. Every
-            // subsequent dot product is then NaN, `NaN > accept2` is false, and
-            // the repair below never accepts a candidate -- it grinds through all
-            // n cursor positions for that column instead. Measured at n=256,
-            // batch=512: 93 ms of a 162 ms solve, and asymmetric (U only), which
-            // is what gave it away. Anything below this bound is a vanished half
-            // whose sigma is at the noise floor, so zero it and let the repair
-            // rebuild the column.
+            // Guard the amplification, not just division by zero: the exact half-norm is
+            // 1/sqrt(2), but a half rotated away comes back at ~1e-20, and 1/1e-20 writes
+            // +-inf into the column, NaNing every later dot product so the repair below
+            // rejects all n candidate axes. Below this bound, zero it and let repair rebuild.
             const T half_present = T(0.0625);
             const T pinv = (pn > half_present) ? (T(1) / pn) : T(0);
             const T qinv = (qn > half_present) ? (T(1) / qn) : T(0);
@@ -305,30 +238,12 @@ void bdsdc_extract_vectors(Queue& ctx,
 
 // Rebuild the singular vectors of the numerically-zero singular values.
 //
-// Criterion is sigma, not the shape of the extracted column. With k zero
-// singular values the entire 2k-dimensional degenerate space mixes, so the
-// selected columns come back full-norm and individually plausible while being
-// parallel to each other -- measured: two identical U columns with V perfectly
-// orthogonal. Only sigma sees that coming.
-//
-// The replacement vectors are arbitrary: for sigma <= tol, any orthonormal
-// completion reconstructs B just as well, to within 2*sigma.
-//
-// The candidate axis is CHOSEN, not searched. The obvious implementation walks a
-// cursor over e_0, e_1, ... and keeps the first whose residual survives
-// orthogonalisation, but the missing direction is usually localised -- for an
-// upper bidiagonal the left null vector sits at the END of the index range -- so
-// the walk rejects ~250 of 256 axes before finding it, each rejection costing a
-// full n-projection pass. Measured at n=256, batch=512: V accepted on attempt 1,
-// U on attempt 251, and that asymmetry alone was 93 ms of a 162 ms solve. The
-// residual of e_c against an orthonormal set Q is exactly 1 - sum_t Q(c,t)^2, so
-// one pass over the final columns ranks every axis at once and the best one is
-// taken directly.
-//
-// One work-group per batch item; the j loop is serial because column j must be
-// orthogonalised against the columns already final, but it only runs for
-// degenerate columns -- for a bidiagonal of full numerical rank this kernel reads
-// sigma and exits.
+// The criterion is sigma, not the shape of the extracted column: a degenerate
+// block comes back full-norm and individually plausible while its columns are
+// parallel to each other, so nothing local sees it. Candidate axes are ranked in
+// one pass, using the fact that the residual of e_c against an orthonormal set Q
+// is exactly 1 - sum_t Q(c,t)^2. The serial j loop runs only for degenerate
+// columns: a bidiagonal of full numerical rank reads sigma and exits.
 template <Backend B, typename T>
 void bdsdc_repair_degenerate(Queue& ctx,
                              const MatrixView<T, MatrixFormat::Dense>& u,
@@ -349,58 +264,13 @@ void bdsdc_repair_degenerate(Queue& ctx,
         const int32_t nn = n;
         const bool wu = want_u;
         const bool wv = want_vh;
-        // +sigma and -sigma stop being resolvable once 2*sigma drops to the
-        // eigenvalue noise floor of the 2n problem, ~eps*||T||.
-        //
-        // The constant must NOT carry a factor of n. With 8*n*eps this is 2.4e-4
-        // relative at n=256 in float, which sweeps in singular values that carry
-        // real information: their vectors get thrown away and rebuilt as
-        // arbitrary orthonormal ones. It also made this kernel fire on ordinary
-        // random matrices.
-        //
-        // The multiplier is DERIVED rather than tuned. It was 16, on the grounds
-        // that this sits an order of magnitude above where an exact zero lands
-        // (measured 1.2e-16 relative in double) and orders below any sigma worth
-        // keeping. That is the right criterion for detecting an exact zero and
-        // the wrong one for keeping U orthogonal, because the damage is not
-        // confined to sigma = 0.
-        //
-        // stedc's eigenvectors for a cluster of gap g carry error ~eps*||T||/g.
-        // The +sigma_i / -sigma_i pair has gap 2*sigma_i, so once that pair stops
-        // being resolvable the two eigenvectors are an arbitrary basis of the
-        // pair's 2-D eigenspace -- and BOTH halves then normalise to the same
-        // (v, u), giving U two parallel columns. The orthogonality error
-        // contributed by column i is therefore about eps*sigma_max/(2*sigma_i).
-        // Holding that below a target `tau` requires
-        //     sigma_i >= eps*sigma_max / (2*tau),
-        // i.e. a threshold of (1/(2*tau)) * eps * sigma_max. With tau = 1e-3 the
-        // multiplier is 500.
-        //
-        // Measured end-to-end (gesvd_relacc, float, n=64, 128 samples), 16 -> 500,
-        // orthogonality / reconstruction by log10(kappa):
-        //
-        //   kappa   1e1        1e3        1e4        1e5        1e6
-        //   ortho   unchanged  unchanged  unchanged  5.2e-4 ->  0.143 ->
-        //                                            4.6e-5     1.1e-4
-        //   recon   unchanged  unchanged  unchanged  1.3e-6 ->  3.1e-6 ->
-        //                                            7.2e-5     7.3e-5
-        //
-        // So it is a real trade and this is the knee of it: kappa <= 1e4 is
-        // untouched, and above it ~1300x of orthogonality costs ~20x of
-        // reconstruction, from 1e-6 to 1e-5 -- both still far inside any
-        // tolerance the suite applies. Pushing further does keep helping
-        // orthogonality (3000 -> 6.6e-5) but starts discarding vectors that carry
-        // information at kappa=1e4 too (recon 1.3e-6 -> 4.2e-4), which is the
-        // failure the paragraph above warns about.
-        //
-        // n=128 behaves identically (ortho 0.200 -> 2.5e-4). DOUBLE is completely
-        // unchanged at every kappa measured -- its resolution limit is never
-        // reached in this range -- and 500*eps in double is 1.1e-13 relative,
-        // still three orders above where an exact zero lands.
-        //
-        // This does NOT fix the singular VALUES, which stay at 0.52 relative
-        // error at kappa=1e6: that is gebrd's own eps*||A|| floor, unreachable
-        // from here. Use the one-sided Jacobi route (n <= 64) for those.
+        // Once 2*sigma reaches the noise floor of the 2n eigenproblem, both halves of
+        // the +/- pair normalise to the same (v, u) and U gets two parallel columns.
+        // Column i contributes orthogonality error ~eps*sigma_max/(2*sigma_i), so a
+        // target tau needs sigma_i >= eps*sigma_max/(2*tau). The factor must NOT carry
+        // an n: an n-scaled tolerance discards singular values that still carry
+        // information. This does not fix the singular VALUES, which keep gebrd's own
+        // eps*||A|| floor; use one-sided Jacobi for those.
         constexpr T kOrthTarget = T(1e-3);
         const T tol_factor =
             (T(1) / (T(2) * kOrthTarget)) * std::numeric_limits<T>::epsilon();
@@ -430,13 +300,9 @@ void bdsdc_repair_degenerate(Queue& ctx,
                 for (int32_t j = 0; j < nn; ++j) {
                     if (sb[j] > tol) continue;
 
-                    // Rank every candidate axis by the residual it would leave,
-                    // 1 - sum_t Q(c,t)^2 over the columns already final: the
-                    // earlier rebuilt ones (t < j) and ALL non-degenerate ones,
-                    // including those after j. Skipping the latter would leave the
-                    // rebuilt vectors orthogonal to each other but not to the good
-                    // columns whenever the degenerate block is not at the end --
-                    // which is the case when the caller asks for ascending order.
+                    // Rank against every column already final: the earlier rebuilt ones
+                    // (t < j) and ALL non-degenerate ones, including those after j. Skipping
+                    // the latter loses orthogonality against them under ascending order.
                     T best = std::numeric_limits<T>::max();
                     int32_t best_c = lid;
                     for (int32_t c = lid; c < nn; c += kGroup) {
@@ -487,10 +353,9 @@ void bdsdc_repair_degenerate(Queue& ctx,
                         acc += wr * wr;
                     }
                     const T nrm2 = sycl::reduce_over_group(grp, acc, sycl::plus<T>());
-                    // c_star is the best axis available, so a residual too small
-                    // to normalise means the final columns already span the space
-                    // -- there is no better choice to fall back to. Leave the
-                    // column as extracted rather than amplifying noise.
+                    // c_star is the best axis available, so a residual too small to normalise
+                    // means the final columns already span the space; leave the column as
+                    // extracted rather than amplifying noise.
                     if (nrm2 > std::numeric_limits<T>::min()) {
                         const T inv = T(1) / sycl::sqrt(nrm2);
                         for (int32_t r = lid; r < nn; r += kGroup) {

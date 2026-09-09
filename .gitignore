@@ -96,3 +96,17 @@ evaluation/traces/*.json
 # Kernel trace output (default name + common folders)
 batchlas_kernels.trace.json
 evaluation/trace/
+.route-diff/
+
+# Profiler captures and compiled experiment harnesses.
+#
+# WP4 Phase 2 produced 80 MB of these under experiments/wp4_potrf/phase2_bench/
+# alone. They are OUTPUTS of the scripts committed beside them -- rebuildable by
+# running build.sh, re-capturable by re-running the profiler -- and nothing in
+# the tree references them. An earlier PR on this branch reached 292,767
+# additions the same way and had to be un-tracked; the READMEs and CSVs are the
+# durable record, the blobs are not.
+*.nsys-rep
+*.sqlite
+*.qdrep
+experiments/**/nsys/

@@ -310,8 +310,8 @@ int run_accuracy(const Options& opt) {
             auto dense_vendor = dense_A.clone();
             auto eigs_span = eigs_cuda.data();
             UnifiedVector<std::byte> ws(
-                backend::syev_vendor_buffer_size<Backend::CUDA, Real>(*q, dense_vendor.view(), eigs_span, JobType::NoEigenVectors, Uplo::Lower));
-            backend::syev_vendor<Backend::CUDA, Real>(*q, dense_vendor.view(), eigs_span, JobType::NoEigenVectors, Uplo::Lower, ws.to_span());
+                batchlas::blas::dispatch::detail::syev_vendor_buffer_size_or_throw<Backend::CUDA, Real>(*q, dense_vendor.view(), eigs_span, JobType::NoEigenVectors, Uplo::Lower));
+            batchlas::blas::dispatch::detail::syev_vendor_or_throw<Backend::CUDA, Real>(*q, dense_vendor.view(), eigs_span, JobType::NoEigenVectors, Uplo::Lower, ws.to_span());
         }
         if (run_stedc) {
             UnifiedVector<std::byte> ws(

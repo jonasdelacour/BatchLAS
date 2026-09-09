@@ -329,3 +329,17 @@ size_t Device::get_property(DeviceProperty property) const {
         default: std::cerr << "Unknown property" << std::endl; return 0;
     }
 }
+
+// ENUMERATED, deliberately, rather than compared against case 7 above -- see
+// the note on the declaration. Cost is one get_info returning a std::vector,
+// i.e. one heap allocation, and it is called from the ROUTE BUILDER, which is
+// the layer allowed to query the device (src/backends/trsm_route.hh:5-8); the
+// route TABLE stays pure. If a profile ever shows it, memoize HERE, not in the
+// header.
+bool Device::supports_sub_group_size(size_t size) const {
+    const auto& d = QueueImpl::device_arrays.at(static_cast<int>(type)).at(idx);
+    for (size_t s : d.get_info<sycl::info::device::sub_group_sizes>()) {
+        if (s == size) return true;
+    }
+    return false;
+}

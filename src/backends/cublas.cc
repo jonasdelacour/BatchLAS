@@ -19,6 +19,8 @@
 #include "batch_launch.hh"
 #include "level3_shape.hh"
 #include "gemm_variant.hh"
+#include "gemm_heterogeneous.hh"
+#include "level3_coverage.hh"
 #include "symm_custom_dispatch.hh"
 #include "syr2k_custom_dispatch.hh"
 #include "syrk_custom_dispatch.hh"
@@ -112,14 +114,20 @@ namespace batchlas {
         }
 
         if (gemm_has_heterogeneous_batch(A, B, C)) {
-            if (!gemm_batch_dimensions_compatible(A, B, C, transA, transB)) {
-                throw std::invalid_argument("GEMM: incompatible per-batch matrix dimensions for heterogeneous dispatch");
-            }
-            return gemm_over_heterogeneous_batch(ctx, A, B, C, beta, transA, transB,
+            // WP2 C1: the dimension check, the loop, the m==0/n==0 skips, the
+            // k==0 -> scale(beta) substitution and the empty-batch Event live in
+            // detail::gemm_heterogeneous_loop (src/backends/gemm_heterogeneous.hh);
+            // none of that was ever about the vendor, and keeping it here is why a
+            // vendor-free build had none of it -- all 17 remaining vendor-free
+            // gemm_tests failures were this. Only the per-item terminal is
+            // backend-specific, and cuBLAS passes gemm_vendor_impl rather than
+            // recursing through gemm_vendor so the route above is not re-run per
+            // member. Its empty-batch Event is create_event_after_external_work(),
+            // what the helper hardcodes, because this work leaves the SYCL queue.
+            return detail::gemm_heterogeneous_loop<T>(ctx, A, B, C, beta, transA, transB,
                 [&](const auto& A_i, const auto& B_i, const auto& C_i) {
                     return gemm_vendor_impl<Back, T>(ctx, A_i, B_i, C_i, alpha, beta, transA, transB, precision);
-                },
-                [&] { return ctx.create_event_after_external_work(); });
+                });
         }
 
         if (gemm_use_sycl_custom(ctx, A, B, C, transA, transB, precision)) {
@@ -162,7 +170,7 @@ namespace batchlas {
         return ctx.create_event_after_external_work();
     }
 
-    template <Backend Back, typename T>
+    template <Backend Back, RealScalar T>
     Event symm_vendor(Queue& ctx,
                       const MatrixView<T, MatrixFormat::Dense>& A,
                       const MatrixView<T, MatrixFormat::Dense>& B,
@@ -171,13 +179,11 @@ namespace batchlas {
                       T beta,
                       Side side,
                       Uplo uplo) {
-        if constexpr (Back == Backend::CUDA) {
-            if constexpr (std::is_same_v<T, float>) {
-                if (symm_use_cuda_custom(ctx, A, B, C, side, uplo)) {
-                    return symm_cuda_custom(ctx, A, B, C, alpha, beta, side, uplo);
-                }
-            }
-        }
+                // WP1 S6: the float custom-route gate moved to the facade
+                // (src/dispatch/entry_points/level3.cc). It has to run BEFORE
+                // the vendor-available test, and this TU is compiled only when
+                // cuBLAS exists -- so leaving it here made the tile kernels
+                // linkable everywhere but callable nowhere.
 
         return symm_vendor_impl<Back, T>(ctx, A, B, C, alpha, beta, side, uplo);
     }
@@ -541,7 +547,7 @@ namespace batchlas {
         return ctx.create_event_after_external_work();
     }
 
-    template <Backend Back, typename T>
+    template <Backend Back, RealScalar T>
     Event syrk_vendor(Queue& ctx,
                       const MatrixView<T, MatrixFormat::Dense>& A,
                       const MatrixView<T, MatrixFormat::Dense>& C,
@@ -550,11 +556,17 @@ namespace batchlas {
                       Uplo uplo,
                       Transpose transA) {
         if constexpr (Back == Backend::CUDA) {
-            if constexpr (std::is_same_v<T, float>) {
-                if (syrk_use_cuda_custom(ctx, A, C, uplo, transA)) {
-                    return syrk_cuda_custom(ctx, A, C, alpha, beta, uplo, transA);
-                }
-            } else {
+                // WP1 S6: the float custom-route gate moved to the facade
+                // (src/dispatch/entry_points/level3.cc). It has to run BEFORE
+                // the vendor-available test, and this TU is compiled only when
+                // cuBLAS exists -- so leaving it here made the tile kernels
+                // linkable everywhere but callable nowhere.
+            //
+            // The NON-float gram route below stays: it is reachable only from
+            // here, so double and complex syrk still have no native route in a
+            // vendor-free build. That is why WP1 S7 refuses to flip
+            // level3_tile_kernels_compiled to a bare `true`.
+            if constexpr (!std::is_same_v<T, float>) {
                 // Everything that is not float reaches the single-tile Gram
                 // kernel only. It is the one route here whose staging and
                 // fragment loads are not written around a 128-bit packet, so it
@@ -604,7 +616,7 @@ namespace batchlas {
         return ctx.create_event_after_external_work();
     }
 
-    template <Backend Back, typename T>
+    template <Backend Back, RealScalar T>
     Event syr2k_vendor(Queue& ctx,
                        const MatrixView<T, MatrixFormat::Dense>& A,
                        const MatrixView<T, MatrixFormat::Dense>& B,
@@ -621,11 +633,11 @@ namespace batchlas {
                     throw std::runtime_error("BATCHLAS_SYR2K_VARIANT=cublasdx only supports float");
                 }
             }
-            if constexpr (std::is_same_v<T, float>) {
-                if (syr2k_use_cuda_custom(ctx, A, B, C, uplo, transA)) {
-                    return syr2k_cuda_custom(ctx, A, B, C, alpha, beta, uplo, transA);
-                }
-            }
+                // WP1 S6: the float custom-route gate moved to the facade
+                // (src/dispatch/entry_points/level3.cc). It has to run BEFORE
+                // the vendor-available test, and this TU is compiled only when
+                // cuBLAS exists -- so leaving it here made the tile kernels
+                // linkable everywhere but callable nowhere.
         }
 
         return syr2k_vendor_impl<Back, T>(ctx, A, B, C, alpha, beta, uplo, transA);
@@ -721,11 +733,15 @@ namespace batchlas {
                     throw std::runtime_error("BATCHLAS_TRMM_VARIANT=cublasdx only supports float");
                 }
             }
-            if constexpr (std::is_same_v<T, float>) {
-                if (trmm_use_cuda_custom(ctx, A, B, C, side, uplo, transA, diag)) {
-                    return trmm_cuda_custom(ctx, A, B, C, alpha, side, uplo, transA, diag);
-                }
-            } else {
+                // WP1 S6: the float custom-route gate moved to the facade
+                // (src/dispatch/entry_points/level3.cc). It has to run BEFORE
+                // the vendor-available test, and this TU is compiled only when
+                // cuBLAS exists -- so leaving it here made the tile kernels
+                // linkable everywhere but callable nowhere.
+            //
+            // The NON-float tile route below stays, and is reachable only from
+            // here -- see the syrk note and WP1 S7.
+            if constexpr (!std::is_same_v<T, float>) {
                 // The tile kernel is type-generic; only its routing was ever
                 // float. The alternative for double and complex is the same
                 // expansion-plus-GEMM as for float, which is strictly more work
@@ -1193,23 +1209,36 @@ namespace batchlas {
             auto nrhs = B.cols();
             auto batch_size = A.batch_size();
             auto pool = BumpAllocator(work_space);
-            if (batch_size <= 1) {
-                auto info = pool.allocate<int>(ctx, 1);
-                cusolverDnParams_t params;
-                cusolverDnCreateParams(&params);
-                cusolverDnXgetrs(handle, params, enum_convert<BackendLibrary::CUBLAS>(transA), n, nrhs,
-                    BackendScalar<T,BackendLibrary::CUBLAS>::type, A.data_ptr(), A.ld(),
-                    pivots.data(),
-                    BackendScalar<T,BackendLibrary::CUBLAS>::type, B.data_ptr(), B.ld(),
-                    info.data());
-            } else {
-                int info;
-                auto reinterpreted_pivots = pivots .as_span<int>();
-                call_backend<T, BackendLibrary::CUBLAS, Back>(cublasSgetrsBatched, cublasDgetrsBatched, cublasCgetrsBatched, cublasZgetrsBatched,
-                    handle, enum_convert<BackendLibrary::CUBLAS>(transA), n, nrhs,
-                    A.data_ptrs(ctx).data(), A.ld(), reinterpreted_pivots.data(),
-                    B.data_ptrs(ctx).data(), B.ld(), &info, batch_size);
-            }
+            // ONE ARM FOR EVERY BATCH SIZE, and the deleted `batch_size <= 1`
+            // special case was a CRASH, not an optimisation.
+            //
+            // It called cusolverDnXgetrs, whose ipiv is GENUINE int64, and handed
+            // it `pivots.data()` raw. Every getrf in this tree writes PACKED
+            // 1-based int32 into that same span -- getrf_vendor below at :1508
+            // does `pivots.as_span<int>()`, and so do rocsolver.cc:227 and both
+            // native tiers -- so at batch 1 the solve read two packed pivots per
+            // int64 slot as one row index and indexed out of bounds.
+            // `getrf<CUDA,float>` then `getrs<CUDA,float>` at n=40, nrhs=3,
+            // batch=1 -- the exact sequence linalg::solve issues
+            // (linalg-ops.hh:343-344) -- aborted with CUDA_ERROR_ILLEGAL_ADDRESS
+            // (exit 134). cublas?getrsBatched reads the packed int32 the getrf
+            // actually wrote and is correct at batchCount = 1, so the two-arm
+            // split bought nothing and cost the only pivot format the family
+            // agrees on. Found by WP6's pivot-contract survey; PRE-EXISTING, and
+            // no batched test could reach it because they all use batch >= 2.
+            //
+            // `info` here is a HOST int (cublas?getrsBatched's info is an argument
+            // validity code, not a per-item device array), which is why nothing is
+            // drawn from the pool; getrs_vendor_buffer_size still reports the old
+            // one-int figure, deliberately, because shrinking a workspace query is
+            // the change this family has been bitten by before.
+            static_cast<void>(pool);
+            int info;
+            auto reinterpreted_pivots = pivots.as_span<int>();
+            call_backend<T, BackendLibrary::CUBLAS, Back>(cublasSgetrsBatched, cublasDgetrsBatched, cublasCgetrsBatched, cublasZgetrsBatched,
+                handle, enum_convert<BackendLibrary::CUBLAS>(transA), n, nrhs,
+                A.data_ptrs(ctx).data(), A.ld(), reinterpreted_pivots.data(),
+                B.data_ptrs(ctx).data(), B.ld(), &info, batch_size);
             return ctx.create_event_after_external_work();
         }
     
@@ -1286,241 +1315,45 @@ namespace batchlas {
 
     } // namespace backend
 
-    template <Backend Back, typename T>
-    Event gemm(Queue& ctx,
-               const MatrixView<T,MatrixFormat::Dense>& A,
-               const MatrixView<T,MatrixFormat::Dense>& B,
-               const MatrixView<T,MatrixFormat::Dense>& C,
-               T alpha,
-               T beta,
-               Transpose transA,
-               Transpose transB,
-               ComputePrecision precision) {
-        return backend::gemm_vendor<Back, T>(ctx, A, B, C, alpha, beta, transA, transB, precision);
-    }
-
-    template <Backend B, typename T>
-    Event gemv(Queue& ctx,
-               const MatrixView<T,MatrixFormat::Dense>& A,
-               const VectorView<T>& X,
-               const VectorView<T>& Y,
-               T alpha,
-               T beta,
-               Transpose transA) {
-        return backend::gemv_vendor<B, T>(ctx, A, X, Y, alpha, beta, transA);
-    }
-
-    template <Backend Back, typename T>
-    Event trsm(Queue& ctx,
-               const MatrixView<T,MatrixFormat::Dense>& A,
-               const MatrixView<T,MatrixFormat::Dense>& B,
-               T alpha,
-               Side side,
-               Uplo uplo,
-               Transpose transA,
-               Diag diag) {
-        return backend::trsm_vendor<Back, T>(ctx, A, B, side, uplo, transA, diag, alpha);
-    }
-
-    template <Backend Back, RealScalar T>
-    Event symm(Queue& ctx,
-               const MatrixView<T, MatrixFormat::Dense>& A,
-               const MatrixView<T, MatrixFormat::Dense>& B,
-               const MatrixView<T, MatrixFormat::Dense>& C,
-               T alpha,
-               T beta,
-               Side side,
-               Uplo uplo) {
-        return backend::symm_vendor<Back, T>(ctx, A, B, C, alpha, beta, side, uplo);
-    }
-
-    template <Backend Back, ComplexScalar T>
-    Event hemm(Queue& ctx,
-               const MatrixView<T, MatrixFormat::Dense>& A,
-               const MatrixView<T, MatrixFormat::Dense>& B,
-               const MatrixView<T, MatrixFormat::Dense>& C,
-               T alpha,
-               T beta,
-               Side side,
-               Uplo uplo) {
-        return backend::hemm_vendor<Back, T>(ctx, A, B, C, alpha, beta, side, uplo);
-    }
-
-    template <Backend Back, ComplexScalar T>
-    Event herk(Queue& ctx,
-               const MatrixView<T, MatrixFormat::Dense>& A,
-               const MatrixView<T, MatrixFormat::Dense>& C,
-               float_t<T> alpha,
-               float_t<T> beta,
-               Uplo uplo,
-               Transpose transA) {
-        return backend::herk_vendor<Back, T>(ctx, A, C, alpha, beta, uplo, transA);
-    }
-
-    template <Backend Back, ComplexScalar T>
-    Event her2k(Queue& ctx,
-                const MatrixView<T, MatrixFormat::Dense>& A,
-                const MatrixView<T, MatrixFormat::Dense>& B,
-                const MatrixView<T, MatrixFormat::Dense>& C,
-                T alpha,
-                float_t<T> beta,
-                Uplo uplo,
-                Transpose transA) {
-        return backend::her2k_vendor<Back, T>(ctx, A, B, C, alpha, beta, uplo, transA);
-    }
-
-    template <Backend Back, RealScalar T>
-    Event syrk(Queue& ctx,
-               const MatrixView<T, MatrixFormat::Dense>& A,
-               const MatrixView<T, MatrixFormat::Dense>& C,
-               T alpha,
-               T beta,
-               Uplo uplo,
-               Transpose transA) {
-        return backend::syrk_vendor<Back, T>(ctx, A, C, alpha, beta, uplo, transA);
-    }
-
-    template <Backend Back, RealScalar T>
-    Event syr2k(Queue& ctx,
-                const MatrixView<T, MatrixFormat::Dense>& A,
-                const MatrixView<T, MatrixFormat::Dense>& B,
-                const MatrixView<T, MatrixFormat::Dense>& C,
-                T alpha,
-                T beta,
-                Uplo uplo,
-                Transpose transA) {
-        return backend::syr2k_vendor<Back, T>(ctx, A, B, C, alpha, beta, uplo, transA);
-    }
-
-    template <Backend Back, typename T>
-    Event trmm(Queue& ctx,
-               const MatrixView<T, MatrixFormat::Dense>& A,
-               const MatrixView<T, MatrixFormat::Dense>& B,
-               const MatrixView<T, MatrixFormat::Dense>& C,
-               T alpha,
-               Side side,
-               Uplo uplo,
-               Transpose transA,
-               Diag diag) {
-        return backend::trmm_vendor<Back, T>(ctx, A, B, C, alpha, side, uplo, transA, diag);
-    }
-
-    template <Backend B, typename T>
-    Event geqrf(Queue& ctx,
-                const MatrixView<T,MatrixFormat::Dense>& A,
-                Span<T> tau,
-                Span<std::byte> work_space) {
-        return backend::geqrf_vendor<B, T>(ctx, A, tau, work_space);
-    }
-
-    template <Backend B, typename T>
-    size_t geqrf_buffer_size(Queue& ctx,
-                             const MatrixView<T,MatrixFormat::Dense>& A,
-                             Span<T> tau) {
-        return backend::geqrf_vendor_buffer_size<B, T>(ctx, A, tau);
-    }
-
-    template <Backend B, typename T>
-    Event orgqr(Queue& ctx,
-                const MatrixView<T, MatrixFormat::Dense>& A,
-                Span<T> tau,
-                Span<std::byte> workspace) {
-        return backend::orgqr_vendor<B, T>(ctx, A, tau, workspace);
-    }
-
-    template <Backend B, typename T>
-    size_t orgqr_buffer_size(Queue& ctx,
-                             const MatrixView<T, MatrixFormat::Dense>& A,
-                             Span<T> tau) {
-        return backend::orgqr_vendor_buffer_size<B, T>(ctx, A, tau);
-    }
-
-    template <Backend Back, typename T>
-    Event getrs(Queue& ctx,
-                const MatrixView<T,MatrixFormat::Dense>& A,
-                const MatrixView<T,MatrixFormat::Dense>& B,
-                Transpose transA,
-                Span<int64_t> pivots,
-                Span<std::byte> work_space) {
-        return backend::getrs_vendor<Back, T>(ctx, A, B, transA, pivots, work_space);
-    }
-
-    template <Backend Back, typename T>
-    size_t getrs_buffer_size(Queue& ctx,
-                             const MatrixView<T,MatrixFormat::Dense>& A,
-                             const MatrixView<T,MatrixFormat::Dense>& B,
-                             Transpose transA) {
-        return backend::getrs_vendor_buffer_size<Back, T>(ctx, A, B, transA);
-    }
-
-    template <Backend B, typename T>
-    Event getrf(Queue& ctx,
-                const MatrixView<T, MatrixFormat::Dense>& A,
-                Span<int64_t> pivots,
-                Span<std::byte> work_space,
-                Span<int32_t> info) {
-        return backend::getrf_vendor<B, T>(ctx, A, pivots, work_space, info);
-    }
-
-    template <Backend B, typename T>
-    size_t getrf_buffer_size(Queue& ctx,
-                             const MatrixView<T, MatrixFormat::Dense>& A) {
-        return backend::getrf_vendor_buffer_size<B, T>(ctx, A);
-    }
-
-    template <Backend B, typename T>
-    Event getri(Queue& ctx,
-                const MatrixView<T, MatrixFormat::Dense>& A,
-                const MatrixView<T, MatrixFormat::Dense>& C,
-                Span<int64_t> pivots,
-                Span<std::byte> work_space,
-                Span<int32_t> info) {
-        return backend::getri_vendor<B, T>(ctx, A, C, pivots, work_space, info);
-    }
-
-    template <Backend B, typename T>
-    size_t getri_buffer_size(Queue& ctx,
-                             const MatrixView<T, MatrixFormat::Dense>& A) {
-        return backend::getri_vendor_buffer_size<B, T>(ctx, A);
-    }
-
     // Template instantiations for cuBLAS functions (MatrixView version)
     // Explicit instantiations. Signatures live in the `sig` namespace beside each
     // public declaration (include/batchlas/blas/functions/*.hh), so changing one is a single
     // header edit rather than one edit per backend TU.
     #define B_ Backend::CUDA
 
+    // Only the `backend::`-qualified vendor entry points are instantiated here.
+    // WP0b moved every public `batchlas::<op>` out of the vendor TUs and into
+    // src/dispatch/entry_points/, so a public row in this table would be a
+    // duplicate definition rather than a convenience.
     #define CUBLAS_OPS(B, fp) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, gemm) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, gemv) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, trsm) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, trmm) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, geqrf) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, geqrf_buffer_size) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, getrs) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, getrs_buffer_size) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, getrf) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, getrf_buffer_size) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, getri) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, getri_buffer_size) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, ormqr) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, ormqr_buffer_size) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, gemm_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, gemv_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, trsm_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, trmm_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, geqrf_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, geqrf_vendor_buffer_size) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, getrs_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, getrs_vendor_buffer_size) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, getrf_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, getrf_vendor_buffer_size) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, getri_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, getri_vendor_buffer_size) \
         BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, ormqr_vendor) \
         BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, ormqr_vendor_buffer_size) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, orgqr) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, orgqr_buffer_size)
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, orgqr_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, orgqr_vendor_buffer_size)
 
     // symm/syrk/syr2k are real-only and hemm/herk/her2k are complex-only, so the
     // narrower domains get their own tables rather than one blanket loop.
     #define CUBLAS_REAL_OPS(B, fp) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, symm) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, syrk) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, syr2k)
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, symm_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, syrk_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, syr2k_vendor)
 
     #define CUBLAS_COMPLEX_OPS(B, fp) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, hemm) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, herk) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, her2k)
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, hemm_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, herk_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, her2k_vendor)
 
     BATCHLAS_FOR_EACH_SCALAR_TYPE_1(CUBLAS_OPS, B_)
     BATCHLAS_FOR_EACH_REAL_TYPE_1(CUBLAS_REAL_OPS, B_)

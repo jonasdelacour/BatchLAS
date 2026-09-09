@@ -1,4 +1,5 @@
 #include "../linalg-impl.hh"
+#include <batchlas/blas/dispatch/route_compiled.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
@@ -39,6 +40,20 @@ namespace batchlas {
         Span<std::byte> geqrf_ws;
         Span<std::byte> orgqr_ws;
     };
+
+    // ONE rule, asked in one place, by the op AND by every size query.
+    //
+    // `B == Backend::NETLIB` meant "there are no device kernels here", which is a
+    // property of the DEVICE, not of the backend enum; asked directly it stays
+    // correct for a host queue reached through any backend. But the op and its
+    // three sizing copies must ask the SAME question: sized as Chol2 and then run
+    // as Householder, ortho_layout carves tau/geqrf_ws/orgqr_ws out of a
+    // BumpAllocator that was never sized for them -- a workspace overrun. Today's
+    // outcome is unchanged (NETLIB is the only backend on a host device here), so
+    // this is a by-construction guarantee, not a bug fix.
+    inline bool ortho_force_householder(const Queue& ctx) {
+        return ctx.device().type != DeviceType::GPU;
+    }
 
     // Single description of ortho's workspace; see workspace_bytes() in
     // util/mempool.hh.
@@ -106,7 +121,7 @@ namespace batchlas {
         handle.setStream(ctx);
         BumpAllocator pool(workspace);
         auto [m, k] = get_effective_dims(A, transA);
-        if constexpr (B == Backend::NETLIB) {
+        if (ortho_force_householder(ctx)) {
             algo = OrthoAlgorithm::Householder;
         }
         bool is_A_trans = transA == Transpose::Trans || transA == Transpose::ConjTrans;
@@ -168,10 +183,12 @@ namespace batchlas {
             return raw != nullptr && std::string(raw) == "gemm";
         }();
         constexpr int gram_max_k = std::is_same_v<T, float> ? 64 : 128;
+        // "syrk reaches the gram tile kernel on this route", not "this is NVIDIA".
         const bool gram_via_syrk =
-            (B == Backend::CUDA) && gram_is_real && k <= gram_max_k && !gram_pinned_to_gemm;
+            dispatch::level3_tile_route_available<B, T> && gram_is_real &&
+            k <= gram_max_k && !gram_pinned_to_gemm;
         auto gram_into_C = [&](const auto& in_mat) {
-            if constexpr (B == Backend::CUDA && gram_is_real) {
+            if constexpr (dispatch::level3_tile_route_available<B, T> && gram_is_real) {
                 if (gram_via_syrk) {
                     return syrk<B, T>(ctx, in_mat, C, T(1), T(0), Uplo::Lower, inv_trans);
                 }
@@ -409,7 +426,7 @@ namespace batchlas {
                              Transpose transA,
                              OrthoAlgorithm algo) {
         auto [m, k] = get_effective_dims(A, transA);
-        if constexpr (B == Backend::NETLIB) {
+        if (ortho_force_householder(ctx)) {
             algo = OrthoAlgorithm::Householder;
         }
         return workspace_bytes([&, m = m, k = k](BumpAllocator& pool) {
@@ -426,7 +443,7 @@ namespace batchlas {
                 Span<std::byte> workspace,
                 OrthoAlgorithm algo,
                 size_t iterations) {
-        if constexpr (B == Backend::NETLIB) {
+        if (ortho_force_householder(ctx)) {
             algo = OrthoAlgorithm::Householder;
         }
         BumpAllocator pool(workspace);
@@ -480,7 +497,7 @@ namespace batchlas {
         auto nM = transM == Transpose::NoTrans ? M.cols_ : M.rows_;
         auto nA = transA == Transpose::NoTrans ? A.cols_ : A.rows_;
         auto batch_size = A.batch_size();
-        if constexpr (B == Backend::NETLIB) {
+        if (ortho_force_householder(ctx)) {
             algo = OrthoAlgorithm::Householder;
         }
         

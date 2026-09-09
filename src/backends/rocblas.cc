@@ -10,6 +10,7 @@
 #include "batch_launch.hh"
 #include "level3_shape.hh"
 #include "gemm_variant.hh"
+#include "gemm_heterogeneous.hh"
 #include "../sycl/gemm_kernels.hh"
 
 namespace batchlas {
@@ -31,11 +32,18 @@ namespace batchlas {
         }
 
         if (gemm_has_heterogeneous_batch(A, B, C)) {
-            return gemm_over_heterogeneous_batch(ctx, A, B, C, beta, transA, transB,
+            // The loop, the m==0/n==0 skips, the k==0 -> scale(beta) substitution
+            // and the empty-batch Event live in detail::gemm_heterogeneous_loop
+            // (src/backends/gemm_heterogeneous.hh) so that a vendor-free build has
+            // them too; only the per-item terminal is backend-specific. rocBLAS
+            // recurses into gemm_vendor on purpose, so an individual member can
+            // still reach the SYCL kernel. The empty-batch Event is
+            // create_event_after_external_work() here as it was before -- the work
+            // leaves the SYCL queue -- which is what that helper already hardcodes.
+            return detail::gemm_heterogeneous_loop<T>(ctx, A, B, C, beta, transA, transB,
                 [&](const auto& A_i, const auto& B_i, const auto& C_i) {
                     return gemm_vendor<Back, T>(ctx, A_i, B_i, C_i, alpha, beta, transA, transB, precision);
-                },
-                [&] { return ctx.create_event_after_external_work(); });
+                });
         }
 
         if (gemm_use_sycl_custom(ctx, A, B, C, transA, transB, precision)) {
@@ -74,21 +82,10 @@ namespace batchlas {
 
     } // namespace backend
 
-    template <Backend Back, typename T>
-    Event gemm(Queue& ctx,
-               const MatrixView<T,MatrixFormat::Dense>& A,
-               const MatrixView<T,MatrixFormat::Dense>& B,
-               const MatrixView<T,MatrixFormat::Dense>& C,
-               T alpha,
-               T beta,
-               Transpose transA,
-               Transpose transB,
-               ComputePrecision precision) {
-        return backend::gemm_vendor<Back, T>(ctx, A, B, C, alpha, beta, transA, transB, precision);
-    }
+    namespace backend {
 
     template <Backend B, typename T>
-    Event gemv(Queue& ctx,
+    Event gemv_vendor(Queue& ctx,
         const MatrixView<T,MatrixFormat::Dense>& A,
         const VectorView<T>& X,
         const VectorView<T>& Y,
@@ -113,15 +110,24 @@ namespace batchlas {
         return ctx.create_event_after_external_work();
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, typename T>
-    Event trsm(Queue& ctx,
+    Event trsm_vendor(Queue& ctx,
                const MatrixView<T,MatrixFormat::Dense>& A,
                const MatrixView<T,MatrixFormat::Dense>& Bmat,
-               T alpha,
                Side side,
                Uplo uplo,
                Transpose transA,
-               Diag diag) {
+               Diag diag,
+               T alpha) {
+        // Parameter order matches backend::trsm_vendor as cuBLAS defines it:
+        // alpha LAST, unlike the public trsm, which takes it third. The two
+        // orders coexisted for as long as each TU declared its own public trsm;
+        // now that one declaration serves every backend, they have to agree.
+
         static LinalgHandle<B> handle;
         handle.setStream(ctx);
         auto [kB, n] = get_effective_dims(Bmat, Transpose::NoTrans);
@@ -142,8 +148,12 @@ namespace batchlas {
         return ctx.create_event_after_external_work();
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, RealScalar T>
-    Event syrk(Queue& ctx,
+    Event syrk_vendor(Queue& ctx,
                const MatrixView<T, MatrixFormat::Dense>& A,
                const MatrixView<T, MatrixFormat::Dense>& C,
                T alpha,
@@ -169,8 +179,12 @@ namespace batchlas {
         return ctx.create_event_after_external_work();
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, RealScalar T>
-    Event syr2k(Queue& ctx,
+    Event syr2k_vendor(Queue& ctx,
                 const MatrixView<T, MatrixFormat::Dense>& A,
                 const MatrixView<T, MatrixFormat::Dense>& Bmat,
                 const MatrixView<T, MatrixFormat::Dense>& C,
@@ -198,8 +212,12 @@ namespace batchlas {
         return ctx.create_event_after_external_work();
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, typename T>
-    Event trmm(Queue& ctx,
+    Event trmm_vendor(Queue& ctx,
                const MatrixView<T, MatrixFormat::Dense>& A,
                const MatrixView<T, MatrixFormat::Dense>& Bmat,
                const MatrixView<T, MatrixFormat::Dense>& C,
@@ -235,21 +253,34 @@ namespace batchlas {
         return ctx.create_event_after_external_work();
     }
 
+    } // namespace backend
+
     // Add further solver routines analogous to cuBLAS implementations using rocSOLVER
 
     // Explicit instantiations. Signatures live in the `sig` namespace beside each
     // public declaration (include/batchlas/blas/functions/*.hh), so changing one is a single
     // header edit rather than one edit per backend TU.
+    //
+    // Every row names a `backend::`-qualified `_vendor` symbol, hence
+    // BATCHLAS_INSTANTIATE_BACKEND_OP rather than the plain _OP: WP0b moved the
+    // public gemm/gemv/trsm/trmm/syrk/syr2k definitions out of every vendor TU
+    // and into src/dispatch/entry_points/level3.cc, so instantiating a public op
+    // here would collide with the one defined there. The alias itself still
+    // lives in `sig` (not `backend::sig`) -- only the function is qualified --
+    // and sig::trsm_vendor is deliberately NOT an alias of sig::trsm, because
+    // the vendor order puts alpha last.
     #define ROCBLAS_OPS(B, fp) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, gemm) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, gemv) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, trsm) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, trmm)
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, gemm_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, gemv_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, trsm_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, trmm_vendor)
 
     // syrk/syr2k are constrained to RealScalar T -- only instantiate for real types.
+    // There is no complex-only table here: rocBLAS carries no symm/hemm/herk/her2k
+    // wrapper at all, which is the omission level3.cc's ROCM arm mirrors exactly.
     #define ROCBLAS_REAL_OPS(B, fp) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, syrk) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, syr2k)
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, syrk_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, syr2k_vendor)
 
     BATCHLAS_FOR_EACH_SCALAR_TYPE_1(ROCBLAS_OPS, Backend::ROCM)
     BATCHLAS_FOR_EACH_REAL_TYPE_1(ROCBLAS_REAL_OPS, Backend::ROCM)

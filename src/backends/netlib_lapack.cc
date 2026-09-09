@@ -215,8 +215,10 @@ namespace batchlas{
     }
     } // namespace detail
 
+    namespace backend {
+
     template <Backend Back, typename T, MatrixFormat MFormat>
-    Event spmm(Queue& ctx,
+    Event spmm_vendor(Queue& ctx,
                const MatrixView<T, MFormat>& A,
                const MatrixView<T, MatrixFormat::Dense>& B,
                const MatrixView<T, MatrixFormat::Dense>& C,
@@ -234,6 +236,17 @@ namespace batchlas{
         return detail::submit_host_task(ctx, "netlib.spmm", [=] {
             if constexpr (MFormat == MatrixFormat::CSR) {
                 int batch = A_view.batch_size();
+                // alpha == 0 means A is NOT READ -- not its values, not its
+                // column indices, and not its row offsets. Callers hand spmm an
+                // A-adjacent BumpAllocator allocation that is not zeroed
+                // (mempool.hh), and 0 * NaN is NaN, so multiplying an unread A
+                // by a zero alpha poisons the result instead of dropping it.
+                // The native bodies in src/sycl/spmm_native.cc make the same
+                // guarantee (gather skips the nonzero loop, scatter skips the
+                // launch outright); this is the host arm agreeing. Note this is
+                // a skip of the alpha TERM only: C is still written below, so
+                // alpha == 0 && beta == 0 zeroes C rather than leaving it alone.
+                const bool alpha_zero = (alpha == T(0));
                 for (int b = 0; b < batch; ++b) {
                     auto A_b = A_view[b];
                     auto B_b = B_view[b];
@@ -250,10 +263,23 @@ namespace batchlas{
 
                     for (int row = 0; row < m; ++row) {
                         for (int col = 0; col < n; ++col) {
-                            T sum = beta * C_b.at(row, col);
-                            for (int idx = A_b.row_offsets()[row]; idx < A_b.row_offsets()[row + 1]; ++idx) {
-                                int a_col = A_b.col_indices()[idx];
-                                sum += alpha * A_b.data()[idx] * B_b.at(a_col, col);
+                            // beta == 0 means C is NOT READ. Every in-library
+                            // caller passes beta = 0 into a BumpAllocator
+                            // allocation, which is not zeroed (mempool.hh), so
+                            // reading C here propagates whatever was in that
+                            // memory -- NaN included -- into the result. The
+                            // native bodies in src/sycl/spmm_native.cc make the
+                            // same guarantee; this is the host arm agreeing.
+                            T sum = (beta == T(0)) ? T(0)
+                                                   : beta * C_b.at(row, col);
+                            if (!alpha_zero) {
+                                for (int idx = A_b.row_offsets()[row]; idx < A_b.row_offsets()[row + 1]; ++idx) {
+                                    int a_col = A_b.col_indices()[idx];
+                                    // B is only ever touched from inside this
+                                    // loop, so guarding the loop is also what
+                                    // keeps B unread at alpha == 0.
+                                    sum += alpha * A_b.data()[idx] * B_b.at(a_col, col);
+                                }
                             }
                             C_b.at(row, col) = sum;
                         }
@@ -265,8 +291,12 @@ namespace batchlas{
         });
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend Back, typename T, MatrixFormat MFormat>
-    size_t spmm_buffer_size(Queue& ctx,
+    size_t spmm_vendor_buffer_size(Queue& ctx,
                             const MatrixView<T, MFormat>& A,
                             const MatrixView<T, MatrixFormat::Dense>& B,
                             const MatrixView<T, MatrixFormat::Dense>& C,
@@ -284,9 +314,17 @@ namespace batchlas{
         static_cast<void>(transB);
         return 0;
     }
+
+    } // namespace backend
     
+    // The netlib gemm is the vendor implementation, so it moves into
+    // `backend` under its vendor name rather than being deleted: unlike
+    // cublas.cc and rocblas.cc, this TU had no separate gemm_vendor to forward
+    // to -- its public `gemm` WAS the CBLAS call.
+    namespace backend {
+
     template <Backend B, typename T>
-    Event gemm(Queue& ctx,
+    Event gemm_vendor(Queue& ctx,
                    const MatrixView<T, MatrixFormat::Dense>& descrA,
                    const MatrixView<T, MatrixFormat::Dense>& descrB,
                    const MatrixView<T, MatrixFormat::Dense>& descrC,
@@ -350,8 +388,12 @@ namespace batchlas{
         });
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, typename T>
-    Event gemv(Queue& ctx,
+    Event gemv_vendor(Queue& ctx,
                const MatrixView<T, MatrixFormat::Dense>& A,
                const VectorView<T>& X,
                const VectorView<T>& Y,
@@ -402,15 +444,24 @@ namespace batchlas{
         });
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, typename T>
-    Event trsm(Queue& ctx,
+    Event trsm_vendor(Queue& ctx,
         const MatrixView<T, MatrixFormat::Dense>& descrA,
         const MatrixView<T, MatrixFormat::Dense>& descrB,
-        T alpha,
         Side side,
         Uplo uplo,
         Transpose transA,
-        Diag diag) {
+        Diag diag,
+        T alpha) {
+        // Parameter order matches backend::trsm_vendor as cuBLAS defines it:
+        // alpha LAST, unlike the public trsm, which takes it third. The two
+        // orders coexisted for as long as each TU declared its own public trsm;
+        // now that one declaration serves every backend, they have to agree.
+
         auto A_view = descrA;
         auto B_view = descrB;
         return detail::submit_host_task<T>(ctx, "netlib.trsm", [=] {
@@ -509,8 +560,12 @@ namespace batchlas{
         });
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, RealScalar T>
-    Event symm(Queue& ctx,
+    Event symm_vendor(Queue& ctx,
                const MatrixView<T, MatrixFormat::Dense>& A,
                const MatrixView<T, MatrixFormat::Dense>& Bmat,
                const MatrixView<T, MatrixFormat::Dense>& Cmat,
@@ -553,8 +608,12 @@ namespace batchlas{
         });
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, ComplexScalar T>
-    Event hemm(Queue& ctx,
+    Event hemm_vendor(Queue& ctx,
                const MatrixView<T, MatrixFormat::Dense>& A,
                const MatrixView<T, MatrixFormat::Dense>& Bmat,
                const MatrixView<T, MatrixFormat::Dense>& Cmat,
@@ -597,9 +656,13 @@ namespace batchlas{
         });
     }
 
+    } // namespace backend
+
+
+    namespace backend {
 
     template <Backend B, ComplexScalar T>
-    Event herk(Queue& ctx,
+    Event herk_vendor(Queue& ctx,
                const MatrixView<T, MatrixFormat::Dense>& A,
                const MatrixView<T, MatrixFormat::Dense>& Cmat,
                float_t<T> alpha,
@@ -637,8 +700,12 @@ namespace batchlas{
         });
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, ComplexScalar T>
-    Event her2k(Queue& ctx,
+    Event her2k_vendor(Queue& ctx,
                 const MatrixView<T, MatrixFormat::Dense>& A,
                 const MatrixView<T, MatrixFormat::Dense>& Bmat,
                 const MatrixView<T, MatrixFormat::Dense>& Cmat,
@@ -678,8 +745,12 @@ namespace batchlas{
         });
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, RealScalar T>
-    Event syrk(Queue& ctx,
+    Event syrk_vendor(Queue& ctx,
                const MatrixView<T, MatrixFormat::Dense>& A,
                const MatrixView<T, MatrixFormat::Dense>& Cmat,
                T alpha,
@@ -716,8 +787,12 @@ namespace batchlas{
         });
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, RealScalar T>
-    Event syr2k(Queue& ctx,
+    Event syr2k_vendor(Queue& ctx,
                 const MatrixView<T, MatrixFormat::Dense>& A,
                 const MatrixView<T, MatrixFormat::Dense>& Bmat,
                 const MatrixView<T, MatrixFormat::Dense>& Cmat,
@@ -759,8 +834,12 @@ namespace batchlas{
         });
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, typename T>
-    Event trmm(Queue& ctx,
+    Event trmm_vendor(Queue& ctx,
                const MatrixView<T, MatrixFormat::Dense>& A,
                const MatrixView<T, MatrixFormat::Dense>& Bmat,
                const MatrixView<T, MatrixFormat::Dense>& Cmat,
@@ -811,8 +890,12 @@ namespace batchlas{
         });
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, typename T>
-    Event potrf(Queue& ctx,
+    Event potrf_vendor(Queue& ctx,
                     const MatrixView<T, MatrixFormat::Dense>& descrA,
                     Uplo uplo,
                     Span<std::byte> workspace,
@@ -844,6 +927,8 @@ namespace batchlas{
             }
         });
     }
+
+    } // namespace backend
 
     namespace backend {
 
@@ -1024,8 +1109,10 @@ namespace batchlas{
 
     } // namespace backend
 
+    namespace backend {
+
     template <Backend Back, typename T>
-    Event getrs(Queue& ctx,
+    Event getrs_vendor(Queue& ctx,
                 const MatrixView<T, MatrixFormat::Dense>& A,
                 const MatrixView<T, MatrixFormat::Dense>& B,
                 Transpose transA,
@@ -1066,8 +1153,12 @@ namespace batchlas{
         });
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend Back, typename T>
-    size_t getrs_buffer_size(Queue& ctx,
+    size_t getrs_vendor_buffer_size(Queue& ctx,
                              const MatrixView<T, MatrixFormat::Dense>& A,
                              const MatrixView<T, MatrixFormat::Dense>& B,
                              Transpose transA) {
@@ -1078,8 +1169,12 @@ namespace batchlas{
         return BumpAllocator::allocation_size<int>(ctx, A.rows() * A.batch_size());
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, typename T>
-    Event getrf(Queue& ctx,
+    Event getrf_vendor(Queue& ctx,
                 const MatrixView<T, MatrixFormat::Dense>& A,
                 Span<int64_t> pivots,
                 Span<std::byte> workspace,
@@ -1123,16 +1218,24 @@ namespace batchlas{
         return ctx.get_event();
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, typename T>
-    size_t getrf_buffer_size(Queue& ctx,
+    size_t getrf_vendor_buffer_size(Queue& ctx,
                              const MatrixView<T, MatrixFormat::Dense>& A) {
         static_cast<void>(ctx);
         static_cast<void>(A);
         return BumpAllocator::allocation_size<int>(ctx, A.rows() * A.batch_size());
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, typename T>
-    Event getri(Queue& ctx,
+    Event getri_vendor(Queue& ctx,
                 const MatrixView<T, MatrixFormat::Dense>& A,
                 const MatrixView<T, MatrixFormat::Dense>& C,
                 Span<int64_t> pivots,
@@ -1171,16 +1274,24 @@ namespace batchlas{
         });
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, typename T>
-    size_t getri_buffer_size(Queue& ctx,
+    size_t getri_vendor_buffer_size(Queue& ctx,
                              const MatrixView<T, MatrixFormat::Dense>& A) {
         static_cast<void>(ctx);
         static_cast<void>(A);
         return BumpAllocator::allocation_size<int>(ctx, A.rows() * A.batch_size());
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, typename T>
-    Event geqrf(Queue& ctx,
+    Event geqrf_vendor(Queue& ctx,
                 const MatrixView<T, MatrixFormat::Dense>& A,
                 Span<T> tau,
                 Span<std::byte> workspace) {
@@ -1203,8 +1314,12 @@ namespace batchlas{
         });
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, typename T>
-    size_t geqrf_buffer_size(Queue& ctx,
+    size_t geqrf_vendor_buffer_size(Queue& ctx,
                              const MatrixView<T, MatrixFormat::Dense>& A,
                              Span<T> tau) {
         static_cast<void>(ctx);
@@ -1213,8 +1328,12 @@ namespace batchlas{
         return 0;
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, typename T>
-    Event orgqr(Queue& ctx,
+    Event orgqr_vendor(Queue& ctx,
                 const MatrixView<T, MatrixFormat::Dense>& A,
                 Span<T> tau,
                 Span<std::byte> workspace) {
@@ -1239,8 +1358,12 @@ namespace batchlas{
         });
     }
 
+    } // namespace backend
+
+    namespace backend {
+
     template <Backend B, typename T>
-    size_t orgqr_buffer_size(Queue& ctx,
+    size_t orgqr_vendor_buffer_size(Queue& ctx,
                              const MatrixView<T, MatrixFormat::Dense>& A,
                              Span<T> tau) {
         static_cast<void>(ctx);
@@ -1248,6 +1371,8 @@ namespace batchlas{
         static_cast<void>(tau);
         return 0;
     }
+
+    } // namespace backend
 
     namespace backend {
 
@@ -1307,8 +1432,10 @@ namespace batchlas{
 
     } // namespace backend
 
+    namespace backend {
+
     template <Backend B, typename T>
-    size_t potrf_buffer_size(Queue& ctx,
+    size_t potrf_vendor_buffer_size(Queue& ctx,
                              const MatrixView<T, MatrixFormat::Dense>& descrA,
                              Uplo uplo) {
         static_cast<void>(ctx);
@@ -1317,37 +1444,47 @@ namespace batchlas{
         return 0;
     }
 
+    } // namespace backend
+
 
     // Explicit instantiations. Signatures live in the `sig` namespace beside each
     // public declaration (include/batchlas/blas/functions/*.hh), so changing one is a single
     // header edit rather than one edit per backend TU.
     #define B_ Backend::NETLIB
 
+    // WP0b moved every public entry point out of the vendor TUs into
+    // src/dispatch/entry_points/, so the tables below name only the
+    // `backend::<op>_vendor` symbols this file still defines. Adding a public
+    // op row back here would collide with those TUs at link time.
+    //
+    // There is no BATCHLAS_INSTANTIATE_BACKEND_FORMAT_OP: _FORMAT_OP emits an
+    // unqualified op name, and the sparse bodies here are backend::spmm_vendor,
+    // so the two CSR rows go through a local shim that carries both the
+    // `backend::` qualification and the comma escape.
+    #define NETLIB_FORMAT_BACKEND_OP(B, fp, F, OP) \
+        BATCHLAS_INSTANTIATE(sig::OP<BATCHLAS_UNPAREN fp BATCHLAS_COMMA F>, backend::OP, B, BATCHLAS_UNPAREN fp, F)
+
     #define NETLIB_OPS(B, fp) \
-        BATCHLAS_INSTANTIATE_FORMAT_OP(B, fp, MatrixFormat::CSR, spmm) \
-        BATCHLAS_INSTANTIATE_FORMAT_OP(B, fp, MatrixFormat::CSR, spmm_buffer_size) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, gemm) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, gemv) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, trsm) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, trmm) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, geqrf) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, geqrf_buffer_size) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, getrs) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, getrs_buffer_size) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, getrf) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, getrf_buffer_size) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, getri) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, getri_buffer_size) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, ormqr) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, ormqr_buffer_size) \
+        NETLIB_FORMAT_BACKEND_OP(B, fp, MatrixFormat::CSR, spmm_vendor) \
+        NETLIB_FORMAT_BACKEND_OP(B, fp, MatrixFormat::CSR, spmm_vendor_buffer_size) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, gemm_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, gemv_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, trsm_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, trmm_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, geqrf_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, geqrf_vendor_buffer_size) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, getrs_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, getrs_vendor_buffer_size) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, getrf_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, getrf_vendor_buffer_size) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, getri_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, getri_vendor_buffer_size) \
         BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, ormqr_vendor) \
         BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, ormqr_vendor_buffer_size) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, orgqr) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, orgqr_buffer_size) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, potrf) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, potrf_buffer_size) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, syev) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, syev_buffer_size) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, orgqr_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, orgqr_vendor_buffer_size) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, potrf_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, potrf_vendor_buffer_size) \
         BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, syev_vendor) \
         BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, syev_vendor_buffer_size) \
         BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, gesvd_vendor) \
@@ -1356,14 +1493,14 @@ namespace batchlas{
     // symm/syrk/syr2k are real-only and hemm/herk/her2k are complex-only, so the
     // narrower domains get their own tables rather than one blanket loop.
     #define NETLIB_REAL_OPS(B, fp) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, symm) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, syrk) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, syr2k)
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, symm_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, syrk_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, syr2k_vendor)
 
     #define NETLIB_COMPLEX_OPS(B, fp) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, hemm) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, herk) \
-        BATCHLAS_INSTANTIATE_OP(B, fp, her2k)
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, hemm_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, herk_vendor) \
+        BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, her2k_vendor)
 
     // Instantiate for the floating-point types of interest.
     BATCHLAS_FOR_EACH_SCALAR_TYPE_1(NETLIB_OPS, B_)
@@ -1373,5 +1510,6 @@ namespace batchlas{
     #undef NETLIB_OPS
     #undef NETLIB_REAL_OPS
     #undef NETLIB_COMPLEX_OPS
+    #undef NETLIB_FORMAT_BACKEND_OP
     #undef B_
 }

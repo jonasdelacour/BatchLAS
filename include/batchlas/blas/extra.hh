@@ -8,20 +8,17 @@
 namespace batchlas
 {
 
-    // Memory passed from outside
     template <typename T, MatrixFormat MF>
     Event norm(Queue &ctx,
               const MatrixView<T, MF> &A,
               const NormType norm_type,
               const Span<float_t<T>> norms);
 
-    // Convenience function which allocates and returns the results stored in an array.
     template <typename T, MatrixFormat MF>
     UnifiedVector<float_t<T>> norm(Queue &ctx,
                           const MatrixView<T, MF> &A,
                           const NormType norm_type = NormType::Frobenius);
 
-    //Memory passed from outside
     template <Backend B, typename T, MatrixFormat MF>
     Event cond(Queue &ctx,
               const MatrixView<T, MF> &A,
@@ -29,65 +26,23 @@ namespace batchlas
               const Span<T> conds,
               const Span<std::byte> workspace);
 
-    // Workspace size for the `cond` overload above.
-    //
-    // This used to be declared as a non-template function hardwired to float,
-    // while the only definition (src/extra/cond.cc) was a template -- so the
-    // symbol the header promised did not exist and any caller got an undefined
-    // reference. The declaration now matches the definition.
-    //
-    // Instantiated for T in {float, double} with MF == MatrixFormat::Dense only
-    // (see COND_INSTANTIATE in src/extra/cond.cc). Complex `cond` is not
-    // implemented, so any other T or MF is a link error rather than a compile
-    // error; the Python binding reports it as not-implemented instead.
+    // Workspace size for the `cond` overload above. Instantiated only for T in
+    // {float, double} with MF == MatrixFormat::Dense (COND_INSTANTIATE in
+    // src/extra/cond.cc); any other T or MF is a link error, not a compile error.
     template <Backend B, typename T, MatrixFormat MF>
     size_t cond_buffer_size(Queue &ctx,
                             const MatrixView<T, MF> &A,
                             const NormType norm_type);
 
-    //Convenience function which allocates memory internally
     template <Backend B, typename T, MatrixFormat MF>
     UnifiedVector<T> cond(Queue &ctx,
                           const MatrixView<T, MF> &A,
                           const NormType norm_type);
 
-    // Create a batch of random dense matrices with a specified log10 conditioning metric.
     // log10_kappa is log10(κ2) or log10(κF) depending on metric (Spectral or Frobenius only).
-    //
-    // `algo` orthonormalises the two random factors. It defaults to CGS2, NOT to
-    // one of the Cholesky variants, and that is deliberate: Chol-QR forms the
-    // Gram matrix and so squares the condition number of its input. The input
-    // here is a raw Matrix::Random, whose conditioning is NOT controlled (the
-    // requested kappa is imposed afterwards, by the diagonal), and in float the
-    // squared Gram goes numerically indefinite once kappa exceeds about 1e4 --
-    // which ordinary random draws reach a few times in a batch of 32 at n=64.
-    // potrf then fails, its info code is discarded (see the note in
-    // src/extra/random_cond.cc), the following trsm back-substitutes through a
-    // garbage diagonal, and the two gemms smear the resulting NaN across every
-    // entry of that batch item. That is the "generator intermittently emits an
-    // entirely non-finite matrix" defect reported against PR #66.
-    //
-    // Measured at n=64, float, batch=32, seed 1, requesting log10(kappa_F) = 5;
-    // "ortho err" is ||Q^H Q - I||_max and the bracket is the range of log10 of
-    // the ACHIEVED condition number over the batch:
-    //
-    //   Chol2 (old default)  3.9e-7   [5.000,  5.000]   2/32 non-finite
-    //   Cholesky             3.2e-2   [4.992,  5.003]   2/32 non-finite
-    //   ShiftChol3           3.4e-7   [5.000,  5.000]   0/32
-    //   Householder          4.3e-7   [5.000, 17.390]   0/32
-    //   CGS2                 2.3e-7   [5.000,  5.000]   0/32
-    //   SVQB2                4.0e-6   [5.000,  5.000]   0/32
-    //
-    // Householder is the obvious candidate and is the WRONG one: it removes the
-    // NaNs but returns a factor that leaves some batch items numerically
-    // singular, so the generator silently stops honouring the requested kappa --
-    // a worse failure than the one being fixed, because it is invisible. That is
-    // a latent defect in ortho's geqrf+orgqr path, not in this generator.
-    //
-    // CGS2 has the best orthogonality of the six, honours the requested kappa
-    // exactly, and uses no potrf at all, so it cannot be caught by the unchecked
-    // info code. Callers who want the faster Cholesky path on input they know to
-    // be well conditioned can still ask for it explicitly.
+    // `algo` defaults to CGS2 deliberately: Chol-QR squares the condition number of an
+    // uncontrolled random input and returns non-finite items in float, and Householder
+    // leaves some items singular, silently not honouring the requested kappa.
     template <Backend B, typename T>
     Matrix<T, MatrixFormat::Dense> random_with_log10_cond_metric(Queue &ctx,
                                                                   int n,
@@ -97,9 +52,6 @@ namespace batchlas
                                                                   unsigned int seed = 42,
                                                                   OrthoAlgorithm algo = OrthoAlgorithm::CGS2);
 
-    // Create a batch of random symmetric/Hermitian dense matrices with a specified log10 conditioning metric.
-    // log10_kappa is log10(κ2) or log10(κF) depending on metric (Spectral or Frobenius only).
-    // See random_with_log10_cond_metric above for why `algo` defaults to CGS2.
     template <Backend B, typename T>
     Matrix<T, MatrixFormat::Dense> random_hermitian_with_log10_cond_metric(Queue &ctx,
                                                                            int n,
@@ -109,7 +61,6 @@ namespace batchlas
                                                                            unsigned int seed = 42,
                                                                            OrthoAlgorithm algo = OrthoAlgorithm::CGS2);
 
-    // Create a batch of random dense banded matrices (general) with a specified log10 conditioning metric.
     // The resulting bandwidth is <= kd. For small kd, this may produce diagonal matrices.
     template <Backend B, typename T>
     Matrix<T, MatrixFormat::Dense> random_banded_with_log10_cond_metric(Queue &ctx,
@@ -120,8 +71,6 @@ namespace batchlas
                                                                          int batch_size = 1,
                                                                          unsigned int seed = 42);
 
-    // Create a batch of random symmetric/Hermitian banded matrices with a specified log10 conditioning metric.
-    // log10_kappa is log10(κ2) or log10(κF) depending on metric (Spectral or Frobenius only).
     template <Backend B, typename T>
     Matrix<T, MatrixFormat::Dense> random_hermitian_banded_with_log10_cond_metric(Queue &ctx,
                                                                                   int n,
@@ -131,7 +80,6 @@ namespace batchlas
                                                                                   int batch_size = 1,
                                                                                   unsigned int seed = 42);
 
-    // Create a batch of random tridiagonal dense matrices (general) with a specified log10 conditioning metric.
     // The condition number is enforced via the diagonal spectrum; off-diagonals are zero.
     template <Backend B, typename T>
     Matrix<T, MatrixFormat::Dense> random_tridiagonal_with_log10_cond_metric(Queue &ctx,
@@ -141,8 +89,6 @@ namespace batchlas
                                                                              int batch_size = 1,
                                                                              unsigned int seed = 42);
 
-    // Create a batch of random symmetric/Hermitian tridiagonal dense matrices with a specified log10 conditioning metric.
-    // log10_kappa is log10(κ2) or log10(κF) depending on metric (Spectral or Frobenius only).
     template <Backend B, typename T>
     Matrix<T, MatrixFormat::Dense> random_hermitian_tridiagonal_with_log10_cond_metric(Queue &ctx,
                                                                                        int n,
@@ -151,36 +97,29 @@ namespace batchlas
                                                                                        int batch_size = 1,
                                                                                        unsigned int seed = 42);
 
-    // Batched matrix transpose into preallocated output
     template <typename T, MatrixFormat MF>
     Event transpose(Queue &ctx,
                     const MatrixView<T, MF> &A,
                     const MatrixView<T, MF> &B);
 
-    // Convenience overload allocating the output matrix
     template <typename T, MatrixFormat MF>
     Matrix<T, MF> transpose(Queue &ctx,
                             const MatrixView<T, MF> &A);
 
-    // Owning-argument and backend-deducing overloads. See
-    // BATCHLAS_ACCEPT_OWNING and BATCHLAS_DISPATCH_ON_QUEUE in
-    // blas/queue-dispatch.hh: the first lets every entry point below take an
-    // owning `Matrix` where its declaration takes a `MatrixView`, the second
-    // takes the backend from the queue.
+    // Owning-argument and backend-deducing overloads: `f(ctx, Matrix, ...)` accepts
+    // owning containers where the primary takes views, and `f(ctx, ...)` uses
+    // ctx.backend(). See BATCHLAS_ACCEPT_OWNING and BATCHLAS_DISPATCH_ON_QUEUE in
+    // blas/queue-dispatch.hh.
     //
-    // `norm` and `transpose` above are not Backend-templated, so they need no
-    // dispatch overload -- they already work as written. They still need the
-    // owning-argument one, which is why they use its _NB spelling: the problem
-    // it solves is deduction of `T` and `MF`, and that is there either way.
+    // `norm` and `transpose` are not Backend-templated, so they need no dispatch
+    // overload, but they do need the owning-argument one -- hence its _NB spelling,
+    // which solves deduction of `T` and `MF` either way.
     //
-    // The six random_*_with_log10_cond_metric generators are deliberately
-    // absent. Their scalar type appears only as `float_t<T>` -- an alias
-    // template, hence a non-deduced context -- and in the return type, so `T`
-    // cannot be deduced from the arguments. The macro's requires-clause would
-    // never be satisfied and it would expand to nothing at all, which reads as
-    // if the generators were dispatchable when they are not. They keep the
-    // explicit f<Backend, T>(...) spelling, for the same reason
-    // tridiagonal_solver_buffer_size does.
+    // The random_*_with_log10_cond_metric generators are deliberately absent from
+    // both: their `T` is non-deduced (it appears only as `float_t<T>` and in the
+    // return type), so either macro would expand to nothing at all, reading as if
+    // they were dispatchable when they are not. They keep the explicit
+    // f<Backend, T>(...) spelling. See docs/cpp-api.md#which-spelling-each-entry-point-takes.
     BATCHLAS_ACCEPT_OWNING(cond)
     BATCHLAS_ACCEPT_OWNING(cond_buffer_size)
     BATCHLAS_ACCEPT_OWNING_NB(norm)

@@ -45,6 +45,11 @@ enum class KernelVariant {
     // Shallow K, wide M and N: the only variant with a 64-accumulator thread
     // tile, and the only one whose shared fragment loads vectorize.
     Tiled128x128RegisterK8,
+    // The wide-scalar tile: 4x4 thread tile, 16 accumulators, and a 16-byte
+    // (not 4-element) access granule, so double / complex<float> /
+    // complex<double> all get vectorized conflict-free fragment loads. The
+    // only register-tiled variant that serves a non-float scalar.
+    Tiled64x64RegisterK16Wide,
     Tiled32x128RegisterK16,
     Tiled32x128RegisterK16TN,
     Tiled32x128RegisterK16TT,

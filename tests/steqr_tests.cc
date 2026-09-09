@@ -661,9 +661,11 @@ void stress_run_case(Queue& ctx,
             // NOTE: CUDA SYCL stacks can be sensitive to specific kernel launch patterns.
             // We request eigenvectors here (even though we only compare eigenvalues) because
             // it exercises the same well-tested SYEV path used elsewhere in this test file.
-            backend::syev_vendor_buffer_size<B, Real>(ctx, dense_A.view(), ref_eigs, JobType::EigenVectors, Uplo::Lower),
+            batchlas::blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, Real>(
+                ctx, dense_A.view(), ref_eigs, JobType::EigenVectors, Uplo::Lower),
             std::byte(0));
-        backend::syev_vendor<B>(ctx, dense_A.view(), ref_eigs, JobType::EigenVectors, Uplo::Lower, syev_ws.to_span());
+        batchlas::blas::dispatch::detail::syev_vendor_or_throw<B, Real>(
+            ctx, dense_A.view(), ref_eigs, JobType::EigenVectors, Uplo::Lower, syev_ws.to_span());
         ctx.wait();
     }
 

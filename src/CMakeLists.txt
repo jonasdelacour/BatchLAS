@@ -7,10 +7,17 @@ add_library(batchlas_core_obj OBJECT
     #util/sycl-util-impl.cc
 )
 add_library(batchlas_backends_obj OBJECT)
-if(BATCHLAS_HAS_CUDA_BACKEND)
+# The vendor-independent facade -- see src/dispatch/CMakeLists.txt.
+add_library(batchlas_dispatch_obj OBJECT)
+# WP0 S6: these carry the VENDOR wrapper TUs, so they exist only when at least
+# one vendor library for that family does. "There is a CUDA device" is no longer
+# sufficient -- with every CUDA math library off, BACKEND_CUDA_SOURCES is empty
+# and an OBJECT library with no sources is a hard CMake error, which is the
+# first thing a vendor-free configure used to hit.
+if(BATCHLAS_HAS_CUDA_BACKEND AND (BATCHLAS_HAS_CUBLAS OR BATCHLAS_HAS_CUSOLVER OR BATCHLAS_HAS_CUSPARSE))
     add_library(batchlas_backends_cuda_obj OBJECT)
 endif()
-if(BATCHLAS_HAS_ROCM_BACKEND)
+if(BATCHLAS_HAS_ROCM_BACKEND AND (BATCHLAS_HAS_ROCBLAS OR BATCHLAS_HAS_ROCSOLVER OR BATCHLAS_HAS_ROCSPARSE))
     add_library(batchlas_backends_rocm_obj OBJECT)
 endif()
 add_library(batchlas_extensions_eigen_obj OBJECT)
@@ -30,6 +37,7 @@ add_library(batchlas_sycl_obj OBJECT)
 set(BATCHLAS_OBJECT_LIBS
     batchlas_core_obj
     batchlas_backends_obj
+    batchlas_dispatch_obj
     batchlas_extensions_eigen_obj
     batchlas_extensions_factorization_obj
     batchlas_extensions_symmetric_obj
@@ -66,6 +74,7 @@ endforeach()
 
 # Add source files from subdirectories
 add_subdirectory(backends)
+add_subdirectory(dispatch)
 add_subdirectory(extensions)
 add_subdirectory(util)
 add_subdirectory(extra)
@@ -100,8 +109,14 @@ add_library(batchlas_core SHARED
 )
 batchlas_configure_component(batchlas_core)
 
+# batchlas_dispatch_obj rides in this component rather than getting a .so of its
+# own: it is the public face of exactly these entry points, and a separate
+# library would add an install target and an export entry for two dozen
+# forwarding functions. The separation that matters is at TU level -- the
+# definitions are no longer inside a vendor file -- not at library level.
 add_library(batchlas_backends SHARED
     $<TARGET_OBJECTS:batchlas_backends_obj>
+    $<TARGET_OBJECTS:batchlas_dispatch_obj>
 )
 batchlas_configure_component(batchlas_backends)
 
@@ -184,7 +199,7 @@ set(BATCHLAS_COMPONENT_TARGETS
     batchlas_sycl
 )
 
-if(BATCHLAS_HAS_CUDA_BACKEND)
+if(TARGET batchlas_backends_cuda_obj)
     add_library(batchlas_backends_cuda SHARED
         $<TARGET_OBJECTS:batchlas_backends_cuda_obj>
     )
@@ -192,7 +207,7 @@ if(BATCHLAS_HAS_CUDA_BACKEND)
     list(APPEND BATCHLAS_COMPONENT_TARGETS batchlas_backends_cuda)
 endif()
 
-if(BATCHLAS_HAS_ROCM_BACKEND)
+if(TARGET batchlas_backends_rocm_obj)
     add_library(batchlas_backends_rocm SHARED
         $<TARGET_OBJECTS:batchlas_backends_rocm_obj>
     )
@@ -220,6 +235,13 @@ endif()
 if(BATCHLAS_HAS_CUDA_BACKEND)
     if(BATCHLAS_CUDA_ARCHITECTURES)
         set_property(TARGET batchlas_backends_obj PROPERTY CUDA_ARCHITECTURES ${BATCHLAS_CUDA_ARCHITECTURES})
+    endif()
+endif()
+
+# Everything below needs the CUDA VENDOR component, which only exists when at
+# least one CUDA math library was found.
+if(TARGET batchlas_backends_cuda_obj)
+    if(BATCHLAS_CUDA_ARCHITECTURES)
         set_property(TARGET batchlas_backends_cuda_obj PROPERTY CUDA_ARCHITECTURES ${BATCHLAS_CUDA_ARCHITECTURES})
         set_property(TARGET batchlas_backends_cuda PROPERTY CUDA_ARCHITECTURES ${BATCHLAS_CUDA_ARCHITECTURES})
     endif()
