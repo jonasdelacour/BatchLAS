@@ -51,6 +51,7 @@
 #include <batchlas/blas/functions.hh>
 #include <batchlas/backend_config.h>
 #include "../util/template-instantiations.hh"
+#include <batchlas/settings.hh>
 
 namespace batchlas {
 
@@ -141,9 +142,12 @@ Event syevx_filtered(Queue& ctx,
     // also turns it off, restoring the old constant-10 behaviour exactly.
     bool degree_explicit = params.filter_degree > 0;
     size_t degree = degree_explicit ? params.filter_degree : kDefaultFilterDegree;
-    if (const char* dv = std::getenv("BATCHLAS_SYEVX_FILTER_DEGREE")) {
-        const int parsed = std::atoi(dv);
-        if (parsed > 0) { degree = static_cast<size_t>(parsed); degree_explicit = true; }
+    // 0 on the field means unset, which is what the call site's `> 0` test
+    // computed before. Setting it also flips degree_explicit, which is why the
+    // four-level precedence chain stays here rather than on the field.
+    if (const int parsed = batchlas::settings().geometry.syevx_filter_degree; parsed > 0) {
+        degree = static_cast<size_t>(parsed);
+        degree_explicit = true;
     }
     // The derivation is OFF by default, opt in with BATCHLAS_SYEVX_FILTER_DEGREE_AUTO=1.
     //
@@ -165,11 +169,14 @@ Event syevx_filtered(Queue& ctx,
     // batched GEMM shape; a quantile instead of a min would keep it), not the
     // per-matrix formula. Until then the constant is the safer default.
     bool auto_degree = false;
-    if (const char* av = std::getenv("BATCHLAS_SYEVX_FILTER_DEGREE_AUTO")) {
+    if (const char* av = batchlas::settings().selection.syevx_filter_degree_auto.get()) {
         if (std::atoi(av) != 0 && !degree_explicit) auto_degree = true;
     }
     bool legacy_bounds = false;
-    if (const char* bv = std::getenv("BATCHLAS_SYEVX_BOUNDS_LEGACY")) {
+    // atoi, not env_truthy: "true"/"on" parse to 0 here and are FALSE. Kept as
+    // it is -- the field is the raw value, so the reading of every spelling is
+    // exactly what it was.
+    if (const char* bv = batchlas::settings().selection.syevx_bounds_legacy.get()) {
         legacy_bounds = (std::atoi(bv) != 0);
     }
     const bool find_largest = params.find_largest;
@@ -691,7 +698,9 @@ Event syevx_filtered(Queue& ctx,
             eff_degree = std::min(eff_degree, cap);
         }
         if (eff_degree < 1) eff_degree = 1;
-        if (std::getenv("BATCHLAS_DEBUG_FILTER_DEGREE")) {
+        // Presence only: any value, including the empty string, enables it,
+        // which is what the bool on the field records.
+        if (batchlas::settings().diagnostics.debug_filter_degree) {
             for (int64_t b = 0; b < batch; ++b) {
                 Real rmax = Real(0);
                 for (int64_t j = 0; j < k; ++j)

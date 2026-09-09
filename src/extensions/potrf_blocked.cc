@@ -23,6 +23,7 @@
 #include <type_traits>
 
 #include <sycl/sycl.hpp>
+#include <batchlas/settings.hh>
 
 namespace batchlas {
 namespace sycl_potrf {
@@ -46,15 +47,14 @@ template <> struct PotrfBlockedConst<double>               { static constexpr in
 template <> struct PotrfBlockedConst<std::complex<float>>  { static constexpr int NB = 96;  static constexpr int W = 32; };
 template <> struct PotrfBlockedConst<std::complex<double>> { static constexpr int NB = 64;  static constexpr int W = 16; };
 
-// Blocking overrides only, never routing; read once so the sizing query and the call agree.
-inline int potrf_env_int(const char* name) {
-    const char* raw = std::getenv(name);
-    if (!raw || !*raw) return 0;
-    const int v = std::atoi(raw);
-    return v > 0 ? v : 0;
-}
-inline int potrf_nb_env() { static const int v = potrf_env_int("BATCHLAS_POTRF_NB"); return v; }
-inline int potrf_w_env()  { static const int v = potrf_env_int("BATCHLAS_POTRF_W");  return v; }
+// Blocking overrides only, never routing; read once so the sizing query and the
+// call agree. The function-local statics are kept for exactly that reason: the
+// settings() snapshot is re-readable, and a reload landing between
+// potrf_buffer_size() and the matching potrf would desynchronise the allocated
+// workspace from the block width actually used. 0 means "unset" on both fields,
+// which is what the per-type PotrfBlockedConst defaults below fall back to.
+inline int potrf_nb_env() { static const int v = batchlas::settings().geometry.potrf_nb; return v; }
+inline int potrf_w_env()  { static const int v = batchlas::settings().geometry.potrf_w;  return v; }
 
 struct PotrfBlockedParams {
     int nb;  // diagonal block order, and the trailing update's k

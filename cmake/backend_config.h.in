@@ -14,6 +14,20 @@
 // Whether CPU SYCL kernel targets are compiled
 #cmakedefine01 BATCHLAS_HAS_CPU_TARGET
 
+// Whether batchlas::Settings::unsafe may be set from the process environment
+// (cmake option BATCHLAS_ALLOW_UNSAFE_ENV, default OFF). 0 means settings()
+// pins those fields to their safe values and warns once per variable naming the
+// option, so BATCHLAS_SKIP_POINTER_CHECKS cannot disarm the USM check,
+// BATCHLAS_LATRD_GRID_FORCE_UNSAFE cannot lift the co-residency cap, and
+// BATCHLAS_BLAS_HEALTH=off cannot skip the host-dgemm correctness probe.
+//
+// #cmakedefine01, like every flag in this header: the macro is ALWAYS defined,
+// to 0 or to 1. Test it with `#if`, never `#ifdef` -- an #ifdef here is true in
+// both builds, which is how a guarded test compiles to nothing in the
+// configuration everyone uses. tests/settings_tests.cc #errors if this header
+// was not reached, for exactly that reason.
+#cmakedefine01 BATCHLAS_ALLOW_UNSAFE_ENV
+
 // ---------------------------------------------------------------------------
 // Vendor math libraries present -- the third dispatch axis (WP0 step S1).
 //

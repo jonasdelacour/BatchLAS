@@ -10,6 +10,7 @@
 #include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/blas/functions/potrf.hh>
 #include <batchlas/blas/functions/trsm.hh>
+#include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
@@ -646,18 +647,11 @@ TYPED_TEST(PotrfCtaTest, FacadeReachesTheCtaKernel) {
     const int n = std::min(48, this->ceiling());
     const int batch = 3;
 
-    struct EnvGuard {
-        std::string saved;
-        bool had = false;
-        EnvGuard() {
-            if (const char* v = std::getenv("BATCHLAS_POTRF_ROUTE")) { saved = v; had = true; }
-            ::setenv("BATCHLAS_POTRF_ROUTE", "cta", 1);
-        }
-        ~EnvGuard() {
-            if (had) ::setenv("BATCHLAS_POTRF_ROUTE", saved.c_str(), 1);
-            else ::unsetenv("BATCHLAS_POTRF_ROUTE");
-        }
-    } guard;
+    // A bare ::setenv is invisible to the library: batchlas::settings() snapshots the
+    // environment before main() and parse_route_env reads only that snapshot. The shared
+    // guard reloads it at both ends, and restores the caller's previous value (or unsets
+    // it) exactly as the hand-rolled EnvGuard here did.
+    const ScopedEnvVar route_pin("BATCHLAS_POTRF_ROUTE", "cta");
 
     Matrix<T, MatrixFormat::Dense> A(n, n, batch);
     std::vector<std::vector<T>> ref(batch);
@@ -1442,26 +1436,23 @@ TYPED_TEST(PotrfBlockedTest, BufferSizeCoversEverySupportedNativeTier) {
         << "the blocked tier does not need more workspace than the CTA tier here, so a "
            "chosen-route-only query would pass this test by accident";
 
-    struct EnvGuard {
-        std::string saved; bool had = false;
-        EnvGuard() {
-            if (const char* v = std::getenv("BATCHLAS_POTRF_ROUTE")) { saved = v; had = true; }
-        }
-        void set(const char* v) { ::setenv("BATCHLAS_POTRF_ROUTE", v, 1); }
-        ~EnvGuard() {
-            if (had) ::setenv("BATCHLAS_POTRF_ROUTE", saved.c_str(), 1);
-            else ::unsetenv("BATCHLAS_POTRF_ROUTE");
-        }
-    } guard;
-
-    guard.set("cta");
-    const std::size_t queried = potrf_buffer_size<B, T>(*this->ctx, A.view(), Uplo::Lower);
+    // The query and the call deliberately run under DIFFERENT pinned routes -- that
+    // mismatch is the property under test. One ScopedEnvVar per arm rather than one
+    // mutable guard: the shared class pins for a scope and reloads the settings snapshot
+    // at both ends, which is the only thing that makes a pin visible to parse_route_env.
+    // Nothing reads the variable between the arms, so the momentary restore is unobservable.
+    const std::size_t queried = [&] {
+        const ScopedEnvVar route_pin("BATCHLAS_POTRF_ROUTE", "cta");
+        return potrf_buffer_size<B, T>(*this->ctx, A.view(), Uplo::Lower);
+    }();
     ASSERT_GE(queried, blk_need)
         << "potrf_buffer_size resolved `cta` and sized only that tier; a caller whose "
            "environment changes between the query and the call (options.hh:546-552 reads "
            "getenv twice) under-allocates by " << (blk_need - queried) << " bytes";
 
-    guard.set("blocked");
+    // Pinned for the rest of the test; its destructor restores the surrounding value,
+    // which is what the single hand-rolled guard did once at end of scope.
+    const ScopedEnvVar route_pin("BATCHLAS_POTRF_ROUTE", "blocked");
     UnifiedVector<std::byte> ws(queried);
     UnifiedVector<int32_t> info(batch, int32_t(-12345));
     ASSERT_NO_THROW(
@@ -1487,17 +1478,8 @@ TYPED_TEST(PotrfBlockedTest, FacadeReachesTheBlockedDriver) {
     const int batch = 3;
     ASSERT_GT(n, this->ceiling());
 
-    struct EnvGuard {
-        std::string saved; bool had = false;
-        EnvGuard() {
-            if (const char* v = std::getenv("BATCHLAS_POTRF_ROUTE")) { saved = v; had = true; }
-            ::setenv("BATCHLAS_POTRF_ROUTE", "blocked", 1);
-        }
-        ~EnvGuard() {
-            if (had) ::setenv("BATCHLAS_POTRF_ROUTE", saved.c_str(), 1);
-            else ::unsetenv("BATCHLAS_POTRF_ROUTE");
-        }
-    } guard;
+    // Same reload requirement as the CTA facade test above; same restore-on-exit.
+    const ScopedEnvVar route_pin("BATCHLAS_POTRF_ROUTE", "blocked");
 
     std::vector<std::vector<T>> ref(batch);
     for (int b = 0; b < batch; ++b) ref[b] = make_spd<T>(n, 4040u + b);

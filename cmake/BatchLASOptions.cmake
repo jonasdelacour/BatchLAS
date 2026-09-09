@@ -106,6 +106,38 @@ option(BATCHLAS_KEEP_CUDA_INTERMEDIATES "Preserve CUDA and SYCL CUDA device comp
 option(BATCHLAS_SANITIZER_FRIENDLY_DEBUG "Use more unwind-friendly debug flags for sanitizer runs (may slow down builds/runs)" OFF)
 option(BATCHLAS_ENABLE_TUNING "Enable BatchLAS tuning targets (requires Python and benchmarks)" OFF)
 
+# Whether the `unsafe` group in batchlas::Settings is allowed to be set from the
+# process environment.
+#
+# Most of the ~106 BATCHLAS_* knobs pick a route, a launch geometry or a dump
+# path: setting one by accident costs a measurement, not a result. A few are
+# different in kind, because they remove a check rather than change one.
+# BATCHLAS_SKIP_POINTER_CHECKS turns off the USM reachability test that stands
+# between an ordinary std::vector and CUDA_ERROR_ILLEGAL_ADDRESS followed by a
+# SIGABRT no catch block can stop; BATCHLAS_LATRD_GRID_FORCE_UNSAFE lets the
+# grid latrd path launch more work-groups per matrix than are guaranteed
+# co-resident, and its spin barrier then HANGS rather than returning a wrong
+# answer; BATCHLAS_BLAS_HEALTH=off skips the host-dgemm probe, after which a
+# known-bad OpenBLAS kernel makes every double result silently wrong with no
+# diagnostic. All three are worth having while debugging. None should be
+# reachable by exporting a shell variable and forgetting it, which is how the
+# readiness audit's A-3 finding describes the failure: a benchmark exports one,
+# the shell keeps it, and every later run in that process has different
+# semantics with nothing on stderr to say so.
+#
+# So the default is OFF, and OFF is not a no-op: settings() holds those fields
+# at their safe defaults whatever the environment says, and warns once on
+# stderr naming both the variable and this option, so the knob fails loudly
+# instead of silently. An embedding application gets a build whose argument
+# checking cannot be disarmed from outside.
+#
+# ON in the dev*, fast-dev and benchmarks presets, which exist to measure and to
+# debug; deliberately OFF in the cuda preset, which is the pre-push gate and has
+# to run the arm a release build runs. See docs/cpp-api.md#configuration.
+option(BATCHLAS_ALLOW_UNSAFE_ENV
+    "Honour the BATCHLAS_* environment overrides that disable a safety check (batchlas::Settings::unsafe)"
+    OFF)
+
 # There is deliberately NO BATCHLAS_ENABLE_COVERAGE option.
 #
 # The per-call half of the coverage instrument (dispatch/coverage.hh) is gated

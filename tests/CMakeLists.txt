@@ -26,6 +26,7 @@ set(TEST_TARGETS
     options_api_tests
     route_vocabulary_tests
     route_gemm_equivalence_tests
+    settings_tests
     linalg_layer_tests
     gemm_tests
     syevx_tests
@@ -97,6 +98,12 @@ set(BATCHLAS_SMOKE_TEST_TARGETS
     # change of meaning would invalidate measurements rather than fail loudly.
     route_vocabulary_tests
     route_gemm_equivalence_tests
+    # settings() decides which kernel runs and whether arguments are checked, for
+    # every op at once, and it is read once per process -- so a regression here is
+    # not one suite going red, it is the whole suite silently measuring the default
+    # arm. Cheap (no kernel launches on the arm that runs by default), so it belongs
+    # in the fast gate.
+    settings_tests
     linalg_layer_tests
 )
 
@@ -138,7 +145,7 @@ set(BATCHLAS_TEST_LABELS_util
     sg_compat_tests util_span_tests util_vector_tests util_device_queue_tests
     mempool_tests matrix_tests matrix_view_tests minibench_cli_tests
     backend_dispatch_tests options_api_tests route_vocabulary_tests
-    route_gemm_equivalence_tests linalg_layer_tests)
+    route_gemm_equivalence_tests settings_tests linalg_layer_tests)
 set(BATCHLAS_TEST_LABELS_blas
     device_blas_tests gemm_tests gemv_tests symm_tests hemm_tests herk_tests her2k_tests
     syrk_tests syr2k_tests

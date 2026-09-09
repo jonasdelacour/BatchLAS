@@ -23,6 +23,7 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <batchlas/settings.hh>
 
 namespace batchlas {
 namespace sycl_getrf {
@@ -51,9 +52,14 @@ inline int getrf_blocked_nb(int n) {
 enum class LeftLaswp { InLoop, DeferWalk, DeferGather };
 
 inline LeftLaswp getrf_left_laswp_mode() {
-    static const bool present = (std::getenv("BATCHLAS_GETRF_LASWP") != nullptr);
+    // The presence latch and the per-call value read both come from one field
+    // now, so they cannot see different strings -- but the latch itself is kept,
+    // because dropping it would make the knob newly effective for a process that
+    // first sets it after the first getrf, which is a behaviour change.
+    static const bool present =
+        (batchlas::settings().selection.getrf_laswp.get() != nullptr);
     if (!present) return LeftLaswp::DeferGather;
-    const char* s = std::getenv("BATCHLAS_GETRF_LASWP");
+    const char* s = batchlas::settings().selection.getrf_laswp.get();
     if (s == nullptr) return LeftLaswp::DeferGather;
     if (std::strcmp(s, "inloop") == 0) return LeftLaswp::InLoop;
     if (std::strcmp(s, "defer_walk") == 0) return LeftLaswp::DeferWalk;

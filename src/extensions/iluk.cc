@@ -15,6 +15,7 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
+#include <batchlas/settings.hh>
 
 namespace batchlas {
 namespace {
@@ -295,7 +296,9 @@ LevelSchedule build_level_schedule(const std::vector<int>& row_offsets,
 // BATCHLAS_ILUK_DEVICE forces either side, which is also how the two are checked
 // against each other.
 bool iluk_prefer_device(int batch_size) {
-    if (const char* v = std::getenv("BATCHLAS_ILUK_DEVICE")) {
+    // First-character '0'/'1' only: "true"/"on"/"yes" all fall through to the
+    // shape default. Narrower than env_truthy, and left that way.
+    if (const char* v = batchlas::settings().selection.iluk_device.get()) {
         if (v[0] == '0') return false;
         if (v[0] == '1') return true;
     }

@@ -16,6 +16,7 @@
 #include "steqr_cta_device.hh"
 #include <array>
 #include <numeric>
+#include <batchlas/settings.hh>
 
 namespace batchlas {
 
@@ -218,7 +219,12 @@ namespace batchlas {
 
         // Optional fail-fast diagnostics: avoids silent non-convergence.
         // Note: checking requires synchronization, so keep it opt-in.
-        if (const char* v = std::getenv("BATCHLAS_STEQR_CTA_CHECK")) {
+        // Diagnostics, and the OPPOSITE of a safety override: it ADDS a check,
+        // so gating it off under a locked-down build would entrench the silent
+        // non-convergence its default already has. First-character truthiness
+        // {1,t,T,y,Y} -- neither env_truthy nor env_falsy -- so the field is the
+        // raw value and the parser stays here.
+        if (const char* v = batchlas::settings().diagnostics.steqr_cta_check.get()) {
             const bool enabled = (v[0] == '1') || (v[0] == 't') || (v[0] == 'T') || (v[0] == 'y') || (v[0] == 'Y');
             if (enabled) {
                 ctx.wait();

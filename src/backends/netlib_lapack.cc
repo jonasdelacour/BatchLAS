@@ -25,6 +25,7 @@
 
 #include "gemm_variant.hh"
 #include "../util/template-instantiations.hh"
+#include <batchlas/settings.hh>
 
 namespace batchlas{
 
@@ -62,10 +63,15 @@ namespace batchlas{
         double worst_error = 0.0;
     };
 
-    // off | warn (default) | error
-    inline const char* host_blas_health_mode() {
-        const char* mode = std::getenv("BATCHLAS_BLAS_HEALTH");
-        return mode ? mode : "warn";
+    // off | warn (default) | error, now a parsed enum on settings().unsafe.
+    //
+    // `off` skips the probe entirely, which suppresses the ONLY detection of a
+    // host BLAS that computes dgemm incorrectly, so it is a genuine safety
+    // override and the BATCHLAS_ALLOW_UNSAFE_ENV gate refuses it. `error` is
+    // STRICTER than the default and is let through -- the gate refuses the
+    // unsafe DIRECTION, not every value that differs from the default.
+    inline batchlas::UnsafeSettings::BlasHealth host_blas_health_mode() {
+        return batchlas::settings().unsafe.blas_health;
     }
 
     // Port of the configure-time probe in cmake/BatchLASBlasHealthCheck.cmake.
@@ -122,7 +128,7 @@ namespace batchlas{
 
     inline const HostBlasDoubleHealth& host_blas_double_health() {
         static const HostBlasDoubleHealth health = [] {
-            if (std::strcmp(host_blas_health_mode(), "off") == 0) {
+            if (host_blas_health_mode() == batchlas::UnsafeSettings::BlasHealth::Off) {
                 return HostBlasDoubleHealth{};
             }
             return probe_host_dgemm();
@@ -132,6 +138,9 @@ namespace batchlas{
 
     inline std::string host_blas_double_health_message(const HostBlasDoubleHealth& health) {
         const std::string required = BATCHLAS_REQUIRED_OPENBLAS_CORETYPE;
+        // OpenBLAS's OWN variable, not a BATCHLAS_* knob: read straight from the
+        // environment for the diagnostic message and deliberately NOT captured
+        // into Settings, which owns only this library's own knobs.
         const char* current_env = std::getenv("OPENBLAS_CORETYPE");
         const std::string current = current_env ? current_env : "";
 
@@ -169,7 +178,7 @@ namespace batchlas{
         if (health.ok) return;
 
         const std::string msg = host_blas_double_health_message(health);
-        if (std::strcmp(host_blas_health_mode(), "error") == 0) {
+        if (host_blas_health_mode() == batchlas::UnsafeSettings::BlasHealth::Error) {
             throw std::runtime_error(msg);
         }
         // Warn once, loudly.

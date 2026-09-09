@@ -7,6 +7,7 @@
 
 #include <batchlas/backend_config.h>
 #include <batchlas/blas/enums.hh>
+#include <batchlas/settings.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 
@@ -72,13 +73,25 @@ namespace detail {
 // std::invalid_argument that names the offending argument.
 //
 // One USM query per pointer argument (~70ns measured), which is noise against a
-// kernel launch. BATCHLAS_SKIP_POINTER_CHECKS=1 bypasses it.
-
+// kernel launch. BATCHLAS_SKIP_POINTER_CHECKS=1 bypasses it, and it is one of
+// the knobs the BATCHLAS_ALLOW_UNSAFE_ENV build option gates: with that option
+// OFF the field below is false whatever the environment says, so an embedding
+// application cannot have its argument validation switched off by ambient
+// process state.
+//
+// The odd acceptance set is preserved verbatim in settings.cc -- ANY non-empty
+// value whose first character is not '0' skips the checks, so "=false", "=off"
+// and "=no" all DISABLE them. That is not env_truthy and must not become it:
+// tightening it here would silently re-enable checking for anyone who wrote one
+// of those spellings, which is a behaviour change at the one site where
+// behaviour changes are most expensive.
+//
+// Still latched in a function-local static, exactly as before: this is on the
+// argument-checking path of every dispatched call, and the latch is what keeps
+// it off the per-argument cost. A reload therefore does not reach it, which is
+// also today's behaviour.
 inline bool pointer_checks_enabled() {
-    static const bool enabled = [] {
-        const char* v = std::getenv("BATCHLAS_SKIP_POINTER_CHECKS");
-        return !(v && *v && *v != '0');
-    }();
+    static const bool enabled = !batchlas::settings().unsafe.skip_pointer_checks;
     return enabled;
 }
 

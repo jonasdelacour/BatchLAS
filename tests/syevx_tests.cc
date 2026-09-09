@@ -921,11 +921,20 @@ TEST(SyevxLobpcgInstrumentationTest, DeviceStagedHistoryMatchesHostReadPath) {
         SyevxParams<float> local = params;
         local.instrumentation = &instr;
 
-        if (force_host_path) {
-            setenv("BATCHLAS_SYEVX_INSTR_HOST", "1", 1);
-        } else {
-            unsetenv("BATCHLAS_SYEVX_INSTR_HOST");
-        }
+        // MUST be ScopedEnvVar, not ::setenv: the knob is read through
+        // batchlas::settings(), whose snapshot is taken once before main(), so a
+        // raw setenv is read by nothing and both arms run the device-staged path
+        // -- the vacuous A/B this comparison exists to prevent. The guard reloads
+        // that snapshot at both ends, and spans the buffer-size query too, so
+        // sizing and solving cannot disagree about which path runs.
+        //
+        // nullptr UNSETS for the duration, which is what the false arm needs: if
+        // the ambient environment already exports the variable, leaving it alone
+        // would again make the two arms the same path. The one semantic change is
+        // on exit -- the old code always unset, the guard restores -- and nothing
+        // here depends on the leak.
+        ScopedEnvVar instr_host("BATCHLAS_SYEVX_INSTR_HOST",
+                                force_host_path ? "1" : nullptr);
 
         UnifiedVector<std::byte> workspace(syevx_buffer_size(
             *ctx, dense.view(), W, neig, JobType::NoEigenVectors,
@@ -934,8 +943,7 @@ TEST(SyevxLobpcgInstrumentationTest, DeviceStagedHistoryMatchesHostReadPath) {
             *ctx, dense.view(), W, neig, workspace, JobType::NoEigenVectors,
             MatrixView<float, MatrixFormat::Dense>(), local);
         ctx->wait_and_throw();
-        unsetenv("BATCHLAS_SYEVX_INSTR_HOST");
-        return run;
+        return run;  // instr_host restores the previous value as it goes out of scope
     };
 
     const auto staged = solve(false);

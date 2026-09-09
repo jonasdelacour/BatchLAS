@@ -1,5 +1,6 @@
 #include "../queue.hh"
 #include <batchlas/backend_config.h>
+#include <batchlas/settings.hh>
 #include <batchlas/util/sycl-span.hh>
 #ifndef DEVICE_CAST
     #define DEVICE_CAST(x,ix) (reinterpret_cast<const sycl::device*>(x)[ix])
@@ -55,11 +56,24 @@ EventImpl* Event::operator ->() const {return impl_.get();}
 EventImpl& Event::operator *() const {return *impl_;}
 
 
+// batchlas::configure() is permitted only until the first Queue exists, and this
+// is where that door closes. The reason is on configure() in
+// <batchlas/settings.hh>: routing and geometry settings are read by
+// *_buffer_size() queries as well as by the matching solve, so a change taken
+// after work has started lets two calls in one process disagree about how much
+// scratch a solve needs.
+//
+// The call goes in the three ROOT constructors. Queue(Device, Backend, bool)
+// delegates to Queue(Device, bool) and so is covered; the move constructor is
+// defaulted, and a Queue that can be moved from is one that was already
+// constructed. note_queue_constructed() is idempotent and noexcept.
 Queue::Queue() : device_(Device::default_device()), in_order_(true) {
+    batchlas::detail::note_queue_constructed();
     impl_ = std::make_unique<QueueImpl>(device_, in_order_);
 }
 
 Queue::Queue(Device dev, bool in_order) : device_(dev), in_order_(in_order) {
+    batchlas::detail::note_queue_constructed();
     impl_ = std::make_unique<QueueImpl>(dev, in_order);
 }
 
@@ -69,6 +83,7 @@ Queue::Queue(Device dev, batchlas::Backend backend, bool in_order) : Queue(dev, 
 
 Queue::Queue(const Queue& base, bool in_order)
     : device_(base.device_), in_order_(in_order), backend_(base.backend_), resolved_backend_(base.resolved_backend_) {
+    batchlas::detail::note_queue_constructed();
     impl_ = std::make_unique<QueueImpl>(base.impl_->get_context(), base.impl_->get_device(), device_, in_order_);
 }
 

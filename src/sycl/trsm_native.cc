@@ -19,6 +19,7 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <batchlas/settings.hh>
 
 namespace batchlas::sycl_trsm {
 
@@ -371,14 +372,14 @@ inline int trsm_outer_block_default() { return 128; }
 // width on the other GEMM dimension. evidence: docs/perf/trsm.md#rejected-outer_nb-of-128-for-sideright
 inline int trsm_outer_block(int cta_nb, Side side) {
     // Read per call, not latched: once a function-local static caches the first
-    // process-wide answer, a later setenv is invisible and an A/B harness (or the
-    // knob's own test) silently measures the default arm twice and passes.
-    const int env = [] {
-        const char* raw = std::getenv("BATCHLAS_TRSM_OUTER_NB");
-        if (!raw || !*raw) return 0;
-        const int v = std::atoi(raw);
-        return v > 0 ? v : 0;
-    }();
+    // process-wide answer, a later change is invisible and an A/B harness (or the
+    // knob's own test) silently measures the default arm twice and passes. The
+    // settings() snapshot is re-read on reload, so reading it here per call keeps
+    // that property; a static here would destroy it again.
+    //
+    // 0 means "unset" at this site, which is what the field carries: the real
+    // default is side-dependent and is applied on the next line.
+    const int env = batchlas::settings().geometry.trsm_outer_nb;
     const int want = env ? env : (side == Side::Left ? trsm_outer_block_default() : cta_nb);
     const int rounded = (want / cta_nb) * cta_nb;
     return rounded >= cta_nb ? rounded : cta_nb;

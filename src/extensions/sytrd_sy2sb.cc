@@ -19,6 +19,7 @@
 #include <cstring>
 #include <stdexcept>
 #include <type_traits>
+#include <batchlas/settings.hh>
 
 namespace batchlas {
 
@@ -57,7 +58,9 @@ namespace {
 // query and the matching sytrd_sy2sb call -- that would desynchronise the
 // workspace size from the block width actually used.
 inline int32_t sy2sb_ormqr_nb_env(bool& has_override) {
-    const char* v = std::getenv("BATCHLAS_SY2SB_ORMQR_NB");
+    // Three-valued (unset / "off"|0 / positive), so the field is the raw value
+    // and the strcmp-plus-strtol contract stays here.
+    const char* v = batchlas::settings().geometry.sy2sb_ormqr_nb.get();
     has_override = false;
     if (!v || !*v) return -1;                       // unset -> use shape gate
     if (std::strcmp(v, "off") == 0 || std::strcmp(v, "OFF") == 0) {

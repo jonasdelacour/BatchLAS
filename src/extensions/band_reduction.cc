@@ -25,6 +25,7 @@
 #include <utility>
 #include <vector>
 #include <batchlas/util/env.hh>
+#include <batchlas/settings.hh>
 
 namespace batchlas {
 
@@ -56,11 +57,13 @@ inline void enforce_real_diagonal(T& x) {
     }
 }
 
+// The field carries the resolved directory: set means the value verbatim
+// (including the empty string, which is NOT the default), unset means
+// "output/bandr1_dumps". create_directories() is called on whatever this
+// returns, which is why the whole family is grouped and clearable in one
+// assignment through configure().
 inline std::string bandr1_dump_root() {
-    if (const char* v = std::getenv("BATCHLAS_DUMP_BANDR1_DIR")) {
-        return std::string(v);
-    }
-    return "output/bandr1_dumps";
+    return batchlas::settings().diagnostics.dump_bandr1.dir;
 }
 
 inline std::string bandr1_dump_dir_for(int32_t sweep_index, int32_t step_in_sweep) {
@@ -507,23 +510,26 @@ inline void bandr1_one_qr_step(Queue& ctx,
     const int n = ABw.cols();
     (void)Postmat;
 
-    bool dump_enabled = env_truthy(std::getenv("BATCHLAS_DUMP_BANDR1_STEP"));
-    const bool dump_abw_only = env_truthy(std::getenv("BATCHLAS_DUMP_BANDR1_ABW_ONLY"));
-    const int dump_step = env_int_or("BATCHLAS_DUMP_BANDR1_STEP_INDEX", -1);
+    // One dump subsystem: a master enable, a content filter, three -1-sentinel
+    // selector indices and a batch selector, grouped into one nested struct.
+    const auto& dump = batchlas::settings().diagnostics.dump_bandr1;
+    bool dump_enabled = dump.step;
+    const bool dump_abw_only = dump.abw_only;
+    const int dump_step = dump.step_index;
     if (dump_step >= 0 && dump_step != step_index) {
         dump_enabled = false;
     }
 
-    const int dump_sweep = env_int_or("BATCHLAS_DUMP_BANDR1_SWEEP_INDEX", -1);
+    const int dump_sweep = dump.sweep_index;
     if (dump_sweep >= 0 && dump_sweep != sweep_index) {
         dump_enabled = false;
     }
 
-    const int dump_step_in_sweep = env_int_or("BATCHLAS_DUMP_BANDR1_STEP_IN_SWEEP", -1);
+    const int dump_step_in_sweep = dump.step_in_sweep;
     if (dump_step_in_sweep >= 0 && dump_step_in_sweep != step_in_sweep) {
         dump_enabled = false;
     }
-    const int dump_batch = env_int_or("BATCHLAS_DUMP_BANDR1_BATCH", -1);
+    const int dump_batch = dump.batch;
 
     const Transpose trans_left = internal::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
 

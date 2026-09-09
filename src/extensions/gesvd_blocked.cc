@@ -19,6 +19,7 @@
 #include <string>
 #include <type_traits>
 #include <batchlas/util/env.hh>
+#include <batchlas/settings.hh>
 
 namespace batchlas {
 
@@ -69,8 +70,12 @@ enum class GesvdNativeMode {
 //
 // BATCHLAS_GESVD_BLOCKED_GEBRD_MIN overrides it, which is how the tables above
 // were taken; set it above the largest n to get the old behaviour back.
+// The field carries the raw value because bare atoi is load-bearing here: an
+// unparseable value yields 0, which is BELOW the default of 1 and therefore
+// silently widens the blocked path rather than falling back to it. Routing this
+// through env_int_or would change that.
 inline bool gesvd_use_blocked_gebrd(int32_t n, GesvdNativeMode mode) {
-    const char* v = std::getenv("BATCHLAS_GESVD_BLOCKED_GEBRD_MIN");
+    const char* v = batchlas::settings().geometry.gesvd_blocked_gebrd_min.get();
     const int32_t threshold = (v != nullptr) ? std::atoi(v) : 1;
     return mode == GesvdNativeMode::Blocked && n >= threshold;
 }
@@ -118,7 +123,7 @@ inline bool gesvd_use_blocked_gebrd(int32_t n, GesvdNativeMode mode) {
 enum class GesvdBidiagSolver { NormalEquations, Bdsdc, Bdsqr };
 
 inline GesvdBidiagSolver gesvd_bidiag_solver() {
-    const char* v = std::getenv("BATCHLAS_GESVD_BIDIAG");
+    const char* v = batchlas::settings().selection.gesvd_bidiag.get();
     if (v == nullptr) return GesvdBidiagSolver::Bdsdc;
     const std::string s(v);
     if (s == "bdsqr") return GesvdBidiagSolver::Bdsqr;
@@ -154,7 +159,7 @@ inline bool gesvd_direct_bidiag(GesvdNativeMode mode, bool thin_tall_u) {
 }
 
 inline bool gesvd_stage_profile_enabled() {
-    return env_truthy(std::getenv("BATCHLAS_GESVD_PROFILE"));
+    return batchlas::settings().diagnostics.gesvd_profile;
 }
 
 struct GesvdStageProfiler {

@@ -35,6 +35,7 @@
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/backend_config.h>
 #include "../util/template-instantiations.hh"
+#include <batchlas/settings.hh>
 
 namespace batchlas {
 
@@ -239,7 +240,7 @@ SyevxPreconditioner parse_syevx_preconditioner(const char* v) {
 // "ignore params.method and use the heuristics". That is pre-existing behaviour
 // and is preserved deliberately.
 SyevxAlgorithm algorithm_from_env(SyevxAlgorithm fallback, bool& from_env) {
-    const char* v = std::getenv("BATCHLAS_SYEVX_ALGORITHM");
+    const char* v = batchlas::settings().selection.syevx_algorithm.get();
     from_env = (v != nullptr && *v != '\0');
     if (!from_env) return fallback;
     return parse_syevx_algorithm(v);
@@ -493,7 +494,7 @@ SyevxPreconditioner syevx_select_preconditioner(SyevxPreconditioner requested,
     // was paid for before the call, so it wins over any environment default.
     if (iluk_configured) return SyevxPreconditioner::ILUK;
     const SyevxPreconditioner from_env =
-        parse_syevx_preconditioner(std::getenv("BATCHLAS_SYEVX_PRECONDITIONER"));
+        parse_syevx_preconditioner(batchlas::settings().selection.syevx_preconditioner.get());
     // ILUK from the environment is not actionable: there is no factor and syevx
     // will not silently build one behind the caller's back (that needs CSR input and
     // find_largest = false, neither of which the environment can know).

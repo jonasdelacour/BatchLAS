@@ -15,6 +15,7 @@
 #include "../math-helpers.hh"
 #include "../util/template-instantiations.hh"
 #include "../sort.hh"
+#include <batchlas/settings.hh>
 
 namespace batchlas {
     template <Backend B, typename T, MatrixFormat MFormat>
@@ -43,10 +44,11 @@ constexpr int kDefaultInitPowerIterations = 4;
 
 inline int lobpcg_init_power_iterations(int from_params, bool find_largest) {
     int steps = from_params < 0 ? kDefaultInitPowerIterations : from_params;
-    if (const char* v = std::getenv("BATCHLAS_SYEVX_INIT_POWER")) {
-        const int parsed = std::atoi(v);
-        if (parsed >= 0) steps = parsed;
-    }
+    // std::optional, because 0 is a MEANINGFUL value here (no power iterations)
+    // and is distinct from unset; the default comes from the caller's params, so
+    // it cannot live on the field either. A negative value is rejected during the
+    // load and arrives as nullopt, exactly as the `>= 0` test did here.
+    if (const auto& v = batchlas::settings().geometry.syevx_init_power) steps = *v;
     // Powers of A amplify the *largest* eigendirections, so the steps are dropped
     // rather than applied backwards when the smallest are wanted.
     return find_largest ? steps : 0;
@@ -60,10 +62,9 @@ inline int64_t lobpcg_block_vectors(size_t neigs, size_t extra_directions, int64
     const int64_t k = static_cast<int64_t>(neigs);
     if (extra_directions > 0) return k + static_cast<int64_t>(extra_directions);
     int64_t extra = std::max<int64_t>(2, k / 4);
-    if (const char* v = std::getenv("BATCHLAS_SYEVX_EXTRA_DIRECTIONS")) {
-        const int parsed = std::atoi(v);
-        if (parsed >= 0) extra = parsed;
-    }
+    // std::optional for the same reason: 0 is meaningful (no guard block), and
+    // the default depends on the requested eigenvalue count.
+    if (const auto& v = batchlas::settings().geometry.syevx_extra_directions) extra = *v;
     if (extra <= 0) return k;
     const int64_t guarded = k + extra;
     if (n > 0 && 3 * guarded > n) return std::max<int64_t>(k, std::min<int64_t>(guarded, n / 3));
@@ -73,11 +74,7 @@ inline int64_t lobpcg_block_vectors(size_t neigs, size_t extra_directions, int64
 // How often the host reads back the convergence flags; each check is a full pipeline
 // drain (SYEVX_PLAN.md §7.1).
 inline int64_t lobpcg_check_every() {
-    if (const char* v = std::getenv("BATCHLAS_SYEVX_CHECK_EVERY")) {
-        const int parsed = std::atoi(v);
-        if (parsed > 0) return parsed;
-    }
-    return 4;
+    return batchlas::settings().geometry.syevx_check_every;
 }
 
 // Instrumentation staging plan (SYEVX_PLAN.md §7.2). The caller-supplied
@@ -102,8 +99,11 @@ struct LobpcgInstrumentationPlan {
 
 // A/B escape hatch: the device-staged path must produce exactly the host path's values,
 // and tests/syevx_tests.cc checks that by running both.
+// First-CHARACTER truthiness, so "true" works and "on" does not. That is a
+// different dialect from env_truthy and is left exactly as it was; the field
+// carries the raw value so no spelling changes meaning.
 inline bool lobpcg_instrumentation_force_host() {
-    const char* v = std::getenv("BATCHLAS_SYEVX_INSTR_HOST");
+    const char* v = batchlas::settings().selection.syevx_instr_host.get();
     return v && (v[0] == '1' || v[0] == 't' || v[0] == 'T' || v[0] == 'y' || v[0] == 'Y');
 }
 
@@ -128,8 +128,12 @@ LobpcgInstrumentationPlan lobpcg_instrumentation_plan(const SyevxParams<T>& para
 // Soft locking, variant (a): column masking. OFF by default and deliberately so -- the
 // mechanism is implemented and correct, but it saves no flops (the block shapes are
 // fixed) and measured no benefit. Evidence: SYEVX_PLAN.md §7.5.
+// The test below is INVERTED -- anything not in the disable set enables the
+// feature, so "=off" and an empty value both turn it ON. Preserved deliberately
+// rather than normalised: changing it here would flip the feature for anyone
+// already exporting one of those spellings. See `risks` in the WP5 report.
 inline bool lobpcg_soft_locking() {
-    if (const char* v = std::getenv("BATCHLAS_SYEVX_SOFT_LOCK")) {
+    if (const char* v = batchlas::settings().selection.syevx_soft_lock.get()) {
         return !(v[0] == '0' || v[0] == 'n' || v[0] == 'N' || v[0] == 'f' || v[0] == 'F');
     }
     return false;
@@ -140,11 +144,7 @@ inline bool lobpcg_soft_locking() {
 // masked column is not frozen, its Ritz vector is still recombined every iteration, so a
 // column at the boundary loses its correction direction and drifts back above `tol`.
 inline double lobpcg_lock_factor() {
-    if (const char* v = std::getenv("BATCHLAS_SYEVX_LOCK_FACTOR")) {
-        const double parsed = std::atof(v);
-        if (parsed > 0.0) return parsed;
-    }
-    return 0.1;
+    return batchlas::settings().geometry.syevx_lock_factor;
 }
 
 // Relative floor below which a Jacobi shift is treated as singular and the column entry
@@ -193,12 +193,10 @@ inline constexpr R jacobi_definiteness_floor() {
                 "syevx_direct_subset for an index or value range");
         }
 
-        const bool trace_enabled = []() {
-            const char* v = std::getenv("BATCHLAS_SYEVX_TRACE");
-            if (!v) return false;
-            return (std::string(v) == "1" || std::string(v) == "true" || std::string(v) == "TRUE" ||
-                    std::string(v) == "on" || std::string(v) == "ON");
-        }();
+        // Was a hand-rolled copy of env_truthy's exact spelling set; the field
+        // is parsed by env_truthy itself in settings.cc, which accepts the same
+        // five spellings {1,true,TRUE,on,ON} and nothing else.
+        const bool trace_enabled = batchlas::settings().diagnostics.syevx_trace;
         auto trace = [&](const char* msg) {
             if (!trace_enabled) return;
             std::cout << msg << std::endl;
@@ -351,7 +349,7 @@ inline constexpr R jacobi_definiteness_floor() {
         const bool prefer_vendor_projected_syev =
             (B != Backend::NETLIB) &&
             ([]() {
-                if (const char* v = std::getenv("BATCHLAS_SYEVX_PROJECTED_VENDOR")) {
+                if (const char* v = batchlas::settings().selection.syevx_projected_vendor.get()) {
                     return (v[0] == '1') || (v[0] == 't') || (v[0] == 'T') || (v[0] == 'y') || (v[0] == 'Y');
                 }
                 return false;

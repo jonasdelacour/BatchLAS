@@ -25,6 +25,7 @@
 #include <stdexcept>
 #include <type_traits>
 #include <batchlas/util/env.hh>
+#include <batchlas/settings.hh>
 
 namespace batchlas {
 
@@ -35,9 +36,12 @@ namespace {
 // ---------------------------------------------------------------------------
 
 // Returns true when BATCHLAS_SYTRD_IMPL=device, false otherwise (legacy default).
+// Latched, unlike its twin latrd_impl() one file over, which is deliberately
+// re-read. The asymmetry is pre-existing and is preserved: the static below
+// still pins the first answer for the process.
 inline bool use_device_sytrd() {
     static const bool result = []() {
-        const char* v = std::getenv("BATCHLAS_SYTRD_IMPL");
+        const char* v = batchlas::settings().selection.sytrd_impl.get();
         return v && std::string(v) == "device";
     }();
     return result;
@@ -59,7 +63,7 @@ enum class SytrdTrailingUpdateMode {
 // so a run pinned with a typo is a default-against-default A/B; that is why
 // both spellings are accepted rather than only the one this file used to call.
 inline SytrdTrailingUpdateMode sytrd_trailing_update_mode() {
-    const char* v = std::getenv("BATCHLAS_SYTRD_TRAILING_UPDATE");
+    const char* v = batchlas::settings().selection.sytrd_trailing_update.get();
     if (!v) return SytrdTrailingUpdateMode::Default;
 
     const std::string s(v);
@@ -76,12 +80,11 @@ inline SytrdTrailingUpdateMode sytrd_trailing_update_mode() {
 // Used by the device sytrd_blocked_impl to allow per-run WG hint overrides.
 inline int32_t latrd_lower_panel_wg_hint_override(int32_t full_n, int32_t batch) {
     (void)batch;
+    // 0 on the field means unset. The fallback is an n-bucketed tuning curve, so
+    // it stays here: a scalar default on the field would pin that curve at one
+    // point. Only {64,128,256} take effect, as before.
     const int32_t fallback = tuning::latrd_lower_panel_wg_hint_for_n(full_n);
-    const char* v = std::getenv("BATCHLAS_LATRD_LOWER_PANEL_WG_HINT");
-    if (!v || *v == '\0') {
-        return fallback;
-    }
-    const int value = std::atoi(v);
+    const int value = batchlas::settings().geometry.latrd_lower_panel_wg_hint;
     if (value == 64 || value == 128 || value == 256) {
         return value;
     }
@@ -720,8 +723,8 @@ Event sytrd_blocked_impl(Queue& ctx,
     }
 
     if (n <= 64) {
-        const bool force_local = env_truthy(std::getenv("BATCHLAS_SYTRD_FORCE_LOCAL_SMALL"));
-        const bool debug_small = env_truthy(std::getenv("BATCHLAS_DEBUG_SYTRD_SMALL"));
+        const bool force_local = batchlas::settings().selection.sytrd_force_local_small;
+        const bool debug_small = batchlas::settings().diagnostics.debug_sytrd_small;
 
         const size_t local_mem_bytes = ctx.device().get_property(DeviceProperty::LOCAL_MEM_SIZE);
         const size_t max_wg_size = ctx.device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE);
@@ -768,9 +771,16 @@ Event sytrd_blocked_impl(Queue& ctx,
     MatrixView<T, MatrixFormat::Dense> Wmat = sytrd_blocked_layout<T>(ctx, pool, n, nb, batch);
 
     const int k = n - 1;
-    const char* fuse_env = std::getenv("BATCHLAS_SYTRD_FUSE_PANEL_UPDATE");
-    const bool fuse_override_on  = env_truthy(fuse_env);
-    const bool fuse_override_off = env_falsy(fuse_env);
+    // TRI-STATE, and the one knob that makes env.hh's "an unset variable is
+    // neither truthy nor falsy" contract load-bearing: forced on, forced off, and
+    // "let the tuned default decide" are three different answers below. The field
+    // is a std::optional<bool> for exactly that reason -- a plain bool would
+    // silently collapse the third state onto the tuned default. An engaged
+    // optional came from env_truthy or env_falsy in settings.cc; a value that is
+    // neither (a typo) is nullopt, which is what this site computed before.
+    const auto& fuse_env = batchlas::settings().selection.sytrd_fuse_panel_update;
+    const bool fuse_override_on  = fuse_env.has_value() && *fuse_env;
+    const bool fuse_override_off = fuse_env.has_value() && !*fuse_env;
     const bool fuse_default = is_legacy
         ? ((B == Backend::CUDA) && (n == 256))
         : tuning::sytrd_fuse_panel_update_for_n(n);

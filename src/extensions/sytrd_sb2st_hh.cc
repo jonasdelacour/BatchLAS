@@ -27,6 +27,7 @@
 #include <string>
 #include <type_traits>
 #include <vector>
+#include <batchlas/settings.hh>
 
 namespace batchlas {
 namespace internal {
@@ -833,7 +834,8 @@ Event unmqr_hb2st(Queue& ctx,
     // the fail-open direction on purpose: a mistyped value must not silently cost
     // the fast path, and the spellings a user would actually write to mean "off"
     // are all here.
-    const bool want_wave = !sb2st_wave_disabled(std::getenv("BATCHLAS_SB2ST_BACK_WAVE"));
+    const bool want_wave =
+        !sb2st_wave_disabled(batchlas::settings().selection.sb2st_back_wave.get());
     if (want_wave) {
         const size_t lmem = ctx->get_device().get_info<sycl::info::device::local_mem_size>();
         const size_t per_col = static_cast<size_t>(n) * sizeof(T);
@@ -864,7 +866,7 @@ Event unmqr_hb2st(Queue& ctx,
         // Putting the per-type constant first costs the harness nothing: it
         // returns 0 for every real T, so tuning:: still owns every cell the
         // float bench can actually measure.
-        int tile = env_positive_int_or("BATCHLAS_SB2ST_BACK_TILE_W", 0);
+        int tile = batchlas::settings().geometry.sb2st_back_tile_w;
         if (tile <= 0) tile = sb2st_back_tile_for<T>(n);
         if (tile <= 0) tile = tuning::sb2st_back_tile_for_n(n);
         if (tile <= 0) {
@@ -895,7 +897,7 @@ Event unmqr_hb2st(Queue& ctx,
         // the knobs' long-standing behaviour and is left alone, but a sweep that
         // pins one knob and reads the other from the default is not measuring
         // either optimum.
-        int subs = env_positive_int_or("BATCHLAS_SB2ST_BACK_SUBS", 0);
+        int subs = batchlas::settings().geometry.sb2st_back_subs;
         if (subs <= 0) subs = sb2st_back_subs_for<T>(n);
         if (subs <= 0) subs = tuning::sb2st_back_subs_for_n(n);
         if (subs <= 0) {
@@ -953,7 +955,12 @@ Event unmqr_hb2st(Queue& ctx,
         while (want < kMaxTile && per_col * static_cast<size_t>(want * 2) <= kTargetLocalBytes) {
             want <<= 1;
         }
-        if (const char* ev = std::getenv("BATCHLAS_SB2ST_BACK_TILE")) {
+        // RAW value, and it must stay raw: 0 is a MEANINGFUL value here -- it
+        // selects the streaming kernel -- so this knob cannot share
+        // env_positive_int_or's "<= 0 means unset" reading with its
+        // near-namesake BATCHLAS_SB2ST_BACK_TILE_W one screen up. They also
+        // drive two DIFFERENT kernels; the name is not an abbreviation.
+        if (const char* ev = batchlas::settings().geometry.sb2st_back_tile.get()) {
             const int f = std::atoi(ev);
             if (f == 0) goto streaming;   // 0 selects the streaming kernel
             if (f > 0) want = f;

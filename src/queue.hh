@@ -25,6 +25,7 @@
 // -I${PROJECT_SOURCE_DIR}/src to a target and do not convert these to <>.
 #include "util/kernel-trace.hh"
 #include <batchlas/util/env.hh>
+#include <batchlas/settings.hh>
 
 // Inline definitions in this private header still have to reach consumers that
 // only ever see the declaration in the installed public header, so they must be
@@ -84,9 +85,12 @@ struct QueueThreadOwner {
 inline bool batchlas_queue_profiling_enabled() {
     // Keep profiling opt-in to avoid overhead in non-benchmark runs.
     // Kernel trace implies profiling; benchmarks can enable profiling without tracing.
+    // settings().diagnostics.profiling is the OR of BATCHLAS_QUEUE_PROFILING and
+    // BATCHLAS_BENCH_PROFILING -- two names, one field, folded in settings.cc.
+    // Reading it here rather than the environment is what puts these two knobs
+    // under configure() and under ScopedEnvVar's reload, like every other knob.
     return batchlas_kernel_trace::enabled() ||
-           batchlas::env_truthy(std::getenv("BATCHLAS_QUEUE_PROFILING")) ||
-           batchlas::env_truthy(std::getenv("BATCHLAS_BENCH_PROFILING"));
+           batchlas::settings().diagnostics.profiling;
 }
 
 // Per-queue scratch memory. See util/workspace.hh for the caller-facing rules.

@@ -19,6 +19,7 @@
 #include <cstring>
 #include <stdexcept>
 #include <string>
+#include <batchlas/settings.hh>
 
 namespace batchlas {
 namespace sycl_getrs {
@@ -179,10 +180,11 @@ bool getrs_perm_gather_launch(Queue& ctx,
 // gather is the default.
 enum class PermSpelling { kDefault, kWalk, kGather };
 
-// Deliberately NOT latched: once a presence check latches false, a later setenv
-// is invisible and the test silently runs the default arm and passes.
+// Deliberately NOT latched: once a presence check latches false, a later change
+// is invisible and the test silently runs the default arm and passes. Reading
+// the settings() snapshot per call keeps that; a static here would not.
 PermSpelling perm_spelling() {
-    const char* const s = std::getenv("BATCHLAS_GETRS_LASWP");
+    const char* const s = batchlas::settings().selection.getrs_laswp.get();
     if (s == nullptr) return PermSpelling::kDefault;
     if (std::strcmp(s, "walk") == 0) return PermSpelling::kWalk;
     if (std::strcmp(s, "gather") == 0) return PermSpelling::kGather;

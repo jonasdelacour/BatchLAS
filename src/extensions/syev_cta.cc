@@ -17,6 +17,7 @@
 
 #include "../math-helpers.hh"
 #include <batchlas/util/env.hh>
+#include <batchlas/settings.hh>
 
 namespace batchlas {
 
@@ -31,8 +32,12 @@ inline U conj_if_complex(const U& x) {
     }
 }
 
+// Diagnostics, not a safety override: it prints the stage name and drains the
+// pipeline, removing no check and selecting no different kernel, so it is
+// deliberately NOT one of the knobs BATCHLAS_ALLOW_UNSAFE_ENV gates. Parsed by
+// env_truthy in settings.cc, exactly as here before.
 inline bool cta_debug_sync_enabled() {
-    return env_truthy(std::getenv("BATCHLAS_CTA_DEBUG_SYNC"));
+    return batchlas::settings().diagnostics.cta_debug_sync;
 }
 
 inline void cta_debug_log(const char* stage) {

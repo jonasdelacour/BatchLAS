@@ -12,6 +12,7 @@
 #include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/blas/dispatch/vendor_available.hh>
 #include <batchlas/blas/matrix.hh>
+#include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
@@ -315,31 +316,13 @@ void check_one(const Problem<T>& p, const char* what) {
     }
 }
 
-struct GeqrfEnvGuard {
-    std::string saved;
-    bool had = false;
-    explicit GeqrfEnvGuard(const char* v) {
-        if (const char* s = std::getenv("BATCHLAS_GEQRF_ROUTE")) { saved = s; had = true; }
-        ::setenv("BATCHLAS_GEQRF_ROUTE", v, 1);
-    }
-    ~GeqrfEnvGuard() {
-        if (had) ::setenv("BATCHLAS_GEQRF_ROUTE", saved.c_str(), 1);
-        else ::unsetenv("BATCHLAS_GEQRF_ROUTE");
-    }
-};
-
-struct OrgqrEnvGuard {
-    std::string saved;
-    bool had = false;
-    explicit OrgqrEnvGuard(const char* v) {
-        if (const char* s = std::getenv("BATCHLAS_ORGQR_ROUTE")) { saved = s; had = true; }
-        ::setenv("BATCHLAS_ORGQR_ROUTE", v, 1);
-    }
-    ~OrgqrEnvGuard() {
-        if (had) ::setenv("BATCHLAS_ORGQR_ROUTE", saved.c_str(), 1);
-        else ::unsetenv("BATCHLAS_ORGQR_ROUTE");
-    }
-};
+// The route pins below use batchlas::ScopedEnvVar (<batchlas/util/env.hh>) rather than a
+// local guard. The two hand-rolled ones this file carried (GeqrfEnvGuard/OrgqrEnvGuard)
+// had the same save-restore-or-unset semantics, but they called ::setenv and nothing else:
+// since batchlas::settings() snapshots the environment once, before main(), a bare ::setenv
+// is invisible to route resolution and every pinned test below silently measured the vendor
+// route. ScopedEnvVar's constructor and destructor call detail::reload_settings(), which is
+// what makes the pin -- and its removal at scope exit -- actually reach the router.
 
 using GeqrfTestTypes = typename test_utils::backend_types<GeqrfConfig>::type;
 
@@ -1162,7 +1145,7 @@ TYPED_TEST(GeqrfTest, FacadeReachesTheCtaKernel) {
     const int m = 40, n = 24, batch = 3;
     ASSERT_TRUE(this->cta_fits(m, n));
 
-    GeqrfEnvGuard guard("cta");
+    ScopedEnvVar guard("BATCHLAS_GEQRF_ROUTE", "cta");
     auto p = make_problem<T>(m, n, batch, 999u);
     auto V = view_of(p);
 
@@ -1210,7 +1193,7 @@ TYPED_TEST(GeqrfTest, FacadeReachesTheBlockedDriver) {
     static constexpr Backend B = TestFixture::BackendType;
     const int m = 100, n = 70, batch = 3;
 
-    GeqrfEnvGuard guard("blocked");
+    ScopedEnvVar guard("BATCHLAS_GEQRF_ROUTE", "blocked");
     auto p = make_problem<T>(m, n, batch, 998u);
     auto V = view_of(p);
 
@@ -1273,7 +1256,7 @@ TYPED_TEST(GeqrfTest, FacadeReachesTheNativeOrgqr) {
     this->ctx->wait();
     const std::vector<T> F(p.buf.begin(), p.buf.end());
 
-    OrgqrEnvGuard oguard("blocked");
+    ScopedEnvVar oguard("BATCHLAS_ORGQR_ROUTE", "blocked");
     const auto route = backend::orgqr_route<B, T>(*this->ctx, V, /*vendor_available=*/true);
     ASSERT_TRUE(dispatch::is_native(route))
         << "BATCHLAS_ORGQR_ROUTE=blocked did not resolve to a native route";
@@ -1374,7 +1357,7 @@ TYPED_TEST(GeqrfTest, BufferSizeCoversEverySupportedNativeTier) {
     auto p = make_problem<T>(m, n, batch, 17u);
     auto V = view_of(p);
     for (const char* pin : {"cta", "blocked"}) {
-        GeqrfEnvGuard guard(pin);
+        ScopedEnvVar guard("BATCHLAS_GEQRF_ROUTE", pin);
         const std::size_t facade = geqrf_buffer_size<B, T>(*this->ctx, V, p.tau.to_span());
         EXPECT_GE(facade, sycl_geqrf::geqrf_cta_buffer_size<T>(*this->ctx, V)) << pin;
         EXPECT_GE(facade, sycl_geqrf::geqrf_blocked_buffer_size<T>(*this->ctx, V)) << pin;

@@ -17,6 +17,7 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <batchlas/settings.hh>
 
 namespace batchlas {
 
@@ -32,8 +33,9 @@ namespace {
 enum class WyPin { Measured, Gemm, Trmm };
 
 inline WyPin wy_pin() {
+    // Latched, as before: this feeds a sizing decision as well as the call.
     static const WyPin result = []() {
-        const char* v = std::getenv("BATCHLAS_ORMQR_WY");
+        const char* v = batchlas::settings().selection.ormqr_wy.get();
         if (!v) return WyPin::Measured;
         const std::string s(v);
         if (s == "gemm") return WyPin::Gemm;
@@ -61,7 +63,7 @@ inline bool wy_trmm_applicable(int ib) {
 
 inline bool use_device_ormqr() {
     static const bool result = []() {
-        const char* v = std::getenv("BATCHLAS_ORMQR_IMPL");
+        const char* v = batchlas::settings().selection.ormqr_impl.get();
         return v && std::string(v) == "device";
     }();
     return result;

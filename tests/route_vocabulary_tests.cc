@@ -16,9 +16,9 @@
 #include <batchlas/blas/dispatch/route_getri.hh>
 #include <batchlas/blas/dispatch/route_gemv.hh>
 #include <batchlas/blas/dispatch/route_spmm.hh>
+#include <batchlas/util/env.hh>
 
 #include <complex>
-#include <cstdlib>
 #include <string>
 
 using namespace batchlas;
@@ -26,43 +26,35 @@ using namespace batchlas::dispatch;
 
 namespace {
 
-// Sets an env var for the object's lifetime and restores it, so cases cannot leak.
-class ScopedEnv {
-public:
-    ScopedEnv(std::string key, const char* value) : key_(std::move(key)) {
-        if (const char* old = std::getenv(key_.c_str())) {
-            had_ = true;
-            old_ = old;
-        }
-        if (value) {
-            ::setenv(key_.c_str(), value, 1);
-        } else {
-            ::unsetenv(key_.c_str());
-        }
-    }
-    ~ScopedEnv() {
-        if (had_) {
-            ::setenv(key_.c_str(), old_.c_str(), 1);
-        } else {
-            ::unsetenv(key_.c_str());
-        }
-    }
-private:
-    std::string key_;
-    std::string old_;
-    bool had_ = false;
-};
+// The private ScopedEnv this file used to carry is gone. It saved, set and
+// restored exactly as batchlas::ScopedEnvVar does, but a raw ::setenv is no
+// longer enough: parse_route_env reads its two values from the batchlas::settings()
+// snapshot (route_env.hh), which is loaded once before main() -- src/dispatch/
+// coverage.cc takes it in a namespace-scope initialiser in an always-linked TU.
+// ScopedEnvVar reloads that snapshot at both ends of its scope, so the cases
+// below assert on the value they just pinned instead of on the ambient one.
 
 // Clears both spellings so a case starts from a known state.
+//
+// ScopedEnvVar BORROWS its name rather than copying it, and neither key here is a
+// string literal -- the canonical one is composed from op_env_stem, the legacy one
+// from a std::string_view. The two buffers are therefore members, declared BEFORE
+// the guards that point at them: members are initialised in declaration order and
+// destroyed in reverse, so each name is alive before its guard is built and still
+// alive when that guard restores.
 struct ClearRouteEnv {
     explicit ClearRouteEnv(Op op)
-        : canonical_("BATCHLAS_" + op_env_stem(op) + "_ROUTE", nullptr),
-          legacy_(std::string(legacy_variable_for(op)).empty()
-                      ? std::string("BATCHLAS_UNUSED_ROUTE_KEY")
-                      : std::string(legacy_variable_for(op)),
-                  nullptr) {}
-    ScopedEnv canonical_;
-    ScopedEnv legacy_;
+        : canonical_key_("BATCHLAS_" + op_env_stem(op) + "_ROUTE"),
+          legacy_key_(std::string(legacy_variable_for(op)).empty()
+                          ? std::string("BATCHLAS_UNUSED_ROUTE_KEY")
+                          : std::string(legacy_variable_for(op))),
+          canonical_(canonical_key_.c_str(), nullptr),
+          legacy_(legacy_key_.c_str(), nullptr) {}
+
+    std::string canonical_key_;
+    std::string legacy_key_;
+    ScopedEnvVar canonical_;
+    ScopedEnvVar legacy_;
 };
 
 } // namespace
@@ -139,7 +131,7 @@ TEST(RouteVocabulary, UnknownValueIsRejectedNotSilentlyAuto) {
 
 TEST(RouteVocabulary, LegacyGemmVariantSyclSelectsRegisterTiled) {
     ClearRouteEnv clear(Op::gemm);
-    ScopedEnv set("BATCHLAS_GEMM_VARIANT", "sycl");
+    ScopedEnvVar set("BATCHLAS_GEMM_VARIANT", "sycl");
 
     const auto parsed = parse_route_env(Op::gemm);
     ASSERT_TRUE(parsed.found);
@@ -222,7 +214,7 @@ TEST(RouteVocabulary, LegacyLevel3GemmIsTheVendorMeasurementRoute) {
 
 TEST(RouteVocabulary, LegacyTrmmTriangularIsOneValueNotTwoReadings) {
     ClearRouteEnv clear(Op::trmm);
-    ScopedEnv set("BATCHLAS_TRMM_VARIANT", "triangular");
+    ScopedEnvVar set("BATCHLAS_TRMM_VARIANT", "triangular");
 
     const auto parsed = parse_route_env(Op::trmm);
     ASSERT_TRUE(parsed.found) << "it is an opinion, not the absence of one";
@@ -232,7 +224,7 @@ TEST(RouteVocabulary, LegacyTrmmTriangularIsOneValueNotTwoReadings) {
 
 TEST(RouteVocabulary, LegacyVendorSpellingMapsToVendorOrigin) {
     ClearRouteEnv clear(Op::trmm);
-    ScopedEnv set("BATCHLAS_TRMM_VARIANT", "vendor");
+    ScopedEnvVar set("BATCHLAS_TRMM_VARIANT", "vendor");
 
     const auto parsed = parse_route_env(Op::trmm);
     ASSERT_TRUE(parsed.found);
@@ -242,14 +234,14 @@ TEST(RouteVocabulary, LegacyVendorSpellingMapsToVendorOrigin) {
 TEST(RouteVocabulary, LegacySyrkTriangularAndGramSurvive) {
     {
         ClearRouteEnv clear(Op::syrk);
-        ScopedEnv set("BATCHLAS_SYRK_VARIANT", "triangular");
+        ScopedEnvVar set("BATCHLAS_SYRK_VARIANT", "triangular");
         const auto parsed = parse_route_env(Op::syrk);
         ASSERT_TRUE(parsed.found);
         EXPECT_EQ(parsed.route.algo, Algorithm::TriangularTiles);
     }
     {
         ClearRouteEnv clear(Op::syrk);
-        ScopedEnv set("BATCHLAS_SYRK_VARIANT", "gram");
+        ScopedEnvVar set("BATCHLAS_SYRK_VARIANT", "gram");
         const auto parsed = parse_route_env(Op::syrk);
         ASSERT_TRUE(parsed.found);
         EXPECT_EQ(parsed.route.algo, Algorithm::GramTiles);
@@ -258,7 +250,7 @@ TEST(RouteVocabulary, LegacySyrkTriangularAndGramSurvive) {
 
 TEST(RouteVocabulary, LegacyProviderSpellingsSurvive) {
     ClearRouteEnv clear(Op::syev);
-    ScopedEnv set("BATCHLAS_SYEV_PROVIDER", "two_stage");
+    ScopedEnvVar set("BATCHLAS_SYEV_PROVIDER", "two_stage");
 
     const auto parsed = parse_route_env(Op::syev);
     ASSERT_TRUE(parsed.found);
@@ -268,8 +260,8 @@ TEST(RouteVocabulary, LegacyProviderSpellingsSurvive) {
 
 TEST(RouteVocabulary, CanonicalSpellingWinsOverLegacy) {
     ClearRouteEnv clear(Op::gemm);
-    ScopedEnv legacy("BATCHLAS_GEMM_VARIANT", "vendor");
-    ScopedEnv canonical("BATCHLAS_GEMM_ROUTE", "native:register_tiled");
+    ScopedEnvVar legacy("BATCHLAS_GEMM_VARIANT", "vendor");
+    ScopedEnvVar canonical("BATCHLAS_GEMM_ROUTE", "native:register_tiled");
 
     const auto parsed = parse_route_env(Op::gemm);
     ASSERT_TRUE(parsed.found);
@@ -300,7 +292,7 @@ TEST(RouteVocabulary, NothingSetReportsNotFound) {
 
 TEST(RouteVocabulary, SetButUnparsedIsDistinguishableFromUnset) {
     ClearRouteEnv clear(Op::gemm);
-    ScopedEnv set("BATCHLAS_GEMM_ROUTE", "not-a-route");
+    ScopedEnvVar set("BATCHLAS_GEMM_ROUTE", "not-a-route");
     const auto parsed = parse_route_env(Op::gemm);
     EXPECT_FALSE(parsed.found);
     EXPECT_TRUE(parsed.unparsed) << "a typo must be reportable, not silently Auto";
@@ -707,7 +699,7 @@ TEST(RoutePotrf, BatchlasPotrfRouteIsActuallyRead) {
         EXPECT_EQ(legacy_unset_default(Op::potrf).origin, Origin::Auto);
     }
     {
-        ScopedEnv e("BATCHLAS_POTRF_ROUTE", "cta");
+        ScopedEnvVar e("BATCHLAS_POTRF_ROUTE", "cta");
         const auto p = parse_route_env(Op::potrf);
         ASSERT_TRUE(p.found) << "BATCHLAS_POTRF_ROUTE was not read at all";
         EXPECT_EQ(p.route, (Route{Origin::Native, Algorithm::CTA}))
@@ -716,19 +708,19 @@ TEST(RoutePotrf, BatchlasPotrfRouteIsActuallyRead) {
         EXPECT_FALSE(p.source.legacy);
     }
     {
-        ScopedEnv e("BATCHLAS_POTRF_ROUTE", "vendor");
+        ScopedEnvVar e("BATCHLAS_POTRF_ROUTE", "vendor");
         const auto p = parse_route_env(Op::potrf);
         ASSERT_TRUE(p.found);
         EXPECT_EQ(p.route, (Route{Origin::Vendor, Algorithm::Auto}));
     }
     {
-        ScopedEnv e("BATCHLAS_POTRF_ROUTE", "native:blocked");
+        ScopedEnvVar e("BATCHLAS_POTRF_ROUTE", "native:blocked");
         const auto p = parse_route_env(Op::potrf);
         ASSERT_TRUE(p.found);
         EXPECT_EQ(p.route, (Route{Origin::Native, Algorithm::Blocked}));
     }
     {
-        ScopedEnv e("BATCHLAS_POTRF_ROUTE", "not-a-route");
+        ScopedEnvVar e("BATCHLAS_POTRF_ROUTE", "not-a-route");
         const auto p = parse_route_env(Op::potrf);
         EXPECT_FALSE(p.found);
         EXPECT_TRUE(p.unparsed) << "a typo must be reported, not silently Auto";
@@ -1002,7 +994,7 @@ TEST(RouteGeqrf, BatchlasGeqrfRouteIsActuallyRead) {
         EXPECT_EQ(legacy_unset_default(Op::geqrf).origin, Origin::Auto);
     }
     {
-        ScopedEnv e("BATCHLAS_GEQRF_ROUTE", "cta");
+        ScopedEnvVar e("BATCHLAS_GEQRF_ROUTE", "cta");
         const auto p = parse_route_env(Op::geqrf);
         ASSERT_TRUE(p.found) << "BATCHLAS_GEQRF_ROUTE was not read at all";
         EXPECT_EQ(p.route, (Route{Origin::Native, Algorithm::CTA}))
@@ -1011,13 +1003,13 @@ TEST(RouteGeqrf, BatchlasGeqrfRouteIsActuallyRead) {
         EXPECT_FALSE(p.source.legacy);
     }
     {
-        ScopedEnv e("BATCHLAS_GEQRF_ROUTE", "vendor");
+        ScopedEnvVar e("BATCHLAS_GEQRF_ROUTE", "vendor");
         const auto p = parse_route_env(Op::geqrf);
         ASSERT_TRUE(p.found);
         EXPECT_EQ(p.route, (Route{Origin::Vendor, Algorithm::Auto}));
     }
     {
-        ScopedEnv e("BATCHLAS_GEQRF_ROUTE", "native:blocked");
+        ScopedEnvVar e("BATCHLAS_GEQRF_ROUTE", "native:blocked");
         const auto p = parse_route_env(Op::geqrf);
         ASSERT_TRUE(p.found);
         EXPECT_EQ(p.route, (Route{Origin::Native, Algorithm::Blocked}));
@@ -1025,7 +1017,7 @@ TEST(RouteGeqrf, BatchlasGeqrfRouteIsActuallyRead) {
     {
         // AN UNRECOGNISED VALUE IS SILENTLY {Auto, Auto}, WHICH IS THE VENDOR: a
         // "native" run that looks identical to the vendor probably IS the vendor.
-        ScopedEnv e("BATCHLAS_GEQRF_ROUTE", "not-a-route");
+        ScopedEnvVar e("BATCHLAS_GEQRF_ROUTE", "not-a-route");
         const auto p = parse_route_env(Op::geqrf);
         EXPECT_FALSE(p.found);
         EXPECT_TRUE(p.unparsed) << "a typo must be reported, not silently Auto";
@@ -1193,7 +1185,7 @@ TEST(RouteOrgqr, BatchlasOrgqrRouteIsActuallyRead) {
         EXPECT_EQ(legacy_unset_default(Op::orgqr).origin, Origin::Auto);
     }
     {
-        ScopedEnv e("BATCHLAS_ORGQR_ROUTE", "blocked");
+        ScopedEnvVar e("BATCHLAS_ORGQR_ROUTE", "blocked");
         const auto p = parse_route_env(Op::orgqr);
         ASSERT_TRUE(p.found) << "BATCHLAS_ORGQR_ROUTE was not read at all";
         EXPECT_EQ(p.route, (Route{Origin::Native, Algorithm::Blocked}));
@@ -1201,13 +1193,13 @@ TEST(RouteOrgqr, BatchlasOrgqrRouteIsActuallyRead) {
         EXPECT_FALSE(p.source.legacy);
     }
     {
-        ScopedEnv e("BATCHLAS_ORGQR_ROUTE", "vendor");
+        ScopedEnvVar e("BATCHLAS_ORGQR_ROUTE", "vendor");
         const auto p = parse_route_env(Op::orgqr);
         ASSERT_TRUE(p.found);
         EXPECT_EQ(p.route, (Route{Origin::Vendor, Algorithm::Auto}));
     }
     {
-        ScopedEnv e("BATCHLAS_ORGQR_ROUTE", "not-a-route");
+        ScopedEnvVar e("BATCHLAS_ORGQR_ROUTE", "not-a-route");
         const auto p = parse_route_env(Op::orgqr);
         EXPECT_FALSE(p.found);
         EXPECT_TRUE(p.unparsed) << "a typo must be reported, not silently Auto";
@@ -1704,7 +1696,7 @@ TEST(RouteGetrf, BatchlasGetrfRouteIsActuallyRead) {
         EXPECT_EQ(legacy_unset_default(Op::getrf).origin, Origin::Auto);
     }
     {
-        ScopedEnv e("BATCHLAS_GETRF_ROUTE", "cta");
+        ScopedEnvVar e("BATCHLAS_GETRF_ROUTE", "cta");
         const auto p = parse_route_env(Op::getrf);
         ASSERT_TRUE(p.found) << "BATCHLAS_GETRF_ROUTE was not read at all";
         EXPECT_EQ(p.route, (Route{Origin::Native, Algorithm::CTA}))
@@ -1713,19 +1705,19 @@ TEST(RouteGetrf, BatchlasGetrfRouteIsActuallyRead) {
         EXPECT_FALSE(p.source.legacy);
     }
     {
-        ScopedEnv e("BATCHLAS_GETRF_ROUTE", "native:blocked");
+        ScopedEnvVar e("BATCHLAS_GETRF_ROUTE", "native:blocked");
         const auto p = parse_route_env(Op::getrf);
         ASSERT_TRUE(p.found);
         EXPECT_EQ(p.route, (Route{Origin::Native, Algorithm::Blocked}));
     }
     {
-        ScopedEnv e("BATCHLAS_GETRF_ROUTE", "vendor");
+        ScopedEnvVar e("BATCHLAS_GETRF_ROUTE", "vendor");
         const auto p = parse_route_env(Op::getrf);
         ASSERT_TRUE(p.found);
         EXPECT_EQ(p.route, (Route{Origin::Vendor, Algorithm::Auto}));
     }
     {
-        ScopedEnv e("BATCHLAS_GETRF_ROUTE", "not-a-route");
+        ScopedEnvVar e("BATCHLAS_GETRF_ROUTE", "not-a-route");
         const auto p = parse_route_env(Op::getrf);
         EXPECT_FALSE(p.found);
         EXPECT_TRUE(p.unparsed) << "a typo must be reported, not silently Auto";
@@ -2046,7 +2038,7 @@ TEST(RouteGetrs, BatchlasGetrsRouteIsActuallyRead) {
         EXPECT_EQ(legacy_unset_default(Op::getrs).origin, Origin::Auto);
     }
     {
-        ScopedEnv e("BATCHLAS_GETRS_ROUTE", "blocked");
+        ScopedEnvVar e("BATCHLAS_GETRS_ROUTE", "blocked");
         const auto p = parse_route_env(Op::getrs);
         ASSERT_TRUE(p.found) << "BATCHLAS_GETRS_ROUTE was not read at all";
         EXPECT_EQ(p.route, (Route{Origin::Native, Algorithm::Blocked}));
@@ -2054,13 +2046,13 @@ TEST(RouteGetrs, BatchlasGetrsRouteIsActuallyRead) {
         EXPECT_FALSE(p.source.legacy);
     }
     {
-        ScopedEnv e("BATCHLAS_GETRS_ROUTE", "vendor");
+        ScopedEnvVar e("BATCHLAS_GETRS_ROUTE", "vendor");
         const auto p = parse_route_env(Op::getrs);
         ASSERT_TRUE(p.found);
         EXPECT_EQ(p.route, (Route{Origin::Vendor, Algorithm::Auto}));
     }
     {
-        ScopedEnv e("BATCHLAS_GETRS_ROUTE", "not-a-route");
+        ScopedEnvVar e("BATCHLAS_GETRS_ROUTE", "not-a-route");
         const auto p = parse_route_env(Op::getrs);
         EXPECT_FALSE(p.found);
         EXPECT_TRUE(p.unparsed) << "a typo must be reported, not silently Auto";
@@ -2234,7 +2226,7 @@ TEST(RouteGetri, BatchlasGetriRouteIsActuallyRead) {
         EXPECT_EQ(legacy_unset_default(Op::getri).origin, Origin::Auto);
     }
     {
-        ScopedEnv e("BATCHLAS_GETRI_ROUTE", "blocked");
+        ScopedEnvVar e("BATCHLAS_GETRI_ROUTE", "blocked");
         const auto p = parse_route_env(Op::getri);
         ASSERT_TRUE(p.found) << "BATCHLAS_GETRI_ROUTE was not read at all";
         EXPECT_EQ(p.route, (Route{Origin::Native, Algorithm::Blocked}));
@@ -2242,13 +2234,13 @@ TEST(RouteGetri, BatchlasGetriRouteIsActuallyRead) {
         EXPECT_FALSE(p.source.legacy);
     }
     {
-        ScopedEnv e("BATCHLAS_GETRI_ROUTE", "vendor");
+        ScopedEnvVar e("BATCHLAS_GETRI_ROUTE", "vendor");
         const auto p = parse_route_env(Op::getri);
         ASSERT_TRUE(p.found);
         EXPECT_EQ(p.route, (Route{Origin::Vendor, Algorithm::Auto}));
     }
     {
-        ScopedEnv e("BATCHLAS_GETRI_ROUTE", "not-a-route");
+        ScopedEnvVar e("BATCHLAS_GETRI_ROUTE", "not-a-route");
         const auto p = parse_route_env(Op::getri);
         EXPECT_FALSE(p.found);
         EXPECT_TRUE(p.unparsed) << "a typo must be reported, not silently Auto";
@@ -2268,8 +2260,8 @@ TEST(RouteLuFamily, TheThreeOpsResolveIndependentlyAndThatIsThePivotHazard) {
     ClearRouteEnv clear_s(Op::getrs);
     ClearRouteEnv clear_i(Op::getri);
 
-    ScopedEnv ef("BATCHLAS_GETRF_ROUTE", "cta");
-    ScopedEnv ei("BATCHLAS_GETRI_ROUTE", "vendor");
+    ScopedEnvVar ef("BATCHLAS_GETRF_ROUTE", "cta");
+    ScopedEnvVar ei("BATCHLAS_GETRI_ROUTE", "vendor");
 
     EXPECT_EQ(parse_route_env(Op::getrf).route, (Route{Origin::Native, Algorithm::CTA}));
     EXPECT_EQ(parse_route_env(Op::getri).route, (Route{Origin::Vendor, Algorithm::Auto}));
@@ -3281,7 +3273,7 @@ TEST(RouteSpmm, BatchlasSpmmRouteIsActuallyRead) {
     }
     {
         // A bare algorithm implies Origin::Native.
-        ScopedEnv e("BATCHLAS_SPMM_ROUTE", "direct");
+        ScopedEnvVar e("BATCHLAS_SPMM_ROUTE", "direct");
         const auto p = parse_route_env(Op::spmm);
         ASSERT_TRUE(p.found) << "BATCHLAS_SPMM_ROUTE was not read at all";
         EXPECT_EQ(p.route, (Route{Origin::Native, Algorithm::Direct}));
@@ -3289,14 +3281,14 @@ TEST(RouteSpmm, BatchlasSpmmRouteIsActuallyRead) {
         EXPECT_FALSE(p.source.legacy);
     }
     {
-        ScopedEnv e("BATCHLAS_SPMM_ROUTE", "native:direct");
+        ScopedEnvVar e("BATCHLAS_SPMM_ROUTE", "native:direct");
         const auto p = parse_route_env(Op::spmm);
         ASSERT_TRUE(p.found);
         EXPECT_EQ(p.route, (Route{Origin::Native, Algorithm::Direct}));
     }
     {
         // A bare origin leaves the algorithm free; the resolver picks the body.
-        ScopedEnv e("BATCHLAS_SPMM_ROUTE", "native");
+        ScopedEnvVar e("BATCHLAS_SPMM_ROUTE", "native");
         const auto p = parse_route_env(Op::spmm);
         ASSERT_TRUE(p.found);
         EXPECT_EQ(p.route, (Route{Origin::Native, Algorithm::Auto}));
@@ -3305,7 +3297,7 @@ TEST(RouteSpmm, BatchlasSpmmRouteIsActuallyRead) {
                   Algorithm::Direct);
     }
     {
-        ScopedEnv e("BATCHLAS_SPMM_ROUTE", "vendor");
+        ScopedEnvVar e("BATCHLAS_SPMM_ROUTE", "vendor");
         const auto p = parse_route_env(Op::spmm);
         ASSERT_TRUE(p.found);
         EXPECT_EQ(p.route, (Route{Origin::Vendor, Algorithm::Auto}));
@@ -3313,7 +3305,7 @@ TEST(RouteSpmm, BatchlasSpmmRouteIsActuallyRead) {
     {
         // THE TYPO PATH: parse_route_env reports it, and every adapter in the tree then
         // DISCARDS `unparsed` and uses the unset default, so the run goes to the vendor.
-        ScopedEnv e("BATCHLAS_SPMM_ROUTE", "not-a-route");
+        ScopedEnvVar e("BATCHLAS_SPMM_ROUTE", "not-a-route");
         const auto p = parse_route_env(Op::spmm);
         EXPECT_FALSE(p.found);
         EXPECT_TRUE(p.unparsed) << "a typo must be reported, not silently Auto";

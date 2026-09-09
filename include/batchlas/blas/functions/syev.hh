@@ -6,6 +6,7 @@
 #include <type_traits>
 #include <string_view>
 
+#include <batchlas/settings.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/blas/matrix.hh>
@@ -155,8 +156,11 @@ template <typename T>
 inline int64_t syev_cta_max_n_for_vectors() {
     // 32 == off: lowering it speeds up LOBPCG's projected solve but flips a marginal
     // case in ILUKTests.SyevxInstrumentationAndPreconditioner, so it is opt-in.
+    // The default is per-TYPE, so it cannot live on the Settings field: the
+    // field carries the raw value and the range check stays here, next to the
+    // constant it falls back to.
     constexpr int64_t kDefault = syev_cta_max_n_default_for<T>();
-    const char* v = std::getenv("BATCHLAS_SYEV_CTA_MAX_N");
+    const char* v = batchlas::settings().geometry.syev_cta_max_n.get();
     if (!v || !*v) return kDefault;
     char* end = nullptr;
     const long parsed = std::strtol(v, &end, 10);
@@ -169,8 +173,11 @@ inline int64_t syev_cta_max_n_for_vectors() {
 enum class SyevSmallKernel { Cta, CtaFused, Jacobi };
 
 inline SyevSmallKernel syev_small_kernel_env(bool& forced) {
+    // `forced` reports whether the variable named the kernel at all, which the
+    // caller needs to tell "set to cta" from "unset"; that is why the field is
+    // the raw value rather than a parsed SyevSmallKernel.
     forced = true;
-    const char* v = std::getenv("BATCHLAS_SYEV_SMALL_KERNEL");
+    const char* v = batchlas::settings().selection.syev_small_kernel.get();
     if (v && *v) {
         const std::string_view s(v);
         if (s == "cta") return SyevSmallKernel::Cta;

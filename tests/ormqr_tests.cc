@@ -2,29 +2,13 @@
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/blas/functions/ormqr.hh>
 #include <batchlas/util/sycl-device-queue.hh>
-
-#include <cstdlib>
-#include <string>
+// batchlas::ScopedEnvVar, which pins BATCHLAS_ORMQR_PROVIDER below. The private
+// copy this file carried set the variable and nothing else; the route is read from
+// the settings() snapshot taken before main(), so it pinned nothing and the three
+// forcing tests below silently asserted against the ambient route.
+#include <batchlas/util/env.hh>
 
 using namespace batchlas;
-
-namespace {
-class ScopedEnvVar {
-public:
-    ScopedEnvVar(const char* name, const char* value) : name_(name) {
-        if (const char* old = std::getenv(name_)) { had_old_ = true; old_value_ = old; }
-        ::setenv(name_, value, 1);
-    }
-    ~ScopedEnvVar() {
-        if (had_old_) ::setenv(name_, old_value_.c_str(), 1);
-        else ::unsetenv(name_);
-    }
-private:
-    const char* name_;
-    bool had_old_ = false;
-    std::string old_value_;
-};
-} // namespace
 
 template <typename T, Backend B>
 struct OrmqrConfig {

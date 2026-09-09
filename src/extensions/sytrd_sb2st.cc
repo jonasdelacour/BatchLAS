@@ -21,6 +21,7 @@
 #include <stdexcept>
 #include <type_traits>
 #include <vector>
+#include <batchlas/settings.hh>
 
 namespace batchlas {
 
@@ -864,7 +865,7 @@ Event sytrd_sb2st(Queue& ctx,
     };
 
     auto parse_mode = []() -> Sb2stSubgroupMode {
-        const char* p = std::getenv("BATCHLAS_SB2ST_SUBGROUP");
+        const char* p = batchlas::settings().selection.sb2st_subgroup.get();
         if (!p || !*p) return Sb2stSubgroupMode::Auto;
         std::string v(p);
         for (char& ch : v) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));

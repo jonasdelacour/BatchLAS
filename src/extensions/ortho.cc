@@ -15,6 +15,7 @@
 #include <batchlas/backend_config.h>
 
 #include "../util/template-instantiations.hh"
+#include <batchlas/settings.hh>
 
 
 // High-level orthogonalization functions built on top of primitive BLAS operations
@@ -179,7 +180,7 @@ namespace batchlas {
         // parent commit to compare against.
         constexpr bool gram_is_real = !sycl::detail::is_complex<T>::value;
         const bool gram_pinned_to_gemm = [] {
-            const char* raw = std::getenv("BATCHLAS_ORTHO_GRAM");
+            const char* raw = batchlas::settings().selection.ortho_gram.get();
             return raw != nullptr && std::string(raw) == "gemm";
         }();
         constexpr int gram_max_k = std::is_same_v<T, float> ? 64 : 128;

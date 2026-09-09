@@ -12,12 +12,19 @@
 #include <unordered_map>
 
 #include <unistd.h>   // getpid; see emit()
+#include <batchlas/settings.hh>
 
 namespace batchlas::dispatch::coverage {
 
-// One definition in one TU, keyed on the same variable emit() reads.
+// One definition in one TU, keyed on the same Settings field emit() reads.
+//
+// This runs at STATIC INIT, before main and therefore before any configure()
+// call could have replaced the snapshot. That is unchanged from the direct
+// environment read it replaces, which saw the same ambient state at the same
+// moment; settings() is documented safe to call from a static initialiser and
+// this is the call site that requires it.
 bool g_dynamic_enabled = [] {
-    const char* p = std::getenv("BATCHLAS_COVERAGE_OUT");
+    const char* p = batchlas::settings().diagnostics.coverage_out.get();
     return p != nullptr && *p != '\0';
 }();
 
@@ -93,7 +100,7 @@ const char* backend_name(Backend b) {
 }
 
 void emit() {
-    const char* path = std::getenv("BATCHLAS_COVERAGE_OUT");
+    const char* path = batchlas::settings().diagnostics.coverage_out.get();
     if (!path || !*path) {
         return;
     }

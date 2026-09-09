@@ -15,7 +15,8 @@
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
         "BATCHLAS_BUILD_TESTS": "OFF",
         "BATCHLAS_BUILD_BENCHMARKS": "OFF",
-        "BATCHLAS_BUILD_PYTHON": "OFF"
+        "BATCHLAS_BUILD_PYTHON": "OFF",
+        "BATCHLAS_ALLOW_UNSAFE_ENV": "ON"
       }
     },
     {
@@ -53,12 +54,13 @@
     {
       "name": "cuda",
       "displayName": "CUDA",
-      "description": "Optional CUDA-enabled build when the environment supports it.",
+      "description": "Optional CUDA-enabled build when the environment supports it. BATCHLAS_ALLOW_UNSAFE_ENV is written back OFF here, not merely left out: this preset inherits dev, which turns it ON, and the pre-push gate has to run the arm a release build runs.",
       "inherits": "dev",
       "binaryDir": "${sourceDir}/build/presets/cuda",
       "cacheVariables": {
         "BATCHLAS_ENABLE_CUDA": "AUTO",
-        "BATCHLAS_BUILD_TESTS": "ON"
+        "BATCHLAS_BUILD_TESTS": "ON",
+        "BATCHLAS_ALLOW_UNSAFE_ENV": "OFF"
       }
     },
     {

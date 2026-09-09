@@ -18,6 +18,7 @@
 #include <cstdlib>
 #include <stdexcept>
 #include <type_traits>
+#include <batchlas/settings.hh>
 
 namespace batchlas {
 
@@ -93,12 +94,10 @@ inline int32_t sytrd_block_size_default(int32_t n) {
 
 template <typename T>
 inline int32_t sytrd_block_size_override(int32_t n) {
+    // 0 on the field means unset. The fallback is both n-bucketed and
+    // type-dependent, so it cannot be a scalar default on the field.
     const int32_t fallback = sytrd_block_size_default<T>(n);
-    const char* v = std::getenv("BATCHLAS_SYTRD_BLOCK_SIZE");
-    if (!v || *v == '\0') {
-        return fallback;
-    }
-    const int value = std::atoi(v);
+    const int32_t value = batchlas::settings().geometry.sytrd_block_size;
     return value > 0 ? value : fallback;
 }
 

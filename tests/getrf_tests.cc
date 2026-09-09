@@ -14,6 +14,7 @@
 #include <batchlas/blas/functions/trsm.hh>
 #include <batchlas/blas/dispatch/vendor_available.hh>
 #include <batchlas/blas/matrix.hh>
+#include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
@@ -540,19 +541,6 @@ int non_diagonal_pivots(const Lu<T>& p, int b) {
     return c;
 }
 
-struct EnvGuard {
-    std::string name, saved;
-    bool had = false;
-    EnvGuard(const char* n, const char* v) : name(n) {
-        if (const char* s = std::getenv(n)) { saved = s; had = true; }
-        ::setenv(n, v, 1);
-    }
-    ~EnvGuard() {
-        if (had) ::setenv(name.c_str(), saved.c_str(), 1);
-        else ::unsetenv(name.c_str());
-    }
-};
-
 // THE FUSED NARROW-RHS GETRS TIER -- SHARED SCAFFOLDING. getrs_fused.cc is a
 // SECOND native getrs arm: one work-group per matrix, the interchange walk and
 // BOTH substitutions in ONE kernel. All three ways in are exercised below.
@@ -1037,12 +1025,24 @@ TYPED_TEST(LuTest, BlockedFactorisesAndPivotsExactly) {
 // SAME transposition list in the SAME order, so the assertion is BITWISE and not
 // "both residuals are small". n = 129 leaves a ONE-COLUMN final panel, where the
 // deferred pass's extents must come from ib and never from nb.
-// getrf_blocked.cc latches its environment read in a function-local static, so the
-// file-scope object below is what makes the latch land on "present" before main.
+// getrf_blocked.cc latches the knob's PRESENCE in a function-local static (the
+// value itself is re-read per call), so the file-scope object below is what makes
+// that latch land on "present" before main.
 // evidence: docs/perf/lu.md#getrf-deferred-left-gather
 namespace {
 struct LeftLaswpKnobPresent {
-    LeftLaswpKnobPresent() { ::setenv("BATCHLAS_GETRF_LASWP", "defer_gather", /*overwrite=*/0); }
+    LeftLaswpKnobPresent() {
+        ::setenv("BATCHLAS_GETRF_LASWP", "defer_gather", /*overwrite=*/0);
+        // NOT a ScopedEnvVar: this presence has to hold for the WHOLE process and
+        // outlive every scope, which is the one shape a restoring guard cannot
+        // express. The explicit reload is the guard's other half. Without it the
+        // settings() snapshot -- taken before main by the always-linked dispatch
+        // coverage TU's own dynamic initialiser, in an order no TU here controls --
+        // can be built from an environment that does not yet contain this setenv;
+        // the presence latch then lands on "absent" and all three arms below
+        // resolve to the SAME DeferGather mode.
+        batchlas::detail::reload_settings();
+    }
 };
 const LeftLaswpKnobPresent kLeftLaswpKnobPresent;
 }  // namespace
@@ -1056,11 +1056,16 @@ TYPED_TEST(LuTest, LeftInterchangeSpellingsAgreeBitForBit) {
         std::vector<std::vector<T>> facs;
         std::vector<std::vector<int>> pivs;
         for (const Arm& a : arms) {
-            ::setenv("BATCHLAS_GETRF_LASWP", a.env, 1);
+            // The guard, never a bare ::setenv: settings() snapshots the environment
+            // once, so an unguarded write leaves all three arms reading the SAME
+            // value and the bitwise comparisons below compare one arm with itself.
+            // On exit it restores what the file-scope object above (or the caller's
+            // shell) had pinned, which is the shipping "defer_gather" arm.
+            const ScopedEnvVar pin("BATCHLAS_GETRF_LASWP", a.env);
             ASSERT_EQ(this->left_mode(n), a.mode)
                 << "n=" << n << ": the driver did not resolve the '" << a.env
                 << "' spelling, so every comparison below would be between two copies of the "
-                   "SAME arm. The environment read latched before this test ran.";
+                   "SAME arm.";
 
             auto p = make_random<T>(n, 3, 4441u + unsigned(n));
             this->run_blocked(p);
@@ -1075,7 +1080,7 @@ TYPED_TEST(LuTest, LeftInterchangeSpellingsAgreeBitForBit) {
                 pv.insert(pv.end(), ip, ip + p.n);
             }
             pivs.push_back(std::move(pv));
-            if (this->HasFailure()) { ::setenv("BATCHLAS_GETRF_LASWP", "defer_gather", 1); return; }
+            if (this->HasFailure()) return;  // pin's destructor restores and reloads
         }
 
         for (std::size_t a = 1; a < facs.size(); ++a) {
@@ -1090,7 +1095,6 @@ TYPED_TEST(LuTest, LeftInterchangeSpellingsAgreeBitForBit) {
             EXPECT_EQ(pivs[a], pivs[0])
                 << "n=" << n << ": '" << arms[a].env << "' produced a different interchange list";
         }
-        ::setenv("BATCHLAS_GETRF_LASWP", "defer_gather", 1);
         if (this->HasFailure()) return;
     }
 }
@@ -1566,7 +1570,12 @@ TYPED_TEST(LuTest, GetrsPermutationSpellingsAgreeBitForBit) {
             for (Transpose op : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans}) {
                 std::vector<std::vector<T>> answer;
                 for (const char* spelling : {"walk", "gather"}) {
-                    setenv("BATCHLAS_GETRS_LASWP", spelling, 1);
+                    // The guard reloads the settings snapshot on both ends; a bare
+                    // ::setenv here would be read by nothing and BOTH arms would run
+                    // the default spelling, making the bit-identity assertion below
+                    // compare one arm with itself. GUARD (1) catches that too, but
+                    // only after the fact.
+                    const ScopedEnvVar pin("BATCHLAS_GETRS_LASWP", spelling);
 
                     // GUARD (1). The driver's own resolution, for THIS shape on
                     // THIS queue, so a fallback the caller cannot see is visible.
@@ -1601,9 +1610,8 @@ TYPED_TEST(LuTest, GetrsPermutationSpellingsAgreeBitForBit) {
                             << " n=" << n << " nrhs=" << nrhs << " b=" << b;
                     }
                     answer.emplace_back(rhs.buf.begin(), rhs.buf.end());
-                    if (this->HasFailure()) { unsetenv("BATCHLAS_GETRS_LASWP"); return; }
+                    if (this->HasFailure()) return;  // pin's destructor restores
                 }
-                unsetenv("BATCHLAS_GETRS_LASWP");
 
                 // THE STRONG ASSERTION: the same permutation and the same two solves, so the
                 // answers must be identical to the last bit.
@@ -1630,42 +1638,53 @@ TYPED_TEST(LuTest, GetrsPermSpellingDecisionSurface) {
     using T = typename TestFixture::T;
     if (this->ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "the gather is GPU-only";
 
-    unsetenv("BATCHLAS_GETRS_LASWP");
     constexpr int kMin = sycl_getrs::kGetrsPermGatherMinNrhs;
     ASSERT_GE(kMin, 1) << "a boundary below 1 would make the walk unreachable by default";
 
-    // THE DEFAULT nrhs BOUNDARY, both sides.
-    if (kMin > 1) {
-        EXPECT_EQ(sycl_getrs::getrs_perm_spelling_debug<T>(*this->ctx, 128, kMin - 1), 0)
-            << "nrhs just below kGetrsPermGatherMinNrhs must take the WALK by default";
-    }
-    EXPECT_EQ(sycl_getrs::getrs_perm_spelling_debug<T>(*this->ctx, 128, kMin), 1)
-        << "nrhs at kGetrsPermGatherMinNrhs must take the GATHER by default";
-    EXPECT_EQ(sycl_getrs::getrs_perm_spelling_debug<T>(*this->ctx, 128, 4 * kMin), 1);
+    {
+        // A null value UNSETS for the duration and reloads, which is how the DEFAULT
+        // arm is reached: an inherited BATCHLAS_GETRS_LASWP would otherwise decide
+        // every assertion in this block. A bare ::unsetenv would not be seen at all.
+        const ScopedEnvVar unpinned("BATCHLAS_GETRS_LASWP", nullptr);
 
-    // linalg::solve issues getrs at nrhs = 1 and is the only caller in the tree;
-    // it must keep the walk.
-    EXPECT_EQ(sycl_getrs::getrs_perm_spelling_debug<T>(*this->ctx, 512, 1), kMin <= 1 ? 1 : 0);
+        // THE DEFAULT nrhs BOUNDARY, both sides.
+        if (kMin > 1) {
+            EXPECT_EQ(sycl_getrs::getrs_perm_spelling_debug<T>(*this->ctx, 128, kMin - 1), 0)
+                << "nrhs just below kGetrsPermGatherMinNrhs must take the WALK by default";
+        }
+        EXPECT_EQ(sycl_getrs::getrs_perm_spelling_debug<T>(*this->ctx, 128, kMin), 1)
+            << "nrhs at kGetrsPermGatherMinNrhs must take the GATHER by default";
+        EXPECT_EQ(sycl_getrs::getrs_perm_spelling_debug<T>(*this->ctx, 128, 4 * kMin), 1);
+
+        // linalg::solve issues getrs at nrhs = 1 and is the only caller in the tree;
+        // it must keep the walk.
+        EXPECT_EQ(sycl_getrs::getrs_perm_spelling_debug<T>(*this->ctx, 512, 1),
+                  kMin <= 1 ? 1 : 0);
+    }
 
     // THE OVERRIDES beat the boundary in both directions.
-    setenv("BATCHLAS_GETRS_LASWP", "walk", 1);
-    EXPECT_EQ(sycl_getrs::getrs_perm_spelling_debug<T>(*this->ctx, 128, 4 * kMin), 0)
-        << "BATCHLAS_GETRS_LASWP=walk must force the walk above the boundary";
-    setenv("BATCHLAS_GETRS_LASWP", "gather", 1);
-    EXPECT_EQ(sycl_getrs::getrs_perm_spelling_debug<T>(*this->ctx, 128, 1), 1)
-        << "BATCHLAS_GETRS_LASWP=gather must force the gather below the boundary";
+    {
+        const ScopedEnvVar pin("BATCHLAS_GETRS_LASWP", "walk");
+        EXPECT_EQ(sycl_getrs::getrs_perm_spelling_debug<T>(*this->ctx, 128, 4 * kMin), 0)
+            << "BATCHLAS_GETRS_LASWP=walk must force the walk above the boundary";
+    }
+    {
+        const ScopedEnvVar pin("BATCHLAS_GETRS_LASWP", "gather");
+        EXPECT_EQ(sycl_getrs::getrs_perm_spelling_debug<T>(*this->ctx, 128, 1), 1)
+            << "BATCHLAS_GETRS_LASWP=gather must force the gather below the boundary";
 
-    // THE CAPACITY REFUSAL, forced on, at an order no tile can hold. This is the
-    // only assertion in the suite that the fallback branch is reachable at all.
-    EXPECT_EQ(sycl_getrs::getrs_perm_spelling_debug<T>(*this->ctx, 1 << 20, 4 * kMin), 0)
-        << "the gather must REFUSE (and fall back to the walk) at an order whose column "
-           "cannot fit local memory, rather than launching a kernel that cannot run";
+        // THE CAPACITY REFUSAL, forced on -- the pin above is what "forced" means, and
+        // it stays in scope for both rows -- at an order no tile can hold. This is the
+        // only assertion in the suite that the fallback branch is reachable at all.
+        EXPECT_EQ(sycl_getrs::getrs_perm_spelling_debug<T>(*this->ctx, 1 << 20, 4 * kMin), 0)
+            << "the gather must REFUSE (and fall back to the walk) at an order whose column "
+               "cannot fit local memory, rather than launching a kernel that cannot run";
 
-    // ...and it must NOT refuse at an order the suite reaches: a capacity that fires
-    // early is a lever that never runs.
-    EXPECT_EQ(sycl_getrs::getrs_perm_spelling_debug<T>(*this->ctx, 1024, 4 * kMin), 1)
-        << "the gather must still fit at n = 1024, the largest order this pass measured";
-    unsetenv("BATCHLAS_GETRS_LASWP");
+        // ...and it must NOT refuse at an order the suite reaches: a capacity that fires
+        // early is a lever that never runs.
+        EXPECT_EQ(sycl_getrs::getrs_perm_spelling_debug<T>(*this->ctx, 1024, 4 * kMin), 1)
+            << "the gather must still fit at n = 1024, the largest order this pass measured";
+    }
 }
 
 // L8d. THE GATHER BUYS NO WORKSPACE, AT ANY WIDTH. The facade takes the workspace
@@ -1682,7 +1701,10 @@ TYPED_TEST(LuTest, GetrsPermGatherBuysNoWorkspace) {
         auto A = view_of(p);
         auto Bv = view_of(rhs);
         for (const char* spelling : {"walk", "gather"}) {
-            setenv("BATCHLAS_GETRS_LASWP", spelling, 1);
+            // The sizing query resolves the spelling through the same settings
+            // snapshot the solve does, so the pin has to be a guard that reloads it
+            // or both rows below measure the default spelling twice.
+            const ScopedEnvVar pin("BATCHLAS_GETRS_LASWP", spelling);
             for (Transpose op : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans}) {
                 EXPECT_EQ(sycl_getrs::getrs_blocked_buffer_size<T>(*this->ctx, A, Bv, op),
                           std::size_t(0))
@@ -1694,7 +1716,6 @@ TYPED_TEST(LuTest, GetrsPermGatherBuysNoWorkspace) {
             }
         }
     }
-    unsetenv("BATCHLAS_GETRS_LASWP");
 }
 
 // L9. GETRI: the inverse, and the promise that A SURVIVES. cublas<t>getriBatched
@@ -1886,9 +1907,9 @@ TYPED_TEST(LuTest, RouteTableAndTheVendorFreeFallback) {
     // route-pinned ctest rerun -- otherwise forces the answer and the test reports
     // a window defect that is really just its own environment. Empty reads as
     // unset in parse_route_env.
-    EnvGuard clear_getrf("BATCHLAS_GETRF_ROUTE", "");
-    EnvGuard clear_getrs("BATCHLAS_GETRS_ROUTE", "");
-    EnvGuard clear_getri("BATCHLAS_GETRI_ROUTE", "");
+    ScopedEnvVar clear_getrf("BATCHLAS_GETRF_ROUTE", "");
+    ScopedEnvVar clear_getrs("BATCHLAS_GETRS_ROUTE", "");
+    ScopedEnvVar clear_getri("BATCHLAS_GETRI_ROUTE", "");
 
     auto small = make_dominant_permuted<T>(std::min(40, std::max(2, this->cta_max_n())), 2, 5u);
     auto large = make_dominant_permuted<T>(512, 2, 6u);
@@ -2037,7 +2058,7 @@ TYPED_TEST(LuTest, FacadeReachesTheNativeKernelsBitExactly) {
     ASSERT_GE(this->cta_max_n(), n) << "the CTA pin cannot be exercised at n=" << n;
 
     for (const char* pin : {"cta", "blocked"}) {
-        EnvGuard g("BATCHLAS_GETRF_ROUTE", pin);
+        ScopedEnvVar g("BATCHLAS_GETRF_ROUTE", pin);
         auto direct = make_dominant_permuted<T>(n, batch, 1234u);
         auto viafac = make_dominant_permuted<T>(n, batch, 1234u);
 
@@ -2078,7 +2099,7 @@ TYPED_TEST(LuTest, FacadeReachesTheNativeKernelsBitExactly) {
         this->run_blocked(p);
         auto A = view_of(p);
 
-        EnvGuard g("BATCHLAS_GETRS_ROUTE", "blocked");
+        ScopedEnvVar g("BATCHLAS_GETRS_ROUTE", "blocked");
         auto r1 = make_rhs<T>(n, 3, batch, 88u);
         auto r2 = make_rhs<T>(n, 3, batch, 88u);
         auto V1 = view_of(r1);
@@ -2106,7 +2127,7 @@ TYPED_TEST(LuTest, FacadeReachesTheNativeKernelsBitExactly) {
         this->run_blocked(p);
         auto A = view_of(p);
 
-        EnvGuard g("BATCHLAS_GETRI_ROUTE", "blocked");
+        ScopedEnvVar g("BATCHLAS_GETRI_ROUTE", "blocked");
         Lu<T> c1, c2;
         alloc(c1, n, batch, 7, 13);
         alloc(c2, n, batch, 7, 13);
@@ -2244,7 +2265,7 @@ TYPED_TEST(LuTest, BufferSizeCoversEveryRouteAndNeverDereferences) {
     }
 
     for (const char* pin : {"cta", "blocked"}) {
-        EnvGuard g("BATCHLAS_GETRF_ROUTE", pin);
+        ScopedEnvVar g("BATCHLAS_GETRF_ROUTE", pin);
         auto p = make_dominant_permuted<T>(n, batch, 2u);
         auto V = view_of(p);
         const auto route = backend::getrf_route<B, T>(
@@ -2682,8 +2703,8 @@ TYPED_TEST(LuTest, FacadeReachesTheFusedGetrsBitExactly) {
 
     // As above: this asserts which tier the facade picks by DEFAULT, so a pinned
     // route in the environment has to be cleared or it decides the answer.
-    EnvGuard clear_getrs("BATCHLAS_GETRS_ROUTE", "");
-    EnvGuard clear_getrf("BATCHLAS_GETRF_ROUTE", "");
+    ScopedEnvVar clear_getrs("BATCHLAS_GETRS_ROUTE", "");
+    ScopedEnvVar clear_getrf("BATCHLAS_GETRF_ROUTE", "");
 
     auto p = make_dominant_permuted<T>(n, batch, 6161u);
     this->run_blocked(p);
@@ -2692,7 +2713,7 @@ TYPED_TEST(LuTest, FacadeReachesTheFusedGetrsBitExactly) {
     auto A = view_of(p);
 
     for (Transpose op : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans}) {
-        EnvGuard g("BATCHLAS_GETRS_ROUTE", "cta");
+        ScopedEnvVar g("BATCHLAS_GETRS_ROUTE", "cta");
         auto r1 = make_rhs<T>(n, nrhs, batch, 7171u);
         auto r2 = make_rhs<T>(n, nrhs, batch, 7171u);
         auto V1 = view_of(r1);
@@ -2724,7 +2745,7 @@ TYPED_TEST(LuTest, FacadeReachesTheFusedGetrsBitExactly) {
     // The other pin must still reach the COMPOSED tier, not the fused route ahead of
     // it in kGetrsOrder.
     {
-        EnvGuard g("BATCHLAS_GETRS_ROUTE", "blocked");
+        ScopedEnvVar g("BATCHLAS_GETRS_ROUTE", "blocked");
         auto rhs = make_rhs<T>(n, nrhs, batch, 7272u);
         auto Bv = view_of(rhs);
         const auto route = backend::getrs_route<B, T>(
@@ -2861,7 +2882,7 @@ TYPED_TEST(LuTest, FusedGetrsDirectEntryPointRefusesWhatSupportsRefuses) {
     // Serve EXACTLY the facade's figure under the CTA pin. A short workspace is a
     // silent heap overflow, not a throw.
     {
-        EnvGuard g("BATCHLAS_GETRS_ROUTE", "cta");
+        ScopedEnvVar g("BATCHLAS_GETRS_ROUTE", "cta");
         const auto route = backend::getrs_route<B, T>(
             *this->ctx, A, Bv, Transpose::NoTrans, dispatch::factorization_vendor_available<B>);
         ASSERT_TRUE(dispatch::is_native(route) && route.algo == dispatch::Algorithm::CTA)

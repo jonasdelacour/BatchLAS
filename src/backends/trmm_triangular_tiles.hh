@@ -54,6 +54,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <type_traits>
+#include <batchlas/settings.hh>
 
 namespace batchlas::backend::detail {
 
@@ -448,10 +449,9 @@ Event trmm_triangular_tiles(Queue& ctx,
     const int m = static_cast<int>(C.rows());
     // BATCHLAS_TRMM_TILE_M pins the row tile so the trade-off below can be
     // swept from one binary.
-    const int forced = [] {
-        const char* raw = std::getenv("BATCHLAS_TRMM_TILE_M");
-        return raw ? std::atoi(raw) : 0;
-    }();
+    // 0 means "unset" at this site; the real default is a function of m and is
+    // applied on the next line. Not latched, as before.
+    const int forced = batchlas::settings().geometry.trmm_tile_m;
 
     const int tile_m = forced ? forced : trmm_row_tile<T>(m);
     if (tile_m <= 16) {
