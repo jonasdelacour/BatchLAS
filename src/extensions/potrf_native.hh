@@ -5,6 +5,7 @@
 // memory) and Blocked (its leaf is that CTA kernel). preferred() is false for both.
 // evidence: docs/perf/potrf.md
 
+#include "../util/internal-api.hh"
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>
@@ -19,32 +20,32 @@ namespace batchlas::sycl_potrf {
 // Per-type CTA capacity for a local-memory budget in BYTES; the budget is a device
 // property, so a hardcoded ceiling makes supports() promise an unlaunchable route.
 template <typename T>
-int potrf_cta_max_n_for_slm(std::size_t slm_budget_bytes);
+BATCHLAS_INTERNAL_API int potrf_cta_max_n_for_slm(std::size_t slm_budget_bytes);
 
 template <typename T>
 int potrf_cta_max_n();
 
 template <typename T>
-bool potrf_blocked_available();
+BATCHLAS_INTERNAL_API bool potrf_blocked_available();
 
 // Workspace in bytes -- replay the layout through BumpAllocator::measuring();
 // a hand-summed exact figure fails the allocator's own capacity check.
 template <typename T>
-std::size_t potrf_cta_buffer_size(Queue& ctx,
-                                  const MatrixView<T, MatrixFormat::Dense>& A);
+BATCHLAS_INTERNAL_API std::size_t potrf_cta_buffer_size(Queue& ctx,
+                                                        const MatrixView<T, MatrixFormat::Dense>& A);
 
 // Test hook: low 16 bits G (matrices/work-group), high 16 L (items/matrix); 0 if unfit.
 template <typename T>
-unsigned potrf_cta_debug_launch(Queue& ctx, int n, int batch);
+BATCHLAS_INTERNAL_API unsigned potrf_cta_debug_launch(Queue& ctx, int n, int batch);
 
 // Direct-call entry: a forced route that supports() rejects falls back to
 // automatic() and silently runs the vendor, so tests bypass the gate here.
 template <typename T>
-Event potrf_cta_dispatch(Queue& ctx,
-                         const MatrixView<T, MatrixFormat::Dense>& A,
-                         Uplo uplo,
-                         Span<std::byte> workspace,
-                         Span<int32_t> info);
+BATCHLAS_INTERNAL_API Event potrf_cta_dispatch(Queue& ctx,
+                                               const MatrixView<T, MatrixFormat::Dense>& A,
+                                               Uplo uplo,
+                                               Span<std::byte> workspace,
+                                               Span<int32_t> info);
 
 // Trailing-update GEMM, injected to reach the ROUTED gemm; empty means gemm_custom.
 template <typename T>
@@ -66,24 +67,24 @@ using PotrfPanelSolve = std::function<Event(
     Side, Uplo, Transpose, Diag)>;
 
 template <typename T>
-std::size_t potrf_blocked_buffer_size(Queue& ctx,
-                                      const MatrixView<T, MatrixFormat::Dense>& A,
-                                      Uplo uplo);
+BATCHLAS_INTERNAL_API std::size_t potrf_blocked_buffer_size(Queue& ctx,
+                                                            const MatrixView<T, MatrixFormat::Dense>& A,
+                                                            Uplo uplo);
 
 // Test hook: low 16 bits nb (diagonal-block order), high 16 W (trailing-update width).
 template <typename T>
-unsigned potrf_blocked_debug_params(Queue& ctx, int n);
+BATCHLAS_INTERNAL_API unsigned potrf_blocked_debug_params(Queue& ctx, int n);
 
 // Uplo::LOWER ONLY -- the right-looking schedule would overwrite the wrong triangle
 // for Upper, so it throws. `info` is LAPACK's: 1-based, GLOBAL, first failure wins;
 // the leaf writes a sub-view-LOCAL index, so the driver translates and merges.
 template <typename T>
-Event potrf_blocked_dispatch(Queue& ctx,
-                             const MatrixView<T, MatrixFormat::Dense>& A,
-                             Uplo uplo,
-                             Span<std::byte> workspace,
-                             Span<int32_t> info,
-                             PotrfTrailingGemm<T> trailing_gemm = {},
-                             PotrfPanelSolve<T> panel_solve = {});
+BATCHLAS_INTERNAL_API Event potrf_blocked_dispatch(Queue& ctx,
+                                                   const MatrixView<T, MatrixFormat::Dense>& A,
+                                                   Uplo uplo,
+                                                   Span<std::byte> workspace,
+                                                   Span<int32_t> info,
+                                                   PotrfTrailingGemm<T> trailing_gemm = {},
+                                                   PotrfPanelSolve<T> panel_solve = {});
 
 }  // namespace batchlas::sycl_potrf

@@ -37,6 +37,7 @@
 // constructor AND destructor call detail::reload_settings(), which re-runs the
 // load. See the note on reload_settings() for what that does not cover.
 
+#include <batchlas/export.hh>
 #include <array>
 #include <cstddef>
 #include <optional>
@@ -699,7 +700,7 @@ struct Settings {
 // means: read settings().group.field where you used to call std::getenv, and do
 // NOT hoist it into a function-local static -- that latch is the defect three
 // call sites in this tree already carry explicit written prohibitions against.
-const Settings& settings();
+BATCHLAS_API const Settings& settings();
 
 // Programmatic override, for an embedding application that wants to stop
 // inheriting ambient process state.
@@ -726,7 +727,7 @@ const Settings& settings();
 // it silently. Ignoring the environment afterwards made every ScopedEnvVar in the
 // process a no-op, which turns an A/B test into two runs of the same arm that
 // agree by construction.
-void configure(const Settings& s);
+BATCHLAS_API void configure(const Settings& s);
 
 namespace detail {
 
@@ -759,14 +760,14 @@ namespace detail {
 // Not thread-safe with respect to concurrent settings() readers, for the same
 // reason ScopedEnvVar is not: the process environment is not thread-safe either.
 // Call it from a test body or a benchmark setup, never from a parallel region.
-void reload_settings();
+BATCHLAS_API void reload_settings();
 
 // Latch: records that a Queue has been constructed, which is what closes
 // configure(). Called from Queue's constructors; nothing else should call it.
-void note_queue_constructed() noexcept;
+BATCHLAS_API void note_queue_constructed() noexcept;
 
 // True once note_queue_constructed() has been called.
-bool queue_constructed() noexcept;
+BATCHLAS_API bool queue_constructed() noexcept;
 
 }  // namespace detail
 

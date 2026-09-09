@@ -157,6 +157,34 @@ set(BATCHLAS_NVIDIA_ARCH "sm_50" CACHE STRING "NVIDIA GPU architecture for CUDA"
 set(BATCHLAS_SYCL_LINK_JOBS "4" CACHE STRING
     "llvm-foreach parallelism for the SYCL device link (-fsycl-max-parallel-link-jobs); 1 disables")
 
+# ---------------------------------------------------------------------------
+# One .so, or fourteen.
+#
+# OFF (the DEVELOPMENT default) builds the 14 component shared objects. That
+# split exists for one measured reason: the unit of SYCL device linking is the
+# shared library, not the object file, so one changed object redoes
+# sycl-post-link + ptxas + AOT for every object in the same .so. Before the
+# split, a one-line edit cost 216 s of which 198 s was a single relink, and the
+# device link is single-threaded so -j cannot shorten it.
+#
+# ON builds one `batchlas` .so from every object library. It is the RELEASE
+# shape, never the dev default: it makes the whole library the relink unit
+# again. What it buys is the packaging story - one SONAME, one export set, no
+# cross-.so symbol cycles, and therefore no -Wl,--no-as-needed workaround and a
+# bounded ABI that -fvisibility=hidden can actually enforce.
+#
+# Measured on this box (2x RTX 4090, DPC++ clang-22 at /opt/dpcpp-cuda,
+# RelWithDebInfo, CUDA on, -fsycl-targets=nvidia_gpu_sm_89,native_cpu):
+# `cmake --build <dir> --target batchlas -j16` from a scratch tree took
+# 11m38s wall, of which the single `Linking CXX shared library libbatchlas.so`
+# step was 9m35s (575 s) on its own. That step is single-threaded, so -j does
+# not shorten it. The product is a 273 MiB libbatchlas.so.0.1.0. Usable for a
+# release build, ruinous as a dev loop - which is the whole reason this
+# defaults OFF.
+option(BATCHLAS_MONOLITHIC_LIBRARY
+    "Build ONE batchlas shared library instead of the 14 component .so (release shape; makes every incremental edit relink the world)"
+    OFF)
+
 set_property(CACHE BATCHLAS_CPU_TARGET PROPERTY STRINGS auto native_cpu spir64_x86_64 none)
 set_property(CACHE BATCHLAS_TEST_TARGET_SET PROPERTY STRINGS all smoke)
 

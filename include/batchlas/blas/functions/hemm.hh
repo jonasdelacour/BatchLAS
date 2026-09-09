@@ -1,5 +1,6 @@
 #pragma once
 
+#include <batchlas/export.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/blas/enums.hh>
@@ -41,14 +42,14 @@ using hemm_vendor = Event(Queue&,
 // symm -- for a real matrix "Hermitian" and "symmetric" are the same statement,
 // and BLAS has no ?hemm for real types.
 template <Backend Ba, ComplexScalar T>
-Event hemm(Queue& ctx,
-           const MatrixView<T, MatrixFormat::Dense>& A,
-           const MatrixView<T, MatrixFormat::Dense>& B,
-           const MatrixView<T, MatrixFormat::Dense>& C,
-           T alpha,
-           T beta,
-           Side side,
-           Uplo uplo);
+BATCHLAS_API Event hemm(Queue& ctx,
+                        const MatrixView<T, MatrixFormat::Dense>& A,
+                        const MatrixView<T, MatrixFormat::Dense>& B,
+                        const MatrixView<T, MatrixFormat::Dense>& C,
+                        T alpha,
+                        T beta,
+                        Side side,
+                        Uplo uplo);
 
 }  // namespace batchlas
 
@@ -64,14 +65,14 @@ namespace batchlas::backend {
 // implementation, named as such. Each vendor wrapper TU defines this primary
 // template for its own Backend value and instantiates it there.
 template <Backend Back, ComplexScalar T>
-Event hemm_vendor(Queue& ctx,
-                  const MatrixView<T, MatrixFormat::Dense>& A,
-                  const MatrixView<T, MatrixFormat::Dense>& B,
-                  const MatrixView<T, MatrixFormat::Dense>& C,
-                  T alpha,
-                  T beta,
-                  Side side,
-                  Uplo uplo);
+BATCHLAS_API Event hemm_vendor(Queue& ctx,
+                               const MatrixView<T, MatrixFormat::Dense>& A,
+                               const MatrixView<T, MatrixFormat::Dense>& B,
+                               const MatrixView<T, MatrixFormat::Dense>& C,
+                               T alpha,
+                               T beta,
+                               Side side,
+                               Uplo uplo);
 
 }  // namespace batchlas::backend
 

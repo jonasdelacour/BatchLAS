@@ -1,5 +1,6 @@
 #pragma once
 
+#include <batchlas/export.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/blas/enums.hh>
@@ -34,15 +35,15 @@ using trmm_vendor = Event(Queue&,
 
 
 template <Backend Ba, typename T>
-Event trmm(Queue& ctx,
-                const MatrixView<T, MatrixFormat::Dense>& A,
-                const MatrixView<T, MatrixFormat::Dense>& B,
-                const MatrixView<T, MatrixFormat::Dense>& C,
-                T alpha,
-                Side side,
-                Uplo uplo,
-                Transpose transA,
-                Diag diag);
+BATCHLAS_API Event trmm(Queue& ctx,
+                             const MatrixView<T, MatrixFormat::Dense>& A,
+                             const MatrixView<T, MatrixFormat::Dense>& B,
+                             const MatrixView<T, MatrixFormat::Dense>& C,
+                             T alpha,
+                             Side side,
+                             Uplo uplo,
+                             Transpose transA,
+                             Diag diag);
 
 }  // namespace batchlas
 
@@ -58,15 +59,15 @@ namespace batchlas::backend {
 // implementation, named as such. Each vendor wrapper TU defines this primary
 // template for its own Backend value and instantiates it there.
 template <Backend Back, typename T>
-Event trmm_vendor(Queue& ctx,
-                  const MatrixView<T, MatrixFormat::Dense>& A,
-                  const MatrixView<T, MatrixFormat::Dense>& B,
-                  const MatrixView<T, MatrixFormat::Dense>& C,
-                  T alpha,
-                  Side side,
-                  Uplo uplo,
-                  Transpose transA,
-                  Diag diag);
+BATCHLAS_API Event trmm_vendor(Queue& ctx,
+                               const MatrixView<T, MatrixFormat::Dense>& A,
+                               const MatrixView<T, MatrixFormat::Dense>& B,
+                               const MatrixView<T, MatrixFormat::Dense>& C,
+                               T alpha,
+                               Side side,
+                               Uplo uplo,
+                               Transpose transA,
+                               Diag diag);
 
 }  // namespace batchlas::backend
 

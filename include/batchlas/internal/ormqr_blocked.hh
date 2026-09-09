@@ -1,5 +1,6 @@
 #pragma once
 
+#include <batchlas/export.hh>
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/tuning_params.hh>
@@ -21,22 +22,22 @@ namespace batchlas {
 // - Workspace is required for explicit V, T, and intermediate W buffers.
 
 template <Backend B, typename T>
-Event ormqr_blocked(Queue& ctx,
-                    const MatrixView<T, MatrixFormat::Dense>& a,
-                    const MatrixView<T, MatrixFormat::Dense>& c,
-                    Side side,
-                    Transpose trans,
-                    Span<T> tau,
-                    Span<std::byte> workspace,
-                    int32_t block_size = tuning::ORMQR_BLOCK_SIZE_MEDIUM);
-
-template <Backend B, typename T>
-size_t ormqr_blocked_buffer_size(Queue& ctx,
+BATCHLAS_API Event ormqr_blocked(Queue& ctx,
                                  const MatrixView<T, MatrixFormat::Dense>& a,
                                  const MatrixView<T, MatrixFormat::Dense>& c,
                                  Side side,
                                  Transpose trans,
                                  Span<T> tau,
+                                 Span<std::byte> workspace,
                                  int32_t block_size = tuning::ORMQR_BLOCK_SIZE_MEDIUM);
+
+template <Backend B, typename T>
+BATCHLAS_API size_t ormqr_blocked_buffer_size(Queue& ctx,
+                                              const MatrixView<T, MatrixFormat::Dense>& a,
+                                              const MatrixView<T, MatrixFormat::Dense>& c,
+                                              Side side,
+                                              Transpose trans,
+                                              Span<T> tau,
+                                              int32_t block_size = tuning::ORMQR_BLOCK_SIZE_MEDIUM);
 
 } // namespace batchlas

@@ -1,4 +1,5 @@
 #pragma once
+#include <batchlas/export.hh>
 #include <cstdlib>
 #include <string>
 
@@ -20,7 +21,7 @@ namespace batchlas {
 // The definition is in src/util/settings.cc. See <batchlas/settings.hh> for what
 // a reload does and, more importantly, for the two cases it does not cover.
 namespace detail {
-void reload_settings();
+BATCHLAS_API void reload_settings();
 }
 
 // NOTE ON THE ARGUMENT: env_truthy/env_falsy take the VALUE of a variable, i.e.

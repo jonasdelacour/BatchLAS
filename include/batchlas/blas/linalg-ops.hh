@@ -1,5 +1,6 @@
 #pragma once
 
+#include <batchlas/export.hh>
 #include <algorithm>
 #include <stdexcept>
 #include <utility>
@@ -27,7 +28,15 @@ namespace batchlas::linalg {
 
 // ---- elementwise -----------------------------------------------------------
 
-enum class BinaryOp { Add, Subtract, Multiply, Divide };
+// BATCHLAS_API for the same reason Backend and MatrixFormat carry it -- see the
+// note at the top of blas/enums.hh. This is the third enum in the public surface
+// used as a template ARGUMENT, and an instantiation takes the minimum of the
+// template's visibility and its arguments'. Without it, all four
+// elementwise_into<float, BinaryOp::*> specialisations stayed hidden while
+// their BATCHLAS_API declaration looked correct. Found by set-diffing the
+// library's exported symbols against what consumers actually link, not by
+// reading: nothing about the declaration looks wrong.
+enum class BATCHLAS_API BinaryOp { Add, Subtract, Multiply, Divide };
 
 // Signature aliases for explicit instantiation; see BATCHLAS_INSTANTIATE in
 // src/util/template-instantiations.hh. Keep in sync with the declarations below.
@@ -60,32 +69,32 @@ using triangular_mask_into = Event(Queue&,
 // C = op(A, B), elementwise, for matching shapes. Aliasing C with A or B is
 // allowed: each work-item reads and writes one element.
 template <typename T, BinaryOp Op>
-Event elementwise_into(Queue& ctx,
-                       const MatrixView<T, MatrixFormat::Dense>& A,
-                       const MatrixView<T, MatrixFormat::Dense>& B,
-                       const MatrixView<T, MatrixFormat::Dense>& C);
+BATCHLAS_API Event elementwise_into(Queue& ctx,
+                                    const MatrixView<T, MatrixFormat::Dense>& A,
+                                    const MatrixView<T, MatrixFormat::Dense>& B,
+                                    const MatrixView<T, MatrixFormat::Dense>& C);
 
 // C = alpha*A + beta*B.
 template <typename T>
-Event axpby_into(Queue& ctx,
-                 T alpha,
-                 const MatrixView<T, MatrixFormat::Dense>& A,
-                 T beta,
-                 const MatrixView<T, MatrixFormat::Dense>& B,
-                 const MatrixView<T, MatrixFormat::Dense>& C);
+BATCHLAS_API Event axpby_into(Queue& ctx,
+                              T alpha,
+                              const MatrixView<T, MatrixFormat::Dense>& A,
+                              T beta,
+                              const MatrixView<T, MatrixFormat::Dense>& B,
+                              const MatrixView<T, MatrixFormat::Dense>& C);
 
 template <typename T>
-Event scale(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, T alpha);
+BATCHLAS_API Event scale(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, T alpha);
 
 // C = A with everything outside the requested triangle zeroed. `k` follows
 // NumPy: 0 keeps the main diagonal, > 0 moves the boundary toward the upper
 // right, < 0 toward the lower left. Aliasing C with A is allowed.
 template <typename T>
-Event triangular_mask_into(Queue& ctx,
-                           const MatrixView<T, MatrixFormat::Dense>& A,
-                           const MatrixView<T, MatrixFormat::Dense>& C,
-                           Uplo uplo,
-                           int64_t k = 0);
+BATCHLAS_API Event triangular_mask_into(Queue& ctx,
+                                        const MatrixView<T, MatrixFormat::Dense>& A,
+                                        const MatrixView<T, MatrixFormat::Dense>& C,
+                                        Uplo uplo,
+                                        int64_t k = 0);
 
 template <typename T>
 inline Event add_into(Queue& ctx,

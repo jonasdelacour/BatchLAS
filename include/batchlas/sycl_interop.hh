@@ -21,6 +21,7 @@
 //
 // Everything here is single-threaded in the same sense the Queue is; see the
 // contract note on struct Queue.
+#include <batchlas/export.hh>
 #include <sycl/sycl.hpp>
 
 #include <batchlas/util/sycl-device-queue.hh>
@@ -39,7 +40,7 @@ namespace batchlas {
 // Do not destroy it, do not hold it past the Queue's lifetime, and do not submit
 // to it from another thread; it is the Queue's queue, not yours. `ctx` must not be
 // a moved-from Queue.
-sycl::queue& sycl_queue(const Queue& ctx);
+BATCHLAS_API sycl::queue& sycl_queue(const Queue& ctx);
 
 // The sycl::event underlying a BatchLAS Event, for handing BatchLAS's work to
 // something that speaks SYCL -- depends_on(), sycl::event::wait_and_throw(), your
@@ -48,7 +49,7 @@ sycl::queue& sycl_queue(const Queue& ctx);
 // A default-constructed or moved-from Event has nothing underneath it; this
 // returns a default-constructed sycl::event for that case, which is already
 // complete and orders nothing.
-sycl::event sycl_event(const Event& event);
+BATCHLAS_API sycl::event sycl_event(const Event& event);
 
 // Wrap a foreign sycl::event as a BatchLAS Event, so that BatchLAS work can be
 // ordered after work that BatchLAS did not submit.
@@ -66,6 +67,6 @@ sycl::event sycl_event(const Event& event);
 // and in the other direction sycl_event(ctx.get_event()) hands your queue an event
 // to depend on. Both queues must live in the same SYCL context for this to be
 // meaningful.
-Event event_from_sycl(sycl::event event);
+BATCHLAS_API Event event_from_sycl(sycl::event event);
 
 }  // namespace batchlas

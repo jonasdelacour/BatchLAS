@@ -9,6 +9,7 @@
 #include <tuple>
 #include <array>    // Added for std::array element types
 #include <sstream>  // Added for temporary string formatting of non-streamable types
+#include <batchlas/export.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
@@ -17,14 +18,14 @@
 namespace batchlas {
     // Forward declarations with default template parameters
     template <typename T = float, MatrixFormat MType = MatrixFormat::Dense>
-    class Matrix;
+    class BATCHLAS_API Matrix;
 
     template <typename T = float, MatrixFormat MType = MatrixFormat::Dense>
-    class MatrixView;
+    class BATCHLAS_API MatrixView;
 
     //Forward declare VectorView with default parameter
     template <typename T = float>
-    class VectorView;
+    class BATCHLAS_API VectorView;
 
     // Forward declare the backend handle - implementation will be in src/ folder
     template <typename T = float, MatrixFormat MType = MatrixFormat::Dense>
@@ -377,8 +378,23 @@ namespace batchlas {
     static_assert(std::is_trivially_copyable_v<KernelMatrixView<float, MatrixFormat::CSR>>,   "KernelMatrixView CSR must be trivially copyable");
 
     // Matrix class - owning container for matrix data
+    //
+    // BATCHLAS_API is on the CLASS TEMPLATE, not on the 313 explicit
+    // instantiations in src/matrix.cc, and the difference is 291 symbols.
+    // Only 22 of those lines are `template class ...;`; the other 291
+    // individually instantiate MEMBER templates -- the constrained
+    // constructors, the Identity/Random/Zeros/Ones/Diagonal/Triangular/
+    // TriDiagToeplitz/RandomSparseHermitian factories, convert_to,
+    // to_row_major/to_column_major, and MatrixView's at/deep_copy/fill_*/
+    // symmetrize/hermitize/triangularize -- which a whole-class instantiation
+    // does not reach. A class-level attribute propagates to every member and
+    // every specialisation and therefore covers all 313; annotating the
+    // instantiation block would cover 22. Separately, an attribute on an
+    // explicit instantiation is not portable: measured, g++ 13 rejects
+    // `template class __attribute__((visibility("default"))) F<double,1>;`
+    // with "'F' is not a class template" where clang accepts it.
     template <typename T, MatrixFormat MType>
-    class Matrix {
+    class BATCHLAS_API Matrix {
     public:
         friend class MatrixView<T, MType>;
         
@@ -781,7 +797,7 @@ namespace batchlas {
 
     // MatrixView class - non-owning view of a matrix
     template <typename T, MatrixFormat MType>
-    class MatrixView {
+    class BATCHLAS_API MatrixView {
     public:
         // Constructors for dense matrix view - from raw spans
         // data_ptrs: Optional array of pointers to the start of each matrix in a batch
@@ -1472,7 +1488,7 @@ namespace batchlas {
 
     // VectorView class - non-owning view of a (possibly batched) vector with stride
     template <typename T>
-    class VectorView {
+    class BATCHLAS_API VectorView {
     public:
         using value_type = T;
         using pointer = T*;
@@ -1759,9 +1775,9 @@ namespace batchlas {
     }
 
     template <typename T, MatrixFormat MType>
-    Event scale(Queue& ctx, const T& alpha, const MatrixView<T, MType>& mat_view);
+    BATCHLAS_API Event scale(Queue& ctx, const T& alpha, const MatrixView<T, MType>& mat_view);
 
     template <typename T>
-    Event scale(Queue& ctx, const T& alpha, const VectorView<T>& vec_view);
+    BATCHLAS_API Event scale(Queue& ctx, const T& alpha, const VectorView<T>& vec_view);
 
 } // namespace batchlas

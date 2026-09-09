@@ -1,5 +1,6 @@
 #pragma once
 
+#include <batchlas/export.hh>
 #include <stdexcept>
 #include <string>
 #include <algorithm>
@@ -98,14 +99,14 @@ inline void trsm_validate_params(
 // memory; the deleted overloads below turn the old spelling into a diagnostic
 // rather than leaving it to be rediscovered.
 template <Backend Back, typename T>
-Event trsm(Queue& ctx,
-           const MatrixView<T, MatrixFormat::Dense>& A,
-           const MatrixView<T, MatrixFormat::Dense>& B,
-           T alpha,
-           Side side,
-           Uplo uplo,
-           Transpose transA,
-           Diag diag);
+BATCHLAS_API Event trsm(Queue& ctx,
+                        const MatrixView<T, MatrixFormat::Dense>& A,
+                        const MatrixView<T, MatrixFormat::Dense>& B,
+                        T alpha,
+                        Side side,
+                        Uplo uplo,
+                        Transpose transA,
+                        Diag diag);
 
 // Tombstones for the pre-reorder argument order. Side/Uplo/Transpose/Diag are
 // all enum class, so nothing implicitly converts to or from T and a stale call
@@ -139,14 +140,14 @@ namespace batchlas::backend {
 // implementation, named as such. Each vendor wrapper TU defines this primary
 // template for its own Backend value and instantiates it there.
 template <Backend Back, typename T>
-Event trsm_vendor(Queue& ctx,
-                  const MatrixView<T,MatrixFormat::Dense>& A,
-                  const MatrixView<T,MatrixFormat::Dense>& B,
-                  Side side,
-                  Uplo uplo,
-                  Transpose transA,
-                  Diag diag,
-                  T alpha);
+BATCHLAS_API Event trsm_vendor(Queue& ctx,
+                               const MatrixView<T,MatrixFormat::Dense>& A,
+                               const MatrixView<T,MatrixFormat::Dense>& B,
+                               Side side,
+                               Uplo uplo,
+                               Transpose transA,
+                               Diag diag,
+                               T alpha);
 
 }  // namespace batchlas::backend
 

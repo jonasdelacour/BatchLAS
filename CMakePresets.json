@@ -54,7 +54,7 @@
     {
       "name": "cuda",
       "displayName": "CUDA",
-      "description": "Optional CUDA-enabled build when the environment supports it. BATCHLAS_ALLOW_UNSAFE_ENV is written back OFF here, not merely left out: this preset inherits dev, which turns it ON, and the pre-push gate has to run the arm a release build runs.",
+      "description": "Optional CUDA-enabled build when the environment supports it. BATCHLAS_ALLOW_UNSAFE_ENV is written back OFF here, not merely left out: this preset inherits dev, which turns it ON, and the pre-push gate has to run the arm a release build runs. BATCHLAS_MONOLITHIC_LIBRARY is deliberately NOT set here - see the note in the release preset. A monolithic gate would put the 575 s single-threaded device link in front of every pre-push run and every re-run after a one-line fix; the nightly CI job builds the release preset instead, which is where an export regression gets caught without taxing the iteration loop.",
       "inherits": "dev",
       "binaryDir": "${sourceDir}/build/presets/cuda",
       "cacheVariables": {
@@ -81,6 +81,20 @@
       "binaryDir": "${sourceDir}/build/presets/dev-gpu-tests",
       "cacheVariables": {
         "BATCHLAS_BUILD_TESTS": "ON"
+      }
+    },
+    {
+      "name": "release",
+      "displayName": "Release",
+      "description": "The shipping shape: Release, no tests, no benchmarks, and ONE batchlas shared library. Inherits dev for the same toolchain discovery every other preset gets, then overrides the three things a release differs in. Do not iterate in this tree: the unit of SYCL device linking is the shared library, so ANY one-line edit costs the whole 575 s (9m35s), single-threaded, measured device link of all 15 object libraries. CAP THE PARALLELISM: a from-scratch build of this preset was OOM-killed at --parallel 20 AND at --parallel 8 on a 125 GB box with 115 GB free, both times during compilation rather than the link, which puts a single heavy SYCL translation unit above 14 GB. --parallel 4 completes in 728 s wall. That ceiling is a property of the from-scratch compile, not of the monolithic shape, so it applies to any cold full build here.",
+      "inherits": "dev",
+      "binaryDir": "${sourceDir}/build/presets/release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "BATCHLAS_BUILD_TESTS": "OFF",
+        "BATCHLAS_BUILD_BENCHMARKS": "OFF",
+        "BATCHLAS_MONOLITHIC_LIBRARY": "ON",
+        "BATCHLAS_ALLOW_UNSAFE_ENV": "OFF"
       }
     }
   ],
@@ -126,6 +140,13 @@
     {
       "name": "dev-gpu-tests",
       "configurePreset": "dev-gpu-tests"
+    },
+    {
+      "name": "release",
+      "configurePreset": "release",
+      "targets": [
+        "batchlas"
+      ]
     }
   ],
   "testPresets": [

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <batchlas/export.hh>
 #include <algorithm>
 #include <optional>
 #include <stdexcept>
@@ -59,23 +60,23 @@ using ormqr_vendor_buffer_size = size_t(Queue&,
 
 // Public API
 template <Backend B, typename T>
-Event ormqr(Queue& ctx,
-            const MatrixView<T, MatrixFormat::Dense>& A,
-            const MatrixView<T, MatrixFormat::Dense>& C,
-            Side side,
-            Transpose trans,
-            Span<T> tau,
-            Span<std::byte> workspace,
-            int32_t block_size_hint = 0);
-
-template <Backend B, typename T>
-size_t ormqr_buffer_size(Queue& ctx,
+BATCHLAS_API Event ormqr(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& A,
                          const MatrixView<T, MatrixFormat::Dense>& C,
                          Side side,
                          Transpose trans,
                          Span<T> tau,
+                         Span<std::byte> workspace,
                          int32_t block_size_hint = 0);
+
+template <Backend B, typename T>
+BATCHLAS_API size_t ormqr_buffer_size(Queue& ctx,
+                                      const MatrixView<T, MatrixFormat::Dense>& A,
+                                      const MatrixView<T, MatrixFormat::Dense>& C,
+                                      Side side,
+                                      Transpose trans,
+                                      Span<T> tau,
+                                      int32_t block_size_hint = 0);
 
 } // namespace batchlas
 
@@ -83,21 +84,21 @@ namespace batchlas::backend {
 
 // Implemented by backend wrapper TUs (e.g. cuSOLVER / rocSOLVER / LAPACKE).
 template <Backend B, typename T>
-Event ormqr_vendor(Queue& ctx,
-                   const MatrixView<T, MatrixFormat::Dense>& A,
-                   const MatrixView<T, MatrixFormat::Dense>& C,
-                   Side side,
-                   Transpose trans,
-                   Span<T> tau,
-                   Span<std::byte> workspace);
-
-template <Backend B, typename T>
-size_t ormqr_vendor_buffer_size(Queue& ctx,
+BATCHLAS_API Event ormqr_vendor(Queue& ctx,
                                 const MatrixView<T, MatrixFormat::Dense>& A,
                                 const MatrixView<T, MatrixFormat::Dense>& C,
                                 Side side,
                                 Transpose trans,
-                                Span<T> tau);
+                                Span<T> tau,
+                                Span<std::byte> workspace);
+
+template <Backend B, typename T>
+BATCHLAS_API size_t ormqr_vendor_buffer_size(Queue& ctx,
+                                             const MatrixView<T, MatrixFormat::Dense>& A,
+                                             const MatrixView<T, MatrixFormat::Dense>& C,
+                                             Side side,
+                                             Transpose trans,
+                                             Span<T> tau);
 
 } // namespace batchlas::backend
 

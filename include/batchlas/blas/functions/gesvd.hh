@@ -1,5 +1,6 @@
 #pragma once
 
+#include <batchlas/export.hh>
 #include <stdexcept>
 #include <optional>
 #include <type_traits>
@@ -56,27 +57,27 @@ using gesvd_vendor_buffer_size = size_t(Queue&,
 // USM, written in place by whichever kernel already knows the answer, so no tier
 // needs workspace for it and gesvd_buffer_size is the same either way.
 template <Backend B, typename T>
-Event gesvd(Queue& ctx,
-            const MatrixView<T, MatrixFormat::Dense>& A,
-            Span<typename base_type<T>::type> singular_values,
-            const MatrixView<T, MatrixFormat::Dense>& U,
-            const MatrixView<T, MatrixFormat::Dense>& Vh,
-            SvdVectors jobu,
-            SvdVectors jobvh,
-            Span<std::byte> workspace,
-            Span<int32_t> info);
+BATCHLAS_API Event gesvd(Queue& ctx,
+                         const MatrixView<T, MatrixFormat::Dense>& A,
+                         Span<typename base_type<T>::type> singular_values,
+                         const MatrixView<T, MatrixFormat::Dense>& U,
+                         const MatrixView<T, MatrixFormat::Dense>& Vh,
+                         SvdVectors jobu,
+                         SvdVectors jobvh,
+                         Span<std::byte> workspace,
+                         Span<int32_t> info);
 
 template <Backend B, typename T>
-Event gesvd(Queue& ctx,
-            const MatrixView<T, MatrixFormat::Dense>& A,
-            Span<typename base_type<T>::type> singular_values,
-            const MatrixView<T, MatrixFormat::Dense>& U,
-            const MatrixView<T, MatrixFormat::Dense>& Vh,
-            SvdVectors jobu,
-            SvdVectors jobvh,
-            Uplo hermitian_uplo,
-            Span<std::byte> workspace,
-            Span<int32_t> info);
+BATCHLAS_API Event gesvd(Queue& ctx,
+                         const MatrixView<T, MatrixFormat::Dense>& A,
+                         Span<typename base_type<T>::type> singular_values,
+                         const MatrixView<T, MatrixFormat::Dense>& U,
+                         const MatrixView<T, MatrixFormat::Dense>& Vh,
+                         SvdVectors jobu,
+                         SvdVectors jobvh,
+                         Uplo hermitian_uplo,
+                         Span<std::byte> workspace,
+                         Span<int32_t> info);
 
 // Old-arity forwarders, one per overload, rather than a defaulted trailing
 // parameter -- the same shape as potrf.hh:110 and functions/syev.hh, and for the
@@ -113,23 +114,23 @@ inline Event gesvd(Queue& ctx,
 }
 
 template <Backend B, typename T>
-size_t gesvd_buffer_size(Queue& ctx,
-                         const MatrixView<T, MatrixFormat::Dense>& A,
-                         Span<typename base_type<T>::type> singular_values,
-                         const MatrixView<T, MatrixFormat::Dense>& U,
-                         const MatrixView<T, MatrixFormat::Dense>& Vh,
-                         SvdVectors jobu,
-                         SvdVectors jobvh);
+BATCHLAS_API size_t gesvd_buffer_size(Queue& ctx,
+                                      const MatrixView<T, MatrixFormat::Dense>& A,
+                                      Span<typename base_type<T>::type> singular_values,
+                                      const MatrixView<T, MatrixFormat::Dense>& U,
+                                      const MatrixView<T, MatrixFormat::Dense>& Vh,
+                                      SvdVectors jobu,
+                                      SvdVectors jobvh);
 
 template <Backend B, typename T>
-size_t gesvd_buffer_size(Queue& ctx,
-                         const MatrixView<T, MatrixFormat::Dense>& A,
-                         Span<typename base_type<T>::type> singular_values,
-                         const MatrixView<T, MatrixFormat::Dense>& U,
-                         const MatrixView<T, MatrixFormat::Dense>& Vh,
-                         SvdVectors jobu,
-                         SvdVectors jobvh,
-                         Uplo hermitian_uplo);
+BATCHLAS_API size_t gesvd_buffer_size(Queue& ctx,
+                                      const MatrixView<T, MatrixFormat::Dense>& A,
+                                      Span<typename base_type<T>::type> singular_values,
+                                      const MatrixView<T, MatrixFormat::Dense>& U,
+                                      const MatrixView<T, MatrixFormat::Dense>& Vh,
+                                      SvdVectors jobu,
+                                      SvdVectors jobvh,
+                                      Uplo hermitian_uplo);
 
 } // namespace batchlas
 
@@ -155,24 +156,24 @@ namespace batchlas::backend {
 // the declaration, not of the function type, so sig::gesvd_vendor still names the
 // full nine-parameter signature that the vendor TUs instantiate.
 template <Backend B, typename T>
-Event gesvd_vendor(Queue& ctx,
-                   const MatrixView<T, MatrixFormat::Dense>& A,
-                   Span<typename base_type<T>::type> singular_values,
-                   const MatrixView<T, MatrixFormat::Dense>& U,
-                   const MatrixView<T, MatrixFormat::Dense>& Vh,
-                   SvdVectors jobu,
-                   SvdVectors jobvh,
-                   Span<std::byte> workspace,
-                   Span<int32_t> info_out = Span<int32_t>());
-
-template <Backend B, typename T>
-size_t gesvd_vendor_buffer_size(Queue& ctx,
+BATCHLAS_API Event gesvd_vendor(Queue& ctx,
                                 const MatrixView<T, MatrixFormat::Dense>& A,
                                 Span<typename base_type<T>::type> singular_values,
                                 const MatrixView<T, MatrixFormat::Dense>& U,
                                 const MatrixView<T, MatrixFormat::Dense>& Vh,
                                 SvdVectors jobu,
-                                SvdVectors jobvh);
+                                SvdVectors jobvh,
+                                Span<std::byte> workspace,
+                                Span<int32_t> info_out = Span<int32_t>());
+
+template <Backend B, typename T>
+BATCHLAS_API size_t gesvd_vendor_buffer_size(Queue& ctx,
+                                             const MatrixView<T, MatrixFormat::Dense>& A,
+                                             Span<typename base_type<T>::type> singular_values,
+                                             const MatrixView<T, MatrixFormat::Dense>& U,
+                                             const MatrixView<T, MatrixFormat::Dense>& Vh,
+                                             SvdVectors jobu,
+                                             SvdVectors jobvh);
 
 } // namespace batchlas::backend
 

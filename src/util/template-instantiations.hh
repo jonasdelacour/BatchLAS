@@ -28,6 +28,41 @@
 //
 // Note that function types cannot carry default arguments -- write the alias
 // with every parameter spelled out and no `= default` clauses.
+//
+// NO BATCHLAS_API HERE, AND THAT IS DELIBERATE. Under
+// BATCHLAS_MONOLITHIC_LIBRARY every object library is compiled
+// -fvisibility=hidden, so each of the ~1,300 definitions this macro emits needs
+// default visibility to reach a consumer. The macro is the wrong place to put
+// it, on three counts, and the annotation lives on the primary DECLARATION in
+// the public header instead (`template <Backend Back, typename T> BATCHLAS_API
+// Event gemm(...)` in blas/functions/gemm.hh, and its ~178 siblings).
+//
+//  1. IT DOES NOT PORTABLY COMPILE. An attribute on an explicit instantiation
+//     is not honoured consistently: measured, g++ 13 -std=c++20 rejects
+//     `template class __attribute__((visibility("default"))) F<double,1>;` with
+//     "'F' is not a class template", where clang accepts it. There is also no
+//     natural slot in this expansion -- the decl-specifier-seq is a type ALIAS
+//     naming a function type, not a return type followed by a declarator.
+//
+//  2. IT IS UNNECESSARY -- but NOT for the reason first written here. This said
+//     "both compilers propagate a visibility attribute from the primary template
+//     to every specialisation", which is only half the rule and the missing half
+//     is what matters: an instantiation gets the MINIMUM of the template's
+//     visibility and its template ARGUMENTS'. Since these are all instantiated on
+//     `Backend`, an unannotated enum would hold every one of them at hidden no
+//     matter what the declaration says, and BATCHLAS_API would be inert.
+//     `Backend` and `MatrixFormat` therefore carry BATCHLAS_API themselves --
+//     see the note at the top of include/batchlas/blas/enums.hh, which records
+//     the measurement. Given that, annotating the declaration does cover the
+//     definition this macro emits.
+//
+//  3. ONLY THE DECLARATION REACHES THE CONSUMER. A consumer's translation unit
+//     sees the header and never this file, and BATCHLAS_API expands to
+//     __attribute__((visibility("default"))) on both the build and the consume
+//     side on ELF -- so one token on one line does both jobs. Annotating here
+//     would export the definition and leave the consumer's reference hidden.
+//
+// The `sig::` aliases need nothing either: they are types, not entities.
 #define BATCHLAS_INSTANTIATE(SIG, FN, ...) template SIG FN<__VA_ARGS__>;
 
 // Name an op once instead of five times.

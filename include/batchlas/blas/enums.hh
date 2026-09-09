@@ -1,10 +1,31 @@
 #pragma once
+#include <batchlas/export.hh>
+
 #include <complex>
 #include <concepts>
 #include <cstdint>
 #include <iosfwd>
 #include <string_view>
 #include <type_traits>
+
+// WHY TWO OF THE ENUMS BELOW CARRY BATCHLAS_API.
+//
+// Clang and GCC give a template instantiation the MINIMUM of the template's own
+// visibility and the visibility of its template ARGUMENTS. `Backend` and
+// `MatrixFormat` are used as non-type template parameters across the whole
+// public surface -- 207 `template <Backend ...>` declarations alone -- so under
+// -fvisibility=hidden an unannotated enum drags every one of those
+// instantiations to hidden, and BATCHLAS_API on the function is INERT.
+//
+// Measured, not assumed: annotating the function alone left
+// `batchlas::gemm<Backend::CUDA, float>` as a local `t` symbol; annotating the
+// enum flipped it to an exported `W`. 63% of the symbols a consumer links --
+// 688 of 1,083 -- were affected. The failure mode is an undefined reference at
+// consumer link, never a compile diagnostic, so nothing in-tree would have
+// caught it: no test links a monolithic install.
+//
+// Only the enums that appear as template arguments need this. Adding a template
+// parameterised on another enum in this header means annotating that one too.
 
 // Every public enum below carries a `constexpr std::string_view to_string(E)`
 // right next to its definition, and a single templated `operator<<` at the end
@@ -46,7 +67,7 @@ namespace batchlas {
     template <typename T>
     concept FloatingOrComplexScalar = RealScalar<T> || ComplexScalar<T>;
 
-    enum class MatrixFormat {
+    enum class BATCHLAS_API MatrixFormat {
         Dense,
         CSR,    // Compressed Sparse Row
         CSC,    // Compressed Sparse Column
@@ -75,7 +96,7 @@ namespace batchlas {
     template <MatrixFormat F>
     concept CsrMatrixFormat = F == MatrixFormat::CSR;
 
-    enum class Backend {
+    enum class BATCHLAS_API Backend {
         AUTO,
         CUDA,
         ROCM,

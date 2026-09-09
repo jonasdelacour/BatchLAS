@@ -316,7 +316,17 @@ template struct UnifiedVector<float>;
 template struct UnifiedVector<double>;
 template struct UnifiedVector<std::complex<float>>;
 template struct UnifiedVector<std::complex<double>>;
-template struct UnifiedVector<std::byte>;
+// The attribute is repeated HERE, unlike every sibling above, because
+// std::byte is `enum class byte : unsigned char` and libstdc++ declares it with
+// no visibility attribute of its own -- so under -fvisibility=hidden it takes
+// the TU default, which is hidden, and an instantiation takes the MINIMUM of
+// the template's visibility and its arguments'. The class-level BATCHLAS_API on
+// UnifiedVector is therefore not enough for this one specialisation, and unlike
+// Backend/MatrixFormat/BinaryOp we cannot annotate the argument: it is not ours.
+// The siblings need nothing because their arguments are builtins or our own
+// class types. Removing this line silently un-exports resize, both constructors
+// and the destructor, and the only symptom is a consumer link error.
+template struct BATCHLAS_API UnifiedVector<std::byte>;
 template struct UnifiedVector<bool>;
 template struct UnifiedVector<std::array<double,2>>;
 template struct UnifiedVector<std::array<double,3>>;

@@ -3,6 +3,7 @@
 // Native batched ORGQR declarations: one tier, Algorithm::Blocked, which is ormqr applied
 // to an identity. preferred() is false everywhere. evidence: docs/perf/qr.md#orgqr-grid
 
+#include "../util/internal-api.hh"
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>
@@ -15,7 +16,7 @@
 namespace batchlas::sycl_orgqr {
 
 template <typename T>
-bool orgqr_blocked_available();
+BATCHLAS_INTERNAL_API bool orgqr_blocked_available();
 
 // Test hook. The width must be a multiple of 16, and >= 32 for complex (gemm_kernels.cc's
 // wide-scalar min_dim gate). evidence: docs/perf/qr.md#block-width-evidence
@@ -45,19 +46,19 @@ using OrgqrApplyQBufferSize = std::function<std::size_t(
 
 // Runs under BumpAllocator::measuring(): same resolution as the call, no data dereference.
 template <typename T>
-std::size_t orgqr_blocked_buffer_size(Queue& ctx,
-                                      const MatrixView<T, MatrixFormat::Dense>& A,
-                                      Span<T> tau,
-                                      OrgqrApplyQBufferSize<T> apply_q_buffer_size = {});
+BATCHLAS_INTERNAL_API std::size_t orgqr_blocked_buffer_size(Queue& ctx,
+                                                            const MatrixView<T, MatrixFormat::Dense>& A,
+                                                            Span<T> tau,
+                                                            OrgqrApplyQBufferSize<T> apply_q_buffer_size = {});
 
 // Reachable without the route table, so it must re-check every supports() gate of
 // RouteTable<Op::orgqr,T> itself -- a rejected forced route silently runs the vendor.
 template <typename T>
-Event orgqr_blocked_dispatch(Queue& ctx,
-                             const MatrixView<T, MatrixFormat::Dense>& A,
-                             Span<T> tau,
-                             Span<std::byte> workspace,
-                             OrgqrApplyQ<T> apply_q = {},
-                             OrgqrApplyQBufferSize<T> apply_q_buffer_size = {});
+BATCHLAS_INTERNAL_API Event orgqr_blocked_dispatch(Queue& ctx,
+                                                   const MatrixView<T, MatrixFormat::Dense>& A,
+                                                   Span<T> tau,
+                                                   Span<std::byte> workspace,
+                                                   OrgqrApplyQ<T> apply_q = {},
+                                                   OrgqrApplyQBufferSize<T> apply_q_buffer_size = {});
 
 }  // namespace batchlas::sycl_orgqr

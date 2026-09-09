@@ -27,6 +27,8 @@
 #include <stdexcept>
 #include <string>
 
+#include <batchlas/export.hh>
+
 namespace batchlas {
 
 // ---------------------------------------------------------------------------
@@ -63,7 +65,44 @@ namespace batchlas {
 //     abstract type"). This is the one rule that fails loudly. message() below
 //     is the differently-named accessor that reaches the text through a tag
 //     handler; `catch (const std::exception&)` is the other way to get it.
-class exception {
+//
+//  4. EVERY CLASS IN THIS HEADER MUST CARRY BATCHLAS_API. This is rule 1's
+//     failure mode again, reached by a different road, and it is the reason the
+//     macro appears on ten classes that have no out-of-line member between
+//     them. NOTHING here has a key function -- `~exception() = default` is
+//     inline and every leaf's members are inline -- so the vtable and the
+//     typeinfo are emitted with VAGUE LINKAGE in every translation unit that
+//     names the type. Measured on the current build: `typeinfo for
+//     batchlas::error` is a weak object (nm class V) in ALL FOURTEEN component
+//     .so AND in the test executables. Catch-by-type works today only because
+//     every one of those copies has default visibility, so the dynamic linker
+//     collapses them to a single address and the unwinder's pointer comparison
+//     succeeds. Under -fvisibility=hidden (monolithic mode) an unannotated copy
+//     stops being collapsible: the library's typeinfo and the consumer's
+//     typeinfo are different objects, `catch (const batchlas::error&)` in the
+//     consumer stops matching a throw from inside the library, and the
+//     exception runs to std::terminate. There is no diagnostic at any point.
+//     BATCHLAS_API forces vtable and typeinfo back to default visibility, which
+//     restores the single address the unwinder needs.
+//
+//     ON THIS x86-64 BUILD the failure is currently masked, which is exactly
+//     why it must not be tested for: the typeinfo NAME strings this DPC++
+//     emits carry no leading '*' (the bytes at `typeinfo name for
+//     batchlas::error` are `N8batchlas5errorE\0`), so libstdc++'s
+//     `operator==` -- `__name == __arg.__name || (__name[0] != '*' &&
+//     strcmp(...) == 0)` -- takes its strcmp fallback and duplicated typeinfos
+//     still compare equal. The '*' prefix is decided by the compiler's RTTI
+//     uniqueness classification; the ARM64 Itanium variant and libc++'s
+//     non-unique-RTTI path compare by POINTER ONLY. A throw/catch test on this
+//     machine therefore passes whether or not the annotation is present, and
+//     reading the annotations is the only check that discriminates.
+//
+//     detail::exception_bridge is annotated for the same reason and is the
+//     easiest one to forget: it is a base subobject on the catch-time upcast
+//     path (rule 2's virtual inheritance means that walk goes through
+//     __vmi_class_type_info and reads the vtable for the virtual-base offset),
+//     so its typeinfo has to unify too.
+class BATCHLAS_API exception {
 public:
     virtual ~exception() = default;
 
@@ -87,7 +126,7 @@ namespace detail {
 // above unbreakable per class rather than a convention each new class must
 // remember.
 template <typename StdBase>
-class exception_bridge : public StdBase, public virtual exception {
+class BATCHLAS_API exception_bridge : public StdBase, public virtual exception {
 public:
     using StdBase::StdBase;
     const char* message() const noexcept override { return StdBase::what(); }
@@ -110,7 +149,7 @@ public:
 // Derives from std::invalid_argument, so existing `catch (const
 // std::invalid_argument&)` handlers keep working and pybind11's default
 // translator keeps mapping it to Python's ValueError.
-class invalid_argument : public detail::exception_bridge<std::invalid_argument> {
+class BATCHLAS_API invalid_argument : public detail::exception_bridge<std::invalid_argument> {
 public:
     explicit invalid_argument(const std::string& what_arg)
         : detail::exception_bridge<std::invalid_argument>(what_arg) {}
@@ -125,7 +164,7 @@ public:
 // only because indexing protocols expect it. std::out_of_range is what
 // pybind11 maps to Python's IndexError, and element access that raised
 // ValueError instead would be a Python-visible regression.
-class out_of_range : public detail::exception_bridge<std::out_of_range> {
+class BATCHLAS_API out_of_range : public detail::exception_bridge<std::out_of_range> {
 public:
     explicit out_of_range(const std::string& what_arg)
         : detail::exception_bridge<std::out_of_range>(what_arg) {}
@@ -148,7 +187,7 @@ public:
 // Nothing throws a bare `error` today; every site adjudicated during the
 // migration fitted one of the five children. It is kept as a catchable base and
 // as the honest home for a future failure that fits none of them.
-class error : public detail::exception_bridge<std::runtime_error> {
+class BATCHLAS_API error : public detail::exception_bridge<std::runtime_error> {
 public:
     explicit error(const std::string& what_arg)
         : detail::exception_bridge<std::runtime_error>(what_arg) {}
@@ -166,7 +205,7 @@ public:
 // identically -- but a different route, backend, scalar type or shape may
 // succeed, which is what separates this from invalid_argument. This is the
 // class to catch when you want to fall back to another algorithm.
-class unsupported : public error {
+class BATCHLAS_API unsupported : public error {
 public:
     explicit unsupported(const std::string& what_arg) : error(what_arg) {}
     explicit unsupported(const char* what_arg) : error(what_arg) {}
@@ -180,7 +219,7 @@ public:
 // FOR A CALLER: sometimes retryable, and it is the one class where retrying can
 // be right -- a transient launch failure or an allocation lost to another
 // process may clear. A status code that repeats is a real fault; do not loop.
-class device_error : public error {
+class BATCHLAS_API device_error : public error {
 public:
     explicit device_error(const std::string& what_arg) : error(what_arg) {}
     explicit device_error(const char* what_arg) : error(what_arg) {}
@@ -194,7 +233,7 @@ public:
 // *_buffer_size() and pass a buffer that size, or cut the batch and call again
 // -- the workspace a batched solve needs scales with the batch, so halving the
 // batch is the usual fix when the arena itself is the limit.
-class workspace_error : public error {
+class BATCHLAS_API workspace_error : public error {
 public:
     explicit workspace_error(const std::string& what_arg) : error(what_arg) {}
     explicit workspace_error(const char* what_arg) : error(what_arg) {}
@@ -214,7 +253,7 @@ public:
 // A-1; until they land, an exception is the only signal, and several tiers
 // (every stedc merge arm, steqr_wg, syev_jacobi_cta, gesvdj_cta) do not even
 // raise that -- they return a wrong answer silently.
-class convergence_error : public error {
+class BATCHLAS_API convergence_error : public error {
 public:
     explicit convergence_error(const std::string& what_arg) : error(what_arg) {}
     explicit convergence_error(const char* what_arg) : error(what_arg) {}
@@ -230,7 +269,7 @@ public:
 // FOR A CALLER: never retryable, and never fixable from the call site. It is a
 // bug in BatchLAS. Report it with the message, which names the route and the
 // two things that disagreed.
-class internal_error : public error {
+class BATCHLAS_API internal_error : public error {
 public:
     explicit internal_error(const std::string& what_arg) : error(what_arg) {}
     explicit internal_error(const char* what_arg) : error(what_arg) {}
@@ -245,7 +284,7 @@ public:
 // FOR A CALLER: not retryable as-is; the fix is to reorder the calls or to
 // confine the object to one thread. Distinct from invalid_argument because no
 // argument is wrong -- only when and from where the call was made.
-class api_misuse : public error {
+class BATCHLAS_API api_misuse : public error {
 public:
     explicit api_misuse(const std::string& what_arg) : error(what_arg) {}
     explicit api_misuse(const char* what_arg) : error(what_arg) {}

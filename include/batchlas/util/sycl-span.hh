@@ -3,6 +3,7 @@
 #include <iterator>
 #include <array>
 #include <type_traits>
+#include <batchlas/export.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 
 namespace batchlas {
@@ -13,8 +14,13 @@ struct is_std_array : std::false_type {};
 template <typename T, std::size_t N>
 struct is_std_array<std::array<T, N>> : std::true_type {};
 
+// The seven out-of-line members below (the USM advice calls and operator==) are
+// defined in src/util/sycl-util-impl.cc and explicitly instantiated there, so
+// Span is a shared-library boundary crossing like Matrix and UnifiedVector. The
+// constexpr bodies in this header are unaffected: -fvisibility-inlines-hidden
+// leaves them hidden, which is right -- a consumer compiles its own copy.
 template <typename T>
-struct Span
+struct BATCHLAS_API Span
 {   
     using value_type = T;
     using pointer = T*;

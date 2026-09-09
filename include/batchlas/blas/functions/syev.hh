@@ -1,5 +1,6 @@
 #pragma once
 
+#include <batchlas/export.hh>
 #include <cstdlib>
 #include <optional>
 #include <stdexcept>
@@ -56,13 +57,13 @@ template <typename T> using syev_vendor_buffer_size = syev_buffer_size<T>;
 // USM, written in place by whichever kernel already knows the answer, so no tier
 // needs workspace for it and syev_buffer_size is the same either way.
 template <Backend B, typename T>
-Event syev(Queue& ctx,
-           const MatrixView<T, MatrixFormat::Dense>& descrA, // A is overwritten with eigenvectors
-           Span<typename base_type<T>::type> eigenvalues,
-           JobType jobtype,
-           Uplo uplo,
-           Span<std::byte> workspace,
-           Span<int32_t> info);
+BATCHLAS_API Event syev(Queue& ctx,
+                        const MatrixView<T, MatrixFormat::Dense>& descrA, // A is overwritten with eigenvectors
+                        Span<typename base_type<T>::type> eigenvalues,
+                        JobType jobtype,
+                        Uplo uplo,
+                        Span<std::byte> workspace,
+                        Span<int32_t> info);
 
 // Old-arity forwarder rather than a defaulted trailing parameter, mirroring
 // potrf.hh:110.
@@ -85,11 +86,11 @@ inline Event syev(Queue& ctx,
 }
 
 template <Backend B, typename T>
-size_t syev_buffer_size(Queue& ctx,
-                        const MatrixView<T, MatrixFormat::Dense>& A,
-                        Span<typename base_type<T>::type> eigenvalues,
-                        JobType jobtype,
-                        Uplo uplo);
+BATCHLAS_API size_t syev_buffer_size(Queue& ctx,
+                                     const MatrixView<T, MatrixFormat::Dense>& A,
+                                     Span<typename base_type<T>::type> eigenvalues,
+                                     JobType jobtype,
+                                     Uplo uplo);
 
 } // namespace batchlas
 
@@ -109,20 +110,20 @@ namespace batchlas::backend {
 // extra overload -- none of them is public API, so none needs a forwarder of its
 // own.
 template <Backend B, typename T>
-Event syev_vendor(Queue& ctx,
-                  const MatrixView<T, MatrixFormat::Dense>& descrA,
-                  Span<typename base_type<T>::type> eigenvalues,
-                  JobType jobtype,
-                  Uplo uplo,
-                  Span<std::byte> workspace,
-                  Span<int32_t> info_out = Span<int32_t>());
-
-template <Backend B, typename T>
-size_t syev_vendor_buffer_size(Queue& ctx,
+BATCHLAS_API Event syev_vendor(Queue& ctx,
                                const MatrixView<T, MatrixFormat::Dense>& descrA,
                                Span<typename base_type<T>::type> eigenvalues,
                                JobType jobtype,
-                               Uplo uplo);
+                               Uplo uplo,
+                               Span<std::byte> workspace,
+                               Span<int32_t> info_out = Span<int32_t>());
+
+template <Backend B, typename T>
+BATCHLAS_API size_t syev_vendor_buffer_size(Queue& ctx,
+                                            const MatrixView<T, MatrixFormat::Dense>& descrA,
+                                            Span<typename base_type<T>::type> eigenvalues,
+                                            JobType jobtype,
+                                            Uplo uplo);
 
 } // namespace batchlas::backend
 

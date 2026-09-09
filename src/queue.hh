@@ -23,6 +23,7 @@
 // The public tree moved to include/batchlas/util/ (spelled <batchlas/util/...>)
 // precisely so that no angle-form <util/...> exists anywhere. Do not add
 // -I${PROJECT_SOURCE_DIR}/src to a target and do not convert these to <>.
+#include "util/internal-api.hh"
 #include "util/kernel-trace.hh"
 #include <batchlas/util/env.hh>
 #include <batchlas/settings.hh>
@@ -394,7 +395,12 @@ struct QueueImpl : public sycl::queue{
         return new_it->second;
     }
 
-    inline static const auto device_arrays = std::array{ 
+    // Exported for the same reason kernel-trace.hh's globals are: this is a
+    // vague-linkage inline static that the linker folds across TUs, and a test
+    // including this private header compiles WITHOUT hidden visibility. Hiding
+    // the library's copy gives the process two SYCL device caches, which is a
+    // duplicated-state bug no undefined reference ever points at.
+    inline static BATCHLAS_INTERNAL_API const auto device_arrays = std::array{ 
                 sycl::device::get_devices(sycl::info::device_type::cpu), 
                 sycl::device::get_devices(sycl::info::device_type::gpu), 
                 sycl::device::get_devices(sycl::info::device_type::accelerator),
