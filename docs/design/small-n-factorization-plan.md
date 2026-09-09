@@ -893,22 +893,62 @@ wins only at n <= 32 and in the solves. Every plan carries its own kill
 criterion, and the kill numbers are recorded in the op's `docs/perf`
 page as a negative result.
 
-## 5. Open questions for the auditor
+## 5. Decisions taken, and what is still open
 
-1. `Algorithm::Tiny` / `LPanel` / `Fused` as new enumerators in
-   `route.hh`, or reuse `CTA` with a sub-tier field? New enumerators keep
-   `route_diff` and the coverage census honest; they touch the route
-   vocabulary (`docs/perf/dispatch.md`).
-2. cdouble at `N = 32` in P1 (128 registers for `rA`): instantiate and
-   accept 33% occupancy, or cap at 16 and keep the CTA kernel for 17..32?
-   The plan says cap; the alternative costs one more instantiation.
-3. P2 adds two public ops (`gesv`, `posv`). If the API surface is frozen
-   for v0.2.0 (WP7), P2 can live behind `linalg::solve` only.
-4. P3 `Uplo::Upper`: implement via the transformed tile or refuse in
-   `supports()`. `grep` for in-tree Upper callers decides.
-5. P5's cutoff between the fused driver and WY is per (type, m, batch) in
-   MAGMA; the plan proposes a per-type order threshold measured on
-   square shapes plus the tall-panel cells. Is a 2-D table wanted?
-6. Instantiation budget: P1 (33) + P2 (40) + P5 (24) + P6 (16) ~ 113 new
-   device kernels across three libraries. The build is device-link-bound;
-   the 15% per-library budget is a proposal, not a measured number.
+Questions 1-3 were put to the repository owner on 2026-09-10 and answered;
+the plans above are written to those answers. Recorded here so a subagent
+does not re-open them.
+
+**D1. New `Algorithm` enumerators — decided.** `Algorithm::Tiny`,
+`Algorithm::LPanel` and `Algorithm::Fused` join `CTA` / `Blocked` /
+`Vendor` in `include/batchlas/blas/dispatch/route.hh`, rather than hiding
+the new tiers inside the existing `CTA` dispatch functions. The reason is
+observability: `scripts/route_diff.sh` and the coverage census key on
+`(op, scalar, backend, shape_class) -> Route`, so a tier swap that reuses
+`CTA` is invisible to both — exactly the defect `docs/perf/gemm.md`
+records for the kernel selector ("`route_diff` cannot see selector
+changes"). Cost, accepted: the route vocabulary in
+`docs/perf/dispatch.md` gains three words, every `RouteTable` order array
+that mentions them is edited, and `Algorithm`'s `to_string` / parse pair
+(`route_env.hh`) must round-trip the new names so `BATCHLAS_<OP>_ROUTE=tiny`
+pins rather than silently falling through to `automatic()`.
+
+**D2. `gesv` and `posv` are public ops — decided.** P2 ships
+`include/batchlas/blas/functions/{gesv,posv}.hh` with their own
+`RouteTable`s, `*_buffer_size` functions and test files, shaped like
+`getrs`, in addition to routing `linalg::solve` / `linalg::solve_spd` to
+them. The v0.2.0 export surface (WP7) therefore grows by two ops; add
+them to the surface census before the tag. `posv` also gives the tree its
+first `potrs`-shaped entry point, which `docs/perf/potrf.md` lists as
+missing.
+
+**D3. `complex<double>` is capped at `N = 16` in P1 — decided.**
+`potrf_tiny`, `getrf_tiny` and `geqrf_tiny` instantiate cdouble only for
+`N in {8, 16}`; `n = 17..32` keeps the CTA kernel (already 0.76-1.00x of
+the vendor there, so little is given up). `rA[32]` for cdouble is 128
+registers before anything else, which caps a work-group at 512 work-items
+and 33% occupancy — the band is memory-bound, so the instantiation would
+probably not pay, and the device-link budget is better spent elsewhere.
+Instantiation count for P1 is therefore **33**, not 36. If a measured
+cdouble cell at n = 17..32 later looks worth it, the decision is
+reversible for one kernel at a time.
+
+Still open, to be settled by measurement or a `grep` rather than by
+opinion:
+
+4. P3 `Uplo::Upper`: implement via the transformed tile (`S(i,c) =
+   conj(A(c,i))`, as `potrf_cta.cc` already does) or refuse it in
+   `supports()` and leave the blocked driver Lower-only. Decide by
+   grepping for in-tree `Uplo::Upper` potrf callers first.
+5. P5's cutoff between the fused QR driver and the WY driver is a
+   `(type, m, batchCount)` lookup table in MAGMA. The plan proposes a
+   per-type order threshold measured on square shapes plus the tall-panel
+   cells; if the grid shows the cutoff moving with `m` or batch, promote
+   it to a 2-D table then, not before.
+6. Instantiation budget: P1 (33) + P2 (40) + P5 (24) + P6 (16) ≈ 113 new
+   device kernels across three libraries. The build is device-link-bound
+   (the `.so` is the SYCL link unit, 117-125 s per touched library), so
+   each plan measures the link delta of the library it touches. The 15%
+   per-library ceiling is a proposal, not a measured number; the first
+   plan to land should replace it with the measured cost per
+   instantiation.
