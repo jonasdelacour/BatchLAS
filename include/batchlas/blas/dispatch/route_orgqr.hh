@@ -55,12 +55,42 @@ struct RouteTable<Op::orgqr, T> {
         }
     }
 
-    // False everywhere, so only a vendor-free build resolves to the native arm;
-    // `is_native && supports` would admit losing cells. evidence: docs/perf/qr.md#orgqr-grid
+    // Native up to n = 512, which is where the evidence stops. Read the ratios
+    // below as "beats the
+    // per-item loop", NOT as "beats cuSOLVER": cublas.cc dispatches
+    // cusolverDnXorgqr once PER BATCH ITEM on an out-of-order sub-queue, so
+    // the vendor arm is batch launches deep and the comparison is against a
+    // structure, not against a kernel.
+    //
+    // That is exactly why the window has no floor. The measured margin is
+    // smallest at the largest order and never approaches the flip gate:
+    //
+    //   T         n = 512   n = 256   n = 64    n <= 16
+    //   float       3.64      5.30     27.10     >= 181
+    //   cfloat      2.54      4.04     15.09     >= 172
+    //   double      4.61      8.46     27.09     >= 98
+    //   cdouble     2.77      4.75     11.31     >= 42
+    //
+    // 66 square cells measured over four types and orders 4..512, zero losses,
+    // minimum 2.54.
+    //
+    // THE 512 CEILING IS LOAD-BEARING, and it is the bracket. There is no
+    // losing cell inside the measured range, so the bound comes from the
+    // cells ABOVE it, which docs/perf/qr.md#orgqr-grid records as losses:
+    // cfloat n = 1024 is 0.82x (0.88 at batch 256, and the record does not
+    // claim it crosses), cdouble n = 1024 is 0.78x, and at n = 2048 every
+    // type loses -- float 0.41x, cfloat 0.31x, cdouble 0.46x. An unbounded
+    // `is_native(r)` would route all of those native. Only float n = 1024
+    // recovers with batch (0.84 / 1.11 / 1.27 / 1.33 at batch 32..256), and
+    // one type crossing is not a window.
+    //
+    // The vendor arm also costs 3.3x the workspace (4,870 MB against 1,476 at
+    // cdouble n=64, batch 8192), which the window does not weigh but a caller
+    // near the memory ceiling will feel.
+    // evidence: docs/perf/small-n-baseline.md#orgqr, docs/perf/qr.md#orgqr-grid
     static bool preferred(Route r, const OrgqrShape& s) {
-        static_cast<void>(r);
-        static_cast<void>(s);
-        return false;
+        if (!is_native(r)) return false;
+        return s.cols() <= 512 && s.rows() <= 512;
     }
 
     static constexpr const Route* order_begin() { return kOrgqrOrder; }

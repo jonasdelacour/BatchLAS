@@ -215,6 +215,35 @@ ladder with both readings, a bracketing non-winner at every proposed edge,
 change. A `preferred()` flip needs `t_native <= 0.90 t_vendor` at
 saturation, no accuracy regression, and an end-to-end caller A/B.
 
+R8a. **"At saturation" is not always reachable, and where it is not, say
+so.** Added after P0 measured it. `lu.md`'s `SAT_LADDER` does not saturate
+these ops: 201 of 442 cells were still moving more than 5% on the last
+doubling, and 3 cells could not go further without oversubscribing the
+24 GB card (an `orgqr` cdouble 1024x128 cell jumps 8.5x for a 2x batch at
+a relative sd of 0.0008 — thrashing is *consistent*, so no variance gate
+can see it). Worse, **potrf's ratio has no fixed point in batch at all**:
+the native arm is linear in batch where cuSOLVER is superlinear, so the
+ratio rises without converging (potrf float n=512 is ">= 1.19 and
+rising"; geqrf float n=512 is "<= 13.4 and falling"). Where a cell does
+not saturate inside the memory ceiling, report the ratio with its
+direction and the batch it was read at, and do not quote a single number
+as if it were the limit. A flip gated on such a cell must state which
+batch it is gated at.
+
+R8b. **A non-empty `preferred()` pre-empts `native_tier_preferred`.**
+`resolve_route`'s `automatic()` walks the order array testing
+`supports(r) && preferred(r)` and RETURNS on the first hit; the tier hook
+is only consulted on the vendor-free walk. So a window that answers true
+for the first native tier hands it every shape it can hold, whatever the
+tier hook says. P0 shipped this defect and measured it: the geqrf double
+window took CTA at 65.19 ms where Blocked is 47.70 and the vendor 55.27,
+i.e. the flip was a 0.848x LOSS against the arm it replaced. Any plan
+below that adds a `preferred()` window to an op with more than one native
+tier must answer true for exactly one tier — see `best_native_tier` in
+`route_geqrf.hh` — and must not compose `native_tier_preferred` directly,
+because for the complex types that hook returns a "CTA wherever it fits"
+sentinel whose Blocked arm is false at every real order.
+
 R9. **Every new test is armed**: the plan lists the deliberate break that
 turns it red, and the PR shows it observed red.
 

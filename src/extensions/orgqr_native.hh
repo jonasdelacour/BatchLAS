@@ -1,7 +1,10 @@
 #pragma once
 
 // Native batched ORGQR declarations: one tier, Algorithm::Blocked, which is ormqr applied
-// to an identity. preferred() is false everywhere. evidence: docs/perf/qr.md#orgqr-grid
+// to an identity. preferred() is true up to n = 512 on both extents, so this tier is the
+// DEFAULT route inside that window, not a vendor-free fallback; above it the recorded
+// losses (cfloat 0.82x and cdouble 0.78x at 1024, every type at 2048) take the vendor.
+// evidence: docs/perf/small-n-baseline.md#orgqr, docs/perf/qr.md#orgqr-grid
 
 #include "../util/internal-api.hh"
 #include <batchlas/blas/enums.hh>

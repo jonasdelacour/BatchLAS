@@ -73,9 +73,13 @@ struct RouteTable<Op::getrs, T> {
         }
     }
 
-    // The measured window, native vs vendor: CTA at nrhs <= 2 (all types) and <= 4
-    // (float); the composition at batch >= 128 with nrhs >= 64 (float) / >= 128 (double).
-    // evidence: docs/perf/lu.md#getrs-fused-window-evidence, #getrs-composition-window-evidence
+    // The measured window, native vs vendor: CTA at order >= 32 with nrhs <= 2 (all
+    // types) and <= 4 (float); the composition at batch >= 128 with nrhs >= 64 (float)
+    // / >= 128 (double), and NO order floor -- clause C's axis is nrhs and its own
+    // batch floor, and it was never measured below order 32 in the first place.
+    // The CTA order floor is documented against its grid at the clause itself below.
+    // evidence: docs/perf/lu.md#getrs-fused-window-evidence, #getrs-composition-window-evidence,
+    //           docs/perf/small-n-baseline.md#getrs
     static bool preferred(Route r, const GetrsShape& s) {
         if (!is_native(r)) return false;
 
@@ -88,6 +92,41 @@ struct RouteTable<Op::getrs, T> {
         }
 
         if (r.algo != Algorithm::CTA) return false;
+
+        // ORDER FLOOR, and it is a fix rather than a tuning knob.
+        //
+        // Clauses A and B shipped with no order bound at all, on a grid whose
+        // smallest order was 32. Re-measured down to n = 4 they lose in live
+        // routed traffic at every type, worst 0.234 (cdouble n=4, nrhs=1,
+        // batch 32768), and the loss deepens with batch rather than washing
+        // out: float n=4 nrhs=1 reads 1.50 / 1.07 / 0.71 / 0.52 at batch
+        // 8192 / 16384 / 32768 / 65536.
+        //
+        // The mechanism is that the fused kernel gives one work-group to a
+        // matrix whose whole solve is a few dozen flops, so the work-group is
+        // the cost; cuBLAS getrsBatched keeps its per-item work in one kernel
+        // and pays no such floor.
+        //
+        // Worst ratio over the batch ladder, nrhs = 1, by order:
+        //
+        //   T         n=4    n=8    n=16   n=17   n=24   n=32   n=48
+        //   float     0.71   1.12   1.04   0.76   0.95   2.29   1.94
+        //   cfloat    0.59   0.69   3.76   1.38   1.27   1.40   1.60
+        //   double    0.52   0.98   0.99   0.87   3.66   3.77   3.74
+        //   cdouble   0.23   0.41   2.00   2.02   1.93   2.13   2.46
+        //
+        // 32 is the first order where all four types clear the flip gate AND
+        // stay clear above it; the band below is non-monotone (float passes at
+        // 8, fails at 9, 16, 17 and 24), so no lower floor is defensible.
+        // Clause B is measured on the same grid and takes the same floor:
+        // float nrhs=4 reads 0.45 / 0.46 at n = 4 / 8 and 1.07 / 1.10 at
+        // 17 / 24, clearing only from 32 (1.30).
+        //
+        // P2 of the small-n plan is what reclaims this band: a fused
+        // factor-and-solve kernel that holds the matrix in registers has no
+        // work-group floor to pay.
+        // evidence: docs/perf/small-n-baseline.md#getrs
+        if (s.order() < 32) return false;
 
         if (s.nrhs() <= 2) return true;                  // clause A
 

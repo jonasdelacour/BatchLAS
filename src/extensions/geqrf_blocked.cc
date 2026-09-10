@@ -86,8 +86,11 @@ GeqrfBlockedWs<T> geqrf_blocked_layout(Queue& ctx, BumpAllocator& pool,
 }  // namespace
 
 // Co-located with the driver so "the flag is true" and "this TU is compiled" are one fact.
-// RouteTable<Op::geqrf,T>::preferred() is still false everywhere.
-// evidence: docs/perf/qr.md#route-arms
+// RouteTable<Op::geqrf,T>::preferred() now routes native above a per-type order floor
+// (float 64, cfloat 48, double 96, cdouble 256) and for tall panels, so this flag also
+// gates the DEFAULT route and not only vendor-free builds: reporting false here sends
+// every in-window shape back to the vendor.
+// evidence: docs/perf/small-n-baseline.md#geqrf, docs/perf/qr.md#route-arms
 template <> bool geqrf_blocked_available<float>()                { return true; }
 template <> bool geqrf_blocked_available<double>()               { return true; }
 template <> bool geqrf_blocked_available<std::complex<float>>()  { return true; }

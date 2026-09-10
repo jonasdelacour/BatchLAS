@@ -308,7 +308,12 @@ set(BATCHLAS_ROUTE_PINNED_TESTS
     # '|' separates several pins for one suite, NOT ';': a semicolon inside a
     # quoted entry is a list separator, so it flattens into this list and breaks
     # the name/value pairing below.
-    geqrf_tests  "BATCHLAS_GEQRF_ROUTE=native|BATCHLAS_ORMQR_ROUTE=native"
+    # ORGQR is pinned here TOO, and it is not redundant: geqrf_tests.cc G9
+    # exercises the orgqr route alongside the geqrf one, and each half is guarded
+    # by its OWN getenv. Without this pin the orgqr half ran unpinned inside the
+    # route-pinned binary, so it asserted the vendor-present default while the
+    # geqrf half was skipped -- an unguarded assertion in a guarded suite.
+    geqrf_tests  "BATCHLAS_GEQRF_ROUTE=native|BATCHLAS_ORGQR_ROUTE=native|BATCHLAS_ORMQR_ROUTE=native"
     orgqr_tests  "BATCHLAS_ORGQR_ROUTE=native|BATCHLAS_ORMQR_ROUTE=native"
     getrf_tests  "BATCHLAS_GETRF_ROUTE=native|BATCHLAS_GETRS_ROUTE=native|BATCHLAS_GETRI_ROUTE=native"
     spmm_tests   "BATCHLAS_SPMM_ROUTE=native"

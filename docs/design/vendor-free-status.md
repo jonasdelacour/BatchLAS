@@ -104,8 +104,8 @@ native route still runs: `automatic()` accepts a merely *supported* native route
 | `gemv` | `CTA`, `Direct` | one window: `complex<double>`, transposed, `64 <= red_len <= 352`, `out_len >= 256`, `batch >= 320` | `route_gemv.hh:60-71` |
 | `trsm` | `CTA`, `Blocked` | native from `batch >= 8`; `float`/`Side::Right` additionally needs `batch >= 128 \|\| order <= 32`; everything else true | `route_trsm.hh:64-80` |
 | `potrf` | `CTA`, `Blocked` | **false everywhere** | `route_potrf.hh:65-69` |
-| `geqrf` | `CTA`, `Blocked` | **false everywhere**; tier choice via `native_tier_preferred` (`:443`) | `route_geqrf.hh:73-77` |
-| `orgqr` | `Blocked` | **false everywhere** | `route_orgqr.hh:60-64` |
+| `geqrf` | `CTA`, `Blocked` | native above a per-type order floor (`float` 64, `cfloat` 48, `double` 96, `cdouble` 256), plus tall panels `rows >= 128 && cols >= 32 && rows >= 4*cols`; the window answers true for **one** tier, resolved through `best_native_tier` so it cannot pre-empt `native_tier_preferred` | `route_geqrf.hh:preferred` |
+| `orgqr` | `Blocked` | native at `rows <= 512 && cols <= 512` | `route_orgqr.hh:preferred` |
 | `ormqr` | `Blocked` | `is_native(r) && supports(r, s)` — native-first, and predates WP5 | `route_ormqr.hh:77-79` |
 | `getrf` | `CTA`, `Blocked` | `float` order ≥ 256, `cfloat` order ≥ 512 | `route_getrf.hh:67-74` |
 | `getrs` | `CTA`, `Blocked` | CTA at `nrhs <= 2` (all types) and `nrhs <= 4` (`float`); Blocked at `batch >= 128` with `float nrhs >= 64` / `double nrhs >= 128` | `route_getrs.hh:79-98` |
@@ -151,10 +151,15 @@ change that:
 
 And these are vendor-first because **no decision was taken**, which is a different debt:
 
-* **`geqrf` and `orgqr`.** `preferred()` is false everywhere while the measured geomeans are
-  **3.24×** and **7.85×**. That value is unrealised in the default build and is the single
-  largest piece left on the table. Flipping it is gated on an end-to-end harness, not a kernel
-  ratio: this tree has turned a 2.16× kernel win into an 11% `gesvd` loss.
+* **`geqrf` and `orgqr` — PARTLY TAKEN.** `preferred()` now routes native inside the measured
+  windows in the table above: `geqrf` above a per-type order floor and on tall panels, `orgqr`
+  to n = 512. What remains vendor-first is what the grid says loses — `geqrf` below the floor
+  (down to 0.02× at `double` n = 8) and `orgqr` above n = 512 — so the residue of the **3.24×**
+  and **7.85×** geomeans is not a decision left untaken but the part of the grid where the
+  vendor wins. Two edges are still debts rather than evidence: the tall clause's `rows >= 128`
+  is the smallest tall panel ever measured and not a bracketed boundary, and the same clause is
+  type-independent while `double`/`cdouble` 128x32 measure **0.68×**
+  ([`small-n-baseline.md`](../perf/small-n-baseline.md#geqrf)).
 * **`potrf`.** `preferred()` all-false, though vendor-free `potrf` works at every order and
   `float` at `n >= 1024` is **1.13–1.40× faster than cuSOLVER**. `potrf` also still has not
   declared `native_tier_preferred`, although it has the same two native tiers and the same
