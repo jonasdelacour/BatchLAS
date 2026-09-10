@@ -590,17 +590,9 @@ static int run(const Cfg& c) {
         q->wait();
     };
 
-    // TIME-BASED WARM-UP, DISCARDED. A cold first run -- SYCL JIT plus cold
-    // clocks -- has fabricated a 3.7x result in this repository.
-    //
-    // IT IS INTERLEAVED, in the same arm order the timed loop uses, and that is
-    // measured rather than stylistic. With a per-arm warm-up (all of arm 0, then
-    // all of arm 1) the first TIMED rep of arm 0 is the only one in the run not
-    // preceded by an arm-1 call, and it came in 2.2x slow every time -- 0.0567
-    // ms against a steady 0.0261 at potrf float n=8 -- which alone pushed the
-    // vendor arm's rel_sd to 0.27 and tripped the gate on a cell whose median
-    // was perfectly stable. Warming in the timed loop's own order removes it.
-    // WARM_S is per arm, so the loop runs for WARM_S x arms.
+    // TIME-BASED WARM-UP, DISCARDED, and INTERLEAVED in the timed loop's arm order -- measured,
+    // not stylistic: a per-arm warm-up made arm 0's first timed rep 2.2x slow every time and
+    // tripped the rel_sd gate on a stable cell. evidence: docs/perf/small-n-baseline.md#warm-up-order-and-the-variance-gate
     {
         const double budget = warm_s() * double(arms.size());
         const auto w0 = std::chrono::steady_clock::now();

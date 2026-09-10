@@ -302,3 +302,231 @@ Raw data is preserved at the git tag `perf-evidence/vendor-independence` and is 
 | nsys kernel splits, winning and losing cells | `experiments/wp5_qr/bench/nsys_split.md`, `kernsum/*_kern.txt` |
 | ormqr WY trmm-vs-gemm gate | `experiments/TRMM_SYRK_BATCHED_KERNELS.md` |
 | campaign narrative, "WP5 has landed" | `VENDOR_INDEPENDENCE_PLAN.md` |
+
+## The shipped `geqrf` window
+
+What the per-type order floor in `preferred()` (`route_geqrf.hh`) resolves to at the one shape
+both test files probe, why a window in `preferred()` can silently overrule the tier hook, and
+how much of that the integration-level test can actually see.
+
+### What 96x96 resolves to, per type
+
+96 is simultaneously **double's floor**, **float's last CTA order** and **below cdouble's
+floor**, which is why it is the probe shape in `tests/geqrf_tests.cc` G9 and in the pure-layer
+route tests. `preferred()` carries a PER-TYPE order floor, so the vendor-present answer at
+96x96 is a per-type fact and **not a blanket "vendor"**. Ratios are native-over-vendor from
+[`small-n-baseline.md#geqrf`](small-n-baseline.md#geqrf), n = 96 row, batch 8192.
+
+| T | 96x96 resolves to | ratio | why this cell |
+|---|---|---|---|
+| float | `native:cta` | **2.69x** | 96 is the LAST float order on CTA |
+| cfloat | `native:cta` | **2.28x** | no measured CTA/blocked crossover, and 9,216 scalars fit the 12,160 cfloat tile |
+| double | `native:blocked` | **1.16x** | double's CTA crossover is n > 48 |
+| cdouble | **VENDOR** | 0.49x | the cdouble floor is n >= 256 |
+
+cdouble 96x96 is 0.49x native and BELOW the cdouble floor of 256; routing it native ships a
+measured loss. The tile-fit arithmetic for cfloat is the CTA capacity from
+[cta-capacity](#cta-capacity): 96*96 = 9,216 scalars against a cfloat tile of 12,160 elems
+(square n = 110).
+
+The tier half of the answer is **the crossover AND the tile fit, both read from the device**:
+on a device whose tile cannot hold 96x96 the blocked arm is the right answer for every type,
+so nothing here is hardcoded to this box.
+
+### A non-empty `preferred()` pre-empts `native_tier_preferred`
+
+`resolve_route`'s `automatic()` walks `kGeqrfOrder` testing `supports(r) && preferred(r)` and
+**RETURNS on the first hit** (`route_resolve.hh:35-37`), before `native_tier_preferred` is
+consulted at all. CTA leads that order, so a window that answers true for CTA hands it every
+shape it can hold, whatever the tier hook says.
+
+Measured cost of getting this wrong: the window shipped `native:cta` at **double n = 96**,
+where **blocked is 1.37x faster** and the resulting route is **0.848x** the vendor — a loss
+against the arm it replaced. See the second sweep in
+[cta-vs-blocked-crossover](#cta-vs-blocked-crossover): double 96, default 23.86 ms (blocked)
+against 32.75 ms (cta).
+
+**The invariant that guards it.** Before the order floor shipped, `tests/geqrf_tests.cc` G9b
+block (3) asserted `is_vendor(...)`, on the reasoning that `native_tier_preferred` is consulted
+only on the vendor-free walk while `preferred()` is consulted always — true then, because
+`preferred()` was all-false, so the vendor-present answer could not be native at all. With a
+window in place the invariant it was really guarding survives, and is stronger: **whichever arm
+the vendor-present walk lands on, it must be the SAME arm the vendor-free tie-break picks.**
+That is what "the tier hook did not leak" means once native can win, and it is what catches the
+pre-emption defect above. Concretely: `preferred()` must answer true for exactly one tier, and
+the resolved `present.algo` must equal `RouteTable::best_native_tier(shape).algo`.
+
+### How the window is guarded
+
+The integration-level check (G9b block (3), `NativeTierTieBreakPicksTheFasterNativeVendorFree`)
+is **one instantiation deep**. Its probe shapes are chosen for the TIER crossover, not for the
+order window, so only a type whose probe shapes land INSIDE its order window can fire the
+assertion. Today that is **float only** — double probes at n = 48 and 64, both under its floor
+of 96, so the check takes the vendor early-exit and asserts nothing. **Verified by planting the
+defect: only `GeqrfTest/4` went red**, and `GeqrfTest/5` passed with the defect in place.
+
+The per-type tier cover therefore lives in the pure layer, where shapes are free:
+`RouteGeqrf.PreferredIsTheMeasuredOrderFloorAndTheTallClause` pins **float 96 -> CTA, float 128
+-> Blocked, double 96 -> Blocked and cfloat 256 -> Blocked**.
+
+## The shipped `orgqr` ceiling
+
+Why `route_orgqr.hh`'s `preferred()` is `rows <= 512 && cols <= 512`, every type. Relocated
+verbatim from that predicate's comment block; the grid it summarises is
+[`small-n-baseline.md`](small-n-baseline.md#orgqr), and the losing cells that bracket it are in
+[`orgqr` grid](#orgqr-grid) above.
+
+**Read every ratio here as "beats the per-item loop", NOT as "beats cuSOLVER".** `cublas.cc`
+dispatches `cusolverDnXorgqr` once PER BATCH ITEM on an out-of-order sub-queue
+(`cublas.cc:1414-1419`), so the vendor arm is `batch` launches deep and the comparison is
+against a structure, not against a kernel.
+
+**That is exactly why the window has no floor.** The measured margin is smallest at the largest
+order and never approaches the flip gate:
+
+| T | n = 512 | n = 256 | n = 64 | n <= 16 |
+|---|---|---|---|---|
+| float | 3.64 | 5.30 | 27.10 | >= 181 |
+| cfloat | 2.54 | 4.04 | 15.09 | >= 172 |
+| double | 4.61 | 8.46 | 27.09 | **>= 97.72** |
+| cdouble | 2.77 | 4.75 | 11.31 | >= 42 |
+
+66 square cells measured over four types and orders 4..512, zero losses, minimum 2.54.
+
+The `double` floor is the one number reconciled on the move. The predicate comment carried it as
+`>= 98`, which overreaches its own measurement: the kept cell is **97.72**
+(`benchmarks/results/factor_baseline_orgqr_double.csv`, `double 16x16 b32768`, vendor 1642.61 ms
+against native 16.8097 ms), the same figure the small-n grid's `16 (b32768)` row records. The
+other three floors sit below their own `n = 16` `b32768` cells — float 209.57, cfloat 172.40,
+cdouble 42.25 — and so do not overreach.
+
+**The 512 ceiling is load-bearing, and it is the bracket.** There is no losing cell inside the
+measured range, so the bound comes from the cells ABOVE it, which [`orgqr` grid](#orgqr-grid)
+records as losses: cfloat n = 1024 is 0.82x (0.88 at batch 256, and the record does not claim it
+crosses), cdouble n = 1024 is 0.78x, and at n = 2048 every type loses — float 0.41x, cfloat
+0.31x, cdouble 0.46x. An unbounded `is_native(r)` would route all of those native. Only float
+n = 1024 recovers with batch (0.84 / 1.11 / 1.27 / 1.33 at batch 32..256), and one type crossing
+is not a window.
+
+**Workspace, which the window does not weigh.** The vendor arm also costs 3.3x the workspace —
+4,870 MB against 1,476 MB at cdouble n = 64, batch 8192 — which a caller near the memory ceiling
+will feel. That advantage reverses above n = 1024 in the same direction the speed advantage
+does; the reversal cells are in [`orgqr` grid](#orgqr-grid).
+
+## CTA capacity: the `INT_MAX` reading
+
+Relocated from `tests/route_vocabulary_tests.cc` (the shape helper above `geqrf_cta_elems`),
+which is where the consequence for a *test* shape was written down. The budget and the
+per-type element counts are the same ones as [cta-capacity](#cta-capacity); what follows is
+the device reading behind them and why a permissive test shape makes half an assertion
+disappear.
+
+**The capacity this box actually reports is NOT the square side.** The shape builder sets both
+`cta_max_m` and `cta_max_elems` from `geqrf_cta_max_*_for_slm`, and `..._max_m_for_slm` returns
+`min(elems, INT_MAX)` (`geqrf_cta.cc:176-179`) — so `cta_max_m == cta_max_elems` and the
+**area** is the only binding bound. Budget `101,376 - 4,096 = 97,280 B`: float 24,320 elems,
+double and cfloat 12,160, cdouble 6,080.
+
+**A permissive capacity makes the tier half of a route test vacuous for the complex types.**
+The permissive `4096 / 1<<24` pair used for the other ops' shapes in that file would make
+EVERY cell CTA-eligible. For float and double that still leaves something to assert, because
+their `native_tier_preferred` carries a real column cap (96 and 48, see
+[the-third-predicate](#the-third-predicate)). For cfloat and cdouble it does not: their
+`native_tier_preferred` returns a `1 << 30` column cap, so **the fit gate is the ONLY thing
+that ever sends cfloat or cdouble to the blocked arm**. A test that hands them an unbounded
+tile can never observe `Algorithm::Blocked`, and the tier column of its table asserts nothing.
+Hence `geqrf_dev_shape<T>()` reports this box's real budget rather than the permissive shape.
+
+## The `geqrf` order floor and the tall-panel clause
+
+The two windows `route_geqrf.hh`'s `preferred()` ships, and every cell that bounds them. The
+per-cell grid both tables are derived from is [`small-n-baseline.md#geqrf`](small-n-baseline.md#geqrf)
+and is **not** repeated here; what is here is the selection — which cell became an edge, and
+which measured cell was refused as one.
+
+### Why the floors sit where they do
+
+cuBLAS `geqrfBatched` is unblocked and saturates at ~380 GFLOP/s (float) **regardless of n**
+(see [the-vendor-baseline](#the-vendor-baseline)), so the native arm pulls away as n grows.
+Below the floor the reverse holds, because the native panel kernel is the whole cost at a size
+where there is no trailing work to amortise it.
+
+The floors are the first order clearing the repository's flip gate, `t_native <= 0.90 t_vendor`
+(ratio >= 1.11), at the top of the measured batch ladder, with the order below it measured as a
+loss:
+
+| T | floor | ratio at floor | bracketing loss below |
+|---|---|---|---|
+| `float` | 64 | 1.71 | 48: 1.02   33: 0.76 |
+| `cfloat` | 48 | 1.74 | 33: 0.69   32: 0.62 |
+| `double` | 96 | 1.16 | 65: 0.66   64: 0.58 |
+| `cdouble` | 256 | 1.50 | 192: 1.06   129: 0.58 |
+
+**float n = 48 (1.02) and cdouble n = 192 (1.06) are inside the gate's dead band and are
+deliberately excluded**: both are single cells that do not clear 1.11, and a window edge without
+a clearing measurement is a guess.
+
+### Tall panels cross over earlier
+
+They are also the shape the callers actually issue: `sytrd_sy2sb.cc:509` and
+`band_reduction.cc:603` factorise an `m x kd` panel with `kd` typically 32, where every square
+cell loses. A floor on `cols()` alone leaves that shape on the vendor while the measurement says
+native is 1.6-6.4x there. Ratios are native-over-vendor at the top of the batch ladder — b16384
+for the `512x*` and `128x32` rows, b8192 for `1024x128`:
+
+| shape | aspect | float | cfloat | double | cdouble |
+|---|---|---|---|---|---|
+| 128 x 32 | 4x | 2.23 | 3.79 | 0.68 | 0.68 |
+| 512 x 32 | 16x | 2.68 | 3.39 | 1.58 | 2.16 |
+| 512 x 64 | 8x | 3.175 | 4.102 | 2.373 | 1.734 |
+| 1024 x 128 | 8x | 7.16 | 5.090 | 6.418 | *excluded* (1.691 at b8192, paging; 2.96 at b4096) |
+
+Hence the second clause, on the panel's **aspect ratio**, and the ratio is per type. `128 x 32`
+is the whole reason: at 4x the 32-bit types win 2.23-3.79 and the 64-bit types **lose** at 0.68,
+so a type-independent aspect floor of 4 would route two measured losses native. The 64-bit floor
+is **8x**, bracketed on both sides — `1024 x 128` (8x) wins 6.418 for double and `512 x 64` (8x)
+wins 2.373 / 1.734 for double / cdouble, while `128 x 32` (4x) loses 0.68 for both.
+
+**Two edges are unbracketed and are debts, not evidence.** The 32-bit aspect floor of 4x is not
+bracketed below: no tall cell narrower than 4x was measured for any type, so 4 is the smallest
+measured aspect and not a demonstrated boundary. Neither is `rows() >= 128`, for the same reason
+— `128 x 32` is simply the shortest tall panel in the grid.
+
+**Reconciliation on the move out of the code.** The table above is re-derived from
+`benchmarks/results/factor_baseline_geqrf_*.csv`, and four cells of the version that shipped in
+the header were wrong: cfloat `512x64` read 3.70 against a measured 4.102, cfloat `1024x128`
+read 5.07 against 5.090, float `512x64` read 3.17 against 3.175, and double / cdouble were shown
+as `-` at `512x64` and `1024x128` although all four of those cells are measured (2.373 / 1.734
+and 6.418 / 1.691). The corrections all move in the argument's own direction: cdouble at 8x wins
+1.734 at `512x64`, which the header's `-` had left the 64-bit aspect floor resting on double
+alone. The one cell that is genuinely not usable is cdouble `1024x128` b8192 — 32 GB, paging,
+1.691 against 2.130 and 2.956 on the two rungs below it, excluded on
+[`small-n-baseline.md#geqrf`](small-n-baseline.md#geqrf)'s own oversubscription rule.
+
+### Why the window answers for exactly one tier
+
+**The tier hook must not be pre-empted.** `resolve_route`'s `automatic()` walks `kGeqrfOrder`
+testing `supports(r) && preferred(r)` and RETURNS on the first hit, before
+`native_tier_preferred` is consulted at all. CTA leads that order, so a window that answers true
+for CTA hands it every shape it can hold, whatever the tier hook says. Measured cost of getting
+this wrong, at the double floor (n = 96): **CTA 65.19 ms against blocked 47.70 and vendor 55.27,
+i.e. the window shipped 0.848x — a loss against the arm it replaced** — while float n = 128 took
+CTA's 2.12x instead of blocked's 3.62x. `tests/geqrf_tests.cc` G9b exists for exactly this and
+caught it. The mechanism and the invariant that guards it are in
+[a-non-empty-preferred-pre-empts-native_tier_preferred](#a-non-empty-preferred-pre-empts-native_tier_preferred);
+the numbers above are the ones that were in the header.
+
+Two figures on that line disagree with other records and neither changes the conclusion. Commit
+`f4e63fb`'s own message gives the vendor time as 55.18, not 55.27; **55.27 is the one consistent
+with the 0.848x it also quotes** (55.18 / 65.19 = 0.846), so 55.27 is kept. The independent pin
+at float n = 128 in [`small-n-baseline.md`](small-n-baseline.md#where-this-baseline-disagrees-with-the-record)
+reads `cta` 15.419 ms / `blocked` 9.349 ms / vendor 31.024 ms, i.e. 2.01x against 3.32x rather
+than 2.12x against 3.62x — a different session and batch, same direction, same size of mistake.
+
+**Why `best_native_tier(s)` and not `native_tier_preferred(r, s)` composed directly.** For the
+complex types that hook returns a `1 << 30` column cap, meaning "CTA wherever it FITS" (see
+[the-third-predicate](#the-third-predicate)), so its **Blocked arm is false at every real
+order**. Composing it directly would answer false for *both* tiers at, say, cfloat 256x256 —
+where CTA cannot hold the tile (65,536 scalars against a cfloat capacity of 12,160) and Blocked
+measures **7.51x** — and hand a large measured win back to the vendor. `best_native_tier`
+resolves the fit first and consults the hook only among the tiers that can serve.

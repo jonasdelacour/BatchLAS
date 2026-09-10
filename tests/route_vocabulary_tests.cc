@@ -754,17 +754,9 @@ GeqrfShape geqrf_shape(int64_t rows, int64_t cols, int64_t batch,
     return s;
 }
 
-// THE CAPACITY THIS BOX ACTUALLY REPORTS, and it is NOT the square side. The shape
-// builder sets both fields from geqrf_cta_max_*_for_slm, and `..._max_m_for_slm`
-// returns min(elems, INT_MAX) (geqrf_cta.cc:176-179) -- so cta_max_m == cta_max_elems
-// and the AREA is the only binding bound. Budget 101,376 - 4,096 = 97,280 B
-// (docs/perf/qr.md#cta-capacity): float 24,320 elems, double and cfloat 12,160,
-// cdouble 6,080.
-//
-// The permissive 4096 / 1<<24 used elsewhere in this file would make EVERY cell below
-// CTA-eligible, and the tier half of this test would then be vacuous for the complex
-// types: their native_tier_preferred returns a 1<<30 column cap, so the fit gate is the
-// ONLY thing that ever sends cfloat or cdouble to the blocked arm.
+// CTA capacity is an AREA, and this box's budget is 97,280 B. The permissive shape helper
+// used elsewhere in this file would make every cell CTA-eligible and the tier half of this
+// test vacuous for the complex types. evidence: docs/perf/qr.md#cta-capacity-the-int_max-reading
 template <typename T>
 constexpr int64_t geqrf_cta_elems() { return 97280 / static_cast<int64_t>(sizeof(T)); }
 
@@ -780,12 +772,8 @@ constexpr Route kGeqrfBlocked{Origin::Native, Algorithm::Blocked};
 constexpr Route kGeqrfNativeBare{Origin::Native, Algorithm::Auto};
 constexpr Route kGeqrfAuto{Origin::Auto, Algorithm::Auto};
 
-// One type's order floor pinned from BOTH sides, plus the TIER at each native cell.
-// The tier is half the assertion: automatic() returns on the first `supports &&
-// preferred` hit and CTA leads kGeqrfOrder, so a window that answers true for CTA
-// above the crossover ships the SLOWER native arm and never consults
-// native_tier_preferred at all. At double n=96 that mistake measured 0.848x the
-// vendor -- a loss against the arm the flip replaced.
+// One type's order floor pinned from BOTH sides, plus the TIER at each native cell -- the
+// tier is half the assertion. evidence: docs/perf/qr.md#the-shipped-geqrf-window
 template <typename T>
 void expect_geqrf_floor(const char* tn,
                         int64_t below,
@@ -974,19 +962,9 @@ TEST(RouteGeqrf, Sg32GatesBothNativeArms) {
     EXPECT_TRUE(is_vendor(resolve_geqrf_route<float>(kGeqrfAuto, small, false)));
 }
 
-// THE MEASURED WINDOW, pinned from both sides, AND THE TIER AT EACH CELL.
-//
-// A per-type order floor on cols(), plus a tall-panel clause on the aspect ratio for
-// the m x 32 shapes the eigen drivers actually issue. This test exists so neither
-// edge, and neither tier choice, can drift without a measurement.
-//
-//   T         floor   ratio at the floor   bracketing loss below
-//   float      64          1.71             48: 1.02   33: 0.76
-//   cfloat     48          1.74             33: 0.69   32: 0.62
-//   double     96          1.16             65: 0.66   64: 0.58
-//   cdouble   256          1.50            192: 1.06  129: 0.58
-//
-// evidence: docs/perf/small-n-baseline.md#geqrf, docs/perf/qr.md#cta-vs-blocked-crossover
+// THE MEASURED WINDOW, pinned from both sides, AND THE TIER AT EACH CELL: a per-type order
+// floor on cols() plus a tall-panel aspect clause, so neither edge nor either tier choice
+// can drift without a measurement. evidence: docs/perf/qr.md#the-shipped-geqrf-window
 TEST(RouteGeqrf, PreferredIsTheMeasuredOrderFloorAndTheTallClause) {
     // ---- the floor and the tier, per type -----------------------------------
     // The tier column is the CTA/Blocked crossover: float turns over at n > 96 and
@@ -1023,10 +1001,8 @@ TEST(RouteGeqrf, PreferredIsTheMeasuredOrderFloorAndTheTallClause) {
                "defect this whole test guards";
     }
 
-    // ---- THE TALL CLAUSE ----------------------------------------------------
-    // sytrd_sy2sb.cc:509 and band_reduction.cc:603 factorise an m x kd panel with
-    // kd typically 32, where the SQUARE floor never fires. float 512x32 measures
-    // 2.68x and 128x32 2.23x; a cols()-only floor leaves both on the vendor.
+    // ---- THE TALL CLAUSE: the m x kd panels the eigen drivers issue, where the square floor
+    //      never fires. evidence: docs/perf/qr.md#the-shipped-geqrf-window
     {
         const auto tall512 = geqrf_dev_shape<float>(512, 32, 16384);
         const Route r512 = resolve_geqrf_route<float>(kGeqrfAuto, tall512, true);
@@ -1065,13 +1041,9 @@ TEST(RouteGeqrf, PreferredIsTheMeasuredOrderFloorAndTheTallClause) {
                "test and dropping the ratio would route a shape nothing measured";
     }
 
-    // ---- THE ASPECT FLOOR IS PER TYPE ---------------------------------------
-    // 128x32 is the cell that forces this. At 4x the 32-bit types measure 2.23x
-    // (float) and 3.79x (cfloat) while BOTH 64-bit types measure 0.68x -- a
-    // MEASURED loss, not an unmeasured edge. A single floor of 4 ships those two
-    // losses native; a single floor of 8 hands float's 2.23x back to the vendor.
-    // Hence 4x for float/cfloat and 8x for double/cdouble.
-    // evidence: docs/perf/small-n-baseline.md#geqrf
+    // ---- THE ASPECT FLOOR IS PER TYPE: 128x32 wins for the 32-bit types and loses for both
+    //      64-bit ones, so one floor cannot serve both.
+    //      evidence: docs/perf/qr.md#the-shipped-geqrf-window
     {
         // The measured losers. 32 columns is under both 64-bit order floors
         // (double 96, cdouble 256), so ONLY the aspect clause could route these.
@@ -1313,18 +1285,9 @@ TEST(RouteOrgqr, VendorFreeFallbackHandsOverTheNativeRoute) {
     EXPECT_TRUE(is_vendor(resolve_orgqr_route<float>(kOrgqrAuto, big, true)));
 }
 
-// THE MEASURED CEILING, and it is the whole window: native to n = 512, vendor above.
-//
-// NOT `is_native(r) && supports(r, s)`. There is no losing cell inside the measured
-// range -- 66 square cells over four types and orders 4..512, zero losses, minimum
-// 2.54x -- so the bound comes entirely from the cells ABOVE it, which
-// docs/perf/qr.md#orgqr-grid records as losses: cfloat n = 1024 is 0.82x, cdouble
-// n = 1024 is 0.78x, and at n = 2048 every type loses (float 0.41x, cfloat 0.31x,
-// cdouble 0.46x). An unbounded predicate would route all of those native.
-//
-// Read every ratio as "beats the per-item cusolverDnXorgqr loop" (cublas.cc:1414-1419),
-// never as "beats cuSOLVER".
-// evidence: docs/perf/small-n-baseline.md#orgqr, docs/perf/qr.md#orgqr-grid
+// THE MEASURED CEILING, and it is the whole window: native to n = 512, vendor above. NOT
+// `is_native && supports` -- there is no losing cell INSIDE the measured range, so the
+// bound comes from the cells above it. evidence: docs/perf/qr.md#the-shipped-orgqr-ceiling
 TEST(RouteOrgqr, PreferredIsNativeUpToTheMeasuredCeiling) {
     // ---- INSIDE: native at every order the grid covers, every type, every batch.
     for (int64_t n : {1, 16, 32, 64, 256, 512}) {
@@ -2100,25 +2063,12 @@ TEST(RouteGetrs, CorrectnessGatesAreNotSpeedGates) {
            "read as live";
 }
 
-// THE MEASURED WINDOW, pinned from BOTH sides:
-//     order >= 32, nrhs <= 2  for every type   -- clause A
-//   + order >= 32, nrhs <= 4  for float only   -- clause B
-// plus clause C for the composition below, which is never preferred at any width the
-// fused tier serves and carries NO order floor (its axis is nrhs and its own batch floor).
-//
-// THE ORDER FLOOR IS PART OF THE WINDOW, not a detail: clauses A and B shipped
-// unbounded in order, on a grid whose smallest order was 32, and re-measured down to
-// n = 4 they lose in live routed traffic at every type -- worst 0.234 at cdouble n=4
-// nrhs=1 batch 32768 -- with the loss DEEPENING with batch rather than washing out.
-// evidence: docs/perf/lu.md#getrs-fused-window-evidence,
-//           docs/perf/small-n-baseline.md#getrs
+// THE MEASURED WINDOW, pinned from BOTH sides: order >= 32 with nrhs <= 2 (every type,
+// clause A) and nrhs <= 4 (float, clause B), plus clause C for the composition.
+// evidence: docs/perf/lu.md#getrs-fused-window-evidence, #getrs-order-floor-evidence
 TEST(RouteGetrs, PreferredIsTheMeasuredNrhsWindowAndNothingWider) {
-    // ---- THE ORDER FLOOR, from both sides ----------------------------------
-    // The fused kernel gives one work-group to a matrix whose whole solve is a few
-    // dozen flops, so below the floor the work-group IS the cost. Worst ratio over
-    // the batch ladder at nrhs = 1: float 0.71 / cfloat 0.59 / double 0.52 /
-    // cdouble 0.23 at n = 4. The band below 32 is non-monotone (float passes at 8,
-    // fails at 9, 16, 17 and 24), so no lower floor is defensible.
+    // ---- THE ORDER FLOOR, from both sides. Below it the work-group IS the cost.
+    //      evidence: docs/perf/lu.md#getrs-order-floor-evidence
     for (int64_t order : {1, 4, 8, 16, 17, 24, 31}) {
         for (int64_t batch : {1, 128, 8192}) {
             for (int64_t nrhs : {int64_t(1), int64_t(2)}) {

@@ -48,7 +48,7 @@ static bool preferred(Route r, const GetriShape& s) {
 }
 ```
 
-`include/batchlas/blas/dispatch/route_getrs.hh:79-98` -- three clauses across two arms:
+`include/batchlas/blas/dispatch/route_getrs.hh:82-102` -- three clauses across two arms:
 
 ```cpp
 if (r.algo == Algorithm::Blocked) {                      // the COMPOSITION -- clause C
@@ -63,7 +63,7 @@ if constexpr (std::is_same_v<T, float>) { if (s.nrhs() <= 4) return true; }  // 
 return false;
 ```
 
-**Correction to the exploration notes.** `experiments/wp6_lu/README.md`, `bench/README.md` and `kernels/README.md` all state that `preferred()` is false everywhere for all three ops. That was the WP6 merge state. The shipped predicates are the four windows above; **the code wins**. All three route headers say so in the WP8-ROUTING-PASS blocks preceding the predicates (`route_getrf.hh:67`, `route_getri.hh:65`, `route_getrs.hh:79`).
+**Correction to the exploration notes.** `experiments/wp6_lu/README.md`, `bench/README.md` and `kernels/README.md` all state that `preferred()` is false everywhere for all three ops. That was the WP6 merge state. The shipped predicates are the four windows above; **the code wins**. All three route headers say so in the WP8-ROUTING-PASS blocks preceding the predicates (`route_getrf.hh:67`, `route_getri.hh:65`, `route_getrs.hh:76`).
 
 The stale sentence survives in more shipped sources than the exploration notes, and the list is longer than the earlier draft of this page gave: `getrf_cta.cc:5-6` and `:154`, `getrf_blocked.cc:38` and `:236`, `getrs_native.cc:2-3`, `getrs_native.hh:3-4`, `getri_native.hh:3-4`, `getri_blocked.cc:140`, and the two shape builders `src/backends/getrs_route.hh:95` and `getri_route.hh:50`. Every one of them says some form of "`preferred()` is false / all-false, so nothing routes here". None of them is true any more for `getrf`, `getrs` or `getri`. Read the predicate, not the prose above it.
 
@@ -84,7 +84,7 @@ The native-vs-native tie-break, consulted **only** in the vendor-free walk, so d
 
 `double` re-run across four batches at its worst order (n=76): 0.78 / 0.84 / 0.85 / 0.85 at batch 2048 / 4096 / 8192 / 16384 -- one-directional, flat in batch, every relative sd < 0.2%. `n <= 32` returns to CTA for `double` too, and that is not a hedge: there `nb = min(32, n) = n`, so the blocked driver runs one panel whose leaf **is** the CTA device function (1.8126 vs 1.8113 ms at n=32, batch 8192 -- the same code, one launch instead of three). Not declaring this hook would cost 1.18-1.29x at double n=76..96 in the build this campaign exists for.
 
-`route_getrs.hh:102` -- CTA (fused) always preferred over Blocked. No crossover to encode: the fused tier is ahead of the composition at **every** cell inside its own capability (51 cells, worst 1.11x at float n=2048 nrhs=8). The column where it would turn is nrhs=16 (double 0.55x, cfloat 0.58x at n=512), and that is outside `supports()` by `kGetrsFusedMaxRhs`. **If that constant is raised, this predicate must gain a window in the same change.** `getri` declares none -- one native arm, no native-vs-native question.
+`route_getrs.hh:107` -- CTA (fused) always preferred over Blocked. No crossover to encode: the fused tier is ahead of the composition at **every** cell inside its own capability (51 cells, worst 1.11x at float n=2048 nrhs=8). The column where it would turn is nrhs=16 (double 0.55x, cfloat 0.58x at n=512), and that is outside `supports()` by `kGetrsFusedMaxRhs`. **If that constant is raised, this predicate must gain a window in the same change.** `getri` declares none -- one native arm, no native-vs-native question.
 
 ## The vendor baseline and saturation
 
@@ -194,6 +194,53 @@ On WP6's own saturating grid the reversal is complete: nrhs=1 goes from 0.256x (
 
 The **thinnest margin in the window** is cdouble n=32 nrhs=2, whose ladder runs 1.257 / 1.162 / 1.132 / 1.120 / **1.116** at batch 1024 -> 16384. It declines and then flattens rather than falling, so it is a flat win by the rule; it is the only cell of 322 under 1.12x and the first place a re-measurement on another box should look.
 
+### `getrs` order floor evidence
+
+Clause A (`nrhs <= 2`, every type) and clause B (`float`, `nrhs = 3..4`) shipped with **no order
+bound at all**, on a grid whose smallest order was 32. Re-measured down to n = 4 they lose in
+**live routed traffic in a vendor-present build** at every type, worst **0.234** (cdouble n=4,
+nrhs=1, batch 32768), and the loss deepens with batch rather than washing out: float n=4 nrhs=1
+reads **1.50 / 1.07 / 0.71 / 0.52** at batch 8192 / 16384 / 32768 / 65536.
+
+That is a correction to [`getrs` fused window evidence](#getrs-fused-window-evidence) above,
+which records clause A as "286 cells, geomean 2.261, **min 1.116, zero losses**" and clause B as
+"min 1.133, zero losses". Both readings score the same predicate; the earlier grid had no rung
+below order 32.
+
+**The mechanism.** The fused kernel gives one work-group to a matrix whose whole solve is a few
+dozen flops, so the work-group **is** the cost. `cublas?getrsBatched` keeps its per-item work
+inside one kernel and pays no such floor.
+
+Worst ratio over the batch ladder, `nrhs = 1`, by order (`vendor_med / native_med`, > 1 means
+native wins; the **minimum** rung of each order's ladder, not its top rung):
+
+| T | n=4 | n=8 | n=16 | n=17 | n=24 | n=32 | n=48 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| float | 0.71 | 1.12 | 1.04 | 0.76 | 0.95 | 2.29 | 1.94 |
+| cfloat | 0.59 | 0.69 | 3.76 | 1.38 | 1.27 | 1.40 | 1.60 |
+| double | 0.52 | 0.98 | 0.99 | 0.87 | 3.66 | 3.77 | 3.74 |
+| cdouble | 0.23 | 0.41 | 2.00 | 2.02 | 1.93 | 2.13 | 2.46 |
+
+**This is a different statistic from the one `small-n-baseline.md` §`getrs` quotes**, and the two
+must not be read against each other cell by cell: that page quotes the **top** batch of each
+ladder — the most saturated reading taken — where this table takes the worst rung anywhere on
+the ladder. Its float n=24 cell reads 1.11; the same ladder's worst rung is 0.95.
+
+**32 is the first order where all four types clear the flip gate AND stay clear above it.** The
+band below it is non-monotone — float passes at 8, fails at 9, 16, 17 and 24 — so no lower floor
+is defensible. Clause B is measured on the same grid and takes the same floor: float nrhs=4 reads
+**0.45 / 0.46** at n = 4 / 8 and **1.07 / 1.10** at 17 / 24, clearing only from 32 (**1.30**).
+
+The floor is therefore a **defect fix rather than a tuning knob**: it excludes measured losses in
+traffic the router was already sending to the fused tier, not marginal wins.
+
+**P2 of the small-n plan is what reclaims this band**: a fused factor-and-solve kernel that holds
+the matrix in registers has no work-group floor to pay.
+
+Source: `benchmarks/results/factor_baseline_getrs_{float,cfloat,double,cdouble}.csv`, ratio
+`vendor_median / native_median`, minimum over each order's batch ladder. All 28 cells of the table
+were re-derived from those CSVs and reproduce exactly.
+
 ### `getrs` composition window evidence
 
 Clause C, the composition, from `experiments/wp8_getrs/cl_*.csv` + `gap_*.csv` scored into `clause_summary.txt`, re-measured on an idle box in `experiments/wp8_getri/lu_c1.csv`. Union: **37 cells, geomean 2.60, min 1.2858, zero losses, zero cells below 1.15** (float `nrhs >= 64`: 22 cells, geomean 3.138, min 1.7695; double `nrhs >= 128`: 15 cells, geomean 1.979, min 1.2858). The earlier 45-cell reading of the same clause is geomean 2.467, min 1.2791.
@@ -215,6 +262,8 @@ Refuting cell for every wider clause, so none is rediscovered:
 **The batch floor of 128 is a conservative policy choice and is known to be one.** At nrhs=128 the composition still WINS at batch 64 and 32 (float 5.93 / 5.96 / 5.60 / 4.71 / 3.87 at n=64/128/256/512/1024; double 4.31 / 4.05 / 3.56), so the floor gives up measured wins rather than excluding measured losses. It is there because below 32 the only readings come from a contaminated sweep (0.055x-0.33x at batch 1-2), and because nrhs=64 -- the other half of the clause -- has no low-batch ladder at all.
 
 Coverage of the admitted set, stated exactly: 45 cells measured directly on three saturated rungs of each of five orders, two passes each side. A further 58 admitted cells at other rungs are covered by a **bound**, not a measurement: the vendor arm did not move in this pass, and the gather's own A/B has minimum 1.0004 over 80 cells with zero cells below 1.00, so `post_ratio >= walk_ratio` at every admitted cell -- and all 58 already clear 1.15 on the walk ladder (min 1.1933, geomean 2.1616). Zero admitted cells are uncovered by measurement or bound.
+
+**Clause C carries no order floor, and that is not an oversight.** Its axis is `nrhs`, plus its own batch floor of 128; it was never measured below order 32 in the first place, so there is no bracketing non-winner below that order to bound it with. The fused tier's order floor is a separate clause with its own grid — see [`getrs` order floor evidence](#getrs-order-floor-evidence).
 
 ## The `laswp` gather
 

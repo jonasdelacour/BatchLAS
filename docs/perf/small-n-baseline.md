@@ -226,7 +226,7 @@ wide arm, and re-measure orgqr single-arm before quoting one in a gate.
 ## getrs
 
 Two right-hand-side widths. `nrhs = 1` is inside shipped clause A of
-`route_getrs.hh:92` (`s.nrhs() <= 2`, **every type**, no order or batch bound); `nrhs = 4` is
+`route_getrs.hh:97` (`s.nrhs() <= 2`, **every type**, no order or batch bound); `nrhs = 4` is
 inside clause B (float only). Everything below therefore describes **live routed traffic in a
 vendor-present build**, not a hypothetical.
 
@@ -278,6 +278,33 @@ evidently had no n < 32 rung and no batch above ~16384. **A cheap P0 repair is a
 on clause A and B** — the bracketing winner is n = 24 nrhs = 1 (1.11 float, 1.27 cfloat, 3.69
 double, 1.96 cdouble) — but the shape of the loss (deepening with batch at n = 4 while n = 17
 bounces 0.878 / 0.755 / 0.922) says the floor should be measured, not guessed.
+
+**The floor was measured, and it is 32.** The paragraph above asks for a measured floor rather
+than a guessed one; this is the table that answers it. Same 20 grids, `nrhs = 1`, but read at the
+**worst rung of each order's batch ladder** instead of at the top rung — the statistic that decides
+whether a clause has a loss anywhere inside it:
+
+| T | n=4 | n=8 | n=16 | n=17 | n=24 | n=32 | n=48 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| float | 0.71 | 1.12 | 1.04 | 0.76 | 0.95 | 2.29 | 1.94 |
+| cfloat | 0.59 | 0.69 | 3.76 | 1.38 | 1.27 | 1.40 | 1.60 |
+| double | 0.52 | 0.98 | 0.99 | 0.87 | 3.66 | 3.77 | 3.74 |
+| cdouble | 0.23 | 0.41 | 2.00 | 2.02 | 1.93 | 2.13 | 2.46 |
+
+Read this way the bracketing winner named above dissolves: **n = 24 is 0.95 for float** at its worst
+rung, against the 1.11 the top-batch table quotes, so it cannot bracket the floor. 32 is the first
+order where all four types clear the flip gate *and* stay clear above it, and the band below it is
+non-monotone — float passes at 8, fails at 9, 16, 17 and 24 — so no lower floor is defensible.
+Clause B takes the same floor on the same grid: float `nrhs = 4` reads 0.45 / 0.46 at n = 4 / 8 and
+1.07 / 1.10 at 17 / 24, clearing only from 32 (1.30).
+
+The mechanism, and why the losses deepen with batch: the fused kernel gives one work-group to a
+matrix whose whole solve is a few dozen flops, so the work-group **is** the cost, while
+`cublas?getrsBatched` keeps its per-item work inside one kernel and pays no such floor. P2 of the
+small-n plan is what reclaims the band — a fused factor-and-solve kernel holding the matrix in
+registers has no work-group floor to pay. The full write-up, with the correction it forces on the
+"min 1.116, zero losses" reading, is `docs/perf/lu.md` §[`getrs` order floor
+evidence](lu.md#getrs-order-floor-evidence).
 
 ## Saturation
 
@@ -444,3 +471,23 @@ reproducible and should be replaced by the numbers here*; the rest of it reprodu
 The saturation extensions, the tier pins and the GEMM-route probe in this page were run one
 process per cell through the same guard and are not in the CSVs; they are quoted inline with
 both arms' absolute times so they can be re-run from the text.
+
+## Warm-up order and the variance gate
+
+Method detail behind the `relsd` discards of [How to read the grid](#how-to-read-the-grid), moved
+out of `benchmarks/factor_bench.cc` so the gate can be audited from this page. The harness warms up
+**time-based** (a `WARM_S` budget per arm, so the warm-up loop runs for `WARM_S x arms`) and
+**discards** the warm-up reps: a cold first run — SYCL JIT plus cold clocks — has fabricated a
+**3.7x** result in this repository.
+
+The warm-up is also **interleaved**, in the same arm order the timed loop uses, and that is measured
+rather than stylistic. With a per-arm warm-up (all of arm 0, then all of arm 1) the first *timed* rep
+of arm 0 is the only one in the run not preceded by an arm-1 call, and it came in **2.2x slow every
+time** — **0.0567 ms against a steady 0.0261** at `potrf` float n = 8 — which alone pushed the vendor
+arm's `rel_sd` to **0.27** and tripped the gate on a cell whose median was perfectly stable. Warming
+in the timed loop's own order removes it.
+
+The consequence for reading the grid: a `relsd` discard on this page is a property of the *route*, not
+an artefact of the first rep, because no arm in the timed loop has an unwarmed neighbour position. The
+0.0261 ms steady reading is the same `factor_bench`, one-arm-per-process vendor time quoted in
+[The potrf n = 8 finding](#the-potrf-n--8-finding).

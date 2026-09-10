@@ -1037,17 +1037,9 @@ TYPED_TEST(GeqrfTest, RouteTableAndTheVendorFreeFallback) {
     ASSERT_TRUE(dispatch::is_native(free_route))
         << "a vendor-free build has no geqrf route for 96x96; the fallback is broken";
 
-    // preferred() carries a PER-TYPE order floor, so the vendor-present answer at
-    // 96x96 is a per-type fact and not a blanket "vendor". Through the real shape
-    // builder, which is what route_vocabulary_tests.cc cannot reach:
-    //
-    //   float   96x96 -> native:cta      2.69x; 96 is the LAST float order on CTA
-    //   cfloat  96x96 -> native:cta      2.28x; no measured CTA/blocked crossover,
-    //                                    and 9,216 scalars fit the 12,160 cfloat tile
-    //   double  96x96 -> native:blocked  1.16x; double's CTA crossover is n > 48
-    //   cdouble 96x96 -> VENDOR          0.49x; the cdouble floor is n >= 256
-    //
-    // evidence: docs/perf/small-n-baseline.md#geqrf, docs/perf/qr.md#cta-vs-blocked-crossover
+    // preferred() carries a PER-TYPE order floor, so the vendor-present answer at 96x96 is a
+    // per-type fact, not a blanket "vendor": native for float/cfloat/double, vendor for cdouble.
+    // evidence: docs/perf/qr.md#the-shipped-geqrf-window
     if (!std::getenv("BATCHLAS_GEQRF_ROUTE")) {
         const auto auto_route =
             backend::geqrf_route<B, T>(*this->ctx, V, /*vendor_available=*/true);
@@ -1153,41 +1145,18 @@ TYPED_TEST(GeqrfTest, NativeTierTieBreakPicksTheFasterNativeVendorFree) {
                "direction (route_geqrf.hh's 'NO LOWER BOUND ON THE EXTENTS' note).";
     }
 
-    // (3) The vendor-present answer must AGREE WITH THE TIE-BREAK, not be vendor.
-    //
-    // This block asserted `is_vendor(...)` until the order floor shipped, on the
-    // reasoning that native_tier_preferred is consulted only on the vendor-free
-    // walk while preferred() is consulted always -- true then, because preferred()
-    // was all-false, so the vendor-present answer could not be native at all.
-    //
-    // With a window in place the invariant it was really guarding survives, and
-    // is stronger: whichever arm the vendor-present walk lands on, it must be the
-    // SAME arm the vendor-free tie-break picks. That is what "the tier hook did
-    // not leak" means once native can win. It also catches the defect this test
-    // caught for real -- a preferred() that answers true for the first native
-    // tier pre-empts automatic()'s tier choice (route_resolve.hh:35-37), which
-    // shipped native:cta at double n=96 where blocked is 1.37x faster and the
-    // vendor 0.848x. evidence: docs/perf/small-n-baseline.md#geqrf
+    // (3) The vendor-present answer must AGREE WITH THE TIE-BREAK, not be vendor: whichever arm
+    //     the vendor-present walk lands on must be the arm the vendor-free tie-break picks.
+    //     evidence: docs/perf/qr.md#the-shipped-geqrf-window
     if (!std::getenv("BATCHLAS_GEQRF_ROUTE")) {
         const auto sh_lo = backend::geqrf_op_shape<B, T>(*this->ctx, V_lo);
         const auto sh_hi = backend::geqrf_op_shape<B, T>(*this->ctx, V_hi);
         ASSERT_TRUE(sh_lo.has_value() && sh_hi.has_value());
         using Tbl = dispatch::RouteTable<dispatch::Op::geqrf, T>;
 
-        // COVERAGE WARNING, measured not assumed: this block can only fire for a
-        // type whose probe shapes land INSIDE the order window, and the probe
-        // shapes are chosen for the TIER crossover, not for the window. Today
-        // that means float only -- double probes at n = 48 and 64, both under
-        // its floor of 96, so `check` takes the vendor early-exit and asserts
-        // nothing, and GeqrfTest/5 passes even with the defect planted.
-        // Verified by planting it: only GeqrfTest/4 went red.
-        //
-        // The per-type tier assertions therefore live in the pure layer, where
-        // shapes are free: RouteGeqrf.PreferredIsTheMeasuredOrderFloorAndTheTallClause
-        // pins float 96 -> CTA, float 128 -> Blocked, double 96 -> Blocked and
-        // cfloat 256 -> Blocked. This block is the integration-level check that
-        // the resolver agrees with the table, and it is one instantiation deep.
-        // `in_window_here` makes that visible in the log rather than silent.
+        // COVERAGE WARNING, measured not assumed: only the float instantiation can fire here --
+        // the other types' probe shapes sit below their own floors, so `check` takes the vendor
+        // early-exit. Per-type tier cover: RouteGeqrf.PreferredIsTheMeasuredOrderFloorAndTheTallClause.
         int in_window_here = 0;
         const auto check = [&](const auto& view, const auto& shape, int64_t n_here) {
             const dispatch::Route present =
