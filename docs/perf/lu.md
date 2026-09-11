@@ -12,7 +12,7 @@ Measurement context, unless stated otherwise: 2x RTX 4090 (sm_89, 128 SMs, 97,28
 
 | op | route order (`kGet??Order`) | native arms |
 |---|---|---|
-| `getrf` | `{Native,CTA}`, `{Native,Blocked}`, `{Vendor,Auto}` | CTA-resident leaf (`getrf_cta.cc`) and right-looking blocked driver (`getrf_blocked.cc`), sharing ONE `?GETF2` device body (`getrf_cta_device.hh`) |
+| `getrf` | `{Native,Tiny}`, `{Native,CTA}`, `{Native,Blocked}`, `{Vendor,Auto}` | register-resident sub-group tier (`getrf_tiny.cc`, pin-only -- see "The tiny tier"), CTA-resident leaf (`getrf_cta.cc`) and right-looking blocked driver (`getrf_blocked.cc`), the last two sharing ONE `?GETF2` device body (`getrf_cta_device.hh`) |
 | `getrs` | `{Native,CTA}`, `{Native,Blocked}`, `{Vendor,Auto}` | CTA = the **fused narrow-RHS kernel** (`getrs_fused.cc`); Blocked = the **composition** (`getrs_native.cc`: permutation + two routed `trsm`) |
 | `getri` | `{Native,Blocked}`, `{Vendor,Auto}` | one arm (`getri_blocked.cc`): write `P` straight into `C`, then two routed `trsm`. Zero workspace. |
 
@@ -85,6 +85,24 @@ The native-vs-native tie-break, consulted **only** in the vendor-free walk, so d
 `double` re-run across four batches at its worst order (n=76): 0.78 / 0.84 / 0.85 / 0.85 at batch 2048 / 4096 / 8192 / 16384 -- one-directional, flat in batch, every relative sd < 0.2%. `n <= 32` returns to CTA for `double` too, and that is not a hedge: there `nb = min(32, n) = n`, so the blocked driver runs one panel whose leaf **is** the CTA device function (1.8126 vs 1.8113 ms at n=32, batch 8192 -- the same code, one launch instead of three). Not declaring this hook would cost 1.18-1.29x at double n=76..96 in the build this campaign exists for.
 
 `route_getrs.hh:107` -- CTA (fused) always preferred over Blocked. No crossover to encode: the fused tier is ahead of the composition at **every** cell inside its own capability (51 cells, worst 1.11x at float n=2048 nrhs=8). The column where it would turn is nrhs=16 (double 0.55x, cfloat 0.58x at n=512), and that is outside `supports()` by `kGetrsFusedMaxRhs`. **If that constant is raised, this predicate must gain a window in the same change.** `getri` declares none -- one native arm, no native-vs-native question.
+
+
+#### Why Tiny is absent from the window
+
+`preferred()` names only the Blocked arm. Tiny is left out deliberately: R8b -- a non-empty
+`preferred()` pre-empts `native_tier_preferred` (`docs/design/small-n-factorization-plan.md`)
+-- means the FIRST native arm answering true there takes every shape it can hold, whatever
+the tier hook says, so a Tiny clause written before the grid exists would move
+vendor-**present** traffic onto an untimed tier. Its window is set from the measured grid in
+a separate change.
+
+In the tier hook the Tiny arm is spelled out rather than left to `default:`, which returns
+**true**. Without the explicit `case Algorithm::Tiny: return false;` the vendor-free walk and
+a bare `BATCHLAS_GETRF_ROUTE=native` pin would both hand Tiny every order <= 32 the day the
+kernel landed -- unmeasured, and invisible to a vendor-present build. The explicit `false`
+still leaves the tier reachable by an explicit `{Native, Tiny}` pin, which `route_resolve.hh`
+honours regardless of this hook. This arm and `preferred()` flip TOGETHER in the measured
+change.
 
 ## The vendor baseline and saturation
 
@@ -357,6 +375,32 @@ Everything here was built or measured and then rejected. Re-deriving any of it i
 12. **A pin that is refused is not a pin, and it silently becomes the other arm.** The `wp6_perf` sweeps drop rows on exactly this: 21 of `flat`'s 180 cells are `cta PIN-FELL-THROUGH to native:blocked` (every `n=2048` cell at `nrhs=8` for double/cfloat, and `nrhs=4` and `8` for cdouble -- the fused capacity cannot hold them), and the `getrf` tier sweep excludes four rows for the same reason. Any A/B that does not read the resolved route back per arm reports the *same* arm twice and calls it 1.00x. It is the same instrument failure as item 11, one layer down.
 13. **`BATCHLAS_GETRS_ROUTE=native` changed meaning** when CTA joined `kGetrsOrder` ahead of Blocked: a bare origin resolves to the first supported route of that origin, which is now the fused tier. Any baseline recorded with a bare `native` pin -- `experiments/wp6_lu/bench/run_cells.sh:37` and `kernels/run_grid.sh:39` export one value into all three LU variables at once -- is measuring a different `getrs` today than when it was recorded. Pin `native:blocked` to mean what `native` used to mean.
 
+## The shape of the GETRF device code
+
+`src/extensions/getrf_cta_device.hh` holds all of the native GETRF panel's device code.
+`getf2_panel_device` is LAPACK ?GETF2 -- unblocked right-looking LU with partial pivoting --
+over a `Tile` supplying `at(r, c)`, instantiated twice: on a `local_accessor` for the
+resident CTA tier, and on a raw global pointer for the blocked tier's panel leaf. Four
+spellings in it are load-bearing, and each is a wrong answer or a launch failure if changed:
+
+* **The pivot search is a sub-group butterfly plus a scan over 32 SLM slots**, never
+  `sycl::reduce_over_group`. The collective fails to launch, deterministically, near 48 KB
+  of local memory -- see [the 48 KB launch hole](#the-48-kb-launch-hole).
+* **The pivot metric is LAPACK's `cabs1`** (|Re| + |Im|), not the modulus cuBLAS uses for
+  complex, so a pivot test must take the HOST as oracle -- see
+  [correctness findings](#correctness-findings).
+* **`info` is exact-zero, 1-based, global and first-failure-wins**, with no epsilon pivot
+  floor. An epsilon floor would make a singular matrix succeed silently.
+* **Barriers B1..B4 sit at the top level of the `k` loop**, whose trip count is
+  kernel-uniform; the launchers add B0 after the tile load and B5 before store-back. A
+  barrier moved inside a divergent branch hangs rather than slows.
+
+`kLuRedSlots = 32` is CONSTANT rather than a function of the work-group width, so the
+capacity query, the fit predicate and the launcher agree on the SLM footprint. `LuRawTile`
+addresses its tile through a raw pointer because G matrices share one `local_accessor` and
+each needs its own base; the launcher pads `ld` ODD, because a row exchange walks `wg`
+work-items at stride `ld` and an even `ld` puts them all in one local-memory bank.
+
 ## Correctness findings
 
 * **The `info` zero-fill raced the panel that reads it, in BOTH native `getrf` tiers.** `getf2_panel_device` *reads* `info[b]` to keep first-failure-wins across panels, so the fill is a read-after-write dependence, not a pure output. On an out-of-order queue (the public API) the panel read the caller's pre-call garbage and wrote it back: **6,979 of 1,638,400 items on the CTA tier and 3,743 of 983,040 on the blocked tier returned the caller's own `-12345`**. Fixed with the `if (!ctx.in_order()) ctx.wait();` guard every other dependent boundary in the family already carried; re-measured 0 wrong of 1,638,400 and 0 of 983,040. Guarded by `LuTest.InfoFillIsOrderedAheadOfThePanelOnAnOutOfOrderQueue`; deleting the guard from both tiers turns it RED (4,682 of 1,638,400 CTA items, 4,370 of 491,520 blocked items). **The first version of that test stayed green with both guards deleted**, because a 300 MB host copy serialised the queue and closed the window it was testing -- [unverified: the ordinal is this page's own, not the sources'. `tests/potrf_tests.cc:641-908` is recorded as the repository's *fifth*, and `getrs_forward` below as the "sixth-plus"; no source numbers this one] the seventh blind guard in this repository, and the second written in the same change as the fix it guards.
@@ -431,3 +475,509 @@ Raw data is preserved at the tag `perf-evidence/vendor-independence`. Retrieve a
 | the `getrs` permutation-gather A/B and its boundary sweep, the wide-`nrhs` ladder, clause C and its gap sweep | `experiments/wp8_getrs/` -- `ab_p{1,2}.csv`, `ab_summary.txt`, `ab_bnd_p{1,2}.csv`, `lad_*.csv`, `hi_*.csv`, `cl_*.csv`, `gap_*.csv`, `clause_summary.txt` |
 | the clean device-1 re-measure that all three shipped windows are scored from | `experiments/wp8_getri/` -- `lu_c1.csv`, `lu_p1.csv`, `lu_p2.csv` (discarded), `summary_c1.txt`, `summary_p1c1.txt`, `pair_cells.sh`, `analyse.py`, `gen_floor.py` |
 | the campaign narrative: "WP6 has landed" and "The WP6/WP7 performance-closure pass" | `VENDOR_INDEPENDENCE_PLAN.md` |
+
+---
+
+## The occupancy rule
+
+**P7, 2026-09-10.** `getrf_cta_max_n_for_slm<T>(budget, min_blocks_per_sm)` and
+`getrf_cta_fits<T>(n, budget, min_blocks_per_sm)` divide the device budget by an occupancy
+target (default 4, `resident::kMinBlocksPerSm`) before testing the footprint. At this box's
+97,280 B budget the advertised ceilings become **77 / 54 / 54 / 38** for
+float / double / cfloat / cdouble, against 155 / 109 / 109 / 77 at target 1. Both scales
+are pinned budget-parameterised in `tests/resident_capacity_tests.cc`.
+
+The walk itself now lives in `src/util/resident_capacity.hh`, shared with potrf; the sqrt
+bound stays here because it is getrf-specific, and the `break` is unchanged.
+
+### One spelling per ceiling
+
+The header's declarations carry the contracts; this is what they mean.
+
+* `getrf_cta_max_n_for_slm<T>(budget, min_blocks_per_sm)` takes a **runtime**
+  `local_mem_size` budget, not `device_limits.hh`'s build-time constant, and the footprint
+  it walks must cover the **pivot-search scratch** as well as the tile. 0 means the tier is
+  absent from this build.
+* `kGetrfReferenceSlmBudget = 97280` (`getrf_cta.cc:35`) exists **only** for the
+  convenience overloads `getrf_cta_max_n<T>()` / `getrf_cta_max_n_for_slm<T>(budget)`, and
+  it is this box's figure: `local_mem_size` reports **101,376 B**, less the standard
+  **4,096 B** reserve. The generated `device_limits.hh` says **49,152** for any
+  `nvidia_gpu_sm_*` pattern with no device query at all
+  (`cmake/BatchLASDetectSYCL.cmake:45-46`) — **2.06x wrong here**, which is why nothing on
+  a real decision path reads it. Same number, same reason, as
+  [potrf.md's budget section](potrf.md#the-slm-budget-and-the-fit-ceilings) and
+  `geqrf_cta.cc`'s `kGeqrfReferenceSlmBudget`.
+* `getrf_cta_fits` is the tier's admission test and is occupancy-scaled by default;
+  `getrf_leaf_fits` is the residency question and is asked at the whole budget. See [the
+  panel leaf is not the tier ceiling](#the-panel-leaf-is-not-the-tier-ceiling).
+* `getrf_tiny_max_n<T>()` is a compile-time property of the **kernel** — the {8, 16, 32}
+  template ladder — not of the device: the tier holds no local memory at all, so no budget
+  enters and there is no walk. 0 would spell "absent from this build"; it never is. It is
+  the ONE place that ceiling is spelled, called by the capacity query, the route builder,
+  the dispatch entry point and the tests alike.
+* `getrf_tiny_buffer_size` is **not** zero: the kernel needs no algorithmic workspace, but
+  a short or empty caller `info` span means "not requested" and draws pool scratch, as
+  every tier's sizing does.
+* `getrf_cta_debug_launch<T>(ctx, m, n)` packs **G (matrices per work-group) in the low 16
+  bits and the work-group width in the high 16**, and answers 0 when the panel is not
+  resident. The pairing `G > 1` ⟺ sub-group-scoped barriers is derived inside the launcher,
+  so this hook is the only way to observe it from outside — see [packed resident
+  leaves](#packed-resident-leaves).
+* `getrf_blocked_debug_params<T>(ctx, n)` packs **nb in the low 16 bits and the leading
+  panel's leaf in the high 16** (1 = local, 2 = global); 0 when the driver is absent.
+
+### The panel leaf is not the tier ceiling
+
+`getrf_leaf_fits` is deliberately **not** occupancy-scaled, and `getrf_panel_factorize`
+and `getrf_blocked.cc` keep asking it at the whole budget. The residency question is
+"resident tile or global-memory stream", and a blocked panel that stops being resident is
+a large-n regression rather than an occupancy win: at float n = 512, nb = 32 the panel is
+513 x 32 x 4 = 65,664 B, resident at 97,280 and *not* at 24,320, and getrf's 1.25-2.35x
+wins at n >= 256 all run through it. One predicate serving both questions is what made
+this a trap; there are now two, and the launcher's `internal_error` still asserts they
+agree in the direction that matters (advertised implies resident).
+
+### Packed resident leaves
+
+`getf2_panel_device` is templated on `LuScope`. Under `SubGroup` every phase barrier is a
+sub-group barrier, the cross-team argmax scan and its B1 disappear (the butterfly already
+spans every lane that scanned the column), and `getrf_leaf_launch` places
+`pack_matrices_per_wg` matrices in one work-group, one per sub-group. Offered only while
+`m <= 32 && n <= 32`; above that the panel wants `getrf_leaf_wg`'s wider group and its
+work-group barriers. `G > 1` under `WorkGroup` scope is a race by construction -- a wrong
+answer, not a launch failure -- so the launcher derives the two together and
+`getrf_cta_debug_launch` is the only way to see the pairing from outside.
+
+Native arm, large batch, against `benchmarks/results/factor_baseline_getrf_*.csv`:
+
+| type | n | batch | vendor | before | after | ratio |
+|---|---|---|---|---|---|---|
+| float | 8 | 32768 | 0.0319 | 0.1216 | 0.0680 | **0.559** |
+| float | 16 | 32768 | 0.1218 | 0.2605 | 0.1636 | **0.628** |
+| float | 32 | 16384 | 0.3159 | 0.5730 | 0.4596 | **0.802** |
+| double | 16 | 32768 | 0.4088 | 1.4945 | 0.7790 | **0.521** |
+| cfloat | 16 | 32768 | 0.2280 | 0.3422 | 0.2233 | **0.653** |
+
+1.25-1.92x, and it closes rather than crosses the vendor gap (float n = 8 goes from 3.8x
+behind cuBLAS to 2.1x). The register probe shows the SubGroup instantiations at
+33/49/35/62 registers for float/double/cfloat/cdouble against 49/62/52/46 for the
+WorkGroup ones, zero spill on every entry function.
+
+### Negative result: registers are not why packing wins
+
+The packed path is not cheaper per matrix -- it gives each matrix 32 lanes where the
+unpacked launcher gave it 64 to 512. The win is the barrier scope and the number of
+matrices in flight per work-group, which is why it is gated on the band where one
+sub-group is enough work rather than applied wherever the tile fits.
+
+## The tiny tier
+
+`Algorithm::Tiny` (`src/extensions/getrf_tiny.cc`), the register-resident `getrf` arm
+for order `n <= 32`. It lands **pin-only**: `preferred()` is false for it and
+`native_tier_preferred()` carries an explicit `case Algorithm::Tiny: return false;`, so
+`automatic()`, the vendor-free walk and a bare `native` pin all resolve exactly as they
+did before. Only `BATCHLAS_GETRF_ROUTE=tiny` reaches it. The window comes from the
+measured grid in a separate PR.
+
+Shape: one matrix per `SubGroupPartition<N>`, `N in {8, 16, 32}` from the compile-time
+ladder (`n <= 8 -> 8`, `<= 16 -> 16`, `<= 32 -> 32`), lane `r` owning row `r` in a
+`D rA[N]` register array; `32/N` matrices per sub-group and `tiny_native::kTinySubGroups`
+(2) per work-group, so 8 / 4 / 2 matrices per work-group of 64 -- see "The work-group
+A/B" below for why 2 and not 4. Rows and columns past `n`
+carry the identity, so the padded tile is `[[A, 0], [0, I]]` and the unrolled body needs
+no lane guard. Partial pivoting is a **lazy relabel** (`rowid`), never a row move; the
+pivot metric is LAPACK's `cabs1`; `ipiv` is 1-based and global; the elimination
+continues finitely past a zero pivot (MAGMA's `update = 0`).
+
+Zero local memory and **zero barriers of any scope** -- `ptxas` reports `used 0
+barriers, 0 bytes smem` for all 22 entry functions -- so the `(47104, 49664]` launch
+hole is structurally unreachable here and none of the defensive 49,920 padding the CTA
+tiers carry is present.
+
+### The register probe, and the unroll that decides it
+
+`scripts/register_probe.sh out.log '' batchlas_extensions_cta`, 11 instantiations
+(4 types x 3 N, less cdouble N=32), both the `<name>` and `<name>_with_offset` variants:
+
+| type | N=8 | N=16 | N=32 |
+|---|---|---|---|
+| float | 48 | 63 | 96 |
+| double | 64 | 90 | 138 |
+| cfloat | 62 | 86 | 143 |
+| cdouble | 94 | 138 | not instantiated |
+
+Every cell: **stack frame 0, spill stores 0, spill loads 0, smem 0, barriers 0.** Worst
+`regs x work_group_size` = 143 x 64 = **9,152** against the 65,536 hard limit, i.e. 7.2x
+of slack. `kWorstRegsPerThread` in the TU is set to 143 and static_asserts on it. (The
+table was first taken at `wg = 128`; the work-group A/B below moved it to 64 and did not
+move a single register count.)
+
+**Two spellings decide whether the array is in registers at all, and neither is
+diagnosed as an error.**
+
+1. `if (j >= n) break;` inside `#pragma unroll` makes the trip count data-dependent.
+   This toolchain then declines the unroll (`-Wpass-failed`: "loop not unrolled"), `rA`
+   becomes dynamically indexed, and `ptxas` relocates it to the stack **with zero
+   spill**, so the probe's own gate stays green. Measured with `break`: float N=32 came
+   back at 128 B stack frame -- exactly 32 floats -- and 40 registers; double N=16 128 B
+   / 48 registers; cdouble N=16 256 B / 56 registers. N=8 was unaffected. Replacing
+   `break` with `continue` -- the guard is kernel-uniform either way, because the entry
+   point rejects a heterogeneous batch -- put every one of those cells back in
+   registers.
+2. Writing the rank-1 update as `for (k = 0; k < N; ++k) { if (k <= j) continue; ... }`
+   asks the unroller to build `N(N+1)/2` copies and then fold half of them away. At the
+   widest complex cell it gave up part way: cfloat N=32 alone kept a 256 B frame (32
+   `Cx<float>`) at 69 registers while every other cell was clean. Starting the loop at
+   the compile-time bound, `for (k = j + 1; k < N; ++k)`, fixed that cell (143
+   registers, frame 0) and changed no other.
+
+The moral for the sibling tiers: **stack frame is the wrong gate for a spill hunt but
+the right gate for a residency claim.** A register-resident design that reports zero
+spill and a frame equal to `N * sizeof(D)` is not register-resident.
+
+### Pad rows and the argmax, corrected
+
+The design this tier was built to claimed that masking padded rows out of the pivot
+candidate set (`rowid < n`) was load-bearing, because a pad row carries the identity
+and so reads exactly 0 in a live column -- which is not *smaller* than every live
+candidate when that column is entirely zero. **Armed and measured: removing the mask
+changes nothing.** The property is guarded by the tie-break DIRECTION instead: the
+argmax key orders ties towards the lowest `rowid`, and `rowid == j` is always a live
+candidate because `j < n`, so a pad row can never win a tie it is only ever tied in.
+Reversing the tie-break (`ok < key` -> `ok > key`) is what elects a pad row, and on a
+padded order that yields `ipiv[j] > n`. The mask is kept as intent, not as the guard.
+
+**Why the argmax carries a (magnitude, key) PAIR and not one packed `uint64`.** Packing
+the magnitude and the rowid into a single 64-bit word so the butterfly can compare one
+value is exact only for a 32-bit magnitude, and on a 32-bit shuffle unit it still costs
+**two 32-bit shuffles per round** -- it saves the compare, not the traffic. The pair form
+is therefore no more expensive and stays exact for `double`. The XOR mask is a power of
+two below N and so is uniform across the whole 32-lane sub-group, which is what
+`sg_compat.hh`'s non-NVPTX fallback requires.
+
+The NaN map is real and is not shared with the CTA tier's reasoning.
+`getrf_cta_device.hh` is safe from NaN for free -- it seeds its running best at `R(-1)`
+and updates through `v > bv`, so a NaN never enters. The tiny argmax seeds every lane
+from its OWN magnitude, and `ov > NaN` and `ov == NaN` are both false, so an unmapped
+NaN survives every butterfly round and the lanes end up disagreeing about the winning
+LANE: different broadcast sources, a wrong factor, no crash. Measured with the map
+removed: float n=4 item 0 returned `ipiv[1] = 3` where the CTA oracle returns 2; cfloat
+n=4 item 0 returned `ipiv[3] = 9`, which is not even inside `[4, 4]`.
+
+### Armed breaks
+
+Each was applied, built, observed red, and restored.
+
+| break | expected | observed |
+|---|---|---|
+| (a) `act = (rowid > j)` -> `rowid >= j` | pivot row scales itself; residual red | float n=1 b=0, `\|\|PA-LU\|\|/\|\|A\|\|` = 1.25 vs tol 2.38e-05, red at every larger n |
+| (b) drop `if (k >= n) continue` from the store | pad written | float `n=1, ld=6, stride=17`, element 6 -- item 0's column 1, the first column past the matrix -- differs from `alloc()`'s poison by 9750. The residual goes red too (float n=2, **0.708** against tol **4.77e-05**, every item) but only at `ld = n`, where item b's pad columns land inside item b+1; at `ld = n+5` they do not, and then the pad assertion is the ONLY one that fires |
+| (c) `ok < key` -> `ok > key` in `tiny_argmax_pair` | exact `cabs1` tie goes to the wrong row | float n=4, `ipiv[0] = 3` where 1 is required, every item; residual, `worst_pivot_ratio` and the planted-zero-column case all stayed GREEN |
+| (d) `tiny_partition_id` -> `part.get_group_linear_id()` | 4 sub-groups alias 4 matrices | float n=1 batch 19, item 4 untouched: `ipiv[0] = 195935983` (0x0BADBEEF), `info` still -12345 |
+| (e) drop `rowid < n` from the candidate mask | pad row wins, `ipiv > n` | **PASS** -- see above; the guard is the tie-break direction, not the mask |
+| (f) drop the `mag == mag` NaN map | pivots diverge from the CTA oracle | float n=4 `ipiv[1]` 3 vs 2; cfloat n=4 `ipiv[3] = 9`, outside `[4, 4]` |
+| (g) add `sycl::group_barrier(it.get_group())` | source check red | red, quoting the inserted line; no rebuild needed |
+| (g') add a 1-element `sycl::local_accessor` | source check red | red on the `local_accessor` token |
+| (h) `lu_cabs1` -> the modulus, in the SHARED `getrf_cta_device.hh` | `TinyPivotsMatchLapacke` red on the complex types; the tiny-vs-CTA cases GREEN, because both tiers read that helper | exactly that. cfloat n=2 b=1 `ipiv[0] = 1` where the host oracle requires 2, at an argmax margin of 0.987; cdouble likewise. `TinyPaddingIsInertAgainstTheCtaRoute`, `TinyArgmaxIgnoresANaNCandidate` and `TinyBreaksAnExactCabs1Tie` stayed green on ALL FOUR types. `TinyFactorisesAndPivotsExactlyAtEveryOrder` also went red, via `expect_piv` |
+| (i) `if (j >= n) continue` -> `break`, then read the PROBE | the array leaves registers with ZERO spill, so the probe's own headline gate stays green and only the stack-frame column moves | 28 `-Wpass-failed` "loop not unrolled" warnings; probe summary still reported "entry functions with non-zero spill (THIS IS THE GATE): **0**"; and **14 of 22 functions grew a stack frame of exactly `N * sizeof(D)`** -- float N=16 64 B, float N=32 128 B, double N=16 128 B, double N=32 256 B, cfloat N=16 128 B, cfloat N=32 256 B, cdouble N=16 256 B, every N=8 cell unaffected. Registers collapsed with it (float N=32 96 -> 64, cfloat N=32 143 -> 66, cdouble N=16 138 -> 68) |
+
+(a), (d), (h) and (i) were re-armed and re-observed after the work-group moved to 64;
+(d) in particular can only fail at more than one partition per work-group, so it is the
+one the work-group change could have invalidated. It did not: float n=1 batch 19 item 4
+still came back completely untouched, `ipiv[0] = 195935983` (0x0BADBEEF) and `info` still
+-12345, identical to the wg=128 observation.
+
+### The work-group A/B
+
+The tier shipped its first draft at a work-group of **4 sub-groups (128)**, justified in
+the source comment by "a wider group divides the launch tail further". **That reason is
+backwards.** The launch tail wastes up to `kMpw - 1` partitions and `kMpw` is `wg / N`,
+so a wider work-group makes the tail COARSER: at `N = 8`, `wg = 128` wastes up to 15
+partitions where `wg = 64` wastes at most 7. getrf was also the odd tier out --
+`potrf_tiny.cc` and `geqrf_tiny.cc` both take the shared `tiny_native::kTinyWgSize`
+(2 x 32 = 64).
+
+Measured A/B, one binary rebuilt between the two runs, 30 cells each
+(4 types x `n in {4, 8, 16, 32}` x `batch in {4096, 16384}`, cdouble n=32 excluded by
+D3), 7 reps, arms `vendor,cta,tiny` interleaved in one process under
+`benchmarks/gpu_guard.sh 1`. Raw: `benchmarks/results/p1_tiny_getrf_wg{128,64}.csv`.
+
+| | cells |
+|---|---|
+| wg=64 faster by > 2% | 2 |
+| wg=64 slower by > 2% | 2 |
+| within 2% | 26 |
+
+Both apparent losses were re-run and did NOT reproduce: cfloat n=32 b4096 came back at
+0.1555-0.1565 ms against the grid's one-off 0.1840 (wg=128 measured 0.1549), and cfloat
+n=8 b4096 sits in a 0.0114-0.0119 band that both grids fall inside. The one cell that
+moves reproducibly is **cdouble n=16 batch 16384: 0.7038 ms at wg=128 against
+0.6693-0.6701 ms across three independent wg=64 runs, a stable 5% win** -- the widest
+cell the tier holds for that type.
+
+**Decision: wg = 64.** Not because 5% in one cell is decisive, but because the A/B says
+the work-group is not a performance knob at all here, and the tie then goes to the value
+that (a) is the shared constant the other two tiny tiers already use, (b) halves the
+launch-tail waste, and (c) doubles the register-gate slack (143 x 64 = 9,152 against
+65,536, 7.2x, where wg=128 gave 3.6x).
+
+**A prediction that did NOT survive contact.** The occupancy arithmetic the change was
+argued from -- registers/SM divided by the block's demand, giving blocks/SM and hence
+"matrices resident per SM" -- predicted wg=64 would win 8-17% in five cells (float n=8,
+double n=32, cfloat n=16, cfloat n=32, cdouble n=16). Four of those five measured as a
+wash. Register counts are identical between the two work-groups in all 22 entry
+functions, so the model's inputs were right and its conclusion was still wrong: at these
+sizes the tier is bound by outstanding memory requests, and the number of resident warps
+stops mattering long before the occupancy table says it should. **Occupancy is not this
+tier's figure of merit; do not tune it against one.**
+
+### First timing: the tiny tier against cuBLAS and the CTA tier
+
+Ratios are `vendor_ms / tiny_ms` and `cta_ms / tiny_ms`; **> 1 means the tiny tier
+wins**. wg = 64, 7 reps, three arms interleaved in one process, `rel_sd` under the 10%
+gate on every row, and every row's untimed correctness re-run reported `ok` with zero
+pivot mismatches against the harness's host `xgetrf`. Raw:
+`benchmarks/results/p1_tiny_getrf_wg64.csv`.
+
+| type | n | batch 4096 vs vendor | batch 16384 vs vendor | b16384 vs CTA |
+|---|---|---|---|---|
+| float | 4 | **1.76** | **1.43** | 2.65 |
+| float | 8 | **1.74** | **1.49** | 2.66 |
+| float | 16 | **1.70** | **1.65** | 2.13 |
+| float | 32 | **1.24** | **1.05** | 1.54 |
+| cfloat | 4 | **1.60** | **1.28** | 2.57 |
+| cfloat | 8 | **1.52** | **1.30** | 2.66 |
+| cfloat | 16 | **1.34** | **1.31** | 1.58 |
+| cfloat | 32 | 0.71 | 0.64 | 1.22 |
+| double | 4 | **1.29** | 0.69 | 3.55 |
+| double | 8 | **1.17** | 0.86 | 3.49 |
+| double | 16 | 0.80 | 0.71 | 1.46 |
+| double | 32 | 0.71 | 0.65 | 0.88 |
+| cdouble | 4 | 0.95 | 0.52 | 3.55 |
+| cdouble | 8 | 0.96 | 0.80 | 3.17 |
+| cdouble | 16 | **1.23** | **1.41** | 1.33 |
+
+**The plan's kill criterion is met.** "If float n=32 tiny is below 1.0x of cuBLAS at
+batch 16384, stop and record the number": it measured **1.051x** (0.29912 ms against
+0.31445). It is the narrowest win in the float column and it is a win.
+
+**The tier beats the CTA tier it would replace in 14 of 15 cells**, by 1.2-3.6x, the one
+exception being double n=32 at 0.88. That is the comparison the design was really
+making, and it is not close.
+
+Against the VENDOR the picture splits exactly as predicted, and the two predictions the
+grid existed to falsify both survived:
+
+* **Predicted wins -- float and cfloat at n <= 16.** Measured 1.28-1.76x. Confirmed.
+* **Predicted loss -- the widest complex cell, cfloat n = 32.** Measured 0.64-0.71x.
+  Confirmed.
+
+Three results the design did NOT predict:
+
+1. **float n = 32 wins** (1.05-1.24x), where the residency table predicted a loss on the
+   same reasoning that correctly predicted cfloat n=32's.
+2. **cdouble n = 16 wins** (1.23-1.41x) while cdouble n = 4 and 8 LOSE (0.52-0.96x) --
+   the opposite of the monotone-in-n shape every other type shows.
+3. **double and cdouble lose ground as the batch grows** (double n=4: 1.29x at b4096,
+   0.69x at b16384), where float and cfloat only soften. The FP64 rate is 1/64 here, so
+   these two types reach their compute roof while the 32-bit types are still on the
+   memory roof, and a larger batch just buys the vendor more of what it is better at.
+
+Result (2) is worth a sentence because it is where the padding cost is visible in
+isolation: at `n = 4` the `N = 8` bucket does 4x the useful arithmetic and reads a 16-byte
+column out of a 32-byte sector, i.e. 2x structural over-fetch that no mapping in this
+family removes. **The roof for a small `n` is SECTOR-ROUNDED, not `n^2`**, and a
+ratio-to-roof computed from `4 n^2 sizeof(T) batch / 950 GB/s` will read `n = 4` as a
+failure against a ceiling it cannot reach.
+
+`preferred()` is still all-false and this PR does not change it: the window belongs in
+the change that also runs the padded orders (`n = 9, 17, 24`) and the intermediate
+batches, which this grid does not cover.
+
+### The pivot-margin gate on elementwise comparisons
+
+Comparing a pivot SEQUENCE elementwise against any other implementation is only well posed
+where the argmax is decided by more than rounding. After a few rank-1 updates two
+candidates in unstructured data can sit within 1 ULP of each other, and then the device
+(which contracts `a - b*c` into an FMA) and the host (which does not) legitimately pick
+different rows — both correct LU factorisations, both with correct residuals. **Measured
+before this guard existed: double n = 10, item 0, `ipiv[6] = 7` against LAPACKE's 9, at a
+margin of ~1 - 1e-16.**
+
+`host_getf2_with_margins` therefore records, at each step,
+`margin[k] = cabs1(runner-up) / cabs1(winner)`, in [0, 1], and every elementwise pivot
+assertion stops at the first step whose margin is within `kTinyAmbiguous` of 1 — because
+every step after a divergence is a factorisation of a different matrix.
+
+`TinyPivotsMatchLapacke` is the only case in `tests/getrf_tests.cc` whose oracle shares no
+line of code with the kernel under test. `expect_piv` is the permutation
+`make_dominant_permuted` built, so the winner at each step is forced by construction and
+the data is never ambiguous; and the tiny-vs-CTA cases compare against a tier that
+`#include`s the same `getrf_cta_device.hh` and calls the same `lu_cabs1`, so a defect in
+the shared pivot METRIC moves both tiers together and leaves every one of them green —
+which is exactly what break (h) above measured. It runs on `make_random` deliberately: on
+a dominant-permuted matrix the argmax is decided by a gap of orders of magnitude, so a
+merely WRONG metric still picks the right row.
+
+It carries TWO oracles. `host_getf2_with_margins` is a BLAS-free triple loop, correct on
+any machine, and it supplies the margins. LAPACKE is the reference implementation, and is
+cross-checked against the triple loop — but only on cells where LAPACKE passes a residual
+check on its OWN factor, for the reason the next section records. The gate is therefore:
+the DEVICE is always asserted against the triple loop; LAPACKE is additionally asserted
+against it wherever LAPACKE can be trusted. The case counts the cells it had to drop and
+fails if LAPACKE was untrustworthy EVERYWHERE, because a silent fallback would let the
+LAPACKE arm quietly stop testing anything.
+
+### Why the tiny-vs-CTA element bound is relative
+
+`TinyPaddingIsInertAgainstTheCtaRoute` factorises an order inside a wider bucket and
+compares against the CTA tier, which is the oracle for the transition period because it
+carries no compile-time `N` at all and so cannot share a padding defect.
+
+It is NOT bit-exact: the two bodies are separate translation units and nothing forbids the
+compiler from contracting one multiply-subtract and not the other. The PIVOT SEQUENCE is
+compared exactly, because that is integer bookkeeping and a padding defect shows there
+first.
+
+The element bound is RELATIVE, and tight. Contraction is the only licensed difference: one
+fused multiply-add per elimination step, so the two factors may part by a few ulp of the
+value they hold, times the n steps that value passed through — never by a fixed slack
+measured against the largest entry in the matrix. The fixture's diagonal is `4n` while its
+off-diagonal entries are O(1), so an ABSOLUTE bound scaled by `4n` licenses thousands of
+ulp on exactly the entries where a padding defect shows up; scaling by the reference
+element instead keeps the bound at a few ulp everywhere. The allowance is `4 * n` ulp per
+element — the factor of four is margin for a toolchain that contracts differently in the
+two translation units, and it is margin and nothing else: **on this box the two tiers agree
+EXACTLY at every order, type and element of the sweep.**
+
+### The host dgetrf oracle is broken on this box
+
+**`LAPACKE_dgetrf` on this machine returns a wrong factorisation for every `n >= 10`.**
+Measured in a 40-line standalone C program with no BatchLAS code linked at all
+(`gcc -O0 lap_check.c -llapacke -llapack -lblas`), random matrices, residual
+`||PA - LU||_F / ||A||_F` computed from LAPACKE's own returned factor and interchange
+list:
+
+| n | dgetrf residual | sgetrf residual |
+|---|---|---|
+| 2..9 | 0 .. 1.4e-16 | 6e-09 .. 5e-08 |
+| 10 | **4.20e-01** | 5.50e-08 |
+| 11 | **8.29e-01** | 6.78e-08 |
+| 12..15 | **4.3e-01 .. 4.9e-01** | 5.3e-08 .. 7.3e-08 |
+| 16 | **1.10e+00** | 7.26e-08 |
+
+`n = 10` is where LAPACK's recursive `dgetrf2` starts issuing a `dgemm`, and `sgetrf` is
+correct at every order -- the signature of this box's known-bad OpenBLAS double GEMM
+kernel, which the memory ledger records under "Broken OpenBLAS dgemm on this machine".
+Nothing in BatchLAS is involved.
+
+Consequence for the test suite: `TinyPivotsMatchLapackeOnUnstructuredData` cannot use
+LAPACKE as an unconditional oracle. It runs a BLAS-free triple-loop `getf2` as the
+primary oracle (correct on any machine, and it also supplies the argmax MARGIN, without
+which an elementwise pivot comparison is not well posed at all), and cross-checks
+LAPACKE against it only on cells where LAPACKE passes a residual check on its own factor.
+The case counts the cells it dropped and FAILS if LAPACKE was untrustworthy everywhere,
+so the arm cannot silently stop testing. Observed on this box: the `double`
+instantiation drops **161 of 224 cells**, which is exactly the `n >= 10` cells at
+`batch = 7` (`(32 - 9) * 7 = 161`); float, cfloat and cdouble drop none.
+
+### R7: the device link, all three tiny tiers landed
+
+**This is the ONE site for the tiny tier's R7 figure**; `docs/perf/potrf.md` and
+`docs/perf/qr.md` point here rather than carrying a third and fourth copy. The number is
+a property of `batchlas_extensions_cta` as a whole, not of any one tier.
+
+`docs/perf/potrf.md` recorded 151 s with `geqrf_tiny` landing concurrently and
+`getrf_tiny` in flight, called it not attributable, and asked for a re-measure once all
+three had landed. They have.
+
+`time cmake --build build/presets/dev-tests --target batchlas_extensions_cta --parallel 4`
+after touching `getrf_tiny.cc`: **167.4 s** (2m47.4) against the 117-125 s recorded
+baseline, i.e. **+34% to +43% for the LIBRARY** with all three tiers present.
+
+Attribution, from the probe log's per-function `Compile time` fields (982 entry functions,
+182.9 s of `ptxas` in total):
+
+| tier | entry functions | ptxas | share of library total |
+|---|---|---|---|
+| `getrf_tiny` | 22 | 19.2 s | **10.5%** |
+| `geqrf_tiny` | 22 | 19.4 s | 10.6% |
+| `potrf_tiny` | 22 | 11.2 s | 6.1% |
+| all three | 66 | 49.8 s | 27.2% |
+
+**getrf_tiny is inside R7's 15% budget at 10.5%. The three tiers TOGETHER are not**, at
+27.2% of `ptxas` and a +34-43% wall-clock delta on the library. That is a fact about the
+package as a whole, not about this tier, and it is recorded here rather than silently
+split three ways: whoever adds a fourth tier to `batchlas_extensions_cta` inherits it.
+
+**The written justification R7 requires, since the budget is exceeded.** The 66 entry
+functions are not redundancy that can be traded away: they are 3 ops x 3 compile-time
+`N` buckets x 4 types, less the capped cdouble N=32 cell, each also emitted as
+`_with_offset`. `N` is what makes `rA[N]` a register array rather than a dynamically
+indexed one, which is the whole tier -- collapsing the buckets to a runtime `n` moves
+`rA[]` to the stack and costs the win outright (the unroll finding above). The type list
+is the library's public contract. The `_with_offset` pair is the batched/strided split
+every kernel in this library already carries. The only lever that does not destroy the
+tier is the bucket count, and P1 already ships the minimum that covers `n <= 32` on a
+32-lane sub-group (`tiny_n_is_legal`: 8, 16, 32). The cost is accepted knowingly and
+paid once, at build time, for a tier that is 2-4x on the shapes it serves.
+
+**Re-measure hygiene.** The figure is contention-sensitive: a repeat of the same
+touch-one-TU build while another compile job held the box came in at **206.3 s**. Take
+this number on an idle machine or not at all.
+
+### The register probe at wg = 64
+
+`scripts/register_probe.sh out.log '' batchlas_extensions_cta`. 22 entry functions
+(4 types x 3 N, less cdouble N=32, each also as `_with_offset`). **Register counts are
+identical to the wg=128 table above** -- the work-group does not enter them.
+
+Every one of the 22: **stack frame 0, spill stores 0, spill loads 0, 0 bytes smem,
+0 barriers.** Worst `regs x work_group_size` = 143 x 64 = **9,152** against the 65,536
+hard limit, 7.2x of slack.
+
+### D3: why cdouble stops at N=16
+
+`rA[32]` for `Cx<double>` is 128 registers before any working set, and the probe puts
+the N=16 cell at 138 registers already. With G-packing the compute-to-DRAM ratio is
+`r = N*q / (43.1*s)` (`q` = clocks per warp-instruction of the update: 0.25 float, 1.5
+cfloat, 16 double, 96 cdouble; `s` = bytes per element), which for cdouble at N=32 is
+4.45 -- predicted 565 us x 4.45 = 2,514 us against a measured vendor 2,917 us, i.e.
+1.16x. Not worth the spill risk. Re-opening the decision is the one `tiny_cap<T>()`
+constant.
+
+### The pivot key encoding
+
+`tiny_device.hh`'s `tiny_key(order_field, lane)` is the tier's ONLY pivot-key encoding,
+and both halves are load-bearing:
+
+* the **ordering field**, in the high bits, decides ties — lowest wins, `I?AMAX`'s order —
+  and is what makes a pad row unable to win a tie it is only ever tied in;
+* the **winner's lane**, in the low `kTinyKeyLaneBits = 8` bits, is carried only as a
+  broadcast source for `tiny_bcast`.
+
+The caller must keep every ordering field DISTINCT within the partition, or the lane bits
+start deciding a tie they know nothing about. `getrf_tiny.cc` does that by seeding a
+non-candidate at `rowid + N` rather than at `rowid`, which sorts every non-candidate
+strictly below every candidate and so lets even an all-NaN live column elect a live row.
+Reversing the comparison is break (c) above; dropping the `mag == mag` NaN map is break
+(f). `tiny_argmax_pair` itself owes nothing to the caller except that seed: `ov > a` and
+`ov == a` are both false when either operand is NaN, so a lane seeded with NaN keeps it
+through every round and the partition ends with lanes disagreeing about the winner — a
+silent wrong answer, not a crash.
+
+### Why the rank-1 update starts at `k = j + 1`
+
+`for (k = j + 1; k < N; ++k)` is a compile-time lower bound once `j` is unrolled. The
+equivalent-looking `for (k = 0; k < N; ++k) { if (k <= j) continue; ... }` asks the
+unroller to build `N(N+1)/2` copies and then fold half of them away, and at the widest
+complex cell it gives up part way and leaves `rA` indexed dynamically — the measured cell
+and its 256 B frame are item 2 of [the register probe, and the unroll that decides
+it](#the-register-probe-and-the-unroll-that-decides-it).
+
+The store loop's guard is `lane < n` and not `rowid < n`: a lane indexed at or above `n`
+keeps a `rowid` at or above `n` for the whole loop, so the two are equivalent and the lane
+form is loop-invariant. And the tier writes `info` once per item and never reads it, so —
+unlike the CTA tier, whose `getf2_panel_device` READS `info` for first-failure-wins across
+panels — it needs no zero pre-fill, and cannot serve as a blocked-driver panel leaf until
+one is added.

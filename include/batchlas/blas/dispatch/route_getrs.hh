@@ -1,8 +1,7 @@
 #pragma once
 
-// GETRS routing table (docs/perf/lu.md). {Native, CTA} is the fused narrow-RHS kernel
-// (getrs_fused.cc): one work-group per matrix, permutation and both substitutions in a
-// single launch. {Native, Blocked} is the composition (getrs_native.cc): laswp + 2 trsm.
+// GETRS routing table. {Native, CTA} is the fused narrow-RHS kernel (getrs_fused.cc);
+// {Native, Blocked} is the composition (getrs_native.cc): laswp + 2 trsm.
 
 #include <batchlas/blas/dispatch/route.hh>
 #include <batchlas/blas/dispatch/route_resolve.hh>
@@ -15,8 +14,8 @@ namespace batchlas::dispatch {
 struct GetrsShape : OpShape {
     bool blocked_available = false;
 
-    // Enumerated from sub_group_sizes: the fused kernels carry
-    // [[sycl::reqd_sub_group_size(32)]], so a {64}-only device cannot launch them.
+    // From sub_group_sizes: the fused kernels carry reqd_sub_group_size(32), so a
+    // {64}-only device cannot launch them.
     bool has_sg32 = false;
 
     // Bounds n*nrhs, not n: the fused kernel holds the whole RHS block in local memory.
@@ -73,14 +72,13 @@ struct RouteTable<Op::getrs, T> {
         }
     }
 
-    // The measured window, native vs vendor: CTA at order >= 32 with nrhs <= 2 (all types)
-    // and <= 4 (float); the composition at batch >= 128, nrhs >= 64 (float) / >= 128 (double).
-    // evidence: docs/perf/lu.md#getrs-fused-window-evidence, #getrs-composition-window-evidence
+    // Every clause below is a window EDGE. evidence: docs/perf/lu.md#getrs-fused-window-evidence
     static bool preferred(Route r, const GetrsShape& s) {
         if (!is_native(r)) return false;
 
         if (r.algo == Algorithm::Blocked) {
-            // Conservative: at nrhs = 128 the composition still wins at batch 32-64.
+            // Deliberately conservative; it gives up measured wins below 128.
+            // evidence: docs/perf/lu.md#getrs-composition-window-evidence
             if (s.batch < 128) return false;
             if constexpr (std::is_same_v<T, float>)  return s.nrhs() >= 64;
             if constexpr (std::is_same_v<T, double>) return s.nrhs() >= 128;
@@ -89,9 +87,8 @@ struct RouteTable<Op::getrs, T> {
 
         if (r.algo != Algorithm::CTA) return false;
 
-        // Order floor, and it is a defect fix rather than a tuning knob: clauses A and B
-        // shipped unbounded on a grid whose smallest order was 32 and lose below it in live
-        // routed traffic. evidence: docs/perf/lu.md#getrs-order-floor-evidence
+        // A defect fix, not a knob: A and B shipped unbounded on a grid whose smallest
+        // order was 32. evidence: docs/perf/lu.md#getrs-order-floor-evidence
         if (s.order() < 32) return false;
 
         if (s.nrhs() <= 2) return true;                  // clause A
@@ -102,8 +99,8 @@ struct RouteTable<Op::getrs, T> {
         return false;
     }
 
-    // Native-vs-native tie-break for the vendor-free walk: CTA leads the composition
-    // everywhere inside supports(); raising kGetrsFusedMaxRhs needs a window here.
+    // Vendor-free tie-break: CTA leads everywhere inside supports(), so raising
+    // kGetrsFusedMaxRhs needs a measured window here first.
     static bool native_tier_preferred(Route r, const GetrsShape& s) {
         if (!is_native(r)) return true;
         static_cast<void>(s);

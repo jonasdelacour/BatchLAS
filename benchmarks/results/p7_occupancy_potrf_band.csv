@@ -1,0 +1,13 @@
+op,type,m,n,nrhs,batch,arm,pin,pin_parsed,median_ms,mean_ms,rel_sd,reps,residual,extra_check,info_nonzero,bad,reason
+potrf,float,80,80,0,2048,vendor,vendor,1,0.207588,0.207524,0.0023,7,8.184e-08,0.000e+00,0,0,ok
+potrf,float,80,80,0,2048,native,native,1,0.686105,0.685813,0.0011,7,9.532e-08,0.000e+00,0,0,ok
+potrf,float,80,80,0,2048,vendor,vendor,1,0.207588,0.207524,0.0023,7,8.184e-08,0.000e+00,0,0,ok
+potrf,float,80,80,0,2048,native,native,1,0.686105,0.685813,0.0011,7,9.532e-08,0.000e+00,0,0,ok
+potrf,float,112,112,0,2048,vendor,vendor,1,0.379660,0.379334,0.0026,7,6.558e-08,0.000e+00,0,0,ok
+potrf,float,112,112,0,2048,native,native,1,0.884131,0.883888,0.0011,7,8.735e-08,0.000e+00,0,0,ok
+potrf,float,112,112,0,2048,vendor,vendor,1,0.379660,0.379334,0.0026,7,6.558e-08,0.000e+00,0,0,ok
+potrf,float,112,112,0,2048,native,native,1,0.884131,0.883888,0.0011,7,8.735e-08,0.000e+00,0,0,ok
+potrf,cfloat,80,80,0,2048,vendor,vendor,1,0.305654,0.305791,0.0026,7,8.184e-08,0.000e+00,0,0,ok
+potrf,cfloat,80,80,0,2048,native,native,1,0.734232,0.734409,0.0023,7,7.639e-08,0.000e+00,0,0,ok
+potrf,cfloat,80,80,0,2048,vendor,vendor,1,0.305654,0.305791,0.0026,7,8.184e-08,0.000e+00,0,0,ok
+potrf,cfloat,80,80,0,2048,native,native,1,0.734232,0.734409,0.0023,7,7.639e-08,0.000e+00,0,0,ok

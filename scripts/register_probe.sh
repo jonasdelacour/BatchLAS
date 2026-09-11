@@ -25,15 +25,28 @@
 # The script now FAILS LOUDLY if the named target has no link.txt, rather than
 # probing the default and reporting a healthy-looking result for the wrong thing.
 #
-# THE GATE. Use these two conditions, NOT "stack frame == 0":
+# THE GATE, AND IT DEPENDS ON WHAT YOU ARE CLAIMING. Two different questions read two
+# different columns, and the wrong pairing is silent in both directions.
+#
+# (1) A SPILL HUNT -- "is this kernel's working set too big for its registers?" Use:
 #   * `0 bytes spill stores, 0 bytes spill loads` on the kernel's lines, and
 #   * `Used N registers` x work-group size <= 65536, the per-BLOCK limit that
 #     src/sycl/gemm_kernels.cc:725-735 records as the real failure mode (a launch
 #     abort, not a slowdown).
-# Stack frame is the WRONG gate: measured on this tree, 220 of 376 entry functions
+# Here stack frame is the WRONG gate: measured on this tree, 220 of 376 entry functions
 # carry a non-zero stack frame with zero spills, so gating on it rejects healthy
 # kernels -- and a grep for "spill" that finds nothing reads as "no spill" whether
 # or not the flag ever took effect.
+#
+# (2) A RESIDENCY CLAIM -- "is this array actually IN registers?", which is what the
+# register-resident tiny tiers (src/extensions/*_tiny.cc) assert. Here the gate is
+# STACK FRAME == 0, and the spill columns are the ones that mislead: an unroll the
+# compiler declined makes the array dynamically indexed, ptxas relocates the WHOLE
+# array to local memory, and because nothing was ever in a register to evict there is
+# ZERO SPILL. Measured: `break` instead of `continue` inside the getrf tiny tier's
+# unrolled j loop gave float N=32 a 128-byte frame -- exactly 32 floats -- at 40
+# registers, 0 spill, and a green test suite.
+# evidence: docs/perf/lu.md#the-register-probe-and-the-unroll-that-decides-it
 #
 # Each kernel appears TWICE, as `<name>` and `<name>_with_offset`; they can differ
 # by a couple of registers. Take the max. Grep by mangled name.

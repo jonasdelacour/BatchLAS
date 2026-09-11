@@ -100,6 +100,12 @@ Event geqrf(Queue& ctx,
         /*vendor_available=*/dispatch::factorization_vendor_available<B>);
 
     if (dispatch::is_native(route)) {
+        // Tiny BEFORE CTA, matching kGeqrfOrder: it is the narrower tier, and its arm
+        // re-applies every supports() gate and throws rather than silently factoring a
+        // leading submatrix.
+        if (route.algo == dispatch::Algorithm::Tiny) {
+            return sycl_geqrf::geqrf_tiny_dispatch<T>(ctx, A, tau, work_space);
+        }
         if (route.algo == dispatch::Algorithm::CTA) {
             return sycl_geqrf::geqrf_cta_dispatch<T>(ctx, A, tau, work_space);
         }
@@ -158,6 +164,15 @@ size_t geqrf_buffer_size(Queue& ctx,
         const auto shape = backend::geqrf_op_shape<B, T>(ctx, A);
         using Tbl = dispatch::RouteTable<dispatch::Op::geqrf, T>;
         if (shape) {
+            if (Tbl::supports({dispatch::Origin::Native, dispatch::Algorithm::Tiny}, *shape)) {
+                // The tiny tier's workspace is legitimately ZERO, which is exactly why
+                // the flag above is `native_fired` and not `native_need != 0`: without
+                // this arm a shape only Tiny supports would throw out of
+                // geqrf_throw_native_unimplemented while the call itself succeeds.
+                native_need = std::max(native_need,
+                                       sycl_geqrf::geqrf_tiny_buffer_size<T>(ctx, A));
+                native_fired = true;
+            }
             if (Tbl::supports({dispatch::Origin::Native, dispatch::Algorithm::CTA}, *shape)) {
                 native_need = std::max(native_need,
                                        sycl_geqrf::geqrf_cta_buffer_size<T>(ctx, A));
@@ -344,6 +359,11 @@ Event getrf(Queue& ctx,
         /*vendor_available=*/dispatch::factorization_vendor_available<B>);
 
     if (dispatch::is_native(route)) {
+        // Tiny BEFORE CTA: it is the narrower tier, and its arm re-applies every
+        // supports() gate itself rather than trusting the resolver.
+        if (route.algo == dispatch::Algorithm::Tiny) {
+            return sycl_getrf::getrf_tiny_dispatch<T>(ctx, A, pivots, work_space, info);
+        }
         if (route.algo == dispatch::Algorithm::CTA) {
             return sycl_getrf::getrf_cta_dispatch<T>(ctx, A, pivots, work_space, info);
         }
@@ -394,6 +414,13 @@ size_t getrf_buffer_size(Queue& ctx,
         const auto shape = backend::getrf_op_shape<B, T>(ctx, A);
         using Tbl = dispatch::RouteTable<dispatch::Op::getrf, T>;
         if (shape) {
+            if (Tbl::supports({dispatch::Origin::Native, dispatch::Algorithm::Tiny}, *shape)) {
+                // Without this arm a shape that ONLY Tiny supports throws out of the
+                // sizing query while the call itself succeeds.
+                native_need = std::max(native_need,
+                                       sycl_getrf::getrf_tiny_buffer_size<T>(ctx, A));
+                native_fired = true;
+            }
             if (Tbl::supports({dispatch::Origin::Native, dispatch::Algorithm::CTA}, *shape)) {
                 native_need = std::max(native_need,
                                        sycl_getrf::getrf_cta_buffer_size<T>(ctx, A));
@@ -635,6 +662,12 @@ Event potrf(Queue& ctx,
     // a caller pins BATCHLAS_POTRF_ROUTE; a vendor-free build takes any supported
     // native route. evidence: docs/perf/potrf.md#preferred-is-false-everywhere
     if (dispatch::is_native(route)) {
+        // Tiny before CTA: it is the tier BELOW CTA at the same orders, so the arm order
+        // here must match kPotrfOrder's or a resolved Tiny route would land on the CTA
+        // kernel and the coverage row would name a kernel that never ran.
+        if (route.algo == dispatch::Algorithm::Tiny) {
+            return sycl_potrf::potrf_tiny_dispatch<T>(ctx, descrA, uplo, workspace, info_out);
+        }
         if (route.algo == dispatch::Algorithm::CTA) {
             return sycl_potrf::potrf_cta_dispatch<T>(ctx, descrA, uplo, workspace, info_out);
         }
@@ -687,6 +720,13 @@ size_t potrf_buffer_size(Queue& ctx,
         const auto shape = backend::potrf_op_shape<B, T>(ctx, A, uplo);
         using Tbl = dispatch::RouteTable<dispatch::Op::potrf, T>;
         if (shape) {
+            // The Tiny tier's workspace is NOT zero -- it draws the same `batch` int32s
+            // of info scratch the CTA tier does -- which is what keeps the
+            // `native_need == 0` unimplemented check above honest at n <= 32.
+            if (Tbl::supports({dispatch::Origin::Native, dispatch::Algorithm::Tiny}, *shape)) {
+                native_need = std::max(native_need,
+                                       sycl_potrf::potrf_tiny_buffer_size<T>(ctx, A));
+            }
             if (Tbl::supports({dispatch::Origin::Native, dispatch::Algorithm::CTA}, *shape)) {
                 native_need = std::max(native_need,
                                        sycl_potrf::potrf_cta_buffer_size<T>(ctx, A));

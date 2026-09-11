@@ -1,7 +1,6 @@
 #pragma once
 
-// GETRF's routing table: the correctness gates, the shipped preferred() window
-// and the native CTA-vs-blocked tie-break. Evidence: docs/perf/lu.md
+// GETRF's routing table. evidence: docs/perf/lu.md
 
 #include <batchlas/blas/dispatch/route.hh>
 #include <batchlas/blas/dispatch/route_resolve.hh>
@@ -12,19 +11,24 @@
 namespace batchlas::dispatch {
 
 struct GetrfShape : OpShape {
-    // 0 means the CTA kernel is absent from this build. Asked of the device, and
-    // it must include the pivot-search SLM scratch or cdouble n=78 fails to launch.
+    // Device-queried; 0 = absent. MUST include the pivot-search SLM scratch or the wide types
+    // ask past the cap and the launch is rejected. evidence: docs/perf/lu.md#one-spelling-per-ceiling
     int cta_max_n = 0;
 
     bool blocked_available = false;
 
-    // From sycl::info::device::sub_group_sizes; OpShape::max_sub_group reports entry [0], not the max.
+    int tiny_max_n = 0;   // compile-time {8,16,32} ladder (no local memory); 0 = absent
+
+    // MUST come from sycl::info::device::sub_group_sizes: OpShape::max_sub_group reports
+    // entry [0], not the max, so it admits a device that rejects the sg32 launch.
     bool has_sg32 = false;
 
     int64_t order() const { return k; }
 };
 
+// Walk order is this array, never Algorithm's numeric value; Tiny first, the narrower tier.
 inline constexpr Route kGetrfOrder[] = {
+    {Origin::Native, Algorithm::Tiny},
     {Origin::Native, Algorithm::CTA},
     {Origin::Native, Algorithm::Blocked},
     {Origin::Vendor, Algorithm::Auto},
@@ -43,18 +47,21 @@ struct RouteTable<Op::getrf, T> {
         if (s.heterogeneous_batch) return false;
         if (s.order() < 1 || s.batch < 1) return false;
 
-        // Pivot Span<int64_t> layout is backend-dependent: CUDA/ROCm and the native
-        // kernels pack 1-based int32 into its first half, netlib writes real int64;
-        // mixing them returns garbage with info == 0.
+        // Pivot Span<int64_t> layout is backend-dependent: CUDA/ROCm and the native kernels
+        // pack 1-based int32 in its first half, netlib real int64; mixing them is silent garbage.
         if (s.backend == Backend::NETLIB) return false;
 
         switch (r.algo) {
+            case Algorithm::Tiny:
+                if (s.tiny_max_n < 1) return false;
+                return s.order() <= static_cast<int64_t>(s.tiny_max_n);
+
             case Algorithm::CTA:
                 if (s.cta_max_n < 1) return false;
                 return s.order() <= static_cast<int64_t>(s.cta_max_n);
 
             case Algorithm::Blocked:
-                // No lower order bound: a floor makes a forced `blocked` fall through to automatic().
+                // No order floor, or a forced `blocked` falls through to automatic().
                 return s.blocked_available && s.cta_max_n >= 1;
 
             default:
@@ -62,7 +69,8 @@ struct RouteTable<Op::getrf, T> {
         }
     }
 
-    // Blocked only: float order >= 256, cfloat order >= 512; double families never.
+    // Blocked only; Tiny stays absent until its grid exists (R8b: the first native arm true
+    // here takes every shape it holds, whatever the tier hook says).
     // evidence: docs/perf/lu.md#getrf-window-evidence
     static bool preferred(Route r, const GetrfShape& s) {
         if (!is_native(r)) return false;
@@ -73,8 +81,7 @@ struct RouteTable<Op::getrf, T> {
         return false;   // double and cdouble earn nothing at any order
     }
 
-    // Native-vs-native tie-break, consulted only in the vendor-free walk.
-    // evidence: docs/perf/lu.md#native_tier_preferred
+    // Native-vs-native tie-break, vendor-free walk only. evidence: docs/perf/lu.md#native_tier_preferred
     static bool native_tier_preferred(Route r, const GetrfShape& s) {
         if (!is_native(r)) return true;
 
@@ -87,6 +94,10 @@ struct RouteTable<Op::getrf, T> {
         }();
 
         switch (r.algo) {
+            // EXPLICIT: `default:` returns TRUE and Tiny leads the order array. Flips with
+            // preferred(). evidence: docs/perf/lu.md#why-tiny-is-absent-from-the-window
+            case Algorithm::Tiny:
+                return false;
             case Algorithm::CTA:
                 return s.order() <= cta_max_order;
             case Algorithm::Blocked:
@@ -102,7 +113,7 @@ struct RouteTable<Op::getrf, T> {
     }
 };
 
-// Pass vendor_available = dispatch::factorization_vendor_available<B>, not solver_vendor_available.
+// vendor_available is factorization_vendor_available<B>, NOT the solver one.
 template <typename T>
 inline Route resolve_getrf_route(Route forced, const GetrfShape& s,
                                  bool vendor_available = true) {

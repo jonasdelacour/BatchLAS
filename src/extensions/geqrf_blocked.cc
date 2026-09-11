@@ -116,10 +116,12 @@ unsigned geqrf_blocked_debug_params(Queue& ctx, int m, int n) {
     const int nb = geqrf_blocked_nb<T>(m, n);
 
     const auto dev = ctx.device();
-    const std::size_t local_mem = dev.get_property(DeviceProperty::LOCAL_MEM_SIZE);
-    const std::size_t budget = (local_mem > 4096) ? (local_mem - 4096) : 0;
+    const std::size_t budget = resident::device_slm_budget(
+        dev.get_property(DeviceProperty::LOCAL_MEM_SIZE));
     const int ib0 = std::min(nb, std::min(m, n));
-    const unsigned leaf = geqrf_cta_fits<T>(m, ib0, budget) ? 1u : 2u;
+    // geqrf_leaf_fits, not geqrf_cta_fits: this reports which leaf geqrf_panel_factorize
+    // will take, and that is the residency question, asked at the whole budget.
+    const unsigned leaf = geqrf_leaf_fits<T>(m, ib0, budget) ? 1u : 2u;
 
     return (leaf << 16) | static_cast<unsigned>(nb);
 }

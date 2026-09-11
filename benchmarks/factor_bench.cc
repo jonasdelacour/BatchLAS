@@ -24,7 +24,7 @@
 // is expected to drop it rather than quote it.
 //
 //   usage: factor_bench <op> <type> <m> <n> <nrhs> <batch> <reps>
-//                       [--route=<pin>] [--csv=<path>] [--arms=vendor,native]
+//                       [--route=<pin>] [--csv=<path>] [--arms=a,b,...]
 //   env:   WARM_S (seconds, default 1.5), LD_PAD (ld = m + LD_PAD)
 //
 #include <batchlas/blas/functions/geqrf.hh>
@@ -443,7 +443,12 @@ struct Cfg {
     int m = 0, n = 0, nrhs = 0, batch = 0, reps = 0;
     std::string route_pin;      // --route=, applied to the NATIVE arm only
     std::string csv;
-    bool want_vendor = true, want_native = true;
+    // The arms to interleave, in order. Each name is also its own route pin unless it
+    // is "native" and --route= overrides it. Defaults to the two-arm vendor/native A/B.
+    // NOT a set of bools: comparing three tiers (vendor, cta, tiny) in ONE process is
+    // what keeps clock drift out of the ratio, and two processes ratioing through a
+    // shared vendor arm puts it back. evidence: docs/perf/small-n-baseline.md#the-arms-list
+    std::vector<std::string> arms{"vendor", "native"};
 };
 
 static void emit(const Cfg& c, const Arm& a, std::FILE* csv) {
@@ -551,9 +556,16 @@ static int run(const Cfg& c) {
         else reset_A();
     };
 
+    // An arm's NAME is its pin, so --arms=vendor,cta,tiny needs no new flag per tier;
+    // --route= still overrides the pin of the arm literally named "native", which is
+    // the two-arm form every existing script uses.
     std::vector<Arm> arms;
-    if (c.want_vendor) { Arm a; a.name = "vendor"; a.pin = "vendor"; arms.push_back(a); }
-    if (c.want_native) { Arm a; a.name = "native"; a.pin = c.route_pin.empty() ? "native" : c.route_pin; arms.push_back(a); }
+    for (const std::string& nm : c.arms) {
+        Arm a;
+        a.name = nm;
+        a.pin = (nm == "native" && !c.route_pin.empty()) ? c.route_pin : nm;
+        arms.push_back(a);
+    }
     if (arms.empty()) { std::fprintf(stderr, "factor_bench: no arms selected\n"); return 2; }
 
     const char* var = pin_variable(c.op);
@@ -747,7 +759,7 @@ int main(int argc, char** argv) {
     if (argc < 8) {
         std::fprintf(stderr,
             "usage: factor_bench <op> <type> <m> <n> <nrhs> <batch> <reps>\n"
-            "                    [--route=<pin>] [--csv=<path>] [--arms=vendor,native]\n"
+            "                    [--route=<pin>] [--csv=<path>] [--arms=a,b,...]\n"
             "  op   : potrf getrf getrs geqrf orgqr\n"
             "  type : float double cfloat cdouble\n"
             "  env  : WARM_S (seconds, default 1.5), LD_PAD (ld = m + LD_PAD)\n"
@@ -775,9 +787,25 @@ int main(int argc, char** argv) {
         if (a.rfind("--route=", 0) == 0) c.route_pin = a.substr(8);
         else if (a.rfind("--csv=", 0) == 0) c.csv = a.substr(6);
         else if (a.rfind("--arms=", 0) == 0) {
+            // SPLIT ON COMMAS EXACTLY, never a substring test: `--arms=native` under a
+            // `find("vendor")` test dropped the vendor arm silently, and `--arms=vendor`
+            // kept it while dropping native -- the same class of defect as the recorded
+            // substring `--name` trap in the minibench harness.
             const std::string v = a.substr(7);
-            c.want_vendor = v.find("vendor") != std::string::npos;
-            c.want_native = v.find("native") != std::string::npos;
+            c.arms.clear();
+            size_t pos = 0;
+            while (pos <= v.size()) {
+                const size_t comma = v.find(',', pos);
+                const size_t end = (comma == std::string::npos) ? v.size() : comma;
+                const std::string tok = v.substr(pos, end - pos);
+                if (!tok.empty()) c.arms.push_back(tok);
+                if (comma == std::string::npos) break;
+                pos = comma + 1;
+            }
+            if (c.arms.empty()) {
+                std::fprintf(stderr, "factor_bench: --arms= listed no arms\n");
+                return 2;
+            }
         } else { std::fprintf(stderr, "factor_bench: unknown flag %s\n", a.c_str()); return 2; }
     }
     if (c.m <= 0 || c.n <= 0 || c.batch <= 0 || c.reps <= 0) {

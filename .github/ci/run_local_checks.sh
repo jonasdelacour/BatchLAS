@@ -29,6 +29,15 @@ run python3 "$here/check_exported_package.py"
 run python3 "$here/check_public_headers.py"
 run python3 "$here/check_no_unprefixed_includes.py"
 run python3 "$here/check_no_global_names.py"
+# The self-test runs first and separately so that a broken counter is
+# distinguishable from a genuine offender list. Without it, a scan that reports
+# nothing is indistinguishable from a scan that cannot count.
+run python3 "$here/check_comment_density.py" --self-test
+run python3 "$here/check_comment_density.py"
+# Same self-test-first reason: an empty finding list must be distinguishable
+# from a walk that read nothing.
+run python3 "$here/check_evidence_anchors.py" --self-test
+run python3 "$here/check_evidence_anchors.py"
 if [ "$#" -gt 0 ]; then
     run python3 "$here/check_exported_package.py" --package "$1"
 fi

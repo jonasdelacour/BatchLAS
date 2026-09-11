@@ -384,6 +384,104 @@ the vendor-free and ROCm builds, and making a future `preferred()` flip *arguabl
   let a divergence vanish from the grid while another kept the count non-zero. E6's exception is paired with `UnsetNowMeansAuto*`, asserting
   *positively* that unset and `"auto"` agree on every shape in the grid.
 
+## The subgroup workspace budget
+
+This is the one constant on this page that is fixed at **configure** time, by CMake, and it is not a measured tuning result — it is a
+compatibility constraint with a measured cost. It is recorded here because `cmake/BatchLASDetectSYCL.cmake` cites this section, and because the
+whole of the claim it cites is negative: **nothing in this tree has ever timed any budget but the one each architecture already ships.**
+
+### What it is and where the number comes from
+
+`kSubgroupWorkspaceBudgetBytes` (`include/batchlas/blas/device/detail/group_blas_subgroup_common.hh:58`) is
+`device_limits::subgroup_workspace_budget_bytes()`, generated from `cmake/device_limits.h.in`. CMake derives it per architecture in
+`batchlas_subgroup_workspace_budget_bytes()` as **that architecture's table local memory less a 4 KiB reserve**, with a 16 KiB floor:
+
+| architecture | table local mem | budget |
+|---|---|---|
+| `nvidia_gpu_sm_*` | 49,152 | **45,056** |
+| `amd_gpu_gfx*` | 65,536 | **61,440** |
+| `intel*` | 65,536 | **61,440** |
+| unrecognised GPU | 32,768 | **28,672** |
+
+It is deliberately **not** the device's real local-memory capacity. On sm_89 that is 101,376 bytes, and a probe reads it; letting the probe reach
+this constant would raise the budget by 2.25x and retune five ops as a side effect of fixing a capacity table. Every run-time capacity asks
+`DeviceProperty::LOCAL_MEM_SIZE` instead (`src/util/resident_capacity.hh`).
+
+### The five gates it drives
+
+Five `if constexpr` predicates compare a workspace struct against the budget, and between them decide which tile variants are compiled in at all:
+
+| predicate | consumed by |
+|---|---|
+| `register_matrix_workspace_supported_v` | `group_blas_gemm.hh:399`, `group_blas_rankk.hh:371,387,409,445` |
+| `complex_rank2k_workspace_supported_v` | `group_blas_rankk.hh:367,383,403,439` |
+| `complex_rank2k_in_kernel_workspace_supported_v` | staged rank-2k path |
+| `optimized_gemm_workspace_supported_v` | `group_blas_gemm.hh:390` |
+| `gemm_workspace_supported_v` | `group_blas_gemm.hh:361,369` |
+
+`group_blas_rankk.hh` is the shared body behind **symm, herk, syrk and syr2k**, so a change here moves five ops, not one.
+
+### What moving it actually changes (measured)
+
+Compiled with `/opt/dpcpp-cuda/bin/clang++ -fsycl -std=c++20` against the real header, with only the generated
+`MIN_GPU_SUBGROUP_WORKSPACE_BUDGET_BYTES` substituted. `sizeof` in bytes; `1`/`0` is the gate.
+
+| budget | type | regmat | c2k | c2kik | optgemm | gemm | gates (regmat/c2k/c2kik/optgemm/gemm) |
+|---|---|---|---|---|---|---|---|
+| 28,672 | float | 25,216 | 16,768 | 12,640 | 41,472 | 41,472 | 1 1 1 **0 0** |
+| 28,672 | double | 25,088 | 27,200 | 25,280 | 82,944 | 82,944 | 1 1 1 0 0 |
+| 28,672 | cfloat | 25,088 | 27,200 | 25,280 | 82,944 | 82,944 | 1 1 1 0 0 |
+| 28,672 | cdouble | 41,728 | 37,504 | 28,160 | 165,888 | 165,888 | **0 0** 1 0 0 |
+| 45,056 | float | 25,216 | 16,768 | 12,640 | 41,472 | 41,472 | 1 1 1 **1 1** |
+| 45,056 | double | 41,984 | 33,536 | 25,280 | 82,944 | 82,944 | 1 1 1 0 0 |
+| 45,056 | cfloat | 41,984 | 33,536 | 25,280 | 82,944 | 82,944 | 1 1 1 0 0 |
+| 45,056 | cdouble | 41,728 | 41,728 | 44,160 | 165,888 | 165,888 | 1 1 1 0 0 |
+| 61,440 | float | 25,216 | 16,768 | 12,640 | 41,472 | 41,472 | 1 1 1 1 1 |
+| 61,440 | double | 50,432 | 33,536 | 25,280 | 82,944 | 82,944 | 1 1 1 0 0 |
+| 61,440 | cfloat | 50,432 | 33,536 | 25,280 | 82,944 | 82,944 | 1 1 1 0 0 |
+| 61,440 | cdouble | 58,624 | 58,624 | 50,560 | 165,888 | 165,888 | 1 1 1 0 0 |
+
+Two things to read off it.
+
+**The gates are not the whole story.** The struct sizes move with the budget, because `subgroup_limit_for_workspace_v` spends the budget on
+staging depth. Between 45,056 and 61,440 no gate flips at all — and yet:
+
+| budget | float regmat/c2k/c2kik | double | cfloat | cdouble |
+|---|---|---|---|---|
+| 28,672 | 8 / 8 / 8 | 2 / 5 / 8 | 2 / 5 / 8 | **0 / 0 / 1** |
+| 45,056 | 8 / 8 / 8 | **6** / 8 / 8 | **6** / 8 / 8 | **1 / 2 / 6** |
+| 61,440 | 8 / 8 / 8 | **8** / 8 / 8 | **8** / 8 / 8 | **3 / 6 / 8** |
+
+(subgroups staged per work-group; the hard cap is `kMaxSubgroupsPerWorkGroup = 8`.)
+
+So a build pinned to NVIDIA's 45,056 on an AMD or Intel part keeps every variant compiled but loses **25% of the staging width for double and
+cfloat** (6 subgroups instead of 8) and **two thirds of it for cdouble** (1 instead of 3 on the register-matrix path, 2 instead of 6 on
+complex rank-2k). That is the concrete content of "silently retunes five BLAS-3 ops".
+
+**28,672 is a different kernel set, not a slower one.** The unrecognised-GPU fallback drops `optimized_gemm` and `gemm` for float, and drops the
+register-matrix and complex-rank-2k paths for cdouble entirely.
+
+### Why this is not a tuning result
+
+**No benchmark in this tree has ever timed any budget but the shipped one.** `grep -rn 'WORKSPACE_CAP\|workspace_budget\|SUBGROUP_WORKSPACE'
+benchmarks tests python examples` returns nothing: the budget is not a benchmark parameter, not a test parameter, and not reachable from the
+environment. The table above is a **compile-time** census of which variants exist at each budget — it says what changes, not what it costs. Every
+number on the rest of this page was measured at one budget only: 45,056, on sm_89.
+
+Widening or narrowing the budget is therefore a separate, measured change, and it needs a harness that does not exist yet: the cap is a CMake
+cache entry, so an A/B is a reconfigure and a full rebuild per arm, not a runtime flag.
+
+### The stale-cache defect
+
+`BATCHLAS_DEVICE_GEMM_WORKSPACE_CAP_BYTES` was a `CACHE STRING` whose historical default was the literal `45056`. When the derivation above
+replaced that default, the new code was placed behind `if(... GREATER 0)` — so **any already-configured build tree kept overriding it**, and every
+architecture got NVIDIA's 45,056. On NVIDIA the override and the derivation agree, which is why the first verification pass did not see it; on AMD
+and Intel the cost is the 6-vs-8 and 1-vs-3 rows above.
+
+The cache entry is now named `BATCHLAS_DEVICE_GEMM_TILE_CAP_BYTES` and defaults to `0` ("derive per architecture"). The old name is migrated at
+configure time: a cached legacy `45056` is dropped with a status line, and any other cached value is carried across to the new name with a
+deprecation warning, so a deliberate override is never silently lost.
+
 ## Open debts
 
 * **Complex is what is still vendor-dependent, and that is the honest headline.** The panel-update population that dominates real demand needs a

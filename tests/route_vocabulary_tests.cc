@@ -512,13 +512,15 @@ PotrfShape potrf_shape(int64_t order, int64_t batch, int cta_max,
 using PotrfTable = RouteTable<Op::potrf, float>;
 constexpr Route kPotrfCta{Origin::Native, Algorithm::CTA};
 constexpr Route kPotrfBlocked{Origin::Native, Algorithm::Blocked};
+constexpr Route kPotrfTiny{Origin::Native, Algorithm::Tiny};
 constexpr Route kPotrfNativeBare{Origin::Native, Algorithm::Auto};
 constexpr Route kPotrfAuto{Origin::Auto, Algorithm::Auto};
 
 } // namespace
 
 TEST(RoutePotrf, SupportedButNotPreferredIsTheWholePoint) {
-    // 155 is the measured float CTA fit ceiling.
+    // cta_max is the float CTA fit ceiling; it only has to exceed the order below, or
+    // supports() answers false and the whole case holds vacuously.
     // evidence: docs/perf/potrf.md#the-slm-budget-and-the-fit-ceilings
     const auto s = potrf_shape(/*order=*/128, /*batch=*/1, /*cta_max=*/155);
 
@@ -579,6 +581,81 @@ TEST(RoutePotrf, PreferredIsFalseEverywhere) {
     EXPECT_FALSE((RouteTable<Op::potrf, double>::preferred(kPotrfCta, s)));
     EXPECT_FALSE((RouteTable<Op::potrf, std::complex<float>>::preferred(kPotrfCta, s)));
     EXPECT_FALSE((RouteTable<Op::potrf, std::complex<double>>::preferred(kPotrfCta, s)));
+}
+
+// route.hh is an INSTALLED header and the library carries a SOVERSION, so an Algorithm
+// enumerator's NUMERIC value is ABI. Inserting a new name anywhere but the end renumbers
+// every enumerator after it, and a caller compiled against the old header then names a
+// different algorithm at run time with no diagnostic anywhere -- no link error, no
+// warning, just a different kernel. These are the values route.hh shipped with; a new
+// algorithm is APPENDED and gets the next free number.
+TEST(RouteVocabulary, AlgorithmEnumeratorValuesAreAbi) {
+    auto value = [](Algorithm a) { return static_cast<int>(a); };
+    EXPECT_EQ(value(Algorithm::Auto), 0);
+    EXPECT_EQ(value(Algorithm::Direct), 1);
+    EXPECT_EQ(value(Algorithm::CTA), 2);
+    EXPECT_EQ(value(Algorithm::Blocked), 3);
+    EXPECT_EQ(value(Algorithm::TwoStage), 4);
+    EXPECT_EQ(value(Algorithm::Jacobi), 5);
+    EXPECT_EQ(value(Algorithm::RegisterTiled), 6);
+    EXPECT_EQ(value(Algorithm::SplitK), 7);
+    EXPECT_EQ(value(Algorithm::ExpandGemm), 8);
+    EXPECT_EQ(value(Algorithm::TriangularTiles), 9);
+    EXPECT_EQ(value(Algorithm::GramTiles), 10);
+    EXPECT_EQ(value(Algorithm::FusedDevice), 11);
+    EXPECT_EQ(value(Algorithm::DiagFullGemm), 12);
+
+    // Appended after the frozen block, not inserted into it.
+    EXPECT_EQ(value(Algorithm::Tiny), 13);
+
+    // Origin is installed too, and Vendor's value reaches is_vendor() in every table.
+    EXPECT_EQ(static_cast<int>(Origin::Auto), 0);
+    EXPECT_EQ(static_cast<int>(Origin::Native), 1);
+    EXPECT_EQ(static_cast<int>(Origin::Vendor), 2);
+}
+
+// Algorithm::Tiny is INVISIBLE until three separate places know it: the enum,
+// to_string (which is what the coverage CSV's chosen_algo column and the route-diff
+// tool print) and parse_algorithm_word. A missing to_string case is a -Wswitch warning
+// and a "?" in every coverage row; a missing parse case is SILENT -- the pin becomes
+// nullopt, is dropped, and a benchmark arm measures whatever automatic() picked.
+TEST(RoutePotrf, TinyVocabularyRoundTripAndTierOrder) {
+    EXPECT_EQ(to_string(Algorithm::Tiny), "tiny");
+    ASSERT_TRUE(parse_algorithm_word("tiny").has_value());
+    EXPECT_EQ(*parse_algorithm_word("tiny"), Algorithm::Tiny);
+
+    // Tiny is the FIRST native arm, so the entry point's arm order must match.
+    EXPECT_EQ(kPotrfOrder[0], kPotrfTiny);
+
+    // A build with no tiny kernel (tiny_max_n == 0) must route exactly as before.
+    const auto absent = potrf_shape(/*order=*/16, /*batch=*/4096, /*cta_max=*/155);
+    ASSERT_EQ(absent.tiny_max_n, 0);
+    EXPECT_FALSE(PotrfTable::supports(kPotrfTiny, absent));
+    EXPECT_TRUE(PotrfTable::native_tier_preferred(kPotrfCta, absent));
+
+    auto s = absent;
+    s.tiny_max_n = 32;
+    EXPECT_TRUE(PotrfTable::supports(kPotrfTiny, s));
+    // EXACTLY ONE native tier answers the hook, or the vendor-free walk is an accident
+    // of the order array rather than a stated decision (R8b, from the other direction).
+    // Tiny answers FALSE, matching getrf and geqrf: the tier is reachable by an explicit
+    // pin only until the commit that MEASURES its window flips this arm and preferred()
+    // together. Until then a vendor-free build routes exactly as it did before Tiny
+    // existed, which is what the resolve below asserts.
+    EXPECT_FALSE(PotrfTable::native_tier_preferred(kPotrfTiny, s));
+    EXPECT_TRUE(PotrfTable::native_tier_preferred(kPotrfCta, s));
+    EXPECT_FALSE(PotrfTable::native_tier_preferred(kPotrfBlocked, s));
+    EXPECT_EQ(resolve_potrf_route<float>(kPotrfAuto, s, /*vendor_available=*/false).algo,
+              Algorithm::CTA);
+
+    // One order past the tier: CTA takes it back, and the vendor still wins on Auto
+    // because preferred() is empty for every tier.
+    auto past = s;
+    past.k = past.m = past.n = 33;
+    EXPECT_FALSE(PotrfTable::supports(kPotrfTiny, past));
+    EXPECT_TRUE(PotrfTable::native_tier_preferred(kPotrfCta, past));
+    EXPECT_FALSE(PotrfTable::preferred(kPotrfTiny, s));
+    EXPECT_TRUE(is_vendor(resolve_potrf_route<float>(kPotrfAuto, s, /*vendor_available=*/true)));
 }
 
 TEST(RoutePotrf, CorrectnessGatesAreNotSpeedGates) {
@@ -1272,10 +1349,10 @@ TEST(RouteOrgqr, VendorFreeFallbackHandsOverTheNativeRoute) {
                                                      /*vendor_available=*/true)))
         << "with a vendor present n = 64 is native too -- the window covers it";
 
-    // AND THE FALLBACK MUST STILL WORK ABOVE THE CEILING, which is the half a
-    // window in supports() would destroy: n = 1024 is a recorded loss (cfloat
-    // 0.82x, cdouble 0.78x, docs/perf/qr.md#orgqr-grid) and takes the vendor, but a
+    // AND THE FALLBACK MUST STILL WORK ABOVE THE CEILING, which is the half a window in
+    // supports() would destroy: n = 1024 is a recorded loss and takes the vendor, but a
     // vendor-free build has to reach the native arm there all the same.
+    // evidence: docs/perf/qr.md#orgqr-grid
     const auto big = orgqr_shape(/*rows=*/1024, /*cols=*/1024, /*batch=*/1);
     EXPECT_TRUE(OrgqrTable::supports(kOrgqrBlocked, big))
         << "the ceiling is a SPEED bound; putting it in supports() would delete the "
@@ -1303,7 +1380,7 @@ TEST(RouteOrgqr, PreferredIsNativeUpToTheMeasuredCeiling) {
         }
     }
 
-    // ---- OUTSIDE: n = 1024 and n = 2048 are the recorded losses, both quoted above.
+    // ---- OUTSIDE: the recorded losses. docs/perf/qr.md#the-shipped-orgqr-ceiling
     for (int64_t n : {1024, 2048}) {
         for (int64_t batch : {1, 8, 128, 2048}) {
             const auto s = orgqr_shape(n, n, batch);
@@ -1316,9 +1393,9 @@ TEST(RouteOrgqr, PreferredIsNativeUpToTheMeasuredCeiling) {
         }
     }
 
-    // The ceiling has NO batch term on purpose. Only float n = 1024 recovers with
-    // batch (0.84 / 1.11 / 1.27 / 1.33 at batch 32..256) and one type crossing is
-    // not a window; if a batch clause is ever added it needs its own measurement.
+    // The ceiling has NO batch term on purpose: exactly ONE type recovers with batch,
+    // and one type crossing is not a window. A batch clause needs its own measurement.
+    // evidence: docs/perf/qr.md#the-shipped-orgqr-ceiling
     EXPECT_FALSE(OrgqrTable::preferred(kOrgqrBlocked, orgqr_shape(1024, 1024, 256)));
 
     // ---- THE EDGE, from both sides and on BOTH extents. Q's columns live in C^m,
@@ -2086,8 +2163,8 @@ TEST(RouteGetrs, PreferredIsTheMeasuredNrhsWindowAndNothingWider) {
                 EXPECT_TRUE(GetrsTable::supports(kGetrsCta, s));
                 EXPECT_TRUE(is_native(resolve_getrs_route<float>(kGetrsAuto, s, false)));
             }
-            // clause B's float-only width takes the same floor: float nrhs=4 reads
-            // 0.45 / 0.46 at n = 4 / 8 and 1.07 / 1.10 at 17 / 24.
+            // clause B's float-only width takes the SAME floor, off the same grid.
+            // evidence: docs/perf/lu.md#getrs-order-floor-evidence
             EXPECT_FALSE(GetrsTable::preferred(kGetrsCta, getrs_shape(order, 4, batch)))
                 << "clause B, float order " << order;
         }

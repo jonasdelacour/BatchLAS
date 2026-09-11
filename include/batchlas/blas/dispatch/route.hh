@@ -38,6 +38,12 @@ enum class Algorithm : uint8_t {
     // Deliberately WRONG, kept only as a measurement baseline: it stores BOTH
     // triangles, clobbering the half the caller owns. Auto must never select it.
     DiagFullGemm,
+
+    // APPENDED, never inserted: route.hh is an installed header behind a SOVERSION, so
+    // every enumerator above keeps the number it shipped with. Walk order is the
+    // kPotrfOrder / kGetrfOrder / kGeqrfOrder arrays, never this numeric value, so Tiny
+    // is still the first arm tried despite being last here.
+    Tiny,             // one matrix per sub-group PARTITION, held in registers
 };
 
 // A selection is a PAIR: `library` is a resolver output and is excluded from equality.
@@ -107,6 +113,7 @@ inline constexpr std::string_view to_string(Algorithm a) {
         case Algorithm::GramTiles:       return "gram_tiles";
         case Algorithm::FusedDevice:     return "fused_device";
         case Algorithm::DiagFullGemm:    return "diag_full_gemm";
+        case Algorithm::Tiny:            return "tiny";
     }
     return "?";
 }

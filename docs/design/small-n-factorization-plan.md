@@ -179,8 +179,18 @@ for N > 32. Target >= 4 resident work-groups per SM by local memory
 
 R2. **Compile-time column count.** The register array is indexed only by
 template constants; loops over it carry `#pragma unroll`. Ladder
-N in {8, 16, 32} (pad the order up, mask lanes/rows); add 24 only if the
-n = 17..24 band shows a cliff. Rows (`m`) stay runtime.
+N in {8, 16, 32} (pad the order up, mask lanes/rows). Rows (`m`) stay runtime.
+
+**CORRECTION (P1, measured against the tree): N = 24 IS NOT AVAILABLE AT ANY
+PRICE, and the original wording of this rule -- "add 24 only if the n = 17..24
+band shows a cliff" -- could not be followed.** `SubGroupPartition<P>`
+(`src/extensions/sg_compat.hh`) computes `base = (lane / P) * P`, so a `P` that
+does not divide 32 leaves a trailing partial chunk whose `select_from_group`
+addresses lanes past the end of the sub-group. The ladder is therefore
+`{8, 16, 32}` and nothing else. If the `n = 17..31` band does cliff, the two
+remedies are (i) bounding the inner loops by `min(n, N)` so the padded columns
+cost issue slots but not memory traffic, or (ii) ceding that band to the CTA
+tier in `preferred()`. Neither is a new bucket.
 
 R3. **Sub-group is the synchronisation unit for n <= 32.** One matrix
 never spans a sub-group; `group_barrier(sg)` only; G = 32/N_pad matrices per
@@ -417,9 +427,43 @@ column; local scratch `N x (N+1) + 2N` elements per matrix (float N=32:
 LAPACK's overflow-safe scaling in `larfg` is kept (`LarfgScalars` in
 `geqrf_cta_device.hh`). `tau` is written to the caller's span.
 
+**SUPERSEDED, AS SHIPPED (P1 geqrf), on three counts.** The paragraph above
+describes what was budgeted; what landed differs, and the reasons are
+measured. See `docs/perf/qr.md#the-tiny-tier-wp6--p1-square-n--32-in-registers`.
+
+1. **Two barriers per column, not four.** The two norm reductions are
+   ORDER-SYMMETRIC XOR ALL-REDUCES over the partition, so every lane leaves
+   holding a bit-identical `smax` and `ssq` and recomputes the Householder
+   scalars for itself. That deletes the publish/barrier/broadcast pair
+   outright; the remaining two order the product tile and the `y` vector.
+   (`sq` and `sx` are not allocated at all -- the reduction is register-only.)
+2. **The tile is `N x (C+1)`, C derived, not `N x (N+1)` fixed.** A flat tile
+   makes local memory rather than registers the binding residency limit in
+   three of the eleven shipped cells. `C` is the largest of {N, N/2, N/4} at
+   which `blocks_by_slm >= blocks_by_regs`, read from the MEASURED register
+   table; it is `N` in eight cells and `N/2` in three. One cell (double N=32)
+   is pinned, because widening it costs 25 registers and a resident block.
+3. **The work-group is 64, not 128.** The `local_accessor` is sized
+   `M * per_matrix` with no fixed term, so a wider work-group has nothing to
+   amortise; the register-quantisation, SLM and launch-tail effects all favour
+   64, which is equal or better in all eleven cells and strictly better in four.
+
+4. **The roof formula, CORRECTED IN PLACE BELOW.** `4 n^2 sizeof(T) batch /
+   950 GB/s` double-counted. The P0 grid and `docs/perf/qr.md` both use
+   read-plus-write-once, `2 n^2 sizeof(T) batch / 950 GB/s`, and that is the
+   formula that reproduces the recorded 282.6 us roof for cdouble n=32 at b8192
+   (`2*1024*16*8192 / 950e9`). The Measurement section below now carries `2 n^2`;
+   this item records only that the number changed.
+
 **Files.**
-- New `src/extensions/tiny_device.hh`: the load/pad/store helpers, the
-  packed argmax, `sx/sq/sP` scratch layout, `SLDA(N) = N + 1`.
+- New `src/extensions/tiny_device.hh`: the geometry constants, the
+  load/pad/store helpers, `tiny_select`, and the pair-valued argmax
+  (`tiny_argmax_pair` with `tiny_key`/`kTinyKeyLaneBits`) -- NOT a packed
+  `uint64` key. AS SHIPPED it carries no scratch layout at all: correction 1
+  above deletes `sx`/`sq`, and the `sP` tile is `N x (C+1)` with `C` derived
+  per cell, so its extent and `geqrf_tiny_slda(c) = c + 1` live in
+  `geqrf_tiny_device.hh` -- the one arm that has local memory -- not in the
+  header the other two tiers also include.
 - New `src/extensions/potrf_tiny.cc`, `getrf_tiny.cc`, `geqrf_tiny.cc`: the
   three kernels, `switch (N)` dispatch, `*_tiny_dispatch<T>(...)` entry
   points, `*_tiny_max_n<T>()` (32; 16 for cdouble).
@@ -467,9 +511,12 @@ GPU-only `SetUp`):
 **Measurement (P0 harness).** Grid: n in {4, 8, 9, 16, 17, 24, 32} x batch
 in [4096, 8192, 16384, 32768, 65536] x 4 types, arms: `tiny`, `cta`,
 `vendor`, interleaved. Report ratio to vendor and to the DRAM roof
-(`4 n^2 sizeof(T) batch / 950 GB/s` for a read + write of a square). The
+(`2 n^2 sizeof(T) batch / 950 GB/s` -- ONE read plus ONE write of a square;
+the `4 n^2` this plan first carried double-counted, see the correction above). The
 n = 9 and n = 17 rows show the padding cost; if `tiny` at 17 is below `cta`
-at 17, add `N = 24`.
+at 17, cede `17..31` to CTA in `preferred()` or bound the inner loops by
+`min(n, N)` -- **NOT** `N = 24`, which R2's correction above shows cannot be
+built on `SubGroupPartition<P>`.
 
 **Acceptance.** Float and cfloat targets above met at saturation with a
 bracketing loss at the first n where `tiny` stops winning against the
@@ -981,3 +1028,43 @@ opinion:
    per-library ceiling is a proposal, not a measured number; the first
    plan to land should replace it with the measured cost per
    instantiation.
+
+## 6. The comment-density burn-down
+
+**2026-09-11.** The house rule -- measured numbers live in `docs/perf/<op>.md` behind an
+`evidence: docs/perf/<page>.md#<anchor>` pointer, and code comments carry correctness
+rationale only -- regressed twice in this campaign before it was made enforceable. It is
+now a gate rather than a convention: `.github/ci/check_comment_density.py` fails any file
+over **18% comment lines over non-blank lines**, runs in `run_local_checks.sh` and in a
+`comment-density` CI job, and self-tests its own counter (`--self-test`, 16 cases) so the
+guard is armed in both directions.
+
+**Why the rule was invisible for so long.** The repo *aggregate* is 15.3%, comfortably
+inside the 12-18% band, and that is the number the house norm was recorded as. Per file,
+150 of 424 sources were over the ceiling. An aggregate cannot see a distribution; only a
+per-file gate can.
+
+**What was done, and what was deferred.**
+
+* **21 files this campaign created or touched were brought into band for real**, by moving
+  every measurement into `docs/perf/{potrf,lu,qr,gemm}.md` and leaving the correctness
+  rationale plus an anchor. Worst before: `resident_capacity.hh` 52.13%,
+  `geqrf_tiny_device.hh` 50.57%, `tiny_device.hh` 45.10%, `getrf_tiny.cc` 32.32%.
+* **Three files carry a waiver with a specific reason**, not a general one:
+  `resident_capacity.hh` (23.73%) and `geqrf_tiny_device.hh` (20.73%) are short files of
+  `constexpr` gates where every remaining line is an invariant that breaks silently, and
+  `src/backends/orgqr_route.hh` (56.60%) is a 46-code-line shape-builder header whose
+  untouched siblings `getrs_route.hh` and `gemv_route.hh` sit at 56.72% and 56.30% -- the
+  density there measures the file's size, not its prose.
+* **133 pre-existing files were batch-waived**, dated, one explicit line each rather than
+  by glob. The alternative was a permanently red `run_local_checks.sh`, and this repo has
+  already recorded that a wrapper which always reports FAILED is a wrapper people stop
+  running. Explicit lines mean a **new** file over the ceiling still fails on the day it
+  is written, which is the regression the gate exists to stop.
+
+**The burn-down.** Delete a line from `.github/ci/comment_density_waivers.txt` when you
+bring its file into band; a waiver matching no file is itself an error, so the list cannot
+go stale in the other direction. Do not add to the batch block. The worst of it is
+structural doc-comment headers rather than evidence dumps -- `sycl_interop.hh` 86.36%,
+`internal-api.hh` 84.38%, `settings.hh` 77.53% -- so this is a prose-relocation exercise
+for the API headers, not an evidence problem.

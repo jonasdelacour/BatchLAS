@@ -56,19 +56,31 @@ template <> struct PotrfBlockedConst<std::complex<double>> { static constexpr in
 inline int potrf_nb_env() { static const int v = batchlas::settings().geometry.potrf_nb; return v; }
 inline int potrf_w_env()  { static const int v = batchlas::settings().geometry.potrf_w;  return v; }
 
+// Above this order the diagonal leaf stops being where the time goes and the trailing
+// update's k -- which IS nb -- starts to be; clamping nb to the occupancy ceiling there
+// buys occupancy in the leaf and pays for it several times over in the GEMM.
+// evidence: docs/perf/potrf.md#the-occupancy-clamp-on-nb
+constexpr int kPotrfOccupancyNbMaxOrder = 256;
+
 struct PotrfBlockedParams {
-    int nb;  // diagonal block order, and the trailing update's k
-    int W;   // trailing-update column-panel width
+    int nb;                 // diagonal block order, and the trailing update's k
+    int W;                  // trailing-update column-panel width
+    int leaf_min_blocks;    // the occupancy target nb was clamped against
 };
 
 template <typename T>
 PotrfBlockedParams potrf_blocked_params(Queue& ctx, int n) {
     using C = PotrfBlockedConst<T>;
 
-    // From THIS device's SLM: the hardcoded potrf_cta_max_n<T>() can name a block the leaf refuses.
-    const std::size_t local_mem =
-        static_cast<std::size_t>(ctx.device().get_property(DeviceProperty::LOCAL_MEM_SIZE));
-    const int ceiling = potrf_cta_max_n_for_slm<T>(local_mem > 4096 ? local_mem - 4096 : 0);
+    // From THIS device's SLM: the hardcoded potrf_cta_max_n<T>() can name a block the leaf
+    // refuses. WHICH ceiling is the choice above: the advertised (occupancy-scaled) one
+    // while the leaf dominates, the residency one once the trailing GEMM does. The leaf
+    // is launched at the same target, so the two can never disagree.
+    const std::size_t budget = resident::device_slm_budget(
+        static_cast<std::size_t>(ctx.device().get_property(DeviceProperty::LOCAL_MEM_SIZE)));
+    const int leaf_min_blocks =
+        (n > 0 && n <= kPotrfOccupancyNbMaxOrder) ? resident::kMinBlocksPerSm : 1;
+    const int ceiling = potrf_cta_max_n_for_slm<T>(budget, leaf_min_blocks);
 
     const int want = potrf_nb_env() ? potrf_nb_env() : C::NB;
     int nb = std::min(want, std::max(ceiling, 1));
@@ -84,7 +96,7 @@ PotrfBlockedParams potrf_blocked_params(Queue& ctx, int n) {
     int W = potrf_w_env() ? potrf_w_env() : C::W;
     if (W < 1) W = 1;
 
-    return {nb, W};
+    return {nb, W, leaf_min_blocks};
 }
 
 template <typename T>
@@ -312,7 +324,10 @@ Event potrf_blocked_dispatch(Queue& ctx,
         const auto A11 = sub(j, ib, j, ib, ws.a11_ptrs.data());
         // (void) on an Event: deliberate. This Queue is in-order, so the next submission
         // is already ordered after this one and the Event carries nothing the caller needs.
-        (void)potrf_cta_dispatch<T>(ctx, A11, Uplo::Lower, ws.leaf_ws, ws.leaf_info);
+        // The SAME occupancy target nb was clamped against: the leaf's gate and the block
+        // width are one decision, and a mismatch makes the leaf throw on a legal block.
+        (void)potrf_cta_dispatch<T>(ctx, A11, Uplo::Lower, ws.leaf_ws, ws.leaf_info,
+                                    p.leaf_min_blocks);
 
         // Unguarded: stale leaf_info, and a solve dividing by a pivot the quench has not replaced.
         if (!ctx.in_order()) ctx.wait();

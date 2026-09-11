@@ -491,3 +491,34 @@ The consequence for reading the grid: a `relsd` discard on this page is a proper
 an artefact of the first rep, because no arm in the timed loop has an unwarmed neighbour position. The
 0.0261 ms steady reading is the same `factor_bench`, one-arm-per-process vendor time quoted in
 [The potrf n = 8 finding](#the-potrf-n--8-finding).
+
+## The arms list
+
+`benchmarks/factor_bench.cc` originally supported exactly two arms, `vendor` and
+`native`, with `--route=` applied to the second, and matched `--arms=` by
+`std::string::find`. Two defects followed from that, and the register-resident tier's
+A/B could not be run through it at all.
+
+**The substring match is the recorded `--name` trap in another costume.**
+`--arms=native` asked for one arm and got one, but only because `find("vendor")` missed;
+`--arms=vendor` silently dropped the native arm. Neither spelling is an error and
+neither prints a warning -- the CSV simply comes back with one row where the caller
+expected two, and a script that ratios row 0 against row 1 reads whatever came next.
+`--arms=` now splits on commas EXACTLY and rejects an empty list.
+
+**Two arms cannot express a three-tier comparison.** Comparing `vendor`, `cta` and
+`tiny` needed either two processes ratioing through a shared vendor arm -- which
+reintroduces precisely the clock drift the in-process interleave exists to remove -- or
+this change. `Cfg` now carries a `std::vector<std::string>` of arm names, each name is
+its own route pin (`--route=` still overrides the pin of the arm literally named
+`native`, which is the two-arm form every existing script uses), and the warm-up loop,
+the timed loop, the per-arm workspace sizing and the per-arm untimed correctness re-run
+all already iterated over `arms`, so they needed no change.
+
+The guards that make an added arm safe were also already there and are worth naming,
+because an arm whose pin does not parse measures whatever `automatic()` picks and says
+nothing about it: `pin_parsed_now()` is recorded per arm in the CSV's `pin_parsed`
+column, and the untimed residual/pivot gate runs per arm, so a fast wrong answer cannot
+be reported as a win. What is NOT guarded is an arm whose pin parses but whose route
+`supports()` refuses -- `BATCHLAS_GETRF_ROUTE=tiny` at cdouble n=32 parses fine and then
+falls through to the vendor, so that cell must be excluded by the caller.

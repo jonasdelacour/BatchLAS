@@ -17,6 +17,10 @@
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
 
+#ifdef BATCHLAS_GEQRF_TESTS_HAVE_LAPACKE
+#include <lapacke.h>
+#endif
+
 #include "test_utils.hh"
 
 #include "../src/extensions/geqrf_native.hh"
@@ -33,6 +37,7 @@
 #include <iterator>
 #include <limits>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -161,15 +166,39 @@ std::vector<typename Prom<T>::type> promote_Q(const T* Q, int m, int k, int ld) 
     return out;
 }
 
-// Householder QR's backward error is O(m k) eps ||A||; this constant is tight, not slack.
+// Exact equality, or both NaN. The NaN half exists because the tiny tier's poison test
+// deliberately fills the pad with NaN and NaN != NaN; without it that test would report
+// the pad as changed whether or not anything wrote to it.
+template <typename T>
+bool same_or_both_nan(T a, T b) {
+    const auto x = up(a);
+    const auto y = up(b);
+    const bool nx = std::isnan(hreal(x)) || std::isnan(himag(x));
+    const bool ny = std::isnan(hreal(y)) || std::isnan(himag(y));
+    if (nx || ny) return nx && ny;
+    return hreal(x) == hreal(y) && himag(x) == himag(y);
+}
+
+// Householder QR's backward error is O(m k) eps ||A||; the 0.5 (m + k) term is tight, not
+// slack. The FLOOR under it is what lets the tiny band reach n < 8 at all: below m + k = 16
+// the formula demands one or two eps, which no correct Householder QR meets. It loosens no
+// shape this file tested before the tiny tier.
+// evidence: docs/perf/qr.md#the-fixtures-tolerance-floor-and-why-it-is-new
+template <typename T>
+double small_order_tol_floor() {
+    return 8.0 * double(std::numeric_limits<RealOf<T>>::epsilon());
+}
+
 template <typename T>
 double residual_tol(int m, int k) {
-    return 0.5 * double(m + k) * double(std::numeric_limits<RealOf<T>>::epsilon());
+    return std::max(0.5 * double(m + k) * double(std::numeric_limits<RealOf<T>>::epsilon()),
+                    small_order_tol_floor<T>());
 }
 
 template <typename T>
 double orth_tol(int m, int k) {
-    return 0.5 * double(m + k) * double(std::numeric_limits<RealOf<T>>::epsilon());
+    return std::max(0.5 * double(m + k) * double(std::numeric_limits<RealOf<T>>::epsilon()),
+                    small_order_tol_floor<T>());
 }
 
 inline bool verbose() { return std::getenv("GEQRF_TESTS_VERBOSE") != nullptr; }
@@ -259,8 +288,42 @@ protected:
         return lm > 4096 ? lm - 4096 : std::size_t(0);
     }
 
+    // The CTA TIER's predicate: occupancy-scaled, and what supports() advertises.
     bool cta_fits(int m, int n) const {
         return sycl_geqrf::geqrf_cta_fits<T>(m, n, budget());
+    }
+
+    // The RESIDENCY predicate, at the whole budget: which leaf geqrf_panel_factorize
+    // takes. Strictly wider than cta_fits, and the only one that can reach the 48 KB
+    // launch hole. evidence: docs/perf/qr.md#the-occupancy-rule
+    bool leaf_fits(int m, int n) const {
+        return sycl_geqrf::geqrf_leaf_fits<T>(m, n, budget());
+    }
+
+    // The largest square panel the CTA tier admits, found by asking the predicate rather
+    // than by hardcoding a number the occupancy rule moves.
+    int cta_max_square() const {
+        int best = 0;
+        for (int n = 1; n <= 4096; ++n) {
+            if (!cta_fits(n, n)) break;
+            best = n;
+        }
+        return best;
+    }
+
+    // The TINY tier's ceiling and its packing, both QUERIED from the one predicate the
+    // launcher and the route builder also call.
+    int tiny_max_n() const {
+        return sycl_geqrf::geqrf_tiny_max_n_for_slm<T>(budget());
+    }
+    // Matrices per work-group at this order; 0 when the order is above the tier.
+    int tiny_pack(int n) const {
+        return static_cast<int>(
+            sycl_geqrf::geqrf_tiny_debug_launch<T>(*this->ctx, n) & 0xffffu);
+    }
+    int tiny_bucket(int n) const {
+        return static_cast<int>(
+            sycl_geqrf::geqrf_tiny_debug_launch<T>(*this->ctx, n) >> 16);
     }
 
     // Queried, never hardcoded: a hardcoded width silently stops straddling when it moves.
@@ -302,6 +365,21 @@ void check_one(const Problem<T>& p, const char* what) {
             << " (m=" << p.m << " n=" << p.n << ")";
     }
 
+    // THE PAD IS PART OF THE CONTRACT. make_problem poisons every element outside the m x n
+    // window -- ld pad, stride pad, tail past the last item -- and this reads it back. Drop
+    // it and an off-by-one store (`k < N` where the guard must be `k < n`) either passes
+    // silently or goes red as the NEXT item's leading columns, for the wrong reason.
+    for (size_t o = 0; o < p.buf.size(); ++o) {
+        const int b = static_cast<int>(o / static_cast<size_t>(p.stride));
+        const int r = static_cast<int>(o % static_cast<size_t>(p.stride));
+        const int col = r / p.ld;
+        const int row = r - col * p.ld;
+        if (b < p.batch && col < p.n && row < p.m) continue;
+        ASSERT_TRUE(same_or_both_nan(p.buf[o], p.a0[o]))
+            << what << ": the kernel wrote outside its m x n window, at buffer offset " << o
+            << " (item " << b << ", column " << col << ", row " << row << ")";
+    }
+
     if (p.batch > 1) {
         const T* f0 = p.buf.data();
         const T* fl = p.buf.data() + static_cast<size_t>(p.batch - 1) * p.stride;
@@ -316,13 +394,11 @@ void check_one(const Problem<T>& p, const char* what) {
     }
 }
 
-// The route pins below use batchlas::ScopedEnvVar (<batchlas/util/env.hh>) rather than a
-// local guard. The two hand-rolled ones this file carried (GeqrfEnvGuard/OrgqrEnvGuard)
-// had the same save-restore-or-unset semantics, but they called ::setenv and nothing else:
-// since batchlas::settings() snapshots the environment once, before main(), a bare ::setenv
-// is invisible to route resolution and every pinned test below silently measured the vendor
-// route. ScopedEnvVar's constructor and destructor call detail::reload_settings(), which is
-// what makes the pin -- and its removal at scope exit -- actually reach the router.
+// The route pins below MUST use batchlas::ScopedEnvVar (<batchlas/util/env.hh>), not a
+// hand-rolled ::setenv guard. batchlas::settings() snapshots the environment once, before
+// main(), so a bare ::setenv is invisible to route resolution and every pinned test here
+// silently measures the vendor. ScopedEnvVar's ctor and dtor call detail::reload_settings(),
+// which is what makes the pin -- and its removal at scope exit -- reach the router.
 
 using GeqrfTestTypes = typename test_utils::backend_types<GeqrfConfig>::type;
 
@@ -352,20 +428,26 @@ TYPED_TEST(GeqrfTest, ResidentLeafLaunchHoleAt48KiB) {
         ASSERT_EQ(static_cast<std::size_t>(r.m) * static_cast<std::size_t>(r.n) * sz, r.bytes)
             << "this row does not ask for " << r.bytes << " B";
         ASSERT_GE(r.m, r.n);
-        ASSERT_TRUE(this->cta_fits(r.m, r.n))
-            << "a " << r.bytes << " B tile is not admissible to the CTA tier at this budget; "
+        // leaf_fits, not cta_fits: a 48 KB tile is far above the occupancy-scaled TIER
+        // ceiling, so only the resident LEAF -- the blocked driver's panel -- can reach
+        // the hole at all. Asserted first, or the rows below prove nothing.
+        ASSERT_TRUE(this->leaf_fits(r.m, r.n))
+            << "a " << r.bytes << " B tile is not resident-admissible at this budget; "
                "the hole row is unreachable and this test proves nothing";
 
         auto p = make_problem<T>(r.m, r.n, 2, 271u + unsigned(r.bytes % 1000));
-        auto V = view_of(p);
-        UnifiedVector<std::byte> wb(std::max<std::size_t>(
-            1, sycl_geqrf::geqrf_cta_buffer_size<T>(*this->ctx, V)));
+        bool resident = false;
         ASSERT_NO_THROW(
-            sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span()))
+            sycl_geqrf::geqrf_panel_factorize<T>(*this->ctx, p.buf.data(), p.ld, p.stride,
+                                                 r.m, r.n, p.batch, p.tau.data(), p.k, 0,
+                                                 &resident))
             << "the resident leaf could not be launched with a " << r.bytes
             << " B tile (" << r.m << "x" << r.n << ")";
         this->ctx->wait();
-        check_one(p, "cta/launch-hole");
+        ASSERT_TRUE(resident)
+            << "the panel took the GLOBAL leaf, which never allocates local memory and so "
+               "cannot trip the hole this test exists to catch";
+        check_one(p, "leaf/launch-hole");
         if (this->HasFailure()) return;
     }
 }
@@ -375,8 +457,12 @@ TYPED_TEST(GeqrfTest, CtaResidualAndOrthogonality) {
     using T = typename TestFixture::T;
     struct S { int m, n, b; };
     // n%nb residues 0/1/2/8 against both shipped widths (32 and 16), m == n and m > n.
-    const S shapes[] = {{32, 32, 5}, {33, 17, 5}, {48, 48, 5}, {49, 49, 4},
-                        {50, 34, 4}, {64, 40, 4}, {17, 9, 3},  {96, 24, 3}};
+    // The small end of the ladder repeats the same residues at areas every type's
+    // occupancy-scaled ceiling admits; without it cdouble, whose ceiling is the tightest,
+    // drops to three shapes and the coverage assertion below stops being reachable.
+    const S shapes[] = {{16, 16, 5}, {24, 8, 5},  {32, 16, 4}, {17, 9, 3},
+                        {32, 32, 5}, {33, 17, 5}, {48, 48, 5}, {49, 49, 4},
+                        {50, 34, 4}, {64, 40, 4}, {96, 24, 3}};
     int ran = 0;
     for (const S& s : shapes) {
         if (!this->cta_fits(s.m, s.n)) continue;
@@ -911,15 +997,11 @@ TYPED_TEST(GeqrfTest, NativeFactorMatchesTheVendorElementwise) {
             this->ctx->wait();
 
             // A RELATIVE elementwise bound: the two do not share a reduction order.
-            //
-            // Scan ONLY the m x n window of each item. p.buf is allocated with the
-            // poison fill and only that window is written, so a scan over the whole
-            // buffer takes its maximum from the ld/stride padding (|-9.75e3|), not
-            // from the factor -- whose entries are O(1). That turned this relative
-            // bound into an absolute one ~1000x looser than it reads, admitting a
-            // float disagreement of ~0.07 on the very property this test exists for.
-            // The padding is bit-identical in both runs, so it contributes 0 to
-            // `worst` and cannot compensate.
+            // Scan ONLY the m x n window. Widening it takes `scale` from the poison
+            // fill in the ld/stride padding rather than from the O(1) factor, and the
+            // padding is bit-identical in both runs, so it contributes 0 to `worst`
+            // and cannot compensate -- the bound goes one-sided, not merely looser.
+            // evidence: docs/perf/qr.md#why-the-elementwise-scan-is-the-m-x-n-window-only
             double scale = 0.0, worst = 0.0, tworst = 0.0, tscale = 0.0;
             for (int b = 0; b < p.batch; ++b)
                 for (int j = 0; j < p.n; ++j)
@@ -1078,6 +1160,43 @@ TYPED_TEST(GeqrfTest, RouteTableAndTheVendorFreeFallback) {
     }
 }
 
+// G9c. THE OCCUPANCY TARGET ITSELF IS PINNED. Every other capacity assertion here asks the
+// predicate rather than a literal, which leaves kGeqrfMinBlocksPerSm free to move without a
+// single red -- and it is not a free knob: it places the CTA/Blocked routing cut.
+// evidence: docs/perf/qr.md#settling-the-target-on-the-tall-panels
+TYPED_TEST(GeqrfTest, OccupancyTargetIsPinned) {
+    using T = typename TestFixture::T;
+
+    EXPECT_EQ(sycl_geqrf::kGeqrfMinBlocksPerSm, 2)
+        << "geqrf's occupancy target moved. It is a routing cut, not an occupancy "
+           "preference: 4 (resident::kMinBlocksPerSm, what potrf and getrf use) hands "
+           "float 96x96 and cfloat 64x64 to the blocked driver, and 1 hands float "
+           "224x64 / 256x64 / 160x96 / 192x96 to the CTA tier. Both directions are "
+           "measured losses -- see the evidence above before changing this.";
+
+    // A SYNTHETIC budget, not this box's: reading LOCAL_MEM_SIZE would make the expected
+    // numbers device data. 97,280 B is sm_89's 101,376 less the 4 KiB reserve, the budget
+    // docs/perf/qr.md measures at. The DEFAULT argument is the point of the call --
+    // spelling the target here would read the literal 2 twice and never touch the constant.
+    constexpr std::size_t kMeasuredBudget = 97280;
+    const int64_t expect =
+        std::is_same_v<T, float>                ? 11776 :
+        std::is_same_v<T, std::complex<double>> ?  2944 :
+                                                   5888;  // double and complex<float>
+    EXPECT_EQ(sycl_geqrf::geqrf_cta_max_elems_for_slm<T>(kMeasuredBudget), expect)
+        << "the advertised CTA area at the measured budget moved. At target 2 the 48 KiB "
+           "launch hole clamps 48,640 down to 47,104, so these ceilings sit 2.07x below "
+           "the resident ones and not exactly 2x: off by a clean factor of two means the "
+           "target moved, off by ~4% means the hole clamp did.";
+
+    // The same call at target 1 is the RESIDENCY ceiling, and the gap between them is
+    // the band the settlement is about. Asserting the gap is non-empty is what keeps the
+    // pin above from passing vacuously on a device whose budget makes the two coincide.
+    EXPECT_GT(sycl_geqrf::geqrf_cta_max_elems_for_slm<T>(kMeasuredBudget, 1), expect)
+        << "the tier ceiling and the residency ceiling coincide, so the occupancy target "
+           "is inert and nothing above this line is discriminating";
+}
+
 // G9b. The native-vs-native tie-break lives in RouteTable::native_tier_preferred, NOT in
 // supports(): both arms must stay supports()-true on both sides of the crossover, or a
 // pinned `cta` falls through to automatic() and measures something else, and the same
@@ -1093,21 +1212,25 @@ TYPED_TEST(GeqrfTest, NativeTierTieBreakPicksTheFasterNativeVendorFree) {
     const bool has_crossover =
         std::is_same_v<T, float> || (std::is_same_v<T, double> && !test_utils::is_complex<T>::value);
     const int nc = std::is_same_v<R, float> ? 96 : 48;   // last n that prefers CTA
-    const int above = std::is_same_v<R, float> ? 128 : 64;  // first n that prefers Blocked
 
     if (!has_crossover) {
         GTEST_SKIP() << "no measured native crossover for this type (route_geqrf.hh: both "
                         "complex types stay on CTA to the top of their SLM capacity)";
     }
 
-    // Both shapes must be CTA-ELIGIBLE, or "blocked was chosen" proves nothing.
-    ASSERT_TRUE(this->cta_fits(nc, nc))
-        << "the below-crossover shape " << nc << "x" << nc << " does not fit the CTA tile on this "
-        << "device, so this test cannot see the tie-break";
-    ASSERT_TRUE(this->cta_fits(above, above))
-        << "the above-crossover shape " << above << "x" << above << " does not fit the CTA tile "
-        << "on this device, so 'blocked was chosen' would prove nothing -- CTA was never a "
-           "candidate. The tie-break is untested here.";
+    // BOTH shapes must be CTA-ELIGIBLE, or "blocked was chosen" proves nothing: the fit
+    // gate, not the tie-break, made the decision. The above-crossover shape is SEARCHED for
+    // rather than hardcoded -- the area ceiling can sit below the crossover.
+    // evidence: docs/perf/qr.md#the-occupancy-rule
+    const int square_cap = this->cta_max_square();
+    int above = 0;
+    if (square_cap > nc) above = nc + 1;
+    if (!this->cta_fits(nc, nc) || above == 0) {
+        GTEST_SKIP() << "this type's CTA area ceiling (largest square " << square_cap
+                     << ") sits at or below the declared column crossover " << nc
+                     << ", so the fit gate answers every shape before the tie-break is "
+                        "consulted and there is nothing here to test";
+    }
 
     auto p_lo = make_problem<T>(nc, nc, 2, 771u);
     auto p_hi = make_problem<T>(above, above, 2, 773u);
@@ -1417,6 +1540,685 @@ TYPED_TEST(GeqrfTest, BufferSizeCoversEverySupportedNativeTier) {
         check_one(p, pin);
     }
 }
+
+// The TINY tier: square n <= 32, one matrix per sub-group partition, held in registers.
+// Declared AFTER G0 -- the launch-hole guard must stay first, and these launches allocate
+// local memory.
+
+// T1. The band, exhaustively: every order the tier admits, a tight and a padded ld, and at
+// the boundary orders a batch leaving a PARTIAL last work-group. That last case is what the
+// "no early return" design exists for -- invisible at any batch that is a multiple of the
+// packing, and invisible at N = 32.
+TYPED_TEST(GeqrfTest, TinyResidualAndOrthogonalityAcrossTheBand) {
+    using T = typename TestFixture::T;
+    const int max_n = this->tiny_max_n();
+    ASSERT_GE(max_n, 8) << "the tiny tier reports no capacity on this device";
+
+    for (int n = 1; n <= max_n; ++n) {
+        for (int ld_pad : {0, 5}) {
+            auto p = make_problem<T>(n, n, 1, 4001u + unsigned(n) * 7u + unsigned(ld_pad), ld_pad);
+            auto V = view_of(p);
+            ASSERT_NO_THROW(sycl_geqrf::geqrf_tiny_dispatch<T>(*this->ctx, V, p.tau.to_span(),
+                                                               Span<std::byte>()))
+                << "n=" << n << " ld_pad=" << ld_pad;
+            this->ctx->wait();
+            check_one(p, "tiny/solo");
+            if (this->HasFailure()) {
+                FAIL() << "tiny failed at n=" << n << " ld_pad=" << ld_pad << " batch=1";
+            }
+        }
+    }
+
+    // The partial-work-group rows, at the orders where the ladder and the packing change.
+    for (int n : {1, 2, 3, 7, 8, 9, 15, 16, 17, 31, 32}) {
+        if (n > max_n) continue;
+        const int pack = this->tiny_pack(n);
+        ASSERT_GE(pack, 1) << "no packing reported at n=" << n;
+        const int batch = 2 * pack + 3;   // a last work-group that is 3/pack full
+        for (int ld_pad : {0, 5}) {
+            auto p = make_problem<T>(n, n, batch, 5003u + unsigned(n), ld_pad);
+            auto V = view_of(p);
+            ASSERT_NO_THROW(sycl_geqrf::geqrf_tiny_dispatch<T>(*this->ctx, V, p.tau.to_span(),
+                                                               Span<std::byte>()))
+                << "n=" << n << " batch=" << batch;
+            this->ctx->wait();
+            check_one(p, "tiny/partial-wg");
+            if (this->HasFailure()) {
+                FAIL() << "tiny failed at n=" << n << " batch=" << batch
+                       << " (pack=" << pack << ") ld_pad=" << ld_pad;
+            }
+        }
+    }
+}
+
+// T2. THE PACKING ORACLE. Same kernel, same arithmetic, only the partition slot differs, so
+// a packed launch must agree with a solo one BIT FOR BIT -- a residual bound would not see
+// a partition index that drops its `sg_id *` term.
+// evidence: docs/perf/qr.md#break-sweeps-the-tiny-tier
+TYPED_TEST(GeqrfTest, TinyPackedBatchMatchesSolo) {
+    using T = typename TestFixture::T;
+    const int max_n = this->tiny_max_n();
+    const T kTauPoison = mk<T>(-12345.0, -12345.0);
+    int packed_orders = 0;
+    for (int n : {5, 8, 12, 16, 24, 32}) {
+        if (n > max_n) continue;
+        const int pack = this->tiny_pack(n);
+        ASSERT_GE(pack, 1) << "no packing reported at n=" << n;
+        if (pack > 1) ++packed_orders;
+        const int batch = 2 * pack + 3;
+
+        auto packed = make_problem<T>(n, n, batch, 6007u + unsigned(n));
+        auto Vp = view_of(packed);
+        sycl_geqrf::geqrf_tiny_dispatch<T>(*this->ctx, Vp, packed.tau.to_span(), Span<std::byte>());
+        this->ctx->wait();
+
+        for (int b = 0; b < batch; ++b) {
+            // One item, its own buffer, its own pointer array: a Matrix built from a
+            // pointer COPIES, so a solo view has to be built exactly as the packed one is
+            // or it factorises something else.
+            auto solo = make_problem<T>(n, n, 1, 0u);
+            for (int j = 0; j < n; ++j) {
+                for (int i = 0; i < n; ++i) {
+                    solo.buf[static_cast<size_t>(j) * solo.ld + i] =
+                        packed.a0[static_cast<size_t>(b) * packed.stride +
+                                  static_cast<size_t>(j) * packed.ld + i];
+                }
+            }
+            solo.a0.assign(solo.buf.begin(), solo.buf.end());
+            auto Vs = view_of(solo);
+            sycl_geqrf::geqrf_tiny_dispatch<T>(*this->ctx, Vs, solo.tau.to_span(), Span<std::byte>());
+            this->ctx->wait();
+
+            for (int j = 0; j < n; ++j) {
+                for (int i = 0; i < n; ++i) {
+                    const T got = packed.buf[static_cast<size_t>(b) * packed.stride +
+                                             static_cast<size_t>(j) * packed.ld + i];
+                    const T want = solo.buf[static_cast<size_t>(j) * solo.ld + i];
+                    ASSERT_EQ(hreal(up(got)), hreal(up(want)))
+                        << "packed item " << b << " of " << batch << " differs from its solo run "
+                        << "at (" << i << "," << j << "), n=" << n;
+                    ASSERT_EQ(himag(up(got)), himag(up(want)));
+                }
+            }
+            for (int i = 0; i < n; ++i) {
+                const T got = packed.tau[static_cast<size_t>(b) * n + i];
+                const T want = solo.tau[static_cast<size_t>(i)];
+                // LIVENESS. make_problem poisons tau identically on both sides, so a
+                // kernel that never wrote tau at all would satisfy the equality below
+                // with -12345 against -12345. Each slot must carry a written value.
+                ASSERT_TRUE(hreal(up(got)) != hreal(up(kTauPoison)) ||
+                            himag(up(got)) != himag(up(kTauPoison)))
+                    << "packed tau[" << i << "] of item " << b << " at n=" << n
+                    << " is still the fixture's poison: the kernel never wrote it";
+                ASSERT_TRUE(std::isfinite(hreal(up(got))) && std::isfinite(himag(up(got))))
+                    << "packed tau[" << i << "] of item " << b << " at n=" << n
+                    << " is not finite";
+                ASSERT_EQ(hreal(up(got)), hreal(up(want)))
+                    << "packed tau[" << i << "] of item " << b << " differs from the solo run";
+                ASSERT_EQ(himag(up(got)), himag(up(want)));
+            }
+        }
+    }
+    // ANTI-VACUITY, the counter both sibling cases carry: with one matrix per
+    // work-group at every order the sweep reached, every comparison above was a solo
+    // run against another solo run and the packing was never exercised.
+    ASSERT_GT(packed_orders, 0)
+        << "no order in the sweep packed more than one matrix per work-group for this "
+           "type; this test proved nothing about the packing";
+}
+
+// T3. The padding contract, with NaN as the poison -- NOT bit-identity against the CTA
+// route, which is unobtainable because the two reduce a column norm in different orders.
+// NaN is the one poison no arithmetic identity can absorb.
+// evidence: docs/perf/qr.md#why-bit-identity-against-the-cta-route-is-not-the-padding-test
+TYPED_TEST(GeqrfTest, TinyPaddingIsInertUnderNaNPoison) {
+    using T = typename TestFixture::T;
+    const double qnan = std::numeric_limits<double>::quiet_NaN();
+    const int max_n = this->tiny_max_n();
+
+    for (int n : {1, 3, 5, 9, 17, 24, 31}) {
+        if (n > max_n) continue;
+        const int batch = 3;
+        auto p = make_problem<T>(n, n, batch, 7011u + unsigned(n));
+        // Every element outside the n x n window -- the ld pad AND the stride pad -- is
+        // NaN. Rows beyond n inside a column are the ld pad; columns beyond n live in the
+        // stride pad.
+        for (size_t o = 0; o < p.buf.size(); ++o) {
+            const int b = static_cast<int>(o / static_cast<size_t>(p.stride));
+            const int r = static_cast<int>(o % static_cast<size_t>(p.stride));
+            const int col = r / p.ld, row = r - col * p.ld;
+            if (b < batch && col < n && row < n) continue;
+            p.buf[o] = mk<T>(qnan, qnan);
+        }
+        p.a0.assign(p.buf.begin(), p.buf.end());
+
+        auto V = view_of(p);
+        ASSERT_NO_THROW(sycl_geqrf::geqrf_tiny_dispatch<T>(*this->ctx, V, p.tau.to_span(),
+                                                           Span<std::byte>()))
+            << "n=" << n;
+        this->ctx->wait();
+
+        for (int b = 0; b < batch; ++b) {
+            for (int j = 0; j < n; ++j) {
+                for (int i = 0; i < n; ++i) {
+                    const auto v = up(p.buf[static_cast<size_t>(b) * p.stride +
+                                            static_cast<size_t>(j) * p.ld + i]);
+                    ASSERT_TRUE(std::isfinite(hreal(v)) && std::isfinite(himag(v)))
+                        << "a NaN from the pad reached the factor at (" << i << "," << j
+                        << ") b=" << b << " n=" << n;
+                }
+            }
+        }
+        // Correct, and the NaN pad untouched -- check_one asserts both (its pad
+        // comparison treats NaN-for-NaN as unchanged).
+        check_one(p, "tiny/nan-pad");
+        if (this->HasFailure()) FAIL() << "tiny NaN-pad failed at n=" << n;
+    }
+}
+
+// T4. A structurally zero column is xLARFG's identity case: tau is EXACTLY zero, the
+// elimination continues, and every output stays finite. That is geqrf's analogue of
+// potrf's planted non-PD column -- there is no info span to read, so the observable is
+// tau itself, which make_problem poisons to -12345 so an unwritten slot is visible.
+TYPED_TEST(GeqrfTest, TinyZeroColumnGivesExactlyZeroTauAndStaysFinite) {
+    using T = typename TestFixture::T;
+    const int max_n = this->tiny_max_n();
+    for (int n : {4, 8, 16, 32}) {
+        if (n > max_n) continue;
+        const int batch = 5;
+        const int zero_col = n / 2;
+        auto p = make_problem<T>(n, n, batch, 8017u + unsigned(n));
+        // Only ONE item carries the defect, so the others prove it did not spread.
+        const int bad = 2;
+        for (int i = 0; i < n; ++i) {
+            p.buf[static_cast<size_t>(bad) * p.stride + static_cast<size_t>(zero_col) * p.ld + i] =
+                mk<T>(0.0, 0.0);
+        }
+        p.a0.assign(p.buf.begin(), p.buf.end());
+
+        auto V = view_of(p);
+        ASSERT_NO_THROW(sycl_geqrf::geqrf_tiny_dispatch<T>(*this->ctx, V, p.tau.to_span(),
+                                                           Span<std::byte>()));
+        this->ctx->wait();
+
+        // A column that is zero in the ORIGINAL matrix is still zero when its reflector is
+        // reached: every preceding H_i is linear, and H_i * 0 = 0.
+        const auto t = up(p.tau[static_cast<size_t>(bad) * n + zero_col]);
+        EXPECT_EQ(hreal(t), 0.0) << "a zero column must give tau = 0 exactly, n=" << n;
+        EXPECT_EQ(himag(t), 0.0);
+        for (size_t i = 0; i < p.tau.size(); ++i) {
+            const auto ti = up(p.tau[i]);
+            ASSERT_TRUE(std::isfinite(hreal(ti)) && std::isfinite(himag(ti)))
+                << "tau[" << i << "] is not finite after the planted zero column";
+            ASSERT_NE(hreal(ti), -12345.0) << "tau slot " << i << " was never written";
+        }
+        check_one(p, "tiny/zero-column");
+        if (this->HasFailure()) FAIL() << "tiny zero-column failed at n=" << n;
+    }
+}
+
+// T5. The direct entry point re-applies every gate supports() applies and THROWS. A
+// forced route that supports() rejects falls through to automatic() and silently runs the
+// vendor, so a missing gate here is a wrong measurement rather than an error.
+TYPED_TEST(GeqrfTest, TinyDirectEntryPointRefusesWhatSupportsRefuses) {
+    using T = typename TestFixture::T;
+    const int max_n = this->tiny_max_n();
+    ASSERT_GE(max_n, 8);
+
+    {   // Tall: P1 is square-only; a tall panel is the CTA tier's.
+        auto p = make_problem<T>(2 * max_n, max_n, 2, 31u);
+        auto V = view_of(p);
+        EXPECT_THROW(sycl_geqrf::geqrf_tiny_dispatch<T>(*this->ctx, V, p.tau.to_span(),
+                                                        Span<std::byte>()),
+                     batchlas::invalid_argument);
+    }
+    {   // One order past the ceiling.
+        auto p = make_problem<T>(max_n + 1, max_n + 1, 2, 32u);
+        auto V = view_of(p);
+        EXPECT_THROW(sycl_geqrf::geqrf_tiny_dispatch<T>(*this->ctx, V, p.tau.to_span(),
+                                                        Span<std::byte>()),
+                     batchlas::invalid_argument);
+    }
+    {   // A tau span one element short is an ERROR here, not a "not requested" sentinel.
+        auto p = make_problem<T>(8, 8, 4, 33u);
+        auto V = view_of(p);
+        Span<T> short_tau(p.tau.data(), p.tau.size() - 1);
+        EXPECT_THROW(sycl_geqrf::geqrf_tiny_dispatch<T>(*this->ctx, V, short_tau,
+                                                        Span<std::byte>()),
+                     batchlas::invalid_argument);
+    }
+}
+
+// T6. Routing. THREE places must know about Algorithm::Tiny before the arm is reachable --
+// the enum, to_string (route_diff.sh and the coverage CSV print it) and
+// parse_algorithm_word (miss it and BATCHLAS_GEQRF_ROUTE=tiny parses to nullopt, the pin is
+// dropped and the arm measures automatic()). The fourth assertion runs the other way: the
+// tier must NOT be preferred, nor become the vendor-free build's choice.
+TYPED_TEST(GeqrfTest, TinyIsRoutableByPinButNotYetPreferred) {
+    using T = typename TestFixture::T;
+    static constexpr Backend B = TestFixture::BackendType;
+    using Tbl = dispatch::RouteTable<dispatch::Op::geqrf, T>;
+    const int max_n = this->tiny_max_n();
+    ASSERT_GE(max_n, 8);
+
+    const dispatch::Route tiny{dispatch::Origin::Native, dispatch::Algorithm::Tiny};
+    EXPECT_EQ(dispatch::to_string(dispatch::Algorithm::Tiny), "tiny");
+    const auto parsed = dispatch::parse_route_value("tiny");
+    ASSERT_TRUE(parsed.has_value()) << "BATCHLAS_GEQRF_ROUTE=tiny does not parse";
+    EXPECT_TRUE(*parsed == tiny);
+
+    auto square = make_problem<T>(max_n, max_n, 2, 41u);
+    auto Vs = view_of(square);
+    const auto shape = backend::geqrf_op_shape<B, T>(*this->ctx, Vs);
+    ASSERT_TRUE(shape.has_value());
+    EXPECT_EQ(shape->tiny_max_n, max_n) << "the shape builder and the launcher disagree";
+    EXPECT_TRUE(Tbl::supports(tiny, *shape));
+
+    // Not preferred, and not the tier the vendor-free walk picks: flipping either belongs
+    // in the measured PR, in one commit, or the arm re-routes two paths unmeasured.
+    EXPECT_FALSE(Tbl::native_tier_preferred(tiny, *shape));
+    EXPECT_FALSE(Tbl::preferred(tiny, *shape));
+    EXPECT_FALSE(Tbl::best_native_tier(*shape) == tiny);
+    EXPECT_FALSE(dispatch::resolve_geqrf_route<T>(dispatch::Route{}, *shape,
+                                                  /*vendor_available=*/false) == tiny)
+        << "the vendor-free build now lands on an unmeasured tier";
+
+    // Refused where it must be: tall, and one order past the ceiling.
+    auto tall = make_problem<T>(2 * max_n, max_n, 2, 42u);
+    auto Vt = view_of(tall);
+    const auto tshape = backend::geqrf_op_shape<B, T>(*this->ctx, Vt);
+    ASSERT_TRUE(tshape.has_value());
+    EXPECT_FALSE(Tbl::supports(tiny, *tshape));
+
+    auto over = make_problem<T>(max_n + 1, max_n + 1, 2, 43u);
+    auto Vo = view_of(over);
+    const auto oshape = backend::geqrf_op_shape<B, T>(*this->ctx, Vo);
+    ASSERT_TRUE(oshape.has_value());
+    EXPECT_FALSE(Tbl::supports(tiny, *oshape));
+}
+
+// T7. The facade reaches the kernel, and geqrf_buffer_size does not throw on the way.
+// The buffer-size arm is a separate failure mode: the tiny tier's workspace is
+// legitimately ZERO, so `native_fired` -- not a non-zero size -- is what tells
+// geqrf_buffer_size that a native tier answered.
+TYPED_TEST(GeqrfTest, FacadeReachesTheTinyKernel) {
+    using T = typename TestFixture::T;
+    static constexpr Backend B = TestFixture::BackendType;
+    const int n = std::min(24, this->tiny_max_n());
+    const int batch = 7;
+    ASSERT_GE(n, 8);
+
+    ScopedEnvVar guard("BATCHLAS_GEQRF_ROUTE", "tiny");
+    auto p = make_problem<T>(n, n, batch, 991u);
+    auto V = view_of(p);
+
+    const auto route = backend::geqrf_route<B, T>(*this->ctx, V, /*vendor_available=*/true);
+    ASSERT_TRUE(dispatch::is_native(route))
+        << "BATCHLAS_GEQRF_ROUTE=tiny did not resolve to a native route";
+    ASSERT_EQ(route.algo, dispatch::Algorithm::Tiny);
+
+    const std::size_t need = geqrf_buffer_size<B, T>(*this->ctx, V, p.tau.to_span());
+    EXPECT_GE(need, sycl_geqrf::geqrf_tiny_buffer_size<T>(*this->ctx, V));
+    UnifiedVector<std::byte> ws(std::max<std::size_t>(1, need));
+    ASSERT_NO_THROW((geqrf<B, T>(*this->ctx, V, p.tau.to_span(), ws.to_span())));
+    this->ctx->wait();
+    const std::vector<T> facade(p.buf.begin(), p.buf.end());
+    const std::vector<T> ftau(p.tau.begin(), p.tau.end());
+
+    reset(p);
+    sycl_geqrf::geqrf_tiny_dispatch<T>(*this->ctx, V, p.tau.to_span(), Span<std::byte>());
+    this->ctx->wait();
+    for (size_t o = 0; o < facade.size(); ++o) {
+        ASSERT_EQ(hreal(up(facade[o])), hreal(up(p.buf[o])))
+            << "the facade did not run the tiny kernel: its answer differs at offset " << o;
+        ASSERT_EQ(himag(up(facade[o])), himag(up(p.buf[o])));
+    }
+    for (size_t o = 0; o < ftau.size(); ++o) {
+        ASSERT_EQ(hreal(up(ftau[o])), hreal(up(p.tau[o]))) << "tau differs at " << o;
+        ASSERT_EQ(himag(up(ftau[o])), himag(up(p.tau[o])));
+    }
+    check_one(p, "tiny/facade");
+}
+
+// T9. RELATIVE accuracy against the tier this one would replace, because below m + k = 16
+// an absolute pass/fail says more about the tolerance constant than about the kernel. This
+// is the evidence behind small_order_tol_floor().
+// evidence: docs/perf/qr.md#the-fixtures-tolerance-floor-and-why-it-is-new
+TYPED_TEST(GeqrfTest, TinyIsNoWorseThanTheCtaRouteAtTinyOrders) {
+    using T = typename TestFixture::T;
+    const int max_n = this->tiny_max_n();
+
+    for (int n = 1; n <= std::min(12, max_n); ++n) {
+        if (!this->cta_fits(n, n)) continue;
+        const int batch = 4;
+        auto p = make_problem<T>(n, n, batch, 9091u + unsigned(n));
+        const std::vector<T> pristine = p.a0;
+        auto V = view_of(p);
+
+        sycl_geqrf::geqrf_tiny_dispatch<T>(*this->ctx, V, p.tau.to_span(), Span<std::byte>());
+        this->ctx->wait();
+        std::vector<double> res_tiny(batch), orth_tiny(batch);
+        for (int b = 0; b < batch; ++b) {
+            const T* F = p.buf.data() + static_cast<size_t>(b) * p.stride;
+            const T* A0 = pristine.data() + static_cast<size_t>(b) * p.stride;
+            const T* tau = p.tau.data() + static_cast<size_t>(b) * p.k;
+            const auto Q = host_form_Q<T>(F, tau, p.m, p.k, p.ld);
+            res_tiny[b] = qr_residual<T>(Q, F, A0, p.m, p.n, p.k, p.ld, p.ld);
+            orth_tiny[b] = orth_of_promoted(Q, p.m, p.k);
+        }
+
+        reset(p);
+        const std::size_t ws = sycl_geqrf::geqrf_cta_buffer_size<T>(*this->ctx, V);
+        UnifiedVector<std::byte> w(ws ? ws : 1);
+        sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, V, p.tau.to_span(), w.to_span());
+        this->ctx->wait();
+
+        for (int b = 0; b < batch; ++b) {
+            const T* F = p.buf.data() + static_cast<size_t>(b) * p.stride;
+            const T* A0 = pristine.data() + static_cast<size_t>(b) * p.stride;
+            const T* tau = p.tau.data() + static_cast<size_t>(b) * p.k;
+            const auto Q = host_form_Q<T>(F, tau, p.m, p.k, p.ld);
+            const double res_cta = qr_residual<T>(Q, F, A0, p.m, p.n, p.k, p.ld, p.ld);
+            const double orth_cta = orth_of_promoted(Q, p.m, p.k);
+            // The slack must stay NEAR ONE: the two kernels differ only in one column
+            // norm's association order, which licenses O(n eps) relative. Widening it to
+            // 4 lets the register kernel lose two bits and still pass under a name that
+            // claims it loses none; the floor is the half that binds at these orders.
+            // evidence: docs/perf/qr.md#the-fixtures-tolerance-floor-and-why-it-is-new
+            const double slack = 2.0;
+            EXPECT_LE(res_tiny[b], std::max(slack * res_cta, small_order_tol_floor<T>()))
+                << "tiny is materially less accurate than the CTA route at n=" << n
+                << " b=" << b << " (tiny " << res_tiny[b] << " vs cta " << res_cta << ")";
+            EXPECT_LE(orth_tiny[b], std::max(slack * orth_cta, small_order_tol_floor<T>()))
+                << "tiny's reflectors are materially less orthonormal than the CTA route's "
+                << "at n=" << n << " b=" << b << " (tiny " << orth_tiny[b] << " vs cta "
+                << orth_cta << ")";
+        }
+    }
+}
+
+// T10. PARTITION INDEPENDENCE, with NaN as the probe. Every collective the reflector runs
+// -- the alpha broadcast and both norm butterflies -- is scoped to the PARTITION, not the
+// sub-group. Widening one to the sub-group is invisible on ordinary data (the extra lanes
+// carry plausible finite numbers) and not invisible when they carry NaN, which is why one
+// item's whole n x n window is NaN and the live neighbours sharing its sub-group must
+// still factor exactly as they do alone.
+// evidence: docs/perf/qr.md#the-synthesis-pass-four-more-breaks
+TYPED_TEST(GeqrfTest, TinyNeighbourNaNDoesNotLeakAcrossPartitions) {
+    using T = typename TestFixture::T;
+    const double qnan = std::numeric_limits<double>::quiet_NaN();
+    const int max_n = this->tiny_max_n();
+
+    for (int n : {1, 5, 8, 13, 16, 24, 32}) {
+        if (n > max_n) continue;
+        const int pack = this->tiny_pack(n);
+        ASSERT_GE(pack, 1) << "no packing reported at n=" << n;
+        // At least two work-groups, and a poisoned item in the middle of the first.
+        const int batch = std::max(4, 2 * pack);
+        const int bad = pack / 2;
+
+        // The clean reference: the SAME matrices with no poison anywhere.
+        auto clean = make_problem<T>(n, n, batch, 6101u + unsigned(n));
+        auto Vc = view_of(clean);
+        ASSERT_NO_THROW(sycl_geqrf::geqrf_tiny_dispatch<T>(*this->ctx, Vc, clean.tau.to_span(),
+                                                           Span<std::byte>()))
+            << "n=" << n;
+        this->ctx->wait();
+
+        // The same problem again, with item `bad` wholly NaN.
+        auto p = make_problem<T>(n, n, batch, 6101u + unsigned(n));
+        for (int j = 0; j < n; ++j) {
+            for (int i = 0; i < n; ++i) {
+                p.buf[static_cast<size_t>(bad) * p.stride + static_cast<size_t>(j) * p.ld + i] =
+                    mk<T>(qnan, qnan);
+            }
+        }
+        auto V = view_of(p);
+        ASSERT_NO_THROW(sycl_geqrf::geqrf_tiny_dispatch<T>(*this->ctx, V, p.tau.to_span(),
+                                                           Span<std::byte>()))
+            << "n=" << n;
+        this->ctx->wait();
+
+        for (int b = 0; b < batch; ++b) {
+            if (b == bad) continue;
+            for (int j = 0; j < n; ++j) {
+                for (int i = 0; i < n; ++i) {
+                    const size_t o = static_cast<size_t>(b) * p.stride +
+                                     static_cast<size_t>(j) * p.ld + i;
+                    ASSERT_TRUE(same_or_both_nan(p.buf[o], clean.buf[o]))
+                        << "item " << b << " changed when a NEIGHBOUR was poisoned with NaN"
+                        << " at (" << i << "," << j << ") n=" << n << " pack=" << pack
+                        << "; a partition collective has been widened to the sub-group";
+                }
+            }
+            for (int i = 0; i < n; ++i) {
+                const size_t o = static_cast<size_t>(b) * n + i;
+                ASSERT_TRUE(same_or_both_nan(p.tau[o], clean.tau[o]))
+                    << "tau[" << i << "] of item " << b << " changed when a neighbour was "
+                       "poisoned with NaN; n=" << n;
+            }
+        }
+    }
+}
+
+// T11. tau, ELEMENTWISE, against LAPACKE -- the only assertion in this file whose oracle is
+// NOT host_form_Q, so a convention error shared by the kernel and that oracle cannot hide
+// in it. Real types only, deliberately: LAPACK's complex xLARFG has a second freedom this
+// file already guards (the real-beta choice), and mixing the two questions into one
+// assertion would make a failure ambiguous.
+// evidence: docs/perf/qr.md#the-synthesis-pass-four-more-breaks
+#ifdef BATCHLAS_GEQRF_TESTS_HAVE_LAPACKE
+TYPED_TEST(GeqrfTest, TinyTauMatchesLapackeElementwise) {
+    using T = typename TestFixture::T;
+    if constexpr (!(std::is_same_v<T, float> || std::is_same_v<T, double>)) {
+        GTEST_SKIP() << "LAPACKE tau comparison is for the real types; the complex "
+                        "convention is pinned by the orthogonality tests";
+    } else {
+        const int max_n = this->tiny_max_n();
+        for (int n : {1, 5, 8, 17, 32}) {
+            if (n > max_n) continue;
+            const int batch = 3;
+            auto p = make_problem<T>(n, n, batch, 7717u + unsigned(n));
+            const std::vector<T> pristine = p.a0;
+            auto V = view_of(p);
+            ASSERT_NO_THROW(sycl_geqrf::geqrf_tiny_dispatch<T>(*this->ctx, V, p.tau.to_span(),
+                                                               Span<std::byte>()))
+                << "n=" << n;
+            this->ctx->wait();
+
+            // The reference runs on the SAME column-major buffer with the SAME ld, one
+            // item at a time; LAPACKE overwrites its input, so each item gets a copy.
+            for (int b = 0; b < batch; ++b) {
+                std::vector<T> a(static_cast<size_t>(p.ld) * n);
+                for (int j = 0; j < n; ++j) {
+                    for (int i = 0; i < n; ++i) {
+                        a[static_cast<size_t>(j) * p.ld + i] =
+                            pristine[static_cast<size_t>(b) * p.stride +
+                                     static_cast<size_t>(j) * p.ld + i];
+                    }
+                }
+                std::vector<T> ref_tau(static_cast<size_t>(n));
+                lapack_int info = 0;
+                if constexpr (std::is_same_v<T, float>) {
+                    info = LAPACKE_sgeqrf(LAPACK_COL_MAJOR, n, n, a.data(), p.ld,
+                                          ref_tau.data());
+                } else {
+                    info = LAPACKE_dgeqrf(LAPACK_COL_MAJOR, n, n, a.data(), p.ld,
+                                          ref_tau.data());
+                }
+                ASSERT_EQ(info, 0) << "LAPACKE_xgeqrf failed at n=" << n << " b=" << b;
+
+                // tau is O(1) for a random matrix and the two implementations differ only
+                // in the association order of one column norm, so the tolerance is a few
+                // hundred eps and not a wildcard. A dropped or doubled tau, a tau written
+                // at the wrong stride, or the unscaled fused larfg all miss by O(1).
+                const double tol = 256.0 * double(n) *
+                                   double(std::numeric_limits<RealOf<T>>::epsilon());
+                for (int i = 0; i < n; ++i) {
+                    const double got = up(p.tau[static_cast<size_t>(b) * n + i]);
+                    const double want = up(ref_tau[static_cast<size_t>(i)]);
+                    ASSERT_NEAR(got, want, tol * std::max(1.0, std::fabs(want)))
+                        << "tau[" << i << "] of item " << b << " at n=" << n
+                        << " disagrees with LAPACKE (" << got << " vs " << want << ")";
+                }
+            }
+        }
+    }
+}
+#endif  // BATCHLAS_GEQRF_TESTS_HAVE_LAPACKE
+
+// T8. A SOURCE check, because neither property has observable behaviour on this device: a
+// work-group barrier in a partition kernel is a RACE that stays green, and a work-group
+// reduce_over_group adds static shared whose cost lands on a NEIGHBOURING kernel's cold
+// first launch. Comments are stripped before matching, so this prose does not match itself.
+#ifdef BATCHLAS_GEQRF_TINY_CC_PATH
+namespace {
+
+std::string FirstLineContaining(const std::string& path, const char* token) {
+    std::FILE* f = std::fopen(path.c_str(), "r");
+    if (!f) return std::string("<could not open ") + path + ">";
+    char line[8192];
+    std::string found;
+    while (std::fgets(line, sizeof(line), f)) {
+        const std::string text(line);
+        const size_t comment = text.find("//");
+        const std::string code = comment == std::string::npos ? text : text.substr(0, comment);
+        if (code.find(token) != std::string::npos) { found = text; break; }
+    }
+    std::fclose(f);
+    return found;
+}
+
+}  // namespace
+
+// The kernel body's text between the parallel_for and its closing brace. Returned as a
+// vector of (line number, code) with comments stripped, so a scan can ask structural
+// questions about the region a source check actually cares about.
+std::vector<std::pair<int, std::string>> KernelBodyLines(const std::string& path,
+                                                         const char* open_token) {
+    std::vector<std::pair<int, std::string>> out;
+    std::FILE* f = std::fopen(path.c_str(), "r");
+    if (!f) return out;
+    char line[8192];
+    int no = 0;
+    bool inside = false;
+    while (std::fgets(line, sizeof(line), f)) {
+        ++no;
+        const std::string text(line);
+        const size_t comment = text.find("//");
+        const std::string code = comment == std::string::npos ? text : text.substr(0, comment);
+        if (!inside) {
+            if (code.find(open_token) != std::string::npos) inside = true;
+            continue;
+        }
+        if (code.find("});") != std::string::npos) break;
+        out.emplace_back(no, code);
+    }
+    std::fclose(f);
+    return out;
+}
+
+// T8b. NO EARLY RETURN in the kernel body, checked in the SOURCE because the behavioural
+// guard does not work: the break was planted and the whole suite stayed green. The idiom is
+// undefined (a sub-group barrier reached by only part of a sub-group) but this toolchain
+// tolerates it on sm_89, so no numerical test on this box can see it.
+// evidence: docs/perf/qr.md#break-sweeps-the-tiny-tier
+TEST(GeqrfTinySource, KernelBodyHasNoEarlyReturn) {
+    const std::string path = BATCHLAS_GEQRF_TINY_CC_PATH;
+    const auto body = KernelBodyLines(path, "parallel_for<GeqrfTinyKernel");
+    ASSERT_FALSE(body.empty()) << "the kernel body could not be located in " << path
+                               << "; this check would pass vacuously";
+    for (const auto& [no, code] : body) {
+        EXPECT_EQ(code.find("return"), std::string::npos)
+            << path << ":" << no << " returns from inside the kernel body. With several "
+               "matrices per sub-group a `prob >= batch` return is partition-uniform but "
+               "NOT sub-group-uniform, and every group_barrier(sg) after it is then "
+               "undefined: " << code;
+    }
+}
+
+// T8c. THE BARRIERS THEMSELVES, by count and by spelling. Same unfalsifiability as T8b: the
+// chunk body is warp-uniform here, so deleting a barrier stays green on this box and is a
+// hard race anywhere a sub-group is not a warp. The apply needs EXACTLY TWO -- one between
+// the elementwise product and the column sum (RAW on the tile), one between the column sum
+// and the update (RAW on y, plus the inter-chunk WAR on the tile, covered only because y is
+// a separate array). The SPELLING is load-bearing too: sg_compat.hh's group_barrier(part)
+// is a NO-OP off NVPTX, so a publish/read pair ordered by it is correct here and silently
+// unordered on AMD. Barrier the PLAIN sub-group everywhere.
+// evidence: docs/perf/qr.md#the-synthesis-pass-four-more-breaks
+TEST(GeqrfTinySource, ChunkBodyCarriesExactlyTwoSubGroupBarriers) {
+    const std::string path = BATCHLAS_GEQRF_TINY_CC_PATH;
+    const auto body = KernelBodyLines(path, "parallel_for<GeqrfTinyKernel");
+    ASSERT_FALSE(body.empty()) << "the kernel body could not be located in " << path
+                               << "; this check would pass vacuously";
+    int sg_barriers = 0;
+    std::string part_barrier;
+    for (const auto& entry : body) {
+        const std::string& code = entry.second;
+        if (code.find("group_barrier(sg)") != std::string::npos) ++sg_barriers;
+        if (code.find("group_barrier(part)") != std::string::npos) {
+            part_barrier = std::to_string(entry.first) + ": " + code;
+        }
+    }
+    EXPECT_EQ(sg_barriers, 2)
+        << path << ": the reflector apply must carry EXACTLY two sycl::group_barrier(sg) "
+           "calls -- one after the elementwise product into the tile, one after the column "
+           "sum into y. Fewer is a race that stays green on sm_89 because the chunk body "
+           "is warp-uniform here; more is a barrier per chunk nobody needs.";
+    EXPECT_TRUE(part_barrier.empty())
+        << path << ": group_barrier(part) is a NO-OP unless kUseNativeChunkedPartition "
+           "(sg_compat.hh:153), so ordering a publish/read pair with it is correct on this "
+           "box and silently unordered elsewhere: " << part_barrier;
+}
+
+// Every barrier in the file, by SPELLING rather than by argument: the first code line
+// that names a barrier and is not the one sanctioned spelling, sycl::group_barrier(sg).
+// Matching `get_group()` alone leaves `it.barrier()` -- nd_item::barrier, a WORK-GROUP
+// barrier that names no group at all -- through the scan.
+std::string FirstUnsanctionedBarrierLine(const std::string& path) {
+    std::FILE* f = std::fopen(path.c_str(), "r");
+    if (!f) return std::string("<could not open ") + path + ">";
+    char line[8192];
+    std::string found;
+    while (std::fgets(line, sizeof(line), f)) {
+        const std::string text(line);
+        const size_t comment = text.find("//");
+        const std::string code = comment == std::string::npos ? text : text.substr(0, comment);
+        if (code.find("barrier(") == std::string::npos) continue;
+        if (code.find("group_barrier(sg)") != std::string::npos) continue;
+        found = text;
+        break;
+    }
+    std::fclose(f);
+    return found;
+}
+
+TEST(GeqrfTinySource, SynchronisesAtSubGroupScopeOnly) {
+    const std::string path = BATCHLAS_GEQRF_TINY_CC_PATH;
+    // POSITIVE CONTROL. Both assertions below are ABSENCES, so a path that names the
+    // wrong file -- or a scan that reads nothing -- reports the property as held. The
+    // scan must first find the one construct that IS in this kernel.
+    ASSERT_FALSE(FirstLineContaining(path, "group_barrier(sg)").empty())
+        << "the source scan found no sycl::group_barrier(sg) in " << path
+        << ": BATCHLAS_GEQRF_TINY_CC_PATH does not name the tiny tier's source, and the "
+           "absence assertions below would pass vacuously";
+    ASSERT_FALSE(FirstLineContaining(path, "parallel_for").empty())
+        << "the source scan found no parallel_for in " << path;
+
+    const std::string wg_barrier = FirstUnsanctionedBarrierLine(path);
+    EXPECT_TRUE(wg_barrier.empty())
+        << "geqrf_tiny.cc carries a barrier that is not sycl::group_barrier(sg) -- a "
+           "work-group barrier (including the argument-free it.barrier()) makes the "
+           "matrices sharing a work-group synchronise with each other, which is a race "
+           "and not a launch failure; group_barrier(part) is a no-op off NVPTX: "
+        << wg_barrier;
+    const std::string reduce = FirstLineContaining(path, "reduce_over_group");
+    EXPECT_TRUE(reduce.empty())
+        << "geqrf_tiny.cc calls reduce_over_group; over a work-group it emits static "
+           "shared, and the shared-memory attribute is sticky per CUfunction, so the cost "
+           "lands on whichever kernel launches cold: " << reduce;
+}
+#endif  // BATCHLAS_GEQRF_TINY_CC_PATH
 
 // Break-sweep evidence for these tests: docs/perf/qr.md#break-sweeps
 

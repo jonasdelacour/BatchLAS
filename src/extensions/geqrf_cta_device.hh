@@ -1,14 +1,9 @@
 #pragma once
 
-// The native batched GEQRF panel factorisation -- all of its device code.
-// `geqr2_panel_device` is LAPACK ?GEQR2 over a `Tile` supplying `at(r, c)`,
-// instantiated against a local_accessor (the CTA tier) and against a raw global
-// pointer (the blocked tier's panel leaf). One work-group per matrix; the
-// required barriers are marked B1..B3 (B0/B4 are in the launcher).
-//
-// Deliberately NOT internal::larfg: that helper preserves alpha's phase, while
-// clarfg/zlarfg -- and the vendors this must be a drop-in for -- return a REAL
-// beta; tau is a contract consumed by ormqr/orgqr/ormbr/sy2sb.
+// All of the native batched GEQRF panel's device code: LAPACK ?GEQR2 over a `Tile`,
+// instantiated on a local_accessor (CTA tier) and a raw pointer (blocked panel leaf).
+// Deliberately NOT internal::larfg -- that preserves alpha's phase where clarfg/zlarfg
+// and the vendors return a REAL beta, and tau is a contract ormqr/orgqr/ormbr/sy2sb read.
 // evidence: docs/perf/qr.md#a-residual-test-cannot-guard-a-convention
 
 #include "../sycl/device_scalar.hh"
@@ -146,17 +141,18 @@ struct GeqrfGlobalTile {
     }
 };
 
-template <typename D, typename LocalAcc>
-struct GeqrfLocalTile {
-    LocalAcc a;
-    int ld;
-    // Unpadded ld is deliberate: both hot patterns walk consecutive rows within
-    // a column, conflict-free in local memory for any ld.
-    auto& at(int r, int c) const {
-        return a[static_cast<std::size_t>(r) +
-                 static_cast<std::size_t>(c) * static_cast<std::size_t>(ld)];
-    }
-};
+// The resident leaf addresses its tile through a raw pointer too: G panels share one
+// local_accessor, so each needs its own base. Unpadded ld is deliberate -- both hot
+// patterns walk consecutive rows within a column, conflict-free at any ld.
+template <typename D> using GeqrfRawTile = GeqrfGlobalTile<D>;
+
+// Which group the phase barriers synchronise, and where the two column reductions are
+// taken. SubGroup is what makes G-packing legal -- every barrier becomes a sub-group
+// barrier and both reductions butterflies, so the G sub-groups never synchronise with
+// each other. It also removes the reduce_over_group calls, and with them the static
+// shared allocation that makes this kernel, alone of the three, trip the 48 KB hole.
+// evidence: docs/perf/qr.md#the-48-kib-launch-hole
+enum class GeqrfScope { SubGroup, WorkGroup };
 
 // Sub-group sum, replicated to every lane. An XOR butterfly rather than
 // sycl::reduce_over_group, whose CUDA path has had float-reduction limits.
@@ -180,27 +176,53 @@ inline D geqrf_sg_sum(const sycl::sub_group& sg, D v) {
     }
 }
 
+// Sub-group max, replicated to every lane; the SubGroup-scoped counterpart of
+// reduce_over_group(g, ., maximum), and free of the static shared it emits.
+template <typename R>
+inline R geqrf_sg_max(const sycl::sub_group& sg, R v) {
+    const uint32_t lanes = static_cast<uint32_t>(sg.get_local_linear_range());
+    for (uint32_t off = lanes / 2; off > 0; off >>= 1) {
+        v = sycl::fmax(v, sycl::permute_group_by_xor(sg, v, off));
+    }
+    return v;
+}
+
 // LAPACK ?GEQR2 on an m x n tile, in place. The apply's conj(tau) is zgeqr2's,
 // not a transcription slip: dropping it still passes every real-typed test.
 // `tau_ptr` is a GLOBAL pointer already offset to this matrix; reflector j lands
 // at tau_ptr[j]. kmax lets a caller factor fewer reflectors than min(m, n).
-template <typename D, typename Tile>
+template <typename D, GeqrfScope SC, typename Tile>
 inline void geqr2_panel_device(sycl::nd_item<1> it, Tile A, int m, int n, int kmax,
                                D* tau_ptr) {
     using R = real_of<D>;
 
     const auto g = it.get_group();
     const auto sg = it.get_sub_group();
-    const int wg = static_cast<int>(it.get_local_range(0));
-    const int tid = static_cast<int>(it.get_local_linear_id());
     const int lane = static_cast<int>(sg.get_local_linear_id());
     const int nlanes = static_cast<int>(sg.get_local_linear_range());
-    const int team = static_cast<int>(sg.get_group_linear_id());
-    const int nteams = static_cast<int>(sg.get_group_linear_range());
+
+    // Under SubGroup scope this sub-group IS the panel's whole work-group: it strides the
+    // rows with its own lanes and walks every column itself.
+    const int wg = (SC == GeqrfScope::SubGroup) ? nlanes
+                                                : static_cast<int>(it.get_local_range(0));
+    const int tid = (SC == GeqrfScope::SubGroup) ? lane
+                                                 : static_cast<int>(it.get_local_linear_id());
+    const int team = (SC == GeqrfScope::SubGroup)
+                         ? 0 : static_cast<int>(sg.get_group_linear_id());
+    const int nteams = (SC == GeqrfScope::SubGroup)
+                           ? 1 : static_cast<int>(sg.get_group_linear_range());
+
+    const auto phase_barrier = [&]() {
+        if constexpr (SC == GeqrfScope::SubGroup) {
+            sycl::group_barrier(sg);
+        } else {
+            sycl::group_barrier(g);
+        }
+    };
 
     for (int j = 0; j < kmax; ++j) {
         // B1 -- the previous reflector's column writes become visible.
-        sycl::group_barrier(g);
+        phase_barrier();
 
         const D alpha = A.at(j, j);
 
@@ -208,7 +230,11 @@ inline void geqr2_panel_device(sycl::nd_item<1> it, Tile A, int m, int n, int km
         for (int r = j + 1 + tid; r < m; r += wg) {
             smax = sycl::fmax(smax, dev_absmax(A.at(r, j)));
         }
-        smax = sycl::reduce_over_group(g, smax, sycl::maximum<R>());
+        if constexpr (SC == GeqrfScope::SubGroup) {
+            smax = geqrf_sg_max<R>(sg, smax);
+        } else {
+            smax = sycl::reduce_over_group(g, smax, sycl::maximum<R>());
+        }
 
         // The collective sits outside the `smax > 0` test: all items reach it.
         R ssq = R(0);
@@ -217,12 +243,16 @@ inline void geqr2_panel_device(sycl::nd_item<1> it, Tile A, int m, int n, int km
                 ssq += dev_abs2_scaled(A.at(r, j), smax);
             }
         }
-        ssq = sycl::reduce_over_group(g, ssq, sycl::plus<R>());
+        if constexpr (SC == GeqrfScope::SubGroup) {
+            ssq = geqrf_sg_sum<R>(sg, ssq);
+        } else {
+            ssq = sycl::reduce_over_group(g, ssq, sycl::plus<R>());
+        }
 
         const LarfgScalars<D> h = geqrf_larfg_scalars<D>(alpha, smax, ssq);
 
         // B2 -- every work-item has read A(j,j) as `alpha`; item 0 overwrites it.
-        sycl::group_barrier(g);
+        phase_barrier();
 
         if (!h.identity) {
             if (tid == 0) {
@@ -244,10 +274,11 @@ inline void geqr2_panel_device(sycl::nd_item<1> it, Tile A, int m, int n, int km
         }
 
         // B3 -- beta and v are published to the teams about to read them.
-        sycl::group_barrier(g);
+        phase_barrier();
 
-        // `h.identity` is work-group-uniform, so this `continue` cannot desync
-        // B1/B2/B3.
+        // `h.identity` is uniform over whichever group the barriers above synchronise --
+        // it is derived from two collectives taken at that same scope -- so this
+        // `continue` cannot desync B1/B2/B3.
         if (h.identity) continue;
 
         const D ctau = batchlas::sycl_device::dev_conj(h.tau);

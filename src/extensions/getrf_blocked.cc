@@ -1,8 +1,6 @@
-// Native batched GETRF, BLOCKED tier: right-looking driver. Per panel -- (P)
-// factorise the diagonal panel via getrf_panel_factorize, (S) apply its
-// interchanges left and right, (T) solve L11 \ A12, (G) update A22 -= L21 U12.
-// This TU must stay in EXTENSIONS_CTA_SOURCES: (P) calls a device symbol from
-// getrf_cta.cc, so the two must share one device-code cluster.
+// Native batched GETRF, BLOCKED tier: right-looking driver, (P) panel, (S) interchanges,
+// (T) solve L11 \ A12, (G) update A22 -= L21 U12. Must stay in EXTENSIONS_CTA_SOURCES:
+// (P) calls a device symbol from getrf_cta.cc and the two share one device-code cluster.
 // evidence: docs/perf/lu.md#getrf-window-evidence
 
 #include "getrf_native.hh"
@@ -52,10 +50,9 @@ inline int getrf_blocked_nb(int n) {
 enum class LeftLaswp { InLoop, DeferWalk, DeferGather };
 
 inline LeftLaswp getrf_left_laswp_mode() {
-    // The presence latch and the per-call value read both come from one field
-    // now, so they cannot see different strings -- but the latch itself is kept,
-    // because dropping it would make the knob newly effective for a process that
-    // first sets it after the first getrf, which is a behaviour change.
+    // One field feeds both the presence latch and the per-call read, so they cannot
+    // disagree -- but the latch STAYS: dropping it would make the knob newly effective
+    // for a process that first sets it after the first getrf.
     static const bool present =
         (batchlas::settings().selection.getrf_laswp.get() != nullptr);
     if (!present) return LeftLaswp::DeferGather;
@@ -66,10 +63,9 @@ inline LeftLaswp getrf_left_laswp_mode() {
     return LeftLaswp::DeferGather;
 }
 
-// Workspace layout, replayed by both the query and the call. No matrix scratch:
-// panel, interchange, solve and update work in place on A. ONE POINTER ARRAY PER
-// ROLE, never nullptr and never shared -- init_data_ptr_array rebases from each
-// view's own data_ptr()/stride, so a shared array loses the first view's bases.
+// Replayed by both the query and the call; no matrix scratch, every phase works in place.
+// ONE POINTER ARRAY PER ROLE, never nullptr and never shared -- init_data_ptr_array
+// rebases from each view's own data_ptr()/stride, so a shared array loses the first's.
 template <typename T>
 struct GetrfBlockedWs {
     Span<int32_t> info;
@@ -119,8 +115,8 @@ unsigned getrf_blocked_debug_params(Queue& ctx, int n) {
     const int nb = getrf_blocked_nb<T>(n);
 
     const auto dev = ctx.device();
-    const std::size_t local_mem = dev.get_property(DeviceProperty::LOCAL_MEM_SIZE);
-    const std::size_t budget = (local_mem > 4096) ? (local_mem - 4096) : 0;
+    const std::size_t budget = resident::device_slm_budget(
+        dev.get_property(DeviceProperty::LOCAL_MEM_SIZE));
     const int ib0 = std::min(nb, n);
     const unsigned leaf = getrf_leaf_fits<T>(n, ib0, budget) ? 1u : 2u;
     const unsigned lmode = static_cast<unsigned>(getrf_left_laswp_mode());
@@ -179,9 +175,11 @@ Event getrf_blocked_dispatch(Queue& ctx,
         throw batchlas::invalid_argument("getrf_blocked: pivot span is shorter than n * batch");
     }
     {
-        const std::size_t local_mem = dev.get_property(DeviceProperty::LOCAL_MEM_SIZE);
-        const std::size_t budget = (local_mem > 4096) ? (local_mem - 4096) : 0;
-        if (getrf_cta_max_n_for_slm<T>(budget) < 1) {
+        // min_blocks_per_sm = 1: the question is whether the panel leaf's argmax slots can
+        // be hosted at all, not what the CTA tier advertises.
+        const std::size_t budget = resident::device_slm_budget(
+            dev.get_property(DeviceProperty::LOCAL_MEM_SIZE));
+        if (getrf_cta_max_n_for_slm<T>(budget, 1) < 1) {
             throw batchlas::unsupported(
                 "getrf_blocked: this device's local-memory budget cannot host the panel "
                 "leaf's argmax slots, so the tier is unavailable (route_getrf.hh's "

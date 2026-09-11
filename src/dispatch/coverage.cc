@@ -186,13 +186,13 @@ void append_static_rows(std::ostringstream& out) {
         {"hemm",  level3_vendor_available<B>,        false},
         {"herk",  level3_vendor_available<B>,        false},
         {"her2k", level3_vendor_available<B>,        false},
-        {"geqrf", factorization_vendor_available<B>, true},   // geqrf_cta + geqrf_blocked
+        {"geqrf", factorization_vendor_available<B>, true},   // geqrf_tiny + _cta + _blocked
         {"orgqr", factorization_vendor_available<B>, true},   // orgqr_blocked (ormqr on I)
-        {"getrf", factorization_vendor_available<B>, true},   // getrf_cta + getrf_blocked
+        {"getrf", factorization_vendor_available<B>, true},   // getrf_tiny + _cta + _blocked
         {"getrs", factorization_vendor_available<B>, true},   // getrs_native (laswp + 2 routed trsm)
         {"getri", factorization_vendor_available<B>, true},   // getri_blocked (P into C + 2 routed trsm)
         {"ormqr", factorization_vendor_available<B>, true},   // ormqr_blocked
-        {"potrf", solver_vendor_available<B>,        true},   // potrf_cta + potrf_blocked
+        {"potrf", solver_vendor_available<B>,        true},   // potrf_tiny + potrf_cta + potrf_blocked
         {"syev",  solver_vendor_available<B>,        true},   // cta/blocked/two_stage
         {"gesvd", solver_vendor_available<B>,        true},   // jacobi/cta/blocked
         {"spmm",  sparse_vendor_available<B>,        true},   // spmm_native_csr (gather + atomic scatter)

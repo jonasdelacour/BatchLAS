@@ -1,10 +1,8 @@
 #pragma once
 
-// Native batched ORGQR declarations: one tier, Algorithm::Blocked, which is ormqr applied
-// to an identity. preferred() is true up to n = 512 on both extents, so this tier is the
-// DEFAULT route inside that window, not a vendor-free fallback; above it the recorded
-// losses (cfloat 0.82x and cdouble 0.78x at 1024, every type at 2048) take the vendor.
-// evidence: docs/perf/small-n-baseline.md#orgqr, docs/perf/qr.md#orgqr-grid
+// Native batched ORGQR: one tier, Algorithm::Blocked -- ormqr applied to an identity.
+// preferred() is true to n = 512 on both extents, so this is the DEFAULT route inside
+// that window, not a vendor-free fallback. evidence: docs/perf/qr.md#the-shipped-orgqr-ceiling
 
 #include "../util/internal-api.hh"
 #include <batchlas/blas/enums.hh>
@@ -21,13 +19,13 @@ namespace batchlas::sycl_orgqr {
 template <typename T>
 BATCHLAS_INTERNAL_API bool orgqr_blocked_available();
 
-// Test hook. The width must be a multiple of 16, and >= 32 for complex (gemm_kernels.cc's
-// wide-scalar min_dim gate). evidence: docs/perf/qr.md#block-width-evidence
+// Test hook. evidence: docs/perf/qr.md#block-width-evidence
 template <typename T>
-int orgqr_blocked_debug_block_size(Queue& ctx, int m, int n);
+int orgqr_blocked_debug_block_size(Queue& ctx, int m,
+                                   int n);  // multiple of 16; >= 32 for complex (gemm min_dim)
 
-// Must be the ROUTED ormqr -- a native ormqr entry point called from a driver TU bypasses
-// RouteTable<Op::ormqr>. Argument order is the positional entry point's; absent injection throws.
+// Must be the ROUTED ormqr: a native entry point called from a driver TU bypasses
+// RouteTable<Op::ormqr>. Positional argument order; absent injection throws.
 template <typename T>
 using OrgqrApplyQ = std::function<Event(
     Queue&,
@@ -54,8 +52,8 @@ BATCHLAS_INTERNAL_API std::size_t orgqr_blocked_buffer_size(Queue& ctx,
                                                             Span<T> tau,
                                                             OrgqrApplyQBufferSize<T> apply_q_buffer_size = {});
 
-// Reachable without the route table, so it must re-check every supports() gate of
-// RouteTable<Op::orgqr,T> itself -- a rejected forced route silently runs the vendor.
+// Reachable without the route table, so it re-checks every supports() gate itself --
+// a rejected forced route otherwise falls through and silently runs the vendor.
 template <typename T>
 BATCHLAS_INTERNAL_API Event orgqr_blocked_dispatch(Queue& ctx,
                                                    const MatrixView<T, MatrixFormat::Dense>& A,

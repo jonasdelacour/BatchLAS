@@ -130,6 +130,43 @@ jobs:
         # `#ifndef BATCHLAS_NO_GLOBAL_NAMES` shim is allowed explicitly.
         run: python3 .github/ci/check_no_global_names.py
 
+  comment-density:
+    name: Comment density is under the house ceiling
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: The counter still counts
+        # Runs first and as its own step: a scan that reports nothing is
+        # otherwise indistinguishable from a scan that cannot count. The
+        # fixtures pin both directions -- an all-comment file must read 100%, an
+        # all-code file 0%, and a file with a trailing comment on every code
+        # line must read 0%, not 100%.
+        run: python3 .github/ci/check_comment_density.py --self-test
+      - name: No source over the 18% comment ceiling
+        # Measured numbers, ratio tables, A/B results, saturation ladders and
+        # bracketing cells belong in docs/perf/<op>.md. Code comments carry
+        # correctness rationale only and point at the evidence with
+        # `evidence: docs/perf/<page>.md#<anchor>`. Hand review let that
+        # regress twice, so the budget is mechanical now. A file that genuinely
+        # earns more prose gets a line in
+        # .github/ci/comment_density_waivers.txt with a reason.
+        run: python3 .github/ci/check_comment_density.py --fix-suggest
+      - name: The anchor resolver still resolves
+        # Same reason as the counter above: a resolver that reports nothing is
+        # indistinguishable from one that walked an empty tree. The fixtures
+        # pin both directions -- a renamed heading, a missing page and a
+        # heading that only exists inside a code fence must all be flagged,
+        # and the three valid spellings beside them must not.
+        run: python3 .github/ci/check_evidence_anchors.py --self-test
+      - name: Every `evidence:` pointer resolves to a real heading
+        # The other half of the same rule. Moving the numbers into docs/perf/
+        # only works if the pointer back to them survives; a citation whose
+        # heading has since been reworded reads as "this was measured" while
+        # leading nowhere, and nothing in a build, a test or a review notices.
+        # Two of the 291 pointers in the tree were already dangling when this
+        # was written.
+        run: python3 .github/ci/check_evidence_anchors.py
+
   # ---------------------------------------------------------------------------
   # THE PRIMARY GATE. Everything above this line is text scanning.
   # ---------------------------------------------------------------------------
