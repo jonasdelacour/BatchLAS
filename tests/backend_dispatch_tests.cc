@@ -47,12 +47,17 @@ TEST(BackendDispatch, AutoResolvesToACompiledBackendAndIsStable) {
 
 // Streaming an enum has to work from a TU shaped like this one -- both header
 // families included, `using namespace batchlas;` at the top -- which is how
-// every in-tree TU and the documented consumer spelling are written. The three
-// enums in <batchlas/util/sycl-device-queue.hh> live in the global namespace and get
-// their own operator<< there; batchlas' generic enum operator<< is a viable
-// candidate for them too (its `to_string(e)` constraint is satisfied by ADL),
-// so this compiles only as long as the global overloads stay strictly more
-// specialised. It is a compile-time test wearing an assertion.
+// every in-tree TU and the documented consumer spelling are written.
+//
+// The three enums in <batchlas/util/sycl-device-queue.hh> and their per-enum
+// operator<< now live in namespace batchlas, alongside enums.hh's constrained
+// enum-streaming template. Both are exact matches for `os << policy`, and
+// partial ordering picks the per-enum overloads because their parameter is a
+// concrete enum type rather than a deduced `E`. So this still compiles only as
+// long as those overloads stay strictly more specialised -- what changed with
+// the WP1 namespace move is that both candidates are now reachable by ADL on
+// the enum argument from ANY TU, not only from one carrying the using-directive.
+// It is a compile-time test wearing an assertion.
 TEST(BackendDispatch, EnumsStreamFromInsideTheNamespace) {
     std::ostringstream os;
     os << Vendor::NVIDIA << ' ' << DeviceType::GPU << ' ' << Policy::SYNC << ' '

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <batchlas/export.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/blas/enums.hh>
@@ -33,14 +34,14 @@ using syr2k_vendor = Event(Queue&,
 
 
 template <Backend Ba, RealScalar T>
-Event syr2k(Queue& ctx,
-            const MatrixView<T, MatrixFormat::Dense>& A,
-            const MatrixView<T, MatrixFormat::Dense>& B,
-            const MatrixView<T, MatrixFormat::Dense>& C,
-            T alpha,
-            T beta,
-            Uplo uplo,
-            Transpose transA);
+BATCHLAS_API Event syr2k(Queue& ctx,
+                         const MatrixView<T, MatrixFormat::Dense>& A,
+                         const MatrixView<T, MatrixFormat::Dense>& B,
+                         const MatrixView<T, MatrixFormat::Dense>& C,
+                         T alpha,
+                         T beta,
+                         Uplo uplo,
+                         Transpose transA);
 
 } // namespace batchlas
 
@@ -56,14 +57,14 @@ namespace batchlas::backend {
 // implementation, named as such. Each vendor wrapper TU defines this primary
 // template for its own Backend value and instantiates it there.
 template <Backend Back, RealScalar T>
-Event syr2k_vendor(Queue& ctx,
-                   const MatrixView<T, MatrixFormat::Dense>& A,
-                   const MatrixView<T, MatrixFormat::Dense>& B,
-                   const MatrixView<T, MatrixFormat::Dense>& C,
-                   T alpha,
-                   T beta,
-                   Uplo uplo,
-                   Transpose transA);
+BATCHLAS_API Event syr2k_vendor(Queue& ctx,
+                                const MatrixView<T, MatrixFormat::Dense>& A,
+                                const MatrixView<T, MatrixFormat::Dense>& B,
+                                const MatrixView<T, MatrixFormat::Dense>& C,
+                                T alpha,
+                                T beta,
+                                Uplo uplo,
+                                Transpose transA);
 
 }  // namespace batchlas::backend
 

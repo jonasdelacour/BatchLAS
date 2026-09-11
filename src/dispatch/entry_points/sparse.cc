@@ -29,7 +29,7 @@ namespace batchlas {
 template <typename T>
 [[noreturn]] inline void spmm_throw_native_unimplemented(dispatch::Route route,
                                                          const char* who) {
-    throw std::logic_error(
+    throw batchlas::internal_error(
         std::string(who) + ": resolved to a native route (" +
         std::string(dispatch::to_string(route.origin)) + ":" +
         std::string(dispatch::to_string(route.algo)) +

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../util/internal-api.hh"
 #include <batchlas/backend_config.h>
 
 #include "gemm_cublasdx_kernels.hh"
@@ -20,7 +21,7 @@ bool cublasdx_gemm_has_forced_variant();
 // honest answer there is a compile-time `false` rather than a link error:
 // "no cuBLASDx variant is available" is exactly true in that build.
 #if BATCHLAS_HAS_CUBLAS
-bool cublasdx_gemm_variant_available(cublasdx_gemm::CuBLASDxGemmVariant variant);
+BATCHLAS_INTERNAL_API bool cublasdx_gemm_variant_available(cublasdx_gemm::CuBLASDxGemmVariant variant);
 #else
 inline bool cublasdx_gemm_variant_available(cublasdx_gemm::CuBLASDxGemmVariant) {
     return false;
@@ -29,12 +30,12 @@ inline bool cublasdx_gemm_variant_available(cublasdx_gemm::CuBLASDxGemmVariant) 
 
 cublasdx_gemm::CuBLASDxGemmVariant forced_cublasdx_gemm_variant();
 
-cublasdx_gemm::CuBLASDxGemmVariant cublasdx_gemm_select_variant(
-    const MatrixView<float, MatrixFormat::Dense>& A,
-    const MatrixView<float, MatrixFormat::Dense>& B,
-    const MatrixView<float, MatrixFormat::Dense>& C,
-    Transpose transA,
-    Transpose transB);
+BATCHLAS_INTERNAL_API cublasdx_gemm::CuBLASDxGemmVariant cublasdx_gemm_select_variant(
+                          const MatrixView<float, MatrixFormat::Dense>& A,
+                          const MatrixView<float, MatrixFormat::Dense>& B,
+                          const MatrixView<float, MatrixFormat::Dense>& C,
+                          Transpose transA,
+                          Transpose transB);
 
 Event gemm_cublasdx(Queue& ctx,
                     const MatrixView<float, MatrixFormat::Dense>& A,

@@ -14,6 +14,7 @@
 #include <string_view>
 
 #include <batchlas/blas/dispatch/route.hh>
+#include <batchlas/settings.hh>
 
 namespace batchlas::dispatch {
 
@@ -34,6 +35,7 @@ inline std::optional<Algorithm> parse_algorithm_word(std::string_view w) {
     if (w == "auto") return Algorithm::Auto;
     if (w == "direct") return Algorithm::Direct;
     if (w == "cta" || w == "batchlas_cta" || w == "batchlas-cta") return Algorithm::CTA;
+    if (w == "tiny" || w == "batchlas_tiny" || w == "batchlas-tiny") return Algorithm::Tiny;
     if (w == "blocked" || w == "batchlas_blocked" || w == "batchlas-blocked") return Algorithm::Blocked;
     if (w == "two_stage" || w == "two-stage" || w == "batchlas_two_stage" ||
         w == "batchlas-two-stage") return Algorithm::TwoStage;
@@ -149,13 +151,20 @@ inline void warn_unparsed_route_env(const RouteRequestSource& src) {
                  src.variable.c_str(), src.value.c_str());
 }
 
-// Canonical variable first, then the legacy one; on found=false the CALLER supplies
-// the default.
+// Canonical variable first, then the legacy one; on found=false the CALLER supplies the
+// default. The two reads below are the ONLY string source for the route vocabulary.
+// Both variable NAMES are still composed here -- canonical from op_env_stem, legacy from
+// the table above -- because RouteRequestSource carries the name into the diagnostic and
+// tests assert on the literal (tests/trmm_tests.cc on "BATCHLAS_TRMM_VARIANT"); only the
+// VALUE comes from the settings() snapshot. Every parser below is untouched because
+// tests/route_vocabulary_tests.cc pins their vocabulary spelling by spelling, including
+// the three load-bearing word collisions above.
 inline ParsedRouteEnv parse_route_env(Op op) {
     ParsedRouteEnv out;
 
     const std::string canonical = "BATCHLAS_" + op_env_stem(op) + "_ROUTE";
-    if (const char* raw = std::getenv(canonical.c_str()); raw && *raw) {
+    if (const char* raw = batchlas::settings().routing.canonical_route(op).get();
+        raw && *raw) {
         out.source = {canonical, raw, false};
         if (const auto r = parse_route_value(raw)) {
             out.route = *r;
@@ -170,7 +179,8 @@ inline ParsedRouteEnv parse_route_env(Op op) {
     const std::string_view legacy = legacy_variable_for(op);
     if (!legacy.empty()) {
         const std::string key(legacy);
-        if (const char* raw = std::getenv(key.c_str()); raw && *raw) {
+        if (const char* raw = batchlas::settings().routing.legacy_route(op).get();
+            raw && *raw) {
             out.source = {key, raw, true};
             if (const auto r = parse_legacy_route_value(op, raw)) {
                 out.route = *r;

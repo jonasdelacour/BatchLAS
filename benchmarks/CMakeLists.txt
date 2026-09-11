@@ -14,6 +14,7 @@ set(BENCHMARK_TARGETS
     band_reduction_benchmark
     bandr1_dump
     geqrf_benchmark
+    factor_bench
     gemm_benchmark
     gemm_heterogeneous_benchmark
     gemm_steady_benchmark

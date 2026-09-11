@@ -21,6 +21,7 @@
 #include <stdexcept>
 #include <type_traits>
 #include <vector>
+#include <batchlas/settings.hh>
 
 namespace batchlas {
 
@@ -112,26 +113,26 @@ inline void validate_sytrd_sb2st_dims(const MatrixView<T, MatrixFormat::Dense>& 
                                      Uplo uplo,
                                      int32_t kd) {
     if (kd < 0) {
-        throw std::invalid_argument("sytrd_sb2st: kd must be non-negative");
+        throw batchlas::invalid_argument("sytrd_sb2st: kd must be non-negative");
     }
     if (uplo != Uplo::Lower && uplo != Uplo::Upper) {
-        throw std::invalid_argument("sytrd_sb2st: invalid uplo");
+        throw batchlas::invalid_argument("sytrd_sb2st: invalid uplo");
     }
 
     const int n = ab.cols();
     if (ab.rows() != kd + 1) {
-        throw std::invalid_argument("sytrd_sb2st: AB must be (kd+1) x n");
+        throw batchlas::invalid_argument("sytrd_sb2st: AB must be (kd+1) x n");
     }
 
     if (d.size() != n || e.size() != std::max(0, n - 1) || tau.size() != std::max(0, n - 1)) {
-        throw std::invalid_argument("sytrd_sb2st: invalid d/e/tau sizes");
+        throw batchlas::invalid_argument("sytrd_sb2st: invalid d/e/tau sizes");
     }
 
     if (ab.batch_size() != d.batch_size() || ab.batch_size() != e.batch_size() || ab.batch_size() != tau.batch_size()) {
-        throw std::invalid_argument("sytrd_sb2st: batch size mismatch");
+        throw batchlas::invalid_argument("sytrd_sb2st: batch size mismatch");
     }
     if (ab.batch_size() < 1) {
-        throw std::invalid_argument("sytrd_sb2st: invalid batch size");
+        throw batchlas::invalid_argument("sytrd_sb2st: invalid batch size");
     }
 }
 
@@ -800,11 +801,11 @@ Event sytrd_sb2st(Queue& ctx,
     validate_sytrd_sb2st_dims(ab_in, d_out, e_out, tau_out, uplo, kd);
 
     if (!ctx.in_order()) {
-        throw std::runtime_error("sytrd_sb2st: requires an in-order Queue");
+        throw batchlas::invalid_argument("sytrd_sb2st: requires an in-order Queue");
     }
 
     if (uplo != Uplo::Lower) {
-        throw std::runtime_error("sytrd_sb2st: only Uplo::Lower is implemented");
+        throw batchlas::unsupported("sytrd_sb2st: only Uplo::Lower is implemented");
     }
 
     const int n = ab_in.cols();
@@ -864,7 +865,7 @@ Event sytrd_sb2st(Queue& ctx,
     };
 
     auto parse_mode = []() -> Sb2stSubgroupMode {
-        const char* p = std::getenv("BATCHLAS_SB2ST_SUBGROUP");
+        const char* p = batchlas::settings().selection.sb2st_subgroup.get();
         if (!p || !*p) return Sb2stSubgroupMode::Auto;
         std::string v(p);
         for (char& ch : v) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
@@ -895,7 +896,7 @@ Event sytrd_sb2st(Queue& ctx,
     }
 
     if (mode == Sb2stSubgroupMode::ForceOn && !can_use_subgroup) {
-        throw std::runtime_error(
+        throw batchlas::unsupported(
             "sytrd_sb2st: BATCHLAS_SB2ST_SUBGROUP=1 requires kd<=32 and a device supporting sub_group_size=32");
     }
 

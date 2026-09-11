@@ -5,6 +5,7 @@
 // directly rather than inferred.
 
 #include <batchlas/util/minibench.hh>
+#include <batchlas/util/env.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/extensions.hh>
 #include "bench_utils.hh"
@@ -44,7 +45,15 @@ static void BM_SYEV_TWO_STAGE(minibench::State& state) {
     const size_t batch = state.range(1);
     const int kd = static_cast<int>(state.range(2));
 
+    // Bare setenv, not a batchlas::ScopedEnvVar: minibench runs the kernel this
+    // function REGISTERS after the call returns, so a scoped guard would restore
+    // kd before the first timed iteration -- and it would straddle the sizing
+    // (below) / solve (timed kernel) pair that settings.hh forbids splitting.
+    // The reload is the half of ScopedEnvVar still needed here: settings()
+    // snapshots the environment once, so without it the sweep would silently
+    // measure the default kd=32 five times over.
     ::setenv("BATCHLAS_SYEV_TWO_STAGE_KD", std::to_string(kd).c_str(), 1);
+    batchlas::detail::reload_settings();
 
     auto q = std::make_shared<Queue>(Device("gpu"), B);
     auto A = Matrix<T>::Random(n, n, true, batch);

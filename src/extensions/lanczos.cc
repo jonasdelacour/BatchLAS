@@ -101,16 +101,18 @@ namespace batchlas {
                     auto basis_view = MatrixView(Vmem.data(), n, (it-1), n, (n+1)*n, batch_size, basis_ptr_mem.data());
                     auto vector_view = MatrixView(Vmem.data() + (it-1)*n, n, 2, n, (n+1)*n, batch_size, vector_view_ptr_mem.data());
                     if((it % params.reorthogonalization_iterations == 0) || (it == iterations - 1)) {
-                        ortho<B>(ctx, vector_view, basis_view, Transpose::NoTrans, Transpose::NoTrans, ortho_buffer, params.ortho_algorithm, params.ortho_iterations);
+                        // (void) on an Event: deliberate. This Queue is in-order, so the next submission
+                        // is already ordered after this one and the Event carries nothing the caller needs.
+                        (void)ortho<B>(ctx, vector_view, basis_view, Transpose::NoTrans, Transpose::NoTrans, ortho_buffer, params.ortho_algorithm, params.ortho_iterations);
                     }
                 }
 
                 auto padded_vector = MatrixView(Vmem.data() + it*n, n, 2, n, (n+1)*n, batch_size);
                 auto spmm_start = std::chrono::steady_clock::now();
                 if constexpr (!(MF == MatrixFormat::Dense)) {
-                    spmm<B>(ctx, A, padded_vector, padded_output, T(1), T(0), Transpose::NoTrans, Transpose::NoTrans, spmm_buffer);
+                    (void)spmm<B>(ctx, A, padded_vector, padded_output, T(1), T(0), Transpose::NoTrans, Transpose::NoTrans, spmm_buffer);
                 } else {
-                    gemm<B>(ctx, A, padded_vector, padded_output, GemmOptions<T>{});
+                    (void)gemm<B>(ctx, A, padded_vector, padded_output, GemmOptions<T>{});
                 }
                 ctx -> submit([&](sycl::handler& h) {
                     auto v_prev_ptr = Vmem.data() + (std::max(it-1,0))*n;
@@ -175,7 +177,7 @@ namespace batchlas {
         init();
         lanczos_iteration(n);
         
-        steqr<B> (ctx,
+        (void)steqr<B> (ctx,
             VectorView<real_t>(alphas.data(), n, batch_size),
             VectorView<real_t>(betas.data(), n-1, batch_size),
             VectorView<real_t>(W.data(), n, batch_size),
@@ -186,7 +188,7 @@ namespace batchlas {
         );
 
         if (jobz == JobType::EigenVectors) {
-            gemm<B>(ctx,
+            (void)gemm<B>(ctx,
                     MatrixView(Vmem.data(), n, n, n, (n+1)*n, batch_size),
                     MatrixView(Q_eigenvectors.data(), n, n, n, n*n, batch_size),
                     V,
@@ -195,7 +197,7 @@ namespace batchlas {
         //Sort the eigenvalues and eigenvectors using sycl::experimental::joint_sort
         if (params.sort_enabled){
             auto sort_workspace = pool.allocate<std::byte>(ctx, sort_buffer_size(ctx, W, V, jobz));
-            sort(ctx, W, V, jobz, params.sort_order, sort_workspace);
+            (void)sort(ctx, W, V, jobz, params.sort_order, sort_workspace);
         }
 
         return ctx.get_event();

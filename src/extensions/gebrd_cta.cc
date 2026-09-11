@@ -91,14 +91,14 @@ inline void gebrd_cta_impl(Queue& ctx,
 
     const auto batch_size = a.batch_size();
     if (n < 1 || n > static_cast<int32_t>(P) || a.rows() != n || a.cols() != n) {
-        throw std::runtime_error("gebrd_cta_impl: invalid n or matrix sizes for CTA partition");
+        throw batchlas::invalid_argument("gebrd_cta_impl: invalid n or matrix sizes for CTA partition");
     }
     if (d.size() != n || e.size() != (n - 1) || tauq.size() != n || taup.size() != n) {
-        throw std::runtime_error("gebrd_cta_impl: invalid d/e/tau sizes");
+        throw batchlas::invalid_argument("gebrd_cta_impl: invalid d/e/tau sizes");
     }
     if (d.batch_size() != batch_size || e.batch_size() != batch_size ||
         tauq.batch_size() != batch_size || taup.batch_size() != batch_size) {
-        throw std::runtime_error("gebrd_cta_impl: batch size mismatch");
+        throw batchlas::invalid_argument("gebrd_cta_impl: batch size mismatch");
     }
 
     ctx->submit([&](sycl::handler& cgh) {
@@ -267,20 +267,20 @@ Event gebrd_cta(Queue& ctx,
                 const VectorView<T>& taup_out,
                 size_t cta_wg_size_multiplier) {
     if (a_in.rows() != a_in.cols()) {
-        throw std::invalid_argument("gebrd_cta: A must be square");
+        throw batchlas::invalid_argument("gebrd_cta: A must be square");
     }
     if constexpr (internal::is_complex<T>::value) {
-        throw std::runtime_error("gebrd_cta: complex types are not implemented");
+        throw batchlas::unsupported("gebrd_cta: complex types are not implemented");
     } else {
         const int64_t n64 = a_in.rows();
         if (n64 < 1 || n64 > 32) {
-            throw std::invalid_argument("gebrd_cta currently supports 1 <= n <= 32");
+            throw batchlas::invalid_argument("gebrd_cta currently supports 1 <= n <= 32");
         }
 
         const int64_t batch_size = a_in.batch_size();
         if (batch_size != d_out.batch_size() || batch_size != e_out.batch_size() ||
             batch_size != tauq_out.batch_size() || batch_size != taup_out.batch_size()) {
-            throw std::invalid_argument("gebrd_cta: batch size mismatch");
+            throw batchlas::invalid_argument("gebrd_cta: batch size mismatch");
         }
 
         const auto dev = ctx->get_device();
@@ -293,7 +293,7 @@ Event gebrd_cta(Queue& ctx,
             }
         }
         if (!has32) {
-            throw std::runtime_error("gebrd_cta: device does not support subgroup size 32 required for CTA kernels");
+            throw batchlas::unsupported("gebrd_cta: device does not support subgroup size 32 required for CTA kernels");
         }
 
         auto& a = const_cast<MatrixView<T, MatrixFormat::Dense>&>(a_in);

@@ -73,7 +73,7 @@ namespace detail {
 template <typename MV>
 inline void require_square(const char* fn, const char* name, const MV& A) {
     if (A.rows() != A.cols())
-        throw std::invalid_argument(std::string(fn) + ": " + name +
+        throw batchlas::invalid_argument(std::string(fn) + ": " + name +
             " must be square, got " + std::to_string(A.rows()) + "x" + std::to_string(A.cols()));
 }
 
@@ -81,7 +81,7 @@ template <typename MA, typename MB>
 inline void require_same_rows(const char* fn, const char* an, const MA& A,
                               const char* bn, const MB& B) {
     if (A.rows() != B.rows())
-        throw std::invalid_argument(std::string(fn) + ": " + an + ".rows() (" +
+        throw batchlas::invalid_argument(std::string(fn) + ": " + an + ".rows() (" +
             std::to_string(A.rows()) + ") must equal " + bn + ".rows() (" +
             std::to_string(B.rows()) + ")");
 }
@@ -90,7 +90,7 @@ template <typename MA, typename MB>
 inline void require_same_batch(const char* fn, const char* an, const MA& A,
                                const char* bn, const MB& B) {
     if (A.batch_size() != B.batch_size())
-        throw std::invalid_argument(std::string(fn) + ": " + an + " and " + bn +
+        throw batchlas::invalid_argument(std::string(fn) + ": " + an + " and " + bn +
             " must have the same batch size (" + std::to_string(A.batch_size()) + " vs " +
             std::to_string(B.batch_size()) + ")");
 }
@@ -99,7 +99,7 @@ inline void require_same_batch(const char* fn, const char* an, const MA& A,
 // one big pivot/tau arena across several calls.
 inline void require_span_at_least(const char* fn, const char* name, size_t have, size_t need) {
     if (have < need)
-        throw std::invalid_argument(std::string(fn) + ": " + name + " holds " +
+        throw batchlas::invalid_argument(std::string(fn) + ": " + name + " holds " +
             std::to_string(have) + " elements, needs at least " + std::to_string(need));
 }
 

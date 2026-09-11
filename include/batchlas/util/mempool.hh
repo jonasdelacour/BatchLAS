@@ -7,6 +7,8 @@
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
 
+namespace batchlas {
+
 struct BumpAllocator {
     template <typename T>
     BumpAllocator(T* data, size_t byte_size): data(data), byte_size(byte_size){}
@@ -51,7 +53,7 @@ struct BumpAllocator {
     // to one quantum.
     inline size_t required_bytes() const {
         if (!measuring_) {
-            throw std::runtime_error("BumpAllocator::required_bytes() on a real pool; use BumpAllocator::measuring().");
+            throw batchlas::api_misuse("BumpAllocator::required_bytes() on a real pool; use BumpAllocator::measuring().");
         }
         if (align_quantum_ == 0) return high_water_;
         return (high_water_ + align_quantum_ - 1) & ~(align_quantum_ - 1);
@@ -81,13 +83,13 @@ struct BumpAllocator {
         if (size == 0) return {};
         size_t alloc_size = allocation_size<T>(device,size);
         if (alloc_size > byte_size){
-            throw std::runtime_error("Attempted to allocate " + std::to_string(alloc_size) + " bytes from a BumpAllocator with only " + std::to_string(byte_size) + " bytes remaining.");
+            throw batchlas::workspace_error("Attempted to allocate " + std::to_string(alloc_size) + " bytes from a BumpAllocator with only " + std::to_string(byte_size) + " bytes remaining.");
         }
 
         void* aligned = data;
         size_t remaining = byte_size;
         if (std::align(alignment<T>(device), size * sizeof(T), aligned, remaining) == nullptr) {
-            throw std::runtime_error("Failed to align BumpAllocator storage for requested allocation.");
+            throw batchlas::workspace_error("Failed to align BumpAllocator storage for requested allocation.");
         }
 
         if (measuring_) {
@@ -124,14 +126,14 @@ struct BumpAllocator {
             // any callee that sizes itself against remaining().size() would size
             // against a number that means nothing. Such call sites have to be
             // converted deliberately (see iluk / syevx_lobpcg), not implicitly.
-            throw std::runtime_error("BumpAllocator::remaining() is not available in sizing mode.");
+            throw batchlas::api_misuse("BumpAllocator::remaining() is not available in sizing mode.");
         }
         return Span<std::byte>(static_cast<std::byte*>(data), byte_size);
     }
 
     inline void consume(size_t bytes) {
         if (bytes > byte_size) {
-            throw std::runtime_error("BumpAllocator::consume called with more bytes than remain.");
+            throw batchlas::workspace_error("BumpAllocator::consume called with more bytes than remain.");
         }
         data = static_cast<std::byte*>(data) + bytes;
         byte_size -= bytes;
@@ -188,3 +190,23 @@ inline size_t workspace_bytes(Fn&& layout) {
     (void)layout(sizer);
     return sizer.required_bytes();
 }
+
+}  // namespace batchlas
+
+// Transitional compatibility shim: these used to be declared at global scope
+// and now live in namespace batchlas. A consumer with a name of its own here
+// defines BATCHLAS_NO_GLOBAL_NAMES to switch the block off; the block goes away
+// entirely once nothing in tree depends on it.
+//
+// workspace_bytes is shimmed even though it is a function rather than a type,
+// and it is the one name in this header that HAS to be: every other unqualified
+// spelling a consumer might use survives the move through ADL on its argument,
+// but workspace_bytes takes only a lambda, whose associated namespace is
+// wherever the consumer wrote it. Without the using-declaration below,
+// `workspace_bytes([](auto& s){ ... })` at global scope stops compiling -- and
+// the doc comment above sells exactly that spelling as the way to write a
+// *_buffer_size entry point.
+#ifndef BATCHLAS_NO_GLOBAL_NAMES
+using batchlas::BumpAllocator;
+using batchlas::workspace_bytes;
+#endif

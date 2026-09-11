@@ -1,5 +1,7 @@
 #pragma once
 
+#include "internal-api.hh"
+
 #include <sycl/sycl.hpp>
 
 #include <atomic>
@@ -12,6 +14,7 @@
 #include <utility>
 #include <vector>
 #include <batchlas/util/env.hh>
+#include <batchlas/settings.hh>
 
 namespace batchlas_kernel_trace {
 
@@ -24,21 +27,32 @@ struct Record {
 };
 
 inline std::atomic<bool> g_initialized{false};
-inline std::atomic<bool> g_enabled{false};
-inline std::mutex g_mu;
-inline std::vector<Record> g_records;
-inline std::atomic<std::uint64_t> g_submit_counter{0};
+// ONE INSTANCE PER PROCESS, not per library. These are vague-linkage inline
+// variables, so every TU that includes this header emits its own copy and the
+// linker is expected to fold them. Under -fvisibility=hidden the library's
+// copies become hidden and stop participating in that fold, while a test TU --
+// which is NOT compiled with hidden visibility and includes this header
+// directly (tests/stedc_tests.cc:5, tests/device_blas_tests.cc:12) -- keeps a
+// default-visibility copy of its own. The result is two record vectors: traces
+// written inside the library are invisible to the test's flush, silently.
+//
+// BATCHLAS_INTERNAL_API keeps them exported so the fold still happens. The same
+// applies to any process-wide state that lives in a private header.
+inline BATCHLAS_INTERNAL_API std::atomic<bool> g_enabled{false};
+inline BATCHLAS_INTERNAL_API std::mutex g_mu;
+inline BATCHLAS_INTERNAL_API std::vector<Record> g_records;
+inline BATCHLAS_INTERNAL_API std::atomic<std::uint64_t> g_submit_counter{0};
 
 inline thread_local const char* tl_scope_name = nullptr;
 
+// BATCHLAS_KERNEL_TRACE_PATH then BATCHLAS_TRACE_PATH, first NON-EMPTY wins,
+// else the built-in name. That precedence -- including the fall-through when the
+// first variable is set but empty -- is resolved once during the settings load,
+// so this is now a plain read. The returned pointer is into the settings
+// snapshot; the single caller (flush(), from atexit) opens the file with it
+// immediately, which is the same lifetime the environment string had.
 inline const char* trace_path() {
-    if (const char* p = std::getenv("BATCHLAS_KERNEL_TRACE_PATH")) {
-        if (*p) return p;
-    }
-    if (const char* p = std::getenv("BATCHLAS_TRACE_PATH")) {
-        if (*p) return p;
-    }
-    return "batchlas_kernels.trace.json";
+    return batchlas::settings().diagnostics.kernel_trace_path.c_str();
 }
 
 inline void flush();
@@ -47,8 +61,10 @@ inline void _init_once() {
     bool expected = false;
     if (!g_initialized.compare_exchange_strong(expected, true)) return;
 
-    const bool enabled = batchlas::env_truthy(std::getenv("BATCHLAS_KERNEL_TRACE")) ||
-                         batchlas::env_truthy(std::getenv("BATCHLAS_TRACE_KERNELS"));
+    // BATCHLAS_KERNEL_TRACE or BATCHLAS_TRACE_KERNELS: an alias pair the call
+    // site used to OR, now one field carrying the OR. Still latched by the
+    // compare_exchange above, so tracing is decided once per process as before.
+    const bool enabled = batchlas::settings().diagnostics.kernel_trace;
     g_enabled.store(enabled);
 
     if (enabled) {

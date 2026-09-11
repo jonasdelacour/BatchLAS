@@ -16,6 +16,7 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <batchlas/settings.hh>
 
 namespace batchlas::sycl_gemv {
 
@@ -107,13 +108,16 @@ inline int gemv_seg_trans_min_items(int cu, int w) {
 }
 
 // Bodies 3 and 5 are one route, so BATCHLAS_GEMV_ROUTE cannot separate them.
-// Never latch this in a function-local static: a getenv cached there makes a
-// later setenv invisible, and the test then passes green on the default arm.
+// Never latch this in a function-local static: a value cached there makes a
+// later change invisible, and the test then passes green on the default arm.
+// Reading settings() per call keeps that property -- the snapshot is re-read by
+// detail::reload_settings(), so a ScopedEnvVar around the A/B is still seen --
+// but a static here would defeat it again exactly as a cached read did.
 //   BATCHLAS_GEMV_SEGT = off | auto (default) | 2|4|8 (force body 5 at that W)
 enum class SegTMode { kAuto, kOff, kForce2, kForce4, kForce8 };
 
 inline SegTMode gemv_segt_mode() {
-    const char* const s = std::getenv("BATCHLAS_GEMV_SEGT");
+    const char* const s = batchlas::settings().selection.gemv_segt.get();
     if (s == nullptr) return SegTMode::kAuto;
     if (std::strcmp(s, "off") == 0) return SegTMode::kOff;
     if (std::strcmp(s, "2") == 0) return SegTMode::kForce2;
@@ -723,7 +727,7 @@ Event gemv_native_cta(Queue& ctx,
                       const VectorView<T>& Y,
                       T alpha, T beta, Transpose transA) {
     if (transA == Transpose::NoTrans) {
-        throw std::runtime_error(
+        throw batchlas::unsupported(
             "BatchLAS: gemv_native_cta called with transA = NoTrans. The CTA body "
             "reduces down a column and serves only Trans/ConjTrans; NoTrans is "
             "already fully coalesced with one work-item per output row and is the "

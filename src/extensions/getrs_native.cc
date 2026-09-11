@@ -19,6 +19,7 @@
 #include <cstring>
 #include <stdexcept>
 #include <string>
+#include <batchlas/settings.hh>
 
 namespace batchlas {
 namespace sycl_getrs {
@@ -179,10 +180,11 @@ bool getrs_perm_gather_launch(Queue& ctx,
 // gather is the default.
 enum class PermSpelling { kDefault, kWalk, kGather };
 
-// Deliberately NOT latched: once a presence check latches false, a later setenv
-// is invisible and the test silently runs the default arm and passes.
+// Deliberately NOT latched: once a presence check latches false, a later change
+// is invisible and the test silently runs the default arm and passes. Reading
+// the settings() snapshot per call keeps that; a static here would not.
 PermSpelling perm_spelling() {
-    const char* const s = std::getenv("BATCHLAS_GETRS_LASWP");
+    const char* const s = batchlas::settings().selection.getrs_laswp.get();
     if (s == nullptr) return PermSpelling::kDefault;
     if (std::strcmp(s, "walk") == 0) return PermSpelling::kWalk;
     if (std::strcmp(s, "gather") == 0) return PermSpelling::kGather;
@@ -247,35 +249,35 @@ Event getrs_blocked_dispatch(Queue& ctx,
     // supports()'s gates, re-applied: this entry point is reachable WITHOUT the
     // table, and an unsupported forced route falls through to automatic().
     if (n < 1 || nrhs < 1 || batch < 1) {
-        throw std::invalid_argument("getrs_blocked: degenerate extents");
+        throw batchlas::invalid_argument("getrs_blocked: degenerate extents");
     }
     if (A.rows() != A.cols()) {
-        throw std::invalid_argument("getrs_blocked: A must be square");
+        throw batchlas::invalid_argument("getrs_blocked: A must be square");
     }
     if (A.rows() != B.rows()) {
-        throw std::invalid_argument("getrs_blocked: B must have A.rows() rows");
+        throw batchlas::invalid_argument("getrs_blocked: B must have A.rows() rows");
     }
     if (A.batch_size() != B.batch_size()) {
-        throw std::invalid_argument("getrs_blocked: A and B must agree on batch size");
+        throw batchlas::invalid_argument("getrs_blocked: A and B must agree on batch size");
     }
     if (A.is_heterogeneous() || B.is_heterogeneous()) {
-        throw std::invalid_argument("getrs_blocked: heterogeneous batch is not supported");
+        throw batchlas::invalid_argument("getrs_blocked: heterogeneous batch is not supported");
     }
     const auto dev = ctx.device();
     if (dev.type != DeviceType::GPU) {
-        throw std::invalid_argument("getrs_blocked: GPU queues only");
+        throw batchlas::invalid_argument("getrs_blocked: GPU queues only");
     }
     if (!dev.supports_sub_group_size(32)) {
         // Enumerated, never MAX_SUB_GROUP_SIZE >= 32: that property returns
         // sub_group_sizes()[0], so it would ACCEPT a {64}-only device.
-        throw std::runtime_error(
+        throw batchlas::unsupported(
             "getrs_blocked: device does not offer sub-group size 32");
     }
     if (pivots.size() < static_cast<std::size_t>(n) * static_cast<std::size_t>(batch)) {
-        throw std::invalid_argument("getrs_blocked: pivot span is shorter than n * batch");
+        throw batchlas::invalid_argument("getrs_blocked: pivot span is shorter than n * batch");
     }
     if (!solve_trsm) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "getrs_blocked: the solve seam is empty. Inject the ROUTED batchlas::trsm "
             "(the facade does; a direct caller must too) -- this driver deliberately has "
             "no native fallback, so that the router, and not this file, chooses the trsm "

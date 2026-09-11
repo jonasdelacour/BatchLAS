@@ -806,3 +806,101 @@ def test_syevx_inverted_value_interval_raises():
     except Exception as exc:  # pragma: no cover - backend/runtime dependent
         _skip_if_unavailable(exc)
     pytest.fail("an empty (vl, vu] interval must be rejected")
+
+
+def test_syev_return_info_reports_a_converged_batch():
+    # The default shape must not move -- that is the compatibility claim -- and
+    # `return_info=True` must append an int32 array of batch_size entries whose
+    # every element is 0 on a batch that converges.
+    a = _symmetric_batch(3, 8, seed=41)
+
+    try:
+        values = bl.syev(a, compute_vectors=False)
+        values_and_info = bl.syev(a, compute_vectors=False, return_info=True)
+    except Exception as exc:  # pragma: no cover - backend/runtime dependent
+        _skip_if_unavailable(exc)
+
+    assert isinstance(values, np.ndarray), "return_info=False must keep the bare-array shape"
+
+    got_values, info = values_and_info
+    assert isinstance(info, np.ndarray)
+    assert info.dtype == np.int32
+    assert info.shape == (3,)
+    np.testing.assert_array_equal(info, np.zeros(3, dtype=np.int32))
+    # Asking for status must not perturb the answer.
+    np.testing.assert_allclose(np.asarray(got_values), np.asarray(values), rtol=0, atol=0)
+
+
+def test_gesvd_return_info_appends_without_moving_the_other_outputs():
+    a = _symmetric_batch(2, 8, seed=42)
+
+    try:
+        u, s, vh = bl.gesvd(a, uplo="lower")
+        u2, s2, vh2, info = bl.gesvd(a, uplo="lower", return_info=True)
+    except Exception as exc:  # pragma: no cover - backend/runtime dependent
+        _skip_if_unavailable(exc)
+
+    # `info` is appended, so u/s/vh keep their positions.
+    assert np.asarray(u2).shape == np.asarray(u).shape
+    assert np.asarray(vh2).shape == np.asarray(vh).shape
+    np.testing.assert_allclose(np.asarray(s2), np.asarray(s), rtol=1e-10, atol=1e-10)
+    assert isinstance(info, np.ndarray)
+    assert info.dtype == np.int32
+    assert info.shape == (2,)
+    np.testing.assert_array_equal(info, np.zeros(2, dtype=np.int32))
+
+
+def test_syevx_return_info_sits_after_the_count_array():
+    # syevx's return layout is (values[, vectors][, m][, info][, history]). An
+    # extremal request reports no `m`, so the two-element form is (values, info)
+    # -- and the without-info call must still be a bare array.
+    a = _symmetric_batch(2, 8, seed=43).astype(np.float64)
+
+    try:
+        values = bl.syevx(a, 3, compute_vectors=False)
+        values_and_info = bl.syevx(a, 3, compute_vectors=False, return_info=True)
+    except Exception as exc:  # pragma: no cover - backend/runtime dependent
+        _skip_if_unavailable(exc)
+
+    assert isinstance(values, np.ndarray)
+    got_values, info = values_and_info
+    assert isinstance(info, np.ndarray)
+    assert info.dtype == np.int32
+    assert info.shape == (2,)
+    assert np.asarray(got_values).shape == np.asarray(values).shape
+
+
+def test_syevx_return_info_flags_an_exhausted_iteration_budget():
+    # The direction that matters. A test that only ever sees info == 0 cannot
+    # tell a working implementation from one that fills the array with zeros --
+    # and for syevx it could not tell a correct copy from one that forgot to
+    # invert LOBPCG's polarity either (LOBPCG's own flag uses 1 for CONVERGED,
+    # the opposite of LAPACK).
+    #
+    # The input is SPARSE on purpose. `iterations` only caps the iterative
+    # routes, and a small dense matrix is answered by the Direct route, where the
+    # cap is inert -- a dense version of this test would report universal
+    # convergence and look like a passing guard. Sparse always routes to LOBPCG,
+    # and Python has no way to pin the algorithm (parse_syevx_params reads
+    # "algorithm" as the ORTHOGONALISATION algorithm, not SyevxParams::method).
+    n = 32
+    base = 4.0 * np.eye(n, dtype=np.float64)
+    offdiag = -0.25 * np.ones(n - 1, dtype=np.float64)
+    base[np.arange(n - 1), np.arange(1, n)] = offdiag
+    base[np.arange(1, n), np.arange(n - 1)] = offdiag
+    matrices = [sp.csr_matrix(base), sp.csr_matrix(base + 0.1 * np.eye(n, dtype=np.float64))]
+    options = bl.SyevxOptions(
+        iterations=1, absolute_tolerance=1e-12, relative_tolerance=1e-12
+    )
+
+    try:
+        _, info = bl.syevx(matrices, 2, compute_vectors=False, options=options, return_info=True)
+    except Exception as exc:  # pragma: no cover - backend/runtime dependent
+        _skip_if_unavailable(exc)
+
+    assert np.asarray(info).shape == (2,)
+    assert int(np.count_nonzero(info)) > 0, (
+        "a single LOBPCG iteration at 1e-12 reported universal convergence; either the "
+        "status is not written, or its polarity is inverted"
+    )
+    assert int(np.min(info)) >= 0, "info is LAPACK-like: 0 or a positive count, never negative"

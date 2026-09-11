@@ -16,13 +16,13 @@ void validate_syr2k_arguments(const MatrixView<T, MatrixFormat::Dense>& A,
                               const MatrixView<T, MatrixFormat::Dense>& C,
                               Transpose transA) {
     if (transA == Transpose::ConjTrans) {
-        throw std::invalid_argument("syr2k does not support ConjTrans for real-valued inputs");
+        throw batchlas::invalid_argument("syr2k does not support ConjTrans for real-valued inputs");
     }
     if (C.rows() != C.cols()) {
-        throw std::invalid_argument("syr2k requires C to be square");
+        throw batchlas::invalid_argument("syr2k requires C to be square");
     }
     if (A.batch_size() != B.batch_size() || B.batch_size() != C.batch_size()) {
-        throw std::invalid_argument("syr2k requires matching batch sizes");
+        throw batchlas::invalid_argument("syr2k requires matching batch sizes");
     }
 
     const int expected_n = transA == Transpose::NoTrans ? A.rows() : A.cols();
@@ -30,7 +30,7 @@ void validate_syr2k_arguments(const MatrixView<T, MatrixFormat::Dense>& A,
     const int expected_k = transA == Transpose::NoTrans ? A.cols() : A.rows();
     const int other_k = transA == Transpose::NoTrans ? B.cols() : B.rows();
     if (expected_n != C.rows() || other_n != C.rows() || expected_k != other_k) {
-        throw std::invalid_argument("syr2k dimension mismatch between A, B, and C");
+        throw batchlas::invalid_argument("syr2k dimension mismatch between A, B, and C");
     }
 }
 

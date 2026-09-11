@@ -117,10 +117,10 @@ Event launch_register_128x32_k32_split_k4(Queue& ctx,
         static_cast<void>(transA);
         static_cast<void>(transB);
         static_cast<void>(kernel_trace_name);
-        throw std::runtime_error("Experimental split-K GEMM is currently only implemented for float");
+        throw batchlas::unsupported("Experimental split-K GEMM is currently only implemented for float");
     } else {
         if (!can_use_split_k_128x32x32_experimental(A, B, C, transA, transB)) {
-            throw std::runtime_error("Experimental split-K GEMM requires large aligned NN float inputs with K divisible by 128");
+            throw batchlas::unsupported("Experimental split-K GEMM requires large aligned NN float inputs with K divisible by 128");
         }
 
         BATCHLAS_KERNEL_TRACE_SCOPE(kernel_trace_name(KernelVariant::Tiled128x32RegisterK32SplitK4));
@@ -148,12 +148,14 @@ Event launch_register_128x32_k32_split_k4(Queue& ctx,
                 partials_view.stride(),
                 batch_size);
 
-            launch_reg<T, RegTile{128, 32, 32, 4, 4, 4, 4, 2, 2}>(
+            // (void) on an Event: deliberate. This Queue is in-order, so the next submission
+            // is already ordered after this one and the Event carries nothing the caller needs.
+            (void)launch_reg<T, RegTile{128, 32, 32, 4, 4, 4, 4, 2, 2}>(
                 ctx, a_slice, b_slice, partial_view, T(1), T(0),
                 kernel_trace_name(KernelVariant::Tiled128x32RegisterK32S2U2));
         }
 
-        reduce_split_k_partials(ctx, partials_view, C, kExperimentalSplitKPartitions, alpha, beta);
+        (void)reduce_split_k_partials(ctx, partials_view, C, kExperimentalSplitKPartitions, alpha, beta);
 
         ctx->submit([partials](sycl::handler& h) {
             h.host_task([partials]() {});

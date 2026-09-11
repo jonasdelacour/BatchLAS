@@ -1,8 +1,8 @@
 #pragma once
 
-// GEQRF shape builder and route resolution; route arms: docs/perf/qr.md#route-arms.
-// Device and environment queries live here so the route table sees a plain struct.
-// Do not add src/queue.hh or <sycl/sycl.hpp>: the vendor-free facade includes this.
+// GEQRF shape builder: device and environment queries live here so the route table sees
+// a plain struct. Do not add src/queue.hh or <sycl/sycl.hpp> -- the vendor-free facade
+// includes this header. evidence: docs/perf/qr.md#route-arms
 
 #include <batchlas/blas/dispatch/route_env.hh>
 #include <batchlas/blas/dispatch/route_geqrf.hh>
@@ -18,9 +18,8 @@
 
 namespace batchlas::backend {
 
-// No squareness test by design: geqrf's operand is rectangular, so only negative
-// extents are non-conforming. Must not dereference A.data_ptr() -- band_reduction
-// sizes sytrd by resolving a route through a null-data MatrixView; metadata only.
+// No squareness test by design (the operand is rectangular), and NOTHING here may
+// dereference A.data_ptr(): band_reduction sizes sytrd through a null-data MatrixView.
 template <Backend B, typename T>
 inline std::optional<dispatch::GeqrfShape> geqrf_op_shape(
     const Queue& ctx,
@@ -45,20 +44,20 @@ inline std::optional<dispatch::GeqrfShape> geqrf_op_shape(
 
     s.heterogeneous_batch = A.is_heterogeneous();
 
-    // Capacities are asked of this device (local_mem_size less the standard 4 KiB
-    // reserve); device_limits.hh's hardcoded 49152 would admit unlaunchable routes.
-    // evidence: docs/perf/qr.md#the-48-kib-launch-hole
-    const std::size_t local_mem =
-        static_cast<std::size_t>(ctx.device().get_property(DeviceProperty::LOCAL_MEM_SIZE));
-    const std::size_t budget = local_mem > 4096 ? local_mem - 4096 : 0;
+    // Ask THIS device (local_mem_size less the 4 KiB reserve): device_limits.hh's
+    // hardcoded 49152 admits unlaunchable routes. evidence: docs/perf/qr.md#the-48-kib-launch-hole
+    const std::size_t budget = resident::device_slm_budget(
+        static_cast<std::size_t>(ctx.device().get_property(DeviceProperty::LOCAL_MEM_SIZE)));
     s.cta_max_m = sycl_geqrf::geqrf_cta_max_m_for_slm<T>(budget);
     s.cta_max_elems = sycl_geqrf::geqrf_cta_max_elems_for_slm<T>(budget);
+    // The SAME predicate the tiny launcher applies, from the SAME budget: a second
+    // spelling here lets supports() advertise an order geqrf_tiny_dispatch refuses.
+    s.tiny_max_n = sycl_geqrf::geqrf_tiny_max_n_for_slm<T>(budget);
     s.blocked_available = sycl_geqrf::geqrf_blocked_available<T>();
     return s;
 }
 
-// Called from geqrf and geqrf_buffer_size with identical arguments; splitting
-// them lets the size query and the call resolve to different routes.
+// geqrf and geqrf_buffer_size must pass IDENTICAL arguments, or they resolve apart.
 template <Backend B, typename T>
 inline dispatch::Route geqrf_route(
     const Queue& ctx,

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <batchlas/export.hh>
 #include <stdexcept>
 #include <string>
 
@@ -70,7 +71,7 @@ using geqrf_vendor_buffer_size = size_t(Queue&,
 template <typename T>
 inline void geqrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
     if (A.rows() < 0 || A.cols() < 0) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "GEQRF: Matrix dimensions cannot be negative (rows=" +
             std::to_string(A.rows()) + ", cols=" + std::to_string(A.cols()) + ")");
     }
@@ -78,15 +79,15 @@ inline void geqrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
 
 
 template <Backend B, typename T>
-Event geqrf(Queue& ctx,
-            const MatrixView<T,MatrixFormat::Dense>& A,
-            Span<T> tau,
-            Span<std::byte> work_space);
+BATCHLAS_API Event geqrf(Queue& ctx,
+                         const MatrixView<T,MatrixFormat::Dense>& A,
+                         Span<T> tau,
+                         Span<std::byte> work_space);
 
 template <Backend B, typename T>
-size_t geqrf_buffer_size(Queue& ctx,
-                         const MatrixView<T,MatrixFormat::Dense>& A,
-                         Span<T> tau);
+BATCHLAS_API size_t geqrf_buffer_size(Queue& ctx,
+                                      const MatrixView<T,MatrixFormat::Dense>& A,
+                                      Span<T> tau);
 
 }  // namespace batchlas
 
@@ -101,16 +102,16 @@ namespace batchlas::backend {
 // src/dispatch/entry_points/factorization.cc and leaves the vendor
 // implementation here, named as such.
 template <Backend B, typename T>
-Event geqrf_vendor(Queue& ctx,
-                   const MatrixView<T,MatrixFormat::Dense>& A,
-                   Span<T> tau,
-                   Span<std::byte> work_space);
+BATCHLAS_API Event geqrf_vendor(Queue& ctx,
+                                const MatrixView<T,MatrixFormat::Dense>& A,
+                                Span<T> tau,
+                                Span<std::byte> work_space);
 
 
 template <Backend B, typename T>
-size_t geqrf_vendor_buffer_size(Queue& ctx,
-                                const MatrixView<T,MatrixFormat::Dense>& A,
-                                Span<T> tau);
+BATCHLAS_API size_t geqrf_vendor_buffer_size(Queue& ctx,
+                                             const MatrixView<T,MatrixFormat::Dense>& A,
+                                             Span<T> tau);
 
 }  // namespace batchlas::backend
 

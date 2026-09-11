@@ -1,5 +1,6 @@
 #include <batchlas/util/minibench.hh>
 #include <batchlas/blas/functions.hh>
+#include <batchlas/util/env.hh>
 #include "bench_utils.hh"
 
 #include <cstdlib>
@@ -60,8 +61,14 @@ static void BM_SYEV(minibench::State& state) {
     const JobType jobz = parse_jobz(static_cast<int>(state.range(4)));
     const Uplo uplo = parse_uplo(static_cast<int>(state.range(5)));
 
+    // Bare ::setenv + explicit reload, not a ScopedEnvVar: minibench runs the kernel
+    // registered below many times AFTER this setup call returns (minibench.hh:312 vs
+    // :333-386), so a guard scoped here would restore the env before the first timed
+    // iteration and every case would measure the tuned default. The reload is what
+    // makes the writes visible at all: settings() snapshots the env once, before main().
     ::setenv("BATCHLAS_SYTRD_BLOCK_SIZE", std::to_string(sytrd_block_size).c_str(), 1);
     ::setenv("BATCHLAS_SYTRD_FUSE_PANEL_UPDATE", fuse_panel_update ? "1" : "0", 1);
+    batchlas::detail::reload_settings();
 
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
     auto A = Matrix<T>::Random(n, n, true, batch);

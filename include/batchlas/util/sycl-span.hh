@@ -3,7 +3,10 @@
 #include <iterator>
 #include <array>
 #include <type_traits>
+#include <batchlas/export.hh>
 #include <batchlas/util/sycl-device-queue.hh>
+
+namespace batchlas {
 
 template <typename T>
 struct is_std_array : std::false_type {};
@@ -11,8 +14,13 @@ struct is_std_array : std::false_type {};
 template <typename T, std::size_t N>
 struct is_std_array<std::array<T, N>> : std::true_type {};
 
+// The seven out-of-line members below (the USM advice calls and operator==) are
+// defined in src/util/sycl-util-impl.cc and explicitly instantiated there, so
+// Span is a shared-library boundary crossing like Matrix and UnifiedVector. The
+// constexpr bodies in this header are unaffected: -fvisibility-inlines-hidden
+// leaves them hidden, which is right -- a consumer compiles its own copy.
 template <typename T>
-struct Span
+struct BATCHLAS_API Span
 {   
     using value_type = T;
     using pointer = T*;
@@ -80,4 +88,18 @@ Span(T*, T*) -> Span<T>;
 
 template <typename T>
 Span(T&) -> Span<T>;
+
+}  // namespace batchlas
+
+// Transitional compatibility shim: Span and is_std_array used to be declared at
+// global scope and now live in namespace batchlas. These using-declarations keep
+// the old unqualified spellings working; a consumer with a name of its own here
+// defines BATCHLAS_NO_GLOBAL_NAMES to switch the block off, and the block goes
+// away entirely once nothing in tree depends on it. CTAD still works through it:
+// the deduction guides above are looked up in Span's own namespace, not where
+// the using-declaration introduced the name.
+#ifndef BATCHLAS_NO_GLOBAL_NAMES
+using batchlas::Span;
+using batchlas::is_std_array;
+#endif
 

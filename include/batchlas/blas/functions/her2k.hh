@@ -1,5 +1,6 @@
 #pragma once
 
+#include <batchlas/export.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/blas/enums.hh>
@@ -45,14 +46,14 @@ using her2k_vendor = Event(Queue&,
 // alpha * A * B^H and its own conjugate transpose is Hermitian for any alpha.
 // beta scales an already-Hermitian C and so is still real.
 template <Backend Ba, ComplexScalar T>
-Event her2k(Queue& ctx,
-            const MatrixView<T, MatrixFormat::Dense>& A,
-            const MatrixView<T, MatrixFormat::Dense>& B,
-            const MatrixView<T, MatrixFormat::Dense>& C,
-            T alpha,
-            float_t<T> beta,
-            Uplo uplo,
-            Transpose transA);
+BATCHLAS_API Event her2k(Queue& ctx,
+                         const MatrixView<T, MatrixFormat::Dense>& A,
+                         const MatrixView<T, MatrixFormat::Dense>& B,
+                         const MatrixView<T, MatrixFormat::Dense>& C,
+                         T alpha,
+                         float_t<T> beta,
+                         Uplo uplo,
+                         Transpose transA);
 
 } // namespace batchlas
 
@@ -68,14 +69,14 @@ namespace batchlas::backend {
 // implementation, named as such. Each vendor wrapper TU defines this primary
 // template for its own Backend value and instantiates it there.
 template <Backend Back, ComplexScalar T>
-Event her2k_vendor(Queue& ctx,
-                   const MatrixView<T, MatrixFormat::Dense>& A,
-                   const MatrixView<T, MatrixFormat::Dense>& B,
-                   const MatrixView<T, MatrixFormat::Dense>& C,
-                   T alpha,
-                   float_t<T> beta,
-                   Uplo uplo,
-                   Transpose transA);
+BATCHLAS_API Event her2k_vendor(Queue& ctx,
+                                const MatrixView<T, MatrixFormat::Dense>& A,
+                                const MatrixView<T, MatrixFormat::Dense>& B,
+                                const MatrixView<T, MatrixFormat::Dense>& C,
+                                T alpha,
+                                float_t<T> beta,
+                                Uplo uplo,
+                                Transpose transA);
 
 }  // namespace batchlas::backend
 

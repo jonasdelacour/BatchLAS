@@ -1,0 +1,70 @@
+# Known test failures on `main`. A debt ledger, not an allowlist.
+#
+# This project's test suite is NOT green, and has not been for some time. A CI
+# job that fails on any non-zero ctest exit can therefore never go green, so it
+# would be switched off within a week. This file is what lets the gate mean
+# something in the meantime: .github/ci/compare_failures.py fails the build on
+# any failure that is NOT listed here, and warns loudly when a listed one starts
+# passing so a fix cannot be silently re-broken later.
+#
+# Every line is a debt. Nothing here is "fine". Fix an entry and delete it;
+# adding one is a decision that deserves a reviewer's attention, which is why
+# each entry carries a date and a pointer to what is actually wrong.
+#
+# FORMAT
+#   <ctest-test>                             a whole ctest test (a non-gtest one,
+#                                            e.g. the consumer_package_tests script)
+#   <ctest-test>::<Suite>.<Case>             one gtest case inside that test's binary
+#   ...either form may carry  ;type_param=<exact gtest XML type_param attribute>
+#   '#' starts a comment; blank lines ignored.
+#
+# WHY GTEST-CASE GRANULARITY AND NOT CTEST-TEST GRANULARITY
+#   The four entries below live in exactly two ctest tests. Keying this file on
+#   the ctest test name would therefore mask all 10 TYPED_TESTs x 4
+#   instantiations in steqr_tests and both cases in lanczos_tests -- roughly 40
+#   cases, in the two suites this project has historically broken most often --
+#   in order to excuse 4. That is not a coarser gate, it is an absent one.
+#   Do not "simplify" this file back to binary level.
+#
+# THE TYPED-TEST INDEX TRAP
+#   `SteqrTest/0` and `SteqrTest/1` are positional indices into
+#   backend_types_filtered's type list (tests/test_utils.hh:119-150), whose
+#   NETLIB block is compiled out when BATCHLAS_HAS_CPU_TARGET is off. Under a
+#   preset such as dev-gpu-tests, `SteqrTest/0` silently becomes float/CUDA -- a
+#   different test, which a bare-index entry would suppress. The `type_param=`
+#   field pins the identity: compare_failures.py makes a type_param mismatch a
+#   hard error rather than honouring the index.
+#
+#   PRESET: these entries were verified under `dev-tests`. They are not claimed
+#   to hold under any other configure preset.
+#
+#   The two steqr entries below carry no type_param yet: the exact demangled
+#   spelling has to be read off a real gtest XML rather than guessed, and no
+#   suite run was permitted in the session that wrote this file.
+#   compare_failures.py prints the observed spelling for any matched typed entry
+#   that lacks one -- paste it in on the first real CI run and the index trap
+#   above is closed for good.
+
+# --- lanczos ------------------------------------------------------------------
+# Verified 2026-09-09 (also on the WP0 and WP1 trees).
+# docs/design/known-defects.md entry 3: src/extensions/lanczos.cc:107-111 issues a
+# two-column level-3 multiply and the consuming kernel reads column 0 only
+# (:127). Not a routing defect -- the same two cases fail with
+# BATCHLAS_SPMM_ROUTE=vendor.
+lanczos_tests::LanczosTestBase.LanczosTest
+lanczos_tests::LanczosTestBase.ToeplitzEigenpairs
+
+# --- steqr --------------------------------------------------------------------
+# Verified 2026-09-09 (also on the WP0 and WP1 trees).
+# Extreme-magnitude convergence: the n=32 stress case does not converge on
+# inputs spanning the far ends of the exponent range. Both instantiations are
+# the NETLIB (Backend 6) ones -- index 0 float, index 1 double.
+steqr_tests::SteqrTest/0.StressExtremeMagnitudesN32
+steqr_tests::SteqrTest/1.StressExtremeMagnitudesN32
+
+# --- DELIBERATELY ABSENT ------------------------------------------------------
+# sytrd_blocked_tests::SytrdBlockedLatrdGridCudaTest.GridMatchesLegacyTridiagonal
+#   was on an older recorded baseline and PASSES as of 2026-09-09. It is left out
+#   on purpose. If it is ever re-added, the NEWLY PASSING warning is what will
+#   tell you the entry is stale rather than letting it hide the regression that
+#   re-broke it.

@@ -35,7 +35,7 @@ inline void set_kernel_from_tuple(StateT& state,
         if constexpr (std::is_invocable_v<decltype(k)&, decltype(xs)&...>) {
             k(xs...);
         } else if constexpr (std::is_invocable_v<decltype(k)&,
-                                                ::Queue&,
+                                                batchlas::Queue&,
                                                 decltype(::bench::detail::kernel_arg(xs))...>) {
             k(*q, ::bench::detail::kernel_arg(xs)...);
         } else {

@@ -3,6 +3,7 @@
 #include <batchlas/backend_config.h>
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/blas/functions/syev.hh>
+#include <batchlas/util/env.hh>
 
 #include <algorithm>
 #include <optional>
@@ -976,11 +977,19 @@ TEST_F(ILUKTests, HostAndDeviceFactorizationsAgree) {
         params.drop_tolerance = c.drop;
         params.fill_factor = c.fill;
 
+        // ScopedEnvVar, not a bare ::setenv: batchlas::settings() snapshots the
+        // environment once before main(), so a raw setenv here would be read by
+        // nothing and both arms below would silently run the host path (every
+        // batch here is under the batch_size >= 32 shape default). The guard
+        // reloads the snapshot at both ends, which is what makes this A/B real.
+        //
+        // It also RESTORES any pre-existing BATCHLAS_ILUK_DEVICE on scope exit
+        // where the old unsetenv unconditionally cleared it; nothing here depends
+        // on the clear, since each arm pins its own value for its own scope.
         auto factor_with = [&](const char* mode) {
-            setenv("BATCHLAS_ILUK_DEVICE", mode, 1);
+            ScopedEnvVar pin("BATCHLAS_ILUK_DEVICE", mode);
             auto M = iluk_factorize(*ctx, view, params);
             ctx->wait_and_throw();
-            unsetenv("BATCHLAS_ILUK_DEVICE");
             return M;
         };
 

@@ -35,7 +35,7 @@ void check_same_shape(const MatrixView<T, MatrixFormat::Dense>& A,
                       const MatrixView<T, MatrixFormat::Dense>& B,
                       const char* where) {
     if (A.rows() != B.rows() || A.cols() != B.cols() || A.batch_size() != B.batch_size()) {
-        throw std::invalid_argument(std::string(where) + ": operands must have the same shape");
+        throw batchlas::invalid_argument(std::string(where) + ": operands must have the same shape");
     }
 }
 

@@ -86,8 +86,11 @@ GeqrfBlockedWs<T> geqrf_blocked_layout(Queue& ctx, BumpAllocator& pool,
 }  // namespace
 
 // Co-located with the driver so "the flag is true" and "this TU is compiled" are one fact.
-// RouteTable<Op::geqrf,T>::preferred() is still false everywhere.
-// evidence: docs/perf/qr.md#route-arms
+// RouteTable<Op::geqrf,T>::preferred() now routes native above a per-type order floor
+// (float 64, cfloat 48, double 96, cdouble 256) and for tall panels, so this flag also
+// gates the DEFAULT route and not only vendor-free builds: reporting false here sends
+// every in-window shape back to the vendor.
+// evidence: docs/perf/small-n-baseline.md#geqrf, docs/perf/qr.md#route-arms
 template <> bool geqrf_blocked_available<float>()                { return true; }
 template <> bool geqrf_blocked_available<double>()               { return true; }
 template <> bool geqrf_blocked_available<std::complex<float>>()  { return true; }
@@ -113,10 +116,12 @@ unsigned geqrf_blocked_debug_params(Queue& ctx, int m, int n) {
     const int nb = geqrf_blocked_nb<T>(m, n);
 
     const auto dev = ctx.device();
-    const std::size_t local_mem = dev.get_property(DeviceProperty::LOCAL_MEM_SIZE);
-    const std::size_t budget = (local_mem > 4096) ? (local_mem - 4096) : 0;
+    const std::size_t budget = resident::device_slm_budget(
+        dev.get_property(DeviceProperty::LOCAL_MEM_SIZE));
     const int ib0 = std::min(nb, std::min(m, n));
-    const unsigned leaf = geqrf_cta_fits<T>(m, ib0, budget) ? 1u : 2u;
+    // geqrf_leaf_fits, not geqrf_cta_fits: this reports which leaf geqrf_panel_factorize
+    // will take, and that is the residency question, asked at the whole budget.
+    const unsigned leaf = geqrf_leaf_fits<T>(m, ib0, budget) ? 1u : 2u;
 
     return (leaf << 16) | static_cast<unsigned>(nb);
 }
@@ -149,26 +154,26 @@ Event geqrf_blocked_dispatch(Queue& ctx,
     // table, and an unsupported forced route falls back to automatic(), so a gate that is
     // wrong here silently measures the vendor instead.
     if (m < 1 || n < 1 || batch < 1) {
-        throw std::invalid_argument("geqrf_blocked: degenerate extents");
+        throw batchlas::invalid_argument("geqrf_blocked: degenerate extents");
     }
     if (m < n) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "geqrf_blocked: m < n is not supported (route_geqrf.hh's supports() refuses it)");
     }
     if (A.is_heterogeneous()) {
-        throw std::invalid_argument("geqrf_blocked: heterogeneous batch is not supported");
+        throw batchlas::invalid_argument("geqrf_blocked: heterogeneous batch is not supported");
     }
     const auto dev = ctx.device();
     if (dev.type != DeviceType::GPU) {
-        throw std::invalid_argument("geqrf_blocked: GPU queues only");
+        throw batchlas::invalid_argument("geqrf_blocked: GPU queues only");
     }
     if (!dev.supports_sub_group_size(32)) {
-        throw std::runtime_error(
+        throw batchlas::unsupported(
             "geqrf_blocked: device does not offer sub-group size 32, which the panel leaf "
             "requires");
     }
     if (tau.size() < static_cast<std::size_t>(k) * static_cast<std::size_t>(batch)) {
-        throw std::invalid_argument("geqrf_blocked: tau span is shorter than k * batch");
+        throw batchlas::invalid_argument("geqrf_blocked: tau span is shorter than k * batch");
     }
 
     const int nb = geqrf_blocked_nb<T>(m, n);

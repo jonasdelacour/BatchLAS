@@ -2,6 +2,10 @@
 
 #include <batchlas/backend_config.h>
 #include <batchlas/blas/linalg.hh>
+// gesvdj_cta and GesvdjParams: the `info` cases below reach the Jacobi tier
+// directly, because gesvd_dispatch hands it a default-constructed GesvdjParams
+// and so no sweep cap is reachable from the public entry point.
+#include <batchlas/blas/extensions.hh>
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
@@ -14,6 +18,7 @@
 #include <array>
 #include <cmath>
 #include <complex>
+#include <cstdint>
 #include <cstdlib>
 #include <functional>
 #include <memory>
@@ -1671,3 +1676,226 @@ TYPED_TEST(GesvdGeneralComplexTest, GeneralComplexAboveCapStillRefused) {
             << "complex general at n=96 silently produced a result; there is no route for it";
     }
 }
+
+
+// ---------------------------------------------------------------------------
+// Per-item convergence status (`info`).
+//
+// The SVD is the other half of the "LAPACK returns info > 0" family, and its
+// status was dropped in three different ways before this work package: bdsqr
+// computed a per-item fail_flags array, then collapsed it into one bool and
+// threw for the WHOLE batch; the netlib arm captured LAPACKE_?gesvd's info and
+// destroyed it in the same throw; gesvdj_cta's sweep loop had no flag at all,
+// only an optional sweep COUNT that the public gesvd cannot even reach because
+// gesvd_dispatch passes a default-constructed GesvdjParams.
+//
+// A batch-wide throw is not a status: it says some item failed, never which, and
+// it takes the good items' answers down with it.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Diagonal with distinct descending entries: singular values are exactly
+// n, n-1, ..., 1, so "converged" can be checked against a closed form rather
+// than against another run of the same code.
+//
+// Both fills take the view BY VALUE: MatrixView::operator() has a const overload
+// returning `const T&`, so a const-reference parameter would make every
+// assignment below a compile error. The view is a non-owning descriptor.
+template <typename Scalar>
+void fill_diagonal_svd_matrix(MatrixView<Scalar, MatrixFormat::Dense> A) {
+    const int n = A.rows();
+    const int batch = A.batch_size();
+    for (int b = 0; b < batch; ++b) {
+        for (int j = 0; j < n; ++j) {
+            for (int i = 0; i < n; ++i) A(i, j, b) = Scalar(0);
+        }
+        for (int i = 0; i < n; ++i) A(i, i, b) = Scalar(n - i);
+    }
+}
+
+// Even items diagonal (a one-sided Jacobi sweep finds nothing to rotate, so they
+// converge at the smallest budget that can prove convergence at all); odd items
+// dense and generic (they do not). The mix is what lets the forced case below
+// assert both directions from one run.
+template <typename Scalar>
+void fill_mixed_svd_matrices(MatrixView<Scalar, MatrixFormat::Dense> A, unsigned seed) {
+    const int n = A.rows();
+    const int batch = A.batch_size();
+    unsigned state = seed;
+    auto next = [&state]() {
+        state = state * 1664525u + 1013904223u;
+        return double(state >> 8) / double(1u << 24);
+    };
+    for (int b = 0; b < batch; ++b) {
+        const bool easy = (b % 2) == 0;
+        for (int j = 0; j < n; ++j) {
+            for (int i = 0; i < n; ++i) {
+                A(i, j, b) = easy ? Scalar(0) : Scalar(next() * 2.0 - 1.0);
+            }
+        }
+        if (easy) {
+            for (int i = 0; i < n; ++i) A(i, i, b) = Scalar(n - i);
+        }
+    }
+}
+
+}  // namespace
+
+TYPED_TEST(GesvdTest, InfoIsZeroOnAConvergingBatch) {
+    using Scalar = typename TestFixture::Scalar;
+    using Real = typename TestFixture::Real;
+    constexpr Backend B = TestFixture::B;
+    const int n = 32;
+    const int batch = 8;
+
+    Matrix<Scalar, MatrixFormat::Dense> A(n, n, batch);
+    fill_diagonal_svd_matrix<Scalar>(A.view());
+    Matrix<Scalar, MatrixFormat::Dense> U(n, n, batch), Vh(n, n, batch);
+    UnifiedVector<Real> s(static_cast<size_t>(n) * static_cast<size_t>(batch));
+
+    // -1, NOT 0: a zero-filled span cannot distinguish "the solver wrote 0" from
+    // "nothing wrote it", and the entry point is required to clear the span
+    // itself, so a surviving -1 is a defect and not a missing write.
+    UnifiedVector<int32_t> info(batch, int32_t(-1));
+
+    const size_t bytes = gesvd_buffer_size<B, Scalar>(*this->ctx, A.view(), s.to_span(), U.view(),
+                                                      Vh.view(), SvdVectors::All, SvdVectors::All);
+    UnifiedVector<std::byte> ws(bytes);
+    gesvd<B, Scalar>(*this->ctx, A.view(), s.to_span(), U.view(), Vh.view(), SvdVectors::All,
+                     SvdVectors::All, ws.to_span(), info.to_span());
+    this->ctx->wait();
+
+    for (int b = 0; b < batch; ++b) {
+        ASSERT_NE(info[b], -1) << "info[" << b << "] still holds the poison value: nothing wrote "
+                                  "the span, so a zero here would have proved nothing";
+        EXPECT_EQ(info[b], 0) << "item " << b << " reported non-convergence on a diagonal matrix";
+    }
+    for (int b = 0; b < batch; ++b) {
+        if (info[b] != 0) continue;
+        for (int i = 0; i < n; ++i) {
+            EXPECT_NEAR(static_cast<double>(s[static_cast<size_t>(b) * n + i]), double(n - i),
+                        static_cast<double>(TestFixture::tol()) * n)
+                << "batch " << b << " singular value " << i;
+        }
+    }
+}
+
+// An empty span is "not requested": neither the workspace query nor the answer
+// may move. gesvd_buffer_size takes no `info` argument at all, so the first half
+// holds by construction; the second is what a caller could observe.
+TYPED_TEST(GesvdTest, EmptyInfoSpanChangesNeitherAnswerNorWorkspace) {
+    using Scalar = typename TestFixture::Scalar;
+    using Real = typename TestFixture::Real;
+    constexpr Backend B = TestFixture::B;
+    const int n = 32;
+    const int batch = 4;
+
+    Matrix<Scalar, MatrixFormat::Dense> A0(n, n, batch), A1(n, n, batch);
+    fill_diagonal_svd_matrix<Scalar>(A0.view());
+    fill_diagonal_svd_matrix<Scalar>(A1.view());
+    Matrix<Scalar, MatrixFormat::Dense> U0(n, n, batch), Vh0(n, n, batch);
+    Matrix<Scalar, MatrixFormat::Dense> U1(n, n, batch), Vh1(n, n, batch);
+    UnifiedVector<Real> s0(static_cast<size_t>(n) * batch), s1(static_cast<size_t>(n) * batch);
+    UnifiedVector<int32_t> info(batch, int32_t(-1));
+
+    const size_t bytes_a = gesvd_buffer_size<B, Scalar>(
+        *this->ctx, A0.view(), s0.to_span(), U0.view(), Vh0.view(), SvdVectors::All, SvdVectors::All);
+    const size_t bytes_b = gesvd_buffer_size<B, Scalar>(
+        *this->ctx, A1.view(), s1.to_span(), U1.view(), Vh1.view(), SvdVectors::All, SvdVectors::All);
+    EXPECT_EQ(bytes_a, bytes_b);
+
+    UnifiedVector<std::byte> ws0(bytes_a), ws1(bytes_a);
+    gesvd<B, Scalar>(*this->ctx, A0.view(), s0.to_span(), U0.view(), Vh0.view(), SvdVectors::All,
+                     SvdVectors::All, ws0.to_span(), info.to_span());
+    gesvd<B, Scalar>(*this->ctx, A1.view(), s1.to_span(), U1.view(), Vh1.view(), SvdVectors::All,
+                     SvdVectors::All, ws1.to_span(), Span<int32_t>{});
+    this->ctx->wait();
+
+    for (size_t i = 0; i < s0.size(); ++i) {
+        EXPECT_EQ(s0[i], s1[i]) << "requesting status changed the answer at index " << i;
+    }
+}
+
+// THE FORCED DIRECTION, through the tier rather than the facade.
+//
+// gesvd_dispatch hands gesvdj_cta a DEFAULT GesvdjParams (blas/functions/gesvd.hh:285),
+// so no sweep cap is reachable from the public entry point -- not even the
+// sweep_counts channel that has existed all along. gesvdj_cta itself takes its
+// params, so that is where the cap goes.
+//
+// max_sweeps = 2, not 1, and the reason is the termination rule: gesvdj_cta
+// requires TWO CONSECUTIVE zero-rotation sweeps before it will call an item
+// converged (gesvdj_cta.cc:733-737, whose comment explains that one is a silent
+// wrong answer). At a cap of 1 NOTHING can converge, so "the items reporting
+// info == 0 are still correct" would be vacuously true. At 2 the diagonal items
+// converge and the dense ones do not, which is the mixed outcome this case needs
+// in order to assert both directions.
+#if BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND
+TYPED_TEST(GesvdTest, InfoReportsItemsThatExhaustTheSweepBudget) {
+    using Scalar = typename TestFixture::Scalar;
+    using Real = typename TestFixture::Real;
+    constexpr Backend B = TestFixture::B;
+    if constexpr (B == Backend::NETLIB) {
+        GTEST_SKIP() << "gesvdj_cta requires sub-group 32; not available on the host backend";
+    } else {
+        const int n = 32;
+        const int batch = 8;
+
+        // Full budget first: this is the reference the capped run's converged
+        // items are held to, and it is the SAME tier on the SAME input, so a
+        // difference can only come from the cap.
+        Matrix<Scalar, MatrixFormat::Dense> A_ref(n, n, batch);
+        fill_mixed_svd_matrices<Scalar>(A_ref.view(), 20260909u);
+        Matrix<Scalar, MatrixFormat::Dense> U_ref(n, n, batch), Vh_ref(n, n, batch);
+        UnifiedVector<Real> s_ref(static_cast<size_t>(n) * batch);
+        UnifiedVector<int32_t> info_ref(batch, int32_t(-1));
+
+        GesvdjParams<Scalar> full;
+        gesvdj_cta<B, Scalar>(*this->ctx, A_ref.view(), s_ref.to_span(), U_ref.view(),
+                              Vh_ref.view(), SvdVectors::All, SvdVectors::All, Span<std::byte>{},
+                              full, info_ref.to_span());
+        this->ctx->wait();
+        for (int b = 0; b < batch; ++b) {
+            ASSERT_NE(info_ref[b], -1) << "info_ref[" << b << "] still holds the poison value";
+            EXPECT_EQ(info_ref[b], 0)
+                << "item " << b << " did not converge at the DEFAULT sweep cap; the forced case "
+                   "below can then prove nothing about the cap";
+        }
+
+        Matrix<Scalar, MatrixFormat::Dense> A(n, n, batch);
+        fill_mixed_svd_matrices<Scalar>(A.view(), 20260909u);
+        Matrix<Scalar, MatrixFormat::Dense> U(n, n, batch), Vh(n, n, batch);
+        UnifiedVector<Real> s(static_cast<size_t>(n) * batch);
+        UnifiedVector<int32_t> info(batch, int32_t(-1));
+
+        GesvdjParams<Scalar> capped;
+        capped.max_sweeps = 2;
+        gesvdj_cta<B, Scalar>(*this->ctx, A.view(), s.to_span(), U.view(), Vh.view(),
+                              SvdVectors::All, SvdVectors::All, Span<std::byte>{}, capped,
+                              info.to_span());
+        this->ctx->wait();
+
+        int reported = 0;
+        for (int b = 0; b < batch; ++b) {
+            ASSERT_NE(info[b], -1) << "info[" << b << "] still holds the poison value";
+            ASSERT_GE(info[b], 0) << "info is LAPACK-like: 0 or a positive count, never negative";
+            if (info[b] != 0) ++reported;
+        }
+        EXPECT_GT(reported, 0)
+            << "a two-sweep budget on dense 32x32 items reported universal convergence; "
+               "either the status is not written, or it is written unconditionally zero";
+
+        for (int b = 0; b < batch; ++b) {
+            if (info[b] != 0) continue;
+            for (int i = 0; i < n; ++i) {
+                const size_t idx = static_cast<size_t>(b) * n + i;
+                EXPECT_NEAR(static_cast<double>(s[idx]), static_cast<double>(s_ref[idx]),
+                            static_cast<double>(TestFixture::tol()) * n)
+                    << "item " << b << " reported info == 0 but singular value " << i
+                    << " differs from the full-budget run";
+            }
+        }
+    }
+}
+#endif  // BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND

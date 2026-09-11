@@ -17,6 +17,7 @@
 
 #include "../math-helpers.hh"
 #include <batchlas/util/env.hh>
+#include <batchlas/settings.hh>
 
 namespace batchlas {
 
@@ -31,8 +32,12 @@ inline U conj_if_complex(const U& x) {
     }
 }
 
+// Diagnostics, not a safety override: it prints the stage name and drains the
+// pipeline, removing no check and selecting no different kernel, so it is
+// deliberately NOT one of the knobs BATCHLAS_ALLOW_UNSAFE_ENV gates. Parsed by
+// env_truthy in settings.cc, exactly as here before.
 inline bool cta_debug_sync_enabled() {
-    return env_truthy(std::getenv("BATCHLAS_CTA_DEBUG_SYNC"));
+    return batchlas::settings().diagnostics.cta_debug_sync;
 }
 
 inline void cta_debug_log(const char* stage) {
@@ -69,7 +74,7 @@ Span<T> ws_alloc(Queue& ctx, Span<std::byte> ws, std::size_t& offset_bytes, std:
 
     const std::size_t used_for_align = static_cast<std::size_t>(p - (base + offset_bytes));
     if (used_for_align > (ws.size() - offset_bytes)) {
-        throw std::runtime_error("syev_cta: workspace alignment overflow.");
+        throw batchlas::workspace_error("syev_cta: workspace alignment overflow.");
     }
     offset_bytes += used_for_align;
 
@@ -77,7 +82,7 @@ Span<T> ws_alloc(Queue& ctx, Span<std::byte> ws, std::size_t& offset_bytes, std:
     const std::size_t padded = BumpAllocator::allocation_size<T>(ctx, count);
 
     if (padded > (ws.size() - offset_bytes)) {
-        throw std::runtime_error("syev_cta: insufficient workspace.");
+        throw batchlas::workspace_error("syev_cta: insufficient workspace.");
     }
 
     T* out = reinterpret_cast<T*>(base + offset_bytes);
@@ -87,7 +92,7 @@ Span<T> ws_alloc(Queue& ctx, Span<std::byte> ws, std::size_t& offset_bytes, std:
 
 Span<std::byte> ws_remaining(Span<std::byte> ws, std::size_t offset_bytes) {
     if (offset_bytes > ws.size()) {
-        throw std::runtime_error("syev_cta: workspace bookkeeping overflow.");
+        throw batchlas::workspace_error("syev_cta: workspace bookkeeping overflow.");
     }
     return Span<std::byte>(ws.data() + offset_bytes, ws.size() - offset_bytes);
 }
@@ -102,26 +107,27 @@ Event syev_cta(Queue& ctx,
                Uplo uplo,
                const Span<std::byte>& ws,
                SteqrParams<T> steqr_params,
-               size_t cta_wg_size_multiplier) {
+               size_t cta_wg_size_multiplier,
+               Span<int32_t> info) {
     cta_debug_log("syev_cta: entry");
     if (a_in.rows() != a_in.cols()) {
-        throw std::invalid_argument("syev_cta: A must be square.");
+        throw batchlas::invalid_argument("syev_cta: A must be square.");
     }
     if (jobz != JobType::NoEigenVectors && jobz != JobType::EigenVectors) {
-        throw std::invalid_argument("syev_cta: invalid JobType.");
+        throw batchlas::invalid_argument("syev_cta: invalid JobType.");
     }
 
     const int64_t n64 = a_in.rows();
     const int64_t batch64 = a_in.batch_size();
 
     if (n64 < 1 || n64 > 32) {
-        throw std::invalid_argument("syev_cta currently supports 1 <= n <= 32.");
+        throw batchlas::invalid_argument("syev_cta currently supports 1 <= n <= 32.");
     }
     const int32_t n = static_cast<int32_t>(n64);
     const int32_t batch = static_cast<int32_t>(batch64);
 
     if (eigenvalues.size() < static_cast<std::size_t>(n) * static_cast<std::size_t>(batch)) {
-        throw std::invalid_argument("syev_cta: eigenvalues span too small for n*batch.");
+        throw batchlas::invalid_argument("syev_cta: eigenvalues span too small for n*batch.");
     }
 
     // We overwrite A only when jobz==EigenVectors.
@@ -221,7 +227,9 @@ Event syev_cta(Queue& ctx,
         VectorView<T> tau_q_view(tau_q_span, /*size=*/n, /*batch_size=*/batch, /*inc=*/1, /*stride=*/n);
 
         // Reduce Hermitian A to Hermitian tridiagonal (d_c real-ish, e_c generally complex).
-        sytrd_cta<B, T>(ctx, a, d_c_view, e_c_view, tau_c_view, uplo_eff, Span<std::byte>(), cta_wg_size_multiplier);
+        // (void) on an Event: deliberate. This Queue is in-order, so the next submission
+        // is already ordered after this one and the Event carries nothing the caller needs.
+        (void)sytrd_cta<B, T>(ctx, a, d_c_view, e_c_view, tau_c_view, uplo_eff, Span<std::byte>(), cta_wg_size_multiplier);
         cta_debug_sync(ctx, "syev_cta: after sytrd_cta");
 
         // Convert Hermitian tridiagonal (complex off-diagonal) to real symmetric tridiagonal via a
@@ -280,7 +288,11 @@ Event syev_cta(Queue& ctx,
                                     /*inc=*/1, /*stride=*/n);
 
         auto steqr_ws = ws_remaining(ws_mut, ws_off);
-        steqr<B, Real>(ctx, d_view, e_view, evals_view, steqr_ws, jobz, steqr_params_local, z_view);
+        // syev_cta owns no convergence criterion of its own: the whole of it is this
+        // call, so `info` is forwarded rather than reduced. steqr clears the span
+        // itself (src/extensions/info_span.hh), and exactly one steqr call runs per
+        // syev_cta call -- the complex arm here or the real one below, never both.
+        (void)steqr<B, Real>(ctx, d_view, e_view, evals_view, steqr_ws, jobz, steqr_params_local, z_view, info);
         cta_debug_sync(ctx, "syev_cta: after steqr (real) ");
 
         if (jobz == JobType::EigenVectors) {
@@ -373,7 +385,7 @@ Event syev_cta(Queue& ctx,
             cta_debug_sync(ctx, "syev_cta: after pack TAUQ");
 
             const Uplo ormq_factorization = (uplo_eff == Uplo::Lower) ? Uplo::Upper : Uplo::Lower;
-            ormqx_cta<B, T>(ctx,
+            (void)ormqx_cta<B, T>(ctx,
                             aq_view,
                             tau_q_view,
                             zc_view,
@@ -424,7 +436,7 @@ Event syev_cta(Queue& ctx,
 
     // Reduce A to tridiagonal: A overwritten with reflectors/tridiagonal.
     // Note: sytrd_cta's workspace is currently unused.
-    sytrd_cta<B, T>(ctx, a, d_view, e_view, tau_view, uplo_eff, Span<std::byte>(), cta_wg_size_multiplier);
+    (void)sytrd_cta<B, T>(ctx, a, d_view, e_view, tau_view, uplo_eff, Span<std::byte>(), cta_wg_size_multiplier);
     cta_debug_sync(ctx, "syev_cta: after sytrd_cta");
 
     // Solve tridiagonal eigenproblem; compute Z from identity when jobz==EigenVectors.
@@ -447,7 +459,7 @@ Event syev_cta(Queue& ctx,
     VectorView<T> evals_view(reinterpret_cast<T*>(eigenvalues.data()), /*size=*/n, /*batch_size=*/batch,
                              /*inc=*/1, /*stride=*/n);
 
-    steqr<B, T>(ctx, d_view, e_view, evals_view, steqr_ws, jobz, steqr_params_local, z_view);
+    (void)steqr<B, T>(ctx, d_view, e_view, evals_view, steqr_ws, jobz, steqr_params_local, z_view, info);
     cta_debug_sync(ctx, "syev_cta: after steqr");
 
     if (jobz == JobType::EigenVectors) {
@@ -520,7 +532,7 @@ Event syev_cta(Queue& ctx,
 
         const Uplo ormq_factorization = (uplo_eff == Uplo::Lower) ? Uplo::Upper : Uplo::Lower;
         // Apply Q (from SYTRD reflectors) to Z: Z := Q * Z.
-        ormqx_cta<B, T>(ctx,
+        (void)ormqx_cta<B, T>(ctx,
                         aq_view,
                         tau_q_view,
                         z_view,
@@ -559,13 +571,13 @@ size_t syev_cta_buffer_size(Queue& ctx,
         }
 
         if (a.rows() != a.cols()) {
-            throw std::invalid_argument("syev_cta_buffer_size: A must be square.");
+            throw batchlas::invalid_argument("syev_cta_buffer_size: A must be square.");
         }
 
         const int64_t n64 = a.rows();
         const int64_t batch64 = a.batch_size();
         if (n64 < 1 || n64 > 32) {
-            throw std::invalid_argument("syev_cta_buffer_size currently supports 1 <= n <= 32.");
+            throw batchlas::invalid_argument("syev_cta_buffer_size currently supports 1 <= n <= 32.");
         }
 
         const int32_t n = static_cast<int32_t>(n64);
@@ -622,13 +634,13 @@ size_t syev_cta_buffer_size(Queue& ctx,
     }
 
     if (a.rows() != a.cols()) {
-        throw std::invalid_argument("syev_cta_buffer_size: A must be square.");
+        throw batchlas::invalid_argument("syev_cta_buffer_size: A must be square.");
     }
 
     const int64_t n64 = a.rows();
     const int64_t batch64 = a.batch_size();
     if (n64 < 1 || n64 > 32) {
-        throw std::invalid_argument("syev_cta_buffer_size currently supports 1 <= n <= 32.");
+        throw batchlas::invalid_argument("syev_cta_buffer_size currently supports 1 <= n <= 32.");
     }
 
     const int32_t n = static_cast<int32_t>(n64);
@@ -677,7 +689,7 @@ size_t syev_cta_buffer_size(Queue& ctx,
 #define SYEV_CTA_INSTANTIATE(back, fp) \
     template Event syev_cta<back, BATCHLAS_UNPAREN fp>(Queue&, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
                                                        Span<typename base_type<BATCHLAS_UNPAREN fp>::type>, JobType, Uplo, \
-                                                       const Span<std::byte>&, SteqrParams<BATCHLAS_UNPAREN fp>, size_t); \
+                                                       const Span<std::byte>&, SteqrParams<BATCHLAS_UNPAREN fp>, size_t, Span<int32_t>); \
     template size_t syev_cta_buffer_size<back, BATCHLAS_UNPAREN fp>(Queue&, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
                                                                     JobType, SteqrParams<BATCHLAS_UNPAREN fp>);
 

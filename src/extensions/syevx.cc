@@ -35,6 +35,7 @@
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/backend_config.h>
 #include "../util/template-instantiations.hh"
+#include <batchlas/settings.hh>
 
 namespace batchlas {
 
@@ -101,7 +102,7 @@ SyevxAlgorithm parse_syevx_algorithm(const char* v) {
 template <typename T, MatrixFormat MFormat>
 void validate_syevx_preconditioner_params(const SyevxParams<T>& params) {
     if (params.preconditioner != nullptr && params.build_preconditioner) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "syevx: SyevxParams::preconditioner and SyevxParams::build_preconditioner are "
             "mutually exclusive; supply a factor or ask syevx to build one, not both");
     }
@@ -124,14 +125,14 @@ void validate_syevx_preconditioner_params(const SyevxParams<T>& params) {
     // a deliberate decision backed by the same sweep (0.85-1.2x on random symmetric
     // input either way), not an oversight.
     if (iluk_configured && params.find_largest) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "syevx: an ILU(k) preconditioner approximates A^{-1} and is only valid when "
             "searching for the smallest eigenpairs; set SyevxParams::find_largest = false "
             "or clear SyevxParams::preconditioner / build_preconditioner");
     }
     if constexpr (MFormat != MatrixFormat::CSR) {
         if (params.build_preconditioner) {
-            throw std::invalid_argument(
+            throw batchlas::invalid_argument(
                 "syevx: SyevxParams::build_preconditioner requires a CSR matrix; ILU(k) is "
                 "only defined for sparse input");
         }
@@ -141,18 +142,18 @@ void validate_syevx_preconditioner_params(const SyevxParams<T>& params) {
     // caller built at real cost is never applied, or a family is asked for that has
     // nothing behind it.
     if (params.preconditioner_type == SyevxPreconditioner::ILUK && !iluk_configured) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "syevx: SyevxPreconditioner::ILUK requires SyevxParams::preconditioner or "
             "SyevxParams::build_preconditioner to be set");
     }
     if (iluk_configured && params.preconditioner_type != SyevxPreconditioner::Auto &&
         params.preconditioner_type != SyevxPreconditioner::ILUK) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "syevx: an ILU(k) factor was supplied or requested but "
             "SyevxParams::preconditioner_type asks for a different family; clear one of them");
     }
     if (params.preconditioner_type == SyevxPreconditioner::Jacobi && params.find_largest) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "syevx: SyevxPreconditioner::Jacobi is diag(A)^{-1}, an approximate A^{-1}, and is "
             "only valid when searching for the smallest eigenpairs; set "
             "SyevxParams::find_largest = false or use SyevxPreconditioner::JacobiShifted, "
@@ -189,12 +190,12 @@ void validate_syevx_range_params(const SyevxParams<T>& params,
     if (params.select == SyevxSelect::Index) {
         const int64_t iu = (params.iu < 0) ? (n - 1) : params.iu;
         if (params.il < 0 || iu >= n || params.il > iu) {
-            throw std::invalid_argument(
+            throw batchlas::invalid_argument(
                 "syevx: SyevxSelect::Index requires 0 <= il <= iu < n (iu < 0 means n-1); "
                 "an empty block is expressed with neigs == 0, not with il > iu");
         }
         if (static_cast<int64_t>(neigs) != iu - params.il + 1) {
-            throw std::invalid_argument(
+            throw batchlas::invalid_argument(
                 "syevx: SyevxSelect::Index requires neigs == iu - il + 1; neigs is validated "
                 "against the range rather than derived from it so that a mismatched pair is a "
                 "loud error instead of a silently under- or over-filled output buffer");
@@ -202,13 +203,13 @@ void validate_syevx_range_params(const SyevxParams<T>& params,
     }
     if (params.select == SyevxSelect::Value) {
         if (!(params.vl < params.vu)) {
-            throw std::invalid_argument(
+            throw batchlas::invalid_argument(
                 "syevx: SyevxSelect::Value requires vl < vu for the half-open interval "
                 "(vl, vu]; an empty or inverted interval is almost always swapped arguments, "
                 "and the cost of being wrong is a full O(n^3) reduction that returns nothing");
         }
         if (!value_range_reportable) {
-            throw std::invalid_argument(
+            throw batchlas::invalid_argument(
                 "syevx: SyevxSelect::Value needs the overload that takes an `m` output span -- "
                 "the number of eigenvalues in an interval is data-dependent and differs per "
                 "batch item, so it cannot be inferred from neigs (which is only a capacity)");
@@ -239,7 +240,7 @@ SyevxPreconditioner parse_syevx_preconditioner(const char* v) {
 // "ignore params.method and use the heuristics". That is pre-existing behaviour
 // and is preserved deliberately.
 SyevxAlgorithm algorithm_from_env(SyevxAlgorithm fallback, bool& from_env) {
-    const char* v = std::getenv("BATCHLAS_SYEVX_ALGORITHM");
+    const char* v = batchlas::settings().selection.syevx_algorithm.get();
     from_env = (v != nullptr && *v != '\0');
     if (!from_env) return fallback;
     return parse_syevx_algorithm(v);
@@ -352,7 +353,7 @@ SyevxAlgorithm syevx_select_algorithm(MatrixFormat format,
         // fall back to. Returning the extremal eigenpairs instead would be the
         // worst available outcome.
         if (!dense) {
-            throw std::invalid_argument(
+            throw batchlas::invalid_argument(
                 std::string("syevx: ") + syevx_select_name(select) +
                 " is not supported for sparse input; LOBPCG is the only sparse path and it "
                 "can only converge to an extreme of the spectrum. Convert to dense, or use "
@@ -367,7 +368,7 @@ SyevxAlgorithm syevx_select_algorithm(MatrixFormat format,
                 // an algorithm changes only the performance characteristics the
                 // caller asked for, while substituting the requested part of
                 // the spectrum changes the answer.
-                throw std::invalid_argument(
+                throw batchlas::invalid_argument(
                     std::string("syevx: SyevxAlgorithm::") + name + " cannot honour " +
                     syevx_select_name(select) +
                     " -- it computes an extreme of the spectrum by construction, so it would "
@@ -493,7 +494,7 @@ SyevxPreconditioner syevx_select_preconditioner(SyevxPreconditioner requested,
     // was paid for before the call, so it wins over any environment default.
     if (iluk_configured) return SyevxPreconditioner::ILUK;
     const SyevxPreconditioner from_env =
-        parse_syevx_preconditioner(std::getenv("BATCHLAS_SYEVX_PRECONDITIONER"));
+        parse_syevx_preconditioner(batchlas::settings().selection.syevx_preconditioner.get());
     // ILUK from the environment is not actionable: there is no factor and syevx
     // will not silently build one behind the caller's back (that needs CSR input and
     // find_largest = false, neither of which the environment can know).
@@ -516,7 +517,8 @@ Event syevx(Queue& ctx,
             Span<std::byte> workspace,
             JobType jobz,
             const MatrixView<T, MatrixFormat::Dense>& V,
-            const SyevxParams<T>& params) {
+            const SyevxParams<T>& params,
+            Span<int32_t> info) {
     validate_syevx_preconditioner_params<T, MFormat>(params);
     // This overload can report a data-dependent count, so a Value range is legal.
     validate_syevx_range_params<T, MFormat>(params, A.rows(), neigs,
@@ -526,7 +528,7 @@ Event syevx(Queue& ctx,
     // here rather than left to the solver. Same wording as stebz's own check.
     if (params.select == SyevxSelect::Value || !m.empty()) {
         if (static_cast<int64_t>(m.size()) < A.batch_size()) {
-            throw std::invalid_argument("syevx: m must cover every batch item");
+            throw batchlas::invalid_argument("syevx: m must cover every batch item");
         }
     }
     // The resolved range decides the routing question ("can this algorithm answer
@@ -539,12 +541,15 @@ Event syevx(Queue& ctx,
                                               params.method,
                                               syevx_direct_subset_supported<T, MFormat>(), jobz,
                                               A.batch_size(), params.select);
+    // `info` is NOT the same output as `m`: m is how many eigenpairs were found,
+    // info is whether the item's iteration converged. Each of the four arms clears
+    // and fills it; nothing is written here.
     if (chosen == SyevxAlgorithm::Direct) {
-        return syevx_direct<B, T, MFormat>(ctx, A, W, m, neigs, workspace, jobz, V, params);
+        return syevx_direct<B, T, MFormat>(ctx, A, W, m, neigs, workspace, jobz, V, params, info);
     }
     if (chosen == SyevxAlgorithm::DirectSubset) {
         return syevx_direct_subset<B, T, MFormat>(ctx, A, W, m, neigs, workspace,
-                                                  jobz, V, params);
+                                                  jobz, V, params, info);
     }
     // LOBPCG and Filtered only ever see an Extremal range -- syevx_select_algorithm
     // throws (or degrades to Direct) otherwise -- so the count is static and equal
@@ -565,9 +570,9 @@ Event syevx(Queue& ctx,
         });
     }
     if (chosen == SyevxAlgorithm::Filtered) {
-        return syevx_filtered<B, T, MFormat>(ctx, A, W, neigs, workspace, jobz, V, params);
+        return syevx_filtered<B, T, MFormat>(ctx, A, W, neigs, workspace, jobz, V, params, info);
     }
-    return syevx_lobpcg<B, T, MFormat>(ctx, A, W, neigs, workspace, jobz, V, params);
+    return syevx_lobpcg<B, T, MFormat>(ctx, A, W, neigs, workspace, jobz, V, params, info);
 }
 
 template <Backend B, typename T, MatrixFormat MFormat>
@@ -578,7 +583,8 @@ Event syevx(Queue& ctx,
             Span<std::byte> workspace,
             JobType jobz,
             const MatrixView<T, MatrixFormat::Dense>& V,
-            const SyevxParams<T>& params) {
+            const SyevxParams<T>& params,
+            Span<int32_t> info) {
     // This overload has nowhere to report a data-dependent count, so a Value
     // range is rejected here -- before any device work, and before the m-taking
     // overload below gets a chance to complain that `m` is empty.
@@ -586,7 +592,7 @@ Event syevx(Queue& ctx,
                                             /*value_range_reportable=*/false);
     // Extremal and Index both have m[b] == neigs by construction, which the
     // caller already knows, so an empty span is exactly right.
-    return syevx<B, T, MFormat>(ctx, A, W, Span<int32_t>(), neigs, workspace, jobz, V, params);
+    return syevx<B, T, MFormat>(ctx, A, W, Span<int32_t>(), neigs, workspace, jobz, V, params, info);
 }
 
 template <Backend B, typename T, MatrixFormat MFormat>
@@ -636,7 +642,8 @@ size_t syevx_buffer_size(Queue& ctx,
         Span<std::byte>,\
         JobType,\
         const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&,\
-        const SyevxParams<BATCHLAS_UNPAREN fp>&);\
+        const SyevxParams<BATCHLAS_UNPAREN fp>&,\
+        Span<int32_t>);\
     template Event syevx<back, BATCHLAS_UNPAREN fp, fmt>(\
         Queue&,\
         const MatrixView<BATCHLAS_UNPAREN fp, fmt>&,\
@@ -646,7 +653,8 @@ size_t syevx_buffer_size(Queue& ctx,
         Span<std::byte>,\
         JobType,\
         const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&,\
-        const SyevxParams<BATCHLAS_UNPAREN fp>&);\
+        const SyevxParams<BATCHLAS_UNPAREN fp>&,\
+        Span<int32_t>);\
     template size_t syevx_buffer_size<back, BATCHLAS_UNPAREN fp, fmt>(\
         Queue&,\
         const MatrixView<BATCHLAS_UNPAREN fp, fmt>&,\

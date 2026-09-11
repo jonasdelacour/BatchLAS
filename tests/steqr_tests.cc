@@ -801,6 +801,221 @@ TYPED_TEST(SteqrTest, StressExtremeMagnitudesN32) {
     }
 }
 
+
+// ---------------------------------------------------------------------------
+// Per-item convergence status (`info`).
+//
+// steqr is the routine LAPACK documents as returning info > 0 -- "the number of
+// off-diagonal elements that did not converge to zero" -- and until this work
+// package the whole of that was unreachable here. steqr_cta computed a per-item
+// `status` array and only READ it under a diagnostics env var; steqr_wg computed
+// nothing at all and its driver ran a fixed n-1 passes with no test. At batch
+// 16384 one non-converged item was invisible: the call returned, ctx.wait()
+// returned, and the caller read eigenvalues that were simply wrong for it.
+//
+// TWO TIERS, ONE SPAN. `steqr` picks steqr_cta when n <= the device sub-group
+// width and steqr_wg otherwise (src/extensions/steqr.cc:43), so at n = 32 these
+// cases exercise the CTA arm on CUDA and the work-group arm on the host -- which
+// is deliberate: the two tiers derive the status by completely different means
+// (a bool out of steqr_cta_solve vs. a post-hoc scan of `e`), and a test that
+// only ever reached one of them would say nothing about the other.
+//
+// THE BATCH IS MIXED ON PURPOSE. Even items are diagonal, so they are converged
+// before the first sweep; odd items are the generic Toeplitz that is not. That
+// is what lets the forced case below state something stronger than "the call
+// failed": the items it reports as converged must still have the right answer.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Even items: diagonal, ascending, distinct -- e is exactly zero, so every
+// off-diagonal is deflated before the first sweep runs.
+// Odd items: the symmetric Toeplitz(0.5, 1, 0.5), whose spectrum is uniform and
+// unclustered and therefore needs the full sweep budget.
+template <typename Real>
+void fill_mixed_convergence_batch(Vector<Real>& d, Vector<Real>& e) {
+    const int n = d.size();
+    const int batch = d.batch_size();
+    for (int b = 0; b < batch; ++b) {
+        const bool easy = (b % 2) == 0;
+        for (int i = 0; i < n; ++i) d(i, b) = easy ? Real(i + 1) : Real(1);
+        for (int i = 0; i < n - 1; ++i) e(i, b) = easy ? Real(0) : Real(0.5);
+    }
+}
+
+// Ascending eigenvalue `i` of item `b` of that batch, in closed form. For the
+// Toeplitz items: a - 2*sqrt(b*c)*cos(pi*k/(n+1)) with a = 1, b = c = 0.5.
+template <typename Real>
+Real mixed_convergence_eigenvalue(int b, int i, int n) {
+    if ((b % 2) == 0) return Real(i + 1);
+    return Real(1) - Real(std::cos(M_PI * double(i + 1) / double(n + 1)));
+}
+
+}  // namespace
+
+TYPED_TEST(SteqrTest, InfoIsZeroOnAConvergingBatch) {
+    using T = typename TestFixture::ScalarType;
+    using Real = typename base_type<T>::type;
+    constexpr Backend B = TestFixture::BackendType;
+    const int n = 32;
+    const int batch = 8;
+
+    Vector<Real> d(n, batch), e(n - 1, batch), w(n, batch);
+    fill_mixed_convergence_batch<Real>(d, e);
+    auto eigvects = Matrix<Real>::Zeros(n, n, batch);
+
+    SteqrParams<Real> params = {};
+    params.sort = true;
+    params.sort_order = SortOrder::Ascending;
+    params.transpose_working_vectors = false;
+
+    // -1, NOT 0. A span left at zero cannot tell "the kernel wrote 0" from
+    // "nothing wrote it at all", and "nothing wrote it" is the exact failure this
+    // mechanism exists to make impossible: a status channel that is never filled
+    // reports universal success. steqr clears the span itself
+    // (src/extensions/steqr.cc:66), so a surviving -1 means that clear never ran.
+    UnifiedVector<int32_t> info(batch, int32_t(-1));
+
+    auto ws = UnifiedVector<std::byte>(
+        steqr_buffer_size<Real>(*this->ctx, d, e, w, JobType::EigenVectors, params), std::byte(0));
+    steqr<B, Real>(*this->ctx, d, e, w, ws.to_span(), JobType::EigenVectors, params, eigvects,
+                   info.to_span());
+    this->ctx->wait();
+
+    for (int b = 0; b < batch; ++b) {
+        ASSERT_NE(info[b], -1) << "info[" << b << "] still holds the poison value: nothing wrote "
+                                  "the span, so a zero here would have been an accident";
+        EXPECT_EQ(info[b], 0) << "item " << b << " reported non-convergence on a batch that "
+                                 "converges under the default sweep budget";
+    }
+    // Both halves of the mixed batch must be RIGHT as well as reported converged;
+    // otherwise the forced case below could not attribute a wrong answer to the cap.
+    const double tol = std::is_same_v<Real, float> ? 1e-4 : 1e-9;
+    for (int b = 0; b < batch; ++b) {
+        if (info[b] != 0) continue;
+        for (int i = 0; i < n; ++i) {
+            EXPECT_NEAR(static_cast<double>(w(i, b)),
+                        static_cast<double>(mixed_convergence_eigenvalue<Real>(b, i, n)), tol)
+                << "batch " << b << " eigenvalue " << i;
+        }
+    }
+}
+
+// THE CASE THAT MATTERS. A test that only ever sees info == 0 cannot tell a
+// working implementation from one that memsets zero, so this one forces the
+// failure on the SAME input and asserts the opposite direction.
+//
+// The knob is SteqrParams::max_sweeps, and 1 rather than a "reduced" value such
+// as 50, for a reason: syev_cta.cc:177-180 and syev_cta_fused.cc:554-557 silently
+// REWRITE max_sweeps to 400 whenever a caller leaves it at the default 50, so a
+// test that lowered the cap to that default would be answered by 400 and pass
+// vacuously. Calling steqr directly avoids the rewrite; 1 escapes it regardless.
+//
+// One sweep per pass gives the CTA arm a budget of max_sweeps*n = 32 sweeps
+// (steqr_cta_device.hh:764) and the work-group arm n-1 = 31 passes of one sweep
+// each, against a 32x32 Toeplitz that needs 2-3 sweeps per eigenvalue.
+TYPED_TEST(SteqrTest, InfoReportsItemsThatExhaustTheSweepBudget) {
+    using T = typename TestFixture::ScalarType;
+    using Real = typename base_type<T>::type;
+    constexpr Backend B = TestFixture::BackendType;
+    const int n = 32;
+    const int batch = 8;
+
+    Vector<Real> d(n, batch), e(n - 1, batch), w(n, batch);
+    fill_mixed_convergence_batch<Real>(d, e);
+    auto eigvects = Matrix<Real>::Zeros(n, n, batch);
+
+    SteqrParams<Real> params = {};
+    params.sort = true;
+    params.sort_order = SortOrder::Ascending;
+    params.transpose_working_vectors = false;
+    params.max_sweeps = 1;
+
+    UnifiedVector<int32_t> info(batch, int32_t(-1));
+
+    auto ws = UnifiedVector<std::byte>(
+        steqr_buffer_size<Real>(*this->ctx, d, e, w, JobType::EigenVectors, params), std::byte(0));
+    steqr<B, Real>(*this->ctx, d, e, w, ws.to_span(), JobType::EigenVectors, params, eigvects,
+                   info.to_span());
+    this->ctx->wait();
+
+    int reported = 0;
+    for (int b = 0; b < batch; ++b) {
+        ASSERT_NE(info[b], -1) << "info[" << b << "] still holds the poison value";
+        ASSERT_GE(info[b], 0) << "info is LAPACK-like: 0 or a positive count, never negative";
+        if (info[b] != 0) ++reported;
+    }
+    EXPECT_GT(reported, 0)
+        << "a one-sweep budget on a 32x32 Toeplitz batch reported universal convergence; "
+           "either the status is not written at all, or it is written unconditionally zero";
+
+    // The other half of the claim, and the reason the batch is mixed: an item the
+    // library says converged must still be CORRECT. A status channel that
+    // reported failure everywhere would satisfy the assertion above on its own;
+    // this is what stops that from passing.
+    const double tol = std::is_same_v<Real, float> ? 1e-4 : 1e-9;
+    for (int b = 0; b < batch; ++b) {
+        if (info[b] != 0) continue;
+        for (int i = 0; i < n; ++i) {
+            EXPECT_NEAR(static_cast<double>(w(i, b)),
+                        static_cast<double>(mixed_convergence_eigenvalue<Real>(b, i, n)), tol)
+                << "item " << b << " reported info == 0 but eigenvalue " << i << " is wrong";
+        }
+    }
+}
+
+// An EMPTY span means "not requested" and must cost nothing -- the contract
+// potrf documents, restated for every routine in this package. Two things are
+// checked, because only one of them is visible from the caller's side: the
+// answer does not change, and the workspace query does not either. The second is
+// what keeps a `*_buffer_size` computed once and reused across calls -- which is
+// how every driver in this tree uses it -- correct.
+TYPED_TEST(SteqrTest, EmptyInfoSpanChangesNeitherAnswerNorWorkspace) {
+    using T = typename TestFixture::ScalarType;
+    using Real = typename base_type<T>::type;
+    constexpr Backend B = TestFixture::BackendType;
+    const int n = 32;
+    const int batch = 4;
+
+    SteqrParams<Real> params = {};
+    params.sort = true;
+    params.sort_order = SortOrder::Ascending;
+    params.transpose_working_vectors = false;
+
+    Vector<Real> d0(n, batch), e0(n - 1, batch), w0(n, batch);
+    Vector<Real> d1(n, batch), e1(n - 1, batch), w1(n, batch);
+    fill_mixed_convergence_batch<Real>(d0, e0);
+    fill_mixed_convergence_batch<Real>(d1, e1);
+    auto eigvects0 = Matrix<Real>::Zeros(n, n, batch);
+    auto eigvects1 = Matrix<Real>::Zeros(n, n, batch);
+
+    // steqr_buffer_size takes no `info` argument at all, which is the strongest
+    // available statement of the contract: the size CANNOT depend on whether
+    // status was asked for. Querying it twice guards the weaker thing that could
+    // still go wrong later -- an overload that does take one.
+    const size_t bytes_a =
+        steqr_buffer_size<Real>(*this->ctx, d0, e0, w0, JobType::EigenVectors, params);
+    const size_t bytes_b =
+        steqr_buffer_size<Real>(*this->ctx, d1, e1, w1, JobType::EigenVectors, params);
+    EXPECT_EQ(bytes_a, bytes_b);
+
+    UnifiedVector<std::byte> ws0(bytes_a, std::byte(0));
+    UnifiedVector<std::byte> ws1(bytes_a, std::byte(0));
+    UnifiedVector<int32_t> info(batch, int32_t(-1));
+
+    steqr<B, Real>(*this->ctx, d0, e0, w0, ws0.to_span(), JobType::EigenVectors, params, eigvects0,
+                   info.to_span());
+    steqr<B, Real>(*this->ctx, d1, e1, w1, ws1.to_span(), JobType::EigenVectors, params, eigvects1,
+                   Span<int32_t>{});
+    this->ctx->wait();
+
+    for (int b = 0; b < batch; ++b) {
+        for (int i = 0; i < n; ++i) {
+            EXPECT_EQ(w0(i, b), w1(i, b))
+                << "requesting status changed the answer at batch " << b << " index " << i;
+        }
+    }
+}
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

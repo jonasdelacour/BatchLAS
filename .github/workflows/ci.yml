@@ -1,24 +1,49 @@
-# Packaging and list-file gate.
+# Static gates, plus one real build-and-test gate on a self-hosted CUDA box.
 #
-# WHAT THIS DOES NOT COVER - read this before trusting a green tick:
-#   * No GPU, no CUDA, no ROCm. Nothing here executes a kernel.
-#   * No SYCL compiler. A GitHub-hosted runner has no DPC++, so the project is
-#     never configured and never compiled. Compile errors, link errors, ABI
-#     breakage and wrong numbers all pass this workflow.
-#   * No tests. ctest never runs.
-#   * No install. The generated BatchLASConfig/BatchLASTargets cannot be
-#     produced without a build, so the export is checked at the source level
-#     here; run `.github/ci/run_local_checks.sh <install-prefix>` on a machine
-#     with the toolchain to check the real generated files.
+# WHAT THIS NOW COVERS - and it is more than it was:
+#   * A real configure, a real compile, a real link, on the only toolchain this
+#     project has ever been built with: a self-built intel/llvm DPC++ with
+#     --cuda, against CUDA 13.2, targeting sm_89. Compile errors, link errors
+#     and ABI breakage are caught here and nowhere else.
+#   * A real ctest run against two RTX 4090s, compared against a checked-in
+#     known-failures list, because `main` is not green and a plain exit-code
+#     gate could therefore never go green.
+#   * A real `cmake --install` followed by the --package half of
+#     check_exported_package.py. That is the check the previous version of this
+#     header said CI "cannot run"; it can now, because there is a build.
 #
-# What it DOES cover is the class of defect that broke consumption of this
-# project and went unnoticed for 1116 commits: list files that no longer parse,
-# a package export pinned to one workstation's filesystem, and public headers
-# that reach into src/. All three are cheap, need no hardware, and each one maps
-# to a defect found by an outside-in integration review.
+# WHAT IT STILL DOES NOT COVER - read this before trusting a green tick:
+#   * One machine. The primary gate is a single self-hosted workstation. If it
+#     is off, wedged, or busy with the human's own build, every PR queues behind
+#     it or reports nothing. There is no second runner and no cloud fallback.
+#   * One compiler, one CUDA, one architecture. No icpx, no upstream clang, no
+#     CUDA other than 13.2, no sm_ other than 89. A change that only breaks on
+#     another sm_ or another DPC++ passes.
+#   * No AMD and no Intel GPU. The ROCm and oneMKL code paths are compiled by
+#     nobody, here or on the workstation - they are text until somebody with the
+#     hardware builds them.
+#   * No macOS, no Windows, no 32-bit, no non-x86 host.
+#   * No hosted compile job. See the HOSTED COMPILE JOB block at the end of this
+#     file for why, and for what would have to change.
+#   * A green ctest can still be vacuous. GTEST_SKIP inside the shared fixture
+#     exits 0, so a run in which every case skipped looks identical, at the
+#     ctest level, to a run with full coverage. That is why the GPU job exports
+#     GTEST_OUTPUT and hands the per-case XML to compare_failures.py, and why it
+#     sets neither BATCHLAS_TEST_BACKEND nor BATCHLAS_TEST_FLOAT_TYPE: one typo
+#     in either turns 70/70 green into 70/70 vacuous.
+#   * No performance gate. Nothing here measures a kernel. A change that is
+#     correct and 10x slower passes.
+#
+# The three static jobs below need no hardware and run on hosted runners in
+# seconds. They stay because they catch a class of defect that a build cannot:
+# list files that no longer parse, a package export pinned to one workstation's
+# filesystem, public headers that reach into src/, and types declared in the
+# consumer's global namespace - all of which compiled fine in-tree for 1116
+# commits.
 #
 # Every check is a script under .github/ci/ so it is runnable locally:
-#   .github/ci/run_local_checks.sh
+#   .github/ci/run_local_checks.sh                 # static only
+#   .github/ci/run_local_checks.sh /tmp/inst       # ...plus a real install
 
 name: CI
 
@@ -27,6 +52,15 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      run_nightly:
+        description: "Also run the nightly full-ctest + vendor-free job"
+        type: boolean
+        default: false
+  schedule:
+    # 03:17 UTC. Off-hour on purpose: the GPU job shares a workstation with a
+    # human, and the odd minute keeps it out of the on-the-hour scheduler crowd.
+    - cron: "17 3 * * *"
 
 permissions:
   contents: read
@@ -60,11 +94,10 @@ jobs:
         # for the variables known to expand to absolute host paths.
         #
         # It cannot see a machine path that arrives through any other variable,
-        # which is most of them. The real gate is --package against an install
-        # prefix, and CI cannot run it: generating the export needs a SYCL
-        # compiler. Run it before pushing:
-        #   cmake --install build --prefix /tmp/inst
-        #   .github/ci/run_local_checks.sh /tmp/inst
+        # which is most of them. The stronger gate is --package against a real
+        # install prefix; that now runs, but only in the gpu-build-test job, so
+        # it is only as available as that one machine. This step is the half
+        # that still works when the workstation is down.
         run: python3 .github/ci/check_exported_package.py --source
 
   public-headers:
@@ -84,3 +117,438 @@ jobs:
         # The only other guard is consumer_package_tests, which is slow-labelled
         # and needs a full install.
         run: python3 .github/ci/check_no_unprefixed_includes.py
+      - name: No type declared in the consumer's global namespace
+        # The same guarantee one level down: `batchlas` is the only name we
+        # claim in a consumer's C++ namespace, not just in their include root.
+        # Six installed headers declared 14 types -- Queue, Span, Event, Device,
+        # Vendor, Policy among them -- at global scope, which is an ambiguity or
+        # an ODR violation for any consumer that owns one of those names. No
+        # build here can see it: in-tree code all says `using namespace
+        # batchlas;` or lives inside the namespace, so global and batchlas
+        # spellings are indistinguishable from within the project. A text scan
+        # is the only cheap oracle, and the sanctioned
+        # `#ifndef BATCHLAS_NO_GLOBAL_NAMES` shim is allowed explicitly.
+        run: python3 .github/ci/check_no_global_names.py
+
+  comment-density:
+    name: Comment density is under the house ceiling
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: The counter still counts
+        # Runs first and as its own step: a scan that reports nothing is
+        # otherwise indistinguishable from a scan that cannot count. The
+        # fixtures pin both directions -- an all-comment file must read 100%, an
+        # all-code file 0%, and a file with a trailing comment on every code
+        # line must read 0%, not 100%.
+        run: python3 .github/ci/check_comment_density.py --self-test
+      - name: No source over the 18% comment ceiling
+        # Measured numbers, ratio tables, A/B results, saturation ladders and
+        # bracketing cells belong in docs/perf/<op>.md. Code comments carry
+        # correctness rationale only and point at the evidence with
+        # `evidence: docs/perf/<page>.md#<anchor>`. Hand review let that
+        # regress twice, so the budget is mechanical now. A file that genuinely
+        # earns more prose gets a line in
+        # .github/ci/comment_density_waivers.txt with a reason.
+        run: python3 .github/ci/check_comment_density.py --fix-suggest
+      - name: The anchor resolver still resolves
+        # Same reason as the counter above: a resolver that reports nothing is
+        # indistinguishable from one that walked an empty tree. The fixtures
+        # pin both directions -- a renamed heading, a missing page and a
+        # heading that only exists inside a code fence must all be flagged,
+        # and the three valid spellings beside them must not.
+        run: python3 .github/ci/check_evidence_anchors.py --self-test
+      - name: Every `evidence:` pointer resolves to a real heading
+        # The other half of the same rule. Moving the numbers into docs/perf/
+        # only works if the pointer back to them survives; a citation whose
+        # heading has since been reworded reads as "this was measured" while
+        # leading nowhere, and nothing in a build, a test or a review notices.
+        # Two of the 291 pointers in the tree were already dangling when this
+        # was written.
+        run: python3 .github/ci/check_evidence_anchors.py
+
+  # ---------------------------------------------------------------------------
+  # THE PRIMARY GATE. Everything above this line is text scanning.
+  # ---------------------------------------------------------------------------
+  gpu-build-test:
+    name: GPU build, ctest and install (self-hosted, sm_89)
+    runs-on: [self-hosted, linux, x64, cuda]
+
+    # A self-hosted runner on a workstation executes whatever a pull request
+    # says to, as this user, with this user's HOME, this user's ccache and both
+    # GPUs. Fork PRs therefore do not get the runner. (pull_request_target is
+    # not the fix - it is the same execution with more secrets in scope.)
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+
+    # ONE HARNESS ON THE BOX AT A TIME - non-negotiable, and the group covers
+    # the build as well as the test run, not just other ctest runs.
+    #
+    # Two reasons, both measured on this machine, not assumed:
+    #   1. A plain full ctest was killed twice by the OOM killer, both times
+    #      while a build or another ctest was running concurrently. Swap is 0 on
+    #      this box, so memory pressure is a kill, not a slowdown. Run alone,
+    #      every suite fits comfortably in 125 GB - including steqr_tests, which
+    #      finishes in 12 s. The constraint is concurrency, not any one test.
+    #   2. The two RTX 4090s share a UVM driver. docs/perf/README.md's
+    #      measurement rules require one harness on the box at a time; two
+    #      concurrent runs do not merely queue, they perturb each other.
+    #
+    # cancel-in-progress is false on purpose: cancelling a half-finished build
+    # to start another one throws away the expensive half (the single-threaded
+    # device link) and leaves a partial build tree behind. Queue instead.
+    #
+    # What this CANNOT arbitrate: the human's own interactive build or ctest on
+    # the same workstation. GitHub's concurrency only orders GitHub's jobs. Both
+    # OOM kills involved exactly that overlap, and no workflow file can fix it.
+    concurrency:
+      group: batchlas-gpu-runner
+      cancel-in-progress: false
+
+    # A cold `cmake --build --preset dev-tests` is tens of minutes, and -j does
+    # not shorten the expensive part: the SYCL device link is single-threaded
+    # and runs once per shared object (14-15 of them, ~250 MB), and it is not
+    # cacheable - ccache accelerates the compile half only, and a measured
+    # all-cache-hits rebuild was still ~213 s of pure link. Add a
+    # fresh-build-dir OpenBLAS health probe at configure time and ~95 s of
+    # ctest. 180 minutes is deliberately loose; a job that dies at the
+    # 60-minute mark on a cold cache teaches nothing.
+    timeout-minutes: 180
+
+    env:
+      # A runner installed as a systemd service inherits /etc/environment and
+      # nothing else - no ~/.bashrc, which is the ONLY place this toolchain is
+      # on PATH. Every variable below is load-bearing:
+      #
+      #   PATH             - cmake/BatchLASCompilerBootstrap.cmake finds the
+      #                      compiler by first finding sycl-ls, so the compiler
+      #                      being installed is not enough; sycl-ls must resolve.
+      #   LD_LIBRARY_PATH  - measured: without /opt/dpcpp-cuda/lib, sycl-ls
+      #                      itself exits 127 on libsycl.so.9. Nothing is on the
+      #                      loader path (no RUNPATH, no ld.so.conf.d entry).
+      #                      BatchLASDetectSYCL turns that 127 into a
+      #                      message(STATUS)/message(WARNING) and returns, so
+      #                      the DEFAULT outcome of a naively-installed runner
+      #                      is a CPU-only, no-NVPTX build that compiles, links,
+      #                      installs and passes ctest having never touched a
+      #                      GPU. This variable is what prevents that.
+      #   CUDA_PATH        - BatchLASDetectSYCL reads it as the fallback for
+      #                      --cuda-path when find_package(CUDAToolkit) misses.
+      #
+      # NOT copied from ~/.bashrc, on purpose: the HPC SDK compiler lib dir. The
+      # rc file puts it on LD_LIBRARY_PATH and then mirrors the whole thing into
+      # LIBRARY_PATH, which drags that SDK's libgomp into every link. LIBRARY_PATH
+      # is deliberately left unset here.
+      #
+      # Deliberately ABSENT, and this is a gate rather than an oversight:
+      # BATCHLAS_TEST_BACKEND and BATCHLAS_TEST_FLOAT_TYPE. The shared fixture
+      # treats an unrecognised value as "skip every backend", so a single typo
+      # in either yields a fully green, fully vacuous run - the exact mechanism
+      # behind a suite once believed flaky that was merely being skipped. Do not
+      # add them here to "focus" a run. OPENBLAS_CORETYPE is absent for a
+      # different reason: ctest sets it per test as an ENVIRONMENT property, and
+      # nothing else this job runs touches BLAS. A future step that launches a
+      # test or benchmark binary directly must source <build>/batchlas-env.sh.
+      PATH: /opt/dpcpp-cuda/bin:/usr/local/cuda-13.2/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      LD_LIBRARY_PATH: /opt/dpcpp-cuda/lib:/usr/local/cuda-13.2/lib64:/opt/intel/oneapi-tbb-2022.3.0/lib/intel64/gcc4.8:/usr/lib/x86_64-linux-gnu
+      CUDA_PATH: /usr/local/cuda-13.2
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Record the toolchain this run actually used
+        # Printed before anything is built so a failure report carries the
+        # environment. sycl-ls here is also the first place a broken
+        # LD_LIBRARY_PATH shows up as an error rather than as a silent CPU
+        # build. The compiler is an assertions build, so an ICE below is signal.
+        run: |
+          set -euo pipefail
+          clang++ --version
+          cmake --version
+          sycl-ls
+          nvidia-smi -L
+
+      - name: Configure (dev-tests preset, CUDA required)
+        # -DBATCHLAS_ENABLE_CUDA=ON overrides the preset's inherited AUTO. AUTO
+        # degrades to a CPU-only build with a warning when no [cuda:gpu] device
+        # is visible; ON turns that same condition into a FATAL_ERROR. On a job
+        # whose entire purpose is "this was tested on a GPU", degrading silently
+        # is the worst available behaviour.
+        #
+        # No -DBATCHLAS_OPENBLAS_CORETYPE. Pinning it would skip most of the
+        # configure-time dgemm probe, but it also converts "this runner needs a
+        # different coretype" into a hard configure failure, and the probe costs
+        # seconds against a build measured in tens of minutes.
+        run: |
+          set -euo pipefail
+          cmake --preset dev-tests -DBATCHLAS_ENABLE_CUDA=ON 2>&1 | tee "$RUNNER_TEMP/configure.log"
+
+      - name: Assert the configure really selected the CUDA target
+        # Belt and braces on the step above. A build that emitted no NVPTX is
+        # the single most likely way this job goes green while testing nothing,
+        # and this log line is the documented tell.
+        run: |
+          set -euo pipefail
+          grep -q 'Using SYCL targets:.*nvidia_gpu_sm_89' "$RUNNER_TEMP/configure.log" \
+            || { echo "::error::configure did not select nvidia_gpu_sm_89 - this build would not have run on a GPU"; exit 1; }
+
+      - name: Build
+        # No --target: the dev-tests BUILD preset deliberately names none, so
+        # this builds the default `all` target - the 14-15 component shared
+        # objects plus all 61 test executables. No test target is
+        # EXCLUDE_FROM_ALL (the only EXCLUDE_FROM_ALL in the repo is on
+        # benchmarks), so `all` is sufficient and no extra target name is needed.
+        #
+        # If a test binary is nonetheless missing at ctest time, this step
+        # half-failed: ctest reports it "Not Run", which reads like a test
+        # failure but is a build failure - and ctest's own JUnit output records
+        # it as a *skip*, indistinguishable by status from a legitimate
+        # SKIP_RETURN_CODE=77. compare_failures.py is written to tell those
+        # apart; nothing else in this file can.
+        run: cmake --build --preset dev-tests
+
+      - name: ctest (-LE slow)
+        # GTEST_OUTPUT's trailing slash is required - it selects directory mode,
+        # in which every gtest binary drops its own XML named after the
+        # executable. That per-case XML is the point: the four baseline failures
+        # live in only 2 of 70 ctest tests, so keying the known-failures list at
+        # binary level would blind the gate to ~40 other cases in those two
+        # suites. It is also the only layer that can see an entirely-skipped,
+        # entirely-vacuous run; ctest cannot.
+        #
+        # The per-test ENVIRONMENT properties tests/CMakeLists.txt sets are
+        # additive to this process environment, so they do not wipe GTEST_OUTPUT.
+        #
+        # No -j: the dev-tests test preset already sets execution.jobs=1, which
+        # is also what keeps the route-pinned reruns' XML filenames deterministic.
+        # `|| true` because ctest exits non-zero on the known baseline failures;
+        # the next step owns the verdict.
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/gtest-xml"
+          GTEST_OUTPUT="xml:$RUNNER_TEMP/gtest-xml/" \
+            ctest --preset dev-tests -LE slow \
+                  --output-junit "$RUNNER_TEMP/ctest-junit.xml" || true
+
+      - name: Compare against the known-failures list
+        # The gate fails in BOTH directions - on an unexpected failure, and on a
+        # listed test that started passing. The second direction is not
+        # decoration: a listed test already came back to life once on this tree,
+        # and a one-directional list would have quietly hidden the fix.
+        #
+        # No --require here: consumer_package_tests is slow-labelled, so
+        # `-LE slow` never ran it. Requiring it would fail every pull request.
+        # The nightly job runs the full suite and requires it there.
+        #
+        # --expected-tests 65 is the guard against a shrunken run. ctest's JUnit
+        # records a test whose executable was never built as a *skip*, and even
+        # miscounts it into the file's `skipped=` attribute, so thirty missing
+        # binaries look like thirty benign skips. The arithmetic behind 65: 70
+        # registered ctest tests minus the 5 slow-labelled ones (stedc_tests,
+        # steqr_tests, sytrd_sb2st_tests, gesvd_tests, consumer_package_tests).
+        # --known defaults to tests/known-failures.txt, which is the ledger.
+        run: |
+          python3 .github/ci/compare_failures.py \
+            --junit "$RUNNER_TEMP/ctest-junit.xml" \
+            --gtest-dir "$RUNNER_TEMP/gtest-xml" \
+            --expected-tests 65
+
+      - name: Install to a temp prefix and check the generated export
+        # This is the half of check_exported_package.py the exported-package job
+        # above cannot reach. --source only sees literals in the list files;
+        # --package reads the BatchLASConfig/BatchLASTargets cmake actually
+        # generated, which is where a machine path arrives through a variable
+        # nobody thought to scan. Generating them needs a real build, which is
+        # why this step lives here and not on a hosted runner.
+        #
+        # run_local_checks.sh re-runs the static checks too. That is redundant
+        # with the three jobs above and kept deliberately: it is the single
+        # command a human runs before pushing, and CI running that same command
+        # is what keeps it from rotting.
+        run: |
+          set -euo pipefail
+          cmake --install build/presets/dev-tests --prefix "$RUNNER_TEMP/inst"
+          .github/ci/run_local_checks.sh "$RUNNER_TEMP/inst"
+
+      - name: Upload test reports
+        # On failure only - the artifacts are interesting only when something
+        # went wrong, and the runner is a workstation whose disk is not free.
+        # LastTest.log carries the actual assertion text; the JUnit and the
+        # gtest XML carry the per-case status compare_failures.py judged.
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gpu-test-reports
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            ${{ runner.temp }}/ctest-junit.xml
+            ${{ runner.temp }}/gtest-xml/
+            ${{ runner.temp }}/configure.log
+            build/presets/dev-tests/Testing/Temporary/LastTest.log
+
+  # ---------------------------------------------------------------------------
+  # NIGHTLY. Everything too slow to put in front of a pull request.
+  # ---------------------------------------------------------------------------
+  gpu-nightly-full:
+    name: Nightly full ctest and vendor-free build (self-hosted, sm_89)
+    runs-on: [self-hosted, linux, x64, cuda]
+    if: >-
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_dispatch' && inputs.run_nightly)
+
+    # THE SAME concurrency group as gpu-build-test, on purpose. The reason is
+    # the machine, not the workflow: one harness on the box at a time. A nightly
+    # run that overlapped a PR's build would reproduce exactly the concurrency
+    # that got a full ctest OOM-killed twice.
+    concurrency:
+      group: batchlas-gpu-runner
+      cancel-in-progress: false
+
+    # Two full configures and two full builds - the vendor-free one shares no
+    # ccache entries with the default one, because the vendor macros differ - a
+    # full ctest including the four slow suites, and consumer_package_tests' own
+    # install-configure-build-run cycle (TIMEOUT 1200 in its own right).
+    timeout-minutes: 360
+
+    env:
+      # Same reasoning as gpu-build-test's env block; see there.
+      PATH: /opt/dpcpp-cuda/bin:/usr/local/cuda-13.2/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      LD_LIBRARY_PATH: /opt/dpcpp-cuda/lib:/usr/local/cuda-13.2/lib64:/opt/intel/oneapi-tbb-2022.3.0/lib/intel64/gcc4.8:/usr/lib/x86_64-linux-gnu
+      CUDA_PATH: /usr/local/cuda-13.2
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure and build (dev-tests preset, CUDA required)
+        run: |
+          set -euo pipefail
+          cmake --preset dev-tests -DBATCHLAS_ENABLE_CUDA=ON 2>&1 | tee "$RUNNER_TEMP/configure.log"
+          grep -q 'Using SYCL targets:.*nvidia_gpu_sm_89' "$RUNNER_TEMP/configure.log" \
+            || { echo "::error::configure did not select nvidia_gpu_sm_89"; exit 1; }
+          cmake --build --preset dev-tests
+
+      - name: Full ctest, slow suites included
+        # No -LE slow. This is the only run that exercises stedc_tests,
+        # steqr_tests, sytrd_sb2st_tests, gesvd_tests and consumer_package_tests
+        # - 70 tests rather than 65.
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/gtest-xml"
+          GTEST_OUTPUT="xml:$RUNNER_TEMP/gtest-xml/" \
+            ctest --preset dev-tests \
+                  --output-junit "$RUNNER_TEMP/ctest-junit.xml" || true
+
+      - name: Compare against the known-failures list
+        # --require consumer_package_tests is most of the reason the full run
+        # exists. That test carries SKIP_RETURN_CODE 77 and has eight distinct
+        # exit-77 paths, one of which is reached only AFTER a successful
+        # install, configure, build and launch - when the built example finds no
+        # usable device. ctest exits 0 on a skip, so on a runner whose GPU is
+        # busy that path silently converts a real device failure into a green
+        # tick and a false "packaging tested" claim. Correct behaviour for a
+        # laptop, wrong for CI: --require makes anything other than a real pass
+        # a failure.
+        #
+        # 70 rather than 65 here: this run includes the five slow-labelled tests.
+        run: |
+          python3 .github/ci/compare_failures.py \
+            --junit "$RUNNER_TEMP/ctest-junit.xml" \
+            --gtest-dir "$RUNNER_TEMP/gtest-xml" \
+            --expected-tests 70 \
+            --require consumer_package_tests
+
+      - name: Vendor-free configure, build and ctest
+        # The configuration docs/design/vendor-free-status.md calls vendor-free:
+        # a CUDA device with every CUDA math library off. It configures,
+        # compiles, links, loads and runs; it is NOT green, and it is not
+        # expected to be. Many HOST-backend rows fail by design because the
+        # native kernel or the host route does not exist yet - that is WP9's
+        # enumerated backlog, not a regression.
+        #
+        # continue-on-error is therefore load-bearing: this step reports, it
+        # does not gate. IT HAS NO KNOWN-FAILURES LIST OF ITS OWN AND NONE IS
+        # INVENTED HERE. The last numbers in vendor-free-status.md are a pass
+        # COUNT from an older tree, not a per-case list, and a list guessed from
+        # a count would mask real breakage. Until somebody records one from an
+        # actual run on this tree, the value of this step is the log and the
+        # artifact. The signal that still survives continue-on-error is the
+        # coarse one that matters most for this configuration: whether it still
+        # configures, compiles and links at all.
+        #
+        # Separate binary dir: no preset describes this configuration, and it
+        # must not clobber build/presets/dev-tests.
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          cmake -S . -B build/vendor-free \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DBATCHLAS_BUILD_TESTS=ON \
+            -DBATCHLAS_BUILD_BENCHMARKS=OFF \
+            -DBATCHLAS_BUILD_PYTHON=OFF \
+            -DBATCHLAS_ENABLE_VENDOR_BLAS=OFF \
+            -DBATCHLAS_ENABLE_CUDA=ON
+          cmake --build build/vendor-free
+          ctest --test-dir build/vendor-free -j 1 -LE slow \
+                --output-junit "$RUNNER_TEMP/ctest-junit-vendor-free.xml" || true
+
+      - name: Upload nightly reports
+        # Unconditional here, unlike the PR job: the vendor-free step is
+        # continue-on-error, so this job can end green while still holding the
+        # one report somebody actually wants to read.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gpu-nightly-reports
+          if-no-files-found: warn
+          retention-days: 30
+          path: |
+            ${{ runner.temp }}/ctest-junit.xml
+            ${{ runner.temp }}/ctest-junit-vendor-free.xml
+            ${{ runner.temp }}/gtest-xml/
+            ${{ runner.temp }}/configure.log
+            build/presets/dev-tests/Testing/Temporary/LastTest.log
+            build/vendor-free/Testing/Temporary/LastTest.log
+
+# ---------------------------------------------------------------------------
+# THE HOSTED COMPILE JOB THAT IS NOT HERE
+# ---------------------------------------------------------------------------
+# There is no hosted-runner compile job, and the omission is a decision rather
+# than an oversight. It was specified, investigated and rejected on measurement.
+#
+# The premise was that BATCHLAS_CPU_TARGET=none would give a cheap host-only
+# compile on a 2-core hosted runner - every host TU compiled and every .so
+# linked, with no device pass. That premise is false. detect_sycl_cpu_target()'s
+# "none" branch does exactly one thing: it declines to append native_cpu /
+# spir64_x86_64 to the SYCL target list. It does not touch -fsycl, which
+# BatchLASDetectSYCL adds unconditionally to every component. On a GPU-less
+# runner the target list ends up EMPTY, no -fsycl-targets= is emitted at all,
+# and the DPC++ driver falls back to its default device pass: measured with
+# `clang++ -fsycl -###`, a -triple spir64-unknown-unknown / -fsycl-is-device job
+# alongside the host one, and the resulting object carries __CLANG_OFFLOAD_BUNDLE
+# sections. There is no host-only knob in this build system. The nearest thing,
+# -fsyntax-only, produces no objects and so cannot link anything, which throws
+# away the host-link and ABI errors the job existed to catch.
+#
+# So the hosted job would be: several GB of oneAPI apt (the compiler alone
+# unpacks to 5.5 GB, against a 14 GB hosted disk budget, before oneDPL - which
+# is a hard dependency, not optional), then 95 library TUs through a real SPIR-V
+# device pass, then ~15 per-.so device links that are single-threaded and that
+# -j cannot shorten, on the runner with the fewest cores, with no warm ccache
+# unless a multi-GB cache entry is restored onto that same disk. That build takes
+# tens of minutes on 20 cores WITH a warm cache.
+#
+# And what it would produce is the CPU-only build AGENTS.md explicitly warns is
+# the wrong path: the apt package ships no CUDA adapter, so it can never catch a
+# CUDA-backend compile error - the backend most of this code targets.
+#
+# A job that times out on every pull request is worse than no job. The hosted
+# budget is better spent on more static checks in .github/ci/, which run in
+# seconds and need no toolchain.
+#
+# WHAT WOULD CHANGE THE ANSWER: a second self-hosted machine (which also fixes
+# the single-point-of-failure named at the top of this file); or a prebuilt
+# container image with the toolchain and a warm ccache baked in, so the hosted
+# job pays only the compile; or an upstream host-only mode in the build system
+# that genuinely suppresses the device pass while still producing objects.

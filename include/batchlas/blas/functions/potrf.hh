@@ -1,5 +1,6 @@
 #pragma once
 
+#include <batchlas/export.hh>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
@@ -67,17 +68,17 @@ template <typename T>
 inline void potrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
                                   Uplo uplo) {
     if (A.rows() < 0 || A.cols() < 0) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "POTRF: Matrix dimensions cannot be negative (rows=" +
             std::to_string(A.rows()) + ", cols=" + std::to_string(A.cols()) + ")");
     }
     if (A.rows() != A.cols()) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "POTRF: A must be square, got " + std::to_string(A.rows()) + "x" +
             std::to_string(A.cols()));
     }
     if (uplo != Uplo::Lower && uplo != Uplo::Upper) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "POTRF: Invalid uplo parameter: " +
             std::to_string(static_cast<int>(uplo)));
     }
@@ -85,9 +86,9 @@ inline void potrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
 
 
 template <Backend B, typename T>
-size_t potrf_buffer_size(Queue& ctx,
-                    const MatrixView<T, MatrixFormat::Dense>& A,
-                    Uplo uplo);
+BATCHLAS_API size_t potrf_buffer_size(Queue& ctx,
+                                 const MatrixView<T, MatrixFormat::Dense>& A,
+                                 Uplo uplo);
 
 // `info` is the LAPACK per-item status: one int32 per batch item, 0 on success
 // and >0 for the leading minor at which the item stopped being positive
@@ -101,11 +102,11 @@ size_t potrf_buffer_size(Queue& ctx,
 // deliberately the same either way, so potrf_buffer_size stays correct whether
 // or not a caller asks for status.
 template <Backend B, typename T>
-Event potrf(Queue& ctx,
-        const MatrixView<T, MatrixFormat::Dense>& descrA,
-        Uplo uplo,
-        Span<std::byte> workspace,
-        Span<int32_t> info);
+BATCHLAS_API Event potrf(Queue& ctx,
+                     const MatrixView<T, MatrixFormat::Dense>& descrA,
+                     Uplo uplo,
+                     Span<std::byte> workspace,
+                     Span<int32_t> info);
 
 // Old-arity forwarder. `info` cannot be a defaulted trailing parameter: the
 // sig:: aliases above are function *types* and function types cannot carry
@@ -133,17 +134,17 @@ namespace batchlas::backend {
 // src/dispatch/entry_points/factorization.cc and leaves the vendor
 // implementation here, named as such.
 template <Backend B, typename T>
-Event potrf_vendor(Queue& ctx,
-                   const MatrixView<T, MatrixFormat::Dense>& descrA,
-                   Uplo uplo,
-                   Span<std::byte> workspace,
-                   Span<int32_t> info_out);
+BATCHLAS_API Event potrf_vendor(Queue& ctx,
+                                const MatrixView<T, MatrixFormat::Dense>& descrA,
+                                Uplo uplo,
+                                Span<std::byte> workspace,
+                                Span<int32_t> info_out);
 
 
 template <Backend B, typename T>
-size_t potrf_vendor_buffer_size(Queue& ctx,
-                                const MatrixView<T,MatrixFormat::Dense>& A,
-                                Uplo uplo);
+BATCHLAS_API size_t potrf_vendor_buffer_size(Queue& ctx,
+                                             const MatrixView<T,MatrixFormat::Dense>& A,
+                                             Uplo uplo);
 
 }  // namespace batchlas::backend
 

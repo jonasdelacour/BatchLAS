@@ -14,11 +14,20 @@
 #include <batchlas/blas/functions/trsm.hh>
 #include <batchlas/blas/dispatch/vendor_available.hh>
 #include <batchlas/blas/matrix.hh>
+#include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
+
+// The ONLY oracle in this file that is not BatchLAS code. Both getrf tiers share
+// getrf_cta_device.hh's lu_cabs1, so a defect in the pivot METRIC itself moves the
+// tiny tier and the CTA tier together and the tiny-vs-cta comparisons stay green.
+// TinyPivotsMatchLapackeOnUnstructuredData is what can see that.
+#ifdef BATCHLAS_GETRF_TESTS_HAVE_LAPACKE
+#include <lapacke.h>
+#endif
 
 #include "../src/extensions/getrf_native.hh"
 #include "../src/extensions/getrs_native.hh"
@@ -33,6 +42,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <limits>
 #include <string>
 #include <vector>
@@ -448,6 +458,17 @@ protected:
                                           pass_info ? p.info.to_span() : Span<int32_t>{});
         this->ctx->wait();
     }
+    // THE REGISTER-RESIDENT TIER. Its ceiling is a compile-time property of the
+    // kernel, not of the device: no local memory enters it.
+    int tiny_max_n() const { return sycl_getrf::getrf_tiny_max_n<T>(); }
+    void run_tiny(Lu<T>& p, bool pass_info = true) {
+        auto V = view_of(p);
+        UnifiedVector<std::byte> ws(std::max<std::size_t>(
+            1, sycl_getrf::getrf_tiny_buffer_size<T>(*this->ctx, V)));
+        sycl_getrf::getrf_tiny_dispatch<T>(*this->ctx, V, p.piv.to_span(), ws.to_span(),
+                                           pass_info ? p.info.to_span() : Span<int32_t>{});
+        this->ctx->wait();
+    }
     void run_blocked(Lu<T>& p, bool pass_info = true) {
         auto V = view_of(p);
         UnifiedVector<std::byte> ws(std::max<std::size_t>(
@@ -539,19 +560,6 @@ int non_diagonal_pivots(const Lu<T>& p, int b) {
     for (int k = 0; k < p.n; ++k) if (ip[k] != k + 1) ++c;
     return c;
 }
-
-struct EnvGuard {
-    std::string name, saved;
-    bool had = false;
-    EnvGuard(const char* n, const char* v) : name(n) {
-        if (const char* s = std::getenv(n)) { saved = s; had = true; }
-        ::setenv(n, v, 1);
-    }
-    ~EnvGuard() {
-        if (had) ::setenv(name.c_str(), saved.c_str(), 1);
-        else ::unsetenv(name.c_str());
-    }
-};
 
 // THE FUSED NARROW-RHS GETRS TIER -- SHARED SCAFFOLDING. getrs_fused.cc is a
 // SECOND native getrs arm: one work-group per matrix, the interchange walk and
@@ -1037,12 +1045,24 @@ TYPED_TEST(LuTest, BlockedFactorisesAndPivotsExactly) {
 // SAME transposition list in the SAME order, so the assertion is BITWISE and not
 // "both residuals are small". n = 129 leaves a ONE-COLUMN final panel, where the
 // deferred pass's extents must come from ib and never from nb.
-// getrf_blocked.cc latches its environment read in a function-local static, so the
-// file-scope object below is what makes the latch land on "present" before main.
+// getrf_blocked.cc latches the knob's PRESENCE in a function-local static (the
+// value itself is re-read per call), so the file-scope object below is what makes
+// that latch land on "present" before main.
 // evidence: docs/perf/lu.md#getrf-deferred-left-gather
 namespace {
 struct LeftLaswpKnobPresent {
-    LeftLaswpKnobPresent() { ::setenv("BATCHLAS_GETRF_LASWP", "defer_gather", /*overwrite=*/0); }
+    LeftLaswpKnobPresent() {
+        ::setenv("BATCHLAS_GETRF_LASWP", "defer_gather", /*overwrite=*/0);
+        // NOT a ScopedEnvVar: this presence has to hold for the WHOLE process and
+        // outlive every scope, which is the one shape a restoring guard cannot
+        // express. The explicit reload is the guard's other half. Without it the
+        // settings() snapshot -- taken before main by the always-linked dispatch
+        // coverage TU's own dynamic initialiser, in an order no TU here controls --
+        // can be built from an environment that does not yet contain this setenv;
+        // the presence latch then lands on "absent" and all three arms below
+        // resolve to the SAME DeferGather mode.
+        batchlas::detail::reload_settings();
+    }
 };
 const LeftLaswpKnobPresent kLeftLaswpKnobPresent;
 }  // namespace
@@ -1056,11 +1076,16 @@ TYPED_TEST(LuTest, LeftInterchangeSpellingsAgreeBitForBit) {
         std::vector<std::vector<T>> facs;
         std::vector<std::vector<int>> pivs;
         for (const Arm& a : arms) {
-            ::setenv("BATCHLAS_GETRF_LASWP", a.env, 1);
+            // The guard, never a bare ::setenv: settings() snapshots the environment
+            // once, so an unguarded write leaves all three arms reading the SAME
+            // value and the bitwise comparisons below compare one arm with itself.
+            // On exit it restores what the file-scope object above (or the caller's
+            // shell) had pinned, which is the shipping "defer_gather" arm.
+            const ScopedEnvVar pin("BATCHLAS_GETRF_LASWP", a.env);
             ASSERT_EQ(this->left_mode(n), a.mode)
                 << "n=" << n << ": the driver did not resolve the '" << a.env
                 << "' spelling, so every comparison below would be between two copies of the "
-                   "SAME arm. The environment read latched before this test ran.";
+                   "SAME arm.";
 
             auto p = make_random<T>(n, 3, 4441u + unsigned(n));
             this->run_blocked(p);
@@ -1075,7 +1100,7 @@ TYPED_TEST(LuTest, LeftInterchangeSpellingsAgreeBitForBit) {
                 pv.insert(pv.end(), ip, ip + p.n);
             }
             pivs.push_back(std::move(pv));
-            if (this->HasFailure()) { ::setenv("BATCHLAS_GETRF_LASWP", "defer_gather", 1); return; }
+            if (this->HasFailure()) return;  // pin's destructor restores and reloads
         }
 
         for (std::size_t a = 1; a < facs.size(); ++a) {
@@ -1090,7 +1115,6 @@ TYPED_TEST(LuTest, LeftInterchangeSpellingsAgreeBitForBit) {
             EXPECT_EQ(pivs[a], pivs[0])
                 << "n=" << n << ": '" << arms[a].env << "' produced a different interchange list";
         }
-        ::setenv("BATCHLAS_GETRF_LASWP", "defer_gather", 1);
         if (this->HasFailure()) return;
     }
 }
@@ -1566,7 +1590,12 @@ TYPED_TEST(LuTest, GetrsPermutationSpellingsAgreeBitForBit) {
             for (Transpose op : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans}) {
                 std::vector<std::vector<T>> answer;
                 for (const char* spelling : {"walk", "gather"}) {
-                    setenv("BATCHLAS_GETRS_LASWP", spelling, 1);
+                    // The guard reloads the settings snapshot on both ends; a bare
+                    // ::setenv here would be read by nothing and BOTH arms would run
+                    // the default spelling, making the bit-identity assertion below
+                    // compare one arm with itself. GUARD (1) catches that too, but
+                    // only after the fact.
+                    const ScopedEnvVar pin("BATCHLAS_GETRS_LASWP", spelling);
 
                     // GUARD (1). The driver's own resolution, for THIS shape on
                     // THIS queue, so a fallback the caller cannot see is visible.
@@ -1601,9 +1630,8 @@ TYPED_TEST(LuTest, GetrsPermutationSpellingsAgreeBitForBit) {
                             << " n=" << n << " nrhs=" << nrhs << " b=" << b;
                     }
                     answer.emplace_back(rhs.buf.begin(), rhs.buf.end());
-                    if (this->HasFailure()) { unsetenv("BATCHLAS_GETRS_LASWP"); return; }
+                    if (this->HasFailure()) return;  // pin's destructor restores
                 }
-                unsetenv("BATCHLAS_GETRS_LASWP");
 
                 // THE STRONG ASSERTION: the same permutation and the same two solves, so the
                 // answers must be identical to the last bit.
@@ -1630,42 +1658,53 @@ TYPED_TEST(LuTest, GetrsPermSpellingDecisionSurface) {
     using T = typename TestFixture::T;
     if (this->ctx->device().type != DeviceType::GPU) GTEST_SKIP() << "the gather is GPU-only";
 
-    unsetenv("BATCHLAS_GETRS_LASWP");
     constexpr int kMin = sycl_getrs::kGetrsPermGatherMinNrhs;
     ASSERT_GE(kMin, 1) << "a boundary below 1 would make the walk unreachable by default";
 
-    // THE DEFAULT nrhs BOUNDARY, both sides.
-    if (kMin > 1) {
-        EXPECT_EQ(sycl_getrs::getrs_perm_spelling_debug<T>(*this->ctx, 128, kMin - 1), 0)
-            << "nrhs just below kGetrsPermGatherMinNrhs must take the WALK by default";
-    }
-    EXPECT_EQ(sycl_getrs::getrs_perm_spelling_debug<T>(*this->ctx, 128, kMin), 1)
-        << "nrhs at kGetrsPermGatherMinNrhs must take the GATHER by default";
-    EXPECT_EQ(sycl_getrs::getrs_perm_spelling_debug<T>(*this->ctx, 128, 4 * kMin), 1);
+    {
+        // A null value UNSETS for the duration and reloads, which is how the DEFAULT
+        // arm is reached: an inherited BATCHLAS_GETRS_LASWP would otherwise decide
+        // every assertion in this block. A bare ::unsetenv would not be seen at all.
+        const ScopedEnvVar unpinned("BATCHLAS_GETRS_LASWP", nullptr);
 
-    // linalg::solve issues getrs at nrhs = 1 and is the only caller in the tree;
-    // it must keep the walk.
-    EXPECT_EQ(sycl_getrs::getrs_perm_spelling_debug<T>(*this->ctx, 512, 1), kMin <= 1 ? 1 : 0);
+        // THE DEFAULT nrhs BOUNDARY, both sides.
+        if (kMin > 1) {
+            EXPECT_EQ(sycl_getrs::getrs_perm_spelling_debug<T>(*this->ctx, 128, kMin - 1), 0)
+                << "nrhs just below kGetrsPermGatherMinNrhs must take the WALK by default";
+        }
+        EXPECT_EQ(sycl_getrs::getrs_perm_spelling_debug<T>(*this->ctx, 128, kMin), 1)
+            << "nrhs at kGetrsPermGatherMinNrhs must take the GATHER by default";
+        EXPECT_EQ(sycl_getrs::getrs_perm_spelling_debug<T>(*this->ctx, 128, 4 * kMin), 1);
+
+        // linalg::solve issues getrs at nrhs = 1 and is the only caller in the tree;
+        // it must keep the walk.
+        EXPECT_EQ(sycl_getrs::getrs_perm_spelling_debug<T>(*this->ctx, 512, 1),
+                  kMin <= 1 ? 1 : 0);
+    }
 
     // THE OVERRIDES beat the boundary in both directions.
-    setenv("BATCHLAS_GETRS_LASWP", "walk", 1);
-    EXPECT_EQ(sycl_getrs::getrs_perm_spelling_debug<T>(*this->ctx, 128, 4 * kMin), 0)
-        << "BATCHLAS_GETRS_LASWP=walk must force the walk above the boundary";
-    setenv("BATCHLAS_GETRS_LASWP", "gather", 1);
-    EXPECT_EQ(sycl_getrs::getrs_perm_spelling_debug<T>(*this->ctx, 128, 1), 1)
-        << "BATCHLAS_GETRS_LASWP=gather must force the gather below the boundary";
+    {
+        const ScopedEnvVar pin("BATCHLAS_GETRS_LASWP", "walk");
+        EXPECT_EQ(sycl_getrs::getrs_perm_spelling_debug<T>(*this->ctx, 128, 4 * kMin), 0)
+            << "BATCHLAS_GETRS_LASWP=walk must force the walk above the boundary";
+    }
+    {
+        const ScopedEnvVar pin("BATCHLAS_GETRS_LASWP", "gather");
+        EXPECT_EQ(sycl_getrs::getrs_perm_spelling_debug<T>(*this->ctx, 128, 1), 1)
+            << "BATCHLAS_GETRS_LASWP=gather must force the gather below the boundary";
 
-    // THE CAPACITY REFUSAL, forced on, at an order no tile can hold. This is the
-    // only assertion in the suite that the fallback branch is reachable at all.
-    EXPECT_EQ(sycl_getrs::getrs_perm_spelling_debug<T>(*this->ctx, 1 << 20, 4 * kMin), 0)
-        << "the gather must REFUSE (and fall back to the walk) at an order whose column "
-           "cannot fit local memory, rather than launching a kernel that cannot run";
+        // THE CAPACITY REFUSAL, forced on -- the pin above is what "forced" means, and
+        // it stays in scope for both rows -- at an order no tile can hold. This is the
+        // only assertion in the suite that the fallback branch is reachable at all.
+        EXPECT_EQ(sycl_getrs::getrs_perm_spelling_debug<T>(*this->ctx, 1 << 20, 4 * kMin), 0)
+            << "the gather must REFUSE (and fall back to the walk) at an order whose column "
+               "cannot fit local memory, rather than launching a kernel that cannot run";
 
-    // ...and it must NOT refuse at an order the suite reaches: a capacity that fires
-    // early is a lever that never runs.
-    EXPECT_EQ(sycl_getrs::getrs_perm_spelling_debug<T>(*this->ctx, 1024, 4 * kMin), 1)
-        << "the gather must still fit at n = 1024, the largest order this pass measured";
-    unsetenv("BATCHLAS_GETRS_LASWP");
+        // ...and it must NOT refuse at an order the suite reaches: a capacity that fires
+        // early is a lever that never runs.
+        EXPECT_EQ(sycl_getrs::getrs_perm_spelling_debug<T>(*this->ctx, 1024, 4 * kMin), 1)
+            << "the gather must still fit at n = 1024, the largest order this pass measured";
+    }
 }
 
 // L8d. THE GATHER BUYS NO WORKSPACE, AT ANY WIDTH. The facade takes the workspace
@@ -1682,7 +1721,10 @@ TYPED_TEST(LuTest, GetrsPermGatherBuysNoWorkspace) {
         auto A = view_of(p);
         auto Bv = view_of(rhs);
         for (const char* spelling : {"walk", "gather"}) {
-            setenv("BATCHLAS_GETRS_LASWP", spelling, 1);
+            // The sizing query resolves the spelling through the same settings
+            // snapshot the solve does, so the pin has to be a guard that reloads it
+            // or both rows below measure the default spelling twice.
+            const ScopedEnvVar pin("BATCHLAS_GETRS_LASWP", spelling);
             for (Transpose op : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans}) {
                 EXPECT_EQ(sycl_getrs::getrs_blocked_buffer_size<T>(*this->ctx, A, Bv, op),
                           std::size_t(0))
@@ -1694,7 +1736,6 @@ TYPED_TEST(LuTest, GetrsPermGatherBuysNoWorkspace) {
             }
         }
     }
-    unsetenv("BATCHLAS_GETRS_LASWP");
 }
 
 // L9. GETRI: the inverse, and the promise that A SURVIVES. cublas<t>getriBatched
@@ -1886,9 +1927,9 @@ TYPED_TEST(LuTest, RouteTableAndTheVendorFreeFallback) {
     // route-pinned ctest rerun -- otherwise forces the answer and the test reports
     // a window defect that is really just its own environment. Empty reads as
     // unset in parse_route_env.
-    EnvGuard clear_getrf("BATCHLAS_GETRF_ROUTE", "");
-    EnvGuard clear_getrs("BATCHLAS_GETRS_ROUTE", "");
-    EnvGuard clear_getri("BATCHLAS_GETRI_ROUTE", "");
+    ScopedEnvVar clear_getrf("BATCHLAS_GETRF_ROUTE", "");
+    ScopedEnvVar clear_getrs("BATCHLAS_GETRS_ROUTE", "");
+    ScopedEnvVar clear_getri("BATCHLAS_GETRI_ROUTE", "");
 
     auto small = make_dominant_permuted<T>(std::min(40, std::max(2, this->cta_max_n())), 2, 5u);
     auto large = make_dominant_permuted<T>(512, 2, 6u);
@@ -2033,11 +2074,13 @@ TYPED_TEST(LuTest, RouteTableAndTheVendorFreeFallback) {
 TYPED_TEST(LuTest, FacadeReachesTheNativeKernelsBitExactly) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::BackendType;
-    const int n = 64, batch = 3;
-    ASSERT_GE(this->cta_max_n(), n) << "the CTA pin cannot be exercised at n=" << n;
+    // Derived from the tier's own ceiling, not hardcoded: the occupancy rule moves it,
+    // and a pin that cannot be exercised is a red test rather than a lost guard.
+    const int n = std::min(64, this->cta_max_n()), batch = 3;
+    ASSERT_GE(n, 32) << "the CTA pin cannot be exercised at a useful order on this device";
 
     for (const char* pin : {"cta", "blocked"}) {
-        EnvGuard g("BATCHLAS_GETRF_ROUTE", pin);
+        ScopedEnvVar g("BATCHLAS_GETRF_ROUTE", pin);
         auto direct = make_dominant_permuted<T>(n, batch, 1234u);
         auto viafac = make_dominant_permuted<T>(n, batch, 1234u);
 
@@ -2078,7 +2121,7 @@ TYPED_TEST(LuTest, FacadeReachesTheNativeKernelsBitExactly) {
         this->run_blocked(p);
         auto A = view_of(p);
 
-        EnvGuard g("BATCHLAS_GETRS_ROUTE", "blocked");
+        ScopedEnvVar g("BATCHLAS_GETRS_ROUTE", "blocked");
         auto r1 = make_rhs<T>(n, 3, batch, 88u);
         auto r2 = make_rhs<T>(n, 3, batch, 88u);
         auto V1 = view_of(r1);
@@ -2106,7 +2149,7 @@ TYPED_TEST(LuTest, FacadeReachesTheNativeKernelsBitExactly) {
         this->run_blocked(p);
         auto A = view_of(p);
 
-        EnvGuard g("BATCHLAS_GETRI_ROUTE", "blocked");
+        ScopedEnvVar g("BATCHLAS_GETRI_ROUTE", "blocked");
         Lu<T> c1, c2;
         alloc(c1, n, batch, 7, 13);
         alloc(c2, n, batch, 7, 13);
@@ -2229,8 +2272,8 @@ TYPED_TEST(LuTest, DirectEntryPointsRefuseWhatSupportsRefuses) {
 TYPED_TEST(LuTest, BufferSizeCoversEveryRouteAndNeverDereferences) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::BackendType;
-    const int n = 64, batch = 3;
-    ASSERT_GE(this->cta_max_n(), n);
+    const int n = std::min(64, this->cta_max_n()), batch = 3;
+    ASSERT_GE(n, 32);
 
     // NULL data, exactly as a measuring pass presents it.
     {
@@ -2244,7 +2287,7 @@ TYPED_TEST(LuTest, BufferSizeCoversEveryRouteAndNeverDereferences) {
     }
 
     for (const char* pin : {"cta", "blocked"}) {
-        EnvGuard g("BATCHLAS_GETRF_ROUTE", pin);
+        ScopedEnvVar g("BATCHLAS_GETRF_ROUTE", pin);
         auto p = make_dominant_permuted<T>(n, batch, 2u);
         auto V = view_of(p);
         const auto route = backend::getrf_route<B, T>(
@@ -2507,8 +2550,8 @@ TYPED_TEST(LuTest, FusedGetrsHandsBackAtBothCeilings) {
 TYPED_TEST(LuTest, FusedGetrsConsumesEveryFactorProducer) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::BackendType;
-    const int n = 40, nrhs = 3, batch = 3;
-    ASSERT_GE(this->cta_max_n(), n);
+    const int n = std::min(40, this->cta_max_n()), nrhs = 3, batch = 3;
+    ASSERT_GE(n, 32);
 
     auto solve_and_check = [&](Lu<T>& p, const char* who) {
         auto A = view_of(p);
@@ -2682,8 +2725,8 @@ TYPED_TEST(LuTest, FacadeReachesTheFusedGetrsBitExactly) {
 
     // As above: this asserts which tier the facade picks by DEFAULT, so a pinned
     // route in the environment has to be cleared or it decides the answer.
-    EnvGuard clear_getrs("BATCHLAS_GETRS_ROUTE", "");
-    EnvGuard clear_getrf("BATCHLAS_GETRF_ROUTE", "");
+    ScopedEnvVar clear_getrs("BATCHLAS_GETRS_ROUTE", "");
+    ScopedEnvVar clear_getrf("BATCHLAS_GETRF_ROUTE", "");
 
     auto p = make_dominant_permuted<T>(n, batch, 6161u);
     this->run_blocked(p);
@@ -2692,7 +2735,7 @@ TYPED_TEST(LuTest, FacadeReachesTheFusedGetrsBitExactly) {
     auto A = view_of(p);
 
     for (Transpose op : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans}) {
-        EnvGuard g("BATCHLAS_GETRS_ROUTE", "cta");
+        ScopedEnvVar g("BATCHLAS_GETRS_ROUTE", "cta");
         auto r1 = make_rhs<T>(n, nrhs, batch, 7171u);
         auto r2 = make_rhs<T>(n, nrhs, batch, 7171u);
         auto V1 = view_of(r1);
@@ -2724,7 +2767,7 @@ TYPED_TEST(LuTest, FacadeReachesTheFusedGetrsBitExactly) {
     // The other pin must still reach the COMPOSED tier, not the fused route ahead of
     // it in kGetrsOrder.
     {
-        EnvGuard g("BATCHLAS_GETRS_ROUTE", "blocked");
+        ScopedEnvVar g("BATCHLAS_GETRS_ROUTE", "blocked");
         auto rhs = make_rhs<T>(n, nrhs, batch, 7272u);
         auto Bv = view_of(rhs);
         const auto route = backend::getrs_route<B, T>(
@@ -2861,7 +2904,7 @@ TYPED_TEST(LuTest, FusedGetrsDirectEntryPointRefusesWhatSupportsRefuses) {
     // Serve EXACTLY the facade's figure under the CTA pin. A short workspace is a
     // silent heap overflow, not a throw.
     {
-        EnvGuard g("BATCHLAS_GETRS_ROUTE", "cta");
+        ScopedEnvVar g("BATCHLAS_GETRS_ROUTE", "cta");
         const auto route = backend::getrs_route<B, T>(
             *this->ctx, A, Bv, Transpose::NoTrans, dispatch::factorization_vendor_available<B>);
         ASSERT_TRUE(dispatch::is_native(route) && route.algo == dispatch::Algorithm::CTA)
@@ -2881,6 +2924,792 @@ TYPED_TEST(LuTest, FusedGetrsDirectEntryPointRefusesWhatSupportsRefuses) {
                       solve_tol<T>(n));
     }
 }
+
+// ===========================================================================
+// THE REGISTER-RESIDENT TIER (Algorithm::Tiny, src/extensions/getrf_tiny.cc).
+// One matrix per SubGroupPartition<N>, N in {8, 16, 32}, row r in lane r's
+// registers, no local memory and no barriers. These cases guard the three
+// properties a functional test otherwise stays green through: a padded row must
+// never win a pivot, the pad must never be written, and the partitions packed into
+// one work-group must not alias. Every (x) below names a break that was applied,
+// observed red and restored. evidence: docs/perf/lu.md#armed-breaks
+// ===========================================================================
+
+namespace {
+
+// Is `idx` inside SOME batch item's logical n x n window? Everything else is the
+// ld pad, the stride pad, or the gap past the last item -- memory the kernel must
+// neither read nor write.
+template <typename T>
+bool tiny_in_window(const Lu<T>& p, size_t idx) {
+    const size_t b = idx / size_t(p.stride);
+    if (b >= size_t(p.batch)) return false;
+    const size_t off = idx - b * size_t(p.stride);
+    const size_t j = off / size_t(p.ld);
+    const size_t i = off % size_t(p.ld);
+    return j < size_t(p.n) && i < size_t(p.n);
+}
+
+// The pad carries alloc()'s large poison, so "unchanged" is a BITWISE claim about
+// a value the kernel has no reason to reproduce by accident.
+template <typename T>
+void expect_pad_untouched(const Lu<T>& p, const char* what) {
+    for (size_t i = 0; i < p.buf.size(); ++i) {
+        if (tiny_in_window(p, i)) continue;
+        ASSERT_EQ(habs(up(p.buf[i]) - up(p.a0[i])), 0.0)
+            << what << ": element " << i << " lies outside every item's n x n window "
+            << "(n=" << p.n << ", ld=" << p.ld << ", stride=" << p.stride
+            << ") and was written -- an off-by-one in the padded store";
+    }
+}
+
+// A tie in cabs1 that the ORDERING of the argmax must resolve, and which no
+// residual and no pivot-growth bound can see: both candidates are equally good
+// pivots, so only the INDEX distinguishes LAPACK's answer from the other one.
+// Row 0 and row 2 of column 0 carry equal cabs1 and different values.
+template <class T>
+void tiny_tie_pair(T& a, T& b) {
+    if constexpr (std::is_same_v<RealOf<T>, T>) {
+        a = mk<T>(3.0, 0.0);
+        b = mk<T>(-3.0, 0.0);      // cabs1 3 == 3
+    } else {
+        a = mk<T>(3.0, 1.0);
+        b = mk<T>(1.0, -3.0);      // cabs1 4 == 4
+    }
+}
+
+template <typename T>
+Lu<T> make_cabs1_tie_in_column0(int n, int batch, unsigned seed) {
+    Lu<T> p;
+    alloc(p, n, batch, 5, 11);
+    Rng rg(seed);
+    T tie_a, tie_b;
+    tiny_tie_pair(tie_a, tie_b);
+    for (int b = 0; b < batch; ++b) {
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < n; ++i)
+                p.buf[size_t(b) * p.stride + size_t(j) * p.ld + i] =
+                    scale(mk<T>(rg.next(), rg.next()), 0.2);
+        // Columns 1.. are strongly dominant, so the tie is the only decision that
+        // is not forced by magnitude and the factor stays well conditioned.
+        for (int j = 1; j < n; ++j)
+            p.buf[size_t(b) * p.stride + size_t(j) * p.ld + j] =
+                mk<T>(4.0 * double(n) * (1.0 + 0.01 * double(b)), 0.0);
+        p.buf[size_t(b) * p.stride + 0] = tie_a;                 // row 0
+        p.buf[size_t(b) * p.stride + 2] = tie_b;                 // row 2
+    }
+    p.a0.assign(p.buf.begin(), p.buf.end());
+    poison(p);
+    return p;
+}
+
+#ifdef BATCHLAS_GETRF_TESTS_HAVE_LAPACKE
+// Column-major, lda = n, 1-based ipiv -- the same contract the device span carries.
+template <typename T>
+lapack_int lapacke_getrf_any(int n, T* a, lapack_int* ipiv) {
+    if constexpr (std::is_same_v<T, float>) {
+        return LAPACKE_sgetrf(LAPACK_COL_MAJOR, n, n, a, n, ipiv);
+    } else if constexpr (std::is_same_v<T, double>) {
+        return LAPACKE_dgetrf(LAPACK_COL_MAJOR, n, n, a, n, ipiv);
+    } else if constexpr (std::is_same_v<T, std::complex<float>>) {
+        return LAPACKE_cgetrf(LAPACK_COL_MAJOR, n, n,
+                              reinterpret_cast<lapack_complex_float*>(a), n, ipiv);
+    } else {
+        static_assert(std::is_same_v<T, std::complex<double>>);
+        return LAPACKE_zgetrf(LAPACK_COL_MAJOR, n, n,
+                              reinterpret_cast<lapack_complex_double*>(a), n, ipiv);
+    }
+}
+#endif
+
+// LAPACK's ?GETF2 on the host in promoted arithmetic, recording at each step the
+// MARGIN by which the winner beat the runner-up: margin[k] = cabs1(runner-up) /
+// cabs1(winner), in [0, 1]. An elementwise pivot comparison is well posed only where
+// the argmax is decided by more than rounding -- the device contracts a - b*c into an
+// FMA and the host does not -- so every caller MUST stop at the first step whose
+// margin is within kTinyAmbiguous of 1: past a divergence the two sides are
+// factorising different matrices.
+// evidence: docs/perf/lu.md#the-pivot-margin-gate-on-elementwise-comparisons
+inline constexpr double kTinyAmbiguous = 0.99;
+
+template <typename T>
+void host_getf2_with_margins(int n, std::vector<T>& a, std::vector<int>& piv,
+                             std::vector<double>& margin) {
+    using P = decltype(up(T{}));
+    piv.assign(size_t(n), 0);
+    margin.assign(size_t(n), 0.0);
+    std::vector<P> A(size_t(n) * size_t(n));
+    for (size_t i = 0; i < A.size(); ++i) A[i] = up(a[i]);
+    for (int k = 0; k < n; ++k) {
+        double best = -1.0, second = -1.0;
+        int win = k;
+        for (int i = k; i < n; ++i) {
+            const double m = hcabs1(A[size_t(k) * size_t(n) + size_t(i)]);
+            // STRICTLY greater, so an exact tie keeps the LOWEST row -- I?AMAX's order
+            // and the tier's. A `>=` here would silently make the oracle disagree with
+            // LAPACK on exactly the case TinyBreaksAnExactCabs1Tie guards.
+            if (m > best) { second = best; best = m; win = i; }
+            else if (m > second) { second = m; }
+        }
+        piv[size_t(k)] = win + 1;
+        margin[size_t(k)] = (best > 0.0 && second > 0.0) ? (second / best) : 0.0;
+        if (win != k)
+            for (int c = 0; c < n; ++c)
+                std::swap(A[size_t(c) * size_t(n) + size_t(k)],
+                          A[size_t(c) * size_t(n) + size_t(win)]);
+        const P p = A[size_t(k) * size_t(n) + size_t(k)];
+        if (hcabs1(p) == 0.0) continue;                 // MAGMA update = 0: carry on
+        for (int i = k + 1; i < n; ++i) A[size_t(k) * size_t(n) + size_t(i)] /= p;
+        for (int c = k + 1; c < n; ++c) {
+            const P u = A[size_t(c) * size_t(n) + size_t(k)];
+            for (int i = k + 1; i < n; ++i)
+                A[size_t(c) * size_t(n) + size_t(i)] -=
+                    A[size_t(k) * size_t(n) + size_t(i)] * u;
+        }
+    }
+}
+
+// ||P A - L U||_F / ||A||_F for a CONTIGUOUS n x n host factor and its interchange
+// list. Used to decide whether the host LAPACKE on THIS machine may be trusted as an
+// oracle for a given cell -- see the note in TinyPivotsMatchLapackeOnUnstructuredData.
+template <typename T>
+double host_factor_residual(int n, const std::vector<T>& a0, const std::vector<T>& f,
+                            const lapack_int* ip) {
+    using P = decltype(up(T{}));
+    std::vector<P> PA(size_t(n) * size_t(n));
+    for (size_t i = 0; i < PA.size(); ++i) PA[i] = up(a0[i]);
+    for (int k = 0; k < n; ++k) {
+        const int q = static_cast<int>(ip[size_t(k)]) - 1;
+        if (q != k)
+            for (int c = 0; c < n; ++c)
+                std::swap(PA[size_t(c) * size_t(n) + size_t(k)],
+                          PA[size_t(c) * size_t(n) + size_t(q)]);
+    }
+    double num = 0.0, den = 0.0;
+    for (int c = 0; c < n; ++c)
+        for (int i = 0; i < n; ++i) {
+            P acc = P{};
+            const int kk = std::min(i, c) + 1;
+            for (int k = 0; k < kk; ++k) {
+                const P l = (k == i) ? P(1) : up(f[size_t(k) * size_t(n) + size_t(i)]);
+                const P u = up(f[size_t(c) * size_t(n) + size_t(k)]);
+                acc += l * u;
+            }
+            const P t = PA[size_t(c) * size_t(n) + size_t(i)];
+            num += habs(acc - t) * habs(acc - t);
+            den += habs(t) * habs(t);
+        }
+    return den > 0.0 ? std::sqrt(num) / std::sqrt(den) : std::sqrt(num);
+}
+
+}  // namespace
+
+// T1. RESIDUAL AND ELEMENTWISE PIVOTS, EVERY ORDER THE TIER HOLDS.
+//
+// n = 1..ceiling covers all three buckets and every padded order inside them;
+// ld = n exercises the unpadded leading dimension and ld = n + 5 the padded one;
+// batch 19 is past a full work-group at EVERY bucket, so the partial last
+// work-group -- the clamp-don't-return tail -- runs in every case. Shrink any of
+// those three and the tail stops being exercised.
+// Arms break (a) (`act = (rowid > j)` weakened to `>=`) and break (d)
+// (tiny_partition_id replaced by part.get_group_linear_id(), which drops the `sg_id *`
+// term and makes the sub-groups of one work-group alias the same matrices).
+// evidence: docs/perf/lu.md#armed-breaks
+TYPED_TEST(LuTest, TinyFactorisesAndPivotsExactlyAtEveryOrder) {
+    using T = typename TestFixture::T;
+    const int cap = this->tiny_max_n();
+    ASSERT_GE(cap, 8) << "the tiny tier reports no capacity for this type";
+
+    for (int n = 1; n <= cap; ++n) {
+        for (int ld_pad : {0, 5}) {
+            for (int batch : {1, 19}) {
+                auto dom = make_dominant_permuted<T>(n, batch, 700u + unsigned(n), ld_pad, 11);
+                // ANTI-VACUITY: at n = 1 the permutation is the identity and nothing
+                // moves, which is a fact about the fixture, not a lost guard.
+                if (n > 1) {
+                    ASSERT_GT(non_diagonal_pivots(dom, 0), 0)
+                        << "n=" << n << ": the fixture pivots nowhere, so the pivot "
+                                       "assertions below are vacuous";
+                }
+                this->run_tiny(dom);
+                check_factor(dom, "tiny/dominant-permuted");
+                for (int b = 0; b < batch; ++b)
+                    EXPECT_EQ(dom.info[b], 0)
+                        << "tiny: a nonsingular item reported info = " << dom.info[b]
+                        << " at n=" << n << " ld_pad=" << ld_pad << " b=" << b;
+                if (this->HasFailure()) return;
+
+                auto rnd = make_random<T>(n, batch, 900u + unsigned(n), ld_pad, 11);
+                this->run_tiny(rnd);
+                check_factor(rnd, "tiny/random");
+                if (this->HasFailure()) return;
+            }
+        }
+    }
+}
+
+// T2. THE PADDING IS INERT: an order inside a wider bucket must factorise as the
+// unpadded CTA tier does. The CTA route is the oracle because it carries no
+// compile-time N at all, so it cannot share a padding defect.
+//
+// The PIVOT SEQUENCE is compared EXACTLY -- integer bookkeeping, where a padding
+// defect shows first. The ELEMENTS are not: the two bodies are separate translation
+// units, so one may contract a multiply-subtract the other does not. That bound must
+// stay RELATIVE to the reference element. An ABSOLUTE bound scaled by the fixture's
+// 4n diagonal licenses thousands of ulp on exactly the O(1) off-diagonal entries
+// where a padding defect shows up.
+// evidence: docs/perf/lu.md#why-the-tiny-vs-cta-element-bound-is-relative
+// Ulp per elimination step the two tiers may licitly part by: one contracted FMA is
+// one ulp of the value it produces, so n steps is n ulp, and the four is margin for a
+// toolchain that contracts differently in the two TUs.
+constexpr double kTinyVsCtaUlpsPerStep = 4.0;
+
+TYPED_TEST(LuTest, TinyPaddingIsInertAgainstTheCtaRoute) {
+    using T = typename TestFixture::T;
+    const int cap = this->tiny_max_n();
+    const int batch = 5;
+
+    for (int n = 1; n <= cap; ++n) {
+        if (this->cta_max_n() < n) continue;
+        auto a = make_dominant_permuted<T>(n, batch, 4242u + unsigned(n));
+        auto b = make_dominant_permuted<T>(n, batch, 4242u + unsigned(n));
+        this->run_tiny(a);
+        this->run_cta(b);
+
+        for (int it = 0; it < batch; ++it) {
+            for (int k = 0; k < n; ++k)
+                ASSERT_EQ(piv_item(a, it)[k], piv_item(b, it)[k])
+                    << "n=" << n << " item " << it << ": tiny and cta disagree on pivot "
+                    << k << " -- the identity pad changed the selection";
+            EXPECT_EQ(a.info[it], b.info[it]) << "n=" << n << " item " << it << ": info differs";
+            for (int j = 0; j < n; ++j)
+                for (int i = 0; i < n; ++i) {
+                    const auto av = up(a.buf[size_t(it) * a.stride + size_t(j) * a.ld + i]);
+                    const auto bv = up(b.buf[size_t(it) * b.stride + size_t(j) * b.ld + i]);
+                    const double d = habs(av - bv);
+                    // Relative to the element itself, floored at 1 so an entry that
+                    // underflows towards zero does not demand exact agreement.
+                    const double scale = std::max(1.0, habs(bv));
+                    const double tol = kTinyVsCtaUlpsPerStep * double(n) * eps_of<T>() * scale;
+                    ASSERT_LE(d, tol)
+                        << "n=" << n << " item " << it << " element (" << i << "," << j
+                        << "): tiny and cta differ by " << d << " (" << d / (eps_of<T>() * scale)
+                        << " ulp of " << habs(bv) << "), tolerance " << tol;
+                }
+        }
+        if (this->HasFailure()) return;
+    }
+}
+
+// T3. THE PAD IS NEVER WRITTEN. The ld = n + 5 shape is load-bearing: at ld = n the
+// pad columns of item b land inside item b+1 and the residual catches the break
+// instead, so only a PADDED ld leaves this assertion as the sole guard.
+// Arms break (b), dropping `if (k >= n) continue` from the store loop.
+// evidence: docs/perf/lu.md#armed-breaks
+TYPED_TEST(LuTest, TinyNeverWritesThePad) {
+    using T = typename TestFixture::T;
+    const int cap = this->tiny_max_n();
+    for (int n : {1, 5, 8, 9, 13, 16, 17, 24, 32}) {
+        if (n > cap) continue;
+        auto p = make_dominant_permuted<T>(n, 7, 55u + unsigned(n));
+        this->run_tiny(p);
+        expect_pad_untouched(p, "tiny/pad");
+        check_factor(p, "tiny/pad-fixture");
+        if (this->HasFailure()) return;
+    }
+}
+
+// T4. A PLANTED ZERO COLUMN: info is 1-based and global, the first failure wins,
+// the elimination continues FINITELY past it (MAGMA's `update = 0` semantics), and
+// the neighbouring items are untouched.
+//
+// This case does NOT guard the `rowid < n` candidate mask -- break (e) removed it and
+// stayed green, because the argmax tie-break already elects the LOWEST rowid and
+// rowid == j is always live. What guards that property is the tie-break DIRECTION, in
+// TinyBreaksAnExactCabs1TieTowardsTheLowestRow. This case's live assertions are info
+// and the ipiv RANGE, which breaks (d) and (f) do turn red.
+// evidence: docs/perf/lu.md#pad-rows-and-the-argmax-corrected
+TYPED_TEST(LuTest, TinyPlantedZeroColumnGivesGlobalOneBasedInfo) {
+    using T = typename TestFixture::T;
+    const int cap = this->tiny_max_n();
+    const int batch = 6;
+
+    for (int n : {2, 5, 8, 13, 16, 24, 32}) {
+        if (n > cap) continue;
+        for (int k = 0; k < n; k += (n > 4 ? (n / 2 + 1) : 1)) {
+            auto p = make_dominant_permuted<T>(n, batch, 606u + unsigned(n));
+            const int bad = 3;                       // NOT item 0: offset 0 hides a stride bug
+            for (int i = 0; i < n; ++i)
+                p.buf[size_t(bad) * p.stride + size_t(k) * p.ld + i] = mk<T>(0.0, 0.0);
+            p.a0.assign(p.buf.begin(), p.buf.end());
+            poison(p);
+            this->run_tiny(p);
+
+            EXPECT_EQ(p.info[bad], k + 1)
+                << "n=" << n << " k=" << k << ": a zero column must give info = k + 1, "
+                                              "1-based and global";
+            for (int b = 0; b < batch; ++b) {
+                if (b != bad)
+                    EXPECT_EQ(p.info[b], 0) << "item " << b << " was flagged by item " << bad;
+                const int* ip = piv_item(p, b);
+                for (int c = 0; c < n; ++c)
+                    ASSERT_TRUE(ip[c] >= c + 1 && ip[c] <= n)
+                        << "n=" << n << " k=" << k << " b=" << b << ": ipiv[" << c << "] = "
+                        << ip[c] << " is outside [c+1, n] -- a padded row won the argmax";
+                for (int j = 0; j < n; ++j)
+                    for (int i = 0; i < n; ++i)
+                        ASSERT_TRUE(hfinite(up(p.buf[size_t(b) * p.stride + size_t(j) * p.ld + i])))
+                            << "n=" << n << " k=" << k << " b=" << b << ": F(" << i << "," << j
+                            << ") is not finite -- the elimination did not continue finitely";
+            }
+            if (this->HasFailure()) return;
+        }
+    }
+}
+
+// T5. PACKED LAUNCHES DO NOT BLEED. Everything outside the logical windows -- the
+// ld pad, the stride pad, and the gap past the last item -- is NaN, so any read
+// past a row or a matrix propagates into the factor and the finiteness assertion
+// in check_factor catches it. The batch is deliberately 3 past a full work-group.
+TYPED_TEST(LuTest, TinyPackedLaunchesDoNotBleed) {
+    using T = typename TestFixture::T;
+    const int cap = this->tiny_max_n();
+    const double qnan = std::numeric_limits<double>::quiet_NaN();
+
+    for (int n : {3, 8, 11, 16, 21, 32}) {
+        if (n > cap) continue;
+        auto p = make_dominant_permuted<T>(n, 19, 771u + unsigned(n));
+        for (size_t i = 0; i < p.buf.size(); ++i)
+            if (!tiny_in_window(p, i)) p.buf[i] = mk<T>(qnan, qnan);
+        p.a0.assign(p.buf.begin(), p.buf.end());
+        // poison() restores a0, which now carries the NaN pad, and re-poisons ipiv.
+        poison(p);
+        this->run_tiny(p);
+        check_factor(p, "tiny/nan-pad");
+        for (int b = 0; b < 19; ++b)
+            EXPECT_EQ(p.info[b], 0) << "n=" << n << " b=" << b << ": NaN outside the window "
+                                                                 "reached the pivot test";
+        if (this->HasFailure()) return;
+    }
+}
+
+// T6. A NaN INSIDE A LIVE COLUMN MUST NOT DECIDE THE PIVOT. The tiny argmax seeds
+// every lane from its OWN magnitude, so an unmapped NaN survives every XOR round
+// (`ov > NaN` and `ov == NaN` are both false) and the lanes end the butterfly
+// disagreeing about the winning LANE: different broadcast sources, a silently wrong
+// factor, no crash. The CTA tier cannot share the defect -- it seeds at R(-1) and
+// updates through `v > bv` -- which is why it is the oracle here; no host reference in
+// this file models "what the butterfly did once its lanes stopped agreeing".
+// Arms break (f), removing the `mag == mag` map to the losing sentinel.
+// evidence: docs/perf/lu.md#armed-breaks
+TYPED_TEST(LuTest, TinyArgmaxIgnoresANaNCandidate) {
+    using T = typename TestFixture::T;
+    const int cap = this->tiny_max_n();
+    const double qnan = std::numeric_limits<double>::quiet_NaN();
+    const int batch = 5;
+
+    for (int n : {4, 8, 16, 32}) {
+        if (n > cap || this->cta_max_n() < n) continue;
+        auto a = make_random<T>(n, batch, 313u + unsigned(n));
+        auto b = make_random<T>(n, batch, 313u + unsigned(n));
+        // A NON-PIVOT row of column 0 in every item: row n-1 of a random matrix is
+        // the argmax with probability 1/n, so the assertion below keeps this honest.
+        for (int it = 0; it < batch; ++it) {
+            a.buf[size_t(it) * a.stride + size_t(n - 1)] = mk<T>(qnan, qnan);
+            b.buf[size_t(it) * b.stride + size_t(n - 1)] = mk<T>(qnan, qnan);
+        }
+        a.a0.assign(a.buf.begin(), a.buf.end());
+        b.a0.assign(b.buf.begin(), b.buf.end());
+        poison(a);
+        poison(b);
+        this->run_tiny(a);
+        this->run_cta(b);
+
+        for (int it = 0; it < batch; ++it) {
+            ASSERT_NE(piv_item(b, it)[0], n)
+                << "n=" << n << " item " << it << ": the CTA oracle chose the NaN row "
+                                                  "itself, so this case tests nothing";
+            for (int k = 0; k < n; ++k)
+                ASSERT_EQ(piv_item(a, it)[k], piv_item(b, it)[k])
+                    << "n=" << n << " item " << it << ": tiny and cta disagree on pivot " << k
+                    << " with a NaN in a candidate row -- the butterfly seed was not "
+                       "NaN-mapped";
+        }
+        if (this->HasFailure()) return;
+    }
+}
+
+// T7. AN EXACT cabs1 TIE GOES TO THE LOWEST ROW, WHICH IS I?AMAX's ORDER.
+//
+// No residual and no pivot-growth bound can see this: both candidates are equally good
+// pivots, and only the index distinguishes LAPACK's answer from the other one.
+// make_dominant_permuted cannot produce an exact tie at all, so this fixture is the
+// only one that reaches the property -- and the tie-break direction it pins is ALSO
+// what keeps a pad row (highest rowid in the partition) from winning an all-zero
+// column, which is the guard T4 turned out not to be.
+// Arms break (c), `ok < key` -> `ok > key` in tiny_argmax_pair.
+// evidence: docs/perf/lu.md#armed-breaks
+TYPED_TEST(LuTest, TinyBreaksAnExactCabs1TieTowardsTheLowestRow) {
+    using T = typename TestFixture::T;
+    const int cap = this->tiny_max_n();
+    const int batch = 4;
+
+    for (int n : {4, 12, 20, 32}) {
+        if (n > cap) continue;
+        auto p = make_cabs1_tie_in_column0<T>(n, batch, 8080u + unsigned(n));
+        // ANTI-VACUITY, on the DATA: the two candidates must carry exactly equal
+        // cabs1, must be strictly the column maximum, and must be different values.
+        for (int b = 0; b < batch; ++b) {
+            const T* A0 = p.a0.data() + size_t(b) * p.stride;
+            const double c0 = hcabs1(up(A0[0]));
+            const double c2 = hcabs1(up(A0[2]));
+            ASSERT_EQ(c0, c2) << "the fixture no longer carries an exact cabs1 tie";
+            ASSERT_GT(habs(up(A0[0]) - up(A0[2])), 0.0)
+                << "the tied entries are equal, so no tie-break can be observed";
+            for (int i = 0; i < n; ++i)
+                if (i != 0 && i != 2)
+                    ASSERT_LT(hcabs1(up(A0[i])), c0)
+                        << "row " << i << " outranks the tie, so column 0 is not decided by it";
+        }
+        this->run_tiny(p);
+        for (int b = 0; b < batch; ++b)
+            EXPECT_EQ(piv_item(p, b)[0], 1)
+                << "n=" << n << " b=" << b << ": an exact cabs1 tie between rows 0 and 2 "
+                   "must go to row 0 (ipiv 1), which is I?AMAX's order";
+        check_factor(p, "tiny/cabs1-tie", /*check_L=*/true);
+        if (this->HasFailure()) return;
+    }
+}
+
+// T8. THE DIRECT ENTRY POINT REFUSES WHAT supports() REFUSES. A forced route that
+// supports() rejects falls through to the vendor and passes green regardless, so
+// each gate is re-applied inside the dispatch and throws.
+TYPED_TEST(LuTest, TinyDirectEntryPointRefusesWhatSupportsRefuses) {
+    using T = typename TestFixture::T;
+    const int cap = this->tiny_max_n();
+    const int n = std::min(8, cap), batch = 2;
+    auto p = make_dominant_permuted<T>(n, batch, 17u);
+    auto A = view_of(p);
+    UnifiedVector<std::byte> ws(4096);
+
+    // An order past the tier's ceiling: `unsupported`, naming the ceiling, and
+    // never a silent factorisation of the leading cap x cap submatrix.
+    {
+        auto big = make_dominant_permuted<T>(cap + 1, batch, 18u);
+        auto Vb = view_of(big);
+        EXPECT_THROW(sycl_getrf::getrf_tiny_dispatch<T>(*this->ctx, Vb, big.piv.to_span(),
+                                                        ws.to_span(), Span<int32_t>{}),
+                     batchlas::unsupported);
+    }
+    // A non-square view.
+    {
+        UnifiedVector<T> w(size_t(8) * 16, mk<T>(1.0, 0.0));
+        UnifiedVector<T*> wp(1, nullptr);
+        MatrixView<T, MatrixFormat::Dense> W(w.data(), 8, 16, 8, 8 * 16, 1, wp.data());
+        UnifiedVector<int64_t> pv(64, 0);
+        EXPECT_THROW(sycl_getrf::getrf_tiny_dispatch<T>(*this->ctx, W, pv.to_span(),
+                                                        ws.to_span(), Span<int32_t>{}),
+                     std::invalid_argument);
+    }
+    // A pivot span shorter than n * batch.
+    {
+        UnifiedVector<int64_t> shortpiv(size_t(n) * batch - 1, 0);
+        EXPECT_THROW(sycl_getrf::getrf_tiny_dispatch<T>(*this->ctx, A, shortpiv.to_span(),
+                                                        ws.to_span(), Span<int32_t>{}),
+                     std::invalid_argument);
+    }
+    // A SHORT info span is "not requested", not an error: the tier draws scratch.
+    {
+        auto q = make_dominant_permuted<T>(n, batch, 19u);
+        EXPECT_NO_THROW(this->run_tiny(q, /*pass_info=*/false));
+        check_factor(q, "tiny/empty-info");
+    }
+}
+
+// T9. ROUTING. Tiny is in the order array FIRST and its supports() gate answers on
+// the tier's own ceiling; preferred() is deliberately all-false for it, so the
+// DEFAULT route is unchanged by this PR and only an explicit pin reaches it. The
+// vendor-free walk and a bare `native` pin are covered by the explicit
+// native_tier_preferred arm, without which Tiny would take every order it holds in
+// a vendor-free build the day it lands.
+TYPED_TEST(LuTest, TinyIsRoutableOnlyByAnExplicitPin) {
+    using T = typename TestFixture::T;
+    constexpr Backend B = TestFixture::BackendType;
+    using Tbl = dispatch::RouteTable<dispatch::Op::getrf, T>;
+    const dispatch::Route tiny{dispatch::Origin::Native, dispatch::Algorithm::Tiny};
+
+    auto p = make_dominant_permuted<T>(std::min(8, this->tiny_max_n()), 3, 21u);
+    auto V = view_of(p);
+    const auto shape = backend::getrf_op_shape<B, T>(*this->ctx, V);
+    ASSERT_TRUE(shape.has_value());
+    EXPECT_EQ(shape->tiny_max_n, this->tiny_max_n())
+        << "the shape builder and the kernel disagree about the tier's ceiling";
+
+    EXPECT_TRUE(Tbl::supports(tiny, *shape));
+    EXPECT_FALSE(Tbl::preferred(tiny, *shape))
+        << "the Tiny window is set from the measured grid in a later PR; a non-empty "
+           "preferred() here pre-empts native_tier_preferred (R8b)";
+    EXPECT_FALSE(Tbl::native_tier_preferred(tiny, *shape))
+        << "without an explicit false arm the `default:` arm returns true and the "
+           "vendor-free walk takes Tiny unmeasured";
+
+    // Each correctness gate, one at a time.
+    for (auto mutate : std::vector<std::function<void(dispatch::GetrfShape&)>>{
+             [](dispatch::GetrfShape& s) { s.tiny_max_n = 0; },
+             [](dispatch::GetrfShape& s) { s.is_gpu = false; },
+             [](dispatch::GetrfShape& s) { s.has_sg32 = false; },
+             [](dispatch::GetrfShape& s) { s.heterogeneous_batch = true; },
+             [](dispatch::GetrfShape& s) { s.m = s.n + 1; },
+             [](dispatch::GetrfShape& s) { s.k = s.tiny_max_n + 1; },
+             [](dispatch::GetrfShape& s) { s.backend = Backend::NETLIB; }}) {
+        dispatch::GetrfShape s = *shape;
+        mutate(s);
+        EXPECT_FALSE(Tbl::supports(tiny, s));
+    }
+
+    // THE DEFAULT ROUTE IS UNCHANGED: nothing in this PR may move a shape that used
+    // to reach CTA or the vendor. This is the assertion route_diff.sh makes across
+    // the whole grid; here it is made where the tier could have stolen a shape.
+    {
+        ScopedEnvVar unpinned("BATCHLAS_GETRF_ROUTE", nullptr);
+        const auto def = backend::getrf_route<B, T>(*this->ctx, V,
+                                                    dispatch::factorization_vendor_available<B>);
+        EXPECT_NE(def.algo, dispatch::Algorithm::Tiny)
+            << "automatic() reached the Tiny tier, whose window has not been measured";
+    }
+    {
+        ScopedEnvVar pin("BATCHLAS_GETRF_ROUTE", "native");
+        const auto nat = backend::getrf_route<B, T>(*this->ctx, V, /*vendor_available=*/false);
+        EXPECT_NE(nat.algo, dispatch::Algorithm::Tiny)
+            << "the vendor-free walk reached the Tiny tier; native_tier_preferred's "
+               "explicit false arm is missing or was flipped";
+    }
+    {
+        ScopedEnvVar pin("BATCHLAS_GETRF_ROUTE", "tiny");
+        const auto forced = backend::getrf_route<B, T>(
+            *this->ctx, V, dispatch::factorization_vendor_available<B>);
+        ASSERT_TRUE(dispatch::is_native(forced)) << "the 'tiny' pin did not take";
+        EXPECT_EQ(forced.algo, dispatch::Algorithm::Tiny)
+            << "BATCHLAS_GETRF_ROUTE=tiny did not parse -- parse_algorithm_word is the "
+               "third place that has to know the arm, and a miss is silent";
+    }
+    EXPECT_EQ(dispatch::to_string(dispatch::Algorithm::Tiny), "tiny")
+        << "to_string is the coverage CSV's chosen_algo column and route_diff.sh's "
+           "printed name";
+}
+
+// T10. THE FACADE REACHES THE TINY KERNEL, ASSERTED BIT-EXACTLY. A route assertion
+// plus a residual can stay green while every number comes from the vendor, so the
+// comparison is bit-exact against the direct entry point -- factor AND pivots --
+// which no vendor can reproduce (cuBLAS pivots on the modulus, this tier on cabs1).
+// getrf_buffer_size is exercised on the same shape: without a Tiny arm there, a
+// shape only this tier supports throws out of the sizing query.
+TYPED_TEST(LuTest, FacadeReachesTheTinyKernelBitExactly) {
+    using T = typename TestFixture::T;
+    constexpr Backend B = TestFixture::BackendType;
+    const int n = std::min(16, this->tiny_max_n()), batch = 19;
+
+    ScopedEnvVar g("BATCHLAS_GETRF_ROUTE", "tiny");
+    auto direct = make_dominant_permuted<T>(n, batch, 5150u);
+    auto viafac = make_dominant_permuted<T>(n, batch, 5150u);
+
+    auto Vf = view_of(viafac);
+    const auto route = backend::getrf_route<B, T>(*this->ctx, Vf,
+                                                  dispatch::factorization_vendor_available<B>);
+    ASSERT_TRUE(dispatch::is_native(route) && route.algo == dispatch::Algorithm::Tiny)
+        << "the 'tiny' pin did not take, so this test compares the vendor with itself";
+
+    this->run_tiny(direct);
+
+    const std::size_t need = getrf_buffer_size<B, T>(*this->ctx, Vf);
+    EXPECT_GE(need, sycl_getrf::getrf_tiny_buffer_size<T>(*this->ctx, Vf))
+        << "getrf_buffer_size does not cover the Tiny tier's info scratch";
+    UnifiedVector<std::byte> ws(std::max<std::size_t>(1, need));
+    ASSERT_NO_THROW((getrf<B, T>(*this->ctx, Vf, viafac.piv.to_span(), ws.to_span(),
+                                 viafac.info.to_span())));
+    this->ctx->wait();
+
+    for (size_t i = 0; i < direct.buf.size(); ++i)
+        ASSERT_EQ(habs(up(direct.buf[i]) - up(viafac.buf[i])), 0.0)
+            << "the facade's factor differs from getrf_tiny_dispatch's at element " << i
+            << " -- something else served this call";
+    for (int b = 0; b < batch; ++b)
+        for (int k = 0; k < n; ++k)
+            ASSERT_EQ(piv_item(direct, b)[k], piv_item(viafac, b)[k])
+                << "pivot " << k << " of item " << b << " differs";
+    check_factor(viafac, "facade/tiny");
+}
+
+// T12. ELEMENTWISE PIVOTS AGAINST AN INDEPENDENT HOST ORACLE, ON UNSTRUCTURED DATA.
+//
+// The only case in this file whose oracle shares NO line of code with the kernel.
+// `expect_piv` is the permutation make_dominant_permuted built, and T2/T6 compare
+// against a tier that #includes the SAME getrf_cta_device.hh and calls the SAME
+// lu_cabs1 -- so a defect in the shared pivot METRIC moves both tiers together and
+// leaves all of those green. make_random is deliberate: on a dominant-permuted matrix
+// the argmax is decided by a gap of orders of magnitude, so a merely WRONG metric
+// still picks the right row.
+//
+// TWO ORACLES, because LAPACKE cannot be trusted unconditionally on this box: its
+// dgetrf is wrong for every n >= 10, with no BatchLAS code involved. The BLAS-free
+// triple loop is the primary oracle and supplies the argmax MARGIN; LAPACKE is
+// cross-checked against it ONLY on cells where LAPACKE passes a residual check on its
+// OWN factor. The dropped-cell count is asserted rather than silently tolerated -- a
+// silent fallback would let the LAPACKE arm quietly stop testing anything.
+// Arms break (h), lu_cabs1 -> the modulus in the SHARED getrf_cta_device.hh.
+// evidence: docs/perf/lu.md#the-host-dgetrf-oracle-is-broken-on-this-box
+//           docs/perf/lu.md#the-pivot-margin-gate-on-elementwise-comparisons
+TYPED_TEST(LuTest, TinyPivotsMatchLapackeOnUnstructuredData) {
+#ifndef BATCHLAS_GETRF_TESTS_HAVE_LAPACKE
+    GTEST_SKIP() << "no host LAPACKE reference in this build";
+#else
+    using T = typename TestFixture::T;
+    const int cap = this->tiny_max_n();
+    const int batch = 7;                      // a partial last work-group at every bucket
+    // Generous: this only has to separate "a correct factorisation" from the 0.4-1.1
+    // this host's dgetrf returns above n = 9.
+    const double kLapackeTrustTol = 1e-3;
+
+    std::vector<T> h, f;
+    std::vector<lapack_int> hp;
+    std::vector<int> ref;
+    std::vector<double> margin;
+    int asserted_nondiagonal = 0, lapacke_cells = 0, lapacke_dropped = 0;
+    for (int n = 1; n <= cap; ++n) {
+        auto p = make_random<T>(n, batch, 6100u + unsigned(n));
+        this->run_tiny(p);
+
+        for (int b = 0; b < batch; ++b) {
+            // The n x n window out of the PADDED, STRIDED original: a0, not buf,
+            // because the factorisation overwrote buf in place.
+            h.assign(size_t(n) * size_t(n), mk<T>(0.0, 0.0));
+            for (int c = 0; c < n; ++c)
+                std::memcpy(h.data() + size_t(c) * size_t(n),
+                            p.a0.data() + size_t(b) * p.stride + size_t(c) * p.ld,
+                            size_t(n) * sizeof(T));
+            host_getf2_with_margins<T>(n, h, ref, margin);
+
+            f = h;
+            hp.assign(size_t(n), 0);
+            const lapack_int rc = lapacke_getrf_any<T>(n, f.data(), hp.data());
+            ASSERT_EQ(rc, 0) << "n=" << n << " b=" << b
+                             << ": the host reference itself reported info = " << rc;
+            const double lres = host_factor_residual<T>(n, h, f, hp.data());
+            const bool trust = std::isfinite(lres) && lres <= kLapackeTrustTol;
+            ++lapacke_cells;
+            if (!trust) ++lapacke_dropped;
+
+            const int* ip = piv_item(p, b);
+            for (int k = 0; k < n; ++k) {
+                // Above this margin the two implementations may legitimately disagree
+                // and every step after would compare different matrices.
+                if (margin[size_t(k)] > kTinyAmbiguous) break;
+                ASSERT_EQ(ip[k], ref[size_t(k)])
+                    << "n=" << n << " b=" << b << ": ipiv[" << k << "] = " << ip[k]
+                    << " where the host reference chose " << ref[size_t(k)]
+                    << " at a runner-up/winner margin of " << margin[size_t(k)]
+                    << " -- the pivot METRIC or its ordering disagrees with LAPACK's, "
+                       "and the CTA oracle cannot see it because both tiers share "
+                       "lu_cabs1";
+                if (trust) {
+                    ASSERT_EQ(ref[size_t(k)], static_cast<int>(hp[size_t(k)]))
+                        << "n=" << n << " b=" << b << " step " << k
+                        << ": the in-file host getf2 disagrees with LAPACKE at a margin "
+                           "of " << margin[size_t(k)] << ", and LAPACKE's own factor "
+                           "residual was " << lres << " -- one of the two ORACLES is "
+                           "wrong, not the kernel";
+                }
+                if (ref[size_t(k)] != k + 1) ++asserted_nondiagonal;
+            }
+            EXPECT_EQ(p.info[b], 0) << "n=" << n << " b=" << b << ": info = " << p.info[b];
+        }
+        check_factor(p, "tiny/host-oracle");
+        if (this->HasFailure()) return;
+    }
+    // ANTI-VACUITY, ACROSS THE WHOLE SWEEP: if every asserted step were the diagonal
+    // one, the comparison would be satisfied by a kernel that returns the identity
+    // interchange list and never pivots at all.
+    EXPECT_GT(asserted_nondiagonal, 0)
+        << "every unambiguous step the oracle chose was the diagonal, so this case "
+           "asserts nothing about pivoting";
+    // AND THE LAPACKE ARM MUST NOT HAVE SILENTLY STOPPED TESTING. If it were dropped
+    // everywhere the case would degrade to "the kernel agrees with a triple loop in
+    // this same file", which is a weaker claim than the one the name makes.
+    EXPECT_LT(lapacke_dropped, lapacke_cells)
+        << "LAPACKE failed its own residual check on ALL " << lapacke_cells
+        << " cells, so nothing was compared against the reference implementation";
+    if (lapacke_dropped > 0) {
+        GTEST_LOG_(INFO) << "LAPACKE was untrustworthy on " << lapacke_dropped << " of "
+                         << lapacke_cells << " cells (its own factor residual exceeded "
+                         << kLapackeTrustTol
+                         << "); those cells were compared against the in-file host "
+                            "reference only. See "
+                            "docs/perf/lu.md#the-host-dgetrf-oracle-is-broken-on-this-box";
+    }
+#endif
+}
+
+// ---------------------------------------------------------------------------
+// T11. A SOURCE CHECK, because both properties are invisible to a functional test on
+// this device. A work-group barrier in a partition kernel is a RACE, not a crash: the
+// G partitions sharing a work-group would synchronise with each other and the answer
+// stays right until the scheduler makes it wrong. A local_accessor is an occupancy
+// cost no result depends on -- and any group collective that allocates static shared
+// can push a NEIGHBOURING kernel into the (47104, 49664] launch hole, whose cap the
+// CUDA adapter raises STICKILY per CUfunction, so a warm suite passes and a cold
+// first launch fails.
+//
+// The scan strips `//` comments first, so the prose above is not what is matched. The
+// token is `group_barrier(` and NOT `group_barrier(it.get_group())`: the tier has zero
+// cross-lane state to order, so no barrier of ANY scope belongs in it, and the
+// stronger spelling could be satisfied by re-spelling the argument.
+// Arms breaks (g) and (g'). evidence: docs/perf/lu.md#armed-breaks
+// ---------------------------------------------------------------------------
+#ifdef BATCHLAS_GETRF_TINY_CC_PATH
+namespace {
+
+// The first line of `path` whose CODE (comments stripped) contains `token`, or "".
+std::string FirstCodeLineContaining(const std::string& path, const char* token) {
+    std::FILE* f = std::fopen(path.c_str(), "r");
+    if (!f) return std::string("<could not open ") + path + ">";
+    char line[8192];
+    std::string found;
+    while (std::fgets(line, sizeof(line), f)) {
+        const std::string text(line);
+        const size_t comment = text.find("//");
+        const std::string code = comment == std::string::npos ? text : text.substr(0, comment);
+        if (code.find(token) != std::string::npos) { found = text; break; }
+    }
+    std::fclose(f);
+    return found;
+}
+
+}  // namespace
+
+TEST(GetrfTinySource, DeclaresNoBarrierAndNoLocalMemory) {
+    const std::string path = BATCHLAS_GETRF_TINY_CC_PATH;
+    // POSITIVE CONTROL FIRST. Every assertion below is an ABSENCE, so a path that
+    // resolves to the wrong file -- or to no file at all -- reports a clean bill of
+    // health. The scan must first be shown to find something that IS in the tier's
+    // source before its silence means anything.
+    ASSERT_FALSE(FirstCodeLineContaining(path, "parallel_for").empty())
+        << "the source scan found no parallel_for in " << path
+        << ": BATCHLAS_GETRF_TINY_CC_PATH does not name the tiny tier's source, and "
+           "every absence assertion below would pass vacuously";
+    ASSERT_FALSE(FirstCodeLineContaining(path, "make_partition").empty())
+        << "the source scan found no make_partition in " << path
+        << ": the file it names is not the partition-per-matrix kernel";
+    for (const char* token : {"group_barrier(", "local_accessor"}) {
+        const std::string offending = FirstCodeLineContaining(path, token);
+        EXPECT_TRUE(offending.empty())
+            << "src/extensions/getrf_tiny.cc names `" << token
+            << "` in code. The register-resident tier has zero cross-lane state to "
+               "order and zero local memory by design; both are silent on this device "
+               "(a partition kernel's work-group barrier is a race, and static shared "
+               "re-opens the 48 KB launch hole for a NEIGHBOURING kernel): " << offending;
+    }
+}
+#endif  // BATCHLAS_GETRF_TINY_CC_PATH
 
 // The break record for every guarded property, including the breaks that turned
 // nothing red: docs/perf/lu.md#blind-guards-and-what-made-them-blind

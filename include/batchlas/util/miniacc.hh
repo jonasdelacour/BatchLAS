@@ -639,6 +639,18 @@ struct CliOptions {
     std::string benchmark_filter;
     std::vector<std::string> backends;
     std::vector<std::string> types;
+
+    // `--help` was seen: usage has been printed and there is nothing to run.
+    //
+    // This flag exists because the --help arm used to call std::exit(0) instead,
+    // and this is an INSTALLED public header (cmake/BatchLASPackaging.cmake
+    // installs include/batchlas wholesale; only minibench*.hh and
+    // bench_structured.hh are EXCLUDEd, miniacc.hh is not). A library header
+    // must never terminate its host process: exit() runs no destructors for any
+    // live automatic object in the caller's frames, and a consumer that parses
+    // an argv containing "--help" for its own reasons -- or that embeds this
+    // harness in a larger program -- has no way to stop it.
+    bool help_requested = false;
 };
 
 inline CliOptions ParseCommandLine(int argc, char** argv) {
@@ -672,7 +684,11 @@ inline CliOptions ParseCommandLine(int argc, char** argv) {
             std::cout << "  --backend=LIST       comma separated backends to run\n";
             std::cout << "  --type=LIST          comma separated floating point types\n";
             std::cout << "  ARGS can be scalars, comma lists or start:end:num ranges\n";
-            std::exit(0);
+            // Return, do not exit. Nothing after --help can matter, and the
+            // combination expansion below is pure work, so the parse stops here
+            // and MiniAccMain turns the flag into a 0 exit status.
+            opt.help_requested = true;
+            return opt;
         } else {
             arg_values.push_back(parse_range_or_list_double(s));
         }
@@ -699,6 +715,10 @@ inline CliOptions ParseCommandLine(int argc, char** argv) {
 
 inline int MiniAccMain(int argc, char** argv) {
     const CliOptions opts = ParseCommandLine(argc, argv);
+    // The one place that decides what --help means for the PROCESS. It is a
+    // main(), so returning 0 here is the same observable behaviour the old
+    // std::exit(0) had -- minus terminating anyone who is not a main().
+    if (opts.help_requested) return 0;
     return RunRegisteredBenchmarks(opts.cfg,
                                    opts.csv_file,
                                    opts.benchmark_filter,

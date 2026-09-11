@@ -75,20 +75,21 @@ Event syevx_direct(Queue& ctx,
                    Span<std::byte> workspace,
                    JobType jobz,
                    const MatrixView<T, MatrixFormat::Dense>& V,
-                   const SyevxParams<T>& params) {
+                   const SyevxParams<T>& params,
+                   Span<int32_t> info) {
     using float_type = typename base_type<T>::type;
 
     if constexpr (MFormat != MatrixFormat::Dense) {
         (void)ctx; (void)A; (void)W; (void)m; (void)neigs; (void)workspace;
-        (void)jobz; (void)V; (void)params;
-        throw std::runtime_error("syevx_direct: only dense matrices are supported");
+        (void)jobz; (void)V; (void)params; (void)info;
+        throw batchlas::unsupported("syevx_direct: only dense matrices are supported");
     } else {
         const int64_t n = A.rows();
         const int64_t batch_size = A.batch_size();
         const bool want_eigenvectors = (jobz == JobType::EigenVectors);
 
         if (A.rows() != A.cols()) {
-            throw std::runtime_error("syevx_direct: A must be square");
+            throw batchlas::invalid_argument("syevx_direct: A must be square");
         }
         // `neigs` is a capacity, so exceeding n is harmless -- the tail of W and V
         // simply goes unwritten. It is clamped inside syevx_resolve_range and is
@@ -96,7 +97,7 @@ Event syevx_direct(Queue& ctx,
         // call's outcome changed from a throw to a success; see the doc comment on
         // syevx_direct in extensions.hh.)
         if (!m.empty() && static_cast<int64_t>(m.size()) < batch_size) {
-            throw std::runtime_error("syevx_direct: m must cover every batch item");
+            throw batchlas::invalid_argument("syevx_direct: m must cover every batch item");
         }
         // The RANGE, on the other hand, is checked here and not only in the public
         // `syevx`. This function is a public entry point in its own right -- the
@@ -111,13 +112,13 @@ Event syevx_direct(Queue& ctx,
         if (params.select == SyevxSelect::Index) {
             const int64_t iu = (params.iu < 0) ? (n - 1) : params.iu;
             if (params.il < 0 || iu >= n || params.il > iu) {
-                throw std::invalid_argument(
+                throw batchlas::invalid_argument(
                     "syevx_direct: SyevxSelect::Index requires 0 <= il <= iu < n (iu < 0 means "
                     "n-1); an empty block is expressed with neigs == 0, not with il > iu");
             }
         }
         if (params.select == SyevxSelect::Value && !(params.vl < params.vu)) {
-            throw std::invalid_argument(
+            throw batchlas::invalid_argument(
                 "syevx_direct: SyevxSelect::Value requires vl < vu for the half-open interval "
                 "(vl, vu]; an empty or inverted interval is almost always swapped arguments");
         }
@@ -134,7 +135,15 @@ Event syevx_direct(Queue& ctx,
 
         auto syev_ws = pool.allocate<std::byte>(
             ctx, syev_buffer_size<B>(ctx, A_copy, lambdas, jobz, Uplo::Lower));
-        syev<B>(ctx, A_copy, lambdas, {.jobz = jobz}, syev_ws);
+        // (void) on an Event: deliberate. This Queue is in-order, so the next submission
+        // is already ordered after this one and the Event carries nothing the caller needs.
+        // syevx_direct owns no iteration of its own: it is one full syev followed
+        // by a selection, so `info` is syev's verbatim and syev does the clear.
+        // Spelled positionally rather than through the option overload because the
+        // option overload has no `info` parameter; Uplo::Lower matches the
+        // syev_buffer_size call directly above, which is what the workspace was
+        // sized for.
+        (void)syev<B, T>(ctx, A_copy, lambdas, jobz, Uplo::Lower, syev_ws, info);
 
         // syev returns eigenvalues ascending, so every range reduces to picking a
         // contiguous block out of `lambdas` -- for an index block statically, for a
@@ -309,7 +318,8 @@ size_t syevx_direct_buffer_size(Queue& ctx,
         Span<std::byte>,\
         JobType,\
         const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&,\
-        const SyevxParams<BATCHLAS_UNPAREN fp>&);\
+        const SyevxParams<BATCHLAS_UNPAREN fp>&,\
+        Span<int32_t>);\
     /* The m-less forwarder is inline and would not need an instantiation to be \
        CALLED, but instantiating it keeps the symbol this library exported before \
        `m` was added, so an object file built against the old header still links. */\
@@ -321,7 +331,8 @@ size_t syevx_direct_buffer_size(Queue& ctx,
         Span<std::byte>,\
         JobType,\
         const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&,\
-        const SyevxParams<BATCHLAS_UNPAREN fp>&);\
+        const SyevxParams<BATCHLAS_UNPAREN fp>&,\
+        Span<int32_t>);\
     template size_t syevx_direct_buffer_size<back, BATCHLAS_UNPAREN fp, fmt>(\
         Queue&,\
         const MatrixView<BATCHLAS_UNPAREN fp, fmt>&,\

@@ -12,6 +12,14 @@
 #include <cstdint>
 #include <cstdlib>
 
+// For batchlas::EnvValue: the eleven BATCHLAS_TUNE_* knobs are captured fields
+// on settings().geometry.tune and each accessor hands its own to
+// tuning_env_override. NOTE FOR THE NEXT RETUNE: the accessors at the bottom of
+// this file are mirrored in evaluation/tuning/generate_tuning_header.py, so this
+// include and those calls must be mirrored there too or the generator will emit
+// a header that no longer compiles.
+#include <batchlas/settings.hh>
+
 namespace batchlas::tuning {
 
 namespace detail {
@@ -21,7 +29,10 @@ namespace detail {
 // Contract (matches BATCHLAS_SY2SB_ORMQR_NB in src/extensions/sytrd_sy2sb.cc and
 // BATCHLAS_SYEV_TWO_STAGE_KD in src/extensions/two_stage_common.hh):
 //   * read FRESH on every call, never cached, so an A/B harness can flip the
-//     variable between runs (or between calls) inside one process;
+//     variable between runs (or between calls) inside one process -- which is
+//     still true through settings(): the snapshot is re-read by
+//     detail::reload_settings(), which ScopedEnvVar fires on both construction
+//     and destruction, so a harness that flips a knob the supported way sees it;
 //   * unset / empty / unparseable / trailing garbage / non-positive  ->
 //     the compiled constant, i.e. bit-for-bit today's behaviour.
 //
@@ -30,8 +41,13 @@ namespace detail {
 // a buffer-size query and its call -- that desynchronises the allocated
 // workspace from the block width actually used. Flip it between runs, not
 // inside one.
-inline int32_t tuning_env_override(const char* name, int32_t fallback) {
-    const char* v = std::getenv(name);
+//
+// It takes the CAPTURED VALUE, not a variable name: each accessor below passes
+// its own field. The strtol contract stays HERE rather than moving into
+// settings.cc because it differs from env_int_or's stoi-in-a-try in exactly the
+// inputs a retune harness types -- "16x" is 16 to env_int_or and unset here.
+inline int32_t tuning_env_override(const EnvValue& captured, int32_t fallback) {
+    const char* v = captured.get();
     if (v == nullptr || *v == '\0') return fallback;
     char* end = nullptr;
     const long parsed = std::strtol(v, &end, 10);
@@ -290,12 +306,12 @@ inline constexpr int32_t stedc_wg_multiplier_default_for_n(int32_t n) {
 // ---------------------------------------------------------------------------
 
 inline int32_t ormqr_block_size_for_n(int32_t n) {
-    return detail::tuning_env_override("BATCHLAS_TUNE_ORMQR_BLOCK_SIZE",
+    return detail::tuning_env_override(settings().geometry.tune.ormqr_block_size,  // BATCHLAS_TUNE_ORMQR_BLOCK_SIZE
                                        ormqr_block_size_default_for_n(n));
 }
 
 inline int32_t gebrd_block_size_for_n(int32_t n) {
-    return detail::tuning_env_override("BATCHLAS_TUNE_GEBRD_BLOCK_SIZE",
+    return detail::tuning_env_override(settings().geometry.tune.gebrd_block_size,  // BATCHLAS_TUNE_GEBRD_BLOCK_SIZE
                                        gebrd_block_size_default_for_n(n));
 }
 
@@ -304,27 +320,27 @@ inline int32_t gebrd_block_size_for_n(int32_t n) {
 // is reachable only from the compiled constant -- which is what we want: the
 // env vars exist to force a specific geometry, not to force auto.
 inline int32_t sb2st_back_tile_for_n(int32_t n) {
-    return detail::tuning_env_override("BATCHLAS_TUNE_SB2ST_BACK_TILE",
+    return detail::tuning_env_override(settings().geometry.tune.sb2st_back_tile,  // BATCHLAS_TUNE_SB2ST_BACK_TILE
                                        sb2st_back_tile_default_for_n(n));
 }
 
 inline int32_t sb2st_back_subs_for_n(int32_t n) {
-    return detail::tuning_env_override("BATCHLAS_TUNE_SB2ST_BACK_SUBS",
+    return detail::tuning_env_override(settings().geometry.tune.sb2st_back_subs,  // BATCHLAS_TUNE_SB2ST_BACK_SUBS
                                        sb2st_back_subs_default_for_n(n));
 }
 
 inline int32_t sy2sb_ormqr_nb_for_n(int32_t n) {
-    return detail::tuning_env_override("BATCHLAS_TUNE_SY2SB_ORMQR_NB",
+    return detail::tuning_env_override(settings().geometry.tune.sy2sb_ormqr_nb,  // BATCHLAS_TUNE_SY2SB_ORMQR_NB
                                        sy2sb_ormqr_nb_default_for_n(n));
 }
 
 inline int32_t sytrd_block_size_for_n(int32_t n) {
-    return detail::tuning_env_override("BATCHLAS_TUNE_SYTRD_BLOCK_SIZE",
+    return detail::tuning_env_override(settings().geometry.tune.sytrd_block_size,  // BATCHLAS_TUNE_SYTRD_BLOCK_SIZE
                                        sytrd_block_size_default_for_n(n));
 }
 
 inline int32_t latrd_lower_panel_wg_hint_for_n(int32_t n) {
-    return detail::tuning_env_override("BATCHLAS_TUNE_LATRD_WG_HINT",
+    return detail::tuning_env_override(settings().geometry.tune.latrd_wg_hint,  // BATCHLAS_TUNE_LATRD_WG_HINT
                                        latrd_lower_panel_wg_hint_default_for_n(n));
 }
 
@@ -339,7 +355,7 @@ inline constexpr bool sytrd_fuse_panel_update_for_n(int32_t n) {
 }
 
 inline int32_t stedc_recursion_threshold_for_n(int32_t n) {
-    return detail::tuning_env_override("BATCHLAS_TUNE_STEDC_RECURSION_THRESHOLD",
+    return detail::tuning_env_override(settings().geometry.tune.stedc_recursion_threshold,  // BATCHLAS_TUNE_STEDC_RECURSION_THRESHOLD
                                        stedc_recursion_threshold_default_for_n(n));
 }
 
@@ -347,17 +363,17 @@ inline int32_t stedc_recursion_threshold_for_n(int32_t n) {
 // StedcMergeVariant::Auto, which would re-enter tuning resolution, so 0 (like
 // every non-positive value) falls back to the compiled constant.
 inline int32_t stedc_merge_variant_for_n(int32_t n) {
-    return detail::tuning_env_override("BATCHLAS_TUNE_STEDC_MERGE_VARIANT",
+    return detail::tuning_env_override(settings().geometry.tune.stedc_merge_variant,  // BATCHLAS_TUNE_STEDC_MERGE_VARIANT
                                        stedc_merge_variant_default_for_n(n));
 }
 
 inline int32_t stedc_threads_per_root_for_n(int32_t n) {
-    return detail::tuning_env_override("BATCHLAS_TUNE_STEDC_THREADS_PER_ROOT",
+    return detail::tuning_env_override(settings().geometry.tune.stedc_threads_per_root,  // BATCHLAS_TUNE_STEDC_THREADS_PER_ROOT
                                        stedc_threads_per_root_default_for_n(n));
 }
 
 inline int32_t stedc_wg_multiplier_for_n(int32_t n) {
-    return detail::tuning_env_override("BATCHLAS_TUNE_STEDC_WG_MULTIPLIER",
+    return detail::tuning_env_override(settings().geometry.tune.stedc_wg_multiplier,  // BATCHLAS_TUNE_STEDC_WG_MULTIPLIER
                                        stedc_wg_multiplier_default_for_n(n));
 }
 

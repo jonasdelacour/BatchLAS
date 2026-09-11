@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../util/internal-api.hh"
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>
@@ -56,11 +57,11 @@ enum class KernelVariant {
 };
 
 template <typename T>
-KernelVariant select_kernel_variant(const MatrixView<T, MatrixFormat::Dense>& A,
-                                    const MatrixView<T, MatrixFormat::Dense>& B,
-                                    const MatrixView<T, MatrixFormat::Dense>& C,
-                                    Transpose transA,
-                                    Transpose transB);
+BATCHLAS_INTERNAL_API KernelVariant select_kernel_variant(const MatrixView<T, MatrixFormat::Dense>& A,
+                                                          const MatrixView<T, MatrixFormat::Dense>& B,
+                                                          const MatrixView<T, MatrixFormat::Dense>& C,
+                                                          Transpose transA,
+                                                          Transpose transB);
 
 template <typename T>
 Event gemm_custom(Queue& ctx,

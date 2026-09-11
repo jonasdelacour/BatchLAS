@@ -71,12 +71,12 @@ Event stebz(Queue& ctx,
     const int64_t n = d.size();
     const int64_t batch_size = d.batch_size();
 
-    if (n < 1) throw std::runtime_error("stebz: n must be positive");
+    if (n < 1) throw batchlas::invalid_argument("stebz: n must be positive");
     if (e.size() < n - 1) {
-        throw std::runtime_error("stebz: e must have at least n-1 entries per batch item");
+        throw batchlas::invalid_argument("stebz: e must have at least n-1 entries per batch item");
     }
     if (static_cast<int64_t>(m.size()) < batch_size) {
-        throw std::runtime_error("stebz: m must cover every batch item");
+        throw batchlas::invalid_argument("stebz: m must cover every batch item");
     }
 
     // Resolve the requested index range. For Value ranges the count is
@@ -87,14 +87,14 @@ Event stebz(Queue& ctx,
         il = params.il;
         iu = (params.iu < 0) ? (n - 1) : params.iu;
         if (il < 0 || iu >= n || il > iu) {
-            throw std::runtime_error("stebz: invalid index range");
+            throw batchlas::invalid_argument("stebz: invalid index range");
         }
     }
     const bool value_range = (params.range == EigenRangeType::Value);
     const int64_t max_wanted = value_range ? n : (iu - il + 1);
 
     if (w.size() < max_wanted) {
-        throw std::runtime_error("stebz: w is too small for the requested range");
+        throw batchlas::invalid_argument("stebz: w is too small for the requested range");
     }
 
     (void)ws; // Bisection needs no scratch: each work-item's state is in registers.

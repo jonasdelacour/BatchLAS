@@ -23,6 +23,7 @@
 #include <type_traits>
 
 #include <sycl/sycl.hpp>
+#include <batchlas/settings.hh>
 
 namespace batchlas {
 namespace sycl_potrf {
@@ -46,29 +47,40 @@ template <> struct PotrfBlockedConst<double>               { static constexpr in
 template <> struct PotrfBlockedConst<std::complex<float>>  { static constexpr int NB = 96;  static constexpr int W = 32; };
 template <> struct PotrfBlockedConst<std::complex<double>> { static constexpr int NB = 64;  static constexpr int W = 16; };
 
-// Blocking overrides only, never routing; read once so the sizing query and the call agree.
-inline int potrf_env_int(const char* name) {
-    const char* raw = std::getenv(name);
-    if (!raw || !*raw) return 0;
-    const int v = std::atoi(raw);
-    return v > 0 ? v : 0;
-}
-inline int potrf_nb_env() { static const int v = potrf_env_int("BATCHLAS_POTRF_NB"); return v; }
-inline int potrf_w_env()  { static const int v = potrf_env_int("BATCHLAS_POTRF_W");  return v; }
+// Blocking overrides only, never routing; read once so the sizing query and the
+// call agree. The function-local statics are kept for exactly that reason: the
+// settings() snapshot is re-readable, and a reload landing between
+// potrf_buffer_size() and the matching potrf would desynchronise the allocated
+// workspace from the block width actually used. 0 means "unset" on both fields,
+// which is what the per-type PotrfBlockedConst defaults below fall back to.
+inline int potrf_nb_env() { static const int v = batchlas::settings().geometry.potrf_nb; return v; }
+inline int potrf_w_env()  { static const int v = batchlas::settings().geometry.potrf_w;  return v; }
+
+// Above this order the diagonal leaf stops being where the time goes and the trailing
+// update's k -- which IS nb -- starts to be; clamping nb to the occupancy ceiling there
+// buys occupancy in the leaf and pays for it several times over in the GEMM.
+// evidence: docs/perf/potrf.md#the-occupancy-clamp-on-nb
+constexpr int kPotrfOccupancyNbMaxOrder = 256;
 
 struct PotrfBlockedParams {
-    int nb;  // diagonal block order, and the trailing update's k
-    int W;   // trailing-update column-panel width
+    int nb;                 // diagonal block order, and the trailing update's k
+    int W;                  // trailing-update column-panel width
+    int leaf_min_blocks;    // the occupancy target nb was clamped against
 };
 
 template <typename T>
 PotrfBlockedParams potrf_blocked_params(Queue& ctx, int n) {
     using C = PotrfBlockedConst<T>;
 
-    // From THIS device's SLM: the hardcoded potrf_cta_max_n<T>() can name a block the leaf refuses.
-    const std::size_t local_mem =
-        static_cast<std::size_t>(ctx.device().get_property(DeviceProperty::LOCAL_MEM_SIZE));
-    const int ceiling = potrf_cta_max_n_for_slm<T>(local_mem > 4096 ? local_mem - 4096 : 0);
+    // From THIS device's SLM: the hardcoded potrf_cta_max_n<T>() can name a block the leaf
+    // refuses. WHICH ceiling is the choice above: the advertised (occupancy-scaled) one
+    // while the leaf dominates, the residency one once the trailing GEMM does. The leaf
+    // is launched at the same target, so the two can never disagree.
+    const std::size_t budget = resident::device_slm_budget(
+        static_cast<std::size_t>(ctx.device().get_property(DeviceProperty::LOCAL_MEM_SIZE)));
+    const int leaf_min_blocks =
+        (n > 0 && n <= kPotrfOccupancyNbMaxOrder) ? resident::kMinBlocksPerSm : 1;
+    const int ceiling = potrf_cta_max_n_for_slm<T>(budget, leaf_min_blocks);
 
     const int want = potrf_nb_env() ? potrf_nb_env() : C::NB;
     int nb = std::min(want, std::max(ceiling, 1));
@@ -84,7 +96,7 @@ PotrfBlockedParams potrf_blocked_params(Queue& ctx, int n) {
     int W = potrf_w_env() ? potrf_w_env() : C::W;
     if (W < 1) W = 1;
 
-    return {nb, W};
+    return {nb, W, leaf_min_blocks};
 }
 
 template <typename T>
@@ -244,22 +256,22 @@ Event potrf_blocked_dispatch(Queue& ctx,
     const int batch = static_cast<int>(A.batch_size());
 
     if (A.rows() != A.cols()) {
-        throw std::invalid_argument("potrf_blocked: A must be square");
+        throw batchlas::invalid_argument("potrf_blocked: A must be square");
     }
     if (n < 1 || batch < 1) {
-        throw std::invalid_argument("potrf_blocked: degenerate extents");
+        throw batchlas::invalid_argument("potrf_blocked: degenerate extents");
     }
     if (uplo != Uplo::Lower) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "potrf_blocked: Uplo::Upper is not implemented; the driver factors the "
             "lower triangle only; see RouteTable<Op::potrf, T>::supports, Blocked arm)");
     }
     if (A.is_heterogeneous()) {
-        throw std::invalid_argument("potrf_blocked: heterogeneous batch is not supported");
+        throw batchlas::invalid_argument("potrf_blocked: heterogeneous batch is not supported");
     }
     const auto dev = ctx.device();
     if (dev.type != DeviceType::GPU) {
-        throw std::invalid_argument("potrf_blocked: GPU queues only");
+        throw batchlas::invalid_argument("potrf_blocked: GPU queues only");
     }
 
     const auto p = potrf_blocked_params<T>(ctx, n);
@@ -310,12 +322,17 @@ Event potrf_blocked_dispatch(Queue& ctx,
         const int m2 = n - j - ib;
 
         const auto A11 = sub(j, ib, j, ib, ws.a11_ptrs.data());
-        potrf_cta_dispatch<T>(ctx, A11, Uplo::Lower, ws.leaf_ws, ws.leaf_info);
+        // (void) on an Event: deliberate. This Queue is in-order, so the next submission
+        // is already ordered after this one and the Event carries nothing the caller needs.
+        // The SAME occupancy target nb was clamped against: the leaf's gate and the block
+        // width are one decision, and a mismatch makes the leaf throw on a legal block.
+        (void)potrf_cta_dispatch<T>(ctx, A11, Uplo::Lower, ws.leaf_ws, ws.leaf_info,
+                                    p.leaf_min_blocks);
 
         // Unguarded: stale leaf_info, and a solve dividing by a pivot the quench has not replaced.
         if (!ctx.in_order()) ctx.wait();
 
-        potrf_blocked_panel_fixup<T>(ctx, a_ptr, ld, stride, j, ib, m2, batch,
+        (void)potrf_blocked_panel_fixup<T>(ctx, a_ptr, ld, stride, j, ib, m2, batch,
                                      info.data(), ws.leaf_info.data(), fixup_wg);
 
         if (m2 == 0) break;

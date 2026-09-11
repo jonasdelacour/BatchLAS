@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../util/internal-api.hh"
 #include "gemm_cublasdx_kernels.hh"
 
 #include <batchlas/blas/enums.hh>
@@ -25,7 +26,7 @@ struct Syr2kLaunchDescriptor {
     float beta;
 };
 
-bool available();
+BATCHLAS_INTERNAL_API bool available();
 
 cudaError_t launch_float(cublasdx_gemm::CuBLASDxGemmVariant variant,
                          const Syr2kLaunchDescriptor& desc,

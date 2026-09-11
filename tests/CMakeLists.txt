@@ -25,7 +25,10 @@ set(TEST_TARGETS
     backend_dispatch_tests
     options_api_tests
     route_vocabulary_tests
+    resident_capacity_tests
     route_gemm_equivalence_tests
+    settings_tests
+    error_model_tests
     linalg_layer_tests
     gemm_tests
     syevx_tests
@@ -97,6 +100,12 @@ set(BATCHLAS_SMOKE_TEST_TARGETS
     # change of meaning would invalidate measurements rather than fail loudly.
     route_vocabulary_tests
     route_gemm_equivalence_tests
+    # settings() decides which kernel runs and whether arguments are checked, for
+    # every op at once, and it is read once per process -- so a regression here is
+    # not one suite going red, it is the whole suite silently measuring the default
+    # arm. Cheap (no kernel launches on the arm that runs by default), so it belongs
+    # in the fast gate.
+    settings_tests
     linalg_layer_tests
 )
 
@@ -138,11 +147,13 @@ set(BATCHLAS_TEST_LABELS_util
     sg_compat_tests util_span_tests util_vector_tests util_device_queue_tests
     mempool_tests matrix_tests matrix_view_tests minibench_cli_tests
     backend_dispatch_tests options_api_tests route_vocabulary_tests
-    route_gemm_equivalence_tests linalg_layer_tests)
+    route_gemm_equivalence_tests settings_tests error_model_tests
+    linalg_layer_tests)
 set(BATCHLAS_TEST_LABELS_blas
     device_blas_tests gemm_tests gemv_tests symm_tests hemm_tests herk_tests her2k_tests
     syrk_tests syr2k_tests
-    trmm_tests trsm_tests potrf_tests geqrf_tests getrf_tests transpose_tests norm_tests cond_tests inverse_tests)
+    trmm_tests trsm_tests potrf_tests geqrf_tests getrf_tests resident_capacity_tests
+    transpose_tests norm_tests cond_tests inverse_tests)
 set(BATCHLAS_TEST_LABELS_ortho
     ortho_tests ormqr_tests ormqr_cta_tests ormqr_blocked_tests orgqr_tests)
 set(BATCHLAS_TEST_LABELS_tridiag
@@ -233,8 +244,30 @@ function(batchlas_add_test_target test_name)
     # find_dependency(CUDAToolkit) onto every installed consumer.
     #
     # LAPACKE: these two call LAPACKE_* directly for their reference results.
-    if(BATCHLAS_HAS_HOST_BACKEND AND test_name MATCHES "^(gesvd_tests|sytrd_sb2st_tests)$")
+    if(BATCHLAS_HAS_HOST_BACKEND AND test_name MATCHES "^(gesvd_tests|sytrd_sb2st_tests|geqrf_tests|getrf_tests)$")
         target_link_libraries(${test_name} PRIVATE ${BATCHLAS_NETLIB_LINK_LIBRARIES})
+    endif()
+    # geqrf_tests compares tau ELEMENTWISE against LAPACKE. NOT because the residual and
+    # orthogonality probes are blind to tau -- that was the original rationale and it is
+    # measured FALSE: v(j) = 1 is implicit in LAPACK's storage, so for a given stored
+    # factor tau is uniquely determined, and armed breaks (store 2v with tau/4; flip
+    # LAPACK's beta sign) each turned the RESIDUAL red as well as tau. What LAPACKE adds
+    # is an INDEPENDENT ORACLE: every other numerical check in the file measures the
+    # kernel against host_form_Q in that same file, so a convention error shared by the
+    # kernel and that oracle passes all of them. evidence: docs/perf/qr.md, "Breaks (h)
+    # and (i) correct the rationale D9 was written from". The define is separate from the
+    # link so the test compiles and skips, rather than failing to build, where no host
+    # backend is present.
+    if(BATCHLAS_HAS_HOST_BACKEND AND test_name STREQUAL "geqrf_tests")
+        target_compile_definitions(${test_name} PRIVATE BATCHLAS_GEQRF_TESTS_HAVE_LAPACKE=1)
+    endif()
+    # getrf_tests compares the tiny tier's ipiv ELEMENTWISE against LAPACKE on
+    # UNSTRUCTURED data. Every other pivot oracle in that file is BatchLAS code: the
+    # combinatorial expect_piv, or the CTA tier -- which shares getrf_cta_device.hh's
+    # lu_cabs1 with the tier under test, so a defect in the pivot METRIC moves both
+    # and leaves the tiny-vs-cta comparisons green.
+    if(BATCHLAS_HAS_HOST_BACKEND AND test_name STREQUAL "getrf_tests")
+        target_compile_definitions(${test_name} PRIVATE BATCHLAS_GETRF_TESTS_HAVE_LAPACKE=1)
     endif()
     # CUDA headers: these #include src/backends/*cublasdx*.hh, which reaches
     # <cuda_runtime_api.h>. CUDA::cudart is wanted here for its include dir.
@@ -248,6 +281,42 @@ function(batchlas_add_test_target test_name)
     if(test_name STREQUAL "options_api_tests")
         target_compile_definitions(${test_name} PRIVATE
             BATCHLAS_OPTIONS_HH_PATH="${PROJECT_SOURCE_DIR}/include/batchlas/blas/options.hh")
+    endif()
+    # error_model_tests reads the installed public headers back to check that
+    # none of them terminates the host process. cmake/BatchLASPackaging.cmake
+    # installs include/batchlas wholesale, so "public" is the whole directory
+    # and there is no per-file allowlist a runtime test could consult instead.
+    # potrf_tests reads potrf_tiny.cc back to check that the tier names no
+    # local_accessor and no group_barrier. Both properties are design invariants
+    # with no observable behaviour on this device -- a work-group barrier in a
+    # partition kernel is a race and a local_accessor is an occupancy cost, and
+    # both stay green in a functional test -- so a source check is the only guard
+    # that can fail.
+    if(test_name STREQUAL "potrf_tests")
+        target_compile_definitions(${test_name} PRIVATE
+            BATCHLAS_POTRF_TINY_CC_PATH="${PROJECT_SOURCE_DIR}/src/extensions/potrf_tiny.cc")
+    endif()
+    # geqrf's tiny kernel DOES carry a local_accessor -- its reflector apply needs the
+    # product tile -- so its source check is the narrower one: no WORK-GROUP barrier and
+    # no reduce_over_group. Both would be silently green here (the first is a race, the
+    # second adds the static shared that re-opens the 48 KB hole for a NEIGHBOURING
+    # kernel), which is why this is a source check and not a behavioural one.
+    if(test_name STREQUAL "geqrf_tests")
+        target_compile_definitions(${test_name} PRIVATE
+            BATCHLAS_GEQRF_TINY_CC_PATH="${PROJECT_SOURCE_DIR}/src/extensions/geqrf_tiny.cc")
+    endif()
+    # getrf_tests reads getrf_tiny.cc back for the same reason potrf_tests reads
+    # potrf_tiny.cc: the register-resident tier declares no local memory and no
+    # barrier of any scope, and both properties are silent on this device -- a
+    # work-group barrier in a partition kernel is a race, and static shared
+    # re-opens the 48 KB hole for a NEIGHBOURING kernel.
+    if(test_name STREQUAL "getrf_tests")
+        target_compile_definitions(${test_name} PRIVATE
+            BATCHLAS_GETRF_TINY_CC_PATH="${PROJECT_SOURCE_DIR}/src/extensions/getrf_tiny.cc")
+    endif()
+    if(test_name STREQUAL "error_model_tests")
+        target_compile_definitions(${test_name} PRIVATE
+            BATCHLAS_INCLUDE_DIR_PATH="${PROJECT_SOURCE_DIR}/include/batchlas")
     endif()
 
     add_test(NAME ${test_name} COMMAND ${test_name})
@@ -291,7 +360,12 @@ set(BATCHLAS_ROUTE_PINNED_TESTS
     # '|' separates several pins for one suite, NOT ';': a semicolon inside a
     # quoted entry is a list separator, so it flattens into this list and breaks
     # the name/value pairing below.
-    geqrf_tests  "BATCHLAS_GEQRF_ROUTE=native|BATCHLAS_ORMQR_ROUTE=native"
+    # ORGQR is pinned here TOO, and it is not redundant: geqrf_tests.cc G9
+    # exercises the orgqr route alongside the geqrf one, and each half is guarded
+    # by its OWN getenv. Without this pin the orgqr half ran unpinned inside the
+    # route-pinned binary, so it asserted the vendor-present default while the
+    # geqrf half was skipped -- an unguarded assertion in a guarded suite.
+    geqrf_tests  "BATCHLAS_GEQRF_ROUTE=native|BATCHLAS_ORGQR_ROUTE=native|BATCHLAS_ORMQR_ROUTE=native"
     orgqr_tests  "BATCHLAS_ORGQR_ROUTE=native|BATCHLAS_ORMQR_ROUTE=native"
     getrf_tests  "BATCHLAS_GETRF_ROUTE=native|BATCHLAS_GETRS_ROUTE=native|BATCHLAS_GETRI_ROUTE=native"
     spmm_tests   "BATCHLAS_SPMM_ROUTE=native"

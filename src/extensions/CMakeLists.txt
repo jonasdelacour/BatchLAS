@@ -12,6 +12,11 @@ set(EXTENSIONS_CTA_SOURCES
     # would be dead weight.
     potrf_cta.cc
     potrf_blocked.cc
+    # WP6/P1: the register-resident TINY tier. Same device-code cluster as the pair
+    # above -- the tests compare the two kernels bit-for-bit, and tiny_device.hh's
+    # helpers are inline templates shared with the getrf/geqrf tiny kernels, so all
+    # three must sit with the sources whose device symbols they call.
+    potrf_tiny.cc
     # WP5 scaffolding, and THIS list for the same W12 reason as potrf's pair: the
     # blocked geqrf driver's panel leaf will BE the CTA device function, shared
     # through a geqrf_cta_device.hh, so the two sources must sit in ONE
@@ -27,6 +32,13 @@ set(EXTENSIONS_CTA_SOURCES
     # follows ormqr_blocked.cc for exactly that reason.
     geqrf_cta.cc
     geqrf_blocked.cc
+    # WP6/P1, the register-resident TINY tier for square n <= 32. HERE because the rule
+    # ":77-86, a source must sit with the sources whose device symbols it calls" places
+    # it: geqrf_tiny.cc reuses geqrf_cta_device.hh's LarfgScalars/geqrf_larfg_scalars
+    # verbatim rather than re-deriving the LAPACK real-beta tau convention, so it shares
+    # a device-code cluster with the pair above. It is also GPU-only, which is what this
+    # object library's NO_CPU_TARGETS configuration (src/CMakeLists.txt:67-71) wants.
+    geqrf_tiny.cc
     # WP6 scaffolding, and THIS list for the same W12 reason as the potrf and
     # geqrf pairs: the blocked getrf driver's diagonal-panel leaf will BE the CTA
     # device function, shared through a getrf_cta_device.hh, so the two sources
@@ -42,6 +54,15 @@ set(EXTENSIONS_CTA_SOURCES
     # getting that wrong is a hard link error, never a silent miscompile (:81-83).
     getrf_cta.cc
     getrf_blocked.cc
+    # WP6/P1, the register-resident tier. HERE for a different reason than the pair
+    # above -- it shares NO device symbol with getrf_cta.cc (its whole body is inline
+    # in the lambda, and it borrows only lu_cabs1, an inline template) -- so the rule
+    # ":77-86, a source must sit with the sources whose device symbols it calls" does
+    # not place it. What places it is that this object library is the only one
+    # configured NO_CPU_TARGETS (src/CMakeLists.txt:67-71) and the tier is GPU-only:
+    # a native_cpu image of these templates would be dead weight. The file's own rule
+    # is "the cluster, not the topic", so the reason is stated rather than assumed.
+    getrf_tiny.cc
     steqr_cta.cc
     stedc_merge_cta.cc
     sytrd_cta.cc

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <batchlas/export.hh>
 #include <batchlas/blas/matrix.hh>
 
 #include <complex>
@@ -15,12 +16,12 @@ namespace csr_generators {
 // The diagonal is made strictly dominant using `diagonal_boost` to keep the matrix
 // well-conditioned for iterative eigensolvers.
 template <typename T>
-Matrix<T, MatrixFormat::CSR> random_sparse_hermitian_csr(int n,
-                                                         float density,
-                                                         int batch_size = 1,
-                                                         unsigned seed = 42,
-                                                         typename base_type<T>::type diagonal_boost = typename base_type<T>::type(1),
-                                                         bool shared_pattern = true);
+BATCHLAS_API Matrix<T, MatrixFormat::CSR> random_sparse_hermitian_csr(int n,
+                                                                      float density,
+                                                                      int batch_size = 1,
+                                                                      unsigned seed = 42,
+                                                                      typename base_type<T>::type diagonal_boost = typename base_type<T>::type(1),
+                                                                      bool shared_pattern = true);
 
 }  // namespace csr_generators
 }  // namespace batchlas

@@ -21,6 +21,7 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <batchlas/settings.hh>
 
 namespace batchlas {
 
@@ -28,14 +29,16 @@ namespace {
 
 enum class LatrdImpl { Legacy, Device, Grid };
 
-// Selected once from BATCHLAS_LATRD_IMPL and cached for the process lifetime.
+// Selected from BATCHLAS_LATRD_IMPL.
 //   (unset) / anything else -> Legacy   (default, bit-for-bit unchanged)
 //   "device"                -> Device   (device-BLAS variant, measured slower)
 //   "grid"                  -> Grid     (multi-work-group-per-matrix panel)
 // Deliberately re-read on every call (not cached) so that a single process can
-// A/B the implementations by flipping the environment variable between runs.
+// A/B the implementations by flipping the environment variable between runs;
+// settings() is re-read on reload, so this stays true, but a static here would
+// pin the first answer for the process and make the A/B vacuous.
 inline LatrdImpl latrd_impl() {
-    const char* v = std::getenv("BATCHLAS_LATRD_IMPL");
+    const char* v = batchlas::settings().selection.latrd_impl.get();
     if (!v) return LatrdImpl::Legacy;
     const std::string s(v);
     if (s == "device") return LatrdImpl::Device;
@@ -92,14 +95,14 @@ inline bool use_device_latrd() { return latrd_impl() == LatrdImpl::Device; }
 // working as designed, since once the batch alone saturates the SMs there is no
 // starvation left for the extra work-groups to absorb.
 inline int64_t latrd_grid_min_n() {
-    return env_positive_int_or("BATCHLAS_LATRD_GRID_MIN_N", 768);
+    return batchlas::settings().geometry.latrd_grid_min_n;
 }
 
 // Grid path is the default above latrd_grid_min_n(); BATCHLAS_LATRD_IMPL still
 // forces either path explicitly at any size, which is what makes the two an
 // intra-run A/B (=legacy restores the old behaviour everywhere).
 inline bool use_grid_latrd(int64_t n) {
-    const char* v = std::getenv("BATCHLAS_LATRD_IMPL");
+    const char* v = batchlas::settings().selection.latrd_impl.get();
     if (v && *v) return latrd_impl() == LatrdImpl::Grid;
     return n >= latrd_grid_min_n();
 }
@@ -340,7 +343,7 @@ inline void* acquire_grid_scratch(Queue& q, size_t bytes) {
     if (!ptr) {
         ptr = sycl::malloc_device(bytes, q->get_device(), cur_ctx);
         if (!ptr) {
-            throw std::runtime_error("latrd_lower_panel(grid): device scratch allocation failed");
+            throw batchlas::device_error("latrd_lower_panel(grid): device scratch allocation failed");
         }
         cap = bytes;
         cached_ctx = cur_ctx;
@@ -1158,7 +1161,7 @@ inline GridLaunch choose_grid_launch(Queue& q, int n, int batch) {
 
     const int cus = static_cast<int>(q.device().get_property(DeviceProperty::MAX_COMPUTE_UNITS));
     const int resident_cap = std::max(1, cus);
-    const int forced_g = env_positive_int_or("BATCHLAS_LATRD_GRID_GROUPS", 0);
+    const int forced_g = batchlas::settings().geometry.latrd_grid_groups;
     int cap = resident_cap / batch;            // integer division, never rounds up
 
     // MEASUREMENT ONLY, DEADLOCK-CAPABLE. The cap above makes the grid path
@@ -1179,7 +1182,10 @@ inline GridLaunch choose_grid_launch(Queue& q, int n, int batch) {
     // satisfies at large batch -- but it rests on an in-order block dispatch the
     // spec does not promise. Run forced-unsafe measurements under `timeout`.
     // Do not use this to relax the default cap; that needs its own argument.
-    if (forced_g > 0 && env_truthy(std::getenv("BATCHLAS_LATRD_GRID_FORCE_UNSAFE"))) {
+    // One of the knobs BATCHLAS_ALLOW_UNSAFE_ENV gates: with that build option
+    // OFF the field is false whatever the environment says, so the cap below
+    // cannot be raised into a deadlock by ambient process state.
+    if (forced_g > 0 && batchlas::settings().unsafe.latrd_grid_force_unsafe) {
         cap = forced_g;
     }
     if (cap < 1) return out;
@@ -1195,7 +1201,7 @@ inline GridLaunch choose_grid_launch(Queue& q, int n, int batch) {
     // One work-item per trailing row, rounded up to a whole sub-group.
     int wg = ((rows + G - 1) / G + 31) / 32 * 32;
     wg = std::min(256, std::max(32, wg));
-    const int forced_wg = env_positive_int_or("BATCHLAS_LATRD_GRID_WG", 0);
+    const int forced_wg = batchlas::settings().geometry.latrd_grid_wg;
     if (forced_wg == 32 || forced_wg == 64 || forced_wg == 128 || forced_wg == 256) {
         wg = forced_wg;
     }
@@ -1281,26 +1287,26 @@ inline void validate_latrd_lower_panel_panel_dims(const MatrixView<T, MatrixForm
                                                   const VectorView<T>& tau,
                                                   const MatrixView<T, MatrixFormat::Dense>& w) {
     if (a.rows() != a.cols()) {
-        throw std::invalid_argument("latrd_lower_panel(panel): A must be square");
+        throw batchlas::invalid_argument("latrd_lower_panel(panel): A must be square");
     }
     if (w.rows() != a.rows()) {
-        throw std::invalid_argument("latrd_lower_panel(panel): W must have same number of rows as A");
+        throw batchlas::invalid_argument("latrd_lower_panel(panel): W must have same number of rows as A");
     }
     const int ib = w.cols();
     if (ib < 0) {
-        throw std::invalid_argument("latrd_lower_panel(panel): invalid W dimensions");
+        throw batchlas::invalid_argument("latrd_lower_panel(panel): invalid W dimensions");
     }
     if (e.size() != ib || tau.size() != ib) {
-        throw std::invalid_argument("latrd_lower_panel(panel): e/tau must have size equal to W.cols()");
+        throw batchlas::invalid_argument("latrd_lower_panel(panel): e/tau must have size equal to W.cols()");
     }
     if (a.batch_size() != e.batch_size() || a.batch_size() != tau.batch_size() || a.batch_size() != w.batch_size()) {
-        throw std::invalid_argument("latrd_lower_panel(panel): batch size mismatch");
+        throw batchlas::invalid_argument("latrd_lower_panel(panel): batch size mismatch");
     }
     if (a.batch_size() < 1) {
-        throw std::invalid_argument("latrd_lower_panel(panel): invalid batch size");
+        throw batchlas::invalid_argument("latrd_lower_panel(panel): invalid batch size");
     }
     if (ib > std::max(0, a.rows() - 1)) {
-        throw std::invalid_argument("latrd_lower_panel(panel): W.cols() must be <= A.rows()-1");
+        throw batchlas::invalid_argument("latrd_lower_panel(panel): W.cols() must be <= A.rows()-1");
     }
 }
 
@@ -1312,29 +1318,29 @@ inline void validate_latrd_lower_panel_dims(const MatrixView<T, MatrixFormat::De
                                             int32_t j0,
                                             int32_t ib) {
     if (a.rows() != a.cols()) {
-        throw std::invalid_argument("latrd_lower_panel: A must be square");
+        throw batchlas::invalid_argument("latrd_lower_panel: A must be square");
     }
     const int n = a.rows();
     if (e.size() != std::max(0, n - 1) || tau.size() != std::max(0, n - 1)) {
-        throw std::invalid_argument("latrd_lower_panel: invalid e/tau sizes");
+        throw batchlas::invalid_argument("latrd_lower_panel: invalid e/tau sizes");
     }
     if (w.rows() != n) {
-        throw std::invalid_argument("latrd_lower_panel: W must have n rows");
+        throw batchlas::invalid_argument("latrd_lower_panel: W must have n rows");
     }
     if (w.cols() < ib) {
-        throw std::invalid_argument("latrd_lower_panel: W must have at least ib columns");
+        throw batchlas::invalid_argument("latrd_lower_panel: W must have at least ib columns");
     }
     if (j0 < 0 || ib < 0) {
-        throw std::invalid_argument("latrd_lower_panel: j0/ib must be non-negative");
+        throw batchlas::invalid_argument("latrd_lower_panel: j0/ib must be non-negative");
     }
     if (j0 > n) {
-        throw std::invalid_argument("latrd_lower_panel: j0 out of range");
+        throw batchlas::invalid_argument("latrd_lower_panel: j0 out of range");
     }
     if (a.batch_size() != e.batch_size() || a.batch_size() != tau.batch_size() || a.batch_size() != w.batch_size()) {
-        throw std::invalid_argument("latrd_lower_panel: batch size mismatch");
+        throw batchlas::invalid_argument("latrd_lower_panel: batch size mismatch");
     }
     if (a.batch_size() < 1) {
-        throw std::invalid_argument("latrd_lower_panel: invalid batch size");
+        throw batchlas::invalid_argument("latrd_lower_panel: invalid batch size");
     }
 }
 

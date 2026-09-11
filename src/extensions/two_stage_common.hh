@@ -26,20 +26,16 @@
 #include <cstdlib>
 #include <string_view>
 #include <type_traits>
+#include <batchlas/settings.hh>
 
 namespace batchlas::two_stage_detail {
 
-// The third copy of this parser, now routed through the shared one. Both spell
-// "a value that does not parse, or parses to <= 0, means unset": a forced band
-// width or block size is meaningless at zero or negative, and these call sites
-// want the computed default there rather than a nonsense launch geometry.
-//
-// batchlas::env_int_or parses with stoi-in-a-try rather than atoi, which differs
-// only on input atoi would silently read as 0 -- and 0 already routes to defval
-// here, so every input maps to the same result as before.
-inline int32_t env_int_or_default(const char* key, int32_t defval) {
-    return static_cast<int32_t>(env_positive_int_or(key, static_cast<int>(defval)));
-}
+// Both knobs below spell "a value that does not parse, or parses to <= 0, means
+// unset": a forced band width or block size is meaningless at zero or negative,
+// and these call sites want the computed default there rather than a nonsense
+// launch geometry. That is env_positive_int_or's contract, and settings.cc
+// applies it to both fields with the same literal defaults spelled here, so the
+// parse is unchanged -- only its timing moved.
 
 inline int32_t choose_two_stage_kd(int32_t n) {
     // Measured with syev_two_stage_benchmark (float, eigenvectors, RTX 4090,
@@ -105,9 +101,7 @@ inline int32_t choose_two_stage_kd(int32_t n) {
     // So: two-stage wins where the batch saturates the device, and loses where it
     // does not, because that is precisely where grid-latrd rescues blocked. Do
     // not restate it as a plain "n >= 1024" rule.
-    const int32_t def = 32;
-
-    const int32_t kd = env_int_or_default("BATCHLAS_SYEV_TWO_STAGE_KD", def);
+    const int32_t kd = batchlas::settings().geometry.syev_two_stage_kd;  // default 32
     return std::min(std::max<int32_t>(1, kd), std::max<int32_t>(1, n - 1));
 }
 
@@ -124,7 +118,7 @@ inline int32_t choose_two_stage_kd(int32_t n) {
 // Both read it in their solve *and* in their *_buffer_size query, so the two stay
 // in lockstep; do not make it stateful or randomize it between the two calls.
 inline bool two_stage_use_givens_chase_for_values() {
-    const char* v = std::getenv("BATCHLAS_SYEV_TWO_STAGE_CHASE");
+    const char* v = batchlas::settings().selection.syev_two_stage_chase.get();
     return v && (std::string_view(v) == "givens");
 }
 
@@ -143,7 +137,7 @@ inline int32_t choose_two_stage_kd_for_job(int32_t n, JobType jobz) {
 }
 
 inline int32_t choose_two_stage_sb2st_block_size() {
-    return env_int_or_default("BATCHLAS_SYEV_TWO_STAGE_SB2ST_BLOCK", 32);
+    return batchlas::settings().geometry.syev_two_stage_sb2st_block;  // default 32
 }
 
 template <typename T>

@@ -15,13 +15,17 @@
 #include <cstdlib>
 #include <string>
 #include <sycl/sycl.hpp>
+#include <batchlas/settings.hh>
 
 namespace batchlas::sycl_gemm {
 
 namespace {
 
+// Its own truthiness dialect -- case-folded and accepting "yes", which
+// env_truthy does not -- so the field carries the raw value and the parser stays
+// here rather than being narrowed onto the shared helper.
 inline bool experimental_kernel_variants_enabled() {
-    const char* raw = std::getenv("BATCHLAS_GEMM_EXPERIMENTAL");
+    const char* raw = batchlas::settings().selection.gemm_experimental.get();
     if (!raw) {
         return false;
     }
@@ -262,7 +266,7 @@ inline bool kernel_variant_matches_name(KernelVariant variant, const std::string
 }
 
 inline KernelVariant forced_kernel_variant() {
-    const char* raw = std::getenv("BATCHLAS_GEMM_SYCL_KERNEL");
+    const char* raw = batchlas::settings().selection.gemm_sycl_kernel.get();
     if (!raw || raw[0] == '\0') {
         return KernelVariant::Direct;
     }
@@ -318,8 +322,10 @@ inline KernelVariant forced_kernel_variant() {
     return KernelVariant::Direct;
 }
 
+// The presence half of the same field forced_kernel_variant() parses, so the
+// two can no longer be handed different strings.
 inline bool has_forced_kernel_variant() {
-    const char* raw = std::getenv("BATCHLAS_GEMM_SYCL_KERNEL");
+    const char* raw = batchlas::settings().selection.gemm_sycl_kernel.get();
     return raw && raw[0] != '\0';
 }
 
@@ -552,18 +558,18 @@ Event gemm_custom(Queue& ctx,
                   ComputePrecision precision) {
     static_cast<void>(precision);
     if (A.batch_size() != B.batch_size() || A.batch_size() != C.batch_size()) {
-        throw std::runtime_error("GEMM SYCL custom path requires matching batch sizes");
+        throw batchlas::invalid_argument("GEMM SYCL custom path requires matching batch sizes");
     }
 
     const auto [m, k] = get_effective_dims(A, transA);
     const auto [k_b, n] = get_effective_dims(B, transB);
     if (k != k_b || C.rows() != m || C.cols() != n) {
-        throw std::runtime_error("GEMM SYCL custom path received incompatible matrix dimensions");
+        throw batchlas::invalid_argument("GEMM SYCL custom path received incompatible matrix dimensions");
     }
 
     const KernelVariant variant = select_kernel_variant(A, B, C, transA, transB);
     if (is_experimental_kernel_variant(variant) && !experimental_kernel_variants_enabled()) {
-        throw std::runtime_error(
+        throw batchlas::unsupported(
             "Requested experimental GEMM SYCL kernel variant without BATCHLAS_GEMM_EXPERIMENTAL enabled");
     }
 

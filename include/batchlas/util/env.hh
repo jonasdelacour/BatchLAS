@@ -1,4 +1,5 @@
 #pragma once
+#include <batchlas/export.hh>
 #include <cstdlib>
 #include <string>
 
@@ -11,6 +12,17 @@
 // accepted, so consolidating is semantics-preserving.
 
 namespace batchlas {
+
+// Declared, not included: <batchlas/settings.hh> pulls in the route vocabulary
+// and this header is reached by nearly every device translation unit in the
+// tree. A declaration is all ScopedEnvVar's constructor and destructor need, and
+// it keeps the include graph of the parsers below exactly as it was.
+//
+// The definition is in src/util/settings.cc. See <batchlas/settings.hh> for what
+// a reload does and, more importantly, for the two cases it does not cover.
+namespace detail {
+BATCHLAS_API void reload_settings();
+}
 
 // NOTE ON THE ARGUMENT: env_truthy/env_falsy take the VALUE of a variable, i.e.
 // they are always called as env_truthy(std::getenv("BATCHLAS_X")). The name-taking
@@ -105,6 +117,15 @@ inline std::string env_string_or(const char* name, const std::string& fallback) 
 //
 // Not thread-safe, because the process environment is not: construct these
 // from a test body or a benchmark setup, never from inside a parallel region.
+//
+// THE RELOAD. batchlas::settings() reads the environment once, under
+// std::call_once, so a setenv on its own is invisible to the library. Both ends
+// of this scope therefore call detail::reload_settings(): the constructor so the
+// pinned value takes effect, and the destructor so it does not leak into every
+// test that runs after this one in the same process. That pair is what lets the
+// fifteen test files using this class keep working unchanged, and it is why a
+// test that calls ::setenv directly instead of constructing one of these will
+// now silently measure the pre-existing value.
 class ScopedEnvVar {
 public:
     // A null `value` UNSETS the variable for the duration, which is how a
@@ -120,6 +141,7 @@ public:
         } else {
             ::unsetenv(name_);
         }
+        detail::reload_settings();
     }
 
     ~ScopedEnvVar() {
@@ -128,6 +150,10 @@ public:
         } else {
             ::unsetenv(name_);
         }
+        // Nested ScopedEnvVars restore innermost-first, so each destructor's
+        // reload leaves the settings agreeing with the environment the enclosing
+        // scope still has pinned.
+        detail::reload_settings();
     }
 
     // Copying would restore the same variable twice, the second time from a

@@ -1,8 +1,7 @@
 #pragma once
 
-// orgqr routing: the one native arm, {Native, Blocked}, is an identity fill plus a routed
-// ormqr, so supports() transcribes ormqr's gates and pinning orgqr needs both
-// BATCHLAS_ORGQR_ROUTE and BATCHLAS_ORMQR_ROUTE. evidence: docs/perf/qr.md#the-vendor-baseline
+// orgqr routing: the one native arm is an identity fill plus a ROUTED ormqr, so supports()
+// transcribes ormqr's gates and pinning orgqr needs BATCHLAS_ORMQR_ROUTE set as well.
 
 #include <batchlas/blas/dispatch/route.hh>
 #include <batchlas/blas/dispatch/route_resolve.hh>
@@ -10,8 +9,7 @@
 namespace batchlas::dispatch {
 
 struct OrgqrShape : OpShape {
-    // Is the orgqr driver compiled -- not merely ormqr_blocked, which is true already.
-    bool blocked_available = false;
+    bool blocked_available = false;  // the ORGQR driver, not ormqr_blocked (already true)
 
     int64_t rows() const { return m; }
     int64_t cols() const { return n; }
@@ -31,8 +29,8 @@ struct RouteTable<Op::orgqr, T> {
 
         if (!s.is_gpu) return false;
 
-        // Unreachable today -- the identity apply is fixed at NoTrans -- but kept so a
-        // future Q^H spelling inherits ormqr's exclusion instead of silently losing it.
+        // Unreachable today (the apply is fixed at NoTrans); kept so a future Q^H
+        // spelling inherits ormqr's exclusion rather than silently losing it.
         if constexpr (is_std_complex_v<T>) {
             if (s.transA == Transpose::Trans) return false;
         }
@@ -55,12 +53,12 @@ struct RouteTable<Op::orgqr, T> {
         }
     }
 
-    // False everywhere, so only a vendor-free build resolves to the native arm;
-    // `is_native && supports` would admit losing cells. evidence: docs/perf/qr.md#orgqr-grid
+    // Native to n = 512 on both extents, every type; the vendor above it. The doc's ratios
+    // mean "beats the per-item cusolverDnXorgqr LOOP", never "beats cuSOLVER".
+    // evidence: docs/perf/qr.md#the-shipped-orgqr-ceiling
     static bool preferred(Route r, const OrgqrShape& s) {
-        static_cast<void>(r);
-        static_cast<void>(s);
-        return false;
+        if (!is_native(r)) return false;
+        return s.cols() <= 512 && s.rows() <= 512;
     }
 
     static constexpr const Route* order_begin() { return kOrgqrOrder; }
@@ -69,10 +67,9 @@ struct RouteTable<Op::orgqr, T> {
     }
 };
 
-// The facade passes vendor_available explicitly; the default hides the vendor-free fallback.
 template <typename T>
 inline Route resolve_orgqr_route(Route forced, const OrgqrShape& s,
-                                 bool vendor_available = true) {
+                                 bool vendor_available = true) {  // facade always passes it
     return resolve_route<Op::orgqr, T>(forced, s, vendor_available);
 }
 

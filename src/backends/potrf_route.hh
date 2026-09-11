@@ -1,8 +1,8 @@
 #pragma once
 
-// The POTRF shape builder and route resolution: device and environment queries
-// live here so the route table reads only its arguments. Do not add src/queue.hh
-// or <sycl/sycl.hpp>; the vendor-free facade includes this. docs/perf/potrf.md
+// POTRF shape builder: device and environment queries live here so the route table reads
+// only its arguments. Do not add src/queue.hh or <sycl/sycl.hpp> -- the vendor-free facade
+// includes this. evidence: docs/perf/potrf.md#what-ships
 
 #include <batchlas/blas/dispatch/route_env.hh>
 #include <batchlas/blas/dispatch/route_potrf.hh>
@@ -39,23 +39,26 @@ inline std::optional<dispatch::PotrfShape> potrf_op_shape(
 
     s.is_gpu = (ctx.device().type == DeviceType::GPU);
 
-    // Enumerated support, not `>= 32`.
-    s.has_sg32 = ctx.device().supports_sub_group_size(32);
+    s.has_sg32 = ctx.device().supports_sub_group_size(32);  // enumerated, not `>= 32`
 
     // Not dead code: this becomes a correctness gate the moment the CTA kernel lands.
     s.heterogeneous_batch = A.is_heterogeneous();
 
-    // Query THIS device: a hardcoded budget makes supports() admit a route that
-    // cannot launch. evidence: docs/perf/potrf.md#the-slm-budget-and-the-fit-ceilings
-    const std::size_t local_mem =
-        static_cast<std::size_t>(ctx.device().get_property(DeviceProperty::LOCAL_MEM_SIZE));
-    s.cta_max_n = sycl_potrf::potrf_cta_max_n_for_slm<T>(local_mem > 4096 ? local_mem - 4096 : 0);
+    // Query THIS device; a hardcoded budget admits a route that cannot launch.
+    // evidence: docs/perf/potrf.md#the-slm-budget-and-the-fit-ceilings
+    const std::size_t budget = resident::device_slm_budget(
+        static_cast<std::size_t>(ctx.device().get_property(DeviceProperty::LOCAL_MEM_SIZE)));
+    s.cta_max_n = sycl_potrf::potrf_cta_max_n_for_slm<T>(budget);
+
+    // No budget argument: the tiny tier holds the matrix in REGISTERS and allocates no
+    // local memory, so its ceiling is a compile-time constant of the type alone.
+    s.tiny_max_n = sycl_potrf::potrf_tiny_max_n<T>();
     s.blocked_available = sycl_potrf::potrf_blocked_available<T>();
     return s;
 }
 
-// The only env read on the potrf path; potrf and potrf_buffer_size must call it
-// with identical arguments or the reported buffer size will not match the call.
+// The only env read on this path, and potrf / potrf_buffer_size must call it with
+// IDENTICAL arguments or the reported size will not match the call.
 template <Backend B, typename T>
 inline dispatch::Route potrf_route(
     const Queue& ctx,

@@ -1,5 +1,6 @@
 #include "../queue.hh"
 #include <batchlas/backend_config.h>
+#include <batchlas/settings.hh>
 #include <batchlas/util/sycl-span.hh>
 #ifndef DEVICE_CAST
     #define DEVICE_CAST(x,ix) (reinterpret_cast<const sycl::device*>(x)[ix])
@@ -10,6 +11,18 @@ class QueueGetEventNoopKernel;
 class QueueEnqueueNoopKernel;
 class QueueExternalWorkBarrierKernel;
 }
+
+// Everything from here to the end of the file is namespace batchlas. These are
+// the out-of-line definitions of Queue/Event/Device, declared in
+// <batchlas/util/sycl-device-queue.hh>, and a member can only be defined out of
+// line in the namespace its class was declared in -- the compatibility shim at
+// the bottom of that header introduces the NAME into the global namespace, which
+// is enough to spell the type but not to define its members.
+//
+// The anonymous namespace above deliberately stays at global scope: it holds
+// SYCL kernel name tags, and moving them renames every kernel mangled from them
+// for no benefit. They are still found from in here by ordinary lookup.
+namespace batchlas {
 
 Event::Event() : impl_(std::make_unique<EventImpl>(sycl::event())) {}
 Event::Event(EventImpl&& impl) : impl_(std::make_unique<EventImpl>(std::move(impl))) {}
@@ -43,11 +56,24 @@ EventImpl* Event::operator ->() const {return impl_.get();}
 EventImpl& Event::operator *() const {return *impl_;}
 
 
+// batchlas::configure() is permitted only until the first Queue exists, and this
+// is where that door closes. The reason is on configure() in
+// <batchlas/settings.hh>: routing and geometry settings are read by
+// *_buffer_size() queries as well as by the matching solve, so a change taken
+// after work has started lets two calls in one process disagree about how much
+// scratch a solve needs.
+//
+// The call goes in the three ROOT constructors. Queue(Device, Backend, bool)
+// delegates to Queue(Device, bool) and so is covered; the move constructor is
+// defaulted, and a Queue that can be moved from is one that was already
+// constructed. note_queue_constructed() is idempotent and noexcept.
 Queue::Queue() : device_(Device::default_device()), in_order_(true) {
+    batchlas::detail::note_queue_constructed();
     impl_ = std::make_unique<QueueImpl>(device_, in_order_);
 }
 
 Queue::Queue(Device dev, bool in_order) : device_(dev), in_order_(in_order) {
+    batchlas::detail::note_queue_constructed();
     impl_ = std::make_unique<QueueImpl>(dev, in_order);
 }
 
@@ -57,6 +83,7 @@ Queue::Queue(Device dev, batchlas::Backend backend, bool in_order) : Queue(dev, 
 
 Queue::Queue(const Queue& base, bool in_order)
     : device_(base.device_), in_order_(in_order), backend_(base.backend_), resolved_backend_(base.resolved_backend_) {
+    batchlas::detail::note_queue_constructed();
     impl_ = std::make_unique<QueueImpl>(base.impl_->get_context(), base.impl_->get_device(), device_, in_order_);
 }
 
@@ -76,7 +103,7 @@ bool Queue::backend_available(batchlas::Backend backend) {
 
 void Queue::set_backend(batchlas::Backend backend) {
     if (backend != batchlas::Backend::AUTO && !backend_available(backend)) {
-        throw std::runtime_error(
+        throw batchlas::unsupported(
             std::string("Queue::set_backend: backend ") + std::string(batchlas::to_string(backend)) +
             " is not compiled into this build of BatchLAS.");
     }
@@ -106,7 +133,7 @@ batchlas::Backend Queue::backend() const {
         choice = Backend::NETLIB;
     }
     if (choice == Backend::AUTO) {
-        throw std::runtime_error("Queue::backend: no backend compiled into this build can serve this device.");
+        throw batchlas::unsupported("Queue::backend: no backend compiled into this build can serve this device.");
     }
     resolved_backend_ = choice;
     return choice;
@@ -169,14 +196,12 @@ void Queue::require_device_accessible(const void* ptr, const char* what) const {
            "  - allocate with sycl::malloc_device/malloc_shared/malloc_host, or\n"
            "    cudaMalloc/cudaMallocManaged on CUDA.\n"
            "See 'Where the memory has to live: the USM contract' in docs/cpp-api.md.";
-    throw std::invalid_argument(msg);
+    throw batchlas::invalid_argument(msg);
 }
 
 size_t Queue::workspace_capacity() const { return impl_->arena_.capacity(); }
 
 bool Queue::trim_workspace() { return impl_->arena_.trim(*impl_); }
-
-namespace batchlas {
 
 Span<std::byte> WorkspaceLease::span() const & { return Span<std::byte>(ptr_, size_); }
 WorkspaceLease::operator Span<std::byte>() const & { return span(); }
@@ -221,8 +246,6 @@ void WorkspaceLease::release_(bool diagnose_out_of_order) noexcept {
     size_ = 0;
     seq_ = 0;
 }
-
-}  // namespace batchlas
 
 
 QueueImpl* Queue::operator->() const {
@@ -343,3 +366,5 @@ bool Device::supports_sub_group_size(size_t size) const {
     }
     return false;
 }
+
+}  // namespace batchlas

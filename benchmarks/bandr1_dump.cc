@@ -2,6 +2,7 @@
 #include <batchlas/blas/matrix.hh>
 
 #include <batchlas/backend_config.h>
+#include <batchlas/util/env.hh>
 
 #include <algorithm>
 #include <complex>
@@ -57,8 +58,22 @@ inline bool is_flag(const char* s, const char* name) {
     return s && name && std::strcmp(s, name) == 0;
 }
 
+// A bare ::setenv plus an explicit reload, NOT batchlas::ScopedEnvVar, and the
+// choice is deliberate: this is a main() pinning process-wide state for the one
+// reduction the tool exists to run. There is no "after" for a guard to restore
+// to (run_one returns straight into main's return), two of the four knobs below
+// are set conditionally so a scoped guard would become std::optional members for
+// no gain, and the values must outlive the Queue built under them.
+//
+// The reload is what makes any of it visible. batchlas::settings() snapshots the
+// environment ONCE, and that snapshot is already taken before main() -- the
+// always-linked dispatch coverage TU reads settings() from a namespace-scope
+// dynamic initialiser -- so a ::setenv on its own leaves this tool writing no
+// dumps at all. Reloading inside the helper rather than once after the block is
+// what stops a fifth knob added later from silently reopening that hole.
 inline void set_env(const char* key, const std::string& value) {
     ::setenv(key, value.c_str(), 1);
+    batchlas::detail::reload_settings();
 }
 
 template <Backend B, typename T>
@@ -75,7 +90,9 @@ int run_one(const std::string& dump_dir,
             bool in_order,
             bool dump_step,
             bool abw_only) {
-    // Drive dumping via env vars used by src/extensions/band_reduction.cc.
+    // Drive dumping via env vars used by src/extensions/band_reduction.cc, which
+    // re-reads settings().diagnostics.dump_bandr1 on every step; set_env above
+    // reloads that snapshot, so these take effect before the Queue is built.
     set_env("BATCHLAS_DUMP_BANDR1_DIR", dump_dir);
     if (dump_step) {
         set_env("BATCHLAS_DUMP_BANDR1_STEP", "1");

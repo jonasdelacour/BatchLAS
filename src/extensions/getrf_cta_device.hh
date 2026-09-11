@@ -1,19 +1,9 @@
 #pragma once
 
-// The native batched GETRF panel factorisation: all of its device code.
-// `getf2_panel_device` is LAPACK ?GETF2 -- unblocked right-looking LU with partial
-// pivoting -- over a `Tile` supplying `at(r, c)`, instantiated on a local_accessor
-// (resident CTA tier) and on a raw global pointer (blocked tier's panel leaf).
-// Windows: docs/perf/lu.md#getrf-window-evidence.
-//
-// The pivot search is a sub-group butterfly plus a scan over 32 SLM slots, not
-// sycl::reduce_over_group: the collective fails to launch, deterministically, near
-// 48 KB of local memory (docs/perf/lu.md#the-48-kb-launch-hole).
-// The pivot metric is LAPACK's cabs1, not the modulus cuBLAS uses for complex, so a
-// pivot test must use the HOST as oracle (docs/perf/lu.md#correctness-findings).
-// info is exact-zero, 1-based, global, first-failure-wins; no epsilon pivot floor.
-// Barriers B1..B4 sit at the top level of the k loop, whose trip count is
-// kernel-uniform; the launchers add B0 after the tile load and B5 before store-back.
+// All of the native batched GETRF panel's device code. FOUR spellings here are wrong
+// answers or launch failures if changed -- the butterfly pivot search, the cabs1 pivot
+// metric, info's exact-zero/1-based/first-failure rule, and the top-of-loop barriers.
+// evidence: docs/perf/lu.md#the-shape-of-the-getrf-device-code
 
 #include "../sycl/device_scalar.hh"
 
@@ -58,27 +48,25 @@ struct LuGlobalTile {
     }
 };
 
-template <typename D, typename LocalAcc>
-struct LuLocalTile {
-    LocalAcc a;
-    int ld;
-    // ld IS PADDED ODD by the launcher: a row exchange walks `wg` work-items at
-    // stride ld, and an even ld puts them all in one SLM bank.
-    auto& at(int r, int c) const {
-        return a[static_cast<std::size_t>(r) +
-                 static_cast<std::size_t>(c) * static_cast<std::size_t>(ld)];
-    }
-};
+// Own base per matrix (G share one accessor), and the launcher pads ld ODD against a
+// bank conflict. evidence: docs/perf/lu.md#the-shape-of-the-getrf-device-code
+template <typename D> using LuRawTile = LuGlobalTile<D>;
 
-// Per-sub-group argmax slots. CONSTANT, not a function of the work-group width, so
-// the capacity query, the fit predicate and the launcher agree on the SLM footprint.
+// CONSTANT, not a function of wg width: the capacity query, the fit predicate and the
+// launcher must agree on the SLM footprint.
 inline constexpr int kLuRedSlots = 32;
+
+// Which group the panel's phase barriers synchronise. SubGroup is what makes G-packing
+// legal: the G sub-groups sharing a work-group then never synchronise with each other.
+// Choosing WorkGroup for a packed launch is a RACE by construction -- wrong answers, not
+// a launch failure -- so the launcher derives the two together and asserts the pairing.
+enum class LuScope { SubGroup, WorkGroup };
 
 // LAPACK ?GETF2 on an m x n tile, in place, for `kmax` (not min(m, n)) steps.
 // `piv_base` is the panel's first GLOBAL row index, so ipiv and info come out global
 // and 1-based with no fix-up pass. `info_item` is READ as well as written
 // (first-failure-wins across panels), so both launchers zero it beforehand.
-template <typename D, typename Tile, typename ValAcc, typename IdxAcc>
+template <typename D, LuScope SC, typename Tile, typename ValAcc, typename IdxAcc>
 inline void getf2_panel_device(sycl::nd_item<1> it, Tile A, int m, int n, int kmax,
                                int* piv_item, int piv_base, int32_t* info_item,
                                ValAcc rval, IdxAcc ridx) {
@@ -86,12 +74,27 @@ inline void getf2_panel_device(sycl::nd_item<1> it, Tile A, int m, int n, int km
 
     const auto g = it.get_group();
     const auto sg = it.get_sub_group();
-    const int wg = static_cast<int>(it.get_local_range(0));
-    const int tid = static_cast<int>(it.get_local_linear_id());
     const int lane = static_cast<int>(sg.get_local_linear_id());
     const int nlanes = static_cast<int>(sg.get_local_linear_range());
     const int team = static_cast<int>(sg.get_group_linear_id());
     const int nteams = static_cast<int>(sg.get_group_linear_range());
+
+    // Under SubGroup scope the work-group holds several independent matrices, so the
+    // item's own lane index and the sub-group width -- not the work-group's -- are what
+    // stride this matrix's rows.
+    const int wg = (SC == LuScope::SubGroup) ? nlanes
+                                             : static_cast<int>(it.get_local_range(0));
+    const int tid = (SC == LuScope::SubGroup) ? lane
+                                              : static_cast<int>(it.get_local_linear_id());
+
+    // The phase barriers, at the scope this instantiation owns.
+    const auto phase_barrier = [&]() {
+        if constexpr (SC == LuScope::SubGroup) {
+            sycl::group_barrier(sg);
+        } else {
+            sycl::group_barrier(g);
+        }
+    };
 
     int32_t info_local = (tid == 0) ? *info_item : 0;
 
@@ -108,19 +111,32 @@ inline void getf2_panel_device(sycl::nd_item<1> it, Tile A, int m, int n, int km
             const int oi = sycl::permute_group_by_xor(sg, bi, off);
             if (ov > bv || (ov == bv && oi < bi)) { bv = ov; bi = oi; }
         }
-        if (lane == 0) {
-            rval[static_cast<std::size_t>(team)] = bv;
-            ridx[static_cast<std::size_t>(team)] = bi;
-        }
-        sycl::group_barrier(g);                                        // B1
+        R fv;
+        int p;
+        if constexpr (SC == LuScope::SubGroup) {
+            // The butterfly above already spans every lane that scanned this column, so
+            // there is nothing to combine and no B1: the SLM slots and the cross-team
+            // scan exist only to join several sub-groups working on ONE matrix.
+            fv = bv;
+            p = bi;
+            static_cast<void>(rval);
+            static_cast<void>(ridx);
+        } else {
+            if (lane == 0) {
+                rval[static_cast<std::size_t>(team)] = bv;
+                ridx[static_cast<std::size_t>(team)] = bi;
+            }
+            sycl::group_barrier(g);                                    // B1
 
-        R fv = R(-1);
-        int p = m;
-        for (int t = 0; t < nteams; ++t) {
-            const R v = rval[static_cast<std::size_t>(t)];
-            const int ii = ridx[static_cast<std::size_t>(t)];
-            if (v > fv || (v == fv && ii < p)) { fv = v; p = ii; }
+            fv = R(-1);
+            p = m;
+            for (int t = 0; t < nteams; ++t) {
+                const R v = rval[static_cast<std::size_t>(t)];
+                const int ii = ridx[static_cast<std::size_t>(t)];
+                if (v > fv || (v == fv && ii < p)) { fv = v; p = ii; }
+            }
         }
+        static_cast<void>(fv);
         if (p >= m) p = k;   // unreachable: k < m, so column k always has a row
 
         if (tid == 0) {
@@ -138,7 +154,7 @@ inline void getf2_panel_device(sycl::nd_item<1> it, Tile A, int m, int n, int km
                 y = t;
             }
         }
-        sycl::group_barrier(g);                                        // B2
+        phase_barrier();                                               // B2
 
         const D d = A.at(k, k);
         if (batchlas::sycl_device::dev_is_zero(d)) {
@@ -161,7 +177,7 @@ inline void getf2_panel_device(sycl::nd_item<1> it, Tile A, int m, int n, int km
                 }
             }
         }
-        sycl::group_barrier(g);                                        // B3
+        phase_barrier();                                               // B3
 
         // Flattened so the work-group saturates when one extent is short; the two
         // runtime divisions beat a power-of-two split (docs/perf/lu.md#negative-results).
@@ -177,7 +193,7 @@ inline void getf2_panel_device(sycl::nd_item<1> it, Tile A, int m, int n, int km
                     batchlas::sycl_device::dev_mul(A.at(i, k), A.at(k, j)));
             }
         }
-        sycl::group_barrier(g);                                        // B4
+        phase_barrier();                                               // B4
     }
 
     if (tid == 0) {

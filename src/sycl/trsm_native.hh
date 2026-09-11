@@ -3,6 +3,7 @@
 // Native batched TRSM declarations: V1 (CTA solver, one work-group per matrix)
 // and V2 (blocked driver that calls V1 on each diagonal block). See docs/perf/trsm.md.
 
+#include "../util/internal-api.hh"
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>
 
@@ -20,14 +21,14 @@ template <typename T>
 bool trsm_blocked_available();
 
 template <typename T>
-Event trsm_native_v1_dispatch(Queue& ctx,
-                              const MatrixView<T, MatrixFormat::Dense>& A,
-                              const MatrixView<T, MatrixFormat::Dense>& B,
-                              T alpha,
-                              Side side,
-                              Uplo uplo,
-                              Transpose transA,
-                              Diag diag);
+BATCHLAS_INTERNAL_API Event trsm_native_v1_dispatch(Queue& ctx,
+                                                    const MatrixView<T, MatrixFormat::Dense>& A,
+                                                    const MatrixView<T, MatrixFormat::Dense>& B,
+                                                    T alpha,
+                                                    Side side,
+                                                    Uplo uplo,
+                                                    Transpose transA,
+                                                    Diag diag);
 
 // Trailing-update GEMM. An EMPTY function means sycl_gemm::gemm_custom, keeping
 // this layer dispatch-free; inject the routed gemm where dispatch is available,
@@ -42,14 +43,14 @@ using TrsmTrailingGemm = std::function<Event(
     T, T, Transpose, Transpose, ComputePrecision)>;
 
 template <typename T>
-Event trsm_native_blocked(Queue& ctx,
-                          const MatrixView<T, MatrixFormat::Dense>& A,
-                          const MatrixView<T, MatrixFormat::Dense>& B,
-                          T alpha,
-                          Side side,
-                          Uplo uplo,
-                          Transpose transA,
-                          Diag diag,
-                          TrsmTrailingGemm<T> trailing_gemm = {});
+BATCHLAS_INTERNAL_API Event trsm_native_blocked(Queue& ctx,
+                                                const MatrixView<T, MatrixFormat::Dense>& A,
+                                                const MatrixView<T, MatrixFormat::Dense>& B,
+                                                T alpha,
+                                                Side side,
+                                                Uplo uplo,
+                                                Transpose transA,
+                                                Diag diag,
+                                                TrsmTrailingGemm<T> trailing_gemm = {});
 
 } // namespace batchlas::sycl_trsm

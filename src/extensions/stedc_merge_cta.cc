@@ -12,6 +12,8 @@
 #include "../math-helpers.hh"
 #include "stedc_secular.hh"
 #include "stedc_merge_kernels.hh"
+#include "info_span.hh"
+#include "info_span.hh"
 
 #include <cassert>
 #include <algorithm>
@@ -342,6 +344,11 @@ template <typename T>
 struct RocRoot {
     T origin;
     T tau;
+    // Whether the bisection/interpolation loop below broke on its convergence
+    // test rather than running out of max_iter. Carried in the struct rather than
+    // added as an out-parameter so the six thin wrappers around the two generic
+    // solvers (partition/wg x roc/ext) need no signature change at all.
+    bool converged;
 };
 
 template <typename T, typename Adapter>
@@ -413,7 +420,7 @@ inline RocRoot<T> solve_root_roc_generic(const Adapter& adapter,
     T ratio_sq = state.ratio_sq;
 
     if (adapter.broadcast(sycl::fabs(eval.secular_value) <= std::numeric_limits<T>::epsilon() * err)) {
-        return {origin, tau};
+        return {origin, tau, true};   // converged before the first iteration
     }
 
     update_bounds(eval.secular_value, tau, lower_bound, upper_bound);
@@ -435,8 +442,13 @@ inline RocRoot<T> solve_root_roc_generic(const Adapter& adapter,
     bool use_fixed = (origin_lower ? -eval.secular_value : eval.secular_value)
                      > (sycl::fabs(prev_f) / T(10));
 
+    // Hoisted out of the loop condition: on cap exhaustion this function used to
+    // just return {origin, tau} with no signal at all, so a root that never
+    // converged was indistinguishable from one that did.
+    bool converged = false;
     for (int32_t iter = 1; iter < max_iter; ++iter) {
         if (adapter.broadcast(sycl::fabs(eval.secular_value) <= std::numeric_limits<T>::epsilon() * err)) {
+            converged = true;
             break;
         }
 
@@ -463,7 +475,7 @@ inline RocRoot<T> solve_root_roc_generic(const Adapter& adapter,
         }
     }
 
-    return {origin, tau};
+    return {origin, tau, converged};
 }
 
 template <typename T, typename Adapter>
@@ -530,7 +542,7 @@ inline RocRoot<T> solve_root_ext_generic(const Adapter& adapter,
             - T(8) * (eval.upper_sum + eval.lower_sum) - eval.upper_sum + rho_inv;
 
     if (sycl::fabs(eval.secular_value) <= std::numeric_limits<T>::epsilon() * err) {
-        return {origin, tau};
+        return {origin, tau, true};   // converged before the first iteration
     }
 
     update_bounds(eval.secular_value, tau, lower_bound, upper_bound);
@@ -562,8 +574,10 @@ inline RocRoot<T> solve_root_ext_generic(const Adapter& adapter,
     err = eval.error_estimate + sycl::fabs(tau) * (eval.upper_derivative + eval.lower_derivative)
           - T(8) * (eval.upper_sum + eval.lower_sum) - eval.upper_sum + rho_inv;
 
+    bool converged = false;
     for (int32_t iter = 1; iter < max_iter; ++iter) {
         if (adapter.broadcast(sycl::fabs(eval.secular_value) <= std::numeric_limits<T>::epsilon() * err)) {
+            converged = true;
             break;
         }
 
@@ -593,7 +607,7 @@ inline RocRoot<T> solve_root_ext_generic(const Adapter& adapter,
               - T(8) * (eval.upper_sum + eval.lower_sum) - eval.upper_sum + rho_inv;
     }
 
-    return {origin, tau};
+    return {origin, tau, converged};
 }
 
 template <typename T, typename Partition>
@@ -944,7 +958,9 @@ void stedc_merge_fused_cta_impl(Queue& ctx,
                                 const Span<int32_t>& n_reduced,
                                 const MatrixView<T, MatrixFormat::Dense>& Qprime,
                                 const VectorView<T>& temp_lambdas,
-                                const StedcParams<T>& params) {
+                                const StedcParams<T>& params,
+                                int32_t* info,
+                                int64_t info_nodes_per_item) {
     const auto batch_size = eigenvalues.batch_size();
     const int32_t nloc = static_cast<int32_t>(Qprime.rows());
     const int32_t sg_size = 32;
@@ -956,6 +972,10 @@ void stedc_merge_fused_cta_impl(Queue& ctx,
                                            kernel_max_wg);
 
     const bool do_rescale = params.enable_rescale;
+    // Locals so the kernel's `[=]` copies a pointer and a scalar; nullptr makes
+    // info_report a no-op. See src/extensions/info_span.hh.
+    int32_t* const info_dev = info;
+    const int64_t nodes_per_item = info_nodes_per_item;
 
     ctx->submit([&](sycl::handler& h) {
         auto Qview = Qprime.kernel_view();
@@ -1010,6 +1030,14 @@ void stedc_merge_fused_cta_impl(Queue& ctx,
 
                     if (lane == 0) {
                         temp_lambdas(root_ix, bid) = root.origin + root.tau;
+                        // This is the one merge arm that honours params.max_sec_iter,
+                        // so it is also the one a forced-non-convergence test can
+                        // drive from the public StedcParams.
+                        if (!root.converged) {
+                            detail::info_report(info_dev,
+                                                detail::info_item(static_cast<int64_t>(bid), nodes_per_item),
+                                                1);
+                        }
                     }
                     write_denominator_column(Q_bid, d_prob, dd, root_ix, root.origin, root.tau, lane, P);
                 }
@@ -1039,7 +1067,9 @@ void stedc_merge_fused_wg(Queue& ctx,
                           const Span<int32_t>& n_reduced,
                           const MatrixView<T, MatrixFormat::Dense>& Qprime,
                           const VectorView<T>& temp_lambdas,
-                          const StedcParams<T>& params) {
+                          const StedcParams<T>& params,
+                          int32_t* info,
+                          int64_t info_nodes_per_item) {
     const int32_t nloc = static_cast<int32_t>(Qprime.rows());
     const auto batch_size = eigenvalues.batch_size();
     const auto dev = ctx->get_device();
@@ -1051,6 +1081,8 @@ void stedc_merge_fused_wg(Queue& ctx,
                                            kernel_max_wg);
 
     const bool do_rescale = params.enable_rescale;
+    int32_t* const info_dev = info;
+    const int64_t nodes_per_item = info_nodes_per_item;
 
     ctx->submit([&](sycl::handler& h) {
         auto Qview = Qprime.kernel_view();
@@ -1097,6 +1129,11 @@ void stedc_merge_fused_wg(Queue& ctx,
 
                     if (tid == 0) {
                         temp_lambdas(root_ix, bid) = root.origin + root.tau;
+                        if (!root.converged) {
+                            detail::info_report(info_dev,
+                                                detail::info_item(static_cast<int64_t>(bid), nodes_per_item),
+                                                1);
+                        }
                     }
                     write_denominator_column(Q_bid, d_prob, dd, root_ix, root.origin, root.tau, tid, bdim);
                     // (WG variant: kept sequential as the reference path.)
@@ -1121,11 +1158,13 @@ void stedc_merge_fused_cta(Queue& ctx,
                            const Span<int32_t>& n_reduced,
                            const MatrixView<T, MatrixFormat::Dense>& Qprime,
                            const VectorView<T>& temp_lambdas,
-                           const StedcParams<T>& params) {
+                           const StedcParams<T>& params,
+                           int32_t* info,
+                           int64_t info_nodes_per_item) {
     const bool has32 = device_has_sub_group_size(ctx, 32);
 
     if (!has32) {
-        stedc_merge_fused<B, T>(ctx, eigenvalues, v, rho, n_reduced, Qprime, temp_lambdas, params);
+        stedc_merge_fused<B, T>(ctx, eigenvalues, v, rho, n_reduced, Qprime, temp_lambdas, params, info, info_nodes_per_item);
         return;
     }
 
@@ -1134,23 +1173,23 @@ void stedc_merge_fused_cta(Queue& ctx,
     const bool use_wg_path = requested > max_sg;
 
     if (use_wg_path) {
-        stedc_merge_fused_wg<B, T>(ctx, eigenvalues, v, rho, n_reduced, Qprime, temp_lambdas, params);
+        stedc_merge_fused_wg<B, T>(ctx, eigenvalues, v, rho, n_reduced, Qprime, temp_lambdas, params, info, info_nodes_per_item);
         return;
     }
 
     if (requested <= 4) {
-        stedc_merge_fused_cta_impl<B, T, 4>(ctx, eigenvalues, v, rho, n_reduced, Qprime, temp_lambdas, params);
+        stedc_merge_fused_cta_impl<B, T, 4>(ctx, eigenvalues, v, rho, n_reduced, Qprime, temp_lambdas, params, info, info_nodes_per_item);
     } else if (requested <= 8) {
-        stedc_merge_fused_cta_impl<B, T, 8>(ctx, eigenvalues, v, rho, n_reduced, Qprime, temp_lambdas, params);
+        stedc_merge_fused_cta_impl<B, T, 8>(ctx, eigenvalues, v, rho, n_reduced, Qprime, temp_lambdas, params, info, info_nodes_per_item);
     } else if (requested <= 16) {
-        stedc_merge_fused_cta_impl<B, T, 16>(ctx, eigenvalues, v, rho, n_reduced, Qprime, temp_lambdas, params);
+        stedc_merge_fused_cta_impl<B, T, 16>(ctx, eigenvalues, v, rho, n_reduced, Qprime, temp_lambdas, params, info, info_nodes_per_item);
     } else {
-        stedc_merge_fused_cta_impl<B, T, 32>(ctx, eigenvalues, v, rho, n_reduced, Qprime, temp_lambdas, params);
+        stedc_merge_fused_cta_impl<B, T, 32>(ctx, eigenvalues, v, rho, n_reduced, Qprime, temp_lambdas, params, info, info_nodes_per_item);
     }
 }
 
 #define STEDC_MERGE_FUSED_CTA_INSTANTIATE(back, fp) \
-    template void stedc_merge_fused_cta<back, BATCHLAS_UNPAREN fp>(Queue&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, const Span<BATCHLAS_UNPAREN fp>&, const Span<int32_t>&, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, const VectorView<BATCHLAS_UNPAREN fp>&, const StedcParams<BATCHLAS_UNPAREN fp>&);
+    template void stedc_merge_fused_cta<back, BATCHLAS_UNPAREN fp>(Queue&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, const Span<BATCHLAS_UNPAREN fp>&, const Span<int32_t>&, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, const VectorView<BATCHLAS_UNPAREN fp>&, const StedcParams<BATCHLAS_UNPAREN fp>&, int32_t*, int64_t);
 
 BATCHLAS_INSTANTIATE_REAL_ALL_BACKENDS(STEDC_MERGE_FUSED_CTA_INSTANTIATE)
 

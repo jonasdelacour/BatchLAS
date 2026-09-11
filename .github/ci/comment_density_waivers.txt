@@ -1,0 +1,165 @@
+# Comment-density waivers for .github/ci/check_comment_density.py
+#
+# One `path # reason` per line, the path relative to the repo root (fnmatch
+# globs allowed). The reason is mandatory and is printed next to the file every
+# run, so a waiver has to keep justifying itself out loud.
+#
+# A waiver is for a file that genuinely earns more prose than the 18% ceiling --
+# not for evidence that has not been moved to docs/perf/ yet. If the comments
+# are measured numbers, ratio tables, A/B results, saturation ladders or
+# bracketing cells, the fix is docs/perf/<op>.md plus an
+# `evidence: docs/perf/<page>.md#<anchor>` pointer, not a line here.
+#
+# A waiver that matches no scanned file is an error: delete it when the file
+# goes, rather than leaving the gate open for whatever takes that name next.
+
+include/batchlas/blas/dispatch/route_ormqr.hh    # predates the budget, not touched by the small-n campaign
+include/batchlas/blas/dispatch/route_compiled.hh # predates the budget, not touched by the small-n campaign
+src/util/resident_capacity.hh                    # 45 lines of constexpr helpers, one invariant each (barrier scope, the non-monotone walk, the single budget spelling); every measured number is in docs/perf/potrf.md#the-shared-helper-budget-slice-walk-and-pack
+src/extensions/geqrf_tiny_device.hh              # 129 lines of constexpr gates and tables, 16 invariants each of which breaks silently (the ceil8 bank rule, the pin, the one-step fixed point, the odd tile stride, the separate y vector, no reqd_work_group_size); every measured number is in docs/perf/qr.md#the-tiny-tier-register-table, #the-chunk-width-and-the-one-cell-that-is-pinned and #the-two-partition-butterflies. 36.45% -> 20.73%; the remaining 5 lines cannot go without deleting a rationale.
+
+# Files this campaign touched that still earn more than the ceiling.
+src/backends/orgqr_route.hh  # a shape-builder header, the same form and density as its untouched siblings src/backends/getrs_route.hh (56.72%) and gemv_route.hh (56.30%); 46 code lines of pure dispatch plumbing where every one carries a trap (the two-variable ORGQR/ORMQR pin, the deliberate absence of has_sg32, the fixed Left/NoTrans apply that makes the inherited complex-Trans gate honest). No measured numbers remain in it -- those are at docs/perf/qr.md#the-shipped-orgqr-ceiling. A density ceiling on a 46-line file measures the file's size, not its prose.
+
+# ---------------------------------------------------------------------
+# BATCH WAIVER, 2026-09-11. The 18% ceiling was introduced by the small-n
+# factorization campaign after these files were written, and the repo
+# aggregate (133 of the tree's files are listed here) hid the
+# per-file problem for years. They are waived EXPLICITLY, one line each
+# rather than by glob, so that a NEW file over the ceiling still fails the
+# gate on the day it is written. Burn these down opportunistically: delete
+# a line when you bring its file into band. Do NOT add to this block.
+# ---------------------------------------------------------------------
+benchmarks/gemm_benchmark.cc                          # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+benchmarks/gemm_vs_level3_benchmark.cc                # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+benchmarks/gesvd_relacc.cc                            # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+benchmarks/gesvd_vendor_benchmark.cc                  # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+benchmarks/her2k_benchmark.cc                         # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+benchmarks/herk_benchmark.cc                          # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+benchmarks/ortho_benchmark.cc                         # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+benchmarks/syevx_benchmark.cc                         # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/blas/csr_generators.hh               # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/blas/dispatch/coverage.hh            # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/blas/dispatch/no_route.hh            # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/blas/dispatch/op.hh                  # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/blas/dispatch/route_gemv.hh          # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/blas/dispatch/route_getri.hh         # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/blas/dispatch/route_resolve.hh       # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/blas/dispatch/route_spmm.hh          # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/blas/dispatch/vendor_available.hh    # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/blas/enums.hh                        # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/blas/extensions.hh                   # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/blas/extra.hh                        # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/blas/functions/gemm.hh               # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/blas/functions/gemv.hh               # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/blas/functions/geqrf.hh              # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/blas/functions/gesvd.hh              # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/blas/functions/getrf.hh              # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/blas/functions/getri.hh              # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/blas/functions/getrs.hh              # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/blas/functions/hemm.hh               # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/blas/functions/her2k.hh              # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/blas/functions/herk.hh               # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/blas/functions/iluk.hh               # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/blas/functions/orgqr.hh              # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/blas/functions/potrf.hh              # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/blas/functions/syev.hh               # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/blas/functions/symm.hh               # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/blas/functions/syr2k.hh              # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/blas/functions/syrk.hh               # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/blas/functions/trmm.hh               # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/blas/functions/trsm.hh               # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/blas/linalg-ops.hh                   # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/blas/linalg.hh                       # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/blas/queue-dispatch.hh               # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/error.hh                             # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/internal/ormqr_blocked.hh            # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/internal/sytrd_blocked.hh            # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/settings.hh                          # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/sycl_interop.hh                      # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/tuning_params.hh                     # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/util/env.hh                          # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/util/kernel-heuristics.hh            # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/util/mempool.hh                      # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/util/sycl-device-queue.hh            # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/util/sycl-local-accessor-helpers.hh  # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/util/sycl-span.hh                    # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+include/batchlas/util/workspace.hh                    # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/backends/batch_launch.hh                          # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/backends/cublasdx_dispatch_common.hh              # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/backends/gemm_heterogeneous.hh                    # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/backends/gemm_variant.hh                          # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/backends/gemv_route.hh                            # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/backends/getrs_route.hh                           # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/backends/level3_coverage.hh                       # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/backends/level3_fused.hh                          # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/backends/level3_fused_absent.cc                   # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/backends/level3_shape.hh                          # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/backends/level3_vendor_fallback.hh                # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/backends/route_common.hh                          # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/backends/syr2k_custom_dispatch.cc                 # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/backends/syr2k_triangular_tiles.hh                # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/backends/syrk_custom_dispatch.cc                  # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/backends/syrk_custom_dispatch.hh                  # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/backends/syrk_gram_tiles.hh                       # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/backends/triangular_expand.hh                     # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/backends/triangular_tiles.hh                      # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/backends/trmm_custom_dispatch.cc                  # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/backends/trmm_triangular_tiles.hh                 # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/backends/trsm_route.hh                            # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/dispatch/entry_points/eigen.cc                    # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/dispatch/entry_points/sparse.cc                   # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/expansion_budget.hh                               # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/extensions/gesvdj_cta.cc                          # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/extensions/getri_native.hh                        # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/extensions/info_span.hh                           # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/extensions/larft_wy.hh                            # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/extensions/latrd_lower_panel.cc                   # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/extensions/ortho.cc                               # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/extensions/ritz_values.cc                         # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/extensions/sg_compat.hh                           # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/extensions/stedc.cc                               # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/extensions/stedc_internal.hh                      # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/extensions/stedc_levels_plan.hh                   # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/extensions/stedc_merge_kernels.hh                 # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/extensions/stedc_secular.hh                       # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/extensions/stein.cc                               # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/extensions/steqr_cta_device.hh                    # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/extensions/syev_blocked.cc                        # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/extensions/syev_cta_fused.cc                      # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/extensions/syev_jacobi_cta.cc                     # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/extensions/syevx.cc                               # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/extensions/syevx_direct.cc                        # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/extensions/syevx_direct_subset.cc                 # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/extensions/syevx_filtered.cc                      # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/extensions/syevx_lobpcg.cc                        # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/extensions/symmetric_product_fold.hh              # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/extensions/sytrd_cta_device.hh                    # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/extensions/sytrd_sb2st_hh.cc                      # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/extensions/sytrd_sb2st_hh.hh                      # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/extensions/sytrd_sy2sb.cc                         # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/extensions/trmm.cc                                # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/extensions/two_stage_common.hh                    # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/extensions/uplo_mirror.hh                         # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/queue.hh                                          # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/sycl/device_scalar.hh                             # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/sycl/gemm/register_128x128.hh                     # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/sycl/gemm/register_launchers.hh                   # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/sycl/gemv_native.hh                               # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/sycl/spmm_native.hh                               # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/util/internal-api.hh                              # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/util/queue-impl.cc                                # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/util/settings.cc                                  # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+src/util/template-instantiations.hh                   # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+tests/bdsdc_tests.cc                                  # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+tests/error_model_tests.cc                            # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+tests/herk_tests.cc                                   # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+tests/lanczos_tests.cc                                # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+tests/mempool_tests.cc                                # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+tests/ormqr_tests.cc                                  # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+tests/settings_tests.cc                               # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+tests/sg_compat_tests.cc                              # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+tests/stedc_tests.cc                                  # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+tests/syev_tests.cc                                   # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+tests/syevx_range_tests.cc                            # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
+tests/syevx_tests.cc                                  # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign

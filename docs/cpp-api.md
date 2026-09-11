@@ -26,10 +26,26 @@ int main() {
 }
 ```
 
-`Matrix`, `MatrixView`, `gemm`, `potrf` and the rest of the numerical surface are
-in namespace `batchlas`. `Queue`, `Device`, `Event`, `Span` and `UnifiedVector`
-are in the **global** namespace: they need no qualification and no
-`using namespace batchlas;`.
+**Everything BatchLAS declares is in namespace `batchlas`** — `Matrix`,
+`MatrixView`, `gemm`, `potrf` and the rest of the numerical surface, and also
+`Queue`, `Device`, `Event`, `Span`, `UnifiedVector` and `BumpAllocator`. Write
+`using namespace batchlas;`, or qualify.
+
+Those last six used to be declared at *global* scope, which meant BatchLAS
+claimed six of the most collision-prone names in GPU C++ in every consumer that
+included a header. They moved in v0.2. For one release each of the affected
+headers still ends with a compatibility block that re-exports its own names
+globally, so existing code keeps compiling unchanged:
+
+```cpp
+#ifndef BATCHLAS_NO_GLOBAL_NAMES
+using batchlas::Queue;
+// ...
+#endif
+```
+
+Define `BATCHLAS_NO_GLOBAL_NAMES` to switch it off and get the namespace
+guarantee today; the block is removed in the release after next.
 
 ### The short template spelling
 
@@ -91,6 +107,7 @@ Build options:
 | `BATCHLAS_ENABLE_MKL`, `BATCHLAS_ENABLE_ROCM` | the oneMKL and ROCm backends, both `OFF` by default |
 | `BATCHLAS_BUILD_TESTS` | on by default for a top-level build; `OFF` when you only want the library |
 | `BATCHLAS_BUILD_BENCHMARKS`, `BATCHLAS_BUILD_PYTHON` | off by default |
+| `BATCHLAS_ALLOW_UNSAFE_ENV` | whether the environment may disable a safety check at runtime, `OFF` by default; see [Configuration](#configuration) |
 
 `CMakePresets.json` carries the development configurations — `cmake --preset dev`
 to build the library, `--preset dev-tests` to add the test suite.
@@ -304,6 +321,17 @@ These take a workspace. Leave it out and it is leased from the queue's arena; se
 | `syev(ctx, A, W, opts)` | symmetric/Hermitian eigendecomposition of the `uplo` triangle | `W` gets the eigenvalues, ascending; `A` gets the eigenvectors when `jobz == JobType::EigenVectors` | `A` n×n; `W` is a `Span` of n·batch of the **real** type (`float` for `std::complex<float>`) |
 
 `getri`, like `trmm`, writes a second matrix operand and leaves its input alone.
+
+**Per-item status.** `potrf`, `getrf` and `getri` optionally report a
+factorisation status, and the five routines whose answer is *iterated* rather
+than computed in one pass — `syev`, `syevx`, `gesvd`, and the tridiagonal
+solvers `steqr` and `stedc` from the extension surface — optionally report a
+convergence status. One `Span<int32_t>`, one entry per batch item, `0` for a
+good item and a positive LAPACK-like value otherwise; empty (the default) reports
+nothing and costs nothing. This is the only way to find out that item 37 of a
+16384-item batch did not converge — the call returns and `ctx.wait()` returns
+either way. See *What gets thrown → Convergence status* for the full convention
+and its two current gaps.
 
 ### Which type each parameter takes
 
@@ -925,23 +953,81 @@ that item's row range into slots the conversion never wrote. Three accessors, on
 
 ## What gets thrown
 
-The split is by *cause*, not by site: `std::invalid_argument` for anything
-determined by the caller's arguments — shapes, `ld`, workspace size, pointer
-reachability — and `std::runtime_error` only for environment and backend
-failures, such as a backend that is not compiled into this build or a vendor
-route with no implementation for the requested arguments. Code that used to
-catch `std::runtime_error` on a shape mismatch must now catch
-`std::invalid_argument`; through the Python bindings the same paths changed from
-`RuntimeError` to `ValueError`.
+Every exception BatchLAS raises is a `batchlas::` type from
+`batchlas/error.hh`, and each one derives from **both** the `std::` exception
+that site used to throw **and** an empty tag base, `batchlas::exception`. So
+three different catches work, and they answer three different questions:
 
-| exception | thrown for |
-| --- | --- |
-| `std::invalid_argument` | everything the caller controls: a pointer that is not reachable from the queue's device (from the queue-dispatching entry points); shape and batch-size mismatches from the dense BLAS backends (`"GEMM: incompatible matrix dimensions"`, `"SYMM: batch size mismatch (A=…, B=…, C=…)"`) and `trsm`'s shape, `lda` and `ldb` checks; the LAPACK-style shape preconditions (`"getrf: A must be square, got 100x50"`, `"getrs: A.rows() (8) must equal B.rows() (4)"`, `"geqrf: tau holds 4 elements, needs at least 16"`); a workspace or output span too short for the chosen provider; `Matrix`/`MatrixView` construction and slicing — null data, non-positive dimensions, an `ld` that is neither `0` nor at least `rows`, too short a source span, a `to_column_major` row pitch that does not fit or a defaulted one on a matrix that is not packed; shape errors from `gesvd` and the extension routines |
-| `std::runtime_error` | environment and backend failures only: a backend that is not compiled into this build; a route with no implementation for the requested arguments (`"BATCHLAS_TRMM_VARIANT=cublasdx only supports float"`, `gesvd`'s vendor route on thin singular vectors); a `Queue` used from a thread other than its owner; a raw-pointer view with no `data_ptrs` array |
-| `std::out_of_range` | `V.at(i, j, b)` / `V(i, j, b)` outside the view |
+```cpp
+#include <batchlas/error.hh>
 
-Catch `std::exception` at the boundary; the message names the routine and the
-numbers.
+try {
+    syev(ctx, A.view(), W.to_span());
+} catch (const batchlas::workspace_error& e) {
+    // the recoverable one: re-query *_buffer_size, or halve the batch and retry
+} catch (const batchlas::exception& e) {
+    // anything BatchLAS itself diagnosed, whatever the cause. e.message(), not e.what()
+} catch (const std::exception& e) {
+    // that, plus std::bad_alloc and sycl::exception. e.what()
+}
+```
+
+**Nothing about existing code changes.** A handler for `std::invalid_argument`
+still catches what is now `batchlas::invalid_argument`; one for
+`std::runtime_error` still catches every runtime failure. Through the Python
+bindings the same call raises the same Python type it always did: pybind11's
+default translator dispatches on the `std::` base, and BatchLAS registers no
+exception translator of its own.
+
+What the new types buy is **discrimination**. Before them, "your shapes are
+wrong", "no route serves this device", "the workspace is too small" and "the
+iteration did not converge" were three `std::runtime_error`s and one
+`std::invalid_argument`, told apart only by reading the message. In a batched
+solver that is the difference between *retry this batch smaller* and *abort the
+run*.
+
+| class | derives from | means | does retrying help? |
+| --- | --- | --- | --- |
+| `batchlas::invalid_argument` | `std::invalid_argument` | The call violates the API contract: a non-square view where a square one is required, mismatched batch sizes, a span shorter than the batch, a negative dimension, a null or non-USM pointer, an `ld` that is neither `0` nor at least `rows`, an enum value with no meaning here. | **No.** Nothing about the machine or the data will make these arguments legal. |
+| `batchlas::out_of_range` | `std::out_of_range` | An index is outside its container: `V.at(i, j, b)`, `V(i, j, b)`, `batch_item(b)`. Kept separate from the row above only so Python element access keeps raising `IndexError`. | **No.** |
+| `batchlas::error` | `std::runtime_error` | Base of the five below. Catch it for "the call failed at runtime, for some reason that is not a bad argument". | — |
+| `batchlas::unsupported` | `batchlas::error` | No route, kernel or backend **in this build on this device** serves the request: a complex type on a real-only native path, `Uplo::Upper` where only `Lower` is implemented, a device with no sub-group 32 under a CTA kernel, a backend that was not compiled in, an order past a kernel's register capacity. | **Not as asked** — but a different route, backend, scalar type or shape may work. This is the one to catch when you want to fall back. |
+| `batchlas::device_error` | `batchlas::error` | The device or its vendor runtime failed: a cuBLAS/cuSOLVER/rocBLAS status code, a launch failure, a handle that would not initialise, a `sycl::malloc_device` that returned null, no device of the requested type. | **Sometimes** — and this is the only class where a retry is ever right. A transient launch failure or an allocation lost to another process can clear; a status code that repeats will not. |
+| `batchlas::workspace_error` | `batchlas::error` | The scratch handed in is too small, or the arena ran out of it. Every routine's `*_buffer_size()` is the contract; this is what fires when the buffer actually passed does not honour it. | **Yes — retry smaller.** Re-query `*_buffer_size()` and pass that many bytes, or halve the batch: a batched solve's workspace scales with the batch. |
+| `batchlas::convergence_error` | `batchlas::error` | An iterative kernel did not converge, or a factorisation broke down on the data: an eigen/SVD sweep budget exhausted, a bidiagonal QR that never deflated, an ILU(k) pivot that was zero with no usable shift. LAPACK's `info > 0`. | **With different parameters, not with the same ones.** A looser tolerance, a higher sweep cap, a different algorithm or rescaled input may converge; the identical call will not. Prefer the per-item `info` spans below, which say *which* item failed. |
+| `batchlas::internal_error` | `batchlas::error` | BatchLAS is internally inconsistent: a resolver picked a native route no linked kernel serves, a capability query and the facade that reads it disagree, a branch documented "unreachable" was reached. | **No**, and it is not fixable from the call site. It is a bug here; report it with the message, which names the two things that disagreed. |
+| `batchlas::api_misuse` | `batchlas::error` | The call is well-formed but arrives in the wrong state or order: a `Queue` used from a thread other than its owner, `attach_to_current_thread()` with a workspace lease outstanding, `configure()` after a `Queue` already exists, a sizing-mode `BumpAllocator` query asked of a real pool. | **No.** Reorder the calls, or confine the object to one thread. |
+
+Three properties of `batchlas::exception` are load-bearing, and each of them
+fails *silently* if broken — which is why `tests/error_model_tests.cc` asserts
+all three rather than trusting the compiler:
+
+- **It does not derive from `std::exception`.** Every leaf already carries one
+  `std::exception` subobject through its `std::` base; a second one would make
+  `catch (const std::exception&)` ambiguous, and an ambiguous base in a catch
+  clause is not diagnosed — the handler simply stops matching and the exception
+  runs to `std::terminate`.
+- **It is a virtual base.** Otherwise a future class deriving from two arms would
+  get two tag subobjects and `catch (const batchlas::exception&)` would stop
+  matching *it*, again with no diagnostic.
+- **It has no `what()`.** `std::exception::what()` lives in a different base
+  subobject and would not override one declared here, so adding it makes every
+  leaf abstract. Read the message through `e.message()` from a tag handler, or
+  catch `std::exception` and use `what()`.
+
+Two failure classes stay **outside** the hierarchy on purpose, so
+`catch (const batchlas::exception&)` will not see them:
+
+- **`std::bad_alloc`**, from the three sites where a `sycl::malloc_*` returned
+  null. It is the standard type for allocation failure and is what pybind11 maps
+  to `MemoryError`; wrapping it would lose that and gain nothing.
+- **`sycl::exception`**, raised by the SYCL runtime itself — including everything
+  the device reports asynchronously at `ctx.wait_and_throw()`. It is not ours to
+  reclassify.
+
+A boundary that must let nothing escape therefore still needs a
+`catch (const std::exception&)` behind the BatchLAS one. Every message names the
+routine and the numbers.
 
 Errors that the device reports asynchronously surface at
 `ctx.wait_and_throw()`, not at the call that enqueued the work.
@@ -951,8 +1037,8 @@ checks every batch item, `symm`, `hemm`, `herk`, `her2k`, `syrk`, `syr2k` and
 `trmm` check shapes and batch sizes, and `trsm` checks shapes, `lda` and `ldb`.
 The queue-dispatching LAPACK-style calls — `potrf`, `getrf`, `getrs`, `getri`,
 `geqrf`, `orgqr`, `syev` written without an explicit `<Backend>` — check their
-shapes host-side before any device work, and throw `std::invalid_argument` on a
-mismatch. `potrf`, `getrf`, `getri` and `syev` require a square `A`; `getrs`
+shapes host-side before any device work, and throw `batchlas::invalid_argument`
+on a mismatch. `potrf`, `getrf`, `getri` and `syev` require a square `A`; `getrs`
 additionally requires `A.rows() == B.rows()` and a matching batch size, and
 `getri` the same of `Ainv`. The output spans must be long enough: `pivots` at
 least `A.rows() * batch_size`, `tau` at least
@@ -971,12 +1057,12 @@ case. Now all three reject it the same way.
 The `f<Backend::CUDA>(ctx, …)` spelling is the library's own inner-loop form and
 skips these checks by design, so the cost stays off the hot path.
 
-**Factorisation status is opt-in, and only `potrf`, `getrf` and `getri` have
-it.** Each takes an optional `Span<int32_t> info`, one entry per batch item, with
-LAPACK's convention: `0` means the item factorised, and a positive value names
-the leading minor (`potrf`) or the zero pivot (`getrf`, `getri`) at which it
-failed. It is a field on `PotrfOptions` and a trailing parameter on
-`getrf`/`getri`:
+**Per-item status is opt-in, and eight routines have it**: `potrf`, `getrf`,
+`getri` report a *factorisation* status, and `syev`, `syevx`, `gesvd`, `steqr`
+and `stedc` report a *convergence* status. All eight use one `Span<int32_t>`,
+one entry per batch item, with LAPACK's convention: `0` means the item is good,
+and a positive value says what went wrong with it. It is a field on
+`PotrfOptions` and a trailing parameter everywhere else:
 
 ```cpp
 UnifiedVector<int32_t> info(batch);
@@ -1002,13 +1088,63 @@ rather than a per-item device array (it spells the per-item form `devInfoArray`,
 as on `gelsBatched`); and rocSOLVER's `geqrf` has no info parameter at all. A
 per-item `geqrf` info would be all zeros by construction.
 
-`syev`, `gesvd` and the solve-style calls (`getrs`, `linalg::solve`) still report
-nothing. A batch item whose pivot is zero to working precision produces numbers
-rather than an exception: `linalg::solve` on a near-singular `A` returns a
-plausible-looking result and nothing in the table above fires. Where the inputs
-are not known to be well-conditioned, check afterwards — compute the residual
-`‖A·X − B‖`, or scan the factor's diagonal for zeros and NaNs — and decide per
-batch item.
+### Convergence status: `syev`, `syevx`, `gesvd`, `steqr`, `stedc`
+
+These five are the routines where LAPACK returns `info > 0` for *this matrix did
+not converge*, and until recently none of them said so. At batch 16384 a single
+non-converged item was invisible: the call returned, `ctx.wait()` returned, and
+the caller read eigenvalues that were simply wrong for that item with nothing
+anywhere recording it. Several tiers computed the answer and threw it away —
+`bdsqr` filled a per-item `fail_flags` array and then collapsed it into one
+batch-wide throw; `steqr_cta` wrote a per-item status readable only under a
+diagnostics environment variable; cuSOLVER's `syevj` returns an `info` array that
+was allocated, passed and dropped.
+
+Each of the five now takes a trailing `Span<int32_t> info`, defaulted to empty:
+
+```cpp
+UnifiedVector<int32_t> info(batch);
+syev<Backend::CUDA>(ctx, A.view(), W.to_span(),
+                    JobType::EigenVectors, Uplo::Lower, ws.to_span(), info.to_span());
+ctx.wait();
+for (int b = 0; b < batch; ++b) {
+    if (info[b] != 0) { /* item b's eigenvalues are not to be trusted */ }
+}
+```
+
+The semantics are the same for all five: **`0` means the item converged**, and a
+value **greater than zero is LAPACK-like** — the number of off-diagonal elements
+that failed to converge where the tier tracks a count, and `1` where it tracks
+only the fact of failure. It is never negative.
+
+Three properties are worth relying on:
+
+- **An empty span means "not requested" and costs nothing.** `info` is *your*
+  USM, written in place by the kernel that already knows the answer, so no tier
+  needs workspace for it and **no `*_buffer_size()` result changes** whether or
+  not you ask. None of the five sizing queries even takes an `info` argument.
+- **The span is an accumulator, not an output register.** It is zeroed exactly
+  once, by the entry point *you* called, and everything below only ever raises a
+  value. That is what makes a nested solve — `syev` → `syev_blocked` → `stedc`,
+  or one `stedc` running many merges over the same items — report *did any of
+  them fail* rather than *did the last one*.
+- **Poison it before the call if you want the check to be honest.** A span you
+  leave at zero cannot distinguish "the solver wrote 0" from "nothing wrote it";
+  fill it with `-1` and a surviving `-1` is a defect rather than a silent pass.
+
+Two limits to know about. `stedc`'s status covers its own merges, not the leaf
+`steqr` solves underneath it — a leaf that runs out of sweeps is not reported
+through `stedc`'s `info` today. And `stein` (inverse iteration, reached through
+`syevx`'s `DirectSubset` route) runs a fixed iteration count with no convergence
+test at all, so it has nothing to report; LAPACK's `?stein` counts the vectors
+that failed, and BatchLAS does not measure it.
+
+The solve-style calls (`getrs`, `linalg::solve`) still report nothing. A batch
+item whose pivot is zero to working precision produces numbers rather than an
+exception: `linalg::solve` on a near-singular `A` returns a plausible-looking
+result and nothing in the table above fires. Where the inputs are not known to be
+well-conditioned, check afterwards — compute the residual `‖A·X − B‖`, or scan
+the factor's diagonal for zeros and NaNs — and decide per batch item.
 
 ## Synchronisation and threading
 
@@ -1096,6 +1232,309 @@ with_backend(ctx, [&](auto Back) {
 
 Use it rather than hardcoding `Backend::CUDA` in code that has to run on more
 than one backend.
+
+## Configuration
+
+Everything BatchLAS reads out of the process environment lands in one typed struct.
+
+```cpp
+#include <batchlas/settings.hh>
+
+const Settings& s = batchlas::settings();   // parsed from the environment, once
+```
+
+`settings()` reads the environment on its first call, under `std::call_once`, and
+hands back a reference to the parsed result. It is thread-safe, and it is the only
+place in the library that reads the environment. Before this existed, ~106 `BATCHLAS_*`
+variables were read at ~77 scattered sites, several of them twice with different
+spellings and different defaults; a variable exported for one benchmark and left in
+the shell changed which kernel every later call in that process ran, and there was no
+programmatic equivalent and no way for an embedding application to lock it down.
+
+### Setting it programmatically
+
+`configure()` takes a whole `Settings` and installs it:
+
+```cpp
+Settings s = batchlas::settings();          // start from what the environment said
+s.routing.canonical[size_t(dispatch::Op::gemm)] = EnvValue::of("native");
+s.geometry.trsm_outer_nb = 64;
+s.diagnostics.dump_bandr1.step = false;
+batchlas::configure(s);                     // before the first Queue
+```
+
+**`configure()` is only permitted until the first `Queue` is constructed.** After
+that it throws `std::runtime_error` and changes nothing. The deadline is not
+bureaucracy: a route changed halfway through a run makes two calls in one process
+disagree about which kernel they used — and several of these knobs are read by a
+`*_buffer_size()` query as well as by the matching solve, some of them changing the
+size, so a change taken mid-run under-sizes a workspace the caller has already
+allocated. `Queue`'s constructor is the latch because it is the earliest point at
+which a dispatch decision can already have been made.
+
+An explicit `configure()` is the last word: it beats whatever the environment said at
+the moment you call it. It installs the struct as it stands; a later
+`reload_settings()` — which is what any `ScopedEnvVar` triggers, at both ends of its
+scope — re-reads the environment over the top. So call `configure()` once, at
+start-up, before anything else in the process starts moving variables around.
+
+The environment is not a second, parallel mechanism sitting beside `Settings` — it is
+parsed *into* `Settings`, is still the way to override a setting from outside the
+program, and is still what the benchmark scripts and the recorded provenance of every
+measurement in `docs/perf` use. What changed is that there is now exactly one reader
+of it, one place to look up what a variable does, and a build option that can turn
+the dangerous subset off.
+
+### Re-reading the environment, and `ScopedEnvVar`
+
+`batchlas::ScopedEnvVar` (`<batchlas/util/env.hh>`) sets a variable for a scope and
+restores it on the way out; a null value unsets it for the duration.
+
+```cpp
+{
+    ScopedEnvVar pin("BATCHLAS_GEMM_ROUTE", "native");
+    gemm(ctx, a, b, c, GemmOptions<float>{});   // runs the native kernel
+}                                               // ...and back to whatever it was
+```
+
+It works with a read-once `settings()` because its constructor *and* its destructor
+call `batchlas::detail::reload_settings()`, which re-reads the environment into the
+same struct. Anything else that writes the environment mid-process — a raw `setenv`,
+a hand-rolled guard — must call `reload_settings()` itself or the change is invisible
+and the code silently exercises the arm it was trying to move off. Prefer
+`ScopedEnvVar`.
+
+Two cautions carried over from the call sites this replaced:
+
+- A reload landing between a `*_buffer_size()` query and its matching call
+  desynchronises the allocated workspace from the block width the call actually uses.
+  Do not let a `ScopedEnvVar` scope straddle a sizing/solve pair.
+- `env_truthy` accepts exactly `{1, true, TRUE, on, ON}` and `env_falsy` exactly
+  `{0, false, FALSE, off, OFF}`, and an unset variable is **neither**. That third
+  state is load-bearing — `BATCHLAS_SYTRD_FUSE_PANEL_UPDATE` needs "forced on",
+  "forced off" and "let the tuned default decide" — which is why those fields are
+  `std::optional<bool>` rather than `bool`.
+
+### `BATCHLAS_ALLOW_UNSAFE_ENV`
+
+Most of the knobs pick a route, a launch geometry or a dump path: setting one by
+accident costs a measurement, not a result. A few are different in kind, because they
+remove a check rather than change one, and those live in `Settings::unsafe` behind a
+CMake option:
+
+```
+cmake -B build -DBATCHLAS_ALLOW_UNSAFE_ENV=ON     # default is OFF
+```
+
+With the option **OFF** — its default, and what every release and install build gets
+— `settings()` holds the `unsafe` fields at their safe values whatever the
+environment says, and prints one warning to stderr at first use naming both the
+variable and the option. So the knob fails loudly rather than silently, and an
+embedding application ships a build whose argument checking cannot be disarmed from
+outside by an inherited shell variable.
+
+It is ON in the `dev`, `dev-tests`, `fast-dev`, `dev-gpu`, `dev-gpu-tests` and
+`benchmarks` presets, which exist to measure and to debug, and deliberately OFF in
+`cuda`, which is the pre-push gate and has to run the arm a release build runs.
+`tests/settings_tests.cc` asserts both arms and says at the top which preset runs
+which.
+
+Membership is not "the knob is scary"; it is "setting this can make a correct program
+crash, hang, or silently compute wrong numbers, and nothing else in the process will
+say so". Three variables qualify:
+
+| variable | what it disables | how it fails |
+| --- | --- | --- |
+| `BATCHLAS_SKIP_POINTER_CHECKS` | the one-USM-query-per-argument reachability check (~70 ns) | ordinary host memory reaches the device as a wild address: `CUDA_ERROR_ILLEGAL_ADDRESS`, then `SIGABRT` from inside the CUDA runtime during teardown, which no catch block can stop — and the same code is correct on the host backend, so a CPU prototype passes and the GPU run dies |
+| `BATCHLAS_LATRD_GRID_FORCE_UNSAFE` | the co-residency cap on the grid `latrd` path | the grid barrier is a sense-reversing spin whose termination argument *is* that cap, so the kernel **hangs** rather than returning a wrong answer, and a hang looks exactly like slow JIT. Run forced-unsafe measurements under `timeout` |
+| `BATCHLAS_BLAS_HEALTH=off` | the host-`dgemm` correctness probe | with a known-bad OpenBLAS kernel, every `double` and `complex<double>` result from the host backend is silently wrong by O(1) and the probe is the only thing that would have said so |
+
+The gate refuses the unsafe *direction*, not every value that differs from the
+default. `BATCHLAS_BLAS_HEALTH=error` is stricter than the default, so it is allowed
+through; only `off` is refused, and `blas_health` is pinned to `Warn` rather than to
+"unset", because its safe value is a value.
+
+`configure()` is not gated. An application that sets one of these in code has made a
+choice, which is exactly the affordance A-3 says was missing; the gate is about
+ambient process state.
+
+`BATCHLAS_CTA_DEBUG_SYNC` and `BATCHLAS_STEQR_CTA_CHECK` are *not* in `unsafe`, and
+the distinction is worth stating because both read as if they were. `CTA_DEBUG_SYNC`
+only drains the pipeline and names the stage an async exception came from — strictly
+safer, just slower. `STEQR_CTA_CHECK` *adds* a convergence check and a throw; the
+unsafe condition there is its default-off state, so forcing it to its default under a
+lock would entrench silent non-convergence rather than prevent anything. Both are
+`diagnostics`.
+
+### The fields
+
+`Settings` has five groups: `routing`, `selection`, `geometry`, `diagnostics` and
+`unsafe`. Field names follow the variable names — `BATCHLAS_TRSM_OUTER_NB` is
+`settings().geometry.trsm_outer_nb` — except where one field carries two spellings,
+which is called out in the tables below.
+
+Two field types, and the split is deliberate. A knob whose call site uses one of the
+shared parsers in `<batchlas/util/env.hh>` gets a **typed** field, and `settings.cc`
+calls that same parser, so the value is bit-for-bit what the site computed before. A
+knob with a bespoke parser gets an **`EnvValue`** — the raw captured string, with
+`is_set()`, `value()` and a `get()` that returns `const char*` or `nullptr` so the
+migrated call site keeps the parser it already has. That is not tidiness deferred:
+the tree contains seven mutually incompatible boolean dialects and three integer
+readers that disagree about trailing garbage, and normalising them would change the
+reading of real spellings at real call sites. What moved is where the string comes
+from, not how it is parsed.
+
+Where a table gives a default in parentheses, the field is a sentinel (`""`, `0`,
+`-1`, `std::nullopt`, "unset") and the real default is computed at the call site from
+`n`, the scalar type, an argument or a device property. Twenty knobs are like that;
+their curves are tuned, and materialising one into a scalar here would pin a tuned
+curve at a single point.
+
+**`routing`** — the route vocabulary, as raw strings, because
+`dispatch::parse_route_env(Op)` remains the single parser and keeps all three of its
+documented word collisions.
+
+| field | variable | type | default |
+| --- | --- | --- | --- |
+| `canonical[Op]`, `canonical_route(op)` | `BATCHLAS_<OP>_ROUTE` | `EnvValue` per `dispatch::Op` | unset (→ `Route{Auto, Auto}` at the adapter) |
+| `legacy[Op]`, `legacy_route(op)` | `BATCHLAS_<OP>_VARIANT`, `BATCHLAS_<OP>_PROVIDER` | `EnvValue` per `dispatch::Op` | unset |
+
+`BATCHLAS_<OP>_ROUTE` works for the 17 ops that have a route adapter: `gemm`, `gemv`,
+`trsm`, `trmm`, `symm`, `syrk`, `syr2k`, `potrf`, `getrf`, `getrs`, `getri`, `geqrf`,
+`orgqr`, `ormqr`, `syev`, `gesvd`, `spmm`. `hemm`, `herk`, `her2k` and `iluk` have an
+`Op` and therefore a slot, but no adapter reads it — **a slot is not a working
+variable**. The legacy spellings are `BATCHLAS_{GEMM,SYMM,SYRK,SYR2K,TRMM}_VARIANT`
+and `BATCHLAS_{SYEV,GESVD,ORMQR}_PROVIDER`; the canonical spelling wins when both are
+set.
+
+**`selection`** — which kernel or algorithm runs, for the knobs that are not part of
+the route vocabulary. Three of these override an explicit API argument, which is the
+sharpest form of the problem this section exists to fix.
+
+| field | variable | type | default |
+| --- | --- | --- | --- |
+| `expand_route` | `BATCHLAS_EXPAND_ROUTE` | `EnvValue` | unset (shape heuristic) |
+| `gemm_cublasdx_kernel` | `BATCHLAS_GEMM_CUBLASDX_KERNEL` | `EnvValue` | unset (vendor fallback) |
+| `gemm_experimental` | `BATCHLAS_GEMM_EXPERIMENTAL` | `EnvValue` | unset (five variants stay locked) |
+| `gemm_sycl_kernel` | `BATCHLAS_GEMM_SYCL_KERNEL` | `EnvValue` | unset (`KernelVariant::Direct`) |
+| `gemv_segt` | `BATCHLAS_GEMV_SEGT` | `EnvValue` | unset (auto) |
+| `gesvd_bidiag` | `BATCHLAS_GESVD_BIDIAG` | `EnvValue` | unset (`bdsdc`) — `normal` **changes numerics** |
+| `getrf_laswp` | `BATCHLAS_GETRF_LASWP` | `EnvValue` | unset (`defer_gather`) |
+| `getrs_laswp` | `BATCHLAS_GETRS_LASWP` | `EnvValue` | unset (`nrhs` gate) |
+| `iluk_device` | `BATCHLAS_ILUK_DEVICE` | `EnvValue` | unset (`batch >= 32`); only `0`/`1` are inspected |
+| `latrd_impl` | `BATCHLAS_LATRD_IMPL` | `EnvValue` | unset (legacy) |
+| `ormqr_impl` | `BATCHLAS_ORMQR_IMPL` | `EnvValue` | unset (legacy); only `device` has an effect |
+| `ormqr_wy` | `BATCHLAS_ORMQR_WY` | `EnvValue` | unset (measured) |
+| `ortho_gram` | `BATCHLAS_ORTHO_GRAM` | `EnvValue` | unset; only `gemm` has an effect |
+| `sb2st_back_wave` | `BATCHLAS_SB2ST_BACK_WAVE` | `EnvValue` | unset (wave on) — **fails open**, and its own disable set is wider than `env_falsy` |
+| `sb2st_subgroup` | `BATCHLAS_SB2ST_SUBGROUP` | `EnvValue` | unset (auto); forced-on throws when `kd > 32` |
+| `syev_small_kernel` | `BATCHLAS_SYEV_SMALL_KERNEL` | `EnvValue` | unset (`cta`, unforced) |
+| `syev_two_stage_chase` | `BATCHLAS_SYEV_TWO_STAGE_CHASE` | `EnvValue` | unset (Householder) |
+| `syevx_algorithm` | `BATCHLAS_SYEVX_ALGORITHM` | `EnvValue` | unset (`params.method`) — overrides an API argument |
+| `syevx_preconditioner` | `BATCHLAS_SYEVX_PRECONDITIONER` | `EnvValue` | unset — overrides an API argument |
+| `syevx_bounds_legacy` | `BATCHLAS_SYEVX_BOUNDS_LEGACY` | `EnvValue` | unset |
+| `syevx_filter_degree_auto` | `BATCHLAS_SYEVX_FILTER_DEGREE_AUTO` | `EnvValue` | unset |
+| `syevx_instr_host` | `BATCHLAS_SYEVX_INSTR_HOST` | `EnvValue` | unset |
+| `syevx_projected_vendor` | `BATCHLAS_SYEVX_PROJECTED_VENDOR` | `EnvValue` | unset — **changes the workspace size** |
+| `syevx_soft_lock` | `BATCHLAS_SYEVX_SOFT_LOCK` | `EnvValue` | unset; its parser is inverted, so `=off` reads as on |
+| `sytrd_force_local_small` | `BATCHLAS_SYTRD_FORCE_LOCAL_SMALL` | `bool` | `false` |
+| `sytrd_fuse_panel_update` | `BATCHLAS_SYTRD_FUSE_PANEL_UPDATE` | `std::optional<bool>` | `nullopt` (tuned per `n`) — the tri-state knob |
+| `sytrd_impl` | `BATCHLAS_SYTRD_IMPL` | `EnvValue` | unset (legacy); only `device` has an effect |
+| `sytrd_trailing_update` | `BATCHLAS_SYTRD_TRAILING_UPDATE` | `EnvValue` | unset (per backend) |
+
+**`geometry`** — launch geometry, block widths and iteration counts.
+
+| field | variable | type | default |
+| --- | --- | --- | --- |
+| `latrd_grid_groups` | `BATCHLAS_LATRD_GRID_GROUPS` | `int` | `0` (`min(cap, ceil((n-1)/32))`) |
+| `latrd_grid_min_n` | `BATCHLAS_LATRD_GRID_MIN_N` | `int` | `768` |
+| `latrd_grid_wg` | `BATCHLAS_LATRD_GRID_WG` | `int` | `0` (computed; only 32/64/128/256 are honoured) |
+| `latrd_lower_panel_wg_hint` | `BATCHLAS_LATRD_LOWER_PANEL_WG_HINT` | `int` | `0` (only 64/128/256; device path only) |
+| `sb2st_back_subs` | `BATCHLAS_SB2ST_BACK_SUBS` | `int` | `0` (per `n`) |
+| `sb2st_back_tile_w` | `BATCHLAS_SB2ST_BACK_TILE_W` | `int` | `0` (per `n`) — the **wave** kernel |
+| `sb2st_back_tile` | `BATCHLAS_SB2ST_BACK_TILE` | `EnvValue` | unset — the **tiled** kernel, a different one, and `0` is meaningful: it selects the streaming path |
+| `potrf_nb`, `potrf_w` | `BATCHLAS_POTRF_NB`, `BATCHLAS_POTRF_W` | `int` | `0` (per scalar type) |
+| `syev_two_stage_kd` | `BATCHLAS_SYEV_TWO_STAGE_KD` | `int` | `32` (then clamped to `[1, n-1]`) |
+| `syev_two_stage_sb2st_block` | `BATCHLAS_SYEV_TWO_STAGE_SB2ST_BLOCK` | `int` | `32` |
+| `sy2sb_ormqr_nb` | `BATCHLAS_SY2SB_ORMQR_NB` | `EnvValue` | unset; three-valued — `off` or `0` means "never hint" |
+| `syev_cta_max_n` | `BATCHLAS_SYEV_CTA_MAX_N` | `EnvValue` | unset (24 for `complex<double>`, else 32; range 0–32) |
+| `sytrd_block_size` | `BATCHLAS_SYTRD_BLOCK_SIZE` | `int` | `0` (per `n` and per scalar type) |
+| `trmm_tile_m` | `BATCHLAS_TRMM_TILE_M` | `int` | `0` (a function of `m`; bucketed to 16/32/64/128) |
+| `trsm_outer_nb` | `BATCHLAS_TRSM_OUTER_NB` | `int` | `0` (128 for `Side::Left`, `cta_nb` for `Side::Right`) |
+| `expand_max_bytes` | `BATCHLAS_EXPAND_MAX_BYTES` | `EnvValue` | unset (device global memory / 4; only ever lowers the ceiling) |
+| `gesvd_blocked_gebrd_min` | `BATCHLAS_GESVD_BLOCKED_GEBRD_MIN` | `EnvValue` | unset (1) |
+| `syevx_check_every` | `BATCHLAS_SYEVX_CHECK_EVERY` | `int` | `4` (each check drains the pipeline) |
+| `syevx_extra_directions` | `BATCHLAS_SYEVX_EXTRA_DIRECTIONS` | `std::optional<int>` | `nullopt` (`max(2, k/4)`); `0` means "no guard block" |
+| `syevx_filter_degree` | `BATCHLAS_SYEVX_FILTER_DEGREE` | `int` | `0` (10, or `params.filter_degree`) |
+| `syevx_init_power` | `BATCHLAS_SYEVX_INIT_POWER` | `std::optional<int>` | `nullopt` (4); `0` is meaningful |
+| `syevx_lock_factor` | `BATCHLAS_SYEVX_LOCK_FACTOR` | `double` | `0.1` — the only non-integer knob |
+
+`geometry.tune` holds the eleven runtime overrides of the generated tuning header, as
+`EnvValue` because `tuning_env_override` is stricter than `env.hh`'s readers — it
+rejects trailing garbage, where `env_int_or` reads `"16x"` as `16`. Each default is
+the `n`-bucketed compiled constant at the call site.
+
+| field | variable |
+| --- | --- |
+| `tune.ormqr_block_size` | `BATCHLAS_TUNE_ORMQR_BLOCK_SIZE` |
+| `tune.gebrd_block_size` | `BATCHLAS_TUNE_GEBRD_BLOCK_SIZE` |
+| `tune.sb2st_back_tile` | `BATCHLAS_TUNE_SB2ST_BACK_TILE` |
+| `tune.sb2st_back_subs` | `BATCHLAS_TUNE_SB2ST_BACK_SUBS` |
+| `tune.sy2sb_ormqr_nb` | `BATCHLAS_TUNE_SY2SB_ORMQR_NB` |
+| `tune.sytrd_block_size` | `BATCHLAS_TUNE_SYTRD_BLOCK_SIZE` |
+| `tune.latrd_wg_hint` | `BATCHLAS_TUNE_LATRD_WG_HINT` |
+| `tune.stedc_recursion_threshold` | `BATCHLAS_TUNE_STEDC_RECURSION_THRESHOLD` |
+| `tune.stedc_merge_variant` | `BATCHLAS_TUNE_STEDC_MERGE_VARIANT` |
+| `tune.stedc_threads_per_root` | `BATCHLAS_TUNE_STEDC_THREADS_PER_ROOT` |
+| `tune.stedc_wg_multiplier` | `BATCHLAS_TUNE_STEDC_WG_MULTIPLIER` |
+
+Five of the `TUNE_*` names sit *under* a second, older variable for the same quantity
+— `sytrd_block_size` over `tune.sytrd_block_size`, and likewise for the `latrd`,
+`sy2sb` and two `sb2st` knobs. The outer one wins.
+
+**`diagnostics`** — tracing, dumping, profiling and the opt-in checks. None of these
+changes a numeric result; several cost a full pipeline drain.
+
+| field | variable | type | default |
+| --- | --- | --- | --- |
+| `profiling` | `BATCHLAS_QUEUE_PROFILING`, `BATCHLAS_BENCH_PROFILING` | `bool` | `false` — two names ORed into one field |
+| `kernel_trace` | `BATCHLAS_KERNEL_TRACE`, `BATCHLAS_TRACE_KERNELS` | `bool` | `false` — likewise; implies profiling |
+| `kernel_trace_path` | `BATCHLAS_KERNEL_TRACE_PATH`, `BATCHLAS_TRACE_PATH` | `std::string` | `"batchlas_kernels.trace.json"` — first **non-empty** wins |
+| `coverage_out` | `BATCHLAS_COVERAGE_OUT` | `EnvValue` | unset (coverage off) |
+| `debug_filter_degree` | `BATCHLAS_DEBUG_FILTER_DEGREE` | `bool` | `false` — presence alone enables, empty string included |
+| `debug_sytrd_small` | `BATCHLAS_DEBUG_SYTRD_SMALL` | `bool` | `false` |
+| `gesvd_profile` | `BATCHLAS_GESVD_PROFILE` | `bool` | `false` (drains per stage) |
+| `syevx_trace` | `BATCHLAS_SYEVX_TRACE` | `bool` | `false` |
+| `cta_debug_sync` | `BATCHLAS_CTA_DEBUG_SYNC` | `bool` | `false` |
+| `steqr_cta_check` | `BATCHLAS_STEQR_CTA_CHECK` | `EnvValue` | unset — and unset means non-convergence is **silent** |
+| `dump_bandr1.dir` | `BATCHLAS_DUMP_BANDR1_DIR` | `std::string` | `"output/bandr1_dumps"` |
+| `dump_bandr1.step` | `BATCHLAS_DUMP_BANDR1_STEP` | `bool` | `false` — master enable for the family |
+| `dump_bandr1.abw_only` | `BATCHLAS_DUMP_BANDR1_ABW_ONLY` | `bool` | `false` |
+| `dump_bandr1.step_index` | `BATCHLAS_DUMP_BANDR1_STEP_INDEX` | `int` | `-1` (all) |
+| `dump_bandr1.sweep_index` | `BATCHLAS_DUMP_BANDR1_SWEEP_INDEX` | `int` | `-1` (all) |
+| `dump_bandr1.step_in_sweep` | `BATCHLAS_DUMP_BANDR1_STEP_IN_SWEEP` | `int` | `-1` (all) |
+| `dump_bandr1.batch` | `BATCHLAS_DUMP_BANDR1_BATCH` | `int` | `-1` (every batch item) |
+
+Three of these are filesystem paths that the library **opens for writing** —
+`kernel_trace_path` and `coverage_out` from `atexit` handlers, and `dump_bandr1.dir`
+via `create_directories`. An application that inherits an environment it did not
+choose gets files written at a path it did not choose; `configure()` is what lets it
+clear them before any work starts.
+
+**`unsafe`** — the three overrides that remove a guarantee. See
+`BATCHLAS_ALLOW_UNSAFE_ENV` above.
+
+| field | variable | type | default |
+| --- | --- | --- | --- |
+| `skip_pointer_checks` | `BATCHLAS_SKIP_POINTER_CHECKS` | `bool` | `false` (checks on) |
+| `latrd_grid_force_unsafe` | `BATCHLAS_LATRD_GRID_FORCE_UNSAFE` | `bool` | `false` (cap enforced) |
+| `blas_health` | `BATCHLAS_BLAS_HEALTH` | `BlasHealth` (`Off` \| `Warn` \| `Error`) | `Warn` |
+
+Variables read only by this repository's own tests and benchmark harnesses
+(`BATCHLAS_TEST_BACKEND`, `BATCHLAS_BENCH_*`, `BATCHLAS_SPMM_WARM_MS` and the rest)
+are deliberately absent from `Settings`: the library never reads them, and adding them
+would create a second, silently-ignored spelling of a name that already works.
+
 
 ## Workspaces come from the queue's arena
 

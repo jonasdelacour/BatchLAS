@@ -16,9 +16,9 @@
 #include <batchlas/blas/dispatch/route_getri.hh>
 #include <batchlas/blas/dispatch/route_gemv.hh>
 #include <batchlas/blas/dispatch/route_spmm.hh>
+#include <batchlas/util/env.hh>
 
 #include <complex>
-#include <cstdlib>
 #include <string>
 
 using namespace batchlas;
@@ -26,43 +26,35 @@ using namespace batchlas::dispatch;
 
 namespace {
 
-// Sets an env var for the object's lifetime and restores it, so cases cannot leak.
-class ScopedEnv {
-public:
-    ScopedEnv(std::string key, const char* value) : key_(std::move(key)) {
-        if (const char* old = std::getenv(key_.c_str())) {
-            had_ = true;
-            old_ = old;
-        }
-        if (value) {
-            ::setenv(key_.c_str(), value, 1);
-        } else {
-            ::unsetenv(key_.c_str());
-        }
-    }
-    ~ScopedEnv() {
-        if (had_) {
-            ::setenv(key_.c_str(), old_.c_str(), 1);
-        } else {
-            ::unsetenv(key_.c_str());
-        }
-    }
-private:
-    std::string key_;
-    std::string old_;
-    bool had_ = false;
-};
+// The private ScopedEnv this file used to carry is gone. It saved, set and
+// restored exactly as batchlas::ScopedEnvVar does, but a raw ::setenv is no
+// longer enough: parse_route_env reads its two values from the batchlas::settings()
+// snapshot (route_env.hh), which is loaded once before main() -- src/dispatch/
+// coverage.cc takes it in a namespace-scope initialiser in an always-linked TU.
+// ScopedEnvVar reloads that snapshot at both ends of its scope, so the cases
+// below assert on the value they just pinned instead of on the ambient one.
 
 // Clears both spellings so a case starts from a known state.
+//
+// ScopedEnvVar BORROWS its name rather than copying it, and neither key here is a
+// string literal -- the canonical one is composed from op_env_stem, the legacy one
+// from a std::string_view. The two buffers are therefore members, declared BEFORE
+// the guards that point at them: members are initialised in declaration order and
+// destroyed in reverse, so each name is alive before its guard is built and still
+// alive when that guard restores.
 struct ClearRouteEnv {
     explicit ClearRouteEnv(Op op)
-        : canonical_("BATCHLAS_" + op_env_stem(op) + "_ROUTE", nullptr),
-          legacy_(std::string(legacy_variable_for(op)).empty()
-                      ? std::string("BATCHLAS_UNUSED_ROUTE_KEY")
-                      : std::string(legacy_variable_for(op)),
-                  nullptr) {}
-    ScopedEnv canonical_;
-    ScopedEnv legacy_;
+        : canonical_key_("BATCHLAS_" + op_env_stem(op) + "_ROUTE"),
+          legacy_key_(std::string(legacy_variable_for(op)).empty()
+                          ? std::string("BATCHLAS_UNUSED_ROUTE_KEY")
+                          : std::string(legacy_variable_for(op))),
+          canonical_(canonical_key_.c_str(), nullptr),
+          legacy_(legacy_key_.c_str(), nullptr) {}
+
+    std::string canonical_key_;
+    std::string legacy_key_;
+    ScopedEnvVar canonical_;
+    ScopedEnvVar legacy_;
 };
 
 } // namespace
@@ -139,7 +131,7 @@ TEST(RouteVocabulary, UnknownValueIsRejectedNotSilentlyAuto) {
 
 TEST(RouteVocabulary, LegacyGemmVariantSyclSelectsRegisterTiled) {
     ClearRouteEnv clear(Op::gemm);
-    ScopedEnv set("BATCHLAS_GEMM_VARIANT", "sycl");
+    ScopedEnvVar set("BATCHLAS_GEMM_VARIANT", "sycl");
 
     const auto parsed = parse_route_env(Op::gemm);
     ASSERT_TRUE(parsed.found);
@@ -222,7 +214,7 @@ TEST(RouteVocabulary, LegacyLevel3GemmIsTheVendorMeasurementRoute) {
 
 TEST(RouteVocabulary, LegacyTrmmTriangularIsOneValueNotTwoReadings) {
     ClearRouteEnv clear(Op::trmm);
-    ScopedEnv set("BATCHLAS_TRMM_VARIANT", "triangular");
+    ScopedEnvVar set("BATCHLAS_TRMM_VARIANT", "triangular");
 
     const auto parsed = parse_route_env(Op::trmm);
     ASSERT_TRUE(parsed.found) << "it is an opinion, not the absence of one";
@@ -232,7 +224,7 @@ TEST(RouteVocabulary, LegacyTrmmTriangularIsOneValueNotTwoReadings) {
 
 TEST(RouteVocabulary, LegacyVendorSpellingMapsToVendorOrigin) {
     ClearRouteEnv clear(Op::trmm);
-    ScopedEnv set("BATCHLAS_TRMM_VARIANT", "vendor");
+    ScopedEnvVar set("BATCHLAS_TRMM_VARIANT", "vendor");
 
     const auto parsed = parse_route_env(Op::trmm);
     ASSERT_TRUE(parsed.found);
@@ -242,14 +234,14 @@ TEST(RouteVocabulary, LegacyVendorSpellingMapsToVendorOrigin) {
 TEST(RouteVocabulary, LegacySyrkTriangularAndGramSurvive) {
     {
         ClearRouteEnv clear(Op::syrk);
-        ScopedEnv set("BATCHLAS_SYRK_VARIANT", "triangular");
+        ScopedEnvVar set("BATCHLAS_SYRK_VARIANT", "triangular");
         const auto parsed = parse_route_env(Op::syrk);
         ASSERT_TRUE(parsed.found);
         EXPECT_EQ(parsed.route.algo, Algorithm::TriangularTiles);
     }
     {
         ClearRouteEnv clear(Op::syrk);
-        ScopedEnv set("BATCHLAS_SYRK_VARIANT", "gram");
+        ScopedEnvVar set("BATCHLAS_SYRK_VARIANT", "gram");
         const auto parsed = parse_route_env(Op::syrk);
         ASSERT_TRUE(parsed.found);
         EXPECT_EQ(parsed.route.algo, Algorithm::GramTiles);
@@ -258,7 +250,7 @@ TEST(RouteVocabulary, LegacySyrkTriangularAndGramSurvive) {
 
 TEST(RouteVocabulary, LegacyProviderSpellingsSurvive) {
     ClearRouteEnv clear(Op::syev);
-    ScopedEnv set("BATCHLAS_SYEV_PROVIDER", "two_stage");
+    ScopedEnvVar set("BATCHLAS_SYEV_PROVIDER", "two_stage");
 
     const auto parsed = parse_route_env(Op::syev);
     ASSERT_TRUE(parsed.found);
@@ -268,8 +260,8 @@ TEST(RouteVocabulary, LegacyProviderSpellingsSurvive) {
 
 TEST(RouteVocabulary, CanonicalSpellingWinsOverLegacy) {
     ClearRouteEnv clear(Op::gemm);
-    ScopedEnv legacy("BATCHLAS_GEMM_VARIANT", "vendor");
-    ScopedEnv canonical("BATCHLAS_GEMM_ROUTE", "native:register_tiled");
+    ScopedEnvVar legacy("BATCHLAS_GEMM_VARIANT", "vendor");
+    ScopedEnvVar canonical("BATCHLAS_GEMM_ROUTE", "native:register_tiled");
 
     const auto parsed = parse_route_env(Op::gemm);
     ASSERT_TRUE(parsed.found);
@@ -300,7 +292,7 @@ TEST(RouteVocabulary, NothingSetReportsNotFound) {
 
 TEST(RouteVocabulary, SetButUnparsedIsDistinguishableFromUnset) {
     ClearRouteEnv clear(Op::gemm);
-    ScopedEnv set("BATCHLAS_GEMM_ROUTE", "not-a-route");
+    ScopedEnvVar set("BATCHLAS_GEMM_ROUTE", "not-a-route");
     const auto parsed = parse_route_env(Op::gemm);
     EXPECT_FALSE(parsed.found);
     EXPECT_TRUE(parsed.unparsed) << "a typo must be reportable, not silently Auto";
@@ -520,13 +512,15 @@ PotrfShape potrf_shape(int64_t order, int64_t batch, int cta_max,
 using PotrfTable = RouteTable<Op::potrf, float>;
 constexpr Route kPotrfCta{Origin::Native, Algorithm::CTA};
 constexpr Route kPotrfBlocked{Origin::Native, Algorithm::Blocked};
+constexpr Route kPotrfTiny{Origin::Native, Algorithm::Tiny};
 constexpr Route kPotrfNativeBare{Origin::Native, Algorithm::Auto};
 constexpr Route kPotrfAuto{Origin::Auto, Algorithm::Auto};
 
 } // namespace
 
 TEST(RoutePotrf, SupportedButNotPreferredIsTheWholePoint) {
-    // 155 is the measured float CTA fit ceiling.
+    // cta_max is the float CTA fit ceiling; it only has to exceed the order below, or
+    // supports() answers false and the whole case holds vacuously.
     // evidence: docs/perf/potrf.md#the-slm-budget-and-the-fit-ceilings
     const auto s = potrf_shape(/*order=*/128, /*batch=*/1, /*cta_max=*/155);
 
@@ -587,6 +581,81 @@ TEST(RoutePotrf, PreferredIsFalseEverywhere) {
     EXPECT_FALSE((RouteTable<Op::potrf, double>::preferred(kPotrfCta, s)));
     EXPECT_FALSE((RouteTable<Op::potrf, std::complex<float>>::preferred(kPotrfCta, s)));
     EXPECT_FALSE((RouteTable<Op::potrf, std::complex<double>>::preferred(kPotrfCta, s)));
+}
+
+// route.hh is an INSTALLED header and the library carries a SOVERSION, so an Algorithm
+// enumerator's NUMERIC value is ABI. Inserting a new name anywhere but the end renumbers
+// every enumerator after it, and a caller compiled against the old header then names a
+// different algorithm at run time with no diagnostic anywhere -- no link error, no
+// warning, just a different kernel. These are the values route.hh shipped with; a new
+// algorithm is APPENDED and gets the next free number.
+TEST(RouteVocabulary, AlgorithmEnumeratorValuesAreAbi) {
+    auto value = [](Algorithm a) { return static_cast<int>(a); };
+    EXPECT_EQ(value(Algorithm::Auto), 0);
+    EXPECT_EQ(value(Algorithm::Direct), 1);
+    EXPECT_EQ(value(Algorithm::CTA), 2);
+    EXPECT_EQ(value(Algorithm::Blocked), 3);
+    EXPECT_EQ(value(Algorithm::TwoStage), 4);
+    EXPECT_EQ(value(Algorithm::Jacobi), 5);
+    EXPECT_EQ(value(Algorithm::RegisterTiled), 6);
+    EXPECT_EQ(value(Algorithm::SplitK), 7);
+    EXPECT_EQ(value(Algorithm::ExpandGemm), 8);
+    EXPECT_EQ(value(Algorithm::TriangularTiles), 9);
+    EXPECT_EQ(value(Algorithm::GramTiles), 10);
+    EXPECT_EQ(value(Algorithm::FusedDevice), 11);
+    EXPECT_EQ(value(Algorithm::DiagFullGemm), 12);
+
+    // Appended after the frozen block, not inserted into it.
+    EXPECT_EQ(value(Algorithm::Tiny), 13);
+
+    // Origin is installed too, and Vendor's value reaches is_vendor() in every table.
+    EXPECT_EQ(static_cast<int>(Origin::Auto), 0);
+    EXPECT_EQ(static_cast<int>(Origin::Native), 1);
+    EXPECT_EQ(static_cast<int>(Origin::Vendor), 2);
+}
+
+// Algorithm::Tiny is INVISIBLE until three separate places know it: the enum,
+// to_string (which is what the coverage CSV's chosen_algo column and the route-diff
+// tool print) and parse_algorithm_word. A missing to_string case is a -Wswitch warning
+// and a "?" in every coverage row; a missing parse case is SILENT -- the pin becomes
+// nullopt, is dropped, and a benchmark arm measures whatever automatic() picked.
+TEST(RoutePotrf, TinyVocabularyRoundTripAndTierOrder) {
+    EXPECT_EQ(to_string(Algorithm::Tiny), "tiny");
+    ASSERT_TRUE(parse_algorithm_word("tiny").has_value());
+    EXPECT_EQ(*parse_algorithm_word("tiny"), Algorithm::Tiny);
+
+    // Tiny is the FIRST native arm, so the entry point's arm order must match.
+    EXPECT_EQ(kPotrfOrder[0], kPotrfTiny);
+
+    // A build with no tiny kernel (tiny_max_n == 0) must route exactly as before.
+    const auto absent = potrf_shape(/*order=*/16, /*batch=*/4096, /*cta_max=*/155);
+    ASSERT_EQ(absent.tiny_max_n, 0);
+    EXPECT_FALSE(PotrfTable::supports(kPotrfTiny, absent));
+    EXPECT_TRUE(PotrfTable::native_tier_preferred(kPotrfCta, absent));
+
+    auto s = absent;
+    s.tiny_max_n = 32;
+    EXPECT_TRUE(PotrfTable::supports(kPotrfTiny, s));
+    // EXACTLY ONE native tier answers the hook, or the vendor-free walk is an accident
+    // of the order array rather than a stated decision (R8b, from the other direction).
+    // Tiny answers FALSE, matching getrf and geqrf: the tier is reachable by an explicit
+    // pin only until the commit that MEASURES its window flips this arm and preferred()
+    // together. Until then a vendor-free build routes exactly as it did before Tiny
+    // existed, which is what the resolve below asserts.
+    EXPECT_FALSE(PotrfTable::native_tier_preferred(kPotrfTiny, s));
+    EXPECT_TRUE(PotrfTable::native_tier_preferred(kPotrfCta, s));
+    EXPECT_FALSE(PotrfTable::native_tier_preferred(kPotrfBlocked, s));
+    EXPECT_EQ(resolve_potrf_route<float>(kPotrfAuto, s, /*vendor_available=*/false).algo,
+              Algorithm::CTA);
+
+    // One order past the tier: CTA takes it back, and the vendor still wins on Auto
+    // because preferred() is empty for every tier.
+    auto past = s;
+    past.k = past.m = past.n = 33;
+    EXPECT_FALSE(PotrfTable::supports(kPotrfTiny, past));
+    EXPECT_TRUE(PotrfTable::native_tier_preferred(kPotrfCta, past));
+    EXPECT_FALSE(PotrfTable::preferred(kPotrfTiny, s));
+    EXPECT_TRUE(is_vendor(resolve_potrf_route<float>(kPotrfAuto, s, /*vendor_available=*/true)));
 }
 
 TEST(RoutePotrf, CorrectnessGatesAreNotSpeedGates) {
@@ -707,7 +776,7 @@ TEST(RoutePotrf, BatchlasPotrfRouteIsActuallyRead) {
         EXPECT_EQ(legacy_unset_default(Op::potrf).origin, Origin::Auto);
     }
     {
-        ScopedEnv e("BATCHLAS_POTRF_ROUTE", "cta");
+        ScopedEnvVar e("BATCHLAS_POTRF_ROUTE", "cta");
         const auto p = parse_route_env(Op::potrf);
         ASSERT_TRUE(p.found) << "BATCHLAS_POTRF_ROUTE was not read at all";
         EXPECT_EQ(p.route, (Route{Origin::Native, Algorithm::CTA}))
@@ -716,19 +785,19 @@ TEST(RoutePotrf, BatchlasPotrfRouteIsActuallyRead) {
         EXPECT_FALSE(p.source.legacy);
     }
     {
-        ScopedEnv e("BATCHLAS_POTRF_ROUTE", "vendor");
+        ScopedEnvVar e("BATCHLAS_POTRF_ROUTE", "vendor");
         const auto p = parse_route_env(Op::potrf);
         ASSERT_TRUE(p.found);
         EXPECT_EQ(p.route, (Route{Origin::Vendor, Algorithm::Auto}));
     }
     {
-        ScopedEnv e("BATCHLAS_POTRF_ROUTE", "native:blocked");
+        ScopedEnvVar e("BATCHLAS_POTRF_ROUTE", "native:blocked");
         const auto p = parse_route_env(Op::potrf);
         ASSERT_TRUE(p.found);
         EXPECT_EQ(p.route, (Route{Origin::Native, Algorithm::Blocked}));
     }
     {
-        ScopedEnv e("BATCHLAS_POTRF_ROUTE", "not-a-route");
+        ScopedEnvVar e("BATCHLAS_POTRF_ROUTE", "not-a-route");
         const auto p = parse_route_env(Op::potrf);
         EXPECT_FALSE(p.found);
         EXPECT_TRUE(p.unparsed) << "a typo must be reported, not silently Auto";
@@ -762,11 +831,64 @@ GeqrfShape geqrf_shape(int64_t rows, int64_t cols, int64_t batch,
     return s;
 }
 
+// CTA capacity is an AREA, and this box's budget is 97,280 B. The permissive shape helper
+// used elsewhere in this file would make every cell CTA-eligible and the tier half of this
+// test vacuous for the complex types. evidence: docs/perf/qr.md#cta-capacity-the-int_max-reading
+template <typename T>
+constexpr int64_t geqrf_cta_elems() { return 97280 / static_cast<int64_t>(sizeof(T)); }
+
+template <typename T>
+GeqrfShape geqrf_dev_shape(int64_t rows, int64_t cols, int64_t batch) {
+    return geqrf_shape(rows, cols, batch,
+                       static_cast<int>(geqrf_cta_elems<T>()), geqrf_cta_elems<T>());
+}
+
 using GeqrfTable = RouteTable<Op::geqrf, float>;
 constexpr Route kGeqrfCta{Origin::Native, Algorithm::CTA};
 constexpr Route kGeqrfBlocked{Origin::Native, Algorithm::Blocked};
 constexpr Route kGeqrfNativeBare{Origin::Native, Algorithm::Auto};
 constexpr Route kGeqrfAuto{Origin::Auto, Algorithm::Auto};
+
+// One type's order floor pinned from BOTH sides, plus the TIER at each native cell -- the
+// tier is half the assertion. evidence: docs/perf/qr.md#the-shipped-geqrf-window
+template <typename T>
+void expect_geqrf_floor(const char* tn,
+                        int64_t below,
+                        int64_t at,   Algorithm at_algo,
+                        int64_t high, Algorithm high_algo) {
+    using Tbl = RouteTable<Op::geqrf, T>;
+    // Batch is looped because the window carries NO batch term: a batch clause
+    // creeping in would make one of these three rungs disagree.
+    for (int64_t batch : {int64_t(1), int64_t(128), int64_t(8192)}) {
+        const auto lo = geqrf_dev_shape<T>(below, below, batch);
+        EXPECT_FALSE(Tbl::preferred(kGeqrfCta, lo))
+            << tn << " n=" << below << " batch " << batch;
+        EXPECT_FALSE(Tbl::preferred(kGeqrfBlocked, lo))
+            << tn << " n=" << below << " batch " << batch;
+        EXPECT_TRUE(is_vendor(resolve_geqrf_route<T>(kGeqrfAuto, lo, true)))
+            << tn << " n=" << below << " is the BRACKETING NON-WINNER below the floor "
+            << "(docs/perf/small-n-baseline.md#geqrf); routing it native ships a "
+               "measured loss";
+
+        for (auto cell : {std::pair<int64_t, Algorithm>{at, at_algo},
+                          std::pair<int64_t, Algorithm>{high, high_algo}}) {
+            const auto s = geqrf_dev_shape<T>(cell.first, cell.first, batch);
+            const Route r = resolve_geqrf_route<T>(kGeqrfAuto, s, true);
+            EXPECT_TRUE(is_native(r))
+                << tn << " n=" << cell.first << " batch " << batch
+                << ": inside the measured window and it took " << to_string(r.origin);
+            EXPECT_EQ(r.algo, cell.second)
+                << tn << " n=" << cell.first << ": the window landed on the WRONG "
+                   "native tier -- got " << to_string(r.algo);
+            // EXACTLY ONE tier, or the first-pass walk pre-empts the tier hook.
+            EXPECT_NE(Tbl::preferred(kGeqrfCta, s), Tbl::preferred(kGeqrfBlocked, s))
+                << tn << " n=" << cell.first << ": preferred() must answer true for "
+                   "exactly one native tier, never both and never neither";
+            EXPECT_FALSE(Tbl::preferred(Route{Origin::Vendor, Algorithm::Auto}, s))
+                << "the vendor is where the walk ENDS, never itself preferred";
+        }
+    }
+}
 
 } // namespace
 
@@ -780,7 +902,10 @@ TEST(RouteGeqrf, VendorFreeFallbackHandsOverTheNativeRoute) {
         << "batch size and panel size are speed questions; neither may gate "
            "CORRECTNESS";
     EXPECT_FALSE(GeqrfTable::preferred(kGeqrfCta, s))
-        << "nothing native about geqrf has been measured -- there is no kernel";
+        << "64x16 is BELOW the measured window from both sides -- 16 columns is under "
+           "the float floor of 64, and 64 rows is under the tall clause's 128 -- so "
+           "Auto must still take the vendor here "
+           "(docs/perf/small-n-baseline.md#geqrf: float n=16 is 0.22x)";
 
     EXPECT_TRUE(is_native(resolve_geqrf_route<float>(kGeqrfAuto, s,
                                                      /*vendor_available=*/false)))
@@ -914,30 +1039,173 @@ TEST(RouteGeqrf, Sg32GatesBothNativeArms) {
     EXPECT_TRUE(is_vendor(resolve_geqrf_route<float>(kGeqrfAuto, small, false)));
 }
 
-TEST(RouteGeqrf, PreferredIsFalseEverywhere) {
-    // preferred() is all-false for geqrf, so Origin::Auto takes the vendor everywhere.
-    for (int64_t rows : {1, 32, 128, 512, 1024, 4096}) {
-        for (int64_t cols : {1, 16, 32, 128, 512}) {
-            if (cols > rows) continue;
-            for (int64_t batch : {1, 8, 128, 2048}) {
-                const auto s = geqrf_shape(rows, cols, batch, 4096, 1 << 24);
-                EXPECT_FALSE(GeqrfTable::preferred(kGeqrfCta, s));
-                EXPECT_FALSE(GeqrfTable::preferred(kGeqrfBlocked, s));
-                EXPECT_FALSE(GeqrfTable::preferred(Route{Origin::Vendor, Algorithm::Auto}, s))
-                    << "the vendor is where the walk ENDS, never itself preferred";
-                EXPECT_TRUE(is_vendor(resolve_geqrf_route<float>(kGeqrfAuto, s, true)))
-                    << "rows " << rows << " cols " << cols << " batch " << batch;
-            }
-        }
+// THE MEASURED WINDOW, pinned from both sides, AND THE TIER AT EACH CELL: a per-type order
+// floor on cols() plus a tall-panel aspect clause, so neither edge nor either tier choice
+// can drift without a measurement. evidence: docs/perf/qr.md#the-shipped-geqrf-window
+TEST(RouteGeqrf, PreferredIsTheMeasuredOrderFloorAndTheTallClause) {
+    // ---- the floor and the tier, per type -----------------------------------
+    // The tier column is the CTA/Blocked crossover: float turns over at n > 96 and
+    // double at n > 48 (native_tier_preferred), while both complex types have no
+    // measured crossover at all, so for them ONLY the CTA tile capacity ever sends a
+    // shape to the blocked arm -- cfloat 256x256 is 65,536 scalars against a 12,160
+    // budget, which is why it must read Blocked and not CTA.
+    expect_geqrf_floor<float>("float", /*below=*/48,
+                              /*at=*/64,  Algorithm::CTA,
+                              /*high=*/128, Algorithm::Blocked);
+    expect_geqrf_floor<double>("double", /*below=*/64,
+                               /*at=*/96,  Algorithm::Blocked,
+                               /*high=*/256, Algorithm::Blocked);
+    expect_geqrf_floor<std::complex<float>>("cfloat", /*below=*/32,
+                                            /*at=*/48,  Algorithm::CTA,
+                                            /*high=*/256, Algorithm::Blocked);
+    expect_geqrf_floor<std::complex<double>>("cdouble", /*below=*/192,
+                                             /*at=*/256, Algorithm::Blocked,
+                                             /*high=*/512, Algorithm::Blocked);
+
+    // float n = 96 is the LAST cell on CTA and n = 112 the first off it: the crossover
+    // the tier hook declares, read through the window rather than around it.
+    {
+        const auto at96  = geqrf_dev_shape<float>(96, 96, 8192);
+        const auto at112 = geqrf_dev_shape<float>(112, 112, 8192);
+        const Route r96  = resolve_geqrf_route<float>(kGeqrfAuto, at96, true);
+        const Route r112 = resolve_geqrf_route<float>(kGeqrfAuto, at112, true);
+        EXPECT_TRUE(is_native(r96));
+        EXPECT_EQ(r96.algo, Algorithm::CTA)
+            << "float n=96 measures 1.294 on CTA against blocked (docs/perf/qr.md)";
+        EXPECT_TRUE(is_native(r112));
+        EXPECT_EQ(r112.algo, Algorithm::Blocked)
+            << "float n=112 measures 0.821 on CTA; CTA above the crossover is the "
+               "defect this whole test guards";
     }
-    // Spelled out per type: preferred() reads the table's T, never s.scalar.
-    const auto s = geqrf_shape(256, 64, 512, 4096, 1 << 24);
-    EXPECT_FALSE((RouteTable<Op::geqrf, double>::preferred(kGeqrfCta, s)));
-    EXPECT_FALSE((RouteTable<Op::geqrf, std::complex<float>>::preferred(kGeqrfCta, s)));
-    EXPECT_FALSE((RouteTable<Op::geqrf, std::complex<double>>::preferred(kGeqrfCta, s)));
-    EXPECT_FALSE((RouteTable<Op::geqrf, double>::preferred(kGeqrfBlocked, s)));
-    EXPECT_FALSE((RouteTable<Op::geqrf, std::complex<float>>::preferred(kGeqrfBlocked, s)));
-    EXPECT_FALSE((RouteTable<Op::geqrf, std::complex<double>>::preferred(kGeqrfBlocked, s)));
+
+    // ---- THE TALL CLAUSE: the m x kd panels the eigen drivers issue, where the square floor
+    //      never fires. evidence: docs/perf/qr.md#the-shipped-geqrf-window
+    {
+        const auto tall512 = geqrf_dev_shape<float>(512, 32, 16384);
+        const Route r512 = resolve_geqrf_route<float>(kGeqrfAuto, tall512, true);
+        EXPECT_TRUE(is_native(r512))
+            << "float 512x32 is 2.68x native and 32 columns is under the float floor "
+               "of 64 -- only the tall clause routes it";
+        EXPECT_EQ(r512.algo, Algorithm::CTA)
+            << "512*32 = 16,384 fits the 24,320-scalar float tile and 32 <= the 96 "
+               "column crossover, so the tall panel stays on CTA";
+
+        // 512x64 is over the crossover in columns, so the SAME clause must hand it to
+        // the blocked arm: the tall clause selects a window, never a tier.
+        const Route r64 = resolve_geqrf_route<float>(
+            kGeqrfAuto, geqrf_dev_shape<float>(512, 64, 16384), true);
+        EXPECT_TRUE(is_native(r64));
+        EXPECT_EQ(r64.algo, Algorithm::Blocked) << "float 512x64 is 3.18x on blocked";
+    }
+    // BOTH of the clause's own edges, from the losing side.
+    {
+        // rows below 128: the smallest tall panel ever measured is 128x32.
+        EXPECT_FALSE(GeqrfTable::preferred(kGeqrfCta, geqrf_dev_shape<float>(96, 32, 16384)));
+        EXPECT_FALSE(GeqrfTable::preferred(kGeqrfBlocked, geqrf_dev_shape<float>(96, 32, 16384)));
+        EXPECT_TRUE(is_vendor(resolve_geqrf_route<float>(
+            kGeqrfAuto, geqrf_dev_shape<float>(96, 32, 16384), true)))
+            << "96x32 is under the clause's row floor of 128 and 32 is under the float "
+               "column floor of 64; nothing measured routes it";
+        // cols below 32.
+        EXPECT_TRUE(is_vendor(resolve_geqrf_route<float>(
+            kGeqrfAuto, geqrf_dev_shape<float>(4096, 16, 16384), true)))
+            << "16 columns: no tall cell that narrow was measured";
+        // aspect below the floor: 128x48 is tall-ish and still outside for every
+        // type -- 128 < 4*48, so it fails even the 32-bit floor.
+        EXPECT_TRUE(is_vendor(resolve_geqrf_route<double>(
+            kGeqrfAuto, geqrf_dev_shape<double>(128, 48, 16384), true)))
+            << "rows >= 128 and cols >= 32 but 128 < 4*48; the clause is an ASPECT "
+               "test and dropping the ratio would route a shape nothing measured";
+    }
+
+    // ---- THE ASPECT FLOOR IS PER TYPE: 128x32 wins for the 32-bit types and loses for both
+    //      64-bit ones, so one floor cannot serve both.
+    //      evidence: docs/perf/qr.md#the-shipped-geqrf-window
+    {
+        // The measured losers. 32 columns is under both 64-bit order floors
+        // (double 96, cdouble 256), so ONLY the aspect clause could route these.
+        EXPECT_TRUE(is_vendor(resolve_geqrf_route<double>(
+            kGeqrfAuto, geqrf_dev_shape<double>(128, 32, 16384), true)))
+            << "double 128x32 is exactly 4x and measures 0.68x; a type-independent "
+               "aspect floor of 4 routes a measured loss native";
+        EXPECT_TRUE(is_vendor(resolve_geqrf_route<std::complex<double>>(
+            kGeqrfAuto, geqrf_dev_shape<std::complex<double>>(128, 32, 16384), true)))
+            << "cdouble 128x32: same 0.68x, same defect";
+
+        // 168x32 is 5.25x -- between the two floors, and UNMEASURED as well as
+        // under the 64-bit one. This is the row route_diff caught moving to
+        // native while the floor was still type-independent.
+        EXPECT_TRUE(is_vendor(resolve_geqrf_route<double>(
+            kGeqrfAuto, geqrf_dev_shape<double>(168, 32, 16384), true)))
+            << "double 168x32 is 5.25x, under the 64-bit floor of 8 and measured "
+               "nowhere in the tall table";
+        EXPECT_TRUE(is_vendor(resolve_geqrf_route<std::complex<double>>(
+            kGeqrfAuto, geqrf_dev_shape<std::complex<double>>(168, 32, 16384), true)))
+            << "cdouble 168x32: same cell, same absent measurement";
+
+        // The winning side of the SAME cell. Without this pair the 64-bit floor
+        // could be applied to all four types and only half the test would notice.
+        const Route f128 = resolve_geqrf_route<float>(
+            kGeqrfAuto, geqrf_dev_shape<float>(128, 32, 16384), true);
+        EXPECT_TRUE(is_native(f128)) << "float 128x32 measures 2.23x";
+        EXPECT_EQ(f128.algo, Algorithm::CTA)
+            << "128*32 = 4,096 fits float's 24,320-scalar tile and 32 <= the 96 "
+               "column crossover";
+        const Route c128 = resolve_geqrf_route<std::complex<float>>(
+            kGeqrfAuto, geqrf_dev_shape<std::complex<float>>(128, 32, 16384), true);
+        EXPECT_TRUE(is_native(c128))
+            << "cfloat 128x32 measures 3.79x -- the largest win in the tall table";
+        EXPECT_EQ(c128.algo, Algorithm::CTA)
+            << "4,096 scalars fits cfloat's 12,160 tile, and cfloat has no measured "
+               "column crossover";
+
+        // 512x32 is 16x, clear of BOTH floors, so all four types stay native: the
+        // 64-bit value is a FLOOR, not a deletion of the tall clause for those
+        // types. The tier is deliberately not pinned per type here -- 512*32 =
+        // 16,384 scalars fits only float's 24,320 tile, so the other three fall to
+        // Blocked on CAPACITY, which is supports() ruling rather than the window.
+        EXPECT_TRUE(is_native(resolve_geqrf_route<float>(
+            kGeqrfAuto, geqrf_dev_shape<float>(512, 32, 16384), true)));
+        EXPECT_TRUE(is_native(resolve_geqrf_route<std::complex<float>>(
+            kGeqrfAuto, geqrf_dev_shape<std::complex<float>>(512, 32, 16384), true)))
+            << "cfloat 512x32 measures 3.39x";
+        EXPECT_TRUE(is_native(resolve_geqrf_route<double>(
+            kGeqrfAuto, geqrf_dev_shape<double>(512, 32, 16384), true)))
+            << "double 512x32 measures 1.58x at twice the 64-bit floor";
+        EXPECT_TRUE(is_native(resolve_geqrf_route<std::complex<double>>(
+            kGeqrfAuto, geqrf_dev_shape<std::complex<double>>(512, 32, 16384), true)))
+            << "cdouble 512x32 measures 2.16x";
+    }
+
+    // ---- preferred() reads the TABLE'S T, never s.scalar --------------------
+    // Every helper shape above carries ScalarKind::F32; a predicate reading s.scalar
+    // would give all four types the float answer. n = 64 separates them: float is at
+    // its floor, double and cdouble are below theirs, cfloat is above its.
+    {
+        EXPECT_TRUE((RouteTable<Op::geqrf, float>::preferred(
+            kGeqrfCta, geqrf_dev_shape<float>(64, 64, 8192))));
+        EXPECT_TRUE((RouteTable<Op::geqrf, std::complex<float>>::preferred(
+            kGeqrfCta, geqrf_dev_shape<std::complex<float>>(64, 64, 8192))));
+        EXPECT_FALSE((RouteTable<Op::geqrf, double>::preferred(
+            kGeqrfCta, geqrf_dev_shape<double>(64, 64, 8192))));
+        EXPECT_FALSE((RouteTable<Op::geqrf, double>::preferred(
+            kGeqrfBlocked, geqrf_dev_shape<double>(64, 64, 8192))));
+        EXPECT_FALSE((RouteTable<Op::geqrf, std::complex<double>>::preferred(
+            kGeqrfCta, geqrf_dev_shape<std::complex<double>>(64, 64, 8192))));
+        EXPECT_FALSE((RouteTable<Op::geqrf, std::complex<double>>::preferred(
+            kGeqrfBlocked, geqrf_dev_shape<std::complex<double>>(64, 64, 8192))));
+    }
+
+    // ---- the window is not a correctness gate -------------------------------
+    // Below the floor both arms must stay supports()-true, or a pinned route falls
+    // through to automatic() and the vendor-free build loses geqrf entirely.
+    {
+        const auto lo = geqrf_dev_shape<double>(32, 32, 8192);
+        EXPECT_TRUE(GeqrfTable::supports(kGeqrfCta, lo));
+        EXPECT_TRUE(GeqrfTable::supports(kGeqrfBlocked, lo));
+        EXPECT_TRUE(is_native(resolve_geqrf_route<double>(kGeqrfAuto, lo, false)))
+            << "a vendor-free build must still factorise a 32x32 panel";
+    }
 }
 
 TEST(RouteGeqrf, BareOriginResolvesToASpecificAlgorithm) {
@@ -1002,7 +1270,7 @@ TEST(RouteGeqrf, BatchlasGeqrfRouteIsActuallyRead) {
         EXPECT_EQ(legacy_unset_default(Op::geqrf).origin, Origin::Auto);
     }
     {
-        ScopedEnv e("BATCHLAS_GEQRF_ROUTE", "cta");
+        ScopedEnvVar e("BATCHLAS_GEQRF_ROUTE", "cta");
         const auto p = parse_route_env(Op::geqrf);
         ASSERT_TRUE(p.found) << "BATCHLAS_GEQRF_ROUTE was not read at all";
         EXPECT_EQ(p.route, (Route{Origin::Native, Algorithm::CTA}))
@@ -1011,13 +1279,13 @@ TEST(RouteGeqrf, BatchlasGeqrfRouteIsActuallyRead) {
         EXPECT_FALSE(p.source.legacy);
     }
     {
-        ScopedEnv e("BATCHLAS_GEQRF_ROUTE", "vendor");
+        ScopedEnvVar e("BATCHLAS_GEQRF_ROUTE", "vendor");
         const auto p = parse_route_env(Op::geqrf);
         ASSERT_TRUE(p.found);
         EXPECT_EQ(p.route, (Route{Origin::Vendor, Algorithm::Auto}));
     }
     {
-        ScopedEnv e("BATCHLAS_GEQRF_ROUTE", "native:blocked");
+        ScopedEnvVar e("BATCHLAS_GEQRF_ROUTE", "native:blocked");
         const auto p = parse_route_env(Op::geqrf);
         ASSERT_TRUE(p.found);
         EXPECT_EQ(p.route, (Route{Origin::Native, Algorithm::Blocked}));
@@ -1025,7 +1293,7 @@ TEST(RouteGeqrf, BatchlasGeqrfRouteIsActuallyRead) {
     {
         // AN UNRECOGNISED VALUE IS SILENTLY {Auto, Auto}, WHICH IS THE VENDOR: a
         // "native" run that looks identical to the vendor probably IS the vendor.
-        ScopedEnv e("BATCHLAS_GEQRF_ROUTE", "not-a-route");
+        ScopedEnvVar e("BATCHLAS_GEQRF_ROUTE", "not-a-route");
         const auto p = parse_route_env(Op::geqrf);
         EXPECT_FALSE(p.found);
         EXPECT_TRUE(p.unparsed) << "a typo must be reported, not silently Auto";
@@ -1072,30 +1340,85 @@ TEST(RouteOrgqr, VendorFreeFallbackHandsOverTheNativeRoute) {
     const auto s = orgqr_shape(/*rows=*/64, /*cols=*/64, /*batch=*/1);
 
     EXPECT_TRUE(OrgqrTable::supports(kOrgqrBlocked, s));
-    EXPECT_FALSE(OrgqrTable::preferred(kOrgqrBlocked, s));
+    EXPECT_TRUE(OrgqrTable::preferred(kOrgqrBlocked, s))
+        << "n = 64 is inside the measured window (27.10x float against the per-item "
+           "vendor loop, docs/perf/small-n-baseline.md#orgqr)";
     EXPECT_TRUE(is_native(resolve_orgqr_route<float>(kOrgqrAuto, s,
                                                      /*vendor_available=*/false)));
-    EXPECT_TRUE(is_vendor(resolve_orgqr_route<float>(kOrgqrAuto, s,
-                                                     /*vendor_available=*/true)));
+    EXPECT_TRUE(is_native(resolve_orgqr_route<float>(kOrgqrAuto, s,
+                                                     /*vendor_available=*/true)))
+        << "with a vendor present n = 64 is native too -- the window covers it";
+
+    // AND THE FALLBACK MUST STILL WORK ABOVE THE CEILING, which is the half a window in
+    // supports() would destroy: n = 1024 is a recorded loss and takes the vendor, but a
+    // vendor-free build has to reach the native arm there all the same.
+    // evidence: docs/perf/qr.md#orgqr-grid
+    const auto big = orgqr_shape(/*rows=*/1024, /*cols=*/1024, /*batch=*/1);
+    EXPECT_TRUE(OrgqrTable::supports(kOrgqrBlocked, big))
+        << "the ceiling is a SPEED bound; putting it in supports() would delete the "
+           "vendor-free route above n = 512";
+    EXPECT_FALSE(OrgqrTable::preferred(kOrgqrBlocked, big));
+    EXPECT_TRUE(is_native(resolve_orgqr_route<float>(kOrgqrAuto, big, false)));
+    EXPECT_TRUE(is_vendor(resolve_orgqr_route<float>(kOrgqrAuto, big, true)));
 }
 
-TEST(RouteOrgqr, PreferredIsFalseEverywhere) {
-    // NOT `is_native(r) && supports(r, s)`: that spelling would make native the
-    // default on every supported shape, and cfloat n=2048 is a measured loss.
-    for (int64_t n : {1, 32, 64, 256, 1024, 2048}) {
+// THE MEASURED CEILING, and it is the whole window: native to n = 512, vendor above. NOT
+// `is_native && supports` -- there is no losing cell INSIDE the measured range, so the
+// bound comes from the cells above it. evidence: docs/perf/qr.md#the-shipped-orgqr-ceiling
+TEST(RouteOrgqr, PreferredIsNativeUpToTheMeasuredCeiling) {
+    // ---- INSIDE: native at every order the grid covers, every type, every batch.
+    for (int64_t n : {1, 16, 32, 64, 256, 512}) {
         for (int64_t batch : {1, 8, 128, 2048}) {
             const auto s = orgqr_shape(n, n, batch);
-            EXPECT_FALSE(OrgqrTable::preferred(kOrgqrBlocked, s));
+            EXPECT_TRUE(OrgqrTable::preferred(kOrgqrBlocked, s))
+                << "n " << n << " batch " << batch;
             EXPECT_FALSE(OrgqrTable::preferred(Route{Origin::Vendor, Algorithm::Auto}, s))
                 << "the vendor is where the walk ENDS, never itself preferred";
+            const Route r = resolve_orgqr_route<float>(kOrgqrAuto, s, true);
+            EXPECT_TRUE(is_native(r) && r.algo == Algorithm::Blocked)
+                << "n " << n << " batch " << batch;
+        }
+    }
+
+    // ---- OUTSIDE: the recorded losses. docs/perf/qr.md#the-shipped-orgqr-ceiling
+    for (int64_t n : {1024, 2048}) {
+        for (int64_t batch : {1, 8, 128, 2048}) {
+            const auto s = orgqr_shape(n, n, batch);
+            EXPECT_FALSE(OrgqrTable::preferred(kOrgqrBlocked, s))
+                << "n " << n << " batch " << batch << " is a recorded LOSS "
+                   "(1024: cfloat 0.82x / cdouble 0.78x; 2048: float 0.41x, "
+                   "cfloat 0.31x, cdouble 0.46x)";
             EXPECT_TRUE(is_vendor(resolve_orgqr_route<float>(kOrgqrAuto, s, true)))
                 << "n " << n << " batch " << batch;
         }
     }
-    const auto s = orgqr_shape(256, 256, 512);
-    EXPECT_FALSE((RouteTable<Op::orgqr, double>::preferred(kOrgqrBlocked, s)));
-    EXPECT_FALSE((RouteTable<Op::orgqr, std::complex<float>>::preferred(kOrgqrBlocked, s)));
-    EXPECT_FALSE((RouteTable<Op::orgqr, std::complex<double>>::preferred(kOrgqrBlocked, s)));
+
+    // The ceiling has NO batch term on purpose: exactly ONE type recovers with batch,
+    // and one type crossing is not a window. A batch clause needs its own measurement.
+    // evidence: docs/perf/qr.md#the-shipped-orgqr-ceiling
+    EXPECT_FALSE(OrgqrTable::preferred(kOrgqrBlocked, orgqr_shape(1024, 1024, 256)));
+
+    // ---- THE EDGE, from both sides and on BOTH extents. Q's columns live in C^m,
+    // so a 1024x512 view is 512 reflectors against 1024 rows: the m cost is real and
+    // the bound is not a cols()-only test.
+    EXPECT_TRUE (OrgqrTable::preferred(kOrgqrBlocked, orgqr_shape(512, 512, 1024)));
+    EXPECT_FALSE(OrgqrTable::preferred(kOrgqrBlocked, orgqr_shape(513, 513, 1024)));
+    EXPECT_TRUE (OrgqrTable::preferred(kOrgqrBlocked, orgqr_shape(512, 256, 1024)));
+    EXPECT_FALSE(OrgqrTable::preferred(kOrgqrBlocked, orgqr_shape(1024, 512, 1024)))
+        << "rows = 1024 is outside the measured range whatever the column count";
+
+    // ---- ALL FOUR TYPES, on both sides. The grid is complete per type, so this is
+    // not float's window generalised.
+    {
+        const auto in  = orgqr_shape(512, 512, 1024);
+        const auto out = orgqr_shape(1024, 1024, 1024);
+        EXPECT_TRUE((RouteTable<Op::orgqr, double>::preferred(kOrgqrBlocked, in)));
+        EXPECT_TRUE((RouteTable<Op::orgqr, std::complex<float>>::preferred(kOrgqrBlocked, in)));
+        EXPECT_TRUE((RouteTable<Op::orgqr, std::complex<double>>::preferred(kOrgqrBlocked, in)));
+        EXPECT_FALSE((RouteTable<Op::orgqr, double>::preferred(kOrgqrBlocked, out)));
+        EXPECT_FALSE((RouteTable<Op::orgqr, std::complex<float>>::preferred(kOrgqrBlocked, out)));
+        EXPECT_FALSE((RouteTable<Op::orgqr, std::complex<double>>::preferred(kOrgqrBlocked, out)));
+    }
 }
 
 TEST(RouteOrgqr, CorrectnessGatesIncludeTheOnesInheritedFromOrmqr) {
@@ -1193,7 +1516,7 @@ TEST(RouteOrgqr, BatchlasOrgqrRouteIsActuallyRead) {
         EXPECT_EQ(legacy_unset_default(Op::orgqr).origin, Origin::Auto);
     }
     {
-        ScopedEnv e("BATCHLAS_ORGQR_ROUTE", "blocked");
+        ScopedEnvVar e("BATCHLAS_ORGQR_ROUTE", "blocked");
         const auto p = parse_route_env(Op::orgqr);
         ASSERT_TRUE(p.found) << "BATCHLAS_ORGQR_ROUTE was not read at all";
         EXPECT_EQ(p.route, (Route{Origin::Native, Algorithm::Blocked}));
@@ -1201,13 +1524,13 @@ TEST(RouteOrgqr, BatchlasOrgqrRouteIsActuallyRead) {
         EXPECT_FALSE(p.source.legacy);
     }
     {
-        ScopedEnv e("BATCHLAS_ORGQR_ROUTE", "vendor");
+        ScopedEnvVar e("BATCHLAS_ORGQR_ROUTE", "vendor");
         const auto p = parse_route_env(Op::orgqr);
         ASSERT_TRUE(p.found);
         EXPECT_EQ(p.route, (Route{Origin::Vendor, Algorithm::Auto}));
     }
     {
-        ScopedEnv e("BATCHLAS_ORGQR_ROUTE", "not-a-route");
+        ScopedEnvVar e("BATCHLAS_ORGQR_ROUTE", "not-a-route");
         const auto p = parse_route_env(Op::orgqr);
         EXPECT_FALSE(p.found);
         EXPECT_TRUE(p.unparsed) << "a typo must be reported, not silently Auto";
@@ -1704,7 +2027,7 @@ TEST(RouteGetrf, BatchlasGetrfRouteIsActuallyRead) {
         EXPECT_EQ(legacy_unset_default(Op::getrf).origin, Origin::Auto);
     }
     {
-        ScopedEnv e("BATCHLAS_GETRF_ROUTE", "cta");
+        ScopedEnvVar e("BATCHLAS_GETRF_ROUTE", "cta");
         const auto p = parse_route_env(Op::getrf);
         ASSERT_TRUE(p.found) << "BATCHLAS_GETRF_ROUTE was not read at all";
         EXPECT_EQ(p.route, (Route{Origin::Native, Algorithm::CTA}))
@@ -1713,19 +2036,19 @@ TEST(RouteGetrf, BatchlasGetrfRouteIsActuallyRead) {
         EXPECT_FALSE(p.source.legacy);
     }
     {
-        ScopedEnv e("BATCHLAS_GETRF_ROUTE", "native:blocked");
+        ScopedEnvVar e("BATCHLAS_GETRF_ROUTE", "native:blocked");
         const auto p = parse_route_env(Op::getrf);
         ASSERT_TRUE(p.found);
         EXPECT_EQ(p.route, (Route{Origin::Native, Algorithm::Blocked}));
     }
     {
-        ScopedEnv e("BATCHLAS_GETRF_ROUTE", "vendor");
+        ScopedEnvVar e("BATCHLAS_GETRF_ROUTE", "vendor");
         const auto p = parse_route_env(Op::getrf);
         ASSERT_TRUE(p.found);
         EXPECT_EQ(p.route, (Route{Origin::Vendor, Algorithm::Auto}));
     }
     {
-        ScopedEnv e("BATCHLAS_GETRF_ROUTE", "not-a-route");
+        ScopedEnvVar e("BATCHLAS_GETRF_ROUTE", "not-a-route");
         const auto p = parse_route_env(Op::getrf);
         EXPECT_FALSE(p.found);
         EXPECT_TRUE(p.unparsed) << "a typo must be reported, not silently Auto";
@@ -1817,15 +2140,62 @@ TEST(RouteGetrs, CorrectnessGatesAreNotSpeedGates) {
            "read as live";
 }
 
-// THE MEASURED nrhs WINDOW, pinned from BOTH sides:
-//     nrhs <= 2  for every type and order   -- clause A
-//   + nrhs <= 4  for float only             -- clause B
-// plus clause C for the composition below, which is never preferred at any width the
-// fused tier serves.
-// evidence: docs/perf/lu.md#getrs-fused-window-evidence
+// THE MEASURED WINDOW, pinned from BOTH sides: order >= 32 with nrhs <= 2 (every type,
+// clause A) and nrhs <= 4 (float, clause B), plus clause C for the composition.
+// evidence: docs/perf/lu.md#getrs-fused-window-evidence, #getrs-order-floor-evidence
 TEST(RouteGetrs, PreferredIsTheMeasuredNrhsWindowAndNothingWider) {
-    // ---- clause A: every type, every order, nrhs <= 2 ----------------------
-    for (int64_t order : {1, 32, 128, 2048}) {
+    // ---- THE ORDER FLOOR, from both sides. Below it the work-group IS the cost.
+    //      evidence: docs/perf/lu.md#getrs-order-floor-evidence
+    for (int64_t order : {1, 4, 8, 16, 17, 24, 31}) {
+        for (int64_t batch : {1, 128, 8192}) {
+            for (int64_t nrhs : {int64_t(1), int64_t(2)}) {
+                const auto s = getrs_shape(order, nrhs, batch);
+                EXPECT_FALSE(GetrsTable::preferred(kGetrsCta, s))
+                    << "float order " << order << " nrhs " << nrhs << " batch " << batch;
+                EXPECT_FALSE((GetrsTableD::preferred(kGetrsCta, s)));
+                EXPECT_FALSE((GetrsTableCF::preferred(kGetrsCta, s)));
+                EXPECT_FALSE((GetrsTableCD::preferred(kGetrsCta, s)));
+                EXPECT_TRUE(is_vendor(resolve_getrs_route<float>(kGetrsAuto, s, true)))
+                    << "order " << order << " nrhs " << nrhs << " batch " << batch
+                    << " is below the order floor and must take the vendor";
+                // NOT a correctness gate: the fused arm stays selectable when forced,
+                // and a vendor-free build must still reach a native route.
+                EXPECT_TRUE(GetrsTable::supports(kGetrsCta, s));
+                EXPECT_TRUE(is_native(resolve_getrs_route<float>(kGetrsAuto, s, false)));
+            }
+            // clause B's float-only width takes the SAME floor, off the same grid.
+            // evidence: docs/perf/lu.md#getrs-order-floor-evidence
+            EXPECT_FALSE(GetrsTable::preferred(kGetrsCta, getrs_shape(order, 4, batch)))
+                << "clause B, float order " << order;
+        }
+    }
+    // ...and the first order INSIDE it, so the floor is bracketed rather than asserted.
+    for (int64_t batch : {1, 128, 8192}) {
+        for (int64_t nrhs : {int64_t(1), int64_t(2)}) {
+            const auto s = getrs_shape(32, nrhs, batch);
+            EXPECT_TRUE(GetrsTable::preferred(kGetrsCta, s))
+                << "order 32 is the first order where all four types clear the flip "
+                   "gate AND stay clear above it (float 2.29, cfloat 1.40, double "
+                   "3.77, cdouble 2.13 at nrhs 1)";
+            EXPECT_TRUE((GetrsTableD::preferred(kGetrsCta, s)));
+            EXPECT_TRUE((GetrsTableCF::preferred(kGetrsCta, s)));
+            EXPECT_TRUE((GetrsTableCD::preferred(kGetrsCta, s)));
+            const Route r = resolve_getrs_route<float>(kGetrsAuto, s, true);
+            EXPECT_TRUE(is_native(r) && r.algo == Algorithm::CTA)
+                << "order 32 nrhs " << nrhs << " batch " << batch;
+        }
+        EXPECT_TRUE(GetrsTable::preferred(kGetrsCta, getrs_shape(32, 4, batch)))
+            << "clause B at the floor: float nrhs=4 clears only from 32 (1.30)";
+        EXPECT_FALSE((GetrsTableD::preferred(kGetrsCta, getrs_shape(32, 4, batch))))
+            << "and the floor must not widen clause B beyond float";
+    }
+    // The floor is on order(), not on nrhs() or batch, PROVED BY CONSTRUCTION: at a
+    // fixed nrhs and batch, order alone flips the answer at 32.
+    EXPECT_FALSE(GetrsTable::preferred(kGetrsCta, getrs_shape(31, 1, 8192)));
+    EXPECT_TRUE (GetrsTable::preferred(kGetrsCta, getrs_shape(32, 1, 8192)));
+
+    // ---- clause A: every type, every order AT OR ABOVE THE FLOOR, nrhs <= 2 --
+    for (int64_t order : {32, 128, 2048}) {
         for (int64_t nrhs : {int64_t(1), int64_t(2)}) {
             for (int64_t batch : {1, 128, 8192}) {
                 const auto s = getrs_shape(order, nrhs, batch);
@@ -2046,7 +2416,7 @@ TEST(RouteGetrs, BatchlasGetrsRouteIsActuallyRead) {
         EXPECT_EQ(legacy_unset_default(Op::getrs).origin, Origin::Auto);
     }
     {
-        ScopedEnv e("BATCHLAS_GETRS_ROUTE", "blocked");
+        ScopedEnvVar e("BATCHLAS_GETRS_ROUTE", "blocked");
         const auto p = parse_route_env(Op::getrs);
         ASSERT_TRUE(p.found) << "BATCHLAS_GETRS_ROUTE was not read at all";
         EXPECT_EQ(p.route, (Route{Origin::Native, Algorithm::Blocked}));
@@ -2054,13 +2424,13 @@ TEST(RouteGetrs, BatchlasGetrsRouteIsActuallyRead) {
         EXPECT_FALSE(p.source.legacy);
     }
     {
-        ScopedEnv e("BATCHLAS_GETRS_ROUTE", "vendor");
+        ScopedEnvVar e("BATCHLAS_GETRS_ROUTE", "vendor");
         const auto p = parse_route_env(Op::getrs);
         ASSERT_TRUE(p.found);
         EXPECT_EQ(p.route, (Route{Origin::Vendor, Algorithm::Auto}));
     }
     {
-        ScopedEnv e("BATCHLAS_GETRS_ROUTE", "not-a-route");
+        ScopedEnvVar e("BATCHLAS_GETRS_ROUTE", "not-a-route");
         const auto p = parse_route_env(Op::getrs);
         EXPECT_FALSE(p.found);
         EXPECT_TRUE(p.unparsed) << "a typo must be reported, not silently Auto";
@@ -2234,7 +2604,7 @@ TEST(RouteGetri, BatchlasGetriRouteIsActuallyRead) {
         EXPECT_EQ(legacy_unset_default(Op::getri).origin, Origin::Auto);
     }
     {
-        ScopedEnv e("BATCHLAS_GETRI_ROUTE", "blocked");
+        ScopedEnvVar e("BATCHLAS_GETRI_ROUTE", "blocked");
         const auto p = parse_route_env(Op::getri);
         ASSERT_TRUE(p.found) << "BATCHLAS_GETRI_ROUTE was not read at all";
         EXPECT_EQ(p.route, (Route{Origin::Native, Algorithm::Blocked}));
@@ -2242,13 +2612,13 @@ TEST(RouteGetri, BatchlasGetriRouteIsActuallyRead) {
         EXPECT_FALSE(p.source.legacy);
     }
     {
-        ScopedEnv e("BATCHLAS_GETRI_ROUTE", "vendor");
+        ScopedEnvVar e("BATCHLAS_GETRI_ROUTE", "vendor");
         const auto p = parse_route_env(Op::getri);
         ASSERT_TRUE(p.found);
         EXPECT_EQ(p.route, (Route{Origin::Vendor, Algorithm::Auto}));
     }
     {
-        ScopedEnv e("BATCHLAS_GETRI_ROUTE", "not-a-route");
+        ScopedEnvVar e("BATCHLAS_GETRI_ROUTE", "not-a-route");
         const auto p = parse_route_env(Op::getri);
         EXPECT_FALSE(p.found);
         EXPECT_TRUE(p.unparsed) << "a typo must be reported, not silently Auto";
@@ -2268,8 +2638,8 @@ TEST(RouteLuFamily, TheThreeOpsResolveIndependentlyAndThatIsThePivotHazard) {
     ClearRouteEnv clear_s(Op::getrs);
     ClearRouteEnv clear_i(Op::getri);
 
-    ScopedEnv ef("BATCHLAS_GETRF_ROUTE", "cta");
-    ScopedEnv ei("BATCHLAS_GETRI_ROUTE", "vendor");
+    ScopedEnvVar ef("BATCHLAS_GETRF_ROUTE", "cta");
+    ScopedEnvVar ei("BATCHLAS_GETRI_ROUTE", "vendor");
 
     EXPECT_EQ(parse_route_env(Op::getrf).route, (Route{Origin::Native, Algorithm::CTA}));
     EXPECT_EQ(parse_route_env(Op::getri).route, (Route{Origin::Vendor, Algorithm::Auto}));
@@ -3281,7 +3651,7 @@ TEST(RouteSpmm, BatchlasSpmmRouteIsActuallyRead) {
     }
     {
         // A bare algorithm implies Origin::Native.
-        ScopedEnv e("BATCHLAS_SPMM_ROUTE", "direct");
+        ScopedEnvVar e("BATCHLAS_SPMM_ROUTE", "direct");
         const auto p = parse_route_env(Op::spmm);
         ASSERT_TRUE(p.found) << "BATCHLAS_SPMM_ROUTE was not read at all";
         EXPECT_EQ(p.route, (Route{Origin::Native, Algorithm::Direct}));
@@ -3289,14 +3659,14 @@ TEST(RouteSpmm, BatchlasSpmmRouteIsActuallyRead) {
         EXPECT_FALSE(p.source.legacy);
     }
     {
-        ScopedEnv e("BATCHLAS_SPMM_ROUTE", "native:direct");
+        ScopedEnvVar e("BATCHLAS_SPMM_ROUTE", "native:direct");
         const auto p = parse_route_env(Op::spmm);
         ASSERT_TRUE(p.found);
         EXPECT_EQ(p.route, (Route{Origin::Native, Algorithm::Direct}));
     }
     {
         // A bare origin leaves the algorithm free; the resolver picks the body.
-        ScopedEnv e("BATCHLAS_SPMM_ROUTE", "native");
+        ScopedEnvVar e("BATCHLAS_SPMM_ROUTE", "native");
         const auto p = parse_route_env(Op::spmm);
         ASSERT_TRUE(p.found);
         EXPECT_EQ(p.route, (Route{Origin::Native, Algorithm::Auto}));
@@ -3305,7 +3675,7 @@ TEST(RouteSpmm, BatchlasSpmmRouteIsActuallyRead) {
                   Algorithm::Direct);
     }
     {
-        ScopedEnv e("BATCHLAS_SPMM_ROUTE", "vendor");
+        ScopedEnvVar e("BATCHLAS_SPMM_ROUTE", "vendor");
         const auto p = parse_route_env(Op::spmm);
         ASSERT_TRUE(p.found);
         EXPECT_EQ(p.route, (Route{Origin::Vendor, Algorithm::Auto}));
@@ -3313,7 +3683,7 @@ TEST(RouteSpmm, BatchlasSpmmRouteIsActuallyRead) {
     {
         // THE TYPO PATH: parse_route_env reports it, and every adapter in the tree then
         // DISCARDS `unparsed` and uses the unset default, so the run goes to the vendor.
-        ScopedEnv e("BATCHLAS_SPMM_ROUTE", "not-a-route");
+        ScopedEnvVar e("BATCHLAS_SPMM_ROUTE", "not-a-route");
         const auto p = parse_route_env(Op::spmm);
         EXPECT_FALSE(p.found);
         EXPECT_TRUE(p.unparsed) << "a typo must be reported, not silently Auto";

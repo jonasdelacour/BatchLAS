@@ -10,6 +10,7 @@
 #include "../math-helpers.hh"
 #include "../queue.hh"
 #include "../util/template-instantiations.hh"
+#include "info_span.hh"
 #include <algorithm>
 #include <complex>
 #include <limits>
@@ -161,7 +162,8 @@ inline void gesvdj_cta_impl(Queue& ctx,
                             int32_t rows,     // R = max(m,n), rows of the solved matrix
                             int32_t cols,     // C = min(m,n), cols of the solved matrix
                             int32_t left_cols,// columns of the left factor to emit: R (All) or C (Thin)
-                            GesvdjParams<T> params) {
+                            GesvdjParams<T> params,
+                            int32_t* info) {
     using Real = typename base_type<T>::type;
 
     const auto batch_size = a_in.batch_size();
@@ -283,6 +285,9 @@ inline void gesvdj_cta_impl(Queue& ctx,
         int32_t* SW = (params.sweep_counts.size() >= static_cast<size_t>(batch_size))
                           ? params.sweep_counts.data()
                           : nullptr;
+        // A local of the submit lambda for the same reason as S and SW; nullptr
+        // when status was not requested, which makes info_store a no-op.
+        int32_t* const info_dev = info;
 
         // The 32 here is load-bearing and was previously only checked on the
         // host, which cannot constrain what the compiler picks. The exact-norm
@@ -756,6 +761,19 @@ inline void gesvdj_cta_impl(Queue& ctx,
                 if (SW != nullptr && lane == 0) {
                     SW[prob_id] = sweeps_used;
                 }
+                // The convergence predicate is `zero_sweeps >= 2`, NOT
+                // `sweeps_used < max_sweeps`: termination here requires TWO
+                // consecutive zero-rotation sweeps (see the verification-sweep note
+                // above), so an item that used fewer than max_sweeps can still have
+                // left the loop without the second clean sweep. zero_sweeps is
+                // partition-uniform -- rot_count is reduced across the partition --
+                // so lane 0 may report for the item.
+                // A STORE, not a raise: this kernel is the single writer for the
+                // item, so a converged item is set to 0 here rather than by a
+                // separate clear kernel that could race with it.
+                if (lane == 0) {
+                    detail::info_store(info_dev, prob_id, (zero_sweeps < 2) ? 1 : 0);
+                }
 
                 // Seed the permutation with the identity BEFORE the sort. The
                 // sort writes Inv_local[rank] for each column, which covers every
@@ -1040,14 +1058,14 @@ void validate_gesvdj_dims(const MatrixView<T, MatrixFormat::Dense>& a,
                           SvdVectors jobvh,
                           const char* where) {
     if (a.batch_size() < 1 || a.rows() < 1 || a.cols() < 1) {
-        throw std::invalid_argument(std::string(where) + ": invalid matrix dimensions or batch size");
+        throw batchlas::invalid_argument(std::string(where) + ": invalid matrix dimensions or batch size");
     }
     const int64_t m = a.rows();
     const int64_t n = a.cols();
     const int64_t k = std::min(m, n);
     const int64_t batch = a.batch_size();
     if (singular_values.size() < static_cast<std::size_t>(k) * static_cast<std::size_t>(batch)) {
-        throw std::invalid_argument(std::string(where) + ": singular_values span too small");
+        throw batchlas::invalid_argument(std::string(where) + ": singular_values span too small");
     }
     // Guard on "is computed at all" rather than "== All", and take the expected
     // column/row count from the job, so Thin is checked against m x k / k x n.
@@ -1058,7 +1076,7 @@ void validate_gesvdj_dims(const MatrixView<T, MatrixFormat::Dense>& a,
     if (jobu != SvdVectors::None) {
         const int64_t want_cols = svd_u_cols(jobu, m, k);
         if (u.rows() != m || u.cols() != want_cols || u.batch_size() != batch) {
-            throw std::invalid_argument(std::string(where) + ": U must be (" +
+            throw batchlas::invalid_argument(std::string(where) + ": U must be (" +
                                         std::to_string(m) + " x " + std::to_string(want_cols) +
                                         ") with matching batch size");
         }
@@ -1066,7 +1084,7 @@ void validate_gesvdj_dims(const MatrixView<T, MatrixFormat::Dense>& a,
     if (jobvh != SvdVectors::None) {
         const int64_t want_rows = svd_vh_rows(jobvh, n, k);
         if (vh.rows() != want_rows || vh.cols() != n || vh.batch_size() != batch) {
-            throw std::invalid_argument(std::string(where) + ": Vh must be (" +
+            throw batchlas::invalid_argument(std::string(where) + ": Vh must be (" +
                                         std::to_string(want_rows) + " x " + std::to_string(n) +
                                         ") with matching batch size");
         }
@@ -1084,7 +1102,8 @@ Event gesvdj_cta(Queue& ctx,
                  SvdVectors jobu,
                  SvdVectors jobvh,
                  const Span<std::byte>& ws,
-                 GesvdjParams<T> params) {
+                 GesvdjParams<T> params,
+                 Span<int32_t> info) {
     (void)ws;
 
     validate_gesvdj_dims(a_in, singular_values, u_out, vh_out, jobu, jobvh, "gesvdj_cta");
@@ -1097,7 +1116,7 @@ Event gesvdj_cta(Queue& ctx,
         jobvh = canonical_jobvh(jobvh, n, k);
     }
     if (std::max(m, n) > gesvdj_cta_max_dim<T>(want_vectors_for_cap(jobu, jobvh))) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "gesvdj_cta: max(m, n) exceeds the supported cap for this scalar type "
             "(see gesvdj_cta_max_dim)");
     }
@@ -1110,7 +1129,7 @@ Event gesvdj_cta(Queue& ctx,
             if (static_cast<int32_t>(s) == 32) { has32 = true; break; }
         }
         if (!has32) {
-            throw std::runtime_error("gesvdj_cta: device does not support subgroup size 32 required for CTA kernels.");
+            throw batchlas::unsupported("gesvdj_cta: device does not support subgroup size 32 required for CTA kernels.");
         }
     }
 
@@ -1139,15 +1158,19 @@ Event gesvdj_cta(Queue& ctx,
 
     auto* s_ptr = singular_values.data();
 
+    // No clear: the kernel STORES every item's status. `info` is caller USM and
+    // needs no workspace, which is why gesvdj_cta_buffer_size still returns 0.
+    int32_t* info_ptr = detail::info_ptr(info, a_in.batch_size());
+
     // (P, C): P lanes per partition, C the tile capacity. Every rung here has
     // C == P, i.e. one row per lane -- the shape this kernel has always had.
     auto launch = [&](auto P_tag, auto C_tag) {
         constexpr size_t Pv = decltype(P_tag)::value;
         constexpr size_t Cv = decltype(C_tag)::value;
         if (want_right) {
-            gesvdj_cta_impl<T, Pv, Cv, true>(ctx, a_in, s_ptr, u_out, vh_out, want_left, transposed, RR, CC, left_cols, params);
+            gesvdj_cta_impl<T, Pv, Cv, true>(ctx, a_in, s_ptr, u_out, vh_out, want_left, transposed, RR, CC, left_cols, params, info_ptr);
         } else {
-            gesvdj_cta_impl<T, Pv, Cv, false>(ctx, a_in, s_ptr, u_out, vh_out, want_left, transposed, RR, CC, left_cols, params);
+            gesvdj_cta_impl<T, Pv, Cv, false>(ctx, a_in, s_ptr, u_out, vh_out, want_left, transposed, RR, CC, left_cols, params, info_ptr);
         }
     };
 
@@ -1188,7 +1211,7 @@ size_t gesvdj_cta_buffer_size(Queue& ctx,
     (void)params;
     validate_gesvdj_dims(a, singular_values, u_out, vh_out, jobu, jobvh, "gesvdj_cta_buffer_size");
     if (std::max(a.rows(), a.cols()) > gesvdj_cta_max_dim<T>(want_vectors_for_cap(jobu, jobvh))) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "gesvdj_cta_buffer_size: max(m, n) exceeds the supported cap for this scalar type");
     }
     // Everything is LDS-resident for the lifetime of the kernel.
@@ -1204,7 +1227,8 @@ size_t gesvdj_cta_buffer_size(Queue& ctx,
         const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
         SvdVectors, SvdVectors, \
         const Span<std::byte>&, \
-        GesvdjParams<BATCHLAS_UNPAREN fp>); \
+        GesvdjParams<BATCHLAS_UNPAREN fp>, \
+        Span<int32_t>); \
     template size_t gesvdj_cta_buffer_size<back, BATCHLAS_UNPAREN fp>( \
         Queue&, \
         const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \

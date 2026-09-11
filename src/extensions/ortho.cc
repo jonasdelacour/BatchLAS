@@ -15,6 +15,7 @@
 #include <batchlas/backend_config.h>
 
 #include "../util/template-instantiations.hh"
+#include <batchlas/settings.hh>
 
 
 // High-level orthogonalization functions built on top of primitive BLAS operations
@@ -179,7 +180,7 @@ namespace batchlas {
         // parent commit to compare against.
         constexpr bool gram_is_real = !sycl::detail::is_complex<T>::value;
         const bool gram_pinned_to_gemm = [] {
-            const char* raw = std::getenv("BATCHLAS_ORTHO_GRAM");
+            const char* raw = batchlas::settings().selection.ortho_gram.get();
             return raw != nullptr && std::string(raw) == "gemm";
         }();
         constexpr int gram_max_k = std::is_same_v<T, float> ? 64 : 128;
@@ -206,9 +207,11 @@ namespace batchlas {
             //Compute StS = S^T * S or StS = S * S^T (depending on transA)
             gram_into_C(A);
             //Compute the Cholesky Factorization of StS
-            potrf<B>(ctx, C, PotrfOptions{}, potrf_workspace);
+            // (void) on an Event: deliberate. This Queue is in-order, so the next submission
+            // is already ordered after this one and the Event carries nothing the caller needs.
+            (void)potrf<B>(ctx, C, PotrfOptions{}, potrf_workspace);
             //Solve X * Chol(StS) = S
-            trsm<B>(ctx,
+            (void)trsm<B>(ctx,
                     C,
                     A,
                     {.alpha = alpha, .side = is_A_trans ? Side::Left : Side::Right, .trans = inv_trans});
@@ -233,8 +236,8 @@ namespace batchlas {
                 //output vector
                 if (i > 0){ //If it's the first vector we just need to normalize it
                     for (int j = 0; j < 2; j++){
-                        gemv<B>(ctx, A_i, A_next, C, {.transA = inv_trans});
-                        gemv<B>(ctx,
+                        (void)gemv<B>(ctx, A_i, A_next, C, {.transA = inv_trans});
+                        (void)gemv<B>(ctx,
                                 A_i,
                                 C,
                                 A_next,
@@ -294,8 +297,8 @@ namespace batchlas {
                 });
             });
             //Compute the Cholesky Factorization of StS
-            potrf<B>(ctx, C, PotrfOptions{}, potrf_workspace);
-            trsm<B>(ctx, C, A, {.side = is_A_trans ? Side::Left : Side::Right, .trans = inv_trans});
+            (void)potrf<B>(ctx, C, PotrfOptions{}, potrf_workspace);
+            (void)trsm<B>(ctx, C, A, {.side = is_A_trans ? Side::Left : Side::Right, .trans = inv_trans});
             chol_alg();
             chol_alg();
         };
@@ -307,7 +310,7 @@ namespace batchlas {
 
         auto svqb_alg = [&](auto in_mat, auto out_mat) {
             //Compute A^H * A
-            gemm<B>(ctx, in_mat, in_mat, C, {.transA = inv_trans, .transB = transA});
+            (void)gemm<B>(ctx, in_mat, in_mat, C, {.transA = inv_trans, .transB = transA});
             //Compute D = diag(A^H * A) ^-1/2
             ctx -> submit([&](sycl::handler& h) {
                 auto ATA_ptr = C.data_ptr();
@@ -345,7 +348,7 @@ namespace batchlas {
                 });
             });
 
-            syev<B>(ctx, C, lambdas, SyevOptions{}, syev_workspace);
+            (void)syev<B>(ctx, C, lambdas, SyevOptions{}, syev_workspace);
 
             //First Compute D * EigenVectors * Lambda^-1/2
             ctx -> submit([&](sycl::handler& h){
@@ -368,7 +371,7 @@ namespace batchlas {
                 });
             });
             //Compute Q = S * D * EigenVectors * Lambda^-1/2
-            gemm<B>(ctx, in_mat, C, out_mat, {.transA = transA});
+            (void)gemm<B>(ctx, in_mat, C, out_mat, {.transA = transA});
             //Memcpy
         };
         switch (algo) {
@@ -383,8 +386,8 @@ namespace batchlas {
                 shift_chol_alg();
                 break;
             case OrthoAlgorithm::Householder: {
-                geqrf<B>(ctx, A, wsl.tau, wsl.geqrf_ws);
-                orgqr<B>(ctx, A, wsl.tau, wsl.orgqr_ws);
+                (void)geqrf<B>(ctx, A, wsl.tau, wsl.geqrf_ws);
+                (void)orgqr<B>(ctx, A, wsl.tau, wsl.orgqr_ws);
                 break;
             }
             case OrthoAlgorithm::CGS2:
@@ -414,7 +417,7 @@ namespace batchlas {
                 break;
             }
             default:
-                throw std::runtime_error("Unknown orthogonalization algorithm");
+                throw batchlas::invalid_argument("Unknown orthogonalization algorithm");
         }
         
         return ctx.get_event();
@@ -458,7 +461,7 @@ namespace batchlas {
         
         // Initialize the matrices if not already done
         if(nA + nM > k){
-            throw std::runtime_error("The number of vectors in A (" + std::to_string(nA) + ") and M (" + std::to_string(nM) + ") must sum to at most the dimension of these vectors (" + std::to_string(k) + ")");
+            throw batchlas::invalid_argument("The number of vectors in A (" + std::to_string(nA) + ") and M (" + std::to_string(nM) + ") must sum to at most the dimension of these vectors (" + std::to_string(k) + ")");
         }
         assert(k == (transM == Transpose::NoTrans ? M.rows_ : M.cols_));
         auto trans = sycl::detail::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
@@ -474,14 +477,14 @@ namespace batchlas {
         auto is_second_transposed = static_cast<Transpose>(((transA == trans) && (transM == no_trans)));
         
         for (size_t i = 0; i < iterations; i++){
-            gemm<B>(ctx, M, A, descrMA, {.transA = inv_transM, .transB = transA});
-            gemm<B>(ctx,
+            (void)gemm<B>(ctx, M, A, descrMA, {.transA = inv_transM, .transB = transA});
+            (void)gemm<B>(ctx,
                     isAtrans ? descrMA : M,
                     isAtrans ? M : descrMA,
                     A,
                     {.alpha = T(-1.0), .beta = T(1.0), .transA = is_first_transposed, .transB = is_second_transposed});
 
-            ortho<B>(ctx, A, transA, orthoworkspace, algo);
+            (void)ortho<B>(ctx, A, transA, orthoworkspace, algo);
         }
         return ctx.get_event();
     }

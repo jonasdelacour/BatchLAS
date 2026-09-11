@@ -1,11 +1,13 @@
 #pragma once
 
+#include <batchlas/export.hh>
 #include <cstdlib>
 #include <optional>
 #include <stdexcept>
 #include <type_traits>
 #include <string_view>
 
+#include <batchlas/settings.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/blas/matrix.hh>
@@ -29,7 +31,7 @@ template <typename T>
 using syev = Event(Queue&,
                    const MatrixView<T, MatrixFormat::Dense>&,
                    Span<typename base_type<T>::type>,
-                   JobType, Uplo, Span<std::byte>);
+                   JobType, Uplo, Span<std::byte>, Span<int32_t>);
 
 template <typename T>
 using syev_buffer_size = size_t(Queue&,
@@ -43,40 +45,85 @@ template <typename T> using syev_vendor_buffer_size = syev_buffer_size<T>;
 }  // namespace sig
 
 
+// `info` is the per-item convergence status: one int32 per batch item, 0 when the
+// item converged and > 0 LAPACK-like (the number of off-diagonal elements that
+// failed to converge, or 1 where the tier that ran tracks only the fact of
+// failure). syev is exactly the routine where LAPACK returns info > 0, and until
+// now a non-converged item at batch 16384 was invisible -- the call returned,
+// ctx.wait() returned, and the caller read eigenvalues that were simply wrong for
+// that item with nothing anywhere saying so.
+//
+// An EMPTY span means "not requested" and costs nothing: `info` is the CALLER's
+// USM, written in place by whichever kernel already knows the answer, so no tier
+// needs workspace for it and syev_buffer_size is the same either way.
 template <Backend B, typename T>
-Event syev(Queue& ctx,
-           const MatrixView<T, MatrixFormat::Dense>& descrA, // A is overwritten with eigenvectors
+BATCHLAS_API Event syev(Queue& ctx,
+                        const MatrixView<T, MatrixFormat::Dense>& descrA, // A is overwritten with eigenvectors
+                        Span<typename base_type<T>::type> eigenvalues,
+                        JobType jobtype,
+                        Uplo uplo,
+                        Span<std::byte> workspace,
+                        Span<int32_t> info);
+
+// Old-arity forwarder rather than a defaulted trailing parameter, mirroring
+// potrf.hh:110.
+//
+// What forces the shape is sig::syev above: it is a function *type*, and function
+// types cannot carry default arguments, so `info` has to be spelled out there
+// whichever way the declaration is written (src/util/template-instantiations.hh).
+// Leaving the declaration default-free too keeps the two parameter-for-parameter
+// identical, which is the invariant BATCHLAS_INSTANTIATE reads; this inline
+// overload is then what keeps every existing six-argument call site -- the
+// SyevOptions spellings in blas/options.hh among them -- compiling unchanged.
+template <Backend B, typename T>
+inline Event syev(Queue& ctx,
+           const MatrixView<T, MatrixFormat::Dense>& descrA,
            Span<typename base_type<T>::type> eigenvalues,
            JobType jobtype,
            Uplo uplo,
-           Span<std::byte> workspace);
+           Span<std::byte> workspace) {
+    return syev<B, T>(ctx, descrA, eigenvalues, jobtype, uplo, workspace, Span<int32_t>{});
+}
 
 template <Backend B, typename T>
-size_t syev_buffer_size(Queue& ctx,
-                        const MatrixView<T, MatrixFormat::Dense>& A,
-                        Span<typename base_type<T>::type> eigenvalues,
-                        JobType jobtype,
-                        Uplo uplo);
+BATCHLAS_API size_t syev_buffer_size(Queue& ctx,
+                                     const MatrixView<T, MatrixFormat::Dense>& A,
+                                     Span<typename base_type<T>::type> eigenvalues,
+                                     JobType jobtype,
+                                     Uplo uplo);
 
 } // namespace batchlas
 
 namespace batchlas::backend {
 
 // Implemented by backend wrapper TUs (e.g. cuSOLVER / rocSOLVER / LAPACKE).
+// `info_out` is the caller's per-item status span, or empty. Every vendor already
+// allocates this array because the vendor call demands somewhere to write; before
+// this it was pool scratch that nobody read.
+//
+// Defaulted rather than forwarded, unlike the public `syev` above. A default
+// argument is a property of the declaration and not of the function type, so
+// sig::syev_vendor still names the full seven-parameter signature and the
+// explicit instantiations in the vendor TUs still match. That default is what
+// keeps the six-argument call sites in src/extra/norm.cc, src/extra/cond.cc,
+// src/extensions/syevx_lobpcg.cc and src/backends/cusolverdx.cc compiling with no
+// extra overload -- none of them is public API, so none needs a forwarder of its
+// own.
 template <Backend B, typename T>
-Event syev_vendor(Queue& ctx,
-                  const MatrixView<T, MatrixFormat::Dense>& descrA,
-                  Span<typename base_type<T>::type> eigenvalues,
-                  JobType jobtype,
-                  Uplo uplo,
-                  Span<std::byte> workspace);
-
-template <Backend B, typename T>
-size_t syev_vendor_buffer_size(Queue& ctx,
+BATCHLAS_API Event syev_vendor(Queue& ctx,
                                const MatrixView<T, MatrixFormat::Dense>& descrA,
                                Span<typename base_type<T>::type> eigenvalues,
                                JobType jobtype,
-                               Uplo uplo);
+                               Uplo uplo,
+                               Span<std::byte> workspace,
+                               Span<int32_t> info_out = Span<int32_t>());
+
+template <Backend B, typename T>
+BATCHLAS_API size_t syev_vendor_buffer_size(Queue& ctx,
+                                            const MatrixView<T, MatrixFormat::Dense>& descrA,
+                                            Span<typename base_type<T>::type> eigenvalues,
+                                            JobType jobtype,
+                                            Uplo uplo);
 
 } // namespace batchlas::backend
 
@@ -155,8 +202,11 @@ template <typename T>
 inline int64_t syev_cta_max_n_for_vectors() {
     // 32 == off: lowering it speeds up LOBPCG's projected solve but flips a marginal
     // case in ILUKTests.SyevxInstrumentationAndPreconditioner, so it is opt-in.
+    // The default is per-TYPE, so it cannot live on the Settings field: the
+    // field carries the raw value and the range check stays here, next to the
+    // constant it falls back to.
     constexpr int64_t kDefault = syev_cta_max_n_default_for<T>();
-    const char* v = std::getenv("BATCHLAS_SYEV_CTA_MAX_N");
+    const char* v = batchlas::settings().geometry.syev_cta_max_n.get();
     if (!v || !*v) return kDefault;
     char* end = nullptr;
     const long parsed = std::strtol(v, &end, 10);
@@ -169,8 +219,11 @@ inline int64_t syev_cta_max_n_for_vectors() {
 enum class SyevSmallKernel { Cta, CtaFused, Jacobi };
 
 inline SyevSmallKernel syev_small_kernel_env(bool& forced) {
+    // `forced` reports whether the variable named the kernel at all, which the
+    // caller needs to tell "set to cta" from "unset"; that is why the field is
+    // the raw value rather than a parsed SyevSmallKernel.
     forced = true;
-    const char* v = std::getenv("BATCHLAS_SYEV_SMALL_KERNEL");
+    const char* v = batchlas::settings().selection.syev_small_kernel.get();
     if (v && *v) {
         const std::string_view s(v);
         if (s == "cta") return SyevSmallKernel::Cta;
@@ -423,7 +476,8 @@ inline Event syev_dispatch(Queue& ctx,
                            Span<typename base_type<T>::type> eigenvalues,
                            JobType jobtype,
                            Uplo uplo,
-                           Span<std::byte> workspace) {
+                           Span<std::byte> workspace,
+                           Span<int32_t> info) {
     namespace d = batchlas::dispatch;
     // NETLIB has no native syev route; skip resolution rather than override it.
     const d::Route chosen = (B == Backend::NETLIB)
@@ -462,11 +516,11 @@ inline Event syev_dispatch(Queue& ctx,
     } else {
         // Unreachable. Throw rather than silently reset to Vendor: a silent reset is
         // how a buffer-size query and its call come to disagree.
-        throw std::logic_error("syev: resolver returned a route with no dispatch arm");
+        throw batchlas::internal_error("syev: resolver returned a route with no dispatch arm");
     }
 
     if (workspace.size() < need_ws) {
-        throw std::runtime_error("syev: insufficient workspace for chosen provider");
+        throw batchlas::workspace_error("syev: insufficient workspace for chosen provider");
     }
 
     // std::optional, not a plain `Queue`: the default Queue constructor builds a real
@@ -483,13 +537,17 @@ inline Event syev_dispatch(Queue& ctx,
 
     Event e;
     if (d::is_vendor(chosen)) {
-        e = detail::syev_vendor_or_throw<B, T>(*run_q, descrA, eigenvalues, jobtype, uplo, workspace);
+        // Every tier below clears `info` itself (steqr / stedc / the leaf CTA
+        // kernels do it; the vendor arm memsets and then lets the vendor overwrite),
+        // so syev_dispatch adds no clear of its own -- exactly one arm runs.
+        e = detail::syev_vendor_or_throw<B, T>(*run_q, descrA, eigenvalues, jobtype, uplo, workspace, info);
     } else if (chosen.algo == d::Algorithm::CTA) {
         // Must take the same branch as the workspace query above: the selector re-reads
         // its env override, so flipping it mid-call under-allocates.
         switch (detail::syev_choose_small_kernel<T>(descrA)) {
             case detail::SyevSmallKernel::Jacobi:
-                e = syev_jacobi_cta<B, T>(*run_q, descrA, eigenvalues, jobtype, uplo, workspace);
+                e = syev_jacobi_cta<B, T>(*run_q, descrA, eigenvalues, jobtype, uplo, workspace,
+                                          JacobiParams<T>(), info);
                 break;
             case detail::SyevSmallKernel::CtaFused:
                 e = syev_cta_fused<B, T>(*run_q,
@@ -499,7 +557,8 @@ inline Event syev_dispatch(Queue& ctx,
                                          uplo,
                                          workspace,
                                          detail::syev_cta_steqr_params<T>(jobtype),
-                                         /*cta_wg_size_multiplier=*/1);
+                                         /*cta_wg_size_multiplier=*/1,
+                                         info);
                 break;
             default:
                 e = syev_cta<B, T>(*run_q,
@@ -509,7 +568,8 @@ inline Event syev_dispatch(Queue& ctx,
                                    uplo,
                                    workspace,
                                    detail::syev_cta_steqr_params<T>(jobtype),
-                                   /*cta_wg_size_multiplier=*/1);
+                                   /*cta_wg_size_multiplier=*/1,
+                                   info);
                 break;
         }
     } else if (chosen.algo == d::Algorithm::TwoStage) {
@@ -519,7 +579,8 @@ inline Event syev_dispatch(Queue& ctx,
                                  jobtype,
                                  uplo,
                                  workspace,
-                                 StedcParams<typename base_type<T>::type>{});
+                                 StedcParams<typename base_type<T>::type>{},
+                                 info);
     } else {
         e = syev_blocked<B, T>(*run_q,
                                descrA,
@@ -527,7 +588,8 @@ inline Event syev_dispatch(Queue& ctx,
                                jobtype,
                                uplo,
                                workspace,
-                               StedcParams<typename base_type<T>::type>{});
+                               StedcParams<typename base_type<T>::type>{},
+                               info);
     }
 
     return e;
@@ -586,8 +648,9 @@ inline Event syev(Queue& ctx,
                   Span<typename base_type<T>::type> eigenvalues,
                   JobType jobtype,
                   Uplo uplo,
-                  Span<std::byte> workspace) {
-    return blas::dispatch::syev_dispatch<B, T>(ctx, descrA, eigenvalues, jobtype, uplo, workspace);
+                  Span<std::byte> workspace,
+                  Span<int32_t> info) {
+    return blas::dispatch::syev_dispatch<B, T>(ctx, descrA, eigenvalues, jobtype, uplo, workspace, info);
 }
 
 template <Backend B, typename T>

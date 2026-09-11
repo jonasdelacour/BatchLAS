@@ -10,6 +10,7 @@
 #include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/blas/functions/potrf.hh>
 #include <batchlas/blas/functions/trsm.hh>
+#include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
@@ -227,6 +228,17 @@ protected:
             this->ctx->device().get_property(DeviceProperty::LOCAL_MEM_SIZE);
         const std::size_t budget = (local_mem > 4096) ? (local_mem - 4096) : 0;
         return sycl_potrf::potrf_cta_max_n_for_slm<T>(budget);
+    }
+
+    // The order a work-group can hold AT ALL, ignoring the occupancy target. Strictly
+    // above ceiling(); it is what the blocked driver's block width is clamped against
+    // once the trailing GEMM, not the leaf, is where the time goes.
+    // evidence: docs/perf/potrf.md#the-occupancy-clamp-on-nb
+    int leaf_ceiling() const {
+        const std::size_t local_mem =
+            this->ctx->device().get_property(DeviceProperty::LOCAL_MEM_SIZE);
+        const std::size_t budget = (local_mem > 4096) ? (local_mem - 4096) : 0;
+        return sycl_potrf::potrf_cta_max_n_for_slm<T>(budget, 1);
     }
 
     // Load the `uplo` triangle of `src` into item `b` and POISON the other: the contract
@@ -646,18 +658,11 @@ TYPED_TEST(PotrfCtaTest, FacadeReachesTheCtaKernel) {
     const int n = std::min(48, this->ceiling());
     const int batch = 3;
 
-    struct EnvGuard {
-        std::string saved;
-        bool had = false;
-        EnvGuard() {
-            if (const char* v = std::getenv("BATCHLAS_POTRF_ROUTE")) { saved = v; had = true; }
-            ::setenv("BATCHLAS_POTRF_ROUTE", "cta", 1);
-        }
-        ~EnvGuard() {
-            if (had) ::setenv("BATCHLAS_POTRF_ROUTE", saved.c_str(), 1);
-            else ::unsetenv("BATCHLAS_POTRF_ROUTE");
-        }
-    } guard;
+    // A bare ::setenv is invisible to the library: batchlas::settings() snapshots the
+    // environment before main() and parse_route_env reads only that snapshot. The shared
+    // guard reloads it at both ends, and restores the caller's previous value (or unsets
+    // it) exactly as the hand-rolled EnvGuard here did.
+    const ScopedEnvVar route_pin("BATCHLAS_POTRF_ROUTE", "cta");
 
     Matrix<T, MatrixFormat::Dense> A(n, n, batch);
     std::vector<std::vector<T>> ref(batch);
@@ -795,14 +800,32 @@ TYPED_TEST(PotrfCtaTest, DirectEntryPointRefusesWhatSupportsRefuses) {
 // evidence: docs/perf/potrf.md#the-slm-budget-and-the-fit-ceilings
 TYPED_TEST(PotrfCtaTest, MeasuredFitCeilings) {
     using T = typename TestFixture::T;
-    const int expect = std::is_same_v<T, float>                ? 155
-                     : std::is_same_v<T, double>               ? 109
-                     : std::is_same_v<T, std::complex<float>>  ? 109
-                                                               : 77;
-    EXPECT_EQ(sycl_potrf::potrf_cta_max_n_for_slm<T>(97280), expect);
-    // And the ceiling really is a ceiling of the formula: one more does not fit.
+
+    // ADVERTISED: what supports() promises, at the default occupancy target of 4 resident
+    // work-groups per SM, i.e. a quarter of the 97,280 B budget.
+    const int advertised = std::is_same_v<T, float>               ? 77
+                         : std::is_same_v<T, double>              ? 54
+                         : std::is_same_v<T, std::complex<float>> ? 54
+                                                                  : 38;
+    // RESIDENT: what a work-group can hold at all, which is what the blocked driver's
+    // diagonal leaf is sized against. The two must not be conflated.
+    const int resident_only = std::is_same_v<T, float>               ? 155
+                            : std::is_same_v<T, double>              ? 109
+                            : std::is_same_v<T, std::complex<float>> ? 109
+                                                                     : 77;
+
+    EXPECT_EQ(sycl_potrf::potrf_cta_max_n_for_slm<T>(97280), advertised);
+    EXPECT_EQ(sycl_potrf::potrf_cta_max_n_for_slm<T>(97280, 1), resident_only);
+
+    // The occupancy target really divides the budget rather than being decorative.
+    EXPECT_LT(sycl_potrf::potrf_cta_max_n_for_slm<T>(97280),
+              sycl_potrf::potrf_cta_max_n_for_slm<T>(97280, 1));
+
+    // And each ceiling really is a ceiling of the formula: a bigger budget admits more.
     EXPECT_LT(sycl_potrf::potrf_cta_max_n_for_slm<T>(97280),
               sycl_potrf::potrf_cta_max_n_for_slm<T>(101376));
+    EXPECT_LT(sycl_potrf::potrf_cta_max_n_for_slm<T>(97280, 1),
+              sycl_potrf::potrf_cta_max_n_for_slm<T>(101376, 1));
 }
 
 // ===========================================================================
@@ -838,6 +861,20 @@ protected:
         const unsigned p = sycl_potrf::potrf_blocked_debug_params<T>(*this->ctx, n);
         return Blocking{static_cast<int>(p & 0xffffu), static_cast<int>(p >> 16)};
     }
+
+    // The largest order the driver serves with exactly ONE block. nb depends on n (the
+    // occupancy clamp is applied only below a measured order), so a width queried at a
+    // huge n is not the width used at that width; iterate to the fixed point.
+    int single_block_order() const {
+        int nb = this->blocking(this->ceiling()).nb;
+        for (int i = 0; i < 8; ++i) {
+            const int next = this->blocking(nb).nb;
+            if (next == nb) break;
+            nb = next;
+        }
+        return nb;
+    }
+
 
     // Run the blocked driver DIRECTLY. The -12345 info seed is load-bearing: the driver
     // READS info to decide whether an earlier panel failed. info_len < 0 means a full
@@ -881,7 +918,10 @@ TYPED_TEST(PotrfBlockedTest, ResidualAboveTheCtaCeiling) {
     const int nb = bp.nb, W = bp.W;
     ASSERT_GT(nb, 0);
     ASSERT_GT(W, 0);
-    ASSERT_LE(nb, cap) << "nb is above the leaf's own capacity: the leaf would throw";
+    // leaf_ceiling(), not cap: at this test's orders nb comes from the residency branch,
+    // and the leaf is launched at that same target.
+    ASSERT_LE(nb, this->leaf_ceiling())
+        << "nb is above the leaf's own capacity: the leaf would throw";
 
     std::vector<int> sizes = {cap + 1, 2 * nb, 2 * nb + nb / 2, nb + 2 * W + 6, 3 * nb + 7};
     std::sort(sizes.begin(), sizes.end());
@@ -1239,7 +1279,11 @@ TYPED_TEST(PotrfBlockedTest, BlockedInfoSpanStatesAndTheZeroPrePass) {
     using R = typename TestFixture::R;
 
     const int nb = this->blocking(1 << 20).nb;
-    const int n = nb + nb / 2;
+    // A short final block AND an order above the CTA tier. nb is now clamped by the
+    // occupancy-scaled ceiling, so nb + nb/2 can land inside the tier; step whole blocks
+    // until it does not, which keeps the short final block.
+    int n = nb + nb / 2;
+    while (n <= this->ceiling()) n += nb;
     const int batch = 4;
     ASSERT_GT(n, this->ceiling());
 
@@ -1281,7 +1325,9 @@ TYPED_TEST(PotrfBlockedTest, BlockedIsCorrectInsideTheCtaTierAndDrawsNoScratchAt
     using R = typename TestFixture::R;
 
     const int cap = this->ceiling();
-    const int nb = this->blocking(1 << 20).nb;
+    // The width the driver uses AT this order, not at 1<<20: nb is not constant in n.
+    const int nb = this->single_block_order();
+    ASSERT_LE(nb, this->leaf_ceiling());
     ASSERT_LE(nb, cap);
 
     // The single-block branch really is a branch: one more column draws the scratch.
@@ -1420,8 +1466,8 @@ TYPED_TEST(PotrfBlockedTest, BufferSizeCoversEverySupportedNativeTier) {
     static constexpr Backend B = TestFixture::BackendType;
 
     const int cap = this->ceiling();
-    const int nb = this->blocking(1 << 20).nb;
     const int n = cap;                       // inside the CTA tier
+    const int nb = this->blocking(n).nb;     // the width used AT that order
     const int batch = 16;
     ASSERT_GT(n, nb) << "at this order the blocked driver is a single block and draws no "
                         "trailing scratch, so the two tiers cost the same and this test "
@@ -1442,26 +1488,23 @@ TYPED_TEST(PotrfBlockedTest, BufferSizeCoversEverySupportedNativeTier) {
         << "the blocked tier does not need more workspace than the CTA tier here, so a "
            "chosen-route-only query would pass this test by accident";
 
-    struct EnvGuard {
-        std::string saved; bool had = false;
-        EnvGuard() {
-            if (const char* v = std::getenv("BATCHLAS_POTRF_ROUTE")) { saved = v; had = true; }
-        }
-        void set(const char* v) { ::setenv("BATCHLAS_POTRF_ROUTE", v, 1); }
-        ~EnvGuard() {
-            if (had) ::setenv("BATCHLAS_POTRF_ROUTE", saved.c_str(), 1);
-            else ::unsetenv("BATCHLAS_POTRF_ROUTE");
-        }
-    } guard;
-
-    guard.set("cta");
-    const std::size_t queried = potrf_buffer_size<B, T>(*this->ctx, A.view(), Uplo::Lower);
+    // The query and the call deliberately run under DIFFERENT pinned routes -- that
+    // mismatch is the property under test. One ScopedEnvVar per arm rather than one
+    // mutable guard: the shared class pins for a scope and reloads the settings snapshot
+    // at both ends, which is the only thing that makes a pin visible to parse_route_env.
+    // Nothing reads the variable between the arms, so the momentary restore is unobservable.
+    const std::size_t queried = [&] {
+        const ScopedEnvVar route_pin("BATCHLAS_POTRF_ROUTE", "cta");
+        return potrf_buffer_size<B, T>(*this->ctx, A.view(), Uplo::Lower);
+    }();
     ASSERT_GE(queried, blk_need)
         << "potrf_buffer_size resolved `cta` and sized only that tier; a caller whose "
            "environment changes between the query and the call (options.hh:546-552 reads "
            "getenv twice) under-allocates by " << (blk_need - queried) << " bytes";
 
-    guard.set("blocked");
+    // Pinned for the rest of the test; its destructor restores the surrounding value,
+    // which is what the single hand-rolled guard did once at end of scope.
+    const ScopedEnvVar route_pin("BATCHLAS_POTRF_ROUTE", "blocked");
     UnifiedVector<std::byte> ws(queried);
     UnifiedVector<int32_t> info(batch, int32_t(-12345));
     ASSERT_NO_THROW(
@@ -1487,17 +1530,8 @@ TYPED_TEST(PotrfBlockedTest, FacadeReachesTheBlockedDriver) {
     const int batch = 3;
     ASSERT_GT(n, this->ceiling());
 
-    struct EnvGuard {
-        std::string saved; bool had = false;
-        EnvGuard() {
-            if (const char* v = std::getenv("BATCHLAS_POTRF_ROUTE")) { saved = v; had = true; }
-            ::setenv("BATCHLAS_POTRF_ROUTE", "blocked", 1);
-        }
-        ~EnvGuard() {
-            if (had) ::setenv("BATCHLAS_POTRF_ROUTE", saved.c_str(), 1);
-            else ::unsetenv("BATCHLAS_POTRF_ROUTE");
-        }
-    } guard;
+    // Same reload requirement as the CTA facade test above; same restore-on-exit.
+    const ScopedEnvVar route_pin("BATCHLAS_POTRF_ROUTE", "blocked");
 
     std::vector<std::vector<T>> ref(batch);
     for (int b = 0; b < batch; ++b) ref[b] = make_spd<T>(n, 4040u + b);
@@ -1599,5 +1633,10 @@ TYPED_TEST(PotrfBlockedTest, BlockedDoesNotReadUninitialisedWorkspace) {
     }
 }
 
+
+// The TINY tier's cases, in their own file only for length; they are inside this
+// anonymous namespace so make_spd, make_planted_ldl and multiply_back_residual
+// above are the same oracles the CTA cases use.
+#include "potrf_tiny_cases.inc"
 
 }  // namespace

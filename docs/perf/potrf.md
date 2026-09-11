@@ -10,11 +10,17 @@ All numbers: RTX 4090 (sm_89, 128 SM), one card held per campaign, under `experi
 
 | tier | file | orders | Uplo |
 |---|---|---|---|
-| `{Native, CTA}` | `src/extensions/potrf_cta.cc`, `potrf_cta_device.hh` | `<= potrf_cta_max_n_for_slm<T>(local_mem - 4096)` = 155/109/109/77 here | both |
+| `{Native, Tiny}` | `src/extensions/potrf_tiny.cc`, `tiny_device.hh` | `<= potrf_tiny_max_n<T>()` = 32, and 16 for cdouble | both |
+| `{Native, CTA}` | `src/extensions/potrf_cta.cc`, `potrf_cta_device.hh` | `<= potrf_cta_max_n_for_slm<T>(local_mem - 4096)` = **77/54/54/38** here (advertised, at the default target of 4 blocks/SM); 155/109/109/77 is the *resident* ceiling, `min_blocks_per_sm = 1` | both |
 | `{Native, Blocked}` | `src/extensions/potrf_blocked.cc` | any | **Lower only** |
 | `{Vendor, Auto}` | cuSOLVER | any | both |
 
-All four scalar types on every arm. The candidate order (`route_potrf.hh:23-27`) is *mostly* a capability ladder:
+All four scalar types on every arm (cdouble n = 17..32 excepted on Tiny). Tiny is FIRST in the candidate order,
+but `native_tier_preferred` answers **false** for it and `preferred()` is false everywhere, so **no route moves**:
+a vendor-free build still takes CTA at n <= 32 and `Auto` in a vendor-present build still takes the vendor. Tiny is
+reachable by an explicit pin only. See [the-tiny-tier](#the-tiny-tier) — it has a register table and two negative
+results but **no timing**, which is precisely why the tier is not yet preferred.
+The rest of the candidate order (`route_potrf.hh`) is *mostly* a capability ladder:
 the blocked driver's diagonal leaf *is* the CTA kernel on a sub-view, so above `cta_max_n` only Blocked can serve.
 **Below it the two arms overlap and the static array decides** — `supports(Blocked)` carries no lower order bound, so
 for `Uplo::Lower` at `n <= cta_max_n` both are supported and the vendor-free walk takes CTA because it is listed
@@ -26,7 +32,8 @@ exists (float n=128 b=512: CTA 0.293 ms against blocked 0.301 ms). Env var `BATC
 | | float | double | complex\<float\> | complex\<double\> |
 |---|---|---|---|---|
 | CTA `NB`/`TS` (`potrf_cta.cc:38`) | 8/4 | 8/4 | 8/4 | 8/2 |
-| CTA fit ceiling at 97,280 B | 155 | 109 | 109 | 77 |
+| CTA fit ceiling, **advertised** (4 blocks/SM, the default) | **77** | **54** | **54** | **38** |
+| CTA fit ceiling, resident only (`min_blocks_per_sm = 1`) at 97,280 B | 155 | 109 | 109 | 77 |
 | blocked `nb` (`potrf_blocked.cc:44`) | 128 | 96 | 96 | 64 |
 | blocked `W` | **128** | 32 | 32 | 16 |
 
@@ -73,7 +80,7 @@ The grids below are the *input* to flipping a cell, not the decision. The gate i
 `local_mem_size` reports **101,376 B**, and a kernel with 0 B static shared launches at exactly that (`cudaDeviceProp
 sharedMemPerBlockOptin` agrees). `device_limits.hh`'s 49,152 is **hardcoded** by
 `cmake/BatchLASDetectSYCL.cmake:45-46` for any `nvidia_gpu_sm_*` pattern — the detection routine never queries
-`local_mem_size` — and is wrong here by 2.06x. Budget used: `local_mem_size - 4096` = **97,280 B**.
+`local_mem_size` — and is wrong here by 2.06x. Budget used: `local_mem_size - 4096` = **97,280 B**. `potrf_cta.cc:47`'s `kPotrfReferenceSlmBudget = 97280` is that figure frozen for the convenience overload `potrf_cta_max_n<T>()` **only**; `potrf_cta_dispatch`, `potrf_cta_debug_launch` and the route table all re-read `LOCAL_MEM_SIZE` from the device, which is why the hardcoded 49,152 never reaches a decision.
 
 | `T` | ceiling `n` | bytes at ceiling | first miss |
 |---|---|---|---|
@@ -577,3 +584,544 @@ Raw data is at tag `perf-evidence/vendor-independence`, retrievable with
 | Phase 2 implementation correctness harness and its break table | `experiments/wp4_potrf/phase2_impl/README.md` |
 | first benchmark campaign — **headline superseded**, mechanism work stands; per-cell rows, nsys splits, nb/W sweeps | `experiments/wp4_potrf/phase2_bench/README.md`, `main.csv`, `nsys/`, `nbsweep.csv` |
 | the spec and its 108 corrections | `WP4_POTRF_SPEC.md`, `WP4_POTRF_SPEC_CORRECTIONS.md` |
+
+---
+
+## The occupancy rule
+
+**P7, 2026-09-10.** `potrf_cta_max_n_for_slm<T>(budget, min_blocks_per_sm)` divides the
+device budget by an occupancy target before walking the footprint. The default target is
+4 (`resident::kMinBlocksPerSm`, design rule R1), so the tier **advertises** what fits in
+a quarter of the budget and the separate question "can a work-group hold this at all" is
+asked with `min_blocks_per_sm = 1`.
+
+At this box's 97,280 B budget:
+
+| type | advertised (target 4) | resident (target 1) |
+|---|---|---|
+| float | **77** | 155 |
+| double | **54** | 109 |
+| complex\<float\> | **54** | 109 |
+| complex\<double\> | **38** | 77 |
+
+Pinned budget-parameterised in `tests/resident_capacity_tests.cc`, so they hold on any
+machine. The walk itself moved to `src/util/resident_capacity.hh`; its `break` (rather
+than `continue`) is unchanged and is now armed by a synthetic non-monotone table, because
+no budget on this box can reach the case that distinguishes the two.
+
+### native_tier_preferred
+
+`route_potrf.hh` now declares the hook it was missing. The crossover **is** the capacity:
+below it the blocked driver at `n <= nb` is the CTA leaf plus a fixup launch and cannot
+win; above it the CTA arm is not supported. Declaring it matters because the absent hook
+defaulted to `true` for every route, making the choice an accident of the order array.
+
+`preferred()` stays all-false, so `Auto` still takes cuSOLVER at every shape and none of
+the below is reachable except in a vendor-free build or under `BATCHLAS_POTRF_ROUTE`.
+
+#### Every tier is enumerated explicitly
+
+Exactly one arm answers `true` at any shape, and the switch names all three rather than
+leaning on `default:`. `default:` returns **true**, so a tier left out of the switch is
+handed every shape it supports on the vendor-free walk and on a bare `native` pin -- R8b
+(`docs/design/small-n-factorization-plan.md`, "A non-empty `preferred()` pre-empts
+`native_tier_preferred`") arriving from the other direction.
+
+`Algorithm::Tiny` therefore carries an EXPLICIT `return false`, the same answer the getrf
+and geqrf tables give their own Tiny arms. Tiny leads `kPotrfOrder`, so a true answer here
+would hand it every order <= `tiny_max_n` on the vendor-free walk and under a bare
+`BATCHLAS_POTRF_ROUTE=native` pin -- before a single cell of the tier had been timed, and
+invisibly to a vendor-present build. This arm and `preferred()` flip TOGETHER in the change
+that measures the window; until then the tier is reachable only by an explicit
+`{Native, Tiny}` pin, which is all a benchmark arm needs.
+
+The other two arms split on the capacity, `cta_holds = (cta_max_n >= 1) && (order <=
+cta_max_n)`: CTA takes it, Blocked takes its complement.
+
+### The occupancy clamp on nb
+
+`potrf_blocked_params` clamps `nb` by the **advertised** ceiling while `n <=
+kPotrfOccupancyNbMaxOrder` (256) and by the **resident** one above it, and launches the
+leaf at the same target. The threshold is measured, not assumed: `nb` is also the
+trailing update's `k`, so halving it buys leaf occupancy and pays for it in the GEMM.
+
+Native arm, large batch, against `benchmarks/results/factor_baseline_potrf_*.csv`
+(ratio = after / before; below 1 is faster):
+
+| type | n | batch | before | after | ratio |
+|---|---|---|---|---|---|
+| float | 128 | 2048 | 1.4533 | 1.0265 | **0.706** |
+| float | 192 | 1024 | 1.4259 | 1.1478 | **0.805** |
+| float | 256 | 1024 | 2.3111 | 2.1527 | **0.931** |
+| float | 384 | 512 | 2.4585 | 2.4598 | 1.001 |
+| float | 512 | 512 | 4.4631 | 4.4580 | 0.999 |
+| cfloat | 128 | 2048 | 2.3254 | 1.5470 | **0.665** |
+| cfloat | 256 | 1024 | 3.6338 | 3.4442 | **0.948** |
+| cfloat | 512 | 256 | 3.7631 | 3.7670 | 1.001 |
+| double | 128 | 2048 | 4.7605 | 3.7514 | **0.788** |
+| double | 512 | 256 | 11.6444 | 11.6997 | 1.005 |
+| cdouble | 512 | 256 | 48.9944 | 48.7266 | 0.995 |
+
+Without the threshold — the occupancy ceiling applied at every order — the wins above are
+unchanged but n >= 384 regresses: float 384 1.109x, float 512 1.209x, cfloat 512 1.382x,
+double 512 1.097x, cdouble 512 1.050x. That is the negative result the threshold exists
+to avoid; do not "simplify" it away.
+
+### The one cell this cost
+
+**float n = 96, batch 2048, native arm: 0.5312 -> 0.7752 ms, 1.46x SLOWER.** Order 96 is
+above the new advertised ceiling of 77, so it leaves the single CTA launch for the blocked
+driver (two panels, a trsm, a gemm, a fold and a fixup). cuSOLVER serves that cell in
+0.2708 ms, so native loses to the vendor either way and `Auto` is unaffected; the loss is
+visible only in a vendor-free build or under a forced native route. The blocked arm
+overtakes CTA between 96 and 128 (after: 80 -> 0.686, 96 -> 0.775, 112 -> 0.884,
+128 -> 1.027 ms, against a CTA baseline of 0.531 at 96 and 1.453 at 128). cfloat moves the
+other way at the same order: 1.4272 -> 0.9577 ms, **0.671x**.
+
+### The shared helper: budget, slice, walk and pack
+
+**2026-09-11.** The rule above lives in one place, `src/util/resident_capacity.hh`, because
+potrf, getrf and geqrf had each grown their own capacity walk and their own spelling of the
+device budget. Everything in it is `constexpr` and free of `<sycl/sycl.hpp>`, so the route
+table's shape builders under `src/backends/` — which must not pull SYCL in — can include it.
+The prose that used to sit above each helper is here; the header keeps the invariant and a
+pointer.
+
+| helper | what it answers |
+|---|---|
+| `device_slm_budget(local_mem_bytes, reserve_bytes = 4096)` | THE spelling of the runtime budget: the device's `LOCAL_MEM_SIZE` less the reserve the SYCL runtime keeps for itself. A site that inlines its own disagrees with the launcher by exactly the reserve. |
+| `kMinBlocksPerSm = 4` | design rule R1's occupancy target, and the value the three CTA tiers advertise with (geqrf overrides it to 2 — [qr.md](qr.md#why-geqrfs-target-is-2-and-not-4)). |
+| `occupancy_budget(budget, min_blocks_per_sm)` | the slice of the budget ONE work-group may own. A work-group whose local memory fits in `budget / N` leaves room for N of them per SM. |
+| `resident_max_n(bytes_fn, budget, min_blocks_per_sm, n_hi = 4096)` | the largest `n` whose per-matrix footprint fits that slice **and** for which every smaller `n` also fits. |
+| `pack_matrices_per_wg(bytes, lanes, wg_budget, max_wg_size, target_wg_size = 128, max_pack = 4)` | how many matrices one work-group should hold when a single sub-group serves a matrix. |
+
+The three potrf test hooks pack two 16-bit fields each, and this is the only place they are
+spelled out: `potrf_cta_debug_launch` is **G (matrices per work-group) in the low 16 bits
+and L (work-items per matrix) in the high 16**, 0 when the order does not fit;
+`potrf_blocked_debug_params` is **nb (diagonal-block order) low, W (trailing-update width)
+high**; `potrf_tiny_debug_launch` is **G (partitions per sub-group) low, S (sub-groups per
+work-group) high**.
+
+**Why `resident_max_n` is a walk with a `break`, not a closed form or a binary search.**
+Each op pads a request landing in the 48 KB hole up past it, so `bytes(n)` is **not
+monotone**: 47,200 B becomes 49,920 while 49,700 B stays as it is. `supports()` spells the
+capacity as the contiguous `order <= cta_max_n`, so the ceiling must be the largest `n` at
+which *every* order up to `n` launches. A `continue` there advertises a range with a hole
+in it — reachable only for budgets inside **[49,664, 49,920)**, which is why the armed test
+feeds it a synthetic non-monotone table rather than a device budget: no budget on this box
+can reach the case that distinguishes the two.
+
+**Why `bytes_per_matrix` must do its own products in `std::size_t` or `int64_t`.** `(m|1)*n`
+overflows `int` at m ≈ **46,341**, which is reachable as a blocked panel height.
+
+**Why `pack_matrices_per_wg` is not a free knob.** A one-sub-group work-group caps at the
+hardware's **24 resident blocks per SM** — 24 of the 48 warps an SM holds, 50% occupancy
+however little local memory it asks for. `G > 1` is correct ONLY where every barrier the
+kernel executes is a SUB-GROUP barrier: under a work-group barrier the G matrices
+synchronise with each other, which is a race by construction rather than a launch failure —
+wrong answers on a suite that stays green. Each caller therefore selects a sub-group-scoped
+body when it takes a `G > 1` result, and derives the two together
+([lu.md](lu.md#packed-resident-leaves), [qr.md](qr.md#packed-resident-panels)). The result
+is a power of two so the slot arithmetic (`matrix = wg_id*G + sg_id`) stays a shift, and a
+single matrix that does not fit returns 1: the helper answers "how many", and 1 is the
+honest answer when none fit.
+
+
+### The contiguity rule and the synthetic table
+
+The `break`-not-`continue` rule above is armed in `tests/resident_capacity_tests.cc`
+against a synthetic footprint, because no budget this box reports lands in the
+`[49,664, 49,920)` band where a `continue`-walk and a `break`-walk disagree.
+
+That footprint is 128 B per unit of `n`, then the library's own 48 KB hole pad
+(`kHoleLo = 47,104`, `kHoleHi = 49,664`, `kHolePadTo = 49,920`, byte-identical in
+`potrf_cta.cc`, `getrf_cta.cc` and `geqrf_cta.cc`):
+
+| n | raw request | after the pad |
+|---|---|---|
+| <= 368 | <= 47,104 | unchanged — 47,104 at n = 368 |
+| 369..388 | 47,232..49,664 | all in the band, all raised to 49,920 |
+| 389 | 49,792 | above the band, NOT padded |
+
+So `bytes(389) < bytes(388)`: the footprint FALLS as `n` rises. That is the library's own
+shape — "47,200 pads to 49,920 while 49,700 stays 49,700" — with a step small enough to
+land a value inside `(kHoleHi, kHolePadTo)`.
+
+At a budget of **49,850 B**: `n <= 368` fits (47,104), `369..388` are refused (49,920),
+and `n = 389` fits again (49,792). The walk must answer **368**. A walk that skipped
+misses instead of stopping would answer **389** and advertise twenty orders that cannot
+launch. A budget of 49,920 admits the whole prefix and answers **390**; one exactly at the
+band's floor, 47,104, answers **368**.
+
+Arithmetic pinned alongside it. `occupancy_budget(97280, 1)` = 97,280 and
+`occupancy_budget(97280, 4)` = 24,320; 0 and -3 are not divisors and return 97,280
+unchanged. The walk really consumes it: over `bytes(n) = 1024n`, budget 97,280 answers
+**95** at target 1 and **23** at target 4. `device_slm_budget` subtracts the 4,096 B
+runtime reserve — 101,376 -> 97,280, 49,152 -> 45,056 — and 4,096 and 1,024 both floor at
+**0** rather than underflowing.
+
+### The G-packing helper and its three limits
+
+`resident::pack_matrices_per_wg(bytes, lanes, slice, max_wg, target_width = 128,
+max_pack = 4)` is bounded by local memory, the work-group width and the cap. The grid
+pinned in `tests/resident_capacity_tests.cc` separates all three, at a 24,320 B slice:
+
+| bytes | lanes | max_wg | target | cap | G | what binds |
+|---|---|---|---|---|---|---|
+| 4,096 | 32 | 1024 | 128 | 4 | 4 | width and cap agree here |
+| 8,192 | 32 | 1024 | 128 | 4 | 2 | local memory |
+| 20,000 | 32 | 1024 | 128 | 4 | 1 | local memory |
+| 4,096 | 32 | 64 | 128 | 4 | 2 | device max work-group size |
+| 4,096 | 32 | 32 | 128 | 4 | 1 | device max work-group size |
+| 1,024 | 256 | 1024 | 128 | 4 | 1 | a matrix wider than one sub-group is never packed |
+| 64 | 8 | 1024 | 128 | 4 | 4 | **the cap alone** — the width admits 16 |
+| 64 | 8 | 1024 | 128 | 16 | 16 | cap raised, width admits 16 |
+| 64 | 8 | 1024 | 32 | 16 | 4 | **the width alone**, with the cap raised |
+| 64 | 8 | 64 | 128 | 16 | 8 | `max_wg`, with the cap raised |
+| 6,144 | 8 | 1024 | 128 | 16 | 2 | local memory, below both |
+
+The 8-lane rows are the load-bearing ones: at 32 lanes the cap of 4 and the 128-wide
+target agree, so a helper that ignored `max_pack` entirely would answer the same on every
+row above them. Degenerate inputs (`bytes = 0`, `lanes = 0`) answer **1** rather than
+dividing by zero. `g >= 1` and "g is a power of two" are structural — the walk starts at 1
+and only doubles — so the grid asserts the three bounds instead, and only for `g > 1`,
+because `G == 1` is the honest answer even when one matrix does not fit.
+
+### The shipped ceilings, pinned in both scales
+
+Pinned budget-parameterised in `tests/resident_capacity_tests.cc` at the reference budget
+of **97,280 B** (101,376 B of local memory less the 4,096 B reserve), so they hold on any
+machine — and pinned in BOTH scales. The occupancy-scaled figure is what `supports()`
+advertises; the unscaled one is what a blocked driver's panel can be held at. Conflating
+them is the defect the pin exists to catch.
+
+| type | potrf advertised / resident | getrf advertised / resident | geqrf advertised / resident (elements) |
+|---|---|---|---|
+| float | **77** / 155 | **77** / 155 | **11,776** / 24,320 |
+| double | **54** / 109 | **54** / 109 | **5,888** / 12,160 |
+| complex\<float\> | **54** / 109 | **54** / 109 | **5,888** / 12,160 |
+| complex\<double\> | **38** / 77 | **38** / 77 | **2,944** / 6,080 |
+
+`geqrf`'s occupancy target is 2 rather than 4
+([qr.md](qr.md#why-geqrfs-target-is-2-and-not-4)), and its figures are the ones the 48 KB hole clamp touches: half of 97,280 lands
+INSIDE the band, so the admissible budget is **47,104** rather than 48,640. Both facts are
+why these are pinned rather than re-derived.
+
+Three further properties ride on the same numbers. The advertised ceiling must be
+*strictly* inside the resident one, or the occupancy target is not being applied. Each fit
+predicate must agree with its own ceiling on both sides, or `supports()` and the
+entry-point gate can disagree: `getrf_cta_fits(a)` true and `(a + 1)` false, with
+`getrf_leaf_fits(a + 1, a + 1)` still true because the residency predicate is strictly
+wider. And the **resident** ceiling gets the same tight pair at its own boundary —
+`getrf_leaf_fits(r, r)` true, `(r + 1, r + 1)` false. Probing residency one order above
+the *advertised* ceiling is not that test: it passes with the whole occupancy factor as
+slack and says nothing about where `leaf_fits` stops, which is the number the blocked
+driver's leaf choice and the 48 KB hole clamp both turn on. `geqrf` bounds an AREA rather
+than an order, so it gets the pair twice in the same 8-column panel shape: at
+`area / 8` rows and at `area_r / 8` rows. Finally, a larger budget must admit more of
+everything (97,280 -> 101,376 raises all three ceilings), because the scaling is a
+division and not a table.
+
+
+## The tiny tier
+
+`Algorithm::Tiny`, `src/extensions/potrf_tiny.cc`, the P1 package of
+`docs/design/small-n-factorization-plan.md`. One matrix per `SubGroupPartition<N>`,
+N in {8, 16, 32}, lane r owning row r in a compile-time `D rA[N]`; right-looking
+unblocked Cholesky; every cross-lane value an indexed sub-group shuffle. **Zero local
+memory, zero barriers, zero static shared** — `ptxas` reports `used 0 barriers` and no
+`smem` line for all 11 kernels, which is what keeps the 48 KB launch hole structurally
+unreachable for this tier.
+
+Geometry: work-group 64 (`kTinySubGroups = 2` sub-groups), G = 32/N partitions per
+sub-group, so 8/4/2 matrices per work-group at N = 8/16/32. Matrices per work-group
+comes from `resident::pack_matrices_per_wg`, with a nominal 1-byte footprint because the
+tier owns no local memory; the packing is decided by the lane and work-group terms alone.
+
+`potrf_tiny_debug_launch<T>(ctx, n)` is the only way to see that geometry from outside: it
+packs **G (partitions per sub-group) in the low 16 bits and S (sub-groups per work-group)
+in the high 16**, and answers 0 when the order is above the tier. The fixture asserts it
+against the geometry INVARIANTS — `S*G*N == wg`, `wg % 32 == 0`, `S >= 2` — and never
+against a pinned S: S is a tuning constant, and a test that pins it blocks the very A/B the
+design calls for (`qr.md` records the same A/B for geqrf at
+[the launch shape](qr.md#the-launch-shape-64-work-items-not-128)).
+
+`potrf_tiny_buffer_size` is **not** zero. The kernel needs no algorithmic workspace, but an
+empty or short caller `info` span means "not requested" and draws `batch` int32s of pool
+scratch, exactly as the CTA tier does; every tier's sizing carries that same term.
+
+`potrf_tiny_max_n<T>()` is a flat compile-time 32, and 16 for `complex<double>` — not a
+budget walk. The tier allocates no local memory, so blocks per SM are set by registers
+and the hardware's 24-blocks-per-SM cap alone, and there is nothing for
+`resident_capacity.hh`'s non-monotone hole-padding walk to walk over.
+
+`preferred()` is still false for every potrf tier, and `native_tier_preferred` answers
+**false** for Tiny — the same answer getrf and geqrf give their own Tiny arms. The
+vendor-free walk and a bare `native` pin therefore still take CTA at n <= 32, and `Auto`
+in a vendor-present build is unaffected: this package changes **no route**. Both
+predicates flip together in the change that MEASURES the window, and until then the
+build report's own two negative results (cfloat n = 32 holds 12 resident matrices/SM
+against potrf_cta's ~20-32; orders 17..31 pay their full padded bucket) stand
+unanswered.
+
+### Register probe — the shipped table
+
+`BATCHLAS_BUILD_DIR=$PWD/build/presets/dev-tests scripts/register_probe.sh out.log ''
+batchlas_extensions_cta`, sm_89, max of `<name>` and `<name>_with_offset`. Gate:
+**stack frame == 0 AND spill == 0 AND regs x 64 <= 65536**, all three.
+
+| type | N | frame | spill | regs | regs x wg (64) |
+|---|---|---|---|---|---|
+| float | 8 | 0 | 0 | 54 | 3,456 |
+| float | 16 | 0 | 0 | 64 | 4,096 |
+| float | 32 | 0 | 0 | 78 | 4,992 |
+| double | 8 | 0 | 0 | 70 | 4,480 |
+| double | 16 | 0 | 0 | 82 | 5,248 |
+| double | 32 | 0 | 0 | 104 | 6,656 |
+| cfloat | 8 | 0 | 0 | 64 | 4,096 |
+| cfloat | 16 | 0 | 0 | 112 | 7,168 |
+| cfloat | 32 | 0 | 0 | 166 | 10,624 |
+| cdouble | 8 | 0 | 0 | 84 | 5,376 |
+| cdouble | 16 | 0 | 0 | 128 | 8,192 |
+| cdouble | 32 | — not instantiated; orders 17..32 of this type stay on CTA | | | |
+
+Re-probed at P1 sign-off and the table above reproduced cell for cell, on a 152.2 s link
+of 974 entry functions, **0 of which carry any spill**. All 22 potrf entries (11 kernels,
+each also `_with_offset`) report `used 0 barriers` and emit **no `smem` line at all** —
+that, and not a padding constant, is what keeps the 48 KB launch hole unreachable here.
+Worst cell is `complex<float>` N = 32 at 166 registers: 166 x 64 = 10,624 against the
+65,536 per-block file, 6.2x of slack.
+
+The launch gate has better than 6x of slack at every cell, so it can never fire; the gate
+that actually bites is the frame column. The TU encodes the gate as
+`kTinyWorstProbedRegs = 176` against the worst probed cell of 166 (`complex<float>`
+N = 32), i.e. a 10-register margin, and `static_assert`s `kTinyWgSize *
+kTinyWorstProbedRegs <= 65536`, so widening the work-group fails to compile rather than
+aborting an enqueue. Two design predictions were wrong in the same
+direction: the plan's "float N=32 ~48 registers (fits 100% occupancy)" and the judged
+design's 56 are both under the probed 78, and the complex cells are far under — cfloat
+N=32 probed at 166 against a predicted 88.
+
+Occupancy therefore comes out below every prediction. At wg = 64, blocks/SM is
+`floor(65536 / (regs_rounded_to_8 * 64))` capped at 24, and no cell reaches the cap:
+
+| cell | regs | blocks/SM | warps/SM | occupancy | resident matrices/SM |
+|---|---|---|---|---|---|
+| float N=8 | 54 -> 56 | 18 | 36 | 75% | 144 |
+| float N=16 | 64 | 16 | 32 | 67% | 64 |
+| float N=32 | 78 -> 80 | 12 | 24 | 50% | 24 |
+| cfloat N=32 | 166 -> 168 | 6 | 12 | 25% | 12 |
+
+Against `potrf_cta`'s ~20 resident matrices/SM at n = 32 float this is still a gain at
+n <= 16 and roughly a wash at n = 32 float; **cfloat n = 32 is worse on residency than
+the tier it would replace**, which is the first place to look when the grid is run.
+
+### Two negative results, both found by the register probe and not by a timer
+
+**1. The batch-uniform early exit for the n = 17..31 band relocates `rA[]`.** The design
+of record calls for `if (j >= n) break;` on the column loop and `if (k >= n) break;` on
+the update loop, both batch-uniform, cutting issued warp-FMAs at n = 17 inside N = 32
+from 496 to 136. It was implemented first and **fails the register gate**: the runtime
+break defeats the full unroll, `rA[j]` becomes a dynamic index, and ptxas relocates the
+whole array to local memory. Probed with the breaks in place:
+
+| type | N | frame | spill | regs |
+|---|---|---|---|---|
+| float | 8 | 0 | 0 | 39 |
+| float | 16 | **64** (= 16 x 4) | 0 | 40 |
+| float | 32 | **128** (= 32 x 4) | 0 | 40 |
+| double | 16 | **128** | 0 | 40 |
+| double | 32 | **256** | 0 | 40 |
+| cfloat | 16 | **128** | 0 | 40 |
+| cfloat | 32 | **256** | 0 | 40 |
+| cdouble | 8 | **160** | 0 | 40 |
+| cdouble | 16 | **288** | 0 | 40 |
+
+A frame of exactly `N * sizeof(T)` bytes with a clean spill column and a suspiciously
+flat 40-register count in every cell is the signature this page's `#register-gate`
+section and `docs/perf/trsm.md:80` both name. The break was removed and replaced by a
+predicate (`col_live`, `k < n`), which restores frame 0 everywhere. **The 17..31 band
+therefore issues the full N(N-1)/2 shuffles and FMAs of its padded bucket, and the plan's
+only stated lever for that band is unavailable at this unroll setting.** It is not worth
+re-attempting without a way to keep the array promotable.
+
+**2. `complex<double>` needed a component-wise select before it would stay in
+registers.** With the breaks removed, 9 of 11 cells came back at frame 0 but cdouble
+N=8 and N=16 still carried 160 and 288 bytes. The cause is the failure path being value
+substitution: `rA[k] = cond ? upd : rA[k]` on a 16-byte aggregate is not a `select` in
+IR — LLVM emits a branch or a memcpy, SROA then declines to promote the array. Replacing
+every such ternary with `tiny_native::tiny_select`, which selects component by component,
+took both cells to frame 0 (and raised their register counts from 40/40 to 84/128, which
+is the array arriving in registers). `Cx<float>` at 8 bytes was never affected.
+
+### The CTA comparison is elementwise, not bit-exact
+
+At n <= 8 the CTA kernel runs exactly one NB = 8 panel, so its diagonal-block body is
+line-for-line this tier's: same `!(akk > 0)`, same `sqrt` then `1/dkk`, same
+own-times-`conj`(other) order, same sticky failure, same real-diagonal load. The first
+version of `TinyAgreesWithCtaWithinOnePanel` therefore asked for bit-identity, and it
+does not hold: **float n = 2, `Uplo::Upper`, one item differed in the last ULP**, because
+the compiler contracts `a - b*conj(c)` into an FMA on one side and not the other — CTA's
+`c` is a local-memory load and this tier's is a shuffle, and the contraction decision
+follows the surrounding code. Editing an unrelated line in the kernel flipped it. The
+test now asserts an elementwise `8*eps` relative bound, which is still far tighter than
+the `4*n*eps` the residual is allowed.
+
+The exact-bit oracles that ARE stable are tiny-vs-tiny, where both sides are the same
+instruction stream: `TinyPaddingIsInert` (a NaN pad must give bit-identical answers to a
+zero pad) and `TinyPackedBatchMatchesSolo` (an item in a packed batch must equal the same
+item run alone).
+
+### What the geometry test can and cannot check
+
+`TinyLaunchGeometryIsReported` asserts the launch geometry against INVARIANTS and never
+against a pinned `S`: `S` is a tuning constant the design calls for A/B-ing, and a test
+that pins it turns the constant into a change-detector.
+
+The hook and the launcher compute the geometry from ONE helper
+(`potrf_tiny_matrices_per_wg`), so there is no second copy to cross-check the returned
+numbers against, and any assertion re-derived from the hook's own answer is an identity
+that no break can move. Two of those were written and then removed: `32 % N == 0` over an
+`N` the test itself picked, and `wg % 32 == 0` over a `wg` the test rebuilt as `S*G*N`.
+
+What remains are the two statements that CAN move — the work-group against the device's
+own `MAX_WORK_GROUP_SIZE`, and R3's two-sub-group floor — plus one real cross-check: the
+bucket the hook chose, read back OUT of its answer as `32/G`, against the 8/16/32 ladder
+the tier documents. That bucket must hold `n`, must be one of the three instantiated
+widths, and must be the TIGHTEST such: a hook that padded every `n` up to 32 would launch
+a legal geometry and waste three quarters of every partition.
+
+The geometry is also pinned behaviourally: every partial-work-group case in
+`tests/potrf_tiny_cases.inc` derives its batch from `per_wg()`, so a wrong
+matrices-per-work-group makes those batches stop straddling a work-group boundary.
+
+### Armed breaks (R9)
+
+Every guard below was planted, observed red, and restored; `src/extensions/potrf_tiny.cc`
+was verified byte-identical to its pre-break state afterwards (md5). Breaks 1-3 were
+planted in the kernel body, break 4 in the failure-path selects. Re-run recipe: edit,
+`cmake --build build/presets/dev-tests --parallel 4`, then the named test.
+
+| # | break planted | guard expected to fire | observed |
+|---|---|---|---|
+| 1 | the rank-1 update broadcasts the **pre-scale** `rA[j]`, so the update omits one `1/dkk` factor (the plan's break (c), "publish before the scale") | `TinyResidualBothTriangles`, first at n = 2 | RED at **n = 2**, both `Uplo`, both `ld`; residual 4.38e-06 against a 9.54e-07 tolerance. n = 1 passed, as predicted — with one column there is no update to corrupt |
+| 2 | `tiny_partition_id` loses its `sg_id *` term, so the two sub-groups of a work-group factorise the same matrices | `TinyPackedBatchMatchesSolo` | RED — `info` for the untouched items came back as the fixture's `-7` poison, i.e. half the batch was never factorised. Fires only at G-packing, which is what the anti-vacuity assertion in that test exists to guarantee |
+| 3 | the `info` write drops its `alive &&` guard, so the **last** failing column wins instead of the first | `TinyInfoIsExactAndFirstFailureWins`, two-failure block | RED — failures planted at columns 2 and 7 gave `info = 8` where 3 is required; 7 and 12 gave 13 where 8 is required; 11 and 16 gave 17 where 12 is required |
+| 4 | both failure-path `tiny_native::tiny_select` calls replaced by a plain `?:` on the 16-byte aggregate | **no test** — the register probe's frame column | **All 49 tiny cases still PASSED.** The probe caught it: `complex<double>` N = 8 went to a **144-byte frame** and N = 16 to a **272-byte frame**, both with spill still 0, register counts *falling* 84 -> 76 and 128 -> 72 as the array left the register file. `float`, `double` and `complex<float>` stayed at frame 0 — `Cx<float>` is 8 bytes and forms a select either way |
+
+Break 4 is the one that matters for maintenance. The frame is `16 * (N + 1)` bytes here
+against the `16 * (N + 2)` recorded in the negative result above, because only the two
+selects in the column body were reverted and `tiny_pad_identity`'s stayed; same defect,
+same signature. It confirms the gate this page states: **frame 0 AND spill 0**, never
+spill alone, and never a green test suite.
+
+### Device link
+
+The attributable figure for THIS tier is `ptxas` compile time from the probe log:
+potrf_tiny's 22 entry functions (11 kernels, each also as `_with_offset`) cost
+**12.3 s of 174.8 s**, or 7.0% of the library's ptxas total — inside R7's 15% budget.
+
+The 151 s library link this section used to quote is SUPERSEDED and was never
+attributable: `geqrf_tiny.cc` landed in the same library concurrently and
+`getrf_tiny.cc` was in flight. The re-measure it asked for has been done with all three
+tiers present, and the aggregate — which does exceed R7's budget — lives in exactly one
+place with its written justification:
+`docs/perf/lu.md#r7-the-device-link-all-three-tiny-tiers-landed`. Do not re-derive it
+here.
+
+### Not measured yet
+
+No timing at all. The tier is correct and register-resident; the grid
+(n in {4,8,9,16,17,24,32} x batch x 4 types x both Uplo, ld = n and ld = n+5 as separate
+rows, `resolved_route` checked on every row) and the `preferred()` window are the next
+change. From the residency table above, the shapes to expect a win at are float and
+cfloat at n <= 16 (144 and 64 resident matrices/SM against CTA's ~20-32), and the ones
+to expect a loss at are cfloat n = 32 (12 resident matrices/SM, worse than the tier it
+replaces) and n = 17..31 of any type, where the padded bucket issues roughly (32/n)^2
+times the useful work and the plan's early-exit lever is unavailable. The kill criterion
+is one line: drop a cell from the `preferred()` window and it falls straight through to
+CTA with no code change.
+
+### The shared tiny-tier invariants
+
+`src/extensions/tiny_device.hh` is the one header all three tiny tiers
+(`potrf_tiny.cc`, `getrf_tiny.cc`, `geqrf_tiny.cc`) share: the geometry constants, the
+identity-padded load/store helpers, the partition broadcast and select, and the LU
+argmax. Three invariants govern it, and every one of them breaks **silently** — a wrong
+answer or a lost register residency, never a compiler diagnostic. The header carries a
+one-line statement of each and points here.
+
+**1. `rA[]` must never be dynamically indexed and must never become a by-reference
+parameter.** `ptxas` then relocates the whole array to local memory with no diagnostic:
+a non-zero stack frame, **ZERO spill** and green tests. Helpers in this header therefore
+take `rA` as a plain pointer to a caller-declared array and touch it only under
+`#pragma unroll` with compile-time bounds, and every caller declares the array at the top
+level of the kernel lambda. The probe rows for both halves of this are
+[Register gate](#register-gate), [Two negative
+results](#two-negative-results-both-found-by-the-register-probe-and-not-by-a-timer) and
+`lu.md`'s [register probe and the unroll that decides
+it](lu.md#the-register-probe-and-the-unroll-that-decides-it).
+
+Its sharpest corner is the **component-wise select**. `tiny_select` selects a complex
+scalar component by component, and it is not cosmetic: a plain `?:` over a 16-byte
+aggregate is not a `select` in IR. LLVM emits a branch or a `memcpy`, SROA then declines
+to promote the array, and `ptxas` relocates `rA[]` to local memory — non-zero frame, ZERO
+spill, green tests. A tiny kernel's failure path is value substitution, so every write
+into `rA[]` under a failure predicate is a select and never control flow. Break 4 of
+[Armed breaks (R9)](#armed-breaks-r9) is exactly that break, planted and observed.
+
+**2. `N` must divide the sub-group.** `SubGroupPartition<P>` bases a chunk at
+`(lane / P) * P`, so a `P` that does not divide 32 addresses lanes past its end. That is
+the whole reason the ladder is `{8, 16, 32}`, and the reason **24 is not on it** — even
+though 24 would be the useful bucket for the 17..31 band this page reports as the tier's
+worst.
+
+**3. Every lane of a partition must reach every partition collective.** The in-tree tail
+idiom `if (prob_id >= nb) return;` (`steqr_cta.cc:90`) is **not** copied into any tiny
+kernel: with more than one partition per sub-group it retires part of a sub-group while
+the survivors still shuffle, and `sg_compat.hh`'s non-NVPTX branch shuffles across all 32
+lanes. Dead partitions instead load the identity from registers and suppress their store.
+On sm_89 this invariant has **no numerical guard** — see `qr.md`'s [break
+(d)](qr.md#break-sweeps-the-tiny-tier), planted at the exact configuration the rule exists
+for and green — so it is guarded by source text instead.
+
+Five further contracts the helpers carry, stated once here rather than at each use:
+
+* **A lane guard belongs INSIDE a collective, never around it.** `tiny_bcast` requires a
+  partition-uniform `src` and every lane of the partition to reach it. A complex value is
+  shuffled as **two reals**, because `permute`/`select` reject an aggregate and `Cx<R>` is
+  one (`gesvdj_cta.cc:94`).
+* **The identity pad is what removes the lane guards.** A row that is not live, and every
+  row of a dead partition, carries the identity — off-diagonals exactly 0, pivot exactly
+  1 — so it adds exactly 0 to every live row and can never raise `info`. For a lane, the
+  live columns of a fixed column `c` are the contiguous range `[c, n-1]`, so each column
+  is one coalesced segment.
+* **`c <= lane` on the triangular load and store is a contract, not a bound.** It is the
+  `OtherTriangleIsNeitherReadNorWritten` property `ortho.cc` depends on: the guard on the
+  load means the other triangle is not READ, the same guard on the store means it is not
+  WRITTEN. Spelling either `c < N` writes past the triangle and, at a padded `ld`, into
+  the caller's pad. `real_diag` forces the diagonal to `(real(A(c,c)), 0)`, as LAPACK and
+  cuSOLVER do.
+* **`Uplo::Upper` is a LOAD TRANSFORM, not a second algorithm.** `A = U^H U` is the same
+  recurrence on `S(i, c) = conj(A(c, i))`. Spelling Upper as "lane r owns a row of U"
+  would need `rA[lane]` — a dynamic index, and therefore invariant 1 again. `tiny_store_full`
+  takes a `row` rather than a `lane` for the mirror-image reason: LU relabels rows instead
+  of moving them, so the row a lane stores to is not the row it loaded from.
+* **`tiny_partition_id`'s `sg_id *` term is load-bearing** (`steqr_cta.cc:82-86`).
+  `part.get_group_linear_id()` is the chunk index within ONE sub-group and repeats across
+  the sub-groups of a work-group; without the term, the two sub-groups of a work-group
+  factorise the same matrices and half the batch is never touched. The break is armed in
+  all three tiers: [break 2 here](#armed-breaks-r9), `lu.md`'s break (d), `qr.md`'s
+  break (e).
+
+`kTinySubGroups = 2` is a tuning constant, not a contract: the launch-geometry test
+asserts the invariants above and never this value. R3 wants it at 2 or more so the
+24-blocks-per-SM cap does not bind.
+
+`tiny_load_pad_identity` — the LU tier's load — is spelled **per element** and not per
+row deliberately: it is the one spelling that cannot take the address of the caller's
+register array. `tiny_load_full` hands `rA` to a callee as `D*`, which is safe only while
+every such callee is inlined and the pointer never escapes, a property no signature
+enforces, and the LU body's array sits in the tier's hottest loop. Rows and columns beyond
+`n` carry the identity, so `[[A, 0], [0, I]]` factorises to `[[LU(A), 0], [0, I]]`; the
+`live` term short-circuits, so a work-item belonging to no matrix issues no global read.

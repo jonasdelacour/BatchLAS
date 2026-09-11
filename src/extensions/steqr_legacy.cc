@@ -10,6 +10,7 @@
 #include "../queue.hh"
 #include "../util/template-instantiations.hh"
 #include "../sort.hh"
+#include "info_span.hh"
 
 namespace batchlas {
 
@@ -177,7 +178,9 @@ Event steqr_impl(Queue& ctx,
 
     {
         BATCHLAS_KERNEL_TRACE_SCOPE("steqr:deflation_scan");
-        internal::scan_inclusive_inplace<int32_t>(ctx, scan_view);
+        // (void) on an Event: deliberate. This Queue is in-order, so the next submission
+        // is already ordered after this one and the Event carries nothing the caller needs.
+        (void)internal::scan_inclusive_inplace<int32_t>(ctx, scan_view);
     }
     
     {
@@ -424,20 +427,21 @@ SteqrLegacyWorkspace<T> steqr_legacy_layout(Queue& ctx,
 
 template <Backend B, typename T>
 Event steqr_legacy(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e_in, const VectorView<T>& eigenvalues, const Span<std::byte>& ws,
-                   JobType jobz, SteqrParams<T> params, const MatrixView<T, MatrixFormat::Dense>& eigvects) {
+                   JobType jobz, SteqrParams<T> params, const MatrixView<T, MatrixFormat::Dense>& eigvects,
+                   Span<int32_t> info) {
     const int64_t n = d_in.size();
     const int64_t batch_size = d_in.batch_size();
 
     if (jobz == JobType::EigenVectors) {
         // Ensure the eigenvector matrix is square and matches the problem size.
         if (eigvects.rows() != eigvects.cols()) {
-            throw std::invalid_argument("Matrix must be square for eigenvector computation.");
+            throw batchlas::invalid_argument("Matrix must be square for eigenvector computation.");
         }
         if (eigvects.rows() != n || eigvects.batch_size() != batch_size) {
-            throw std::invalid_argument("Eigenvector matrix has incompatible dimensions.");
+            throw batchlas::invalid_argument("Eigenvector matrix has incompatible dimensions.");
         }
         if (!params.back_transform) {
-            eigvects.fill_identity(ctx);
+            (void)eigvects.fill_identity(ctx);
         }
     }
 
@@ -462,7 +466,7 @@ Event steqr_legacy(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e
     ctx.wait();
     for (int64_t i = 0; i < n - 1; ++i) {
         not_converged[0] = 0; // Safe: the queue is idle at this point.
-        steqr_impl(ctx, d, e, jobz, eigvects, givens_rotations, deflation_indices, apply_order, sweep_counts,
+        (void)steqr_impl(ctx, d, e, jobz, eigvects, givens_rotations, deflation_indices, apply_order, sweep_counts,
                    BumpAllocator(wsl.scratch), params.max_sweeps, params.zero_threshold);
 
         ctx -> submit([&](sycl::handler& cgh) {
@@ -482,6 +486,28 @@ Event steqr_legacy(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e
         if (not_converged[0] == 0) break;
     }
 
+    // Per-item status, from the same predicate the loop above already tests.
+    //
+    // `converged_flag` is one int32 for the WHOLE batch and is a loop-termination
+    // signal, not diagnostics: it says some item still has a live off-diagonal, and
+    // it is reset at the top of every pass. This re-runs the scan once, per item and
+    // per surviving off-diagonal, which is what LAPACK's ?steqr info counts. No
+    // workspace: `info` is the caller's USM and an empty span skips the launch.
+    // No zeroing here: `steqr` (and `stedc`, for a leaf solve) has already cleared
+    // the span, and info_report only ever raises. See info_span.hh.
+    if (int32_t* info_out = detail::info_ptr(info, batch_size)) {
+        ctx->submit([&](sycl::handler& cgh) {
+            cgh.parallel_for(sycl::range<1>(static_cast<size_t>(batch_size)), [=](sycl::id<1> id) {
+                auto ebid = e.batch_item(id[0]);
+                int32_t unconverged = 0;
+                for (int64_t j = 0; j < n - 1; ++j) {
+                    if (ebid(j) != T(0)) ++unconverged;
+                }
+                detail::info_report(info_out, static_cast<int64_t>(id[0]), unconverged);
+            });
+        });
+    }
+
     ctx -> submit([&](sycl::handler& cgh) {
         cgh.parallel_for(sycl::nd_range(sycl::range(batch_size* n), sycl::range(n)), [=](sycl::nd_item<1> item) {
             auto bid = item.get_group_linear_id();
@@ -492,7 +518,7 @@ Event steqr_legacy(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e
 
     if (params.sort){
         // The passes are finished, so their scratch is free for sort to take over.
-        sort(ctx, eigenvalues, eigvects, jobz, params.sort_order, wsl.scratch);
+        (void)sort(ctx, eigenvalues, eigvects, jobz, params.sort_order, wsl.scratch);
     }
     return ctx.get_event();
 }
@@ -514,7 +540,7 @@ size_t steqr_legacy_buffer_size(Queue& ctx, const VectorView<T>& d, const Vector
 
 
 #define STEQR_LEGACY_INSTANTIATE(back, fp) \
-template Event steqr_legacy<back, BATCHLAS_UNPAREN fp>(Queue&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, const Span<std::byte>&, JobType, SteqrParams<BATCHLAS_UNPAREN fp>, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&);
+template Event steqr_legacy<back, BATCHLAS_UNPAREN fp>(Queue&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, const Span<std::byte>&, JobType, SteqrParams<BATCHLAS_UNPAREN fp>, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, Span<int32_t>);
 
 #define STEQR_LEGACY_INSTANTIATE_FOR_BACKEND(back) \
     BATCHLAS_FOR_EACH_REAL_TYPE_1(STEQR_LEGACY_INSTANTIATE, back)
