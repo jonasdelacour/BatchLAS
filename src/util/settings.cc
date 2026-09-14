@@ -126,7 +126,9 @@ void load_selection(SelectionSettings& s) {
     s.gemm_sycl_kernel = raw("BATCHLAS_GEMM_SYCL_KERNEL");
     s.gemv_segt = raw("BATCHLAS_GEMV_SEGT");
     s.gesvd_bidiag = raw("BATCHLAS_GESVD_BIDIAG");
+    s.geqrf_leaf = raw("BATCHLAS_GEQRF_LEAF");
     s.getrf_laswp = raw("BATCHLAS_GETRF_LASWP");
+    s.getrf_leaf = raw("BATCHLAS_GETRF_LEAF");
     s.getrs_laswp = raw("BATCHLAS_GETRS_LASWP");
     s.iluk_device = raw("BATCHLAS_ILUK_DEVICE");
     s.latrd_impl = raw("BATCHLAS_LATRD_IMPL");

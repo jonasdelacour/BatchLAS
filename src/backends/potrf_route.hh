@@ -50,6 +50,10 @@ inline std::optional<dispatch::PotrfShape> potrf_op_shape(
         static_cast<std::size_t>(ctx.device().get_property(DeviceProperty::LOCAL_MEM_SIZE)));
     s.cta_max_n = sycl_potrf::potrf_cta_max_n_for_slm<T>(budget);
 
+    s.lpanel_max_n = sycl_potrf::potrf_lpanel_max_n_for_slm<T>(   // two caps: SLM and max WG
+        budget,
+        static_cast<int>(ctx.device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE)));
+
     // No budget argument: the tiny tier holds the matrix in REGISTERS and allocates no
     // local memory, so its ceiling is a compile-time constant of the type alone.
     s.tiny_max_n = sycl_potrf::potrf_tiny_max_n<T>();

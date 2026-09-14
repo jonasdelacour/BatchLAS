@@ -1,0 +1,5 @@
+op,type,m,n,nrhs,batch,arm,pin,pin_parsed,median_ms,mean_ms,rel_sd,reps,residual,extra_check,info_nonzero,bad,reason,resolved_route
+gesv,float,17,17,1,32768,tiny,tiny,1,0.282310,0.282162,0.0032,9,3.813e-08,0.000e+00,0,0,ok,skipped
+gesv,float,17,17,1,32768,blocked,blocked,1,0.324828,0.324941,0.0011,9,3.674e-08,0.000e+00,0,0,ok,skipped
+gesv,float,17,17,1,65536,tiny,tiny,1,0.535313,0.535627,0.0050,9,3.431e-08,0.000e+00,0,0,ok,skipped
+gesv,float,17,17,1,65536,blocked,blocked,1,0.695475,0.695480,0.0015,9,3.495e-08,0.000e+00,0,0,ok,skipped

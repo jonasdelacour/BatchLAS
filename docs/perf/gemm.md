@@ -157,10 +157,13 @@ kernel, traced and confirmed. The transposed register family plateaus near 15–
 
 ### Complex is refused
 
-`preferred()` returns false for complex at every shape (`route_gemm.hh:43-45`). The reason is the selector: the only complex register arm is
-`Tiled64x64RegisterK16Wide`, reachable at `min_dim >= 256` + aligned NN or through the CTA gate below; everything else falls to `Tiled16`,
+`preferred()` returns false for complex at every shape. The reason was the selector: the only complex register arm was
+`Tiled64x64RegisterK16Wide`, reachable at `min_dim >= 256` + aligned NN or through the CTA gate below; everything else fell to `Tiled16`,
 measured 3.2–7.1× slower than cuBLAS (cdouble 0.386–0.392 vs 1.238–1.246 TFLOP/s; cfloat 6.6–6.9 vs 45–49 TFLOP/s). The route equivalence test
 asserts complex never moves under the flip.
+
+P6 added two more complex register arms (the transposed panel tiles) and **the refusal still stands** — this time on its own measurement, not
+for want of a kernel: see [Wide-scalar transposed tiles](#wide-scalar-transposed-tiles).
 
 ### The Auto flip
 
@@ -287,6 +290,235 @@ losses**; cdouble `ctas >= 128` admits 24 cells, **worst 1.08×, zero losses**. 
 
 The `min_dim >= 256` arm is kept ahead of this one so nothing routing to the kernel today stops doing so; 256³b4 and 512³b1 were verified
 unchanged by trace.
+
+### Wide-scalar transposed tiles
+
+`src/sycl/gemm/register_wide_transposed.hh` — the P6 family, now **measured**. Four variants, 4 types, 16 kernels. Two of them are
+**selected** for complex transposed shapes in `select_kernel_variant`; `preferred()` is **unchanged**, so in a build with cuBLAS present
+complex still routes to the vendor. That split is the result, not a staging step: see "the window that was refused" below.
+
+Raw csvs: `benchmarks/results/p6_gemm_{nc_potrf_shapes_complex,nc_potrf_shapes_real,cn_geqrf_shapes_complex,bracket_cells,ragged_tile_sweep}.csv`
+plus `benchmarks/results/p6_e2e_before.csv` (the shipping state) and
+`benchmarks/results/p6_e2e_with_refused_window.csv` (the withdrawn route window). 220 kernel cells (880 timed arms) plus 48 end-to-end cells; 1 discarded (named below). Harness: an out-of-tree standalone A/B built on
+`factor_bench.cc`'s rules — one cell per process under `gpu_guard.sh 1`, warm-up interleaved in the timed loop's **arm order**, 7 reps,
+per-arm medians, `rel_sd` gate, and an untimed host-checked run of every arm in double promotion on items 0 and batch-1.
+
+**Why a new kernel and not a flag.** Neither existing family serves these shapes. `register_tiled_common.hh` carries `Transpose OpA/OpB`
+but its inner loop is `accum += a * b` on `T`; at `std::complex` that `operator*` is Annex-G conformant — an `isnan` branch and a
+`__mulsc3`/`__muldc3` call per multiply. `register_64x64_k16_wide.hh` keeps `std::complex` out of device code but reads A as m×k and B as
+k×n and is NN only. The new header is the intersection: the wide kernel's POD scalar, 16-byte fragment granule and unpadded shared stride,
+with the transposed operand staged through shared by a transposed **store** rather than a transposed global read, so the global reads stay
+coalesced in all four forms. Conjugation is applied once per element at the staging store and costs **nothing per FMA**.
+
+**The macro tile is a parameter because the demand is not square.** Read off the drivers, not off a square benchmark grid:
+
+| driver | call | logical shape | form | (nb, W) by scalar |
+|---|---|---|---|---|
+| `potrf_blocked.cc:370` | `A22 -= L21 L21^H` | m_trailing × W × nb | `NoTrans/ConjTrans` | float (128,128), double & cfloat (96,32), cdouble (64,16) |
+| `potrf_blocked.cc:357` | the W×W diagonal fold | W × W × nb | `NoTrans/ConjTrans` | same |
+| `geqrf_blocked.cc:277` | `W1 = V^H A22` | nb × n2 × m_panel | `ConjTrans/NoTrans` | nb = 32, or 16 for double |
+| `geqrf_blocked.cc:282` | `W2 = T^H W1` | nb × n2 × nb | `ConjTrans/NoTrans` | same |
+| `geqrf_blocked.cc:286` | `A22 -= V W2` | m × n2 × nb | `NoTrans/NoTrans` | already served by the NN wide kernel |
+
+Every complex transposed shape in the tree has a dimension of 16 or 32. The tiles match a panel width instead:
+`64x64x16wide_cn` and `64x64x16wide_nc` (general), `128x32x16wide_nc` (potrf trailing + fold at W = 32), `32x128x16wide_cn`
+(geqrf `W1` and `T^H W1` at nb = 32). Work-group 256 for all four; shared per work-group is `(M·K + K·N)·sizeof(T)`, 40 KB at cdouble for
+the rectangular tiles, under the 48 KB hole in every case.
+
+**One instantiation serves both real and complex transposes.** `wide_trans_matches<T>` licenses a single widening: for a *real* scalar
+conj is the identity, so a `ConjTrans` instantiation is a correct `Trans` — which is what lets one variant serve `potrf_blocked.cc`'s
+`kTrailingTransB<T>` (ConjTrans for complex, Trans for real) and holds the count to 4 × 4 = 16. For complex the substitution is refused and
+the call falls back to `Tiled16`.
+
+#### The grid
+
+Ratios are **in time**, `arm_ms / native_ms`; > 1 means the tile wins. Batch 1024 unless stated. `ld` is padded on every operand
+(`+8`) except where the driver packs it (geqrf's V and W1), matching what each caller actually hands `gemm`.
+
+**NC, the potrf trailing shape (m × 32 × k, `NoTrans/ConjTrans`), `128x32x16wide_nc`:**
+
+| type | m=128 k=32 | 128,96 | 256,32 | 256,96 | 512,32 | 512,96 | 1024,32 | 1024,96 | 256×128×96 |
+|---|---|---|---|---|---|---|---|---|---|
+| cdouble vs cuBLAS | 1.123 | 1.120 | 1.135 | 1.130 | 1.142 | 1.134 | 1.144 | 1.137 | 1.136 |
+| cdouble vs Tiled16 | 3.350 | 3.461 | 3.424 | 3.503 | 3.461 | 3.522 | 3.478 | 3.529 | 3.530 |
+| cfloat vs cuBLAS | 0.955 | 1.069 | 1.013 | 1.011 | 1.010 | 1.012 | 1.006 | 1.006 | 0.863 |
+| cfloat vs Tiled16 | 1.603 | 1.815 | 1.428 | 1.882 | 1.589 | 2.056 | 1.484 | 2.108 | 2.948 |
+| double vs cuBLAS | 1.032 | 1.084 | 1.049 | 1.098 | 1.062 | 1.105 | 1.069 | 1.110 | 1.111 |
+| **double vs Tiled16** | **0.919** | **0.970** | **0.954** | **0.990** | **0.968** | **0.995** | **0.972** | **0.997** | **0.998** |
+| float vs cuBLAS | 0.806 | 1.062 | 0.712 | 0.917 | 0.827 | 0.941 | 0.844 | 0.942 | 0.773 |
+| float vs Tiled16 | 1.373 | 1.975 | 1.252 | 1.834 | 1.556 | 1.999 | 1.622 | 2.098 | 2.713 |
+
+**CN, the geqrf panel shape (32 × n × k, `ConjTrans/NoTrans`), `32x128x16wide_cn`:**
+
+| type | n=64 k=128 | 64,512 | 256,32 | 256,128 | 256,512 | 512,128 | 512,512 | 128×256×512 |
+|---|---|---|---|---|---|---|---|---|
+| cdouble vs cuBLAS | 0.570 | 0.563 | 1.130 | 1.124 | 1.126 | 1.127 | 1.128 | 1.129 |
+| cdouble vs Tiled16 | 1.759 | 1.762 | 3.422 | 3.501 | 3.531 | 3.515 | 3.536 | 3.536 |
+| cfloat vs cuBLAS | 0.909 | 0.847 | 1.066 | 0.952 | 0.915 | 0.974 | 0.932 | 0.639 |
+| cfloat vs Tiled16 | 1.567 | 1.739 | 1.291 | 1.920 | 2.507 | 2.110 | 2.755 | 3.718 |
+
+**Read the two rows against each other and the whole result is there.** Against `Tiled16` the tile wins broadly, for both complex types.
+Against cuBLAS only complex<double> ever clears R8's 1.11× bar, complex<float> tops out at 1.069×, and `double` **loses to `Tiled16`**
+(0.92–1.00×) — which is already 1.03–1.11× of cuBLAS on these shapes, so for `double` there is nothing to win and the selector leaves it
+alone. That double row is the clearest single negative result in the grid.
+
+#### Saturation, and where it is not reached (R8a)
+
+The ratio rises with batch and does not reach a fixed point inside the memory ceiling, so it is quoted with its direction and the batch it
+was read at. cdouble NC m=512 k=96: **1.099 → 1.120 → 1.134** at batch 64 → 256 → 1024 (still rising, +1.2% on the last doubling).
+cdouble CN 32×256×512: **1.052 → 1.112 → 1.126**. cfloat NC m=512 k=96 vs Tiled16: **2.881 → 1.984 → 2.056** — not monotone, and the
+batch-64 cell is a small-work cell, not a saturated one. Every ratio quoted above is the batch-1024 reading.
+
+#### Bracketing non-winners, all measured
+
+| edge | cell | vs cuBLAS | vs Tiled16 |
+|---|---|---|---|
+| m below the 128-row NC tile | cdouble 32×32×96 (the potrf W×W fold) | 0.283 | 0.857 |
+| n below the 32-col NC tile | cdouble 512×16×64 (the shape potrf cdouble issues) | 0.581 | 1.789 |
+| n below the 128-col CN tile | cdouble 32×64×512 | 0.563 | 1.762 |
+| m below the 32-row CN tile | cdouble 16×512×512 | 0.567 | 1.773 |
+| k → 1 | cdouble 512×32×1 | 0.346 | 0.563 |
+| k = 8 (the other side of that edge) | cdouble 512×32×8 | 1.163 | 1.884 |
+| batch below saturation | cdouble 128×32×96 at batch 64 | 0.569 | 1.707 |
+
+**No high-side bracket exists.** cdouble at 512³ batch 256 and 1024×1024×512 batch 128 both still read 1.13× of cuBLAS and 3.5× of
+Tiled16, in both transposed forms. The window has no measured upper bound in m, n or k — the same debt the `double` window already carries.
+
+#### The window that was refused, and the grid defect that produced it
+
+A `preferred()` window for complex<double> — the transposed forms, filled tiles, `k >= 8`, `ctas >= 1024` — **was written, built, tested and
+then withdrawn.** Its kernel evidence was the table above (every admitted cell ≥ 1.11×, every refused cell a measured loser). It failed the
+end-to-end gate and then failed its own re-measurement:
+
+| op | type | n | batch | route unchanged (ms) | window open (ms) | ratio |
+|---|---|---|---|---|---|---|
+| geqrf | cdouble | 256 | 1024 | 163.42 | 168.24 | **0.9714** |
+| geqrf | cdouble | 512 | 1024 | 889.72 | 892.56 | 0.9968 |
+| geqrf | cdouble | 512 | 256 | 227.68 | 228.27 | 0.9975 |
+| geqrf | cdouble | 256 | 256 | 43.96 | 43.94 | 1.0005 |
+
+Every other cell of the before/after (potrf and geqrf, cfloat / cdouble / double, n ∈ {256, 512}, batch ∈ {256, 1024}) moved by less than
+0.7%. A `BATCHLAS_KERNEL_TRACE` run confirms the kernel really did run — 24 launches of `gemm_sycl_register_32x128_k16_wide_cn` inside one
+`geqrf cdouble 256` call — so this is not a window that failed to fire.
+
+**The cause is a defect in the grid, not in the kernel: every `n` in the CN sweep and every `m` in the NC sweep was an exact multiple of the
+tile's own macro dimension.** 64, 128, 256, 512, 1024 against a 128-wide tile. The drivers issue `n2 = m - j2`, i.e. 224, 192, 160, 128, …,
+which leave a mostly-empty trailing column tile. Re-measured at those:
+
+| cdouble CN, 32 × n × 256, batch 1024 | n=136 | 160 | 192 | 224 | 288 | 384 | 480 |
+|---|---|---|---|---|---|---|---|
+| vs cuBLAS | 0.637 | 0.707 | 0.846 | 0.985 | 0.847 | **1.125** | 1.057 |
+| vs Tiled16 | 1.990 | 2.209 | 2.646 | 3.080 | 2.650 | 3.521 | 3.308 |
+
+| cdouble NC, m × 32 × 96, batch 1024 | m=136 | 160 | 200 | 224 | 288 | 384 | 480 |
+|---|---|---|---|---|---|---|---|
+| vs cuBLAS | 0.718 | 0.718 | 0.996 | 0.995 | 0.855 | **1.133** | 1.065 |
+| vs Tiled16 | 1.988 | 2.209 | 2.859 | 3.078 | 2.649 | 3.515 | 3.308 |
+
+The "1.13× window" is visible **only at exact tile multiples**. cuBLAS's ratio is flat in raggedness because it tiles the output
+differently; this kernel pays the full cost of a quarter-full trailing tile. `t_native <= 0.90 t_vendor` is therefore not met on the
+population the drivers actually generate, and the route is left alone. cfloat is the same story one notch lower (0.824–0.958 ragged).
+
+**Against `Tiled16` raggedness costs almost nothing** (1.68–3.52× cdouble, 1.68–2.42× cfloat across the same ragged sweep), which is why the
+**selector** row ships and the **route** row does not. `Tiled16` is one accumulator per thread; a partly-empty 128-wide tile still does far
+more work per load than that.
+
+The general lesson, and it generalises past this kernel: **a macro-tiled kernel must be swept at sizes that are NOT multiples of its own
+tile**, or the sweep measures the kernel's best case and calls it the average. Bracketing on size alone does not catch it — every cell in the
+first grid was bracketed, and every bracket was itself tile-aligned.
+
+#### What ships
+
+`select_kernel_variant` (`src/sycl/gemm_kernels.cc`), complex only, via `wide_transposed_tile_for` in `gemm_kernels.hh`:
+`NoTrans/ConjTrans` with `m >= 128 && n >= 32` → `128x32x16wide_nc`; `ConjTrans/NoTrans` with `m >= 32 && n >= 128` →
+`32x128x16wide_cn`; both need `k >= 8` and `ctas >= 64` for the tile in question. Everything else is `Tiled16`, unchanged.
+
+This is reachable in a **vendor-free or ROCm build**, and under a forced `BATCHLAS_GEMM_VARIANT=sycl` — `preferred()` refuses complex, so a
+complex shape in a cuBLAS build never reaches it. That is the honest scope: the deliverable is the vendor-independence build, worth
+**1.68–3.52×** there, and nothing at all in the vendor build.
+
+#### Register residency
+
+`scripts/register_probe.sh` (`BATCHLAS_BUILD_DIR=build/presets/dev-tests`, target `batchlas_sycl`): 576 entry functions, **0 with non-zero
+spill**, and all 16 `GemmWideTransposedKernel` instantiations present in the cubin — which is the check that the instantiation budget was
+actually spent, not merely written. Per instantiation:
+
+| tile / form | float | double | cfloat | cdouble |
+|---|---|---|---|---|
+| 64×64 CN | 43 | 66 | 72 | 128 |
+| 64×64 NC | 45 | 64 | 72 | 132 |
+| 128×32 NC | 47 | 64 | 72 | 124 |
+| 32×128 CN | 53 | 60 | 72 | 128 |
+
+Zero spill everywhere, and the profile tracks the NN wide kernel it was ported from (55/72/72/132). The cdouble column at 124–132 caps a
+work-group at 512 work-items, i.e. 33% occupancy — the same ceiling the NN kernel runs at.
+
+#### R9: the armed breaks
+
+The kernel's own breaks, run against `gemm_tests --gtest_filter='GemmTest/*.WideTransposed*'` (36 live cases: 9 tests × 4 types on CUDA):
+
+| break | expected red | observed red |
+|---|---|---|
+| 1. transposed A staging forms the `NoTrans` address | the CN tests, all 4 types (12) | **14** — the 12, plus `RealTransWideningOnALeg` for float and double, which also reaches the CN tile |
+| 2. transposed B staging forms the `NoTrans` address | the NC tests (12) | **14** — same +2, on the NC widening test |
+| 3. drop `dev_conj` on A | the CN tests, complex only (6) | **6**, exactly |
+| 4. drop `dev_conj` on B | the NC tests, complex only (6) | **6**, exactly |
+| 5. drop the epilogue `col >= n` guard | 15 | **18** — the two n = 32 potrf shapes stay green (n = TileN, no edge), correctly; the replica's count was low by 3 |
+| 6. drop the epilogue `row >= m` guard | 16 | **18**, and `NC128x32PotrfTrailingShape` stays green at **beta = 1** exactly as predicted: out-of-range rows accumulate zero, so the epilogue writes `prior` |
+| 7. swap the transposed-store index decomposition (**the break the plan names**) | 0 — it cannot go red | **0**, confirmed on hardware |
+| 8. drop the complex refusal in `wide_trans_matches<T>` | the 2 widening tests, complex only (4) | **4**, exactly |
+| 9. drop the staging bounds test on A | *(new; not predicted)* | **0** |
+
+Break 7 is a **performance** defect that no correctness test in this design can see: the staging loop is a full cover of the tile, so
+swapping the decomposition writes the same (i, kk) set and only changes which lane fetches which element. The answer is bit-identical; the
+global reads stop being coalesced. It has to be caught by an `ncu` sector count, not by `ctest`.
+
+Break 9 is the one finding from arming that was not predicted at all. Dropping `if (gm < m && gk < k)` on the A staging leg changes nothing,
+because the **B** staging leg's own bounds test still writes a zero for every out-of-range `kk`, and the product `af * 0` kills the garbage;
+out-of-range **rows** are dropped by the epilogue guard. So the A-side test is redundant for correctness whenever the B-side one holds — it
+earns its place only as an out-of-allocation read guard, which a test whose operands are sub-views of a wider parent can never exercise.
+Two tests defending one property is a guard you cannot arm; recorded rather than removed.
+
+The dispatch breaks, against `gemm_tests --gtest_filter='GemmDispatchPolicyTest.*'` plus `route_gemm_equivalence_tests` (these were run
+against the version that still carried the refused route window, which is why two of them name route tests that no longer exist):
+
+| break | expected red | observed red |
+|---|---|---|
+| A. the selector row never fires | `ComplexTransposedTakesTheWideTransposedTile` | that, **plus** the route-inside-selector invariant — correctly: a routed shape landing on `Tiled16` was the 3.5× regression that test existed for |
+| B. the NC gate stops requiring a filled 128-row tile | `WideTransposedSelectorRefusesEveryMeasuredLoser` | exactly that |
+| C. the route CTA floor drops below the selector's | the subset invariant | that, plus `ComplexTransposedTakesTheWideTransposedTile` |
+| D. the route window opens for complex<float> | `...IsComplexDoubleOnly` | that, plus `RouteGemmEquivalence.ComplexFloat` |
+| E. the route window narrows until the equivalence grid misses it | `RouteGemmEquivalence.ComplexDouble` (the non-vacuity guard) | that, plus `...IsComplexDoubleOnly` |
+| F. the `k >= 8` rank-1 exclusion is dropped | `WideTransposedSelectorRefusesEveryMeasuredLoser` | exactly that |
+
+#### Discarded cells, and what could not be established
+
+One cell of 244 tripped the `rel_sd < 10%` gate and is excluded: **float 512×32×96 batch 256, arm `64x64x16wide_nc`, rel_sd 0.172.** Its
+`128x32x16wide_nc` and vendor arms in the same process were at 0.002 and 0.004, so it is that arm on that cell, not the cell.
+
+Not established:
+
+* **The A/B harness these numbers came from is NOT in the tree.** `benchmarks/` has no gemm binary that can pin a `KernelVariant` per arm
+  *and* interleave the arms in one process, and `factor_bench.cc` covers factorizations only. The harness was a standalone `.cc` compiled
+  against `include/` + `build/presets/dev-tests/include/` and linked against the 14 component `.so`s (the recipe `docs/perf/level3.md` uses),
+  structured on `factor_bench.cc`'s rules. It was deliberately not added to `benchmarks/CMakeLists.txt`, because the `dev-tests` preset has
+  `BATCHLAS_BUILD_BENCHMARKS=OFF` and adding a source no build in the loop compiles is how this repo acquired 321 never-compiled lines. Until
+  it is in-tree and built, **every cell on this page is reproducible only by rebuilding that harness**. It should become
+  `benchmarks/gemm_ab_bench.cc` in a change that also runs the `benchmarks` preset.
+* **No `ncu` reading was taken.** The occupancy check for the 40 KB cdouble tiles is outstanding, and break 7 has no coalescing
+  measurement behind it. Every timing on this page is wall-clock.
+* **The 16-wide tiles are still not built**, so potrf complex<double> (W = 16) and geqrf double (nb = 16) reach no register kernel. The
+  n = 16 cell measured **1.789× of Tiled16** — a win the vendor-free build is leaving on the table — but on one cell, and potrf's `(nb, W)`
+  and a 16-wide tile are one coupled piece of work.
+* **No upper bound on m, n or k is measured** for the selector window; the largest cells are 1024×1024×512.
+* **The `k` edge is bracketed at 1 and 8 only**; `k` in 2..7 is unmeasured and refused.
+* **`float` transposed is not routed to these tiles**, although it beats `Tiled16` by 1.25–2.71× on the NC shapes. It was not A/B'd against
+  the existing `Tiled128x32RegisterK32{TN,NT,TT}` family, which owns `m >= 128 && n >= 32 && k >= 128` for float, and a selector row that
+  cannot say which of the two is better is not a row worth writing.
+* **The plan's premise that "float transposed is 0.23–0.55× across 48 of 48 cells" does not describe this demand.** On the panel shapes the
+  drivers issue, float native reads **0.71–1.24×** of cuBLAS. That figure came from a square grid.
+* **The plan's acceptance bar ("≥ 0.9× cuBLAS") is on the wrong side of R8 by 1.23×.** R8 needs `t_native <= 0.90 t_vendor`, i.e. ≥ 1.11×.
+  0.9× cuBLAS is 1.11× the vendor *in time*. The bar as written would have passed this kernel's cfloat cells; R8 does not.
 
 ### The strided ld defect and the routing fix
 
@@ -484,21 +716,25 @@ deprecation warning, so a deliberate override is never silently lost.
 
 ## Open debts
 
-* **Complex is what is still vendor-dependent, and that is the honest headline.** The panel-update population that dominates real demand needs a
-  *transposed and predicated* wide-scalar kernel — a new kernel, not a routing change. `ConjTrans` is supported by **no** register-tiled variant
-  in the tree (every TN/NT/TT launcher passes `Transpose::Trans`; no instantiation in the built `.so` carries `ConjTrans`), and for complex that
-  is the transpose that matters: herk, her2k and hemm all issue it.
-* **`scripts/gemm_demand.py`'s `preferred()` replica has drifted and is now wrong.** Its `double` branch (`:50-68`) is the pre-E5 `m == n == k &&
-  max_dim <= 512` with no `k >= 2`. Every demand figure it produces under-counts double, and `--check` will report genuine native rows as
-  disagreements. Its own docstring says a drifted replica is worse than no replica.
+* **Complex is still vendor-dependent in a cuBLAS build, and that is now a measured result rather than a gap.** The transposed wide-scalar
+  kernel exists (`register_wide_transposed.hh`), is tested, and is **selected** for complex transposed shapes — but only against `Tiled16`,
+  because a `preferred()` window for complex<double> was measured and **refused**: it cleared R8 only at tile-aligned sizes and ran at
+  0.64–0.99× of cuBLAS on the ragged `n` the blocked drivers actually issue. The vendor-free and ROCm builds gain 1.68–3.52×; the vendor
+  build gains nothing. The 16-wide tiles that potrf complex<double> and geqrf double need are still not built, and the n = 16 cell measured
+  1.79× of `Tiled16` unexploited. See above.
+* ~~`scripts/gemm_demand.py`'s `preferred()` replica has drifted~~ — **paid**. `scripts/gemm_demand.py:50-77` now transcribes the shipped
+  predicate exactly (float NN square `max_dim <= 32`; double `k >= 2`, no squareness, no upper bound). Verified against
+  `route_gemm.hh` rather than re-asserted.
 * **The double window deliberately reaches past its measurements.** No upper size bound; largest measured 2048³. The FP64-ceiling argument is an
   argument, not a measurement, above 2048.
-* **Nothing in `ctest` asserts on kernel choice or throughput**, and `scripts/route_diff.sh` records resolver `Route`s, not `KernelVariant`s, so
-  it is structurally blind to every selector change on this page. A regression in the CTA gate or the `mn_min` gate would be **completely
-  silent**, visible only as the suite getting slower.
-* **`SelectSyclKernelVariantForTest` (`tests/gemm_tests.cc:213`) hard-codes `Matrix<float>` and `select_kernel_variant<float>`,** so every
+* **`scripts/route_diff.sh` records resolver `Route`s, not `KernelVariant`s**, so it is structurally blind to every selector change on this
+  page. `GemmDispatchPolicyTest` now covers the complex transposed selector window and both its edges, but a regression in the float CTA gate
+  or the `mn_min` gate is still **completely silent**, visible only as the suite getting slower.
+* **`SelectSyclKernelVariantForTest` hard-codes `Matrix<float>` and `select_kernel_variant<float>`,** so every pre-existing
   `GemmDispatchPolicyTest` is float-only: the double `max_dim <= 24` boundary, the complex CTA gate and the wide kernel's `min_dim >= 256` arm
-  have **no dispatch-policy test at all**. Same blind-by-construction shape as the 18×14×12 ConjTrans case.
+  still have **no dispatch-policy test**. Same blind-by-construction shape as the 18×14×12 ConjTrans case. A templated
+  `SelectSyclKernelVariantForTestT<T>` now sits beside it and is used by one assertion (that complex transposed shapes still fall to `Tiled16`);
+  porting the existing float assertions onto it is the rest of the debt.
 * **The wide kernel's predicated leg has never been timed against `Tiled16`.** It is correct (round-off on 70×53×37) and reachable, but both
   routing arms gate on the aligned fast path or on a CTA count, so no timing of the predicated leg exists.
 * **The 12-cell subset behind the 1.74× / 1.75× routing geomean is not identified in the preserved data.**

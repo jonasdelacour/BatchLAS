@@ -1443,18 +1443,39 @@ TYPED_TEST(PotrfBlockedTest, BlockedRouteTableAndTheVendorFreeFallback) {
     //     the driver mirrors, or a forced `blocked` there silently becomes cuSOLVER.
     EXPECT_FALSE(Tbl::supports(blk, *upper));
 
-    // (3) preferred() is still ALL FALSE, so a vendor-present build takes the vendor for
-    //     this shape. evidence: docs/perf/potrf.md#preferred-is-false-everywhere
+    // (3) The blocked driver is never what `preferred()` names: inside the measured window
+    //     that is LPanel, outside it nothing at all.
+    //     evidence: docs/perf/potrf.md#the-measured-lpanel-window
     EXPECT_FALSE(Tbl::preferred(blk, *lower));
     EXPECT_FALSE(Tbl::preferred(cta, *lower));
 
-    // (4) With no vendor in the build resolve_route hands over any SUPPORTED native
-    //     route; above the CTA ceiling the blocked driver is the only one.
+    // (4) With no vendor in the build resolve_route hands over a SUPPORTED native route.
+    //     Since P3 the tier immediately above the CTA ceiling is LPanel for the types the
+    //     grid covers; double and complex<double> still fall to the blocked driver there.
+    const dispatch::Route lp{dispatch::Origin::Native, dispatch::Algorithm::LPanel};
+    constexpr bool lpanel_measured =
+        std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>;
     const auto free_route = backend::potrf_route<B, T>(*this->ctx, A.view(), Uplo::Lower,
                                                        /*vendor_available=*/false);
     EXPECT_TRUE(dispatch::is_native(free_route));
-    EXPECT_EQ(free_route.algo, dispatch::Algorithm::Blocked)
-        << "a vendor-free build does not reach the blocked driver above the CTA ceiling";
+    EXPECT_EQ(free_route.algo, (lpanel_measured && Tbl::supports(lp, *lower))
+                                   ? dispatch::Algorithm::LPanel
+                                   : dispatch::Algorithm::Blocked)
+        << "the vendor-free tier above the CTA ceiling is not the measured one";
+
+    // (5) ... and the blocked driver is still REACHABLE, above LPanel's own ceiling, which
+    //     is the claim (4) used to carry. 1100 is over the 1024 work-item cap the LPanel
+    //     body needs (one work-item per row) for every type.
+    Matrix<T, MatrixFormat::Dense> Big(1100, 1100, 1);
+    Big.fill(T{});
+    for (int i = 0; i < 1100; ++i) Big(i, i, 0) = make_scalar<T>(R(1), R(0));
+    const auto big_lower = backend::potrf_op_shape<B, T>(*this->ctx, Big.view(), Uplo::Lower);
+    ASSERT_TRUE(big_lower.has_value());
+    EXPECT_FALSE(Tbl::supports(lp, *big_lower));
+    const auto big_free = backend::potrf_route<B, T>(*this->ctx, Big.view(), Uplo::Lower,
+                                                     /*vendor_available=*/false);
+    EXPECT_EQ(big_free.algo, dispatch::Algorithm::Blocked)
+        << "a vendor-free build does not reach the blocked driver above the LPanel ceiling";
 }
 
 // potrf_buffer_size SURVIVES THE ROUTE CHANGING BETWEEN QUERY AND CALL: the route is
@@ -1638,5 +1659,8 @@ TYPED_TEST(PotrfBlockedTest, BlockedDoesNotReadUninitialisedWorkspace) {
 // anonymous namespace so make_spd, make_planted_ldl and multiply_back_residual
 // above are the same oracles the CTA cases use.
 #include "potrf_tiny_cases.inc"
+
+// The LPANEL tier's cases, here for the same reason: one set of oracles.
+#include "potrf_lpanel_cases.inc"
 
 }  // namespace

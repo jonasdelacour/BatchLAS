@@ -15,6 +15,12 @@
 #include <batchlas/blas/functions/getri.hh>
 #include <batchlas/blas/functions/potrf.hh>
 
+// P2: the two ops with no vendor arm anywhere. Their composed routes are built from
+// the entry points above, in this file, because only this layer can name a route for
+// getrf / getrs / potrf / trsm.
+#include <batchlas/blas/functions/gesv.hh>
+#include <batchlas/blas/functions/posv.hh>
+
 // The routed ops the blocked drivers inject: their kernel TUs carry no Backend
 // parameter, so only this layer can name a route for them.
 #include <batchlas/blas/functions/gemm.hh>
@@ -36,6 +42,9 @@
 #include "../../backends/getrf_route.hh"
 #include "../../backends/getrs_route.hh"
 #include "../../backends/getri_route.hh"
+#include "../../backends/gesv_route.hh"
+#include "../../backends/posv_route.hh"
+#include "../../extensions/solve_native.hh"
 #include "../../extensions/getrf_native.hh"
 #include "../../extensions/getrs_native.hh"
 #include "../../extensions/getri_native.hh"
@@ -658,9 +667,9 @@ Event potrf(Queue& ctx,
         ctx, descrA, uplo,
         /*vendor_available=*/dispatch::solver_vendor_available<B>);
 
-    // preferred() is all-false, so a vendor-present build enters this block only when
-    // a caller pins BATCHLAS_POTRF_ROUTE; a vendor-free build takes any supported
-    // native route. evidence: docs/perf/potrf.md#preferred-is-false-everywhere
+    // A vendor-present build enters this block inside potrf's ONE measured window, or when
+    // a caller pins BATCHLAS_POTRF_ROUTE; a vendor-free build takes any supported native
+    // route. evidence: docs/perf/potrf.md#the-measured-lpanel-window
     if (dispatch::is_native(route)) {
         // Tiny before CTA: it is the tier BELOW CTA at the same orders, so the arm order
         // here must match kPotrfOrder's or a resolved Tiny route would land on the CTA
@@ -670,6 +679,10 @@ Event potrf(Queue& ctx,
         }
         if (route.algo == dispatch::Algorithm::CTA) {
             return sycl_potrf::potrf_cta_dispatch<T>(ctx, descrA, uplo, workspace, info_out);
+        }
+        // WP6/P3. evidence: docs/perf/potrf.md#the-measured-lpanel-window
+        if (route.algo == dispatch::Algorithm::LPanel) {
+            return sycl_potrf::potrf_lpanel_dispatch<T>(ctx, descrA, uplo, workspace, info_out);
         }
         if (route.algo == dispatch::Algorithm::Blocked) {
             // GEMM and TRSM go through the ROUTER -- see geqrf above.
@@ -736,6 +749,15 @@ size_t potrf_buffer_size(Queue& ctx,
                 native_need = std::max(
                     native_need, sycl_potrf::potrf_blocked_buffer_size<T>(ctx, A, uplo));
             }
+            // P3 made {Native, LPanel} reachable from Auto, so it must be sized here
+            // too. Without this arm, a device whose CTA capacity is 0 refuses CTA AND
+            // Blocked (which inherits CTA's presence gate), leaving native_need == 0 and
+            // throwing for exactly the shapes potrf() then runs on LPanel.
+            if (Tbl::supports({dispatch::Origin::Native, dispatch::Algorithm::LPanel},
+                              *shape)) {
+                native_need = std::max(
+                    native_need, sycl_potrf::potrf_lpanel_buffer_size<T>(ctx, A));
+            }
         }
         if (native_need == 0) {
             potrf_throw_native_unimplemented<T>(route, "potrf_buffer_size");
@@ -752,6 +774,140 @@ size_t potrf_buffer_size(Queue& ctx,
         return std::max(native_need,
                         backend::potrf_vendor_buffer_size<B, T>(ctx, A, uplo));
     }
+}
+
+// ---------------------------------------------------------------------------
+// P2: gesv and posv. THE TWO OPS WITH NO VENDOR ARM ON ANY BACKEND, so neither
+// has a `*_vendor` declaration, neither reads factorization_vendor_available, and
+// neither can fall back the way every other op in this file does. Their composed
+// arms are assembled here out of the routed entry points above -- for gesv
+// `getrf; getrs`, for posv `potrf; trsm; trsm` -- which is also why the
+// composition lives in the facade rather than in a driver TU.
+// evidence: docs/perf/lu.md#p2-the-window-this-tier-expects
+
+template <typename T>
+[[noreturn]] inline void solve_throw_unroutable(dispatch::Route route, const char* who) {
+    throw batchlas::internal_error(
+        std::string(who) + ": resolved to " +
+        std::string(dispatch::to_string(route.origin)) + ":" +
+        std::string(dispatch::to_string(route.algo)) +
+        ", which names no implementation. This op has no vendor arm, so a "
+        "{vendor, auto} answer means the shape builder returned nullopt for a pair "
+        "the validator had already accepted -- a routing defect, not a missing "
+        "library.");
+}
+
+// The workspace split, and why it is safe to cut the caller's span at the first
+// leg's reported size: BumpAllocator's sizing results are alignment multiples and a
+// real pool's base is device-aligned, so the tail sub-span is device-aligned too
+// (mempool.hh). Sharing ONE span between the two legs would also work on an
+// in-order queue, but only by an argument about kernel ordering; this one needs no
+// such argument.
+template <Backend Back, typename T>
+Event gesv(Queue& ctx,
+           const MatrixView<T, MatrixFormat::Dense>& A,
+           const MatrixView<T, MatrixFormat::Dense>& B,
+           Span<int64_t> pivots,
+           Span<std::byte> work_space,
+           Span<int32_t> info) {
+    gesv_validate_params<T>(A, B);
+
+    const dispatch::Route route = backend::gesv_route<Back, T>(ctx, A, B);
+
+    if (route.algo == dispatch::Algorithm::Tiny) {
+        return sycl_gesv::gesv_tiny_dispatch<T>(ctx, A, B, pivots, work_space, info);
+    }
+    if (route.algo == dispatch::Algorithm::Blocked) {
+        const std::size_t split = getrf_buffer_size<Back, T>(ctx, A);
+        if (work_space.size() < split) {
+            throw batchlas::workspace_error(
+                "gesv: workspace is shorter than the composed route's getrf leg needs");
+        }
+        (void)getrf<Back, T>(ctx, A, pivots, work_space.subspan(0, split), info);
+        return getrs<Back, T>(ctx, A, B, Transpose::NoTrans, pivots,
+                              work_space.subspan(split));
+    }
+    solve_throw_unroutable<T>(route, "gesv");
+}
+
+template <Backend Back, typename T>
+size_t gesv_buffer_size(Queue& ctx,
+                        const MatrixView<T, MatrixFormat::Dense>& A,
+                        const MatrixView<T, MatrixFormat::Dense>& B) {
+    // The query mirrors the call: SAME ARGUMENTS, so the two reach the same route by
+    // construction rather than by a comment asking for it.
+    gesv_validate_params<T>(A, B);
+
+    const dispatch::Route route = backend::gesv_route<Back, T>(ctx, A, B);
+
+    if (route.algo == dispatch::Algorithm::Tiny) {
+        return sycl_gesv::gesv_tiny_buffer_size<T>(ctx, A, B);
+    }
+    if (route.algo == dispatch::Algorithm::Blocked) {
+        // A SUM, not a max: the two legs hold disjoint halves of the span.
+        return getrf_buffer_size<Back, T>(ctx, A) +
+               getrs_buffer_size<Back, T>(ctx, A, B, Transpose::NoTrans);
+    }
+    solve_throw_unroutable<T>(route, "gesv_buffer_size");
+}
+
+template <Backend Back, typename T>
+Event posv(Queue& ctx,
+           const MatrixView<T, MatrixFormat::Dense>& A,
+           const MatrixView<T, MatrixFormat::Dense>& B,
+           Uplo uplo,
+           Span<std::byte> work_space,
+           Span<int32_t> info) {
+    posv_validate_params<T>(A, B, uplo);
+
+    const dispatch::Route route = backend::posv_route<Back, T>(ctx, A, B, uplo);
+
+    if (route.algo == dispatch::Algorithm::Tiny) {
+        return sycl_posv::posv_tiny_dispatch<T>(ctx, A, B, uplo, work_space, info);
+    }
+    if (route.algo == dispatch::Algorithm::Blocked) {
+        // No split here: `trsm` takes no workspace, so potrf owns the whole span.
+        (void)potrf<Back, T>(ctx, A, uplo, work_space, info);
+
+        // ConjTrans only for a complex scalar. A real backend is entitled to treat
+        // ConjTrans as unsupported rather than as Trans, and the two are identical
+        // for a real matrix, so asking for the one that always exists is free.
+        // `internal::is_complex` is private to another src/ header, so detect
+        // complex via base_type, as syev.hh:243 does: for a real T, base_type<T>
+        // IS T.
+        constexpr bool kReal = std::is_same_v<T, typename base_type<T>::type>;
+        constexpr Transpose kAdj = kReal ? Transpose::Trans : Transpose::ConjTrans;
+        const T one = T(1);
+        if (uplo == Uplo::Lower) {
+            (void)trsm<Back, T>(ctx, A, B, one, Side::Left, Uplo::Lower,
+                                Transpose::NoTrans, Diag::NonUnit);
+            return trsm<Back, T>(ctx, A, B, one, Side::Left, Uplo::Lower, kAdj,
+                                 Diag::NonUnit);
+        }
+        (void)trsm<Back, T>(ctx, A, B, one, Side::Left, Uplo::Upper, kAdj,
+                            Diag::NonUnit);
+        return trsm<Back, T>(ctx, A, B, one, Side::Left, Uplo::Upper,
+                             Transpose::NoTrans, Diag::NonUnit);
+    }
+    solve_throw_unroutable<T>(route, "posv");
+}
+
+template <Backend Back, typename T>
+size_t posv_buffer_size(Queue& ctx,
+                        const MatrixView<T, MatrixFormat::Dense>& A,
+                        const MatrixView<T, MatrixFormat::Dense>& B,
+                        Uplo uplo) {
+    posv_validate_params<T>(A, B, uplo);
+
+    const dispatch::Route route = backend::posv_route<Back, T>(ctx, A, B, uplo);
+
+    if (route.algo == dispatch::Algorithm::Tiny) {
+        return sycl_posv::posv_tiny_buffer_size<T>(ctx, A, B);
+    }
+    if (route.algo == dispatch::Algorithm::Blocked) {
+        return potrf_buffer_size<Back, T>(ctx, A, uplo);
+    }
+    solve_throw_unroutable<T>(route, "posv_buffer_size");
 }
 
 #define OP_INSTANTIATE(OP, B_, fp) BATCHLAS_INSTANTIATE(sig::OP<fp>, OP, B_, fp)
@@ -774,6 +930,20 @@ size_t potrf_buffer_size(Queue& ctx,
     FACTORIZATION_ONE(B_, std::complex<float>)      \
     FACTORIZATION_ONE(B_, std::complex<double>)
 
+// P2's two ops. A separate driver from FACTORIZATION_ALL only because they landed
+// separately; they have the same four-type domain.
+#define SOLVE_ONE(B_, fp)                      \
+    OP_INSTANTIATE(gesv, B_, fp)               \
+    OP_INSTANTIATE(gesv_buffer_size, B_, fp)   \
+    OP_INSTANTIATE(posv, B_, fp)               \
+    OP_INSTANTIATE(posv_buffer_size, B_, fp)
+
+#define SOLVE_ALL(B_)                               \
+    SOLVE_ONE(B_, float)                            \
+    SOLVE_ONE(B_, double)                           \
+    SOLVE_ONE(B_, std::complex<float>)              \
+    SOLVE_ONE(B_, std::complex<double>)
+
 #define POTRF_ALL(B_)                               \
     OP_INSTANTIATE(potrf, B_, float)                \
     OP_INSTANTIATE(potrf, B_, double)               \
@@ -790,18 +960,23 @@ size_t potrf_buffer_size(Queue& ctx,
 #if BATCHLAS_HAS_CUDA_BACKEND
 FACTORIZATION_ALL(Backend::CUDA)
 POTRF_ALL(Backend::CUDA)
+SOLVE_ALL(Backend::CUDA)
 #endif
 
 #if BATCHLAS_HAS_ROCM_BACKEND
 FACTORIZATION_ALL(Backend::ROCM)
 POTRF_ALL(Backend::ROCM)
+SOLVE_ALL(Backend::ROCM)
 #endif
 
 #if BATCHLAS_HAS_HOST_BACKEND
 FACTORIZATION_ALL(Backend::NETLIB)
 POTRF_ALL(Backend::NETLIB)
+SOLVE_ALL(Backend::NETLIB)
 #endif
 
+#undef SOLVE_ALL
+#undef SOLVE_ONE
 #undef POTRF_ALL
 #undef FACTORIZATION_ALL
 #undef FACTORIZATION_ONE

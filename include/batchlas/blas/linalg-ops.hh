@@ -13,6 +13,9 @@
 // svd() below calls gesvd and gesvd_buffer_size directly. Reached transitively
 // before this file grew that call; named here so it cannot break again.
 #include <batchlas/blas/functions/gesvd.hh>
+// solve_spd() below calls posv and posv_buffer_size directly; named here for the
+// same reason gesvd.hh is, rather than relied on transitively.
+#include <batchlas/blas/functions/posv.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/blas/options.hh>
 #include <batchlas/util/sycl-device-queue.hh>
@@ -300,6 +303,34 @@ inline Matrix<T, MatrixFormat::Dense> solve(Queue& ctx,
 
     (void)getrf(ctx, LU.view(), pivots);
     (void)getrs(ctx, LU.view(), X.view(), pivots, {.trans = trans});
+    return X;
+}
+
+// Solve A X = B for Hermitian positive-definite A by Cholesky. Neither A nor B is
+// modified.
+//
+// SPELLED ON `posv`, NOT ON `solve` ABOVE, and the difference is not stylistic: LU
+// with partial pivoting is backward stable for any nonsingular A, so `solve` is the
+// safe default and stays the one every existing caller reaches. This entry point
+// trades that generality for roughly half the arithmetic and makes the SPD claim the
+// caller's; a matrix that is not positive definite comes back as a non-zero `info`
+// and an undefined X, exactly as LAPACK's ?POSV does.
+//
+// The workspace is an arena lease, as everywhere in this layer: a local Span would
+// be freed before the kernels it feeds have run.
+template <typename T>
+inline Matrix<T, MatrixFormat::Dense> solve_spd(Queue& ctx,
+                                                const MatrixView<T, MatrixFormat::Dense>& A,
+                                                const MatrixView<T, MatrixFormat::Dense>& B,
+                                                Uplo uplo = Uplo::Lower) {
+    auto F = detail::like(A);
+    (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, F.view(), A);
+
+    Matrix<T, MatrixFormat::Dense> X(B.rows(), B.cols(), B.batch_size());
+    (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, X.view(), B);
+
+    auto lease = ctx.workspace(posv_buffer_size(ctx, F.view(), X.view(), uplo));
+    (void)posv(ctx, F.view(), X.view(), uplo, lease.span(), Span<int32_t>{});
     return X;
 }
 

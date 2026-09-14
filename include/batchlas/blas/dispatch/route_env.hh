@@ -36,6 +36,7 @@ inline std::optional<Algorithm> parse_algorithm_word(std::string_view w) {
     if (w == "direct") return Algorithm::Direct;
     if (w == "cta" || w == "batchlas_cta" || w == "batchlas-cta") return Algorithm::CTA;
     if (w == "tiny" || w == "batchlas_tiny" || w == "batchlas-tiny") return Algorithm::Tiny;
+    if (w == "lpanel" || w == "batchlas_lpanel" || w == "batchlas-lpanel") return Algorithm::LPanel;
     if (w == "blocked" || w == "batchlas_blocked" || w == "batchlas-blocked") return Algorithm::Blocked;
     if (w == "two_stage" || w == "two-stage" || w == "batchlas_two_stage" ||
         w == "batchlas-two-stage") return Algorithm::TwoStage;

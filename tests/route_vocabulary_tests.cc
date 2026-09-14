@@ -490,7 +490,7 @@ namespace {
 // PERMISSIVE DEFAULTS, one hostile field per case: with cta_max_n at 0 or has_sg32
 // false, every "supports() is false" case below would pass for the wrong reason.
 PotrfShape potrf_shape(int64_t order, int64_t batch, int cta_max,
-                       Uplo uplo = Uplo::Lower) {
+                       Uplo uplo = Uplo::Lower, int lpanel_max = 0) {
     PotrfShape s;
     s.op = Op::potrf;
     s.scalar = ScalarKind::F32;
@@ -505,6 +505,10 @@ PotrfShape potrf_shape(int64_t order, int64_t batch, int cta_max,
     s.is_gpu = true;
     s.has_sg32 = true;
     s.cta_max_n = cta_max;
+    // 0 means "LPanel absent", which is what every case below this helper's introduction
+    // assumed implicitly. It is now EXPLICIT, because leaving it unset is what made the
+    // window tests vacuous the moment P3 shipped a real window.
+    s.lpanel_max_n = lpanel_max;
     s.blocked_available = (cta_max > 0);
     return s;
 }
@@ -522,19 +526,37 @@ TEST(RoutePotrf, SupportedButNotPreferredIsTheWholePoint) {
     // cta_max is the float CTA fit ceiling; it only has to exceed the order below, or
     // supports() answers false and the whole case holds vacuously.
     // evidence: docs/perf/potrf.md#the-slm-budget-and-the-fit-ceilings
-    const auto s = potrf_shape(/*order=*/128, /*batch=*/1, /*cta_max=*/155);
+    const auto s = potrf_shape(/*order=*/128, /*batch=*/1, /*cta_max=*/155,
+                               Uplo::Lower, /*lpanel_max=*/512);
 
     EXPECT_TRUE(PotrfTable::supports(kPotrfCta, s))
         << "batch size is a speed question; it must not gate CORRECTNESS";
     EXPECT_FALSE(PotrfTable::preferred(kPotrfCta, s))
-        << "nothing about potrf has been measured yet";
+        << "CTA is supported at 128 but LPanel is the MEASURED tier above order 35, so "
+           "the window must answer for LPanel and not for the tier it displaced";
+    EXPECT_TRUE(PotrfTable::preferred(Route{Origin::Native, Algorithm::LPanel}, s))
+        << "if this is false the case above holds vacuously";
     EXPECT_TRUE(is_native(resolve_potrf_route<float>(kPotrfAuto, s,
                                                      /*vendor_available=*/false)))
         << "un-preferred must never mean unroutable when there is no vendor";
-    EXPECT_TRUE(is_vendor(resolve_potrf_route<float>(kPotrfAuto, s,
+
+    // WP4 step 0.7 made this shape a zero-behaviour-change gate: with a vendor present,
+    // Auto took cuSOLVER. P3 MEASURED the LPanel tier here and deliberately superseded
+    // that, so the gate now holds only OFF the window. Both halves are asserted, because
+    // "the vendor still wins everywhere else" is the property the flip must not break.
+    // evidence: docs/perf/potrf.md#the-measured-lpanel-window
+    EXPECT_TRUE(is_native(resolve_potrf_route<float>(kPotrfAuto, s,
                                                      /*vendor_available=*/true)))
-        << "and with a vendor present it must take it -- WP4 step 0.7 is a "
-           "zero-behaviour-change gate";
+        << "inside the measured window Auto must take the native tier";
+
+    const auto off_window = potrf_shape(/*order=*/128, /*batch=*/1, /*cta_max=*/155,
+                                        Uplo::Upper, /*lpanel_max=*/512);
+    EXPECT_TRUE(PotrfTable::supports(kPotrfCta, off_window));
+    EXPECT_FALSE(PotrfTable::preferred(kPotrfCta, off_window));
+    EXPECT_TRUE(is_vendor(resolve_potrf_route<float>(kPotrfAuto, off_window,
+                                                     /*vendor_available=*/true)))
+        << "Uplo::Upper has no grid, so supported-but-not-preferred must still mean "
+           "the vendor takes it";
 }
 
 TEST(RoutePotrf, VendorFreeFallbackPicksTheNativeRoute) {
@@ -561,34 +583,66 @@ TEST(RoutePotrf, VendorFreeFallbackPicksTheNativeRoute) {
     EXPECT_EQ(rbare.algo, Algorithm::CTA);
 }
 
-TEST(RoutePotrf, PreferredIsFalseEverywhere) {
-    // preferred() is all-false for potrf, so Origin::Auto takes the vendor everywhere.
-    for (int64_t order : {1, 8, 63, 64, 77, 109, 155, 156, 512, 4096}) {
-        for (int64_t batch : {1, 8, 128, 2048}) {
-            for (Uplo up : {Uplo::Lower, Uplo::Upper}) {
-                const auto s = potrf_shape(order, batch, 155, up);
-                EXPECT_FALSE(PotrfTable::preferred(kPotrfCta, s));
-                EXPECT_FALSE(PotrfTable::preferred(kPotrfBlocked, s));
-                EXPECT_FALSE(PotrfTable::preferred(Route{Origin::Vendor, Algorithm::Auto}, s))
-                    << "the vendor is where the walk ENDS, never itself preferred";
-                EXPECT_TRUE(is_vendor(resolve_potrf_route<float>(kPotrfAuto, s, true)))
-                    << "order " << order << " batch " << batch;
-            }
+TEST(RoutePotrf, TheMeasuredLpanelWindowAndNothingElse) {
+    // P3's window: 32 < order <= 256, Uplo::Lower, float and complex<float> only.
+    // evidence: docs/perf/potrf.md#the-measured-lpanel-window
+    constexpr Route kPotrfLPanel{Origin::Native, Algorithm::LPanel};
+
+    auto preferred_count = [](const PotrfShape& sh) {
+        int n = 0;
+        for (const Route* it = PotrfTable::order_begin(); it != PotrfTable::order_end(); ++it)
+            if (PotrfTable::preferred(*it, sh)) ++n;
+        return n;
+    };
+
+    // IN the window: exactly ONE tier answers true (R8b -- automatic() returns on the
+    // first supports && preferred hit, so two true tiers would make the order array the
+    // decision and silently hand the shape to whichever is listed first).
+    for (int64_t order : {33, 36, 64, 128, 192, 256}) {
+        for (int64_t batch : {1, 128, 2048}) {
+            const auto sh = potrf_shape(order, batch, 155, Uplo::Lower, 512);
+            EXPECT_EQ(preferred_count(sh), 1) << "order " << order << " batch " << batch;
+            EXPECT_TRUE(is_native(resolve_potrf_route<float>(kPotrfAuto, sh, true)))
+                << "order " << order << " batch " << batch;
         }
     }
-    // Spelled out per type: preferred() reads the table's T, never s.scalar.
-    const auto s = potrf_shape(64, 512, 155);
-    EXPECT_FALSE((RouteTable<Op::potrf, double>::preferred(kPotrfCta, s)));
-    EXPECT_FALSE((RouteTable<Op::potrf, std::complex<float>>::preferred(kPotrfCta, s)));
-    EXPECT_FALSE((RouteTable<Op::potrf, std::complex<double>>::preferred(kPotrfCta, s)));
+
+    // The float CTA/LPanel split inside the window sits at 35.
+    EXPECT_TRUE(PotrfTable::preferred(kPotrfCta, potrf_shape(34, 2048, 155, Uplo::Lower, 512)));
+    EXPECT_TRUE(PotrfTable::preferred(kPotrfLPanel, potrf_shape(36, 2048, 155, Uplo::Lower, 512)));
+
+    // OUT of the window, all four edges, the vendor still wins the walk.
+    for (const auto& sh : {potrf_shape(32, 2048, 155, Uplo::Lower, 512),   // at/below the floor
+                           potrf_shape(257, 2048, 512, Uplo::Lower, 512),  // above the ceiling
+                           potrf_shape(512, 2048, 512, Uplo::Lower, 512),
+                           potrf_shape(128, 2048, 155, Uplo::Upper, 512)}) {
+        EXPECT_EQ(preferred_count(sh), 0);
+        EXPECT_TRUE(is_vendor(resolve_potrf_route<float>(kPotrfAuto, sh, true)));
+    }
+
+    // A device that cannot HOLD LPanel must not fire the window: the walk would land on
+    // CTA, which the grid measured LOSING to the vendor above order 35.
+    const auto no_lpanel = potrf_shape(128, 2048, 155, Uplo::Lower, /*lpanel_max=*/0);
+    EXPECT_EQ(preferred_count(no_lpanel), 0);
+    EXPECT_TRUE(is_vendor(resolve_potrf_route<float>(kPotrfAuto, no_lpanel, true)));
+
+    // Per type: the window reads the table's T, never s.scalar, and only the two types
+    // with a grid may fire. The shape says F32 throughout -- that is the point.
+    const auto sh = potrf_shape(64, 2048, 155, Uplo::Lower, 512);
+    EXPECT_TRUE((RouteTable<Op::potrf, std::complex<float>>::preferred(
+        Route{Origin::Native, Algorithm::LPanel}, sh)));
+    for (int64_t order : {33, 64, 128, 256}) {
+        const auto d = potrf_shape(order, 2048, 155, Uplo::Lower, 512);
+        EXPECT_FALSE((RouteTable<Op::potrf, double>::preferred(kPotrfCta, d)));
+        EXPECT_FALSE((RouteTable<Op::potrf, double>::preferred(kPotrfLPanel, d)));
+        EXPECT_FALSE((RouteTable<Op::potrf, std::complex<double>>::preferred(kPotrfCta, d)));
+        EXPECT_FALSE((RouteTable<Op::potrf, std::complex<double>>::preferred(kPotrfLPanel, d)));
+    }
+
+    // The vendor is where the walk ENDS, never itself preferred.
+    EXPECT_FALSE(PotrfTable::preferred(Route{Origin::Vendor, Algorithm::Auto}, sh));
 }
 
-// route.hh is an INSTALLED header and the library carries a SOVERSION, so an Algorithm
-// enumerator's NUMERIC value is ABI. Inserting a new name anywhere but the end renumbers
-// every enumerator after it, and a caller compiled against the old header then names a
-// different algorithm at run time with no diagnostic anywhere -- no link error, no
-// warning, just a different kernel. These are the values route.hh shipped with; a new
-// algorithm is APPENDED and gets the next free number.
 TEST(RouteVocabulary, AlgorithmEnumeratorValuesAreAbi) {
     auto value = [](Algorithm a) { return static_cast<int>(a); };
     EXPECT_EQ(value(Algorithm::Auto), 0);
@@ -1052,8 +1106,8 @@ TEST(RouteGeqrf, PreferredIsTheMeasuredOrderFloorAndTheTallClause) {
     expect_geqrf_floor<float>("float", /*below=*/48,
                               /*at=*/64,  Algorithm::CTA,
                               /*high=*/128, Algorithm::Blocked);
-    expect_geqrf_floor<double>("double", /*below=*/64,
-                               /*at=*/96,  Algorithm::Blocked,
+    expect_geqrf_floor<double>("double", /*below=*/72,
+                               /*at=*/76,  Algorithm::Blocked,
                                /*high=*/256, Algorithm::Blocked);
     expect_geqrf_floor<std::complex<float>>("cfloat", /*below=*/32,
                                             /*at=*/48,  Algorithm::CTA,
@@ -1875,17 +1929,29 @@ TEST(RouteGetrf, PreferredIsTheMeasuredOrderWindowPerTypeAndBlockedOnly) {
             EXPECT_TRUE(is_vendor(resolve_getrf_route<float>(kGetrfAuto, s, true)))
                 << "order " << order << " batch " << batch;
         }
-        // cfloat's boundary is 512, not float's 256.
+        // cfloat since P4: >= 512 at any batch, and 256..511 ONLY at batch >= 256.
+        // The register panel leaf is what makes 256 clear the gate at all, and the
+        // batch term is a measured loss at batch 64..128, not caution.
+        // evidence: docs/perf/lu.md#the-cfloat-window-moves-to-256
         for (int64_t order : {512, 513, 2048}) {
             const auto s = getrf_shape(order, batch, 4096);
             EXPECT_TRUE(GetrfTableCF::preferred(kGetrfBlocked, s)) << "cfloat order " << order;
             const Route r = resolve_getrf_route<std::complex<float>>(kGetrfAuto, s, true);
             EXPECT_TRUE(is_native(r) && r.algo == Algorithm::Blocked);
         }
-        for (int64_t order : {1, 128, 256, 511}) {
+        for (int64_t order : {256, 257, 511}) {
+            const auto s = getrf_shape(order, batch, 4096);
+            EXPECT_EQ(GetrfTableCF::preferred(kGetrfBlocked, s), batch >= 256)
+                << "cfloat order " << order << " batch " << batch
+                << ": the 256..511 band is batch-gated -- 0.92 at batch 128, 1.285 at 256";
+            const Route r = resolve_getrf_route<std::complex<float>>(kGetrfAuto, s, true);
+            EXPECT_EQ(is_native(r) && r.algo == Algorithm::Blocked, batch >= 256);
+        }
+        for (int64_t order : {1, 128, 192, 255}) {
             const auto s = getrf_shape(order, batch, 4096);
             EXPECT_FALSE(GetrfTableCF::preferred(kGetrfBlocked, s))
-                << "cfloat order " << order << ": n=256 batch=128 is 0.884";
+                << "cfloat order " << order << ": n=192 is 1.101/0.915/0.859 up the "
+                   "batch ladder, below the gate at every saturating rung";
             EXPECT_TRUE(is_vendor(
                 resolve_getrf_route<std::complex<float>>(kGetrfAuto, s, true)));
         }

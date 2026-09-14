@@ -15,6 +15,9 @@
 #include "../src/backends/gemm_variant.hh"
 #endif
 #include "../src/sycl/gemm_kernels.hh"
+#include <batchlas/blas/dispatch/route_gemm.hh>
+#include <complex>
+#include <utility>
 #include "test_utils.hh"
 
 using namespace batchlas;
@@ -1897,6 +1900,320 @@ TYPED_TEST(GemmTest, ForcedTransposedLauncherRejectsMismatchedTransposeForm) {
 
     auto tol = test_utils::tolerance<ScalarType>() * 100;
     ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, m, n, batch_size, tol));
+}
+
+// ===========================================================================
+// P6: the wide-scalar TRANSPOSED register family.
+//
+// Four variants, forceable by name only -- the selector does not reach them
+// yet, deliberately: a selector row without a measured grid behind it is the
+// defect this campaign has already shipped once. See
+// docs/perf/gemm.md#wide-scalar-transposed-tiles for the window each is
+// expected to win and what must be measured before it opens.
+//
+// THE ORACLE IS Tiled16, NEVER THE VENDOR, for the reason the NN wide tests
+// give above: these kernels exist for the vendor-free build, and there a
+// forced-vendor arm degrades back to a native route -- which for these shapes
+// would be the kernel under test. The test would then compare it against
+// itself and pass over any defect. Tiled16 is an independent implementation
+// (one accumulator per thread, std::complex operator*, scalar epilogue,
+// runtime transpose) present in both builds.
+//
+// EVERY SHAPE HERE IS RAGGED IN AT LEAST ONE DIMENSION and is taken as a
+// SUB-VIEW of a wider parent, so the leading dimension is inherited and the
+// base pointer is offset off any 16-byte boundary. That is what a panel update
+// actually hands to gemm, and it is the only way the predicated staging leg
+// and the predicated epilogue get exercised. The comparison is over the WHOLE
+// parent, not the sub-view, so a write past the tile edge is caught rather
+// than landing in slack the assertion never reads.
+// ===========================================================================
+
+namespace {
+
+// beta is a parameter because a beta == 0 test is structurally blind to the
+// epilogue's read-modify-write and a beta != 0 test is blind to an accumulator
+// that was never zeroed; both are needed. alpha is always != 1 so that a
+// dropped alpha cannot pass.
+template <typename ScalarType>
+void RunForcedWideTransposedAgainstTiled16(Queue& ctx,
+                                           const char* kernel_name,
+                                           int m,
+                                           int n,
+                                           int k,
+                                           Transpose transA,
+                                           Transpose transB,
+                                           ScalarType beta,
+                                           int parent = 512,
+                                           int row_offset = 3,
+                                           int batch_size = 3) {
+    const int a_rows = transA == Transpose::NoTrans ? m : k;
+    const int a_cols = transA == Transpose::NoTrans ? k : m;
+    const int b_rows = transB == Transpose::NoTrans ? k : n;
+    const int b_cols = transB == Transpose::NoTrans ? n : k;
+
+    auto PA = Matrix<ScalarType>::Random(parent, parent, false, batch_size);
+    auto PB = Matrix<ScalarType>::Random(parent, parent, false, batch_size);
+    auto PC = Matrix<ScalarType>::Random(parent, parent, false, batch_size);
+    auto PC_ref = PC.clone();
+
+    auto Av = [&](Matrix<ScalarType>& M) {
+        return M.view()(Slice(row_offset, row_offset + a_rows), Slice(0, a_cols));
+    };
+    auto Bv = [&](Matrix<ScalarType>& M) {
+        return M.view()(Slice(row_offset, row_offset + b_rows), Slice(0, b_cols));
+    };
+    auto Cv = [&](Matrix<ScalarType>& M) {
+        return M.view()(Slice(row_offset, row_offset + m), Slice(0, n));
+    };
+
+    {
+        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", kernel_name);
+        gemm(ctx, Av(PA), Bv(PB), Cv(PC),
+             {.alpha = ScalarType(2), .beta = beta, .transA = transA, .transB = transB});
+    }
+    {
+        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "tiled16");
+        gemm(ctx, Av(PA), Bv(PB), Cv(PC_ref),
+             {.alpha = ScalarType(2), .beta = beta, .transA = transA, .transB = transB});
+    }
+    ctx.wait();
+
+    auto tol = test_utils::tolerance<ScalarType>() * 100;
+    ASSERT_TRUE(AssertBatchedMatrixNear(PC, PC_ref, parent, parent, batch_size, tol));
+}
+
+}  // namespace
+
+// The general square CN tile. ConjTrans on A is the most common transposed
+// form in real complex demand.
+TYPED_TEST(GemmTest, WideTransposedCN64Ragged) {
+    using ScalarType = typename TestFixture::ScalarType;
+    RunForcedWideTransposedAgainstTiled16<ScalarType>(
+        *(this->ctx), "64x64x16wide_cn", 100, 70, 90,
+        Transpose::ConjTrans, Transpose::NoTrans, ScalarType(-1));
+}
+
+TYPED_TEST(GemmTest, WideTransposedCN64BetaZero) {
+    using ScalarType = typename TestFixture::ScalarType;
+    RunForcedWideTransposedAgainstTiled16<ScalarType>(
+        *(this->ctx), "64x64x16wide_cn", 100, 70, 90,
+        Transpose::ConjTrans, Transpose::NoTrans, ScalarType(0));
+}
+
+TYPED_TEST(GemmTest, WideTransposedNC64Ragged) {
+    using ScalarType = typename TestFixture::ScalarType;
+    RunForcedWideTransposedAgainstTiled16<ScalarType>(
+        *(this->ctx), "64x64x16wide_nc", 100, 70, 90,
+        Transpose::NoTrans, Transpose::ConjTrans, ScalarType(-1));
+}
+
+// The potrf trailing panel verbatim: A22 -= L21 L21^H is m_trailing x W x nb
+// with W = 32 and nb = 96 for complex<float>. m is ragged, n is EXACTLY the
+// tile width and k an exact multiple of the k step -- the combination the
+// driver produces and which no square test reaches.
+TYPED_TEST(GemmTest, WideTransposedNC128x32PotrfTrailingShape) {
+    using ScalarType = typename TestFixture::ScalarType;
+    RunForcedWideTransposedAgainstTiled16<ScalarType>(
+        *(this->ctx), "128x32x16wide_nc", 200, 32, 96,
+        Transpose::NoTrans, Transpose::ConjTrans, ScalarType(1));
+}
+
+// The other half of the same driver step: the W x W diagonal block, where m is
+// 32 against a 128-row macro tile, so three quarters of the tile is predicated
+// away. A kernel that mishandles a mostly-empty m tile passes the panel test
+// above and fails here.
+TYPED_TEST(GemmTest, WideTransposedNC128x32PotrfDiagonalBlockShape) {
+    using ScalarType = typename TestFixture::ScalarType;
+    RunForcedWideTransposedAgainstTiled16<ScalarType>(
+        *(this->ctx), "128x32x16wide_nc", 32, 32, 96,
+        Transpose::NoTrans, Transpose::ConjTrans, ScalarType(0));
+}
+
+// The geqrf panel update W1 = V^H A22 verbatim: nb x n2 x m_panel with nb = 32.
+// k is large and ragged, so the k loop's partial final step on the TRANSPOSED
+// operand is reached here and by none of the potrf shapes.
+TYPED_TEST(GemmTest, WideTransposedCN32x128GeqrfPanelShape) {
+    using ScalarType = typename TestFixture::ScalarType;
+    RunForcedWideTransposedAgainstTiled16<ScalarType>(
+        *(this->ctx), "32x128x16wide_cn", 32, 200, 140,
+        Transpose::ConjTrans, Transpose::NoTrans, ScalarType(0));
+}
+
+// ---------------------------------------------------------------------------
+// THE WIDENING AND THE GUARD, which are one line read two ways.
+//
+// wide_trans_matches<T> lets ONE ConjTrans instantiation serve a Trans request
+// for a REAL scalar, because conj is the identity there -- that is what makes a
+// single variant able to serve potrf_blocked.cc's kTrailingTransB<T>, which is
+// ConjTrans for complex and Trans for real. For a COMPLEX scalar the same
+// substitution conjugates an operand that must not be conjugated and returns a
+// plausible wrong matrix, so it must be refused and the call must fall back.
+//
+// One test covers both directions because the two types disagree about what
+// the right ANSWER is, not about what the right BEHAVIOUR is: for real, the
+// kernel runs and must agree with Tiled16; for complex it falls back to Tiled16
+// and agrees trivially. Removing the guard leaves real passing and turns
+// complex red, which is exactly the asymmetry asserted here.
+// ---------------------------------------------------------------------------
+TYPED_TEST(GemmTest, WideTransposedRealTransWideningAndComplexRefusal) {
+    using ScalarType = typename TestFixture::ScalarType;
+    RunForcedWideTransposedAgainstTiled16<ScalarType>(
+        *(this->ctx), "128x32x16wide_nc", 100, 32, 96,
+        Transpose::NoTrans, Transpose::Trans, ScalarType(-1));
+}
+
+// The mirror of the above on the A leg: a Trans request against a ConjTrans
+// instantiation of the CN tile.
+TYPED_TEST(GemmTest, WideTransposedRealTransWideningOnALeg) {
+    using ScalarType = typename TestFixture::ScalarType;
+    RunForcedWideTransposedAgainstTiled16<ScalarType>(
+        *(this->ctx), "32x128x16wide_cn", 32, 100, 90,
+        Transpose::Trans, Transpose::NoTrans, ScalarType(-1));
+}
+
+// A NoTrans request against a transposing instantiation must fall back for
+// EVERY type, real included: the widening is Trans <-> ConjTrans only, and an
+// untransposed operand read as transposed is wrong for a real scalar too.
+TYPED_TEST(GemmTest, WideTransposedRefusesNoTransRequest) {
+    using ScalarType = typename TestFixture::ScalarType;
+    RunForcedWideTransposedAgainstTiled16<ScalarType>(
+        *(this->ctx), "64x64x16wide_cn", 100, 70, 90,
+        Transpose::NoTrans, Transpose::NoTrans, ScalarType(-1));
+}
+
+// ---------------------------------------------------------------------------
+// THE SELECTOR WINDOW, and its edges.
+//
+// Pinned because a selector regression is otherwise completely invisible:
+// nothing else in ctest asserts on kernel choice, and route_diff.sh records
+// resolver Routes, not KernelVariants. Every case below is a cell that was
+// actually measured -- the admitted ones won, the refused ones lost -- so this
+// test is the grid's boundary written down. docs/perf/gemm.md#wide-scalar-transposed-tiles
+//
+// SelectSyclKernelVariantForTest above is hard-wired to float and so cannot ask
+// this question of the types that motivate the family at all. This one is
+// templated; the two coexist rather than the float one being replaced, because
+// every existing dispatch-policy assertion is float and rewriting them is not
+// this change's business.
+// ---------------------------------------------------------------------------
+namespace {
+
+template <typename T>
+batchlas::sycl_gemm::KernelVariant SelectSyclKernelVariantForTestT(int m,
+                                                                   int n,
+                                                                   int k,
+                                                                   Transpose transA,
+                                                                   Transpose transB,
+                                                                   int batch = 64) {
+    const int a_rows = transA == Transpose::NoTrans ? m : k;
+    const int a_cols = transA == Transpose::NoTrans ? k : m;
+    const int b_rows = transB == Transpose::NoTrans ? k : n;
+    const int b_cols = transB == Transpose::NoTrans ? n : k;
+
+    Matrix<T> A(a_rows, a_cols, batch, 0);
+    Matrix<T> B(b_rows, b_cols, batch, 0);
+    Matrix<T> C(m, n, batch, 0);
+
+    return batchlas::sycl_gemm::select_kernel_variant<T>(A.view(), B.view(), C.view(),
+                                                         transA, transB);
+}
+
+}  // namespace
+
+namespace {
+using batchlas::sycl_gemm::KernelVariant;
+constexpr Transpose kN = Transpose::NoTrans;
+constexpr Transpose kC = Transpose::ConjTrans;
+}  // namespace
+
+TEST(GemmDispatchPolicyTest, ComplexTransposedTakesTheWideTransposedTile) {
+    // The potrf trailing update and the geqrf panel update. Both types, because
+    // the selector's arm is Tiled16 in both and both beat it.
+    EXPECT_EQ(SelectSyclKernelVariantForTestT<std::complex<float>>(256, 32, 96, kN, kC, 1024),
+              KernelVariant::Tiled128x32RegisterK16WideNC);
+    EXPECT_EQ(SelectSyclKernelVariantForTestT<std::complex<double>>(256, 32, 96, kN, kC, 1024),
+              KernelVariant::Tiled128x32RegisterK16WideNC);
+    EXPECT_EQ(SelectSyclKernelVariantForTestT<std::complex<float>>(32, 256, 512, kC, kN, 1024),
+              KernelVariant::Tiled32x128RegisterK16WideCN);
+    EXPECT_EQ(SelectSyclKernelVariantForTestT<std::complex<double>>(32, 256, 512, kC, kN, 1024),
+              KernelVariant::Tiled32x128RegisterK16WideCN);
+    // RAGGED against the macro tile, which is what the blocked drivers issue and
+    // what the first grid missed entirely by sweeping only exact multiples. The
+    // tile still beats Tiled16 here (1.68-3.52x); it is only against the VENDOR
+    // that raggedness destroys the margin.
+    EXPECT_EQ(SelectSyclKernelVariantForTestT<std::complex<double>>(32, 224, 256, kC, kN, 1024),
+              KernelVariant::Tiled32x128RegisterK16WideCN);
+    EXPECT_EQ(SelectSyclKernelVariantForTestT<std::complex<float>>(200, 32, 96, kN, kC, 1024),
+              KernelVariant::Tiled128x32RegisterK16WideNC);
+}
+
+TEST(GemmDispatchPolicyTest, WideTransposedSelectorRefusesEveryMeasuredLoser) {
+    // An UNDERFILLED macro tile, which is where the measured losses against
+    // Tiled16 are: the potrf W x W fold (m = 32 against a 128-row tile) at
+    // 0.46-0.90x, and the geqrf n = 64 cell at batch 64 (0.87x).
+    //
+    // n = 16 is refused for a DIFFERENT reason and is a known, recorded cost:
+    // it measured 1.79x of Tiled16, a win, but on a single cell, and it is
+    // exactly the shape potrf complex<double> issues (W = 16). Admitting a
+    // one-cell window is what this campaign has already been burned by.
+    EXPECT_EQ(SelectSyclKernelVariantForTestT<std::complex<double>>(32, 32, 96, kN, kC, 1024),
+              KernelVariant::Tiled16);
+    EXPECT_EQ(SelectSyclKernelVariantForTestT<std::complex<double>>(512, 16, 64, kN, kC, 1024),
+              KernelVariant::Tiled16);
+    EXPECT_EQ(SelectSyclKernelVariantForTestT<std::complex<double>>(32, 64, 512, kC, kN, 1024),
+              KernelVariant::Tiled16);
+    // k = 1: 0.56x of Tiled16, the rank-1 exception the double window carries too.
+    EXPECT_EQ(SelectSyclKernelVariantForTestT<std::complex<double>>(512, 32, 1, kN, kC, 1024),
+              KernelVariant::Tiled16);
+    // Too few CTAs to fill the machine.
+    EXPECT_EQ(SelectSyclKernelVariantForTestT<std::complex<double>>(128, 32, 96, kN, kC, 8),
+              KernelVariant::Tiled16);
+    // Trans, not ConjTrans: the instantiations are ConjTrans and
+    // wide_trans_matches refuses to substitute for a COMPLEX scalar, so
+    // admitting it would name a kernel that then silently falls back.
+    EXPECT_EQ(SelectSyclKernelVariantForTestT<std::complex<double>>(
+                  256, 32, 96, kN, Transpose::Trans, 1024),
+              KernelVariant::Tiled16);
+    // REAL scalars are excluded on measurement: on these cells the tile runs at
+    // 0.92-1.00x of Tiled16, which is already 1.11x of cuBLAS there.
+    EXPECT_EQ(SelectSyclKernelVariantForTestT<double>(256, 32, 96, kN, kC, 1024),
+              KernelVariant::Tiled16);
+    EXPECT_EQ(SelectSyclKernelVariantForTestT<float>(256, 32, 96, kN, kC, 1024),
+              KernelVariant::Tiled16);
+}
+
+// complex stays on the VENDOR route, and that is a measured decision, not an
+// omission. A complex<double> window on exactly these tiles was written,
+// measured and withdrawn: it cleared R8's 1.11x bar only where n was an exact
+// multiple of the macro tile, and at the ragged n the blocked drivers actually
+// issue (224, 192, 160, ...) it ran at 0.64-0.99x of cuBLAS -- with an
+// end-to-end geqrf complex<double> A/B of 0.971x.
+// evidence: docs/perf/gemm.md#wide-scalar-transposed-tiles
+TEST(GemmDispatchPolicyTest, ComplexTransposedStaysOnTheVendorRoute) {
+    batchlas::dispatch::OpShape s;
+    s.op = batchlas::dispatch::Op::gemm;
+    s.is_gpu = true;
+    s.batch = 1024;
+    s.k = 96;
+    const batchlas::dispatch::Route native{batchlas::dispatch::Origin::Native,
+                                           batchlas::dispatch::Algorithm::RegisterTiled};
+    for (auto dims : {std::pair<int64_t, int64_t>{256, 32},
+                      std::pair<int64_t, int64_t>{32, 256},
+                      std::pair<int64_t, int64_t>{1024, 128}}) {
+        for (auto forms : {std::pair<Transpose, Transpose>{kN, kC},
+                           std::pair<Transpose, Transpose>{kC, kN}}) {
+            s.m = dims.first; s.n = dims.second;
+            s.transA = forms.first; s.transB = forms.second;
+            EXPECT_FALSE((batchlas::dispatch::RouteTable<batchlas::dispatch::Op::gemm,
+                                                         std::complex<float>>::preferred(native, s)))
+                << s.describe();
+            EXPECT_FALSE((batchlas::dispatch::RouteTable<batchlas::dispatch::Op::gemm,
+                                                         std::complex<double>>::preferred(native, s)))
+                << s.describe();
+        }
+    }
 }
 
 int main(int argc, char **argv) {

@@ -75,6 +75,28 @@ template <typename T>
 BATCHLAS_INTERNAL_API unsigned geqrf_blocked_debug_params(
     Queue& ctx, int m, int n);  // nb | leaf<<16; high half 1 = resident, 2 = global, 0 = absent
 
+// Auto answers Register only inside a measured height window, and used_resident_out keeps
+// meaning LOCAL-memory residency. evidence: docs/perf/qr.md#the-panel-height-window
+enum class GeqrfPanelLeaf : int { Auto = 0, Resident = 1, Global = 2, Register = 3 };
+
+template <typename T>
+BATCHLAS_INTERNAL_API int geqrf_panel_reg_cols();   // 0 = absent for this scalar
+
+template <typename T>
+BATCHLAS_INTERNAL_API int geqrf_panel_reg_max_m();
+
+template <typename T>   // THE ONE fit predicate: launcher, driver and tests all share it
+BATCHLAS_INTERNAL_API bool geqrf_panel_reg_fits(int m, int n, int device_max_wg = 1024);
+
+// SHOULD it, not CAN it: a measured window strictly inside `fits`.
+// evidence: docs/perf/qr.md#the-panel-height-window
+template <typename T>
+BATCHLAS_INTERNAL_API bool geqrf_panel_reg_preferred(int m, int n, int device_max_wg = 1024);
+
+template <typename T>
+BATCHLAS_INTERNAL_API unsigned geqrf_panel_reg_debug_launch(
+    Queue& ctx, int m, int n);  // wg | leaf<<16; 0 = no fit
+
 // Empty means "use sycl_gemm::gemm_custom"; inject to route trailing updates through the table.
 template <typename T>
 using GeqrfTrailingGemm = std::function<Event(
@@ -95,7 +117,9 @@ BATCHLAS_INTERNAL_API Event geqrf_blocked_dispatch(Queue& ctx,
                                                    const MatrixView<T, MatrixFormat::Dense>& A,
                                                    Span<T> tau,
                                                    Span<std::byte> workspace,
-                                                   GeqrfTrailingGemm<T> trailing_gemm = {});
+                                                   GeqrfTrailingGemm<T> trailing_gemm = {},
+                                                   GeqrfPanelLeaf panel_leaf =
+                                                       GeqrfPanelLeaf::Auto);
 
 // Raw pointers, not a MatrixView: a slice carries the PARENT pointer array. tau is indexed
 // tau_ptr[b * tau_batch_stride + tau_offset + j] with k = min(rows, cols) of the WHOLE matrix;
@@ -105,7 +129,9 @@ Event geqrf_panel_factorize(Queue& ctx,
                             T* a_ptr, int ld, int stride,
                             int m, int n, int batch,
                             T* tau_ptr, int tau_batch_stride, int tau_offset,
-                            bool* used_resident_out = nullptr);
+                            bool* used_resident_out = nullptr,
+                            GeqrfPanelLeaf leaf = GeqrfPanelLeaf::Auto,
+                            GeqrfPanelLeaf* leaf_used_out = nullptr);
 
 // The CTA TIER's predicate, occupancy-scaled: capacity, this gate and the launcher's are ONE.
 template <typename T>

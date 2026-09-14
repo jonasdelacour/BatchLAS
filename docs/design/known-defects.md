@@ -27,6 +27,7 @@ The superseded root documents these were filed in are preserved at the git tag
 | 7 | `src/backends/trsm_route.hh:40-56` | the heterogeneous-batch rejection has no writer, so the gate cannot fire | a stated safety property that is not enforced |
 | 8 | `src/backends/syrk_custom_dispatch.cc:261` | a forced native `syrk` lands on a route that writes both triangles | wrong answer, forced routes only |
 | 9 | `src/backends/syr2k_custom_dispatch.cc:210` | a forced native `syr2k` throws a cuBLASDx message it did not ask for | misleading diagnostic |
+| 10 | grid `latrd` (`SytrdBlockedLatrdGridCudaTest.GridMatchesLegacyTridiagonal`) | disagrees with the legacy path by ~5e-5 against a 1e-8 tolerance, at a DIFFERENT index every time | **wrong answer, ~1 run in 7** |
 
 ## 1. `ortho`'s transposed arm builds a view that does not describe the memory
 
@@ -213,6 +214,52 @@ are reachable only through an environment pin.
 
 Full context in [`../perf/level3.md`](../perf/level3.md) and
 [`../perf/dispatch.md`](../perf/dispatch.md).
+
+## 10. The grid `latrd` path disagrees with the legacy path NONDETERMINISTICALLY
+
+**2026-09-14.** `SytrdBlockedLatrdGridCudaTest.GridMatchesLegacyTridiagonal` fails about
+**one run in seven**. It is a flaky WRONG ANSWER, not a flaky timeout.
+
+Measured: **6 of 40** runs failed at the default routes, **4 of 40** with
+`BATCHLAS_GEMM_ROUTE=vendor`. Those rates are indistinguishable, so routed GEMM is not
+the cause. The disagreeing eigenvalue index is different on **every** failure observed --
+1058, 1090, 1219, 2135, 1063, 5253, 7377, 1366, 1155, 194 -- which is the signature of a
+race rather than a threshold that some input crosses. A representative miss at
+`n=1024 batch=8 nb=32 seed=456`:
+
+| | value |
+|---|---|
+| grid path `ds[1][i]` | -0.067254041269475984 |
+| legacy path `ds[0][i]` | -0.067303749995033968 |
+| tolerance | 1.024e-08 |
+
+The disagreement is ~5e-5, i.e. **four orders of magnitude outside tolerance** -- far too
+large to be an association-order difference between two reduction trees.
+
+**Not caused by the small-n campaign (P0-P7).** No `sytrd`, `latrd`, `syr2k`, `her2k` or
+`steqr` source was modified by it, and pinning the one routed op those paths share
+(`gemm`) does not move the failure rate.
+
+**Why it was not noticed before.** A full `ctest` runs this binary once, so at ~15% it
+passes roughly six runs in seven; several consecutive green full-suite runs are the
+expected observation even with the defect present. It is invisible to `-LE slow`
+iteration for the same reason.
+
+**Where to look.** `GridMatchesLegacyTridiagonal` compares the grid `latrd` against the
+legacy one, and the grid path is already recorded as fragile: its group cap is
+`SMs / batch`, so it does not run at all at `batch >= 128` and its A/B is vacuous there.
+`batch = 8` is inside the band where it does run. A missing or mis-scoped barrier between
+the panel's group-partitioned update and its consumer would produce exactly this -- a
+different index each time, a magnitude far above rounding.
+
+**Reproduce:**
+```
+for i in $(seq 1 40); do
+  ./build/presets/dev-tests/tests/sytrd_blocked_tests \
+    --gtest_filter=SytrdBlockedLatrdGridCudaTest.GridMatchesLegacyTridiagonal \
+      >/dev/null 2>&1 || echo "fail $i"
+done
+```
 
 ## One filed claim that did not survive re-checking
 

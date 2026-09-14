@@ -193,6 +193,17 @@ struct SelectionSettings {
     // rule at the call site so a buffer-size query and its solve cannot disagree.
     EnvValue gesvd_bidiag{};
 
+    // BATCHLAS_GETRF_LEAF = slm | reg (default `reg`, P4's register-resident panel
+    // leaf, used wherever the panel fits its register cap). `slm` selects the older
+    // local-memory panel. Re-read per call so one process can A/B the two leaves.
+    EnvValue getrf_leaf{};
+
+    // BATCHLAS_GEQRF_LEAF = auto | reg (default `auto`, i.e. the local-memory or
+    // global panel leaf the blocked driver has always used). `reg` asks for P5's
+    // register panel leaf wherever the panel fits it. Re-read per call so one
+    // process can interleave the two arms. evidence: docs/perf/qr.md#the-register-leaf-ab
+    EnvValue geqrf_leaf{};
+
     // BATCHLAS_GETRF_LASWP = inloop | defer_walk | defer_gather (default
     // DeferGather). Its call site is deliberately hybrid -- presence latched in
     // a static, value re-read per call, so a harness can swap arms mid-run.

@@ -2220,6 +2220,346 @@ TEST(GeqrfTinySource, SynchronisesAtSubGroupScopeOnly) {
 }
 #endif  // BATCHLAS_GEQRF_TINY_CC_PATH
 
+// ===========================================================================================
+// P5. THE REGISTER PANEL LEAF. One panel ROW per work-item, the m x N panel in registers.
+// Declared LAST on purpose: GeqrfTest.ResidentLeafLaunchHoleAt48KiB must stay first, and this
+// leaf allocates only its sub-group slot arrays, so it can neither reach nor mask that hole.
+// evidence: docs/perf/qr.md#the-register-panel-leaf-wp6--p5
+
+// P5-1. The capability triple -- compiled width, tallest panel, and the launch the predicate
+// promises -- asked of the ONE predicate rather than hardcoded, then checked for the two
+// properties a second spelling of it would break: it agrees with the blocked driver's block
+// width, and it is a contiguous range in both extents.
+TYPED_TEST(GeqrfTest, RegisterPanelLeafCapabilityIsSelfConsistent) {
+    using T = typename TestFixture::T;
+    const int cols = sycl_geqrf::geqrf_panel_reg_cols<T>();
+    const int max_m = sycl_geqrf::geqrf_panel_reg_max_m<T>();
+    if (cols < 1) {
+        GTEST_SKIP() << "this scalar has no register panel leaf (GeqrfPanelRegPlan::cols == 0)";
+    }
+
+    // The width MUST be the driver's block width, or the driver's full-width panels never
+    // reach this leaf and only its short final panel does -- an A/B that measures nothing.
+    EXPECT_EQ(cols, this->nb(512, 512))
+        << "the register leaf is compiled for a panel width of " << cols
+        << " but the blocked driver factors panels " << this->nb(512, 512) << " wide";
+
+    ASSERT_GE(max_m, 32) << "a leaf that cannot hold one warp of rows is not a leaf";
+    EXPECT_EQ(max_m % 32, 0) << "the work-group is roundup(m, 32), so the height ceiling must "
+                                "be a whole number of warps: " << max_m;
+
+    const int wg_max = static_cast<int>(
+        this->ctx->device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
+
+    // CONTIGUOUS IN m. supports()-style ceilings are spelled `m <= max_m` everywhere, so a
+    // predicate with a hole in it advertises a range it cannot serve.
+    for (int m = 1; m <= max_m; ++m) {
+        ASSERT_TRUE(sycl_geqrf::geqrf_panel_reg_fits<T>(m, 1, wg_max))
+            << "the height range has a hole at m = " << m << " (ceiling " << max_m << ")";
+    }
+    EXPECT_FALSE(sycl_geqrf::geqrf_panel_reg_fits<T>(max_m + 1, 1, wg_max))
+        << "the predicate admits a panel one row above its own ceiling";
+
+    // CONTIGUOUS IN n, and closed exactly at the compiled width.
+    for (int n = 1; n <= cols; ++n) {
+        ASSERT_TRUE(sycl_geqrf::geqrf_panel_reg_fits<T>(max_m, n, wg_max))
+            << "the width range has a hole at n = " << n;
+    }
+    EXPECT_FALSE(sycl_geqrf::geqrf_panel_reg_fits<T>(max_m, cols + 1, wg_max))
+        << "the predicate admits a panel wider than the register array that holds it";
+
+    // The debug hook and the predicate are one fact: a launch the predicate refuses reports 0,
+    // and one it admits reports the Register arm at roundup(m, 32) work-items.
+    EXPECT_EQ(sycl_geqrf::geqrf_panel_reg_debug_launch<T>(*this->ctx, max_m + 1, 1), 0u);
+    for (int m : {1, 31, 32, 33, 64, 65}) {
+        if (m > max_m) continue;
+        const unsigned d = sycl_geqrf::geqrf_panel_reg_debug_launch<T>(*this->ctx, m, 1);
+        EXPECT_EQ(d & 0xffffu, static_cast<unsigned>(((m + 31) / 32) * 32))
+            << "the work-group width at m = " << m << " is not roundup(m, 32)";
+        EXPECT_EQ(d >> 16, static_cast<unsigned>(sycl_geqrf::GeqrfPanelLeaf::Register));
+    }
+}
+
+// P5-2. THE FACTORISATION. A residue ladder in BOTH extents -- rows either side of a warp
+// boundary, columns either side of the compiled width -- because the kernel's two guards are
+// `r < m` (a lane predicate) and `k < n` (a register-slot predicate) and they fail
+// independently. check_one reads the poison pad back, which is what arms the store-guard break.
+TYPED_TEST(GeqrfTest, RegisterPanelLeafResidualAndOrthogonality) {
+    using T = typename TestFixture::T;
+    const int cols = sycl_geqrf::geqrf_panel_reg_cols<T>();
+    if (cols < 1) GTEST_SKIP() << "this scalar has no register panel leaf";
+    const int wg_max = static_cast<int>(
+        this->ctx->device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
+
+    const int ms[] = {1, 2, 7, 8, 16, 31, 32, 33, 63, 64, 65, 100, 128, 129, 160, 256, 320, 384};
+    const int ns[] = {1, 2, 5, 8, 9, 16, 17, 32};
+    int ran = 0;
+    for (int m : ms) {
+        for (int n : ns) {
+            if (n > m || n > cols) continue;
+            if (!sycl_geqrf::geqrf_panel_reg_fits<T>(m, n, wg_max)) continue;
+            ++ran;
+            auto p = make_problem<T>(m, n, 3, 6101u + 37u * unsigned(m) + unsigned(n));
+            auto leaf_used = sycl_geqrf::GeqrfPanelLeaf::Auto;
+            ASSERT_NO_THROW(sycl_geqrf::geqrf_panel_factorize<T>(
+                *this->ctx, p.buf.data(), p.ld, p.stride, m, n, p.batch, p.tau.data(), p.k, 0,
+                nullptr, sycl_geqrf::GeqrfPanelLeaf::Register, &leaf_used));
+            this->ctx->wait();
+            ASSERT_EQ(leaf_used, sycl_geqrf::GeqrfPanelLeaf::Register)
+                << "the forced Register leaf silently ran a different arm at " << m << "x" << n;
+            check_one(p, "panel/register");
+            if (this->HasFailure()) return;
+        }
+    }
+    ASSERT_GE(ran, 20) << "only " << ran << " shapes reached the register leaf; this test has "
+                          "stopped covering the tier it names";
+}
+
+// P5-2b. THE CEILING ITSELF LAUNCHES. The guard that was missing: P5 shipped a height ceiling
+// computed from an AOT `-Xcuda-ptxas -v` probe of a standalone translation unit, and the kernel
+// as built into the library uses more registers than that probe reported, so every panel of
+// 385..448 rows aborted the PROCESS with CUDA_ERROR_LAUNCH_OUT_OF_RESOURCES. A predicate test
+// that only asserts `max_m + 1` is refused cannot see that, because it never asks the device to
+// run `max_m`. P5-2's ladder stopped at m = 256 and was blind too.
+// evidence: docs/perf/qr.md#the-height-ceiling-the-aot-probe-got-wrong
+TYPED_TEST(GeqrfTest, RegisterPanelLeafRunsAtItsOwnHeightCeiling) {
+    using T = typename TestFixture::T;
+    const int cols = sycl_geqrf::geqrf_panel_reg_cols<T>();
+    if (cols < 1) GTEST_SKIP() << "this scalar has no register panel leaf";
+    const int max_m = sycl_geqrf::geqrf_panel_reg_max_m<T>();
+    const int wg_max = static_cast<int>(
+        this->ctx->device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
+    ASSERT_TRUE(sycl_geqrf::geqrf_panel_reg_fits<T>(max_m, cols, wg_max))
+        << "the predicate refuses its own ceiling";
+
+    // The ceiling and the warp below it: the launch is refused by WORK-GROUP, so the last
+    // admitted height and the largest one a whole warp short of it are the two cells that
+    // bracket the refusal. A narrow batch keeps this cheap; the arithmetic is P5-2's job.
+    for (int m : {max_m - 32, max_m}) {
+        if (m < cols) continue;
+        auto p = make_problem<T>(m, cols, 2, 9311u + unsigned(m));
+        auto leaf_used = sycl_geqrf::GeqrfPanelLeaf::Auto;
+        ASSERT_NO_THROW(sycl_geqrf::geqrf_panel_factorize<T>(
+            *this->ctx, p.buf.data(), p.ld, p.stride, m, cols, p.batch, p.tau.data(), p.k, 0,
+            nullptr, sycl_geqrf::GeqrfPanelLeaf::Register, &leaf_used))
+            << "the register leaf could not be launched at m = " << m
+            << ", which its own ceiling of " << max_m << " advertises";
+        this->ctx->wait();
+        ASSERT_EQ(leaf_used, sycl_geqrf::GeqrfPanelLeaf::Register);
+        check_one(p, "panel/register-ceiling");
+        if (this->HasFailure()) return;
+    }
+}
+
+// P5-3. THE TRANSITION ORACLE, and what it can and cannot be. The two leaves reduce the column
+// norm over DIFFERENT association orders -- a warp butterfly plus a serial slot scan here, a
+// work-group reduce_over_group there -- so bit-identity is unobtainable by construction and a
+// tight RELATIVE agreement on both outputs is the strongest guard there is.
+// evidence: docs/perf/qr.md#why-bit-identity-against-the-cta-route-is-not-the-padding-test
+TYPED_TEST(GeqrfTest, RegisterPanelLeafAgreesWithTheResidentLeaf) {
+    using T = typename TestFixture::T;
+    using R = typename TestFixture::R;
+    const int cols = sycl_geqrf::geqrf_panel_reg_cols<T>();
+    if (cols < 1) GTEST_SKIP() << "this scalar has no register panel leaf";
+    const int wg_max = static_cast<int>(
+        this->ctx->device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
+
+    struct S { int m, n; };
+    const S shapes[] = {{64, 16}, {65, 8}, {128, 16}, {96, 32}};
+    int ran = 0;
+    for (const S& s : shapes) {
+        if (s.n > cols) continue;
+        if (!sycl_geqrf::geqrf_panel_reg_fits<T>(s.m, s.n, wg_max)) continue;
+        if (!this->leaf_fits(s.m, s.n)) continue;   // the arm compared against must exist
+        ++ran;
+
+        auto a = make_problem<T>(s.m, s.n, 2, 4441u + unsigned(s.m));
+        auto b = make_problem<T>(s.m, s.n, 2, 4441u + unsigned(s.m));
+        ASSERT_NO_THROW(sycl_geqrf::geqrf_panel_factorize<T>(
+            *this->ctx, a.buf.data(), a.ld, a.stride, s.m, s.n, a.batch, a.tau.data(), a.k, 0,
+            nullptr, sycl_geqrf::GeqrfPanelLeaf::Register, nullptr));
+        ASSERT_NO_THROW(sycl_geqrf::geqrf_panel_factorize<T>(
+            *this->ctx, b.buf.data(), b.ld, b.stride, s.m, s.n, b.batch, b.tau.data(), b.k, 0,
+            nullptr, sycl_geqrf::GeqrfPanelLeaf::Resident, nullptr));
+        this->ctx->wait();
+
+        // NORMWISE, not elementwise-relative: R's trailing columns hold entries far below
+        // ||A||, and a relative bound on those measures cancellation, not disagreement.
+        const double tol = 64.0 * double(std::numeric_limits<R>::epsilon()) * double(s.m);
+        for (int item = 0; item < a.batch; ++item) {
+            double scale = 0.0;
+            for (int j = 0; j < s.n; ++j)
+                for (int i = 0; i < s.m; ++i)
+                    scale = std::max(scale,
+                                     habs(up(b.buf[size_t(item) * b.stride +
+                                                   size_t(j) * b.ld + i])));
+            ASSERT_GT(scale, 0.0) << "the reference factor is all zero; nothing is compared";
+            for (int j = 0; j < a.k; ++j) {
+                const size_t t = size_t(item) * a.k + j;
+                EXPECT_LE(habs(up(a.tau[t]) - up(b.tau[t])), tol)
+                    << "tau[" << j << "] disagrees between the register and resident leaves at "
+                    << s.m << "x" << s.n << " item " << item;
+            }
+            for (int j = 0; j < s.n; ++j) {
+                for (int i = 0; i < s.m; ++i) {
+                    const size_t o = size_t(item) * a.stride + size_t(j) * a.ld + i;
+                    EXPECT_LE(habs(up(a.buf[o]) - up(b.buf[o])), tol * scale)
+                        << "the factor disagrees at (" << i << "," << j << ") at " << s.m << "x"
+                        << s.n << " item " << item;
+                }
+            }
+        }
+        if (this->HasFailure()) return;
+    }
+    ASSERT_GE(ran, 1) << "no shape was admitted by BOTH leaves, so nothing was compared";
+}
+
+// P5-4. A forced leaf that does not fit THROWS. A silent fallback is how a pinned A/B comes to
+// measure the arm it was pinned away from, and it reads as a clean run.
+TYPED_TEST(GeqrfTest, RegisterPanelLeafRefusesWhatItCannotHold) {
+    using T = typename TestFixture::T;
+    const int cols = sycl_geqrf::geqrf_panel_reg_cols<T>();
+    if (cols < 1) GTEST_SKIP() << "this scalar has no register panel leaf";
+    const int max_m = sycl_geqrf::geqrf_panel_reg_max_m<T>();
+
+    auto wide = make_problem<T>(cols + 1, cols + 1, 1, 77u);
+    EXPECT_THROW(sycl_geqrf::geqrf_panel_factorize<T>(
+                     *this->ctx, wide.buf.data(), wide.ld, wide.stride, cols + 1, cols + 1,
+                     wide.batch, wide.tau.data(), wide.k, 0, nullptr,
+                     sycl_geqrf::GeqrfPanelLeaf::Register, nullptr),
+                 std::invalid_argument)
+        << "a panel one column wider than the register array was accepted";
+
+    auto tall = make_problem<T>(max_m + 1, 1, 1, 78u);
+    EXPECT_THROW(sycl_geqrf::geqrf_panel_factorize<T>(
+                     *this->ctx, tall.buf.data(), tall.ld, tall.stride, max_m + 1, 1,
+                     tall.batch, tall.tau.data(), tall.k, 0, nullptr,
+                     sycl_geqrf::GeqrfPanelLeaf::Register, nullptr),
+                 std::invalid_argument)
+        << "a panel one row above the register-file ceiling was accepted; that launch aborts";
+}
+
+// P5-5. tau = 0. An exactly-zero sub-column with a real positive diagonal is xLARFG's identity
+// case, and this leaf deliberately has NO `if (identity) continue` -- it runs the inert
+// arithmetic instead, to keep the barrier sequence uniform. So the case has to be exercised.
+TYPED_TEST(GeqrfTest, RegisterPanelLeafZeroSubColumnGivesTauZero) {
+    using T = typename TestFixture::T;
+    const int cols = sycl_geqrf::geqrf_panel_reg_cols<T>();
+    if (cols < 1) GTEST_SKIP() << "this scalar has no register panel leaf";
+    const int wg_max = static_cast<int>(
+        this->ctx->device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
+    const int m = 64, n = std::min(8, cols);
+    if (!sycl_geqrf::geqrf_panel_reg_fits<T>(m, n, wg_max)) GTEST_SKIP() << "shape not admitted";
+
+    auto p = make_problem<T>(m, n, 2, 123u);
+    // Upper triangular with a REAL positive diagonal: every reflector is the identity, so tau
+    // is zero throughout and the factor must come back UNCHANGED, poison pad included.
+    for (int b = 0; b < p.batch; ++b) {
+        for (int j = 0; j < n; ++j) {
+            for (int i = 0; i < m; ++i) {
+                const double v = (i < j) ? (0.25 * (i + 1) + 0.5 * j)
+                                         : (i == j ? double(2 + b + j) : 0.0);
+                p.buf[size_t(b) * p.stride + size_t(j) * p.ld + i] = mk<T>(v, 0.0);
+            }
+        }
+    }
+    p.a0.assign(p.buf.begin(), p.buf.end());
+
+    ASSERT_NO_THROW(sycl_geqrf::geqrf_panel_factorize<T>(
+        *this->ctx, p.buf.data(), p.ld, p.stride, m, n, p.batch, p.tau.data(), p.k, 0, nullptr,
+        sycl_geqrf::GeqrfPanelLeaf::Register, nullptr));
+    this->ctx->wait();
+
+    for (size_t t = 0; t < p.tau.size(); ++t) {
+        EXPECT_EQ(habs(up(p.tau[t])), 0.0)
+            << "tau[" << t << "] is not exactly zero on an already-triangular panel";
+    }
+    for (size_t o = 0; o < p.buf.size(); ++o) {
+        ASSERT_TRUE(same_or_both_nan(p.buf[o], p.a0[o]))
+            << "the identity path modified the panel at buffer offset " << o;
+    }
+}
+
+// P5-6. THE DRIVER takes it. Its panels shrink as j0 advances, so a Register request is honoured
+// per panel; this asserts the whole factorisation is still correct with the leaf swapped.
+TYPED_TEST(GeqrfTest, BlockedDriverWithTheRegisterLeaf) {
+    using T = typename TestFixture::T;
+    const int cols = sycl_geqrf::geqrf_panel_reg_cols<T>();
+    if (cols < 1) GTEST_SKIP() << "this scalar has no register panel leaf";
+
+    struct S { int m, n, b; };
+    const S shapes[] = {{64, 64, 4}, {96, 96, 2}, {129, 33, 3}, {130, 130, 2}, {100, 64, 3}};
+    for (const S& s : shapes) {
+        auto p = make_problem<T>(s.m, s.n, s.b, 5551u + 13u * unsigned(s.m) + unsigned(s.n));
+        auto V = view_of(p);
+        const std::size_t ws = sycl_geqrf::geqrf_blocked_buffer_size<T>(*this->ctx, V);
+        UnifiedVector<std::byte> w(ws ? ws : 1);
+        ASSERT_NO_THROW(sycl_geqrf::geqrf_blocked_dispatch<T>(
+            *this->ctx, V, p.tau.to_span(), w.to_span(), {},
+            sycl_geqrf::GeqrfPanelLeaf::Register));
+        this->ctx->wait();
+        check_one(p, "blocked/register-leaf");
+        if (this->HasFailure()) return;
+    }
+}
+
+// P5-7. THE HEIGHT WINDOW IS WHAT AUTO TAKES. `kGeqrfAutoPrefersRegisterLeaf` is now true, so
+// this guard inverted: Auto must take the register leaf INSIDE the measured height window and
+// must not take it one warp above. The window is a POLICY strictly inside the capability -- the
+// leaf still launches to 384 rows and a pinned caller still reaches every one of them -- and a
+// flip that gates on `fits` instead of `preferred` measures 0.38-0.93x at mp >= 144, which is
+// the whole reason the two predicates are separate.
+// evidence: docs/perf/qr.md#the-panel-height-window
+TYPED_TEST(GeqrfTest, AutoTakesTheRegisterLeafExactlyInsideTheHeightWindow) {
+    using T = typename TestFixture::T;
+    const int cols = sycl_geqrf::geqrf_panel_reg_cols<T>();
+    if (cols < 1) GTEST_SKIP() << "this scalar has no register panel leaf";
+    const int wg_max = static_cast<int>(
+        this->ctx->device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
+
+    // The policy is a HEIGHT, so the two extents are probed separately: the tallest admitted
+    // panel and the next warp up share every other property.
+    int policy_max = 0;
+    for (int m = 32; m <= sycl_geqrf::geqrf_panel_reg_max_m<T>(); m += 32) {
+        if (sycl_geqrf::geqrf_panel_reg_preferred<T>(m, cols, wg_max)) policy_max = m;
+    }
+    ASSERT_GE(policy_max, 32) << "the policy admits no panel at all";
+    ASSERT_LT(policy_max, sycl_geqrf::geqrf_panel_reg_max_m<T>())
+        << "a policy that reaches the hard ceiling is not a policy; it is the capability again, "
+           "and the A/B that produced the window would have nothing to bracket";
+    ASSERT_TRUE(sycl_geqrf::geqrf_panel_reg_fits<T>(policy_max + 32, cols, wg_max))
+        << "the cell just outside the policy must still FIT, or this test brackets the "
+           "capability rather than the policy";
+
+    struct S { int m, n; bool want_reg; };
+    const S shapes[] = {{32, 8, true},               {64, 16, true},
+                        {policy_max, cols, true},    {policy_max + 32, cols, false},
+                        {policy_max + 64, cols, false}};
+    int ran = 0;
+    for (const S& s : shapes) {
+        if (s.n > cols || s.m > sycl_geqrf::geqrf_panel_reg_max_m<T>()) continue;
+        ++ran;
+        auto p = make_problem<T>(s.m, s.n, 2, 8801u + unsigned(s.m));
+        auto leaf_used = sycl_geqrf::GeqrfPanelLeaf::Auto;
+        ASSERT_NO_THROW(sycl_geqrf::geqrf_panel_factorize<T>(
+            *this->ctx, p.buf.data(), p.ld, p.stride, s.m, s.n, p.batch, p.tau.data(), p.k, 0,
+            nullptr, sycl_geqrf::GeqrfPanelLeaf::Auto, &leaf_used));
+        this->ctx->wait();
+        if (s.want_reg) {
+            EXPECT_EQ(leaf_used, sycl_geqrf::GeqrfPanelLeaf::Register)
+                << "Auto declined the register leaf at " << s.m << "x" << s.n
+                << ", inside the measured height window";
+        } else {
+            EXPECT_NE(leaf_used, sycl_geqrf::GeqrfPanelLeaf::Register)
+                << "Auto took the register leaf at " << s.m << "x" << s.n
+                << ", above the measured height window, where it is 0.38-0.89x";
+        }
+        check_one(p, "panel/auto");
+        if (this->HasFailure()) return;
+    }
+    ASSERT_GE(ran, 4) << "only " << ran << " shapes were admitted; this guard is near-vacuous";
+}
+
 // Break-sweep evidence for these tests: docs/perf/qr.md#break-sweeps
 
 int main(int argc, char** argv) {

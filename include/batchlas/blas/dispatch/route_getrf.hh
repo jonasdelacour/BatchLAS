@@ -69,15 +69,18 @@ struct RouteTable<Op::getrf, T> {
         }
     }
 
-    // Blocked only; Tiny stays absent until its grid exists (R8b: the first native arm true
-    // here takes every shape it holds, whatever the tier hook says).
-    // evidence: docs/perf/lu.md#getrf-window-evidence
+    // Blocked only; Tiny absent until its grid exists (R8b). evidence: docs/perf/lu.md#getrf-window-evidence
+    // cfloat 256..511 is BATCH-GATED because that band LOSES at batch 64..128, and holds
+    // at all only while the register panel leaf is the default one.
+    // evidence: docs/perf/lu.md#the-cfloat-window-moves-to-256
     static bool preferred(Route r, const GetrfShape& s) {
         if (!is_native(r)) return false;
         if (r.algo != Algorithm::Blocked) return false;
 
-        if constexpr (std::is_same_v<T, float>)               return s.order() >= 256;
-        if constexpr (std::is_same_v<T, std::complex<float>>) return s.order() >= 512;
+        if constexpr (std::is_same_v<T, float>) return s.order() >= 256;
+        if constexpr (std::is_same_v<T, std::complex<float>>) {
+            return s.order() >= 512 || (s.order() >= 256 && s.batch >= 256);
+        }
         return false;   // double and cdouble earn nothing at any order
     }
 

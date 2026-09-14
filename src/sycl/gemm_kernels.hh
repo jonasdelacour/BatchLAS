@@ -51,10 +51,47 @@ enum class KernelVariant {
     // complex<double> all get vectorized conflict-free fragment loads. The
     // only register-tiled variant that serves a non-float scalar.
     Tiled64x64RegisterK16Wide,
+    // The transposed / conj-transposed wide-scalar family: macro tile matched to
+    // a PANEL WIDTH. evidence: docs/perf/gemm.md#wide-scalar-transposed-tiles
+    Tiled64x64RegisterK16WideCN,
+    Tiled64x64RegisterK16WideNC,
+    Tiled128x32RegisterK16WideNC,
+    Tiled32x128RegisterK16WideCN,
     Tiled32x128RegisterK16,
     Tiled32x128RegisterK16TN,
     Tiled32x128RegisterK16TT,
 };
+
+// Which wide-scalar TRANSPOSED tile a shape fits: the matching macro-tile
+// dimension must be FILLED, since these tiles are cut to a panel width rather
+// than square. A selector predicate, never a routing one -- its arm is Tiled16.
+// evidence: docs/perf/gemm.md#wide-scalar-transposed-tiles
+enum class WideTransposedTile { None, NC128x32, CN32x128 };
+
+inline WideTransposedTile wide_transposed_tile_for(Transpose transA, Transpose transB,
+                                                   int64_t m, int64_t n, int64_t k,
+                                                   int64_t batch) {
+    if (k < 8) return WideTransposedTile::None;
+    constexpr int64_t kMinCtas = 64;
+    auto ctas = [&](int64_t tm, int64_t tn) {
+        return ((m + tm - 1) / tm) * ((n + tn - 1) / tn) * batch;
+    };
+    // ConjTrans EXACTLY: these are ConjTrans instantiations and
+    // wide_trans_matches refuses to serve a COMPLEX Trans with one, so a Trans
+    // shape selected here would silently fall back and the selector would be
+    // naming a kernel that did not run.
+    if (transA == Transpose::NoTrans && transB == Transpose::ConjTrans) {
+        if (m >= 128 && n >= 32 && ctas(128, 32) >= kMinCtas) {
+            return WideTransposedTile::NC128x32;
+        }
+    } else if (transA == Transpose::ConjTrans && transB == Transpose::NoTrans) {
+        if (m >= 32 && n >= 128 && ctas(32, 128) >= kMinCtas) {
+            return WideTransposedTile::CN32x128;
+        }
+    }
+    return WideTransposedTile::None;
+}
+
 
 template <typename T>
 BATCHLAS_INTERNAL_API KernelVariant select_kernel_variant(const MatrixView<T, MatrixFormat::Dense>& A,

@@ -63,6 +63,33 @@ inline LeftLaswp getrf_left_laswp_mode() {
     return LeftLaswp::DeferGather;
 }
 
+// WHICH PANEL LEAF, re-read per call so one process can A/B the two. `Reg` is the
+// DEFAULT since the P4 grid measured it faster at 153 of 156 paired cells.
+// evidence: docs/perf/lu.md#the-register-leaf-ab
+enum class PanelLeaf { Slm, Reg };
+
+inline PanelLeaf getrf_panel_leaf_mode() {
+    const char* s = batchlas::settings().selection.getrf_leaf.get();
+    if (s == nullptr) return PanelLeaf::Reg;
+    if (std::strcmp(s, "slm") == 0) return PanelLeaf::Slm;
+    return PanelLeaf::Reg;
+}
+
+// A SEPARATE hook from getrf_blocked_debug_params deliberately: that word's leaf field is
+// pinned against getrf_leaf_fits, and widening it would move the laswp field above it.
+template <typename T>
+int getrf_blocked_leaf_kind(Queue& ctx, int m, int ib) {
+    const auto dev = ctx.device();
+    const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
+    if (getrf_panel_leaf_mode() == PanelLeaf::Reg &&
+        getrf_panel_reg_fits<T>(m, ib, max_wg)) {
+        return 3;
+    }
+    const std::size_t budget = resident::device_slm_budget(
+        dev.get_property(DeviceProperty::LOCAL_MEM_SIZE));
+    return getrf_leaf_fits<T>(m, ib, budget) ? 1 : 2;
+}
+
 // Replayed by both the query and the call; no matrix scratch, every phase works in place.
 // ONE POINTER ARRAY PER ROLE, never nullptr and never shared -- init_data_ptr_array
 // rebases from each view's own data_ptr()/stride, so a shared array loses the first's.
@@ -122,6 +149,14 @@ unsigned getrf_blocked_debug_params(Queue& ctx, int n) {
     const unsigned lmode = static_cast<unsigned>(getrf_left_laswp_mode());
 
     return (lmode << 24) | (leaf << 16) | static_cast<unsigned>(nb);
+}
+
+// 1 resident, 2 global, 3 register, 0 degenerate. evidence: docs/perf/lu.md#the-register-panel-leaf
+template <typename T>
+unsigned getrf_blocked_debug_leaf(Queue& ctx, int n) {
+    if (n < 1) return 0u;
+    const int ib0 = std::min(getrf_blocked_nb<T>(n), n);
+    return static_cast<unsigned>(getrf_blocked_leaf_kind<T>(ctx, n, ib0));
 }
 
 template <typename T>
@@ -196,6 +231,7 @@ Event getrf_blocked_dispatch(Queue& ctx,
 
     const int nb = getrf_blocked_nb<T>(n);
     const LeftLaswp mode = getrf_left_laswp_mode();
+    const PanelLeaf leaf_mode = getrf_panel_leaf_mode();
     const std::size_t local_mem_all = dev.get_property(DeviceProperty::LOCAL_MEM_SIZE);
     const std::size_t slm_budget = (local_mem_all > 4096) ? (local_mem_all - 4096) : 0;
     const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
@@ -239,11 +275,16 @@ Event getrf_blocked_dispatch(Queue& ctx,
         const int m2 = mp - ib;                // trailing rows;    ZERO on the last panel
 
         // (P) piv_stride is n and piv_base is j0, which is what makes ipiv global
-        // 1-based and info a global column index with no fix-up.
-        (void)getrf_panel_factorize<T>(ctx,
-                                       a_ptr + static_cast<std::ptrdiff_t>(j0) * ld + j0,
-                                       ld, stride, mp, ib, batch,
-                                       piv_ptr, n, j0, info.data(), nullptr);
+        // 1-based and info a global column index with no fix-up. The two leaves answer the
+        // SAME contract: nothing below this line depends on which one ran.
+        T* const panel = a_ptr + static_cast<std::ptrdiff_t>(j0) * ld + j0;
+        if (leaf_mode == PanelLeaf::Reg && getrf_panel_reg_fits<T>(mp, ib, max_wg)) {
+            (void)getrf_panel_reg_factorize<T>(ctx, panel, ld, stride, mp, ib, batch,
+                                               piv_ptr, n, j0, info.data());
+        } else {
+            (void)getrf_panel_factorize<T>(ctx, panel, ld, stride, mp, ib, batch,
+                                           piv_ptr, n, j0, info.data(), nullptr);
+        }
 
         // A caller may build an out-of-order queue, so every dependent edge guards itself.
         if (!ctx.in_order()) ctx.wait();
@@ -319,6 +360,7 @@ Event getrf_blocked_dispatch(Queue& ctx,
     template std::size_t getrf_blocked_buffer_size<T>(                                        \
         Queue&, const MatrixView<T, MatrixFormat::Dense>&);                                   \
     template unsigned getrf_blocked_debug_params<T>(Queue&, int);                             \
+    template unsigned getrf_blocked_debug_leaf<T>(Queue&, int);                               \
     template Event getrf_blocked_dispatch<T>(Queue&,                                          \
                                              const MatrixView<T, MatrixFormat::Dense>&,       \
                                              Span<int64_t>, Span<std::byte>, Span<int32_t>,   \

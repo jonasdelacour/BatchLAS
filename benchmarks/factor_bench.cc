@@ -1,6 +1,6 @@
 // P0 of docs/design/small-n-factorization-plan.md: the in-tree, correct,
 // saturation-aware A/B harness for the batched factorizations
-// (potrf / getrf / getrs / geqrf / orgqr) at n = 4..512.
+// (potrf / getrf / getrs / geqrf / orgqr / gesv / posv) at n = 4..512.
 //
 // It exists because there was no potrf, getrf or getrs harness in benchmarks/
 // at all: every Cholesky and LU number in docs/perf came from standalone
@@ -28,9 +28,11 @@
 //   env:   WARM_S (seconds, default 1.5), LD_PAD (ld = m + LD_PAD)
 //
 #include <batchlas/blas/functions/geqrf.hh>
+#include <batchlas/blas/functions/gesv.hh>
 #include <batchlas/blas/functions/getrf.hh>
 #include <batchlas/blas/functions/getrs.hh>
 #include <batchlas/blas/functions/orgqr.hh>
+#include <batchlas/blas/functions/posv.hh>
 #include <batchlas/blas/functions/potrf.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/env.hh>
@@ -50,6 +52,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -147,7 +150,10 @@ static int host_getrf(int m, int n, std::complex<double>* a, int lda, int* ip) {
 }
 
 // ------------------------------------------------------------- route pins
-enum class OpKind { potrf, getrf, getrs, geqrf, orgqr };
+enum class OpKind { potrf, getrf, getrs, geqrf, orgqr, gesv, posv };
+
+// P2: the FUSED ops have no vendor arm of their own -- see composed_pins below.
+static bool is_solve_op(OpKind k) { return k == OpKind::gesv || k == OpKind::posv; }
 
 static const char* pin_variable(OpKind k) {
     switch (k) {
@@ -156,8 +162,20 @@ static const char* pin_variable(OpKind k) {
         case OpKind::getrs: return "BATCHLAS_GETRS_ROUTE";
         case OpKind::geqrf: return "BATCHLAS_GEQRF_ROUTE";
         case OpKind::orgqr: return "BATCHLAS_ORGQR_ROUTE";
+        case OpKind::gesv:  return "BATCHLAS_GESV_ROUTE";
+        case OpKind::posv:  return "BATCHLAS_POSV_ROUTE";
     }
     return "";
+}
+
+// The leaf A/B variable per op; nullptr for an op with no leaf seam, which makes an
+// `/leaf=` arm on that op a loud no-op rather than a quiet one.
+static const char* leaf_variable(OpKind op) {
+    switch (op) {
+        case OpKind::getrf: return "BATCHLAS_GETRF_LEAF";
+        case OpKind::geqrf: return "BATCHLAS_GEQRF_LEAF";
+        default: return nullptr;
+    }
 }
 static dispatch::Op dispatch_op(OpKind k) {
     switch (k) {
@@ -166,6 +184,8 @@ static dispatch::Op dispatch_op(OpKind k) {
         case OpKind::getrs: return dispatch::Op::getrs;
         case OpKind::geqrf: return dispatch::Op::geqrf;
         case OpKind::orgqr: return dispatch::Op::orgqr;
+        case OpKind::gesv:  return dispatch::Op::gesv;
+        case OpKind::posv:  return dispatch::Op::posv;
     }
     return dispatch::Op::COUNT;
 }
@@ -176,6 +196,8 @@ static const char* op_text(OpKind k) {
         case OpKind::getrs: return "getrs";
         case OpKind::geqrf: return "geqrf";
         case OpKind::orgqr: return "orgqr";
+        case OpKind::gesv:  return "gesv";
+        case OpKind::posv:  return "posv";
     }
     return "?";
 }
@@ -411,8 +433,11 @@ static double ortho_norm(const D* Q, int m, int k, int lq) {
 
 // ------------------------------------------------------------- one arm
 struct Arm {
-    std::string name;      // "vendor" | "native"
+    std::string name;      // "vendor" | "native" | "<pin>/leaf=<x>"
     std::string pin;       // the value actually written to BATCHLAS_<OP>_ROUTE
+    std::string leaf;      // P4: BATCHLAS_GETRF_LEAF for this arm's reps only, or empty
+    // P2: extra (variable, value) pins held for this arm's reps only; see composed_pins.
+    std::vector<std::pair<std::string, std::string>> sub_pins;
     bool pin_parsed = false;
     Stat st;
     double residual = std::numeric_limits<double>::quiet_NaN();
@@ -420,6 +445,57 @@ struct Arm {
     int info_nonzero = 0;
     int bad = 0;
     std::string reason;
+};
+
+// P4 needs an A/B the route pin cannot express: both arms are the SAME route
+// (native blocked getrf) and differ only in which panel leaf the driver calls, which
+// is BATCHLAS_GETRF_LEAF. An arm named "blocked/leaf=reg" pins both, for that arm's
+// reps only, so the leaf A/B is interleaved in one process like every other arm here
+// instead of ratioed across two. evidence: docs/perf/lu.md#the-register-leaf-ab
+// P5 needs the same A/B for geqrf's panel leaf, whose variable is BATCHLAS_GEQRF_LEAF, so the
+// leaf variable is chosen by OP rather than hardcoded: setting getrf's variable on a geqrf cell
+// is a silent no-op and the two arms would then be the same arm measured twice.
+// P2: gesv and posv have NO vendor arm of their own. Their `Blocked` route is a
+// COMPOSITION -- `getrf; getrs` and `potrf; trsm; trsm` -- and each composed op routes
+// independently, so "the vendor arm" and "the two-launch native arm" are the same
+// gesv/posv route under two different sub-op pinnings. Naming the arm alone would
+// measure whatever the composed ops happened to route to, which is the "diff the
+// ROUTE, not the timing" defect; these pins make the composition explicit and
+// `pin_parsed_now` still proves the OUTER pin landed.
+static std::vector<std::pair<std::string, std::string>>
+composed_pins(OpKind op, const std::string& arm_name) {
+    if (op == OpKind::gesv) {
+        if (arm_name == "vendor")
+            return {{"BATCHLAS_GETRF_ROUTE", "vendor"}, {"BATCHLAS_GETRS_ROUTE", "vendor"}};
+        if (arm_name == "native")
+            return {{"BATCHLAS_GETRF_ROUTE", "tiny"}, {"BATCHLAS_GETRS_ROUTE", "cta"}};
+    }
+    if (op == OpKind::posv) {
+        if (arm_name == "vendor")
+            return {{"BATCHLAS_POTRF_ROUTE", "vendor"}, {"BATCHLAS_TRSM_ROUTE", "vendor"}};
+        if (arm_name == "native")
+            return {{"BATCHLAS_POTRF_ROUTE", "tiny"}, {"BATCHLAS_TRSM_ROUTE", "cta"}};
+    }
+    return {};
+}
+
+// For a solve op an arm named "vendor" or "native" pins the OUTER route to `blocked`
+// (the composed arm) and differs only in what the composed sub-ops take.
+static std::string solve_outer_pin(const std::string& arm_name) {
+    return (arm_name == "vendor" || arm_name == "native") ? std::string("blocked") : arm_name;
+}
+
+struct ArmEnv {
+    ScopedEnvVar route;
+    std::unique_ptr<ScopedEnvVar> leaf;
+    std::vector<std::unique_ptr<ScopedEnvVar>> extra;
+    ArmEnv(const char* var, const Arm& a, const char* leaf_var) : route(var, a.pin.c_str()) {
+        if (!a.leaf.empty() && leaf_var != nullptr) {
+            leaf = std::make_unique<ScopedEnvVar>(leaf_var, a.leaf.c_str());
+        }
+        for (const auto& kv : a.sub_pins)
+            extra.push_back(std::make_unique<ScopedEnvVar>(kv.first.c_str(), kv.second.c_str()));
+    }
 };
 
 static void flag(Arm& a, const char* why) {
@@ -501,11 +577,12 @@ static int run(const Cfg& c) {
     const int pstride = n;
     UnifiedVector<T> tau(size_t(kmin) * nbatch);
 
-    const size_t bsz = (c.op == OpKind::getrs) ? sb * nbatch : size_t(1);
+    const bool has_rhs = (c.op == OpKind::getrs) || is_solve_op(c.op);
+    const size_t bsz = has_rhs ? sb * nbatch : size_t(1);
     UnifiedVector<T> B0(bsz), X(bsz);
     UnifiedVector<T*> pB0(nbatch), pX(nbatch);
     MV B0v, Xv;
-    if (c.op == OpKind::getrs) {
+    if (has_rhs) {
         B0v = MV(B0.data(), n, nrhs, ldb, int(sb), batch, pB0.data());
         Xv  = MV(X.data(),  n, nrhs, ldb, int(sb), batch, pX.data());
         Rng rg(777);
@@ -516,8 +593,10 @@ static int run(const Cfg& c) {
     }
 
     switch (c.op) {
-        case OpKind::potrf: fill_spd<T>(A0, n, lda, sa, batch); break;
+        case OpKind::potrf:
+        case OpKind::posv: fill_spd<T>(A0, n, lda, sa, batch); break;
         case OpKind::getrf:
+        case OpKind::gesv:
         case OpKind::getrs: fill_lu<T>(A0, n, lda, sa, batch, 12345); break;
         case OpKind::geqrf:
         case OpKind::orgqr: fill_gauss<T>(A0, m, n, lda, sa, batch, 12345); break;
@@ -553,6 +632,8 @@ static int run(const Cfg& c) {
     auto reset = [&] {
         if (c.op == OpKind::getrs) { (void)MV::copy(*q, Xv, B0v); q->wait(); }
         else if (c.op == OpKind::orgqr) { std::memcpy(A.data(), F.data(), sa * nbatch * sizeof(T)); }
+        // A fused solve overwrites A with the factor AND B with X, so both are restored.
+        else if (is_solve_op(c.op)) { reset_A(); (void)MV::copy(*q, Xv, B0v); q->wait(); }
         else reset_A();
     };
 
@@ -563,7 +644,17 @@ static int run(const Cfg& c) {
     for (const std::string& nm : c.arms) {
         Arm a;
         a.name = nm;
-        a.pin = (nm == "native" && !c.route_pin.empty()) ? c.route_pin : nm;
+        std::string pin = nm;
+        const auto cut = nm.find("/leaf=");
+        if (cut != std::string::npos) {
+            pin = nm.substr(0, cut);
+            a.leaf = nm.substr(cut + 6);
+        }
+        a.pin = (pin == "native" && !c.route_pin.empty()) ? c.route_pin : pin;
+        if (is_solve_op(c.op)) {
+            a.sub_pins = composed_pins(c.op, pin);
+            if (a.pin == pin) a.pin = solve_outer_pin(pin);
+        }
         arms.push_back(a);
     }
     if (arms.empty()) { std::fprintf(stderr, "factor_bench: no arms selected\n"); return 2; }
@@ -576,7 +667,7 @@ static int run(const Cfg& c) {
     // defect. Over-allocating is safe; under-allocating is not.
     size_t wneed = 0;
     for (size_t i = 0; i < arms.size(); ++i) {
-        ScopedEnvVar pinned(var, arms[i].pin.c_str());
+        ArmEnv pinned(var, arms[i], leaf_variable(c.op));
         arms[i].pin_parsed = pin_parsed_now(c.op);
         size_t need = 0;
         switch (c.op) {
@@ -585,6 +676,8 @@ static int run(const Cfg& c) {
             case OpKind::getrs: need = getrs_buffer_size<BE, T>(*q, Av, Xv, Transpose::NoTrans); break;
             case OpKind::geqrf: need = geqrf_buffer_size<BE, T>(*q, Av, tau.to_span()); break;
             case OpKind::orgqr: need = orgqr_buffer_size<BE, T>(*q, Av, tau.to_span()); break;
+            case OpKind::gesv: need = gesv_buffer_size<BE, T>(*q, Av, Xv); break;
+            case OpKind::posv: need = posv_buffer_size<BE, T>(*q, Av, Xv, Uplo::Lower); break;
         }
         wneed = std::max(wneed, need);
     }
@@ -598,6 +691,12 @@ static int run(const Cfg& c) {
             case OpKind::getrs: (void)getrs<BE, T>(*q, Av, Xv, Transpose::NoTrans, piv.to_span(), ws.to_span()); break;
             case OpKind::geqrf: (void)geqrf<BE, T>(*q, Av, tau.to_span(), ws.to_span()); break;
             case OpKind::orgqr: (void)orgqr<BE, T>(*q, Av, tau.to_span(), ws.to_span()); break;
+            case OpKind::gesv:
+                (void)gesv<BE, T>(*q, Av, Xv, piv.to_span(), ws.to_span(), info.to_span());
+                break;
+            case OpKind::posv:
+                (void)posv<BE, T>(*q, Av, Xv, Uplo::Lower, ws.to_span(), info.to_span());
+                break;
         }
         q->wait();
     };
@@ -610,7 +709,7 @@ static int run(const Cfg& c) {
         const auto w0 = std::chrono::steady_clock::now();
         do {
             for (size_t i = 0; i < arms.size(); ++i) {
-                ScopedEnvVar pinned(var, arms[i].pin.c_str());
+                ArmEnv pinned(var, arms[i], leaf_variable(c.op));
                 reset();
                 call();
             }
@@ -622,7 +721,7 @@ static int run(const Cfg& c) {
     std::vector<std::vector<double>> ms(arms.size());
     for (int r = 0; r < c.reps; ++r) {
         for (size_t i = 0; i < arms.size(); ++i) {
-            ScopedEnvVar pinned(var, arms[i].pin.c_str());
+            ArmEnv pinned(var, arms[i], leaf_variable(c.op));
             reset();
             const auto t0 = std::chrono::steady_clock::now();
             call();
@@ -649,7 +748,7 @@ static int run(const Cfg& c) {
         Arm& a = arms[i];
         a.st = stat_of(ms[i]);
         {
-            ScopedEnvVar pinned(var, a.pin.c_str());
+            ArmEnv pinned(var, a, leaf_variable(c.op));
             for (int b = 0; b < batch; ++b) info[b] = 0;
             reset();
             call();
@@ -680,6 +779,8 @@ static int run(const Cfg& c) {
                 if (nontrivial_pivots(pivi, n) == 0) flag(a, "vacuous_pivots");
                 break;
             }
+            case OpKind::gesv:
+            case OpKind::posv:
             case OpKind::getrs:
                 a.residual = getrs_residual<T>(X, B0, A0, n, nrhs, lda, sa, ldb, sb, batch);
                 break;
@@ -760,7 +861,7 @@ int main(int argc, char** argv) {
         std::fprintf(stderr,
             "usage: factor_bench <op> <type> <m> <n> <nrhs> <batch> <reps>\n"
             "                    [--route=<pin>] [--csv=<path>] [--arms=a,b,...]\n"
-            "  op   : potrf getrf getrs geqrf orgqr\n"
+            "  op   : potrf getrf getrs geqrf orgqr gesv posv\n"
             "  type : float double cfloat cdouble\n"
             "  env  : WARM_S (seconds, default 1.5), LD_PAD (ld = m + LD_PAD)\n"
             "prints: op,type,m,n,nrhs,batch,arm,pin,pin_parsed,median_ms,mean_ms,"
@@ -774,6 +875,8 @@ int main(int argc, char** argv) {
     else if (opn == "getrs") c.op = OpKind::getrs;
     else if (opn == "geqrf") c.op = OpKind::geqrf;
     else if (opn == "orgqr") c.op = OpKind::orgqr;
+    else if (opn == "gesv")  c.op = OpKind::gesv;
+    else if (opn == "posv")  c.op = OpKind::posv;
     else { std::fprintf(stderr, "factor_bench: unknown op %s\n", opn.c_str()); return 2; }
 
     c.type  = argv[2];
@@ -812,11 +915,12 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "factor_bench: need m>0 n>0 batch>0 reps>0\n");
         return 2;
     }
-    if (c.op == OpKind::getrs && c.nrhs <= 0) {
-        std::fprintf(stderr, "factor_bench: getrs needs nrhs > 0\n");
+    if ((c.op == OpKind::getrs || is_solve_op(c.op)) && c.nrhs <= 0) {
+        std::fprintf(stderr, "factor_bench: %s needs nrhs > 0\n", opn.c_str());
         return 2;
     }
-    if ((c.op == OpKind::potrf || c.op == OpKind::getrf || c.op == OpKind::getrs) && c.m != c.n) {
+    if ((c.op == OpKind::potrf || c.op == OpKind::getrf || c.op == OpKind::getrs ||
+         is_solve_op(c.op)) && c.m != c.n) {
         std::fprintf(stderr, "factor_bench: %s is square; m must equal n\n", opn.c_str());
         return 2;
     }

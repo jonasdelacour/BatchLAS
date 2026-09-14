@@ -6,6 +6,7 @@
 
 #include "potrf_native.hh"
 #include "potrf_cta_device.hh"
+#include "potrf_slm_hole.hh"
 
 #include "../queue.hh"
 #include "../util/resident_capacity.hh"
@@ -64,16 +65,9 @@ constexpr std::size_t potrf_slm_per_matrix(int n, int NB, int TS,
          + 4 * static_cast<std::size_t>(Rt0 + 1);
 }
 
-// The 48 KB launch hole: a dynamic request inside this band is refused at enqueue, and the raised
-// cap is sticky per CUfunction, so an earlier larger launch masks it. Inert only while these
-// kernels have zero static shared. evidence: docs/perf/potrf.md#the-48-kb-launch-hole
-constexpr std::size_t kPotrfHoleLo = 47104;
-constexpr std::size_t kPotrfHoleHi = 49664;
-constexpr std::size_t kPotrfHolePadTo = 49920;
-
-constexpr std::size_t potrf_hole_padded(std::size_t bytes) {
-    return (bytes > kPotrfHoleLo && bytes <= kPotrfHoleHi) ? kPotrfHolePadTo : bytes;
-}
+// The 48 KB launch hole is spelled ONCE, in potrf_slm_hole.hh, because the LPanel leaf pads
+// against the same band. Inert only while these kernels have zero static shared.
+using potrf_native::potrf_hole_padded;
 
 // Scope is derived here and nowhere else, so no caller can assert one the L ladder disagrees with.
 struct PotrfCtaLaunch {

@@ -61,6 +61,11 @@ BATCHLAS_INTERNAL_API std::size_t getrf_blocked_buffer_size(Queue& ctx,
 template <typename T>
 BATCHLAS_INTERNAL_API unsigned getrf_blocked_debug_params(Queue& ctx, int n);  // nb | leaf<<16
 
+// The leading panel's leaf AS THE DRIVER WOULD TAKE IT: getrf_blocked_debug_params' leaf
+// field is a pure fit query. 1 resident, 2 global, 3 register, 0 degenerate.
+template <typename T>
+BATCHLAS_INTERNAL_API unsigned getrf_blocked_debug_leaf(Queue& ctx, int n);
+
 // An empty seam means "use sycl_gemm::gemm_custom" rather than a routed gemm.
 template <typename T>
 using GetrfTrailingGemm = std::function<Event(
@@ -107,8 +112,29 @@ BATCHLAS_INTERNAL_API unsigned getrf_cta_debug_launch(Queue& ctx, int m, int n);
 template <typename T>
 BATCHLAS_INTERNAL_API bool getrf_leaf_fits(int m, int n, std::size_t slm_budget_bytes);
 
-// `piv_stride` is the matrix ORDER, never the panel width; `piv_base` is the panel's
-// first global row. `info_ptr` is read as well as written, so zero it before panel 0.
+// THE TWO PANEL LEAVES, one contract: `piv_stride` is the matrix ORDER, `piv_base` the
+// panel's first global row, `info_ptr` READ as well as written (zero it before panel 0).
+// P4's register leaf adds a WIDTH ceiling `nb` (a short final panel arrives with n < nb)
+// and a REGISTER height ceiling `max_m`; 0 = absent. evidence: docs/perf/lu.md#the-register-panel-leaf
+template <typename T>
+BATCHLAS_INTERNAL_API int getrf_panel_reg_nb();
+
+template <typename T>
+BATCHLAS_INTERNAL_API int getrf_panel_reg_max_m();
+
+template <typename T>
+BATCHLAS_INTERNAL_API bool getrf_panel_reg_fits(int m, int n, int max_wg);
+
+template <typename T>
+BATCHLAS_INTERNAL_API unsigned getrf_panel_reg_debug_launch(Queue& ctx, int m, int n);
+
+template <typename T>
+BATCHLAS_INTERNAL_API Event getrf_panel_reg_factorize(Queue& ctx,
+                                                      T* a_ptr, int ld, int stride,
+                                                      int m, int n, int batch,
+                                                      int* piv_ptr, int piv_stride,
+                                                      int piv_base, int32_t* info_ptr);
+
 template <typename T>
 BATCHLAS_INTERNAL_API Event getrf_panel_factorize(Queue& ctx,
                                                   T* a_ptr, int ld, int stride,

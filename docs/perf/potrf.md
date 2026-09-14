@@ -12,14 +12,22 @@ All numbers: RTX 4090 (sm_89, 128 SM), one card held per campaign, under `experi
 |---|---|---|---|
 | `{Native, Tiny}` | `src/extensions/potrf_tiny.cc`, `tiny_device.hh` | `<= potrf_tiny_max_n<T>()` = 32, and 16 for cdouble | both |
 | `{Native, CTA}` | `src/extensions/potrf_cta.cc`, `potrf_cta_device.hh` | `<= potrf_cta_max_n_for_slm<T>(local_mem - 4096)` = **77/54/54/38** here (advertised, at the default target of 4 blocks/SM); 155/109/109/77 is the *resident* ceiling, `min_blocks_per_sm = 1` | both |
+| `{Native, LPanel}` | `src/extensions/potrf_lpanel.cc`, `potrf_lpanel_device.hh` | `<= potrf_lpanel_max_n_for_slm<T>(local_mem - 4096, max_wg)` = **744/368/368/180** here (advertised); see [the LPanel tier](#the-lpanel-tier) | **Lower only** |
 | `{Native, Blocked}` | `src/extensions/potrf_blocked.cc` | any | **Lower only** |
 | `{Vendor, Auto}` | cuSOLVER | any | both |
 
-All four scalar types on every arm (cdouble n = 17..32 excepted on Tiny). Tiny is FIRST in the candidate order,
-but `native_tier_preferred` answers **false** for it and `preferred()` is false everywhere, so **no route moves**:
-a vendor-free build still takes CTA at n <= 32 and `Auto` in a vendor-present build still takes the vendor. Tiny is
-reachable by an explicit pin only. See [the-tiny-tier](#the-tiny-tier) — it has a register table and two negative
-results but **no timing**, which is precisely why the tier is not yet preferred.
+All four scalar types on every arm (cdouble n = 17..32 excepted on Tiny).
+
+**`preferred()` is no longer false.** P3 measured the LPanel tier and potrf now carries its first routed window:
+**32 < n <= 256, `Uplo::Lower`, `float` and `complex<float>`** — see
+[the measured LPanel window](#the-measured-lpanel-window). Inside it `Auto` takes a native tier in a
+vendor-present build; the CTA/LPanel split sits at order 35 for float and 32 for cfloat. Everything outside that
+window — `Upper`, `double`, `cdouble`, n <= 32 and n > 256 — still takes cuSOLVER.
+
+**Tiny remains unrouted.** It is FIRST in the candidate order but `native_tier_preferred` answers **false** for it,
+so it is reachable by an explicit pin only. See [the-tiny-tier](#the-tiny-tier): it has a register table and two
+negative results, and it is now known to measure **2.19-2.59x** at n <= 32 — that band is left on the table
+deliberately, because the win was recorded after the window was cut and has not been bracketed.
 The rest of the candidate order (`route_potrf.hh`) is *mostly* a capability ladder:
 the blocked driver's diagonal leaf *is* the CTA kernel on a sub-view, so above `cta_max_n` only Blocked can serve.
 **Below it the two arms overlap and the static array decides** — `supports(Blocked)` carries no lower order bound, so
@@ -61,19 +69,25 @@ would make a forced `blocked` at small `n` fall through `automatic()` to cuSOLVE
 adds `cta_max_n` (asked of the *device*), `blocked_available` (does the driver exist in this *build*) and
 `has_sg32`; the builder is `src/backends/potrf_route.hh:20-55`, so the table stays pure.
 
-### `preferred()` is false everywhere
+### What `preferred()` answered before P3
 
-`preferred()` returns `false` unconditionally (`route_potrf.hh:65-69`). Un-preferred is not unroutable:
-`route_resolve.hh:38-49` still hands a **vendor-free** caller any supported native route, while `Origin::Auto` in a
-vendor-present build keeps taking cuSOLVER. `route_diff.sh` across both landings shows zero changed non-potrf rows;
+**Superseded.** This section records the state up to P1/P7, when `preferred()` returned `false` unconditionally;
+the shipped predicate is now the window at [the measured LPanel window](#the-measured-lpanel-window). What remains
+true and load-bearing: un-preferred is not unroutable — `route_resolve.hh:38-49` still hands a **vendor-free**
+caller any supported native route, which is why a window is about the vendor-present default and nothing else.
+
+`route_diff.sh` across both landings shows zero changed non-potrf rows;
 what changed is potrf's `native_route_supported` column, 0 → 1 (`route_potrf.hh:3-4`), and the Phase 2 capture is
 +28 additions / 0 removals. **The Phase 2 triage delta's route diff was never re-run** — the capture needs
 `-DBATCHLAS_ENABLE_COVERAGE=ON`, i.e. two device-link-bound rebuilds — and was argued instead from the diff touching
 no routing predicate (one `group_barrier`, two `fill`s, four in-order guards, one tuning constant, comments).
 
 The grids below are the *input* to flipping a cell, not the decision. The gate is three-part:
-`t_native <= 0.90 * t_vendor` at saturation, **and** no accuracy regression, **and** an end-to-end
-`ortho_benchmark` win. None has been run. (This repo once turned a 2.16x kernel win into an 11% gesvd loss.)
+`t_native <= 0.90 * t_vendor` at saturation, **and** no accuracy regression, **and** an end-to-end win.
+(This repo once turned a 2.16x kernel win into an 11% gesvd loss.) For the LPanel window the first two were run —
+see [the measured LPanel window](#the-measured-lpanel-window), which reports the grid, the bracketing non-winners
+at n = 384 and 512, and an end-to-end A/B through the facade. **`ortho_benchmark` itself was not run** for potrf;
+the end-to-end evidence is `factor_bench --arms=vendor,auto`, which exercises the routed path but not a caller.
 
 ## The SLM budget and the fit ceilings
 
@@ -616,12 +630,14 @@ below it the blocked driver at `n <= nb` is the CTA leaf plus a fixup launch and
 win; above it the CTA arm is not supported. Declaring it matters because the absent hook
 defaulted to `true` for every route, making the choice an accident of the order array.
 
-`preferred()` stays all-false, so `Auto` still takes cuSOLVER at every shape and none of
-the below is reachable except in a vendor-free build or under `BATCHLAS_POTRF_ROUTE`.
+**Superseded in part by P3.** `preferred()` is no longer all-false: it answers inside one
+measured window, and the hook below is what that window resolves the tier with. See
+[the measured LPanel window](#the-measured-lpanel-window); the crossover-is-the-capacity
+argument still holds for `double` and `complex<double>`, which have no LPanel grid.
 
 #### Every tier is enumerated explicitly
 
-Exactly one arm answers `true` at any shape, and the switch names all three rather than
+Exactly one arm answers `true` at any shape, and the switch names all four rather than
 leaning on `default:`. `default:` returns **true**, so a tier left out of the switch is
 handed every shape it supports on the vendor-free walk and on a bare `native` pin -- R8b
 (`docs/design/small-n-factorization-plan.md`, "A non-empty `preferred()` pre-empts
@@ -1125,3 +1141,475 @@ every such callee is inlined and the pointer never escapes, a property no signat
 enforces, and the LU body's array sits in the tier's hottest loop. Rows and columns beyond
 `n` carry the identity, so `[[A, 0], [0, I]]` factorises to `[[LU(A), 0], [0, I]]`; the
 `live` term short-circuits, so a work-item belonging to no matrix issues no global read.
+
+---
+
+## The LPanel tier
+
+WP6/P3. `src/extensions/potrf_lpanel.cc` + `potrf_lpanel_device.hh`. A **left-looking,
+thread-per-row panel** kernel: one work-group holds **one `n x NB` panel** in local memory
+rather than the whole `n x n` matrix, factors it in place, stores it, and re-reads the
+already-factored columns to its left from global memory on the next panel. `NB = 8` for
+every type; `NB = 16` is a float-only A/B arm, selected by `nb_hint`.
+
+**It is measured and it now carries potrf's first routed window**, `32 < n <= 256` for
+`float` and `complex<float>`, `Uplo::Lower` — see
+[the measured LPanel window](#the-measured-lpanel-window). Outside that window `Auto` still
+takes the vendor, and `double`/`complex<double>` are untouched. `Algorithm::LPanel` is
+enumerator **14**, appended.
+
+`Uplo::Upper` is **refused**, in `supports()` and again in `potrf_lpanel_dispatch`. The
+left-looking update reads the already-factored *lower* triangle, so Upper needs the
+transformed-tile trick `potrf_cta.cc` uses. No in-tree caller asks: `ortho.cc:93` and
+`linalg::cholesky`'s default both pass `Lower`, and the blocked driver already refuses Upper.
+
+### Footprint and the two caps
+
+```
+slm_per_matrix(n, NB, sizeof(T)) = (n*NB + NB*NB) * sizeof(T) + 256
+```
+
+`sA` is the `n x NB` panel at `ld = n` — no odd padding, because lane `row` reads
+`sA[row + i*n]`, already stride 1 across lanes — `sB` the `NB x NB` broadcast block, and the
+256 over-covers `*fail` plus alignment slack. The band from
+[the 48 KB launch hole](#the-48-kb-launch-hole) is applied to the **total** request, and `G`
+is stepped back down if the pad pushes it over.
+
+The ceiling folds **two** independent caps: the local-memory slice, and
+`MAX_WORK_GROUP_SIZE`. The second is not slack — `potrf_lpanel_body` requires `L >= n`
+because lane `row` carries `rp/rS/rA` across the whole `k` loop, so an order above the
+work-group size would be a silent race, not a launch failure.
+
+These are **arithmetic from the formula above**, not timings; the test
+`CeilingIsCappedByBothMemoryAndWorkGroupSize` pins them against the budget-parameterised
+query at the reference budget 97,280 B with `max_wg = 1024`:
+
+| | float | double | complex\<float\> | complex\<double\> |
+|---|---|---|---|---|
+| LPanel `NB` | 8 (16 as an A/B) | 8 | 8 | 8 |
+| LPanel advertised (4 blocks/SM) | **744** | **368** | **368** | **180** |
+| LPanel resident (`min_blocks_per_sm = 1`) | 1024 (wg-capped) | 1024 (wg-capped) | 1024 (wg-capped) | 750 |
+| CTA advertised, for comparison | 77 | 54 | 54 | 38 |
+| LPanel `NB = 16` advertised (float only) | 360 | — | — | — |
+
+Every advertised figure above lands on exactly 24,320 B, which is
+`occupancy_budget(97280, 4)`. The point of the tier is the second row against the fourth: at
+the default occupancy target the LPanel arm advertises **the whole 32 < n <= 512 band for
+float in a single launch**, where CTA advertises 77 — so the shipped native arm at
+`78 <= n <= 256` float is the blocked driver at `nb = 64`, and an 80x80 matrix is factored as
+two panels, two leaves, two fixups, a trsm, a gemm and a fold.
+
+### Why LPanel may pack on work-group barriers
+
+`potrf_cta.cc` may only pack `G > 1` matrices into a work-group at `L == 32`, where its
+phase barriers are **sub-group** barriers; a work-group barrier there would synchronise the
+`G` matrices with each other, which is a race by construction.
+
+LPanel is the opposite case and packs on **work-group** barriers deliberately. Every barrier
+in `potrf_lpanel_body` is `group_barrier(it.get_group())`, sits at the top level outside the
+`if` that guards its phase, and failure is a predicated skip rather than a `break`. The
+barrier schedule is therefore a function of `(n, NB)` alone — and the packed matrices share
+both — so the extra matrices are merely synchronised with each other, never raced. Two
+consequences a maintainer must preserve:
+
+* **No early return, and no shortened `n`.** A dead slot of the tail work-group runs the
+  *whole* body against a live matrix with its stores suppressed (the `store` flag). Giving
+  it `n = 0` instead would skip every barrier and hang the group.
+* **B6 is not optional.** The store at the end of a panel writes global columns that the
+  *next* panel's left-looking staging reads, from different work-items.
+
+### LPanel register gate
+
+The per-lane register arrays are `rp[NB] + rS[NB] + rA[NB]` = `3*NB` scalars before
+addressing: 24 for a real type at `NB = 8`, 48 registers for `complex<float>`, 96 for
+`complex<double>`. Against the plan's own occupancy line (100% occupancy needs <= 42
+registers/thread) that caps cfloat at roughly two thirds and cdouble at roughly one third of
+the occupancy float gets — so **the cfloat target in the P3 plan text is not supported by
+P3's own arithmetic**. Independently, [open debts](#open-debts) item 2 records that complex
+is 0.311-0.509x vendor-free with the cause *outside* this driver (the complex trailing GEMM,
+P6's package). The honest gate for this tier is **float first**; cfloat is measured and
+reported, not promised. No register probe has been run: the arrays above are a source count,
+not a `ptxas` count.
+
+### What P3's plan text got wrong
+
+The section at `docs/design/small-n-factorization-plan.md` around line 600 predates P1 and
+P7 and is stale in five places. Recorded so nobody re-derives them:
+
+1. **`Algorithm::LPanel` and `Algorithm::Fused` were never added** (D1 claims they ship).
+   Only `Tiny` was. This change appends `LPanel` as enumerator 14; a 15th is free.
+2. **The R8b trap is armed and the plan does not mention the hook.** `native_tier_preferred`
+   ends `default: return true`, and `tests/CMakeLists.txt:359` runs `potrf_tests` under
+   `BATCHLAS_POTRF_ROUTE=native`, so an omitted `LPanel` arm would silently re-point that
+   whole suite. The arm is spelled out, and `RouteWindowIsExactlyTheMeasuredOne` counts the arms
+   that answer true and asserts the count is exactly 1.
+3. **The stated loss mechanism is a route that no longer ships.** The 8.3%
+   `sm__warps_active` figure was measured on the CTA arm at n = 96..155; since P7, float CTA
+   is advertised only to 77, so `Auto`, the vendor-free walk and a bare `native` pin cannot
+   reach the CTA kernel there at all. The right statement is the last paragraph of
+   [Footprint and the two caps](#footprint-and-the-two-caps).
+4. **"CTA retained for one release then deleted" is not available.** The CTA body is the
+   Tiny tier's correctness oracle (`TinyAgreesWithCtaWithinOnePanel`) and the `n <= 77`
+   winner. The deletion is struck; CTA stays in `kPotrfOrder` ahead of LPanel.
+5. **Open question 4 (Upper) is answerable by grep** and is answered above: refuse it.
+
+### The measured LPanel window
+
+**2026-09-14, integration.** `benchmarks/factor_bench` one process per cell, arms
+INTERLEAVED in the timed loop (`--arms=vendor,lpanel,cta,blocked`), 7 reps, medians,
+`gpu_guard.sh 1`, host residual on items 0 and batch-1 of every timed row. Raw CSVs:
+`benchmarks/results/p3_lpanel_ab.csv` (the grid),
+`benchmarks/results/p3_lpanel_edges.csv` (the brackets),
+`benchmarks/results/p3_auto_after_flip.csv` (the end-to-end check after the flip).
+Ratios are `vendor_ms / arm_ms` — **> 1 means the arm wins** — and every one is a TIME ratio.
+
+| | float | | | complex\<float\> | | |
+|---|---|---|---|---|---|---|
+| n / batch | lpanel | cta | blocked | lpanel | cta | blocked |
+| 33 / 8k-16k | 1.698 / 1.785 | **2.225 / 1.834** | 0.251 / 0.261 | **1.202 / 1.521** | 1.052 / 1.307 | 0.312 / 0.377 |
+| 36 / 8k-16k | 1.679 / **1.853** | **1.853** / 1.533 | — | **1.255 / 1.519** | 0.858 / 1.006 | — |
+| 40 / 8k-16k | **1.669 / 1.879** | 1.398 / 1.200 | — | **1.290 / 1.537** | 0.754 / 0.887 | — |
+| 44 / 8k-16k | **1.562 / 1.854** | 0.917 / 1.022 | — | **1.259 / 1.494** | 0.679 / 0.781 | — |
+| 48 / 8k-16k | **1.571 / 1.834** | 0.948 / 1.080 | 0.223 / 0.250 | **1.238 / 1.498** | 0.685 / 0.796 | 0.367 / 0.422 |
+| 64 / 8k-16k | **1.888 / 2.226** | 0.833 / 0.944 | 0.820 / 0.933 | **1.604 / 1.866** | (does not fit) | 0.537 / 0.585 |
+| 65 / 4k-8k | **1.542 / 1.758** | 1.081 / 1.208 | 0.412 / 0.426 | **1.292 / 1.611** | (does not fit) | 0.450 / 0.508 |
+| 96 / 4k-8k | **1.603 / 2.080** | — | 0.383 / 0.473 | **1.496 / 1.850** | — | 0.529 / 0.606 |
+| 128 / 4k-8k | **1.568 / 1.920** | — | 0.527 / 0.614 | **1.651 / 1.857** | — | 0.702 / 0.766 |
+| 129 / 2k-4k | **1.278 / 1.676** | — | 0.538 / 0.668 | **1.188 / 1.543** | — | 0.655 / 0.694 |
+| 192 / 2k-4k | **1.514 / 2.026** | — | 0.631 / 0.783 | **1.359 / 1.579** | — | 0.702 / 0.744 |
+| 256 / 2k-4k | **1.617 / 2.121** | — | 0.750 / 0.935 | **1.258 / 1.469** | — | 0.863 / 0.890 |
+| 384 / 0.5k-1k | *1.049* / 1.241 | — | 0.838 / 0.929 | (does not fit) | — | 0.797 / 0.919 |
+| 512 / 0.5k-1k | *1.079* / 1.322 | — | 1.040 / 1.177 | (does not fit) | — | 0.948 / 1.079 |
+
+**The window that ships: `32 < n <= 256`, `Uplo::Lower`, `float` and `complex<float>`.**
+`preferred()` answers for exactly one native tier there (`best_native_tier`, R8b), and the
+tier hook splits it: **CTA to n = 35, LPanel above** for float (the only two cells where CTA
+is ahead are n = 33 at both batches and n = 36 at the *smaller* batch), **LPanel from 33
+up** for cfloat, where CTA loses to the vendor at every order above 33.
+
+**Bracketing non-winners, both edges.**
+* Upper, float: **n = 384 at batch 512 is 1.049**, below the 1.11 gate, and n = 512 at batch
+  512 is 1.079 — also below. Both clear it at the doubled batch (1.241, 1.322), which is
+  exactly the R8a situation, so 257..512 is left with the vendor rather than gated on a
+  reading that only holds at one end of the ladder.
+* Upper, cfloat: the tier **does not reach** n = 384 — `slm_per_matrix(384, 8, 8) = 25,344 B`
+  against an `occupancy_budget(97280, 4)` of 24,320 — so `supports()` is false and the pin
+  silently measures the vendor (see the named cells below). The edge is a FIT, not a timing.
+* Lower: n = 32 is not a timing edge but a TIER edge. The Tiny tier (P1) is the measured
+  winner there (float 2.187 / 2.591 against LPanel's 2.053 / 2.314 at batch 16k / 32k), and
+  Tiny is itself unrouted, so `n <= 32` stays P1's decision, not P3's. The window's floor is
+  `order() > 32` for that reason, and not because native loses below it.
+
+**The kill/confirm probe P3's plan asked for, answered.** "Does the blocked driver lose at
+n <= 256 because of its leaf?" — **yes, and by a lot.** `blocked` is 0.22-0.94x of the
+vendor at every order from 33 to 256 in both types, and only reaches parity at n = 512
+(1.04-1.18x float). The premise holds, and the LPanel arm beats `blocked` at every measured
+order including 384 and 512.
+
+**Saturation: not reached, and the direction is up.** Every cell was read at two batches
+(the ladder value and its double) and every ratio RISES with batch, which is R8a's recorded
+"potrf's ratio has no fixed point in batch": the native arm is linear where cuSOLVER is
+superlinear. The window is therefore gated on the SMALLER of the two batches in every cell
+(minimum in-window ratio: float 1.278 at n = 129 batch 2048, cfloat 1.188 at the same cell),
+so it does not depend on the unsaturated tail.
+
+**Cells DISCARDED and named.** No cell was dropped for variance — the worst relative sd in
+the whole grid is 0.062 (cfloat n = 24, batch 16384) and the median is under 0.003. Eight
+cells are reported but **do not measure the tier they name**: the cfloat `lpanel` arm at
+n = 384 and n = 512, and the cfloat `cta` arm at n = 64 and n = 65 (the CTA ceiling for
+cfloat is 54), at both batches each. An unsupported pin falls through `supports()` into `automatic()`, so those
+`lpanel` rows are the VENDOR — visible both in the time (7.9958 vs 7.9839 ms) and in the
+residual column, which matches the vendor's 1.805e-07 rather than the native 9.730e-08.
+They are listed as "(does not fit)" above. A ratio of exactly 1.000 against the vendor
+is the signature to look for.
+
+**End-to-end after the flip**, `--arms=vendor,auto` through the facade, same guard, 7 reps:
+float n = 33 **1.87x**, n = 64 **2.23x**, n = 128 **1.92x**, n = 256 **2.13x**; cfloat n = 64
+**1.86x**, n = 256 **1.48x**; and the three cells that must NOT move — float n = 24, float
+n = 384, double n = 128 — came back within 0.1% of the vendor arm, which is the window's
+floor, ceiling and type gate observed rather than asserted. The n = 33 auto time (0.2642 ms)
+matches the `cta` arm (0.2668) and the n = 64 auto time (0.5251) matches `lpanel` (0.5286),
+so the tier hook picks the tier the grid chose.
+
+**What could NOT be established.**
+* **`NB = 16`, the plan's named float A/B, was not measured.** It is instantiated and
+  reachable through `nb_hint`, but `factor_bench` has no flag that reaches the parameter and
+  the route carries no `nb` — so the A/B needs either a harness flag or a `PotrfLpanelConst`
+  change. `NB = 8` is what ships.
+* **`double` and `complex<double>`: no grid.** Both are excluded from the window AND from the
+  tier hook, so their routes are bit-identical to pre-P3. R10 does not gate on them, but the
+  tier holds them (ceilings 368 and 180) and may well win; that is a measurement, not a
+  guess, and it has not been taken.
+* **No `ncu`, no register probe, no nsys attribution.** The `sm__warps_active >= 40%` gate in
+  P3's plan is unmeasured. The occupancy argument is arithmetic (`slm_per_matrix`), the win
+  is a timing, and nothing here says the win comes from occupancy rather than from the
+  single-launch schedule.
+* **The blocked driver's leaf is still CTA**, and `PotrfBlockedConst` was not re-tuned. The
+  grid says the leaf swap is worth trying (LPanel beats `blocked` everywhere measured), but
+  that changes numbers on a route that ships, so it wants its own A/B.
+* **`lpin` vs `lpout`** (per-panel relaunch with a shrinking work-group) was never built.
+
+### The pivot-cell WAR race
+
+**WP6/P3 integration, 2026-09-14. The kernel as first written returned WRONG ANSWERS at
+large batch, and the whole 11-test suite was green.** Found by adding one guard, diagnosed
+to a single missing barrier, fixed in one line.
+
+The symptom. At `batch >= 1024` (float `n = 128`) `factor_bench --arms=lpanel` reported
+residuals of 1e-04 against a bit-stable 1.3e-07 at `batch <= 512`, and the value *changed
+from run to run on identical input* — `fill_spd` is deterministic and gives every item the
+same matrix, so a varying residual is proof of nondeterminism, not of a hard bug. The CTA
+and Blocked arms were bit-stable at the same shapes, which is what ruled the harness out.
+
+The mechanism, and it is one line. In the panel factorisation every lane READS the pivot
+`sA[(j+i) + i*slda]` at the top of column `i`, and the lane that owns row `j+i` then
+OVERWRITES that same cell with `sqrt(d)` — with **no barrier between the read and the
+write**. It is a write-after-read hazard across warps: a warp that runs ahead publishes the
+root before a slower warp has read the pivot, and that whole warp then scales its rows by
+`1/sqrt(sqrt(d))`. The fix is `B3b`, one work-group barrier between the `d` read and the
+scale; with it, every shape measured is bit-stable again (`n` in {64, 128, 256, 384, 512} x
+`batch` in {1024, 2048, 4096, 8192, 16384}).
+
+The signature is worth remembering: **the first wrong row was always a multiple of 32**.
+Lanes are rows, so per-warp corruption means the *reader* was a warp, not a lane — which
+points at a shared cell read cross-warp, and away from anything per-lane (`rp`, `rA`, the
+lane's own global stores).
+
+Why it needed occupancy to appear at all. With a handful of resident work-groups the warps
+of one group run near lockstep and the hazard window never opens. The suite's residual sweep
+runs `batch <= 3`; `AgreesWithTheCtaKernel`, the poison test and both `info` tests run
+`batch <= 2` to 35. **Eleven tests, four types, and not one of them launched enough
+work-groups to skew two warps apart.** The new guard
+`PanelStoresArePublishedAtSaturatingBatch` runs `n = 128, batch = 1024` with every item the
+SAME matrix and demands every item come back BIT-IDENTICAL to item 0 — a cross-item oracle,
+deliberately against the sweep's "every item differs" rule, because with identical input a
+deterministic kernel has no licence to disagree with itself. `batch = 512` was measured NOT
+enough; 1024 is.
+
+### Armed breaks (R9) — LPanel
+
+Planted, built, observed and restored during integration. `src/extensions/potrf_lpanel_device.hh`
+and `potrf_lpanel.cc` were checked back to their intended state by md5 afterwards. Three of the
+seven predictions were WRONG, and each wrong one is a finding rather than an embarrassment.
+
+| # | the break | expected red | OBSERVED |
+|---|---|---|---|
+| 1 | delete `B6` (the barrier ending the panel loop) | `ResidualAcrossPanelBoundaries` at every n > NB | **GREEN — NOT ARMED.** Nothing red at `batch` 1024 (all 4 types, n to 512) nor at `batch` 4096/16384 through `factor_bench`. The store -> next-panel-staging dependency is real in the data flow, but the prefetch that precedes the staging read is 8 dependent global loads, and that latency apparently covers the window on this card. Kept on the data-flow argument alone; **no test can see it**. (A first observation of this break "red" was taken before the WAR fix below and was that race, not this one.) |
+| 2 | delete `B3` (between publishing `sA` and the panel factorisation) | `ResidualAcrossPanelBoundaries` | **RED**, 19 cases: `double` and `complex<double>` red in 8 tests each (residual sweep, CTA oracle, both `info` tests, padded-ld, packed batch, facade), `float`/`complex<float>` red only in the saturating-batch guard and cfloat's residual sweep. The scalar width decides how far apart the warps drift. |
+| 3 | drop `dev_conj` when staging `sB` | complex ONLY red, real green | **RED for complex exactly as predicted** — `complex<float>` and `complex<double>` red in 8 tests each, `float` and `double` green in every test except the saturating-batch guard, which was red for all four types because the WAR race below was still present. The complex/real asymmetry — the anti-vacuity half — held. |
+| 4 | prefetch guard `row >= j + i` -> `row >= j` | `OtherTriangleIsNeitherReadNorWritten` | **GREEN — the bound is defended THREE times.** Phase (3) re-applies `row >= j + i` when publishing and the store re-applies it again, so relaxing the prefetch alone changes no output. Only breaking all three (4b) reaches the caller. |
+| 4b | relax the prefetch, the publish AND the store guard | as 4 | **RED for all four types**, but only after the test was strengthened — see below. |
+| 5 | drop the `ok &&` from `const bool bad = ok && !(d > R(0))` | `info` names the LAST planted failure | **RED**, all four types, 3 tests each: `info = 93` where 1 was planted, `96` where 2 was planted, `96` where 8 was planted. |
+| 6 | delete the `case Algorithm::LPanel: return false;` arm from `native_tier_preferred` | `RouteTableIsInertUntilMeasured` (now `RouteWindowIsExactlyTheMeasuredOne`): the arm count becomes 2 | **RED**, all four types, and nothing else moved. The R8b guard works. |
+| 8 | `preferred()` returns `true` for every native arm in the window instead of only for `best_native_tier(s)` — the R8b defect, on the NEW window | `RouteWindowIsExactlyTheMeasuredOne`: `pref_hits` must be 1 | **RED**, float and cfloat: `pref_hits` = **3** at n = 33 and 64 (Tiny, CTA and LPanel all answer), 2 at n = 256. `automatic()` would have returned the Tiny tier for every shape in the window. |
+| 9 | *(not planted — SHIPPED, and caught by a test in another file)* the window composed `best_native_tier(s)` without asking whether the tier the GRID names actually holds on this device | — | **RED in `route_vocabulary_tests`**, 6 orders x 4 batches x `Uplo::Lower`: its synthetic `PotrfShape` leaves `lpanel_max_n = 0`, so at order 63..156 the walk fell back to CTA — which the grid measures at **0.53-0.94x of the vendor** at those orders. `preferred()` now also requires `best.algo` to be the tier measured for that order (CTA at or below the boundary, LPanel above), and the file needed no edit. |
+| 7 | give a dead packed slot `n = 0` instead of `store = false` | `PackedBatchIsIndependentAndTheTailSlotsAreInert` HANGS; expect a ctest timeout | **GREEN, AND THE BREAK WAS ALREADY IN THE TREE.** `potrf_lpanel.cc` shipped `..., Ag, ldg, live ? n : 0);  // BREAK7` — the dead slots were exiting before the first barrier, which is UB in SYCL and which the prediction said would hang. It does not hang: the slots are whole warps (`L` is a multiple of 32), and an exited warp is not counted by a CTA barrier on this hardware. Integration changed the call to pass `n` unconditionally, which is what both files' comments already claimed and what removes the UB; the cost is that at most `G-1` slots of ONE work-group in the grid do full work. |
+
+**The poison that the guard swallowed (the twelfth blind guard).**
+`OtherTriangleIsNeitherReadNorWritten` poisoned the upper triangle with a quiet NaN and
+checked `isnan` afterwards. That cannot see a WRITE: the value the kernel would store into
+the upper triangle is computed *from* the NaN it just read, so the corrupted output is NaN
+too and `isnan` passes. Break 4b was green under the original test and red only after the
+test was given a **second pass with a finite sentinel** (`-999 + 777i`) and a bit-equality
+check. The NaN pass still owns the "not read" half — a stray read makes the residual NaN —
+and the finite pass owns the "not written" half. Both halves are needed; neither alone is a
+guard. This is the same failure mode `spmm.md` records as "your poison must be something the
+code under test will ACCEPT".
+
+### LPanel: what integration measured, and what it could not
+
+**Correctness: measured and green.** 52 of 52 LPanel cases pass on CUDA (the other 48 are
+NETLIB rows that skip: it is a GPU kernel), `potrf_tests`, `potrf_tests_native`,
+`ortho_tests` and `resident_capacity_tests` all pass with the window in place.
+Bit-stability confirmed at `n` in {64, 128, 256, 384, 512} x `batch` to 16384, float and
+cfloat, after the `B3b` fix above.
+
+**Performance: measured, with the grid and its limits in
+[the measured LPanel window](#the-measured-lpanel-window).** The measurement window on GPU 1
+was itself interrupted: another user's process held the card at 100% for the first hour, and
+`gpu_guard.sh` refused rather than reporting numbers taken beside it. Everything taken during
+that hour was correctness-only on GPU 0 — residuals, bit-equality, `info` — and no time from
+that period is quoted anywhere. Every ratio above was taken after the card was exclusively
+ours, and `gpu_guard` confirmed "exclusive for the whole run" on each cell.
+
+## The fused posv tier
+
+`src/extensions/posv_tiny.cc`, one launch for `A X = B` with Hermitian
+positive-definite A at order `n <= 32` and `nrhs <= 4`: `potrf_tiny.cc`'s unblocked
+Cholesky recurrence verbatim, followed in the same kernel by both triangular solves
+with L still in registers. Zero local memory, zero barriers, every cross-lane value
+a sub-group shuffle, exactly as the tiny tier requires
+([the shared tiny-tier invariants](#the-shared-tiny-tier-invariants)).
+
+**It is not routed.** `route_posv.hh`'s `preferred()` is all-false and
+`native_tier_preferred` answers false for `Tiny`, so `Auto` takes the composed
+`potrf; trsm; trsm` arm. As with `gesv`, there is no batched vendor `posv` anywhere
+and no `potrs` op in this library, so `resolve_posv_route` passes
+`vendor_available=false` unconditionally — which means the tier hook is consulted on
+every call and answering `true` there would ship the tier. That is why it is false.
+
+### posv: the backward solve costs a transpose
+
+**The P2 plan text is wrong on this point, and the kernel does not follow it.** The
+plan says the backward solve needs no transpose trick "because every lane holds a
+full row". That does not follow. Lane `r` holds *row* `r` of L, so:
+
+* `L y = b` reads `L(r, i) = rA[i]` — the index is the loop counter, so it is
+  **local to the lane** and the forward solve is a cheap right-looking sweep whose
+  only cross-lane traffic is the pivot row's own values, `NR + 1` shuffles per step.
+* `L^H x = y` needs `L(i, r)` — **column** access, which no lane has. Lane `r` needs
+  an element that lives on lane `i`, at an offset that differs per lane, and
+  `tiny_device.hh`'s first invariant forbids the dynamic index into `rA[]` that a
+  direct shuffle would need.
+
+The kernel buys it with an explicit on-the-fly transpose: at step `i`, lane `i`
+broadcasts `rA[0..i-1]` and every lane keeps the one element where `c == lane`. That
+costs `N(N-1)/2` shuffles — 496 at N = 32 — which is the **same order as the
+factorization itself** (also `N(N-1)/2`), so the fused posv kernel is roughly twice
+a `potrf_tiny` before the RHS work is counted. It is, however, independent of
+`nrhs`, which the alternative is not.
+
+**The alternative, and why it was not taken.** The left-looking form needs
+`conj(L(j, i))` on lane `j` at compile-time index `i` — local — and a partition
+reduction over lanes `j > i`, i.e. a `log2(N)` butterfly per RHS column:
+`NR * N * log2(N)` shuffles, 160 at `N = 32, NR = 1` and 640 at `NR = 4`. It is
+cheaper at `NR <= 2` and dearer at `NR = 4`. **This is a named A/B for the
+measurement phase, not a settled choice**; the transpose form shipped because it is
+`nrhs`-independent and needs no new collective in `tiny_device.hh`.
+
+### P2: the window this tier expects
+
+**Nothing was measured for posv, and unlike `gesv` the bound cannot be computed from
+committed data either**: there is no `potrs` op and no `trsm`-composition baseline at
+these orders in `benchmarks/results/`, so `t_vendor_potrf + t_two_trsm` is not on
+record. What *is* on record is the tiny potrf tier's own standing against cuSOLVER
+([the tiny tier](#the-tiny-tier)), and the structural fact above that the fused
+kernel costs about 2x a `potrf_tiny`.
+
+Read together those two say the honest prior is: **a win where `potrf_tiny` wins by
+more than ~2x and the two `trsm` launches are a real share of the composition** —
+which is the small-`n`, large-batch corner, `n <= 16` — and a loss at `n = 32`. That
+is a hypothesis with no number behind it; it is written down so the grid that runs
+has something to falsify.
+
+The grid P2 owes: `n in {4, 8, 9, 16, 17, 24, 32}` x `nrhs in {1, 2, 4}` x batch
+`[4096..65536]` x 4 types, three arms interleaved — `posv` composed, `posv` tiny,
+and `potrf_tiny` alone as the floor — with a bracketing non-winner at whichever `n`
+the tier stops winning, per R8.
+
+### P2: the measured posv window
+
+**What shipped.** `route_posv.hh::tiny_window_max_n()` = 32 for every type except
+`std::complex<double>`, which stops at 16 because P1 instantiates no further (plan
+D3). As in `route_gesv.hh` the predicate lives in `native_tier_preferred`, not
+`preferred()`: `resolve_posv_route` always passes `vendor_available = false`, so the
+vendor-free walk (`supports && native_tier_preferred`, first hit wins) is the
+shipping path and the fit is resolved before the hook is asked. `preferred()` stays
+all-false, permanently, and `posv_tests.cc` asserts it.
+
+**The arms.** `posv` has no vendor entry either; its `Blocked` route is
+`potrf; trsm; trsm`, each leg routing independently. `run_solve_grid.sh` interleaves
+four arms in one process: `tiny`; `blocked` (legs under `Auto` — **the incumbent**);
+`vendor` (`potrf`=vendor, `trsm`=vendor); `native` (`potrf`=tiny, `trsm`=cta). The
+flip is gated on `tiny` vs `blocked`.
+
+#### posv float and cfloat — `t_blocked / t_tiny`, 7 reps, interleaved
+
+Raw: `benchmarks/results/p2_posv_float.csv`, `p2_posv_cfloat.csv`. `!` marks a cell
+re-run for `rel_sd` (see the table in `lu.md`); both re-runs agreed.
+
+| n | nrhs | float 8192 | float 16384 | float 32768 | cfloat 8192 | cfloat 16384 | cfloat 32768 |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 4 | 1 | 11.27 | 16.37 | 21.84 | 8.06 | 9.39 | 11.94 |
+| 4 | 4 | 9.61! | 11.56 | 15.14 | 5.85 | 6.87 | 7.54 |
+| 8 | 1 | 9.33 | 12.57 | 16.62 | 6.11 | 6.72 | 8.19 |
+| 8 | 4 | 7.34 | 8.44 | 11.10 | 4.20 | 4.18 | 4.24 |
+| 9 | 1 | 10.24 | 12.35 | 14.33 | 5.08 | 5.29 | 5.77 |
+| 9 | 4 | 7.73 | 8.56 | 9.52 | 2.99 | 3.00 | 3.14 |
+| 16 | 1 | 8.02 | 9.91 | 11.15 | 3.51 | 3.52 | 3.30 |
+| 16 | 4 | 6.13 | 6.52! | 6.90 | 2.06 | 1.87 | 1.99 |
+| 17 | 1 | 7.06 | 7.69 | 7.60 | 3.29 | 3.20 | 3.16 |
+| 17 | 4 | 5.63 | 5.53 | 5.26 | 1.87 | 1.93 | 2.17 |
+| 24 | 1 | 6.74 | 6.62 | 6.90 | 2.62 | 2.60 | 2.71 |
+| 24 | 4 | 5.10 | 4.52 | 4.76 | 1.55 | 1.72 | 1.92 |
+| 32 | 1 | 5.36 | 5.13 | 5.75 | 2.16 | 2.25 | 2.35 |
+| 32 | 4 | 3.76 | 3.77 | 4.14 | **1.29** | 1.52 | 1.69 |
+
+Every cell clears the 1.11 gate by a wide margin; the weakest, cfloat n = 32
+nrhs = 4 at 1.29, **rises** with batch (1.29 / 1.52 / 1.69) and reads 1.87 at
+131072 (`p2_posv_cfloat_bigbatch.csv`). Unlike `gesv`, posv has **no reversing cell
+anywhere on the ladder** — checked explicitly at batch 131072 for cfloat n = 4, 16
+and 32 (8.20, 2.17, 1.87).
+
+#### posv double and cdouble — routed, unlike gesv's
+
+Raw: `p2_posv_double.csv`, `p2_posv_cdouble.csv`, batches 16384 / 32768:
+
+| n | double nrhs=1 | double nrhs=4 | cdouble nrhs=1 | cdouble nrhs=4 |
+|---:|---:|---:|---:|---:|
+| 4 | 10.41 / 10.76 | 6.13 / 6.20 | 10.03 / 10.11 | 7.18 / 7.24 |
+| 8 | 8.03 / 8.19 | 4.05 / 4.05 | 6.18 / 6.21 | 4.22 / 4.20 |
+| 16 | 5.31 / 5.32 | 2.62 / 2.73 | 4.90 / 4.94 | 3.08 / 3.11 |
+| 32 | 3.69 / 3.70 | 2.12 / 2.12 | — (capped at 16) | — |
+
+R10 routes double where it wins, and it wins everywhere here, by 2.12x at worst.
+
+#### A SEPARATE DEFECT this grid exposed: posv's composed arm is mis-routed under Auto
+
+The `vendor` arm (`potrf`=vendor, `trsm`=vendor) is **2-5x faster than the same
+composition under `Auto`** at these orders. float, `nrhs = 1`, `t_blocked / t_vendor`:
+
+| n | 8192 | 16384 | 32768 |
+|---:|---:|---:|---:|
+| 4 | 1.82 | 2.66 | 3.61 |
+| 8 | 1.51 | 1.96 | 2.46 |
+| 9 | 2.95 | 3.63 | 4.58 |
+| 16 | 2.27 | 2.89 | 3.23 |
+| 17 | 4.45 | 5.17 | 5.56 |
+| 32 | 2.74 | 2.86 | 2.86 |
+
+**This is not a posv defect.** `posv`'s `Blocked` arm just calls `potrf` and `trsm`,
+so one or both of their `preferred()` windows is choosing a native tier that loses at
+n <= 32 and large batch. `trsm` is the first suspect: this composition is
+`Side::Left`, which `docs/perf/trsm.md` already records as the one side with a float
+cliff. The consequence for P2 is only that the fused tier's measured margin against
+the *incumbent* (above) is larger than its margin against the *best reachable*
+composition — so `posv`'s window is justified twice over against what ships, and by
+less against what `potrf`/`trsm` could route to. **Where the fused tier loses to the
+vendor-pinned composition — cfloat n >= 17 at `nrhs = 4`, double n = 4 and n = 32 at
+`nrhs = 4`, cdouble n >= 8 — it still beats the arm it actually replaces, so no
+routing decision here is wrong; the number to chase is `potrf`/`trsm` at n <= 32.**
+
+#### Route readback after the flip
+
+`benchmarks/results/p2_route_readback.txt`, dispatch coverage under `--arms=auto`:
+
+```
+posv   float    n=32  -> native:tiny      posv   float    n=33  -> native:blocked
+posv   cfloat   n=32  -> native:tiny      posv   double   n=32  -> native:tiny
+posv   cdouble  n=16  -> native:tiny      posv   cdouble  n=17  -> native:blocked
+```
+
+#### What P2's integration could NOT establish for posv
+
+- **No measured non-winner at the top edge.** posv's window ends where the tier's
+  instantiations end (32, or 16 for cdouble), so there is no reachable cell above it;
+  the bracket is `supports()` returning false, which the route test pins but no timer
+  can read. The one *measured* bracket P2 owns is `gesv` cfloat at n = 17.
+- **The `Uplo::Upper` grid was not timed.** The harness drives `Uplo::Lower` only.
+  Upper is correctness-tested at every order in `posv_tests.cc` (and the load
+  transform means it runs the same algorithm), but it has no timing row.
+- **The register probe was not run** — see the section below.
+- **`nrhs` 2 and 3 were not timed**, only 1 and 4.
+
+### P2: the register bound is assumed, not probed
+
+`posv_tiny.cc` carries `kWorstRegsPerThread = 256` in a `static_assert` against the
+per-block register file at `kTinyWgSize = 64`. It was **not measured**: it is
+`potrf_tiny`'s probed 176 plus room for the `2 * NR` scalars the two solves add.
+`scripts/register_probe.sh` must report frame 0 and spill 0 for every
+`PosvTinyKernel` instantiation before the tier is timed — a non-zero stack frame
+means an unrolled loop was declined and `rA[]` left the register file, which is a
+slowdown and never a wrong answer, so only the probe can see it. The same note, and
+the 44-instantiation R7 count for both P2 kernels, is in
+`docs/perf/lu.md#p2-the-register-bound-is-assumed-not-probed`.

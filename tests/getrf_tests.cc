@@ -1220,6 +1220,453 @@ TYPED_TEST(LuTest, BothPanelLeavesFactoriseCorrectly) {
     }
 }
 
+
+// ===========================================================================
+// P4. THE REGISTER-RESIDENT PANEL LEAF (getrf_panel_reg.cc).
+//
+// A drop-in for getrf_panel_factorize with the identical contract, so the oracle
+// that matters is THE OTHER LEAF: the interchange list is an integer sequence and
+// two implementations of the same pivot rule must produce it exactly. The factor
+// itself is compared only to a tolerance, because the two kernels are free to
+// contract a multiply-subtract differently.
+//
+// ARMED BREAKS for R9, each with the cell it must turn red (observe, restore):
+//  (a) drop `cand`'s `rowid >= j` in the argmax (getrf_panel_reg_device.hh step 1)
+//      -> an already-eliminated row wins; RegPanelAgreesWithTheLocalMemoryLeaf
+//      reports a differing ipiv, and the pivot-ratio oracle exceeds 1.
+//  (b) relabel with `rowid = p` for BOTH arms (step 2) -> two work-items claim the
+//      same logical row, the store drops one and duplicates another;
+//      RegPanelAgreesWithTheLocalMemoryLeaf's residual explodes.
+//  (c) publish the pivot row BEFORE the relabel (step 3) -- PREDICTED red, OBSERVED
+//      GREEN, and the prediction was the wrong one: the publisher is the same
+//      physical item in both orders and `act` is computed after the relabel either
+//      way, so moving the publish up is a no-op. The break with teeth is (c'):
+//      keep the publish after the relabel and select on the PRE-swap identity
+//      `rowid == p`, which publishes the row that was swapped down.
+//  (d) drop barrier B2 -> the scale reads an sx the publisher has not finished
+//      writing; same test. It is red from the SHORTEST two-sub-group panel
+//      (m = 33), not only the tall ones: any m > 32 puts publisher and reader in
+//      different sub-groups.
+//  (e) write `piv_item[j] = p + 1`, dropping piv_base -> RegPanelIpivAndInfoAre
+//      GlobalAtANonZeroPivBase turns red while every piv_base == 0 cell stays green.
+//  (f) initialise `info_local = 0` unconditionally instead of from *info_item ->
+//      RegPanelPlantedZeroColumnIsGlobalAndFirstFailureWins turns red on the
+//      SECOND planted column only.
+//  (g) store to `a[tid + k*ld]` instead of `a[rowid + k*ld]` (step 5) -> the lazy
+//      swap never lands; residual explodes at every cell that pivots at all.
+// ===========================================================================
+namespace {
+
+// An m x ncols PANEL: ld padded, stride NOT ld*ncols, both regions poisoned, so a
+// launcher that defaults either extent is falsifiable by construction.
+template <typename T>
+struct Panel {
+    int m = 0, ncols = 0, batch = 0, ld = 0, stride = 0, piv_stride = 0, piv_base = 0;
+    UnifiedVector<T> buf;
+    std::vector<T> a0;
+    UnifiedVector<int> piv;
+    UnifiedVector<int32_t> info;
+
+    const int* piv_of(int b) const {
+        return piv.data() + size_t(b) * piv_stride + piv_base;
+    }
+    T* fac_of(int b) { return buf.data() + size_t(b) * stride; }
+    const T* src_of(int b) const { return a0.data() + size_t(b) * stride; }
+};
+
+template <typename T>
+Panel<T> make_panel(int m, int ncols, int batch, unsigned seed, int piv_base = 0) {
+    Panel<T> p;
+    p.m = m; p.ncols = ncols; p.batch = batch;
+    p.ld = m + 3;
+    p.stride = p.ld * ncols + 7;
+    p.piv_base = piv_base;
+    p.piv_stride = piv_base + ncols + 4;
+    p.buf = UnifiedVector<T>(size_t(p.stride) * batch, mk<T>(-9.75e3, 4.5e3));
+    Rng rg(seed);
+    for (int b = 0; b < batch; ++b)
+        for (int j = 0; j < ncols; ++j)
+            for (int i = 0; i < m; ++i)
+                p.buf[size_t(b) * p.stride + size_t(j) * p.ld + i] = mk<T>(rg.next(), rg.next());
+    p.a0.assign(p.buf.begin(), p.buf.end());
+    p.piv = UnifiedVector<int>(size_t(p.piv_stride) * batch, -12345);
+    p.info = UnifiedVector<int32_t>(size_t(batch), 0);
+    return p;
+}
+
+template <typename T>
+void repanel(Panel<T>& p) {
+    std::copy(p.a0.begin(), p.a0.end(), p.buf.begin());
+    std::fill(p.piv.begin(), p.piv.end(), -12345);
+    std::fill(p.info.begin(), p.info.end(), int32_t(0));
+}
+
+// The interchange list with piv_base removed, which is what pa_lu_residual's P wants.
+std::vector<int> panel_local_piv(const int* ip, int k, int piv_base) {
+    std::vector<int> v(static_cast<std::size_t>(k), 0);
+    for (int s = 0; s < k; ++s) v[size_t(s)] = ip[s] - piv_base;
+    return v;
+}
+
+}  // namespace
+
+// P4a. THE TRANSITION ORACLE. Both leaves, same input, same ipiv EXACTLY.
+TYPED_TEST(LuTest, RegPanelAgreesWithTheLocalMemoryLeaf) {
+    using T = typename TestFixture::T;
+    const int max_wg =
+        int(this->ctx->device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
+    const int nbw = sycl_getrf::getrf_panel_reg_nb<T>();
+    ASSERT_GE(nbw, 1) << "the register panel reports no width for this type, so nothing "
+                         "below can run and this test would pass vacuously";
+
+    int ran = 0;
+    for (int m : {33, 48, 64, 65, 96, 128, 129, 192, 256, 257, 288, 384, 512}) {
+        for (int ncols : {1, 8, 31, 32}) {
+            if (ncols > m) continue;
+            if (!sycl_getrf::getrf_panel_reg_fits<T>(m, ncols, max_wg)) continue;
+
+            const int batch = 3, k = std::min(m, ncols);
+            auto p = make_panel<T>(m, ncols, batch, 7717u + unsigned(m * 37 + ncols));
+
+            // Arm 1: the register leaf.
+            ASSERT_NO_THROW(sycl_getrf::getrf_panel_reg_factorize<T>(
+                *this->ctx, p.buf.data(), p.ld, p.stride, m, ncols, batch,
+                p.piv.data(), p.piv_stride, p.piv_base, p.info.data()))
+                << "m=" << m << " ncols=" << ncols;
+            this->ctx->wait();
+            std::vector<T> reg_fac(p.buf.begin(), p.buf.end());
+            std::vector<int> reg_piv(p.piv.begin(), p.piv.end());
+            std::vector<int32_t> reg_info(p.info.begin(), p.info.end());
+
+            // Arm 2: today's leaf, on the SAME pristine input.
+            repanel(p);
+            bool resident = false;
+            ASSERT_NO_THROW(sycl_getrf::getrf_panel_factorize<T>(
+                *this->ctx, p.buf.data(), p.ld, p.stride, m, ncols, batch,
+                p.piv.data(), p.piv_stride, p.piv_base, p.info.data(), &resident));
+            this->ctx->wait();
+
+            const char* what = resident ? "register vs resident" : "register vs global";
+            std::size_t bad_slot = reg_piv.size();
+            for (std::size_t i = 0; i < reg_piv.size(); ++i)
+                if (reg_piv[i] != p.piv[i]) { bad_slot = i; break; }
+            EXPECT_EQ(bad_slot, reg_piv.size())
+                << what << " at m=" << m << " ncols=" << ncols << ": the two leaves chose "
+                   "DIFFERENT pivots (first at slot " << bad_slot << ": register "
+                << reg_piv[std::min(bad_slot, reg_piv.size() - 1)] << " vs local-memory "
+                << p.piv[std::min(bad_slot, reg_piv.size() - 1)]
+                << "), so they do not implement the same cabs1 partial-pivoting rule";
+            EXPECT_EQ(reg_info, std::vector<int32_t>(p.info.begin(), p.info.end()))
+                << what << " at m=" << m << " ncols=" << ncols;
+
+            // BOTH ENDS OF THE BATCH: item 0 sits at offset 0, so a wrong batch
+            // stride cannot move it.
+            for (int b : {0, batch - 1}) {
+                const auto ip = panel_local_piv(reg_piv.data() + size_t(b) * p.piv_stride + p.piv_base,
+                                          k, p.piv_base);
+                for (int s = 0; s < k; ++s)
+                    ASSERT_TRUE(ip[size_t(s)] >= s + 1 && ip[size_t(s)] <= m)
+                        << what << " m=" << m << " ncols=" << ncols << " b=" << b
+                        << ": ipiv[" << s << "] = " << ip[size_t(s)]
+                        << " is outside [s+1, m] -- not a 1-based interchange list";
+                EXPECT_LE(pa_lu_residual<T>(p.src_of(b), reg_fac.data() + size_t(b) * p.stride,
+                                            ip.data(), m, ncols, p.ld),
+                          lu_tol<T>(std::max(m, ncols)))
+                    << "register leaf m=" << m << " ncols=" << ncols << " b=" << b;
+                EXPECT_LE(worst_pivot_ratio<T>(reg_fac.data() + size_t(b) * p.stride,
+                                               m, ncols, p.ld),
+                          1.0 + 32.0 * eps_of<T>())
+                    << "register leaf m=" << m << " ncols=" << ncols << " b=" << b
+                    << ": a row with a LARGER cabs1 than the chosen pivot was left below it";
+            }
+
+            // The two items must DIFFER, or "the kernel broadcast item 0" passes.
+            bool differ = false;
+            for (int j = 0; j < ncols && !differ; ++j)
+                for (int i = 0; i < m; ++i)
+                    if (habs(up(reg_fac[size_t(0) * p.stride + size_t(j) * p.ld + i]) -
+                             up(reg_fac[size_t(batch - 1) * p.stride + size_t(j) * p.ld + i])) >
+                        0.0) { differ = true; break; }
+            EXPECT_TRUE(differ) << "m=" << m << " ncols=" << ncols
+                                << ": items 0 and " << batch - 1 << " are identical, so this "
+                                   "cell cannot see a batch-stride defect";
+            ++ran;
+            if (this->HasFailure()) return;
+        }
+    }
+    ASSERT_GT(ran, 6) << "only " << ran << " panel shapes were eligible; the ladder is not "
+                         "exercising the register leaf";
+}
+
+// P4b. THE PIVOT CROSSES THE SUB-GROUP BOUNDARY AND THE PANEL'S LOWER HALF. The
+// winner for column 3 is planted at row 200, which no single sub-group's butterfly
+// can see: it is found only if the cross-sub-group slot scan runs.
+TYPED_TEST(LuTest, RegPanelPivotCrossesTheSubGroupBoundary) {
+    using T = typename TestFixture::T;
+    const int max_wg =
+        int(this->ctx->device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
+    const int m = 256, ncols = 32, batch = 2, col = 3, row = 200;
+    if (!sycl_getrf::getrf_panel_reg_fits<T>(m, ncols, max_wg))
+        GTEST_SKIP() << "a " << m << "x" << ncols << " panel is outside this type's "
+                     << "register leaf, so this shape cannot be built";
+    ASSERT_GE(row / 32, 6) << "the planted winner is inside the FIRST sub-group, so a kernel "
+                              "with no cross-sub-group scan would pass this test";
+
+    auto p = make_panel<T>(m, ncols, batch, 30313u);
+    // Every entry of column `col` at or below `col` is small; one row is large. The
+    // columns to the LEFT are untouched, so rows 0..col-1 are eliminated normally.
+    for (int b = 0; b < batch; ++b)
+        for (int i = col; i < m; ++i)
+            p.a0[size_t(b) * p.stride + size_t(col) * p.ld + i] = mk<T>(1.0 / 1024.0, 0.0);
+    for (int b = 0; b < batch; ++b)
+        p.a0[size_t(b) * p.stride + size_t(col) * p.ld + row] = mk<T>(64.0, -64.0);
+    repanel(p);
+
+    ASSERT_NO_THROW(sycl_getrf::getrf_panel_reg_factorize<T>(
+        *this->ctx, p.buf.data(), p.ld, p.stride, m, ncols, batch,
+        p.piv.data(), p.piv_stride, p.piv_base, p.info.data()));
+    this->ctx->wait();
+
+    for (int b = 0; b < batch; ++b) {
+        const int* ip = p.piv_of(b);
+        EXPECT_EQ(ip[col], row + 1)
+            << "b=" << b << ": column " << col << " did not pivot to row " << row
+            << " (got " << ip[col] << "). The winner is " << (row / 32)
+            << " sub-groups down the work-group, so a butterfly-only argmax cannot find it";
+        const auto lp = panel_local_piv(ip, ncols, p.piv_base);
+        EXPECT_LE(pa_lu_residual<T>(p.src_of(b), p.fac_of(b), lp.data(), m, ncols, p.ld),
+                  lu_tol<T>(m)) << "b=" << b;
+    }
+}
+
+// P4c. ipiv AND info ARE GLOBAL AT A NON-ZERO piv_base. Dropping the offset is
+// invisible to every piv_base == 0 cell, and the blocked driver runs exactly one
+// such panel (the first) out of n/nb.
+TYPED_TEST(LuTest, RegPanelIpivAndInfoAreGlobalAtANonZeroPivBase) {
+    using T = typename TestFixture::T;
+    const int max_wg =
+        int(this->ctx->device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
+    const int m = 96, ncols = 32, batch = 3, base = 64;
+    if (!sycl_getrf::getrf_panel_reg_fits<T>(m, ncols, max_wg)) GTEST_SKIP() << "not eligible";
+
+    auto p0 = make_panel<T>(m, ncols, batch, 5107u, /*piv_base=*/0);
+    auto pb = make_panel<T>(m, ncols, batch, 5107u, /*piv_base=*/base);
+    ASSERT_EQ(p0.stride, pb.stride);
+    ASSERT_EQ(p0.a0, pb.a0) << "the two panels must hold the SAME matrix, or the offset "
+                               "comparison below is between two different factorisations";
+
+    for (Panel<T>* p : {&p0, &pb}) {
+        ASSERT_NO_THROW(sycl_getrf::getrf_panel_reg_factorize<T>(
+            *this->ctx, p->buf.data(), p->ld, p->stride, m, ncols, batch,
+            p->piv.data(), p->piv_stride, p->piv_base, p->info.data()));
+        this->ctx->wait();
+    }
+
+    for (int b = 0; b < batch; ++b) {
+        const int* i0 = p0.piv_of(b);
+        const int* ib = pb.piv_of(b);
+        for (int s = 0; s < ncols; ++s)
+            ASSERT_EQ(ib[s], i0[s] + base)
+                << "b=" << b << " s=" << s
+                << ": ipiv at piv_base=" << base << " is not the piv_base=0 list shifted by "
+                   "the base, so the panel's rows are not being reported globally";
+        // The slots BELOW piv_base and ABOVE the panel must be untouched.
+        for (int s = 0; s < base; ++s)
+            ASSERT_EQ(pb.piv[size_t(b) * pb.piv_stride + s], -12345)
+                << "b=" << b << ": the panel wrote ipiv slot " << s << ", left of its base";
+        for (int s = base + ncols; s < pb.piv_stride; ++s)
+            ASSERT_EQ(pb.piv[size_t(b) * pb.piv_stride + s], -12345)
+                << "b=" << b << ": the panel wrote ipiv slot " << s << ", right of its width";
+    }
+}
+
+// P4d. A PLANTED ZERO COLUMN: info is EXACT-ZERO, 1-BASED, GLOBAL, per item and
+// FIRST-FAILURE-WINS ACROSS CALLS -- the leaf READS info, which is what lets the
+// blocked driver report the first failure over all its panels.
+TYPED_TEST(LuTest, RegPanelPlantedZeroColumnIsGlobalAndFirstFailureWins) {
+    using T = typename TestFixture::T;
+    const int max_wg =
+        int(this->ctx->device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
+    const int m = 128, ncols = 32, batch = 3, base = 32, c1 = 5, c2 = 19;
+    if (!sycl_getrf::getrf_panel_reg_fits<T>(m, ncols, max_wg)) GTEST_SKIP() << "not eligible";
+
+    auto p = make_panel<T>(m, ncols, batch, 9041u, base);
+    const int bad = 2;   // NOT item 0: a wrong batch stride cannot move item 0
+    for (int j : {c1, c2})
+        for (int i = 0; i < m; ++i)
+            p.a0[size_t(bad) * p.stride + size_t(j) * p.ld + i] = mk<T>(0.0, 0.0);
+    repanel(p);
+
+    ASSERT_NO_THROW(sycl_getrf::getrf_panel_reg_factorize<T>(
+        *this->ctx, p.buf.data(), p.ld, p.stride, m, ncols, batch,
+        p.piv.data(), p.piv_stride, p.piv_base, p.info.data()));
+    this->ctx->wait();
+
+    for (int b = 0; b < batch; ++b) {
+        EXPECT_EQ(p.info[b], (b == bad) ? (base + c1 + 1) : 0)
+            << "b=" << b << ": info must be the GLOBAL 1-based column of the FIRST zero "
+               "pivot (planted at panel columns " << c1 << " and " << c2
+            << ", piv_base=" << base << ")";
+        const T* F = p.fac_of(b);
+        for (int j = 0; j < ncols; ++j)
+            for (int i = 0; i < m; ++i)
+                ASSERT_TRUE(hfinite(up(F[size_t(j) * p.ld + i])))
+                    << "b=" << b << " left F(" << i << "," << j << ") non-finite; a failed "
+                       "item must stay finite, as LAPACK's and cuBLAS's do";
+    }
+
+    // FIRST-FAILURE-WINS ACROSS CALLS: a pre-set info must survive, because the
+    // blocked driver's later panels must not overwrite an earlier panel's column.
+    repanel(p);
+    for (int b = 0; b < batch; ++b) p.info[b] = int32_t(7);
+    ASSERT_NO_THROW(sycl_getrf::getrf_panel_reg_factorize<T>(
+        *this->ctx, p.buf.data(), p.ld, p.stride, m, ncols, batch,
+        p.piv.data(), p.piv_stride, p.piv_base, p.info.data()));
+    this->ctx->wait();
+    for (int b = 0; b < batch; ++b)
+        EXPECT_EQ(p.info[b], int32_t(7))
+            << "b=" << b << ": the leaf overwrote a non-zero info, so first-failure-wins "
+               "does not hold across the blocked driver's panels";
+}
+
+// P4e. THE CAPACITY HAS ONE SPELLING. getrf_panel_reg_fits, the debug hook and the
+// entry point's refusal must be the same predicate, and the sweep must contain
+// cells on BOTH sides or it is a tautology over a function that never refuses.
+TYPED_TEST(LuTest, RegPanelCapacityIsOneSpelling) {
+    using T = typename TestFixture::T;
+    const int max_wg =
+        int(this->ctx->device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
+    const int cap = sycl_getrf::getrf_panel_reg_max_m<T>();
+    const int nbw = sycl_getrf::getrf_panel_reg_nb<T>();
+    ASSERT_GT(cap, 32) << "the register panel must at least cover one nb = 32 block's height";
+    ASSERT_EQ(nbw, 32) << "the panel width moved; every ladder above names 32";
+
+    int accepted = 0, refused = 0;
+    for (int m : {1, 8, 32, 33, 64, 128, 256, 288, 320, 384, 512, cap, cap + 1, cap + 32,
+                  2 * cap}) {
+        for (int n : {0, 1, 32, nbw + 1}) {
+            const bool fits = sycl_getrf::getrf_panel_reg_fits<T>(m, n, max_wg);
+            EXPECT_EQ(fits, sycl_getrf::getrf_panel_reg_debug_launch<T>(*this->ctx, m, n) != 0u)
+                << "m=" << m << " n=" << n
+                << ": getrf_panel_reg_fits and the debug hook disagree, so a caller that asks "
+                   "one of them can be handed a panel the launcher refuses";
+            if (fits) ++accepted; else ++refused;
+        }
+    }
+    EXPECT_GT(accepted, 0);
+    EXPECT_GT(refused, 0) << "no cell in the sweep was refused, so the agreement above is a "
+                             "tautology";
+
+    // And the entry point refuses exactly what the predicate refuses.
+    UnifiedVector<T> buf(size_t(64) * 8, mk<T>(1.0, 0.0));
+    UnifiedVector<int> piv(size_t(64) * 1, -1);
+    UnifiedVector<int32_t> info(size_t(1), 0);
+    auto call = [&](int m, int n) {
+        sycl_getrf::getrf_panel_reg_factorize<T>(*this->ctx, buf.data(), 64, 64 * 8,
+                                                 m, n, 1, piv.data(), 64, 0, info.data());
+    };
+    EXPECT_THROW(call(8, nbw + 1), batchlas::unsupported)
+        << "a panel WIDER than the compile-time NB was accepted; it would be factorised as a "
+           "leading submatrix and the trailing columns silently left alone";
+    EXPECT_THROW(call(cap + 32, 8), batchlas::unsupported)
+        << "a panel taller than the register cap was accepted; the launch would exceed this "
+           "type's per-sub-partition register ceiling and abort";
+    EXPECT_THROW(call(0, 8), batchlas::invalid_argument);
+
+    // AND THE CAP IS LAUNCHABLE. The agreement sweep above compares one arithmetic
+    // spelling with another and cannot see a cap that the DRIVER refuses; the first
+    // cap this file shipped accepted a 288-lane cdouble panel that aborts with
+    // CUDA_ERROR_LAUNCH_OUT_OF_RESOURCES, because regs x work-group <= 65,536 is not
+    // the gate -- registers are owned per sub-partition.
+    // evidence: docs/perf/lu.md#the-register-panel-leaf-register-probe
+    UnifiedVector<T> tall(std::size_t(cap + 3) * 32, mk<T>(1.0, 0.0));
+    UnifiedVector<int> tall_piv(std::size_t(cap + 32), -1);
+    UnifiedVector<int32_t> tall_info(std::size_t(1), 0);
+    for (int i = 0; i < 32; ++i) tall[std::size_t(i) * (cap + 3) + i] = mk<T>(2.0, 0.5);
+    ASSERT_TRUE(sycl_getrf::getrf_panel_reg_fits<T>(cap, 32, max_wg))
+        << "the advertised cap is not accepted by the predicate, so the launch below "
+           "would be vacuous";
+    EXPECT_NO_THROW({
+        sycl_getrf::getrf_panel_reg_factorize<T>(
+            *this->ctx, tall.data(), cap + 3, (cap + 3) * 32, cap, 32, 1,
+            tall_piv.data(), cap + 32, 0, tall_info.data());
+        this->ctx->wait();
+    }) << "the panel at the ADVERTISED cap m=" << cap << " (work-group " << cap
+       << ") does not launch, so getrf_panel_reg_max_m advertises capacity the device "
+          "refuses";
+}
+
+// P4f. THE BLOCKED DRIVER TAKES THE REGISTER LEAF UNDER THE KNOB AND PRODUCES THE
+// SAME INTERCHANGE LIST. The knob is the only way a benchmark can A/B the two, so
+// a knob that resolves to the same arm in both passes is the failure mode here.
+TYPED_TEST(LuTest, BlockedDriverTakesTheRegisterLeafUnderTheKnob) {
+    using T = typename TestFixture::T;
+
+    int saw_reg = 0;
+    for (int n : {33, 64, 65, 96, 128, 129, 192, 256, 257, 384, 512}) {
+        std::vector<int> pivs[2];
+        std::vector<T> facs[2];
+        for (int arm = 0; arm < 2; ++arm) {
+            // The guard, never a bare ::setenv: settings() snapshots the environment
+            // once, so an unguarded write leaves both arms reading the SAME value.
+            const ScopedEnvVar pin("BATCHLAS_GETRF_LEAF", arm ? "reg" : "slm");
+            const unsigned kind = sycl_getrf::getrf_blocked_debug_leaf<T>(*this->ctx, n);
+            ASSERT_GE(kind, 1u) << "n=" << n << ": the driver reports no leaf at all";
+            if (arm == 0) {
+                ASSERT_NE(kind, 3u) << "n=" << n << ": the DEFAULT arm resolved to the register "
+                                       "leaf, so the comparison below is one arm against itself";
+            } else if (kind == 3u) {
+                ++saw_reg;
+            }
+
+            auto p = make_random<T>(n, 3, 2281u + unsigned(n));
+            this->run_blocked(p);
+            check_factor(p, arm ? "blocked(leaf=reg)" : "blocked(leaf=slm)");
+            for (int b = 0; b < p.batch; ++b)
+                ASSERT_EQ(p.info[b], 0) << "n=" << n << " arm=" << arm << " b=" << b;
+
+            for (int b = 0; b < p.batch; ++b) {
+                const int* ip = piv_item(p, b);
+                pivs[arm].insert(pivs[arm].end(), ip, ip + p.n);
+            }
+            facs[arm].assign(p.buf.data(), p.buf.data() + p.buf.size());
+            if (this->HasFailure()) return;   // pin's destructor restores and reloads
+        }
+        EXPECT_EQ(pivs[1], pivs[0])
+            << "n=" << n << ": the register leaf produced a different interchange list from "
+               "the local-memory leaf, so the two are not the same pivot rule";
+        ASSERT_EQ(facs[1].size(), facs[0].size());
+        double worst = 0.0, scale = 0.0;
+        for (std::size_t i = 0; i < facs[0].size(); ++i) {
+            worst = std::max(worst, habs(up(facs[1][i]) - up(facs[0][i])));
+            scale = std::max(scale, habs(up(facs[0][i])));
+        }
+        // RELATIVE, and generous: the two kernels run the same operations in the same
+        // order, so the only legitimate difference is a contracted multiply-subtract.
+        EXPECT_LE(worst, 1000.0 * double(n) * eps_of<T>() * std::max(scale, 1.0))
+            << "n=" << n << ": the two leaves' factors differ by " << worst
+            << " at the worst element (scale " << scale
+            << ") -- far past a contraction difference";
+        if (this->HasFailure()) return;
+    }
+    ASSERT_GT(saw_reg, 4) << "the register leaf was taken at only " << saw_reg
+                          << " of the orders above, so this test mostly compared the "
+                             "local-memory leaf with itself";
+
+    // AND THE DEFAULT IS THE REGISTER LEAF. Every P4 ratio on the page was measured
+    // against a driver that takes it with the variable UNSET, so a silent revert of
+    // the default would leave the window in route_getrf.hh scored against an arm
+    // nothing runs. evidence: docs/perf/lu.md#the-register-leaf-ab
+    {
+        const ScopedEnvVar unset("BATCHLAS_GETRF_LEAF", nullptr);
+        for (int n : {64, 128, 256}) {
+            EXPECT_EQ(sycl_getrf::getrf_blocked_debug_leaf<T>(*this->ctx, n), 3u)
+                << "n=" << n << ": with BATCHLAS_GETRF_LEAF unset the blocked driver did "
+                   "NOT take the register leaf";
+        }
+    }
+}
+
 // L5. A SINGULAR MATRIX: `info` is EXACT-ZERO, 1-BASED, GLOBAL, per item and
 // FIRST-FAILURE-WINS, with the other batch items unaffected and the failed item
 // still FINITE (?GETF2 records the failure and SKIPS the reciprocal scale). The
@@ -1964,7 +2411,8 @@ TYPED_TEST(LuTest, RouteTableAndTheVendorFreeFallback) {
     }
 
     // THE SHIPPED WINDOWS, met here at BATCH 2; neither carries a batch term.
-    //   getrf: native:blocked for float at order >= 256, cfloat at >= 512.
+    //   getrf: native:blocked for float at order >= 256; cfloat at >= 512, or
+    //          >= 256 when batch >= 256 (P4).
     //   getri: native:blocked for float at order >= 128, cfloat at >= 256.
     //   double and cdouble earn no window in either op, at any order.
     // evidence: docs/perf/lu.md#getrf-window-evidence
@@ -1981,6 +2429,39 @@ TYPED_TEST(LuTest, RouteTableAndTheVendorFreeFallback) {
             << ", below every measured boundary";
         EXPECT_TRUE(dispatch::is_vendor(
             backend::getri_route<B, T>(*this->ctx, Vs, /*vendor_available=*/true)));
+
+        // THE CFLOAT EDGE P4 MOVED, on BOTH of its axes: n=256 at batch 256 is in;
+        // the same order at batch 2 is out, because 256..511 LOSES at small batch; and
+        // n=192 is out at any batch. Asserting only n=512 cannot fail when the floor
+        // slides back to 512, and asserting only the order cannot fail when the batch
+        // term is dropped. evidence: docs/perf/lu.md#the-cfloat-window-moves-to-256
+        {
+            auto in_band   = make_dominant_permuted<T>(256, 256, 9501u);
+            auto small_bat = make_dominant_permuted<T>(256, 2, 9502u);
+            auto out_band  = make_dominant_permuted<T>(192, 256, 9503u);
+            auto Vin  = view_of(in_band);
+            auto Vsb  = view_of(small_bat);
+            auto Vout = view_of(out_band);
+            const auto r_in  = backend::getrf_route<B, T>(*this->ctx, Vin, true);
+            const auto r_sb  = backend::getrf_route<B, T>(*this->ctx, Vsb, true);
+            const auto r_out = backend::getrf_route<B, T>(*this->ctx, Vout, true);
+            if constexpr (kCF) {
+                EXPECT_TRUE(dispatch::is_native(r_in) &&
+                            r_in.algo == dispatch::Algorithm::Blocked)
+                    << "cfloat n=256 batch=256 is inside the window P4 measured "
+                       "(1.285 there, 1.146-1.295 at the saturating rungs)";
+                EXPECT_TRUE(dispatch::is_vendor(r_sb))
+                    << "cfloat n=256 batch=2 is OUTSIDE it: the 256..511 band reads 0.92 "
+                       "at batch 128 and the clause carries a batch >= 256 term";
+            } else if constexpr (!kF) {
+                EXPECT_TRUE(dispatch::is_vendor(r_in))
+                    << "only float and cfloat earned a getrf window";
+            }
+            if constexpr (!kF) {
+                EXPECT_TRUE(dispatch::is_vendor(r_out))
+                    << "n=192 is the bracketing NON-winner below the cfloat floor";
+            }
+        }
 
         // Vl is n = 512: inside both windows for float and cfloat, outside for the doubles.
         const auto rf512 = backend::getrf_route<B, T>(*this->ctx, Vl, true);

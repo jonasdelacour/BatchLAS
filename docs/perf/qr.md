@@ -313,7 +313,11 @@ how much of that the integration-level test can actually see.
 
 ### What 96x96 resolves to, per type
 
-96 is simultaneously **double's floor**, **float's last CTA order** and **below cdouble's
+96 was double's floor when this section was written; P5 moved it to 76
+([the double order floor moves to 76](#the-double-order-floor-moves-to-76)), so 96 is now
+INSIDE double's window rather than on its edge, and every claim below about 96 being the
+first double order still holds as a claim about a routed order.
+96 is simultaneously **inside double's window**, **float's last CTA order** and **below cdouble's
 floor**, which is why it is the probe shape in `tests/geqrf_tests.cc` G9 and in the pure-layer
 route tests. `preferred()` carries a PER-TYPE order floor, so the vendor-present answer at
 96x96 is a per-type fact and **not a blanket "vendor"**. Ratios are native-over-vendor from
@@ -461,8 +465,12 @@ loss:
 |---|---|---|---|
 | `float` | 64 | 1.71 | 48: 1.02   33: 0.76 |
 | `cfloat` | 48 | 1.74 | 33: 0.69   32: 0.62 |
-| `double` | 96 | 1.16 | 65: 0.66   64: 0.58 |
+| `double` | **76** (was 96) | 1.26 | 72: 1.11   64: 1.01 |
 | `cdouble` | 256 | 1.50 | 192: 1.06   129: 0.58 |
+
+The `double` row is P5's, re-measured with the register panel leaf in the blocked arm and
+with its own brackets; the other three are P0's and are unchanged.
+[The double order floor moves to 76](#the-double-order-floor-moves-to-76) carries that grid.
 
 **float n = 48 (1.02) and cdouble n = 192 (1.06) are inside the gate's dead band and are
 deliberately excluded**: both are single cells that do not clear 1.11, and a window edge without
@@ -1157,3 +1165,316 @@ the device through `resident::device_slm_budget`.
 probed table a function of the launch shape rather than of the kernel body. Only
 `reqd_sub_group_size(32)` is declared. That is what licenses the same-register-counts
 column of [the launch shape](#the-launch-shape-64-work-items-not-128).
+
+## The register panel leaf (WP6 / P5)
+
+`geqr2_panel_reg_device<D, N>` (`src/extensions/geqrf_panel_reg_device.hh`) is a third panel
+leaf beside the resident and global ones in `geqrf_panel_factorize`: **one panel row per
+work-item**, `rA[N]` holding the whole `m x N` panel in registers between one coalesced load
+and one store, work-group = `roundup(m, 32)`, three work-group barriers per column. It is the
+P5 "fused QR panel" reduced to the half the survey found value in.
+
+### What landed and what did not
+
+| P5 component | state |
+|---|---|
+| `GeqrfPanelRegKernel<T, N>`, the register panel leaf | LANDED, `double` only |
+| the leaf reachable from `geqrf_panel_factorize` and from the blocked driver | LANDED, by explicit request only |
+| `LarfApplyRegKernel` (the fused apply), `geqrf_fused_driver`, `orgqr_fused`, `ormqr_fused` | NOT BUILT — see below |
+| `Algorithm::Fused`, `route_geqrf.hh` **order** change | NOT MADE |
+| `preferred()`'s `double` order floor | **MOVED 96 -> 76** on the integration grid, see below |
+| `Auto` resolving to the register leaf | **FLIPPED**, inside a measured height window |
+| the `larft` replacement | NOT MADE (Open debt 5 stands) |
+
+The fused apply was dropped on a reading of the tree, not on a measurement. `geqrf_blocked.cc`
+breaks out of its panel loop at `n2 <= 0`, and `nb` is 32 for float/cfloat/cdouble, so an
+`m x 32` panel of those types runs **one** `geqrf_panel_factorize` launch and exits — no
+`pack_v`, no `larft`, no trailing GEMM. P5's tall-panel targets (`float 128x32`, `float
+512x32`, `cfloat 512x32`) are exactly those shapes, so the fused apply, the `larft` removal and
+the `pack_v` removal are worth **zero** there. Only `double`, at `nb = 16`, splits them.
+
+### The register panel leaf width and height table
+
+MEASURED, by a standalone `-Xcuda-ptxas -v` link of a TU that instantiates these four entry
+functions and nothing else (the shared-library probe in `scripts/register_probe.sh` needs a
+whole-library device link, which was not available while five agents were editing the tree).
+Every row is **0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads** — the stack
+frame is the gate for a residency claim, and `rA[N]` is in registers at all four widths.
+
+| scalar | N | registers | max work-group (`65536 / ceil8(regs)`, warp-floored) | ptxas, both entry copies | shipped |
+|---|---|---|---|---|---|
+| `float` | 32 | 168 | 384 | 19.4 + 20.2 = **39.6 s** | no |
+| `double` | 16 | 136 | 480 | 3.27 + 3.06 = **6.3 s** | **yes** |
+| `complex<float>` | 32 | 180 | 352 | 23.5 + 22.5 = **46.0 s** | no |
+| `complex<double>` | 32 | 255 (ptxas ceiling) | 256 | 30.0 + 30.5 = **60.5 s** | no |
+
+The register MODEL in the header (`N * words + 96 + 16`) is kept only as the fallback for a
+cell with no probe row, and these numbers show it is wrong in both directions: it predicts 144
+for float (measured 168) and 144 for double (measured 136). A cell that falls back to it is a
+cell nobody has probed.
+
+`probed_cols` pins the width each row was measured at; `geqrf_panel_reg_row_is_current<D>()`
+fails to COMPILE if the plan's width moves away from it, because a probe row measured at a
+width the kernel no longer uses reads as measured while describing a different kernel.
+
+### Why only `double` ships
+
+R7 is the reason, and it is a measurement, not a preference.
+[`lu.md#r7`](lu.md#r7-the-device-link-all-three-tiny-tiers-landed) records
+`batchlas_extensions_cta` at ~183 s of `ptxas` with the three tiny tiers already over the 15%
+per-tier budget. Against that baseline:
+
+* `double` at N = 16 adds **6.3 s, +3.4%** — inside the budget.
+* `float` at N = 32 adds 39.6 s, **+21.6%**; `cfloat` 46.0 s, **+25.1%**; `cdouble` 60.5 s,
+  **+33.1%**. All four together are **+83%**, which is not a cost this campaign may take on
+  its own authority.
+
+The cost is `O(N^2)`: the column loop and the apply loop are BOTH fully unrolled (they must be,
+or `rA[j]` becomes a dynamic index and the array leaves the register file), so N = 32 emits
+roughly four times the N = 16 body. `double`'s N = 16 is affordable for exactly that reason.
+
+`cdouble` has a second, independent reason: ptxas clamps it at the 255-register per-thread
+ceiling, which pins the work-group at 256 and the occupancy at **one block per SM**.
+
+Turning a scalar back on is one line — `cols = 0` to `cols = 32` in `GeqrfPanelRegPlan` — and
+the price above is what it costs. The way to bring float and cfloat in under budget is N = 16
+with the blocked driver splitting its 32-wide panel into two 16-wide register panels with an
+apply between, which is P5's own WY-leaf design and is not v1.
+
+### What the register panel leaf does not serve
+
+* **Any scalar but `double`**, on the ptxas budget above.
+* **Panels taller than 384 rows** (`double`) CANNOT be launched, and **panels taller than 128
+  rows are not WORTH launching**. Two different numbers: the first is the measured register-file
+  gate ([the height ceiling the AOT probe got wrong](#the-height-ceiling-the-aot-probe-got-wrong)),
+  the second the measured speed crossover ([the panel height window](#the-panel-height-window)).
+  A `ROWS`-per-item variant amortises the overhead term over fewer threads and is the way past
+  both; it is another instantiation dimension and is deliberately not in v1.
+* **Occupancy is not gated at compile time, and the measurement says it should have been.**
+  The design left only the hard launch gate in place and called the tall end "a MEASURED
+  question, not a compiled one". It was measured, and the answer is that occupancy governs the
+  whole result: the leaf is 2.17x at `m = 64` and 0.38x at `m = 384`, monotone in between. The
+  height window is that question's answer, applied as policy rather than as capability.
+
+### The height ceiling the AOT probe got wrong
+
+**The first thing the integration phase measured, and it is a correctness result, not a
+performance one.** `GeqrfPanelRegPlan<double>::probed_regs = 136` comes from a standalone
+`-Xcuda-ptxas -v` link. The same kernel inside `libbatchlas_extensions_cta` **does not use 136
+registers**, and `cuobjdump -res-usage` finds no such entry in the library at all: these kernels
+ship as device IR and the register allocation that matters is the one the runtime makes. The
+register-file arithmetic `65536 / ceil8(136) -> 481 -> 448` therefore advertised a height the
+device refuses.
+
+Bisected on the shipped library, `double`, `n = 16`, one panel per launch:
+
+| panel rows `m` | work-group | launch |
+|---|---|---|
+| 256, 288, 320, 352, **384** | 256 ... 384 | OK |
+| **385**, 392, 400, 408, 415, 416, 448 | 416 ... 448 | `CUDA_ERROR_LAUNCH_OUT_OF_RESOURCES` |
+
+So the real per-thread count is in `(65536/416, 65536/384] = (157.5, 170.6]` — 160 or 168 at
+sm_89's granularity of 8 — against a probe that said 136. The ceiling is now a MEASURED
+constant, `GeqrfPanelRegPlan<D>::launch_max_rows`, which always wins over the model, and a
+`static_assert` requires one for any scalar whose `cols` is non-zero.
+
+Three things about how this shipped are worth keeping:
+
+* **It aborts, it does not throw.** In `factor_bench` the driver error surfaced as an uncaught
+  `sycl::exception` and killed the process; nine grid cells came back as "NO OUTPUT rc=134".
+  Inside the test fixture the same failure is catchable, which is why the guard below can report
+  it instead of taking the binary down with it.
+* **`geqrf_panel_reg_fits` was self-consistent and still wrong.**
+  `RegisterPanelLeafCapabilityIsSelfConsistent` asserts the range is contiguous and that
+  `max_m + 1` is refused. Both were true of a ceiling that could not be launched, because
+  nothing in that test ever asks the device to run `max_m`.
+* **The residual ladder stopped at `m = 256`** and never reached the broken band either.
+  `RegisterPanelLeafRunsAtItsOwnHeightCeiling` is the new guard and the ladder now runs to 384.
+
+### The panel height window
+
+MEASURED. `factor_bench`, GPU 1 under `gpu_guard.sh`, 9 interleaved reps per arm, three arms in
+one process (`vendor`, `blocked`, `blocked/leaf=reg`), one process per cell, `double`. Every
+ratio below is a TIME ratio `t_blocked / t_reg` at a batch where the cell is saturated (the arm
+times are linear in batch: `double n = 64` reads 5.05 / 10.03 / 20.29 / 40.13 ms at
+2048 / 4096 / 8192 / 16384). Raw rows:
+`benchmarks/results/p5_reg_leaf_uncapped.csv`, `benchmarks/results/p5_reg_leaf_capped.csv`.
+
+**The register leaf is a function of PANEL HEIGHT, and it inverts.** One row per work-item makes
+a tall panel a wide work-group at a fixed register cost per item, so occupancy falls as the panel
+grows. Taken at a single `m x 16` panel (`n = nb`, so the whole factorisation is one launch):
+
+| panel rows | 16 | 32 | 64 | 128 | 144 | 160 | 176 | 192 | 224 | 256 | 384 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| `t_blocked / t_reg` | 0.98 | 1.09 | **2.17** | **1.10** | 0.89 | 0.89 | 0.74 | 0.74 | 0.60 | 0.48 | 0.38 |
+
+`kGeqrfPanelRegPolicyRows = 128` is that crossover, and `geqrf_panel_reg_preferred` is the
+policy predicate built on it. **`fits` and `preferred` are deliberately two predicates**: the
+leaf launches to 384 rows and a caller that pins `GeqrfPanelLeaf::Register` still reaches every
+one of them, but the driver and `Auto` consult `preferred`, because a policy gated on `fits`
+measures 0.38-0.89x at `mp >= 144`.
+
+With the height cap in place the blocked driver's panels shrink past the cap as `j0` advances,
+so a tall first panel takes the old leaf and the shorter ones take the register leaf. Square
+`m = n`, saturated batch, `t_blocked / t_reg`, capped policy vs today's leaf:
+
+| n | 16 | 33 | 48 | 64 | 80 | 88 | 96 | 128 | 160 | 192 | 224 | 256 | 384 | 448 | 512 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| capped | **0.98** | 1.35 | 1.32 | 1.40 | 1.33 | 1.30 | 1.29 | 1.18 | **1.10** | 1.07 | 1.05 | 1.04 | 1.01 | 1.01 | 1.01 |
+| uncapped | 0.98 | 1.35 | 1.32 | 1.39 | — | — | 1.29 | 1.18 | 1.08 | 1.02 | 0.97 | 0.93 | 0.87 | 0.91 | 0.93 |
+
+The uncapped row is the same leaf with `fits` as the gate, and it is the measured cost of
+getting this wrong: **it loses at every `n >= 224`.** The capped row never loses outside its
+own bottom edge.
+
+**Bracketing non-winners, both edges of the window that clears `t_blocked <= 0.90 t_reg`
+(ratio >= 1.11):**
+
+* below: **square `n = 16` at 0.98** — one `16 x 16` panel, where the launch is all there is.
+  A lower bound of `m >= 32` would recover it (`32 x 16` reads 1.09) but rests on two cells and
+  would split every driver's short final panel off onto a second leaf; it is NOT shipped.
+* above: **square `n = 160` at 1.10 and `n = 192` at 1.07** — under the gate and above it in
+  value, which is exactly what an edge should look like.
+* the capability edge, separately: every tall cell from `144 x 16` to `512 x 16` reads
+  **1.000 to four digits**, because the policy declines them and both arms are then the same
+  kernel. That is the control that proves the A/B is not measuring itself.
+
+`double n = 64` was P5's headline cell and it is NOT a win against the arm that ships there.
+The leaf is worth 1.40x against the blocked arm, but blocked is not what `n = 64` resolves to:
+against cuSOLVER the register-leaf arm reads 1.10x at batch 16384 and **1.01x at batch 32768**,
+falling, so it fails the 1.11 gate. See the floor section below.
+
+### The double order floor moves to 76
+
+FLIPPED, on this grid. `preferred()`'s `double` floor was 96; it is now **76**. The gate is
+`t_native <= 0.90 t_vendor` (ratio >= 1.11) at saturation, `t_vendor / t_native` with the
+register leaf in the native arm:
+
+| n | 64 | 72 | 76 | 79 | 80 | 88 | 96 |
+|---|---|---|---|---|---|---|---|
+| batch 16384 | 1.100 | **1.105** | 1.263 | 1.375 | 1.400 | 1.422 | 1.697 |
+| batch 32768 | **1.009** | **1.088** | 1.241 | 1.346 | 1.376 | 1.400 | — |
+
+`n = 72` and `n = 64` are the bracketing non-winners and they are non-winners at BOTH batches;
+`n = 76` is the lowest measured order that clears at both. R8a applies to the direction: the
+vendor arm is still unsaturated here (its time grows 1.77-1.82x for a 2x batch where the native
+arm grows 1.99x), so these ratios FALL with batch and the floor is gated at batch 32768, the
+largest that fits the card at these orders.
+
+**This flip is contingent on the leaf.** With today's leaf the same cells read
+`t_vendor / t_blocked` of 1.045 at `n = 80` and 1.029 at batch 32768 — below the gate. The
+window widening exists only because the register leaf is in the native arm.
+
+Non-square shapes newly admitted by the lower floor were checked separately, because the floor
+is a clause on `cols()` alone and the tall clause (`rows >= 8 * cols`) never covered them:
+
+| shape | batch | `t_vendor / t_native` |
+|---|---|---|
+| `160 x 80` | 8192 | 1.53 |
+| `256 x 80` | 8192 | 1.93 |
+| `512 x 80` | 4096 | 2.29 |
+| `1024 x 80` | 2048 | 2.91 |
+| `160 x 88` | 8192 | 1.57 |
+| `512 x 88` | 4096 | 2.25 |
+
+`256 x 80` is the cell this is really for: aspect 3.2 is under the tall clause's 8 and 80
+columns were under the old floor, so it took the vendor and lost 1.93x.
+
+### What the shipped route does now
+
+CONFIRMED end to end with the DEFAULT route and no pin, `--arms=vendor,auto`, the resolved
+route read back per cell from `BATCHLAS_COVERAGE_OUT`.
+Raw: `benchmarks/results/p5_auto_after_flip.csv`.
+
+| shape | batch | resolved | `t_vendor` | `t_auto` | ratio |
+|---|---|---|---|---|---|
+| `64 x 64` | 16384 | vendor | 31.82 | 31.74 | — |
+| `72 x 72` | 16384 | vendor | 46.20 | 46.10 | — |
+| `76 x 76` | 16384 | native:blocked | 55.13 | 43.90 | 1.26 |
+| `80 x 80` | 16384 | native:blocked | 62.15 | 44.52 | 1.40 |
+| `88 x 88` | 16384 | native:blocked | 85.54 | 59.32 | 1.44 |
+| `96 x 96` | 16384 | native:blocked | 106.2 | 62.36 | 1.70 |
+| `128 x 128` | 16384 | native:blocked | 250.6 | 112.6 | 2.23 |
+| `160 x 160` | 8192 | native:blocked | 240.9 | 93.97 | 2.56 |
+| `256 x 256` | 4096 | native:blocked | 459.7 | 134.6 | 3.42 |
+| `512 x 512` | 1024 | native:blocked | 995.1 | 198.5 | 5.01 |
+| `256 x 80` | 8192 | native:blocked | 124.5 | 64.59 | 1.93 |
+| `512 x 16` | 16384 | vendor | 26.55 | 26.64 | — |
+| `64 x 16` | 16384 | vendor | 1.805 | 1.807 | — |
+
+Two shapes carry the same leaf change without a route change: `512 x 16` and `64 x 16` are
+under both the floor and the tall clause's 32-column bound, so they stay on the vendor and the
+readings confirm `Auto` did not move.
+
+`geqrf_cta_dispatch` now asks for `GeqrfPanelLeaf::Resident` **explicitly**. It used to pass
+`Auto` and assert that the leaf came back resident; with `Auto` answering `Register` inside the
+height window that assertion fired, which is the CTA tier telling the truth — the CTA tier IS
+the resident leaf run over the whole matrix, and a pinned `cta` route silently running a
+different kernel is the defect the assertion exists for.
+
+### What this measurement could NOT establish
+
+* **Any type but `double`.** `float`, `cfloat` and `cdouble` carry `cols = 0` on R7 grounds
+  (39.6-60.5 s of ptxas each against `batchlas_extensions_cta`'s ~183 s), so every cell of every
+  grid above is `double`. R10 makes `double` a reported type, not a gating one; the flip is
+  justified on its own measured grid and claims nothing about the other three.
+* **The fused apply, `orgqr_fused`, `ormqr_fused`.** Never built, so P5's `Kill` clause — "if
+  the fused apply is slower than WY-with-fused-leaf at every `n >= 64`" — was never testable.
+  What shipped is the clause's own fallback: "ship only the leaf swap".
+* **The `larft` removal (Open debt 5).** Still stands. An `nsys` profile of `128 x 128`
+  `double` batch 8 puts `LarftKernelName` at 34% of device time against the panel's 48.6%, so
+  the second-largest item in this driver is still untouched.
+* **`orgqr` and `ormqr` end to end.** The leaf is a `geqrf` kernel; neither suite's timings were
+  re-measured, and P5's `orgqr` target (>= 1.5x over identity+ormqr) is untouched.
+* **The exact register count of the shipped kernel.** Bounded to `(157.5, 170.6]` by bisection;
+  `cuobjdump` cannot read it out of the library.
+
+### The register leaf A/B
+
+`BATCHLAS_GEQRF_LEAF = auto | reg` selects the panel leaf per call (`Settings::selection`,
+consumed in `geqrf_blocked.cc`), mirroring `BATCHLAS_GETRF_LEAF`. `factor_bench`'s `ArmEnv`
+chooses the leaf variable by OP rather than hardcoding getrf's.
+
+**The first full grid was thrown away.** `BATCHLAS_BUILD_BENCHMARKS` is `OFF` in the
+`dev-tests` cache, so `cmake --build` never rebuilt `factor_bench` and the binary on disk was
+three days old: its `/leaf=reg` arm set getrf's variable, which `geqrf` ignores, and BOTH arms
+ran the resident leaf. Every cell read `t_blocked / t_reg` between 0.999 and 1.004 and the
+honest-looking conclusion was "the leaf is a wash at saturation". The tell was an `nsys`
+`cuda_gpu_kern_sum` on a single cell: two separate processes showed `GeqrfPanelRegKernel` and
+`GeqrfPanelResidentKernel` respectively, but a ONE-process two-arm run showed only
+`GeqrfPanelResidentKernel`, ten launches. **Confirm an A/B by kernel name before reading its
+ratio**; a null result is exactly what a dead pin looks like.
+
+### Break sweeps: the register panel leaf
+
+R9. Every break below was planted, rebuilt, run on GPU 1 and restored. `double`,
+`GeqrfTest/5`. "Also red" lists guards that were not the named target.
+
+| # | break | expected | observed |
+|---|---|---|---|
+| 1 | drop the `r < j` term from the `v` select | `...ResidualAndOrthogonality` orth ~O(1) at every `m > n` | **RED at the first cell, `7 x 5`**: residual 63.1, 513.5, 0.388 over items 0-2 against a 1.78e-15 tolerance. Also red: `...AgreesWithTheResidentLeaf`, `BlockedDriverWithTheRegisterLeaf` |
+| 2 | `ssq` mask `r > j` to `r >= j` | alpha counted twice, residual >> tol at every `m > 1` | **RED.** Also red: `...AgreesWithTheResidentLeaf`, `...ZeroSubColumnGivesTauZero`, `BlockedDriverWithTheRegisterLeaf` |
+| 3 | remove barrier B3 | red at `m > 32`, green at `m <= 32` | **RED, but the prediction was WRONG.** Green at every cell with `m <= 128` for every `n`; the first failure is `m = 129, n = 16`, i.e. the first height with five sub-groups. Also red: `BlockedDriverWithTheRegisterLeaf`. The guard on this barrier is ONE cell of a 16 x 8 ladder, and it exists only because the ladder reaches past 128 |
+| 4 | store guard `k < n` to `k < N` | the poison-pad scan reports a write outside the window | **RED, verbatim**: "wrote outside its m x n window, at buffer offset 6 (item 0, column 1, row 0)". Also red: three more |
+| 5 | apply guard `k <= j` to `k < j` (both loops) | column `j` re-updated after being set to `beta`; residual red | **RED at `2 x 1`**, residual 1.518 and orth 0.168 |
+| 6 | drop `m <= max_m` from `geqrf_panel_reg_fits` | `...RefusesWhatItCannotHold` red, and the launch aborts | **RED, and the launch does abort**: "The kernel uses 136 registers per work-item for a total of 512 work-items per work-group." Also red: `...CapabilityIsSelfConsistent` |
+| 7 | `kGeqrfAutoPrefersRegisterLeaf = true` **without** the height policy | `AutoDoesNotYetTakeTheRegisterLeaf` red | **RED** — and FOUR other guards went red with it, including `geqrf_cta`'s own `internal_error` ("the panel leaf did not take the resident path after the fit check passed"). The no-flip promise had more guards than the one written for it |
+
+Three more were planted for what the integration phase itself added:
+
+| # | break | expected | observed |
+|---|---|---|---|
+| A | `launch_max_rows` 384 -> 448, the AOT-probe value | `RegisterPanelLeafRunsAtItsOwnHeightCeiling` red | **RED at `m = 416`**, the bracket cell rather than the ceiling: `UR_RESULT_ERROR_OUT_OF_RESOURCES`, caught and reported rather than aborting |
+| B | `geqrf_panel_reg_preferred` gates on `fits` only | `AutoTakesTheRegisterLeafExactlyInsideTheHeightWindow` red | **RED**: "a policy that reaches the hard ceiling is not a policy; it is the capability again". Also red: `ResidentLeafLaunchHoleAt48KiB`, which needs `Auto` to answer Resident at its shape |
+| C | `double` order floor 76 -> 96 | `RouteGeqrf.PreferredIsTheMeasuredOrderFloorAndTheTallClause` red | **RED** at the `at=76` probe: `is_native(r)` false where true was expected |
+
+### Why bit-identity against the resident leaf is not the oracle here either
+
+Same reason as the tiny tier. The resident leaf reduces a column norm with
+`reduce_over_group` over up to 256 work-items; the register leaf uses a 32-lane butterfly plus
+a serial scan over `ceil(m/32)` slots. The association orders differ, so the last ulp differs.
+`RegisterPanelLeafAgreesWithTheResidentLeaf` asserts a NORMWISE agreement at
+`64 * eps * m * max|R|` instead — normwise and not elementwise-relative, because `R`'s trailing
+columns hold entries far below `||A||` and a relative bound on those measures cancellation
+rather than disagreement. The convention itself is guarded where it already was: both leaves
+call `geqrf_larfg_scalars` verbatim, and the elementwise LAPACKE `tau` comparison covers it.

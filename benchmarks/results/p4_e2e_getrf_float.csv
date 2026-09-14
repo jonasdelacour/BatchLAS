@@ -1,0 +1,7 @@
+op,type,m,n,nrhs,batch,arm,pin,pin_parsed,median_ms,mean_ms,rel_sd,reps,residual,extra_check,info_nonzero,bad,reason,resolved_route
+getrf,float,192,192,0,2048,vendor,vendor,1,12.612928,12.613761,0.0035,7,8.450e-08,0.000e+00,0,0,ok,vendor:auto
+getrf,float,192,192,0,2048,auto,auto,1,12.560706,12.546013,0.0054,7,8.450e-08,0.000e+00,0,0,ok,vendor:auto
+getrf,float,256,256,0,2048,vendor,vendor,1,31.710620,31.672618,0.0063,7,1.107e-07,0.000e+00,0,0,ok,vendor:auto
+getrf,float,256,256,0,2048,auto,auto,1,21.535292,21.535963,0.0005,7,1.190e-07,0.000e+00,0,0,ok,native:blocked
+getrf,float,512,512,0,512,vendor,vendor,1,49.557732,49.544129,0.0041,7,1.319e-07,0.000e+00,0,0,ok,vendor:auto
+getrf,float,512,512,0,512,auto,auto,1,26.185407,26.189910,0.0008,7,1.288e-07,0.000e+00,0,0,ok,native:blocked

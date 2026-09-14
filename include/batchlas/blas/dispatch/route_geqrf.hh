@@ -77,14 +77,15 @@ struct RouteTable<Op::geqrf, T> {
         }
     }
 
-    // A per-type order floor plus a tall-panel clause. Both constants below are window
-    // EDGES, not knobs. evidence: docs/perf/qr.md#the-geqrf-order-floor-and-the-tall-panel-clause
+    // A per-type order floor plus a tall-panel clause; both are window EDGES, not knobs.
+    // evidence: docs/perf/qr.md#the-geqrf-order-floor-and-the-tall-panel-clause
     static bool preferred(Route r, const GeqrfShape& s) {
         if (!is_native(r)) return false;
 
         const int64_t floor_n = [] () -> int64_t {
             if constexpr (std::is_same_v<T, float>)  return 64;
-            if constexpr (std::is_same_v<T, double>) return 96;
+            // 76 holds only with the register panel leaf in the blocked arm.
+            if constexpr (std::is_same_v<T, double>) return 76;
             if constexpr (std::is_same_v<T, std::complex<float>>)  return 48;
             if constexpr (std::is_same_v<T, std::complex<double>>) return 256;
             return (1 << 30);

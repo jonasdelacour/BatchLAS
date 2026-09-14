@@ -1420,6 +1420,7 @@ sharpest form of the problem this section exists to fix.
 | `gemv_segt` | `BATCHLAS_GEMV_SEGT` | `EnvValue` | unset (auto) |
 | `gesvd_bidiag` | `BATCHLAS_GESVD_BIDIAG` | `EnvValue` | unset (`bdsdc`) — `normal` **changes numerics** |
 | `getrf_laswp` | `BATCHLAS_GETRF_LASWP` | `EnvValue` | unset (`defer_gather`) |
+| `getrf_leaf` | `BATCHLAS_GETRF_LEAF` | `EnvValue` | unset (`reg`, P4's register panel leaf); `slm` selects the older local-memory panel |
 | `getrs_laswp` | `BATCHLAS_GETRS_LASWP` | `EnvValue` | unset (`nrhs` gate) |
 | `iluk_device` | `BATCHLAS_ILUK_DEVICE` | `EnvValue` | unset (`batch >= 32`); only `0`/`1` are inspected |
 | `latrd_impl` | `BATCHLAS_LATRD_IMPL` | `EnvValue` | unset (legacy) |

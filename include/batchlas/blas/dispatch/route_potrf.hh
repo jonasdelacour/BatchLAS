@@ -5,11 +5,15 @@
 #include <batchlas/blas/dispatch/route.hh>
 #include <batchlas/blas/dispatch/route_resolve.hh>
 
+#include <complex>
+#include <type_traits>
+
 namespace batchlas::dispatch {
 
 struct PotrfShape : OpShape {
     int cta_max_n = 0;    // device-queried local-memory ceiling; 0 = tier absent from this build
     int tiny_max_n = 0;   // compile-time ceiling (the tier owns no local memory); 0 = absent
+    int lpanel_max_n = 0;  // SLM slice AND MAX_WORK_GROUP_SIZE (one work-item per row)
 
     bool blocked_available = false;
 
@@ -23,6 +27,7 @@ struct PotrfShape : OpShape {
 inline constexpr Route kPotrfOrder[] = {
     {Origin::Native, Algorithm::Tiny},
     {Origin::Native, Algorithm::CTA},
+    {Origin::Native, Algorithm::LPanel},
     {Origin::Native, Algorithm::Blocked},
     {Origin::Vendor, Algorithm::Auto},
 };
@@ -54,6 +59,12 @@ struct RouteTable<Op::potrf, T> {
                 if (s.cta_max_n < 1) return false;
                 return s.order() <= s.cta_max_n;
 
+            case Algorithm::LPanel:
+                // uplo IS correctness, as on Blocked: the update reads the LOWER triangle.
+                if (s.uplo != Uplo::Lower) return false;
+                if (s.lpanel_max_n < 1) return false;
+                return s.order() <= s.lpanel_max_n;
+
             case Algorithm::Blocked:
                 // uplo IS correctness: the driver is Lower-only and handed Upper overwrites
                 // the caller's triangle. No order floor, or a forced `blocked` falls through.
@@ -65,28 +76,66 @@ struct RouteTable<Op::potrf, T> {
         }
     }
 
-    // Empty window: Auto takes the vendor everywhere, a vendor-free build still resolves.
-    // evidence: docs/perf/potrf.md#preferred-is-false-everywhere
+    // The one measured window: 32 < n <= 256, Uplo::Lower, float and complex<float>.
+    // evidence: docs/perf/potrf.md#the-measured-lpanel-window
     static bool preferred(Route r, const PotrfShape& s) {
-        static_cast<void>(r);
-        static_cast<void>(s);
-        return false;
+        if (!is_native(r)) return false;
+        if (!lpanel_types()) return false;
+        if (s.uplo != Uplo::Lower) return false;
+        if (s.order() <= 32 || s.order() > 256) return false;
+
+        // R8b: exactly ONE tier may answer true, because automatic() returns on the first
+        // supports && preferred hit and never consults the tier hook.
+        const Route best = best_native_tier(s);
+        if (best.origin == Origin::Auto) return false;
+
+        // On a device that cannot HOLD the tier the grid names, the walk lands on one
+        // measured LOSING to the vendor, so the window must not fire at all.
+        const Algorithm measured = (s.order() <= cta_last_order()) ? Algorithm::CTA
+                                                                   : Algorithm::LPanel;
+        if (best.algo != measured) return false;
+        return r == best;
     }
 
-    // Native-vs-native tie-break, consulted only in the vendor-free walk.
-    // evidence: docs/perf/potrf.md#native_tier_preferred
+    // The tier the walk lands on; Auto/Auto means none. Resolves FIT before the hook.
+    static Route best_native_tier(const PotrfShape& s) {
+        Route first_supported{};
+        bool found = false;
+        for (const Route* it = order_begin(); it != order_end(); ++it) {
+            if (!is_native(*it) || !supports(*it, s)) continue;
+            if (!found) { first_supported = *it; found = true; }
+            if (native_tier_preferred(*it, s)) return *it;
+        }
+        return found ? first_supported : Route{};
+    }
+
+    // Native-vs-native tie-break. evidence: docs/perf/potrf.md#native_tier_preferred
     static bool native_tier_preferred(Route r, const PotrfShape& s) {
         if (!is_native(r)) return true;
 
         // Enumerate EVERY tier: `default:` answers true, so an omitted arm takes every shape.
         // evidence: docs/perf/potrf.md#every-tier-is-enumerated-explicitly
         const bool cta_holds = (s.cta_max_n >= 1) && (s.order() <= s.cta_max_n);
+        // LPanel takes a shape only where it was MEASURED: double and cdouble have no grid.
+        const bool lpanel_holds = lpanel_types() && (s.uplo == Uplo::Lower) &&
+                                  (s.lpanel_max_n >= 1) && (s.order() <= s.lpanel_max_n) &&
+                                  (s.order() > cta_last_order());
         switch (r.algo) {
             case Algorithm::Tiny:    return false;
-            case Algorithm::CTA:     return cta_holds;
-            case Algorithm::Blocked: return !cta_holds;
+            case Algorithm::CTA:     return cta_holds && !lpanel_holds;
+            case Algorithm::LPanel:  return lpanel_holds;
+            case Algorithm::Blocked: return !cta_holds && !lpanel_holds;
             default:                 return true;
         }
+    }
+
+    // Measured types and the measured CTA/LPanel boundary inside them.
+    // evidence: docs/perf/potrf.md#the-measured-lpanel-window
+    static constexpr bool lpanel_types() {
+        return std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>;
+    }
+    static constexpr int64_t cta_last_order() {
+        return std::is_same_v<T, float> ? 35 : 32;
     }
 
     static constexpr const Route* order_begin() { return kPotrfOrder; }

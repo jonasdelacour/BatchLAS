@@ -1,7 +1,7 @@
 #pragma once
 
 // Native batched POTRF, declarations only: the route table and the vendor-free facade need no
-// <sycl/sycl.hpp>. preferred() is false for all three tiers. EVERY *_dispatch re-applies
+// <sycl/sycl.hpp>. preferred() is false for every tier. EVERY *_dispatch re-applies
 // supports()'s gates -- a rejected forced route silently runs the vendor. evidence: docs/perf/potrf.md
 
 #include "../util/internal-api.hh"
@@ -48,6 +48,38 @@ BATCHLAS_INTERNAL_API int potrf_cta_max_n_for_slm(
 
 template <typename T>
 int potrf_cta_max_n();
+
+// LPANEL tier (potrf_lpanel.cc): ONE n x NB panel in local memory instead of the whole
+// matrix. TWO caps, hence the second argument -- the local-memory slice AND
+// MAX_WORK_GROUP_SIZE, because the body needs one work-item per row. nb_hint 0 means the
+// type's default NB; a value this build does not instantiate answers 0 here and throws at
+// dispatch. evidence: docs/perf/potrf.md#the-lpanel-tier
+template <typename T>
+BATCHLAS_INTERNAL_API int potrf_lpanel_max_n_for_slm(
+    std::size_t slm_budget_bytes,
+    int max_wg_size,
+    int min_blocks_per_sm = resident::kMinBlocksPerSm,
+    int nb_hint = 0);
+
+template <typename T>
+BATCHLAS_INTERNAL_API std::size_t potrf_lpanel_buffer_size(   // short info span draws scratch
+    Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A);
+
+template <typename T>
+BATCHLAS_INTERNAL_API unsigned potrf_lpanel_debug_launch(   // NB<<16 | L<<4 | G, 0 if unfit
+    Queue& ctx, int n, int batch,
+    int min_blocks_per_sm = resident::kMinBlocksPerSm,
+    int nb_hint = 0);
+
+template <typename T>
+BATCHLAS_INTERNAL_API Event potrf_lpanel_dispatch(
+    Queue& ctx,
+    const MatrixView<T, MatrixFormat::Dense>& A,
+    Uplo uplo,   // LOWER ONLY: the left-looking update reads the already-factored triangle
+    Span<std::byte> workspace,
+    Span<int32_t> info,   // LAPACK's: 1-based, GLOBAL to this view, first failure wins
+    int min_blocks_per_sm = resident::kMinBlocksPerSm,
+    int nb_hint = 0);
 
 template <typename T>
 BATCHLAS_INTERNAL_API bool potrf_blocked_available();

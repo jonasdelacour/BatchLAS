@@ -17,6 +17,14 @@ set(EXTENSIONS_CTA_SOURCES
     # helpers are inline templates shared with the getrf/geqrf tiny kernels, so all
     # three must sit with the sources whose device symbols they call.
     potrf_tiny.cc
+    # WP6/P2: the FUSED factor-and-solve tier. Same cluster as potrf_tiny.cc -- it
+    # reuses tiny_device.hh's inline helpers and is GPU-only, so a native_cpu image
+    # of it would be dead weight (this library is the only NO_CPU_TARGETS one).
+    posv_tiny.cc
+    # WP6/P3: the LEFT-LOOKING panel leaf. Same device-code cluster again -- the tests
+    # compare it against potrf_cta_body on the same matrices, and it is the blocked
+    # driver's intended replacement leaf.
+    potrf_lpanel.cc
     # WP5 scaffolding, and THIS list for the same W12 reason as potrf's pair: the
     # blocked geqrf driver's panel leaf will BE the CTA device function, shared
     # through a geqrf_cta_device.hh, so the two sources must sit in ONE
@@ -63,6 +71,15 @@ set(EXTENSIONS_CTA_SOURCES
     # a native_cpu image of these templates would be dead weight. The file's own rule
     # is "the cluster, not the topic", so the reason is stated rather than assumed.
     getrf_tiny.cc
+    # WP6/P2: the FUSED factor-and-solve tier. HERE for getrf_tiny.cc's reason, not
+    # for the shared-device-symbol one: it borrows only lu_cabs1, an inline template,
+    # and the tier is GPU-only.
+    gesv_tiny.cc
+    # WP6/P4, the register-resident PANEL leaf for the blocked driver. HERE by the
+    # ":77-86" rule and not by the GPU-only one: getrf_panel_reg_device.hh includes
+    # getrf_cta_device.hh for lu_cabs1 and lu_zero, and getrf_blocked.cc calls this
+    # file's getrf_panel_reg_factorize, so all three share a device-code cluster.
+    getrf_panel_reg.cc
     steqr_cta.cc
     stedc_merge_cta.cc
     sytrd_cta.cc
