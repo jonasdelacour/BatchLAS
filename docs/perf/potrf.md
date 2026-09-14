@@ -654,6 +654,91 @@ that measures the window; until then the tier is reachable only by an explicit
 The other two arms split on the capacity, `cta_holds = (cta_max_n >= 1) && (order <=
 cta_max_n)`: CTA takes it, Blocked takes its complement.
 
+### The tiny potrf window
+
+**2026-09-14.** potrf's register tier shipped with P1 and was never routed: `preferred()`
+excluded `order <= 32` outright and `native_tier_preferred` answered **false** for Tiny, so
+`Auto` took cuSOLVER at every order the tier can hold. It wins at **every one of them**.
+
+Grid `benchmarks/results/p9_potrf_tiny.csv` and `p9_potrf_low.csv`, `t_vendor / t_tiny`,
+one process per cell, arms interleaved, 9 reps, `Uplo::Lower`:
+
+| n | 1 | 2 | 3 | 4 | 6 | 8 | 9 | 12 | 16 | 17 | 20 | 24 | 28 | 32 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| **float** @65536 | 3.92 | 5.02 | — | 7.21 | 9.12 | **10.64** | 3.02 | 3.74 | 3.07 | 2.06 | 2.29 | 2.55 | 2.93 | 2.91 |
+| **cfloat** @65536 | 3.43 | 4.34 | 5.17 | 6.02 | 6.40 | **7.43** | 2.10 | 1.57 | 1.62 | 1.23 | 1.30 | 1.26 | 1.32 | 1.30 |
+
+float n = 3 was **discarded and named**: its tiny arm returned `rel_sd` over the 10% gate.
+Nothing else in either grid was discarded. The `auto` arm was measured beside every cell
+and read **0.999-1.003** — the flip's before-picture, and proof the tier was inert.
+
+The window is therefore the whole tier, `1 <= n <= 32`, float and cfloat. Three properties
+of its edges, stated exactly:
+
+* **There is no lower bracket and none is needed.** n = 1 already wins 3.4-3.9x; the tier
+  holds nothing smaller.
+* **The ceiling is the TIER's, not a measured loss.** `supports()` refuses n = 33 because
+  the kernel is square-only to 32, so nothing above the window was measured losing — a
+  wider register kernel is *untested, not refuted*. Above 32 the LPanel window takes over.
+* **`Uplo::Upper` is excluded although the kernel handles it.** `supports()` carries no
+  uplo gate for Tiny (Upper is the same recurrence on `S(i,c) = conj(A(c,i))`), but the
+  grid is Lower-only and an unmeasured triangle is not a window. Open cell.
+
+The weakest cells are the ones that fill their register array least — cfloat n = 17 at
+1.23x — which is the same bucket-fill effect the getrf and posv windows turn on; see
+[the tiny getrf window](lu.md#the-tiny-getrf-window).
+
+#### Arming the tiny window
+
+Three breaks planted; **two red, one unfalsifiable**, recorded rather than counted:
+
+| planted break | observed | why |
+|---|---|---|
+| fire the window with no tier linked (drop the `tiny_max_n` gate) | **red** | |
+| let CTA answer inside the tiny window too (R8b) | **red** | |
+| admit `Uplo::Upper`, which has no grid | *stayed green* | `preferred()` refuses Upper before `tiny_window()` is reached, so the property is defended twice |
+
+The duplicated `uplo` gate is not pure redundancy: `native_tier_preferred` calls
+`tiny_window` **without** the outer check, so it is what keeps a vendor-free build from
+taking the tier for Upper on an unmeasured basis. That path is correct either way -- the
+kernel has no uplo gate in `supports()` because Upper is the same recurrence on a
+transposed tile -- so the cost of the restriction is an unclaimed win, not a wrong answer.
+
+### The posv window is not a no-op
+
+**2026-09-14.** A review flagged `route_posv.hh`'s `tiny_window_max_n()` as vacuous: it
+returns 32, which is the tier's own instantiation cap, so a ceiling alone excludes nothing
+the tier can hold. Structurally that is true. **The decision it encodes is still correct,
+and narrowing it was measured as a 2-5x REGRESSION.**
+
+The trap is the baseline. `posv` has **no vendor arm** -- `resolve_posv_route` passes
+`vendor_available = false` -- so "not preferred" does not mean cuSOLVER. It means the
+**composed arm** (`potrf` + two `trsm`). Judged against a vendor-PINNED composition, cfloat
+looks like it loses at half its orders:
+
+| n | 9 | 12 | 13 | 17 | 20 | 24 | 26 |
+|---|---|---|---|---|---|---|---|
+| vs vendor-pinned composition (nrhs=1) | 0.79 | 0.96 | 1.20 | 0.78 | 0.91 | 1.17 | 1.28 |
+| **vs the incumbent it actually falls back to** | **5.40** | **3.84** | **3.57** | **3.18** | **2.92** | **2.71** | **2.59** |
+
+A three-band window cut from the first row was built, shipped to the tree, and measured
+end to end: the excluded cells fell from ~0.79x to **0.146-0.55x**, because they landed on
+the composed arm instead. The window was reverted. Every cell the tier holds beats the
+arm it replaces by at least **1.93x** (cfloat n=26, nrhs=4).
+
+**The real defect this exposes is in the composed arm, not in posv's window.** P2 already
+filed it: the composition under `Auto` is 2-5x slower than the same composition with its
+legs pinned to the vendor, at n <= 32 and large batch. Routing `potrf` to its register tier
+(above) does not close that gap, so the remaining cost is on the `trsm` leg. Note the
+shape: these cells run `nrhs * batch` = 65,536 to 262,144, and `docs/perf` already carries
+a warning that trsm's windows above `q * batch` around 65,000 were measured on a racing
+kernel. That is the thread to pull, and it is not a posv change.
+
+**The lesson, stated for the next window.** Measure a flip against the arm it actually
+replaces. For an op with a vendor arm that is the vendor; for `posv`, `gesv` and any other
+composed op it is the composition under `Auto`. P2's own report said this in as many words
+and this pass ignored it for one grid.
+
 ### The occupancy clamp on nb
 
 `potrf_blocked_params` clamps `nb` by the **advertised** ceiling while `n <=

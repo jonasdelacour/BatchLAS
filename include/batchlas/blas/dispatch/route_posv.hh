@@ -1,8 +1,7 @@
 #pragma once
 
-// POSV routing: {Native, Tiny} is the fused kernel, {Native, Blocked} the
-// `potrf; trsm; trsm` composition. As in route_gesv.hh the order array carries NO
-// vendor entry. evidence: docs/perf/potrf.md#the-fused-posv-tier
+// POSV routing: {Native, Tiny} is the fused kernel and {Native, Blocked} the composed
+// arm (potrf + two trsm). evidence: docs/perf/potrf.md#p2-the-measured-posv-window
 
 #include <batchlas/blas/dispatch/route.hh>
 #include <batchlas/blas/dispatch/route_resolve.hh>
@@ -69,8 +68,8 @@ struct RouteTable<Op::posv, T> {
     // evidence: docs/perf/potrf.md#p2-the-measured-posv-window
     static bool native_tier_preferred(Route r, const PosvShape& s) {
         switch (r.algo) {
-            case Algorithm::Tiny:    return s.order() <= tiny_window_max_n();
-            case Algorithm::Blocked: return true;
+            case Algorithm::Tiny:    return tiny_window(s);
+            case Algorithm::Blocked: return !tiny_window(s);
             default:                 return false;
         }
     }
@@ -79,6 +78,12 @@ struct RouteTable<Op::posv, T> {
     static constexpr int64_t tiny_window_max_n() {
         if constexpr (std::is_same_v<T, std::complex<double>>) return 16;
         return 32;
+    }
+
+    // Cap-equals-ceiling is CORRECT here, not vacuous: the alternative is the composed
+    // arm. evidence: docs/perf/potrf.md#the-posv-window-is-not-a-no-op
+    static bool tiny_window(const PosvShape& s) {
+        return s.order() >= 1 && s.order() <= tiny_window_max_n();
     }
 
     static constexpr const Route* order_begin() { return kPosvOrder; }

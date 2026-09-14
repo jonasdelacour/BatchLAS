@@ -76,12 +76,16 @@ struct RouteTable<Op::potrf, T> {
         }
     }
 
-    // The one measured window: 32 < n <= 256, Uplo::Lower, float and complex<float>.
+    // Two windows now: the register tier at n <= 32 and LPanel at 32 < n <= 256.
     // evidence: docs/perf/potrf.md#the-measured-lpanel-window
     static bool preferred(Route r, const PotrfShape& s) {
         if (!is_native(r)) return false;
         if (!lpanel_types()) return false;
         if (s.uplo != Uplo::Lower) return false;
+
+        // evidence: docs/perf/potrf.md#the-tiny-potrf-window
+        if (tiny_window(s)) return r.algo == Algorithm::Tiny;
+
         if (s.order() <= 32 || s.order() > 256) return false;
 
         // R8b: exactly ONE tier may answer true, because automatic() returns on the first
@@ -95,6 +99,12 @@ struct RouteTable<Op::potrf, T> {
                                                                    : Algorithm::LPanel;
         if (best.algo != measured) return false;
         return r == best;
+    }
+
+    static bool tiny_window(const PotrfShape& s) {  // Lower only: the grid is Lower-only
+        if (!lpanel_types() || s.uplo != Uplo::Lower) return false;
+        if (s.tiny_max_n < 1) return false;
+        return s.order() >= 1 && s.order() <= s.tiny_max_n && s.order() <= 32;
     }
 
     // The tier the walk lands on; Auto/Auto means none. Resolves FIT before the hook.
@@ -121,8 +131,8 @@ struct RouteTable<Op::potrf, T> {
                                   (s.lpanel_max_n >= 1) && (s.order() <= s.lpanel_max_n) &&
                                   (s.order() > cta_last_order());
         switch (r.algo) {
-            case Algorithm::Tiny:    return false;
-            case Algorithm::CTA:     return cta_holds && !lpanel_holds;
+            case Algorithm::Tiny:    return tiny_window(s);
+            case Algorithm::CTA:     return !tiny_window(s) && cta_holds && !lpanel_holds;
             case Algorithm::LPanel:  return lpanel_holds;
             case Algorithm::Blocked: return !cta_holds && !lpanel_holds;
             default:                 return true;

@@ -552,25 +552,43 @@ TYPED_TEST(PotrfTinyTest, TinyRouteTableAndVocabulary) {
 
     auto at_cap = *shape;
     EXPECT_TRUE(Tbl::supports(tiny, at_cap));
-    // FALSE on purpose, exactly as getrf and geqrf answer it. Tiny is routable by an
-    // explicit pin and nothing else: a true answer here hands the tier the whole vendor-free
-    // walk and every bare `native` pin at order <= tiny_max_n. The flip belongs in the
-    // commit that MEASURES the window, together with preferred().
-    EXPECT_FALSE(Tbl::native_tier_preferred(tiny, at_cap));
-    // Exactly one native tier answers true, or the vendor-free walk is an accident of
-    // the order array (R8b, from the other direction). At the tiny cap that is CTA.
-    EXPECT_TRUE(Tbl::native_tier_preferred(
-        {dispatch::Origin::Native, dispatch::Algorithm::CTA}, at_cap));
+    // The window is MEASURED now: the tier wins 1.23-10.64x over cuSOLVER at every order
+    // it holds, so it answers true in BOTH predicates for float and cfloat, Lower only.
+    // evidence: docs/perf/potrf.md#the-tiny-potrf-window
+    constexpr bool windowed =
+        std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>;
+    EXPECT_EQ(Tbl::native_tier_preferred(tiny, at_cap), windowed);
+    EXPECT_EQ(Tbl::preferred(tiny, at_cap), windowed);
+
+    // Exactly one native tier answers true, or the walk is an accident of the order array
+    // (R8b). Inside the window that tier is Tiny, and CTA must step aside.
+    EXPECT_EQ(Tbl::native_tier_preferred(
+        {dispatch::Origin::Native, dispatch::Algorithm::CTA}, at_cap), !windowed);
     EXPECT_FALSE(Tbl::native_tier_preferred(
         {dispatch::Origin::Native, dispatch::Algorithm::Blocked}, at_cap));
+
+    int hits = 0;
+    for (const dispatch::Route* r = Tbl::order_begin(); r != Tbl::order_end(); ++r)
+        if (dispatch::is_native(*r) && Tbl::supports(*r, at_cap) && Tbl::preferred(*r, at_cap))
+            ++hits;
+    EXPECT_EQ(hits, windowed ? 1 : 0);
+
+    // Upper is NOT in the window although supports() admits the tier: the grid is
+    // Lower-only and an unmeasured triangle is not a window.
+    auto up = at_cap;
+    up.uplo = Uplo::Upper;
+    EXPECT_TRUE(Tbl::supports(tiny, up));
+    EXPECT_FALSE(Tbl::preferred(tiny, up));
 
     auto past = *shape;
     past.m = past.n = past.k = cap + 1;
     EXPECT_FALSE(Tbl::supports(tiny, past));
     EXPECT_FALSE(Tbl::native_tier_preferred(tiny, past));
 
-    // preferred() is still empty for every tier: the window is set from measurement.
-    EXPECT_FALSE(Tbl::preferred(tiny, at_cap));
+    // A build with no tiny kernel must not fire the window.
+    auto absent = at_cap;
+    absent.tiny_max_n = 0;
+    EXPECT_FALSE(Tbl::preferred(tiny, absent));
 }
 
 // The facade actually reaches the TINY kernel; the guard is bit-exactness against the

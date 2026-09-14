@@ -490,7 +490,12 @@ TYPED_TEST(PotrfLpanelTest, RouteWindowIsExactlyTheMeasuredOne) {
         EXPECT_FALSE(Tbl::supports(lp, *upper)) << "LPanel must refuse Upper, n=" << n;
         EXPECT_EQ(Tbl::supports(lp, *lower), n <= this->lp_ceiling()) << "n=" << n;
 
-        const bool in_window = measured && n > 32 && n <= 256;
+        // Two windows now: the register tier owns n <= 32 and LPanel 32 < n <= 256, so a
+        // measured type has exactly one preferred tier at BOTH, and only above 256 is
+        // there none. evidence: docs/perf/potrf.md#the-tiny-potrf-window
+        const bool in_lpanel = measured && n > 32 && n <= 256;
+        const bool in_tiny = measured && n <= 32 && n <= lower->tiny_max_n;
+        const bool in_window = in_lpanel || in_tiny;
 
         int pref_hits = 0;
         int pref_hits_upper = 0;
@@ -510,7 +515,9 @@ TYPED_TEST(PotrfLpanelTest, RouteWindowIsExactlyTheMeasuredOne) {
                                                       /*vendor_available=*/true);
         if (in_window) {
             ASSERT_TRUE(dispatch::is_native(route)) << "n=" << n;
-            EXPECT_EQ(route.algo, (n <= cta_last) ? dispatch::Algorithm::CTA
+            // Tiny owns n <= 32, then the CTA/LPanel split at cta_last inside LPanel's window.
+            EXPECT_EQ(route.algo, in_tiny ? dispatch::Algorithm::Tiny
+                                : (n <= cta_last) ? dispatch::Algorithm::CTA
                                                   : dispatch::Algorithm::LPanel) << "n=" << n;
         } else {
             EXPECT_TRUE(dispatch::is_vendor(route))
@@ -524,7 +531,8 @@ TYPED_TEST(PotrfLpanelTest, RouteWindowIsExactlyTheMeasuredOne) {
         const auto free_route = backend::potrf_route<B, T>(*this->ctx, A.view(), Uplo::Lower,
                                                            /*vendor_available=*/false);
         const bool lpanel_owns = measured && n > cta_last && n <= this->lp_ceiling();
-        const dispatch::Algorithm want = lpanel_owns ? dispatch::Algorithm::LPanel
+        const dispatch::Algorithm want = in_tiny ? dispatch::Algorithm::Tiny
+                                       : lpanel_owns ? dispatch::Algorithm::LPanel
                                        : (n <= this->ceiling()) ? dispatch::Algorithm::CTA
                                                                 : dispatch::Algorithm::Blocked;
         EXPECT_EQ(free_route.algo, want) << "vendor-free walk, n=" << n;

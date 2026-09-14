@@ -692,24 +692,29 @@ TEST(RoutePotrf, TinyVocabularyRoundTripAndTierOrder) {
     EXPECT_TRUE(PotrfTable::supports(kPotrfTiny, s));
     // EXACTLY ONE native tier answers the hook, or the vendor-free walk is an accident
     // of the order array rather than a stated decision (R8b, from the other direction).
-    // Tiny answers FALSE, matching getrf and geqrf: the tier is reachable by an explicit
-    // pin only until the commit that MEASURES its window flips this arm and preferred()
-    // together. Until then a vendor-free build routes exactly as it did before Tiny
-    // existed, which is what the resolve below asserts.
-    EXPECT_FALSE(PotrfTable::native_tier_preferred(kPotrfTiny, s));
-    EXPECT_TRUE(PotrfTable::native_tier_preferred(kPotrfCta, s));
+    // The window is MEASURED now, so at order <= 32 that tier is Tiny and CTA steps
+    // aside. evidence: docs/perf/potrf.md#the-tiny-potrf-window
+    EXPECT_TRUE(PotrfTable::native_tier_preferred(kPotrfTiny, s));
+    EXPECT_FALSE(PotrfTable::native_tier_preferred(kPotrfCta, s));
     EXPECT_FALSE(PotrfTable::native_tier_preferred(kPotrfBlocked, s));
     EXPECT_EQ(resolve_potrf_route<float>(kPotrfAuto, s, /*vendor_available=*/false).algo,
-              Algorithm::CTA);
+              Algorithm::Tiny);
+    EXPECT_TRUE(PotrfTable::preferred(kPotrfTiny, s));
+    EXPECT_TRUE(is_native(resolve_potrf_route<float>(kPotrfAuto, s, /*vendor_available=*/true)));
 
-    // One order past the tier: CTA takes it back, and the vendor still wins on Auto
-    // because preferred() is empty for every tier.
+    // One order past the tier: CTA takes the vendor-free walk back, and Auto lands on
+    // LPanel because 33 is inside the OTHER window.
     auto past = s;
     past.k = past.m = past.n = 33;
     EXPECT_FALSE(PotrfTable::supports(kPotrfTiny, past));
-    EXPECT_TRUE(PotrfTable::native_tier_preferred(kPotrfCta, past));
-    EXPECT_FALSE(PotrfTable::preferred(kPotrfTiny, s));
-    EXPECT_TRUE(is_vendor(resolve_potrf_route<float>(kPotrfAuto, s, /*vendor_available=*/true)));
+    EXPECT_FALSE(PotrfTable::preferred(kPotrfTiny, past));
+
+    // Upper has no grid behind either window.
+    auto up = s;
+    up.uplo = Uplo::Upper;
+    EXPECT_TRUE(PotrfTable::supports(kPotrfTiny, up));
+    EXPECT_FALSE(PotrfTable::preferred(kPotrfTiny, up));
+    EXPECT_TRUE(is_vendor(resolve_potrf_route<float>(kPotrfAuto, up, /*vendor_available=*/true)));
 }
 
 TEST(RoutePotrf, CorrectnessGatesAreNotSpeedGates) {
