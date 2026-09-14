@@ -3907,19 +3907,24 @@ TYPED_TEST(LuTest, TinyDirectEntryPointRefusesWhatSupportsRefuses) {
     }
 }
 
-// T9. ROUTING. Tiny is in the order array FIRST and its supports() gate answers on
-// the tier's own ceiling; preferred() is deliberately all-false for it, so the
-// DEFAULT route is unchanged by this PR and only an explicit pin reaches it. The
-// vendor-free walk and a bare `native` pin are covered by the explicit
-// native_tier_preferred arm, without which Tiny would take every order it holds in
-// a vendor-free build the day it lands.
-TYPED_TEST(LuTest, TinyIsRoutableOnlyByAnExplicitPin) {
+// T9. ROUTING. Tiny is in the order array FIRST and its supports() gate answers on the
+// tier's own ceiling. Its window is now MEASURED -- float 8..32, cfloat 9..16 -- so this
+// case asserts the window from both sides rather than "never preferred", which is what it
+// said while the grid was outstanding. fp64 has no window on this part at any order.
+// evidence: docs/perf/lu.md#the-tiny-getrf-window
+TYPED_TEST(LuTest, TinyRoutesInsideItsMeasuredWindowAndNowhereElse) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::BackendType;
     using Tbl = dispatch::RouteTable<dispatch::Op::getrf, T>;
     const dispatch::Route tiny{dispatch::Origin::Native, dispatch::Algorithm::Tiny};
 
-    auto p = make_dominant_permuted<T>(std::min(8, this->tiny_max_n()), 3, 21u);
+    // The window, per type, transcribed from the grid and NOT from the predicate.
+    constexpr bool kWindowed =
+        std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>;
+    const int in_n  = std::is_same_v<T, float> ? 8 : 9;    // float n=8 1.256x, cfloat 9 1.993x
+    const int out_n = std::is_same_v<T, float> ? 4 : 8;    // float n=4 0.888x, cfloat 8 1.086x
+
+    auto p = make_dominant_permuted<T>(std::min(in_n, this->tiny_max_n()), 3, 21u);
     auto V = view_of(p);
     const auto shape = backend::getrf_op_shape<B, T>(*this->ctx, V);
     ASSERT_TRUE(shape.has_value());
@@ -3927,12 +3932,45 @@ TYPED_TEST(LuTest, TinyIsRoutableOnlyByAnExplicitPin) {
         << "the shape builder and the kernel disagree about the tier's ceiling";
 
     EXPECT_TRUE(Tbl::supports(tiny, *shape));
-    EXPECT_FALSE(Tbl::preferred(tiny, *shape))
-        << "the Tiny window is set from the measured grid in a later PR; a non-empty "
-           "preferred() here pre-empts native_tier_preferred (R8b)";
-    EXPECT_FALSE(Tbl::native_tier_preferred(tiny, *shape))
-        << "without an explicit false arm the `default:` arm returns true and the "
-           "vendor-free walk takes Tiny unmeasured";
+    EXPECT_EQ(Tbl::preferred(tiny, *shape), kWindowed)
+        << "order " << in_n << " is inside the measured window for this type";
+    EXPECT_EQ(Tbl::native_tier_preferred(tiny, *shape), kWindowed)
+        << "the vendor-free walk must land on the same tier the window picks";
+
+    // Exactly ONE tier may answer true, or the order array becomes the decision (R8b).
+    if (kWindowed) {
+        int hits = 0;
+        for (const auto* it = Tbl::order_begin(); it != Tbl::order_end(); ++it)
+            if (Tbl::preferred(*it, *shape)) ++hits;
+        EXPECT_EQ(hits, 1);
+    }
+
+    // BELOW the window: a measured non-winner, and the route must not move there.
+    {
+        auto q = make_dominant_permuted<T>(out_n, 3, 23u);
+        auto QV = view_of(q);
+        const auto qs = backend::getrf_op_shape<B, T>(*this->ctx, QV);
+        ASSERT_TRUE(qs.has_value());
+        EXPECT_TRUE(Tbl::supports(tiny, *qs)) << "the TIER still holds this order";
+        EXPECT_FALSE(Tbl::preferred(tiny, *qs))
+            << "order " << out_n << " is a measured non-winner and must stay on the vendor";
+        ScopedEnvVar unpinned("BATCHLAS_GETRF_ROUTE", nullptr);
+        const auto def = backend::getrf_route<B, T>(*this->ctx, QV,
+                                                    dispatch::factorization_vendor_available<B>);
+        EXPECT_NE(def.algo, dispatch::Algorithm::Tiny)
+            << "automatic() took Tiny below its measured floor";
+    }
+
+    // ABOVE the window, for cfloat only: n = 17 pads into the N = 32 array and measures
+    // 0.368x, the sharpest edge in the table.
+    if constexpr (std::is_same_v<T, std::complex<float>>) {
+        auto q = make_dominant_permuted<T>(17, 3, 24u);
+        auto QV = view_of(q);
+        const auto qs = backend::getrf_op_shape<B, T>(*this->ctx, QV);
+        ASSERT_TRUE(qs.has_value());
+        EXPECT_TRUE(Tbl::supports(tiny, *qs));
+        EXPECT_FALSE(Tbl::preferred(tiny, *qs)) << "cfloat n=17 measured 0.368x";
+    }
 
     // Each correctness gate, one at a time.
     for (auto mutate : std::vector<std::function<void(dispatch::GetrfShape&)>>{
@@ -3948,22 +3986,32 @@ TYPED_TEST(LuTest, TinyIsRoutableOnlyByAnExplicitPin) {
         EXPECT_FALSE(Tbl::supports(tiny, s));
     }
 
-    // THE DEFAULT ROUTE IS UNCHANGED: nothing in this PR may move a shape that used
-    // to reach CTA or the vendor. This is the assertion route_diff.sh makes across
-    // the whole grid; here it is made where the tier could have stolen a shape.
+    // INSIDE the window the default route MOVES -- that is the change -- and the
+    // vendor-free walk must land on the same tier rather than on an arm the grid
+    // measured slower.
     {
         ScopedEnvVar unpinned("BATCHLAS_GETRF_ROUTE", nullptr);
         const auto def = backend::getrf_route<B, T>(*this->ctx, V,
                                                     dispatch::factorization_vendor_available<B>);
-        EXPECT_NE(def.algo, dispatch::Algorithm::Tiny)
-            << "automatic() reached the Tiny tier, whose window has not been measured";
+        if (kWindowed) {
+            EXPECT_EQ(def.algo, dispatch::Algorithm::Tiny)
+                << "automatic() did not reach the Tiny tier inside its measured window";
+        } else {
+            EXPECT_NE(def.algo, dispatch::Algorithm::Tiny)
+                << "fp64 has no measured window on this part and must not route here";
+        }
     }
     {
         ScopedEnvVar pin("BATCHLAS_GETRF_ROUTE", "native");
         const auto nat = backend::getrf_route<B, T>(*this->ctx, V, /*vendor_available=*/false);
-        EXPECT_NE(nat.algo, dispatch::Algorithm::Tiny)
-            << "the vendor-free walk reached the Tiny tier; native_tier_preferred's "
-               "explicit false arm is missing or was flipped";
+        if (kWindowed) {
+            EXPECT_EQ(nat.algo, dispatch::Algorithm::Tiny)
+                << "the vendor-free walk disagrees with the window; native_tier_preferred "
+                   "and preferred() must name the same tier";
+        } else {
+            EXPECT_NE(nat.algo, dispatch::Algorithm::Tiny)
+                << "the vendor-free walk reached an unmeasured Tiny tier for fp64";
+        }
     }
     {
         ScopedEnvVar pin("BATCHLAS_GETRF_ROUTE", "tiny");

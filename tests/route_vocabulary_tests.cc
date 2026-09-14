@@ -1600,7 +1600,7 @@ TEST(RouteOrgqr, BatchlasOrgqrRouteIsActuallyRead) {
 namespace {
 
 // PERMISSIVE DEFAULTS, one hostile field per case -- as in potrf_shape above.
-GetrfShape getrf_shape(int64_t order, int64_t batch, int cta_max_n) {
+GetrfShape getrf_shape(int64_t order, int64_t batch, int cta_max_n, int tiny_max = 0) {
     GetrfShape s;
     s.op = Op::getrf;
     s.scalar = ScalarKind::F32;
@@ -1613,6 +1613,9 @@ GetrfShape getrf_shape(int64_t order, int64_t batch, int cta_max_n) {
     s.is_gpu = true;
     s.has_sg32 = true;
     s.cta_max_n = cta_max_n;
+    // 0 means "the register tier is absent from this build". It must be set explicitly by
+    // any case that asserts on the tiny window, or that case holds vacuously.
+    s.tiny_max_n = tiny_max;
     s.blocked_available = (cta_max_n > 0);
     return s;
 }
@@ -1700,6 +1703,78 @@ using GetriTableCF = RouteTable<Op::getri, std::complex<float>>;
 using GetriTableCD = RouteTable<Op::getri, std::complex<double>>;
 
 } // namespace
+
+TEST(RouteGetrf, TheMeasuredTinyWindowAndNothingElse) {
+    // float 8..32, cfloat 9..16, both bracketed by a MEASURED non-winner below and
+    // (for cfloat) above. evidence: docs/perf/lu.md#the-tiny-getrf-window
+    using F   = RouteTable<Op::getrf, float>;
+    using CF  = RouteTable<Op::getrf, std::complex<float>>;
+    using D   = RouteTable<Op::getrf, double>;
+    using CD  = RouteTable<Op::getrf, std::complex<double>>;
+    constexpr Route kTiny{Origin::Native, Algorithm::Tiny};
+    constexpr Route kAuto{Origin::Auto, Algorithm::Auto};
+
+    auto hits = [](auto tbl, const GetrfShape& sh) {
+        using Tbl = decltype(tbl);
+        int n = 0;
+        for (const Route* it = Tbl::order_begin(); it != Tbl::order_end(); ++it)
+            if (Tbl::preferred(*it, sh)) ++n;
+        return n;
+    };
+
+    // IN the window, exactly ONE tier answers (R8b) and Auto takes a native route.
+    for (int64_t n : {8, 9, 12, 16, 17, 24, 32}) {
+        const auto sh = getrf_shape(n, 16384, /*cta_max_n=*/128, /*tiny_max=*/32);
+        EXPECT_TRUE(F::preferred(kTiny, sh)) << "float n=" << n;
+        EXPECT_EQ(hits(F{}, sh), 1) << "float n=" << n;
+        EXPECT_TRUE(is_native(resolve_getrf_route<float>(kAuto, sh, true))) << "float n=" << n;
+    }
+    for (int64_t n : {9, 12, 16}) {
+        const auto sh = getrf_shape(n, 16384, 128, 32);
+        EXPECT_TRUE(CF::preferred(kTiny, sh)) << "cfloat n=" << n;
+        EXPECT_EQ(hits(CF{}, sh), 1) << "cfloat n=" << n;
+    }
+
+    // The four MEASURED brackets. Each of these is a cell that lost, not a guess.
+    for (int64_t n : {1, 4, 7}) {                       // float below the floor
+        const auto sh = getrf_shape(n, 65536, 128, 32);
+        EXPECT_FALSE(F::preferred(kTiny, sh)) << "float n=" << n << " measured 0.888x at n=4";
+        EXPECT_TRUE(is_vendor(resolve_getrf_route<float>(kAuto, sh, true)));
+    }
+    for (int64_t n : {4, 8}) {                          // cfloat below its floor
+        const auto sh = getrf_shape(n, 65536, 128, 32);
+        EXPECT_FALSE(CF::preferred(kTiny, sh))
+            << "cfloat n=" << n << ": n=8 falls to 1.086x one doubling deeper";
+    }
+    for (int64_t n : {17, 24, 32}) {                    // cfloat above its ceiling
+        const auto sh = getrf_shape(n, 65536, 128, 32);
+        EXPECT_FALSE(CF::preferred(kTiny, sh)) << "cfloat n=" << n << " measured 0.368x at 17";
+        EXPECT_TRUE(is_vendor(resolve_getrf_route<std::complex<float>>(kAuto, sh, true)));
+    }
+
+    // fp64 is unrouted here on purpose: 1/64 rate on this part, and no grid.
+    for (int64_t n : {8, 12, 16, 32}) {
+        const auto sh = getrf_shape(n, 16384, 128, 32);
+        EXPECT_FALSE(D::preferred(kTiny, sh));
+        EXPECT_FALSE(CD::preferred(kTiny, sh));
+    }
+
+    // A build WITHOUT the tier must not fire the window, or Auto sends the shape to a
+    // tier that cannot serve it and the walk falls through to an unmeasured arm.
+    const auto absent = getrf_shape(12, 16384, /*cta_max_n=*/128, /*tiny_max=*/0);
+    EXPECT_FALSE(F::preferred(kTiny, absent));
+    EXPECT_EQ(hits(F{}, absent), 0);
+    EXPECT_TRUE(is_vendor(resolve_getrf_route<float>(kAuto, absent, true)));
+
+    // The tier ceiling still gates: n beyond tiny_max_n is refused even inside 8..32.
+    const auto capped = getrf_shape(24, 16384, /*cta_max_n=*/128, /*tiny_max=*/16);
+    EXPECT_FALSE(F::preferred(kTiny, capped));
+
+    // The Blocked window is untouched and still disjoint from this one.
+    const auto big = getrf_shape(256, 16384, 128, 32);
+    EXPECT_TRUE(F::preferred(Route{Origin::Native, Algorithm::Blocked}, big));
+    EXPECT_EQ(hits(F{}, big), 1);
+}
 
 TEST(RouteGetrf, VendorFreeFallbackHandsOverTheNativeRoute) {
     // THE TEST THAT FAILS IF A SPEED THRESHOLD EVER LANDS IN supports(): the

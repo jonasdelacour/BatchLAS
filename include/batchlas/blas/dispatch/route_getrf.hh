@@ -69,19 +69,34 @@ struct RouteTable<Op::getrf, T> {
         }
     }
 
-    // Blocked only; Tiny absent until its grid exists (R8b). evidence: docs/perf/lu.md#getrf-window-evidence
-    // cfloat 256..511 is BATCH-GATED because that band LOSES at batch 64..128, and holds
-    // at all only while the register panel leaf is the default one.
-    // evidence: docs/perf/lu.md#the-cfloat-window-moves-to-256
+    // TWO DISJOINT windows, one per tier: exactly one may answer true at any order, or
+    // the order array becomes the decision (R8b). cfloat 256..511 is BATCH-gated.
+    // evidence: docs/perf/lu.md#getrf-window-evidence
     static bool preferred(Route r, const GetrfShape& s) {
         if (!is_native(r)) return false;
+        if (r.algo == Algorithm::Tiny) return tiny_window(s);
         if (r.algo != Algorithm::Blocked) return false;
+        if (tiny_window(s)) return false;  // defence in depth; no test observes it
 
         if constexpr (std::is_same_v<T, float>) return s.order() >= 256;
         if constexpr (std::is_same_v<T, std::complex<float>>) {
             return s.order() >= 512 || (s.order() >= 256 && s.batch >= 256);
         }
         return false;   // double and cdouble earn nothing at any order
+    }
+
+    // Bounds are measured EDGES. cfloat stops at 16 because 17 pads into the N = 32
+    // register array and loses. evidence: docs/perf/lu.md#the-tiny-getrf-window
+    static bool tiny_window(const GetrfShape& s) {
+        if (s.tiny_max_n < 1) return false;  // 0 spells "tier absent"; also covered below
+        if (s.order() > static_cast<int64_t>(s.tiny_max_n)) return false;
+        if constexpr (std::is_same_v<T, float>) {
+            return s.order() >= 8 && s.order() <= 32;
+        } else if constexpr (std::is_same_v<T, std::complex<float>>) {
+            return s.order() >= 9 && s.order() <= 16;
+        } else {
+            return false;   // fp64 on this part runs at 1/64 rate; no grid, no window
+        }
     }
 
     // Native-vs-native tie-break, vendor-free walk only. evidence: docs/perf/lu.md#native_tier_preferred
@@ -97,14 +112,14 @@ struct RouteTable<Op::getrf, T> {
         }();
 
         switch (r.algo) {
-            // EXPLICIT: `default:` returns TRUE and Tiny leads the order array. Flips with
-            // preferred(). evidence: docs/perf/lu.md#why-tiny-is-absent-from-the-window
+            // EXPLICIT: `default:` returns TRUE and Tiny leads the order array. Inside
+            // the window only, so the vendor-FREE walk lands where the window points.
             case Algorithm::Tiny:
-                return false;
+                return tiny_window(s);
             case Algorithm::CTA:
-                return s.order() <= cta_max_order;
+                return !tiny_window(s) && s.order() <= cta_max_order;
             case Algorithm::Blocked:
-                return s.order() > cta_max_order;
+                return !tiny_window(s) && s.order() > cta_max_order;
             default:
                 return true;
         }

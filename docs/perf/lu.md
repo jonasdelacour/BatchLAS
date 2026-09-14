@@ -535,6 +535,96 @@ The header's declarations carry the contracts; this is what they mean.
 * `getrf_blocked_debug_params<T>(ctx, n)` packs **nb in the low 16 bits and the leading
   panel's leaf in the high 16** (1 = local, 2 = global); 0 when the driver is absent.
 
+### The tiny getrf window
+
+**2026-09-14.** The register-resident tier shipped with P1 and was left unrouted for want
+of a saturation grid. It has one now, and it routes: **float `8 <= n <= 32`**, **cfloat
+`9 <= n <= 16`**. This is the band the scoreboard showed us losing 0.21-0.74x in, and the
+losing arm there was the blocked/CTA one -- the tier that wins was simply never asked.
+
+Grid: `benchmarks/results/p8_getrf_tiny_window.csv` (240 rows, 80 cells x 3 arms) and
+`p8_getrf_tiny_edges.csv`. One process per cell, arms interleaved in that process, 9 reps,
+warm-up interleaved in the timed loop's arm order, host residual on items 0 and batch-1.
+**No cell was discarded**: worst `rel_sd` in the whole grid is under 0.10 and nothing came
+back `bad`. Ratio is `t_vendor / t_tiny`, so above 1 the tier wins; the gate is 1.11.
+
+| n | float 8k | 16k | 32k | 65k | cfloat 8k | 16k | 32k | 65k |
+|---|---|---|---|---|---|---|---|---|
+| 4 | 1.662 | 1.415 | 1.192 | *1.020* | 1.475 | 1.265 | *1.016* | **0.833** |
+| 8 | 1.644 | 1.482 | 1.400 | **1.303** | 1.471 | 1.295 | 1.181 | *1.117* |
+| 9 | 1.772 | 1.743 | 1.687 | **1.664** | 1.385 | 1.360 | 1.469 | **1.540** |
+| 12 | 1.743 | 1.707 | 1.708 | **1.735** | 1.346 | 1.325 | 1.436 | **1.941** |
+| 16 | 1.668 | 1.642 | 1.640 | **1.663** | 1.344 | 1.302 | 1.599 | **1.416** |
+| 17 | 1.023 | 1.085 | 1.106 | **1.143** | 0.397 | 0.363 | 0.377 | **0.368** |
+| 20 | 1.043 | 1.123 | 1.125 | **1.141** | 0.429 | 0.421 | 0.421 | 0.409 |
+| 24 | 1.058 | 1.079 | 1.084 | **1.140** | 0.457 | 0.524 | 0.518 | 0.508 |
+| 28 | 1.101 | 1.097 | 1.094 | **1.183** | 0.584 | 0.579 | 0.570 | 0.547 |
+| 32 | 1.192 | 1.077 | 1.123 | **1.225** | 0.626 | 0.631 | 0.643 | 0.646 |
+
+#### The two edges the 65,536 rung could not settle
+
+Two cells sat within 0.01 of the gate *and were falling with batch*, which is the direction
+that kills a window. Both were taken one doubling deeper, and one of them changed the
+answer:
+
+| cell | 65,536 | 131,072 | effect on the window |
+|---|---|---|---|
+| float n = 4 | 1.059 | **0.888** | stays out; the lower bracket is a measured LOSS |
+| float n = 8 | 1.306 | 1.256 | stays in |
+| cfloat n = 8 | 1.122 | **1.086** | **falls below the gate -- excluded** |
+| cfloat n = 9 | 1.618 | 1.993 | stays in, and is still rising |
+
+Taking cfloat n = 8 on the 65,536 reading alone would have shipped a cell that does not
+clear its own gate one rung deeper. It is the second time in this campaign that an
+unsaturated rung nearly bought a window (compare the geqrf leaf, where the unsaturated cell
+was misleading in the *other* direction).
+
+#### Why the floors sit where they do, and why cfloat's ceiling is 16
+
+The kernel is instantiated on an **N-bucket ladder, N in {8, 16, 32}**, and the window is
+that ladder read off a graph:
+
+* **Both types lose at n = 4.** n = 4 half-fills the N = 8 register array while cuBLAS
+  `getrfBatched` is at its most efficient -- the work is small enough that the vendor's
+  per-batch overhead is amortised and ours is not. The tier only pays once its bucket is
+  full.
+* **cfloat's cliff at 17 is the sharpest edge in this table: 1.416 -> 0.368.** n = 17 pads
+  into the N = 32 array, so a complex item carries roughly twice the register traffic it
+  needs. float absorbs that (1.143 at n = 17, still a win); complex does not. cfloat's
+  window is therefore *exactly the N = 16 instantiation*.
+* **float's ceiling of 32 is the TIER's, not a measured loss.** `supports()` refuses n = 33
+  because the kernel is square-only to 32, so there is no bracketing non-winner above the
+  window -- a wider register kernel is **untested, not refuted**. That is an open cell, not
+  a closed one.
+* **float n = 5..7 are unmeasured and deliberately excluded** by the floor of 8 rather than
+  admitted on a guess. They sit between a measured loss (4) and a measured win (8).
+
+#### Arming the window test: three breaks red, two unfalsifiable
+
+`RouteGetrf.TheMeasuredTinyWindowAndNothingElse` was armed in five directions. Three went
+red as predicted; **two could not, and the reason is worth recording rather than glossing**:
+
+| planted break | observed | why |
+|---|---|---|
+| float floor 8 -> 1, admitting the 0.888x cell at n = 4 | **red** | |
+| cfloat ceiling 16 -> 32, admitting the 0.368x cliff at 17 | **red** | |
+| cfloat floor 9 -> 8, admitting the cell that falls to 1.086x | **red** | |
+| remove the `tiny_max_n < 1` tier-absent gate | *stayed green* | the ceiling test `order > tiny_max_n` already refuses every order >= 1, so two guards defend one property |
+| remove the anti-overlap line from the Blocked arm | *stayed green* | Tiny (<= 32) and Blocked (>= 256) are disjoint by construction, so the line changes no answer today |
+
+Both unfalsifiable lines were **kept and relabelled** rather than deleted: they are defence
+in depth against a future widening of either window, and the code now says so instead of
+implying a test covers them. This is the same shape of finding P6 reported from its own
+arming -- a guard that cannot fail is not automatically a guard that should go, but it must
+never be counted as coverage.
+
+#### What moved, end to end
+
+The `auto` arm was measured alongside every cell above and read **1.000-1.007 against the
+vendor throughout**, which is the flip's before-picture: `Auto` was taking cuSOLVER at every
+one of these orders. fp64 is not routed here and was not re-gridded: on this part fp64 runs
+at 1/64 the fp32 rate, so the ratio measures a crippled unit rather than a kernel.
+
 ### The panel leaf is not the tier ceiling
 
 `getrf_leaf_fits` is deliberately **not** occupancy-scaled, and `getrf_panel_factorize`
