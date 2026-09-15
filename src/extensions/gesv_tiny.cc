@@ -47,9 +47,9 @@ namespace sd = ::batchlas::sycl_device;
 
 constexpr int kTinyWg = tn::kTinyWgSize;
 
-// A launch ABORT, not a slowdown, so it is encoded to fail at COMPILE time. The number
-// is getrf_tiny's worst probed count plus the 2*NR scalars this tier adds for cdouble at
-// NR = 4; it is a BOUND TO RE-PROBE, not a measurement.
+// A launch ABORT, not a slowdown, so it is encoded to fail at COMPILE time. NOW PROBED: worst
+// is cdouble N=16 NR=4 at 182 registers, frame 0, spill 0; every gesv tiny kernel is clean. The
+// 224 below is the HEADROOM a new instantiation may use before re-probing, not a measurement.
 // evidence: docs/perf/lu.md#p2-the-register-bound-is-assumed-not-probed
 constexpr int kWorstRegsPerThread = 224;   // per SUB-PARTITION: 32 x 224 = 7,168 of 16,384
 static_assert(resident::sm89_fits(kWorstRegsPerThread, kTinyWg),

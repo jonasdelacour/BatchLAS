@@ -1832,3 +1832,110 @@ means an unrolled loop was declined and `rA[]` left the register file, which is 
 slowdown and never a wrong answer, so only the probe can see it. The same note, and
 the 44-instantiation R7 count for both P2 kernels, is in
 `docs/perf/lu.md#p2-the-register-bound-is-assumed-not-probed`.
+
+## The probe's own gate could not fail
+
+`scripts/register_probe.sh` is the instrument every register-residency claim in this campaign
+rests on. Its spill gate was:
+
+```awk
+/Compiling entry function/ {e=1; next}
+/Function properties for/  {e=0}
+e && /spill stores/ && !/0 bytes spill stores, 0 bytes spill loads/ {n++}
+END {print n+0}
+```
+
+ptxas emits, per kernel, in this order:
+
+```
+ptxas info    : Compiling entry function '_Z...' for 'sm_89'
+ptxas info    : Function properties for _Z...
+    N bytes stack frame, M bytes spill stores, K bytes spill loads
+ptxas info    : Used R registers, ...
+```
+
+`Function properties for` arrives **between** the entry-function line and the data, so `e` was
+cleared before the spill test could ever run. **The gate printed 0 for every input, always.** A
+clean report from a gate that cannot report anything else reads exactly like a clean report.
+
+Fixed, and the fix is what surfaced
+[the posv cdouble spiller](#the-posv-tiny-tier-is-not-register-resident-for-cdouble): the same
+link now reports **1 entry function with non-zero spill** where the old gate reported 0.
+
+Three further defects fixed in the same pass, each of the same silent-zero family:
+
+* **Stack frame was not reported at all**, and it — not spill — is the gate for a residency
+  claim. The link reports **98 of 541 distinct kernels** with a non-zero frame.
+* **An entry name that did not match the mangled-name pattern was skipped by the gate while
+  still counting toward the denominator.** Now counted, printed, and a non-zero count exits
+  non-zero. Zero on every log on disk, so this was latent rather than a live miss.
+* **A SIGPIPE abort** in the frame listing (`printf | head` under `set -euo pipefail`) that
+  would have killed the script mid-report once the list outgrew the pipe buffer, truncating the
+  report it exists to produce. Reproduced at 500 rows (exit 141), fixed with `sed -n '1,20p'`,
+  which consumes its whole input.
+
+The script also fails loudly when the named target has no `link.txt`, rather than silently
+probing the default library — a real hazard here, since the factorization tiers live in
+`batchlas_extensions_cta` and the default is `batchlas_sycl`. Pass
+`BATCHLAS_BUILD_DIR` when the build tree is not `<repo>/build`:
+
+```
+BATCHLAS_BUILD_DIR=$PWD/build/presets/dev-tests \
+  scripts/register_probe.sh out.log '' batchlas_extensions_cta
+```
+
+The link takes about 340 s, so this is a deliberate act, not part of a build.
+
+## The posv tiny tier is not register-resident for cdouble
+
+Found by running `scripts/register_probe.sh` after fixing its gate — the gate had been
+structurally incapable of reporting a non-zero count, so this was invisible rather than
+unnoticed. See [the probe's own gate could not fail](#the-probes-own-gate-could-not-fail).
+
+Probed against `batchlas_extensions_cta` on this tree (sm_89, AOT device link, 1082 entry
+functions, 541 distinct kernels):
+
+| kernel | registers | stack frame | spill |
+|---|---|---|---|
+| `PosvTinyKernel<complex<double>, 16, 4>` | **255** | **96 B** | **184 B** |
+| `PosvTinyKernel<complex<float>, 32, 4>` | 149 | **256 B** | 0 |
+| `PosvTinyKernel<complex<double>, 16, 1>` | 246 | 0 | 0 |
+| `PosvTinyKernel<double, 32, 4>` | 222 | 0 | 0 |
+| every `GesvTinyKernel` instantiation | ≤ 182 | 0 | 0 |
+| every `GetrfTinyKernel` / `PotrfTinyKernel` / `GeqrfTinyKernel` | ≤ 193 | 0 | 0 |
+
+**Two of the tier's own instantiations are not register-resident**, which is the tier's entire
+premise: `complex<double>` at N=16/NR=4 spills 184 bytes over a 96-byte frame, and
+`complex<float>` at N=32/NR=4 carries a 256-byte frame with no spill at all. A non-zero stack
+frame is the gate for a residency claim and the probe never used to report it.
+
+**Both are on the default `Auto` path, not pin-only.** `route_posv.hh`'s `tiny_window()` admits
+every order up to `tiny_window_max_n()`, which is 16 for cdouble and 32 otherwise, so a caller
+asking for cdouble `n = 16` with `nrhs` in the 4-bucket reaches the spilling kernel through
+`Auto`.
+
+**It is not a launch abort.** The tier launches at `kTinyWgSize = 64`, i.e. 2 warps, so
+`ceil(2/4) * 32 * 256 = 8,192` against the sub-partition's 16,384 — comfortably legal. The cost
+is spill traffic inside a kernel written specifically to avoid it, not a crash.
+
+**The old bound was a tell.** `posv_tiny.cc` declared `kWorstRegsPerThread = 256`, above the
+255-register ISA ceiling, so no kernel could ever have reported it — exactly what an assumed
+bound looks like, and the comment said as much ("a BOUND TO RE-PROBE, not a measurement"). It is
+now the measured 255. `gesv_tiny.cc`'s assumed 224 turned out to be a safe over-estimate: its
+worst real instantiation is 182, clean.
+
+### What is owed
+
+Not fixed here, and deliberately not papered over by lowering a cap:
+
+1. **Why NR=4 costs so much more than NR=1 for cdouble** — 246 → 255-plus-spill is the whole
+   budget, and the 2·NR extra scalars the solve arm adds do not obviously account for it.
+2. **Whether the spill is measurable end to end.** The cdouble posv window was never timed at
+   the shapes this instantiation serves; the `posv` grids on this page are float and cfloat.
+   The window may be right anyway — spilling and still beating the composed arm is possible —
+   but nobody has looked.
+3. **The float N=32/NR=4 frame.** 256 bytes with zero spill usually means a local array that
+   did not get promoted; that is a read of the generated code, not of a counter.
+
+Until (2) is measured, the honest statement is that the cdouble posv tier is routed on a
+residency claim its own probe refutes.

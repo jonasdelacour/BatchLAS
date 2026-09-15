@@ -45,10 +45,11 @@ namespace sd = ::batchlas::sycl_device;
 
 constexpr int kTinyWg = tn::kTinyWgSize;
 
-// A launch ABORT, not a slowdown, so it is encoded to fail at COMPILE time. A BOUND TO
-// RE-PROBE, not a measurement: potrf_tiny's worst probed count plus the 2*NR scalars this
-// tier adds. evidence: docs/perf/potrf.md#p2-the-register-bound-is-assumed-not-probed
-constexpr int kWorstRegsPerThread = 256;
+// A launch ABORT, not a slowdown, so it is encoded to fail at COMPILE time. NOW PROBED, and
+// the old assumed 256 was a tell: it is above the 255-register ISA ceiling, so no kernel could
+// ever have reported it. Measured worst is 255 (cdouble N=16 NR=4), which SPILLS.
+// evidence: docs/perf/potrf.md#the-posv-tiny-tier-is-not-register-resident-for-cdouble
+constexpr int kWorstRegsPerThread = 255;
 // The bound is per SUB-PARTITION: 64 lanes is 2 warps in one of the four, 1 x 32 x 256 =
 // 8,192 of its 16,384. evidence: docs/perf/lu.md#the-register-cap-that-binds-is-per-sub-partition
 static_assert(resident::sm89_fits(kWorstRegsPerThread, kTinyWg),
