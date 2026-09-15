@@ -51,12 +51,12 @@ inline bool device_has_sub_group_size(const Queue& ctx, int32_t target_size) {
 }
 
 // `kernel_max_wg` is the largest work-group this particular kernel can launch on
-// this device, which is generally smaller than the device maximum: the merge
-// kernel uses ~80 registers per work-item, so 1024 work-items would need 81920
-// registers against a 65536 limit and the launch throws outright. Callers pass
-// the kernel-specific bound; 0 means "unknown", in which case only the device
-// limit applies. This matters now that the tuning tables ask for wide
-// work-groups.
+// this device, which is generally smaller than the device maximum: sm_89 owns its
+// registers in four sub-partitions of 16384, so the merge kernel's ~80 registers
+// per work-item cap it at 16384/(32*80) = 6 warps per partition, 768 work-items --
+// 1024 throws outright. Callers pass the kernel-specific bound; 0 means "unknown",
+// in which case only the device limit applies. This matters now that the tuning
+// tables ask for wide work-groups.
 inline int32_t choose_wg_size(const sycl::device& dev,
                               int32_t base_wg_size,
                               int32_t requested_mul,

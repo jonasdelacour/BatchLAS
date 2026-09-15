@@ -11,6 +11,12 @@ Two things this page is not. It is not a performance-debt list — those live pe
 written here was re-checked against the working tree, and where a source document's claim did not
 survive that check it is marked as such.
 
+**Two entries no longer fit the title, and are kept in place rather than deleted so the numbering
+stays stable.** #7 is **closed** — the tree grew the writer this page asked for and the entry went
+stale. #10 is **diagnosed and fixed, pending verification** — the mechanism is located and the fix
+is in the tree, but no run has confirmed it, and in this repository an unwatched guard is not a
+verified one. Neither is "in the tree today" in the sense the paragraph above means.
+
 The superseded root documents these were filed in are preserved at the git tag
 `perf-evidence/vendor-independence` (`git show perf-evidence/vendor-independence:WP7_FILED_DEFECTS.md`).
 
@@ -24,10 +30,10 @@ The superseded root documents these were filed in are preserved at the git tag
 | 4 | `src/backends/rocsparse.cc:30-31,62-63` | `ConjTrans` maps to the conjugating enum for **real** scalars | inferred wrong answers on AMD; unobservable here |
 | 5 | `src/backends/netlib_lapack.cc:508,520,537,549` | `trsm` reads `B` when `alpha == 0` | `NaN` from unwritten workspace |
 | 6 | `src/backends/netlib_lapack.cc:1389` | `getri` copies `n*n` contiguous elements and ignores both `ld`s | wrong answer at padded `ld` |
-| 7 | `src/backends/trsm_route.hh:40-56` | the heterogeneous-batch rejection has no writer, so the gate cannot fire | a stated safety property that is not enforced |
+| 7 | `src/backends/trsm_route.hh:51` | ~~the heterogeneous-batch rejection has no writer~~ | **not a defect — the field IS written; entry closed 2026-09-15** |
 | 8 | `src/backends/syrk_custom_dispatch.cc:261` | a forced native `syrk` lands on a route that writes both triangles | wrong answer, forced routes only |
 | 9 | `src/backends/syr2k_custom_dispatch.cc:210` | a forced native `syr2k` throws a cuBLASDx message it did not ask for | misleading diagnostic |
-| 10 | grid `latrd` (`SytrdBlockedLatrdGridCudaTest.GridMatchesLegacyTridiagonal`) | disagrees with the legacy path by ~5e-5 against a 1e-8 tolerance, at a DIFFERENT index every time | **wrong answer, ~1 run in 7** |
+| 10 | grid `latrd` (`src/extensions/latrd_lower_panel.cc`, the grid kernel's column-update / sumsq pair) | a cross-sub-group read-after-write on `Ab(r, i)` with no barrier between the two loops | **fixed; armed 20/20 red on deletion under the amplified geometry; residual rate at the default geometry not bounded** |
 
 ## 1. `ortho`'s transposed arm builds a view that does not describe the memory
 
@@ -185,17 +191,33 @@ so any padded leading dimension gives a wrong answer (and, if `C` is the tighter
 write past its last column). Pre-existing, recorded in [`../perf/lu.md`](../perf/lu.md), not
 fixed. The correct form is the per-column `std::copy_n` already used 400 lines above at `:995`.
 
-## 7. `trsm`'s heterogeneous-batch rejection can never fire
+## 7. CLOSED — `trsm`'s heterogeneous-batch rejection *can* fire
 
-`route_trsm.hh:43` rejects a heterogeneous batch (`if (s.heterogeneous_batch) return false;`) —
-correctly, since one `trsm` launch covers the whole batch with a single `(order, q, ld, stride)`
-tuple. But `trsm_op_shape` (`src/backends/trsm_route.hh:40-56`) never writes the field, so it
-keeps `OpShape`'s default of `false` (`include/batchlas/blas/dispatch/route.hh:162`).
-`MatrixView::is_heterogeneous()` exists and `getrf`'s builder calls it
-(`src/backends/getrf_route.hh:45`); `trsm`'s does not.
+**Closed 2026-09-15, by reading the file.** This entry claimed that `trsm_op_shape` never writes
+`heterogeneous_batch`, so `route_trsm.hh:43`'s `if (s.heterogeneous_batch) return false;` could
+never be reached with a true value. That is false in the working tree. `src/backends/trsm_route.hh:51`,
+inside `trsm_op_shape`, reads:
 
-The gate is a documented intention, not an enforced one. No measurement either way, and no test
-constructs a heterogeneous `trsm`.
+```cpp
+// supports() refuses a heterogeneous batch; without this the field keeps
+// OpShape's default false and that correctness gate can never fire.
+s.heterogeneous_batch = A.is_heterogeneous() || B.is_heterogeneous();
+```
+
+Writer and gate now agree, and the in-tree comment is a verbatim paraphrase of this defect entry —
+i.e. the fix was made *in response to* this filing and the filing was never retired. The same
+staleness had propagated into [`../perf/trsm.md`](../perf/trsm.md) (open debt 12 and the
+`supports()` paragraph); both are corrected in the same pass.
+
+**On what basis this is closed, and what is still not established.** Closed on source inspection
+only: the field is written, `B` is checked as well as `A` (a wider check than `getrf`'s, which
+sees one operand), and the default at `include/batchlas/blas/dispatch/route.hh:179` is no longer
+what a heterogeneous batch would leave behind. The original entry's *second* sentence still
+stands and is NOT closed: **no test in the tree constructs a heterogeneous `trsm`**, so the gate
+is argued, not armed. Per this page's own checklist item 1, a gate nobody has watched go red is
+not a verified gate. Anyone picking this up should build a heterogeneous `A` or `B`, assert
+`resolve_trsm_route` returns the vendor arm, and — the part that actually matters — assert it
+under `vendor_available == false`, where the route walk has nowhere left to go.
 
 ## 8, 9. Two forced-route defects in the level-3 dispatchers
 
@@ -215,44 +237,169 @@ are reachable only through an environment pin.
 Full context in [`../perf/level3.md`](../perf/level3.md) and
 [`../perf/dispatch.md`](../perf/dispatch.md).
 
-## 10. The grid `latrd` path disagrees with the legacy path NONDETERMINISTICALLY
+## 10. The grid `latrd` path: an unsynchronised cross-sub-group read-after-write
 
-**2026-09-14.** `SytrdBlockedLatrdGridCudaTest.GridMatchesLegacyTridiagonal` fails about
-**one run in seven**. It is a flaky WRONG ANSWER, not a flaky timeout.
+**Status: diagnosed, fixed, and the fix ARMED.** Filed 2026-09-14 as a nondeterministic wrong
+answer; the root cause was located on 2026-09-15, the barrier restored in
+`src/extensions/latrd_lower_panel.cc`, and the restoration armed the same day by deleting it
+again and observing red. The arming is under *What was run* below. Read that section before
+quoting this as closed: the amplified leg is decisive, the unamplified leg is not.
 
-Measured: **6 of 40** runs failed at the default routes, **4 of 40** with
-`BATCHLAS_GEMM_ROUTE=vendor`. Those rates are indistinguishable, so routed GEMM is not
-the cause. The disagreeing eigenvalue index is different on **every** failure observed --
-1058, 1090, 1219, 2135, 1063, 5253, 7377, 1366, 1155, 194 -- which is the signature of a
-race rather than a threshold that some input crosses. A representative miss at
-`n=1024 batch=8 nb=32 seed=456`:
+### The observation, as filed
 
-| | value |
-|---|---|
-| grid path `ds[1][i]` | -0.067254041269475984 |
-| legacy path `ds[0][i]` | -0.067303749995033968 |
-| tolerance | 1.024e-08 |
+`SytrdBlockedLatrdGridCudaTest.GridMatchesLegacyTridiagonal` failed about **one run in seven** —
+a flaky WRONG ANSWER, not a flaky timeout. **6 of 40** runs failed at the default routes, **4 of
+40** with `BATCHLAS_GEMM_ROUTE=vendor`; indistinguishable, so routed GEMM was not the cause. The
+disagreeing eigenvalue index was different on **every** failure observed (1058, 1090, 1219, 2135,
+1063, 5253, 7377, 1366, 1155, 194). A representative miss at `n=1024 batch=8 nb=32 seed=456` gave
+grid `-0.067254041269475984` against legacy `-0.067303749995033968`, tolerance `1.024e-08`: a
+~5e-5 disagreement, four orders of magnitude outside tolerance and far too large to be an
+association-order difference between two reduction trees.
 
-The disagreement is ~5e-5, i.e. **four orders of magnitude outside tolerance** -- far too
-large to be an association-order difference between two reduction trees.
+### The mechanism
 
-**Not caused by the small-n campaign (P0-P7).** No `sytrd`, `latrd`, `syr2k`, `her2k` or
-`steqr` source was modified by it, and pinning the one routed op those paths share
-(`gemm`) does not move the failure rate.
+Verified twice by reading `src/extensions/latrd_lower_panel.cc`, and the line numbers below
+re-checked against the working tree on **2026-09-15, after the barrier was inserted** (the insert
+moved everything below it down by five lines). They are approximate on purpose — the file is
+under concurrent edit — so **each step is quoted, and the excerpt, not the number, is the
+citation**.
 
-**Why it was not noticed before.** A full `ctest` runs this binary once, so at ~15% it
-passes roughly six runs in seven; several consecutive green full-suite runs are the
-expected observation even with the defect present. It is invisible to `-LE slow`
-iteration for the same reason.
+1. **The row partition.** For column `i` the grid kernel gives group `gg` a contiguous row block
+   (~line 728):
+   ```cpp
+   const int chunk = (total_r + G - 1) / G;
+   const int rlo = sycl::min(n, base_r + gg * chunk);     // base_r == i + 1
+   const int rhi = sycl::min(n, rlo + chunk);
+   const int slo = sycl::max(rlo, i + 2);                 // reflector tail start
+   ```
+2. **The write.** The column-update loop writes under the mapping `r = rlo + lid` (loop head
+   ~line 750; the write `Ab(r, i) = val;` itself is ~14 lines further down, ~line 764, at the
+   bottom of the `p < i` accumulation):
+   ```cpp
+   for (int r = rlo + lid; r < rhi; r += wg) { ... Ab(r, i) = val; }
+   ```
+3. **The read.** The sumsq loop immediately after re-reads the same column under a **different**
+   mapping, `r = slo + lid` (loop head ~line 774, the read `sumsq += abs2_if_complex(Ab(r, i));`
+   ~line 775):
+   ```cpp
+   for (int r = slo + lid; r < rhi; r += wg) { sumsq += abs2_if_complex(Ab(r, i)); }
+   ```
+4. **Nothing separated them.** The next synchronisation in the original grid kernel was
+   `grid_barrier(it, bar, G);   // barrier 1` (~line 780) — *after* the sumsq loop, one loop too
+   late.
+5. **The offset is exactly one row.** For group `gg == 0`, `rlo == base_r == i + 1`, so
+   `slo == max(i+1, i+2) == rlo + 1`. Work-item `lid` therefore reads row `rlo + lid + 1`, which
+   is the row work-item `lid + 1` wrote in step 2. For `gg >= 1`, `rlo >= i + 2` so `slo == rlo`
+   and each item reads only what it wrote — **the race is confined to group 0**.
+6. **The legacy kernel in the same file has the barrier.** Its column update ends with the same
+   `Ab(r, i) = val;` (~line 430) and is followed **immediately** by
+   `it.barrier(sycl::access::fence_space::global_space);` (~line 432) before its own
+   `x0 = i + 2` sumsq loop (~line 439). The grid rewrite dropped it; the fix restores the
+   identical statement at ~line 770, between the write loop and the sumsq loop, with the
+   write/read mappings recorded in a three-line comment immediately above it.
 
-**Where to look.** `GridMatchesLegacyTridiagonal` compares the grid `latrd` against the
-legacy one, and the grid path is already recorded as fragile: its group cap is
-`SMs / batch`, so it does not run at all at `batch >= 128` and its A/B is vacuous there.
-`batch = 8` is inside the band where it does run. A missing or mis-scoped barrier between
-the panel's group-partitioned update and its consumer would produce exactly this -- a
-different index each time, a magnitude far above rounding.
+### Provenance: the grid rewrite, not the small-n campaign
 
-**Reproduce:**
+The original filing said "**not caused by the small-n campaign (P0-P7)** — no `sytrd`, `latrd`,
+`syr2k`, `her2k` or `steqr` source was modified by it". That sentence is **kept, but restated**,
+because the diagnosis moved the defect from "somewhere, possibly routing" to a specific pair of
+loops in a specific source file, and a blanket "no `latrd` source was modified" now reads as a
+claim about a file that *is* modified in the working tree (by the fix above).
+
+The precise form: the racing loop pair was introduced by **`87f6887`, 2026-08-03,
+"latrd: add a multi-work-group panel path (`BATCHLAS_LATRD_IMPL=grid`)"** — that commit adds
+`chunk`/`rlo`/`rhi`/`slo`, the `r = rlo + lid` write loop and the `r = slo + lid` sumsq loop with
+no barrier between them, and the pre-fix tip of this branch still shows that gap.
+**`5401f63`, the same day**, made the grid path the default for `n >= 768`, which is what turned a
+latent opt-in race into a flake anybody could hit. The small-n campaign's own commits run
+**2026-09-10 to 2026-09-14** (`30c0e8f` .. `a6f6294`) — six weeks later — and none of them touches
+this file; the only edit to it in this working tree is the restored barrier. The supporting
+measurement from the filing also still stands: pinning the one routed op these paths share
+(`BATCHLAS_GEMM_ROUTE=vendor`) did not move the failure rate (4/40, against 6/40 at the default
+routes).
+
+**So: a pre-existing defect, six weeks older than P0-P7, found while the campaign was running.**
+Do not let the campaign's dates in the revision history attach it to the campaign.
+
+### When it can fire
+
+Item `lid` and item `lid + 1` execute in lock step whenever they share a sub-group, so the race
+only expresses itself at a sub-group boundary: `lid ≡ 31 (mod 32)`. That needs **both**
+
+* `wg > 32`, so item `lid + 1` exists in another sub-group, and
+* `chunk > 32`, so row `rlo + 32` is still inside `[slo, rhi)` and item 31 actually reads it.
+
+`chunk = (total_r + G - 1) / G` depends on `n`, `i` and **`G` alone — not on `wg`**. That is the
+part that makes the configuration counter-intuitive: *lowering* the group count raises `chunk`
+and widens the race. Working through `latrd_grid_launch` (same file, ~line 1160-1215) with
+`resident_cap = MAX_COMPUTE_UNITS = 128` on this box, `cap = 128 / batch`,
+`G = min(cap, ceil(rows/32))` and `wg = ceil(ceil(rows/G)/32)*32` clamped to `[32, 256]`, the
+condition reduces to `floor(128 / batch) < ceil((n-1) / 32)` — and when it holds, `wg >= 64`
+follows automatically.
+
+At the default `latrd_grid_min_n` of **768** (`src/util/settings.cc:176`) the grid path is the
+default for `n >= 768` with **no environment variable set at all**. The filed configuration
+`n=1024, batch=8` gives `cap=16`, `G=16`, `chunk=64`, `wg=64` — race live, exactly as reported.
+So does `n=768` at `batch >= 6` (`cap=21 < 24`, `chunk=37`). At `batch=1..4` and `n=1024`,
+`G = ceil(rows/32) = 32` and `chunk = 32`, which is **not** `> 32`: the default route is clean
+there, which is part of why this took so long to see.
+
+### What was run (2026-09-15)
+
+R9 arming, four legs, each a full relink of the shared library (the `.so` link is the AOT device
+compile, so none of these could have been a stale build):
+
+| leg | geometry | expected | observed |
+|---|---|---|---|
+| barrier present | amplified, x20 | green | **green** |
+| barrier present | default, x40 | green | **green** |
+| **barrier deleted** | **amplified, x20** | **red** | **RED, 20 of 20** |
+| barrier deleted | default, x40 | red | green |
+| barrier restored | amplified, x20 | green | **green** |
+
+The red leg fails at `tests/sytrd_blocked_tests.cc:545`, the grid-vs-legacy `ASSERT_NEAR` on the
+diagonal, with differences of `4.45e-05` and `8.56e-04` against a tolerance of `1.024e-08` — four
+to five orders out, the same signature as the original filing and far too large for a reduction
+association-order difference.
+
+**The fourth leg is the honest caveat and must not be filed off.** With the barrier deleted, the
+*default* geometry passed 40 of 40. That is not evidence the default route is safe; it is the
+expression rate. At `n=1024, batch=8` the default gives `wg=64` — two sub-groups, so exactly
+**one** boundary lane crosses per column — against eight sub-groups and seven crossings per
+column under the amplifier, over `chunk=512` rows instead of 64. The default window is roughly
+16x narrower, which is exactly why the original flake was ~1 run in 7 rather than 1 in 1, and why
+40 runs of a single filter can miss it. The amplified leg is what proves the barrier is
+load-bearing; the unamplified leg proves only that 40 samples are too few to see this window.
+
+What this therefore does and does not establish: the write/read hazard is real, the restored
+barrier removes it, and the deleted-barrier configuration is reproducibly wrong under a geometry
+the code reaches by supported environment variables. It does **not** establish a bound on the
+residual rate at the default geometry — the barrier makes the hazard unexpressible by the memory
+model, and that argument is stronger than any number of green runs, but it remains an argument.
+
+### What is still owed
+
+1. **An amplified repro, red before the fix and green after.** *(Done — see the table above.)*
+   Force the group count **down**,
+   which forces `chunk` **up**:
+   ```
+   BATCHLAS_LATRD_GRID_GROUPS=2 BATCHLAS_LATRD_GRID_WG=256 \
+     ./build/presets/dev-tests/tests/sytrd_blocked_tests \
+       --gtest_filter=SytrdBlockedLatrdGridCudaTest.GridMatchesLegacyTridiagonal
+   ```
+   At `n=1024` that gives `chunk = ceil(1023/2) = 512` and `wg = 256`, so eight sub-group
+   boundaries per read pass instead of one — roughly a 16x wider window than the default
+   configuration the flake was observed at. `GROUPS=2` only *lowers* `G` below the residency cap,
+   so it does **not** need `BATCHLAS_LATRD_GRID_FORCE_UNSAFE` and cannot deadlock the software
+   grid barrier. The pre-fix leg has to be run with the barrier at ~line 770 deleted and the
+   shared library relinked — the `.so` link is the AOT device compile, so a stale build proves
+   nothing (checklist item 1).
+2. **An unamplified loop**, the original 40-run form below, expected 0/40. Run post-fix: 0/40,
+   green. But see the caveat above — the same 40-run form was *also* green with the barrier
+   deleted, so on its own it does not distinguish *gone* from *narrowed*, and it did not settle
+   that question here. Settling it needs either many more samples at the default geometry or
+   `compute-sanitizer --tool racecheck`, which is not part of ctest and needs its own GPU slot.
+
 ```
 for i in $(seq 1 40); do
   ./build/presets/dev-tests/tests/sytrd_blocked_tests \
@@ -260,6 +407,43 @@ for i in $(seq 1 40); do
       >/dev/null 2>&1 || echo "fail $i"
 done
 ```
+
+### A remediation note in the original filing that is wrong
+
+The filing suggested adding a test that **pins the work-group size high**. That is not the
+remediation, and `tests/sytrd_blocked_tests.cc:597-612` is the proof:
+
+```cpp
+TEST(SytrdBlockedLatrdGridCudaTest, ForcedGroupCountsAgree) {
+    for (const char* groups : {"2", "3", "7", "16", "64"}) {
+        for (const char* wgs : {"32", "128"}) {
+            ScopedEnvVar g("BATCHLAS_LATRD_GRID_GROUPS", groups);
+            ScopedEnvVar w("BATCHLAS_LATRD_GRID_WG", wgs);
+            run_latrd_grid_case<double>(129, 1, 32, "grid", 200.0);
+```
+
+`wg` is already pinned to 128 in half its cells, and the test has not been reported flaky. Two
+corrections to the filing, in opposite directions:
+
+* **Pinning `wg` high is necessary and not sufficient.** `wg > 32` is only one of the two
+  conditions; `chunk > 32` is the other, and `chunk` is set by `G`. Of this test's ten
+  `(groups, wg)` cells, the five at `wg = 32` cannot race at all, and of the five at `wg = 128`
+  only `G = 2` and `G = 3` give `chunk > 32` on the first panel (`n_t = 129`, `total_r = 128`, so
+  `chunk = 64` and `43`); `G = 7/16/64` give `chunk = 19/8/2` and are clean by construction.
+* **But it is *not* "effectively clean", and this page should not say so.** Two of its ten cells
+  do reach the race, and its tolerance is tight enough to see one: `eig_tol = 200 *
+  tolerance<double>() = 200 * 1e-10 = 2e-8` (`tests/test_utils.hh:201-210`), against an observed
+  disagreement of ~5e-5. The honest statement is that the test is an **unreliable** guard, not a
+  blind one — at `n=129, batch=1` group 0 contributes exactly **one** crossing pair per column
+  and only its first two panels have `chunk > 32`, so about **64** crossing pairs per run in its
+  best cell, against about **2,300** for the flaky test (9 grid-path panels x 32 columns x 8
+  batch items, one pair each). Roughly 40x less exposure, from a static count of the loops — not
+  a failure-rate measurement. It has not been observed to fail; nobody has run it enough times to
+  say it cannot.
+
+The real remediation is a case that forces `G` **down** at a large `n` — the amplified repro
+above — because that is the only knob that inflates `chunk`. `BATCHLAS_LATRD_GRID_WG` alone
+cannot reach the defect no matter what it is set to.
 
 ## One filed claim that did not survive re-checking
 

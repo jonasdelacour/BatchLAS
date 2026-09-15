@@ -1,7 +1,8 @@
 # POTRF: the CTA kernel, the blocked driver, and the 48 KB SLM launch hole (WP4)
 
-Two native tiers ship, both linked and correct; **neither is preferred**, so a vendor-present build still resolves
-every `potrf` to cuSOLVER. They exist so a `-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF` build stops throwing `NoRouteError`.
+Four native tiers ship, all linked and correct, and **two windows are routed**: a vendor-present build takes a
+native tier for `Uplo::Lower`, `float` and `complex<float>`, at `n <= 256`, and cuSOLVER everywhere else. The tiers
+also exist so a `-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF` build stops throwing `NoRouteError`.
 
 All numbers: RTX 4090 (sm_89, 128 SM), one card held per campaign, under `experiments/gpu_guard.sh`. Ratios are
 `vendor / native` — **> 1 means native wins** — unless the table says otherwise.
@@ -18,17 +19,26 @@ All numbers: RTX 4090 (sm_89, 128 SM), one card held per campaign, under `experi
 
 All four scalar types on every arm (cdouble n = 17..32 excepted on Tiny).
 
-**`preferred()` is no longer false.** P3 measured the LPanel tier and potrf now carries its first routed window:
-**32 < n <= 256, `Uplo::Lower`, `float` and `complex<float>`** — see
-[the measured LPanel window](#the-measured-lpanel-window). Inside it `Auto` takes a native tier in a
-vendor-present build; the CTA/LPanel split sits at order 35 for float and 32 for cfloat. Everything outside that
-window — `Upper`, `double`, `cdouble`, n <= 32 and n > 256 — still takes cuSOLVER.
+**`preferred()` is no longer false, and it now carries TWO windows** (`route_potrf.hh:80-110`), both
+`Uplo::Lower` and both `float` and `complex<float>` only — `lpanel_types()` and an explicit `uplo` test gate the
+whole predicate before either window is consulted:
 
-**Tiny remains unrouted.** It is FIRST in the candidate order but `native_tier_preferred` answers **false** for it,
-so it is reachable by an explicit pin only. See [the-tiny-tier](#the-tiny-tier): it has a register table and two
-negative results, and it is now known to measure **2.19-2.59x** at n <= 32 — that band is left on the table
-deliberately, because the win was recorded after the window was cut and has not been bracketed.
-The rest of the candidate order (`route_potrf.hh`) is *mostly* a capability ladder:
+* **`n <= 32` is the register tier.** `tiny_window(s)` is tested FIRST and, when it holds, `preferred()` answers
+  for `Algorithm::Tiny` and for nothing else (`route_potrf.hh:87`). Its bound is
+  `min(s.tiny_max_n, 32)`, so cdouble's lower instantiation cap would apply if the type reached the predicate at
+  all. Grid: [the tiny potrf window](#the-tiny-potrf-window).
+* **`32 < n <= 256` is CTA-or-LPanel.** `best_native_tier` picks one arm and `preferred()` additionally requires
+  it to be the tier the grid measured at that order — CTA to 35 for float, 32 for cfloat, LPanel above. Grid:
+  [the measured LPanel window](#the-measured-lpanel-window).
+
+Everything outside both windows — `Upper`, `double`, `cdouble`, and **n > 256** — still takes cuSOLVER. Two of
+those exclusions are *untested, not refuted*, with the grids that would settle them at
+[unmeasured Tiny windows](#unmeasured-tiny-windows-upper-and-the-double-types).
+
+**Tiny is FIRST in the candidate order and is now routed there.** See
+[the-tiny-tier](#the-tiny-tier) for its register table and two negative results; at the tier edge, n = 32, it
+measures **2.187 / 2.591x** the vendor at batch 16k / 32k (float), which is the cell that decided the boundary
+against LPanel. The rest of the candidate order (`route_potrf.hh`) is *mostly* a capability ladder:
 the blocked driver's diagonal leaf *is* the CTA kernel on a sub-view, so above `cta_max_n` only Blocked can serve.
 **Below it the two arms overlap and the static array decides** — `supports(Blocked)` carries no lower order bound, so
 for `Uplo::Lower` at `n <= cta_max_n` both are supported and the vendor-free walk takes CTA because it is listed
@@ -78,9 +88,18 @@ caller any supported native route, which is why a window is about the vendor-pre
 
 `route_diff.sh` across both landings shows zero changed non-potrf rows;
 what changed is potrf's `native_route_supported` column, 0 → 1 (`route_potrf.hh:3-4`), and the Phase 2 capture is
-+28 additions / 0 removals. **The Phase 2 triage delta's route diff was never re-run** — the capture needs
-`-DBATCHLAS_ENABLE_COVERAGE=ON`, i.e. two device-link-bound rebuilds — and was argued instead from the diff touching
-no routing predicate (one `group_barrier`, two `fill`s, four in-order guards, one tuning constant, comments).
++28 additions / 0 removals. **The Phase 2 triage delta's route diff was never re-run, and the reason recorded here
+for skipping it was false.** It claimed the capture needs `-DBATCHLAS_ENABLE_COVERAGE=ON`, i.e. two
+device-link-bound rebuilds. **There is no such option and there never was one that worked**: `cmake/BatchLASOptions.cmake:141-150`
+records that it is deliberately absent, because the gate sits in `resolve_route`, an inline function template, so a
+consumer TU compiled without the macro interposes its own uninstrumented copy and recording silently stops. It is
+gated at RUNTIME on `$BATCHLAS_COVERAGE_OUT`, which `scripts/route_diff.sh` sets itself — "any ordinary build
+works … no special configuration", in the script's own words. The skip therefore rests only on the second half of
+the argument, that the diff touched no routing predicate (one `group_barrier`, two `fill`s, four in-order guards,
+one tuning constant, comments). That is an argument from reading the diff, which is exactly what `route_diff.sh`
+exists because it cannot establish. **The obligation is OWED**: one `ctest` run per side under
+`BATCHLAS_COVERAGE_OUT`, no reconfigure. Note that [open debts](#open-debts) item 14 predicts the capture would
+show nothing anyway — but "the instrument is blind here" is a result to record, not a reason to skip the run.
 
 The grids below are the *input* to flipping a cell, not the decision. The gate is three-part:
 `t_native <= 0.90 * t_vendor` at saturation, **and** no accuracy regression, **and** an end-to-end win.
@@ -541,7 +560,27 @@ is RED on all four types (`inf`, 1.99e+266, 9.39e+25, 6.75e+234).
 
 ## Open debts
 
-1. **`preferred()` is all-false.** No cell flipped; the three-part gate has not been run.
+1. **Two windows ship; the rest of the surface is unflipped.** (Was "`preferred()` is all-false" — refuted on
+   2026-09-14 by P1's tiny window and P3's LPanel window.) What is routed: `Uplo::Lower`, `float` and
+   `complex<float>`, `n <= 32` on `Algorithm::Tiny` and `32 < n <= 256` on CTA/LPanel. What remains unflipped, and
+   why, each stated with the right word and split by TYPE, because the two types do not share a verdict here:
+   **n > 256 for `float`** is *refuted at the smaller batch* of its bracket (1.049 at n = 384 / batch 512, 1.079
+   at n = 512 / batch 512, both under the gate; they clear it only at the doubled batch, so R8a leaves them with
+   the vendor). **n > 256 for `complex<float>` is not refuted, because it was never timed.** The two bracket
+   cells the grid prints for cfloat read "(does not fit)": `slm_per_matrix(384, 8, 8) = 25,344 B` exceeds
+   `occupancy_budget(97280, 4) = 24,320 B`, so `supports()` is false, the pin falls through to `automatic()` and
+   the row measures the vendor against itself. Above the cfloat LPanel ceiling of 368 the band is *unreachable* —
+   a stronger statement than refuted, and one no timing can change without a wider tier — while the reachable
+   strip `257 <= n <= 368` is ***untested***: not one cell of it was run. See
+   [the measured LPanel window](#the-measured-lpanel-window) for both bracket rows as recorded.
+   `Uplo::Upper` and the two double types are ***untested, not
+   refuted*** — see [unmeasured Tiny windows](#unmeasured-tiny-windows-upper-and-the-double-types) and debt 5 for
+   the blocked driver's separate Upper gap. Gate evidence, per window, stated as recorded and no wider: LPanel has
+   the grid, the bracketing non-winners at n = 384 and 512 (float only — cfloat does not fit there), and an
+   end-to-end A/B through the facade
+   (`factor_bench --arms=vendor,auto`); Tiny has the grid and the `auto`-arm before-picture (0.999-1.003) read
+   beside every cell. **`ortho_benchmark` was not run for potrf at all**, so no window here has a caller-level
+   number.
 2. **Complex is 0.311-0.509x vendor-free and the cause is outside this driver.** A register-tiled complex GEMM is
    worth ~2.7x on vendor-free cdouble potrf alone — the highest-value follow-on.
 3. **Small `n` (<= 256) loses for every type, and it is the Phase 1 leaf.** No blocked-driver tuning addresses it.
@@ -577,6 +616,22 @@ is RED on all four types (`inf`, 1.99e+266, 9.39e+25, 6.75e+234).
 15. **`Uplo::Upper` coverage in `potrf_tests` is lighter than Lower** for `PackedBatchMatchesSolo`,
     `EmptyInfoSpanStillFactorises`, `ComplexDiagonalIsExactlyReal` and `FacadeReachesTheCtaKernel`; residual and
     `info` sweep both. 112 of 216 cases skip (host backends of a GPU kernel).
+16. **The CTA/Blocked overlap below `cta_max_n` is decided by array order, not by a measurement.** `supports()`
+    carries no lower order bound on Blocked, so for `Uplo::Lower` at `n <= cta_max_n` both arms are supported and
+    the vendor-free walk takes CTA because `kPotrfOrder` lists it first. One data point exists (float n = 128
+    b = 512: CTA 0.293 ms against blocked 0.301 ms). This is the item the top of this page points at.
+17. **B6 is unfalsifiable on this hardware, and is held by a data-flow argument alone.** The barrier ending
+    `potrf_lpanel_body`'s panel loop orders the panel-end global store against the NEXT panel's left-looking
+    staging read of those same columns, by different work-items (`src/extensions/potrf_lpanel_device.hh:8-10`;
+    the store/`B6` pair is at `:158-167`). Deleting it was planted and measured **GREEN** — nothing red at batch
+    1024 in `PanelStoresArePublishedAtSaturatingBatch` (all four types, n to 512), nor at batch 4096/16384 through
+    `factor_bench` — apparently because the 8 dependent global loads of the next panel's prefetch cover the window
+    on this card. So **no test on this hardware can arm it**, and none claims to; see
+    [armed breaks (R9) — LPanel](#armed-breaks-r9--lpanel) row 1 and the comment on that test. Record this as
+    *unfalsifiable*, never as *covered*: the dependency is real in the data flow, another card or another
+    prefetch depth may expose it, and "no test goes red" is not a licence to delete the barrier. Closing this debt
+    means a probe that widens the hazard window on purpose (a shortened prefetch, or a forced warp skew), not
+    another batch.
 
 ## Raw evidence
 
@@ -703,6 +758,60 @@ The duplicated `uplo` gate is not pure redundancy: `native_tier_preferred` calls
 taking the tier for Upper on an unmeasured basis. That path is correct either way -- the
 kernel has no uplo gate in `supports()` because Upper is the same recurrence on a
 transposed tile -- so the cost of the restriction is an unclaimed win, not a wrong answer.
+
+### Unmeasured Tiny windows: Upper and the double types
+
+Two exclusions from [the tiny potrf window](#the-tiny-potrf-window) are **untested, not refuted**. Neither is a
+correctness gate and neither needs new device code — both kernels are already instantiated and linked. What is
+missing in each case is a grid. Recorded with the grid that would settle it, so the next pass measures instead of
+re-deriving.
+
+#### (a) `Uplo::Upper`, float and `complex<float>`
+
+**The kernel is correct for Upper; this was re-verified, not assumed.** `potrf_tiny.cc` branches on `upper` in
+exactly two places, the load and the store, and the recurrence between them is untouched:
+`tiny_load_upper` reads `S(i,c) = conj(A(c,i))` (`tiny_device.hh:91-107`) and `tiny_store_upper` writes the result
+back through the same transform (`:118-127`). That is why `supports()` carries no `uplo` gate for Tiny. Three
+tests exercise both triangles on oracles independent of the kernel: `TinyResidualBothTriangles` sweeps **every**
+order 1..cap x {Lower, Upper} x ld in {n, n+5} x batch in {1, per_wg+3} against a host multiply-back residual,
+`TinyAgreesWithCtaWithinOnePanel` against the CTA kernel, and `TinyOtherTriangleIsNeitherReadNorWritten` against a
+finite sentinel — all four scalar types.
+
+So the exclusion is **purely the missing grid**: `p9_potrf_tiny.csv` and `p9_potrf_low.csv` were run `Uplo::Lower`
+only, and an unmeasured triangle is not a window. The restriction is spelled twice on purpose (in `preferred()`
+and again inside `tiny_window()`, which `native_tier_preferred` calls without the outer check), which is why the
+planted "admit Upper" break stayed green. Cost of the restriction: an unclaimed win, never a wrong answer.
+
+**The grid that would settle it.** The Lower grid re-run with `uplo = Upper` and nothing else changed: the same 14
+orders (n in {1,2,3,4,6,8,9,12,16,17,20,24,28,32}), batch 65,536, one process per cell, arms interleaved in the
+timed loop, 9 reps, ratio `t_vendor / t_tiny`, the `auto` arm read beside every cell as the before-picture, and
+the same `rel_sd` 10% discard rule. The only per-cell difference from the Lower run is the load/store transform,
+so what the grid has to establish is whether that transform costs enough to drop the *weakest* cells under the
+gate — cfloat n = 17 clears it by 1.23x on Lower, which is the margin at risk. Flipping also means changing the
+Upper expectation in `TinyRouteTableAndVocabulary` (`tests/potrf_tiny_cases.inc:576-581`); that expectation is a
+deliberate guard on "unmeasured", not an oversight.
+
+#### (b) `double` and `complex<double>`
+
+`potrf_tiny.cc` instantiates both (`BATCHLAS_POTRF_TINY_INSTANTIATE(double)` and
+`(std::complex<double>)`) and caps them at `PotrfTinyCap` = 32 and **16**; `supports()` admits them, because
+`tiny_max_n` is filled from `potrf_tiny_max_n<T>()` (`src/backends/potrf_route.hh:59`) with no type test. They are
+refused one line *before* the window is reached: `preferred()` opens with `if (!lpanel_types()) return false;`,
+and `lpanel_types()` is `float || complex<float>`.
+
+**Widening must introduce a separate `tiny_types()` predicate; it must NOT widen `lpanel_types()`.**
+`lpanel_types()` has three call sites in `route_potrf.hh` — `preferred()`, `tiny_window()` and the `lpanel_holds`
+term of `native_tier_preferred()` — so widening it would drag the `32 < n <= 256` window along with it and route
+double and cdouble to CTA/LPanel on no grid at all: P3 measured float and cfloat only, and [open debts](#open-debts)
+item 2 records complex running 0.311-0.509x vendor-free with the cause outside this driver. One predicate, two
+windows, is exactly how that accident happens.
+
+**The grid that would settle it.** n in {1,2,4,8,9,12,16,17,24,32} for `double` and {1,2,4,8,9,12,16} for
+`complex<double>` (its instantiation cap is 16, so there is nothing above it to measure), `Uplo::Lower`, batch
+65,536, same protocol as (a). Two things to read off it rather than assume: the padded-bucket effect that makes
+cfloat n = 17 the weakest Lower cell should be *stronger* for the wider types, and the register demand is `rA[N]`
+per lane, so occupancy at N = 32 is where a loss would appear first. `kTinyWorstProbedRegs` is a probe over the
+instantiations that already ship, these two included, so no new launch gate is needed — only a number to quote.
 
 ### The posv window is not a no-op
 
@@ -902,6 +1011,18 @@ them is the defect the pin exists to catch.
 | double | **54** / 109 | **54** / 109 | **5,888** / 12,160 |
 | complex\<float\> | **54** / 109 | **54** / 109 | **5,888** / 12,160 |
 | complex\<double\> | **38** / 77 | **38** / 77 | **2,944** / 6,080 |
+
+**Where each number comes from, so it can be re-derived without a build.** Every potrf figure in this section and
+in [what ships](#what-ships) is `resident::resident_max_n(n -> potrf_hole_padded(potrf_slm_per_matrix(n, NB, TS,
+sizeof(D), sizeof(R))), 97280, min_blocks)` — `potrf_cta_max_n_for_slm<T>` verbatim (`potrf_cta.cc:136-149`), with
+`(NB, TS)` from `PotrfCtaConst` (8/4 for float, double and cfloat; 8/2 for cdouble). `min_blocks = 4` is the
+declared default (`potrf_native.hh:45-47`, `resident::kMinBlocksPerSm`) and gives the **advertised** row
+77/54/54/38 at an `occupancy_budget` of 24,320 B; `min_blocks = 1` gives the **resident** row 155/109/109/77 at
+the full 97,280 B. Re-checked against the shipped expressions on 2026-09-15: all eight ceilings, the
+bytes-at-ceiling column (96,540 / 95,476 / 95,444 / 95,328) and the first-miss column (98,408 / 98,108 / 98,076 /
+99,056) reproduce exactly — **no drift**. The same two numbers reach the blocked driver through
+`potrf_blocked_params`, which picks `min_blocks` by order (4 at `n <= 256`, else 1) and clamps
+`nb = min(want, ceiling)` (`potrf_blocked.cc:81-86`); that clamp is why no shipped `nb` equals a fit ceiling.
 
 `geqrf`'s occupancy target is 2 rather than 4
 ([qr.md](qr.md#why-geqrfs-target-is-2-and-not-4)), and its figures are the ones the 48 KB hole clamp touches: half of 97,280 lands
@@ -1131,6 +1252,17 @@ place with its written justification:
 here.
 
 ### Not measured yet
+
+**Superseded on 2026-09-14 — the tier IS measured and routed; see
+[the tiny potrf window](#the-tiny-potrf-window).** Kept because its predictions are worth
+scoring against the grid that arrived: the win at float/cfloat `n <= 16` held (3.02-10.64x and
+1.57-7.43x), but the two predicted **losses did not materialise** — cfloat n = 32 measured
+1.30x, and across the 17..31 strip (grid cells 17, 20, 24 and 28) **cfloat** measured
+1.23-1.32x while **float** measured 2.06-2.93x. Both ranges are type-qualified on purpose:
+the 2.93 is FLOAT at n = 28, and no cfloat cell in that strip exceeds 1.32. Weakest of their
+rows, but still ahead of cuSOLVER at every cell.
+The bucket-fill reasoning was right about which cells would be weakest and wrong about the
+sign. Nothing below was re-run; read it as the pre-grid expectation.
 
 No timing at all. The tier is correct and register-resident; the grid
 (n in {4,8,9,16,17,24,32} x batch x 4 types x both Uplo, ld = n and ld = n+5 as separate
@@ -1382,8 +1514,10 @@ up** for cfloat, where CTA loses to the vendor at every order above 33.
   silently measures the vendor (see the named cells below). The edge is a FIT, not a timing.
 * Lower: n = 32 is not a timing edge but a TIER edge. The Tiny tier (P1) is the measured
   winner there (float 2.187 / 2.591 against LPanel's 2.053 / 2.314 at batch 16k / 32k), and
-  Tiny is itself unrouted, so `n <= 32` stays P1's decision, not P3's. The window's floor is
-  `order() > 32` for that reason, and not because native loses below it.
+  `n <= 32` stays P1's decision, not P3's. The window's floor is
+  `order() > 32` for that reason, and not because native loses below it. (This paragraph as
+  first written added "and Tiny is itself unrouted" — true when the grid was read, refuted
+  the same day: P1's window ships and `tiny_window()` now owns `n <= 32`.)
 
 **The kill/confirm probe P3's plan asked for, answered.** "Does the blocked driver lose at
 n <= 256 because of its leaf?" — **yes, and by a lot.** `blocked` is 0.22-0.94x of the

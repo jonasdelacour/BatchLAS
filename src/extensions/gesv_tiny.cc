@@ -51,8 +51,8 @@ constexpr int kTinyWg = tn::kTinyWgSize;
 // is getrf_tiny's worst probed count plus the 2*NR scalars this tier adds for cdouble at
 // NR = 4; it is a BOUND TO RE-PROBE, not a measurement.
 // evidence: docs/perf/lu.md#p2-the-register-bound-is-assumed-not-probed
-constexpr int kWorstRegsPerThread = 224;
-static_assert(kTinyWg * kWorstRegsPerThread <= 65536,
+constexpr int kWorstRegsPerThread = 224;   // per SUB-PARTITION: 32 x 224 = 7,168 of 16,384
+static_assert(resident::sm89_fits(kWorstRegsPerThread, kTinyWg),
               "re-run scripts/register_probe.sh before raising the tiny work-group size");
 
 // cdouble stops at 16 for the same reason getrf_tiny does: 32 rows of a 16-byte scalar

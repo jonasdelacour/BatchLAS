@@ -45,11 +45,12 @@ struct PotrfTinyCap { static constexpr int kMaxN = 32; };
 template <>
 struct PotrfTinyCap<std::complex<double>> { static constexpr int kMaxN = 16; };
 
-// A LAUNCH gate: violating it aborts the enqueue (trsm_native.cc:113). The gate that
+// A LAUNCH gate: violating it aborts the enqueue. What binds is the SUB-PARTITION file --
+// 64 lanes is 2 warps in one partition, 1 x 32 x 176 = 5,632 of its 16,384. The gate that
 // actually bites here is the probe's STACK FRAME column. evidence: docs/perf/potrf.md#the-tiny-tier
 constexpr int kTinyWorstProbedRegs = 176;
-static_assert(kTinyWgSize * kTinyWorstProbedRegs <= 65536,
-              "kTinyWgSize x kTinyWorstProbedRegs exceeds the per-block register file; "
+static_assert(resident::sm89_fits(kTinyWorstProbedRegs, kTinyWgSize),
+              "kTinyWorstProbedRegs at kTinyWgSize overflows a register sub-partition; "
               "re-run scripts/register_probe.sh before raising either");
 
 // Matrices per work-group, through the shared helper. The byte argument is a nominal 1

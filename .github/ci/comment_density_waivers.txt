@@ -13,6 +13,32 @@
 # A waiver that matches no scanned file is an error: delete it when the file
 # goes, rather than leaving the gate open for whatever takes that name next.
 
+# ---------------------------------------------------------------------
+# BURN-DOWN ASSESSMENT, 2026-09-15. 137 files remain waived, down one:
+# tests/sg_compat_tests.cc went 19.27% -> 14.13% by deleting 18 banner-rule
+# lines (`// -----` separators) and nothing else, so its line is gone.
+#
+# The honest finding is that a large subset of the rest CANNOT be fixed by
+# deletion at all. They are doc-comment API headers where the density
+# measures the file's SHAPE -- a declaration plus the contract it carries --
+# rather than slop. The worst, with the deletions each would need:
+#     include/batchlas/sycl_interop.hh   86.36%   57/66   delete 56
+#     include/batchlas/settings.hh       77.53%  528/681  delete 495
+#     include/batchlas/error.hh          73.06%  198/271  delete 182
+# Deleting 56 of 66 lines does not remove slop, it removes the interface.
+#
+# The only real remedy for those is RELOCATING the prose into docs/perf and
+# leaving an `evidence:` anchor pointing at it. That is a separate
+# reviewable change, one file at a time, and it cannot be staged in halves:
+# .github/ci/check_evidence_anchors.py resolves every pointer against the
+# tree, so the target heading must land in the SAME commit as the pointer
+# or the gate goes red.
+#
+# Counts above are from `check_comment_density.py --fix-suggest`, which now
+# reports waived files too. No waived file is currently under the ceiling,
+# so there is no waiver line here that can be deleted for free.
+# ---------------------------------------------------------------------
+
 include/batchlas/blas/dispatch/route_ormqr.hh    # predates the budget, not touched by the small-n campaign
 include/batchlas/blas/dispatch/route_compiled.hh # predates the budget, not touched by the small-n campaign
 src/util/resident_capacity.hh                    # 45 lines of constexpr helpers, one invariant each (barrier scope, the non-monotone walk, the single budget spelling); every measured number is in docs/perf/potrf.md#the-shared-helper-budget-slice-walk-and-pack
@@ -158,7 +184,6 @@ tests/lanczos_tests.cc                                # predates the small-n com
 tests/mempool_tests.cc                                # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
 tests/ormqr_tests.cc                                  # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
 tests/settings_tests.cc                               # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
-tests/sg_compat_tests.cc                              # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
 tests/stedc_tests.cc                                  # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
 tests/syev_tests.cc                                   # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
 tests/syevx_range_tests.cc                            # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign

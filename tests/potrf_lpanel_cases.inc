@@ -94,13 +94,23 @@ TYPED_TEST(PotrfLpanelTest, ResidualAcrossPanelBoundaries) {
                       << " cases; it proves nothing about panel boundaries";
 }
 
-// THE PANEL STORE IS ONLY PUBLISHED UNDER A BARRIER, AND THE SWEEP ABOVE CANNOT SEE IT.
-// The store at the end of a panel writes global columns the NEXT panel stages into sB from
-// OTHER work-items; B6 orders the two. With B6 deleted the sweep above stays green at every
-// n, because a handful of resident work-groups run near lockstep -- the corruption needs
-// several work-groups per SM. Identical items here, deliberately against the sweep's
-// "every item differs" rule: this test's oracle is cross-item agreement, and the stride bug
-// that rule guards is covered by PaddedLeadingDimensionStrideAndEmptyInfoSpan.
+// CROSS-WARP NONDETERMINISM AT SATURATING BATCH, WHICH THE SWEEP ABOVE CANNOT SEE.
+// The sweep runs batch <= 3; with a handful of resident work-groups the warps of a group run
+// near lockstep and no cross-warp hazard window opens. This is the only case in the file that
+// launches enough work-groups per SM to skew two warps apart, and it is what exposed the
+// pivot-cell write-after-read race the whole 11-test suite was green over (the fix is B3b;
+// deleting B3 turns this case red for float and cfloat). Identical items, deliberately
+// against the sweep's "every item differs" rule: the oracle is cross-item agreement -- a
+// deterministic, atomic-free kernel has no licence to disagree with itself -- and the stride
+// bug that rule guards is covered by PaddedLeadingDimensionStrideAndEmptyInfoSpan.
+//
+// IT DOES NOT GUARD B6, and nothing here does. Deleting B6 was planted and measured GREEN at
+// batch 1024 in this case and at 4096/16384 through factor_bench, all four types, n to 512:
+// the 8 dependent global loads of the next panel's prefetch apparently cover the window on
+// this card. B6 is held by the DATA-FLOW argument in potrf_lpanel_device.hh alone -- the
+// panel-end store writes global columns the NEXT panel's left-looking staging reads, from
+// other work-items, and only B6 orders them. Unfalsifiable on this hardware is not optional:
+// do not delete it because no test goes red.
 // evidence: docs/perf/potrf.md#armed-breaks-r9--lpanel
 TYPED_TEST(PotrfLpanelTest, PanelStoresArePublishedAtSaturatingBatch) {
     using T = typename TestFixture::T;

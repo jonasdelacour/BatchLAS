@@ -764,6 +764,11 @@ Event latrd_lower_panel_batched_wg_grid(Queue& q,
                         Ab(r, i) = val;
                     }
 
+                    // Write mapping [rlo+lid, rhi), read mapping [slo+lid, rhi): for gg == 0
+                    // slo == rlo + 1, so item lid reads the row item lid+1 just wrote. Masked
+                    // inside one sub-group only. This is the legacy kernel's barrier, restored.
+                    it.barrier(sycl::access::fence_space::global_space);
+
                     // ---- sumsq partial (only over rows this group just wrote) --
                     Real sumsq = Real(0);
                     for (int r = slo + lid; r < rhi; r += wg) {

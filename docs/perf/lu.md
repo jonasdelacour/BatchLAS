@@ -1199,13 +1199,57 @@ getrf_tests: RegPanelAgreesWithTheLocalMemoryLeaf, cdouble, m=257 ncols=1
 
 **On sm_89 the register file is owned by four sub-partitions of 16,384 registers each**
 and a block's warps are dealt round-robin over them, so what has to fit is
-`ceil(warps / 4) x 32 x regs <= 16,384`, i.e. `threads <= 128 * floor(512 / regs)`. That
-is strictly tighter than the per-block rule whenever `regs > 128`, and it reproduces the
-observation exactly: cdouble at 176 registers allows 2 warps per partition = **256
-threads**, and 256 passed where 288 aborted. The SYCL runtime's own check does not see
-it either — it refuses a launch with the per-block message (`131 registers ... 512
-work-items`, seen when an armed break pushed float to 131), so a kernel can clear the
-runtime's gate and still be refused by the driver.
+
+```
+ceil(warps / 4) * 32 * ((regs + 7) & ~7) <= 16,384
+```
+
+— the `& ~7` because ptxas allocates in granules of 8 and the count the gate divides into
+is the ALLOCATED one. Equivalently `threads <= 128 * floor(512 / regs_alloc)`. It
+reproduces the observation exactly: cdouble at 176 registers budgets to 208, allows 2
+warps per partition = **256 threads**, and 256 passed where 288 aborted. The SYCL
+runtime's own check does not see it either — it refuses a launch with the per-block
+message (`131 registers ... 512 work-items`, seen when an armed break pushed float to
+131), so a kernel can clear the runtime's gate and still be refused by the driver.
+
+**The discriminator is the warp count, not the register count.** An earlier draft of this
+section said the sub-partition rule "is strictly tighter than the per-block rule whenever
+`regs > 128`". That is wrong, and wrong in the dangerous direction: it clears sites it
+should flag. The two rules coincide **exactly when `warps % 4 == 0`**, i.e. when the
+work-group size is a multiple of 128 — there the `ceil` is an identity and
+`(threads / 4) * regs <= 16,384` is `threads * regs <= 65,536` verbatim. At every other
+work-group width the `ceil` rounds up and the sub-partition rule is strictly tighter,
+*at any register count*. Worked counter-example at a count far below 128: `r = 76` gives
+`128 * floor(512 / 76) = 768` against `floor(65,536 / 76) = 862`.
+
+That counter-example is not hypothetical; it was a live site until 2026-09-15.
+`src/extensions/getrs_fused.cc` computed its work-group cap as `(65536 / regs) & ~31` —
+the per-block spelling, rounded to a sub-group, hence a cap that is a multiple of 32 but
+need not be a multiple of 128, which is exactly the case where the two rules diverge. By
+the sub-partition arithmetic (probed counts from the table at `getrs_fused.cc:62-77`,
+allocation rounded to 8), that spelling handed out widths with no margin left — two of
+them sitting exactly on the partition limit, and one already past it:
+
+| cell | probed / allocated | old cap | warps | busiest partition | verdict |
+|---|---:|---:|---:|---:|---|
+| double, `NoTrans`, `nrhs` 5..8 | 61 / 64 | 928 | 29 | `8 * 32 * 64 = 16,384` | **exactly at** the limit |
+| cdouble, `Trans`, `nrhs` 3..4 | 58 / 64 | 992 | 31 | `8 * 32 * 64 = 16,384` | **exactly at** the limit |
+| float, `Trans`, `nrhs` 5..8 | 68 / 72 | 832 | 26 | `7 * 32 * 72 = 16,128` | fits, 1.6% spare |
+| cdouble, `Trans`, `nrhs` 5..8 | 86 / 88 | 672 | 21 | `6 * 32 * 88 = 16,896` | **over by 512** |
+
+A drift inside `kGetrsFusedRegMargin` (8) on either of the first two turns a legal launch
+into `CUDA_ERROR_LAUNCH_OUT_OF_RESOURCES`, and the last one is over the partition before
+any drift at all. **The whole table is arithmetic on the shipped constants, not a launch
+anyone has run** — the only runtime abort this section records is the cdouble 288-lane
+one above, at a different site. A reviewer applying the deleted `regs > 128` test would
+have cleared every row of it without computing anything, since the largest count in the
+table is 86.
+
+The site now calls the shared helper, `resident::sm89_max_work_group(regs)`
+(`src/extensions/getrs_fused.cc:99`), which is this rule in one place:
+`src/util/resident_capacity.hh:90-103` gives both the ceiling and `sm89_fits(regs, wg)`,
+the predicate form, so a `static_assert` can read as prose. Any site still dividing into
+65,536 is using the spelling that produced the four rows above.
 
 Device-link register counts for the shipped kernel, from `scripts/register_probe.sh
 <log> GetrfPanelRegKernel batchlas_extensions_cta` (1,082 entry functions, **0 with
@@ -1233,16 +1277,33 @@ whole defect. It now factorises an `m = cap` panel and asserts the launch does n
    `Cx<double>` at "128 registers for `rA` alone, so cdouble may need `NB = 16`", and
    `NB = 16` would have forced the blocked driver's `nb` to 16 for that type — which
    collides with the `min_dim >= 32` gate on the wide-scalar complex GEMM. Measured: 176
-   registers, no spill, no frame. The type ships at `NB = 32` with a height cap of 288.
+   registers, no spill, no frame. The type ships at `NB = 32` with a height cap of **256**
+   (an earlier draft of this line said 288 — that is the value that aborted; `panel_reg_max_m<cdouble>()`
+   is 256, as the table above and `getrf_panel_reg.cc:71-87` both give).
 2. **Every type is register-cheaper than the tiny tier's `rA[32]` cell** (64/104/96/176
    against 96/138/143/not-instantiated), because the pivot row travels through local
    memory instead of `NB` sub-group broadcasts. That is what buys heights of 512 for
    float, double and cfloat rather than the plan's 512 / 512 / 384 / 256 guess.
 
-The height caps are `min(512, floor(65536 / regs_budget))` rounded down to a sub-group,
-with `regs_budget` the measured count plus 15% headroom rounded **up to ptxas's
-allocation granularity of 8**. That last rounding is not decoration: a budget of 203 that
-ptxas allocates as 208 turns a 320-lane cap from 64,960 into 66,560 — a launch abort.
+The height caps are `min(512, 128 * floor(512 / regs_budget))` rounded down to a
+sub-group — the sub-partition spelling above, which is what `panel_reg_wg_ceiling`
+implements (`getrf_panel_reg.cc:71-74`). They are **not** `floor(65536 / regs_budget)`;
+that per-block form is the one this section's defect shipped with. `regs_budget` is the
+measured count plus 15% headroom rounded **up to ptxas's allocation granularity of 8**.
+Under the corrected rule that rounding changes the cap only when it carries the budget
+across a `512/k` boundary, and **not one shipped type is changed by it**: double
+119 -> 120, cfloat 110 -> 112 and cdouble 202 -> 208 keep their quotient exactly (4, 4 and
+2), and float 73 -> 80 drops from 7 to 6 but both are over `kPanelRegMaxRows`, so its cap
+is 512 either way. The four caps in the table above are what the *unrounded* budgets would
+have given too.
+It is still not decoration, because one step is 128 lanes wide: a probe of **148**
+registers carries to `148 * 115 / 100 = 170` with headroom, and `128 * floor(512 / 170) =
+3 * 128 = 384`; ptxas allocates **176**, and `128 * floor(512 / 176) = 2 * 128 = 256`.
+Launch the 384-lane panel on the unrounded figure and a sub-partition holds 3 warps of the
+allocated 176 — `3 * 32 * 176 = 16,896` against 16,384, a launch abort — where the
+unrounded 170 would have fitted at 16,320. (This line previously illustrated the point with
+a 320-lane cap divided into 65,536; 320 is not a multiple of 128, so the corrected rule
+cannot produce it, and that example went with the per-block spelling.)
 
 ### The register leaf A/B
 

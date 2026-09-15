@@ -77,10 +77,29 @@ struct RouteTable<Op::geqrf, T> {
         }
     }
 
+    // The MEASURED square window: bands NOT contiguous, holes measured rather than arbitrary.
+    // evidence: docs/perf/qr.md#the-tiny-geqrf-window
+    static bool tiny_window(const GeqrfShape& s) {
+        if (s.tiny_max_n < 1) return false;          // 0 spells "tier absent"
+        if (s.m != s.n) return false;                // the register array IS the matrix
+        const int64_t n = s.cols();
+        if (n > static_cast<int64_t>(s.tiny_max_n)) return false;
+        if constexpr (std::is_same_v<T, float>) {
+            return (n >= 4 && n <= 16) || (n >= 21 && n <= 32);
+        } else if constexpr (std::is_same_v<T, std::complex<float>>) {
+            return (n >= 5 && n <= 8) || (n >= 11 && n <= 16) || (n >= 25 && n <= 32);
+        } else {
+            return false;                            // fp64 measured 0.14-1.13x; no window
+        }
+    }
+
     // A per-type order floor plus a tall-panel clause; both are window EDGES, not knobs.
     // evidence: docs/perf/qr.md#the-geqrf-order-floor-and-the-tall-panel-clause
     static bool preferred(Route r, const GeqrfShape& s) {
         if (!is_native(r)) return false;
+
+        // BEFORE the floor/tall gate below, which every square n <= 32 fails: dead code after it.
+        if (tiny_window(s)) return r.algo == Algorithm::Tiny;
 
         const int64_t floor_n = [] () -> int64_t {
             if constexpr (std::is_same_v<T, float>)  return 64;
@@ -138,14 +157,14 @@ struct RouteTable<Op::geqrf, T> {
         }();
 
         switch (r.algo) {
-            // EXPLICIT: `default:` returns TRUE and Tiny leads the order array. Flips with
-            // preferred(). evidence: docs/perf/qr.md#why-the-tiny-arm-is-spelled-out
+            // EXPLICIT: `default:` returns TRUE and Tiny leads the order array.
+            // evidence: docs/perf/qr.md#why-the-tiny-arm-is-spelled-out
             case Algorithm::Tiny:
-                return false;
-            case Algorithm::CTA:
-                return s.cols() <= cta_max_cols;
+                return tiny_window(s);
+            case Algorithm::CTA:   // !tiny_window keeps exactly one tier true inside it (R8b)
+                return !tiny_window(s) && s.cols() <= cta_max_cols;
             case Algorithm::Blocked:
-                return s.cols() > cta_max_cols;
+                return !tiny_window(s) && s.cols() > cta_max_cols;
             default:
                 return true;
         }

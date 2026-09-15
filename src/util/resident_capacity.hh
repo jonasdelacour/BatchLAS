@@ -66,4 +66,43 @@ constexpr int pack_matrices_per_wg(std::size_t bytes_per_matrix,
     return g;  // 1 is the honest answer when not even one matrix fits
 }
 
+// THE LAUNCH gate, as against the occupancy gates above: on sm_89 the 65,536 registers of an SM
+// are owned by FOUR sub-partitions of 16,384 and a block's warps are dealt over them round-robin,
+// so what must fit is ceil(warps / 4) x 32 x allocated_regs <= 16,384. The per-block spelling
+// `regs x wg <= 65536` agrees only when the warp count is a multiple of four and is strictly
+// looser otherwise -- it accepts launches the driver refuses. Every gate that was on the
+// per-block spelling now routes through here; getrf_panel_reg.cc still carries its own copy
+// of these constants and its own panel_reg_wg_ceiling, which agrees with sm89_max_work_group
+// but has not been collapsed into it.
+// evidence: docs/perf/lu.md#the-register-cap-that-binds-is-per-sub-partition
+inline constexpr int kRegsPerBlock = 65536;
+inline constexpr int kRegsPerPartition = 16384;
+inline constexpr int kPartitionsPerBlock = 4;
+inline constexpr int kLanesPerWarp = 32;
+inline constexpr int kRegAllocGranularity = 8;  // ptxas allocates registers in banks of eight
+
+// The count every gate below divides into is the ALLOCATED one, not the probed one.
+constexpr int sm89_alloc_regs(int regs_per_thread) {
+    return (regs_per_thread + kRegAllocGranularity - 1) / kRegAllocGranularity *
+           kRegAllocGranularity;
+}
+
+// The widest work-group this register demand may be LAUNCHED at: the most warps one
+// sub-partition may hold, times the four partitions a block is dealt over. 0 for a nonsense
+// demand, exactly as resident_max_n's 0 spells "nothing fits".
+constexpr int sm89_max_work_group(int regs_per_thread) {
+    if (regs_per_thread < 1) return 0;
+    const int warps_per_partition =
+        kRegsPerPartition / (kLanesPerWarp * sm89_alloc_regs(regs_per_thread));
+    return warps_per_partition * kPartitionsPerBlock * kLanesPerWarp;
+}
+
+// The same rule as a predicate, so a static_assert reads as prose rather than as arithmetic.
+constexpr bool sm89_fits(int regs_per_thread, int work_group_size) {
+    if (regs_per_thread < 1 || work_group_size < 1) return false;
+    const int warps = (work_group_size + kLanesPerWarp - 1) / kLanesPerWarp;
+    const int per_partition = (warps + kPartitionsPerBlock - 1) / kPartitionsPerBlock;
+    return per_partition * kLanesPerWarp * sm89_alloc_regs(regs_per_thread) <= kRegsPerPartition;
+}
+
 }  // namespace batchlas::resident

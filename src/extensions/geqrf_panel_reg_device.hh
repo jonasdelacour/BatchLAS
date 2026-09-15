@@ -8,6 +8,7 @@
 #include "geqrf_cta_device.hh"
 
 #include "../sycl/device_scalar.hh"
+#include "../util/resident_capacity.hh"
 
 #include <sycl/sycl.hpp>
 
@@ -80,15 +81,11 @@ constexpr int geqrf_panel_reg_regs() {
     }
 }
 
-inline constexpr int kGeqrfPanelRegFilePerBlock = 65536;
 inline constexpr int kGeqrfPanelRegMaxWg = 1024;
 
-// Banks of eight: a rule on the raw count admits a work-group the hardware refuses at launch.
-constexpr int geqrf_panel_reg_ceil8(int regs) { return (regs + 7) & ~7; }
-
-// THE HARD GATE as a HEIGHT: regs x wg over the per-block register file aborts the launch. THE
-// AOT PROBE DOES NOT DECIDE IT -- the arithmetic below is optimistic against the library's own
-// allocation, so `launch_max_rows` wins.
+// THE HARD GATE as a HEIGHT: warps overflowing a register SUB-PARTITION abort the launch. THE
+// ARITHMETIC DOES NOT DECIDE IT -- sm89_max_work_group divides a PROBED count, optimistic against
+// what the library allocates, so the MEASURED launch_max_rows stays in the min() and wins.
 // evidence: docs/perf/qr.md#the-height-ceiling-the-aot-probe-got-wrong
 template <typename D>
 constexpr int geqrf_panel_reg_max_rows() {
@@ -97,9 +94,8 @@ constexpr int geqrf_panel_reg_max_rows() {
     } else {
         static_assert(GeqrfPanelRegPlan<D>::launch_max_rows > 0,
                       "a scalar with a register panel leaf must carry a MEASURED height ceiling");
-        const int by_file = kGeqrfPanelRegFilePerBlock /
-                            geqrf_panel_reg_ceil8(geqrf_panel_reg_regs<D>());
-        const int capped = (by_file < kGeqrfPanelRegMaxWg) ? by_file : kGeqrfPanelRegMaxWg;
+        const int by_regs = resident::sm89_max_work_group(geqrf_panel_reg_regs<D>());
+        const int capped = (by_regs < kGeqrfPanelRegMaxWg) ? by_regs : kGeqrfPanelRegMaxWg;
         const int measured = GeqrfPanelRegPlan<D>::launch_max_rows;
         const int lo = (measured < capped) ? measured : capped;
         return (lo / 32) * 32;

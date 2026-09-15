@@ -11,6 +11,7 @@
 
 #include "../queue.hh"
 #include "../sycl/device_scalar.hh"
+#include "../util/resident_capacity.hh"
 
 #include <sycl/sycl.hpp>
 
@@ -44,10 +45,11 @@ inline int getrs_fused_nb(int n) {
 // step of that recurrence. Inert on this device, kept for portability.
 inline int getrs_fused_blk_ld(int nb) { return nb + 1; }
 
-// The register gate. registers-per-work-item x work-group-size must not exceed 65,536
-// or the launch ABORTS rather than merely slowing down. The table is per (type, body,
-// width) rather than a max over them, and is measured with scripts/register_probe.sh
-// -- re-run that probe if ptxas moves a cell by more than kGetrsFusedRegMargin.
+// The register gate: a launch ABORT, not a slowdown. What binds is resident::sm89_fits --
+// registers per sub-partition, not the per-block 65,536 this file used to divide into.
+// evidence: docs/perf/lu.md#the-register-cap-that-binds-is-per-sub-partition
+// The table is per (type, body, width) rather than a max over them, and is measured with
+// scripts/register_probe.sh -- re-run it if ptxas moves a cell by more than the margin.
 constexpr int kGetrsFusedRegMargin = 8;
 
 // The accumulator-width bucket. It MUST agree with fused_dispatch_nr's ladder below:
@@ -87,8 +89,16 @@ inline int getrs_fused_wg(int n, int nrhs, int max_wg, bool trans) {
     while (wg < n / 2 && wg < 1024) wg *= 2;
     if (wg < 64) wg = 64;
 
+    // MARGIN RESTORATION: the per-block spelling this replaces handed out widths whose
+    // ceil(warps / 4) usage sat AT 16,384 (double NoTrans nrhs 5..8 at 928 lanes, cdouble
+    // Trans nrhs 3..4 at 992), so a drift inside kGetrsFusedRegMargin itself turned a legal
+    // launch into CUDA_ERROR_LAUNCH_OUT_OF_RESOURCES. By the same arithmetic -- NOT by a
+    // launch anyone has run -- cdouble Trans nrhs 5..8 computes over it (672 lanes at the
+    // probed 86 registers is 6 x 32 x 88 = 16,896), but that cell is UNREACHABLE: the 672-lane
+    // width needs n >= 1025, and getrs_fused_dispatch throws invalid_argument on n * nrhs past
+    // the resident-RHS capacity long before it. Seven cells narrow, the widest by 96 lanes.
     const int regs = getrs_fused_regs_for<T>(nrhs, trans) + kGetrsFusedRegMargin;
-    int cap = (65536 / regs) & ~31;          // down to a multiple of the sub-group
+    int cap = resident::sm89_max_work_group(regs);   // already a multiple of the sub-group
     if (cap < 32) cap = 32;
     if (wg > cap) wg = cap;
 

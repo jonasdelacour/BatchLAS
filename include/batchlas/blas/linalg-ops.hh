@@ -13,8 +13,9 @@
 // svd() below calls gesvd and gesvd_buffer_size directly. Reached transitively
 // before this file grew that call; named here so it cannot break again.
 #include <batchlas/blas/functions/gesvd.hh>
-// solve_spd() below calls posv and posv_buffer_size directly; named here for the
-// same reason gesvd.hh is, rather than relied on transitively.
+// solve() and solve_spd() below call gesv/posv and their buffer_size queries
+// directly; named here for the same reason gesvd.hh is, not relied on transitively.
+#include <batchlas/blas/functions/gesv.hh>
 #include <batchlas/blas/functions/posv.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/blas/options.hh>
@@ -284,8 +285,21 @@ inline Eigh<T> eigh(Queue& ctx,
     return Eigh<T>{std::move(W), std::move(V), std::move(info)};
 }
 
-// Solve A X = B for X by LU factorisation. Neither A nor B is modified. The
-// pivots come from the arena: a local would be freed before the kernels run.
+// Solve op(A) X = B for X by LU with partial pivoting. Neither A nor B is modified.
+// Pivots and workspace both come from the arena: a local would be freed before the
+// kernels run.
+//
+// THE `trans` BRANCH IS NOT STYLISTIC -- do not flatten it. `gesv` has no Transpose
+// parameter (blas/functions/gesv.hh), so only NoTrans can reach it and Trans /
+// ConjTrans keep the hand-composed getrf + getrs. No shape gate guards the gesv
+// call either: gesv itself picks between its fused kernel and that same composition
+// (dispatch/route_gesv.hh), and a copy of that window here would drift from it.
+//
+// BEHAVIOUR CHANGE, deliberate: route_gesv's supports() refuses every route when an
+// extent is degenerate (n, nrhs or batch < 1), and the entry point then throws
+// (solve_throw_unroutable). The old hand-composed body enqueued nothing instead.
+// This makes `solve` agree with `solve_spd`, which has thrown on the identical
+// guard in route_posv.hh since P2.
 template <typename T>
 inline Matrix<T, MatrixFormat::Dense> solve(Queue& ctx,
                                             const MatrixView<T, MatrixFormat::Dense>& A,
@@ -300,6 +314,14 @@ inline Matrix<T, MatrixFormat::Dense> solve(Queue& ctx,
     const size_t n_pivots = static_cast<size_t>(A.rows()) * static_cast<size_t>(A.batch_size());
     auto pivot_bytes = ctx.workspace(n_pivots * sizeof(int64_t));
     Span<int64_t> pivots(reinterpret_cast<int64_t*>(pivot_bytes.data()), n_pivots);
+
+    if (trans == Transpose::NoTrans) {
+        // Acquired after the pivot lease and released before it -- reverse order,
+        // the case the arena returns immediately.
+        auto lease = ctx.workspace(gesv_buffer_size(ctx, LU.view(), X.view()));
+        (void)gesv(ctx, LU.view(), X.view(), pivots, lease.span(), Span<int32_t>{});
+        return X;
+    }
 
     (void)getrf(ctx, LU.view(), pivots);
     (void)getrs(ctx, LU.view(), X.view(), pivots, {.trans = trans});

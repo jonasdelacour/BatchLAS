@@ -49,7 +49,9 @@ constexpr int kTinyWg = tn::kTinyWgSize;
 // RE-PROBE, not a measurement: potrf_tiny's worst probed count plus the 2*NR scalars this
 // tier adds. evidence: docs/perf/potrf.md#p2-the-register-bound-is-assumed-not-probed
 constexpr int kWorstRegsPerThread = 256;
-static_assert(kTinyWg * kWorstRegsPerThread <= 65536,
+// The bound is per SUB-PARTITION: 64 lanes is 2 warps in one of the four, 1 x 32 x 256 =
+// 8,192 of its 16,384. evidence: docs/perf/lu.md#the-register-cap-that-binds-is-per-sub-partition
+static_assert(resident::sm89_fits(kWorstRegsPerThread, kTinyWg),
               "re-run scripts/register_probe.sh before raising the tiny work-group size");
 
 // The same flat compile-time ceiling potrf_tiny carries, for the same reason: the tier

@@ -13,6 +13,7 @@
 #include "tiny_device.hh"
 
 #include "../queue.hh"
+#include "../util/resident_capacity.hh"
 #include "../util/template-instantiations.hh"
 
 #include <batchlas/error.hh>
@@ -40,10 +41,10 @@ namespace sd = ::batchlas::sycl_device;
 // evidence: docs/perf/lu.md#the-work-group-ab
 constexpr int kTinyWg = tn::kTinyWgSize;
 
-// A launch ABORT, not a slowdown, so it is encoded to fail at COMPILE time.
-// evidence: docs/perf/lu.md#the-register-probe-at-wg--64
-constexpr int kWorstRegsPerThread = 143;
-static_assert(kTinyWg * kWorstRegsPerThread <= 65536,
+// A launch ABORT, not a slowdown, so it is encoded to fail at COMPILE time; per SUB-PARTITION,
+// not per block. evidence: docs/perf/lu.md#the-register-probe-at-wg--64
+constexpr int kWorstRegsPerThread = 143;   // 64 lanes = 2 warps: 32 x 144 = 4,608 of 16,384
+static_assert(resident::sm89_fits(kWorstRegsPerThread, kTinyWg),
               "re-run scripts/register_probe.sh out.log '' batchlas_extensions_cta "
               "before raising the tiny tier's work-group size");
 

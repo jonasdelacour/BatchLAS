@@ -1794,7 +1794,7 @@ TYPED_TEST(GeqrfTest, TinyDirectEntryPointRefusesWhatSupportsRefuses) {
 // parse_algorithm_word (miss it and BATCHLAS_GEQRF_ROUTE=tiny parses to nullopt, the pin is
 // dropped and the arm measures automatic()). The fourth assertion runs the other way: the
 // tier must NOT be preferred, nor become the vendor-free build's choice.
-TYPED_TEST(GeqrfTest, TinyIsRoutableByPinButNotYetPreferred) {
+TYPED_TEST(GeqrfTest, TinyRoutesInsideItsMeasuredWindowAndNowhereElse) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::BackendType;
     using Tbl = dispatch::RouteTable<dispatch::Op::geqrf, T>;
@@ -1814,14 +1814,49 @@ TYPED_TEST(GeqrfTest, TinyIsRoutableByPinButNotYetPreferred) {
     EXPECT_EQ(shape->tiny_max_n, max_n) << "the shape builder and the launcher disagree";
     EXPECT_TRUE(Tbl::supports(tiny, *shape));
 
-    // Not preferred, and not the tier the vendor-free walk picks: flipping either belongs
-    // in the measured PR, in one commit, or the arm re-routes two paths unmeasured.
-    EXPECT_FALSE(Tbl::native_tier_preferred(tiny, *shape));
-    EXPECT_FALSE(Tbl::preferred(tiny, *shape));
-    EXPECT_FALSE(Tbl::best_native_tier(*shape) == tiny);
-    EXPECT_FALSE(dispatch::resolve_geqrf_route<T>(dispatch::Route{}, *shape,
-                                                  /*vendor_available=*/false) == tiny)
-        << "the vendor-free build now lands on an unmeasured tier";
+    // The window is MEASURED now. At the tier cap it holds for float (21..32) and for
+    // complex<float> (25..32), and is refused for both fp64 types, which lose to the vendor
+    // at every order the tier reaches. evidence: docs/perf/qr.md#the-tiny-geqrf-window
+    constexpr bool windowed =
+        std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>;
+    const bool at_cap = Tbl::tiny_window(*shape);
+    EXPECT_EQ(at_cap, windowed) << "the window and the type list disagree at n = " << max_n;
+
+    EXPECT_EQ(Tbl::native_tier_preferred(tiny, *shape), windowed);
+    EXPECT_EQ(Tbl::preferred(tiny, *shape), windowed);
+    EXPECT_EQ(Tbl::best_native_tier(*shape) == tiny, windowed);
+    EXPECT_EQ(dispatch::resolve_geqrf_route<T>(dispatch::Route{}, *shape,
+                                               /*vendor_available=*/false) == tiny,
+              windowed);
+
+    // EXACTLY ONE native tier answers true inside the window, or the vendor-free walk is an
+    // accident of the order array rather than a stated decision (R8b).
+    int hits = 0;
+    for (const dispatch::Route* it = Tbl::order_begin(); it != Tbl::order_end(); ++it)
+        if (dispatch::is_native(*it) && Tbl::supports(*it, *shape) &&
+            Tbl::native_tier_preferred(*it, *shape))
+            ++hits;
+    EXPECT_EQ(hits, 1) << "R8b: " << hits << " native tiers answered at n = " << max_n;
+
+    // THE HOLE IN THE WINDOW IS DELIBERATE, and it is the part a future reader will want to
+    // "simplify". Orders 17..32 all run the N=32 bucket, so n=17 does 32 iterations for 17
+    // columns; float absorbs that and complex does not. n = 17 is a MEASURED loss for both
+    // (float 0.812x, cfloat 0.553x), so it must be refused even though it is inside the cap.
+    if (windowed && max_n >= 17) {
+        auto hole = make_problem<T>(17, 17, 2, 44u);
+        auto Vh = view_of(hole);
+        const auto hshape = backend::geqrf_op_shape<B, T>(*this->ctx, Vh);
+        ASSERT_TRUE(hshape.has_value());
+        EXPECT_TRUE(Tbl::supports(tiny, *hshape)) << "n = 17 is inside the tier's capacity";
+        EXPECT_FALSE(Tbl::tiny_window(*hshape)) << "n = 17 is a measured loss, not a window";
+        EXPECT_FALSE(Tbl::preferred(tiny, *hshape));
+    }
+
+    // A build with no tiny kernel must not fire the window, whatever the order says.
+    auto absent = *shape;
+    absent.tiny_max_n = 0;
+    EXPECT_FALSE(Tbl::tiny_window(absent));
+    EXPECT_FALSE(Tbl::preferred(tiny, absent));
 
     // Refused where it must be: tall, and one order past the ceiling.
     auto tall = make_problem<T>(2 * max_n, max_n, 2, 42u);

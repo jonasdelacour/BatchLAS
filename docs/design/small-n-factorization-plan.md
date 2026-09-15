@@ -1,7 +1,12 @@
 # Native batched factorizations at n = 4..512: research digest and execution plans
 
-Status: research + plan, nothing executed. Written 2026-09-10 against
-`readiness/wp3-abi` (aca64f6). Supersedes the WP6 entry of
+Status: research + plan, written 2026-09-10 against `readiness/wp3-abi`
+(aca64f6). **"Nothing executed" was true when this line was written and is not
+true now**: parts of these plans have since shipped, in part and unevenly. The
+per-plan blocks marked **SUPERSEDED, AS SHIPPED** (P1) and **STATUS, AS
+SHIPPED** (P2, P5) are the authority on what landed; a plan with no such block
+carries no claim either way, and nothing in section 4's schedule was verified
+against the tree. Supersedes the WP6 entry of
 `docs/design/readiness-remediation-plan.md`, which assumed WP6 was
 measurement work; it is not. Every number below that is not marked
 "literature" or "arithmetic" was measured on this box (2x RTX 4090, sm_89)
@@ -55,7 +60,7 @@ runtime `n` and lost; it did not test (1).
 |---|---|---|---|---|
 | P0 | In-tree harness + baseline + the zero-engineering routing flips | all | realises geqrf 2-12x, orgqr, at n >= 64 today | - |
 | P1 | Register-resident sub-group kernels, packed, template N in {8,16,32}: potrf, getrf, geqrf | n <= 32 | potrf >= 3x, geqrf >= 3x, getrf >= 1.3x (vs 0.55x) | P0 |
-| P2 | Fused factor+solve for tiny systems (gesv, posv) behind `linalg::solve` | n <= 32, nrhs <= 4 | >= 3x vs getrf+getrs | P1 |
+| P2 | Fused factor+solve for tiny systems (gesv, posv) behind `linalg::solve` (the `solve` rewiring is claimed by P2 but shipped in the readiness pass, not in P2 itself -- see P2's status note) | n <= 32, nrhs <= 4 | >= 3x vs getrf+getrs | P1 |
 | P3 | Left-looking 8-wide fused Cholesky panel ("lpout") as the potrf leaf, single launch, thread-per-row | 32 < n <= 192 (leaf up to 512 via blocked) | >= 1.2x at 64..256 (vs 0.36-1.00x) | P0 |
 | P4 | Register panel LU leaf (m x 32 in registers, lazy swap) + recursive panel + row-parallel laswp | 32 < n <= 512 | >= 1.0x at 64..128 float/cfloat (vs 0.73-0.87x), keep 1.6-2.3x above | P0, P7 |
 | P5 | Fused QR panel + fused reflector-apply (no T, no larft) for n <= 128; same kernel is orgqr/ormqr small | 32 < n <= 128, all tall panels | double 0.5x -> >= 1x at 64; larft 20-49% removed | P0 |
@@ -538,10 +543,17 @@ measurement 1.5). Depends on P0.
 ### P2. Fused factor-and-solve for tiny systems (`gesv`, `posv`)
 
 **Goal.** One kernel that factorises and solves `A X = B` for `n <= 32`,
-`nrhs <= 4`, from `linalg::solve` (which today is `getrf` then `getrs`;
-`include/batchlas/blas/linalg-ops.hh:287-302`). The fused getrs tier already
-wins 1.7-3.8x by keeping the RHS resident; fusing the factorization removes
-the second launch, the second read of A, and the `ipiv` round trip.
+`nrhs <= 4`, from `linalg::solve` -- meaning the one `solve()` function
+template in `include/batchlas/blas/linalg-ops.hh`,
+`solve(Queue&, A, B, Transpose = NoTrans)`, and NOT the `solve_spd()`
+directly below it. (Cited by name and signature rather than by line range:
+that header is under active edit, and a line range into it goes stale faster
+than this plan is re-read.) AT THE TIME OF WRITING `solve()` was a
+hand-composed `getrf` then `getrs`; the `linalg::solve` half of this goal is
+claimed by P2 but was shipped in the readiness pass, not in P2 itself -- see
+**P2 STATUS, AS SHIPPED** at the end of this section. The fused getrs tier
+already wins 1.7-3.8x by keeping the RHS resident; fusing the factorization
+removes the second launch, the second read of A, and the `ipiv` round trip.
 
 **Targets.** >= 3x vs `getrf + getrs` vendor at n <= 32, nrhs = 1, float
 and cfloat; >= 2x at nrhs = 4. For SPD (`posv`) the same against
@@ -573,8 +585,9 @@ ops `gesv` / `posv` in `include/batchlas/blas/functions/{gesv,posv}.hh`
 `route_gesv.hh` / `route_posv.hh` with order `{Tiny, Composed}` where
 `Composed` is the existing `getrf + getrs` (or `potrf + trsm x2`) and is the
 vendor-free fallback; `linalg::solve` and a new `linalg::solve_spd` call
-them. Instantiations: 2 kernels x 3 N x 2 NR x 4 types = 48 -> 40 with
-cdouble capped at N = 16.
+them. AS SHIPPED: `solve_spd` is P2's; the `linalg::solve` call site is the
+readiness pass's, not P2's. Instantiations: 2 kernels x 3 N x 2 NR x 4 types
+= 48 -> 40 with cdouble capped at N = 16.
 
 **Tests.** `tests/gesv_tests.cc`, `posv_tests.cc`: `||A X - B|| / (||A||
 ||X||)` vs LAPACKE `gesv`/`posv` for n in 1..32, nrhs in 1..4, both ld
@@ -588,12 +601,31 @@ quantifies what fusion itself buys. n in {4..32}, nrhs in {1, 2, 4}, batch
 
 **Acceptance.** Targets met float/cfloat; `linalg::solve` end-to-end A/B
 (the `cond`/`inverse` tests use it) shows the gain; failing names == ledger.
+The `linalg::solve` clause is claimed by P2 but was satisfied, if at all, by
+the readiness pass that rewired the call site; P2 itself never ran it.
 
 **Kill.** If fused beats the two-launch native arm by < 1.15x at n = 32
 nrhs = 1, ship only the `linalg::solve` routing to `tiny getrf + fused
-getrs` and drop the fused kernel.
+getrs` and drop the fused kernel. (The `linalg::solve` routing this clause
+falls back to is again the readiness pass's work, not P2's.)
 
 **Effort.** 2-3 agent-days. Depends on P1 (getrf and potrf tiny kernels).
+
+**P2 STATUS, AS SHIPPED.** P2's own deliverables landed:
+`include/batchlas/blas/functions/{gesv,posv}.hh`,
+`include/batchlas/blas/dispatch/route_{gesv,posv}.hh`,
+`src/extensions/{gesv,posv}_tiny.cc`, and `linalg::solve_spd`, which calls
+`posv` directly.
+
+**What P2 did NOT ship is the `linalg::solve` half of its own goal.** Every
+row above that says P2 routes `linalg::solve` -- the ranked-ideas table, the
+Goal, the Files list, the Acceptance clause, the Kill fallback and D2 -- is
+**claimed by P2 and shipped in the readiness pass, not in P2 itself**. Read
+`solve()` in `include/batchlas/blas/linalg-ops.hh` before quoting any of
+them, and note that even as rewired it is not a blanket flip: `gesv` carries
+no `Transpose` parameter, so only `Transpose::NoTrans` reaches it and
+`Trans` / `ConjTrans` keep the hand-composed `getrf` then `getrs`. None of
+P2's `linalg::solve` end-to-end A/B was ever run by P2.
 
 ---
 
@@ -841,6 +873,56 @@ kernel (orgqr small keeps the register-identity variant only if it wins).
 
 **Effort.** 6-8 agent-days. Depends on P0.
 
+**P5 STATUS, AS SHIPPED. Almost none of the above was built, and the part
+that was is half of one conjunct, for one type of four.** Full accounting in
+`docs/perf/qr.md#the-register-panel-leaf-wp6--p5`.
+
+**Never built.** `LarfApplyRegKernel` (the fused reflector apply),
+`geqrf_fused_driver`, `orgqr_fused`, `ormqr_fused`; `Algorithm::Fused` and
+the `route_geqrf.hh` order change that would reach it; the `larft`
+replacement (`V^H V` + `sm32x32` trmv); the `orgqr` small target of >= 1.5x
+over identity+ormqr, which was never measured at all.
+
+**Built.** `GeqrfPanelRegKernel<T, N>` -- the register panel leaf -- reachable
+from `geqrf_panel_factorize` and the blocked driver, plus a measured height
+window and a `double` order floor moved 96 -> 76. That is the `Kill` clause's
+fallback, "ship only the leaf swap and the larft fix", with **the larft fix
+never made**; and the leaf swap itself carries `cols = 16` for `double` and
+`cols = 0` -- that header's spelling of ABSENT -- for `float`,
+`complex<float>` and `complex<double>` (`src/extensions/geqrf_panel_reg_device.hh`,
+`GeqrfPanelRegPlan`). The reason is R7: the other three cost 39.6-60.5 s of
+`ptxas` each against `batchlas_extensions_cta`'s ~183 s.
+
+**Why the fused apply is NOT the next increment, and this is a reading of the
+tree rather than a measurement.** `geqrf_nb_for_type<T>()`
+(`src/extensions/geqrf_blocked.cc`) is **32 for `float`, `cfloat` and
+`cdouble`** and 16 for `double` only, and the blocked driver's panel loop
+breaks out at `if (n2 <= 0) break;` **before** `pack_v`, before `larft` and
+before the trailing GEMMs. So an `m x 32` panel of those three types runs
+exactly ONE panel factorisation and never reaches any of the three kernels
+the fused apply exists to delete. P5's own tall-panel targets -- `float
+128x32`, `float 512x32`, `cfloat 512x32` -- are precisely those shapes, so
+the fused apply, the `larft` removal and the `pack_v` removal are worth
+**zero** there. Only `double`, at `nb = 16`, splits a 32-wide panel into two
+panels with an update between.
+
+**And the figure that motivated P5 is not a saturated figure.** The "`larft`
+is 34% of device time" reading is an `nsys` profile of `128 x 128` `double`
+at **batch 8** -- nowhere near saturation, and this plan's own R8a says a
+ratio read below saturation is overhead compared to overhead. The
+larger-batch splits on the same page
+(`docs/perf/qr.md#where-the-time-goes`) put `larft` **and** `pack_v`
+TOGETHER at 19.7% (float n=1024), 22.3% (cdouble n=256) and 6.5% (cdouble
+n=1024). **Those are not saturated splits either** -- calling them that
+would repeat the error this paragraph is correcting. They are `nsys
+cuda_gpu_kern_sum` captures, vendor-free, `WARM_S=0.2` and **2 reps**, at
+the batch the memory-bounded order schedule pairs with each order (n=1024 at
+batch 128, n=256 at batch 2048), and that section's preamble says they must
+not be quoted as timings; `qr.md`'s only batch ladder is at n=64 and does not
+cover these orders. Size any `larft` work against **20-22% for the pair, as a
+larger-batch profiler estimate**, not against 34% for `larft` alone -- and do
+not re-promote either number to "saturated".
+
 ---
 
 ### P6. Transposed and complex wide-scalar register GEMM for the panel-update shapes
@@ -993,7 +1075,9 @@ pins rather than silently falling through to `automatic()`.
 `include/batchlas/blas/functions/{gesv,posv}.hh` with their own
 `RouteTable`s, `*_buffer_size` functions and test files, shaped like
 `getrs`, in addition to routing `linalg::solve` / `linalg::solve_spd` to
-them. The v0.2.0 export surface (WP7) therefore grows by two ops; add
+them. AS SHIPPED, that last conjunct split in two: `linalg::solve_spd` is
+P2's, `linalg::solve` is the readiness pass's. The v0.2.0 export surface
+(WP7) therefore grows by two ops; add
 them to the surface census before the tag. `posv` also gives the tree its
 first `potrs`-shaped entry point, which `docs/perf/potrf.md` lists as
 missing.

@@ -45,12 +45,13 @@ constexpr int geqrf_tiny_worst_regs() {
     return worst + gn::kGeqrfTinyRegMargin;
 }
 
-// GATE 1, the HARD one: regs x work-group size over the per-block register file ABORTS the
-// launch. Both operands are named so raising either is deliberate; GATE 2 is what binds.
+// GATE 1, the HARD one: a work-group whose warps overflow a register SUB-PARTITION ABORTS
+// the launch -- 64 lanes is 2 warps in one of the four, 1 x 32 x ceil8(226 + 8) = 7,680 of
+// its 16,384. Both operands are named so raising either is deliberate; GATE 2 still binds.
 constexpr int kGeqrfTinyMaxWg = gn::kGeqrfTinyWg;
 constexpr int kGeqrfTinyWorstRegs = geqrf_tiny_worst_regs();
-static_assert(kGeqrfTinyMaxWg * kGeqrfTinyWorstRegs <= 65536,
-              "geqrf tiny: regs x wg exceeds the per-block register file -- re-run "
+static_assert(resident::sm89_fits(kGeqrfTinyWorstRegs, kGeqrfTinyMaxWg),
+              "geqrf tiny: regs x wg overflows a register sub-partition -- re-run "
               "scripts/register_probe.sh before raising either operand");
 
 // GATE 2: every SHIPPED cell keeps R1's resident::kMinBlocksPerSm blocks per SM, so a

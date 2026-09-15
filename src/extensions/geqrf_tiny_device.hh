@@ -98,7 +98,9 @@ constexpr int geqrf_tiny_regs_for() {
 }
 
 // The ceil8 below is load-bearing: ptxas allocates registers in banks of eight, so a rule
-// reading the raw count admits a block the hardware refuses.
+// reading the raw count admits a block the hardware refuses. 65,536 is the SM's whole file and
+// is the right number for an OCCUPANCY count; the LAUNCH gate is resident::sm89_fits, which
+// divides one sub-partition. evidence: docs/perf/lu.md#the-register-cap-that-binds-is-per-sub-partition
 inline constexpr int kGeqrfTinyRegsPerSm = 65536;
 inline constexpr int kGeqrfTinyThreadsPerSm = 1536;
 inline constexpr int kGeqrfTinyMaxBlocksPerSm = 24;
@@ -175,8 +177,8 @@ constexpr bool geqrf_tiny_chunk_is_fixed_point() {
     return recorded == 0 || recorded == geqrf_tiny_chunk<D, N>();
 }
 
-// THE GATE THAT BINDS -- the raw `regs x wg <= 65536` launch-abort gate has too much slack
-// here to guard anything. evidence: docs/perf/qr.md#the-tiny-tier-register-table
+// THE GATE THAT BINDS -- resident::sm89_fits, the launch-abort gate, has too much slack at a
+// 64-lane group to guard anything. evidence: docs/perf/qr.md#the-tiny-tier-register-table
 template <typename D, int N>
 constexpr bool geqrf_tiny_cell_is_resident() {
     return geqrf_tiny_blocks_by_regs(geqrf_tiny_regs_for<D, N>(),

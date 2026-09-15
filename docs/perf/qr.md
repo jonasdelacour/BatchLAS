@@ -10,7 +10,7 @@ All timings: GPU 1 of a 2x RTX 4090 box (sm_89, 128 SMs), `CUDA_VISIBLE_DEVICES=
 
 | op | arms, in `order` sequence | `preferred()` |
 |---|---|---|
-| `geqrf` | `{Native, Tiny}`, `{Native, CTA}`, `{Native, Blocked}`, `{Vendor, Auto}` (`route_geqrf.hh:kGeqrfOrder`) | **`Tiny` is false, and `native_tier_preferred(Tiny)` is false too** — see [the tiny tier](#the-tiny-tier-wp6--p1-square-n--32-in-registers). Otherwise native above a per-type **order floor** — `float` 64, `cfloat` 48, `double` 96, `cdouble` 256 — plus a **tall-panel clause**, `rows >= 128 && cols >= 32 && rows >= tall_aspect*cols`, where `tall_aspect` is **4 for the 32-bit types and 8 for the 64-bit ones** (`route_geqrf.hh:preferred`) -- the split is load-bearing, see [tall panels cross over earlier](#tall-panels-cross-over-earlier) |
+| `geqrf` | `{Native, Tiny}`, `{Native, CTA}`, `{Native, Blocked}`, `{Vendor, Auto}` (`route_geqrf.hh:kGeqrfOrder`) | **`Tiny` is false, and `native_tier_preferred(Tiny)` is false too** — see [the tiny tier](#the-tiny-tier-wp6--p1-square-n--32-in-registers). Otherwise native above a per-type **order floor** — `float` 64, `cfloat` 48, `double` **76** (P5 moved it from 96, [the double order floor moves to 76](#the-double-order-floor-moves-to-76)), `cdouble` 256 — plus a **tall-panel clause**, `rows >= 128 && cols >= 32 && rows >= tall_aspect*cols`, where `tall_aspect` is **4 for the 32-bit types and 8 for the 64-bit ones** (`route_geqrf.hh:preferred`) -- the split is load-bearing, see [tall panels cross over earlier](#tall-panels-cross-over-earlier) |
 | `orgqr` | `{Native, Blocked}`, `{Vendor, Auto}` (`route_orgqr.hh:21-24`) | native at `rows <= 512 && cols <= 512`, every type (`route_orgqr.hh:preferred`) |
 | `ormqr` | `{Native, Blocked}`, `{Vendor, Auto}` (`route_ormqr.hh:45-48`) | `is_native(r) && supports(r, s)` (`route_ormqr.hh:77-79`) |
 
@@ -283,6 +283,7 @@ One harness trap in the gate itself, since every number above is a `ctest` count
 10. **The CTA tier's workspace is zero but callers still pay the blocked layout.** The facade takes `max` over every *supported* native tier and `supports()` deliberately puts no lower extent bound on the Blocked arm, so a caller at n=64 batch=8192 pays 168 MB (float) / 671 MB (cdouble) even though the route it takes is CTA. Sizing W1/W2 on `n - nb` rather than `n` took ~28% off; the remainder is the deliberate `max` policy. (The vendor `orgqr` it replaces asks for 1164 MB / 4644 MB at that cell.)
 11. **`potrf` had WP5's dispatch gap. CLOSED at P7** ([potrf.md#native_tier_preferred](potrf.md#native_tier_preferred)); the reading below is what the debt was. `potrf` carries the same two native tiers ({CTA, Blocked}) and the same all-false `preferred()`, so its vendor-free walk still returns the first *supported* native route from a static order array that cannot follow a crossover — the exact defect `native_tier_preferred` was added for. `getrf` and `getrs` have since declared the hook; `route_potrf.hh` has not. Nobody has measured whether `potrf`'s vendor-free tier choice is wrong, which is the first step, not the fix.
 12. **`resolve_ormqr_route` is called with two arguments** (`ormqr.hh:209`), taking the `vendor_available = true` default, so `ormqr` never reaches `route_resolve.hh:38-49`'s vendor-free fallback. It gets away with it only because its `preferred()` is native-first. `geqrf` and `orgqr` pass the argument explicitly; do not inherit the omission.
+13. **The `geqrf` Tiny tier is supported at every square `n <= 32`, preferred nowhere, and has never been timed.** `supports()` admits it, `native_tier_preferred` hard-codes `false` for it, and `preferred()`'s order-floor/tall-aspect gate rejects the whole band before any tier is named — so the band is served by CTA in a vendor-free build and by cuSOLVER otherwise, and CTA is measured there at **0.78x / 0.21x / 0.71x / 0.33x**. The grid that would settle it, the flip gate, and the two-edit routing change (including why the `preferred()` clause must precede the existing gate or it is dead code) are in [the tiny tier is supported, never preferred, and never timed](#the-tiny-tier-is-supported-never-preferred-and-never-timed). An implemented, tested, linked tier that no `Auto` shape can reach.
 
 ## Raw evidence
 
@@ -742,7 +743,11 @@ pin (`BATCHLAS_GEQRF_ROUTE=tiny`) or by forcing: `preferred()` and
 
 **NO TIMING HAS BEEN TAKEN.** The implementation PR is correctness and residency only.
 Nothing on this page is a speed claim about the tier, and its window stays closed until a
-grid exists.
+grid exists. The band it would serve is the one measured NATIVE LOSS in
+[the order and batch grid](#geqrf-order-and-batch-grid) (n = 32, batch 8192: float 0.78x,
+double 0.21x, cfloat 0.71x, cdouble 0.33x), served there by the CTA tier; the grid that
+would settle the tier and the exact routing edit it implies are in
+[the tiny tier is supported, never preferred, and never timed](#the-tiny-tier-is-supported-never-preferred-and-never-timed).
 
 ### The tiny ceiling predicate
 
@@ -1166,6 +1171,70 @@ probed table a function of the launch shape rather than of the kernel body. Only
 `reqd_sub_group_size(32)` is declared. That is what licenses the same-register-counts
 column of [the launch shape](#the-launch-shape-64-work-items-not-128).
 
+### The tiny tier is supported, never preferred, and never timed
+
+**OPEN OPPORTUNITY. Nothing in this subsection is a speed claim; it is the shape of the
+measurement that does not exist.** What is stated here is the shipped predicate, read out of
+`route_geqrf.hh`, and the one measured grid row that sits underneath it.
+
+**The predicate, three lines of it.** `supports()` admits the tier for square shapes at or
+below the type ceiling -- `s.m == s.n && s.n <= s.tiny_max_n` (`route_geqrf.hh:61-64`), so
+every square `n <= 32` (`n <= 16` for `cdouble`) is a supported `{Native, Tiny}` route.
+`native_tier_preferred` then answers `case Algorithm::Tiny: return false;`
+(`route_geqrf.hh:143-144`), so `best_native_tier` walks past it and lands on `CTA`, which is
+supported at those orders and inside its own column cap. And `preferred()` tests its order
+floor and tall clause FIRST (`route_geqrf.hh:100-103`): a square `n <= 32` clears neither --
+the lowest floor is `cfloat`'s 48, and the tall clause needs `rows >= 128` -- so `preferred()`
+is **false for every tier** in this band and the vendor keeps the traffic in a vendor-present
+build. `preferred(Tiny)` is false at every shape in the tree.
+
+**What the band measures today.** `geqrf` square n = 32 at batch 8192, vendor against
+vendor-free, is the first row of [the order and batch grid](#geqrf-order-and-batch-grid):
+**float 0.78x, double 0.21x, cfloat 0.71x, cdouble 0.33x** -- native loses in all four types.
+That row is served by **CTA**, the tier the tiny kernel was written to replace. It is the only
+row of that grid where the native arm loses in all four types, and it is exactly the band the
+tiny tier owns by construction -- and the tier that might answer it has never been put on a
+clock: [the tiny tier](#the-tiny-tier-wp6--p1-square-n--32-in-registers) still reads NO TIMING
+HAS BEEN TAKEN. A measured 0.21x on the arm the tier replaces is an argument for taking the
+measurement, not a prediction about the tier.
+
+**The grid that would settle it.** Square `n in {8, 12, 16, 20, 24, 28, 32}`, four types with
+`cdouble` capped at 16 (D3, and the tier is not instantiated above it), at the saturating batch
+for each order, arms `vendor`, `tiny`, `cta`, `blocked` interleaved in one process, R8
+protocol throughout: JIT warmed, medians of >= 7 reps, relative sd < 10% or the cell is
+discarded and named, host residual on items 0 and batch-1 of every timed row, the saturation
+ladder reported with both readings, ratios in time. Arms are pinned with
+`BATCHLAS_GEQRF_ROUTE=tiny|cta|blocked`, which `route_resolve.hh` honours regardless of
+`native_tier_preferred` -- **and the arm must be confirmed by kernel name before its ratio is
+read**, because a dead pin looks exactly like a null result ([the register leaf
+A/B](#the-register-leaf-ab) is the worked example of that mistake in this family). Flip gate is
+the repository's: `t_native <= 0.90 t_vendor`, ratio >= 1.11, at saturation, with a bracketing
+non-winner at each edge of whatever window clears.
+
+**The routing change, if it clears, and the one place it must go.** Two edits, in one commit:
+
+1. `native_tier_preferred`'s `case Algorithm::Tiny: return false;` becomes the measured
+   window, so the vendor-free walk stops treating the tier as absent.
+2. `preferred()` gains `if (tiny_window(s)) return r.algo == Algorithm::Tiny;` **as its first
+   statement after the `is_native` test, BEFORE the order-floor / tall-aspect gate.**
+
+**Point 2 is the whole trap and it is structural, not stylistic.** The existing gate is
+`cols() >= floor_n || (rows() >= 128 && cols() >= 32 && rows() >= tall_aspect * cols())`, and
+every square `n <= 32` fails both disjuncts for every type -- `float`'s floor is 64, and the
+tall clause cannot be satisfied by a matrix whose rows are its columns. A tiny clause placed
+after that gate is therefore **dead code at every shape the tier supports**, and dead in a way
+no test that only checks resolved routes can distinguish from "the window is closed". This is
+where `geqrf` differs from `getrf`: `route_getrf.hh:75-77` tests `if (r.algo ==
+Algorithm::Tiny) return tiny_window(s);` on the line after `is_native`, ahead of its own order
+thresholds, so the same clause in the same position is live there. Copying getrf's *text*
+without copying its *position* reproduces the bug.
+
+The `native_tier_preferred` edit alone is not enough and the `preferred()` edit alone is not
+either: the first moves only vendor-free builds, the second only vendor-present ones, and
+[why the window answers for exactly one tier](#why-the-window-answers-for-exactly-one-tier) is
+the invariant the pair has to keep -- exactly one native tier may answer `preferred()` true,
+which is why point 2 is written `return r.algo == Algorithm::Tiny` and not `return true`.
+
 ## The register panel leaf (WP6 / P5)
 
 `geqr2_panel_reg_device<D, N>` (`src/extensions/geqrf_panel_reg_device.hh`) is a third panel
@@ -1419,11 +1488,36 @@ different kernel is the defect the assertion exists for.
   grid above is `double`. R10 makes `double` a reported type, not a gating one; the flip is
   justified on its own measured grid and claims nothing about the other three.
 * **The fused apply, `orgqr_fused`, `ormqr_fused`.** Never built, so P5's `Kill` clause — "if
-  the fused apply is slower than WY-with-fused-leaf at every `n >= 64`" — was never testable.
-  What shipped is the clause's own fallback: "ship only the leaf swap".
+  the fused apply is slower than WY-with-fused-leaf at every `n >= 64`, ship only the leaf swap
+  and the larft fix and drop the apply kernel (orgqr small keeps the register-identity variant
+  only if it wins)" (`docs/design/small-n-factorization-plan.md`, P5 `Kill`) — was never
+  testable. What shipped is that clause's own fallback, and **the fallback is itself
+  half-shipped**, on both of its halves:
+  * **The `larft` fix was never made.** It is one of the two conjuncts of the fallback, not an
+    optional extra; [what landed and what did not](#what-landed-and-what-did-not) lists it NOT
+    MADE and Open debt 5 still stands.
+  * **The leaf swap shipped for `double` alone.** `GeqrfPanelRegPlan`
+    (`src/extensions/geqrf_panel_reg_device.hh:28-54`) carries `cols = 16` for `double` and
+    `cols = 0` for `float`, `complex<float>` and `complex<double>`, and `cols = 0` is that
+    header's own spelling of ABSENT. **One type of four.**
+
+  So "P5 shipped its Kill fallback" is not a statement this page supports. What it supports is
+  "P5 shipped half of one conjunct of its Kill fallback, for `double`".
 * **The `larft` removal (Open debt 5).** Still stands. An `nsys` profile of `128 x 128`
   `double` batch 8 puts `LarftKernelName` at 34% of device time against the panel's 48.6%, so
-  the second-largest item in this driver is still untouched.
+  the second-largest item in this driver is still untouched. **Batch 8 is nowhere near
+  saturation** and that 34% is not the number to size the work against. The better-conditioned
+  figure is the `larft` **plus** `pack_v` pair in [where the time goes](#where-the-time-goes) —
+  19.7% (float n=1024), 22.3% (cdouble n=256), 6.5% (cdouble n=1024) — but **those are not
+  saturated splits either, and must not be quoted as such.** They are `nsys cuda_gpu_kern_sum`
+  captures taken vendor-free at `WARM_S=0.2` and **2 reps**, at whatever batch the
+  memory-bounded order schedule pairs with the order (**float n=1024 and cdouble n=1024 at batch
+  128, cdouble n=256 at batch 2048**) — a schedule, not a saturation ladder — and that section's
+  own preamble says the captures "must not be quoted as timings". The only batch ladder on this
+  page runs at **n=64** ([`geqrf` order and batch grid](#geqrf-order-and-batch-grid), where both
+  arms are launch-bound below batch ~512), and it says nothing about these orders. So: size
+  `larft` work against **20-22% for the pair, as a larger-batch profiler estimate**, not against
+  34%, and not against a saturation figure this page does not have.
 * **`orgqr` and `ormqr` end to end.** The leaf is a `geqrf` kernel; neither suite's timings were
   re-measured, and P5's `orgqr` target (>= 1.5x over identity+ormqr) is untouched.
 * **The exact register count of the shipped kernel.** Bounded to `(157.5, 170.6]` by bisection;
@@ -1478,3 +1572,128 @@ a serial scan over `ceil(m/32)` slots. The association orders differ, so the las
 columns hold entries far below `||A||` and a relative bound on those measures cancellation
 rather than disagreement. The convention itself is guarded where it already was: both leaves
 call `geqrf_larfg_scalars` verbatim, and the elementwise LAPACKE `tau` comparison covers it.
+## The tiny `geqrf` window
+
+The register tier was written, instantiated, correctness-tested and then **never timed**. It was
+supported-but-never-preferred: `supports()` admitted every square `n <= tiny_max_n`, but
+`native_tier_preferred` answered a hard `false` for `Algorithm::Tiny`, so `best_native_tier()`
+returned CTA at every order the tier reaches and `preferred(Tiny)` was false everywhere. `Auto`
+therefore sent the whole square band to CTA — which [the order and batch grid](#geqrf-order-and-batch-grid)
+already recorded as a native **loss** against the vendor (n=32, batch 8192: float 0.78x, double
+0.21x, cfloat 0.71x, cdouble 0.33x). The tier the tiny kernel was written to replace was the tier
+that kept the traffic.
+
+This is the third instance of one pattern in this campaign, after the `getrf` and `potrf` tiny
+tiers: the kernel was already finished and only the routing was missing.
+
+### The grid
+
+R8, interleaved arms inside one `factor_bench` process, medians of 9 (15 on the confirmation
+cells), ratios in TIME against the **vendor** arm, which is the arm a flip actually replaces here
+(`geqrf` has a vendor arm, unlike `gesv`/`posv`). Flip gate `ratio >= 1.11`.
+
+**Saturation first, because it changes the answer.** At batch 2048 and 8192 the tier looks far
+stronger than it is; the ratio falls as the batch grows and only settles by 32768:
+
+| cell | batch 2048 | batch 8192 | batch 32768 |
+|---|---|---|---|
+| cfloat n=9 | 1.985x | 1.305x | **1.015x** |
+| cfloat n=16 | 2.835x | 2.040x | 1.678x |
+| cfloat n=21 | 1.263x | 0.794x | 0.873x |
+| cfloat n=32 | 2.632x | 1.924x | 1.865x |
+| float n=9 | 2.824x | 1.795x | 1.593x |
+| float n=32 | 4.052x | 3.252x | 3.284x |
+
+A window cut at 8192 would have admitted cfloat n=9 at 1.305x, which the saturated rung refuses
+at 1.015x. **Every number below is at batch 32768.**
+
+| n | float | cfloat | | n | float | cfloat |
+|---|---|---|---|---|---|---|
+| 4 | 1.586x | 1.061x | | 18 | 0.885x | 0.623x |
+| 5 | — | 1.433x | | 19 | 1.004x | 0.716x |
+| 6 | — | 1.652x | | 20 | 1.043x | 0.752x |
+| 7 | — | 2.055x | | 21 | 1.225x | 0.873x |
+| 8 | 2.964x | 1.977x | | 22 | 1.317x | 0.961x |
+| 9 | 1.593x | 1.026x | | 23 | — | 1.053x |
+| 10 | 1.866x | 1.117x | | 24 | 1.403x | 1.122x |
+| 11 | 2.189x | 1.341x | | 25 | — | 1.328x |
+| 12 | 2.384x | 1.252x | | 26 | 1.705x | 1.443x |
+| 13 | — | 1.495x | | 27 | 1.855x | 1.643x |
+| 14 | 3.164x | 1.586x | | 28 | 1.906x | 1.800x |
+| 15 | 3.598x | 1.749x | | 30 | 2.150x | 2.321x |
+| 16 | 3.711x | 1.678x | | 32 | 3.284x | 1.865x |
+| 17 | 0.812x | 0.553x | | | | |
+
+### The window that ships
+
+```
+float             4 <= n <= 16,  21 <= n <= 32
+complex<float>    5 <= n <=  8,  11 <= n <= 16,  25 <= n <= 32
+double, cdouble   refused
+```
+
+**The holes are measured, not arbitrary, and they are the part a future reader will want to tidy
+away.** `tiny_n_is_legal` admits `N` in `{8, 16, 32}` only — `N` must divide the 32-wide
+sub-group because the reductions are partition butterflies — and the loop deliberately
+`continue`s rather than `break`s, which is what keeps the array in registers with zero spill. So
+every order in 17..32 runs a full 32-iteration trip count. At n=17 that is 32 iterations for 17
+columns, and the same fill penalty reappears at the bottom of each bucket (n=9, n=10 in the N=16
+bucket; n=4 in the N=8 bucket). float absorbs it and complex does not, which is exactly the shape
+of the two windows. It is the same mechanism as [the n=17 cliff](lu.md) in `getrf`.
+
+**fp64 is refused on evidence, not on principle.** double measured 0.901x, 0.414x, 0.949x,
+0.332x, 0.414x, 0.512x at n = 8..28 and only 1.134x at n=32 — a single marginal point is not a
+window. Note the native *alternatives* are far worse there (CTA and Blocked read 0.14-0.67x), so
+in a vendor-free build the tier is still much the best native arm; it simply does not beat
+cuSOLVER.
+
+### A measurement caveat that is part of the result
+
+These grids were taken while **NVML was broken on the box** (kernel module 595.84 against
+userspace 595.91.07 — the driver package was upgraded without a module reload). CUDA itself was
+unaffected, but `benchmarks/gpu_guard.sh` could not run: it polls `nvidia-smi` for utilisation
+and the start-of-run SM clock. The stand-in guard preserved what the real guard's own header
+calls the thing that actually makes it race-free — `CUDA_VISIBLE_DEVICES` pinning — and rebuilt
+the foreign-process check from `/proc` file descriptors on `/dev/nvidia1`, arming it against a
+live holder (refused, naming the pid) and a clean card (passed). What was **lost** is the
+utilisation reading and the SM clock, so a cold or throttled run cannot be detected.
+
+That cost was paid, and it is measurable: **cfloat n=23 read 0.148x in one run and 1.053x in
+another**, both passing the `rel_sd < 10%` discipline. A 7x swing between runs of one cell is
+drift the guard would normally have caught.
+
+Two consequences, both deliberate:
+
+* the **complex window uses a 1.25 margin rather than the 1.11 flip gate**, so every cell it
+  admits cleared 1.25x and every cell it refuses measured at most 1.122x. The cells that fall in
+  that gap — cfloat n=10 (1.117x) and n=24 (1.122x) — are **left out on purpose**;
+* the **float window keeps the 1.11 gate**, because float reproduced tightly across independent
+  runs: n=17 measured 0.812x twice to three digits, n=21 1.211x then 1.225x, n=16 3.711x then
+  3.693x, and its margins are large enough that a 10% error flips nothing.
+
+**Both windows should be re-cut once NVML is working**, against the real guard. The float window
+is unlikely to move; the complex edges at n = 9, 10, 23, 24 are the ones to re-take.
+
+### Arming the window
+
+R9, four breaks, each built and run against `geqrf_tests`:
+
+| break | expected | observed |
+|---|---|---|
+| admit n = 17..20, a measured float loss | red | **RED** |
+| fire the window with `tiny_max_n == 0` (no tier linked) | red | green |
+| let CTA answer inside the window too (R8b) | red | **RED** |
+| drop the square-only gate, admitting tall panels | red | green |
+
+**Two of the four are recorded as unfalsifiable, not as coverage.** Breaks B and D stayed green
+because `supports()` already refuses both shapes independently: it returns false when
+`tiny_max_n < 1` and false unless `s.m == s.n`, so deleting the same test from `tiny_window()`
+changes nothing a test can observe. The property is defended twice and the redundant half cannot
+be armed from here. This is the same situation as the `Uplo::Upper` break on the `potrf` tiny
+window, and it is written down for the same reason: a green break is evidence about the *test*,
+not about the code, and counting it as coverage is how a guard comes to be trusted for something
+it never checked.
+
+Breaks A and C are the load-bearing ones, and both went red: A defends the window's measured
+edges (the hole at 17..20 is the whole point of the predicate) and C defends R8b exclusivity
+(without it the vendor-free walk still lands on CTA, the arm the window was measured to beat).

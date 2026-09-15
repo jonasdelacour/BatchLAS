@@ -47,6 +47,7 @@ USAGE
     python3 .github/ci/check_comment_density.py src/extensions  # a subtree
     python3 .github/ci/check_comment_density.py --ceiling 25
     python3 .github/ci/check_comment_density.py --fix-suggest   # what to move, with line ranges
+                                                                # (waived files too -- they ARE the burn-down list)
     python3 .github/ci/check_comment_density.py --all           # list every file, not just offenders
     python3 .github/ci/check_comment_density.py --self-test     # arm the counter in both directions
 
@@ -56,6 +57,7 @@ waiver line, or a failed self-test).
 
 import argparse
 import fnmatch
+import math
 import os
 import re
 import subprocess
@@ -233,6 +235,67 @@ def density(comment_lines, non_blank):
 
 
 # --------------------------------------------------------------------------
+# how much has to go: two different questions, two different numbers
+# --------------------------------------------------------------------------
+
+def deletions_needed(c, nb, ceiling):
+    """Comment lines to DELETE outright to land at or under the ceiling.
+
+    Deleting a comment line drops the numerator AND the denominator, so the
+    count solves (c - k) / (nb - k) <= p, i.e. k = ceil((c - p*nb) / (1 - p)).
+    The numerator-only (c - p*nb) is a different question (see below). It is
+    never larger, and usually strictly smaller -- a contributor who deletes
+    exactly that many lines is then still over the ceiling, which is how this
+    tool used to lie. On a file only just over the ceiling the two coincide;
+    remedy() has to notice that rather than assert a gap that is not there.
+    """
+    p = ceiling / 100.0
+    if nb <= 0 or p >= 1.0 or density(c, nb) <= ceiling + 1e-9:
+        return 0
+    k = max(int(math.ceil((c - p * nb) / (1.0 - p) - 1e-9)), 1)
+    while k < c and density(c - k, nb - k) > ceiling + 1e-9:
+        k += 1
+    return k
+
+
+def relocations_needed(c, nb, ceiling):
+    """Comment lines that must stop being comment lines with nb held FIXED.
+
+    That is the case where the file's non-blank line count does not move: the
+    line becomes code, or code arrives alongside the prose that leaves. Only
+    the numerator moves, so k = ceil(c - p*nb). It is a floor on the work, not
+    a deletion instruction -- never print it as one.
+    """
+    if nb <= 0 or density(c, nb) <= ceiling + 1e-9:
+        return 0
+    return max(int(math.ceil(c - (ceiling / 100.0) * nb - 1e-9)), 1)
+
+
+def remedy(c, nb, ceiling):
+    """The remediation clause shared by the offender and waived reports.
+
+    Two counts because there are two questions, and which sentence to print
+    depends on whether they actually differ. When they do, the contributor has
+    to be told that the smaller one is not a deletion instruction. When they do
+    not -- true for 14 of the 137 files over the ceiling as this ships, every
+    file sitting just above it -- the old wording named the same integer twice
+    and then called it insufficient ("delete 1 ... the numerator-only figure of
+    1 does NOT clear the ceiling"), which reads as a broken tool and gets the
+    whole gate ignored. So: one number when there is one number.
+    """
+    k = deletions_needed(c, nb, ceiling)
+    r = relocations_needed(c, nb, ceiling)
+    move = ("move the evidence to docs/perf/<op>.md and leave an "
+            "`evidence: docs/perf/<page>.md#<anchor>` pointer")
+    if k == r:
+        return ("delete %d comment line(s) -- deleting them and relocating them "
+                "come to the same count on this file; %s" % (k, move))
+    return ("delete %d comment line(s) -- deleting a line drops both counts, so "
+            "the numerator-only figure of %d does NOT clear the ceiling; %s"
+            % (k, r, move))
+
+
+# --------------------------------------------------------------------------
 # file discovery
 # --------------------------------------------------------------------------
 
@@ -375,6 +438,43 @@ CEILING_CASES = [
     (100.0, True, "an all-comment file fails"),
 ]
 
+# (name, comment_lines, non_blank, ceiling, expected_delete, expected_relocate)
+# Every delete count is also checked for minimality below, so these cannot be
+# quietly loosened to whatever the code happens to return.
+ARITH_CASES = [
+    ("sg_compat", 58, 301, 18.0, 5, 4,
+     "the numerator-only 4 leaves 54/297 = 18.18%, still over; 5 gives 17.91%"),
+    ("settings_hh", 528, 681, 18.0, 495, 406,
+     "a doc-comment header needs 495 deletions; the old 406 leaves 122/275 = 44%"),
+    ("exact_tie", 55, 300, 18.0, 2, 1,
+     "c - p*nb is exactly 1.0: relocate is ceil()=1, not the old int()+1=2"),
+    ("at_ceiling", 54, 300, 18.0, 0, 0,
+     "a file exactly at the ceiling is owed no deletions at all"),
+    ("all_comment", 4, 4, 18.0, 4, 4,
+     "deleting every comment line is always enough and is never exceeded"),
+]
+
+# (name, comment_lines, non_blank, ceiling, must_contain, must_not_contain, why)
+# These pin the rendered SENTENCE, not the two integers. ARITH_CASES already
+# carried a k == r row (all_comment, 4/4) and it did not catch remedy() naming
+# the same number twice and then calling it insufficient, precisely because
+# nothing asserted on the words. An assertion on integers cannot see prose.
+REMEDY_CASES = [
+    ("eq_syev", 109, 603, 18.0, "delete 1 comment line(s)", "does NOT clear",
+     "real include/batchlas/blas/functions/syev.hh, k == r == 1: naming 1 and "
+     "then calling 1 insufficient is the defect this pins"),
+    ("eq_small", 3, 11, 18.0, "delete 2 comment line(s)", "does NOT clear",
+     "real include/batchlas/blas/dispatch/op.hh, k == r == 2"),
+    ("eq_all_comment", 4, 4, 18.0, "delete 4 comment line(s)", "does NOT clear",
+     "the all-comment 4/4 arithmetic row, now checked for what it prints"),
+    ("diff_sg_compat", 58, 301, 18.0,
+     "the numerator-only figure of 4 does NOT clear the ceiling", "same count",
+     "k=5 r=4 differ, so the two-number warning must survive this change"),
+    ("diff_settings_hh", 528, 681, 18.0,
+     "the numerator-only figure of 406 does NOT clear the ceiling", "same count",
+     "k=495 r=406: the widest real gap in the repo"),
+]
+
 
 def self_test():
     print("== check_comment_density self-test (expected vs observed)")
@@ -394,8 +494,32 @@ def self_test():
               % ("ok" if ok else "FAIL", "gate", d, DEFAULT_CEILING,
                  "fail" if expect_fail else "pass",
                  "fail" if got_fail else "pass", why))
+    for name, c, nb, ceiling, exp_del, exp_rel, why in ARITH_CASES:
+        got_del = deletions_needed(c, nb, ceiling)
+        got_rel = relocations_needed(c, nb, ceiling)
+        ok = got_del == exp_del and got_rel == exp_rel
+        if got_del:
+            # the count must actually clear the ceiling, and one fewer must not.
+            ok = ok and density(c - got_del, nb - got_del) <= ceiling + 1e-9
+            ok = ok and density(c - got_del + 1, nb - got_del + 1) > ceiling + 1e-9
+        bad += 0 if ok else 1
+        print("  %-4s %-16s %d/%-4d delete expected %-4d observed %-4d  relocate "
+              "expected %-4d observed %-4d  %s"
+              % ("ok" if ok else "FAIL", name, c, nb,
+                 exp_del, got_del, exp_rel, got_rel, why))
+    for name, c, nb, ceiling, want, unwanted, why in REMEDY_CASES:
+        got = remedy(c, nb, ceiling)
+        ok = want in got and (unwanted is None or unwanted not in got)
+        # Whatever else it says, the sentence must name the DELETION count, and
+        # must never issue the relocation count as the thing to delete.
+        k = deletions_needed(c, nb, ceiling)
+        ok = ok and ("delete %d comment line(s)" % k) in got
+        bad += 0 if ok else 1
+        print("  %-4s %-16s %d/%-4d says %r  %s"
+              % ("ok" if ok else "FAIL", name, c, nb, got[:96], why))
     print("check_comment_density self-test: %d case(s), %d failure(s)"
-          % (len(SELF_TEST_CASES) + len(CEILING_CASES), bad))
+          % (len(SELF_TEST_CASES) + len(CEILING_CASES) + len(ARITH_CASES)
+             + len(REMEDY_CASES), bad))
     return 1 if bad else 0
 
 
@@ -449,12 +573,20 @@ def main(argv=None):
     ceiling = args.ceiling
     offenders = []
     waived = []
+    waived_clear = []          # waived, but already under the ceiling
     for rel, c, nb, d, text, flags in rows:
-        if nb < args.min_lines or d <= ceiling + 1e-9:
+        if nb < args.min_lines:
             continue
         hit = match_waiver(rel, waivers)
+        if d <= ceiling + 1e-9:
+            # A waiver on an in-band file suppresses nothing. It is not an
+            # error (the file is fine), but the line is free to delete and
+            # nothing else in this tool would ever mention it.
+            if hit:
+                waived_clear.append((rel, c, nb, d, hit))
+            continue
         if hit:
-            waived.append((rel, c, nb, d, hit))
+            waived.append((rel, c, nb, d, hit, text, flags))
         else:
             offenders.append((rel, c, nb, d, text, flags))
 
@@ -493,12 +625,29 @@ def main(argv=None):
         shown = waived if show_all else waived[:WAIVER_LIST_LIMIT]
         print("== waived (allowlisted, still over the %.0f%% ceiling): %d file(s)"
               % (ceiling, len(waived)))
-        for rel, c, nb, d, (pat, reason, lineno) in shown:
+        for rel, c, nb, d, (pat, reason, lineno), text, flags in shown:
             print("  %6.2f%%  %4d/%-5d %s" % (d, c, nb, rel))
             print("            %s:%d -- %s" % (WAIVERS, lineno, reason))
+            if args.fix_suggest:
+                # The burn-down population IS the waived set, so this is the
+                # one place --fix-suggest has real work to do. It used to skip
+                # them entirely: waived rows never reached `offenders`.
+                print("            waived, not a gate failure -- to un-waive: %s"
+                      % remedy(c, nb, ceiling))
+                for s, e, ln, first in comment_blocks(text, flags):
+                    print("            longest block: lines %d-%d (%d lines): %s"
+                          % (s, e, ln, first[:70]))
         if not show_all:
             print("  ... and %d more, worst first; --show-waivers lists every one with "
-                  "its reason." % (len(waived) - len(shown)))
+                  "its reason%s." % (len(waived) - len(shown),
+                                     " and its burn-down detail" if args.fix_suggest else ""))
+        print()
+
+    if waived_clear:
+        print("== waived but now UNDER the %.0f%% ceiling: %d file(s) -- the waiver "
+              "line is dead weight and can be deleted for free" % (ceiling, len(waived_clear)))
+        for rel, c, nb, d, (pat, reason, lineno) in sorted(waived_clear, key=lambda r: -r[3]):
+            print("  %6.2f%%  %4d/%-5d %s  (%s:%d)" % (d, c, nb, rel, WAIVERS, lineno))
         print()
 
     if offenders:
@@ -507,11 +656,8 @@ def main(argv=None):
               "file is not a defect." % (BAND_FLOOR, ceiling))
         print()
         for rel, c, nb, d, text, flags in offenders:
-            over = max(int(c - (ceiling / 100.0) * nb) + 1, 1)
             print("%s:1: error: %.2f%% comment lines (%d/%d non-blank), ceiling %.0f%% "
-                  "-- move ~%d line(s) of evidence to docs/perf/<op>.md and leave an "
-                  "`evidence: docs/perf/<page>.md#<anchor>` pointer"
-                  % (rel, d, c, nb, ceiling, over))
+                  "-- %s" % (rel, d, c, nb, ceiling, remedy(c, nb, ceiling)))
             if args.fix_suggest:
                 for s, e, ln, first in comment_blocks(text, flags):
                     print("        longest block: lines %d-%d (%d lines): %s"
@@ -524,11 +670,12 @@ def main(argv=None):
     total_nb = sum(r[2] for r in rows)
     total_c = sum(r[1] for r in rows)
     print("check_comment_density: %d file(s), repo density %.2f%% (%d/%d), "
-          "%d over ceiling, %d waived"
+          "%d over ceiling, %d waived, %d waiver(s) now free to delete"
           % (len(rows), density(total_c, total_nb), total_c, total_nb,
-             len(offenders), len(waived)))
-    if offenders and not args.fix_suggest:
-        print("  re-run with --fix-suggest to see which blocks to move.")
+             len(offenders), len(waived), len(waived_clear)))
+    if (offenders or waived) and not args.fix_suggest:
+        print("  re-run with --fix-suggest to see which blocks to move "
+              "(offenders and waived burn-down candidates alike).")
     return 1 if (offenders or errors) else 0
 
 
