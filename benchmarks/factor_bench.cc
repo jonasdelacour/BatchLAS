@@ -282,18 +282,27 @@ static void fill_gauss(UnifiedVector<T>& A0, int m, int n, int ld, size_t stride
 // || A0 - L L^H ||_F / || A0 ||_F over the FACTORED (lower) triangle.
 template <typename T>
 static double potrf_residual(const UnifiedVector<T>& F, const UnifiedVector<T>& A0,
-                             int n, int ld, size_t stride, int batch) {
+                             int n, int ld, size_t stride, int batch, bool upper) {
     using D = typename Prom<T>::type;
     double worst = 0;
     for (int b : {0, batch - 1}) {
         const size_t o = size_t(b) * stride;
         double num = 0, den = 0;
+        // Lower walks the lower triangle and forms L L^H; Upper walks the upper one and forms
+        // U^H U, where U(k, i) lives at F[i*ld + k]. Reusing the Lower sweep for an Upper
+        // factor reads the untouched triangle and scores a correct answer as garbage.
         for (int j = 0; j < n; ++j)
-            for (int i = j; i < n; ++i) {
+            for (int i = (upper ? 0 : j); upper ? (i <= j) : (i < n); ++i) {
                 D acc = D(0);
-                for (int k = 0; k <= j; ++k)
-                    acc += up(F[o + size_t(k) * size_t(ld) + size_t(i)]) *
-                           cj(up(F[o + size_t(k) * size_t(ld) + size_t(j)]));
+                if (upper) {
+                    for (int k = 0; k <= i; ++k)
+                        acc += cj(up(F[o + size_t(i) * size_t(ld) + size_t(k)])) *
+                               up(F[o + size_t(j) * size_t(ld) + size_t(k)]);
+                } else {
+                    for (int k = 0; k <= j; ++k)
+                        acc += up(F[o + size_t(k) * size_t(ld) + size_t(i)]) *
+                               cj(up(F[o + size_t(k) * size_t(ld) + size_t(j)]));
+                }
                 const D a = up(A0[o + size_t(j) * size_t(ld) + size_t(i)]);
                 const double d = ab(acc - a), r = ab(a);
                 num += d * d;
@@ -525,7 +534,12 @@ struct Cfg {
     // what keeps clock drift out of the ratio, and two processes ratioing through a
     // shared vendor arm puts it back. evidence: docs/perf/small-n-baseline.md#the-arms-list
     std::vector<std::string> arms{"vendor", "native"};
+    // potrf/posv only. The grids on docs/perf were Lower-only because this harness could
+    // not express anything else, which is why the Upper windows read "untested".
+    bool upper = false;
 };
+
+static Uplo up_of(const Cfg& c) { return c.upper ? Uplo::Upper : Uplo::Lower; }
 
 static void emit(const Cfg& c, const Arm& a, std::FILE* csv) {
     char buf[512];
@@ -671,13 +685,13 @@ static int run(const Cfg& c) {
         arms[i].pin_parsed = pin_parsed_now(c.op);
         size_t need = 0;
         switch (c.op) {
-            case OpKind::potrf: need = potrf_buffer_size<BE, T>(*q, Av, Uplo::Lower); break;
+            case OpKind::potrf: need = potrf_buffer_size<BE, T>(*q, Av, up_of(c)); break;
             case OpKind::getrf: need = getrf_buffer_size<BE, T>(*q, Av); break;
             case OpKind::getrs: need = getrs_buffer_size<BE, T>(*q, Av, Xv, Transpose::NoTrans); break;
             case OpKind::geqrf: need = geqrf_buffer_size<BE, T>(*q, Av, tau.to_span()); break;
             case OpKind::orgqr: need = orgqr_buffer_size<BE, T>(*q, Av, tau.to_span()); break;
             case OpKind::gesv: need = gesv_buffer_size<BE, T>(*q, Av, Xv); break;
-            case OpKind::posv: need = posv_buffer_size<BE, T>(*q, Av, Xv, Uplo::Lower); break;
+            case OpKind::posv: need = posv_buffer_size<BE, T>(*q, Av, Xv, up_of(c)); break;
         }
         wneed = std::max(wneed, need);
     }
@@ -686,7 +700,7 @@ static int run(const Cfg& c) {
 
     auto call = [&] {
         switch (c.op) {
-            case OpKind::potrf: (void)potrf<BE, T>(*q, Av, Uplo::Lower, ws.to_span(), info.to_span()); break;
+            case OpKind::potrf: (void)potrf<BE, T>(*q, Av, up_of(c), ws.to_span(), info.to_span()); break;
             case OpKind::getrf: (void)getrf<BE, T>(*q, Av, piv.to_span(), ws.to_span(), info.to_span()); break;
             case OpKind::getrs: (void)getrs<BE, T>(*q, Av, Xv, Transpose::NoTrans, piv.to_span(), ws.to_span()); break;
             case OpKind::geqrf: (void)geqrf<BE, T>(*q, Av, tau.to_span(), ws.to_span()); break;
@@ -695,7 +709,7 @@ static int run(const Cfg& c) {
                 (void)gesv<BE, T>(*q, Av, Xv, piv.to_span(), ws.to_span(), info.to_span());
                 break;
             case OpKind::posv:
-                (void)posv<BE, T>(*q, Av, Xv, Uplo::Lower, ws.to_span(), info.to_span());
+                (void)posv<BE, T>(*q, Av, Xv, up_of(c), ws.to_span(), info.to_span());
                 break;
         }
         q->wait();
@@ -755,7 +769,7 @@ static int run(const Cfg& c) {
         }
         switch (c.op) {
             case OpKind::potrf:
-                a.residual = potrf_residual<T>(A, A0, n, lda, sa, batch);
+                a.residual = potrf_residual<T>(A, A0, n, lda, sa, batch, c.upper);
                 break;
             case OpKind::getrf: {
                 a.residual = getrf_residual<T>(A, A0, pivi, pstride, n, lda, sa, batch);
@@ -863,6 +877,7 @@ int main(int argc, char** argv) {
             "                    [--route=<pin>] [--csv=<path>] [--arms=a,b,...]\n"
             "  op   : potrf getrf getrs geqrf orgqr gesv posv\n"
             "  type : float double cfloat cdouble\n"
+            "  --uplo=upper|lower : potrf and posv only, default lower\n"
             "  env  : WARM_S (seconds, default 1.5), LD_PAD (ld = m + LD_PAD)\n"
             "prints: op,type,m,n,nrhs,batch,arm,pin,pin_parsed,median_ms,mean_ms,"
             "rel_sd,reps,residual,extra_check,info_nonzero,bad,reason\n");
@@ -889,6 +904,8 @@ int main(int argc, char** argv) {
         const std::string a = argv[i];
         if (a.rfind("--route=", 0) == 0) c.route_pin = a.substr(8);
         else if (a.rfind("--csv=", 0) == 0) c.csv = a.substr(6);
+        else if (a == "--uplo=upper") c.upper = true;
+        else if (a == "--uplo=lower") c.upper = false;
         else if (a.rfind("--arms=", 0) == 0) {
             // SPLIT ON COMMAS EXACTLY, never a substring test: `--arms=native` under a
             // `find("vendor")` test dropped the vendor arm silently, and `--arms=vendor`

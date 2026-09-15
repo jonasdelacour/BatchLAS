@@ -1939,3 +1939,105 @@ Not fixed here, and deliberately not papered over by lowering a cap:
 
 Until (2) is measured, the honest statement is that the cdouble posv tier is routed on a
 residency claim its own probe refutes.
+
+## The tiny potrf window, extended to Upper and to fp64
+
+Two things this page previously recorded as *untested, not refuted* are now measured, and both
+turned out to be wins — one of them the widest margin in the campaign. Both grids are at batch
+**32768**, R8, interleaved arms in one process, ratios in time against the **vendor** arm, and
+both were taken with the degraded guard described in
+[the NVML caveat](qr.md#a-measurement-caveat-that-is-part-of-the-result).
+
+### Uplo::Upper is the wider window, by a long way
+
+`factor_bench` could not express `Uplo::Upper` at all — it hardcoded `Uplo::Lower` at four call
+sites — which is the entire reason the grid was Lower-only and the doc said "an unmeasured
+triangle is not a window". It now takes `--uplo=upper|lower`, with a residual path that forms
+`Uᴴ U` from the upper triangle rather than `L Lᴴ` from the lower one. Reusing the Lower sweep on
+an Upper factor reads the untouched triangle and scores a correct answer as garbage; the two
+paths agree to the digit on a symmetric input (both `9.555e-08` at float n=16), which is what a
+correct pair must do.
+
+| n | float | cfloat | double | cdouble |
+|---|---|---|---|---|
+| 1 | 21.539x | 20.214x | 3.891x | 2.949x |
+| 2 | 27.065x | 21.875x | 4.297x | 3.540x |
+| 3 | 22.462x | 21.825x | — | — |
+| 4 | 28.600x | 21.418x | 5.235x | 4.690x |
+| 8 | **28.727x** | 13.251x | 6.987x | 6.310x |
+| 10 | 9.991x | 6.643x | 1.621x | 1.417x |
+| 12 | 11.154x | 5.978x | 1.808x | 1.684x |
+| 16 | 11.018x | 3.462x | 2.317x | 2.127x |
+| 17 | 3.192x | 1.738x | — | — |
+| 20 | 3.352x | 1.952x | — | — |
+| 24 | 3.544x | 2.072x | — | — |
+| 28 | 3.626x | 2.346x | — | — |
+| 32 | 3.314x | 2.118x | — | — |
+
+**Every measured cell wins, for every type, with no holes.** The mechanism is not that our
+kernel is better at Upper — it is that cuSOLVER is much worse at it. A direct pair at float
+n=16, batch 4096: vendor **0.0360 ms** Lower against **0.0730 ms** Upper, while the tier moves
+only 0.01096 → 0.01263. The vendor roughly doubles; we barely notice the triangle. That gap is
+wide enough to swallow the N-bucket fill penalty that splits the *Lower* band below, which is
+why the Upper window is the whole tier and the Lower one is not.
+
+The window is therefore `1 <= n <= tiny_max_n` for all four types on Upper. LPanel is untouched:
+its grid is still Lower-only and `supports()` still refuses Upper outright, so one order past
+the register tier Upper returns to the vendor. That pair is asserted in both test files so the
+`uplo` test cannot be deleted wholesale now that one window no longer needs it.
+
+### fp64 wins on Lower too, in two bands
+
+`lpanel_types()` is float/cfloat, and `preferred()` tested it before anything else, so neither
+fp64 type could reach the tiny window at all. That gate was about the **LPanel** grid; it was
+never a claim about the register tier. Measured:
+
+| n | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 20 | 32 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| **double** | 0.715 | 1.158 | 1.629 | 2.099 | 2.558 | 3.014 | 3.494 | **3.956** | 0.865 | 0.957 | 1.049 | 1.145 | 1.233 | 1.322 | 1.411 | 1.505 | 0.548 | 0.590 | 0.768 |
+| **cdouble** | 0.709 | 1.291 | 1.885 | 2.486 | 3.080 | 3.687 | 4.279 | **4.892** | 0.882 | 0.976 | 1.071 | 1.167 | 1.263 | 1.354 | 1.446 | 1.545 | — | — | — |
+
+Window: **2..8 and 12..16**, both types. The bands are the N-bucket structure exactly — n=1 is
+overhead-bound, 2..8 fills the N=8 bucket, 9..11 fills N=16 badly and loses, 12..16 fills it
+well, and 17+ enters N=32 where double collapses to 0.548-0.768x. Two independent types trace
+the same curve to within a few percent, with `rel_sd` around 0.001, which is why this window
+uses the standard 1.11 gate rather than the widened margin the geqrf complex grid needed: the
+structure corroborates itself across types and matches a known mechanism, where that one did not.
+
+cdouble has no rows above 16 because the tier caps there, and **the four cells that looked like
+`1.000x` in the first pass were vacuous, not neutral**: at cdouble n=20 the `tiny` arm read
+4.410 ms against the vendor's 4.413 ms, i.e. `supports()` refused the pin and the route fell
+through to the vendor, so both arms measured the same code. `pin_parsed` says the value parsed,
+never that the route ran — the trap this harness documents and still caught nobody's eye until
+the ratio came out at exactly 1.000.
+
+### End to end
+
+The flip moves `Auto`, which is the only thing that matters to a caller. Vendor against `Auto`,
+batch 32768, after the change:
+
+| | n=6 | n=10 | n=14 | n=16 |
+|---|---|---|---|---|
+| double | 3.017x | **1.000x** | 1.323x | 1.505x |
+| cdouble | 3.687x | **1.001x** | 1.353x | 1.546x |
+
+Inside the window `Auto` tracks the pinned tier to three digits (pinned: 3.014, 1.322, 1.505 /
+3.687, 1.354, 1.545). At n=10 — the hole the window deliberately excludes — `Auto` reads exactly
+1.000x, which is the vendor. The window does what it says and nothing else.
+
+### Arming both windows
+
+R9, four breaks, each rebuilt and run against `potrf_tests` and `route_vocabulary_tests`:
+
+| break | expected | observed |
+|---|---|---|
+| admit the fp64 Lower hole n=9..11, a measured loss | red | **RED** |
+| refuse `Uplo::Upper` again | red | **RED** |
+| let Upper reach the LPanel window, which is Lower-only | red | **RED** |
+| fire the window with `tiny_max_n == 0` (no tier linked) | red | green |
+
+The fourth is recorded as **unfalsifiable, not as coverage**: `supports()` independently returns
+false when `tiny_max_n < 1`, so deleting the same test from `tiny_window()` changes nothing a
+test can observe. Same shape as the corresponding break on the `geqrf` window. The first three
+are the load-bearing ones and all went red — in particular the third, which is what stops the
+`uplo` test being deleted from `preferred()` now that the tiny window no longer needs it.

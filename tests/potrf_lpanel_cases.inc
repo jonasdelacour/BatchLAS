@@ -506,6 +506,10 @@ TYPED_TEST(PotrfLpanelTest, RouteWindowIsExactlyTheMeasuredOne) {
         const bool in_lpanel = measured && n > 32 && n <= 256;
         const bool in_tiny = measured && n <= 32 && n <= lower->tiny_max_n;
         const bool in_window = in_lpanel || in_tiny;
+        // UPPER is not `measured`-gated: the register tier's Upper grid covers all four
+        // types at every order it holds, which is why it is the wider of the two windows.
+        // LPanel above 32 is still Lower-only. evidence: docs/perf/potrf.md#the-tiny-potrf-window
+        const bool in_tiny_upper = n <= 32 && n <= upper->tiny_max_n;
 
         int pref_hits = 0;
         int pref_hits_upper = 0;
@@ -517,7 +521,8 @@ TYPED_TEST(PotrfLpanelTest, RouteWindowIsExactlyTheMeasuredOne) {
             if (Tbl::supports(*r, *lower) && Tbl::native_tier_preferred(*r, *lower)) ++tier_hits;
         }
         EXPECT_EQ(pref_hits, in_window ? 1 : 0) << "n=" << n;
-        EXPECT_EQ(pref_hits_upper, 0) << "Upper has no grid behind it, n=" << n;
+        EXPECT_EQ(pref_hits_upper, in_tiny_upper ? 1 : 0)
+            << "Upper is the tiny tier's window and nothing else's, n=" << n;
         EXPECT_EQ(tier_hits, 1) << "n=" << n << ": the vendor-free walk is an accident of the "
                                    "order array rather than a stated decision";
 
@@ -533,10 +538,15 @@ TYPED_TEST(PotrfLpanelTest, RouteWindowIsExactlyTheMeasuredOne) {
             EXPECT_TRUE(dispatch::is_vendor(route))
                 << "a shape OUTSIDE the measured window left the vendor, n=" << n;
         }
-        EXPECT_TRUE(dispatch::is_vendor(
-            backend::potrf_route<B, T>(*this->ctx, A.view(), Uplo::Upper,
-                                       /*vendor_available=*/true)))
-            << "Upper moved off the vendor at n=" << n;
+        const auto up_route = backend::potrf_route<B, T>(*this->ctx, A.view(), Uplo::Upper,
+                                                         /*vendor_available=*/true);
+        if (in_tiny_upper) {
+            ASSERT_TRUE(dispatch::is_native(up_route)) << "n=" << n;
+            EXPECT_EQ(up_route.algo, dispatch::Algorithm::Tiny) << "n=" << n;
+        } else {
+            EXPECT_TRUE(dispatch::is_vendor(up_route))
+                << "above the tiny tier Upper has no grid, so it stays vendor, n=" << n;
+        }
 
         const auto free_route = backend::potrf_route<B, T>(*this->ctx, A.view(), Uplo::Lower,
                                                            /*vendor_available=*/false);

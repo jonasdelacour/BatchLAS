@@ -76,16 +76,15 @@ struct RouteTable<Op::potrf, T> {
         }
     }
 
-    // Two windows now: the register tier at n <= 32 and LPanel at 32 < n <= 256.
+    // Two windows: the register tier at n <= 32, LPanel at 32 < n <= 256 (Lower, fp32 only).
     // evidence: docs/perf/potrf.md#the-measured-lpanel-window
     static bool preferred(Route r, const PotrfShape& s) {
         if (!is_native(r)) return false;
-        if (!lpanel_types()) return false;
-        if (s.uplo != Uplo::Lower) return false;
 
-        // evidence: docs/perf/potrf.md#the-tiny-potrf-window
+        // The only window measured on Upper or for fp64, so it precedes both gates below.
         if (tiny_window(s)) return r.algo == Algorithm::Tiny;
 
+        if (s.uplo != Uplo::Lower || !lpanel_types()) return false;
         if (s.order() <= 32 || s.order() > 256) return false;
 
         // R8b: exactly ONE tier may answer true, because automatic() returns on the first
@@ -101,10 +100,14 @@ struct RouteTable<Op::potrf, T> {
         return r == best;
     }
 
-    static bool tiny_window(const PotrfShape& s) {  // Lower only: the grid is Lower-only
-        if (!lpanel_types() || s.uplo != Uplo::Lower) return false;
+    // evidence: docs/perf/potrf.md#the-tiny-potrf-window-extended-to-upper-and-to-fp64
+    static bool tiny_window(const PotrfShape& s) {
         if (s.tiny_max_n < 1) return false;
-        return s.order() >= 1 && s.order() <= s.tiny_max_n && s.order() <= 32;
+        const int64_t n = s.order();
+        if (n < 1 || n > static_cast<int64_t>(s.tiny_max_n) || n > 32) return false;
+        if (s.uplo == Uplo::Upper) return true;       // whole tier, every type: 1.42-28.73x
+        if constexpr (lpanel_types()) return true;    // Lower, float/cfloat: the whole tier
+        else return (n >= 2 && n <= 8) || (n >= 12 && n <= 16);   // Lower fp64: fill splits it
     }
 
     // The tier the walk lands on; Auto/Auto means none. Resolves FIT before the hook.

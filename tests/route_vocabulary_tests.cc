@@ -709,12 +709,23 @@ TEST(RoutePotrf, TinyVocabularyRoundTripAndTierOrder) {
     EXPECT_FALSE(PotrfTable::supports(kPotrfTiny, past));
     EXPECT_FALSE(PotrfTable::preferred(kPotrfTiny, past));
 
-    // Upper has no grid behind either window.
+    // Upper IS measured now, and it is the wider of the two windows: the whole tier, every
+    // type, 1.42-28.73x, because cuSOLVER's Upper potrf is about 2x its own Lower at these
+    // orders. evidence: docs/perf/potrf.md#the-tiny-potrf-window
     auto up = s;
     up.uplo = Uplo::Upper;
     EXPECT_TRUE(PotrfTable::supports(kPotrfTiny, up));
-    EXPECT_FALSE(PotrfTable::preferred(kPotrfTiny, up));
-    EXPECT_TRUE(is_vendor(resolve_potrf_route<float>(kPotrfAuto, up, /*vendor_available=*/true)));
+    EXPECT_TRUE(PotrfTable::preferred(kPotrfTiny, up));
+    EXPECT_TRUE(is_native(resolve_potrf_route<float>(kPotrfAuto, up, /*vendor_available=*/true)));
+
+    // But ONLY the tiny tier: LPanel's grid is still Lower-only, so one order past the tier
+    // Upper must fall back to the vendor. This is the pair that stops the uplo test being
+    // deleted wholesale now that one window no longer needs it.
+    auto up_past = up;
+    up_past.k = up_past.m = up_past.n = 128;
+    EXPECT_FALSE(PotrfTable::preferred(Route{Origin::Native, Algorithm::LPanel}, up_past));
+    EXPECT_TRUE(is_vendor(resolve_potrf_route<float>(kPotrfAuto, up_past,
+                                                     /*vendor_available=*/true)));
 }
 
 TEST(RoutePotrf, CorrectnessGatesAreNotSpeedGates) {

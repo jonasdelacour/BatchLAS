@@ -552,11 +552,17 @@ TYPED_TEST(PotrfTinyTest, TinyRouteTableAndVocabulary) {
 
     auto at_cap = *shape;
     EXPECT_TRUE(Tbl::supports(tiny, at_cap));
-    // The window is MEASURED now: the tier wins 1.23-10.64x over cuSOLVER at every order
-    // it holds, so it answers true in BOTH predicates for float and cfloat, Lower only.
-    // evidence: docs/perf/potrf.md#the-tiny-potrf-window
-    constexpr bool windowed =
+    // The window is MEASURED for ALL FOUR types now, Lower only. It is NOT a type list: float
+    // and cfloat take the whole tier, while both fp64 types take 2..8 and 12..16 only, because
+    // the N-bucket fill splits the band. So the expectation at the cap is derived FROM the
+    // predicate, not restated beside it -- restating it is how the two drift apart, and at the
+    // cap the answer differs per type (cdouble caps at 16, inside the band; double at 32,
+    // outside it). evidence: docs/perf/potrf.md#the-tiny-potrf-window
+    constexpr bool fp32 =
         std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>;
+    const bool windowed = Tbl::tiny_window(at_cap);
+    EXPECT_EQ(windowed, fp32 || cap == 16)
+        << "cap " << cap << " landed outside the measured band unexpectedly";
     EXPECT_EQ(Tbl::native_tier_preferred(tiny, at_cap), windowed);
     EXPECT_EQ(Tbl::preferred(tiny, at_cap), windowed);
 
@@ -573,12 +579,25 @@ TYPED_TEST(PotrfTinyTest, TinyRouteTableAndVocabulary) {
             ++hits;
     EXPECT_EQ(hits, windowed ? 1 : 0);
 
-    // Upper is NOT in the window although supports() admits the tier: the grid is
-    // Lower-only and an unmeasured triangle is not a window.
+    // UPPER IS NOW MEASURED, and it is the WIDER window of the two: the whole tier, every
+    // type, 1.42-28.73x. It is therefore preferred at the cap even for the fp64 types whose
+    // LOWER band has a hole there. evidence: docs/perf/potrf.md#the-tiny-potrf-window
     auto up = at_cap;
     up.uplo = Uplo::Upper;
     EXPECT_TRUE(Tbl::supports(tiny, up));
-    EXPECT_FALSE(Tbl::preferred(tiny, up));
+    EXPECT_TRUE(Tbl::tiny_window(up));
+    EXPECT_TRUE(Tbl::preferred(tiny, up));
+
+    // Upper is wider than Lower, so at an order the Lower band excludes the two must differ.
+    // This is what stops a future edit collapsing them back into one uplo-blind predicate.
+    if constexpr (!fp32) {
+        auto hole = at_cap;
+        hole.m = hole.n = hole.k = 10;     // 9..11 is the measured fp64 Lower hole
+        hole.uplo = Uplo::Lower;
+        EXPECT_FALSE(Tbl::tiny_window(hole)) << "fp64 Lower n=10 measured 0.957-0.976x";
+        hole.uplo = Uplo::Upper;
+        EXPECT_TRUE(Tbl::tiny_window(hole)) << "fp64 Upper n=10 measured 1.42-1.62x";
+    }
 
     auto past = *shape;
     past.m = past.n = past.k = cap + 1;
