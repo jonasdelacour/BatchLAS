@@ -1,5 +1,6 @@
 #pragma once
 
+#include <batchlas/export.hh>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
@@ -68,7 +69,7 @@ using getri_vendor_buffer_size = size_t(Queue&,
 template <typename T>
 inline void getri_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
     if (A.rows() < 0 || A.cols() < 0) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "GETRI: Matrix dimensions cannot be negative (A: rows=" +
             std::to_string(A.rows()) + ", cols=" + std::to_string(A.cols()) + ")");
     }
@@ -79,7 +80,7 @@ inline void getri_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
                                   const MatrixView<T, MatrixFormat::Dense>& C) {
     getri_validate_params<T>(A);
     if (C.rows() < 0 || C.cols() < 0) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "GETRI: Matrix dimensions cannot be negative (C: rows=" +
             std::to_string(C.rows()) + ", cols=" + std::to_string(C.cols()) + ")");
     }
@@ -96,12 +97,12 @@ inline void getri_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
 // deliberately the same either way, so getri_buffer_size stays correct whether
 // or not a caller asks for status.
 template <Backend B, typename T>
-Event getri(Queue& ctx,
-            const MatrixView<T, MatrixFormat::Dense>& A,
-            const MatrixView<T, MatrixFormat::Dense>& C,
-            Span<int64_t> pivots,
-            Span<std::byte> work_space,
-            Span<int32_t> info);
+BATCHLAS_API Event getri(Queue& ctx,
+                         const MatrixView<T, MatrixFormat::Dense>& A,
+                         const MatrixView<T, MatrixFormat::Dense>& C,
+                         Span<int64_t> pivots,
+                         Span<std::byte> work_space,
+                         Span<int32_t> info);
 
 // Old-arity forwarder. `info` cannot be a defaulted trailing parameter: the
 // sig:: alias above is a function *type* and function types cannot carry
@@ -118,8 +119,8 @@ inline Event getri(Queue& ctx,
 }
 
 template <Backend B, typename T>
-size_t getri_buffer_size(Queue& ctx,
-                         const MatrixView<T, MatrixFormat::Dense>& A);
+BATCHLAS_API size_t getri_buffer_size(Queue& ctx,
+                                      const MatrixView<T, MatrixFormat::Dense>& A);
 
 }  // namespace batchlas
 
@@ -134,17 +135,17 @@ namespace batchlas::backend {
 // src/dispatch/entry_points/factorization.cc and leaves the vendor
 // implementation here, named as such.
 template <Backend B, typename T>
-Event getri_vendor(Queue& ctx,
-                   const MatrixView<T, MatrixFormat::Dense>& A,
-                   const MatrixView<T, MatrixFormat::Dense>& C,
-                   Span<int64_t> pivots,
-                   Span<std::byte> work_space,
-                   Span<int32_t> info_out);
+BATCHLAS_API Event getri_vendor(Queue& ctx,
+                                const MatrixView<T, MatrixFormat::Dense>& A,
+                                const MatrixView<T, MatrixFormat::Dense>& C,
+                                Span<int64_t> pivots,
+                                Span<std::byte> work_space,
+                                Span<int32_t> info_out);
 
 
 template <Backend B, typename T>
-size_t getri_vendor_buffer_size(Queue& ctx,
-                                const MatrixView<T, MatrixFormat::Dense>& A);
+BATCHLAS_API size_t getri_vendor_buffer_size(Queue& ctx,
+                                             const MatrixView<T, MatrixFormat::Dense>& A);
 
 }  // namespace batchlas::backend
 

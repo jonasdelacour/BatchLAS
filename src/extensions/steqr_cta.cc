@@ -14,8 +14,11 @@
 #include "../util/template-instantiations.hh"
 #include "../sort.hh"
 #include "steqr_cta_device.hh"
+#include "info_span.hh"
 #include <array>
 #include <numeric>
+#include <batchlas/settings.hh>
+#include <batchlas/error.hh>
 
 namespace batchlas {
 
@@ -38,7 +41,7 @@ namespace batchlas {
         (void)pool;
         const auto batch_size = d.batch_size();
         if (n < 1 || n > static_cast<int32_t>(P) || d.size() != n || e.size() != (n - 1)) {
-            throw std::runtime_error("steqr_cta_impl: invalid n or vector sizes for CTA partition.");
+            throw batchlas::invalid_argument("steqr_cta_impl: invalid n or vector sizes for CTA partition.");
         }
 
         ctx->submit([&](sycl::handler& cgh) {
@@ -106,9 +109,13 @@ namespace batchlas {
                                                              static_cast<int32_t>(max_sweeps),
                                                              zero_threshold,
                                                              cta_shift_strategy, cta_update_scheme);
-                    if (failed && lane == 0 && status) {
-                        // We cannot throw from device code; the host decides how to handle it.
-                        status[prob_id] = 1;
+                    if (failed && lane == 0) {
+                        // We cannot throw from device code; the host decides how to
+                        // handle it. info_report is an atomic fetch_max, not a store:
+                        // when `status` is the caller's span this kernel is one of
+                        // several writers to the same item (stedc runs a leaf solve per
+                        // half), and it must never lower a failure already recorded.
+                        detail::info_report(status, prob_id, 1);
                     }
 
                     // Store back D/E (one element per lane).
@@ -132,13 +139,16 @@ namespace batchlas {
     Event steqr_cta(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e_in,
                     const VectorView<T>& eigenvalues, const Span<std::byte>& ws,
                     JobType jobz, SteqrParams<T> params,
-                    const MatrixView<T, MatrixFormat::Dense>& eigvects) {
+                    const MatrixView<T, MatrixFormat::Dense>& eigvects,
+                    Span<int32_t> info) {
         BATCHLAS_KERNEL_TRACE_SCOPE("steqr_cta");
         if (eigvects.rows() != eigvects.cols()) {
-            throw std::invalid_argument("Matrix must be square for eigenvalue computation.");
+            throw batchlas::invalid_argument("Matrix must be square for eigenvalue computation.");
         }
         if (jobz == JobType::EigenVectors && !params.back_transform) {
-            eigvects.fill_identity(ctx);
+            // (void) on an Event: deliberate. This Queue is in-order, so the next submission
+            // is already ordered after this one and the Event carries nothing the caller needs.
+            (void)eigvects.fill_identity(ctx);
         }
 
         const int64_t n = d_in.size();
@@ -154,8 +164,24 @@ namespace batchlas {
         auto e = VectorView<T>(pool.allocate<T>(ctx, VectorView<T>::required_span_length(n - 1, increment, e_stride, batch_size)),
                                n - 1, batch_size, increment, e_stride);
 
-        auto status = pool.allocate<int32_t>(ctx, std::max<int64_t>(int64_t(1), batch_size)).data();
-        ctx->memset(status, 0, sizeof(int32_t) * static_cast<size_t>(std::max<int64_t>(int64_t(1), batch_size)));
+        // The status array this kernel has always written, now reachable.
+        //
+        // `info` is the caller's USM, so when it is supplied the kernel writes it in
+        // place and the pool draw is simply skipped -- which is why
+        // steqr_cta_buffer_size below is unchanged, and why the int32 term stays
+        // UNCONDITIONAL there: supplying `info` only ever REMOVES an allocation, so a
+        // workspace sized without status is never too small for a call made with it.
+        //
+        // Only the pool fallback is zeroed here. A caller-supplied span arrives
+        // already zeroed -- `steqr` and `stedc` do it -- and re-zeroing it would erase
+        // the first half's failure when stedc runs its second leaf solve over the same
+        // batch items. That is the accumulator rule in info_span.hh.
+        const int64_t status_len = std::max<int64_t>(int64_t(1), batch_size);
+        int32_t* status = detail::info_ptr(info, batch_size);
+        if (!status) {
+            status = pool.allocate<int32_t>(ctx, status_len).data();
+            ctx->memset(status, 0, sizeof(int32_t) * static_cast<size_t>(status_len));
+        }
 
         VectorView<T>::copy(ctx, d, d_in);
         VectorView<T>::copy(ctx, e, e_in);
@@ -165,7 +191,7 @@ namespace batchlas {
         // CTA backend: choose an optimal compile-time partition size P in {4,8,16,32}.
         // Requires warp-sized sub-groups (32) on NVIDIA.
         if (n < 1 || n > 32) {
-            throw std::invalid_argument("steqr_cta currently supports 1 <= n <= 32.");
+            throw batchlas::invalid_argument("steqr_cta currently supports 1 <= n <= 32.");
         }
 
         const auto dev = ctx->get_device();
@@ -181,7 +207,7 @@ namespace batchlas {
         }
 
         if (!has32) {
-            return steqr_wg<B, T>(ctx, d_in, e_in, eigenvalues, ws, jobz, params, eigvects);
+            return steqr_wg<B, T>(ctx, d_in, e_in, eigenvalues, ws, jobz, params, eigvects, info);
         }
 
         const int32_t n_i32 = static_cast<int32_t>(n);
@@ -218,13 +244,23 @@ namespace batchlas {
 
         // Optional fail-fast diagnostics: avoids silent non-convergence.
         // Note: checking requires synchronization, so keep it opt-in.
-        if (const char* v = std::getenv("BATCHLAS_STEQR_CTA_CHECK")) {
+        // Diagnostics, and the OPPOSITE of a safety override: it ADDS a check,
+        // so gating it off under a locked-down build would entrench the silent
+        // non-convergence its default already has. First-character truthiness
+        // {1,t,T,y,Y} -- neither env_truthy nor env_falsy -- so the field is the
+        // raw value and the parser stays here.
+        if (const char* v = batchlas::settings().diagnostics.steqr_cta_check.get()) {
             const bool enabled = (v[0] == '1') || (v[0] == 't') || (v[0] == 'T') || (v[0] == 'y') || (v[0] == 'Y');
             if (enabled) {
                 ctx.wait();
                 for (int64_t i = 0; i < batch_size; ++i) {
                     if (status[i] != 0) {
-                        throw std::runtime_error("steqr_cta: failed to converge within sweep budget.");
+                        // batchlas::convergence_error derives from std::runtime_error
+                        // (batchlas/error.hh), so every existing catch site still
+                        // matches; what changes is that a consumer can now tell this
+                        // apart from a device failure or a bad argument.
+                        throw batchlas::convergence_error(
+                            "steqr_cta: failed to converge within sweep budget.");
                     }
                 }
             }
@@ -232,7 +268,7 @@ namespace batchlas {
 
         if (params.sort) {
             auto ws_sort = pool.allocate<std::byte>(ctx, sort_buffer_size<T>(ctx, eigenvalues.data(), eigvects, jobz));
-            sort(ctx, eigenvalues, eigvects, jobz, params.sort_order, ws_sort);
+            (void)sort(ctx, eigenvalues, eigvects, jobz, params.sort_order, ws_sort);
         }
 
         return ctx.get_event();
@@ -277,7 +313,7 @@ namespace batchlas {
     }
 
 #define STEQR_CTA_INSTANTIATE(back, fp) \
-    template Event steqr_cta<back, BATCHLAS_UNPAREN fp>(Queue&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, const Span<std::byte>&, JobType, SteqrParams<BATCHLAS_UNPAREN fp>, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&);
+    template Event steqr_cta<back, BATCHLAS_UNPAREN fp>(Queue&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, const Span<std::byte>&, JobType, SteqrParams<BATCHLAS_UNPAREN fp>, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, Span<int32_t>);
 
     BATCHLAS_INSTANTIATE_REAL_ALL_BACKENDS(STEQR_CTA_INSTANTIATE)
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <batchlas/export.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/blas/enums.hh>
@@ -32,13 +33,13 @@ using gemv_vendor = Event(Queue&,
 
 
 template <Backend B, typename T>
-Event gemv(Queue& ctx,
-           const MatrixView<T, MatrixFormat::Dense>& A,
-           const VectorView<T>& X,
-           const VectorView<T>& Y,
-           T alpha,
-           T beta,
-           Transpose transA);
+BATCHLAS_API Event gemv(Queue& ctx,
+                        const MatrixView<T, MatrixFormat::Dense>& A,
+                        const VectorView<T>& X,
+                        const VectorView<T>& Y,
+                        T alpha,
+                        T beta,
+                        Transpose transA);
 
 }  // namespace batchlas
 
@@ -54,13 +55,13 @@ namespace batchlas::backend {
 // implementation, named as such. Each vendor wrapper TU defines this primary
 // template for its own Backend value and instantiates it there.
 template <Backend B, typename T>
-Event gemv_vendor(Queue& ctx,
-                  const MatrixView<T,MatrixFormat::Dense>& A,
-                  const VectorView<T>& X,
-                  const VectorView<T>& Y,
-                  T alpha,
-                  T beta,
-                  Transpose transA);
+BATCHLAS_API Event gemv_vendor(Queue& ctx,
+                               const MatrixView<T,MatrixFormat::Dense>& A,
+                               const VectorView<T>& X,
+                               const VectorView<T>& Y,
+                               T alpha,
+                               T beta,
+                               Transpose transA);
 
 }  // namespace batchlas::backend
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <batchlas/export.hh>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
@@ -63,7 +64,7 @@ using getrf_vendor_buffer_size = size_t(Queue&,
 template <typename T>
 inline void getrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
     if (A.rows() < 0 || A.cols() < 0) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "GETRF: Matrix dimensions cannot be negative (rows=" +
             std::to_string(A.rows()) + ", cols=" + std::to_string(A.cols()) + ")");
     }
@@ -81,11 +82,11 @@ inline void getrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
 // deliberately the same either way, so getrf_buffer_size stays correct whether
 // or not a caller asks for status.
 template <Backend B, typename T>
-Event getrf(Queue& ctx,
-            const MatrixView<T, MatrixFormat::Dense>& A,
-            Span<int64_t> pivots,
-            Span<std::byte> work_space,
-            Span<int32_t> info);
+BATCHLAS_API Event getrf(Queue& ctx,
+                         const MatrixView<T, MatrixFormat::Dense>& A,
+                         Span<int64_t> pivots,
+                         Span<std::byte> work_space,
+                         Span<int32_t> info);
 
 // Old-arity forwarder. `info` cannot be a defaulted trailing parameter: the
 // sig:: alias above is a function *type* and function types cannot carry
@@ -101,8 +102,8 @@ inline Event getrf(Queue& ctx,
 }
 
 template <Backend B, typename T>
-size_t getrf_buffer_size(Queue& ctx,
-                         const MatrixView<T, MatrixFormat::Dense>& A);
+BATCHLAS_API size_t getrf_buffer_size(Queue& ctx,
+                                      const MatrixView<T, MatrixFormat::Dense>& A);
 
 }  // namespace batchlas
 
@@ -117,16 +118,16 @@ namespace batchlas::backend {
 // src/dispatch/entry_points/factorization.cc and leaves the vendor
 // implementation here, named as such.
 template <Backend B, typename T>
-Event getrf_vendor(Queue& ctx,
-                   const MatrixView<T, MatrixFormat::Dense>& A,
-                   Span<int64_t> pivots,
-                   Span<std::byte> work_space,
-                   Span<int32_t> info_out);
+BATCHLAS_API Event getrf_vendor(Queue& ctx,
+                                const MatrixView<T, MatrixFormat::Dense>& A,
+                                Span<int64_t> pivots,
+                                Span<std::byte> work_space,
+                                Span<int32_t> info_out);
 
 
 template <Backend B, typename T>
-size_t getrf_vendor_buffer_size(Queue& ctx,
-                                const MatrixView<T, MatrixFormat::Dense>& A);
+BATCHLAS_API size_t getrf_vendor_buffer_size(Queue& ctx,
+                                             const MatrixView<T, MatrixFormat::Dense>& A);
 
 }  // namespace batchlas::backend
 

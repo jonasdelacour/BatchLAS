@@ -28,7 +28,7 @@ namespace batchlas {
                Transpose transB,
                ComputePrecision precision) {
         if (!gemm_batch_dimensions_compatible(A, B, C, transA, transB)) {
-            throw std::invalid_argument("GEMM: incompatible matrix dimensions");
+            throw batchlas::invalid_argument("GEMM: incompatible matrix dimensions");
         }
 
         if (gemm_has_heterogeneous_batch(A, B, C)) {

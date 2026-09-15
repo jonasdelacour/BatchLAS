@@ -146,10 +146,10 @@ Event gebrd_unblocked(Queue& ctx,
     static_cast<void>(B);
 
     if (a.rows() < a.cols()) {
-        throw std::invalid_argument("gebrd_unblocked: current implementation requires rows >= cols");
+        throw batchlas::invalid_argument("gebrd_unblocked: current implementation requires rows >= cols");
     }
     if constexpr (internal::is_complex<T>::value) {
-        throw std::runtime_error("gebrd_unblocked: complex types are not implemented yet");
+        throw batchlas::unsupported("gebrd_unblocked: complex types are not implemented yet");
     } else {
         return gebrd_unblocked_real<T>(ctx, a, d, e, tauq, taup);
     }

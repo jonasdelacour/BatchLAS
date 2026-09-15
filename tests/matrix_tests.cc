@@ -201,7 +201,11 @@ TEST(MatrixDenseTest, SubmatrixViewThrowsForCSR) {
 TEST(MatrixDenseTest, ExceptionOnCopyFromMismatchedShape) {
     Matrix<float, MatrixFormat::Dense> a(2, 2, 1);
     Matrix<float, MatrixFormat::Dense> b(3, 2, 1);
-    EXPECT_THROW(a.copy_from(b.view()), std::runtime_error);
+    // A shape mismatch is the CALLER's error, so it is invalid_argument, not the
+    // catch-all runtime_error this used to assert. Spelled as the concrete type
+    // rather than std::exception so that a future reclassification has to come
+    // here and be argued about.
+    EXPECT_THROW(a.copy_from(b.view()), batchlas::invalid_argument);
 }
 
 // ---------------------------------------------------------------------------
@@ -724,7 +728,11 @@ TEST(MatrixCSRTest, CopyFromView) {
 TEST(MatrixCSRTest, ExceptionOnCopyFromMismatchedShape) {
     Matrix<float, MatrixFormat::CSR> a(2, 2, NonZeros{2}, 1);
     Matrix<float, MatrixFormat::CSR> b(3, 2, NonZeros{2}, 1);
-    EXPECT_THROW(a.copy_from(b.view()), std::runtime_error);
+    // A shape mismatch is the CALLER's error, so it is invalid_argument, not the
+    // catch-all runtime_error this used to assert. Spelled as the concrete type
+    // rather than std::exception so that a future reclassification has to come
+    // here and be argued about.
+    EXPECT_THROW(a.copy_from(b.view()), batchlas::invalid_argument);
 }
 
 // ---------------------------------------------------------------------------

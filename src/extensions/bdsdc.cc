@@ -379,9 +379,10 @@ Event bdsdc(Queue& ctx,
             const Span<std::byte>& ws,
             const MatrixView<T, MatrixFormat::Dense>& u,
             const MatrixView<T, MatrixFormat::Dense>& vh,
-            bool sort_desc) {
+            bool sort_desc,
+            Span<int32_t> info) {
     if constexpr (internal::is_complex<T>::value) {
-        throw std::runtime_error("bdsdc: complex types are not implemented");
+        throw batchlas::unsupported("bdsdc: complex types are not implemented");
     } else {
         const int32_t n = static_cast<int32_t>(d.size());
         const int32_t batch = static_cast<int32_t>(d.batch_size());
@@ -389,10 +390,10 @@ Event bdsdc(Queue& ctx,
             return ctx.get_event();
         }
         if (!ctx.in_order()) {
-            throw std::runtime_error("bdsdc: requires an in-order Queue");
+            throw batchlas::invalid_argument("bdsdc: requires an in-order Queue");
         }
         if (static_cast<int32_t>(singular_values_out.size()) < n * batch) {
-            throw std::invalid_argument("bdsdc: singular_values span too small");
+            throw batchlas::invalid_argument("bdsdc: singular_values span too small");
         }
 
         const bool want_u = u.data_ptr() != nullptr && u.rows() > 0 && u.cols() >= n;
@@ -405,14 +406,21 @@ Event bdsdc(Queue& ctx,
 
         bdsdc_build_gk<B, T>(ctx, d, e, layout, n, batch);
 
-        stedc<B, T>(ctx,
+        // (void) on an Event: deliberate. This Queue is in-order, so the next submission
+        // is already ordered after this one and the Event carries nothing the caller needs.
+        // bdsdc owns no iteration: the Golub-Kahan build and both extraction
+        // passes are direct, so stedc is the only thing here that can fail to
+        // converge. Its batch axis is the caller's (the tridiagonal is 2n long,
+        // not the batch), so `info` forwards unchanged and stedc does the clear.
+        (void)stedc<B, T>(ctx,
                     layout.gk_d,
                     layout.gk_e,
                     layout.lambda,
                     layout.stedc_ws,
                     JobType::EigenVectors,
                     bdsdc_stedc_params<T>(),
-                    layout.Z);
+                    layout.Z,
+                    info);
 
         if (!want_vectors) {
             bdsdc_extract_values<B, T>(ctx, layout, singular_values_out, n, batch, sort_desc);
@@ -432,11 +440,13 @@ Event bdsdc(Queue& ctx,
             const VectorView<T>& e,
             Span<T> singular_values_out,
             const Span<std::byte>& ws,
-            bool sort_desc) {
+            bool sort_desc,
+            Span<int32_t> info) {
     return bdsdc<B, T>(ctx, d, e, singular_values_out, ws,
                        MatrixView<T, MatrixFormat::Dense>(nullptr, 0, 0, 1, 1, d.batch_size()),
                        MatrixView<T, MatrixFormat::Dense>(nullptr, 0, 0, 1, 1, d.batch_size()),
-                       sort_desc);
+                       sort_desc,
+                       info);
 }
 
 template <Backend B, typename T>
@@ -466,14 +476,14 @@ size_t bdsdc_buffer_size(Queue& ctx,
         const Span<std::byte>&, \
         const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
         const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
-        bool); \
+        bool, Span<int32_t>); \
     template Event bdsdc<back, BATCHLAS_UNPAREN fp>( \
         Queue&, \
         const VectorView<BATCHLAS_UNPAREN fp>&, \
         const VectorView<BATCHLAS_UNPAREN fp>&, \
         Span<BATCHLAS_UNPAREN fp>, \
         const Span<std::byte>&, \
-        bool); \
+        bool, Span<int32_t>); \
     template size_t bdsdc_buffer_size<back, BATCHLAS_UNPAREN fp>( \
         Queue&, \
         const VectorView<BATCHLAS_UNPAREN fp>&, \

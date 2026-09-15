@@ -629,7 +629,19 @@ def gesvd(
     uplo: str | None = None,
     backend: str = "auto",
     device: str | None = None,
+    return_info: bool = False,
 ):
+    """Singular value decomposition.
+
+    Returns ``s`` (or ``(u, s, vh)`` with ``compute_vectors``).
+
+    ``return_info=True`` appends a per-item convergence status as a NumPy int32
+    array of ``batch_size`` entries -- ``(s, info)`` or ``(u, s, vh, info)``.
+    ``info[b] == 0`` means item ``b`` converged; anything greater is LAPACK-like
+    and means its singular values are not to be trusted. Without it, a batch item
+    that ran out of sweeps is indistinguishable from one that did not: the call
+    returns either way. Requesting it costs no extra workspace.
+    """
     return _unwrap(
         _ext._gesvd(
             _coerce_dense_matrix(a),
@@ -637,6 +649,7 @@ def gesvd(
             uplo,
             _normalize_backend(backend, device),
             _normalize_device(device),
+            return_info,
         )
     )
 
@@ -779,7 +792,21 @@ def syev(
     options: dict[str, Any] | None = None,
     backend: str = "auto",
     device: str | None = None,
+    return_info: bool = False,
 ):
+    """Symmetric/Hermitian eigendecomposition.
+
+    Returns ``values`` (or ``(values, vectors)`` with ``compute_vectors``).
+
+    ``return_info=True`` appends a per-item convergence status as a NumPy int32
+    array of ``batch_size`` entries -- ``(values, info)`` or
+    ``(values, vectors, info)``. ``info[b] == 0`` means item ``b`` converged;
+    anything greater is LAPACK-like (the number of off-diagonal elements that did
+    not converge, or 1 where the route tracks only the fact of failure) and means
+    item ``b``'s eigenvalues are wrong. At batch 16384 that is otherwise
+    invisible: the call returns and the values look like values. Requesting it
+    costs no extra workspace.
+    """
     return _unwrap(
         _ext._syev(
             _coerce_dense_matrix(a),
@@ -788,6 +815,7 @@ def syev(
             _normalize_options(options),
             _normalize_backend(backend, device),
             _normalize_device(device),
+            return_info,
         )
     )
 
@@ -1051,6 +1079,7 @@ def syevx(
     device: str | None = None,
     return_history: bool = False,
     preconditioner: ILUKPreconditioner | None = None,
+    return_info: bool = False,
 ):
     """Selected eigenvalues (and optionally eigenvectors) of a Hermitian matrix.
 
@@ -1088,6 +1117,16 @@ def syevx(
 
     Interior ranges are answered only by the dense paths, so a non-extremal
     range on a sparse matrix raises.
+
+    ``return_info=True`` adds a per-item CONVERGENCE status as a NumPy int32
+    array of ``batch_size`` entries, placed after ``m`` and before ``history``:
+    ``(values, info)``, ``(values, vectors, info)``,
+    ``(values, vectors, m, info, history)``, and so on. It answers a different
+    question from ``m``: ``m[b]`` is how many eigenpairs item ``b`` has,
+    ``info[b]`` is whether they can be believed -- ``0`` if the iteration
+    converged, a positive LAPACK-like value if it ran out of budget. This is the
+    only way to tell an item that hit ``options["iterations"]`` from one that
+    genuinely converged; both return values and neither raises.
     """
     normalized = _normalize_options(options)
     if _is_sparse_object(a) or _is_sparse_batch(a):
@@ -1100,6 +1139,7 @@ def syevx(
             _normalize_device(device),
             return_history,
             preconditioner,
+            return_info,
         )
     else:
         raw = _ext._syevx_dense(
@@ -1111,6 +1151,7 @@ def syevx(
             _normalize_device(device),
             return_history,
             preconditioner,
+            return_info,
         )
     return _unwrap(raw)
 

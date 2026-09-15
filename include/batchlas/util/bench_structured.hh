@@ -19,7 +19,7 @@
 // - USM prepare/prefetch hooks
 // - device-resident pristine copies for mutating algorithms
 
-inline double bench_event_elapsed_ms(const Event& start, const Event& end) {
+inline double bench_event_elapsed_ms(const batchlas::Event& start, const batchlas::Event& end) {
     const auto s = start.profiling_command_start_end_ns();
     const auto e = end.profiling_command_start_end_ns();
 
@@ -34,9 +34,9 @@ inline double bench_event_elapsed_ms(const Event& start, const Event& end) {
 namespace bench {
 
 struct ManagedInputs {
-    explicit ManagedInputs(std::shared_ptr<::Queue> q_) : q(std::move(q_)) {}
+    explicit ManagedInputs(std::shared_ptr<batchlas::Queue> q_) : q(std::move(q_)) {}
 
-    std::shared_ptr<::Queue> q;
+    std::shared_ptr<batchlas::Queue> q;
 
     std::vector<std::function<void()>> init_once;
     std::vector<std::function<void()>> prepare_once;
@@ -44,7 +44,7 @@ struct ManagedInputs {
     std::vector<std::function<void()>> before_each;
 
     template <typename T>
-    ManagedInputs& prepare(::Span<T> s) {
+    ManagedInputs& prepare(batchlas::Span<T> s) {
 
         auto queue = q;
         prepare_once.emplace_back([queue, s]() mutable {
@@ -56,7 +56,7 @@ struct ManagedInputs {
     }
 
     template <typename T>
-    ManagedInputs& prepare(const ::UnifiedVector<T>& v) {
+    ManagedInputs& prepare(const batchlas::UnifiedVector<T>& v) {
         return prepare(v.to_span());
     }
 
@@ -152,12 +152,12 @@ struct ManagedInputs {
 };
 
 template <typename F>
-inline auto make_event_timed_kernel_ms(std::shared_ptr<::Queue> q, F&& kernel) {
+inline auto make_event_timed_kernel_ms(std::shared_ptr<batchlas::Queue> q, F&& kernel) {
     return [q = std::move(q), kernel = std::forward<F>(kernel)]() mutable -> double {
         const auto host_t0 = std::chrono::steady_clock::now();
-        Event start = q->get_event();
+        batchlas::Event start = q->get_event();
         kernel();
-        Event end = q->get_event();
+        batchlas::Event end = q->get_event();
         end.wait();
         const auto host_t1 = std::chrono::steady_clock::now();
 
@@ -265,17 +265,17 @@ inline decltype(auto) kernel_arg(const batchlas::Matrix<T, F>& m) {
 }
 
 template <typename T>
-inline decltype(auto) kernel_arg(::UnifiedVector<T>& v) {
+inline decltype(auto) kernel_arg(batchlas::UnifiedVector<T>& v) {
     return v.to_span();
 }
 
 template <typename T>
-inline decltype(auto) kernel_arg(const ::UnifiedVector<T>& v) {
+inline decltype(auto) kernel_arg(const batchlas::UnifiedVector<T>& v) {
     return v.to_span();
 }
 
 template <typename T>
-inline decltype(auto) kernel_arg(::Span<T> s) {
+inline decltype(auto) kernel_arg(batchlas::Span<T> s) {
     return s;
 }
 
@@ -326,7 +326,7 @@ inline auto manage(T&& t) {
 
 template <typename KernelFn, typename... Managed>
 struct KernelConfigurator {
-    std::shared_ptr<::Queue> q;
+    std::shared_ptr<batchlas::Queue> q;
     KernelFn kernel;
     std::tuple<Managed...> managed;
 
@@ -348,7 +348,7 @@ struct KernelConfigurator {
 
 template <typename... Managed>
 struct KernelBuilder {
-    std::shared_ptr<::Queue> q;
+    std::shared_ptr<batchlas::Queue> q;
     std::tuple<Managed...> managed;
 
     template <typename KernelFn>
@@ -362,7 +362,7 @@ struct KernelBuilder {
 };
 
 template <typename... ManagedArgs>
-inline auto Kernel(std::shared_ptr<::Queue> q, ManagedArgs&&... managed_args)
+inline auto Kernel(std::shared_ptr<batchlas::Queue> q, ManagedArgs&&... managed_args)
     -> KernelBuilder<decltype(detail::wrap_managed(std::forward<ManagedArgs>(managed_args)))...> {
     return {
         std::move(q),

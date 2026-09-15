@@ -15,6 +15,7 @@
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
 #include "../queue.hh"
+#include "info_span.hh"
 #include <batchlas/util/mempool.hh>
 #include <sycl/sycl.hpp>
 #include <algorithm>
@@ -59,13 +60,14 @@ Event syevx_direct_subset(Queue& ctx,
                           Span<std::byte> workspace,
                           JobType jobz,
                           const MatrixView<T, MatrixFormat::Dense>& V,
-                          const SyevxParams<T>& params) {
+                          const SyevxParams<T>& params,
+                          Span<int32_t> info) {
     using Real = typename base_type<T>::type;
 
     if constexpr (!syevx_direct_subset_supported<T, MFormat>()) {
         (void)ctx; (void)A; (void)W; (void)m; (void)neigs; (void)workspace;
-        (void)jobz; (void)V; (void)params;
-        throw std::runtime_error(
+        (void)jobz; (void)V; (void)params; (void)info;
+        throw batchlas::unsupported(
             "syevx_direct_subset: only real scalar types with dense input are supported");
     } else {
         const int32_t n = static_cast<int32_t>(A.rows());
@@ -77,32 +79,47 @@ Event syevx_direct_subset(Queue& ctx,
         const int64_t capacity = static_cast<int64_t>(neigs);
         const bool want_eigenvectors = (jobz == JobType::EigenVectors);
 
-        if (A.rows() != A.cols()) throw std::runtime_error("syevx_direct_subset: A must be square");
+        // Reported as converged, deliberately and with a caveat.
+        //
+        // sytrd_sy2sb/sb2st are direct, but the two solvers below are not: stebz
+        // bisects to a tolerance and cannot tell its three loop exits apart
+        // afterwards, and stein runs a FIXED count of inverse iterations with no
+        // convergence test at all (LAPACK's ?stein reports how many vectors failed;
+        // nothing here measures it). Giving either a real flag means adding a
+        // residual check -- new arithmetic, not surfacing something that exists --
+        // so it is out of this work package's scope and listed in `deferred`.
+        //
+        // Writing 0 rather than leaving the span untouched is the deliberate part:
+        // an uninitialised span is worse than a conservative one, because the caller
+        // cannot tell "converged" from "never written".
+        detail::info_clear(ctx, info, batch);
+
+        if (A.rows() != A.cols()) throw batchlas::invalid_argument("syevx_direct_subset: A must be square");
         // A capacity above n just leaves the tail of W and V unwritten (the work
         // count is clamped inside syevx_resolve_range); zero is rejected because
         // stein requires k >= 1.
-        if (capacity < 1) throw std::runtime_error("syevx_direct_subset: invalid neigs");
+        if (capacity < 1) throw batchlas::invalid_argument("syevx_direct_subset: invalid neigs");
         if (!m.empty() && static_cast<int64_t>(m.size()) < batch) {
-            throw std::runtime_error("syevx_direct_subset: m must cover every batch item");
+            throw batchlas::invalid_argument("syevx_direct_subset: m must cover every batch item");
         }
         // Validated here rather than left to stebz, which would otherwise reject the
         // range two layers down, after the whole O(n^3) reduction has already run.
         if (params.select == SyevxSelect::Index) {
             const int64_t iu = (params.iu < 0) ? (int64_t(n) - 1) : params.iu;
             if (params.il < 0 || iu >= n || params.il > iu) {
-                throw std::invalid_argument(
+                throw batchlas::invalid_argument(
                     "syevx_direct_subset: SyevxSelect::Index requires 0 <= il <= iu < n (iu < 0 "
                     "means n-1); an empty block is expressed with neigs == 0, not with il > iu");
             }
         }
         if (params.select == SyevxSelect::Value && !(params.vl < params.vu)) {
-            throw std::invalid_argument(
+            throw batchlas::invalid_argument(
                 "syevx_direct_subset: SyevxSelect::Value requires vl < vu for the half-open "
                 "interval (vl, vu]; an empty or inverted interval is almost always swapped "
                 "arguments");
         }
         if (!ctx.in_order()) {
-            throw std::runtime_error("syevx_direct_subset: requires an in-order Queue");
+            throw batchlas::invalid_argument("syevx_direct_subset: requires an in-order Queue");
         }
 
         // Resolved once so this function and syevx_direct_subset_buffer_size cannot
@@ -170,7 +187,9 @@ Event syevx_direct_subset(Queue& ctx,
         {
             const size_t bytes = sytrd_sy2sb_buffer_size<B, T>(ctx, a, ab_view, tau_sy2sb_view, Uplo::Lower, kd);
             auto sy2sb_ws = pool.allocate<std::byte>(ctx, bytes);
-            sytrd_sy2sb<B, T>(ctx, a, ab_view, tau_sy2sb_view, Uplo::Lower, kd, sy2sb_ws);
+            // (void) on an Event: deliberate. This Queue is in-order, so the next submission
+            // is already ordered after this one and the Event carries nothing the caller needs.
+            (void)sytrd_sy2sb<B, T>(ctx, a, ab_view, tau_sy2sb_view, Uplo::Lower, kd, sy2sb_ws);
         }
 
         // Stage 2: band -> tridiagonal. Both modes run the Householder chase;
@@ -198,7 +217,7 @@ Event syevx_direct_subset(Queue& ctx,
 
             const size_t bytes = internal::sytrd_sb2st_hh_buffer_size<B, T>(ctx, n, kd, batch);
             auto hh_ws = pool.allocate<std::byte>(ctx, bytes);
-            internal::sytrd_sb2st_hh<B, T>(ctx, ab_view, ab_tri_view, d_view, e_view,
+            (void)internal::sytrd_sb2st_hh<B, T>(ctx, ab_view, ab_tri_view, d_view, e_view,
                                            v_sb2st_view, tau_sb2st_hh_view, Uplo::Lower, kd,
                                            hh_ws);
 
@@ -217,7 +236,7 @@ Event syevx_direct_subset(Queue& ctx,
                                                                tau_sb2st_view, Uplo::Lower, kd,
                                                                sb2st_block_size);
             auto sb2st_ws = pool.allocate<std::byte>(ctx, bytes);
-            sytrd_sb2st<B, T>(ctx, ab_view, d_view, e_view, tau_sb2st_view, Uplo::Lower, kd,
+            (void)sytrd_sb2st<B, T>(ctx, ab_view, d_view, e_view, tau_sb2st_view, Uplo::Lower, kd,
                               sb2st_ws, sb2st_block_size);
         }
 
@@ -241,7 +260,7 @@ Event syevx_direct_subset(Queue& ctx,
         {
             const size_t bytes = stebz_buffer_size<B, Real>(ctx, n, batch, bp);
             auto stebz_ws = pool.allocate<std::byte>(ctx, bytes);
-            stebz<B, Real>(ctx, d_view, e_view, w_sub, m_span, stebz_ws, bp);
+            (void)stebz<B, Real>(ctx, d_view, e_view, w_sub, m_span, stebz_ws, bp);
         }
 
         if (want_eigenvectors) {
@@ -254,7 +273,7 @@ Event syevx_direct_subset(Queue& ctx,
                 // between the two calls. Critically, stein ZEROES columns
                 // [m[b], capacity) rather than leaving stale workspace there; the
                 // back-transforms below rely on that.
-                stein<B, Real>(ctx, d_view, e_view, w_sub, static_cast<size_t>(capacity),
+                (void)stein<B, Real>(ctx, d_view, e_view, w_sub, static_cast<size_t>(capacity),
                                Span<const int32_t>(m_span.data(), m_span.size()),
                                V_sub, stein_ws, sp);
 
@@ -266,7 +285,7 @@ Event syevx_direct_subset(Queue& ctx,
                 // columns hold stein's zeros and an orthogonal transform maps zero to
                 // zero. Shaping the call per item would cost a device->host sync.
                 if (nrefl > 0) {
-                    internal::unmqr_hb2st<B, T>(
+                    (void)internal::unmqr_hb2st<B, T>(
                         ctx, v_sb2st_view, tau_sb2st_hh_view, V_sub, n, kd,
                         Span<const int32_t>(sb2st_starts.data(), sb2st_starts.size()),
                         Span<const int32_t>(sb2st_lens.data(), sb2st_lens.size()),
@@ -293,10 +312,10 @@ Event syevx_direct_subset(Queue& ctx,
                     }
                     auto ormqr_ws = pool.allocate<std::byte>(ctx, bytes_ormqr);
                     if constexpr (B == Backend::NETLIB) {
-                        blas::dispatch::detail::ormqr_vendor_or_throw<B, T>(ctx, v1_view, v_sub_rows, Side::Left,
+                        (void)blas::dispatch::detail::ormqr_vendor_or_throw<B, T>(ctx, v1_view, v_sub_rows, Side::Left,
                                                     Transpose::NoTrans, tau1_flat, ormqr_ws);
                     } else {
-                        ormqr_blocked<B, T>(ctx, v1_view, v_sub_rows, Side::Left,
+                        (void)ormqr_blocked<B, T>(ctx, v1_view, v_sub_rows, Side::Left,
                                             Transpose::NoTrans, tau1_flat, ormqr_ws,
                                             ormqr_block_size);
                     }
@@ -499,7 +518,8 @@ size_t syevx_direct_subset_buffer_size(Queue& ctx,
         Span<std::byte>,\
         JobType,\
         const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&,\
-        const SyevxParams<BATCHLAS_UNPAREN fp>&);\
+        const SyevxParams<BATCHLAS_UNPAREN fp>&,\
+        Span<int32_t>);\
     /* See the note in syevx_direct.cc: instantiating the inline m-less forwarder \
        preserves the symbol this library exported before `m` was added. */\
     template Event syevx_direct_subset<back, BATCHLAS_UNPAREN fp, fmt>(\
@@ -510,7 +530,8 @@ size_t syevx_direct_subset_buffer_size(Queue& ctx,
         Span<std::byte>,\
         JobType,\
         const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&,\
-        const SyevxParams<BATCHLAS_UNPAREN fp>&);\
+        const SyevxParams<BATCHLAS_UNPAREN fp>&,\
+        Span<int32_t>);\
     template size_t syevx_direct_subset_buffer_size<back, BATCHLAS_UNPAREN fp, fmt>(\
         Queue&,\
         const MatrixView<BATCHLAS_UNPAREN fp, fmt>&,\

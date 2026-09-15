@@ -1,5 +1,6 @@
 #pragma once
 
+#include <batchlas/export.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/blas/matrix.hh>
@@ -24,15 +25,15 @@ using gemm_vendor = gemm<T>;
 }  // namespace sig
 
 template <Backend Back, typename T>
-Event gemm(Queue& ctx,
-           const MatrixView<T, MatrixFormat::Dense>& A,
-           const MatrixView<T, MatrixFormat::Dense>& B,
-           const MatrixView<T, MatrixFormat::Dense>& C,
-           T alpha,
-           T beta,
-           Transpose transA,
-           Transpose transB,
-           ComputePrecision precision = ComputePrecision::Default);
+BATCHLAS_API Event gemm(Queue& ctx,
+                        const MatrixView<T, MatrixFormat::Dense>& A,
+                        const MatrixView<T, MatrixFormat::Dense>& B,
+                        const MatrixView<T, MatrixFormat::Dense>& C,
+                        T alpha,
+                        T beta,
+                        Transpose transA,
+                        Transpose transB,
+                        ComputePrecision precision = ComputePrecision::Default);
 
 // There is no separate gemm_heterogeneous entry point. `gemm` handles a
 // heterogeneous batch -- one where the items carry differing active_rows /
@@ -65,15 +66,15 @@ namespace batchlas::backend {
 // syev_vendor (functions/syev.hh) and ormqr_vendor (functions/ormqr.hh) have
 // used all along.
 template <Backend Back, typename T>
-Event gemm_vendor(Queue& ctx,
-                  const MatrixView<T, MatrixFormat::Dense>& A,
-                  const MatrixView<T, MatrixFormat::Dense>& B,
-                  const MatrixView<T, MatrixFormat::Dense>& C,
-                  T alpha,
-                  T beta,
-                  Transpose transA,
-                  Transpose transB,
-                  ComputePrecision precision);
+BATCHLAS_API Event gemm_vendor(Queue& ctx,
+                               const MatrixView<T, MatrixFormat::Dense>& A,
+                               const MatrixView<T, MatrixFormat::Dense>& B,
+                               const MatrixView<T, MatrixFormat::Dense>& C,
+                               T alpha,
+                               T beta,
+                               Transpose transA,
+                               Transpose transB,
+                               ComputePrecision precision);
 
 }  // namespace batchlas::backend
 

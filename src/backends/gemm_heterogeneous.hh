@@ -50,7 +50,7 @@ Event gemm_heterogeneous_loop(Queue& ctx,
                               Transpose transB,
                               LaunchItem&& launch_item) {
     if (!gemm_batch_dimensions_compatible(A, B, C, transA, transB)) {
-        throw std::invalid_argument("GEMM: incompatible per-batch matrix dimensions for heterogeneous dispatch");
+        throw batchlas::invalid_argument("GEMM: incompatible per-batch matrix dimensions for heterogeneous dispatch");
     }
 
     bool launched = false;

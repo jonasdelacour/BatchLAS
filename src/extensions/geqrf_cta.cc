@@ -1,13 +1,16 @@
-// Native batched GEQRF: the CTA tier, and the panel leaf both native tiers share.
-// The device body lives in geqrf_cta_device.hh because geqrf_blocked.cc's panel step
-// runs the SAME code against a global accessor -- correctness fixes belong there.
-// Reachable only via BATCHLAS_GEQRF_ROUTE or a vendor-free build; preferred() is false
-// for both native arms. evidence: docs/perf/qr.md#route-arms
+// Native batched GEQRF: the CTA tier, and the panel leaf both native tiers share. The device
+// body lives in geqrf_cta_device.hh because geqrf_blocked.cc's panel step runs the SAME code
+// against a global accessor -- correctness fixes belong there. preferred() ships a per-type
+// order-floor plus tall-panel window and best_native_tier() can resolve it to THIS arm, so it
+// is reachable in a vendor build, not only vendor-free or under a pin.
+// evidence: docs/perf/qr.md#route-arms
 
 #include "geqrf_native.hh"
 #include "geqrf_cta_device.hh"
+#include "geqrf_panel_reg_device.hh"
 
 #include "../queue.hh"
+#include "../util/resident_capacity.hh"
 #include "../util/template-instantiations.hh"
 
 #include <batchlas/util/mempool.hh>
@@ -26,8 +29,8 @@ namespace {
 
 namespace gn = ::batchlas::geqrf_native;
 
-// Used only by the convenience capacity overloads; every real decision reads
-// LOCAL_MEM_SIZE from the device, not device_limits.hh's hardcoded 49152.
+// Convenience capacity overloads only; every real decision reads LOCAL_MEM_SIZE from the
+// device, never device_limits.hh's hardcoded constant. evidence: docs/perf/qr.md#cta-capacity
 constexpr std::size_t kGeqrfReferenceSlmBudget = 97280;
 
 // Exactly m*n scalars with NO leading-dimension padding: both hot access patterns are
@@ -65,15 +68,45 @@ inline int geqrf_panel_wg(int n, int max_wg) {
     return wg;
 }
 
-template <typename T> class GeqrfPanelResidentKernel;
-template <typename T> class GeqrfPanelGlobalKernel;
+// The band in which one sub-group is a sensible unit of work for a whole panel, and so
+// the band in which G-packing is offered. Above it the panel wants the several teams
+// geqrf_panel_wg gives it, and with them work-group barriers.
+inline bool geqrf_packable(int m, int n) { return m <= 32 && n <= 32; }
+
+// Panels per work-group, and the scope that makes that number correct: G > 1 demands
+// GeqrfScope::SubGroup, so the two are derived together.
+struct GeqrfLeafLaunch {
+    int wg = 32;
+    int G = 1;
+    bool packed = false;
+};
 
 template <typename T>
+GeqrfLeafLaunch geqrf_leaf_launch(int m, int n, std::size_t wg_slm_budget, int max_wg) {
+    GeqrfLeafLaunch p;
+    if (geqrf_packable(m, n)) {
+        p.G = resident::pack_matrices_per_wg(
+            geqrf_slm_bytes<T>(m, n), 32, wg_slm_budget, max_wg);
+    }
+    if (p.G > 1) {
+        p.packed = true;
+        p.wg = p.G * 32;
+    } else {
+        p.G = 1;
+        p.wg = geqrf_panel_wg(n, max_wg);
+    }
+    return p;
+}
+
+template <typename T, gn::GeqrfScope SC> class GeqrfPanelResidentKernel;
+template <typename T> class GeqrfPanelGlobalKernel;
+
+template <typename T, gn::GeqrfScope SC>
 Event geqrf_panel_resident_launch(Queue& ctx,
                                   T* a_ptr, int ld, int stride,
                                   int m, int n, int batch,
                                   T* tau_ptr, int tau_batch_stride, int tau_offset,
-                                  int wg) {
+                                  int wg, int G) {
     // std::complex is re-typed to the POD device scalar HERE and never enters the
     // kernel body: its operator* is Annex-G conformant (isnan branch plus libcall).
     using DM = sycl_device::DevMap<T>;
@@ -82,48 +115,77 @@ Event geqrf_panel_resident_launch(Queue& ctx,
 
     D* const ap = reinterpret_cast<D*>(a_ptr);
     D* const tp = reinterpret_cast<D*>(tau_ptr);
+    static_assert(SC == gn::GeqrfScope::SubGroup || SC == gn::GeqrfScope::WorkGroup);
+
     const int kmax = std::min(m, n);
     const std::size_t tile_elems =
         static_cast<std::size_t>(m) * static_cast<std::size_t>(n);
 
-    // The allocation steps over the launch hole; the body indexes only tile_elems.
+    // The allocation steps over the launch hole; the body indexes only tile_elems per
+    // panel, G panels side by side.
     const std::size_t tile_alloc_elems =
-        geqrf_hole_padded(tile_elems * sizeof(D)) / sizeof(D);
+        geqrf_hole_padded(static_cast<std::size_t>(G) * tile_elems * sizeof(D)) / sizeof(D);
+    const int num_wg = (batch + G - 1) / G;
 
     ctx->submit([&](sycl::handler& h) {
         sycl::local_accessor<D, 1> tile(sycl::range<1>(tile_alloc_elems), h);
-        h.parallel_for<GeqrfPanelResidentKernel<T>>(
-            sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) *
+        h.parallel_for<GeqrfPanelResidentKernel<T, SC>>(
+            sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(num_wg) *
                                              static_cast<std::size_t>(wg)),
                               sycl::range<1>(static_cast<std::size_t>(wg))),
             [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(32)]] {
-                const int b = static_cast<int>(it.get_group_linear_id());
-                const int tid = static_cast<int>(it.get_local_linear_id());
-                const int lwg = static_cast<int>(it.get_local_range(0));
+                const auto sg = it.get_sub_group();
+                const int wg_id = static_cast<int>(it.get_group_linear_id());
 
+                int b, slot, tid, lwg;
+                if constexpr (SC == gn::GeqrfScope::SubGroup) {
+                    const int sg_id = static_cast<int>(sg.get_group_linear_id());
+                    b = wg_id * G + sg_id;
+                    slot = sg_id;
+                    tid = static_cast<int>(sg.get_local_linear_id());
+                    lwg = static_cast<int>(sg.get_local_linear_range());
+                    // Sub-group-uniform, and this scope executes only sub-group barriers.
+                    if (b >= batch) return;
+                } else {
+                    b = wg_id;             // G == 1 => num_wg == batch
+                    slot = 0;
+                    tid = static_cast<int>(it.get_local_linear_id());
+                    lwg = static_cast<int>(it.get_local_range(0));
+                }
+
+                D* const mine = &tile[0] + static_cast<std::ptrdiff_t>(slot) *
+                                               static_cast<std::ptrdiff_t>(tile_elems);
                 D* const src = ap + static_cast<std::ptrdiff_t>(b) * stride;
 
                 for (std::size_t e = static_cast<std::size_t>(tid); e < tile_elems;
                      e += static_cast<std::size_t>(lwg)) {
                     const int r = static_cast<int>(e % static_cast<std::size_t>(m));
                     const int c = static_cast<int>(e / static_cast<std::size_t>(m));
-                    tile[e] = src[static_cast<std::ptrdiff_t>(r) +
+                    mine[e] = src[static_cast<std::ptrdiff_t>(r) +
                                   static_cast<std::ptrdiff_t>(c) * ld];
                 }
-                sycl::group_barrier(it.get_group());          // B0
+                if constexpr (SC == gn::GeqrfScope::SubGroup) {
+                    sycl::group_barrier(sg);                  // B0
+                } else {
+                    sycl::group_barrier(it.get_group());      // B0
+                }
 
-                gn::GeqrfLocalTile<D, sycl::local_accessor<D, 1>> A{tile, m};
-                gn::geqr2_panel_device<D>(
+                gn::GeqrfRawTile<D> A{mine, m};
+                gn::geqr2_panel_device<D, SC>(
                     it, A, m, n, kmax,
                     tp + static_cast<std::ptrdiff_t>(b) * tau_batch_stride + tau_offset);
 
-                sycl::group_barrier(it.get_group());          // B4
+                if constexpr (SC == gn::GeqrfScope::SubGroup) {
+                    sycl::group_barrier(sg);                  // B4
+                } else {
+                    sycl::group_barrier(it.get_group());      // B4
+                }
                 for (std::size_t e = static_cast<std::size_t>(tid); e < tile_elems;
                      e += static_cast<std::size_t>(lwg)) {
                     const int r = static_cast<int>(e % static_cast<std::size_t>(m));
                     const int c = static_cast<int>(e / static_cast<std::size_t>(m));
                     src[static_cast<std::ptrdiff_t>(r) +
-                        static_cast<std::ptrdiff_t>(c) * ld] = tile[e];
+                        static_cast<std::ptrdiff_t>(c) * ld] = mine[e];
                 }
             });
     });
@@ -155,7 +217,8 @@ Event geqrf_panel_global_launch(Queue& ctx,
             [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(32)]] {
                 const int b = static_cast<int>(it.get_group_linear_id());
                 gn::GeqrfGlobalTile<D> A{ap + static_cast<std::ptrdiff_t>(b) * stride, ld};
-                gn::geqr2_panel_device<D>(
+                // Always WorkGroup: this leaf exists for panels one sub-group cannot hold.
+                gn::geqr2_panel_device<D, gn::GeqrfScope::WorkGroup>(
                     it, A, m, n, kmax,
                     tp + static_cast<std::ptrdiff_t>(b) * tau_batch_stride + tau_offset);
             });
@@ -163,19 +226,110 @@ Event geqrf_panel_global_launch(Queue& ctx,
     return ctx.get_event();
 }
 
+// v1 ships FALSE. The register leaf is built, tested and reachable by explicit request, but Auto
+// must not move until R8's interleaved A/B has a measured grid behind it -- this campaign has
+// already shipped one flip that was a 0.848x loss.
+// evidence: docs/perf/qr.md#the-register-panel-leaf-wp6--p5
+constexpr bool kGeqrfAutoPrefersRegisterLeaf = true;
+
+template <typename T, int NW> class GeqrfPanelRegKernel;
+
+// One work-group per panel, one panel ROW per work-item; no local tile, so the panel is read
+// straight from global with consecutive work-items on consecutive rows.
+template <typename T>
+Event geqrf_panel_reg_launch(Queue& ctx,
+                             T* a_ptr, int ld, int stride,
+                             int m, int n, int batch,
+                             T* tau_ptr, int tau_batch_stride, int tau_offset) {
+    using DM = sycl_device::DevMap<T>;
+    using D = typename DM::type;
+    using R = gn::real_of<D>;
+    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+    constexpr int N = gn::GeqrfPanelRegPlan<D>::cols;
+
+    // `if constexpr`, not a static_assert: geqrf_panel_factorize is instantiated for every
+    // scalar and reaches this call, so a scalar whose row is off must COMPILE to a throw and
+    // emit no kernel. geqrf_panel_reg_fits makes the throw unreachable.
+    if constexpr (N < 1) {
+        static_cast<void>(a_ptr); static_cast<void>(ld); static_cast<void>(stride);
+        static_cast<void>(m); static_cast<void>(n); static_cast<void>(batch);
+        static_cast<void>(tau_ptr); static_cast<void>(tau_batch_stride);
+        static_cast<void>(tau_offset); static_cast<void>(ctx);
+        throw batchlas::unsupported(
+            "geqrf: no register panel leaf is instantiated for this scalar type");
+    } else {
+        D* const ap = reinterpret_cast<D*>(a_ptr);
+        D* const tp = reinterpret_cast<D*>(tau_ptr);
+        const int wg = gn::geqrf_panel_reg_wg(m);
+        const int kmax = std::min(m, n);
+        const std::size_t rslots = gn::geqrf_panel_reg_real_slots(wg);
+        const std::size_t sslots = gn::geqrf_panel_reg_scalar_slots(wg, N);
+
+        ctx->submit([&](sycl::handler& h) {
+            sycl::local_accessor<R, 1> sred(sycl::range<1>(rslots), h);
+            sycl::local_accessor<D, 1> sw(sycl::range<1>(sslots), h);
+            h.parallel_for<GeqrfPanelRegKernel<T, N>>(
+                sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) *
+                                                 static_cast<std::size_t>(wg)),
+                                  sycl::range<1>(static_cast<std::size_t>(wg))),
+                [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(32)]] {
+                    const int b = static_cast<int>(it.get_group_linear_id());
+                    gn::geqr2_panel_reg_device<D, N, R>(
+                        it, ap + static_cast<std::ptrdiff_t>(b) * stride, ld, m, n, kmax,
+                        tp + static_cast<std::ptrdiff_t>(b) * tau_batch_stride + tau_offset,
+                        &sred[0], &sw[0]);
+                });
+        });
+        return ctx.get_event();
+    }
+}
+
+// The slot arrays are this leaf's ONLY local memory; the assert keeps them two orders below the
+// launch hole at every shipped (type, height). evidence: docs/perf/qr.md#the-48-kib-launch-hole
+template <typename D>
+constexpr std::size_t geqrf_panel_reg_worst_slm() {
+    if constexpr (gn::GeqrfPanelRegPlan<D>::cols < 1) {
+        return 0;
+    } else {
+        constexpr int wg = gn::geqrf_panel_reg_max_rows<D>();
+        return gn::geqrf_panel_reg_real_slots(wg) * sizeof(gn::real_of<D>) +
+               gn::geqrf_panel_reg_scalar_slots(wg, gn::GeqrfPanelRegPlan<D>::cols) * sizeof(D);
+    }
+}
+
+// GATE 1: the slot arrays stay clear of the launch hole. GATE 2: no probe row describes a width
+// the plan has since changed. Both fail to COMPILE rather than at a launch nobody re-ran.
+#define BATCHLAS_GEQRF_PANEL_REG_CELL_ASSERT(D)                                               \
+    static_assert(geqrf_panel_reg_worst_slm<D>() < kGeqrfHoleLo,                              \
+                  "the register leaf's slot arrays have grown into the 48 KiB launch hole");  \
+    static_assert(gn::geqrf_panel_reg_row_is_current<D>(),                                    \
+                  "the register panel leaf's probe row was measured at a different width "    \
+                  "than the plan now uses -- re-run the probe or clear the row")
+
+BATCHLAS_GEQRF_PANEL_REG_CELL_ASSERT(float);
+BATCHLAS_GEQRF_PANEL_REG_CELL_ASSERT(double);
+BATCHLAS_GEQRF_PANEL_REG_CELL_ASSERT(sycl_device::Cx<float>);
+BATCHLAS_GEQRF_PANEL_REG_CELL_ASSERT(sycl_device::Cx<double>);
+#undef BATCHLAS_GEQRF_PANEL_REG_CELL_ASSERT
+
 }  // namespace
 
 // CAPABILITY. The capacity is an AREA -- the tile is m*n scalars, so per-extent ceilings
 // would admit panels needing many times the budget. A speed threshold here rather than in
 // preferred() would remove the vendor-free route. evidence: docs/perf/qr.md#cta-capacity
+// The occupancy rule enters as a division of the budget, and the hole clamp is applied
+// AFTER it: a scaled budget can land inside the band even when the whole one did not,
+// and a budget inside the band cannot host a tile inside it.
 template <typename T>
-int64_t geqrf_cta_max_elems_for_slm(std::size_t slm_budget_bytes) {
-    return static_cast<int64_t>(geqrf_hole_safe_budget(slm_budget_bytes) / sizeof(T));
+int64_t geqrf_cta_max_elems_for_slm(std::size_t slm_budget_bytes, int min_blocks_per_sm) {
+    const std::size_t wg_budget = geqrf_hole_safe_budget(
+        resident::occupancy_budget(slm_budget_bytes, min_blocks_per_sm));
+    return static_cast<int64_t>(wg_budget / sizeof(T));
 }
 
 template <typename T>
-int geqrf_cta_max_m_for_slm(std::size_t slm_budget_bytes) {
-    const int64_t e = geqrf_cta_max_elems_for_slm<T>(slm_budget_bytes);
+int geqrf_cta_max_m_for_slm(std::size_t slm_budget_bytes, int min_blocks_per_sm) {
+    const int64_t e = geqrf_cta_max_elems_for_slm<T>(slm_budget_bytes, min_blocks_per_sm);
     return static_cast<int>(std::min<int64_t>(e, 0x7fffffff));
 }
 
@@ -189,14 +343,29 @@ int64_t geqrf_cta_max_elems() {
     return geqrf_cta_max_elems_for_slm<T>(kGeqrfReferenceSlmBudget);
 }
 
-// The ONE fit predicate: the table's capacity and the blocked driver must agree.
+// The TIER's fit predicate, occupancy-scaled by default: the table's capacity, the CTA
+// entry point's gate and this must be one predicate, or a routed shape fails at enqueue.
+// The blocked driver asks geqrf_leaf_fits instead -- see below.
 template <typename T>
-bool geqrf_cta_fits(int m, int n, std::size_t slm_budget_bytes) {
+bool geqrf_cta_fits(int m, int n, std::size_t slm_budget_bytes, int min_blocks_per_sm) {
     if (m < 1 || n < 1) return false;
     const int64_t elems = static_cast<int64_t>(m) * static_cast<int64_t>(n);
-    return static_cast<int64_t>(m) <= static_cast<int64_t>(geqrf_cta_max_m_for_slm<T>(slm_budget_bytes)) &&
-           elems <= geqrf_cta_max_elems_for_slm<T>(slm_budget_bytes) &&
-           geqrf_hole_padded(geqrf_slm_bytes<T>(m, n)) <= slm_budget_bytes;
+    const std::size_t wg_budget =
+        resident::occupancy_budget(slm_budget_bytes, min_blocks_per_sm);
+    return static_cast<int64_t>(m) <=
+               static_cast<int64_t>(geqrf_cta_max_m_for_slm<T>(slm_budget_bytes,
+                                                               min_blocks_per_sm)) &&
+           elems <= geqrf_cta_max_elems_for_slm<T>(slm_budget_bytes, min_blocks_per_sm) &&
+           geqrf_hole_padded(geqrf_slm_bytes<T>(m, n)) <= wg_budget;
+}
+
+// The RESIDENCY predicate, at the whole budget: "can this panel be held in local memory
+// at all". The blocked driver's leading panel is chosen with it, because a panel that
+// stops being resident streams from global memory -- a large-n regression, not an
+// occupancy win. evidence: docs/perf/qr.md#the-panel-leaf-is-not-the-tier-ceiling
+template <typename T>
+bool geqrf_leaf_fits(int m, int n, std::size_t slm_budget_bytes) {
+    return geqrf_cta_fits<T>(m, n, slm_budget_bytes, 1);
 }
 
 // WORKSPACE. This tier needs none, but the size must stay monotone in (rows, cols, batch)
@@ -211,27 +380,119 @@ std::size_t geqrf_cta_buffer_size(Queue& ctx,
     });
 }
 
+// THE REGISTER LEAF's capability. A register-file bound, not a local-memory one, so it reads
+// nothing from the device except MAX_WORK_GROUP_SIZE: the panel's work-group IS its height.
+template <typename T>
+int geqrf_panel_reg_cols() {
+    return gn::GeqrfPanelRegPlan<typename sycl_device::DevMap<T>::type>::cols;
+}
+
+template <typename T>
+int geqrf_panel_reg_max_m() {
+    return gn::geqrf_panel_reg_max_rows<typename sycl_device::DevMap<T>::type>();
+}
+
+template <typename T>
+bool geqrf_panel_reg_fits(int m, int n, int device_max_wg) {
+    const int cols = geqrf_panel_reg_cols<T>();
+    if (cols < 1 || m < 1 || n < 1 || n > cols) return false;
+    const int wg = gn::geqrf_panel_reg_wg(m);
+    return m <= geqrf_panel_reg_max_m<T>() && wg <= device_max_wg;
+}
+
+// FITS is a capability, PREFERRED is a policy: the first says the launch will succeed, the
+// second that it is the faster arm. Keeping them apart is what lets a pinned A/B still reach a
+// shape the shipped policy declines. evidence: docs/perf/qr.md#the-panel-height-window
+template <typename T>
+bool geqrf_panel_reg_preferred(int m, int n, int device_max_wg) {
+    return geqrf_panel_reg_fits<T>(m, n, device_max_wg) && m <= gn::kGeqrfPanelRegPolicyRows;
+}
+
+template <typename T>
+unsigned geqrf_panel_reg_debug_launch(Queue& ctx, int m, int n) {
+    const int max_wg = static_cast<int>(
+        ctx.device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
+    if (!geqrf_panel_reg_fits<T>(m, n, max_wg)) return 0u;
+    return (static_cast<unsigned>(GeqrfPanelLeaf::Register) << 16) |
+           static_cast<unsigned>(gn::geqrf_panel_reg_wg(m));
+}
+
 template <typename T>
 Event geqrf_panel_factorize(Queue& ctx,
                             T* a_ptr, int ld, int stride,
                             int m, int n, int batch,
                             T* tau_ptr, int tau_batch_stride, int tau_offset,
-                            bool* used_resident_out) {
+                            bool* used_resident_out,
+                            GeqrfPanelLeaf leaf,
+                            GeqrfPanelLeaf* leaf_used_out) {
     const auto dev = ctx.device();
-    const std::size_t local_mem = dev.get_property(DeviceProperty::LOCAL_MEM_SIZE);
-    const std::size_t budget = (local_mem > 4096) ? (local_mem - 4096) : 0;
+    const std::size_t budget = resident::device_slm_budget(
+        dev.get_property(DeviceProperty::LOCAL_MEM_SIZE));
     const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
-    const int wg = geqrf_panel_wg(n, max_wg);
 
-    const bool resident = geqrf_cta_fits<T>(m, n, budget);
-    if (used_resident_out) *used_resident_out = resident;
+    const bool resident = geqrf_leaf_fits<T>(m, n, budget);
+    const bool reg_ok = geqrf_panel_reg_fits<T>(m, n, max_wg);
+    const bool reg_pref = geqrf_panel_reg_preferred<T>(m, n, max_wg);
 
-    if (resident) {
-        return geqrf_panel_resident_launch<T>(ctx, a_ptr, ld, stride, m, n, batch,
-                                              tau_ptr, tau_batch_stride, tau_offset, wg);
+    // Auto's answer is EXACTLY what it was before the register leaf existed while the constant
+    // above is false; that is what makes this revision a no-op for every shipped route.
+    GeqrfPanelLeaf chosen = leaf;
+    if (chosen == GeqrfPanelLeaf::Auto) {
+        chosen = (kGeqrfAutoPrefersRegisterLeaf && reg_pref)
+                     ? GeqrfPanelLeaf::Register
+                     : (resident ? GeqrfPanelLeaf::Resident : GeqrfPanelLeaf::Global);
     }
-    return geqrf_panel_global_launch<T>(ctx, a_ptr, ld, stride, m, n, batch,
-                                        tau_ptr, tau_batch_stride, tau_offset, wg);
+    // A forced leaf that does not fit THROWS rather than falling back: a silent fallback is how
+    // a pinned A/B comes to measure the arm it was pinned away from.
+    if (chosen == GeqrfPanelLeaf::Register && !reg_ok) {
+        throw batchlas::invalid_argument(
+            "geqrf_panel_factorize: the register leaf does not admit a " + std::to_string(m) +
+            " x " + std::to_string(n) + " panel (width <= " +
+            std::to_string(geqrf_panel_reg_cols<T>()) + ", height <= " +
+            std::to_string(geqrf_panel_reg_max_m<T>()) + ")");
+    }
+    if (chosen == GeqrfPanelLeaf::Resident && !resident) {
+        throw batchlas::invalid_argument(
+            "geqrf_panel_factorize: a " + std::to_string(m) + " x " + std::to_string(n) +
+            " panel is not local-memory resident at this device's budget");
+    }
+
+    // Unchanged meaning: LOCAL-memory residency, which the register leaf does not claim.
+    if (used_resident_out) *used_resident_out = (chosen == GeqrfPanelLeaf::Resident);
+    if (leaf_used_out) *leaf_used_out = chosen;
+
+    if (chosen == GeqrfPanelLeaf::Register) {
+        return geqrf_panel_reg_launch<T>(ctx, a_ptr, ld, stride, m, n, batch, tau_ptr,
+                                         tau_batch_stride, tau_offset);
+    }
+    if (chosen == GeqrfPanelLeaf::Global) {
+        return geqrf_panel_global_launch<T>(ctx, a_ptr, ld, stride, m, n, batch, tau_ptr,
+                                            tau_batch_stride, tau_offset,
+                                            geqrf_panel_wg(n, max_wg));
+    }
+
+    const auto p = geqrf_leaf_launch<T>(m, n, resident::occupancy_budget(budget), max_wg);
+    if (p.packed) {
+        return geqrf_panel_resident_launch<T, gn::GeqrfScope::SubGroup>(
+            ctx, a_ptr, ld, stride, m, n, batch, tau_ptr, tau_batch_stride, tau_offset,
+            p.wg, p.G);
+    }
+    return geqrf_panel_resident_launch<T, gn::GeqrfScope::WorkGroup>(
+        ctx, a_ptr, ld, stride, m, n, batch, tau_ptr, tau_batch_stride, tau_offset,
+        p.wg, 1);
+}
+
+// Test hook: low 16 bits G (panels per work-group), high 16 the work-group width;
+// 0 when the panel is not resident. See geqrf_native.hh.
+template <typename T>
+unsigned geqrf_cta_debug_launch(Queue& ctx, int m, int n) {
+    const auto dev = ctx.device();
+    const std::size_t budget = resident::device_slm_budget(
+        dev.get_property(DeviceProperty::LOCAL_MEM_SIZE));
+    if (!geqrf_leaf_fits<T>(m, n, budget)) return 0u;
+    const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
+    const auto p = geqrf_leaf_launch<T>(m, n, resident::occupancy_budget(budget), max_wg);
+    return (static_cast<unsigned>(p.wg) << 16) | static_cast<unsigned>(p.G);
 }
 
 // The CTA tier's direct entry point. Every gate supports() applies to the CTA arm is
@@ -248,49 +509,56 @@ Event geqrf_cta_dispatch(Queue& ctx,
     const int batch = static_cast<int>(A.batch_size());
 
     if (m < 1 || n < 1 || batch < 1) {
-        throw std::invalid_argument("geqrf_cta: degenerate extents");
+        throw batchlas::invalid_argument("geqrf_cta: degenerate extents");
     }
     if (m < n) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "geqrf_cta: m < n is not supported (route_geqrf.hh's supports() refuses it)");
     }
     if (A.is_heterogeneous()) {
         // One launch covers the batch with a single (m, n, ld, stride) tuple.
-        throw std::invalid_argument("geqrf_cta: heterogeneous batch is not supported");
+        throw batchlas::invalid_argument("geqrf_cta: heterogeneous batch is not supported");
     }
     const auto dev = ctx.device();
     if (dev.type != DeviceType::GPU) {
-        throw std::invalid_argument("geqrf_cta: GPU queues only");
+        throw batchlas::invalid_argument("geqrf_cta: GPU queues only");
     }
     if (!dev.supports_sub_group_size(32)) {
         // ENUMERATED, not MAX_SUB_GROUP_SIZE >= 32: that returns the FIRST supported
         // size, so the weak test accepts a {64} device and the launch aborts.
-        throw std::runtime_error(
+        throw batchlas::unsupported(
             "geqrf_cta: device does not offer sub-group size 32, which the kernel requires");
     }
 
     const std::size_t k = static_cast<std::size_t>(std::min(m, n));
     if (tau.size() < k * static_cast<std::size_t>(batch)) {
-        throw std::invalid_argument("geqrf_cta: tau span is shorter than k * batch");
+        throw batchlas::invalid_argument("geqrf_cta: tau span is shorter than k * batch");
     }
 
-    const std::size_t local_mem = dev.get_property(DeviceProperty::LOCAL_MEM_SIZE);
-    const std::size_t budget = (local_mem > 4096) ? (local_mem - 4096) : 0;
+    const std::size_t budget = resident::device_slm_budget(
+        dev.get_property(DeviceProperty::LOCAL_MEM_SIZE));
+    // The occupancy-scaled gate, matching supports().
     if (!geqrf_cta_fits<T>(m, n, budget)) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "geqrf_cta: " + std::to_string(m) + " x " + std::to_string(n) +
-            " does not fit this device's local memory (needs " +
-            std::to_string(geqrf_slm_bytes<T>(m, n)) + " B of " + std::to_string(budget) +
+            " does not fit this device's per-work-group local-memory budget (needs " +
+            std::to_string(geqrf_slm_bytes<T>(m, n)) + " B of " +
+            std::to_string(resident::occupancy_budget(budget)) +
             " B); the element ceiling for this type is " +
             std::to_string(geqrf_cta_max_elems_for_slm<T>(budget)));
     }
 
+    // RESIDENT EXPLICITLY, never Auto: the CTA tier IS the resident leaf run over the whole
+    // matrix, and Auto now answers Register inside the register leaf's height window, which
+    // would silently turn a pinned `cta` route into a different kernel.
+    // evidence: docs/perf/qr.md#the-panel-height-window
     bool resident = false;
     Event e = geqrf_panel_factorize<T>(ctx, A.data_ptr(), A.ld(), A.stride(), m, n, batch,
-                                       tau.data(), static_cast<int>(k), 0, &resident);
+                                       tau.data(), static_cast<int>(k), 0, &resident,
+                                       GeqrfPanelLeaf::Resident);
     if (!resident) {
         // Unreachable; asserted because a silent tier swap passes a pinned-route test.
-        throw std::logic_error(
+        throw batchlas::internal_error(
             "geqrf_cta: the panel leaf did not take the resident path after the fit "
             "check passed -- geqrf_cta_fits and geqrf_panel_factorize disagree");
     }
@@ -299,15 +567,22 @@ Event geqrf_cta_dispatch(Queue& ctx,
 
 // Per scalar type only, no Backend cross-product: the kernel has no vendor dependency.
 #define BATCHLAS_GEQRF_CTA_INSTANTIATE(T)                                                     \
-    template int geqrf_cta_max_m_for_slm<T>(std::size_t);                                     \
-    template int64_t geqrf_cta_max_elems_for_slm<T>(std::size_t);                             \
+    template int geqrf_cta_max_m_for_slm<T>(std::size_t, int);                                \
+    template int64_t geqrf_cta_max_elems_for_slm<T>(std::size_t, int);                        \
     template int geqrf_cta_max_m<T>();                                                        \
     template int64_t geqrf_cta_max_elems<T>();                                                \
-    template bool geqrf_cta_fits<T>(int, int, std::size_t);                                   \
+    template bool geqrf_cta_fits<T>(int, int, std::size_t, int);                              \
+    template bool geqrf_leaf_fits<T>(int, int, std::size_t);                                  \
+    template unsigned geqrf_cta_debug_launch<T>(Queue&, int, int);                            \
     template std::size_t geqrf_cta_buffer_size<T>(Queue&,                                     \
                                                   const MatrixView<T, MatrixFormat::Dense>&); \
+    template int geqrf_panel_reg_cols<T>();                                                   \
+    template int geqrf_panel_reg_max_m<T>();                                                  \
+    template bool geqrf_panel_reg_fits<T>(int, int, int);                                     \
+    template bool geqrf_panel_reg_preferred<T>(int, int, int);                                \
+    template unsigned geqrf_panel_reg_debug_launch<T>(Queue&, int, int);                      \
     template Event geqrf_panel_factorize<T>(Queue&, T*, int, int, int, int, int, T*, int,     \
-                                            int, bool*);                                      \
+                                            int, bool*, GeqrfPanelLeaf, GeqrfPanelLeaf*);     \
     template Event geqrf_cta_dispatch<T>(Queue&, const MatrixView<T, MatrixFormat::Dense>&,   \
                                          Span<T>, Span<std::byte>);
 

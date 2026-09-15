@@ -2,6 +2,8 @@
 #include <functional>
 #include <iostream>
 
+namespace batchlas {
+
 template<typename T>
 struct ReferenceWrapper : public std::reference_wrapper<T> {
     using std::reference_wrapper<T>::reference_wrapper;
@@ -49,3 +51,13 @@ struct ReferenceWrapper : public std::reference_wrapper<T> {
     template <typename U>
     inline constexpr friend std::ostream& operator<<(std::ostream& os, const ReferenceWrapper<U>& ref);
 };
+
+}  // namespace batchlas
+
+// Transitional compatibility shim: ReferenceWrapper used to be declared at
+// global scope and now lives in namespace batchlas. A consumer with a name of
+// its own here defines BATCHLAS_NO_GLOBAL_NAMES to switch the block off; the
+// block goes away entirely once nothing in tree depends on it.
+#ifndef BATCHLAS_NO_GLOBAL_NAMES
+using batchlas::ReferenceWrapper;
+#endif

@@ -1,0 +1,12 @@
+gesv   float    n=32  -> native:tiny
+gesv   float    n=33  -> native:blocked
+gesv   cfloat   n=16  -> native:tiny
+gesv   cfloat   n=17  -> native:blocked
+gesv   double   n=16  -> native:blocked
+gesv   cdouble  n=16  -> native:blocked
+posv   float    n=32  -> native:tiny
+posv   float    n=33  -> native:blocked
+posv   cfloat   n=32  -> native:tiny
+posv   double   n=32  -> native:tiny
+posv   cdouble  n=16  -> native:tiny
+posv   cdouble  n=17  -> native:blocked

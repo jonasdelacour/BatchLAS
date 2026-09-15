@@ -33,13 +33,13 @@ namespace batchlas {
                               size_t cta_wg_size_multiplier) {
         const auto batch_size = a.batch_size();
         if (n < 1 || n > static_cast<int32_t>(P) || a.rows() != n || a.cols() != n) {
-            throw std::runtime_error("sytd2_cta_impl: invalid n or matrix sizes for CTA partition.");
+            throw batchlas::invalid_argument("sytd2_cta_impl: invalid n or matrix sizes for CTA partition.");
         }
         if (d.size() != n || e.size() != (n - 1) || tau.size() != (n - 1)) {
-            throw std::runtime_error("sytd2_cta_impl: invalid d/e/tau sizes.");
+            throw batchlas::invalid_argument("sytd2_cta_impl: invalid d/e/tau sizes.");
         }
         if (d.batch_size() != batch_size || e.batch_size() != batch_size || tau.batch_size() != batch_size) {
-            throw std::runtime_error("sytd2_cta_impl: batch size mismatch.");
+            throw batchlas::invalid_argument("sytd2_cta_impl: batch size mismatch.");
         }
 
         ctx->submit([&](sycl::handler& cgh) {
@@ -296,18 +296,18 @@ namespace batchlas {
                     size_t cta_wg_size_multiplier) {
         (void)ws;
         if (a_in.rows() != a_in.cols()) {
-            throw std::invalid_argument("sytrd_cta: A must be square.");
+            throw batchlas::invalid_argument("sytrd_cta: A must be square.");
         }
 
         const int64_t n64 = a_in.rows();
         const int64_t batch_size = a_in.batch_size();
         if (batch_size != d_out.batch_size() || batch_size != e_out.batch_size() || batch_size != tau_out.batch_size()) {
-            throw std::invalid_argument("sytrd_cta: batch size mismatch.");
+            throw batchlas::invalid_argument("sytrd_cta: batch size mismatch.");
         }
 
         const int32_t n = static_cast<int32_t>(n64);
         if (n < 1 || n > 32) {
-            throw std::invalid_argument("sytrd_cta currently supports 1 <= n <= 32.");
+            throw batchlas::invalid_argument("sytrd_cta currently supports 1 <= n <= 32.");
         }
 
         // Make mutable views (A is overwritten, D/E/TAU are outputs).
@@ -328,7 +328,7 @@ namespace batchlas {
                 }
             }
             if (!has32) {
-                throw std::runtime_error("sytrd_cta: device does not support subgroup size 32 required for CTA kernels.");
+                throw batchlas::unsupported("sytrd_cta: device does not support subgroup size 32 required for CTA kernels.");
             }
         }
 

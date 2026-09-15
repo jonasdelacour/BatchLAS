@@ -545,9 +545,11 @@ Event ormbr_apply_p_blocked_impl(Queue& ctx,
             auto W1 = W1full({0, ib}, Slice());
             auto W2 = W2full({0, ib}, Slice());
 
-            gemm<B>(ctx, Ublk, Csub, W1, {.transA = Transpose::ConjTrans});
-            gemm<B>(ctx, Tblk, W1, W2, {.transA = t_eff});
-            gemm<B>(ctx, Ublk, W2, Csub, {.alpha = T(-1), .beta = T(1)});
+            // (void) on an Event: deliberate. This Queue is in-order, so the next submission
+            // is already ordered after this one and the Event carries nothing the caller needs.
+            (void)gemm<B>(ctx, Ublk, Csub, W1, {.transA = Transpose::ConjTrans});
+            (void)gemm<B>(ctx, Tblk, W1, W2, {.transA = t_eff});
+            (void)gemm<B>(ctx, Ublk, W2, Csub, {.alpha = T(-1), .beta = T(1)});
         } else {
             auto Csub = c(Slice(), {i0 + 1, SliceEnd()});
             MatrixView<T, MatrixFormat::Dense> W1full(W1buf.data(), mC, nb, mC, static_cast<int64_t>(mC) * static_cast<int64_t>(nb), batch);
@@ -555,9 +557,9 @@ Event ormbr_apply_p_blocked_impl(Queue& ctx,
             auto W1 = W1full(Slice(), {0, ib});
             auto W2 = W2full(Slice(), {0, ib});
 
-            gemm<B>(ctx, Csub, Ublk, W1, GemmOptions<T>{});
-            gemm<B>(ctx, W1, Tblk, W2, {.transB = t_eff});
-            gemm<B>(ctx,
+            (void)gemm<B>(ctx, Csub, Ublk, W1, GemmOptions<T>{});
+            (void)gemm<B>(ctx, W1, Tblk, W2, {.transB = t_eff});
+            (void)gemm<B>(ctx,
                     W2,
                     Ublk,
                     Csub,
@@ -585,33 +587,33 @@ inline void validate_ormbr_dims(const MatrixView<T, MatrixFormat::Dense>& a,
                                 char vect,
                                 Side side) {
     if (a.batch_size() != c.batch_size() || tau.batch_size() != a.batch_size()) {
-        throw std::invalid_argument("ormbr: batch size mismatch");
+        throw batchlas::invalid_argument("ormbr: batch size mismatch");
     }
     if (a.batch_size() < 1) {
-        throw std::invalid_argument("ormbr: invalid batch size");
+        throw batchlas::invalid_argument("ormbr: invalid batch size");
     }
 
     const char v = upper_ascii(vect);
     if (v != 'Q' && v != 'P') {
-        throw std::invalid_argument("ormbr: vect must be 'Q' or 'P'");
+        throw batchlas::invalid_argument("ormbr: vect must be 'Q' or 'P'");
     }
 
     const int32_t k = std::min<int32_t>(a.rows(), a.cols());
     const int32_t order = (v == 'Q') ? static_cast<int32_t>(a.rows()) : static_cast<int32_t>(a.cols());
     const int32_t nq = (side == Side::Left) ? static_cast<int32_t>(c.rows()) : static_cast<int32_t>(c.cols());
     if (nq != order) {
-        throw std::invalid_argument("ormbr: C dimension does not match reflector order");
+        throw batchlas::invalid_argument("ormbr: C dimension does not match reflector order");
     }
 
     const int32_t need_tau = (v == 'Q') ? k : std::max<int32_t>(0, k - 1);
     if (tau.inc() != 1) {
-        throw std::invalid_argument("ormbr: tau must be unit-stride");
+        throw batchlas::invalid_argument("ormbr: tau must be unit-stride");
     }
     if (tau.stride() != tau.size()) {
-        throw std::invalid_argument("ormbr: tau must be tightly packed by batch");
+        throw batchlas::invalid_argument("ormbr: tau must be tightly packed by batch");
     }
     if (tau.size() < static_cast<size_t>(need_tau)) {
-        throw std::invalid_argument("ormbr: tau span too small");
+        throw batchlas::invalid_argument("ormbr: tau span too small");
     }
 }
 
@@ -650,7 +652,7 @@ Event ormbr(Queue& ctx,
 
     if constexpr (internal::is_complex<T>::value) {
         if (trans == Transpose::Trans) {
-            throw std::runtime_error("ormbr: Trans not supported for complex 'P'; use ConjTrans");
+            throw batchlas::unsupported("ormbr: Trans not supported for complex 'P'; use ConjTrans");
         }
     }
 
@@ -696,7 +698,7 @@ size_t ormbr_buffer_size(Queue& ctx,
 
     if constexpr (internal::is_complex<T>::value) {
         if (trans == Transpose::Trans) {
-            throw std::runtime_error("ormbr_buffer_size: Trans not supported for complex 'P'; use ConjTrans");
+            throw batchlas::unsupported("ormbr_buffer_size: Trans not supported for complex 'P'; use ConjTrans");
         }
     }
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <batchlas/export.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/blas/enums.hh>
@@ -43,13 +44,13 @@ using herk_vendor = Event(Queue&,
 //
 // Constrained to complex scalars; the real spelling of this is syrk.
 template <Backend Ba, ComplexScalar T>
-Event herk(Queue& ctx,
-           const MatrixView<T, MatrixFormat::Dense>& A,
-           const MatrixView<T, MatrixFormat::Dense>& C,
-           float_t<T> alpha,
-           float_t<T> beta,
-           Uplo uplo,
-           Transpose transA);
+BATCHLAS_API Event herk(Queue& ctx,
+                        const MatrixView<T, MatrixFormat::Dense>& A,
+                        const MatrixView<T, MatrixFormat::Dense>& C,
+                        float_t<T> alpha,
+                        float_t<T> beta,
+                        Uplo uplo,
+                        Transpose transA);
 
 } // namespace batchlas
 
@@ -65,13 +66,13 @@ namespace batchlas::backend {
 // implementation, named as such. Each vendor wrapper TU defines this primary
 // template for its own Backend value and instantiates it there.
 template <Backend Back, ComplexScalar T>
-Event herk_vendor(Queue& ctx,
-                  const MatrixView<T, MatrixFormat::Dense>& A,
-                  const MatrixView<T, MatrixFormat::Dense>& C,
-                  float_t<T> alpha,
-                  float_t<T> beta,
-                  Uplo uplo,
-                  Transpose transA);
+BATCHLAS_API Event herk_vendor(Queue& ctx,
+                               const MatrixView<T, MatrixFormat::Dense>& A,
+                               const MatrixView<T, MatrixFormat::Dense>& C,
+                               float_t<T> alpha,
+                               float_t<T> beta,
+                               Uplo uplo,
+                               Transpose transA);
 
 }  // namespace batchlas::backend
 

@@ -8,6 +8,7 @@
 #include "trsm_native.hh"
 
 #include "../linalg-impl.hh"
+#include "../util/resident_capacity.hh"
 #include "device_scalar.hh"
 #include "gemm_kernels.hh"
 
@@ -19,6 +20,7 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <batchlas/settings.hh>
 
 namespace batchlas::sycl_trsm {
 
@@ -109,9 +111,11 @@ Event trsm_native_v1(Queue& ctx,
     // adding a rung above kMaxWg now fails to compile instead of aborting at launch.
     constexpr int kMaxWg = 256;
     constexpr int kWorstRegsPerThread = 226;   // complex<double>, N=32
-    static_assert(kMaxWg * kWorstRegsPerThread <= 65536,
-                  "the work-group ceiling is set by registers per block, not by occupancy; "
-                  "re-run scripts/register_probe.sh before raising it");
+    // 256 lanes is 8 warps, 2 per sub-partition: 2 x 32 x ceil8(226) = 14,848 of 16,384.
+    // evidence: docs/perf/lu.md#the-register-cap-that-binds-is-per-sub-partition
+    static_assert(resident::sm89_fits(kWorstRegsPerThread, kMaxWg),
+                  "the work-group ceiling is set by registers per sub-partition, not by "
+                  "occupancy; re-run scripts/register_probe.sh before raising it");
     int wg = 32;
     for (int cand : {kMaxWg, 128, 64, 32}) {
         if (cand > max_wg) continue;
@@ -345,7 +349,7 @@ Event trsm_native_v1_buckets(Queue& ctx,
         default: break;
     }
     {
-            throw std::runtime_error(
+            throw batchlas::unsupported(
                 "BatchLAS: trsm_native_v1 called with triangular order " +
                 std::to_string(A.rows()) +
                 ", which exceeds this scalar's CTA register capacity of " +
@@ -371,14 +375,14 @@ inline int trsm_outer_block_default() { return 128; }
 // width on the other GEMM dimension. evidence: docs/perf/trsm.md#rejected-outer_nb-of-128-for-sideright
 inline int trsm_outer_block(int cta_nb, Side side) {
     // Read per call, not latched: once a function-local static caches the first
-    // process-wide answer, a later setenv is invisible and an A/B harness (or the
-    // knob's own test) silently measures the default arm twice and passes.
-    const int env = [] {
-        const char* raw = std::getenv("BATCHLAS_TRSM_OUTER_NB");
-        if (!raw || !*raw) return 0;
-        const int v = std::atoi(raw);
-        return v > 0 ? v : 0;
-    }();
+    // process-wide answer, a later change is invisible and an A/B harness (or the
+    // knob's own test) silently measures the default arm twice and passes. The
+    // settings() snapshot is re-read on reload, so reading it here per call keeps
+    // that property; a static here would destroy it again.
+    //
+    // 0 means "unset" at this site, which is what the field carries: the real
+    // default is side-dependent and is applied on the next line.
+    const int env = batchlas::settings().geometry.trsm_outer_nb;
     const int want = env ? env : (side == Side::Left ? trsm_outer_block_default() : cta_nb);
     const int rounded = (want / cta_nb) * cta_nb;
     return rounded >= cta_nb ? rounded : cta_nb;
@@ -467,7 +471,9 @@ Event trsm_native_blocked(Queue& ctx,
         const auto Adiag = sub(A, r0, m, r0, m, lda, sa, bs);
         const auto Bblk = (side == Side::Left) ? sub(B, r0, m, 0, q, ldb, sb, bs)
                                                : sub(B, 0, q, r0, m, ldb, sb, bs);
-        trsm_native_v1_dispatch<T>(ctx, Adiag, Bblk, alpha_eff, side, uplo, transA, diag);
+        // (void) on an Event: deliberate. This Queue is in-order, so the next submission
+        // is already ordered after this one and the Event carries nothing the caller needs.
+        (void)trsm_native_v1_dispatch<T>(ctx, Adiag, Bblk, alpha_eff, side, uplo, transA, diag);
     };
 
     // TWO LEVELS: the outer applies the whole solved prefix to a panel in one fat
@@ -525,7 +531,8 @@ template Event trsm_native_v1_dispatch<std::complex<double>>(
     Side, Uplo, Transpose, Diag);
 
 // Measured CTA capacity per type; the gate is stack frame == 0, zero spill and
-// registers x work-group <= 65536. evidence: docs/perf/trsm.md#the-register-gate-and-the-cta-capacity
+// resident::sm89_fits at the widest rung of the ladder above -- registers per SUB-PARTITION,
+// not the per-block 65,536. evidence: docs/perf/trsm.md#the-register-gate-and-the-cta-capacity
 template <> int trsm_cta_max_n<float>()                { return 32; }
 template <> int trsm_cta_max_n<double>()               { return 32; }
 template <> int trsm_cta_max_n<std::complex<float>>()  { return 32; }

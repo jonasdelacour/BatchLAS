@@ -1,5 +1,6 @@
 #pragma once
 
+#include <batchlas/export.hh>
 #include <algorithm>
 #include <stdexcept>
 #include <utility>
@@ -9,6 +10,13 @@
 // below bind at template-definition context.
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/extra.hh>
+// svd() below calls gesvd and gesvd_buffer_size directly. Reached transitively
+// before this file grew that call; named here so it cannot break again.
+#include <batchlas/blas/functions/gesvd.hh>
+// solve() and solve_spd() below call gesv/posv and their buffer_size queries
+// directly; named here for the same reason gesvd.hh is, not relied on transitively.
+#include <batchlas/blas/functions/gesv.hh>
+#include <batchlas/blas/functions/posv.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/blas/options.hh>
 #include <batchlas/util/sycl-device-queue.hh>
@@ -24,7 +32,15 @@ namespace batchlas::linalg {
 
 // ---- elementwise -----------------------------------------------------------
 
-enum class BinaryOp { Add, Subtract, Multiply, Divide };
+// BATCHLAS_API for the same reason Backend and MatrixFormat carry it -- see the
+// note at the top of blas/enums.hh. This is the third enum in the public surface
+// used as a template ARGUMENT, and an instantiation takes the minimum of the
+// template's visibility and its arguments'. Without it, all four
+// elementwise_into<float, BinaryOp::*> specialisations stayed hidden while
+// their BATCHLAS_API declaration looked correct. Found by set-diffing the
+// library's exported symbols against what consumers actually link, not by
+// reading: nothing about the declaration looks wrong.
+enum class BATCHLAS_API BinaryOp { Add, Subtract, Multiply, Divide };
 
 // Signature aliases for explicit instantiation; see BATCHLAS_INSTANTIATE in
 // src/util/template-instantiations.hh. Keep in sync with the declarations below.
@@ -57,32 +73,32 @@ using triangular_mask_into = Event(Queue&,
 // C = op(A, B), elementwise, for matching shapes. Aliasing C with A or B is
 // allowed: each work-item reads and writes one element.
 template <typename T, BinaryOp Op>
-Event elementwise_into(Queue& ctx,
-                       const MatrixView<T, MatrixFormat::Dense>& A,
-                       const MatrixView<T, MatrixFormat::Dense>& B,
-                       const MatrixView<T, MatrixFormat::Dense>& C);
+BATCHLAS_API Event elementwise_into(Queue& ctx,
+                                    const MatrixView<T, MatrixFormat::Dense>& A,
+                                    const MatrixView<T, MatrixFormat::Dense>& B,
+                                    const MatrixView<T, MatrixFormat::Dense>& C);
 
 // C = alpha*A + beta*B.
 template <typename T>
-Event axpby_into(Queue& ctx,
-                 T alpha,
-                 const MatrixView<T, MatrixFormat::Dense>& A,
-                 T beta,
-                 const MatrixView<T, MatrixFormat::Dense>& B,
-                 const MatrixView<T, MatrixFormat::Dense>& C);
+BATCHLAS_API Event axpby_into(Queue& ctx,
+                              T alpha,
+                              const MatrixView<T, MatrixFormat::Dense>& A,
+                              T beta,
+                              const MatrixView<T, MatrixFormat::Dense>& B,
+                              const MatrixView<T, MatrixFormat::Dense>& C);
 
 template <typename T>
-Event scale(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, T alpha);
+BATCHLAS_API Event scale(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, T alpha);
 
 // C = A with everything outside the requested triangle zeroed. `k` follows
 // NumPy: 0 keeps the main diagonal, > 0 moves the boundary toward the upper
 // right, < 0 toward the lower left. Aliasing C with A is allowed.
 template <typename T>
-Event triangular_mask_into(Queue& ctx,
-                           const MatrixView<T, MatrixFormat::Dense>& A,
-                           const MatrixView<T, MatrixFormat::Dense>& C,
-                           Uplo uplo,
-                           int64_t k = 0);
+BATCHLAS_API Event triangular_mask_into(Queue& ctx,
+                                        const MatrixView<T, MatrixFormat::Dense>& A,
+                                        const MatrixView<T, MatrixFormat::Dense>& C,
+                                        Uplo uplo,
+                                        int64_t k = 0);
 
 template <typename T>
 inline Event add_into(Queue& ctx,
@@ -129,7 +145,9 @@ inline Matrix<T, MatrixFormat::Dense> add(Queue& ctx,
                                           const MatrixView<T, MatrixFormat::Dense>& A,
                                           const MatrixView<T, MatrixFormat::Dense>& B) {
     auto C = detail::like(A);
-    add_into<T>(ctx, A, B, C.view());
+    // (void) on an Event: deliberate. This Queue is in-order, so the next submission
+    // is already ordered after this one and the Event carries nothing the caller needs.
+    (void)add_into<T>(ctx, A, B, C.view());
     return C;
 }
 
@@ -138,7 +156,7 @@ inline Matrix<T, MatrixFormat::Dense> subtract(Queue& ctx,
                                                const MatrixView<T, MatrixFormat::Dense>& A,
                                                const MatrixView<T, MatrixFormat::Dense>& B) {
     auto C = detail::like(A);
-    subtract_into<T>(ctx, A, B, C.view());
+    (void)subtract_into<T>(ctx, A, B, C.view());
     return C;
 }
 
@@ -147,7 +165,7 @@ inline Matrix<T, MatrixFormat::Dense> multiply(Queue& ctx,
                                                const MatrixView<T, MatrixFormat::Dense>& A,
                                                const MatrixView<T, MatrixFormat::Dense>& B) {
     auto C = detail::like(A);
-    multiply_into<T>(ctx, A, B, C.view());
+    (void)multiply_into<T>(ctx, A, B, C.view());
     return C;
 }
 
@@ -156,7 +174,7 @@ inline Matrix<T, MatrixFormat::Dense> divide(Queue& ctx,
                                              const MatrixView<T, MatrixFormat::Dense>& A,
                                              const MatrixView<T, MatrixFormat::Dense>& B) {
     auto C = detail::like(A);
-    divide_into<T>(ctx, A, B, C.view());
+    (void)divide_into<T>(ctx, A, B, C.view());
     return C;
 }
 
@@ -165,7 +183,7 @@ inline Matrix<T, MatrixFormat::Dense> scaled(Queue& ctx,
                                              const MatrixView<T, MatrixFormat::Dense>& A,
                                              T alpha) {
     auto C = detail::like(A);
-    axpby_into<T>(ctx, alpha, A, T(0), A, C.view());
+    (void)axpby_into<T>(ctx, alpha, A, T(0), A, C.view());
     return C;
 }
 
@@ -192,7 +210,7 @@ inline Matrix<T, MatrixFormat::Dense> matmul(Queue& ctx,
     const auto m = ta ? A.cols() : A.rows();
     const auto n = tb ? B.rows() : B.cols();
     Matrix<T, MatrixFormat::Dense> C(m, n, A.batch_size());
-    gemm(ctx, A, B, C.view(),
+    (void)gemm(ctx, A, B, C.view(),
          GemmOptions<T>{.alpha = opts.alpha,
                         .beta = T(0),  // C is fresh
                         .transA = opts.transA,
@@ -210,7 +228,7 @@ inline Matrix<T, MatrixFormat::Dense> cholesky(Queue& ctx,
                                                Uplo uplo = kDefaultUplo) {
     auto L = detail::like(A);
     MatrixView<T, MatrixFormat::Dense>::copy(ctx, L.view(), A);
-    potrf(ctx, L.view(), {.uplo = uplo});
+    (void)potrf(ctx, L.view(), {.uplo = uplo});
     return L;
 }
 
@@ -223,7 +241,7 @@ inline UnifiedVector<typename base_type<T>::type> eigvalsh(Queue& ctx,
                                                  static_cast<size_t>(A.batch_size()));
     auto work = detail::like(A);
     MatrixView<T, MatrixFormat::Dense>::copy(ctx, work.view(), A);
-    syev(ctx, work.view(), W.to_span(), {.jobz = JobType::NoEigenVectors, .uplo = uplo});
+    (void)syev(ctx, work.view(), W.to_span(), {.jobz = JobType::NoEigenVectors, .uplo = uplo});
     return W;
 }
 
@@ -231,6 +249,12 @@ template <typename T>
 struct Eigh {
     UnifiedVector<typename base_type<T>::type> values;
     Matrix<T, MatrixFormat::Dense> vectors;
+    // Per-item convergence status, one int32 per batch item: 0 converged, > 0
+    // LAPACK-like. The value-returning layer ALWAYS asks for it -- a caller here
+    // has no workspace of their own and no other way to find out, and at batch
+    // 16384 a single non-converged item is otherwise invisible: `values` and
+    // `vectors` come back looking exactly like a converged solve.
+    UnifiedVector<int32_t> info;
 };
 
 // Eigenvalues and eigenvectors of a symmetric/Hermitian A. A is not modified.
@@ -240,14 +264,42 @@ inline Eigh<T> eigh(Queue& ctx,
                     Uplo uplo = kDefaultUplo) {
     UnifiedVector<typename base_type<T>::type> W(static_cast<size_t>(A.rows()) *
                                                  static_cast<size_t>(A.batch_size()));
+    UnifiedVector<int32_t> info(static_cast<size_t>(A.batch_size()));
+    // Kept from the SyevOptions overload this used to go through: the positional
+    // spelling below has no squareness check of its own, and a non-square view
+    // otherwise reaches the backend and gets factorised as rows() x rows().
+    // Qualified, because `detail::` here would find batchlas::linalg::detail.
+    ::batchlas::detail::require_square("eigh", "A", A);
     auto V = detail::like(A);
     MatrixView<T, MatrixFormat::Dense>::copy(ctx, V.view(), A);
-    syev(ctx, V.view(), W.to_span(), {.jobz = JobType::EigenVectors, .uplo = uplo});
-    return Eigh<T>{std::move(W), std::move(V)};
+    // Spelled positionally rather than through the SyevOptions overload because
+    // SyevOptions carries no `info` field (unlike PotrfOptions); the workspace
+    // lease is taken here exactly as that overload takes it.
+    auto lease = ctx.workspace(
+        syev_buffer_size(ctx, V.view(), W.to_span(), JobType::EigenVectors, uplo));
+    (void)syev(ctx, V.view(), W.to_span(), JobType::EigenVectors, uplo, lease.span(),
+               info.to_span());
+    // `info` is written by the kernels and read by the caller after they wait, so
+    // it does not need a wait here -- it is moved into the result and outlives the
+    // call, unlike the local scratch in svd() below.
+    return Eigh<T>{std::move(W), std::move(V), std::move(info)};
 }
 
-// Solve A X = B for X by LU factorisation. Neither A nor B is modified. The
-// pivots come from the arena: a local would be freed before the kernels run.
+// Solve op(A) X = B for X by LU with partial pivoting. Neither A nor B is modified.
+// Pivots and workspace both come from the arena: a local would be freed before the
+// kernels run.
+//
+// THE `trans` BRANCH IS NOT STYLISTIC -- do not flatten it. `gesv` has no Transpose
+// parameter (blas/functions/gesv.hh), so only NoTrans can reach it and Trans /
+// ConjTrans keep the hand-composed getrf + getrs. No shape gate guards the gesv
+// call either: gesv itself picks between its fused kernel and that same composition
+// (dispatch/route_gesv.hh), and a copy of that window here would drift from it.
+//
+// BEHAVIOUR CHANGE, deliberate: route_gesv's supports() refuses every route when an
+// extent is degenerate (n, nrhs or batch < 1), and the entry point then throws
+// (solve_throw_unroutable). The old hand-composed body enqueued nothing instead.
+// This makes `solve` agree with `solve_spd`, which has thrown on the identical
+// guard in route_posv.hh since P2.
 template <typename T>
 inline Matrix<T, MatrixFormat::Dense> solve(Queue& ctx,
                                             const MatrixView<T, MatrixFormat::Dense>& A,
@@ -263,8 +315,44 @@ inline Matrix<T, MatrixFormat::Dense> solve(Queue& ctx,
     auto pivot_bytes = ctx.workspace(n_pivots * sizeof(int64_t));
     Span<int64_t> pivots(reinterpret_cast<int64_t*>(pivot_bytes.data()), n_pivots);
 
-    getrf(ctx, LU.view(), pivots);
-    getrs(ctx, LU.view(), X.view(), pivots, {.trans = trans});
+    if (trans == Transpose::NoTrans) {
+        // Acquired after the pivot lease and released before it -- reverse order,
+        // the case the arena returns immediately.
+        auto lease = ctx.workspace(gesv_buffer_size(ctx, LU.view(), X.view()));
+        (void)gesv(ctx, LU.view(), X.view(), pivots, lease.span(), Span<int32_t>{});
+        return X;
+    }
+
+    (void)getrf(ctx, LU.view(), pivots);
+    (void)getrs(ctx, LU.view(), X.view(), pivots, {.trans = trans});
+    return X;
+}
+
+// Solve A X = B for Hermitian positive-definite A by Cholesky. Neither A nor B is
+// modified.
+//
+// SPELLED ON `posv`, NOT ON `solve` ABOVE, and the difference is not stylistic: LU
+// with partial pivoting is backward stable for any nonsingular A, so `solve` is the
+// safe default and stays the one every existing caller reaches. This entry point
+// trades that generality for roughly half the arithmetic and makes the SPD claim the
+// caller's; a matrix that is not positive definite comes back as a non-zero `info`
+// and an undefined X, exactly as LAPACK's ?POSV does.
+//
+// The workspace is an arena lease, as everywhere in this layer: a local Span would
+// be freed before the kernels it feeds have run.
+template <typename T>
+inline Matrix<T, MatrixFormat::Dense> solve_spd(Queue& ctx,
+                                                const MatrixView<T, MatrixFormat::Dense>& A,
+                                                const MatrixView<T, MatrixFormat::Dense>& B,
+                                                Uplo uplo = Uplo::Lower) {
+    auto F = detail::like(A);
+    (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, F.view(), A);
+
+    Matrix<T, MatrixFormat::Dense> X(B.rows(), B.cols(), B.batch_size());
+    (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, X.view(), B);
+
+    auto lease = ctx.workspace(posv_buffer_size(ctx, F.view(), X.view(), uplo));
+    (void)posv(ctx, F.view(), X.view(), uplo, lease.span(), Span<int32_t>{});
     return X;
 }
 
@@ -274,7 +362,7 @@ inline Matrix<T, MatrixFormat::Dense> triu(Queue& ctx,
                                            const MatrixView<T, MatrixFormat::Dense>& A,
                                            int64_t k = 0) {
     auto C = detail::like(A);
-    triangular_mask_into<T>(ctx, A, C.view(), Uplo::Upper, k);
+    (void)triangular_mask_into<T>(ctx, A, C.view(), Uplo::Upper, k);
     return C;
 }
 
@@ -283,7 +371,7 @@ inline Matrix<T, MatrixFormat::Dense> tril(Queue& ctx,
                                            const MatrixView<T, MatrixFormat::Dense>& A,
                                            int64_t k = 0) {
     auto C = detail::like(A);
-    triangular_mask_into<T>(ctx, A, C.view(), Uplo::Lower, k);
+    (void)triangular_mask_into<T>(ctx, A, C.view(), Uplo::Lower, k);
     return C;
 }
 
@@ -334,6 +422,9 @@ struct Svd {
     Matrix<T, MatrixFormat::Dense> U;                   // m x m (All) or m x k (Thin)
     UnifiedVector<typename base_type<T>::type> values;  // k = min(m, n) per batch item
     Matrix<T, MatrixFormat::Dense> Vh;                  // n x n (All) or k x n (Thin)
+    // Per-item convergence status; see Eigh::info above. Always requested, for
+    // the same reason.
+    UnifiedVector<int32_t> info;
 };
 
 // Singular value decomposition. A is not modified -- gesvd overwrites its input,
@@ -344,7 +435,7 @@ inline Svd<T> svd(Queue& ctx,
                   const MatrixView<T, MatrixFormat::Dense>& A,
                   SvdVectors vectors = SvdVectors::All) {
     if (vectors == SvdVectors::None) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "linalg::svd: SvdVectors::None would leave U and Vh empty; use "
             "::batchlas::gesvd directly for a values-only decomposition");
     }
@@ -363,13 +454,18 @@ inline Svd<T> svd(Queue& ctx,
     UnifiedVector<typename base_type<T>::type> S(static_cast<size_t>(k) *
                                                  static_cast<size_t>(batch));
 
-    ::batchlas::gesvd(ctx, work.view(), S.to_span(), U.view(), Vh.view(),
-                      GesvdOptions{.jobu = vectors, .jobvh = vectors});
+    UnifiedVector<int32_t> info(static_cast<size_t>(batch));
+    // Positional, not GesvdOptions: that struct carries no `info` field. The
+    // workspace lease mirrors what the option overload takes.
+    auto lease = ctx.workspace(::batchlas::gesvd_buffer_size(
+        ctx, work.view(), S.to_span(), U.view(), Vh.view(), vectors, vectors));
+    ::batchlas::gesvd(ctx, work.view(), S.to_span(), U.view(), Vh.view(), vectors, vectors,
+                      lease.span(), info.to_span());
 
     // `work` is local scratch gesvd reads and overwrites, and ~Matrix frees its
     // USM without waiting: returning early frees it under enqueued kernels.
     ctx.wait();
-    return Svd<T>{std::move(U), std::move(S), std::move(Vh)};
+    return Svd<T>{std::move(U), std::move(S), std::move(Vh), std::move(info)};
 }
 
 template <typename T>

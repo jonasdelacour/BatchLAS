@@ -66,7 +66,7 @@ bool should_use_cublasdx(const Queue& ctx,
 [[noreturn]] inline void throw_forced_cublasdx_unavailable(std::string_view env_var,
                                                            std::string_view op_name,
                                                            const std::string& reason) {
-    throw std::runtime_error(std::string(env_var) + "=cublasdx requested, but fused cuBLASDx " +
+    throw batchlas::unsupported(std::string(env_var) + "=cublasdx requested, but fused cuBLASDx " +
                              std::string(op_name) + " is unavailable: " + reason);
 }
 

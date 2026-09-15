@@ -13,12 +13,14 @@
 #include <batchlas/blas/functions/getrf.hh>
 #include <batchlas/blas/functions/getri.hh>
 #include <batchlas/blas/functions/getrs.hh>
+#include <batchlas/blas/functions/gesv.hh>
 #include <batchlas/blas/functions/gesvd.hh>
 #include <batchlas/blas/functions/hemm.hh>
 #include <batchlas/blas/functions/her2k.hh>
 #include <batchlas/blas/functions/herk.hh>
 #include <batchlas/blas/functions/orgqr.hh>
 #include <batchlas/blas/functions/ormqr.hh>
+#include <batchlas/blas/functions/posv.hh>
 #include <batchlas/blas/functions/potrf.hh>
 #include <batchlas/blas/functions/spmm.hh>
 #include <batchlas/blas/functions/symm.hh>

@@ -12,7 +12,10 @@
 #include "../src/sycl/gemv_native.hh"
 #include "../src/backends/gemv_route.hh"
 #include <utility>
-#include <cstdlib>
+// The WRITE side of the knob this file pins. settings() snapshots the environment
+// once, before main(), so a bare ::setenv in a test body is read by nothing;
+// ScopedEnvVar is the guard that reloads that snapshot at both ends of a scope.
+#include <batchlas/util/env.hh>
 
 using namespace batchlas;
 
@@ -1078,21 +1081,43 @@ TYPED_TEST(GemvCoverageTest, SegTransSpellingKnobIsNotLatched) {
     if (!this->ctx->device().supports_sub_group_size(32)) return;
     const int64_t kBig = 1 << 20;
     const int kFar = 100000;     // far above every per-type red_len gate
-    ::unsetenv("BATCHLAS_GEMV_SEGT");
-    EXPECT_EQ(batchlas::sycl_gemv::gemv_seg_trans_width_debug<S>(*this->ctx, kFar, kBig), 1);
-    EXPECT_GT(batchlas::sycl_gemv::gemv_seg_trans_width_debug<S>(*this->ctx, 8, kBig), 1);
-    // Forced, in both directions, AFTER a default read.
-    ::setenv("BATCHLAS_GEMV_SEGT", "4", 1);
-    EXPECT_EQ(batchlas::sycl_gemv::gemv_seg_trans_width_debug<S>(*this->ctx, kFar, 1), 4);
-    ::setenv("BATCHLAS_GEMV_SEGT", "8", 1);
-    EXPECT_EQ(batchlas::sycl_gemv::gemv_seg_trans_width_debug<S>(*this->ctx, kFar, 1), 8);
-    ::setenv("BATCHLAS_GEMV_SEGT", "2", 1);
-    EXPECT_EQ(batchlas::sycl_gemv::gemv_seg_trans_width_debug<S>(*this->ctx, kFar, 1), 2);
-    ::setenv("BATCHLAS_GEMV_SEGT", "off", 1);
-    EXPECT_EQ(batchlas::sycl_gemv::gemv_seg_trans_width_debug<S>(*this->ctx, 8, kBig), 1);
-    // Unsetting restores the gates -- which a latched PRESENCE would not.
-    ::unsetenv("BATCHLAS_GEMV_SEGT");
-    EXPECT_GT(batchlas::sycl_gemv::gemv_seg_trans_width_debug<S>(*this->ctx, 8, kBig), 1);
+    auto width = [&](int red_len, int64_t items) {
+        return batchlas::sycl_gemv::gemv_seg_trans_width_debug<S>(*this->ctx, red_len, items);
+    };
+    // Every arm below is a ScopedEnvVar, never a bare ::setenv. What the route
+    // reads is settings().selection.gemv_segt, and only this guard's constructor
+    // and destructor reload that snapshot: with raw setenv calls all five arms
+    // would read the SAME mode, the assertions would still pass, and the knob
+    // whose no-latching prohibition this test exists to enforce
+    // (src/sycl/gemv_native.cc) would go untested.
+    //
+    // The outer guard pins the automatic mode for the whole body whatever the
+    // surrounding environment said, and RESTORES that value on the way out --
+    // the bare ::unsetenv it replaces leaked an unset into every later test.
+    const ScopedEnvVar automatic("BATCHLAS_GEMV_SEGT", nullptr);
+    EXPECT_EQ(width(kFar, kBig), 1);
+    EXPECT_GT(width(8, kBig), 1);
+    // Forced, in both directions, AFTER a default read. Each nested scope reloads
+    // on entry and again on exit, so the mode genuinely differs between arms.
+    {
+        const ScopedEnvVar force("BATCHLAS_GEMV_SEGT", "4");
+        EXPECT_EQ(width(kFar, 1), 4);
+    }
+    {
+        const ScopedEnvVar force("BATCHLAS_GEMV_SEGT", "8");
+        EXPECT_EQ(width(kFar, 1), 8);
+    }
+    {
+        const ScopedEnvVar force("BATCHLAS_GEMV_SEGT", "2");
+        EXPECT_EQ(width(kFar, 1), 2);
+    }
+    {
+        const ScopedEnvVar off("BATCHLAS_GEMV_SEGT", "off");
+        EXPECT_EQ(width(8, kBig), 1);
+    }
+    // That last destructor restored the outer scope's unset state, so the gates
+    // are live again here -- which a latched PRESENCE would not allow.
+    EXPECT_GT(width(8, kBig), 1);
 }
 
 int main(int argc, char **argv) {

@@ -3,6 +3,7 @@
 #include "math-helpers.hh"
 #include "queue.hh"
 
+#include <batchlas/settings.hh>
 #include <batchlas/util/mempool.hh>
 
 #include <algorithm>
@@ -71,8 +72,10 @@ inline bool expansion_fits(const Queue& ctx, int n, int batch, std::size_t bytes
         return false;
     }
 
+    // The default is a DEVICE property, so the Settings field carries only the
+    // override and the strtoull stays here beside the min() it feeds.
     std::size_t budget = ctx.device().get_property(DeviceProperty::GLOBAL_MEM_SIZE) / 4;
-    if (const char* capped = std::getenv("BATCHLAS_EXPAND_MAX_BYTES")) {
+    if (const char* capped = batchlas::settings().geometry.expand_max_bytes.get()) {
         budget = std::min(budget, static_cast<std::size_t>(std::strtoull(capped, nullptr, 10)));
     }
     return bytes <= budget;
@@ -93,7 +96,7 @@ inline bool expansion_fits(const Queue& ctx, int n, int batch, std::size_t bytes
 // is guarding against is worse than none, because it reads as if it had been
 // checked.
 inline int expansion_route_pin() {
-    if (const char* route = std::getenv("BATCHLAS_EXPAND_ROUTE")) {
+    if (const char* route = batchlas::settings().selection.expand_route.get()) {
         if (std::string_view(route) == "expand") return 1;
         if (std::string_view(route) == "loop") return 0;
     }

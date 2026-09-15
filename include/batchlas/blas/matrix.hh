@@ -9,6 +9,7 @@
 #include <tuple>
 #include <array>    // Added for std::array element types
 #include <sstream>  // Added for temporary string formatting of non-streamable types
+#include <batchlas/export.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
@@ -17,14 +18,14 @@
 namespace batchlas {
     // Forward declarations with default template parameters
     template <typename T = float, MatrixFormat MType = MatrixFormat::Dense>
-    class Matrix;
+    class BATCHLAS_API Matrix;
 
     template <typename T = float, MatrixFormat MType = MatrixFormat::Dense>
-    class MatrixView;
+    class BATCHLAS_API MatrixView;
 
     //Forward declare VectorView with default parameter
     template <typename T = float>
-    class VectorView;
+    class BATCHLAS_API VectorView;
 
     // Forward declare the backend handle - implementation will be in src/ folder
     template <typename T = float, MatrixFormat MType = MatrixFormat::Dense>
@@ -228,17 +229,17 @@ namespace batchlas {
 
             if (active_rows.size() != static_cast<std::size_t>(batch_size) ||
                 active_cols.size() != static_cast<std::size_t>(batch_size)) {
-                throw std::invalid_argument("Dense heterogeneous metadata must provide rows and cols for every batch item");
+                throw batchlas::invalid_argument("Dense heterogeneous metadata must provide rows and cols for every batch item");
             }
 
             for (int batch_index = 0; batch_index < batch_size; ++batch_index) {
                 const int rows = active_rows[batch_index];
                 const int cols = active_cols[batch_index];
                 if (rows < 0 || cols < 0) {
-                    throw std::invalid_argument("Dense heterogeneous metadata cannot contain negative dimensions");
+                    throw batchlas::invalid_argument("Dense heterogeneous metadata cannot contain negative dimensions");
                 }
                 if (rows > rows_capacity || cols > cols_capacity) {
-                    throw std::invalid_argument("Dense heterogeneous metadata exceeds the matrix storage capacity");
+                    throw batchlas::invalid_argument("Dense heterogeneous metadata exceeds the matrix storage capacity");
                 }
             }
         }
@@ -377,8 +378,23 @@ namespace batchlas {
     static_assert(std::is_trivially_copyable_v<KernelMatrixView<float, MatrixFormat::CSR>>,   "KernelMatrixView CSR must be trivially copyable");
 
     // Matrix class - owning container for matrix data
+    //
+    // BATCHLAS_API is on the CLASS TEMPLATE, not on the 313 explicit
+    // instantiations in src/matrix.cc, and the difference is 291 symbols.
+    // Only 22 of those lines are `template class ...;`; the other 291
+    // individually instantiate MEMBER templates -- the constrained
+    // constructors, the Identity/Random/Zeros/Ones/Diagonal/Triangular/
+    // TriDiagToeplitz/RandomSparseHermitian factories, convert_to,
+    // to_row_major/to_column_major, and MatrixView's at/deep_copy/fill_*/
+    // symmetrize/hermitize/triangularize -- which a whole-class instantiation
+    // does not reach. A class-level attribute propagates to every member and
+    // every specialisation and therefore covers all 313; annotating the
+    // instantiation block would cover 22. Separately, an attribute on an
+    // explicit instantiation is not portable: measured, g++ 13 rejects
+    // `template class __attribute__((visibility("default"))) F<double,1>;`
+    // with "'F' is not a class template" where clang accepts it.
     template <typename T, MatrixFormat MType>
-    class Matrix {
+    class BATCHLAS_API Matrix {
     public:
         friend class MatrixView<T, MType>;
         
@@ -572,7 +588,7 @@ namespace batchlas {
             auto [r_start, r_len] = detail::normalize_slice_component(rows, rows_);
             auto [c_start, c_len] = detail::normalize_slice_component(cols, cols_);
             if (r_len <= 0 || c_len <= 0) {
-                throw std::invalid_argument("Invalid slice dimensions on Matrix: " + std::to_string(r_len) + "x" + std::to_string(c_len));
+                throw batchlas::invalid_argument("Invalid slice dimensions on Matrix: " + std::to_string(r_len) + "x" + std::to_string(c_len));
             }
             auto offset = c_start * ld_ + r_start;
             return MatrixView<T, MType>(data_.data() + offset, static_cast<int>(r_len), static_cast<int>(c_len), ld_, stride_, batch_size_, data_ptrs_.data());
@@ -781,7 +797,7 @@ namespace batchlas {
 
     // MatrixView class - non-owning view of a matrix
     template <typename T, MatrixFormat MType>
-    class MatrixView {
+    class BATCHLAS_API MatrixView {
     public:
         // Constructors for dense matrix view - from raw spans
         // data_ptrs: Optional array of pointers to the start of each matrix in a batch
@@ -1000,7 +1016,7 @@ namespace batchlas {
             auto [r_start, r_len] = detail::normalize_slice_component(rows, rows_);
             auto [c_start, c_len] = detail::normalize_slice_component(cols, cols_);
             if (r_len <= 0 || c_len <= 0) {
-                throw std::invalid_argument("Invalid slice dimensions: " + std::to_string(r_len) + "x" + std::to_string(c_len));
+                throw batchlas::invalid_argument("Invalid slice dimensions: " + std::to_string(r_len) + "x" + std::to_string(c_len));
             }
             auto offset = c_start * ld_ + r_start;
             // The parent pointer-array refers to the *unsliced* base addresses, which a
@@ -1019,7 +1035,7 @@ namespace batchlas {
         VectorView<T> operator()(int32_t row, Slice cols) const {
             auto [c_start, c_len] = detail::normalize_slice_component(cols, cols_);
             if (c_len <= 0) {
-                throw std::invalid_argument("Invalid slice dimensions for row vector: " + std::to_string(c_len));
+                throw batchlas::invalid_argument("Invalid slice dimensions for row vector: " + std::to_string(c_len));
             }
             auto offset = c_start * ld_ + row;
             return VectorView<T>(data_ptr() + offset, static_cast<int>(c_len), batch_size_, ld_, stride_);
@@ -1030,7 +1046,7 @@ namespace batchlas {
         VectorView<T> operator()(Slice rows, int32_t col) const {
             auto [r_start, r_len] = detail::normalize_slice_component(rows, rows_);
             if (r_len <= 0) {
-                throw std::invalid_argument("Invalid slice dimensions for column vector: " + std::to_string(r_len));
+                throw batchlas::invalid_argument("Invalid slice dimensions for column vector: " + std::to_string(r_len));
             }
             auto offset = col * ld_ + r_start;
             return VectorView<T>(data_ptr() + offset, static_cast<int>(r_len), batch_size_, 1, stride_);
@@ -1163,8 +1179,10 @@ namespace batchlas {
             requires DenseMatrixFormat<M>
         Event fill_tridiag(const Queue& ctx, VectorView<T> sub_diag, 
                             VectorView<T> diag, VectorView<T> super_diag) const {
-                                fill_diagonal(ctx, diag);
-                                fill_diagonal(ctx, sub_diag, -1);
+                                // (void) on an Event: deliberate. This Queue is in-order, so the next submission
+                                // is already ordered after this one and the Event carries nothing the caller needs.
+                                (void)fill_diagonal(ctx, diag);
+                                (void)fill_diagonal(ctx, sub_diag, -1);
                                 return fill_diagonal(ctx, super_diag, 1);
                             }
 
@@ -1470,7 +1488,7 @@ namespace batchlas {
 
     // VectorView class - non-owning view of a (possibly batched) vector with stride
     template <typename T>
-    class VectorView {
+    class BATCHLAS_API VectorView {
     public:
         using value_type = T;
         using pointer = T*;
@@ -1757,9 +1775,9 @@ namespace batchlas {
     }
 
     template <typename T, MatrixFormat MType>
-    Event scale(Queue& ctx, const T& alpha, const MatrixView<T, MType>& mat_view);
+    BATCHLAS_API Event scale(Queue& ctx, const T& alpha, const MatrixView<T, MType>& mat_view);
 
     template <typename T>
-    Event scale(Queue& ctx, const T& alpha, const VectorView<T>& vec_view);
+    BATCHLAS_API Event scale(Queue& ctx, const T& alpha, const VectorView<T>& vec_view);
 
 } // namespace batchlas

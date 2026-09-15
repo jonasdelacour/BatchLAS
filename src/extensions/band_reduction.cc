@@ -25,6 +25,7 @@
 #include <utility>
 #include <vector>
 #include <batchlas/util/env.hh>
+#include <batchlas/settings.hh>
 
 namespace batchlas {
 
@@ -56,11 +57,13 @@ inline void enforce_real_diagonal(T& x) {
     }
 }
 
+// The field carries the resolved directory: set means the value verbatim
+// (including the empty string, which is NOT the default), unset means
+// "output/bandr1_dumps". create_directories() is called on whatever this
+// returns, which is why the whole family is grouped and clearable in one
+// assignment through configure().
 inline std::string bandr1_dump_root() {
-    if (const char* v = std::getenv("BATCHLAS_DUMP_BANDR1_DIR")) {
-        return std::string(v);
-    }
-    return "output/bandr1_dumps";
+    return batchlas::settings().diagnostics.dump_bandr1.dir;
 }
 
 inline std::string bandr1_dump_dir_for(int32_t sweep_index, int32_t step_in_sweep) {
@@ -98,7 +101,7 @@ inline void dump_dense_matrix_csv(Queue& ctx,
     auto src = mat[batch_index];
     T* host = sycl::malloc_host<T>(static_cast<size_t>(rows) * static_cast<size_t>(cols), ctx->get_context());
     if (!host) {
-        throw std::runtime_error("bandr1 dump: sycl::malloc_host failed");
+        throw batchlas::device_error("bandr1 dump: sycl::malloc_host failed");
     }
 
     MatrixView<T, MatrixFormat::Dense> host_view(host, rows, cols, rows, rows * cols, /*batch_size=*/1);
@@ -385,19 +388,19 @@ inline void validate_band_reduction_dims(const MatrixView<T, MatrixFormat::Dense
     const int batch = ab.batch_size();
 
     if (kd < 0) {
-        throw std::runtime_error("sytrd_band_reduction: kd must be >= 0");
+        throw batchlas::invalid_argument("sytrd_band_reduction: kd must be >= 0");
     }
     if (rows != kd + 1) {
-        throw std::runtime_error("sytrd_band_reduction: ab.rows() must equal kd+1");
+        throw batchlas::invalid_argument("sytrd_band_reduction: ab.rows() must equal kd+1");
     }
     if (d.size() != n || d.batch_size() != batch) {
-        throw std::runtime_error("sytrd_band_reduction: d_out must have size n and matching batch");
+        throw batchlas::invalid_argument("sytrd_band_reduction: d_out must have size n and matching batch");
     }
     if (e.size() != std::max(0, n - 1) || e.batch_size() != batch) {
-        throw std::runtime_error("sytrd_band_reduction: e_out must have size n-1 and matching batch");
+        throw batchlas::invalid_argument("sytrd_band_reduction: e_out must have size n-1 and matching batch");
     }
     if (tau.size() != std::max(0, n - 1) || tau.batch_size() != batch) {
-        throw std::runtime_error("sytrd_band_reduction: tau_out must have size n-1 and matching batch");
+        throw batchlas::invalid_argument("sytrd_band_reduction: tau_out must have size n-1 and matching batch");
     }
 }
 
@@ -421,13 +424,13 @@ inline Bandr1Schedule make_bandr1_schedule(SytrdBandReductionParams params,
     }
 
     if (params.d_seq.size() != params.block_size_seq.size()) {
-        throw std::runtime_error(std::string(callsite) +
+        throw batchlas::invalid_argument(std::string(callsite) +
                                  ": params.d_seq and params.block_size_seq must have the same length");
     }
 
     for (int32_t d : params.d_seq) {
         if (d < 0) {
-            throw std::runtime_error(std::string(callsite) + ": params.d_seq entries must be >= 0");
+            throw batchlas::invalid_argument(std::string(callsite) + ": params.d_seq entries must be >= 0");
         }
     }
 
@@ -461,7 +464,7 @@ inline Span<T> alloc_from_ws(Queue& ctx,
 
     const size_t alloc_bytes = BumpAllocator::allocation_size<T>(ctx.device(), count);
     if (byte_offset + alloc_bytes > ws.size()) {
-        throw std::runtime_error("sytrd_band_reduction: insufficient workspace");
+        throw batchlas::workspace_error("sytrd_band_reduction: insufficient workspace");
     }
 
     T* ptr = reinterpret_cast<T*>(reinterpret_cast<std::byte*>(ws.data()) + byte_offset);
@@ -507,23 +510,26 @@ inline void bandr1_one_qr_step(Queue& ctx,
     const int n = ABw.cols();
     (void)Postmat;
 
-    bool dump_enabled = env_truthy(std::getenv("BATCHLAS_DUMP_BANDR1_STEP"));
-    const bool dump_abw_only = env_truthy(std::getenv("BATCHLAS_DUMP_BANDR1_ABW_ONLY"));
-    const int dump_step = env_int_or("BATCHLAS_DUMP_BANDR1_STEP_INDEX", -1);
+    // One dump subsystem: a master enable, a content filter, three -1-sentinel
+    // selector indices and a batch selector, grouped into one nested struct.
+    const auto& dump = batchlas::settings().diagnostics.dump_bandr1;
+    bool dump_enabled = dump.step;
+    const bool dump_abw_only = dump.abw_only;
+    const int dump_step = dump.step_index;
     if (dump_step >= 0 && dump_step != step_index) {
         dump_enabled = false;
     }
 
-    const int dump_sweep = env_int_or("BATCHLAS_DUMP_BANDR1_SWEEP_INDEX", -1);
+    const int dump_sweep = dump.sweep_index;
     if (dump_sweep >= 0 && dump_sweep != sweep_index) {
         dump_enabled = false;
     }
 
-    const int dump_step_in_sweep = env_int_or("BATCHLAS_DUMP_BANDR1_STEP_IN_SWEEP", -1);
+    const int dump_step_in_sweep = dump.step_in_sweep;
     if (dump_step_in_sweep >= 0 && dump_step_in_sweep != step_in_sweep) {
         dump_enabled = false;
     }
-    const int dump_batch = env_int_or("BATCHLAS_DUMP_BANDR1_BATCH", -1);
+    const int dump_batch = dump.batch;
 
     const Transpose trans_left = internal::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
 
@@ -1067,19 +1073,19 @@ Event sytrd_band_reduction_single_step_core(Queue& ctx,
                                             const Span<std::byte>& ws,
                                             SytrdBandReductionParams params) {
     if (!ctx.in_order()) {
-        throw std::runtime_error("sytrd_band_reduction_single_step: requires an in-order Queue");
+        throw batchlas::invalid_argument("sytrd_band_reduction_single_step: requires an in-order Queue");
     }
     if (uplo != Uplo::Lower) {
-        throw std::runtime_error("sytrd_band_reduction_single_step: only Uplo::Lower is implemented");
+        throw batchlas::unsupported("sytrd_band_reduction_single_step: only Uplo::Lower is implemented");
     }
 
     const int n = ab_in.cols();
     const int batch = ab_in.batch_size();
     if (ab_in.rows() != kd + 1) {
-        throw std::runtime_error("sytrd_band_reduction_single_step: ab_in.rows() must equal kd+1");
+        throw batchlas::invalid_argument("sytrd_band_reduction_single_step: ab_in.rows() must equal kd+1");
     }
     if (abw_out.cols() != n || abw_out.batch_size() != batch) {
-        throw std::runtime_error("sytrd_band_reduction_single_step: abw_out must match (n,batch)");
+        throw batchlas::invalid_argument("sytrd_band_reduction_single_step: abw_out must match (n,batch)");
     }
 
     if (kd <= 1 || n <= 1) {
@@ -1118,7 +1124,7 @@ Event sytrd_band_reduction_single_step_core(Queue& ctx,
     }
     kd_work = std::min(kd_work, n - 1);
     if (abw_out.rows() != kd_work + 1) {
-        throw std::runtime_error("sytrd_band_reduction_single_step: abw_out.rows() must equal kd_work+1");
+        throw batchlas::invalid_argument("sytrd_band_reduction_single_step: abw_out.rows() must equal kd_work+1");
     }
 
     const Bandr1Schedule schedule = make_bandr1_schedule(params, "sytrd_band_reduction_single_step");
@@ -1218,10 +1224,10 @@ Event sytrd_band_reduction_bandr1_core(Queue& ctx,
     validate_band_reduction_dims(ab_in, d_out, e_out, tau_out, kd);
 
     if (!ctx.in_order()) {
-        throw std::runtime_error("sytrd_band_reduction: requires an in-order Queue");
+        throw batchlas::invalid_argument("sytrd_band_reduction: requires an in-order Queue");
     }
     if (uplo != Uplo::Lower) {
-        throw std::runtime_error("sytrd_band_reduction: only Uplo::Lower is implemented");
+        throw batchlas::unsupported("sytrd_band_reduction: only Uplo::Lower is implemented");
     }
 
     const int n = ab_in.cols();
@@ -1421,7 +1427,7 @@ size_t sytrd_band_reduction_single_step_buffer_size(Queue& ctx,
                                                     SytrdBandReductionParams params) {
     (void)uplo;
     if (ab_in.rows() != kd + 1) {
-        throw std::runtime_error("sytrd_band_reduction_single_step_buffer_size: ab_in.rows() must equal kd+1");
+        throw batchlas::invalid_argument("sytrd_band_reduction_single_step_buffer_size: ab_in.rows() must equal kd+1");
     }
     const int n = ab_in.cols();
     const int batch = ab_in.batch_size();
@@ -1431,7 +1437,7 @@ size_t sytrd_band_reduction_single_step_buffer_size(Queue& ctx,
     }
     kd_work = std::min(kd_work, n - 1);
     if (abw_out.rows() != kd_work + 1 || abw_out.cols() != n || abw_out.batch_size() != batch) {
-        throw std::runtime_error("sytrd_band_reduction_single_step_buffer_size: abw_out must be (kd_work+1) x n with matching batch");
+        throw batchlas::invalid_argument("sytrd_band_reduction_single_step_buffer_size: abw_out must be (kd_work+1) x n with matching batch");
     }
     const Bandr1Schedule schedule = make_bandr1_schedule(params, "sytrd_band_reduction_single_step_buffer_size");
     const int nb_target = max_block_size_in_schedule(schedule.block_size_seq);

@@ -21,6 +21,7 @@
 #include <optional>
 #include <string>
 #include <type_traits>
+#include <batchlas/settings.hh>
 
 namespace batchlas::backend {
 
@@ -128,8 +129,16 @@ enum class GemmVariantRequest {
     Auto,
 };
 
+// BATCHLAS_GEMM_VARIANT has TWO readers with two vocabularies and two unset
+// defaults: dispatch::parse_route_env(Op::gemm) reaches it through the legacy
+// table and defaults to {Auto,Auto}, while this one defaults to Vendor. Both now
+// read the SAME captured string -- routing.legacy_route(Op::gemm) is where
+// parse_route_env reads it too -- so the two can no longer be handed different
+// values. Unifying the two DEFAULTS would be a behaviour change (it moves which
+// kernel a bare gemm() call runs) and is deliberately not done here.
 inline GemmVariantRequest gemm_variant_request() {
-    const char* raw = std::getenv("BATCHLAS_GEMM_VARIANT");
+    const char* raw =
+        batchlas::settings().routing.legacy_route(dispatch::Op::gemm).get();
     if (!raw) {
         return GemmVariantRequest::Vendor;
     }

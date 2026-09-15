@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <limits>
 #include <string_view>
+#include <batchlas/settings.hh>
 
 // Scratch expansions that turn a matrix whose meaning lives in one triangle
 // into an ordinary dense operand a batched GEMM can read.
@@ -48,7 +49,9 @@ constexpr int kExpandMinDim = 256;
 // reach whichever route the shape would not have picked. An expansion still has
 // to fit before it can be built, so this only ever narrows expansion_fits.
 inline bool expansion_preferred(int max_dim, int batch) {
-    if (const char* route = std::getenv("BATCHLAS_EXPAND_ROUTE")) {
+    // Same Settings field as expansion_budget.hh's expansion_route_pin(), so the
+    // two independent parsers can no longer be handed different strings.
+    if (const char* route = batchlas::settings().selection.expand_route.get()) {
         if (std::string_view(route) == "expand") {
             return true;
         }

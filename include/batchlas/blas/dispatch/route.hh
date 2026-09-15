@@ -38,6 +38,13 @@ enum class Algorithm : uint8_t {
     // Deliberately WRONG, kept only as a measurement baseline: it stores BOTH
     // triangles, clobbering the half the caller owns. Auto must never select it.
     DiagFullGemm,
+
+    // APPENDED, never inserted: route.hh is an installed header behind a SOVERSION, so
+    // every enumerator above keeps the number it shipped with. Walk order is the
+    // kPotrfOrder / kGetrfOrder / kGeqrfOrder arrays, never this numeric value, so Tiny
+    // is still the first arm tried despite being last here.
+    Tiny,             // one matrix per sub-group PARTITION, held in registers
+    LPanel,           // left-looking fused panel: local memory holds ONE n x NB panel
 };
 
 // A selection is a PAIR: `library` is a resolver output and is excluded from equality.
@@ -71,6 +78,10 @@ inline constexpr bool is_native(const Route& r) { return is_native(r.origin); }
 enum class Op : uint8_t {
     gemm, gemv, trsm, trmm, symm, hemm, syrk, herk, syr2k, her2k,
     potrf, getrf, getrs, getri, geqrf, orgqr, ormqr, syev, gesvd, spmm, iluk,
+    // APPENDED before COUNT, never inserted, for Algorithm::Tiny's reason: this is
+    // an installed header behind a SOVERSION. gesv and posv are the two ops with no
+    // vendor arm on any backend (route_gesv.hh).
+    gesv, posv,
     COUNT
 };
 
@@ -107,6 +118,8 @@ inline constexpr std::string_view to_string(Algorithm a) {
         case Algorithm::GramTiles:       return "gram_tiles";
         case Algorithm::FusedDevice:     return "fused_device";
         case Algorithm::DiagFullGemm:    return "diag_full_gemm";
+        case Algorithm::Tiny:            return "tiny";
+        case Algorithm::LPanel:          return "lpanel";
     }
     return "?";
 }
@@ -133,7 +146,9 @@ inline constexpr std::string_view op_name(Op o) {
         case Op::geqrf: return "geqrf";  case Op::orgqr: return "orgqr";
         case Op::ormqr: return "ormqr";  case Op::syev:  return "syev";
         case Op::gesvd: return "gesvd";  case Op::spmm:  return "spmm";
-        case Op::iluk:  return "iluk";   case Op::COUNT: return "?";
+        case Op::iluk:  return "iluk";
+        case Op::gesv:  return "gesv";   case Op::posv:  return "posv";
+        case Op::COUNT: return "?";
     }
     return "?";
 }

@@ -18,7 +18,7 @@ namespace batchlas
                              const Span<T> conds,
                              const Span<std::byte> workspace){
                         if (A.rows() != A.cols()) {
-                            throw std::runtime_error("cond: Spectral norm requires square symmetric/Hermitian matrices");
+                            throw batchlas::invalid_argument("cond: Spectral norm requires square symmetric/Hermitian matrices");
                         }
 
                         using Real = typename base_type<T>::type;
@@ -93,10 +93,12 @@ namespace batchlas
                         auto A_norms = pool.allocate<T>(ctx, A.batch_size());
                         auto A_inv_norms = pool.allocate<T>(ctx, A.batch_size());
 
-                        inv<B>(ctx, A, Ainv, inv_workspace);
+                        // (void) on an Event: deliberate. This Queue is in-order, so the next submission
+                        // is already ordered after this one and the Event carries nothing the caller needs.
+                        (void)inv<B>(ctx, A, Ainv, inv_workspace);
                         
-                        norm(ctx, Ainv, norm_type, A_inv_norms);
-                        norm(ctx, A, norm_type, A_norms);
+                        (void)norm(ctx, Ainv, norm_type, A_inv_norms);
+                        (void)norm(ctx, A, norm_type, A_norms);
                         ctx -> parallel_for(A.batch_size(), [=](size_t i) {
                             conds[i] = A_inv_norms[i] * A_norms[i];
                         });
@@ -121,7 +123,7 @@ namespace batchlas
     {
         if (norm_type == NormType::Spectral) {
             if constexpr (MF != MatrixFormat::Dense) {
-                throw std::runtime_error("cond: Spectral norm only supported for dense symmetric/Hermitian matrices");
+                throw batchlas::unsupported("cond: Spectral norm only supported for dense symmetric/Hermitian matrices");
             } else {
                 using Real = typename base_type<T>::type;
                 const size_t eig_size = static_cast<size_t>(A.rows()) * A.batch_size();

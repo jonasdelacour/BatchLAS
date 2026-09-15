@@ -377,14 +377,14 @@ namespace batchlas{
                     case ComputePrecision::BF16: return CUBLAS_COMPUTE_32F_FAST_16BF;
                     case ComputePrecision::TF32: return CUBLAS_COMPUTE_32F_FAST_TF32;
                     default:
-                        throw std::runtime_error("Unsupported precision for single precision type");
+                        throw batchlas::unsupported("Unsupported precision for single precision type");
                 }
             } 
             else if constexpr (std::is_same_v<BaseType, double>) {
                 if (precision == ComputePrecision::F64) {
                     return CUBLAS_COMPUTE_64F;
                 }
-                throw std::runtime_error("Only F64 precision supported for double precision type");
+                throw batchlas::unsupported("Only F64 precision supported for double precision type");
             }
         } else
 #endif
@@ -403,7 +403,7 @@ namespace batchlas{
         } else
 #endif
         {
-            throw std::runtime_error("Unsupported backend or type combination");
+            throw batchlas::unsupported("Unsupported backend or type combination");
         }
     }
 
@@ -636,7 +636,7 @@ namespace batchlas{
 #if BATCHLAS_HAS_CUBLAS
     inline auto check_status(cublasStatus_t status) {
         if (status != CUBLAS_STATUS_SUCCESS) {
-            throw std::runtime_error("CUBLAS error: " + std::to_string(status));
+            throw batchlas::device_error("CUBLAS error: " + std::to_string(status));
         }
         return status;
     }
@@ -645,7 +645,7 @@ namespace batchlas{
 #if BATCHLAS_HAS_CUSPARSE
     inline auto check_status(cusparseStatus_t status) {
         if (status != CUSPARSE_STATUS_SUCCESS) {
-            throw std::runtime_error("CUSPARSE error: " + std::to_string(status));
+            throw batchlas::device_error("CUSPARSE error: " + std::to_string(status));
         }
         return status;
     }
@@ -654,7 +654,7 @@ namespace batchlas{
 #if BATCHLAS_HAS_CUSOLVER
     inline auto check_status(cusolverStatus_t status) {
         if (status != CUSOLVER_STATUS_SUCCESS) {
-            throw std::runtime_error("CUSOLVER error: " + std::to_string(status));
+            throw batchlas::device_error("CUSOLVER error: " + std::to_string(status));
         }
         return status;
     }
@@ -663,14 +663,14 @@ namespace batchlas{
 #if BATCHLAS_HAS_ROCM_BACKEND
     inline auto check_status(rocblas_status status) {
         if (status != rocblas_status_success) {
-            throw std::runtime_error("rocBLAS error: " + std::to_string(status));
+            throw batchlas::device_error("rocBLAS error: " + std::to_string(status));
         }
         return status;
     }
 
     inline auto check_status(rocsparse_status status) {
         if (status != rocsparse_status_success) {
-            throw std::runtime_error("rocSPARSE error: " + std::to_string(status));
+            throw batchlas::device_error("rocSPARSE error: " + std::to_string(status));
         }
         return status;
     }
@@ -943,19 +943,19 @@ namespace batchlas{
                 auto blas_status = cublasCreate(&blas_handle_);
                 if (blas_status != CUBLAS_STATUS_SUCCESS) {
                     std::cerr << "CUBLAS initialization failed with status: " << blas_status << std::endl;
-                    throw std::runtime_error("CUBLAS initialization failed");
+                    throw batchlas::device_error("CUBLAS initialization failed");
                 }
 
                 auto sparse_status = cusparseCreate(&sparse_handle_);
                 if (sparse_status != CUSPARSE_STATUS_SUCCESS) {
                     std::cerr << "CUSPARSE initialization failed with status: " << sparse_status << std::endl;
-                    throw std::runtime_error("CUSPARSE initialization failed");
+                    throw batchlas::device_error("CUSPARSE initialization failed");
                 }
 
                 auto solver_status = cusolverDnCreate(&solver_handle_);
                 if (solver_status != CUSOLVER_STATUS_SUCCESS) {
                     std::cerr << "CUSOLVER initialization failed with status: " << solver_status << std::endl;
-                    throw std::runtime_error("CUSOLVER initialization failed");
+                    throw batchlas::device_error("CUSOLVER initialization failed");
                 }
                 cudaDeviceSynchronize();
             }

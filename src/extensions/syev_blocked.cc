@@ -1,5 +1,6 @@
 #include <batchlas/blas/extensions.hh>
 #include "uplo_mirror.hh"
+#include "info_span.hh"
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/blas/linalg.hh>
@@ -18,6 +19,7 @@
 #include <cstdlib>
 #include <stdexcept>
 #include <type_traits>
+#include <batchlas/settings.hh>
 
 namespace batchlas {
 
@@ -29,10 +31,10 @@ inline void validate_syev_blocked_dims(const MatrixView<T, MatrixFormat::Dense>&
                                       JobType jobz,
                                       Uplo uplo) {
     if (a.rows() != a.cols()) {
-        throw std::invalid_argument("syev_blocked: A must be square.");
+        throw batchlas::invalid_argument("syev_blocked: A must be square.");
     }
     if (jobz != JobType::NoEigenVectors && jobz != JobType::EigenVectors) {
-        throw std::invalid_argument("syev_blocked: invalid JobType.");
+        throw batchlas::invalid_argument("syev_blocked: invalid JobType.");
     }
     // Uplo::Upper is accepted: the solve mirrors the upper triangle into the lower one and
     // proceeds down the Lower path. See uplo_mirror.hh.
@@ -40,12 +42,12 @@ inline void validate_syev_blocked_dims(const MatrixView<T, MatrixFormat::Dense>&
     const int64_t n64 = a.rows();
     const int64_t batch64 = a.batch_size();
     if (n64 < 1 || batch64 < 1) {
-        throw std::invalid_argument("syev_blocked: invalid n or batch size.");
+        throw batchlas::invalid_argument("syev_blocked: invalid n or batch size.");
     }
 
     const std::size_t need = static_cast<std::size_t>(n64) * static_cast<std::size_t>(batch64);
     if (eigenvalues.size() < need) {
-        throw std::invalid_argument("syev_blocked: eigenvalues span too small for n*batch.");
+        throw batchlas::invalid_argument("syev_blocked: eigenvalues span too small for n*batch.");
     }
 }
 
@@ -93,12 +95,10 @@ inline int32_t sytrd_block_size_default(int32_t n) {
 
 template <typename T>
 inline int32_t sytrd_block_size_override(int32_t n) {
+    // 0 on the field means unset. The fallback is both n-bucketed and
+    // type-dependent, so it cannot be a scalar default on the field.
     const int32_t fallback = sytrd_block_size_default<T>(n);
-    const char* v = std::getenv("BATCHLAS_SYTRD_BLOCK_SIZE");
-    if (!v || *v == '\0') {
-        return fallback;
-    }
-    const int value = std::atoi(v);
+    const int32_t value = batchlas::settings().geometry.sytrd_block_size;
     return value > 0 ? value : fallback;
 }
 
@@ -128,18 +128,21 @@ Event syev_blocked(Queue& ctx,
                    JobType jobz,
                    Uplo uplo,
                    const Span<std::byte>& ws,
-                   StedcParams<typename base_type<T>::type> stedc_params) {
+                   StedcParams<typename base_type<T>::type> stedc_params,
+                   Span<int32_t> info) {
     validate_syev_blocked_dims(a_in, eigenvalues, jobz, uplo);
 
     if (!ctx.in_order()) {
-        throw std::runtime_error("syev_blocked: requires an in-order Queue");
+        throw batchlas::invalid_argument("syev_blocked: requires an in-order Queue");
     }
 
     // Uplo::Upper: mirror the upper triangle into the lower one and continue as Lower.
     // sytrd_blocked below implements Lower only; this O(n^2) pass is what lets Auto route
     // Upper input here at all instead of conceding it to the vendor. See uplo_mirror.hh.
     if (uplo == Uplo::Upper) {
-        mirror_upper_to_lower<B, T>(ctx, a_in);
+        // (void) on an Event: deliberate. This Queue is in-order, so the next submission
+        // is already ordered after this one and the Event carries nothing the caller needs.
+        (void)mirror_upper_to_lower<B, T>(ctx, a_in);
         uplo = Uplo::Lower;
     }
 
@@ -198,7 +201,7 @@ Event syev_blocked(Queue& ctx,
                                                                  uplo,
                                                                  sytrd_block_size);
             auto sytrd_ws = pool.allocate<std::byte>(ctx, sytrd_ws_bytes);
-            sytrd_blocked<B, T>(ctx, a, d_c_view, e_c_view, tau_c_view, uplo, sytrd_ws, sytrd_block_size);
+            (void)sytrd_blocked<B, T>(ctx, a, d_c_view, e_c_view, tau_c_view, uplo, sytrd_ws, sytrd_block_size);
         }
 
         // Convert complex Hermitian tridiagonal to real symmetric tridiagonal via diagonal phase similarity.
@@ -270,7 +273,11 @@ Event syev_blocked(Queue& ctx,
                                                                      static_cast<std::size_t>(batch),
                                                                      bp);
             auto stebz_ws = pool.allocate<std::byte>(ctx, stebz_ws_bytes);
-            stebz<B, Real>(ctx, d_view, e_view, evals_view, m_span, stebz_ws, bp);
+            // See the real branch below: bisection has no status of its own, but
+            // syev.hh's contract is that every tier clears `info`, and this is the
+            // default values-mode path for 32 < n <= 320.
+            detail::info_clear(ctx, info, batch);
+            (void)stebz<B, Real>(ctx, d_view, e_view, evals_view, m_span, stebz_ws, bp);
 
             return ctx.get_event();
         }
@@ -290,7 +297,11 @@ Event syev_blocked(Queue& ctx,
         {
             auto stedc_ws_bytes = stedc_buffer_size<B, Real>(ctx, static_cast<std::size_t>(n), static_cast<std::size_t>(batch), internal_jobz, stedc_params);
             auto stedc_ws = pool.allocate<std::byte>(ctx, stedc_ws_bytes);
-            stedc<B, Real>(ctx, d_view, e_view, evals_view, stedc_ws, internal_jobz, stedc_params, z_view);
+            // syev_blocked does not iterate: sytrd_blocked is direct and the
+            // back-transform is direct, so every convergence event in this tier is
+            // stedc's. Forward the span rather than reduce anything -- stedc clears
+            // it, and exactly one of the two arms runs.
+            (void)stedc<B, Real>(ctx, d_view, e_view, evals_view, stedc_ws, internal_jobz, stedc_params, z_view, info);
         }
 
         if (jobz == JobType::EigenVectors) {
@@ -328,7 +339,7 @@ Event syev_blocked(Queue& ctx,
                                                                       ormqr_block_size);
                 auto ormqr_ws = pool.allocate<std::byte>(ctx, ormqr_ws_bytes);
 
-                ormqr_blocked<B, T>(ctx,
+                (void)ormqr_blocked<B, T>(ctx,
                                     aq_view,
                                     zc_sub,
                                     Side::Left,
@@ -365,7 +376,7 @@ Event syev_blocked(Queue& ctx,
         {
             auto sytrd_ws_bytes = sytrd_blocked_buffer_size<B, T>(ctx, a, d_view, e_view, tau_view, uplo, sytrd_block_size);
             auto sytrd_ws = pool.allocate<std::byte>(ctx, sytrd_ws_bytes);
-            sytrd_blocked<B, T>(ctx, a, d_view, e_view, tau_view, uplo, sytrd_ws, sytrd_block_size);
+            (void)sytrd_blocked<B, T>(ctx, a, d_view, e_view, tau_view, uplo, sytrd_ws, sytrd_block_size);
         }
 
         // STEDC's recursive merge path uses the split off-diagonal value and
@@ -417,7 +428,14 @@ Event syev_blocked(Queue& ctx,
                                                                   static_cast<std::size_t>(batch),
                                                                   bp);
             auto stebz_ws = pool.allocate<std::byte>(ctx, stebz_ws_bytes);
-            stebz<B, T>(ctx, d_view, e_view, evals_view, m_span, stebz_ws, bp);
+            // stebz is bisection: it has no iteration budget to exhaust and so no
+            // status of its own. Clear anyway -- syev.hh's contract says every
+            // tier below clears `info` itself, and this early return is the
+            // DEFAULT path for 32 < n <= 320 in values mode, so leaving the span
+            // untouched hands the caller whatever was in the buffer. Mirrors
+            // syev_two_stage.cc:275.
+            detail::info_clear(ctx, info, batch);
+            (void)stebz<B, T>(ctx, d_view, e_view, evals_view, m_span, stebz_ws, bp);
 
             return ctx.get_event();
         }
@@ -429,7 +447,7 @@ Event syev_blocked(Queue& ctx,
         {
             auto stedc_ws_bytes = stedc_buffer_size<B, T>(ctx, static_cast<std::size_t>(n), static_cast<std::size_t>(batch), internal_jobz, stedc_params);
             auto stedc_ws = pool.allocate<std::byte>(ctx, stedc_ws_bytes);
-            stedc<B, T>(ctx, d_view, e_view, evals_view, stedc_ws, internal_jobz, stedc_params, z_view);
+            (void)stedc<B, T>(ctx, d_view, e_view, evals_view, stedc_ws, internal_jobz, stedc_params, z_view, info);
         }
 
         if (jobz == JobType::EigenVectors) {
@@ -465,7 +483,7 @@ Event syev_blocked(Queue& ctx,
                                                                       ormqr_block_size);
                 auto ormqr_ws = pool.allocate<std::byte>(ctx, ormqr_ws_bytes);
 
-                ormqr_blocked<B, T>(ctx,
+                (void)ormqr_blocked<B, T>(ctx,
                                     aq_view,
                                     z_sub,
                                     Side::Left,
@@ -489,10 +507,10 @@ size_t syev_blocked_buffer_size(Queue& ctx,
                                 Uplo uplo,
                                 StedcParams<typename base_type<T>::type> stedc_params) {
     if (a.rows() != a.cols()) {
-        throw std::invalid_argument("syev_blocked_buffer_size: A must be square.");
+        throw batchlas::invalid_argument("syev_blocked_buffer_size: A must be square.");
     }
     if (jobz != JobType::NoEigenVectors && jobz != JobType::EigenVectors) {
-        throw std::invalid_argument("syev_blocked_buffer_size: invalid JobType.");
+        throw batchlas::invalid_argument("syev_blocked_buffer_size: invalid JobType.");
     }
     // Uplo::Upper is accepted; the workspace is identical because the mirror is in-place.
 
@@ -616,7 +634,8 @@ size_t syev_blocked_buffer_size(Queue& ctx,
         JobType, \
         Uplo, \
         const Span<std::byte>&, \
-        StedcParams<typename base_type<BATCHLAS_UNPAREN fp>::type>); \
+        StedcParams<typename base_type<BATCHLAS_UNPAREN fp>::type>, \
+        Span<int32_t>); \
     template size_t syev_blocked_buffer_size<back, BATCHLAS_UNPAREN fp>( \
         Queue&, \
         const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \

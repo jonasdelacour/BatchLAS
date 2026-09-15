@@ -8,6 +8,7 @@
 #include "../math-helpers.hh"
 #include "stedc_secular.hh"
 #include "stedc_merge_kernels.hh"
+#include "info_span.hh"
 
 namespace batchlas {
 
@@ -23,10 +24,16 @@ void stedc_merge_fused(Queue& ctx,
                        const Span<int32_t>& n_reduced,
                        const MatrixView<T, MatrixFormat::Dense>& Qprime,
                        const VectorView<T>& temp_lambdas,
-                       const StedcParams<T>& params) {
+                       const StedcParams<T>& params,
+                       int32_t* info,
+                       int64_t info_nodes_per_item) {
     const auto batch_size = eigenvalues.batch_size();
     const int wg_size = params.merge_threads;
     const bool do_rescale = params.enable_rescale;
+    // Locals of the enclosing scope so the kernel's `[=]` copies a pointer and a
+    // scalar; nullptr makes info_report a no-op.
+    int32_t* const info_dev = info;
+    const int64_t nodes_per_item = info_nodes_per_item;
 
     ctx->submit([&](sycl::handler& h) {
         auto Qview = Qprime.kernel_view();
@@ -64,10 +71,20 @@ void stedc_merge_fused(Queue& ctx,
 
                     for (int k = tid; k < dd; k += bdim) {
                         auto dview = Q_bid(Slice{}, k);
+                        // The flag sec_solve_* has always computed. Several threads
+                        // of the same work-group may report the same item; the
+                        // report is an atomic fetch_max, so that is exactly the
+                        // "did ANY root fail" reduction wanted.
+                        bool root_converged = true;
                         if (k == dd - 1) {
-                            temp_lambdas(k, bid) = sec_solve_ext_roc(dd, dview, v.batch_item(bid), std::abs(T(2) * rho[bid]));
+                            temp_lambdas(k, bid) = sec_solve_ext_roc(dd, dview, v.batch_item(bid), std::abs(T(2) * rho[bid]), root_converged);
                         } else {
-                            temp_lambdas(k, bid) = sec_solve_roc(dd, dview, v.batch_item(bid), std::abs(T(2) * rho[bid]), k);
+                            temp_lambdas(k, bid) = sec_solve_roc(dd, dview, v.batch_item(bid), std::abs(T(2) * rho[bid]), k, root_converged);
+                        }
+                        if (!root_converged) {
+                            detail::info_report(info_dev,
+                                                detail::info_item(static_cast<int64_t>(bid), nodes_per_item),
+                                                1);
                         }
                     }
                 }
@@ -124,13 +141,15 @@ void stedc_merge_dispatch(Queue& ctx,
                           const Span<int32_t>& n_reduced,
                           const MatrixView<T, MatrixFormat::Dense>& Qprime,
                           const VectorView<T>& temp_lambdas,
-                          const StedcParams<T>& params) {
+                          const StedcParams<T>& params,
+                          int32_t* info,
+                          int64_t info_nodes_per_item) {
     switch (params.merge_variant) {
     case StedcMergeVariant::Fused:
-        stedc_merge_fused<B, T>(ctx, eigenvalues, v, rho, n_reduced, Qprime, temp_lambdas, params);
+        stedc_merge_fused<B, T>(ctx, eigenvalues, v, rho, n_reduced, Qprime, temp_lambdas, params, info, info_nodes_per_item);
         break;
     case StedcMergeVariant::FusedCta:
-        stedc_merge_fused_cta<B, T>(ctx, eigenvalues, v, rho, n_reduced, Qprime, temp_lambdas, params);
+        stedc_merge_fused_cta<B, T>(ctx, eigenvalues, v, rho, n_reduced, Qprime, temp_lambdas, params, info, info_nodes_per_item);
         break;
     default:
         // Baseline path is handled by the caller in stedc.cc.
@@ -139,8 +158,8 @@ void stedc_merge_dispatch(Queue& ctx,
 }
 
 #define STEDC_MERGE_INSTANTIATE(back, fp) \
-    template void stedc_merge_fused<back, BATCHLAS_UNPAREN fp>(Queue&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, const Span<BATCHLAS_UNPAREN fp>&, const Span<int32_t>&, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, const VectorView<BATCHLAS_UNPAREN fp>&, const StedcParams<BATCHLAS_UNPAREN fp>&); \
-    template void stedc_merge_dispatch<back, BATCHLAS_UNPAREN fp>(Queue&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, const Span<BATCHLAS_UNPAREN fp>&, const Span<int32_t>&, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, const VectorView<BATCHLAS_UNPAREN fp>&, const StedcParams<BATCHLAS_UNPAREN fp>&);
+    template void stedc_merge_fused<back, BATCHLAS_UNPAREN fp>(Queue&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, const Span<BATCHLAS_UNPAREN fp>&, const Span<int32_t>&, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, const VectorView<BATCHLAS_UNPAREN fp>&, const StedcParams<BATCHLAS_UNPAREN fp>&, int32_t*, int64_t); \
+    template void stedc_merge_dispatch<back, BATCHLAS_UNPAREN fp>(Queue&, const VectorView<BATCHLAS_UNPAREN fp>&, const VectorView<BATCHLAS_UNPAREN fp>&, const Span<BATCHLAS_UNPAREN fp>&, const Span<int32_t>&, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, const VectorView<BATCHLAS_UNPAREN fp>&, const StedcParams<BATCHLAS_UNPAREN fp>&, int32_t*, int64_t);
 
 BATCHLAS_INSTANTIATE_REAL_ALL_BACKENDS(STEDC_MERGE_INSTANTIATE)
 

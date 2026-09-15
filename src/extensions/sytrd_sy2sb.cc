@@ -19,6 +19,7 @@
 #include <cstring>
 #include <stdexcept>
 #include <type_traits>
+#include <batchlas/settings.hh>
 
 namespace batchlas {
 
@@ -57,7 +58,9 @@ namespace {
 // query and the matching sytrd_sy2sb call -- that would desynchronise the
 // workspace size from the block width actually used.
 inline int32_t sy2sb_ormqr_nb_env(bool& has_override) {
-    const char* v = std::getenv("BATCHLAS_SY2SB_ORMQR_NB");
+    // Three-valued (unset / "off"|0 / positive), so the field is the raw value
+    // and the strcmp-plus-strtol contract stays here.
+    const char* v = batchlas::settings().geometry.sy2sb_ormqr_nb.get();
     has_override = false;
     if (!v || !*v) return -1;                       // unset -> use shape gate
     if (std::strcmp(v, "off") == 0 || std::strcmp(v, "OFF") == 0) {
@@ -107,13 +110,13 @@ inline void validate_sytrd_sy2sb_dims(const MatrixView<T, MatrixFormat::Dense>& 
                                      Uplo uplo,
                                      int32_t kd) {
     if (a.rows() != a.cols()) {
-        throw std::invalid_argument("sytrd_sy2sb: A must be square");
+        throw batchlas::invalid_argument("sytrd_sy2sb: A must be square");
     }
     if (kd < 0) {
-        throw std::invalid_argument("sytrd_sy2sb: kd must be non-negative");
+        throw batchlas::invalid_argument("sytrd_sy2sb: kd must be non-negative");
     }
     if (uplo != Uplo::Lower && uplo != Uplo::Upper) {
-        throw std::invalid_argument("sytrd_sy2sb: invalid uplo");
+        throw batchlas::invalid_argument("sytrd_sy2sb: invalid uplo");
     }
 
     const int n = a.rows();
@@ -121,16 +124,16 @@ inline void validate_sytrd_sy2sb_dims(const MatrixView<T, MatrixFormat::Dense>& 
     const int tau_need = std::max(0, n - kd_i);
 
     if (ab.rows() != kd_i + 1 || ab.cols() != n) {
-        throw std::invalid_argument("sytrd_sy2sb: AB must be (kd+1) x n");
+        throw batchlas::invalid_argument("sytrd_sy2sb: AB must be (kd+1) x n");
     }
     if (tau.size() != tau_need) {
-        throw std::invalid_argument("sytrd_sy2sb: tau must have size (n-kd)");
+        throw batchlas::invalid_argument("sytrd_sy2sb: tau must have size (n-kd)");
     }
     if (a.batch_size() != ab.batch_size() || a.batch_size() != tau.batch_size()) {
-        throw std::invalid_argument("sytrd_sy2sb: batch size mismatch");
+        throw batchlas::invalid_argument("sytrd_sy2sb: batch size mismatch");
     }
     if (a.batch_size() < 1) {
-        throw std::invalid_argument("sytrd_sy2sb: invalid batch size");
+        throw batchlas::invalid_argument("sytrd_sy2sb: invalid batch size");
     }
 }
 
@@ -421,11 +424,11 @@ Event sytrd_sy2sb(Queue& ctx,
     validate_sytrd_sy2sb_dims(a_in, ab_out, tau_out, uplo, kd);
 
     if (!ctx.in_order()) {
-        throw std::runtime_error("sytrd_sy2sb: requires an in-order Queue");
+        throw batchlas::invalid_argument("sytrd_sy2sb: requires an in-order Queue");
     }
 
     if (uplo != Uplo::Lower) {
-        throw std::runtime_error("sytrd_sy2sb: only Uplo::Lower is implemented");
+        throw batchlas::unsupported("sytrd_sy2sb: only Uplo::Lower is implemented");
     }
 
     const int n = a_in.rows();
@@ -501,7 +504,9 @@ Event sytrd_sy2sb(Queue& ctx,
         Span<T> tau_panel_span(tau_panel_buf.data(), static_cast<size_t>(pk) * static_cast<size_t>(batch));
 
         // QR factorization of V in-place.
-        geqrf<B, T>(ctx, V, tau_panel_span, panel_ws);
+        // (void) on an Event: deliberate. This Queue is in-order, so the next submission
+        // is already ordered after this one and the Event carries nothing the caller needs.
+        (void)geqrf<B, T>(ctx, V, tau_panel_span, panel_ws);
 
         // Copy band portion into AB for columns i..i+pk-1.
         (void)copy_band_lower<T>(ctx, a_in, ab_out, i, pk, kd_i);
@@ -513,8 +518,8 @@ Event sytrd_sy2sb(Queue& ctx,
         // The hint is clamped to k = min(rows, cols) inside the dispatch, so on a
         // short final panel (pk < kd) it degrades to min(nb, pk) and the workspace
         // sized from the i = 0 panel still bounds it.
-        ormqr<B, T>(ctx, V, A_left, Side::Left, trans_left_it, tau_panel_span, panel_ws, ormqr_nb_hint);
-        ormqr<B, T>(ctx, V, A_right, Side::Right, Transpose::NoTrans, tau_panel_span, panel_ws, ormqr_nb_hint);
+        (void)ormqr<B, T>(ctx, V, A_left, Side::Left, trans_left_it, tau_panel_span, panel_ws, ormqr_nb_hint);
+        (void)ormqr<B, T>(ctx, V, A_right, Side::Right, Transpose::NoTrans, tau_panel_span, panel_ws, ormqr_nb_hint);
 
         // Store tau panel into output tau at offset i.
         (void)copy_tau_panel_to_out<T>(ctx, tau_panel_buf.data(), /*tau_panel_ld=*/pk, tau_out, i, pk);

@@ -166,43 +166,43 @@ Event getri_blocked_dispatch(Queue& ctx,
     // is reachable without the table, and an unsupported forced route falls through
     // to automatic() -- a wrong gate here makes a pinned-route test measure cuBLAS.
     if (n < 1 || batch < 1) {
-        throw std::invalid_argument("getri_blocked: degenerate extents");
+        throw batchlas::invalid_argument("getri_blocked: degenerate extents");
     }
     if (A.rows() != A.cols()) {
-        throw std::invalid_argument("getri_blocked: A must be square");
+        throw batchlas::invalid_argument("getri_blocked: A must be square");
     }
     if (A.is_heterogeneous() || C.is_heterogeneous()) {
-        throw std::invalid_argument("getri_blocked: heterogeneous batch is not supported");
+        throw batchlas::invalid_argument("getri_blocked: heterogeneous batch is not supported");
     }
     const auto dev = ctx.device();
     if (dev.type != DeviceType::GPU) {
-        throw std::invalid_argument("getri_blocked: GPU queues only");
+        throw batchlas::invalid_argument("getri_blocked: GPU queues only");
     }
     if (!dev.supports_sub_group_size(32)) {
         // This file's kernels need no sub-group size; the routed trsm does.
-        throw std::runtime_error("getri_blocked: device does not offer sub-group size 32");
+        throw batchlas::unsupported("getri_blocked: device does not offer sub-group size 32");
     }
 
     // Ungateable by the route: GetriShape is a function of A alone, so C is unchecked.
     if (C.rows() != n || C.cols() != n) {
-        throw std::invalid_argument("getri_blocked: C must be square of A's order");
+        throw batchlas::invalid_argument("getri_blocked: C must be square of A's order");
     }
     if (C.batch_size() != A.batch_size()) {
-        throw std::invalid_argument("getri_blocked: A and C must agree on batch size");
+        throw batchlas::invalid_argument("getri_blocked: A and C must agree on batch size");
     }
     if (C.data_ptr() == A.data_ptr()) {
         // Aliasing is fatal, not merely unsupported: C is zeroed before the solves
         // read A's triangles.
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "getri_blocked: in-place (C aliasing A) is not supported, as it is not by "
             "cublas<t>getriBatched");
     }
 
     if (pivots.size() < static_cast<std::size_t>(n) * static_cast<std::size_t>(batch)) {
-        throw std::invalid_argument("getri_blocked: pivot span is shorter than n * batch");
+        throw batchlas::invalid_argument("getri_blocked: pivot span is shorter than n * batch");
     }
     if (!solve_trsm) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "getri_blocked: the solve seam is empty. Inject the ROUTED batchlas::trsm "
             "(the facade does; a direct caller must too) -- this driver deliberately has "
             "no native fallback, so that the router, and not this file, chooses the trsm "

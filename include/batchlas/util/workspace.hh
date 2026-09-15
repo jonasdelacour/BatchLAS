@@ -2,16 +2,24 @@
 #include <cstddef>
 #include <cstdint>
 
+#include <batchlas/export.hh>
+
 // Deliberately does not include util/sycl-span.hh: that header includes
 // util/sycl-device-queue.hh, which includes this one. Span is only needed as a
 // return type here, so a forward declaration is enough and the accessors that
 // mention it are defined out of line.
+//
+// Both forward declarations must stay INSIDE namespace batchlas, alongside the
+// definitions they stand in for (util/sycl-span.hh, util/sycl-device-queue.hh).
+// A forward declaration in another namespace declares a DIFFERENT type, and the
+// error then surfaces far from here -- as an incomplete type or a failed
+// conversion in blas/options.hh or src/util/queue-impl.cc.
+namespace batchlas {
+
 template <typename T>
 struct Span;
 
 struct Queue;
-
-namespace batchlas {
 
 // A borrow of scratch memory from a Queue's workspace arena, released when the
 // handle goes out of scope.
@@ -67,7 +75,13 @@ namespace batchlas {
 //
 // A lease is tied to one Queue and is not thread-safe, in keeping with Queue
 // itself.
-class WorkspaceLease {
+// BATCHLAS_API is class-level here specifically to catch release_. It is
+// PRIVATE, but the public inline destructor below calls it, so a consumer's own
+// translation unit emits an undefined reference to a private member function --
+// measured: _ZN8batchlas14WorkspaceLease8release_Eb is on the 1,083-symbol
+// surface the in-tree test binaries actually need. Annotating only the public
+// members would leave that one reference unresolvable.
+class BATCHLAS_API WorkspaceLease {
 public:
     WorkspaceLease() = default;
     WorkspaceLease(const WorkspaceLease&) = delete;
@@ -160,7 +174,7 @@ public:
     void release() noexcept;
 
 private:
-    friend struct ::Queue;
+    friend struct Queue;
     // `diagnose_out_of_order` is forwarded to the arena; false suppresses the
     // debug assert for the one caller that cannot avoid returning out of order.
     void release_(bool diagnose_out_of_order) noexcept;

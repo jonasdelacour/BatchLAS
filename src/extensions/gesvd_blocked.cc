@@ -8,6 +8,8 @@
 
 #include "../math-helpers.hh"
 #include "../util/template-instantiations.hh"
+#include "info_span.hh"
+#include "stedc_internal.hh"
 
 #include <algorithm>
 #include <chrono>
@@ -19,6 +21,7 @@
 #include <string>
 #include <type_traits>
 #include <batchlas/util/env.hh>
+#include <batchlas/settings.hh>
 
 namespace batchlas {
 
@@ -69,8 +72,12 @@ enum class GesvdNativeMode {
 //
 // BATCHLAS_GESVD_BLOCKED_GEBRD_MIN overrides it, which is how the tables above
 // were taken; set it above the largest n to get the old behaviour back.
+// The field carries the raw value because bare atoi is load-bearing here: an
+// unparseable value yields 0, which is BELOW the default of 1 and therefore
+// silently widens the blocked path rather than falling back to it. Routing this
+// through env_int_or would change that.
 inline bool gesvd_use_blocked_gebrd(int32_t n, GesvdNativeMode mode) {
-    const char* v = std::getenv("BATCHLAS_GESVD_BLOCKED_GEBRD_MIN");
+    const char* v = batchlas::settings().geometry.gesvd_blocked_gebrd_min.get();
     const int32_t threshold = (v != nullptr) ? std::atoi(v) : 1;
     return mode == GesvdNativeMode::Blocked && n >= threshold;
 }
@@ -118,7 +125,7 @@ inline bool gesvd_use_blocked_gebrd(int32_t n, GesvdNativeMode mode) {
 enum class GesvdBidiagSolver { NormalEquations, Bdsdc, Bdsqr };
 
 inline GesvdBidiagSolver gesvd_bidiag_solver() {
-    const char* v = std::getenv("BATCHLAS_GESVD_BIDIAG");
+    const char* v = batchlas::settings().selection.gesvd_bidiag.get();
     if (v == nullptr) return GesvdBidiagSolver::Bdsdc;
     const std::string s(v);
     if (s == "bdsqr") return GesvdBidiagSolver::Bdsqr;
@@ -154,7 +161,7 @@ inline bool gesvd_direct_bidiag(GesvdNativeMode mode, bool thin_tall_u) {
 }
 
 inline bool gesvd_stage_profile_enabled() {
-    return env_truthy(std::getenv("BATCHLAS_GESVD_PROFILE"));
+    return batchlas::settings().diagnostics.gesvd_profile;
 }
 
 struct GesvdStageProfiler {
@@ -199,7 +206,7 @@ void validate_gesvd_dims(const MatrixView<T, MatrixFormat::Dense>& a,
                          SvdVectors jobvh,
                          const char* where) {
     if (a.batch_size() < 1 || a.rows() < 1 || a.cols() < 1) {
-        throw std::invalid_argument(std::string(where) + ": invalid matrix dimensions or batch size");
+        throw batchlas::invalid_argument(std::string(where) + ": invalid matrix dimensions or batch size");
     }
 
     const int64_t m = a.rows();
@@ -208,7 +215,7 @@ void validate_gesvd_dims(const MatrixView<T, MatrixFormat::Dense>& a,
     const int64_t batch = a.batch_size();
     const std::size_t need_s = static_cast<std::size_t>(k) * static_cast<std::size_t>(batch);
     if (singular_values.size() < need_s) {
-        throw std::invalid_argument(std::string(where) + ": singular_values span too small");
+        throw batchlas::invalid_argument(std::string(where) + ": singular_values span too small");
     }
 
     // Guard on "computed at all" and take the expected extent from the job, so
@@ -219,7 +226,7 @@ void validate_gesvd_dims(const MatrixView<T, MatrixFormat::Dense>& a,
     if (jobu != SvdVectors::None) {
         const int64_t want_cols = svd_u_cols(jobu, m, k);
         if (u.rows() != m || u.cols() != want_cols || u.batch_size() != batch) {
-            throw std::invalid_argument(std::string(where) + ": U must be (" +
+            throw batchlas::invalid_argument(std::string(where) + ": U must be (" +
                                         std::to_string(m) + " x " + std::to_string(want_cols) +
                                         ") with matching batch size");
         }
@@ -227,7 +234,7 @@ void validate_gesvd_dims(const MatrixView<T, MatrixFormat::Dense>& a,
     if (jobvh != SvdVectors::None) {
         const int64_t want_rows = svd_vh_rows(jobvh, n, k);
         if (vh.rows() != want_rows || vh.cols() != n || vh.batch_size() != batch) {
-            throw std::invalid_argument(std::string(where) + ": Vh must be (" +
+            throw batchlas::invalid_argument(std::string(where) + ": Vh must be (" +
                                         std::to_string(want_rows) + " x " + std::to_string(n) +
                                         ") with matching batch size");
         }
@@ -292,10 +299,11 @@ Event solve_tridiagonal(Queue& ctx,
                         const VectorView<T>& sign_view,
                         JobType jobz,
                         GesvdNativeMode mode,
-                        const Span<std::byte>& ws) {
+                        const Span<std::byte>& ws,
+                        Span<int32_t> info) {
     if (mode == GesvdNativeMode::CTA) {
         BATCHLAS_KERNEL_TRACE_SCOPE("gesvd.solve_tridiag.steqr_cta");
-        return steqr_cta<B, T>(ctx, diag, offdiag, evals, ws, jobz, gesvd_cta_steqr_params<T>(), dense_out);
+        return steqr_cta<B, T>(ctx, diag, offdiag, evals, ws, jobz, gesvd_cta_steqr_params<T>(), dense_out, info);
     }
 
     {
@@ -320,14 +328,22 @@ Event solve_tridiagonal(Queue& ctx,
     {
         BATCHLAS_KERNEL_TRACE_SCOPE("gesvd.solve_tridiag.stedc");
     }
-    stedc<B, T>(ctx,
+    // (void) on an Event: deliberate. This Queue is in-order, so the next submission
+    // is already ordered after this one and the Event carries nothing the caller needs.
+    // stedc_dispatch, NOT stedc: gesvd_native_impl calls this function twice over
+    // the SAME batch items (the right tridiagonal, then the left one when U is
+    // wanted and the matrix is tall or rank-deficient), and `stedc` clears the span
+    // it is handed. The one clear is in gesvd_native_impl. steqr_cta above does not
+    // clear either. See src/extensions/stedc_internal.hh.
+    (void)stedc_dispatch<B, T>(ctx,
                 diag,
                 offdiag,
                 evals,
                 ws,
                 JobType::EigenVectors,
                 gesvd_blocked_stedc_params<T>(),
-                dense_out);
+                dense_out,
+                info);
 
     if (jobz == JobType::EigenVectors) {
         BATCHLAS_KERNEL_TRACE_SCOPE("gesvd.solve_tridiag.restore_signs");
@@ -802,20 +818,25 @@ Event gesvd_native_impl(Queue& ctx,
                         SvdVectors jobvh,
                         const Span<std::byte>& ws,
                         GesvdNativeMode mode,
-                        const char* where) {
+                        const char* where,
+                        Span<int32_t> info) {
     validate_gesvd_dims(a_in, singular_values, u_out, vh_out, jobu, jobvh, where);
 
     if (!ctx.in_order()) {
-        throw std::runtime_error(std::string(where) + ": requires an in-order Queue");
+        throw batchlas::invalid_argument(std::string(where) + ": requires an in-order Queue");
     }
 
     if constexpr (internal::is_complex<T>::value) {
-        throw std::runtime_error(std::string(where) + ": complex native path is not implemented");
+        throw batchlas::unsupported(std::string(where) + ": complex native path is not implemented");
     } else {
         const int32_t m = static_cast<int32_t>(a_in.rows());
         const int32_t n = static_cast<int32_t>(a_in.cols());
         const int32_t k = std::min(m, n);
         const int32_t batch = static_cast<int32_t>(a_in.batch_size());
+        // The one clear for this call. gebrd and both back-transforms are direct,
+        // so everything that can fail to converge sits under solve_tridiagonal /
+        // bdsdc / bdsqr below, and all of those only raise. See info_span.hh.
+        detail::info_clear(ctx, info, batch);
         jobu = canonical_jobu(jobu, m, k);
         jobvh = canonical_jobvh(jobvh, n, k);
         // `!= None`, not `== All`. Keeping the old idiom here is the silent
@@ -879,7 +900,7 @@ Event gesvd_native_impl(Queue& ctx,
             }
 
             profiler.run("gesvd.transpose_input", [&] {
-                transpose(ctx, a_in, at_view);
+                (void)transpose(ctx, a_in, at_view);
             });
 
             // trans_jobu / trans_jobvh are computed above, next to ut_view's
@@ -898,7 +919,7 @@ Event gesvd_native_impl(Queue& ctx,
             auto inner_ws = pool.allocate<std::byte>(ctx, inner_ws_bytes);
 
             profiler.run("gesvd.transpose_solve", [&] {
-                gesvd_native_impl<B, T>(ctx,
+                (void)gesvd_native_impl<B, T>(ctx,
                                         at_view,
                                         singular_values,
                                         ut_view,
@@ -907,17 +928,18 @@ Event gesvd_native_impl(Queue& ctx,
                                         trans_jobvh,
                                         inner_ws,
                                         mode,
-                                        where);
+                                        where,
+                                        info);
             });
 
             if (want_u) {
                 profiler.run("gesvd.transpose_u", [&] {
-                    transpose(ctx, vht_view, u_out);
+                    (void)transpose(ctx, vht_view, u_out);
                 });
             }
             if (want_vh) {
                 profiler.run("gesvd.transpose_vh", [&] {
-                    transpose(ctx, ut_view, vh_out);
+                    (void)transpose(ctx, ut_view, vh_out);
                 });
             }
 
@@ -991,13 +1013,13 @@ Event gesvd_native_impl(Queue& ctx,
 
         profiler.run("gesvd.gebrd", [&] {
             if constexpr (B == Backend::NETLIB) {
-                gebrd_unblocked<B, T>(ctx, a, d_view, e_view, tauq_view, taup_view);
+                (void)gebrd_unblocked<B, T>(ctx, a, d_view, e_view, tauq_view, taup_view);
             } else if (mode == GesvdNativeMode::CTA && m == n) {
-                gebrd_cta<B, T>(ctx, a, d_view, e_view, tauq_view, taup_view);
+                (void)gebrd_cta<B, T>(ctx, a, d_view, e_view, tauq_view, taup_view);
             } else if (use_blocked_gebrd) {
-                gebrd_blocked<B, T>(ctx, a, d_view, e_view, tauq_view, taup_view, gebrd_ws, gebrd_block_size);
+                (void)gebrd_blocked<B, T>(ctx, a, d_view, e_view, tauq_view, taup_view, gebrd_ws, gebrd_block_size);
             } else {
-                gebrd_unblocked<B, T>(ctx, a, d_view, e_view, tauq_view, taup_view);
+                (void)gebrd_unblocked<B, T>(ctx, a, d_view, e_view, tauq_view, taup_view);
             }
         });
 
@@ -1029,9 +1051,9 @@ Event gesvd_native_impl(Queue& ctx,
             if (!need_vecs) {
                 profiler.run("gesvd.bidiag_values", [&] {
                     if (use_bdsdc) {
-                        bdsdc<B, T>(ctx, d_view, e_view, singular_values, bidiag_ws, /*sort_desc=*/true);
+                        (void)bdsdc<B, T>(ctx, d_view, e_view, singular_values, bidiag_ws, /*sort_desc=*/true, info);
                     } else {
-                        bdsqr<B, T>(ctx, d_view, e_view, singular_values, bidiag_ws, /*sort_desc=*/true);
+                        (void)bdsqr<B, T>(ctx, d_view, e_view, singular_values, bidiag_ws, /*sort_desc=*/true, info);
                     }
                 });
                 return ctx.get_event();
@@ -1053,9 +1075,9 @@ Event gesvd_native_impl(Queue& ctx,
 
             profiler.run("gesvd.bidiag_vectors", [&] {
                 if (use_bdsdc) {
-                    bdsdc<B, T>(ctx, d_view, e_view, singular_values, bidiag_ws, u_sub, vh_sub, /*sort_desc=*/true);
+                    (void)bdsdc<B, T>(ctx, d_view, e_view, singular_values, bidiag_ws, u_sub, vh_sub, /*sort_desc=*/true, info);
                 } else {
-                    bdsqr<B, T>(ctx, d_view, e_view, singular_values, bidiag_ws, u_sub, vh_sub, /*sort_desc=*/true);
+                    (void)bdsqr<B, T>(ctx, d_view, e_view, singular_values, bidiag_ws, u_sub, vh_sub, /*sort_desc=*/true, info);
                 }
             });
         } else {
@@ -1064,7 +1086,7 @@ Event gesvd_native_impl(Queue& ctx,
             form_right_tridiagonal(ctx, d_view, e_view, tri_d_right, tri_e_right);
         });
         profiler.run("gesvd.solve_right_tridiag", [&] {
-            solve_tridiagonal<B, T>(ctx,
+            (void)solve_tridiagonal<B, T>(ctx,
                                     tri_d_right,
                                     tri_e_right,
                                     evals_right,
@@ -1072,7 +1094,8 @@ Event gesvd_native_impl(Queue& ctx,
                                     sign_right,
                                     tridiag_job,
                                     mode,
-                                    solver_ws);
+                                    solver_ws,
+                                    info);
         });
 
         if (!need_vecs) {
@@ -1101,7 +1124,9 @@ Event gesvd_native_impl(Queue& ctx,
                 form_left_tridiagonal(ctx, d_view, e_view, m, tri_d_left, tri_e_left);
             });
             profiler.run("gesvd.solve_left_tridiag", [&] {
-                solve_tridiagonal<B, T>(ctx,
+                // Same items as the right solve above, hence stedc_dispatch inside
+                // rather than stedc: this second call must accumulate, not clear.
+                (void)solve_tridiagonal<B, T>(ctx,
                                         tri_d_left,
                                         tri_e_left,
                                         evals_left,
@@ -1109,7 +1134,8 @@ Event gesvd_native_impl(Queue& ctx,
                                         sign_left,
                                         JobType::EigenVectors,
                                         mode,
-                                        solver_ws);
+                                        solver_ws,
+                                        info);
             });
             profiler.run("gesvd.patch_zero_left_vectors", [&] {
                 patch_zero_left_vectors(ctx, singular_values, k, left_vecs, u_out);
@@ -1122,7 +1148,7 @@ Event gesvd_native_impl(Queue& ctx,
             const size_t left_ws_bytes = left_backtransform_workspace_size<B, T>(ctx, a, tauq_view, u_out, mode);
             auto left_ws = pool.allocate<std::byte>(ctx, left_ws_bytes);
             profiler.run("gesvd.apply_left_backtransform", [&] {
-                apply_left_backtransform<B, T>(ctx, a, tauq_view, u_out, mode, left_ws);
+                (void)apply_left_backtransform<B, T>(ctx, a, tauq_view, u_out, mode, left_ws);
             });
         }
 
@@ -1138,7 +1164,7 @@ Event gesvd_native_impl(Queue& ctx,
                                         p_block_size);
             auto p_ws = pool.allocate<std::byte>(ctx, p_ws_bytes);
             profiler.run("gesvd.apply_right_backtransform", [&] {
-                ormbr<B, T>(ctx, a, taup_view, vh_out, 'P', Side::Right, Transpose::ConjTrans, p_ws, p_block_size);
+                (void)ormbr<B, T>(ctx, a, taup_view, vh_out, 'P', Side::Right, Transpose::ConjTrans, p_ws, p_block_size);
             });
         }
 
@@ -1157,19 +1183,20 @@ Event gesvd_native_hermitian_impl(Queue& ctx,
                                   const Span<std::byte>& ws,
                                   GesvdNativeMode mode,
                                   Uplo hermitian_uplo,
-                                  const char* where) {
+                                  const char* where,
+                                  Span<int32_t> info) {
     using Real = typename base_type<T>::type;
 
     if (a_in.rows() != a_in.cols()) {
-        throw std::invalid_argument(std::string(where) + ": Hermitian path requires square matrices");
+        throw batchlas::invalid_argument(std::string(where) + ": Hermitian path requires square matrices");
     }
     validate_gesvd_dims(a_in, singular_values, u_out, vh_out, jobu, jobvh, where);
 
     if (!ctx.in_order()) {
-        throw std::runtime_error(std::string(where) + ": requires an in-order Queue");
+        throw batchlas::invalid_argument(std::string(where) + ": requires an in-order Queue");
     }
     if (hermitian_uplo != Uplo::Lower && hermitian_uplo != Uplo::Upper) {
-        throw std::invalid_argument(std::string(where) + ": invalid Hermitian triangle selector");
+        throw batchlas::invalid_argument(std::string(where) + ": invalid Hermitian triangle selector");
     }
 
     const int32_t n = static_cast<int32_t>(a_in.rows());
@@ -1195,10 +1222,15 @@ Event gesvd_native_hermitian_impl(Queue& ctx,
     auto syev_ws = pool.allocate<std::byte>(ctx, syev_ws_bytes);
 
     profiler.run("gesvd.hermitian.syev", [&] {
+        // The Hermitian path is one eigen-decomposition plus a sort and a sign
+        // fix-up, so its whole convergence story is this single call; both arms
+        // clear `info` themselves (via steqr / stedc).
         if (mode == GesvdNativeMode::CTA) {
-            syev_cta<B, T>(ctx, a, eigvals_span, jobz, hermitian_uplo, syev_ws);
+            (void)syev_cta<B, T>(ctx, a, eigvals_span, jobz, hermitian_uplo, syev_ws,
+                                 SteqrParams<T>(), /*cta_wg_size_multiplier=*/1, info);
         } else {
-            syev_blocked<B, T>(ctx, a, eigvals_span, jobz, hermitian_uplo, syev_ws);
+            (void)syev_blocked<B, T>(ctx, a, eigvals_span, jobz, hermitian_uplo, syev_ws,
+                                     StedcParams<Real>(), info);
         }
     });
     profiler.run("gesvd.hermitian.sort", [&] {
@@ -1230,7 +1262,7 @@ size_t gesvd_native_buffer_size(Queue& ctx,
     validate_gesvd_dims(a, singular_values, u_out, vh_out, jobu, jobvh, where);
 
     if constexpr (internal::is_complex<T>::value) {
-        throw std::runtime_error(std::string(where) + ": complex native path is not implemented");
+        throw batchlas::unsupported(std::string(where) + ": complex native path is not implemented");
     } else {
         const size_t m = static_cast<size_t>(a.rows());
         const size_t n = static_cast<size_t>(a.cols());
@@ -1400,11 +1432,11 @@ size_t gesvd_native_hermitian_buffer_size(Queue& ctx,
                                           Uplo hermitian_uplo,
                                           const char* where) {
     if (a.rows() != a.cols()) {
-        throw std::invalid_argument(std::string(where) + ": Hermitian path requires square matrices");
+        throw batchlas::invalid_argument(std::string(where) + ": Hermitian path requires square matrices");
     }
     validate_gesvd_dims(a, singular_values, u_out, vh_out, jobu, jobvh, where);
     if (hermitian_uplo != Uplo::Lower && hermitian_uplo != Uplo::Upper) {
-        throw std::invalid_argument(std::string(where) + ": invalid Hermitian triangle selector");
+        throw batchlas::invalid_argument(std::string(where) + ": invalid Hermitian triangle selector");
     }
 
     const size_t n = static_cast<size_t>(a.rows());
@@ -1432,7 +1464,8 @@ Event gesvd_blocked(Queue& ctx,
                     const MatrixView<T, MatrixFormat::Dense>& vh_out,
                     SvdVectors jobu,
                     SvdVectors jobvh,
-                    const Span<std::byte>& ws) {
+                    const Span<std::byte>& ws,
+                    Span<int32_t> info) {
     return gesvd_native_impl<B, T>(ctx,
                                    a_in,
                                    singular_values,
@@ -1442,7 +1475,8 @@ Event gesvd_blocked(Queue& ctx,
                                    jobvh,
                                    ws,
                                    GesvdNativeMode::Blocked,
-                                   "gesvd_blocked");
+                                   "gesvd_blocked",
+                                   info);
 }
 
 template <Backend B, typename T>
@@ -1454,7 +1488,8 @@ Event gesvd_blocked(Queue& ctx,
                     SvdVectors jobu,
                     SvdVectors jobvh,
                     Uplo hermitian_uplo,
-                    const Span<std::byte>& ws) {
+                    const Span<std::byte>& ws,
+                    Span<int32_t> info) {
     return gesvd_native_hermitian_impl<B, T>(ctx,
                                              a_in,
                                              singular_values,
@@ -1465,7 +1500,8 @@ Event gesvd_blocked(Queue& ctx,
                                              ws,
                                              GesvdNativeMode::Blocked,
                                              hermitian_uplo,
-                                             "gesvd_blocked");
+                                             "gesvd_blocked",
+                                             info);
 }
 
 template <Backend B, typename T>
@@ -1516,10 +1552,11 @@ Event gesvd_cta(Queue& ctx,
                 const MatrixView<T, MatrixFormat::Dense>& vh_out,
                 SvdVectors jobu,
                 SvdVectors jobvh,
-                const Span<std::byte>& ws) {
+                const Span<std::byte>& ws,
+                Span<int32_t> info) {
     validate_gesvd_dims(a_in, singular_values, u_out, vh_out, jobu, jobvh, "gesvd_cta");
     if (std::max(a_in.rows(), a_in.cols()) > 32) {
-        throw std::invalid_argument("gesvd_cta: currently supports max(m, n) <= 32");
+        throw batchlas::invalid_argument("gesvd_cta: currently supports max(m, n) <= 32");
     }
     // Mode CTA always takes the normal-equations branch, whose
     // patch_zero_left_vectors writes m columns of U unconditionally. Refuse a
@@ -1530,7 +1567,7 @@ Event gesvd_cta(Queue& ctx,
         const int64_t k = std::min<int64_t>(a_in.rows(), a_in.cols());
         if (canonical_jobu(jobu, a_in.rows(), k) == SvdVectors::Thin ||
             canonical_jobvh(jobvh, a_in.cols(), k) == SvdVectors::Thin) {
-            throw std::invalid_argument(
+            throw batchlas::invalid_argument(
                 "gesvd_cta: thin singular vectors are not supported (use gesvd_blocked or gesvdj_cta)");
         }
     }
@@ -1543,7 +1580,8 @@ Event gesvd_cta(Queue& ctx,
                                    jobvh,
                                    ws,
                                    GesvdNativeMode::CTA,
-                                   "gesvd_cta");
+                                   "gesvd_cta",
+                                   info);
 }
 
 template <Backend B, typename T>
@@ -1555,13 +1593,14 @@ Event gesvd_cta(Queue& ctx,
                 SvdVectors jobu,
                 SvdVectors jobvh,
                 Uplo hermitian_uplo,
-                const Span<std::byte>& ws) {
+                const Span<std::byte>& ws,
+                Span<int32_t> info) {
     validate_gesvd_dims(a_in, singular_values, u_out, vh_out, jobu, jobvh, "gesvd_cta");
     if (a_in.rows() != a_in.cols()) {
-        throw std::invalid_argument("gesvd_cta: Hermitian path requires square matrices");
+        throw batchlas::invalid_argument("gesvd_cta: Hermitian path requires square matrices");
     }
     if (std::max(a_in.rows(), a_in.cols()) > 32) {
-        throw std::invalid_argument("gesvd_cta: currently supports max(m, n) <= 32");
+        throw batchlas::invalid_argument("gesvd_cta: currently supports max(m, n) <= 32");
     }
     // Mode CTA always takes the normal-equations branch, whose
     // patch_zero_left_vectors writes m columns of U unconditionally. Refuse a
@@ -1572,7 +1611,7 @@ Event gesvd_cta(Queue& ctx,
         const int64_t k = std::min<int64_t>(a_in.rows(), a_in.cols());
         if (canonical_jobu(jobu, a_in.rows(), k) == SvdVectors::Thin ||
             canonical_jobvh(jobvh, a_in.cols(), k) == SvdVectors::Thin) {
-            throw std::invalid_argument(
+            throw batchlas::invalid_argument(
                 "gesvd_cta: thin singular vectors are not supported (use gesvd_blocked or gesvdj_cta)");
         }
     }
@@ -1586,7 +1625,8 @@ Event gesvd_cta(Queue& ctx,
                                              ws,
                                              GesvdNativeMode::CTA,
                                              hermitian_uplo,
-                                             "gesvd_cta");
+                                             "gesvd_cta",
+                                             info);
 }
 
 template <Backend B, typename T>
@@ -1599,13 +1639,13 @@ size_t gesvd_cta_buffer_size(Queue& ctx,
                              SvdVectors jobvh) {
     validate_gesvd_dims(a, singular_values, u_out, vh_out, jobu, jobvh, "gesvd_cta_buffer_size");
     if (std::max(a.rows(), a.cols()) > 32) {
-        throw std::invalid_argument("gesvd_cta_buffer_size: currently supports max(m, n) <= 32");
+        throw batchlas::invalid_argument("gesvd_cta_buffer_size: currently supports max(m, n) <= 32");
     }
     {
         const int64_t k = std::min<int64_t>(a.rows(), a.cols());
         if (canonical_jobu(jobu, a.rows(), k) == SvdVectors::Thin ||
             canonical_jobvh(jobvh, a.cols(), k) == SvdVectors::Thin) {
-            throw std::invalid_argument(
+            throw batchlas::invalid_argument(
                 "gesvd_cta_buffer_size: thin singular vectors are not supported");
         }
     }
@@ -1631,16 +1671,16 @@ size_t gesvd_cta_buffer_size(Queue& ctx,
                              Uplo hermitian_uplo) {
     validate_gesvd_dims(a, singular_values, u_out, vh_out, jobu, jobvh, "gesvd_cta_buffer_size");
     if (a.rows() != a.cols()) {
-        throw std::invalid_argument("gesvd_cta_buffer_size: Hermitian path requires square matrices");
+        throw batchlas::invalid_argument("gesvd_cta_buffer_size: Hermitian path requires square matrices");
     }
     if (std::max(a.rows(), a.cols()) > 32) {
-        throw std::invalid_argument("gesvd_cta_buffer_size: currently supports max(m, n) <= 32");
+        throw batchlas::invalid_argument("gesvd_cta_buffer_size: currently supports max(m, n) <= 32");
     }
     {
         const int64_t k = std::min<int64_t>(a.rows(), a.cols());
         if (canonical_jobu(jobu, a.rows(), k) == SvdVectors::Thin ||
             canonical_jobvh(jobvh, a.cols(), k) == SvdVectors::Thin) {
-            throw std::invalid_argument(
+            throw batchlas::invalid_argument(
                 "gesvd_cta_buffer_size: thin singular vectors are not supported");
         }
     }
@@ -1665,7 +1705,8 @@ size_t gesvd_cta_buffer_size(Queue& ctx,
         const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
         SvdVectors, \
         SvdVectors, \
-        const Span<std::byte>&); \
+        const Span<std::byte>&, \
+        Span<int32_t>); \
     template Event gesvd_blocked<back, BATCHLAS_UNPAREN fp>( \
         Queue&, \
         const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
@@ -1675,7 +1716,8 @@ size_t gesvd_cta_buffer_size(Queue& ctx,
         SvdVectors, \
         SvdVectors, \
         Uplo, \
-        const Span<std::byte>&); \
+        const Span<std::byte>&, \
+        Span<int32_t>); \
     template size_t gesvd_blocked_buffer_size<back, BATCHLAS_UNPAREN fp>( \
         Queue&, \
         const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
@@ -1701,7 +1743,8 @@ size_t gesvd_cta_buffer_size(Queue& ctx,
         const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
         SvdVectors, \
         SvdVectors, \
-        const Span<std::byte>&); \
+        const Span<std::byte>&, \
+        Span<int32_t>); \
     template Event gesvd_cta<back, BATCHLAS_UNPAREN fp>( \
         Queue&, \
         const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
@@ -1711,7 +1754,8 @@ size_t gesvd_cta_buffer_size(Queue& ctx,
         SvdVectors, \
         SvdVectors, \
         Uplo, \
-        const Span<std::byte>&); \
+        const Span<std::byte>&, \
+        Span<int32_t>); \
     template size_t gesvd_cta_buffer_size<back, BATCHLAS_UNPAREN fp>( \
         Queue&, \
         const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \

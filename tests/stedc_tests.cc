@@ -5,6 +5,12 @@
 #include "../src/queue.hh"
 #include "../src/extensions/stedc_levels_plan.hh"
 
+// Named rather than inherited transitively: the `info` cases below use M_PI,
+// std::cos and std::is_same_v, and nothing else in this file did.
+#include <cmath>
+#include <cstdint>
+#include <type_traits>
+
 using namespace batchlas;
 
 namespace {
@@ -539,6 +545,171 @@ TYPED_TEST(StedcTest, FusedCtaFallsBackToWgWhenRequestedExceedsMaxSubgroup) {
     }
 }
 
+
+// ---------------------------------------------------------------------------
+// Per-item convergence status (`info`).
+//
+// stedc is one of the five routines LAPACK gives an info > 0 to, and the one
+// where the status has the furthest to travel: a divide-and-conquer solve is a
+// tree of leaf steqr calls and secular-equation merges, and either level can
+// fail to converge on one batch item while every other item is fine.
+//
+// WHICH KNOB FORCES A FAILURE, AND WHICH ONLY LOOKS LIKE IT DOES.
+//
+// stedc has two caps and they are NOT equally reachable, which is the trap in
+// writing the forced case:
+//
+//   * `leaf_steqr_params.max_sweeps` is real. It caps the leaf steqr, and the
+//     level-synchronous driver -- the default -- folds each leaf's status back
+//     into the caller's span (src/extensions/stedc.cc:921-936; the fold is
+//     needed because that one steqr call solves leaves*batch problems, so its
+//     batch axis is LONGER than `info`). This is what the forced case below
+//     uses, and it is also the failure LAPACK's `?stedc` reports info > 0 for.
+//   * `max_sec_iter` is NOT reachable on the arms that run by default:
+//     src/extensions/stedc_secular.cc:297 and :521 hardcode `i < 50` and :700
+//     hardcodes `iter >= 100`, so the parameter never reaches the loop. Only
+//     Fused/FusedCta honour it (stedc_merge_cta.cc:1005). A test that set
+//     max_sec_iter, ran the default arm and watched nothing fail would look
+//     exactly like a working guard while testing a value that never left the
+//     parameter struct -- so it is not written here.
+// ---------------------------------------------------------------------------
+
+TYPED_TEST(StedcTest, InfoIsZeroOnAConvergingBatch) {
+    using T = typename TestFixture::ScalarType;
+    using float_type = typename base_type<T>::type;
+    const int n = 128;
+    const int batch = 4;
+
+    // The same Toeplitz(1, 1, 1) the other cases in this file solve, at a size
+    // that still forces a real merge tree (recursion_threshold = 32 gives two
+    // levels) without paying for the dense reference solve they do.
+    auto d = Vector<float_type>::ones(n, batch);
+    auto e = Vector<float_type>::ones(n - 1, batch);
+    auto eigvals = Vector<float_type>::zeros(n, batch);
+    auto eigvects = Matrix<float_type>::Identity(n, batch);
+    StedcParams<float_type> params = {.recursion_threshold = 32};
+
+    // -1, NOT 0: a span left at zero cannot tell "the solver wrote 0" from
+    // "nothing wrote it at all". The entry point is required to clear the span
+    // once (the accumulator rule in src/extensions/info_span.hh), so a surviving
+    // -1 means that clear never ran and every zero in this array would have been
+    // an accident of initialisation.
+    UnifiedVector<int32_t> info(batch, int32_t(-1));
+
+    UnifiedVector<std::byte> ws(stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params));
+    stedc(*this->ctx, d.view(), e.view(), eigvals.view(), ws, JobType::EigenVectors, params,
+          eigvects.view(), info.to_span());
+    this->ctx->wait();
+
+    for (int b = 0; b < batch; ++b) {
+        ASSERT_NE(info[b], -1) << "info[" << b << "] still holds the poison value: the span was "
+                                  "never written, so a zero here would prove nothing";
+        EXPECT_EQ(info[b], 0) << "item " << b << " reported non-convergence on a Toeplitz batch "
+                                 "that every other case in this file solves";
+    }
+
+    // Reported converged AND correct. The closed form for Toeplitz(1, 1, 1) is
+    // 1 + 2*cos(k*pi/(n+1)), ascending in k measured from the far end.
+    const double tol = std::is_same_v<float_type, float> ? 2e-3 : 1e-8;
+    for (int b = 0; b < batch; ++b) {
+        if (info[b] != 0) continue;
+        for (int i = 0; i < n; ++i) {
+            const double expected = 1.0 + 2.0 * std::cos(M_PI * double(n - i) / double(n + 1));
+            EXPECT_NEAR(static_cast<double>(eigvals(i, b)), expected, tol)
+                << "batch " << b << " eigenvalue " << i;
+        }
+    }
+}
+
+// THE CASE THAT MATTERS: the same batch, one sweep allowed in the leaf solves.
+//
+// A test that only ever observes info == 0 cannot distinguish a working
+// implementation from one that memsets the span to zero, so this forces the
+// failure on the SAME input the case above solves cleanly. `max_sweeps = 1`
+// rather than a "reduced" 50 because 50 is the default, and the CTA tiers rewrite
+// the default to 400 (syev_cta.cc:177-180) -- a habit worth not relying on the
+// absence of.
+//
+// It also exercises the part of the plumbing that is unique to stedc: the leaf
+// axis is not the batch axis. One steqr call solves 2^L * batch_size leaf
+// problems, and each leaf's status has to be folded back onto the batch item it
+// belongs to. A fold that got the divisor wrong would report failures against
+// the wrong items -- or, with batch_size = 1, look perfect while being wrong, so
+// this case uses a batch of 4.
+TYPED_TEST(StedcTest, InfoReportsLeafSolvesThatExhaustTheirSweepBudget) {
+    using T = typename TestFixture::ScalarType;
+    using float_type = typename base_type<T>::type;
+    const int n = 128;
+    const int batch = 4;
+
+    auto d = Vector<float_type>::ones(n, batch);
+    auto e = Vector<float_type>::ones(n - 1, batch);
+    auto eigvals = Vector<float_type>::zeros(n, batch);
+    auto eigvects = Matrix<float_type>::Identity(n, batch);
+    StedcParams<float_type> params = {.recursion_threshold = 32};
+    params.leaf_steqr_params.max_sweeps = 1;
+
+    UnifiedVector<int32_t> info(batch, int32_t(-1));
+
+    UnifiedVector<std::byte> ws(stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params));
+    stedc(*this->ctx, d.view(), e.view(), eigvals.view(), ws, JobType::EigenVectors, params,
+          eigvects.view(), info.to_span());
+    this->ctx->wait();
+
+    int reported = 0;
+    for (int b = 0; b < batch; ++b) {
+        ASSERT_NE(info[b], -1) << "info[" << b << "] still holds the poison value";
+        ASSERT_GE(info[b], 0) << "info is LAPACK-like: 0 or a positive count, never negative";
+        if (info[b] != 0) ++reported;
+    }
+    EXPECT_GT(reported, 0)
+        << "a one-sweep leaf budget on a 128-wide Toeplitz batch reported universal "
+           "convergence; either the leaf status is not folded into the caller's span, or it "
+           "is written unconditionally zero";
+}
+
+// The empty-span half of the contract: "not requested" must cost nothing and
+// change nothing. stedc_buffer_size takes no `info` argument, so the size cannot
+// depend on it by construction; what is checked here is that the ANSWER does not
+// either -- i.e. that the status path is a write to caller memory and not an
+// extra pool draw that shifts every later allocation.
+TYPED_TEST(StedcTest, EmptyInfoSpanChangesNeitherAnswerNorWorkspace) {
+    using T = typename TestFixture::ScalarType;
+    using float_type = typename base_type<T>::type;
+    const int n = 128;
+    const int batch = 4;
+
+    StedcParams<float_type> params = {.recursion_threshold = 32};
+    const size_t bytes_a = stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params);
+    const size_t bytes_b = stedc_buffer_size(*this->ctx, n, batch, JobType::EigenVectors, params);
+    EXPECT_EQ(bytes_a, bytes_b);
+
+    auto d0 = Vector<float_type>::ones(n, batch);
+    auto e0 = Vector<float_type>::ones(n - 1, batch);
+    auto w0 = Vector<float_type>::zeros(n, batch);
+    auto z0 = Matrix<float_type>::Identity(n, batch);
+    auto d1 = Vector<float_type>::ones(n, batch);
+    auto e1 = Vector<float_type>::ones(n - 1, batch);
+    auto w1 = Vector<float_type>::zeros(n, batch);
+    auto z1 = Matrix<float_type>::Identity(n, batch);
+
+    UnifiedVector<std::byte> ws0(bytes_a);
+    UnifiedVector<std::byte> ws1(bytes_a);
+    UnifiedVector<int32_t> info(batch, int32_t(-1));
+
+    stedc(*this->ctx, d0.view(), e0.view(), w0.view(), ws0, JobType::EigenVectors, params,
+          z0.view(), info.to_span());
+    stedc(*this->ctx, d1.view(), e1.view(), w1.view(), ws1, JobType::EigenVectors, params,
+          z1.view(), Span<int32_t>{});
+    this->ctx->wait();
+
+    for (int b = 0; b < batch; ++b) {
+        for (int i = 0; i < n; ++i) {
+            EXPECT_EQ(w0(i, b), w1(i, b))
+                << "requesting status changed the answer at batch " << b << " index " << i;
+        }
+    }
+}
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();

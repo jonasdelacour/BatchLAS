@@ -12,6 +12,8 @@
 #include "stedc_secular.hh"
 #include "stedc_merge_kernels.hh"
 #include "stedc_levels_plan.hh"
+#include "info_span.hh"
+#include "stedc_internal.hh"
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -92,6 +94,8 @@ template <Backend B, typename T> class StedcLevelSplit;
 template <Backend B, typename T> class StedcLevelRho;
 template <Backend B, typename T> class StedcLevelZeroOffdiag;
 template <Backend B, typename T> class StedcLevelUnpad;
+// Folds the per-leaf convergence status down onto the caller's per-item span.
+template <Backend B, typename T> class StedcLevelLeafStatus;
 
 // ---------------------------------------------------------------------------
 // One divide-and-conquer merge, applied to a *super-batch*.
@@ -131,6 +135,13 @@ void stedc_merge_step(Queue& ctx,
                       const Span<std::byte>& ws,
                       int64_t m,
                       const StedcParams<T>& effective_params,
+                      // Per-item convergence status, or nullptr when not requested.
+                      // `info_nodes_per_item` is how many merge nodes this launch
+                      // covers per batch item -- 1 for the recursive driver, 2^l for
+                      // the level-synchronous one, which merges every sibling at a
+                      // level in a single launch. See src/extensions/info_span.hh.
+                      int32_t* info,
+                      int64_t info_nodes_per_item,
                       const MatrixView<T, MatrixFormat::Dense>& out_even = MatrixView<T, MatrixFormat::Dense>(),
                       const MatrixView<T, MatrixFormat::Dense>& out_odd = MatrixView<T, MatrixFormat::Dense>())
 {
@@ -176,9 +187,11 @@ void stedc_merge_step(Queue& ctx,
             }
         });
     });
-    argsort(ctx, eigenvalues, perm_map, SortOrder::Ascending, true);
-    permute(ctx, eigenvalues, perm_map);
-    permute(ctx, v, perm_map);
+    // (void) on an Event: deliberate. This Queue is in-order, so the next submission
+    // is already ordered after this one and the Event carries nothing the caller needs.
+    (void)argsort(ctx, eigenvalues, perm_map, SortOrder::Ascending, true);
+    (void)permute(ctx, eigenvalues, perm_map);
+    (void)permute(ctx, v, perm_map);
 
     auto keep_indices = VectorView<int32_t>(pool.allocate<int32_t>(ctx, n * batch_size), n, batch_size);
     auto n_reduced = pool.allocate<int32_t>(ctx, batch_size);
@@ -304,23 +317,28 @@ void stedc_merge_step(Queue& ctx,
     });
 
     // Apply deflation permutation to contiguous vectors.
-    permute(ctx, eigenvalues, permutation);
-    permute(ctx, v, permutation);
+    (void)permute(ctx, eigenvalues, permutation);
+    (void)permute(ctx, v, permutation);
 
     // Update the logical->physical column map instead of physically permuting the eigenvector matrix.
     // This composes the current column map with the deflation permutation.
-    permute(ctx, perm_map, permutation);
+    (void)permute(ctx, perm_map, permutation);
 
     auto temp_lambdas = VectorView<T>(pool.allocate<T>(ctx, n * batch_size), n, batch_size);
-    Qprime.fill_identity(ctx);
+    (void)Qprime.fill_identity(ctx);
     if (effective_params.secular_solver == StedcSecularSolver::Legacy) {
-        secular_solver(ctx, eigenvalues, v, Qprime, temp_lambdas, n_reduced, rho, T(10.0));
+        (void)secular_solver(ctx, eigenvalues, v, Qprime, temp_lambdas, n_reduced, rho, T(10.0), info, info_nodes_per_item);
     } else if (effective_params.merge_variant == StedcMergeVariant::Fused
             || effective_params.merge_variant == StedcMergeVariant::FusedCta) {
         // Fused merge paths: single-kernel implementations selected by merge_variant.
-        stedc_merge_dispatch<B, T>(ctx, eigenvalues, v, rho, n_reduced, Qprime, temp_lambdas, effective_params);
+        stedc_merge_dispatch<B, T>(ctx, eigenvalues, v, rho, n_reduced, Qprime, temp_lambdas, effective_params, info, info_nodes_per_item);
     } else {
         // Baseline ROCm path: 3 separate kernels
+        //
+        // Locals so the kernel's `[=]` copies a pointer and a scalar; nullptr makes
+        // info_report a no-op.
+        int32_t* const info_dev = info;
+        const int64_t nodes_per_item = info_nodes_per_item;
         ctx -> submit([&](sycl::handler& h) {
             auto Qview = Qprime.kernel_view();
             h.parallel_for<StedcSecularSolve<B, T>>(sycl::nd_range<1>(batch_size*128, 128), [=](sycl::nd_item<1> item) {
@@ -338,10 +356,21 @@ void stedc_merge_step(Queue& ctx,
                 sycl::group_barrier(cta);
                 for (int k = tid; k < n; k += bdim) {
                     auto dview = Q_bid(Slice{}, k);
+                    // sec_solve_* computed this flag already: the ext variant threw
+                    // it away with `(void)converged` and the other guarded it with a
+                    // release-mode-dead assert. Several threads may report the same
+                    // item; info_report is an atomic fetch_max, which is exactly the
+                    // "did ANY root fail" reduction wanted.
+                    bool root_converged = true;
                     if (k == n - 1){
-                        temp_lambdas(k, bid) = sec_solve_ext_roc(n, dview, v.batch_item(bid), std::abs(2 * rho[bid]));
+                        temp_lambdas(k, bid) = sec_solve_ext_roc(n, dview, v.batch_item(bid), std::abs(2 * rho[bid]), root_converged);
                     } else {
-                        temp_lambdas(k, bid) = sec_solve_roc(n, dview, v.batch_item(bid), std::abs(2 * rho[bid]), k);
+                        temp_lambdas(k, bid) = sec_solve_roc(n, dview, v.batch_item(bid), std::abs(2 * rho[bid]), k, root_converged);
+                    }
+                    if (!root_converged) {
+                        detail::info_report(info_dev,
+                                            detail::info_item(static_cast<int64_t>(bid), nodes_per_item),
+                                            1);
                     }
                 }
                 sycl::group_barrier(cta);
@@ -438,8 +467,8 @@ void stedc_merge_step(Queue& ctx,
         });
     });
 
-    argsort(ctx, eigenvalues, permutation, SortOrder::Ascending, true);
-    permute(ctx, eigenvalues, permutation);
+    (void)argsort(ctx, eigenvalues, permutation, SortOrder::Ascending, true);
+    (void)permute(ctx, eigenvalues, permutation);
 
     // Deflation-aware back-transform.
     //
@@ -467,10 +496,10 @@ void stedc_merge_step(Queue& ctx,
         // fold-back, neither of which fits a split destination. The saving it
         // buys is small next to not having to materialise the block-diagonal
         // input in the first place, which is what splitting achieves.
-        permuted_copy(ctx, Qprime, temp_Q, permutation);
-        permuted_copy(ctx, eigvects, Qprime, perm_map);
+        (void)permuted_copy(ctx, Qprime, temp_Q, permutation);
+        (void)permuted_copy(ctx, eigvects, Qprime, perm_map);
         for (int parity = 0; parity < 2; ++parity) {
-            gemm<B>(ctx, stedc_batch_parity(Qprime, parity), stedc_batch_parity(temp_Q, parity),
+            (void)gemm<B>(ctx, stedc_batch_parity(Qprime, parity), stedc_batch_parity(temp_Q, parity),
                     parity == 0 ? out_even : out_odd,
                     T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans);
         }
@@ -490,9 +519,9 @@ void stedc_merge_step(Queue& ctx,
     if (dd_max <= static_cast<int64_t>(stedc_deflation_gemm_max_kept_fraction * static_cast<double>(n))) {
         // A -> temp_Q. eigvects is free afterwards and is reused as the narrow
         // GEMM output, so this needs no extra workspace.
-        permuted_copy(ctx, eigvects, temp_Q, perm_map);
+        (void)permuted_copy(ctx, eigvects, temp_Q, perm_map);
         auto product_head = eigvects(Slice{}, Slice{0, static_cast<int>(dd_max)});
-        gemm<B>(ctx,
+        (void)gemm<B>(ctx,
                 temp_Q,
                 Qprime(Slice{}, Slice{0, static_cast<int>(dd_max)}),
                 product_head,
@@ -500,12 +529,12 @@ void stedc_merge_step(Queue& ctx,
         // Fold the multiplied head back over A so temp_Q holds the whole
         // product A*M; its tail columns are already correct.
         MatrixView<T, MatrixFormat::Dense>::copy(ctx, temp_Q(Slice{}, Slice{0, static_cast<int>(dd_max)}), product_head);
-        permuted_copy(ctx, temp_Q, eigvects, permutation);
+        (void)permuted_copy(ctx, temp_Q, eigvects, permutation);
     } else {
         // Avoid full-matrix copy + permute by using out-of-place permuted_copy in scratch buffers.
-        permuted_copy(ctx, Qprime, temp_Q, permutation);
-        permuted_copy(ctx, eigvects, Qprime, perm_map);
-        gemm<B>(ctx, Qprime, temp_Q, eigvects, GemmOptions<T>{});
+        (void)permuted_copy(ctx, Qprime, temp_Q, permutation);
+        (void)permuted_copy(ctx, eigvects, Qprime, perm_map);
+        (void)gemm<B>(ctx, Qprime, temp_Q, eigvects, GemmOptions<T>{});
     }
 }
 
@@ -524,7 +553,8 @@ size_t stedc_merge_step_workspace(Queue& ctx, size_t s, size_t P) {
 
 template <Backend B, typename T>
 Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, const VectorView<T>& eigenvalues, const Span<std::byte>& ws,
-            JobType jobz, StedcParams<T> params, const MatrixView<T, MatrixFormat::Dense>& eigvects, const MatrixView<T, MatrixFormat::Dense>& temp_Q)
+            JobType jobz, StedcParams<T> params, const MatrixView<T, MatrixFormat::Dense>& eigvects, const MatrixView<T, MatrixFormat::Dense>& temp_Q,
+            Span<int32_t> info)
 {
     auto n = d.size();
     auto batch_size = d.batch_size();
@@ -536,7 +566,16 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
     steqr_params.sort = true;
     steqr_params.sort_order = SortOrder::Ascending;
     if (n <= effective_params.recursion_threshold){
-        return steqr<B, T>(ctx, d, e, eigenvalues, ws, jobz, steqr_params, eigvects);
+        // steqr_dispatch, not steqr: this is the recursive driver's LEAF, and a
+        // leaf that exhausts its sweep budget is exactly what LAPACK's ?stedc
+        // reports as info > 0. Calling the public steqr here dropped `info` on
+        // the floor, so every shape that reaches this driver -- Recursive
+        // requested, plan.levels == 0 (i.e. every n <= recursion_threshold), or
+        // an unpadded-but-unpacked eigvects view -- reported convergence it had
+        // not checked. steqr_dispatch is the no-clear entry point that
+        // steqr_internal.hh added for precisely this caller; the two half-solves
+        // below then accumulate through info_report's fetch_max.
+        return steqr_dispatch<B, T>(ctx, d, e, eigenvalues, ws, jobz, steqr_params, eigvects, info);
     }
 
     //Split the matrix into two halves
@@ -570,14 +609,18 @@ Event stedc_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, con
         auto pool = BumpAllocator(ws.subspan(BumpAllocator::allocation_size<T>(ctx, batch_size)));
         auto ws1 = pool.allocate<std::byte>(ctx, stedc_internal_workspace_size<B, T>(ctx, m, batch_size, jobz, params));
         auto ws2 = pool.allocate<std::byte>(ctx, stedc_internal_workspace_size<B, T>(ctx, n - m, batch_size, jobz, params));
-        stedc_impl<B, T>(ctx, d1, e1, lambda1, ws1, jobz, params, E1, Q1);
-        stedc_impl<B, T>(ctx, d2, e2, lambda2, ws2, jobz, params, E2, Q2);
+        // Both halves are the SAME batch items, so both accumulate into the same
+        // `info` slots; info_report's fetch_max is what makes that an OR.
+        (void)stedc_impl<B, T>(ctx, d1, e1, lambda1, ws1, jobz, params, E1, Q1, info);
+        (void)stedc_impl<B, T>(ctx, d2, e2, lambda2, ws2, jobz, params, E2, Q2, info);
     }
 
     //Once the children are done their workspace can be reused for the merge.
     auto merge_ws = pool.allocate<std::byte>(ctx, stedc_merge_step_workspace<T>(ctx, n, batch_size));
     MatrixView<T> Qprime = MatrixView<T>(pool.allocate<T>(ctx, n * n * batch_size).data(), n, n, n, n * n, batch_size);
-    stedc_merge_step<B, T>(ctx, eigenvalues, eigvects, Qprime, temp_Q, rho, merge_ws, m, effective_params);
+    // One merge node per batch item on this driver, hence a divisor of 1.
+    stedc_merge_step<B, T>(ctx, eigenvalues, eigvects, Qprime, temp_Q, rho, merge_ws, m, effective_params,
+                           detail::info_ptr(info, batch_size), 1);
     return ctx.get_event();
 }
 
@@ -652,6 +695,13 @@ size_t stedc_levels_workspace(Queue& ctx, const StedcLevelPlan& plan, size_t bat
     // The merges consume the leaves' eigenvectors whatever the caller asked
     // for, so the leaf solve always computes them.
     (void)jobz;
+    // Per-leaf convergence status for the single leaf STEQR call. It is
+    // UNCONDITIONAL, exactly like potrf's: the size must not depend on whether the
+    // caller asked for status, or a workspace sized without `info` would be too
+    // small for a call made with it. This array cannot be the caller's `info` --
+    // that one is indexed by batch item and this one by leaf, and there are
+    // `leaves` of them per item.
+    bytes += BumpAllocator::allocation_size<int32_t>(ctx, leaf_batch);
     bytes += BumpAllocator::allocation_size<std::byte>(
         ctx, steqr_buffer_size<T>(ctx, d_leaf, e_leaf, w_leaf, JobType::EigenVectors, leaf_params));
 
@@ -673,7 +723,8 @@ Event stedc_levels_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>&
                         const VectorView<T>& eigenvalues, const Span<std::byte>& ws,
                         JobType jobz, StedcParams<T> params,
                         const MatrixView<T, MatrixFormat::Dense>& eigvects,
-                        const StedcLevelPlan& plan)
+                        const StedcLevelPlan& plan,
+                        Span<int32_t> info)
 {
     const int64_t n = d.size();
     const int64_t bs = d.batch_size();
@@ -706,6 +757,9 @@ Event stedc_levels_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>&
                                stedc_merge_step_workspace<T>(ctx, N >> l, (size_t(1) << l) * bs));
     }
     auto merge_ws = pool.allocate<std::byte>(ctx, merge_bytes);
+    // Drawn unconditionally so the workspace size does not depend on whether the
+    // caller asked for status; see stedc_levels_workspace.
+    auto leaf_status = pool.allocate<int32_t>(ctx, static_cast<size_t>(size_t(1) << L) * static_cast<size_t>(bs));
 
     T* dp_ptr = dp.data();
     T* ep_ptr = ep.data();
@@ -865,7 +919,32 @@ Event stedc_levels_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>&
         auto leaf_ws = pool.remaining();
         // Always compute leaf eigenvectors: the merges consume them even when
         // the caller only wants eigenvalues.
-        steqr<B, T>(ctx, d_leaf, e_leaf, w_leaf, leaf_ws, JobType::EigenVectors, leaf_params, z_leaf);
+        //
+        // THE LEAF AXIS IS NOT THE BATCH AXIS. This one call solves leaf_batch =
+        // 2^L * bs independent problems, so handing it the caller's `info` (length
+        // bs) would alias and over-run it. It gets its own per-leaf array, folded
+        // down afterwards: leaf j belongs to batch item j / 2^L, because
+        // gather_blockdiag maps parent node p to children 2p and 2p+1, so a node at
+        // level l covers item p / 2^l. steqr_dispatch, not steqr, because steqr
+        // would clear the span it is handed; the memset here is the leaf array's
+        // own, and the caller's span was cleared once in `stedc`.
+        const bool want_leaf_status = (detail::info_ptr(info, bs) != nullptr);
+        Span<int32_t> leaf_info;
+        if (want_leaf_status) {
+            leaf_info = Span<int32_t>(leaf_status.data(), static_cast<size_t>(leaf_batch));
+            ctx->memset(leaf_info.data(), 0, sizeof(int32_t) * static_cast<size_t>(leaf_batch));
+        }
+        (void)steqr_dispatch<B, T>(ctx, d_leaf, e_leaf, w_leaf, leaf_ws, JobType::EigenVectors, leaf_params, z_leaf, leaf_info);
+        if (want_leaf_status) {
+            int32_t* const out = detail::info_ptr(info, bs);
+            const int32_t* const leaves_in = leaf_info.data();
+            const int64_t leaves_per_item = leaf_batch / bs;
+            (void)ctx->parallel_for<StedcLevelLeafStatus<B, T>>(
+                sycl::range<1>(static_cast<size_t>(leaf_batch)), [=](sycl::id<1> idx) {
+                    const int64_t j = static_cast<int64_t>(idx[0]);
+                    detail::info_report(out, detail::info_item(j, leaves_per_item), leaves_in[j]);
+                });
+        }
         gather_blockdiag(L - 1, leaf);
     }
 
@@ -883,8 +962,12 @@ Event stedc_levels_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>&
         auto temp_Q = MatrixView<T>(tempq_buf.data(), s, s, s, s * s, P);
         const auto level_params = resolve_stedc_tuning<B, T>(s, params, ctx.device().type == DeviceType::GPU);
 
+        // At level l one launch merges k = 2^l sibling nodes per batch item, so the
+        // kernel's node index is divided by k before it indexes `info`.
+        int32_t* const info_out = detail::info_ptr(info, bs);
         if (l == 0) {
-            stedc_merge_step<B, T>(ctx, lambda, Zp, Qprime, temp_Q, rho_level, merge_ws, half, level_params);
+            stedc_merge_step<B, T>(ctx, lambda, Zp, Qprime, temp_Q, rho_level, merge_ws, half, level_params,
+                                   info_out, k);
         } else {
             // Hand the result straight to the parent's diagonal sub-blocks.
             const int64_t sp = s * 2;   // parent node size
@@ -893,6 +976,7 @@ Event stedc_levels_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>&
             auto out_even = MatrixView<T>(pbase, s, s, sp, sp * sp, P / 2);
             auto out_odd = MatrixView<T>(pbase + s * (sp + 1), s, s, sp, sp * sp, P / 2);
             stedc_merge_step<B, T>(ctx, lambda, Zp, Qprime, temp_Q, rho_level, merge_ws, half, level_params,
+                                   info_out, k,
                                    out_even, out_odd);
         }
     }
@@ -914,29 +998,44 @@ Event stedc_levels_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>&
 
 template <Backend B, typename T>
 Event stedc(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, const VectorView<T>& eigenvalues, const Span<std::byte>& ws,
-            JobType jobz, StedcParams<T> params, const MatrixView<T, MatrixFormat::Dense>& eigvects)
+            JobType jobz, StedcParams<T> params, const MatrixView<T, MatrixFormat::Dense>& eigvects,
+            Span<int32_t> info)
 {
     if (d.size() != e.size() + 1) {
-        throw std::runtime_error("The size of e must be one less than the size of d.");
+        throw batchlas::invalid_argument("The size of e must be one less than the size of d.");
     }
     if (d.size() != eigenvalues.size()) {
-        throw std::runtime_error("The size of eigenvalues must match the size of d.");
+        throw batchlas::invalid_argument("The size of eigenvalues must match the size of d.");
     }
     if (d.batch_size() != e.batch_size() || d.batch_size() != eigenvalues.batch_size()) {
-        throw std::runtime_error("The batch sizes of d, e, and eigenvalues must match.");
+        throw batchlas::invalid_argument("The batch sizes of d, e, and eigenvalues must match.");
     }
     if (jobz == JobType::EigenVectors) {
         if (eigvects.rows() != d.size() || eigvects.cols() != d.size() || eigvects.batch_size() != d.batch_size()) {
-            throw std::runtime_error("The dimensions of eigvects must match the size of d and its batch size.");
+            throw batchlas::invalid_argument("The dimensions of eigvects must match the size of d and its batch size.");
         }
     }
 
+    // The single clear for the whole call, here and nowhere below: every driver,
+    // leaf and merge under this point only ever RAISES a status, which is what lets
+    // the recursive driver's two half-solves and the level driver's L merges all
+    // write the same slots. See src/extensions/info_span.hh.
+    detail::info_clear(ctx, info, d.batch_size());
+    return stedc_dispatch<B, T>(ctx, d, e, eigenvalues, ws, jobz, params, eigvects, info);
+}
+
+// Everything after the clear; see stedc_internal.hh for who calls this directly.
+template <Backend B, typename T>
+Event stedc_dispatch(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, const VectorView<T>& eigenvalues, const Span<std::byte>& ws,
+            JobType jobz, StedcParams<T> params, const MatrixView<T, MatrixFormat::Dense>& eigvects,
+            Span<int32_t> info)
+{
     if constexpr (B == Backend::NETLIB) {
         auto steqr_params = params.leaf_steqr_params;
         steqr_params.sort = true;
         steqr_params.sort_order = SortOrder::Ascending;
         steqr_params.back_transform = false;
-        return steqr_legacy<B, T>(ctx, d, e, eigenvalues, ws, jobz, steqr_params, eigvects);
+        return steqr_legacy<B, T>(ctx, d, e, eigenvalues, ws, jobz, steqr_params, eigvects, info);
     }
 
     const auto n = d.size();
@@ -948,16 +1047,16 @@ Event stedc(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e, const Ve
         // the caller's matrix is densely packed, so a non-packed view (which the
         // workspace was *not* sized for) falls back to the recursive driver.
         if (plan.levels > 0 && (plan.padded_n != n || stedc_top_matrix_is_packed<T>(eigvects, n))) {
-            return stedc_levels_impl<B, T>(ctx, d, e, eigenvalues, ws, jobz, params, eigvects, plan);
+            return stedc_levels_impl<B, T>(ctx, d, e, eigenvalues, ws, jobz, params, eigvects, plan, info);
         }
     }
 
     //Clean the output matrix before we begin.
-    eigvects.fill_zeros(ctx);
+    (void)eigvects.fill_zeros(ctx);
     auto pool = BumpAllocator(ws);
     auto alloc_size = BumpAllocator::allocation_size<T>(ctx, n * n * d.batch_size());
     auto temp_Q = MatrixView<T>(pool.allocate<T>(ctx, n * n * d.batch_size()).data(), n, n, n, n * n, d.batch_size());
-    return stedc_impl<B, T>(ctx, d, e, eigenvalues, ws.subspan(alloc_size), jobz, params, eigvects, temp_Q);
+    return stedc_impl<B, T>(ctx, d, e, eigenvalues, ws.subspan(alloc_size), jobz, params, eigvects, temp_Q, info);
 
 }
 
@@ -1038,7 +1137,8 @@ size_t stedc_internal_workspace_size(Queue& ctx, size_t n, size_t batch_size, Jo
 }
 
 #define STEDC_INSTANTIATE(back, fp) \
-template Event stedc<back, BATCHLAS_UNPAREN fp>(Queue& ctx, const VectorView<BATCHLAS_UNPAREN fp>& d, const VectorView<BATCHLAS_UNPAREN fp>& e, const VectorView<BATCHLAS_UNPAREN fp>& eigenvalues, const Span<std::byte>& ws, JobType jobz, StedcParams<BATCHLAS_UNPAREN fp> params, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>& eigvects); \
+template Event stedc_dispatch<back, BATCHLAS_UNPAREN fp>(Queue& ctx, const VectorView<BATCHLAS_UNPAREN fp>& d, const VectorView<BATCHLAS_UNPAREN fp>& e, const VectorView<BATCHLAS_UNPAREN fp>& eigenvalues, const Span<std::byte>& ws, JobType jobz, StedcParams<BATCHLAS_UNPAREN fp> params, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>& eigvects, Span<int32_t> info); \
+template Event stedc<back, BATCHLAS_UNPAREN fp>(Queue& ctx, const VectorView<BATCHLAS_UNPAREN fp>& d, const VectorView<BATCHLAS_UNPAREN fp>& e, const VectorView<BATCHLAS_UNPAREN fp>& eigenvalues, const Span<std::byte>& ws, JobType jobz, StedcParams<BATCHLAS_UNPAREN fp> params, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>& eigvects, Span<int32_t> info); \
 template size_t stedc_buffer_size<back, BATCHLAS_UNPAREN fp>(Queue& ctx, size_t n, size_t batch_size, JobType jobz, StedcParams<BATCHLAS_UNPAREN fp> params);
 
 BATCHLAS_INSTANTIATE_REAL_ALL_BACKENDS(STEDC_INSTANTIATE)

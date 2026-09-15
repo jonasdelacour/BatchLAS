@@ -15,18 +15,18 @@ void validate_syrk_arguments(const MatrixView<T, MatrixFormat::Dense>& A,
                              const MatrixView<T, MatrixFormat::Dense>& C,
                              Transpose transA) {
     if (transA == Transpose::ConjTrans) {
-        throw std::invalid_argument("syrk does not support ConjTrans for real-valued inputs");
+        throw batchlas::invalid_argument("syrk does not support ConjTrans for real-valued inputs");
     }
     if (C.rows() != C.cols()) {
-        throw std::invalid_argument("syrk requires C to be square");
+        throw batchlas::invalid_argument("syrk requires C to be square");
     }
     if (A.batch_size() != C.batch_size()) {
-        throw std::invalid_argument("syrk requires matching batch sizes");
+        throw batchlas::invalid_argument("syrk requires matching batch sizes");
     }
 
     const int expected_n = transA == Transpose::NoTrans ? A.rows() : A.cols();
     if (expected_n != C.rows()) {
-        throw std::invalid_argument("syrk dimension mismatch between A and C");
+        throw batchlas::invalid_argument("syrk dimension mismatch between A and C");
     }
 }
 

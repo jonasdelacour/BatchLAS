@@ -18,9 +18,53 @@ set(BATCHLAS_SYCL_EXTRA_CXX_OPTIONS "")
 set(BATCHLAS_SYCL_EXTRA_LINK_OPTIONS "")
 set(BATCHLAS_SYCL_NO_CPU_CXX_OPTIONS "")
 set(BATCHLAS_DETECTED_DEVICE_LIMIT_ENTRIES "")
-set(BATCHLAS_DETECTED_DEVICE_LIMIT_MIN_GPU_LOCAL_MEM_BYTES 32768)
 set(BATCHLAS_DETECTED_DEVICE_LIMIT_MIN_GPU_SUBGROUP_WORKSPACE_BUDGET_BYTES 28672)
 set(BATCHLAS_DETECTED_DEVICE_LIMIT_MIN_GPU_SAFE_SUBGROUPS_PER_WORKGROUP 2)
+
+# See batchlas_subgroup_workspace_budget_bytes below: this is the DEVICE-GEMM tile cap,
+# not a device capacity, and moving it recompiles a different set of tile variants into
+# gemm, symm, herk, syrk and syr2k. 0 derives it per architecture; a non-zero value
+# overrides the derivation for every architecture at once.
+#
+# The NAME is load-bearing. Its predecessor, BATCHLAS_DEVICE_GEMM_WORKSPACE_CAP_BYTES,
+# shipped with a default of the literal 45056, and a CACHE entry outlives the list file
+# that declared it: once the derivation replaced that default, every ALREADY-CONFIGURED
+# tree still held 45056, still took the `GREATER 0` branch, and still forced NVIDIA's cap
+# onto every architecture. Renaming is what makes the fix reach those trees, because a
+# stale entry under the old name can no longer be read. Do not rename it back, and do not
+# reintroduce a non-zero default.
+# evidence: docs/perf/gemm.md#the-subgroup-workspace-budget
+set(BATCHLAS_DEVICE_GEMM_TILE_CAP_BYTES 0 CACHE STRING
+    "Compile-time local-memory cap for the device GEMM tile variants, in bytes; 0 derives it per architecture")
+
+# Migrate rather than ignore. Dropping the old entry silently would lose a value someone
+# set on purpose; carrying it across unconditionally would resurrect the stale default.
+# 45056 is the only value that is ambiguous between the two, and it WAS the default, so
+# it is read as one.
+if(DEFINED CACHE{BATCHLAS_DEVICE_GEMM_WORKSPACE_CAP_BYTES})
+    set(_batchlas_legacy_cap "$CACHE{BATCHLAS_DEVICE_GEMM_WORKSPACE_CAP_BYTES}")
+    unset(BATCHLAS_DEVICE_GEMM_WORKSPACE_CAP_BYTES CACHE)
+    if("${_batchlas_legacy_cap}" STREQUAL "45056" OR "${_batchlas_legacy_cap}" STREQUAL "0")
+        message(STATUS "Dropping the legacy BATCHLAS_DEVICE_GEMM_WORKSPACE_CAP_BYTES default (${_batchlas_legacy_cap}); the device-GEMM tile cap is now derived per architecture")
+    else()
+        message(WARNING "BATCHLAS_DEVICE_GEMM_WORKSPACE_CAP_BYTES is renamed to BATCHLAS_DEVICE_GEMM_TILE_CAP_BYTES; carrying your override ${_batchlas_legacy_cap} across to the new name")
+        set(BATCHLAS_DEVICE_GEMM_TILE_CAP_BYTES "${_batchlas_legacy_cap}" CACHE STRING
+            "Compile-time local-memory cap for the device GEMM tile variants, in bytes; 0 derives it per architecture"
+            FORCE)
+    endif()
+    unset(_batchlas_legacy_cap)
+endif()
+
+# The configure-time local-memory probe that used to write this is gone: it cost a full
+# SYCL compile, link and run at every fresh configure, and by the end it had no readers at
+# all -- its one former consumer (the tile cap above) is table-derived on purpose, and
+# every resident capacity asks DeviceProperty::LOCAL_MEM_SIZE at run time. Left in an
+# existing cache the entry still reads as a knob, so it is removed rather than orphaned.
+if(DEFINED CACHE{BATCHLAS_GPU_LOCAL_MEM_BYTES})
+    unset(BATCHLAS_GPU_LOCAL_MEM_BYTES CACHE)
+    message(STATUS "Removing BATCHLAS_GPU_LOCAL_MEM_BYTES from the cache; the configure-time local-memory probe it fed no longer exists and nothing reads its result")
+endif()
+
 set(BATCHLAS_SYCL_BASE_CXX_OPTIONS
     -fsycl
     -Wno-c++20-extensions
@@ -38,27 +82,55 @@ if(BATCHLAS_SYCL_LINK_JOBS GREATER 1)
         -fsycl-max-parallel-link-jobs=${BATCHLAS_SYCL_LINK_JOBS})
 endif()
 
-function(batchlas_device_local_mem_bytes architecture device_type out_var)
-    set(_local_mem_bytes 32768)
+# The per-architecture local-memory table. Two callers: the reported DETECTED_DEVICES
+# row, and the tile cap below, which needs it as the HISTORICAL figure it must not move
+# away from. It is deliberately NOT a device capacity -- no kernel may size anything from
+# it, because a build-host table cannot bind the device the process later opens; every
+# resident capacity asks DeviceProperty::LOCAL_MEM_SIZE instead
+# (src/util/resident_capacity.hh).
+function(batchlas_architecture_table_local_mem_bytes architecture device_type out_var)
+    set(_table_bytes 32768)
 
     if("${device_type}" STREQUAL "gpu")
         if("${architecture}" MATCHES "^nvidia_gpu_sm_[0-9]+$")
-            set(_local_mem_bytes 49152)
+            set(_table_bytes 49152)
         elseif("${architecture}" MATCHES "^amd_gpu_gfx[0-9]+$")
-            set(_local_mem_bytes 65536)
+            set(_table_bytes 65536)
         elseif("${architecture}" MATCHES "^intel")
-            set(_local_mem_bytes 65536)
+            set(_table_bytes 65536)
         endif()
     endif()
 
-    set(${out_var} "${_local_mem_bytes}" PARENT_SCOPE)
+    set(${out_var} "${_table_bytes}" PARENT_SCOPE)
 endfunction()
 
-function(batchlas_subgroup_workspace_budget_bytes local_mem_bytes device_type out_var)
+# The DEVICE-GEMM tiles' compile-time workspace cap, and the only value in the generated
+# header anything reads (group_blas_subgroup_common.hh's kSubgroupWorkspaceBudgetBytes).
+#
+# It is derived from the ARCHITECTURE TABLE and never from a device capacity, even a true
+# one. The budget sizes fixed arrays inside device structs and drives five `if constexpr`
+# gates spanning gemm, symm, herk, syrk and syr2k, so it is a tuning constant wearing a
+# capacity's clothes: raising it changes both which tile variants compile in and how many
+# subgroups each stages. Feeding sm_89's real 101,376 into it would retune five ops as a
+# side effect of correcting a capacity table, and no benchmark in this tree has ever
+# timed any budget but the one each architecture already ships.
+#
+# The `- 4096` reserve and the 16384 floor are likewise historical, not derived: together
+# with the table they reproduce, byte for byte, the budget every architecture had before
+# any of this was touched (NVIDIA 45,056, AMD and Intel 61,440, unrecognised GPU 28,672).
+# Changing any of the three is a measured change, not a cleanup.
+# evidence: docs/perf/gemm.md#the-subgroup-workspace-budget
+function(batchlas_subgroup_workspace_budget_bytes architecture local_mem_bytes device_type out_var)
     set(_workspace_budget_bytes "${local_mem_bytes}")
 
     if("${device_type}" STREQUAL "gpu")
-        math(EXPR _workspace_budget_bytes "${local_mem_bytes} - 4096")
+        if(BATCHLAS_DEVICE_GEMM_TILE_CAP_BYTES GREATER 0)
+            set(_workspace_budget_bytes "${BATCHLAS_DEVICE_GEMM_TILE_CAP_BYTES}")
+        else()
+            batchlas_architecture_table_local_mem_bytes("${architecture}" "${device_type}" _table_bytes)
+            math(EXPR _workspace_budget_bytes "${_table_bytes} - 4096")
+        endif()
+
         if(_workspace_budget_bytes LESS 16384)
             set(_workspace_budget_bytes 16384)
         endif()
@@ -244,7 +316,6 @@ function(collect_sycl_device_limit_info)
     if(NOT SYCL_LS)
         message(STATUS "sycl-ls not found, generating conservative device limits")
         set(BATCHLAS_DETECTED_DEVICE_LIMIT_ENTRIES "" PARENT_SCOPE)
-        set(BATCHLAS_DETECTED_DEVICE_LIMIT_MIN_GPU_LOCAL_MEM_BYTES 32768 PARENT_SCOPE)
         set(BATCHLAS_DETECTED_DEVICE_LIMIT_MIN_GPU_SUBGROUP_WORKSPACE_BUDGET_BYTES 28672 PARENT_SCOPE)
         set(BATCHLAS_DETECTED_DEVICE_LIMIT_MIN_GPU_SAFE_SUBGROUPS_PER_WORKGROUP 2 PARENT_SCOPE)
         return()
@@ -259,7 +330,6 @@ function(collect_sycl_device_limit_info)
     if(NOT SYCL_LS_DEVICE_LIMITS_RESULT EQUAL 0)
         message(WARNING "Failed to execute sycl-ls --verbose for device limit detection: ${SYCL_LS_DEVICE_LIMITS_ERROR}")
         set(BATCHLAS_DETECTED_DEVICE_LIMIT_ENTRIES "" PARENT_SCOPE)
-        set(BATCHLAS_DETECTED_DEVICE_LIMIT_MIN_GPU_LOCAL_MEM_BYTES 32768 PARENT_SCOPE)
         set(BATCHLAS_DETECTED_DEVICE_LIMIT_MIN_GPU_SUBGROUP_WORKSPACE_BUDGET_BYTES 28672 PARENT_SCOPE)
         set(BATCHLAS_DETECTED_DEVICE_LIMIT_MIN_GPU_SAFE_SUBGROUPS_PER_WORKGROUP 2 PARENT_SCOPE)
         return()
@@ -270,7 +340,6 @@ function(collect_sycl_device_limit_info)
     string(REPLACE "\n" ";" _sycl_ls_lines "${SYCL_LS_DEVICE_LIMITS_OUTPUT}")
 
     set(_entries "")
-    set(_min_gpu_local_mem_bytes 0)
     set(_min_gpu_workspace_budget_bytes 0)
     set(_min_gpu_safe_subgroups_per_workgroup 0)
     set(_current_platform_name "")
@@ -312,8 +381,8 @@ function(collect_sycl_device_limit_info)
                 endif()
             elseif(_trimmed_line MATCHES "^Architecture:[ ]*(.+)$")
                 set(_current_architecture "${CMAKE_MATCH_1}")
-                batchlas_device_local_mem_bytes("${_current_architecture}" "${_current_device_type}" _current_local_mem_bytes)
-                batchlas_subgroup_workspace_budget_bytes("${_current_local_mem_bytes}" "${_current_device_type}" _current_workspace_budget_bytes)
+                batchlas_architecture_table_local_mem_bytes("${_current_architecture}" "${_current_device_type}" _current_local_mem_bytes)
+                batchlas_subgroup_workspace_budget_bytes("${_current_architecture}" "${_current_local_mem_bytes}" "${_current_device_type}" _current_workspace_budget_bytes)
                 batchlas_safe_subgroups_per_workgroup("${_current_architecture}" "${_current_device_type}" _current_safe_subgroups_per_workgroup)
 
                 set(_entry "${_current_platform_name}|${_current_device_type}|${_current_device_name}|${_current_architecture}|${_current_subgroup_size}|${_current_local_mem_bytes}|${_current_workspace_budget_bytes}")
@@ -323,9 +392,6 @@ function(collect_sycl_device_limit_info)
                 endif()
 
                 if("${_current_device_type}" STREQUAL "gpu")
-                    if(_min_gpu_local_mem_bytes EQUAL 0 OR _current_local_mem_bytes LESS _min_gpu_local_mem_bytes)
-                        set(_min_gpu_local_mem_bytes "${_current_local_mem_bytes}")
-                    endif()
                     if(_min_gpu_workspace_budget_bytes EQUAL 0 OR _current_workspace_budget_bytes LESS _min_gpu_workspace_budget_bytes)
                         set(_min_gpu_workspace_budget_bytes "${_current_workspace_budget_bytes}")
                     endif()
@@ -339,9 +405,6 @@ function(collect_sycl_device_limit_info)
         endif()
     endforeach()
 
-    if(_min_gpu_local_mem_bytes EQUAL 0)
-        set(_min_gpu_local_mem_bytes 32768)
-    endif()
     if(_min_gpu_workspace_budget_bytes EQUAL 0)
         set(_min_gpu_workspace_budget_bytes 28672)
     endif()
@@ -350,7 +413,6 @@ function(collect_sycl_device_limit_info)
     endif()
 
     set(BATCHLAS_DETECTED_DEVICE_LIMIT_ENTRIES "${_entries}" PARENT_SCOPE)
-    set(BATCHLAS_DETECTED_DEVICE_LIMIT_MIN_GPU_LOCAL_MEM_BYTES "${_min_gpu_local_mem_bytes}" PARENT_SCOPE)
     set(BATCHLAS_DETECTED_DEVICE_LIMIT_MIN_GPU_SUBGROUP_WORKSPACE_BUDGET_BYTES "${_min_gpu_workspace_budget_bytes}" PARENT_SCOPE)
     set(BATCHLAS_DETECTED_DEVICE_LIMIT_MIN_GPU_SAFE_SUBGROUPS_PER_WORKGROUP "${_min_gpu_safe_subgroups_per_workgroup}" PARENT_SCOPE)
 endfunction()
@@ -428,8 +490,18 @@ function(detect_sycl_cpu_target)
     set(BATCHLAS_SYCL_TARGETS "${BATCHLAS_SYCL_TARGETS}" PARENT_SCOPE)
 endfunction()
 
+# Under `cmake -P` there is no project to configure and no toolchain to detect, so a
+# script that include()s this file gets the derivation functions and nothing else. That
+# is what lets the per-architecture caps be checked for AMD and Intel from a box that has
+# neither.
+if(CMAKE_SCRIPT_MODE_FILE)
+    set(BATCHLAS_DETECT_SYCL_FUNCTIONS_ONLY TRUE)
+endif()
+if(NOT BATCHLAS_DETECT_SYCL_FUNCTIONS_ONLY)
+
 detect_sycl_gpu_architectures()
 detect_sycl_cpu_target()
+
 collect_sycl_device_limit_info()
 
 set(DETECTED_AMD_ARCH "")
@@ -605,3 +677,5 @@ if(BATCHLAS_SYCL_TARGETS_NO_CPU_STRING)
 endif()
 
 message(STATUS "Using Intel oneAPI DPC++ compiler for SYCL: ${CMAKE_CXX_COMPILER}")
+
+endif() # NOT BATCHLAS_DETECT_SYCL_FUNCTIONS_ONLY

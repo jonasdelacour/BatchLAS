@@ -84,7 +84,12 @@ int main() try {
         }
     }
 
-    Queue ctx(Device::default_device());  // backend resolved from the device
+    // Fully qualified on purpose. Queue and Device are in namespace batchlas
+    // like everything else; the compatibility shim in the util headers would
+    // also let this be spelled bare, but a consumer that defines
+    // BATCHLAS_NO_GLOBAL_NAMES gets no such help -- and consumer_test.sh builds
+    // this file both ways precisely to keep that promise honest.
+    batchlas::Queue ctx(batchlas::Device::default_device());
     std::printf("backend = %d\n", static_cast<int>(ctx.backend()));
 
     // C := alpha * A * B  (+ beta * C, beta = 0). Option-struct spelling; the
