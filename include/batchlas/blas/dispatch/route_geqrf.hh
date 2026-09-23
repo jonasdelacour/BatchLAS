@@ -87,7 +87,7 @@ struct RouteTable<Op::geqrf, T> {
         if constexpr (std::is_same_v<T, float>) {
             return (n >= 4 && n <= 16) || (n >= 21 && n <= 32);
         } else if constexpr (std::is_same_v<T, std::complex<float>>) {
-            return (n >= 5 && n <= 8) || (n >= 11 && n <= 16) || (n >= 25 && n <= 32);
+            return (n >= 5 && n <= 8) || (n >= 11 && n <= 16) || (n >= 24 && n <= 32);
         } else {
             return false;                            // fp64 measured 0.14-1.13x; no window
         }

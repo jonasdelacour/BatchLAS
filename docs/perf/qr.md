@@ -1628,7 +1628,7 @@ at 1.015x. **Every number below is at batch 32768.**
 
 ```
 float             4 <= n <= 16,  21 <= n <= 32
-complex<float>    5 <= n <=  8,  11 <= n <= 16,  25 <= n <= 32
+complex<float>    5 <= n <=  8,  11 <= n <= 16,  24 <= n <= 32
 double, cdouble   refused
 ```
 
@@ -1671,8 +1671,9 @@ Two consequences, both deliberate:
   runs: n=17 measured 0.812x twice to three digits, n=21 1.211x then 1.225x, n=16 3.711x then
   3.693x, and its margins are large enough that a 10% error flips nothing.
 
-**Both windows should be re-cut once NVML is working**, against the real guard. The float window
-is unlikely to move; the complex edges at n = 9, 10, 23, 24 are the ones to re-take.
+**Both windows were re-cut once NVML was fixed**, against the real guard — see
+[The re-cut, against a working guard](#the-re-cut-against-a-working-guard). One cell in the whole
+set was contaminated, and the complex top band moved from 25..32 to 24..32; nothing else changed.
 
 ### Arming the window
 
@@ -1697,3 +1698,69 @@ it never checked.
 Breaks A and C are the load-bearing ones, and both went red: A defends the window's measured
 edges (the hole at 17..20 is the whole point of the predicate) and C defends R8b exclusivity
 (without it the vendor-free walk still lands on CTA, the arm the window was measured to beat).
+
+## The re-cut, against a working guard
+
+The windows above were first cut while NVML was down, so `benchmarks/gpu_guard.sh` could not run
+and a stand-in was used. NVML is fixed (the module and userspace now agree at 595.91.07) and
+every cell below was re-taken through the **real** guard, which reported "exclusive for the whole
+run" on all 33 and refused nothing.
+
+**The stand-in had a worse hole than the outage did, and it is the reason to re-cut at all.** It
+found foreign processes by reading `/proc/<pid>/fd`, which the kernel only permits for the
+reader's *own* processes. This box is shared, and `/proc/<other user's pid>/fd` is
+`Permission denied` — so the stand-in reported an idle card while another user's jobs held it.
+Worse, the arming that was supposed to validate it used a hog started by the same account, i.e.
+the one class of process it *could* see, so the test passed on a poison the code under test was
+uniquely able to swallow. The real guard, given the same situation, refuses and names the pids.
+
+### What changed: almost nothing, and that is the result
+
+| | first cut (stand-in) | re-cut (real guard) | verdict |
+|---|---|---|---|
+| geqrf float 17 | 0.812x | 0.805x | unchanged |
+| geqrf float 20 | 1.043x | 1.043x | unchanged |
+| geqrf float 21 | 1.225x | 1.215x | unchanged |
+| geqrf float 32 | 3.284x | 3.281x | unchanged |
+| geqrf cfloat 9 | 1.026x | 1.026x | unchanged |
+| geqrf cfloat 16 | 1.678x | 1.691x | unchanged |
+| geqrf cfloat 32 | 1.865x | 1.875x | unchanged |
+| **geqrf cfloat 23** | **0.148x** | **1.067x** | the one contaminated cell |
+| potrf double 11 | 1.049x | 1.049x | unchanged |
+| potrf double 12 | 1.145x | 1.145x | unchanged |
+| potrf double 16 | 1.505x | 1.508x | unchanged |
+| potrf cdouble 16 | 1.545x | 1.546x | unchanged |
+| potrf Upper float 16 | 11.018x | 10.786x | unchanged |
+| potrf Upper cdouble 10 | 1.417x | 1.388x | unchanged |
+
+Exactly **one** cell out of the set was contaminated — cfloat n=23, which read 0.148x once and
+1.067x on every other occasion. Everything else reproduces, much of it to three decimal places.
+So the degraded grids were sound and the conclusions drawn from them stand.
+
+### The widened complex margin was right, and not for the reason it was chosen
+
+The complex window used a 1.25 margin instead of the 1.11 flip gate, justified defensively by
+that 7x swing. Three independent guard-clean measurements of the cells it excluded show the
+margin was picking out genuinely unstable cells, which is a better reason than the one given:
+
+| n | run 1 | run 2 | run 3 |
+|---|---|---|---|
+| cfloat 4 | 1.061x | 1.157x | **0.981x** |
+| cfloat 10 | 1.117x | 1.111x | **1.103x** |
+| cfloat 24 | 1.122x | 1.122x | 1.119x |
+
+n=4 crosses the gate in both directions between runs and n=10 sits on it, so both are correctly
+refused — a window cut at 1.11 on any single run would have admitted one or both. **n=24 is the
+exception**: three runs inside 0.3% of each other, all above the gate, so the top band moves from
+`25..32` to `24..32`. That is the only predicate change the re-cut produced.
+
+The float window and both potrf windows are unchanged, confirmed against the real guard.
+
+### What is still owed
+
+The cells re-taken here are the window *edges* and the ones nearest the gate. The band interiors
+(cfloat 6, 7, 12..15, 26..31; float 5..16, 22..31; the potrf Upper grid above n=16) were measured
+once, with the stand-in. Their margins are wide — mostly above 1.4x and in places above 20x — so
+contention of the size observed cannot have manufactured them, and no conclusion here rests on a
+cell that was not re-taken. They are nonetheless single-run numbers and should be refreshed the
+next time the op is touched.
