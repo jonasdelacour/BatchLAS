@@ -1,0 +1,6 @@
+# Measured evidence: raw benchmark CSVs and logs. Stored in Git LFS so a PR that adds a grid
+# costs a three-line pointer per file in its diff rather than the grid itself, while the data
+# stays versioned with the commit that produced it. `git lfs pull` fetches the contents.
+# .github/ci/check_lfs_pointers.py fails CI if a file here is committed as raw content -- which
+# is what happens, silently, when git-lfs is not installed on the committing machine.
+benchmarks/results/** filter=lfs diff=lfs merge=lfs -text

@@ -167,6 +167,25 @@ jobs:
         # was written.
         run: python3 .github/ci/check_evidence_anchors.py
 
+  lfs-pointers:
+    name: Benchmark results are stored in Git LFS
+    runs-on: ubuntu-latest
+    steps:
+      # No `lfs: true`: the check reads each file's committed BLOB, which is the pointer
+      # whether or not the checkout smudges it, so the job never downloads the data.
+      - uses: actions/checkout@v4
+      - name: The pointer detector still detects
+        # Same reason as the other self-tests: an empty finding list must be distinguishable
+        # from a detector that accepts everything. Pins a raw CSV, a truncated pointer, and a
+        # real file that happens to START with the pointer's version line.
+        run: python3 .github/ci/check_lfs_pointers.py --self-test
+      - name: Nothing under an LFS path is committed as raw content
+        # Raw grids live under benchmarks/results/ in LFS so a PR that adds one costs a
+        # three-line pointer per file, not the grid. Committing from a machine without
+        # git-lfs installed silently stores the raw file instead -- no warning anywhere --
+        # and this is the only thing that notices.
+        run: python3 .github/ci/check_lfs_pointers.py
+
   # ---------------------------------------------------------------------------
   # THE PRIMARY GATE. Everything above this line is text scanning.
   # ---------------------------------------------------------------------------
@@ -178,9 +197,16 @@ jobs:
     # says to, as this user, with this user's HOME, this user's ccache and both
     # GPUs. Fork PRs therefore do not get the runner. (pull_request_target is
     # not the fix - it is the same execution with more secrets in scope.)
+    #
+    # OPT-IN via the repository variable GPU_RUNNER=true (Settings > Secrets and
+    # variables > Actions > Variables). With no runner registered, an ungated job
+    # sits queued for 24 h and is then CANCELLED, which leaves every PR and every
+    # push to main marked "unstable". Unset, the job is SKIPPED -- neutral, not a
+    # failure. Set the variable in the same breath as registering the runner.
     if: >-
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
+      vars.GPU_RUNNER == 'true' &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
 
     # ONE HARNESS ON THE BOX AT A TIME - non-negotiable, and the group covers
     # the build as well as the test run, not just other ctest runs.
@@ -394,9 +420,11 @@ jobs:
   gpu-nightly-full:
     name: Nightly full ctest and vendor-free build (self-hosted, sm_89)
     runs-on: [self-hosted, linux, x64, cuda]
+    # Same GPU_RUNNER opt-in as gpu-build-test, for the same reason.
     if: >-
-      github.event_name == 'schedule' ||
-      (github.event_name == 'workflow_dispatch' && inputs.run_nightly)
+      vars.GPU_RUNNER == 'true' &&
+      (github.event_name == 'schedule' ||
+       (github.event_name == 'workflow_dispatch' && inputs.run_nightly))
 
     # THE SAME concurrency group as gpu-build-test, on purpose. The reason is
     # the machine, not the workflow: one harness on the box at a time. A nightly

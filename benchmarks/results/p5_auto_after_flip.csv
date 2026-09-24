@@ -1,27 +1,3 @@
-op,type,m,n,nrhs,batch,arm,pin,pin_parsed,median_ms,mean_ms,rel_sd,reps,residual,extra_check,info_nonzero,bad,reason,resolved_route
-geqrf,double,64,64,0,16384,vendor,vendor,1,31.823965,31.754605,0.0076,9,5.291e-16,5.652e-15,0,0,ok,vendor
-geqrf,double,64,64,0,16384,auto,auto,1,31.743610,31.775000,0.0043,9,5.291e-16,5.652e-15,0,0,ok,vendor:auto
-geqrf,double,72,72,0,16384,vendor,vendor,1,46.202002,46.157886,0.0025,9,5.592e-16,6.388e-15,0,0,ok,vendor
-geqrf,double,72,72,0,16384,auto,auto,1,46.101887,46.096461,0.0020,9,5.592e-16,6.388e-15,0,0,ok,vendor:auto
-geqrf,double,76,76,0,16384,vendor,vendor,1,55.126711,55.297658,0.0086,9,5.617e-16,6.749e-15,0,0,ok,vendor
-geqrf,double,76,76,0,16384,auto,auto,1,43.901981,43.929039,0.0017,9,6.651e-16,7.197e-15,0,0,ok,native:blocked
-geqrf,double,80,80,0,16384,vendor,vendor,1,62.145430,62.339122,0.0085,9,5.856e-16,7.103e-15,0,0,ok,vendor
-geqrf,double,80,80,0,16384,auto,auto,1,44.519192,44.522931,0.0003,9,7.113e-16,7.627e-15,0,0,ok,native:blocked
-geqrf,double,88,88,0,16384,vendor,vendor,1,85.541660,85.124404,0.0083,9,6.115e-16,8.075e-15,0,0,ok,vendor
-geqrf,double,88,88,0,16384,auto,auto,1,59.323044,59.323718,0.0002,9,7.652e-16,8.476e-15,0,0,ok,native:blocked
-geqrf,double,96,96,0,16384,vendor,vendor,1,106.246081,105.941125,0.0065,9,6.149e-16,8.044e-15,0,0,ok,vendor
-geqrf,double,96,96,0,16384,auto,auto,1,62.361444,62.370831,0.0005,9,7.586e-16,9.136e-15,0,0,ok,native:blocked
-geqrf,double,128,128,0,16384,vendor,vendor,1,250.578479,250.597677,0.0060,9,6.780e-16,1.049e-14,0,0,ok,vendor
-geqrf,double,128,128,0,16384,auto,auto,1,112.642521,112.689660,0.0009,9,8.321e-16,1.103e-14,0,0,ok,native:blocked
-geqrf,double,160,160,0,8192,vendor,vendor,1,240.880420,240.992998,0.0021,9,7.383e-16,1.302e-14,0,0,ok,vendor
-geqrf,double,160,160,0,8192,auto,auto,1,93.972638,93.974763,0.0001,9,8.978e-16,1.328e-14,0,0,ok,native:blocked
-geqrf,double,256,256,0,4096,vendor,vendor,1,459.746136,460.166483,0.0018,9,8.899e-16,1.985e-14,0,0,ok,vendor
-geqrf,double,256,256,0,4096,auto,auto,1,134.599233,134.607346,0.0002,9,1.100e-15,2.083e-14,0,0,ok,native:blocked
-geqrf,double,512,512,0,1024,vendor,vendor,1,995.147261,995.106199,0.0001,9,1.218e-15,3.899e-14,0,0,ok,vendor
-geqrf,double,512,512,0,1024,auto,auto,1,198.459543,198.467777,0.0001,9,1.512e-15,3.952e-14,0,0,ok,native:blocked
-geqrf,double,256,80,0,8192,vendor,vendor,1,124.472951,124.525955,0.0033,9,5.561e-16,5.599e-15,0,0,ok,vendor
-geqrf,double,256,80,0,8192,auto,auto,1,64.589905,64.590008,0.0001,9,6.713e-16,5.905e-15,0,0,ok,native:blocked
-geqrf,double,512,16,0,16384,vendor,vendor,1,26.551607,26.570892,0.0049,9,2.886e-16,2.669e-15,0,0,ok,vendor
-geqrf,double,512,16,0,16384,auto,auto,1,26.639750,26.639920,0.0039,9,2.886e-16,2.669e-15,0,0,ok,vendor:auto
-geqrf,double,64,16,0,16384,vendor,vendor,1,1.804772,1.815762,0.0186,9,3.131e-16,1.687e-15,0,0,ok,vendor
-geqrf,double,64,16,0,16384,auto,auto,1,1.806621,1.811085,0.0078,9,3.131e-16,1.687e-15,0,0,ok,vendor:auto
+version https://git-lfs.github.com/spec/v1
+oid sha256:31bc0b2fdb8bd5a3f258c906570c144f2f3484caf0bf20afb72d03cba1a6e97d
+size 2954

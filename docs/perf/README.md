@@ -82,6 +82,34 @@ or check the whole tree out somewhere scratch:
 git worktree add /tmp/perf-evidence perf-evidence/vendor-independence
 ```
 
+### New raw data lives in `benchmarks/results/`, in Git LFS
+
+The tag solved the line-count problem by taking the data out of the tree, which also detached
+it from the commit that produced it. New grids stay in the tree instead, under
+`benchmarks/results/`, and `.gitattributes` routes that directory through **Git LFS**: the
+repository stores a three-line pointer per file and the content lives in LFS storage. A PR that
+adds a grid therefore costs about three lines per file in its diff, not the grid — the WP6 PR
+carried 14,608 lines of CSV and log, 30% of its diff, before this, and 285 after.
+
+Nothing changes for the reader except one command. File names, paths, every citation on these
+pages and every script that writes or reads them are unchanged, and GitHub still renders a
+tracked CSV in its web view. With `git-lfs` installed a clone smudges the real content in
+automatically; without it the files read as pointers, and
+
+```
+git lfs install        # once per machine
+git lfs pull           # fetch the content for the current checkout
+```
+
+brings them back.
+
+**Committing without `git-lfs` installed stores the raw file, silently.** Git has no `lfs` filter
+driver on such a machine, ignores the attribute and says nothing. `.github/ci/check_lfs_pointers.py`
+is the only thing that notices: it reads each LFS-tracked file's committed blob and fails CI if it
+is not a pointer. It runs in `.github/ci/run_local_checks.sh` against the index, so it catches the
+file before the commit rather than after. The fix is `git lfs install` then
+`git add --renormalize benchmarks/results`; no data is lost.
+
 ## Related
 
 - [../design/vendor-independence.md](../design/vendor-independence.md) — how dispatch works

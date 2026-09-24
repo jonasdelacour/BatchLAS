@@ -1,5 +1,3 @@
-op,type,m,n,nrhs,batch,arm,pin,pin_parsed,median_ms,mean_ms,rel_sd,reps,residual,extra_check,info_nonzero,bad,reason,resolved_route
-gesv,cfloat,16,16,1,16384,tiny,tiny,1,0.117150,0.117060,0.0050,7,3.045e-08,0.000e+00,0,0,ok,gesv:native:tiny
-gesv,cfloat,16,16,1,16384,blocked,blocked,1,0.335232,0.335168,0.0043,7,3.916e-08,0.000e+00,0,0,ok,gesv:native:blocked|getrf:vendor:auto|getrs:vendor:auto
-gesv,cfloat,17,17,1,16384,tiny,tiny,1,0.371495,0.371557,0.0015,7,3.514e-08,0.000e+00,0,0,ok,gesv:native:tiny
-gesv,cfloat,17,17,1,16384,blocked,blocked,1,0.246687,0.246641,0.0012,7,4.264e-08,0.000e+00,0,0,ok,gesv:native:blocked|getrf:vendor:auto|getrs:vendor:auto
+version https://git-lfs.github.com/spec/v1
+oid sha256:d32b81f69cdba47ae0a05436afcc85019aa05da49d03d3abe67fda49bdcb76eb
+size 658

@@ -38,6 +38,9 @@ run python3 "$here/check_comment_density.py"
 # from a walk that read nothing.
 run python3 "$here/check_evidence_anchors.py" --self-test
 run python3 "$here/check_evidence_anchors.py"
+# Checks the INDEX, so it catches a raw benchmark file before it is committed, not after.
+run python3 "$here/check_lfs_pointers.py" --self-test
+run python3 "$here/check_lfs_pointers.py"
 if [ "$#" -gt 0 ]; then
     run python3 "$here/check_exported_package.py" --package "$1"
 fi

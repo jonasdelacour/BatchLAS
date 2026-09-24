@@ -1,5 +1,3 @@
-op,type,m,n,nrhs,batch,arm,pin,pin_parsed,median_ms,mean_ms,rel_sd,reps,residual,extra_check,info_nonzero,bad,reason,resolved_route
-posv,float,16,16,4,16384,tiny,tiny,1,0.066081,0.066130,0.0047,15,3.681e-08,0.000e+00,0,0,ok,skipped
-posv,float,16,16,4,16384,blocked,blocked,1,0.435036,0.435026,0.0012,15,3.142e-08,0.000e+00,0,0,ok,skipped
-posv,float,16,16,4,16384,vendor,blocked,1,0.240982,0.240950,0.0043,15,3.465e-08,0.000e+00,0,0,ok,skipped
-posv,float,16,16,4,16384,native,blocked,1,0.364005,0.363938,0.0011,15,3.142e-08,0.000e+00,0,0,ok,skipped
+version https://git-lfs.github.com/spec/v1
+oid sha256:51c8dae6d91e3d57dce246ed100d057e144800c701e20e7ef46cf74a741370c8
+size 548

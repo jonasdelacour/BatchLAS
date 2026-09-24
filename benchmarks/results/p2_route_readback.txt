@@ -1,12 +1,3 @@
-gesv   float    n=32  -> native:tiny
-gesv   float    n=33  -> native:blocked
-gesv   cfloat   n=16  -> native:tiny
-gesv   cfloat   n=17  -> native:blocked
-gesv   double   n=16  -> native:blocked
-gesv   cdouble  n=16  -> native:blocked
-posv   float    n=32  -> native:tiny
-posv   float    n=33  -> native:blocked
-posv   cfloat   n=32  -> native:tiny
-posv   double   n=32  -> native:tiny
-posv   cdouble  n=16  -> native:tiny
-posv   cdouble  n=17  -> native:blocked
+version https://git-lfs.github.com/spec/v1
+oid sha256:750cac7d2d9768907d72b94067e1ccf2878a2c723a07fba1b55a8913ec5aecb9
+size 462

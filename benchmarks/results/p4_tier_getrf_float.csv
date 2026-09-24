@@ -1,25 +1,3 @@
-op,type,m,n,nrhs,batch,arm,pin,pin_parsed,median_ms,mean_ms,rel_sd,reps,residual,extra_check,info_nonzero,bad,reason,resolved_route
-getrf,float,33,33,0,8192,vendor,vendor,1,0.666014,0.665928,0.0017,7,8.429e-08,0.000e+00,0,0,ok,vendor:auto
-getrf,float,33,33,0,8192,cta,cta,1,0.609804,0.609872,0.0015,7,1.557e-07,0.000e+00,0,0,ok,native:cta
-getrf,float,33,33,0,8192,blocked/leaf=reg,blocked,1,0.585237,0.585389,0.0005,7,1.557e-07,0.000e+00,0,0,ok,native:blocked
-getrf,float,48,48,0,8192,vendor,vendor,1,1.300542,1.301173,0.0015,7,7.271e-08,0.000e+00,0,0,ok,vendor:auto
-getrf,float,48,48,0,8192,cta,cta,1,1.015656,1.015774,0.0007,7,1.279e-07,0.000e+00,0,0,ok,native:cta
-getrf,float,48,48,0,8192,blocked/leaf=reg,blocked,1,0.961502,0.961931,0.0015,7,1.071e-07,0.000e+00,0,0,ok,native:blocked
-getrf,float,64,64,0,8192,vendor,vendor,1,2.647019,2.646878,0.0013,7,1.009e-07,0.000e+00,0,0,ok,vendor:auto
-getrf,float,64,64,0,8192,cta,cta,1,1.627530,1.627267,0.0007,7,1.698e-07,0.000e+00,0,0,ok,native:cta
-getrf,float,64,64,0,8192,blocked/leaf=reg,blocked,1,1.840251,1.840031,0.0055,7,1.150e-07,0.000e+00,0,0,ok,native:blocked
-getrf,float,65,65,0,4096,vendor,vendor,1,1.558064,1.559468,0.0025,7,9.422e-08,0.000e+00,0,0,ok,vendor:auto
-getrf,float,65,65,0,4096,cta,cta,1,1.856209,1.856898,0.0010,7,2.076e-07,0.000e+00,0,0,ok,native:cta
-getrf,float,65,65,0,4096,blocked/leaf=reg,blocked,1,1.144058,1.143947,0.0014,7,1.340e-07,0.000e+00,0,0,ok,native:blocked
-getrf,float,96,96,0,4096,vendor,vendor,1,3.195911,3.196836,0.0028,7,7.560e-08,0.000e+00,0,0,ok,vendor:auto
-getrf,float,96,96,0,4096,cta,cta,1,3.190738,3.194919,0.0029,7,7.560e-08,0.000e+00,0,0,ok,vendor:auto
-getrf,float,96,96,0,4096,blocked/leaf=reg,blocked,1,2.967609,2.968154,0.0014,7,9.577e-08,0.000e+00,0,0,ok,native:blocked
-getrf,float,128,128,0,4096,vendor,vendor,1,5.785076,5.778909,0.0027,7,9.819e-08,0.000e+00,0,0,ok,vendor:auto
-getrf,float,128,128,0,4096,cta,cta,1,5.778433,5.780902,0.0042,7,9.819e-08,0.000e+00,0,0,ok,vendor:auto
-getrf,float,128,128,0,4096,blocked/leaf=reg,blocked,1,5.542872,5.591862,0.0167,7,1.226e-07,0.000e+00,0,0,ok,native:blocked
-getrf,float,192,192,0,2048,vendor,vendor,1,12.620482,12.629007,0.0072,7,8.450e-08,0.000e+00,0,0,ok,vendor:auto
-getrf,float,192,192,0,2048,cta,cta,1,12.497000,12.532886,0.0060,7,8.450e-08,0.000e+00,0,0,ok,vendor:auto
-getrf,float,192,192,0,2048,blocked/leaf=reg,blocked,1,10.036865,10.035493,0.0011,7,9.430e-08,0.000e+00,0,0,ok,native:blocked
-getrf,float,256,256,0,2048,vendor,vendor,1,31.556764,31.605593,0.0061,7,1.107e-07,0.000e+00,0,0,ok,vendor:auto
-getrf,float,256,256,0,2048,cta,cta,1,23.966251,23.965248,0.0005,7,1.190e-07,0.000e+00,0,0,ok,native:blocked
-getrf,float,256,256,0,2048,blocked/leaf=reg,blocked,1,21.638667,21.636041,0.0007,7,1.190e-07,0.000e+00,0,0,ok,native:blocked
+version https://git-lfs.github.com/spec/v1
+oid sha256:8fc5bcac38704808662c0e8ed5ab12c524924de4f1cb86aee292c74b600a495d
+size 2793

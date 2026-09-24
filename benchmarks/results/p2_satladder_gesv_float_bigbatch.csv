@@ -1,9 +1,3 @@
-op,type,m,n,nrhs,batch,arm,pin,pin_parsed,median_ms,mean_ms,rel_sd,reps,residual,extra_check,info_nonzero,bad,reason,resolved_route
-gesv,float,4,4,4,65536,tiny,tiny,1,0.032308,0.032302,0.0039,15,5.488e-08,0.000e+00,0,0,ok,skipped
-gesv,float,4,4,4,65536,blocked,blocked,1,0.054089,0.054107,0.0047,15,4.010e-08,0.000e+00,0,0,ok,skipped
-gesv,float,4,4,4,131072,tiny,tiny,1,0.056414,0.056412,0.0043,15,5.488e-08,0.000e+00,0,0,ok,skipped
-gesv,float,4,4,4,131072,blocked,blocked,1,0.077234,0.077275,0.0044,15,4.010e-08,0.000e+00,0,0,ok,skipped
-gesv,float,8,8,4,65536,tiny,tiny,1,0.065446,0.065444,0.0026,15,2.618e-08,0.000e+00,0,0,ok,skipped
-gesv,float,8,8,4,65536,blocked,blocked,1,0.124119,0.124235,0.0044,15,2.951e-08,0.000e+00,0,0,ok,skipped
-gesv,float,8,8,4,131072,tiny,tiny,1,0.123705,0.123780,0.0032,15,2.663e-08,0.000e+00,0,0,ok,skipped
-gesv,float,8,8,4,131072,blocked,blocked,1,0.215459,0.215904,0.0059,15,3.084e-08,0.000e+00,0,0,ok,skipped
+version https://git-lfs.github.com/spec/v1
+oid sha256:de61afb8434e165c787d6f91833f0ff7c864445e321cac3e46588b389f349071
+size 944

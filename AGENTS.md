@@ -17,6 +17,7 @@ Component	Debian/Ubuntu (apt)	Fedora/RHEL-like (dnf)	Arch Linux (pacman)	Source 
 BLAS/LAPACK (Fortran APIs)	libblas-dev liblapack-dev	blas-devel lapack-devel	blas lapack	see §4
 C interface (CBLAS & LAPACKE headers)	liblapacke-dev	lapack-devel	lapacke	see §4
 Build tools	build-essential cmake git	@development-tools cmake git	base-devel cmake git	—
+Git LFS (raw benchmark results; docs/perf/README.md)	git-lfs	git-lfs	git-lfs	—
 
 Why not just libopenblas-dev? Ubuntu’s OpenBLAS package omits lapacke.h; you still need liblapacke-dev for the C interface, or build LAPACKE yourself. This is a packaging decision, not a BatchLAS bug.
 
