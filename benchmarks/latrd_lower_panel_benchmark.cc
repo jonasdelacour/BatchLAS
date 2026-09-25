@@ -59,7 +59,7 @@ static void BM_LATRD_LOWER_PANEL(minibench::State& state) {
             auto e_panel = e(Slice(j0, j0 + ib));
             auto tau_panel = tau(Slice(j0, j0 + ib));
             auto W_panel = W({j0, SliceEnd()}, {0, ib});
-            latrd_lower_panel(q, A_panel, e_panel, tau_panel, W_panel, 0, fuse_trailing_update);
+            (void)latrd_lower_panel(q, A_panel, e_panel, tau_panel, W_panel, 0, fuse_trailing_update);
         });
 
     state.SetMetric("GFLOPS", approx_flops * 1e-9, minibench::Rate);

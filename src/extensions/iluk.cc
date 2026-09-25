@@ -25,7 +25,13 @@ using RealT = typename base_type<T>::type;
 
 template <typename T>
 inline RealT<T> abs_value(const T& v) {
-    return static_cast<RealT<T>>(std::abs(v));
+    // Not std::abs for complex: it lowers to a libm cabs call that the
+    // native_cpu device link cannot resolve.
+    if constexpr (std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>) {
+        return sycl::hypot(v.real(), v.imag());
+    } else {
+        return static_cast<RealT<T>>(std::abs(v));
+    }
 }
 
 template <typename T>

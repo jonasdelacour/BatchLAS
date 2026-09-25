@@ -183,8 +183,8 @@ namespace batchlas {
             ctx->memset(status, 0, sizeof(int32_t) * static_cast<size_t>(status_len));
         }
 
-        VectorView<T>::copy(ctx, d, d_in);
-        VectorView<T>::copy(ctx, e, e_in);
+        (void)VectorView<T>::copy(ctx, d, d_in);
+        (void)VectorView<T>::copy(ctx, e, e_in);
 
         auto& eigvects_mut = const_cast<MatrixView<T, MatrixFormat::Dense>&>(eigvects);
 
@@ -240,7 +240,7 @@ namespace batchlas {
         }
 
         // Copy back eigenvalues.
-        VectorView<T>::copy(ctx, eigenvalues, d);
+        (void)VectorView<T>::copy(ctx, eigenvalues, d);
 
         // Optional fail-fast diagnostics: avoids silent non-convergence.
         // Note: checking requires synchronization, so keep it opt-in.

@@ -60,7 +60,7 @@ static void BM_SYTRD_BLOCKED(minibench::State& state) {
         bench::pristine(A0), //sytrd_blocked mutates A so if it is not kept pristine between runs the speed results will change between runs.
         d,e,tau,uplo,ws,nb,
         [](Queue& q, auto&&... xs) {
-            sytrd_blocked(q, std::forward<decltype(xs)>(xs)...);
+            (void)sytrd_blocked(q, std::forward<decltype(xs)>(xs)...);
         });
     state.SetMetric("GFLOPS", total_flops * 1e-9, minibench::Rate);
     state.SetMetric("T(µs)/matrix", (1.0 / double(batch)) * 1e6, minibench::Reciprocal);

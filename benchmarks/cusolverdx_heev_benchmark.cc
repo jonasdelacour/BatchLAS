@@ -45,7 +45,7 @@ static void BM_CUSOLVERDX_HEEV(minibench::State& state) {
                     Uplo::Lower,
                     std::move(workspace),
                     [](Queue& q_local, auto&&... xs) {
-                        backend::cusolverdx::heev<T>(q_local, std::forward<decltype(xs)>(xs)...);
+                        (void)backend::cusolverdx::heev<T>(q_local, std::forward<decltype(xs)>(xs)...);
                     });
 
     const double flops = 4.0 / 3.0 * static_cast<double>(n) * static_cast<double>(n) * static_cast<double>(n);

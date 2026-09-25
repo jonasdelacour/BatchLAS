@@ -54,7 +54,7 @@ void run_syev_cta(miniacc::State& state, const char* impl_name) {
         try {
             UnifiedVector<std::byte> ws(
                 syev_cta_buffer_size<B, Real>(*q, A_work.view(), JobType::EigenVectors, params));
-            syev_cta<B, Real>(*q,
+            (void)syev_cta<B, Real>(*q,
                               A_work.view(),
                               eigvals.to_span(),
                               JobType::EigenVectors,

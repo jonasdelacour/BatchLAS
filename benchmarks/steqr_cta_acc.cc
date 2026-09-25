@@ -61,7 +61,7 @@ void run_steqr_cta(miniacc::State& state, const char* impl_name) {
         try {
             UnifiedVector<std::byte> ws(
                 steqr_cta_buffer_size<Real>(*q, d, e, evals, JobType::EigenVectors, params));
-            steqr_cta<B, Real>(*q, d, e, evals, ws.to_span(), JobType::EigenVectors, params, evecs);
+            (void)steqr_cta<B, Real>(*q, d, e, evals, ws.to_span(), JobType::EigenVectors, params, evecs);
             q->wait();
         } catch (const std::exception& ex) {
             miniacc_acc::record_failed_samples(state, n, n, cur_batch, target_log10, std::string("solver_exception:") + ex.what());

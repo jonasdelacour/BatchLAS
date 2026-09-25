@@ -168,7 +168,7 @@ Event syevx_direct_subset(Queue& ctx,
         MatrixView<T, MatrixFormat::Dense> a(a_copy_span.data(), n, n, n,
                                              static_cast<int64_t>(n) * n, batch,
                                              a_copy_ptrs.data());
-        MatrixView<T, MatrixFormat::Dense>::copy(ctx, a, A);
+        (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, a, A);
 
         // Stage 1: dense -> band.
         auto ab_span = pool.allocate<T>(ctx, static_cast<size_t>(kd + 1) * n * batch);

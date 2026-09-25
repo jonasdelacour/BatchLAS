@@ -340,7 +340,7 @@ Event potrf_blocked_dispatch(Queue& ctx,
         if (!ctx.in_order()) ctx.wait();
 
         const auto A21 = sub(j + ib, m2, j, ib, ws.a21_ptrs.data());
-        panel_solve(ctx, A11, A21, T(1), Side::Right, Uplo::Lower,
+        (void)panel_solve(ctx, A11, A21, T(1), Side::Right, Uplo::Lower,
                     Transpose::ConjTrans, Diag::NonUnit);
 
         if (!ctx.in_order()) ctx.wait();
@@ -354,21 +354,21 @@ Event potrf_blocked_dispatch(Queue& ctx,
             const auto Cd = sub(j + ib + c, w, j + ib + c, w, nullptr);
             const MatrixView<T, MatrixFormat::Dense> Sc(prod_ptr, w, w, W, W * W, batch);
 
-            trailing_gemm(ctx, Lrow, Lrow, Sc, T(-1), T(0),
+            (void)trailing_gemm(ctx, Lrow, Lrow, Sc, T(-1), T(0),
                           Transpose::NoTrans, kTrailingTransB<T>,
                           ComputePrecision::Default);
 
             // RAW: out of order the fold reads stale scratch -- a wrong factor with info == 0.
             if (!ctx.in_order()) ctx.wait();
 
-            ::batchlas::detail::fold_symmetric_product_into_triangle<T>(
+            (void)::batchlas::detail::fold_symmetric_product_into_triangle<T>(
                 ctx, Cd, Sc, T(1), Uplo::Lower);
 
             const int mr = m2 - c - w;
             if (mr > 0) {
                 const auto Lr = sub(j + ib + c + w, mr, j, ib, nullptr);
                 const auto Cr = sub(j + ib + c + w, mr, j + ib + c, w, nullptr);
-                trailing_gemm(ctx, Lr, Lrow, Cr, T(-1), T(1),
+                (void)trailing_gemm(ctx, Lr, Lrow, Cr, T(-1), T(1),
                               Transpose::NoTrans, kTrailingTransB<T>,
                               ComputePrecision::Default);
             }

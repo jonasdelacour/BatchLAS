@@ -74,7 +74,7 @@ TYPED_TEST(RitzValuesTest, DiagonalMatrix) {
     UnifiedVector<std::byte> workspace(workspace_size);
     
     // Compute Ritz values
-    ritz_values<BackendType, ScalarType, MatrixFormat::Dense>(
+    (void)ritz_values<BackendType, ScalarType, MatrixFormat::Dense>(
         *(this->ctx), A, V, ritz_vals, workspace);
     this->ctx->wait();
     
@@ -134,7 +134,7 @@ TYPED_TEST(RitzValuesTest, TridiagonalMatrix) {
     UnifiedVector<std::byte> workspace(workspace_size);
     
     // Compute Ritz values
-    ritz_values<BackendType, ScalarType, MatrixFormat::Dense>(
+    (void)ritz_values<BackendType, ScalarType, MatrixFormat::Dense>(
         *(this->ctx), A, V, ritz_vals, workspace);
     this->ctx->wait();
     

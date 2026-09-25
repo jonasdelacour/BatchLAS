@@ -46,7 +46,7 @@ static void BM_SYEVX(minibench::State& state) {
                     MatrixView<T, MatrixFormat::Dense>(),
                     params,
                     [](Queue& q, auto&&... xs) {
-                        syevx(q, std::forward<decltype(xs)>(xs)...);
+                        (void)syevx(q, std::forward<decltype(xs)>(xs)...);
                     });
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
@@ -96,7 +96,7 @@ static void BM_SYEVX_Crossover(minibench::State& state) {
                     MatrixView<T, MatrixFormat::Dense>(),
                     params,
                     [](Queue& q, auto&&... xs) {
-                        syevx(q, std::forward<decltype(xs)>(xs)...);
+                        (void)syevx(q, std::forward<decltype(xs)>(xs)...);
                     });
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
@@ -145,7 +145,7 @@ static void BM_SYEVX_CrossoverVectors(minibench::State& state) {
                     std::move(V),
                     params,
                     [](Queue& q, auto&&... xs) {
-                        syevx(q, std::forward<decltype(xs)>(xs)...);
+                        (void)syevx(q, std::forward<decltype(xs)>(xs)...);
                     });
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
@@ -294,7 +294,7 @@ double sparse_eig_error(Queue& q, int n, size_t neigs, int config, float boost) 
 
         UnifiedVector<std::byte> ws(syevx_buffer_size(
             q, A.view(), W.to_span(), neigs, JobType::EigenVectors, V.view(), params));
-        syevx(q, A.view(), W.to_span(), neigs, ws.to_span(),
+        (void)syevx(q, A.view(), W.to_span(), neigs, ws.to_span(),
               JobType::EigenVectors, V.view(), params);
         q.wait_and_throw();
 
@@ -302,7 +302,7 @@ double sparse_eig_error(Queue& q, int n, size_t neigs, int config, float boost) 
         UnifiedVector<Real> W_ref(n);
         UnifiedVector<std::byte> syev_ws(syev_buffer_size(
             q, A_dense.view(), W_ref.to_span(), JobType::NoEigenVectors, Uplo::Lower));
-        syev(q, A_dense.view(), W_ref.to_span(),
+        (void)syev(q, A_dense.view(), W_ref.to_span(),
              {.jobz = JobType::NoEigenVectors}, syev_ws);
         q.wait_and_throw();
 
@@ -376,7 +376,7 @@ static void BM_SYEVX_SparseImpl(minibench::State& state) {
                     std::move(V),
                     params,
                     [](Queue& q, auto&&... xs) {
-                        syevx(q, std::forward<decltype(xs)>(xs)...);
+                        (void)syevx(q, std::forward<decltype(xs)>(xs)...);
                     });
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
@@ -463,7 +463,7 @@ static void BM_SYEVX_RangePosition(minibench::State& state) {
                     std::move(V),
                     params,
                     [](Queue& q, auto&&... xs) {
-                        syevx<B>(q, std::forward<decltype(xs)>(xs)...);
+                        (void)syevx<B>(q, std::forward<decltype(xs)>(xs)...);
                     });
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }

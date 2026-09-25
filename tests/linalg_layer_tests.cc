@@ -58,9 +58,9 @@ Matrix<float, MatrixFormat::Dense> spd(int n, int batch) {
     {
         const int n = 8, batch = 4;
         Matrix<float> As(n, n, batch), Bs(n, n, batch), Cs(n, n, batch);
-        As.view().fill_random(ctx, /*hermitian=*/false, /*seed=*/1);
-        Bs.view().fill_random(ctx, /*hermitian=*/false, /*seed=*/2);
-        gemm(ctx, As.view(), Bs.view(), Cs.view(), {.alpha = 2.0f});
+        (void)As.view().fill_random(ctx, /*hermitian=*/false, /*seed=*/1);
+        (void)Bs.view().fill_random(ctx, /*hermitian=*/false, /*seed=*/2);
+        (void)gemm(ctx, As.view(), Bs.view(), Cs.view(), {.alpha = 2.0f});
         ctx.wait();
         [[maybe_unused]] float c00 = Cs(0, 0, 0);
     }
@@ -100,7 +100,7 @@ Matrix<float, MatrixFormat::Dense> spd(int n, int batch) {
         Matrix<float> Asy(n, k, batch), Csy(n, n, batch);
         syrk(ctx, Asy.view(), Csy.view(), {.uplo = Uplo::Lower}).wait();
         Csy.view().symmetrize(ctx, Uplo::Lower).wait();
-        Csy.view().hermitize(ctx, Uplo::Lower);
+        (void)Csy.view().hermitize(ctx, Uplo::Lower);
     }
 
     // "Which type each parameter takes"
@@ -112,7 +112,7 @@ Matrix<float, MatrixFormat::Dense> spd(int n, int batch) {
         [[maybe_unused]] Span<float> ws_span = w.to_span();
 
         Vector<float> x(n, /*batch_size=*/batch), y(m, batch);
-        gemv(ctx, A, x.view(), y.view(), {.alpha = 1.0f});
+        (void)gemv(ctx, A, x.view(), y.view(), {.alpha = 1.0f});
 
         // The inc/stride argument orders are opposite. Vector now names both with tag
         // types, so the two spellings can no longer be transliterated into each other.
@@ -148,9 +148,9 @@ Matrix<float, MatrixFormat::Dense> spd(int n, int batch) {
 
         Matrix<float> Bh(n, n, batch), dst(n, n, batch);
         UnifiedVector<float> d(n);
-        Bh.view().fill_diagonal(ctx, d.to_span());
-        Bh.view().fill_zeros(ctx);
-        MatrixView<float>::copy(ctx, dst.view(), Bh.view());
+        (void)Bh.view().fill_diagonal(ctx, d.to_span());
+        (void)Bh.view().fill_zeros(ctx);
+        (void)MatrixView<float>::copy(ctx, dst.view(), Bh.view());
 
         // "`Random` is deterministic"
         [[maybe_unused]] auto R0 = Matrix<float>::Random(n, n, false, batch);
@@ -184,14 +184,14 @@ Matrix<float, MatrixFormat::Dense> spd(int n, int batch) {
         MatrixView<float> Au(ha.data(), n, n, n, n * n, batch);
         MatrixView<float> Bu(hb.data(), n, n, n, n * n, batch);
         MatrixView<float> Cu(hc.data(), n, n, n, n * n, batch);
-        gemm(ctx, Au, Bu, Cu, GemmOptions<float>{});
+        (void)gemm(ctx, Au, Bu, Cu, GemmOptions<float>{});
         [[maybe_unused]] bool reachable = ctx.is_device_accessible(ha.data());
     }
 
     // "Where the memory has to live" -- an argument that addresses no elements
     {
         SyevxParams<float> params;
-        syevx(ctx, A, W, size_t(1), my_span, JobType::NoEigenVectors,
+        (void)syevx(ctx, A, W, size_t(1), my_span, JobType::NoEigenVectors,
               MatrixView<float>(), params);
     }
 
@@ -219,7 +219,7 @@ Matrix<float, MatrixFormat::Dense> spd(int n, int batch) {
         MatrixView<float> At(RA.view().data_ptr(), k, m, k);
         MatrixView<float> Bt(RB.view().data_ptr(), n, k, n);
         MatrixView<float> Ct(RC.view().data_ptr(), n, m, n);
-        gemm(ctx, Bt, At, Ct, GemmOptions<float>{});
+        (void)gemm(ctx, Bt, At, Ct, GemmOptions<float>{});
     }
 
     // "The CSR non-zero count has its own type" -- the owning and from-data
@@ -247,37 +247,37 @@ Matrix<float, MatrixFormat::Dense> spd(int n, int batch) {
     [[maybe_unused]] Backend resolved = ctx.backend();
     with_backend(ctx, [&](auto Back) {
         constexpr Backend Bk = Back.value;
-        gemm<Bk>(ctx, A, B, C, 1.0f, 0.0f, Transpose::NoTrans, Transpose::NoTrans);
+        (void)gemm<Bk>(ctx, A, B, C, 1.0f, 0.0f, Transpose::NoTrans, Transpose::NoTrans);
     });
 
     // "Options are structs with defaults"
-    gemm(ctx, A, B, C, {.alpha = 2.0f, .transA = Transpose::Trans});
-    syev(ctx, A, W, {.jobz = JobType::NoEigenVectors});
-    getrs(ctx, A, C, pivots, {.trans = Transpose::Trans});
+    (void)gemm(ctx, A, B, C, {.alpha = 2.0f, .transA = Transpose::Trans});
+    (void)syev(ctx, A, W, {.jobz = JobType::NoEigenVectors});
+    (void)getrs(ctx, A, C, pivots, {.trans = Transpose::Trans});
 
     // "Which spelling each entry point takes"
-    getrf(ctx, A, pivots);
+    (void)getrf(ctx, A, pivots);
     with_backend(ctx, [&](auto Back) {
         constexpr Backend Bk = Back.value;
         auto ws = ctx.workspace(gesvd_buffer_size<Bk, float>(
                                     ctx, A, S, U, Vh,
                                     SvdVectors::All, SvdVectors::All));
-        gesvd<Bk, float>(ctx, A, S, U, Vh,
+        (void)gesvd<Bk, float>(ctx, A, S, U, Vh,
                          SvdVectors::All, SvdVectors::All, ws.span());
     });
 
     // "Workspaces come from the queue's arena"
-    potrf(ctx, A, {.uplo = Uplo::Lower});
+    (void)potrf(ctx, A, {.uplo = Uplo::Lower});
     with_backend(ctx, [&](auto Back) {
         constexpr Backend Bk = Back.value;
         UnifiedVector<std::byte> ws(potrf_buffer_size<Bk, float>(ctx, A, Uplo::Lower));
-        potrf<Bk, float>(ctx, A, Uplo::Lower, ws.to_span());
+        (void)potrf<Bk, float>(ctx, A, Uplo::Lower, ws.to_span());
         ctx.wait();
     });
     auto lease = ctx.workspace(1024);
     [[maybe_unused]] Span<std::byte> bytes = lease.span();
     [[maybe_unused]] auto capacity = ctx.workspace_capacity();
-    potrf(ctx, A, {.uplo = Uplo::Lower}, my_span);
+    (void)potrf(ctx, A, {.uplo = Uplo::Lower}, my_span);
     lease.release();                       // before reassigning a live lease
     lease = ctx.workspace(2048);
     lease.release();
@@ -287,7 +287,7 @@ Matrix<float, MatrixFormat::Dense> spd(int n, int batch) {
     // The bare-`{}` spelling is absent because it is ill-formed; the deleted
     // overload that makes it so is pinned by tests/options_api_tests.cc.
     with_backend(ctx, [&](auto Back) {
-        potrf<Back.value>(ctx, A, PotrfOptions{}, my_span);
+        (void)potrf<Back.value>(ctx, A, PotrfOptions{}, my_span);
     });
 
     // "Synchronisation and threading"
@@ -308,7 +308,7 @@ Matrix<float, MatrixFormat::Dense> spd(int n, int batch) {
         sycl::event mine = my_queue.ext_oneapi_submit_barrier();
         Event e = batchlas::event_from_sycl(mine);
         ctx.enqueue(e);                                        // `enqueue` takes an lvalue
-        batchlas::potrf(ctx, A, {.uplo = Uplo::Lower});
+        (void)batchlas::potrf(ctx, A, {.uplo = Uplo::Lower});
 
         // ... and in the other direction:
         my_queue.ext_oneapi_submit_barrier({batchlas::sycl_event(ctx.get_event())});
@@ -325,12 +325,12 @@ Matrix<float, MatrixFormat::Dense> spd(int n, int batch) {
     [[maybe_unused]] auto hadamard = linalg::multiply(ctx, A, B);
     [[maybe_unused]] auto quotient = linalg::divide(ctx, A, B);
     [[maybe_unused]] auto scaled_copy = linalg::scaled(ctx, A, 2.0f);
-    linalg::scale(ctx, A, 2.0f);
-    linalg::axpby_into(ctx, 2.0f, A, 3.0f, B, C);
-    linalg::add_into(ctx, A, B, C);
-    linalg::subtract_into(ctx, A, B, C);
-    linalg::multiply_into(ctx, A, B, C);
-    linalg::divide_into(ctx, A, B, C);
+    (void)linalg::scale(ctx, A, 2.0f);
+    (void)linalg::axpby_into(ctx, 2.0f, A, 3.0f, B, C);
+    (void)linalg::add_into(ctx, A, B, C);
+    (void)linalg::subtract_into(ctx, A, B, C);
+    (void)linalg::multiply_into(ctx, A, B, C);
+    (void)linalg::divide_into(ctx, A, B, C);
 
     // "The linalg convenience layer" -- the rest of the layer
     [[maybe_unused]] auto svd_result = linalg::svd(ctx, A);
@@ -448,7 +448,7 @@ TEST(LinalgLayer, ScaleIsInPlaceAndAxpbyAccumulates) {
         for (int j = 0; j < cols; ++j)
             for (int i = 0; i < rows; ++i) before.push_back(at(A.view(), i, j, b));
 
-    linalg::scale<float>(q, A.view(), -2.0f);
+    (void)linalg::scale<float>(q, A.view(), -2.0f);
     q.wait();
 
     size_t k = 0;
@@ -461,7 +461,7 @@ TEST(LinalgLayer, ScaleIsInPlaceAndAxpbyAccumulates) {
     auto X = from_fn(rows, cols, batch, [](int i, int j, int) { return float(i + j + 1); });
     auto Y = from_fn(rows, cols, batch, [](int i, int j, int) { return float(2 * i - j); });
     Matrix<float, MatrixFormat::Dense> C(rows, cols, batch);
-    linalg::axpby_into<float>(q, 2.0f, X.view(), 3.0f, Y.view(), C.view());
+    (void)linalg::axpby_into<float>(q, 2.0f, X.view(), 3.0f, Y.view(), C.view());
     q.wait();
 
     for (int b = 0; b < batch; ++b)
@@ -475,7 +475,7 @@ TEST(LinalgLayer, MismatchedShapesAreRejected) {
     Queue q;
     auto A = from_fn(4, 4, 1, [](int, int, int) { return 1.0f; });
     auto B = from_fn(4, 5, 1, [](int, int, int) { return 1.0f; });
-    EXPECT_THROW(linalg::add_into<float>(q, A.view(), B.view(), A.view()), std::invalid_argument);
+    EXPECT_THROW((void)linalg::add_into<float>(q, A.view(), B.view(), A.view()), std::invalid_argument);
 }
 
 // The value-returning wrappers must not modify their inputs -- that is the whole
@@ -777,7 +777,7 @@ TEST(LinalgLayer, TriuTrilMaskAnExistingMatrix) {
             }
 
     // Aliasing: the documented in-place spelling.
-    linalg::triangular_mask_into<float>(q, A.view(), A.view(), Uplo::Upper, 0);
+    (void)linalg::triangular_mask_into<float>(q, A.view(), A.view(), Uplo::Upper, 0);
     q.wait();
     for (int b = 0; b < batch; ++b)
         for (int j = 0; j < cols; ++j)
@@ -790,7 +790,7 @@ TEST(LinalgLayer, TriangularMaskRejectsMismatchedShapes) {
     Queue q;
     auto A = from_fn(4, 4, 1, [](int, int, int) { return 1.0f; });
     auto C = from_fn(4, 5, 1, [](int, int, int) { return 1.0f; });
-    EXPECT_THROW(linalg::triangular_mask_into<float>(q, A.view(), C.view(), Uplo::Upper, 0),
+    EXPECT_THROW((void)linalg::triangular_mask_into<float>(q, A.view(), C.view(), Uplo::Upper, 0),
                  std::invalid_argument);
 }
 
@@ -878,8 +878,8 @@ TEST(LinalgLayer, LuFactorsAndPivotsSolveTheSystem) {
     ASSERT_EQ(f.pivots.size(), size_t(n) * size_t(batch));
 
     Matrix<float, MatrixFormat::Dense> X(n, nrhs, batch);
-    MatrixView<float, MatrixFormat::Dense>::copy(q, X.view(), B.view());
-    getrs(q, f.factors.view(), X.view(), f.pivots.to_span());
+    (void)MatrixView<float, MatrixFormat::Dense>::copy(q, X.view(), B.view());
+    (void)getrs(q, f.factors.view(), X.view(), f.pivots.to_span());
     q.wait();
 
     auto AX = linalg::matmul(q, A.view(), X.view());

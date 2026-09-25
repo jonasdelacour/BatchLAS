@@ -92,7 +92,7 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceSingle) {
 
     {
         UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size(*this->ctx, A.view(), tau.to_span()));
-        geqrf(*this->ctx, A.view(), tau.to_span(), ws_geqrf.to_span());
+        (void)geqrf(*this->ctx, A.view(), tau.to_span(), ws_geqrf.to_span());
         this->ctx->wait();
     }
 
@@ -101,7 +101,7 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceSingle) {
 
     {
         UnifiedVector<std::byte> ws_ref(batchlas::blas::dispatch::detail::ormqr_vendor_buffer_size_or_throw<B, T>(*this->ctx, A.view(), Q_ref.view(), Side::Left, Transpose::NoTrans, tau.to_span()));
-        batchlas::blas::dispatch::detail::ormqr_vendor_or_throw<B, T>(*this->ctx, A.view(), Q_ref.view(), Side::Left, Transpose::NoTrans, tau.to_span(), ws_ref.to_span());
+        (void)batchlas::blas::dispatch::detail::ormqr_vendor_or_throw<B, T>(*this->ctx, A.view(), Q_ref.view(), Side::Left, Transpose::NoTrans, tau.to_span(), ws_ref.to_span());
         this->ctx->wait();
     }
 
@@ -114,13 +114,13 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceSingle) {
                                                                         Transpose::NoTrans,
                                                                         tau.to_span(),
                                                                         block_size));
-        ormqr_blocked<B, T>(*this->ctx, A.view(), Q_blk.view(), Side::Left, Transpose::NoTrans, tau.to_span(), ws_blk.to_span(), block_size);
+        (void)ormqr_blocked<B, T>(*this->ctx, A.view(), Q_blk.view(), Side::Left, Transpose::NoTrans, tau.to_span(), ws_blk.to_span(), block_size);
         this->ctx->wait();
     }
 
     // Check orthonormality for the blocked output.
     Matrix<T, MatrixFormat::Dense> QtQ = Matrix<T, MatrixFormat::Dense>::Zeros(n, n, batch);
-    gemm(*this->ctx, Q_blk.view(), Q_blk.view(), QtQ.view(), {.transA = this->trans_h()});
+    (void)gemm(*this->ctx, Q_blk.view(), Q_blk.view(), QtQ.view(), {.transA = this->trans_h()});
     this->ctx->wait();
 
     auto r = QtQ.data();
@@ -153,7 +153,7 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceSingleTrans) {
 
     {
         UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size(*this->ctx, A.view(), tau.to_span()));
-        geqrf(*this->ctx, A.view(), tau.to_span(), ws_geqrf.to_span());
+        (void)geqrf(*this->ctx, A.view(), tau.to_span(), ws_geqrf.to_span());
         this->ctx->wait();
     }
 
@@ -162,7 +162,7 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceSingleTrans) {
 
     {
         UnifiedVector<std::byte> ws_ref(batchlas::blas::dispatch::detail::ormqr_vendor_buffer_size_or_throw<B, T>(*this->ctx, A.view(), Q_ref.view(), Side::Left, this->trans_h(), tau.to_span()));
-        batchlas::blas::dispatch::detail::ormqr_vendor_or_throw<B, T>(*this->ctx, A.view(), Q_ref.view(), Side::Left, this->trans_h(), tau.to_span(), ws_ref.to_span());
+        (void)batchlas::blas::dispatch::detail::ormqr_vendor_or_throw<B, T>(*this->ctx, A.view(), Q_ref.view(), Side::Left, this->trans_h(), tau.to_span(), ws_ref.to_span());
         this->ctx->wait();
     }
 
@@ -175,7 +175,7 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceSingleTrans) {
                                                                         this->trans_h(),
                                                                         tau.to_span(),
                                                                         block_size));
-        ormqr_blocked<B, T>(*this->ctx, A.view(), Q_blk.view(), Side::Left, this->trans_h(), tau.to_span(), ws_blk.to_span(), block_size);
+        (void)ormqr_blocked<B, T>(*this->ctx, A.view(), Q_blk.view(), Side::Left, this->trans_h(), tau.to_span(), ws_blk.to_span(), block_size);
         this->ctx->wait();
     }
 
@@ -200,7 +200,7 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceRightSingle) {
 
     {
         UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size(*this->ctx, A.view(), tau.to_span()));
-        geqrf(*this->ctx, A.view(), tau.to_span(), ws_geqrf.to_span());
+        (void)geqrf(*this->ctx, A.view(), tau.to_span(), ws_geqrf.to_span());
         this->ctx->wait();
     }
 
@@ -209,7 +209,7 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceRightSingle) {
 
     {
         UnifiedVector<std::byte> ws_ref(batchlas::blas::dispatch::detail::ormqr_vendor_buffer_size_or_throw<B, T>(*this->ctx, A.view(), Q_ref.view(), Side::Right, Transpose::NoTrans, tau.to_span()));
-        batchlas::blas::dispatch::detail::ormqr_vendor_or_throw<B, T>(*this->ctx, A.view(), Q_ref.view(), Side::Right, Transpose::NoTrans, tau.to_span(), ws_ref.to_span());
+        (void)batchlas::blas::dispatch::detail::ormqr_vendor_or_throw<B, T>(*this->ctx, A.view(), Q_ref.view(), Side::Right, Transpose::NoTrans, tau.to_span(), ws_ref.to_span());
         this->ctx->wait();
     }
 
@@ -222,7 +222,7 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceRightSingle) {
                                                                         Transpose::NoTrans,
                                                                         tau.to_span(),
                                                                         block_size));
-        ormqr_blocked<B, T>(*this->ctx, A.view(), Q_blk.view(), Side::Right, Transpose::NoTrans, tau.to_span(), ws_blk.to_span(), block_size);
+        (void)ormqr_blocked<B, T>(*this->ctx, A.view(), Q_blk.view(), Side::Right, Transpose::NoTrans, tau.to_span(), ws_blk.to_span(), block_size);
         this->ctx->wait();
     }
 
@@ -247,7 +247,7 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceRightSingleTrans) {
 
     {
         UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size(*this->ctx, A.view(), tau.to_span()));
-        geqrf(*this->ctx, A.view(), tau.to_span(), ws_geqrf.to_span());
+        (void)geqrf(*this->ctx, A.view(), tau.to_span(), ws_geqrf.to_span());
         this->ctx->wait();
     }
 
@@ -257,7 +257,7 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceRightSingleTrans) {
     {
         UnifiedVector<std::byte> ws_ref(
             batchlas::blas::dispatch::detail::ormqr_vendor_buffer_size_or_throw<B, T>(*this->ctx, A.view(), Q_ref.view(), Side::Right, this->trans_h(), tau.to_span()));
-        batchlas::blas::dispatch::detail::ormqr_vendor_or_throw<B, T>(*this->ctx, A.view(), Q_ref.view(), Side::Right, this->trans_h(), tau.to_span(), ws_ref.to_span());
+        (void)batchlas::blas::dispatch::detail::ormqr_vendor_or_throw<B, T>(*this->ctx, A.view(), Q_ref.view(), Side::Right, this->trans_h(), tau.to_span(), ws_ref.to_span());
         this->ctx->wait();
     }
 
@@ -270,7 +270,7 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceRightSingleTrans) {
                                                                         this->trans_h(),
                                                                         tau.to_span(),
                                                                         block_size));
-        ormqr_blocked<B, T>(*this->ctx, A.view(), Q_blk.view(), Side::Right, this->trans_h(), tau.to_span(), ws_blk.to_span(), block_size);
+        (void)ormqr_blocked<B, T>(*this->ctx, A.view(), Q_blk.view(), Side::Right, this->trans_h(), tau.to_span(), ws_blk.to_span(), block_size);
         this->ctx->wait();
     }
 
@@ -295,7 +295,7 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceBatched) {
 
     {
         UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size(*this->ctx, A.view(), tau.to_span()));
-        geqrf(*this->ctx, A.view(), tau.to_span(), ws_geqrf.to_span());
+        (void)geqrf(*this->ctx, A.view(), tau.to_span(), ws_geqrf.to_span());
         this->ctx->wait();
     }
 
@@ -304,7 +304,7 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceBatched) {
 
     {
         UnifiedVector<std::byte> ws_ref(batchlas::blas::dispatch::detail::ormqr_vendor_buffer_size_or_throw<B, T>(*this->ctx, A.view(), Q_ref.view(), Side::Left, Transpose::NoTrans, tau.to_span()));
-        batchlas::blas::dispatch::detail::ormqr_vendor_or_throw<B, T>(*this->ctx, A.view(), Q_ref.view(), Side::Left, Transpose::NoTrans, tau.to_span(), ws_ref.to_span());
+        (void)batchlas::blas::dispatch::detail::ormqr_vendor_or_throw<B, T>(*this->ctx, A.view(), Q_ref.view(), Side::Left, Transpose::NoTrans, tau.to_span(), ws_ref.to_span());
         this->ctx->wait();
     }
 
@@ -317,7 +317,7 @@ TYPED_TEST(OrmqrBlockedTest, MatchesOrmqrReferenceBatched) {
                                                                         Transpose::NoTrans,
                                                                         tau.to_span(),
                                                                         block_size));
-        ormqr_blocked<B, T>(*this->ctx, A.view(), Q_blk.view(), Side::Left, Transpose::NoTrans, tau.to_span(), ws_blk.to_span(), block_size);
+        (void)ormqr_blocked<B, T>(*this->ctx, A.view(), Q_blk.view(), Side::Left, Transpose::NoTrans, tau.to_span(), ws_blk.to_span(), block_size);
         this->ctx->wait();
     }
 

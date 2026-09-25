@@ -154,7 +154,7 @@ TEST_F(LanczosTestBase, LanczosTest) {
         eigenvectors, params);
     UnifiedVector<std::byte> workspace(buffer_size);
 
-    lanczos(
+    (void)lanczos(
         *ctx, sparse_matrix, W_data, workspace, JobType::EigenVectors, eigenvectors, params);
 
     ctx->wait();
@@ -183,7 +183,7 @@ TEST_F(LanczosTestBase, LanczosTest) {
         spmm_buffer_size(*ctx, sparse_matrix, eigenvectors, residuals, 1.0f, -1.0f, Transpose::NoTrans, Transpose::NoTrans));
 
     //Compute R = A @ V - V @ diag(W)
-    spmm(
+    (void)spmm(
         *ctx, sparse_matrix, eigenvectors, residuals, 1.0f, -1.0f, Transpose::NoTrans, Transpose::NoTrans, spmm_workspace);
 
     ctx->wait();
@@ -191,7 +191,7 @@ TEST_F(LanczosTestBase, LanczosTest) {
     //Compute the norms of the residuals
     UnifiedVector<float> norms_memory(batch_size * rows * rows, 0.0f);
     
-    gemm(*ctx,
+    (void)gemm(*ctx,
                                   residuals,
                                   residuals,
                                   MatrixView(norms_memory.data(), rows, rows, rows, rows*rows, batch_size),
@@ -228,12 +228,12 @@ TEST_F(LanczosTestBase, ToeplitzEigenpairs) {
     size_t buf_size = lanczos_buffer_size(*ctx, A_view, W, JobType::EigenVectors, eigenvectors_view, params);
     UnifiedVector<std::byte> workspace(buf_size);
 
-    lanczos(*ctx, A_view, W, workspace, JobType::EigenVectors, eigenvectors_view, params);
+    (void)lanczos(*ctx, A_view, W, workspace, JobType::EigenVectors, eigenvectors_view, params);
     ctx->wait();
 
     // expected eigenvalues for Toeplitz matrix
     UnifiedVector<float> expected(n * batch);
-    syev(*ctx, dense.view(), expected.to_span(),
+    (void)syev(*ctx, dense.view(), expected.to_span(),
          {.jobz = JobType::NoEigenVectors, .uplo = Uplo::Upper});
     ctx->wait();
 

@@ -87,7 +87,7 @@ TYPED_TEST(SteqrTest, SingleMatrix) {
     //VectorView<float_type>::copy(*this->ctx, VectorView(diag), VectorView(sub_diag)).wait();
 
     auto ws = UnifiedVector<std::byte>(steqr_buffer_size<float_type>(*this->ctx, diag, sub_diag, eigenvalues, JobType::EigenVectors, params), std::byte(0));
-    steqr<B, float_type>(*this->ctx, VectorView(diag), VectorView(sub_diag), VectorView(eigenvalues),
+    (void)steqr<B, float_type>(*this->ctx, VectorView(diag), VectorView(sub_diag), VectorView(eigenvalues),
         ws.to_span(), JobType::EigenVectors, params, eigvects);
     this->ctx->wait();
 
@@ -126,7 +126,7 @@ TYPED_TEST(SteqrTest, BatchedMatrices) {
 
     UnifiedVector<std::byte> ws(steqr_buffer_size<float_type>(*this->ctx, a, b, c, JobType::EigenVectors, params), std::byte(0));
 
-    steqr<B, float_type>(*this->ctx, a, b, c,
+    (void)steqr<B, float_type>(*this->ctx, a, b, c,
         ws.to_span(), JobType::EigenVectors, params, eigvects);
         
     this->ctx->wait();
@@ -173,7 +173,7 @@ TYPED_TEST(SteqrTest, BatchedRandomMatrices) {
 
     UnifiedVector<std::byte> ws(steqr_buffer_size<float_type>(*this->ctx,diag, sub_diag, eigenvalues, JobType::EigenVectors, params), std::byte(0));
 
-    steqr<B, float_type>(*this->ctx, diag, sub_diag, eigenvalues,
+    (void)steqr<B, float_type>(*this->ctx, diag, sub_diag, eigenvalues,
         ws.to_span(), JobType::EigenVectors, params, eigvects);
         
     this->ctx->wait();
@@ -225,7 +225,7 @@ TYPED_TEST(SteqrTest, SteqrRandomN8SchemeCompare) {
     UnifiedVector<std::byte> ws_ref(
         steqr_buffer_size<float_type>(*this->ctx, diag, sub_diag, evals_ref, JobType::EigenVectors, params_ref),
         std::byte(0));
-    steqr<B, float_type>(*this->ctx, VectorView(diag), VectorView(sub_diag), VectorView(evals_ref),
+    (void)steqr<B, float_type>(*this->ctx, VectorView(diag), VectorView(sub_diag), VectorView(evals_ref),
                          ws_ref.to_span(), JobType::EigenVectors, params_ref, eigvects_ref);
     this->ctx->wait();
 
@@ -245,7 +245,7 @@ TYPED_TEST(SteqrTest, SteqrRandomN8SchemeCompare) {
         UnifiedVector<std::byte> ws_cta(
             steqr_buffer_size<float_type>(*this->ctx, diag, sub_diag, evals_cta, JobType::EigenVectors, params_cta),
             std::byte(0));
-        steqr<B, float_type>(*this->ctx, VectorView(diag), VectorView(sub_diag), VectorView(evals_cta),
+        (void)steqr<B, float_type>(*this->ctx, VectorView(diag), VectorView(sub_diag), VectorView(evals_cta),
                              ws_cta.to_span(), JobType::EigenVectors, params_cta, eigvects_cta);
         this->ctx->wait();
 
@@ -304,7 +304,7 @@ TYPED_TEST(SteqrTest, SteqrSingleMatrixWithSchemes) {
             steqr_buffer_size<float_type>(*this->ctx, diag, sub_diag, eigenvalues, JobType::EigenVectors, params),
             std::byte(0));
 
-        steqr<B, float_type>(*this->ctx, VectorView(diag), VectorView(sub_diag), VectorView(eigenvalues),
+        (void)steqr<B, float_type>(*this->ctx, VectorView(diag), VectorView(sub_diag), VectorView(eigenvalues),
                              ws.to_span(), JobType::EigenVectors, params, eigvects);
         this->ctx->wait();
 
@@ -361,7 +361,7 @@ TYPED_TEST(SteqrTest, SteqrBatchedMatricesWithSchemes) {
             steqr_buffer_size<float_type>(*this->ctx, diag, sub_diag, eigenvalues, JobType::EigenVectors, params),
             std::byte(0));
 
-        steqr<B, float_type>(*this->ctx, VectorView(diag), VectorView(sub_diag), VectorView(eigenvalues),
+        (void)steqr<B, float_type>(*this->ctx, VectorView(diag), VectorView(sub_diag), VectorView(eigenvalues),
                              ws.to_span(), JobType::EigenVectors, params, eigvects);
         this->ctx->wait();
 
@@ -414,7 +414,7 @@ TYPED_TEST(SteqrTest, SteqrRandomMatrices) {
             steqr_buffer_size<float_type>(*this->ctx, diag, sub_diag, eigenvalues, JobType::EigenVectors, params),
             std::byte(0));
 
-        steqr<B, float_type>(*this->ctx, VectorView(diag), VectorView(sub_diag), VectorView(eigenvalues),
+        (void)steqr<B, float_type>(*this->ctx, VectorView(diag), VectorView(sub_diag), VectorView(eigenvalues),
                              ws.to_span(), JobType::EigenVectors, params, eigvects);
         this->ctx->wait();
 
@@ -486,7 +486,7 @@ TYPED_TEST(SteqrTest, SteqrConditionedTridiagonalNetlibRef) {
     auto ws = UnifiedVector<std::byte>(
         steqr_buffer_size<float_type>(*this->ctx, diag, sub, eigenvalues, JobType::EigenVectors, params),
         std::byte(0));
-    steqr<B, float_type>(*this->ctx, diag, sub, eigenvalues,
+    (void)steqr<B, float_type>(*this->ctx, diag, sub, eigenvalues,
                          ws.to_span(), JobType::EigenVectors, params, eigvects);
     this->ctx->wait();
 
@@ -664,7 +664,7 @@ void stress_run_case(Queue& ctx,
             batchlas::blas::dispatch::detail::syev_vendor_buffer_size_or_throw<B, Real>(
                 ctx, dense_A.view(), ref_eigs, JobType::EigenVectors, Uplo::Lower),
             std::byte(0));
-        batchlas::blas::dispatch::detail::syev_vendor_or_throw<B, Real>(
+        (void)batchlas::blas::dispatch::detail::syev_vendor_or_throw<B, Real>(
             ctx, dense_A.view(), ref_eigs, JobType::EigenVectors, Uplo::Lower, syev_ws.to_span());
         ctx.wait();
     }
@@ -685,7 +685,7 @@ void stress_run_case(Queue& ctx,
         // an assertion inside the runtime scheduler. We request eigenvectors here to
         // keep this stress test runnable on CUDA; we still validate only eigenvalues.
         auto eigvects = Matrix<Real>::Zeros(n, n, batch);
-        steqr<B, Real>(ctx, diag, sub, steqr_eigs, ws.to_span(), JobType::EigenVectors, params, eigvects);
+        (void)steqr<B, Real>(ctx, diag, sub, steqr_eigs, ws.to_span(), JobType::EigenVectors, params, eigvects);
         ctx.wait();
     }
 
@@ -704,7 +704,7 @@ void stress_run_case(Queue& ctx,
             steqr_buffer_size<Real>(ctx, diag, sub, cta_eigs, JobType::EigenVectors, params),
             std::byte(0));
         auto eigvects = Matrix<Real>::Zeros(n, n, batch);
-        steqr<B, Real>(ctx, diag, sub, cta_eigs, ws.to_span(), JobType::EigenVectors, params, eigvects);
+        (void)steqr<B, Real>(ctx, diag, sub, cta_eigs, ws.to_span(), JobType::EigenVectors, params, eigvects);
         ctx.wait();
     }
 
@@ -878,7 +878,7 @@ TYPED_TEST(SteqrTest, InfoIsZeroOnAConvergingBatch) {
 
     auto ws = UnifiedVector<std::byte>(
         steqr_buffer_size<Real>(*this->ctx, d, e, w, JobType::EigenVectors, params), std::byte(0));
-    steqr<B, Real>(*this->ctx, d, e, w, ws.to_span(), JobType::EigenVectors, params, eigvects,
+    (void)steqr<B, Real>(*this->ctx, d, e, w, ws.to_span(), JobType::EigenVectors, params, eigvects,
                    info.to_span());
     this->ctx->wait();
 
@@ -935,7 +935,7 @@ TYPED_TEST(SteqrTest, InfoReportsItemsThatExhaustTheSweepBudget) {
 
     auto ws = UnifiedVector<std::byte>(
         steqr_buffer_size<Real>(*this->ctx, d, e, w, JobType::EigenVectors, params), std::byte(0));
-    steqr<B, Real>(*this->ctx, d, e, w, ws.to_span(), JobType::EigenVectors, params, eigvects,
+    (void)steqr<B, Real>(*this->ctx, d, e, w, ws.to_span(), JobType::EigenVectors, params, eigvects,
                    info.to_span());
     this->ctx->wait();
 
@@ -1003,9 +1003,9 @@ TYPED_TEST(SteqrTest, EmptyInfoSpanChangesNeitherAnswerNorWorkspace) {
     UnifiedVector<std::byte> ws1(bytes_a, std::byte(0));
     UnifiedVector<int32_t> info(batch, int32_t(-1));
 
-    steqr<B, Real>(*this->ctx, d0, e0, w0, ws0.to_span(), JobType::EigenVectors, params, eigvects0,
+    (void)steqr<B, Real>(*this->ctx, d0, e0, w0, ws0.to_span(), JobType::EigenVectors, params, eigvects0,
                    info.to_span());
-    steqr<B, Real>(*this->ctx, d1, e1, w1, ws1.to_span(), JobType::EigenVectors, params, eigvects1,
+    (void)steqr<B, Real>(*this->ctx, d1, e1, w1, ws1.to_span(), JobType::EigenVectors, params, eigvects1,
                    Span<int32_t>{});
     this->ctx->wait();
 

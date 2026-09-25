@@ -34,7 +34,7 @@ static void BM_HERK(minibench::State& state) {
                     Uplo::Lower,
                     Transpose::NoTrans,
                     [](Queue& q, auto&&... xs) {
-                        herk(q, std::forward<decltype(xs)>(xs)...);
+                        (void)herk(q, std::forward<decltype(xs)>(xs)...);
                     });
     state.SetMetric("GFLOPS",
                     static_cast<double>(batch) * (1e-9 * static_cast<double>(n) * static_cast<double>(n + 1) * static_cast<double>(k)),

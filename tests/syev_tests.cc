@@ -63,7 +63,7 @@ TYPED_TEST(SyevTest, DiagTest) {
             return a < b;
         }
     });
-    syev(*this->ctx, A_view, W.to_span(), {.jobz = JobType::NoEigenVectors}, workspace.to_span());
+    (void)syev(*this->ctx, A_view, W.to_span(), {.jobz = JobType::NoEigenVectors}, workspace.to_span());
     (*this->ctx).wait();
     for (int i = 0; i < n; ++i) {
         if constexpr (std::is_same_v<T, std::complex<float>> || std::is_same_v<T, std::complex<double>>) {
@@ -149,7 +149,7 @@ TYPED_TEST(SyevTest, InfoIsZeroOnAConvergingBatch) {
 
     auto ws = UnifiedVector<std::byte>(
         syev_buffer_size<B, T>(*this->ctx, A.view(), W.to_span(), JobType::NoEigenVectors, Uplo::Lower));
-    syev<B, T>(*this->ctx, A.view(), W.to_span(), JobType::NoEigenVectors, Uplo::Lower,
+    (void)syev<B, T>(*this->ctx, A.view(), W.to_span(), JobType::NoEigenVectors, Uplo::Lower,
                ws.to_span(), info.to_span());
     this->ctx->wait();
 
@@ -195,9 +195,9 @@ TYPED_TEST(SyevTest, EmptyInfoSpanChangesNeitherAnswerNorWorkspace) {
     EXPECT_EQ(bytes_a, bytes_b);
 
     UnifiedVector<std::byte> ws0(bytes_a), ws1(bytes_a);
-    syev<B, T>(*this->ctx, A0.view(), W0.to_span(), JobType::NoEigenVectors, Uplo::Lower,
+    (void)syev<B, T>(*this->ctx, A0.view(), W0.to_span(), JobType::NoEigenVectors, Uplo::Lower,
                ws0.to_span(), info.to_span());
-    syev<B, T>(*this->ctx, A1.view(), W1.to_span(), JobType::NoEigenVectors, Uplo::Lower,
+    (void)syev<B, T>(*this->ctx, A1.view(), W1.to_span(), JobType::NoEigenVectors, Uplo::Lower,
                ws1.to_span(), Span<int32_t>{});
     this->ctx->wait();
 
@@ -243,7 +243,7 @@ TYPED_TEST(SyevTest, InfoReportsItemsThatExhaustTheSweepBudget) {
 
         auto ws = UnifiedVector<std::byte>(
             syev_cta_buffer_size<B, T>(*this->ctx, A.view(), JobType::NoEigenVectors, params));
-        syev_cta<B, T>(*this->ctx, A.view(), W.to_span(), JobType::NoEigenVectors, Uplo::Lower,
+        (void)syev_cta<B, T>(*this->ctx, A.view(), W.to_span(), JobType::NoEigenVectors, Uplo::Lower,
                        ws.to_span(), params, /*cta_wg_size_multiplier=*/1, info.to_span());
         this->ctx->wait();
 

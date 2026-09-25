@@ -452,14 +452,14 @@ Event trsm_native_blocked(Queue& ctx,
 
         if (side == Side::Left) {
             // C(m x q) := -op(Aoff)(m x k) * X(k x q) + beta*C
-            trailing_gemm(ctx, Aoff, X, C, T(-1), beta,
+            (void)trailing_gemm(ctx, Aoff, X, C, T(-1), beta,
                           transA, Transpose::NoTrans,
                           ComputePrecision::Default);
         } else {
             // C(q x m) := -X(q x k) * op(Aoff)(k x m) + beta*C. X GOES IN THE A
             // POSITION: with the A block first, C would have at most nb rows
             // against the required q.
-            trailing_gemm(ctx, X, Aoff, C, T(-1), beta,
+            (void)trailing_gemm(ctx, X, Aoff, C, T(-1), beta,
                           Transpose::NoTrans, transA,
                           ComputePrecision::Default);
         }

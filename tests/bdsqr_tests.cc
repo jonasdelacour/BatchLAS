@@ -144,9 +144,9 @@ protected:
                     }
                 }
             }
-            bdsqr<B, Scalar>(ctx, dv, ev, s.to_span(), ws.to_span(), U.view(), Vh.view(), true);
+            (void)bdsqr<B, Scalar>(ctx, dv, ev, s.to_span(), ws.to_span(), U.view(), Vh.view(), true);
         } else {
-            bdsqr<B, Scalar>(ctx, dv, ev, s.to_span(), ws.to_span(), true);
+            (void)bdsqr<B, Scalar>(ctx, dv, ev, s.to_span(), ws.to_span(), true);
         }
         ctx.wait_and_throw();
 
@@ -227,7 +227,7 @@ protected:
         const size_t ws_bytes = bdsqr_buffer_size<Scalar>(ctx, dv, ev, s.to_span());
         UnifiedVector<std::byte> ws(ws_bytes);
 
-        bdsqr<B, Scalar>(ctx, dv, ev, s.to_span(), ws.to_span(), true);
+        (void)bdsqr<B, Scalar>(ctx, dv, ev, s.to_span(), ws.to_span(), true);
         ctx.wait_and_throw();
 
         for (int b = 0; b < batch; ++b) {

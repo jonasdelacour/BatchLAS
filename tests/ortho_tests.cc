@@ -64,14 +64,14 @@ protected:
         auto transp = std::is_same_v<ScalarType, std::complex<typename base_type<ScalarType>::type>> ? Transpose::ConjTrans : Transpose::Trans;
         if (transQ == Transpose::NoTrans) { // Columns are orthogonal, Q is m x k
             // Result_actual = Q^T * Q
-            gemm(*(this->ctx),
+            (void)gemm(*(this->ctx),
                               Q_view,
                               Q_view,
                               Result_actual_view,
                               {.alpha = ScalarType(1.0), .beta = ScalarType(0.0), .transA = transp});
         } else { // Rows are orthogonal, Q is k x m
             // Result_actual = Q * Q^T
-            gemm(*(this->ctx),
+            (void)gemm(*(this->ctx),
                               Q_view,
                               Q_view,
                               Result_actual_view,
@@ -210,7 +210,7 @@ protected:
         Matrix<ScalarType, MatrixFormat::Dense> Result_AM(res_rows, res_cols, batch_size);
         auto Result_AM_view = Result_AM.view();
 
-        gemm(*(this->ctx),
+        (void)gemm(*(this->ctx),
                           A_view,
                           M_basis_view,
                           Result_AM_view,
@@ -277,7 +277,7 @@ TYPED_TEST(OrthoMatrixTest, OrthogonalizeMatrix) {
             size_t buffer_size = ortho_buffer_size(*(this->ctx), A.view(), transA, algo);
             UnifiedVector<std::byte> workspace(buffer_size);
 
-            ortho(*(this->ctx), A.view(), transA, workspace.to_span(), algo);
+            (void)ortho(*(this->ctx), A.view(), transA, workspace.to_span(), algo);
             this->ctx->wait();
 
             this->check_orthonormality(A, transA, tol);
@@ -321,7 +321,7 @@ TYPED_TEST(OrthoAgainstMTest, OrthogonalizeMatrixAgainstM) {
 
                 size_t ortho_M_buffer_size = ortho_buffer_size(*(this->ctx), M.view(), transM, algo);
                 UnifiedVector<std::byte> workspace_M_ortho(ortho_M_buffer_size);
-                ortho(*(this->ctx), M.view(), transM, workspace_M_ortho.to_span(), algo);
+                (void)ortho(*(this->ctx), M.view(), transM, workspace_M_ortho.to_span(), algo);
                 this->ctx->wait();
 
                 this->check_orthonormality(M, transM, tol);
@@ -330,7 +330,7 @@ TYPED_TEST(OrthoAgainstMTest, OrthogonalizeMatrixAgainstM) {
                 UnifiedVector<std::byte> workspace(buffer_size);
                 const size_t iterations = 2;
 
-                ortho(*(this->ctx), A.view(), M.view(), transA, transM, workspace.to_span(), algo, iterations);
+                (void)ortho(*(this->ctx), A.view(), M.view(), transA, transM, workspace.to_span(), algo, iterations);
                 this->ctx->wait();
 
                 this->check_orthonormality(A, transA, tol);

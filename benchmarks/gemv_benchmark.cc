@@ -25,7 +25,7 @@ static void BM_GEMV(minibench::State& state) {
                     T(0),
                     Transpose::NoTrans,
                     [](Queue& q, auto&&... xs) {
-                        gemv(q, std::forward<decltype(xs)>(xs)...);
+                        (void)gemv(q, std::forward<decltype(xs)>(xs)...);
                     });
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * 2.0 * m * n),
                     minibench::Rate);

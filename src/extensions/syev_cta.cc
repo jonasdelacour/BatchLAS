@@ -397,7 +397,7 @@ Event syev_cta(Queue& ctx,
                             cta_wg_size_multiplier);
             cta_debug_sync(ctx, "syev_cta: after ormqx_cta");
 
-            MatrixView<T, MatrixFormat::Dense>::copy(ctx, a, zc_view);
+            (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, a, zc_view);
             cta_debug_sync(ctx, "syev_cta: after copy eigenvectors out");
         }
 
@@ -545,7 +545,7 @@ Event syev_cta(Queue& ctx,
                 cta_debug_sync(ctx, "syev_cta: after ormqx_cta");
 
         // Overwrite A with eigenvectors.
-        MatrixView<T, MatrixFormat::Dense>::copy(ctx, a, z_view);
+        (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, a, z_view);
         cta_debug_sync(ctx, "syev_cta: after copy eigenvectors out");
     }
 

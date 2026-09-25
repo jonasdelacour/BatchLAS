@@ -147,7 +147,7 @@ TYPED_TEST(Sb2stHhTest, StoredReflectorsReproduceSimilarity) {
                 internal::sytrd_sb2st_hh_buffer_size<B, T>(ctx, n, kd, batch);
             UnifiedVector<std::byte> ws(ws_bytes);
 
-            internal::sytrd_sb2st_hh<B, T>(ctx, ab, ab_tri, d, e, vmat, tau,
+            (void)internal::sytrd_sb2st_hh<B, T>(ctx, ab, ab_tri, d, e, vmat, tau,
                                            Uplo::Lower, kd, ws.to_span());
             ctx.wait();
 
@@ -286,7 +286,7 @@ TYPED_TEST(Sb2stHhTest, BackTransformAppliesQ2) {
 
             UnifiedVector<std::byte> ws(
                 internal::sytrd_sb2st_hh_buffer_size<B, T>(ctx, n, kd, batch));
-            internal::sytrd_sb2st_hh<B, T>(ctx, ab, ab_tri, d, e, vmat, tau,
+            (void)internal::sytrd_sb2st_hh<B, T>(ctx, ab, ab_tri, d, e, vmat, tau,
                                            Uplo::Lower, kd, ws.to_span());
             ctx.wait();
 
@@ -307,7 +307,7 @@ TYPED_TEST(Sb2stHhTest, BackTransformAppliesQ2) {
             UnifiedVector<int32_t> waves(wave_host.size());
             for (size_t k = 0; k < wave_host.size(); ++k) waves[k] = wave_host[k];
 
-            internal::unmqr_hb2st<B, T>(
+            (void)internal::unmqr_hb2st<B, T>(
                 ctx, vmat, tau, Z, n, kd,
                 Span<const int32_t>(starts.data(), sched.size()),
                 Span<const int32_t>(lens.data(), sched.size()),

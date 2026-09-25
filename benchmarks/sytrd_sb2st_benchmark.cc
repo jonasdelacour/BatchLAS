@@ -111,7 +111,7 @@ static void BM_SYTRD_SB2ST(minibench::State& state) {
         ws,
         ib,
         [](Queue& q, auto&&... xs) {
-            sytrd_sb2st(q, std::forward<decltype(xs)>(xs)...);
+            (void)sytrd_sb2st(q, std::forward<decltype(xs)>(xs)...);
         });
 
     state.SetMetric("T(µs)/matrix", (1.0 / double(batch)) * 1e6, minibench::Reciprocal);
@@ -175,7 +175,7 @@ static void BM_SYTRD_BAND_REDUCTION(minibench::State& state) {
         ws,
         ib,
         [](Queue& q, auto&&... xs) {
-            sytrd_band_reduction(q, std::forward<decltype(xs)>(xs)...);
+            (void)sytrd_band_reduction(q, std::forward<decltype(xs)>(xs)...);
         });
 
     state.SetMetric("T(µs)/matrix", (1.0 / double(batch)) * 1e6, minibench::Reciprocal);

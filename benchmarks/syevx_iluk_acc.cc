@@ -457,7 +457,7 @@ std::vector<MatrixMetrics<Real>> run_sparse_syevx_once(Queue& q,
                              params));
 
     const auto start = std::chrono::steady_clock::now();
-    syevx(q,
+    (void)syevx(q,
              csr_view,
              buffers.eigvals.to_span(),
              static_cast<std::size_t>(neigs),

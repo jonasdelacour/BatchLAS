@@ -33,11 +33,11 @@ inline void set_kernel_from_tuple(StateT& state,
     // This enables callsites to pass a function pointer like `sytrd_cta<B>` as the kernel.
     auto adapter = [q, k = std::move(k)](auto&... xs) mutable {
         if constexpr (std::is_invocable_v<decltype(k)&, decltype(xs)&...>) {
-            k(xs...);
+            (void)k(xs...);
         } else if constexpr (std::is_invocable_v<decltype(k)&,
                                                 batchlas::Queue&,
                                                 decltype(::bench::detail::kernel_arg(xs))...>) {
-            k(*q, ::bench::detail::kernel_arg(xs)...);
+            (void)k(*q, ::bench::detail::kernel_arg(xs)...);
         } else {
             static_assert(always_false<decltype(k)>::value,
                           "Kernel callable is not invocable as k(args...) nor as k(*q, kernel_arg(args)...) ");

@@ -214,7 +214,7 @@ TEST(SettingsUnsafe, SkipPointerChecksHonoursTheBuildOption) {
     std::vector<float> host(n * n, 1.0f);
     MatrixView<float, MatrixFormat::Dense> poisoned(host.data(), n, n);
     Matrix<float, MatrixFormat::Dense> b(n, n, 1), c(n, n, 1);
-    EXPECT_THROW(gemm(q, poisoned, b.view(), c.view(), GemmOptions<float>{}),
+    EXPECT_THROW((void)gemm(q, poisoned, b.view(), c.view(), GemmOptions<float>{}),
                  std::invalid_argument);
 #endif
 }

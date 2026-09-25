@@ -338,8 +338,8 @@ Event steqr_wg(Queue& ctx,
     const auto e_stride = params.transpose_working_vectors ? 1 : n - 1;
     auto d = VectorView<T>(pool.allocate<T>(ctx, VectorView<T>::required_span_length(n, increment, d_stride, batch_size)), n, batch_size, increment, d_stride);
     auto e = VectorView<T>(pool.allocate<T>(ctx, VectorView<T>::required_span_length(n - 1, increment, e_stride, batch_size)), n - 1, batch_size, increment, e_stride);
-    VectorView<T>::copy(ctx, d, d_in);
-    VectorView<T>::copy(ctx, e, e_in);
+    (void)VectorView<T>::copy(ctx, d, d_in);
+    (void)VectorView<T>::copy(ctx, e, e_in);
 
     auto n_sweeps_to_store =
         (jobz == JobType::EigenVectors && params.block_rotations) ? std::max(params.block_size * 2, params.max_sweeps) : params.max_sweeps;

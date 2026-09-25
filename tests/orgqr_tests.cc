@@ -36,15 +36,15 @@ TYPED_TEST(OrgqrTest, SingleMatrix) {
     Matrix<T, MatrixFormat::Dense> A = Matrix<T, MatrixFormat::Dense>::Random(n, n);
     UnifiedVector<T> tau(n);
     UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size(*this->ctx, A.view(), tau.to_span()));
-    geqrf(*this->ctx, A.view(), tau.to_span(), ws_geqrf.to_span());
+    (void)geqrf(*this->ctx, A.view(), tau.to_span(), ws_geqrf.to_span());
     this->ctx->wait();
 
     UnifiedVector<std::byte> ws_orgqr(orgqr_buffer_size(*this->ctx, A.view(), tau.to_span()));
-    orgqr(*this->ctx, A.view(), tau.to_span(), ws_orgqr.to_span());
+    (void)orgqr(*this->ctx, A.view(), tau.to_span(), ws_orgqr.to_span());
     this->ctx->wait();
 
     Matrix<T, MatrixFormat::Dense> Result(n, n);
-    gemm(*this->ctx, A.view(), A.view(), Result.view(), {.transA = this->trans_op});
+    (void)gemm(*this->ctx, A.view(), A.view(), Result.view(), {.transA = this->trans_op});
     this->ctx->wait();
 
     auto r = Result.data();
@@ -65,15 +65,15 @@ TYPED_TEST(OrgqrTest, BatchedMatrices) {
     Matrix<T, MatrixFormat::Dense> A = Matrix<T, MatrixFormat::Dense>::Random(n, n, false, batch);
     UnifiedVector<T> tau(n * batch);
     UnifiedVector<std::byte> ws_geqrf(geqrf_buffer_size(*this->ctx, A.view(), tau.to_span()));
-    geqrf(*this->ctx, A.view(), tau.to_span(), ws_geqrf.to_span());
+    (void)geqrf(*this->ctx, A.view(), tau.to_span(), ws_geqrf.to_span());
     this->ctx->wait();
 
     UnifiedVector<std::byte> ws_orgqr(orgqr_buffer_size(*this->ctx, A.view(), tau.to_span()));
-    orgqr(*this->ctx, A.view(), tau.to_span(), ws_orgqr.to_span());
+    (void)orgqr(*this->ctx, A.view(), tau.to_span(), ws_orgqr.to_span());
     this->ctx->wait();
 
     Matrix<T, MatrixFormat::Dense> Result(n, n, batch);
-    gemm(*this->ctx, A.view(), A.view(), Result.view(), {.transA = this->trans_op});
+    (void)gemm(*this->ctx, A.view(), A.view(), Result.view(), {.transA = this->trans_op});
     this->ctx->wait();
 
     auto r = Result.data();
@@ -217,13 +217,13 @@ TYPED_TEST(OrgqrTest, QIsOrthonormalAndReconstructsAAtEveryBatchItem) {
 
         UnifiedVector<std::byte> wg(std::max<size_t>(
             1, geqrf_buffer_size<B, T>(*this->ctx, V, tau.to_span())));
-        geqrf<B, T>(*this->ctx, V, tau.to_span(), wg.to_span());
+        (void)geqrf<B, T>(*this->ctx, V, tau.to_span(), wg.to_span());
         this->ctx->wait();
         const std::vector<T> F(buf.begin(), buf.end());   // orgqr overwrites it
 
         UnifiedVector<std::byte> wo(std::max<size_t>(
             1, orgqr_buffer_size<B, T>(*this->ctx, V, tau.to_span())));
-        orgqr<B, T>(*this->ctx, V, tau.to_span(), wo.to_span());
+        (void)orgqr<B, T>(*this->ctx, V, tau.to_span(), wo.to_span());
         this->ctx->wait();
 
         const double tol = 0.5 * double(s.m + s.n) *

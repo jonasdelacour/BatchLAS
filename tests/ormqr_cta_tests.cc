@@ -162,7 +162,7 @@ TYPED_TEST(OrmqrCtaTest, ThrowsOnNTooLarge) {
 	UnifiedVector<std::byte> ws_dummy(1, std::byte{0});
 
 	EXPECT_THROW(
-		(ormqx_cta(*this->ctx,
+		((void)ormqx_cta(*this->ctx,
 		            A.view(),
 		            VectorView<T>(tau),
 		            C.view(),

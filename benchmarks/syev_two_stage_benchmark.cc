@@ -66,7 +66,7 @@ static void BM_SYEV_TWO_STAGE(minibench::State& state) {
     state.SetKernel(q, bench::pristine(A), std::move(W), JobType::EigenVectors,
                     Uplo::Lower, std::move(workspace),
                     [](Queue& qq, auto&&... xs) {
-                        syev_two_stage(qq, std::forward<decltype(xs)>(xs)...);
+                        (void)syev_two_stage(qq, std::forward<decltype(xs)>(xs)...);
                     });
     state.SetMetric("Time (ms)", 1.0, minibench::Reciprocal);
 }
@@ -87,7 +87,7 @@ static void BM_SYEV_BLOCKED_BASELINE(minibench::State& state) {
     state.SetKernel(q, bench::pristine(A), std::move(W), JobType::EigenVectors,
                     Uplo::Lower, std::move(workspace),
                     [](Queue& qq, auto&&... xs) {
-                        syev_blocked(qq, std::forward<decltype(xs)>(xs)...);
+                        (void)syev_blocked(qq, std::forward<decltype(xs)>(xs)...);
                     });
     state.SetMetric("Time (ms)", 1.0, minibench::Reciprocal);
 }

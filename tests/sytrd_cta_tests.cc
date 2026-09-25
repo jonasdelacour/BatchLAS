@@ -292,7 +292,7 @@ TYPED_TEST(SytrdCtaTest, RandomSymmetricLower) {
 	Vector<Real> tau(n - 1, batch);
 	UnifiedVector<std::byte> ws(1, std::byte{0});
 
-    sytrd_cta<B, Real>(*this->ctx, A.view(), d, e, tau, Uplo::Lower, ws.to_span(), /*cta_wg_size_multiplier=*/1);
+    (void)sytrd_cta<B, Real>(*this->ctx, A.view(), d, e, tau, Uplo::Lower, ws.to_span(), /*cta_wg_size_multiplier=*/1);
     this->ctx->wait();
 	/* try {
 	} catch (const sycl::exception& ex) {
@@ -328,7 +328,7 @@ TYPED_TEST(SytrdCtaTest, RandomSymmetricUpper) {
 	Vector<Real> tau(n - 1, batch);
 	UnifiedVector<std::byte> ws(1, std::byte{0});
 
-    sytrd_cta<B, Real>(*this->ctx, A.view(), d, e, tau, Uplo::Upper, ws.to_span(), /*cta_wg_size_multiplier=*/1);
+    (void)sytrd_cta<B, Real>(*this->ctx, A.view(), d, e, tau, Uplo::Upper, ws.to_span(), /*cta_wg_size_multiplier=*/1);
     this->ctx->wait();
 	/* try {
 	} catch (const sycl::exception& ex) {
@@ -393,7 +393,7 @@ TEST(SytrdCtaTest, HostBackendThrowsWithoutSubgroup32) {
 	UnifiedVector<std::byte> ws(1, std::byte{0});
 
 	EXPECT_THROW(
-		(sytrd_cta(ctx, A.view(), d.view(), e.view(), tau.view(), Uplo::Lower, ws.to_span(), 1), ctx.wait()),
+		((void)sytrd_cta(ctx, A.view(), d.view(), e.view(), tau.view(), Uplo::Lower, ws.to_span(), 1), ctx.wait()),
 		std::exception);
 }
 #endif

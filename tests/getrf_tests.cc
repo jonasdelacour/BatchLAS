@@ -454,7 +454,7 @@ protected:
         auto V = view_of(p);
         UnifiedVector<std::byte> ws(std::max<std::size_t>(
             1, sycl_getrf::getrf_cta_buffer_size<T>(*this->ctx, V)));
-        sycl_getrf::getrf_cta_dispatch<T>(*this->ctx, V, p.piv.to_span(), ws.to_span(),
+        (void)sycl_getrf::getrf_cta_dispatch<T>(*this->ctx, V, p.piv.to_span(), ws.to_span(),
                                           pass_info ? p.info.to_span() : Span<int32_t>{});
         this->ctx->wait();
     }
@@ -465,7 +465,7 @@ protected:
         auto V = view_of(p);
         UnifiedVector<std::byte> ws(std::max<std::size_t>(
             1, sycl_getrf::getrf_tiny_buffer_size<T>(*this->ctx, V)));
-        sycl_getrf::getrf_tiny_dispatch<T>(*this->ctx, V, p.piv.to_span(), ws.to_span(),
+        (void)sycl_getrf::getrf_tiny_dispatch<T>(*this->ctx, V, p.piv.to_span(), ws.to_span(),
                                            pass_info ? p.info.to_span() : Span<int32_t>{});
         this->ctx->wait();
     }
@@ -473,7 +473,7 @@ protected:
         auto V = view_of(p);
         UnifiedVector<std::byte> ws(std::max<std::size_t>(
             1, sycl_getrf::getrf_blocked_buffer_size<T>(*this->ctx, V)));
-        sycl_getrf::getrf_blocked_dispatch<T>(*this->ctx, V, p.piv.to_span(), ws.to_span(),
+        (void)sycl_getrf::getrf_blocked_dispatch<T>(*this->ctx, V, p.piv.to_span(), ws.to_span(),
                                               pass_info ? p.info.to_span() : Span<int32_t>{},
                                               gemm_seam(), trsm_seam());
         this->ctx->wait();
@@ -857,7 +857,7 @@ TYPED_TEST(LuTest, ResidentLeafLaunchHoleAt48KiB) {
 
         bool resident = false;
         ASSERT_NO_THROW(
-            sycl_getrf::getrf_panel_factorize<T>(*this->ctx, buf.data(), ld, stride,
+            (void)sycl_getrf::getrf_panel_factorize<T>(*this->ctx, buf.data(), ld, stride,
                                                  m, n, batch, piv.data(), k, 0,
                                                  info.data(), &resident))
             << "the resident leaf could not be launched with a " << r.bytes << " B tile ("
@@ -961,7 +961,7 @@ TYPED_TEST(LuTest, FusedGetrsLaunchHoleAt48KiB) {
             auto Bv = view_of(rhs);
             UnifiedVector<std::byte> ws(std::max<std::size_t>(
                 1, sycl_getrs::getrs_fused_buffer_size<T>(*this->ctx, A, Bv, op)));
-            ASSERT_NO_THROW(sycl_getrs::getrs_fused_dispatch<T>(
+            ASSERT_NO_THROW((void)sycl_getrs::getrs_fused_dispatch<T>(
                 *this->ctx, A, Bv, op, p.piv.to_span(), ws.to_span()))
                 << "rung " << want << " B (n=" << n << ", asked " << asked
                 << " B, transA=" << int(op) << ") REFUSED TO LAUNCH";
@@ -1195,7 +1195,7 @@ TYPED_TEST(LuTest, BothPanelLeavesFactoriseCorrectly) {
 
         bool resident = false;
         ASSERT_NO_THROW(
-            sycl_getrf::getrf_panel_factorize<T>(*this->ctx, buf.data(), ld, stride,
+            (void)sycl_getrf::getrf_panel_factorize<T>(*this->ctx, buf.data(), ld, stride,
                                                  m, n, batch, piv.data(), k, 0,
                                                  info.data(), &resident));
         this->ctx->wait();
@@ -1329,7 +1329,7 @@ TYPED_TEST(LuTest, RegPanelAgreesWithTheLocalMemoryLeaf) {
             auto p = make_panel<T>(m, ncols, batch, 7717u + unsigned(m * 37 + ncols));
 
             // Arm 1: the register leaf.
-            ASSERT_NO_THROW(sycl_getrf::getrf_panel_reg_factorize<T>(
+            ASSERT_NO_THROW((void)sycl_getrf::getrf_panel_reg_factorize<T>(
                 *this->ctx, p.buf.data(), p.ld, p.stride, m, ncols, batch,
                 p.piv.data(), p.piv_stride, p.piv_base, p.info.data()))
                 << "m=" << m << " ncols=" << ncols;
@@ -1341,7 +1341,7 @@ TYPED_TEST(LuTest, RegPanelAgreesWithTheLocalMemoryLeaf) {
             // Arm 2: today's leaf, on the SAME pristine input.
             repanel(p);
             bool resident = false;
-            ASSERT_NO_THROW(sycl_getrf::getrf_panel_factorize<T>(
+            ASSERT_NO_THROW((void)sycl_getrf::getrf_panel_factorize<T>(
                 *this->ctx, p.buf.data(), p.ld, p.stride, m, ncols, batch,
                 p.piv.data(), p.piv_stride, p.piv_base, p.info.data(), &resident));
             this->ctx->wait();
@@ -1422,7 +1422,7 @@ TYPED_TEST(LuTest, RegPanelPivotCrossesTheSubGroupBoundary) {
         p.a0[size_t(b) * p.stride + size_t(col) * p.ld + row] = mk<T>(64.0, -64.0);
     repanel(p);
 
-    ASSERT_NO_THROW(sycl_getrf::getrf_panel_reg_factorize<T>(
+    ASSERT_NO_THROW((void)sycl_getrf::getrf_panel_reg_factorize<T>(
         *this->ctx, p.buf.data(), p.ld, p.stride, m, ncols, batch,
         p.piv.data(), p.piv_stride, p.piv_base, p.info.data()));
     this->ctx->wait();
@@ -1456,7 +1456,7 @@ TYPED_TEST(LuTest, RegPanelIpivAndInfoAreGlobalAtANonZeroPivBase) {
                                "comparison below is between two different factorisations";
 
     for (Panel<T>* p : {&p0, &pb}) {
-        ASSERT_NO_THROW(sycl_getrf::getrf_panel_reg_factorize<T>(
+        ASSERT_NO_THROW((void)sycl_getrf::getrf_panel_reg_factorize<T>(
             *this->ctx, p->buf.data(), p->ld, p->stride, m, ncols, batch,
             p->piv.data(), p->piv_stride, p->piv_base, p->info.data()));
         this->ctx->wait();
@@ -1497,7 +1497,7 @@ TYPED_TEST(LuTest, RegPanelPlantedZeroColumnIsGlobalAndFirstFailureWins) {
             p.a0[size_t(bad) * p.stride + size_t(j) * p.ld + i] = mk<T>(0.0, 0.0);
     repanel(p);
 
-    ASSERT_NO_THROW(sycl_getrf::getrf_panel_reg_factorize<T>(
+    ASSERT_NO_THROW((void)sycl_getrf::getrf_panel_reg_factorize<T>(
         *this->ctx, p.buf.data(), p.ld, p.stride, m, ncols, batch,
         p.piv.data(), p.piv_stride, p.piv_base, p.info.data()));
     this->ctx->wait();
@@ -1519,7 +1519,7 @@ TYPED_TEST(LuTest, RegPanelPlantedZeroColumnIsGlobalAndFirstFailureWins) {
     // blocked driver's later panels must not overwrite an earlier panel's column.
     repanel(p);
     for (int b = 0; b < batch; ++b) p.info[b] = int32_t(7);
-    ASSERT_NO_THROW(sycl_getrf::getrf_panel_reg_factorize<T>(
+    ASSERT_NO_THROW((void)sycl_getrf::getrf_panel_reg_factorize<T>(
         *this->ctx, p.buf.data(), p.ld, p.stride, m, ncols, batch,
         p.piv.data(), p.piv_stride, p.piv_base, p.info.data()));
     this->ctx->wait();
@@ -1562,7 +1562,7 @@ TYPED_TEST(LuTest, RegPanelCapacityIsOneSpelling) {
     UnifiedVector<int> piv(size_t(64) * 1, -1);
     UnifiedVector<int32_t> info(size_t(1), 0);
     auto call = [&](int m, int n) {
-        sycl_getrf::getrf_panel_reg_factorize<T>(*this->ctx, buf.data(), 64, 64 * 8,
+        (void)sycl_getrf::getrf_panel_reg_factorize<T>(*this->ctx, buf.data(), 64, 64 * 8,
                                                  m, n, 1, piv.data(), 64, 0, info.data());
     };
     EXPECT_THROW(call(8, nbw + 1), batchlas::unsupported)
@@ -1587,7 +1587,7 @@ TYPED_TEST(LuTest, RegPanelCapacityIsOneSpelling) {
         << "the advertised cap is not accepted by the predicate, so the launch below "
            "would be vacuous";
     EXPECT_NO_THROW({
-        sycl_getrf::getrf_panel_reg_factorize<T>(
+        (void)sycl_getrf::getrf_panel_reg_factorize<T>(
             *this->ctx, tall.data(), cap + 3, (cap + 3) * 32, cap, 32, 1,
             tall_piv.data(), cap + 32, 0, tall_info.data());
         this->ctx->wait();
@@ -1791,7 +1791,7 @@ TYPED_TEST(LuTest, InfoFillIsOrderedAheadOfThePanelOnAnOutOfOrderQueue) {
             seed_info(p);
             UnifiedVector<std::byte> ws(std::max<std::size_t>(
                 1, sycl_getrf::getrf_cta_buffer_size<T>(*this->ctx, V)));
-            sycl_getrf::getrf_cta_dispatch<T>(*this->ctx, V, p.piv.to_span(), ws.to_span(),
+            (void)sycl_getrf::getrf_cta_dispatch<T>(*this->ctx, V, p.piv.to_span(), ws.to_span(),
                                               p.info.to_span());
             this->ctx->wait();
             count_wrong(p, cw, cp);
@@ -1804,7 +1804,7 @@ TYPED_TEST(LuTest, InfoFillIsOrderedAheadOfThePanelOnAnOutOfOrderQueue) {
             seed_info(p);
             UnifiedVector<std::byte> ws(std::max<std::size_t>(
                 1, sycl_getrf::getrf_cta_buffer_size<T>(ooo, V)));
-            sycl_getrf::getrf_cta_dispatch<T>(ooo, V, p.piv.to_span(), ws.to_span(),
+            (void)sycl_getrf::getrf_cta_dispatch<T>(ooo, V, p.piv.to_span(), ws.to_span(),
                                               p.info.to_span());
             ooo.wait();
             count_wrong(p, wrong, poisoned);
@@ -1835,7 +1835,7 @@ TYPED_TEST(LuTest, InfoFillIsOrderedAheadOfThePanelOnAnOutOfOrderQueue) {
             seed_info(p);
             UnifiedVector<std::byte> ws(std::max<std::size_t>(
                 1, sycl_getrf::getrf_blocked_buffer_size<T>(*this->ctx, V)));
-            sycl_getrf::getrf_blocked_dispatch<T>(*this->ctx, V, p.piv.to_span(), ws.to_span(),
+            (void)sycl_getrf::getrf_blocked_dispatch<T>(*this->ctx, V, p.piv.to_span(), ws.to_span(),
                                                   p.info.to_span(),
                                                   this->gemm_seam(), this->trsm_seam());
             this->ctx->wait();
@@ -1848,7 +1848,7 @@ TYPED_TEST(LuTest, InfoFillIsOrderedAheadOfThePanelOnAnOutOfOrderQueue) {
             seed_info(p);
             UnifiedVector<std::byte> ws(std::max<std::size_t>(
                 1, sycl_getrf::getrf_blocked_buffer_size<T>(ooo, V)));
-            sycl_getrf::getrf_blocked_dispatch<T>(ooo, V, p.piv.to_span(), ws.to_span(),
+            (void)sycl_getrf::getrf_blocked_dispatch<T>(ooo, V, p.piv.to_span(), ws.to_span(),
                                                   p.info.to_span(),
                                                   this->gemm_seam(), this->trsm_seam());
             ooo.wait();
@@ -1979,7 +1979,7 @@ TYPED_TEST(LuTest, GetrsSolvesAllThreeTransposeModes) {
             auto Bv = view_of(rhs);
             UnifiedVector<std::byte> ws(std::max<std::size_t>(
                 1, sycl_getrs::getrs_blocked_buffer_size<T>(*this->ctx, A, Bv, op)));
-            ASSERT_NO_THROW(sycl_getrs::getrs_blocked_dispatch<T>(
+            ASSERT_NO_THROW((void)sycl_getrs::getrs_blocked_dispatch<T>(
                 *this->ctx, A, Bv, op, p.piv.to_span(), ws.to_span(), this->getrs_seam()));
             this->ctx->wait();
 
@@ -2061,7 +2061,7 @@ TYPED_TEST(LuTest, GetrsPermutationSpellingsAgreeBitForBit) {
                     // The query must stay 0 under BOTH spellings: the gather is in place.
                     UnifiedVector<std::byte> ws(std::max<std::size_t>(
                         1, sycl_getrs::getrs_blocked_buffer_size<T>(*this->ctx, A, Bv, op)));
-                    ASSERT_NO_THROW(sycl_getrs::getrs_blocked_dispatch<T>(
+                    ASSERT_NO_THROW((void)sycl_getrs::getrs_blocked_dispatch<T>(
                         *this->ctx, A, Bv, op, p.piv.to_span(), ws.to_span(),
                         this->getrs_seam()));
                     this->ctx->wait();
@@ -2211,7 +2211,7 @@ TYPED_TEST(LuTest, GetriInvertsAndLeavesTheFactorUntouched) {
     auto C = view_of(c);
     UnifiedVector<std::byte> ws(std::max<std::size_t>(
         1, sycl_getri::getri_blocked_buffer_size<T>(*this->ctx, A)));
-    ASSERT_NO_THROW(sycl_getri::getri_blocked_dispatch<T>(
+    ASSERT_NO_THROW((void)sycl_getri::getri_blocked_dispatch<T>(
         *this->ctx, A, C, p.piv.to_span(), ws.to_span(), cinfo.to_span(), this->getri_seam()));
     this->ctx->wait();
 
@@ -2266,7 +2266,7 @@ TYPED_TEST(LuTest, NativeFactorFeedsTheVendorSolvers) {
             UnifiedVector<std::byte> ws(std::max<std::size_t>(
                 1, backend::getrs_vendor_buffer_size<B, T>(*this->ctx, A, Bv,
                                                            Transpose::NoTrans)));
-            ASSERT_NO_THROW((backend::getrs_vendor<B, T>(*this->ctx, A, Bv, Transpose::NoTrans,
+            ASSERT_NO_THROW(((void)backend::getrs_vendor<B, T>(*this->ctx, A, Bv, Transpose::NoTrans,
                                                          p.piv.to_span(), ws.to_span())));
             this->ctx->wait();
             for (int b = 0; b < batch; ++b)
@@ -2284,7 +2284,7 @@ TYPED_TEST(LuTest, NativeFactorFeedsTheVendorSolvers) {
             auto C = view_of(c);
             UnifiedVector<std::byte> ws(std::max<std::size_t>(
                 1, backend::getri_vendor_buffer_size<B, T>(*this->ctx, A)));
-            ASSERT_NO_THROW((backend::getri_vendor<B, T>(*this->ctx, A, C, p.piv.to_span(),
+            ASSERT_NO_THROW(((void)backend::getri_vendor<B, T>(*this->ctx, A, C, p.piv.to_span(),
                                                          ws.to_span(), ci.to_span())));
             this->ctx->wait();
             for (int b = 0; b < batch; ++b) {
@@ -2310,7 +2310,7 @@ TYPED_TEST(LuTest, VendorFactorFeedsTheNativeSolvers) {
             auto A = view_of(p);
             UnifiedVector<std::byte> ws(std::max<std::size_t>(
                 1, backend::getrf_vendor_buffer_size<B, T>(*this->ctx, A)));
-            ASSERT_NO_THROW((backend::getrf_vendor<B, T>(*this->ctx, A, p.piv.to_span(),
+            ASSERT_NO_THROW(((void)backend::getrf_vendor<B, T>(*this->ctx, A, p.piv.to_span(),
                                                          ws.to_span(), p.info.to_span())));
             this->ctx->wait();
             for (int b = 0; b < batch; ++b) ASSERT_EQ(p.info[b], 0);
@@ -2327,7 +2327,7 @@ TYPED_TEST(LuTest, VendorFactorFeedsTheNativeSolvers) {
             UnifiedVector<std::byte> ws(std::max<std::size_t>(
                 1, sycl_getrs::getrs_blocked_buffer_size<T>(*this->ctx, A, Bv,
                                                             Transpose::NoTrans)));
-            ASSERT_NO_THROW(sycl_getrs::getrs_blocked_dispatch<T>(
+            ASSERT_NO_THROW((void)sycl_getrs::getrs_blocked_dispatch<T>(
                 *this->ctx, A, Bv, Transpose::NoTrans, p.piv.to_span(), ws.to_span(),
                 this->getrs_seam()));
             this->ctx->wait();
@@ -2346,7 +2346,7 @@ TYPED_TEST(LuTest, VendorFactorFeedsTheNativeSolvers) {
             auto C = view_of(c);
             UnifiedVector<std::byte> ws(std::max<std::size_t>(
                 1, sycl_getri::getri_blocked_buffer_size<T>(*this->ctx, A)));
-            ASSERT_NO_THROW(sycl_getri::getri_blocked_dispatch<T>(
+            ASSERT_NO_THROW((void)sycl_getri::getri_blocked_dispatch<T>(
                 *this->ctx, A, C, p.piv.to_span(), ws.to_span(), ci.to_span(),
                 this->getri_seam()));
             this->ctx->wait();
@@ -2580,7 +2580,7 @@ TYPED_TEST(LuTest, FacadeReachesTheNativeKernelsBitExactly) {
 
         UnifiedVector<std::byte> ws(std::max<std::size_t>(
             1, getrf_buffer_size<B, T>(*this->ctx, Vf)));
-        ASSERT_NO_THROW((getrf<B, T>(*this->ctx, Vf, viafac.piv.to_span(), ws.to_span(),
+        ASSERT_NO_THROW(((void)getrf<B, T>(*this->ctx, Vf, viafac.piv.to_span(), ws.to_span(),
                                      viafac.info.to_span())));
         this->ctx->wait();
 
@@ -2613,12 +2613,12 @@ TYPED_TEST(LuTest, FacadeReachesTheNativeKernelsBitExactly) {
 
         UnifiedVector<std::byte> w1(std::max<std::size_t>(
             1, sycl_getrs::getrs_blocked_buffer_size<T>(*this->ctx, A, V1, Transpose::Trans)));
-        sycl_getrs::getrs_blocked_dispatch<T>(*this->ctx, A, V1, Transpose::Trans,
+        (void)sycl_getrs::getrs_blocked_dispatch<T>(*this->ctx, A, V1, Transpose::Trans,
                                               p.piv.to_span(), w1.to_span(), this->getrs_seam());
         this->ctx->wait();
         UnifiedVector<std::byte> w2(std::max<std::size_t>(
             1, getrs_buffer_size<B, T>(*this->ctx, A, V2, Transpose::Trans)));
-        ASSERT_NO_THROW((getrs<B, T>(*this->ctx, A, V2, Transpose::Trans, p.piv.to_span(),
+        ASSERT_NO_THROW(((void)getrs<B, T>(*this->ctx, A, V2, Transpose::Trans, p.piv.to_span(),
                                      w2.to_span())));
         this->ctx->wait();
         for (size_t i = 0; i < r1.buf.size(); ++i)
@@ -2645,12 +2645,12 @@ TYPED_TEST(LuTest, FacadeReachesTheNativeKernelsBitExactly) {
 
         UnifiedVector<std::byte> w1(std::max<std::size_t>(
             1, sycl_getri::getri_blocked_buffer_size<T>(*this->ctx, A)));
-        sycl_getri::getri_blocked_dispatch<T>(*this->ctx, A, C1, p.piv.to_span(), w1.to_span(),
+        (void)sycl_getri::getri_blocked_dispatch<T>(*this->ctx, A, C1, p.piv.to_span(), w1.to_span(),
                                               i1.to_span(), this->getri_seam());
         this->ctx->wait();
         UnifiedVector<std::byte> w2(std::max<std::size_t>(
             1, getri_buffer_size<B, T>(*this->ctx, A)));
-        ASSERT_NO_THROW((getri<B, T>(*this->ctx, A, C2, p.piv.to_span(), w2.to_span(),
+        ASSERT_NO_THROW(((void)getri<B, T>(*this->ctx, A, C2, p.piv.to_span(), w2.to_span(),
                                      i2.to_span())));
         this->ctx->wait();
         for (size_t i = 0; i < c1.buf.size(); ++i)
@@ -2675,7 +2675,7 @@ TYPED_TEST(LuTest, DirectEntryPointsRefuseWhatSupportsRefuses) {
         UnifiedVector<T*> wp(1, nullptr);
         MatrixView<T, MatrixFormat::Dense> W(w.data(), 24, 32, 24, 24 * 32, 1, wp.data());
         UnifiedVector<int64_t> pv(64, 0);
-        EXPECT_THROW(sycl_getrf::getrf_blocked_dispatch<T>(*this->ctx, W, pv.to_span(),
+        EXPECT_THROW((void)sycl_getrf::getrf_blocked_dispatch<T>(*this->ctx, W, pv.to_span(),
                                                            ws.to_span(), Span<int32_t>{},
                                                            this->gemm_seam(), this->trsm_seam()),
                      std::invalid_argument);
@@ -2683,16 +2683,16 @@ TYPED_TEST(LuTest, DirectEntryPointsRefuseWhatSupportsRefuses) {
     // A pivot span shorter than n * batch.
     {
         UnifiedVector<int64_t> shortpiv(size_t(n) * batch - 1, 0);
-        EXPECT_THROW(sycl_getrf::getrf_blocked_dispatch<T>(*this->ctx, A, shortpiv.to_span(),
+        EXPECT_THROW((void)sycl_getrf::getrf_blocked_dispatch<T>(*this->ctx, A, shortpiv.to_span(),
                                                            ws.to_span(), Span<int32_t>{},
                                                            this->gemm_seam(), this->trsm_seam()),
                      std::invalid_argument);
-        EXPECT_THROW(sycl_getrf::getrf_cta_dispatch<T>(*this->ctx, A, shortpiv.to_span(),
+        EXPECT_THROW((void)sycl_getrf::getrf_cta_dispatch<T>(*this->ctx, A, shortpiv.to_span(),
                                                        ws.to_span(), Span<int32_t>{}),
                      std::invalid_argument);
     }
     // An empty panel-solve seam. NOT defaulted to a native trsm.
-    EXPECT_THROW(sycl_getrf::getrf_blocked_dispatch<T>(*this->ctx, A, p.piv.to_span(),
+    EXPECT_THROW((void)sycl_getrf::getrf_blocked_dispatch<T>(*this->ctx, A, p.piv.to_span(),
                                                        ws.to_span(), Span<int32_t>{},
                                                        this->gemm_seam(),
                                                        sycl_getrf::GetrfPanelSolveTrsm<T>{}),
@@ -2702,7 +2702,7 @@ TYPED_TEST(LuTest, DirectEntryPointsRefuseWhatSupportsRefuses) {
         const int over = this->cta_max_n() + 1;
         auto big = make_dominant_permuted<T>(over, 1, 41u);
         auto Vb = view_of(big);
-        EXPECT_THROW(sycl_getrf::getrf_cta_dispatch<T>(*this->ctx, Vb, big.piv.to_span(),
+        EXPECT_THROW((void)sycl_getrf::getrf_cta_dispatch<T>(*this->ctx, Vb, big.piv.to_span(),
                                                        ws.to_span(), Span<int32_t>{}),
                      std::invalid_argument)
             << "getrf_cta_dispatch accepted order " << over << " with a capacity of "
@@ -2713,19 +2713,19 @@ TYPED_TEST(LuTest, DirectEntryPointsRefuseWhatSupportsRefuses) {
         this->run_blocked(p);
         auto rhs = make_rhs<T>(n, 2, batch, 12u);
         auto Bv = view_of(rhs);
-        EXPECT_THROW(sycl_getrs::getrs_blocked_dispatch<T>(*this->ctx, A, Bv, Transpose::NoTrans,
+        EXPECT_THROW((void)sycl_getrs::getrs_blocked_dispatch<T>(*this->ctx, A, Bv, Transpose::NoTrans,
                                                            p.piv.to_span(), ws.to_span(),
                                                            sycl_getrs::GetrsSolveTrsm<T>{}),
                      std::invalid_argument);
         auto mismatched = make_rhs<T>(n + 1, 2, batch, 13u);
         auto Bm = view_of(mismatched);
-        EXPECT_THROW(sycl_getrs::getrs_blocked_dispatch<T>(*this->ctx, A, Bm, Transpose::NoTrans,
+        EXPECT_THROW((void)sycl_getrs::getrs_blocked_dispatch<T>(*this->ctx, A, Bm, Transpose::NoTrans,
                                                            p.piv.to_span(), ws.to_span(),
                                                            this->getrs_seam()),
                      std::invalid_argument);
 
         UnifiedVector<int32_t> ci(size_t(batch), 0);
-        EXPECT_THROW(sycl_getri::getri_blocked_dispatch<T>(*this->ctx, A, A, p.piv.to_span(),
+        EXPECT_THROW((void)sycl_getri::getri_blocked_dispatch<T>(*this->ctx, A, A, p.piv.to_span(),
                                                            ws.to_span(), ci.to_span(),
                                                            this->getri_seam()),
                      std::invalid_argument)
@@ -2738,7 +2738,7 @@ TYPED_TEST(LuTest, DirectEntryPointsRefuseWhatSupportsRefuses) {
         // std::function rather than getting a diagnostic.
         auto cbuf = make_dominant_permuted<T>(n, batch, 71u);
         auto Cv = view_of(cbuf);
-        EXPECT_THROW(sycl_getri::getri_blocked_dispatch<T>(*this->ctx, A, Cv, p.piv.to_span(),
+        EXPECT_THROW((void)sycl_getri::getri_blocked_dispatch<T>(*this->ctx, A, Cv, p.piv.to_span(),
                                                            ws.to_span(), ci.to_span(),
                                                            sycl_getri::GetriSolveTrsm<T>{}),
                      std::invalid_argument)
@@ -2785,7 +2785,7 @@ TYPED_TEST(LuTest, BufferSizeCoversEveryRouteAndNeverDereferences) {
 
         // Serve EXACTLY that many bytes: a short workspace is a silent heap overflow.
         UnifiedVector<std::byte> ws(std::max<std::size_t>(1, need));
-        ASSERT_NO_THROW((getrf<B, T>(*this->ctx, V, p.piv.to_span(), ws.to_span(),
+        ASSERT_NO_THROW(((void)getrf<B, T>(*this->ctx, V, p.piv.to_span(), ws.to_span(),
                                      p.info.to_span())));
         this->ctx->wait();
         check_factor(p, "buffer-size/getrf");
@@ -2824,7 +2824,7 @@ TYPED_TEST(LuTest, FusedGetrsSolvesEveryTransposeAtEveryInstantiatedWidth) {
             auto Bv = view_of(rhs);
             UnifiedVector<std::byte> ws(std::max<std::size_t>(
                 1, sycl_getrs::getrs_fused_buffer_size<T>(*this->ctx, A, Bv, op)));
-            ASSERT_NO_THROW(sycl_getrs::getrs_fused_dispatch<T>(
+            ASSERT_NO_THROW((void)sycl_getrs::getrs_fused_dispatch<T>(
                 *this->ctx, A, Bv, op, p.piv.to_span(), ws.to_span()));
             this->ctx->wait();
 
@@ -2893,7 +2893,7 @@ TYPED_TEST(LuTest, FusedGetrsAtBlockBoundariesAndTheNbSwitch) {
                 auto Bv = view_of(rhs);
                 UnifiedVector<std::byte> ws(std::max<std::size_t>(
                     1, sycl_getrs::getrs_fused_buffer_size<T>(*this->ctx, A, Bv, op)));
-                ASSERT_NO_THROW(sycl_getrs::getrs_fused_dispatch<T>(
+                ASSERT_NO_THROW((void)sycl_getrs::getrs_fused_dispatch<T>(
                     *this->ctx, A, Bv, op, p.piv.to_span(), ws.to_span()))
                     << "n=" << n << " nrhs=" << nrhs << " transA=" << int(op);
                 this->ctx->wait();
@@ -2945,10 +2945,10 @@ TYPED_TEST(LuTest, FusedGetrsHandsBackAtBothCeilings) {
         UnifiedVector<std::byte> ws(std::max<std::size_t>(
             1, sycl_getrs::getrs_fused_buffer_size<T>(*this->ctx, A, Bv, Transpose::NoTrans)));
         if (nrhs <= maxr) {
-            ASSERT_NO_THROW(sycl_getrs::getrs_fused_dispatch<T>(
+            ASSERT_NO_THROW((void)sycl_getrs::getrs_fused_dispatch<T>(
                 *this->ctx, A, Bv, Transpose::NoTrans, p.piv.to_span(), ws.to_span()));
         } else {
-            EXPECT_THROW(sycl_getrs::getrs_fused_dispatch<T>(
+            EXPECT_THROW((void)sycl_getrs::getrs_fused_dispatch<T>(
                              *this->ctx, A, Bv, Transpose::NoTrans, p.piv.to_span(),
                              ws.to_span()),
                          std::invalid_argument)
@@ -2973,7 +2973,7 @@ TYPED_TEST(LuTest, FusedGetrsHandsBackAtBothCeilings) {
                    "that wide";
             UnifiedVector<std::byte> ws(std::max<std::size_t>(
                 1, getrs_buffer_size<B, T>(*this->ctx, A, Bv, op)));
-            ASSERT_NO_THROW((getrs<B, T>(*this->ctx, A, Bv, op, p.piv.to_span(), ws.to_span())));
+            ASSERT_NO_THROW(((void)getrs<B, T>(*this->ctx, A, Bv, op, p.piv.to_span(), ws.to_span())));
             this->ctx->wait();
             for (int b = 0; b < batch; ++b)
                 EXPECT_LE(solve_residual<T>(p.a0.data() + size_t(b) * p.stride,
@@ -3012,7 +3012,7 @@ TYPED_TEST(LuTest, FusedGetrsHandsBackAtBothCeilings) {
                 << " against fused_max_elems=" << shape->fused_max_elems;
             if (order == over) {
                 UnifiedVector<std::byte> ws(1);
-                EXPECT_THROW(sycl_getrs::getrs_fused_dispatch<T>(
+                EXPECT_THROW((void)sycl_getrs::getrs_fused_dispatch<T>(
                                  *this->ctx, An, Bn, Transpose::NoTrans, piv.to_span(),
                                  ws.to_span()),
                              std::invalid_argument)
@@ -3041,7 +3041,7 @@ TYPED_TEST(LuTest, FusedGetrsConsumesEveryFactorProducer) {
             auto Bv = view_of(rhs);
             UnifiedVector<std::byte> ws(std::max<std::size_t>(
                 1, sycl_getrs::getrs_fused_buffer_size<T>(*this->ctx, A, Bv, op)));
-            ASSERT_NO_THROW(sycl_getrs::getrs_fused_dispatch<T>(
+            ASSERT_NO_THROW((void)sycl_getrs::getrs_fused_dispatch<T>(
                 *this->ctx, A, Bv, op, p.piv.to_span(), ws.to_span()));
             this->ctx->wait();
             for (int b = 0; b < batch; ++b)
@@ -3078,7 +3078,7 @@ TYPED_TEST(LuTest, FusedGetrsConsumesEveryFactorProducer) {
             auto A = view_of(p);
             UnifiedVector<std::byte> ws(std::max<std::size_t>(
                 1, backend::getrf_vendor_buffer_size<B, T>(*this->ctx, A)));
-            ASSERT_NO_THROW((backend::getrf_vendor<B, T>(*this->ctx, A, p.piv.to_span(),
+            ASSERT_NO_THROW(((void)backend::getrf_vendor<B, T>(*this->ctx, A, p.piv.to_span(),
                                                          ws.to_span(), p.info.to_span())));
             this->ctx->wait();
             for (int b = 0; b < batch; ++b) ASSERT_EQ(p.info[b], 0);
@@ -3094,7 +3094,7 @@ TYPED_TEST(LuTest, FusedGetrsConsumesEveryFactorProducer) {
         auto Bv = view_of(rhs);
         UnifiedVector<std::byte> ws(std::max<std::size_t>(
             1, backend::getrs_vendor_buffer_size<B, T>(*this->ctx, A, Bv, Transpose::NoTrans)));
-        ASSERT_NO_THROW((backend::getrs_vendor<B, T>(*this->ctx, A, Bv, Transpose::NoTrans,
+        ASSERT_NO_THROW(((void)backend::getrs_vendor<B, T>(*this->ctx, A, Bv, Transpose::NoTrans,
                                                      p.piv.to_span(), ws.to_span())));
         this->ctx->wait();
         for (int b = 0; b < batch; ++b)
@@ -3134,7 +3134,7 @@ TYPED_TEST(LuTest, FusedGetrsOnSingularAndNearlySingularFactors) {
                 auto Bv = view_of(rhs);
                 UnifiedVector<std::byte> ws(std::max<std::size_t>(
                     1, sycl_getrs::getrs_fused_buffer_size<T>(*this->ctx, A, Bv, op)));
-                ASSERT_NO_THROW(sycl_getrs::getrs_fused_dispatch<T>(
+                ASSERT_NO_THROW((void)sycl_getrs::getrs_fused_dispatch<T>(
                     *this->ctx, A, Bv, op, p.piv.to_span(), ws.to_span()));
                 this->ctx->wait();
                 for (int b = 0; b < batch; ++b) {
@@ -3170,7 +3170,7 @@ TYPED_TEST(LuTest, FusedGetrsOnSingularAndNearlySingularFactors) {
                 auto Bv = view_of(rhs);
                 UnifiedVector<std::byte> ws(std::max<std::size_t>(
                     1, sycl_getrs::getrs_fused_buffer_size<T>(*this->ctx, A, Bv, op)));
-                ASSERT_NO_THROW(sycl_getrs::getrs_fused_dispatch<T>(
+                ASSERT_NO_THROW((void)sycl_getrs::getrs_fused_dispatch<T>(
                     *this->ctx, A, Bv, op, p.piv.to_span(), ws.to_span()))
                     << "an exactly singular factor must not make the launch throw or hang";
                 this->ctx->wait();
@@ -3231,12 +3231,12 @@ TYPED_TEST(LuTest, FacadeReachesTheFusedGetrsBitExactly) {
 
         UnifiedVector<std::byte> w1(std::max<std::size_t>(
             1, sycl_getrs::getrs_fused_buffer_size<T>(*this->ctx, A, V1, op)));
-        sycl_getrs::getrs_fused_dispatch<T>(*this->ctx, A, V1, op, p.piv.to_span(), w1.to_span());
+        (void)sycl_getrs::getrs_fused_dispatch<T>(*this->ctx, A, V1, op, p.piv.to_span(), w1.to_span());
         this->ctx->wait();
 
         UnifiedVector<std::byte> w2(std::max<std::size_t>(
             1, getrs_buffer_size<B, T>(*this->ctx, A, V2, op)));
-        ASSERT_NO_THROW((getrs<B, T>(*this->ctx, A, V2, op, p.piv.to_span(), w2.to_span())));
+        ASSERT_NO_THROW(((void)getrs<B, T>(*this->ctx, A, V2, op, p.piv.to_span(), w2.to_span())));
         this->ctx->wait();
 
         for (size_t i = 0; i < r1.buf.size(); ++i)
@@ -3337,7 +3337,7 @@ TYPED_TEST(LuTest, FusedGetrsDirectEntryPointRefusesWhatSupportsRefuses) {
         UnifiedVector<T> w(size_t(24) * 32, mk<T>(1.0, 0.0));
         UnifiedVector<T*> wp(1, nullptr);
         MatrixView<T, MatrixFormat::Dense> W(w.data(), 24, 32, 24, 24 * 32, 1, wp.data());
-        EXPECT_THROW(sycl_getrs::getrs_fused_dispatch<T>(*this->ctx, W, Bv, Transpose::NoTrans,
+        EXPECT_THROW((void)sycl_getrs::getrs_fused_dispatch<T>(*this->ctx, W, Bv, Transpose::NoTrans,
                                                          p.piv.to_span(), ws.to_span()),
                      std::invalid_argument);
     }
@@ -3345,7 +3345,7 @@ TYPED_TEST(LuTest, FusedGetrsDirectEntryPointRefusesWhatSupportsRefuses) {
     {
         auto mismatched = make_rhs<T>(n + 1, nrhs, batch, 8383u);
         auto Bm = view_of(mismatched);
-        EXPECT_THROW(sycl_getrs::getrs_fused_dispatch<T>(*this->ctx, A, Bm, Transpose::NoTrans,
+        EXPECT_THROW((void)sycl_getrs::getrs_fused_dispatch<T>(*this->ctx, A, Bm, Transpose::NoTrans,
                                                          p.piv.to_span(), ws.to_span()),
                      std::invalid_argument);
     }
@@ -3353,14 +3353,14 @@ TYPED_TEST(LuTest, FusedGetrsDirectEntryPointRefusesWhatSupportsRefuses) {
     {
         auto other = make_rhs<T>(n, nrhs, batch + 1, 8484u);
         auto Bo = view_of(other);
-        EXPECT_THROW(sycl_getrs::getrs_fused_dispatch<T>(*this->ctx, A, Bo, Transpose::NoTrans,
+        EXPECT_THROW((void)sycl_getrs::getrs_fused_dispatch<T>(*this->ctx, A, Bo, Transpose::NoTrans,
                                                          p.piv.to_span(), ws.to_span()),
                      std::invalid_argument);
     }
     // A pivot span shorter than n * batch.
     {
         UnifiedVector<int64_t> shortpiv(size_t(n) * batch - 1, 0);
-        EXPECT_THROW(sycl_getrs::getrs_fused_dispatch<T>(*this->ctx, A, Bv, Transpose::NoTrans,
+        EXPECT_THROW((void)sycl_getrs::getrs_fused_dispatch<T>(*this->ctx, A, Bv, Transpose::NoTrans,
                                                          shortpiv.to_span(), ws.to_span()),
                      std::invalid_argument);
     }
@@ -3394,7 +3394,7 @@ TYPED_TEST(LuTest, FusedGetrsDirectEntryPointRefusesWhatSupportsRefuses) {
         EXPECT_GE(need, sycl_getrs::getrs_fused_buffer_size<T>(*this->ctx, A, Bv,
                                                                Transpose::NoTrans));
         UnifiedVector<std::byte> exact(std::max<std::size_t>(1, need));
-        ASSERT_NO_THROW((getrs<B, T>(*this->ctx, A, Bv, Transpose::NoTrans, p.piv.to_span(),
+        ASSERT_NO_THROW(((void)getrs<B, T>(*this->ctx, A, Bv, Transpose::NoTrans, p.piv.to_span(),
                                      exact.to_span())));
         this->ctx->wait();
         for (int b = 0; b < batch; ++b)
@@ -3878,7 +3878,7 @@ TYPED_TEST(LuTest, TinyDirectEntryPointRefusesWhatSupportsRefuses) {
     {
         auto big = make_dominant_permuted<T>(cap + 1, batch, 18u);
         auto Vb = view_of(big);
-        EXPECT_THROW(sycl_getrf::getrf_tiny_dispatch<T>(*this->ctx, Vb, big.piv.to_span(),
+        EXPECT_THROW((void)sycl_getrf::getrf_tiny_dispatch<T>(*this->ctx, Vb, big.piv.to_span(),
                                                         ws.to_span(), Span<int32_t>{}),
                      batchlas::unsupported);
     }
@@ -3888,14 +3888,14 @@ TYPED_TEST(LuTest, TinyDirectEntryPointRefusesWhatSupportsRefuses) {
         UnifiedVector<T*> wp(1, nullptr);
         MatrixView<T, MatrixFormat::Dense> W(w.data(), 8, 16, 8, 8 * 16, 1, wp.data());
         UnifiedVector<int64_t> pv(64, 0);
-        EXPECT_THROW(sycl_getrf::getrf_tiny_dispatch<T>(*this->ctx, W, pv.to_span(),
+        EXPECT_THROW((void)sycl_getrf::getrf_tiny_dispatch<T>(*this->ctx, W, pv.to_span(),
                                                         ws.to_span(), Span<int32_t>{}),
                      std::invalid_argument);
     }
     // A pivot span shorter than n * batch.
     {
         UnifiedVector<int64_t> shortpiv(size_t(n) * batch - 1, 0);
-        EXPECT_THROW(sycl_getrf::getrf_tiny_dispatch<T>(*this->ctx, A, shortpiv.to_span(),
+        EXPECT_THROW((void)sycl_getrf::getrf_tiny_dispatch<T>(*this->ctx, A, shortpiv.to_span(),
                                                         ws.to_span(), Span<int32_t>{}),
                      std::invalid_argument);
     }
@@ -4054,7 +4054,7 @@ TYPED_TEST(LuTest, FacadeReachesTheTinyKernelBitExactly) {
     EXPECT_GE(need, sycl_getrf::getrf_tiny_buffer_size<T>(*this->ctx, Vf))
         << "getrf_buffer_size does not cover the Tiny tier's info scratch";
     UnifiedVector<std::byte> ws(std::max<std::size_t>(1, need));
-    ASSERT_NO_THROW((getrf<B, T>(*this->ctx, Vf, viafac.piv.to_span(), ws.to_span(),
+    ASSERT_NO_THROW(((void)getrf<B, T>(*this->ctx, Vf, viafac.piv.to_span(), ws.to_span(),
                                  viafac.info.to_span())));
     this->ctx->wait();
 

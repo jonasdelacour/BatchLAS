@@ -206,7 +206,7 @@ int run_accuracy(const Options& opt) {
             auto run_ortho_case = [&](OrthoAlgorithm algo, const char* impl_name) {
                 auto Q = dense_A.clone();
                 UnifiedVector<std::byte> ws(ortho_buffer_size<B, Real>(*q, Q.view(), Transpose::NoTrans, algo));
-                ortho<B, Real>(*q, Q.view(), Transpose::NoTrans, ws.to_span(), algo);
+                (void)ortho<B, Real>(*q, Q.view(), Transpose::NoTrans, ws.to_span(), algo);
                 q->wait();
                 const auto ortho_vals = orthogonality_residuals<B, Real>(*q, Q);
                 emit_rows(sample_id, target_log10s, conds, ortho_vals, impl_name, cur_batch);
@@ -225,7 +225,7 @@ int run_accuracy(const Options& opt) {
                 UnifiedVector<Real> eigvals(static_cast<size_t>(n) * static_cast<size_t>(cur_batch));
                 UnifiedVector<std::byte> ws(
                     syev_buffer_size<B, Real>(*q, A.view(), eigvals.to_span(), JobType::EigenVectors, Uplo::Lower));
-                syev<B>(*q, A.view(), eigvals.to_span(), {}, ws.to_span());
+                (void)syev<B>(*q, A.view(), eigvals.to_span(), {}, ws.to_span());
                 q->wait();
                 const auto ortho_vals = orthogonality_residuals<B, Real>(*q, A);
                 emit_rows(sample_id, target_log10s, conds, ortho_vals, "syev", cur_batch);
@@ -247,7 +247,7 @@ int run_accuracy(const Options& opt) {
                     auto eigvects = Matrix<Real>::Identity(n, cur_batch);
                     UnifiedVector<std::byte> ws(
                         steqr_buffer_size<Real>(*q, d_work, e_work, eigvals, JobType::EigenVectors, steqr_params));
-                    steqr<B, Real>(*q,
+                    (void)steqr<B, Real>(*q,
                                    d_work,
                                    e_work,
                                    eigvals,
@@ -270,7 +270,7 @@ int run_accuracy(const Options& opt) {
                     const char* cta_name = opt.scheme == SteqrUpdateScheme::PG ? "steqr_cta_pg" : "steqr_cta_exp";
                     UnifiedVector<std::byte> ws(
                         steqr_cta_buffer_size<Real>(*q, d_work, e_work, eigvals, JobType::EigenVectors, steqr_params));
-                    steqr_cta<B, Real>(*q,
+                    (void)steqr_cta<B, Real>(*q,
                                        d_work,
                                        e_work,
                                        eigvals,
@@ -292,7 +292,7 @@ int run_accuracy(const Options& opt) {
                     StedcParams<Real> stedc_params{};
                     UnifiedVector<std::byte> ws(
                         stedc_buffer_size<B, Real>(*q, n, cur_batch, JobType::EigenVectors, stedc_params));
-                    stedc<B, Real>(*q,
+                    (void)stedc<B, Real>(*q,
                                    d_work,
                                    e_work,
                                    eigvals,
@@ -313,7 +313,7 @@ int run_accuracy(const Options& opt) {
     return 0;
 }
 
-int dispatch(const Options& opt) {
+int run_selected(const Options& opt) {
     if (opt.dtype != "float" && opt.dtype != "double") {
         std::cerr << "Unsupported dtype for orthogonality accuracy: " << opt.dtype << " (use float/double)\n";
         return 1;
@@ -374,5 +374,5 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    return dispatch(opt);
+    return run_selected(opt);
 }

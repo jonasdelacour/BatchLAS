@@ -220,21 +220,21 @@ void run_gesvd_relacc(miniacc::State& state) {
                     *q, A_work.view(), s.to_span(), U.view(), Vh.view(),
                     SvdVectors::All, SvdVectors::All);
                 UnifiedVector<std::byte> ws(ws_bytes);
-                gesvd_cta<B, Real>(*q, A_work.view(), s.to_span(), U.view(), Vh.view(),
+                (void)gesvd_cta<B, Real>(*q, A_work.view(), s.to_span(), U.view(), Vh.view(),
                                    SvdVectors::All, SvdVectors::All, ws.to_span());
             } else if constexpr (Impl == RelAccImpl::CusolverJacobi) {
                 const size_t ws_bytes = backend::gesvd_vendor_buffer_size<B, Real>(
                     *q, A_work.view(), s.to_span(), U.view(), Vh.view(),
                     SvdVectors::All, SvdVectors::All);
                 UnifiedVector<std::byte> ws(ws_bytes);
-                backend::gesvd_vendor<B, Real>(*q, A_work.view(), s.to_span(), U.view(), Vh.view(),
+                (void)backend::gesvd_vendor<B, Real>(*q, A_work.view(), s.to_span(), U.view(), Vh.view(),
                                                SvdVectors::All, SvdVectors::All, ws.to_span());
             } else if constexpr (Impl == RelAccImpl::BatchlasBlocked) {
                 const size_t ws_bytes = gesvd_blocked_buffer_size<B, Real>(
                     *q, A_work.view(), s.to_span(), U.view(), Vh.view(),
                     SvdVectors::All, SvdVectors::All);
                 UnifiedVector<std::byte> ws(ws_bytes);
-                gesvd_blocked<B, Real>(*q, A_work.view(), s.to_span(), U.view(), Vh.view(),
+                (void)gesvd_blocked<B, Real>(*q, A_work.view(), s.to_span(), U.view(), Vh.view(),
                                        SvdVectors::All, SvdVectors::All, ws.to_span());
             } else if constexpr (Impl == RelAccImpl::QrPrecond) {
                 // Tier 2 hypothesis test, deliberately OUT of kernel.
@@ -249,7 +249,7 @@ void run_gesvd_relacc(miniacc::State& state) {
                 UnifiedVector<Real> tau(static_cast<size_t>(n) * cur_batch);
                 const size_t qr_ws = geqrf_buffer_size<B, Real>(*q, A_work.view(), tau.to_span());
                 UnifiedVector<std::byte> qws(qr_ws);
-                geqrf<B, Real>(*q, A_work.view(), tau.to_span(), qws.to_span());
+                (void)geqrf<B, Real>(*q, A_work.view(), tau.to_span(), qws.to_span());
                 q->wait_and_throw();
                 // Zero the strict lower triangle by hand rather than calling
                 // MatrixView::triangularize. That helper indexes `i*ld + j` while
@@ -277,12 +277,12 @@ void run_gesvd_relacc(miniacc::State& state) {
 
                 GesvdjParams<Real> jp;
                 jp.sweep_counts = sweeps.to_span();
-                gesvdj_cta<B, Real>(*q, A_work.view(), s.to_span(), U.view(), Vh.view(),
+                (void)gesvdj_cta<B, Real>(*q, A_work.view(), s.to_span(), U.view(), Vh.view(),
                                     SvdVectors::All, SvdVectors::All, Span<std::byte>(), jp);
             } else {
                 GesvdjParams<Real> jp;
                 jp.sweep_counts = sweeps.to_span();
-                gesvdj_cta<B, Real>(*q, A_work.view(), s.to_span(), U.view(), Vh.view(),
+                (void)gesvdj_cta<B, Real>(*q, A_work.view(), s.to_span(), U.view(), Vh.view(),
                                     SvdVectors::All, SvdVectors::All, Span<std::byte>(), jp);
             }
             q->wait_and_throw();

@@ -81,7 +81,7 @@ static void BM_ORMQR_CTA(minibench::State& state) {
                         VectorView<T> tau_view_local(tau_storage,
                                                      static_cast<int>(n),
                                                      static_cast<int>(batch));
-                        ormqx_cta(q,
+                        (void)ormqx_cta(q,
                                     A,
                                     tau_view_local,
                                     C,

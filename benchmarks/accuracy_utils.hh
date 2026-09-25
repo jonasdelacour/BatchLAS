@@ -65,7 +65,7 @@ inline UnifiedVector<typename base_type<Real>::type> orthogonality_residuals(
     const int dimension = vectors.cols();
     const int batch = vectors.batch_size();
     auto gram_minus_i = Matrix<Real>::Identity(dimension, batch);
-    gemm<B, Real>(q,
+    (void)gemm<B, Real>(q,
                   vectors.view(),
                   vectors.view(),
                   gram_minus_i.view(),

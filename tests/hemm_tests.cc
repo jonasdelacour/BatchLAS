@@ -174,17 +174,17 @@ TYPED_TEST(HemmTest, OptionStructMatchesPositional) {
     Matrix<T, MatrixFormat::Dense> C_named(n, n, batch);
     Matrix<T, MatrixFormat::Dense> C_named_pos(n, n, batch);
     for (auto* C : {&C_defaults, &C_defaults_pos, &C_named, &C_named_pos}) {
-        C->view().fill_zeros(*(this->ctx));
+        (void)C->view().fill_zeros(*(this->ctx));
     }
     this->ctx->wait();
 
-    hemm(*(this->ctx), A.view(), B.view(), C_defaults.view(), {});
-    hemm<Ba, T>(*(this->ctx), A.view(), B.view(), C_defaults_pos.view(),
+    (void)hemm(*(this->ctx), A.view(), B.view(), C_defaults.view(), {});
+    (void)hemm<Ba, T>(*(this->ctx), A.view(), B.view(), C_defaults_pos.view(),
                 T(1), T(0), Side::Left, Uplo::Lower);
 
-    hemm(*(this->ctx), A.view(), B.view(), C_named.view(),
+    (void)hemm(*(this->ctx), A.view(), B.view(), C_named.view(),
          {.alpha = T(1.5, 0.25), .side = Side::Right, .uplo = Uplo::Upper});
-    hemm<Ba, T>(*(this->ctx), A.view(), B.view(), C_named_pos.view(),
+    (void)hemm<Ba, T>(*(this->ctx), A.view(), B.view(), C_named_pos.view(),
                 T(1.5, 0.25), T(0), Side::Right, Uplo::Upper);
     this->ctx->wait();
 
@@ -216,8 +216,8 @@ TYPED_TEST(HemmTest, QuadraticFormIsReal) {
         auto X = Matrix<T, MatrixFormat::Dense>::Random(n, n, false, batch, 13);
         Matrix<T, MatrixFormat::Dense> AX(n, n, batch);
         Matrix<T, MatrixFormat::Dense> XhAX(n, n, batch);
-        AX.view().fill_zeros(*(this->ctx));
-        XhAX.view().fill_zeros(*(this->ctx));
+        (void)AX.view().fill_zeros(*(this->ctx));
+        (void)XhAX.view().fill_zeros(*(this->ctx));
         this->ctx->wait();
 
         hemm(*(this->ctx), A.view(), X.view(), AX.view(), {.uplo = uplo}).wait();

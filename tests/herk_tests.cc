@@ -109,7 +109,7 @@ TYPED_TEST(HerkTest, IgnoresUnreferencedTriangleOfC) {
                         this->ctx->wait();
 
                         Matrix<T, MatrixFormat::Dense> R(n, n, shape.batch);
-                        R.view().fill_zeros(*(this->ctx));
+                        (void)R.view().fill_zeros(*(this->ctx));
                         this->ctx->wait();
 
                         herk(*(this->ctx), A.view(), C.view(),
@@ -228,8 +228,8 @@ TYPED_TEST(HerkTest, TrianglesAgreeAcrossUplo) {
 
         Matrix<T, MatrixFormat::Dense> C_lower(n, n, batch);
         Matrix<T, MatrixFormat::Dense> C_upper(n, n, batch);
-        C_lower.view().fill_zeros(*(this->ctx));
-        C_upper.view().fill_zeros(*(this->ctx));
+        (void)C_lower.view().fill_zeros(*(this->ctx));
+        (void)C_upper.view().fill_zeros(*(this->ctx));
         this->ctx->wait();
 
         herk(*(this->ctx), A.view(), C_lower.view(), {.uplo = Uplo::Lower, .trans = trans}).wait();
@@ -275,17 +275,17 @@ TYPED_TEST(HerkTest, OptionStructMatchesPositional) {
     Matrix<T, MatrixFormat::Dense> C_named(n, n, batch);
     Matrix<T, MatrixFormat::Dense> C_named_pos(n, n, batch);
     for (auto* C : {&C_defaults, &C_defaults_pos, &C_named, &C_named_pos}) {
-        C->view().fill_zeros(*(this->ctx));
+        (void)C->view().fill_zeros(*(this->ctx));
     }
     this->ctx->wait();
 
-    herk(*(this->ctx), A.view(), C_defaults.view(), {});
-    herk<Ba, T>(*(this->ctx), A.view(), C_defaults_pos.view(),
+    (void)herk(*(this->ctx), A.view(), C_defaults.view(), {});
+    (void)herk<Ba, T>(*(this->ctx), A.view(), C_defaults_pos.view(),
                 real_t(1), real_t(0), Uplo::Lower, Transpose::NoTrans);
 
-    herk(*(this->ctx), A.view(), C_named.view(),
+    (void)herk(*(this->ctx), A.view(), C_named.view(),
          {.alpha = real_t(1.5), .uplo = Uplo::Upper});
-    herk<Ba, T>(*(this->ctx), A.view(), C_named_pos.view(),
+    (void)herk<Ba, T>(*(this->ctx), A.view(), C_named_pos.view(),
                 real_t(1.5), real_t(0), Uplo::Upper, Transpose::NoTrans);
     this->ctx->wait();
 

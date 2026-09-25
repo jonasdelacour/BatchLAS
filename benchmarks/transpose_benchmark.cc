@@ -22,7 +22,7 @@ static void BM_TRANSPOSE(minibench::State& state) {
                     std::move(A),
                     std::move(B_mat),
                     [](Queue& q, auto&& A, auto&& B_mat) {
-                        batchlas::transpose<T, MatrixFormat::Dense>(q, A, B_mat);
+                        (void)batchlas::transpose<T, MatrixFormat::Dense>(q, A, B_mat);
                     });
     state.SetMetric("GB/s", static_cast<double>(batch) * (1e-9 * n * m * sizeof(T)), minibench::Rate);
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);

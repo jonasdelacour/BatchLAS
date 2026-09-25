@@ -205,7 +205,7 @@ namespace batchlas {
             constexpr T alpha = 1.0;
             constexpr T beta = 0.0;
             //Compute StS = S^T * S or StS = S * S^T (depending on transA)
-            gram_into_C(A);
+            (void)gram_into_C(A);
             //Compute the Cholesky Factorization of StS
             // (void) on an Event: deliberate. This Queue is in-order, so the next submission
             // is already ordered after this one and the Event carries nothing the caller needs.
@@ -276,7 +276,7 @@ namespace batchlas {
         };
 
         auto shift_chol_alg = [&](){
-            gram_into_C(A);
+            (void)gram_into_C(A);
 
             auto ATA_ptr = C.data_ptr();
             ctx -> submit([&](sycl::handler& h){

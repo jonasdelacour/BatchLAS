@@ -229,7 +229,7 @@ void run_gesvd_blocked_acc(miniacc::State& state) {
             }();
             UnifiedVector<std::byte> ws(ws_bytes);
             if constexpr (is_complex<Scalar>::value) {
-                gesvd_blocked<B, Scalar>(*q,
+                (void)gesvd_blocked<B, Scalar>(*q,
                                          A_work.view(),
                                          s.to_span(),
                                          U.view(),
@@ -239,7 +239,7 @@ void run_gesvd_blocked_acc(miniacc::State& state) {
                                          Uplo::Lower,
                                          ws.to_span());
             } else {
-                gesvd_blocked<B, Scalar>(*q,
+                (void)gesvd_blocked<B, Scalar>(*q,
                                          A_work.view(),
                                          s.to_span(),
                                          U.view(),

@@ -66,7 +66,7 @@ static void BM_SYEV_CTA_FUSED(minibench::State& state) {
                     params,
                     wg_mult,
                     [](Queue& q, auto&&... xs) {
-                        syev_cta_fused(q, std::forward<decltype(xs)>(xs)...);
+                        (void)syev_cta_fused(q, std::forward<decltype(xs)>(xs)...);
                     });
 
     const double flops = 4.0 / 3.0 * static_cast<double>(n) * n * n;
@@ -101,7 +101,7 @@ static void BM_SYEV_CTA_PIPELINED(minibench::State& state) {
                     params,
                     wg_mult,
                     [](Queue& q, auto&&... xs) {
-                        syev_cta(q, std::forward<decltype(xs)>(xs)...);
+                        (void)syev_cta(q, std::forward<decltype(xs)>(xs)...);
                     });
 
     const double flops = 4.0 / 3.0 * static_cast<double>(n) * n * n;

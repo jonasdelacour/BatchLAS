@@ -657,7 +657,18 @@ endforeach()
 foreach(_opt IN LISTS BATCHLAS_SYCL_BASE_LINK_OPTIONS BATCHLAS_SYCL_EXTRA_LINK_OPTIONS)
     batchlas_build_interface_option(_opt_esc "${_opt}")
     target_link_options(batchlas_sycl_options INTERFACE "$<BUILD_INTERFACE:${_opt_esc}>")
+    target_link_options(batchlas_sycl_no_cpu_options INTERFACE "$<BUILD_INTERFACE:${_opt_esc}>")
 endforeach()
+
+# The native_cpu device frontend inherits the host's -fmath-errno, so std::sqrt
+# in a kernel stays an errno-setting libm call instead of llvm.sqrt, and every
+# device link warns "Undefined function sqrt ... may result in runtime errors".
+# Device code has no errno; the host compile is left alone.
+list(FIND BATCHLAS_SYCL_TARGETS "native_cpu" _native_cpu_idx)
+if(NOT _native_cpu_idx EQUAL -1)
+    target_compile_options(batchlas_sycl_options INTERFACE
+        "$<BUILD_INTERFACE:$<$<COMPILE_LANGUAGE:CXX>:SHELL:-Xsycl-target-frontend=native_cpu -fno-math-errno>>")
+endif()
 
 if(BATCHLAS_SYCL_TARGETS_STRING)
     batchlas_build_interface_option(_targets_esc "-fsycl-targets=${BATCHLAS_SYCL_TARGETS_STRING}")
@@ -673,6 +684,9 @@ if(BATCHLAS_SYCL_TARGETS_NO_CPU_STRING)
     batchlas_build_interface_option(_targets_no_cpu_esc "-fsycl-targets=${BATCHLAS_SYCL_TARGETS_NO_CPU_STRING}")
     target_compile_options(batchlas_sycl_no_cpu_options INTERFACE
         "$<BUILD_INTERFACE:$<$<COMPILE_LANGUAGE:CXX>:${_targets_no_cpu_esc}>>"
+    )
+    target_link_options(batchlas_sycl_no_cpu_options INTERFACE
+        "$<BUILD_INTERFACE:${_targets_no_cpu_esc}>"
     )
 endif()
 

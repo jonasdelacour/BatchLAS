@@ -227,7 +227,7 @@ inline Matrix<T, MatrixFormat::Dense> cholesky(Queue& ctx,
                                                const MatrixView<T, MatrixFormat::Dense>& A,
                                                Uplo uplo = kDefaultUplo) {
     auto L = detail::like(A);
-    MatrixView<T, MatrixFormat::Dense>::copy(ctx, L.view(), A);
+    (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, L.view(), A);
     (void)potrf(ctx, L.view(), {.uplo = uplo});
     return L;
 }
@@ -240,7 +240,7 @@ inline UnifiedVector<typename base_type<T>::type> eigvalsh(Queue& ctx,
     UnifiedVector<typename base_type<T>::type> W(static_cast<size_t>(A.rows()) *
                                                  static_cast<size_t>(A.batch_size()));
     auto work = detail::like(A);
-    MatrixView<T, MatrixFormat::Dense>::copy(ctx, work.view(), A);
+    (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, work.view(), A);
     (void)syev(ctx, work.view(), W.to_span(), {.jobz = JobType::NoEigenVectors, .uplo = uplo});
     return W;
 }
@@ -271,7 +271,7 @@ inline Eigh<T> eigh(Queue& ctx,
     // Qualified, because `detail::` here would find batchlas::linalg::detail.
     ::batchlas::detail::require_square("eigh", "A", A);
     auto V = detail::like(A);
-    MatrixView<T, MatrixFormat::Dense>::copy(ctx, V.view(), A);
+    (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, V.view(), A);
     // Spelled positionally rather than through the SyevOptions overload because
     // SyevOptions carries no `info` field (unlike PotrfOptions); the workspace
     // lease is taken here exactly as that overload takes it.
@@ -306,10 +306,10 @@ inline Matrix<T, MatrixFormat::Dense> solve(Queue& ctx,
                                             const MatrixView<T, MatrixFormat::Dense>& B,
                                             Transpose trans = Transpose::NoTrans) {
     auto LU = detail::like(A);
-    MatrixView<T, MatrixFormat::Dense>::copy(ctx, LU.view(), A);
+    (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, LU.view(), A);
 
     Matrix<T, MatrixFormat::Dense> X(B.rows(), B.cols(), B.batch_size());
-    MatrixView<T, MatrixFormat::Dense>::copy(ctx, X.view(), B);
+    (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, X.view(), B);
 
     const size_t n_pivots = static_cast<size_t>(A.rows()) * static_cast<size_t>(A.batch_size());
     auto pivot_bytes = ctx.workspace(n_pivots * sizeof(int64_t));
@@ -445,7 +445,7 @@ inline Svd<T> svd(Queue& ctx,
     const int batch = A.batch_size();
 
     auto work = detail::like(A);
-    MatrixView<T, MatrixFormat::Dense>::copy(ctx, work.view(), A);
+    (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, work.view(), A);
 
     Matrix<T, MatrixFormat::Dense> U(static_cast<int>(m),
                                      static_cast<int>(svd_u_cols(vectors, m, k)), batch);
@@ -459,7 +459,7 @@ inline Svd<T> svd(Queue& ctx,
     // workspace lease mirrors what the option overload takes.
     auto lease = ctx.workspace(::batchlas::gesvd_buffer_size(
         ctx, work.view(), S.to_span(), U.view(), Vh.view(), vectors, vectors));
-    ::batchlas::gesvd(ctx, work.view(), S.to_span(), U.view(), Vh.view(), vectors, vectors,
+    (void)::batchlas::gesvd(ctx, work.view(), S.to_span(), U.view(), Vh.view(), vectors, vectors,
                       lease.span(), info.to_span());
 
     // `work` is local scratch gesvd reads and overwrites, and ~Matrix frees its
@@ -479,10 +479,10 @@ struct Lu {
 template <typename T>
 inline Lu<T> lu(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
     auto LU = detail::like(A);
-    MatrixView<T, MatrixFormat::Dense>::copy(ctx, LU.view(), A);
+    (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, LU.view(), A);
     UnifiedVector<int64_t> pivots(static_cast<size_t>(A.rows()) *
                                   static_cast<size_t>(A.batch_size()));
-    ::batchlas::getrf(ctx, LU.view(), pivots.to_span());
+    (void)::batchlas::getrf(ctx, LU.view(), pivots.to_span());
     return Lu<T>{std::move(LU), std::move(pivots)};
 }
 

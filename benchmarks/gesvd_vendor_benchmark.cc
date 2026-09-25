@@ -90,7 +90,7 @@ static void BM_GESVD_CUSOLVER_JACOBI(minibench::State& state) {
                     std::move(workspace),
                     [](Queue& q, auto&& A_, auto&& s_, auto&& U_, auto&& Vh_,
                        auto&& jobu_, auto&& jobvh_, auto&& ws_) {
-                        backend::gesvd_vendor<B, T>(q, A_, s_, U_, Vh_, jobu_, jobvh_, ws_);
+                        (void)backend::gesvd_vendor<B, T>(q, A_, s_, U_, Vh_, jobu_, jobvh_, ws_);
                     });
 
     state.SetMetric("Matrices/s", static_cast<double>(batch), minibench::Rate);
@@ -126,7 +126,7 @@ static void BM_GESVD_BATCHLAS_CTA(minibench::State& state) {
                     std::move(workspace),
                     [](Queue& q, auto&& A_, auto&& s_, auto&& U_, auto&& Vh_,
                        auto&& jobu_, auto&& jobvh_, auto&& ws_) {
-                        gesvd_cta<B, T>(q, A_, s_, U_, Vh_, jobu_, jobvh_, ws_);
+                        (void)gesvd_cta<B, T>(q, A_, s_, U_, Vh_, jobu_, jobvh_, ws_);
                     });
 
     state.SetMetric("Matrices/s", static_cast<double>(batch), minibench::Rate);
@@ -165,7 +165,7 @@ static void BM_GESVD_BATCHLAS_JACOBI(minibench::State& state) {
                         if (const char* e = std::getenv("BATCHLAS_GESVDJ_WGMUL")) {
                             jp.cta_wg_size_multiplier = static_cast<size_t>(std::atoi(e));
                         }
-                        gesvdj_cta<B, T>(q, A_, s_, U_, Vh_, jobu_, jobvh_, Span<std::byte>(), jp);
+                        (void)gesvdj_cta<B, T>(q, A_, s_, U_, Vh_, jobu_, jobvh_, Span<std::byte>(), jp);
                     });
 
     state.SetMetric("Matrices/s", static_cast<double>(batch), minibench::Rate);

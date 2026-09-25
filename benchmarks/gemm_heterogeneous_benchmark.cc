@@ -125,7 +125,7 @@ void run_heterogeneous_variant(minibench::State& state,
     });
 
     state.SetTimedKernelMs(bench::make_event_timed_kernel_ms(q, [q, A, B, C, env]() {
-        gemm(*q,
+        (void)gemm(*q,
                                           A->view(),
                                           B->view(),
                                           C->view(),

@@ -50,7 +50,7 @@ void run_syev_blocked(miniacc::State& state) {
         try {
             UnifiedVector<std::byte> ws(
                 syev_blocked_buffer_size<B, Real>(*q, A_work.view(), JobType::EigenVectors, Uplo::Lower));
-            syev_blocked<B, Real>(*q,
+            (void)syev_blocked<B, Real>(*q,
                                   A_work.view(),
                                   eigvals.to_span(),
                                   JobType::EigenVectors,

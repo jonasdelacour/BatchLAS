@@ -182,7 +182,7 @@ inline bool try_htev_dx(Queue& ctx,
                                                          stream);
         if (err == cudaErrorNotSupported) return false;
         throw_on_cuda_error(err, "cusolverdx::htev(float)");
-        VectorView<T>::copy(ctx, eigenvalues, d);
+        (void)VectorView<T>::copy(ctx, eigenvalues, d);
         return true;
     } else if constexpr (std::is_same_v<T, double>) {
         const auto err = cuda_kernels::htev_launch_double(d.data_ptr(),
@@ -196,7 +196,7 @@ inline bool try_htev_dx(Queue& ctx,
                                                           stream);
         if (err == cudaErrorNotSupported) return false;
         throw_on_cuda_error(err, "cusolverdx::htev(double)");
-        VectorView<T>::copy(ctx, eigenvalues, d);
+        (void)VectorView<T>::copy(ctx, eigenvalues, d);
         return true;
     }
     return false;
@@ -280,7 +280,7 @@ Event htev(Queue& ctx,
         (void)backend::syev_vendor<Backend::CUDA, T>(ctx, dense, lambda, jobz, uplo, syev_workspace);
 
         if (jobz == JobType::EigenVectors) {
-            MatrixView<T, MatrixFormat::Dense>::copy(ctx, eigvects, dense);
+            (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, eigvects, dense);
         }
         return ctx.get_event();
     });

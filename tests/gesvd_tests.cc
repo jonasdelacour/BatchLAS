@@ -1762,7 +1762,7 @@ TYPED_TEST(GesvdTest, InfoIsZeroOnAConvergingBatch) {
     const size_t bytes = gesvd_buffer_size<B, Scalar>(*this->ctx, A.view(), s.to_span(), U.view(),
                                                       Vh.view(), SvdVectors::All, SvdVectors::All);
     UnifiedVector<std::byte> ws(bytes);
-    gesvd<B, Scalar>(*this->ctx, A.view(), s.to_span(), U.view(), Vh.view(), SvdVectors::All,
+    (void)gesvd<B, Scalar>(*this->ctx, A.view(), s.to_span(), U.view(), Vh.view(), SvdVectors::All,
                      SvdVectors::All, ws.to_span(), info.to_span());
     this->ctx->wait();
 
@@ -1806,9 +1806,9 @@ TYPED_TEST(GesvdTest, EmptyInfoSpanChangesNeitherAnswerNorWorkspace) {
     EXPECT_EQ(bytes_a, bytes_b);
 
     UnifiedVector<std::byte> ws0(bytes_a), ws1(bytes_a);
-    gesvd<B, Scalar>(*this->ctx, A0.view(), s0.to_span(), U0.view(), Vh0.view(), SvdVectors::All,
+    (void)gesvd<B, Scalar>(*this->ctx, A0.view(), s0.to_span(), U0.view(), Vh0.view(), SvdVectors::All,
                      SvdVectors::All, ws0.to_span(), info.to_span());
-    gesvd<B, Scalar>(*this->ctx, A1.view(), s1.to_span(), U1.view(), Vh1.view(), SvdVectors::All,
+    (void)gesvd<B, Scalar>(*this->ctx, A1.view(), s1.to_span(), U1.view(), Vh1.view(), SvdVectors::All,
                      SvdVectors::All, ws1.to_span(), Span<int32_t>{});
     this->ctx->wait();
 
@@ -1852,7 +1852,7 @@ TYPED_TEST(GesvdTest, InfoReportsItemsThatExhaustTheSweepBudget) {
         UnifiedVector<int32_t> info_ref(batch, int32_t(-1));
 
         GesvdjParams<Scalar> full;
-        gesvdj_cta<B, Scalar>(*this->ctx, A_ref.view(), s_ref.to_span(), U_ref.view(),
+        (void)gesvdj_cta<B, Scalar>(*this->ctx, A_ref.view(), s_ref.to_span(), U_ref.view(),
                               Vh_ref.view(), SvdVectors::All, SvdVectors::All, Span<std::byte>{},
                               full, info_ref.to_span());
         this->ctx->wait();
@@ -1871,7 +1871,7 @@ TYPED_TEST(GesvdTest, InfoReportsItemsThatExhaustTheSweepBudget) {
 
         GesvdjParams<Scalar> capped;
         capped.max_sweeps = 2;
-        gesvdj_cta<B, Scalar>(*this->ctx, A.view(), s.to_span(), U.view(), Vh.view(),
+        (void)gesvdj_cta<B, Scalar>(*this->ctx, A.view(), s.to_span(), U.view(), Vh.view(),
                               SvdVectors::All, SvdVectors::All, Span<std::byte>{}, capped,
                               info.to_span());
         this->ctx->wait();

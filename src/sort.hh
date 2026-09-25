@@ -273,7 +273,7 @@ Event permuted_copy_active_2d(Queue& ctx,
 //Out of place permutation
 template <typename T, typename K>
 Event permute(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& data, const MatrixView<T, MatrixFormat::Dense>& temp_storage, const VectorView<K>& indices, const PermutedCopyParams& params = {}){
-    MatrixView<T>::copy(ctx, temp_storage, data);
+    (void)MatrixView<T>::copy(ctx, temp_storage, data);
     return permuted_copy(ctx, temp_storage, data, indices, params);
 }
 
@@ -461,7 +461,7 @@ Event sort(Queue& ctx, const VectorView<T>& eigs, const MatrixView<T, MatrixForm
     VectorView<T> eigs_unit = eigs;
     if (eigs.inc() != 1) {
         auto tmp = Vector<T>(eigs.size(), eigs.batch_size(), Stride{eigs.size()}, Inc{1});
-        VectorView<T>::copy(ctx, tmp, eigs);
+        (void)VectorView<T>::copy(ctx, tmp, eigs);
         eigs_unit = VectorView<T>(tmp);
     }
     auto permutation = VectorView<int32_t>(pool.allocate<int32_t>(ctx, eigs.size() * eigs.batch_size()).data(), eigs.size(), eigs.batch_size(), 1, eigs.size());

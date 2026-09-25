@@ -105,7 +105,7 @@ static void BM_GESVD_BLOCKED(minibench::State& state) {
                     jobvh,
                     std::move(workspace),
                     [](Queue& q, auto&&... xs) {
-                        gesvd_blocked(q, std::forward<decltype(xs)>(xs)...);
+                        (void)gesvd_blocked(q, std::forward<decltype(xs)>(xs)...);
                     });
 
     state.SetMetric("Matrices/s", static_cast<double>(batch), minibench::Rate);

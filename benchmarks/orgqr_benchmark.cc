@@ -16,7 +16,7 @@ static void BM_ORGQR(minibench::State& state) {
     UnifiedVector<T> tau(m * batch);
     size_t geqrf_ws = geqrf_buffer_size(*q, A.view(), tau.to_span());
     UnifiedVector<std::byte> ws_geqrf(geqrf_ws);
-    geqrf(*q, A.view(), tau.to_span(), ws_geqrf.to_span());
+    (void)geqrf(*q, A.view(), tau.to_span(), ws_geqrf.to_span());
     q->wait();
 
     size_t org_ws = orgqr_buffer_size(*q, A.view(), tau.to_span());
@@ -27,7 +27,7 @@ static void BM_ORGQR(minibench::State& state) {
                     std::move(tau),
                     std::move(ws),
                     [](Queue& q, auto&&... xs) {
-                        orgqr(q, std::forward<decltype(xs)>(xs)...);
+                        (void)orgqr(q, std::forward<decltype(xs)>(xs)...);
                     });
     //FLOP calculation for ORGQR derived from: https://www.smcm.iqfr.csic.es/docs/intel/mkl/mkl_manual/lse/functn_orgqr.htm
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * (2 * m * n * n - 2.0 / 3.0 * n * n * n)), minibench::Rate);

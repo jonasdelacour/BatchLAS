@@ -59,7 +59,7 @@ static void BM_SYEV_JACOBI_CTA(minibench::State& state) {
                     std::move(workspace),
                     params,
                     [](Queue& q, auto&&... xs) {
-                        syev_jacobi_cta(q, std::forward<decltype(xs)>(xs)...);
+                        (void)syev_jacobi_cta(q, std::forward<decltype(xs)>(xs)...);
                     });
 
     const double flops = 4.0 / 3.0 * static_cast<double>(n) * n * n;
@@ -94,7 +94,7 @@ static void BM_SYEV_CTA_TRIDIAG_REF(minibench::State& state) {
                     params,
                     wg_mult,
                     [](Queue& q, auto&&... xs) {
-                        syev_cta(q, std::forward<decltype(xs)>(xs)...);
+                        (void)syev_cta(q, std::forward<decltype(xs)>(xs)...);
                     });
 
     const double flops = 4.0 / 3.0 * static_cast<double>(n) * n * n;

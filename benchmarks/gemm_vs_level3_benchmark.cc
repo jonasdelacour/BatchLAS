@@ -140,17 +140,17 @@ void configure_gram(minibench::State& state) {
         auto kernel = [q, A, C]() mutable {
             if constexpr (sycl::detail::is_complex<T>::value) {
                 using Real = typename T::value_type;
-                herk<B, T>(*q, A->view(), C->view(), Real(1), Real(0),
+                (void)herk<B, T>(*q, A->view(), C->view(), Real(1), Real(0),
                            Uplo::Lower, Transpose::ConjTrans);
             } else {
-                syrk<B, T>(*q, A->view(), C->view(), T(1), T(0),
+                (void)syrk<B, T>(*q, A->view(), C->view(), T(1), T(0),
                            Uplo::Lower, Transpose::Trans);
             }
         };
         install(state, q, managed, std::move(kernel), flops, batch);
     } else {
         auto kernel = [q, A, C]() mutable {
-            gemm<B>(*q, A->view(), A->view(), C->view(),
+            (void)gemm<B>(*q, A->view(), A->view(), C->view(),
                     {.alpha = T(1), .beta = T(0),
                      .transA = conj_trans_for<T>(), .transB = Transpose::NoTrans});
         };
@@ -188,18 +188,18 @@ void configure_trailing(minibench::State& state) {
 
     if constexpr (Variant == 0) {
         auto kernel = [q, V, W, A22]() mutable {
-            gemm<B>(*q, V->view(), W->view(), A22->view(),
+            (void)gemm<B>(*q, V->view(), W->view(), A22->view(),
                     {.alpha = T(-1), .beta = T(1), .transB = Transpose::ConjTrans});
-            gemm<B>(*q, W->view(), V->view(), A22->view(),
+            (void)gemm<B>(*q, W->view(), V->view(), A22->view(),
                     {.alpha = T(-1), .beta = T(1), .transB = Transpose::ConjTrans});
         };
         install(state, q, managed, std::move(kernel), flops, batch);
     } else {
         auto kernel = [q, V, W, A22]() mutable {
-            syr2k<B, T>(*q, V->view(), W->view(), A22->view(), T(-1), T(1),
+            (void)syr2k<B, T>(*q, V->view(), W->view(), A22->view(), T(-1), T(1),
                         Uplo::Lower, Transpose::NoTrans);
             if constexpr (Variant == 2) {
-                A22->view().symmetrize(*q, Uplo::Lower);
+                (void)A22->view().symmetrize(*q, Uplo::Lower);
             }
         };
         install(state, q, managed, std::move(kernel), flops, batch);
@@ -244,13 +244,13 @@ void configure_tw(minibench::State& state) {
         // measurement, and it inflated every trmm row in that report. The GPU
         // spelling is what these shapes are here to measure, so it is gone.
         auto kernel = [q, Tm, W1, W2]() mutable {
-            trmm<B, T>(*q, Tm->view(), W1->view(), W2->view(), T(1),
+            (void)trmm<B, T>(*q, Tm->view(), W1->view(), W2->view(), T(1),
                        Side::Left, Uplo::Upper, conj_trans_for<T>(), Diag::NonUnit);
         };
         install(state, q, managed, std::move(kernel), flops, batch);
     } else {
         auto kernel = [q, Tm, W1, W2]() mutable {
-            gemm<B>(*q, Tm->view(), W1->view(), W2->view(),
+            (void)gemm<B>(*q, Tm->view(), W1->view(), W2->view(),
                     {.alpha = T(1), .beta = T(0), .transA = conj_trans_for<T>()});
         };
         install(state, q, managed, std::move(kernel), flops, batch);

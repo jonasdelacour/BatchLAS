@@ -391,7 +391,7 @@ Event syev_two_stage(Queue& ctx,
         }
     }
 
-    MatrixView<T, MatrixFormat::Dense>::copy(ctx, a, z_view);
+    (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, a, z_view);
 
     return ctx.get_event();
 }
