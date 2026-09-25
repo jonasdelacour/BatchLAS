@@ -336,10 +336,11 @@ cmake --preset benchmarks
 cmake --build --preset benchmarks
 ```
 
-Benchmark executables are **not** part of the default `all` target — they are 61
-heavy translation units that no test run needs. The preset above still builds
-them all, because it names the `batchlas_benchmarks` aggregate explicitly. In a
-hand-configured tree, ask for them by name or via the aggregate:
+With `BATCHLAS_BUILD_BENCHMARKS=ON` (the preset above, or `-D`/`ccmake` in a
+hand-configured tree) the benchmark executables are part of the default `all`
+target, so a plain `cmake --build build` builds them. They are 61 heavy
+translation units, so leave the option OFF in trees you iterate on. To build
+only the benchmarks, or just one:
 
 ```bash
 cmake --build build --target batchlas_benchmarks -j"$(nproc)"   # all of them

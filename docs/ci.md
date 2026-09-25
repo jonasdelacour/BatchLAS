@@ -38,7 +38,7 @@ the runner exist, and what to do when it misbehaves.
 | CPU-only / `icpx` builds | The runner has a CUDA DPC++ only. A break that shows up solely without a GPU backend passes CI. There is deliberately **no hosted compile job**; see [Why there is no hosted compile job](#why-there-is-no-hosted-compile-job). |
 | macOS, Windows | No attempt made. |
 | Python bindings | `dev-tests` sets `BATCHLAS_BUILD_PYTHON=OFF`. `python/` is neither built nor tested by CI. |
-| Benchmarks | Benchmark targets are `EXCLUDE_FROM_ALL`, so the default build never compiles them. A benchmark that no longer compiles passes CI. |
+| Benchmarks | `dev-tests` sets `BATCHLAS_BUILD_BENCHMARKS=OFF`, so benchmarks are never compiled. A benchmark that no longer compiles passes CI. |
 | Performance regressions | Nothing is timed. A change that is correct and 10x slower is green. |
 | Other NVIDIA architectures, other CUDA versions, other DPC++ builds | Only `sm_89` / CUDA 13.2 / this `/opt/dpcpp-cuda` is built and run. |
 | Multi-GPU behaviour | The box has two 4090s; nothing in the suite exercises more than one deliberately. |
