@@ -63,7 +63,7 @@ namespace batchlas {
         handle.setStream(ctx);
 
         if (!gemm_batch_dimensions_compatible(A, B, C, transA, transB)) {
-            throw std::invalid_argument("GEMM: incompatible matrix dimensions");
+            throw batchlas::invalid_argument("GEMM: incompatible matrix dimensions");
         }
 
         auto [m, k] = get_effective_dims(A, transA);
@@ -418,7 +418,9 @@ namespace batchlas {
 
             // The GEMM cannot be pointed at C: it would write both triangles,
             // and HERK owns only one of them.
-            gemm_vendor<Back, T>(ctx, A, A, product, T(alpha), T(0),
+            // (void) on an Event: deliberate. This Queue is in-order, so the next submission
+            // is already ordered after this one and the Event carries nothing the caller needs.
+            (void)gemm_vendor<Back, T>(ctx, A, A, product, T(alpha), T(0),
                                  transA,
                                  transA == Transpose::NoTrans ? Transpose::ConjTrans
                                                               : Transpose::NoTrans,
@@ -484,7 +486,7 @@ namespace batchlas {
 
             MatrixView<T, MatrixFormat::Dense> product(storage.data(), n, n, ld, ld * n, batch);
 
-            gemm_vendor<Back, T>(ctx, A, B, product, alpha, T(0),
+            (void)gemm_vendor<Back, T>(ctx, A, B, product, alpha, T(0),
                                  transA,
                                  no_trans ? Transpose::ConjTrans : Transpose::NoTrans,
                                  ComputePrecision::Default);
@@ -630,7 +632,7 @@ namespace batchlas {
                 if constexpr (std::is_same_v<T, float>) {
                     return syr2k_cuda_custom(ctx, A, B, C, alpha, beta, uplo, transA);
                 } else {
-                    throw std::runtime_error("BATCHLAS_SYR2K_VARIANT=cublasdx only supports float");
+                    throw batchlas::unsupported("BATCHLAS_SYR2K_VARIANT=cublasdx only supports float");
                 }
             }
                 // WP1 S6: the float custom-route gate moved to the facade
@@ -730,7 +732,7 @@ namespace batchlas {
                 if constexpr (std::is_same_v<T, float>) {
                     return trmm_cuda_custom(ctx, A, B, C, alpha, side, uplo, transA, diag);
                 } else {
-                    throw std::runtime_error("BATCHLAS_TRMM_VARIANT=cublasdx only supports float");
+                    throw batchlas::unsupported("BATCHLAS_TRMM_VARIANT=cublasdx only supports float");
                 }
             }
                 // WP1 S6: the float custom-route gate moved to the facade
@@ -1083,7 +1085,7 @@ namespace batchlas {
                 size_t single_ws = ormqr_vendor_buffer_size<B>(ctx, A.batch_item(0), C.batch_item(0), side, trans, tau.subspan(0, k));
                 for (int i = 0; i < batch_size; ++i) {
                     auto sub_ws = pool.allocate<std::byte>(ctx, single_ws);
-                    ormqr_vendor<B>(ctx, A.batch_item(i), C.batch_item(i), side, trans, tau.subspan(i * k, k), sub_ws);
+                    (void)ormqr_vendor<B>(ctx, A.batch_item(i), C.batch_item(i), side, trans, tau.subspan(i * k, k), sub_ws);
                 }
             }
             return ctx.create_event_after_external_work();
@@ -1162,7 +1164,7 @@ namespace batchlas {
             size_t single_ws = orgqr_vendor_buffer_size<B>(ctx, A.batch_item(0), tau.subspan(0, k));
             for (int i = 0; i < batch_size; ++i) {
                 auto sub_ws = pool.allocate<std::byte>(sub_queue, single_ws);
-                orgqr_vendor<B>(sub_queue, A.batch_item(i), tau.subspan(i * k, k), sub_ws);
+                (void)orgqr_vendor<B>(sub_queue, A.batch_item(i), tau.subspan(i * k, k), sub_ws);
             }
             sub_queue.wait();
         }

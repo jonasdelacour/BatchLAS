@@ -1,5 +1,6 @@
 #pragma once
 
+#include <batchlas/export.hh>
 #include <stdexcept>
 #include <string>
 
@@ -64,7 +65,7 @@ template <typename T>
 inline void getrs_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
                                   const MatrixView<T, MatrixFormat::Dense>& B) {
     if (A.rows() < 0 || A.cols() < 0 || B.rows() < 0 || B.cols() < 0) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "GETRS: Matrix dimensions cannot be negative (A: rows=" +
             std::to_string(A.rows()) + ", cols=" + std::to_string(A.cols()) +
             "; B: rows=" + std::to_string(B.rows()) +
@@ -74,18 +75,18 @@ inline void getrs_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
 
 
 template <Backend Back, typename T>
-Event getrs(Queue& ctx,
-           const MatrixView<T, MatrixFormat::Dense>& A,
-           const MatrixView<T, MatrixFormat::Dense>& B,
-           Transpose transA,
-           Span<int64_t> pivots,
-           Span<std::byte> work_space);
+BATCHLAS_API Event getrs(Queue& ctx,
+                        const MatrixView<T, MatrixFormat::Dense>& A,
+                        const MatrixView<T, MatrixFormat::Dense>& B,
+                        Transpose transA,
+                        Span<int64_t> pivots,
+                        Span<std::byte> work_space);
 
 template <Backend Back, typename T>
-size_t getrs_buffer_size(Queue& ctx,
-                         const MatrixView<T, MatrixFormat::Dense>& A,
-                         const MatrixView<T, MatrixFormat::Dense>& B,
-                         Transpose transA);
+BATCHLAS_API size_t getrs_buffer_size(Queue& ctx,
+                                      const MatrixView<T, MatrixFormat::Dense>& A,
+                                      const MatrixView<T, MatrixFormat::Dense>& B,
+                                      Transpose transA);
 
 }  // namespace batchlas
 
@@ -100,19 +101,19 @@ namespace batchlas::backend {
 // src/dispatch/entry_points/factorization.cc and leaves the vendor
 // implementation here, named as such.
 template <Backend Back, typename T>
-Event getrs_vendor(Queue& ctx,
-                   const MatrixView<T,MatrixFormat::Dense>& A,
-                   const MatrixView<T,MatrixFormat::Dense>& B,
-                   Transpose transA,
-                   Span<int64_t> pivots,
-                   Span<std::byte> work_space);
+BATCHLAS_API Event getrs_vendor(Queue& ctx,
+                                const MatrixView<T,MatrixFormat::Dense>& A,
+                                const MatrixView<T,MatrixFormat::Dense>& B,
+                                Transpose transA,
+                                Span<int64_t> pivots,
+                                Span<std::byte> work_space);
 
 
 template <Backend Back, typename T>
-size_t getrs_vendor_buffer_size(Queue& ctx,
-                                const MatrixView<T,MatrixFormat::Dense>& A,
-                                const MatrixView<T,MatrixFormat::Dense>& B,
-                                Transpose transA);
+BATCHLAS_API size_t getrs_vendor_buffer_size(Queue& ctx,
+                                             const MatrixView<T,MatrixFormat::Dense>& A,
+                                             const MatrixView<T,MatrixFormat::Dense>& B,
+                                             Transpose transA);
 
 }  // namespace batchlas::backend
 

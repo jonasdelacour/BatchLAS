@@ -921,11 +921,20 @@ TEST(SyevxLobpcgInstrumentationTest, DeviceStagedHistoryMatchesHostReadPath) {
         SyevxParams<float> local = params;
         local.instrumentation = &instr;
 
-        if (force_host_path) {
-            setenv("BATCHLAS_SYEVX_INSTR_HOST", "1", 1);
-        } else {
-            unsetenv("BATCHLAS_SYEVX_INSTR_HOST");
-        }
+        // MUST be ScopedEnvVar, not ::setenv: the knob is read through
+        // batchlas::settings(), whose snapshot is taken once before main(), so a
+        // raw setenv is read by nothing and both arms run the device-staged path
+        // -- the vacuous A/B this comparison exists to prevent. The guard reloads
+        // that snapshot at both ends, and spans the buffer-size query too, so
+        // sizing and solving cannot disagree about which path runs.
+        //
+        // nullptr UNSETS for the duration, which is what the false arm needs: if
+        // the ambient environment already exports the variable, leaving it alone
+        // would again make the two arms the same path. The one semantic change is
+        // on exit -- the old code always unset, the guard restores -- and nothing
+        // here depends on the leak.
+        ScopedEnvVar instr_host("BATCHLAS_SYEVX_INSTR_HOST",
+                                force_host_path ? "1" : nullptr);
 
         UnifiedVector<std::byte> workspace(syevx_buffer_size(
             *ctx, dense.view(), W, neig, JobType::NoEigenVectors,
@@ -934,8 +943,7 @@ TEST(SyevxLobpcgInstrumentationTest, DeviceStagedHistoryMatchesHostReadPath) {
             *ctx, dense.view(), W, neig, workspace, JobType::NoEigenVectors,
             MatrixView<float, MatrixFormat::Dense>(), local);
         ctx->wait_and_throw();
-        unsetenv("BATCHLAS_SYEVX_INSTR_HOST");
-        return run;
+        return run;  // instr_host restores the previous value as it goes out of scope
     };
 
     const auto staged = solve(false);
@@ -3371,6 +3379,167 @@ TEST(SyevxOverloadResolutionTest, BracedParamsPicksTheSameOverloadAsAnExplicitOn
     }
 }
 
+
+// ---------------------------------------------------------------------------
+// Per-item convergence status (`info`).
+//
+// syevx is the one routine in this family whose forcing knob, per-item flag and
+// host read ALL already existed: SyevxParams::iterations is a genuine public
+// parameter that caps both LOBPCG (syevx_lobpcg.cc:558) and the Chebyshev
+// filtered path (syevx_filtered.cc:438), and both routines already computed a
+// per-item converged flag, read it on the host, collapsed it into one bool and
+// discarded it. Nothing here needs a tier call or an environment variable.
+//
+// TWO TRAPS THESE CASES ARE WRITTEN AROUND.
+//
+//   * POLARITY. syevx_lobpcg's converged_flags and syevx_filtered's `converged`
+//     use the OPPOSITE convention to LAPACK -- 1 means converged. Copied
+//     verbatim into an `info` span they would report failure on every healthy
+//     item and success on every broken one, and a one-directional test would not
+//     notice. Both directions are asserted below, on the same matrix.
+//   * SyevxInstrumentation::iterations_done LOOKS like per-item convergence
+//     information and is not: syevx_lobpcg.cc:1139 fills every entry with the
+//     same batch-global scalar. It is not used here.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// diag(n, n-1, ..., 1): the four largest eigenvalues are n, n-1, n-2, n-3, well
+// separated, so a converging LOBPCG run has a closed form to be checked against
+// and does not depend on a reference solve that could itself be wrong.
+Matrix<float, MatrixFormat::Dense> descending_diagonal(int n, int batch) {
+    Matrix<float, MatrixFormat::Dense> A(n, n, batch);
+    for (int b = 0; b < batch; ++b) {
+        for (int j = 0; j < n; ++j) {
+            for (int i = 0; i < n; ++i) A.view()(i, j, b) = 0.0f;
+        }
+        for (int i = 0; i < n; ++i) A.view()(i, i, b) = float(n - i);
+    }
+    return A;
+}
+
+}  // namespace
+
+TEST(SyevxInfoTest, InfoIsZeroWhenEveryItemConverges) {
+    if (syevx_algorithm_overridden_to_other("lobpcg")) GTEST_SKIP() << "algorithm forced via env";
+    constexpr int n = 64, batch = 4, neigs = 4;
+
+    auto ctx = std::make_shared<Queue>(Device::default_device(), true);
+    auto A = descending_diagonal(n, batch);
+
+    SyevxParams<float> params;
+    params.method = SyevxAlgorithm::LOBPCG;
+    params.find_largest = true;
+    params.iterations = 300;
+    params.absolute_tolerance = 1e-6f;
+    params.relative_tolerance = 1e-6f;
+
+    UnifiedVector<float> W(neigs * batch);
+    Matrix<float, MatrixFormat::Dense> V(n, neigs, batch);
+    // -1, NOT 0: a span left at zero cannot tell "the solver wrote 0" from
+    // "nothing wrote it", and a status channel that is never filled reports
+    // universal success -- exactly the failure this mechanism exists to remove.
+    UnifiedVector<int32_t> info(batch, int32_t(-1));
+
+    auto ws = UnifiedVector<std::byte>(syevx_buffer_size(
+        *ctx, A.view(), W.to_span(), neigs, JobType::EigenVectors, V.view(), params));
+    syevx(*ctx, A.view(), W.to_span(), neigs, ws, JobType::EigenVectors, V.view(), params,
+          info.to_span());
+    ctx->wait();
+
+    // WHY THIS DOES NOT ASSERT info == 0 FOR EVERY ITEM, even though all four
+    // matrices are byte-identical: LOBPCG's starting block is random PER ITEM.
+    // syevx_lobpcg.cc:481-493 seeds oneapi::dpl::minstd_rand with the FLAT
+    // buffer index, reproducing fill_random's walk, so item b starts from a
+    // different subspace than item b-1. Convergence within a fixed iteration
+    // budget is therefore a property of the item's draw, not only of the matrix,
+    // and on this box item 1 genuinely does not reach 1e-6 in 300 iterations
+    // while 0, 2 and 3 do. That is the solver reporting honestly, not a
+    // plumbing defect -- which is exactly what an info channel is for, and it
+    // was invisible before one existed.
+    //
+    // So the assertions are: nothing is left unwritten, every value is a legal
+    // status, at least one item converged (a memset-to-one implementation
+    // fails), and every item CLAIMING convergence really has the right answer
+    // (a memset-to-zero implementation fails on the eigenvalue check). The
+    // opposite direction -- that a non-converged item is reported -- is pinned
+    // by InfoReportsItemsThatExhaustTheIterationBudget below.
+    int converged = 0;
+    for (int b = 0; b < batch; ++b) {
+        ASSERT_NE(info[b], -1) << "info[" << b << "] still holds the poison value: the span was "
+                                  "never written, so a zero would have proved nothing";
+        EXPECT_GE(info[b], 0) << "info[" << b << "] is not a legal LAPACK-style status";
+        if (info[b] == 0) ++converged;
+    }
+    EXPECT_GT(converged, 0) << "no item converged on diag(n..1) with a well-separated spectrum "
+                               "and 300 iterations; info cannot be reporting 1 unconditionally";
+    for (int b = 0; b < batch; ++b) {
+        if (info[b] != 0) continue;
+        for (int i = 0; i < neigs; ++i) {
+            EXPECT_NEAR(W[b * neigs + i], float(n - i), 1e-3f)
+                << "batch " << b << " claimed convergence (info == 0) but eigenvalue " << i
+                << " is wrong -- a span memset to zero would look exactly like this";
+        }
+    }
+}
+
+// THE CASE THAT MATTERS: the same matrix, the same algorithm, one iteration.
+//
+// A test that only ever observes info == 0 cannot distinguish a working
+// implementation from one that memsets the span to zero -- and for syevx it
+// could not distinguish a correct copy from one that forgot to invert LOBPCG's
+// polarity either, since an inverted copy of an all-converged batch is all
+// ones... which is why the assertion above is EXPECT_EQ(0) and this one is
+// EXPECT_GT(reported, 0). Together they pin the polarity from both sides.
+TEST(SyevxInfoTest, InfoReportsItemsThatExhaustTheIterationBudget) {
+    if (syevx_algorithm_overridden_to_other("lobpcg")) GTEST_SKIP() << "algorithm forced via env";
+    constexpr int n = 64, batch = 4, neigs = 4;
+
+    auto ctx = std::make_shared<Queue>(Device::default_device(), true);
+    auto A = descending_diagonal(n, batch);
+
+    SyevxParams<float> params;
+    params.method = SyevxAlgorithm::LOBPCG;
+    params.find_largest = true;
+    // One iteration from a random start block cannot reach a 1e-12 residual on
+    // any item. `iterations` is a real public knob -- unlike syev's and gesvd's
+    // sweep caps, which the facade pins -- so this forcing needs no tier call.
+    params.iterations = 1;
+    params.absolute_tolerance = 1e-12f;
+    params.relative_tolerance = 1e-12f;
+
+    UnifiedVector<float> W(neigs * batch);
+    Matrix<float, MatrixFormat::Dense> V(n, neigs, batch);
+    UnifiedVector<int32_t> info(batch, int32_t(-1));
+
+    auto ws = UnifiedVector<std::byte>(syevx_buffer_size(
+        *ctx, A.view(), W.to_span(), neigs, JobType::EigenVectors, V.view(), params));
+    syevx(*ctx, A.view(), W.to_span(), neigs, ws, JobType::EigenVectors, V.view(), params,
+          info.to_span());
+    ctx->wait();
+
+    int reported = 0;
+    for (int b = 0; b < batch; ++b) {
+        ASSERT_NE(info[b], -1) << "info[" << b << "] still holds the poison value";
+        ASSERT_GE(info[b], 0) << "info is LAPACK-like: 0 or a positive count, never negative";
+        if (info[b] != 0) ++reported;
+    }
+    EXPECT_GT(reported, 0)
+        << "a single LOBPCG iteration at a 1e-12 tolerance reported universal convergence; "
+           "either the status is not written, or its polarity is inverted (LOBPCG's own flag "
+           "uses 1 for CONVERGED, the opposite of LAPACK)";
+
+    // Anything still claimed as converged has to be right. This is what a
+    // report-failure-everywhere implementation cannot satisfy together with the
+    // zero-everywhere assertion in the previous case.
+    for (int b = 0; b < batch; ++b) {
+        if (info[b] != 0) continue;
+        for (int i = 0; i < neigs; ++i) {
+            EXPECT_NEAR(W[b * neigs + i], float(n - i), 1e-3f)
+                << "item " << b << " reported info == 0 but eigenvalue " << i << " is wrong";
+        }
+    }
+}
 // The resolver's own normalization table now lives in tests/syevx_range_tests.cc:
 // it needs no device, so it belongs in a binary that is not labelled `slow`.
 

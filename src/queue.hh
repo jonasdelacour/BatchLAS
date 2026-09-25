@@ -23,8 +23,10 @@
 // The public tree moved to include/batchlas/util/ (spelled <batchlas/util/...>)
 // precisely so that no angle-form <util/...> exists anywhere. Do not add
 // -I${PROJECT_SOURCE_DIR}/src to a target and do not convert these to <>.
+#include "util/internal-api.hh"
 #include "util/kernel-trace.hh"
 #include <batchlas/util/env.hh>
+#include <batchlas/settings.hh>
 
 // Inline definitions in this private header still have to reach consumers that
 // only ever see the declaration in the installed public header, so they must be
@@ -49,7 +51,7 @@
 // leases within one block and still corrupt them -- a lock would hide the design
 // constraint rather than satisfy it.
 [[noreturn]] inline void batchlas_throw_queue_wrong_thread(const char* what) {
-    throw std::runtime_error(
+    throw batchlas::api_misuse(
         std::string("BatchLAS: ") + what +
         " was called from a thread other than the one that owns this Queue. A Queue is "
         "single-threaded: its workspace arena and its cached last event are unsynchronised, and "
@@ -57,6 +59,19 @@
         "device share a SYCL context, so they still see each other's memory), or transfer this one "
         "with Queue::attach_to_current_thread() while no other thread is using it.");
 }
+
+// Everything from here to the end of the file is namespace batchlas. QueueImpl
+// and EventImpl are DEFINED below, and they are declared in
+// <batchlas/util/sycl-device-queue.hh>, which now declares them inside batchlas;
+// defining them at global scope would define two unrelated types and leave
+// Queue::impl_ pointing at an incomplete one. The same goes for the out-of-line
+// Queue members near the bottom. This header is private and never installed, so
+// the compatibility shim in the public header does not reach it at all.
+//
+// batchlas_throw_queue_wrong_thread above stays at global scope on purpose: its
+// name already carries the prefix, nothing outside this header calls it, and the
+// call in QueueThreadOwner::check below still finds it by ordinary lookup.
+namespace batchlas {
 
 struct QueueThreadOwner {
     std::thread::id owner_ = std::this_thread::get_id();
@@ -71,9 +86,12 @@ struct QueueThreadOwner {
 inline bool batchlas_queue_profiling_enabled() {
     // Keep profiling opt-in to avoid overhead in non-benchmark runs.
     // Kernel trace implies profiling; benchmarks can enable profiling without tracing.
+    // settings().diagnostics.profiling is the OR of BATCHLAS_QUEUE_PROFILING and
+    // BATCHLAS_BENCH_PROFILING -- two names, one field, folded in settings.cc.
+    // Reading it here rather than the environment is what puts these two knobs
+    // under configure() and under ScopedEnvVar's reload, like every other knob.
     return batchlas_kernel_trace::enabled() ||
-           batchlas::env_truthy(std::getenv("BATCHLAS_QUEUE_PROFILING")) ||
-           batchlas::env_truthy(std::getenv("BATCHLAS_BENCH_PROFILING"));
+           batchlas::settings().diagnostics.profiling;
 }
 
 // Per-queue scratch memory. See util/workspace.hh for the caller-facing rules.
@@ -377,7 +395,12 @@ struct QueueImpl : public sycl::queue{
         return new_it->second;
     }
 
-    inline static const auto device_arrays = std::array{ 
+    // Exported for the same reason kernel-trace.hh's globals are: this is a
+    // vague-linkage inline static that the linker folds across TUs, and a test
+    // including this private header compiles WITHOUT hidden visibility. Hiding
+    // the library's copy gives the process two SYCL device caches, which is a
+    // duplicated-state bug no undefined reference ever points at.
+    inline static BATCHLAS_INTERNAL_API const auto device_arrays = std::array{ 
                 sycl::device::get_devices(sycl::info::device_type::cpu), 
                 sycl::device::get_devices(sycl::info::device_type::gpu), 
                 sycl::device::get_devices(sycl::info::device_type::accelerator),
@@ -531,7 +554,7 @@ BATCHLAS_QUEUE_EXPORTED_INLINE void Queue::attach_to_current_thread() {
     // A lease released on the new thread would rewind an arena the old thread is
     // still carving from, which is the corruption this guard exists to stop.
     if (impl_->arena_.has_outstanding_loans()) {
-        throw std::runtime_error(
+        throw batchlas::api_misuse(
             "Queue::attach_to_current_thread: a workspace lease is still outstanding. Release every "
             "lease before transferring the queue to another thread.");
     }
@@ -559,8 +582,6 @@ BATCHLAS_QUEUE_EXPORTED_INLINE void* Queue::native_handle() const {
             return nullptr;
     }
 }
-
-namespace batchlas {
 
 BATCHLAS_QUEUE_EXPORTED_INLINE sycl::queue& sycl_queue(const Queue& ctx) { return *ctx.impl_; }
 

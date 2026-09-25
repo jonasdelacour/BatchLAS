@@ -4,6 +4,7 @@
 // the wrong one only breaks complex. Design and evidence: docs/perf/qr.md
 
 #include "geqrf_native.hh"
+#include "geqrf_panel_reg_device.hh"
 #include "larft_wy.hh"
 
 #include "../sycl/gemm_kernels.hh"
@@ -11,11 +12,13 @@
 #include "../util/template-instantiations.hh"
 
 #include <batchlas/util/mempool.hh>
+#include <batchlas/settings.hh>
 
 #include <algorithm>
 #include <complex>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -53,6 +56,28 @@ inline int geqrf_blocked_nb(int m, int n) {
     return std::max(1, std::min(geqrf_nb_for_type<T>(), k));
 }
 
+// WHICH PANEL LEAF, re-read per call. evidence: docs/perf/qr.md#the-register-leaf-ab
+inline GeqrfPanelLeaf geqrf_panel_leaf_from_env() {
+    const char* s = batchlas::settings().selection.geqrf_leaf.get();
+    if (s != nullptr && std::strcmp(s, "reg") == 0) return GeqrfPanelLeaf::Register;
+    return GeqrfPanelLeaf::Auto;
+}
+
+// The register leaf's compiled width must be THIS width, or the driver's full-width panels miss
+// it and only the short final panel takes it -- an A/B that measures almost nothing.
+#define BATCHLAS_GEQRF_REG_WIDTH_ASSERT(T)                                                    \
+    static_assert(                                                                            \
+        geqrf_native::GeqrfPanelRegPlan<sycl_device::DevMap<T>::type>::cols == 0 ||            \
+            geqrf_native::GeqrfPanelRegPlan<sycl_device::DevMap<T>::type>::cols ==             \
+                geqrf_nb_for_type<T>(),                                                       \
+        "geqrf: the register panel leaf's width disagrees with the blocked driver's nb")
+
+BATCHLAS_GEQRF_REG_WIDTH_ASSERT(float);
+BATCHLAS_GEQRF_REG_WIDTH_ASSERT(double);
+BATCHLAS_GEQRF_REG_WIDTH_ASSERT(std::complex<float>);
+BATCHLAS_GEQRF_REG_WIDTH_ASSERT(std::complex<double>);
+#undef BATCHLAS_GEQRF_REG_WIDTH_ASSERT
+
 // The total must be monotone non-decreasing in (rows, cols, batch) and must read no element
 // of A or tau: band_reduction.cc sizes against a null view, then calls geqrf with a sub-view.
 template <typename T>
@@ -86,8 +111,11 @@ GeqrfBlockedWs<T> geqrf_blocked_layout(Queue& ctx, BumpAllocator& pool,
 }  // namespace
 
 // Co-located with the driver so "the flag is true" and "this TU is compiled" are one fact.
-// RouteTable<Op::geqrf,T>::preferred() is still false everywhere.
-// evidence: docs/perf/qr.md#route-arms
+// RouteTable<Op::geqrf,T>::preferred() now routes native above a per-type order floor
+// (float 64, cfloat 48, double 96, cdouble 256) and for tall panels, so this flag also
+// gates the DEFAULT route and not only vendor-free builds: reporting false here sends
+// every in-window shape back to the vendor.
+// evidence: docs/perf/small-n-baseline.md#geqrf, docs/perf/qr.md#route-arms
 template <> bool geqrf_blocked_available<float>()                { return true; }
 template <> bool geqrf_blocked_available<double>()               { return true; }
 template <> bool geqrf_blocked_available<std::complex<float>>()  { return true; }
@@ -113,10 +141,12 @@ unsigned geqrf_blocked_debug_params(Queue& ctx, int m, int n) {
     const int nb = geqrf_blocked_nb<T>(m, n);
 
     const auto dev = ctx.device();
-    const std::size_t local_mem = dev.get_property(DeviceProperty::LOCAL_MEM_SIZE);
-    const std::size_t budget = (local_mem > 4096) ? (local_mem - 4096) : 0;
+    const std::size_t budget = resident::device_slm_budget(
+        dev.get_property(DeviceProperty::LOCAL_MEM_SIZE));
     const int ib0 = std::min(nb, std::min(m, n));
-    const unsigned leaf = geqrf_cta_fits<T>(m, ib0, budget) ? 1u : 2u;
+    // geqrf_leaf_fits, not geqrf_cta_fits: this reports which leaf geqrf_panel_factorize
+    // will take, and that is the residency question, asked at the whole budget.
+    const unsigned leaf = geqrf_leaf_fits<T>(m, ib0, budget) ? 1u : 2u;
 
     return (leaf << 16) | static_cast<unsigned>(nb);
 }
@@ -126,7 +156,8 @@ Event geqrf_blocked_dispatch(Queue& ctx,
                              const MatrixView<T, MatrixFormat::Dense>& A,
                              Span<T> tau,
                              Span<std::byte> workspace,
-                             GeqrfTrailingGemm<T> trailing_gemm) {
+                             GeqrfTrailingGemm<T> trailing_gemm,
+                             GeqrfPanelLeaf panel_leaf) {
     // Default the seam to the native kernel so this TU stands alone; the facade injects
     // the ROUTED gemm. Calling gemm_custom here unconditionally bypasses the route table.
     if (!trailing_gemm) {
@@ -145,34 +176,38 @@ Event geqrf_blocked_dispatch(Queue& ctx,
     const int batch = static_cast<int>(A.batch_size());
     const int k = std::min(m, n);
 
+    // The caller wins; the environment only fills in Auto, so a pin cannot be redirected.
+    if (panel_leaf == GeqrfPanelLeaf::Auto) panel_leaf = geqrf_panel_leaf_from_env();
+
     // Re-applies every gate supports() applies: this entry point is reachable without the
     // table, and an unsupported forced route falls back to automatic(), so a gate that is
     // wrong here silently measures the vendor instead.
     if (m < 1 || n < 1 || batch < 1) {
-        throw std::invalid_argument("geqrf_blocked: degenerate extents");
+        throw batchlas::invalid_argument("geqrf_blocked: degenerate extents");
     }
     if (m < n) {
-        throw std::invalid_argument(
+        throw batchlas::invalid_argument(
             "geqrf_blocked: m < n is not supported (route_geqrf.hh's supports() refuses it)");
     }
     if (A.is_heterogeneous()) {
-        throw std::invalid_argument("geqrf_blocked: heterogeneous batch is not supported");
+        throw batchlas::invalid_argument("geqrf_blocked: heterogeneous batch is not supported");
     }
     const auto dev = ctx.device();
     if (dev.type != DeviceType::GPU) {
-        throw std::invalid_argument("geqrf_blocked: GPU queues only");
+        throw batchlas::invalid_argument("geqrf_blocked: GPU queues only");
     }
     if (!dev.supports_sub_group_size(32)) {
-        throw std::runtime_error(
+        throw batchlas::unsupported(
             "geqrf_blocked: device does not offer sub-group size 32, which the panel leaf "
             "requires");
     }
     if (tau.size() < static_cast<std::size_t>(k) * static_cast<std::size_t>(batch)) {
-        throw std::invalid_argument("geqrf_blocked: tau span is shorter than k * batch");
+        throw batchlas::invalid_argument("geqrf_blocked: tau span is shorter than k * batch");
     }
 
     const int nb = geqrf_blocked_nb<T>(m, n);
     const int n2max = std::max(0, n - nb);
+    const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
 
     BumpAllocator pool(workspace);
     auto ws = geqrf_blocked_layout<T>(ctx, pool, m, n, nb, batch);
@@ -197,12 +232,21 @@ Event geqrf_blocked_dispatch(Queue& ctx,
         const int mp = m - j0;          // panel / V height, and A22's height
         const int n2 = n - j2;          // trailing columns; ZERO on the last panel
 
+        // PER PANEL and a POLICY request: panels shrink as j0 advances, so a tall first panel
+        // keeps today's leaf. Gating on `fits` here measures 0.38-0.93x at mp >= 144; any other
+        // forced leaf throws. evidence: docs/perf/qr.md#the-panel-height-window
+        const GeqrfPanelLeaf leaf_here =
+            (panel_leaf == GeqrfPanelLeaf::Register &&
+             !geqrf_panel_reg_preferred<T>(mp, ib, max_wg))
+                ? GeqrfPanelLeaf::Auto
+                : panel_leaf;
+
         // tau's batch stride is k, the whole matrix's reflector count (geqrf's contract),
         // at offset j0; the panel's own min(mp, ib) would scatter tau for every item but one.
         (void)geqrf_panel_factorize<T>(ctx,
                                        a_ptr + static_cast<std::ptrdiff_t>(j0) * ld + j0,
                                        ld, stride, mp, ib, batch,
-                                       tau_ptr, k, j0, nullptr);
+                                       tau_ptr, k, j0, nullptr, leaf_here, nullptr);
 
         if (n2 <= 0) break;
 
@@ -267,7 +311,8 @@ Event geqrf_blocked_dispatch(Queue& ctx,
     template unsigned geqrf_blocked_debug_params<T>(Queue&, int, int);                        \
     template Event geqrf_blocked_dispatch<T>(Queue&,                                          \
                                              const MatrixView<T, MatrixFormat::Dense>&,       \
-                                             Span<T>, Span<std::byte>, GeqrfTrailingGemm<T>);
+                                             Span<T>, Span<std::byte>, GeqrfTrailingGemm<T>,   \
+                                             GeqrfPanelLeaf);
 
 BATCHLAS_GEQRF_BLOCKED_INSTANTIATE(float)
 BATCHLAS_GEQRF_BLOCKED_INSTANTIATE(double)

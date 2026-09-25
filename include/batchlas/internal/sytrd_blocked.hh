@@ -1,5 +1,6 @@
 #pragma once
 
+#include <batchlas/export.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/tuning_params.hh>
 #include <batchlas/util/sycl-span.hh>
@@ -23,22 +24,22 @@ namespace batchlas {
 // - `ws` is required (W workspace).
 
 template <Backend B, typename T>
-size_t sytrd_blocked_buffer_size(Queue& ctx,
+BATCHLAS_API size_t sytrd_blocked_buffer_size(Queue& ctx,
+                                              const MatrixView<T, MatrixFormat::Dense>& a,
+                                              const VectorView<T>& d,
+                                              const VectorView<T>& e,
+                                              const VectorView<T>& tau,
+                                              Uplo uplo,
+                                              int32_t block_size);
+
+template <Backend B, typename T>
+BATCHLAS_API Event sytrd_blocked(Queue& ctx,
                                  const MatrixView<T, MatrixFormat::Dense>& a,
                                  const VectorView<T>& d,
                                  const VectorView<T>& e,
                                  const VectorView<T>& tau,
                                  Uplo uplo,
+                                 Span<std::byte> ws,
                                  int32_t block_size);
-
-template <Backend B, typename T>
-Event sytrd_blocked(Queue& ctx,
-                    const MatrixView<T, MatrixFormat::Dense>& a,
-                    const VectorView<T>& d,
-                    const VectorView<T>& e,
-                    const VectorView<T>& tau,
-                    Uplo uplo,
-                    Span<std::byte> ws,
-                    int32_t block_size);
 
 } // namespace batchlas

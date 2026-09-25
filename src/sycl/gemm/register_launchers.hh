@@ -62,7 +62,7 @@ Event launch_reg(Queue& ctx,
         const bool eligible = can_use_aligned_nn_fast_path<T, P.M, P.N, P.K, P.VA, P.VB>(A, B, C);
         if constexpr (P.require_aligned) {
             if (!eligible) {
-                throw std::runtime_error(
+                throw batchlas::unsupported(
                     "Requested aligned GEMM kernel for a non-eligible matrix layout");
             }
         }

@@ -225,5 +225,45 @@ else
     fail "include-collision probe failed for an unexpected reason (full log: ${decoy_log})"
 fi
 
+# ---------------------------------------------------------------------------
+# Phase 5: the namespace probe. Build the same example a third time with
+# BATCHLAS_NO_GLOBAL_NAMES defined, which switches off the compatibility shims
+# at the bottom of the util headers.
+#
+# Phases 2 and 4 prove BatchLAS claims only `batchlas` in the consumer's INCLUDE
+# root. This proves the same thing one level down, in the consumer's C++ GLOBAL
+# NAMESPACE: with the shims off, Queue, Device, Event, Span, UnifiedVector,
+# BumpAllocator, Vendor, Policy, DeviceType, ReferenceWrapper and friends must
+# not exist at global scope at all.
+#
+# It is a separate phase rather than a flag on Phase 3 because both spellings
+# have to keep working for one release: Phase 3 builds main.cc with the shim ON
+# (what existing consumer code does), this builds the identical file with it OFF
+# (what a consumer with its own ::Queue does). main.cc is fully qualified, so it
+# is expected to compile both ways -- if it ever compiles only with the shim,
+# that means an unqualified spelling crept back in.
+#
+# The static guard on our own side is .github/ci/check_no_global_names.py, which
+# needs no build. This is the end-to-end half it cannot do.
+# ---------------------------------------------------------------------------
+ns_build="${work_dir}/build-nsprobe"
+ns_log="${log_dir}/nsprobe.log"
+ns_rc=0
+if configure_consumer "${ns_build}" \
+        -DCMAKE_CXX_FLAGS=-DBATCHLAS_NO_GLOBAL_NAMES >"${ns_log}" 2>&1; then
+    "${cmake_bin}" --build "${ns_build}" --parallel >>"${ns_log}" 2>&1
+    ns_rc=$?
+else
+    ns_rc=1
+fi
+
+if [[ ${ns_rc} -eq 0 ]]; then
+    say "namespace probe: CLEAN -- the example builds with the global-name shims"
+    say "                 switched off, so nothing it uses needs BatchLAS to squat ::"
+else
+    tail -n 40 "${ns_log}" >&2
+    fail "REGRESSION: the consumer example no longer builds with BATCHLAS_NO_GLOBAL_NAMES defined; something in the installed headers or in main.cc depends on a name BatchLAS exports into the global namespace (full log: ${ns_log})"
+fi
+
 say "PASS"
 exit 0

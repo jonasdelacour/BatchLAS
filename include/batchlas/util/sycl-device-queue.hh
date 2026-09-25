@@ -11,9 +11,15 @@
 #include <string_view>
 #include <type_traits>
 
+// First, so every public header that reaches a Queue also sees the exception
+// hierarchy: <batchlas/error.hh> is dependency-free (only <stdexcept> and
+// <string>), so this costs nothing and cannot form a cycle.
+#include <batchlas/error.hh>
+#include <batchlas/export.hh>
 #include <batchlas/util/workspace.hh>
 #include <batchlas/blas/enums.hh>
 
+namespace batchlas {
 
 enum class Policy
 {
@@ -39,8 +45,9 @@ enum class Vendor
     OTHER
 };
 
-// These enums live in the GLOBAL namespace, so their to_string() overloads must
-// too, or ADL will not find them. Same pattern as <batchlas/blas/enums.hh>.
+// These enums live in namespace batchlas, so their to_string() overloads must
+// too, or ADL will not find them. Exactly the pattern of <batchlas/blas/enums.hh>,
+// whose namespace these now share.
 inline constexpr std::string_view to_string(Policy v) {
     switch (v) {
         case Policy::SYNC: return "SYNC";
@@ -71,8 +78,11 @@ inline constexpr std::string_view to_string(Vendor v) {
     return "Vendor(?)";
 }
 
-// One overload per enum, not a constrained template: a template would tie with
-// batchlas' and make every enum stream ambiguous.
+// One overload per enum, not a constrained template. These now share a namespace
+// with the constrained enum-streaming template in <batchlas/blas/enums.hh>; a
+// concrete second parameter wins partial ordering against its deduced `E`, so the
+// specific form is what keeps `os << policy` unambiguous. A constrained template
+// here would tie with that one instead.
 template <typename CharT, typename Traits>
 std::basic_ostream<CharT, Traits>& operator<<(std::basic_ostream<CharT, Traits>& os, Policy value) {
     return os << to_string(value);
@@ -119,7 +129,7 @@ enum class DeviceProperty
     NUMBER_OF_PROPERTIES
 };
 
-struct Device{
+struct BATCHLAS_API Device{
     static std::vector<Device> get_devices(DeviceType type);
 
     Device() = default;
@@ -129,7 +139,7 @@ struct Device{
     Device(std::string type) {
         std::transform(type.begin(), type.end(), type.begin(), ::tolower);
         auto pick = [](std::vector<Device> devs, const std::string& name) -> Device {
-            if (devs.empty()) throw std::runtime_error("No " + name + " device available");
+            if (devs.empty()) throw batchlas::device_error("No " + name + " device available");
             return devs.at(0);
         };
         if(type == "cpu") {
@@ -139,7 +149,7 @@ struct Device{
         } else if(type == "accelerator") {
             *this = pick(get_devices(DeviceType::ACCELERATOR), "accelerator");
         } else {
-            throw std::runtime_error("Invalid device type: " + type);
+            throw batchlas::invalid_argument("Invalid device type: " + type);
         }
     }
 
@@ -172,22 +182,47 @@ struct Device{
 
 struct EventImpl;
 
-struct Event {
+// [[nodiscard]] on the TYPE, not on each of the ~279 functions that return one:
+// the operations live in include/batchlas/blas/functions/*.hh behind generated
+// forwarders and dispatch macros, and marking the class is the only way to reach
+// every one of them from a single place.
+//
+// WHY IT MATTERS. An Event is how a caller orders work that the library cannot
+// order for it: an out-of-order Queue, a second Queue sharing the context, or a
+// hand-off to raw SYCL. Dropping it there is a silent race, and it used to be
+// invisible. It is a WARNING, not an error -- the default Queue is in-order, so
+// the overwhelmingly common case of chaining calls on one Queue is correct
+// without ever touching the Event. That is exactly why the in-tree discards
+// below are spelled `(void)`: each one is a claim that the queue's own ordering
+// is enough, and the cast is what makes the claim deliberate and greppable
+// instead of accidental.
+//
+// BATCHLAS_API IS PER MEMBER HERE, not on the class, and that is forced rather
+// than chosen. A class-key position carrying BOTH a C++11
+// attribute-specifier-seq and a GNU attribute is rejected by GCC in either
+// order -- measured, g++ 13 -std=c++20 -fsyntax-only on a standalone probe:
+// `struct [[nodiscard]] __attribute__((visibility("default"))) E` gives
+// "expected identifier before '__attribute__'" and the reverse order gives
+// "expected identifier before '[' token", though clang accepts both. Event has
+// no virtual member, so it has no vtable or typeinfo that needs class-level
+// visibility; annotating its ten out-of-line members is exactly equivalent and
+// costs the [[nodiscard]] nothing.
+struct [[nodiscard]] Event {
     std::unique_ptr<EventImpl> impl_;
 
-    Event();
-    ~Event();
-    Event& operator=(EventImpl&& impl);
-    Event(EventImpl&& impl);
-    Event(Event&& other);
-    Event& operator=(Event&& other);
-    void wait() const;
-    EventImpl* operator->() const;
-    EventImpl& operator*() const;
+    BATCHLAS_API Event();
+    BATCHLAS_API ~Event();
+    BATCHLAS_API Event& operator=(EventImpl&& impl);
+    BATCHLAS_API Event(EventImpl&& impl);
+    BATCHLAS_API Event(Event&& other);
+    BATCHLAS_API Event& operator=(Event&& other);
+    BATCHLAS_API void wait() const;
+    BATCHLAS_API EventImpl* operator->() const;
+    BATCHLAS_API EventImpl& operator*() const;
 
     // {command_start, command_end} in nanoseconds when profiling is enabled on
     // the underlying SYCL queue; std::nullopt when it is not.
-    std::optional<std::pair<std::uint64_t, std::uint64_t>> profiling_command_start_end_ns() const;
+    BATCHLAS_API std::optional<std::pair<std::uint64_t, std::uint64_t>> profiling_command_start_end_ns() const;
 };
 
 struct QueueImpl;
@@ -195,7 +230,7 @@ struct QueueImpl;
 // A Queue is SINGLE-THREADED: it owns an unsynchronised workspace arena and a
 // cached "last event", and the operations that mutate either throw if called
 // from another thread. docs/cpp-api.md#synchronisation-and-threading
-struct Queue{
+struct BATCHLAS_API Queue{
 
     /* Declared here, defined in the .cc: QueueImpl is incomplete here. */
     Queue(); 
@@ -232,7 +267,16 @@ struct Queue{
 
     // Transfers single-thread ownership (not a share). Call once from the new owner
     // while no other thread uses the Queue; unchecked. Throws if a lease is outstanding.
-    void attach_to_current_thread();
+    //
+    // BATCHLAS_API on the member, not inherited from the class: this and
+    // native_handle() below are defined `[[gnu::used]] inline` in the PRIVATE
+    // src/queue.hh (see BATCHLAS_QUEUE_EXPORTED_INLINE there). `used` stops the
+    // symbol being dropped as unreferenced; it does not set visibility, and
+    // -fvisibility-inlines-hidden hides an inline MEMBER whatever the enclosing
+    // class says. Without the macro here the pair would be emitted and hidden,
+    // which fails a consumer's link with a missing symbol that a `nm -D` on the
+    // library appears to contradict.
+    BATCHLAS_API void attach_to_current_thread();
 
     // Borrow `bytes` of device scratch. The queue owns it: it stays valid until
     // the lease is released, not until the caller returns. See workspace.hh.
@@ -269,7 +313,7 @@ struct Queue{
     // Native stream as an opaque pointer: CUstream on CUDA, hipStream_t on HIP,
     // nullptr elsewhere; owned by the Queue. Your work on it is ordered after
     // BatchLAS's, not the reverse -- for that see create_event_after_external_work().
-    void* native_handle() const;
+    BATCHLAS_API void* native_handle() const;
 
     private:
         Device device_;
@@ -278,3 +322,29 @@ struct Queue{
         mutable batchlas::Backend resolved_backend_ = batchlas::Backend::AUTO;
 };
 
+}  // namespace batchlas
+
+// Transitional compatibility shim. These names used to be declared at global
+// scope; they now live in namespace batchlas, and these using-declarations keep
+// the old unqualified spellings working for existing code. A consumer that owns
+// a name of its own here defines BATCHLAS_NO_GLOBAL_NAMES to switch the block
+// off; the block goes away entirely once nothing in tree depends on it.
+#ifndef BATCHLAS_NO_GLOBAL_NAMES
+using batchlas::Device;
+using batchlas::DeviceProperty;
+using batchlas::DeviceType;
+using batchlas::Event;
+using batchlas::EventImpl;
+using batchlas::Policy;
+using batchlas::Queue;
+using batchlas::QueueImpl;
+using batchlas::Vendor;
+// str_to_vendor takes a std::string, so ADL associates only namespace std and
+// never reaches batchlas; its one caller (src/util/queue-impl.cc) calls it
+// unqualified. to_string and operator<< are deliberately NOT shimmed: naming
+// either would drag the whole batchlas overload set -- every to_string in
+// blas/enums.hh, and that header's constrained enum-streaming template -- into
+// the consumer's global namespace, i.e. a larger global footprint than the one
+// this move removes. ADL covers both for their enums.
+using batchlas::str_to_vendor;
+#endif

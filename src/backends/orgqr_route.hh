@@ -81,8 +81,10 @@ inline std::optional<dispatch::OrgqrShape> orgqr_op_shape(
     //
     // TRUE for all four scalar types: orgqr_blocked.cc ships the identity fill
     // plus a routed ormqr, so the native arm is supported and a vendor-free build
-    // (or an explicit route pin) reaches {Native, Blocked}. preferred() is still
-    // false everywhere, so a vendor-present build's default does not move.
+    // (or an explicit route pin) reaches {Native, Blocked}. preferred() is true to
+    // n = 512 on both extents, so a FALSE here also moves the vendor-present default
+    // back to the per-item cusolverDnXorgqr loop for every shape in that window.
+    // evidence: docs/perf/small-n-baseline.md#orgqr
     s.blocked_available = sycl_orgqr::orgqr_blocked_available<T>();
     return s;
 }

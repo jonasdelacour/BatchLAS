@@ -1,5 +1,6 @@
 #pragma once
 
+#include <batchlas/export.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/blas/enums.hh>
 #include <batchlas/util/sycl-device-queue.hh>
@@ -105,21 +106,21 @@ struct ILUKPreconditioner {
 // iluk_factorize does this already; call it only when building an
 // ILUKPreconditioner by hand, since iluk_apply requires a valid schedule.
 template <typename T>
-void iluk_build_level_schedule(ILUKPreconditioner<T>& M);
+BATCHLAS_API void iluk_build_level_schedule(ILUKPreconditioner<T>& M);
 
 template <Backend B, typename T>
-ILUKPreconditioner<T> iluk_factorize(Queue& ctx,
-                                     const MatrixView<T, MatrixFormat::CSR>& A,
-                                     const ILUKParams<T>& params = ILUKParams<T>());
+BATCHLAS_API ILUKPreconditioner<T> iluk_factorize(Queue& ctx,
+                                                  const MatrixView<T, MatrixFormat::CSR>& A,
+                                                  const ILUKParams<T>& params = ILUKParams<T>());
 
 // Bytes of workspace the Span overload of iluk_factorize needs for A. The exact
 // fill count is only known after the numeric phase (drop tolerance and fill
 // control both prune entries), so this sizes against the symbolic pattern, which
 // is an upper bound. Running it costs one symbolic factorization.
 template <Backend B, typename T>
-size_t iluk_buffer_size(Queue& ctx,
-                        const MatrixView<T, MatrixFormat::CSR>& A,
-                        const ILUKParams<T>& params = ILUKParams<T>());
+BATCHLAS_API size_t iluk_buffer_size(Queue& ctx,
+                                     const MatrixView<T, MatrixFormat::CSR>& A,
+                                     const ILUKParams<T>& params = ILUKParams<T>());
 
 // Factorize A into caller-supplied memory instead of allocating. Lets an
 // iterative solver carve the preconditioner out of the workspace it was already
@@ -129,18 +130,18 @@ size_t iluk_buffer_size(Queue& ctx,
 // wants to keep sub-allocating from the same pool needs it reported back rather
 // than predicted -- predicting it means running the symbolic phase a second time.
 template <Backend B, typename T>
-ILUKView<T> iluk_factorize(Queue& ctx,
-                           const MatrixView<T, MatrixFormat::CSR>& A,
-                           Span<std::byte> workspace,
-                           const ILUKParams<T>& params,
-                           size_t* bytes_used = nullptr);
+BATCHLAS_API ILUKView<T> iluk_factorize(Queue& ctx,
+                                        const MatrixView<T, MatrixFormat::CSR>& A,
+                                        Span<std::byte> workspace,
+                                        const ILUKParams<T>& params,
+                                        size_t* bytes_used = nullptr);
 
 template <Backend B, typename T>
-Event iluk_apply(Queue& ctx,
-                 const ILUKView<T>& M,
-                 const MatrixView<T, MatrixFormat::Dense>& rhs,
-                 const MatrixView<T, MatrixFormat::Dense>& out,
-                 Span<std::byte> workspace = Span<std::byte>());
+BATCHLAS_API Event iluk_apply(Queue& ctx,
+                              const ILUKView<T>& M,
+                              const MatrixView<T, MatrixFormat::Dense>& rhs,
+                              const MatrixView<T, MatrixFormat::Dense>& out,
+                              Span<std::byte> workspace = Span<std::byte>());
 
 // Convenience overload so callers holding an owning factor need not spell .view().
 template <Backend B, typename T>
@@ -153,10 +154,10 @@ Event iluk_apply(Queue& ctx,
 }
 
 template <Backend B, typename T>
-size_t iluk_apply_buffer_size(Queue& ctx,
-                              const ILUKView<T>& M,
-                              const MatrixView<T, MatrixFormat::Dense>& rhs,
-                              const MatrixView<T, MatrixFormat::Dense>& out);
+BATCHLAS_API size_t iluk_apply_buffer_size(Queue& ctx,
+                                           const ILUKView<T>& M,
+                                           const MatrixView<T, MatrixFormat::Dense>& rhs,
+                                           const MatrixView<T, MatrixFormat::Dense>& out);
 
 template <Backend B, typename T>
 size_t iluk_apply_buffer_size(Queue& ctx,

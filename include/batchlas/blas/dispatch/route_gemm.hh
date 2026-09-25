@@ -39,7 +39,9 @@ struct RouteTable<Op::gemm, T> {
 
         if (s.heterogeneous_batch) return false;
 
-        // Complex has no register kernel. evidence: docs/perf/gemm.md#complex-is-refused
+        // Complex has no register route: the transposed panel window was
+        // measured and REFUTED.
+        // evidence: docs/perf/gemm.md#wide-scalar-transposed-tiles
         if constexpr (is_std_complex_v<T>) {
             return false;
         } else {

@@ -15,6 +15,7 @@ py::object sparse_iterative_eigensolver(const Matrix<T, MF>& matrix,
                                         const std::optional<std::string>& device_name,
                                         bool use_lanczos,
                                         bool return_history,
+                                        bool return_info = false,
                                         const ILUKPreconditioner<T>* preconditioner = nullptr) {
     Queue& queue = acquire_queue(device_name, backend);
     Vector<typename base_type<T>::type> values(static_cast<int>(neigs), matrix.batch_size());
@@ -56,6 +57,21 @@ py::object sparse_iterative_eigensolver(const Matrix<T, MF>& matrix,
     UnifiedVector<int32_t> counts;
     if (!use_lanczos) {
         counts.resize(static_cast<std::size_t>(matrix.batch_size()));
+    }
+
+    // Per-item CONVERGENCE status, which is a different question from `counts`
+    // above: `m[b]` is how many eigenpairs item b has, `info[b]` is whether they
+    // can be believed. LOBPCG and the filtered path both already computed a
+    // per-item flag and then reduced it to one bool; this is the span that
+    // carries it out.
+    //
+    // Left empty unless asked for -- an empty span is how the C++ layer spells
+    // "not requested", it costs no workspace, and the answer is unchanged. The
+    // lanczos path never calls syevx and has no status to report.
+    const bool report_info = return_info && !use_lanczos;
+    UnifiedVector<int32_t> info;
+    if (report_info) {
+        info.resize(static_cast<std::size_t>(matrix.batch_size()));
     }
 
     if (!use_lanczos && return_history) {
@@ -115,11 +131,12 @@ py::object sparse_iterative_eigensolver(const Matrix<T, MF>& matrix,
                 // and Index it costs one extra batch_size-wide fill.
                 if (compute_vectors) {
                     batchlas::syevx<B, T, MF>(queue, matrix.view(), values.data(), counts.to_span(), neigs,
-                                              workspace, jobz, vectors->view(), syevx_params);
+                                              workspace, jobz, vectors->view(), syevx_params,
+                                              info.to_span());
                 } else {
                     batchlas::syevx<B, T, MF>(queue, matrix.view(), values.data(), counts.to_span(), neigs,
                                               workspace, jobz, MatrixView<T, MatrixFormat::Dense>(),
-                                              syevx_params);
+                                              syevx_params, info.to_span());
                 }
             }
         });
@@ -129,9 +146,12 @@ py::object sparse_iterative_eigensolver(const Matrix<T, MF>& matrix,
     py::object vectors_object =
         compute_vectors ? dense_matrix_to_python(wrap_dense(std::move(*vectors))) : py::none();
 
-    // Return layout: (values[, vectors][, m][, history]). `m` sits immediately
-    // after the eigenvectors, mirroring the C++ argument order where the count
-    // span follows W, and `history` stays last.
+    // Return layout: (values[, vectors][, m][, info][, history]). Every optional
+    // part keeps its place whether or not the ones before it are present, so
+    // adding one moves nothing: `m` still sits immediately after the
+    // eigenvectors, mirroring the C++ argument order where the count span
+    // follows W, `info` follows it exactly as the C++ `info` span follows
+    // `params`, and `history` stays last.
     py::object counts_object = py::none();
     if (report_counts) {
         py::array_t<int32_t> counts_out({static_cast<py::ssize_t>(matrix.batch_size())});
@@ -141,65 +161,67 @@ py::object sparse_iterative_eigensolver(const Matrix<T, MF>& matrix,
         }
         counts_object = std::move(counts_out);
     }
+    const py::object info_object = info_to_python(info, matrix.batch_size());
 
-    if (!return_history || use_lanczos) {
-        if (compute_vectors && report_counts) {
-            return py::make_tuple(values_object, vectors_object, counts_object);
-        }
-        if (compute_vectors) {
-            return py::make_tuple(values_object, vectors_object);
-        }
-        if (report_counts) {
-            return py::make_tuple(values_object, counts_object);
-        }
-        return values_object;
-    }
-
-    const std::size_t store_every = instrumentation->store_every;
-    const std::size_t stored_iters = (syevx_params.iterations + store_every - 1) / store_every;
-    auto history_array = [&](const UnifiedVector<real_type>& buffer) -> py::object {
-        if (buffer.size() == 0) {
-            return py::none();
-        }
-        py::array_t<real_type> out(
-            {static_cast<py::ssize_t>(stored_iters), static_cast<py::ssize_t>(matrix.batch_size()),
-             static_cast<py::ssize_t>(neigs)});
-        auto view = out.template mutable_unchecked<3>();
-        for (std::size_t iter = 0; iter < stored_iters; ++iter) {
-            for (int batch = 0; batch < matrix.batch_size(); ++batch) {
-                for (std::size_t eig = 0; eig < neigs; ++eig) {
-                    const std::size_t index =
-                        iter * static_cast<std::size_t>(matrix.batch_size()) * neigs +
-                        static_cast<std::size_t>(batch) * neigs + eig;
-                    view(iter, static_cast<std::size_t>(batch), eig) = buffer[index];
+    const bool report_history = return_history && !use_lanczos;
+    py::object history_object = py::none();
+    if (report_history) {
+        const std::size_t store_every = instrumentation->store_every;
+        const std::size_t stored_iters = (syevx_params.iterations + store_every - 1) / store_every;
+        auto history_array = [&](const UnifiedVector<real_type>& buffer) -> py::object {
+            if (buffer.size() == 0) {
+                return py::none();
+            }
+            py::array_t<real_type> out({static_cast<py::ssize_t>(stored_iters),
+                                        static_cast<py::ssize_t>(matrix.batch_size()),
+                                        static_cast<py::ssize_t>(neigs)});
+            auto view = out.template mutable_unchecked<3>();
+            for (std::size_t iter = 0; iter < stored_iters; ++iter) {
+                for (int batch = 0; batch < matrix.batch_size(); ++batch) {
+                    for (std::size_t eig = 0; eig < neigs; ++eig) {
+                        const std::size_t index =
+                            iter * static_cast<std::size_t>(matrix.batch_size()) * neigs +
+                            static_cast<std::size_t>(batch) * neigs + eig;
+                        view(iter, static_cast<std::size_t>(batch), eig) = buffer[index];
+                    }
                 }
             }
+            return out;
+        };
+
+        py::dict history;
+        history["best_residual_history"] = history_array(best_history);
+        history["current_residual_history"] = history_array(current_history);
+        history["convergence_rate_history"] = history_array(rate_history);
+        history["ritz_value_history"] = history_array(ritz_history);
+        py::array_t<int32_t> iterations_out({static_cast<py::ssize_t>(matrix.batch_size())});
+        auto iterations_view = iterations_out.mutable_unchecked<1>();
+        for (int batch = 0; batch < matrix.batch_size(); ++batch) {
+            iterations_view(static_cast<std::size_t>(batch)) =
+                iterations_done[static_cast<std::size_t>(batch)];
         }
-        return out;
-    };
+        history["iterations_done"] = std::move(iterations_out);
+        history_object = std::move(history);
+    }
 
-    py::dict history;
-    history["best_residual_history"] = history_array(best_history);
-    history["current_residual_history"] = history_array(current_history);
-    history["convergence_rate_history"] = history_array(rate_history);
-    history["ritz_value_history"] = history_array(ritz_history);
-    py::array_t<int32_t> iterations_out({static_cast<py::ssize_t>(matrix.batch_size())});
-    auto iterations_view = iterations_out.mutable_unchecked<1>();
-    for (int batch = 0; batch < matrix.batch_size(); ++batch) {
-        iterations_view(static_cast<std::size_t>(batch)) = iterations_done[static_cast<std::size_t>(batch)];
-    }
-    history["iterations_done"] = std::move(iterations_out);
+    // Assembled as a list rather than one make_tuple per combination. With
+    // vectors, counts, info and history each optional there are sixteen shapes,
+    // and enumerating them by hand is how one of them gets forgotten -- the
+    // branch set this replaces already covered only eight.
+    std::vector<py::object> parts;
+    parts.push_back(values_object);
+    if (compute_vectors) parts.push_back(vectors_object);
+    if (report_counts) parts.push_back(counts_object);
+    if (report_info) parts.push_back(info_object);
+    if (report_history) parts.push_back(history_object);
 
-    if (compute_vectors && report_counts) {
-        return py::make_tuple(values_object, vectors_object, counts_object, history);
-    }
-    if (compute_vectors) {
-        return py::make_tuple(values_object, vectors_object, history);
-    }
-    if (report_counts) {
-        return py::make_tuple(values_object, counts_object, history);
-    }
-    return py::make_tuple(values_object, history);
+    // A lone `values` is returned BARE, not as a one-tuple: that is the historic
+    // shape of the plainest call and unpacking it would break every existing
+    // caller.
+    if (parts.size() == 1) return parts.front();
+    py::tuple out(parts.size());
+    for (std::size_t i = 0; i < parts.size(); ++i) out[i] = parts[i];
+    return out;
 }
 
 template <typename T>
@@ -499,7 +521,8 @@ void init_spectral_ops(py::module_& module) {
                             const std::string& uplo_name,
                             const py::dict& options,
                             const std::string& backend_name,
-                            const py::object& device_name_obj) {
+                            const py::object& device_name_obj,
+                            bool return_info) {
         const Uplo uplo = parse_uplo(uplo_name);
         const Backend backend = parse_backend(backend_name);
         const auto device_name = optional_string_from_obj(device_name_obj);
@@ -511,11 +534,47 @@ void init_spectral_ops(py::module_& module) {
             Vector<typename base_type<scalar_type>::type> values(a_copy.rows(), a_copy.batch_size());
             Queue& queue = acquire_queue(device_name, backend);
             const JobType jobz = compute_vectors ? JobType::EigenVectors : JobType::NoEigenVectors;
-            batchlas::syev(queue, a_copy.view(), values.data(),
-                                        {.jobz = jobz, .uplo = uplo});
+
+            // Per-item convergence status. Left EMPTY unless asked for: an empty
+            // span is how the C++ layer spells "not requested", it costs no
+            // workspace, and it leaves the answer bit-for-bit unchanged.
+            //
+            // Default-constructed then resized, like the history buffers above:
+            // an unconditional zero-length unified allocation is a device
+            // allocation nobody uses.
+            UnifiedVector<int32_t> info;
+            if (return_info) info.resize(static_cast<std::size_t>(a_copy.batch_size()));
+
+            // The positional spelling rather than the SyevOptions one, because
+            // that is where `info` lives -- the arena lease is identical either
+            // way (run_backend_with_workspace calls queue.workspace() too).
+            run_backend_with_workspace(
+                queue,
+                [&](auto backend_tag) {
+                    constexpr Backend B = decltype(backend_tag)::value;
+                    return batchlas::syev_buffer_size<B, scalar_type>(queue, a_copy.view(),
+                                                                     values.data(), jobz, uplo);
+                },
+                [&](auto backend_tag, Span<std::byte> workspace) {
+                    constexpr Backend B = decltype(backend_tag)::value;
+                    batchlas::syev<B, scalar_type>(queue, a_copy.view(), values.data(), jobz, uplo,
+                                                  workspace, info.to_span());
+                });
             queue.wait();
+
+            // `info` goes LAST, after the eigenvectors, so no existing return
+            // shape moves: a caller that does not pass return_info sees exactly
+            // what it saw before.
+            py::object info_object = info_to_python(info, a_copy.batch_size());
+            if (compute_vectors && return_info) {
+                return py::make_tuple(wrap_vector(std::move(values)), wrap_dense(std::move(a_copy)),
+                                      info_object);
+            }
             if (compute_vectors) {
                 return py::make_tuple(wrap_vector(std::move(values)), wrap_dense(std::move(a_copy)));
+            }
+            if (return_info) {
+                return py::make_tuple(wrap_vector(std::move(values)), info_object);
             }
             return py::cast(wrap_vector(std::move(values)));
         });
@@ -624,7 +683,8 @@ void init_spectral_ops(py::module_& module) {
 
     module.def("_syevx_dense", [](const DenseMatrix& matrix, std::size_t neigs, bool compute_vectors,
                                    const py::dict& options, const std::string& backend_name,
-                                   const py::object& device_name_obj, bool return_history, const py::object& preconditioner) {
+                                   const py::object& device_name_obj, bool return_history,
+                                   const py::object& preconditioner, bool return_info) {
         const Backend backend = parse_backend(backend_name);
         const auto device_name = optional_string_from_obj(device_name_obj);
         if (!preconditioner.is_none()) {
@@ -634,13 +694,14 @@ void init_spectral_ops(py::module_& module) {
             using scalar_type = typename decltype(tag)::type;
             return sparse_iterative_eigensolver<scalar_type, MatrixFormat::Dense>(typed_matrix, neigs, compute_vectors,
                                                                                   options, backend, device_name, false,
-                                                                                  return_history);
+                                                                                  return_history, return_info);
         });
     });
 
     module.def("_syevx_sparse", [](const SparseMatrix& matrix, std::size_t neigs, bool compute_vectors,
                                     const py::dict& options, const std::string& backend_name,
-                                    const py::object& device_name_obj, bool return_history, const py::object& preconditioner) {
+                                    const py::object& device_name_obj, bool return_history,
+                                    const py::object& preconditioner, bool return_info) {
         const Backend backend = parse_backend(backend_name);
         const auto device_name = optional_string_from_obj(device_name_obj);
         return visit_sparse(matrix, [&](auto tag, const auto& typed_matrix) -> py::object {
@@ -653,7 +714,8 @@ void init_spectral_ops(py::module_& module) {
             }
             return sparse_iterative_eigensolver<scalar_type, MatrixFormat::CSR>(typed_matrix, neigs, compute_vectors,
                                                                                 options, backend, device_name, false,
-                                                                                return_history, handle_ptr);
+                                                                                return_history, return_info,
+                                                                                handle_ptr);
         });
     });
 

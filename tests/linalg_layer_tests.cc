@@ -549,6 +549,143 @@ TEST(LinalgLayer, SolveSatisfiesTheSystem) {
                     << "A X != B at (" << i << "," << j << ") batch " << b;
 }
 
+// ---- linalg::solve after the gesv rewire -----------------------------------
+//
+// `solve` now sends Transpose::NoTrans to the fused `gesv` and keeps the
+// hand-composed getrf + getrs for Trans/ConjTrans, because gesv has no Transpose
+// parameter. Both arms therefore need their own residual. The NoTrans shapes below
+// straddle route_gesv's fused window (float n <= 32, complex<float> n <= 16, and
+// nrhs <= 4 for both); on a CPU queue, or a device without sub-group 32, the fused
+// tier is gated off and every shape takes the composed arm -- so these are
+// correctness rows that hold on any device, not routing rows.
+
+namespace {
+
+template <typename T>
+inline constexpr bool kIsComplex = !std::is_same_v<T, typename base_type<T>::type>;
+
+template <typename T>
+T scalar_of(double re, double im) {
+    using Real = typename base_type<T>::type;
+    if constexpr (kIsComplex<T>) {
+        return T(Real(re), Real(im));
+    } else {
+        (void)im;
+        return T(Real(re));
+    }
+}
+
+// std::conj on a real argument returns std::complex, so it cannot be spelled bare.
+template <typename T>
+T conj_of(const T& z) {
+    if constexpr (kIsComplex<T>) {
+        return std::conj(z);
+    } else {
+        return z;
+    }
+}
+
+template <typename T>
+T& elem(const MatrixView<T, MatrixFormat::Dense>& v, int i, int j, int b) {
+    return v.data_ptr()[static_cast<int64_t>(b) * v.stride() +
+                        static_cast<int64_t>(j) * v.ld() + i];
+}
+
+// Diagonally dominant for every batch item, so LU is well-posed without pivot luck.
+// The imaginary part is off-diagonal and odd in (i - j), which is what makes
+// ConjTrans a different system from Trans.
+template <typename T>
+Matrix<T, MatrixFormat::Dense> solve_system(int n, int batch) {
+    Matrix<T, MatrixFormat::Dense> A(n, n, batch);
+    const auto v = A.view();
+    for (int b = 0; b < batch; ++b)
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < n; ++i)
+                elem(v, i, j, b) =
+                    i == j ? scalar_of<T>(double(n + b + 3), 0.0)
+                           : scalar_of<T>(1.0 / (1.0 + std::abs(i - j)),
+                                          0.25 * double(i - j) / double(n));
+    return A;
+}
+
+template <typename T>
+Matrix<T, MatrixFormat::Dense> solve_rhs(int n, int nrhs, int batch) {
+    Matrix<T, MatrixFormat::Dense> B(n, nrhs, batch);
+    const auto v = B.view();
+    for (int b = 0; b < batch; ++b)
+        for (int j = 0; j < nrhs; ++j)
+            for (int i = 0; i < n; ++i)
+                elem(v, i, j, b) = scalar_of<T>(1.0 + i - 2.0 * j + b, 0.5 - 0.1 * j);
+    return B;
+}
+
+// Checked on batch item 0 AND item batch - 1: a host residual on item 0 alone cannot
+// see a per-item indexing bug, which is the house rule for this kind of check.
+template <typename T>
+void expect_solves(Queue& q, const char* what, int n, int nrhs, int batch, Transpose trans) {
+    using Real = typename base_type<T>::type;
+    auto A = solve_system<T>(n, batch);
+    auto B = solve_rhs<T>(n, nrhs, batch);
+
+    auto X = linalg::solve(q, A.view(), B.view(), trans);
+    q.wait();
+
+    ASSERT_EQ(X.rows(), n) << what;
+    ASSERT_EQ(X.cols(), nrhs) << what;
+    ASSERT_EQ(X.batch_size(), batch) << what;
+
+    const auto Av = A.view();
+    const auto Bv = B.view();
+    const auto Xv = X.view();
+
+    for (int b : {0, batch - 1}) {
+        Real scale = Real(1);
+        for (int j = 0; j < nrhs; ++j)
+            for (int i = 0; i < n; ++i) scale = std::max(scale, std::abs(elem(Bv, i, j, b)));
+
+        for (int j = 0; j < nrhs; ++j)
+            for (int i = 0; i < n; ++i) {
+                T acc{};
+                for (int k = 0; k < n; ++k) {
+                    const T a = trans == Transpose::NoTrans ? elem(Av, i, k, b)
+                                : trans == Transpose::Trans ? elem(Av, k, i, b)
+                                                            : conj_of(elem(Av, k, i, b));
+                    acc += a * elem(Xv, k, j, b);
+                }
+                ASSERT_LE(std::abs(acc - elem(Bv, i, j, b)), Real(2e-3) * scale)
+                    << what << ": op(A) X != B at (" << i << "," << j << ") batch " << b;
+            }
+    }
+}
+
+}  // namespace
+
+// float: n = 16 is inside the fused window, n = 48 is outside it by order, and
+// nrhs = 6 is outside it by right-hand sides.
+TEST(LinalgLayer, SolveNoTransFloatStraddlesTheFusedWindow) {
+    Queue q;
+    expect_solves<float>(q, "float inside", 16, 2, 8, Transpose::NoTrans);
+    expect_solves<float>(q, "float outside by n", 48, 2, 8, Transpose::NoTrans);
+    expect_solves<float>(q, "float outside by nrhs", 16, 6, 8, Transpose::NoTrans);
+}
+
+// complex<float>: the window stops at n = 16, half of float's.
+TEST(LinalgLayer, SolveNoTransComplexStraddlesTheFusedWindow) {
+    Queue q;
+    expect_solves<std::complex<float>>(q, "cfloat inside", 8, 2, 4, Transpose::NoTrans);
+    expect_solves<std::complex<float>>(q, "cfloat outside by n", 40, 2, 4, Transpose::NoTrans);
+}
+
+// The arm the rewire preserved. gesv has no Transpose parameter, so these must still
+// go through getrf + getrs -- and ConjTrans must still conjugate.
+TEST(LinalgLayer, SolveTransposedKeepsTheComposedArm) {
+    Queue q;
+    expect_solves<float>(q, "float Trans", 16, 2, 8, Transpose::Trans);
+    expect_solves<float>(q, "float Trans, large n", 48, 2, 8, Transpose::Trans);
+    expect_solves<std::complex<float>>(q, "cfloat Trans", 8, 2, 4, Transpose::Trans);
+    expect_solves<std::complex<float>>(q, "cfloat ConjTrans", 8, 2, 4, Transpose::ConjTrans);
+}
+
 // A V == V diag(w).
 TEST(LinalgLayer, EighProducesConsistentEigenpairs) {
     Queue q;

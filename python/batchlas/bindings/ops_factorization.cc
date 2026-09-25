@@ -191,10 +191,17 @@ py::object dense_gesvd_impl(const DenseMatrix& a_wrapper,
                             Backend backend,
                             const std::optional<std::string>& device_name,
                             bool blocked,
-                            std::optional<Uplo> hermitian_uplo) {
+                            std::optional<Uplo> hermitian_uplo,
+                            bool return_info = false) {
     DenseMatrixT<T> out = std::get<DenseMatrixT<T>>(a_wrapper.storage).clone();
     const int n = out.rows();
     Vector<typename base_type<T>::type> singular_values(n, out.batch_size());
+    // Per-item convergence status, left EMPTY unless asked for: an empty span is
+    // how the C++ layer spells "not requested", it costs no workspace, and it
+    // leaves the answer bit-for-bit unchanged. The batch-wide throw this
+    // replaces took the converged items' answers down with the one that failed.
+    UnifiedVector<int32_t> info;
+    if (return_info) info.resize(static_cast<std::size_t>(out.batch_size()));
     DenseMatrixT<T> u = compute_vectors ? DenseMatrixT<T>(n, n, out.batch_size()) : DenseMatrixT<T>(1, 1, out.batch_size());
     DenseMatrixT<T> vh = compute_vectors ? DenseMatrixT<T>(n, n, out.batch_size()) : DenseMatrixT<T>(1, 1, out.batch_size());
     const SvdVectors job = compute_vectors ? SvdVectors::All : SvdVectors::None;
@@ -250,7 +257,8 @@ py::object dense_gesvd_impl(const DenseMatrix& a_wrapper,
                                                   job,
                                                   job,
                                                   *hermitian_uplo,
-                                                  workspace);
+                                                  workspace,
+                                                  info.to_span());
                 } else {
                     batchlas::gesvd_blocked<B, T>(queue,
                                                   out.view(),
@@ -259,7 +267,8 @@ py::object dense_gesvd_impl(const DenseMatrix& a_wrapper,
                                                   vh.view(),
                                                   job,
                                                   job,
-                                                  workspace);
+                                                  workspace,
+                                                  info.to_span());
                 }
             } else {
                 if (hermitian_uplo.has_value()) {
@@ -271,7 +280,8 @@ py::object dense_gesvd_impl(const DenseMatrix& a_wrapper,
                                           job,
                                           job,
                                           *hermitian_uplo,
-                                          workspace);
+                                          workspace,
+                                          info.to_span());
                 } else {
                     batchlas::gesvd<B, T>(queue,
                                           out.view(),
@@ -280,14 +290,28 @@ py::object dense_gesvd_impl(const DenseMatrix& a_wrapper,
                                           vh.view(),
                                           job,
                                           job,
-                                          workspace);
+                                          workspace,
+                                          info.to_span());
                 }
             }
         });
     queue.wait();
 
-    if (!compute_vectors) {
+    // `info` goes LAST so no existing return shape moves: a caller that does not
+    // ask for it sees exactly the `s` or `(u, s, vh)` it saw before.
+    const py::object info_object = info_to_python(info, out.batch_size());
+    if (!compute_vectors && !return_info) {
         return dense_vector_to_python(wrap_vector(std::move(singular_values)));
+    }
+    if (!compute_vectors) {
+        return py::make_tuple(dense_vector_to_python(wrap_vector(std::move(singular_values))),
+                              info_object);
+    }
+    if (return_info) {
+        return py::make_tuple(wrap_dense(std::move(u)),
+                              wrap_vector(std::move(singular_values)),
+                              wrap_dense(std::move(vh)),
+                              info_object);
     }
     return py::make_tuple(wrap_dense(std::move(u)),
                           wrap_vector(std::move(singular_values)),
@@ -581,7 +605,8 @@ void init_factorization_ops(py::module_& module) {
                              bool compute_vectors,
                              const py::object& uplo_name_obj,
                              const std::string& backend_name,
-                             const py::object& device_name_obj) {
+                             const py::object& device_name_obj,
+                             bool return_info) {
         const Backend backend = parse_backend(backend_name);
         const auto device_name = optional_string_from_obj(device_name_obj);
         const auto uplo_name = optional_string_from_obj(uplo_name_obj);
@@ -590,7 +615,8 @@ void init_factorization_ops(py::module_& module) {
             : std::nullopt;
         return visit_dense(a, [&](auto tag, const auto&) -> py::object {
             using scalar_type = typename decltype(tag)::type;
-            return dense_gesvd_impl<scalar_type>(a, compute_vectors, backend, device_name, false, hermitian_uplo);
+            return dense_gesvd_impl<scalar_type>(a, compute_vectors, backend, device_name, false,
+                                                 hermitian_uplo, return_info);
         });
     });
 

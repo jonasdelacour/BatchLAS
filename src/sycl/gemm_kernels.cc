@@ -5,6 +5,7 @@
 #include "gemm/register_128x128.hh"
 #include "gemm/register_64x64_k16_wide.hh"
 #include "gemm/register_launchers.hh"
+#include "gemm/register_wide_transposed.hh"
 #include "gemm/split_k.hh"
 #include "gemm/tiled_general.hh"
 
@@ -15,13 +16,17 @@
 #include <cstdlib>
 #include <string>
 #include <sycl/sycl.hpp>
+#include <batchlas/settings.hh>
 
 namespace batchlas::sycl_gemm {
 
 namespace {
 
+// Its own truthiness dialect -- case-folded and accepting "yes", which
+// env_truthy does not -- so the field carries the raw value and the parser stays
+// here rather than being narrowed onto the shared helper.
 inline bool experimental_kernel_variants_enabled() {
-    const char* raw = std::getenv("BATCHLAS_GEMM_EXPERIMENTAL");
+    const char* raw = batchlas::settings().selection.gemm_experimental.get();
     if (!raw) {
         return false;
     }
@@ -153,6 +158,14 @@ inline const char* kernel_trace_name(KernelVariant variant) {
         return "gemm_sycl_register_128x128_k8";
     case KernelVariant::Tiled64x64RegisterK16Wide:
         return "gemm_sycl_register_64x64_k16_wide";
+    case KernelVariant::Tiled64x64RegisterK16WideCN:
+        return "gemm_sycl_register_64x64_k16_wide_cn";
+    case KernelVariant::Tiled64x64RegisterK16WideNC:
+        return "gemm_sycl_register_64x64_k16_wide_nc";
+    case KernelVariant::Tiled128x32RegisterK16WideNC:
+        return "gemm_sycl_register_128x32_k16_wide_nc";
+    case KernelVariant::Tiled32x128RegisterK16WideCN:
+        return "gemm_sycl_register_32x128_k16_wide_cn";
     case KernelVariant::Tiled32x128RegisterK16:
         return "gemm_sycl_register_32x128_k16";
     case KernelVariant::Tiled32x128RegisterK16TN:
@@ -250,6 +263,18 @@ inline bool kernel_variant_matches_name(KernelVariant variant, const std::string
     case KernelVariant::Tiled64x64RegisterK16Wide:
         return name == "register64x64k16wide" || name == "reg64x64k16wide" ||
             name == "64x64x16wide";
+    case KernelVariant::Tiled64x64RegisterK16WideCN:
+        return name == "register64x64k16widecn" || name == "reg64x64k16widecn" ||
+            name == "64x64x16wide_cn";
+    case KernelVariant::Tiled64x64RegisterK16WideNC:
+        return name == "register64x64k16widenc" || name == "reg64x64k16widenc" ||
+            name == "64x64x16wide_nc";
+    case KernelVariant::Tiled128x32RegisterK16WideNC:
+        return name == "register128x32k16widenc" || name == "reg128x32k16widenc" ||
+            name == "128x32x16wide_nc";
+    case KernelVariant::Tiled32x128RegisterK16WideCN:
+        return name == "register32x128k16widecn" || name == "reg32x128k16widecn" ||
+            name == "32x128x16wide_cn";
     case KernelVariant::Tiled32x128RegisterK16:
         return name == "register32x128k16" || name == "reg32x128k16" || name == "32x128x16";
     case KernelVariant::Tiled32x128RegisterK16TN:
@@ -262,7 +287,7 @@ inline bool kernel_variant_matches_name(KernelVariant variant, const std::string
 }
 
 inline KernelVariant forced_kernel_variant() {
-    const char* raw = std::getenv("BATCHLAS_GEMM_SYCL_KERNEL");
+    const char* raw = batchlas::settings().selection.gemm_sycl_kernel.get();
     if (!raw || raw[0] == '\0') {
         return KernelVariant::Direct;
     }
@@ -307,6 +332,10 @@ inline KernelVariant forced_kernel_variant() {
                                   KernelVariant::Tiled128x64RegisterK32LargeTT4x8U2,
                                   KernelVariant::Tiled128x128RegisterK8,
                                   KernelVariant::Tiled64x64RegisterK16Wide,
+                                  KernelVariant::Tiled64x64RegisterK16WideCN,
+                                  KernelVariant::Tiled64x64RegisterK16WideNC,
+                                  KernelVariant::Tiled128x32RegisterK16WideNC,
+                                  KernelVariant::Tiled32x128RegisterK16WideCN,
                                   KernelVariant::Tiled32x128RegisterK16,
                                   KernelVariant::Tiled32x128RegisterK16TN,
                                   KernelVariant::Tiled32x128RegisterK16TT}) {
@@ -318,8 +347,10 @@ inline KernelVariant forced_kernel_variant() {
     return KernelVariant::Direct;
 }
 
+// The presence half of the same field forced_kernel_variant() parses, so the
+// two can no longer be handed different strings.
 inline bool has_forced_kernel_variant() {
-    const char* raw = std::getenv("BATCHLAS_GEMM_SYCL_KERNEL");
+    const char* raw = batchlas::settings().selection.gemm_sycl_kernel.get();
     return raw && raw[0] != '\0';
 }
 
@@ -446,6 +477,24 @@ KernelVariant select_kernel_variant(const MatrixView<T, MatrixFormat::Dense>& A,
     const int max_dim = std::max({m, n, k});
     const int min_dim = std::min({m, n, k});
     if (transA != Transpose::NoTrans || transB != Transpose::NoTrans) {
+        // The wide-scalar transposed panel tiles, COMPLEX ONLY. double is
+        // excluded on measurement, not on principle: on the same cells the tile
+        // runs at 0.92-1.00x of Tiled16, which is already 1.11x of cuBLAS there,
+        // so there is nothing to win. float keeps its own 128x32K32 family.
+        // The arm here is Tiled16, never the vendor: preferred() refuses complex,
+        // so a complex shape only reaches this function in a vendor-free build or
+        // under a forced BATCHLAS_GEMM_VARIANT=sycl.
+        // evidence: docs/perf/gemm.md#wide-scalar-transposed-tiles
+        if constexpr (is_std_complex_v<T>) {
+            switch (wide_transposed_tile_for(transA, transB, m, n, k, A.batch_size())) {
+            case WideTransposedTile::NC128x32:
+                return KernelVariant::Tiled128x32RegisterK16WideNC;
+            case WideTransposedTile::CN32x128:
+                return KernelVariant::Tiled32x128RegisterK16WideCN;
+            case WideTransposedTile::None:
+                break;
+            }
+        }
         if constexpr (std::is_same_v<T, float>) {
             if (transA == Transpose::Trans && transB == Transpose::NoTrans && m >= 128 && n >= 32 && k >= 128) {
                 return KernelVariant::Tiled128x32RegisterK32TN;
@@ -552,18 +601,18 @@ Event gemm_custom(Queue& ctx,
                   ComputePrecision precision) {
     static_cast<void>(precision);
     if (A.batch_size() != B.batch_size() || A.batch_size() != C.batch_size()) {
-        throw std::runtime_error("GEMM SYCL custom path requires matching batch sizes");
+        throw batchlas::invalid_argument("GEMM SYCL custom path requires matching batch sizes");
     }
 
     const auto [m, k] = get_effective_dims(A, transA);
     const auto [k_b, n] = get_effective_dims(B, transB);
     if (k != k_b || C.rows() != m || C.cols() != n) {
-        throw std::runtime_error("GEMM SYCL custom path received incompatible matrix dimensions");
+        throw batchlas::invalid_argument("GEMM SYCL custom path received incompatible matrix dimensions");
     }
 
     const KernelVariant variant = select_kernel_variant(A, B, C, transA, transB);
     if (is_experimental_kernel_variant(variant) && !experimental_kernel_variants_enabled()) {
-        throw std::runtime_error(
+        throw batchlas::unsupported(
             "Requested experimental GEMM SYCL kernel variant without BATCHLAS_GEMM_EXPERIMENTAL enabled");
     }
 
@@ -722,6 +771,43 @@ Event gemm_custom(Queue& ctx,
             }
             return launch_register_64x64_k16_wide<T, false>(
                 ctx, A, B, C, alpha, beta, kernel_trace_name);
+        }
+        return launch_tiled<T, 16>(ctx, A, B, C, alpha, beta, transA, transB);
+    // GUARD, as for every hard-wired-transpose variant above, with the one
+    // widening wide_trans_matches<T> licenses: for a REAL scalar conj is the
+    // identity, so a ConjTrans instantiation is a correct Trans. For complex it
+    // is not, and running it unguarded would silently drop the conjugation and
+    // return a plausible wrong matrix. All four are forceable by name, so they
+    // fall back rather than compute the wrong thing.
+    case KernelVariant::Tiled64x64RegisterK16WideCN:
+        if (wide_trans_matches<T>(transA, Transpose::ConjTrans) && transB == Transpose::NoTrans) {
+            return launch_wide_transposed<
+                T, WideTile{64, 64, 16, 4, 4, Transpose::ConjTrans, Transpose::NoTrans}>(
+                ctx, A, B, C, alpha, beta, kernel_trace_name(variant));
+        }
+        return launch_tiled<T, 16>(ctx, A, B, C, alpha, beta, transA, transB);
+    case KernelVariant::Tiled64x64RegisterK16WideNC:
+        if (transA == Transpose::NoTrans && wide_trans_matches<T>(transB, Transpose::ConjTrans)) {
+            return launch_wide_transposed<
+                T, WideTile{64, 64, 16, 4, 4, Transpose::NoTrans, Transpose::ConjTrans}>(
+                ctx, A, B, C, alpha, beta, kernel_trace_name(variant));
+        }
+        return launch_tiled<T, 16>(ctx, A, B, C, alpha, beta, transA, transB);
+    // The potrf trailing update: m_trailing x W x nb with W = 32, so a 32-wide
+    // n tile wastes nothing. evidence: docs/perf/gemm.md#wide-scalar-transposed-tiles
+    case KernelVariant::Tiled128x32RegisterK16WideNC:
+        if (transA == Transpose::NoTrans && wide_trans_matches<T>(transB, Transpose::ConjTrans)) {
+            return launch_wide_transposed<
+                T, WideTile{128, 32, 16, 4, 4, Transpose::NoTrans, Transpose::ConjTrans}>(
+                ctx, A, B, C, alpha, beta, kernel_trace_name(variant));
+        }
+        return launch_tiled<T, 16>(ctx, A, B, C, alpha, beta, transA, transB);
+    // The geqrf panel update W1 = V^H A22: nb x n2 x m_panel with nb = 32.
+    case KernelVariant::Tiled32x128RegisterK16WideCN:
+        if (wide_trans_matches<T>(transA, Transpose::ConjTrans) && transB == Transpose::NoTrans) {
+            return launch_wide_transposed<
+                T, WideTile{32, 128, 16, 4, 4, Transpose::ConjTrans, Transpose::NoTrans}>(
+                ctx, A, B, C, alpha, beta, kernel_trace_name(variant));
         }
         return launch_tiled<T, 16>(ctx, A, B, C, alpha, beta, transA, transB);
     case KernelVariant::Tiled32x128RegisterK16:

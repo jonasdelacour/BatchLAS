@@ -66,10 +66,10 @@ Event launch_register_128x32_k32_persistent(Queue& ctx,
         static_cast<void>(transA);
         static_cast<void>(transB);
         static_cast<void>(kernel_trace_name);
-        throw std::runtime_error("Experimental persistent GEMM is currently only implemented for float");
+        throw batchlas::unsupported("Experimental persistent GEMM is currently only implemented for float");
     } else {
         if (!can_use_persistent_128x32x32_experimental(A, B, C, transA, transB)) {
-            throw std::runtime_error("Experimental persistent GEMM requires large aligned NN float inputs");
+            throw batchlas::unsupported("Experimental persistent GEMM requires large aligned NN float inputs");
         }
 
         using Policy = RegisterTilePolicy<128, 32, 32, 4, 4, 4, 4, 2, 2>;

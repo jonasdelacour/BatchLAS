@@ -17,7 +17,7 @@ namespace batchlas
                                    const MatrixView<T, MatrixFormat::Dense> &A,
                                    const Span<float_t<T>> norms) {
         if (A.rows() != A.cols()) {
-            throw std::runtime_error("norm: Spectral norm requires square symmetric/Hermitian matrices");
+            throw batchlas::invalid_argument("norm: Spectral norm requires square symmetric/Hermitian matrices");
         }
 
         using Real = typename base_type<T>::type;
@@ -92,7 +92,7 @@ namespace batchlas
         #if BATCHLAS_HAS_HOST_BACKEND
         return norm_spectral_vendor_impl<Backend::NETLIB>(ctx, A, norms);
         #else
-        throw std::runtime_error("norm: Spectral norm requires a vendor backend (CUDA/ROCM/MKL/NETLIB)");
+        throw batchlas::unsupported("norm: Spectral norm requires a vendor backend (CUDA/ROCM/MKL/NETLIB)");
         #endif
     }
 
@@ -192,7 +192,7 @@ namespace batchlas
     {
         if (norm_type == NormType::Spectral) {
             if constexpr (MF != MatrixFormat::Dense) {
-                throw std::runtime_error("norm: Spectral norm only supported for dense symmetric/Hermitian matrices");
+                throw batchlas::unsupported("norm: Spectral norm only supported for dense symmetric/Hermitian matrices");
             } else {
                 return norm_spectral_impl(ctx, A, norms);
             }
@@ -209,7 +209,7 @@ namespace batchlas
         UnifiedVector<float_t<T>> norms(A.batch_size());
         if (norm_type == NormType::Spectral) {
             if constexpr (MF != MatrixFormat::Dense) {
-                throw std::runtime_error("norm: Spectral norm only supported for dense symmetric/Hermitian matrices");
+                throw batchlas::unsupported("norm: Spectral norm only supported for dense symmetric/Hermitian matrices");
             } else {
                 norm_spectral_impl(ctx, A, norms.to_span()).wait();
             }

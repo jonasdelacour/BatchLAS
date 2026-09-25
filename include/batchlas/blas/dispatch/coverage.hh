@@ -48,6 +48,7 @@
 // EVERY TU in the process agrees on it, which is not something a library can
 // enforce on its consumers. The runtime gate has no such requirement.
 
+#include <batchlas/export.hh>
 #include <cstdint>
 #include <string>
 
@@ -64,16 +65,16 @@ namespace batchlas::dispatch::coverage {
 // route" cannot distinguish "nothing native serves this shape" from "something
 // does, but the vendor was preferred" -- and recording either as a definite
 // answer would be a claim the caller cannot support.
-void record(Op op, ScalarKind scalar, Backend backend, const OpShape& shape,
-            Route chosen, bool native_route_existed, int native_route_supported);
+BATCHLAS_API void record(Op op, ScalarKind scalar, Backend backend, const OpShape& shape,
+                         Route chosen, bool native_route_existed, int native_route_supported);
 
 // A call that found no route at all. Recorded separately because it is the row
 // that matters most: it is a gap, not a preference.
-void record_miss(Op op, ScalarKind scalar, Backend backend, const char* library);
+BATCHLAS_API void record_miss(Op op, ScalarKind scalar, Backend backend, const char* library);
 
 // The static table: what routes this build contains, independent of any run.
 // Returns CSV with a header row.
-std::string static_table();
+BATCHLAS_API std::string static_table();
 
 // Set once, from $BATCHLAS_COVERAGE_OUT, by a dynamic initialiser in
 // coverage.cc. A plain bool rather than a function-local static so the hot path

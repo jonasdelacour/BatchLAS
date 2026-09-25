@@ -58,20 +58,20 @@ inline void validate_gebrd_dims(const MatrixView<T, MatrixFormat::Dense>& a,
                                 const VectorView<T>& taup,
                                 const char* where) {
     if (a.rows() < a.cols()) {
-        throw std::invalid_argument(std::string(where) + ": A must satisfy rows >= cols");
+        throw batchlas::invalid_argument(std::string(where) + ": A must satisfy rows >= cols");
     }
 
     const int32_t k = static_cast<int32_t>(a.cols());
     const int32_t need_e = std::max<int32_t>(0, k - 1);
     if (d.size() != k || e.size() != need_e || tauq.size() != k || taup.size() != k) {
-        throw std::invalid_argument(std::string(where) + ": invalid d/e/tau sizes");
+        throw batchlas::invalid_argument(std::string(where) + ": invalid d/e/tau sizes");
     }
     if (a.batch_size() != d.batch_size() || a.batch_size() != e.batch_size() ||
         a.batch_size() != tauq.batch_size() || a.batch_size() != taup.batch_size()) {
-        throw std::invalid_argument(std::string(where) + ": batch size mismatch");
+        throw batchlas::invalid_argument(std::string(where) + ": batch size mismatch");
     }
     if (a.batch_size() < 1) {
-        throw std::invalid_argument(std::string(where) + ": invalid batch size");
+        throw batchlas::invalid_argument(std::string(where) + ": invalid batch size");
     }
 }
 
@@ -121,13 +121,13 @@ Event gebrd_blocked_real(Queue& ctx,
     validate_gebrd_dims(a_in, d_out, e_out, tauq_out, taup_out, "gebrd_blocked");
 
     if (!ctx.in_order()) {
-        throw std::runtime_error("gebrd_blocked: requires an in-order Queue");
+        throw batchlas::invalid_argument("gebrd_blocked: requires an in-order Queue");
     }
 
     constexpr int32_t MaxPanelNB = 64;
     const int32_t nb = gebrd_blocked_resolved_nb(block_size);
     if (nb > MaxPanelNB) {
-        throw std::invalid_argument("gebrd_blocked: block_size > 64 is not supported");
+        throw batchlas::invalid_argument("gebrd_blocked: block_size > 64 is not supported");
     }
 
     auto& a = const_cast<MatrixView<T, MatrixFormat::Dense>&>(a_in);
@@ -148,8 +148,10 @@ Event gebrd_blocked_real(Queue& ctx,
         const int32_t ib = std::min(nb, k_total - j0);
         auto x_panel = x_mat({j0, SliceEnd()}, {0, ib});
         auto y_panel = y_mat({j0, SliceEnd()}, {0, ib});
-        x_panel.fill_zeros(ctx);
-        y_panel.fill_zeros(ctx);
+        // (void) on an Event: deliberate. This Queue is in-order, so the next submission
+        // is already ordered after this one and the Event carries nothing the caller needs.
+        (void)x_panel.fill_zeros(ctx);
+        (void)y_panel.fill_zeros(ctx);
 
         ctx->submit([&](sycl::handler& h) {
             auto A = a.kernel_view();
@@ -361,12 +363,12 @@ Event gebrd_blocked_real(Queue& ctx,
             auto x2 = x_mat({j2, SliceEnd()}, {0, ib});
             auto u2 = a({j0, j2}, {j2, SliceEnd()});
 
-            gemm<B>(ctx, v2, y2, a22, {.alpha = T(-1), .beta = T(1), .transB = Transpose::Trans});
-            gemm<B>(ctx, x2, u2, a22, {.alpha = T(-1), .beta = T(1)});
+            (void)gemm<B>(ctx, v2, y2, a22, {.alpha = T(-1), .beta = T(1), .transB = Transpose::Trans});
+            (void)gemm<B>(ctx, x2, u2, a22, {.alpha = T(-1), .beta = T(1)});
         }
     }
 
-    gebrd_restore_bidiag_upper(ctx, a, d_out, e_out);
+    (void)gebrd_restore_bidiag_upper(ctx, a, d_out, e_out);
     return ctx.get_event();
 }
 
@@ -382,7 +384,7 @@ Event gebrd_blocked(Queue& ctx,
                     const Span<std::byte>& ws,
                     int32_t block_size) {
     if constexpr (internal::is_complex<T>::value) {
-        throw std::runtime_error("gebrd_blocked: complex types are not implemented");
+        throw batchlas::unsupported("gebrd_blocked: complex types are not implemented");
     } else {
         return gebrd_blocked_real<B, T>(ctx, a_in, d_out, e_out, tauq_out, taup_out, ws, block_size);
     }

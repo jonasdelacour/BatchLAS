@@ -45,8 +45,10 @@ namespace batchlas {
         BumpAllocator pool(workspace);
         auto ws = inv_layout<B, T>(ctx, pool, A);
         MatrixView<T, MatrixFormat::Dense>::copy(ctx, ws.Acopy, A);
-        getrf<B>(ctx, ws.Acopy, ws.pivots, ws.getrf_ws);
-        getri<B>(ctx, ws.Acopy, Ainv, ws.pivots, ws.getri_ws);
+        // (void) on an Event: deliberate. This Queue is in-order, so the next submission
+        // is already ordered after this one and the Event carries nothing the caller needs.
+        (void)getrf<B>(ctx, ws.Acopy, ws.pivots, ws.getrf_ws);
+        (void)getri<B>(ctx, ws.Acopy, Ainv, ws.pivots, ws.getri_ws);
         return ctx.get_event();
     }
 
@@ -66,7 +68,7 @@ namespace batchlas {
         // queue and outlives the call; the next lease reuses it, which the
         // in-order queue orders behind this work.
         auto workspace = ctx.workspace(inv_buffer_size<B>(ctx, A));
-        inv<B>(ctx, A, Aout.view(), workspace.span());
+        (void)inv<B>(ctx, A, Aout.view(), workspace.span());
         return Aout;
     }
 

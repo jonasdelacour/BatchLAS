@@ -89,6 +89,15 @@ if(NOT BATCHLAS_OPENBLAS_CORETYPE STREQUAL "")
         "set BATCHLAS_BLAS_HEALTH=off to silence it, =error to make it throw.")
 endif()
 
+# A split build (BATCHLAS_MONOLITHIC_LIBRARY=OFF) installs the 14 component .so
+# into a SECOND export set so BatchLAS::batchlas stays the only name worth
+# spelling. It has to be included FIRST: BatchLAS::batchlas' link interface
+# names those imported targets, and the export CMake generates for a foreign
+# export set only checks that they already exist. A monolithic install ships no
+# such file, hence the EXISTS guard rather than an unconditional include.
+if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/BatchLASComponentTargets.cmake")
+    include("${CMAKE_CURRENT_LIST_DIR}/BatchLASComponentTargets.cmake")
+endif()
 include("${CMAKE_CURRENT_LIST_DIR}/BatchLASTargets.cmake")
 
 # BatchLAS ships no independently usable components (every component .so has

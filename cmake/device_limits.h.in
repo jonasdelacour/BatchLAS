@@ -23,7 +23,11 @@ inline constexpr std::array<DetectedDeviceLimit, @BATCHLAS_DEVICE_LIMIT_ENTRY_CO
 @BATCHLAS_DEVICE_LIMIT_ENTRY_LINES@}};
 
 inline constexpr std::size_t DETECTED_DEVICE_COUNT = DETECTED_DEVICES.size();
-inline constexpr std::uint64_t MIN_GPU_LOCAL_MEM_BYTES = @BATCHLAS_DETECTED_DEVICE_LIMIT_MIN_GPU_LOCAL_MEM_BYTES@ull;
+
+// The device-GEMM tile cap. Per-architecture table value, NOT any device's reported
+// capacity, and no resident capacity may be computed from it: a capacity must hold on
+// the device the process opens, so those read DeviceProperty::LOCAL_MEM_SIZE at run time
+// (src/util/resident_capacity.hh). evidence: docs/perf/gemm.md#the-subgroup-workspace-budget
 inline constexpr std::uint64_t MIN_GPU_SUBGROUP_WORKSPACE_BUDGET_BYTES =
     @BATCHLAS_DETECTED_DEVICE_LIMIT_MIN_GPU_SUBGROUP_WORKSPACE_BUDGET_BYTES@ull;
 inline constexpr std::uint32_t MIN_GPU_SAFE_SUBGROUPS_PER_WORKGROUP =

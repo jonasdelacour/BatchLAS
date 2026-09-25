@@ -19,9 +19,7 @@
 
 namespace {
 
-// ---------------------------------------------------------------------------
 // SYCL queue helpers
-// ---------------------------------------------------------------------------
 static sycl::queue make_gpu_queue() {
     try {
         return sycl::queue{sycl::gpu_selector_v};
@@ -30,14 +28,12 @@ static sycl::queue make_gpu_queue() {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Kernel: test SubGroupPartition identity functions
 //   get_local_linear_id      == lane within chunk  [0, P)
 //   get_local_linear_range   == P
 //   get_group_linear_id      == chunk index within sub-group
 //   get_group_linear_range   == sg_size / P
 //   leader()                 == (lane_within_chunk == 0)
-// ---------------------------------------------------------------------------
 template <size_t P, size_t SG>
 void test_partition_identity(sycl::queue& q) {
     constexpr int N = static_cast<int>(SG);
@@ -88,11 +84,9 @@ void test_partition_identity(sycl::queue& q) {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Kernel: test permute_group_by_xor (XOR shuffle within chunk)
 //   Each lane i XORs with mask 1: result should be value from lane (i ^ 1).
 //   Since i ^ 1 stays within the same chunk (mask < P), this is intra-chunk.
-// ---------------------------------------------------------------------------
 template <size_t P, size_t SG>
 void test_permute_xor(sycl::queue& q) {
     constexpr int N = static_cast<int>(SG);
@@ -126,10 +120,8 @@ void test_permute_xor(sycl::queue& q) {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Kernel: test select_from_group (broadcast a specific lane's value)
 //   Every lane reads lane 0's value (the leader).  Expected = base of chunk.
-// ---------------------------------------------------------------------------
 template <size_t P, size_t SG>
 void test_select_from_group(sycl::queue& q) {
     constexpr int N = static_cast<int>(SG);
@@ -159,12 +151,10 @@ void test_select_from_group(sycl::queue& q) {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Kernel: test shift_group_left (shift within sub-group)
 //   shift_group_left(part, v, 1): lane i reads lane (i+1)'s value.
 //   Last lane of each chunk reads from across the boundary; result undefined
 //   by SYCL spec — we check only non-boundary lanes.
-// ---------------------------------------------------------------------------
 template <size_t P, size_t SG>
 void test_shift_left(sycl::queue& q) {
     constexpr int N = static_cast<int>(SG);
@@ -194,11 +184,9 @@ void test_shift_left(sycl::queue& q) {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Kernel: test in-partition butterfly reduction using permute_group_by_xor
 //   Each chunk reduces its lanes' values (0..P-1 relative ids) to their sum.
 //   Expected sum for chunk k = sum(k*P .. k*P + P - 1) = k*P*P + P*(P-1)/2.
-// ---------------------------------------------------------------------------
 template <size_t P, size_t SG>
 void test_butterfly_reduce(sycl::queue& q) {
     constexpr int N = static_cast<int>(SG);
@@ -232,10 +220,8 @@ void test_butterfly_reduce(sycl::queue& q) {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Kernel: test group_barrier is a no-op (doesn't deadlock, pass-through)
 //   Write a value, call group_barrier, read it back unchanged.
-// ---------------------------------------------------------------------------
 template <size_t P, size_t SG>
 void test_group_barrier(sycl::queue& q) {
     constexpr int N = static_cast<int>(SG);
@@ -264,10 +250,8 @@ void test_group_barrier(sycl::queue& q) {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Kernel: full end-to-end — replicate what the CTA kernels do:
 //   per-partition sum-reduce of floating-point values using butterfly.
-// ---------------------------------------------------------------------------
 template <size_t P, size_t SG>
 void test_float_butterfly_reduce(sycl::queue& q) {
     constexpr int N = static_cast<int>(SG);
@@ -305,9 +289,7 @@ void test_float_butterfly_reduce(sycl::queue& q) {
     }
 }
 
-// ---------------------------------------------------------------------------
 // Fixture + typed test macros  
-// ---------------------------------------------------------------------------
 class SgCompatTest : public ::testing::Test {
 protected:
     sycl::queue q = make_gpu_queue();

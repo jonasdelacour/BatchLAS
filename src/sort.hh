@@ -14,7 +14,7 @@ Event permute(Queue& ctx, VectorView<T> data, VectorView<K> indices){
     auto batch_size = data.batch_size();
     // Since we use sycl::ext::oneapi::experimental::gather, we need to ensure data and indices use unit increments.
     if(data.inc() != 1 || indices.inc() != 1){
-        throw std::runtime_error("permute: data and indices must have unit increment (inc=1)");
+        throw batchlas::invalid_argument("permute: data and indices must have unit increment (inc=1)");
     }
 
     ctx -> submit([&](sycl::handler& h) {
@@ -44,10 +44,10 @@ Event argsort_active(Queue& ctx,
     const auto n = data.size();
     const auto batch_size = data.batch_size();
     if (data.inc() != 1 || indices.inc() != 1) {
-        throw std::runtime_error("argsort_active: data and indices must have unit increment (inc=1)");
+        throw batchlas::invalid_argument("argsort_active: data and indices must have unit increment (inc=1)");
     }
     if (static_cast<int64_t>(active_lengths.size()) < batch_size) {
-        throw std::runtime_error("argsort_active: active_lengths must cover every batch item");
+        throw batchlas::invalid_argument("argsort_active: active_lengths must cover every batch item");
     }
 
     ctx->submit([&](sycl::handler& h) {
@@ -132,10 +132,10 @@ Event permuted_copy(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& src, c
     auto n = src.rows();
     auto batch_size = src.batch_size();
     if(src.inc() != 1 || dst.inc() != 1 || indices.inc() != 1){
-        throw std::runtime_error("permute: data and indices must have unit increment (inc=1)");
+        throw batchlas::invalid_argument("permute: data and indices must have unit increment (inc=1)");
     }
     if(src.rows() != dst.rows() || src.cols() != dst.cols() || src.batch_size() != dst.batch_size() || src.batch_size() != indices.batch_size()){
-        throw std::runtime_error("permute: src, dst and indices must have the same dimensions");
+        throw batchlas::invalid_argument("permute: src, dst and indices must have the same dimensions");
     }
     auto total_work_items = src.rows() * src.cols() * batch_size;
     bool use_default_work_group_size = (params.work_group_size_range.first == -1 && params.work_group_size_range.second == -1);
@@ -179,13 +179,13 @@ Event permuted_copy_active(Queue& ctx,
     auto n = src.rows();
     auto batch_size = src.batch_size();
     if (src.inc() != 1 || dst.inc() != 1 || indices.inc() != 1) {
-        throw std::runtime_error("permuted_copy_active: src, dst and indices must have unit increment");
+        throw batchlas::invalid_argument("permuted_copy_active: src, dst and indices must have unit increment");
     }
     if (src.rows() != dst.rows() || src.cols() != dst.cols() || src.batch_size() != dst.batch_size() || src.batch_size() != indices.batch_size()) {
-        throw std::runtime_error("permuted_copy_active: src, dst and indices must have the same dimensions");
+        throw batchlas::invalid_argument("permuted_copy_active: src, dst and indices must have the same dimensions");
     }
     if (static_cast<int64_t>(active_lengths.size()) < batch_size) {
-        throw std::runtime_error("permuted_copy_active: active_lengths must cover every batch item");
+        throw batchlas::invalid_argument("permuted_copy_active: active_lengths must cover every batch item");
     }
 
     auto total_work_items = src.rows() * src.cols() * batch_size;
@@ -229,17 +229,17 @@ Event permuted_copy_active_2d(Queue& ctx,
     auto cols = src.cols();
     auto batch_size = src.batch_size();
     if (src.inc() != 1 || dst.inc() != 1 || row_indices.inc() != 1 || col_indices.inc() != 1) {
-        throw std::runtime_error("permuted_copy_active_2d: src, dst, and index vectors must have unit increment");
+        throw batchlas::invalid_argument("permuted_copy_active_2d: src, dst, and index vectors must have unit increment");
     }
     if (src.rows() != dst.rows() || src.cols() != dst.cols() || src.batch_size() != dst.batch_size() ||
         src.batch_size() != row_indices.batch_size() || src.batch_size() != col_indices.batch_size()) {
-        throw std::runtime_error("permuted_copy_active_2d: src, dst, row_indices and col_indices must have matching dimensions");
+        throw batchlas::invalid_argument("permuted_copy_active_2d: src, dst, row_indices and col_indices must have matching dimensions");
     }
     if (row_indices.size() < rows || col_indices.size() < cols) {
-        throw std::runtime_error("permuted_copy_active_2d: index vectors must cover the active matrix dimensions");
+        throw batchlas::invalid_argument("permuted_copy_active_2d: index vectors must cover the active matrix dimensions");
     }
     if (static_cast<int64_t>(active_lengths.size()) < batch_size) {
-        throw std::runtime_error("permuted_copy_active_2d: active_lengths must cover every batch item");
+        throw batchlas::invalid_argument("permuted_copy_active_2d: active_lengths must cover every batch item");
     }
 
     auto total_work_items = rows * cols * batch_size;
@@ -293,7 +293,7 @@ Event permute(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& data, const 
     auto n = data.rows();
     auto batch_size = data.batch_size();
     if(data.inc() != 1 || indices.inc() != 1){
-        throw std::runtime_error("permute: data and indices must have unit increment (inc=1)");
+        throw batchlas::invalid_argument("permute: data and indices must have unit increment (inc=1)");
     }
 
     ctx -> submit([&](sycl::handler& h) {
@@ -360,10 +360,10 @@ Event permute_active(Queue& ctx,
     const auto n = data.size();
     const auto batch_size = data.batch_size();
     if (data.inc() != 1 || indices.inc() != 1) {
-        throw std::runtime_error("permute_active: data and indices must have unit increment (inc=1)");
+        throw batchlas::invalid_argument("permute_active: data and indices must have unit increment (inc=1)");
     }
     if (static_cast<int64_t>(active_lengths.size()) < batch_size) {
-        throw std::runtime_error("permute_active: active_lengths must cover every batch item");
+        throw batchlas::invalid_argument("permute_active: active_lengths must cover every batch item");
     }
 
     ctx->submit([&](sycl::handler& h) {
@@ -390,7 +390,7 @@ Event argsort(Queue& ctx, VectorView<T> data, VectorView<K> indices, SortOrder o
     auto n = data.size();
     auto batch_size = data.batch_size();
     if(data.inc() != 1 || indices.inc() != 1){
-        throw std::runtime_error("argsort: data and indices must have unit increment (inc=1)");
+        throw batchlas::invalid_argument("argsort: data and indices must have unit increment (inc=1)");
     }
 
     ctx -> submit([&](sycl::handler& h) {
@@ -465,11 +465,13 @@ Event sort(Queue& ctx, const VectorView<T>& eigs, const MatrixView<T, MatrixForm
         eigs_unit = VectorView<T>(tmp);
     }
     auto permutation = VectorView<int32_t>(pool.allocate<int32_t>(ctx, eigs.size() * eigs.batch_size()).data(), eigs.size(), eigs.batch_size(), 1, eigs.size());
-    argsort(ctx, eigs_unit, permutation, order, true);
-    permute(ctx, eigs, permutation);
+    // (void) on an Event: deliberate. This Queue is in-order, so the next submission
+    // is already ordered after this one and the Event carries nothing the caller needs.
+    (void)argsort(ctx, eigs_unit, permutation, order, true);
+    (void)permute(ctx, eigs, permutation);
     if (jobz == JobType::EigenVectors){
         auto temp_eigvects = MatrixView<T, MatrixFormat::Dense>(pool.allocate<T>(ctx, eigvects.rows() * eigvects.cols() * eigvects.batch_size()).data(), eigvects.rows(), eigvects.cols(), eigvects.rows(), eigvects.rows() * eigvects.cols(), eigvects.batch_size());
-        permute(ctx, eigvects, temp_eigvects, permutation);
+        (void)permute(ctx, eigvects, temp_eigvects, permutation);
     }
     return ctx.get_event();
 }
@@ -479,7 +481,7 @@ Event sort(Queue& ctx, Span<T> W, const MatrixView<T, MatrixFormat::Dense>& V, J
     const auto batch_size = V.batch_size();
     const auto n_total = W.size();
     if (batch_size <= 0 || (n_total % batch_size) != 0) {
-        throw std::runtime_error("sort: invalid batch layout for eigenvalues span");
+        throw batchlas::invalid_argument("sort: invalid batch layout for eigenvalues span");
     }
     const auto n = n_total / batch_size;
     return sort(ctx, VectorView<T>(W.data(), static_cast<int>(n), batch_size, 1, static_cast<int>(n)), V, jobz, order, workspace);
@@ -523,7 +525,7 @@ size_t sort_buffer_size(Queue& ctx, Span<T> W, const MatrixView<T, MatrixFormat:
         batch = 1;
     }
     if (batch <= 0 || n_total < 0) {
-        throw std::runtime_error("sort_buffer_size: invalid batch layout for eigenvalues span");
+        throw batchlas::invalid_argument("sort_buffer_size: invalid batch layout for eigenvalues span");
     }
 
     size_t size = 0;

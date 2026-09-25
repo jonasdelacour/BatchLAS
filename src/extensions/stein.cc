@@ -118,17 +118,17 @@ Event stein(Queue& ctx,
     const int64_t k = static_cast<int64_t>(k_in);
     const int64_t batch_size = d.batch_size();
 
-    if (n < 1) throw std::runtime_error("stein: n must be positive");
-    if (k < 1) throw std::runtime_error("stein: k must be positive");
+    if (n < 1) throw batchlas::invalid_argument("stein: n must be positive");
+    if (k < 1) throw batchlas::invalid_argument("stein: k must be positive");
     if (e.size() < n - 1) {
-        throw std::runtime_error("stein: e must have at least n-1 entries per batch item");
+        throw batchlas::invalid_argument("stein: e must have at least n-1 entries per batch item");
     }
     if (Z.rows() < n || Z.cols() < k) {
-        throw std::runtime_error("stein: Z must be at least n x k");
+        throw batchlas::invalid_argument("stein: Z must be at least n x k");
     }
-    if (w.size() < k) throw std::runtime_error("stein: w must hold k eigenvalues");
+    if (w.size() < k) throw batchlas::invalid_argument("stein: w must hold k eigenvalues");
     if (!counts.empty() && counts.size() < static_cast<size_t>(batch_size)) {
-        throw std::runtime_error("stein: counts must cover every batch item");
+        throw batchlas::invalid_argument("stein: counts must cover every batch item");
     }
 
     // Null means "no per-item count": every item uses the full capacity k, which

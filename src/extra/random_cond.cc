@@ -99,7 +99,7 @@ namespace detail {
 
         const long double log10_n = std::log10(static_cast<long double>(n));
         if (static_cast<long double>(log10_kappaF) < log10_n) {
-            throw std::runtime_error("build_spectrum_kappaF: log10_kappaF must be >= log10(n)");
+            throw batchlas::invalid_argument("build_spectrum_kappaF: log10_kappaF must be >= log10(n)");
         }
 
         const long double target = std::log(10.0L) * static_cast<long double>(log10_kappaF);
@@ -147,7 +147,7 @@ namespace detail {
             case NormType::Frobenius:
                 return build_spectrum_kappaF<T>(n, log10_kappa);
             default:
-                throw std::runtime_error(std::string(func_name) + ": metric must be NormType::Spectral or NormType::Frobenius");
+                throw batchlas::invalid_argument(std::string(func_name) + ": metric must be NormType::Spectral or NormType::Frobenius");
         }
     }
 
@@ -260,10 +260,10 @@ Matrix<T, MatrixFormat::Dense> random_with_log10_cond_metric(Queue &ctx,
     using real_t = float_t<T>;
 
     if (n <= 0 || batch_size <= 0) {
-        throw std::runtime_error("random_with_log10_cond_metric: n and batch_size must be positive");
+        throw batchlas::invalid_argument("random_with_log10_cond_metric: n and batch_size must be positive");
     }
     if (log10_kappa < real_t(0)) {
-        throw std::runtime_error("random_with_log10_cond_metric: log10_kappa must be non-negative");
+        throw batchlas::invalid_argument("random_with_log10_cond_metric: log10_kappa must be non-negative");
     }
 
     if constexpr (B == Backend::NETLIB) {
@@ -293,9 +293,11 @@ Matrix<T, MatrixFormat::Dense> random_with_log10_cond_metric(Queue &ctx,
     Matrix<T> A(n, n, batch_size);
 
     // A = U * S * V^H
-    gemm<B>(ctx, U.view(), S.view(), tmp.view(), GemmOptions<T>{});
+    // (void) on an Event: deliberate. This Queue is in-order, so the next submission
+    // is already ordered after this one and the Event carries nothing the caller needs.
+    (void)gemm<B>(ctx, U.view(), S.view(), tmp.view(), GemmOptions<T>{});
     const Transpose v_trans = batchlas::is_std_complex_v<T> ? Transpose::ConjTrans : Transpose::Trans;
-    gemm<B>(ctx, tmp.view(), V.view(), A.view(), {.transB = v_trans});
+    (void)gemm<B>(ctx, tmp.view(), V.view(), A.view(), {.transB = v_trans});
     ctx.wait();
 
     return A;
@@ -312,10 +314,10 @@ Matrix<T, MatrixFormat::Dense> random_hermitian_with_log10_cond_metric(Queue &ct
                                                                        OrthoAlgorithm algo) {
     using real_t = float_t<T>;
     if (n <= 0 || batch_size <= 0) {
-        throw std::runtime_error("random_hermitian_with_log10_cond_metric: n and batch_size must be positive");
+        throw batchlas::invalid_argument("random_hermitian_with_log10_cond_metric: n and batch_size must be positive");
     }
     if (log10_kappa < real_t(0)) {
-        throw std::runtime_error("random_hermitian_with_log10_cond_metric: log10_kappa must be non-negative");
+        throw batchlas::invalid_argument("random_hermitian_with_log10_cond_metric: log10_kappa must be non-negative");
     }
 
     if constexpr (B == Backend::NETLIB) {
@@ -338,9 +340,9 @@ Matrix<T, MatrixFormat::Dense> random_hermitian_with_log10_cond_metric(Queue &ct
     Matrix<T> tmp(n, n, batch_size);
     Matrix<T> A(n, n, batch_size);
 
-    gemm<B>(ctx, Q.view(), D.view(), tmp.view(), GemmOptions<T>{});
+    (void)gemm<B>(ctx, Q.view(), D.view(), tmp.view(), GemmOptions<T>{});
     const Transpose q_trans = batchlas::is_std_complex_v<T> ? Transpose::ConjTrans : Transpose::Trans;
-    gemm<B>(ctx, tmp.view(), Q.view(), A.view(), {.transB = q_trans});
+    (void)gemm<B>(ctx, tmp.view(), Q.view(), A.view(), {.transB = q_trans});
     ctx.wait();
 
     return A;
@@ -357,13 +359,13 @@ Matrix<T, MatrixFormat::Dense> random_banded_with_log10_cond_metric(Queue &ctx,
                                                                     unsigned int seed) {
     using real_t = float_t<T>;
     if (n <= 0 || batch_size <= 0) {
-        throw std::runtime_error("random_banded_with_log10_cond_metric: n and batch_size must be positive");
+        throw batchlas::invalid_argument("random_banded_with_log10_cond_metric: n and batch_size must be positive");
     }
     if (kd < 0) {
-        throw std::runtime_error("random_banded_with_log10_cond_metric: kd must be non-negative");
+        throw batchlas::invalid_argument("random_banded_with_log10_cond_metric: kd must be non-negative");
     }
     if (log10_kappa < real_t(0)) {
-        throw std::runtime_error("random_banded_with_log10_cond_metric: log10_kappa must be non-negative");
+        throw batchlas::invalid_argument("random_banded_with_log10_cond_metric: log10_kappa must be non-negative");
     }
     if (kd >= n - 1) {
         return random_with_log10_cond_metric<B, T>(ctx, n, log10_kappa, metric, batch_size, seed);
@@ -385,9 +387,9 @@ Matrix<T, MatrixFormat::Dense> random_banded_with_log10_cond_metric(Queue &ctx,
     Matrix<T> tmp(n, n, batch_size);
     Matrix<T> A(n, n, batch_size);
 
-    gemm<B>(ctx, Q.view(), D.view(), tmp.view(), GemmOptions<T>{});
+    (void)gemm<B>(ctx, Q.view(), D.view(), tmp.view(), GemmOptions<T>{});
     const Transpose r_trans = batchlas::is_std_complex_v<T> ? Transpose::ConjTrans : Transpose::Trans;
-    gemm<B>(ctx, tmp.view(), R.view(), A.view(), {.transB = r_trans});
+    (void)gemm<B>(ctx, tmp.view(), R.view(), A.view(), {.transB = r_trans});
     ctx.wait();
 
     return A;
@@ -404,13 +406,13 @@ Matrix<T, MatrixFormat::Dense> random_hermitian_banded_with_log10_cond_metric(Qu
                                                                               unsigned int seed) {
     using real_t = float_t<T>;
     if (n <= 0 || batch_size <= 0) {
-        throw std::runtime_error("random_hermitian_banded_with_log10_cond_metric: n and batch_size must be positive");
+        throw batchlas::invalid_argument("random_hermitian_banded_with_log10_cond_metric: n and batch_size must be positive");
     }
     if (kd < 0) {
-        throw std::runtime_error("random_hermitian_banded_with_log10_cond_metric: kd must be non-negative");
+        throw batchlas::invalid_argument("random_hermitian_banded_with_log10_cond_metric: kd must be non-negative");
     }
     if (log10_kappa < real_t(0)) {
-        throw std::runtime_error("random_hermitian_banded_with_log10_cond_metric: log10_kappa must be non-negative");
+        throw batchlas::invalid_argument("random_hermitian_banded_with_log10_cond_metric: log10_kappa must be non-negative");
     }
     if (kd >= n - 1) {
         return random_hermitian_with_log10_cond_metric<B, T>(ctx, n, log10_kappa, metric, batch_size, seed);
@@ -432,9 +434,9 @@ Matrix<T, MatrixFormat::Dense> random_hermitian_banded_with_log10_cond_metric(Qu
     Matrix<T> tmp(n, n, batch_size);
     Matrix<T> A(n, n, batch_size);
 
-    gemm<B>(ctx, Q.view(), D.view(), tmp.view(), GemmOptions<T>{});
+    (void)gemm<B>(ctx, Q.view(), D.view(), tmp.view(), GemmOptions<T>{});
     const Transpose q_trans = batchlas::is_std_complex_v<T> ? Transpose::ConjTrans : Transpose::Trans;
-    gemm<B>(ctx, tmp.view(), Q.view(), A.view(), {.transB = q_trans});
+    (void)gemm<B>(ctx, tmp.view(), Q.view(), A.view(), {.transB = q_trans});
     ctx.wait();
 
     return A;
@@ -450,10 +452,10 @@ Matrix<T, MatrixFormat::Dense> random_tridiagonal_with_log10_cond_metric(Queue &
                                                                          unsigned int /*seed*/) {
     using real_t = float_t<T>;
     if (n <= 0 || batch_size <= 0) {
-        throw std::runtime_error("random_tridiagonal_with_log10_cond_metric: n and batch_size must be positive");
+        throw batchlas::invalid_argument("random_tridiagonal_with_log10_cond_metric: n and batch_size must be positive");
     }
     if (log10_kappa < real_t(0)) {
-        throw std::runtime_error("random_tridiagonal_with_log10_cond_metric: log10_kappa must be non-negative");
+        throw batchlas::invalid_argument("random_tridiagonal_with_log10_cond_metric: log10_kappa must be non-negative");
     }
 
     UnifiedVector<T> diag_vals = detail::build_spectrum_for_metric<T>(
@@ -480,10 +482,10 @@ Matrix<T, MatrixFormat::Dense> random_hermitian_tridiagonal_with_log10_cond_metr
         }
     }
     if (n <= 0 || batch_size <= 0) {
-        throw std::runtime_error("random_hermitian_tridiagonal_with_log10_cond_metric: n and batch_size must be positive");
+        throw batchlas::invalid_argument("random_hermitian_tridiagonal_with_log10_cond_metric: n and batch_size must be positive");
     }
     if (log10_kappa < real_t(0)) {
-        throw std::runtime_error("random_hermitian_tridiagonal_with_log10_cond_metric: log10_kappa must be non-negative");
+        throw batchlas::invalid_argument("random_hermitian_tridiagonal_with_log10_cond_metric: log10_kappa must be non-negative");
     }
 
     if constexpr (B == Backend::NETLIB) {
@@ -508,9 +510,9 @@ Matrix<T, MatrixFormat::Dense> random_hermitian_tridiagonal_with_log10_cond_metr
     Matrix<T> tmp(n, n, batch_size);
     Matrix<T> A(n, n, batch_size);
 
-    gemm<B>(ctx, Q.view(), D.view(), tmp.view(), GemmOptions<T>{});
+    (void)gemm<B>(ctx, Q.view(), D.view(), tmp.view(), GemmOptions<T>{});
     const Transpose q_trans = batchlas::is_std_complex_v<T> ? Transpose::ConjTrans : Transpose::Trans;
-    gemm<B>(ctx, tmp.view(), Q.view(), A.view(), {.transB = q_trans});
+    (void)gemm<B>(ctx, tmp.view(), Q.view(), A.view(), {.transB = q_trans});
     ctx.wait();
 
     constexpr int block_size = 32;

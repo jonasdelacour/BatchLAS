@@ -6,6 +6,7 @@
 #include "../math-helpers.hh"
 #include "../queue.hh"
 #include "../util/template-instantiations.hh"
+#include "info_span.hh"
 
 #include <algorithm>
 #include <cmath>
@@ -354,7 +355,8 @@ Event bdsqr(Queue& ctx,
             const VectorView<T>& e,
             Span<T> singular_values_out,
             const Span<std::byte>& ws,
-            bool sort_desc) {
+            bool sort_desc,
+            Span<int32_t> info) {
     const auto empty = MatrixView<T, MatrixFormat::Dense>(nullptr, 0, 0, 1, 1, d.batch_size());
     return bdsqr<B, T>(ctx,
                        d,
@@ -363,7 +365,8 @@ Event bdsqr(Queue& ctx,
                        ws,
                        empty,
                        empty,
-                       sort_desc);
+                       sort_desc,
+                       info);
 }
 
 template <Backend B, typename T>
@@ -374,38 +377,44 @@ Event bdsqr(Queue& ctx,
             const Span<std::byte>& ws,
             const MatrixView<T, MatrixFormat::Dense>& u,
             const MatrixView<T, MatrixFormat::Dense>& vh,
-            bool sort_desc) {
+            bool sort_desc,
+            Span<int32_t> info) {
     static_cast<void>(B);
 
     const int32_t n = static_cast<int32_t>(d.size());
     const int32_t batch = static_cast<int32_t>(d.batch_size());
 
     if (batch < 1 || n < 1) {
-        throw std::invalid_argument("bdsqr: invalid dimensions");
+        throw batchlas::invalid_argument("bdsqr: invalid dimensions");
     }
     if (e.size() != std::max<int32_t>(0, n - 1) || e.batch_size() != batch) {
-        throw std::invalid_argument("bdsqr: e must have length n-1 and matching batch size");
+        throw batchlas::invalid_argument("bdsqr: e must have length n-1 and matching batch size");
     }
     const size_t need_s = static_cast<size_t>(n) * static_cast<size_t>(batch);
     if (singular_values_out.size() < need_s) {
-        throw std::invalid_argument("bdsqr: singular_values_out span too small");
+        throw batchlas::invalid_argument("bdsqr: singular_values_out span too small");
     }
     if (u.rows() > 0 || u.cols() > 0) {
         if (u.cols() != n || u.batch_size() != batch) {
-            throw std::invalid_argument("bdsqr: U must have n columns and matching batch size");
+            throw batchlas::invalid_argument("bdsqr: U must have n columns and matching batch size");
         }
     }
     if (vh.rows() > 0 || vh.cols() > 0) {
         if (vh.rows() != n || vh.batch_size() != batch) {
-            throw std::invalid_argument("bdsqr: Vh must have n rows and matching batch size");
+            throw batchlas::invalid_argument("bdsqr: Vh must have n rows and matching batch size");
         }
     }
 
     if constexpr (internal::is_complex<T>::value) {
-        throw std::runtime_error("bdsqr: complex types are not implemented yet");
+        throw batchlas::unsupported("bdsqr: complex types are not implemented yet");
     } else {
         Span<std::byte> ws_mut(const_cast<std::byte*>(ws.data()), ws.size());
         BumpAllocator pool(ws_mut);
+        // fail_flags stays a pool draw and stays UNCONDITIONAL: it is the whole of
+        // bdsqr's workspace (see bdsqr_layout / bdsqr_buffer_size), the kernel
+        // STORES into it rather than raising, and `info` is an accumulator that
+        // several producers may share. Folding afterwards keeps both contracts and
+        // leaves bdsqr_buffer_size untouched.
         auto fail_flags = bdsqr_layout<T>(ctx, pool, batch);
         const bool ok = bdsqr_implicit_qr_attempt<T>(ctx,
                                                      d,
@@ -417,8 +426,19 @@ Event bdsqr(Queue& ctx,
                                                      batch,
                                                      sort_desc,
                                                      fail_flags);
-        if (!ok) {
-            throw std::runtime_error("bdsqr: native implicit bidiagonal QR did not converge");
+        // 0 already means converged here, so no polarity flip -- unlike
+        // syevx_lobpcg / syevx_filtered, whose flags mean the opposite.
+        detail::info_from_flags(ctx, info, fail_flags.data(), batch, /*one_means_converged=*/false);
+        // The batch-wide throw is what a caller who asked for NO per-item status
+        // still needs: without it a non-converged item is silent again. A caller who
+        // supplied `info` gets the per-item answer instead of an exception that says
+        // nothing about which item failed.
+        //
+        // The condition is info_ptr, not info.empty(): a SHORT non-empty span is
+        // "not requested" everywhere else in this mechanism, and testing empty()
+        // here would drop both the span AND the throw for one.
+        if (!ok && detail::info_ptr(info, batch) == nullptr) {
+            throw batchlas::convergence_error("bdsqr: native implicit bidiagonal QR did not converge");
         }
         return ctx.get_event();
     }
@@ -445,14 +465,14 @@ size_t bdsqr_buffer_size(Queue& ctx,
         const Span<std::byte>&, \
         const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
         const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \
-        bool); \
+        bool, Span<int32_t>); \
     template Event bdsqr<back, BATCHLAS_UNPAREN fp>( \
         Queue&, \
         const VectorView<BATCHLAS_UNPAREN fp>&, \
         const VectorView<BATCHLAS_UNPAREN fp>&, \
         Span<BATCHLAS_UNPAREN fp>, \
         const Span<std::byte>&, \
-        bool);
+        bool, Span<int32_t>);
 
 #define BDSQR_BUFFER_INSTANTIATE(fp) \
     template size_t bdsqr_buffer_size<BATCHLAS_UNPAREN fp>( \

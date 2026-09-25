@@ -1,5 +1,6 @@
 #pragma once
 
+#include <batchlas/export.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/blas/matrix.hh>
@@ -34,25 +35,25 @@ using spmm_vendor_buffer_size = spmm_buffer_size<T, F>;
 
 
 template <Backend B, typename T, MatrixFormat MFormat>
-Event spmm(Queue& ctx,
-    const MatrixView<T, MFormat>& A,
-    const MatrixView<T, MatrixFormat::Dense>& descrB,
-    const MatrixView<T, MatrixFormat::Dense>& descrC,
-    T alpha,
-    T beta,
-    Transpose transA,
-    Transpose transB,
-    Span<std::byte> workspace);
+BATCHLAS_API Event spmm(Queue& ctx,
+                 const MatrixView<T, MFormat>& A,
+                 const MatrixView<T, MatrixFormat::Dense>& descrB,
+                 const MatrixView<T, MatrixFormat::Dense>& descrC,
+                 T alpha,
+                 T beta,
+                 Transpose transA,
+                 Transpose transB,
+                 Span<std::byte> workspace);
 
 template <Backend B, typename T, MatrixFormat MFormat>
-size_t spmm_buffer_size(Queue& ctx,
-                        const MatrixView<T, MFormat>& A,
-                        const MatrixView<T, MatrixFormat::Dense>& B_mat,
-                        const MatrixView<T, MatrixFormat::Dense>& C,
-                        T alpha,
-                        T beta,
-                        Transpose transA,
-                        Transpose transB);
+BATCHLAS_API size_t spmm_buffer_size(Queue& ctx,
+                                     const MatrixView<T, MFormat>& A,
+                                     const MatrixView<T, MatrixFormat::Dense>& B_mat,
+                                     const MatrixView<T, MatrixFormat::Dense>& C,
+                                     T alpha,
+                                     T beta,
+                                     Transpose transA,
+                                     Transpose transB);
 
 }  // namespace batchlas
 
@@ -63,25 +64,25 @@ namespace batchlas::backend {
 // gemm.hh. Unlike the dense ops, spmm carries a MatrixFormat template
 // parameter, so its instantiations are hand-written in each vendor TU.
 template <Backend B, typename T, MatrixFormat MFormat>
-Event spmm_vendor(Queue& ctx,
-                  const MatrixView<T, MFormat>& A,
-                  const MatrixView<T, MatrixFormat::Dense>& B_mat,
-                  const MatrixView<T, MatrixFormat::Dense>& C,
-                  T alpha,
-                  T beta,
-                  Transpose transA,
-                  Transpose transB,
-                  Span<std::byte> workspace);
-
-template <Backend B, typename T, MatrixFormat MFormat>
-size_t spmm_vendor_buffer_size(Queue& ctx,
+BATCHLAS_API Event spmm_vendor(Queue& ctx,
                                const MatrixView<T, MFormat>& A,
                                const MatrixView<T, MatrixFormat::Dense>& B_mat,
                                const MatrixView<T, MatrixFormat::Dense>& C,
                                T alpha,
                                T beta,
                                Transpose transA,
-                               Transpose transB);
+                               Transpose transB,
+                               Span<std::byte> workspace);
+
+template <Backend B, typename T, MatrixFormat MFormat>
+BATCHLAS_API size_t spmm_vendor_buffer_size(Queue& ctx,
+                                            const MatrixView<T, MFormat>& A,
+                                            const MatrixView<T, MatrixFormat::Dense>& B_mat,
+                                            const MatrixView<T, MatrixFormat::Dense>& C,
+                                            T alpha,
+                                            T beta,
+                                            Transpose transA,
+                                            Transpose transB);
 
 }  // namespace batchlas::backend
 

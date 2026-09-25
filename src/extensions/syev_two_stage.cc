@@ -10,6 +10,7 @@
 #include <batchlas/tuning_params.hh>
 
 #include "../queue.hh"
+#include "info_span.hh"
 #include "../util/template-instantiations.hh"
 #include "sytrd_sb2st_hh.hh"
 #include "two_stage_common.hh"
@@ -34,22 +35,22 @@ inline void validate_syev_two_stage_dims(const MatrixView<T, MatrixFormat::Dense
                                          JobType jobz,
                                          Uplo uplo) {
     if (a.rows() != a.cols()) {
-        throw std::invalid_argument("syev_two_stage: A must be square.");
+        throw batchlas::invalid_argument("syev_two_stage: A must be square.");
     }
     if (jobz != JobType::NoEigenVectors && jobz != JobType::EigenVectors) {
-        throw std::invalid_argument("syev_two_stage: invalid JobType.");
+        throw batchlas::invalid_argument("syev_two_stage: invalid JobType.");
     }
     // Uplo::Upper is accepted; the solve mirrors it into Lower first. See uplo_mirror.hh.
 
     const int64_t n64 = a.rows();
     const int64_t batch64 = a.batch_size();
     if (n64 < 1 || batch64 < 1) {
-        throw std::invalid_argument("syev_two_stage: invalid n or batch size.");
+        throw batchlas::invalid_argument("syev_two_stage: invalid n or batch size.");
     }
 
     const std::size_t need = static_cast<std::size_t>(n64) * static_cast<std::size_t>(batch64);
     if (eigenvalues.size() < need) {
-        throw std::invalid_argument("syev_two_stage: eigenvalues span too small for n*batch.");
+        throw batchlas::invalid_argument("syev_two_stage: eigenvalues span too small for n*batch.");
     }
 }
 
@@ -62,24 +63,27 @@ Event syev_two_stage(Queue& ctx,
                      JobType jobz,
                      Uplo uplo,
                      const Span<std::byte>& ws,
-                     StedcParams<typename base_type<T>::type> stedc_params) {
+                     StedcParams<typename base_type<T>::type> stedc_params,
+                     Span<int32_t> info) {
     BATCHLAS_KERNEL_TRACE_SCOPE("syev_two_stage.entry");
     validate_syev_two_stage_dims(a_in, eigenvalues, jobz, uplo);
 
     if (!ctx.in_order()) {
-        throw std::runtime_error("syev_two_stage: requires an in-order Queue");
+        throw batchlas::invalid_argument("syev_two_stage: requires an in-order Queue");
     }
 
     // Uplo::Upper: mirror into Lower, then run the ordinary Lower pipeline (sytrd_sy2sb ->
     // sb2st -> stedc -> back-transform), none of which implements Upper. See uplo_mirror.hh.
     if (uplo == Uplo::Upper) {
-        mirror_upper_to_lower<B, T>(ctx, a_in);
+        // (void) on an Event: deliberate. This Queue is in-order, so the next submission
+        // is already ordered after this one and the Event carries nothing the caller needs.
+        (void)mirror_upper_to_lower<B, T>(ctx, a_in);
         uplo = Uplo::Lower;
     }
 
     if constexpr (B == Backend::NETLIB) {
         if (jobz == JobType::EigenVectors) {
-            return syev_blocked<B, T>(ctx, a_in, eigenvalues, jobz, uplo, ws, stedc_params);
+            return syev_blocked<B, T>(ctx, a_in, eigenvalues, jobz, uplo, ws, stedc_params, info);
         }
     }
 
@@ -135,7 +139,7 @@ Event syev_two_stage(Queue& ctx,
                                                                      uplo,
                                                                      kd);
         auto sy2sb_ws = pool.allocate<std::byte>(ctx, sy2sb_ws_bytes);
-        sytrd_sy2sb<B, T>(ctx, a, ab_view, tau_sy2sb_view, uplo, kd, sy2sb_ws);
+        (void)sytrd_sy2sb<B, T>(ctx, a, ab_view, tau_sy2sb_view, uplo, kd, sy2sb_ws);
     }
 
     // Stage 2 outputs: band -> tridiagonal (real d,e).
@@ -220,7 +224,7 @@ Event syev_two_stage(Queue& ctx,
         const size_t sb2st_ws_bytes = sytrd_sb2st_buffer_size<B, T>(
             ctx, ab_view, d_view, e_view, tau_sb2st_view, uplo, kd, sb2st_block_size);
         auto sb2st_ws = pool.allocate<std::byte>(ctx, sb2st_ws_bytes);
-        sytrd_sb2st<B, T>(ctx, ab_view, d_view, e_view, tau_sb2st_view, uplo, kd,
+        (void)sytrd_sb2st<B, T>(ctx, ab_view, d_view, e_view, tau_sb2st_view, uplo, kd,
                           sb2st_ws, sb2st_block_size);
     } else {
         const int32_t nr = std::max<int32_t>(1, nrefl);
@@ -245,7 +249,7 @@ Event syev_two_stage(Queue& ctx,
         BATCHLAS_KERNEL_TRACE_SCOPE("syev_two_stage.sb2st_hh");
         const size_t ws_bytes = internal::sytrd_sb2st_hh_buffer_size<B, T>(ctx, n, kd, batch);
         auto hh_ws = pool.allocate<std::byte>(ctx, ws_bytes);
-        internal::sytrd_sb2st_hh<B, T>(ctx, ab_view, ab_tri_view, d_view, e_view,
+        (void)internal::sytrd_sb2st_hh<B, T>(ctx, ab_view, ab_tri_view, d_view, e_view,
                                        v_sb2st_view, tau_sb2st_hh_view, uplo, kd,
                                        hh_ws);
 
@@ -262,6 +266,13 @@ Event syev_two_stage(Queue& ctx,
 
     if (!want_eigvecs) {
         BATCHLAS_KERNEL_TRACE_SCOPE("syev_two_stage.stebz_evals");
+        // Eigenvalues only: the tridiagonal solve is stebz's bisection, which
+        // records nothing today -- its three loop exits (tolerance met, budget
+        // exhausted, midpoint stopped advancing) are indistinguishable after the
+        // fact. Report 0 rather than leaving the span untouched: an unwritten span
+        // is worse than a conservative one, because the caller cannot tell the two
+        // apart. See `deferred` in the work package: stebz needs a flag of its own.
+        detail::info_clear(ctx, info, batch);
         auto m_span = pool.allocate<int32_t>(ctx, static_cast<std::size_t>(batch));
         StebzParams<Real> bp;
         bp.range = EigenRangeType::Index;
@@ -273,7 +284,7 @@ Event syev_two_stage(Queue& ctx,
                                                                  static_cast<std::size_t>(batch),
                                                                  bp);
         auto stebz_ws = pool.allocate<std::byte>(ctx, stebz_ws_bytes);
-        stebz<B, Real>(ctx, d_view, e_view, evals_view, m_span, stebz_ws, bp);
+        (void)stebz<B, Real>(ctx, d_view, e_view, evals_view, m_span, stebz_ws, bp);
 
         return ctx.get_event();
     }
@@ -306,14 +317,17 @@ Event syev_two_stage(Queue& ctx,
                                                                      JobType::EigenVectors,
                                                                      stedc_params);
         auto stedc_ws = pool.allocate<std::byte>(ctx, stedc_ws_bytes);
-        stedc<B, Real>(ctx,
+        // As in syev_blocked: sy2sb, sb2st and the back-transform are all direct,
+        // so stedc owns every convergence event this tier can have.
+        (void)stedc<B, Real>(ctx,
                        d_view,
                        e_view,
                        evals_view,
                        stedc_ws,
                        JobType::EigenVectors,
                        stedc_params,
-                       z_real_view);
+                       z_real_view,
+                       info);
     }
 
     // stedc solves the *real* tridiagonal built from |subdiagonal|. Lifting by
@@ -334,7 +348,7 @@ Event syev_two_stage(Queue& ctx,
     // Z := Q2 Z
     if (nrefl > 0) {
         BATCHLAS_KERNEL_TRACE_SCOPE("syev_two_stage.backtransform_q2");
-        internal::unmqr_hb2st<B, T>(ctx,
+        (void)internal::unmqr_hb2st<B, T>(ctx,
                                     v_sb2st_view,
                                     tau_sb2st_hh_view,
                                     z_view,
@@ -369,10 +383,10 @@ Event syev_two_stage(Queue& ctx,
         }
         auto ormqr_ws = pool.allocate<std::byte>(ctx, ormqr_ws_bytes);
         if constexpr (B == Backend::NETLIB) {
-            blas::dispatch::detail::ormqr_vendor_or_throw<B, T>(
+            (void)blas::dispatch::detail::ormqr_vendor_or_throw<B, T>(
                 ctx, v1_view, z_sub, Side::Left, Transpose::NoTrans, tau1_flat, ormqr_ws);
         } else {
-            ormqr_blocked<B, T>(ctx, v1_view, z_sub, Side::Left, Transpose::NoTrans,
+            (void)ormqr_blocked<B, T>(ctx, v1_view, z_sub, Side::Left, Transpose::NoTrans,
                                 tau1_flat, ormqr_ws, ormqr_block_size);
         }
     }
@@ -389,10 +403,10 @@ size_t syev_two_stage_buffer_size(Queue& ctx,
                                   Uplo uplo,
                                   StedcParams<typename base_type<T>::type> stedc_params) {
     if (a.rows() != a.cols()) {
-        throw std::invalid_argument("syev_two_stage_buffer_size: A must be square.");
+        throw batchlas::invalid_argument("syev_two_stage_buffer_size: A must be square.");
     }
     if (jobz != JobType::NoEigenVectors && jobz != JobType::EigenVectors) {
-        throw std::invalid_argument("syev_two_stage_buffer_size: invalid JobType.");
+        throw batchlas::invalid_argument("syev_two_stage_buffer_size: invalid JobType.");
     }
     // Uplo::Upper is accepted; workspace is identical, the mirror is in-place.
 
@@ -548,7 +562,8 @@ size_t syev_two_stage_buffer_size(Queue& ctx,
         JobType, \
         Uplo, \
         const Span<std::byte>&, \
-        StedcParams<typename base_type<BATCHLAS_UNPAREN fp>::type>); \
+        StedcParams<typename base_type<BATCHLAS_UNPAREN fp>::type>, \
+        Span<int32_t>); \
     template size_t syev_two_stage_buffer_size<back, BATCHLAS_UNPAREN fp>( \
         Queue&, \
         const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, \

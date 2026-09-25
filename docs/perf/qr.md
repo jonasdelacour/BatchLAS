@@ -2,7 +2,7 @@
 
 Native SYCL `geqrf` (two tiers) and `orgqr` (one tier), the `ormqr` they are built on, and the routing that selects between them.
 
-All timings: GPU 1 of a 2x RTX 4090 box (sm_89, 128 SMs), `CUDA_VISIBLE_DEVICES=1`, `WARM_S=1.5`, medians of interleaved A/B, cells with relative sd > 10% discarded, nothing timed under `BATCHLAS_KERNEL_TRACE`. "Vendor-free" always means the **build** (`-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`), never an env var inside a build that still links cuSOLVER: `route_resolve.hh:76-80` falls through to `automatic()` when a forced route is unsupported and `automatic()` returns `{Vendor, Auto}` (:129), so a forced-route A/B inside one build can silently be vendor-vs-vendor. `local_mem_size` here is 101,376 B; every capacity below derives from that minus the standard 4,096 B reserve, i.e. a 97,280 B budget. The generated `device_limits.hh`'s 49,152 is hardcoded for any `nvidia_gpu_sm_*` architecture with no device query at all (`cmake/BatchLASDetectSYCL.cmake:44-45`) and is 2.06x wrong on this box; nothing in this family reads it — `geqrf_cta.cc:31`'s `kGeqrfReferenceSlmBudget = 97280` answers only the "at this repository's reference budget" convenience overloads, and every real decision reads the device through `geqrf_route.hh:51-53`.
+All timings: GPU 1 of a 2x RTX 4090 box (sm_89, 128 SMs), `CUDA_VISIBLE_DEVICES=1`, `WARM_S=1.5`, medians of interleaved A/B, cells with relative sd > 10% discarded, nothing timed under `BATCHLAS_KERNEL_TRACE`. "Vendor-free" always means the **build** (`-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`), never an env var inside a build that still links cuSOLVER: `route_resolve.hh:76-80` falls through to `automatic()` when a forced route is unsupported and `automatic()` returns `{Vendor, Auto}` (:129), so a forced-route A/B inside one build can silently be vendor-vs-vendor. `local_mem_size` here is 101,376 B; every capacity below derives from that minus the standard 4,096 B reserve, i.e. a 97,280 B budget. The generated `device_limits.hh`'s 49,152 is hardcoded for any `nvidia_gpu_sm_*` architecture with no device query at all (`cmake/BatchLASDetectSYCL.cmake:44-45`) and is 2.06x wrong on this box; nothing in this family reads it — `geqrf_cta.cc:33`'s `kGeqrfReferenceSlmBudget = 97280` answers only the "at this repository's reference budget" convenience overloads, and every real decision reads the device through `geqrf_route.hh:51-53`.
 
 ## What ships
 
@@ -10,11 +10,11 @@ All timings: GPU 1 of a 2x RTX 4090 box (sm_89, 128 SMs), `CUDA_VISIBLE_DEVICES=
 
 | op | arms, in `order` sequence | `preferred()` |
 |---|---|---|
-| `geqrf` | `{Native, CTA}`, `{Native, Blocked}`, `{Vendor, Auto}` (`route_geqrf.hh:33-37`) | **false everywhere** (`route_geqrf.hh:73-77`) |
-| `orgqr` | `{Native, Blocked}`, `{Vendor, Auto}` (`route_orgqr.hh:21-24`) | **false everywhere** (`route_orgqr.hh:60-64`) |
+| `geqrf` | `{Native, Tiny}`, `{Native, CTA}`, `{Native, Blocked}`, `{Vendor, Auto}` (`route_geqrf.hh:kGeqrfOrder`) | **`Tiny` is false, and `native_tier_preferred(Tiny)` is false too** — see [the tiny tier](#the-tiny-tier-wp6--p1-square-n--32-in-registers). Otherwise native above a per-type **order floor** — `float` 64, `cfloat` 48, `double` **76** (P5 moved it from 96, [the double order floor moves to 76](#the-double-order-floor-moves-to-76)), `cdouble` 256 — plus a **tall-panel clause**, `rows >= 128 && cols >= 32 && rows >= tall_aspect*cols`, where `tall_aspect` is **4 for the 32-bit types and 8 for the 64-bit ones** (`route_geqrf.hh:preferred`) -- the split is load-bearing, see [tall panels cross over earlier](#tall-panels-cross-over-earlier) |
+| `orgqr` | `{Native, Blocked}`, `{Vendor, Auto}` (`route_orgqr.hh:21-24`) | native at `rows <= 512 && cols <= 512`, every type (`route_orgqr.hh:preferred`) |
 | `ormqr` | `{Native, Blocked}`, `{Vendor, Auto}` (`route_ormqr.hh:45-48`) | `is_native(r) && supports(r, s)` (`route_ormqr.hh:77-79`) |
 
-`geqrf` and `orgqr` ship **route-neutral**: a vendor-present build takes cuSOLVER for every shape. The kernels are reachable only from a vendor-free build (`route_resolve.hh:38-49`), from `BATCHLAS_GEQRF_ROUTE` / `BATCHLAS_ORGQR_ROUTE`, or from the direct entry points `geqrf_cta_dispatch` / `geqrf_blocked_dispatch` / `orgqr_blocked_dispatch`. The 3.24x (`geqrf`) and 7.85x (`orgqr`) geomeans below are therefore **unrealised in the default build** — debt 1.
+`geqrf` and `orgqr` no longer ship route-neutral. A vendor-present build now takes the native arm inside the windows above; outside them — `geqrf` below its floor and off the tall clause, `orgqr` above n = 512 — it still takes cuSOLVER, and the kernels are then reachable only from a vendor-free build (`route_resolve.hh:38-49`), from `BATCHLAS_GEQRF_ROUTE` / `BATCHLAS_ORGQR_ROUTE`, or from the direct entry points `geqrf_cta_dispatch` / `geqrf_blocked_dispatch` / `orgqr_blocked_dispatch`. The windows are the cells that clear the repository's flip gate on the n = 4..512 grid, bracketed on both sides; the grid, including every excluded cell, is [`small-n-baseline.md`](small-n-baseline.md#geqrf). The 3.24x (`geqrf`) and 7.85x (`orgqr`) geomeans below span the whole grid and so are **still not** what the default build realises — only the in-window part of them is.
 
 `ormqr` is the exception: `preferred()` is native-first, so a supported blocked `ormqr` runs natively in every build. That predates WP5 (no shape ever sent a supported blocked `ormqr` to the vendor) and is why `orgqr`'s native arm — an identity fill plus a routed `ormqr` — works at all.
 
@@ -26,11 +26,13 @@ All timings: GPU 1 of a 2x RTX 4090 box (sm_89, 128 SMs), `CUDA_VISIBLE_DEVICES=
 
 `geqrf`'s CTA tier holds the whole `m x n` panel in a `local_accessor`, so its ceiling is an **area**, `m*n <= cta_max_elems` in int64 (`route_geqrf.hh:59-61`). `cta_max_m` is also tested but is not independently binding with the shipped layout — there is one tile and no per-row resident array, so the largest admissible m at n = 1 *is* the area bound (`geqrf_cta.cc:171-310`). It is kept as a separate number because it is what moves if a per-row array (a staged `v`, a norm cache) is ever added. On this box: float 24,320 elems (square n = 155), double and cfloat 12,160 (n = 110), cdouble 6,080 (n = 77).
 
+Where the budget itself comes from — this box's 101,376 B `local_mem_size`, the 4,096 B reserve, and why `geqrf_cta.cc:33`'s `kGeqrfReferenceSlmBudget = 97280` serves the convenience overloads only while `device_limits.hh`'s hardcoded 49,152 is 2.06x wrong here — is in the preamble at the top of this page.
+
 Above the area bound the blocked driver serves the shape. Its panel leaf is the same device body (`geqrf_cta_device.hh`) instantiated against a global pointer instead of a `local_accessor`, chosen per panel by the same `geqrf_cta_fits` predicate the route table's capacity uses — so the ceiling the table advertises and the allocation the launcher makes cannot disagree.
 
 ### The third predicate
 
-`preferred()` cannot express "which of two **native** tiers". It is consulted by the loop above the vendor-free walk and runs regardless of `vendor_available`, so a window written to fix the vendor-free tier choice also moves vendor-**present** traffic, including where cuSOLVER beats both natives. WP5 added an optional third predicate, `RouteTable::native_tier_preferred`, detected with a `requires` expression and defaulting to `true` so every table that does not declare it keeps its old answer (`route_resolve.hh:18-25`). It is consulted **only** on the vendor-free walk, which is now two passes (`route_resolve.hh:38-49`); `gemm`, `trsm`, `potrf` and `gesvd` were untouched by construction at WP5 and the route diff confirmed it. Since then WP6 has declared the hook for `getrf` (`route_getrf.hh:78`) and `getrs`. **`potrf` still has not**, although it has the same two native tiers and the same all-false `preferred()` — see [open-debts](#open-debts).
+`preferred()` cannot express "which of two **native** tiers". It is consulted by the loop above the vendor-free walk and runs regardless of `vendor_available`, so a window written to fix the vendor-free tier choice also moves vendor-**present** traffic, including where cuSOLVER beats both natives. WP5 added an optional third predicate, `RouteTable::native_tier_preferred`, detected with a `requires` expression and defaulting to `true` so every table that does not declare it keeps its old answer (`route_resolve.hh:18-25`). It is consulted **only** on the vendor-free walk, which is now two passes (`route_resolve.hh:38-49`); `gemm`, `trsm`, `potrf` and `gesvd` were untouched by construction at WP5 and the route diff confirmed it. Since then WP6 has declared the hook for `getrf` (`route_getrf.hh:78`), `getrs` and — as of P7 — `potrf` ([potrf.md#native_tier_preferred](potrf.md#native_tier_preferred)); the debt recorded below is closed.
 
 The shipped `geqrf` window, verbatim (`route_geqrf.hh:79-103`):
 
@@ -279,8 +281,9 @@ One harness trap in the gate itself, since every number above is a `ctest` count
 8. **`geqrf_buffer_size` builds its shape twice and makes 6 uncached SYCL `get_info` calls per API call.** This lands on `band_reduction.cc:595`, which calls `geqrf(...).wait()` once per step, and on `sytrd_sy2sb.cc:504`, which calls `geqrf(...)` once per step **without** a `.wait()` (the source note says both wait; the code does not) — `O(n^2/kd^2)` steps, ~500 for n=1024. Pure host overhead, no wrong answer, and **not measured**. Measure before acting.
 9. **`resolve_ormqr_block_size` still returns the float-only 16/16/24/48/56 ladder keyed on `A.rows()`** (`include/batchlas/tuning_params.hh:45-47`, `include/batchlas/blas/functions/ormqr.hh:219-227`) for every `ormqr` caller that passes no hint. Measured wrong for three of four types, costing 1.11–1.55x. `geqrf` and `orgqr` bypass it with their own type-keyed widths; nothing else does. Read the *source* header, not the generated one: the `configure_file` copy at `build/include/batchlas/tuning_params.hh` says **16/32/64/128/128** and is never compiled, because `src/CMakeLists.txt` puts `${PROJECT_SOURCE_DIR}/include` ahead of `${PROJECT_BINARY_DIR}/include`. The harness prints the width it actually used, and it prints 16/24/48/56.
 10. **The CTA tier's workspace is zero but callers still pay the blocked layout.** The facade takes `max` over every *supported* native tier and `supports()` deliberately puts no lower extent bound on the Blocked arm, so a caller at n=64 batch=8192 pays 168 MB (float) / 671 MB (cdouble) even though the route it takes is CTA. Sizing W1/W2 on `n - nb` rather than `n` took ~28% off; the remainder is the deliberate `max` policy. (The vendor `orgqr` it replaces asks for 1164 MB / 4644 MB at that cell.)
-11. **`potrf` has WP5's dispatch gap and has not closed it.** `potrf` carries the same two native tiers ({CTA, Blocked}) and the same all-false `preferred()`, so its vendor-free walk still returns the first *supported* native route from a static order array that cannot follow a crossover — the exact defect `native_tier_preferred` was added for. `getrf` and `getrs` have since declared the hook; `route_potrf.hh` has not. Nobody has measured whether `potrf`'s vendor-free tier choice is wrong, which is the first step, not the fix.
+11. **`potrf` had WP5's dispatch gap. CLOSED at P7** ([potrf.md#native_tier_preferred](potrf.md#native_tier_preferred)); the reading below is what the debt was. `potrf` carries the same two native tiers ({CTA, Blocked}) and the same all-false `preferred()`, so its vendor-free walk still returns the first *supported* native route from a static order array that cannot follow a crossover — the exact defect `native_tier_preferred` was added for. `getrf` and `getrs` have since declared the hook; `route_potrf.hh` has not. Nobody has measured whether `potrf`'s vendor-free tier choice is wrong, which is the first step, not the fix.
 12. **`resolve_ormqr_route` is called with two arguments** (`ormqr.hh:209`), taking the `vendor_available = true` default, so `ormqr` never reaches `route_resolve.hh:38-49`'s vendor-free fallback. It gets away with it only because its `preferred()` is native-first. `geqrf` and `orgqr` pass the argument explicitly; do not inherit the omission.
+13. **The `geqrf` Tiny tier is supported at every square `n <= 32`, preferred nowhere, and has never been timed.** `supports()` admits it, `native_tier_preferred` hard-codes `false` for it, and `preferred()`'s order-floor/tall-aspect gate rejects the whole band before any tier is named — so the band is served by CTA in a vendor-free build and by cuSOLVER otherwise, and CTA is measured there at **0.78x / 0.21x / 0.71x / 0.33x**. The grid that would settle it, the flip gate, and the two-edit routing change (including why the `preferred()` clause must precede the existing gate or it is dead code) are in [the tiny tier is supported, never preferred, and never timed](#the-tiny-tier-is-supported-never-preferred-and-never-timed). An implemented, tested, linked tier that no `Auto` shape can reach.
 
 ## Raw evidence
 
@@ -302,3 +305,1462 @@ Raw data is preserved at the git tag `perf-evidence/vendor-independence` and is 
 | nsys kernel splits, winning and losing cells | `experiments/wp5_qr/bench/nsys_split.md`, `kernsum/*_kern.txt` |
 | ormqr WY trmm-vs-gemm gate | `experiments/TRMM_SYRK_BATCHED_KERNELS.md` |
 | campaign narrative, "WP5 has landed" | `VENDOR_INDEPENDENCE_PLAN.md` |
+
+## The shipped `geqrf` window
+
+What the per-type order floor in `preferred()` (`route_geqrf.hh`) resolves to at the one shape
+both test files probe, why a window in `preferred()` can silently overrule the tier hook, and
+how much of that the integration-level test can actually see.
+
+### What 96x96 resolves to, per type
+
+96 was double's floor when this section was written; P5 moved it to 76
+([the double order floor moves to 76](#the-double-order-floor-moves-to-76)), so 96 is now
+INSIDE double's window rather than on its edge, and every claim below about 96 being the
+first double order still holds as a claim about a routed order.
+96 is simultaneously **inside double's window**, **float's last CTA order** and **below cdouble's
+floor**, which is why it is the probe shape in `tests/geqrf_tests.cc` G9 and in the pure-layer
+route tests. `preferred()` carries a PER-TYPE order floor, so the vendor-present answer at
+96x96 is a per-type fact and **not a blanket "vendor"**. Ratios are native-over-vendor from
+[`small-n-baseline.md#geqrf`](small-n-baseline.md#geqrf), n = 96 row, batch 8192.
+
+| T | 96x96 resolves to | ratio | why this cell |
+|---|---|---|---|
+| float | `native:cta` | **2.69x** | 96 is the LAST float order on CTA |
+| cfloat | `native:cta` | **2.28x** | no measured CTA/blocked crossover, and 9,216 scalars fit the 12,160 cfloat tile |
+| double | `native:blocked` | **1.16x** | double's CTA crossover is n > 48 |
+| cdouble | **VENDOR** | 0.49x | the cdouble floor is n >= 256 |
+
+cdouble 96x96 is 0.49x native and BELOW the cdouble floor of 256; routing it native ships a
+measured loss. The tile-fit arithmetic for cfloat is the CTA capacity from
+[cta-capacity](#cta-capacity): 96*96 = 9,216 scalars against a cfloat tile of 12,160 elems
+(square n = 110).
+
+The tier half of the answer is **the crossover AND the tile fit, both read from the device**:
+on a device whose tile cannot hold 96x96 the blocked arm is the right answer for every type,
+so nothing here is hardcoded to this box.
+
+### A non-empty `preferred()` pre-empts `native_tier_preferred`
+
+`resolve_route`'s `automatic()` walks `kGeqrfOrder` testing `supports(r) && preferred(r)` and
+**RETURNS on the first hit** (`route_resolve.hh:35-37`), before `native_tier_preferred` is
+consulted at all. CTA leads that order, so a window that answers true for CTA hands it every
+shape it can hold, whatever the tier hook says.
+
+Measured cost of getting this wrong: the window shipped `native:cta` at **double n = 96**,
+where **blocked is 1.37x faster** and the resulting route is **0.848x** the vendor — a loss
+against the arm it replaced. See the second sweep in
+[cta-vs-blocked-crossover](#cta-vs-blocked-crossover): double 96, default 23.86 ms (blocked)
+against 32.75 ms (cta).
+
+**The invariant that guards it.** Before the order floor shipped, `tests/geqrf_tests.cc` G9b
+block (3) asserted `is_vendor(...)`, on the reasoning that `native_tier_preferred` is consulted
+only on the vendor-free walk while `preferred()` is consulted always — true then, because
+`preferred()` was all-false, so the vendor-present answer could not be native at all. With a
+window in place the invariant it was really guarding survives, and is stronger: **whichever arm
+the vendor-present walk lands on, it must be the SAME arm the vendor-free tie-break picks.**
+That is what "the tier hook did not leak" means once native can win, and it is what catches the
+pre-emption defect above. Concretely: `preferred()` must answer true for exactly one tier, and
+the resolved `present.algo` must equal `RouteTable::best_native_tier(shape).algo`.
+
+### How the window is guarded
+
+The integration-level check (G9b block (3), `NativeTierTieBreakPicksTheFasterNativeVendorFree`)
+is **one instantiation deep**. Its probe shapes are chosen for the TIER crossover, not for the
+order window, so only a type whose probe shapes land INSIDE its order window can fire the
+assertion. Today that is **float only** — double probes at n = 48 and 64, both under its floor
+of 96, so the check takes the vendor early-exit and asserts nothing. **Verified by planting the
+defect: only `GeqrfTest/4` went red**, and `GeqrfTest/5` passed with the defect in place.
+
+The per-type tier cover therefore lives in the pure layer, where shapes are free:
+`RouteGeqrf.PreferredIsTheMeasuredOrderFloorAndTheTallClause` pins **float 96 -> CTA, float 128
+-> Blocked, double 96 -> Blocked and cfloat 256 -> Blocked**.
+
+## The shipped `orgqr` ceiling
+
+Why `route_orgqr.hh`'s `preferred()` is `rows <= 512 && cols <= 512`, every type. Relocated
+verbatim from that predicate's comment block; the grid it summarises is
+[`small-n-baseline.md`](small-n-baseline.md#orgqr), and the losing cells that bracket it are in
+[`orgqr` grid](#orgqr-grid) above.
+
+**Read every ratio here as "beats the per-item loop", NOT as "beats cuSOLVER".** `cublas.cc`
+dispatches `cusolverDnXorgqr` once PER BATCH ITEM on an out-of-order sub-queue
+(`cublas.cc:1414-1419`), so the vendor arm is `batch` launches deep and the comparison is
+against a structure, not against a kernel.
+
+**That is exactly why the window has no floor.** The measured margin is smallest at the largest
+order and never approaches the flip gate:
+
+| T | n = 512 | n = 256 | n = 64 | n <= 16 |
+|---|---|---|---|---|
+| float | 3.64 | 5.30 | 27.10 | >= 181 |
+| cfloat | 2.54 | 4.04 | 15.09 | >= 172 |
+| double | 4.61 | 8.46 | 27.09 | **>= 97.72** |
+| cdouble | 2.77 | 4.75 | 11.31 | >= 42 |
+
+66 square cells measured over four types and orders 4..512, zero losses, minimum 2.54.
+
+The `double` floor is the one number reconciled on the move. The predicate comment carried it as
+`>= 98`, which overreaches its own measurement: the kept cell is **97.72**
+(`benchmarks/results/factor_baseline_orgqr_double.csv`, `double 16x16 b32768`, vendor 1642.61 ms
+against native 16.8097 ms), the same figure the small-n grid's `16 (b32768)` row records. The
+other three floors sit below their own `n = 16` `b32768` cells — float 209.57, cfloat 172.40,
+cdouble 42.25 — and so do not overreach.
+
+**The 512 ceiling is load-bearing, and it is the bracket.** There is no losing cell inside the
+measured range, so the bound comes from the cells ABOVE it, which [`orgqr` grid](#orgqr-grid)
+records as losses: cfloat n = 1024 is 0.82x (0.88 at batch 256, and the record does not claim it
+crosses), cdouble n = 1024 is 0.78x, and at n = 2048 every type loses — float 0.41x, cfloat
+0.31x, cdouble 0.46x. An unbounded `is_native(r)` would route all of those native. Only float
+n = 1024 recovers with batch (0.84 / 1.11 / 1.27 / 1.33 at batch 32..256), and one type crossing
+is not a window.
+
+**Workspace, which the window does not weigh.** The vendor arm also costs 3.3x the workspace —
+4,870 MB against 1,476 MB at cdouble n = 64, batch 8192 — which a caller near the memory ceiling
+will feel. That advantage reverses above n = 1024 in the same direction the speed advantage
+does; the reversal cells are in [`orgqr` grid](#orgqr-grid).
+
+## CTA capacity: the `INT_MAX` reading
+
+Relocated from `tests/route_vocabulary_tests.cc` (the shape helper above `geqrf_cta_elems`),
+which is where the consequence for a *test* shape was written down. The budget and the
+per-type element counts are the same ones as [cta-capacity](#cta-capacity); what follows is
+the device reading behind them and why a permissive test shape makes half an assertion
+disappear.
+
+**The capacity this box actually reports is NOT the square side.** The shape builder sets both
+`cta_max_m` and `cta_max_elems` from `geqrf_cta_max_*_for_slm`, and `..._max_m_for_slm` returns
+`min(elems, INT_MAX)` (`geqrf_cta.cc:176-179`) — so `cta_max_m == cta_max_elems` and the
+**area** is the only binding bound. Budget `101,376 - 4,096 = 97,280 B`: float 24,320 elems,
+double and cfloat 12,160, cdouble 6,080.
+
+**A permissive capacity makes the tier half of a route test vacuous for the complex types.**
+The permissive `4096 / 1<<24` pair used for the other ops' shapes in that file would make
+EVERY cell CTA-eligible. For float and double that still leaves something to assert, because
+their `native_tier_preferred` carries a real column cap (96 and 48, see
+[the-third-predicate](#the-third-predicate)). For cfloat and cdouble it does not: their
+`native_tier_preferred` returns a `1 << 30` column cap, so **the fit gate is the ONLY thing
+that ever sends cfloat or cdouble to the blocked arm**. A test that hands them an unbounded
+tile can never observe `Algorithm::Blocked`, and the tier column of its table asserts nothing.
+Hence `geqrf_dev_shape<T>()` reports this box's real budget rather than the permissive shape.
+
+## The `geqrf` order floor and the tall-panel clause
+
+The two windows `route_geqrf.hh`'s `preferred()` ships, and every cell that bounds them. The
+per-cell grid both tables are derived from is [`small-n-baseline.md#geqrf`](small-n-baseline.md#geqrf)
+and is **not** repeated here; what is here is the selection — which cell became an edge, and
+which measured cell was refused as one.
+
+### Why the floors sit where they do
+
+cuBLAS `geqrfBatched` is unblocked and saturates at ~380 GFLOP/s (float) **regardless of n**
+(see [the-vendor-baseline](#the-vendor-baseline)), so the native arm pulls away as n grows.
+Below the floor the reverse holds, because the native panel kernel is the whole cost at a size
+where there is no trailing work to amortise it.
+
+The floors are the first order clearing the repository's flip gate, `t_native <= 0.90 t_vendor`
+(ratio >= 1.11), at the top of the measured batch ladder, with the order below it measured as a
+loss:
+
+| T | floor | ratio at floor | bracketing loss below |
+|---|---|---|---|
+| `float` | 64 | 1.71 | 48: 1.02   33: 0.76 |
+| `cfloat` | 48 | 1.74 | 33: 0.69   32: 0.62 |
+| `double` | **76** (was 96) | 1.26 | 72: 1.11   64: 1.01 |
+| `cdouble` | 256 | 1.50 | 192: 1.06   129: 0.58 |
+
+The `double` row is P5's, re-measured with the register panel leaf in the blocked arm and
+with its own brackets; the other three are P0's and are unchanged.
+[The double order floor moves to 76](#the-double-order-floor-moves-to-76) carries that grid.
+
+**float n = 48 (1.02) and cdouble n = 192 (1.06) are inside the gate's dead band and are
+deliberately excluded**: both are single cells that do not clear 1.11, and a window edge without
+a clearing measurement is a guess.
+
+### Tall panels cross over earlier
+
+They are also the shape the callers actually issue: `sytrd_sy2sb.cc:509` and
+`band_reduction.cc:603` factorise an `m x kd` panel with `kd` typically 32, where every square
+cell loses. A floor on `cols()` alone leaves that shape on the vendor while the measurement says
+native is 1.6-6.4x there. Ratios are native-over-vendor at the top of the batch ladder — b16384
+for the `512x*` and `128x32` rows, b8192 for `1024x128`:
+
+| shape | aspect | float | cfloat | double | cdouble |
+|---|---|---|---|---|---|
+| 128 x 32 | 4x | 2.23 | 3.79 | 0.68 | 0.68 |
+| 512 x 32 | 16x | 2.68 | 3.39 | 1.58 | 2.16 |
+| 512 x 64 | 8x | 3.175 | 4.102 | 2.373 | 1.734 |
+| 1024 x 128 | 8x | 7.16 | 5.090 | 6.418 | *excluded* (1.691 at b8192, paging; 2.96 at b4096) |
+
+Hence the second clause, on the panel's **aspect ratio**, and the ratio is per type. `128 x 32`
+is the whole reason: at 4x the 32-bit types win 2.23-3.79 and the 64-bit types **lose** at 0.68,
+so a type-independent aspect floor of 4 would route two measured losses native. The 64-bit floor
+is **8x**, bracketed on both sides — `1024 x 128` (8x) wins 6.418 for double and `512 x 64` (8x)
+wins 2.373 / 1.734 for double / cdouble, while `128 x 32` (4x) loses 0.68 for both.
+
+**Two edges are unbracketed and are debts, not evidence.** The 32-bit aspect floor of 4x is not
+bracketed below: no tall cell narrower than 4x was measured for any type, so 4 is the smallest
+measured aspect and not a demonstrated boundary. Neither is `rows() >= 128`, for the same reason
+— `128 x 32` is simply the shortest tall panel in the grid.
+
+**Reconciliation on the move out of the code.** The table above is re-derived from
+`benchmarks/results/factor_baseline_geqrf_*.csv`, and four cells of the version that shipped in
+the header were wrong: cfloat `512x64` read 3.70 against a measured 4.102, cfloat `1024x128`
+read 5.07 against 5.090, float `512x64` read 3.17 against 3.175, and double / cdouble were shown
+as `-` at `512x64` and `1024x128` although all four of those cells are measured (2.373 / 1.734
+and 6.418 / 1.691). The corrections all move in the argument's own direction: cdouble at 8x wins
+1.734 at `512x64`, which the header's `-` had left the 64-bit aspect floor resting on double
+alone. The one cell that is genuinely not usable is cdouble `1024x128` b8192 — 32 GB, paging,
+1.691 against 2.130 and 2.956 on the two rungs below it, excluded on
+[`small-n-baseline.md#geqrf`](small-n-baseline.md#geqrf)'s own oversubscription rule.
+
+### Why the window answers for exactly one tier
+
+**The tier hook must not be pre-empted.** `resolve_route`'s `automatic()` walks `kGeqrfOrder`
+testing `supports(r) && preferred(r)` and RETURNS on the first hit, before
+`native_tier_preferred` is consulted at all. CTA leads that order, so a window that answers true
+for CTA hands it every shape it can hold, whatever the tier hook says. Measured cost of getting
+this wrong, at the double floor (n = 96): **CTA 65.19 ms against blocked 47.70 and vendor 55.27,
+i.e. the window shipped 0.848x — a loss against the arm it replaced** — while float n = 128 took
+CTA's 2.12x instead of blocked's 3.62x. `tests/geqrf_tests.cc` G9b exists for exactly this and
+caught it. The mechanism and the invariant that guards it are in
+[a-non-empty-preferred-pre-empts-native_tier_preferred](#a-non-empty-preferred-pre-empts-native_tier_preferred);
+the numbers above are the ones that were in the header.
+
+Two figures on that line disagree with other records and neither changes the conclusion. Commit
+`f4e63fb`'s own message gives the vendor time as 55.18, not 55.27; **55.27 is the one consistent
+with the 0.848x it also quotes** (55.18 / 65.19 = 0.846), so 55.27 is kept. The independent pin
+at float n = 128 in [`small-n-baseline.md`](small-n-baseline.md#where-this-baseline-disagrees-with-the-record)
+reads `cta` 15.419 ms / `blocked` 9.349 ms / vendor 31.024 ms, i.e. 2.01x against 3.32x rather
+than 2.12x against 3.62x — a different session and batch, same direction, same size of mistake.
+
+**Why `best_native_tier(s)` and not `native_tier_preferred(r, s)` composed directly.** For the
+complex types that hook returns a `1 << 30` column cap, meaning "CTA wherever it FITS" (see
+[the-third-predicate](#the-third-predicate)), so its **Blocked arm is false at every real
+order**. Composing it directly would answer false for *both* tiers at, say, cfloat 256x256 —
+where CTA cannot hold the tile (65,536 scalars against a cfloat capacity of 12,160) and Blocked
+measures **7.51x** — and hand a large measured win back to the vendor. `best_native_tier`
+resolves the fit first and consults the hook only among the tiers that can serve.
+
+---
+
+## The occupancy rule
+
+**P7, 2026-09-10.** `geqrf_cta_max_elems_for_slm<T>(budget, min_blocks_per_sm)` divides
+the device budget by an occupancy target before converting it to an element count. The
+hole clamp is applied **after** the division: a scaled budget can land inside the 48 KB
+band even when the whole one did not.
+
+### Why geqrf's target is 2 and not 4
+
+`resident::kMinBlocksPerSm` is 4 and potrf and getrf use it. geqrf uses 2
+(`kGeqrfMinBlocksPerSm`), and the reason is a general one worth stating plainly: **the
+occupancy rule answers "how many work-groups fit", not "is the better-occupancy arm
+faster".** For this op the alternative to the CTA tier is not a leaner kernel — it is the
+blocked driver, which runs *the same resident panel* plus `larft` and three trailing
+GEMMs. An occupancy-limited kernel is still the best kernel when the alternative is a
+multi-launch driver.
+
+At target 4 the advertised area falls below the CTA-vs-Blocked crossover
+`native_tier_preferred` already ships (96 columns for float), i.e. the capacity would
+refuse shapes the measured tier table calls faster. Measured, native arm, large batch:
+
+| type | m x n | batch | before | at target 4 | ratio |
+|---|---|---|---|---|---|
+| cfloat | 64 x 64 | 8192 | 4.9460 | 9.0565 | **1.831 SLOWER** |
+| float | 96 x 96 | 4096 | 4.9748 | 5.6843 | **1.143 SLOWER** |
+
+Both are routed cells — geqrf's `preferred()` window is non-empty for float and cfloat —
+so those were user-visible losses, not vendor-free-only ones. At target 2 both return to
+baseline (cfloat 64: 4.9470, ratio 1.000; float 96: 4.9698, ratio 0.999) and the ceiling
+lands at 108 square for float, inside the plan's measured 96..112 crossover window.
+
+At this box's 97,280 B budget, target 2 (note 48,640 falls inside the launch-hole band and
+is clamped to 47,104, which is where the odd-looking figures come from):
+
+| type | advertised elems (target 2) | square | resident elems (target 1) | square |
+|---|---|---|---|---|
+| float | **11,776** | 108 | 24,320 | 155 |
+| double | **5,888** | 76 | 12,160 | 110 |
+| complex\<float\> | **5,888** | 76 | 12,160 | 110 |
+| complex\<double\> | **2,944** | 54 | 6,080 | 77 |
+
+Both `cta_max_m` and `cta_max_elems` survive, and the capacity stays an AREA: collapsing
+it to a scalar order makes the tier column of the geqrf and route-vocabulary tests vacuous
+for cfloat and cdouble, whose `native_tier_preferred` is "CTA wherever it fits".
+
+### Settling the target on the tall panels
+
+**P7 follow-up, 2026-09-11.** The paragraph above was argued from square cells only. The
+review's objection was that the clamp moves the *tall* panels — and those are the shape
+the eigen drivers issue on every call (`sytrd_sy2sb.cc:509`, `ortho.cc`, `band_reduction.cc:603`
+hand `geqrf` an `m x nb` panel with `nb` 32..64). A host probe against the shipped table
+confirmed the routing move: at target 2 the default `Auto` route goes `native:cta ->
+native:blocked` for float `512x32`, `384x32`, `256x64`, for cfloat `256x32`, and for
+double `256x32`. **Measured, the move costs nothing.**
+
+Raw rows: [`benchmarks/results/p7_occupancy_geqrf_tall.csv`](../../benchmarks/results/p7_occupancy_geqrf_tall.csv)
+(144 rows, 9-11 reps, interleaved, `rel_sd <= 0.05`, residual and `||Q^H Q - I||` checked
+on items 0 and batch-1 in double promotion). Ratio is `blocked_ms / cta_ms`, so **> 1
+means CTA ahead**, matching [cta-vs-blocked-crossover](#cta-vs-blocked-crossover).
+
+| type | m x n | elems | batch | vendor | CTA | Blocked | blk/cta |
+|---|---|---|---|---|---|---|---|
+| float | 512 x 32 | 16,384 | 8192 | 21.8490 | 8.2560 | 8.2622 | 1.001 |
+| float | 384 x 32 | 12,288 | 8192 | 15.6254 | 4.0916 | 4.0982 | 1.002 |
+| float | 256 x 32 | 8,192 | 8192 | 9.4998 | 2.3654 | 2.3749 | 1.004 |
+| float | 256 x 64 | 16,384 | 8192 | 40.3957 | 15.0023 | 10.5431 | **0.703** |
+| cfloat | 256 x 32 | 8,192 | 8192 | 20.2912 | 6.7715 | 6.7776 | 1.001 |
+| double | 256 x 32 | 8,192 | 8192 | 21.6106 | 20.6838 | 19.3423 | **0.935** |
+| float | 1024 x 128 | 131,072 | 4096 | 366.7172 | *never CTA-eligible* | 63.9487 | — |
+
+Three dead ties and two Blocked wins; **CTA wins no cell the clamp moves.** `1024x128` is
+the control and did not move: 131,072 elements is above the resident ceiling at every
+target, so it is Blocked at 1, 2 and 4 alike.
+
+**Why the ties are ties, and it is not noise.** `geqrf_blocked`'s block width on this box
+is **nb = 32** (nb = 16 for double: `geqrf_blocked_debug_params`). At `n <= nb` the blocked
+route factorises the whole panel in **one leaf call** — the same `geqr2_panel_device`
+launch the CTA tier makes, taken through `geqrf_leaf_fits` at the *whole* budget, so it
+keeps residency. `cta -> blocked` at `512x32` / `384x32` / `256x32` / `320x32` / `192x32`
+is therefore not a kernel change at all; the 0.1-0.4% is the driver's host-side framing.
+The residual and orthogonality columns are bit-equal between the two arms at every one of
+those cells, which is the check that says so. At `n > nb` the driver splits — float
+`256x64` becomes two `256x32` panels plus `larft` and a trailing GEMM — and that is
+**faster** than the one-shot `256x64` resident panel, by 1.42x, stable across the batch
+ladder (b4096 0.729, b8192 0.703, b16384 0.690). Double `256x32` splits into two `256x16`
+panels and wins 1.07x (b4096 0.940, b8192 0.935, b16384 0.933; the cell reproduces to
+three digits on a re-measure).
+
+**Target 4 is refuted, with fresh numbers.** The two cells quoted in the table above
+re-measure at 5.7432 / 4.9769 for float `96x96` (**1.154 CTA ahead**) and 9.0424 / 4.9606
+for cfloat `64x64` (**1.823 CTA ahead**), against the 1.143 and 1.831 recorded at P7. Both
+are routed cells. Raising geqrf to its siblings' 4 would hand both to the blocked driver.
+
+**Decision: `kGeqrfMinBlocksPerSm` stays 2.** Neither the constant nor the tall-panel
+clause moves. `GeqrfTest.OccupancyTargetIsPinned` fails if the value
+moves, so the constant cannot drift back to its siblings' 4 unremarked. The tall clause in particular needs no re-cut: at every `m x nb` panel in the
+grid with `nb` in 32..64, the arm the table routes to is never slower than the arm it
+passed over.
+
+#### What the clamp does cost, and where the real cut belongs
+
+The bracketing is not one-sided and the debt is recorded rather than argued away. A single
+scalar occupancy target is a proxy for a **per-type crossover area**, and it lands 4-28%
+below the measured one. Ladders at fixed n, `blocked_ms / cta_ms`:
+
+| type | n | m (elems) → ratio | crossover bracket |
+|---|---|---|---|
+| float | 64 | 128 (8,192) 1.551 · 192 (12,288) 1.231 · **224 (14,336) 0.706** · 256 (16,384) 0.703 | 12,288 .. 14,336 |
+| float | 96 | 96 (9,216) 1.154 · 128 (12,288) 1.191 · **160 (15,360) 0.672** · 192 (18,432) 0.690 | 12,288 .. 15,360 |
+| cfloat | 48/64/96 | 64x64 (4,096) 1.823 · 128x48 (6,144) 1.925 · **128x64 (8,192) 0.913** · 96x96 (9,216) 0.924 · 160x64 (10,240) 0.957 | 6,144 .. 8,192 |
+| double | 32 | 192 (6,144) 1.043 · 224 (7,168) 0.949 · 256 (8,192) 0.935 · 288 (9,216) 1.148 · 320 (10,240) 1.139 · 352 (11,264) 1.128 | **non-monotone** |
+
+float `n = 32`, cfloat `n = 32` and cdouble `n = 32` are absent from this table on purpose:
+`n <= nb` makes both arms the same launch, so they are ties by construction and bracket
+nothing. **double at n = 32 is genuinely non-monotone** — a narrow Blocked dip at
+m = 224..256 with CTA ahead on both sides — and every cell on that ladder is within 1.15x,
+so it brackets nothing either. It is quoted because it was re-measured at 11 reps
+specifically to check the dip, and the dip reproduced.
+
+Cost of the shipped target at **routed** cells it cuts below the crossover: float `128x96`
+1.191, float `192x64` 1.231, cfloat `128x48` **1.925**, double `192..352 x 32` 1.04-1.15.
+Cost of target **1** at routed cells: float `224x64` 1.417, `256x64` 1.423, `192x96` 1.450,
+`160x96` 1.487, double `224..256 x 32` 1.07. Cost of target **4**: everything target 2
+costs, plus float `96x96` 1.154 and cfloat `64x64` 1.823. **4 is strictly worse than 2; 1
+and 2 trade cells of comparable size in opposite directions**, and 2 is the one that is
+neutral-or-better on the driver shapes, which is why it stays.
+
+**The debt.** The largest single cell above is cfloat `128x48` at 1.925, and it is on the
+wrong side of a ceiling that misses by 4% (5,888 advertised against a crossover above
+6,144). Chasing it by moving the occupancy target is the wrong lever: the target scales
+every type's ceiling by the same factor, and the four crossovers are not in that ratio. The
+right cut is a measured **per-type area** in `native_tier_preferred`, where a speed cutoff
+belongs — `route_geqrf.hh`'s own header says `supports()` is correctness only, and
+`GeqrfTest`'s tie-break test already asserts that neither arm may lose `supports()` across
+the crossover for exactly this reason. That is a routing change with its own grid (double
+is not settleable from the six cells here) and is **not** taken as part of this settlement.
+
+### The `geqrf_blocked_debug_params` key
+
+`geqrf_blocked_debug_params<T>(ctx, m, n)` packs **nb in the low 16 bits and the leading
+panel's leaf in the high 16** (`1` = resident, `2` = global); the whole word is **0** when
+the driver is absent. It answers `geqrf_leaf_fits` at the whole SLM budget, not
+`geqrf_cta_fits` at the occupancy-scaled one -- see [the panel leaf is not the tier
+ceiling](#the-panel-leaf-is-not-the-tier-ceiling). `tests/geqrf_tests.cc` compares the
+high half against bare `1u`/`2u`, so this is the only definition of those two values in
+the tree. The `getrf` hook uses the same encoding; its record is at
+[lu.md](lu.md#one-spelling-per-ceiling).
+
+### The panel leaf is not the tier ceiling
+
+`geqrf_cta_fits` is the TIER's predicate and is occupancy-scaled; `geqrf_leaf_fits` is the
+residency one and is asked at the whole budget. `geqrf_panel_factorize` and
+`geqrf_blocked.cc`'s leading-panel tag use the latter, so no blocked panel loses residency
+to an occupancy target. `GeqrfTest.ResidentLeafLaunchHoleAt48KiB` moved to the leaf
+predicate and the leaf entry point for the same reason: a 48 KB tile is far above the
+occupancy-scaled tier ceiling, so under the new rule only the resident leaf can reach the
+hole at all. It must still be the FIRST test in its file.
+
+### Packed resident panels
+
+`geqr2_panel_device` is templated on `GeqrfScope`. Under `SubGroup` the phase barriers are
+sub-group barriers, `team`/`nteams` collapse to 0/1, and — the part that matters here —
+both `reduce_over_group` calls become butterflies (`geqrf_sg_max`, `geqrf_sg_sum`). That
+removes the static shared allocation that makes this kernel, alone among the three,
+actually trip the 48 KB hole. Packing is offered while `m <= 32 && n <= 32`.
+
+| type | m x n | batch | vendor | before | after | ratio |
+|---|---|---|---|---|---|---|
+| float | 8 x 8 | 32768 | 0.0613 | 0.7287 | 0.1466 | **0.201** |
+| float | 16 x 16 | 32768 | 0.3501 | 1.6156 | 0.4700 | **0.291** |
+| float | 32 x 32 | 16384 | 1.4448 | 1.9716 | 1.2037 | **0.611** |
+| double | 32 x 32 | 16384 | 4.5973 | 21.6526 | 6.9274 | **0.320** |
+| cfloat | 32 x 32 | 16384 | 1.6531 | 2.6749 | 2.2372 | **0.836** |
+
+1.2-5.0x. The largest factors are float 8x8 (4.97x) and double 32x32 (3.13x), which is
+consistent with the mechanism: those are the shapes where the old launcher gave a
+64-element column a reduction over 256 lanes, through the work-group collective design
+rule R4 already recorded as 1.5-4.7x slower for FP64.
+
+### The one cell this cost
+
+**cdouble 64 x 64, batch 8192, native arm: 59.1719 -> 98.4222 ms, 1.66x SLOWER.** 4,096
+elements is above cdouble's advertised 2,944 and fits only at target 1 (65,536 B, 1.48
+work-groups per SM), so the shape leaves CTA for the blocked driver. cuBLAS serves it in
+31.4838 ms — native loses to the vendor either way — and cdouble's `preferred()` floor is
+256 columns, so `Auto` never routed this cell native. Visible only in a vendor-free build
+or under a forced route. Per design rule R10 double is measured and reported, not gated.
+
+## The tiny tier (WP6 / P1): square n <= 32 in registers
+
+`src/extensions/geqrf_tiny.cc`, `Algorithm::Tiny`, first in `kGeqrfOrder`. One matrix per
+`SubGroupPartition<N>` with `N` in {8, 16, 32}; lane `r` owns row `r` in a compile-time
+`D rA[N]`. **Two** sub-groups per work-group -- `tiny_device.hh`'s shared `kTinyWgSize`,
+64 work-items -- carrying `64 / N` matrices. Reachable only by an explicit `{Native, Tiny}`
+pin (`BATCHLAS_GEQRF_ROUTE=tiny`) or by forcing: `preferred()` and
+`native_tier_preferred()` both answer **false** for the tier.
+
+**NO TIMING HAS BEEN TAKEN.** The implementation PR is correctness and residency only.
+Nothing on this page is a speed claim about the tier, and its window stays closed until a
+grid exists. The band it would serve is the one measured NATIVE LOSS in
+[the order and batch grid](#geqrf-order-and-batch-grid) (n = 32, batch 8192: float 0.78x,
+double 0.21x, cfloat 0.71x, cdouble 0.33x), served there by the CTA tier; the grid that
+would settle the tier and the exact routing edit it implies are in
+[the tiny tier is supported, never preferred, and never timed](#the-tiny-tier-is-supported-never-preferred-and-never-timed).
+
+### The tiny ceiling predicate
+
+`geqrf_tiny_max_n_for_slm<T>(budget)` is the **one** predicate for the tier ceiling — the
+shape builder, the entry point and the tests all call it, and forking it would let
+`supports()` advertise an order the launcher refuses. It returns 0 when no bucket fits; the
+type ceiling is **32**, and **16 for `complex<double>`** ([the cdouble N=32
+cell](#the-cdouble-n32-cell)). The value is **not monotone in the bucket width** — the
+chunk rule halves the tile as N grows ([the chunk
+width](#the-chunk-width-and-the-one-cell-that-is-pinned)) — so it is a walk with a `break`,
+which is what makes the range it names contiguous.
+
+#### Why the Tiny arm is spelled out
+
+`native_tier_preferred`'s `default:` returns **true**, and Tiny leads `kGeqrfOrder`. A
+default-true answer would therefore hand the tier the vendor-free walk
+(`route_resolve.hh:40-50`) and every bare `BATCHLAS_GEQRF_ROUTE=native` pin
+(`route_resolve.hh:78-86`) before a single cell had been measured. The explicit `false`
+leaves it reachable by an explicit `{Native, Tiny}` pin, which `route_resolve.hh` honours
+regardless of this hook -- all a benchmark arm needs. Flipping it to true belongs in the
+SAME commit that widens `preferred()`'s window from the grid.
+
+The `supports()` gate is square-only (`m == n && n <= tiny_max_n`): the register array IS
+the matrix, so a tall panel is the CTA tier's, and `tiny_max_n` is an ORDER, not an area --
+the footprint is a work-group's, not a matrix's.
+
+**What it replaces.** The CTA tier holds the tile in local memory and, for each
+reflector, runs a separate 5-step butterfly per TRAILING COLUMN (`geqrf_cta_device.hh`'s
+apply): at n = 32 that is **496 dependent shuffle chains per matrix**, each reducing a
+column that has exactly one element per lane, plus a re-read of the trailing columns from
+local memory on every reflector. The tiny kernel reduces ONCE per column -- the
+Householder scalars, replicated to every lane by an order-symmetric butterfly, so no
+publish/broadcast pair is needed -- and forms the whole trailing update as an elementwise
+product into one local tile whose columns are then summed. The matrix never leaves the
+register file between the load and the store.
+
+### The tiny tier register table
+
+`scripts/register_probe.sh out.log '' batchlas_extensions_cta` on sm_89, at the shipped
+work-group width (64) and chunk widths. **The third argument is load-bearing**: the
+script's default target is `batchlas_sycl`, which contains none of these kernels, and a
+clean report from the wrong library reads exactly like a clean report from the right one.
+Each kernel appears twice (`<name>` and `<name>_with_offset`); the two agreed in every
+cell.
+
+`blocks/SM = min( 65536 / (ceil8(regs) * 64), 1536 / 64, 24 )`; occupancy is
+`blocks * 64 / 1536`.
+
+| T | N | C | registers | ceil8 | regs x 64 | blocks/SM | occupancy | frame | spill |
+|---|---|---|---|---|---|---|---|---|---|
+| float | 8 | 8 | 64 | 64 | 4,096 | 16 | 66.7% | 0 | 0 / 0 |
+| float | 16 | 16 | 91 | 96 | 5,824 | 10 | 41.7% | 0 | 0 / 0 |
+| float | 32 | 32 | 142 | 144 | 9,088 | 7 | 29.2% | 0 | 0 / 0 |
+| double | 8 | 8 | 84 | 88 | 5,376 | 11 | 45.8% | 0 | 0 / 0 |
+| double | 16 | 16 | 124 | 128 | 7,936 | 8 | 33.3% | 0 | 0 / 0 |
+| double | 32 | 16 | 193 | 200 | 12,352 | 5 | 20.8% | 0 | 0 / 0 |
+| cfloat | 8 | 8 | 72 | 72 | 4,608 | 14 | 58.3% | 0 | 0 / 0 |
+| cfloat | 16 | 16 | 128 | 128 | 8,192 | 8 | 33.3% | 0 | 0 / 0 |
+| cfloat | 32 | 16 | 168 | 168 | 10,752 | 6 | 25.0% | 0 | 0 / 0 |
+| cdouble | 8 | 8 | 110 | 112 | 7,040 | 9 | 37.5% | 0 | 0 / 0 |
+| cdouble | 16 | 8 | 162 | 168 | 10,368 | 6 | 25.0% | 0 | 0 / 0 |
+
+Eleven instantiations, every one at zero spill and zero stack frame, every one at or above
+R1's four-blocks-per-SM floor. `ptxas` reports **0 bytes of static shared** for every
+`GeqrfTinyKernel` (no `bytes smem` field appears on any of the 22 entry lines), which is
+what keeps the (47,104, 49,664] launch hole structurally unreachable for this TU; the
+dynamic local request is 2,560-8,960 B per work-group, so none of `geqrf_cta.cc`'s
+hole-padding machinery is carried here.
+
+The table lives in `geqrf_tiny_device.hh` as `GeqrfTinyRegs<D>`, keyed on the **device**
+scalar, and it is the single source of truth: the chunk-width rule reads it, the hard
+`regs x wg <= 65536` gate is derived from it (`max cell + 8`), and the R1 residency gate
+is a `static_assert` per cell.
+
+The register MODEL -- `R(N, words) = N*words + 88`, calibrated on `trsm_native.cc`'s
+measured table -- survives only as the fallback for a cell with no probe row. It is wrong
+in **both** directions: it over-predicts at N = 8 and 16 (96 against a measured 64 for
+float N=8) and under-predicts at N = 32 (120 against 142 for float) -- roughly **-30% at
+N = 8 and +25% at N = 32**. Letting it choose the chunk width while the probe gated the
+launch was two sources of truth for one number, and that is what the move fixes.
+
+`kGeqrfTinyRegMargin = 8` is the headroom added to the worst cell before the hard
+`regs x wg <= 65536` gate is derived from it. The hard gate has enormous slack at this
+tier's width: at a 64-wide work-group it permits **1,024 registers per work-item**, so it
+can never fire, and the R1 four-blocks-per-SM `static_assert` per cell is the gate that
+actually binds.
+
+`ptxas` allocates registers in banks of eight, which is why every residency formula on
+this page rounds first: at 92 registers a block costs **96** per work-item, and a rule
+that reads 92 admits a block the hardware refuses.
+
+### The launch shape: 64 work-items, not 128
+
+An earlier revision ran four sub-groups (128 work-items) on the stated grounds that "a
+wider work-group amortises the tile allocation over more matrices". It does not: the
+`local_accessor` is sized `M * per_matrix`, exactly linear in `M` with no fixed term, so
+there is nothing to amortise. The three effects that are real all point the other way --
+register quantisation (`blocks/SM = 65536 / (ceil8(regs) * WG)`), local memory per
+work-group, and the launch tail's wasted partitions.
+
+Same probed register counts (registers are a property of the body, and no
+`reqd_work_group_size` is declared, so no `.maxntid` lets ptxas trade against a launch
+bound), two launch widths:
+
+| T | N | blocks x 64 = threads | blocks x 128 = threads | occupancy 64 | occupancy 128 |
+|---|---|---|---|---|---|
+| float | 8 | 16 / 1,024 | 8 / 1,024 | 66.7% | 66.7% |
+| float | 16 | 10 / 640 | 5 / 640 | 41.7% | 41.7% |
+| float | 32 | 7 / 448 | 3 / 384 | **29.2%** | 25.0% |
+| double | 8 | 11 / 704 | 5 / 640 | **45.8%** | 41.7% |
+| double | 16 | 8 / 512 | 4 / 512 | 33.3% | 33.3% |
+| double | 32 | 5 / 320 | 2 / 256 | **20.8%** | 16.7% |
+| cfloat | 8 | 14 / 896 | 7 / 896 | 58.3% | 58.3% |
+| cfloat | 16 | 8 / 512 | 4 / 512 | 33.3% | 33.3% |
+| cfloat | 32 | 6 / 384 | 3 / 384 | 25.0% | 25.0% |
+| cdouble | 8 | 9 / 576 | 4 / 512 | **37.5%** | 33.3% |
+| cdouble | 16 | 6 / 384 | 3 / 384 | 25.0% | 25.0% |
+
+Equal or better in all eleven cells, strictly better in four. It also halves bytes per
+work-group, and re-uses `tiny_device.hh`'s shared `kTinyWgSize` instead of forking a second
+geometry constant. `getrf_tiny.cc`'s four-sub-group rationale ("pure register work with no
+local memory, so the width costs nothing but occupancy granularity") does not transfer:
+geqrf is the one tiny arm that HAS local memory.
+
+100% occupancy (<= 42 registers per work-item) is out of reach for every cell but float
+N=8's neighbourhood, because `rA[N]` alone is `N*words` registers -- 32 for float N=32, 64
+for double N=32, 128 for cdouble N=16 -- before any working set.
+
+### The chunk width, and the one cell that is pinned
+
+C is derived, not fixed: the largest of {N, N/2, N/4} at which
+`blocks_by_slm >= blocks_by_regs`, both sides compile-time and the register side read from
+the probe. Local memory per matrix is `N*(C+1) + C` scalars -- the product tile plus a
+SEPARATE C-element `y` vector, which is exactly why two barriers per chunk cover all three
+hazards including the inter-chunk WAR.
+
+| T | N | C | matrices/WG | bytes/WG | blocks by SLM | blocks by regs |
+|---|---|---|---|---|---|---|
+| float | 8 | 8 | 8 | 2,560 | 38 | 16 |
+| float | 16 | 16 | 4 | 4,608 | 21 | 10 |
+| float | 32 | 32 | 2 | 8,704 | 11 | 7 |
+| double | 8 | 8 | 8 | 5,120 | 19 | 11 |
+| double | 16 | 16 | 4 | 9,216 | 10 | 8 |
+| double | 32 | 16 | 2 | 8,960 | 10 | 5 |
+| cfloat | 8 | 8 | 8 | 5,120 | 19 | 14 |
+| cfloat | 16 | 16 | 4 | 9,216 | 10 | 8 |
+| cfloat | 32 | 16 | 2 | 8,960 | 10 | 6 |
+| cdouble | 8 | 8 | 8 | 10,240 | 9 | 9 |
+| cdouble | 16 | 8 | 4 | 9,728 | 10 | 6 |
+
+Local memory is never the binding residency limit at the shipped widths, which is what the
+derived rule exists to guarantee.
+
+**double N=32 is PINNED to C=16, and the re-probe is why.** Halving the work-group to 64
+halves bytes/WG, which lets the derived rule offer that cell C=32 (SLM admits 5 blocks
+against 5 by registers at the C=16 register count -- the tie the rule accepts). The
+prediction was that the single-chunk body would be no worse than float N=32's, which was
+clean. It was worse:
+
+| double N=32 | registers | ceil8 | blocks/SM at WG=64 | barriers per matrix |
+|---|---|---|---|---|
+| C = 16 (shipped) | 193 | 200 | 5 | 124 |
+| C = 32 (re-probe) | **218** | 224 | **4** | 62 |
+
+Both are at zero frame and zero spill, so this is not the unroll defect below; the wider
+chunk simply doubles the two elementwise phases and ptxas answers with 25 more registers.
+Halving the barriers costs a resident block, and 4 blocks/SM is R1's floor rather than
+comfortably above it, so the cell keeps the narrow chunk. `GeqrfTinyRegs<double>::pin[2]`
+records it and a `static_assert` re-derives it, so the pin cannot silently rot.
+
+**The tile's leading dimension is `C + 1`, and the odd stride is per scalar width.** The
+tile's two hot accesses are a unit-stride row walk (phase 1 writes `sP[lane*SLDA + kk]`)
+and an all-lanes-one-address broadcast (phase 3 reads `sy[kk]`), so the `+1` exists to
+spread the N rows of a column over distinct banks:
+
+| scalar width | phases per warp-wide access | banks touched by row r | covers 32 banks |
+|---|---|---|---|
+| 4 B | 1 x 32 lanes | `gcd(C+1, 32) = 1`, so r mod 32 | r = 0..31 |
+| 8 B | 2 x 16 lanes | `2r mod 32` | r = 0..15 |
+| 16 B | 4 x 8 lanes | `4r mod 32` | r = 0..7 |
+
+Each row covers all 32 banks exactly once at its own width. The reference local-memory
+budget the compile-time derivation is taken against is `kGeqrfTinyReferenceSlm = 97,280`
+B, this box's per-SM figure; every RUNTIME decision reads `LOCAL_MEM_SIZE` from the
+device through `resident::device_slm_budget` instead.
+
+### The stack frame is the gate for this kernel, not the spill counter
+
+`scripts/register_probe.sh`'s own header says to gate on `0 bytes spill stores / 0 bytes
+spill loads` and never on stack frame, because 220 of 376 entry functions in this tree
+carry a non-zero frame with zero spills. **For this kernel that advice inverts**, and the
+first probe is why:
+
+| T | N | C | first probe | after `#pragma clang loop unroll(full)` |
+|---|---|---|---|---|
+| float | 32 | 32 | 142 regs, 0 B frame, 0 spill | unchanged |
+| double | 32 | 16 | 158 regs, **256 B frame**, 0 spill | 193 regs, 0 B frame, 0 spill |
+| cfloat | 32 | 16 | 158 regs, **256 B frame**, 0 spill | 168 regs, 0 B frame, 0 spill |
+| cdouble | 32 | 16 | 140 regs, **544 B frame**, 0 spill | not instantiated |
+
+256 B is exactly `sizeof(double) * 32`, i.e. `rA[N]` itself. `#pragma unroll` is a HINT
+that clang weighs against a code-size threshold; at N = 32 with C = N/2 the doubled
+phase-2 body crosses it, the column loop survives, `rA[j]` becomes a **dynamic index**,
+and the front end places the array in local memory. That is not a ptxas *spill*, so the
+spill counter stayed at zero and the recommended gate reported the kernel healthy while
+its entire thesis had been undone. `unroll(full)` on every loop whose index reaches `rA`
+is the fix. The float N=32 cell was clean on the first probe (C = N there, one chunk per
+column), which is exactly why probing the float row alone would have missed this.
+
+The `-Wpass-failed=transform-warning` line `loop not unrolled` on the column loop is the
+compile-time signal for the same defect, and it is emitted.
+
+### The cdouble N=32 cell
+
+Not instantiated: `geqrf_tiny_type_ceiling<complex<double>>()` is 16, and the N=32 arm
+sits under `if constexpr` so no kernel is emitted. This is a **budget decision with a live
+counter-example**. `trsm_native.cc` ships a `complex<double>` N=32 body with `x[32]` --
+the same 128-register array -- at a measured 226 registers and zero spill on this
+toolchain today, and the first probe above compiled this kernel's cdouble N=32 cell (at
+`unroll(full)` it would need re-measuring, since 140 registers there came with a 544 B
+frame). So the cell is reachable; it is left out to hold the instantiation count at 11.
+It is also the largest unclaimed shape in the band: the P0 baseline has cuBLAS at
+5,758.5 us for cdouble n=32 at b8192 against a 282.6 us DRAM roof, 20.4x above it, with
+the CTA arm at 0.33x -- the worst vendor-relative cell in the whole grid. First extension
+after v1, not a closed question.
+
+### R7: the device link
+
+`geqrf_tiny`'s 22 entry functions cost **19.4 s of the library's 182.9 s of `ptxas`**,
+or 10.6% — inside R7's 15% budget for this tier alone. The AGGREGATE for all three tiny
+tiers is over budget, and both the figure and the written justification R7 then requires
+live in exactly one place:
+`docs/perf/lu.md#r7-the-device-link-all-three-tiny-tiers-landed`. It is a property of
+`batchlas_extensions_cta` as a whole, so it is not restated here.
+
+### What the design gives up, and what to A/B first
+
+* **Phase 2 wastes lanes.** Only `min(C, n-1-j)` of the N lanes are active while a chunk's
+  columns are summed, so at C = N/2 at most half the partition works during part of the
+  apply. That is now confined to three cells (double N=32, cfloat N=32, cdouble N=16) and
+  to the last few columns of any cell. Splitting each column's sum across `N/w` lanes and
+  combining with `log2` shuffles is the fix, and is deliberately not in v1.
+* **Barriers per column are `2 * ceil((n-1-j)/C)`** -- exactly 2 wherever C = N (8 of the
+  11 cells), and 4 falling to 2 in the three cells where C = N/2. The plan budgeted 4 per
+  column everywhere; the saving comes from the butterfly norm letting every lane recompute
+  the Householder scalars, not from the chunking.
+* **A padded `ld` may split DRAM sectors when several matrices share a sub-group.** At
+  N = 8 a sub-group's 32 lanes read four segments belonging to four different matrices,
+  and at the fixtures' `ld = n + 5` those start unaligned. The `ld = n` and `ld = n + 5`
+  rows at n = 8 and 16 are what would expose it; if it measures large the answer is a
+  routing gate on `ld`, not a kernel change.
+* **double and cdouble cannot reach the DRAM roof.** Ada runs FP64 at 1/64, so the apply's
+  FP64-class warp instructions put double n=32 several times above its roof. Report those
+  cells against the VENDOR only; R10 is doing real work here.
+
+### Why bit-identity against the CTA route is not the padding test
+
+The plan asked for "n = 5 inside N = 8 is bit-identical to the CTA route at n = 5". That
+is unobtainable by construction: the CTA route reduces the column norm over 32 sub-group
+lanes (`geqrf_sg_sum`, `geqrf_cta_device.hh:169-186`) and the tiny kernel over an N-lane
+partition butterfly, so the association orders differ in the last ulp. The shipped guard
+is stronger and obtainable -- NaN in the `ld` pad, in the stride pad and in every row and
+column beyond `n`, then a finite correct factor AND an unchanged NaN pad -- and it arms
+the store-guard break at the same time.
+
+### Why the elementwise scan is the m x n window only
+
+`G7`'s native-vs-vendor elementwise comparison in `tests/geqrf_tests.cc` scans the
+`m x n` window of each item and nothing else. Widening it to the whole buffer is not
+conservative -- it silently converts a RELATIVE bound into an absolute one.
+
+`p.buf` is allocated with the poison fill `mk<T>(-9.75e3, 4.5e3)` and only the `m x n`
+window is ever written, so a scan over the whole buffer takes `scale` from the `ld` and
+stride padding -- magnitude **9.75e3** -- rather than from the factor, whose entries are
+**O(1)**. That is roughly **1000x** looser than the tolerance reads, and it admitted a
+float disagreement of about **0.07** on the very property the test exists to pin.
+
+The padding cannot compensate in the other direction either: it is bit-identical in both
+runs, so it contributes **0** to `worst` while inflating `scale`. The bound is therefore
+one-sided in the wrong direction, which is why the narrow scan is NECESSARY and not
+merely tighter.
+
+
+### The fixture's tolerance floor, and why it is new
+
+`residual_tol` / `orth_tol` in `tests/geqrf_tests.cc` were `0.5 (m + k) eps`. That term is
+a stand-in for the backward-error bound's constant times m n, and it stops standing in
+below about m + k = 16: at m = k = 1 it demands a relative residual of ONE eps, and at
+m = k = 2 two. Measured, on correct output:
+
+| shape | type | observed | old tolerance |
+|---|---|---|---|
+| 1x1 | cfloat | res 1.47e-07 (1.2 eps), orth 1.99e-07 (1.7 eps) | 1.19e-07 |
+| 2x2 | float | res 3.10e-07 (2.6 eps), orth 3.56e-07 (3.0 eps) | 2.38e-07 |
+
+A floor of 8 eps was added. It loosens NO shape this file tested before -- the smallest
+was 16x16, i.e. m + k = 32 and a 16 eps tolerance -- because nothing here reached n < 8
+until the tiny band. The evidence that the kernel and not the tolerance was at fault is
+`TinyIsNoWorseThanTheCtaRouteAtTinyOrders`, which runs both tiers on identical data for
+n = 1..12 and requires the tiny residual and orthogonality to stay within **2x** of the
+CTA route's, or under the 8 eps floor.
+
+**What "no worse" means there, exactly.** The two kernels differ only in the association
+order of one column norm — 32 sub-group lanes against an N-lane partition butterfly —
+which licenses an O(n eps) RELATIVE difference in the reflector, so the ratio must sit
+near one rather than inside a free multiple. The **4x** this test first carried let the
+register kernel lose two bits of the answer and still pass under a name claiming it loses
+none; the slack is now **2.0**. The floor is the other half of the claim, and at these
+orders it is the half that binds: both tiers land below 8 eps here, where a ratio says
+more about the noise than about the kernel.
+
+### Break sweeps: the tiny tier
+
+Each break was planted, rebuilt, run and restored. Expected-vs-observed:
+
+| # | break | expected | observed |
+|---|---|---|---|
+| b | store guard `k < N` instead of `k < n` (pass `N` to `tiny_store_full`) | the new pad-unchanged assertion in `check_one` goes red | **RED.** `tiny/solo: the kernel wrote outside its m x n window, at buffer offset 1 (item 0, column 1, row 0)` at n=1; then `TinyPackedBatchMatchesSolo` and `TinyPaddingIsInertUnderNaNPoison` too, and `tiny/zero-column` at 0.878 residual against 9.54e-07 |
+| c | drop the `lane < j` term from the `vr` select, so eliminated rows re-enter the reflector | residual red at small n | **RED, all four types.** float `\|\|QR-A\|\|/\|\|A\|\|` = 0.2469 vs 9.54e-07 at 3x3; double 0.2469 vs 1.78e-15; cfloat and cdouble 0.4766 |
+| d | restore `if (prob >= batch) return;` in place of the `live` predicate | garbage or a hang in the partial last work-group at N < 32 | **GREEN -- the break was NOT observed.** See below |
+| e | drop the `sg_id *` term from `tiny_partition_id` | S-1 of every S partitions serve another matrix's slot | **RED, all four types.** `packed item 4 of 35 differs from its solo run at (0,0), n=5` |
+
+**Break (d) did not fire, and that is the finding.** It was planted at batch = 35 with a
+packing of 16, i.e. a last work-group whose sub-group 0 holds three live partitions and
+one dead one -- exactly the configuration the "no early return" rule exists for -- and
+every test in the file stayed green. The idiom really is undefined (a sub-group barrier
+reached by only part of a sub-group), but this toolchain lowers
+`sycl::group_barrier(sub_group)` in a way that tolerates it on sm_89, so **no numerical
+test on this box can distinguish it from the correct code.** A guard nobody has seen fail
+is not a guard, so the rule is guarded by its source text instead:
+`GeqrfTinySource.KernelBodyHasNoEarlyReturn` scans the kernel body between the
+`parallel_for` and its closing brace for any `return`, and the same planted break turns it
+red with no rebuild:
+
+```
+src/extensions/geqrf_tiny.cc:131 returns from inside the kernel body ...
+                if (prob >= batch) return;
+```
+
+The companion check, `GeqrfTinySource.SynchronisesAtSubGroupScopeOnly`, asserts the TU
+contains no `get_group()` and no `reduce_over_group` for the same reason: a work-group
+barrier here is a race rather than a launch failure, and a work-group `reduce_over_group`
+adds static shared whose cost lands on a NEIGHBOURING kernel's cold first launch.
+
+#### The synthesis pass: four more breaks
+
+Planted against the WG=64 tree, after the chunk rule was moved onto the probe.
+
+| # | break | expected | observed |
+|---|---|---|---|
+| f | delete one of the two `sycl::group_barrier(sg)` calls in the chunk body | `ChunkBodyCarriesExactlyTwoSubGroupBarriers` red with **no rebuild** | **RED.** `Expected equality of these values: sg_barriers / Which is: 1 / 2` |
+| f' | the same break, **rebuilt and run numerically** | ambiguous; the chunk body is warp-uniform on sm_89 | **GREEN, 34 of 34.** Every numerical tiny test passes with a missing barrier |
+| g | widen both norm butterflies from `<N>(part, ...)` to `<32>(sg, ...)` | `TinyNeighbourNaNDoesNotLeakAcrossPartitions` red | **RED**, and it names the mechanism: `item 5 changed when a NEIGHBOUR was poisoned with NaN at (0,0) n=5 pack=8`. 27 of 41 tiny cases red overall |
+| h | rescale the reflector: store `2v` and `tau/4` (the same `H = I - tau v v^H`) | `TinyTauMatchesLapackeElementwise` red, residual green | **RED on tau**, exactly 4x: `tau[0] of item 0 at n=5 disagrees with LAPACKE (0.3764505 vs 1.5058020)`. **Residual ALSO red** -- see below |
+| i | LAPACK's beta sign choice, `-SIGN(nrm, alphr)` -> `+SIGN` | tau red, residual green (a valid QR with a sign-flipped row of R) | **Both red.** tau red as expected; the residual red too, because same-sign `alpha - beta` is catastrophic cancellation -- which is LAPACK's own reason for the sign |
+
+**Break (f') is the point of the source check, and it is now measured rather than argued.**
+With one of the two barriers deleted the whole numerical tiny suite -- 34 cases across four
+types, including the packed-vs-solo bit-identity oracle -- stays green. Control flow in the
+chunk body is warp-uniform, so on sm_89 the missing barrier costs nothing; on any device
+where a sub-group is not a warp it is a hard race with no test to catch it. The count and
+the spelling are therefore guarded by source text.
+
+**Breaks (h) and (i) correct the rationale D9 was written from, and the correction is
+worth recording.** The claim was that a residual and an orthogonality probe are blind to
+`tau` on the REAL types, so `tau` there is unguarded. That is **not** true once the LAPACK
+storage convention is taken into account: `v(j) = 1` is implicit, so for a given stored
+factor `tau` is uniquely determined, and the file's own `host_form_Q` reconstructs `Q` from
+`(tau, v)` and so does constrain it. Neither break is invisible to the residual.
+
+What the LAPACKE comparison *does* add is an **independent oracle**. Every other numerical
+check in `geqrf_tests.cc` measures the kernel against `host_form_Q` in the same file, so a
+convention error shared by the kernel and that oracle would pass every one of them. The
+elementwise `tau` check is the only assertion in the file that cannot have that property.
+It is kept for that reason, not for the reason it was proposed.
+
+### The two partition butterflies
+
+`geqrf_tiny_device.hh`'s `geqrf_tiny_reduce_fmax` and `geqrf_tiny_reduce_sum` are
+hand-rolled XOR butterflies over the PARTITION — the shape `steqr_cta_device.hh`'s
+`partition_reduce_fmax` established — for two reasons, neither cosmetic:
+
+1. There is **no `reduce_over_group` overload for `SubGroupPartition`** anywhere in the
+   tree, and a WORK-GROUP `reduce_over_group` emits static shared, which re-opens the
+   `(47104, 49664]` launch hole for every kernel sharing the `CUfunction`. Same mechanism
+   as [the 48 KiB launch hole](#the-48-kib-launch-hole), and the reason
+   `GeqrfTinySource.SynchronisesAtSubGroupScopeOnly` scans the TU for the token.
+2. They are **ALL-reduces on purpose.** The butterfly is order-symmetric, so every lane
+   leaves with a BIT-IDENTICAL result and can recompute the Householder scalars for
+   itself; that replication is what removes the publish/broadcast barrier pair. Widening
+   either from `<N>(part, ...)` to `<32>(sg, ...)` leaks across partitions — break (g) of
+   [the synthesis pass](#the-synthesis-pass-four-more-breaks).
+
+`geqrf_tiny_slm_elems(n_pad, c)` is `n_pad * (c + 1) + c` scalars: the `N x (C+1)` product
+tile plus a SEPARATE `c`-element `y` vector. `y` being a separate array, and not a row of
+the tile, is exactly why two barriers per chunk suffice — the inter-chunk WAR on the tile
+and the RAW on `y` are then covered by different barriers. Their count and placement are
+guarded by source text (`ChunkBodyCarriesExactlyTwoSubGroupBarriers`), because break (f')
+showed the numerical suite cannot see a missing one on sm_89.
+
+`kGeqrfTinyRegOverhead = 88` is the register model's constant term and
+`kGeqrfTinyRegMargin = 8` the hard gate's headroom. The model survives only as the
+fallback for a cell with no probe row, for the reason recorded at [the tiny tier register
+table](#the-tiny-tier-register-table). `GeqrfTinyRegs<D>`'s primary template IS that
+"no probe row" case: zero in `at` is the sentinel the model fallback keys on, zero in
+`probed_chunk` disables the fixed-point assertion for that cell, and `pin` overrides the
+derived chunk width. `pin` is **not** a free knob — the derivation is blind to a `C` that
+costs a block by pushing the REGISTER count up, which is what
+[double N=32](#the-chunk-width-and-the-one-cell-that-is-pinned) measures.
+
+`geqrf_tiny_matrices_per_wg<N>()` goes through `resident::pack_matrices_per_wg` rather
+than being spelled `kGeqrfTinyWg / N`, so the power-of-two guarantee and the
+max-work-group clamp stay in the one place that owns them; the byte arguments are nominal
+because the lane bound is the binding one here. `kGeqrfTinyReferenceSlm = 97280` is a
+COMPILE-TIME derivation constant only — every runtime decision reads `LOCAL_MEM_SIZE` from
+the device through `resident::device_slm_budget`.
+
+`reqd_work_group_size` is deliberately **not** declared anywhere in this tier: it emits
+`.maxntid`, which lets `ptxas` trade registers against a launch bound and so makes the
+probed table a function of the launch shape rather than of the kernel body. Only
+`reqd_sub_group_size(32)` is declared. That is what licenses the same-register-counts
+column of [the launch shape](#the-launch-shape-64-work-items-not-128).
+
+### The tiny tier is supported, never preferred, and never timed
+
+**OPEN OPPORTUNITY. Nothing in this subsection is a speed claim; it is the shape of the
+measurement that does not exist.** What is stated here is the shipped predicate, read out of
+`route_geqrf.hh`, and the one measured grid row that sits underneath it.
+
+**The predicate, three lines of it.** `supports()` admits the tier for square shapes at or
+below the type ceiling -- `s.m == s.n && s.n <= s.tiny_max_n` (`route_geqrf.hh:61-64`), so
+every square `n <= 32` (`n <= 16` for `cdouble`) is a supported `{Native, Tiny}` route.
+`native_tier_preferred` then answers `case Algorithm::Tiny: return false;`
+(`route_geqrf.hh:143-144`), so `best_native_tier` walks past it and lands on `CTA`, which is
+supported at those orders and inside its own column cap. And `preferred()` tests its order
+floor and tall clause FIRST (`route_geqrf.hh:100-103`): a square `n <= 32` clears neither --
+the lowest floor is `cfloat`'s 48, and the tall clause needs `rows >= 128` -- so `preferred()`
+is **false for every tier** in this band and the vendor keeps the traffic in a vendor-present
+build. `preferred(Tiny)` is false at every shape in the tree.
+
+**What the band measures today.** `geqrf` square n = 32 at batch 8192, vendor against
+vendor-free, is the first row of [the order and batch grid](#geqrf-order-and-batch-grid):
+**float 0.78x, double 0.21x, cfloat 0.71x, cdouble 0.33x** -- native loses in all four types.
+That row is served by **CTA**, the tier the tiny kernel was written to replace. It is the only
+row of that grid where the native arm loses in all four types, and it is exactly the band the
+tiny tier owns by construction -- and the tier that might answer it has never been put on a
+clock: [the tiny tier](#the-tiny-tier-wp6--p1-square-n--32-in-registers) still reads NO TIMING
+HAS BEEN TAKEN. A measured 0.21x on the arm the tier replaces is an argument for taking the
+measurement, not a prediction about the tier.
+
+**The grid that would settle it.** Square `n in {8, 12, 16, 20, 24, 28, 32}`, four types with
+`cdouble` capped at 16 (D3, and the tier is not instantiated above it), at the saturating batch
+for each order, arms `vendor`, `tiny`, `cta`, `blocked` interleaved in one process, R8
+protocol throughout: JIT warmed, medians of >= 7 reps, relative sd < 10% or the cell is
+discarded and named, host residual on items 0 and batch-1 of every timed row, the saturation
+ladder reported with both readings, ratios in time. Arms are pinned with
+`BATCHLAS_GEQRF_ROUTE=tiny|cta|blocked`, which `route_resolve.hh` honours regardless of
+`native_tier_preferred` -- **and the arm must be confirmed by kernel name before its ratio is
+read**, because a dead pin looks exactly like a null result ([the register leaf
+A/B](#the-register-leaf-ab) is the worked example of that mistake in this family). Flip gate is
+the repository's: `t_native <= 0.90 t_vendor`, ratio >= 1.11, at saturation, with a bracketing
+non-winner at each edge of whatever window clears.
+
+**The routing change, if it clears, and the one place it must go.** Two edits, in one commit:
+
+1. `native_tier_preferred`'s `case Algorithm::Tiny: return false;` becomes the measured
+   window, so the vendor-free walk stops treating the tier as absent.
+2. `preferred()` gains `if (tiny_window(s)) return r.algo == Algorithm::Tiny;` **as its first
+   statement after the `is_native` test, BEFORE the order-floor / tall-aspect gate.**
+
+**Point 2 is the whole trap and it is structural, not stylistic.** The existing gate is
+`cols() >= floor_n || (rows() >= 128 && cols() >= 32 && rows() >= tall_aspect * cols())`, and
+every square `n <= 32` fails both disjuncts for every type -- `float`'s floor is 64, and the
+tall clause cannot be satisfied by a matrix whose rows are its columns. A tiny clause placed
+after that gate is therefore **dead code at every shape the tier supports**, and dead in a way
+no test that only checks resolved routes can distinguish from "the window is closed". This is
+where `geqrf` differs from `getrf`: `route_getrf.hh:75-77` tests `if (r.algo ==
+Algorithm::Tiny) return tiny_window(s);` on the line after `is_native`, ahead of its own order
+thresholds, so the same clause in the same position is live there. Copying getrf's *text*
+without copying its *position* reproduces the bug.
+
+The `native_tier_preferred` edit alone is not enough and the `preferred()` edit alone is not
+either: the first moves only vendor-free builds, the second only vendor-present ones, and
+[why the window answers for exactly one tier](#why-the-window-answers-for-exactly-one-tier) is
+the invariant the pair has to keep -- exactly one native tier may answer `preferred()` true,
+which is why point 2 is written `return r.algo == Algorithm::Tiny` and not `return true`.
+
+## The register panel leaf (WP6 / P5)
+
+`geqr2_panel_reg_device<D, N>` (`src/extensions/geqrf_panel_reg_device.hh`) is a third panel
+leaf beside the resident and global ones in `geqrf_panel_factorize`: **one panel row per
+work-item**, `rA[N]` holding the whole `m x N` panel in registers between one coalesced load
+and one store, work-group = `roundup(m, 32)`, three work-group barriers per column. It is the
+P5 "fused QR panel" reduced to the half the survey found value in.
+
+### What landed and what did not
+
+| P5 component | state |
+|---|---|
+| `GeqrfPanelRegKernel<T, N>`, the register panel leaf | LANDED, `double` only |
+| the leaf reachable from `geqrf_panel_factorize` and from the blocked driver | LANDED, by explicit request only |
+| `LarfApplyRegKernel` (the fused apply), `geqrf_fused_driver`, `orgqr_fused`, `ormqr_fused` | NOT BUILT — see below |
+| `Algorithm::Fused`, `route_geqrf.hh` **order** change | NOT MADE |
+| `preferred()`'s `double` order floor | **MOVED 96 -> 76** on the integration grid, see below |
+| `Auto` resolving to the register leaf | **FLIPPED**, inside a measured height window |
+| the `larft` replacement | NOT MADE (Open debt 5 stands) |
+
+The fused apply was dropped on a reading of the tree, not on a measurement. `geqrf_blocked.cc`
+breaks out of its panel loop at `n2 <= 0`, and `nb` is 32 for float/cfloat/cdouble, so an
+`m x 32` panel of those types runs **one** `geqrf_panel_factorize` launch and exits — no
+`pack_v`, no `larft`, no trailing GEMM. P5's tall-panel targets (`float 128x32`, `float
+512x32`, `cfloat 512x32`) are exactly those shapes, so the fused apply, the `larft` removal and
+the `pack_v` removal are worth **zero** there. Only `double`, at `nb = 16`, splits them.
+
+### The register panel leaf width and height table
+
+MEASURED, by a standalone `-Xcuda-ptxas -v` link of a TU that instantiates these four entry
+functions and nothing else (the shared-library probe in `scripts/register_probe.sh` needs a
+whole-library device link, which was not available while five agents were editing the tree).
+Every row is **0 bytes stack frame, 0 bytes spill stores, 0 bytes spill loads** — the stack
+frame is the gate for a residency claim, and `rA[N]` is in registers at all four widths.
+
+| scalar | N | registers | max work-group (`65536 / ceil8(regs)`, warp-floored) | ptxas, both entry copies | shipped |
+|---|---|---|---|---|---|
+| `float` | 32 | 168 | 384 | 19.4 + 20.2 = **39.6 s** | no |
+| `double` | 16 | 136 | 480 | 3.27 + 3.06 = **6.3 s** | **yes** |
+| `complex<float>` | 32 | 180 | 352 | 23.5 + 22.5 = **46.0 s** | no |
+| `complex<double>` | 32 | 255 (ptxas ceiling) | 256 | 30.0 + 30.5 = **60.5 s** | no |
+
+The register MODEL in the header (`N * words + 96 + 16`) is kept only as the fallback for a
+cell with no probe row, and these numbers show it is wrong in both directions: it predicts 144
+for float (measured 168) and 144 for double (measured 136). A cell that falls back to it is a
+cell nobody has probed.
+
+`probed_cols` pins the width each row was measured at; `geqrf_panel_reg_row_is_current<D>()`
+fails to COMPILE if the plan's width moves away from it, because a probe row measured at a
+width the kernel no longer uses reads as measured while describing a different kernel.
+
+### Why only `double` ships
+
+R7 is the reason, and it is a measurement, not a preference.
+[`lu.md#r7`](lu.md#r7-the-device-link-all-three-tiny-tiers-landed) records
+`batchlas_extensions_cta` at ~183 s of `ptxas` with the three tiny tiers already over the 15%
+per-tier budget. Against that baseline:
+
+* `double` at N = 16 adds **6.3 s, +3.4%** — inside the budget.
+* `float` at N = 32 adds 39.6 s, **+21.6%**; `cfloat` 46.0 s, **+25.1%**; `cdouble` 60.5 s,
+  **+33.1%**. All four together are **+83%**, which is not a cost this campaign may take on
+  its own authority.
+
+The cost is `O(N^2)`: the column loop and the apply loop are BOTH fully unrolled (they must be,
+or `rA[j]` becomes a dynamic index and the array leaves the register file), so N = 32 emits
+roughly four times the N = 16 body. `double`'s N = 16 is affordable for exactly that reason.
+
+`cdouble` has a second, independent reason: ptxas clamps it at the 255-register per-thread
+ceiling, which pins the work-group at 256 and the occupancy at **one block per SM**.
+
+Turning a scalar back on is one line — `cols = 0` to `cols = 32` in `GeqrfPanelRegPlan` — and
+the price above is what it costs. The way to bring float and cfloat in under budget is N = 16
+with the blocked driver splitting its 32-wide panel into two 16-wide register panels with an
+apply between, which is P5's own WY-leaf design and is not v1.
+
+### What the register panel leaf does not serve
+
+* **Any scalar but `double`**, on the ptxas budget above.
+* **Panels taller than 384 rows** (`double`) CANNOT be launched, and **panels taller than 128
+  rows are not WORTH launching**. Two different numbers: the first is the measured register-file
+  gate ([the height ceiling the AOT probe got wrong](#the-height-ceiling-the-aot-probe-got-wrong)),
+  the second the measured speed crossover ([the panel height window](#the-panel-height-window)).
+  A `ROWS`-per-item variant amortises the overhead term over fewer threads and is the way past
+  both; it is another instantiation dimension and is deliberately not in v1.
+* **Occupancy is not gated at compile time, and the measurement says it should have been.**
+  The design left only the hard launch gate in place and called the tall end "a MEASURED
+  question, not a compiled one". It was measured, and the answer is that occupancy governs the
+  whole result: the leaf is 2.17x at `m = 64` and 0.38x at `m = 384`, monotone in between. The
+  height window is that question's answer, applied as policy rather than as capability.
+
+### The height ceiling the AOT probe got wrong
+
+**The first thing the integration phase measured, and it is a correctness result, not a
+performance one.** `GeqrfPanelRegPlan<double>::probed_regs = 136` comes from a standalone
+`-Xcuda-ptxas -v` link. The same kernel inside `libbatchlas_extensions_cta` **does not use 136
+registers**, and `cuobjdump -res-usage` finds no such entry in the library at all: these kernels
+ship as device IR and the register allocation that matters is the one the runtime makes. The
+register-file arithmetic `65536 / ceil8(136) -> 481 -> 448` therefore advertised a height the
+device refuses.
+
+Bisected on the shipped library, `double`, `n = 16`, one panel per launch:
+
+| panel rows `m` | work-group | launch |
+|---|---|---|
+| 256, 288, 320, 352, **384** | 256 ... 384 | OK |
+| **385**, 392, 400, 408, 415, 416, 448 | 416 ... 448 | `CUDA_ERROR_LAUNCH_OUT_OF_RESOURCES` |
+
+So the real per-thread count is in `(65536/416, 65536/384] = (157.5, 170.6]` — 160 or 168 at
+sm_89's granularity of 8 — against a probe that said 136. The ceiling is now a MEASURED
+constant, `GeqrfPanelRegPlan<D>::launch_max_rows`, which always wins over the model, and a
+`static_assert` requires one for any scalar whose `cols` is non-zero.
+
+Three things about how this shipped are worth keeping:
+
+* **It aborts, it does not throw.** In `factor_bench` the driver error surfaced as an uncaught
+  `sycl::exception` and killed the process; nine grid cells came back as "NO OUTPUT rc=134".
+  Inside the test fixture the same failure is catchable, which is why the guard below can report
+  it instead of taking the binary down with it.
+* **`geqrf_panel_reg_fits` was self-consistent and still wrong.**
+  `RegisterPanelLeafCapabilityIsSelfConsistent` asserts the range is contiguous and that
+  `max_m + 1` is refused. Both were true of a ceiling that could not be launched, because
+  nothing in that test ever asks the device to run `max_m`.
+* **The residual ladder stopped at `m = 256`** and never reached the broken band either.
+  `RegisterPanelLeafRunsAtItsOwnHeightCeiling` is the new guard and the ladder now runs to 384.
+
+### The panel height window
+
+MEASURED. `factor_bench`, GPU 1 under `gpu_guard.sh`, 9 interleaved reps per arm, three arms in
+one process (`vendor`, `blocked`, `blocked/leaf=reg`), one process per cell, `double`. Every
+ratio below is a TIME ratio `t_blocked / t_reg` at a batch where the cell is saturated (the arm
+times are linear in batch: `double n = 64` reads 5.05 / 10.03 / 20.29 / 40.13 ms at
+2048 / 4096 / 8192 / 16384). Raw rows:
+`benchmarks/results/p5_reg_leaf_uncapped.csv`, `benchmarks/results/p5_reg_leaf_capped.csv`.
+
+**The register leaf is a function of PANEL HEIGHT, and it inverts.** One row per work-item makes
+a tall panel a wide work-group at a fixed register cost per item, so occupancy falls as the panel
+grows. Taken at a single `m x 16` panel (`n = nb`, so the whole factorisation is one launch):
+
+| panel rows | 16 | 32 | 64 | 128 | 144 | 160 | 176 | 192 | 224 | 256 | 384 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| `t_blocked / t_reg` | 0.98 | 1.09 | **2.17** | **1.10** | 0.89 | 0.89 | 0.74 | 0.74 | 0.60 | 0.48 | 0.38 |
+
+`kGeqrfPanelRegPolicyRows = 128` is that crossover, and `geqrf_panel_reg_preferred` is the
+policy predicate built on it. **`fits` and `preferred` are deliberately two predicates**: the
+leaf launches to 384 rows and a caller that pins `GeqrfPanelLeaf::Register` still reaches every
+one of them, but the driver and `Auto` consult `preferred`, because a policy gated on `fits`
+measures 0.38-0.89x at `mp >= 144`.
+
+With the height cap in place the blocked driver's panels shrink past the cap as `j0` advances,
+so a tall first panel takes the old leaf and the shorter ones take the register leaf. Square
+`m = n`, saturated batch, `t_blocked / t_reg`, capped policy vs today's leaf:
+
+| n | 16 | 33 | 48 | 64 | 80 | 88 | 96 | 128 | 160 | 192 | 224 | 256 | 384 | 448 | 512 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| capped | **0.98** | 1.35 | 1.32 | 1.40 | 1.33 | 1.30 | 1.29 | 1.18 | **1.10** | 1.07 | 1.05 | 1.04 | 1.01 | 1.01 | 1.01 |
+| uncapped | 0.98 | 1.35 | 1.32 | 1.39 | — | — | 1.29 | 1.18 | 1.08 | 1.02 | 0.97 | 0.93 | 0.87 | 0.91 | 0.93 |
+
+The uncapped row is the same leaf with `fits` as the gate, and it is the measured cost of
+getting this wrong: **it loses at every `n >= 224`.** The capped row never loses outside its
+own bottom edge.
+
+**Bracketing non-winners, both edges of the window that clears `t_blocked <= 0.90 t_reg`
+(ratio >= 1.11):**
+
+* below: **square `n = 16` at 0.98** — one `16 x 16` panel, where the launch is all there is.
+  A lower bound of `m >= 32` would recover it (`32 x 16` reads 1.09) but rests on two cells and
+  would split every driver's short final panel off onto a second leaf; it is NOT shipped.
+* above: **square `n = 160` at 1.10 and `n = 192` at 1.07** — under the gate and above it in
+  value, which is exactly what an edge should look like.
+* the capability edge, separately: every tall cell from `144 x 16` to `512 x 16` reads
+  **1.000 to four digits**, because the policy declines them and both arms are then the same
+  kernel. That is the control that proves the A/B is not measuring itself.
+
+`double n = 64` was P5's headline cell and it is NOT a win against the arm that ships there.
+The leaf is worth 1.40x against the blocked arm, but blocked is not what `n = 64` resolves to:
+against cuSOLVER the register-leaf arm reads 1.10x at batch 16384 and **1.01x at batch 32768**,
+falling, so it fails the 1.11 gate. See the floor section below.
+
+### The double order floor moves to 76
+
+FLIPPED, on this grid. `preferred()`'s `double` floor was 96; it is now **76**. The gate is
+`t_native <= 0.90 t_vendor` (ratio >= 1.11) at saturation, `t_vendor / t_native` with the
+register leaf in the native arm:
+
+| n | 64 | 72 | 76 | 79 | 80 | 88 | 96 |
+|---|---|---|---|---|---|---|---|
+| batch 16384 | 1.100 | **1.105** | 1.263 | 1.375 | 1.400 | 1.422 | 1.697 |
+| batch 32768 | **1.009** | **1.088** | 1.241 | 1.346 | 1.376 | 1.400 | — |
+
+`n = 72` and `n = 64` are the bracketing non-winners and they are non-winners at BOTH batches;
+`n = 76` is the lowest measured order that clears at both. R8a applies to the direction: the
+vendor arm is still unsaturated here (its time grows 1.77-1.82x for a 2x batch where the native
+arm grows 1.99x), so these ratios FALL with batch and the floor is gated at batch 32768, the
+largest that fits the card at these orders.
+
+**This flip is contingent on the leaf.** With today's leaf the same cells read
+`t_vendor / t_blocked` of 1.045 at `n = 80` and 1.029 at batch 32768 — below the gate. The
+window widening exists only because the register leaf is in the native arm.
+
+Non-square shapes newly admitted by the lower floor were checked separately, because the floor
+is a clause on `cols()` alone and the tall clause (`rows >= 8 * cols`) never covered them:
+
+| shape | batch | `t_vendor / t_native` |
+|---|---|---|
+| `160 x 80` | 8192 | 1.53 |
+| `256 x 80` | 8192 | 1.93 |
+| `512 x 80` | 4096 | 2.29 |
+| `1024 x 80` | 2048 | 2.91 |
+| `160 x 88` | 8192 | 1.57 |
+| `512 x 88` | 4096 | 2.25 |
+
+`256 x 80` is the cell this is really for: aspect 3.2 is under the tall clause's 8 and 80
+columns were under the old floor, so it took the vendor and lost 1.93x.
+
+### What the shipped route does now
+
+CONFIRMED end to end with the DEFAULT route and no pin, `--arms=vendor,auto`, the resolved
+route read back per cell from `BATCHLAS_COVERAGE_OUT`.
+Raw: `benchmarks/results/p5_auto_after_flip.csv`.
+
+| shape | batch | resolved | `t_vendor` | `t_auto` | ratio |
+|---|---|---|---|---|---|
+| `64 x 64` | 16384 | vendor | 31.82 | 31.74 | — |
+| `72 x 72` | 16384 | vendor | 46.20 | 46.10 | — |
+| `76 x 76` | 16384 | native:blocked | 55.13 | 43.90 | 1.26 |
+| `80 x 80` | 16384 | native:blocked | 62.15 | 44.52 | 1.40 |
+| `88 x 88` | 16384 | native:blocked | 85.54 | 59.32 | 1.44 |
+| `96 x 96` | 16384 | native:blocked | 106.2 | 62.36 | 1.70 |
+| `128 x 128` | 16384 | native:blocked | 250.6 | 112.6 | 2.23 |
+| `160 x 160` | 8192 | native:blocked | 240.9 | 93.97 | 2.56 |
+| `256 x 256` | 4096 | native:blocked | 459.7 | 134.6 | 3.42 |
+| `512 x 512` | 1024 | native:blocked | 995.1 | 198.5 | 5.01 |
+| `256 x 80` | 8192 | native:blocked | 124.5 | 64.59 | 1.93 |
+| `512 x 16` | 16384 | vendor | 26.55 | 26.64 | — |
+| `64 x 16` | 16384 | vendor | 1.805 | 1.807 | — |
+
+Two shapes carry the same leaf change without a route change: `512 x 16` and `64 x 16` are
+under both the floor and the tall clause's 32-column bound, so they stay on the vendor and the
+readings confirm `Auto` did not move.
+
+`geqrf_cta_dispatch` now asks for `GeqrfPanelLeaf::Resident` **explicitly**. It used to pass
+`Auto` and assert that the leaf came back resident; with `Auto` answering `Register` inside the
+height window that assertion fired, which is the CTA tier telling the truth — the CTA tier IS
+the resident leaf run over the whole matrix, and a pinned `cta` route silently running a
+different kernel is the defect the assertion exists for.
+
+### What this measurement could NOT establish
+
+* **Any type but `double`.** `float`, `cfloat` and `cdouble` carry `cols = 0` on R7 grounds
+  (39.6-60.5 s of ptxas each against `batchlas_extensions_cta`'s ~183 s), so every cell of every
+  grid above is `double`. R10 makes `double` a reported type, not a gating one; the flip is
+  justified on its own measured grid and claims nothing about the other three.
+* **The fused apply, `orgqr_fused`, `ormqr_fused`.** Never built, so P5's `Kill` clause — "if
+  the fused apply is slower than WY-with-fused-leaf at every `n >= 64`, ship only the leaf swap
+  and the larft fix and drop the apply kernel (orgqr small keeps the register-identity variant
+  only if it wins)" (`docs/design/small-n-factorization-plan.md`, P5 `Kill`) — was never
+  testable. What shipped is that clause's own fallback, and **the fallback is itself
+  half-shipped**, on both of its halves:
+  * **The `larft` fix was never made.** It is one of the two conjuncts of the fallback, not an
+    optional extra; [what landed and what did not](#what-landed-and-what-did-not) lists it NOT
+    MADE and Open debt 5 still stands.
+  * **The leaf swap shipped for `double` alone.** `GeqrfPanelRegPlan`
+    (`src/extensions/geqrf_panel_reg_device.hh:28-54`) carries `cols = 16` for `double` and
+    `cols = 0` for `float`, `complex<float>` and `complex<double>`, and `cols = 0` is that
+    header's own spelling of ABSENT. **One type of four.**
+
+  So "P5 shipped its Kill fallback" is not a statement this page supports. What it supports is
+  "P5 shipped half of one conjunct of its Kill fallback, for `double`".
+* **The `larft` removal (Open debt 5).** Still stands. An `nsys` profile of `128 x 128`
+  `double` batch 8 puts `LarftKernelName` at 34% of device time against the panel's 48.6%, so
+  the second-largest item in this driver is still untouched. **Batch 8 is nowhere near
+  saturation** and that 34% is not the number to size the work against. The better-conditioned
+  figure is the `larft` **plus** `pack_v` pair in [where the time goes](#where-the-time-goes) —
+  19.7% (float n=1024), 22.3% (cdouble n=256), 6.5% (cdouble n=1024) — but **those are not
+  saturated splits either, and must not be quoted as such.** They are `nsys cuda_gpu_kern_sum`
+  captures taken vendor-free at `WARM_S=0.2` and **2 reps**, at whatever batch the
+  memory-bounded order schedule pairs with the order (**float n=1024 and cdouble n=1024 at batch
+  128, cdouble n=256 at batch 2048**) — a schedule, not a saturation ladder — and that section's
+  own preamble says the captures "must not be quoted as timings". The only batch ladder on this
+  page runs at **n=64** ([`geqrf` order and batch grid](#geqrf-order-and-batch-grid), where both
+  arms are launch-bound below batch ~512), and it says nothing about these orders. So: size
+  `larft` work against **20-22% for the pair, as a larger-batch profiler estimate**, not against
+  34%, and not against a saturation figure this page does not have.
+* **`orgqr` and `ormqr` end to end.** The leaf is a `geqrf` kernel; neither suite's timings were
+  re-measured, and P5's `orgqr` target (>= 1.5x over identity+ormqr) is untouched.
+* **The exact register count of the shipped kernel.** Bounded to `(157.5, 170.6]` by bisection;
+  `cuobjdump` cannot read it out of the library.
+
+### The register leaf A/B
+
+`BATCHLAS_GEQRF_LEAF = auto | reg` selects the panel leaf per call (`Settings::selection`,
+consumed in `geqrf_blocked.cc`), mirroring `BATCHLAS_GETRF_LEAF`. `factor_bench`'s `ArmEnv`
+chooses the leaf variable by OP rather than hardcoding getrf's.
+
+**The first full grid was thrown away.** `BATCHLAS_BUILD_BENCHMARKS` is `OFF` in the
+`dev-tests` cache, so `cmake --build` never rebuilt `factor_bench` and the binary on disk was
+three days old: its `/leaf=reg` arm set getrf's variable, which `geqrf` ignores, and BOTH arms
+ran the resident leaf. Every cell read `t_blocked / t_reg` between 0.999 and 1.004 and the
+honest-looking conclusion was "the leaf is a wash at saturation". The tell was an `nsys`
+`cuda_gpu_kern_sum` on a single cell: two separate processes showed `GeqrfPanelRegKernel` and
+`GeqrfPanelResidentKernel` respectively, but a ONE-process two-arm run showed only
+`GeqrfPanelResidentKernel`, ten launches. **Confirm an A/B by kernel name before reading its
+ratio**; a null result is exactly what a dead pin looks like.
+
+### Break sweeps: the register panel leaf
+
+R9. Every break below was planted, rebuilt, run on GPU 1 and restored. `double`,
+`GeqrfTest/5`. "Also red" lists guards that were not the named target.
+
+| # | break | expected | observed |
+|---|---|---|---|
+| 1 | drop the `r < j` term from the `v` select | `...ResidualAndOrthogonality` orth ~O(1) at every `m > n` | **RED at the first cell, `7 x 5`**: residual 63.1, 513.5, 0.388 over items 0-2 against a 1.78e-15 tolerance. Also red: `...AgreesWithTheResidentLeaf`, `BlockedDriverWithTheRegisterLeaf` |
+| 2 | `ssq` mask `r > j` to `r >= j` | alpha counted twice, residual >> tol at every `m > 1` | **RED.** Also red: `...AgreesWithTheResidentLeaf`, `...ZeroSubColumnGivesTauZero`, `BlockedDriverWithTheRegisterLeaf` |
+| 3 | remove barrier B3 | red at `m > 32`, green at `m <= 32` | **RED, but the prediction was WRONG.** Green at every cell with `m <= 128` for every `n`; the first failure is `m = 129, n = 16`, i.e. the first height with five sub-groups. Also red: `BlockedDriverWithTheRegisterLeaf`. The guard on this barrier is ONE cell of a 16 x 8 ladder, and it exists only because the ladder reaches past 128 |
+| 4 | store guard `k < n` to `k < N` | the poison-pad scan reports a write outside the window | **RED, verbatim**: "wrote outside its m x n window, at buffer offset 6 (item 0, column 1, row 0)". Also red: three more |
+| 5 | apply guard `k <= j` to `k < j` (both loops) | column `j` re-updated after being set to `beta`; residual red | **RED at `2 x 1`**, residual 1.518 and orth 0.168 |
+| 6 | drop `m <= max_m` from `geqrf_panel_reg_fits` | `...RefusesWhatItCannotHold` red, and the launch aborts | **RED, and the launch does abort**: "The kernel uses 136 registers per work-item for a total of 512 work-items per work-group." Also red: `...CapabilityIsSelfConsistent` |
+| 7 | `kGeqrfAutoPrefersRegisterLeaf = true` **without** the height policy | `AutoDoesNotYetTakeTheRegisterLeaf` red | **RED** — and FOUR other guards went red with it, including `geqrf_cta`'s own `internal_error` ("the panel leaf did not take the resident path after the fit check passed"). The no-flip promise had more guards than the one written for it |
+
+Three more were planted for what the integration phase itself added:
+
+| # | break | expected | observed |
+|---|---|---|---|
+| A | `launch_max_rows` 384 -> 448, the AOT-probe value | `RegisterPanelLeafRunsAtItsOwnHeightCeiling` red | **RED at `m = 416`**, the bracket cell rather than the ceiling: `UR_RESULT_ERROR_OUT_OF_RESOURCES`, caught and reported rather than aborting |
+| B | `geqrf_panel_reg_preferred` gates on `fits` only | `AutoTakesTheRegisterLeafExactlyInsideTheHeightWindow` red | **RED**: "a policy that reaches the hard ceiling is not a policy; it is the capability again". Also red: `ResidentLeafLaunchHoleAt48KiB`, which needs `Auto` to answer Resident at its shape |
+| C | `double` order floor 76 -> 96 | `RouteGeqrf.PreferredIsTheMeasuredOrderFloorAndTheTallClause` red | **RED** at the `at=76` probe: `is_native(r)` false where true was expected |
+
+### Why bit-identity against the resident leaf is not the oracle here either
+
+Same reason as the tiny tier. The resident leaf reduces a column norm with
+`reduce_over_group` over up to 256 work-items; the register leaf uses a 32-lane butterfly plus
+a serial scan over `ceil(m/32)` slots. The association orders differ, so the last ulp differs.
+`RegisterPanelLeafAgreesWithTheResidentLeaf` asserts a NORMWISE agreement at
+`64 * eps * m * max|R|` instead — normwise and not elementwise-relative, because `R`'s trailing
+columns hold entries far below `||A||` and a relative bound on those measures cancellation
+rather than disagreement. The convention itself is guarded where it already was: both leaves
+call `geqrf_larfg_scalars` verbatim, and the elementwise LAPACKE `tau` comparison covers it.
+## The tiny `geqrf` window
+
+The register tier was written, instantiated, correctness-tested and then **never timed**. It was
+supported-but-never-preferred: `supports()` admitted every square `n <= tiny_max_n`, but
+`native_tier_preferred` answered a hard `false` for `Algorithm::Tiny`, so `best_native_tier()`
+returned CTA at every order the tier reaches and `preferred(Tiny)` was false everywhere. `Auto`
+therefore sent the whole square band to CTA — which [the order and batch grid](#geqrf-order-and-batch-grid)
+already recorded as a native **loss** against the vendor (n=32, batch 8192: float 0.78x, double
+0.21x, cfloat 0.71x, cdouble 0.33x). The tier the tiny kernel was written to replace was the tier
+that kept the traffic.
+
+This is the third instance of one pattern in this campaign, after the `getrf` and `potrf` tiny
+tiers: the kernel was already finished and only the routing was missing.
+
+### The grid
+
+R8, interleaved arms inside one `factor_bench` process, medians of 9 (15 on the confirmation
+cells), ratios in TIME against the **vendor** arm, which is the arm a flip actually replaces here
+(`geqrf` has a vendor arm, unlike `gesv`/`posv`). Flip gate `ratio >= 1.11`.
+
+**Saturation first, because it changes the answer.** At batch 2048 and 8192 the tier looks far
+stronger than it is; the ratio falls as the batch grows and only settles by 32768:
+
+| cell | batch 2048 | batch 8192 | batch 32768 |
+|---|---|---|---|
+| cfloat n=9 | 1.985x | 1.305x | **1.015x** |
+| cfloat n=16 | 2.835x | 2.040x | 1.678x |
+| cfloat n=21 | 1.263x | 0.794x | 0.873x |
+| cfloat n=32 | 2.632x | 1.924x | 1.865x |
+| float n=9 | 2.824x | 1.795x | 1.593x |
+| float n=32 | 4.052x | 3.252x | 3.284x |
+
+A window cut at 8192 would have admitted cfloat n=9 at 1.305x, which the saturated rung refuses
+at 1.015x. **Every number below is at batch 32768.**
+
+| n | float | cfloat | | n | float | cfloat |
+|---|---|---|---|---|---|---|
+| 4 | 1.586x | 1.061x | | 18 | 0.885x | 0.623x |
+| 5 | — | 1.433x | | 19 | 1.004x | 0.716x |
+| 6 | — | 1.652x | | 20 | 1.043x | 0.752x |
+| 7 | — | 2.055x | | 21 | 1.225x | 0.873x |
+| 8 | 2.964x | 1.977x | | 22 | 1.317x | 0.961x |
+| 9 | 1.593x | 1.026x | | 23 | — | 1.053x |
+| 10 | 1.866x | 1.117x | | 24 | 1.403x | 1.122x |
+| 11 | 2.189x | 1.341x | | 25 | — | 1.328x |
+| 12 | 2.384x | 1.252x | | 26 | 1.705x | 1.443x |
+| 13 | — | 1.495x | | 27 | 1.855x | 1.643x |
+| 14 | 3.164x | 1.586x | | 28 | 1.906x | 1.800x |
+| 15 | 3.598x | 1.749x | | 30 | 2.150x | 2.321x |
+| 16 | 3.711x | 1.678x | | 32 | 3.284x | 1.865x |
+| 17 | 0.812x | 0.553x | | | | |
+
+### The window that ships
+
+```
+float             4 <= n <= 16,  21 <= n <= 32
+complex<float>    5 <= n <=  8,  11 <= n <= 16,  24 <= n <= 32
+double, cdouble   refused
+```
+
+**The holes are measured, not arbitrary, and they are the part a future reader will want to tidy
+away.** `tiny_n_is_legal` admits `N` in `{8, 16, 32}` only — `N` must divide the 32-wide
+sub-group because the reductions are partition butterflies — and the loop deliberately
+`continue`s rather than `break`s, which is what keeps the array in registers with zero spill. So
+every order in 17..32 runs a full 32-iteration trip count. At n=17 that is 32 iterations for 17
+columns, and the same fill penalty reappears at the bottom of each bucket (n=9, n=10 in the N=16
+bucket; n=4 in the N=8 bucket). float absorbs it and complex does not, which is exactly the shape
+of the two windows. It is the same mechanism as [the n=17 cliff](lu.md) in `getrf`.
+
+**fp64 is refused on evidence, not on principle.** double measured 0.901x, 0.414x, 0.949x,
+0.332x, 0.414x, 0.512x at n = 8..28 and only 1.134x at n=32 — a single marginal point is not a
+window. Note the native *alternatives* are far worse there (CTA and Blocked read 0.14-0.67x), so
+in a vendor-free build the tier is still much the best native arm; it simply does not beat
+cuSOLVER.
+
+### A measurement caveat that is part of the result
+
+These grids were taken while **NVML was broken on the box** (kernel module 595.84 against
+userspace 595.91.07 — the driver package was upgraded without a module reload). CUDA itself was
+unaffected, but `benchmarks/gpu_guard.sh` could not run: it polls `nvidia-smi` for utilisation
+and the start-of-run SM clock. The stand-in guard preserved what the real guard's own header
+calls the thing that actually makes it race-free — `CUDA_VISIBLE_DEVICES` pinning — and rebuilt
+the foreign-process check from `/proc` file descriptors on `/dev/nvidia1`, arming it against a
+live holder (refused, naming the pid) and a clean card (passed). What was **lost** is the
+utilisation reading and the SM clock, so a cold or throttled run cannot be detected.
+
+That cost was paid, and it is measurable: **cfloat n=23 read 0.148x in one run and 1.053x in
+another**, both passing the `rel_sd < 10%` discipline. A 7x swing between runs of one cell is
+drift the guard would normally have caught.
+
+Two consequences, both deliberate:
+
+* the **complex window uses a 1.25 margin rather than the 1.11 flip gate**, so every cell it
+  admits cleared 1.25x and every cell it refuses measured at most 1.122x. The cells that fall in
+  that gap — cfloat n=10 (1.117x) and n=24 (1.122x) — are **left out on purpose**;
+* the **float window keeps the 1.11 gate**, because float reproduced tightly across independent
+  runs: n=17 measured 0.812x twice to three digits, n=21 1.211x then 1.225x, n=16 3.711x then
+  3.693x, and its margins are large enough that a 10% error flips nothing.
+
+**Both windows were re-cut once NVML was fixed**, against the real guard — see
+[The re-cut, against a working guard](#the-re-cut-against-a-working-guard). One cell in the whole
+set was contaminated, and the complex top band moved from 25..32 to 24..32; nothing else changed.
+
+### Arming the window
+
+R9, four breaks, each built and run against `geqrf_tests`:
+
+| break | expected | observed |
+|---|---|---|
+| admit n = 17..20, a measured float loss | red | **RED** |
+| fire the window with `tiny_max_n == 0` (no tier linked) | red | green |
+| let CTA answer inside the window too (R8b) | red | **RED** |
+| drop the square-only gate, admitting tall panels | red | green |
+
+**Two of the four are recorded as unfalsifiable, not as coverage.** Breaks B and D stayed green
+because `supports()` already refuses both shapes independently: it returns false when
+`tiny_max_n < 1` and false unless `s.m == s.n`, so deleting the same test from `tiny_window()`
+changes nothing a test can observe. The property is defended twice and the redundant half cannot
+be armed from here. This is the same situation as the `Uplo::Upper` break on the `potrf` tiny
+window, and it is written down for the same reason: a green break is evidence about the *test*,
+not about the code, and counting it as coverage is how a guard comes to be trusted for something
+it never checked.
+
+Breaks A and C are the load-bearing ones, and both went red: A defends the window's measured
+edges (the hole at 17..20 is the whole point of the predicate) and C defends R8b exclusivity
+(without it the vendor-free walk still lands on CTA, the arm the window was measured to beat).
+
+## The re-cut, against a working guard
+
+The windows above were first cut while NVML was down, so `benchmarks/gpu_guard.sh` could not run
+and a stand-in was used. NVML is fixed (the module and userspace now agree at 595.91.07) and
+every cell below was re-taken through the **real** guard, which reported "exclusive for the whole
+run" on all 33 and refused nothing.
+
+**The stand-in had a worse hole than the outage did, and it is the reason to re-cut at all.** It
+found foreign processes by reading `/proc/<pid>/fd`, which the kernel only permits for the
+reader's *own* processes. This box is shared, and `/proc/<other user's pid>/fd` is
+`Permission denied` — so the stand-in reported an idle card while another user's jobs held it.
+Worse, the arming that was supposed to validate it used a hog started by the same account, i.e.
+the one class of process it *could* see, so the test passed on a poison the code under test was
+uniquely able to swallow. The real guard, given the same situation, refuses and names the pids.
+
+### What changed: almost nothing, and that is the result
+
+| | first cut (stand-in) | re-cut (real guard) | verdict |
+|---|---|---|---|
+| geqrf float 17 | 0.812x | 0.805x | unchanged |
+| geqrf float 20 | 1.043x | 1.043x | unchanged |
+| geqrf float 21 | 1.225x | 1.215x | unchanged |
+| geqrf float 32 | 3.284x | 3.281x | unchanged |
+| geqrf cfloat 9 | 1.026x | 1.026x | unchanged |
+| geqrf cfloat 16 | 1.678x | 1.691x | unchanged |
+| geqrf cfloat 32 | 1.865x | 1.875x | unchanged |
+| **geqrf cfloat 23** | **0.148x** | **1.067x** | the one contaminated cell |
+| potrf double 11 | 1.049x | 1.049x | unchanged |
+| potrf double 12 | 1.145x | 1.145x | unchanged |
+| potrf double 16 | 1.505x | 1.508x | unchanged |
+| potrf cdouble 16 | 1.545x | 1.546x | unchanged |
+| potrf Upper float 16 | 11.018x | 10.786x | unchanged |
+| potrf Upper cdouble 10 | 1.417x | 1.388x | unchanged |
+
+Exactly **one** cell out of the set was contaminated — cfloat n=23, which read 0.148x once and
+1.067x on every other occasion. Everything else reproduces, much of it to three decimal places.
+So the degraded grids were sound and the conclusions drawn from them stand.
+
+### The widened complex margin was right, and not for the reason it was chosen
+
+The complex window used a 1.25 margin instead of the 1.11 flip gate, justified defensively by
+that 7x swing. Three independent guard-clean measurements of the cells it excluded show the
+margin was picking out genuinely unstable cells, which is a better reason than the one given:
+
+| n | run 1 | run 2 | run 3 |
+|---|---|---|---|
+| cfloat 4 | 1.061x | 1.157x | **0.981x** |
+| cfloat 10 | 1.117x | 1.111x | **1.103x** |
+| cfloat 24 | 1.122x | 1.122x | 1.119x |
+
+n=4 crosses the gate in both directions between runs and n=10 sits on it, so both are correctly
+refused — a window cut at 1.11 on any single run would have admitted one or both. **n=24 is the
+exception**: three runs inside 0.3% of each other, all above the gate, so the top band moves from
+`25..32` to `24..32`. That is the only predicate change the re-cut produced.
+
+The float window and both potrf windows are unchanged, confirmed against the real guard.
+
+### What is still owed
+
+The cells re-taken here are the window *edges* and the ones nearest the gate. The band interiors
+(cfloat 6, 7, 12..15, 26..31; float 5..16, 22..31; the potrf Upper grid above n=16) were measured
+once, with the stand-in. Their margins are wide — mostly above 1.4x and in places above 20x — so
+contention of the size observed cannot have manufactured them, and no conclusion here rests on a
+cell that was not re-taken. They are nonetheless single-run numbers and should be refreshed the
+next time the op is touched.

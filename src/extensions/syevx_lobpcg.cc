@@ -2,6 +2,7 @@
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
 #include "../queue.hh"
+#include "info_span.hh"
 #include <batchlas/util/mempool.hh>
 #include <sycl/sycl.hpp>
 #include <complex>
@@ -15,6 +16,7 @@
 #include "../math-helpers.hh"
 #include "../util/template-instantiations.hh"
 #include "../sort.hh"
+#include <batchlas/settings.hh>
 
 namespace batchlas {
     template <Backend B, typename T, MatrixFormat MFormat>
@@ -43,10 +45,11 @@ constexpr int kDefaultInitPowerIterations = 4;
 
 inline int lobpcg_init_power_iterations(int from_params, bool find_largest) {
     int steps = from_params < 0 ? kDefaultInitPowerIterations : from_params;
-    if (const char* v = std::getenv("BATCHLAS_SYEVX_INIT_POWER")) {
-        const int parsed = std::atoi(v);
-        if (parsed >= 0) steps = parsed;
-    }
+    // std::optional, because 0 is a MEANINGFUL value here (no power iterations)
+    // and is distinct from unset; the default comes from the caller's params, so
+    // it cannot live on the field either. A negative value is rejected during the
+    // load and arrives as nullopt, exactly as the `>= 0` test did here.
+    if (const auto& v = batchlas::settings().geometry.syevx_init_power) steps = *v;
     // Powers of A amplify the *largest* eigendirections, so the steps are dropped
     // rather than applied backwards when the smallest are wanted.
     return find_largest ? steps : 0;
@@ -60,10 +63,9 @@ inline int64_t lobpcg_block_vectors(size_t neigs, size_t extra_directions, int64
     const int64_t k = static_cast<int64_t>(neigs);
     if (extra_directions > 0) return k + static_cast<int64_t>(extra_directions);
     int64_t extra = std::max<int64_t>(2, k / 4);
-    if (const char* v = std::getenv("BATCHLAS_SYEVX_EXTRA_DIRECTIONS")) {
-        const int parsed = std::atoi(v);
-        if (parsed >= 0) extra = parsed;
-    }
+    // std::optional for the same reason: 0 is meaningful (no guard block), and
+    // the default depends on the requested eigenvalue count.
+    if (const auto& v = batchlas::settings().geometry.syevx_extra_directions) extra = *v;
     if (extra <= 0) return k;
     const int64_t guarded = k + extra;
     if (n > 0 && 3 * guarded > n) return std::max<int64_t>(k, std::min<int64_t>(guarded, n / 3));
@@ -73,11 +75,7 @@ inline int64_t lobpcg_block_vectors(size_t neigs, size_t extra_directions, int64
 // How often the host reads back the convergence flags; each check is a full pipeline
 // drain (SYEVX_PLAN.md §7.1).
 inline int64_t lobpcg_check_every() {
-    if (const char* v = std::getenv("BATCHLAS_SYEVX_CHECK_EVERY")) {
-        const int parsed = std::atoi(v);
-        if (parsed > 0) return parsed;
-    }
-    return 4;
+    return batchlas::settings().geometry.syevx_check_every;
 }
 
 // Instrumentation staging plan (SYEVX_PLAN.md §7.2). The caller-supplied
@@ -102,8 +100,11 @@ struct LobpcgInstrumentationPlan {
 
 // A/B escape hatch: the device-staged path must produce exactly the host path's values,
 // and tests/syevx_tests.cc checks that by running both.
+// First-CHARACTER truthiness, so "true" works and "on" does not. That is a
+// different dialect from env_truthy and is left exactly as it was; the field
+// carries the raw value so no spelling changes meaning.
 inline bool lobpcg_instrumentation_force_host() {
-    const char* v = std::getenv("BATCHLAS_SYEVX_INSTR_HOST");
+    const char* v = batchlas::settings().selection.syevx_instr_host.get();
     return v && (v[0] == '1' || v[0] == 't' || v[0] == 'T' || v[0] == 'y' || v[0] == 'Y');
 }
 
@@ -128,8 +129,12 @@ LobpcgInstrumentationPlan lobpcg_instrumentation_plan(const SyevxParams<T>& para
 // Soft locking, variant (a): column masking. OFF by default and deliberately so -- the
 // mechanism is implemented and correct, but it saves no flops (the block shapes are
 // fixed) and measured no benefit. Evidence: SYEVX_PLAN.md §7.5.
+// The test below is INVERTED -- anything not in the disable set enables the
+// feature, so "=off" and an empty value both turn it ON. Preserved deliberately
+// rather than normalised: changing it here would flip the feature for anyone
+// already exporting one of those spellings. See `risks` in the WP5 report.
 inline bool lobpcg_soft_locking() {
-    if (const char* v = std::getenv("BATCHLAS_SYEVX_SOFT_LOCK")) {
+    if (const char* v = batchlas::settings().selection.syevx_soft_lock.get()) {
         return !(v[0] == '0' || v[0] == 'n' || v[0] == 'N' || v[0] == 'f' || v[0] == 'F');
     }
     return false;
@@ -140,11 +145,7 @@ inline bool lobpcg_soft_locking() {
 // masked column is not frozen, its Ritz vector is still recombined every iteration, so a
 // column at the boundary loses its correction direction and drifts back above `tol`.
 inline double lobpcg_lock_factor() {
-    if (const char* v = std::getenv("BATCHLAS_SYEVX_LOCK_FACTOR")) {
-        const double parsed = std::atof(v);
-        if (parsed > 0.0) return parsed;
-    }
-    return 0.1;
+    return batchlas::settings().geometry.syevx_lock_factor;
 }
 
 // Relative floor below which a Jacobi shift is treated as singular and the column entry
@@ -177,7 +178,8 @@ inline constexpr R jacobi_definiteness_floor() {
                 Span<std::byte> workspace,
                 JobType jobz,
                 const MatrixView<T, MatrixFormat::Dense>& V, //Output eigenvectors for jobz == JobType::EigenVectors
-                const SyevxParams<T>& params 
+                const SyevxParams<T>& params,
+                Span<int32_t> info
         ) {
         using float_type = typename base_type<T>::type;
 
@@ -187,18 +189,16 @@ inline constexpr R jacobi_definiteness_floor() {
         // interior request is the one failure mode no downstream check can catch.
         // See SYEVX_RANGE_PLAN.md §2.5.
         if (params.select != SyevxSelect::Extremal) {
-            throw std::invalid_argument(
+            throw batchlas::invalid_argument(
                 "syevx_lobpcg: only SyevxSelect::Extremal is supported; LOBPCG converges to an "
                 "extreme of the spectrum by construction. Use syevx_direct or "
                 "syevx_direct_subset for an index or value range");
         }
 
-        const bool trace_enabled = []() {
-            const char* v = std::getenv("BATCHLAS_SYEVX_TRACE");
-            if (!v) return false;
-            return (std::string(v) == "1" || std::string(v) == "true" || std::string(v) == "TRUE" ||
-                    std::string(v) == "on" || std::string(v) == "ON");
-        }();
+        // Was a hand-rolled copy of env_truthy's exact spelling set; the field
+        // is parsed by env_truthy itself in settings.cc, which accepts the same
+        // five spellings {1,true,TRUE,on,ON} and nothing else.
+        const bool trace_enabled = batchlas::settings().diagnostics.syevx_trace;
         auto trace = [&](const char* msg) {
             if (!trace_enabled) return;
             std::cout << msg << std::endl;
@@ -209,7 +209,7 @@ inline constexpr R jacobi_definiteness_floor() {
             ctx.wait_and_throw();
         };
         if (params.preconditioner != nullptr && params.build_preconditioner) {
-            throw std::invalid_argument(
+            throw batchlas::invalid_argument(
                 "syevx: SyevxParams::preconditioner and SyevxParams::build_preconditioner are "
                 "mutually exclusive; supply a factor or ask syevx to build one, not both");
         }
@@ -227,14 +227,14 @@ inline constexpr R jacobi_definiteness_floor() {
         // An ILU(k) factorization approximates A^{-1}: for the largest eigenpairs it
         // suppresses the wanted directions. Reject rather than silently degrade.
         if (use_preconditioner && params.find_largest) {
-            throw std::invalid_argument(
+            throw batchlas::invalid_argument(
                 "syevx: an ILU(k) preconditioner approximates A^{-1} and is only valid when "
                 "searching for the smallest eigenpairs; set SyevxParams::find_largest = false "
                 "or clear SyevxParams::preconditioner / build_preconditioner");
         }
         if constexpr (MFormat != MatrixFormat::CSR) {
             if (params.build_preconditioner) {
-                throw std::invalid_argument(
+                throw batchlas::invalid_argument(
                     "syevx: SyevxParams::build_preconditioner requires a CSR matrix; ILU(k) is "
                     "only defined for sparse input");
             }
@@ -259,6 +259,11 @@ inline constexpr R jacobi_definiteness_floor() {
         auto best_residuals = pool.allocate<typename base_type<T>::type>(ctx, neigs * batch_size);
         auto best_quality = pool.allocate<typename base_type<T>::type>(ctx, batch_size);
         auto converged_flags = pool.allocate<int32_t>(ctx, batch_size);
+        // Zeroed (= "not converged") because the residual kernel that fills it does
+        // not run at all on the params.iterations == 0 cold path, and pool memory is
+        // uninitialised. Without this, the status written at the end of the function
+        // would be whatever the workspace happened to hold.
+        ctx->memset(converged_flags.data(), 0, sizeof(int32_t) * static_cast<size_t>(batch_size));
         // Per-column convergence state for soft locking; 1 == column i of batch bid met
         // the tolerance on the *current* iterate. Consumed on-device only.
         auto col_converged = pool.allocate<int32_t>(ctx, neigs * batch_size);
@@ -351,7 +356,7 @@ inline constexpr R jacobi_definiteness_floor() {
         const bool prefer_vendor_projected_syev =
             (B != Backend::NETLIB) &&
             ([]() {
-                if (const char* v = std::getenv("BATCHLAS_SYEVX_PROJECTED_VENDOR")) {
+                if (const char* v = batchlas::settings().selection.syevx_projected_vendor.get()) {
                     return (v[0] == '1') || (v[0] == 't') || (v[0] == 'T') || (v[0] == 'y') || (v[0] == 'Y');
                 }
                 return false;
@@ -504,34 +509,36 @@ inline constexpr R jacobi_definiteness_floor() {
         const int init_power_steps =
             lobpcg_init_power_iterations(params.init_power_iterations, params.find_largest);
         for (int step = 0; step < init_power_steps; ++step) {
-            ortho<B>(ctx, X, Transpose::NoTrans, ortho_workspace, params.algorithm);
+            // (void) on an Event: deliberate. This Queue is in-order, so the next submission
+            // is already ordered after this one and the Event carries nothing the caller needs.
+            (void)ortho<B>(ctx, X, Transpose::NoTrans, ortho_workspace, params.algorithm);
             if constexpr (MFormat == MatrixFormat::Dense) {
-                gemm<B>(ctx, A, X, AX, GemmOptions<T>{});
+                (void)gemm<B>(ctx, A, X, AX, GemmOptions<T>{});
             } else {
-                spmm<B>(ctx, A, X, AX, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans, spmm_workspace);
+                (void)spmm<B>(ctx, A, X, AX, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans, spmm_workspace);
             }
             MatrixView<T, MatrixFormat::Dense>::copy(ctx, X, AX);
         }
 
         trace("syevx: ortho init");
-        ortho<B>(ctx, X, Transpose::NoTrans, ortho_workspace, params.algorithm);
+        (void)ortho<B>(ctx, X, Transpose::NoTrans, ortho_workspace, params.algorithm);
         trace_wait("syevx: ortho init done");
         if constexpr (MFormat == MatrixFormat::Dense) {
             trace("syevx: gemm A*X");
-            gemm<B>(ctx, A, X, AX, GemmOptions<T>{});
+            (void)gemm<B>(ctx, A, X, AX, GemmOptions<T>{});
         } else {
             trace("syevx: spmm A*X");
-            spmm<B>(ctx, A, X, AX, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans, spmm_workspace);
+            (void)spmm<B>(ctx, A, X, AX, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans, spmm_workspace);
         }
         trace_wait("syevx: A*X done");
         trace("syevx: gemm X^T*(A*X)");
-        gemm<B>(ctx, X, AX, XtAX, {.transA = trans});
+        (void)gemm<B>(ctx, X, AX, XtAX, {.transA = trans});
         trace_wait("syevx: XtAX gemm done");
         trace("syevx: syev XtAX");
         if (prefer_vendor_projected_syev) {
-            blas::dispatch::detail::syev_vendor_or_throw<B, T>(ctx, XtAX, lambdas, JobType::EigenVectors, Uplo::Lower, syev_workspace);
+            (void)blas::dispatch::detail::syev_vendor_or_throw<B, T>(ctx, XtAX, lambdas, JobType::EigenVectors, Uplo::Lower, syev_workspace);
         } else {
-            syev<B>(ctx, XtAX, lambdas, SyevOptions{}, syev_workspace);
+            (void)syev<B>(ctx, XtAX, lambdas, SyevOptions{}, syev_workspace);
         }
         trace_wait("syevx: syev XtAX done");
 
@@ -540,11 +547,11 @@ inline constexpr R jacobi_definiteness_floor() {
         // the order of X's columns, they are a basis. The largest-first presentation is
         // applied exactly once, in the `X_best` snapshot, via `reported_col()` below.
         trace("syevx: gemm X*Z (update X)");
-        gemm<B>(ctx, X, XtAX, X_new, GemmOptions<T>{});
+        (void)gemm<B>(ctx, X, XtAX, X_new, GemmOptions<T>{});
         trace_wait("syevx: update X done");
 
         trace("syevx: gemm AX*Z (update AX)");
-        gemm<B>(ctx, AX, XtAX, AX_new, GemmOptions<T>{});
+        (void)gemm<B>(ctx, AX, XtAX, AX_new, GemmOptions<T>{});
         trace_wait("syevx: update AX done");
 
         swap_subspace();
@@ -826,7 +833,7 @@ inline constexpr R jacobi_definiteness_floor() {
                 // R_preconditioned must stay a distinct destination: the forward solve
                 // writes into `out` as its temporary y while still reading `rhs`, so
                 // aliasing them corrupts the solve. Queue ordering sequences the copy.
-                iluk_apply<B, T>(ctx, precond, R, R_preconditioned);
+                (void)iluk_apply<B, T>(ctx, precond, R, R_preconditioned);
                 MatrixView<T, MatrixFormat::Dense>::copy(ctx, R, R_preconditioned);
                 trace("syevx: ILU(k) apply done");
             }
@@ -979,7 +986,7 @@ inline constexpr R jacobi_definiteness_floor() {
             }
 
             trace("syevx: ortho R vs (X or XP)");
-            ortho<B>(ctx, R, restart ? X : XP, Transpose::NoTrans, Transpose::NoTrans, ortho_workspace, params.algorithm, params.ortho_iterations);
+            (void)ortho<B>(ctx, R, restart ? X : XP, Transpose::NoTrans, Transpose::NoTrans, ortho_workspace, params.algorithm, params.ortho_iterations);
             trace_wait("syevx: ortho R done");
 
             // Second half of the masking: drop the rank-filler directions before they can
@@ -1029,10 +1036,10 @@ inline constexpr R jacobi_definiteness_floor() {
             }
             if constexpr (MFormat == MatrixFormat::Dense) {
                 trace("syevx: gemm A*(P or R)");
-                gemm<B>(ctx, A, restart ? P : R, restart ? AP : AR, GemmOptions<T>{});
+                (void)gemm<B>(ctx, A, restart ? P : R, restart ? AP : AR, GemmOptions<T>{});
             } else {
                 trace("syevx: spmm A*(P or R)");
-                spmm<B>(ctx, A, restart ? P : R, restart ? AP : AR, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans, spmm_workspace);
+                (void)spmm<B>(ctx, A, restart ? P : R, restart ? AP : AR, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans, spmm_workspace);
             }
             trace_wait("syevx: A*(P or R) done");
 
@@ -1041,7 +1048,7 @@ inline constexpr R jacobi_definiteness_floor() {
             // and writes out of bounds.
             auto StAS = MatrixView(StAS_base, Nvecs, Nvecs, StAS_base.ld(), StAS_base.stride());
             trace("syevx: gemm S^T*(A*S) (StAS)");
-            gemm<B>(ctx, S({0,n}, {0,Nvecs}), AS({0,n}, {0,Nvecs}), StAS, {.transA = trans});
+            (void)gemm<B>(ctx, S({0,n}, {0,Nvecs}), AS({0,n}, {0,Nvecs}), StAS, {.transA = trans});
             trace_wait("syevx: StAS gemm done");
 
             // A masked residual column zeroes the corresponding row and column of StAS,
@@ -1090,9 +1097,9 @@ inline constexpr R jacobi_definiteness_floor() {
             }
             trace("syevx: syev StAS");
             if (prefer_vendor_projected_syev) {
-                blas::dispatch::detail::syev_vendor_or_throw<B, T>(ctx, StAS, lambdas, JobType::EigenVectors, Uplo::Lower, syev_workspace);
+                (void)blas::dispatch::detail::syev_vendor_or_throw<B, T>(ctx, StAS, lambdas, JobType::EigenVectors, Uplo::Lower, syev_workspace);
             } else {
-                syev<B>(ctx, StAS, lambdas, SyevOptions{}, syev_workspace);
+                (void)syev<B>(ctx, StAS, lambdas, SyevOptions{}, syev_workspace);
             }
             trace_wait("syevx: syev StAS done");
             current_num_eigvals = static_cast<int64_t>(Nvecs);
@@ -1113,7 +1120,7 @@ inline constexpr R jacobi_definiteness_floor() {
             auto Z_search = Z({block_vectors, Nvecs}, {0, block_vectors});
 
             trace("syevx: build search-direction coefficients");
-            C_p_active.fill_zeros(ctx);
+            (void)C_p_active.fill_zeros(ctx);
             MatrixView<T, MatrixFormat::Dense>::copy(
                 ctx,
                 C_p_active({block_vectors, Nvecs}, {0, block_vectors}),
@@ -1123,14 +1130,14 @@ inline constexpr R jacobi_definiteness_floor() {
 
             // X = [X, P, R] * C_x, and AX = [AX, AP, AR] * C_x implicitly.
             trace("syevx: update X/AX submit");
-            gemm<B>(ctx, S({0,n}, {0,Nvecs}), Z, X_new, GemmOptions<T>{});
-            gemm<B>(ctx, AS({0,n}, {0,Nvecs}), Z, AX_new, GemmOptions<T>{});
+            (void)gemm<B>(ctx, S({0,n}, {0,Nvecs}), Z, X_new, GemmOptions<T>{});
+            (void)gemm<B>(ctx, AS({0,n}, {0,Nvecs}), Z, AX_new, GemmOptions<T>{});
             trace("syevx: ortho C_p vs Z submit");
-            ortho<B>(ctx, C_p_active, Z, Transpose::NoTrans, Transpose::NoTrans, ortho_workspace, params.algorithm, params.ortho_iterations);
+            (void)ortho<B>(ctx, C_p_active, Z, Transpose::NoTrans, Transpose::NoTrans, ortho_workspace, params.algorithm, params.ortho_iterations);
             // P = [X, P, R] * C_p, and AP likewise.
             trace("syevx: update P/AP submit");
-            gemm<B>(ctx, S({0,n}, {0,Nvecs}), C_p_active, P_new, GemmOptions<T>{});
-            gemm<B>(ctx, AS({0,n}, {0,Nvecs}), C_p_active, AP_new, GemmOptions<T>{});
+            (void)gemm<B>(ctx, S({0,n}, {0,Nvecs}), C_p_active, P_new, GemmOptions<T>{});
+            (void)gemm<B>(ctx, AS({0,n}, {0,Nvecs}), C_p_active, AP_new, GemmOptions<T>{});
 
             swap_subspace(); //AX <=> AX_new, AP <=> AP_new, X <=> X_new, P <=> P_new ...
             restart = false;
@@ -1226,6 +1233,19 @@ inline constexpr R jacobi_definiteness_floor() {
             }
         }
 
+        // The per-item flag this routine has always written and then collapsed into
+        // one `all_converged` bool. Three traps, all of them silent:
+        //   * POLARITY IS INVERTED versus LAPACK -- converged_flags[b] == 1 means the
+        //     item DID converge -- so it is negated here. Copying it verbatim reports
+        //     failure on every healthy item and success on every broken one.
+        //   * The flags are only fresh on iterations where the residual drain ran, so
+        //     this reads them AFTER the loop rather than from mid-loop state.
+        // converged_flags is a POOL draw whose bytes syevx_lobpcg_buffer_size already
+        // accounts for unconditionally, and it lives in the caller's workspace, so
+        // there is neither a sizing change nor a lifetime hazard here -- no wait is
+        // needed, unlike syevx_filtered's local UnifiedVector.
+        detail::info_from_flags(ctx, info, converged_flags.data(),
+                                static_cast<int64_t>(batch_size), /*one_means_converged=*/true);
         return ctx.get_event();
     }
 
@@ -1240,7 +1260,7 @@ inline constexpr R jacobi_definiteness_floor() {
         // Must reject exactly what the solver rejects: a sizing call that returns a number
         // for a request the solve will refuse is a caller-visible inconsistency.
         if (params.select != SyevxSelect::Extremal) {
-            throw std::invalid_argument(
+            throw batchlas::invalid_argument(
                 "syevx_lobpcg_buffer_size: only SyevxSelect::Extremal is supported; see "
                 "syevx_lobpcg");
         }
@@ -1355,7 +1375,8 @@ inline constexpr R jacobi_definiteness_floor() {
         Span<std::byte>,\
         JobType,\
         const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&,\
-        const SyevxParams<BATCHLAS_UNPAREN fp>&);\
+        const SyevxParams<BATCHLAS_UNPAREN fp>&,\
+        Span<int32_t>);\
     template size_t syevx_lobpcg_buffer_size<back, BATCHLAS_UNPAREN fp, fmt>(\
         Queue&,\
         const MatrixView<BATCHLAS_UNPAREN fp, fmt>&,\

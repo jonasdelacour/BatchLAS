@@ -24,6 +24,7 @@
 //
 // so the back-transform applies them in *reverse* generation order.
 
+#include "../util/internal-api.hh"
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>
@@ -95,19 +96,19 @@ inline int32_t sb2st_hh_work_bandwidth(int32_t n, int32_t kd) {
 //                           nrefl == build_sb2st_hh_schedule(n, kd).size()
 //   tau_out    nrefl
 template <Backend B, typename T>
-Event sytrd_sb2st_hh(Queue& ctx,
-                     const MatrixView<T, MatrixFormat::Dense>& ab_in,
-                     const MatrixView<T, MatrixFormat::Dense>& ab_tri_out,
-                     const VectorView<typename base_type<T>::type>& d_out,
-                     const VectorView<typename base_type<T>::type>& e_out,
-                     const MatrixView<T, MatrixFormat::Dense>& v_out,
-                     const VectorView<T>& tau_out,
-                     Uplo uplo,
-                     int32_t kd,
-                     const Span<std::byte>& ws);
+BATCHLAS_INTERNAL_API Event sytrd_sb2st_hh(Queue& ctx,
+                                           const MatrixView<T, MatrixFormat::Dense>& ab_in,
+                                           const MatrixView<T, MatrixFormat::Dense>& ab_tri_out,
+                                           const VectorView<typename base_type<T>::type>& d_out,
+                                           const VectorView<typename base_type<T>::type>& e_out,
+                                           const MatrixView<T, MatrixFormat::Dense>& v_out,
+                                           const VectorView<T>& tau_out,
+                                           Uplo uplo,
+                                           int32_t kd,
+                                           const Span<std::byte>& ws);
 
 template <Backend B, typename T>
-size_t sytrd_sb2st_hh_buffer_size(Queue& ctx, int32_t n, int32_t kd, int32_t batch);
+BATCHLAS_INTERNAL_API size_t sytrd_sb2st_hh_buffer_size(Queue& ctx, int32_t n, int32_t kd, int32_t batch);
 
 // Splits the reflector list into maximal runs of consecutive reflectors with
 // pairwise-disjoint row ranges. Disjoint reflectors commute, so a whole run can
@@ -147,15 +148,15 @@ inline std::vector<int32_t> build_sb2st_hh_wave_offsets(
 // All four spans must stay alive until the returned Event completes -- they are
 // read by the kernel, not copied.
 template <Backend B, typename T>
-Event unmqr_hb2st(Queue& ctx,
-                  const MatrixView<T, MatrixFormat::Dense>& v_in,
-                  const VectorView<T>& tau_in,
-                  const MatrixView<T, MatrixFormat::Dense>& z_io,
-                  int32_t n,
-                  int32_t kd,
-                  Span<const int32_t> starts,
-                  Span<const int32_t> lens,
-                  Span<const int32_t> waves);
+BATCHLAS_INTERNAL_API Event unmqr_hb2st(Queue& ctx,
+                                        const MatrixView<T, MatrixFormat::Dense>& v_in,
+                                        const VectorView<T>& tau_in,
+                                        const MatrixView<T, MatrixFormat::Dense>& z_io,
+                                        int32_t n,
+                                        int32_t kd,
+                                        Span<const int32_t> starts,
+                                        Span<const int32_t> lens,
+                                        Span<const int32_t> waves);
 
 } // namespace internal
 } // namespace batchlas

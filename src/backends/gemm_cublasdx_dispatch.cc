@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <stdexcept>
 #include <string>
+#include <batchlas/settings.hh>
 
 namespace batchlas::backend {
 
@@ -54,8 +55,7 @@ inline bool is_squareish_shape(int m, int n, int k) {
     return min_dim * 2 >= max_dim;
 }
 
-inline std::string lowered_env(const char* name) {
-    const char* raw = std::getenv(name);
+inline std::string lowered(const char* raw) {
     if (!raw || raw[0] == '\0') {
         return {};
     }
@@ -152,7 +152,7 @@ const char* cublasdx_gemm_trace_name(cublasdx_gemm::CuBLASDxGemmVariant variant)
 }
 
 bool cublasdx_gemm_has_forced_variant() {
-    const char* raw = std::getenv("BATCHLAS_GEMM_CUBLASDX_KERNEL");
+    const char* raw = batchlas::settings().selection.gemm_cublasdx_kernel.get();
     return raw && raw[0] != '\0';
 }
 
@@ -166,7 +166,9 @@ bool cublasdx_gemm_variant_available(cublasdx_gemm::CuBLASDxGemmVariant variant)
 }
 
 cublasdx_gemm::CuBLASDxGemmVariant forced_cublasdx_gemm_variant() {
-    const std::string name = lowered_env("BATCHLAS_GEMM_CUBLASDX_KERNEL");
+    // Same field the presence check above reads, so the two cannot disagree.
+    const std::string name =
+        lowered(batchlas::settings().selection.gemm_cublasdx_kernel.get());
     if (name.empty()) {
         return cublasdx_gemm::CuBLASDxGemmVariant::VendorFallback;
     }
@@ -258,11 +260,11 @@ Event gemm_cublasdx(Queue& ctx,
     }
 
     if (A.batch_size() != B.batch_size() || A.batch_size() != C.batch_size()) {
-        throw std::runtime_error("cuBLASDx GEMM path requires matching batch sizes");
+        throw batchlas::invalid_argument("cuBLASDx GEMM path requires matching batch sizes");
     }
 
     if (!gemm_batch_dimensions_compatible(A, B, C, transA, transB)) {
-        throw std::runtime_error("cuBLASDx GEMM path received incompatible matrix dimensions");
+        throw batchlas::invalid_argument("cuBLASDx GEMM path received incompatible matrix dimensions");
     }
 
     Event last_event;
@@ -306,7 +308,7 @@ Event gemm_cublasdx(Queue& ctx,
     }
 
     if (!variant_compatible_with_ops(variant, transA, transB)) {
-        throw std::runtime_error("Requested cuBLASDx GEMM variant is incompatible with the transpose operands");
+        throw batchlas::unsupported("Requested cuBLASDx GEMM variant is incompatible with the transpose operands");
     }
 
     cublasdx_gemm::GemmLaunchDescriptor desc{};
@@ -348,7 +350,7 @@ Event gemm_cublasdx(Queue& ctx,
         return gemm_vendor_cuda_raw(ctx, A, B, C, alpha, beta, transA, transB, precision);
     }
     if (status != cudaSuccess) {
-        throw std::runtime_error(std::string("cuBLASDx GEMM launch failed: ") + cudaGetErrorString(status));
+        throw batchlas::device_error(std::string("cuBLASDx GEMM launch failed: ") + cudaGetErrorString(status));
     }
 
     return ctx.create_event_after_external_work();

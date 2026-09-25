@@ -9,6 +9,7 @@
 #include <random>
 #include <type_traits>
 #include "test_utils.hh"
+#include <batchlas/util/env.hh>
 #include "../src/sycl/trsm_native.hh"
 
 using namespace batchlas;
@@ -700,23 +701,19 @@ TEST(TrsmNativeBlocked, TwoLevelFloatAndComplex) {
 // OUTER_NB = 32 collapses the driver back to the single-level schedule, which
 // must still be correct. evidence: docs/perf/trsm.md#tuning-knobs-and-environment
 TEST(TrsmNativeBlocked, OuterBlockKnobIsHonouredAndAlwaysCorrect) {
-    struct EnvGuard {
-        const char* key;
-        std::string saved;
-        bool had;
-        EnvGuard(const char* k, const char* v) : key(k) {
-            const char* old = std::getenv(k);
-            had = old != nullptr;
-            if (had) saved = old;
-            setenv(k, v, 1);
-        }
-        ~EnvGuard() { had ? setenv(key, saved.c_str(), 1) : unsetenv(key); }
-    };
-    // trsm_outer_block caches the parse in a function-local static, so the first
-    // blocked call in the process fixes the value and this setenv may be a no-op:
-    // assert correctness under whatever value is live, never a schedule.
+    // The local EnvGuard this test carried was byte-identical to
+    // batchlas::ScopedEnvVar (set with overwrite, restore-or-unset on exit) minus
+    // the reload: settings() snapshots the environment once, so a raw setenv is
+    // invisible to trsm_outer_block and all three arms below would have run the
+    // live value three times and passed by construction.
+    //
+    // trsm_outer_block reads settings().geometry.trsm_outer_nb per call and is
+    // deliberately not latched in a function-local static, so each arm really does
+    // reach the driver: at nb = 32 these round to outer_nb 64, 32 and 256, i.e.
+    // four panels, seven panels, and (256 > n = 200) a single panel that collapses
+    // the outer level away. Correctness is the assertion; the schedule is not.
     for (const char* v : {"64", "32", "256"}) {
-        EnvGuard g("BATCHLAS_TRSM_OUTER_NB", v);
+        batchlas::ScopedEnvVar g("BATCHLAS_TRSM_OUTER_NB", v);
         for (Side sd : {Side::Left, Side::Right})
             RunTrsmBlocked<double>({200, 16, 2, sd, Uplo::Lower, Transpose::NoTrans,
                                     Diag::NonUnit, -1.25});

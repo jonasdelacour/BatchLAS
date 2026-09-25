@@ -184,16 +184,23 @@ For a Linux-oriented environment setup with package suggestions and oneAPI notes
 
 ### Tested platforms
 
-Only one configuration is exercised regularly. CI (`.github/workflows/ci.yml`)
-checks list files, the exported package and the public headers only — a
-GitHub-hosted runner has no SYCL compiler, so nothing is configured, compiled,
-tested or run there. Everything outside the Primary row is untested rather than
-known-good.
+Only one configuration is exercised regularly, and CI now gates that one
+configuration and no other. `.github/workflows/ci.yml` runs static checks on
+GitHub-hosted runners (list files, the exported package at source level, the
+public headers — a hosted runner has no SYCL compiler, so nothing is configured
+or compiled there), plus a **self-hosted GPU job on the Primary machine** that
+configures with CUDA required, builds every library and test binary, runs
+`ctest`, installs the package and checks the generated export. A nightly job on
+the same runner adds the slow suites, the out-of-tree consumer packaging test
+and a vendor-free build. Everything outside the Primary row is still untested
+rather than known-good — CI adds no coverage there.
 
 | | Compiler | CUDA | GPU / arch | OS | Status |
 | --- | --- | --- | --- | --- | --- |
 | Primary | `intel/llvm` DPC++, clang 22.0.0git, built with `--cuda` (installed at `/opt/dpcpp-cuda`) | 13.2 | NVIDIA RTX 4090, `sm_89` | Ubuntu 22.04 | Library, tests and benchmarks built and run here daily |
-| CPU only | Intel oneAPI `icpx` 2025.x | — | none (`spir64_x86_64` / `native_cpu`) | Ubuntu 22.04 | Configures and builds; **no NVIDIA support** — see the warning above |
+| CI — static checks | none (no toolchain) | — | none | `ubuntu-latest` | List files, source-level export and public headers only; nothing configured, compiled or run |
+| CI — GPU gate | the Primary row's toolchain, on a self-hosted runner on that machine | 13.2 | NVIDIA RTX 4090, `sm_89` | Ubuntu 22.04 | Build + `ctest -LE slow` + install on every push and non-fork PR; full `ctest`, packaging and a vendor-free build nightly |
+| CPU only | Intel oneAPI `icpx` 2025.x | — | none (`spir64_x86_64` / `native_cpu`) | Ubuntu 22.04 | Configures and builds; **no NVIDIA support** — see the warning above. Not built by CI |
 | AMD / ROCm | — | — | — | — | Code paths exist; not built or run by anyone here |
 | oneMKL backend | — | — | Intel GPU | — | Code paths exist; not built or run by anyone here |
 | macOS / Windows | — | — | — | — | Untested; no attempt made |
@@ -201,6 +208,13 @@ known-good.
 Other NVIDIA architectures should work — the build detects the local GPU and can
 be pointed elsewhere with `-DBATCHLAS_NVIDIA_ARCH=sm_XX` — but nothing but
 `sm_89` has been run.
+
+Because `main` is not green (four known test failures), the GPU job compares
+each run against a checked-in ledger, `tests/known-failures.txt`, rather than
+against `ctest`'s exit code. See **[docs/ci.md](docs/ci.md)** for the full
+coverage table, how to stand the self-hosted runner up, how to retire a
+known-failure entry, and the environment trap that makes a runner build a
+CPU-only library and report green.
 
 ## Build
 

@@ -68,12 +68,14 @@ Event trmm(Queue& ctx,
     bool is_ll_or_ur = (uplo == Uplo::Lower && side == Side::Left) || (uplo == Uplo::Upper && side == Side::Right);
     
     // Call trmm recursively on the sub-matrices
-    trmm<Ba>(ctx,
+    // (void) on an Event: deliberate. This Queue is in-order, so the next submission
+    // is already ordered after this one and the Event carries nothing the caller needs.
+    (void)trmm<Ba>(ctx,
              A22,
              B2,
              C2,
              {.alpha = alpha, .side = side, .uplo = uplo, .trans = transA, .diag = diag});
-    trmm<Ba>(ctx,
+    (void)trmm<Ba>(ctx,
              A11,
              B1,
              C1,

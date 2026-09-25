@@ -154,32 +154,32 @@ inline DenseSourceLayout dense_source_layout(const char* ctor, bool has_data,
                                              int batch_size) {
     const std::string prefix = std::string(ctor) + ": ";
     if (!has_data) {
-        throw std::invalid_argument(prefix + "data pointer is null");
+        throw batchlas::invalid_argument(prefix + "data pointer is null");
     }
     if (rows <= 0 || cols <= 0) {
-        throw std::invalid_argument(prefix + "invalid matrix dimensions " +
+        throw batchlas::invalid_argument(prefix + "invalid matrix dimensions " +
                                     std::to_string(rows) + "x" + std::to_string(cols));
     }
     if (batch_size <= 0) {
-        throw std::invalid_argument(prefix + "invalid batch size " + std::to_string(batch_size));
+        throw batchlas::invalid_argument(prefix + "invalid batch size " + std::to_string(batch_size));
     }
     if (ld < 0) {
-        throw std::invalid_argument(prefix + "invalid leading dimension " + std::to_string(ld));
+        throw batchlas::invalid_argument(prefix + "invalid leading dimension " + std::to_string(ld));
     }
     if (stride < 0) {
-        throw std::invalid_argument(prefix + "invalid stride " + std::to_string(stride));
+        throw batchlas::invalid_argument(prefix + "invalid stride " + std::to_string(stride));
     }
 
     const int src_ld = ld > 0 ? ld : rows;
     if (src_ld < rows) {
-        throw std::invalid_argument(prefix + "leading dimension " + std::to_string(src_ld) +
+        throw batchlas::invalid_argument(prefix + "leading dimension " + std::to_string(src_ld) +
                                     " is smaller than the row count " + std::to_string(rows));
     }
 
     const std::size_t packed = static_cast<std::size_t>(src_ld) * static_cast<std::size_t>(cols);
     const std::size_t src_stride = stride > 0 ? static_cast<std::size_t>(stride) : packed;
     if (batch_size > 1 && src_stride < packed) {
-        throw std::invalid_argument(prefix + "stride " + std::to_string(src_stride) +
+        throw batchlas::invalid_argument(prefix + "stride " + std::to_string(src_stride) +
                                     " is smaller than ld * cols (" + std::to_string(packed) + ")");
     }
     return DenseSourceLayout{src_ld, src_stride};
@@ -201,7 +201,7 @@ inline const T* dense_checked_source(Span<const T> data, int rows, int cols, int
     const auto src = dense_source_layout(ctor, data.data() != nullptr, rows, cols, ld, stride, batch_size);
     const std::size_t required = dense_source_extent(src, rows, cols, batch_size);
     if (data.size() < required) {
-        throw std::invalid_argument(std::string(ctor) + ": span holds " + std::to_string(data.size()) +
+        throw batchlas::invalid_argument(std::string(ctor) + ": span holds " + std::to_string(data.size()) +
                                     " elements but the requested shape needs " + std::to_string(required));
     }
     return data.data();
@@ -228,25 +228,25 @@ Matrix<T, MType>::Matrix(int rows, int cols, int batch_size, int ld, int stride)
     {
         const std::string prefix = "Matrix(rows, cols, batch_size, ld, stride): ";
         if (rows < 0 || cols < 0) {
-            throw std::invalid_argument(prefix + "invalid matrix dimensions " +
+            throw batchlas::invalid_argument(prefix + "invalid matrix dimensions " +
                                         std::to_string(rows) + "x" + std::to_string(cols));
         }
         if (batch_size < 0) {
-            throw std::invalid_argument(prefix + "invalid batch size " + std::to_string(batch_size));
+            throw batchlas::invalid_argument(prefix + "invalid batch size " + std::to_string(batch_size));
         }
         if (ld < 0) {
-            throw std::invalid_argument(prefix + "invalid leading dimension " + std::to_string(ld));
+            throw batchlas::invalid_argument(prefix + "invalid leading dimension " + std::to_string(ld));
         }
         if (stride < 0) {
-            throw std::invalid_argument(prefix + "invalid stride " + std::to_string(stride));
+            throw batchlas::invalid_argument(prefix + "invalid stride " + std::to_string(stride));
         }
         if (ld_ < rows) {
-            throw std::invalid_argument(prefix + "leading dimension " + std::to_string(ld_) +
+            throw batchlas::invalid_argument(prefix + "leading dimension " + std::to_string(ld_) +
                                         " is smaller than the row count " + std::to_string(rows));
         }
         const std::size_t packed = static_cast<std::size_t>(ld_) * static_cast<std::size_t>(cols);
         if (static_cast<std::size_t>(stride_) < packed) {
-            throw std::invalid_argument(prefix + "stride " + std::to_string(stride_) +
+            throw batchlas::invalid_argument(prefix + "stride " + std::to_string(stride_) +
                                         " is smaller than ld * cols (" + std::to_string(packed) + ")");
         }
     }
@@ -626,7 +626,7 @@ Matrix<T, NewMType> Matrix<T, MType>::convert_to(const float_t<T>& zero_threshol
     // Handle other conversions (e.g., Dense to COO, CSR to CSC, etc.)
     else {
         // Throw error for unsupported or unimplemented conversions
-        throw std::runtime_error("Conversion between specified matrix formats not supported or implemented.");
+        throw batchlas::unsupported("Conversion between specified matrix formats not supported or implemented.");
     }
 }
 
@@ -654,7 +654,7 @@ MatrixView<T, MType> Matrix<T, MType>::view(int rows, int cols, int ld, int stri
     } else {
         // This implementation is simplified - in practice, extracting a submatrix from CSR format
         // requires conversion to coordinate format, extracting the submatrix, and converting back
-        throw std::runtime_error("Submatrix views of CSR matrices not yet implemented");
+        throw batchlas::unsupported("Submatrix views of CSR matrices not yet implemented");
     }
 }
 
@@ -670,7 +670,7 @@ MatrixView<T, MType>::MatrixView(const VectorView<T>& vector_view, VectorOrienta
       batch_size_(vector_view.batch_size()),
       data_(vector_view.data()) {
     if (orientation == VectorOrientation::Column && vector_view.inc() != 1) {
-        throw std::runtime_error("Cannot create column matrix view from vector with inc != 1");
+        throw batchlas::invalid_argument("Cannot create column matrix view from vector with inc != 1");
     }
 }
 
@@ -698,7 +698,7 @@ Event VectorView<T>::hadamard_product(const Queue& ctx, T a, T b, const VectorVi
 template <typename T, MatrixFormat MType>
 void Matrix<T, MType>::copy_from(const MatrixView<T, MType>& src) {
     if (rows_ != src.rows_ || cols_ != src.cols_ || batch_size_ != src.batch_size_) {
-        throw std::runtime_error("Matrix dimensions or batch size mismatch in copy_from");
+        throw batchlas::invalid_argument("Matrix dimensions or batch size mismatch in copy_from");
     }
     
     if constexpr (MType == MatrixFormat::Dense) {
@@ -1138,7 +1138,7 @@ Event MatrixView<T, MType>::fill_random(const Queue& ctx, bool hermitian, unsign
     // If hermitian flag is set, enforce Hermitian property using a kernel
     if (hermitian) {
         if (rows != cols) {
-            throw std::runtime_error("Hermitian matrices must be square");
+            throw batchlas::invalid_argument("Hermitian matrices must be square");
         }
 
         int ld = ld_;
@@ -1191,13 +1191,13 @@ Event MatrixView<T, MType>::fill_random_sparse_hermitian(const Queue& ctx,
                                                          typename base_type<T>::type diagonal_boost,
                                                          bool shared_pattern) const {
     if (rows_ <= 0 || cols_ <= 0) {
-        throw std::invalid_argument("fill_random_sparse_hermitian: matrix dimensions must be > 0");
+        throw batchlas::invalid_argument("fill_random_sparse_hermitian: matrix dimensions must be > 0");
     }
     if (rows_ != cols_) {
-        throw std::invalid_argument("fill_random_sparse_hermitian: Hermitian matrices must be square");
+        throw batchlas::invalid_argument("fill_random_sparse_hermitian: Hermitian matrices must be square");
     }
     if (batch_size_ <= 0) {
-        throw std::invalid_argument("fill_random_sparse_hermitian: batch_size must be > 0");
+        throw batchlas::invalid_argument("fill_random_sparse_hermitian: batch_size must be > 0");
     }
 
     density = std::clamp(density, 0.0f, 1.0f);
@@ -1206,7 +1206,7 @@ Event MatrixView<T, MType>::fill_random_sparse_hermitian(const Queue& ctx,
     const int offdiag_edges = (nnz_per_matrix - n) / 2;
 
     if (nnz_ != nnz_per_matrix || matrix_stride_ < nnz_per_matrix || offset_stride_ < (n + 1)) {
-        throw std::invalid_argument("fill_random_sparse_hermitian: CSR storage shape does not match requested density");
+        throw batchlas::invalid_argument("fill_random_sparse_hermitian: CSR storage shape does not match requested density");
     }
 
     auto row_offsets_ptr = row_offsets_.data();
@@ -1420,8 +1420,10 @@ template <typename T, MatrixFormat MType>
 template <MatrixFormat M>
     requires DenseMatrixFormat<M>
 Event MatrixView<T, MType>::fill_identity(const Queue& ctx, T value) const {
-    fill_zeros(ctx);
-    fill_diagonal(ctx, value);
+    // (void) on an Event: deliberate. This Queue is in-order, so the next submission
+    // is already ordered after this one and the Event carries nothing the caller needs.
+    (void)fill_zeros(ctx);
+    (void)fill_diagonal(ctx, value);
     return ctx.get_event();
 }
 
@@ -1633,7 +1635,7 @@ inline std::size_t checked_row_major_pitch(int row_pitch, int rows, int cols, st
                                            std::size_t buffer_elems) {
     const std::string prefix = "Matrix::to_column_major: ";
     if (row_pitch < 0) {
-        throw std::invalid_argument(prefix + "invalid row pitch " + std::to_string(row_pitch));
+        throw batchlas::invalid_argument(prefix + "invalid row pitch " + std::to_string(row_pitch));
     }
     const std::size_t pitch = row_pitch > 0 ? static_cast<std::size_t>(row_pitch)
                                             : static_cast<std::size_t>(cols);
@@ -1646,7 +1648,7 @@ inline std::size_t checked_row_major_pitch(int row_pitch, int rows, int cols, st
         const std::size_t packed_item = static_cast<std::size_t>(rows) *
                                         static_cast<std::size_t>(cols);
         if (ld != static_cast<std::size_t>(rows) || stride != packed_item) {
-            throw std::invalid_argument(
+            throw batchlas::invalid_argument(
                 prefix + "the default row pitch means packed (pitch cols = " + std::to_string(cols) +
                 "), but this matrix is not packed: rows=" + std::to_string(rows) +
                 " cols=" + std::to_string(cols) + " ld=" + std::to_string(ld) +
@@ -1658,20 +1660,20 @@ inline std::size_t checked_row_major_pitch(int row_pitch, int rows, int cols, st
         }
     }
     if (pitch < static_cast<std::size_t>(cols)) {
-        throw std::invalid_argument(prefix + "row pitch " + std::to_string(pitch) +
+        throw batchlas::invalid_argument(prefix + "row pitch " + std::to_string(pitch) +
                                     " is smaller than the column count " + std::to_string(cols));
     }
     const std::size_t item = static_cast<std::size_t>(rows - 1) * pitch +
                              static_cast<std::size_t>(cols);
     if (batch_size > 1 && item > stride) {
-        throw std::invalid_argument(prefix + "a row-major read at pitch " + std::to_string(pitch) +
+        throw batchlas::invalid_argument(prefix + "a row-major read at pitch " + std::to_string(pitch) +
                                     " spans " + std::to_string(item) +
                                     " elements per batch item, but the batch items are only " +
                                     std::to_string(stride) + " apart (stride)");
     }
     const std::size_t needed = static_cast<std::size_t>(batch_size - 1) * stride + item;
     if (needed > buffer_elems) {
-        throw std::invalid_argument(prefix + "a row-major read at pitch " + std::to_string(pitch) +
+        throw batchlas::invalid_argument(prefix + "a row-major read at pitch " + std::to_string(pitch) +
                                     " needs " + std::to_string(needed) +
                                     " elements but the matrix owns " + std::to_string(buffer_elems) +
                                     "; pass the pitch the buffer really has, or compact it first");
@@ -1688,7 +1690,7 @@ inline void check_column_major_extent(int rows, int cols, std::size_t ld, std::s
                                static_cast<std::size_t>(cols - 1) * ld +
                                static_cast<std::size_t>(rows);
     if (needed > buffer_elems) {
-        throw std::invalid_argument("Matrix::to_row_major: a column-major read at ld " +
+        throw batchlas::invalid_argument("Matrix::to_row_major: a column-major read at ld " +
                                     std::to_string(ld) + " needs " + std::to_string(needed) +
                                     " elements but the matrix owns " + std::to_string(buffer_elems));
     }
@@ -1864,20 +1866,20 @@ MatrixView<T, MType>::MatrixView(T* data, int rows, int cols, int ld,
     //     against: for `V(p, n, n, batch)` the resolved stride equals ld * cols exactly.
     const std::string prefix = "MatrixView(data, rows, cols, ld, stride, batch_size): ";
     if (rows < 0 || cols < 0) {
-        throw std::invalid_argument(prefix + "invalid matrix dimensions " +
+        throw batchlas::invalid_argument(prefix + "invalid matrix dimensions " +
                                     std::to_string(rows) + "x" + std::to_string(cols));
     }
     if (batch_size < 0) {
-        throw std::invalid_argument(prefix + "invalid batch size " + std::to_string(batch_size));
+        throw batchlas::invalid_argument(prefix + "invalid batch size " + std::to_string(batch_size));
     }
     if (ld < 0) {
-        throw std::invalid_argument(prefix + "invalid leading dimension " + std::to_string(ld));
+        throw batchlas::invalid_argument(prefix + "invalid leading dimension " + std::to_string(ld));
     }
     if (stride < 0) {
-        throw std::invalid_argument(prefix + "invalid stride " + std::to_string(stride));
+        throw batchlas::invalid_argument(prefix + "invalid stride " + std::to_string(stride));
     }
     if (ld_ < rows) {
-        throw std::invalid_argument(prefix + "leading dimension " + std::to_string(ld_) +
+        throw batchlas::invalid_argument(prefix + "leading dimension " + std::to_string(ld_) +
                                     " is smaller than the row count " + std::to_string(rows) +
                                     " (did you mean MatrixView(data, rows, cols, /*ld=*/" +
                                     std::to_string(rows) + ", /*stride=*/0, /*batch_size=*/" +
@@ -1981,12 +1983,12 @@ template <MatrixFormat M>
     requires DenseMatrixFormat<M>
 T& MatrixView<T, MType>::at(int row, int col, int batch) {
     if (batch < 0 || batch >= batch_size_) {
-        throw std::out_of_range("Matrix indices out of range");
+        throw batchlas::out_of_range("Matrix indices out of range");
     }
     const int batch_rows = rows(batch);
     const int batch_cols = cols(batch);
     if (row < 0 || row >= batch_rows || col < 0 || col >= batch_cols) {
-        throw std::out_of_range("Matrix indices out of range");
+        throw batchlas::out_of_range("Matrix indices out of range");
     }
     // The batch term in int64_t: batch * stride_ in int wraps at batch sizes this
     // library targets (a 512x512 float item has stride 262144, so it wraps at b = 8192).
@@ -1998,12 +2000,12 @@ template <MatrixFormat M>
     requires DenseMatrixFormat<M>
 const T& MatrixView<T, MType>::at(int row, int col, int batch) const {
     if (batch < 0 || batch >= batch_size_) {
-        throw std::out_of_range("Matrix indices out of range");
+        throw batchlas::out_of_range("Matrix indices out of range");
     }
     const int batch_rows = rows(batch);
     const int batch_cols = cols(batch);
     if (row < 0 || row >= batch_rows || col < 0 || col >= batch_cols) {
-        throw std::out_of_range("Matrix indices out of range");
+        throw batchlas::out_of_range("Matrix indices out of range");
     }
     // The batch term in int64_t: batch * stride_ in int wraps at batch sizes this
     // library targets (a 512x512 float item has stride 262144, so it wraps at b = 8192).
@@ -2014,7 +2016,7 @@ const T& MatrixView<T, MType>::at(int row, int col, int batch) const {
 template <typename T, MatrixFormat MType>
 MatrixView<T, MType> MatrixView<T, MType>::batch_item(int batch_index) const {
     if (batch_index < 0 || batch_index >= batch_size_) {
-        throw std::out_of_range("Batch index out of range");
+        throw batchlas::out_of_range("Batch index out of range");
     }
     
     if constexpr (MType == MatrixFormat::Dense) {
@@ -2062,7 +2064,7 @@ template <typename T, MatrixFormat MType> struct CopyKernel3D {};
 template <typename T, MatrixFormat MType>
 Event MatrixView<T, MType>::copy(Queue& ctx, const MatrixView<T, MType>& dest, const MatrixView<T, MType>& src) {
     if (src.rows() != dest.rows() || src.cols() != dest.cols() || src.batch_size() != dest.batch_size()) {
-        throw std::invalid_argument("Copy called on incompatible matrices");
+        throw batchlas::invalid_argument("Copy called on incompatible matrices");
     }
     if constexpr(MType == MatrixFormat::Dense) {
         if (src.data_ptr() == dest.data_ptr()) return ctx.get_event(); // No-op if same buffer
@@ -2114,9 +2116,9 @@ Event MatrixView<T, MType>::copy(Queue& ctx, const MatrixView<T, MType>& dest, c
             return event;
         }
     } else if constexpr(MType == MatrixFormat::CSR) {
-        throw std::runtime_error("CSR copy not implemented yet");
+        throw batchlas::unsupported("CSR copy not implemented yet");
     } else {
-        throw std::runtime_error("Unsupported matrix format in copy");
+        throw batchlas::unsupported("Unsupported matrix format in copy");
     }
     return ctx.get_event();
 }
@@ -2124,7 +2126,7 @@ Event MatrixView<T, MType>::copy(Queue& ctx, const MatrixView<T, MType>& dest, c
 template <typename T>
 Event VectorView<T>::copy(Queue& ctx, const VectorView<T>& dest, const VectorView<T>& src) {
     if (src.size() != dest.size() || src.batch_size() != dest.batch_size()) {
-        throw std::invalid_argument("Copy called on incompatible vectors");
+        throw batchlas::invalid_argument("Copy called on incompatible vectors");
     }
     if (src.data_ptr() == dest.data_ptr()) return ctx.get_event(); // No-op if same buffer
     if ((src.stride() == src.size() && dest.stride() == dest.size() && src.inc() == 1 && dest.inc() == 1) ||
@@ -2173,7 +2175,7 @@ Event VectorView<T>::copy(Queue& ctx, const VectorView<T>& dest, const VectorVie
 template <typename T>
 bool VectorView<T>::all_close(Queue& ctx, const VectorView<T>& a, const VectorView<T>& b, float_t<T> tol) {
     if (a.size() != b.size() || a.batch_size() != b.batch_size()) {
-        throw std::invalid_argument("all_close called on incompatible vectors");
+        throw batchlas::invalid_argument("all_close called on incompatible vectors");
     }
     UnifiedVector<bool> batch_results(a.batch_size());
 
@@ -2231,7 +2233,7 @@ bool VectorView<T>::all_close(Queue& ctx, const VectorView<T>& a, const VectorVi
 template <typename T, MatrixFormat MType>
 bool MatrixView<T, MType>::all_close(Queue& ctx, const MatrixView<T, MType>& A, const MatrixView<T, MType>& B, float_t<T> tol) {
     if (A.rows() != B.rows() || A.cols() != B.cols() || A.batch_size() != B.batch_size()) {
-        throw std::invalid_argument("all_close called on incompatible matrices");
+        throw batchlas::invalid_argument("all_close called on incompatible matrices");
     }
     UnifiedVector<bool> batch_results(A.batch_size());
     if constexpr (MType == MatrixFormat::Dense) {
@@ -2288,7 +2290,7 @@ bool MatrixView<T, MType>::all_close(Queue& ctx, const MatrixView<T, MType>& A, 
             });
         }).wait();
     } else {
-        throw std::runtime_error("all_close not implemented for this matrix format");
+        throw batchlas::unsupported("all_close not implemented for this matrix format");
     }
 
     ctx -> submit([&](sycl::handler& cgh) {
@@ -2325,7 +2327,7 @@ Event scale(Queue& ctx, const T& alpha, const MatrixView<T, MType>& matrix) {
         static_cast<size_t>(matrix.rows()) * matrix.cols() * matrix.batch_size(),
         ctx.device(), KernelType::ELEMENTWISE);
     if constexpr (MType == MatrixFormat::CSR) {
-        throw std::runtime_error("scale not implemented for CSR matrices yet");
+        throw batchlas::unsupported("scale not implemented for CSR matrices yet");
     } else if constexpr (MType == MatrixFormat::Dense) {
         return static_cast<EventImpl>(ctx->submit([&](sycl::handler& cgh) {
             auto view = matrix.kernel_view();
@@ -2366,13 +2368,13 @@ void MatrixView<T, MType>::init_data_ptr_array(Queue& ctx, Span<T*> target) cons
     if (target.data() == nullptr) target = data_ptrs_;
     auto [start_ptr, stride, data_ptrs] = std::make_tuple(this->data_ptr(), stride_, target);
     if (!data_ptrs.data()) {
-        throw std::runtime_error("data_ptrs target is null");
+        throw batchlas::invalid_argument("data_ptrs target is null");
     }
     if (data_ptrs.size() < static_cast<std::size_t>(batch_size_)) {
-        throw std::runtime_error("data_ptrs target is smaller than batch_size");
+        throw batchlas::invalid_argument("data_ptrs target is smaller than batch_size");
     }
     if (!start_ptr) {
-        throw std::runtime_error("start_ptr is null");
+        throw batchlas::invalid_argument("start_ptr is null");
     }
     ctx->submit([&](sycl::handler& cgh) {
         cgh.parallel_for(sycl::range<1>(batch_size_), [=](sycl::id<1> idx) {
