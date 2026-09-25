@@ -69,13 +69,13 @@ set(BENCHMARK_TARGETS
     htev_compare_benchmark
 )
 
-# Benchmarks are kept out of the default ALL target: they are 61 heavy
-# translation units (~710 s of compile) that no dev loop and no test run needs,
-# and there is a hard ~12 s floor per TU regardless of how trivial the benchmark
-# is. Build them with `--target batchlas_benchmarks`, by name, or via the
-# `benchmarks` build preset, which names the aggregate explicitly.
+# Benchmarks ARE part of the default ALL target. BATCHLAS_BUILD_BENCHMARKS
+# (default OFF, ON only in the `benchmarks` preset) is the opt-in; marking the
+# targets EXCLUDE_FROM_ALL as well meant switching the option on in ccmake
+# defined 61 targets that a plain `cmake --build` / `make` never built. To
+# iterate on one benchmark, build it by name; `batchlas_benchmarks` still
+# builds exactly the benchmark set.
 function(batchlas_register_benchmark target_name)
-    set_target_properties(${target_name} PROPERTIES EXCLUDE_FROM_ALL ON)
     set_property(GLOBAL APPEND PROPERTY BATCHLAS_ALL_BENCHMARK_TARGETS ${target_name})
 endfunction()
 

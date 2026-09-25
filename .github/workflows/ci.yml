@@ -323,8 +323,8 @@ jobs:
         # No --target: the dev-tests BUILD preset deliberately names none, so
         # this builds the default `all` target - the 14-15 component shared
         # objects plus all 61 test executables. No test target is
-        # EXCLUDE_FROM_ALL (the only EXCLUDE_FROM_ALL in the repo is on
-        # benchmarks), so `all` is sufficient and no extra target name is needed.
+        # EXCLUDE_FROM_ALL, so `all` is sufficient and no extra target name is
+        # needed.
         #
         # If a test binary is nonetheless missing at ctest time, this step
         # half-failed: ctest reports it "Not Run", which reads like a test

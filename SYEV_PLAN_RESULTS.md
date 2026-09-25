@@ -175,7 +175,7 @@ library. Second, the intermediate spot-check that read float values-only at 15.3
 14.463 was an artifact of that same broken build; a 6% anomaly is exactly the size that gets
 rationalised as thermal drift rather than investigated. It was worth chasing.
 
-Note also that benchmark targets here are `EXCLUDE_FROM_ALL`: after `--target clean`, a plain
+Note also that benchmark targets here were `EXCLUDE_FROM_ALL` at the time (no longer true): after `--target clean`, a plain
 `cmake --build` rebuilds the tests but leaves no benchmark binaries, and the next measurement
 fails with "No such file or directory" rather than anything informative.
 
