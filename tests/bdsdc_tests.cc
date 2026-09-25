@@ -144,9 +144,9 @@ protected:
 
         Matrix<Scalar> U(n, n, batch), Vh(n, n, batch);
         if (vectors) {
-            bdsdc<B, Scalar>(ctx, dv, ev, s.to_span(), ws.to_span(), U.view(), Vh.view(), true);
+            (void)bdsdc<B, Scalar>(ctx, dv, ev, s.to_span(), ws.to_span(), U.view(), Vh.view(), true);
         } else {
-            bdsdc<B, Scalar>(ctx, dv, ev, s.to_span(), ws.to_span(), true);
+            (void)bdsdc<B, Scalar>(ctx, dv, ev, s.to_span(), ws.to_span(), true);
         }
         ctx.wait_and_throw();
 

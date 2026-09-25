@@ -16,11 +16,11 @@ TEST(InverseTest, InverseIdentityCheck) {
     
     Matrix<float, MatrixFormat::Dense> Ainverse(40,40,2);
     UnifiedVector<std::byte> ws(inv_buffer_size(ctx, A.view()));
-    inv(ctx, A.view(), Ainverse.view(), ws);
+    (void)inv(ctx, A.view(), Ainverse.view(), ws);
     ctx.wait();
 
     Matrix<float, MatrixFormat::Dense> result(40,40,2);
-    gemm(ctx, A.view(), Ainverse.view(), result.view(), {});
+    (void)gemm(ctx, A.view(), Ainverse.view(), result.view(), {});
     ctx.wait();
 
     auto r = result.data();

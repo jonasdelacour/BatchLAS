@@ -349,7 +349,7 @@ Event syev_blocked(Queue& ctx,
                                     ormqr_block_size);
             }
 
-            MatrixView<T, MatrixFormat::Dense>::copy(ctx, a, zc_view);
+            (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, a, zc_view);
         }
 
         return ctx.get_event();
@@ -493,7 +493,7 @@ Event syev_blocked(Queue& ctx,
                                     ormqr_block_size);
             }
 
-            MatrixView<T, MatrixFormat::Dense>::copy(ctx, a, z_view);
+            (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, a, z_view);
         }
 
         return ctx.get_event();

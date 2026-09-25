@@ -46,7 +46,7 @@ static void BM_PERMUTED_COPY(minibench::State& state) {
                        auto&& dst,
                        auto&& permutation,
                        const PermutedCopyParams& params) {
-                        permuted_copy(q, src, dst, permutation, params);
+                        (void)permuted_copy(q, src, dst, permutation, params);
                     });
 
     const double bytes_moved = static_cast<double>(rows) * cols * batch * sizeof(T) * 2.0;

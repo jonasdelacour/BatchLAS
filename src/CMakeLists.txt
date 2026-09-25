@@ -133,6 +133,14 @@ if(BATCHLAS_ENABLE_SYCL)
 endif()
 
 function(batchlas_configure_component target)
+    set(options NO_CPU_TARGETS)
+    cmake_parse_arguments(BATCHLAS_COMP "${options}" "" "" ${ARGN})
+    # The device link must see the same -fsycl-targets the objects were
+    # compiled with, or clang warns that the native_cpu image is missing.
+    set(_sycl_options batchlas_sycl_options)
+    if(BATCHLAS_COMP_NO_CPU_TARGETS AND BATCHLAS_SYCL_TARGETS_NO_CPU_STRING)
+        set(_sycl_options batchlas_sycl_no_cpu_options)
+    endif()
     target_include_directories(${target}
         PUBLIC
             $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
@@ -148,7 +156,7 @@ function(batchlas_configure_component target)
         PRIVATE
             batchlas_build_options
             batchlas_dep_options
-            batchlas_sycl_options
+            ${_sycl_options}
             tbb
     )
     # SONAME discipline. Without these every install wrote a bare
@@ -278,7 +286,7 @@ batchlas_configure_component(batchlas_extensions_stedc)
 add_library(batchlas_extensions_cta SHARED
     $<TARGET_OBJECTS:batchlas_extensions_cta_obj>
 )
-batchlas_configure_component(batchlas_extensions_cta)
+batchlas_configure_component(batchlas_extensions_cta NO_CPU_TARGETS)
 
 add_library(batchlas_util SHARED
     $<TARGET_OBJECTS:batchlas_util_obj>

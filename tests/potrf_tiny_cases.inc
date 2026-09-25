@@ -88,10 +88,10 @@ protected:
         UnifiedVector<std::byte> ws(sycl_potrf::potrf_tiny_buffer_size<T>(*this->ctx, V));
         UnifiedVector<int32_t> info(batch, int32_t(-7));
         if (pass_info_span) {
-            sycl_potrf::potrf_tiny_dispatch<T>(*this->ctx, V, uplo, ws.to_span(),
+            (void)sycl_potrf::potrf_tiny_dispatch<T>(*this->ctx, V, uplo, ws.to_span(),
                                                info.to_span());
         } else {
-            sycl_potrf::potrf_tiny_dispatch<T>(*this->ctx, V, uplo, ws.to_span(),
+            (void)sycl_potrf::potrf_tiny_dispatch<T>(*this->ctx, V, uplo, ws.to_span(),
                                                Span<int32_t>{});
         }
         this->ctx->wait();
@@ -178,7 +178,7 @@ TYPED_TEST(PotrfTinyTest, TinyAgreesWithCtaWithinOnePanel) {
             UnifiedVector<std::byte> ws(
                 sycl_potrf::potrf_cta_buffer_size<T>(*this->ctx, cta.view()));
             UnifiedVector<int32_t> info_c(batch, int32_t(-7));
-            sycl_potrf::potrf_cta_dispatch<T>(*this->ctx, cta.view(), uplo, ws.to_span(),
+            (void)sycl_potrf::potrf_cta_dispatch<T>(*this->ctx, cta.view(), uplo, ws.to_span(),
                                               info_c.to_span());
             this->ctx->wait();
 
@@ -638,7 +638,7 @@ TYPED_TEST(PotrfTinyTest, TinyFacadeReachesTheTinyKernel) {
     UnifiedVector<std::byte> ws(
         potrf_buffer_size<B, T>(*this->ctx, through.view(), Uplo::Lower));
     UnifiedVector<int32_t> info(batch, int32_t(-7));
-    potrf<B, T>(*this->ctx, through.view(), Uplo::Lower, ws.to_span(), info.to_span());
+    (void)potrf<B, T>(*this->ctx, through.view(), Uplo::Lower, ws.to_span(), info.to_span());
     this->ctx->wait();
 
     const auto info_direct = this->run_tiny(direct.view(), Uplo::Lower);
@@ -686,14 +686,14 @@ TYPED_TEST(PotrfTinyTest, TinyDirectEntryPointRefusesWhatSupportsRefuses) {
         const int n = this->cap() + 1;
         Matrix<T, MatrixFormat::Dense> A(n, n, 1);
         A.fill(T{});
-        EXPECT_THROW(sycl_potrf::potrf_tiny_dispatch<T>(*this->ctx, A.view(), Uplo::Lower,
+        EXPECT_THROW((void)sycl_potrf::potrf_tiny_dispatch<T>(*this->ctx, A.view(), Uplo::Lower,
                                                         ws.to_span(), info.to_span()),
                      std::invalid_argument);
     }
     {   // not square
         Matrix<T, MatrixFormat::Dense> A(8, 6, 1);
         A.fill(T{});
-        EXPECT_THROW(sycl_potrf::potrf_tiny_dispatch<T>(*this->ctx, A.view(), Uplo::Lower,
+        EXPECT_THROW((void)sycl_potrf::potrf_tiny_dispatch<T>(*this->ctx, A.view(), Uplo::Lower,
                                                         ws.to_span(), info.to_span()),
                      std::invalid_argument);
     }

@@ -57,7 +57,7 @@ void run_family_variant(minibench::State& state, const char* kernel_name, Transp
                         ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
                         ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", kernel_name);
                         ScopedEnvVar experimental("BATCHLAS_GEMM_EXPERIMENTAL", "1");
-                        gemm(q, std::forward<decltype(xs)>(xs)...);
+                        (void)gemm(q, std::forward<decltype(xs)>(xs)...);
                     });
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * 2.0 * m * n * k), minibench::Rate);
     state.SetMetric("Time (µs) / matrix", (1.0 / static_cast<double>(batch)) * 1e6, minibench::Reciprocal);

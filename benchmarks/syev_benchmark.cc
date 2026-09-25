@@ -85,7 +85,7 @@ static void BM_SYEV(minibench::State& state) {
                     uplo,
                     std::move(workspace),
                     [](Queue& q, auto&&... xs) {
-                        syev(q, std::forward<decltype(xs)>(xs)...);
+                        (void)syev(q, std::forward<decltype(xs)>(xs)...);
                     });
     double flops = 4.0 / 3.0 * static_cast<double>(n) * n * n;
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * flops), minibench::Rate);

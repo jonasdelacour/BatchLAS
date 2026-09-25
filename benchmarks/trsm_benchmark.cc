@@ -28,7 +28,7 @@ static void BM_TRSM(minibench::State& state) {
                     Transpose::NoTrans,
                     Diag::NonUnit,
                     [](Queue& q, auto&&... xs) {
-                        trsm(q, std::forward<decltype(xs)>(xs)...);
+                        (void)trsm(q, std::forward<decltype(xs)>(xs)...);
                     });
     // TRSM does n^2 * q flops; B is square here, so q == n.
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * n * n * n), minibench::Rate);
@@ -140,7 +140,7 @@ static void BM_TRSM_OrthoBody(minibench::State& state) {
                     trans,
                     Diag::NonUnit,
                     [](Queue& qq, auto&&... xs) {
-                        trsm(qq, std::forward<decltype(xs)>(xs)...);
+                        (void)trsm(qq, std::forward<decltype(xs)>(xs)...);
                     });
 
     // Real-arithmetic flop convention for all four types, so complex GFLOPS understates

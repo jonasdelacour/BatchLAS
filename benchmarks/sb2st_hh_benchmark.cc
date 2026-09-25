@@ -47,7 +47,7 @@ static void BM_SB2ST_HH_CHASE(minibench::State& state) {
                     std::move(e), std::move(vmat), std::move(tau), Uplo::Lower, kd,
                     std::move(ws),
                     [](Queue& qq, auto&&... xs) {
-                        internal::sytrd_sb2st_hh<B, T>(qq, std::forward<decltype(xs)>(xs)...);
+                        (void)internal::sytrd_sb2st_hh<B, T>(qq, std::forward<decltype(xs)>(xs)...);
                     });
     state.SetMetric("Time (ms)", 1.0, minibench::Reciprocal);
     // Per-matrix, so a row compares directly against the syev profile without a
@@ -88,7 +88,7 @@ static void BM_SB2ST_HH_BACK(minibench::State& state) {
     const size_t nw = wave_host.size();
     state.SetKernel(q, std::move(vmat), std::move(tau), bench::pristine(Z), n, kd,
                     [sp, lp, wp, nr, nw](Queue& qq, auto&&... xs) {
-                        internal::unmqr_hb2st<B, T>(qq, std::forward<decltype(xs)>(xs)...,
+                        (void)internal::unmqr_hb2st<B, T>(qq, std::forward<decltype(xs)>(xs)...,
                                                     Span<const int32_t>(sp, nr),
                                                     Span<const int32_t>(lp, nr),
                                                     Span<const int32_t>(wp, nw));

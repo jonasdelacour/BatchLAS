@@ -287,15 +287,15 @@ Event geqrf_blocked_dispatch(Queue& ctx,
         MatrixView<T, MatrixFormat::Dense> W2(ws.w2.data(), ib, n2, nb,
                                               nb * n2max, batch);
 
-        trailing_gemm(ctx, Vblk, A22, W1, T(1), T(0), kConjT<T>, Transpose::NoTrans,
+        (void)trailing_gemm(ctx, Vblk, A22, W1, T(1), T(0), kConjT<T>, Transpose::NoTrans,
                       ComputePrecision::Default);
         if (!ctx.in_order()) ctx.wait();
 
-        trailing_gemm(ctx, Tblk, W1, W2, T(1), T(0), kConjT<T>, Transpose::NoTrans,
+        (void)trailing_gemm(ctx, Tblk, W1, W2, T(1), T(0), kConjT<T>, Transpose::NoTrans,
                       ComputePrecision::Default);
         if (!ctx.in_order()) ctx.wait();
 
-        trailing_gemm(ctx, Vblk, W2, A22, T(-1), T(1), Transpose::NoTrans,
+        (void)trailing_gemm(ctx, Vblk, W2, A22, T(-1), T(1), Transpose::NoTrans,
                       Transpose::NoTrans, ComputePrecision::Default);
 
         // The next pack_v OVERWRITES the V this update is still reading.

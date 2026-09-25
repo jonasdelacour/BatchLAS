@@ -177,7 +177,7 @@ static void BM_BAND_REDUCTION(minibench::State& state) {
         bench::pristine(ab_in),
         d, e, tau, uplo, static_cast<int32_t>(kd), ws, params,
         [](Queue& q, auto&&... xs) {
-            sytrd_band_reduction(q, std::forward<decltype(xs)>(xs)...);
+            (void)sytrd_band_reduction(q, std::forward<decltype(xs)>(xs)...);
         });
     state.SetMetric("GFLOPS", total_flops * 1e-9, minibench::Rate);
     state.SetMetric("T(µs)/matrix", (1.0 / double(batch)) * 1e6, minibench::Reciprocal);

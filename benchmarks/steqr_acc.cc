@@ -60,7 +60,7 @@ void run_steqr(miniacc::State& state) {
         try {
             UnifiedVector<std::byte> ws(
                 steqr_buffer_size<Real>(*q, d, e, evals, JobType::EigenVectors, params));
-            steqr<B, Real>(*q, d, e, evals, ws.to_span(), JobType::EigenVectors, params, evecs);
+            (void)steqr<B, Real>(*q, d, e, evals, ws.to_span(), JobType::EigenVectors, params, evecs);
             q->wait();
         } catch (const std::exception& ex) {
             miniacc_acc::record_failed_samples(state, n, n, cur_batch, target_log10, std::string("solver_exception:") + ex.what());

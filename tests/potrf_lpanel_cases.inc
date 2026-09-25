@@ -418,7 +418,7 @@ TYPED_TEST(PotrfLpanelTest, DirectEntryPointRefusesWhatSupportsRefuses) {
         Matrix<T, MatrixFormat::Dense> A(40, 33, 1);
         A.fill(make_scalar<T>(R(1), R(0)));
         UnifiedVector<std::byte> ws(64);
-        EXPECT_THROW(sycl_potrf::potrf_lpanel_dispatch<T>(*this->ctx, A.view(), Uplo::Lower,
+        EXPECT_THROW((void)sycl_potrf::potrf_lpanel_dispatch<T>(*this->ctx, A.view(), Uplo::Lower,
                                                           ws.to_span(), info.to_span()),
                      std::invalid_argument);
     }
@@ -431,7 +431,7 @@ TYPED_TEST(PotrfLpanelTest, DirectEntryPointRefusesWhatSupportsRefuses) {
         for (int i = 0; i < n; ++i) A(i, i, 0) = make_scalar<T>(R(2), R(0));
         UnifiedVector<std::byte> ws(
             sycl_potrf::potrf_lpanel_buffer_size<T>(*this->ctx, A.view()));
-        EXPECT_THROW(sycl_potrf::potrf_lpanel_dispatch<T>(*this->ctx, A.view(), Uplo::Upper,
+        EXPECT_THROW((void)sycl_potrf::potrf_lpanel_dispatch<T>(*this->ctx, A.view(), Uplo::Upper,
                                                           ws.to_span(), info.to_span()),
                      std::invalid_argument);
     }
@@ -446,7 +446,7 @@ TYPED_TEST(PotrfLpanelTest, DirectEntryPointRefusesWhatSupportsRefuses) {
             << "debug_launch says order " << n << " fits, one past the advertised ceiling";
         UnifiedVector<std::byte> ws(
             sycl_potrf::potrf_lpanel_buffer_size<T>(*this->ctx, A.view()));
-        EXPECT_THROW(sycl_potrf::potrf_lpanel_dispatch<T>(*this->ctx, A.view(), Uplo::Lower,
+        EXPECT_THROW((void)sycl_potrf::potrf_lpanel_dispatch<T>(*this->ctx, A.view(), Uplo::Lower,
                                                           ws.to_span(), info.to_span()),
                      std::invalid_argument);
     }
@@ -592,7 +592,7 @@ TYPED_TEST(PotrfLpanelTest, FacadeReachesTheLpanelKernel) {
         << "potrf_buffer_size does not cover the LPanel tier it just resolved to";
     UnifiedVector<std::byte> ws(bytes);
     UnifiedVector<int32_t> info(batch, int32_t(-7));
-    potrf<B, T>(*this->ctx, A.view(), Uplo::Lower, ws.to_span(), info.to_span());
+    (void)potrf<B, T>(*this->ctx, A.view(), Uplo::Lower, ws.to_span(), info.to_span());
     this->ctx->wait();
 
     const auto info_direct = this->run_lpanel(direct.view());
@@ -647,7 +647,7 @@ TYPED_TEST(PotrfLpanelTest, NbSixteenIsInstantiatedForFloatOnly) {
         for (int i = 0; i < n; ++i) A(i, i, 0) = make_scalar<T>(R(2), R(0));
         UnifiedVector<std::byte> ws(
             sycl_potrf::potrf_lpanel_buffer_size<T>(*this->ctx, A.view()));
-        EXPECT_THROW(sycl_potrf::potrf_lpanel_dispatch<T>(
+        EXPECT_THROW((void)sycl_potrf::potrf_lpanel_dispatch<T>(
                          *this->ctx, A.view(), Uplo::Lower, ws.to_span(), probe.to_span(),
                          resident::kMinBlocksPerSm, /*nb_hint=*/16),
                      std::exception);

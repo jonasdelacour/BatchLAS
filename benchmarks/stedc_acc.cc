@@ -55,7 +55,7 @@ void run_stedc(miniacc::State& state) {
             StedcParams<Real> params{};
             UnifiedVector<std::byte> ws(
                 stedc_buffer_size<B, Real>(*q, n, cur_batch, JobType::EigenVectors, params));
-            stedc<B, Real>(*q, d, e, evals, ws.to_span(), JobType::EigenVectors, params, evecs);
+            (void)stedc<B, Real>(*q, d, e, evals, ws.to_span(), JobType::EigenVectors, params, evecs);
             q->wait();
         } catch (const std::exception& ex) {
             miniacc_acc::record_failed_samples(state, n, n, cur_batch, target_log10, std::string("solver_exception:") + ex.what());

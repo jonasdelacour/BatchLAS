@@ -131,7 +131,7 @@ Event syevx_direct(Queue& ctx,
         auto A_copy = packed_copy_view<T>(a_copy_data.data(), n, batch_size, a_copy_ptrs.data());
 
         // syev overwrites its input; syevx must leave A intact.
-        MatrixView<T, MatrixFormat::Dense>::copy(ctx, A_copy, A);
+        (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, A_copy, A);
 
         auto syev_ws = pool.allocate<std::byte>(
             ctx, syev_buffer_size<B>(ctx, A_copy, lambdas, jobz, Uplo::Lower));

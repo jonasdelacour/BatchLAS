@@ -219,7 +219,7 @@ TEST_F(ILUKTests, FactorApplyDiagonalBatchMultiRHS) {
         params.levels_of_fill = k;
         auto M = iluk_factorize(*ctx, A, params);
 
-        iluk_apply(*ctx, M, rhs.view(), out.view());
+        (void)iluk_apply(*ctx, M, rhs.view(), out.view());
         ctx->wait_and_throw();
 
         for (int b = 0; b < batch; ++b) {
@@ -342,7 +342,7 @@ TEST_F(ILUKTests, ZeroShiftZeroDiagonalApplyThrows) {
     rhs(0, 0, 0) = 1.0f;
     rhs(1, 0, 0) = 2.0f;
 
-    EXPECT_THROW((iluk_apply(*ctx, M, rhs.view(), out.view())), std::runtime_error);
+    EXPECT_THROW(((void)iluk_apply(*ctx, M, rhs.view(), out.view())), std::runtime_error);
 }
 
 TEST_F(ILUKTests, DropToleranceRemovesTinyOffDiagonalEntries) {
@@ -485,7 +485,7 @@ TEST_F(ILUKTests, InverseResidualIsNearZeroForExactTridiagonalFactorization) {
     auto identity = make_identity_matrix<float>(n, batch);
     Matrix<float, MatrixFormat::Dense> approx_inverse(n, n, batch);
 
-    iluk_apply(*ctx, M, identity.view(), approx_inverse.view());
+    (void)iluk_apply(*ctx, M, identity.view(), approx_inverse.view());
     ctx->wait_and_throw();
 
     const double residual = inverse_residual_frobenius(A, approx_inverse.view());
@@ -525,8 +525,8 @@ TEST_F(ILUKTests, HigherFillImprovesApproximateInverseResidualOnLargeSparseMatri
     auto M0 = iluk_factorize(*ctx, A, params_k0);
     auto M4 = iluk_factorize(*ctx, A, params_k4);
 
-    iluk_apply(*ctx, M0, identity.view(), approx_inverse_k0.view());
-    iluk_apply(*ctx, M4, identity.view(), approx_inverse_k4.view());
+    (void)iluk_apply(*ctx, M0, identity.view(), approx_inverse_k0.view());
+    (void)iluk_apply(*ctx, M4, identity.view(), approx_inverse_k4.view());
     ctx->wait_and_throw();
 
     const double residual_k0 = inverse_residual_frobenius(A, approx_inverse_k0.view());
@@ -662,7 +662,7 @@ TEST_F(ILUKTests, SyevxInstrumentationAndPreconditioner) {
             syevx_buffer_size(*ctx, csr_view, run.W, neigs, JobType::NoEigenVectors,
                                                        MatrixView<float, MatrixFormat::Dense>(), params));
 
-        syevx(*ctx, csr_view, run.W, neigs, workspace, JobType::NoEigenVectors,
+        (void)syevx(*ctx, csr_view, run.W, neigs, workspace, JobType::NoEigenVectors,
                                        MatrixView<float, MatrixFormat::Dense>(), params);
         ctx->wait_and_throw();
     };
@@ -836,13 +836,13 @@ TEST_F(ILUKTests, SyevxRejectsPreconditionerWhenSearchingForLargestEigenpairs) {
 
     params.find_largest = true;
     EXPECT_THROW(
-        syevx(*ctx, view, W, neigs, workspace, JobType::NoEigenVectors,
+        (void)syevx(*ctx, view, W, neigs, workspace, JobType::NoEigenVectors,
                                        MatrixView<float, MatrixFormat::Dense>(), params),
         std::invalid_argument);
 
     params.find_largest = false;
     EXPECT_NO_THROW(
-        syevx(*ctx, view, W, neigs, workspace, JobType::NoEigenVectors,
+        (void)syevx(*ctx, view, W, neigs, workspace, JobType::NoEigenVectors,
                                        MatrixView<float, MatrixFormat::Dense>(), params));
     ctx->wait_and_throw();
 }
@@ -880,7 +880,7 @@ TEST_F(ILUKTests, SyevxBuildsPreconditionerFromItsOwnWorkspace) {
         UnifiedVector<std::byte> workspace(
             syevx_buffer_size(*ctx, view, W, neigs, JobType::NoEigenVectors,
                                                        MatrixView<float, MatrixFormat::Dense>(), params));
-        syevx(*ctx, view, W, neigs, workspace, JobType::NoEigenVectors,
+        (void)syevx(*ctx, view, W, neigs, workspace, JobType::NoEigenVectors,
                                        MatrixView<float, MatrixFormat::Dense>(), params);
         ctx->wait_and_throw();
     };
@@ -928,14 +928,14 @@ TEST_F(ILUKTests, SyevxBuildPreconditionerRejectsIllegalConfigurations) {
     // the caller clearly disagrees with itself about which factor should be used.
     params.preconditioner = &M;
     EXPECT_THROW(
-        syevx(*ctx, view, W, neigs, workspace, JobType::NoEigenVectors,
+        (void)syevx(*ctx, view, W, neigs, workspace, JobType::NoEigenVectors,
                                        MatrixView<float, MatrixFormat::Dense>(), params),
         std::invalid_argument);
     params.preconditioner = nullptr;
 
     params.find_largest = true;
     EXPECT_THROW(
-        syevx(*ctx, view, W, neigs, workspace, JobType::NoEigenVectors,
+        (void)syevx(*ctx, view, W, neigs, workspace, JobType::NoEigenVectors,
                                        MatrixView<float, MatrixFormat::Dense>(), params),
         std::invalid_argument);
     params.find_largest = false;
@@ -946,12 +946,12 @@ TEST_F(ILUKTests, SyevxBuildPreconditionerRejectsIllegalConfigurations) {
     auto dense_view = dense.view();
     UnifiedVector<std::byte> dense_ws(1024);
     EXPECT_THROW(
-        syevx(*ctx, dense_view, W, neigs, dense_ws, JobType::NoEigenVectors,
+        (void)syevx(*ctx, dense_view, W, neigs, dense_ws, JobType::NoEigenVectors,
                                        MatrixView<float, MatrixFormat::Dense>(), params),
         std::invalid_argument);
 
     EXPECT_NO_THROW(
-        syevx(*ctx, view, W, neigs, workspace, JobType::NoEigenVectors,
+        (void)syevx(*ctx, view, W, neigs, workspace, JobType::NoEigenVectors,
                                        MatrixView<float, MatrixFormat::Dense>(), params));
     ctx->wait_and_throw();
 }
@@ -1107,10 +1107,10 @@ TEST_F(ILUKTests, DISABLED_SyevxVsSyevThreshold) {
                 *ctx, dense_work.view(), W_full, JobType::NoEigenVectors, Uplo::Lower));
             std::vector<double> samples;
             for (int r = 0; r < reps + 1; ++r) {  // first pass is a discarded warm-up
-                MatrixView<float, MatrixFormat::Dense>::copy(*ctx, dense_work.view(), dense_ref.view());
+                (void)MatrixView<float, MatrixFormat::Dense>::copy(*ctx, dense_work.view(), dense_ref.view());
                 ctx->wait_and_throw();
                 const auto t0 = std::chrono::steady_clock::now();
-                syev(*ctx,
+                (void)syev(*ctx,
                                               dense_work.view(),
                                               W_full,
                                               {.jobz = JobType::NoEigenVectors},
@@ -1147,7 +1147,7 @@ TEST_F(ILUKTests, DISABLED_SyevxVsSyevThreshold) {
             std::vector<double> samples;
             for (int r = 0; r < reps + 1; ++r) {
                 const auto t0 = std::chrono::steady_clock::now();
-                syevx(*ctx, csr_view, W, static_cast<size_t>(k), ws,
+                (void)syevx(*ctx, csr_view, W, static_cast<size_t>(k), ws,
                                                JobType::NoEigenVectors,
                                                MatrixView<float, MatrixFormat::Dense>(), params);
                 ctx->wait_and_throw();
@@ -1266,12 +1266,12 @@ TEST_F(ILUKTests, DISABLED_PreconditionerAmortizationBenchmark) {
 
             // Discarded warm-up: the first launch of each kernel pays JIT and
             // clock ramp, which otherwise lands entirely on whichever run goes first.
-            syevx(*ctx, view, W, neigs, ws, JobType::NoEigenVectors,
+            (void)syevx(*ctx, view, W, neigs, ws, JobType::NoEigenVectors,
                                            MatrixView<float, MatrixFormat::Dense>(), params);
             ctx->wait_and_throw();
 
             const auto t0 = std::chrono::steady_clock::now();
-            syevx(*ctx, view, W, neigs, ws, JobType::NoEigenVectors,
+            (void)syevx(*ctx, view, W, neigs, ws, JobType::NoEigenVectors,
                                            MatrixView<float, MatrixFormat::Dense>(), params);
             ctx->wait_and_throw();
             const double elapsed = seconds_since(t0);
@@ -1302,12 +1302,12 @@ TEST_F(ILUKTests, DISABLED_PreconditionerAmortizationBenchmark) {
         const int block = static_cast<int>(neigs + extra_dirs);
         Matrix<float, MatrixFormat::Dense> rhs(n, block, s.batch);
         Matrix<float, MatrixFormat::Dense> out(n, block, s.batch);
-        rhs.view().fill(*ctx, 1.0f);
+        (void)rhs.view().fill(*ctx, 1.0f);
         ctx->wait_and_throw();
         const auto ta = std::chrono::steady_clock::now();
         constexpr int apply_reps = 10;
         for (int r = 0; r < apply_reps; ++r) {
-            iluk_apply(*ctx, M, rhs.view(), out.view());
+            (void)iluk_apply(*ctx, M, rhs.view(), out.view());
         }
         ctx->wait_and_throw();
         const double apply_s = seconds_since(ta) / apply_reps;

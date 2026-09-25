@@ -528,7 +528,7 @@ void stedc_merge_step(Queue& ctx,
                 GemmOptions<T>{});
         // Fold the multiplied head back over A so temp_Q holds the whole
         // product A*M; its tail columns are already correct.
-        MatrixView<T, MatrixFormat::Dense>::copy(ctx, temp_Q(Slice{}, Slice{0, static_cast<int>(dd_max)}), product_head);
+        (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, temp_Q(Slice{}, Slice{0, static_cast<int>(dd_max)}), product_head);
         (void)permuted_copy(ctx, temp_Q, eigvects, permutation);
     } else {
         // Avoid full-matrix copy + permute by using out-of-place permuted_copy in scratch buffers.
@@ -991,7 +991,7 @@ Event stedc_levels_impl(Queue& ctx, const VectorView<T>& d, const VectorView<T>&
     });
     if (own_top && eigvects.data_ptr() != nullptr) {
         auto top = MatrixView<T>(level_buf[0].data(), N, N, N, N * N, bs);
-        MatrixView<T, MatrixFormat::Dense>::copy(ctx, eigvects, top(Slice{0, n}, Slice{0, n}));
+        (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, eigvects, top(Slice{0, n}, Slice{0, n}));
     }
     return ctx.get_event();
 }

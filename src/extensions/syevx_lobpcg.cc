@@ -517,7 +517,7 @@ inline constexpr R jacobi_definiteness_floor() {
             } else {
                 (void)spmm<B>(ctx, A, X, AX, T(1.0), T(0.0), Transpose::NoTrans, Transpose::NoTrans, spmm_workspace);
             }
-            MatrixView<T, MatrixFormat::Dense>::copy(ctx, X, AX);
+            (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, X, AX);
         }
 
         trace("syevx: ortho init");
@@ -834,7 +834,7 @@ inline constexpr R jacobi_definiteness_floor() {
                 // writes into `out` as its temporary y while still reading `rhs`, so
                 // aliasing them corrupts the solve. Queue ordering sequences the copy.
                 (void)iluk_apply<B, T>(ctx, precond, R, R_preconditioned);
-                MatrixView<T, MatrixFormat::Dense>::copy(ctx, R, R_preconditioned);
+                (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, R, R_preconditioned);
                 trace("syevx: ILU(k) apply done");
             }
 
@@ -1121,7 +1121,7 @@ inline constexpr R jacobi_definiteness_floor() {
 
             trace("syevx: build search-direction coefficients");
             (void)C_p_active.fill_zeros(ctx);
-            MatrixView<T, MatrixFormat::Dense>::copy(
+            (void)MatrixView<T, MatrixFormat::Dense>::copy(
                 ctx,
                 C_p_active({block_vectors, Nvecs}, {0, block_vectors}),
                 Z_search);
@@ -1153,9 +1153,9 @@ inline constexpr R jacobi_definiteness_floor() {
         if (want_eigenvectors){
             if (completed_iterations > 0) {
                 // X_best is already largest-first; the snapshot applied the permutation.
-                MatrixView<T, MatrixFormat::Dense>::copy(ctx, V({0,n}, {0,int64_t(neigs)}), X_best);
+                (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, V({0,n}, {0,int64_t(neigs)}), X_best);
             } else if (!params.find_largest) {
-                MatrixView<T, MatrixFormat::Dense>::copy(
+                (void)MatrixView<T, MatrixFormat::Dense>::copy(
                     ctx, V({0,n}, {0,int64_t(neigs)}), X({0, n}, {0, static_cast<int64_t>(neigs)}));
             } else {
                 // params.iterations == 0: the loop never ran, so no snapshot exists and X

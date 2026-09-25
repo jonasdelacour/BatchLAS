@@ -181,7 +181,7 @@ UnifiedVector<typename base_type<Real>::type> residual_residuals(
     const int batch = A.batch_size();
     auto R = Matrix<Real>::Zeros(n, m, batch);
 
-    gemm<B>(q, A.view(), Z.view(), R.view(), {.alpha = Real(1), .beta = Real(0)});
+    (void)gemm<B>(q, A.view(), Z.view(), R.view(), {.alpha = Real(1), .beta = Real(0)});
 
     auto r_view = R.kernel_view();
     auto z_view = Z.view().kernel_view();
@@ -437,7 +437,7 @@ int run_accuracy(const Options& opt) {
 
                     UnifiedVector<std::byte> ws(
                         steqr_cta_buffer_size<Real>(*q, d_work, e_work, eigvals, JobType::EigenVectors, params));
-                    steqr_cta<B, Real>(*q,
+                    (void)steqr_cta<B, Real>(*q,
                                        d_work,
                                        e_work,
                                        eigvals,
@@ -486,7 +486,7 @@ int run_accuracy(const Options& opt) {
                     
                     UnifiedVector<std::byte> ws(
                         stedc_buffer_size<B, Real>(*q, n, cur_batch, JobType::EigenVectors, params));
-                    stedc<B, Real>(*q,
+                    (void)stedc<B, Real>(*q,
                                    d_work,
                                    e_work,
                                    eigvals,
@@ -529,7 +529,7 @@ int run_accuracy(const Options& opt) {
 
                     UnifiedVector<std::byte> ws(
                         syev_cta_buffer_size<B, Real>(*q, A_work.view(), JobType::EigenVectors, params));
-                    syev_cta<B, Real>(*q,
+                    (void)syev_cta<B, Real>(*q,
                                       A_work.view(),
                                       eigvals.to_span(),
                                       JobType::EigenVectors,
@@ -571,7 +571,7 @@ int run_accuracy(const Options& opt) {
                                                           A_work.view(),
                                                           JobType::EigenVectors,
                                                           Uplo::Lower));
-                    syev_blocked<B, Real>(*q,
+                    (void)syev_blocked<B, Real>(*q,
                                           A_work.view(),
                                           eigvals.to_span(),
                                           JobType::EigenVectors,
@@ -612,7 +612,7 @@ int run_accuracy(const Options& opt) {
                                                   eigvals.to_span(),
                                                   JobType::EigenVectors,
                                                   Uplo::Lower));
-                    syev<B>(*q, A_work.view(), eigvals.to_span(), {}, ws.to_span());
+                    (void)syev<B>(*q, A_work.view(), eigvals.to_span(), {}, ws.to_span());
                     q->wait();
 
                     VectorView<Real> evals_view(eigvals.to_span(), n, cur_batch, 1, n);
@@ -664,7 +664,7 @@ int run_accuracy(const Options& opt) {
                                              V.view(),
                                              params));
 
-                    syevx(*q,
+                    (void)syevx(*q,
                              A_work.view(),
                              eigvals.to_span(),
                              static_cast<size_t>(neigs),
@@ -704,7 +704,7 @@ int run_accuracy(const Options& opt) {
 #endif
 }
 
-int dispatch(const Options& opt) {
+int run_selected(const Options& opt) {
     if (opt.dtype != "float" && opt.dtype != "double") {
         std::cerr << "Unsupported dtype for eigensolver accuracy: " << opt.dtype << " (use float/double)\n";
         return 1;
@@ -765,5 +765,5 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    return dispatch(opt);
+    return run_selected(opt);
 }

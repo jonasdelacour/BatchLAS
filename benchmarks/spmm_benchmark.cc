@@ -156,12 +156,12 @@ void run_spmm(minibench::State& state) {
 
     auto kernel_once = [q, Av, Bv, Cv, Amat, Bmat, Cmat, ws, alpha, beta, transA, transB]() {
         if constexpr (A == Arm::Warm) {
-            spmm<Bk, T, MatrixFormat::CSR>(*q, *Av, *Bv, *Cv, alpha, beta,
+            (void)spmm<Bk, T, MatrixFormat::CSR>(*q, *Av, *Bv, *Cv, alpha, beta,
                                            transA, transB, ws->to_span());
         } else {
             // The Matrix overload builds a fresh MatrixView -- and so a fresh descriptor
             // triple that is never destroyed -- per call. Never compare a native kernel to it.
-            spmm<Bk, T, MatrixFormat::CSR>(*q, *Amat, *Bmat, *Cmat, alpha, beta,
+            (void)spmm<Bk, T, MatrixFormat::CSR>(*q, *Amat, *Bmat, *Cmat, alpha, beta,
                                            transA, transB, ws->to_span());
         }
     };

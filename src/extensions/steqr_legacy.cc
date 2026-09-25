@@ -450,8 +450,8 @@ Event steqr_legacy(Queue& ctx, const VectorView<T>& d_in, const VectorView<T>& e
     auto d = wsl.d;
     auto e = wsl.e;
     //Copy inputs to working buffers
-    VectorView<T>::copy(ctx, d, d_in);
-    VectorView<T>::copy(ctx, e, e_in);
+    (void)VectorView<T>::copy(ctx, d, d_in);
+    (void)VectorView<T>::copy(ctx, e, e_in);
 
     auto givens_rotations = wsl.givens_rotations;
     auto apply_order = wsl.apply_order;

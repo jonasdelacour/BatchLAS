@@ -25,7 +25,7 @@ static void BM_SYR2K(minibench::State& state) {
                     Uplo::Lower,
                     Transpose::NoTrans,
                     [](Queue& q, auto&&... xs) {
-                        syr2k(q, std::forward<decltype(xs)>(xs)...);
+                        (void)syr2k(q, std::forward<decltype(xs)>(xs)...);
                     });
     state.SetMetric("GFLOPS",
                     static_cast<double>(batch) * (2e-9 * static_cast<double>(n) * static_cast<double>(n + 1) * static_cast<double>(k)),

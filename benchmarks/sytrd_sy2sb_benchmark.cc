@@ -74,7 +74,7 @@ static void BM_SYTRD_SY2SB(minibench::State& state) {
         kd,
         ws,
         [](Queue& q, auto&&... xs) {
-            sytrd_sy2sb(q, std::forward<decltype(xs)>(xs)...);
+            (void)sytrd_sy2sb(q, std::forward<decltype(xs)>(xs)...);
         });
 
     // Estimate FLOPs: dense-to-band reduction involves QR + orthogonal transforms

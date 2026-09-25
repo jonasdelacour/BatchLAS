@@ -44,7 +44,7 @@ namespace batchlas {
               Span<std::byte> workspace) {
         BumpAllocator pool(workspace);
         auto ws = inv_layout<B, T>(ctx, pool, A);
-        MatrixView<T, MatrixFormat::Dense>::copy(ctx, ws.Acopy, A);
+        (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, ws.Acopy, A);
         // (void) on an Event: deliberate. This Queue is in-order, so the next submission
         // is already ordered after this one and the Event carries nothing the caller needs.
         (void)getrf<B>(ctx, ws.Acopy, ws.pivots, ws.getrf_ws);

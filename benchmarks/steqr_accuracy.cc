@@ -295,7 +295,7 @@ int run_accuracy(const Options& opt) {
             params.max_sweeps = 10;
             UnifiedVector<std::byte> ws(
                 steqr_buffer_size<Real>(*q, d, e, eigs_steqr, JobType::EigenVectors, params));
-            steqr<B, Real>(*q, d, e, eigs_steqr, ws.to_span(), JobType::EigenVectors, params, eigvects);
+            (void)steqr<B, Real>(*q, d, e, eigs_steqr, ws.to_span(), JobType::EigenVectors, params, eigvects);
             q->wait();
         }
         if (run_cta) {
@@ -303,7 +303,7 @@ int run_accuracy(const Options& opt) {
             params.cta_update_scheme = scheme;
             UnifiedVector<std::byte> ws(
                 steqr_cta_buffer_size<Real>(*q, d, e, eigs_cta, JobType::EigenVectors, params));
-            steqr_cta<B, Real>(*q, d, e, eigs_cta, ws.to_span(), JobType::EigenVectors, params, eigvects);
+            (void)steqr_cta<B, Real>(*q, d, e, eigs_cta, ws.to_span(), JobType::EigenVectors, params, eigvects);
             q->wait();
         }
         if (run_cuda_syev) {
@@ -311,12 +311,12 @@ int run_accuracy(const Options& opt) {
             auto eigs_span = eigs_cuda.data();
             UnifiedVector<std::byte> ws(
                 batchlas::blas::dispatch::detail::syev_vendor_buffer_size_or_throw<Backend::CUDA, Real>(*q, dense_vendor.view(), eigs_span, JobType::NoEigenVectors, Uplo::Lower));
-            batchlas::blas::dispatch::detail::syev_vendor_or_throw<Backend::CUDA, Real>(*q, dense_vendor.view(), eigs_span, JobType::NoEigenVectors, Uplo::Lower, ws.to_span());
+            (void)batchlas::blas::dispatch::detail::syev_vendor_or_throw<Backend::CUDA, Real>(*q, dense_vendor.view(), eigs_span, JobType::NoEigenVectors, Uplo::Lower, ws.to_span());
         }
         if (run_stedc) {
             UnifiedVector<std::byte> ws(
                 stedc_buffer_size<B, Real>(*q, n, cur_batch, JobType::EigenVectors, StedcParams<Real>{}));
-            stedc<B, Real>(*q, d, e, eigs_stedc, ws.to_span(), JobType::EigenVectors, StedcParams<Real>{}, eigvects);
+            (void)stedc<B, Real>(*q, d, e, eigs_stedc, ws.to_span(), JobType::EigenVectors, StedcParams<Real>{}, eigvects);
         }
         q->wait();
 
@@ -430,7 +430,7 @@ int run_accuracy(const Options& opt) {
 #endif
 }
 
-int dispatch(const Options& opt) {
+int run_selected(const Options& opt) {
     const std::string& dtype = opt.dtype;
     if (dtype != "float" && dtype != "double") {
         std::cerr << "Unsupported dtype for steqr accuracy: " << opt.dtype << " (use float/double)\n";
@@ -496,5 +496,5 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    return dispatch(opt);
+    return run_selected(opt);
 }

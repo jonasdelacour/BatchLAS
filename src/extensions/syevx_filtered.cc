@@ -429,9 +429,9 @@ Event syevx_filtered(Queue& ctx,
         (void)gemm<B>(ctx, blk, ablk, H, {.transA = conj_t});
         (void)syev<B>(ctx, H, theta_span, SyevOptions{}, syev_ws);
         (void)gemm<B>(ctx, blk, H, Tmp, GemmOptions<T>{});
-        MatrixView<T, MatrixFormat::Dense>::copy(ctx, blk, Tmp);
+        (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, blk, Tmp);
         (void)gemm<B>(ctx, ablk, H, Tmp, GemmOptions<T>{});
-        MatrixView<T, MatrixFormat::Dense>::copy(ctx, ablk, Tmp);
+        (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, ablk, Tmp);
     };
 
     rayleigh_ritz(X, AX);
@@ -680,7 +680,7 @@ Event syevx_filtered(Queue& ctx,
             });
         }
         apply_step(X, X, Y, /*first=*/true);
-        MatrixView<T, MatrixFormat::Dense>::copy(ctx, Yprev, X);
+        (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, Yprev, X);
 
         // The interval kernel just wrote the per-batch precision limit; take the
         // strictest so every item runs the same recurrence length. This reuses
@@ -740,7 +740,7 @@ Event syevx_filtered(Queue& ctx,
         }
 
         (void)ortho<B>(ctx, Y, Transpose::NoTrans, ortho_ws, params.algorithm);
-        MatrixView<T, MatrixFormat::Dense>::copy(ctx, X, Y);
+        (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, X, Y);
         rayleigh_ritz(X, AX);
     }
 

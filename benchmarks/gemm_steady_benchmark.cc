@@ -56,7 +56,7 @@ void configure_steady_gemm(minibench::State& state, TimerFactory&& timer_factory
     state.SetBeforeEachRun(managed.make_before_each_run());
 
     auto kernel_once = [q, A, Bm, C]() mutable {
-        gemm(*q, A->view(), Bm->view(), C->view(), {.beta = T(1)});
+        (void)gemm(*q, A->view(), Bm->view(), C->view(), {.beta = T(1)});
     };
 
     state.SetKernel(std::function<void()>(kernel_once));

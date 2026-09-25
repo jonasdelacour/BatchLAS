@@ -17,7 +17,7 @@ static void BM_ORMQR(minibench::State& state) {
     UnifiedVector<T> tau(m * batch);
     size_t geqrf_ws = geqrf_buffer_size(*q, A.view(), tau.to_span());
     UnifiedVector<std::byte> ws_geqrf(geqrf_ws);
-    geqrf(*q, A.view(), tau.to_span(), ws_geqrf.to_span());
+    (void)geqrf(*q, A.view(), tau.to_span(), ws_geqrf.to_span());
     q->wait();
 
     auto Q = Matrix<T>::Identity(m, batch);
@@ -33,7 +33,7 @@ static void BM_ORMQR(minibench::State& state) {
                     std::move(tau),
                     std::move(ws),
                     [](Queue& q, auto&&... xs) {
-                        ormqr(q, std::forward<decltype(xs)>(xs)...);
+                        (void)ormqr(q, std::forward<decltype(xs)>(xs)...);
                     });
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * (4 * m * n * n - 2 * n * n * n + 3 * n * n)), minibench::Rate);
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);

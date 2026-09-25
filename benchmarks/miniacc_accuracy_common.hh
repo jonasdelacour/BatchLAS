@@ -103,7 +103,7 @@ inline UnifiedVector<typename base_type<Real>::type> orthogonality_residuals(
     const int m = Z.cols();
     const int batch = Z.batch_size();
     auto ztz_minus_i = Matrix<Real>::Identity(m, batch);
-    gemm<B, Real>(q,
+    (void)gemm<B, Real>(q,
                   Z.view(),
                   Z.view(),
                   ztz_minus_i.view(),
@@ -126,7 +126,7 @@ inline UnifiedVector<typename base_type<Real>::type> residual_residuals(
     const int batch = A.batch_size();
     auto R = Matrix<Real>::Zeros(n, m, batch);
 
-    gemm<B, Real>(q,
+    (void)gemm<B, Real>(q,
                   A.view(),
                   Z.view(),
                   R.view(),

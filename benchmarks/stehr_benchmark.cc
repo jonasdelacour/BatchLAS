@@ -44,7 +44,7 @@ static void BM_STEHR(minibench::State& state) {
                        auto&& eigvects,
                        size_t n,
                        size_t batch) {
-                        tridiagonal_solver(q,
+                        (void)tridiagonal_solver(q,
                                               diags.data(),
                                               off_diags.data(),
                                               eigvals.data(),

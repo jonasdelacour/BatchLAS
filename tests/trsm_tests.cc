@@ -146,7 +146,7 @@ protected:
             auto B_view = B_matrix.view();
             
             try {
-                trsm(*(this->ctx),
+                (void)trsm(*(this->ctx),
                                   A_view,
                                   B_view,
                                   {.alpha = alpha, .uplo = uplo, .trans = trans});
@@ -163,7 +163,7 @@ protected:
                 auto B_view = B_parent_view.batch_item(b);
                 
                 try {
-                    trsm(*(this->ctx),
+                    (void)trsm(*(this->ctx),
                                       A_view,
                                       B_view,
                                       {.alpha = alpha, .uplo = uplo, .trans = trans});
@@ -312,7 +312,7 @@ void RunTrsmNative(const TrsmNativeCase<T>& tc) {
         }
     }
 
-    batchlas::sycl_trsm::trsm_native_v1_dispatch<T>(
+    (void)batchlas::sycl_trsm::trsm_native_v1_dispatch<T>(
         *ctx, A.view(), B.view(), tc.alpha, tc.side, tc.uplo, tc.transA, tc.diag);
     ctx->wait();
 
@@ -432,7 +432,7 @@ TEST(TrsmNativeCta, OverCapacityThrowsRatherThanTruncating) {
             Bv.at(r, c, 0) = 1.0;
 
     EXPECT_THROW(
-        (batchlas::sycl_trsm::trsm_native_v1_dispatch<double>(
+        ((void)batchlas::sycl_trsm::trsm_native_v1_dispatch<double>(
             *ctx, A.view(), B.view(), 1.0, Side::Right, Uplo::Lower,
             Transpose::NoTrans, Diag::NonUnit)),
         std::runtime_error)
@@ -473,7 +473,7 @@ void RunTrsmBlocked(const TrsmNativeCase<T>& tc) {
                 b_in[(static_cast<size_t>(b) * bcols + c) * brows + r] = v;
             }
     }
-    batchlas::sycl_trsm::trsm_native_blocked<T>(
+    (void)batchlas::sycl_trsm::trsm_native_blocked<T>(
         *ctx, A.view(), B.view(), tc.alpha, tc.side, tc.uplo, tc.transA, tc.diag);
     ctx->wait();
 

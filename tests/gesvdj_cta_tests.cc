@@ -169,7 +169,7 @@ protected:
         Matrix<Scalar> Vh(n, n, batch);
         UnifiedVector<Real> s(static_cast<size_t>(k) * batch);
 
-        gesvdj_cta<B, Scalar>(ctx, A.view(), s.to_span(), U.view(), Vh.view(),
+        (void)gesvdj_cta<B, Scalar>(ctx, A.view(), s.to_span(), U.view(), Vh.view(),
                               SvdVectors::All, SvdVectors::All);
         ctx.wait_and_throw();
 
@@ -239,7 +239,7 @@ protected:
         Matrix<Scalar> Vh(k, n, batch);
         UnifiedVector<Real> s(static_cast<size_t>(k) * batch);
 
-        gesvdj_cta<B, Scalar>(ctx, A.view(), s.to_span(), U.view(), Vh.view(),
+        (void)gesvdj_cta<B, Scalar>(ctx, A.view(), s.to_span(), U.view(), Vh.view(),
                               SvdVectors::Thin, SvdVectors::Thin);
         ctx.wait_and_throw();
 
@@ -460,7 +460,7 @@ TYPED_TEST(GesvdjCtaTest, JobCombinations) {
         Matrix<Scalar> A(n, n, batch);
         std::copy(host.begin(), host.end(), A.view().data_ptr());
         Matrix<Scalar> U(n, n, batch), Vh(n, n, batch);
-        gesvdj_cta<B, Scalar>(ctx, A.view(), s_ref.to_span(), U.view(), Vh.view(),
+        (void)gesvdj_cta<B, Scalar>(ctx, A.view(), s_ref.to_span(), U.view(), Vh.view(),
                               SvdVectors::All, SvdVectors::All);
         ctx.wait_and_throw();
     }
@@ -471,7 +471,7 @@ TYPED_TEST(GesvdjCtaTest, JobCombinations) {
             std::copy(host.begin(), host.end(), A.view().data_ptr());
             Matrix<Scalar> U(n, n, batch), Vh(n, n, batch);
             UnifiedVector<Real> s(static_cast<size_t>(n) * batch);
-            gesvdj_cta<B, Scalar>(ctx, A.view(), s.to_span(), U.view(), Vh.view(),
+            (void)gesvdj_cta<B, Scalar>(ctx, A.view(), s.to_span(), U.view(), Vh.view(),
                                   ju ? SvdVectors::All : SvdVectors::None,
                                   jv ? SvdVectors::All : SvdVectors::None);
             ctx.wait_and_throw();
@@ -510,7 +510,7 @@ TYPED_TEST(GesvdjCtaTest, PublicApiDispatch) {
     const size_t ws_bytes = gesvd_buffer_size<B, Scalar>(
         ctx, A.view(), s.to_span(), U.view(), Vh.view(), SvdVectors::All, SvdVectors::All);
     UnifiedVector<std::byte> ws(ws_bytes);
-    gesvd<B, Scalar>(ctx, A.view(), s.to_span(), U.view(), Vh.view(),
+    (void)gesvd<B, Scalar>(ctx, A.view(), s.to_span(), U.view(), Vh.view(),
                      SvdVectors::All, SvdVectors::All, ws.to_span());
     ctx.wait_and_throw();
 
@@ -594,7 +594,7 @@ TYPED_TEST(GesvdjCtaTest, ThinMatchesFullLeadingColumns) {
     load(A_all);
     Matrix<Scalar> U_all(m, m, batch), Vh_all(n, n, batch);
     UnifiedVector<Real> s_all(static_cast<size_t>(k) * batch);
-    gesvdj_cta<B, Scalar>(ctx, A_all.view(), s_all.to_span(), U_all.view(), Vh_all.view(),
+    (void)gesvdj_cta<B, Scalar>(ctx, A_all.view(), s_all.to_span(), U_all.view(), Vh_all.view(),
                           SvdVectors::All, SvdVectors::All);
     ctx.wait_and_throw();
 
@@ -602,7 +602,7 @@ TYPED_TEST(GesvdjCtaTest, ThinMatchesFullLeadingColumns) {
     load(A_thin);
     Matrix<Scalar> U_thin(m, k, batch), Vh_thin(k, n, batch);
     UnifiedVector<Real> s_thin(static_cast<size_t>(k) * batch);
-    gesvdj_cta<B, Scalar>(ctx, A_thin.view(), s_thin.to_span(), U_thin.view(), Vh_thin.view(),
+    (void)gesvdj_cta<B, Scalar>(ctx, A_thin.view(), s_thin.to_span(), U_thin.view(), Vh_thin.view(),
                           SvdVectors::Thin, SvdVectors::Thin);
     ctx.wait_and_throw();
 

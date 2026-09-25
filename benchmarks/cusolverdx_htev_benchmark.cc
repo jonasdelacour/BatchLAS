@@ -49,7 +49,7 @@ static void BM_CUSOLVERDX_HTEV(minibench::State& state) {
                     std::move(workspace),
                     Uplo::Lower,
                     [](Queue& q_local, auto&&... xs) {
-                        backend::cusolverdx::htev<T>(q_local, std::forward<decltype(xs)>(xs)...);
+                        (void)backend::cusolverdx::htev<T>(q_local, std::forward<decltype(xs)>(xs)...);
                     });
     state.SetMetric("Time (µs) / matrix", (1.0 / static_cast<double>(batch)) * 1e6, minibench::Reciprocal);
 #else

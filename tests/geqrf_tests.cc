@@ -438,7 +438,7 @@ TYPED_TEST(GeqrfTest, ResidentLeafLaunchHoleAt48KiB) {
         auto p = make_problem<T>(r.m, r.n, 2, 271u + unsigned(r.bytes % 1000));
         bool resident = false;
         ASSERT_NO_THROW(
-            sycl_geqrf::geqrf_panel_factorize<T>(*this->ctx, p.buf.data(), p.ld, p.stride,
+            (void)sycl_geqrf::geqrf_panel_factorize<T>(*this->ctx, p.buf.data(), p.ld, p.stride,
                                                  r.m, r.n, p.batch, p.tau.data(), p.k, 0,
                                                  &resident))
             << "the resident leaf could not be launched with a " << r.bytes
@@ -472,7 +472,7 @@ TYPED_TEST(GeqrfTest, CtaResidualAndOrthogonality) {
         const std::size_t ws = sycl_geqrf::geqrf_cta_buffer_size<T>(*this->ctx, V);
         UnifiedVector<std::byte> w(ws ? ws : 1);
         ASSERT_NO_THROW(
-            sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, V, p.tau.to_span(), w.to_span()));
+            (void)sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, V, p.tau.to_span(), w.to_span()));
         this->ctx->wait();
         check_one(p, "cta");
         if (this->HasFailure()) return;
@@ -494,7 +494,7 @@ TYPED_TEST(GeqrfTest, BlockedResidualAndOrthogonality) {
         const std::size_t ws = sycl_geqrf::geqrf_blocked_buffer_size<T>(*this->ctx, V);
         UnifiedVector<std::byte> w(ws ? ws : 1);
         ASSERT_NO_THROW(
-            sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), w.to_span()));
+            (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), w.to_span()));
         this->ctx->wait();
         check_one(p, "blocked");
         if (this->HasFailure()) return;
@@ -530,7 +530,7 @@ TYPED_TEST(GeqrfTest, ShortFinalPanelStraddlesTheBlockWidth) {
         auto V = view_of(p);
         const std::size_t ws = sycl_geqrf::geqrf_blocked_buffer_size<T>(*this->ctx, V);
         UnifiedVector<std::byte> wbuf(ws ? ws : 1);
-        ASSERT_NO_THROW(sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(),
+        ASSERT_NO_THROW((void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(),
                                                               wbuf.to_span()));
         this->ctx->wait();
         check_one(p, (s.n % w) ? "blocked/short-final-panel" : "blocked/exact-multiple");
@@ -553,7 +553,7 @@ TYPED_TEST(GeqrfTest, BothPanelLeavesFactoriseCorrectly) {
         auto V = view_of(p);
         UnifiedVector<std::byte> wb(std::max<std::size_t>(
             1, sycl_geqrf::geqrf_blocked_buffer_size<T>(*this->ctx, V)));
-        ASSERT_NO_THROW(sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(),
+        ASSERT_NO_THROW((void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(),
                                                               wb.to_span()));
         this->ctx->wait();
         check_one(p, "blocked/resident-leaf");
@@ -571,7 +571,7 @@ TYPED_TEST(GeqrfTest, BothPanelLeavesFactoriseCorrectly) {
         auto V = view_of(p);
         UnifiedVector<std::byte> wb(std::max<std::size_t>(
             1, sycl_geqrf::geqrf_blocked_buffer_size<T>(*this->ctx, V)));
-        ASSERT_NO_THROW(sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(),
+        ASSERT_NO_THROW((void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(),
                                                               wb.to_span()));
         this->ctx->wait();
         check_one(p, "blocked/global-leaf");
@@ -602,11 +602,11 @@ TYPED_TEST(GeqrfTest, RankDeficientColumnsStillFactorise) {
             1, pass ? sycl_geqrf::geqrf_blocked_buffer_size<T>(*this->ctx, V)
                     : sycl_geqrf::geqrf_cta_buffer_size<T>(*this->ctx, V)));
         if (pass) {
-            ASSERT_NO_THROW(sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(),
+            ASSERT_NO_THROW((void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(),
                                                                   wb.to_span()));
         } else {
             ASSERT_TRUE(this->cta_fits(m, n));
-            ASSERT_NO_THROW(sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, V, p.tau.to_span(),
+            ASSERT_NO_THROW((void)sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, V, p.tau.to_span(),
                                                               wb.to_span()));
         }
         this->ctx->wait();
@@ -639,9 +639,9 @@ TYPED_TEST(GeqrfTest, ComplexRDiagonalIsExactlyReal) {
                 1, s.blocked ? sycl_geqrf::geqrf_blocked_buffer_size<T>(*this->ctx, V)
                              : sycl_geqrf::geqrf_cta_buffer_size<T>(*this->ctx, V)));
             if (s.blocked)
-                sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span());
+                (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span());
             else
-                sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span());
+                (void)sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span());
             this->ctx->wait();
             for (int b = 0; b < p.batch; ++b) {
                 const T* F = p.buf.data() + static_cast<size_t>(b) * p.stride;
@@ -669,7 +669,7 @@ TYPED_TEST(GeqrfTest, TauConventionSurvivesTheRoutedOrmqr) {
     auto V = view_of(p);
     UnifiedVector<std::byte> wb(std::max<std::size_t>(
         1, sycl_geqrf::geqrf_blocked_buffer_size<T>(*this->ctx, V)));
-    sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span());
+    (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span());
     this->ctx->wait();
 
     // C = the first n columns of I_m; then C <- Q C, so Q's first n columns come
@@ -685,7 +685,7 @@ TYPED_TEST(GeqrfTest, TauConventionSurvivesTheRoutedOrmqr) {
     const std::size_t ows = ormqr_buffer_size<B, T>(*this->ctx, V, Cv, Side::Left,
                                                     Transpose::NoTrans, p.tau.to_span(), 0);
     UnifiedVector<std::byte> ow(ows ? ows : 1);
-    ormqr<B, T>(*this->ctx, V, Cv, Side::Left, Transpose::NoTrans, p.tau.to_span(),
+    (void)ormqr<B, T>(*this->ctx, V, Cv, Side::Left, Transpose::NoTrans, p.tau.to_span(),
                 ow.to_span(), 0);
     this->ctx->wait();
 
@@ -715,7 +715,7 @@ TYPED_TEST(GeqrfTest, VendorFactorFeedsTheNativeOrgqr) {
         const std::size_t vws =
             backend::geqrf_vendor_buffer_size<B, T>(*this->ctx, V, p.tau.to_span());
         UnifiedVector<std::byte> vw(vws ? vws : 1);
-        backend::geqrf_vendor<B, T>(*this->ctx, V, p.tau.to_span(), vw.to_span());
+        (void)backend::geqrf_vendor<B, T>(*this->ctx, V, p.tau.to_span(), vw.to_span());
         this->ctx->wait();
 
         // The native orgqr overwrites its A with Q, so keep the factor.
@@ -734,7 +734,7 @@ TYPED_TEST(GeqrfTest, VendorFactorFeedsTheNativeOrgqr) {
         const std::size_t ows =
             sycl_orgqr::orgqr_blocked_buffer_size<T>(*this->ctx, V, p.tau.to_span(), applybs);
         UnifiedVector<std::byte> ow(ows ? ows : 1);
-        ASSERT_NO_THROW(sycl_orgqr::orgqr_blocked_dispatch<T>(
+        ASSERT_NO_THROW((void)sycl_orgqr::orgqr_blocked_dispatch<T>(
             *this->ctx, V, p.tau.to_span(), ow.to_span(), apply, applybs));
         this->ctx->wait();
 
@@ -827,9 +827,9 @@ TYPED_TEST(GeqrfTest, ConventionMatchesReferenceLapackWithoutAVendor) {
             1, s.blocked ? sycl_geqrf::geqrf_blocked_buffer_size<T>(*this->ctx, V)
                          : sycl_geqrf::geqrf_cta_buffer_size<T>(*this->ctx, V)));
         if (s.blocked) {
-            sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span(), {});
+            (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span(), {});
         } else {
-            sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span());
+            (void)sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span());
         }
         this->ctx->wait();
 
@@ -921,9 +921,9 @@ TYPED_TEST(GeqrfTest, SubnormalScaleColumnsTakeTheDivisionPath) {
             1, s.blocked ? sycl_geqrf::geqrf_blocked_buffer_size<T>(*this->ctx, V)
                          : sycl_geqrf::geqrf_cta_buffer_size<T>(*this->ctx, V)));
         if (s.blocked) {
-            sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span(), {});
+            (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span(), {});
         } else {
-            sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span());
+            (void)sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span());
         }
         this->ctx->wait();
 
@@ -981,7 +981,7 @@ TYPED_TEST(GeqrfTest, NativeFactorMatchesTheVendorElementwise) {
             const std::size_t vws =
                 backend::geqrf_vendor_buffer_size<B, T>(*this->ctx, V, p.tau.to_span());
             UnifiedVector<std::byte> vw(vws ? vws : 1);
-            backend::geqrf_vendor<B, T>(*this->ctx, V, p.tau.to_span(), vw.to_span());
+            (void)backend::geqrf_vendor<B, T>(*this->ctx, V, p.tau.to_span(), vw.to_span());
             this->ctx->wait();
             const std::vector<T> Fv(p.buf.begin(), p.buf.end());
             const std::vector<T> tv(p.tau.begin(), p.tau.end());
@@ -991,9 +991,9 @@ TYPED_TEST(GeqrfTest, NativeFactorMatchesTheVendorElementwise) {
                 1, s.blocked ? sycl_geqrf::geqrf_blocked_buffer_size<T>(*this->ctx, V)
                              : sycl_geqrf::geqrf_cta_buffer_size<T>(*this->ctx, V)));
             if (s.blocked)
-                sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span());
+                (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span());
             else
-                sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span());
+                (void)sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span());
             this->ctx->wait();
 
             // A RELATIVE elementwise bound: the two do not share a reduction order.
@@ -1065,10 +1065,10 @@ TYPED_TEST(GeqrfTest, WideIsRefusedAndTallAndSquareAreNot) {
         auto V = view_of(p);
         UnifiedVector<std::byte> wb(4096);
         EXPECT_THROW(
-            sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span()),
+            (void)sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span()),
             std::invalid_argument);
         EXPECT_THROW(
-            sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span()),
+            (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span()),
             std::invalid_argument);
     }
 }
@@ -1089,18 +1089,18 @@ TYPED_TEST(GeqrfTest, DirectEntryPointsRefuseWhatSupportsRefuses) {
     auto H = V.with_active_dims(ar.to_span(), ac.to_span());
     ASSERT_TRUE(H.is_heterogeneous())
         << "the view is not actually heterogeneous; this case would prove nothing";
-    EXPECT_THROW(sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, H, p.tau.to_span(), wb.to_span()),
+    EXPECT_THROW((void)sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, H, p.tau.to_span(), wb.to_span()),
                  std::invalid_argument);
     EXPECT_THROW(
-        sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, H, p.tau.to_span(), wb.to_span()),
+        (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, H, p.tau.to_span(), wb.to_span()),
         std::invalid_argument);
 
     // (b) a tau span shorter than k * batch. tau is packed per matrix with stride k OF
     // THE WHOLE MATRIX, so a short span is an out-of-bounds write, not a smaller problem.
     Span<T> shortTau(p.tau.data(), p.tau.size() - 1);
-    EXPECT_THROW(sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, V, shortTau, wb.to_span()),
+    EXPECT_THROW((void)sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, V, shortTau, wb.to_span()),
                  std::invalid_argument);
-    EXPECT_THROW(sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, shortTau, wb.to_span()),
+    EXPECT_THROW((void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, shortTau, wb.to_span()),
                  std::invalid_argument);
 }
 
@@ -1328,7 +1328,7 @@ TYPED_TEST(GeqrfTest, FacadeReachesTheCtaKernel) {
 
     UnifiedVector<std::byte> ws(std::max<std::size_t>(
         1, geqrf_buffer_size<B, T>(*this->ctx, V, p.tau.to_span())));
-    geqrf<B, T>(*this->ctx, V, p.tau.to_span(), ws.to_span());
+    (void)geqrf<B, T>(*this->ctx, V, p.tau.to_span(), ws.to_span());
     this->ctx->wait();
     const std::vector<T> facade(p.buf.begin(), p.buf.end());
     const std::vector<T> ftau(p.tau.begin(), p.tau.end());
@@ -1336,7 +1336,7 @@ TYPED_TEST(GeqrfTest, FacadeReachesTheCtaKernel) {
     reset(p);
     UnifiedVector<std::byte> dws(std::max<std::size_t>(
         1, sycl_geqrf::geqrf_cta_buffer_size<T>(*this->ctx, V)));
-    sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, V, p.tau.to_span(), dws.to_span());
+    (void)sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, V, p.tau.to_span(), dws.to_span());
     this->ctx->wait();
 
     for (int b = 0; b < batch; ++b) {
@@ -1375,7 +1375,7 @@ TYPED_TEST(GeqrfTest, FacadeReachesTheBlockedDriver) {
 
     UnifiedVector<std::byte> ws(std::max<std::size_t>(
         1, geqrf_buffer_size<B, T>(*this->ctx, V, p.tau.to_span())));
-    geqrf<B, T>(*this->ctx, V, p.tau.to_span(), ws.to_span());
+    (void)geqrf<B, T>(*this->ctx, V, p.tau.to_span(), ws.to_span());
     this->ctx->wait();
     const std::vector<T> facade(p.buf.begin(), p.buf.end());
     const std::vector<T> ftau(p.tau.begin(), p.tau.end());
@@ -1383,7 +1383,7 @@ TYPED_TEST(GeqrfTest, FacadeReachesTheBlockedDriver) {
     reset(p);
     UnifiedVector<std::byte> dws(std::max<std::size_t>(
         1, sycl_geqrf::geqrf_blocked_buffer_size<T>(*this->ctx, V)));
-    sycl_geqrf::geqrf_blocked_dispatch<T>(
+    (void)sycl_geqrf::geqrf_blocked_dispatch<T>(
         *this->ctx, V, p.tau.to_span(), dws.to_span(),
         [](Queue& c, const MatrixView<T, MatrixFormat::Dense>& ga,
            const MatrixView<T, MatrixFormat::Dense>& gb,
@@ -1423,7 +1423,7 @@ TYPED_TEST(GeqrfTest, FacadeReachesTheNativeOrgqr) {
     auto V = view_of(p);
     UnifiedVector<std::byte> gws(std::max<std::size_t>(
         1, sycl_geqrf::geqrf_blocked_buffer_size<T>(*this->ctx, V)));
-    sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), gws.to_span());
+    (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), gws.to_span());
     this->ctx->wait();
     const std::vector<T> F(p.buf.begin(), p.buf.end());
 
@@ -1435,7 +1435,7 @@ TYPED_TEST(GeqrfTest, FacadeReachesTheNativeOrgqr) {
 
     UnifiedVector<std::byte> ows(std::max<std::size_t>(
         1, orgqr_buffer_size<B, T>(*this->ctx, V, p.tau.to_span())));
-    orgqr<B, T>(*this->ctx, V, p.tau.to_span(), ows.to_span());
+    (void)orgqr<B, T>(*this->ctx, V, p.tau.to_span(), ows.to_span());
     this->ctx->wait();
     const std::vector<T> facade(p.buf.begin(), p.buf.end());
 
@@ -1453,7 +1453,7 @@ TYPED_TEST(GeqrfTest, FacadeReachesTheNativeOrgqr) {
     const std::size_t dwsz =
         sycl_orgqr::orgqr_blocked_buffer_size<T>(*this->ctx, V, p.tau.to_span(), applybs);
     UnifiedVector<std::byte> dw(dwsz ? dwsz : 1);
-    sycl_orgqr::orgqr_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), dw.to_span(), apply,
+    (void)sycl_orgqr::orgqr_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), dw.to_span(), apply,
                                           applybs);
     this->ctx->wait();
 
@@ -1535,7 +1535,7 @@ TYPED_TEST(GeqrfTest, BufferSizeCoversEverySupportedNativeTier) {
         // And the pinned call actually runs inside it.
         reset(p);
         UnifiedVector<std::byte> ws(facade ? facade : 1);
-        EXPECT_NO_THROW((geqrf<B, T>(*this->ctx, V, p.tau.to_span(), ws.to_span()))) << pin;
+        EXPECT_NO_THROW(((void)geqrf<B, T>(*this->ctx, V, p.tau.to_span(), ws.to_span()))) << pin;
         this->ctx->wait();
         check_one(p, pin);
     }
@@ -1558,7 +1558,7 @@ TYPED_TEST(GeqrfTest, TinyResidualAndOrthogonalityAcrossTheBand) {
         for (int ld_pad : {0, 5}) {
             auto p = make_problem<T>(n, n, 1, 4001u + unsigned(n) * 7u + unsigned(ld_pad), ld_pad);
             auto V = view_of(p);
-            ASSERT_NO_THROW(sycl_geqrf::geqrf_tiny_dispatch<T>(*this->ctx, V, p.tau.to_span(),
+            ASSERT_NO_THROW((void)sycl_geqrf::geqrf_tiny_dispatch<T>(*this->ctx, V, p.tau.to_span(),
                                                                Span<std::byte>()))
                 << "n=" << n << " ld_pad=" << ld_pad;
             this->ctx->wait();
@@ -1578,7 +1578,7 @@ TYPED_TEST(GeqrfTest, TinyResidualAndOrthogonalityAcrossTheBand) {
         for (int ld_pad : {0, 5}) {
             auto p = make_problem<T>(n, n, batch, 5003u + unsigned(n), ld_pad);
             auto V = view_of(p);
-            ASSERT_NO_THROW(sycl_geqrf::geqrf_tiny_dispatch<T>(*this->ctx, V, p.tau.to_span(),
+            ASSERT_NO_THROW((void)sycl_geqrf::geqrf_tiny_dispatch<T>(*this->ctx, V, p.tau.to_span(),
                                                                Span<std::byte>()))
                 << "n=" << n << " batch=" << batch;
             this->ctx->wait();
@@ -1609,7 +1609,7 @@ TYPED_TEST(GeqrfTest, TinyPackedBatchMatchesSolo) {
 
         auto packed = make_problem<T>(n, n, batch, 6007u + unsigned(n));
         auto Vp = view_of(packed);
-        sycl_geqrf::geqrf_tiny_dispatch<T>(*this->ctx, Vp, packed.tau.to_span(), Span<std::byte>());
+        (void)sycl_geqrf::geqrf_tiny_dispatch<T>(*this->ctx, Vp, packed.tau.to_span(), Span<std::byte>());
         this->ctx->wait();
 
         for (int b = 0; b < batch; ++b) {
@@ -1626,7 +1626,7 @@ TYPED_TEST(GeqrfTest, TinyPackedBatchMatchesSolo) {
             }
             solo.a0.assign(solo.buf.begin(), solo.buf.end());
             auto Vs = view_of(solo);
-            sycl_geqrf::geqrf_tiny_dispatch<T>(*this->ctx, Vs, solo.tau.to_span(), Span<std::byte>());
+            (void)sycl_geqrf::geqrf_tiny_dispatch<T>(*this->ctx, Vs, solo.tau.to_span(), Span<std::byte>());
             this->ctx->wait();
 
             for (int j = 0; j < n; ++j) {
@@ -1693,7 +1693,7 @@ TYPED_TEST(GeqrfTest, TinyPaddingIsInertUnderNaNPoison) {
         p.a0.assign(p.buf.begin(), p.buf.end());
 
         auto V = view_of(p);
-        ASSERT_NO_THROW(sycl_geqrf::geqrf_tiny_dispatch<T>(*this->ctx, V, p.tau.to_span(),
+        ASSERT_NO_THROW((void)sycl_geqrf::geqrf_tiny_dispatch<T>(*this->ctx, V, p.tau.to_span(),
                                                            Span<std::byte>()))
             << "n=" << n;
         this->ctx->wait();
@@ -1737,7 +1737,7 @@ TYPED_TEST(GeqrfTest, TinyZeroColumnGivesExactlyZeroTauAndStaysFinite) {
         p.a0.assign(p.buf.begin(), p.buf.end());
 
         auto V = view_of(p);
-        ASSERT_NO_THROW(sycl_geqrf::geqrf_tiny_dispatch<T>(*this->ctx, V, p.tau.to_span(),
+        ASSERT_NO_THROW((void)sycl_geqrf::geqrf_tiny_dispatch<T>(*this->ctx, V, p.tau.to_span(),
                                                            Span<std::byte>()));
         this->ctx->wait();
 
@@ -1768,14 +1768,14 @@ TYPED_TEST(GeqrfTest, TinyDirectEntryPointRefusesWhatSupportsRefuses) {
     {   // Tall: P1 is square-only; a tall panel is the CTA tier's.
         auto p = make_problem<T>(2 * max_n, max_n, 2, 31u);
         auto V = view_of(p);
-        EXPECT_THROW(sycl_geqrf::geqrf_tiny_dispatch<T>(*this->ctx, V, p.tau.to_span(),
+        EXPECT_THROW((void)sycl_geqrf::geqrf_tiny_dispatch<T>(*this->ctx, V, p.tau.to_span(),
                                                         Span<std::byte>()),
                      batchlas::invalid_argument);
     }
     {   // One order past the ceiling.
         auto p = make_problem<T>(max_n + 1, max_n + 1, 2, 32u);
         auto V = view_of(p);
-        EXPECT_THROW(sycl_geqrf::geqrf_tiny_dispatch<T>(*this->ctx, V, p.tau.to_span(),
+        EXPECT_THROW((void)sycl_geqrf::geqrf_tiny_dispatch<T>(*this->ctx, V, p.tau.to_span(),
                                                         Span<std::byte>()),
                      batchlas::invalid_argument);
     }
@@ -1783,7 +1783,7 @@ TYPED_TEST(GeqrfTest, TinyDirectEntryPointRefusesWhatSupportsRefuses) {
         auto p = make_problem<T>(8, 8, 4, 33u);
         auto V = view_of(p);
         Span<T> short_tau(p.tau.data(), p.tau.size() - 1);
-        EXPECT_THROW(sycl_geqrf::geqrf_tiny_dispatch<T>(*this->ctx, V, short_tau,
+        EXPECT_THROW((void)sycl_geqrf::geqrf_tiny_dispatch<T>(*this->ctx, V, short_tau,
                                                         Span<std::byte>()),
                      batchlas::invalid_argument);
     }
@@ -1895,13 +1895,13 @@ TYPED_TEST(GeqrfTest, FacadeReachesTheTinyKernel) {
     const std::size_t need = geqrf_buffer_size<B, T>(*this->ctx, V, p.tau.to_span());
     EXPECT_GE(need, sycl_geqrf::geqrf_tiny_buffer_size<T>(*this->ctx, V));
     UnifiedVector<std::byte> ws(std::max<std::size_t>(1, need));
-    ASSERT_NO_THROW((geqrf<B, T>(*this->ctx, V, p.tau.to_span(), ws.to_span())));
+    ASSERT_NO_THROW(((void)geqrf<B, T>(*this->ctx, V, p.tau.to_span(), ws.to_span())));
     this->ctx->wait();
     const std::vector<T> facade(p.buf.begin(), p.buf.end());
     const std::vector<T> ftau(p.tau.begin(), p.tau.end());
 
     reset(p);
-    sycl_geqrf::geqrf_tiny_dispatch<T>(*this->ctx, V, p.tau.to_span(), Span<std::byte>());
+    (void)sycl_geqrf::geqrf_tiny_dispatch<T>(*this->ctx, V, p.tau.to_span(), Span<std::byte>());
     this->ctx->wait();
     for (size_t o = 0; o < facade.size(); ++o) {
         ASSERT_EQ(hreal(up(facade[o])), hreal(up(p.buf[o])))
@@ -1930,7 +1930,7 @@ TYPED_TEST(GeqrfTest, TinyIsNoWorseThanTheCtaRouteAtTinyOrders) {
         const std::vector<T> pristine = p.a0;
         auto V = view_of(p);
 
-        sycl_geqrf::geqrf_tiny_dispatch<T>(*this->ctx, V, p.tau.to_span(), Span<std::byte>());
+        (void)sycl_geqrf::geqrf_tiny_dispatch<T>(*this->ctx, V, p.tau.to_span(), Span<std::byte>());
         this->ctx->wait();
         std::vector<double> res_tiny(batch), orth_tiny(batch);
         for (int b = 0; b < batch; ++b) {
@@ -1945,7 +1945,7 @@ TYPED_TEST(GeqrfTest, TinyIsNoWorseThanTheCtaRouteAtTinyOrders) {
         reset(p);
         const std::size_t ws = sycl_geqrf::geqrf_cta_buffer_size<T>(*this->ctx, V);
         UnifiedVector<std::byte> w(ws ? ws : 1);
-        sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, V, p.tau.to_span(), w.to_span());
+        (void)sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, V, p.tau.to_span(), w.to_span());
         this->ctx->wait();
 
         for (int b = 0; b < batch; ++b) {
@@ -1995,7 +1995,7 @@ TYPED_TEST(GeqrfTest, TinyNeighbourNaNDoesNotLeakAcrossPartitions) {
         // The clean reference: the SAME matrices with no poison anywhere.
         auto clean = make_problem<T>(n, n, batch, 6101u + unsigned(n));
         auto Vc = view_of(clean);
-        ASSERT_NO_THROW(sycl_geqrf::geqrf_tiny_dispatch<T>(*this->ctx, Vc, clean.tau.to_span(),
+        ASSERT_NO_THROW((void)sycl_geqrf::geqrf_tiny_dispatch<T>(*this->ctx, Vc, clean.tau.to_span(),
                                                            Span<std::byte>()))
             << "n=" << n;
         this->ctx->wait();
@@ -2009,7 +2009,7 @@ TYPED_TEST(GeqrfTest, TinyNeighbourNaNDoesNotLeakAcrossPartitions) {
             }
         }
         auto V = view_of(p);
-        ASSERT_NO_THROW(sycl_geqrf::geqrf_tiny_dispatch<T>(*this->ctx, V, p.tau.to_span(),
+        ASSERT_NO_THROW((void)sycl_geqrf::geqrf_tiny_dispatch<T>(*this->ctx, V, p.tau.to_span(),
                                                            Span<std::byte>()))
             << "n=" << n;
         this->ctx->wait();
@@ -2056,7 +2056,7 @@ TYPED_TEST(GeqrfTest, TinyTauMatchesLapackeElementwise) {
             auto p = make_problem<T>(n, n, batch, 7717u + unsigned(n));
             const std::vector<T> pristine = p.a0;
             auto V = view_of(p);
-            ASSERT_NO_THROW(sycl_geqrf::geqrf_tiny_dispatch<T>(*this->ctx, V, p.tau.to_span(),
+            ASSERT_NO_THROW((void)sycl_geqrf::geqrf_tiny_dispatch<T>(*this->ctx, V, p.tau.to_span(),
                                                                Span<std::byte>()))
                 << "n=" << n;
             this->ctx->wait();
@@ -2336,7 +2336,7 @@ TYPED_TEST(GeqrfTest, RegisterPanelLeafResidualAndOrthogonality) {
             ++ran;
             auto p = make_problem<T>(m, n, 3, 6101u + 37u * unsigned(m) + unsigned(n));
             auto leaf_used = sycl_geqrf::GeqrfPanelLeaf::Auto;
-            ASSERT_NO_THROW(sycl_geqrf::geqrf_panel_factorize<T>(
+            ASSERT_NO_THROW((void)sycl_geqrf::geqrf_panel_factorize<T>(
                 *this->ctx, p.buf.data(), p.ld, p.stride, m, n, p.batch, p.tau.data(), p.k, 0,
                 nullptr, sycl_geqrf::GeqrfPanelLeaf::Register, &leaf_used));
             this->ctx->wait();
@@ -2374,7 +2374,7 @@ TYPED_TEST(GeqrfTest, RegisterPanelLeafRunsAtItsOwnHeightCeiling) {
         if (m < cols) continue;
         auto p = make_problem<T>(m, cols, 2, 9311u + unsigned(m));
         auto leaf_used = sycl_geqrf::GeqrfPanelLeaf::Auto;
-        ASSERT_NO_THROW(sycl_geqrf::geqrf_panel_factorize<T>(
+        ASSERT_NO_THROW((void)sycl_geqrf::geqrf_panel_factorize<T>(
             *this->ctx, p.buf.data(), p.ld, p.stride, m, cols, p.batch, p.tau.data(), p.k, 0,
             nullptr, sycl_geqrf::GeqrfPanelLeaf::Register, &leaf_used))
             << "the register leaf could not be launched at m = " << m
@@ -2410,10 +2410,10 @@ TYPED_TEST(GeqrfTest, RegisterPanelLeafAgreesWithTheResidentLeaf) {
 
         auto a = make_problem<T>(s.m, s.n, 2, 4441u + unsigned(s.m));
         auto b = make_problem<T>(s.m, s.n, 2, 4441u + unsigned(s.m));
-        ASSERT_NO_THROW(sycl_geqrf::geqrf_panel_factorize<T>(
+        ASSERT_NO_THROW((void)sycl_geqrf::geqrf_panel_factorize<T>(
             *this->ctx, a.buf.data(), a.ld, a.stride, s.m, s.n, a.batch, a.tau.data(), a.k, 0,
             nullptr, sycl_geqrf::GeqrfPanelLeaf::Register, nullptr));
-        ASSERT_NO_THROW(sycl_geqrf::geqrf_panel_factorize<T>(
+        ASSERT_NO_THROW((void)sycl_geqrf::geqrf_panel_factorize<T>(
             *this->ctx, b.buf.data(), b.ld, b.stride, s.m, s.n, b.batch, b.tau.data(), b.k, 0,
             nullptr, sycl_geqrf::GeqrfPanelLeaf::Resident, nullptr));
         this->ctx->wait();
@@ -2458,7 +2458,7 @@ TYPED_TEST(GeqrfTest, RegisterPanelLeafRefusesWhatItCannotHold) {
     const int max_m = sycl_geqrf::geqrf_panel_reg_max_m<T>();
 
     auto wide = make_problem<T>(cols + 1, cols + 1, 1, 77u);
-    EXPECT_THROW(sycl_geqrf::geqrf_panel_factorize<T>(
+    EXPECT_THROW((void)sycl_geqrf::geqrf_panel_factorize<T>(
                      *this->ctx, wide.buf.data(), wide.ld, wide.stride, cols + 1, cols + 1,
                      wide.batch, wide.tau.data(), wide.k, 0, nullptr,
                      sycl_geqrf::GeqrfPanelLeaf::Register, nullptr),
@@ -2466,7 +2466,7 @@ TYPED_TEST(GeqrfTest, RegisterPanelLeafRefusesWhatItCannotHold) {
         << "a panel one column wider than the register array was accepted";
 
     auto tall = make_problem<T>(max_m + 1, 1, 1, 78u);
-    EXPECT_THROW(sycl_geqrf::geqrf_panel_factorize<T>(
+    EXPECT_THROW((void)sycl_geqrf::geqrf_panel_factorize<T>(
                      *this->ctx, tall.buf.data(), tall.ld, tall.stride, max_m + 1, 1,
                      tall.batch, tall.tau.data(), tall.k, 0, nullptr,
                      sycl_geqrf::GeqrfPanelLeaf::Register, nullptr),
@@ -2500,7 +2500,7 @@ TYPED_TEST(GeqrfTest, RegisterPanelLeafZeroSubColumnGivesTauZero) {
     }
     p.a0.assign(p.buf.begin(), p.buf.end());
 
-    ASSERT_NO_THROW(sycl_geqrf::geqrf_panel_factorize<T>(
+    ASSERT_NO_THROW((void)sycl_geqrf::geqrf_panel_factorize<T>(
         *this->ctx, p.buf.data(), p.ld, p.stride, m, n, p.batch, p.tau.data(), p.k, 0, nullptr,
         sycl_geqrf::GeqrfPanelLeaf::Register, nullptr));
     this->ctx->wait();
@@ -2529,7 +2529,7 @@ TYPED_TEST(GeqrfTest, BlockedDriverWithTheRegisterLeaf) {
         auto V = view_of(p);
         const std::size_t ws = sycl_geqrf::geqrf_blocked_buffer_size<T>(*this->ctx, V);
         UnifiedVector<std::byte> w(ws ? ws : 1);
-        ASSERT_NO_THROW(sycl_geqrf::geqrf_blocked_dispatch<T>(
+        ASSERT_NO_THROW((void)sycl_geqrf::geqrf_blocked_dispatch<T>(
             *this->ctx, V, p.tau.to_span(), w.to_span(), {},
             sycl_geqrf::GeqrfPanelLeaf::Register));
         this->ctx->wait();
@@ -2576,7 +2576,7 @@ TYPED_TEST(GeqrfTest, AutoTakesTheRegisterLeafExactlyInsideTheHeightWindow) {
         ++ran;
         auto p = make_problem<T>(s.m, s.n, 2, 8801u + unsigned(s.m));
         auto leaf_used = sycl_geqrf::GeqrfPanelLeaf::Auto;
-        ASSERT_NO_THROW(sycl_geqrf::geqrf_panel_factorize<T>(
+        ASSERT_NO_THROW((void)sycl_geqrf::geqrf_panel_factorize<T>(
             *this->ctx, p.buf.data(), p.ld, p.stride, s.m, s.n, p.batch, p.tau.data(), p.k, 0,
             nullptr, sycl_geqrf::GeqrfPanelLeaf::Auto, &leaf_used));
         this->ctx->wait();

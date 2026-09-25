@@ -335,7 +335,7 @@ TYPED_TEST(PackedLeafTest, PackedLeafMatchesSoloBitForBit) {
         UnifiedVector<int> piv_p(static_cast<size_t>(n) * batch, -12345);
         UnifiedVector<int32_t> info_p(static_cast<size_t>(batch), 0);
         bool resident = false;
-        ASSERT_NO_THROW(sycl_getrf::getrf_panel_factorize<T>(
+        ASSERT_NO_THROW((void)sycl_getrf::getrf_panel_factorize<T>(
             *this->ctx, packed.data(), ld, stride, n, n, batch, piv_p.data(), n, 0,
             info_p.data(), &resident));
         this->ctx->wait();
@@ -377,7 +377,7 @@ TYPED_TEST(PackedLeafTest, PackedLeafMatchesSoloBitForBit) {
             UnifiedVector<int> piv_s(static_cast<size_t>(n), -12345);
             UnifiedVector<int32_t> info_s(1, 0);
             bool res_s = false;
-            ASSERT_NO_THROW(sycl_getrf::getrf_panel_factorize<T>(
+            ASSERT_NO_THROW((void)sycl_getrf::getrf_panel_factorize<T>(
                 *this->ctx, solo.data(), ld, stride, n, n, 1, piv_s.data(), n, 0,
                 info_s.data(), &res_s));
             this->ctx->wait();

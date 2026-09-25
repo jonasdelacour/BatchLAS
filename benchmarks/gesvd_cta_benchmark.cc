@@ -65,7 +65,7 @@ static void BM_GESVD_CTA(minibench::State& state) {
                     jobvh,
                     std::move(workspace),
                     [](Queue& q, auto&&... xs) {
-                        gesvd_cta(q, std::forward<decltype(xs)>(xs)...);
+                        (void)gesvd_cta(q, std::forward<decltype(xs)>(xs)...);
                     });
 
     state.SetMetric("Matrices/s", static_cast<double>(batch), minibench::Rate);

@@ -23,12 +23,16 @@ namespace batchlas::backend::cublasdx_gemm {
 
 namespace {
 
+#if BATCHLAS_HAS_CUBLASDX_HEADER
 constexpr int kBlockSize = 256;
+#endif
 constexpr int kSupportedSM = 890;
 
+#if BATCHLAS_HAS_CUBLASDX_HEADER
 constexpr int ceil_div(int value, int divisor) {
     return (value + divisor - 1) / divisor;
 }
+#endif
 
 inline int batch_dim(const int* batch_dims, int fallback, int batch_idx) {
     return batch_dims ? batch_dims[batch_idx] : fallback;
@@ -97,9 +101,11 @@ inline bool is_16b_aligned(const void* ptr) {
     return (reinterpret_cast<std::uintptr_t>(ptr) % 16u) == 0u;
 }
 
+#if BATCHLAS_HAS_CUBLASDX_HEADER
 constexpr unsigned int round_up_unsigned(unsigned int value, unsigned int alignment) {
     return ((value + alignment - 1u) / alignment) * alignment;
 }
+#endif
 
 inline bool has_max_alignment(const GemmLaunchDescriptor& desc) {
     return is_16b_aligned(desc.a_ptr) && is_16b_aligned(desc.b_ptr) && is_16b_aligned(desc.c_ptr) &&

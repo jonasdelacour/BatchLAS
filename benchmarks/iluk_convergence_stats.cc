@@ -279,7 +279,7 @@ void run_case(Queue& queue,
                            MatrixView<float, MatrixFormat::Dense>(),
                            params));
 
-        syevx<kGpuBackend>(queue,
+        (void)syevx<kGpuBackend>(queue,
                    csr_view,
                    buffers.eigvals,
                    static_cast<size_t>(neigs),

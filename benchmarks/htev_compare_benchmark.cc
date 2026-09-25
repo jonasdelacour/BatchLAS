@@ -67,7 +67,7 @@ static void BM_HTEV_STEQR(minibench::State& state) {
                     params,
                     bench::pristine(eigvects),
                     [](Queue& q_ref, auto&&... xs) {
-                        steqr(q_ref, std::forward<decltype(xs)>(xs)...);
+                        (void)steqr(q_ref, std::forward<decltype(xs)>(xs)...);
                     });
 
     state.SetMetric("Time (µs) / matrix", (1.0 / static_cast<double>(batch)) * 1e6, minibench::Reciprocal);
@@ -100,7 +100,7 @@ static void BM_HTEV_STEDC(minibench::State& state) {
         auto e = static_cast<VectorView<T>>(e_arg);
         auto w = static_cast<VectorView<T>>(w_arg);
         auto Z = z_arg.view();
-        stedc(*q, d, e, w, ws_arg.to_span(), jz, p, Z);
+        (void)stedc(*q, d, e, w, ws_arg.to_span(), jz, p, Z);
     };
 
     state.SetKernel(q,
@@ -147,7 +147,7 @@ static void BM_HTEV_DX(minibench::State& state) {
                     std::move(workspace),
                     Uplo::Lower,
                     [](Queue& q_ref, auto&&... xs) {
-                        backend::cusolverdx::htev<T>(q_ref, std::forward<decltype(xs)>(xs)...);
+                        (void)backend::cusolverdx::htev<T>(q_ref, std::forward<decltype(xs)>(xs)...);
                     });
 
     state.SetMetric("Time (µs) / matrix", (1.0 / static_cast<double>(batch)) * 1e6, minibench::Reciprocal);

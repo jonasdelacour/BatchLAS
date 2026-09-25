@@ -77,7 +77,7 @@ void run_ortho_case(miniacc::State& state, const char* impl_name) {
 
         auto Q = dense_A.clone();
         UnifiedVector<std::byte> ws(ortho_buffer_size<B, Real>(*q, Q.view(), Transpose::NoTrans, Algo));
-        ortho<B, Real>(*q, Q.view(), Transpose::NoTrans, ws.to_span(), Algo);
+        (void)ortho<B, Real>(*q, Q.view(), Transpose::NoTrans, ws.to_span(), Algo);
         q->wait();
 
         const auto ortho_vals = miniacc_acc::orthogonality_residuals<B, Real>(*q, Q);

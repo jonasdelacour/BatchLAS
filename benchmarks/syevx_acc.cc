@@ -79,7 +79,7 @@ void run_syevx(miniacc::State& state) {
                                          JobType::EigenVectors,
                                          V.view(),
                                          params));
-                syevx(*q,
+                (void)syevx(*q,
                          A_work.view(),
                          eigvals.to_span(),
                          static_cast<size_t>(neigs),

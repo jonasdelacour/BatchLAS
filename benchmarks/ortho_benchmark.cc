@@ -32,7 +32,7 @@ static void BM_Ortho(minibench::State& state) {
                     std::move(workspace),
                     algo,
                         [](Queue& q, auto&&... xs) {
-                            ortho(q, std::forward<decltype(xs)>(xs)...);
+                            (void)ortho(q, std::forward<decltype(xs)>(xs)...);
                         });
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }

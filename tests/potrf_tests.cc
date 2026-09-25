@@ -271,10 +271,10 @@ protected:
         UnifiedVector<std::byte> ws(sycl_potrf::potrf_cta_buffer_size<T>(*this->ctx, A.view()));
         UnifiedVector<int32_t> info(batch, int32_t(-7));
         if (pass_info_span) {
-            sycl_potrf::potrf_cta_dispatch<T>(*this->ctx, A.view(), uplo, ws.to_span(),
+            (void)sycl_potrf::potrf_cta_dispatch<T>(*this->ctx, A.view(), uplo, ws.to_span(),
                                               info.to_span());
         } else {
-            sycl_potrf::potrf_cta_dispatch<T>(*this->ctx, A.view(), uplo, ws.to_span(),
+            (void)sycl_potrf::potrf_cta_dispatch<T>(*this->ctx, A.view(), uplo, ws.to_span(),
                                               Span<int32_t>{});
         }
         this->ctx->wait();
@@ -351,7 +351,7 @@ TYPED_TEST(PotrfCtaTest, JustPastTheCeilingHasNoCtaRoute) {
 
     UnifiedVector<std::byte> ws(sycl_potrf::potrf_cta_buffer_size<T>(*this->ctx, A.view()));
     UnifiedVector<int32_t> info(1, int32_t(0));
-    EXPECT_THROW(sycl_potrf::potrf_cta_dispatch<T>(*this->ctx, A.view(), Uplo::Lower,
+    EXPECT_THROW((void)sycl_potrf::potrf_cta_dispatch<T>(*this->ctx, A.view(), Uplo::Lower,
                                                    ws.to_span(), info.to_span()),
                  std::invalid_argument);
 }
@@ -680,7 +680,7 @@ TYPED_TEST(PotrfCtaTest, FacadeReachesTheCtaKernel) {
 
     UnifiedVector<std::byte> ws(potrf_buffer_size<B, T>(*this->ctx, A.view(), Uplo::Lower));
     UnifiedVector<int32_t> info(batch, int32_t(-7));
-    potrf<B, T>(*this->ctx, A.view(), Uplo::Lower, ws.to_span(), info.to_span());
+    (void)potrf<B, T>(*this->ctx, A.view(), Uplo::Lower, ws.to_span(), info.to_span());
     this->ctx->wait();
 
     // THE GUARD: bit-exactness observes EXECUTION; a residual check would accept either.
@@ -737,7 +737,7 @@ TYPED_TEST(PotrfCtaTest, PaddedLeadingDimensionAndNonDefaultStride) {
 
         UnifiedVector<std::byte> ws(sycl_potrf::potrf_cta_buffer_size<T>(*this->ctx, V));
         UnifiedVector<int32_t> info(batch, int32_t(-7));
-        sycl_potrf::potrf_cta_dispatch<T>(*this->ctx, V, uplo, ws.to_span(), info.to_span());
+        (void)sycl_potrf::potrf_cta_dispatch<T>(*this->ctx, V, uplo, ws.to_span(), info.to_span());
         this->ctx->wait();
 
         for (int b = 0; b < batch; ++b) {
@@ -772,7 +772,7 @@ TYPED_TEST(PotrfCtaTest, DirectEntryPointRefusesWhatSupportsRefuses) {
         Matrix<T, MatrixFormat::Dense> A(8, 5, 1);
         A.fill(make_scalar<T>(R(1), R(0)));
         UnifiedVector<std::byte> ws(64);
-        EXPECT_THROW(sycl_potrf::potrf_cta_dispatch<T>(*this->ctx, A.view(), Uplo::Lower,
+        EXPECT_THROW((void)sycl_potrf::potrf_cta_dispatch<T>(*this->ctx, A.view(), Uplo::Lower,
                                                        ws.to_span(), info.to_span()),
                      std::invalid_argument);
     }
@@ -790,7 +790,7 @@ TYPED_TEST(PotrfCtaTest, DirectEntryPointRefusesWhatSupportsRefuses) {
         ASSERT_TRUE(V.is_heterogeneous())
             << "the view is not actually heterogeneous; this case would prove nothing";
         UnifiedVector<std::byte> ws(sycl_potrf::potrf_cta_buffer_size<T>(*this->ctx, A.view()));
-        EXPECT_THROW(sycl_potrf::potrf_cta_dispatch<T>(*this->ctx, V, Uplo::Lower,
+        EXPECT_THROW((void)sycl_potrf::potrf_cta_dispatch<T>(*this->ctx, V, Uplo::Lower,
                                                        ws.to_span(), info.to_span()),
                      std::invalid_argument);
     }
@@ -887,11 +887,11 @@ protected:
         const int len = (info_len < 0) ? batch : info_len;
         UnifiedVector<int32_t> info(static_cast<size_t>(std::max(len, 1)), int32_t(-12345));
         if (len > 0) {
-            sycl_potrf::potrf_blocked_dispatch<T>(
+            (void)sycl_potrf::potrf_blocked_dispatch<T>(
                 *this->ctx, V, uplo, ws.to_span(),
                 Span<int32_t>(info.data(), static_cast<size_t>(len)));
         } else {
-            sycl_potrf::potrf_blocked_dispatch<T>(*this->ctx, V, uplo, ws.to_span(),
+            (void)sycl_potrf::potrf_blocked_dispatch<T>(*this->ctx, V, uplo, ws.to_span(),
                                                   Span<int32_t>{});
         }
         this->ctx->wait();
@@ -1380,7 +1380,7 @@ TYPED_TEST(PotrfBlockedTest, BlockedDirectEntryPointRefusesWhatSupportsRefuses) 
             for (int i = 0; i < n; ++i) A(i, i, b) = make_scalar<T>(R(2), R(0));
         UnifiedVector<std::byte> ws(
             sycl_potrf::potrf_blocked_buffer_size<T>(*this->ctx, A.view(), Uplo::Lower));
-        EXPECT_THROW(sycl_potrf::potrf_blocked_dispatch<T>(*this->ctx, A.view(), Uplo::Upper,
+        EXPECT_THROW((void)sycl_potrf::potrf_blocked_dispatch<T>(*this->ctx, A.view(), Uplo::Upper,
                                                            ws.to_span(), info.to_span()),
                      std::invalid_argument);
     }
@@ -1390,7 +1390,7 @@ TYPED_TEST(PotrfBlockedTest, BlockedDirectEntryPointRefusesWhatSupportsRefuses) 
         Matrix<T, MatrixFormat::Dense> A(n, n - 3, 1);
         A.fill(make_scalar<T>(R(1), R(0)));
         UnifiedVector<std::byte> ws(64);
-        EXPECT_THROW(sycl_potrf::potrf_blocked_dispatch<T>(*this->ctx, A.view(), Uplo::Lower,
+        EXPECT_THROW((void)sycl_potrf::potrf_blocked_dispatch<T>(*this->ctx, A.view(), Uplo::Lower,
                                                            ws.to_span(), info.to_span()),
                      std::invalid_argument);
     }
@@ -1408,7 +1408,7 @@ TYPED_TEST(PotrfBlockedTest, BlockedDirectEntryPointRefusesWhatSupportsRefuses) 
             << "the view is not actually heterogeneous; this case would prove nothing";
         UnifiedVector<std::byte> ws(
             sycl_potrf::potrf_blocked_buffer_size<T>(*this->ctx, A.view(), Uplo::Lower));
-        EXPECT_THROW(sycl_potrf::potrf_blocked_dispatch<T>(*this->ctx, V, Uplo::Lower,
+        EXPECT_THROW((void)sycl_potrf::potrf_blocked_dispatch<T>(*this->ctx, V, Uplo::Lower,
                                                            ws.to_span(), info.to_span()),
                      std::invalid_argument);
     }
@@ -1529,7 +1529,7 @@ TYPED_TEST(PotrfBlockedTest, BufferSizeCoversEverySupportedNativeTier) {
     UnifiedVector<std::byte> ws(queried);
     UnifiedVector<int32_t> info(batch, int32_t(-12345));
     ASSERT_NO_THROW(
-        (potrf<B, T>(*this->ctx, A.view(), Uplo::Lower, ws.to_span(), info.to_span())));
+        ((void)potrf<B, T>(*this->ctx, A.view(), Uplo::Lower, ws.to_span(), info.to_span())));
     this->ctx->wait();
     for (int b = 0; b < batch; ++b) {
         ASSERT_EQ(info[b], 0) << "b=" << b;
@@ -1570,7 +1570,7 @@ TYPED_TEST(PotrfBlockedTest, FacadeReachesTheBlockedDriver) {
 
     UnifiedVector<std::byte> ws(potrf_buffer_size<B, T>(*this->ctx, A.view(), Uplo::Lower));
     UnifiedVector<int32_t> info(batch, int32_t(-7));
-    potrf<B, T>(*this->ctx, A.view(), Uplo::Lower, ws.to_span(), info.to_span());
+    (void)potrf<B, T>(*this->ctx, A.view(), Uplo::Lower, ws.to_span(), info.to_span());
     this->ctx->wait();
 
     // THE GUARD.
@@ -1580,7 +1580,7 @@ TYPED_TEST(PotrfBlockedTest, FacadeReachesTheBlockedDriver) {
     UnifiedVector<std::byte> dws(
         sycl_potrf::potrf_blocked_buffer_size<T>(*this->ctx, direct.view(), Uplo::Lower));
     UnifiedVector<int32_t> dinfo(batch, int32_t(-7));
-    sycl_potrf::potrf_blocked_dispatch<T>(
+    (void)sycl_potrf::potrf_blocked_dispatch<T>(
         *this->ctx, direct.view(), Uplo::Lower, dws.to_span(), dinfo.to_span(),
         [](Queue& c, const MatrixView<T, MatrixFormat::Dense>& ga,
            const MatrixView<T, MatrixFormat::Dense>& gb,
@@ -1640,7 +1640,7 @@ TYPED_TEST(PotrfBlockedTest, BlockedDoesNotReadUninitialisedWorkspace) {
     std::memset(ws.data(), 0xFF, bytes);
 
     UnifiedVector<int32_t> info(batch, int32_t(-12345));
-    sycl_potrf::potrf_blocked_dispatch<T>(*this->ctx, A.view(), Uplo::Lower,
+    (void)sycl_potrf::potrf_blocked_dispatch<T>(*this->ctx, A.view(), Uplo::Lower,
                                           ws.to_span(), info.to_span());
     this->ctx->wait();
 

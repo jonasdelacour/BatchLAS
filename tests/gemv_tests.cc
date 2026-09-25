@@ -137,7 +137,7 @@ TYPED_TEST(GemvMatrixViewTest, SingleGemvNoTranspose) {
 
     this->computeExpectedGemv(alpha, beta, Transpose::NoTrans); 
 
-    gemv(*(this->ctx), A_view, x_vec, y_vec, {.alpha = alpha, .beta = beta});
+    (void)gemv(*(this->ctx), A_view, x_vec, y_vec, {.alpha = alpha, .beta = beta});
 
     this->ctx->wait();
     
@@ -163,7 +163,7 @@ TYPED_TEST(GemvMatrixViewTest, SingleGemvWithTranspose) {
 
     this->computeExpectedGemv(alpha, beta, Transpose::Trans); 
 
-    gemv(*(this->ctx),
+    (void)gemv(*(this->ctx),
                       A_view,
                       x_vec,
                       y_vec,
@@ -193,7 +193,7 @@ TYPED_TEST(GemvMatrixViewTest, BatchedGemvNoTranspose) {
 
     this->computeExpectedGemv(alpha, beta, Transpose::NoTrans);
 
-    gemv(*(this->ctx), A_view, x_vec, y_vec, {.alpha = alpha, .beta = beta});
+    (void)gemv(*(this->ctx), A_view, x_vec, y_vec, {.alpha = alpha, .beta = beta});
 
     this->ctx->wait();
 
@@ -224,7 +224,7 @@ TYPED_TEST(GemvMatrixViewTest, BatchedGemvWithTranspose) {
 
     this->computeExpectedGemv(alpha, beta, Transpose::Trans);
 
-    gemv(*(this->ctx),
+    (void)gemv(*(this->ctx),
                       A_view,
                       x_vec,
                       y_vec,
@@ -264,7 +264,7 @@ TYPED_TEST(GemvMatrixViewTest, BatchedGemvWithAlphaBeta) {
 
     this->computeExpectedGemv(alpha, beta, Transpose::NoTrans); 
 
-    gemv(*(this->ctx), A_view, x_vec, y_vec, {.alpha = alpha, .beta = beta});
+    (void)gemv(*(this->ctx), A_view, x_vec, y_vec, {.alpha = alpha, .beta = beta});
 
     this->ctx->wait();
 
@@ -406,7 +406,7 @@ protected:
         ASSERT_EQ(A_view.ld(), ld);
         ASSERT_EQ(A_view.stride(), a_stride);
 
-        gemv(*(this->ctx), A_view, x_vec, y_vec,
+        (void)gemv(*(this->ctx), A_view, x_vec, y_vec,
              {.alpha = c.alpha, .beta = c.beta, .transA = c.transA});
         this->ctx->wait();
 
@@ -656,7 +656,7 @@ TYPED_TEST(GemvCoverageTest, ZeroReductionLeavesYUntouched) {
     VectorView<S> y_vec(y.data(), m, batch, 1, m);
 
     // alpha != 0 and beta != 1, so only the n == 0 clause can quick-return here.
-    gemv(*(this->ctx), A_view, x_vec, y_vec,
+    (void)gemv(*(this->ctx), A_view, x_vec, y_vec,
          {.alpha = static_cast<S>(2.0), .beta = static_cast<S>(0.5),
           .transA = Transpose::NoTrans});
     this->ctx->wait();
@@ -692,7 +692,7 @@ TYPED_TEST(GemvCoverageTest, ZeroRowsLeavesYUntouched) {
     ASSERT_EQ(x_vec.size(), 0);
 
     // alpha != 0 and beta != 1, so ONLY the m == 0 clause can quick-return.
-    gemv(*(this->ctx), A_view, x_vec, y_vec,
+    (void)gemv(*(this->ctx), A_view, x_vec, y_vec,
          {.alpha = static_cast<S>(2.0), .beta = static_cast<S>(0.5),
           .transA = Transpose::Trans});
     this->ctx->wait();
@@ -724,7 +724,7 @@ TYPED_TEST(GemvCoverageTest, AlphaZeroBetaOneLeavesYUntouched) {
     VectorView<S> x_vec(x.data(), n, batch, 1, n);
     VectorView<S> y_vec(y.data(), m, batch, 1, m);
 
-    gemv(*(this->ctx), A_view, x_vec, y_vec,
+    (void)gemv(*(this->ctx), A_view, x_vec, y_vec,
          {.alpha = static_cast<S>(0.0), .beta = static_cast<S>(1.0),
           .transA = Transpose::NoTrans});
     this->ctx->wait();

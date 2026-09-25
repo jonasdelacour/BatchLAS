@@ -64,7 +64,7 @@ static void BM_STEQR(minibench::State& state) {
                     params,
                     bench::pristine(eigvects),
                     [](Queue& q, auto&&... xs) {
-                        steqr(q, std::forward<decltype(xs)>(xs)...);
+                        (void)steqr(q, std::forward<decltype(xs)>(xs)...);
                     });
     state.SetMetric("GFLOPS", total_flops * 1e-9, minibench::Rate);
     state.SetMetric("T(µs)/matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);

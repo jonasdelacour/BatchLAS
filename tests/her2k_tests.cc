@@ -107,7 +107,7 @@ TYPED_TEST(Her2kTest, IgnoresUnreferencedTriangleOfC) {
                         this->ctx->wait();
 
                         Matrix<T, MatrixFormat::Dense> R(n, n, shape.batch);
-                        R.view().fill_zeros(*(this->ctx));
+                        (void)R.view().fill_zeros(*(this->ctx));
                         this->ctx->wait();
 
                         her2k(*(this->ctx), A.view(), B.view(), C.view(),
@@ -232,8 +232,8 @@ TYPED_TEST(Her2kTest, TrianglesAgreeAcrossUplo) {
 
         Matrix<T, MatrixFormat::Dense> C_lower(n, n, batch);
         Matrix<T, MatrixFormat::Dense> C_upper(n, n, batch);
-        C_lower.view().fill_zeros(*(this->ctx));
-        C_upper.view().fill_zeros(*(this->ctx));
+        (void)C_lower.view().fill_zeros(*(this->ctx));
+        (void)C_upper.view().fill_zeros(*(this->ctx));
         this->ctx->wait();
 
         her2k(*(this->ctx), A.view(), B.view(), C_lower.view(),
@@ -282,17 +282,17 @@ TYPED_TEST(Her2kTest, OptionStructMatchesPositional) {
     Matrix<T, MatrixFormat::Dense> C_named(n, n, batch);
     Matrix<T, MatrixFormat::Dense> C_named_pos(n, n, batch);
     for (auto* C : {&C_defaults, &C_defaults_pos, &C_named, &C_named_pos}) {
-        C->view().fill_zeros(*(this->ctx));
+        (void)C->view().fill_zeros(*(this->ctx));
     }
     this->ctx->wait();
 
-    her2k(*(this->ctx), A.view(), B.view(), C_defaults.view(), {});
-    her2k<Ba, T>(*(this->ctx), A.view(), B.view(), C_defaults_pos.view(),
+    (void)her2k(*(this->ctx), A.view(), B.view(), C_defaults.view(), {});
+    (void)her2k<Ba, T>(*(this->ctx), A.view(), B.view(), C_defaults_pos.view(),
                  T(1), real_t(0), Uplo::Lower, Transpose::NoTrans);
 
-    her2k(*(this->ctx), A.view(), B.view(), C_named.view(),
+    (void)her2k(*(this->ctx), A.view(), B.view(), C_named.view(),
           {.alpha = T(1.5, 0.25), .uplo = Uplo::Upper});
-    her2k<Ba, T>(*(this->ctx), A.view(), B.view(), C_named_pos.view(),
+    (void)her2k<Ba, T>(*(this->ctx), A.view(), B.view(), C_named_pos.view(),
                  T(1.5, 0.25), real_t(0), Uplo::Upper, Transpose::NoTrans);
     this->ctx->wait();
 

@@ -66,7 +66,7 @@ static void BM_SYEV_BLOCKED(minibench::State& state) {
                     Uplo::Lower,
                     std::move(workspace),
                     [](Queue& q, auto&&... xs) {
-                        syev_blocked(q, std::forward<decltype(xs)>(xs)...);
+                        (void)syev_blocked(q, std::forward<decltype(xs)>(xs)...);
                     });
 
     const double flops = 4.0 / 3.0 * static_cast<double>(n) * double(n) * double(n);

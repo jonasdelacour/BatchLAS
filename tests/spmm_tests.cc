@@ -346,7 +346,7 @@ protected:
             const size_t need = spmm_buffer_size(*(this->ctx), A_view, B_view, C_view,
                                                  c.alpha, c.beta, c.transA, c.transB);
             if (need > 0) ws.resize(need);
-            spmm(*(this->ctx), A_view, B_view, C_view, c.alpha, c.beta,
+            (void)spmm(*(this->ctx), A_view, B_view, C_view, c.alpha, c.beta,
                  c.transA, c.transB, ws);
             this->ctx->wait();
         } catch (const std::exception& e) {
