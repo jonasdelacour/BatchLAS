@@ -3861,3 +3861,32 @@ TEST(RouteSpmm, BatchlasSpmmRouteIsActuallyRead) {
             << "and the value spmm_route.hh substitutes for it is plain Auto";
     }
 }
+
+// The vendor-FREE walk against the measured tiny-vs-CTA grid: tiny in the vs-vendor
+// window's gaps (float 3 and 17..20, cfloat 4, 9, 10 and 22), CTA only where it measured
+// ahead (cfloat 17 and 20). evidence: docs/perf/qr.md#the-native-tiny-tie-break
+TEST(RouteGeqrf, NativeWalkTakesTinyInTheWindowGaps) {
+    constexpr Route kTiny{Origin::Native, Algorithm::Tiny};
+    auto sq = [](int64_t n) {
+        GeqrfShape s = geqrf_shape(n, n, 32768, /*cta_max_m=*/128, /*cta_max_elems=*/1 << 20);
+        s.tiny_max_n = 32;
+        return s;
+    };
+    for (int64_t n : {3, 17, 20}) {
+        EXPECT_EQ(resolve_geqrf_route<float>(kGeqrfAuto, sq(n), false), kTiny) << "float n=" << n;
+    }
+    for (int64_t n : {4, 9, 10, 22}) {
+        EXPECT_EQ(resolve_geqrf_route<std::complex<float>>(kGeqrfAuto, sq(n), false), kTiny)
+            << "cfloat n=" << n;
+    }
+    for (int64_t n : {17, 20}) {
+        EXPECT_EQ(resolve_geqrf_route<std::complex<float>>(kGeqrfAuto, sq(n), false), kGeqrfCta)
+            << "cfloat n=" << n;
+    }
+    // The vendor-PRESENT route is untouched in the gaps: still the vendor.
+    EXPECT_TRUE(is_vendor(resolve_geqrf_route<std::complex<float>>(kGeqrfAuto, sq(4), true)));
+    // Rectangular A never reaches Tiny: the register array IS the matrix.
+    GeqrfShape tall = sq(8);
+    tall.m = 12;
+    EXPECT_NE(resolve_geqrf_route<float>(kGeqrfAuto, tall, false), kTiny);
+}
