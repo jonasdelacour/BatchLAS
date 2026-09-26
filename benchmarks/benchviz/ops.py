@@ -270,9 +270,11 @@ class Grid:
     def from_config(cls, cfg: dict) -> "Grid":
         if "grid" in cfg:
             return cls.from_dict(cfg["grid"])
-        g = PRESETS[cfg.get("preset", "quick")]   # campaigns from before grids existed
+        # Campaigns from before grids existed; "imported" ones never had a preset.
+        name = cfg.get("preset", "quick")
+        g = PRESETS.get(name, PRESETS["quick"])
         return cls.from_dict({**g.to_dict(), "mem_gib": cfg.get("mem_gib") or g.mem_gib,
-                              "orders": cfg.get("orders")})
+                              "orders": cfg.get("orders"), "name": name})
 
 
 PRESETS = {

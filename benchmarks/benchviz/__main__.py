@@ -184,6 +184,12 @@ def cmd_import(a):
     print(f"imported {len(rows)} rows into {camp.dir}")
 
 
+def cmd_export(a):
+    from export import export
+    p = export(Path(a.root), a.campaigns, Path(a.out), fragment=a.fragment)
+    print(p)
+
+
 def cmd_serve(a):
     import server
     server.serve(Path(a.root), a.host, a.port, default_build_dirs())
@@ -229,6 +235,12 @@ def main():
     im.add_argument("campaign")
     im.add_argument("files", nargs="+")
     im.set_defaults(fn=cmd_import)
+
+    ex = sub.add_parser("export", parents=[common], help="static phone-friendly snapshot (HTML + figures)")
+    ex.add_argument("campaigns", nargs="+")
+    ex.add_argument("--out", default=str(DEFAULT_ROOT / "_export"))
+    ex.add_argument("--fragment", action="store_true", help="omit the html/head/body skeleton")
+    ex.set_defaults(fn=cmd_export)
 
     s = sub.add_parser("serve", parents=[common], help="the live dashboard")
     s.add_argument("--host", default="127.0.0.1")

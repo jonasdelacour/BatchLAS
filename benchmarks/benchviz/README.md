@@ -24,6 +24,10 @@ python3 benchmarks/benchviz run --ops all --types all --preset full --campaign p
 python3 benchmarks/benchviz plot paper-4090
 ```
 
+For a read-only copy you can open on a phone or send to someone, `export` writes a static page plus
+downscaled figures: `python3 benchmarks/benchviz export <campaign>... --out <dir>`. Pass `--fragment`
+when the host wraps the page in its own `<html>` skeleton.
+
 Campaigns are stored in `benchviz_runs/<name>/` (git-ignored):
 
 | File | Contents |
