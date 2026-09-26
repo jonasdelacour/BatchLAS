@@ -3944,7 +3944,7 @@ TYPED_TEST(LuTest, TinyDirectEntryPointRefusesWhatSupportsRefuses) {
 }
 
 // T9. ROUTING. Tiny is in the order array FIRST and its supports() gate answers on the
-// tier's own ceiling. Its window is MEASURED -- float 5..16 and 23..32, cfloat 5..7 and 9..16 -- so this
+// tier's own ceiling. Its window is MEASURED -- float 5..32, cfloat 5..7 and 9..16 -- so this
 // case asserts the window from both sides rather than "never preferred", which is what it
 // said while the grid was outstanding. fp64 has no window on this part at any order.
 // evidence: docs/perf/lu.md#the-tiny-getrf-window

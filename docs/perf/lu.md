@@ -1946,3 +1946,28 @@ measures 0.73 / 0.82x against CTA's 0.62 / 0.50x; gesv cfloat n = 32 moves 0.65 
 **Still losing:** cfloat 17..32 on every native tier. The tiny kernel's N = 32 complex
 instantiation is the obvious target: its rank-1 update broadcasts the pivot row with two
 shuffles per complex element.
+
+### The tiny launch bound
+
+**2026-09-27.** ncu on tiny getrf, cfloat n = 32, batch 32768: **143 registers per
+thread, 25% theoretical occupancy** (register-limited, 6 blocks of 64), 12.3 cycles
+per issued instruction, 38% memory and 25% SM throughput -- latency-bound for want of
+warps. ptxas's `.minnctapersm` trades registers for occupancy, and DPC++ emits it from
+`[[intel::min_work_groups_per_cu(N)]]` -- which is refused on a lambda, so the kernel is
+now the functor `GetrfTinyBody<D, N, Mpw, MinBlocks>`. Tiny arm, batch 32768, ms:
+
+| cell | MinBlocks 1 (no cap) | 8 | 12 | 16 |
+|---|---:|---:|---:|---:|
+| float 16 | 0.0738 | 0.0737 | 0.0739 | 0.0741 |
+| float 24 | 0.363 | 0.375 | 0.334 | **0.277** |
+| float 32 | 0.557 | 0.560 | 0.501 | **0.469** |
+| cfloat 16 | 0.142 | 0.142 | 0.138 | **0.133** |
+| cfloat 24 | 0.938 | 0.781 | **0.654** | 0.739 |
+| cfloat 32 | 1.300 | **1.051** | 1.182 | 1.377 |
+
+`getrf_tiny_min_blocks`: float N = 32 -> 16, cfloat N = 32 -> 8, cfloat N = 16 -> 16,
+everything else 1 (fp64 unmeasured). Re-measured at batch 131072, tiny now beats CTA at
+**every** float order 17..32 (`t_vendor / t_arm`, tiny / CTA): 1.36 / 1.32, 1.47 / 1.25,
+1.53 / 1.20, 1.56 / 1.12, 1.57 / 0.94, 1.47 / 0.73 at n = 17 / 20 / 22 / 24 / 28 / 32 --
+so the float CTA band of the N=4 section is retired and the tiny window is float 5..32.
+cfloat tiny still loses at 17..32 (0.72x at 24, 0.80x at 32) and stays out.

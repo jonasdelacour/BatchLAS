@@ -75,7 +75,6 @@ struct RouteTable<Op::getrf, T> {
     static bool preferred(Route r, const GetrfShape& s) {
         if (!is_native(r)) return false;
         if (r.algo == Algorithm::Tiny) return tiny_window(s);
-        if (r.algo == Algorithm::CTA) return cta_window(s);
         if (r.algo != Algorithm::Blocked) return false;
         if (tiny_window(s)) return false;  // defence in depth; no test observes it
 
@@ -87,24 +86,16 @@ struct RouteTable<Op::getrf, T> {
     }
 
     // Bounds are measured EDGES. n = 4 ties the vendor at the DRAM roof, cfloat 8 falls
-    // under the gate, cfloat 17 pads into N = 32 and loses; float 17..22 is CTA's.
-    // evidence: docs/perf/lu.md#the-n4-bucket-and-the-cta-band
+    // under the gate, cfloat 17 pads into N = 32 and loses.
+    // evidence: docs/perf/lu.md#the-tiny-launch-bound
     static bool tiny_window(const GetrfShape& s) {
         if (!tiny_fits(s)) return false;
         if constexpr (std::is_same_v<T, float>) {
-            return (s.order() >= 5 && s.order() <= 16) || (s.order() >= 23 && s.order() <= 32);
+            return s.order() >= 5 && s.order() <= 32;
         } else if constexpr (std::is_same_v<T, std::complex<float>>) {
             return (s.order() >= 5 && s.order() <= 7) || (s.order() >= 9 && s.order() <= 16);
         } else {
             return false;   // fp64 on this part runs at 1/64 rate; no grid, no window
-        }
-    }
-
-    static bool cta_window(const GetrfShape& s) {
-        if constexpr (std::is_same_v<T, float>) {
-            return s.order() >= 17 && s.order() <= 22;
-        } else {
-            return false;
         }
     }
 

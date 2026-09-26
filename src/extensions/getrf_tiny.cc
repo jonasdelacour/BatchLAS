@@ -29,7 +29,7 @@ namespace batchlas {
 namespace sycl_getrf {
 
 // At TU namespace scope: a kernel name must not name an internal-linkage entity.
-template <typename T, int N> class GetrfTinyKernel;
+template <typename T, int N, int MinBlocks> class GetrfTinyKernel;
 
 namespace {
 
@@ -64,129 +64,165 @@ constexpr int tiny_cap() {
     return std::is_same_v<T, std::complex<double>> ? 16 : 32;
 }
 
-template <typename T, int N>
+// A FUNCTOR, not a lambda, only so the launch bound can be spelled: the attribute that
+// emits ptxas's .minnctapersm is refused on a lambda. MinBlocks caps the registers the
+// allocator may take (65,536 / (64 * MinBlocks)); 1 is no cap.
+template <typename D, int N, int Mpw, int MinBlocks>
+struct GetrfTinyBody {
+    using R = gn::real_of<D>;
+    D* ap;
+    int n;
+    int batch;
+    std::ptrdiff_t ldp;
+    std::ptrdiff_t strp;
+    int* piv_ptr;
+    int32_t* info_ptr;
+
+    [[sycl::reqd_sub_group_size(32), intel::max_work_group_size(1, 1, kTinyWg),
+      intel::min_work_groups_per_cu(MinBlocks)]]
+    void operator()(sycl::nd_item<1> it) const {
+        constexpr int kMpw = Mpw;
+        const auto sg = it.get_sub_group();
+        const auto part = make_partition<N>(sg);
+        const int wg_id = static_cast<int>(it.get_group_linear_id());
+        const int lane = static_cast<int>(part.get_local_linear_id());
+        const int prob_id = wg_id * kMpw + tn::tiny_partition_id(sg, part);
+
+        // CLAMP, DO NOT RETURN (steqr_cta.cc:88 does the opposite): tiny_device.hh's
+        // third invariant -- an early-exited lane still sits in the shuffle mask.
+        const bool live = (prob_id < batch);
+        const int b = live ? prob_id : 0;
+        const D* const src = ap + static_cast<std::ptrdiff_t>(b) * strp;
+
+        D rA[N];  // top level, never a parameter: tiny_device.hh invariant 1
+#pragma unroll
+        for (int c = 0; c < N; ++c) {
+            rA[c] = tn::tiny_load_pad_identity<D>(src, lane, c, n, ldp, live);
+        }
+
+        int rowid = lane;    // WHICH matrix row this lane currently owns
+        int my_piv = lane;   // lane j accumulates ipiv[j]
+        int32_t linfo = 0;   // partition-uniform: from the broadcast pivot
+
+#pragma unroll
+        for (int j = 0; j < N; ++j) {
+            // `continue`, NOT `break`. A break makes the trip count data-dependent,
+            // the toolchain declines the unroll, rA becomes dynamically indexed and
+            // ptxas relocates it to the stack -- with ZERO spill and green tests, so
+            // only the probe's stack-frame column shows it. Skipping a collective
+            // here is legal ONLY because n is kernel-uniform, which holds only
+            // because the entry point rejects a heterogeneous batch; relax that and
+            // every collective below is undefined -- a wrong answer, not a crash.
+            // evidence: docs/perf/lu.md#the-register-probe-and-the-unroll-that-decides-it
+            if (j >= n) continue;
+
+            // --- 1. argmax over live rows. A pad row is kept out by the tie-break
+            // DIRECTION, not by the `rowid < n` mask; the `mag == mag` map IS
+            // load-bearing -- an unmapped NaN leaves lanes disagreeing on the winner.
+            // evidence: docs/perf/lu.md#pad-rows-and-the-argmax-corrected
+            const R mag = gn::lu_cabs1<D>(rA[j]);
+            const bool cand = (rowid >= j) && (rowid < n);
+            R a = (cand && (mag == mag)) ? mag : R(-1);
+            // `rowid + N`: every non-candidate sorts strictly BELOW every candidate.
+            int key = tn::tiny_key(cand ? rowid : (rowid + N), lane);
+            tn::tiny_argmax_pair<N>(part, a, key);
+            const int p = tn::tiny_key_order(key);        // winner's rowid
+            const uint32_t pl = tn::tiny_key_lane(key);   // winner's lane
+            if (lane == j) my_piv = p;
+
+            if (rowid == p) rowid = j;  // --- 2. lazy swap; no row moves lanes
+            else if (rowid == j) rowid = p;
+
+            const D piv = tn::tiny_bcast<D>(part, rA[j], pl);  // --- 3. ?GETF2
+            const bool zero = sd::dev_is_zero(piv);   // EXACT zero, no epsilon
+            if (zero && linfo == 0) linfo = static_cast<int32_t>(j + 1);
+            const D rc = sd::dev_recip(piv);
+            const bool use_mul =
+                !zero && sd::dev_isfinite(rc) && !sd::dev_is_zero(rc);
+            const bool act = (rowid > j);   // NEW rowid: the pivot row is excluded
+            if (act) {
+                if (use_mul) {
+                    rA[j] = sd::dev_mul(rA[j], rc);
+                } else if (!zero) {
+                    rA[j] = sd::dev_div(rA[j], piv);   // ?GETF2's sfmin arm
+                }
+            }
+
+            // --- 4. rank-1 update, collective OUTSIDE the guard. A zero pivot was
+            // the argmax, so every multiplier is zero: LAPACK's ?GER as a no-op.
+#pragma unroll
+            for (int k = j + 1; k < N; ++k) {
+                // `k = j + 1` is a COMPILE-TIME lower bound once j is unrolled.
+                // evidence: docs/perf/lu.md#why-the-rank-1-update-starts-at-k--j--1
+                if (k >= n) continue;      // kernel-uniform, as above
+                const D u = tn::tiny_bcast<D>(part, rA[k], pl);
+                if (act) rA[k] = sd::dev_sub(rA[k], sd::dev_mul(rA[j], u));
+            }
+        }
+
+        if (live) {
+            D* const dst = ap + static_cast<std::ptrdiff_t>(b) * strp;
+#pragma unroll
+            for (int k = 0; k < N; ++k) {
+                if (k >= n) continue;
+                if (lane < n) {  // not `rowid < n`: equivalent, and loop-invariant
+                    dst[static_cast<std::ptrdiff_t>(rowid) +
+                        static_cast<std::ptrdiff_t>(k) * ldp] = rA[k];
+                }
+            }
+            if (lane < n) {
+                // 1-BASED and GLOBAL, as LAPACK defines ipiv.
+                piv_ptr[static_cast<std::ptrdiff_t>(b) * n + lane] = my_piv + 1;
+            }
+            if (part.leader()) info_ptr[b] = linfo;
+        }
+    }
+};
+
+template <typename T, int N, int MinBlocks>
 Event getrf_tiny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int n, int batch,
                         int* piv_ptr, int32_t* info_ptr) {
     // Re-typed HERE: std::complex's Annex-G operator* costs an isnan branch and a libcall.
     using DM = sycl_device::DevMap<T>;
     using D = typename DM::type;
-    using R = typename DM::real;
     static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
     static_assert(N == 4 || N == 8 || N == 16 || N == 32, "the tiny ladder is {4, 8, 16, 32}");
 
-    D* const ap = reinterpret_cast<D*>(a_ptr);
     // Via the shared helper, not kTinyWg / N: the guarantees stay where they are owned.
     constexpr int kMpw = resident::pack_matrices_per_wg(
         /*bytes_per_matrix=*/1u, N, /*wg_slm_budget_bytes=*/~std::size_t(0),
         kTinyWg, kTinyWg, /*max_pack=*/kTinyWg / N);
     static_assert(kMpw * N == kTinyWg, "the tiny launch must fill its work-group exactly");
     const int num_wg = (batch + kMpw - 1) / kMpw;
-    const std::ptrdiff_t ldp = static_cast<std::ptrdiff_t>(ld);
-    const std::ptrdiff_t strp = static_cast<std::ptrdiff_t>(stride);
+    const GetrfTinyBody<D, N, kMpw, MinBlocks> body{
+        reinterpret_cast<D*>(a_ptr), n, batch, static_cast<std::ptrdiff_t>(ld),
+        static_cast<std::ptrdiff_t>(stride), piv_ptr, info_ptr};
 
     ctx->submit([&](sycl::handler& h) {
-        h.parallel_for<GetrfTinyKernel<T, N>>(
+        h.parallel_for<GetrfTinyKernel<T, N, MinBlocks>>(
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(num_wg) *
                                              static_cast<std::size_t>(kTinyWg)),
                               sycl::range<1>(static_cast<std::size_t>(kTinyWg))),
-            [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(32)]] {
-                const auto sg = it.get_sub_group();
-                const auto part = make_partition<N>(sg);
-                const int wg_id = static_cast<int>(it.get_group_linear_id());
-                const int lane = static_cast<int>(part.get_local_linear_id());
-                const int prob_id = wg_id * kMpw + tn::tiny_partition_id(sg, part);
-
-                // CLAMP, DO NOT RETURN (steqr_cta.cc:88 does the opposite): tiny_device.hh's
-                // third invariant -- an early-exited lane still sits in the shuffle mask.
-                const bool live = (prob_id < batch);
-                const int b = live ? prob_id : 0;
-                const D* const src = ap + static_cast<std::ptrdiff_t>(b) * strp;
-
-                D rA[N];  // top level, never a parameter: tiny_device.hh invariant 1
-#pragma unroll
-                for (int c = 0; c < N; ++c) {
-                    rA[c] = tn::tiny_load_pad_identity<D>(src, lane, c, n, ldp, live);
-                }
-
-                int rowid = lane;    // WHICH matrix row this lane currently owns
-                int my_piv = lane;   // lane j accumulates ipiv[j]
-                int32_t linfo = 0;   // partition-uniform: from the broadcast pivot
-
-#pragma unroll
-                for (int j = 0; j < N; ++j) {
-                    // `continue`, NOT `break`. A break makes the trip count data-dependent,
-                    // the toolchain declines the unroll, rA becomes dynamically indexed and
-                    // ptxas relocates it to the stack -- with ZERO spill and green tests, so
-                    // only the probe's stack-frame column shows it. Skipping a collective
-                    // here is legal ONLY because n is kernel-uniform, which holds only
-                    // because the entry point rejects a heterogeneous batch; relax that and
-                    // every collective below is undefined -- a wrong answer, not a crash.
-                    // evidence: docs/perf/lu.md#the-register-probe-and-the-unroll-that-decides-it
-                    if (j >= n) continue;
-
-                    // --- 1. argmax over live rows. A pad row is kept out by the tie-break
-                    // DIRECTION, not by the `rowid < n` mask; the `mag == mag` map IS
-                    // load-bearing -- an unmapped NaN leaves lanes disagreeing on the winner.
-                    // evidence: docs/perf/lu.md#pad-rows-and-the-argmax-corrected
-                    const R mag = gn::lu_cabs1<D>(rA[j]);
-                    const bool cand = (rowid >= j) && (rowid < n);
-                    R a = (cand && (mag == mag)) ? mag : R(-1);
-                    // `rowid + N`: every non-candidate sorts strictly BELOW every candidate.
-                    int key = tn::tiny_key(cand ? rowid : (rowid + N), lane);
-                    tn::tiny_argmax_pair<N>(part, a, key);
-                    const int p = tn::tiny_key_order(key);        // winner's rowid
-                    const uint32_t pl = tn::tiny_key_lane(key);   // winner's lane
-                    if (lane == j) my_piv = p;
-
-                    if (rowid == p) rowid = j;  // --- 2. lazy swap; no row moves lanes
-                    else if (rowid == j) rowid = p;
-
-                    const D piv = tn::tiny_bcast<D>(part, rA[j], pl);  // --- 3. ?GETF2
-                    const bool zero = sd::dev_is_zero(piv);   // EXACT zero, no epsilon
-                    if (zero && linfo == 0) linfo = static_cast<int32_t>(j + 1);
-                    const D rc = sd::dev_recip(piv);
-                    const bool use_mul =
-                        !zero && sd::dev_isfinite(rc) && !sd::dev_is_zero(rc);
-                    const bool act = (rowid > j);   // NEW rowid: the pivot row is excluded
-                    if (act) {
-                        if (use_mul) {
-                            rA[j] = sd::dev_mul(rA[j], rc);
-                        } else if (!zero) {
-                            rA[j] = sd::dev_div(rA[j], piv);   // ?GETF2's sfmin arm
-                        }
-                    }
-
-                    // --- 4. rank-1 update, collective OUTSIDE the guard. A zero pivot was
-                    // the argmax, so every multiplier is zero: LAPACK's ?GER as a no-op.
-#pragma unroll
-                    for (int k = j + 1; k < N; ++k) {
-                        // `k = j + 1` is a COMPILE-TIME lower bound once j is unrolled.
-                        // evidence: docs/perf/lu.md#why-the-rank-1-update-starts-at-k--j--1
-                        if (k >= n) continue;      // kernel-uniform, as above
-                        const D u = tn::tiny_bcast<D>(part, rA[k], pl);
-                        if (act) rA[k] = sd::dev_sub(rA[k], sd::dev_mul(rA[j], u));
-                    }
-                }
-
-                if (live) {
-                    D* const dst = ap + static_cast<std::ptrdiff_t>(b) * strp;
-#pragma unroll
-                    for (int k = 0; k < N; ++k) {
-                        if (k >= n) continue;
-                        if (lane < n) {  // not `rowid < n`: equivalent, and loop-invariant
-                            dst[static_cast<std::ptrdiff_t>(rowid) +
-                                static_cast<std::ptrdiff_t>(k) * ldp] = rA[k];
-                        }
-                    }
-                    if (lane < n) {
-                        // 1-BASED and GLOBAL, as LAPACK defines ipiv.
-                        piv_ptr[static_cast<std::ptrdiff_t>(b) * n + lane] = my_piv + 1;
-                    }
-                    if (part.leader()) info_ptr[b] = linfo;
-                }
-            });
+            body);
     });
     return ctx.get_event();
+}
+
+// The launch bound per (type, bucket), measured at batch 32768 over {1, 8, 12, 16}:
+// float N = 32 1.19-1.31x at 16, cfloat N = 32 1.24x at 8 and N = 16 1.07x at 16; every
+// other cell is flat or unmeasured and keeps no cap. evidence: docs/perf/lu.md#the-tiny-launch-bound
+template <typename T, int N>
+constexpr int getrf_tiny_min_blocks() {
+    if constexpr (std::is_same_v<T, float>) return N == 32 ? 16 : 1;
+    if constexpr (std::is_same_v<T, std::complex<float>>) return N == 32 ? 8 : N == 16 ? 16 : 1;
+    return 1;
+}
+
+template <typename T, int N>
+Event getrf_tiny_launch_mb(Queue& ctx, T* a_ptr, int ld, int stride, int n, int batch,
+                           int* piv_ptr, int32_t* info_ptr) {
+    return getrf_tiny_launch<T, N, getrf_tiny_min_blocks<T, N>()>(ctx, a_ptr, ld, stride, n,
+                                                                   batch, piv_ptr, info_ptr);
 }
 
 // An empty OR SHORT `info` span means "not requested". A may carry a null data_ptr().
@@ -272,17 +308,17 @@ Event getrf_tiny_dispatch(Queue& ctx,
 
     switch (bucket) {
         case 4:
-            return getrf_tiny_launch<T, 4>(ctx, A.data_ptr(), A.ld(), A.stride(), n, batch,
+            return getrf_tiny_launch_mb<T, 4>(ctx, A.data_ptr(), A.ld(), A.stride(), n, batch,
                                            piv_i32.data(), info.data());
         case 8:
-            return getrf_tiny_launch<T, 8>(ctx, A.data_ptr(), A.ld(), A.stride(), n, batch,
+            return getrf_tiny_launch_mb<T, 8>(ctx, A.data_ptr(), A.ld(), A.stride(), n, batch,
                                            piv_i32.data(), info.data());
         case 16:
-            return getrf_tiny_launch<T, 16>(ctx, A.data_ptr(), A.ld(), A.stride(), n, batch,
+            return getrf_tiny_launch_mb<T, 16>(ctx, A.data_ptr(), A.ld(), A.stride(), n, batch,
                                             piv_i32.data(), info.data());
         case 32:
             if constexpr (tiny_cap<T>() >= 32) {
-                return getrf_tiny_launch<T, 32>(ctx, A.data_ptr(), A.ld(), A.stride(), n,
+                return getrf_tiny_launch_mb<T, 32>(ctx, A.data_ptr(), A.ld(), A.stride(), n,
                                                 batch, piv_i32.data(), info.data());
             }
             break;

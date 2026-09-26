@@ -1721,9 +1721,8 @@ using GetriTableCD = RouteTable<Op::getri, std::complex<double>>;
 } // namespace
 
 TEST(RouteGetrf, TheMeasuredTinyWindowAndNothingElse) {
-    // Tiny: float 5..16 and 23..32, cfloat 5..7 and 9..16; CTA: float 17..22. Every edge
-    // is a MEASURED non-winner or the other tier's measured win.
-    // evidence: docs/perf/lu.md#the-n4-bucket-and-the-cta-band
+    // Tiny: float 5..32, cfloat 5..7 and 9..16. Every edge is a MEASURED non-winner.
+    // evidence: docs/perf/lu.md#the-tiny-launch-bound
     using F   = RouteTable<Op::getrf, float>;
     using CF  = RouteTable<Op::getrf, std::complex<float>>;
     using D   = RouteTable<Op::getrf, double>;
@@ -1741,18 +1740,16 @@ TEST(RouteGetrf, TheMeasuredTinyWindowAndNothingElse) {
     };
 
     // IN the window, exactly ONE tier answers (R8b) and Auto takes a native route.
-    for (int64_t n : {5, 7, 8, 9, 12, 16, 23, 24, 32}) {
+    for (int64_t n : {5, 7, 8, 9, 12, 16, 17, 20, 22, 24, 32}) {
         const auto sh = getrf_shape(n, 16384, /*cta_max_n=*/128, /*tiny_max=*/32);
         EXPECT_TRUE(F::preferred(kTiny, sh)) << "float n=" << n;
         EXPECT_EQ(hits(F{}, sh), 1) << "float n=" << n;
         EXPECT_TRUE(is_native(resolve_getrf_route<float>(kAuto, sh, true))) << "float n=" << n;
     }
-    for (int64_t n : {17, 20, 22}) {                    // CTA's band: 1.19-1.31x vs 1.14-1.16x
+    for (int64_t n : {17, 20, 22}) {                    // the retired CTA band: tiny 1.36-1.53x
         const auto sh = getrf_shape(n, 16384, 128, 32);
-        EXPECT_FALSE(F::preferred(kTiny, sh)) << "float n=" << n;
-        EXPECT_TRUE(F::preferred(kCta, sh)) << "float n=" << n;
-        EXPECT_EQ(hits(F{}, sh), 1) << "float n=" << n;
-        EXPECT_EQ(resolve_getrf_route<float>(kAuto, sh, true), kCta) << "float n=" << n;
+        EXPECT_FALSE(F::preferred(kCta, sh)) << "float n=" << n;
+        EXPECT_EQ(resolve_getrf_route<float>(kAuto, sh, true), kTiny) << "float n=" << n;
     }
     for (int64_t n : {5, 7, 9, 12, 16}) {
         const auto sh = getrf_shape(n, 16384, 128, 32);
