@@ -1971,3 +1971,8 @@ everything else 1 (fp64 unmeasured). Re-measured at batch 131072, tiny now beats
 1.53 / 1.20, 1.56 / 1.12, 1.57 / 0.94, 1.47 / 0.73 at n = 17 / 20 / 22 / 24 / 28 / 32 --
 so the float CTA band of the N=4 section is retired and the tiny window is float 5..32.
 cfloat tiny still loses at 17..32 (0.72x at 24, 0.80x at 32) and stays out.
+
+`gesv_tiny` takes the same functor (`GesvTinyBody`) and a smaller table
+(`gesv_tiny_min_blocks`): float N = 32 and cfloat N = 16 at 16 blocks, 1.07-1.09x (float
+n = 24 / 32: 0.427 -> 0.394 / 0.629 -> 0.589 ms; cfloat n = 16: 0.274 -> 0.251 ms); cfloat
+N = 32 gains nothing at any bound and stays uncapped. The gesv window is unchanged.

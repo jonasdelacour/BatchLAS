@@ -2082,7 +2082,8 @@ CTA also beats the fused tiny kernel inside part of its old window. Batch 32768,
 | cfloat | 2 | 0.46 / **0.68** | 0.63 / **0.84** | 0.33 / **0.94** | 0.63 / **1.62** | 0.98 / **2.52** |
 | cfloat | 4 | **0.75** / 0.57 | **1.11** / 0.83 | 0.44 / **0.86** | 0.76 / **1.33** | 1.23 / **1.98** |
 
-So `tiny_window` is now: float `n <= 16 || nrhs >= 3`, cfloat `n <= 8 || (n <= 16 &&
+*Superseded by [the posv tiny launch bound](#the-posv-tiny-launch-bound).* So
+`tiny_window` was: float `n <= 16 || nrhs >= 3`, cfloat `n <= 8 || (n <= 16 &&
 nrhs >= 3)`. cfloat n = 8 stays tiny at every width (2.93 / 1.29 / 1.74 against CTA's
 1.27 / 0.72 / 0.47). double and cdouble keep the tier ceiling: tiny against CTA is
 unmeasured for them. nrhs = 3 is interpolated from 2 and 4.
@@ -2098,3 +2099,41 @@ staging) returned the right answer and stayed green on Upper at n = 33, 64 and 1
 Pinned, the break is red on Lower at every n > 1 and on Upper wherever potrf ran native
 (n = 17 and 33 for every type, n = 64 where CTA fits). The test asserts the poison
 survived only where potrf resolved native.
+
+## The posv tiny launch bound
+
+**2026-09-27.** The same `.minnctapersm` bound as getrf's tiny tier
+(docs/perf/lu.md#the-tiny-launch-bound), applied to `posv_tiny` through the functor
+`PosvTinyBody`. Swept per (type, bucket, RHS width) over MinBlocks {1, 8, 12, 16},
+batch 32768, tiny arm, ms (uncapped -> chosen):
+
+| cell | uncapped | chosen | gain |
+|---|---:|---:|---:|
+| float n=16 nrhs=1 | 0.0800 | 0.0713 (16) | 1.12x |
+| float n=24 nrhs=1 | 0.461 | 0.330 (16) | 1.40x |
+| float n=32 nrhs=1 | 0.534 | 0.403 (16) | 1.33x |
+| float n=16 nrhs=4 | 0.129 | 0.110 (12) | 1.17x |
+| float n=32 nrhs=4 | 0.687 | 0.576 (16) | 1.19x |
+| cfloat n=8 nrhs=1 | 0.0612 | 0.0466 (16) | 1.31x |
+| cfloat n=16 nrhs=1 | 0.376 | 0.302 (8) | 1.24x |
+| cfloat n=24 nrhs=1 | 2.075 | 1.099 (8) | **1.89x** |
+| cfloat n=32 nrhs=1 | 2.490 | 1.353 (8) | **1.84x** |
+| cfloat n=16 nrhs=4 | 0.651 | 0.483 (8) | 1.35x |
+| cfloat n=32 nrhs=4 | 3.504 | 3.160 (8) | 1.11x |
+
+A cap that is too tight costs as much as it saves elsewhere (cfloat N = 32 at 16 blocks is
+2.3x *slower*), so every cell is transcribed from the sweep, never extrapolated;
+`posv_tiny_min_blocks` holds the table, fp64 uncapped and unmeasured.
+
+The tiny-vs-CTA window moved again (`t_vendor / t_arm`, tiny / CTA, batch 32768):
+float nrhs = 1 now takes tiny at every order (n = 17 / 24 / 32: 1.62 / 1.86 / 2.45 against
+CTA's 1.47 / 1.71 / 2.22), and so does nrhs = 4 (1.51 / 1.58 / 1.73 against
+1.14 / 1.15 / 1.22). nrhs = 2 stays CTA's above 16 (tiny 1.12 / 1.33 / 1.43 against
+1.39 / 1.73 / 1.87): the NR = 4 tiny kernel costs the same at every width it serves,
+CTA's cost grows with the width. cfloat: tiny at n <= 16 for nrhs 1 and 4 (n = 12 / 16:
+1.18 / 1.38 and 0.99 / 1.45 against CTA's 1.15 / 1.30 and 0.57 / 0.83), at n <= 8 for
+nrhs = 2, CTA at 17 and above. So `tiny_window` is float `n <= 16 || nrhs != 2`, cfloat
+`n <= 8 || (n <= 16 && nrhs != 2)`.
+
+**Still losing:** cfloat 9..17 at nrhs = 2 (best 0.68 / 0.84 / 0.94 at n = 12 / 16 / 17),
+cfloat n = 12 nrhs = 4 ties (0.99), cfloat n = 17 at every width (CTA 0.86-1.08).

@@ -413,23 +413,23 @@ TYPED_TEST(PosvTest, TinyRefusesShapesAboveItsCeilings) {
 // P7. THE ROUTE, pinned to the MEASURED window; preferred() is asserted all-false
 // permanently because this op passes vendor_available=false and the window therefore
 // lives in native_tier_preferred. Outside the tiny window the fused-solve CTA arm takes
-// every shape it can hold. evidence: docs/perf/potrf.md#the-fused-potrs-solve
+// every shape it can hold. evidence: docs/perf/potrf.md#the-posv-tiny-launch-bound
 // ARMED BREAK (R9): make route_posv.hh's cfloat tiny_window return `order() <= 16`.
-// EXPECTED: RED for cfloat at n = 9 and 16 with nrhs = 1 only.
+// EXPECTED: RED for cfloat at n = 9 and 16 with nrhs = 2 only.
 TYPED_TEST(PosvTest, AutoTakesTheMeasuredWindow) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::BackendType;
     using Tbl = dispatch::RouteTable<dispatch::Op::posv, T>;
 
     // Restated, not read back from the header: a test that asks the header what the
-    // header says cannot fail. The tiny window's ceiling for narrow and for wide RHS.
+    // header says cannot fail. The tiny window's ceiling at nrhs = 2 and at every other width.
     constexpr bool kF = std::is_same_v<T, float>;
     constexpr bool kC = std::is_same_v<T, std::complex<float>>;
     constexpr bool kZ = std::is_same_v<T, std::complex<double>>;
-    const int narrow = kF ? 16 : kC ? 8 : kZ ? 16 : 32;
-    const int wide = kF ? 32 : kC ? 16 : kZ ? 16 : 32;
+    const int two = kF ? 16 : kC ? 8 : kZ ? 16 : 32;
+    const int other = kF ? 32 : kC ? 16 : kZ ? 16 : 32;
 
-    for (int nrhs : {1, 4}) {
+    for (int nrhs : {1, 2, 4}) {
         for (int n : {4, 8, 9, 16, 17, 32, 64}) {
             auto p = make_spd<T>(n, nrhs, 4, Uplo::Lower, 12u + unsigned(n));
             auto A = a_view(p); auto Bv = b_view(p);
@@ -441,7 +441,7 @@ TYPED_TEST(PosvTest, AutoTakesTheMeasuredWindow) {
                 << "n=" << n << ": preferred() is not this op's shipping hook";
 
             const bool fits = (n <= sycl_posv::posv_tiny_max_n<T>());
-            const int win = (nrhs >= 3) ? wide : narrow;
+            const int win = (nrhs == 2) ? two : other;
             const auto want = (fits && n <= win) ? dispatch::Algorithm::Tiny
                                                  : dispatch::Algorithm::CTA;
             const auto r = backend::posv_route<B, T>(*this->ctx, A, Bv, Uplo::Lower);
