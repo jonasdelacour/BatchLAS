@@ -37,6 +37,11 @@ Campaigns are stored in `benchviz_runs/<name>/` (git-ignored):
 | `figures/<op>/{speedup_n,throughput_n,heatmap}.{pdf,png}` | The per-op figures |
 | `figures/_summary/summary_<precision>.{pdf,png}` | The cross-op summaries |
 
+`--gpu 0,1` (or both GPU chips in the run panel) splits a campaign's cells across the cards, one
+worker per GPU. Both arms of a cell always run on the same card, so every ratio compares like with
+like. The two workers share the host CPU, so for figures you will publish, prefer one card. Stop kills
+the cell in flight within about half a second, and a stopped campaign resumes where it left off.
+
 Re-running with the same `--campaign` resumes it and only measures the missing cells. Passing
 different `--ops` or `--types` extends it.
 

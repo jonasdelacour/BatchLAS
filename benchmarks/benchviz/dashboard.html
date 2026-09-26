@@ -252,7 +252,7 @@ dialog .acts a, dialog .acts button { font-size: 13px; color: #111; background: 
       <div class="cap"><span id="gcap"></span><span class="muted">n ↓ · batch →</span></div></div>
 
     <div class="g2">
-      <div><div class="lbl">GPU</div><input class="field" id="dgpu" type="number" min="0" value="1"></div>
+      <div><div class="lbl">GPUs <span class="hint">two split the cells</span></div><div class="chips" id="dgpus"></div></div>
       <div><div class="lbl">Campaign</div><input class="field" id="dname" placeholder="new" list="camplist"><datalist id="camplist"></datalist></div>
     </div>
     <p class="msg">Reusing a campaign name resumes it and adds to it. One process per cell and arm on the chosen GPU, behind
@@ -581,6 +581,11 @@ function buildDrawer() {
   $("gorders").oninput = () => { grid.orders = $("gorders").value.trim() || null; custom(); estimate(); };
   $("greps").oninput = () => { grid.reps = +$("greps").value || 1; custom(); estimate(); };
   $("gmem").oninput = () => { grid.mem_gib = +$("gmem").value || 0.25; custom(); estimate(); };
+  const gl = meta.gpus && meta.gpus.length ? meta.gpus : [{ index: 1, name: "" }];
+  const dflt = gl.some(g => g.index === 1) ? 1 : gl[0].index;
+  $("dgpus").innerHTML = gl.map(g => `<button type="button" class="chip ${g.index === dflt ? "on" : ""}" data-g="${g.index}" title="${esc(g.name)}">GPU ${g.index}</button>`).join("");
+  $("dgpus").onclick = (e) => { const b = e.target.closest(".chip"); if (!b) return; b.classList.toggle("on");
+    if (!$("dgpus").querySelector(".chip.on")) b.classList.add("on"); estimate(); };
   loadPreset("quick");
 }
 function loadPreset(k) { grid = { ...meta.presets[k] }; grid.orders = grid.orders ? grid.orders.join(",") : null; grid.batches = grid.batches ? grid.batches.join(",") : null; drawGridForm(); estimate(); }
@@ -604,7 +609,7 @@ function runBody() {
   return { ops: [...$("dops").querySelectorAll("input:checked")].map(i => i.value),
            types: [...$("dtypes").querySelectorAll(".chip.on")].map(b => b.dataset.t),
            preset: "quick", grid: { ...grid, orders: grid.orders || null, batches: grid.batches || null },
-           gpu: +$("dgpu").value, campaign: $("dname").value.trim() };
+           gpus: [...$("dgpus").querySelectorAll(".chip.on")].map(b => +b.dataset.g), campaign: $("dname").value.trim() };
 }
 let estSeq = 0;
 async function estimate() {
@@ -616,7 +621,8 @@ async function estimate() {
   drawPreview(e);
   if (!b.ops.length || !b.types.length) { $("estimate").textContent = "Pick at least one op and one precision."; $("dstart").disabled = true; return; }
   $("dstart").disabled = !e.cells;
-  $("estimate").innerHTML = `<b>${e.arm_cells}</b> arm-cells · about <b>${dur(e.seconds)}</b>`;
+  const ng = b.gpus.length || 1;
+  $("estimate").innerHTML = `<b>${e.arm_cells}</b> arm-cells · about <b>${dur(e.seconds / ng)}</b>${ng > 1 ? ` on ${ng} GPUs` : ""}`;
 }
 function drawPreview(e) {
   const svg = $("gprev");
@@ -646,7 +652,12 @@ $("dstart").onclick = async () => {
   if (j.error) { $("estimate").textContent = j.error; return; }
   openDrawer(false); pinned = false; $("follow").checked = true; setTimeout(() => watch(j.campaign), 500);
 };
-$("stop").onclick = async () => { if (camp && confirm("Stop after the current cell? The campaign can be resumed later.")) await post("/api/stop", { campaign: camp }); };
+$("stop").onclick = async () => {
+  if (!camp) return;
+  $("stop").disabled = true; $("stop").textContent = "Stopping…";
+  await post("/api/stop", { campaign: camp });
+  setTimeout(() => { $("stop").disabled = false; $("stop").textContent = "Stop"; }, 4000);
+};
 
 // ---------------------------------------------------------------- lightbox & boot
 function openLb(base) {

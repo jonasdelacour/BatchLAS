@@ -18,7 +18,9 @@ import os
 import shutil
 import subprocess
 import sys
+import signal
 import tempfile
+import threading
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -80,37 +82,95 @@ def classify(rec: dict, op, arm_key: str) -> dict:
     return rec
 
 
+def detect_gpus(backend: str = "cuda") -> List[dict]:
+    """The GPUs this box actually has: [{index, name}]. Empty when it cannot tell."""
+    if backend != "cuda" or not shutil.which("nvidia-smi"):
+        return []
+    try:
+        out = subprocess.run(["nvidia-smi", "--query-gpu=index,name", "--format=csv,noheader"],
+                             capture_output=True, text=True, timeout=10).stdout
+    except Exception:
+        return []
+    gpus = []
+    for line in out.splitlines():
+        idx, _, name = line.partition(",")
+        if idx.strip().isdigit():
+            gpus.append({"index": int(idx), "name": name.strip()})
+    return gpus
+
+
+class Stopped(Exception):
+    pass
+
+
 class Runner:
-    def __init__(self, camp: Campaign, build_dirs: List[Path], gpu: int, guard: bool,
+    """Runs a campaign on one or more GPUs. With several, each GPU gets its own
+    worker pulling whole cells from one shared queue: both arms of a cell always
+    run on the same card, so every ratio compares like with like."""
+
+    def __init__(self, camp: Campaign, build_dirs: List[Path], gpus, guard: bool,
                  backend: str, log=print):
         self.camp = camp
         self.build_dirs = build_dirs
-        self.gpu = gpu
+        self.gpus = [int(g) for g in (gpus if isinstance(gpus, (list, tuple)) else [gpus])]
         self.guard = guard and shutil.which("nvidia-smi") is not None and backend == "cuda"
         self.backend = backend
         self.log = log
         self.repo = Path(__file__).resolve().parents[2]
-        self._stop = False
+        self._stop = threading.Event()
+        self._lock = threading.Lock()
+        known = detect_gpus(backend)
+        if known:
+            bad = [g for g in self.gpus if g not in {k["index"] for k in known}]
+            if bad:
+                raise ValueError(f"GPU {bad} does not exist; this box has "
+                                 + ", ".join(f"{k['index']} ({k['name']})" for k in known))
 
     def stop(self):
-        self._stop = True
+        self._stop.set()
+
+    def stopping(self) -> bool:
+        if not self._stop.is_set() and self.camp.stop_requested():
+            self._stop.set()
+        return self._stop.is_set()
 
     # ------------------------------------------------------------ one process
-    def _exec(self, argv: List[str], env: Dict[str, str], timeout: float) -> subprocess.CompletedProcess:
+    def _exec(self, gpu: int, argv: List[str], env: Dict[str, str], timeout: float):
+        """One benchmark process in its own process group, polled for a stop
+        request so Stop takes effect within half a second, mid-cell."""
         full_env = {**os.environ, **env}
         if self.guard:
-            argv = [str(self.repo / "benchmarks" / "gpu_guard.sh"), str(self.gpu), *argv]
+            argv = [str(self.repo / "benchmarks" / "gpu_guard.sh"), str(gpu), *argv]
         elif self.backend == "cuda":
-            full_env["CUDA_VISIBLE_DEVICES"] = str(self.gpu)
+            full_env["CUDA_VISIBLE_DEVICES"] = str(gpu)
         else:
-            full_env["ROCR_VISIBLE_DEVICES"] = str(self.gpu)
-        return subprocess.run(argv, env=full_env, capture_output=True, text=True, timeout=timeout)
+            full_env["ROCR_VISIBLE_DEVICES"] = str(gpu)
+        p = subprocess.Popen(argv, env=full_env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             text=True, start_new_session=True)
+        t0 = time.time()
+        while p.poll() is None:
+            if self.stopping() or time.time() - t0 > timeout:
+                try:
+                    os.killpg(p.pid, signal.SIGTERM)
+                    p.wait(3)
+                except (ProcessLookupError, subprocess.TimeoutExpired):
+                    try:
+                        os.killpg(p.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                p.wait()
+                if self._stop.is_set():
+                    raise Stopped()
+                raise subprocess.TimeoutExpired(argv, timeout)
+            time.sleep(0.5)
+        out, err = p.communicate()
+        return subprocess.CompletedProcess(argv, p.returncode, out, err)
 
-    def _run_arm(self, cell: Cell, arm_key: str, reps: int, tmp: str) -> dict:
+    def _run_arm(self, gpu: int, cell: Cell, arm_key: str, reps: int, tmp: str) -> dict:
         op = OPS[cell.op]
         arm = next(a for a in op.arms if a.key == arm_key)
         binary = find_binary(op.binary, self.build_dirs)
-        base = dict(asdict(cell), arm=arm_key, backend=self.backend, t=time.time())
+        base = dict(asdict(cell), arm=arm_key, backend=self.backend, gpu=gpu, t=time.time())
         if binary is None:
             return {**base, "ok": False, "reason": f"binary {op.binary} not built"}
         csv_path = os.path.join(tmp, "out.csv")
@@ -130,11 +190,11 @@ class Runner:
         for attempt in range(3):
             t0 = time.time()
             try:
-                p = self._exec(argv, env, timeout=900)
+                p = self._exec(gpu, argv, env, timeout=900)
             except subprocess.TimeoutExpired:
                 return {**base, "ok": False, "reason": "timeout (900 s)"}
             if p.returncode == GUARD_CONTAMINATED:
-                self.log(f"  GPU {self.gpu} contaminated during the run; retrying ({attempt + 1}/3)")
+                self.log(f"  GPU {gpu} contaminated during the run; retrying ({attempt + 1}/3)")
                 continue
             break
         else:
@@ -169,46 +229,89 @@ class Runner:
         return classify(rec, op, arm_key)
 
     # ------------------------------------------------------------ campaign
+    def _measure(self, gpu: int, cell: Cell, arm: str, reps: int, tmp: str) -> dict:
+        with self._lock:
+            missing = self._failed_ops.get(cell.op, "")
+        if missing:  # an op whose binary is missing fails every cell the same way
+            return dict(asdict(cell), arm=arm, gpu=gpu, ok=False, reason=missing)
+        rec = self._run_arm(gpu, cell, arm, reps, tmp)
+        for _ in range(2):  # factor_bench's noise gate: re-measure rather than leave a hole
+            if rec.get("ok") or "relsd" not in str(rec.get("reason")):
+                break
+            self.log(f"  GPU {gpu}: noisy ({rec['reason']}); re-measuring")
+            rec = self._run_arm(gpu, cell, arm, reps, tmp)
+        if not rec["ok"] and rec["reason"].startswith("binary"):
+            with self._lock:
+                self._failed_ops[cell.op] = rec["reason"]
+        return rec
+
+    def _worker(self, gpu: int, reps: int):
+        tmp = tempfile.mkdtemp(prefix=f"benchviz_gpu{gpu}_")
+        try:
+            while not self.stopping():
+                with self._lock:
+                    if not self._queue:
+                        return
+                    cell, arms = self._queue.pop(0)
+                for arm in arms:
+                    with self._lock:
+                        self._current[gpu] = f"{cell.op} {cell.dtype} n={cell.n} batch={cell.batch} [{arm}]"
+                        self._status()
+                    rec = self._measure(gpu, cell, arm, reps, tmp)
+                    with self._lock:
+                        self.camp.append(rec)
+                        self._done += 1
+                        n = self._done
+                    status = f"{rec['time_ms']:.4f} ms {rec.get('route', '')}" if rec.get("ok") else rec["reason"]
+                    self.log(f"[{n}/{self._total}] GPU {gpu} {cell.op} {cell.dtype} n={cell.n} "
+                             f"batch={cell.batch} {arm}: {status}")
+        except Stopped:
+            pass
+        except Exception as e:  # surface in the dashboard rather than die silently
+            self._errors.append(f"GPU {gpu}: {e!r}")
+            self._stop.set()
+        finally:
+            with self._lock:
+                self._current.pop(gpu, None)
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def _status(self, state: str = "running", **kw):
+        if len(self.gpus) > 1:
+            cur = "  |  ".join(f"GPU {g}: {c}" for g, c in sorted(self._current.items()))
+        else:
+            cur = next(iter(self._current.values()), "")
+        self.camp.set_status(state, done=self._done, total=self._total, current=cur, gpus=self.gpus, **kw)
+
     def run(self):
         cfg = self.camp.config
         grid = Grid.from_config(cfg)
         req = cfg.get("request", cfg)
         cells = plan_cells(req["ops"], req["types"], grid)
         done = self.camp.done_keys()
-        todo = [(c, a.key) for c in cells for a in OPS[c.op].arms if c.key(a.key) not in done]
-        total = len(cells) * 2
-        self.camp.set_status("running", total=total, done=total - len(todo), pid=os.getpid())
-        self.log(f"campaign {self.camp.name}: {len(todo)} of {total} arm-cells to run")
-        tmp = tempfile.mkdtemp(prefix="benchviz_")
-        failed_ops = {}
-        try:
-            for i, (cell, arm) in enumerate(todo):
-                if self._stop or self.camp.stop_requested():
-                    self.camp.set_status("stopped")
-                    self.log("stopped on request")
-                    return
-                self.camp.set_status("running", current=f"{cell.op} {cell.dtype} n={cell.n} "
-                                     f"batch={cell.batch} [{arm}]", done=total - len(todo) + i)
-                # An op whose binary is missing would fail every cell the same way.
-                if failed_ops.get(cell.op, "").startswith("binary"):
-                    rec = dict(asdict(cell), arm=arm, ok=False, reason=failed_ops[cell.op])
-                else:
-                    rec = self._run_arm(cell, arm, grid.reps, tmp)
-                    # factor_bench's noise gate: re-measure rather than leave a hole.
-                    for _ in range(2):
-                        if rec.get("ok") or "relsd" not in str(rec.get("reason")):
-                            break
-                        self.log(f"  noisy ({rec['reason']}); re-measuring")
-                        rec = self._run_arm(cell, arm, grid.reps, tmp)
-                    if not rec["ok"] and rec["reason"].startswith("binary"):
-                        failed_ops[cell.op] = rec["reason"]
-                self.camp.append(rec)
-                status = f"{rec['time_ms']:.4f} ms {rec.get('route', '')}" if rec.get("ok") else rec["reason"]
-                self.log(f"[{total - len(todo) + i + 1}/{total}] {cell.op} {cell.dtype} "
-                         f"n={cell.n} batch={cell.batch} {arm}: {status}")
-            self.camp.set_status("finished", done=total, current="")
-        except Exception as e:  # surface in the dashboard rather than die silently
-            self.camp.set_status("failed", error=repr(e))
-            raise
-        finally:
-            shutil.rmtree(tmp, ignore_errors=True)
+        self._queue = []
+        for c in cells:
+            arms = [a.key for a in OPS[c.op].arms if c.key(a.key) not in done]
+            if arms:
+                self._queue.append((c, arms))
+        self._total = len(cells) * 2
+        self._done = self._total - sum(len(a) for _, a in self._queue)
+        self._current, self._failed_ops, self._errors = {}, {}, []
+        self.camp.set_status("running", total=self._total, done=self._done, pid=os.getpid(),
+                             gpus=self.gpus, error=None, current="")
+        self.log(f"campaign {self.camp.name}: {self._total - self._done} of {self._total} arm-cells to run "
+                 f"on GPU {', '.join(map(str, self.gpus))}")
+        threads = [threading.Thread(target=self._worker, args=(g, grid.reps), daemon=True) for g in self.gpus]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        with self._lock:
+            self._current.clear()
+            if self._errors:
+                self._status("failed", error="; ".join(self._errors))
+                raise RuntimeError(self._errors[0])
+            if self._stop.is_set() and self._queue:
+                self._status("stopped")
+                self.log("stopped on request")
+            else:
+                self._status("finished")

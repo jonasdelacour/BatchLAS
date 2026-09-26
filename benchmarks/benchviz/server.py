@@ -126,7 +126,7 @@ def snapshot(root: Path, name: str) -> dict:
     if st.get("state") == "running" and an["mean_wall"] and st.get("total"):
         eta = (st["total"] - st.get("done", 0)) * an["mean_wall"]
     return {
-        "campaign": name, "config": {**{k: cfg.get(k) for k in ("ops", "types", "preset", "backend", "gpu")},
+        "campaign": name, "config": {**{k: cfg.get(k) for k in ("ops", "types", "preset", "backend", "gpu", "gpus")},
                                      "grid": Grid.from_config(cfg).to_dict()},
         "provenance": cfg.get("provenance", {}), "status": st, "eta_s": eta,
         "rate_per_min": an["rate_per_min"], "per_op": an["per_op"], "failures": an["failures"],
@@ -221,6 +221,7 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/meta":
             return self._json({
                 "read_only": self.read_only,
+                "gpus": __import__("runner").detect_gpus(),
                 "ops": [{"name": k, "title": v.title, "types": list(v.types), "notes": v.notes, "group": v.group, "vendor": list(v.vendor),
                          "orders": list(v.orders), "min_order": v.min_order, "max_order": v.max_order}
                         for k, v in OPS.items()],
@@ -298,8 +299,17 @@ class Handler(BaseHTTPRequestHandler):
             name = b.get("campaign", "")
             if name not in list_campaigns(self.root):
                 return self._json({"error": "no such campaign"}, 404)
-            Campaign(self.root, name).request_stop()
-            return self._json({"ok": True, "note": "stops after the current cell"})
+            camp = Campaign(self.root, name)
+            camp.request_stop()
+            st = camp.status()
+            try:  # a runner that already died cannot honour the request itself
+                os.kill(int(st.get("pid") or 0), 0) if st.get("pid") else None
+                alive = bool(st.get("pid"))
+            except (OSError, ValueError):
+                alive = False
+            if not alive and st.get("state") == "running":
+                camp.set_status("stopped")
+            return self._json({"ok": True})
         if u.path == "/api/replot":
             name = b.get("campaign", "")
             if name not in list_campaigns(self.root):
@@ -318,6 +328,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": f"grid: {e}"}, 400)
         if not ops or not types:
             return self._json({"error": "choose at least one op and one precision"}, 400)
+        from runner import detect_gpus
+        gpus = sorted({int(g) for g in (b.get("gpus") or [b.get("gpu", 1)])})
+        known = {g["index"] for g in detect_gpus()}
+        if known and not set(gpus) <= known:
+            return self._json({"error": f"GPU {gpus} not on this box; it has GPU {sorted(known)}"}, 400)
         name = "".join(ch for ch in str(b.get("campaign") or "") if ch.isalnum() or ch in "-_.") \
             or time.strftime("cuda-%Y%m%d-%H%M%S")
         with _lock:
@@ -326,7 +341,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"error": f"{name} is already running"}, 409)
             cmd = [sys.executable, str(HERE), "run", "--root", str(self.root), "--campaign", name,
                    "--ops", ",".join(ops), "--types", ",".join(types),
-                   "--grid-json", json.dumps(grid.to_dict()), "--gpu", str(int(b.get("gpu", 1)))]
+                   "--grid-json", json.dumps(grid.to_dict()), "--gpu", ",".join(map(str, gpus))]
             for d in self.build_dirs:
                 cmd += ["--build-dir", str(d)]
             (self.root / name).mkdir(parents=True, exist_ok=True)

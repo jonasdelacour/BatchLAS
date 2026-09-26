@@ -74,8 +74,8 @@ def make_campaign(a) -> Campaign:
     name = a.campaign or time.strftime(f"{a.backend}-%Y%m%d-%H%M%S")
     cfg = {
         "ops": ops, "types": types, "preset": a.grid.name, "backend": a.backend,
-        "gpu": a.gpu, "grid": a.grid.to_dict(),
-        "provenance": provenance(a.backend, a.gpu),
+        "gpu": a.gpus[0], "gpus": a.gpus, "grid": a.grid.to_dict(),
+        "provenance": provenance(a.backend, a.gpus[0]),
     }
     return Campaign.create(Path(a.root), name, cfg)
 
@@ -85,6 +85,11 @@ def cmd_run(a):
     from runner import Runner
 
     a.grid = grid_from_args(a)
+    a.gpus = parse_list(a.gpu)
+    from runner import detect_gpus
+    known = {g["index"] for g in detect_gpus(a.backend)}
+    if known and not set(a.gpus) <= known:
+        raise SystemExit(f"--gpu {a.gpu}: this box has GPU {', '.join(map(str, sorted(known)))}")
     cells = plan_cells(_csv_list(a.ops, OPS), _csv_list(a.types, TYPES), a.grid)
     if a.dry_run:
         print(f"grid: {a.grid.to_dict()}")
@@ -105,7 +110,7 @@ def cmd_run(a):
             logf.write(msg + "\n")
             logf.flush()
 
-    runner = Runner(camp, build_dirs, a.gpu, guard=not a.no_guard, backend=a.backend, log=log)
+    runner = Runner(camp, build_dirs, a.gpus, guard=not a.no_guard, backend=a.backend, log=log)
 
     # Replot in the background as rows land, throttled per op: a usetex render
     # of three figures is a couple of seconds, a cell is several.
@@ -217,7 +222,8 @@ def main():
     r.add_argument("--mem-gib", type=float, help="per-arm device-memory budget that caps batch")
     r.add_argument("--grid-json", help="a whole grid as JSON (what the dashboard sends)")
     r.add_argument("--backend", default="cuda", choices=["cuda", "rocm"])
-    r.add_argument("--gpu", type=int, default=1, help="GPU index (default 1: the benchmark card)")
+    r.add_argument("--gpu", default="1", help="GPU index, or a list (0,1) to split the cells across cards; "
+                   "both arms of a cell always share a card (default 1)")
     r.add_argument("--build-dir", action="append", help="where the benchmark binaries are (repeatable)")
     r.add_argument("--no-guard", action="store_true", help="skip gpu_guard.sh (exclusive-GPU check)")
     r.add_argument("--no-plot", action="store_true")
