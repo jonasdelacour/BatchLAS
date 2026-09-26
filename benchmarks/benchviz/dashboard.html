@@ -336,9 +336,21 @@ function watch(name) {
   camp = name; built = null; tblKey = null; $("campaign").value = name;
   try { apply(getSync(`/api/state?c=${encodeURIComponent(name)}`)); } catch (e) {}
   if (es) es.close();
-  es = new EventSource(`/api/events?c=${encodeURIComponent(name)}`);
-  es.onmessage = (ev) => apply(JSON.parse(ev.data));
+  clearInterval(poll); clearTimeout(quiet);
+  // Live updates stream over SSE. Some proxies (Cloudflare tunnels, some port
+  // forwarders) buffer a stream indefinitely, so if nothing arrives within a few
+  // seconds the page polls instead; either way the view updates in place.
+  const q = encodeURIComponent(name);
+  es = new EventSource(`/api/events?c=${q}`);
+  quiet = setTimeout(() => {
+    es.close();
+    poll = setInterval(async () => {
+      try { apply(await (await fetch(`/api/state?c=${q}`)).json()); } catch (e) {}
+    }, 2000);
+  }, 5000);
+  es.onmessage = (ev) => { clearTimeout(quiet); apply(JSON.parse(ev.data)); };
 }
+let poll = null, quiet = null;
 
 function apply(s) {
   if (s.campaigns) fillCampaigns(s.campaigns);
@@ -360,7 +372,7 @@ function renderHeader() {
   text($("rate"), running && S.rate_per_min ? `${S.rate_per_min.toFixed(1)} cells/min` : "");
   text($("eta"), running && S.eta_s ? `${dur(S.eta_s)} left` : "");
   text($("current"), running ? st.current || "" : "");
-  $("stop").hidden = !running;
+  $("stop").hidden = !running || meta.read_only;
 }
 
 function renderRail() {
@@ -647,6 +659,7 @@ $("lb").onclick = (e) => { if (e.target === $("lb")) $("lb").close(); };
 parseHash();
 meta = getSync("/api/meta");
 buildDrawer();
+if (meta.read_only) $("newrun").hidden = true;
 fillCampaigns(meta.campaigns);
 if (!meta.campaigns.length) $("view").innerHTML = `<div class="panel empty">No campaigns yet.&ensp;<button class="btn primary" onclick="openDrawer(true)">Start a run</button></div>`;
 </script>

@@ -192,7 +192,7 @@ def cmd_export(a):
 
 def cmd_serve(a):
     import server
-    server.serve(Path(a.root), a.host, a.port, default_build_dirs())
+    server.serve(Path(a.root), a.host, a.port, default_build_dirs(), read_only=a.read_only, token=a.token or "")
 
 
 def main():
@@ -245,6 +245,8 @@ def main():
     s = sub.add_parser("serve", parents=[common], help="the live dashboard")
     s.add_argument("--host", default="127.0.0.1")
     s.add_argument("--port", type=int, default=8765)
+    s.add_argument("--read-only", action="store_true", help="no starting/stopping runs (for a copy exposed beyond the box)")
+    s.add_argument("--token", help="require this secret as ?t=<token> in the link (then kept in a cookie)")
     s.set_defaults(fn=cmd_serve)
 
     lo = sub.add_parser("list-ops", parents=[common])

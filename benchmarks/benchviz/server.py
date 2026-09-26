@@ -172,6 +172,8 @@ def plan_estimate(b: dict, mean_wall: float) -> dict:
 
 class Handler(BaseHTTPRequestHandler):
     root: Path = Path(".")
+    read_only: bool = False
+    token: str = ""
     build_dirs: list = []
     protocol_version = "HTTP/1.1"
 
@@ -197,13 +199,28 @@ class Handler(BaseHTTPRequestHandler):
         return json.loads(self.rfile.read(n) or b"{}")
 
     # ------------------------------------------------------------ GET
+    def _authorized(self) -> bool:
+        """With a token set, every request needs it: once as ?t=... in the link,
+        then from the cookie that first response sets."""
+        if not self.token:
+            return True
+        import hmac
+        q = parse_qs(urlparse(self.path).query).get("t", [""])[0]
+        cookie = self.headers.get("Cookie", "")
+        have = [c.split("=", 1)[1] for c in cookie.split("; ") if c.startswith("bvt=")]
+        return any(hmac.compare_digest(x, self.token) for x in [q, *have] if x)
+
     def do_GET(self):
+        if not self._authorized():
+            return self._send(403, b"This dashboard needs the full link, including its ?t= token.", "text/plain")
         u = urlparse(self.path)
         q = parse_qs(u.query)
         if u.path in ("/", "/index.html"):
-            return self._send(200, (HERE / "dashboard.html").read_bytes(), "text/html; charset=utf-8")
+            extra = {"Set-Cookie": f"bvt={self.token}; Path=/; HttpOnly; SameSite=Lax; Secure"} if self.token else None
+            return self._send(200, (HERE / "dashboard.html").read_bytes(), "text/html; charset=utf-8", extra)
         if u.path == "/api/meta":
             return self._json({
+                "read_only": self.read_only,
                 "ops": [{"name": k, "title": v.title, "types": list(v.types), "notes": v.notes, "group": v.group, "vendor": list(v.vendor),
                          "orders": list(v.orders), "min_order": v.min_order, "max_order": v.max_order}
                         for k, v in OPS.items()],
@@ -232,33 +249,43 @@ class Handler(BaseHTTPRequestHandler):
         self._send(404, b"not found", "text/plain")
 
     def _events(self, name: str):
+        # Chunked framing: an unframed stream on a keep-alive connection cannot be
+        # delimited, and proxies (cloudflared, VS Code forwarding) stall on it.
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-store")
-        self.send_header("Connection", "keep-alive")
+        self.send_header("X-Accel-Buffering", "no")
+        self.send_header("Transfer-Encoding", "chunked")
         self.end_headers()
-        last = None
-        beat = 0.0
+
+        def chunk(data: bytes):
+            self.wfile.write(f"{len(data):X}\r\n".encode() + data + b"\r\n")
+            self.wfile.flush()
+
+        last, beat = None, time.time()
         try:
             while True:
                 snap = snapshot(self.root, name) if name else {}
                 snap["campaigns"] = list_campaigns(self.root)
                 blob = json.dumps(snap)
                 if blob != last:
-                    self.wfile.write(f"data: {blob}\n\n".encode())
-                    self.wfile.flush()
-                    last = blob
+                    chunk(f"data: {blob}\n\n".encode())
+                    last, beat = blob, time.time()
                 elif time.time() - beat > 15:
-                    self.wfile.write(b": keepalive\n\n")
-                    self.wfile.flush()
+                    chunk(b": keepalive\n\n")
                     beat = time.time()
                 time.sleep(1.0)
         except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True
             return
 
     # ------------------------------------------------------------ POST
     def do_POST(self):
         u = urlparse(self.path)
+        if not self._authorized():
+            return self._json({"error": "forbidden"}, 403)
+        if self.read_only and u.path != "/api/plan":
+            return self._json({"error": "This copy of the dashboard is read-only; start runs from the GPU box."}, 403)
         try:
             b = self._body()
         except Exception:
@@ -312,10 +339,12 @@ class Handler(BaseHTTPRequestHandler):
         return self._json({"ok": True, "campaign": name})
 
 
-def serve(root: Path, host: str, port: int, build_dirs: list):
+def serve(root: Path, host: str, port: int, build_dirs: list, read_only: bool = False, token: str = ""):
     root.mkdir(parents=True, exist_ok=True)
     Handler.root = root
     Handler.build_dirs = build_dirs
+    Handler.read_only = read_only
+    Handler.token = token
     httpd = ThreadingHTTPServer((host, port), Handler)
     httpd.daemon_threads = True
     # Port forwarders (VS Code Remote, ssh -L localhost:...) may dial ::1 rather
