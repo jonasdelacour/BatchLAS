@@ -3890,3 +3890,22 @@ TEST(RouteGeqrf, NativeWalkTakesTinyInTheWindowGaps) {
     tall.m = 12;
     EXPECT_NE(resolve_geqrf_route<float>(kGeqrfAuto, tall, false), kTiny);
 }
+
+// The vendor-free getrf walk for cfloat: CTA to 24, Blocked across 28..32, CTA above --
+// each the measured best native tier. evidence: docs/perf/lu.md#the-right-hand-gather
+TEST(RouteGetrf, CfloatNativeWalkTakesBlockedAcross28To32) {
+    constexpr Route kCta{Origin::Native, Algorithm::CTA};
+    constexpr Route kBlocked{Origin::Native, Algorithm::Blocked};
+    constexpr Route kAuto{Origin::Auto, Algorithm::Auto};
+    using CF = std::complex<float>;
+    for (int64_t n : {20, 24, 40}) {
+        const auto sh = getrf_shape(n, 32768, /*cta_max_n=*/128, /*tiny_max=*/32);
+        EXPECT_EQ(resolve_getrf_route<CF>(kAuto, sh, false), kCta) << "cfloat n=" << n;
+    }
+    for (int64_t n : {28, 32}) {
+        const auto sh = getrf_shape(n, 32768, 128, 32);
+        EXPECT_EQ(resolve_getrf_route<CF>(kAuto, sh, false), kBlocked) << "cfloat n=" << n;
+        // Vendor-present Auto is unchanged: native against native only.
+        EXPECT_TRUE(is_vendor(resolve_getrf_route<CF>(kAuto, sh, true))) << "cfloat n=" << n;
+    }
+}

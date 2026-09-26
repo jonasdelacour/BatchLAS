@@ -14,6 +14,7 @@
 
 #include <sycl/sycl.hpp>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 
@@ -227,6 +228,100 @@ bool lu_laswp_deferred_left_launch(Queue& ctx,
                         while (row >= R) { row -= R; ++col; }
                     }
                     sycl::group_barrier(grp);
+                }
+            });
+    });
+    return true;
+}
+
+template <typename Tag, typename T> class LuLaswpRightGatherKernel;
+
+// The in-loop RIGHT-hand interchange as the same gather: pivots [k0, k0 + L) applied to
+// columns [c_begin, c_begin + ncols), rows [k0, k0 + R). One group per (column tile, item),
+// so it is parallel over columns as well as batch; only rows the permutation MOVES are
+// written back. Returns false having enqueued nothing when a column does not fit.
+// evidence: docs/perf/lu.md#the-right-hand-gather
+template <typename Tag, typename T>
+bool lu_laswp_right_gather_launch(Queue& ctx,
+                                  T* base, int ld, int stride, int batch,
+                                  const int* piv, int piv_stride,
+                                  int k0, int L, int R, int c_begin, int ncols,
+                                  std::size_t slm_budget, int max_wg) {
+    if (batch <= 0 || ncols <= 0 || L <= 0 || R <= 0) return true;
+
+    using DM = sycl_device::DevMap<T>;
+    using D = typename DM::type;
+    static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
+
+    const int ldt = R | 1;
+    const std::size_t int_bytes = static_cast<std::size_t>(R) * sizeof(int);
+    if (slm_budget <= int_bytes) return false;
+    const std::size_t col_bytes = static_cast<std::size_t>(ldt) * sizeof(D);
+    std::size_t data_budget = slm_budget - int_bytes;
+    if (data_budget > kLuLaswpTileCap) data_budget = kLuLaswpTileCap;
+    const int Cs = static_cast<int>(std::min<std::size_t>(data_budget / col_bytes,
+                                                           static_cast<std::size_t>(ncols)));
+    if (Cs <= 0) return false;
+    // Sized below the 48 KB hole by the tile cap, so no padding arm is needed.
+    const std::size_t tile_elems = static_cast<std::size_t>(Cs) * static_cast<std::size_t>(ldt);
+
+    int wg = (max_wg < 256) ? max_wg : 256;
+    if (wg < 32) wg = 32;
+    const int ntile = (ncols + Cs - 1) / Cs;
+
+    D* const bp = reinterpret_cast<D*>(base);
+
+    ctx->submit([&](sycl::handler& h) {
+        sycl::local_accessor<int, 1> idxs(sycl::range<1>(static_cast<std::size_t>(R)), h);
+        sycl::local_accessor<D, 1> tile(sycl::range<1>(tile_elems), h);
+
+        h.parallel_for<LuLaswpRightGatherKernel<Tag, T>>(
+            sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(ntile) *
+                                             static_cast<std::size_t>(batch) *
+                                             static_cast<std::size_t>(wg)),
+                              sycl::range<1>(static_cast<std::size_t>(wg))),
+            [=](sycl::nd_item<1> it) {
+                const auto grp = it.get_group();
+                const int gid = static_cast<int>(it.get_group(0));
+                const int lid = static_cast<int>(it.get_local_id(0));
+                const int t = gid / batch;
+                const int b = gid - t * batch;
+                const int cb = c_begin + t * Cs;
+                const int cw = ((c_begin + ncols - cb) < Cs) ? (c_begin + ncols - cb) : Cs;
+
+                D* const Ab = bp + static_cast<std::ptrdiff_t>(b) * stride;
+                const int* const ip = piv + static_cast<std::ptrdiff_t>(b) * piv_stride;
+
+                for (int i = lid; i < R; i += wg) idxs[i] = i;
+                sycl::group_barrier(grp);
+                // L serial swaps on the int array; clamped as the deferred gather is.
+                if (lid == 0) {
+                    for (int i = 0; i < L; ++i) {
+                        int p = ip[k0 + i] - 1 - k0;
+                        if (p < 0 || p >= R) p = i;
+                        if (p != i) {
+                            const int s = idxs[i];
+                            idxs[i] = idxs[p];
+                            idxs[p] = s;
+                        }
+                    }
+                }
+
+                // Row fastest, the contiguous direction; overlaps the serial phase.
+                for (int e = lid; e < cw * R; e += wg) {
+                    const int col = e / R, row = e - col * R;
+                    tile[static_cast<std::size_t>(col) * ldt + row] =
+                        Ab[static_cast<std::ptrdiff_t>(cb + col) * ld + k0 + row];
+                }
+                sycl::group_barrier(grp);
+
+                for (int e = lid; e < cw * R; e += wg) {
+                    const int col = e / R, row = e - col * R;
+                    const int src = idxs[row];
+                    if (src != row) {
+                        Ab[static_cast<std::ptrdiff_t>(cb + col) * ld + k0 + row] =
+                            tile[static_cast<std::size_t>(col) * ldt + src];
+                    }
                 }
             });
     });

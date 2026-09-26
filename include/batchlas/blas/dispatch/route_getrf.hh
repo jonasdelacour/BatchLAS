@@ -113,6 +113,15 @@ struct RouteTable<Op::getrf, T> {
         return s.tiny_max_n >= 1 && s.order() <= static_cast<int64_t>(s.tiny_max_n);
     }
 
+    // cfloat 28..32: Blocked 0.73 / 0.82x of the vendor where CTA is 0.62 / 0.50x.
+    static bool blocked_band(const GetrfShape& s) {
+        if constexpr (std::is_same_v<T, std::complex<float>>) {
+            return s.blocked_available && s.order() >= 28 && s.order() <= 32;
+        } else {
+            return false;
+        }
+    }
+
     // Native against native: at n <= 8 tiny is ~3x the CTA tier for both single types,
     // so the vendor-free walk takes it even where the vendor ties.
     static bool tiny_native(const GetrfShape& s) {
@@ -140,9 +149,9 @@ struct RouteTable<Op::getrf, T> {
             case Algorithm::Tiny:
                 return tiny_native(s);
             case Algorithm::CTA:
-                return !tiny_native(s) && s.order() <= cta_max_order;
+                return !tiny_native(s) && !blocked_band(s) && s.order() <= cta_max_order;
             case Algorithm::Blocked:
-                return !tiny_native(s) && s.order() > cta_max_order;
+                return !tiny_native(s) && (blocked_band(s) || s.order() > cta_max_order);
             default:
                 return true;
         }

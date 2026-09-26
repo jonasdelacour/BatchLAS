@@ -1119,6 +1119,42 @@ TYPED_TEST(LuTest, LeftInterchangeSpellingsAgreeBitForBit) {
     }
 }
 
+// L2b. The right-hand pass, walk against gather, bit for bit. n = 129 and 300 leave a short
+// final panel and several column tiles per step; batch 37 is odd so the last (tile, item)
+// groups are partial. evidence: docs/perf/lu.md#the-right-hand-gather
+// ARMED BREAK (R9): write every row in lu_laswp_right_gather_launch's store loop from
+// `tile[... + row]` instead of `tile[... + src]`. EXPECTED: RED at every n.
+TYPED_TEST(LuTest, RightInterchangeSpellingsAgreeBitForBit) {
+    using T = typename TestFixture::T;
+    for (int n : {33, 64, 129, 300}) {
+        std::vector<std::vector<T>> facs;
+        std::vector<std::vector<int>> pivs;
+        for (const char* spelling : {"walk", "gather"}) {
+            const ScopedEnvVar pin("BATCHLAS_GETRF_RIGHT_LASWP", spelling);
+            auto p = make_random<T>(n, 37, 5557u + unsigned(n));
+            this->run_blocked(p);
+            check_factor(p, spelling);
+            for (int b = 0; b < p.batch; ++b)
+                ASSERT_EQ(p.info[b], 0) << spelling << " n=" << n << " b=" << b;
+            facs.emplace_back(p.buf.data(), p.buf.data() + p.buf.size());
+            std::vector<int> pv;
+            for (int b = 0; b < p.batch; ++b) {
+                const int* ip = piv_item(p, b);
+                pv.insert(pv.end(), ip, ip + p.n);
+            }
+            pivs.push_back(std::move(pv));
+            if (this->HasFailure()) return;
+        }
+        std::size_t diff = 0;
+        for (std::size_t i = 0; i < facs[0].size(); ++i)
+            if (std::memcmp(&facs[1][i], &facs[0][i], sizeof(T)) != 0) ++diff;
+        EXPECT_EQ(diff, std::size_t(0)) << "n=" << n << ": gather differs from walk in "
+                                        << diff << " of " << facs[0].size() << " elements";
+        EXPECT_EQ(pivs[1], pivs[0]) << "n=" << n;
+        if (this->HasFailure()) return;
+    }
+}
+
 // L3. THE BLOCK BOUNDARY IS QUERIED, NOT ASSUMED. A straddle test that cannot
 // see where the boundary is keeps passing after the width moves while silently
 // no longer testing a short final panel.

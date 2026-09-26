@@ -1898,3 +1898,51 @@ float n = 23 sits between 22 (CTA) and 24 (tiny) and is given to tiny unmeasured
 **Still losing** on every native tier: cfloat 17..32 (batch 32768: tiny 0.37 / 0.50 /
 0.64, CTA 1.02 / 0.80 / 0.50 at n = 17 / 24 / 32) and cfloat 64 / 128 on Blocked.
 Auto routes these to cuSOLVER, so only the vendor-free build pays.
+
+### The right-hand gather
+
+**2026-09-26.** nsys on cfloat n = 128, batch 4096, native blocked getrf: **58% of the
+kernel time was `LuLaswpKernel`**, the in-loop right-hand interchange (S-right), 2.44 ms
+per call against 0.40 ms for the panel and 0.67 ms for the trailing cgemm. S-right was
+still the per-column walk -- consecutive work-items `ld` apart, one sector per element --
+because the in-place gather's `L / R` amortisation was priced to pay only below
+`n - j0 ~ 160` (cfloat).
+
+`lu_laswp_right_gather_launch` (lu_laswp.hh) is that gather with two changes: one group
+per **(column tile, item)**, so it is parallel over columns and not just batch, and only
+rows the permutation **moves** are written back. Both lower its cost enough that the
+crossover moves far past the priced one. Walk vs gather on the pinned blocked route,
+`BATCHLAS_GETRF_RIGHT_LASWP`, `t_walk / t_gather`, every residual ok:
+
+| n (batch) | float | cfloat | double | cdouble |
+|---|---:|---:|---:|---:|
+| 64 (16384) | 1.45 | 1.38 | 1.20 | 1.17 |
+| 128 (8192) | 1.91 | 1.97 | 1.52 | 1.20 |
+| 192 (4096) | 2.54 | 1.87 | 1.50 | 1.17 |
+| 256 (2048) | 2.42 | 1.69 | 1.40 | 1.13 |
+| 384 (1024) | 2.10 | 1.49 | 1.28 | 1.07 |
+| 512 (512) | 1.80 | 1.35 | 1.19 | 1.04 |
+| 1024 (128) | 1.21 | 1.03 | 1.01 | 0.98 |
+| 2048 (32) | 0.95 | 0.88 | 0.94 | 0.99 |
+
+The gate is per block step on the trailing height `R = n - j0` -- the quantity the
+amortisation depends on -- swept at n = 1024 and 2048 over thresholds 256..1024: float
+**1024**, cfloat and double **768**, cdouble **384** (`getrf_right_gather_max_rows`). At
+every swept n the gated arm is within 0.5% of the better of the two pure arms or ahead of
+both. `LuTest.RightInterchangeSpellingsAgreeBitForBit` asserts the two spellings
+bit-identical, batch 37, n = 33 / 64 / 129 / 300.
+
+Native vs cuSOLVER at benchviz's batches (32768 to n = 32, then 16384 / 4096 / 1024 / 256):
+
+| n | getrf float | getrf cfloat | gesv float | gesv cfloat |
+|---:|---|---|---|---|
+| 64 | 1.63 | 0.84 -> **1.17** | 1.62 | 0.87 -> **1.17** |
+| 128 | 1.01 -> **2.04** | 0.56 -> **1.05** | 2.01 | 0.61 -> **1.10** |
+| 256 | 1.47 -> **4.26** | 1.29 -> **2.06** | 3.94 | 2.02 |
+| 512 | 1.90 -> **3.32** | 1.64 -> **2.03** | 3.27 | 2.03 |
+
+**cfloat 28..32** now takes Blocked in the vendor-free walk (`blocked_band`), where it
+measures 0.73 / 0.82x against CTA's 0.62 / 0.50x; gesv cfloat n = 32 moves 0.65 -> 0.94x.
+**Still losing:** cfloat 17..32 on every native tier. The tiny kernel's N = 32 complex
+instantiation is the obvious target: its rank-1 update broadcasts the pivot row with two
+shuffles per complex element.
