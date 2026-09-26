@@ -34,6 +34,7 @@
 #include <batchlas/blas/functions/orgqr.hh>
 #include <batchlas/blas/functions/posv.hh>
 #include <batchlas/blas/functions/potrf.hh>
+#include <batchlas/backend_config.h>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
@@ -57,7 +58,13 @@
 #include <vector>
 
 using namespace batchlas;
+// The vendor arm is whichever vendor library this build links: cuSOLVER/cuBLAS on
+// CUDA, rocSOLVER/rocBLAS on ROCm.
+#if BATCHLAS_HAS_CUDA_BACKEND
 static constexpr Backend BE = Backend::CUDA;
+#else
+static constexpr Backend BE = Backend::ROCM;
+#endif
 
 // ------------------------------------------------------------- promotion
 template <class T> struct Prom { using type = double; };

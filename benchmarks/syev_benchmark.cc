@@ -66,8 +66,16 @@ static void BM_SYEV(minibench::State& state) {
     // :333-386), so a guard scoped here would restore the env before the first timed
     // iteration and every case would measure the tuned default. The reload is what
     // makes the writes visible at all: settings() snapshots the env once, before main().
-    ::setenv("BATCHLAS_SYTRD_BLOCK_SIZE", std::to_string(sytrd_block_size).c_str(), 1);
-    ::setenv("BATCHLAS_SYTRD_FUSE_PANEL_UPDATE", fuse_panel_update ? "1" : "0", 1);
+    // nb = 0 and fuse = 2 leave the knob UNSET, i.e. the tuned default -- what a
+    // library caller gets, and what a BatchLAS-vs-vendor comparison has to measure.
+    if (sytrd_block_size > 0)
+        ::setenv("BATCHLAS_SYTRD_BLOCK_SIZE", std::to_string(sytrd_block_size).c_str(), 1);
+    else
+        ::unsetenv("BATCHLAS_SYTRD_BLOCK_SIZE");
+    if (fuse_panel_update == 2)
+        ::unsetenv("BATCHLAS_SYTRD_FUSE_PANEL_UPDATE");
+    else
+        ::setenv("BATCHLAS_SYTRD_FUSE_PANEL_UPDATE", fuse_panel_update ? "1" : "0", 1);
     batchlas::detail::reload_settings();
 
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);

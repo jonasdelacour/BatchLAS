@@ -1,0 +1,678 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BatchLAS benchviz</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #fafaf9; --surface: #ffffff; --sunken: #f3f3f1; --hover: #f0f0ed;
+  --ink: #16161a; --ink-2: #55545a; --muted: #8e8d93;
+  --hair: #e8e7e4; --hair-2: #dcdbd7;
+  --accent: #1f77b4; --accent-soft: rgba(31,119,180,.09); --on-accent: #fff;
+  --win: #1f77b4; --lose: #8c564b;
+  --good: #2e8b3d; --warn: #b7791f; --bad: #c0392b;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --r: 12px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #111112; --surface: #19191b; --sunken: #141415; --hover: #222225;
+    --ink: #f1f1f0; --ink-2: #bdbcc2; --muted: #807f86; --hair: #2a2a2d; --hair-2: #353538;
+    --accent: #5aa6e6; --accent-soft: rgba(90,166,230,.12); --win: #5aa6e6; --lose: #c89484;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #111112; --surface: #19191b; --sunken: #141415; --hover: #222225;
+  --ink: #f1f1f0; --ink-2: #bdbcc2; --muted: #807f86; --hair: #2a2a2d; --hair-2: #353538;
+  --accent: #5aa6e6; --accent-soft: rgba(90,166,230,.12); --win: #5aa6e6; --lose: #c89484;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; animation: none !important; } }
+html { overflow-y: scroll; }                        /* no width jump when content height changes */
+html, body { margin: 0; }
+body { background: var(--page); color: var(--ink); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased; }
+.mono { font-family: var(--mono); }
+.num { font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted); }
+button, select, input { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.btn { background: transparent; border: 1px solid var(--hair-2); border-radius: 8px; padding: 5px 12px; font-size: 13px;
+  text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }
+.btn:hover { background: var(--hover); }
+.btn.primary { background: var(--ink); border-color: var(--ink); color: var(--surface); font-weight: 600; }
+.btn.primary:hover { opacity: .88; background: var(--ink); }
+.btn.ghost { border-color: transparent; }
+.btn.danger { color: var(--bad); }
+.btn:disabled { opacity: .4; cursor: default; }
+
+/* ---------------------------------------------------------------- header */
+header.top { position: sticky; top: 0; z-index: 20; height: 56px; display: flex; align-items: center; gap: 16px;
+  padding: 0 20px; background: color-mix(in srgb, var(--surface) 88%, transparent); backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--hair); }
+.brand { font-weight: 650; letter-spacing: -.01em; white-space: nowrap; }
+.sel { appearance: none; border: 1px solid var(--hair-2); border-radius: 8px; padding: 5px 28px 5px 10px; background: var(--surface)
+  url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238e8d93' stroke-width='1.5'/%3E%3C/svg%3E") no-repeat right 10px center; }
+.status { flex: 1; display: flex; align-items: center; gap: 14px; min-width: 0; font-size: 13px; color: var(--ink-2); }
+.state { display: inline-flex; align-items: center; gap: 7px; font-weight: 600; color: var(--ink); text-transform: capitalize; white-space: nowrap; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: none; }
+.running .dot { background: var(--accent); animation: pulse 1.6s ease-in-out infinite; }
+.finished .dot, .imported .dot { background: var(--good); }
+.failed .dot, .interrupted .dot { background: var(--bad); }
+.stopped .dot { background: var(--warn); }
+@keyframes pulse { 50% { opacity: .3; } }
+.track { width: 160px; flex: none; height: 4px; background: var(--sunken); border-radius: 2px; overflow: hidden; }
+.track i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .6s ease; }
+.stat-inline { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.current { font-family: var(--mono); font-size: 12px; color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink-2); cursor: pointer; white-space: nowrap; }
+.toggle input { accent-color: var(--accent); }
+@media (max-width: 1100px) { .current, .hide-md { display: none; } }
+@media (max-width: 760px) { .track { width: 60px; } .status .stat-inline:not(.keep) { display: none; } }
+
+/* ---------------------------------------------------------------- layout */
+.shell { display: grid; grid-template-columns: 232px minmax(0, 1fr); }
+@media (max-width: 900px) { .shell { grid-template-columns: 1fr; } nav.rail { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--hair); } }
+nav.rail { position: sticky; top: 56px; height: calc(100vh - 56px); overflow: auto; padding: 16px 10px 24px; border-right: 1px solid var(--hair); }
+.rail .grp { margin: 18px 10px 6px; font-size: 11.5px; font-weight: 600; color: var(--muted); }
+.rail a { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 0 8px; padding: 6px 10px; border-radius: 7px;
+  color: var(--ink-2); text-decoration: none; position: relative; }
+.rail a:hover { background: var(--hover); }
+.rail a.on { background: var(--accent-soft); color: var(--ink); }
+.rail .nm { font-family: var(--mono); font-size: 13px; }
+.rail a.on .nm { font-weight: 600; }
+.rail a.off { opacity: .45; }
+.rail .bar { grid-column: 1 / -1; height: 2px; margin-top: 4px; background: var(--sunken); border-radius: 1px; overflow: hidden; }
+.rail .bar i { display: block; height: 100%; background: var(--accent); transition: width .6s ease; }
+.rail a.live .nm::after { content: ""; display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-radius: 50%;
+  background: var(--accent); vertical-align: 1px; animation: pulse 1.6s ease-in-out infinite; }
+.sp { font-family: var(--mono); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.sp.win { color: var(--win); } .sp.lose { color: var(--lose); }
+
+main.view { padding: 32px 40px 80px; min-width: 0; overflow-anchor: none; }
+.wrap { max-width: 1180px; margin: 0 auto; }
+@media (max-width: 760px) { main.view { padding: 20px 16px 60px; } }
+.head { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+.head h1 { margin: 0; font-size: 24px; font-weight: 650; letter-spacing: -.02em; }
+.head h1 .mono { font-size: 22px; font-weight: 600; }
+.lede { margin: 6px 0 24px; color: var(--muted); font-size: 13.5px; max-width: 80ch; }
+.panel { background: var(--surface); border: 1px solid var(--hair); border-radius: var(--r); }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); margin-bottom: 28px; }
+.stats > div { padding: 16px 20px; border-left: 1px solid var(--hair); min-height: 96px; }
+.stats > div:first-child { border-left: 0; }
+.stats .k { font-size: 12.5px; color: var(--muted); display: flex; justify-content: space-between; }
+.stats .v { font-size: 28px; font-weight: 600; letter-spacing: -.02em; line-height: 1.25; font-variant-numeric: tabular-nums; margin-top: 4px; }
+.stats .v small { font-size: 14px; color: var(--muted); font-weight: 500; letter-spacing: 0; }
+.stats .v.win { color: var(--win); } .stats .v.lose { color: var(--lose); }
+.stats .f { font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.sec { display: flex; align-items: center; gap: 12px; margin: 36px 0 12px; }
+.sec h2 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: -.005em; }
+.sec .sp-grow { flex: 1; }
+
+.seg { display: inline-flex; background: var(--sunken); border-radius: 8px; padding: 2px; gap: 2px; }
+.seg button { border: 0; background: transparent; border-radius: 6px; padding: 4px 11px; font-size: 12.5px; color: var(--ink-2); }
+.seg button.on { background: var(--surface); color: var(--ink); font-weight: 600; box-shadow: 0 0 0 1px var(--hair), 0 1px 2px rgba(0,0,0,.05); }
+
+.figure { padding: 14px; }
+.figbar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+.figbar .when { font-size: 12px; color: var(--muted); margin-left: 4px; }
+.paper { background: #fff; border-radius: 8px; display: flex; align-items: center; justify-content: center; overflow: hidden;
+  min-height: 280px; transition: box-shadow .8s ease; }
+.paper img { display: block; max-width: min(100%, 1080px); max-height: 68vh; width: auto; height: auto; cursor: zoom-in; }
+.paper img[hidden] { display: none; }
+.paper .ph { color: #8e8d93; font-size: 13px; padding: 40px; text-align: center; }
+.paper.fresh { box-shadow: inset 0 0 0 2px var(--accent); }
+
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th { text-align: left; font-weight: 500; font-size: 12px; color: var(--muted); padding: 9px 14px; border-bottom: 1px solid var(--hair);
+  position: sticky; top: 0; background: var(--surface); white-space: nowrap; user-select: none; }
+th.s { cursor: pointer; } th.s:hover { color: var(--ink); }
+td { padding: 8px 14px; border-bottom: 1px solid var(--hair); }
+tbody tr:last-child td { border-bottom: 0; }
+.r { text-align: right; }
+tr.link { cursor: pointer; } tr.link:hover td { background: var(--hover); }
+.scroll { max-height: 440px; overflow: auto; border-radius: var(--r); }
+.route { font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+.sub2 { display: block; font-size: 11px; color: var(--muted); }
+.chips { display: flex; gap: 4px; flex-wrap: wrap; }
+.chip { border: 1px solid var(--hair-2); background: transparent; border-radius: 999px; padding: 3px 11px; font-size: 12.5px; color: var(--ink-2); }
+.chip.on { background: var(--ink); border-color: var(--ink); color: var(--surface); }
+.cols { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 16px; align-items: start; }
+@media (max-width: 1100px) { .cols { grid-template-columns: 1fr; } }
+.feed { list-style: none; margin: 0; padding: 6px 0; }
+.feed li { display: grid; grid-template-columns: 62px minmax(0, 1fr) 64px; gap: 12px; height: 34px; align-items: center; padding: 0 16px;
+  font-size: 12.5px; border-bottom: 1px solid var(--hair); }
+.feed li:last-child { border-bottom: 0; }
+.feed li.blank { color: transparent; }
+.feed .t { color: var(--muted); font-variant-numeric: tabular-nums; }
+.feed .w { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.feed .x { text-align: right; }
+.feed .bad { color: var(--bad); }
+details.panel + details.panel { margin-top: 12px; }
+details > summary { padding: 12px 16px; cursor: pointer; font-weight: 600; font-size: 13px; list-style: none; display: flex; align-items: center; gap: 8px; }
+details > summary::-webkit-details-marker { display: none; }
+details > summary::after { content: ""; margin-left: auto; width: 7px; height: 7px; border-right: 1.5px solid var(--muted);
+  border-bottom: 1.5px solid var(--muted); transform: rotate(45deg); transition: transform .15s; }
+details[open] > summary::after { transform: rotate(-135deg); }
+pre.log { margin: 0; padding: 12px 16px; height: 300px; overflow: auto; font: 12px/1.6 var(--mono); color: var(--ink-2);
+  background: var(--sunken); border-top: 1px solid var(--hair); white-space: pre-wrap; border-radius: 0 0 var(--r) var(--r); }
+.empty { padding: 44px 20px; text-align: center; color: var(--muted); }
+
+/* ---------------------------------------------------------------- drawer */
+.scrim { position: fixed; inset: 0; background: rgba(10,10,12,.28); z-index: 40; opacity: 0; pointer-events: none; transition: opacity .2s; }
+.scrim.on { opacity: 1; pointer-events: auto; }
+aside.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(520px, 100vw); background: var(--surface); z-index: 50;
+  border-left: 1px solid var(--hair); transform: translateX(100%); transition: transform .22s ease; display: flex; flex-direction: column; }
+aside.drawer.on { transform: none; box-shadow: -20px 0 60px rgba(0,0,0,.12); }
+.dh { display: flex; align-items: center; padding: 16px 22px; border-bottom: 1px solid var(--hair); }
+.dh h3 { margin: 0; font-size: 16px; flex: 1; }
+.db { padding: 6px 22px 24px; overflow: auto; flex: 1; }
+.df { padding: 14px 22px; border-top: 1px solid var(--hair); display: flex; gap: 12px; align-items: center; }
+.lbl { display: flex; align-items: baseline; gap: 10px; font-size: 12.5px; font-weight: 600; color: var(--ink); margin: 22px 0 8px; }
+.lbl .hint { font-weight: 400; color: var(--muted); }
+.lbl a { margin-left: auto; font-weight: 400; color: var(--accent); cursor: pointer; font-size: 12px; }
+.opgrp { font-size: 11.5px; color: var(--muted); margin: 10px 0 6px; display: flex; }
+.opgrp a { margin-left: auto; color: var(--accent); cursor: pointer; }
+.opgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.opc { display: flex; flex-direction: column; padding: 7px 10px; border: 1px solid var(--hair); border-radius: 8px; cursor: pointer; min-width: 0; }
+.opc input { position: absolute; opacity: 0; pointer-events: none; }
+.opc b { font-family: var(--mono); font-size: 12.5px; font-weight: 600; }
+.opc span { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.opc:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.field { width: 100%; border: 1px solid var(--hair-2); border-radius: 8px; padding: 6px 10px; background: var(--surface); font-size: 13px; }
+.field.mono { font-family: var(--mono); font-size: 12.5px; }
+.field.err { border-color: var(--bad); }
+.g2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.g3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+.fl { font-size: 11.5px; color: var(--muted); margin: 10px 0 4px; display: block; }
+.preview { margin-top: 14px; padding: 12px; background: var(--sunken); border-radius: 10px; }
+.preview svg { display: block; width: 100%; height: auto; }
+.preview .cap { font-size: 12px; color: var(--ink-2); margin-top: 6px; display: flex; justify-content: space-between; gap: 10px; }
+.est { font-size: 13px; color: var(--ink-2); }
+.est b { color: var(--ink); }
+.msg { font-size: 12px; color: var(--muted); margin-top: 18px; line-height: 1.55; }
+dialog { border: 0; padding: 0; background: transparent; max-width: 96vw; }
+dialog::backdrop { background: rgba(0,0,0,.6); }
+dialog .box { background: #fff; border-radius: 10px; padding: 14px; }
+dialog img { max-width: 92vw; max-height: 82vh; display: block; }
+dialog .acts { display: flex; gap: 8px; justify-content: flex-end; margin-top: 10px; }
+dialog .acts a, dialog .acts button { font-size: 13px; color: #111; background: #fff; border: 1px solid #dcdbd7; border-radius: 7px; padding: 5px 12px; text-decoration: none; }
+</style>
+</head>
+<body>
+<header class="top">
+  <span class="brand">BatchLAS</span>
+  <select class="sel" id="campaign" aria-label="Campaign"></select>
+  <div class="status">
+    <span class="state" id="state"><span class="dot"></span><span>idle</span></span>
+    <span class="track hide-md"><i id="fill"></i></span>
+    <span class="stat-inline keep" id="count"></span>
+    <span class="stat-inline" id="rate"></span>
+    <span class="stat-inline keep" id="eta"></span>
+    <span class="current" id="current"></span>
+  </div>
+  <label class="toggle hide-md" title="Jump to the op being measured"><input type="checkbox" id="follow" checked> Follow</label>
+  <button class="btn danger" id="stop" hidden>Stop</button>
+  <button class="btn primary" id="newrun">New run</button>
+  <button class="btn ghost" id="theme" title="Toggle theme" aria-label="Toggle theme">◐</button>
+</header>
+
+<div class="shell">
+  <nav class="rail" id="rail"></nav>
+  <main class="view"><div class="wrap" id="view"></div></main>
+</div>
+
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" aria-label="New run">
+  <div class="dh"><h3>New run</h3><button class="btn ghost" id="dclose" aria-label="Close">✕</button></div>
+  <div class="db">
+    <div class="lbl">Operations</div>
+    <div id="dops"></div>
+    <div class="lbl">Precision</div>
+    <div class="chips" id="dtypes"></div>
+
+    <div class="lbl">Grid <span class="hint">start from a preset, then adjust</span></div>
+    <div class="seg" id="dpreset"></div>
+    <label class="fl" for="gorders">Orders n <span class="muted">— blank uses each op's own ladder · <span class="mono">16,32</span>, <span class="mono">4:512</span> doubles, <span class="mono">8:128:8</span> steps</span></label>
+    <input class="field mono" id="gorders" placeholder="op defaults">
+    <label class="fl">Batch</label>
+    <div class="seg" id="gmode"></div>
+    <div id="gbatch"></div>
+    <div class="g2">
+      <div><label class="fl" for="greps">Timed reps</label><input class="field" id="greps" type="number" min="1"></div>
+      <div><label class="fl" for="gmem">Memory budget per arm [GiB]</label><input class="field" id="gmem" type="number" min="0.25" step="0.25"></div>
+    </div>
+    <div class="preview"><svg id="gprev" viewBox="0 0 460 120" role="img" aria-label="Grid preview"></svg>
+      <div class="cap"><span id="gcap"></span><span class="muted">n ↓ · batch →</span></div></div>
+
+    <div class="g2">
+      <div><div class="lbl">GPUs <span class="hint">two split the cells</span></div><div class="chips" id="dgpus"></div></div>
+      <div><div class="lbl">Campaign</div><input class="field" id="dname" placeholder="new" list="camplist"><datalist id="camplist"></datalist></div>
+    </div>
+    <p class="msg">Reusing a campaign name resumes it and adds to it. One process per cell and arm on the chosen GPU, behind
+      <span class="mono">gpu_guard.sh</span>. BatchLAS is pinned <span class="mono">native</span>; a cell whose route does not match its arm is dropped.</p>
+  </div>
+  <div class="df"><span class="est" id="estimate"></span><span style="flex:1"></span><button class="btn primary" id="dstart">Start</button></div>
+</aside>
+
+<dialog id="lb"><div class="box"><img id="lbimg" alt="">
+  <div class="acts"><a id="lbpdf" download>PDF</a><a id="lbpng" download>PNG</a><button id="lbclose">Close</button></div>
+</div></dialog>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+const PREC = { float: ["Single", "S"], double: ["Double", "D"], cfloat: ["Complex single", "C"], cdouble: ["Complex double", "Z"] };
+const PORD = Object.keys(PREC);
+const FIGS = [["speedup_n", "Speedup vs n"], ["throughput_n", "Throughput"], ["heatmap", "n × batch"]];
+let meta = null, S = null, es = null, camp = null, route = { page: "overview" }, pinned = false, built = null;
+let figTab = "speedup_n", sumTab = null, tblFilter = "all", tblSort = ["n", 1], tblKey = null;
+
+// ---------------------------------------------------------------- utils
+const fmtX = (v) => v == null ? "—" : (v >= 9.95 ? v.toFixed(0) : v >= 0.995 ? v.toFixed(2) : v.toFixed(3)) + "×";
+const cls = (v) => v == null ? "" : v >= 1 ? "win" : "lose";
+const fmtMs = (v) => v == null ? "—" : v >= 100 ? v.toFixed(0) : v >= 1 ? v.toFixed(2) : v.toFixed(4);
+const clock = (t) => t ? new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }) : "";
+const pfx = (t) => PREC[t] ? PREC[t][1] : t;
+const vendOf = (op) => { const o = meta && meta.ops.find(x => x.name === op); return o ? o.vendor[S && S.config.backend === "rocm" ? 1 : 0] : "vendor"; };
+function dur(s) {
+  if (s == null || !isFinite(s)) return "—";
+  s = Math.round(s); if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60), h = Math.floor(m / 60);
+  return h ? `${h}h ${String(m % 60).padStart(2, "0")}m` : `${m}m ${String(s % 60).padStart(2, "0")}s`;
+}
+function getSync(url) { const x = new XMLHttpRequest(); x.open("GET", url, false); x.send(); return JSON.parse(x.responseText); }
+async function post(url, body) { return (await fetch(url, { method: "POST", body: JSON.stringify(body) })).json(); }
+const figUrl = (path, v) => `/fig/${encodeURIComponent(camp)}/${path}${v ? `?v=${v}` : ""}`;
+// Replace an element's content only when it actually changed: the whole fix for
+// the page jumping on every event is never to touch a node that did not change.
+function patch(el, html) { if (el && el.__h !== html) { el.innerHTML = html; el.__h = html; } }
+function text(el, t) { if (el && el.textContent !== t) el.textContent = t; }
+
+// ---------------------------------------------------------------- theme
+function setTheme(t) { t ? document.documentElement.dataset.theme = t : delete document.documentElement.dataset.theme;
+  try { t ? localStorage.setItem("bv-theme", t) : localStorage.removeItem("bv-theme"); } catch (e) {} }
+try { const t = localStorage.getItem("bv-theme"); if (t) setTheme(t); } catch (e) {}
+$("theme").onclick = () => {
+  const d = document.documentElement.dataset.theme === "dark" || (!document.documentElement.dataset.theme && matchMedia("(prefers-color-scheme: dark)").matches);
+  setTheme(d ? "light" : "dark");
+};
+
+// ---------------------------------------------------------------- routing & campaigns
+function parseHash() {
+  const h = location.hash.replace(/^#\/?/, "").split("/");
+  if (h[0] === "new") {  // a link that opens the run panel directly, without the slide-in
+    history.replaceState(null, "", "#/overview");
+    $("drawer").style.transition = "none"; setTimeout(() => { openDrawer(true); setTimeout(() => $("drawer").style.transition = "", 50); }, 0);
+  }
+  route = h[0] === "op" && h[1] ? { page: "op", op: h[1] } : { page: "overview" };
+}
+window.addEventListener("hashchange", () => { parseHash(); built = null; render(); window.scrollTo(0, 0); });
+$("rail").addEventListener("click", () => { if (S && S.status.state === "running") { pinned = true; $("follow").checked = false; } });
+$("follow").onchange = () => { pinned = !$("follow").checked; if (!pinned && S) apply(S); };
+
+function fillCampaigns(list) {
+  const sel = $("campaign"), cur = [...sel.options].map(o => o.value).join("|");
+  if (cur !== list.join("|")) {
+    sel.innerHTML = list.length ? list.map(c => `<option>${esc(c)}</option>`).join("") : `<option value="">no campaigns</option>`;
+    $("camplist").innerHTML = list.map(c => `<option value="${esc(c)}">`).join("");
+    if (camp) sel.value = camp;
+  }
+  if (!camp && list.length) {
+    const want = new URLSearchParams(location.search).get("c");
+    watch(want && list.includes(want) ? want : list[0]);
+  }
+}
+$("campaign").onchange = (e) => watch(e.target.value);
+function watch(name) {
+  if (!name) return;
+  camp = name; built = null; tblKey = null; $("campaign").value = name;
+  try { apply(getSync(`/api/state?c=${encodeURIComponent(name)}`)); } catch (e) {}
+  if (es) es.close();
+  clearInterval(poll); clearTimeout(quiet);
+  // Live updates stream over SSE. Some proxies (Cloudflare tunnels, some port
+  // forwarders) buffer a stream indefinitely, so if nothing arrives within a few
+  // seconds the page polls instead; either way the view updates in place.
+  const q = encodeURIComponent(name);
+  es = new EventSource(`/api/events?c=${q}`);
+  quiet = setTimeout(() => {
+    es.close();
+    poll = setInterval(async () => {
+      try { apply(await (await fetch(`/api/state?c=${q}`)).json()); } catch (e) {}
+    }, 2000);
+  }, 5000);
+  es.onmessage = (ev) => { clearTimeout(quiet); apply(JSON.parse(ev.data)); };
+}
+let poll = null, quiet = null;
+
+function apply(s) {
+  if (s.campaigns) fillCampaigns(s.campaigns);
+  if (!s.campaign || s.missing || s.campaign !== camp) return;
+  S = s;
+  const live = liveOp();
+  if (live && !pinned && (route.page !== "op" || route.op !== live)) { location.hash = `#/op/${live}`; return; }
+  render();
+}
+const liveOp = () => S && S.status.state === "running" && S.status.current ? S.status.current.split(" ")[0] : null;
+
+// ---------------------------------------------------------------- header & rail
+function renderHeader() {
+  const st = S.status, state = st.state || "idle", running = state === "running";
+  $("state").className = "state " + state; text($("state").lastElementChild, state);
+  const done = running ? (st.done ?? 0) : S.rows, total = running ? (st.total ?? S.planned) : Math.max(S.planned, S.rows);
+  $("fill").style.width = total ? `${(100 * Math.min(done, total) / total).toFixed(1)}%` : "0";
+  patch($("count"), total ? `<b style="color:var(--ink)">${done}</b> / ${total}` : "");
+  text($("rate"), running && S.rate_per_min ? `${S.rate_per_min.toFixed(1)} cells/min` : "");
+  text($("eta"), running && S.eta_s ? `${dur(S.eta_s)} left` : "");
+  text($("current"), running ? st.current || "" : "");
+  $("stop").hidden = !running || meta.read_only;
+}
+
+function renderRail() {
+  const live = liveOp(), groups = {};
+  meta.ops.forEach(o => (groups[o.group] ||= []).push(o));
+  let h = `<a href="#/overview" class="${route.page === "overview" ? "on" : ""}"><span style="font-weight:600;color:var(--ink)">Overview</span><span></span></a>`;
+  for (const [g, ops] of Object.entries(groups)) {
+    h += `<div class="grp">${esc(g)}</div>`;
+    for (const o of ops) {
+      const p = S.per_op[o.name], on = route.page === "op" && route.op === o.name;
+      const frac = p && p.planned ? (p.ok + p.failed) / p.planned : 0;
+      h += `<a href="#/op/${o.name}" class="${on ? "on" : ""}${p ? "" : " off"}${live === o.name ? " live" : ""}">
+        <span class="nm">${o.name}</span><span class="sp ${cls(p && p.geomean)}">${p && p.geomean ? fmtX(p.geomean) : ""}</span>
+        ${p && frac < 1 ? `<span class="bar"><i style="width:${(100 * frac).toFixed(1)}%"></i></span>` : ""}</a>`;
+    }
+  }
+  patch($("rail"), h);
+}
+
+// ---------------------------------------------------------------- figure panel (in-place image swaps)
+function figShell(id, tabs) {
+  return `<div class="panel figure"><div class="figbar">${tabs}<span class="when" id="${id}-when"></span><span style="flex:1"></span>
+    <span id="${id}-dl"></span></div><div class="paper" id="${id}-paper"><img id="${id}-img" alt="" hidden><div class="ph" id="${id}-ph">No figure yet.</div></div></div>`;
+}
+function updateFig(id, group, name) {
+  const f = S.figures.find(x => x.group === group && x.name === name);
+  const img = $(`${id}-img`), ph = $(`${id}-ph`), paper = $(`${id}-paper`);
+  if (!img) return;
+  if (!f) {
+    img.hidden = true; ph.hidden = false; img.removeAttribute("src"); img.__k = null;
+    text(ph, S.status.state === "running" ? "Renders once both arms of a cell have landed." : "No figure yet.");
+    patch($(`${id}-dl`), ""); text($(`${id}-when`), ""); return;
+  }
+  const base = f.path.replace(/\.png$/, ""), key = `${camp}|${f.path}|${f.mtime}`;
+  patch($(`${id}-dl`), `<a class="btn" href="${figUrl(base + ".pdf")}" download>PDF</a><a class="btn" href="${figUrl(base + ".png")}" download>PNG</a>`);
+  text($(`${id}-when`), `rendered ${clock(f.mtime)}`);
+  if (img.__k === key) return;
+  const sameFig = img.__k && img.__k.split("|").slice(0, 2).join("|") === `${camp}|${f.path}`;
+  const pre = new Image();
+  pre.onload = () => {
+    if ($(`${id}-img`) !== img) return;
+    img.src = pre.src; img.hidden = false; ph.hidden = true;
+    img.onclick = () => openLb(base);
+    if (sameFig) { paper.classList.add("fresh"); setTimeout(() => paper.classList.remove("fresh"), 900); }
+  };
+  pre.src = figUrl(f.path, f.mtime);
+  img.__k = key;
+}
+function segHTML(items, cur, fn) {
+  return `<div class="seg">${items.map(([k, l]) => `<button class="${k === cur ? "on" : ""}" data-k="${k}" onclick="${fn}('${k}')">${l}</button>`).join("")}</div>`;
+}
+function setSeg(root, k) { root && root.querySelectorAll(".seg button").forEach(b => b.classList.toggle("on", b.dataset.k === k)); }
+function setFig(k) { figTab = k; setSeg($("opfig"), k); updateFig("of", route.op, k); }
+function setSum(k) { sumTab = k; setSeg($("ovfig"), k); updateFig("sf", "_summary", `summary_${k}`); }
+
+// ---------------------------------------------------------------- views
+function render() {
+  if (!S || !meta) return;
+  renderHeader(); renderRail();
+  const key = `${camp}|${route.page}|${route.op || ""}`;
+  if (built !== key) { built = key; tblKey = null; route.page === "op" ? buildOp() : buildOverview(); }
+  route.page === "op" ? updateOp() : updateOverview();
+}
+
+function buildOverview() {
+  $("view").innerHTML = `<div class="head"><h1>Overview</h1></div><p class="lede" id="ov-lede"></p>
+    <div class="panel stats" id="ov-stats"></div>
+    <div class="sec"><h2>Speedup at saturation</h2></div>
+    <div class="panel"><div id="ov-table"></div></div>
+    <div class="sec"><h2>Summary figure</h2></div><div id="ovfig"></div>
+    <div class="sec"><h2>Activity</h2></div><div id="act"></div>`;
+  $("act").innerHTML = activityShell();
+}
+function updateOverview() {
+  const p = S.provenance || {};
+  const types = PORD.filter(t => (S.config.types || []).includes(t));
+  const ops = meta.ops.filter(o => S.per_op[o.name]);
+  const all = ops.map(o => S.per_op[o.name]), measured = all.filter(q => q.geomean);
+  const gm = measured.length ? Math.exp(measured.reduce((a, q) => a + Math.log(q.geomean), 0) / measured.length) : null;
+  const wins = measured.filter(q => q.geomean >= 1).length;
+  const failed = all.reduce((a, q) => a + q.failed, 0), ok = all.reduce((a, q) => a + q.ok, 0);
+  patch($("ov-lede"), `Speedup is vendor time (cuSOLVER, cuBLAS or cuSPARSE, per op) divided by BatchLAS time, at the largest batch where both arms were measured; above 1× BatchLAS is faster.
+    <br><span class="muted">${esc([p.device, p.driver && `driver ${p.driver}`, p.git_sha && `BatchLAS ${p.git_sha}${p.git_dirty ? " (dirty)" : ""}`,
+    S.config.grid && `${S.config.grid.name} grid`, p.started && `started ${p.started}`].filter(Boolean).join("  ·  "))}</span>`);
+  patch($("ov-stats"), `
+    <div><div class="k">Geomean speedup</div><div class="v ${cls(gm)}">${fmtX(gm)}</div><div class="f">over ${measured.length} ops, every precision</div></div>
+    <div><div class="k">Ops where BatchLAS wins</div><div class="v">${wins}<small> / ${measured.length}</small></div><div class="f">by geomean</div></div>
+    <div><div class="k">Arm-cells measured</div><div class="v">${ok}<small> / ${S.planned}</small></div><div class="f">verified or timed</div></div>
+    <div><div class="k">Failed or dropped</div><div class="v" ${failed ? 'style="color:var(--bad)"' : ""}>${failed}</div><div class="f">verification, noise, route</div></div>`);
+  patch($("ov-table"), ops.length ? `<table><thead><tr><th>Operation</th>${types.map(t => `<th class="r">${PREC[t][0]}</th>`).join("")}<th class="r">Cells</th></tr></thead>
+    <tbody>${ops.map(o => { const q = S.per_op[o.name];
+      return `<tr class="link" onclick="location.hash='#/op/${o.name}'"><td><span class="mono">${o.name}</span><span class="sub2">${esc(o.title)}</span></td>` +
+        types.map(t => { const x = q.prec[t]; return `<td class="r">${x ? `<span class="sp ${cls(x.geomean)}">${fmtX(x.geomean)}</span><span class="sub2 num">${fmtX(x.min)} – ${fmtX(x.max)}</span>` : `<span class="muted">—</span>`}</td>`; }).join("") +
+        `<td class="r num muted">${q.ok + q.failed} / ${q.planned}</td></tr>`; }).join("")}</tbody></table>` : `<div class="empty">No measurements yet.</div>`);
+  if (!sumTab || !types.includes(sumTab)) sumTab = types[0];
+  const segKey = types.join(",");
+  if ($("ovfig").__k !== segKey) { $("ovfig").__k = segKey; $("ovfig").innerHTML = figShell("sf", types.length > 1 ? segHTML(types.map(t => [t, PREC[t][0]]), sumTab, "setSum") : ""); }
+  if (sumTab) updateFig("sf", "_summary", `summary_${sumTab}`);
+  updateActivity(null);
+}
+
+function buildOp() {
+  const o = meta.ops.find(x => x.name === route.op);
+  if (!o) { location.hash = "#/overview"; return; }
+  $("view").innerHTML = `<div class="head"><h1><span class="mono">${o.name}</span>&ensp;${esc(o.title)}</h1><span class="muted num" id="op-count"></span></div>
+    <p class="lede">${o.notes ? esc(o.notes) + ". " : ""}BatchLAS pinned native against ${esc(vendOf(o.name))}; speedup at the saturated batch.</p>
+    <div id="op-body"></div>`;
+}
+function updateOp() {
+  const o = meta.ops.find(x => x.name === route.op), p = S.per_op[route.op];
+  if (!o) return;
+  text($("op-count"), p ? `${p.ok + p.failed} / ${p.planned} arm-cells` : "");
+  const body = $("op-body");
+  if (!p) { patch(body, `<div class="panel empty">Not part of this campaign. Start a run with <span class="mono">${o.name}</span> selected; reuse this campaign's name to add it here.</div>`); return; }
+  if (!$("op-stats")) {
+    body.innerHTML = `<div class="panel stats" id="op-stats"></div><div id="opfig"></div>
+      <div class="sec"><h2>Measurements</h2><span class="sp-grow"></span><div class="chips" id="tf"></div></div>
+      <div class="panel"><div class="scroll" id="tbl"><div class="empty">Loading…</div></div></div>
+      <div class="sec"><h2>Activity</h2></div><div id="act"></div>`;
+    $("opfig").innerHTML = figShell("of", segHTML(FIGS, figTab, "setFig"));
+    $("act").innerHTML = activityShell();
+    body.__h = null;
+  }
+  const types = PORD.filter(t => p.prec[t]);
+  patch($("op-stats"), types.length ? types.map(t => { const q = p.prec[t];
+    return `<div><div class="k"><span>${PREC[t][0]}</span><span class="mono">${PREC[t][1]}</span></div><div class="v ${cls(q.geomean)}">${fmtX(q.geomean)}</div>
+      <div class="f">${fmtX(q.min)} – ${fmtX(q.max)} · faster at ${q.wins} of ${q.n}</div></div>`; }).join("")
+    : `<div><div class="k">Speedup</div><div class="v">—</div><div class="f">no paired cells yet</div></div>`);
+  updateFig("of", route.op, figTab);
+  patch($("tf"), ["all", ...types].map(t => `<button class="chip ${tblFilter === t ? "on" : ""}" data-t="${t}" onclick="setFilter('${t}')">${t === "all" ? "All" : PREC[t][0]}</button>`).join(""));
+  const k = `${camp}|${route.op}|${p.ok}`;
+  if (tblKey !== k) { tblKey = k; loadTable(route.op); }
+  updateActivity(route.op);
+}
+
+let tblData = null;
+async function loadTable(op) {
+  const r = await fetch(`/api/op?c=${encodeURIComponent(camp)}&op=${op}`).then(r => r.json());
+  if (route.op !== op) return;
+  tblData = r.rows; drawTable();
+}
+function setFilter(t) { tblFilter = t; $("tf").querySelectorAll(".chip").forEach(b => b.classList.toggle("on", b.dataset.t === t)); drawTable(); }
+function sortBy(k) { tblSort = [k, tblSort[0] === k ? -tblSort[1] : 1]; drawTable(); }
+function drawTable() {
+  const el = $("tbl"); if (!el || !tblData) return;
+  const [k, dir] = tblSort, v = (r) => k === "dtype" ? PORD.indexOf(r.dtype) : r[k];
+  const rows = tblData.filter(r => tblFilter === "all" || r.dtype === tblFilter)
+    .sort((a, b) => (v(a) > v(b) ? 1 : v(a) < v(b) ? -1 : 0) * dir || PORD.indexOf(a.dtype) - PORD.indexOf(b.dtype) || a.batch - b.batch);
+  if (!rows.length) { patch(el, `<div class="empty">No paired measurements yet.</div>`); return; }
+  const vend = esc(vendOf(route.op));
+  const th = (key, l, r) => `<th class="s${r ? " r" : ""}" onclick="sortBy('${key}')">${l}${k === key ? (dir > 0 ? " ↑" : " ↓") : ""}</th>`;
+  const top = el.scrollTop;
+  patch(el, `<table><thead><tr>${th("dtype", "Precision")}${th("n", "n", 1)}${th("batch", "Batch", 1)}${th("time_ms_batchlas", "BatchLAS [ms]", 1)}${th("time_ms_vendor", `${vend} [ms]`, 1)}${th("speedup", "Speedup", 1)}<th>Routes</th></tr></thead>
+    <tbody>${rows.map(r => `<tr><td>${PREC[r.dtype] ? PREC[r.dtype][0] : esc(r.dtype)}</td><td class="r num">${r.n}</td><td class="r num">${r.batch}</td>
+      <td class="r num">${fmtMs(r.time_ms_batchlas)}</td><td class="r num">${fmtMs(r.time_ms_vendor)}</td>
+      <td class="r"><span class="sp ${cls(r.speedup)}">${fmtX(r.speedup)}</span></td>
+      <td class="route">${esc(r.route_batchlas)}<span class="sub2">${esc(r.route_vendor)}</span></td></tr>`).join("")}</tbody></table>`);
+  el.scrollTop = top;
+}
+
+// ---------------------------------------------------------------- activity (fixed height: 10 rows, always)
+const FEED_ROWS = 10;
+function activityShell() {
+  return `<div class="cols"><div class="panel"><ul class="feed" id="feed"></ul></div><div>
+    <details class="panel" id="failbox"><summary>Failed or dropped <span class="muted num" id="failn" style="font-weight:400"></span></summary><div class="scroll" id="fails" style="max-height:300px"></div></details>
+    <details class="panel" id="logbox"><summary>Run log</summary><pre class="log" id="log"></pre></details></div></div>`;
+}
+function updateActivity(op) {
+  const act = S.activity.filter(a => !op || a.op === op).slice(0, FEED_ROWS);
+  let h = act.map(a => `<li><span class="t">${clock(a.t)}</span>
+    <span class="w"><span class="mono">${a.op}</span> ${pfx(a.dtype)} · n ${a.n} · batch ${a.batch} · <span class="muted">${a.arm}</span>
+    ${a.ok ? `<span class="muted num"> ${fmtMs(a.time_ms)} ms</span>` : ` <span class="bad">${esc(a.reason)}</span>`}</span>
+    <span class="x sp ${cls(a.speedup)}">${a.speedup ? fmtX(a.speedup) : ""}</span></li>`).join("");
+  for (let i = act.length; i < FEED_ROWS; i++) h += `<li class="blank">·</li>`;
+  patch($("feed"), h);
+  const fails = S.failures.filter(f => !op || f.op === op).slice().reverse();
+  text($("failn"), String(fails.length));
+  patch($("fails"), fails.length ? `<table><tbody>${fails.map(f => `<tr><td class="num" style="white-space:nowrap"><span class="mono">${f.op}</span> ${pfx(f.dtype)} n ${f.n} · ${f.batch}</td><td>${f.arm}</td><td>${esc(f.reason)}</td></tr>`).join("")}</tbody></table>`
+    : `<div class="empty" style="padding:18px">None.</div>`);
+  const log = $("log"), atEnd = log.scrollHeight - log.scrollTop - log.clientHeight < 24;
+  const t = S.log.join("\n");
+  if (log.textContent !== t) { log.textContent = t; if (atEnd) log.scrollTop = log.scrollHeight; }
+}
+
+// ---------------------------------------------------------------- drawer: ops, precision, grid
+let grid = null;
+function openDrawer(on) { $("drawer").classList.toggle("on", on); $("scrim").classList.toggle("on", on); if (on) estimate(); }
+$("newrun").onclick = () => openDrawer(true);
+$("dclose").onclick = $("scrim").onclick = () => openDrawer(false);
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") openDrawer(false); });
+
+function buildDrawer() {
+  const groups = {};
+  meta.ops.forEach(o => (groups[o.group] ||= []).push(o));
+  $("dops").innerHTML = Object.entries(groups).map(([g, ops]) => `<div class="opgrp">${esc(g)}<a data-g="${esc(g)}">all / none</a></div>
+    <div class="opgrid">${ops.map(o => `<label class="opc" title="${esc(o.notes || o.title)}"><input type="checkbox" value="${o.name}" data-g="${esc(g)}"><b>${o.name}</b><span>${esc(o.title)}</span></label>`).join("")}</div>`).join("");
+  $("dops").onclick = (e) => { const a = e.target.closest("a[data-g]"); if (!a) return;
+    const bs = [...$("dops").querySelectorAll(`input[data-g="${a.dataset.g}"]`)], on = !bs.every(b => b.checked); bs.forEach(b => b.checked = on); estimate(); };
+  $("dops").onchange = estimate;
+  $("dtypes").innerHTML = meta.types.map(t => `<button type="button" class="chip ${["float", "double"].includes(t.name) ? "on" : ""}" data-t="${t.name}">${esc(t.label)}</button>`).join("");
+  $("dtypes").onclick = (e) => { const b = e.target.closest(".chip"); if (b) { b.classList.toggle("on"); estimate(); } };
+  $("dpreset").innerHTML = Object.keys(meta.presets).map(k => `<button type="button" data-k="${k}">${k}</button>`).join("") + `<button type="button" data-k="custom" hidden>custom</button>`;
+  $("dpreset").onclick = (e) => { const b = e.target.closest("button"); if (b && b.dataset.k !== "custom") loadPreset(b.dataset.k); };
+  $("gmode").innerHTML = [["ladder", "Ladder"], ["list", "List"], ["saturated", "Saturated only"]].map(([k, l]) => `<button type="button" data-k="${k}">${l}</button>`).join("");
+  $("gmode").onclick = (e) => { const b = e.target.closest("button"); if (b) { grid.batch_mode = b.dataset.k; custom(); drawGridForm(); estimate(); } };
+  $("gorders").oninput = () => { grid.orders = $("gorders").value.trim() || null; custom(); estimate(); };
+  $("greps").oninput = () => { grid.reps = +$("greps").value || 1; custom(); estimate(); };
+  $("gmem").oninput = () => { grid.mem_gib = +$("gmem").value || 0.25; custom(); estimate(); };
+  const gl = meta.gpus && meta.gpus.length ? meta.gpus : [{ index: 1, name: "" }];
+  const dflt = gl.some(g => g.index === 1) ? 1 : gl[0].index;
+  $("dgpus").innerHTML = gl.map(g => `<button type="button" class="chip ${g.index === dflt ? "on" : ""}" data-g="${g.index}" title="${esc(g.name)}">GPU ${g.index}</button>`).join("");
+  $("dgpus").onclick = (e) => { const b = e.target.closest(".chip"); if (!b) return; b.classList.toggle("on");
+    if (!$("dgpus").querySelector(".chip.on")) b.classList.add("on"); estimate(); };
+  loadPreset("quick");
+}
+function loadPreset(k) { grid = { ...meta.presets[k] }; grid.orders = grid.orders ? grid.orders.join(",") : null; grid.batches = grid.batches ? grid.batches.join(",") : null; drawGridForm(); estimate(); }
+function custom() { grid.name = "custom"; setSeg($("dpreset").parentElement, "custom"); $("dpreset").querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.k === "custom")); $("dpreset").querySelector('[data-k="custom"]').hidden = false; }
+function drawGridForm() {
+  $("dpreset").querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.k === grid.name));
+  $("gmode").querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.k === grid.batch_mode));
+  $("gorders").value = grid.orders || ""; $("greps").value = grid.reps; $("gmem").value = grid.mem_gib;
+  const m = grid.batch_mode;
+  $("gbatch").innerHTML = m === "ladder" ? `<div class="g3">
+      <div><label class="fl">From</label><input class="field num" id="gbmin" type="number" min="1" value="${grid.batch_min}"></div>
+      <div><label class="fl">Up to (and memory)</label><input class="field num" id="gbmax" type="number" min="1" value="${grid.batch_max}"></div>
+      <div><label class="fl">Step ×</label><input class="field num" id="gbstep" type="number" min="2" value="${grid.batch_step}"></div></div>`
+    : m === "list" ? `<label class="fl">Batches</label><input class="field mono" id="gblist" placeholder="256,1024,4096 or 64:16384" value="${esc(grid.batches || "")}">`
+    : `<div class="g2"><div><label class="fl">Largest batch up to</label><input class="field num" id="gbmax" type="number" min="1" value="${grid.batch_max}"></div>
+       <div class="fl" style="align-self:end;margin:0 0 8px">one batch per n: the largest that fits the memory budget</div></div>`;
+  const bind = (id, key, num) => { const el = $(id); if (el) el.oninput = () => { grid[key] = num ? +el.value : el.value.trim(); custom(); estimate(); }; };
+  bind("gbmin", "batch_min", 1); bind("gbmax", "batch_max", 1); bind("gbstep", "batch_step", 1); bind("gblist", "batches", 0);
+}
+function runBody() {
+  return { ops: [...$("dops").querySelectorAll("input:checked")].map(i => i.value),
+           types: [...$("dtypes").querySelectorAll(".chip.on")].map(b => b.dataset.t),
+           preset: "quick", grid: { ...grid, orders: grid.orders || null, batches: grid.batches || null },
+           gpus: [...$("dgpus").querySelectorAll(".chip.on")].map(b => +b.dataset.g), campaign: $("dname").value.trim() };
+}
+let estSeq = 0;
+async function estimate() {
+  const b = runBody(), seq = ++estSeq;
+  const e = await post("/api/plan", b);
+  if (seq !== estSeq) return;
+  $("gorders").classList.toggle("err", !!(e.error && /order|range/i.test(e.error)));
+  if (e.error) { $("estimate").textContent = e.error; $("dstart").disabled = true; drawPreview(null); return; }
+  drawPreview(e);
+  if (!b.ops.length || !b.types.length) { $("estimate").textContent = "Pick at least one op and one precision."; $("dstart").disabled = true; return; }
+  $("dstart").disabled = !e.cells;
+  const ng = b.gpus.length || 1;
+  $("estimate").innerHTML = `<b>${e.arm_cells}</b> arm-cells · about <b>${dur(e.seconds / ng)}</b>${ng > 1 ? ` on ${ng} GPUs` : ""}`;
+}
+function drawPreview(e) {
+  const svg = $("gprev");
+  if (!e || !e.orders || !e.orders.length) {
+    svg.setAttribute("viewBox", "0 0 460 40");
+    svg.innerHTML = `<text x="230" y="24" text-anchor="middle" font-size="12" fill="currentColor" opacity=".5">${e ? "nothing selected" : "invalid grid"}</text>`;
+    text($("gcap"), ""); return;
+  }
+  const ns = e.orders, bs = e.batches, has = new Set(e.marks.map(([n, b]) => `${n}|${b}`));
+  const L = 44, T = 6, W = 460, cw = Math.min(26, (W - L - 6) / bs.length), ch = Math.min(14, 190 / ns.length), H = T + ns.length * ch + 22;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  let h = "";
+  ns.forEach((n, i) => {
+    h += `<text x="${L - 6}" y="${T + i * ch + ch * .72}" text-anchor="end" font-size="${Math.min(10, ch * .8)}" fill="currentColor" opacity=".55" font-family="ui-monospace,monospace">${n}</text>`;
+    bs.forEach((b, j) => {
+      const on = has.has(`${n}|${b}`);
+      h += `<rect x="${L + j * cw + 1}" y="${T + i * ch + 1}" width="${cw - 2}" height="${ch - 2}" rx="2" fill="${on ? "var(--accent)" : "currentColor"}" opacity="${on ? .85 : .07}"/>`;
+    });
+  });
+  const step = Math.ceil(bs.length / 8);
+  bs.forEach((b, j) => { if (j % step === 0) h += `<text x="${L + j * cw + cw / 2}" y="${H - 6}" text-anchor="middle" font-size="9" fill="currentColor" opacity=".55" font-family="ui-monospace,monospace">${b >= 1024 ? (b / 1024) + "k" : b}</text>`; });
+  svg.innerHTML = h;
+  text($("gcap"), `${ns.length} orders × ${bs.length} batches · ${e.cells} cells`);
+}
+$("dstart").onclick = async () => {
+  const j = await post("/api/run", runBody());
+  if (j.error) { $("estimate").textContent = j.error; return; }
+  openDrawer(false); pinned = false; $("follow").checked = true; setTimeout(() => watch(j.campaign), 500);
+};
+$("stop").onclick = async () => {
+  if (!camp) return;
+  $("stop").disabled = true; $("stop").textContent = "Stopping…";
+  await post("/api/stop", { campaign: camp });
+  setTimeout(() => { $("stop").disabled = false; $("stop").textContent = "Stop"; }, 4000);
+};
+
+// ---------------------------------------------------------------- lightbox & boot
+function openLb(base) {
+  $("lbimg").src = figUrl(`${base}.png`, Date.now()); $("lbpdf").href = figUrl(`${base}.pdf`); $("lbpng").href = figUrl(`${base}.png`);
+  $("lb").showModal();
+}
+$("lbclose").onclick = () => $("lb").close();
+$("lb").onclick = (e) => { if (e.target === $("lb")) $("lb").close(); };
+
+parseHash();
+meta = getSync("/api/meta");
+buildDrawer();
+if (meta.read_only) $("newrun").hidden = true;
+fillCampaigns(meta.campaigns);
+if (!meta.campaigns.length) $("view").innerHTML = `<div class="panel empty">No campaigns yet.&ensp;<button class="btn primary" onclick="openDrawer(true)">Start a run</button></div>`;
+</script>
+</body>
+</html>

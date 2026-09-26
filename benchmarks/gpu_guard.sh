@@ -43,7 +43,9 @@ waited=0
 while :; do
     util="$(query utilization.gpu)"
     procs="$(foreign_procs)"
-    [ -z "${util:-}" ] && { echo "gpu_guard: cannot query GPU $GPU" >&2; exit 3; }
+    case "${util:-}" in
+        ''|*[!0-9]*) echo "gpu_guard: cannot query GPU $GPU (${util:-no answer})" >&2; exit 3 ;;
+    esac
     if [ "$util" -le "$UTIL_CEILING" ] && [ -z "$procs" ]; then
         break
     fi

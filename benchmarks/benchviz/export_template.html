@@ -1,0 +1,189 @@
+<title>BatchLAS Speedups</title>
+<style>
+:root {
+  --page: #fafaf9; --surface: #ffffff; --sunken: #f2f2ef; --ink: #16161a; --ink-2: #55545a; --muted: #8e8d93;
+  --hair: #e8e7e4; --win: #1f77b4; --win-soft: rgba(31,119,180,.10); --lose: #8c564b; --lose-soft: rgba(140,86,75,.12);
+  --bad: #c0392b; --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #111112; --surface: #19191b; --sunken: #202023; --ink: #f1f1f0; --ink-2: #bdbcc2; --muted: #85848b;
+    --hair: #2a2a2d; --win: #5aa6e6; --win-soft: rgba(90,166,230,.14); --lose: #c89484; --lose-soft: rgba(200,148,132,.14);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #111112; --surface: #19191b; --sunken: #202023; --ink: #f1f1f0; --ink-2: #bdbcc2; --muted: #85848b;
+  --hair: #2a2a2d; --win: #5aa6e6; --win-soft: rgba(90,166,230,.14); --lose: #c89484; --lose-soft: rgba(200,148,132,.14);
+}
+body { background: var(--page); color: var(--ink); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; }
+.wrap { max-width: 880px; margin: 0 auto; padding-inline: 16px; padding-block: 0 48px; }
+.mono { font-family: var(--mono); }
+.num { font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted); }
+button { font: inherit; color: inherit; cursor: pointer; }
+:focus-visible { outline: 2px solid var(--win); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+.bar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--page); border-bottom: 1px solid var(--hair);
+  margin-inline: -16px; padding: 12px 16px 10px; }
+.bar h1 { margin: 0 0 8px; font-size: 17px; font-weight: 650; letter-spacing: -.01em; text-wrap: balance; }
+.bar h1 small { font-weight: 400; color: var(--muted); font-size: 13px; margin-left: 6px; }
+.chips { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; }
+.chip { flex: none; border: 1px solid var(--hair); background: var(--surface); border-radius: 999px; padding: 5px 12px; font-size: 13px; color: var(--ink-2); }
+.chip[aria-pressed="true"] { background: var(--ink); color: var(--page); border-color: var(--ink); }
+
+.meta { font-size: 12.5px; color: var(--muted); margin: 14px 0 0; }
+.note { font-size: 13px; color: var(--ink-2); background: var(--sunken); border-radius: 10px; padding: 10px 12px; margin: 12px 0 0; }
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); background: var(--surface); border: 1px solid var(--hair); border-radius: 12px; margin-top: 14px; }
+.stats > div { padding: 12px 14px; border-left: 1px solid var(--hair); min-width: 0; }
+.stats > div:first-child { border-left: 0; }
+.stats .k { font-size: 12px; color: var(--muted); }
+.stats .v { font-size: 24px; font-weight: 650; letter-spacing: -.02em; font-variant-numeric: tabular-nums; line-height: 1.3; }
+.stats .v small { font-size: 13px; font-weight: 500; color: var(--muted); }
+.win { color: var(--win); } .lose { color: var(--lose); }
+
+h2 { font-size: 15px; font-weight: 650; margin: 28px 0 10px; }
+.tblwrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--hair); border-radius: 12px; }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+th { text-align: left; font-weight: 500; font-size: 12px; color: var(--muted); padding: 9px 12px; border-bottom: 1px solid var(--hair); white-space: nowrap; }
+td { padding: 9px 12px; border-bottom: 1px solid var(--hair); vertical-align: top; }
+tbody tr:last-child td { border-bottom: 0; }
+.r { text-align: right; }
+.sp { font-family: var(--mono); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.rng { display: block; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.grp { font-size: 11.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); background: var(--sunken); }
+tr.link { cursor: pointer; }
+
+.seg { display: inline-flex; background: var(--sunken); border-radius: 9px; padding: 2px; gap: 2px; max-width: 100%; overflow-x: auto; }
+.seg button { flex: none; border: 0; background: transparent; border-radius: 7px; padding: 5px 11px; font-size: 13px; color: var(--ink-2); }
+.seg button[aria-pressed="true"] { background: var(--surface); color: var(--ink); font-weight: 600; box-shadow: 0 0 0 1px var(--hair); }
+.paper { background: #fff; border-radius: 10px; padding: 8px; margin-top: 10px; border: 1px solid var(--hair); }
+.paper img { display: block; width: 100%; height: auto; }
+.paper .none { color: #8e8d93; font-size: 13px; padding: 28px; text-align: center; }
+
+details.op { background: var(--surface); border: 1px solid var(--hair); border-radius: 12px; margin-top: 10px; scroll-margin-top: 110px; }
+details.op > summary { list-style: none; cursor: pointer; padding: 12px 14px; display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; align-items: baseline; }
+details.op > summary::-webkit-details-marker { display: none; }
+details.op > summary .nm { font-family: var(--mono); font-weight: 600; font-size: 14.5px; }
+details.op > summary .ti { grid-column: 1; font-size: 12.5px; color: var(--muted); }
+details.op > summary .gm { grid-row: 1 / span 2; grid-column: 2; align-self: center; font-family: var(--mono); font-size: 15px; font-weight: 600;
+  padding: 3px 9px; border-radius: 8px; font-variant-numeric: tabular-nums; }
+.gm.win { background: var(--win-soft); } .gm.lose { background: var(--lose-soft); }
+details.op[open] > summary { border-bottom: 1px solid var(--hair); }
+.body { padding: 12px 14px 16px; display: grid; gap: 14px; min-width: 0; }
+.prec { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; }
+.prec div { background: var(--sunken); border-radius: 10px; padding: 8px 10px; }
+.prec .k { font-size: 11.5px; color: var(--muted); }
+.prec .v { font-size: 18px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.prec .f { font-size: 11px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.opnote { font-size: 12.5px; color: var(--ink-2); margin: 0; }
+.route { font-family: var(--mono); font-size: 11px; color: var(--muted); white-space: nowrap; }
+.fails td { font-size: 12.5px; }
+footer { margin-top: 32px; font-size: 12px; color: var(--muted); }
+</style>
+
+<div class="wrap">
+  <div class="bar">
+    <h1>BatchLAS <small>vs vendor, per op</small></h1>
+    <div class="chips" id="camps" role="group" aria-label="Campaign"></div>
+  </div>
+  <p class="meta" id="meta"></p>
+  <div id="note"></div>
+  <div class="stats" id="stats"></div>
+  <h2>Speedup at saturation</h2>
+  <div class="tblwrap"><table id="overview"></table></div>
+  <div id="sum"></div>
+  <h2>Operations</h2>
+  <div id="ops"></div>
+  <div id="failbox"></div>
+  <footer id="foot"></footer>
+</div>
+
+<script>
+"use strict";
+const DATA = /*DATA*/null;
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+const PREC = { float: ["Single", "S"], double: ["Double", "D"], cfloat: ["Complex single", "C"], cdouble: ["Complex double", "Z"] };
+const PORD = Object.keys(PREC);
+const FIGS = [["speedup_n", "Speedup vs n"], ["throughput_n", "Throughput"], ["heatmap", "n × batch"]];
+const fx = (v) => v == null ? "—" : (v >= 9.95 ? v.toFixed(0) : v >= 0.995 ? v.toFixed(2) : v.toFixed(3)) + "×";
+const cls = (v) => v == null ? "" : v >= 1 ? "win" : "lose";
+const ms = (v) => v == null ? "—" : v >= 100 ? v.toFixed(0) : v >= 1 ? v.toFixed(2) : v.toFixed(4);
+let cur = 0;
+try { const k = localStorage.getItem("bv-camp"); const i = DATA.campaigns.findIndex(c => c.name === k); if (i >= 0) cur = i; } catch (e) {}
+
+function label(c) {
+  const g = new Set(c.ops.map(o => o.group));
+  return g.size === 1 ? `${[...g][0]} · ${c.name}` : c.name;
+}
+function render() {
+  const c = DATA.campaigns[cur], p = c.provenance || {}, g = c.grid || {};
+  $("camps").innerHTML = DATA.campaigns.map((x, i) => `<button class="chip" aria-pressed="${i === cur}" data-i="${i}">${esc(label(x))}</button>`).join("");
+  $("meta").textContent = [p.device, p.driver && `driver ${p.driver}`, p.git_sha && `BatchLAS ${p.git_sha}`, g.name && `${g.name} grid`, p.started && `measured ${p.started}`].filter(Boolean).join(" · ");
+  const coarse = g.name === "smoke" || g.name === "imported";
+  $("note").innerHTML = coarse ? `<p class="note">${g.name === "smoke" ? "Smoke grid: every third order and two batch sizes per order. Good for a first look; rerun with the quick or full grid before quoting a number." : "Imported from an earlier factor_bench run (three batches per order)."}</p>` : "";
+  const measured = c.ops.filter(o => o.geomean);
+  const gm = measured.length ? Math.exp(measured.reduce((a, o) => a + Math.log(o.geomean), 0) / measured.length) : null;
+  const wins = measured.filter(o => o.geomean >= 1).length;
+  $("stats").innerHTML = `<div><div class="k">Geomean</div><div class="v ${cls(gm)}">${fx(gm)}</div></div>
+    <div><div class="k">Ops won</div><div class="v">${wins}<small> / ${measured.length}</small></div></div>
+    <div><div class="k">Cells</div><div class="v">${c.rows}</div></div>`;
+  const types = PORD.filter(t => c.ops.some(o => o.prec[t]));
+  let rows = "", grp = null;
+  for (const o of c.ops) {
+    if (o.group !== grp) { grp = o.group; rows += `<tr><td class="grp" colspan="${types.length + 1}">${esc(grp)}</td></tr>`; }
+    rows += `<tr class="link" data-op="${o.name}"><td><span class="mono">${o.name}</span><span class="rng">vs ${esc(o.vendor)}</span></td>` +
+      types.map(t => { const q = o.prec[t]; return `<td class="r">${q ? `<span class="sp ${cls(q.geomean)}">${fx(q.geomean)}</span><span class="rng">${fx(q.min)}–${fx(q.max)}</span>` : `<span class="muted">—</span>`}</td>`; }).join("") + `</tr>`;
+  }
+  $("overview").innerHTML = `<thead><tr><th>Op</th>${types.map(t => `<th class="r">${PREC[t][1]}</th>`).join("")}</tr></thead><tbody>${rows}</tbody>`;
+  const st = types.filter(t => c.summaries[t]);
+  $("sum").innerHTML = st.length ? `<h2>All ops at a glance</h2>${figBlock("sum", st.map(t => [t, PREC[t][0]]), (k) => c.summaries[k])}` : "";
+  $("ops").innerHTML = c.ops.map(o => `<details class="op" id="${o.name}"><summary><span class="nm">${o.name}</span>
+      <span class="gm ${cls(o.geomean)}">${fx(o.geomean)}</span><span class="ti">${esc(o.title)} · vs ${esc(o.vendor)}</span></summary><div class="body" data-op="${o.name}"></div></details>`).join("");
+  $("ops").querySelectorAll("details").forEach(d => d.addEventListener("toggle", () => { if (d.open) fillOp(d.id); }));
+  $("failbox").innerHTML = c.failures.length ? `<h2>Failed or dropped <span class="muted">${c.failures.length}</span></h2><div class="tblwrap fails"><table><tbody>${c.failures.slice().reverse().map(f =>
+      `<tr><td class="num" style="white-space:nowrap"><span class="mono">${f.op}</span> ${PREC[f.dtype] ? PREC[f.dtype][1] : esc(f.dtype)} n ${f.n} · ${f.batch}</td><td>${esc(f.arm)}</td><td>${esc(f.reason)}</td></tr>`).join("")}</tbody></table></div>` : "";
+  $("foot").textContent = `Snapshot exported ${DATA.exported}. Speedup is vendor time divided by BatchLAS time at the largest batch where both arms were measured; above 1× BatchLAS is faster. BatchLAS is pinned to its native kernels; a cell whose route did not match its arm was dropped.`;
+  if (location.hash.length > 1) { const d = document.getElementById(location.hash.slice(1)); if (d && d.tagName === "DETAILS") { d.open = true; fillOp(d.id); } }
+}
+function figBlock(id, tabs, src) {
+  const first = tabs[0][0];
+  return `<div class="fig" data-id="${id}"><div class="seg">${tabs.map(([k, l]) => `<button aria-pressed="${k === first}" data-k="${k}">${l}</button>`).join("")}</div>
+    <div class="paper">${src(first) ? `<img alt="" src="${src(first)}">` : `<div class="none">No figure.</div>`}</div></div>`;
+}
+const srcs = {};
+function fillOp(name) {
+  const c = DATA.campaigns[cur], o = c.ops.find(x => x.name === name), el = document.querySelector(`.body[data-op="${name}"]`);
+  if (!o || !el || el.dataset.done) return;
+  el.dataset.done = "1";
+  srcs[name] = (k) => o.figs[k];
+  const types = PORD.filter(t => o.prec[t]);
+  const rows = o.rows.slice().sort((a, b) => PORD.indexOf(a.dtype) - PORD.indexOf(b.dtype) || a.n - b.n || a.batch - b.batch);
+  el.innerHTML = (o.notes ? `<p class="opnote">${esc(o.notes)}.</p>` : "") +
+    `<div class="prec">${types.map(t => { const q = o.prec[t]; return `<div><div class="k">${PREC[t][0]}</div><div class="v ${cls(q.geomean)}">${fx(q.geomean)}</div>
+      <div class="f">faster at ${q.wins} of ${q.n} orders</div></div>`; }).join("")}</div>` +
+    figBlock(name, FIGS.filter(([k]) => o.figs[k]).length ? FIGS : [["none", "Figures"]], (k) => o.figs[k]) +
+    `<div class="tblwrap"><table><thead><tr><th>Prec</th><th class="r">n</th><th class="r">Batch</th><th class="r">BatchLAS ms</th><th class="r">${esc(o.vendor)} ms</th><th class="r">Speedup</th><th>Routes</th></tr></thead>
+      <tbody>${rows.map(r => `<tr><td>${PREC[r.dtype] ? PREC[r.dtype][1] : esc(r.dtype)}</td><td class="r num">${r.n}</td><td class="r num">${r.batch}</td>
+      <td class="r num">${ms(r.time_ms_batchlas)}</td><td class="r num">${ms(r.time_ms_vendor)}</td><td class="r"><span class="sp ${cls(r.speedup)}">${fx(r.speedup)}</span></td>
+      <td><span class="route">${esc(r.route_batchlas)}</span><span class="rng route">${esc(r.route_vendor)}</span></td></tr>`).join("")}</tbody></table></div>`;
+}
+document.addEventListener("click", (e) => {
+  const chip = e.target.closest(".chip[data-i]");
+  if (chip) { cur = +chip.dataset.i; try { localStorage.setItem("bv-camp", DATA.campaigns[cur].name); } catch (x) {} render(); window.scrollTo(0, 0); return; }
+  const b = e.target.closest(".fig .seg button");
+  if (b) {
+    const fig = b.closest(".fig"), id = fig.dataset.id, c = DATA.campaigns[cur];
+    const url = id === "sum" ? c.summaries[b.dataset.k] : (srcs[id] && srcs[id](b.dataset.k));
+    fig.querySelectorAll(".seg button").forEach(x => x.setAttribute("aria-pressed", x === b));
+    fig.querySelector(".paper").innerHTML = url ? `<img alt="" src="${url}">` : `<div class="none">No figure.</div>`;
+    return;
+  }
+  const tr = e.target.closest("tr.link[data-op]");
+  if (tr) { const d = document.getElementById(tr.dataset.op); d.open = true; fillOp(d.id); d.scrollIntoView({ behavior: "smooth", block: "start" }); }
+});
+render();
+</script>
