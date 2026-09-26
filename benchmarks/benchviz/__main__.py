@@ -19,7 +19,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from ops import OPS, PRESETS, TYPES, plan_cells  # noqa: E402
+from ops import OPS, PRESETS, TYPES, Grid, parse_list, plan_cells  # noqa: E402
 from store import DEFAULT_ROOT, REPO, Campaign, provenance  # noqa: E402
 
 
@@ -49,14 +49,32 @@ def cmd_list_ops(a):
             print(f"        {s.notes}")
 
 
+def grid_from_args(a) -> Grid:
+    """Preset first, then --grid-json, then each explicit flag."""
+    import json
+    g = PRESETS[a.preset].to_dict()
+    if getattr(a, "grid_json", None):
+        g.update(json.loads(a.grid_json))
+    for flag, key, conv in (("orders", "orders", parse_list), ("batches", "batches", parse_list),
+                            ("batch_mode", "batch_mode", str), ("batch_min", "batch_min", int),
+                            ("batch_max", "batch_max", int), ("batch_step", "batch_step", int),
+                            ("reps", "reps", int), ("mem_gib", "mem_gib", float)):
+        v = getattr(a, flag, None)
+        if v is not None:
+            g[key] = conv(v)
+            g["name"] = "custom"
+    if getattr(a, "batches", None) and not getattr(a, "batch_mode", None):
+        g["batch_mode"] = "list"
+    return Grid.from_dict(g)
+
+
 def make_campaign(a) -> Campaign:
     ops = _csv_list(a.ops, OPS)
     types = _csv_list(a.types, TYPES)
     name = a.campaign or time.strftime(f"{a.backend}-%Y%m%d-%H%M%S")
     cfg = {
-        "ops": ops, "types": types, "preset": a.preset, "backend": a.backend,
-        "gpu": a.gpu, "mem_gib": a.mem_gib,
-        "orders": [int(x) for x in a.orders.split(",")] if a.orders else None,
+        "ops": ops, "types": types, "preset": a.grid.name, "backend": a.backend,
+        "gpu": a.gpu, "grid": a.grid.to_dict(),
         "provenance": provenance(a.backend, a.gpu),
     }
     return Campaign.create(Path(a.root), name, cfg)
@@ -66,9 +84,10 @@ def cmd_run(a):
     from plots import render_op
     from runner import Runner
 
-    orders = [int(x) for x in a.orders.split(",")] if a.orders else None
-    cells = plan_cells(_csv_list(a.ops, OPS), _csv_list(a.types, TYPES), PRESETS[a.preset], a.mem_gib, orders)
+    a.grid = grid_from_args(a)
+    cells = plan_cells(_csv_list(a.ops, OPS), _csv_list(a.types, TYPES), a.grid)
     if a.dry_run:
+        print(f"grid: {a.grid.to_dict()}")
         print(f"{len(cells)} cells x 2 arms")
         for c in cells:
             print(f"  {c.op:6s} {c.dtype:8s} n={c.n:5d} batch={c.batch}")
@@ -136,8 +155,8 @@ def cmd_plot(a):
 
 def cmd_import(a):
     """Load factor_bench CSVs (run_factor_grid.sh output) into a campaign."""
-    cfg = {"ops": [], "types": [], "preset": "imported", "backend": "cuda", "gpu": None, "mem_gib": None,
-           "orders": None, "provenance": {**provenance("cuda", 1), "imported_from": a.files}}
+    cfg = {"ops": [], "types": [], "preset": "imported", "backend": "cuda", "gpu": None,
+           "grid": {**PRESETS["quick"].to_dict(), "name": "imported"}, "provenance": {**provenance("cuda", 1), "imported_from": a.files}}
     rows = []
     for f in a.files:
         with open(f) as fh:
@@ -180,11 +199,19 @@ def main():
     r.add_argument("--campaign", help="name; default <backend>-<timestamp>")
     r.add_argument("--ops", default="all", help=f"comma list or 'all' ({','.join(OPS)})")
     r.add_argument("--types", default="all", help="comma list of float,double,cfloat,cdouble or 'all'")
-    r.add_argument("--preset", default="quick", choices=list(PRESETS))
-    r.add_argument("--orders", help="override the n ladder, e.g. 16,32,64")
+    r.add_argument("--preset", default="quick", choices=list(PRESETS), help="starting grid; flags below override it")
+    r.add_argument("--orders", help="n values: '16,32,64', '4:512' (doubling), '8:128:8' (step 8)")
+    r.add_argument("--batch-mode", choices=["ladder", "list", "saturated"],
+                   help="ladder: batch-min * step^k up to the cap; list: --batches; saturated: one batch per n at the cap")
+    r.add_argument("--batches", help="explicit batch list (implies --batch-mode list), same syntax as --orders")
+    r.add_argument("--batch-min", type=int)
+    r.add_argument("--batch-max", type=int, help="upper cap on batch, before the memory cap")
+    r.add_argument("--batch-step", type=int, help="ladder factor (2 = every power of two)")
+    r.add_argument("--reps", type=int, help="timed repetitions per arm-cell")
+    r.add_argument("--mem-gib", type=float, help="per-arm device-memory budget that caps batch")
+    r.add_argument("--grid-json", help="a whole grid as JSON (what the dashboard sends)")
     r.add_argument("--backend", default="cuda", choices=["cuda", "rocm"])
     r.add_argument("--gpu", type=int, default=1, help="GPU index (default 1: the benchmark card)")
-    r.add_argument("--mem-gib", type=float, default=3.0, help="per-arm device-memory budget that caps batch")
     r.add_argument("--build-dir", action="append", help="where the benchmark binaries are (repeatable)")
     r.add_argument("--no-guard", action="store_true", help="skip gpu_guard.sh (exclusive-GPU check)")
     r.add_argument("--no-plot", action="store_true")

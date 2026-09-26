@@ -1,4 +1,4 @@
-# benchviz: BatchLAS vs vendor LAPACK
+# benchviz: BatchLAS vs vendor LAPACK and BLAS
 
 This tool measures and plots BatchLAS against the vendor LAPACK library the build links:
 cuSOLVER/cuBLAS on CUDA, rocSOLVER/rocBLAS on ROCm. It covers every LAPACK op that has a
@@ -9,7 +9,8 @@ TeX installation with `latex` and `dvipng` for the Computer Modern text. It inst
 ```sh
 # 1. Build the harnesses (the library plus four targets).
 cmake -S . -B build -DCMAKE_CXX_COMPILER=/opt/dpcpp-cuda/bin/clang++ -DBATCHLAS_BUILD_BENCHMARKS=ON
-cmake --build build --target factor_bench syev_benchmark ormqr_benchmark gesvd_vendor_benchmark -j"$(nproc)"
+cmake --build build --target factor_bench syev_benchmark ormqr_benchmark gesvd_vendor_benchmark \
+    gemm_benchmark gemv_benchmark trsm_benchmark trmm_benchmark syrk_benchmark syr2k_benchmark spmm_benchmark -j"$(nproc)"
 
 # 2a. Start the dashboard and launch runs from the browser.
 python3 benchmarks/benchviz serve            # http://127.0.0.1:8765
@@ -44,9 +45,19 @@ different `--ops` or `--types` extends it.
 | ormqr | `ormqr_benchmark` | `BATCHLAS_ORMQR_ROUTE=vendor` | `=native` |
 | syev (with vectors) | `syev_benchmark` | `BATCHLAS_SYEV_ROUTE=vendor` | `=native`, tuned nb and fuse |
 | gesvd (n ≤ 32) | `gesvd_vendor_benchmark` | direct `gesvdjBatched` call | `gesvd_cta` |
+| gemm, gemv, trsm, spmm | `<op>_benchmark` | `BATCHLAS_<OP>_ROUTE=vendor` (cuBLAS / cuSPARSE) | `=native` |
+| trmm, syrk, syr2k (float) | `<op>_benchmark` | `=vendor` | `=triangular` (triangular-tile kernels) |
 
-syevx, sytrd, stedc and steqr have no vendor route in dispatch, so a comparison would put
-BatchLAS against itself.
+BLAS cells are square (m = n = k). spmm uses a random CSR pattern with 16 nonzeros per row, 16 right-hand
+sides, and n rows.
+
+Some ops are left out, each for a stated reason:
+- **syevx, sytrd, stedc, steqr:** no vendor route.
+- **symm:** its native arm cannot be pinned; it is expand-then-gemm through the routed gemm.
+- **hemm, herk, her2k:** no route variable and no coverage rows.
+- **syrk and syr2k in double, and trmm in double:** no native kernel. For syrk double, nothing is recorded.
+- **Plain `native` for syrk and syr2k:** it selects a wrong-answer route or throws, which is why those
+  arms pin `triangular`.
 
 **The BatchLAS arm is pinned `native`, never `auto`.** Where `auto` already prefers the vendor,
 an `auto` arm would time the vendor twice and report 1.0×.
@@ -99,14 +110,26 @@ PDFs embed TrueType fonts (`pdf.fonttype 42`).
 
 ## Grids
 
-| Preset | Orders | Batch ladder | Arm-cells (all ops, all precisions) |
-|---|---|---|---|
-| `smoke` | every 3rd order | ×16 steps from 256 | ~360 |
-| `quick` | every order | ×4 steps from 64 | ~2,300 |
-| `full` | every order | ×2 steps from 32 | ~5,000 |
+A grid is a preset plus any overrides. The dashboard's run panel edits one field by field and previews
+the n × batch cells it covers; the CLI takes the same fields as flags.
 
-On a 4090 an arm-cell takes about 5–8 s, mostly process start and warm-up. `--mem-gib` (default
-3) caps the batch size for each order. `--orders 16,32,64` overrides the order ladder.
+| Field | Flag | Meaning |
+|---|---|---|
+| orders | `--orders` | n values. `16,32,64` lists them, `4:512` doubles from 4 to 512, and `8:128:8` steps by 8. Blank uses each op's own ladder. Values outside an op's supported range are dropped. |
+| batch mode | `--batch-mode` | `ladder` (default), `list`, or `saturated`, which takes one batch per n: the largest that fits the memory budget. |
+| ladder | `--batch-min --batch-max --batch-step` | batch-min × step^k, up to min(batch-max, memory cap) |
+| list | `--batches` | an explicit batch list, same syntax as orders |
+| reps | `--reps` | timed repetitions per arm-cell |
+| memory | `--mem-gib` | per-arm device-memory budget, which caps batch for each (op, n) |
+
+| Preset | Grid |
+|---|---|
+| `smoke` | every 3rd order, batch ×16 from 256 |
+| `saturation` | every order, only the saturated batch; enough for speedup vs n and throughput |
+| `quick` | every order, batch ×4 from 64 |
+| `full` | every order, batch ×2 from 32 |
+
+On a 4090 an arm-cell takes about 3–8 s, mostly process start, warm-up and the exclusive-GPU check.
 
 ## ROCm
 

@@ -4,6 +4,7 @@ summary_<t>. What "saturated batch" means and why: README.md, "Figures"."""
 from __future__ import annotations
 
 import math
+import warnings
 from pathlib import Path
 from typing import List, Optional, Sequence
 
@@ -11,9 +12,11 @@ import numpy as np
 import pandas as pd
 
 import style
-from ops import OPS, TYPE_PREFIX, TYPES
+from ops import OPS, TYPE_PREFIX, TYPES, vendor_name
 
 style.apply()
+# A campaign's first render can hold a single point per panel; log axes warn on it.
+warnings.filterwarnings("ignore", message="Data has no positive values")
 import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.colors import Normalize  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
@@ -73,16 +76,21 @@ def saturated(w: pd.DataFrame) -> pd.DataFrame:
     return w.loc[w.groupby(["op", "dtype", "n"])["batch"].idxmax()].sort_values(["op", "dtype", "n"])
 
 
-def vendor_label(meta: dict) -> str:
-    return meta.get("vendor_label", "vendor")
+def vendor_label(meta: dict, op: str = None) -> str:
+    """The library the vendor arm of `op` reaches; with no op (the cross-op
+    summary) the generic word, since that figure mixes cuSOLVER and cuBLAS."""
+    if op is None:
+        return "Vendor"
+    return vendor_name(op, "rocm" if "roc" in meta.get("vendor_label", "").lower() else "cuda")
 
 
-def _n_label() -> str:
-    return r"Matrix Order $n$ [1]" if plt.rcParams["text.usetex"] else "Matrix Order n [1]"
+def _n_label(op: str = None) -> str:
+    lab = OPS[op].n_label if op in OPS else "Matrix Order $n$ [1]"
+    return lab if plt.rcParams["text.usetex"] else lab.replace("$", "")
 
 
 # ----------------------------------------------------------------- axes
-def _n_axis(ax, ns: Sequence[int], label=True):
+def _n_axis(ax, ns: Sequence[int], label=True, op=None):
     ns = sorted(set(int(v) for v in ns))
     ax.set_xscale("log", base=2)
     lo, hi = ns[0], ns[-1]
@@ -94,7 +102,7 @@ def _n_axis(ax, ns: Sequence[int], label=True):
     ax.xaxis.set_minor_formatter(NullFormatter())
     ax.set_xlim(lo / 2 ** 0.15, hi * 2 ** 0.15)
     if label:
-        ax.set_xlabel(_n_label())
+        ax.set_xlabel(_n_label(op))
 
 
 def _speedup_axis(ax, lo: float, hi: float):
@@ -135,14 +143,14 @@ def fig_speedup_n(w: pd.DataFrame, op: str, meta: dict):
         handles.append(Line2D([], [], ls=":", color=c, marker=mk, ms=10 * sc,
                               label=f"{PREC_TITLE[t]} [{TYPE_PREFIX[t]}]"))
     ax.axhline(1.0, color=style.REF, ls="--", lw=1.5, zorder=2)
-    handles.append(Line2D([], [], color=style.REF, ls="--", label=style.tex(f"Parity with {vendor_label(meta)}")))
+    handles.append(Line2D([], [], color=style.REF, ls="--", label=style.tex(f"Parity with {vendor_label(meta, op)}")))
     if hollow:
         handles.append(Line2D([], [], ls="none", marker="o", ms=10, mfc="white", mec="black", mew=2,
                               label="Calls a vendor sub-op"))
-    _n_axis(ax, s.n)
+    _n_axis(ax, s.n, op=op)
     lo = float((s.speedup - 2 * s.speedup_sd).clip(lower=1e-3).min())
     _speedup_axis(ax, lo, float((s.speedup + 2 * s.speedup_sd).max()))
-    ax.set_ylabel(style.tex(f"Speedup vs. {vendor_label(meta)}"))
+    ax.set_ylabel(style.tex(f"Speedup vs. {vendor_label(meta, op)}"))
     ax.legend(handles=handles, loc="best")
     style.outline(ax)
     return fig
@@ -168,13 +176,13 @@ def fig_throughput_n(w: pd.DataFrame, op: str, meta: dict):
             style.series(ax, d.n, y, style.LIB_COLOR[arm], style.LIB_MARKER[arm], style.LIB_MSCALE[arm], band=band)
         ax.set_yscale("log")
         ax.set_title(style.bold(f"{PREC_TITLE[t]} [{TYPE_PREFIX[t]}]"), pad=12)
-        _n_axis(ax, d.n, label=i + ncol >= len(types))
+        _n_axis(ax, d.n, label=i + ncol >= len(types), op=op)
         if i % ncol == 0:
             ax.set_ylabel(throughput_label(op))
         style.outline(ax)
     handles = [Line2D([], [], ls=":", color=style.LIB_COLOR[a], marker=style.LIB_MARKER[a],
                       ms=10 * style.LIB_MSCALE[a], label=l)
-               for a, l in (("batchlas", "BatchLAS"), ("vendor", style.tex(vendor_label(meta))))]
+               for a, l in (("batchlas", "BatchLAS"), ("vendor", style.tex(vendor_label(meta, op))))]
     axes.flat[0].legend(handles=handles + [style.band_handle()], loc="upper left")
     return fig
 
@@ -204,11 +212,11 @@ def _map_norm(values: np.ndarray) -> Normalize:
     return Normalize(vmin=lo, vmax=hi)
 
 
-def _speedup_colorbar(fig, im, axes, meta, norm):
+def _speedup_colorbar(fig, im, axes, meta, norm, op=None):
     ticks = np.arange(norm.vmin, norm.vmax + 1)
     cb = fig.colorbar(im, ax=axes, location="right", ticks=ticks, pad=0.02, fraction=0.05, aspect=25)
     cb.ax.set_yticklabels([style.times(2.0 ** k) for k in ticks])
-    cb.set_label(style.tex(f"Speedup vs. {vendor_label(meta)}") + r" [$\times$]")
+    cb.set_label(style.tex(f"Speedup vs. {vendor_label(meta, op)}") + r" [$\times$]")
     cb.ax.axhline(0.0, color=style.REF, lw=3)
     return cb
 
@@ -246,8 +254,8 @@ def fig_heatmap(w: pd.DataFrame, op: str, meta: dict):
         ax.set_title(style.bold(f"{PREC_TITLE[t]} [{TYPE_PREFIX[t]}]"), pad=12)
         ax.set_xlabel("Batch Size [1]")
         if i == 0:
-            ax.set_ylabel(_n_label())
-    _speedup_colorbar(fig, im, axes[0].tolist(), meta, norm)
+            ax.set_ylabel(_n_label(op))
+    _speedup_colorbar(fig, im, axes[0].tolist(), meta, norm, op)
     return fig
 
 

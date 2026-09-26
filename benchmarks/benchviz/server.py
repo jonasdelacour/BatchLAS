@@ -21,7 +21,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-from ops import OPS, PRESETS, TYPE_LABEL, TYPES, plan_cells
+from ops import OPS, PRESETS, TYPE_LABEL, TYPES, Grid, plan_cells
 from store import Campaign, list_campaigns
 
 HERE = Path(__file__).resolve().parent
@@ -52,7 +52,7 @@ def _analysis(camp: Campaign) -> dict:
     sat = saturated(w) if not w.empty else w
     cfg = camp.config
     try:
-        planned = plan_cells(cfg["ops"], cfg["types"], PRESETS[cfg["preset"]], cfg["mem_gib"], cfg.get("orders"))
+        planned = plan_cells(cfg["ops"], cfg["types"], Grid.from_config(cfg))
     except Exception:
         planned = []
     per_op: dict = {}
@@ -126,7 +126,8 @@ def snapshot(root: Path, name: str) -> dict:
     if st.get("state") == "running" and an["mean_wall"] and st.get("total"):
         eta = (st["total"] - st.get("done", 0)) * an["mean_wall"]
     return {
-        "campaign": name, "config": {k: cfg.get(k) for k in ("ops", "types", "preset", "backend", "gpu")},
+        "campaign": name, "config": {**{k: cfg.get(k) for k in ("ops", "types", "preset", "backend", "gpu")},
+                                     "grid": Grid.from_config(cfg).to_dict()},
         "provenance": cfg.get("provenance", {}), "status": st, "eta_s": eta,
         "rate_per_min": an["rate_per_min"], "per_op": an["per_op"], "failures": an["failures"],
         "activity": an["activity"], "figures": figs, "log": tail, "rows": an["rows"], "planned": an["planned"],
@@ -149,14 +150,24 @@ def op_table(root: Path, name: str, op: str) -> dict:
     return {"rows": json.loads(out.to_json(orient="records"))}
 
 
+def request_grid(b: dict) -> Grid:
+    base = PRESETS.get(b.get("preset") or "quick", PRESETS["quick"]).to_dict()
+    return Grid.from_dict({**base, **(b.get("grid") or {})})
+
+
 def plan_estimate(b: dict, mean_wall: float) -> dict:
     ops = [o for o in b.get("ops", []) if o in OPS]
     types = [t for t in b.get("types", []) if t in TYPES]
-    preset = b.get("preset", "quick")
-    if not ops or not types or preset not in PRESETS:
-        return {"cells": 0, "arm_cells": 0, "seconds": 0}
-    cells = plan_cells(ops, types, PRESETS[preset], float(b.get("mem_gib") or 3.0))
-    return {"cells": len(cells), "arm_cells": 2 * len(cells), "seconds": 2 * len(cells) * mean_wall}
+    try:
+        grid = request_grid(b)
+    except (ValueError, TypeError) as e:
+        return {"cells": 0, "arm_cells": 0, "seconds": 0, "error": str(e)}
+    cells = plan_cells(ops, types, grid) if ops and types else []
+    # The n x batch occupancy the preview draws: one mark per (n, batch) in the union.
+    marks = sorted({(c.n, c.batch) for c in cells})
+    return {"cells": len(cells), "arm_cells": 2 * len(cells), "seconds": 2 * len(cells) * mean_wall,
+            "orders": sorted({c.n for c in cells}), "batches": sorted({c.batch for c in cells}),
+            "marks": marks, "grid": grid.to_dict()}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -193,10 +204,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, (HERE / "dashboard.html").read_bytes(), "text/html; charset=utf-8")
         if u.path == "/api/meta":
             return self._json({
-                "ops": [{"name": k, "title": v.title, "types": list(v.types), "notes": v.notes}
+                "ops": [{"name": k, "title": v.title, "types": list(v.types), "notes": v.notes, "group": v.group, "vendor": list(v.vendor),
+                         "orders": list(v.orders), "min_order": v.min_order, "max_order": v.max_order}
                         for k, v in OPS.items()],
                 "types": [{"name": t, "label": TYPE_LABEL[t]} for t in TYPES],
-                "presets": [{"name": k, "step": v.batch_step, "min_batch": v.min_batch} for k, v in PRESETS.items()],
+                "presets": {k: v.to_dict() for k, v in PRESETS.items()},
                 "campaigns": list_campaigns(self.root),
             })
         if u.path == "/api/state":
@@ -273,8 +285,11 @@ class Handler(BaseHTTPRequestHandler):
     def _run(self, b: dict):
         ops = [o for o in b.get("ops", []) if o in OPS]
         types = [t for t in b.get("types", []) if t in TYPES]
-        preset = b.get("preset", "quick")
-        if not ops or not types or preset not in PRESETS:
+        try:
+            grid = request_grid(b)
+        except (ValueError, TypeError) as e:
+            return self._json({"error": f"grid: {e}"}, 400)
+        if not ops or not types:
             return self._json({"error": "choose at least one op and one precision"}, 400)
         name = "".join(ch for ch in str(b.get("campaign") or "") if ch.isalnum() or ch in "-_.") \
             or time.strftime("cuda-%Y%m%d-%H%M%S")
@@ -283,10 +298,8 @@ class Handler(BaseHTTPRequestHandler):
             if p and p.poll() is None:
                 return self._json({"error": f"{name} is already running"}, 409)
             cmd = [sys.executable, str(HERE), "run", "--root", str(self.root), "--campaign", name,
-                   "--ops", ",".join(ops), "--types", ",".join(types), "--preset", preset,
-                   "--gpu", str(int(b.get("gpu", 1)))]
-            if b.get("orders"):
-                cmd += ["--orders", ",".join(str(int(x)) for x in str(b["orders"]).split(",") if x.strip())]
+                   "--ops", ",".join(ops), "--types", ",".join(types),
+                   "--grid-json", json.dumps(grid.to_dict()), "--gpu", str(int(b.get("gpu", 1)))]
             for d in self.build_dirs:
                 cmd += ["--build-dir", str(d)]
             (self.root / name).mkdir(parents=True, exist_ok=True)

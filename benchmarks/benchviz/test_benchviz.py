@@ -6,7 +6,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from ops import OPS, PRESETS, batch_ladder, plan_cells  # noqa: E402
+from ops import OPS, PRESETS, Grid, batch_ladder, parse_list, plan_cells  # noqa: E402
 from plots import paired, saturated  # noqa: E402
 from runner import classify, parse_coverage  # noqa: E402
 
@@ -61,7 +61,7 @@ class Coverage(unittest.TestCase):
         self.assertFalse(classify({**c, "ok": True, "reason": "ok"}, OPS["potrf"], "batchlas")["ok"])
 
 
-class Grid(unittest.TestCase):
+class Ladder(unittest.TestCase):
     def test_ladder_is_descending_and_memory_capped(self):
         b = batch_ladder(OPS["syev"], "cdouble", 1024, PRESETS["full"], mem_gib=3.0)
         self.assertEqual(b, sorted(b, reverse=True))
@@ -71,6 +71,29 @@ class Grid(unittest.TestCase):
         cells = plan_cells(["gesvd"], ["cfloat", "float"], PRESETS["smoke"], 3.0)
         self.assertTrue(cells)
         self.assertEqual({c.dtype for c in cells}, {"float"})
+
+
+class GridSpec(unittest.TestCase):
+    def test_list_syntax(self):
+        self.assertEqual(parse_list("4:32"), [4, 8, 16, 32])
+        self.assertEqual(parse_list("8:32:8, 5"), [5, 8, 16, 24, 32])
+        with self.assertRaises(ValueError):
+            parse_list("16:x")
+
+    def test_modes(self):
+        op = OPS["gemm"]
+        sat = Grid.from_dict({**PRESETS["quick"].to_dict(), "batch_mode": "saturated"})
+        self.assertEqual(len(batch_ladder(op, "float", 64, sat)), 1)
+        lst = Grid.from_dict({**PRESETS["quick"].to_dict(), "batch_mode": "list", "batches": "100,1000"})
+        self.assertEqual(batch_ladder(op, "float", 64, lst), [1000, 100])
+
+    def test_orders_are_clipped_to_what_the_op_supports(self):
+        g = Grid.from_dict({**PRESETS["quick"].to_dict(), "orders": "16:128"})
+        self.assertEqual({c.n for c in plan_cells(["gesvd"], ["float"], g)}, {16, 32})
+
+    def test_old_campaign_config_still_loads(self):
+        g = Grid.from_config({"preset": "smoke", "mem_gib": 2.0, "orders": [8, 16]})
+        self.assertEqual((g.batch_step, g.mem_gib, g.orders), (16, 2.0, [8, 16]))
 
 
 class Pairing(unittest.TestCase):

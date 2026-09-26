@@ -24,7 +24,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from ops import OPS, PRESETS, Cell, plan_cells
+from ops import OPS, Cell, Grid, plan_cells
 from store import Campaign
 
 GUARD_CONTAMINATED = 5
@@ -171,9 +171,9 @@ class Runner:
     # ------------------------------------------------------------ campaign
     def run(self):
         cfg = self.camp.config
-        preset = PRESETS[cfg["preset"]]
+        grid = Grid.from_config(cfg)
         req = cfg.get("request", cfg)
-        cells = plan_cells(req["ops"], req["types"], preset, cfg["mem_gib"], cfg.get("orders"))
+        cells = plan_cells(req["ops"], req["types"], grid)
         done = self.camp.done_keys()
         todo = [(c, a.key) for c in cells for a in OPS[c.op].arms if c.key(a.key) not in done]
         total = len(cells) * 2
@@ -193,13 +193,13 @@ class Runner:
                 if failed_ops.get(cell.op, "").startswith("binary"):
                     rec = dict(asdict(cell), arm=arm, ok=False, reason=failed_ops[cell.op])
                 else:
-                    rec = self._run_arm(cell, arm, preset.reps, tmp)
+                    rec = self._run_arm(cell, arm, grid.reps, tmp)
                     # factor_bench's noise gate: re-measure rather than leave a hole.
                     for _ in range(2):
                         if rec.get("ok") or "relsd" not in str(rec.get("reason")):
                             break
                         self.log(f"  noisy ({rec['reason']}); re-measuring")
-                        rec = self._run_arm(cell, arm, preset.reps, tmp)
+                        rec = self._run_arm(cell, arm, grid.reps, tmp)
                     if not rec["ok"] and rec["reason"].startswith("binary"):
                         failed_ops[cell.op] = rec["reason"]
                 self.camp.append(rec)
