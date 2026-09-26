@@ -7,420 +7,534 @@
 <style>
 :root {
   color-scheme: light;
-  --page: #f9f9f7;
-  --surface: #fcfcfb;
-  --surface-2: #f3f2ef;
-  --ink: #0b0b0b;
-  --ink-2: #52514e;
-  --muted: #898781;
-  --hair: #e1e0d9;
-  --axis: #c3c2b7;
-  --ring: rgba(11,11,11,0.10);
-  --accent: #2a78d6;
-  --accent-ink: #ffffff;
-  --good: #0ca30c;
-  --warn: #c98500;
-  --bad: #d03b3b;
-  --flash: rgba(42,120,214,0.35);
+  --page: #f6f6f4; --surface: #ffffff; --sunken: #f0efec;
+  --ink: #111110; --ink-2: #4d4c48; --muted: #8a8882;
+  --hair: #e4e3de; --hair-2: #d6d5cf;
+  --accent: #1f77b4; --accent-soft: rgba(31,119,180,.10); --on-accent: #fff;
+  --win: #1f77b4; --lose: #8c564b;
+  --good: #2e8b3d; --warn: #b7791f; --bad: #c0392b;
+  --shadow: 0 1px 2px rgba(0,0,0,.04), 0 4px 16px rgba(0,0,0,.04);
+  --radius: 10px;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
-    --page: #0d0d0d; --surface: #1a1a19; --surface-2: #232321;
-    --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
-    --hair: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10);
-    --accent: #3987e5; --flash: rgba(57,135,229,0.45);
+    --page: #0f0f0e; --surface: #181817; --sunken: #121211;
+    --ink: #f2f1ec; --ink-2: #c3c2b9; --muted: #85837c;
+    --hair: #2a2a28; --hair-2: #353532;
+    --accent: #4c9be0; --accent-soft: rgba(76,155,224,.14);
+    --win: #5aa6e6; --lose: #c89484; --shadow: none;
   }
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --page: #0d0d0d; --surface: #1a1a19; --surface-2: #232321;
-  --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
-  --hair: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10);
-  --accent: #3987e5; --flash: rgba(57,135,229,0.45);
+  --page: #0f0f0e; --surface: #181817; --sunken: #121211;
+  --ink: #f2f1ec; --ink-2: #c3c2b9; --muted: #85837c;
+  --hair: #2a2a28; --hair-2: #353532;
+  --accent: #4c9be0; --accent-soft: rgba(76,155,224,.14);
+  --win: #5aa6e6; --lose: #c89484; --shadow: none;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; }
-body {
-  background: var(--page); color: var(--ink);
-  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
-}
-.mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+body { background: var(--page); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+.mono { font-family: var(--mono); }
 .num { font-variant-numeric: tabular-nums; }
-
-/* ---------------------------------------------------------------- shell */
-header {
-  position: sticky; top: 0; z-index: 5;
-  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
-  padding: 12px 24px; background: var(--surface);
-  border-bottom: 1px solid var(--hair);
-}
-header h1 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
-header h1 span { color: var(--muted); font-weight: 400; }
-.grow { flex: 1; }
-select, input, button {
-  font: inherit; color: inherit; background: var(--surface);
-  border: 1px solid var(--hair); border-radius: 6px; padding: 6px 10px;
-}
+.muted { color: var(--muted); }
+button, select, input { font: inherit; color: inherit; }
 button { cursor: pointer; }
-button.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; font-weight: 600; }
-button.ghost { background: transparent; }
-button:disabled { opacity: .5; cursor: default; }
-button:focus-visible, select:focus-visible, input:focus-visible, .chip:focus-within {
-  outline: 2px solid var(--accent); outline-offset: 1px;
-}
-.layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 24px; padding: 24px; max-width: 1680px; margin: 0 auto; }
-@media (max-width: 900px) { .layout { grid-template-columns: 1fr; padding: 16px; } header { padding: 12px 16px; } }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.btn { background: var(--surface); border: 1px solid var(--hair-2); border-radius: 8px; padding: 6px 12px; font-size: 13px; text-decoration: none; }
+.btn:hover { background: var(--sunken); }
+.btn.primary { background: var(--accent); border-color: transparent; color: var(--on-accent); font-weight: 600; }
+.btn.primary:hover { filter: brightness(1.06); }
+.btn.danger { color: var(--bad); }
+.btn.icon { padding: 6px 9px; }
+.btn:disabled { opacity: .45; cursor: default; }
 
-.panel { background: var(--surface); border: 1px solid var(--hair); border-radius: 10px; padding: 16px; }
-.panel h2 { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 12px; }
-aside .panel + .panel { margin-top: 16px; }
-label.field { display: block; font-size: 12px; color: var(--ink-2); margin: 12px 0 6px; }
-.chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.chip { position: relative; }
-.chip input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
-.chip span {
-  display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 12.5px;
-  border: 1px solid var(--hair); color: var(--ink-2); user-select: none;
-}
-.chip input:checked + span { background: var(--ink); color: var(--surface); border-color: var(--ink); }
-.row { display: flex; gap: 8px; }
-.row > * { flex: 1; min-width: 0; }
-.row select, .row input { width: 100%; }
-.actions { display: flex; gap: 8px; margin-top: 16px; }
-.hint { font-size: 12px; color: var(--muted); margin-top: 8px; }
+/* ---------------------------------------------------------------- chrome */
+.top { position: sticky; top: 0; z-index: 20; background: var(--surface); border-bottom: 1px solid var(--hair); }
+.bar1 { display: flex; align-items: center; gap: 12px; padding: 10px 20px; }
+.brand { display: flex; align-items: baseline; gap: 8px; font-weight: 650; letter-spacing: -.01em; }
+.brand small { font-weight: 400; color: var(--muted); }
+.grow { flex: 1; }
+.campsel { border: 1px solid var(--hair-2); border-radius: 8px; padding: 6px 10px; background: var(--surface); min-width: 220px; }
+.bar2 { display: grid; grid-template-columns: auto minmax(160px, 1fr) auto auto auto auto; gap: 18px; align-items: center;
+  padding: 8px 20px 10px; font-size: 13px; }
+.state { display: inline-flex; align-items: center; gap: 7px; font-weight: 600; text-transform: capitalize; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.running .dot { background: var(--accent); animation: ping 1.6s infinite; }
+.finished .dot, .imported .dot { background: var(--good); }
+.failed .dot, .interrupted .dot { background: var(--bad); }
+.stopped .dot { background: var(--warn); }
+@keyframes ping { 0% { box-shadow: 0 0 0 0 rgba(31,119,180,.45); } 70% { box-shadow: 0 0 0 7px rgba(31,119,180,0); } 100% { box-shadow: 0 0 0 0 rgba(31,119,180,0); } }
+.prog { display: flex; align-items: center; gap: 10px; }
+.track { flex: 1; height: 6px; background: var(--sunken); border-radius: 3px; overflow: hidden; }
+.track > i { display: block; height: 100%; width: 0; background: var(--accent); border-radius: 3px; transition: width .6s ease; }
+.kv { color: var(--muted); white-space: nowrap; }
+.kv b { color: var(--ink); font-weight: 600; }
+.current { font-family: var(--mono); font-size: 12px; color: var(--ink-2); background: var(--sunken); padding: 3px 8px; border-radius: 6px;
+  max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prov { padding: 0 20px 8px; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 1000px) { .bar2 { grid-template-columns: auto 1fr; } .bar2 .opt { display: none; } }
 
-/* ---------------------------------------------------------------- status */
-.status { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; align-items: end; }
-@media (max-width: 700px) { .status { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-.stat .k { font-size: 12px; color: var(--muted); }
-.stat .v { font-size: 22px; font-weight: 600; letter-spacing: -0.01em; }
-.stat .v small { font-size: 13px; font-weight: 400; color: var(--muted); }
-.pill { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600;
-  padding: 3px 10px; border-radius: 999px; border: 1px solid var(--hair); }
-.pill i { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
-.pill.running i { background: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
-.pill.finished i { background: var(--good); }
-.pill.failed i, .pill.interrupted i { background: var(--bad); }
-.pill.stopped i { background: var(--warn); }
-@keyframes pulse { 50% { opacity: .35; } }
-.bar { height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; margin-top: 16px; }
-.bar > div { height: 100%; background: var(--accent); border-radius: 3px; transition: width .6s ease; }
-.current { margin-top: 8px; font-size: 12.5px; color: var(--ink-2); min-height: 1.4em; }
-.prov { margin-top: 12px; font-size: 12px; color: var(--muted); }
+.shell { display: grid; grid-template-columns: 250px minmax(0, 1fr); min-height: calc(100vh - 110px); }
+@media (max-width: 860px) { .shell { grid-template-columns: 1fr; } .rail { position: static !important; max-height: none !important; border-right: 0 !important; } }
 
-/* ---------------------------------------------------------------- figures */
-.opnav { display: flex; flex-wrap: wrap; gap: 6px; margin: 24px 0 8px; }
-.opnav a { text-decoration: none; color: var(--ink-2); font-size: 12.5px; padding: 3px 10px;
-  border: 1px solid var(--hair); border-radius: 999px; }
-.opnav a b { font-weight: 600; color: var(--ink); }
-.opnav a em { font-style: normal; color: var(--bad); }
-section.op { margin-top: 24px; scroll-margin-top: 72px; }
-section.op h3 { display: flex; align-items: baseline; gap: 10px; margin: 0 0 12px; font-size: 16px; font-weight: 600; }
-section.op h3 .mono { font-size: 15px; }
-section.op h3 small { font-size: 12.5px; font-weight: 400; color: var(--muted); }
-/* Figures are shown near their PRINTED size (1.45 css px per printed px at
-   96 dpi), so a single-column figure never balloons to a 1400 px card. */
-.figs { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; }
-figure { margin: 0; flex: 0 1 auto; max-width: 100%; background: #ffffff; border-radius: 8px; box-shadow: 0 0 0 1px var(--ring);
-  padding: 10px; cursor: zoom-in; transition: box-shadow .3s; position: relative; }
-figure img { display: block; width: 100%; height: auto; }
-figure:not(.sized) { width: 480px; }
-figure.fresh { box-shadow: 0 0 0 3px var(--flash); }
-.empty { color: var(--muted); font-size: 13px; padding: 32px; text-align: center;
-  border: 1px dashed var(--hair); border-radius: 8px; }
+/* ---------------------------------------------------------------- rail */
+.rail { border-right: 1px solid var(--hair); padding: 14px 10px; position: sticky; top: 110px; align-self: start;
+  max-height: calc(100vh - 110px); overflow: auto; }
+.rail h4 { margin: 14px 10px 6px; font-size: 11px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
+.navi { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; align-items: center; padding: 8px 10px; border-radius: 8px;
+  text-decoration: none; color: inherit; position: relative; }
+.navi:hover { background: var(--sunken); }
+.navi.on { background: var(--accent-soft); }
+.navi .nm { font-family: var(--mono); font-weight: 600; font-size: 13px; }
+.navi .ti { grid-column: 1 / -1; font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.navi .mini { grid-column: 1 / -1; height: 3px; background: var(--sunken); border-radius: 2px; overflow: hidden; margin-top: 3px; }
+.navi .mini i { display: block; height: 100%; background: var(--accent); float: left; }
+.navi .mini i.bad { background: var(--bad); float: right; }
+.navi.live .nm::after { content: " ●"; color: var(--accent); font-size: 9px; vertical-align: 2px; animation: blink 1.4s infinite; }
+@keyframes blink { 50% { opacity: .25; } }
+.sp { font-family: var(--mono); font-size: 12.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.sp.win { color: var(--win); } .sp.lose { color: var(--lose); }
 
-/* ---------------------------------------------------------------- tables & log */
-details.panel { margin-top: 24px; }
-details summary { cursor: pointer; font-weight: 600; font-size: 13px; }
-table { border-collapse: collapse; width: 100%; font-size: 12.5px; margin-top: 12px; }
-th { text-align: left; font-weight: 600; color: var(--muted); border-bottom: 1px solid var(--hair); padding: 6px 8px; }
-td { border-bottom: 1px solid var(--hair); padding: 6px 8px; vertical-align: top; }
-td.num { text-align: right; }
-pre.log { margin: 12px 0 0; max-height: 300px; overflow: auto; font-size: 12px; line-height: 1.5;
-  color: var(--ink-2); background: var(--surface-2); border-radius: 6px; padding: 10px 12px; white-space: pre-wrap; }
+/* ---------------------------------------------------------------- view */
+.view { padding: 22px 28px 60px; min-width: 0; }
+.vh { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 4px; }
+.vh h2 { margin: 0; font-size: 22px; letter-spacing: -.015em; font-weight: 650; }
+.vh h2 .mono { font-size: 21px; }
+.sub { color: var(--muted); font-size: 13px; margin-bottom: 18px; }
+.card { background: var(--surface); border: 1px solid var(--hair); border-radius: var(--radius); box-shadow: var(--shadow); }
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; margin-bottom: 18px; }
+.tile { padding: 14px 16px; }
+.tile .k { font-size: 12px; color: var(--muted); display: flex; justify-content: space-between; gap: 8px; }
+.tile .v { font-size: 26px; font-weight: 650; letter-spacing: -.02em; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.tile .v small { font-size: 13px; font-weight: 500; color: var(--muted); letter-spacing: 0; }
+.tile .f { font-size: 12px; color: var(--ink-2); margin-top: 4px; font-variant-numeric: tabular-nums; }
+.tile .v.win { color: var(--win); } .tile .v.lose { color: var(--lose); }
+.sec { margin: 26px 0 10px; display: flex; align-items: center; gap: 12px; }
+.sec h3 { margin: 0; font-size: 12px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
+.sec .grow { border-top: 1px solid var(--hair); }
 
-/* ---------------------------------------------------------------- lightbox */
+.seg { display: inline-flex; background: var(--sunken); border-radius: 9px; padding: 3px; gap: 2px; }
+.seg button { border: 0; background: transparent; border-radius: 7px; padding: 5px 12px; font-size: 13px; color: var(--ink-2); }
+.seg button.on { background: var(--surface); color: var(--ink); font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+.figbox { padding: 16px; }
+.figtools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.paper { background: #fff; border-radius: 6px; padding: 14px; display: flex; justify-content: center; position: relative; min-height: 120px;
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,.06); }
+.paper img { display: block; max-width: min(100%, 1100px); max-height: 72vh; height: auto; cursor: zoom-in; }
+.paper.fresh { animation: fresh 1.4s ease; }
+@keyframes fresh { 0% { box-shadow: 0 0 0 3px rgba(31,119,180,.55); } 100% { box-shadow: 0 0 0 3px rgba(31,119,180,0); } }
+.stamp { position: absolute; right: 12px; bottom: 6px; font-size: 11px; color: #8a8882; }
+.empty { padding: 44px 20px; text-align: center; color: var(--muted); }
+
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th { text-align: left; font-weight: 600; font-size: 12px; color: var(--muted); padding: 8px 12px; border-bottom: 1px solid var(--hair);
+  position: sticky; top: 0; background: var(--surface); white-space: nowrap; user-select: none; }
+th.sort { cursor: pointer; } th.sort:hover { color: var(--ink); }
+td { padding: 7px 12px; border-bottom: 1px solid var(--hair); }
+tr:last-child td { border-bottom: 0; }
+td.r, th.r { text-align: right; }
+tbody tr.link { cursor: pointer; } tbody tr.link:hover td { background: var(--sunken); }
+.tbl { max-height: 460px; overflow: auto; border-radius: var(--radius); }
+.route { font-family: var(--mono); font-size: 11.5px; color: var(--ink-2); }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { border: 1px solid var(--hair-2); background: transparent; border-radius: 999px; padding: 3px 11px; font-size: 12.5px; color: var(--ink-2); }
+.chip.on { background: var(--ink); border-color: var(--ink); color: var(--surface); }
+.two { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 14px; }
+@media (max-width: 1200px) { .two { grid-template-columns: 1fr; } }
+.feed { list-style: none; margin: 0; padding: 4px 0; }
+.feed li { display: grid; grid-template-columns: 64px 1fr auto; gap: 10px; padding: 7px 14px; font-size: 12.5px; border-bottom: 1px solid var(--hair); align-items: baseline; }
+.feed li:last-child { border-bottom: 0; }
+.feed .when { color: var(--muted); font-variant-numeric: tabular-nums; }
+.feed .what { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.feed .bad { color: var(--bad); }
+details.card > summary { padding: 12px 16px; cursor: pointer; font-weight: 600; font-size: 13px; list-style: none; display: flex; gap: 8px; align-items: center; }
+details.card > summary::-webkit-details-marker { display: none; }
+details.card > summary::before { content: "›"; display: inline-block; transition: transform .15s; color: var(--muted); }
+details.card[open] > summary::before { transform: rotate(90deg); }
+pre.log { margin: 0; padding: 12px 16px; max-height: 320px; overflow: auto; font: 12px/1.55 var(--mono); color: var(--ink-2);
+  background: var(--sunken); border-top: 1px solid var(--hair); white-space: pre-wrap; border-radius: 0 0 var(--radius) var(--radius); }
+
+/* ---------------------------------------------------------------- drawer & lightbox */
+.scrim { position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 40; opacity: 0; pointer-events: none; transition: opacity .2s; }
+.scrim.on { opacity: 1; pointer-events: auto; }
+.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(440px, 100vw); background: var(--surface); z-index: 50;
+  border-left: 1px solid var(--hair); transform: translateX(100%); transition: transform .22s ease; display: flex; flex-direction: column; }
+.drawer.on { transform: none; }
+.drawer header { display: flex; align-items: center; padding: 16px 20px; border-bottom: 1px solid var(--hair); }
+.drawer header h3 { margin: 0; font-size: 16px; }
+.drawer .body { padding: 4px 20px 20px; overflow: auto; flex: 1; }
+.drawer footer { padding: 14px 20px; border-top: 1px solid var(--hair); display: flex; gap: 10px; align-items: center; }
+.lbl { display: flex; justify-content: space-between; align-items: baseline; font-size: 12px; font-weight: 600; color: var(--ink-2); margin: 18px 0 8px; }
+.lbl a { font-weight: 400; color: var(--accent); cursor: pointer; }
+.opgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.optc { display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--hair); border-radius: 8px; cursor: pointer; }
+.optc:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.optc input { margin: 2px 0 0; accent-color: var(--accent); }
+.optc b { font-family: var(--mono); font-size: 12.5px; display: block; }
+.optc span { font-size: 11.5px; color: var(--muted); }
+.field { width: 100%; border: 1px solid var(--hair-2); border-radius: 8px; padding: 7px 10px; background: var(--surface); }
+.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.estimate { font-size: 13px; color: var(--ink-2); }
+.estimate b { color: var(--ink); }
+.msg { font-size: 12.5px; color: var(--muted); margin-top: 18px; }
 dialog { border: 0; padding: 0; background: transparent; max-width: 96vw; }
 dialog::backdrop { background: rgba(0,0,0,.6); }
-dialog .box { background: #fff; border-radius: 10px; padding: 16px; }
-dialog img { max-width: 92vw; max-height: 80vh; display: block; }
-dialog .bar2 { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
-dialog .bar2 a, dialog .bar2 button { font-size: 13px; color: #0b0b0b; background: #fff; border: 1px solid #e1e0d9;
-  border-radius: 6px; padding: 6px 12px; text-decoration: none; }
+dialog .box { background: #fff; border-radius: 10px; padding: 14px; }
+dialog img { max-width: 92vw; max-height: 82vh; display: block; }
+dialog .acts { display: flex; gap: 8px; justify-content: flex-end; margin-top: 10px; }
+dialog .acts a, dialog .acts button { font-size: 13px; color: #111; background: #fff; border: 1px solid #d6d5cf; border-radius: 7px; padding: 6px 12px; text-decoration: none; }
 </style>
 </head>
 <body>
-<header>
-  <h1>BatchLAS <span>vs vendor LAPACK</span></h1>
-  <div class="grow"></div>
-  <label class="sr" for="campaign" style="font-size:12px;color:var(--muted)">Campaign</label>
-  <select id="campaign" aria-label="Campaign"></select>
-  <button class="ghost" id="theme" title="Toggle theme" aria-label="Toggle theme">◐</button>
-</header>
-
-<div class="layout">
-  <aside>
-    <form class="panel" id="runform">
-      <h2>New run</h2>
-      <label class="field">Operations</label>
-      <div class="chips" id="ops"></div>
-      <label class="field">Precision</label>
-      <div class="chips" id="types"></div>
-      <div class="row">
-        <div><label class="field" for="preset">Grid</label><select id="preset"></select></div>
-        <div><label class="field" for="gpu">GPU</label><input id="gpu" type="number" min="0" value="1"></div>
-      </div>
-      <label class="field" for="name">Campaign name <span style="color:var(--muted)">(reuse to resume or extend)</span></label>
-      <input id="name" placeholder="auto: cuda-YYYYMMDD-HHMMSS" style="width:100%">
-      <div class="actions">
-        <button type="submit" class="primary">Start</button>
-        <button type="button" id="stop" class="ghost">Stop</button>
-        <button type="button" id="replot" class="ghost">Replot</button>
-      </div>
-      <div class="hint" id="formmsg">Runs one process per cell on the chosen GPU, behind gpu_guard.sh.</div>
-    </form>
-    <div class="panel">
-      <h2>Reading the figures</h2>
-      <div class="hint" style="margin:0">
-        Speedup is vendor time divided by BatchLAS time. Anything above 1× means BatchLAS is faster.
-        The BatchLAS arm is pinned to <span class="mono">native</span>. A cell whose native pin fell back to a vendor route is
-        dropped, not plotted. An open marker means the BatchLAS arm still calls a vendor sub-op, such as cuBLAS gemm.
-        The n-figures use the largest batch at which both arms were measured.
-      </div>
-    </div>
-  </aside>
-
-  <main>
-    <div class="panel">
-      <div class="status">
-        <div class="stat"><div class="k">State</div><div class="v"><span class="pill" id="pill"><i></i><span>idle</span></span></div></div>
-        <div class="stat"><div class="k">Cells</div><div class="v num" id="cells">—</div></div>
-        <div class="stat"><div class="k">Remaining</div><div class="v num" id="eta">—</div></div>
-        <div class="stat"><div class="k">Failed arm-cells</div><div class="v num" id="nfail">—</div></div>
-      </div>
-      <div class="bar"><div id="barfill" style="width:0"></div></div>
-      <div class="current mono" id="current"></div>
-      <div class="prov" id="prov"></div>
-    </div>
-
-    <nav class="opnav" id="opnav"></nav>
-    <div id="figs"><div class="empty">Pick a campaign or start a run.</div></div>
-
-    <details class="panel" id="failbox">
-      <summary>Failed and dropped cells <span id="failcount" style="color:var(--muted);font-weight:400"></span></summary>
-      <table><thead><tr><th>op</th><th>precision</th><th class="num">n</th><th class="num">batch</th><th>arm</th><th>reason</th></tr></thead>
-      <tbody id="failrows"></tbody></table>
-    </details>
-    <details class="panel" open>
-      <summary>Run log</summary>
-      <pre class="log mono" id="log"></pre>
-    </details>
-  </main>
+<div class="top">
+  <div class="bar1">
+    <div class="brand">BatchLAS <small>vs vendor LAPACK</small></div>
+    <select class="campsel" id="campaign" aria-label="Campaign"></select>
+    <div class="grow"></div>
+    <button class="btn primary" id="newrun">New run</button>
+    <button class="btn icon" id="theme" title="Toggle theme" aria-label="Toggle theme">◐</button>
+  </div>
+  <div class="bar2">
+    <span class="state" id="state"><span class="dot"></span><span>idle</span></span>
+    <div class="prog"><div class="track"><i id="fill"></i></div><span class="kv num" id="count"></span></div>
+    <span class="kv opt">Rate <b class="num" id="rate">—</b></span>
+    <span class="kv">Left <b class="num" id="eta">—</b></span>
+    <span class="current opt" id="current" hidden></span>
+    <span style="display:flex;gap:12px;align-items:center">
+      <label class="kv opt" style="cursor:pointer" title="Jump to the op being measured"><input type="checkbox" id="follow" checked style="accent-color:var(--accent)"> Follow</label>
+      <button class="btn danger" id="stop" hidden>Stop</button>
+    </span>
+  </div>
+  <div class="prov" id="prov"></div>
 </div>
 
+<div class="shell">
+  <nav class="rail" id="rail"></nav>
+  <main class="view" id="view"><div class="empty">Loading…</div></main>
+</div>
+
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" aria-label="New run">
+  <header><h3>New run</h3><div class="grow"></div><button class="btn icon" id="dclose" aria-label="Close">✕</button></header>
+  <div class="body">
+    <div class="lbl">Operations <a id="opall">all / none</a></div>
+    <div class="opgrid" id="dops"></div>
+    <div class="lbl">Precision</div>
+    <div class="chips" id="dtypes"></div>
+    <div class="row2">
+      <div><div class="lbl">Grid</div><select class="field" id="dpreset"></select></div>
+      <div><div class="lbl">GPU</div><input class="field" id="dgpu" type="number" min="0" value="1"></div>
+    </div>
+    <div class="lbl">Campaign <span class="muted" style="font-weight:400">an existing name resumes / extends it</span></div>
+    <input class="field" id="dname" placeholder="new: cuda-YYYYMMDD-HHMMSS" list="camplist">
+    <datalist id="camplist"></datalist>
+    <p class="msg">One process per cell and arm on the chosen GPU, behind <span class="mono">gpu_guard.sh</span>. BatchLAS is pinned
+      <span class="mono">native</span>; a cell whose route does not match its arm is dropped and listed.</p>
+  </div>
+  <footer><span class="estimate" id="estimate"></span><div class="grow"></div><button class="btn primary" id="dstart">Start</button></footer>
+</aside>
+
 <dialog id="lb"><div class="box"><img id="lbimg" alt="">
-  <div class="bar2"><a id="lbpdf" download>Download PDF</a><a id="lbpng" download>PNG</a><button id="lbclose">Close</button></div>
+  <div class="acts"><a id="lbpdf" download>PDF</a><a id="lbpng" download>PNG</a><button id="lbclose">Close</button></div>
 </div></dialog>
 
 <script>
 const $ = (id) => document.getElementById(id);
-const FIG_ORDER = ["speedup_n", "throughput_n", "heatmap"];
-const FIG_NAME = { speedup_n: "speedup vs n", throughput_n: "throughput vs n", heatmap: "speedup, n × batch" };
-let meta = null, es = null, current = null, seen = {}, firstPaint = true;
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+const PREC = { float: ["Single", "S"], double: ["Double", "D"], cfloat: ["Complex single", "C"], cdouble: ["Complex double", "Z"] };
+const FIGS = [["speedup_n", "Speedup vs n"], ["throughput_n", "Throughput"], ["heatmap", "n × batch"]];
+let meta = null, S = null, es = null, camp = null, route = { page: "overview" }, pinned = false;
+let figTab = "speedup_n", sumTab = null, tblFilter = "all", tblSort = ["n", 1], seenFig = {}, opCache = {}, lastRows = null;
+
+// ---------------------------------------------------------------- utils
+const fmtX = (v) => v == null ? "—" : (v >= 9.95 ? v.toFixed(0) : v >= 0.995 ? v.toFixed(2) : v.toFixed(3)) + "×";
+const spCls = (v) => v == null ? "" : v >= 1 ? "win" : "lose";
+const fmtMs = (v) => v == null ? "—" : v >= 100 ? v.toFixed(0) : v >= 1 ? v.toFixed(2) : v.toFixed(4);
+function fmtDur(s) {
+  if (s == null || !isFinite(s)) return "—";
+  s = Math.round(s); if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60), h = Math.floor(m / 60);
+  return h ? `${h}h ${String(m % 60).padStart(2, "0")}m` : `${m}m ${String(s % 60).padStart(2, "0")}s`;
+}
+function ago(t) {
+  if (!t) return ""; const s = Date.now() / 1000 - t;
+  return s < 60 ? `${Math.max(0, Math.round(s))}s` : s < 3600 ? `${Math.round(s / 60)}m` : s < 86400 ? `${Math.round(s / 3600)}h` : `${Math.round(s / 86400)}d`;
+}
+function getSync(url) { const x = new XMLHttpRequest(); x.open("GET", url, false); x.send(); return JSON.parse(x.responseText); }
+async function post(url, body) { return (await fetch(url, { method: "POST", body: JSON.stringify(body) })).json(); }
+const figUrl = (path, v) => `/fig/${encodeURIComponent(camp)}/${path}${v ? `?v=${v}` : ""}`;
+const prefix = (t) => PREC[t] ? PREC[t][1] : t;
 
 // ---------------------------------------------------------------- theme
-function setTheme(t) {
-  if (t) document.documentElement.dataset.theme = t; else delete document.documentElement.dataset.theme;
-  try { t ? localStorage.setItem("bv-theme", t) : localStorage.removeItem("bv-theme"); } catch (e) {}
-}
+function setTheme(t) { t ? document.documentElement.dataset.theme = t : delete document.documentElement.dataset.theme;
+  try { t ? localStorage.setItem("bv-theme", t) : localStorage.removeItem("bv-theme"); } catch (e) {} }
 try { const t = localStorage.getItem("bv-theme"); if (t) setTheme(t); } catch (e) {}
 $("theme").onclick = () => {
-  const dark = document.documentElement.dataset.theme === "dark" ||
-    (!document.documentElement.dataset.theme && matchMedia("(prefers-color-scheme: dark)").matches);
-  setTheme(dark ? "light" : "dark");
+  const d = document.documentElement.dataset.theme === "dark" || (!document.documentElement.dataset.theme && matchMedia("(prefers-color-scheme: dark)").matches);
+  setTheme(d ? "light" : "dark");
 };
 
-// ---------------------------------------------------------------- form
-function chip(container, name, value, label, checked, title) {
-  const l = document.createElement("label");
-  l.className = "chip"; if (title) l.title = title;
-  l.innerHTML = `<input type="checkbox" name="${name}" value="${value}" ${checked ? "checked" : ""}><span>${label}</span>`;
-  container.appendChild(l);
+// ---------------------------------------------------------------- routing
+function parseHash() {
+  const h = location.hash.replace(/^#\/?/, "").split("/");
+  route = h[0] === "op" && h[1] ? { page: "op", op: h[1] } : { page: "overview" };
 }
-function getSync(url) {  // first paint only: data is on screen before `load`
-  const x = new XMLHttpRequest(); x.open("GET", url, false); x.send(); return JSON.parse(x.responseText);
-}
-function loadMeta() {
-  meta = getSync("/api/meta");
-  $("ops").innerHTML = ""; $("types").innerHTML = ""; $("preset").innerHTML = "";
-  meta.ops.forEach(o => chip($("ops"), "op", o.name, o.name, false, o.title + (o.notes ? " — " + o.notes : "")));
-  meta.types.forEach(t => chip($("types"), "type", t.name, t.label, t.name === "float" || t.name === "double"));
-  meta.presets.forEach(p => { const o = new Option(p, p); $("preset").add(o); });
-  $("preset").value = "quick";
-  fillCampaigns(meta.campaigns);
-}
+window.addEventListener("hashchange", () => { parseHash(); renderRail(); renderView(); });
+// A click in the rail while a run is live pins the view; "Follow" unpins it.
+$("rail").addEventListener("click", () => { if (S && S.status.state === "running") { pinned = true; $("follow").checked = false; } });
+$("follow").onchange = () => { pinned = !$("follow").checked; if (!pinned && S) apply(S); };
+
+// ---------------------------------------------------------------- campaigns
 function fillCampaigns(list) {
-  const sel = $("campaign");
-  const have = [...sel.options].map(o => o.value).join("|");
-  if (have === list.join("|")) return;
-  const keep = sel.value;
-  sel.innerHTML = "";
-  list.forEach(c => sel.add(new Option(c, c)));
-  if (!list.length) sel.add(new Option("no campaigns yet", ""));
-  if (keep && list.includes(keep)) sel.value = keep;
-  if (!current && list.length) {
+  const sel = $("campaign"), cur = [...sel.options].map(o => o.value).join("|");
+  if (cur !== list.join("|")) {
+    sel.innerHTML = list.length ? list.map(c => `<option>${esc(c)}</option>`).join("") : `<option value="">no campaigns yet</option>`;
+    $("camplist").innerHTML = list.map(c => `<option value="${esc(c)}">`).join("");
+    if (camp) sel.value = camp;
+  }
+  if (!camp && list.length) {
     const want = new URLSearchParams(location.search).get("c");
     watch(want && list.includes(want) ? want : list[0]);
   }
 }
 $("campaign").onchange = (e) => watch(e.target.value);
-
-$("runform").onsubmit = async (e) => {
-  e.preventDefault();
-  const pick = (n) => [...document.querySelectorAll(`input[name=${n}]:checked`)].map(i => i.value);
-  const body = { ops: pick("op"), types: pick("type"), preset: $("preset").value,
-                 gpu: +$("gpu").value, campaign: $("name").value.trim() };
-  const r = await fetch("/api/run", { method: "POST", body: JSON.stringify(body) });
-  const j = await r.json();
-  $("formmsg").textContent = j.error ? j.error : `Started ${j.campaign}.`;
-  if (!j.error) { seen = {}; setTimeout(() => watch(j.campaign), 400); }
-};
-$("stop").onclick = async () => {
-  if (!current) return;
-  const j = await (await fetch("/api/stop", { method: "POST", body: JSON.stringify({ campaign: current }) })).json();
-  $("formmsg").textContent = j.error || "Stop requested; the current cell finishes first.";
-};
-$("replot").onclick = async () => {
-  if (!current) return;
-  await fetch("/api/replot", { method: "POST", body: JSON.stringify({ campaign: current }) });
-  $("formmsg").textContent = "Re-rendering every figure…";
-};
-
-// ---------------------------------------------------------------- live state
 function watch(name) {
   if (!name) return;
-  current = name; seen = {}; firstPaint = true;
-  $("campaign").value = name;
-  try { render(getSync(`/api/state?c=${encodeURIComponent(name)}`)); } catch (e) {}
+  camp = name; seenFig = {}; opCache = {}; lastRows = null; $("campaign").value = name;
+  try { apply(getSync(`/api/state?c=${encodeURIComponent(name)}`)); } catch (e) {}
   if (es) es.close();
   es = new EventSource(`/api/events?c=${encodeURIComponent(name)}`);
-  es.onmessage = (ev) => render(JSON.parse(ev.data));
+  es.onmessage = (ev) => apply(JSON.parse(ev.data));
 }
 
-function fmtDur(s) {
-  if (s == null) return "—";
-  s = Math.round(s);
-  if (s < 60) return `${s}s`;
-  const m = Math.floor(s / 60), h = Math.floor(m / 60);
-  return h ? `${h}h ${m % 60}m` : `${m}m ${s % 60}s`;
-}
-
-function render(s) {
+// ---------------------------------------------------------------- state
+function apply(s) {
   if (s.campaigns) fillCampaigns(s.campaigns);
-  if (!s.campaign || s.missing) return;
-  const st = s.status || {};
-  const state = st.state || "idle";
-  $("pill").className = "pill " + state;
-  $("pill").querySelector("span").textContent = state;
-  const done = st.done ?? s.rows, total = st.total ?? s.rows;
-  $("cells").innerHTML = total ? `${done}<small> / ${total}</small>` : "—";
-  $("barfill").style.width = total ? `${(100 * done / total).toFixed(1)}%` : "0";
-  $("eta").textContent = state === "running" ? fmtDur(s.eta_s) : "—";
-  $("nfail").textContent = s.failures.length;
-  $("current").textContent = state === "running" && st.current ? "▸ " + st.current : (st.error || "");
-  const p = s.provenance || {};
-  $("prov").textContent = [p.device, p.vendor_label && `vs ${p.vendor_label}`, p.driver && `driver ${p.driver}`,
-    p.git_sha && `BatchLAS ${p.git_sha}${p.git_dirty ? "+dirty" : ""}`, s.config.preset && `grid ${s.config.preset}`,
-    p.started && `started ${p.started}`].filter(Boolean).join("  ·  ");
-
-  // Figures, grouped by op in registry order, summaries last.
-  const groups = {};
-  s.figures.forEach(f => (groups[f.group] ||= []).push(f));
-  const order = meta ? meta.ops.map(o => o.name).filter(o => groups[o]) : Object.keys(groups).filter(g => g !== "_summary");
-  if (groups._summary) order.push("_summary");
-  const nav = $("opnav"); nav.innerHTML = "";
-  order.forEach(g => {
-    const po = s.per_op[g];
-    const a = document.createElement("a");
-    a.href = `#op-${g}`;
-    a.innerHTML = g === "_summary" ? "<b>summary</b>"
-      : `<b class="mono">${g}</b>${po ? ` <span class="num">${po.ok}</span>` : ""}${po && po.failed ? ` <em class="num">${po.failed}✕</em>` : ""}`;
-    nav.appendChild(a);
-  });
-  const root = $("figs");
-  if (!order.length) {
-    root.innerHTML = `<div class="empty">${state === "running" ? "Measuring — the first figure appears once both arms of a cell have landed." : "No figures yet."}</div>`;
-  } else {
-    if (root.querySelector(".empty")) root.innerHTML = "";
-    order.forEach(g => {
-      let sec = $(`op-${g}`);
-      if (!sec) {
-        sec = document.createElement("section");
-        sec.className = "op"; sec.id = `op-${g}`;
-        const title = g === "_summary" ? "Summary <small>all ops, batch at saturation</small>"
-          : `<span class="mono">${g}</span> ${(meta && meta.ops.find(o => o.name === g) || {}).title || ""}`;
-        sec.innerHTML = `<h3>${title}</h3><div class="figs"></div>`;
-        root.appendChild(sec);
-      }
-      const box = sec.querySelector(".figs");
-      const figs = groups[g].slice().sort((a, b) => {
-        const ia = FIG_ORDER.indexOf(a.name), ib = FIG_ORDER.indexOf(b.name);
-        return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.name.localeCompare(b.name);
-      });
-      figs.forEach(f => {
-        const id = `f-${f.path.replace(/[^a-z0-9]/gi, "_")}`;
-        let el = $(id);
-        const src = `/fig/${encodeURIComponent(s.campaign)}/${f.path}?v=${f.mtime}`;
-        if (!el) {
-          el = document.createElement("figure"); el.id = id;
-          el.title = `${FIG_NAME[f.name] || f.name.replace("summary_", "summary, ")} (click to enlarge)`;
-          el.innerHTML = `<img alt="${g} ${FIG_NAME[f.name] || f.name}">`;
-          el.querySelector("img").addEventListener("load", (ev) => {
-            // savefig.dpi is 300: printed inches = naturalWidth / 300.
-            el.style.width = `${Math.round(ev.target.naturalWidth / 300 * 96 * 1.45) + 20}px`;
-            el.classList.add("sized");
-          });
-          el.onclick = () => openLb(s.campaign, f.path);
-          box.appendChild(el);
-        }
-        if (seen[f.path] !== f.mtime) {
-          const img = el.querySelector("img");
-          if (!img.getAttribute("src")) { img.src = src; seen[f.path] = f.mtime; return; }
-          const pre = new Image();
-          pre.onload = () => { img.src = src; };
-          pre.src = src;
-          if (!firstPaint && seen[f.path] !== undefined) {
-            el.classList.add("fresh"); setTimeout(() => el.classList.remove("fresh"), 1600);
-          }
-          seen[f.path] = f.mtime;
-        }
-      });
-    });
-  }
-  firstPaint = false;
-
-  $("failcount").textContent = s.failures.length ? `(${s.failures.length})` : "";
-  $("failrows").innerHTML = s.failures.slice().reverse().map(f =>
-    `<tr><td class="mono">${f.op}</td><td>${f.dtype}</td><td class="num">${f.n}</td><td class="num">${f.batch}</td>` +
-    `<td>${f.arm}</td><td>${(f.reason || "").replace(/</g, "&lt;")}</td></tr>`).join("");
-  const log = $("log");
-  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 20;
-  log.textContent = s.log.join("\n");
-  if (atBottom) log.scrollTop = log.scrollHeight;
+  if (!s.campaign || s.missing || s.campaign !== camp) return;
+  S = s;
+  if (lastRows !== s.rows) { opCache = {}; lastRows = s.rows; }
+  renderStrip();
+  const live = s.status.state === "running" && s.status.current ? s.status.current.split(" ")[0] : null;
+  if (live && !pinned && (route.page !== "op" || route.op !== live)) { location.hash = `#/op/${live}`; return; }
+  renderRail(); renderView();
 }
+
+function renderStrip() {
+  const st = S.status, state = st.state || "idle", running = state === "running";
+  $("state").className = "state " + state; $("state").lastElementChild.textContent = state;
+  const done = running ? (st.done ?? 0) : S.rows, total = running ? (st.total ?? S.planned) : Math.max(S.planned, S.rows);
+  $("fill").style.width = total ? `${(100 * Math.min(done, total) / total).toFixed(1)}%` : "0";
+  $("count").innerHTML = total ? `<b>${done}</b> / ${total} arm-cells` : "";
+  $("rate").textContent = running && S.rate_per_min ? `${S.rate_per_min.toFixed(1)} / min` : "—";
+  $("eta").textContent = running ? fmtDur(S.eta_s) : "—";
+  $("current").hidden = !(running && st.current); $("current").textContent = st.current || ""; $("current").title = st.current || "";
+  $("stop").hidden = !running;
+  const p = S.provenance || {};
+  $("prov").textContent = [p.device, p.vendor_label && `vs ${p.vendor_label}`, p.driver && `driver ${p.driver}`,
+    p.git_sha && `BatchLAS ${p.git_sha}${p.git_dirty ? " (dirty)" : ""}`, S.config.preset && `${S.config.preset} grid`,
+    p.started && `started ${p.started}`, st.error].filter(Boolean).join("   ·   ");
+}
+
+// ---------------------------------------------------------------- rail
+function renderRail() {
+  if (!meta || !S) return;
+  const live = S.status.state === "running" && S.status.current ? S.status.current.split(" ")[0] : null;
+  const item = (href, on, inner, cls = "") => `<a class="navi${on ? " on" : ""} ${cls}" href="${href}">${inner}</a>`;
+  let h = item("#/overview", route.page === "overview",
+    `<span style="font-weight:600">Overview</span><span></span><span class="ti">every op at saturation</span>`);
+  h += `<h4>Operations</h4>`;
+  meta.ops.filter(o => S.per_op[o.name]).forEach(o => {
+    const po = S.per_op[o.name];
+    const okp = po.planned ? 100 * po.ok / po.planned : 0, badp = po.planned ? 100 * po.failed / po.planned : 0;
+    h += item(`#/op/${o.name}`, route.page === "op" && route.op === o.name,
+      `<span class="nm">${o.name}</span><span class="sp ${spCls(po.geomean)}" title="geomean speedup at saturation">${po.geomean ? fmtX(po.geomean) : ""}</span>
+       <span class="ti">${esc(o.title)}</span><span class="mini"><i style="width:${okp}%"></i><i class="bad" style="width:${badp}%"></i></span>`,
+      live === o.name ? "live" : "");
+  });
+  const others = meta.ops.filter(o => !S.per_op[o.name]);
+  if (others.length) h += `<h4>Not in this campaign</h4>` + others.map(o =>
+    item(`#/op/${o.name}`, route.page === "op" && route.op === o.name, `<span class="nm muted">${o.name}</span><span></span>`)).join("");
+  $("rail").innerHTML = h;
+}
+
+// ---------------------------------------------------------------- views
+function renderView() {
+  if (!S || !meta) return;
+  const y = window.scrollY;
+  if (route.page === "op") renderOp(route.op); else renderOverview();
+  window.scrollTo(0, y);
+}
+
+function figPanel(group, name, alt) {
+  const f = S.figures.find(x => x.group === group && x.name === name);
+  if (!f) return `<div class="paper"><div class="empty">${S.status.state === "running" ? "Renders once both arms of a cell have landed." : "No figure yet."}</div></div>`;
+  const base = f.path.replace(/\.png$/, "");
+  return `<div class="paper" data-fig="${esc(f.path)}" data-m="${f.mtime}">
+      <img src="${figUrl(f.path, f.mtime)}" alt="${esc(alt)}" onclick="openLb('${esc(base)}')">
+      <span class="stamp">rendered ${ago(f.mtime)} ago</span></div>`;
+}
+function flashFresh() {
+  document.querySelectorAll(".paper[data-fig]").forEach(el => {
+    const k = el.dataset.fig, m = el.dataset.m;
+    if (seenFig[k] && seenFig[k] !== m) el.classList.add("fresh");
+    seenFig[k] = m;
+  });
+}
+function segs(items, cur, fn) {
+  return `<div class="seg">${items.map(([k, l]) => `<button class="${k === cur ? "on" : ""}" onclick="${fn}('${k}')">${l}</button>`).join("")}</div>`;
+}
+function setFig(k) { figTab = k; renderView(); }
+function setSum(k) { sumTab = k; renderView(); }
+
+function renderOverview() {
+  const types = Object.keys(PREC).filter(t => (S.config.types || []).includes(t));
+  const ops = meta.ops.filter(o => S.per_op[o.name]);
+  const all = ops.map(o => S.per_op[o.name]), measured = all.filter(p => p.geomean);
+  const gm = measured.length ? Math.exp(measured.reduce((a, p) => a + Math.log(p.geomean), 0) / measured.length) : null;
+  const wins = measured.filter(p => p.geomean >= 1).length;
+  const failed = all.reduce((a, p) => a + p.failed, 0), ok = all.reduce((a, p) => a + p.ok, 0);
+  if (!sumTab || !types.includes(sumTab)) sumTab = types[0];
+  const vend = esc(S.provenance.vendor_label || "vendor");
+  let h = `<div class="vh"><h2>Overview</h2><span class="muted">${esc(camp)}</span></div>
+    <div class="sub">Speedup is ${vend} time divided by BatchLAS time, at the largest batch where both arms were measured. Above 1× BatchLAS is faster.</div>
+    <div class="tiles">
+      <div class="card tile"><div class="k">Geomean speedup</div><div class="v ${spCls(gm)}">${fmtX(gm)}</div><div class="f">over ${measured.length} ops, every precision</div></div>
+      <div class="card tile"><div class="k">Ops BatchLAS wins</div><div class="v">${wins}<small> / ${measured.length}</small></div><div class="f">by geomean at saturation</div></div>
+      <div class="card tile"><div class="k">Measured</div><div class="v">${ok}<small> / ${S.planned}</small></div><div class="f">arm-cells verified or timed</div></div>
+      <div class="card tile"><div class="k">Failed or dropped</div><div class="v" style="${failed ? "color:var(--bad)" : ""}">${failed}</div><div class="f">verification, noise, route mismatch</div></div>
+    </div>
+    <div class="card"><div class="tbl" style="max-height:none"><table>
+      <thead><tr><th>Operation</th>${types.map(t => `<th class="r">${PREC[t][0]} <span class="mono">${PREC[t][1]}</span></th>`).join("")}<th class="r">Arm-cells</th></tr></thead>
+      <tbody>${ops.map(o => { const p = S.per_op[o.name];
+        return `<tr class="link" onclick="location.hash='#/op/${o.name}'"><td><span class="mono" style="font-weight:600">${o.name}</span>&nbsp; <span class="muted">${esc(o.title)}</span></td>` +
+          types.map(t => { const q = p.prec[t]; return `<td class="r">${q ? `<span class="sp ${spCls(q.geomean)}">${fmtX(q.geomean)}</span><br><span class="muted num" style="font-size:11px">${fmtX(q.min)} – ${fmtX(q.max)}</span>` : `<span class="muted">—</span>`}</td>`; }).join("") +
+          `<td class="r num muted">${p.ok + p.failed} / ${p.planned}</td></tr>`; }).join("")}</tbody></table></div></div>`;
+  if (types.length) h += `<div class="sec"><h3>Summary figure</h3><div class="grow"></div>${segs(types.map(t => [t, PREC[t][0]]), sumTab, "setSum")}</div>
+    <div class="card figbox">${figPanel("_summary", `summary_${sumTab}`, `summary ${sumTab}`)}</div>`;
+  h += activityAndLog(null);
+  $("view").innerHTML = h; flashFresh();
+}
+
+function renderOp(op) {
+  const o = meta.ops.find(x => x.name === op); if (!o) { location.hash = "#/overview"; return; }
+  const p = S.per_op[op];
+  let h = `<div class="vh"><h2><span class="mono">${op}</span>&nbsp; ${esc(o.title)}</h2>
+      ${p ? `<span class="muted num">${p.ok + p.failed} / ${p.planned} arm-cells${p.last_t ? ` · last ${ago(p.last_t)} ago` : ""}</span>` : ""}</div>
+    <div class="sub">${o.notes ? esc(o.notes) + ". " : ""}BatchLAS pinned <span class="mono">native</span> against the ${esc(S.provenance.vendor_label || "vendor")} route.</div>`;
+  if (!p) {
+    $("view").innerHTML = h + `<div class="card empty">Not part of this campaign. Start a run with <span class="mono">${op}</span> selected, reusing this campaign's name to extend it.</div>`;
+    return;
+  }
+  const types = Object.keys(PREC).filter(t => p.prec[t]);
+  h += `<div class="tiles">${types.map(t => { const q = p.prec[t];
+      return `<div class="card tile"><div class="k"><span>${PREC[t][0]}</span><span class="mono">${PREC[t][1]}</span></div>
+        <div class="v ${spCls(q.geomean)}">${fmtX(q.geomean)}</div>
+        <div class="f">${fmtX(q.min)} – ${fmtX(q.max)} · faster at ${q.wins} of ${q.n} orders</div></div>`; }).join("") ||
+      `<div class="card tile"><div class="k">Speedup</div><div class="v">—</div><div class="f">no paired cells yet</div></div>`}</div>`;
+  const has = S.figures.some(f => f.group === op && f.name === figTab);
+  h += `<div class="card figbox"><div class="figtools">${segs(FIGS, figTab, "setFig")}<div class="grow"></div>
+      ${has ? `<a class="btn" href="${figUrl(`${op}/${figTab}.pdf`)}" download>PDF</a><a class="btn" href="${figUrl(`${op}/${figTab}.png`)}" download>PNG</a>` : ""}</div>
+      ${figPanel(op, figTab, `${op} ${figTab}`)}</div>`;
+  h += `<div class="sec"><h3>Measurements</h3><div class="grow"></div><div class="chips" id="tf">
+      ${["all", ...types].map(t => `<button class="chip ${tblFilter === t ? "on" : ""}" data-t="${t}" onclick="tblFilter='${t}';drawTable('${op}')">${t === "all" ? "All" : PREC[t][0]}</button>`).join("")}</div></div>
+    <div class="card"><div class="tbl" id="tbl"><div class="empty">Loading…</div></div></div>`;
+  h += activityAndLog(op);
+  $("view").innerHTML = h; flashFresh();
+  drawTable(op);
+}
+
+async function drawTable(op) {
+  if (!opCache[op]) opCache[op] = fetch(`/api/op?c=${encodeURIComponent(camp)}&op=${op}`).then(r => r.json());
+  const data = await opCache[op];
+  const el = $("tbl"); if (!el || route.op !== op) return;
+  document.querySelectorAll("#tf .chip").forEach(b => b.classList.toggle("on", b.dataset.t === tblFilter));
+  const rows = data.rows.filter(r => tblFilter === "all" || r.dtype === tblFilter);
+  const [k, dir] = tblSort, ord = Object.keys(PREC);
+  const val = (r) => k === "dtype" ? ord.indexOf(r.dtype) : r[k];
+  rows.sort((a, b) => (val(a) > val(b) ? 1 : val(a) < val(b) ? -1 : 0) * dir || ord.indexOf(a.dtype) - ord.indexOf(b.dtype) || a.batch - b.batch);
+  if (!rows.length) { el.innerHTML = `<div class="empty">No paired measurements yet.</div>`; return; }
+  const vend = esc(S.provenance.vendor_label || "vendor");
+  const th = (key, label, r) => `<th class="sort${r ? " r" : ""}" onclick="sortBy('${key}','${op}')">${label}${k === key ? (dir > 0 ? " ↑" : " ↓") : ""}</th>`;
+  el.innerHTML = `<table><thead><tr>${th("dtype", "Precision")}${th("n", "n", 1)}${th("batch", "Batch", 1)}${th("time_ms_batchlas", "BatchLAS [ms]", 1)}${th("time_ms_vendor", `${vend} [ms]`, 1)}${th("speedup", "Speedup", 1)}<th>BatchLAS route</th><th>${vend} route</th></tr></thead>
+    <tbody>${rows.map(r => `<tr><td>${PREC[r.dtype] ? PREC[r.dtype][0] : esc(r.dtype)}</td><td class="r num">${r.n}</td><td class="r num">${r.batch}</td>
+      <td class="r num">${fmtMs(r.time_ms_batchlas)}</td><td class="r num">${fmtMs(r.time_ms_vendor)}</td>
+      <td class="r"><span class="sp ${spCls(r.speedup)}">${fmtX(r.speedup)}</span></td>
+      <td class="route">${esc(r.route_batchlas)}</td><td class="route">${esc(r.route_vendor)}</td></tr>`).join("")}</tbody></table>`;
+}
+function sortBy(key, op) { tblSort = [key, tblSort[0] === key ? -tblSort[1] : 1]; drawTable(op); }
+
+function activityAndLog(op) {
+  const act = S.activity.filter(a => !op || a.op === op);
+  const fails = S.failures.filter(f => !op || f.op === op).slice().reverse();
+  const logOpen = $("logbox") && $("logbox").open;
+  const feed = act.length ? `<ul class="feed">${act.map(a => `<li><span class="when">${ago(a.t)} ago</span>
+      <span class="what"><span class="mono">${a.op}</span> ${prefix(a.dtype)} n=${a.n} batch=${a.batch} <span class="muted">${a.arm}</span>
+      ${a.ok ? `<span class="muted num">${fmtMs(a.time_ms)} ms</span>` : `<span class="bad">${esc(a.reason)}</span>`}</span>
+      <span class="sp ${spCls(a.speedup)}">${a.speedup ? fmtX(a.speedup) : ""}</span></li>`).join("")}</ul>`
+    : `<div class="empty">${op ? "No recent cells for this op." : "Nothing yet."}</div>`;
+  return `<div class="sec"><h3>Activity</h3><div class="grow"></div></div>
+    <div class="two"><div class="card">${feed}</div>
+    <div style="display:grid;gap:14px;align-content:start">
+      <details class="card" ${fails.length && fails.length < 30 ? "open" : ""}><summary>Failed or dropped <span class="muted" style="font-weight:400">${fails.length}</span></summary>
+        ${fails.length ? `<div class="tbl" style="max-height:260px"><table><thead><tr><th>Cell</th><th>Arm</th><th>Reason</th></tr></thead><tbody>
+        ${fails.map(f => `<tr><td class="num" style="white-space:nowrap"><span class="mono">${f.op}</span> ${prefix(f.dtype)} n=${f.n} b=${f.batch}</td><td>${f.arm}</td><td>${esc(f.reason)}</td></tr>`).join("")}
+        </tbody></table></div>` : `<div class="empty" style="padding:16px">None.</div>`}</details>
+      <details class="card" id="logbox" ${logOpen ? "open" : ""}><summary>Run log</summary><pre class="log">${esc(S.log.join("\n"))}</pre></details>
+    </div></div>`;
+}
+
+// ---------------------------------------------------------------- drawer
+function openDrawer(on) { $("drawer").classList.toggle("on", on); $("scrim").classList.toggle("on", on); if (on) estimate(); }
+$("newrun").onclick = () => openDrawer(true);
+$("dclose").onclick = $("scrim").onclick = () => openDrawer(false);
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") openDrawer(false); });
+function buildDrawer() {
+  $("dops").innerHTML = meta.ops.map(o => `<label class="optc" title="${esc(o.notes)}"><input type="checkbox" value="${o.name}">
+    <div><b>${o.name}</b><span>${esc(o.title)}</span></div></label>`).join("");
+  $("dtypes").innerHTML = meta.types.map(t => `<button type="button" class="chip ${["float", "double"].includes(t.name) ? "on" : ""}" data-t="${t.name}">${esc(t.label)}</button>`).join("");
+  $("dtypes").onclick = (e) => { const b = e.target.closest(".chip"); if (b) { b.classList.toggle("on"); estimate(); } };
+  $("dpreset").innerHTML = meta.presets.map(p => `<option value="${p.name}">${p.name} · batch ×${p.step} from ${p.min_batch}</option>`).join("");
+  $("dpreset").value = "quick";
+  $("dops").onchange = $("dpreset").onchange = estimate;
+  $("opall").onclick = () => { const bs = [...document.querySelectorAll("#dops input")]; const on = !bs.every(b => b.checked); bs.forEach(b => b.checked = on); estimate(); };
+}
+function runBody() {
+  return { ops: [...document.querySelectorAll("#dops input:checked")].map(i => i.value),
+           types: [...document.querySelectorAll("#dtypes .chip.on")].map(b => b.dataset.t),
+           preset: $("dpreset").value, gpu: +$("dgpu").value, campaign: $("dname").value.trim() };
+}
+async function estimate() {
+  const b = runBody();
+  if (!b.ops.length || !b.types.length) { $("estimate").textContent = "Pick at least one op and one precision."; $("dstart").disabled = true; return; }
+  const e = await post("/api/plan", b);
+  $("dstart").disabled = !e.cells;
+  $("estimate").innerHTML = `<b>${e.arm_cells}</b> arm-cells · about <b>${fmtDur(e.seconds)}</b>`;
+}
+$("dstart").onclick = async () => {
+  const j = await post("/api/run", runBody());
+  if (j.error) { $("estimate").textContent = j.error; return; }
+  openDrawer(false); pinned = false; $("follow").checked = true; setTimeout(() => watch(j.campaign), 500);
+};
+$("stop").onclick = async () => { if (camp && confirm("Stop after the current cell? The campaign can be resumed later.")) await post("/api/stop", { campaign: camp }); };
 
 // ---------------------------------------------------------------- lightbox
-function openLb(camp, path) {
-  const base = `/fig/${encodeURIComponent(camp)}/${path.replace(/\.png$/, "")}`;
-  $("lbimg").src = `${base}.png?t=${Date.now()}`;
-  $("lbpdf").href = `${base}.pdf`; $("lbpng").href = `${base}.png`;
+function openLb(base) {
+  $("lbimg").src = figUrl(`${base}.png`, Date.now()); $("lbpdf").href = figUrl(`${base}.pdf`); $("lbpng").href = figUrl(`${base}.png`);
   $("lb").showModal();
 }
 $("lbclose").onclick = () => $("lb").close();
 $("lb").onclick = (e) => { if (e.target === $("lb")) $("lb").close(); };
 
-loadMeta();
+// ---------------------------------------------------------------- boot
+parseHash();
+meta = getSync("/api/meta");
+buildDrawer();
+fillCampaigns(meta.campaigns);
+if (!meta.campaigns.length) $("view").innerHTML = `<div class="card empty">No campaigns yet.&nbsp; <button class="btn primary" onclick="openDrawer(true)">Start a run</button></div>`;
 </script>
 </body>
 </html>

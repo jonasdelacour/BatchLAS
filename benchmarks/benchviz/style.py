@@ -1,17 +1,11 @@
-"""Journal figure style: LaTeX Computer Modern, real column widths, 8 pt text.
+"""The house figure style: plotting/stylesheet.py, as used for the PASC'24
+dualization paper and the MSc thesis.
 
-Sizes are the printed sizes. A figure made at 3.5 in and \\includegraphics'd at
-\\columnwidth is typeset 1:1, so its 8 pt labels match an 8-9 pt caption -- the
-opposite of the 20 x 10 in, 30 pt figures that shrink to illegibility.
-
-Colour roles (validated with the dataviz palette validator, light surface):
-  precisions  S/D/C/Z  categorical slots 1-4, always with a distinct marker AND a
-                       direct label (slots 3-4 are under 3:1 on white; the label
-                       is the required relief)
-  libraries            BatchLAS in blue; the comparator in secondary ink, dashed,
-                       open markers -- the subject is the one in colour
-  speedup              diverging blue (BatchLAS faster) / red (vendor faster)
-                       around a neutral gray at exactly 1x, on a log2 scale
+Figures are drawn large (20 x 10 in, 30 pt) and scaled down by LaTeX, which
+is what gives the thin lines, big markers and full-box frames their look.
+Line plots: dotted connectors, markers o ^ s * D, a gray 2-sigma band, a
+frameless legend with enlarged markers, red dashed reference lines. Maps:
+viridis, a faint cell grid, bold column titles, a bracketed colorbar label.
 """
 from __future__ import annotations
 
@@ -21,37 +15,35 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
-from matplotlib.colors import LinearSegmentedColormap  # noqa: E402
+import numpy as np  # noqa: E402
+from cycler import cycler  # noqa: E402
 
-SINGLE_COL = 3.5    # in; IEEE/ACM/SIAM single column is 3.3-3.5
-DOUBLE_COL = 7.16   # in; IEEE double column
+FONTSIZE = 30
+PANEL = (20, 10)          # one line-plot panel
+MAP_PANEL = (10, 10)      # one 2D-map panel
 
-INK = "#0b0b0b"
-INK_2 = "#52514e"
-MUTED = "#898781"
-GRID = "#e1e0d9"
-AXIS = "#c3c2b7"
-MISSING = "#f4f3f0"
+# stylesheet.py's colour dictionary, in its order.
+CD = ["#1f77b4", "#e377c2", "#0D9276", "#8c564b", "#7570b3", "#d95f02", "#e7298a", "#66a61e", "#8931EF"]
+MARKERS = ["o", "^", "s", "*", "D"]
+MARKER_SCALES = [1.1, 1.25, 1.0, 1.5, 1.0]
 
-PREC_COLOR = {"float": "#2a78d6", "double": "#eb6834", "cfloat": "#1baf7a", "cdouble": "#eda100"}
-PREC_MARKER = {"float": "o", "double": "s", "cfloat": "^", "cdouble": "D"}
-LIB_COLOR = {"batchlas": "#2a78d6", "vendor": INK_2}
-
-SPEEDUP_CMAP = LinearSegmentedColormap.from_list(
-    "speedup",
-    ["#7a1f1f", "#c93a39", "#ee9491", "#f0efec", "#9ec5f4", "#2a78d6", "#0d366b"],
-)
-
-_applied = False
+PREC_ORDER = ["float", "double", "cfloat", "cdouble"]
+PREC_COLOR = dict(zip(PREC_ORDER, CD))
+PREC_MARKER = dict(zip(PREC_ORDER, MARKERS))
+PREC_MSCALE = dict(zip(PREC_ORDER, MARKER_SCALES))
+LIB_COLOR = {"batchlas": CD[0], "vendor": CD[3]}
+LIB_MARKER = {"batchlas": "o", "vendor": "*"}
+LIB_MSCALE = {"batchlas": 1.1, "vendor": 1.5}
+BAND = "#d3d3d3"
+REF = "red"
+CMAP = "viridis"
 
 
 def usetex_available() -> bool:
-    return all(shutil.which(b) for b in ("latex", "dvipng")) and bool(shutil.which("kpsewhich"))
+    return all(shutil.which(b) for b in ("latex", "dvipng", "kpsewhich"))
 
 
 def apply(usetex: bool | None = None) -> bool:
-    """Set rcParams. Returns whether LaTeX is in use."""
-    global _applied
     if usetex is None:
         usetex = usetex_available()
     rc = plt.rcParams
@@ -60,68 +52,46 @@ def apply(usetex: bool | None = None) -> bool:
         "font.family": "serif",
         "font.serif": ["Computer Modern Roman", "CMU Serif", "DejaVu Serif"],
         "mathtext.fontset": "cm",
-        "text.latex.preamble": r"\usepackage{amsmath}\usepackage{amssymb}",
-        "font.size": 8,
-        "axes.titlesize": 8,
-        "axes.labelsize": 8,
-        "xtick.labelsize": 7,
-        "ytick.labelsize": 7,
-        "legend.fontsize": 7,
-        "axes.linewidth": 0.6,
-        "axes.edgecolor": INK_2,
-        "axes.labelcolor": INK,
-        "axes.titlecolor": INK,
-        "axes.spines.top": False,
-        "axes.spines.right": False,
-        "axes.grid": True,
-        "axes.grid.which": "major",
-        "axes.axisbelow": True,
-        "grid.color": GRID,
-        "grid.linewidth": 0.4,
-        "grid.linestyle": "-",
-        "xtick.color": INK_2,
-        "ytick.color": INK_2,
-        "xtick.labelcolor": INK,
-        "ytick.labelcolor": INK,
-        "xtick.direction": "out",
-        "ytick.direction": "out",
-        "xtick.major.size": 3,
-        "ytick.major.size": 3,
-        "xtick.minor.size": 1.5,
-        "ytick.minor.size": 1.5,
-        "xtick.major.width": 0.6,
-        "ytick.major.width": 0.6,
-        "xtick.minor.width": 0.4,
-        "ytick.minor.width": 0.4,
-        "lines.linewidth": 1.1,
-        "lines.markersize": 3.6,
-        "lines.markeredgewidth": 0.7,
+        "text.latex.preamble": r"\usepackage{amssymb}\usepackage{amsmath}",
+        "font.size": FONTSIZE,
+        "figure.figsize": PANEL,
+        "lines.markersize": 10,
+        "lines.linewidth": 1.5,
+        "lines.markeredgecolor": matplotlib.colors.to_rgba("black", 0.5),
+        "lines.markeredgewidth": 0.01,
+        "legend.markerscale": 2.0,
+        "legend.framealpha": 0,
         "legend.frameon": False,
-        "legend.handlelength": 1.8,
-        "legend.handletextpad": 0.5,
-        "legend.columnspacing": 1.2,
-        "legend.borderaxespad": 0.2,
-        "figure.dpi": 150,
-        "savefig.dpi": 300,
+        "legend.labelspacing": 0.1,
+        "legend.fontsize": int(FONTSIZE * 0.9),
+        "legend.loc": "upper left",
+        "axes.autolimit_mode": "data",
+        "axes.xmargin": 0,
+        "axes.ymargin": 0.10,
+        "axes.titlesize": FONTSIZE,
+        "axes.labelsize": FONTSIZE,
+        "axes.linewidth": 1.0,
+        "axes.grid": True,
+        "axes.axisbelow": True,
+        "axes.prop_cycle": cycler(color=CD),
+        "grid.linestyle": "-",
+        "grid.alpha": 0.2,
+        "xtick.direction": "in",
+        "ytick.direction": "in",
+        "xtick.labelsize": FONTSIZE,
+        "ytick.labelsize": FONTSIZE,
+        "figure.autolayout": False,
+        "figure.constrained_layout.use": True,
+        "savefig.dpi": 100,
         "savefig.bbox": "tight",
-        "savefig.pad_inches": 0.02,
-        "savefig.transparent": False,
-        "figure.facecolor": "white",
-        "axes.facecolor": "white",
-        "hatch.linewidth": 0.4,
-        "hatch.color": GRID,
+        "savefig.facecolor": "white",
         "pdf.fonttype": 42,
         "ps.fonttype": 42,
-        "figure.constrained_layout.use": True,
-        "figure.constrained_layout.h_pad": 0.02,
-        "figure.constrained_layout.w_pad": 0.02,
     })
-    _applied = True
     return usetex
 
 
 def tex(s: str) -> str:
-    """Escape the characters LaTeX treats specially in running text."""
     if not plt.rcParams["text.usetex"]:
         return s
     for a, b in (("\\", r"\textbackslash{}"), ("_", r"\_"), ("%", r"\%"), ("&", r"\&"), ("#", r"\#")):
@@ -129,14 +99,41 @@ def tex(s: str) -> str:
     return s
 
 
+def bold(s: str) -> str:
+    return rf"\textbf{{{tex(s)}}}" if plt.rcParams["text.usetex"] else s
+
+
 def mono(s: str) -> str:
     return rf"\texttt{{{tex(s)}}}" if plt.rcParams["text.usetex"] else s
 
 
 def times(x: float) -> str:
-    """A speedup tick label: 0.25x, 1x, 4x."""
-    if x >= 1:
-        v = f"{x:g}"
-    else:
-        v = f"{x:.3g}".rstrip("0").rstrip(".")
+    v = f"{x:g}" if x >= 1 else f"{x:.3g}"
     return rf"{v}$\times$"
+
+
+def series(ax, x, y, color, marker, mscale=1.0, label=None, band=None, ls=":", zorder=3):
+    """One series in the house style: dotted connector, big marker, optional
+    band = (lo, hi) drawn as the gray 2-sigma fill."""
+    if band is not None:
+        ax.fill_between(x, band[0], band[1], color=BAND, alpha=0.6, lw=0, zorder=1)
+    ax.plot(x, y, ls=ls, color=color, marker=marker, ms=10 * mscale, label=label, zorder=zorder)
+
+
+def band_handle():
+    from matplotlib.patches import Patch
+    return Patch(facecolor=BAND, alpha=0.6, edgecolor="none", label=r"$2\sigma$")
+
+
+def outline(ax):
+    """Full box, as every panel in the house style has."""
+    for s in ax.spines.values():
+        s.set_visible(True)
+        s.set_linewidth(1.0)
+        s.set_color("black")
+
+
+def log2_ticks(lo: float, hi: float, max_ticks: int = 8):
+    k0, k1 = int(np.floor(np.log2(lo))), int(np.ceil(np.log2(hi)))
+    step = max(1, int(np.ceil((k1 - k0 + 1) / max_ticks)))
+    return [2.0 ** k for k in range(k0, k1 + 1, step)]

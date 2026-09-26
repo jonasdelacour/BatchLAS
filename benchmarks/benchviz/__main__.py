@@ -128,7 +128,7 @@ def cmd_plot(a):
     if a.no_tex:
         style.apply(usetex=False)
     camp = Campaign(Path(a.root), a.campaign)
-    out = render_all(camp, titles=not a.no_titles, ops=_csv_list(a.ops, OPS) if a.ops else None)
+    out = render_all(camp, ops=_csv_list(a.ops, OPS) if a.ops else None)
     for p in out:
         print(p.relative_to(camp.dir))
     camp.set_status(camp.status().get("state", "idle"), plotted=time.time())
@@ -194,7 +194,6 @@ def main():
 
     pl = sub.add_parser("plot", parents=[common], help="render all figures of a campaign")
     pl.add_argument("campaign")
-    pl.add_argument("--no-titles", action="store_true", help="omit in-figure titles (for a paper; use captions)")
     pl.add_argument("--no-tex", action="store_true", help="mathtext instead of LaTeX")
     pl.add_argument("--ops", help="only these ops (comma list)")
     pl.set_defaults(fn=cmd_plot)

@@ -19,8 +19,8 @@ python3 benchmarks/benchviz serve            # http://127.0.0.1:8765
 python3 benchmarks/benchviz run --ops potrf,getrf,syev --types float,double --preset quick
 python3 benchmarks/benchviz run --ops all --types all --preset full --campaign paper-4090
 
-# 3. Re-render. Use --no-titles for a paper, where the caption carries the title.
-python3 benchmarks/benchviz plot paper-4090 --no-titles
+# 3. Re-render every figure (e.g. after a style change).
+python3 benchmarks/benchviz plot paper-4090
 ```
 
 Campaigns are stored in `benchviz_runs/<name>/` (git-ignored):
@@ -80,17 +80,22 @@ actually ran (`route`) plus every sub-op route (`subroutes`). A pin is never tak
 
 ## Figures
 
-| Figure | Content | Size |
-|---|---|---|
-| `speedup_n` | vendor time / BatchLAS time against n, one line per precision (S/D/C/Z), log2 axes | 3.5 in (single column) |
-| `throughput_n` | GFLOP/s against n (LAWN 41 counts, complex = 4× real), or matrices/s for syev and gesvd. BatchLAS solid blue, vendor dashed gray, one panel per precision | 7.16 in (double column) |
-| `heatmap` | speedup over the whole n × batch grid. Diverging blue/red around a neutral 1×, clipped at 8×; hatched cells were not measured | 7.16 in |
-| `summary_<t>` | op × n speedup table at saturation | single column |
+| Figure | Content |
+|---|---|
+| `speedup_n` | Vendor time / BatchLAS time against n, at the saturated batch. One series per precision (S/D/C/Z) with a 2σ band, and a red dashed parity line at 1×. Log2 y-axis only when the range exceeds 8×. |
+| `throughput_n` | GFLOP/s against n (LAWN 41 counts, complex = 4× real), or matrices/s for syev and gesvd. BatchLAS (○) vs vendor (★), one panel per precision, with 2σ bands. |
+| `heatmap` | Speedup over the whole n × batch grid, in viridis with log2 colour steps. A red boundary follows the 1× crossing. Empty cells were not measured. |
+| `summary_<t>` | Op × n speedup table at saturation, annotated with the value in each cell. |
 
-All text is 7–8 pt LaTeX Computer Modern, so a figure set at `\columnwidth` is typeset 1:1. The
-colours pass the dataviz palette validator, including colour-vision-deficiency separation. Every
-precision line also has its own marker and a direct label, so colour never carries identity
-alone. PDFs embed TrueType fonts (`pdf.fonttype 42`), as most publishers require.
+The style is the house style of `plotting/stylesheet.py`:
+- LaTeX Computer Modern, drawn at 20 × 10 in with 30 pt text and scaled down by `\includegraphics`.
+- A full box around every panel, ticks pointing in, and a light full grid.
+- Dotted connectors with markers in the order ○ △ □ ★ ◇, and the stylesheet's colour order.
+- A frameless legend with enlarged markers.
+- Units in brackets on every axis.
+- Bold column titles on multi-panel figures, and no in-figure title (the caption carries it).
+
+PDFs embed TrueType fonts (`pdf.fonttype 42`).
 
 ## Grids
 
