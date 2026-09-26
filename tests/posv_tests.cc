@@ -18,6 +18,9 @@
 #include "../src/extensions/solve_native.hh"
 #include "../src/extensions/potrf_native.hh"
 #include "../src/backends/posv_route.hh"
+#include "../src/backends/potrf_route.hh"
+
+#include <batchlas/blas/dispatch/vendor_available.hh>
 
 #include <algorithm>
 #include <cmath>
@@ -409,37 +412,92 @@ TYPED_TEST(PosvTest, TinyRefusesShapesAboveItsCeilings) {
 
 // P7. THE ROUTE, pinned to the MEASURED window; preferred() is asserted all-false
 // permanently because this op passes vendor_available=false and the window therefore
-// lives in native_tier_preferred. evidence: docs/perf/potrf.md#p2-the-measured-posv-window
-// ARMED BREAK (R9): make route_posv.hh's tiny_window_max_n return 8. EXPECTED, and
-// OBSERVED: RED at n = 16, 17 and 32 (17 included -- the tier still FITS there), with
-// n = 4, 8 and the n = 64 bracket GREEN.
+// lives in native_tier_preferred. Outside the tiny window the fused-solve CTA arm takes
+// every shape it can hold. evidence: docs/perf/potrf.md#the-fused-potrs-solve
+// ARMED BREAK (R9): make route_posv.hh's cfloat tiny_window return `order() <= 16`.
+// EXPECTED: RED for cfloat at n = 9 and 16 with nrhs = 1 only.
 TYPED_TEST(PosvTest, AutoTakesTheMeasuredWindow) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::BackendType;
     using Tbl = dispatch::RouteTable<dispatch::Op::posv, T>;
 
     // Restated, not read back from the header: a test that asks the header what the
-    // header says cannot fail.
-    const int win = std::is_same_v<T, std::complex<double>> ? 16 : 32;
+    // header says cannot fail. The tiny window's ceiling for narrow and for wide RHS.
+    constexpr bool kF = std::is_same_v<T, float>;
+    constexpr bool kC = std::is_same_v<T, std::complex<float>>;
+    constexpr bool kZ = std::is_same_v<T, std::complex<double>>;
+    const int narrow = kF ? 16 : kC ? 8 : kZ ? 16 : 32;
+    const int wide = kF ? 32 : kC ? 16 : kZ ? 16 : 32;
 
-    for (int n : {4, 8, 16, 17, 32, 64}) {
-        auto p = make_spd<T>(n, 1, 4, Uplo::Lower, 12u + unsigned(n));
-        auto A = a_view(p); auto Bv = b_view(p);
-        const auto shape = backend::posv_op_shape<B, T>(*this->ctx, A, Bv, Uplo::Lower);
-        ASSERT_TRUE(shape.has_value()) << "n=" << n;
+    for (int nrhs : {1, 4}) {
+        for (int n : {4, 8, 9, 16, 17, 32, 64}) {
+            auto p = make_spd<T>(n, nrhs, 4, Uplo::Lower, 12u + unsigned(n));
+            auto A = a_view(p); auto Bv = b_view(p);
+            const auto shape = backend::posv_op_shape<B, T>(*this->ctx, A, Bv, Uplo::Lower);
+            ASSERT_TRUE(shape.has_value()) << "n=" << n;
 
-        EXPECT_FALSE(Tbl::preferred({dispatch::Origin::Native, dispatch::Algorithm::Tiny},
-                                    *shape))
-            << "n=" << n << ": preferred() is not this op's shipping hook";
+            EXPECT_FALSE(Tbl::preferred({dispatch::Origin::Native, dispatch::Algorithm::Tiny},
+                                        *shape))
+                << "n=" << n << ": preferred() is not this op's shipping hook";
 
-        const bool fits = (n <= sycl_posv::posv_tiny_max_n<T>());
-        const auto want = (fits && n <= win) ? dispatch::Algorithm::Tiny
-                                             : dispatch::Algorithm::Blocked;
-        const auto r = backend::posv_route<B, T>(*this->ctx, A, Bv, Uplo::Lower);
-        EXPECT_EQ(r.algo, want)
-            << "n=" << n << ": Auto resolved to "
-            << std::string(dispatch::to_string(r.algo));
-        EXPECT_EQ(r.origin, dispatch::Origin::Native);
+            const bool fits = (n <= sycl_posv::posv_tiny_max_n<T>());
+            const int win = (nrhs >= 3) ? wide : narrow;
+            const auto want = (fits && n <= win) ? dispatch::Algorithm::Tiny
+                                                 : dispatch::Algorithm::CTA;
+            const auto r = backend::posv_route<B, T>(*this->ctx, A, Bv, Uplo::Lower);
+            EXPECT_EQ(r.algo, want)
+                << "n=" << n << " nrhs=" << nrhs << ": Auto resolved to "
+                << std::string(dispatch::to_string(r.algo));
+            EXPECT_EQ(r.origin, dispatch::Origin::Native);
+        }
+    }
+}
+
+// P7b. The fused-solve CTA arm, pinned, on both triangles. n = 17 and 100 leave a short
+// final nb block, n = 33 and 64 are whole blocks; nrhs covers every accumulator bucket.
+// Batch 96 gives a missing barrier many resident work-groups to race against.
+// potrf is pinned NATIVE: cuSOLVER's Upper potrf overwrites the unreferenced lower
+// triangle, and with the poison gone a wrong-triangle read in the solve passes green.
+// ARMED BREAK (R9): swap ld_a/ld_h in potrs_fused_launch's backward staging.
+// EXPECTED: RED for every n > 1 on Lower, and on Upper wherever potrf ran native.
+TYPED_TEST(PosvTest, FusedSolveArmSolvesOnBothTriangles) {
+    using T = typename TestFixture::T;
+    constexpr Backend B = TestFixture::BackendType;
+    const ScopedEnvVar pin("BATCHLAS_POSV_ROUTE", "cta");
+    const ScopedEnvVar pin_potrf("BATCHLAS_POTRF_ROUTE", "native");
+
+    for (Uplo uplo : {Uplo::Lower, Uplo::Upper}) {
+        for (int nrhs : {1, 2, 3, 8}) {
+            for (int n : {1, 17, 33, 64, 100}) {
+                auto p = make_spd<T>(n, nrhs, 96, uplo, 4242u + unsigned(n * 16 + nrhs));
+                auto A = a_view(p); auto Bv = b_view(p);
+                const auto r = backend::posv_route<B, T>(*this->ctx, A, Bv, uplo);
+                ASSERT_EQ(r.algo, dispatch::Algorithm::CTA)
+                    << "the pin fell through at n=" << n << " nrhs=" << nrhs;
+                const size_t need = posv_buffer_size<B, T>(*this->ctx, A, Bv, uplo);
+                UnifiedVector<std::byte> ws(need > 0 ? need : size_t(1));
+                (void)posv<B, T>(*this->ctx, A, Bv, uplo, Span<std::byte>(ws.data(), need),
+                           p.info.to_span());
+                this->ctx->wait();
+
+                for (int item : {0, p.batch / 2, p.batch - 1}) {
+                    EXPECT_EQ(p.info[item], 0) << "n=" << n;
+                    EXPECT_LT(solve_residual(p, item, uplo), solve_tol<T>(n))
+                        << "n=" << n << " nrhs=" << nrhs << " item=" << item
+                        << " uplo=" << (uplo == Uplo::Lower ? "L" : "U");
+                }
+                // The poison in the other triangle is what makes a wrong-triangle READ
+                // in the solve visible, so a native potrf must leave it in place.
+                const auto pr = backend::potrf_route<B, T>(
+                    *this->ctx, A, uplo, dispatch::factorization_vendor_available<B>);
+                if (dispatch::is_native(pr)) {
+                    size_t where = 0;
+                    EXPECT_TRUE(untouched_outside_triangle(p, uplo, &where))
+                        << "n=" << n << " uplo=" << (uplo == Uplo::Lower ? "L" : "U")
+                        << ": first changed element at " << where;
+                }
+            }
+        }
     }
 }
 

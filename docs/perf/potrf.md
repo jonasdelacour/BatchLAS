@@ -2041,3 +2041,60 @@ false when `tiny_max_n < 1`, so deleting the same test from `tiny_window()` chan
 test can observe. Same shape as the corresponding break on the `geqrf` window. The first three
 are the load-bearing ones and all went red — in particular the third, which is what stops the
 `uplo` test being deleted from `preferred()` now that the tiny window no longer needs it.
+
+## The fused potrs solve
+
+**2026-09-26.** posv's composed arm was `potrf; trsm; trsm`, and at nrhs = 1 the two
+trsm launches cost 4.6x the potrf they follow (float n = 64, batch 16384: potrf 0.53 ms,
+posv 2.96 ms against cuSOLVER's 1.74 ms). A new tier, `{Native, CTA}`, runs the routed
+potrf and then **one** kernel for both triangular solves: `sycl_getrs::potrs_fused_dispatch`
+in `getrs_fused.cc`, the fused narrow-RHS getrs body with no pivots and a non-unit
+diagonal on both phases. Lower solves L in the axpy form and L^H in the dot form; Upper
+is the mirror image. It shares getrs's resident-RHS capacity and `kGetrsFusedMaxRhs`.
+
+The arm order is Tiny, CTA, Blocked; above the tiny window CTA takes every shape it can
+hold and Blocked is its capacity fallback. Ratios are `t_vendor / t_native`, Lower,
+nrhs = 1, factor_bench, 5 reps, interleaved; batch 32768 to n = 32, 16384 at 64,
+4096 at 128, 1024 at 256.
+
+| n | float before | float after | cfloat before | cfloat after |
+|---:|---:|---:|---:|---:|
+| 64 | 0.59 | **2.07** | 1.18 | **4.56** |
+| 128 | 0.79 | **1.62** | 3.35 | **7.03** |
+| 256 | 1.02 | **1.46** | 11.3 | **15.4** |
+
+Upper, batch 16384: float 1.39 / 1.10, cfloat 2.27 / 2.24 at n = 64 / 128. double and
+cdouble, batch 8192, CTA against Blocked: 4.2 / 3.9 / 2.5 / 1.6x (double) and
+4.5 / 4.1 / 2.5 / 1.5x (cdouble) at n = 33 / 64 / 128 / 256, and ahead of cuSOLVER at
+every one of those cells.
+
+### The tiny window moved
+
+CTA also beats the fused tiny kernel inside part of its old window. Batch 32768,
+`t_vendor / t_arm`:
+
+| type | nrhs | n = 12 | 16 | 17 | 24 | 32 |
+|---|---:|---|---|---|---|---|
+| float | 1 | tiny 3.31, cta 1.92 | 3.41 / 2.07 | 1.35 / **1.46** | 1.59 / **1.70** | 2.01 / **2.22** |
+| float | 2 | 2.35 / 2.10 | 2.51 / 2.33 | 0.88 / **1.38** | 1.10 / **1.73** | 1.18 / **1.86** |
+| float | 4 | 3.74 / 1.54 | 3.54 / 1.45 | **1.19** / 1.14 | **1.30** / 1.15 | **1.45** / 1.22 |
+| cfloat | 1 | 0.91 / **1.15** | 1.13 / **1.30** | 0.47 / **1.07** | 0.88 / **1.94** | 1.40 / **3.13** |
+| cfloat | 2 | 0.46 / **0.68** | 0.63 / **0.84** | 0.33 / **0.94** | 0.63 / **1.62** | 0.98 / **2.52** |
+| cfloat | 4 | **0.75** / 0.57 | **1.11** / 0.83 | 0.44 / **0.86** | 0.76 / **1.33** | 1.23 / **1.98** |
+
+So `tiny_window` is now: float `n <= 16 || nrhs >= 3`, cfloat `n <= 8 || (n <= 16 &&
+nrhs >= 3)`. cfloat n = 8 stays tiny at every width (2.93 / 1.29 / 1.74 against CTA's
+1.27 / 0.72 / 0.47). double and cdouble keep the tier ceiling: tiny against CTA is
+unmeasured for them. nrhs = 3 is interpolated from 2 and 4.
+
+**Still losing:** cfloat 9..17 at nrhs >= 2 loses to cuSOLVER on both arms (best 0.68-0.94).
+
+### The poisoned triangle is only poison if potrf leaves it alone
+
+`FusedSolveArmSolvesOnBothTriangles` pins potrf `native`. Unpinned, Upper at n >= 33
+resolves potrf to cuSOLVER, which **overwrites the unreferenced lower triangle**, so
+the solve's wrong-triangle read (the armed break: swap `ld_a`/`ld_h` in the backward
+staging) returned the right answer and stayed green on Upper at n = 33, 64 and 100.
+Pinned, the break is red on Lower at every n > 1 and on Upper wherever potrf ran native
+(n = 17 and 33 for every type, n = 64 where CTA fits). The test asserts the poison
+survived only where potrf resolved native.

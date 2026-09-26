@@ -137,9 +137,9 @@ for _s in (
     _fb("geqrf", "QR factorization", flops_geqrf),
     _fb("orgqr", "QR: form Q", flops_orgqr, footprint=5.0, setup_ops=("geqrf",)),
     _fb("gesv", "General linear solve", flops_gesv, nrhs=1, footprint=5.0,
-        notes="composed: getrf + getrs, both sub-ops pinned per arm", composed_of=("getrf", "getrs")),
+        notes="native arm is the shipped route: fused tiny in its window, else getrf + getrs", composed_of=("getrf", "getrs")),
     _fb("posv", "SPD linear solve", flops_posv, nrhs=1, footprint=5.0,
-        notes="composed: potrf + trsm, both sub-ops pinned per arm", composed_of=("potrf", "trsm")),
+        notes="native arm is the shipped route: fused tiny in its window, else potrf + trsm", composed_of=("potrf", "trsm")),
     OpSpec(
         name="ormqr", title="QR: apply Q", harness="minibench", binary="ormqr_benchmark",
         types=("float", "double"),

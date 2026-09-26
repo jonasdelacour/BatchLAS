@@ -32,7 +32,7 @@ ROOT="$(dirname "$HERE")"
 GPU="${GPU:-1}"
 REPS="${REPS:-7}"
 GUARD="$HERE/gpu_guard.sh"
-ARMS="${ARMS:-tiny,vendor,native}"
+ARMS="${ARMS:-tiny,vendor,composed}"
 
 BENCH="${FACTOR_BENCH:-}"
 if [ -z "$BENCH" ]; then

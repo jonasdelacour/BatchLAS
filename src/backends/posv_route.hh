@@ -9,6 +9,7 @@
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 
+#include "../extensions/getrs_native.hh"
 #include "../extensions/solve_native.hh"
 
 #include <optional>
@@ -54,6 +55,14 @@ inline std::optional<dispatch::PosvShape> posv_op_shape(
     // `potrf` then two routed `trsm` calls; all three are public entry points the
     // facade guarantees in every build with the device family.
     s.composed_available = true;
+
+    // Device-queried, exactly as potrs_fused_dispatch re-checks it.
+    const std::size_t local_mem = ctx.device().get_property(DeviceProperty::LOCAL_MEM_SIZE);
+    const std::size_t budget = (local_mem > 4096) ? (local_mem - 4096) : 0;
+    s.fused_max_rhs_elems = s.is_gpu ? static_cast<int64_t>(
+                                           sycl_getrs::getrs_fused_max_rhs_elems<T>(budget))
+                                     : 0;
+    s.fused_max_nrhs = sycl_getrs::kGetrsFusedMaxRhs;
 
     return s;
 }

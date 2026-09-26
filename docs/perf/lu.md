@@ -1672,7 +1672,8 @@ three explicit and `run_solve_grid.sh` interleaves them in one process:
 | `tiny` | `tiny` | — (one fused kernel) |
 | `blocked` | `blocked` | `getrf`, `getrs` under `Auto` — **the incumbent, what a user gets today** |
 | `vendor` | `blocked` | `getrf`=vendor, `getrs`=vendor |
-| `native` | `blocked` | `getrf`=tiny, `getrs`=cta (the two-launch native arm) |
+| `composed` | `blocked` | `getrf`=tiny, `getrs`=cta (the two-launch native arm; named `native` until 2026-09-26) |
+| `native` | `native` | `getrf`=native, `getrs`=native -- the SHIPPED native walk, what benchviz plots |
 
 The flip is gated on `tiny` vs **`blocked`**, because that is the arm it replaces.
 
