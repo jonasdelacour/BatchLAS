@@ -318,6 +318,19 @@ def serve(root: Path, host: str, port: int, build_dirs: list):
     Handler.build_dirs = build_dirs
     httpd = ThreadingHTTPServer((host, port), Handler)
     httpd.daemon_threads = True
+    # Port forwarders (VS Code Remote, ssh -L localhost:...) may dial ::1 rather
+    # than 127.0.0.1; listen on the IPv6 loopback too so both reach the page.
+    if host in ("127.0.0.1", "localhost"):
+        import socket
+
+        class V6(ThreadingHTTPServer):
+            address_family = socket.AF_INET6
+        try:
+            v6 = V6(("::1", port), Handler)
+            v6.daemon_threads = True
+            threading.Thread(target=v6.serve_forever, daemon=True).start()
+        except OSError:
+            pass
     print(f"benchviz dashboard: http://{host}:{port}/   (campaigns in {root})", flush=True)
     if host in ("127.0.0.1", "localhost"):
         print(f"  from another machine: ssh -L {port}:localhost:{port} {os.uname().nodename}")
