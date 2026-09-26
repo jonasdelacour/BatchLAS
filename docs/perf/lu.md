@@ -1858,3 +1858,43 @@ never as a wrong answer.
 Instantiation count, for R7: 2 kernels x 3 N x 2 NR x 4 types = 48, less the two
 `cdouble` N = 32 arms per kernel = **44**. The device-link delta of
 `batchlas_extensions_cta` is likewise owed and not taken.
+
+### The N=4 bucket and the CTA band
+
+**2026-09-26.** benchviz's native getrf arm lost 0.36-0.52x at n <= 8 on both single
+types because the vendor-free tie-break reused the *vs-vendor* tiny window: below its
+floor it fell through to CTA, which runs ~3x slower than tiny there. Three changes:
+
+1. **`getrf_tiny` gains an N = 4 bucket** -- eight matrices per sub-group instead of
+   four half-empty N = 8 partitions. Batch 32768, `t_vendor / t_tiny`: float n = 4
+   1.22 -> 1.45, cfloat 1.04 -> 1.40. At batch 262144 both arms sit on the DRAM roof
+   (float n = 4: vendor 0.0378 ms, tiny 0.0382 ms, ~890 GB/s), so 0.99 is a tie at the
+   ceiling, not a loss; 32768 is not saturated at this order. fp64 still loses
+   (double 0.72, cdouble 0.68 at 262144) and stays unrouted.
+2. **`tiny_native`**: the vendor-free walk takes Tiny at every n <= 8 for float and
+   cfloat, including the vendor ties (float 4, cfloat 4 and 8).
+3. **The vs-vendor windows**, batch 131072, gate 1.11:
+
+| cell | vendor/tiny | vendor/cta | ships |
+|---|---:|---:|---|
+| float 5 | 1.46 | 0.37 | tiny (new) |
+| float 7 | 1.32 | 0.36 | tiny (new) |
+| float 17 | 1.14 | **1.31** | CTA (new) |
+| float 18 | 1.16 | **1.30** | CTA |
+| float 19 | 1.15 | **1.28** | CTA |
+| float 20 | 1.16 | **1.25** | CTA |
+| float 21 | 1.15 | **1.23** | CTA |
+| float 22 | 1.15 | **1.19** | CTA |
+| float 24 | **1.18** | 1.11 | tiny |
+| float 28 | **1.23** | 0.94 | tiny |
+| float 32 | **1.29** | 0.73 | tiny |
+| cfloat 5 | 1.15 | -- | tiny (new) |
+| cfloat 6 | 1.15 | -- | tiny (new) |
+| cfloat 7 | 1.24 | -- | tiny (new) |
+| cfloat 8 | 1.10 | -- | vendor (under the gate, as before) |
+
+float n = 23 sits between 22 (CTA) and 24 (tiny) and is given to tiny unmeasured.
+
+**Still losing** on every native tier: cfloat 17..32 (batch 32768: tiny 0.37 / 0.50 /
+0.64, CTA 1.02 / 0.80 / 0.50 at n = 17 / 24 / 32) and cfloat 64 / 128 on Blocked.
+Auto routes these to cuSOLVER, so only the vendor-free build pays.

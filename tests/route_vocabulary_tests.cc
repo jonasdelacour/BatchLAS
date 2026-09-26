@@ -1721,13 +1721,15 @@ using GetriTableCD = RouteTable<Op::getri, std::complex<double>>;
 } // namespace
 
 TEST(RouteGetrf, TheMeasuredTinyWindowAndNothingElse) {
-    // float 8..32, cfloat 9..16, both bracketed by a MEASURED non-winner below and
-    // (for cfloat) above. evidence: docs/perf/lu.md#the-tiny-getrf-window
+    // Tiny: float 5..16 and 23..32, cfloat 5..7 and 9..16; CTA: float 17..22. Every edge
+    // is a MEASURED non-winner or the other tier's measured win.
+    // evidence: docs/perf/lu.md#the-n4-bucket-and-the-cta-band
     using F   = RouteTable<Op::getrf, float>;
     using CF  = RouteTable<Op::getrf, std::complex<float>>;
     using D   = RouteTable<Op::getrf, double>;
     using CD  = RouteTable<Op::getrf, std::complex<double>>;
     constexpr Route kTiny{Origin::Native, Algorithm::Tiny};
+    constexpr Route kCta{Origin::Native, Algorithm::CTA};
     constexpr Route kAuto{Origin::Auto, Algorithm::Auto};
 
     auto hits = [](auto tbl, const GetrfShape& sh) {
@@ -1739,28 +1741,39 @@ TEST(RouteGetrf, TheMeasuredTinyWindowAndNothingElse) {
     };
 
     // IN the window, exactly ONE tier answers (R8b) and Auto takes a native route.
-    for (int64_t n : {8, 9, 12, 16, 17, 24, 32}) {
+    for (int64_t n : {5, 7, 8, 9, 12, 16, 23, 24, 32}) {
         const auto sh = getrf_shape(n, 16384, /*cta_max_n=*/128, /*tiny_max=*/32);
         EXPECT_TRUE(F::preferred(kTiny, sh)) << "float n=" << n;
         EXPECT_EQ(hits(F{}, sh), 1) << "float n=" << n;
         EXPECT_TRUE(is_native(resolve_getrf_route<float>(kAuto, sh, true))) << "float n=" << n;
     }
-    for (int64_t n : {9, 12, 16}) {
+    for (int64_t n : {17, 20, 22}) {                    // CTA's band: 1.19-1.31x vs 1.14-1.16x
+        const auto sh = getrf_shape(n, 16384, 128, 32);
+        EXPECT_FALSE(F::preferred(kTiny, sh)) << "float n=" << n;
+        EXPECT_TRUE(F::preferred(kCta, sh)) << "float n=" << n;
+        EXPECT_EQ(hits(F{}, sh), 1) << "float n=" << n;
+        EXPECT_EQ(resolve_getrf_route<float>(kAuto, sh, true), kCta) << "float n=" << n;
+    }
+    for (int64_t n : {5, 7, 9, 12, 16}) {
         const auto sh = getrf_shape(n, 16384, 128, 32);
         EXPECT_TRUE(CF::preferred(kTiny, sh)) << "cfloat n=" << n;
         EXPECT_EQ(hits(CF{}, sh), 1) << "cfloat n=" << n;
     }
 
-    // The four MEASURED brackets. Each of these is a cell that lost, not a guess.
-    for (int64_t n : {1, 4, 7}) {                       // float below the floor
+    // The MEASURED brackets. Each of these is a cell that lost or tied, not a guess.
+    for (int64_t n : {1, 4}) {                          // float n=4 ties at the DRAM roof
         const auto sh = getrf_shape(n, 65536, 128, 32);
-        EXPECT_FALSE(F::preferred(kTiny, sh)) << "float n=" << n << " measured 0.888x at n=4";
+        EXPECT_FALSE(F::preferred(kTiny, sh)) << "float n=" << n << " measured 0.99x at n=4";
         EXPECT_TRUE(is_vendor(resolve_getrf_route<float>(kAuto, sh, true)));
+        // ...but the vendor-FREE walk still takes Tiny: ~3x the CTA tier here.
+        EXPECT_EQ(resolve_getrf_route<float>(kAuto, sh, false), kTiny) << "float n=" << n;
     }
-    for (int64_t n : {4, 8}) {                          // cfloat below its floor
+    for (int64_t n : {4, 8}) {                          // cfloat's two ties
         const auto sh = getrf_shape(n, 65536, 128, 32);
         EXPECT_FALSE(CF::preferred(kTiny, sh))
             << "cfloat n=" << n << ": n=8 falls to 1.086x one doubling deeper";
+        EXPECT_EQ(resolve_getrf_route<std::complex<float>>(kAuto, sh, false), kTiny)
+            << "cfloat n=" << n;
     }
     for (int64_t n : {17, 24, 32}) {                    // cfloat above its ceiling
         const auto sh = getrf_shape(n, 65536, 128, 32);

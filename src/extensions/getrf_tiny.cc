@@ -51,6 +51,7 @@ static_assert(resident::sm89_fits(kWorstRegsPerThread, kTinyWg),
 // 0 means "above the tier" -- `unsupported`, never a silent leading-submatrix factorisation.
 constexpr int tiny_bucket(int n) {
     if (n < 1) return 0;
+    if (n <= 4) return 4;   // eight matrices per sub-group; n = 4 half-fills N = 8
     if (n <= 8) return 8;
     if (n <= 16) return 16;
     if (n <= 32) return 32;
@@ -71,7 +72,7 @@ Event getrf_tiny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int n, int bat
     using D = typename DM::type;
     using R = typename DM::real;
     static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
-    static_assert(N == 8 || N == 16 || N == 32, "the tiny ladder is {8, 16, 32}");
+    static_assert(N == 4 || N == 8 || N == 16 || N == 32, "the tiny ladder is {4, 8, 16, 32}");
 
     D* const ap = reinterpret_cast<D*>(a_ptr);
     // Via the shared helper, not kTinyWg / N: the guarantees stay where they are owned.
@@ -270,6 +271,9 @@ Event getrf_tiny_dispatch(Queue& ctx,
     auto piv_i32 = pivots.as_span<int>();
 
     switch (bucket) {
+        case 4:
+            return getrf_tiny_launch<T, 4>(ctx, A.data_ptr(), A.ld(), A.stride(), n, batch,
+                                           piv_i32.data(), info.data());
         case 8:
             return getrf_tiny_launch<T, 8>(ctx, A.data_ptr(), A.ld(), A.stride(), n, batch,
                                            piv_i32.data(), info.data());

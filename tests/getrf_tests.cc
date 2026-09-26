@@ -3908,7 +3908,7 @@ TYPED_TEST(LuTest, TinyDirectEntryPointRefusesWhatSupportsRefuses) {
 }
 
 // T9. ROUTING. Tiny is in the order array FIRST and its supports() gate answers on the
-// tier's own ceiling. Its window is now MEASURED -- float 8..32, cfloat 9..16 -- so this
+// tier's own ceiling. Its window is MEASURED -- float 5..16 and 23..32, cfloat 5..7 and 9..16 -- so this
 // case asserts the window from both sides rather than "never preferred", which is what it
 // said while the grid was outstanding. fp64 has no window on this part at any order.
 // evidence: docs/perf/lu.md#the-tiny-getrf-window
@@ -3922,7 +3922,7 @@ TYPED_TEST(LuTest, TinyRoutesInsideItsMeasuredWindowAndNowhereElse) {
     constexpr bool kWindowed =
         std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>;
     const int in_n  = std::is_same_v<T, float> ? 8 : 9;    // float n=8 1.256x, cfloat 9 1.993x
-    const int out_n = std::is_same_v<T, float> ? 4 : 8;    // float n=4 0.888x, cfloat 8 1.086x
+    const int out_n = std::is_same_v<T, float> ? 4 : 8;    // float n=4 0.99x, cfloat 8 1.086x
 
     auto p = make_dominant_permuted<T>(std::min(in_n, this->tiny_max_n()), 3, 21u);
     auto V = view_of(p);
@@ -3959,6 +3959,14 @@ TYPED_TEST(LuTest, TinyRoutesInsideItsMeasuredWindowAndNowhereElse) {
                                                     dispatch::factorization_vendor_available<B>);
         EXPECT_NE(def.algo, dispatch::Algorithm::Tiny)
             << "automatic() took Tiny below its measured floor";
+        if constexpr (kWindowed) {
+            // A tie with the vendor, but ~3x the CTA tier: the native walk takes Tiny.
+            ScopedEnvVar pin("BATCHLAS_GETRF_ROUTE", "native");
+            const auto nat = backend::getrf_route<B, T>(*this->ctx, QV,
+                                                        /*vendor_available=*/false);
+            EXPECT_EQ(nat.algo, dispatch::Algorithm::Tiny)
+                << "the vendor-free walk left Tiny for CTA at order " << out_n;
+        }
     }
 
     // ABOVE the window, for cfloat only: n = 17 pads into the N = 32 array and measures

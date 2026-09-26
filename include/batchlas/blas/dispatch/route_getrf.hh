@@ -69,12 +69,13 @@ struct RouteTable<Op::getrf, T> {
         }
     }
 
-    // TWO DISJOINT windows, one per tier: exactly one may answer true at any order, or
+    // DISJOINT windows, one per tier: exactly one may answer true at any order, or
     // the order array becomes the decision (R8b). cfloat 256..511 is BATCH-gated.
     // evidence: docs/perf/lu.md#getrf-window-evidence
     static bool preferred(Route r, const GetrfShape& s) {
         if (!is_native(r)) return false;
         if (r.algo == Algorithm::Tiny) return tiny_window(s);
+        if (r.algo == Algorithm::CTA) return cta_window(s);
         if (r.algo != Algorithm::Blocked) return false;
         if (tiny_window(s)) return false;  // defence in depth; no test observes it
 
@@ -85,18 +86,40 @@ struct RouteTable<Op::getrf, T> {
         return false;   // double and cdouble earn nothing at any order
     }
 
-    // Bounds are measured EDGES. cfloat stops at 16 because 17 pads into the N = 32
-    // register array and loses. evidence: docs/perf/lu.md#the-tiny-getrf-window
+    // Bounds are measured EDGES. n = 4 ties the vendor at the DRAM roof, cfloat 8 falls
+    // under the gate, cfloat 17 pads into N = 32 and loses; float 17..22 is CTA's.
+    // evidence: docs/perf/lu.md#the-n4-bucket-and-the-cta-band
     static bool tiny_window(const GetrfShape& s) {
-        if (s.tiny_max_n < 1) return false;  // 0 spells "tier absent"; also covered below
-        if (s.order() > static_cast<int64_t>(s.tiny_max_n)) return false;
+        if (!tiny_fits(s)) return false;
         if constexpr (std::is_same_v<T, float>) {
-            return s.order() >= 8 && s.order() <= 32;
+            return (s.order() >= 5 && s.order() <= 16) || (s.order() >= 23 && s.order() <= 32);
         } else if constexpr (std::is_same_v<T, std::complex<float>>) {
-            return s.order() >= 9 && s.order() <= 16;
+            return (s.order() >= 5 && s.order() <= 7) || (s.order() >= 9 && s.order() <= 16);
         } else {
             return false;   // fp64 on this part runs at 1/64 rate; no grid, no window
         }
+    }
+
+    static bool cta_window(const GetrfShape& s) {
+        if constexpr (std::is_same_v<T, float>) {
+            return s.order() >= 17 && s.order() <= 22;
+        } else {
+            return false;
+        }
+    }
+
+    // 0 spells "tier absent".
+    static bool tiny_fits(const GetrfShape& s) {
+        return s.tiny_max_n >= 1 && s.order() <= static_cast<int64_t>(s.tiny_max_n);
+    }
+
+    // Native against native: at n <= 8 tiny is ~3x the CTA tier for both single types,
+    // so the vendor-free walk takes it even where the vendor ties.
+    static bool tiny_native(const GetrfShape& s) {
+        if (tiny_window(s)) return true;
+        constexpr bool kSingle =
+            std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>;
+        return kSingle && tiny_fits(s) && s.order() <= 8;
     }
 
     // Native-vs-native tie-break, vendor-free walk only. evidence: docs/perf/lu.md#native_tier_preferred
@@ -113,13 +136,13 @@ struct RouteTable<Op::getrf, T> {
 
         switch (r.algo) {
             // EXPLICIT: `default:` returns TRUE and Tiny leads the order array. Inside
-            // the window only, so the vendor-FREE walk lands where the window points.
+            // tiny_native only, so the vendor-FREE walk lands where the windows point.
             case Algorithm::Tiny:
-                return tiny_window(s);
+                return tiny_native(s);
             case Algorithm::CTA:
-                return !tiny_window(s) && s.order() <= cta_max_order;
+                return !tiny_native(s) && s.order() <= cta_max_order;
             case Algorithm::Blocked:
-                return !tiny_window(s) && s.order() > cta_max_order;
+                return !tiny_native(s) && s.order() > cta_max_order;
             default:
                 return true;
         }
