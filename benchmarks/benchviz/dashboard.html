@@ -1,0 +1,426 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BatchLAS benchviz</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7;
+  --surface: #fcfcfb;
+  --surface-2: #f3f2ef;
+  --ink: #0b0b0b;
+  --ink-2: #52514e;
+  --muted: #898781;
+  --hair: #e1e0d9;
+  --axis: #c3c2b7;
+  --ring: rgba(11,11,11,0.10);
+  --accent: #2a78d6;
+  --accent-ink: #ffffff;
+  --good: #0ca30c;
+  --warn: #c98500;
+  --bad: #d03b3b;
+  --flash: rgba(42,120,214,0.35);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --surface-2: #232321;
+    --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+    --hair: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10);
+    --accent: #3987e5; --flash: rgba(57,135,229,0.45);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --surface-2: #232321;
+  --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+  --hair: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10);
+  --accent: #3987e5; --flash: rgba(57,135,229,0.45);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--page); color: var(--ink);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+.mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+.num { font-variant-numeric: tabular-nums; }
+
+/* ---------------------------------------------------------------- shell */
+header {
+  position: sticky; top: 0; z-index: 5;
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  padding: 12px 24px; background: var(--surface);
+  border-bottom: 1px solid var(--hair);
+}
+header h1 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+header h1 span { color: var(--muted); font-weight: 400; }
+.grow { flex: 1; }
+select, input, button {
+  font: inherit; color: inherit; background: var(--surface);
+  border: 1px solid var(--hair); border-radius: 6px; padding: 6px 10px;
+}
+button { cursor: pointer; }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; font-weight: 600; }
+button.ghost { background: transparent; }
+button:disabled { opacity: .5; cursor: default; }
+button:focus-visible, select:focus-visible, input:focus-visible, .chip:focus-within {
+  outline: 2px solid var(--accent); outline-offset: 1px;
+}
+.layout { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 24px; padding: 24px; max-width: 1680px; margin: 0 auto; }
+@media (max-width: 900px) { .layout { grid-template-columns: 1fr; padding: 16px; } header { padding: 12px 16px; } }
+
+.panel { background: var(--surface); border: 1px solid var(--hair); border-radius: 10px; padding: 16px; }
+.panel h2 { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 12px; }
+aside .panel + .panel { margin-top: 16px; }
+label.field { display: block; font-size: 12px; color: var(--ink-2); margin: 12px 0 6px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { position: relative; }
+.chip input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.chip span {
+  display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 12.5px;
+  border: 1px solid var(--hair); color: var(--ink-2); user-select: none;
+}
+.chip input:checked + span { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+.row { display: flex; gap: 8px; }
+.row > * { flex: 1; min-width: 0; }
+.row select, .row input { width: 100%; }
+.actions { display: flex; gap: 8px; margin-top: 16px; }
+.hint { font-size: 12px; color: var(--muted); margin-top: 8px; }
+
+/* ---------------------------------------------------------------- status */
+.status { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; align-items: end; }
+@media (max-width: 700px) { .status { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.stat .k { font-size: 12px; color: var(--muted); }
+.stat .v { font-size: 22px; font-weight: 600; letter-spacing: -0.01em; }
+.stat .v small { font-size: 13px; font-weight: 400; color: var(--muted); }
+.pill { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600;
+  padding: 3px 10px; border-radius: 999px; border: 1px solid var(--hair); }
+.pill i { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.pill.running i { background: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
+.pill.finished i { background: var(--good); }
+.pill.failed i, .pill.interrupted i { background: var(--bad); }
+.pill.stopped i { background: var(--warn); }
+@keyframes pulse { 50% { opacity: .35; } }
+.bar { height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; margin-top: 16px; }
+.bar > div { height: 100%; background: var(--accent); border-radius: 3px; transition: width .6s ease; }
+.current { margin-top: 8px; font-size: 12.5px; color: var(--ink-2); min-height: 1.4em; }
+.prov { margin-top: 12px; font-size: 12px; color: var(--muted); }
+
+/* ---------------------------------------------------------------- figures */
+.opnav { display: flex; flex-wrap: wrap; gap: 6px; margin: 24px 0 8px; }
+.opnav a { text-decoration: none; color: var(--ink-2); font-size: 12.5px; padding: 3px 10px;
+  border: 1px solid var(--hair); border-radius: 999px; }
+.opnav a b { font-weight: 600; color: var(--ink); }
+.opnav a em { font-style: normal; color: var(--bad); }
+section.op { margin-top: 24px; scroll-margin-top: 72px; }
+section.op h3 { display: flex; align-items: baseline; gap: 10px; margin: 0 0 12px; font-size: 16px; font-weight: 600; }
+section.op h3 .mono { font-size: 15px; }
+section.op h3 small { font-size: 12.5px; font-weight: 400; color: var(--muted); }
+/* Figures are shown near their PRINTED size (1.45 css px per printed px at
+   96 dpi), so a single-column figure never balloons to a 1400 px card. */
+.figs { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; }
+figure { margin: 0; flex: 0 1 auto; max-width: 100%; background: #ffffff; border-radius: 8px; box-shadow: 0 0 0 1px var(--ring);
+  padding: 10px; cursor: zoom-in; transition: box-shadow .3s; position: relative; }
+figure img { display: block; width: 100%; height: auto; }
+figure:not(.sized) { width: 480px; }
+figure.fresh { box-shadow: 0 0 0 3px var(--flash); }
+.empty { color: var(--muted); font-size: 13px; padding: 32px; text-align: center;
+  border: 1px dashed var(--hair); border-radius: 8px; }
+
+/* ---------------------------------------------------------------- tables & log */
+details.panel { margin-top: 24px; }
+details summary { cursor: pointer; font-weight: 600; font-size: 13px; }
+table { border-collapse: collapse; width: 100%; font-size: 12.5px; margin-top: 12px; }
+th { text-align: left; font-weight: 600; color: var(--muted); border-bottom: 1px solid var(--hair); padding: 6px 8px; }
+td { border-bottom: 1px solid var(--hair); padding: 6px 8px; vertical-align: top; }
+td.num { text-align: right; }
+pre.log { margin: 12px 0 0; max-height: 300px; overflow: auto; font-size: 12px; line-height: 1.5;
+  color: var(--ink-2); background: var(--surface-2); border-radius: 6px; padding: 10px 12px; white-space: pre-wrap; }
+
+/* ---------------------------------------------------------------- lightbox */
+dialog { border: 0; padding: 0; background: transparent; max-width: 96vw; }
+dialog::backdrop { background: rgba(0,0,0,.6); }
+dialog .box { background: #fff; border-radius: 10px; padding: 16px; }
+dialog img { max-width: 92vw; max-height: 80vh; display: block; }
+dialog .bar2 { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
+dialog .bar2 a, dialog .bar2 button { font-size: 13px; color: #0b0b0b; background: #fff; border: 1px solid #e1e0d9;
+  border-radius: 6px; padding: 6px 12px; text-decoration: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>BatchLAS <span>vs vendor LAPACK</span></h1>
+  <div class="grow"></div>
+  <label class="sr" for="campaign" style="font-size:12px;color:var(--muted)">Campaign</label>
+  <select id="campaign" aria-label="Campaign"></select>
+  <button class="ghost" id="theme" title="Toggle theme" aria-label="Toggle theme">◐</button>
+</header>
+
+<div class="layout">
+  <aside>
+    <form class="panel" id="runform">
+      <h2>New run</h2>
+      <label class="field">Operations</label>
+      <div class="chips" id="ops"></div>
+      <label class="field">Precision</label>
+      <div class="chips" id="types"></div>
+      <div class="row">
+        <div><label class="field" for="preset">Grid</label><select id="preset"></select></div>
+        <div><label class="field" for="gpu">GPU</label><input id="gpu" type="number" min="0" value="1"></div>
+      </div>
+      <label class="field" for="name">Campaign name <span style="color:var(--muted)">(reuse to resume or extend)</span></label>
+      <input id="name" placeholder="auto: cuda-YYYYMMDD-HHMMSS" style="width:100%">
+      <div class="actions">
+        <button type="submit" class="primary">Start</button>
+        <button type="button" id="stop" class="ghost">Stop</button>
+        <button type="button" id="replot" class="ghost">Replot</button>
+      </div>
+      <div class="hint" id="formmsg">Runs one process per cell on the chosen GPU, behind gpu_guard.sh.</div>
+    </form>
+    <div class="panel">
+      <h2>Reading the figures</h2>
+      <div class="hint" style="margin:0">
+        Speedup is vendor time divided by BatchLAS time. Anything above 1× means BatchLAS is faster.
+        The BatchLAS arm is pinned to <span class="mono">native</span>. A cell whose native pin fell back to a vendor route is
+        dropped, not plotted. An open marker means the BatchLAS arm still calls a vendor sub-op, such as cuBLAS gemm.
+        The n-figures use the largest batch at which both arms were measured.
+      </div>
+    </div>
+  </aside>
+
+  <main>
+    <div class="panel">
+      <div class="status">
+        <div class="stat"><div class="k">State</div><div class="v"><span class="pill" id="pill"><i></i><span>idle</span></span></div></div>
+        <div class="stat"><div class="k">Cells</div><div class="v num" id="cells">—</div></div>
+        <div class="stat"><div class="k">Remaining</div><div class="v num" id="eta">—</div></div>
+        <div class="stat"><div class="k">Failed arm-cells</div><div class="v num" id="nfail">—</div></div>
+      </div>
+      <div class="bar"><div id="barfill" style="width:0"></div></div>
+      <div class="current mono" id="current"></div>
+      <div class="prov" id="prov"></div>
+    </div>
+
+    <nav class="opnav" id="opnav"></nav>
+    <div id="figs"><div class="empty">Pick a campaign or start a run.</div></div>
+
+    <details class="panel" id="failbox">
+      <summary>Failed and dropped cells <span id="failcount" style="color:var(--muted);font-weight:400"></span></summary>
+      <table><thead><tr><th>op</th><th>precision</th><th class="num">n</th><th class="num">batch</th><th>arm</th><th>reason</th></tr></thead>
+      <tbody id="failrows"></tbody></table>
+    </details>
+    <details class="panel" open>
+      <summary>Run log</summary>
+      <pre class="log mono" id="log"></pre>
+    </details>
+  </main>
+</div>
+
+<dialog id="lb"><div class="box"><img id="lbimg" alt="">
+  <div class="bar2"><a id="lbpdf" download>Download PDF</a><a id="lbpng" download>PNG</a><button id="lbclose">Close</button></div>
+</div></dialog>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const FIG_ORDER = ["speedup_n", "throughput_n", "heatmap"];
+const FIG_NAME = { speedup_n: "speedup vs n", throughput_n: "throughput vs n", heatmap: "speedup, n × batch" };
+let meta = null, es = null, current = null, seen = {}, firstPaint = true;
+
+// ---------------------------------------------------------------- theme
+function setTheme(t) {
+  if (t) document.documentElement.dataset.theme = t; else delete document.documentElement.dataset.theme;
+  try { t ? localStorage.setItem("bv-theme", t) : localStorage.removeItem("bv-theme"); } catch (e) {}
+}
+try { const t = localStorage.getItem("bv-theme"); if (t) setTheme(t); } catch (e) {}
+$("theme").onclick = () => {
+  const dark = document.documentElement.dataset.theme === "dark" ||
+    (!document.documentElement.dataset.theme && matchMedia("(prefers-color-scheme: dark)").matches);
+  setTheme(dark ? "light" : "dark");
+};
+
+// ---------------------------------------------------------------- form
+function chip(container, name, value, label, checked, title) {
+  const l = document.createElement("label");
+  l.className = "chip"; if (title) l.title = title;
+  l.innerHTML = `<input type="checkbox" name="${name}" value="${value}" ${checked ? "checked" : ""}><span>${label}</span>`;
+  container.appendChild(l);
+}
+function getSync(url) {  // first paint only: data is on screen before `load`
+  const x = new XMLHttpRequest(); x.open("GET", url, false); x.send(); return JSON.parse(x.responseText);
+}
+function loadMeta() {
+  meta = getSync("/api/meta");
+  $("ops").innerHTML = ""; $("types").innerHTML = ""; $("preset").innerHTML = "";
+  meta.ops.forEach(o => chip($("ops"), "op", o.name, o.name, false, o.title + (o.notes ? " — " + o.notes : "")));
+  meta.types.forEach(t => chip($("types"), "type", t.name, t.label, t.name === "float" || t.name === "double"));
+  meta.presets.forEach(p => { const o = new Option(p, p); $("preset").add(o); });
+  $("preset").value = "quick";
+  fillCampaigns(meta.campaigns);
+}
+function fillCampaigns(list) {
+  const sel = $("campaign");
+  const have = [...sel.options].map(o => o.value).join("|");
+  if (have === list.join("|")) return;
+  const keep = sel.value;
+  sel.innerHTML = "";
+  list.forEach(c => sel.add(new Option(c, c)));
+  if (!list.length) sel.add(new Option("no campaigns yet", ""));
+  if (keep && list.includes(keep)) sel.value = keep;
+  if (!current && list.length) {
+    const want = new URLSearchParams(location.search).get("c");
+    watch(want && list.includes(want) ? want : list[0]);
+  }
+}
+$("campaign").onchange = (e) => watch(e.target.value);
+
+$("runform").onsubmit = async (e) => {
+  e.preventDefault();
+  const pick = (n) => [...document.querySelectorAll(`input[name=${n}]:checked`)].map(i => i.value);
+  const body = { ops: pick("op"), types: pick("type"), preset: $("preset").value,
+                 gpu: +$("gpu").value, campaign: $("name").value.trim() };
+  const r = await fetch("/api/run", { method: "POST", body: JSON.stringify(body) });
+  const j = await r.json();
+  $("formmsg").textContent = j.error ? j.error : `Started ${j.campaign}.`;
+  if (!j.error) { seen = {}; setTimeout(() => watch(j.campaign), 400); }
+};
+$("stop").onclick = async () => {
+  if (!current) return;
+  const j = await (await fetch("/api/stop", { method: "POST", body: JSON.stringify({ campaign: current }) })).json();
+  $("formmsg").textContent = j.error || "Stop requested; the current cell finishes first.";
+};
+$("replot").onclick = async () => {
+  if (!current) return;
+  await fetch("/api/replot", { method: "POST", body: JSON.stringify({ campaign: current }) });
+  $("formmsg").textContent = "Re-rendering every figure…";
+};
+
+// ---------------------------------------------------------------- live state
+function watch(name) {
+  if (!name) return;
+  current = name; seen = {}; firstPaint = true;
+  $("campaign").value = name;
+  try { render(getSync(`/api/state?c=${encodeURIComponent(name)}`)); } catch (e) {}
+  if (es) es.close();
+  es = new EventSource(`/api/events?c=${encodeURIComponent(name)}`);
+  es.onmessage = (ev) => render(JSON.parse(ev.data));
+}
+
+function fmtDur(s) {
+  if (s == null) return "—";
+  s = Math.round(s);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60), h = Math.floor(m / 60);
+  return h ? `${h}h ${m % 60}m` : `${m}m ${s % 60}s`;
+}
+
+function render(s) {
+  if (s.campaigns) fillCampaigns(s.campaigns);
+  if (!s.campaign || s.missing) return;
+  const st = s.status || {};
+  const state = st.state || "idle";
+  $("pill").className = "pill " + state;
+  $("pill").querySelector("span").textContent = state;
+  const done = st.done ?? s.rows, total = st.total ?? s.rows;
+  $("cells").innerHTML = total ? `${done}<small> / ${total}</small>` : "—";
+  $("barfill").style.width = total ? `${(100 * done / total).toFixed(1)}%` : "0";
+  $("eta").textContent = state === "running" ? fmtDur(s.eta_s) : "—";
+  $("nfail").textContent = s.failures.length;
+  $("current").textContent = state === "running" && st.current ? "▸ " + st.current : (st.error || "");
+  const p = s.provenance || {};
+  $("prov").textContent = [p.device, p.vendor_label && `vs ${p.vendor_label}`, p.driver && `driver ${p.driver}`,
+    p.git_sha && `BatchLAS ${p.git_sha}${p.git_dirty ? "+dirty" : ""}`, s.config.preset && `grid ${s.config.preset}`,
+    p.started && `started ${p.started}`].filter(Boolean).join("  ·  ");
+
+  // Figures, grouped by op in registry order, summaries last.
+  const groups = {};
+  s.figures.forEach(f => (groups[f.group] ||= []).push(f));
+  const order = meta ? meta.ops.map(o => o.name).filter(o => groups[o]) : Object.keys(groups).filter(g => g !== "_summary");
+  if (groups._summary) order.push("_summary");
+  const nav = $("opnav"); nav.innerHTML = "";
+  order.forEach(g => {
+    const po = s.per_op[g];
+    const a = document.createElement("a");
+    a.href = `#op-${g}`;
+    a.innerHTML = g === "_summary" ? "<b>summary</b>"
+      : `<b class="mono">${g}</b>${po ? ` <span class="num">${po.ok}</span>` : ""}${po && po.failed ? ` <em class="num">${po.failed}✕</em>` : ""}`;
+    nav.appendChild(a);
+  });
+  const root = $("figs");
+  if (!order.length) {
+    root.innerHTML = `<div class="empty">${state === "running" ? "Measuring — the first figure appears once both arms of a cell have landed." : "No figures yet."}</div>`;
+  } else {
+    if (root.querySelector(".empty")) root.innerHTML = "";
+    order.forEach(g => {
+      let sec = $(`op-${g}`);
+      if (!sec) {
+        sec = document.createElement("section");
+        sec.className = "op"; sec.id = `op-${g}`;
+        const title = g === "_summary" ? "Summary <small>all ops, batch at saturation</small>"
+          : `<span class="mono">${g}</span> ${(meta && meta.ops.find(o => o.name === g) || {}).title || ""}`;
+        sec.innerHTML = `<h3>${title}</h3><div class="figs"></div>`;
+        root.appendChild(sec);
+      }
+      const box = sec.querySelector(".figs");
+      const figs = groups[g].slice().sort((a, b) => {
+        const ia = FIG_ORDER.indexOf(a.name), ib = FIG_ORDER.indexOf(b.name);
+        return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.name.localeCompare(b.name);
+      });
+      figs.forEach(f => {
+        const id = `f-${f.path.replace(/[^a-z0-9]/gi, "_")}`;
+        let el = $(id);
+        const src = `/fig/${encodeURIComponent(s.campaign)}/${f.path}?v=${f.mtime}`;
+        if (!el) {
+          el = document.createElement("figure"); el.id = id;
+          el.title = `${FIG_NAME[f.name] || f.name.replace("summary_", "summary, ")} (click to enlarge)`;
+          el.innerHTML = `<img alt="${g} ${FIG_NAME[f.name] || f.name}">`;
+          el.querySelector("img").addEventListener("load", (ev) => {
+            // savefig.dpi is 300: printed inches = naturalWidth / 300.
+            el.style.width = `${Math.round(ev.target.naturalWidth / 300 * 96 * 1.45) + 20}px`;
+            el.classList.add("sized");
+          });
+          el.onclick = () => openLb(s.campaign, f.path);
+          box.appendChild(el);
+        }
+        if (seen[f.path] !== f.mtime) {
+          const img = el.querySelector("img");
+          if (!img.getAttribute("src")) { img.src = src; seen[f.path] = f.mtime; return; }
+          const pre = new Image();
+          pre.onload = () => { img.src = src; };
+          pre.src = src;
+          if (!firstPaint && seen[f.path] !== undefined) {
+            el.classList.add("fresh"); setTimeout(() => el.classList.remove("fresh"), 1600);
+          }
+          seen[f.path] = f.mtime;
+        }
+      });
+    });
+  }
+  firstPaint = false;
+
+  $("failcount").textContent = s.failures.length ? `(${s.failures.length})` : "";
+  $("failrows").innerHTML = s.failures.slice().reverse().map(f =>
+    `<tr><td class="mono">${f.op}</td><td>${f.dtype}</td><td class="num">${f.n}</td><td class="num">${f.batch}</td>` +
+    `<td>${f.arm}</td><td>${(f.reason || "").replace(/</g, "&lt;")}</td></tr>`).join("");
+  const log = $("log");
+  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 20;
+  log.textContent = s.log.join("\n");
+  if (atBottom) log.scrollTop = log.scrollHeight;
+}
+
+// ---------------------------------------------------------------- lightbox
+function openLb(camp, path) {
+  const base = `/fig/${encodeURIComponent(camp)}/${path.replace(/\.png$/, "")}`;
+  $("lbimg").src = `${base}.png?t=${Date.now()}`;
+  $("lbpdf").href = `${base}.pdf`; $("lbpng").href = `${base}.png`;
+  $("lb").showModal();
+}
+$("lbclose").onclick = () => $("lb").close();
+$("lb").onclick = (e) => { if (e.target === $("lb")) $("lb").close(); };
+
+loadMeta();
+</script>
+</body>
+</html>

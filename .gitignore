@@ -110,3 +110,6 @@ evaluation/trace/
 *.sqlite
 *.qdrep
 experiments/**/nsys/
+
+# benchviz campaigns (benchmarks/benchviz)
+benchviz_runs/
