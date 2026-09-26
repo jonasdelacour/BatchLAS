@@ -60,6 +60,8 @@ enum class KernelVariant {
     Tiled32x128RegisterK16,
     Tiled32x128RegisterK16TN,
     Tiled32x128RegisterK16TT,
+    // max(m, n, k) <= 32, real scalars: several matrices per work-group, coalesced.
+    SmallBatched,
 };
 
 // Which wide-scalar TRANSPOSED tile a shape fits: the matching macro-tile

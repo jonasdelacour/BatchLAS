@@ -777,3 +777,41 @@ Retrieve any path below with `git show perf-evidence/vendor-independence:<path>`
 | Complex routing defect, merge gate, CTA ladder | `experiments/wp4_complex/README.md` + `smallbatch/`, `batchsweep/`, `routing_proposal/` |
 | The trailing-update GEMM inside `trsm`, the sub-view `ld` | `experiments/wp3_s16/README.md` |
 | Design narrative and per-step verdicts | `WP2_GEMM_SPEC.md`, `WP2_WIDE_SCALAR_GEMM_VERDICT.md`, `VENDOR_INDEPENDENCE_PLAN.md` |
+
+## The small batched kernel
+
+**2026-09-26.** Float NN at `max(m, n, k) <= 48` ran `Direct`: one work-item per output,
+an 8 x 8 group whose FAST index is the column, so adjacent lanes read B and write C
+`ld` apart; the transpose switch sat in the k loop and C was read even at beta = 0. At
+n = 32, batch 32768 that is 1.75 ms -- 0.22 TB/s of a ~400 MB problem, 0.61x cuBLAS.
+33..48 fell to `Tiled16`, worse still (n = 48: 6.09 ms, 0.25x).
+
+`src/sycl/gemm/small_batched.hh` (`KernelVariant::SmallBatched`, forced as `small`): a
+128-lane group holds 128 / (2 * NB) matrices, NB in {8, 16, 32, 64} from max(m, n, k);
+op(B) is staged in local memory (odd ld, storage-order walk, so either transpose reads
+coalesced); each lane holds one row of op(A) in registers and NB / 2 columns of C;
+lanes run down the rows, so A loads and C stores are coalesced; beta = 0 skips the C
+read. Real scalars only -- `std::complex`'s `operator*` is the Annex G trap -- so a
+complex call forced to `small` runs `Direct`.
+
+Batch 32768 unless noted, `BM_GEMM` square NN, beta = 0, ms:
+
+| n | cuBLAS | before | small | vs cuBLAS |
+|---:|---:|---:|---:|---:|
+| 8 | 0.175 | 0.024 (Direct) | 0.021 | 8.5x |
+| 16 | 0.358 | 0.235 (Direct) | 0.133 | 2.69x |
+| 24 | 1.008 | 0.842 (Direct) | 0.361 | 2.79x |
+| 32 | 1.161 | 1.747 (Direct) | 0.608 | **1.91x** (was 0.64x) |
+| 40 | 1.267 | 3.670 (Tiled16) | 1.474 | 0.86x (was 0.35x) |
+| 48 | 1.524 | 6.087 (Tiled16) | 1.741 | 0.88x (was 0.25x) |
+| 64 | 2.419 | 2.612 (32x32 reg) | 2.365 | **1.02x** (was 0.93x) |
+
+Routed for float: every `max_dim <= 32` shape (NN and transposed), and NN squares-ish
+with `min_dim > 32` up to 64. Non-square shapes above 32 keep their previous kernels:
+the panel-update shapes (large m, n, small k) are unmeasured here, and the kernel pads
+m and n to the bucket. double measured at parity with Direct / Tiled16 (fp64 is
+compute-bound at 1/64 rate) and is not routed. `preferred()` is untouched: only float
+NN `max_dim <= 32` was already native.
+
+The NB = 64 bucket is shared-load bound (one broadcast `ld.shared` per FMA); 40..48
+still lose to cuBLAS.

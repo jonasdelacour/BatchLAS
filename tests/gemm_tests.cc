@@ -2002,6 +2002,45 @@ TYPED_TEST(GemmTest, WideTransposedCN64BetaZero) {
         Transpose::ConjTrans, Transpose::NoTrans, ScalarType(0));
 }
 
+// The small batched kernel (max(m, n, k) <= 64, real scalars; complex falls back to
+// Direct under the same name). Ragged edges in every bucket, both transposes of each
+// operand, beta = 0 (the C read is skipped) and beta != 0, and batch 67 so the last
+// work-group holds a partial set of matrices.
+// ARMED BREAK (R9): drop `c < n` from small_batched.hh's epilogue guard.
+// EXPECTED: RED on every n that is not a whole bucket.
+TYPED_TEST(GemmTest, SmallBatchedMatchesVendorOnRaggedShapes) {
+    using ScalarType = typename TestFixture::ScalarType;
+    const Transpose ops[] = {Transpose::NoTrans, Transpose::Trans};
+    const int shapes[][3] = {{1, 1, 1}, {5, 3, 7}, {8, 8, 8}, {13, 9, 16},
+                             {16, 16, 16}, {17, 32, 5}, {31, 29, 23}, {32, 32, 32},
+                             {33, 40, 64}, {48, 50, 61}, {64, 64, 64}, {64, 7, 3}};
+    for (Transpose ta : ops) {
+        for (Transpose tb : ops) {
+            for (const auto& s : shapes) {
+                for (ScalarType beta : {ScalarType(0), ScalarType(-1.5)}) {
+                    SCOPED_TRACE(::testing::Message() << "m=" << s[0] << " n=" << s[1]
+                                                      << " k=" << s[2]);
+                    RunForcedSyclGemmKernelCompare<ScalarType, TestFixture::BackendType>(
+                        *(this->ctx), "small", s[0], s[1], s[2], 67, ta, tb, 75,
+                        ScalarType(0.5), beta);
+                }
+            }
+        }
+    }
+}
+
+// A sub-view of a larger parent: ld != m on all three operands, and the WHOLE parent is
+// compared, so a store past the view's rows or columns is caught.
+TYPED_TEST(GemmTest, SmallBatchedStridedSubviewWritesOnlyItsView) {
+    using ScalarType = typename TestFixture::ScalarType;
+    RunForcedWideTransposedAgainstTiled16<ScalarType>(
+        *(this->ctx), "small", 29, 31, 17, Transpose::NoTrans, Transpose::NoTrans,
+        ScalarType(1), /*parent=*/64, /*row_offset=*/3, /*batch_size=*/5);
+    RunForcedWideTransposedAgainstTiled16<ScalarType>(
+        *(this->ctx), "small", 12, 7, 32, Transpose::Trans, Transpose::Trans,
+        ScalarType(0), /*parent=*/64, /*row_offset=*/2, /*batch_size=*/5);
+}
+
 TYPED_TEST(GemmTest, WideTransposedNC64Ragged) {
     using ScalarType = typename TestFixture::ScalarType;
     RunForcedWideTransposedAgainstTiled16<ScalarType>(
