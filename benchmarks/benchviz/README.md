@@ -24,6 +24,25 @@ python3 benchmarks/benchviz run --ops all --types all --preset full --campaign p
 python3 benchmarks/benchviz plot paper-4090
 ```
 
+## Which build is measured
+
+benchviz does not compile anything. It runs whatever harness binaries it finds, searching in this order:
+`build/` of the checkout it runs from, then `build/presets/{benchmarks,dev-tests}`, then, when that
+checkout is a worktree, the main checkout's `build/`. `run --build-dir <dir>` overrides the search.
+So the code you measure is the code **last compiled** into that directory. It is not the checkout's HEAD.
+A worktree whose `build/` was compiled days ago measures days-old kernels.
+
+```sh
+python3 benchmarks/benchviz info     # the build a run would use now, and every campaign's state
+```
+
+`info`, the `serve` banner and the dashboard header all show that build: its estimated source
+commit (`~sha`, the last commit before the library was linked), its build time, and a warning when
+it is behind. "Behind" means source files changed after it was built, or main has source commits it
+lacks. Each campaign records the builds it used in `campaign.json` under `provenance.builds`. A
+resume on a different build adds an entry there, and every result row records its `binary` path.
+Campaigns created before this was added show "not recorded".
+
 For a read-only copy you can open on a phone or send to someone, `export` writes a static page plus
 downscaled figures: `python3 benchmarks/benchviz export <campaign>... --out <dir>`. Pass `--fragment`
 when the host wraps the page in its own `<html>` skeleton.
@@ -33,7 +52,7 @@ Campaigns are stored in `benchviz_runs/<name>/` (git-ignored):
 | File | Contents |
 |---|---|
 | `results.jsonl` | Append-only, one row per (cell, arm) |
-| `campaign.json` | The request and its provenance: GPU, driver, git SHA, dirty flag |
+| `campaign.json` | The request and its provenance: GPU, driver, the builds measured, and the benchviz checkout's SHA and dirty flag |
 | `figures/<op>/{speedup_n,throughput_n,heatmap}.{pdf,png}` | The per-op figures |
 | `figures/_summary/summary_<precision>.{pdf,png}` | The cross-op summaries |
 

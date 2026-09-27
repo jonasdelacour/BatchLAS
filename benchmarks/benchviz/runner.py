@@ -176,7 +176,8 @@ class Runner:
         op = OPS[cell.op]
         arm = next(a for a in op.arms if a.key == arm_key)
         binary = find_binary(op.binary, self.build_dirs)
-        base = dict(asdict(cell), arm=arm_key, backend=self.backend, gpu=gpu, t=time.time())
+        base = dict(asdict(cell), arm=arm_key, backend=self.backend, gpu=gpu, t=time.time(),
+                    binary=str(binary) if binary else None)
         if binary is None:
             return {**base, "ok": False, "reason": f"binary {op.binary} not built"}
         csv_path = os.path.join(tmp, "out.csv")

@@ -22,11 +22,22 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from ops import OPS, PRESETS, TYPE_LABEL, TYPES, Grid, plan_cells
-from store import Campaign, list_campaigns
+from store import Campaign, build_info, describe_build, list_campaigns
 
 HERE = Path(__file__).resolve().parent
 _procs: dict = {}  # campaign -> Popen started by this server
+_bg: list = []     # replot children
 _lock = threading.Lock()
+
+
+def _reaper():
+    """Collect exited children; unpolled, each finished run lingers as a zombie."""
+    while True:
+        with _lock:
+            for p in [*_procs.values(), *_bg]:
+                p.poll()
+            _bg[:] = [p for p in _bg if p.returncode is None]
+        time.sleep(5.0)
 
 
 _cache: dict = {}
@@ -221,6 +232,8 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/meta":
             return self._json({
                 "read_only": self.read_only,
+                "repo": str(HERE.parents[1]),
+                "builds": [build_info(d) for d in self.build_dirs],
                 "gpus": __import__("runner").detect_gpus(),
                 "ops": [{"name": k, "title": v.title, "types": list(v.types), "notes": v.notes, "group": v.group, "vendor": list(v.vendor),
                          "orders": list(v.orders), "min_order": v.min_order, "max_order": v.max_order}
@@ -315,7 +328,9 @@ class Handler(BaseHTTPRequestHandler):
             if name not in list_campaigns(self.root):
                 return self._json({"error": "no such campaign"}, 404)
             cmd = [sys.executable, str(HERE), "plot", name, "--root", str(self.root)]
-            subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            with _lock:
+                _bg.append(subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                            start_new_session=True))
             return self._json({"ok": True})
         self._json({"error": "unknown endpoint"}, 404)
 
@@ -356,6 +371,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def serve(root: Path, host: str, port: int, build_dirs: list, read_only: bool = False, token: str = ""):
     root.mkdir(parents=True, exist_ok=True)
+    threading.Thread(target=_reaper, daemon=True).start()
     Handler.root = root
     Handler.build_dirs = build_dirs
     Handler.read_only = read_only
@@ -376,6 +392,10 @@ def serve(root: Path, host: str, port: int, build_dirs: list, read_only: bool = 
         except OSError:
             pass
     print(f"benchviz dashboard: http://{host}:{port}/   (campaigns in {root})", flush=True)
+    for d in build_dirs or []:
+        print("  runs use " + describe_build(build_info(d)), flush=True)
+    if not build_dirs:
+        print("  WARNING: no build directory found; runs will fail. See README.md step 1.", flush=True)
     if host in ("127.0.0.1", "localhost"):
         print(f"  from another machine: ssh -L {port}:localhost:{port} {os.uname().nodename}")
     try:

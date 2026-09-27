@@ -57,6 +57,11 @@ header.top { position: sticky; top: 0; z-index: 20; height: 56px; display: flex;
   padding: 0 20px; background: color-mix(in srgb, var(--surface) 88%, transparent); backdrop-filter: blur(8px);
   border-bottom: 1px solid var(--hair); }
 .brand { font-weight: 650; letter-spacing: -.01em; white-space: nowrap; }
+.buildtag { font-family: var(--mono); font-size: 12px; color: var(--muted); white-space: nowrap; cursor: help; }
+.buildtag.stale { color: var(--warn); font-weight: 600; }
+.buildwarn { border: 1px solid var(--warn); color: var(--warn); border-radius: 8px; padding: 8px 10px; font-size: 12.5px; margin-bottom: 12px; }
+.buildwarn code, .buildok code { font-family: var(--mono); font-size: 11.5px; word-break: break-all; }
+.buildok { color: var(--muted); font-size: 12.5px; margin-bottom: 12px; }
 .sel { appearance: none; border: 1px solid var(--hair-2); border-radius: 8px; padding: 5px 28px 5px 10px; background: var(--surface)
   url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238e8d93' stroke-width='1.5'/%3E%3C/svg%3E") no-repeat right 10px center; }
 .status { flex: 1; display: flex; align-items: center; gap: 14px; min-width: 0; font-size: 13px; color: var(--ink-2); }
@@ -208,6 +213,7 @@ dialog .acts a, dialog .acts button { font-size: 13px; color: #111; background: 
 <body>
 <header class="top">
   <span class="brand">BatchLAS</span>
+  <span class="buildtag hide-md" id="build"></span>
   <select class="sel" id="campaign" aria-label="Campaign"></select>
   <div class="status">
     <span class="state" id="state"><span class="dot"></span><span>idle</span></span>
@@ -232,6 +238,7 @@ dialog .acts a, dialog .acts button { font-size: 13px; color: #111; background: 
 <aside class="drawer" id="drawer" aria-label="New run">
   <div class="dh"><h3>New run</h3><button class="btn ghost" id="dclose" aria-label="Close">✕</button></div>
   <div class="db">
+    <div id="dbuild"></div>
     <div class="lbl">Operations</div>
     <div id="dops"></div>
     <div class="lbl">Precision</div>
@@ -456,7 +463,8 @@ function updateOverview() {
   const failed = all.reduce((a, q) => a + q.failed, 0), ok = all.reduce((a, q) => a + q.ok, 0);
   patch($("ov-lede"), `Speedup is vendor time (cuSOLVER, cuBLAS or cuSPARSE, per op) divided by BatchLAS time, at the largest batch where both arms were measured; above 1× BatchLAS is faster.
     <br><span class="muted">${esc([p.device, p.driver && `driver ${p.driver}`, p.git_sha && `BatchLAS ${p.git_sha}${p.git_dirty ? " (dirty)" : ""}`,
-    S.config.grid && `${S.config.grid.name} grid`, p.started && `started ${p.started}`].filter(Boolean).join("  ·  "))}</span>`);
+    S.config.grid && `${S.config.grid.name} grid`, p.started && `started ${p.started}`].filter(Boolean).join("  ·  "))}</span>
+    <br><span class="muted">${esc(campaignBuilds(p))}</span>`);
   patch($("ov-stats"), `
     <div><div class="k">Geomean speedup</div><div class="v ${cls(gm)}">${fmtX(gm)}</div><div class="f">over ${measured.length} ops, every precision</div></div>
     <div><div class="k">Ops where BatchLAS wins</div><div class="v">${wins}<small> / ${measured.length}</small></div><div class="f">by geomean</div></div>
@@ -667,9 +675,39 @@ function openLb(base) {
 $("lbclose").onclick = () => $("lb").close();
 $("lb").onclick = (e) => { if (e.target === $("lb")) $("lb").close(); };
 
+// Which binaries a run started now would measure. The checkout benchviz runs
+// from says nothing about this: a worktree's build/ can be days behind it.
+function buildLine(b) {
+  if (b.error) return `${b.dir}: ${b.error}`;
+  return `~${b.built_from || "?"} · built ${b.built}` + (b.branch ? ` · ${b.branch}` : "");
+}
+function campaignBuilds(p) {
+  const bs = p.builds || [];
+  if (!bs.length) return "Binaries: not recorded (campaign predates build provenance)";
+  return "Binaries: " + bs.map(b => buildLine(b) + (b.stale || b.behind_main ? " (behind its source)" : "")).join("; ");
+}
+function showBuild() {
+  const bs = meta.builds || [], el = $("build"), b = bs[0];
+  const lag = x => [x.behind_main && `${x.behind_main} source commit(s) on main are not in it`,
+                    x.stale && `${x.changed_since} source file(s) changed since it was built`].filter(Boolean).join("; ");
+  if (!b) { el.textContent = "no build found"; el.className = "buildtag hide-md stale"; }
+  else {
+    const bad = b.stale || b.behind_main || b.error;
+    el.textContent = "build " + buildLine(b) + (bad ? "  ⚠ behind" : "");
+    el.className = "buildtag hide-md" + (bad ? " stale" : "");
+    el.title = bs.map(x => `${x.dir}\nsource ${x.source || "?"} (HEAD ${x.head || "?"})\ncompiler ${x.compiler || "?"}` +
+      (lag(x) ? `\n${lag(x)}` : "")).join("\n\n") + `\n\nbenchviz code: ${meta.repo}`;
+  }
+  $("dbuild").innerHTML = !b ? `<div class="buildwarn">No build directory found; runs will fail.</div>`
+    : lag(b) ? `<div class="buildwarn">Runs will measure <b>${esc(buildLine(b))}</b> from <code>${esc(b.dir)}</code>: ${esc(lag(b))}. ` +
+      `Rebuild it, or restart the server from an up-to-date checkout.</div>`
+    : `<div class="buildok">Runs will measure <b>${esc(buildLine(b))}</b> from <code>${esc(b.dir)}</code></div>`;
+}
+
 parseHash();
 meta = getSync("/api/meta");
 buildDrawer();
+showBuild();
 if (meta.read_only) $("newrun").hidden = true;
 fillCampaigns(meta.campaigns);
 if (!meta.campaigns.length) $("view").innerHTML = `<div class="panel empty">No campaigns yet.&ensp;<button class="btn primary" onclick="openDrawer(true)">Start a run</button></div>`;
