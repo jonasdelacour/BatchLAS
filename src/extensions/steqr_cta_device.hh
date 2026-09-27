@@ -39,40 +39,43 @@ namespace batchlas {
     template <typename T>
     inline cta_rotation<T> cta_lartg(const T f, const T g) {
         if constexpr (std::is_same_v<T, float>) {
-            // Range guard.
+            // Range guard: |f| and |g| inside (sqrt(safmin), sqrt(safmax/2)) keeps
+            // f^2 + g^2 finite and normal; anything else (NaN included, since every
+            // compare is false) takes the scaled reference implementation.
             //
-            // The previous formulation tested |f| and |g| separately against
-            // sqrt(safmin) and sqrt(safmax/2): four FSETPs plus three predicate
-            // merges plus a separate `g == 0` early-out, i.e. ~9 instructions on
-            // the hottest path in the solver.  Everything those tests protect is
-            // a property of t = f^2 + g^2 alone, so one interval test on `t`
-            // (which we have to form anyway) is both cheaper and stricter:
-            //   * overflow of f*f or g*g yields t == inf  -> rejected by t < tmax
-            //   * total underflow yields t == 0           -> rejected by t > tmin
-            //   * NaN inputs yield t == NaN               -> both compares false
-            // The `g == 0` case needs no special handling either: it gives
-            // inv = 1/|f|, hence c = 1, s = 0 and r = f exactly.
-            if (g == T(0)) return {T(1), T(0), f};
-
+            // g == 0 must return exactly (1, 0, f), which rsqrt + Newton does not
+            // guarantee. It is forced by the final select, not an early return, so
+            // an identity rotation takes the same path as its neighbours instead of
+            // diverging; the result is bitwise what the early return gave.
+            const bool gz = (g == T(0));
             const T f_abs = sycl::fabs(f);
             const T g_abs = sycl::fabs(g);
 
             const T rtmin = sycl::sqrt(internal::safmin<T>());
             const T rtmax = sycl::sqrt(internal::safmax<T>() / T(2));
 
-            if (f_abs > rtmin && f_abs < rtmax && g_abs > rtmin && g_abs < rtmax) {
+            T c = T(1), s = T(0), r = f;
+            if (f_abs > rtmin && f_abs < rtmax && (gz || (g_abs > rtmin && g_abs < rtmax))) {
                 const T t = f * f + g * g;
                 T inv = sycl::rsqrt(t);
                 // One fused Newton step brings the hardware estimate below 0.5 ulp.
                 inv = sycl::fma(inv * T(0.5), sycl::fma(-(t * inv), inv, T(1)), inv);
                 const T d = sycl::sqrt(t);
                 const T signed_inv = sycl::copysign(inv, f);
-                return {f_abs * inv, g * signed_inv, sycl::copysign(d, f)};
+                c = f_abs * inv;
+                s = g * signed_inv;
+                r = sycl::copysign(d, f);
+            } else if (!gz) {
+                const auto res = internal::lartg(f, g);
+                c = res.c;
+                s = res.s;
+                r = res.r;
             }
+            return {gz ? T(1) : c, gz ? T(0) : s, gz ? f : r};
+        } else {
+            const auto res = internal::lartg(f, g);
+            return {res.c, res.s, res.r};
         }
-
-        const auto res = internal::lartg(f, g);
-        return {res.c, res.s, res.r};
     }
 
     template <typename T>
@@ -372,8 +375,12 @@ namespace batchlas {
             // (di, ei) pair of iteration v+1 is exactly the (dj_new, ej_new) pair this
             // iteration just produced.  Carrying them in registers halves the number of
             // cross-lane shuffles in the hottest loop of the solver.
+            // Shuffles run unconditionally with a clamped source and the value is
+            // selected afterwards: a shuffle under a condition not provably warp-uniform
+            // costs a MATCH/VOTE/BRA.DIV wrapper per call and breaks full-warp lockstep.
             T di = select_from_group(partition, diag, m);
-            T ei = (m - 1) >= 0 ? select_from_group(partition, offdiag, m - 1) : T(0);
+            T ei = select_from_group(partition, offdiag, std::max(m - 1, 0));
+            ei = (m >= 1) ? ei : T(0);
             T e_own = T(0);
 
             // Snapshot the tridiagonal before the chase.
@@ -411,8 +418,8 @@ namespace batchlas {
 
                 // Next virtual offdiag (toward physical l). It is safe to read outside the block because
                 // deflation boundaries force those couplings to zero.
-                const bool have_ej = (lo - 1) >= 0;
-                const T ej = have_ej ? select_from_group(partition, offdiag_snap, lo - 1) : T(0);
+                const T ej_raw = select_from_group(partition, offdiag_snap, std::max(lo - 1, 0));
+                const T ej = (lo >= 1) ? ej_raw : T(0);
 
                 const auto upd = [&]() {
                     const T x = eprev;

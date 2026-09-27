@@ -95,7 +95,7 @@ struct GetrfTinyBody {
         const int pidx = tn::tiny_partition_id(sg, part);
         const int prob_id = wg_id * kMpw + pidx;
 
-        // CLAMP, DO NOT RETURN (steqr_cta.cc:88 does the opposite): tiny_device.hh's
+        // CLAMP, DO NOT RETURN (as steqr_cta.cc does too): tiny_device.hh's
         // third invariant -- an early-exited lane still sits in the shuffle mask.
         const bool live = (prob_id < batch);
         const int b = live ? prob_id : 0;

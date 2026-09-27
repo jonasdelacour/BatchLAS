@@ -87,9 +87,13 @@ namespace batchlas {
                     const int32_t part_id = sg_id * parts_per_sg + static_cast<int32_t>(partition.get_group_linear_id());
                     const int32_t lane = static_cast<int32_t>(partition.get_local_linear_id());
                     const int32_t prob_id = static_cast<int32_t>(wg_id) * static_cast<int32_t>(probs_per_wg) + part_id;
-                    if (prob_id >= static_cast<int32_t>(batch_size)) return;
-                    auto d_prob = d.batch_item(prob_id);
-                    auto e_prob = e.batch_item(prob_id);
+                    // Clamp, do not return: a chunk past the batch end still runs the
+                    // solve, on a zero problem, so every lane of the warp reaches every
+                    // collective. A zero tridiagonal is all 1x1 blocks and never chases.
+                    const bool live = prob_id < static_cast<int32_t>(batch_size);
+                    const int32_t b = live ? prob_id : 0;
+                    auto d_prob = d.batch_item(b);
+                    auto e_prob = e.batch_item(b);
 
                     // Compile-time selectable eigenvector accumulation (shared-memory Q).
                     const int32_t base_q = part_id * static_cast<int32_t>(P) * static_cast<int32_t>(P);
@@ -97,19 +101,19 @@ namespace batchlas {
                     QSharedCache<T, P, P, ComputeVecs, QLocalAccT> qcache(Q_local, base_q, lane, n);
 
                     if constexpr (ComputeVecs) {
-                        auto Q_prob = Q_view.batch_item(prob_id);
-                        qcache.load(Q_prob);
+                        auto Q_prob = Q_view.batch_item(b);
+                        if (live) qcache.load(Q_prob);  // lane-private; a dead tile is never read
                     }
 
                     // Load D/E into registers (one element per lane).
-                    T diag = (lane < n) ? d_prob(lane) : T(0);
-                    T offdiag = (lane < (n - 1)) ? e_prob(lane) : T(0);
+                    T diag = (live && lane < n) ? d_prob(lane) : T(0);
+                    T offdiag = (live && lane < (n - 1)) ? e_prob(lane) : T(0);
 
                     const bool failed = steqr_cta_solve<T, P>(partition, diag, offdiag, qcache, n,
                                                              static_cast<int32_t>(max_sweeps),
                                                              zero_threshold,
                                                              cta_shift_strategy, cta_update_scheme);
-                    if (failed && lane == 0) {
+                    if (live && failed && lane == 0) {
                         // We cannot throw from device code; the host decides how to
                         // handle it. info_report is an atomic fetch_max, not a store:
                         // when `status` is the caller's span this kernel is one of
@@ -119,16 +123,16 @@ namespace batchlas {
                     }
 
                     // Store back D/E (one element per lane).
-                    if (lane < n) {
+                    if (live && lane < n) {
                         d_prob(lane) = diag;
                     }
-                    if (lane < (n - 1)) {
+                    if (live && lane < (n - 1)) {
                         e_prob(lane) = offdiag;
                     }
 
                     if constexpr (ComputeVecs) {
-                        auto Q_prob = Q_view.batch_item(prob_id);
-                        qcache.store(Q_prob);
+                        auto Q_prob = Q_view.batch_item(b);
+                        if (live) qcache.store(Q_prob);
                     }
                 });
         });
