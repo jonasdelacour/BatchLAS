@@ -150,7 +150,7 @@ std::vector<OpShape> shape_grid(ScalarKind scalar) {
 // divergence is counted separately below so none can quietly stop being reached.
 // evidence: docs/perf/gemm.md#evidence-for-each-boundary
 enum class Divergence { None, HeterogeneousWidened, FloatWindowNarrowed, DefaultFlipped,
-                        DoubleWindowWidened };
+                        DoubleWindowWidened, FloatSmallWidened };
 
 template <typename T>
 Divergence classify_divergence(const char* env, const OpShape& s,
@@ -174,6 +174,14 @@ Divergence classify_divergence(const char* env, const OpShape& s,
             }
         }
     }
+    // Float NN squares 33..48 joined the window with the 4x4-tiled small kernel.
+    // evidence: docs/perf/gemm.md#the-small-tiled-kernel
+    if constexpr (std::is_same_v<T, float>) {
+        if (!old_native && new_native && s.transA == Transpose::NoTrans &&
+            s.transB == Transpose::NoTrans && s.max_dim() > 32 && s.max_dim() <= 48) {
+            return Divergence::FloatSmallWidened;
+        }
+    }
     if constexpr (std::is_same_v<T, double>) {
         if (!old_native && new_native) {
             const bool non_square = (s.m != s.n || s.n != s.k);
@@ -188,7 +196,7 @@ Divergence classify_divergence(const char* env, const OpShape& s,
 template <typename T>
 void expect_equivalent(ScalarKind kind, const char* type_name) {
     size_t compared = 0, native_cases = 0, het_widened = 0, float_narrowed = 0,
-           default_flipped = 0, double_widened = 0;
+           default_flipped = 0, double_widened = 0, float_small = 0;
     for (const char* env : kEnvValues) {
         for (const OpShape& s : shape_grid(kind)) {
             const bool old_native = legacy_use_sycl_custom<T>(legacy_request_from(env), s);
@@ -201,6 +209,7 @@ void expect_equivalent(ScalarKind kind, const char* type_name) {
             if (d == Divergence::FloatWindowNarrowed)  { ++float_narrowed; continue; }
             if (d == Divergence::DefaultFlipped)       { ++default_flipped; continue; }
             if (d == Divergence::DoubleWindowWidened)  { ++double_widened; continue; }
+            if (d == Divergence::FloatSmallWidened)    { ++float_small; continue; }
 
             ASSERT_EQ(old_native, new_native)
                 << "route diverged for " << type_name
@@ -220,6 +229,11 @@ void expect_equivalent(ScalarKind kind, const char* type_name) {
         << "grid no longer reaches the intended heterogeneous divergence for "
         << type_name << " -- the exception is now vacuous";
 
+    if constexpr (std::is_same_v<T, float>) {
+        EXPECT_GT(float_small, 0u) << "grid no longer reaches the 33..48 widening";
+    } else {
+        EXPECT_EQ(float_small, 0u) << "the 33..48 widening is float-only";
+    }
     if constexpr (std::is_same_v<T, float>) {
         EXPECT_GT(float_narrowed, 0u)
             << "grid no longer reaches the WP2 E4 float narrowing -- the "

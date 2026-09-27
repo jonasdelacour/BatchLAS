@@ -121,6 +121,130 @@ Event launch_small_batched(Queue& ctx,
     return ctx.get_event();
 }
 
+template <typename T, int NB, bool PrefetchC>
+class GemmSmallTiledKernel;
+
+// NN, 32 < max(m, n, k) <= kSmallTiledMaxDim: one matrix per work-group, A
+// ([k][m]) and B (as stored) both staged in local memory, and a 4x4 register
+// tile of C per lane, so an FMA costs 1/8 of a shared load instead of one.
+// With beta != 0 the lane reads its C tile BEFORE the barrier so that latency
+// overlaps the staging; at beta == 0 that prefetch is compiled out, because
+// its registers cost more than it saves. evidence: docs/perf/gemm.md#the-small-tiled-kernel
+inline constexpr int kSmallTiledMaxDim = 56;
+
+template <typename T, int NB, bool PrefetchC>
+Event launch_small_tiled(Queue& ctx,
+                         const MatrixView<T, MatrixFormat::Dense>& A,
+                         const MatrixView<T, MatrixFormat::Dense>& B,
+                         const MatrixView<T, MatrixFormat::Dense>& C,
+                         T alpha, T beta, int m, int n, int k) {
+    using V4 = T __attribute__((ext_vector_type(4)));
+    constexpr int kTr = NB / 4;          // lanes per row and per column of 4x4 tiles
+    constexpr int kWg = kTr * kTr;
+    constexpr int kLd = NB + 4;          // keeps the V4 reads 16-byte aligned
+    static_assert(NB % 4 == 0, "4x4 lane tiles");
+
+    const int batch = static_cast<int>(A.batch_size());
+    const T* a_ptr = A.data_ptr();
+    const T* b_ptr = B.data_ptr();
+    T* c_ptr = C.data_ptr();
+    const std::ptrdiff_t lda = A.ld(), ldb = B.ld(), ldc = C.ld();
+    const std::ptrdiff_t sa = A.stride(), sb = B.stride(), sc = C.stride();
+    const bool beta_zero = (beta == T(0));
+
+    ctx->submit([&](sycl::handler& h) {
+        sycl::local_accessor<T, 1> slm(sycl::range<1>(static_cast<std::size_t>(2 * NB * kLd)), h);
+        h.parallel_for<GemmSmallTiledKernel<T, NB, PrefetchC>>(
+            sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(batch) * kWg),
+                              sycl::range<1>(kWg)),
+            [=](sycl::nd_item<1> it) {
+                const int t = static_cast<int>(it.get_local_id(0));
+                const std::ptrdiff_t bi = static_cast<std::ptrdiff_t>(it.get_group(0));
+                const int kp = (k + 3) & ~3;
+                T* const sA = &slm[0];           // sA[l * kLd + r]
+                T* const sB = sA + NB * kLd;     // sB[c * kLd + l]
+                const T* const Ab = a_ptr + bi * sa;
+                const T* const Bb = b_ptr + bi * sb;
+                T* const Cb = c_ptr + bi * sc;
+                // Storage order, so both reads are coalesced; zero-padded.
+                for (int e = t; e < NB * kp; e += kWg) {
+                    const int r = e % NB, l = e / NB;
+                    sA[l * kLd + r] = (r < m && l < k) ? Ab[r + l * lda] : T(0);
+                }
+                for (int e = t; e < kp * NB; e += kWg) {
+                    const int l = e % kp, c = e / kp;
+                    sB[c * kLd + l] = (l < k && c < n) ? Bb[l + c * ldb] : T(0);
+                }
+                const int tr = t % kTr, tc = t / kTr;
+                T prior[4][4];
+                if constexpr (PrefetchC) {
+#pragma unroll
+                    for (int j = 0; j < 4; ++j) {
+#pragma unroll
+                        for (int i = 0; i < 4; ++i) {
+                            const int r = tr * 4 + i, c = tc * 4 + j;
+                            prior[i][j] = (r < m && c < n) ? Cb[r + c * ldc] : T(0);
+                        }
+                    }
+                }
+                it.barrier(sycl::access::fence_space::local_space);
+
+                T acc[4][4];
+#pragma unroll
+                for (int i = 0; i < 4; ++i) {
+#pragma unroll
+                    for (int j = 0; j < 4; ++j) acc[i][j] = T(0);
+                }
+                for (int l0 = 0; l0 < kp; l0 += 4) {
+                    V4 bv[4];
+#pragma unroll
+                    for (int j = 0; j < 4; ++j) {
+                        bv[j] = *reinterpret_cast<const V4*>(&sB[(tc * 4 + j) * kLd + l0]);
+                    }
+#pragma unroll
+                    for (int ll = 0; ll < 4; ++ll) {
+                        const V4 av = *reinterpret_cast<const V4*>(&sA[(l0 + ll) * kLd + tr * 4]);
+#pragma unroll
+                        for (int i = 0; i < 4; ++i) {
+#pragma unroll
+                            for (int j = 0; j < 4; ++j) acc[i][j] += av[i] * bv[j][ll];
+                        }
+                    }
+                }
+
+#pragma unroll
+                for (int j = 0; j < 4; ++j) {
+                    const int c = tc * 4 + j;
+#pragma unroll
+                    for (int i = 0; i < 4; ++i) {
+                        const int r = tr * 4 + i;
+                        if (r < m && c < n) {
+                            T* const dst = Cb + r + c * ldc;
+                            if constexpr (PrefetchC) {
+                                *dst = alpha * acc[i][j] + beta * prior[i][j];
+                            } else {
+                                *dst = beta_zero ? alpha * acc[i][j] : alpha * acc[i][j] + beta * *dst;
+                            }
+                        }
+                    }
+                }
+            });
+    });
+    return ctx.get_event();
+}
+
+template <typename T, int NB>
+Event small_tiled(Queue& ctx,
+                  const MatrixView<T, MatrixFormat::Dense>& A,
+                  const MatrixView<T, MatrixFormat::Dense>& B,
+                  const MatrixView<T, MatrixFormat::Dense>& C,
+                  T alpha, T beta, int m, int n, int k) {
+    if (beta == T(0)) {
+        return launch_small_tiled<T, NB, false>(ctx, A, B, C, alpha, beta, m, n, k);
+    }
+    return launch_small_tiled<T, NB, true>(ctx, A, B, C, alpha, beta, m, n, k);
+}
+
 template <typename T>
 Event small_batched(Queue& ctx,
                     const MatrixView<T, MatrixFormat::Dense>& A,
@@ -129,6 +253,13 @@ Event small_batched(Queue& ctx,
                     T alpha, T beta, Transpose transA, Transpose transB,
                     int m, int n, int k) {
     const int max_dim = m > n ? (m > k ? m : k) : (n > k ? n : k);
+    if constexpr (std::is_same_v<T, float>) {
+        if (transA == Transpose::NoTrans && transB == Transpose::NoTrans && max_dim > 32 &&
+            max_dim <= kSmallTiledMaxDim) {
+            return max_dim <= 48 ? small_tiled<T, 48>(ctx, A, B, C, alpha, beta, m, n, k)
+                                 : small_tiled<T, 56>(ctx, A, B, C, alpha, beta, m, n, k);
+        }
+    }
     switch (small_bucket(max_dim)) {
     case 8:
         return launch_small_batched<T, 8>(ctx, A, B, C, alpha, beta, transA, transB, m, n, k);
