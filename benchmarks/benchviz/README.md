@@ -76,8 +76,9 @@ different `--ops` or `--types` extends it.
 | gemm, gemv, trsm, spmm | `<op>_benchmark` | `BATCHLAS_<OP>_ROUTE=vendor` (cuBLAS / cuSPARSE) | `=native` |
 | trmm, syrk, syr2k (float) | `<op>_benchmark` | `=vendor` | `=triangular` (triangular-tile kernels) |
 
-BLAS cells are square (m = n = k). spmm uses a random CSR pattern with 16 nonzeros per row, 16 right-hand
-sides, and n rows.
+The n-figures use square cells (m = n = k). spmm uses a random CSR pattern with 16 nonzeros per row,
+16 right-hand sides, and n rows. The rectangular ops are also swept over a second dimension; see
+"Rectangular ops".
 
 Some ops are left out, each for a stated reason:
 - **syevx, sytrd, stedc, steqr:** no vendor route.
@@ -125,6 +126,38 @@ actually ran (`route`) plus every sub-op route (`subroutes`). A pin is never tak
 | `throughput_n` | GFLOP/s against n (LAWN 41 counts, complex = 4× real), or matrices/s for syev and gesvd. BatchLAS (○) vs vendor (★), one panel per precision, with 2σ bands. |
 | `heatmap` | Speedup over the whole n × batch grid, in viridis with log2 colour steps. A red boundary follows the 1× crossing. Empty cells were not measured. |
 | `summary_<t>` | Op × n speedup table at saturation, annotated with the value in each cell. |
+| `speedup_2d` | Rectangular ops only. Speedup over the op's two shape axes (below), one panel per precision, annotated, with the same colour scale and 1× boundary as `heatmap`. Hatched cells are shapes the op does not define. |
+| `throughput_2d` | Rectangular ops only. GFLOP/s over the same axes: one row per precision, BatchLAS and vendor side by side on a shared log colour scale. |
+
+## Rectangular ops
+
+A square sweep cannot show where a tall-skinny QR or a small-k GEMM wins, so an op whose shape has a second
+dimension also gets a 2-D sweep (its `Plane` in `ops.py`). Each shape runs once, at its saturated batch:
+the largest power of two that fits the memory budget for that shape. The map's cells can therefore sit at
+different batches, and every cell is a saturated ratio.
+
+| Op | y axis | x axis | Constraint |
+|---|---|---|---|
+| geqrf, orgqr | rows m | columns n | n ≤ m (factor_bench) |
+| ormqr | order of Q, m | reflectors n | n ≤ m |
+| getrs, gesv, posv | order n | right-hand sides (1, 4, 16, 64, 256) | |
+| gemm | output order m = n | inner dimension k | |
+| gemv | rows m | columns n | |
+| trsm | triangle order n | right-hand sides q | |
+| syrk, syr2k | order n | rank k | |
+| spmm | rows n | right-hand sides (4 … 128) | |
+
+The square point of each plane is the square sweep's cell, not a second measurement. Left square:
+potrf and getrf (factor_bench only takes m = n for them), syev, trmm (`trmm_benchmark`'s operands only
+agree at m = n = k), and gesvd (its harness takes n only).
+
+Every preset turns the sweep on; `--no-rect` (or the dashboard's "Rectangular shapes" box) turns it off.
+It adds about 90% to a `quick` campaign of every op and precision (1,667 cells become 3,157). Campaigns created before this existed keep their
+plan: a grid saved without the field loads with the sweep off.
+
+The trsm map needs a `trsm_benchmark` built after `BM_TRSM` started reading its second argument as the
+right-hand-side count. An older binary ignores it and times n × n, so `benchviz info` must not report
+the build as behind.
 
 The style is the house style of `plotting/stylesheet.py`:
 - LaTeX Computer Modern, drawn at 20 × 10 in with 30 pt text and scaled down by `\includegraphics`.
@@ -149,6 +182,7 @@ the n × batch cells it covers; the CLI takes the same fields as flags.
 | list | `--batches` | an explicit batch list, same syntax as orders |
 | reps | `--reps` | timed repetitions per arm-cell |
 | memory | `--mem-gib` | per-arm device-memory budget, which caps batch for each (op, n) |
+| rectangular | `--rect` / `--no-rect` | also sweep the rectangular ops' shape planes, one saturated batch per shape |
 
 | Preset | Grid |
 |---|---|

@@ -255,6 +255,7 @@ dialog .acts a, dialog .acts button { font-size: 13px; color: #111; background: 
       <div><label class="fl" for="greps">Timed reps</label><input class="field" id="greps" type="number" min="1"></div>
       <div><label class="fl" for="gmem">Memory budget per arm [GiB]</label><input class="field" id="gmem" type="number" min="0.25" step="0.25"></div>
     </div>
+    <label class="fl"><input type="checkbox" id="grect"> Rectangular shapes <span class="muted">— an m × n (or n × k) sweep of the rectangular ops, one saturated batch per shape</span></label>
     <div class="preview"><svg id="gprev" viewBox="0 0 460 120" role="img" aria-label="Grid preview"></svg>
       <div class="cap"><span id="gcap"></span><span class="muted">n ↓ · batch →</span></div></div>
 
@@ -279,6 +280,9 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<":
 const PREC = { float: ["Single", "S"], double: ["Double", "D"], cfloat: ["Complex single", "C"], cdouble: ["Complex double", "Z"] };
 const PORD = Object.keys(PREC);
 const FIGS = [["speedup_n", "Speedup vs n"], ["throughput_n", "Throughput"], ["heatmap", "n × batch"]];
+// Rectangular ops add the two shape maps, named by their plane's axes.
+const figsOf = (o) => o && o.plane ? [...FIGS, ["speedup_2d", `${o.plane.y} × ${o.plane.x} speedup`], ["throughput_2d", `${o.plane.y} × ${o.plane.x} throughput`]] : FIGS;
+const shapeOf = (r) => r.shape || `n ${r.n}`;
 let meta = null, S = null, es = null, camp = null, route = { page: "overview" }, pinned = false, built = null;
 let figTab = "speedup_n", sumTab = null, tblFilter = "all", tblSort = ["n", 1], tblKey = null;
 
@@ -500,7 +504,8 @@ function updateOp() {
       <div class="sec"><h2>Measurements</h2><span class="sp-grow"></span><div class="chips" id="tf"></div></div>
       <div class="panel"><div class="scroll" id="tbl"><div class="empty">Loading…</div></div></div>
       <div class="sec"><h2>Activity</h2></div><div id="act"></div>`;
-    $("opfig").innerHTML = figShell("of", segHTML(FIGS, figTab, "setFig"));
+    if (!figsOf(o).some(([k]) => k === figTab)) figTab = "speedup_n";
+    $("opfig").innerHTML = figShell("of", segHTML(figsOf(o), figTab, "setFig"));
     $("act").innerHTML = activityShell();
     body.__h = null;
   }
@@ -533,8 +538,8 @@ function drawTable() {
   const vend = esc(vendOf(route.op));
   const th = (key, l, r) => `<th class="s${r ? " r" : ""}" onclick="sortBy('${key}')">${l}${k === key ? (dir > 0 ? " ↑" : " ↓") : ""}</th>`;
   const top = el.scrollTop;
-  patch(el, `<table><thead><tr>${th("dtype", "Precision")}${th("n", "n", 1)}${th("batch", "Batch", 1)}${th("time_ms_batchlas", "BatchLAS [ms]", 1)}${th("time_ms_vendor", `${vend} [ms]`, 1)}${th("speedup", "Speedup", 1)}<th>Routes</th></tr></thead>
-    <tbody>${rows.map(r => `<tr><td>${PREC[r.dtype] ? PREC[r.dtype][0] : esc(r.dtype)}</td><td class="r num">${r.n}</td><td class="r num">${r.batch}</td>
+  patch(el, `<table><thead><tr>${th("dtype", "Precision")}${th("n", "Shape", 1)}${th("batch", "Batch", 1)}${th("time_ms_batchlas", "BatchLAS [ms]", 1)}${th("time_ms_vendor", `${vend} [ms]`, 1)}${th("speedup", "Speedup", 1)}<th>Routes</th></tr></thead>
+    <tbody>${rows.map(r => `<tr><td>${PREC[r.dtype] ? PREC[r.dtype][0] : esc(r.dtype)}</td><td class="r num">${esc(shapeOf(r))}</td><td class="r num">${r.batch}</td>
       <td class="r num">${fmtMs(r.time_ms_batchlas)}</td><td class="r num">${fmtMs(r.time_ms_vendor)}</td>
       <td class="r"><span class="sp ${cls(r.speedup)}">${fmtX(r.speedup)}</span></td>
       <td class="route">${esc(r.route_batchlas)}<span class="sub2">${esc(r.route_vendor)}</span></td></tr>`).join("")}</tbody></table>`);
@@ -551,14 +556,14 @@ function activityShell() {
 function updateActivity(op) {
   const act = S.activity.filter(a => !op || a.op === op).slice(0, FEED_ROWS);
   let h = act.map(a => `<li><span class="t">${clock(a.t)}</span>
-    <span class="w"><span class="mono">${a.op}</span> ${pfx(a.dtype)} · n ${a.n} · batch ${a.batch} · <span class="muted">${a.arm}</span>
+    <span class="w"><span class="mono">${a.op}</span> ${pfx(a.dtype)} · ${esc(shapeOf(a))} · batch ${a.batch} · <span class="muted">${a.arm}</span>
     ${a.ok ? `<span class="muted num"> ${fmtMs(a.time_ms)} ms</span>` : ` <span class="bad">${esc(a.reason)}</span>`}</span>
     <span class="x sp ${cls(a.speedup)}">${a.speedup ? fmtX(a.speedup) : ""}</span></li>`).join("");
   for (let i = act.length; i < FEED_ROWS; i++) h += `<li class="blank">·</li>`;
   patch($("feed"), h);
   const fails = S.failures.filter(f => !op || f.op === op).slice().reverse();
   text($("failn"), String(fails.length));
-  patch($("fails"), fails.length ? `<table><tbody>${fails.map(f => `<tr><td class="num" style="white-space:nowrap"><span class="mono">${f.op}</span> ${pfx(f.dtype)} n ${f.n} · ${f.batch}</td><td>${f.arm}</td><td>${esc(f.reason)}</td></tr>`).join("")}</tbody></table>`
+  patch($("fails"), fails.length ? `<table><tbody>${fails.map(f => `<tr><td class="num" style="white-space:nowrap"><span class="mono">${f.op}</span> ${pfx(f.dtype)} ${esc(shapeOf(f))} · ${f.batch}</td><td>${f.arm}</td><td>${esc(f.reason)}</td></tr>`).join("")}</tbody></table>`
     : `<div class="empty" style="padding:18px">None.</div>`);
   const log = $("log"), atEnd = log.scrollHeight - log.scrollTop - log.clientHeight < 24;
   const t = S.log.join("\n");
@@ -589,6 +594,7 @@ function buildDrawer() {
   $("gorders").oninput = () => { grid.orders = $("gorders").value.trim() || null; custom(); estimate(); };
   $("greps").oninput = () => { grid.reps = +$("greps").value || 1; custom(); estimate(); };
   $("gmem").oninput = () => { grid.mem_gib = +$("gmem").value || 0.25; custom(); estimate(); };
+  $("grect").onchange = () => { grid.rect = $("grect").checked; custom(); estimate(); };
   const gl = meta.gpus && meta.gpus.length ? meta.gpus : [{ index: 1, name: "" }];
   const dflt = gl.some(g => g.index === 1) ? 1 : gl[0].index;
   $("dgpus").innerHTML = gl.map(g => `<button type="button" class="chip ${g.index === dflt ? "on" : ""}" data-g="${g.index}" title="${esc(g.name)}">GPU ${g.index}</button>`).join("");
@@ -602,6 +608,7 @@ function drawGridForm() {
   $("dpreset").querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.k === grid.name));
   $("gmode").querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.k === grid.batch_mode));
   $("gorders").value = grid.orders || ""; $("greps").value = grid.reps; $("gmem").value = grid.mem_gib;
+  $("grect").checked = !!grid.rect;
   const m = grid.batch_mode;
   $("gbatch").innerHTML = m === "ladder" ? `<div class="g3">
       <div><label class="fl">From</label><input class="field num" id="gbmin" type="number" min="1" value="${grid.batch_min}"></div>
@@ -653,7 +660,7 @@ function drawPreview(e) {
   const step = Math.ceil(bs.length / 8);
   bs.forEach((b, j) => { if (j % step === 0) h += `<text x="${L + j * cw + cw / 2}" y="${H - 6}" text-anchor="middle" font-size="9" fill="currentColor" opacity=".55" font-family="ui-monospace,monospace">${b >= 1024 ? (b / 1024) + "k" : b}</text>`; });
   svg.innerHTML = h;
-  text($("gcap"), `${ns.length} orders × ${bs.length} batches · ${e.cells} cells`);
+  text($("gcap"), `${ns.length} orders × ${bs.length} batches · ${e.cells} cells` + (e.rect_cells ? ` (${e.rect_cells} rectangular)` : ""));
 }
 $("dstart").onclick = async () => {
   const j = await post("/api/run", runBody());

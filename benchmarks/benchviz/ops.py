@@ -6,6 +6,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
+import numpy as np
+
 TYPES = ("float", "double", "cfloat", "cdouble")
 TYPE_BYTES = {"float": 4, "double": 8, "cfloat": 8, "cdouble": 16}
 # LAPACK's one-letter precision prefix; what a paper labels its curves with.
@@ -37,18 +39,22 @@ def flops_geqrf(m, n, nrhs, t): return _flops(2.0 * m * n * n - 2.0 * n ** 3 / 3
 def flops_orgqr(m, n, nrhs, t): return _flops(2.0 * m * n * n - 2.0 * n ** 3 / 3.0, t)
 def flops_gesv(m, n, nrhs, t): return _flops(2.0 * n ** 3 / 3.0 + 2.0 * n * n * nrhs, t)
 def flops_posv(m, n, nrhs, t): return _flops(n ** 3 / 3.0 + 2.0 * n * n * nrhs, t)
-# BLAS cells are square (m = n = k, as the benchmark args are built), so the
-# counts are written in n alone; the cell's third field is not k for them.
-def flops_gemm(m, n, k, t): return _flops(2.0 * n ** 3, t)
-def flops_gemv(m, n, k, t): return _flops(2.0 * n ** 2, t)
-def flops_trsm(m, n, k, t): return _flops(1.0 * n ** 3, t)
+def _k(k, dflt):
+    """A BLAS cell's third field: 0 on a square cell (the key it has always had),
+    so the third dimension is then the op's square default."""
+    return np.where(np.asarray(k) > 0, k, dflt)
+
+
+def flops_gemm(m, n, k, t): return _flops(2.0 * m * n * _k(k, n), t)
+def flops_gemv(m, n, k, t): return _flops(2.0 * m * n, t)
+def flops_trsm(m, n, k, t): return _flops(1.0 * n * n * _k(k, n), t)
 def flops_trmm(m, n, k, t): return _flops(1.0 * n ** 3, t)
-def flops_syrk(m, n, k, t): return _flops(1.0 * n * (n + 1) * n, t)
-def flops_syr2k(m, n, k, t): return _flops(2.0 * n ** 3, t)
+def flops_syrk(m, n, k, t): return _flops(1.0 * n * (n + 1) * _k(k, n), t)
+def flops_syr2k(m, n, k, t): return _flops(2.0 * n * n * _k(k, n), t)
 
 
 SPMM_NNZ_ROW, SPMM_NRHS = 16, 16
-def flops_spmm(m, n, k, t): return _flops(2.0 * n * SPMM_NNZ_ROW * SPMM_NRHS, t)
+def flops_spmm(m, n, k, t): return _flops(2.0 * n * SPMM_NNZ_ROW * _k(k, SPMM_NRHS), t)
 
 
 # ormqr applies Q (from an m x n geqrf, k = n reflectors) to an m x m C from the left.
@@ -66,6 +72,40 @@ class Arm:
     fixed_route: Optional[str] = None
 
 
+@dataclass(frozen=True)
+class Plane:
+    """The 2-D shape sweep of a rectangular op: one cell per (x, y), each at its
+    saturated batch, drawn as the speedup_2d and throughput_2d maps. `cell` maps
+    (x, y) to the Cell's (m, n, third) and `coords` maps back. The point that is
+    the op's square cell keeps the square cell's key, so both sweeps share it."""
+    x: str                    # short names, for the dashboard: "n", "k", "q"
+    y: str
+    x_label: str              # axis labels, units in brackets
+    y_label: str
+    cell: Callable[[int, int], Tuple[int, int, int]]
+    coords: Callable[[int, int, int], Tuple[int, int]]
+    x_values: Optional[Sequence[int]] = None      # None: the op's orders
+    valid: Callable[[int, int], bool] = lambda x, y: True
+    # Operand area at (m, n, third) in units of n^2, times the op's footprint. It is
+    # n^2 on the square cell, so both sweeps size an item alike there.
+    area: Callable[[int, int, int], float] = lambda m, n, k: float(m) * n
+
+
+def _tall(x_label="Columns $n$ [1]", y_label="Rows $m$ [1]", valid=lambda x, y: True,
+          area=lambda m, n, k: float(m) * n) -> Plane:
+    """x = n columns, y = m rows."""
+    return Plane(x="n", y="m", x_label=x_label, y_label=y_label, valid=valid, area=area,
+                 cell=lambda x, y: (y, x, 0), coords=lambda m, n, k: (n, m))
+
+
+def _third(x, x_label, y_label, square_k=0, x_values=None, area=lambda m, n, k: float(n) * n) -> Plane:
+    """y = the order n (m = n), x = the cell's third field. The square cell stores
+    `square_k` there: 0 for the BLAS ops, meaning third = n; 1 for the solves (nrhs)."""
+    return Plane(x=x, y="n", x_label=x_label, y_label=y_label, x_values=x_values, area=area,
+                 cell=lambda xv, yv: (yv, yv, 0 if square_k == 0 and xv == yv else xv),
+                 coords=lambda m, n, k: (k if k else n, n))
+
+
 @dataclass
 class OpSpec:
     name: str
@@ -79,8 +119,8 @@ class OpSpec:
     # Device bytes per matrix / (n^2 sizeof T); caps the batch ladder. Conservative.
     footprint: float = 4.0
     nrhs: int = 0
-    # minibench positional args after (n, batch) -- or the full arg builder.
-    args: Optional[Callable[[int, int], List[int]]] = None
+    # minibench positional args of a cell, from its (m, n, third, batch).
+    args: Optional[Callable[[int, int, int, int], List[int]]] = None
     max_batch: int = 32768
     notes: str = ""
     # Untimed same-process setup ops (getrs needs an LU): their routes pollute
@@ -91,54 +131,71 @@ class OpSpec:
     group: str = "LAPACK"
     n_label: str = "Matrix Order $n$ [1]"
     vendor: Tuple[str, str] = ("cuSOLVER", "rocSOLVER")   # the library the vendor arm reaches: (CUDA, ROCm)
-    # Device bytes of one matrix at order n, when n^2 * footprint is the wrong model (sparse).
-    bytes_per_item: Optional[Callable[[int, str], float]] = None
+    # Device bytes of one item at (n, third), when n^2 * footprint is the wrong model (sparse).
+    bytes_per_item: Optional[Callable[[int, int, str], float]] = None
     # Composed ops take the outer `blocked` route in BOTH arms; the arm is decided
     # by these sub-ops' routes (factor_bench.cc composed_pins).
     composed_of: Tuple[str, ...] = ()
+    # Rectangular ops also get a 2-D shape sweep; None for the square-only ones.
+    plane: Optional[Plane] = None
 
-    def cell_args(self, n: int, batch: int) -> List[int]:
-        return self.args(n, batch) if self.args else [n, batch]
+    def cell_args(self, cell: "Cell") -> List[int]:
+        return self.args(cell.m, cell.n, cell.nrhs, cell.batch) if self.args else [cell.n, cell.batch]
+
+    def is_square(self, m: int, n: int, k: int) -> bool:
+        """Is (m, n, third) the op's square cell, the one the n-figures plot?"""
+        return (m, k) == self.shape(n)
+
+    def shape_text(self, m: int, n: int, k: int) -> str:
+        if self.plane is None or self.is_square(m, n, k):
+            return f"n {n}"
+        x, y = self.plane.coords(m, n, k)
+        return f"{self.plane.y} {y} · {self.plane.x} {x}"
 
     def shape(self, n: int) -> Tuple[int, int]:
         """(m, third dim) of the cell at order n; the third is nrhs or k."""
         return n, self.nrhs
 
 
-def _fb(name, title, flops, nrhs=0, footprint=4.0, orders=None, notes="", setup_ops=(), composed_of=()):
+def _fb(name, title, flops, nrhs=0, footprint=4.0, orders=None, notes="", setup_ops=(), composed_of=(), plane=None):
     return OpSpec(
         name=name, title=title, harness="factor_bench", binary="factor_bench",
         types=TYPES,
         orders=orders or (4, 8, 16, 32, 64, 128, 256, 512),
         arms=(Arm("batchlas", fb_arm="native"), Arm("vendor", fb_arm="vendor")),
         flops=flops, nrhs=nrhs, footprint=footprint, notes=notes, setup_ops=setup_ops, max_order=1024,
-        composed_of=composed_of,
+        composed_of=composed_of, plane=plane,
     )
 
 
 def _blas(name, title, binary, bench, flops, native="native", types=TYPES, orders=(), footprint=3.0,
-          args=None, notes="", bytes_per_item=None, n_label="Matrix Order $n$ [1]"):
+          args=None, notes="", bytes_per_item=None, n_label="Matrix Order $n$ [1]", plane=None):
     var = f"BATCHLAS_{name.upper()}_ROUTE"
     return OpSpec(
         name=name, title=title, harness="minibench", binary=binary, types=types, orders=orders,
         arms=(Arm("batchlas", env=((var, native),), bench_name=bench), Arm("vendor", env=((var, "vendor"),), bench_name=bench)),
         flops=flops, footprint=footprint, args=args, notes=notes, group="BLAS", bytes_per_item=bytes_per_item,
-        n_label=n_label,
+        n_label=n_label, plane=plane,
         max_batch=65536, max_order=max(orders),
         vendor=("cuSPARSE", "rocSPARSE") if name == "spmm" else ("cuBLAS", "rocBLAS"),
     )
 
 
+# factor_bench takes n <= m, and potrf/getrf only square: README.md, "Rectangular ops".
+_QR_PLANE = _tall(valid=lambda x, y: x <= y)
+_SOLVE_PLANE = _third("nrhs", "Right-Hand Sides [1]", "Matrix Order $n$ [1]", square_k=1,
+                      x_values=(1, 4, 16, 64, 256))
+
 OPS: Dict[str, OpSpec] = {}
 for _s in (
     _fb("potrf", "Cholesky factorization", flops_potrf),
     _fb("getrf", "LU factorization", flops_getrf),
-    _fb("getrs", "LU solve", flops_getrs, nrhs=1, footprint=5.0, setup_ops=("getrf",)),
-    _fb("geqrf", "QR factorization", flops_geqrf),
-    _fb("orgqr", "QR: form Q", flops_orgqr, footprint=5.0, setup_ops=("geqrf",)),
-    _fb("gesv", "General linear solve", flops_gesv, nrhs=1, footprint=5.0,
+    _fb("getrs", "LU solve", flops_getrs, nrhs=1, footprint=5.0, setup_ops=("getrf",), plane=_SOLVE_PLANE),
+    _fb("geqrf", "QR factorization", flops_geqrf, plane=_QR_PLANE),
+    _fb("orgqr", "QR: form Q", flops_orgqr, footprint=5.0, setup_ops=("geqrf",), plane=_QR_PLANE),
+    _fb("gesv", "General linear solve", flops_gesv, nrhs=1, footprint=5.0, plane=_SOLVE_PLANE,
         notes="native arm is the shipped route: fused tiny in its window, else getrf + getrs", composed_of=("getrf", "getrs")),
-    _fb("posv", "SPD linear solve", flops_posv, nrhs=1, footprint=5.0,
+    _fb("posv", "SPD linear solve", flops_posv, nrhs=1, footprint=5.0, plane=_SOLVE_PLANE,
         notes="native arm is the shipped route: fused tiny in its window, else potrf + trsm", composed_of=("potrf", "trsm")),
     OpSpec(
         name="ormqr", title="QR: apply Q", harness="minibench", binary="ormqr_benchmark",
@@ -147,7 +204,10 @@ for _s in (
         arms=(Arm("batchlas", env=(("BATCHLAS_ORMQR_ROUTE", "native"),), bench_name="BM_ORMQR<"),
               Arm("vendor", env=(("BATCHLAS_ORMQR_ROUTE", "vendor"),), bench_name="BM_ORMQR<")),
         flops=flops_ormqr, footprint=5.0, setup_ops=("geqrf",),
-        args=lambda n, b: [n, n, b],
+        args=lambda m, n, k, b: [m, n, b],
+        # Q is m x m and outweighs A (m x n).
+        plane=_tall(x_label="Reflectors $n$ [1]", y_label="Order of $Q$, $m$ [1]", valid=lambda x, y: x <= y,
+                    area=lambda m, n, k: float(m) * m),
     ),
     OpSpec(
         name="syev", title="Symmetric eigensolver", harness="minibench", binary="syev_benchmark",
@@ -157,7 +217,7 @@ for _s in (
               Arm("vendor", env=(("BATCHLAS_SYEV_ROUTE", "vendor"),), bench_name="BM_SYEV<")),
         footprint=6.0,
         # n, batch, nb=0 (tuned), fuse=2 (tuned), jobz=1 (vectors), uplo=0 (lower)
-        args=lambda n, b: [n, b, 0, 2, 1, 0],
+        args=lambda m, n, k, b: [n, b, 0, 2, 1, 0],
         notes="eigenvalues and eigenvectors; throughput in matrices/s (no canonical flop count)",
     ),
     OpSpec(
@@ -168,33 +228,51 @@ for _s in (
         arms=(Arm("batchlas", bench_name="BM_GESVD_BATCHLAS_CTA<", fixed_route="native:cta"),
               Arm("vendor", bench_name="BM_GESVD_CUSOLVER_JACOBI<", fixed_route="vendor:gesvdj_batched")),
         footprint=6.0,
-        args=lambda n, b: [n, b, 1, 1],
+        args=lambda m, n, k, b: [n, b, 1, 1],
         notes="cuSOLVER gesvdjBatched is capped at n = 32; vendor time includes the V -> V^H transpose",
         max_order=32,
     ),
     # ---------------------------------------------------------------- BLAS
-    # All square (m = n = k). Arms are the canonical BATCHLAS_<OP>_ROUTE only:
-    # legacy spellings mean different things per op (route_env.hh:106-134).
+    # The square cells are m = n = k and store k as 0. Arms are the canonical
+    # BATCHLAS_<OP>_ROUTE only: legacy spellings mean different things per op
+    # (route_env.hh:106-134).
     _blas("gemm", "General matrix multiply", "gemm_benchmark", "BM_GEMM<", flops_gemm,
-          orders=(8, 16, 32, 64, 128, 256, 512, 1024), footprint=3.0, args=lambda n, b: [n, n, n, b]),
+          orders=(8, 16, 32, 64, 128, 256, 512, 1024), footprint=3.0, args=lambda m, n, k, b: [m, n, k or n, b],
+          plane=_third("k", "Inner Dimension $k$ [1]", "Output Order $m = n$ [1]",
+                       area=lambda m, n, k: (m * (k or n) + (k or n) * n + m * n) / 3.0)),
     _blas("gemv", "Matrix-vector multiply", "gemv_benchmark", "BM_GEMV<", flops_gemv,
-          orders=(16, 32, 64, 128, 256, 512, 1024, 2048), footprint=1.2, args=lambda n, b: [n, n, b]),
+          orders=(16, 32, 64, 128, 256, 512, 1024, 2048), footprint=1.2, args=lambda m, n, k, b: [m, n, b],
+          plane=_tall()),
     _blas("trsm", "Triangular solve", "trsm_benchmark", "BM_TRSM<", flops_trsm,
-          orders=(8, 16, 32, 64, 128, 256, 512), footprint=3.0, args=lambda n, b: [n, n, b]),
+          orders=(8, 16, 32, 64, 128, 256, 512), footprint=3.0, args=lambda m, n, k, b: [n, k or n, b],
+          plane=_third("q", "Right-Hand Sides $q$ [1]", "Triangle Order $n$ [1]",
+                       area=lambda m, n, k: (n * n + 2.0 * n * (k or n)) / 3.0)),
+    # trmm_benchmark's operands only agree at m = n = k, so trmm stays square.
     _blas("trmm", "Triangular multiply", "trmm_benchmark", "BM_TRMM<", flops_trmm, native="triangular",
           types=("float",), orders=(16, 32, 64, 128, 256, 512, 1024), footprint=3.0,
-          args=lambda n, b: [n, n, n, b], notes="native triangular-tile kernel is CUDA float only"),
+          args=lambda m, n, k, b: [n, n, n, b], notes="native triangular-tile kernel is CUDA float only"),
     _blas("syrk", "Symmetric rank-k update", "syrk_benchmark", "BM_SYRK<", flops_syrk, native="triangular",
           types=("float",), orders=(16, 32, 64, 128, 256, 512, 1024), footprint=3.0,
-          args=lambda n, b: [n, n, n, b], notes="native triangular-tile kernel is float only (double records no route); plain native is a wrong-answer route"),
+          args=lambda m, n, k, b: [n, k or n, k or n, b],
+          plane=_third("k", "Rank $k$ [1]", "Matrix Order $n$ [1]",
+                       area=lambda m, n, k: (n * n + 2.0 * n * (k or n)) / 3.0),
+          notes="native triangular-tile kernel is float only (double records no route); plain native is a wrong-answer route"),
     _blas("syr2k", "Symmetric rank-2k update", "syr2k_benchmark", "BM_SYR2K<", flops_syr2k, native="triangular",
           types=("float",), orders=(16, 32, 64, 128, 256, 512, 1024), footprint=4.0,
-          args=lambda n, b: [n, n, n, b], notes="native triangular-tile kernel is float only"),
+          args=lambda m, n, k, b: [n, k or n, k or n, b],
+          plane=_third("k", "Rank $k$ [1]", "Matrix Order $n$ [1]",
+                       area=lambda m, n, k: (n * n + 3.0 * n * (k or n)) / 4.0),
+          notes="native triangular-tile kernel is float only"),
     _blas("spmm", "Sparse x dense multiply", "spmm_benchmark", "BM_SPMM_Grid<", flops_spmm,
           orders=(256, 512, 1024, 2048, 4096, 8192, 16384),
-          args=lambda n, b: [n, SPMM_NNZ_ROW, SPMM_NRHS, b, 0, 0, 1],
+          args=lambda m, n, k, b: [n, SPMM_NNZ_ROW, k or SPMM_NRHS, b, 0, 0, 1],
           n_label="Matrix Rows $n$ [1]",
-          bytes_per_item=lambda n, t: 3.0 * (n * SPMM_NNZ_ROW * (TYPE_BYTES[t] + 4) + 2 * n * SPMM_NRHS * TYPE_BYTES[t]),
+          bytes_per_item=lambda n, k, t: 3.0 * (n * SPMM_NNZ_ROW * (TYPE_BYTES[t] + 4)
+                                                + 2 * n * (k or SPMM_NRHS) * TYPE_BYTES[t]),
+          plane=Plane(x="nrhs", y="n", x_label="Right-Hand Sides [1]", y_label="Matrix Rows $n$ [1]",
+                      x_values=(4, 8, 16, 32, 64, 128),
+                      cell=lambda x, y: (y, y, 0 if x == SPMM_NRHS else x),
+                      coords=lambda m, n, k: (k or SPMM_NRHS, n)),
           notes=f"CSR, random pattern, {SPMM_NNZ_ROW} nonzeros per row, {SPMM_NRHS} right-hand sides; n is the row count"),
 ):
     OPS[_s.name] = _s
@@ -248,6 +326,9 @@ class Grid:
     batches: Optional[List[int]] = None
     reps: int = 5
     mem_gib: float = 3.0
+    # Also sweep each rectangular op's Plane (at the saturated batch). False here so a
+    # campaign saved before the field existed keeps its plan; every preset turns it on.
+    rect: bool = False
     name: str = "custom"
 
     def to_dict(self) -> dict:
@@ -274,23 +355,28 @@ class Grid:
         name = cfg.get("preset", "quick")
         g = PRESETS.get(name, PRESETS["quick"])
         return cls.from_dict({**g.to_dict(), "mem_gib": cfg.get("mem_gib") or g.mem_gib,
-                              "orders": cfg.get("orders"), "name": name})
+                              "orders": cfg.get("orders"), "name": name, "rect": False})
 
 
 PRESETS = {
-    "smoke": Grid(order_stride=3, batch_min=256, batch_step=16, reps=3, name="smoke"),
-    "saturation": Grid(batch_mode="saturated", reps=7, name="saturation"),
-    "quick": Grid(batch_min=64, batch_step=4, reps=5, name="quick"),
-    "full": Grid(batch_min=32, batch_step=2, reps=9, name="full"),
+    "smoke": Grid(order_stride=3, batch_min=256, batch_step=16, reps=3, rect=True, name="smoke"),
+    "saturation": Grid(batch_mode="saturated", reps=7, rect=True, name="saturation"),
+    "quick": Grid(batch_min=64, batch_step=4, reps=5, rect=True, name="quick"),
+    "full": Grid(batch_min=32, batch_step=2, reps=9, rect=True, name="full"),
 }
 
 
-def memory_cap(op: "OpSpec", dtype: str, n: int, grid: Grid) -> int:
-    per_matrix = op.footprint * n * n * TYPE_BYTES[dtype]
+def memory_cap(op: "OpSpec", dtype: str, n: int, grid: Grid, m: Optional[int] = None, k: Optional[int] = None) -> int:
+    """Largest batch that fits the budget; (m, k) default to the op's square cell."""
+    if m is None:
+        m, k = op.shape(n)
     if op.bytes_per_item:
-        per_matrix = op.bytes_per_item(n, dtype)
-    elif op.nrhs:
-        per_matrix += 3.0 * n * op.nrhs * TYPE_BYTES[dtype]
+        per_matrix = op.bytes_per_item(n, k, dtype)
+    else:
+        area = op.plane.area(m, n, k) if op.plane else float(m) * n
+        per_matrix = op.footprint * area * TYPE_BYTES[dtype]
+        if op.nrhs:
+            per_matrix += 3.0 * n * k * TYPE_BYTES[dtype]
     return max(1, min(int(grid.mem_gib * (1 << 30) // max(per_matrix, 1.0)), op.max_batch, grid.batch_max))
 
 
@@ -346,4 +432,31 @@ def plan_cells(ops: Sequence[str], types: Sequence[str], grid: Grid, mem_gib: Op
                 for b in batch_ladder(op, t, n, grid):
                     m, k = op.shape(n)
                     cells.append(Cell(name, t, m, n, k, b))
+            if grid.rect and op.plane:
+                cells += plane_cells(op, t, grid, have=set(cells))
     return cells
+
+
+def plane_axes(op: "OpSpec", grid: Grid) -> Tuple[List[int], List[int]]:
+    ys = op_orders(op, grid)
+    xs = list(op.plane.x_values)[:: max(1, grid.order_stride)] if op.plane.x_values else ys
+    return xs, ys
+
+
+def plane_cells(op: "OpSpec", dtype: str, grid: Grid, have=frozenset()) -> List[Cell]:
+    """One cell per valid (x, y), at the largest power-of-two batch that fits: a
+    map over shapes can show one batch per shape, and only the saturated one is a
+    fair ratio. A square point the square sweep already measures is not repeated."""
+    xs, ys = plane_axes(op, grid)
+    swept = {(h.m, h.n, h.nrhs) for h in have if h.op == op.name and h.dtype == dtype}
+    out = []
+    for y in ys:
+        for x in xs:
+            if not op.plane.valid(x, y):
+                continue
+            m, n, k = op.plane.cell(x, y)
+            if max(m, n) > op.max_order or (op.is_square(m, n, k) and (m, n, k) in swept):
+                continue
+            cap = memory_cap(op, dtype, n, grid, m, k)
+            out.append(Cell(op.name, dtype, m, n, k, 1 << (cap.bit_length() - 1)))
+    return out

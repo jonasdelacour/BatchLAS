@@ -193,7 +193,7 @@ class Runner:
             argv = [str(binary), f"--backend={self.backend.upper()}", f"--type={cell.dtype}",
                     f"--name={arm.bench_name}", "--warmup=3", f"--min_iters={reps}",
                     f"--max_iters={max(reps, 20)}", "--min_time=200", f"--csv={csv_path}",
-                    *map(str, op.cell_args(cell.n, cell.batch))]
+                    *map(str, op.cell_args(cell))]
         for attempt in range(3):
             t0 = time.time()
             try:
@@ -260,9 +260,10 @@ class Runner:
                     if not self._queue:
                         return
                     cell, arms = self._queue.pop(0)
+                shape = OPS[cell.op].shape_text(cell.m, cell.n, cell.nrhs)
                 for arm in arms:
                     with self._lock:
-                        self._current[gpu] = f"{cell.op} {cell.dtype} n={cell.n} batch={cell.batch} [{arm}]"
+                        self._current[gpu] = f"{cell.op} {cell.dtype} {shape} batch={cell.batch} [{arm}]"
                         self._status()
                     rec = self._measure(gpu, cell, arm, reps, tmp)
                     with self._lock:
@@ -270,7 +271,7 @@ class Runner:
                         self._done += 1
                         n = self._done
                     status = f"{rec['time_ms']:.4f} ms {rec.get('route', '')}" if rec.get("ok") else rec["reason"]
-                    self.log(f"[{n}/{self._total}] GPU {gpu} {cell.op} {cell.dtype} n={cell.n} "
+                    self.log(f"[{n}/{self._total}] GPU {gpu} {cell.op} {cell.dtype} {shape} "
                              f"batch={cell.batch} {arm}: {status}")
         except Stopped:
             pass
