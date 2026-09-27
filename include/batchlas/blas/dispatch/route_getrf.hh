@@ -86,14 +86,14 @@ struct RouteTable<Op::getrf, T> {
     }
 
     // Bounds are measured EDGES. n = 4 ties the vendor at the DRAM roof, cfloat 8 falls
-    // under the gate, cfloat 17 pads into N = 32 and loses.
-    // evidence: docs/perf/lu.md#the-tiny-launch-bound
+    // under the gate, cfloat 25..32 ties the vendor (0.97-1.10x) and stays out.
+    // evidence: docs/perf/lu.md#the-column-bucket
     static bool tiny_window(const GetrfShape& s) {
         if (!tiny_fits(s)) return false;
         if constexpr (std::is_same_v<T, float>) {
             return s.order() >= 5 && s.order() <= 32;
         } else if constexpr (std::is_same_v<T, std::complex<float>>) {
-            return (s.order() >= 5 && s.order() <= 7) || (s.order() >= 9 && s.order() <= 16);
+            return (s.order() >= 5 && s.order() <= 7) || (s.order() >= 9 && s.order() <= 24);
         } else {
             return false;   // fp64 on this part runs at 1/64 rate; no grid, no window
         }
@@ -104,22 +104,11 @@ struct RouteTable<Op::getrf, T> {
         return s.tiny_max_n >= 1 && s.order() <= static_cast<int64_t>(s.tiny_max_n);
     }
 
-    // cfloat 28..32: Blocked 0.73 / 0.82x of the vendor where CTA is 0.62 / 0.50x.
-    static bool blocked_band(const GetrfShape& s) {
-        if constexpr (std::is_same_v<T, std::complex<float>>) {
-            return s.blocked_available && s.order() >= 28 && s.order() <= 32;
-        } else {
-            return false;
-        }
-    }
-
-    // Native against native: at n <= 8 tiny is ~3x the CTA tier for both single types,
-    // so the vendor-free walk takes it even where the vendor ties.
+    // Tiny is the fastest native tier wherever it fits. evidence: docs/perf/lu.md#the-column-bucket
     static bool tiny_native(const GetrfShape& s) {
-        if (tiny_window(s)) return true;
         constexpr bool kSingle =
             std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>;
-        return kSingle && tiny_fits(s) && s.order() <= 8;
+        return tiny_window(s) || (kSingle && tiny_fits(s));
     }
 
     // Native-vs-native tie-break, vendor-free walk only. evidence: docs/perf/lu.md#native_tier_preferred
@@ -140,9 +129,9 @@ struct RouteTable<Op::getrf, T> {
             case Algorithm::Tiny:
                 return tiny_native(s);
             case Algorithm::CTA:
-                return !tiny_native(s) && !blocked_band(s) && s.order() <= cta_max_order;
+                return !tiny_native(s) && s.order() <= cta_max_order;
             case Algorithm::Blocked:
-                return !tiny_native(s) && (blocked_band(s) || s.order() > cta_max_order);
+                return !tiny_native(s) && s.order() > cta_max_order;
             default:
                 return true;
         }

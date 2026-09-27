@@ -90,15 +90,14 @@ struct RouteTable<Op::posv, T> {
         return 32;
     }
 
-    // Measured against CTA for float and cfloat only; fp64 keeps the tier ceiling. nrhs = 2
-    // is CTA's: its cost grows with the width, the NR = 4 tiny kernel's does not.
-    // evidence: docs/perf/potrf.md#the-posv-tiny-launch-bound
+    // Measured against CTA for float and cfloat only; fp64 keeps the tier ceiling. Float
+    // tiny wins every cell; cfloat above 24 is tiny only at nrhs > 2 (1.19-1.24x), nrhs = 2
+    // ties (1.01-1.08x) and nrhs = 1 is CTA's (1.03-1.13x).
+    // evidence: docs/perf/potrf.md#the-posv-local-memory-transpose
     static bool tiny_window(const PosvShape& s) {
         if (s.order() < 1 || s.order() > tiny_window_max_n()) return false;
-        if constexpr (std::is_same_v<T, float>) {
-            return s.order() <= 16 || s.nrhs() != 2;
-        } else if constexpr (std::is_same_v<T, std::complex<float>>) {
-            return s.order() <= 8 || (s.order() <= 16 && s.nrhs() != 2);
+        if constexpr (std::is_same_v<T, std::complex<float>>) {
+            return s.order() <= 24 || s.nrhs() > 2;
         } else {
             return true;
         }

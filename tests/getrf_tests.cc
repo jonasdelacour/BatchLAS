@@ -3810,6 +3810,30 @@ TYPED_TEST(LuTest, TinyPackedLaunchesDoNotBleed) {
     }
 }
 
+// T5b. THE LOCAL-MEMORY PIVOT ROW UNDER A SATURATED LAUNCH, at one order per column
+// bucket of both lane buckets. T1's batch of 19 is one or two work-groups; 4096 keeps
+// every SM full, which is what a race in the parity double buffer, or a row buffer
+// shared by two partitions, needs before it turns into a wrong factor.
+// evidence: docs/perf/lu.md#the-local-memory-broadcast
+// ARMED BREAK (R9): index the row buffer without `pidx`. EXPECTED: RED here and in T1,
+// T3-T6, float and cfloat.
+// ARMED BREAK (R9): single-buffer it, `(j & 1)` -> 0. EXPECTED: GREEN everywhere -- a
+// BLIND guard on this device: the parity is kept because the memory model needs it,
+// not because any failure was seen without it.
+// ARMED BREAK (R9): drop the `group_barrier(sg)`. EXPECTED: RED here and in T1, T3-T6,
+// float and cfloat, and T11.
+TYPED_TEST(LuTest, TinyLocalMemoryRowSurvivesASaturatedLaunch) {
+    using T = typename TestFixture::T;
+    const int cap = this->tiny_max_n();
+    for (int n : {9, 12, 16, 17, 22, 27, 32}) {
+        if (n > cap) continue;
+        auto p = make_random<T>(n, 4096, 8800u + unsigned(n));
+        this->run_tiny(p);
+        check_factor(p, "tiny/saturated");
+        if (this->HasFailure()) return;
+    }
+}
+
 // T6. A NaN INSIDE A LIVE COLUMN MUST NOT DECIDE THE PIVOT. The tiny argmax seeds
 // every lane from its OWN magnitude, so an unmapped NaN survives every XOR round
 // (`ov > NaN` and `ov == NaN` are both false) and the lanes end the butterfly
@@ -3944,7 +3968,7 @@ TYPED_TEST(LuTest, TinyDirectEntryPointRefusesWhatSupportsRefuses) {
 }
 
 // T9. ROUTING. Tiny is in the order array FIRST and its supports() gate answers on the
-// tier's own ceiling. Its window is MEASURED -- float 5..32, cfloat 5..7 and 9..16 -- so this
+// tier's own ceiling. Its window is MEASURED -- float 5..32, cfloat 5..7 and 9..24 -- so this
 // case asserts the window from both sides rather than "never preferred", which is what it
 // said while the grid was outstanding. fp64 has no window on this part at any order.
 // evidence: docs/perf/lu.md#the-tiny-getrf-window
@@ -4005,15 +4029,33 @@ TYPED_TEST(LuTest, TinyRoutesInsideItsMeasuredWindowAndNowhereElse) {
         }
     }
 
-    // ABOVE the window, for cfloat only: n = 17 pads into the N = 32 array and measures
-    // 0.368x, the sharpest edge in the table.
+    // THE UPPER EDGE, cfloat only, at the column bucket's measured edge: n = 24 (1.15x)
+    // is in, n = 25 (1.03x) is out -- and at 25 and 32 the vendor-free walk still takes
+    // Tiny, 1.2-1.5x over the better of CTA and Blocked. evidence: docs/perf/lu.md#the-column-bucket
+    // ARMED BREAK (R9): cfloat tiny_window upper edge 24 -> 32. EXPECTED: n=25 preferred, red.
+    // ARMED BREAK (R9): tiny_native back to `tiny_window || n <= 8`. EXPECTED: n=25/32 walk
+    // leaves Tiny, red.
     if constexpr (std::is_same_v<T, std::complex<float>>) {
-        auto q = make_dominant_permuted<T>(17, 3, 24u);
-        auto QV = view_of(q);
-        const auto qs = backend::getrf_op_shape<B, T>(*this->ctx, QV);
-        ASSERT_TRUE(qs.has_value());
-        EXPECT_TRUE(Tbl::supports(tiny, *qs));
-        EXPECT_FALSE(Tbl::preferred(tiny, *qs)) << "cfloat n=17 measured 0.368x";
+        const auto shape_at = [&](int n, uint32_t seed) {
+            auto q = make_dominant_permuted<T>(n, 3, seed);
+            auto QV = view_of(q);
+            return backend::getrf_op_shape<B, T>(*this->ctx, QV);
+        };
+        const auto s24 = shape_at(24, 24u);
+        ASSERT_TRUE(s24.has_value());
+        EXPECT_TRUE(Tbl::preferred(tiny, *s24)) << "cfloat n=24 measured 1.15x";
+        const dispatch::Route blocked{dispatch::Origin::Native, dispatch::Algorithm::Blocked};
+        const dispatch::Route cta{dispatch::Origin::Native, dispatch::Algorithm::CTA};
+        for (int n : {25, 32}) {
+            const auto qs = shape_at(n, 25u + static_cast<uint32_t>(n));
+            ASSERT_TRUE(qs.has_value());
+            EXPECT_TRUE(Tbl::supports(tiny, *qs));
+            EXPECT_FALSE(Tbl::preferred(tiny, *qs)) << "cfloat n=" << n << " ties the vendor";
+            EXPECT_TRUE(Tbl::native_tier_preferred(tiny, *qs))
+                << "cfloat n=" << n << ": Tiny is the fastest native tier";
+            EXPECT_FALSE(Tbl::native_tier_preferred(blocked, *qs));
+            EXPECT_FALSE(Tbl::native_tier_preferred(cta, *qs));
+        }
     }
 
     // Each correctness gate, one at a time.
@@ -4224,19 +4266,19 @@ TYPED_TEST(LuTest, TinyPivotsMatchLapackeOnUnstructuredData) {
 
 // ---------------------------------------------------------------------------
 // T11. A SOURCE CHECK, because both properties are invisible to a functional test on
-// this device. A work-group barrier in a partition kernel is a RACE, not a crash: the
+// this device. A WORK-GROUP barrier in a partition kernel is a RACE, not a crash: the
 // G partitions sharing a work-group would synchronise with each other and the answer
-// stays right until the scheduler makes it wrong. A local_accessor is an occupancy
-// cost no result depends on -- and any group collective that allocates static shared
-// can push a NEIGHBOURING kernel into the (47104, 49664] launch hole, whose cap the
-// CUDA adapter raises STICKILY per CUfunction, so a warm suite passes and a cold
-// first launch fails.
+// stays right until the scheduler makes it wrong. The tier's one barrier is the
+// SUB-GROUP barrier of the local-memory pivot row, spelled exactly `group_barrier(sg)`
+// (`group_barrier(part)` is a no-op off the native partition path). Its local memory
+// is a `local_accessor` the launch accounting sees; a GROUP COLLECTIVE allocates static
+// shared it cannot see, and can push a NEIGHBOURING kernel into the (47104, 49664]
+// launch hole, whose cap the CUDA adapter raises STICKILY per CUfunction.
+// evidence: docs/perf/lu.md#the-local-memory-broadcast
 //
-// The scan strips `//` comments first, so the prose above is not what is matched. The
-// token is `group_barrier(` and NOT `group_barrier(it.get_group())`: the tier has zero
-// cross-lane state to order, so no barrier of ANY scope belongs in it, and the
-// stronger spelling could be satisfied by re-spelling the argument.
-// Arms breaks (g) and (g'). evidence: docs/perf/lu.md#armed-breaks
+// The scan strips `//` comments first, so the prose above is not what is matched.
+// ARMED BREAK (R9): spell the pivot-row barrier `group_barrier(it.get_group())`.
+// EXPECTED: RED, naming that line, with every numerical case GREEN.
 // ---------------------------------------------------------------------------
 #ifdef BATCHLAS_GETRF_TINY_CC_PATH
 namespace {
@@ -4259,7 +4301,7 @@ std::string FirstCodeLineContaining(const std::string& path, const char* token) 
 
 }  // namespace
 
-TEST(GetrfTinySource, DeclaresNoBarrierAndNoLocalMemory) {
+TEST(GetrfTinySource, OnlySubGroupBarriersAndNoGroupCollective) {
     const std::string path = BATCHLAS_GETRF_TINY_CC_PATH;
     // POSITIVE CONTROL FIRST. Every assertion below is an ABSENCE, so a path that
     // resolves to the wrong file -- or to no file at all -- reports a clean bill of
@@ -4269,18 +4311,28 @@ TEST(GetrfTinySource, DeclaresNoBarrierAndNoLocalMemory) {
         << "the source scan found no parallel_for in " << path
         << ": BATCHLAS_GETRF_TINY_CC_PATH does not name the tiny tier's source, and "
            "every absence assertion below would pass vacuously";
-    ASSERT_FALSE(FirstCodeLineContaining(path, "make_partition").empty())
-        << "the source scan found no make_partition in " << path
-        << ": the file it names is not the partition-per-matrix kernel";
-    for (const char* token : {"group_barrier(", "local_accessor"}) {
-        const std::string offending = FirstCodeLineContaining(path, token);
-        EXPECT_TRUE(offending.empty())
-            << "src/extensions/getrf_tiny.cc names `" << token
-            << "` in code. The register-resident tier has zero cross-lane state to "
-               "order and zero local memory by design; both are silent on this device "
-               "(a partition kernel's work-group barrier is a race, and static shared "
-               "re-opens the 48 KB launch hole for a NEIGHBOURING kernel): " << offending;
+    ASSERT_FALSE(FirstCodeLineContaining(path, "group_barrier(sg)").empty())
+        << "the scan found no sub-group barrier in " << path
+        << ": the local-memory pivot row is gone, or this is the wrong file";
+
+    std::FILE* f = std::fopen(path.c_str(), "r");
+    ASSERT_NE(f, nullptr) << path;
+    char line[8192];
+    while (std::fgets(line, sizeof(line), f)) {
+        const std::string text(line);
+        const size_t comment = text.find("//");
+        const std::string code = comment == std::string::npos ? text : text.substr(0, comment);
+        if (code.find("group_barrier(") != std::string::npos) {
+            EXPECT_NE(code.find("group_barrier(sg)"), std::string::npos)
+                << "a barrier of the wrong scope in the partition kernel: " << text;
+        }
+        for (const char* token : {"_over_group(", "group_broadcast(", "joint_"}) {
+            EXPECT_EQ(code.find(token), std::string::npos)
+                << "a group collective allocates static shared the launch accounting "
+                   "cannot see: " << text;
+        }
     }
+    std::fclose(f);
 }
 #endif  // BATCHLAS_GETRF_TINY_CC_PATH
 

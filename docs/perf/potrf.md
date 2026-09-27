@@ -2137,3 +2137,43 @@ nrhs = 2, CTA at 17 and above. So `tiny_window` is float `n <= 16 || nrhs != 2`,
 
 **Still losing:** cfloat 9..17 at nrhs = 2 (best 0.68 / 0.84 / 0.94 at n = 12 / 16 / 17),
 cfloat n = 12 nrhs = 4 ties (0.99), cfloat n = 17 at every width (CTA 0.86-1.08).
+
+## The posv local-memory transpose
+
+**2026-09-27, second pass.** The three levers of docs/perf/lu.md#the-column-bucket applied
+to `posv_tiny`: the column bucket NC ({12, 16} under N = 16, {20, 24, 28, 32} under N = 32),
+an NR = 2 RHS bucket with every RHS loop stopping at nrhs (docs/perf/lu.md#the-rhs-pad-column-cost),
+and local memory for the two cross-lane reads that scale with n:
+
+* **The Cholesky column.** Step j broadcast L(k, j) from lane k to every lane, `n - j - 1`
+  shuffles (two per complex element). Now every lane stores ITS element -- one store, all
+  lanes at once -- then one `group_barrier(sg)` and vector loads, double-buffered by parity.
+* **The backward solve's transpose.** Step i needed L(i, lane) on each lane below i, which
+  no lane holds: `i` shuffles plus a select chain. Now lane i stores its row and each lane
+  loads the ONE element at its own index -- local memory may be indexed dynamically,
+  registers may not.
+
+The factor stays bit-identical to `potrf_tiny` (P2 is green): the arithmetic is unchanged,
+only the transport. Launch bounds re-swept per (type, NC, NR) over {8, 12, 16} and
+transcribed in `posv_tiny_min_blocks`; float is flat within 2% and takes 16.
+
+Batch 32768, `t_vendor / t_arm`, tiny / CTA, arms interleaved:
+
+| posv cfloat n | nrhs 1 | nrhs 2 | nrhs 4 |
+|---|---|---|---|
+| 9 | 1.78 / 0.95 | 1.52 / 0.62 | 1.23 / 0.48 |
+| 12 | 2.03 / 1.15 | 1.51 / 0.68 | 1.44 / 0.57 |
+| 16 | 1.88 / 1.30 | 1.40 / 0.84 | 1.71 / 0.83 |
+| 17 | 1.80 / 1.08 | 1.65 / 0.94 | 1.29 / 0.86 |
+| 20 | 2.18 / 1.42 | 2.02 / 1.20 | 1.49 / 1.05 |
+| 24 | 2.57 / 1.92 | 2.22 / 1.61 | 1.73 / 1.33 |
+| 28 | 2.34 / 2.41 | 2.17 / 2.00 | 2.12 / 1.70 |
+| 32 | 2.78 / 3.12 | 2.54 / 2.51 | 2.35 / 1.98 |
+
+Before: tiny 0.68 / 0.84 / 0.94 at n = 12 / 16 / 17, nrhs = 2, and n = 17 at every width
+0.86-1.08. Every cfloat cell now beats the vendor legs by 1.23x or more. Against CTA, tiny
+wins 1.3-2.6x at n <= 24 and at nrhs = 4 above it (1.24x / 1.19x at 28 / 32); nrhs = 2 above
+24 ties (1.08x / 1.01x) and nrhs = 1 is CTA's (1.03x / 1.13x). So cfloat `tiny_window` is
+`n <= 24 || nrhs > 2`. float: tiny 1.84-5.32x of the vendor at every cell and 1.3-3.5x over
+CTA, including the nrhs = 2 band above 16 that was CTA's, so float `tiny_window` is the
+whole tier.

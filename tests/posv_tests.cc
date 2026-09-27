@@ -270,11 +270,13 @@ TYPED_TEST_SUITE(PosvTest, PosvTestTypes);
 // `c >= i - 1` instead of `c >= i`, dropping the last column of the backward
 // update. EXPECTED: RED at every n >= 2 with a residual of order 1, and P2 (the
 // factor comparison) GREEN -- which localises the break to the solve.
+// ARMED BREAK (R9): the local-memory transpose read guarded `lane < i - 1`. EXPECTED: RED
+// here for float and cfloat, P2 GREEN.
 TYPED_TEST(PosvTest, TinySolveResidualMatchesHostReference) {
     using T = typename TestFixture::T;
     const int cap = this->cap();
     for (Uplo uplo : {Uplo::Lower, Uplo::Upper}) {
-        for (int n : {1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 24, 31, 32}) {
+        for (int n : {1, 2, 3, 4, 5, 7, 8, 9, 13, 15, 16, 17, 21, 24, 26, 28, 31, 32}) {
             if (n > cap) continue;
             for (int nrhs : {1, 2, 3, 4}) {
                 auto p = make_spd<T>(n, nrhs, 9, uplo, 555u + unsigned(n * 7 + nrhs));
@@ -413,24 +415,23 @@ TYPED_TEST(PosvTest, TinyRefusesShapesAboveItsCeilings) {
 // P7. THE ROUTE, pinned to the MEASURED window; preferred() is asserted all-false
 // permanently because this op passes vendor_available=false and the window therefore
 // lives in native_tier_preferred. Outside the tiny window the fused-solve CTA arm takes
-// every shape it can hold. evidence: docs/perf/potrf.md#the-posv-tiny-launch-bound
-// ARMED BREAK (R9): make route_posv.hh's cfloat tiny_window return `order() <= 16`.
-// EXPECTED: RED for cfloat at n = 9 and 16 with nrhs = 2 only.
+// every shape it can hold. evidence: docs/perf/potrf.md#the-posv-local-memory-transpose
+// ARMED BREAK (R9): make route_posv.hh's cfloat tiny_window return `order() <= 24`.
+// EXPECTED: RED for cfloat at n = 25 and 32 with nrhs = 4.
+// ARMED BREAK (R9): restore the float window `order() <= 16 || nrhs() != 2`.
+// EXPECTED: RED for float at n = 17, 24, 25 and 32 with nrhs = 2.
 TYPED_TEST(PosvTest, AutoTakesTheMeasuredWindow) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::BackendType;
     using Tbl = dispatch::RouteTable<dispatch::Op::posv, T>;
 
     // Restated, not read back from the header: a test that asks the header what the
-    // header says cannot fail. The tiny window's ceiling at nrhs = 2 and at every other width.
-    constexpr bool kF = std::is_same_v<T, float>;
+    // header says cannot fail. Tiny holds every width up to the tier ceiling, except
+    // cfloat above 24 at nrhs <= 2, which is CTA's (a tie at 2, a loss at 1).
     constexpr bool kC = std::is_same_v<T, std::complex<float>>;
-    constexpr bool kZ = std::is_same_v<T, std::complex<double>>;
-    const int two = kF ? 16 : kC ? 8 : kZ ? 16 : 32;
-    const int other = kF ? 32 : kC ? 16 : kZ ? 16 : 32;
 
     for (int nrhs : {1, 2, 4}) {
-        for (int n : {4, 8, 9, 16, 17, 32, 64}) {
+        for (int n : {4, 8, 9, 16, 17, 24, 25, 32, 64}) {
             auto p = make_spd<T>(n, nrhs, 4, Uplo::Lower, 12u + unsigned(n));
             auto A = a_view(p); auto Bv = b_view(p);
             const auto shape = backend::posv_op_shape<B, T>(*this->ctx, A, Bv, Uplo::Lower);
@@ -441,9 +442,9 @@ TYPED_TEST(PosvTest, AutoTakesTheMeasuredWindow) {
                 << "n=" << n << ": preferred() is not this op's shipping hook";
 
             const bool fits = (n <= sycl_posv::posv_tiny_max_n<T>());
-            const int win = (nrhs == 2) ? two : other;
-            const auto want = (fits && n <= win) ? dispatch::Algorithm::Tiny
-                                                 : dispatch::Algorithm::CTA;
+            const bool win = !kC || n <= 24 || nrhs > 2;
+            const auto want = (fits && win) ? dispatch::Algorithm::Tiny
+                                            : dispatch::Algorithm::CTA;
             const auto r = backend::posv_route<B, T>(*this->ctx, A, Bv, Uplo::Lower);
             EXPECT_EQ(r.algo, want)
                 << "n=" << n << " nrhs=" << nrhs << ": Auto resolved to "

@@ -62,19 +62,28 @@ constexpr int tiny_cap() {
     return std::is_same_v<T, std::complex<double>> ? 16 : 32;
 }
 
-// The RHS ladder is {1, 4}: nrhs 2 and 3 run in the NR = 4 instantiation with zero
-// columns, which solve to zero and are never stored. 0 means "above the tier".
+// The RHS ladder is {1, 2, 4}: nrhs 3 runs in NR = 4 with one zero column. Every RHS loop
+// stops at nrhs (kernel-uniform): a zero pad column sends each divide down its slow path.
+// evidence: docs/perf/lu.md#the-rhs-pad-column-cost. 0 means "above the tier".
 constexpr int tiny_rhs_bucket(int nrhs) {
     if (nrhs < 1) return 0;
-    if (nrhs <= 1) return 1;
+    if (nrhs <= 2) return nrhs;
     if (nrhs <= kGesvTinyMaxRhs) return kGesvTinyMaxRhs;
     return 0;
 }
 
-// A FUNCTOR so the launch bound can be spelled (refused on a lambda); see getrf_tiny.cc.
-template <typename D, int N, int NR, int Mpw, int MinBlocks>
+// A FUNCTOR so the launch bound can be spelled (refused on a lambda); see getrf_tiny.cc,
+// whose column bucket NC and local-memory pivot row this body shares. The published row
+// carries the pivot row of B after that of A, so forward substitution rides the same
+// barrier. evidence: docs/perf/lu.md#the-local-memory-broadcast
+template <typename D, int N, int NC, int NR, int Mpw, int MinBlocks, bool Slm>
 struct GesvTinyBody {
     using R = gn::real_of<D>;
+    using R4 = tn::tiny_r4<R>;
+    static constexpr int kW = tn::tiny_r4_width<D>();
+    static constexpr int kNCV = (NC + kW - 1) / kW;
+    static constexpr int kNRV = (NR + kW - 1) / kW;
+    static constexpr int kRowV = kNCV + kNRV;   // vectors per published row
     D* ap;
     D* bp;
     int n;
@@ -83,6 +92,7 @@ struct GesvTinyBody {
     std::ptrdiff_t ldap, ldbp, strap, strbp;
     int* piv_ptr;
     int32_t* info_ptr;
+    sycl::local_accessor<R4, 1> slm;   // 2 parities x Mpw rows; one element when !Slm
 
     [[sycl::reqd_sub_group_size(32), intel::max_work_group_size(1, 1, kTinyWg),
       intel::min_work_groups_per_cu(MinBlocks)]]
@@ -92,7 +102,8 @@ struct GesvTinyBody {
         const auto part = make_partition<N>(sg);
         const int wg_id = static_cast<int>(it.get_group_linear_id());
         const int lane = static_cast<int>(part.get_local_linear_id());
-        const int prob_id = wg_id * kMpw + tn::tiny_partition_id(sg, part);
+        const int pidx = tn::tiny_partition_id(sg, part);
+        const int prob_id = wg_id * kMpw + pidx;
 
         // CLAMP, DO NOT RETURN: tiny_device.hh's third invariant -- an
         // early-exited lane still sits in the shuffle mask.
@@ -101,15 +112,14 @@ struct GesvTinyBody {
         const D* const srcA = ap + static_cast<std::ptrdiff_t>(b) * strap;
         const D* const srcB = bp + static_cast<std::ptrdiff_t>(b) * strbp;
 
-        D rA[N];  // top level, never a parameter: tiny_device.hh invariant 1
+        D rA[NC];  // top level, never a parameter: tiny_device.hh invariant 1
 #pragma unroll
-        for (int c = 0; c < N; ++c) {
+        for (int c = 0; c < NC; ++c) {
             rA[c] = tn::tiny_load_pad_identity<D>(srcA, lane, c, n, ldap, live);
         }
 
-        // The pad columns of the RHS are ZERO, not identity: they must solve to
-        // zero so that a NaN cannot be manufactured out of a column nobody asked
-        // for and then leak through a downstream nanmax.
+        // The pad columns of the RHS are ZERO and never touched: every RHS loop below
+        // stops at nrhs, so no column nobody asked for can manufacture a NaN.
         D rB[NR];
         D rX[NR];
 #pragma unroll
@@ -131,8 +141,9 @@ struct GesvTinyBody {
         int row_lane = lane;   // lane j records WHICH lane ends up holding row j
         int32_t linfo = 0;     // partition-uniform: from the broadcast pivot
 
+        // Full unroll needs the TU's raised -pragma-unroll-threshold; see getrf_tiny.cc.
 #pragma unroll
-        for (int j = 0; j < N; ++j) {
+        for (int j = 0; j < NC; ++j) {
             // `continue`, NOT `break`: a break makes the trip count
             // data-dependent, the unroll is declined and rA/rB leave the register
             // file with zero spill and green tests.
@@ -158,7 +169,31 @@ struct GesvTinyBody {
             if (rowid == p) rowid = j;  // --- 2. lazy swap; no row moves lanes
             else if (rowid == j) rowid = p;
 
-            const D piv = tn::tiny_bcast<D>(part, rA[j], pl);   // --- 3. ?GETF2
+            // --- 3. publish the pivot row of [A | B], double-buffered by parity.
+            R4* sp = nullptr;
+            if constexpr (Slm) {
+                sp = &slm[((j & 1) * kMpw + pidx) * kRowV];
+                if (lane == static_cast<int>(pl)) {
+#pragma unroll
+                    for (int v = 0; v < kNCV; ++v) {
+                        if (v < j / kW) continue;
+                        sp[v] = BATCHLAS_TINY_R4_PACK(D, R, NC, rA, v);
+                    }
+#pragma unroll
+                    for (int v = 0; v < kNRV; ++v) {
+                        if (v * kW >= nrhs) continue;
+                        sp[kNCV + v] = BATCHLAS_TINY_R4_PACK(D, R, NR, rB, v);
+                    }
+                }
+                sycl::group_barrier(sg);
+            }
+
+            D piv;   // --- 4. ?GETF2
+            if constexpr (Slm) {
+                piv = tn::tiny_r4_get<D, R>(sp[j / kW], j % kW);
+            } else {
+                piv = tn::tiny_bcast<D>(part, rA[j], pl);
+            }
             const bool zero = sd::dev_is_zero(piv);   // EXACT zero, no epsilon
             if (zero && linfo == 0) linfo = static_cast<int32_t>(j + 1);
             const D rc = sd::dev_recip(piv);
@@ -173,21 +208,47 @@ struct GesvTinyBody {
                 }
             }
 
-            // --- 4. rank-1 update, collective OUTSIDE the guard.
+            // --- 5. rank-1 update and, THE FUSION, forward substitution: the same
+            // update applied to the RHS with the multiplier step 4 just produced, so
+            // L y = P b costs no launch, no reload and no barrier of its own.
+            if constexpr (Slm) {
 #pragma unroll
-            for (int k = j + 1; k < N; ++k) {
-                if (k >= n) continue;
-                const D u = tn::tiny_bcast<D>(part, rA[k], pl);
-                if (act) rA[k] = sd::dev_sub(rA[k], sd::dev_mul(rA[j], u));
-            }
-
-            // --- 5. THE FUSION. Forward substitution is the same rank-1 update
-            // applied to the RHS with the multiplier rA[j] that step 3 just
-            // produced, so L y = P b costs no launch, no reload and no barrier.
+                for (int v = 0; v < kNCV; ++v) {
+                    if (v < j / kW || v * kW >= n) continue;
+                    const R4 x = sp[v];
 #pragma unroll
-            for (int k = 0; k < NR; ++k) {
-                const D ub = tn::tiny_bcast<D>(part, rB[k], pl);
-                if (act) rB[k] = sd::dev_sub(rB[k], sd::dev_mul(rA[j], ub));
+                    for (int e = 0; e < kW; ++e) {
+                        const int k = v * kW + e;
+                        if (k <= j || k >= NC || k >= n) continue;
+                        const D u = tn::tiny_r4_get<D, R>(x, e);
+                        if (act) rA[k] = sd::dev_sub(rA[k], sd::dev_mul(rA[j], u));
+                    }
+                }
+#pragma unroll
+                for (int v = 0; v < kNRV; ++v) {
+                    if (v * kW >= nrhs) continue;
+                    const R4 x = sp[kNCV + v];
+#pragma unroll
+                    for (int e = 0; e < kW; ++e) {
+                        const int k = v * kW + e;
+                        if (k >= NR || k >= nrhs) continue;
+                        const D ub = tn::tiny_r4_get<D, R>(x, e);
+                        if (act) rB[k] = sd::dev_sub(rB[k], sd::dev_mul(rA[j], ub));
+                    }
+                }
+            } else {
+#pragma unroll
+                for (int k = j + 1; k < NC; ++k) {
+                    if (k >= n) continue;
+                    const D u = tn::tiny_bcast<D>(part, rA[k], pl);
+                    if (act) rA[k] = sd::dev_sub(rA[k], sd::dev_mul(rA[j], u));
+                }
+#pragma unroll
+                for (int k = 0; k < NR; ++k) {
+                    if (k >= nrhs) continue;   // kernel-uniform
+                    const D ub = tn::tiny_bcast<D>(part, rB[k], pl);
+                    if (act) rB[k] = sd::dev_sub(rB[k], sd::dev_mul(rA[j], ub));
+                }
             }
         }
 
@@ -195,7 +256,7 @@ struct GesvTinyBody {
         // from lane i's `row_lane` with a partition-UNIFORM source, as
         // tiny_device.hh's tiny_bcast contract requires.
 #pragma unroll
-        for (int i = N - 1; i >= 0; --i) {
+        for (int i = NC - 1; i >= 0; --i) {
             if (i >= n) continue;
 
             const uint32_t il = static_cast<uint32_t>(
@@ -208,15 +269,18 @@ struct GesvTinyBody {
 
 #pragma unroll
             for (int k = 0; k < NR; ++k) {
+                if (k >= nrhs) continue;   // kernel-uniform
                 const D yi = tn::tiny_bcast<D>(part, rB[k], il);
                 // A singular U is reported through `info` and LAPACK leaves X
                 // undefined; zero is chosen over the inf a bare divide would
-                // write, so a residual check reports the singularity and not a
-                // NaN that propagates into every later statistic.
-                const D xi = tn::tiny_select(
-                    zero, D{},
-                    tn::tiny_select(use_mul, sd::dev_mul(yi, rc),
-                                    sd::dev_div(yi, dii)));
+                // write. A BRANCH on the partition-uniform flags, not a select: a
+                // select pays the divide on every step. evidence: docs/perf/lu.md#the-rhs-pad-column-cost
+                D xi = D{};
+                if (use_mul) {
+                    xi = sd::dev_mul(yi, rc);
+                } else if (!zero) {
+                    xi = sd::dev_div(yi, dii);
+                }
 
                 // Lane `il` writes rX, never rB: it is this step's shuffle source
                 // and a self-update would race every read above it.
@@ -230,7 +294,7 @@ struct GesvTinyBody {
             D* const dstA = ap + static_cast<std::ptrdiff_t>(b) * strap;
             D* const dstB = bp + static_cast<std::ptrdiff_t>(b) * strbp;
 #pragma unroll
-            for (int k = 0; k < N; ++k) {
+            for (int k = 0; k < NC; ++k) {
                 if (k >= n) continue;
                 dstA[static_cast<std::ptrdiff_t>(rowid) +
                      static_cast<std::ptrdiff_t>(k) * ldap] = rA[k];
@@ -248,7 +312,13 @@ struct GesvTinyBody {
     }
 };
 
-template <typename T, int N, int NR, int MinBlocks>
+// The local-memory row is for the 32-bit types at N >= 16, where it was measured.
+template <typename T, int N>
+constexpr bool gesv_tiny_slm() {
+    return (std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>) && N >= 16;
+}
+
+template <typename T, int N, int NC, int NR, int MinBlocks>
 Event gesv_tiny_launch_b(Queue& ctx,
                          T* a_ptr, int lda, int stride_a,
                          T* b_ptr, int ldb, int stride_b,
@@ -259,22 +329,27 @@ Event gesv_tiny_launch_b(Queue& ctx,
     using D = typename DM::type;
     static_assert(sizeof(D) == sizeof(T), "device scalar must be layout-compatible");
     static_assert(tn::tiny_n_is_legal(N), "the tiny ladder is {8, 16, 32}");
-    static_assert(NR == 1 || NR == kGesvTinyMaxRhs, "the RHS ladder is {1, 4}");
+    static_assert(NR == 1 || NR == 2 || NR == kGesvTinyMaxRhs, "the RHS ladder is {1, 2, 4}");
+    static_assert(NC <= N && NC % 2 == 0, "the column bucket is even and within the lanes");
 
     constexpr int kMpw = resident::pack_matrices_per_wg(
         /*bytes_per_matrix=*/1u, N, /*wg_slm_budget_bytes=*/~std::size_t(0),
         kTinyWg, kTinyWg, /*max_pack=*/kTinyWg / N);
     static_assert(kMpw * N == kTinyWg, "the tiny launch must fill its work-group exactly");
+    constexpr bool kSlm = gesv_tiny_slm<T, N>();
+    using Body = GesvTinyBody<D, N, NC, NR, kMpw, MinBlocks, kSlm>;
 
     const int num_wg = (batch + kMpw - 1) / kMpw;
-    const GesvTinyBody<D, N, NR, kMpw, MinBlocks> body{
-        reinterpret_cast<D*>(a_ptr), reinterpret_cast<D*>(b_ptr), n, nrhs, batch,
-        static_cast<std::ptrdiff_t>(lda), static_cast<std::ptrdiff_t>(ldb),
-        static_cast<std::ptrdiff_t>(stride_a), static_cast<std::ptrdiff_t>(stride_b),
-        piv_ptr, info_ptr};
+    const std::size_t slm_elems = kSlm ? std::size_t(2 * kMpw * Body::kRowV) : 1;
 
     ctx->submit([&](sycl::handler& h) {
-        h.parallel_for<GesvTinyKernel<T, N, NR, MinBlocks>>(
+        const Body body{
+            reinterpret_cast<D*>(a_ptr), reinterpret_cast<D*>(b_ptr), n, nrhs, batch,
+            static_cast<std::ptrdiff_t>(lda), static_cast<std::ptrdiff_t>(ldb),
+            static_cast<std::ptrdiff_t>(stride_a), static_cast<std::ptrdiff_t>(stride_b),
+            piv_ptr, info_ptr,
+            sycl::local_accessor<typename Body::R4, 1>(sycl::range<1>(slm_elems), h)};
+        h.parallel_for<GesvTinyKernel<T, N, NC * 8 + NR, MinBlocks>>(
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(num_wg) *
                                              static_cast<std::size_t>(kTinyWg)),
                               sycl::range<1>(static_cast<std::size_t>(kTinyWg))),
@@ -283,14 +358,46 @@ Event gesv_tiny_launch_b(Queue& ctx,
     return ctx.get_event();
 }
 
-// The launch bound per (type, bucket), measured at batch 32768 over {1, 8, 12, 16}: float
-// N = 32 and cfloat N = 16 gain 1.07-1.09x at 16; cfloat N = 32 gains nothing and keeps no
-// cap. evidence: docs/perf/lu.md#the-tiny-launch-bound
+// The column bucket, coarser than getrf's: every NC here is paid three times (NR).
 template <typename T, int N>
+constexpr bool gesv_nc_legal(int nc) {
+    if constexpr (!gesv_tiny_slm<T, N>()) return nc == N;
+    return N == 16 ? (nc == 12 || nc == 16) : (nc == 20 || nc == 24 || nc == 28 || nc == 32);
+}
+inline int gesv_nc_of(int n, int N) {
+    if (N == 16) return n <= 12 ? 12 : 16;
+    if (N == 32) return n <= 20 ? 20 : tn::tiny_col_bucket(n, 4);
+    return N;
+}
+
+// The launch bound per (type, N, NC, NR), each the argmin of a batch-32768 sweep over
+// {8, 12, 16}; float is flat within 2% except NR = 1 at NC >= 28.
+// evidence: docs/perf/lu.md#the-column-bucket
+template <typename T, int N, int NC, int NR>
 constexpr int gesv_tiny_min_blocks() {
-    if constexpr (std::is_same_v<T, float>) return N == 32 ? 16 : 1;
-    if constexpr (std::is_same_v<T, std::complex<float>>) return N == 16 ? 16 : 1;
-    return 1;
+    if constexpr (std::is_same_v<T, float>) {
+        if constexpr (N == 32) return (NR == 1 && NC >= 28) ? 12 : 16;
+        return N == 16 ? 16 : 1;
+    } else if constexpr (std::is_same_v<T, std::complex<float>>) {
+        if constexpr (N == 16) return (NC == 16 && NR == 4) ? 12 : 16;
+        if constexpr (N == 32) {
+            if constexpr (NC == 20) return NR == 1 ? 16 : 12;
+            if constexpr (NC == 24) return 12;
+            if constexpr (NC == 28) return NR == 2 ? 12 : 8;
+            return 8;
+        }
+        return 1;
+    } else {
+        return 1;
+    }
+}
+
+template <typename T, int N, int NC, int NR>
+Event gesv_tiny_launch_nc(Queue& ctx, T* a_ptr, int lda, int stride_a, T* b_ptr, int ldb,
+                          int stride_b, int n, int nrhs, int batch, int* piv_ptr,
+                          int32_t* info_ptr) {
+    return gesv_tiny_launch_b<T, N, NC, NR, gesv_tiny_min_blocks<T, N, NC, NR>()>(
+        ctx, a_ptr, lda, stride_a, b_ptr, ldb, stride_b, n, nrhs, batch, piv_ptr, info_ptr);
 }
 
 template <typename T, int N, int NR>
@@ -299,8 +406,24 @@ Event gesv_tiny_launch(Queue& ctx,
                        T* b_ptr, int ldb, int stride_b,
                        int n, int nrhs, int batch,
                        int* piv_ptr, int32_t* info_ptr) {
-    return gesv_tiny_launch_b<T, N, NR, gesv_tiny_min_blocks<T, N>()>(
-        ctx, a_ptr, lda, stride_a, b_ptr, ldb, stride_b, n, nrhs, batch, piv_ptr, info_ptr);
+    switch (gesv_nc_of(n, N)) {
+#define BATCHLAS_GESV_TINY_NC(NCC)                                                           \
+        case NCC:                                                                            \
+            if constexpr (NCC <= N && gesv_nc_legal<T, N>(NCC)) {                            \
+                return gesv_tiny_launch_nc<T, N, NCC, NR>(ctx, a_ptr, lda, stride_a, b_ptr,  \
+                                                          ldb, stride_b, n, nrhs, batch,     \
+                                                          piv_ptr, info_ptr);                \
+            }                                                                                \
+            break;
+        BATCHLAS_GESV_TINY_NC(8) BATCHLAS_GESV_TINY_NC(12) BATCHLAS_GESV_TINY_NC(16)
+        BATCHLAS_GESV_TINY_NC(20) BATCHLAS_GESV_TINY_NC(24) BATCHLAS_GESV_TINY_NC(28)
+        BATCHLAS_GESV_TINY_NC(32)
+#undef BATCHLAS_GESV_TINY_NC
+        default:
+            break;
+    }
+    return gesv_tiny_launch_nc<T, N, N, NR>(ctx, a_ptr, lda, stride_a, b_ptr, ldb, stride_b,
+                                            n, nrhs, batch, piv_ptr, info_ptr);
 }
 
 Span<int32_t> gesv_tiny_layout(Queue& ctx, BumpAllocator& pool, int batch) {
@@ -411,6 +534,13 @@ Event gesv_tiny_dispatch(Queue& ctx,
             case 8:  BATCHLAS_GESV_TINY_ARM(8, 1)  break;
             case 16: BATCHLAS_GESV_TINY_ARM(16, 1) break;
             case 32: BATCHLAS_GESV_TINY_ARM(32, 1) break;
+            default: break;
+        }
+    } else if (rbucket == 2) {
+        switch (bucket) {
+            case 8:  BATCHLAS_GESV_TINY_ARM(8, 2)  break;
+            case 16: BATCHLAS_GESV_TINY_ARM(16, 2) break;
+            case 32: BATCHLAS_GESV_TINY_ARM(32, 2) break;
             default: break;
         }
     } else {

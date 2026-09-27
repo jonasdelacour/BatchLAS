@@ -1945,7 +1945,8 @@ Native vs cuSOLVER at benchviz's batches (32768 to n = 32, then 16384 / 4096 / 1
 measures 0.73 / 0.82x against CTA's 0.62 / 0.50x; gesv cfloat n = 32 moves 0.65 -> 0.94x.
 **Still losing:** cfloat 17..32 on every native tier. The tiny kernel's N = 32 complex
 instantiation is the obvious target: its rank-1 update broadcasts the pivot row with two
-shuffles per complex element.
+shuffles per complex element. (Superseded: [the column bucket](#the-column-bucket) retires the
+Blocked band and serves cfloat 17..32 from the tiny tier.)
 
 ### The tiny launch bound
 
@@ -1976,3 +1977,158 @@ cfloat tiny still loses at 17..32 (0.72x at 24, 0.80x at 32) and stays out.
 (`gesv_tiny_min_blocks`): float N = 32 and cfloat N = 16 at 16 blocks, 1.07-1.09x (float
 n = 24 / 32: 0.427 -> 0.394 / 0.629 -> 0.589 ms; cfloat n = 16: 0.274 -> 0.251 ms); cfloat
 N = 32 gains nothing at any bound and stays uncapped. The gesv window is unchanged.
+
+## The column bucket and the local-memory pivot row
+
+**2026-09-27, second pass.** The launch bound left cfloat 17..32 losing on every native
+tier. Three levers on the tiny kernels, each measured at batch 32768 with the arms
+interleaved in one process (`factor_bench --arms=...`), `t_vendor / t_arm`, rel_sd <= 0.05
+on every cell quoted; raw sweeps are under `/tmp/perf-cfloat-tiny-lu/` in the session
+that produced them and are summarised here.
+
+### The column bucket
+
+The lane bucket N (8, 16, 32 lanes, one row per lane) also sized the register row:
+`D rA[N]`, `for (j < N)`, `for (k < N)` with a runtime `if (k >= n) continue`. The
+`continue` skips the work but not the registers, and a register budget is what the
+launch bound trades against occupancy -- so n = 17 paid for 32 columns of registers. Now
+`rA[NC]` with NC a compile-time column count (`tiny_col_bucket`), rows still N lanes.
+Shuffle path, best launch bound, ms:
+
+| cell | NC = N | NC = bucket | gain |
+|---|---:|---:|---:|
+| cfloat n=17 | 0.542 | 0.233 (NC 20) | 2.32x |
+| cfloat n=24 | 0.766 | 0.519 (NC 24) | 1.48x |
+| cfloat n=28 | 0.926 | 0.736 (NC 28) | 1.26x |
+| float n=17 | 0.180 | 0.129 (NC 20) | 1.40x |
+| float n=24 | 0.292 | 0.232 (NC 24) | 1.26x |
+| float n=28 | 0.381 | 0.307 (NC 28) | 1.24x |
+
+`getrf` instantiates every even NC (10..32 for the 32-bit types, one kernel per bucket);
+`gesv` and `posv` pay each NC three times (NR), so they take {12, 16} and {20, 24, 28, 32}.
+fp64 keeps NC = N.
+
+**The unroll that is declined above a size.** The full unroll of the j loop is what keeps
+`rA[]` in registers, and LLVM's `#pragma unroll` has a size threshold (16 Ki): above it the
+unroll is declined, `rA[]` is dynamically indexed and ptxas puts it on the stack -- 256 B
+frame, **zero spill**, green tests. The cfloat N = 32 local-memory variant crossed it:
+49 M local loads per launch, 2.61 ms against 1.06 for the shuffle kernel. The only trace is
+a remark (`-Rpass-missed=loop-unroll`: "unrolled size is too large"). The three tiny TUs
+now compile with `-mllvm -pragma-unroll-threshold=262144` (`src/CMakeLists.txt`); the same
+kernel then holds 128 registers and no frame. The first variant had a second suspect for
+its frame, a `?:` over the complex aggregate (the SROA trap `tiny_device.hh` already
+records); only the threshold was isolated, and `tiny_device.hh` packs the row by value into
+an `ext_vector_type` so the other never arises.
+
+### The local-memory broadcast
+
+The rank-1 update of step j needs the pivot row on every lane: `N - j - 1` shuffles, two
+per complex element. Now the pivot lane stores its row as 16-byte vectors into a
+per-partition local buffer, one `group_barrier(sg)`, and every lane reads it back with
+vector loads (a broadcast: every lane reads the same address). Double-buffered by step
+parity, so one barrier per step orders the next store after every read two steps back.
+512 B of local memory per work-group at N = 32; the barrier is sub-group scope, which is
+the only one a partition kernel may use. Same NC, best launch bound, ms:
+
+| cell | shuffles | local row | gain |
+|---|---:|---:|---:|
+| cfloat n=17 | 0.233 | 0.193 | 1.21x |
+| cfloat n=24 | 0.519 | 0.414 | 1.25x |
+| cfloat n=28 | 0.733 | 0.640 | 1.15x |
+| cfloat n=32 | 1.064 | 0.844 | 1.26x |
+| float n=24 | 0.231 | 0.169 | 1.37x |
+| float n=32 | 0.453 | 0.312 | 1.45x |
+
+ncu, cfloat n = 32: 426 M -> 315 M warp instructions, 1.12 -> 0.83 ms. It is still
+latency-bound -- 33% warps active at 128 registers, short-scoreboard the largest stall
+(3.9 cycles per issue) -- so what is left is the argmax butterfly's serial chain, not
+traffic. The same row, with B's pivot row appended, serves `gesv_tiny`'s forward
+substitution; `posv_tiny` uses the transposed pattern (docs/perf/potrf.md#the-posv-local-memory-transpose).
+
+The launch bound was re-swept for every (type, NC) and transcribed per cell
+(`getrf_tiny_min_blocks`): cfloat 12 at NC 18/20/26/28, 16 at 22/24, 8 at 30/32; float
+16-20, flat within 3%. Too tight is still the expensive direction: cfloat NC 32 at 20
+blocks is 1.92 ms against 0.86 at 8.
+
+### The RHS pad-column cost
+
+The gesv and posv RHS ladder was {1, 4}, so nrhs = 2 ran NR = 4 with two zero columns, and
+measured SLOWER than nrhs = 4 on the same kernel: gesv cfloat n = 9, 0.082 / 0.451 / 0.357 /
+0.268 ms at nrhs 1 / 2 / 3 / 4. ncu at nrhs 2 against 4: 127.8 M against 100.3 M
+instructions, 0.51 against 0.31 ms. Two defects: the solve steps computed
+`tiny_select(use_mul, mul, div)`, which pays the complex divide on every step whatever
+`use_mul` says, and a zero pad column sends that divide down its slow path. The fix is a
+branch on the partition-uniform flags, every RHS loop stopping at `nrhs`, and an NR = 2
+bucket. gesv cfloat n = 9 nrhs = 2: 0.453 -> 0.080 ms.
+
+### Negative results of this pass
+
+* **One 64-bit shuffle per complex element** (bit-cast to `uint64_t`): identical to two
+  32-bit shuffles -- cfloat n = 32 1.0605 against 1.0609 ms, n = 24 0.7657 against
+  0.7666. NVPTX has no 64-bit SHFL; it emits the same two instructions.
+* **Two lanes per row** for cfloat N = 32 was not built. A row split over two lanes needs 64
+  lanes per matrix, i.e. two warps and a work-group barrier per step; after the local row
+  the kernel is latency-bound at 128 registers, not register-bound. Unmeasured.
+* **Improving the CTA tier for cfloat 17..32** was not attempted: the tiny tier now beats
+  it by 1.4-1.9x at every one of those orders, so CTA no longer serves them.
+
+### End to end after the column bucket
+
+Batch 32768, `t_vendor / t_arm`, one process per cell, arms interleaved. getrf `native`
+is the vendor-free walk.
+
+| getrf cfloat | 9 | 12 | 16 | 17 | 20 | 24 | 28 | 32 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| tiny | 1.99 | 2.00 | 1.79 | 1.41 | 1.30 | 1.16 | 0.99 | 0.96 |
+| best other native | 0.91 | 0.85 | 1.01 | 1.04 | 0.93 | 0.81 | 0.72 | 0.82 |
+
+Before this pass the cfloat walk measured 1.03 / 0.92 / 0.81 / 0.74 / 0.82 at 17 / 20 / 24 /
+28 / 32. The fine buckets, per order (tiny, best bound): 1.45 / 1.45 / 1.39 / 1.27 / 1.17 /
+1.33 / 1.33 / 1.15 at 17..24, then 1.03 / 0.98 / 1.10 / 1.01 / 1.02 / 1.07 / 1.35 / 0.97 at
+25..32. So the cfloat `tiny_window` is 5..7 and 9..24 (25..32 ties the vendor and stays
+out), `tiny_native` takes Tiny wherever it fits, and the cfloat Blocked band of
+[the right-hand gather](#the-right-hand-gather) is retired.
+
+| getrf float | 9 | 12 | 16 | 17 | 20 | 24 | 28 | 32 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| tiny | 2.35 | 2.51 | 2.68 | 2.42 | 2.54 | 2.31 | 2.06 | 1.92 |
+
+(was 1.30 / 1.47 / 1.56 / 1.57 / 1.47 at 17 / 20 / 24 / 28 / 32, batch 131072.)
+
+gesv, `tiny` and `composed` (native getrf; native getrs):
+
+| gesv cfloat n | nrhs 1 | nrhs 2 | nrhs 4 |
+|---|---|---|---|
+| 9 | 1.91 / 1.26 | 3.91 / 2.09 | 3.82 / 1.59 |
+| 16 | 3.09 / 2.67 | 2.69 / 2.23 | 2.52 / 1.74 |
+| 17 | 1.30 / 1.34 | 1.22 / 1.20 | 1.18 / 0.99 |
+| 24 | 1.19 / 1.16 | 1.25 / 1.17 | 1.09 / 1.04 |
+| 28 | 1.22 / 1.06 | 1.20 / 1.10 | 1.09 / 1.01 |
+| 32 | 1.18 / 1.06 | 1.13 / 1.10 | 1.09 / 1.03 |
+
+The fused tier now beats the vendor legs at every cfloat cell (the native walk measured
+0.91-0.95 at 24..32 before). It beats the composition at 17..32 by only 0.97-1.19x, under
+the 1.11x gate on most cells, so the gesv window stays cfloat <= 16 and the routed walk
+there is the composition, 0.99-1.34x -- it already rides the new tiny getrf. float gesv: tiny 1.97-4.99x at every cell, 1.5-2.3x over the composition.
+
+**Still losing:** getrf cfloat 25..32 against cuBLAS, 0.96-1.03x (routed to the vendor when
+one is present; the vendor-free walk takes Tiny).
+
+### Armed breaks (column bucket pass)
+
+Each break built and run against getrf_tests, gesv_tests, posv_tests and
+route_vocabulary_tests on GPU 1, then reverted:
+
+* row buffer indexed without `pidx` -- RED in T5b, T1, T3-T6 (float, cfloat);
+* `group_barrier(sg)` dropped -- RED in the same cases and in T11;
+* the barrier spelled at work-group scope -- RED in T11 only;
+* **single buffer instead of the parity pair -- GREEN everywhere, a blind guard**: kept for
+  the memory model, no failure was observed without it;
+* gesv: B's pivot row not stored -- RED in G1 (float, cfloat);
+* posv: the transpose read guarded `lane < i - 1` -- RED in P1, P2 green;
+* cfloat getrf window 24 -> 16 -- RED in T9 and `RouteGetrf.TheMeasuredTinyWindowAndNothingElse`;
+* `tiny_native` back to `n <= 8` -- RED in T9 and `RouteGetrf.CfloatNativeWalkTakesTinyWhereverItFits`;
+* posv cfloat window without the `nrhs > 2` clause -- RED in P7 at n = 25, 32, nrhs = 4;
+  the old float window -- RED in P7 at n = 17..32, nrhs = 2.
+
+The RHS pad-column fix is a speed change only; no functional test can see it.
