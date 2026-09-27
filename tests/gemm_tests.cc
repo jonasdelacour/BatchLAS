@@ -4,6 +4,7 @@
 #include <iostream>
 #include <vector>
 #include <cmath>
+#include <limits>
 #include <type_traits>
 #include <cstdlib>
 #include <string>
@@ -1378,6 +1379,106 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x128K8KernelRagged) {
                                                             100, ScalarType(2), ScalarType(-1));
 }
 
+// A forced kernel against the vendor, with an optional all-NaN C. The NaN
+// check is explicit because AssertBatchedMatrixNear's `abs(a - e) > tol` is
+// false for a NaN, so a NaN result would pass it.
+template <typename ScalarType>
+void Run128x128Compare(Queue& ctx, int m, int n, int k, int batch_size, ScalarType alpha,
+                       ScalarType beta, bool nan_c, const char* kernel = "128x128x8") {
+    SCOPED_TRACE(::testing::Message() << m << "x" << n << "x" << k << " b" << batch_size
+                                      << " beta=" << beta << " nan_c=" << nan_c);
+    auto A = Matrix<ScalarType>::Random(m, k, false, batch_size);
+    auto B = Matrix<ScalarType>::Random(k, n, false, batch_size);
+    auto C = Matrix<ScalarType>::Random(m, n, false, batch_size);
+    if (nan_c) {
+        auto host = C.data();
+        for (size_t i = 0; i < host.size(); ++i) {
+            host[i] = std::numeric_limits<ScalarType>::quiet_NaN();
+        }
+    }
+    auto C_ref = C.clone();
+    {
+        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", kernel);
+        (void)gemm(ctx, A.view(), B.view(), C.view(), {.alpha = alpha, .beta = beta});
+    }
+    {
+        ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
+        (void)gemm(ctx, A.view(), B.view(), C_ref.view(), {.alpha = alpha, .beta = beta});
+    }
+    ctx.wait();
+    for (int b = 0; b < batch_size; ++b) {
+        for (int col = 0; col < n; ++col) {
+            for (int row = 0; row < m; ++row) {
+                ASSERT_TRUE(std::isfinite(C(row, col, b))) << "b=" << b << " r=" << row << " c=" << col;
+            }
+        }
+    }
+    auto tol = test_utils::tolerance<ScalarType>() * 100;
+    ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, m, n, batch_size, tol));
+}
+
+// The double-buffered k loop is unrolled by two, so an ODD slab count ends in a
+// separate tail step that an even k never reaches: 136 = 17 slabs of 8, 128 =
+// 16. Batch 256 puts 1024 work-groups in flight, enough for a missing barrier
+// to race, which the batch-2 cases above cannot show.
+// ARMED BREAK (R9): deleting the tail `compute(0)` in register_128x128.hh.
+// EXPECTED: OddSlabs RED on both betas at (0,0), EvenSlabs green. Observed.
+// ARMED BREAK (R9): deleting the barrier after `sstore(1)`.
+// EXPECTED: OddSlabs and EvenSlabs RED on both betas. Observed.
+TYPED_TEST(GemmTest, Forced128x128K8OddSlabsBothBetas) {
+    using ScalarType = typename TestFixture::ScalarType;
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "128x128x8 SYCL register kernel is float-only";
+    } else {
+        Run128x128Compare<ScalarType>(*(this->ctx), 256, 256, 136, 256, 2.0f, -1.0f, false);
+        Run128x128Compare<ScalarType>(*(this->ctx), 256, 256, 136, 256, 1.0f, 0.0f, false);
+    }
+}
+
+TYPED_TEST(GemmTest, Forced128x128K8EvenSlabsBothBetas) {
+    using ScalarType = typename TestFixture::ScalarType;
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "128x128x8 SYCL register kernel is float-only";
+    } else {
+        Run128x128Compare<ScalarType>(*(this->ctx), 384, 256, 128, 256, 2.0f, -1.0f, false);
+        Run128x128Compare<ScalarType>(*(this->ctx), 384, 256, 128, 256, 1.0f, 0.0f, false);
+    }
+}
+
+// Aligned k <= kStagedEpilogueMaxK takes the staged epilogue: C goes through
+// local memory and each warp stores whole columns. k = 24 is an odd slab count
+// (its tail runs right before the staging reuses the A tile), 8 a single slab.
+// ARMED BREAK (R9): dropping `+ p` from the staged store's column.
+// EXPECTED: StagedEpilogue RED on the even k = 64 case too, which no other
+// break in this set reaches. Observed.
+TYPED_TEST(GemmTest, Forced128x128K8StagedEpilogue) {
+    using ScalarType = typename TestFixture::ScalarType;
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "128x128x8 SYCL register kernel is float-only";
+    } else {
+        Run128x128Compare<ScalarType>(*(this->ctx), 256, 384, 24, 256, 2.0f, -1.0f, false);
+        Run128x128Compare<ScalarType>(*(this->ctx), 256, 384, 64, 256, 1.0f, 0.0f, false);
+        Run128x128Compare<ScalarType>(*(this->ctx), 128, 256, 8, 64, 1.0f, 0.0f, true);
+    }
+}
+
+// beta == 0 must not read C (BLAS semantics: a NaN in C is overwritten), on
+// both legs, plus k below one slab on the predicated leg.
+// ARMED BREAK (R9): making the aligned epilogue always take the beta != 0
+// branch. EXPECTED: BetaZeroNaNC RED on the 256^3 case, a NaN at (0,0). Observed.
+TYPED_TEST(GemmTest, Forced128x128K8BetaZeroNaNC) {
+    using ScalarType = typename TestFixture::ScalarType;
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "128x128x8 SYCL register kernel is float-only";
+    } else {
+        Run128x128Compare<ScalarType>(*(this->ctx), 256, 256, 256, 8, 1.5f, 0.0f, true);
+        Run128x128Compare<ScalarType>(*(this->ctx), 200, 130, 70, 8, 1.5f, 0.0f, true);
+        Run128x128Compare<ScalarType>(*(this->ctx), 130, 131, 5, 8, 1.0f, 0.5f, false);
+        Run128x128Compare<ScalarType>(*(this->ctx), 129, 257, 1, 8, 1.0f, 0.0f, true);
+    }
+}
+
 // The 64x64x16 wide-scalar kernel, which unlike every other register-tiled
 // variant serves ALL FOUR scalar types -- that is the whole point of it, so
 // there is deliberately no float-only skip here.
@@ -1574,6 +1675,15 @@ TYPED_TEST(GemmTest, RouteAdapterAutoHonoursTheMeasuredWindow) {
         EXPECT_TRUE(batchlas::dispatch::is_native(in_window));
         EXPECT_EQ(in_window.algo, batchlas::dispatch::Algorithm::RegisterTiled);
 
+        // The 4x4-tiled small kernel's window: 33..48 native from batch 64,
+        // 49 and up still vendor. See docs/perf/gemm.md#the-small-tiled-kernel.
+        // ARMED BREAK (R9): route_gemm.hh back to `max_dim <= 32`.
+        // EXPECTED: the 48^3 batch-64 assertion goes RED. Observed.
+        EXPECT_TRUE(batchlas::dispatch::is_native(route_for<ScalarType>(*(this->ctx), 48, 48, 48, 64)));
+        EXPECT_TRUE(batchlas::dispatch::is_native(route_for<ScalarType>(*(this->ctx), 33, 33, 33, 128)));
+        EXPECT_TRUE(batchlas::dispatch::is_vendor(route_for<ScalarType>(*(this->ctx), 49, 49, 49, 128)));
+        EXPECT_TRUE(batchlas::dispatch::is_vendor(route_for<ScalarType>(*(this->ctx), 48, 48, 48, 63)));
+
         // WP2 E4 retired float's 128..512 NN window and its whole transposed
         // window. Both are asserted here in their NEW direction, so the change
         // is pinned rather than merely absent -- a removed assertion cannot
@@ -1756,6 +1866,41 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x128K8SubViewAlignedLeg) {
 
     auto tol = test_utils::tolerance<ScalarType>() * 100;
     ASSERT_TRUE(AssertBatchedMatrixNear(PC, PC_ref, P, P, batch_size, tol));
+    }
+}
+
+// The same aligned sub-view at k = 32, which takes the STAGED epilogue: its
+// column-per-warp stores are the ones that could leave the view's extent.
+// ARMED BREAK (R9): a second, escaping store of each staged column at
+// `dst + 128 * ldc`. EXPECTED: RED at parent (128, 128), outside the
+// sub-block, while the sub-block itself is right. Observed.
+TYPED_TEST(GemmTest, Forced128x128K8SubViewStagedEpilogue) {
+    using ScalarType = typename TestFixture::ScalarType;
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "128x128x8 SYCL register kernel is float-only";
+    } else {
+        constexpr int P = 512, batch_size = 4, m = 128, n = 128, k = 32, r0 = 128;
+        auto PA = Matrix<ScalarType>::Random(P, P, false, batch_size);
+        auto PB = Matrix<ScalarType>::Random(P, P, false, batch_size);
+        auto PC = Matrix<ScalarType>::Random(P, P, false, batch_size);
+        auto PC_ref = PC.clone();
+        auto Asub = [&](Matrix<ScalarType>& M) { return M.view()(Slice(r0, r0 + m), Slice(0, k)); };
+        auto Bsub = [&](Matrix<ScalarType>& M) { return M.view()(Slice(0, k), Slice(0, n)); };
+        auto Csub = [&](Matrix<ScalarType>& M) { return M.view()(Slice(r0, r0 + m), Slice(0, n)); };
+        {
+            ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+            ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "128x128x8");
+            (void)gemm(*(this->ctx), Asub(PA), Bsub(PB), Csub(PC),
+                       {.alpha = ScalarType(2), .beta = ScalarType(-1)});
+        }
+        {
+            ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
+            (void)gemm(*(this->ctx), Asub(PA), Bsub(PB), Csub(PC_ref),
+                       {.alpha = ScalarType(2), .beta = ScalarType(-1)});
+        }
+        this->ctx->wait();
+        auto tol = test_utils::tolerance<ScalarType>() * 100;
+        ASSERT_TRUE(AssertBatchedMatrixNear(PC, PC_ref, P, P, batch_size, tol));
     }
 }
 
@@ -2029,6 +2174,29 @@ TYPED_TEST(GemmTest, SmallBatchedMatchesVendorOnRaggedShapes) {
     }
 }
 
+// The 4x4-tiled leg (float NN, 32 < max(m, n, k) <= 56, buckets 48 and 56):
+// ragged in every dimension, k below one 4-step, both betas (two different
+// instantiations: beta != 0 prefetches C), NaN C at beta = 0, batch 67.
+// ARMED BREAK (R9): `l0 < kp` -> `l0 < kp - 4` in the tiled k loop.
+// EXPECTED: SmallTiled RED on every case, and the tiled sub-view cases below;
+// SmallBatchedMatchesVendor (NB = 64 and transposed shapes) green. Observed.
+// ARMED BREAK (R9): prefetched C read at `Cb[r + c * ldc + 1]`.
+// EXPECTED: RED on every beta != 0 case only. Observed.
+TYPED_TEST(GemmTest, SmallTiledMatchesVendor) {
+    using ScalarType = typename TestFixture::ScalarType;
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        GTEST_SKIP() << "the 4x4-tiled leg is float-only";
+    } else {
+        const int shapes[][3] = {{33, 33, 33}, {40, 40, 40}, {48, 48, 48}, {33, 48, 17},
+                                 {48, 36, 3}, {49, 56, 50}, {56, 56, 56}, {56, 33, 41},
+                                 {37, 52, 5}, {50, 49, 1}};
+        for (const auto& sh : shapes) {
+            Run128x128Compare<ScalarType>(*(this->ctx), sh[0], sh[1], sh[2], 67, 0.5f, -1.5f, false, "small");
+            Run128x128Compare<ScalarType>(*(this->ctx), sh[0], sh[1], sh[2], 67, 0.5f, 0.0f, true, "small");
+        }
+    }
+}
+
 // A sub-view of a larger parent: ld != m on all three operands, and the WHOLE parent is
 // compared, so a store past the view's rows or columns is caught.
 TYPED_TEST(GemmTest, SmallBatchedStridedSubviewWritesOnlyItsView) {
@@ -2039,6 +2207,13 @@ TYPED_TEST(GemmTest, SmallBatchedStridedSubviewWritesOnlyItsView) {
     RunForcedWideTransposedAgainstTiled16<ScalarType>(
         *(this->ctx), "small", 12, 7, 32, Transpose::Trans, Transpose::Trans,
         ScalarType(0), /*parent=*/64, /*row_offset=*/2, /*batch_size=*/5);
+    // The tiled leg (NN, max 33..56), both instantiations.
+    RunForcedWideTransposedAgainstTiled16<ScalarType>(
+        *(this->ctx), "small", 45, 51, 38, Transpose::NoTrans, Transpose::NoTrans,
+        ScalarType(1), /*parent=*/96, /*row_offset=*/3, /*batch_size=*/5);
+    RunForcedWideTransposedAgainstTiled16<ScalarType>(
+        *(this->ctx), "small", 35, 40, 44, Transpose::NoTrans, Transpose::NoTrans,
+        ScalarType(0), /*parent=*/96, /*row_offset=*/1, /*batch_size=*/5);
 }
 
 TYPED_TEST(GemmTest, WideTransposedNC64Ragged) {

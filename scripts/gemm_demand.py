@@ -65,7 +65,8 @@ def preferred(t, m, n, k, batch, tA, tB):
             return False
         if tA != NOTRANS or tB != NOTRANS:
             return False
-        return mx <= 32
+        # 33..48 joined with the 4x4-tiled small kernel (2026-09-27).
+        return mx <= 48
     if t == "double":
         # E5 landed after E6 and removed BOTH the squareness test and the
         # max_dim <= 512 bound, adding k >= 2 instead (k == 1 is the rank-1

@@ -33,13 +33,13 @@ complex<float>, complex<double>              -> false                    :43-44
 s.batch < 64                                 -> false                    :48
 float :  s.m == s.n && s.n == s.k                                        :51
          transA == NoTrans && transB == NoTrans                          :54
-         max_dim <= 32                       -> true, else false         :57,58
+         max_dim <= 48                       -> true, else false         (was 32; see the small tiled kernel)
 double:  s.k >= 2                            -> the whole predicate      :62
 anything else                                -> false                    :64
 ```
 
 Read plainly: **native is preferred only for `double` (any shape, any transpose form, `k >= 2`, `batch >= 64`, GPU, homogeneous) and for `float`
-NN squares with `max_dim <= 32`.** Complex is `false` at every shape. `preferred()` returning false never makes a route ineligible — vendor-free,
+NN squares with `max_dim <= 48`** (32 until 2026-09-27, see [The small tiled kernel](#the-small-tiled-kernel)). Complex is `false` at every shape. `preferred()` returning false never makes a route ineligible — vendor-free,
 `resolve_route` still falls back to any *supported* native route (`route_resolve.hh:18-62`), so every narrowing below costs a vendor-free build
 nothing.
 
@@ -145,6 +145,9 @@ The window kept, and the cell that brackets it — square NN, batch 512, both be
 | 96 | 0.49×, 0.43× | |
 | 127 | 0.36×, 0.44× | |
 
+**Superseded for 33..48 on 2026-09-27**: the 4x4-tiled small kernel takes those squares to 1.15-2.3x, and the window now ends at 48 — see
+[The small tiled kernel](#the-small-tiled-kernel). The rows above are the old kernels' numbers.
+
 **Two float windows were removed on measurement**; 40 cells argued to narrow and none to widen.
 
 *NN 128..512*: n=128 0.97–0.98×, n=192 0.39–0.47×, n=256 0.80–0.87×, n=384 0.77–0.79×, n=512 0.91×. Not an unsaturated artefact — flat across
@@ -181,6 +184,61 @@ Vocabulary trap (`route_env.hh:97-160`): `BATCHLAS_GEMM_VARIANT=native` does **n
 `cuda-native`/`direct-cuda`, is consumed only as an exclusion, and is `Origin::Vendor` in the canonical vocabulary.
 
 ### The 128x128 float kernel
+
+**2026-09-27 rework** (`src/sycl/gemm/register_128x128.hh`). Four levers, each found by ncu or SASS, each measured alone first in a standalone
+harness that interleaves cuBLAS and the SYCL arms in one process (rotated order, paired per-rep ratios; `/tmp` harness, recipe below):
+
+1. **The prefetch that never prefetched.** Register prefetch of slab s+1 into a double-buffered shared tile, one barrier per slab. Written with
+   the prefetch registers as a 16-byte *struct*, LLVM turns global-load + shared-store into a memcpy and sinks the load down to the store:
+   the PTX shows `ld.global.b64; st.shared.b64` pairs back to back, so there is no prefetch at all (and the load splits into two 64-bit
+   halves). With clang `ext_vector_type(4)` registers the load stays at the top of the slab (`ld.global.v4` then 500 FFMAs later
+   `st.shared.v4`). Paired vs cuBLAS at 512³ b1024, β=0: 0.91× → 1.04×. This is why the 2024 "double-buffering recovered zero" result
+   below is void: that attempt probably hit the same sink.
+2. **The lane swizzle.** An `LDS.128` costs **4** shared wavefronts when its address depends on *both* lane bits 0 and 1, and **2** otherwise
+   (microprobe, 12 patterns; the old layout's A loads took 4 whatever the unique-address count, B loads 2 — 3.0 average against cuBLAS's
+   2.0). Giving m lane bit 0 and n lane bit 1 (warp tile 64×32, bands 32/16) cuts shared-load wavefronts 805M → 537M at 512³ b1024 (cuBLAS
+   549M) and is worth ~3–7% on compute-bound shapes.
+3. **The L2::128B hint on B.** 256³ b4096 is DRAM-bound (3.2 GB, cuBLAS at 920 GB/s = 93.6% of peak). Each thread reads 32 bytes of a B column
+   per slab, so DRAM saw 32-byte requests strided by `ldb` and ran at 87%. `ld.global.L2::128B` (inline PTX, NVPTX-only, plain load
+   elsewhere) takes 256³ from **0.80× to 1.00×** and is neutral elsewhere; the same hint on the predicated leg's scalar B loads takes that leg
+   from 0.80× to 0.98× on aligned shapes. A K=16 slab reached 0.95× there by doubling bytes in flight, but loses 2–5% at compute-bound
+   shapes; with the hint it is dominated.
+4. **The staged epilogue for k ≤ 64** — its own section below.
+
+The launch bound `min_work_groups_per_cu(2)` (128-register cap) was swept on the final kernel: **1** → 127 registers, same speed (±2%,
+noise); **2** → 128, ships as a guard; **3** → 80 registers + 1.4 KB spill, **8.8× slower**. Two groups per SM is what matters; the kernel
+happens to fit today.
+
+In-tree, `gemm_benchmark` (`BM_GEMM<`, `--warmup=3 --min_iters=5 --max_iters=20 --min_time=200`), 5 alternating rounds of three processes
+(vendor, native new, native old), median of per-round paired ratios `t_vendor / t_native`:
+
+| shape | β | new | old | new/old |
+|---|---|---|---|---|
+| 128³ b16384 | 0 / 1 | 1.01 / 1.01 | 0.93 / 0.99 | 1.09 / 1.02 |
+| 256³ b4096 | 0 / 1 | 1.01 / 1.00 | 0.82 / 0.90 | 1.23 / 1.11 |
+| 384³ b2048 | 0 / 1 | 1.05–1.14 / 0.99–1.02 | 0.80–0.84 / 0.81–0.83 | 1.30 / 1.22 |
+| 512³ b1024 | 0 / 1 | 1.11–1.13 / 1.06–1.11 | 0.87–0.91 / 0.88 | 1.25 / 1.21–1.25 |
+| 768³ b256 | 0 / 1 | 1.11–1.15 / 1.07–1.14 | 0.93–0.98 / 0.91–0.94 | 1.13–1.20 / 1.16–1.21 |
+| 1024³ b256 | 0 / 1 | 1.12 / 1.12–1.14 | 0.95 / 0.95–0.96 | 1.18 / 1.17–1.20 |
+| 2048³ b32 | 0 | 1.12–1.13 | 0.96 | 1.17 |
+| 512×256×512 b1024 | 0 | 1.10–1.12 | 0.90 | 1.22–1.24 |
+| 2048²×128 b64 | 0 | 1.06 | 0.85 | 1.25 |
+| 512²×128 b2048 | 0 | 1.06 | 0.97 | 1.09 |
+| 1024²×64, 512²×32, 512²×16, 512²×8 | 0 | 1.00–1.01 | 1.00 | 1.00 |
+| 256³ b4096 ld+1 (predicated) | 0 | 0.95 | 0.79 | 1.20 |
+| 512³ b1024 ld+1 (predicated) | 1 | 0.89–0.94 | 0.75 | 1.17–1.24 |
+| 1024³ b256 ld+1 (predicated) | 0 | 1.03 | 0.82 | 1.26 |
+| 320³ b2048 (predicated, ragged) | 0 | 0.93–1.01 | 0.77 | 1.19–1.31 |
+| 544³ b512 (predicated, ragged) | 0 | 1.00–1.01 | 0.79 | 1.26–1.28 |
+
+Ranges are separate runs. **Measurement hazard**: this box is power-limited (455–475 W peaks, SM clock 1.8–2.8 GHz within one run), so
+compute-bound cells move ±5% run to run and arm *order* matters — the arm that runs right after cuBLAS gained up to 4% in one in-process
+experiment. The harness now rotates the order every rep. At 512³ b4096 the per-process benchmark gave 0.997 while the in-process harness
+with 0.5 s samples gave 1.089 on the same build and a 77 °C GPU: the cross-process ratio drifts with temperature, the interleaved one less.
+
+**Routing is unchanged above 48, deliberately.** The aligned leg clears the 1.11× gate at 512–2048 on both betas, but 384 β=1 (0.99–1.02),
+768 β=1 (1.07 in one run) and the predicated leg at 512 ld+1 (0.89–0.94) do not, and a `preferred()` window cannot see alignment without
+becoming the leg-predicate routing gate. The sub-views factorisations pass are exactly the predicated case.
 
 `src/sycl/gemm/register_128x128.hh` — 128×128×8 macro tile, 8×8 accumulators (64 per thread), 256 threads. Ported from
 `experiments/sycl_vs_cuda/`, which settled the premise directly: the same SGEMM body compiled by nvcc and by DPC++ produces **the same SASS inner
@@ -562,10 +620,16 @@ the vendor-free and ROCm builds, and making a future `preferred()` flip *arguabl
 
 ## Negative results
 
-* **Double-buffering the 128×128 k-loop.** 127 registers, zero spill, barriers halved, and it incidentally fixed the split-`LDG` defect to
+* **Double-buffering the 128×128 k-loop.** *Refuted 2026-09-27 — see [The 128x128 float kernel](#the-128x128-float-kernel), lever 1: with
+  struct-typed prefetch registers the global load is sunk to its shared store, so this measured a kernel with no prefetch.* Original entry:
+  127 registers, zero spill, barriers halved, and it incidentally fixed the split-`LDG` defect to
   *exactly* cuBLAS's sector count — for **zero time recovered**. cuBLAS uses 17.664 KB shared per block against our 9.216 KB and is
   occupancy-limited by registers anyway, so the extra shared memory is free for it; that asymmetry is why copying its structure did not copy its
   result.
+* **Dead levers of the 2026-09-27 pass** (standalone harness, paired vs cuBLAS): lane maps that change the unique-address count but keep
+  both lane bits 0 and 1 in one operand's address (8×4, 4×8, 2×16 lane grids: 3.0 wavefronts/LDS unchanged, ±1%); padding the B tile stride
+  to 132 (removes the 2-way STS conflict, −1–2%); skipping the last-slab reload (neutral); `st.global.cs` streaming C stores (0.982 → 0.982 at
+  512²×32); a 16-deep k slab (0.95× at 256³ before the L2 hint, 0.97–0.99× at 512³; dominated after it); cap 3 per CU (8.8× slower).
 * **Packing B into contiguous scratch.** Pays at the same roofline the kernel already achieves; loses harder as m grows.
 * **The WP3 mechanism for the `ld` defect.** WP3 blamed `register_tiled_common.hh` — odd tile strides `TileM+1`/`TileK+1`, `[n][k]` B staging, a
   read-modify-write epilogue, a contiguity predicate every sub-view fails. **Those shapes never execute that file**: they route to
@@ -814,4 +878,51 @@ compute-bound at 1/64 rate) and is not routed. `preferred()` is untouched: only 
 NN `max_dim <= 32` was already native.
 
 The NB = 64 bucket is shared-load bound (one broadcast `ld.shared` per FMA); 40..48
-still lose to cuBLAS.
+still lose to cuBLAS. **Superseded for NN 33..56** — see the next section.
+
+### The staged epilogue
+
+At k ≤ 64 the 128×128 kernel is store-bound (512²×32 b4096 writes 4.3 GB of C). The swizzled layout's direct epilogue stores four 128-byte
+column pieces per warp instruction, and DRAM ran at 87.6% of peak against 89.6% for a layout that stores two 256-byte pieces — a 2–3%
+regression against the old kernel at k ≤ 32 (0.976 new/old at 512²×32 and 1024²×32, 0.968 at 512²×16 and 512²×8). The staged epilogue
+routes C through local memory (4 passes of 32 columns × 128 rows) so each warp stores whole 128-row columns (512 B per `STG.128`):
+
+| k (512² , β=0) | direct | staged |
+|---|---|---|
+| 32 (b4096) | 0.982 | 1.002 |
+| 64 (b4096) | 0.994 | 1.000 |
+| 128 (b2048) | 1.003 | 1.004 |
+| 256 (b2048) | 1.18 | 1.12 |
+
+So `kStagedEpilogueMaxK = 64`, aligned leg only. Library after the gate: 512²×32 1.005, 1024²×32 1.009, 256²×32 b16384 1.010, 512²×16
+1.008, 512²×8 1.011, 512²×32 β=1 1.004 — all back to parity with the old kernel and at or above cuBLAS. The first version spilled 36 bytes
+at the 128-register cap because the slot decode kept three extra lane values alive across the k loop; decoding the slot from `nb` alone
+(slot = column / 4) fixed it.
+
+## The small tiled kernel
+
+**2026-09-27.** `small_batched.hh`, float NN with 32 < max(m, n, k) ≤ 56: one matrix per work-group of (NB/4)² lanes (NB = 48 or 56), A
+staged `[k][m]` and B as stored, both in local memory, and a 4×4 register tile of C per lane — one `LDS.128` of A and a quarter of four
+`LDS.128` of B per 16 FMAs, where the NB = 64 bucket issues one broadcast `ld.shared` per FMA. The problem is DRAM-bound (48³ b32768 moves
+906 MB; the kernel sustains ~860 GB/s). At β ≠ 0 each lane reads its C tile before the barrier so the latency overlaps the staging (48³ β=1:
+0.91× → 1.09× in the harness); at β = 0 that prefetch is compiled out, because its 27 registers cost 12% at 56³.
+
+`gemm_benchmark`, 5 alternating rounds, paired `t_vendor / t_native`, square NN:
+
+| n, batch | β=0 new (old) | β=1 new (old) |
+|---|---|---|
+| 33, 32768 | 2.30 (1.25) | 1.94 (0.99) |
+| 40, 32768 | 1.62 (1.06) | 1.37 (0.80) |
+| 44, 32768 | 1.56 (1.11) | 1.32 (0.81) |
+| 48, 32768 | 1.36 (1.06) | 1.15 (0.82) |
+| 48, 131072 | 1.36 (1.06) | 1.16 (0.83) |
+| 56, 32768 | 1.23 (1.12) | 1.08 (0.79) |
+| 64, 16384 | 1.05 (1.05) — unchanged kernel | |
+| 48, 64 / 256 / 1024 | 1.33 / 1.44 / 1.90 | 1.43 / — / 2.64 |
+| 40, 64 / 1024 | 1.34 / 1.81 | b256: 1.75 |
+
+57..64 keeps the NB = 64 kernel: the tiled NB = 64 variant measured 0.89–0.91× at 64³ β=0 against the old kernel's 0.99×, and ties at β=1.
+**`preferred()` widened from `max_dim <= 32` to `<= 48`** (float, square NN, batch ≥ 64): every 33..48 cell clears 1.11× on both betas from
+batch 64 up. 49..56 is routed to the tiled kernel by the selector but not preferred, because 56³ β=1 is 1.08×.
+
+Not measured: non-square NN shapes with min_dim ≤ 32 and max 33..56 (the selector still sends them to Direct / Tiled16).
