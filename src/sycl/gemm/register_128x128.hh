@@ -92,7 +92,8 @@ inline bool can_use_128x128_fast_path(const MatrixView<T, MatrixFormat::Dense>& 
     const auto m = A.rows();
     const auto k = A.cols();
     const auto n = B.cols();
-    if ((m % TileM) != 0 || (n % TileN) != 0 || (k % TileK) != 0) {
+    // k == 0 would pass the modulus test, and the prefetch of slab 0 runs before the loop.
+    if (k < TileK || (m % TileM) != 0 || (n % TileN) != 0 || (k % TileK) != 0) {
         return false;
     }
     // Every 128-bit access this kernel makes is at a multiple of 4 elements
