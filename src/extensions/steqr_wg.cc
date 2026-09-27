@@ -200,7 +200,9 @@ Event steqr_wg_impl(Queue& ctx,
                         continue;
                     }
 
-                    bool QR = std::abs(d_(0)) <= std::abs(d_(n_local - 1));
+                    // The sweep converges the end the shift is taken from (virtual index
+                    // n_local - 1), so orient that end at the SMALLER |d|, as dsteqr does.
+                    bool QR = std::abs(d_(n_local - 1)) < std::abs(d_(0));
                     order_view[gid] = QR ? ApplyOrder::Forward : ApplyOrder::Backward;
                     for (size_t k = 0; k < max_sweeps; ++k) {
                         auto anorm = std::abs(d_(n_local - 1));

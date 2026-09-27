@@ -1016,6 +1016,147 @@ TYPED_TEST(SteqrTest, EmptyInfoSpanChangesNeitherAnswerNorWorkspace) {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Graded tridiagonals: the QL/QR direction choice.
+//
+// LAPACK dsteqr runs QL when |D(l)| <= |D(lend)| and QR otherwise, so the
+// chase always converges the small end of a graded block first. steqr_cta and
+// steqr_wg (the host tier and n > sub-group width) both once had this inverted: on a graded block it converged the LARGE end first, which
+// took about 2x the implicit steps and lost relative accuracy in the small
+// eigenvalues (float n=16 errors up to 5e1, double n=32 medians of 1e-6).
+//
+// Every other test in this file compares with rel * (1 + |lambda|), which is an
+// absolute tolerance for small eigenvalues, and uses random input where both
+// directions are equally good. Neither can see this defect. This test grades
+// the input (span 1e-6 float, 1e-12 double), mixes both orientations within
+// each warp, and checks RELATIVE error per eigenvalue against a long-double
+// Sturm bisection. The two thresholds sit 7-100x above the fixed rule's
+// measured errors and far below the inverted rule's.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// All eigenvalues of one symmetric tridiagonal, ascending, by bisection on the
+// Sturm count in long double.
+std::vector<long double> sturm_eigenvalues(const std::vector<long double>& d,
+                                           const std::vector<long double>& e) {
+    const int n = static_cast<int>(d.size());
+    long double lo = d[0], hi = d[0];
+    for (int i = 0; i < n; ++i) {
+        long double r = 0;
+        if (i > 0) r += std::fabs(e[i - 1]);
+        if (i < n - 1) r += std::fabs(e[i]);
+        lo = std::min(lo, d[i] - r);
+        hi = std::max(hi, d[i] + r);
+    }
+    const long double pad = (hi - lo) * 1e-3L + std::numeric_limits<long double>::min();
+    lo -= pad;
+    hi += pad;
+    auto count_below = [&](long double x) {
+        int c = 0;
+        long double q = 1;
+        for (int i = 0; i < n; ++i) {
+            q = (d[i] - x) - (i > 0 ? e[i - 1] * e[i - 1] / q : 0.0L);
+            if (q == 0) q = -std::numeric_limits<long double>::min() * 1e10L;
+            c += q < 0;
+        }
+        return c;
+    };
+    std::vector<long double> ev(n);
+    for (int k = 0; k < n; ++k) {
+        long double a = lo, b = hi;
+        for (int it = 0; it < 120; ++it) {
+            const long double m = (a + b) / 2;
+            if (count_below(m) <= k) a = m; else b = m;
+        }
+        ev[k] = (a + b) / 2;
+    }
+    return ev;
+}
+
+}  // namespace
+
+TYPED_TEST(SteqrTest, GradedTridiagonalRelativeAccuracy) {
+    using T = typename TestFixture::ScalarType;
+    using Real = typename base_type<T>::type;
+    constexpr Backend B = TestFixture::BackendType;
+    constexpr bool is_float = std::is_same_v<Real, float>;
+    const long double span = is_float ? 1e-6L : 1e-12L;
+    const double median_tol = is_float ? 1e-5 : 1e-13;
+    const double max_tol = is_float ? 5e-2 : 1e-9;
+
+    // n = 16 and 32 put 2 and 1 problems in a warp on the CTA tier; n = 48 is
+    // past the sub-group width, so it takes steqr_wg, which had the same
+    // inversion. n = 8 is barely affected by the direction and is left out.
+    for (const int n : {16, 32, 48}) {
+        const int batch = 512;
+        Vector<Real> diag(n, Real(0), batch);
+        Vector<Real> sub(n - 1, Real(0), batch);
+        Vector<Real> evals = Vector<Real>::zeros(n, batch);
+
+        // Deterministic multiplicative factors in [0.5, 1.5) and signs, so the
+        // input does not depend on a library RNG.
+        uint32_t state = 12345u + static_cast<uint32_t>(n);
+        auto next_unit = [&]() {
+            state = state * 1664525u + 1013904223u;
+            return 0.5L + static_cast<long double>(state >> 8) / static_cast<long double>(1u << 24);
+        };
+        const long double g = std::pow(span, 1.0L / (n - 1));
+        std::vector<std::vector<long double>> hd(batch, std::vector<long double>(n));
+        std::vector<std::vector<long double>> he(batch, std::vector<long double>(n - 1));
+        for (int b = 0; b < batch; ++b) {
+            const bool large_at_bottom = (b % 2) == 1;
+            for (int i = 0; i < n; ++i) {
+                const int k = large_at_bottom ? n - 1 - i : i;
+                const long double sign = ((b / 2 + i) % 3 == 0) ? -1.0L : 1.0L;
+                diag(i, b) = static_cast<Real>(sign * next_unit() * std::pow(g, k));
+                hd[b][i] = diag(i, b);  // the reference sees exactly the rounded input
+            }
+            for (int i = 0; i < n - 1; ++i) {
+                const long double k = large_at_bottom ? (n - 2 - i) + 0.5L : i + 0.5L;
+                sub(i, b) = static_cast<Real>(next_unit() * std::pow(g, k));
+                he[b][i] = sub(i, b);
+            }
+        }
+
+        SteqrParams<Real> params = {};
+        params.sort = true;
+        params.sort_order = SortOrder::Ascending;
+        try {
+            auto ws = UnifiedVector<std::byte>(
+                steqr_buffer_size<Real>(*this->ctx, diag, sub, evals, JobType::EigenVectors, params), std::byte(0));
+            auto eigvects = Matrix<Real>::Zeros(n, n, batch);
+            (void)steqr<B, Real>(*this->ctx, diag, sub, evals, ws.to_span(), JobType::EigenVectors, params, eigvects);
+            this->ctx->wait();
+        } catch (const std::exception& e) {
+            if (is_kernel_not_found_message(e.what())) {
+                GTEST_SKIP() << "Skipping due to missing kernel bundle: " << e.what();
+            }
+            throw;
+        }
+
+        std::vector<double> item_max(batch);
+        for (int b = 0; b < batch; ++b) {
+            const auto ref = sturm_eigenvalues(hd[b], he[b]);
+            std::vector<long double> got(n);
+            for (int i = 0; i < n; ++i) got[i] = evals(i, b);
+            std::sort(got.begin(), got.end());
+            double worst = 0;
+            for (int i = 0; i < n; ++i) {
+                ASSERT_TRUE(std::isfinite(static_cast<double>(got[i]))) << "n=" << n << " item " << b;
+                worst = std::max(worst, static_cast<double>(std::fabs(got[i] - ref[i]) / std::fabs(ref[i])));
+            }
+            item_max[b] = worst;
+        }
+        const double max_err = *std::max_element(item_max.begin(), item_max.end());
+        std::nth_element(item_max.begin(), item_max.begin() + batch / 2, item_max.end());
+        const double median_err = item_max[batch / 2];
+        EXPECT_LE(median_err, median_tol) << "n=" << n << ": median over items of the worst relative eigenvalue error";
+        EXPECT_LE(max_err, max_tol) << "n=" << n << ": worst relative eigenvalue error over the batch";
+    }
+}
+
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
