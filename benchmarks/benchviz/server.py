@@ -43,6 +43,11 @@ def _reaper():
 _cache: dict = {}
 
 
+def _shape(r) -> str:
+    """"n 64" for a square cell, "m 256 · n 32" on a rectangular op's plane."""
+    return OPS[r["op"]].shape_text(r["m"], r["n"], r["nrhs"]) if r.get("op") in OPS else f"n {r.get('n')}"
+
+
 def _analysis(camp: Campaign) -> dict:
     """Pairing and per-op statistics, recomputed only when results.jsonl changes."""
     try:
@@ -88,17 +93,18 @@ def _analysis(camp: Campaign) -> dict:
                             "max": float(sp.max()), "wins": int((sp > 1).sum()), "n": int(sp.size)}
         if not d.empty:
             o["geomean"] = float(np.exp(np.log(d.speedup.astype(float)).mean()))
-    failures = [{k: r.get(k) for k in ("op", "dtype", "n", "batch", "arm", "reason", "t")}
+    failures = [{k: r.get(k) for k in ("op", "dtype", "n", "batch", "arm", "reason", "t")} | {"shape": _shape(r)}
                 for r in latest.values() if not r.get("ok")]
     failures.sort(key=lambda r: r.get("t") or 0)
     speed = {}
     if not w.empty:
         for r in w.itertuples():
-            speed[(r.op, r.dtype, r.n, r.batch)] = float(r.speedup)
+            speed[(r.op, r.dtype, r.m, r.n, r.nrhs, r.batch)] = float(r.speedup)
     activity = []
     for r in rows[-14:][::-1]:
         activity.append({k: r.get(k) for k in ("op", "dtype", "n", "batch", "arm", "time_ms", "ok", "reason", "route", "t")}
-                        | {"speedup": speed.get((r["op"], r["dtype"], r["n"], r["batch"]))})
+                        | {"shape": _shape(r),
+                           "speedup": speed.get((r["op"], r["dtype"], r["m"], r["n"], r["nrhs"], r["batch"]))})
     walls = [r["wall_s"] for r in rows[-40:] if r.get("wall_s")]
     rate = 60.0 * len(walls) / sum(walls) if walls and sum(walls) > 0 else None
     val = {"per_op": per_op, "failures": failures[-300:], "activity": activity, "rate_per_min": rate,
@@ -152,11 +158,12 @@ def op_table(root: Path, name: str, op: str) -> dict:
     w = _analysis(camp)["paired"]
     if w.empty or not (w.op == op).any():
         return {"rows": []}
-    d = w[w.op == op].sort_values(["dtype", "n", "batch"])
-    cols = ["dtype", "n", "batch", "time_ms_batchlas", "time_ms_vendor", "speedup", "route_batchlas", "route_vendor"]
+    d = w[w.op == op]
+    cols = ["dtype", "m", "n", "nrhs", "batch", "time_ms_batchlas", "time_ms_vendor", "speedup", "route_batchlas", "route_vendor"]
     out = d[[c for c in cols if c in d]].copy()
+    out["shape"] = [OPS[op].shape_text(int(m), int(n), int(k)) for m, n, k in zip(out.m, out.n, out.nrhs)]
     out["dtype"] = out["dtype"].map({t: i for i, t in enumerate(TYPES)}).fillna(9)
-    out = out.sort_values(["dtype", "n", "batch"])
+    out = out.sort_values(["dtype", "n", "m", "nrhs", "batch"])
     out["dtype"] = out["dtype"].map(dict(enumerate(TYPES)))
     return {"rows": json.loads(out.to_json(orient="records"))}
 
@@ -174,11 +181,13 @@ def plan_estimate(b: dict, mean_wall: float) -> dict:
     except (ValueError, TypeError) as e:
         return {"cells": 0, "arm_cells": 0, "seconds": 0, "error": str(e)}
     cells = plan_cells(ops, types, grid) if ops and types else []
-    # The n x batch occupancy the preview draws: one mark per (n, batch) in the union.
-    marks = sorted({(c.n, c.batch) for c in cells})
+    # The n x batch occupancy the preview draws: one mark per (n, batch) of the square
+    # cells. The rectangular ones are counted, not drawn: they have no single n.
+    sq = [c for c in cells if OPS[c.op].is_square(c.m, c.n, c.nrhs)]
+    marks = sorted({(c.n, c.batch) for c in sq})
     return {"cells": len(cells), "arm_cells": 2 * len(cells), "seconds": 2 * len(cells) * mean_wall,
-            "orders": sorted({c.n for c in cells}), "batches": sorted({c.batch for c in cells}),
-            "marks": marks, "grid": grid.to_dict()}
+            "orders": sorted({c.n for c in sq}), "batches": sorted({c.batch for c in sq}),
+            "marks": marks, "rect_cells": len(cells) - len(sq), "grid": grid.to_dict()}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -236,7 +245,8 @@ class Handler(BaseHTTPRequestHandler):
                 "builds": [build_info(d) for d in self.build_dirs],
                 "gpus": __import__("runner").detect_gpus(),
                 "ops": [{"name": k, "title": v.title, "types": list(v.types), "notes": v.notes, "group": v.group, "vendor": list(v.vendor),
-                         "orders": list(v.orders), "min_order": v.min_order, "max_order": v.max_order}
+                         "orders": list(v.orders), "min_order": v.min_order, "max_order": v.max_order,
+                         "plane": {"x": v.plane.x, "y": v.plane.y} if v.plane else None}
                         for k, v in OPS.items()],
                 "types": [{"name": t, "label": TYPE_LABEL[t]} for t in TYPES],
                 "presets": {k: v.to_dict() for k, v in PRESETS.items()},

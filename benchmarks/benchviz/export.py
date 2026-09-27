@@ -42,7 +42,7 @@ def campaign_data(camp: Campaign, figdir: Path, rel: str) -> dict:
         if op not in OPS:
             continue
         figs = {}
-        for name in ("speedup_n", "throughput_n", "heatmap"):
+        for name in ("speedup_n", "throughput_n", "heatmap", "speedup_2d", "throughput_2d"):
             src = camp.figures / op / f"{name}.png"
             if src.exists():
                 _shrink(src, figdir / op / f"{name}.png")

@@ -1,6 +1,7 @@
 """Figures for one campaign, derived from results.jsonl alone, in the house
-style (style.py). Per op: speedup_n, throughput_n, heatmap. Per precision:
-summary_<t>. What "saturated batch" means and why: README.md, "Figures"."""
+style (style.py). Per op: speedup_n, throughput_n, heatmap, and for the
+rectangular ops speedup_2d and throughput_2d. Per precision: summary_<t>.
+What "saturated batch" means and why: README.md, "Figures"."""
 from __future__ import annotations
 
 import math
@@ -18,8 +19,9 @@ style.apply()
 # A campaign's first render can hold a single point per panel; log axes warn on it.
 warnings.filterwarnings("ignore", message="Data has no positive values")
 import matplotlib.pyplot as plt  # noqa: E402
-from matplotlib.colors import Normalize  # noqa: E402
+from matplotlib.colors import LogNorm, Normalize  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
+from matplotlib.patches import Rectangle  # noqa: E402
 from matplotlib.ticker import FixedLocator, FuncFormatter, NullFormatter, NullLocator  # noqa: E402
 
 KEYS = ["op", "dtype", "m", "n", "nrhs", "batch"]
@@ -54,6 +56,9 @@ def paired(rows: List[dict]) -> pd.DataFrame:
     rb = pd.to_numeric(w.get("rel_sd_batchlas"), errors="coerce").fillna(0.0)
     rv = pd.to_numeric(w.get("rel_sd_vendor"), errors="coerce").fillna(0.0)
     w["speedup_sd"] = w["speedup"] * np.sqrt(rb ** 2 + rv ** 2)
+    # The n-figures plot square cells only; the rectangular ones go to the 2-D maps.
+    w["square"] = [OPS[o].is_square(int(m), int(n), int(k)) if o in OPS else True
+                   for o, m, n, k in zip(w.op, w.m, w.n, w.nrhs)]
     return w
 
 
@@ -70,10 +75,27 @@ def throughput_label(op: str) -> str:
     return "Throughput [Matrices / s]" if OPS[op].flops is None else "Throughput [GFLOP / s]"
 
 
+def square(w: pd.DataFrame) -> pd.DataFrame:
+    return w[w.square.astype(bool)] if "square" in w else w
+
+
 def saturated(w: pd.DataFrame) -> pd.DataFrame:
+    w = square(w)
     if w.empty:
         return w
     return w.loc[w.groupby(["op", "dtype", "n"])["batch"].idxmax()].sort_values(["op", "dtype", "n"])
+
+
+def plane_points(w: pd.DataFrame, op: str) -> pd.DataFrame:
+    """The op's cells placed on its Plane as (x, y), one per (dtype, x, y): the
+    largest batch measured there."""
+    plane = OPS[op].plane
+    d = w[w.op == op] if not w.empty else w
+    if plane is None or d.empty:
+        return d.iloc[0:0]
+    xy = [plane.coords(int(m), int(n), int(k)) for m, n, k in zip(d.m, d.n, d.nrhs)]
+    d = d.assign(x=[p[0] for p in xy], y=[p[1] for p in xy])
+    return d.loc[d.groupby(["dtype", "x", "y"])["batch"].idxmax()]
 
 
 def vendor_label(meta: dict, op: str = None) -> str:
@@ -84,9 +106,12 @@ def vendor_label(meta: dict, op: str = None) -> str:
     return vendor_name(op, "rocm" if "roc" in meta.get("vendor_label", "").lower() else "cuda")
 
 
-def _n_label(op: str = None) -> str:
-    lab = OPS[op].n_label if op in OPS else "Matrix Order $n$ [1]"
+def _label(lab: str) -> str:
     return lab if plt.rcParams["text.usetex"] else lab.replace("$", "")
+
+
+def _n_label(op: str = None) -> str:
+    return _label(OPS[op].n_label if op in OPS else "Matrix Order $n$ [1]")
 
 
 # ----------------------------------------------------------------- axes
@@ -230,8 +255,32 @@ def _map_axes(ax, xlabels, ylabels):
     style.outline(ax)
 
 
+def _fmt_speedup(v: float) -> str:
+    return f"{v:.0f}" if v >= 9.95 else (f"{v:.1f}" if v >= 0.995 else f"{v:.2f}".lstrip("0"))
+
+
+def _fmt_rate(v: float) -> str:
+    if v >= 9995:
+        return f"{v / 1e3:.0f}k"
+    if v >= 999.5:
+        return f"{v / 1e3:.1f}k"
+    return f"{v:.0f}" if v >= 9.95 else f"{v:.2g}"
+
+
+def _annotate(ax, Z: np.ndarray, norm, text):
+    """The value in each cell, black or white by the cell colour's luminance."""
+    cmap = plt.get_cmap(style.CMAP)
+    for i in range(Z.shape[0]):
+        for j in range(Z.shape[1]):
+            if np.isnan(Z[i, j]):
+                continue
+            lum = np.dot(cmap(norm(Z[i, j]))[:3], [0.299, 0.587, 0.114])
+            ax.text(j + 0.5, i + 0.5, text(Z[i, j]), ha="center", va="center", fontsize=FONT_CELL,
+                    color="black" if lum > 0.5 else "white")
+
+
 def fig_heatmap(w: pd.DataFrame, op: str, meta: dict):
-    d0 = w[w.op == op]
+    d0 = square(w[w.op == op])
     if d0.empty:
         return None
     types = [t for t in style.PREC_ORDER if (d0.dtype == t).any()]
@@ -273,16 +322,7 @@ def fig_summary(w: pd.DataFrame, dtype: str, meta: dict):
     im = ax.pcolormesh(np.arange(len(ns) + 1), np.arange(len(ops) + 1), np.ma.masked_invalid(Z),
                        cmap=style.CMAP, norm=norm, edgecolors=(1, 1, 1, 0.25), linewidth=0.5)
     _parity_edges(ax, Z)
-    cmap = plt.get_cmap(style.CMAP)
-    for i in range(len(ops)):
-        for j in range(len(ns)):
-            if np.isnan(Z[i, j]):
-                continue
-            v = 2 ** Z[i, j]
-            txt = f"{v:.0f}" if v >= 9.95 else (f"{v:.1f}" if v >= 0.995 else f"{v:.2f}".lstrip("0"))
-            lum = np.dot(cmap(norm(Z[i, j]))[:3], [0.299, 0.587, 0.114])
-            ax.text(j + 0.5, i + 0.5, txt, ha="center", va="center", fontsize=FONT_CELL,
-                    color="black" if lum > 0.5 else "white")
+    _annotate(ax, Z, norm, lambda z: _fmt_speedup(2 ** z))
     _map_axes(ax, [str(n) for n in ns], [style.mono(o) for o in ops])
     ax.invert_yaxis()
     ax.set_xlabel(_n_label())
@@ -291,8 +331,95 @@ def fig_summary(w: pd.DataFrame, dtype: str, meta: dict):
     return fig
 
 
+def _plane_grid(d: pd.DataFrame, xs, ys, value) -> np.ndarray:
+    Z = np.full((len(ys), len(xs)), np.nan)
+    for r, v in zip(d.itertuples(), value(d)):
+        Z[ys.index(r.y), xs.index(r.x)] = v
+    return Z
+
+
+def _plane_axes(ax, plane, xs, ys, ylabels=True):
+    """Tick labels, axis labels, and a faint hatch over shapes the op does not define
+    (n > m for QR), so they read differently from shapes not yet measured."""
+    for i, y in enumerate(ys):
+        for j, x in enumerate(xs):
+            if not plane.valid(x, y):
+                ax.add_patch(Rectangle((j, i), 1, 1, fill=False, hatch="//", lw=0,
+                                       edgecolor=(0, 0, 0, 0.18), zorder=0))
+    _map_axes(ax, [str(x) for x in xs], [str(y) if ylabels else "" for y in ys])
+    ax.set_xlabel(_label(plane.x_label))
+    if ylabels:
+        ax.set_ylabel(_label(plane.y_label))
+
+
+def _plane_data(w: pd.DataFrame, op: str):
+    """(points, types, xs, ys), or None when the op has no Plane or only its square
+    cells were measured: a map of the diagonal alone says nothing the n-figures do not."""
+    d = plane_points(w, op)
+    if d.empty or d.square.astype(bool).all():
+        return None
+    return d, [t for t in style.PREC_ORDER if (d.dtype == t).any()], sorted(d.x.unique()), sorted(d.y.unique())
+
+
+def fig_speedup_2d(w: pd.DataFrame, op: str, meta: dict):
+    got = _plane_data(w, op)
+    if got is None:
+        return None
+    d, types, xs, ys = got
+    plane = OPS[op].plane
+    grids = {t: _plane_grid(d[d.dtype == t], xs, ys, lambda e: np.log2(e.speedup.astype(float))) for t in types}
+    norm = _map_norm(np.concatenate([g.ravel() for g in grids.values()]))
+    fig, axes = plt.subplots(1, len(types), figsize=(style.MAP_PANEL[0] * len(types) + 2, style.MAP_PANEL[1]),
+                             squeeze=False)
+    im = None
+    for i, (ax, t) in enumerate(zip(axes[0], types)):
+        Z = grids[t]
+        im = ax.pcolormesh(np.arange(len(xs) + 1), np.arange(len(ys) + 1), np.ma.masked_invalid(Z),
+                           cmap=style.CMAP, norm=norm, edgecolors=(1, 1, 1, 0.25), linewidth=0.5)
+        _parity_edges(ax, Z)
+        _annotate(ax, Z, norm, lambda z: _fmt_speedup(2 ** z))
+        _plane_axes(ax, plane, xs, ys, ylabels=i == 0)
+        ax.set_title(style.bold(f"{PREC_TITLE[t]} [{TYPE_PREFIX[t]}]"), pad=12)
+    _speedup_colorbar(fig, im, axes[0].tolist(), meta, norm, op)
+    return fig
+
+
+def fig_throughput_2d(w: pd.DataFrame, op: str, meta: dict):
+    """One row per precision, BatchLAS and vendor side by side on a shared log scale."""
+    got = _plane_data(w, op)
+    if got is None:
+        return None
+    d, types, xs, ys = got
+    plane = OPS[op].plane
+    libs = (("batchlas", "BatchLAS"), ("vendor", vendor_label(meta, op)))
+    fig, axes = plt.subplots(len(types), 2, figsize=(style.MAP_PANEL[0] * 2 + 3, style.MAP_PANEL[1] * len(types)),
+                             squeeze=False)
+    for row, t in enumerate(types):
+        dt = d[d.dtype == t]
+        grids = {a: _plane_grid(dt, xs, ys, lambda e, a=a: throughput(
+            op, t, e.m, e.n, e.nrhs, e.batch, e[f"time_ms_{a}"].astype(float))) for a, _ in libs}
+        v = np.concatenate([g.ravel() for g in grids.values()])
+        v = v[np.isfinite(v) & (v > 0)]
+        norm = LogNorm(vmin=v.min(), vmax=max(v.max(), v.min() * 1.01)) if v.size else LogNorm(1, 10)
+        im = None
+        for col, (a, lab) in enumerate(libs):
+            ax, Z = axes[row, col], grids[a]
+            im = ax.pcolormesh(np.arange(len(xs) + 1), np.arange(len(ys) + 1), np.ma.masked_invalid(Z),
+                               cmap=style.CMAP, norm=norm, edgecolors=(1, 1, 1, 0.25), linewidth=0.5)
+            _annotate(ax, Z, norm, _fmt_rate)
+            _plane_axes(ax, plane, xs, ys, ylabels=col == 0)
+            if row + 1 < len(types):
+                ax.set_xlabel("")
+            ax.set_title(style.bold(f"{lab}, {PREC_TITLE[t]} [{TYPE_PREFIX[t]}]"), pad=12)
+        cb = fig.colorbar(im, ax=axes[row].tolist(), location="right", pad=0.02, fraction=0.05, aspect=20)
+        cb.ax.yaxis.set_major_formatter(FuncFormatter(lambda x, _: f"{x:g}"))
+        cb.set_label(throughput_label(op))
+    return fig
+
+
 # ----------------------------------------------------------------- export
-FIGURES = (("speedup_n", fig_speedup_n), ("throughput_n", fig_throughput_n), ("heatmap", fig_heatmap))
+FIGURES = (("speedup_n", fig_speedup_n), ("throughput_n", fig_throughput_n), ("heatmap", fig_heatmap),
+           ("speedup_2d", fig_speedup_2d), ("throughput_2d", fig_throughput_2d))
 
 
 def save(fig, stem: Path, formats=("pdf", "png")) -> List[Path]:

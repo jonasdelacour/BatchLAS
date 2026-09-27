@@ -11,12 +11,13 @@ using namespace batchlas;
 
 template <typename T, Backend B>
 static void BM_TRSM(minibench::State& state) {
-    // SquareBatchSizes emits Args({s, s, bs}): batch is range(2), not range(1).
+    // Args (n, nrhs, batch): A is n x n, B is n x nrhs. SquareBatchSizes emits nrhs = n.
     const size_t n = state.range(0);
+    const size_t nrhs = state.range(1);
     const size_t batch = state.range(2);
 
     auto A = Matrix<T>::Triangular(n, Uplo::Lower, T(1), T(0.5), batch);
-    auto Bm = Matrix<T>::Random(n, n, false, batch);
+    auto Bm = Matrix<T>::Random(n, nrhs, false, batch);
 
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
     state.SetKernel(q,
@@ -30,8 +31,8 @@ static void BM_TRSM(minibench::State& state) {
                     [](Queue& q, auto&&... xs) {
                         (void)trsm(q, std::forward<decltype(xs)>(xs)...);
                     });
-    // TRSM does n^2 * q flops; B is square here, so q == n.
-    state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * n * n * n), minibench::Rate);
+    // TRSM does n^2 * nrhs flops.
+    state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * n * n * nrhs), minibench::Rate);
     state.SetMetric("Time (µs) / matrix", (1.0 / batch) * 1e6, minibench::Reciprocal);
 }
 

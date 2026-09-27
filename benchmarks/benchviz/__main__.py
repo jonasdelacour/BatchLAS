@@ -69,6 +69,9 @@ def grid_from_args(a) -> Grid:
         if v is not None:
             g[key] = conv(v)
             g["name"] = "custom"
+    if getattr(a, "rect", None) is not None:
+        g["rect"] = a.rect
+        g["name"] = "custom"
     if getattr(a, "batches", None) and not getattr(a, "batch_mode", None):
         g["batch_mode"] = "list"
     return Grid.from_dict(g)
@@ -255,6 +258,9 @@ def main():
     r.add_argument("--batch-step", type=int, help="ladder factor (2 = every power of two)")
     r.add_argument("--reps", type=int, help="timed repetitions per arm-cell")
     r.add_argument("--mem-gib", type=float, help="per-arm device-memory budget that caps batch")
+    r.add_argument("--rect", action=argparse.BooleanOptionalAction, default=None,
+                   help="also sweep the rectangular ops over m x n (or n x k) at the saturated batch "
+                        "(on in every preset)")
     r.add_argument("--grid-json", help="a whole grid as JSON (what the dashboard sends)")
     r.add_argument("--backend", default="cuda", choices=["cuda", "rocm"])
     r.add_argument("--gpu", default="1", help="GPU index, or a list (0,1) to split the cells across cards; "
