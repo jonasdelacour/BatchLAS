@@ -29,6 +29,73 @@ def _sh(*argv) -> str:
         return ""
 
 
+# What the binaries are compiled from; benchviz's own Python is not.
+_SOURCE_PATHS = ("src", "include", "benchmarks", "cmake", "CMakeLists.txt", ":(exclude)benchmarks/benchviz")
+
+
+def build_info(build_dir: Path) -> Dict[str, object]:
+    """Which source a build directory's binaries were compiled from.
+
+    The checkout benchviz runs from says nothing about this: a worktree's
+    build/ can be days behind its HEAD. Nothing records the SHA at build time,
+    so it is estimated as the last commit before the newest library was
+    linked, and the build is stale when source changed after that.
+    """
+    b = Path(build_dir).resolve()
+    info: Dict[str, object] = {"dir": str(b)}
+    libs = [p for p in (b / "src").glob("libbatchlas*.so*") if p.is_file()]
+    if not libs:
+        info["error"] = "no libbatchlas*.so under src/"
+        return info
+    built = max(p.stat().st_mtime for p in libs)
+    info["built"] = time.strftime("%Y-%m-%d %H:%M", time.localtime(built))
+    cache = b / "CMakeCache.txt"
+    src = None
+    if cache.exists():
+        for line in cache.read_text(errors="replace").splitlines():
+            if line.startswith("CMAKE_HOME_DIRECTORY:"):
+                src = Path(line.split("=", 1)[1])
+            elif line.startswith("CMAKE_CXX_COMPILER:"):
+                info["compiler"] = line.split("=", 1)[1]
+    if src is None or not (src / ".git").exists():
+        return info
+    git = ("git", "-C", str(src))
+    info["source"] = str(src)
+    info["branch"] = _sh(*git, "rev-parse", "--abbrev-ref", "HEAD")
+    info["head"] = _sh(*git, "rev-parse", "--short", "HEAD")
+    sha = _sh(*git, "rev-list", "-1", f"--before={int(built)}", "HEAD")
+    info["built_from"] = sha[:7]
+    changed = _sh(*git, "diff", "--name-only", sha, "HEAD", "--", *_SOURCE_PATHS).split() if sha else []
+    edited = [f for f in _sh(*git, "diff", "--name-only", "HEAD", "--", *_SOURCE_PATHS).split()
+              if (src / f).exists() and (src / f).stat().st_mtime > built]
+    info["changed_since"] = len(set(changed) | set(edited))
+    info["stale"] = bool(changed or edited)
+    # A worktree's HEAD can itself be behind: count what main has that this build lacks.
+    if sha:
+        n = _sh(*git, "rev-list", "--count", "--no-merges", f"{sha}..main", "--", *_SOURCE_PATHS)
+        info["behind_main"] = int(n) if n.isdigit() else None
+    return info
+
+
+def harness_targets() -> List[str]:
+    from ops import OPS
+    return sorted({op.binary for op in OPS.values()})
+
+
+def describe_build(bi: dict) -> str:
+    if bi.get("error"):
+        return f"{bi['dir']}: {bi['error']}"
+    s = f"{bi['dir']}  built {bi.get('built')}"
+    if bi.get("built_from"):
+        s += f" from ~{bi['built_from']} ({bi.get('branch')}, HEAD {bi.get('head')})"
+    if bi.get("behind_main"):
+        s += f"\n  NOTE: {bi['behind_main']} source commit(s) on main are not in this build"
+    if bi.get("stale"):
+        s += f"\n  WARNING: STALE BUILD -- {bi['changed_since']} source file(s) changed since it was built;" \
+             f" rebuild with:\n    cmake --build {bi['dir']} -j\"$(nproc)\" --target {' '.join(harness_targets())}"
+    return s
+
+
 def provenance(backend: str, gpu: int) -> Dict[str, str]:
     p = {
         "git_sha": _sh("git", "-C", str(REPO), "rev-parse", "--short", "HEAD"),
@@ -74,7 +141,13 @@ class Campaign:
                 raise ValueError(f"campaign {name} is a {old.get('backend')} campaign")
             for k in ("ops", "types"):
                 config[k] = list(dict.fromkeys([*old.get(k, []), *config[k]]))
-            config["provenance"] = old.get("provenance", config.get("provenance"))
+            new = config.get("provenance") or {}
+            config["provenance"] = old.get("provenance", new)
+            # A resume may run a different build; keep every one it used.
+            builds = config["provenance"].setdefault("builds", [])
+            for bi in new.get("builds", []):
+                if all((x.get("dir"), x.get("built")) != (bi.get("dir"), bi.get("built")) for x in builds):
+                    builds.append(bi)
         cfg_path.write_text(json.dumps(config, indent=2))
         (c.dir / "STOP").unlink(missing_ok=True)
         return c

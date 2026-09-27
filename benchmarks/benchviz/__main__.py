@@ -20,7 +20,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 from ops import OPS, PRESETS, TYPES, Grid, parse_list, plan_cells  # noqa: E402
-from store import DEFAULT_ROOT, REPO, Campaign, provenance  # noqa: E402
+from store import DEFAULT_ROOT, REPO, Campaign, build_info, describe_build, provenance  # noqa: E402
 
 
 def _csv_list(s: str, allowed) -> list:
@@ -36,7 +36,13 @@ def _csv_list(s: str, allowed) -> list:
 def default_build_dirs() -> list:
     cands = [REPO / "build", REPO / "build" / "presets" / "benchmarks", REPO / "build" / "presets" / "dev-tests"]
     # A worktree's own build first, then the main checkout's.
-    main = Path(os.environ.get("BATCHLAS_MAIN_CHECKOUT", REPO))
+    main = os.environ.get("BATCHLAS_MAIN_CHECKOUT")
+    if not main:  # a worktree's common .git sits in the main checkout
+        import subprocess
+        common = subprocess.run(["git", "-C", str(REPO), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                                capture_output=True, text=True).stdout.strip()
+        main = Path(common).parent if common else REPO
+    main = Path(main)
     if main != REPO:
         cands.append(main / "build")
     return [c for c in cands if c.exists()]
@@ -68,14 +74,14 @@ def grid_from_args(a) -> Grid:
     return Grid.from_dict(g)
 
 
-def make_campaign(a) -> Campaign:
+def make_campaign(a, build_dirs) -> Campaign:
     ops = _csv_list(a.ops, OPS)
     types = _csv_list(a.types, TYPES)
     name = a.campaign or time.strftime(f"{a.backend}-%Y%m%d-%H%M%S")
     cfg = {
         "ops": ops, "types": types, "preset": a.grid.name, "backend": a.backend,
         "gpu": a.gpus[0], "gpus": a.gpus, "grid": a.grid.to_dict(),
-        "provenance": provenance(a.backend, a.gpus[0]),
+        "provenance": {**provenance(a.backend, a.gpus[0]), "builds": [build_info(d) for d in build_dirs]},
     }
     return Campaign.create(Path(a.root), name, cfg)
 
@@ -97,9 +103,9 @@ def cmd_run(a):
         for c in cells:
             print(f"  {c.op:6s} {c.dtype:8s} n={c.n:5d} batch={c.batch}")
         return
-    camp = make_campaign(a)
-    print(f"campaign {camp.name}: {len(cells)} cells x 2 arms -> {camp.dir}")
     build_dirs = [Path(p) for p in a.build_dir] if a.build_dir else default_build_dirs()
+    camp = make_campaign(a, build_dirs)
+    print(f"campaign {camp.name}: {len(cells)} cells x 2 arms -> {camp.dir}")
     # The dashboard tails run.log. A dashboard-started run already has its
     # stdout redirected there; a terminal run appends as well as printing.
     logf = None if os.environ.get("BENCHVIZ_STDOUT_IS_LOG") else open(camp.dir / "run.log", "a")
@@ -110,6 +116,8 @@ def cmd_run(a):
             logf.write(msg + "\n")
             logf.flush()
 
+    for d in build_dirs:
+        log("binaries: " + describe_build(build_info(d)))
     runner = Runner(camp, build_dirs, a.gpus, guard=not a.no_guard, backend=a.backend, log=log)
 
     # Replot in the background as rows land, throttled per op: a usetex render
@@ -195,6 +203,33 @@ def cmd_export(a):
     print(p)
 
 
+def cmd_info(a):
+    """What a run started now would measure, and what is already running."""
+    import json
+    from store import list_campaigns
+    print(f"benchviz from {REPO}")
+    dirs = default_build_dirs()
+    if not dirs:
+        print("no build directory found (looked in build/, build/presets/*)")
+    for d in dirs:
+        print("binaries: " + describe_build(build_info(d)))
+    for name in list_campaigns(Path(a.root)):
+        c = Campaign(Path(a.root), name)
+        st, prov = c.status(), c.config.get("provenance", {})
+        alive = False
+        if st.get("state") == "running" and st.get("pid"):
+            try:
+                os.kill(st["pid"], 0)
+                alive = True
+            except OSError:
+                pass
+        state = st.get("state", "?") if alive or st.get("state") != "running" else "interrupted"
+        builds = prov.get("builds") or []
+        b = ", ".join(f"~{x.get('built_from', '?')}{' STALE' if x.get('stale') else ''}" for x in builds) \
+            or "unrecorded (made before build provenance)"
+        print(f"  {name:28s} {state:11s} {st.get('done', 0)}/{st.get('total', 0)}  build {b}")
+
+
 def cmd_serve(a):
     import server
     server.serve(Path(a.root), a.host, a.port, default_build_dirs(), read_only=a.read_only, token=a.token or "")
@@ -254,6 +289,9 @@ def main():
     s.add_argument("--read-only", action="store_true", help="no starting/stopping runs (for a copy exposed beyond the box)")
     s.add_argument("--token", help="require this secret as ?t=<token> in the link (then kept in a cookie)")
     s.set_defaults(fn=cmd_serve)
+
+    i = sub.add_parser("info", parents=[common], help="which build runs would use, and each campaign's state")
+    i.set_defaults(fn=cmd_info)
 
     lo = sub.add_parser("list-ops", parents=[common])
     lo.set_defaults(fn=cmd_list_ops)
