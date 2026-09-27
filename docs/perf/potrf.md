@@ -2041,3 +2041,139 @@ false when `tiny_max_n < 1`, so deleting the same test from `tiny_window()` chan
 test can observe. Same shape as the corresponding break on the `geqrf` window. The first three
 are the load-bearing ones and all went red — in particular the third, which is what stops the
 `uplo` test being deleted from `preferred()` now that the tiny window no longer needs it.
+
+## The fused potrs solve
+
+**2026-09-26.** posv's composed arm was `potrf; trsm; trsm`, and at nrhs = 1 the two
+trsm launches cost 4.6x the potrf they follow (float n = 64, batch 16384: potrf 0.53 ms,
+posv 2.96 ms against cuSOLVER's 1.74 ms). A new tier, `{Native, CTA}`, runs the routed
+potrf and then **one** kernel for both triangular solves: `sycl_getrs::potrs_fused_dispatch`
+in `getrs_fused.cc`, the fused narrow-RHS getrs body with no pivots and a non-unit
+diagonal on both phases. Lower solves L in the axpy form and L^H in the dot form; Upper
+is the mirror image. It shares getrs's resident-RHS capacity and `kGetrsFusedMaxRhs`.
+
+The arm order is Tiny, CTA, Blocked; above the tiny window CTA takes every shape it can
+hold and Blocked is its capacity fallback. Ratios are `t_vendor / t_native`, Lower,
+nrhs = 1, factor_bench, 5 reps, interleaved; batch 32768 to n = 32, 16384 at 64,
+4096 at 128, 1024 at 256.
+
+| n | float before | float after | cfloat before | cfloat after |
+|---:|---:|---:|---:|---:|
+| 64 | 0.59 | **2.07** | 1.18 | **4.56** |
+| 128 | 0.79 | **1.62** | 3.35 | **7.03** |
+| 256 | 1.02 | **1.46** | 11.3 | **15.4** |
+
+Upper, batch 16384: float 1.39 / 1.10, cfloat 2.27 / 2.24 at n = 64 / 128. double and
+cdouble, batch 8192, CTA against Blocked: 4.2 / 3.9 / 2.5 / 1.6x (double) and
+4.5 / 4.1 / 2.5 / 1.5x (cdouble) at n = 33 / 64 / 128 / 256, and ahead of cuSOLVER at
+every one of those cells.
+
+### The tiny window moved
+
+CTA also beats the fused tiny kernel inside part of its old window. Batch 32768,
+`t_vendor / t_arm`:
+
+| type | nrhs | n = 12 | 16 | 17 | 24 | 32 |
+|---|---:|---|---|---|---|---|
+| float | 1 | tiny 3.31, cta 1.92 | 3.41 / 2.07 | 1.35 / **1.46** | 1.59 / **1.70** | 2.01 / **2.22** |
+| float | 2 | 2.35 / 2.10 | 2.51 / 2.33 | 0.88 / **1.38** | 1.10 / **1.73** | 1.18 / **1.86** |
+| float | 4 | 3.74 / 1.54 | 3.54 / 1.45 | **1.19** / 1.14 | **1.30** / 1.15 | **1.45** / 1.22 |
+| cfloat | 1 | 0.91 / **1.15** | 1.13 / **1.30** | 0.47 / **1.07** | 0.88 / **1.94** | 1.40 / **3.13** |
+| cfloat | 2 | 0.46 / **0.68** | 0.63 / **0.84** | 0.33 / **0.94** | 0.63 / **1.62** | 0.98 / **2.52** |
+| cfloat | 4 | **0.75** / 0.57 | **1.11** / 0.83 | 0.44 / **0.86** | 0.76 / **1.33** | 1.23 / **1.98** |
+
+*Superseded by [the posv tiny launch bound](#the-posv-tiny-launch-bound).* So
+`tiny_window` was: float `n <= 16 || nrhs >= 3`, cfloat `n <= 8 || (n <= 16 &&
+nrhs >= 3)`. cfloat n = 8 stays tiny at every width (2.93 / 1.29 / 1.74 against CTA's
+1.27 / 0.72 / 0.47). double and cdouble keep the tier ceiling: tiny against CTA is
+unmeasured for them. nrhs = 3 is interpolated from 2 and 4.
+
+**Still losing:** cfloat 9..17 at nrhs >= 2 loses to cuSOLVER on both arms (best 0.68-0.94).
+
+### The poisoned triangle is only poison if potrf leaves it alone
+
+`FusedSolveArmSolvesOnBothTriangles` pins potrf `native`. Unpinned, Upper at n >= 33
+resolves potrf to cuSOLVER, which **overwrites the unreferenced lower triangle**, so
+the solve's wrong-triangle read (the armed break: swap `ld_a`/`ld_h` in the backward
+staging) returned the right answer and stayed green on Upper at n = 33, 64 and 100.
+Pinned, the break is red on Lower at every n > 1 and on Upper wherever potrf ran native
+(n = 17 and 33 for every type, n = 64 where CTA fits). The test asserts the poison
+survived only where potrf resolved native.
+
+## The posv tiny launch bound
+
+**2026-09-27.** The same `.minnctapersm` bound as getrf's tiny tier
+(docs/perf/lu.md#the-tiny-launch-bound), applied to `posv_tiny` through the functor
+`PosvTinyBody`. Swept per (type, bucket, RHS width) over MinBlocks {1, 8, 12, 16},
+batch 32768, tiny arm, ms (uncapped -> chosen):
+
+| cell | uncapped | chosen | gain |
+|---|---:|---:|---:|
+| float n=16 nrhs=1 | 0.0800 | 0.0713 (16) | 1.12x |
+| float n=24 nrhs=1 | 0.461 | 0.330 (16) | 1.40x |
+| float n=32 nrhs=1 | 0.534 | 0.403 (16) | 1.33x |
+| float n=16 nrhs=4 | 0.129 | 0.110 (12) | 1.17x |
+| float n=32 nrhs=4 | 0.687 | 0.576 (16) | 1.19x |
+| cfloat n=8 nrhs=1 | 0.0612 | 0.0466 (16) | 1.31x |
+| cfloat n=16 nrhs=1 | 0.376 | 0.302 (8) | 1.24x |
+| cfloat n=24 nrhs=1 | 2.075 | 1.099 (8) | **1.89x** |
+| cfloat n=32 nrhs=1 | 2.490 | 1.353 (8) | **1.84x** |
+| cfloat n=16 nrhs=4 | 0.651 | 0.483 (8) | 1.35x |
+| cfloat n=32 nrhs=4 | 3.504 | 3.160 (8) | 1.11x |
+
+A cap that is too tight costs as much as it saves elsewhere (cfloat N = 32 at 16 blocks is
+2.3x *slower*), so every cell is transcribed from the sweep, never extrapolated;
+`posv_tiny_min_blocks` holds the table, fp64 uncapped and unmeasured.
+
+The tiny-vs-CTA window moved again (`t_vendor / t_arm`, tiny / CTA, batch 32768):
+float nrhs = 1 now takes tiny at every order (n = 17 / 24 / 32: 1.62 / 1.86 / 2.45 against
+CTA's 1.47 / 1.71 / 2.22), and so does nrhs = 4 (1.51 / 1.58 / 1.73 against
+1.14 / 1.15 / 1.22). nrhs = 2 stays CTA's above 16 (tiny 1.12 / 1.33 / 1.43 against
+1.39 / 1.73 / 1.87): the NR = 4 tiny kernel costs the same at every width it serves,
+CTA's cost grows with the width. cfloat: tiny at n <= 16 for nrhs 1 and 4 (n = 12 / 16:
+1.18 / 1.38 and 0.99 / 1.45 against CTA's 1.15 / 1.30 and 0.57 / 0.83), at n <= 8 for
+nrhs = 2, CTA at 17 and above. So `tiny_window` is float `n <= 16 || nrhs != 2`, cfloat
+`n <= 8 || (n <= 16 && nrhs != 2)`.
+
+**Still losing:** cfloat 9..17 at nrhs = 2 (best 0.68 / 0.84 / 0.94 at n = 12 / 16 / 17),
+cfloat n = 12 nrhs = 4 ties (0.99), cfloat n = 17 at every width (CTA 0.86-1.08).
+
+## The posv local-memory transpose
+
+**2026-09-27, second pass.** The three levers of docs/perf/lu.md#the-column-bucket applied
+to `posv_tiny`: the column bucket NC ({12, 16} under N = 16, {20, 24, 28, 32} under N = 32),
+an NR = 2 RHS bucket with every RHS loop stopping at nrhs (docs/perf/lu.md#the-rhs-pad-column-cost),
+and local memory for the two cross-lane reads that scale with n:
+
+* **The Cholesky column.** Step j broadcast L(k, j) from lane k to every lane, `n - j - 1`
+  shuffles (two per complex element). Now every lane stores ITS element -- one store, all
+  lanes at once -- then one `group_barrier(sg)` and vector loads, double-buffered by parity.
+* **The backward solve's transpose.** Step i needed L(i, lane) on each lane below i, which
+  no lane holds: `i` shuffles plus a select chain. Now lane i stores its row and each lane
+  loads the ONE element at its own index -- local memory may be indexed dynamically,
+  registers may not.
+
+The factor stays bit-identical to `potrf_tiny` (P2 is green): the arithmetic is unchanged,
+only the transport. Launch bounds re-swept per (type, NC, NR) over {8, 12, 16} and
+transcribed in `posv_tiny_min_blocks`; float is flat within 2% and takes 16.
+
+Batch 32768, `t_vendor / t_arm`, tiny / CTA, arms interleaved:
+
+| posv cfloat n | nrhs 1 | nrhs 2 | nrhs 4 |
+|---|---|---|---|
+| 9 | 1.78 / 0.95 | 1.52 / 0.62 | 1.23 / 0.48 |
+| 12 | 2.03 / 1.15 | 1.51 / 0.68 | 1.44 / 0.57 |
+| 16 | 1.88 / 1.30 | 1.40 / 0.84 | 1.71 / 0.83 |
+| 17 | 1.80 / 1.08 | 1.65 / 0.94 | 1.29 / 0.86 |
+| 20 | 2.18 / 1.42 | 2.02 / 1.20 | 1.49 / 1.05 |
+| 24 | 2.57 / 1.92 | 2.22 / 1.61 | 1.73 / 1.33 |
+| 28 | 2.34 / 2.41 | 2.17 / 2.00 | 2.12 / 1.70 |
+| 32 | 2.78 / 3.12 | 2.54 / 2.51 | 2.35 / 1.98 |
+
+Before: tiny 0.68 / 0.84 / 0.94 at n = 12 / 16 / 17, nrhs = 2, and n = 17 at every width
+0.86-1.08. Every cfloat cell now beats the vendor legs by 1.23x or more. Against CTA, tiny
+wins 1.3-2.6x at n <= 24 and at nrhs = 4 above it (1.24x / 1.19x at 28 / 32); nrhs = 2 above
+24 ties (1.08x / 1.01x) and nrhs = 1 is CTA's (1.03x / 1.13x). So cfloat `tiny_window` is
+`n <= 24 || nrhs > 2`. float: tiny 1.84-5.32x of the vendor at every cell and 1.3-3.5x over
+CTA, including the nrhs = 2 band above 16 that was CTA's, so float `tiny_window` is the
+whole tier.

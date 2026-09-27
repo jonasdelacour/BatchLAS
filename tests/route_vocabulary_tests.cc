@@ -1721,13 +1721,15 @@ using GetriTableCD = RouteTable<Op::getri, std::complex<double>>;
 } // namespace
 
 TEST(RouteGetrf, TheMeasuredTinyWindowAndNothingElse) {
-    // float 8..32, cfloat 9..16, both bracketed by a MEASURED non-winner below and
-    // (for cfloat) above. evidence: docs/perf/lu.md#the-tiny-getrf-window
+    // Tiny: float 5..32, cfloat 5..7 and 9..24. Every edge is a MEASURED non-winner.
+    // evidence: docs/perf/lu.md#the-column-bucket
+    // ARMED BREAK (R9): cfloat tiny_window upper edge 24 -> 16. EXPECTED: RED at 17, 20, 24.
     using F   = RouteTable<Op::getrf, float>;
     using CF  = RouteTable<Op::getrf, std::complex<float>>;
     using D   = RouteTable<Op::getrf, double>;
     using CD  = RouteTable<Op::getrf, std::complex<double>>;
     constexpr Route kTiny{Origin::Native, Algorithm::Tiny};
+    constexpr Route kCta{Origin::Native, Algorithm::CTA};
     constexpr Route kAuto{Origin::Auto, Algorithm::Auto};
 
     auto hits = [](auto tbl, const GetrfShape& sh) {
@@ -1739,32 +1741,41 @@ TEST(RouteGetrf, TheMeasuredTinyWindowAndNothingElse) {
     };
 
     // IN the window, exactly ONE tier answers (R8b) and Auto takes a native route.
-    for (int64_t n : {8, 9, 12, 16, 17, 24, 32}) {
+    for (int64_t n : {5, 7, 8, 9, 12, 16, 17, 20, 22, 24, 32}) {
         const auto sh = getrf_shape(n, 16384, /*cta_max_n=*/128, /*tiny_max=*/32);
         EXPECT_TRUE(F::preferred(kTiny, sh)) << "float n=" << n;
         EXPECT_EQ(hits(F{}, sh), 1) << "float n=" << n;
         EXPECT_TRUE(is_native(resolve_getrf_route<float>(kAuto, sh, true))) << "float n=" << n;
     }
-    for (int64_t n : {9, 12, 16}) {
+    for (int64_t n : {17, 20, 22}) {                    // the retired CTA band: tiny 1.36-1.53x
+        const auto sh = getrf_shape(n, 16384, 128, 32);
+        EXPECT_FALSE(F::preferred(kCta, sh)) << "float n=" << n;
+        EXPECT_EQ(resolve_getrf_route<float>(kAuto, sh, true), kTiny) << "float n=" << n;
+    }
+    for (int64_t n : {5, 7, 9, 12, 16, 17, 20, 24}) {   // the column bucket: 17..24 1.15-1.45x
         const auto sh = getrf_shape(n, 16384, 128, 32);
         EXPECT_TRUE(CF::preferred(kTiny, sh)) << "cfloat n=" << n;
         EXPECT_EQ(hits(CF{}, sh), 1) << "cfloat n=" << n;
     }
 
-    // The four MEASURED brackets. Each of these is a cell that lost, not a guess.
-    for (int64_t n : {1, 4, 7}) {                       // float below the floor
+    // The MEASURED brackets. Each of these is a cell that lost or tied, not a guess.
+    for (int64_t n : {1, 4}) {                          // float n=4 ties at the DRAM roof
         const auto sh = getrf_shape(n, 65536, 128, 32);
-        EXPECT_FALSE(F::preferred(kTiny, sh)) << "float n=" << n << " measured 0.888x at n=4";
+        EXPECT_FALSE(F::preferred(kTiny, sh)) << "float n=" << n << " measured 0.99x at n=4";
         EXPECT_TRUE(is_vendor(resolve_getrf_route<float>(kAuto, sh, true)));
+        // ...but the vendor-FREE walk still takes Tiny: ~3x the CTA tier here.
+        EXPECT_EQ(resolve_getrf_route<float>(kAuto, sh, false), kTiny) << "float n=" << n;
     }
-    for (int64_t n : {4, 8}) {                          // cfloat below its floor
+    for (int64_t n : {4, 8}) {                          // cfloat's two ties
         const auto sh = getrf_shape(n, 65536, 128, 32);
         EXPECT_FALSE(CF::preferred(kTiny, sh))
             << "cfloat n=" << n << ": n=8 falls to 1.086x one doubling deeper";
+        EXPECT_EQ(resolve_getrf_route<std::complex<float>>(kAuto, sh, false), kTiny)
+            << "cfloat n=" << n;
     }
-    for (int64_t n : {17, 24, 32}) {                    // cfloat above its ceiling
+    for (int64_t n : {25, 28, 32}) {                    // cfloat ties above 24: 0.97-1.10x
         const auto sh = getrf_shape(n, 65536, 128, 32);
-        EXPECT_FALSE(CF::preferred(kTiny, sh)) << "cfloat n=" << n << " measured 0.368x at 17";
+        EXPECT_FALSE(CF::preferred(kTiny, sh)) << "cfloat n=" << n << " ties the vendor";
         EXPECT_TRUE(is_vendor(resolve_getrf_route<std::complex<float>>(kAuto, sh, true)));
     }
 
@@ -3847,4 +3858,56 @@ TEST(RouteSpmm, BatchlasSpmmRouteIsActuallyRead) {
         EXPECT_EQ(legacy_unset_default(Op::spmm), (Route{Origin::Auto, Algorithm::Auto}))
             << "and the value spmm_route.hh substitutes for it is plain Auto";
     }
+}
+
+// The vendor-FREE walk against the measured tiny-vs-CTA grid: tiny in the vs-vendor
+// window's gaps (float 3 and 17..20, cfloat 4, 9, 10 and 22), CTA only where it measured
+// ahead (cfloat 17 and 20). evidence: docs/perf/qr.md#the-native-tiny-tie-break
+TEST(RouteGeqrf, NativeWalkTakesTinyInTheWindowGaps) {
+    constexpr Route kTiny{Origin::Native, Algorithm::Tiny};
+    auto sq = [](int64_t n) {
+        GeqrfShape s = geqrf_shape(n, n, 32768, /*cta_max_m=*/128, /*cta_max_elems=*/1 << 20);
+        s.tiny_max_n = 32;
+        return s;
+    };
+    for (int64_t n : {3, 17, 20}) {
+        EXPECT_EQ(resolve_geqrf_route<float>(kGeqrfAuto, sq(n), false), kTiny) << "float n=" << n;
+    }
+    for (int64_t n : {4, 9, 10, 22}) {
+        EXPECT_EQ(resolve_geqrf_route<std::complex<float>>(kGeqrfAuto, sq(n), false), kTiny)
+            << "cfloat n=" << n;
+    }
+    for (int64_t n : {17, 20}) {
+        EXPECT_EQ(resolve_geqrf_route<std::complex<float>>(kGeqrfAuto, sq(n), false), kGeqrfCta)
+            << "cfloat n=" << n;
+    }
+    // The vendor-PRESENT route is untouched in the gaps: still the vendor.
+    EXPECT_TRUE(is_vendor(resolve_geqrf_route<std::complex<float>>(kGeqrfAuto, sq(4), true)));
+    // Rectangular A never reaches Tiny: the register array IS the matrix.
+    GeqrfShape tall = sq(8);
+    tall.m = 12;
+    EXPECT_NE(resolve_geqrf_route<float>(kGeqrfAuto, tall, false), kTiny);
+}
+
+// The vendor-free getrf walk for cfloat: Tiny wherever it fits (1.2-1.5x over the better of
+// CTA and Blocked at 25..32), CTA above -- each the measured best native tier.
+// evidence: docs/perf/lu.md#the-column-bucket
+// ARMED BREAK (R9): restore tiny_native's `n <= 8` clause in place of `tiny_fits`.
+// EXPECTED: RED at 25, 28 and 32 (the walk leaves Tiny).
+TEST(RouteGetrf, CfloatNativeWalkTakesTinyWhereverItFits) {
+    constexpr Route kTiny{Origin::Native, Algorithm::Tiny};
+    constexpr Route kCta{Origin::Native, Algorithm::CTA};
+    constexpr Route kAuto{Origin::Auto, Algorithm::Auto};
+    using CF = std::complex<float>;
+    for (int64_t n : {17, 24, 25, 28, 32}) {
+        const auto sh = getrf_shape(n, 32768, /*cta_max_n=*/128, /*tiny_max=*/32);
+        EXPECT_EQ(resolve_getrf_route<CF>(kAuto, sh, false), kTiny) << "cfloat n=" << n;
+    }
+    for (int64_t n : {25, 28, 32}) {
+        // Vendor-present Auto is unchanged: native against native only.
+        const auto sh = getrf_shape(n, 32768, 128, 32);
+        EXPECT_TRUE(is_vendor(resolve_getrf_route<CF>(kAuto, sh, true))) << "cfloat n=" << n;
+    }
+    const auto above = getrf_shape(40, 32768, 128, 32);
+    EXPECT_EQ(resolve_getrf_route<CF>(kAuto, above, false), kCta) << "cfloat n=40";
 }

@@ -77,4 +77,11 @@ BATCHLAS_INTERNAL_API Event getrs_fused_dispatch(Queue& ctx,
                                                  Span<int64_t> pivots,
                                                  Span<std::byte> workspace);
 
+// posv's CTA arm: both Cholesky solves in one kernel, same capacity and ceiling as above.
+template <typename T>
+BATCHLAS_INTERNAL_API Event potrs_fused_dispatch(Queue& ctx,
+                                                 const MatrixView<T, MatrixFormat::Dense>& A,
+                                                 const MatrixView<T, MatrixFormat::Dense>& B,
+                                                 Uplo uplo);
+
 }  // namespace batchlas::sycl_getrs

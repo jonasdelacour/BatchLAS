@@ -51,13 +51,12 @@ struct RouteTable<Op::gemm, T> {
 
             if constexpr (std::is_same_v<T, float>) {
                 if (s.m != s.n || s.n != s.k) return false;
-                // float: square NN only, max_dim <= 32.
-                // evidence: docs/perf/gemm.md#float-nn-at-max_dim-32
+                // float: square NN only, max_dim <= 48 (the 4x4-tiled small kernel).
+                // evidence: docs/perf/gemm.md#the-small-tiled-kernel
                 if (s.transA != Transpose::NoTrans || s.transB != Transpose::NoTrans) {
                     return false;
                 }
-                if (max_dim <= 32) return true;
-                return false;
+                return max_dim <= 48;
             } else if constexpr (std::is_same_v<T, double>) {
                 // double: any transpose, any size, k >= 2 (k=1 rank-1 goes to the vendor).
                 // evidence: docs/perf/gemm.md#double-the-only-fully-native-window

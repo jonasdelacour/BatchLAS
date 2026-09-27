@@ -73,8 +73,14 @@ def classify(rec: dict, op, arm_key: str) -> dict:
     effective = [rec["route"]]
     if op.composed_of:
         mine = [s for s in rec.get("subroutes", []) if s.split("=", 1)[0] in op.composed_of]
-        effective = [s.split("=", 1)[1] for s in mine] or ["unknown"]
-        rec["route"] = "+".join(mine) or "unknown"
+        if rec["route"].endswith(":blocked"):
+            # The outer `blocked` route is a pure composition: its sub-ops ARE the arm.
+            effective = [s.split("=", 1)[1] for s in mine] or ["unknown"]
+            rec["route"] = "+".join(mine) or "unknown"
+        else:
+            # A fused tier (tiny: no sub-op; cta: potrf + its own solve) is its own route.
+            effective += [s.split("=", 1)[1] for s in mine]
+            rec["route"] = "+".join([op.name + "=" + rec["route"]] + mine)
     want = "vendor" if arm_key == "vendor" else "native"
     stray = [r for r in effective if not r.startswith(want)]
     if rec["ok"] and stray:

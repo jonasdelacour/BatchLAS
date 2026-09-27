@@ -93,6 +93,18 @@ struct RouteTable<Op::geqrf, T> {
         }
     }
 
+    // Native against native, square only: tiny beats CTA at every fitting float order and
+    // cfloat outside 17..21. evidence: docs/perf/qr.md#the-native-tiny-tie-break
+    static bool tiny_native(const GeqrfShape& s) {
+        if (tiny_window(s)) return true;
+        if (s.tiny_max_n < 1 || s.m != s.n) return false;
+        const int64_t n = s.cols();
+        if (n > static_cast<int64_t>(s.tiny_max_n)) return false;
+        if constexpr (std::is_same_v<T, float>) return true;
+        if constexpr (std::is_same_v<T, std::complex<float>>) return n <= 16 || n >= 22;
+        return false;
+    }
+
     // A per-type order floor plus a tall-panel clause; both are window EDGES, not knobs.
     // evidence: docs/perf/qr.md#the-geqrf-order-floor-and-the-tall-panel-clause
     static bool preferred(Route r, const GeqrfShape& s) {
@@ -160,11 +172,11 @@ struct RouteTable<Op::geqrf, T> {
             // EXPLICIT: `default:` returns TRUE and Tiny leads the order array.
             // evidence: docs/perf/qr.md#why-the-tiny-arm-is-spelled-out
             case Algorithm::Tiny:
-                return tiny_window(s);
-            case Algorithm::CTA:   // !tiny_window keeps exactly one tier true inside it (R8b)
-                return !tiny_window(s) && s.cols() <= cta_max_cols;
+                return tiny_native(s);
+            case Algorithm::CTA:   // !tiny_native keeps exactly one tier true inside it (R8b)
+                return !tiny_native(s) && s.cols() <= cta_max_cols;
             case Algorithm::Blocked:
-                return !tiny_window(s) && s.cols() > cta_max_cols;
+                return !tiny_native(s) && s.cols() > cta_max_cols;
             default:
                 return true;
         }

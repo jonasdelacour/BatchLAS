@@ -1764,3 +1764,31 @@ once, with the stand-in. Their margins are wide — mostly above 1.4x and in pla
 contention of the size observed cannot have manufactured them, and no conclusion here rests on a
 cell that was not re-taken. They are nonetheless single-run numbers and should be refreshed the
 next time the op is touched.
+
+### The native tiny tie-break
+
+**2026-09-26.** The vendor-free walk (and benchviz's pinned `native` arm) used the
+*vs-vendor* tiny window for native-vs-native too, so in the window's gaps it fell through
+to CTA -- cfloat n = 4 plotted at 0.38x. Measured at batch 32768, `t_vendor / t_arm`:
+
+| cell | tiny | CTA | Blocked |
+|---|---:|---:|---:|
+| float 3 | **1.61** | 0.54 | 0.54 |
+| float 17 | **0.80** | 0.77 | 0.77 |
+| float 20 | **1.04** | 0.88 | 0.88 |
+| cfloat 3 | **1.10** | 0.49 | 0.48 |
+| cfloat 4 | **0.99** | 0.38 | 0.38 |
+| cfloat 9 | **1.01** | 0.50 | 0.50 |
+| cfloat 10 | **1.10** | 0.51 | 0.51 |
+| cfloat 17 | 0.55 | **0.76** | 0.77 |
+| cfloat 20 | 0.75 | **0.83** | 0.84 |
+| cfloat 22 | **0.92** | 0.91 | 0.91 |
+
+`tiny_native` therefore takes every fitting square float order and cfloat outside
+17..21; the vs-vendor window is unchanged. The float n = 64 point that looked like a
+dip is not one: CTA is the best native tier there (batch 16384: CTA 1.72x, Blocked
+0.95x) and cuSOLVER simply has a strong kernel at that order.
+
+**Still losing:** float and cfloat 17..20 (best 0.80 / 0.83), and n = 33..40 on CTA
+(float 0.78 / 0.90, cfloat 0.69 at 33). cfloat n = 4 ties; an N = 4 geqrf tiny bucket
+would need its own register probe (`GeqrfTinyRegs` has no slot for it).

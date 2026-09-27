@@ -865,6 +865,12 @@ Event posv(Queue& ctx,
     if (route.algo == dispatch::Algorithm::Tiny) {
         return sycl_posv::posv_tiny_dispatch<T>(ctx, A, B, uplo, work_space, info);
     }
+    if (route.algo == dispatch::Algorithm::CTA) {
+        // The routed potrf, then BOTH triangular solves in one kernel: two nrhs = 1 trsm
+        // launches stream L twice at a fraction of the bandwidth one fused pass gets.
+        (void)potrf<Back, T>(ctx, A, uplo, work_space, info);
+        return sycl_getrs::potrs_fused_dispatch<T>(ctx, A, B, uplo);
+    }
     if (route.algo == dispatch::Algorithm::Blocked) {
         // No split here: `trsm` takes no workspace, so potrf owns the whole span.
         (void)potrf<Back, T>(ctx, A, uplo, work_space, info);
@@ -904,8 +910,8 @@ size_t posv_buffer_size(Queue& ctx,
     if (route.algo == dispatch::Algorithm::Tiny) {
         return sycl_posv::posv_tiny_buffer_size<T>(ctx, A, B);
     }
-    if (route.algo == dispatch::Algorithm::Blocked) {
-        return potrf_buffer_size<Back, T>(ctx, A, uplo);
+    if (route.algo == dispatch::Algorithm::CTA || route.algo == dispatch::Algorithm::Blocked) {
+        return potrf_buffer_size<Back, T>(ctx, A, uplo);   // neither solve takes workspace
     }
     solve_throw_unroutable<T>(route, "posv_buffer_size");
 }

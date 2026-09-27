@@ -484,21 +484,29 @@ composed_pins(OpKind op, const std::string& arm_name) {
         if (arm_name == "vendor")
             return {{"BATCHLAS_GETRF_ROUTE", "vendor"}, {"BATCHLAS_GETRS_ROUTE", "vendor"}};
         if (arm_name == "native")
+            return {{"BATCHLAS_GETRF_ROUTE", "native"}, {"BATCHLAS_GETRS_ROUTE", "native"}};
+        if (arm_name == "composed")
             return {{"BATCHLAS_GETRF_ROUTE", "tiny"}, {"BATCHLAS_GETRS_ROUTE", "cta"}};
     }
     if (op == OpKind::posv) {
         if (arm_name == "vendor")
             return {{"BATCHLAS_POTRF_ROUTE", "vendor"}, {"BATCHLAS_TRSM_ROUTE", "vendor"}};
         if (arm_name == "native")
+            return {{"BATCHLAS_POTRF_ROUTE", "native"}, {"BATCHLAS_TRSM_ROUTE", "native"}};
+        if (arm_name == "composed")
             return {{"BATCHLAS_POTRF_ROUTE", "tiny"}, {"BATCHLAS_TRSM_ROUTE", "cta"}};
     }
     return {};
 }
 
-// For a solve op an arm named "vendor" or "native" pins the OUTER route to `blocked`
-// (the composed arm) and differs only in what the composed sub-ops take.
+// For a solve op the outer route is what separates the arms: "vendor" and "composed"
+// pin the two-launch `blocked` composition, "native" takes the SHIPPED native walk --
+// the fused tiny kernel inside its window, the composition above it. Pinning "native"
+// to `blocked` measured a composition the library never selects at n <= 32 and put
+// posv at 0.25-0.62x where the shipped fused kernel wins 1.1-6.9x.
 static std::string solve_outer_pin(const std::string& arm_name) {
-    return (arm_name == "vendor" || arm_name == "native") ? std::string("blocked") : arm_name;
+    if (arm_name == "vendor" || arm_name == "composed") return "blocked";
+    return arm_name;
 }
 
 struct ArmEnv {

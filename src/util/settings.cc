@@ -128,6 +128,7 @@ void load_selection(SelectionSettings& s) {
     s.gesvd_bidiag = raw("BATCHLAS_GESVD_BIDIAG");
     s.geqrf_leaf = raw("BATCHLAS_GEQRF_LEAF");
     s.getrf_laswp = raw("BATCHLAS_GETRF_LASWP");
+    s.getrf_right_laswp = raw("BATCHLAS_GETRF_RIGHT_LASWP");
     s.getrf_leaf = raw("BATCHLAS_GETRF_LEAF");
     s.getrs_laswp = raw("BATCHLAS_GETRS_LASWP");
     s.iluk_device = raw("BATCHLAS_ILUK_DEVICE");

@@ -209,6 +209,9 @@ struct SelectionSettings {
     // a static, value re-read per call, so a harness can swap arms mid-run.
     EnvValue getrf_laswp{};
 
+    // BATCHLAS_GETRF_RIGHT_LASWP = walk | gather; unset takes the measured crossover.
+    EnvValue getrf_right_laswp{};
+
     // BATCHLAS_GETRS_LASWP = walk | gather. Deliberately NOT latched at its call
     // site, for the same reason as gemv_segt.
     EnvValue getrs_laswp{};

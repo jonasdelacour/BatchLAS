@@ -39,6 +39,14 @@ constexpr int getrf_nb_for_type() {
     return 32;
 }
 
+// The trailing height up to which the gather beats the walk, swept at n = 1024 and 2048.
+template <typename T>
+constexpr int getrf_right_gather_max_rows() {
+    if constexpr (std::is_same_v<T, float>) return 1024;
+    if constexpr (std::is_same_v<T, std::complex<double>>) return 384;
+    return 768;
+}
+
 template <typename T>
 inline int getrf_blocked_nb(int n) {
     return std::max(1, std::min(getrf_nb_for_type<T>(), n));
@@ -61,6 +69,17 @@ inline LeftLaswp getrf_left_laswp_mode() {
     if (std::strcmp(s, "inloop") == 0) return LeftLaswp::InLoop;
     if (std::strcmp(s, "defer_walk") == 0) return LeftLaswp::DeferWalk;
     return LeftLaswp::DeferGather;
+}
+
+// The right-hand pass: gather while the trailing height is under the crossover, the
+// walk above it. Re-read per call. evidence: docs/perf/lu.md#the-right-hand-gather
+template <typename T>
+inline bool getrf_right_gather(int R) {
+    const char* s = batchlas::settings().selection.getrf_right_laswp.get();
+    if (s != nullptr && std::strcmp(s, "walk") == 0) return false;
+    if (s != nullptr && std::strcmp(s, "gather") == 0) return true;
+    if (s != nullptr && s[0] >= '0' && s[0] <= '9') return R <= std::atoi(s);   // A/B sweeps
+    return R <= getrf_right_gather_max_rows<T>();
 }
 
 // WHICH PANEL LEAF, re-read per call so one process can A/B the two. `Reg` is the
@@ -301,10 +320,17 @@ Event getrf_blocked_dispatch(Queue& ctx,
         if (n2 <= 0) break;   // the short final panel: no trailing work at all
 
         // (S-right) The same interchanges on the trailing columns, before (T) reads them.
-        (void)lu_native::lu_laswp_launch<GetrfBlockedLaswpTag, T>(
-            ctx, a_ptr + static_cast<std::ptrdiff_t>(j2) * ld, ld, stride,
-            /*ncols=*/n2, batch,
-            piv_ptr, /*piv_stride=*/n, /*k0=*/j0, /*k1=*/j2, /*forward=*/true);
+        const bool gathered = getrf_right_gather<T>(mp) &&
+            lu_native::lu_laswp_right_gather_launch<GetrfBlockedLaswpTag, T>(
+                ctx, a_ptr, ld, stride, batch, piv_ptr, /*piv_stride=*/n,
+                /*k0=*/j0, /*L=*/ib, /*R=*/mp, /*c_begin=*/j2, /*ncols=*/n2,
+                slm_budget, max_wg);
+        if (!gathered) {
+            (void)lu_native::lu_laswp_launch<GetrfBlockedLaswpTag, T>(
+                ctx, a_ptr + static_cast<std::ptrdiff_t>(j2) * ld, ld, stride,
+                /*ncols=*/n2, batch,
+                piv_ptr, /*piv_stride=*/n, /*k0=*/j0, /*k1=*/j2, /*forward=*/true);
+        }
         if (!ctx.in_order()) ctx.wait();
 
         // (T) U12 := L11 \ A12. L11 is unit lower, so the diagonal it holds (which

@@ -258,10 +258,12 @@ TYPED_TEST_SUITE(GesvTest, GesvTestTypes);
 // ARMED BREAK (R9): in gesv_tiny.cc step 6 change `tiny_select(rowid < i, upd, rB[k])`
 // to `rowid < i - 1`. EXPECTED RED at every n >= 2, residual of order 1 rather than
 // n*eps, with G2 still GREEN -- which is the point of having both.
+// ARMED BREAK (R9): skip the store of B's pivot row into the local row (step 3).
+// EXPECTED: RED here for float and cfloat.
 TYPED_TEST(GesvTest, TinySolveResidualMatchesHostReference) {
     using T = typename TestFixture::T;
     const int cap = this->cap();
-    for (int n : {1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 24, 31, 32}) {
+    for (int n : {1, 2, 3, 4, 5, 7, 8, 9, 13, 15, 16, 17, 21, 24, 26, 28, 31, 32}) {
         if (n > cap) continue;
         for (int nrhs : {1, 2, 3, 4}) {
             auto p = make_system<T>(n, nrhs, 9, 1234u + unsigned(n * 7 + nrhs));
@@ -403,8 +405,8 @@ TYPED_TEST(GesvTest, TinyRefusesShapesAboveItsCeilings) {
 }
 
 // G7. THE ROUTE, pinned to the MEASURED window and to nothing else. float takes the
-// fused tier over the whole ladder it fits; cfloat stops at 16 because n = 17 is a
-// measured LOSS (0.45-0.84x of the composed arm); double and cdouble have no window.
+// fused tier over the whole ladder it fits; cfloat stops at 16 because 17..32 beats the
+// composed arm by only 0.97-1.19x (under the 1.11x gate); double and cdouble have none.
 // The n = 64 row is the structural bracket at the top: the tier does not fit there at
 // any type, so the composed arm must answer. evidence: docs/perf/lu.md#p2-the-measured-gesv-window
 //

@@ -64,6 +64,14 @@ set_target_properties(
     PROPERTIES POSITION_INDEPENDENT_CODE ON
 )
 
+# The tiny tiers fully unroll an n x n step; above LLVM's default pragma threshold the
+# unroll is declined and rA[] leaves the register file. evidence: docs/perf/lu.md#the-column-bucket
+set_source_files_properties(
+    ${CMAKE_CURRENT_SOURCE_DIR}/extensions/getrf_tiny.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/extensions/gesv_tiny.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/extensions/posv_tiny.cc
+    PROPERTIES COMPILE_OPTIONS "-mllvm;-pragma-unroll-threshold=262144")
+
 foreach(_obj ${BATCHLAS_OBJECT_LIBS})
     if(_obj STREQUAL "batchlas_extensions_cta_obj")
         batchlas_apply_object_options(${_obj} NO_CPU_TARGETS)

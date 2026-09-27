@@ -146,6 +146,50 @@ inline void tiny_store_full(const D* rA, D* __restrict a, int ld,
     }
 }
 
+// rA[] is sized by a compile-time NC >= n, not N. evidence: docs/perf/lu.md#the-column-bucket
+constexpr int tiny_col_bucket(int n, int step) {
+    return ((n + step - 1) / step) * step;
+}
+
+// A row broadcast through local memory as 16-byte vectors, packed by value and never by a
+// `?:` over the complex aggregate. evidence: docs/perf/lu.md#the-local-memory-broadcast
+template <typename R>
+using tiny_r4 = R __attribute__((ext_vector_type(4)));
+
+template <typename D>
+inline constexpr int tiny_r4_width() {  // D elements per 16-byte vector
+    return sycl_device::dev_is_complex_v<D> ? 2 : 4;
+}
+
+// Element `e` of a vector; `e` is compile-time once the caller is unrolled.
+template <typename D, typename R>
+inline D tiny_r4_get(tiny_r4<R> x, int e) {
+    if constexpr (sycl_device::dev_is_complex_v<D>) {
+        return D{e == 0 ? x.x : x.z, e == 0 ? x.y : x.w};
+    } else {
+        return e == 0 ? x.x : e == 1 ? x.y : e == 2 ? x.z : x.w;
+    }
+}
+
+// By VALUE, never a pointer into rA[] (invariant 1); a complex vector takes a and b only.
+template <typename D, typename R>
+inline tiny_r4<R> tiny_r4_pack(D a, D b, D c, D d) {
+    if constexpr (sycl_device::dev_is_complex_v<D>) {
+        return tiny_r4<R>{a.re, a.im, b.re, b.im};
+    } else {
+        return tiny_r4<R>{a, b, c, d};
+    }
+}
+
+// Vector `v` of the row rA[0..NC). `% NC` only keeps an index in range past a row end;
+// those vector lanes are never read. A MACRO because a function would take rA's address.
+#define BATCHLAS_TINY_R4_PACK(D, R, NC, rA, v)                                              \
+    ::batchlas::tiny_native::tiny_r4_pack<D, R>(                                            \
+        rA[((v) * ::batchlas::tiny_native::tiny_r4_width<D>()) % (NC)],                     \
+        rA[((v) * ::batchlas::tiny_native::tiny_r4_width<D>() + 1) % (NC)],                 \
+        rA[((v) * ::batchlas::tiny_native::tiny_r4_width<D>() + 2) % (NC)],                 \
+        rA[((v) * ::batchlas::tiny_native::tiny_r4_width<D>() + 3) % (NC)])
+
 // The partition index UNIQUE IN THE WORK-GROUP. The `sg_id *` term is load-bearing
 // (steqr_cta.cc:82-86): part.get_group_linear_id() repeats across a work-group's
 // sub-groups, so without it half the batch is never touched. Armed in all three tiers.

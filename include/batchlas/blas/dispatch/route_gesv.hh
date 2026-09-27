@@ -75,7 +75,7 @@ struct RouteTable<Op::gesv, T> {
         }
     }
 
-    // 0 means "no measured window". evidence: docs/perf/lu.md#p2-double-and-cdouble
+    // 0 = no window; cfloat 17..32 is under the gate. evidence: docs/perf/lu.md#end-to-end-after-the-column-bucket
     static constexpr int64_t tiny_window_max_n() {
         if constexpr (std::is_same_v<T, float>) return 32;
         if constexpr (std::is_same_v<T, std::complex<float>>) return 16;

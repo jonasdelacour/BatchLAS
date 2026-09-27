@@ -6,6 +6,7 @@
 #include "gemm/register_64x64_k16_wide.hh"
 #include "gemm/register_launchers.hh"
 #include "gemm/register_wide_transposed.hh"
+#include "gemm/small_batched.hh"
 #include "gemm/split_k.hh"
 #include "gemm/tiled_general.hh"
 
@@ -172,6 +173,8 @@ inline const char* kernel_trace_name(KernelVariant variant) {
         return "gemm_sycl_register_32x128_k16_tn";
     case KernelVariant::Tiled32x128RegisterK16TT:
         return "gemm_sycl_register_32x128_k16_tt";
+    case KernelVariant::SmallBatched:
+        return "gemm_sycl_small_batched";
     }
 
     return "gemm_sycl_unknown";
@@ -281,6 +284,8 @@ inline bool kernel_variant_matches_name(KernelVariant variant, const std::string
         return name == "register32x128k16tn" || name == "reg32x128k16tn" || name == "32x128x16tn";
     case KernelVariant::Tiled32x128RegisterK16TT:
         return name == "register32x128k16tt" || name == "reg32x128k16tt" || name == "32x128x16tt";
+    case KernelVariant::SmallBatched:
+        return name == "small" || name == "smallbatched";
     }
 
     return false;
@@ -338,7 +343,8 @@ inline KernelVariant forced_kernel_variant() {
                                   KernelVariant::Tiled32x128RegisterK16WideCN,
                                   KernelVariant::Tiled32x128RegisterK16,
                                   KernelVariant::Tiled32x128RegisterK16TN,
-                                  KernelVariant::Tiled32x128RegisterK16TT}) {
+                                  KernelVariant::Tiled32x128RegisterK16TT,
+                                  KernelVariant::SmallBatched}) {
         if (kernel_variant_matches_name(variant, name)) {
             return variant;
         }
@@ -506,9 +512,18 @@ KernelVariant select_kernel_variant(const MatrixView<T, MatrixFormat::Dense>& A,
                 return KernelVariant::Tiled128x32RegisterK32TT;
             }
         }
+        if constexpr (std::is_same_v<T, float>) {
+            if (max_dim <= 32) return KernelVariant::SmallBatched;
+        }
         return max_dim <= 32 ? KernelVariant::Direct : KernelVariant::Tiled16;
     }
     if constexpr (std::is_same_v<T, float>) {
+        // 1.8-8x over Direct at batch 32768, and 2.1-3.5x over Tiled16 / 1.1x over the
+        // 32x32 register tile on the squares above. evidence: docs/perf/gemm.md#the-small-batched-kernel
+        if (max_dim <= 32) return KernelVariant::SmallBatched;
+        if (max_dim <= sycl_gemm_small::kSmallMaxDim && min_dim > 32) {
+            return KernelVariant::SmallBatched;
+        }
         // Full 128x128 output tiles with deep k go to the 64-accumulator
         // kernel. evidence: docs/perf/gemm.md#the-128x128-float-kernel
         if (m >= 128 && n >= 128 && k >= 128 && can_use_128x128_fast_path<T>(A, B, C)) {
@@ -824,6 +839,16 @@ Event gemm_custom(Queue& ctx,
                 ctx, A, B, C, alpha, beta, kernel_trace_name(variant));
         }
         return launch_tiled<T, 16>(ctx, A, B, C, alpha, beta, transA, transB);
+    case KernelVariant::SmallBatched:
+        // Forceable for any shape; it serves only what it can hold.
+        if constexpr (!is_std_complex_v<T>) {
+            if (std::max({m, n, k}) <= sycl_gemm_small::kSmallMaxDim) {
+                BATCHLAS_KERNEL_TRACE_SCOPE("gemm_sycl_small_batched");
+                return sycl_gemm_small::small_batched<T>(ctx, A, B, C, alpha, beta,
+                                                         transA, transB, m, n, k);
+            }
+        }
+        return launch_direct(ctx, A, B, C, alpha, beta, transA, transB);
     }
 
     return ctx.get_event();
