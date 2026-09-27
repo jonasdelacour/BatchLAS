@@ -817,12 +817,12 @@ namespace batchlas {
                 }
             }
 
-            // Choose between QL and QR (matches steqr.cc):
-            // - QR if |D(l)| <= |D(lend)|
-            // - QL otherwise
+            // Choose between QL and QR as LAPACK dsteqr does: QL if |D(l)| <= |D(lend)|,
+            // QR otherwise, so a graded block converges its small end first. The
+            // inverted rule took ~2x the steps and lost relative accuracy on graded input.
             const T d_first = sycl::fabs(select_from_group(partition, diag, block_begin));
             const T d_last = sycl::fabs(select_from_group(partition, diag, block_end));
-            const bool use_ql = (d_last < d_first);
+            const bool use_ql = !(d_last < d_first);
             if (use_ql) {
                 // ---------------- QL iteration: converge from the top (l grows) ----------------
                 for (int32_t l = block_begin; l <= block_end && !failed;) {
