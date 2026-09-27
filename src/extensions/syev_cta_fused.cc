@@ -407,6 +407,9 @@ inline void syev_cta_fused_impl(Queue& ctx,
                                              shift_strategy, update_scheme);
                     if (lane == 0) detail::info_store(info_dev, prob_id, failed ? 1 : 0);
 
+                    // The sweeps wrote the tile by row (lane == row); the readout
+                    // below reads it by column, i.e. other lanes' writes.
+                    group_barrier(part);
                     const int32_t dst = slot_of(diag);
                     if (lane < nn) {
                         W[static_cast<int64_t>(prob_id) * nn + dst] = diag;

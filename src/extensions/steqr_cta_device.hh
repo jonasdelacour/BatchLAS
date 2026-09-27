@@ -178,6 +178,19 @@ namespace batchlas {
         inline void chase_end(int32_t) {
             Q_local[idx] = carry;
         }
+
+        // Q := Q*J on columns [bb, be]; lane-private (own row), so no barrier.
+        inline void reverse_columns(int32_t bb, int32_t be, bool rev) {
+            if (!rev) return;
+            const int32_t pN = static_cast<int32_t>(LDQ);
+            for (int32_t a = bb, b = be; a < b; ++a, --b) {
+                const int32_t ia = base_q + lane + a * pN;
+                const int32_t ib = base_q + lane + b * pN;
+                const T qa = Q_local[ia];
+                Q_local[ia] = Q_local[ib];
+                Q_local[ib] = qa;
+            }
+        }
     };
 
     template <typename T, size_t P, size_t LDQ, typename LocalAcc>
@@ -195,6 +208,7 @@ namespace batchlas {
         template <int32_t Dir>
         inline void chase_step(T, T) {}
         inline void chase_end(int32_t) {}
+        inline void reverse_columns(int32_t, int32_t, bool) {}
     };
 
     template <typename T, typename Partition>
@@ -225,6 +239,28 @@ namespace batchlas {
                 }
             }
         }
+    }
+
+    // T := J*T*J and Q := Q*J on the block [bb, be] when `rev`, J the reversal.
+    //
+    // A QR sweep on T is exactly a QL sweep on J*T*J (shift, rotation and
+    // deflation formulas are mirror images), so a QR block is mirrored, swept
+    // by the QL chase and mirrored back. d mirrors about bb+be, e about
+    // bb+be-1; e(bb-1) (the split mark) and e(be) (zero) do not move.
+    template <size_t P, typename T, typename Partition, typename QCache>
+    inline void reverse_block(const Partition& partition,
+                              T& diag,
+                              T& offdiag,
+                              QCache& qcache,
+                              int32_t bb,
+                              int32_t be,
+                              bool rev) {
+        const int32_t lane = static_cast<int32_t>(partition.get_local_linear_id());
+        const int32_t src_d = (rev && lane >= bb && lane <= be) ? (bb + be - lane) : lane;
+        const int32_t src_e = (rev && lane >= bb && lane < be) ? (bb + be - 1 - lane) : lane;
+        diag = select_from_group(partition, diag, static_cast<uint32_t>(src_d));
+        offdiag = select_from_group(partition, offdiag, static_cast<uint32_t>(src_e));
+        qcache.reverse_columns(bb, be, rev);
     }
 
     // Butterfly (XOR-shuffle) all-reduce within the partition.
@@ -267,7 +303,6 @@ namespace batchlas {
                                      T& diag,
                                      T& offdiag,
                                      int32_t l0,
-                                     bool ql,
                                      QCache& qcache) {
         const T a = select_from_group(partition, diag, l0);
         const T b = select_from_group(partition, offdiag, l0);
@@ -285,13 +320,8 @@ namespace batchlas {
             diag = rt2;
         }
 
-        // Inline QR/QL eigenvector update:
-        // - QR: apply (cs, -sn) on columns (l0, l0+1)
-        // - QL: apply (cs,  sn) on columns (l0+1, l0)
-        const int32_t col0 = ql ? (l0 + 1) : l0;
-        const int32_t col1 = ql ? l0 : (l0 + 1);
-        const T s_eff = ql ? sn : -sn;
-        qcache.apply(col0, col1, cs, s_eff);
+        // QL eigenvector update: apply (cs, sn) on columns (l0+1, l0).
+        qcache.apply(l0 + 1, l0, cs, sn);
     }
 
     template <typename T, size_t P, typename Partition, typename QCache>
@@ -308,7 +338,8 @@ namespace batchlas {
 
         // EXP update scheme = explicit similarity update (bulge-chase), matching the logic in steqr.cc.
         // We implement QL by operating on a *virtual reversed* indexing inside [l..m] and running a QR-style
-        // bulge chase in that virtual space.
+        // bulge chase in that virtual space. This is the only chase: QR sweeps run it on a mirrored block
+        // (see reverse_block).
         const auto explicit_ql_step_exp = [&]() {
             // Preload shift inputs.
             const T p0  = select_from_group(partition, diag, l);
@@ -539,210 +570,9 @@ namespace batchlas {
         }
     }
 
-    template <typename T, size_t P, typename Partition, typename QCache>
-    inline void implicit_qr_step(const Partition& partition,
-                                 T& diag,
-                                 T& offdiag,
-                                 QCache& qcache,
-                                 int32_t n,
-                                 int32_t m,
-                                 int32_t l,
-                                 SteqrShiftStrategy shift_strategy,
-                                 SteqrUpdateScheme update_scheme) {
-        const int32_t lane = static_cast<int32_t>(partition.get_local_linear_id());
-
-        // EXP update scheme = explicit similarity update (bulge-chase), matching steqr.cc.
-        const auto explicit_qr_step_exp = [&]() {
-            // Shift from trailing 2x2 of the physical block (l-1,l).
-            const T p0  = select_from_group(partition, diag, l);
-            const T e0  = select_from_group(partition, offdiag, l - 1);
-            const T dlm1 = select_from_group(partition, diag, l - 1);
-
-            T mu = T(0);
-
-            // Partition-uniform: computed redundantly on every lane.
-            if (shift_strategy == SteqrShiftStrategy::Wilkinson) {
-                mu = wilkinson_shift(dlm1, e0, p0);
-            } else {
-                const T gg = (dlm1 - p0) / (T(2) * e0);
-                const T rr = sycl::hypot(gg, T(1));
-                mu = p0 - e0 / (gg + sycl::copysign(rr, gg));
-            }
-
-            // The chase walks physical indices upward one step at a time, so the (di, ei)
-            // pair of iteration i+1 is exactly the (dj_new, ej_new) pair produced here.
-            // Carrying them in registers halves the cross-lane shuffles in this loop.
-            T di = select_from_group(partition, diag, m);
-            T ei = select_from_group(partition, offdiag, m);
-            T e_own = T(0);
-
-            // Snapshot the tridiagonal before the chase; see the QL path for why.
-            // The chase writes lanes i and i-1 at iteration i but reads only lanes
-            // i+1 and above, so the broadcasts always want the pre-chase values.
-            // Sourcing them from immutable copies frees the compiler to hoist the
-            // SHFLs off the rotation's dependency chain.
-            const T diag_snap = diag;
-            const T offdiag_snap = offdiag;
-
-            // Seed the running (eprev, bulge) pair with the first rotation's operands so
-            // that every iteration takes the same path; see the QL chase for details.
-            T eprev = di - mu;
-            T bulge = ei;
-
-            qcache.chase_begin(m);
-
-            for (int32_t i = m; i < l; ++i) {
-                const T dj = select_from_group(partition, diag_snap, i + 1);
-
-                const bool have_ej = (i + 1) < (n - 1);
-                const T ej = have_ej ? select_from_group(partition, offdiag_snap, i + 1) : T(0);
-
-                const auto upd = [&]() {
-                    const T x = eprev;
-                    const T y = bulge;
-
-                    const auto [c1, s1, r1] = cta_lartg(x, y);
-                    const T sigma = -s1;
-
-                    // Update physical e(i-1) for i>m.
-                    const T e_im1_new = x * c1 - y * sigma;
-
-                    // Explicit similarity update for local pair (di, ei, dj) and propagation into ej.
-                    const T di_new = c1 * (c1 * di - ei * sigma) - sigma * (ei * c1 - sigma * dj);
-                    const T dj_new = c1 * (c1 * dj + ei * sigma) + sigma * (ei * c1 + sigma * di);
-                    const T ei_new = c1 * (c1 * ei + sigma * di) - sigma * (c1 * dj + sigma * ei);
-
-                    const T ej_new = c1 * ej;
-                    const T bulge_new = -ej * sigma;
-
-                    eprev = ei_new;
-                    bulge = bulge_new;
-
-                    // Return {c, sigma, di_new, dj_new, ei_new, ej_new, e_im1_new}
-                    return std::array<T, 7>{c1, sigma, di_new, dj_new, ei_new, ej_new, e_im1_new};
-                }();
-
-                const T c1 = upd[0];
-                const T sigma = upd[1];
-
-                // Only d(i) and e(i-1) survive to the next rotation; d(i+1), e(i+1)
-                // and e(i) are all recomputed by it, so they are carried in registers
-                // and flushed once after the chase.  Selects rather than branches: see
-                // the QL chase for why.
-                diag = (lane == i) ? upd[2] : diag;
-                offdiag = (i > m && lane == (i - 1)) ? upd[6] : offdiag;
-
-                // QR eigenvector update: columns (i, i+1).
-                qcache.template chase_step<1>(c1, sigma);
-
-                // Carry the values the next iteration would otherwise re-shuffle:
-                // d(i+1) and e(i+1) are exactly what was just written.
-                di = upd[3];
-                ei = upd[5];
-                e_own = upd[4];
-            }
-
-            // Flush the carried tail values (i == l-1 on the final iteration).
-            if (lane == l) {
-                diag = di;
-                if (l < (n - 1)) {
-                    offdiag = ei;
-                }
-            }
-            if (lane == (l - 1)) {
-                offdiag = e_own;
-            }
-
-            qcache.chase_end(l);
-        };
-
-        if (update_scheme == SteqrUpdateScheme::EXP) {
-            explicit_qr_step_exp();
-            return;
-        }
-
-        // Broadcast values needed for the shift (all lanes participate).
-        const T p0 = select_from_group(partition, diag, l);
-        const T e0 = select_from_group(partition, offdiag, l - 1);
-        const T dlm1 = select_from_group(partition, diag, l - 1);
-        const T dm = select_from_group(partition, diag, m);
-
-        // Partition-uniform scalar state (evaluated redundantly on every lane).
-        T g = T(0);
-        T c = T(1);
-        T s = T(1);
-        T p = T(0);
-
-        {
-            T mu = T(0);
-            if (shift_strategy == SteqrShiftStrategy::Wilkinson) {
-                mu = wilkinson_shift(dlm1, e0, p0);
-            } else {
-                const T gg = (dlm1 - p0) / (T(2) * e0);
-                const T rr = sycl::hypot(gg, T(1));
-                mu = p0 - e0 / (gg + sycl::copysign(rr, gg));
-            }
-            g = dm - mu;
-        }
-
-        qcache.chase_begin(m);
-
-        for (int32_t i = m; i < l; ++i) {
-            // Broadcast the tridiagonal entries needed for this step.
-            const T ei = select_from_group(partition, offdiag, i);
-            const T di = select_from_group(partition, diag, i);
-            const T dip1 = select_from_group(partition, diag, i + 1);
-
-            // Whether E(i-1) should be updated is a pure function of (i, m).
-            const bool do_e_upd = (i != m);
-
-            const auto [c1b, s1b, d_i_new_b, r1_out_b] = [&]() {
-                // {c1, s1, d_i_new, r1_out}
-                const T f = s * ei;
-                T rout = T(0);
-
-                const auto [c1, s1, r1] = cta_lartg(g, f);
-
-                // In the original local-memory version: E(i-1) = r1 for i != m.
-                if (do_e_upd) {
-                    rout = r1;
-                }
-
-                const T g2 = di - p;
-                const T r2 = (dip1 - g2) * s1 + T(2) * c1 * (c * ei);
-                p = s1 * r2;
-
-                const T d_i_new = g2 + p;
-                g = c1 * r2 - (c * ei);
-                c = c1;
-                s = s1;
-
-                return std::array{c1, s1, d_i_new, rout};
-            }();
-
-            // Apply D/E updates directly to registers (predicated, not branched).
-            diag = (lane == i) ? d_i_new_b : diag;
-            offdiag = (do_e_upd && lane == (i - 1)) ? r1_out_b : offdiag;
-
-            // Match previous sign convention: apply(i,i+1,c,-s).
-            qcache.template chase_step<1>(c1b, -s1b);
-        }
-
-        qcache.chase_end(l);
-
-        // Final updates: D(l) = D(l) - p, and E(l-1) = g.
-        const T d_l_new_b = p0 - p;
-        const T e_lm1_new_b = g;
-        if (lane == l) {
-            diag = d_l_new_b;
-        }
-        if (lane == (l - 1)) {
-            offdiag = e_lm1_new_b;
-        }
-    }
-
     // One problem's worth of the STEQR outer loop: split into blocks separated by
-    // zero offdiagonals, then run shifted QL/QR sweeps on each block.
+    // zero offdiagonals, then run shifted QL sweeps on each block (QR as QL on the
+    // mirrored block).
     //
     // `diag`/`offdiag` are register-resident with lane i owning d(i) and e(i);
     // `qcache` accumulates the rotations (a no-op when eigenvectors are not
@@ -820,95 +650,58 @@ namespace batchlas {
             // Choose between QL and QR as LAPACK dsteqr does: QL if |D(l)| <= |D(lend)|,
             // QR otherwise, so a graded block converges its small end first. The
             // inverted rule took ~2x the steps and lost relative accuracy on graded input.
+            // QR runs as QL on the mirrored block (reverse_block), so chunks of one
+            // warp that pick different directions share one loop nest instead of
+            // running two back to back. It is mirrored back even on failure.
             const T d_first = sycl::fabs(select_from_group(partition, diag, block_begin));
             const T d_last = sycl::fabs(select_from_group(partition, diag, block_end));
-            const bool use_ql = !(d_last < d_first);
-            if (use_ql) {
-                // ---------------- QL iteration: converge from the top (l grows) ----------------
-                for (int32_t l = block_begin; l <= block_end && !failed;) {
-                    if (l == block_end) {
-                        l += 1;
-                        continue;
-                    }
+            const bool rev = d_last < d_first;
+            reverse_block<P>(partition, diag, offdiag, qcache, block_begin, block_end, rev);
 
-                    bool advanced = false;
-                    for (int32_t sweep = 0; sweep < max_sweeps; ++sweep) {
-                        // Deflate within current active subproblem [l..lend].
-                        deflate(partition, offdiag, diag, n, l, block_end + 1, zero_threshold);
-
-                        // Find first m in [l..lend-1] such that E(m)==0; if none, m=lend.
-                        const int32_t m_candidate = (lane >= l && lane < block_end && offdiag == T(0)) ? lane : block_end;
-                        const int32_t m = partition_reduce_min<P>(partition, m_candidate);
-
-                        if (m == l) {
-                            l += 1;
-                            advanced = true;
-                            break;
-                        }
-
-                        if (m == l + 1) {
-                            solve_2x2_and_update<T, P>(partition, diag, offdiag, l, /*ql=*/true, qcache);
-                            l += 2;
-                            advanced = true;
-                            break;
-                        }
-
-                        if (sweep_budget <= 0) {
-                            failed = true;
-                            break;
-                        }
-                        sweep_budget -= 1;
-
-                        implicit_ql_step<T, P>(partition, diag, offdiag, qcache, n, l, m, cta_shift_strategy, cta_update_scheme);
-                    }
-
-                    if (!advanced) {
-                        failed = true;
-                    }
+            // QL iteration: converge from the top (l grows).
+            for (int32_t l = block_begin; l <= block_end && !failed;) {
+                if (l == block_end) {
+                    l += 1;
+                    continue;
                 }
-            } else {
-                // ---------------- QR iteration: converge from the bottom (l shrinks) ----------------
-                for (int32_t l = block_end; l >= block_begin; /* manual step */) {
-                    if (failed) break;
-                    if (l == block_begin) break;
 
-                    bool advanced = false;
-                    for (int32_t sweep = 0; sweep < max_sweeps; ++sweep) {
-                        deflate(partition, offdiag, diag, n, block_begin, l + 1, zero_threshold);
+                bool advanced = false;
+                for (int32_t sweep = 0; sweep < max_sweeps; ++sweep) {
+                    // Deflate within current active subproblem [l..lend].
+                    deflate(partition, offdiag, diag, n, l, block_end + 1, zero_threshold);
 
-                        // Find m scanning downward: look for E(i)==0 and take the largest i+1.
-                        const int32_t m_candidate =
-                            (lane >= block_begin && lane < l && offdiag == T(0)) ? (lane + 1) : block_begin;
-                        const int32_t m = partition_reduce_max<P>(partition, m_candidate);
+                    // Find first m in [l..lend-1] such that E(m)==0; if none, m=lend.
+                    const int32_t m_candidate = (lane >= l && lane < block_end && offdiag == T(0)) ? lane : block_end;
+                    const int32_t m = partition_reduce_min<P>(partition, m_candidate);
 
-                        if (m == l) {
-                            l -= 1;
-                            advanced = true;
-                            break;
-                        }
-
-                        if (m + 1 == l) {
-                            solve_2x2_and_update<T, P>(partition, diag, offdiag, l - 1, /*ql=*/false, qcache);
-                            l = (l <= 1) ? block_begin : (l - 2);
-                            advanced = true;
-                            break;
-                        }
-
-                        if (sweep_budget <= 0) {
-                            failed = true;
-                            break;
-                        }
-                        sweep_budget -= 1;
-
-                        implicit_qr_step<T, P>(partition, diag, offdiag, qcache, n, m, l, cta_shift_strategy, cta_update_scheme);
+                    if (m == l) {
+                        l += 1;
+                        advanced = true;
+                        break;
                     }
 
-                    if (!advanced) {
+                    if (m == l + 1) {
+                        solve_2x2_and_update<T, P>(partition, diag, offdiag, l, qcache);
+                        l += 2;
+                        advanced = true;
+                        break;
+                    }
+
+                    if (sweep_budget <= 0) {
                         failed = true;
                         break;
                     }
+                    sweep_budget -= 1;
+
+                    implicit_ql_step<T, P>(partition, diag, offdiag, qcache, n, l, m, cta_shift_strategy, cta_update_scheme);
+                }
+
+                if (!advanced) {
+                    failed = true;
                 }
             }
+
+            reverse_block<P>(partition, diag, offdiag, qcache, block_begin, block_end, rev);
 
             // Rescale converged block back to the original magnitude.
             if (scale != T(1)) {

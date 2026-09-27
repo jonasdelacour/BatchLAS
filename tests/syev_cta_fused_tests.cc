@@ -366,6 +366,45 @@ TYPED_TEST(SyevCtaFusedTest, SortOrderAndWgMultiplier) {
 	}
 }
 
+// A full-size batch whose items grade in alternating directions, so the steqr
+// solve inside the kernel mixes QL and QR blocks within every warp, and 4099
+// leaves a ragged final work-group. Every item is checked: the eigenvector
+// readout reads the accumulator tile across lanes after the solve.
+TYPED_TEST(SyevCtaFusedTest, MixedDirectionLargeBatch) {
+	using Scalar = typename TestFixture::ScalarType;
+	using Real = typename base_type<Scalar>::type;
+	constexpr Backend B = TestFixture::BackendType;
+
+	const int batch = 4099;
+	const Real tol = test_utils::tolerance<Scalar>() * Real(5);
+
+	for (int n : {8, 16}) {
+		SCOPED_TRACE(::testing::Message() << "n=" << n);
+		auto A0 = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/4099u + n);
+		const Real g = std::pow(Real(1e-2), Real(1) / Real(n - 1));
+		for (int b = 0; b < batch; ++b) {
+			const int kind = b % 3;  // 0: large end first, 1: small end first, 2: unscaled
+			if (kind == 2) continue;
+			for (int j = 0; j < n; ++j) {
+				for (int i = 0; i < n; ++i) {
+					const int ki = kind == 0 ? i : n - 1 - i;
+					const int kj = kind == 0 ? j : n - 1 - j;
+					A0.view()(i, j, b) *= std::pow(g, Real(ki + kj));
+				}
+			}
+		}
+		auto A = A0;
+		auto W = UnifiedVector<Real>(static_cast<std::size_t>(n) * batch);
+
+		syev_cta_fused<B, Scalar>(*this->ctx, A.view(), W.to_span(), JobType::EigenVectors, Uplo::Lower).wait();
+
+		for (int b = 0; b < batch; ++b) {
+			check_orthonormal_columns(A.view(), n, b, tol);
+			check_eigen_residual(A0.view(), A.view(), W, n, b, tol);
+		}
+	}
+}
+
 TYPED_TEST(SyevCtaFusedTest, RequiresNoWorkspace) {
 	using Scalar = typename TestFixture::ScalarType;
 	constexpr Backend B = TestFixture::BackendType;
