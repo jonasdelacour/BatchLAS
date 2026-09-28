@@ -230,7 +230,7 @@ and `syev` passes 0 to both of its CTA arms. An explicit value is still taken as
 | kernel | multiplier 2 | everything else |
 |---|---|---|
 | `steqr_cta` (`kSteqrCtaAutoWgMultiplier`) | float, `P = 8` and `P = 16` | 1 |
-| fused `syev` (`kSyevCtaFusedAutoWgMultiplier`) | real float, `P = 8` and `P = 16`; complex float with vectors, `P = 8` | 1 |
+| fused `syev` (`kSyevCtaFusedAutoWgMultiplier`) | real float, `P = 8` and `P = 16` | 1 |
 
 `syev_cta` passes the 0 on to its tridiagonal solve. Its reduction and back-transform read 0 as 1.
 
@@ -290,15 +290,22 @@ loses no more than 1% at batch 4,096-8,192.
   at 2 because no row loses and the two average 3.9%.
 - **Float `P = 4` and `P = 32`** gain under 3%, 0.7-2.9% averaged over V and N, and stay at 1.
 - **Double** loses 0.2-1.8% and stays at 1.
-- **Complex float** pays only at `P = 8` with vectors. At `P = 32` it is local-memory bound
-  and multiplier 2 costs 11%.
+- **Complex float** stays at 1. At `P = 8` with vectors the kernel sweep above read 1.061,
+  but three public-`syev` measurements at batch 16,384 did not reproduce it: 0.99 / 0.99 in
+  the close-out below, 0.988 / 0.994 against the previous step over 16 pooled rounds, and
+  0.993 on the fused benchmark. At `P = 32` it is local-memory bound and multiplier 2 costs
+  11%.
 
-## Small-n syev routing
+## Small-n syev routing (measured, not shipped)
 
 With its tuned multiplier, the fused kernel at `P = 8` now beats Jacobi on real float from
-n = 7 up. `syev_choose_small_kernel` therefore sends real float n <= 6 to Jacobi and n >= 7
-to the fused kernel. Before this change the boundary was 8 | 9. Complex float keeps the fused
-kernel for n <= 8, where it already won.
+n = 7 up. Moving the `syev_choose_small_kernel` boundary from 8 | 9 to 6 | 7 would pay the
+times below, but it did not ship. Jacobi is the accuracy-oriented kernel: its relative
+off-diagonal threshold keeps the small eigenvalues of graded SPD input to relative accuracy,
+and the fused kernel is only normwise accurate. The A/B measured time and normwise error
+(which improved, 2.4-3.3e-6 to 1.3-1.7e-6) but not relative error on graded SPD input. The
+boundary stays at 8 | 9 until that trade is measured and accepted. Complex float keeps the
+fused kernel for n <= 8, where it already won.
 
 Public `syev`, both small-n kernels forced through `BATCHLAS_SYEV_SMALL_KERNEL`, batch 65,536,
 7 interleaved rounds (5 for complex), spreads 2-8%. The ratio is Jacobi / fused, so above 1
@@ -326,9 +333,9 @@ This is the lockstep series measured against `main` before it (3df4e99):
 - the warp-legality prep;
 - the flat solver;
 - the full-warp partition at `P = 32`;
-- the tuned multiplier and the small-n routing above.
+- the tuned multiplier above.
 
-The interleaved Q tile did not ship. Every eigenvalue is bitwise identical to `main`. The
+The interleaved Q tile and the small-n routing did not ship. Every eigenvalue is bitwise identical to `main`. The
 unsorted order inside mirrored blocks differs, and eigenvectors match up to the sign and order
 of that permutation.
 
@@ -347,14 +354,14 @@ at most 3% except where noted; the n = 4 rows sit near launch overhead, with abo
 | `steqr` double n=8 / 16 / 32 | 32,768 / 16,384 | - | - | 1.85 / 1.58 / 1.00 | 1.90 / 1.92 / 1.00 | 1 (not changed) |
 | `syev` float n=12 / 16, fused | 16,384 | - | - | 1.54 / 1.59 | 1.55 / 1.59 | 1.08 / 1.07 |
 | `syev` float n=32, fused | 16,384 | - | - | 1.23 | 1.17 | 1 (not changed) |
-| `syev` complex float n=8, fused | 16,384 | - | - | 1.63 | 1.58 | 0.99 / 0.99 |
+| `syev` complex float n=8, fused | 16,384 | - | - | 1.63 | 1.58 | 1 (not changed) |
 | `syev` complex float n=16 / 32, pipeline | 16,384 | - | - | 1.18 / 1.05 | 1.16 / 1.03 | 1.01 / 1.00 |
 | `syev_cta` float n=16 (forced) | 16,384 | - | - | 1.36 | 1.34 | 1.03 / 1.02 |
 | `stedc` float n=64 (P=32 leaves) | 8,192 | - | - | 1.14 | 1.09 | 1.00 (5% spread) |
 
 The fused n = 32 row is the step before the multiplier, because the tuned table leaves
-`P = 32` at 1. On top of the table, real-float `syev` at n = 7 and 8 now runs the fused kernel.
-That is 1.11-1.58x over the Jacobi kernel it replaces (see "Small-n syev routing").
+`P = 32` at 1. The complex float n = 8 row is the step before the multiplier for the same
+reason; the multiplier-2 build measured 0.99 / 0.99 of it.
 
 Nsight Compute, `SteqrCTAKernel` float, eigenvectors, random input, batch 8,192. Batch 8,192 is
 below saturation, so these are instruction and lockstep diagnostics, not the headline times.

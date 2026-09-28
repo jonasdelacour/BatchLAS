@@ -428,9 +428,7 @@ TYPED_TEST(SyevBlockedTest, AutoEigenvectorsAtRetunedPanelWidth) {
 // and complex<double> hands n > 24 to the vendor. Neither branch was reachable
 // from Auto for complex before, so neither was covered.
 //
-// n = 6 and n = 28 sit one on each side of those two new boundaries, and n = 7
-// is the first real-float size past Jacobi (6 | 7 since the fused kernel's
-// work-group multiplier). The sizes
+// n = 6 and n = 28 sit one on each side of those two new boundaries. The sizes
 // are driven through the public `syev` so that syev_dispatch's buffer-size query
 // and its solve both run syev_choose_small_kernel -- that selector reads its env
 // override fresh on every call and is documented as having to agree between the
@@ -439,7 +437,7 @@ TYPED_TEST(SyevBlockedTest, AutoEigenvectorsSmallNKernelBoundaries) {
 	using Scalar = typename TestFixture::ScalarType;
 	using Real = typename base_type<Scalar>::type;
 
-	for (const int n : {6, 7, 28}) {
+	for (const int n : {6, 28}) {
 		const int batch = 1;
 
 		Matrix<Scalar, MatrixFormat::Dense> A0 =

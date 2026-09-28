@@ -32,16 +32,13 @@ template <typename T, size_t P, bool ComputeVectors>
 class SyevCtaFusedKernel;
 
 // Multiplier used when the caller passes 0 (the default): two warps per work-group
-// clear the one-warp per-SM block limit. It pays for real float at P == 8 and 16 and
-// for complex float with vectors at P == 8; P == 32 loses on graded input, and
-// double gains nothing. Tuned on sm_89 only.
+// clear the one-warp per-SM block limit. It pays for real float at P == 8 and 16.
+// P == 32 loses on graded input, complex float at P == 8 loses about 1% through
+// syev, and double gains nothing. Tuned on sm_89 only.
 // evidence: docs/perf/steqr.md#work-group-multiplier
 template <typename T, size_t P, bool ComputeVectors>
 inline constexpr int32_t kSyevCtaFusedAutoWgMultiplier =
-    ((std::is_same_v<T, float> && (P == 8 || P == 16)) ||
-     (std::is_same_v<T, std::complex<float>> && P == 8 && ComputeVectors))
-        ? 2
-        : 1;
+    (std::is_same_v<T, float> && (P == 8 || P == 16)) ? 2 : 1;
 
 // ---------------------------------------------------------------------------
 // Monolithic (fused) CTA symmetric/Hermitian eigensolver.

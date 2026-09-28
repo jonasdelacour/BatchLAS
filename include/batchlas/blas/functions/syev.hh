@@ -256,9 +256,7 @@ inline SyevSmallKernel syev_choose_small_kernel(const MatrixView<T, MatrixFormat
         if constexpr (is_double) {
             return SyevSmallKernel::Jacobi;
         } else {
-            // The fused kernel wins from n = 7 at saturation; n = 6 is mixed.
-            // evidence: docs/perf/steqr.md#small-n-syev-routing
-            return A.rows() <= 6 ? SyevSmallKernel::Jacobi
+            return A.rows() <= 8 ? SyevSmallKernel::Jacobi
                                  : SyevSmallKernel::CtaFused;
         }
     }
