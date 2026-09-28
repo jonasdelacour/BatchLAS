@@ -176,3 +176,42 @@ scaled items.
 - **The lockstep solver on NVPTX** (every phase voted, the padded chase), in one round:
   float n=4 0.69x, n=8 0.81x, n=12 0.78x, n=16 0.78x. Step 3 measured it at 1.2-1.25x slower
   in float too.
+
+## Interleaved Q tile (measured negative)
+
+`steqr_cta` gives each chunk a private `P x P` Q tile in shared memory, `LDQ = P`, at
+`part_id * P * P`. Lanes index it only by row, so a chunk alone never has a bank conflict. The
+chunks of one warp do: their tiles start `P * P` words apart, a multiple of 32 at `P >= 8`, so
+chunks touching columns that are equal mod `32/P` hit the same banks. That is up to 4-way at
+`P = 4` and `P = 8`, and 2-way at `P = 16`. Interleaving the chunks (`LDQ = 32`, chunk `k` at
+`sg_id * 32 * P + k * P`) makes the bank the warp lane for any column. It is a pure address
+change: the dump harness matched step 4 bitwise on 1,160 cases, including work-group
+multiplier 4, and the tests passed. It removes the conflicts and buys nothing, so it did not
+ship.
+
+Nsight Compute, kernel alone, eigenvectors on, batch 8,192, one launch per layout. `P = 32`
+has the same layout either way:
+
+| case | shared ld / st conflicts, `LDQ = P` | `LDQ = 32` | kernel time `LDQ = P` / `LDQ = 32` (us) |
+|---|---|---|---|
+| float n=4 (P=4) | 84,920 / 84,920 | 0 / 0 | 11.0 / 10.9 |
+| float n=8 (P=8) | 513,210 / 513,215 | 0 / 0 | 35.0 / 34.6 |
+| float n=12 (P=16) | 719,513 / 732,532 | 3,049 / 1,278 | 98.9 / 100.4 |
+| float n=16 (P=16) | 1,224,216 / 1,172,533 | 6,906 / 1,601 | 156.8 / 160.7 |
+| double n=8 (P=8) | 407,092 / 386,283 | 0 / 0 | 693.5 / 693.6 |
+| float n=32 (P=32) | 25,580 / 16,788 | 25,656 / 16,705 | 776.3 / 779.6 |
+
+Library A/B through the public `steqr`, `stedc` and `syev` calls, step 4 against the
+interleaved build, eigenvectors on, 5 interleaved rounds and a 7-round recheck of float
+`P <= 16`, all eigenvalues bitwise equal:
+
+- float n=4 and n=8, random and graded: 0.988-1.005x. One graded n=8 round read 1.037x at a
+  5.5% spread; the recheck gave 0.997x.
+- float n=12 and n=16: 0.978-1.002x. Double n=8, n=16 and n=32: 0.996-1.001x.
+- The `P = 32`, complex `syev` pipeline and `stedc` n=64 rows are within their noise.
+
+The conflicts cost nothing measurable because the kernel is latency-bound. Each rotation does
+one shared load and one store per lane among about 80 instructions, and a replayed wavefront
+is hidden behind the rotation's dependent arithmetic chain. Halving the shared wavefronts at
+n=16 moved time by less than the run-to-run spread. The plan's gate was at least 2% at
+`P = 4` or `P = 8` with no regression, and it was not met.
