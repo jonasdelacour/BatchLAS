@@ -20,6 +20,7 @@
 #include <limits>
 #include <numeric>
 #include <stdexcept>
+#include <type_traits>
 
 using namespace sycl::ext::oneapi;
 
@@ -29,6 +30,18 @@ namespace batchlas {
 // depend on internal-linkage entities.
 template <typename T, size_t P, bool ComputeVectors>
 class SyevCtaFusedKernel;
+
+// Multiplier used when the caller passes 0 (the default): two warps per work-group
+// clear the one-warp per-SM block limit. It pays for real float at P == 8 and 16 and
+// for complex float with vectors at P == 8; P == 32 loses on graded input, and
+// double gains nothing. Tuned on sm_89 only.
+// evidence: docs/perf/steqr.md#work-group-multiplier
+template <typename T, size_t P, bool ComputeVectors>
+inline constexpr int32_t kSyevCtaFusedAutoWgMultiplier =
+    ((std::is_same_v<T, float> && (P == 8 || P == 16)) ||
+     (std::is_same_v<T, std::complex<float>> && P == 8 && ComputeVectors))
+        ? 2
+        : 1;
 
 // ---------------------------------------------------------------------------
 // Monolithic (fused) CTA symmetric/Hermitian eigensolver.
@@ -134,8 +147,11 @@ inline void syev_cta_fused_impl(Queue& ctx,
         constexpr std::size_t kQTileElems = static_cast<std::size_t>(LDQ) * P;
 
         const int32_t base_wg_size = std::lcm<int32_t>(static_cast<int32_t>(P), sg_size);
-        int32_t wg_size_multiplier = std::max<int32_t>(int32_t(1),
-                                                       static_cast<int32_t>(cta_wg_size_multiplier));
+        // 0 asks for the tuned value; any explicit value is taken as given.
+        int32_t wg_size_multiplier = cta_wg_size_multiplier == 0
+                                         ? kSyevCtaFusedAutoWgMultiplier<T, P, ComputeVectors>
+                                         : std::max<int32_t>(int32_t(1),
+                                                             static_cast<int32_t>(cta_wg_size_multiplier));
         int32_t wg_size = base_wg_size * wg_size_multiplier;
 
         const int32_t max_wg_size = static_cast<int32_t>(dev.get_info<sycl::info::device::max_work_group_size>());

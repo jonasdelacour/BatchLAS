@@ -17,6 +17,7 @@
 #include "info_span.hh"
 #include <array>
 #include <numeric>
+#include <type_traits>
 #include <batchlas/settings.hh>
 #include <batchlas/error.hh>
 
@@ -24,6 +25,13 @@ namespace batchlas {
 
     template <typename T, size_t P, bool ComputeVecs>
     class SteqrCTAKernel;
+
+    // Multiplier for a caller's 0 (the default): two-warp groups clear the per-SM block
+    // limit that caps one-warp groups below the float register limit. Tuned on sm_89.
+    // evidence: docs/perf/steqr.md#work-group-multiplier
+    template <typename T, size_t P>
+    inline constexpr int32_t kSteqrCtaAutoWgMultiplier =
+        (std::is_same_v<T, float> && (P == 8 || P == 16)) ? 2 : 1;
 
     template <typename T, size_t P, bool ComputeVecs>
     inline void steqr_cta_impl(Queue& ctx,
@@ -55,7 +63,9 @@ namespace batchlas {
             // Baseline work-group size is LCM(P, sg_size), so we can form fixed-size partitions of size P.
             // Allow scaling it at runtime to tune the number of sub-groups per work-group.
             const int32_t base_wg_size = std::lcm<int32_t>(static_cast<int32_t>(P), static_cast<int32_t>(sg_size));
-            int32_t wg_size_multiplier = std::max<int32_t>(int32_t(1), cta_wg_size_multiplier);
+            int32_t wg_size_multiplier = cta_wg_size_multiplier == 0
+                                             ? kSteqrCtaAutoWgMultiplier<T, P>
+                                             : std::max<int32_t>(int32_t(1), cta_wg_size_multiplier);
             int32_t wg_size = base_wg_size * wg_size_multiplier;
 
             const int32_t max_wg_size = static_cast<int32_t>(dev.get_info<sycl::info::device::max_work_group_size>());

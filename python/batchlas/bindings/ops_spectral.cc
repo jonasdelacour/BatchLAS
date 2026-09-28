@@ -604,7 +604,7 @@ void init_spectral_ops(py::module_& module) {
                     const auto params = parse_steqr_params<scalar_type>(options);
                     batchlas::syev_cta<B, scalar_type>(
                         queue, out.view(), values.data(), jobz, uplo, workspace, params,
-                        py_scalar_or_default<std::size_t>(options, "cta_wg_size_multiplier", 1));
+                        py_scalar_or_default<std::size_t>(options, "cta_wg_size_multiplier", 0));
                 });
             queue.wait();
             if (compute_vectors) {

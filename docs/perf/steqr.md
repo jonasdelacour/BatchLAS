@@ -215,3 +215,163 @@ one shared load and one store per lane among about 80 instructions, and a replay
 is hidden behind the rotation's dependent arithmetic chain. Halving the shared wavefronts at
 n=16 moved time by less than the run-to-run spread. The plan's gate was at least 2% at
 `P = 4` or `P = 8` with no regression, and it was not met.
+
+## Work-group multiplier
+
+`cta_wg_size_multiplier` sets how many warps share a work-group. At 1 every work-group is one
+warp. sm_89 runs at most 24 work-groups per SM, so one-warp groups stop at 24 of the 48 warp
+slots. Float `steqr_cta` needs 55-68 registers, which leaves room for 28-32 warps. With two
+warps per group the kernel reaches that register limit. The multiplier changes only the launch
+shape, never the arithmetic: the dump harness matched multiplier 1 byte for byte at 0, 2 and 4.
+
+A caller's 0 now means "tuned". It is the default in `SteqrParams` and in `syev_cta_fused`,
+and `syev` passes 0 to both of its CTA arms. An explicit value is still taken as given:
+
+| kernel | multiplier 2 | everything else |
+|---|---|---|
+| `steqr_cta` (`kSteqrCtaAutoWgMultiplier`) | float, `P = 8` and `P = 16` | 1 |
+| fused `syev` (`kSyevCtaFusedAutoWgMultiplier`) | real float, `P = 8` and `P = 16`; complex float with vectors, `P = 8` | 1 |
+
+`syev_cta` passes the 0 on to its tridiagonal solve. Its reduction and back-transform read 0 as 1.
+
+Nsight Compute, one launch per multiplier, random input:
+
+| case | regs | multiplier 1: limit, theoretical / achieved occupancy | multiplier 2: limit, theoretical / achieved | kernel time 1 / 2 (us) |
+|---|---|---|---|---|
+| `steqr` float n=4 V (P=4) | 68 | blocks, 50 / 43% | registers, 58 / 48% | 38.7 / 39.5 |
+| `steqr` float n=8 V (P=8) | 68 | blocks, 50 / 46% | registers, 58 / 52% | 197.9 / 193.2 |
+| `steqr` float n=8 N | 64 | blocks, 50 / 46% | registers, 67 / 58% | 173.1 / 162.6 |
+| `steqr` float n=16 V (P=16) | 60 | blocks, 50 / 47% | registers, 67 / 60% | 501.2 / 485.8 |
+| `steqr` float n=16 N | 55 | blocks, 50 / 46% | blocks, 75 / 66% | 457.2 / 428.3 |
+| `steqr` float n=32 V (P=32) | 67 | shared memory, 42 / 39% | shared memory, 46 / 42% | 1410.9 / 1396.9 |
+| `steqr` double n=8 / n=16 V | 90 | registers, 42 / 39% | registers, 42 / 39% | 5264 / 5275, 18165 / 18155 |
+| fused float n=16 V | 63 | blocks, 50 / 47% | registers, 67 / 60% | 704.2 / 660.4 |
+| fused complex float n=8 V | 80 | shared memory, 44 / 41% | 50 / 46% | 463.1 / 437.3 |
+
+Batch 65,536 for n <= 8, 32,768 for n = 12 and 16, 16,384 for n = 32. Double is register-bound
+at 20 warps whatever the group size. At `P = 32` the Q tile plus the per-block shared-memory
+reservation binds first. At n = 4, the added warps buy no time.
+
+Through the library, wall clock of `steqr_cta` (`sort = false`) and `syev_cta_fused`, 5-8
+interleaved rounds in one process, ratio = multiplier 1 / multiplier 2, spreads at most 2.5%
+unless noted:
+
+| case | saturated batch | batch 4,096-8,192 |
+|---|---|---|
+| `steqr` float n=3 / n=4 V (P=4) | 0.993 / 0.993-0.995 | 1.009 (n=4) |
+| `steqr` float n=4 N | 1.039-1.045 (spread up to 7%) | 0.998 (11% spread) |
+| `steqr` float n=6 / n=8 V (P=8) | 1.025 / 1.023 | 0.998-0.999 (n=8) |
+| `steqr` float n=8 N | 1.052-1.056 | 1.000 |
+| `steqr` float n=12 V / N (P=16) | 1.042 / 1.063 | 0.994 (4,096), 1.100 (8,192) |
+| `steqr` float n=16 V / N | 1.033 / 1.061 | 1.009 (4,096), 1.085 / 1.124 (8,192) |
+| `steqr` float n=24 V / N (P=32) | 1.012 / 1.029 | - |
+| `steqr` float n=32 V / N | 1.010-1.013 / 1.024-1.025 | 1.007-1.016 / 1.046 |
+| `steqr` double n=4, 8, 12, 16, 32 V; n=8, 16 N | 0.995-0.999 | - |
+| fused real float n=4 V (P=4) | 0.992 | - |
+| fused real float n=8 / 12 / 16 / 24 / 32 V | 1.050 / 1.084 / 1.063 / 1.046 / 1.045 | 1.005-1.008 (n=8), 1.144 (n=12), 0.996-1.125 (n=16), 0.990-1.009 (n=32) |
+| fused real float n=12 / 16 N | 1.095 / 1.080 | - |
+| fused complex float n=4 / 8 V | 1.003 / 1.061 | 0.984-0.999 |
+| fused complex float n=8 N | 0.993 | - |
+| fused complex float n=16 / 32 V | 1.019 / 0.891 | - |
+| fused double n=8 / 16 / 32, complex double n=8 / 16 | 0.991-1.010 | - |
+
+Multiplier 4 was never better than 2 by more than noise, and it lost up to 28% where local
+memory binds, at complex float n=32.
+
+How the table was decided. The rule was: take 2 where it gains at least 3% at saturation and
+loses no more than 1% at batch 4,096-8,192.
+
+- **Float `P = 16`, and the real-float fused kernel at `P = 8` and `P = 16`,** pass on every
+  row, random and graded.
+- **The real-float fused kernel at `P = 32`** gains on random input (1.045 in the sweep,
+  1.045 through `syev` at n=32) but loses on graded input: `syev` float n=32 graded went from
+  1705 to 1744 us (0.978, 5 rounds, spreads under 2%). It stays at 1.
+- **Float `P = 8`** passes on eigenvalues only (5.5%). With vectors it gains 2.3%. It is kept
+  at 2 because no row loses and the two average 3.9%.
+- **Float `P = 4` and `P = 32`** gain under 3%, 0.7-2.9% averaged over V and N, and stay at 1.
+- **Double** loses 0.2-1.8% and stays at 1.
+- **Complex float** pays only at `P = 8` with vectors. At `P = 32` it is local-memory bound
+  and multiplier 2 costs 11%.
+
+## Small-n syev routing
+
+With its tuned multiplier, the fused kernel at `P = 8` now beats Jacobi on real float from
+n = 7 up. `syev_choose_small_kernel` therefore sends real float n <= 6 to Jacobi and n >= 7
+to the fused kernel. Before this change the boundary was 8 | 9. Complex float keeps the fused
+kernel for n <= 8, where it already won.
+
+Public `syev`, both small-n kernels forced through `BATCHLAS_SYEV_SMALL_KERNEL`, batch 65,536,
+7 interleaved rounds (5 for complex), spreads 2-8%. The ratio is Jacobi / fused, so above 1
+the fused kernel is faster:
+
+| case | random V | graded V | random N | graded N |
+|---|---|---|---|---|
+| real float n=5 | 1.077 | - | 1.164 | 1.289 |
+| real float n=6 | 0.962-0.974 | 1.154 | 0.991 | 1.241 |
+| real float n=7 | 1.148-1.169 | 1.477 | 1.203 | 1.578 |
+| real float n=8 | 1.132-1.153 | 1.546 | 1.111 | 1.526 |
+| real float n=7 / n=8, batch 16,384 | 1.136 / 1.070 | 1.420 / 1.408 | - | - |
+| complex float n=3 / 4 / 5 / 6 / 7 / 8 | 1.08 / 1.04 / 1.80 / 1.86 / 2.21 / 2.25 | - | - | - |
+
+- **n = 5** also favours the fused kernel. It stays on Jacobi because n = 6, random input with
+  vectors, loses 3-4%, and a boundary that flips twice would route on noise.
+- **Below saturation** (n = 8, batch 8,192) the two are within noise: 0.97 at a 13% spread.
+- **complex float n = 2** is faster on Jacobi (0.62). It is launch-bound, at 19-31 us with
+  13-15% spreads, and was left alone.
+
+## Cumulative result
+
+This is the lockstep series measured against `main` before it (3df4e99):
+- direction unification by per-block mirroring;
+- the warp-legality prep;
+- the flat solver;
+- the full-warp partition at `P = 32`;
+- the tuned multiplier and the small-n routing above.
+
+The interleaved Q tile did not ship. Every eigenvalue is bitwise identical to `main`. The
+unsorted order inside mirrored blocks differs, and eigenvectors match up to the sign and order
+of that permutation.
+
+Public API, library defaults, 3 interleaved rounds, medians, ratio = `main` / final, so above
+1 the final build is faster. The last column is this section's multiplier alone. Spreads are
+at most 3% except where noted; the n = 4 rows sit near launch overhead, with about 5% noise:
+
+| case | batch | random N | graded N | random V | graded V | multiplier alone (V, random / graded) |
+|---|---|---|---|---|---|---|
+| `steqr` float n=4 (P=4) | 32,768 | 1.17 | 1.12 | 1.14 | 0.99 (14-18%) | 1 (not changed) |
+| `steqr` float n=8 (P=8) | 32,768 | 1.50 | 1.36 | 1.35 | 1.27 | 1.07 / 1.00 |
+| `steqr` float n=12 (P=16) | 16,384 | 1.50 | 1.56 | 1.46 | 1.49 | 1.04 / 1.04 |
+| `steqr` float n=16 (P=16) | 16,384 | 1.59 | 1.67 | 1.50 | 1.51 | 1.04 / 1.01 |
+| `steqr` float n=24 (P=32) | 16,384 | 1.16 | 1.14 | 1.20 | 1.16 | 1 (not changed) |
+| `steqr` float n=32 (P=32) | 16,384 | 1.17 | 1.15 | 1.18 | 1.15 | 1 (not changed) |
+| `steqr` double n=8 / 16 / 32 | 32,768 / 16,384 | - | - | 1.85 / 1.58 / 1.00 | 1.90 / 1.92 / 1.00 | 1 (not changed) |
+| `syev` float n=12 / 16, fused | 16,384 | - | - | 1.54 / 1.59 | 1.55 / 1.59 | 1.08 / 1.07 |
+| `syev` float n=32, fused | 16,384 | - | - | 1.23 | 1.17 | 1 (not changed) |
+| `syev` complex float n=8, fused | 16,384 | - | - | 1.63 | 1.58 | 0.99 / 0.99 |
+| `syev` complex float n=16 / 32, pipeline | 16,384 | - | - | 1.18 / 1.05 | 1.16 / 1.03 | 1.01 / 1.00 |
+| `syev_cta` float n=16 (forced) | 16,384 | - | - | 1.36 | 1.34 | 1.03 / 1.02 |
+| `stedc` float n=64 (P=32 leaves) | 8,192 | - | - | 1.14 | 1.09 | 1.00 (5% spread) |
+
+The fused n = 32 row is the step before the multiplier, because the tuned table leaves
+`P = 32` at 1. On top of the table, real-float `syev` at n = 7 and 8 now runs the fused kernel.
+That is 1.11-1.58x over the Jacobi kernel it replaces (see "Small-n syev routing").
+
+Nsight Compute, `SteqrCTAKernel` float, eigenvectors, random input, batch 8,192. Batch 8,192 is
+below saturation, so these are instruction and lockstep diagnostics, not the headline times.
+"share" is k times the one-problem instruction count over the warp's count at full batch, out
+of k = 32/P, so k means perfect lockstep. "F / ideal" is the warp's count over the expected
+cost of its slowest chunk:
+
+| n (P) | warp instructions: `main` → direction → flat | share: `main` → direction → flat | F / ideal: `main` → direction → flat | kernel time (us): `main` → direction → flat |
+|---|---|---|---|---|
+| 4 (4) | 5504 → 3413 → 3252 | 3.56 → 6.10 → 6.48 of 8 | 1.97 → 1.15 → 1.10 | 18.8 → 12.9 → 11.7 |
+| 8 (8) | 16856 → 10795 → 10179 | 1.92 → 3.11 → 3.25 of 4 | 1.89 → 1.16 → 1.12 | 57.1 → 38.7 → 34.7 |
+| 16 (16) | 42647 → 33006 → 27406 | 1.27 → 1.70 → 1.94 of 2 | 1.52 → 1.14 → 1.00 | 288.3 → 193.2 → 161.2 |
+
+At n = 4 and n = 8, the flat column shows the warp-legality prep: those sizes run the nested
+solver. At n = 32 the full-warp partition cut instructions by 6.1% and kernel time by 1.095x.
+
+Most of the gain is direction unification. Before it, chunks that picked QL and chunks that
+picked QR ran two disjoint loop nests back to back. What is left at P <= 8 is ordinary
+trip-count divergence, 10-12% over the ideal. The flat solver closes it at `P = 16` and cannot
+pay for itself at `P = 4`.
