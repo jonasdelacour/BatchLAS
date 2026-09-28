@@ -50,15 +50,11 @@ def _shape(r) -> str:
 
 def _analysis(camp: Campaign) -> dict:
     """Pairing and per-op statistics, recomputed only when results.jsonl changes."""
-    try:
-        st = camp.results.stat()
-        key = (str(camp.dir), st.st_size, st.st_mtime)
-    except FileNotFoundError:
-        key = (str(camp.dir), 0, 0)
+    key = camp.data_key()
     if _cache.get("key") == key:
         return _cache["val"]
     import numpy as np
-    from plots import paired, saturated
+    from plots import paired, saturated, throughput, throughput_label
 
     rows = camp.rows()
     latest: dict = {}
@@ -67,13 +63,13 @@ def _analysis(camp: Campaign) -> dict:
     w = paired(rows)
     sat = saturated(w) if not w.empty else w
     cfg = camp.config
-    try:
-        planned = plan_cells(cfg["ops"], cfg["types"], Grid.from_config(cfg))
+    try:  # a comparison plans nothing: its cells are whatever both sources measured
+        planned = [] if cfg.get("kind") == "compare" else plan_cells(cfg["ops"], cfg["types"], Grid.from_config(cfg))
     except Exception:
         planned = []
     per_op: dict = {}
     for c in planned:
-        per_op.setdefault(c.op, {"planned": 0})["planned"] += 2
+        per_op.setdefault(c.op, {"planned": 0})["planned"] += len(OPS[c.op].arms)
     for r in latest.values():
         o = per_op.setdefault(r["op"], {"planned": 0})
         o["ok" if r.get("ok") else "failed"] = o.get("ok" if r.get("ok") else "failed", 0) + 1
@@ -88,18 +84,26 @@ def _analysis(camp: Campaign) -> dict:
             dt = d[d.dtype == t] if not d.empty else d
             if dt.empty:
                 continue
-            sp = dt.speedup.astype(float).to_numpy()
-            o["prec"][t] = {"geomean": float(np.exp(np.log(sp).mean())), "min": float(sp.min()),
-                            "max": float(sp.max()), "wins": int((sp > 1).sum()), "n": int(sp.size)}
-        if not d.empty:
-            o["geomean"] = float(np.exp(np.log(d.speedup.astype(float)).mean()))
+            sp = dt.speedup.astype(float).dropna().to_numpy()
+            if sp.size:
+                o["prec"][t] = {"geomean": float(np.exp(np.log(sp).mean())), "min": float(sp.min()),
+                                "max": float(sp.max()), "wins": int((sp > 1).sum()), "n": int(sp.size)}
+            elif op in OPS:  # no reference arm: the best saturated throughput, and where
+                y = throughput(op, t, dt.m, dt.n, dt.nrhs, dt.batch, dt.time_ms_batchlas.astype(float))
+                i = int(np.nanargmax(y))
+                o["prec"][t] = {"peak": float(y[i]), "at_n": int(dt.n.iloc[i]), "n": int(len(y)),
+                                "unit": throughput_label(op).split("[")[1].rstrip("]")}
+        sp = d.speedup.astype(float).dropna() if not d.empty else []
+        if len(sp):
+            o["geomean"] = float(np.exp(np.log(sp).mean()))
     failures = [{k: r.get(k) for k in ("op", "dtype", "n", "batch", "arm", "reason", "t")} | {"shape": _shape(r)}
                 for r in latest.values() if not r.get("ok")]
     failures.sort(key=lambda r: r.get("t") or 0)
     speed = {}
     if not w.empty:
         for r in w.itertuples():
-            speed[(r.op, r.dtype, r.m, r.n, r.nrhs, r.batch)] = float(r.speedup)
+            if r.speedup == r.speedup:  # NaN for a single-arm op, and not valid JSON
+                speed[(r.op, r.dtype, r.m, r.n, r.nrhs, r.batch)] = float(r.speedup)
     activity = []
     for r in rows[-14:][::-1]:
         activity.append({k: r.get(k) for k in ("op", "dtype", "n", "batch", "arm", "time_ms", "ok", "reason", "route", "t")}
@@ -110,8 +114,27 @@ def _analysis(camp: Campaign) -> dict:
     val = {"per_op": per_op, "failures": failures[-300:], "activity": activity, "rate_per_min": rate,
            "mean_wall": sum(walls) / len(walls) if walls else None, "rows": len(rows),
            "planned": sum(o["planned"] for o in per_op.values()), "paired": w}
+    if cfg.get("kind") == "compare":
+        import compare
+        val["control"] = compare.control(camp)
     _cache.update(key=key, val=val)
     return val
+
+
+_replotting: dict = {}  # comparison -> (data key, Popen)
+
+
+def _replot_compare(camp: Campaign) -> None:
+    """A comparison has no runner to replot it: re-render when a source gains rows."""
+    key = camp.data_key()
+    with _lock:
+        was = _replotting.get(camp.name)
+        if was and (was[0] == key or was[1].poll() is None):
+            return
+        cmd = [sys.executable, str(HERE), "plot", camp.name, "--root", str(camp.root)]
+        p = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        _replotting[camp.name] = (key, p)
+        _bg.append(p)
 
 
 def snapshot(root: Path, name: str) -> dict:
@@ -142,7 +165,11 @@ def snapshot(root: Path, name: str) -> dict:
     eta = None
     if st.get("state") == "running" and an["mean_wall"] and st.get("total"):
         eta = (st["total"] - st.get("done", 0)) * an["mean_wall"]
-    return {
+    extra = {}
+    if cfg.get("kind") == "compare":
+        extra = {"kind": "compare", "base": cfg.get("base"), "new": cfg.get("new"), "control": an.get("control")}
+        _replot_compare(camp)
+    return {**extra,
         "campaign": name, "config": {**{k: cfg.get(k) for k in ("ops", "types", "preset", "backend", "gpu", "gpus")},
                                      "grid": Grid.from_config(cfg).to_dict()},
         "provenance": cfg.get("provenance", {}), "status": st, "eta_s": eta,
@@ -185,7 +212,8 @@ def plan_estimate(b: dict, mean_wall: float) -> dict:
     # cells. The rectangular ones are counted, not drawn: they have no single n.
     sq = [c for c in cells if OPS[c.op].is_square(c.m, c.n, c.nrhs)]
     marks = sorted({(c.n, c.batch) for c in sq})
-    return {"cells": len(cells), "arm_cells": 2 * len(cells), "seconds": 2 * len(cells) * mean_wall,
+    arm_cells = sum(len(OPS[c.op].arms) for c in cells)
+    return {"cells": len(cells), "arm_cells": arm_cells, "seconds": arm_cells * mean_wall,
             "orders": sorted({c.n for c in sq}), "batches": sorted({c.batch for c in sq}),
             "marks": marks, "rect_cells": len(cells) - len(sq), "grid": grid.to_dict()}
 
@@ -246,7 +274,7 @@ class Handler(BaseHTTPRequestHandler):
                 "gpus": __import__("runner").detect_gpus(),
                 "ops": [{"name": k, "title": v.title, "types": list(v.types), "notes": v.notes, "group": v.group, "vendor": list(v.vendor),
                          "orders": list(v.orders), "min_order": v.min_order, "max_order": v.max_order,
-                         "plane": {"x": v.plane.x, "y": v.plane.y} if v.plane else None}
+                         "plane": {"x": v.plane.x, "y": v.plane.y} if v.plane else None, "arms": len(v.arms)}
                         for k, v in OPS.items()],
                 "types": [{"name": t, "label": TYPE_LABEL[t]} for t in TYPES],
                 "presets": {k: v.to_dict() for k, v in PRESETS.items()},
@@ -333,6 +361,8 @@ class Handler(BaseHTTPRequestHandler):
             if not alive and st.get("state") == "running":
                 camp.set_status("stopped")
             return self._json({"ok": True})
+        if u.path == "/api/compare":
+            return self._compare(b)
         if u.path == "/api/replot":
             name = b.get("campaign", "")
             if name not in list_campaigns(self.root):
@@ -343,6 +373,17 @@ class Handler(BaseHTTPRequestHandler):
                                             start_new_session=True))
             return self._json({"ok": True})
         self._json({"error": "unknown endpoint"}, 404)
+
+    def _compare(self, b: dict):
+        import compare
+        base, new = b.get("base", ""), b.get("new", "")
+        name = "".join(ch for ch in str(b.get("name") or f"cmp-{base}-vs-{new}") if ch.isalnum() or ch in "-_.")
+        try:
+            camp = compare.create(self.root, name, base, new)
+        except ValueError as e:
+            return self._json({"error": str(e)}, 400)
+        _replot_compare(camp)
+        return self._json({"ok": True, "campaign": name})
 
     def _run(self, b: dict):
         ops = [o for o in b.get("ops", []) if o in OPS]

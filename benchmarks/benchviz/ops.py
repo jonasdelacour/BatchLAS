@@ -61,6 +61,10 @@ def flops_spmm(m, n, k, t): return _flops(2.0 * n * SPMM_NNZ_ROW * _k(k, SPMM_NR
 def flops_ormqr(m, n, nrhs, t): return _flops(4.0 * m * m * n - 2.0 * m * n * n, t)
 
 
+# Dense to tridiagonal, and dense to band (its leading order is the same).
+def flops_sytrd(m, n, nrhs, t): return _flops(4.0 * n ** 3 / 3.0, t)
+
+
 @dataclass(frozen=True)
 class Arm:
     key: str                  # "batchlas" | "vendor"
@@ -114,13 +118,15 @@ class OpSpec:
     binary: str
     types: Sequence[str]
     orders: Sequence[int]
-    arms: Tuple[Arm, Arm]
+    arms: Tuple[Arm, ...]           # (batchlas,) for an op no vendor library has
     flops: Optional[Callable] = None
     # Device bytes per matrix / (n^2 sizeof T); caps the batch ladder. Conservative.
     footprint: float = 4.0
     nrhs: int = 0
     # minibench positional args of a cell, from its (m, n, third, batch).
     args: Optional[Callable[[int, int, int, int], List[int]]] = None
+    # The same, for a harness whose arguments also depend on the precision.
+    typed_args: Optional[Callable[[int, int, int, int, str], List[int]]] = None
     max_batch: int = 32768
     notes: str = ""
     # Untimed same-process setup ops (getrs needs an LU): their routes pollute
@@ -139,7 +145,15 @@ class OpSpec:
     # Rectangular ops also get a 2-D shape sweep; None for the square-only ones.
     plane: Optional[Plane] = None
 
+    @property
+    def single(self) -> bool:
+        """No vendor arm: a campaign plots its throughput, and a speedup only
+        appears in a build comparison (compare.py)."""
+        return len(self.arms) == 1
+
     def cell_args(self, cell: "Cell") -> List[int]:
+        if self.typed_args:
+            return self.typed_args(cell.m, cell.n, cell.nrhs, cell.batch, cell.dtype)
         return self.args(cell.m, cell.n, cell.nrhs, cell.batch) if self.args else [cell.n, cell.batch]
 
     def is_square(self, m: int, n: int, k: int) -> bool:
@@ -179,6 +193,31 @@ def _blas(name, title, binary, bench, flops, native="native", types=TYPES, order
         max_batch=65536, max_order=max(orders),
         vendor=("cuSPARSE", "rocSPARSE") if name == "spmm" else ("cuBLAS", "rocBLAS"),
     )
+
+
+def _stage(name, title, binary, bench, route, orders, types=TYPES, footprint=4.0, flops=None,
+           args=None, typed_args=None, max_order=None, notes=""):
+    return OpSpec(
+        name=name, title=title, harness="minibench", binary=binary, types=types, orders=orders,
+        # The route is the one the harness calls directly; coverage still records
+        # the sub-ops under it, which is what decides vendor-freedom.
+        arms=(Arm("batchlas", bench_name=bench, fixed_route=route),),
+        flops=flops, footprint=footprint, args=args, typed_args=typed_args, notes=notes,
+        group="Eigensolver stages", max_order=max_order or max(orders), vendor=("none", "none"),
+    )
+
+
+def sytrd_nb(n: int, dtype: str) -> int:
+    """syev_blocked's panel width: tuning_params.hh's SYTRD_BLOCK_SIZE_* buckets,
+    with the complex override syev_blocked.cc applies at 256 < n <= 512."""
+    if dtype.startswith("c") and 256 < n <= 512:
+        return 32
+    return 8 if n <= 128 else 16 if n <= 256 else 8 if n <= 512 else 48
+
+
+def two_stage_kd(n: int) -> int:
+    """choose_two_stage_kd (two_stage_common.hh): kd = 32, below n."""
+    return max(1, min(32, n - 1))
 
 
 # factor_bench takes n <= m, and potrf/getrf only square: README.md, "Rectangular ops".
@@ -232,6 +271,38 @@ for _s in (
         notes="cuSOLVER gesvdjBatched is capped at n = 32; vendor time includes the V -> V^H transpose",
         max_order=32,
     ),
+    # ---------------------------------------------------------------- syev's stages
+    # No vendor library ships these batched, so one arm; README.md, "Sub-operations".
+    # The arguments are the defaults syev passes, spelled explicitly so that any
+    # older build's harness runs the same cell.
+    _stage("stedc", "Tridiagonal divide and conquer", "stedc_benchmark", "BM_STEDC<", "native:stedc",
+           orders=(32, 64, 128, 256, 320, 512, 640, 1024), footprint=14.0, types=("float", "double"),
+           # Measured peak, RTX 4090 float: 13 n^2 per matrix at n = 256, 6.6 at 1024.
+           # rec_threshold 0 and Auto merge / algorithm: the tuning tables, as syev gets them.
+           args=lambda m, n, k, b: [n, b, 0, -1, 0, 0, -1],
+           notes="eigenvalues and eigenvectors of a random tridiagonal; tuned threshold, Auto merge and driver"),
+    _stage("steqr", "Tridiagonal QR iteration", "steqr_benchmark", "BM_STEQR<", "native:steqr",
+           orders=(8, 16, 32, 64, 128), footprint=64.0, types=("float", "double"),
+           # Measured peak: ~60 n^2 per matrix at every n; the workspace, not the operands.
+           # max_sweeps 50 and interleaved working vectors, as SteqrParams defaults;
+           # the harness's legacy schema pins the Wilkinson shift.
+           args=lambda m, n, k, b: [n, b, 50, 1, 0],
+           notes="eigenvalues and eigenvectors; n <= 32 is steqr_cta, above it steqr_wg; Wilkinson shift"),
+    _stage("sytrd", "Tridiagonal reduction, blocked", "sytrd_blocked_benchmark", "BM_SYTRD_BLOCKED<",
+           "native:blocked", orders=(32, 64, 128, 256, 512, 1024), flops=flops_sytrd,
+           typed_args=lambda m, n, k, b, t: [n, b, sytrd_nb(n, t), 0],
+           notes="syev_blocked's stage 1, at its panel width nb"),
+    _stage("sytrd_cta", "Tridiagonal reduction, one CTA", "sytrd_cta_benchmark", "BM_SYTRD_CTA<", "native:cta",
+           orders=(4, 8, 16, 24, 32), flops=flops_sytrd, types=("float", "double"), max_order=32,
+           args=lambda m, n, k, b: [n, b, 0, 0], notes="the n <= 32 reduction syev_cta runs"),
+    _stage("sy2sb", "Two-stage: dense to band", "sytrd_sy2sb_benchmark", "BM_SYTRD_SY2SB<", "native:sy2sb",
+           orders=(64, 128, 256, 512, 1024), flops=flops_sytrd,
+           args=lambda m, n, k, b: [n, b, two_stage_kd(n), 0],
+           notes="syev_two_stage's stage 1 at its band width kd = 32"),
+    _stage("sb2st", "Two-stage: band to tridiagonal", "sytrd_sb2st_benchmark", "BM_SYTRD_SB2ST<", "native:sb2st",
+           orders=(64, 128, 256, 512, 1024),
+           args=lambda m, n, k, b: [n, b, two_stage_kd(n), 0],
+           notes="syev_two_stage's bulge chase from kd = 32; throughput in matrices/s"),
     # ---------------------------------------------------------------- BLAS
     # The square cells are m = n = k and store k as 0. Arms are the canonical
     # BATCHLAS_<OP>_ROUTE only: legacy spellings mean different things per op

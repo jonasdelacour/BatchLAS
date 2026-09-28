@@ -37,6 +37,7 @@ def campaign_data(camp: Campaign, figdir: Path, rel: str) -> dict:
     an = server._analysis(camp)
     cfg = camp.config
     backend = cfg.get("backend", "cuda")
+    prov = cfg.get("provenance", {})  # a build comparison names its two builds here
     ops = []
     for op, st in an["per_op"].items():
         if op not in OPS:
@@ -49,7 +50,8 @@ def campaign_data(camp: Campaign, figdir: Path, rel: str) -> dict:
                 figs[name] = f"{rel}/{op}/{name}.png"
         rows = server.op_table(camp.root, camp.name, op)["rows"]
         ops.append({"name": op, "title": OPS[op].title, "group": OPS[op].group, "notes": OPS[op].notes,
-                    "vendor": vendor_name(op, backend), "stats": {k: st[k] for k in ("ok", "failed", "planned")},
+                    "vendor": prov.get("ref_label") or ("" if OPS[op].single else vendor_name(op, backend)),
+                    "mine": prov.get("new_label") or "BatchLAS", "stats": {k: st[k] for k in ("ok", "failed", "planned")},
                     "geomean": st.get("geomean"), "prec": st.get("prec", {}), "figs": figs, "rows": rows})
     ops.sort(key=lambda o: list(OPS).index(o["name"]))
     summaries = {}

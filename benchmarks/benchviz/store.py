@@ -137,6 +137,8 @@ class Campaign:
             # showing what earlier invocations measured; everything else is the
             # latest request's.
             old = json.loads(cfg_path.read_text())
+            if old.get("kind") == "compare":
+                raise ValueError(f"{name} is a build comparison, not a campaign that can be run")
             if old.get("backend") != config.get("backend"):
                 raise ValueError(f"campaign {name} is a {old.get('backend')} campaign")
             for k in ("ops", "types"):
@@ -162,7 +164,27 @@ class Campaign:
             fh.write(json.dumps(rec) + "\n")
             fh.flush()
 
+    def is_compare(self) -> bool:
+        try:
+            return self.config.get("kind") == "compare"
+        except (FileNotFoundError, json.JSONDecodeError):
+            return False
+
+    def data_key(self) -> tuple:
+        """Changes whenever rows() would return something new."""
+        if self.is_compare():
+            import compare
+            return (str(self.dir), compare.data_key(self))
+        try:
+            st = self.results.stat()
+            return (str(self.dir), st.st_size, st.st_mtime)
+        except FileNotFoundError:
+            return (str(self.dir), 0, 0)
+
     def rows(self) -> List[dict]:
+        if self.is_compare():  # derived from its two source campaigns (compare.py)
+            import compare
+            return compare.rows(self)
         if not self.results.exists():
             return []
         out = []

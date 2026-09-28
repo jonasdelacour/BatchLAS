@@ -22,7 +22,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 from matplotlib.colors import LogNorm, Normalize  # noqa: E402
 from matplotlib.lines import Line2D  # noqa: E402
 from matplotlib.patches import Rectangle  # noqa: E402
-from matplotlib.ticker import FixedLocator, FuncFormatter, NullFormatter, NullLocator  # noqa: E402
+from matplotlib.ticker import FixedLocator, FuncFormatter, LogLocator, NullFormatter, NullLocator  # noqa: E402
 
 KEYS = ["op", "dtype", "m", "n", "nrhs", "batch"]
 PREC_TITLE = {"float": "Single", "double": "Double", "cfloat": "Complex Single", "cdouble": "Complex Double"}
@@ -31,7 +31,8 @@ FONT_CELL = 22
 
 # ----------------------------------------------------------------- data
 def paired(rows: List[dict]) -> pd.DataFrame:
-    """One row per cell with both arms side by side; only verified pairs."""
+    """One row per cell with both arms side by side; only verified pairs. A
+    single-arm op's cells are kept alone, with no vendor time and no speedup."""
     if not rows:
         return pd.DataFrame()
     df = pd.DataFrame(rows)
@@ -48,9 +49,15 @@ def paired(rows: List[dict]) -> pd.DataFrame:
                        aggfunc="first")
     w.columns = [f"{a}_{b}" for a, b in w.columns]
     w = w.reset_index()
-    if not {"time_ms_batchlas", "time_ms_vendor"} <= set(w.columns):
+    if "time_ms_batchlas" not in w:
         return pd.DataFrame()
-    w = w.dropna(subset=["time_ms_batchlas", "time_ms_vendor"])
+    for c in ("time_ms_vendor", "rel_sd_vendor", "route_vendor", "vendor_free_vendor"):
+        if c not in w:
+            w[c] = np.nan
+    single = w.op.map(lambda o: o in OPS and OPS[o].single)
+    w = w[w.time_ms_batchlas.notna() & (w.time_ms_vendor.notna() | single)].copy()
+    if w.empty:
+        return pd.DataFrame()
     tb, tv = w["time_ms_batchlas"].astype(float), w["time_ms_vendor"].astype(float)
     w["speedup"] = tv / tb
     rb = pd.to_numeric(w.get("rel_sd_batchlas"), errors="coerce").fillna(0.0)
@@ -100,10 +107,17 @@ def plane_points(w: pd.DataFrame, op: str) -> pd.DataFrame:
 
 def vendor_label(meta: dict, op: str = None) -> str:
     """The library the vendor arm of `op` reaches; with no op (the cross-op
-    summary) the generic word, since that figure mixes cuSOLVER and cuBLAS."""
+    summary) the generic word, since that figure mixes cuSOLVER and cuBLAS. In a
+    build comparison the reference slot holds the baseline build instead."""
+    if meta.get("ref_label"):
+        return meta["ref_label"]
     if op is None:
         return "Vendor"
     return vendor_name(op, "rocm" if "roc" in meta.get("vendor_label", "").lower() else "cuda")
+
+
+def batchlas_label(meta: dict) -> str:
+    return meta.get("new_label") or "BatchLAS"
 
 
 def _label(lab: str) -> str:
@@ -145,7 +159,7 @@ def _speedup_axis(ax, lo: float, hi: float):
 
 # ----------------------------------------------------------------- figures
 def fig_speedup_n(w: pd.DataFrame, op: str, meta: dict):
-    s = saturated(w[w.op == op])
+    s = saturated(w[w.op == op]).dropna(subset=["speedup"])
     if s.empty:
         return None
     fig, ax = plt.subplots(figsize=style.PANEL)
@@ -191,14 +205,23 @@ def fig_throughput_n(w: pd.DataFrame, op: str, meta: dict):
     fig, axes = plt.subplots(nrow, ncol, figsize=(10 * ncol, 7.5 * nrow), squeeze=False)
     for ax in axes.flat[len(types):]:
         ax.set_visible(False)
+    arms = [a for a in ("vendor", "batchlas") if s[f"time_ms_{a}"].notna().any()]
+    hollow = False
     for i, (ax, t) in enumerate(zip(axes.flat, types)):
         d = s[s.dtype == t]
-        for arm in ("vendor", "batchlas"):
+        for arm in arms:
             tm = d[f"time_ms_{arm}"].astype(float).to_numpy()
             rs = pd.to_numeric(d.get(f"rel_sd_{arm}"), errors="coerce").fillna(0).to_numpy()
             y = throughput(op, t, d.m, d.n, d.nrhs, d.batch, tm)
             band = (y / (1 + 2 * rs), y / np.maximum(1 - 2 * rs, 0.05))
-            style.series(ax, d.n, y, style.LIB_COLOR[arm], style.LIB_MARKER[arm], style.LIB_MSCALE[arm], band=band)
+            c, mk, sc = style.LIB_COLOR[arm], style.LIB_MARKER[arm], style.LIB_MSCALE[arm]
+            style.series(ax, d.n, y, c, mk, sc, band=band)
+            if arms == ["batchlas"]:
+                # With no speedup figure, this is where a vendor sub-op call shows.
+                vf = d.vendor_free_batchlas.fillna(True).astype(bool).to_numpy()
+                if (~vf).any():
+                    hollow = True
+                    ax.plot(d.n[~vf], y[~vf], ls="none", marker=mk, ms=10 * sc, mfc="white", mec=c, mew=2, zorder=4)
         ax.set_yscale("log")
         ax.set_title(style.bold(f"{PREC_TITLE[t]} [{TYPE_PREFIX[t]}]"), pad=12)
         _n_axis(ax, d.n, label=i + ncol >= len(types), op=op)
@@ -207,8 +230,12 @@ def fig_throughput_n(w: pd.DataFrame, op: str, meta: dict):
         style.outline(ax)
     handles = [Line2D([], [], ls=":", color=style.LIB_COLOR[a], marker=style.LIB_MARKER[a],
                       ms=10 * style.LIB_MSCALE[a], label=l)
-               for a, l in (("batchlas", "BatchLAS"), ("vendor", style.tex(vendor_label(meta, op))))]
-    axes.flat[0].legend(handles=handles + [style.band_handle()], loc="upper left")
+               for a, l in (("batchlas", style.tex(batchlas_label(meta))), ("vendor", style.tex(vendor_label(meta, op))))
+               if a in arms]
+    if hollow:
+        handles.append(Line2D([], [], ls="none", marker="o", ms=10, mfc="white", mec="black", mew=2,
+                              label="Calls a vendor sub-op"))
+    axes.flat[0].legend(handles=handles + [style.band_handle()], loc="upper left" if len(arms) > 1 else "best")
     return fig
 
 
@@ -280,36 +307,56 @@ def _annotate(ax, Z: np.ndarray, norm, text):
 
 
 def fig_heatmap(w: pd.DataFrame, op: str, meta: dict):
+    """Speedup over n x batch; for an op with no reference arm, BatchLAS's throughput."""
     d0 = square(w[w.op == op])
     if d0.empty:
         return None
+    rate = d0.speedup.isna().all()
     types = [t for t in style.PREC_ORDER if (d0.dtype == t).any()]
     ns, bs = sorted(d0.n.unique()), sorted(d0.batch.unique())
     grids = {}
     for t in types:
         Z = np.full((len(ns), len(bs)), np.nan)
-        for r in d0[d0.dtype == t].itertuples():
-            Z[ns.index(r.n), bs.index(r.batch)] = math.log2(r.speedup)
+        dt = d0[d0.dtype == t]
+        v = throughput(op, t, dt.m, dt.n, dt.nrhs, dt.batch, dt.time_ms_batchlas.astype(float)) if rate \
+            else np.log2(dt.speedup.astype(float))
+        for r, z in zip(dt.itertuples(), v):
+            Z[ns.index(r.n), bs.index(r.batch)] = z
         grids[t] = Z
-    norm = _map_norm(np.concatenate([g.ravel() for g in grids.values()]))
+    allz = np.concatenate([g.ravel() for g in grids.values()])
+    if rate:
+        pos = allz[np.isfinite(allz) & (allz > 0)]
+        norm = LogNorm(vmin=pos.min(), vmax=max(pos.max(), pos.min() * 1.01)) if pos.size else LogNorm(1, 10)
+    else:
+        norm = _map_norm(allz)
     fig, axes = plt.subplots(1, len(types), figsize=(style.MAP_PANEL[0] * len(types) + 2, style.MAP_PANEL[1]),
                              squeeze=False)
     im = None
     for i, (ax, t) in enumerate(zip(axes[0], types)):
         im = ax.pcolormesh(np.arange(len(bs) + 1), np.arange(len(ns) + 1), np.ma.masked_invalid(grids[t]),
                            cmap=style.CMAP, norm=norm, edgecolors=(1, 1, 1, 0.25), linewidth=0.5)
-        _parity_edges(ax, grids[t])
+        if rate:
+            _annotate(ax, grids[t], norm, _fmt_rate)
+        else:
+            _parity_edges(ax, grids[t])
         _map_axes(ax, [_batch_label(b) for b in bs], [str(n) if i == 0 else "" for n in ns])
         ax.set_title(style.bold(f"{PREC_TITLE[t]} [{TYPE_PREFIX[t]}]"), pad=12)
         ax.set_xlabel("Batch Size [1]")
         if i == 0:
             ax.set_ylabel(_n_label(op))
-    _speedup_colorbar(fig, im, axes[0].tolist(), meta, norm, op)
+    if rate:
+        cb = fig.colorbar(im, ax=axes[0].tolist(), location="right", pad=0.02, fraction=0.05, aspect=25)
+        cb.ax.yaxis.set_major_locator(LogLocator(base=10, subs=(1, 2, 5)))  # a narrow range still gets ticks
+        cb.ax.yaxis.set_minor_locator(NullLocator())
+        cb.ax.yaxis.set_major_formatter(FuncFormatter(lambda x, _: f"{x:g}"))
+        cb.set_label(throughput_label(op))
+    else:
+        _speedup_colorbar(fig, im, axes[0].tolist(), meta, norm, op)
     return fig
 
 
 def fig_summary(w: pd.DataFrame, dtype: str, meta: dict):
-    s = saturated(w[w.dtype == dtype])
+    s = saturated(w[w.dtype == dtype]).dropna(subset=["speedup"])
     if s.empty:
         return None
     ops = [o for o in OPS if (s.op == o).any()]
@@ -391,7 +438,7 @@ def fig_throughput_2d(w: pd.DataFrame, op: str, meta: dict):
         return None
     d, types, xs, ys = got
     plane = OPS[op].plane
-    libs = (("batchlas", "BatchLAS"), ("vendor", vendor_label(meta, op)))
+    libs = (("batchlas", batchlas_label(meta)), ("vendor", vendor_label(meta, op)))
     fig, axes = plt.subplots(len(types), 2, figsize=(style.MAP_PANEL[0] * 2 + 3, style.MAP_PANEL[1] * len(types)),
                              squeeze=False)
     for row, t in enumerate(types):
@@ -412,6 +459,8 @@ def fig_throughput_2d(w: pd.DataFrame, op: str, meta: dict):
                 ax.set_xlabel("")
             ax.set_title(style.bold(f"{lab}, {PREC_TITLE[t]} [{TYPE_PREFIX[t]}]"), pad=12)
         cb = fig.colorbar(im, ax=axes[row].tolist(), location="right", pad=0.02, fraction=0.05, aspect=20)
+        cb.ax.yaxis.set_major_locator(LogLocator(base=10, subs=(1, 2, 5)))  # a narrow range still gets ticks
+        cb.ax.yaxis.set_minor_locator(NullLocator())
         cb.ax.yaxis.set_major_formatter(FuncFormatter(lambda x, _: f"{x:g}"))
         cb.set_label(throughput_label(op))
     return fig

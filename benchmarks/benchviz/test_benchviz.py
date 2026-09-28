@@ -195,5 +195,111 @@ class PlaneFigures(unittest.TestCase):
         self.assertIsNone(fig_speedup_2d(w, "potrf", {}))
 
 
+def row(op, n, arm, time_ms, batch=1024, t=0.0, dtype="float", ok=True):
+    return dict(op=op, dtype=dtype, m=n, n=n, nrhs=0, batch=batch, arm=arm, ok=ok, time_ms=time_ms,
+                rel_sd=0.01, route="native:x", vendor_free=True, t=t, reason="ok")
+
+
+class SubOps(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import style
+        style.apply(usetex=False)
+
+    def test_single_arm_and_the_arguments_syev_passes(self):
+        for name in ("stedc", "steqr", "sytrd", "sytrd_cta", "sy2sb", "sb2st"):
+            self.assertTrue(OPS[name].single, name)
+            self.assertEqual([a.key for a in OPS[name].arms], ["batchlas"])
+        from ops import Cell
+        # Auto everything for stedc; 50 sweeps and interleaved vectors for steqr.
+        self.assertEqual(OPS["stedc"].cell_args(Cell("stedc", "float", 320, 320, 0, 512)), [320, 512, 0, -1, 0, 0, -1])
+        self.assertEqual(OPS["steqr"].cell_args(Cell("steqr", "float", 64, 64, 0, 512)), [64, 512, 50, 1, 0])
+        # syev_blocked's panel: the complex override at 256 < n <= 512 only.
+        self.assertEqual(OPS["sytrd"].cell_args(Cell("sytrd", "cfloat", 384, 384, 0, 64))[2], 32)
+        self.assertEqual(OPS["sytrd"].cell_args(Cell("sytrd", "float", 384, 384, 0, 64))[2], 8)
+        self.assertEqual(OPS["sytrd"].cell_args(Cell("sytrd", "double", 1024, 1024, 0, 64))[2], 48)
+        self.assertEqual(OPS["sy2sb"].cell_args(Cell("sy2sb", "float", 64, 64, 0, 8)), [64, 8, 32, 0])
+        self.assertEqual(max(c.n for c in plan_cells(["sytrd_cta"], ["float"], PRESETS["quick"])), 32)
+
+    def test_single_arm_cells_pair_alone_and_draw_throughput_only(self):
+        import matplotlib.pyplot as plt
+        from plots import fig_heatmap, fig_speedup_n, fig_summary, fig_throughput_n
+        rows = [row("stedc", n, "batchlas", n / 64, batch=b) for n in (64, 128) for b in (256, 1024)]
+        rows += [row("potrf", 64, "batchlas", 1.0), row("potrf", 64, "vendor", 2.0),
+                 row("potrf", 128, "batchlas", 1.0)]   # an unpaired two-arm cell still drops
+        w = paired(rows)
+        self.assertEqual(len(w[w.op == "stedc"]), 4)
+        self.assertTrue(w[w.op == "stedc"].speedup.isna().all())
+        self.assertEqual(list(w[w.op == "potrf"].n), [64])
+        self.assertIsNone(fig_speedup_n(w, "stedc", {}))
+        for fn in (fig_throughput_n, fig_heatmap):
+            fig = fn(w, "stedc", {})
+            self.assertIsNotNone(fig)
+            plt.close(fig)
+        fig = fig_summary(w, "float", {})
+        self.assertEqual([t.get_text() for t in fig.axes[0].get_yticklabels()], ["potrf"])
+        plt.close(fig)
+
+
+class Compare(unittest.TestCase):
+    def setUp(self):
+        from store import Campaign
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = self.tmp.name
+        for name, sha, t_mine, t_vendor in (("old", "aaaaaaa", 2.0, 1.0), ("new", "bbbbbbb", 1.0, 1.1)):
+            c = Campaign.create(self.root, name, {
+                "ops": ["potrf", "stedc"], "types": ["float"], "backend": "cuda", "grid": PRESETS["quick"].to_dict(),
+                "provenance": {"device": "RTX", "builds": [{"dir": f"/b/{name}", "built": "x", "built_from": sha}]}})
+            for n in (64, 128):
+                c.append(row("potrf", n, "batchlas", t_mine))
+                c.append(row("potrf", n, "vendor", t_vendor))
+                c.append(row("stedc", n, "batchlas", 2 * t_mine))
+            if name == "new":
+                c.append(row("stedc", 256, "batchlas", 1.0))   # measured in one build only
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_pairs_the_candidate_against_the_baseline(self):
+        import compare
+        cmp = compare.create(self.root, "cmp", "old", "new")
+        w = paired(cmp.rows())
+        # The baseline's BatchLAS arm sits in the reference slot: 2x faster in the new build.
+        self.assertEqual(sorted(set(w.speedup.round(6))), [2.0])
+        self.assertEqual(sorted(w[w.op == "stedc"].n), [64, 128])   # the stedc speedup a campaign cannot give
+        ctl = compare.control(cmp)
+        self.assertEqual((ctl["matched"], ctl["only_new"], ctl["only_base"]), (4, 1, 0))
+        self.assertAlmostEqual(ctl["vendor"]["geomean"], 1.0 / 1.1)
+        p = cmp.config["provenance"]
+        self.assertEqual((p["ref_label"], p["new_label"]), ("Build aaaaaaa", "Build bbbbbbb"))
+        self.assertIn("4 cells in both", compare.report(cmp))
+
+    def test_follows_its_sources_and_cannot_be_run(self):
+        import compare
+        from store import Campaign
+        cmp = compare.create(self.root, "cmp", "old", "new")
+        k = cmp.data_key()
+        Campaign(self.root, "old").append(row("stedc", 256, "batchlas", 3.0))
+        self.assertNotEqual(cmp.data_key(), k)
+        self.assertEqual(compare.control(cmp)["matched"], 5)
+        with self.assertRaises(ValueError):
+            Campaign.create(self.root, "cmp", {"ops": ["potrf"], "types": ["float"], "backend": "cuda"})
+        with self.assertRaises(ValueError):
+            compare.create(self.root, "cmp2", "cmp", "new")
+        with self.assertRaises(ValueError):
+            compare.create(self.root, "old", "old", "new")   # never overwrites a measured campaign
+
+    def test_figures_name_the_builds(self):
+        import compare
+        import matplotlib.pyplot as plt
+        import style
+        from plots import fig_speedup_n
+        style.apply(usetex=False)
+        cmp = compare.create(self.root, "cmp", "old", "new")
+        fig = fig_speedup_n(paired(cmp.rows()), "stedc", cmp.config["provenance"])
+        self.assertIn("Build aaaaaaa", fig.axes[0].get_ylabel())
+        plt.close(fig)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -10,7 +10,9 @@ TeX installation with `latex` and `dvipng` for the Computer Modern text. It inst
 # 1. Build the harnesses (the library plus four targets).
 cmake -S . -B build -DCMAKE_CXX_COMPILER=/opt/dpcpp-cuda/bin/clang++ -DBATCHLAS_BUILD_BENCHMARKS=ON
 cmake --build build --target factor_bench syev_benchmark ormqr_benchmark gesvd_vendor_benchmark \
-    gemm_benchmark gemv_benchmark trsm_benchmark trmm_benchmark syrk_benchmark syr2k_benchmark spmm_benchmark -j"$(nproc)"
+    gemm_benchmark gemv_benchmark trsm_benchmark trmm_benchmark syrk_benchmark syr2k_benchmark spmm_benchmark \
+    stedc_benchmark steqr_benchmark sytrd_blocked_benchmark sytrd_cta_benchmark sytrd_sy2sb_benchmark \
+    sytrd_sb2st_benchmark -j"$(nproc)"
 
 # 2a. Start the dashboard and launch runs from the browser.
 python3 benchmarks/benchviz serve            # http://127.0.0.1:8765
@@ -22,6 +24,11 @@ python3 benchmarks/benchviz run --ops all --types all --preset full --campaign p
 
 # 3. Re-render every figure (e.g. after a style change).
 python3 benchmarks/benchviz plot paper-4090
+
+# 4. Compare two builds: the same grid measured from each, then paired cell by cell.
+python3 benchmarks/benchviz run --campaign before --build-dir ../old-checkout/build --ops syev,stedc --types float
+python3 benchmarks/benchviz run --campaign after  --build-dir build                 --ops syev,stedc --types float
+python3 benchmarks/benchviz compare before after
 ```
 
 ## Which build is measured
@@ -56,6 +63,9 @@ Campaigns are stored in `benchviz_runs/<name>/` (git-ignored):
 | `figures/<op>/{speedup_n,throughput_n,heatmap}.{pdf,png}` | The per-op figures |
 | `figures/_summary/summary_<precision>.{pdf,png}` | The cross-op summaries |
 
+A build comparison's `campaign.json` names its two source campaigns (`kind: compare`), and it has no
+`results.jsonl`.
+
 `--gpu 0,1` (or both GPU chips in the run panel) splits a campaign's cells across the cards, one
 worker per GPU. Both arms of a cell always run on the same card, so every ratio compares like with
 like. The two workers share the host CPU, so for figures you will publish, prefer one card. Stop kills
@@ -75,13 +85,15 @@ different `--ops` or `--types` extends it.
 | gesvd (n ≤ 32) | `gesvd_vendor_benchmark` | direct `gesvdjBatched` call | `gesvd_cta` |
 | gemm, gemv, trsm, spmm | `<op>_benchmark` | `BATCHLAS_<OP>_ROUTE=vendor` (cuBLAS / cuSPARSE) | `=native` |
 | trmm, syrk, syr2k (float) | `<op>_benchmark` | `=vendor` | `=triangular` (triangular-tile kernels) |
+| stedc, steqr, sytrd, sytrd_cta, sy2sb, sb2st | their own harnesses | none | the harness's direct call |
 
 The n-figures use square cells (m = n = k). spmm uses a random CSR pattern with 16 nonzeros per row,
 16 right-hand sides, and n rows. The rectangular ops are also swept over a second dimension; see
 "Rectangular ops".
 
 Some ops are left out, each for a stated reason:
-- **syevx, sytrd, stedc, steqr:** no vendor route.
+- **syevx:** no vendor route. (stedc, steqr and the sytrd family have none either; they are measured
+  alone. See "Sub-operations".)
 - **symm:** its native arm cannot be pinned; it is expand-then-gemm through the routed gemm.
 - **hemm, herk, her2k:** no route variable and no coverage rows.
 - **syrk and syr2k in double, and trmm in double:** no native kernel. For syrk double, nothing is recorded.
@@ -129,6 +141,62 @@ actually ran (`route`) plus every sub-op route (`subroutes`). A pin is never tak
 | `speedup_2d` | Rectangular ops only. Speedup over the op's two shape axes (below), one panel per precision, annotated, with the same colour scale and 1× boundary as `heatmap`. Hatched cells are shapes the op does not define. |
 | `throughput_2d` | Rectangular ops only. GFLOP/s over the same axes: one row per precision, BatchLAS and vendor side by side on a shared log colour scale. |
 
+An op with no vendor arm draws `throughput_n` with BatchLAS alone, and `heatmap` becomes its
+throughput over n × batch, annotated. It has no speedup figures and is left out of `summary_<t>`,
+except in a build comparison, where every op gets them.
+
+## Sub-operations
+
+syev's stages are ops of their own, in the dashboard group "Eigensolver stages". No vendor library
+ships them batched, so each has one arm, BatchLAS. A campaign gives their throughput, and a build
+comparison (below) gives their speedup.
+
+| Op | Harness | What it runs | Arguments |
+|---|---|---|---|
+| stedc | `stedc_benchmark` | divide and conquer, with vectors | threshold 0, merge and driver `Auto`: the tuning tables syev gets |
+| steqr | `steqr_benchmark` | QR iteration, with vectors; n ≤ 32 is `steqr_cta`, above it `steqr_wg` | 50 sweeps, interleaved working vectors; the harness pins the Wilkinson shift |
+| sytrd | `sytrd_blocked_benchmark` | blocked reduction to tridiagonal, syev_blocked's stage 1 | nb as syev_blocked chooses it, including its complex override at 256 < n ≤ 512 |
+| sytrd_cta | `sytrd_cta_benchmark` | one-CTA reduction, n ≤ 32 | defaults |
+| sy2sb | `sytrd_sy2sb_benchmark` | two-stage stage 1, dense to band | kd = 32, as `choose_two_stage_kd` |
+| sb2st | `sytrd_sb2st_benchmark` | two-stage stage 2, the bulge chase | kd = 32 |
+
+- **Spelled out, not defaulted.** Every argument is passed explicitly, through harness entry points that
+  have existed for months, so an older build's binary runs exactly the same cell. A harness that
+  mapped "0" to the library's default would make an old build silently measure something else.
+- **The copies go stale.** `sytrd_nb` and `two_stage_kd` in `ops.py` copy the library's choices. A
+  retune that changes them is not measured until those copies are updated too.
+- **steqr stops at n = 128.** Above n = 32, `steqr_wg` is slow: 210 ms at n = 128, batch 256, against
+  0.6 ms for stedc. n = 256 would take minutes per cell.
+- **Routes.** None of these ops is dispatched, so the route is the function the harness calls. Coverage
+  still records the dispatched sub-ops underneath (stedc's merge gemm, for example). An open marker
+  means one of them resolved to a vendor library.
+- **Flop counts.** sytrd, sytrd_cta and sy2sb use 4n³/3 (LAWN 41's sytrd; sy2sb has the same leading
+  order). stedc, steqr and sb2st have no canonical count and are plotted in matrices/s.
+
+## Comparing builds
+
+`compare <baseline> <candidate>` pairs two campaigns cell by cell, usually one per build. It writes a
+comparison `benchviz_runs/<name>/` (default `cmp-<baseline>-vs-<candidate>`) that the dashboard,
+`plot` and `export` treat like any other campaign. The dashboard's **Compare builds** button does the same.
+
+- **What the speedup is.** The candidate's BatchLAS arm goes in the BatchLAS slot and the baseline's
+  BatchLAS arm in the vendor slot. So every figure is unchanged, and above 1× the candidate is faster.
+  The labels name the builds: `Build <sha>`, from each campaign's recorded build.
+- **Only shared cells.** A cell counts only when it was verified in both campaigns. The overview
+  says how many cells were only in one.
+- **The vendor control.** Both campaigns measured the vendor arm, and the vendor library did not change
+  between builds. So its ratio between the two runs measures the machine: clocks, contention, the
+  driver. The overview reports it, and flags it beyond 5 %. A control of 1.08× means every speedup
+  in the comparison is inflated by roughly that much.
+- **Live.** A comparison stores no rows; it re-reads both campaigns on every load. Comparing
+  against a campaign that is still running therefore fills in as it runs, and the dashboard re-renders
+  the figures when a source gains rows.
+- **Warnings.** It warns when the two campaigns ran on different devices, and when they measured the
+  same binaries. The second makes every ratio run-to-run noise, which is a useful A/A test in its own right.
+
+For figures you will quote, measure the two campaigns back to back on the same card, with the same
+grid.
+
 ## Rectangular ops
 
 A square sweep cannot show where a tall-skinny QR or a small-k GEMM wins, so an op whose shape has a second
@@ -152,7 +220,8 @@ potrf and getrf (factor_bench only takes m = n for them), syev, trmm (`trmm_benc
 agree at m = n = k), and gesvd (its harness takes n only).
 
 Every preset turns the sweep on; `--no-rect` (or the dashboard's "Rectangular shapes" box) turns it off.
-It adds about 90% to a `quick` campaign of every op and precision (1,667 cells become 3,157). Campaigns created before this existed keep their
+It adds about 90% to a `quick` campaign of the vendor-compared ops in every precision (1,667 cells become 3,157;
+the six sub-operations add another 328, one arm each). Campaigns created before this existed keep their
 plan: a grid saved without the field loads with the sweep off.
 
 The trsm map needs a `trsm_benchmark` built after `BM_TRSM` started reading its second argument as the
