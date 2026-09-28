@@ -405,6 +405,45 @@ TYPED_TEST(SyevCtaFusedTest, MixedDirectionLargeBatch) {
 	}
 }
 
+// A batch one past a whole number of work-groups: every chunk but one of the
+// final work-group is dead. Dead chunks run the kernel on a zero matrix aliased
+// to item 0 rather than returning, so an ungated store would overwrite item 0
+// long after its own work-group finished; k is large enough that it does.
+TYPED_TEST(SyevCtaFusedTest, RaggedTailBatch) {
+	using Scalar = typename TestFixture::ScalarType;
+	using Real = typename base_type<Scalar>::type;
+	constexpr Backend B = TestFixture::BackendType;
+
+	const Real tol = test_utils::tolerance<Scalar>() * Real(5);
+	for (int n : {4, 8, 12, 32}) {
+		const int k = n == 32 ? 4096 : 8192;  // more work-groups than fit resident
+		const int P = n <= 4 ? 4 : (n <= 8 ? 8 : (n <= 16 ? 16 : 32));
+		for (int mult : {1, 2}) {
+			const int probs_per_wg = 32 * mult / P;
+			if (probs_per_wg == 1) continue;  // no dead chunk
+			const int batch = probs_per_wg * k + 1;
+			SCOPED_TRACE(::testing::Message() << "n=" << n << " wg_multiplier=" << mult << " batch=" << batch);
+
+			auto A0 = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/77u + n);
+			auto A = A0;
+			auto W = UnifiedVector<Real>(static_cast<std::size_t>(n) * batch);
+			auto info = UnifiedVector<int32_t>(static_cast<std::size_t>(batch), int32_t(0));
+
+			syev_cta_fused<B, Scalar>(*this->ctx, A.view(), W.to_span(), JobType::EigenVectors, Uplo::Lower,
+									  Span<std::byte>(), SteqrParams<Scalar>{}, static_cast<size_t>(mult),
+									  info.to_span())
+				.wait();
+
+			for (int b : {0, 1, batch - 2, batch - 1}) {
+				SCOPED_TRACE(::testing::Message() << "item " << b);
+				EXPECT_EQ(info[static_cast<std::size_t>(b)], 0);
+				check_orthonormal_columns(A.view(), n, b, tol);
+				check_eigen_residual(A0.view(), A.view(), W, n, b, tol);
+			}
+		}
+	}
+}
+
 TYPED_TEST(SyevCtaFusedTest, RequiresNoWorkspace) {
 	using Scalar = typename TestFixture::ScalarType;
 	constexpr Backend B = TestFixture::BackendType;

@@ -194,6 +194,10 @@ inline void syev_cta_fused_impl(Queue& ctx,
 
                 const auto sg = it.get_sub_group();
                 const auto part = make_partition<P>(sg);
+                // The solve takes the full-sub-group partition: every lane of the
+                // warp reaches it (dead chunks are clamped below, not returned), so
+                // it may run maskless where the chunks share one instruction stream.
+                const auto solve_part = make_partition<P, false>(sg);
 
                 const int32_t sg_id = static_cast<int32_t>(sg.get_group_linear_id());
                 const int32_t parts_per_sg = static_cast<int32_t>(part.get_group_linear_range());
@@ -201,9 +205,11 @@ inline void syev_cta_fused_impl(Queue& ctx,
 
                 const int32_t lane = static_cast<int32_t>(part.get_local_linear_id());
                 const int32_t prob_id = wg_id * probs_per_wg + part_id;
-                if (prob_id >= nb) return;
-
-                auto A_prob = A_view.batch_item(prob_id);
+                // Clamp, do not return: a chunk past the batch end runs every stage
+                // on a zero matrix (no reflector, all 1x1 blocks, no chase) and
+                // writes nothing.
+                const bool live = prob_id < nb;
+                auto A_prob = A_view.batch_item(live ? prob_id : 0);
 
                 const int32_t base_a = part_id * static_cast<int32_t>(kATileElems);
                 const int32_t base_v = part_id * static_cast<int32_t>(P);
@@ -218,7 +224,7 @@ inline void syev_cta_fused_impl(Queue& ctx,
                 // here it costs nothing.
                 for (int32_t c = 0; c < static_cast<int32_t>(P); ++c) {
                     T v = T(0);
-                    if (lane < nn && c < nn) {
+                    if (live && lane < nn && c < nn) {
                         if (lane == c) {
                             // Hermitian diagonals are real by definition; force
                             // it so a caller's round-off cannot leak an
@@ -288,7 +294,7 @@ inline void syev_cta_fused_impl(Queue& ctx,
                 if constexpr (!ComputeVectors) {
                     // ---- Stage 2: eigenvalues only, no accumulator. ----
                     QSharedCache<Real, P, LDQ, false, decltype(Q_local)> qcache(Q_local, base_q, lane, nn);
-                    const bool failed = steqr_cta_solve<Real, P>(part, diag, offdiag, qcache, nn,
+                    const bool failed = steqr_cta_solve<Real, P>(solve_part, diag, offdiag, qcache, nn,
                                              max_sweeps, zero_threshold,
                                              shift_strategy, update_scheme);
                     // The bool steqr_cta_solve has always returned and this tier has
@@ -296,10 +302,10 @@ inline void syev_cta_fused_impl(Queue& ctx,
                     // of the three arms below runs per problem, so this kernel is the
                     // single writer for the item and needs no separate clear (which
                     // would be a second submission, and racy on an out-of-order queue).
-                    if (lane == 0) detail::info_store(info_dev, prob_id, failed ? 1 : 0);
+                    if (live && lane == 0) detail::info_store(info_dev, prob_id, failed ? 1 : 0);
 
                     const int32_t dst = slot_of(diag);
-                    if (lane < nn) {
+                    if (live && lane < nn) {
                         W[static_cast<int64_t>(prob_id) * nn + dst] = diag;
                     }
                 } else if constexpr (kFusedOrgql) {
@@ -402,16 +408,16 @@ inline void syev_cta_fused_impl(Queue& ctx,
 
                     // ---- Stage 2b: sweeps, accumulating onto Q_house. ----
                     QSharedCache<Real, P, LDQ, true, decltype(A_local)> qcache(A_local, base_a, lane, nn);
-                    const bool failed = steqr_cta_solve<Real, P>(part, diag, offdiag, qcache, nn,
+                    const bool failed = steqr_cta_solve<Real, P>(solve_part, diag, offdiag, qcache, nn,
                                              max_sweeps, zero_threshold,
                                              shift_strategy, update_scheme);
-                    if (lane == 0) detail::info_store(info_dev, prob_id, failed ? 1 : 0);
+                    if (live && lane == 0) detail::info_store(info_dev, prob_id, failed ? 1 : 0);
 
                     // The sweeps wrote the tile by row (lane == row); the readout
                     // below reads it by column, i.e. other lanes' writes.
                     group_barrier(part);
                     const int32_t dst = slot_of(diag);
-                    if (lane < nn) {
+                    if (live && lane < nn) {
                         W[static_cast<int64_t>(prob_id) * nn + dst] = diag;
                         for (int32_t r = 0; r < nn; ++r) {
                             A_prob(r, dst) = A_local[base_a + r + lane * LDA];
@@ -431,13 +437,13 @@ inline void syev_cta_fused_impl(Queue& ctx,
                     }
                     group_barrier(part);
 
-                    const bool failed = steqr_cta_solve<Real, P>(part, diag, offdiag, qcache, nn,
+                    const bool failed = steqr_cta_solve<Real, P>(solve_part, diag, offdiag, qcache, nn,
                                              max_sweeps, zero_threshold,
                                              shift_strategy, update_scheme);
-                    if (lane == 0) detail::info_store(info_dev, prob_id, failed ? 1 : 0);
+                    if (live && lane == 0) detail::info_store(info_dev, prob_id, failed ? 1 : 0);
 
                     const int32_t dst = slot_of(diag);
-                    if (lane < nn) {
+                    if (live && lane < nn) {
                         W[static_cast<int64_t>(prob_id) * nn + dst] = diag;
                     }
 
@@ -510,7 +516,7 @@ inline void syev_cta_fused_impl(Queue& ctx,
                         group_barrier(part);
                     }
 
-                    if (lane < nn) {
+                    if (live && lane < nn) {
                         for (int32_t r = 0; r < nn; ++r) {
                             A_prob(r, dst) = C_col[r];
                         }

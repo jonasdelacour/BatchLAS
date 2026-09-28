@@ -248,8 +248,9 @@ namespace batchlas {
         const bool lane_in_active_range = (lane + 1 < n) && (lane >= start_ix) && (lane + 1 < end_ix);
 
         // We need d_{i+1} (neighbor lane's diagonal). A 1-lane shift is the most direct.
-        // Note: for lanes without i+1 (last lane), the result is unspecified, but those
-        // lanes never use d_ip1 due to lane_in_active_range.
+        // Note: for lanes without i+1 (last lane), the result is unspecified (on a
+        // full-sub-group partition it is the next chunk's lane 0), but those lanes
+        // never use d_ip1 due to lane_in_active_range.
         const T d_ip1 = shift_group_left(partition, d, 1);
 
         if (lane_in_active_range) {
@@ -1067,9 +1068,15 @@ namespace batchlas {
 
     // Returns true if any block failed to converge within budget.
     //
-    // A sub-group-wide partition cannot run the nested loops legally when its
-    // chunks diverge, so it takes the lockstep solver (EXP; the padded chase has
-    // no PG form) whenever a warp holds more than one chunk.
+    // A full-sub-group (emulated) partition is the caller's promise that every
+    // lane of the sub-group runs this solve. P == 32 is one chunk per warp, so
+    // the nested loops are warp-uniform and run on it without the per-collective
+    // mask check. Smaller chunks diverge around its collectives: on NVPTX the
+    // chunk-masked partition takes over, because every maskless form measured
+    // slower there (the padding costs more than the masks save); elsewhere the
+    // lockstep solver is the legal form for EXP, while PG still runs the nested
+    // loops, which is only legal while the chunks happen not to diverge.
+    // evidence: docs/perf/steqr.md#full-warp-partition
     template <typename T, size_t P, typename Partition, typename QCache>
     inline bool steqr_cta_solve(const Partition& partition,
                                 T& diag,
@@ -1081,7 +1088,11 @@ namespace batchlas {
                                 SteqrShiftStrategy cta_shift_strategy,
                                 SteqrUpdateScheme cta_update_scheme) {
         if constexpr (lockstep_spans_subgroup_v<Partition> && P < 32) {
-            if (cta_update_scheme == SteqrUpdateScheme::EXP) {
+            if constexpr (kUseNativeChunkedPartition) {
+                const auto chunk = make_partition<P, true>(partition.sg);
+                return steqr_cta_solve<T, P>(chunk, diag, offdiag, qcache, n, max_sweeps,
+                                             zero_threshold, cta_shift_strategy, cta_update_scheme);
+            } else if (cta_update_scheme == SteqrUpdateScheme::EXP) {
                 return steqr_cta_solve_lockstep<T, P>(partition, diag, offdiag, qcache, n, max_sweeps,
                                                       zero_threshold, cta_shift_strategy, cta_update_scheme);
             }

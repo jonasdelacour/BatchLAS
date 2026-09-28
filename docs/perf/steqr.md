@@ -110,3 +110,69 @@ solver above, are only legal on it while chunks never diverge around a collectiv
 Forcing the emulated partition on sm_89 matched the native result bitwise on all 192 EXP
 cases. It was 1.2-1.25x slower in float and equal in double, while its `P = 32` nested solve
 was 1.07x faster. It is what an emulated partition runs today (the non-NVPTX targets).
+
+## Full-warp partition
+
+On NVPTX the native `chunked_partition` passes a runtime member mask, so ptxas wraps every
+collective in a MATCH.ANY + VOTEU convergence check with a WARPSYNC slow path. The emulated
+partition (`make_partition<P, false>`) shuffles over the whole warp with a constant mask and
+has no such wrapper, but every lane of the warp must then reach every collective.
+
+`steqr_cta` and the fused `syev` kernel now hand the solve a full-warp partition. Both clamp
+their dead tail chunks onto a zero problem instead of returning, so every lane reaches the
+solve. What the solve does with that promise depends on `P`:
+
+- **`P = 32`** is one chunk per warp. The nested loops are already warp-uniform, so they run on
+  the full-warp partition as they are. In the SASS, MATCH.ANY and VOTEU drop from 10-11 to 0
+  per kernel. The BRA.DIV convergence branches stay: ptxas emits them for any `.sync`
+  collective it cannot prove converged.
+- **`P < 32` on NVPTX** rebuilds the native partition and runs the step-3 forms (flat or nested)
+  unchanged, because every full-warp form measured slower (below).
+- **Other targets** have no native partition. They run the lockstep solver for EXP, as before.
+
+Kernel alone, float and double, eigenvectors `V` or not `N`, 3 interleaved rounds (spread in
+parentheses). "step 3" is the native partition everywhere; "shipped" is `P = 32` on the
+full-warp partition; "warp chase" also runs the flat solver's chase on the full-warp partition
+at every `P < 32` (padded, as in the lockstep solver), with the settle phase left native:
+
+| case | step 3 (us) | shipped | step 3 / shipped | warp chase | step 3 / warp chase |
+|---|---|---|---|---|---|
+| float n=4 V / N | 33.8 / 31.9 | 36.9 / 32.8 | 0.92 (13%) / 0.97 | 47.2 / 39.9 | 0.72 / 0.80 |
+| float n=6 V | 112.6 | 112.7 | 1.00 | 131.1 | 0.86 |
+| float n=8 V / N | 178.2 / 154.6 | 179.2 / 156.9 | 0.99 / 0.99 | 196.6 / 169.0 | 0.91 / 0.91 |
+| float n=12 V | 293.0 | 291.8 | 1.00 | 343.0 | 0.85 |
+| float n=16 V / N | 455.7 / 416.8 | 464.9 / 423.9 | 0.98 / 0.98 (4%) | 541.7 / 448.5 | 0.84 / 0.93 |
+| float n=24 N | 752.6 | 690.3 | **1.09** | 692.2 | 1.09 |
+| float n=32 V / N | 1485.8 / 1260.9 | 1390.6 / 1156.1 | **1.07 / 1.09** | 1391.6 / 1155.4 | 1.07 / 1.09 |
+| double n=4 V | 797.7 | 795.6 | 1.00 | 847.9 | 0.94 |
+| double n=8 / 16 V | 5282.6 / 18156.6 | 5274.4 / 16725.1 | 1.00 / 1.09 | 5292.0 / 16727.0 | 1.00 / 1.09 |
+| double n=32 V / N | 60970.1 / 56590.4 | 60899.5 / 56609.8 | 1.00 / 1.00 | 60901.4 / 56564.5 | 1.00 / 1.00 |
+
+At `P < 32` "shipped" runs the step-3 code with the same instruction counts, so its ratios
+there are noise. The one exception is double n=16, whose 1.09 is a code-generation swing
+between two builds of the same flat solver, not a gain of this change. Double at `P = 32` is
+FP64-pipe bound (about 4% issue-active), so removing integer and vote instructions does
+nothing for it.
+
+Through the public API (library defaults, batch 16,384, random and graded, 3-5 interleaved
+rounds, eigenvalues bitwise equal):
+
+- `steqr` float n=24 and n=32: 1.05-1.10x;
+- fused `syev` float n=32: 1.07-1.09x;
+- `steqr` double n=32, and everything at `P < 32` (including fused float n=12/16 and complex
+  n=8/16): within about 1%.
+
+All three forms matched step 3 bitwise on the 384-case dump harness: n from 1 to 32, batch
+4,099, EXP and PG, both shifts, work-group multiplier 1 and 2, graded, split, zero, NaN and
+scaled items.
+
+### Measured worse
+
+- **The warp chase at `P < 32`** (settle on the native partition, then a warp vote and the
+  padded chase on the full-warp partition). It is 0.72-0.93x in float and 0.94-1.0x in
+  double. The padded chase adds about ten selects per rotation: the idle-chunk inputs, five
+  carries and the Q index and store. The chase has only two shuffles per rotation, and their
+  mask wrappers cost less than the padding that replaces them.
+- **The lockstep solver on NVPTX** (every phase voted, the padded chase), in one round:
+  float n=4 0.69x, n=8 0.81x, n=12 0.78x, n=16 0.78x. Step 3 measured it at 1.2-1.25x slower
+  in float too.

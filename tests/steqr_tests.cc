@@ -1394,7 +1394,8 @@ TYPED_TEST(SteqrTest, PerChunkFailureIsolated) {
 }
 
 // ---------------------------------------------------------------------------
-// Ragged tail: batch = probs_per_wg*k + 1, probs_per_wg = 32*mult/P.
+// Ragged tail: batch = probs_per_wg*k + 1, probs_per_wg = 32*mult/P. At
+// P = 32 with mult 2 the dead chunk is a whole warp on the maskless solve.
 //
 // Chunks past the batch end run the solve on a zero problem instead of
 // returning. They alias item 0's views, so a missed gate on a load, store or
@@ -1411,8 +1412,8 @@ TYPED_TEST(SteqrTest, RaggedTailBatch) {
     constexpr Backend B = TestFixture::BackendType;
     if constexpr (B == Backend::NETLIB) GTEST_SKIP() << "tests the steqr_cta work-group tail";
 
-    for (const int n : {4, 7}) {
-        const int P = n <= 4 ? 4 : 8;
+    for (const int n : {4, 7, 13, 32}) {
+        const int P = n <= 4 ? 4 : (n <= 8 ? 8 : (n <= 16 ? 16 : 32));
         for (const int mult : {1, 2}) {
             for (const int k : {0, 1, 97, 8192}) {
                 const int batch = (32 * mult / P) * k + 1;
