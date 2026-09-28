@@ -84,7 +84,6 @@ header.top { position: sticky; top: 0; z-index: 20; height: 56px; display: flex;
 
 /* ---------------------------------------------------------------- layout */
 .shell { display: grid; grid-template-columns: 232px minmax(0, 1fr); }
-@media (max-width: 900px) { .shell { grid-template-columns: 1fr; } nav.rail { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--hair); } }
 nav.rail { position: sticky; top: 56px; height: calc(100vh - 56px); overflow: auto; padding: 16px 10px 24px; border-right: 1px solid var(--hair); }
 .rail .grp { margin: 18px 10px 6px; font-size: 11.5px; font-weight: 600; color: var(--muted); }
 .rail a { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 0 8px; padding: 6px 10px; border-radius: 7px;
@@ -98,6 +97,28 @@ nav.rail { position: sticky; top: 56px; height: calc(100vh - 56px); overflow: au
 .rail .bar i { display: block; height: 100%; background: var(--accent); transition: width .6s ease; }
 .rail a.live .nm::after { content: ""; display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-radius: 50%;
   background: var(--accent); vertical-align: 1px; animation: pulse 1.6s ease-in-out infinite; }
+/* Narrow screens: the rail becomes one horizontally scrolling strip under the header.
+   It must follow the rules above, which it overrides at equal specificity. */
+@media (max-width: 900px) {
+  .shell { grid-template-columns: 1fr; }
+  nav.rail { position: sticky; top: 56px; z-index: 10; height: auto; display: flex; gap: 4px; overflow-x: auto; padding: 8px 12px;
+    border-right: 0; border-bottom: 1px solid var(--hair); background: var(--page); scrollbar-width: none; }
+  nav.rail::-webkit-scrollbar { display: none; }
+  .rail .grp, .rail .bar { display: none; }
+  .rail a { display: inline-flex; flex: none; gap: 6px; padding: 5px 10px; border: 1px solid var(--hair); border-radius: 999px; white-space: nowrap; }
+  .rail a.on { border-color: var(--accent); }
+}
+@media (max-width: 760px) {
+  header.top { gap: 10px; padding: 0 12px; }
+  header.top .sel { min-width: 0; max-width: 52vw; text-overflow: ellipsis; }
+  /* Only the state dot and the ETA fit beside the campaign menu. */
+  .status { gap: 8px; overflow: hidden; }
+  .status .stat-inline:not(#eta), .state > span:last-child { display: none; }
+  .figbar .seg { flex-wrap: wrap; }
+  .stats > div { min-height: 0; padding: 12px 14px; }
+  .stats .v { font-size: 22px; }
+}
+#ov-table { overflow-x: auto; }
 .sp { font-family: var(--mono); font-size: 12.5px; font-variant-numeric: tabular-nums; }
 .sp.win { color: var(--win); } .sp.lose { color: var(--lose); }
 
@@ -421,6 +442,12 @@ function renderRail() {
     }
   }
   patch($("rail"), h);
+  // In the phone strip the current op can sit off-screen; bring it in once per page.
+  const on = $("rail").querySelector("a.on"), rail = $("rail");
+  if (on && rail.scrollWidth > rail.clientWidth && rail.__on !== on.getAttribute("href")) {
+    rail.__on = on.getAttribute("href");
+    rail.scrollLeft = on.offsetLeft - (rail.clientWidth - on.offsetWidth) / 2;
+  }
 }
 
 // ---------------------------------------------------------------- figure panel (in-place image swaps)
