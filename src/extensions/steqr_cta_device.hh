@@ -18,6 +18,7 @@
 
 #include <array>
 #include <cstdint>
+#include <type_traits>
 
 namespace batchlas {
 
@@ -178,8 +179,24 @@ namespace batchlas {
             idx = next;
         }
 
+        // Padded form for a chunk that idles through a lockstep chase: an idle
+        // step reads its own current word and writes nothing, so the index never
+        // leaves the lane's own row, even in a tile shared with other chunks.
+        template <int32_t Dir>
+        inline void chase_step_masked(T c, T s, bool act) {
+            const int32_t next = act ? idx + Dir * static_cast<int32_t>(LDQ) : idx;
+            const T q1 = Q_local[next];
+            if (act) Q_local[idx] = c * carry - s * q1;
+            carry = act ? s * carry + c * q1 : carry;
+            idx = next;
+        }
+
         inline void chase_end(int32_t) {
             Q_local[idx] = carry;
+        }
+
+        inline void apply_if(bool pred, int32_t col0, int32_t col1, T c, T s) {
+            if (pred) apply(col0, col1, c, s);
         }
 
         // Q := Q*J on columns [bb, be]; lane-private (own row), so no barrier.
@@ -210,7 +227,10 @@ namespace batchlas {
         inline void chase_begin(int32_t) {}
         template <int32_t Dir>
         inline void chase_step(T, T) {}
+        template <int32_t Dir>
+        inline void chase_step_masked(T, T, bool) {}
         inline void chase_end(int32_t) {}
+        inline void apply_if(bool, int32_t, int32_t, T, T) {}
         inline void reverse_columns(int32_t, int32_t, bool) {}
     };
 
@@ -306,7 +326,9 @@ namespace batchlas {
                                      T& diag,
                                      T& offdiag,
                                      int32_t l0,
-                                     QCache& qcache) {
+                                     QCache& qcache,
+                                     bool pred = true) {
+        // `pred` false: shuffles still run (l0 must be in [0, P-2]), nothing is written.
         const T a = select_from_group(partition, diag, l0);
         const T b = select_from_group(partition, offdiag, l0);
         const T c2 = select_from_group(partition, diag, l0 + 1);
@@ -315,19 +337,23 @@ namespace batchlas {
         // all lanes instead of computing on the leader and broadcasting four values.
         const auto [rt1, rt2, cs, sn] = internal::laev2(a, b, c2);
         const int32_t lane = static_cast<int32_t>(partition.get_local_linear_id());
-        if (lane == l0) {
+        if (pred && lane == l0) {
             diag = rt1;
             offdiag = T(0);
         }
-        if (lane == (l0 + 1)) {
+        if (pred && lane == (l0 + 1)) {
             diag = rt2;
         }
 
         // QL eigenvector update: apply (cs, sn) on columns (l0+1, l0).
-        qcache.apply(l0 + 1, l0, cs, sn);
+        qcache.apply_if(pred, l0 + 1, l0, cs, sn);
     }
 
-    template <typename T, size_t P, typename Partition, typename QCache>
+    // Pad: the chunks of the lockstep domain share one trip count, and a chunk
+    // with `active` false or a shorter chase idles through identity rotations.
+    // Idle state is never multiplied by a mask, only discarded by selects, so a
+    // failed chunk's NaNs cannot reach d, e or Q. EXP only.
+    template <typename T, size_t P, bool Pad = false, typename Partition, typename QCache>
     inline void implicit_ql_step(const Partition& partition,
                                  T& diag,
                                  T& offdiag,
@@ -336,8 +362,12 @@ namespace batchlas {
                                  int32_t l,
                                  int32_t m,
                                  SteqrShiftStrategy shift_strategy,
-                                 SteqrUpdateScheme update_scheme) {
+                                 SteqrUpdateScheme update_scheme,
+                                 bool active = true) {
         const int32_t lane = static_cast<int32_t>(partition.get_local_linear_id());
+        // An idle chunk's l and m are stale: clamp every shuffle source into the chunk.
+        const int32_t ls = Pad ? sycl::clamp(l, int32_t(0), static_cast<int32_t>(P) - 2) : l;
+        const int32_t ms = Pad ? sycl::clamp(m, int32_t(0), static_cast<int32_t>(P) - 1) : m;
 
         // EXP update scheme = explicit similarity update (bulge-chase), matching the logic in steqr.cc.
         // We implement QL by operating on a *virtual reversed* indexing inside [l..m] and running a QR-style
@@ -345,9 +375,15 @@ namespace batchlas {
         // (see reverse_block).
         const auto explicit_ql_step_exp = [&]() {
             // Preload shift inputs.
-            const T p0  = select_from_group(partition, diag, l);
-            const T e0  = select_from_group(partition, offdiag, l);
-            const T dlp1 = select_from_group(partition, diag, l + 1);
+            T p0  = select_from_group(partition, diag, ls);
+            T e0  = select_from_group(partition, offdiag, ls);
+            T dlp1 = select_from_group(partition, diag, ls + 1);
+            if constexpr (Pad) {
+                // A benign 2x2 keeps an idle chunk's shift finite (e0 == 0 divides by 0).
+                p0 = active ? p0 : T(0);
+                e0 = active ? e0 : T(1);
+                dlp1 = active ? dlp1 : T(0);
+            }
 
             // Partition-uniform scalar state for the virtual QR bulge chase.
             // Every lane evaluates it redundantly: the inputs are broadcast values, so
@@ -364,8 +400,8 @@ namespace batchlas {
                 mu = p0 - e0 / (gg + sycl::copysign(rr, gg));
             }
 
-            const int32_t nb = m - l + 1; // block length
-            // Virtual index v in [0..nb-2] maps to physical indices:
+            const int32_t nrot = Pad ? lockstep_max(partition, active ? m - l : 0) : m - l;
+            // Virtual index v in [0..m-l-1] maps to physical indices:
             //   d_v(v)   = d( m - v )
             //   d_v(v+1) = d( m - v - 1 )
             //   e_v(v)   = e( m - v - 1 )  (couples the two diags above)
@@ -378,9 +414,9 @@ namespace batchlas {
             // Shuffles run unconditionally with a clamped source and the value is
             // selected afterwards: a shuffle under a condition not provably warp-uniform
             // costs a MATCH/VOTE/BRA.DIV wrapper per call and breaks full-warp lockstep.
-            T di = select_from_group(partition, diag, m);
-            T ei = select_from_group(partition, offdiag, std::max(m - 1, 0));
-            ei = (m >= 1) ? ei : T(0);
+            T di = select_from_group(partition, diag, ms);
+            T ei = select_from_group(partition, offdiag, std::max(ms - 1, 0));
+            ei = (ms >= 1) ? ei : T(0);
             T e_own = T(0);
 
             // Snapshot the tridiagonal before the chase.
@@ -408,13 +444,14 @@ namespace batchlas {
             // conditions collapse into a single compare against this limit.
             const int32_t e_hi_limit = std::min(m, n - 1);
 
-            qcache.chase_begin(m);
+            qcache.chase_begin(ms);
 
-            for (int32_t v = 0; v < nb - 1; ++v) {
+            for (int32_t v = 0; v < nrot; ++v) {
                 const int32_t hi = m - v;
                 const int32_t lo = m - v - 1;
+                const bool act = !Pad || (active && v < m - l);
 
-                const T dj = select_from_group(partition, diag_snap, lo);
+                const T dj = select_from_group(partition, diag_snap, Pad ? std::max(lo, 0) : lo);
 
                 // Next virtual offdiag (toward physical l). It is safe to read outside the block because
                 // deflation boundaries force those couplings to zero.
@@ -422,8 +459,9 @@ namespace batchlas {
                 const T ej = (lo >= 1) ? ej_raw : T(0);
 
                 const auto upd = [&]() {
-                    const T x = eprev;
-                    const T y = bulge;
+                    // Idle: (1, 0) is the exact identity rotation c = 1, s = 0.
+                    const T x = act ? eprev : T(1);
+                    const T y = act ? bulge : T(0);
 
                     const auto [c1, s1, r1] = cta_lartg(x, y);
                     const T sigma = -s1; // match steqr.cc / saved-rotation convention
@@ -443,8 +481,8 @@ namespace batchlas {
                     const T bulge_new = -ej * sigma;
 
                     // Advance the (uniform) chase state.
-                    eprev = ei_new;
-                    bulge = bulge_new;
+                    eprev = act ? ei_new : eprev;
+                    bulge = act ? bulge_new : bulge;
 
                     // Return {c, sigma, di_new, dj_new, ei_new, ej_new, e_hi_new}
                     return std::array<T, 7>{c1, sigma, di_new, dj_new, ei_new, ej_new, e_hi_new};
@@ -462,34 +500,38 @@ namespace batchlas {
                 // Written as selects, not `if`s: exactly one lane of the partition is
                 // ever the target, so a branch here is a guaranteed divergence (and a
                 // BSSY/BSYNC pair) on every single rotation.
-                const bool owns_hi = (lane == hi);
+                const bool owns_hi = act && (lane == hi);
                 diag = owns_hi ? upd[2] : diag;
                 offdiag = (owns_hi && hi < e_hi_limit) ? upd[6] : offdiag;
 
                 // QL eigenvector update: columns are reversed in physical ordering.
                 // In your existing PG path you do apply(i+1, i, c, -s); here the physical pair is (hi, lo).
-                qcache.template chase_step<-1>(c1, sigma);
+                if constexpr (Pad) {
+                    qcache.template chase_step_masked<-1>(c1, sigma, act);
+                } else {
+                    qcache.template chase_step<-1>(c1, sigma);
+                }
 
                 // Carry the values the next iteration would otherwise re-shuffle:
                 // d(lo) and e(lo-1) are exactly what was just written.
-                di = upd[3];
-                ei = upd[5];
-                e_own = upd[4];
+                di = act ? upd[3] : di;
+                ei = act ? upd[5] : ei;
+                e_own = act ? upd[4] : e_own;
             }
 
             // Flush the carried tail values (lo == l on the final iteration).
-            if (lane == l) {
+            if (active && lane == l) {
                 diag = di;
                 offdiag = e_own;
             }
-            if (l >= 1 && lane == (l - 1)) {
+            if (active && l >= 1 && lane == (l - 1)) {
                 offdiag = ei;
             }
 
-            qcache.chase_end(l);
+            if (active) qcache.chase_end(l);
         };
 
-        if (update_scheme == SteqrUpdateScheme::EXP) {
+        if (Pad || update_scheme == SteqrUpdateScheme::EXP) {
             explicit_ql_step_exp();
             return;
         }
@@ -585,15 +627,15 @@ namespace batchlas {
     // `qcache` accumulates the rotations (a no-op when eigenvectors are not
     // wanted). Returns true if any block failed to converge within budget.
     template <typename T, size_t P, typename Partition, typename QCache>
-    inline bool steqr_cta_solve(const Partition& partition,
-                                T& diag,
-                                T& offdiag,
-                                QCache& qcache,
-                                int32_t n,
-                                int32_t max_sweeps,
-                                T zero_threshold,
-                                SteqrShiftStrategy cta_shift_strategy,
-                                SteqrUpdateScheme cta_update_scheme) {
+    inline bool steqr_cta_solve_nested(const Partition& partition,
+                                       T& diag,
+                                       T& offdiag,
+                                       QCache& qcache,
+                                       int32_t n,
+                                       int32_t max_sweeps,
+                                       T zero_threshold,
+                                       SteqrShiftStrategy cta_shift_strategy,
+                                       SteqrUpdateScheme cta_update_scheme) {
         const int32_t lane = static_cast<int32_t>(partition.get_local_linear_id());
 
         // Defensive convergence budget to avoid unbounded looping on hard inputs.
@@ -724,6 +766,331 @@ namespace batchlas {
         }
 
         return failed;
+    }
+
+    // steqr_cta_solve_nested with the sweep hoisted out of the loop nest, for a
+    // partition whose collectives are chunk-local (native chunked_partition).
+    //
+    // The nested loops realign the chunks of a warp only at their exits, so a
+    // chunk that advances past an eigenvalue waits while its neighbours finish
+    // sweeping theirs, and the warp pays the sum over eigenvalues of the slowest
+    // chunk. Here a chunk settles (opens, tests, 2x2-solves, closes) until it has
+    // a sweep to run or is done, and every chunk with a sweep chases in the same
+    // pass, so the warp pays closer to the slowest chunk's total. The per-chunk
+    // operation sequence is the nested solver's, so the results are bitwise equal.
+    template <typename T, size_t P, typename Partition, typename QCache>
+    inline bool steqr_cta_solve_flat(const Partition& partition,
+                                     T& diag,
+                                     T& offdiag,
+                                     QCache& qcache,
+                                     int32_t n,
+                                     int32_t max_sweeps,
+                                     T zero_threshold,
+                                     SteqrShiftStrategy cta_shift_strategy,
+                                     SteqrUpdateScheme cta_update_scheme) {
+        const int32_t lane = static_cast<int32_t>(partition.get_local_linear_id());
+        int32_t sweep_budget = max_sweeps * n;
+        int32_t next_block_begin = 0;
+        int32_t block_begin = 0;
+        int32_t block_end = 0;
+        int32_t l = 0;
+        int32_t m = 0;
+        int32_t sweeps_at_l = 0;
+        bool rev = false;
+        T scale = T(1);
+        T inv_scale = T(1);
+        bool need_block = true;
+        bool done = false;
+        bool failed = false;
+
+        while (!done) {
+            // Settle: every exit of this loop is either "sweep [l, m] next" or done,
+            // so the chunks of a warp reconverge right before the chase.
+            for (;;) {
+                if (need_block) {
+                    // ---- Open the next block (nested: top of the split loop). ----
+                    const int32_t bb = next_block_begin;
+                    if (bb > 0 && lane == (bb - 1) && lane < (n - 1)) {
+                        offdiag = T(0);
+                    }
+                    deflate(partition, offdiag, diag, n, bb, n, zero_threshold);
+                    const int32_t be = partition_reduce_min<P>(
+                        partition, (lane >= bb && lane < (n - 1) && offdiag == T(0)) ? lane : (n - 1));
+                    next_block_begin = be + 1;
+                    if (be <= bb) {
+                        if (next_block_begin >= n) {
+                            done = true;
+                            break;
+                        }
+                        continue;
+                    }
+
+                    T anorm_cand = T(0);
+                    if (lane >= bb && lane <= be) {
+                        anorm_cand = sycl::fabs(diag);
+                    }
+                    if (lane >= bb && lane < be) {
+                        anorm_cand = sycl::fmax(anorm_cand, sycl::fabs(offdiag));
+                    }
+                    const T anorm = partition_reduce_fmax<P>(partition, anorm_cand);
+                    scale = T(1);
+                    if (anorm > internal::ssfmax<T>()) {
+                        scale = internal::ssfmax<T>() / anorm;
+                    } else if (anorm < internal::ssfmin<T>() && anorm != T(0)) {
+                        scale = internal::ssfmin<T>() / anorm;
+                    }
+                    inv_scale = T(1) / scale;
+                    if (scale != T(1)) {
+                        if (lane >= bb && lane <= be) {
+                            diag *= scale;
+                        }
+                        if (lane >= bb && lane < be) {
+                            offdiag *= scale;
+                        }
+                    }
+
+                    const T d_first = sycl::fabs(select_from_group(partition, diag, bb));
+                    const T d_last = sycl::fabs(select_from_group(partition, diag, be));
+                    rev = d_last < d_first;
+                    reverse_block<P>(partition, diag, offdiag, qcache, bb, be, rev);
+                    block_begin = bb;
+                    block_end = be;
+                    l = bb;
+                    sweeps_at_l = 0;
+                    need_block = false;
+                }
+
+                // ---- Test [l, block_end] (nested: sweep loop top). ----
+                // The sweep cap comes first: the nested loop gives up after its last
+                // sweep without deflating or searching for m again.
+                bool closing = false;
+                if (sweeps_at_l >= max_sweeps) {
+                    failed = true;
+                    closing = true;
+                } else {
+                    deflate(partition, offdiag, diag, n, l, block_end + 1, zero_threshold);
+                    m = partition_reduce_min<P>(
+                        partition, (lane >= l && lane < block_end && offdiag == T(0)) ? lane : block_end);
+                    if (m == l) {
+                        l += 1;
+                    } else if (m == l + 1) {
+                        solve_2x2_and_update<T, P>(partition, diag, offdiag, l, qcache);
+                        l += 2;
+                    } else if (sweep_budget <= 0) {
+                        failed = true;
+                    } else {
+                        break;
+                    }
+                    sweeps_at_l = 0;
+                    closing = failed || l >= block_end;
+                }
+
+                // ---- Close the block: mirror back and rescale, even on failure. ----
+                if (closing) {
+                    reverse_block<P>(partition, diag, offdiag, qcache, block_begin, block_end, rev);
+                    if (scale != T(1)) {
+                        if (lane >= block_begin && lane <= block_end) {
+                            diag *= inv_scale;
+                        }
+                        if (lane >= block_begin && lane < block_end) {
+                            offdiag *= inv_scale;
+                        }
+                    }
+                    need_block = true;
+                    if (failed || next_block_begin >= n) {
+                        done = true;
+                        break;
+                    }
+                }
+            }
+            if (done) break;
+
+            implicit_ql_step<T, P>(partition, diag, offdiag, qcache, n, l, m,
+                                   cta_shift_strategy, cta_update_scheme);
+            sweep_budget -= 1;
+            sweeps_at_l += 1;
+        }
+        return failed;
+    }
+
+    // The same state machine for a partition whose lockstep domain is the whole
+    // sub-group (emulated partition): every branch that guards a collective must
+    // be taken by all chunks, so each phase runs under a sub-group vote with its
+    // updates gated per chunk, and the sweep is the padded chase. A chunk outside
+    // a phase feeds its collectives in-range sources and discards the results.
+    template <typename T, size_t P, typename Partition, typename QCache>
+    inline bool steqr_cta_solve_lockstep(const Partition& partition,
+                                         T& diag,
+                                         T& offdiag,
+                                         QCache& qcache,
+                                         int32_t n,
+                                         int32_t max_sweeps,
+                                         T zero_threshold,
+                                         SteqrShiftStrategy cta_shift_strategy,
+                                         SteqrUpdateScheme cta_update_scheme) {
+        const int32_t lane = static_cast<int32_t>(partition.get_local_linear_id());
+
+        int32_t sweep_budget = max_sweeps * n;
+        int32_t next_block_begin = 0;
+        int32_t block_begin = 0;
+        int32_t block_end = 0;
+        int32_t l = 0;
+        int32_t m = 0;
+        int32_t sweeps_at_l = 0;
+        bool rev = false;
+        T scale = T(1);
+        T inv_scale = T(1);
+        bool need_block = true;
+        bool ready = false;  // a sweep on [l, m] is pending
+        bool done = false;
+        bool failed = false;
+
+        while (lockstep_any(partition, !done)) {
+            while (lockstep_any(partition, !done && !ready)) {
+                // ---- Open the next block (nested: top of the split loop). ----
+                const bool opening = !done && !ready && need_block;
+                if (lockstep_any(partition, opening)) {
+                    const int32_t bb = opening ? next_block_begin : 0;
+                    if (opening && bb > 0 && lane == (bb - 1) && lane < (n - 1)) {
+                        offdiag = T(0);
+                    }
+                    deflate(partition, offdiag, diag, n, opening ? bb : n, n, zero_threshold);
+                    const int32_t be = partition_reduce_min<P>(
+                        partition, (opening && lane >= bb && lane < (n - 1) && offdiag == T(0)) ? lane : (n - 1));
+                    const bool opened = opening && be > bb;
+
+                    T anorm_cand = T(0);
+                    if (opened && lane >= bb && lane <= be) {
+                        anorm_cand = sycl::fabs(diag);
+                    }
+                    if (opened && lane >= bb && lane < be) {
+                        anorm_cand = sycl::fmax(anorm_cand, sycl::fabs(offdiag));
+                    }
+                    const T anorm = partition_reduce_fmax<P>(partition, anorm_cand);
+                    T sc = T(1);
+                    if (anorm > internal::ssfmax<T>()) {
+                        sc = internal::ssfmax<T>() / anorm;
+                    } else if (anorm < internal::ssfmin<T>() && anorm != T(0)) {
+                        sc = internal::ssfmin<T>() / anorm;
+                    }
+                    if (opened && sc != T(1)) {
+                        if (lane >= bb && lane <= be) {
+                            diag *= sc;
+                        }
+                        if (lane >= bb && lane < be) {
+                            offdiag *= sc;
+                        }
+                    }
+
+                    const T d_first = sycl::fabs(select_from_group(partition, diag, bb));
+                    const T d_last = sycl::fabs(select_from_group(partition, diag, be));
+                    const bool rv = opened && (d_last < d_first);
+                    reverse_block<P>(partition, diag, offdiag, qcache, bb, be, rv);
+
+                    // A size-0/1 block is skipped: stay in `need_block` for the next one.
+                    next_block_begin = opening ? be + 1 : next_block_begin;
+                    if (opened) {
+                        block_begin = bb;
+                        block_end = be;
+                        l = bb;
+                        sweeps_at_l = 0;
+                        rev = rv;
+                        scale = sc;
+                        inv_scale = T(1) / sc;
+                        need_block = false;
+                    }
+                    done = done || (opening && !opened && be + 1 >= n);
+                }
+
+                // ---- Test the active subproblem [l, block_end] (nested: sweep loop top). ----
+                const bool testing = !done && !ready && !need_block;
+                // The sweep cap comes first: the nested loop gives up after its last
+                // sweep without deflating or searching for m again.
+                const bool cap = testing && sweeps_at_l >= max_sweeps;
+                const bool active = testing && !cap;
+                if (lockstep_any(partition, active)) {
+                    deflate(partition, offdiag, diag, n, active ? l : n, block_end + 1, zero_threshold);
+                    const int32_t mm = partition_reduce_min<P>(
+                        partition, (active && lane >= l && lane < block_end && offdiag == T(0)) ? lane : block_end);
+                    const bool adv1 = active && mm == l;
+                    const bool adv2 = active && mm == l + 1;
+                    const bool want = active && !adv1 && !adv2;
+                    failed = failed || (want && sweep_budget <= 0);
+                    m = (want && sweep_budget > 0) ? mm : m;
+                    ready = ready || (want && sweep_budget > 0);
+
+                    if (lockstep_any(partition, adv2)) {
+                        const int32_t l0 = sycl::clamp(l, int32_t(0), static_cast<int32_t>(P) - 2);
+                        solve_2x2_and_update<T, P>(partition, diag, offdiag, l0, qcache, adv2);
+                    }
+                    l += adv1 ? 1 : (adv2 ? 2 : 0);
+                    sweeps_at_l = (adv1 || adv2) ? 0 : sweeps_at_l;
+                }
+                failed = failed || cap;
+
+                // ---- Close the block: mirror back and rescale, even on failure. ----
+                const bool closing = testing && (l >= block_end || failed);
+                if (lockstep_any(partition, closing)) {
+                    reverse_block<P>(partition, diag, offdiag, qcache, block_begin, block_end, closing && rev);
+                    if (closing && scale != T(1)) {
+                        if (lane >= block_begin && lane <= block_end) {
+                            diag *= inv_scale;
+                        }
+                        if (lane >= block_begin && lane < block_end) {
+                            offdiag *= inv_scale;
+                        }
+                    }
+                    need_block = need_block || closing;
+                    done = done || (closing && (failed || next_block_begin >= n));
+                }
+            }
+
+            // ---- Every chunk with a pending sweep chases in the same pass. ----
+            if (lockstep_any(partition, ready)) {
+                implicit_ql_step<T, P, true>(partition, diag, offdiag, qcache, n, l, m,
+                                             cta_shift_strategy, cta_update_scheme, ready);
+            }
+            sweep_budget -= ready ? 1 : 0;
+            sweeps_at_l += ready ? 1 : 0;
+            ready = false;
+        }
+
+        return failed;
+    }
+
+    // Where the hoisted sweep pays for its bookkeeping. It does not at P == 32
+    // (one chunk per warp) or P == 4, whose 1-3 rotation sweeps are too short for
+    // realignment to beat the extra per-pass work; float P == 8 breaks even.
+    // evidence: docs/perf/steqr.md#lockstep-flat-solver
+    template <typename T, size_t P>
+    inline constexpr bool kSteqrCtaFlatPays = (P == 16) || (P == 8 && std::is_same_v<T, double>);
+
+    // Returns true if any block failed to converge within budget.
+    //
+    // A sub-group-wide partition cannot run the nested loops legally when its
+    // chunks diverge, so it takes the lockstep solver (EXP; the padded chase has
+    // no PG form) whenever a warp holds more than one chunk.
+    template <typename T, size_t P, typename Partition, typename QCache>
+    inline bool steqr_cta_solve(const Partition& partition,
+                                T& diag,
+                                T& offdiag,
+                                QCache& qcache,
+                                int32_t n,
+                                int32_t max_sweeps,
+                                T zero_threshold,
+                                SteqrShiftStrategy cta_shift_strategy,
+                                SteqrUpdateScheme cta_update_scheme) {
+        if constexpr (lockstep_spans_subgroup_v<Partition> && P < 32) {
+            if (cta_update_scheme == SteqrUpdateScheme::EXP) {
+                return steqr_cta_solve_lockstep<T, P>(partition, diag, offdiag, qcache, n, max_sweeps,
+                                                      zero_threshold, cta_shift_strategy, cta_update_scheme);
+            }
+        } else if constexpr (kSteqrCtaFlatPays<T, P>) {
+            return steqr_cta_solve_flat<T, P>(partition, diag, offdiag, qcache, n, max_sweeps,
+                                              zero_threshold, cta_shift_strategy, cta_update_scheme);
+        }
+        return steqr_cta_solve_nested<T, P>(partition, diag, offdiag, qcache, n, max_sweeps,
+                                            zero_threshold, cta_shift_strategy, cta_update_scheme);
     }
 
 } // namespace batchlas

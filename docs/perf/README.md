@@ -19,6 +19,7 @@ conservative. Most of the obvious moves in here have already been made and measu
 | [lu.md](lu.md) | `getrf` `getrs` `getri` | **yes** — four windows, all `float`/`cfloat`-leaning |
 | [gemv.md](gemv.md) | `gemv` | **yes** — one `complex<double>` transposed window |
 | [spmm.md](spmm.md) | `spmm` | **yes** — the `NoTrans` gather; the transposed scatter stays vendor-first |
+| [steqr.md](steqr.md) | `steqr_cta` (also the fused small-n `syev` and the `stedc` leaves) | n/a — no vendor arm; records the lockstep flat solver |
 
 ## Two rules these pages are written to
 

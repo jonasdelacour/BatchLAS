@@ -172,6 +172,47 @@ inline T shift_group_left(SubGroupPartition<P> part, T v, uint32_t delta) {
 }
 
 // ---------------------------------------------------------------------------
+// Lockstep hooks — the domain whose chunks must run one instruction stream.
+//
+// A native chunked_partition masks every collective to its own chunk, so the
+// chunk is the whole domain and the chunks of a warp may take different trip
+// counts. The emulated partition shuffles over the full sub-group, so its
+// chunks must agree on every branch that guards a collective: the votes span
+// the sub-group and the caller pads short chunks with no-op work.
+//
+// `v` must be uniform across the chunk (the caller's own state).
+// ---------------------------------------------------------------------------
+template <typename Group>
+inline constexpr bool lockstep_spans_subgroup_v = false;
+
+template <size_t P>
+inline constexpr bool lockstep_spans_subgroup_v<SubGroupPartition<P>> = !kUseNativeChunkedPartition;
+
+template <size_t P>
+inline bool lockstep_any(SubGroupPartition<P> part, bool v) {
+    if constexpr (kUseNativeChunkedPartition) {
+        return v;
+    } else {
+        return sycl::any_of_group(part.sg, v);
+    }
+}
+
+template <size_t P>
+inline int32_t lockstep_max(SubGroupPartition<P> part, int32_t v) {
+    if constexpr (kUseNativeChunkedPartition) {
+        return v;
+    } else {
+        // Chunk-uniform input, so only the cross-chunk butterfly steps are needed.
+        const uint32_t range = static_cast<uint32_t>(part.sg.get_local_linear_range());
+        for (uint32_t mask = static_cast<uint32_t>(P); mask < range; mask <<= 1) {
+            const int32_t other = sycl::permute_group_by_xor(part.sg, v, mask);
+            v = (other > v) ? other : v;
+        }
+        return v;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // sg_leader_broadcast — used by group-invoke.hh's broadcast_from_leader_impl
 //   via ADL to broadcast the leader's value to every lane in the chunk.
 //
