@@ -16,7 +16,7 @@ endif()
 
 # Define test executables
 set(TEST_TARGETS
-    sg_compat_tests
+    sg_partition_tests
     util_span_tests
     util_vector_tests
     util_device_queue_tests
@@ -146,7 +146,7 @@ endif()
 # grows past ~15 s, label it here rather than letting it bloat the default run.
 # ---------------------------------------------------------------------------
 set(BATCHLAS_TEST_LABELS_util
-    sg_compat_tests util_span_tests util_vector_tests util_device_queue_tests
+    sg_partition_tests util_span_tests util_vector_tests util_device_queue_tests
     mempool_tests matrix_tests matrix_view_tests minibench_cli_tests
     backend_dispatch_tests options_api_tests route_vocabulary_tests
     route_gemm_equivalence_tests settings_tests error_model_tests
@@ -202,9 +202,9 @@ endfunction()
 
 function(batchlas_add_test_target test_name)
     add_executable(${test_name} ${test_name}.cc)
-    if(test_name STREQUAL "sg_compat_tests")
-        # sg_compat_tests uses sg_compat.hh directly — no full batchlas library
-        # needed, only the SYCL compiler and include paths.
+    if(test_name STREQUAL "sg_partition_tests")
+        # Header-only: compiles src/extensions/sg_partition/ directly and links
+        # no batchlas library, only the SYCL compiler and include paths.
         batchlas_configure_binary_target(${test_name}
             NO_FACADE
             LIBRARIES
@@ -331,6 +331,11 @@ function(batchlas_add_test_target test_name)
         list(APPEND _labels slow)
     endif()
     set_tests_properties(${test_name} PROPERTIES LABELS "${_labels}")
+    if(test_name STREQUAL "sg_partition_tests")
+        # A backend that breaks a divergent collective deadlocks rather than
+        # failing; the suite needs ~60 s even under an OpenCL CPU JIT.
+        set_tests_properties(${test_name} PROPERTIES TIMEOUT 300)
+    endif()
 
     if(BATCHLAS_OPENBLAS_CORETYPE)
         # The host BLAS was found to compute dgemm incorrectly with its

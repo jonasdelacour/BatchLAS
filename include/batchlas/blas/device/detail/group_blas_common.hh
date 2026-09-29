@@ -13,7 +13,6 @@
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>
 
-#include <sycl/ext/oneapi/group_local_memory.hpp>
 #include <sycl/sycl.hpp>
 
 namespace batchlas::device {

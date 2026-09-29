@@ -101,7 +101,7 @@ Event launch_trmm_triangular_tiles(Queue& ctx,
     // down to 64 threads and halving the lanes again costs more in outstanding
     // loads than the ratio buys -- that end is bandwidth bound, not FMA bound,
     // and measured 0.374 -> 0.424 ms at m = 32.
-    constexpr int LocalCols = (sycl::detail::is_complex<T>::value && TileM >= 64)
+    constexpr int LocalCols = (is_std_complex_v<T> && TileM >= 64)
                                   ? trmm_lanes(TileN) / 2
                                   : trmm_lanes(TileN);
     constexpr int ThreadRows = TileM / LocalRows;
@@ -411,7 +411,7 @@ bool trmm_tiles_supported(const MatrixView<T, MatrixFormat::Dense>& A,
 // further up. The thresholds below are that table.
 template <typename T>
 inline int trmm_row_tile(int m) {
-    constexpr bool complex_t = sycl::detail::is_complex<T>::value;
+    constexpr bool complex_t = is_std_complex_v<T>;
     constexpr bool wide = sizeof(typename base_type<T>::type) > 4 || complex_t;
     if constexpr (wide) {
         // Complex stops at 32 because its 64-row cell measured a wash either

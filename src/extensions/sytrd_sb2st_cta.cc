@@ -409,7 +409,7 @@ Event btrd_lower_inplace_subgroup(Queue& q,
                 const auto sg = it.get_sub_group();
                 const auto partition = make_partition<P>(sg);
 
-                // NOTE: chunked_partition<P>(sg) partitions *within a sub-group*.
+                // NOTE: make_partition<P>(sg) partitions *within a sub-group*.
                 // If the work-group contains multiple sub-groups, partition.get_group_linear_id()
                 // repeats for each sub-group. Make part_id unique within the whole work-group.
                 const int32_t sg_id = static_cast<int32_t>(sg.get_group_linear_id());

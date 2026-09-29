@@ -1,4 +1,5 @@
 #include "../linalg-impl.hh"
+#include "../math-helpers.hh"
 #include <batchlas/blas/dispatch/route_compiled.hh>
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
@@ -178,7 +179,7 @@ namespace batchlas {
         // BATCHLAS_ORTHO_GRAM=gemm pins the old spelling, so the substitution
         // stays measurable from one binary rather than needing a build of the
         // parent commit to compare against.
-        constexpr bool gram_is_real = !sycl::detail::is_complex<T>::value;
+        constexpr bool gram_is_real = !internal::is_complex<T>::value;
         const bool gram_pinned_to_gemm = [] {
             const char* raw = batchlas::settings().selection.ortho_gram.get();
             return raw != nullptr && std::string(raw) == "gemm";
@@ -198,8 +199,8 @@ namespace batchlas {
         };
 
 
-        auto real_part = [](T value) { if constexpr (sycl::detail::is_complex<T>::value) return value.real(); else return value; };
-        auto square = [](T value) { if constexpr (sycl::detail::is_complex<T>::value) return (value * std::conj(value)).real(); else return value * value; };
+        auto real_part = [](T value) { if constexpr (internal::is_complex<T>::value) return value.real(); else return value; };
+        auto square = [](T value) { if constexpr (internal::is_complex<T>::value) return (value * std::conj(value)).real(); else return value * value; };
         
         auto chol_alg = [&](){
             constexpr T alpha = 1.0;
@@ -286,7 +287,7 @@ namespace batchlas {
                     auto cta = item.get_group();
                     auto ATA_acc = ATA_ptr + bid * ATA_stride;
                     T g_norm = 0.0;
-                    if constexpr (sycl::detail::is_complex<T>::value){
+                    if constexpr (internal::is_complex<T>::value){
                         g_norm = sycl::reduce_over_group(cta, std::sqrt(ATA_acc[tid * k + tid].real()), sycl::maximum<typename T::value_type>());
                     } else {
                         g_norm = sycl::reduce_over_group(cta, std::sqrt(ATA_acc[tid * k + tid]), sycl::maximum<T>());
@@ -464,7 +465,7 @@ namespace batchlas {
             throw batchlas::invalid_argument("The number of vectors in A (" + std::to_string(nA) + ") and M (" + std::to_string(nM) + ") must sum to at most the dimension of these vectors (" + std::to_string(k) + ")");
         }
         assert(k == (transM == Transpose::NoTrans ? M.rows_ : M.cols_));
-        auto trans = sycl::detail::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
+        auto trans = internal::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
         auto no_trans = Transpose::NoTrans;
         auto inv_transA = transA == trans ? no_trans : trans;
         auto inv_transM = transM == trans ? no_trans : trans;

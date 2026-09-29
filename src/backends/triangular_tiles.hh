@@ -14,9 +14,17 @@
 // linalg-impl.hh; including this header first, or from a non-CUDA translation
 // unit, fails with "no member named 'conj' in namespace 'std'".
 #include <complex>
+#include <type_traits>
 #include <sycl/sycl.hpp>
 
 namespace batchlas::backend::detail {
+
+// Replaces sycl::detail::is_complex, which is a DPC++ implementation detail and
+// absent from other SYCL implementations.
+template <typename T> struct is_std_complex : std::false_type {};
+template <typename R> struct is_std_complex<std::complex<R>> : std::true_type {};
+template <typename T>
+inline constexpr bool is_std_complex_v = is_std_complex<std::remove_cv_t<T>>::value;
 
 // A vector of four T with the alignment the 128-bit load/store forms need.
 template <typename T>
@@ -38,7 +46,7 @@ inline TileVec4<T>& tile_vec4(T* p) {
 // both the plain and the ^H spellings rather than two near-copies.
 template <typename T>
 inline T conj_if(const T& value) {
-    if constexpr (sycl::detail::is_complex<T>::value) {
+    if constexpr (is_std_complex_v<T>) {
         return std::conj(value);
     } else {
         return value;
@@ -64,7 +72,7 @@ inline T conj_if(const T& value) {
 // with a `T&` out-parameter, with no other change.
 template <typename T>
 inline T accumulate(const T& accum, const T& a, const T& b) {
-    if constexpr (sycl::detail::is_complex<T>::value) {
+    if constexpr (is_std_complex_v<T>) {
         using Real = typename T::value_type;
         const Real ar = a.real();
         const Real ai = a.imag();

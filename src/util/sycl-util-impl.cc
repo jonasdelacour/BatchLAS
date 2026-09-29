@@ -14,6 +14,16 @@
     #define DEVICE_CAST(x,ix) (reinterpret_cast<const sycl::device*>(x)[ix])
 #endif
 
+// SYCL 2020 leaves mem_advise's advice values implementation-defined; the
+// UR_USM_ADVICE_FLAG_* ones are DPC++'s Unified Runtime. Advice is only a hint
+// and these wrappers already return an empty Event on failure, so elsewhere
+// they are no-ops.
+#if defined(SYCL_IMPLEMENTATION_ONEAPI)
+    #define BATCHLAS_MEM_ADVISE(q, ptr, bytes, flag) static_cast<EventImpl>((q)->mem_advise((ptr), (bytes), (flag)))
+#else
+    #define BATCHLAS_MEM_ADVISE(q, ptr, bytes, flag) ((void)(q), (void)(ptr), (void)(bytes), Event{})
+#endif
+
 using namespace sycl;
 
 // Everything from here to the end of the file is namespace batchlas, and all of
@@ -107,7 +117,7 @@ template <typename T>
 Event Span<T>::set_read_mostly(const Queue &ctx) const {
     if (!data_ || this->size_bytes() == 0) return Event{};
     try {
-        return static_cast<EventImpl>(ctx -> mem_advise(data_, this->size_bytes(), UR_USM_ADVICE_FLAG_SET_READ_MOSTLY));
+        return BATCHLAS_MEM_ADVISE(ctx, data_, this->size_bytes(), UR_USM_ADVICE_FLAG_SET_READ_MOSTLY);
     } catch (const sycl::exception&) {
         return Event{};
     } catch (...) {
@@ -119,7 +129,7 @@ template <typename T>
 Event Span<T>::unset_read_mostly(const Queue &ctx) const {
     if (!data_ || this->size_bytes() == 0) return Event{};
     try {
-        return static_cast<EventImpl>(ctx -> mem_advise(data_, this->size_bytes(), UR_USM_ADVICE_FLAG_CLEAR_READ_MOSTLY));
+        return BATCHLAS_MEM_ADVISE(ctx, data_, this->size_bytes(), UR_USM_ADVICE_FLAG_CLEAR_READ_MOSTLY);
     } catch (const sycl::exception&) {
         return Event{};
     } catch (...) {
@@ -131,7 +141,7 @@ template <typename T>
 Event Span<T>::set_preferred_location(const Queue &ctx) const {
     if (!data_ || this->size_bytes() == 0) return Event{};
     try {
-        return static_cast<EventImpl>(ctx -> mem_advise(data_, this->size_bytes(), UR_USM_ADVICE_FLAG_SET_PREFERRED_LOCATION));
+        return BATCHLAS_MEM_ADVISE(ctx, data_, this->size_bytes(), UR_USM_ADVICE_FLAG_SET_PREFERRED_LOCATION);
     } catch (const sycl::exception&) {
         return Event{};
     } catch (...) {
@@ -143,7 +153,7 @@ template <typename T>
 Event Span<T>::clear_preferred_location(const Queue &ctx) const {
     if (!data_ || this->size_bytes() == 0) return Event{};
     try {
-        return static_cast<EventImpl>(ctx -> mem_advise(data_, this->size_bytes(), UR_USM_ADVICE_FLAG_CLEAR_PREFERRED_LOCATION));
+        return BATCHLAS_MEM_ADVISE(ctx, data_, this->size_bytes(), UR_USM_ADVICE_FLAG_CLEAR_PREFERRED_LOCATION);
     } catch (const sycl::exception&) {
         return Event{};
     } catch (...) {
@@ -155,7 +165,7 @@ template <typename T>
 Event Span<T>::set_access_device(const Queue &ctx) const {
     if (!data_ || this->size_bytes() == 0) return Event{};
     try {
-        return static_cast<EventImpl>(ctx -> mem_advise(data_, this->size_bytes(), UR_USM_ADVICE_FLAG_SET_ACCESSED_BY_DEVICE));
+        return BATCHLAS_MEM_ADVISE(ctx, data_, this->size_bytes(), UR_USM_ADVICE_FLAG_SET_ACCESSED_BY_DEVICE);
     } catch (const sycl::exception&) {
         return Event{};
     } catch (...) {
@@ -167,7 +177,7 @@ template <typename T>
 Event Span<T>::clear_access_device(const Queue &ctx) const {
     if (!data_ || this->size_bytes() == 0) return Event{};
     try {
-        return static_cast<EventImpl>(ctx -> mem_advise(data_, this->size_bytes(), UR_USM_ADVICE_FLAG_CLEAR_ACCESSED_BY_DEVICE));
+        return BATCHLAS_MEM_ADVISE(ctx, data_, this->size_bytes(), UR_USM_ADVICE_FLAG_CLEAR_ACCESSED_BY_DEVICE);
     } catch (const sycl::exception&) {
         return Event{};
     } catch (...) {
