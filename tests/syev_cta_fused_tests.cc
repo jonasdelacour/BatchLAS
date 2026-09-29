@@ -366,6 +366,84 @@ TYPED_TEST(SyevCtaFusedTest, SortOrderAndWgMultiplier) {
 	}
 }
 
+// A full-size batch whose items grade in alternating directions, so the steqr
+// solve inside the kernel mixes QL and QR blocks within every warp, and 4099
+// leaves a ragged final work-group. Every item is checked: the eigenvector
+// readout reads the accumulator tile across lanes after the solve.
+TYPED_TEST(SyevCtaFusedTest, MixedDirectionLargeBatch) {
+	using Scalar = typename TestFixture::ScalarType;
+	using Real = typename base_type<Scalar>::type;
+	constexpr Backend B = TestFixture::BackendType;
+
+	const int batch = 4099;
+	const Real tol = test_utils::tolerance<Scalar>() * Real(5);
+
+	for (int n : {8, 16}) {
+		SCOPED_TRACE(::testing::Message() << "n=" << n);
+		auto A0 = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/4099u + n);
+		const Real g = std::pow(Real(1e-2), Real(1) / Real(n - 1));
+		for (int b = 0; b < batch; ++b) {
+			const int kind = b % 3;  // 0: large end first, 1: small end first, 2: unscaled
+			if (kind == 2) continue;
+			for (int j = 0; j < n; ++j) {
+				for (int i = 0; i < n; ++i) {
+					const int ki = kind == 0 ? i : n - 1 - i;
+					const int kj = kind == 0 ? j : n - 1 - j;
+					A0.view()(i, j, b) *= std::pow(g, Real(ki + kj));
+				}
+			}
+		}
+		auto A = A0;
+		auto W = UnifiedVector<Real>(static_cast<std::size_t>(n) * batch);
+
+		syev_cta_fused<B, Scalar>(*this->ctx, A.view(), W.to_span(), JobType::EigenVectors, Uplo::Lower).wait();
+
+		for (int b = 0; b < batch; ++b) {
+			check_orthonormal_columns(A.view(), n, b, tol);
+			check_eigen_residual(A0.view(), A.view(), W, n, b, tol);
+		}
+	}
+}
+
+// A batch one past a whole number of work-groups: every chunk but one of the
+// final work-group is dead. Dead chunks run the kernel on a zero matrix aliased
+// to item 0 rather than returning, so an ungated store would overwrite item 0
+// long after its own work-group finished; k is large enough that it does.
+TYPED_TEST(SyevCtaFusedTest, RaggedTailBatch) {
+	using Scalar = typename TestFixture::ScalarType;
+	using Real = typename base_type<Scalar>::type;
+	constexpr Backend B = TestFixture::BackendType;
+
+	const Real tol = test_utils::tolerance<Scalar>() * Real(5);
+	for (int n : {4, 8, 12, 32}) {
+		const int k = n == 32 ? 4096 : 8192;  // more work-groups than fit resident
+		const int P = n <= 4 ? 4 : (n <= 8 ? 8 : (n <= 16 ? 16 : 32));
+		for (int mult : {1, 2}) {
+			const int probs_per_wg = 32 * mult / P;
+			if (probs_per_wg == 1) continue;  // no dead chunk
+			const int batch = probs_per_wg * k + 1;
+			SCOPED_TRACE(::testing::Message() << "n=" << n << " wg_multiplier=" << mult << " batch=" << batch);
+
+			auto A0 = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/77u + n);
+			auto A = A0;
+			auto W = UnifiedVector<Real>(static_cast<std::size_t>(n) * batch);
+			auto info = UnifiedVector<int32_t>(static_cast<std::size_t>(batch), int32_t(0));
+
+			syev_cta_fused<B, Scalar>(*this->ctx, A.view(), W.to_span(), JobType::EigenVectors, Uplo::Lower,
+									  Span<std::byte>(), SteqrParams<Scalar>{}, static_cast<size_t>(mult),
+									  info.to_span())
+				.wait();
+
+			for (int b : {0, 1, batch - 2, batch - 1}) {
+				SCOPED_TRACE(::testing::Message() << "item " << b);
+				EXPECT_EQ(info[static_cast<std::size_t>(b)], 0);
+				check_orthonormal_columns(A.view(), n, b, tol);
+				check_eigen_residual(A0.view(), A.view(), W, n, b, tol);
+			}
+		}
+	}
+}
+
 TYPED_TEST(SyevCtaFusedTest, RequiresNoWorkspace) {
 	using Scalar = typename TestFixture::ScalarType;
 	constexpr Backend B = TestFixture::BackendType;

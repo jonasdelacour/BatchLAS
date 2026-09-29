@@ -17,6 +17,7 @@
 #include "info_span.hh"
 #include <array>
 #include <numeric>
+#include <type_traits>
 #include <batchlas/settings.hh>
 #include <batchlas/error.hh>
 
@@ -24,6 +25,13 @@ namespace batchlas {
 
     template <typename T, size_t P, bool ComputeVecs>
     class SteqrCTAKernel;
+
+    // Multiplier for a caller's 0 (the default): two-warp groups clear the per-SM block
+    // limit that caps one-warp groups below the float register limit. Tuned on sm_89.
+    // evidence: docs/perf/steqr.md#work-group-multiplier
+    template <typename T, size_t P>
+    inline constexpr int32_t kSteqrCtaAutoWgMultiplier =
+        (std::is_same_v<T, float> && (P == 8 || P == 16)) ? 2 : 1;
 
     template <typename T, size_t P, bool ComputeVecs>
     inline void steqr_cta_impl(Queue& ctx,
@@ -55,7 +63,9 @@ namespace batchlas {
             // Baseline work-group size is LCM(P, sg_size), so we can form fixed-size partitions of size P.
             // Allow scaling it at runtime to tune the number of sub-groups per work-group.
             const int32_t base_wg_size = std::lcm<int32_t>(static_cast<int32_t>(P), static_cast<int32_t>(sg_size));
-            int32_t wg_size_multiplier = std::max<int32_t>(int32_t(1), cta_wg_size_multiplier);
+            int32_t wg_size_multiplier = cta_wg_size_multiplier == 0
+                                             ? kSteqrCtaAutoWgMultiplier<T, P>
+                                             : std::max<int32_t>(int32_t(1), cta_wg_size_multiplier);
             int32_t wg_size = base_wg_size * wg_size_multiplier;
 
             const int32_t max_wg_size = static_cast<int32_t>(dev.get_info<sycl::info::device::max_work_group_size>());
@@ -78,7 +88,10 @@ namespace batchlas {
                     const int32_t wg_id = static_cast<int32_t>(wg.get_group_linear_id());
 
                     const auto sg = it.get_sub_group();
-                    const auto partition = make_partition<P>(sg);
+                    // Full-sub-group partition: every lane of the warp reaches the solve
+                    // (dead chunks are clamped below, not returned), which lets it run
+                    // maskless where the chunks share one instruction stream.
+                    const auto partition = make_partition<P, false>(sg);
                     // NOTE: chunked_partition<P>(sg) partitions *within a sub-group*.
                     // If the work-group contains multiple sub-groups, partition.get_group_linear_id()
                     // repeats for each sub-group. Make part_id unique within the whole work-group.
@@ -87,9 +100,13 @@ namespace batchlas {
                     const int32_t part_id = sg_id * parts_per_sg + static_cast<int32_t>(partition.get_group_linear_id());
                     const int32_t lane = static_cast<int32_t>(partition.get_local_linear_id());
                     const int32_t prob_id = static_cast<int32_t>(wg_id) * static_cast<int32_t>(probs_per_wg) + part_id;
-                    if (prob_id >= static_cast<int32_t>(batch_size)) return;
-                    auto d_prob = d.batch_item(prob_id);
-                    auto e_prob = e.batch_item(prob_id);
+                    // Clamp, do not return: a chunk past the batch end still runs the
+                    // solve, on a zero problem, so every lane of the warp reaches every
+                    // collective. A zero tridiagonal is all 1x1 blocks and never chases.
+                    const bool live = prob_id < static_cast<int32_t>(batch_size);
+                    const int32_t b = live ? prob_id : 0;
+                    auto d_prob = d.batch_item(b);
+                    auto e_prob = e.batch_item(b);
 
                     // Compile-time selectable eigenvector accumulation (shared-memory Q).
                     const int32_t base_q = part_id * static_cast<int32_t>(P) * static_cast<int32_t>(P);
@@ -97,19 +114,19 @@ namespace batchlas {
                     QSharedCache<T, P, P, ComputeVecs, QLocalAccT> qcache(Q_local, base_q, lane, n);
 
                     if constexpr (ComputeVecs) {
-                        auto Q_prob = Q_view.batch_item(prob_id);
-                        qcache.load(Q_prob);
+                        auto Q_prob = Q_view.batch_item(b);
+                        if (live) qcache.load(Q_prob);  // lane-private; a dead tile is never read
                     }
 
                     // Load D/E into registers (one element per lane).
-                    T diag = (lane < n) ? d_prob(lane) : T(0);
-                    T offdiag = (lane < (n - 1)) ? e_prob(lane) : T(0);
+                    T diag = (live && lane < n) ? d_prob(lane) : T(0);
+                    T offdiag = (live && lane < (n - 1)) ? e_prob(lane) : T(0);
 
                     const bool failed = steqr_cta_solve<T, P>(partition, diag, offdiag, qcache, n,
                                                              static_cast<int32_t>(max_sweeps),
                                                              zero_threshold,
                                                              cta_shift_strategy, cta_update_scheme);
-                    if (failed && lane == 0) {
+                    if (live && failed && lane == 0) {
                         // We cannot throw from device code; the host decides how to
                         // handle it. info_report is an atomic fetch_max, not a store:
                         // when `status` is the caller's span this kernel is one of
@@ -119,16 +136,16 @@ namespace batchlas {
                     }
 
                     // Store back D/E (one element per lane).
-                    if (lane < n) {
+                    if (live && lane < n) {
                         d_prob(lane) = diag;
                     }
-                    if (lane < (n - 1)) {
+                    if (live && lane < (n - 1)) {
                         e_prob(lane) = offdiag;
                     }
 
                     if constexpr (ComputeVecs) {
-                        auto Q_prob = Q_view.batch_item(prob_id);
-                        qcache.store(Q_prob);
+                        auto Q_prob = Q_view.batch_item(b);
+                        if (live) qcache.store(Q_prob);
                     }
                 });
         });

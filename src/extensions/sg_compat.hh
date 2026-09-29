@@ -56,15 +56,21 @@ struct NativePartitionState<P, false> {
 };
 
 // ---------------------------------------------------------------------------
-// SubGroupPartition<P>
+// SubGroupPartition<P, Native>
 //
 // Wraps a sycl::sub_group and the absolute base lane of this chunk.
 // Chunk i occupies lanes [i*P, (i+1)*P) of the sub_group.
+//
+// Native (NVPTX only) routes collectives through chunked_partition, whose
+// runtime member mask keeps chunk-divergent control flow legal but costs a
+// MATCH/VOTE/BRA.DIV wrapper per collective. Native == false shuffles over the
+// full sub-group with a constant mask: every lane of the sub-group must reach
+// every collective, i.e. the chunks run one instruction stream.
 // ---------------------------------------------------------------------------
-template <size_t P>
+template <size_t P, bool Native = kUseNativeChunkedPartition>
 struct SubGroupPartition {
     sycl::sub_group sg;
-    NativePartitionState<P> native_state;
+    NativePartitionState<P, Native> native_state;
     uint32_t base;  ///< absolute sub_group lane of this chunk's first lane
 
     explicit SubGroupPartition(sycl::sub_group sg_)
@@ -100,9 +106,9 @@ struct SubGroupPartition {
 // ---------------------------------------------------------------------------
 // Factory — replaces sycl::ext::oneapi::experimental::chunked_partition<P>(sg)
 // ---------------------------------------------------------------------------
-template <size_t P>
-inline SubGroupPartition<P> make_partition(sycl::sub_group sg) {
-    return SubGroupPartition<P>(sg);
+template <size_t P, bool Native = kUseNativeChunkedPartition>
+inline SubGroupPartition<P, Native> make_partition(sycl::sub_group sg) {
+    return SubGroupPartition<P, Native>(sg);
 }
 
 // ---------------------------------------------------------------------------
@@ -119,9 +125,9 @@ inline SubGroupPartition<P> make_partition(sycl::sub_group sg) {
 // permute_group_by_xor:
 //   mask < P, so the XOR address stays within the same chunk.
 //   Route through the underlying sub_group (SubgroupShuffleXorINTEL).
-template <size_t P, typename T>
-inline T permute_group_by_xor(SubGroupPartition<P> part, T v, uint32_t mask) {
-    if constexpr (kUseNativeChunkedPartition) {
+template <size_t P, bool N, typename T>
+inline T permute_group_by_xor(SubGroupPartition<P, N> part, T v, uint32_t mask) {
+    if constexpr (N) {
         return sycl::permute_group_by_xor(part.native_state.native, v, mask);
     } else {
         return sycl::permute_group_by_xor(part.sg, v, mask);
@@ -131,9 +137,9 @@ inline T permute_group_by_xor(SubGroupPartition<P> part, T v, uint32_t mask) {
 // select_from_group:
 //   local_id is 0-based within the chunk; convert to absolute sub_group lane.
 //   Each lane supplies its own base, so every chunk reads its own member.
-template <size_t P, typename T>
-inline T select_from_group(SubGroupPartition<P> part, T v, uint32_t local_id) {
-    if constexpr (kUseNativeChunkedPartition) {
+template <size_t P, bool N, typename T>
+inline T select_from_group(SubGroupPartition<P, N> part, T v, uint32_t local_id) {
+    if constexpr (N) {
         using native_partition_t = typename NativePartitionState<P, true>::partition_type;
         return sycl::select_from_group(part.native_state.native, v,
                                        typename native_partition_t::id_type{local_id});
@@ -150,10 +156,15 @@ inline T select_from_group(SubGroupPartition<P> part, T v, uint32_t local_id) {
 //   not be visible to other lanes after reconvergence.  Routing through
 //   sycl::group_barrier(sub_group) emits __syncwarp() on CUDA and is a
 //   cheap no-op on AMD (where wave lanes are always coherent after merge).
-template <size_t P>
-inline void group_barrier(SubGroupPartition<P> part) noexcept {
-    if constexpr (kUseNativeChunkedPartition) {
+//   An emulated partition on NVPTX spans the warp, so it barriers the warp.
+template <size_t P, bool N>
+inline void group_barrier(SubGroupPartition<P, N> part) noexcept {
+    if constexpr (N) {
         sycl::group_barrier(part.native_state.native);
+    } else {
+#if defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__)
+        sycl::group_barrier(part.sg);
+#endif
     }
 }
 
@@ -162,12 +173,53 @@ inline void group_barrier(SubGroupPartition<P> part) noexcept {
 //   (SubgroupShuffleDownINTEL).  The boundary value (last lane of the chunk
 //   reading across to the next chunk) is undefined by the SYCL spec, matching
 //   the fixed_size_group semantics; callers guard that case.
-template <size_t P, typename T>
-inline T shift_group_left(SubGroupPartition<P> part, T v, uint32_t delta) {
-    if constexpr (kUseNativeChunkedPartition) {
+template <size_t P, bool N, typename T>
+inline T shift_group_left(SubGroupPartition<P, N> part, T v, uint32_t delta) {
+    if constexpr (N) {
         return sycl::shift_group_left(part.native_state.native, v, delta);
     } else {
         return sycl::shift_group_left(part.sg, v, delta);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Lockstep hooks — the domain whose chunks must run one instruction stream.
+//
+// A native chunked_partition masks every collective to its own chunk, so the
+// chunk is the whole domain and the chunks of a warp may take different trip
+// counts. The emulated partition shuffles over the full sub-group, so its
+// chunks must agree on every branch that guards a collective: the votes span
+// the sub-group and the caller pads short chunks with no-op work.
+//
+// `v` must be uniform across the chunk (the caller's own state).
+// ---------------------------------------------------------------------------
+template <typename Group>
+inline constexpr bool lockstep_spans_subgroup_v = false;
+
+template <size_t P, bool N>
+inline constexpr bool lockstep_spans_subgroup_v<SubGroupPartition<P, N>> = !N;
+
+template <size_t P, bool N>
+inline bool lockstep_any(SubGroupPartition<P, N> part, bool v) {
+    if constexpr (N) {
+        return v;
+    } else {
+        return sycl::any_of_group(part.sg, v);
+    }
+}
+
+template <size_t P, bool N>
+inline int32_t lockstep_max(SubGroupPartition<P, N> part, int32_t v) {
+    if constexpr (N) {
+        return v;
+    } else {
+        // Chunk-uniform input, so only the cross-chunk butterfly steps are needed.
+        const uint32_t range = static_cast<uint32_t>(part.sg.get_local_linear_range());
+        for (uint32_t mask = static_cast<uint32_t>(P); mask < range; mask <<= 1) {
+            const int32_t other = sycl::permute_group_by_xor(part.sg, v, mask);
+            v = (other > v) ? other : v;
+        }
+        return v;
     }
 }
 
@@ -179,9 +231,9 @@ inline T shift_group_left(SubGroupPartition<P> part, T v, uint32_t delta) {
 //   callers.  Because each chunk has a different base, each chunk gets its
 //   own leader's value.
 // ---------------------------------------------------------------------------
-template <size_t P, typename T>
-inline T sg_leader_broadcast(SubGroupPartition<P> part, T value) {
-    if constexpr (kUseNativeChunkedPartition) {
+template <size_t P, bool N, typename T>
+inline T sg_leader_broadcast(SubGroupPartition<P, N> part, T value) {
+    if constexpr (N) {
         using native_partition_t = typename NativePartitionState<P, true>::partition_type;
         return sycl::select_from_group(part.native_state.native, value,
                                        typename native_partition_t::id_type{});

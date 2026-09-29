@@ -53,7 +53,7 @@ static void BM_SYEV_CTA(minibench::State& state) {
     const size_t batch = state.range(1);
     const int jobz_i = static_cast<int>(state.range(2));
     const int uplo_i = static_cast<int>(state.range(3));
-    const size_t wg_mult = state.range(4) > 0 ? state.range(4) : 1;
+    const size_t wg_mult = state.range(4) > 0 ? state.range(4) : 0;  // 0: library-tuned
 
     const JobType jobz = parse_jobz(jobz_i);
     const Uplo uplo = parse_uplo(uplo_i);
