@@ -45,7 +45,7 @@ static void BM_SYEV_CTA_FUSED(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
     const JobType jobz = parse_jobz(static_cast<int>(state.range(2)));
-    const size_t wg_mult = state.range(3) > 0 ? state.range(3) : 1;
+    const size_t wg_mult = state.range(3) > 0 ? state.range(3) : 0;  // 0: library-tuned
 
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
     auto A = Matrix<T>::Random(n, n, /*hermitian=*/true, batch);
@@ -80,7 +80,7 @@ static void BM_SYEV_CTA_PIPELINED(minibench::State& state) {
     const size_t n = state.range(0);
     const size_t batch = state.range(1);
     const JobType jobz = parse_jobz(static_cast<int>(state.range(2)));
-    const size_t wg_mult = state.range(3) > 0 ? state.range(3) : 1;
+    const size_t wg_mult = state.range(3) > 0 ? state.range(3) : 0;  // 0: library-tuned
 
     auto q = std::make_shared<Queue>(Device(B == Backend::NETLIB ? "cpu" : "gpu"), B);
     auto A = Matrix<T>::Random(n, n, /*hermitian=*/true, batch);

@@ -557,7 +557,7 @@ inline Event syev_dispatch(Queue& ctx,
                                          uplo,
                                          workspace,
                                          detail::syev_cta_steqr_params<T>(jobtype),
-                                         /*cta_wg_size_multiplier=*/1,
+                                         /*cta_wg_size_multiplier=*/0,
                                          info);
                 break;
             default:
@@ -568,7 +568,7 @@ inline Event syev_dispatch(Queue& ctx,
                                    uplo,
                                    workspace,
                                    detail::syev_cta_steqr_params<T>(jobtype),
-                                   /*cta_wg_size_multiplier=*/1,
+                                   /*cta_wg_size_multiplier=*/0,
                                    info);
                 break;
         }

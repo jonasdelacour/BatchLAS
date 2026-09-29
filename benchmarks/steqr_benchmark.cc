@@ -31,7 +31,7 @@ static void BM_STEQR(minibench::State& state) {
     // - Otherwise treat arg3 as transpose flag from the legacy steqr benchmark schema.
     const bool use_tuned_schema = (arg4 != 0);
     const bool transpose = use_tuned_schema ? false : static_cast<bool>(arg3);
-    const size_t wg_multiplier = use_tuned_schema ? std::max<size_t>(size_t(1), arg3) : size_t(1);
+    const size_t wg_multiplier = use_tuned_schema ? arg3 : size_t(0);  // 0: library-tuned
     const int shift_kind = use_tuned_schema ? static_cast<int>(arg4) : 1;
 
     SteqrParams<T> params;

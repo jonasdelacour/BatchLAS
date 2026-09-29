@@ -756,7 +756,8 @@ namespace batchlas {
         SortOrder sort_order = SortOrder::Ascending;
 
         // CTA STEQR only: multiplies the baseline work-group size, LCM(N, sub_group_size).
-        size_t cta_wg_size_multiplier = 1;
+        // 0 picks a tuned value per scalar type and partition width.
+        size_t cta_wg_size_multiplier = 0;
 
         // CTA STEQR only: shift strategy for the implicit QR/QL steps.
         SteqrShiftStrategy cta_shift_strategy = SteqrShiftStrategy::Lapack;
@@ -1089,6 +1090,8 @@ namespace batchlas {
      * @brief CTA-optimized symmetric eigen-solver (SYEV-like), n <= 32; real symmetric and
      *        complex Hermitian. Overwrites A with eigenvectors when jobz == EigenVectors.
      *        Eigenvalues ascend when SteqrParams::sort is set (default).
+     *        cta_wg_size_multiplier == 0 lets the tridiagonal solve pick its tuned value
+     *        and runs the reduction and back-transform at 1.
      */
     template <Backend B, typename T>
     BATCHLAS_API Event syev_cta(Queue& ctx,
@@ -1098,7 +1101,7 @@ namespace batchlas {
                                 Uplo uplo,
                                 const Span<std::byte>& ws,
                                 SteqrParams<T> steqr_params = SteqrParams<T>(),
-                                size_t cta_wg_size_multiplier = 1,
+                                size_t cta_wg_size_multiplier = 0,
                                 Span<int32_t> info = Span<int32_t>());
 
     template <Backend B, typename T>
@@ -1113,6 +1116,7 @@ namespace batchlas {
      * Runs end to end inside one sub-group partition, so results track syev_cta only to
      * within the reassociation that fusing implies. Unlike syev_cta, A is left untouched
      * when jobz == NoEigenVectors. `ws` is accepted for API symmetry and ignored.
+     * cta_wg_size_multiplier == 0 picks a tuned value per scalar type and width.
      */
     template <Backend B, typename T>
     BATCHLAS_API Event syev_cta_fused(Queue& ctx,
@@ -1122,7 +1126,7 @@ namespace batchlas {
                                       Uplo uplo,
                                       const Span<std::byte>& ws = Span<std::byte>(),
                                       SteqrParams<T> steqr_params = SteqrParams<T>(),
-                                      size_t cta_wg_size_multiplier = 1,
+                                      size_t cta_wg_size_multiplier = 0,
                                       Span<int32_t> info = Span<int32_t>());
 
     template <Backend B, typename T>

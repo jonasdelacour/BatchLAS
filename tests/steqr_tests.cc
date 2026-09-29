@@ -1157,6 +1157,306 @@ TYPED_TEST(SteqrTest, GradedTridiagonalRelativeAccuracy) {
     }
 }
 
+namespace {
+
+// Max-norm of a tridiagonal given as long-double d/e.
+double tridiag_norm(const std::vector<long double>& d, const std::vector<long double>& e) {
+    const int n = static_cast<int>(d.size());
+    double t = 0;
+    for (int i = 0; i < n; ++i) {
+        t = std::max(t, static_cast<double>(std::fabs(d[i]) + (i > 0 ? std::fabs(e[i - 1]) : 0.0L) +
+                                            (i < n - 1 ? std::fabs(e[i]) : 0.0L)));
+    }
+    return t;
+}
+
+// True when item b of a sorted steqr result is right: eigenvalues against the
+// long-double reference, the residual ||T z - lambda z|| and the orthogonality
+// of Z, each within 64*n*eps (times ||T|| where it has units). `why` receives
+// the three measured values for the failure message.
+template <typename Real>
+bool tridiag_item_ok(const std::vector<long double>& hd, const std::vector<long double>& he,
+                     const std::vector<long double>& ref, Vector<Real>& evals, const Real* Z, int b,
+                     std::string& why) {
+    const int n = static_cast<int>(hd.size());
+    const double tol = 64.0 * n * std::numeric_limits<Real>::epsilon();
+    const double tnorm = tridiag_norm(hd, he);
+    double ev_err = 0, res = 0, orth = 0;
+    for (int j = 0; j < n; ++j) {
+        const double lam = evals(j, b);
+        ev_err = std::max(ev_err, std::fabs(lam - static_cast<double>(ref[j])));
+        for (int i = 0; i < n; ++i) {
+            double r = (static_cast<double>(hd[i]) - lam) * Z[i + j * n];
+            if (i > 0) r += static_cast<double>(he[i - 1]) * Z[i - 1 + j * n];
+            if (i < n - 1) r += static_cast<double>(he[i]) * Z[i + 1 + j * n];
+            res = std::max(res, std::fabs(r));
+        }
+        for (int k = 0; k <= j; ++k) {
+            double s = 0;
+            for (int i = 0; i < n; ++i) s += static_cast<double>(Z[i + j * n]) * Z[i + k * n];
+            orth = std::max(orth, std::fabs(s - (j == k ? 1.0 : 0.0)));
+        }
+    }
+    why = "eigenvalue error " + std::to_string(ev_err / tnorm) + ", residual " + std::to_string(res / tnorm) +
+          ", orthogonality " + std::to_string(orth) + " (tol " + std::to_string(tol) + ")";
+    return ev_err <= tol * tnorm && res <= tol * tnorm && orth <= tol;
+}
+
+// steqr with eigenvectors, sorted ascending, on long-double input rounded to
+// Real. Returns false with `skip_reason` set on a missing kernel bundle.
+template <Backend B, typename Real>
+bool run_steqr_vectors(Queue& ctx, const std::vector<std::vector<long double>>& hd,
+                       const std::vector<std::vector<long double>>& he, SteqrParams<Real> params,
+                       Vector<Real>& evals, Matrix<Real>& eigvects, UnifiedVector<int32_t>& info,
+                       std::string& skip_reason) {
+    const int batch = static_cast<int>(hd.size());
+    const int n = static_cast<int>(hd[0].size());
+    Vector<Real> diag(n, Real(0), batch), sub(n - 1, Real(0), batch);
+    for (int b = 0; b < batch; ++b) {
+        for (int i = 0; i < n; ++i) diag(i, b) = static_cast<Real>(hd[b][i]);
+        for (int i = 0; i < n - 1; ++i) sub(i, b) = static_cast<Real>(he[b][i]);
+    }
+    params.sort = true;
+    params.sort_order = SortOrder::Ascending;
+    try {
+        auto ws = UnifiedVector<std::byte>(
+            steqr_buffer_size<Real>(ctx, diag, sub, evals, JobType::EigenVectors, params), std::byte(0));
+        (void)steqr<B, Real>(ctx, diag, sub, evals, ws.to_span(), JobType::EigenVectors, params, eigvects,
+                             info.to_span());
+        ctx.wait();
+    } catch (const std::exception& e) {
+        if (is_kernel_not_found_message(e.what())) {
+            skip_reason = e.what();
+            return false;
+        }
+        throw;
+    }
+    return true;
+}
+
+}  // namespace
+
+// ---------------------------------------------------------------------------
+// Mixed QL/QR directions inside every warp.
+//
+// steqr_cta serves a QR block by mirroring it and running the QL chase, so
+// every item of a warp shares one loop nest. The mirror has separate index
+// maps for d and e, and a wrong one corrupts only the items that take it.
+// Items cycle five kinds: graded-ascending (QL), graded-descending (QR),
+// random, and two split at an interior e(k) == 0 whose blocks grade in
+// opposite directions, so one mirrors a block with bb > 0 and the other one
+// with be < n-1 (a map that drops bb passes every unsplit input). Every warp
+// at n <= 16 holds both directions, n = 32 is the stedc leaf width (one item
+// per warp, so a smaller batch), and batch 4099 leaves a ragged final
+// work-group. Every item is checked, under every shift and update scheme.
+// ---------------------------------------------------------------------------
+TYPED_TEST(SteqrTest, MixedDirectionLockstep) {
+    using T = typename TestFixture::ScalarType;
+    using Real = typename base_type<T>::type;
+    constexpr Backend B = TestFixture::BackendType;
+
+    for (const int n : {3, 5, 8, 13, 16, 32}) {
+        if (B == Backend::NETLIB && n == 32) continue;  // host tier: no leaf width, 3x the test's time
+        const int batch = n == 32 ? 1025 : 4099;
+        uint32_t state = 777u + static_cast<uint32_t>(n);
+        auto next_unit = [&]() {
+            state = state * 1664525u + 1013904223u;
+            return 0.5L + static_cast<long double>(state >> 8) / static_cast<long double>(1u << 24);
+        };
+        const long double g = std::pow(1e-6L, 1.0L / (n - 1));
+        const int split = n / 3;  // e(split) == 0 in kinds 3 and 4; off-centre so the blocks differ
+        std::vector<std::vector<long double>> hd(batch, std::vector<long double>(n));
+        std::vector<std::vector<long double>> he(batch, std::vector<long double>(n - 1));
+        std::vector<std::vector<long double>> ref(batch);
+        for (int b = 0; b < batch; ++b) {
+            // 0: small end first (QL), 1: large end first (QR), 2: random,
+            // 3: [0,split] QL above [split+1,n-1] QR, 4: [0,split] QR above [split+1,n-1] QL.
+            const int kind = b % 5;
+            // Exponent k of index i (|d(i)| ~ g^k, g < 1): 0 at the large end of its (sub-)block.
+            auto grade_pos = [&](int i) {
+                if (kind == 0) return n - 1 - i;
+                if (kind == 1) return i;
+                const bool upper = i <= split;
+                const int lo = upper ? 0 : split + 1;
+                const int hi = upper ? split : n - 1;
+                const bool small_first = (kind == 3) == upper;
+                return small_first ? hi - i : i - lo;
+            };
+            for (int i = 0; i < n; ++i) {
+                const long double sign = ((b + i) % 3 == 0) ? -1.0L : 1.0L;
+                const long double v =
+                    kind == 2 ? 2.0L * next_unit() - 2.0L : sign * next_unit() * std::pow(g, grade_pos(i));
+                hd[b][i] = static_cast<Real>(v);
+            }
+            for (int i = 0; i < n - 1; ++i) {
+                const long double k = std::min(grade_pos(i), grade_pos(i + 1)) + 0.5L;
+                const long double v = kind == 2 ? next_unit() : next_unit() * std::pow(g, k);
+                he[b][i] = (kind >= 3 && i == split) ? 0.0L : static_cast<long double>(static_cast<Real>(v));
+            }
+            ref[b] = sturm_eigenvalues(hd[b], he[b]);
+        }
+
+        for (const auto scheme : kSteqrUpdateSchemes) {
+            for (const auto shift : {SteqrShiftStrategy::Lapack, SteqrShiftStrategy::Wilkinson}) {
+                Vector<Real> evals(n, Real(0), batch);
+                auto eigvects = Matrix<Real>::Zeros(n, n, batch);
+                UnifiedVector<int32_t> info(batch, int32_t(0));
+                SteqrParams<Real> params = {};
+                params.cta_update_scheme = scheme;
+                params.cta_shift_strategy = shift;
+                std::string skip;
+                if (!run_steqr_vectors<B, Real>(*this->ctx, hd, he, params, evals, eigvects, info, skip)) {
+                    GTEST_SKIP() << "Skipping due to missing kernel bundle: " << skip;
+                }
+
+                const std::string tag = std::string("n=") + std::to_string(n) + " " + update_scheme_name(scheme) +
+                                        (shift == SteqrShiftStrategy::Lapack ? " Lapack" : " Wilkinson");
+                int bad_items = 0;
+                for (int b = 0; b < batch && bad_items < 8; ++b) {
+                    const Real* Z = eigvects.data().data() + static_cast<size_t>(b) * n * n;
+                    std::string why;
+                    const bool ok = info[b] == 0 && tridiag_item_ok(hd[b], he[b], ref[b], evals, Z, b, why);
+                    if (!ok) ++bad_items;
+                    EXPECT_TRUE(ok) << tag << " item " << b << " (kind " << b % 5 << "): info " << info[b] << ", "
+                                    << why;
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// One failing item must not disturb its warp.
+//
+// steqr_cta packs 32/P items into a warp (P = 4, 8, 16 at n = 4, 7, 13), and
+// those chunks are to run in lockstep, sharing loops, votes and shuffles. An
+// item with a NaN off-diagonal never deflates, so it spends its whole sweep
+// budget and fails. It sits at every chunk position in turn (warp w poisons
+// chunk w mod 32/P): only it may report info != 0, and every neighbour must
+// still be right. Batch 4099 also leaves a ragged tail. The host tier packs
+// nothing into warps, so it is skipped there.
+// ---------------------------------------------------------------------------
+TYPED_TEST(SteqrTest, PerChunkFailureIsolated) {
+    using T = typename TestFixture::ScalarType;
+    using Real = typename base_type<T>::type;
+    constexpr Backend B = TestFixture::BackendType;
+    if constexpr (B == Backend::NETLIB) GTEST_SKIP() << "tests the steqr_cta chunk layout";
+    const int batch = 4099;
+
+    for (const int n : {4, 7, 13}) {
+        const int per_warp = n <= 4 ? 8 : (n <= 8 ? 4 : 2);
+        auto poisoned = [&](int b) { return b % per_warp == (b / per_warp) % per_warp; };
+        uint32_t state = 4242u + static_cast<uint32_t>(n);
+        auto next_unit = [&]() {
+            state = state * 1664525u + 1013904223u;
+            return 0.5L + static_cast<long double>(state >> 8) / static_cast<long double>(1u << 24);
+        };
+        std::vector<std::vector<long double>> hd(batch, std::vector<long double>(n));
+        std::vector<std::vector<long double>> he(batch, std::vector<long double>(n - 1));
+        std::vector<std::vector<long double>> ref(batch);
+        for (int b = 0; b < batch; ++b) {
+            for (int i = 0; i < n; ++i) hd[b][i] = static_cast<Real>(2.0L * next_unit() - 2.0L);
+            for (int i = 0; i < n - 1; ++i) he[b][i] = static_cast<Real>(next_unit());
+            if (poisoned(b)) {
+                he[b][n / 2] = std::numeric_limits<long double>::quiet_NaN();
+            } else {
+                ref[b] = sturm_eigenvalues(hd[b], he[b]);
+            }
+        }
+
+        for (const auto scheme : kSteqrUpdateSchemes) {
+            Vector<Real> evals(n, Real(0), batch);
+            auto eigvects = Matrix<Real>::Zeros(n, n, batch);
+            UnifiedVector<int32_t> info(batch, int32_t(-1));
+            SteqrParams<Real> params = {};
+            params.cta_update_scheme = scheme;
+            std::string skip;
+            if (!run_steqr_vectors<B, Real>(*this->ctx, hd, he, params, evals, eigvects, info, skip)) {
+                GTEST_SKIP() << "Skipping due to missing kernel bundle: " << skip;
+            }
+
+            int bad_items = 0;
+            for (int b = 0; b < batch && bad_items < 8; ++b) {
+                bool ok = false;
+                std::string why = "the NaN item reported no failure";
+                if (!poisoned(b)) {
+                    const Real* Z = eigvects.data().data() + static_cast<size_t>(b) * n * n;
+                    ok = info[b] == 0 && tridiag_item_ok(hd[b], he[b], ref[b], evals, Z, b, why);
+                } else {
+                    ok = info[b] > 0;
+                }
+                if (!ok) ++bad_items;
+                EXPECT_TRUE(ok) << "n=" << n << " " << update_scheme_name(scheme) << " item " << b << " (chunk "
+                                << b % per_warp << "): info " << info[b] << ", " << why;
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Ragged tail: batch = probs_per_wg*k + 1, probs_per_wg = 32*mult/P. At
+// P = 32 with mult 2 the dead chunk is a whole warp on the maskless solve.
+//
+// Chunks past the batch end run the solve on a zero problem instead of
+// returning. They alias item 0's views, so a missed gate on a load, store or
+// status report corrupts item 0 -- but only if the stray write lands after
+// item 0's own. Item 0 is therefore diagonal (its warp finishes at once) and
+// k = 8192 puts the tail in a work-group launched long after work-group 0
+// retired (more work-groups than an RTX 4090 holds resident); within one warp
+// (k = 0) the winner of the race is arbitrary. Measured with the d store
+// ungated: only the large-k case failed in float, k = 0 as well in double.
+// ---------------------------------------------------------------------------
+TYPED_TEST(SteqrTest, RaggedTailBatch) {
+    using T = typename TestFixture::ScalarType;
+    using Real = typename base_type<T>::type;
+    constexpr Backend B = TestFixture::BackendType;
+    if constexpr (B == Backend::NETLIB) GTEST_SKIP() << "tests the steqr_cta work-group tail";
+
+    for (const int n : {4, 7, 13, 32}) {
+        const int P = n <= 4 ? 4 : (n <= 8 ? 8 : (n <= 16 ? 16 : 32));
+        for (const int mult : {1, 2}) {
+            for (const int k : {0, 1, 97, 8192}) {
+                const int batch = (32 * mult / P) * k + 1;
+                auto checked = [&](int b) { return batch <= 8192 || b < 64 || b >= batch - 64; };
+                uint32_t state = 99u + static_cast<uint32_t>(n * 1000 + mult * 100 + k);
+                auto next_unit = [&]() {
+                    state = state * 1664525u + 1013904223u;
+                    return 0.5L + static_cast<long double>(state >> 8) / static_cast<long double>(1u << 24);
+                };
+                std::vector<std::vector<long double>> hd(batch, std::vector<long double>(n));
+                std::vector<std::vector<long double>> he(batch, std::vector<long double>(n - 1));
+                std::vector<std::vector<long double>> ref(batch);
+                for (int b = 0; b < batch; ++b) {
+                    for (int i = 0; i < n; ++i) hd[b][i] = static_cast<Real>(b == 0 ? i + 1.5L : 2.0L * next_unit() - 2.0L);
+                    for (int i = 0; i < n - 1; ++i) he[b][i] = b == 0 ? 0.0L : static_cast<long double>(static_cast<Real>(next_unit()));
+                    if (checked(b)) ref[b] = sturm_eigenvalues(hd[b], he[b]);
+                }
+
+                Vector<Real> evals(n, Real(0), batch);
+                auto eigvects = Matrix<Real>::Zeros(n, n, batch);
+                UnifiedVector<int32_t> info(batch, int32_t(-1));
+                SteqrParams<Real> params = {};
+                params.cta_wg_size_multiplier = mult;
+                std::string skip;
+                if (!run_steqr_vectors<B, Real>(*this->ctx, hd, he, params, evals, eigvects, info, skip)) {
+                    GTEST_SKIP() << "Skipping due to missing kernel bundle: " << skip;
+                }
+
+                int bad_items = 0;
+                for (int b = 0; b < batch && bad_items < 8; ++b) {
+                    if (!checked(b)) continue;
+                    const Real* Z = eigvects.data().data() + static_cast<size_t>(b) * n * n;
+                    std::string why;
+                    const bool ok = info[b] == 0 && tridiag_item_ok(hd[b], he[b], ref[b], evals, Z, b, why);
+                    if (!ok) ++bad_items;
+                    EXPECT_TRUE(ok) << "n=" << n << " mult=" << mult << " batch=" << batch << " item " << b
+                                    << ": info " << info[b] << ", " << why;
+                }
+            }
+        }
+    }
+}
+
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
