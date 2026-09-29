@@ -14,7 +14,6 @@
 #include <complex>
 #include <limits>
 #include <numeric>
-using namespace sycl::ext::oneapi;
 
 namespace batchlas {
 

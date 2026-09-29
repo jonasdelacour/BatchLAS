@@ -16,7 +16,6 @@
 #include <array>
 #include "sytrd_cta_device.hh"
 
-using namespace sycl::ext::oneapi;
 
 namespace batchlas {
 

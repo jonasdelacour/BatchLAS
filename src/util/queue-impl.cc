@@ -261,16 +261,20 @@ void Queue::enqueue(Event& event) {
     // Ensure the queue is ordered after `event`.
     // A command group with only depends_on() is not guaranteed to create an actual
     // scheduling node on all backends. Use a barrier when available, else fall
-    // back to a no-op kernel.
+    // back to a no-op kernel. The barrier is sycl_ext_oneapi_enqueue_barrier, so
+    // an implementation without it compiles straight to the fallback.
+#if defined(SYCL_EXT_ONEAPI_ENQUEUE_BARRIER)
     try {
         sycl::event e = impl_->ext_oneapi_submit_barrier({static_cast<sycl::event>(*event)});
         impl_->last_event_ = e;
+        return;
     } catch (const sycl::exception&) {
-        impl_->submit([&](sycl::handler& h) {
-            h.depends_on(static_cast<sycl::event>(*event));
-            h.single_task<QueueEnqueueNoopKernel>([]() {});
-        });
     }
+#endif
+    impl_->submit([&](sycl::handler& h) {
+        h.depends_on(static_cast<sycl::event>(*event));
+        h.single_task<QueueEnqueueNoopKernel>([]() {});
+    });
 }
 
 Event Queue::get_event() const {
@@ -286,6 +290,7 @@ Event Queue::get_event() const {
     // event that is ordered after all previously enqueued work.
     // Submitting an unnamed `single_task` can fail under AOT/kernel-bundle
     // builds ("No kernel named ... was found"), especially on CUDA backends.
+#if defined(SYCL_EXT_ONEAPI_ENQUEUE_BARRIER)
     try {
         sycl::event e = impl_->ext_oneapi_submit_barrier();
         impl_->last_event_ = e;
@@ -294,28 +299,31 @@ Event Queue::get_event() const {
     } catch (const sycl::exception&) {
         // Some backends (notably certain CUDA/UR stacks) don't support
         // ext_oneapi_submit_barrier and may throw unsupported-feature errors.
-        EventImpl event = impl_->submit([&](sycl::handler& h) {
-            h.single_task<QueueGetEventNoopKernel>([]() {});
-        });
-        return event;
     }
+#endif
+    EventImpl event = impl_->submit([&](sycl::handler& h) {
+        h.single_task<QueueGetEventNoopKernel>([]() {});
+    });
+    return event;
 }
 
 Event Queue::create_event_after_external_work() {
     // Always create a new barrier event, never use the cached last_event_.
     // This ensures the returned event properly depends on external library calls
     // (cuBLAS, rocBLAS, etc.) that execute on the stream but don't update last_event_.
+#if defined(SYCL_EXT_ONEAPI_ENQUEUE_BARRIER)
     try {
         sycl::event e = impl_->ext_oneapi_submit_barrier();
         impl_->last_event_ = e;
         EventImpl event = std::move(e);
         return event;
     } catch (const sycl::exception&) {
-        EventImpl event = impl_->submit([&](sycl::handler& h) {
-            h.single_task<QueueExternalWorkBarrierKernel>([]() {});
-        });
-        return event;
     }
+#endif
+    EventImpl event = impl_->submit([&](sycl::handler& h) {
+        h.single_task<QueueExternalWorkBarrierKernel>([]() {});
+    });
+    return event;
 }
 
 std::vector<Device> Device::get_devices(DeviceType type){

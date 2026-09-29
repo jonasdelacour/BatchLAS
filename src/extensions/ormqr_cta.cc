@@ -20,7 +20,6 @@
 #include <array>
 #include <type_traits>
 
-using namespace sycl::ext::oneapi;
 
 namespace batchlas {
 

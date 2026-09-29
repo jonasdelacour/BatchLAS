@@ -69,7 +69,7 @@ inline constexpr int kGramMaxTile = 128;
 // that is not quite Hermitian, which the eigensolvers downstream do notice.
 template <typename T>
 inline T real_part_of(const T& value) {
-    if constexpr (sycl::detail::is_complex<T>::value) {
+    if constexpr (is_std_complex_v<T>) {
         return T(value.real(), typename T::value_type(0));
     } else {
         return value;
@@ -361,7 +361,7 @@ Event syrk_gram_tiles(Queue& ctx,
         // spilling. Doubling the thread tile quarters the thread count to 160
         // and the same accumulators fit.
         constexpr int ThreadTile =
-            (NTile == 128 && sycl::detail::is_complex<T>::value) ? 8 : 4;
+            (NTile == 128 && is_std_complex_v<T>) ? 8 : 4;
         constexpr int KC = 32;
         return trans
             ? launch_syrk_gram_tiles<T, NTile, ThreadTile, KC, true, Conjugate>(

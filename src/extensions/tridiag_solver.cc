@@ -1,12 +1,11 @@
 #include "../linalg-impl.hh"
+#include "../math-helpers.hh"
 #include <batchlas/util/sycl-vector.hh>
 #include <batchlas/util/sycl-span.hh>
 #include "../queue.hh"
 #include <batchlas/util/mempool.hh>
 #include <sycl/sycl.hpp>
 #include <complex>
-#include <oneapi/dpl/random>
-#include <oneapi/dpl/algorithm>
 #include <batchlas/blas/linalg.hh>
 
 #include "../util/template-instantiations.hh"
@@ -237,7 +236,7 @@ Event tridiagonal_solver(Queue& ctx,
             }
 
             for (int i = tid; i < n; i += bdim) {
-                if constexpr (sycl::detail::is_complex<T>::value) {
+                if constexpr (internal::is_complex<T>::value) {
                     batch_W[i] = D[i].real();
                 } else {
                     batch_W[i] = D[i];

@@ -1,7 +1,6 @@
 #pragma once
 
 #include <batchlas/blas/device/detail/group_blas_common.hh>
-#include <sycl/ext/oneapi/group_local_memory.hpp>
 
 namespace batchlas::device {
 

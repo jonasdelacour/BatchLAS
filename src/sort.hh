@@ -12,7 +12,8 @@ template <typename T, typename K>
 Event permute(Queue& ctx, VectorView<T> data, VectorView<K> indices){
     auto n = data.size();
     auto batch_size = data.batch_size();
-    // Since we use sycl::ext::oneapi::experimental::gather, we need to ensure data and indices use unit increments.
+    // Unit increments were required by an earlier oneAPI gather-based version; the
+    // SLM permute below no longer calls it, but the contract is kept unchanged.
     if(data.inc() != 1 || indices.inc() != 1){
         throw batchlas::invalid_argument("permute: data and indices must have unit increment (inc=1)");
     }

@@ -92,7 +92,7 @@ namespace batchlas {
                     // (dead chunks are clamped below, not returned), which lets it run
                     // maskless where the chunks share one instruction stream.
                     const auto partition = make_partition<P, false>(sg);
-                    // NOTE: chunked_partition<P>(sg) partitions *within a sub-group*.
+                    // NOTE: make_partition<P>(sg) partitions *within a sub-group*.
                     // If the work-group contains multiple sub-groups, partition.get_group_linear_id()
                     // repeats for each sub-group. Make part_id unique within the whole work-group.
                     const int32_t sg_id = static_cast<int32_t>(sg.get_group_linear_id());

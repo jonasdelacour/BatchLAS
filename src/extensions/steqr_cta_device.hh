@@ -770,7 +770,7 @@ namespace batchlas {
     }
 
     // steqr_cta_solve_nested with the sweep hoisted out of the loop nest, for a
-    // partition whose collectives are chunk-local (native chunked_partition).
+    // partition whose collectives are chunk-local (a masked SubGroupPartition).
     //
     // The nested loops realign the chunks of a warp only at their exits, so a
     // chunk that advances past an eigenvalue waits while its neighbours finish

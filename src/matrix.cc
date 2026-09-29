@@ -4,8 +4,6 @@
 #include <batchlas/util/mempool.hh>
 #include <batchlas/util/kernel-heuristics.hh>
 #include <sycl/sycl.hpp>
-#include <oneapi/dpl/algorithm>
-#include <oneapi/dpl/execution>
 #include <oneapi/dpl/random>
 #include <complex>
 #include <random>
@@ -2072,6 +2070,7 @@ Event MatrixView<T, MType>::copy(Queue& ctx, const MatrixView<T, MType>& dest, c
             //If the stride is the same as the size of each matrix just do a straight memcpy
             auto event = static_cast<EventImpl>(ctx->memcpy(dest.data_.data(), src.data_.data(), src.data().size_bytes()));
             return event;
+#if defined(SYCL_EXT_ONEAPI_MEMCPY2D)  // sycl_ext_oneapi_memcpy2d; without it every strided case takes the copy kernel
         } else if (src.ld() == src.rows() && dest.ld() == dest.rows()){
             //If both leading dimensions are the same as the number of rows we can utilize oneapis 2d copy kernel
             auto event = static_cast<EventImpl>(ctx->ext_oneapi_memcpy2d(  static_cast<void*>(dest.data_ptr()),
@@ -2088,6 +2087,7 @@ Event MatrixView<T, MType>::copy(Queue& ctx, const MatrixView<T, MType>& dest, c
                                                     src.ld() * sizeof(T),
                                                     src.rows()*sizeof(T), src.cols() * src.batch_size()));
             return event;
+#endif
         } else {
             //If neither the ld nor the strides are unit, we need to do essentially a 3D copy
             auto [ global_size, local_size ] = compute_nd_range_sizes(
@@ -2134,6 +2134,7 @@ Event VectorView<T>::copy(Queue& ctx, const VectorView<T>& dest, const VectorVie
         //If the stride is the same as the size of each vector just do a straight memcpy
         auto event = static_cast<EventImpl>(ctx->memcpy(dest.data_.data(), src.data_.data(), src.size() * src.batch_size() * sizeof(T)));
         return event;
+#if defined(SYCL_EXT_ONEAPI_MEMCPY2D)  // sycl_ext_oneapi_memcpy2d; without it every strided case takes the copy kernel
     } else if (src.stride() == src.inc() * src.size() && dest.stride() == dest.inc() * dest.size()) {
         // If both the strides and increments are the same as the size of each vector just do a straight 2D memcpy
         auto event = static_cast<EventImpl>(ctx->ext_oneapi_memcpy2d(  static_cast<void*>(dest.data_ptr()),
@@ -2158,6 +2159,7 @@ Event VectorView<T>::copy(Queue& ctx, const VectorView<T>& dest, const VectorVie
                                                 src.stride() * sizeof(T),
                                                 sizeof(T), src.size() * src.batch_size()));
         return event;
+#endif
     } else {
         //If neither the ld nor the strides are unit, we need to do essentially a 2D copy
         auto event = static_cast<EventImpl>(ctx->submit([&](sycl::handler& cgh) {

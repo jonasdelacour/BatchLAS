@@ -11,7 +11,6 @@
 #include <numeric>
 #include <stdexcept>
 
-using namespace sycl::ext::oneapi;
 
 namespace batchlas {
 
