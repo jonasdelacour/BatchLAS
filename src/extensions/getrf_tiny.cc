@@ -84,8 +84,7 @@ struct GetrfTinyBody {
     int32_t* info_ptr;
     sycl::local_accessor<R4, 1> slm;   // 2 parities x Mpw rows; one element when !Slm
 
-    [[sycl::reqd_sub_group_size(32), intel::max_work_group_size(1, 1, kTinyWg),
-      intel::min_work_groups_per_cu(MinBlocks)]]
+    [[sycl::reqd_sub_group_size(32), BATCHLAS_LAUNCH_BOUNDS(kTinyWg, MinBlocks)]]
     void operator()(sycl::nd_item<1> it) const {
         constexpr int kMpw = Mpw;
         const auto sg = it.get_sub_group();

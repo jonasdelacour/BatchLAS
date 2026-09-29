@@ -40,6 +40,19 @@
 #define BATCHLAS_QUEUE_EXPORTED_INLINE [[gnu::used]] inline
 #endif
 
+// CUDA __launch_bounds__, spelled as SYCL kernel attributes, for use inside a
+// kernel's attribute list: [[sycl::reqd_sub_group_size(32), BATCHLAS_LAUNCH_BOUNDS(T, B)]].
+// NVPTX only. Everywhere else it expands to nothing (an empty attribute-list entry
+// is legal): the values were tuned on NVIDIA, and on SPIR-V the attributes emit
+// KernelAttributesINTEL, which icpx 2026.0's CPU AOT compiler rejects ("unsupported
+// capability 5892"), failing the link of any spir64_x86_64 build.
+#if defined(__SYCL_DEVICE_ONLY__) && defined(__NVPTX__)
+#define BATCHLAS_LAUNCH_BOUNDS(max_threads, min_blocks) \
+    intel::max_work_group_size(1, 1, max_threads), intel::min_work_groups_per_cu(min_blocks)
+#else
+#define BATCHLAS_LAUNCH_BOUNDS(max_threads, min_blocks)
+#endif
+
 // A Queue is single-threaded by contract; the reasoning is on struct Queue in
 // util/sycl-device-queue.hh. This is the whole enforcement: record the thread that
 // built the queue, and compare against it on the paths that mutate state shared
