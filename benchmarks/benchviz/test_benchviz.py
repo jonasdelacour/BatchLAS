@@ -272,7 +272,42 @@ class Compare(unittest.TestCase):
         self.assertAlmostEqual(ctl["vendor"]["geomean"], 1.0 / 1.1)
         p = cmp.config["provenance"]
         self.assertEqual((p["ref_label"], p["new_label"]), ("Build aaaaaaa", "Build bbbbbbb"))
-        self.assertIn("4 cells in both", compare.report(cmp))
+        self.assertIn("4 cells paired", compare.report(cmp))
+
+    def test_logs_on_different_grids_pair_by_time_per_matrix(self):
+        import compare
+        from store import Campaign
+        other = os.path.join(self.tmp.name, "elsewhere")   # another checkout's benchviz_runs/
+        c = Campaign.create(other, "ladder", {"ops": ["potrf"], "types": ["float"], "backend": "cuda",
+                                              "provenance": {"builds": [{"dir": "/b/c", "built": "y", "built_from": "ccccccc"}]}})
+        for b, t in ((256, 0.5), (4096, 4.0)):             # never at batch 1024, the other log's
+            c.append(row("potrf", 64, "batchlas", t, batch=b))
+        c.append(row("potrf", 128, "batchlas", 1.0))      # batch 1024: an identical cell
+        cmp = compare.create(self.root, "cmp", "old", os.path.join(c.dir, "results.jsonl"))
+        w = paired(cmp.rows()).set_index("n")
+        # old: 2.0 ms for 1024 matrices; ladder: 4.0 ms for 4096 -> 2x per matrix, at the larger batch.
+        self.assertAlmostEqual(float(w.loc[64].speedup), 2.0)
+        self.assertEqual(int(w.loc[64].batch), 4096)
+        self.assertAlmostEqual(float(w.loc[128].speedup), 2.0)
+        ctl = compare.control(cmp)
+        self.assertEqual((ctl["matched"], ctl["rescaled"]), (2, 1))
+        exact = compare.create(self.root, "cmp-exact", "old", c.dir, exact=True)
+        self.assertEqual(list(paired(exact.rows()).n), [128])
+        self.assertIn("different batch grids", " ".join(cmp.config["provenance"]["warnings"]))
+
+    def test_any_arm_against_any_arm(self):
+        import compare
+        vv = compare.create(self.root, "vv", "old", "new", base_arm="vendor", new_arm="vendor")
+        w = paired(vv.rows())
+        self.assertEqual(sorted(set(w.op)), ["potrf"])             # stedc has no vendor arm
+        self.assertAlmostEqual(float(w.speedup.iloc[0]), 1.0 / 1.1)
+        self.assertIsNone(compare.control(vv)["vendor"]["geomean"])   # the control is what is compared
+        p = vv.config["provenance"]
+        self.assertEqual((p["ref_label"], p["new_label"]), ("Build aaaaaaa vendor", "Build bbbbbbb vendor"))
+        mine = compare.create(self.root, "mine", "new", "new", base_arm="vendor")
+        self.assertAlmostEqual(float(paired(mine.rows()).speedup.iloc[0]), 1.1)   # BatchLAS vs vendor, one log
+        with self.assertRaises(ValueError):
+            compare.create(self.root, "self", "new", "new")
 
     def test_follows_its_sources_and_cannot_be_run(self):
         import compare

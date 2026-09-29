@@ -152,7 +152,7 @@ function render() {
   $("failbox").innerHTML = c.failures.length ? `<h2>Failed or dropped <span class="muted">${c.failures.length}</span></h2><div class="tblwrap fails"><table><tbody>${c.failures.slice().reverse().map(f =>
       `<tr><td class="num" style="white-space:nowrap"><span class="mono">${f.op}</span> ${PREC[f.dtype] ? PREC[f.dtype][1] : esc(f.dtype)} ${esc(f.shape || "n " + f.n)} · ${f.batch}</td><td>${esc(f.arm)}</td><td>${esc(f.reason)}</td></tr>`).join("")}</tbody></table></div>` : "";
   $("foot").textContent = p.kind === "compare"
-    ? `Snapshot exported ${DATA.exported}. A build comparison: speedup is ${p.ref_label} time divided by ${p.new_label} time, BatchLAS arm against BatchLAS arm, at the largest batch measured in both; above 1× the candidate build is faster.`
+    ? `Snapshot exported ${DATA.exported}. A log comparison: speedup is ${p.ref_label} time divided by ${p.new_label} time (${p.base_arm || "batchlas"} arm against ${p.new_arm || "batchlas"} arm), at the largest batch measured in both; above 1× the candidate is faster.`
     : `Snapshot exported ${DATA.exported}. Speedup is vendor time divided by BatchLAS time at the largest batch where both arms were measured; above 1× BatchLAS is faster. BatchLAS is pinned to its native kernels; a cell whose route did not match its arm was dropped.`;
   if (location.hash.length > 1) { const d = document.getElementById(location.hash.slice(1)); if (d && d.tagName === "DETAILS") { d.open = true; fillOp(d.id); } }
 }

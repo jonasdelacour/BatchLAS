@@ -280,6 +280,9 @@ class Handler(BaseHTTPRequestHandler):
                 "presets": {k: v.to_dict() for k, v in PRESETS.items()},
                 "campaigns": list_campaigns(self.root),
             })
+        if u.path == "/api/logs":
+            from store import discover_logs
+            return self._json([x for x in discover_logs() if x["kind"] != "compare"])
         if u.path == "/api/state":
             return self._json(snapshot(self.root, q.get("c", [""])[0]))
         if u.path == "/api/op":
@@ -336,7 +339,8 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         if not self._authorized():
             return self._json({"error": "forbidden"}, 403)
-        if self.read_only and u.path != "/api/plan":
+        # A comparison only reads logs and writes its small config: no GPU, so read-only allows it.
+        if self.read_only and u.path not in ("/api/plan", "/api/compare"):
             return self._json({"error": "This copy of the dashboard is read-only; start runs from the GPU box."}, 403)
         try:
             b = self._body()
@@ -376,10 +380,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def _compare(self, b: dict):
         import compare
-        base, new = b.get("base", ""), b.get("new", "")
-        name = "".join(ch for ch in str(b.get("name") or f"cmp-{base}-vs-{new}") if ch.isalnum() or ch in "-_.")
+        ab, an = b.get("base_arm") or "batchlas", b.get("new_arm") or "batchlas"
         try:
-            camp = compare.create(self.root, name, base, new)
+            base, new = (compare.resolve(self.root, str(b.get(k, ""))) for k in ("base", "new"))
+            arms = "" if ab == an == "batchlas" else f"-{ab}-{an}"
+            name = "".join(ch for ch in str(b.get("name") or f"cmp-{base.name}-vs-{new.name}{arms}")
+                           if ch.isalnum() or ch in "-_.")
+            camp = compare.create(self.root, name, str(base), str(new), ab, an, bool(b.get("exact")))
         except ValueError as e:
             return self._json({"error": str(e)}, 400)
         _replot_compare(camp)

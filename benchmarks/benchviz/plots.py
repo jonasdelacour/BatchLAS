@@ -108,7 +108,7 @@ def plane_points(w: pd.DataFrame, op: str) -> pd.DataFrame:
 def vendor_label(meta: dict, op: str = None) -> str:
     """The library the vendor arm of `op` reaches; with no op (the cross-op
     summary) the generic word, since that figure mixes cuSOLVER and cuBLAS. In a
-    build comparison the reference slot holds the baseline build instead."""
+    log comparison the reference slot holds the baseline build instead."""
     if meta.get("ref_label"):
         return meta["ref_label"]
     if op is None:

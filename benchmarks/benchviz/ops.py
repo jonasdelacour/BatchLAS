@@ -148,7 +148,7 @@ class OpSpec:
     @property
     def single(self) -> bool:
         """No vendor arm: a campaign plots its throughput, and a speedup only
-        appears in a build comparison (compare.py)."""
+        appears in a log comparison (compare.py)."""
         return len(self.arms) == 1
 
     def cell_args(self, cell: "Cell") -> List[int]:

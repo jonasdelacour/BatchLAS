@@ -37,7 +37,7 @@ def campaign_data(camp: Campaign, figdir: Path, rel: str) -> dict:
     an = server._analysis(camp)
     cfg = camp.config
     backend = cfg.get("backend", "cuda")
-    prov = cfg.get("provenance", {})  # a build comparison names its two builds here
+    prov = cfg.get("provenance", {})  # a log comparison names its two logs here
     ops = []
     for op, st in an["per_op"].items():
         if op not in OPS:

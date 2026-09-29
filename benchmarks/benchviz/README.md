@@ -25,7 +25,7 @@ python3 benchmarks/benchviz run --ops all --types all --preset full --campaign p
 # 3. Re-render every figure (e.g. after a style change).
 python3 benchmarks/benchviz plot paper-4090
 
-# 4. Compare two builds: the same grid measured from each, then paired cell by cell.
+# 4. Compare any two logs, e.g. one run per build (see "Comparing logs").
 python3 benchmarks/benchviz run --campaign before --build-dir ../old-checkout/build --ops syev,stedc --types float
 python3 benchmarks/benchviz run --campaign after  --build-dir build                 --ops syev,stedc --types float
 python3 benchmarks/benchviz compare before after
@@ -63,7 +63,7 @@ Campaigns are stored in `benchviz_runs/<name>/` (git-ignored):
 | `figures/<op>/{speedup_n,throughput_n,heatmap}.{pdf,png}` | The per-op figures |
 | `figures/_summary/summary_<precision>.{pdf,png}` | The cross-op summaries |
 
-A build comparison's `campaign.json` names its two source campaigns (`kind: compare`), and it has no
+A log comparison's `campaign.json` names its two source campaigns (`kind: compare`), and it has no
 `results.jsonl`.
 
 `--gpu 0,1` (or both GPU chips in the run panel) splits a campaign's cells across the cards, one
@@ -143,13 +143,13 @@ actually ran (`route`) plus every sub-op route (`subroutes`). A pin is never tak
 
 An op with no vendor arm draws `throughput_n` with BatchLAS alone, and `heatmap` becomes its
 throughput over n × batch, annotated. It has no speedup figures and is left out of `summary_<t>`,
-except in a build comparison, where every op gets them.
+except in a log comparison, where every op gets them.
 
 ## Sub-operations
 
 syev's stages are ops of their own, in the dashboard group "Eigensolver stages". No vendor library
 ships them batched, so each has one arm, BatchLAS. A campaign gives their throughput, and a build
-comparison (below) gives their speedup.
+comparison ("Comparing logs") gives their speedup.
 
 | Op | Harness | What it runs | Arguments |
 |---|---|---|---|
@@ -173,29 +173,48 @@ comparison (below) gives their speedup.
 - **Flop counts.** sytrd, sytrd_cta and sy2sb use 4n³/3 (LAWN 41's sytrd; sy2sb has the same leading
   order). stedc, steqr and sb2st have no canonical count and are plotted in matrices/s.
 
-## Comparing builds
+## Comparing logs
 
-`compare <baseline> <candidate>` pairs two campaigns cell by cell, usually one per build. It writes a
-comparison `benchviz_runs/<name>/` (default `cmp-<baseline>-vs-<candidate>`) that the dashboard,
-`plot` and `export` treat like any other campaign. The dashboard's **Compare builds** button does the same.
+`compare <baseline> <candidate>` pairs any two logs cell by cell: two builds, two runs of one build, a
+campaign from last week against one from today, or runs made in two different checkouts. Neither log has
+to have been made for the comparison.
 
-- **What the speedup is.** The candidate's BatchLAS arm goes in the BatchLAS slot and the baseline's
-  BatchLAS arm in the vendor slot. So every figure is unchanged, and above 1× the candidate is faster.
-  The labels name the builds: `Build <sha>`, from each campaign's recorded build.
-- **Only shared cells.** A cell counts only when it was verified in both campaigns. The overview
-  says how many cells were only in one.
-- **The vendor control.** Both campaigns measured the vendor arm, and the vendor library did not change
-  between builds. So its ratio between the two runs measures the machine: clocks, contention, the
-  driver. The overview reports it, and flags it beyond 5 %. A control of 1.08× means every speedup
-  in the comparison is inflated by roughly that much.
-- **Live.** A comparison stores no rows; it re-reads both campaigns on every load. Comparing
-  against a campaign that is still running therefore fills in as it runs, and the dashboard re-renders
-  the figures when a source gains rows.
-- **Warnings.** It warns when the two campaigns ran on different devices, and when they measured the
-  same binaries. The second makes every ratio run-to-run noise, which is a useful A/A test in its own right.
+```sh
+python3 benchmarks/benchviz logs                     # every campaign in every checkout's benchviz_runs/
+python3 benchmarks/benchviz compare baseline main-3df4e99-square
+python3 benchmarks/benchviz compare ../other/benchviz_runs/x/results.jsonl y --exact
+python3 benchmarks/benchviz compare before after --base-arm vendor --new-arm vendor   # did cuSOLVER move?
+```
 
-For figures you will quote, measure the two campaigns back to back on the same card, with the same
-grid.
+A source is a campaign name (looked up in `--root`, then in every checkout; an ambiguous name lists
+the paths to choose from), a campaign directory, or its `results.jsonl`. The comparison is written to
+`benchviz_runs/<name>/` (default `cmp-<baseline>-vs-<candidate>`), and the dashboard, `plot` and
+`export` treat it like any other campaign. The dashboard's **Compare logs** button offers every log on
+the box, grouped by checkout.
+
+- **What the speedup is.** The candidate's chosen arm goes in the BatchLAS slot and the baseline's in
+  the vendor slot, so every figure works unchanged; above 1× the candidate is faster. The arm is BatchLAS
+  on both sides by default. `--base-arm` and `--new-arm` pick either arm of either log: vendor against
+  vendor shows a driver or CUDA update, and BatchLAS against vendor within one log is that log's own speedup.
+- **How cells are matched.**
+  - First, the same cell (op, precision, shape, batch) in both logs.
+  - Then, for a shape the two measured but never at a common batch (two grids, two memory budgets), each
+    log's largest batch, compared by **time per matrix**. That assumes both points are saturated, which is
+    what the top of a ladder is for. The overview counts these rescaled pairs, and `--exact` drops them.
+  - A shape only one log measured has no ratio. The overview counts those too.
+- **Labels.** `Build <sha>` when the log recorded its binaries. Older logs did not record them, so they
+  are labelled `HEAD <sha>`: the checkout benchviz ran from, which is not necessarily what was measured.
+- **The vendor control.** With BatchLAS on both sides, both logs also ran the vendor arm, and the vendor
+  library did not change. So its ratio measures the machine: clocks, contention, the driver. The overview
+  reports it, and flags it beyond 5 %. A control of 1.08× means every speedup in the comparison is
+  inflated by roughly that much.
+- **Live.** A comparison stores no rows; it re-reads both logs on every load. Comparing against a
+  campaign that is still running therefore fills in as it runs, and the dashboard re-renders the figures
+  when a source gains rows.
+- **Warnings.** It warns about different devices, different batch grids, and two logs of the same
+  binaries. The last makes every ratio run-to-run noise, which is a useful A/A test in its own right.
+
+For figures you will quote, measure the two campaigns back to back on the same card, with the same grid.
 
 ## Rectangular ops
 
