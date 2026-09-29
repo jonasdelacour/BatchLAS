@@ -113,6 +113,9 @@ const FIGS = [["speedup_n", "Speedup vs n"], ["throughput_n", "Throughput"], ["h
 const fx = (v) => v == null ? "—" : (v >= 9.95 ? v.toFixed(0) : v >= 0.995 ? v.toFixed(2) : v.toFixed(3)) + "×";
 const cls = (v) => v == null ? "" : v >= 1 ? "win" : "lose";
 const ms = (v) => v == null ? "—" : v >= 100 ? v.toFixed(0) : v >= 1 ? v.toFixed(2) : v.toFixed(4);
+const fr = (v) => v >= 9995 ? `${(v / 1e3).toFixed(0)}k` : v >= 999.5 ? `${(v / 1e3).toFixed(1)}k` : v >= 9.95 ? v.toFixed(0) : v.toPrecision(2);
+// An op with no reference arm has a peak throughput where the others have a speedup.
+const vs = (o) => o.vendor ? `vs ${esc(o.vendor)}` : "throughput only";
 let cur = 0;
 try { const k = localStorage.getItem("bv-camp"); const i = DATA.campaigns.findIndex(c => c.name === k); if (i >= 0) cur = i; } catch (e) {}
 
@@ -136,18 +139,21 @@ function render() {
   let rows = "", grp = null;
   for (const o of c.ops) {
     if (o.group !== grp) { grp = o.group; rows += `<tr><td class="grp" colspan="${types.length + 1}">${esc(grp)}</td></tr>`; }
-    rows += `<tr class="link" data-op="${o.name}"><td><span class="mono">${o.name}</span><span class="rng">vs ${esc(o.vendor)}</span></td>` +
-      types.map(t => { const q = o.prec[t]; return `<td class="r">${q ? `<span class="sp ${cls(q.geomean)}">${fx(q.geomean)}</span><span class="rng">${fx(q.min)}–${fx(q.max)}</span>` : `<span class="muted">—</span>`}</td>`; }).join("") + `</tr>`;
+    rows += `<tr class="link" data-op="${o.name}"><td><span class="mono">${o.name}</span><span class="rng">${vs(o)}</span></td>` +
+      types.map(t => { const q = o.prec[t]; return `<td class="r">${q && q.geomean ? `<span class="sp ${cls(q.geomean)}">${fx(q.geomean)}</span><span class="rng">${fx(q.min)}–${fx(q.max)}</span>`
+        : q && q.peak ? `<span class="sp">${fr(q.peak)}</span><span class="rng">${esc(q.unit)}</span>` : `<span class="muted">—</span>`}</td>`; }).join("") + `</tr>`;
   }
   $("overview").innerHTML = `<thead><tr><th>Op</th>${types.map(t => `<th class="r">${PREC[t][1]}</th>`).join("")}</tr></thead><tbody>${rows}</tbody>`;
   const st = types.filter(t => c.summaries[t]);
   $("sum").innerHTML = st.length ? `<h2>All ops at a glance</h2>${figBlock("sum", st.map(t => [t, PREC[t][0]]), (k) => c.summaries[k])}` : "";
   $("ops").innerHTML = c.ops.map(o => `<details class="op" id="${o.name}"><summary><span class="nm">${o.name}</span>
-      <span class="gm ${cls(o.geomean)}">${fx(o.geomean)}</span><span class="ti">${esc(o.title)} · vs ${esc(o.vendor)}</span></summary><div class="body" data-op="${o.name}"></div></details>`).join("");
+      <span class="gm ${cls(o.geomean)}">${fx(o.geomean)}</span><span class="ti">${esc(o.title)} · ${vs(o)}</span></summary><div class="body" data-op="${o.name}"></div></details>`).join("");
   $("ops").querySelectorAll("details").forEach(d => d.addEventListener("toggle", () => { if (d.open) fillOp(d.id); }));
   $("failbox").innerHTML = c.failures.length ? `<h2>Failed or dropped <span class="muted">${c.failures.length}</span></h2><div class="tblwrap fails"><table><tbody>${c.failures.slice().reverse().map(f =>
       `<tr><td class="num" style="white-space:nowrap"><span class="mono">${f.op}</span> ${PREC[f.dtype] ? PREC[f.dtype][1] : esc(f.dtype)} ${esc(f.shape || "n " + f.n)} · ${f.batch}</td><td>${esc(f.arm)}</td><td>${esc(f.reason)}</td></tr>`).join("")}</tbody></table></div>` : "";
-  $("foot").textContent = `Snapshot exported ${DATA.exported}. Speedup is vendor time divided by BatchLAS time at the largest batch where both arms were measured; above 1× BatchLAS is faster. BatchLAS is pinned to its native kernels; a cell whose route did not match its arm was dropped.`;
+  $("foot").textContent = p.kind === "compare"
+    ? `Snapshot exported ${DATA.exported}. A log comparison: speedup is ${p.ref_label} time divided by ${p.new_label} time (${p.base_arm || "batchlas"} arm against ${p.new_arm || "batchlas"} arm), at the largest batch measured in both; above 1× the candidate is faster.`
+    : `Snapshot exported ${DATA.exported}. Speedup is vendor time divided by BatchLAS time at the largest batch where both arms were measured; above 1× BatchLAS is faster. BatchLAS is pinned to its native kernels; a cell whose route did not match its arm was dropped.`;
   if (location.hash.length > 1) { const d = document.getElementById(location.hash.slice(1)); if (d && d.tagName === "DETAILS") { d.open = true; fillOp(d.id); } }
 }
 function figBlock(id, tabs, src) {
@@ -164,10 +170,11 @@ function fillOp(name) {
   const types = PORD.filter(t => o.prec[t]);
   const rows = o.rows.slice().sort((a, b) => PORD.indexOf(a.dtype) - PORD.indexOf(b.dtype) || a.n - b.n || a.batch - b.batch);
   el.innerHTML = (o.notes ? `<p class="opnote">${esc(o.notes)}.</p>` : "") +
-    `<div class="prec">${types.map(t => { const q = o.prec[t]; return `<div><div class="k">${PREC[t][0]}</div><div class="v ${cls(q.geomean)}">${fx(q.geomean)}</div>
-      <div class="f">faster at ${q.wins} of ${q.n} orders</div></div>`; }).join("")}</div>` +
+    `<div class="prec">${types.map(t => { const q = o.prec[t]; return q.geomean ? `<div><div class="k">${PREC[t][0]}</div><div class="v ${cls(q.geomean)}">${fx(q.geomean)}</div>
+      <div class="f">faster at ${q.wins} of ${q.n} orders</div></div>` : `<div><div class="k">${PREC[t][0]}</div><div class="v">${fr(q.peak)}</div>
+      <div class="f">peak ${esc(q.unit)}, at n ${q.at_n}</div></div>`; }).join("")}</div>` +
     figBlock(name, FIGS.filter(([k]) => o.figs[k]).length ? FIGS.filter(([k]) => o.figs[k]) : [["none", "Figures"]], (k) => o.figs[k]) +
-    `<div class="tblwrap"><table><thead><tr><th>Prec</th><th class="r">n</th><th class="r">Batch</th><th class="r">BatchLAS ms</th><th class="r">${esc(o.vendor)} ms</th><th class="r">Speedup</th><th>Routes</th></tr></thead>
+    `<div class="tblwrap"><table><thead><tr><th>Prec</th><th class="r">n</th><th class="r">Batch</th><th class="r">${esc(o.mine)} ms</th><th class="r">${esc(o.vendor || "—")} ms</th><th class="r">Speedup</th><th>Routes</th></tr></thead>
       <tbody>${rows.map(r => `<tr><td>${PREC[r.dtype] ? PREC[r.dtype][1] : esc(r.dtype)}</td><td class="r num">${esc(r.shape || "n " + r.n)}</td><td class="r num">${r.batch}</td>
       <td class="r num">${ms(r.time_ms_batchlas)}</td><td class="r num">${ms(r.time_ms_vendor)}</td><td class="r"><span class="sp ${cls(r.speedup)}">${fx(r.speedup)}</span></td>
       <td><span class="route">${esc(r.route_batchlas)}</span><span class="rng route">${esc(r.route_vendor)}</span></td></tr>`).join("")}</tbody></table></div>`;

@@ -137,6 +137,8 @@ class Campaign:
             # showing what earlier invocations measured; everything else is the
             # latest request's.
             old = json.loads(cfg_path.read_text())
+            if old.get("kind") == "compare":
+                raise ValueError(f"{name} is a log comparison, not a campaign that can be run")
             if old.get("backend") != config.get("backend"):
                 raise ValueError(f"campaign {name} is a {old.get('backend')} campaign")
             for k in ("ops", "types"):
@@ -162,7 +164,27 @@ class Campaign:
             fh.write(json.dumps(rec) + "\n")
             fh.flush()
 
+    def is_compare(self) -> bool:
+        try:
+            return self.config.get("kind") == "compare"
+        except (FileNotFoundError, json.JSONDecodeError):
+            return False
+
+    def data_key(self) -> tuple:
+        """Changes whenever rows() would return something new."""
+        if self.is_compare():
+            import compare
+            return (str(self.dir), compare.data_key(self))
+        try:
+            st = self.results.stat()
+            return (str(self.dir), st.st_size, st.st_mtime)
+        except FileNotFoundError:
+            return (str(self.dir), 0, 0)
+
     def rows(self) -> List[dict]:
+        if self.is_compare():  # derived from its two source campaigns (compare.py)
+            import compare
+            return compare.rows(self)
         if not self.results.exists():
             return []
         out = []
@@ -202,6 +224,46 @@ class Campaign:
 
     def stop_requested(self) -> bool:
         return (self.dir / "STOP").exists()
+
+
+def log_roots() -> List[Path]:
+    """Every benchviz_runs/ on this box: this checkout's, the main checkout's, and
+    each worktree's. Campaigns land in whichever checkout ran them, so a log worth
+    comparing is often in another one."""
+    common = _sh("git", "-C", str(REPO), "rev-parse", "--path-format=absolute", "--git-common-dir")
+    main = Path(common).parent if common else REPO
+    cands = [REPO / "benchviz_runs", main / "benchviz_runs",
+             *sorted((main / ".claude" / "worktrees").glob("*/benchviz_runs"))]
+    out = []
+    for c in cands:
+        if c.is_dir() and c.resolve() not in out:
+            out.append(c.resolve())
+    return out
+
+
+def discover_logs(roots: Optional[List[Path]] = None) -> List[dict]:
+    """Every campaign under the log roots, newest first, with what a picker shows."""
+    out = []
+    for root in roots or log_roots():
+        for d in root.iterdir():
+            p = d / "campaign.json"
+            if not p.is_file():
+                continue
+            try:
+                cfg = json.loads(p.read_text())
+            except (OSError, json.JSONDecodeError):
+                continue
+            builds = [b for b in (cfg.get("provenance") or {}).get("builds") or [] if b.get("built_from")]
+            res = d / "results.jsonl"
+            out.append({
+                "path": str(d), "name": d.name, "checkout": root.parent.name, "kind": cfg.get("kind", "campaign"),
+                "build": builds[0]["built_from"] if builds else None, "ops": cfg.get("ops", []),
+                "types": cfg.get("types", []), "grid": (cfg.get("grid") or {}).get("name") or cfg.get("preset"),
+                "started": (cfg.get("provenance") or {}).get("started"),
+                "rows": sum(1 for _ in open(res)) if res.is_file() else 0,
+                "mtime": (res if res.is_file() else p).stat().st_mtime,
+            })
+    return sorted(out, key=lambda x: x["mtime"], reverse=True)
 
 
 def list_campaigns(root: Path) -> List[str]:

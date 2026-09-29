@@ -228,7 +228,11 @@ class Runner:
             rec.update(time_ms=avg, rel_sd=sd / avg if avg > 0 else 0.0,
                        residual=None, ok=True, reason="ok (timing only; not verified)")
         if arm.fixed_route:
-            rec.update(route=arm.fixed_route, subroutes=[], vendor_free=arm.key != "vendor")
+            # The top route is known by construction; the sub-ops under it (stedc's
+            # merge gemm, say) still record coverage, and decide vendor-freedom.
+            subs = parse_coverage(cov, cell.op)["subroutes"]
+            rec.update(route=arm.fixed_route, subroutes=subs,
+                       vendor_free=arm.key != "vendor" and not any("=vendor" in s for s in subs))
         else:
             rec.update(parse_coverage(cov, cell.op))
             if op.setup_ops:
@@ -301,7 +305,7 @@ class Runner:
             arms = [a.key for a in OPS[c.op].arms if c.key(a.key) not in done]
             if arms:
                 self._queue.append((c, arms))
-        self._total = len(cells) * 2
+        self._total = sum(len(OPS[c.op].arms) for c in cells)
         self._done = self._total - sum(len(a) for _, a in self._queue)
         self._current, self._failed_ops, self._errors = {}, {}, []
         self.camp.set_status("running", total=self._total, done=self._done, pid=os.getpid(),

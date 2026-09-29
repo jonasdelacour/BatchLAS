@@ -4,6 +4,8 @@
     python3 benchmarks/benchviz run  --ops potrf,syev --types float,double
     python3 benchmarks/benchviz plot <campaign>            # (re)render every figure
     python3 benchmarks/benchviz import <campaign> benchmarks/results/factor_baseline_*.csv
+    python3 benchmarks/benchviz logs                             # every campaign on this box
+    python3 benchmarks/benchviz compare <baseline> <candidate>   # any two logs, cell by cell
     python3 benchmarks/benchviz list-ops
 """
 from __future__ import annotations
@@ -102,13 +104,13 @@ def cmd_run(a):
     cells = plan_cells(_csv_list(a.ops, OPS), _csv_list(a.types, TYPES), a.grid)
     if a.dry_run:
         print(f"grid: {a.grid.to_dict()}")
-        print(f"{len(cells)} cells x 2 arms")
+        print(f"{len(cells)} cells, {sum(len(OPS[c.op].arms) for c in cells)} arm-cells")
         for c in cells:
             print(f"  {c.op:6s} {c.dtype:8s} n={c.n:5d} batch={c.batch}")
         return
     build_dirs = [Path(p) for p in a.build_dir] if a.build_dir else default_build_dirs()
     camp = make_campaign(a, build_dirs)
-    print(f"campaign {camp.name}: {len(cells)} cells x 2 arms -> {camp.dir}")
+    print(f"campaign {camp.name}: {len(cells)} cells, {sum(len(OPS[c.op].arms) for c in cells)} arm-cells -> {camp.dir}")
     # The dashboard tails run.log. A dashboard-started run already has its
     # stdout redirected there; a terminal run appends as well as printing.
     logf = None if os.environ.get("BENCHVIZ_STDOUT_IS_LOG") else open(camp.dir / "run.log", "a")
@@ -206,6 +208,38 @@ def cmd_export(a):
     print(p)
 
 
+def cmd_compare(a):
+    import compare
+    try:
+        base, new = (compare.resolve(Path(a.root), s) for s in (a.baseline, a.candidate))
+        arms = "" if a.base_arm == a.new_arm == "batchlas" else f"-{a.base_arm}-{a.new_arm}"
+        name = a.name or f"cmp-{base.name}-vs-{new.name}{arms}"
+        camp = compare.create(Path(a.root), name, str(base), str(new), a.base_arm, a.new_arm, a.exact)
+    except ValueError as e:
+        raise SystemExit(str(e))
+    print(compare.report(camp))
+    if not a.no_plot:
+        from plots import render_all
+        import style
+        if a.no_tex:
+            style.apply(usetex=False)
+        render_all(camp)
+        camp.set_status(compare.KIND, plotted=time.time())
+        print(f"figures: {camp.figures}")
+    print(f"comparison {name}: open it from the dashboard's campaign list")
+
+
+def cmd_logs(a):
+    """Every campaign on this box, so a comparison can name any of them."""
+    from store import discover_logs
+    logs = [x for x in discover_logs() if a.all or x["kind"] != "compare"]
+    for x in logs:
+        print(f"{x['name']:28s} {x['checkout']:22s} {x['rows']:5d} rows  build ~{x['build'] or '?':8s} "
+              f"{x['grid'] or '?':10s} {','.join(x['ops'])[:48]}")
+        print(f"{'':28s} {x['path']}")
+    print(f"{len(logs)} logs. Compare two by name (when unique) or by path: benchviz compare <baseline> <candidate>")
+
+
 def cmd_info(a):
     """What a run started now would measure, and what is already running."""
     import json
@@ -227,6 +261,11 @@ def cmd_info(a):
             except OSError:
                 pass
         state = st.get("state", "?") if alive or st.get("state") != "running" else "interrupted"
+        if c.is_compare():
+            cfg = c.config
+            print(f"  {name:28s} {'compare':11s} {cfg['provenance'].get('new_label')} ({cfg['new']}) vs "
+                  f"{cfg['provenance'].get('ref_label')} ({cfg['base']})")
+            continue
         builds = prov.get("builds") or []
         b = ", ".join(f"~{x.get('built_from', '?')}{' STALE' if x.get('stale') else ''}" for x in builds) \
             or "unrecorded (made before build provenance)"
@@ -282,6 +321,26 @@ def main():
     im.add_argument("campaign")
     im.add_argument("files", nargs="+")
     im.set_defaults(fn=cmd_import)
+
+    cp = sub.add_parser("compare", parents=[common],
+                        help="compare two campaigns measured from different builds, cell by cell")
+    cp.add_argument("baseline", help="the reference log (1x): a campaign name, its directory, or its results.jsonl")
+    cp.add_argument("candidate", help="the other log; speedup > 1x means it is faster")
+    cp.add_argument("--base-arm", choices=["batchlas", "vendor"], default="batchlas",
+                    help="which arm of the baseline to compare (default batchlas)")
+    cp.add_argument("--new-arm", choices=["batchlas", "vendor"], default="batchlas",
+                    help="which arm of the candidate to compare (default batchlas)")
+    cp.add_argument("--exact", action="store_true",
+                    help="pair only identical cells; by default a shape measured at no common batch is "
+                         "compared by time per matrix at each log's largest batch")
+    cp.add_argument("--name", help="the comparison's name; default cmp-<baseline>-vs-<candidate>")
+    cp.add_argument("--no-plot", action="store_true")
+    cp.add_argument("--no-tex", action="store_true", help="mathtext instead of LaTeX")
+    cp.set_defaults(fn=cmd_compare)
+
+    lg = sub.add_parser("logs", parents=[common], help="list every campaign on this box, in every checkout")
+    lg.add_argument("--all", action="store_true", help="include comparisons")
+    lg.set_defaults(fn=cmd_logs)
 
     ex = sub.add_parser("export", parents=[common], help="static phone-friendly snapshot (HTML + figures)")
     ex.add_argument("campaigns", nargs="+")

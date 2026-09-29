@@ -71,6 +71,7 @@ header.top { position: sticky; top: 0; z-index: 20; height: 56px; display: flex;
 .finished .dot, .imported .dot { background: var(--good); }
 .failed .dot, .interrupted .dot { background: var(--bad); }
 .stopped .dot { background: var(--warn); }
+.compare .dot { background: var(--accent); }
 @keyframes pulse { 50% { opacity: .3; } }
 .track { width: 160px; flex: none; height: 4px; background: var(--sunken); border-radius: 2px; overflow: hidden; }
 .track i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .6s ease; }
@@ -83,7 +84,6 @@ header.top { position: sticky; top: 0; z-index: 20; height: 56px; display: flex;
 
 /* ---------------------------------------------------------------- layout */
 .shell { display: grid; grid-template-columns: 232px minmax(0, 1fr); }
-@media (max-width: 900px) { .shell { grid-template-columns: 1fr; } nav.rail { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--hair); } }
 nav.rail { position: sticky; top: 56px; height: calc(100vh - 56px); overflow: auto; padding: 16px 10px 24px; border-right: 1px solid var(--hair); }
 .rail .grp { margin: 18px 10px 6px; font-size: 11.5px; font-weight: 600; color: var(--muted); }
 .rail a { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 0 8px; padding: 6px 10px; border-radius: 7px;
@@ -97,6 +97,30 @@ nav.rail { position: sticky; top: 56px; height: calc(100vh - 56px); overflow: au
 .rail .bar i { display: block; height: 100%; background: var(--accent); transition: width .6s ease; }
 .rail a.live .nm::after { content: ""; display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-radius: 50%;
   background: var(--accent); vertical-align: 1px; animation: pulse 1.6s ease-in-out infinite; }
+/* Narrow screens: the rail becomes one horizontally scrolling strip under the header.
+   It must follow the rules above, which it overrides at equal specificity. */
+@media (max-width: 900px) {
+  .shell { grid-template-columns: 1fr; }
+  nav.rail { position: sticky; top: 56px; z-index: 10; height: auto; display: flex; gap: 4px; overflow-x: auto; padding: 8px 12px;
+    border-right: 0; border-bottom: 1px solid var(--hair); background: var(--page); scrollbar-width: none; }
+  nav.rail::-webkit-scrollbar { display: none; }
+  .rail .grp, .rail .bar { display: none; }
+  .rail a { display: inline-flex; flex: none; gap: 6px; padding: 5px 10px; border: 1px solid var(--hair); border-radius: 999px; white-space: nowrap; }
+  .rail a.on { border-color: var(--accent); }
+}
+@media (max-width: 760px) {
+  header.top { gap: 10px; padding: 0 12px; }
+  .hide-sm { display: none; }
+  header.top .btn { white-space: nowrap; }
+  header.top .sel { min-width: 0; max-width: 52vw; text-overflow: ellipsis; }
+  /* Only the state dot and the ETA fit beside the campaign menu. */
+  .status { gap: 8px; overflow: hidden; }
+  .status .stat-inline:not(#eta), .state > span:last-child { display: none; }
+  .figbar .seg { flex-wrap: wrap; }
+  .stats > div { min-height: 0; padding: 12px 14px; }
+  .stats .v { font-size: 22px; }
+}
+#ov-table { overflow-x: auto; }
 .sp { font-family: var(--mono); font-size: 12.5px; font-variant-numeric: tabular-nums; }
 .sp.win { color: var(--win); } .sp.lose { color: var(--lose); }
 
@@ -225,6 +249,7 @@ dialog .acts a, dialog .acts button { font-size: 13px; color: #111; background: 
   </div>
   <label class="toggle hide-md" title="Jump to the op being measured"><input type="checkbox" id="follow" checked> Follow</label>
   <button class="btn danger" id="stop" hidden>Stop</button>
+  <button class="btn" id="newcmp" title="Pair any two campaigns on this box, cell by cell">Compare<span class="hide-sm"> logs</span></button>
   <button class="btn primary" id="newrun">New run</button>
   <button class="btn ghost" id="theme" title="Toggle theme" aria-label="Toggle theme">◐</button>
 </header>
@@ -269,6 +294,20 @@ dialog .acts a, dialog .acts button { font-size: 13px; color: #111; background: 
   <div class="df"><span class="est" id="estimate"></span><span style="flex:1"></span><button class="btn primary" id="dstart">Start</button></div>
 </aside>
 
+<dialog id="cmpdlg"><div class="box" style="width:min(480px,92vw);color:#16161a">
+  <h3 style="margin:0 0 6px;font-size:16px">Compare logs</h3>
+  <p class="msg" style="margin:0 0 10px">Any two campaigns on this box, from any checkout, paired cell by cell; above 1× the candidate is
+    faster. A shape the two measured at no common batch is compared by time per matrix at each one's largest batch.
+    With BatchLAS on both sides, the vendor arm is the control: it did not change, so a ratio far from 1× is the machine.</p>
+  <label class="fl" for="cmpbase">Baseline (1×)</label><select class="field" id="cmpbase"></select>
+  <div class="seg" id="cmpbarm" style="margin-top:6px"></div>
+  <label class="fl" for="cmpnew">Candidate</label><select class="field" id="cmpnew"></select>
+  <div class="seg" id="cmpnarm" style="margin-top:6px"></div>
+  <label class="fl"><input type="checkbox" id="cmpexact"> Identical cells only <span style="color:#8e8d93">— no rescaling across batches</span></label>
+  <p class="msg" id="cmpmsg" style="color:#c0392b;margin:10px 0 0"></p>
+  <div class="acts"><button id="cmpcancel">Cancel</button><button id="cmpgo" style="font-weight:600">Compare</button></div>
+</div></dialog>
+
 <dialog id="lb"><div class="box"><img id="lbimg" alt="">
   <div class="acts"><a id="lbpdf" download>PDF</a><a id="lbpng" download>PNG</a><button id="lbclose">Close</button></div>
 </div></dialog>
@@ -281,7 +320,11 @@ const PREC = { float: ["Single", "S"], double: ["Double", "D"], cfloat: ["Comple
 const PORD = Object.keys(PREC);
 const FIGS = [["speedup_n", "Speedup vs n"], ["throughput_n", "Throughput"], ["heatmap", "n × batch"]];
 // Rectangular ops add the two shape maps, named by their plane's axes.
-const figsOf = (o) => o && o.plane ? [...FIGS, ["speedup_2d", `${o.plane.y} × ${o.plane.x} speedup`], ["throughput_2d", `${o.plane.y} × ${o.plane.x} throughput`]] : FIGS;
+// An op with no vendor arm has only throughput figures, except in a log comparison.
+const isCmp = () => !!(S && S.kind === "compare");
+const single = (o) => o && o.arms === 1 && !isCmp();
+const figsOf = (o) => single(o) ? [["throughput_n", "Throughput"], ["heatmap", "n × batch throughput"]]
+  : o && o.plane ? [...FIGS, ["speedup_2d", `${o.plane.y} × ${o.plane.x} speedup`], ["throughput_2d", `${o.plane.y} × ${o.plane.x} throughput`]] : FIGS;
 const shapeOf = (r) => r.shape || `n ${r.n}`;
 let meta = null, S = null, es = null, camp = null, route = { page: "overview" }, pinned = false, built = null;
 let figTab = "speedup_n", sumTab = null, tblFilter = "all", tblSort = ["n", 1], tblKey = null;
@@ -293,6 +336,10 @@ const fmtMs = (v) => v == null ? "—" : v >= 100 ? v.toFixed(0) : v >= 1 ? v.to
 const clock = (t) => t ? new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }) : "";
 const pfx = (t) => PREC[t] ? PREC[t][1] : t;
 const vendOf = (op) => { const o = meta && meta.ops.find(x => x.name === op); return o ? o.vendor[S && S.config.backend === "rocm" ? 1 : 0] : "vendor"; };
+// What the two arms are called: the libraries, or in a comparison the two builds.
+const refOf = (op) => isCmp() ? S.provenance.ref_label : vendOf(op);
+const mineOf = () => isCmp() ? S.provenance.new_label : "BatchLAS";
+const fmtRate = (v) => v == null ? "—" : v >= 9995 ? `${(v / 1e3).toFixed(0)}k` : v >= 999.5 ? `${(v / 1e3).toFixed(1)}k` : v >= 9.95 ? v.toFixed(0) : v.toPrecision(2);
 function dur(s) {
   if (s == null || !isFinite(s)) return "—";
   s = Math.round(s); if (s < 60) return `${s}s`;
@@ -383,7 +430,7 @@ function renderHeader() {
   text($("rate"), running && S.rate_per_min ? `${S.rate_per_min.toFixed(1)} cells/min` : "");
   text($("eta"), running && S.eta_s ? `${dur(S.eta_s)} left` : "");
   text($("current"), running ? st.current || "" : "");
-  $("stop").hidden = !running || meta.read_only;
+  $("stop").hidden = !running || meta.read_only || isCmp();
 }
 
 function renderRail() {
@@ -401,6 +448,12 @@ function renderRail() {
     }
   }
   patch($("rail"), h);
+  // In the phone strip the current op can sit off-screen; bring it in once per page.
+  const on = $("rail").querySelector("a.on"), rail = $("rail");
+  if (on && rail.scrollWidth > rail.clientWidth && rail.__on !== on.getAttribute("href")) {
+    rail.__on = on.getAttribute("href");
+    rail.scrollLeft = on.offsetLeft - (rail.clientWidth - on.offsetWidth) / 2;
+  }
 }
 
 // ---------------------------------------------------------------- figure panel (in-place image swaps)
@@ -451,7 +504,7 @@ function render() {
 function buildOverview() {
   $("view").innerHTML = `<div class="head"><h1>Overview</h1></div><p class="lede" id="ov-lede"></p>
     <div class="panel stats" id="ov-stats"></div>
-    <div class="sec"><h2>Speedup at saturation</h2></div>
+    <div class="sec"><h2 id="ov-h">Speedup at saturation</h2></div>
     <div class="panel"><div id="ov-table"></div></div>
     <div class="sec"><h2>Summary figure</h2></div><div id="ovfig"></div>
     <div class="sec"><h2>Activity</h2></div><div id="act"></div>`;
@@ -465,19 +518,23 @@ function updateOverview() {
   const gm = measured.length ? Math.exp(measured.reduce((a, q) => a + Math.log(q.geomean), 0) / measured.length) : null;
   const wins = measured.filter(q => q.geomean >= 1).length;
   const failed = all.reduce((a, q) => a + q.failed, 0), ok = all.reduce((a, q) => a + q.ok, 0);
-  patch($("ov-lede"), `Speedup is vendor time (cuSOLVER, cuBLAS or cuSPARSE, per op) divided by BatchLAS time, at the largest batch where both arms were measured; above 1× BatchLAS is faster.
+  if (isCmp()) patch($("ov-lede"), cmpLede(p));
+  else patch($("ov-lede"), `Speedup is vendor time (cuSOLVER, cuBLAS or cuSPARSE, per op) divided by BatchLAS time, at the largest batch where both arms were measured; above 1× BatchLAS is faster.
+    Ops no vendor library has show their throughput; compare two builds to see their speedup.
     <br><span class="muted">${esc([p.device, p.driver && `driver ${p.driver}`, p.git_sha && `BatchLAS ${p.git_sha}${p.git_dirty ? " (dirty)" : ""}`,
     S.config.grid && `${S.config.grid.name} grid`, p.started && `started ${p.started}`].filter(Boolean).join("  ·  "))}</span>
     <br><span class="muted">${esc(campaignBuilds(p))}</span>`);
   patch($("ov-stats"), `
     <div><div class="k">Geomean speedup</div><div class="v ${cls(gm)}">${fmtX(gm)}</div><div class="f">over ${measured.length} ops, every precision</div></div>
-    <div><div class="k">Ops where BatchLAS wins</div><div class="v">${wins}<small> / ${measured.length}</small></div><div class="f">by geomean</div></div>
-    <div><div class="k">Arm-cells measured</div><div class="v">${ok}<small> / ${S.planned}</small></div><div class="f">verified or timed</div></div>
+    <div><div class="k">${isCmp() ? `Ops faster in ${esc(mineOf())}` : "Ops where BatchLAS wins"}</div><div class="v">${wins}<small> / ${measured.length}</small></div><div class="f">by geomean</div></div>
+    <div><div class="k">${isCmp() ? "Cells paired" : "Arm-cells measured"}</div><div class="v">${isCmp() ? S.control.matched : ok}<small>${isCmp() ? "" : ` / ${S.planned}`}</small></div>
+      <div class="f">${isCmp() ? `${S.control.rescaled ? `${S.control.rescaled} by time per matrix; ` : ""}shapes only in the candidate ${S.control.only_new}, only in the baseline ${S.control.only_base}` : "verified or timed"}</div></div>
     <div><div class="k">Failed or dropped</div><div class="v" ${failed ? 'style="color:var(--bad)"' : ""}>${failed}</div><div class="f">verification, noise, route</div></div>`);
   patch($("ov-table"), ops.length ? `<table><thead><tr><th>Operation</th>${types.map(t => `<th class="r">${PREC[t][0]}</th>`).join("")}<th class="r">Cells</th></tr></thead>
     <tbody>${ops.map(o => { const q = S.per_op[o.name];
       return `<tr class="link" onclick="location.hash='#/op/${o.name}'"><td><span class="mono">${o.name}</span><span class="sub2">${esc(o.title)}</span></td>` +
-        types.map(t => { const x = q.prec[t]; return `<td class="r">${x ? `<span class="sp ${cls(x.geomean)}">${fmtX(x.geomean)}</span><span class="sub2 num">${fmtX(x.min)} – ${fmtX(x.max)}</span>` : `<span class="muted">—</span>`}</td>`; }).join("") +
+        types.map(t => { const x = q.prec[t]; return `<td class="r">${x && x.geomean ? `<span class="sp ${cls(x.geomean)}">${fmtX(x.geomean)}</span><span class="sub2 num">${fmtX(x.min)} – ${fmtX(x.max)}</span>`
+          : x && x.peak ? `<span class="sp">${fmtRate(x.peak)}</span><span class="sub2 num">peak ${esc(x.unit)}, n ${x.at_n}</span>` : `<span class="muted">—</span>`}</td>`; }).join("") +
         `<td class="r num muted">${q.ok + q.failed} / ${q.planned}</td></tr>`; }).join("")}</tbody></table>` : `<div class="empty">No measurements yet.</div>`);
   if (!sumTab || !types.includes(sumTab)) sumTab = types[0];
   const segKey = types.join(",");
@@ -490,7 +547,9 @@ function buildOp() {
   const o = meta.ops.find(x => x.name === route.op);
   if (!o) { location.hash = "#/overview"; return; }
   $("view").innerHTML = `<div class="head"><h1><span class="mono">${o.name}</span>&ensp;${esc(o.title)}</h1><span class="muted num" id="op-count"></span></div>
-    <p class="lede">${o.notes ? esc(o.notes) + ". " : ""}BatchLAS pinned native against ${esc(vendOf(o.name))}; speedup at the saturated batch.</p>
+    <p class="lede">${o.notes ? esc(o.notes) + ". " : ""}${isCmp() ? `${esc(mineOf())} against ${esc(refOf(o.name))}, both BatchLAS pinned native; speedup at the saturated batch.`
+      : single(o) ? "No vendor library ships this op batched, so this is BatchLAS's throughput alone. Compare two builds for a speedup."
+      : `BatchLAS pinned native against ${esc(vendOf(o.name))}; speedup at the saturated batch.`}</p>
     <div id="op-body"></div>`;
 }
 function updateOp() {
@@ -504,13 +563,15 @@ function updateOp() {
       <div class="sec"><h2>Measurements</h2><span class="sp-grow"></span><div class="chips" id="tf"></div></div>
       <div class="panel"><div class="scroll" id="tbl"><div class="empty">Loading…</div></div></div>
       <div class="sec"><h2>Activity</h2></div><div id="act"></div>`;
-    if (!figsOf(o).some(([k]) => k === figTab)) figTab = "speedup_n";
+    if (!figsOf(o).some(([k]) => k === figTab)) figTab = figsOf(o)[0][0];
     $("opfig").innerHTML = figShell("of", segHTML(figsOf(o), figTab, "setFig"));
     $("act").innerHTML = activityShell();
     body.__h = null;
   }
   const types = PORD.filter(t => p.prec[t]);
   patch($("op-stats"), types.length ? types.map(t => { const q = p.prec[t];
+    if (!q.geomean) return `<div><div class="k"><span>${PREC[t][0]}</span><span class="mono">${PREC[t][1]}</span></div><div class="v">${fmtRate(q.peak)}<small> ${esc(q.unit)}</small></div>
+      <div class="f">peak at saturation, at n ${q.at_n}</div></div>`;
     return `<div><div class="k"><span>${PREC[t][0]}</span><span class="mono">${PREC[t][1]}</span></div><div class="v ${cls(q.geomean)}">${fmtX(q.geomean)}</div>
       <div class="f">${fmtX(q.min)} – ${fmtX(q.max)} · faster at ${q.wins} of ${q.n}</div></div>`; }).join("")
     : `<div><div class="k">Speedup</div><div class="v">—</div><div class="f">no paired cells yet</div></div>`);
@@ -534,11 +595,11 @@ function drawTable() {
   const [k, dir] = tblSort, v = (r) => k === "dtype" ? PORD.indexOf(r.dtype) : r[k];
   const rows = tblData.filter(r => tblFilter === "all" || r.dtype === tblFilter)
     .sort((a, b) => (v(a) > v(b) ? 1 : v(a) < v(b) ? -1 : 0) * dir || PORD.indexOf(a.dtype) - PORD.indexOf(b.dtype) || a.batch - b.batch);
-  if (!rows.length) { patch(el, `<div class="empty">No paired measurements yet.</div>`); return; }
-  const vend = esc(vendOf(route.op));
+  if (!rows.length) { patch(el, `<div class="empty">No measurements yet.</div>`); return; }
+  const vend = esc(refOf(route.op)), mine = esc(mineOf());
   const th = (key, l, r) => `<th class="s${r ? " r" : ""}" onclick="sortBy('${key}')">${l}${k === key ? (dir > 0 ? " ↑" : " ↓") : ""}</th>`;
   const top = el.scrollTop;
-  patch(el, `<table><thead><tr>${th("dtype", "Precision")}${th("n", "Shape", 1)}${th("batch", "Batch", 1)}${th("time_ms_batchlas", "BatchLAS [ms]", 1)}${th("time_ms_vendor", `${vend} [ms]`, 1)}${th("speedup", "Speedup", 1)}<th>Routes</th></tr></thead>
+  patch(el, `<table><thead><tr>${th("dtype", "Precision")}${th("n", "Shape", 1)}${th("batch", "Batch", 1)}${th("time_ms_batchlas", `${mine} [ms]`, 1)}${th("time_ms_vendor", `${vend} [ms]`, 1)}${th("speedup", "Speedup", 1)}<th>Routes</th></tr></thead>
     <tbody>${rows.map(r => `<tr><td>${PREC[r.dtype] ? PREC[r.dtype][0] : esc(r.dtype)}</td><td class="r num">${esc(shapeOf(r))}</td><td class="r num">${r.batch}</td>
       <td class="r num">${fmtMs(r.time_ms_batchlas)}</td><td class="r num">${fmtMs(r.time_ms_vendor)}</td>
       <td class="r"><span class="sp ${cls(r.speedup)}">${fmtX(r.speedup)}</span></td>
@@ -672,6 +733,45 @@ $("stop").onclick = async () => {
   $("stop").disabled = true; $("stop").textContent = "Stopping…";
   await post("/api/stop", { campaign: camp });
   setTimeout(() => { $("stop").disabled = false; $("stop").textContent = "Stop"; }, 4000);
+};
+
+// ---------------------------------------------------------------- log comparison
+function cmpLede(p) {
+  const c = S.control || {}, v = c.vendor || {};
+  const ctl = v.geomean ? `Vendor control: ${fmtX(v.geomean)} over ${v.cells} cells${Math.abs(Math.log(v.geomean)) > Math.log(1.05)
+    ? " — far from 1×: the two runs saw different machine states, and every speedup here carries that bias" : ""}.`
+    : "No vendor control: neither campaign measured the vendor arm on a shared cell.";
+  const side = (x) => x ? `${x.campaign}: ${(x.builds || []).map(buildLine).join("; ") || (x.git_sha ? `HEAD ${x.git_sha}, build not recorded` : "build not recorded")}${x.path ? ` (${x.path})` : ""}` : "";
+  const arms = (p.base_arm || "batchlas") === (p.new_arm || "batchlas") ? `${p.base_arm === "vendor" ? "vendor" : "BatchLAS"} arm against ${p.base_arm === "vendor" ? "vendor" : "BatchLAS"} arm`
+    : `the baseline's ${p.base_arm} arm against the candidate's ${p.new_arm} arm`;
+  const how = c.rescaled ? ` ${c.rescaled} of the ${c.matched} pairs were measured at different batches and are compared by time per matrix at each log's largest batch.` : "";
+  return `Speedup is ${esc(p.ref_label)} time divided by ${esc(p.new_label)} time, ${esc(arms)}, at the largest batch
+    measured in both; above 1× the candidate is faster.${esc(how)} ${(p.base_arm || "batchlas") === "batchlas" && (p.new_arm || "batchlas") === "batchlas" ? esc(ctl) : ""}
+    ${(p.warnings || []).map(w => `<br><span style="color:var(--warn)">⚠ ${esc(w)}</span>`).join("")}
+    <br><span class="muted">Baseline ${esc(side(p.base))}</span><br><span class="muted">Candidate ${esc(side(p.new))}</span>`;
+}
+// Every log on the box, grouped by the checkout it lives in, newest first.
+async function openCmp() {
+  const logs = await (await fetch("/api/logs")).json(), groups = {};
+  logs.forEach(x => (groups[x.checkout] ||= []).push(x));
+  const opts = Object.entries(groups).map(([g, xs]) => `<optgroup label="${esc(g)}">${xs.map(x =>
+    `<option value="${esc(x.path)}">${esc(x.name)} · ${x.rows} rows${x.build ? ` · ~${esc(x.build)}` : ""}${x.grid ? ` · ${esc(x.grid)}` : ""}</option>`).join("")}</optgroup>`).join("");
+  $("cmpbase").innerHTML = opts; $("cmpnew").innerHTML = opts;
+  if (logs.length > 1) { $("cmpbase").value = logs[1].path; $("cmpnew").value = logs[0].path; }
+  for (const id of ["cmpbarm", "cmpnarm"]) {
+    $(id).innerHTML = [["batchlas", "BatchLAS arm"], ["vendor", "Vendor arm"]].map(([k, l]) => `<button type="button" class="${k === "batchlas" ? "on" : ""}" data-k="${k}">${l}</button>`).join("");
+    $(id).onclick = (e) => { const b = e.target.closest("button"); if (b) $(id).querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b)); };
+  }
+  $("cmpmsg").textContent = ""; $("cmpdlg").showModal();
+}
+const armOf = (id) => ($(id).querySelector("button.on") || {}).dataset?.k || "batchlas";
+$("newcmp").onclick = openCmp;
+$("cmpcancel").onclick = () => $("cmpdlg").close();
+$("cmpgo").onclick = async () => {
+  const j = await post("/api/compare", { base: $("cmpbase").value, new: $("cmpnew").value,
+    base_arm: armOf("cmpbarm"), new_arm: armOf("cmpnarm"), exact: $("cmpexact").checked });
+  if (j.error) { $("cmpmsg").textContent = j.error; return; }
+  $("cmpdlg").close(); pinned = false; setTimeout(() => watch(j.campaign), 300);
 };
 
 // ---------------------------------------------------------------- lightbox & boot
