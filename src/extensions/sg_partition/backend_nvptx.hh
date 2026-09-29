@@ -5,12 +5,14 @@
 // For any member mask that is not an immediate, ptxas guards the collectives
 // of each basic block with MATCH.ANY + REDUX.OR + VOTEU.ANY + BRA.DIV, whatever
 // the mask's source (DPC++ chunked_partition and CUDA tiled_partition too).
-// MATCH.ANY slows with the number of distinct masks in the warp, 32 / P.
-// So a masked collective narrower than the warp first tests activemask: if all
-// 32 lanes are here, all took the same branch and will execute the same
-// shfl.sync, the immediate full mask is legal, and ptxas adds no check. That is
-// the premise ptxas's own fast path rests on, without MATCH.ANY. A diverged
-// warp, or one with an exited or unlaunched lane, uses the chunk mask.
+// MATCH.ANY slows with the number of distinct masks in the warp, 32 / P, but
+// ptxas shares one check among the collectives of a basic block.
+// A masked collective narrower than the warp uses the chunk mask by default.
+// BATCHLAS_SGP_NVPTX_CONVERGENCE_FAST_PATH instead tests activemask first: if
+// all 32 lanes are here, all will execute the same shfl.sync and the immediate
+// full mask is legal, so ptxas adds no check. That test cannot be shared across
+// collectives, so it wins only where collectives are sparse; in the
+// collective-dense CTA eigensolvers it measured slower than the shared check.
 //
 // The `c` operand's segment mask ((32 - P) << 8) makes idx take the chunk-local
 // lane and makes down/up clamp at the chunk edge.
@@ -84,8 +86,15 @@ struct Mask {
 };
 
 // Not CSE-able (the intrinsic is convergent and reads the active set), so
-// each call tests the warp at that point.
-inline bool warp_converged() { return __nvvm_activemask() == ~0u; }
+// each call tests the warp at that point. A constant false folds the fast path
+// away, leaving the plain chunk-mask collective.
+inline bool warp_converged() {
+#if defined(BATCHLAS_SGP_NVPTX_CONVERGENCE_FAST_PATH)
+    return __nvvm_activemask() == ~0u;
+#else
+    return false;
+#endif
+}
 
 template <typename Op, typename T>
 inline constexpr bool is_op_v = std::is_same_v<Op, T>;
