@@ -133,6 +133,19 @@ inline constexpr bool kHasRedux = false;
 
 } // namespace nvptx_detail
 
+// The primitives of a diverged warp: always the chunk mask. region() hands this
+// out once instead of testing convergence per word.
+template <uint32_t P>
+struct NvptxChunkOps {
+    using C = nvptx_detail::Mask<P, false>;
+    static uint32_t shfl_idx(const sycl::sub_group&, uint32_t b, uint32_t v, uint32_t s) { return C::shfl_idx(b, v, s); }
+    static uint32_t shfl_xor(const sycl::sub_group&, uint32_t b, uint32_t v, uint32_t m) { return C::shfl_xor(b, v, m); }
+    static uint32_t shfl_down(const sycl::sub_group&, uint32_t b, uint32_t v, uint32_t d) { return C::shfl_down(b, v, d); }
+    static uint32_t shfl_up(const sycl::sub_group&, uint32_t b, uint32_t v, uint32_t d) { return C::shfl_up(b, v, d); }
+    static uint32_t ballot(const sycl::sub_group&, uint32_t b, bool pred) { return C::ballot(b, pred); }
+    static void barrier(const sycl::sub_group&, uint32_t b) { C::barrier(b); }
+};
+
 template <uint32_t P, bool Masked>
 struct NvptxBackend {
     static constexpr const char* name = "nvptx";
@@ -184,6 +197,16 @@ struct NvptxBackend {
             if (!nvptx_detail::warp_converged()) return Chunk::barrier(base);
         }
         Full::barrier(base);
+    }
+
+    // One convergence test for everything f does: f gets the full-mask (lockstep)
+    // backend when the warp is converged, the chunk-mask ops otherwise.
+    template <typename F>
+    static decltype(auto) region(F&& f) {
+        if constexpr (kDynamic) {
+            if (!nvptx_detail::warp_converged()) return f(NvptxChunkOps<P>{});
+        }
+        return f(NvptxBackend<P, false>{});
     }
 
     // P = 32 integer reductions are one redux.sync. A masked P < 32 partition

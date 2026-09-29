@@ -90,6 +90,18 @@ inline T map_words(const T& v, F&& f) {
 template <uint32_t P>
 inline constexpr bool is_pow2_v = P != 0 && (P & (P - 1)) == 0;
 
+// Runs f(ops), where ops is a backend-like type whose primitives f calls. A
+// backend with a region() hook chooses ops once for the region (NVPTX tests
+// warp convergence once), so a multi-word value or a whole scan pays once.
+template <typename B, typename F>
+inline decltype(auto) region(F&& f) {
+    if constexpr (requires { B::region(f); }) {
+        return B::region(f);
+    } else {
+        return f(B{});
+    }
+}
+
 } // namespace sgp
 
 // Kept for the call sites that ask whether masked partitions are the native
@@ -143,28 +155,44 @@ inline constexpr bool is_sub_group_partition_v<SubGroupPartition<P, M>> = true;
 template <size_t P, bool M, typename T>
 inline T select_from_group(SubGroupPartition<P, M> part, T v, uint32_t local_id) {
     using B = typename SubGroupPartition<P, M>::backend;
-    return sgp::map_words(v, [&](uint32_t w) { return B::shfl_idx(part.sg, part.base, w, local_id); });
+    return sgp::region<B>([&](auto ops) {
+        return sgp::map_words(v, [&](uint32_t w) {
+            return decltype(ops)::shfl_idx(part.sg, part.base, w, local_id);
+        });
+    });
 }
 
 // Value of local lane (id ^ mask); mask < P.
 template <size_t P, bool M, typename T>
 inline T permute_group_by_xor(SubGroupPartition<P, M> part, T v, uint32_t mask) {
     using B = typename SubGroupPartition<P, M>::backend;
-    return sgp::map_words(v, [&](uint32_t w) { return B::shfl_xor(part.sg, part.base, w, mask); });
+    return sgp::region<B>([&](auto ops) {
+        return sgp::map_words(v, [&](uint32_t w) {
+            return decltype(ops)::shfl_xor(part.sg, part.base, w, mask);
+        });
+    });
 }
 
 // Value of local lane id + delta; unspecified when that leaves the chunk.
 template <size_t P, bool M, typename T>
 inline T shift_group_left(SubGroupPartition<P, M> part, T v, uint32_t delta = 1) {
     using B = typename SubGroupPartition<P, M>::backend;
-    return sgp::map_words(v, [&](uint32_t w) { return B::shfl_down(part.sg, part.base, w, delta); });
+    return sgp::region<B>([&](auto ops) {
+        return sgp::map_words(v, [&](uint32_t w) {
+            return decltype(ops)::shfl_down(part.sg, part.base, w, delta);
+        });
+    });
 }
 
 // Value of local lane id - delta; unspecified when that leaves the chunk.
 template <size_t P, bool M, typename T>
 inline T shift_group_right(SubGroupPartition<P, M> part, T v, uint32_t delta = 1) {
     using B = typename SubGroupPartition<P, M>::backend;
-    return sgp::map_words(v, [&](uint32_t w) { return B::shfl_up(part.sg, part.base, w, delta); });
+    return sgp::region<B>([&](auto ops) {
+        return sgp::map_words(v, [&](uint32_t w) {
+            return decltype(ops)::shfl_up(part.sg, part.base, w, delta);
+        });
+    });
 }
 
 template <size_t P, bool M, typename T>
@@ -240,13 +268,19 @@ inline T reduce_over_group(SubGroupPartition<P, M> part, T v, Op op) {
 
 template <size_t P, bool M, typename T, typename Op>
 inline T inclusive_scan_over_group(SubGroupPartition<P, M> part, T v, Op op) {
+    using B = typename SubGroupPartition<P, M>::backend;
     const uint32_t lid = part.get_local_linear_id();
+    return sgp::region<B>([&](auto ops) {
+        T x = v;
 #pragma unroll
-    for (uint32_t d = 1; d < static_cast<uint32_t>(P); d <<= 1) {
-        const T other = shift_group_right(part, v, d);
-        if (lid >= d) v = op(other, v);
-    }
-    return v;
+        for (uint32_t d = 1; d < static_cast<uint32_t>(P); d <<= 1) {
+            const T other = sgp::map_words(x, [&](uint32_t w) {
+                return decltype(ops)::shfl_up(part.sg, part.base, w, d);
+            });
+            if (lid >= d) x = op(other, x);
+        }
+        return x;
+    });
 }
 
 template <size_t P, bool M, typename T, typename Op>
