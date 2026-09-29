@@ -1,11 +1,7 @@
 #pragma once
-// Generic backend: every primitive is a plain sycl::sub_group collective.
-//
-// Used on the host pass, on SYCL Native CPU, and as the reference the device
-// backends are tested against. The sub-group collectives it calls are only
-// defined for converged sub-groups, so a Masked partition that diverges per
-// chunk relies on SIMD hardware tolerating that (true on the OpenCL CPU device).
-// The device backends exist to remove that reliance.
+// Generic backend: plain sycl::sub_group collectives (host pass, Native CPU).
+// Those are defined only for a converged sub-group, so a diverging Masked
+// partition here relies on SIMD hardware tolerating it.
 
 #include <sycl/sycl.hpp>
 
@@ -27,7 +23,6 @@ struct GenericBackend {
         return sycl::permute_group_by_xor(sg, v, mask);
     }
 
-    // Lanes whose source falls outside the chunk get an unspecified value.
     static uint32_t shfl_down(const sycl::sub_group& sg, uint32_t, uint32_t v, uint32_t delta) {
         return sycl::shift_group_left(sg, v, delta);
     }
@@ -46,8 +41,7 @@ struct GenericBackend {
 
     static void barrier(const sycl::sub_group& sg, uint32_t) { sycl::group_barrier(sg); }
 
-    // Optional fast path for reduce_over_group; the front end falls back to a
-    // shfl_xor butterfly when this is false.
+    // Optional; when false the front end reduces with a shfl_xor butterfly.
     template <typename T, typename Op>
     static constexpr bool has_native_reduce = false;
 
