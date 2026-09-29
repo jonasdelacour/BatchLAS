@@ -188,21 +188,31 @@ inline void group_barrier(SubGroupPartition<P, M> part) noexcept {
 // Votes
 // ---------------------------------------------------------------------------
 
-// Bit i set iff local lane i of this chunk passed pred.
+// Bit i set iff local lane i of this chunk passed pred. 32 bits, so P <= 32.
 template <size_t P, bool M>
 inline uint32_t ballot(SubGroupPartition<P, M> part, bool pred) {
+    static_assert(P <= 32, "ballot returns 32 bits; use any_of_group/all_of_group for P = 64");
     return SubGroupPartition<P, M>::backend::ballot(part.sg, part.base, pred);
 }
 
+// P = 64 does not fit a ballot word, so it votes by reduction.
 template <size_t P, bool M>
 inline bool any_of_group(SubGroupPartition<P, M> part, bool pred) {
-    return ballot(part, pred) != 0u;
+    if constexpr (P > 32) {
+        return reduce_over_group(part, static_cast<uint32_t>(pred), sycl::bit_or<uint32_t>()) != 0u;
+    } else {
+        return ballot(part, pred) != 0u;
+    }
 }
 
 template <size_t P, bool M>
 inline bool all_of_group(SubGroupPartition<P, M> part, bool pred) {
-    constexpr uint32_t full = P >= 32 ? ~0u : ((1u << P) - 1u);
-    return ballot(part, pred) == full;
+    if constexpr (P > 32) {
+        return reduce_over_group(part, static_cast<uint32_t>(pred), sycl::bit_and<uint32_t>()) != 0u;
+    } else {
+        constexpr uint32_t full = P >= 32 ? ~0u : ((1u << P) - 1u);
+        return ballot(part, pred) == full;
+    }
 }
 
 template <size_t P, bool M>

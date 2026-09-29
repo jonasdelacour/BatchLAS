@@ -25,8 +25,29 @@ Component labels, one per binary (see `CMakeLists.txt`):
 
 Run `ctest -L <component>` for the subsystem you touched. **If you changed
 shared low-level code** — `Queue`, `Matrix`/`MatrixView`, the memory pool,
-`sg_compat`, anything under `include/batchlas/util` — a component label is not enough;
+`sg_compat`/`sg_partition`, anything under `include/batchlas/util` — a component label is not enough;
 run the full suite.
+
+## The sub-group partition layer
+
+`sg_partition_tests` covers `src/extensions/sg_partition/` (`SubGroupPartition<P, Masked>`
+and every collective) on whatever backend the device pass selects. It is
+header-only and links no BatchLAS library, so it builds on its own:
+`cmake --build build --target sg_partition_tests`. Run it once per device,
+since each has its own backend:
+
+```bash
+ONEAPI_DEVICE_SELECTOR=cuda:0     ./build/tests/sg_partition_tests  # NVPTX backend, SG = 32 only
+ONEAPI_DEVICE_SELECTOR=opencl:cpu ./build/tests/sg_partition_tests  # SPIR-V backend, SG = 8/16/32/64
+```
+
+The OpenCL CPU run needs a spir64 image (`-DBATCHLAS_CPU_TARGET=spir64_x86_64`;
+the default `native_cpu` has sub-group size 1, so every case skips there). Sizes
+a device lacks are skipped, not failed. A backend that breaks a collective under
+divergence tends to hang rather than fail, hence the 300 s ctest timeout.
+
+When a partition collective sits under a branch in a test, every lane of the
+chunk must still reach it: call it unconditionally and branch on the result.
 
 The `slow` label marks the binaries that dominate wall-clock. `ctest -LE slow`
 is the best default for a broad-but-quick check. Keep the list in
