@@ -32,136 +32,43 @@ else()
     message(STATUS "MKL backend disabled")
 endif()
 
+# Probe the NVIDIA math libraries through FindCUDAToolkit: its CUDA:: targets
+# are what the backends link (see BATCHLAS_CUDA_LINK_LIBRARIES below), so the
+# probe and the link cannot disagree. A separate find_library() search used to:
+# on the NVIDIA HPC SDK, cuSOLVER and cuSPARSE live in
+# <sdk>/math_libs/<cuda-version>/lib64 rather than in the toolkit, the probe
+# missed them, cublas.cc was silently dropped, and the link failed on
+# undefined *_vendor<Backend::CUDA> symbols. Override a library with
+# -DCUDA_<name>_LIBRARY=<path>, e.g. -DCUDA_cusolver_LIBRARY=...
 function(find_nvidia_libs)
     if(NOT BATCHLAS_CUDA_ENABLED)
         return()
     endif()
 
     message(STATUS "Searching for NVIDIA CUDA libraries...")
+    find_package(CUDAToolkit QUIET)
 
-    set(NVIDIA_HPC_SDK_BASE "")
-    if(BATCHLAS_CUDA_PATH)
-        if(BATCHLAS_CUDA_PATH MATCHES ".*/nvidia/hpc_sdk/.*" OR BATCHLAS_CUDA_PATH MATCHES ".*/nvhpc/.*")
-            string(REGEX REPLACE "(.*nvidia/hpc_sdk)/.*" "\\1" POTENTIAL_HPC_SDK_BASE "${BATCHLAS_CUDA_PATH}")
-            if(EXISTS "${POTENTIAL_HPC_SDK_BASE}")
-                set(NVIDIA_HPC_SDK_BASE "${POTENTIAL_HPC_SDK_BASE}")
-                message(STATUS "Detected NVIDIA HPC SDK installation at: ${NVIDIA_HPC_SDK_BASE}")
-            endif()
-
-            if(NOT NVIDIA_HPC_SDK_BASE)
-                string(REGEX REPLACE "(.*nvhpc)/.*" "\\1" POTENTIAL_HPC_SDK_BASE "${BATCHLAS_CUDA_PATH}")
-                if(EXISTS "${POTENTIAL_HPC_SDK_BASE}")
-                    set(NVIDIA_HPC_SDK_BASE "${POTENTIAL_HPC_SDK_BASE}")
-                    message(STATUS "Detected NVIDIA HPC SDK installation at: ${POTENTIAL_HPC_SDK_BASE}")
-                endif()
-            endif()
-
-            if(NVIDIA_HPC_SDK_BASE)
-                string(REGEX REPLACE "${NVIDIA_HPC_SDK_BASE}/(.*)/cuda.*" "\\1" HPC_SDK_PLATFORM_VERSION "${BATCHLAS_CUDA_PATH}")
-                if(BATCHLAS_CUDA_PATH MATCHES ".*/([0-9]+\\.[0-9]+)/cuda.*")
-                    string(REGEX REPLACE ".*/([0-9]+\\.[0-9]+)/cuda.*" "\\1" HPC_SDK_VERSION "${BATCHLAS_CUDA_PATH}")
-                    message(STATUS "HPC SDK version: ${HPC_SDK_VERSION}")
-                    set(POTENTIAL_MATH_LIBS_DIR "${NVIDIA_HPC_SDK_BASE}/${HPC_SDK_PLATFORM_VERSION}/math_libs")
-                    if(EXISTS "${POTENTIAL_MATH_LIBS_DIR}")
-                        message(STATUS "Found HPC SDK math_libs directory: ${POTENTIAL_MATH_LIBS_DIR}")
-                        file(GLOB MATH_LIBS_VERSIONS "${POTENTIAL_MATH_LIBS_DIR}/*")
-                        list(SORT MATH_LIBS_VERSIONS)
-                        list(REVERSE MATH_LIBS_VERSIONS)
-                        foreach(VERSION_DIR ${MATH_LIBS_VERSIONS})
-                            if(IS_DIRECTORY "${VERSION_DIR}")
-                                set(MATH_LIBS_DIR "${VERSION_DIR}")
-                                get_filename_component(MATH_LIBS_VERSION "${VERSION_DIR}" NAME)
-                                message(STATUS "Using math_libs version: ${MATH_LIBS_VERSION}")
-                                break()
-                            endif()
-                        endforeach()
-                    endif()
-                endif()
-            endif()
-        endif()
-    endif()
-
-    set(NVIDIA_HPC_SDK_PATHS
-        "${NVIDIA_HPC_SDK_BASE}"
-        "/opt/nvidia/hpc_sdk"
-        "/usr/local/nvidia/hpc_sdk"
-        "$ENV{NVHPC_ROOT}"
-    )
-
-    if(DEFINED MATH_LIBS_DIR)
-        find_library(CUBLAS_LIBRARY
-            NAMES cublas
-            PATHS "${MATH_LIBS_DIR}"
-            PATH_SUFFIXES targets/x86_64-linux/lib lib64 lib
-            NO_DEFAULT_PATH
-            DOC "NVIDIA cuBLAS library"
-        )
-    endif()
-
-    if(NOT CUBLAS_LIBRARY)
-        find_library(CUBLAS_LIBRARY
-            NAMES cublas
-            PATHS
-                ${BATCHLAS_CUDA_PATH}/lib64
-                ${BATCHLAS_CUDA_PATH}/lib
-                ${CUDA_TOOLKIT_ROOT_DIR}/lib64
-                ${CUDA_TOOLKIT_ROOT_DIR}/lib
-                ${NVIDIA_HPC_SDK_PATHS}
-            PATH_SUFFIXES
-                lib64
-                lib
-                target/x86_64-linux/lib
-                targets/x86_64-linux/lib
-                Linux_x86_64/*/math_libs/*/targets/x86_64-linux/lib
-                */math_libs/*/targets/x86_64-linux/lib
-                */math_libs/lib64
-                Linux_x86_64/*/cuda/lib64
-                */cuda/lib64
-            DOC "NVIDIA cuBLAS library"
-        )
-    endif()
-
-    if(CUBLAS_LIBRARY)
-        message(STATUS "Found cuBLAS: ${CUBLAS_LIBRARY}")
+    if(TARGET CUDA::cublas)
+        message(STATUS "Found cuBLAS: ${CUDA_cublas_LIBRARY}")
         # NOTE (WP0 S1): this line is the family/library conflation itself --
         # "we found cuBLAS" is being used to answer "is there a CUDA backend".
-        # It stays for now so S1 is bit-identical; S2 replaces it with a
-        # derivation from the hardware. The library axis is recorded alongside.
+        # S2 replaces it with a derivation from the hardware.
         set(BATCHLAS_HAS_CUDA_BACKEND TRUE PARENT_SCOPE)
+        if(BATCHLAS_ENABLE_CUBLAS)
+            set(BATCHLAS_HAS_CUBLAS TRUE PARENT_SCOPE)
+        endif()
     else()
-        message(WARNING "NVIDIA GPU detected but cuBLAS library not found. Add its path to CMAKE_PREFIX_PATH if needed.")
+        message(WARNING "NVIDIA GPU detected but cuBLAS library not found. "
+            "Point CMake at the toolkit with -DCUDAToolkit_ROOT=<path> or at the "
+            "library with -DCUDA_cublas_LIBRARY=<path>.")
     endif()
 
-    # ---- axis 3: which NVIDIA math libraries are actually present ----------
-    #
-    # cuSOLVER and cuSPARSE were never probed. They are pulled in blind via
-    # CUDA::cusolver / CUDA::cusparse on a flag they did not influence, so a
-    # toolkit missing either one fails at link time rather than at configure
-    # time, and nothing can ask "is cuSOLVER available?" in order to route
-    # around it. Probe them separately now.
-    if(BATCHLAS_ENABLE_CUBLAS AND CUBLAS_LIBRARY)
-        set(BATCHLAS_HAS_CUBLAS TRUE PARENT_SCOPE)
-    endif()
-
-    find_library(CUSOLVER_LIBRARY
-        NAMES cusolver
-        PATHS ${BATCHLAS_CUDA_PATH}/lib64 ${BATCHLAS_CUDA_PATH}/lib
-              ${CUDA_TOOLKIT_ROOT_DIR}/lib64 ${CUDA_TOOLKIT_ROOT_DIR}/lib
-        PATH_SUFFIXES lib64 lib targets/x86_64-linux/lib
-        DOC "NVIDIA cuSOLVER library")
-    if(BATCHLAS_ENABLE_CUSOLVER AND CUSOLVER_LIBRARY)
-        message(STATUS "Found cuSOLVER: ${CUSOLVER_LIBRARY}")
+    if(TARGET CUDA::cusolver AND BATCHLAS_ENABLE_CUSOLVER)
+        message(STATUS "Found cuSOLVER: ${CUDA_cusolver_LIBRARY}")
         set(BATCHLAS_HAS_CUSOLVER TRUE PARENT_SCOPE)
     endif()
-
-    find_library(CUSPARSE_LIBRARY
-        NAMES cusparse
-        PATHS ${BATCHLAS_CUDA_PATH}/lib64 ${BATCHLAS_CUDA_PATH}/lib
-              ${CUDA_TOOLKIT_ROOT_DIR}/lib64 ${CUDA_TOOLKIT_ROOT_DIR}/lib
-        PATH_SUFFIXES lib64 lib targets/x86_64-linux/lib
-        DOC "NVIDIA cuSPARSE library")
-    if(BATCHLAS_ENABLE_CUSPARSE AND CUSPARSE_LIBRARY)
-        message(STATUS "Found cuSPARSE: ${CUSPARSE_LIBRARY}")
+    if(TARGET CUDA::cusparse AND BATCHLAS_ENABLE_CUSPARSE)
+        message(STATUS "Found cuSPARSE: ${CUDA_cusparse_LIBRARY}")
         set(BATCHLAS_HAS_CUSPARSE TRUE PARENT_SCOPE)
     endif()
 endfunction()
