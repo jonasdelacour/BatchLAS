@@ -1458,7 +1458,7 @@ sharpest form of the problem this section exists to fix.
 | field | variable | type | default |
 | --- | --- | --- | --- |
 | `latrd_grid_groups` | `BATCHLAS_LATRD_GRID_GROUPS` | `int` | `0` (`min(cap, ceil((n-1)/32))`) |
-| `latrd_grid_min_n` | `BATCHLAS_LATRD_GRID_MIN_N` | `int` | `768` |
+| `latrd_grid_min_n` | `BATCHLAS_LATRD_GRID_MIN_N` | `int` | `0` (per architecture: 768 on sm_89 and non-CUDA; on sm_120 320 real, 256 complex) |
 | `latrd_grid_wg` | `BATCHLAS_LATRD_GRID_WG` | `int` | `0` (computed; only 32/64/128/256 are honoured) |
 | `latrd_lower_panel_wg_hint` | `BATCHLAS_LATRD_LOWER_PANEL_WG_HINT` | `int` | `0` (only 64/128/256; device path only) |
 | `sb2st_back_subs` | `BATCHLAS_SB2ST_BACK_SUBS` | `int` | `0` (per `n`) |

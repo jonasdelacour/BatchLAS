@@ -14,6 +14,7 @@
 #include "../util/template-instantiations.hh"
 #include "sytrd_sb2st_hh.hh"
 #include "two_stage_common.hh"
+#include "syev_arch_tuning.hh"
 
 #include <algorithm>
 #include <complex>
@@ -95,7 +96,8 @@ Event syev_two_stage(Queue& ctx,
     const int32_t tau_sy2sb_n = std::max<int32_t>(0, n - kd);
     const int32_t sb2st_block_size = choose_two_stage_sb2st_block_size();
     const int32_t p = std::max<int32_t>(0, n - 1);
-    const int32_t ormqr_block_size = tuning::ormqr_block_size_for_n(n);
+    const int32_t ormqr_block_size =
+        syev_tuning::ormqr_block_size_for_n(n, ctx.device().cuda_compute_capability());
 
     Span<std::byte> ws_mut(const_cast<std::byte*>(ws.data()), ws.size());
     BumpAllocator pool(ws_mut);
@@ -424,7 +426,8 @@ size_t syev_two_stage_buffer_size(Queue& ctx,
     const int32_t tau_sy2sb_n = std::max<int32_t>(0, n - kd);
     const int32_t sb2st_block_size = choose_two_stage_sb2st_block_size();
     const int32_t p = std::max<int32_t>(0, n - 1);
-    const int32_t ormqr_block_size = tuning::ormqr_block_size_for_n(n);
+    const int32_t ormqr_block_size =
+        syev_tuning::ormqr_block_size_for_n(n, ctx.device().cuda_compute_capability());
 
     using Real = typename base_type<T>::type;
 

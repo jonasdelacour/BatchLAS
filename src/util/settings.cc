@@ -174,7 +174,7 @@ void load_geometry(GeometrySettings& g) {
     // differs is an integer literal too large for int, where atoi is undefined
     // and stoi-in-a-try lands on the fallback -- a change in the safe direction.
     g.latrd_grid_groups = env_positive_int_or("BATCHLAS_LATRD_GRID_GROUPS", 0);
-    g.latrd_grid_min_n = env_positive_int_or("BATCHLAS_LATRD_GRID_MIN_N", 768);
+    g.latrd_grid_min_n = env_positive_int_or("BATCHLAS_LATRD_GRID_MIN_N", 0);
     g.latrd_grid_wg = env_positive_int_or("BATCHLAS_LATRD_GRID_WG", 0);
     g.latrd_lower_panel_wg_hint = env_positive_int_or("BATCHLAS_LATRD_LOWER_PANEL_WG_HINT", 0);
 

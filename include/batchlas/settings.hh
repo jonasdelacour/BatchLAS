@@ -347,9 +347,10 @@ struct GeometrySettings {
     int latrd_grid_groups = 0;
 
     // BATCHLAS_LATRD_GRID_MIN_N, via env_positive_int_or. The n at which the
-    // grid latrd path becomes eligible. The ~50 lines of measured evidence for
-    // 768 live at the call site and stay there.
-    int latrd_grid_min_n = 768;
+    // grid latrd path becomes eligible. 0 = the per-architecture default
+    // (768 on sm_89 and non-CUDA devices; see src/extensions/syev_arch_tuning.hh).
+    // The measured evidence lives at the call site and stays there.
+    int latrd_grid_min_n = 0;
 
     // BATCHLAS_LATRD_GRID_WG, via env_positive_int_or. 0 = the computed
     // work-group size. Only {32,64,128,256} are honoured; any other positive
