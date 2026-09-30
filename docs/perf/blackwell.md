@@ -32,3 +32,53 @@ The 4090 numbers in this directory were all taken with self-built dpcpp-cuda, wh
 why this never appeared there. Fix: `-ffp-model=precise` for IntelLLVM in
 `cmake/BatchLASOptions.cmake`. `-fdenormal-fp-math=ieee` alone also restores inlining
 but leaves reassoc/afn on, which section 11 of AGENTS.md rules out.
+
+## Device-call guard
+
+Machine: threadripper02, RTX PRO 6000 Blackwell Max-Q (sm_120), icpx 2026.0, CUDA 13.2.
+The `-ffp-model=precise` fix above has no functional symptom when it regresses: every
+test stays green and only the timings move. `scripts/check_device_calls.py` (ctest
+`device_calls_tests`, label `util`; also `BATCHLAS_BUILD_DIR=build
+.github/ci/run_local_checks.sh`) guards it. It walks each `build/src/libbatchlas_*.so`
+for embedded CUDA fatbins (magic `0xBA55ED50`), runs `cuobjdump -ptx` on each, and
+fails if any `.entry` contains a `call` to a `__spirv_*`/`__clc_*` function, or if
+one of the representative kernels (`GemmRegister64x64K16WideKernel<complex<float>,true>`,
+`PotrfLpanelKernel`, `TrsmCtaKernel`) is missing. It exits 77 (ctest skip) when
+there is no NVPTX image or no `cuobjdump`.
+
+It reads PTX, not SASS: in a correct precise build, `TrsmCtaKernel` still has 9-33
+SASS `CALL.REL`, which are ptxas's own IEEE division/sqrt slow-path subroutines. A
+SASS `CALL.REL` count cannot tell those from a libspirv stub. A PTX `call` names its
+callee.
+
+Proof that it can fail: the same three TUs (`trsm_native.cc`, `potrf_lpanel.cc`,
+`gemm_kernels.cc`) compiled with BASE's `flags.make` and device-linked into a scratch
+library, with and without `-ffp-model=fast` appended (the last flag wins):
+
+| build | kernels | with builtin calls | wide cfloat | potrf lpanel | trsm cta | exit |
+|---|---|---|---|---|---|---|
+| `-ffp-model=fast` | 251 | 248 | 1031 calls | 952 | 8548 | 1 |
+| as built (precise) | 492 | 0 | 0 | 0 | 0 | 0 |
+| BASE build, 14 libraries | 6277 | 0 | 0 | 0 | 0 | 0 |
+
+208 BASE kernels do call something: device functions LLVM chose not to inline
+(`larfg`, `sec_solve_roc`, gesvdj and syrk/trmm tile lambdas). Those are reported but
+do not fail the check.
+
+### `__builtin_fma` in `device_scalar.hh`: not adopted
+
+`fma_acc` and the complex helpers in `src/sycl/device_scalar.hh` could call
+`__builtin_fma{,f}` instead of `sycl::fma`. That spelling inlines even under the fast
+model: in the fast scratch build it cut the wide cfloat kernel from 1031 calls to 7,
+lpanel from 952 to 52 and trsm cta from 8548 to 672. The barrier and id calls remain,
+so the guard stays red there, as it should. Under precise it is **not** a no-op,
+though. SASS of all 14 libraries against BASE: 158 of 6277 kernels differ, in
+`extensions_cta` (126), `sycl` (16) and `extensions_factorization` (16). Examples are
+GetrsFusedN<float,1> (1104 -> 896 instructions, LDG 40 -> 22), GesvTiny<cdouble>,
+GetrfTiny<cfloat>, Geqrf/GetrfPanel* and complex TrsmCta n=32. The differences are
+in unrolling and scheduling (`llvm.fma` is visible to the cost models;
+the libspirv/NVVM fma is not). No kernel's FMA fusion changed that we could see, but
+neither bit-identity nor timing was measured for those 158 kernels. Since the flag
+is the real fix and the guard now enforces it, the switch was left out. The
+tiny-probe result (identical SASS for one loop, `tmp/gemm/probe`) does not carry
+over to the library.

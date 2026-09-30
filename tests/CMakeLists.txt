@@ -462,6 +462,24 @@ add_test(NAME cmake_detect_sycl_tests
             -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/detect_sycl_arch_tests.cmake")
 set_tests_properties(cmake_detect_sycl_tests PROPERTIES LABELS "util")
 
+# device_calls_tests: scans the built libraries' NVPTX images and fails if any
+# kernel calls a SPIR-V builtin (sycl::fma, barriers, id queries) out of line --
+# what an icpx build without -ffp-model=precise produces, 6-15x slower and green
+# in every functional test. Skips (77) when there is no NVPTX image or no cuobjdump.
+# evidence: docs/perf/blackwell.md#device-call-guard
+find_package(Python3 QUIET COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+    set(_device_calls_args "${PROJECT_BINARY_DIR}")
+    if(CUDAToolkit_BIN_DIR AND EXISTS "${CUDAToolkit_BIN_DIR}/cuobjdump")
+        list(APPEND _device_calls_args --cuobjdump "${CUDAToolkit_BIN_DIR}/cuobjdump")
+    endif()
+    add_test(NAME device_calls_tests
+        COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/scripts/check_device_calls.py"
+                ${_device_calls_args})
+    set_tests_properties(device_calls_tests PROPERTIES
+        LABELS "util" SKIP_RETURN_CODE 77 TIMEOUT 600)
+endif()
+
 # ---------------------------------------------------------------------------
 # consumer_package_tests: the outside-in guard.
 #
