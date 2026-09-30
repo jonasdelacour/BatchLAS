@@ -719,6 +719,24 @@ now 2048 tiles for the float 16 tile from k = 768 and 1536 for the float 32 tile
 k = 512. cfloat keeps 1024: at 1024 tiles and k = 1024 it wins (16x16 1.47 -> 1.02,
 32x32 1.72 -> 1.14).
 
+Confirmation after the fix, one run with four arms (BASE, the pre-fix head 6b6aa30b,
+the fix, vendor), 3 reps, /vendor at pad 0 / pad 1, kernel checked by trace:
+
+| cell | BASE | pre-fix | fix |
+|---|---|---|---|
+| f 16x16x1024 b1024 | 1.55 / 1.20 | 1.64 / 1.76 | 1.56 / 1.20 |
+| f 16x16x1024 b2048 | 1.12 / 0.99 | 0.92 / 0.94 | 0.93 / 0.94 |
+| f 16x16x768 b2048 | 1.05 / 0.94 | 0.92 / 0.93 | 0.92 / 0.93 |
+| f 32x32x512 b1024 | 1.22 / 1.38 | 1.75 / 1.76 | 1.22 / 1.48 |
+| f 32x32x512 b1536 | 1.44 / 1.71 | 1.31 / 1.32 | 1.31 / 1.32 |
+| f 32x32x1024 b1024 | 1.29 / 1.49 | 1.77 / 1.76 | 1.29 / 1.47 |
+| f 32x32x1024 b1536 | 1.43 / 1.55 | 1.28 / 1.26 | 1.28 / 1.26 |
+| f 32x32x1024 b2048 | 1.33 / 1.43 | 1.10 / 1.08 | 1.10 / 1.07 |
+
+32x32x512 b1024 at pad 1 runs the same kernel as BASE; a 7-rep recheck gives 1.47 vs
+1.41. Unchanged cells: f 16x16x32, 32x32x1024 b8192, 40x40x128, cfloat 16x16x1024 and
+32x32x1024 b1024.
+
 The rule forfeits gains on shapes that fill the tile badly, where the older kernel is
 slow: at 1024 tiles the tile wins f 8x8x1024 (2.93 vs 2.33), 12x12x1024 (2.22 vs
 1.85), 24x24x512 (2.30 vs 1.11), 24x24x1024 (2.48 vs 1.68), 20x20, 28x28 and 31x31
@@ -846,7 +864,10 @@ at batch 1024), `SmallWideSaturatingBatchIsBitIdentical` (batch 2048),
 `Sm120TransposedFallbackMatchesTiled16`, and the two selector straddle tests. Armed
 breaks: dropping the epilogue's `col >= n` guard turns exactly the shapes with a
 partial n tile red (whole-tile shapes stay green). Staging k one past its end turns
-exactly the k % 16 != 0 shapes red.
+exactly the k % 16 != 0 shapes red. Moving the transposed fallback's floor to
+`ctas > 128` and the float 16-tile deep-k edge to `k >= 769` (one build) turns red
+only the six exact-edge assertions of the two straddle tests (f NC/CN panel at b64,
+f/c 64x64x16 at b128, f 16x16x768 b1024); every correctness test stays green.
 
 Still losing in the NN native walk: float 8x8x1024 1.10, float 100x100x64 1.28
 (128x128 at 3/4 fill; no better tile measured), float 65x65x8 1.29 (128x128K8, BASE
