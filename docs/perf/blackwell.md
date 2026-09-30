@@ -757,6 +757,12 @@ Over the whole 62-cell grid (n = 8..512, q in {8, 16, 32, 64, n}):
 
 The q = n cells at n >= 128 run V1 on uncapped rungs and did not move.
 
+The fixup that removed the development knobs was re-measured on the review's 23 Left
+and Right cells, 6 Auto cells, and 7 posv/getrs cells, against BASE and cuBLAS
+(`wp2-trsm/fx/m_*.csv`). Every cell matched the review within about 2%, for example
+float n32 q8 at 0.117 ms (cuBLAS 0.169) and cfloat n32 q8 at 0.335 ms (1.409). No cell
+moved against BASE in the wrong direction.
+
 `preferred()` is unchanged for Side::Left (Side::Right: next section). With the new
 kernel, native wins every measured Side::Left cell, so the diagnosis's interim small-q vendor window (trsm-interim-route-small-q) is
 not needed.
