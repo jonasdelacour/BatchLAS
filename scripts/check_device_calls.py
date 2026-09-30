@@ -46,7 +46,7 @@ REPRESENTATIVE = {
 
 ENTRY_RE = re.compile(r"^\s*(?:\.visible\s+|\.weak\s+)?\.entry\s+([\w$.]+)", re.M)
 FUNC_RE = re.compile(r"^\s*(?:\.visible\s+|\.weak\s+|\.extern\s+)?\.func\s+(?:\([^)]*\)\s*)?([\w$.]+)", re.M)
-CALL_RE = re.compile(r"^\s*(?:@!?%\w+\s+)?call(?:\.uni)?\s+(?:\([^)]*\)\s*,\s*)?([\w$.]+)", re.M)
+CALL_RE = re.compile(r"^\s*(?:\{\s*)?(?:@!?%\w+\s+)?call(?:\.uni)?\s+(?:\([^)]*\)\s*,\s*)?([\w$.]+)", re.M)
 
 
 def find_cuobjdump(explicit):
@@ -76,24 +76,68 @@ def fatbins(path):
         off = i + header + size
 
 
+COMMENT_RE = re.compile(r"//[^\n]*|/\*.*?\*/", re.S)
+DECL_END_RE = re.compile(r"[{;]")
+BRACE_RE = re.compile(r"[{}]")
+
+
 def split_functions(ptx):
-    """Map each .entry/.func name to its body text."""
-    marks = [(m.start(), m.group(1), "entry") for m in ENTRY_RE.finditer(ptx)]
-    marks += [(m.start(), m.group(1), "func") for m in FUNC_RE.finditer(ptx)]
+    """[(kind, name, body)] for every .entry/.func that has a body.
+
+    Bodies are delimited by brace matching, not by the next header, so a body-less
+    prototype (`.extern .func foo(...);`) anywhere in the module is skipped instead
+    of cutting the function before it short.
+    """
+    text = COMMENT_RE.sub("", ptx)
+    marks = [(m.start(), m.end(), m.group(1), "entry") for m in ENTRY_RE.finditer(text)]
+    marks += [(m.start(), m.end(), m.group(1), "func") for m in FUNC_RE.finditer(text)]
     marks.sort()
     out = []
-    for n, (start, name, kind) in enumerate(marks):
-        end = marks[n + 1][0] if n + 1 < len(marks) else len(ptx)
-        out.append((kind, name, ptx[start:end]))
+    for start, hdr_end, name, kind in marks:
+        d = DECL_END_RE.search(text, hdr_end)
+        if d is None or d.group() == ";":
+            continue
+        depth = 0
+        end = len(text)
+        for b in BRACE_RE.finditer(text, d.start()):
+            depth += 1 if b.group() == "{" else -1
+            if depth == 0:
+                end = b.end()
+                break
+        out.append((kind, name, text[start:end]))
     return out
 
 
 def scan_ptx(ptx):
-    """[(entry name, [callee, ...])] for every .entry in one PTX module."""
+    """[(entry name, [callee, ...])] for every .entry in one PTX module.
+
+    The callee list is transitive: calls made by a non-inlined local .func helper
+    count against every entry that reaches it, once per call site in the helper.
+    """
+    funcs = split_functions(ptx)
+    direct = {name: CALL_RE.findall(body) for kind, name, body in funcs if kind == "func"}
+    memo = {}
+
+    def reached(fn, stack):
+        if fn in memo:
+            return memo[fn]
+        calls = []
+        for callee in direct.get(fn, []):
+            if callee in direct and callee not in stack:
+                calls += reached(callee, stack | {callee})
+        memo[fn] = [c for c in direct.get(fn, [])] + calls
+        return memo[fn]
+
     result = []
-    for kind, name, body in split_functions(ptx):
-        if kind == "entry":
-            result.append((name, CALL_RE.findall(body)))
+    for kind, name, body in funcs:
+        if kind != "entry":
+            continue
+        calls = CALL_RE.findall(body)
+        via = []
+        for callee in dict.fromkeys(calls):
+            if callee in direct:
+                via += reached(callee, {callee})
+        result.append((name, calls + via))
     return result
 
 
@@ -173,10 +217,32 @@ SELF_TEST_PTX = """
 	@%p1 call.uni _Z22__spirv_ControlBarrierjjj, (param0, param1, param2);
 	ret;
 }
+.extern .func (.param .b32 func_retval0) vprintf(.param .b64 fmt, .param .b64 args);
 .visible .entry _ZTS4Good(.param .u64 p)
 {
 	fma.rn.f32 	%f4, %f1, %f2, %f3;
 	// call.uni _Z15__spirv_ocl_fmafff in a comment is not a call
+	{
+	call.uni (retval0), vprintf, (param0, param1);
+	}
+	ret;
+}
+.func _Z7helper2v()
+{
+	call.uni _Z7helper2v, ();
+	call.uni _Z28__spirv_BuiltInLocalInvocationIdv, ();
+	ret;
+}
+.func _Z6helperv()
+{
+	{ call.uni _Z7helper2v, (); }
+	ret;
+}
+.func _Z6helperv();
+.visible .entry _ZTS9ViaHelper(.param .u64 p)
+{
+	call.uni _Z6helperv, ();
+	call.uni _Z6helperv, ();
 	ret;
 }
 """
@@ -184,9 +250,12 @@ SELF_TEST_PTX = """
 
 def self_test():
     got = dict(scan_ptx(SELF_TEST_PTX))
-    ok = (set(got) == {"_ZTS3Bad", "_ZTS4Good"}
+    via = ["_Z6helperv", "_Z6helperv", "_Z7helper2v",
+           "_Z7helper2v", "_Z28__spirv_BuiltInLocalInvocationIdv"]
+    ok = (set(got) == {"_ZTS3Bad", "_ZTS4Good", "_ZTS9ViaHelper"}
           and got["_ZTS3Bad"] == ["_Z15__spirv_ocl_fmafff", "_Z22__spirv_ControlBarrierjjj"]
-          and got["_ZTS4Good"] == []
+          and got["_ZTS4Good"] == ["vprintf"]
+          and got["_ZTS9ViaHelper"] == via
           and all(BANNED_CALLEE.search(c) for c in got["_ZTS3Bad"]))
     blob = FATBIN_MAGIC + struct.pack("<HHQ", 1, 16, 4) + b"abcd"
     ok = ok and [len(b) for b in fatbins_from_bytes(b"xx" + blob + b"yy" + blob)] == [20, 20]
