@@ -50,6 +50,7 @@ inline std::optional<dispatch::GesvShape> gesv_op_shape(
 
     // Two ROUTED public calls, so this is the facade's guarantee, not a kernel's.
     s.composed_available = true;
+    s.cuda_cc = ctx.device().cuda_compute_capability();
 
     return s;
 }
