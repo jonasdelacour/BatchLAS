@@ -75,6 +75,8 @@ set(EXTENSIONS_CTA_SOURCES
     # for the shared-device-symbol one: it borrows only lu_cabs1, an inline template,
     # and the tier is GPU-only.
     gesv_tiny.cc
+    # The register-resident getrs tier; GPU-only like gesv_tiny.cc, no shared device symbol.
+    getrs_tiny.cc
     # WP6/P4, the register-resident PANEL leaf for the blocked driver. HERE by the
     # ":77-86" rule and not by the GPU-only one: getrf_panel_reg_device.hh includes
     # getrf_cta_device.hh for lu_cabs1 and lu_zero, and getrf_blocked.cc calls this

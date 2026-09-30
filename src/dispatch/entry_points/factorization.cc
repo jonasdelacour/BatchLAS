@@ -476,6 +476,9 @@ Event getrs(Queue& ctx,
     // the fused tier can hold to Algorithm::CTA and the rest to Blocked.
     // evidence: docs/perf/lu.md#getrs-fused-window-evidence
     if (dispatch::is_native(route)) {
+        if (route.algo == dispatch::Algorithm::Tiny) {
+            return sycl_getrs::getrs_tiny_dispatch<T>(ctx, A, B, transA, pivots);
+        }
         if (route.algo == dispatch::Algorithm::CTA) {
             // The fused tier injects nothing: the permutation and both
             // substitutions are one kernel, so it has no seam.
@@ -525,6 +528,11 @@ size_t getrs_buffer_size(Queue& ctx,
         const auto shape = backend::getrs_op_shape<Back, T>(ctx, A, B, transA);
         using Tbl = dispatch::RouteTable<dispatch::Op::getrs, T>;
         if (shape) {
+            // The register-resident tier takes no workspace.
+            if (Tbl::supports({dispatch::Origin::Native, dispatch::Algorithm::Tiny},
+                              *shape)) {
+                native_fired = true;
+            }
             if (Tbl::supports({dispatch::Origin::Native, dispatch::Algorithm::CTA},
                               *shape)) {
                 native_need = std::max(
