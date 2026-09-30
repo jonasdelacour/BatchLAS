@@ -24,6 +24,7 @@
 
 #include <sycl/sycl.hpp>
 #include <batchlas/settings.hh>
+#include <batchlas/blas/dispatch/route.hh>
 
 namespace batchlas {
 namespace sycl_potrf {
@@ -46,6 +47,20 @@ template <> struct PotrfBlockedConst<float>                { static constexpr in
 template <> struct PotrfBlockedConst<double>               { static constexpr int NB = 96;  static constexpr int W = 32; };
 template <> struct PotrfBlockedConst<std::complex<float>>  { static constexpr int NB = 96;  static constexpr int W = 32; };
 template <> struct PotrfBlockedConst<std::complex<double>> { static constexpr int NB = 64;  static constexpr int W = 16; };
+
+// sm_120, fp32 types only (fp64 was not swept there and keeps the sm_89 pair). Float's nb
+// is order-dependent: 64 through NbLargeAbove, 128 past it; cfloat did not move, so it
+// keeps sm_89's. evidence: docs/perf/blackwell.md#potrf-blocked-nb-w
+template <typename T> struct PotrfBlockedConstSm120 : PotrfBlockedConst<T> {
+    static constexpr int NbLarge = PotrfBlockedConst<T>::NB;
+    static constexpr int NbLargeAbove = 0;
+};
+template <> struct PotrfBlockedConstSm120<float> {
+    static constexpr int NB = 64;
+    static constexpr int W = 64;
+    static constexpr int NbLarge = 128;
+    static constexpr int NbLargeAbove = 512;
+};
 
 // Blocking overrides only, never routing; read once so the sizing query and the
 // call agree. The function-local statics are kept for exactly that reason: the
@@ -70,7 +85,12 @@ struct PotrfBlockedParams {
 
 template <typename T>
 PotrfBlockedParams potrf_blocked_params(Queue& ctx, int n) {
-    using C = PotrfBlockedConst<T>;
+    const bool sm120 = dispatch::is_sm120_family(ctx.device().cuda_compute_capability());
+    using C120 = PotrfBlockedConstSm120<T>;
+    const int def_nb = !sm120 ? PotrfBlockedConst<T>::NB
+                     : (C120::NbLargeAbove > 0 && n > C120::NbLargeAbove) ? C120::NbLarge
+                                                                          : C120::NB;
+    const int def_w = sm120 ? C120::W : PotrfBlockedConst<T>::W;
 
     // From THIS device's SLM: the hardcoded potrf_cta_max_n<T>() can name a block the leaf
     // refuses. WHICH ceiling is the choice above: the advertised (occupancy-scaled) one
@@ -82,7 +102,7 @@ PotrfBlockedParams potrf_blocked_params(Queue& ctx, int n) {
         (n > 0 && n <= kPotrfOccupancyNbMaxOrder) ? resident::kMinBlocksPerSm : 1;
     const int ceiling = potrf_cta_max_n_for_slm<T>(budget, leaf_min_blocks);
 
-    const int want = potrf_nb_env() ? potrf_nb_env() : C::NB;
+    const int want = potrf_nb_env() ? potrf_nb_env() : def_nb;
     int nb = std::min(want, std::max(ceiling, 1));
     if (n > 0) nb = std::min(nb, n);
 
@@ -93,7 +113,7 @@ PotrfBlockedParams potrf_blocked_params(Queue& ctx, int n) {
     }
     if (nb < 1) nb = 1;
 
-    int W = potrf_w_env() ? potrf_w_env() : C::W;
+    int W = potrf_w_env() ? potrf_w_env() : def_w;
     if (W < 1) W = 1;
 
     return {nb, W, leaf_min_blocks};

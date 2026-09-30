@@ -154,6 +154,77 @@ TYPED_TEST(PotrfLpanelTest, PanelStoresArePublishedAtSaturatingBatch) {
         << first_bad << "); n=" << n;
 }
 
+// THE VECTOR sB READ. The left-looking update reads each lane-uniform sB column as 16-byte
+// local vectors, which is only legal on a 16-byte-aligned block whose per-slot offset is a
+// whole number of vectors, and whose vector index is (kk*NB)/VW. A wrong VW for one scalar
+// width, a slot offset that is not whole vectors, or a column index that ignores kk is wrong
+// only for SOME types, n or packings -- so this runs every type (complex data with a nonzero
+// imaginary part), odd n that leave a partial last k-block, a padded ld and a stride that is
+// not ld*n, at saturating batch, and demands every item BIT-identical to a batch-1 launch of
+// the same matrix (a different G and grid, same arithmetic order). A residual check on the
+// batch-1 run keeps the bit comparison from agreeing with a wrong answer.
+// evidence: docs/perf/blackwell.md#potrf-lpanel-vector-sb
+TYPED_TEST(PotrfLpanelTest, VectorSbReadIsBitIdenticalAcrossPackingAndBatch) {
+    using T = typename TestFixture::T;
+    using R = typename TestFixture::R;
+    const int cap = this->lp_ceiling();
+    ASSERT_GT(cap, 32);
+
+    struct Case { int n; int batch; int nb_hint; };
+    std::vector<Case> cases = {{41, 2048, 0}, {139, 1024, 0}, {200, 1024, 0}};
+    if constexpr (std::is_same_v<T, float>) cases.push_back({139, 1024, 16});
+
+    for (const auto& c : cases) {
+        const int n = std::min(c.n, cap);
+        const int ld = n + 3;
+        const int stride = ld * n + 5;
+        const auto ref = make_spd<T>(n, 60601u + static_cast<unsigned>(n));
+        if constexpr (!std::is_same_v<T, R>) {
+            R imag_mass = 0;
+            for (int j = 0; j < n; ++j)
+                for (int i = j + 1; i < n; ++i)
+                    imag_mass += std::abs(ref[i + static_cast<size_t>(j) * n].imag());
+            ASSERT_GT(imag_mass, R(0)) << "complex input with a zero imaginary part";
+        }
+        auto fill = [&](UnifiedVector<T>& buf, int batch) {
+            for (int b = 0; b < batch; ++b)
+                for (int j = 0; j < n; ++j)
+                    for (int i = 0; i < n; ++i)
+                        buf[static_cast<size_t>(b) * stride + i + static_cast<size_t>(j) * ld] =
+                            (i >= j) ? ref[i + static_cast<size_t>(j) * n]
+                                     : make_scalar<T>(R(-999), R(777));
+        };
+
+        UnifiedVector<T> one(static_cast<size_t>(stride));
+        fill(one, 1);
+        MatrixView<T, MatrixFormat::Dense> V1(one.data(), n, n, ld, stride, 1);
+        ASSERT_EQ(this->run_lpanel(V1, Uplo::Lower, c.nb_hint)[0], 0) << "n=" << n;
+        std::vector<T> L1(static_cast<size_t>(n) * n, T{});
+        for (int j = 0; j < n; ++j)
+            for (int i = j; i < n; ++i)
+                L1[i + static_cast<size_t>(j) * n] = one[i + static_cast<size_t>(j) * ld];
+        ASSERT_LE((multiply_back_residual<T>(ref, L1, n)), residual_tol<T>(n)) << "n=" << n;
+
+        UnifiedVector<T> many(static_cast<size_t>(stride) * c.batch);
+        fill(many, c.batch);
+        MatrixView<T, MatrixFormat::Dense> VB(many.data(), n, n, ld, stride, c.batch);
+        const auto info = this->run_lpanel(VB, Uplo::Lower, c.nb_hint);
+        int bad_items = 0, first_bad = -1;
+        for (int b = 0; b < c.batch; ++b) {
+            bool same = (info[b] == 0);
+            const size_t o = static_cast<size_t>(b) * stride;
+            for (int j = 0; j < n && same; ++j)
+                for (int i = j; i < n; ++i)
+                    if (!(many[o + i + static_cast<size_t>(j) * ld] ==
+                          L1[i + static_cast<size_t>(j) * n])) { same = false; break; }
+            if (!same && bad_items++ == 0) first_bad = b;
+        }
+        EXPECT_EQ(bad_items, 0) << bad_items << " of " << c.batch
+                                << " items differ from the batch-1 launch (first " << first_bad
+                                << "); n=" << n << " nb_hint=" << c.nb_hint;
+    }
+}
+
 // The other triangle is neither READ nor WRITTEN, and THAT TAKES TWO POISONS. A quiet NaN
 // alone cannot see the WRITE: the value the kernel would store into the upper triangle is
 // itself derived from the NaN it read, so `isnan` passes on the corrupted output too --
@@ -483,8 +554,13 @@ TYPED_TEST(PotrfLpanelTest, RouteWindowIsExactlyTheMeasuredOne) {
     constexpr bool measured =
         std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>;
     const int cta_last = std::is_same_v<T, float> ? 35 : 32;
+    // Per-architecture edges, spelled out rather than read back from the table.
+    // evidence: docs/perf/blackwell.md#potrf-lpanel-auto-window
+    const bool sm120 = dispatch::is_sm120_family(this->ctx->device().cuda_compute_capability());
+    const int lp_window = !sm120 ? 256 : std::is_same_v<T, float> ? 320 : 128;
+    const int lp_tier_cap = (sm120 && std::is_same_v<T, float>) ? 320 : 1 << 30;
 
-    for (int n : {32, 33, 64, 256, 257, 384}) {
+    for (int n : {32, 33, 64, 128, 129, 256, 257, 320, 321, 384}) {
         if (n > this->lp_ceiling() && n > this->ceiling()) continue;
 
         Matrix<T, MatrixFormat::Dense> A(n, n, 4);
@@ -500,10 +576,10 @@ TYPED_TEST(PotrfLpanelTest, RouteWindowIsExactlyTheMeasuredOne) {
         EXPECT_FALSE(Tbl::supports(lp, *upper)) << "LPanel must refuse Upper, n=" << n;
         EXPECT_EQ(Tbl::supports(lp, *lower), n <= this->lp_ceiling()) << "n=" << n;
 
-        // Two windows now: the register tier owns n <= 32 and LPanel 32 < n <= 256, so a
-        // measured type has exactly one preferred tier at BOTH, and only above 256 is
+        // Two windows now: the register tier owns n <= 32 and LPanel 32 < n <= lp_window, so
+        // a measured type has exactly one preferred tier at BOTH, and only above it is
         // there none. evidence: docs/perf/potrf.md#the-tiny-potrf-window
-        const bool in_lpanel = measured && n > 32 && n <= 256;
+        const bool in_lpanel = measured && n > 32 && n <= lp_window;
         const bool in_tiny = measured && n <= 32 && n <= lower->tiny_max_n;
         const bool in_window = in_lpanel || in_tiny;
         // UPPER is not `measured`-gated: the register tier's Upper grid covers all four
@@ -550,7 +626,8 @@ TYPED_TEST(PotrfLpanelTest, RouteWindowIsExactlyTheMeasuredOne) {
 
         const auto free_route = backend::potrf_route<B, T>(*this->ctx, A.view(), Uplo::Lower,
                                                            /*vendor_available=*/false);
-        const bool lpanel_owns = measured && n > cta_last && n <= this->lp_ceiling();
+        const bool lpanel_owns = measured && n > cta_last && n <= this->lp_ceiling() &&
+                                 n <= lp_tier_cap;
         const dispatch::Algorithm want = in_tiny ? dispatch::Algorithm::Tiny
                                        : lpanel_owns ? dispatch::Algorithm::LPanel
                                        : (n <= this->ceiling()) ? dispatch::Algorithm::CTA
