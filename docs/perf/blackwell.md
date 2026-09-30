@@ -941,3 +941,277 @@ Not done: rows 9..16 at order 17..24, and at order 32 with batch 32768, still lo
 5-18% (n20 q16, n32 q16 b32768). A Side::Right sub-group kernel (each row of B is a
 Left solve with op(A)^T, so the canonical fold carries over with the B access
 transposed) would fix both, but it was not written.
+
+## gemm (native register-tiled selector)
+
+Machine: threadripper02, GPU 1 (RTX PRO 6000 Blackwell Max-Q, sm_120), icpx 2026.0
+with `-ffp-model=precise`, RelWithDebInfo, CUDA 13.2 cuBLAS as the vendor. Harness:
+`gemm_benchmark` / `gemm_transpose_benchmark` (`--warmup=3 --min_iters=8`), one
+throwaway JIT pass per cell, 3 reps alternating arm order, medians. BASE is
+502ad378 (its libraries, `BATCHLAS_GEMM_ROUTE=native`); new is the same binary
+against the new libraries. Ratios are time/vendor. Kernel choice was checked with
+`BATCHLAS_KERNEL_TRACE` on every quoted NN cell.
+
+Everything below is keyed on `is_sm120_family(cuda_cc)` in `select_kernel_variant`
+(`src/sycl/gemm_kernels.cc`). cc 0 and cc 89 keep the 4090 ladder, which
+`GemmDispatchPolicyTest.Sm120SmallTilesAndTheirEdges` and
+`Sm120TransposedFallbackAndItsEdges` assert shape by shape. None of it changes
+`preferred()`: in a vendor build, Auto still sends complex and transposed float to
+cuBLAS. The consumers are the native walk, vendor-free builds and direct
+`gemm_custom` callers. The vendor-build factorizations are unchanged: potrf, getrf
+and geqrf in float, cfloat and cdouble at n=128-512 measured new/base 0.996-1.003.
+
+### gemm small tiles
+
+There are two new NN instantiations of the wide-scalar template
+(`launch_wide_transposed`, 64 threads each): 16x16 with a 2x2 thread tile and 32x32
+with a 4x4 thread tile (`Tiled16x16RegisterK16Wide`, `Tiled32x32RegisterK16Wide`).
+They are forceable as `16x16x16wide` and `32x32x16wide`. On the 4090 the only complex
+register kernel was the 64x64 tile, which at m=n=32 computes 3/4 padding.
+
+Windows (float and complex<float>; `fits16` = max(m,n) <= 16, or min(m,n) <= 8 with
+max(m,n) <= 32):
+
+- 16x16 tile: `fits16`, at least 1024 tiles in flight, and k >= 32 (float) or
+  max(m,n,k) > 8 (cfloat). float needs 2048 tiles from k = 768 on.
+- 32x32 tile: max(m,n) <= 32 and not `fits16`, at least 1024 tiles, and k > 32 (float).
+  float needs 1536 tiles from k = 512 on (see "Tiles in flight at deep k" below).
+- float, 32 < min(m,n), max(m,n) < 128, max(m,n,k) > 56: the 64x64 wide tile when
+  min(m,n) <= 64, otherwise 128x128x8 (gemm-3).
+- cfloat 64x64 wide gate: min(m,n) >= 32 instead of min(m,n,k) >= 32 (gemm-2).
+  For k >= 32 it keeps the 4090's 64 CTAs. For k < 32 it needs m*n*batch >= 2^19
+  (see the gate table below).
+
+Final A/B, NN, time/vendor (BASE -> new):
+
+| cell | BASE | new | | cell | BASE | new |
+|---|---|---|---|---|---|---|
+| f 8x8x32 b32768 | 1.10 | 0.38 | | c 8x8x256 b32768 | 1.19 | 0.58 |
+| f 8x8x128 | 1.35 | 0.71 | | c 8x8x1024 b16384 | 1.36 | 0.58 |
+| f 8x8x1024 | 2.11 | 1.10 | | c 16x16x16 | 0.54 | 0.23 |
+| f 16x16x32 | 0.99 | 0.51 | | c 16x16x64 | 1.31 | 0.51 |
+| f 16x16x1024 b16384 | 1.33 | 0.85 | | c 16x16x1024 b8192 | 1.38 | 0.79 |
+| f 24x24x128 | 2.71 | 1.02 | | c 32x32x8 | 1.23 | 0.76 |
+| f 32x32x64 | 1.08 | 0.93 | | c 32x32x16 | 1.64 | 0.72 |
+| f 32x32x256 | 1.20 | 0.92 | | c 32x32x64 | 1.48 | 0.95 |
+| f 32x32x1024 b8192 | 1.34 | 0.99 | | c 32x32x1024 b4096 | 2.04 | 1.07 |
+| f 40x40x128 | 3.22 | 1.02 | | c 64x64x8 | 1.65 | 0.96 |
+| f 64x64x8 | 1.35 | 0.93 | | c 64x64x16 | 2.74 | 0.96 |
+| f 64x64x16 | 1.69 | 0.93 | | c 128x128x8 b16384 | 1.57 | 0.99 |
+| f 64x64x1024 b4096 | 1.16 | 0.89 | | c 1024x1024x16 b256 | 2.47 | 1.00 |
+| f 96x96x32 | 1.52 | 1.02 | | | | |
+| f 100x100x64 b16384 | 3.21 | 1.28 | | | | |
+| f 127x127x16 b16384 | 2.09 | 1.02 | | | | |
+
+Batch is 32768 unless given. Controls, unchanged by construction and by measurement
+(BASE = new): f 8x8x16, 16x16x16 and 32x32x32 (SmallBatched), 48^3, 128x128x32,
+128x128x1024 and 256^3; c 8^3 (Direct), 64x64x64 and 256^3 (wide 64x64). With
+`BATCHLAS_BENCH_LD_PAD=1`: f 64x64x16 1.62 -> 0.96, f 32x32x256 1.82 -> 0.90,
+f 100x100x64 3.12 -> 1.32, c 16x16x64 1.34 -> 0.60, c 64x64x16 2.65 -> 0.99.
+
+Brackets (forced-kernel screens on the same card, as /vendor):
+
+- k edge of the float 16 tile: 16x16x16 SmallBatched 0.27 vs 16x16 0.30 (kept), and
+  16x16x32 1.01 vs 0.51. 8x8x16: SmallBatched 0.25, Direct 0.22, 16x16 0.25 (kept).
+  This supersedes gemm-4. Direct beats SmallBatched at 8x8x32 (0.36), but the 16x16
+  tile is as good (0.39) and wins from k=64 up (8x8x64 0.57 vs Direct 0.83).
+- k edge of the float 32 tile: 32x32x32 SmallBatched 0.85 vs 0.89, and 32x32x64 1.10
+  vs 0.93.
+- Tiles in flight (k = 256): float 16x16x256 b512 is 1.77 on the 16 tile vs 1.25 on
+  BASE, and b1024 1.22 vs 1.35. Float 32x32x256 b512 1.85 vs 1.20, and b1024 1.08 vs
+  1.09. cfloat 32x32x64 b1024 1.05 vs 1.69. The 1024 floor holds only up to moderate k;
+  see the next subsection.
+
+#### Tiles in flight at deep k
+
+Review found the 1024-tile floor losing at deep k: one 64-thread group per tile walks k
+serially, and at 1024 tiles the older kernels (Tiled16 at 16x16, Tiled32x32Register at
+32x32) are not yet wave-limited. Forced-tile screens, GPU 1, beta = 1, 3 reps, BASE vs
+the tile, /vendor at `LD_PAD=0` / `LD_PAD=1`:
+
+| cell | tiles | BASE | tile | verdict |
+|---|---|---|---|---|
+| f 16x16x384 | 1024 | 1.49 / 1.32 | 1.34 / 1.33 | tile |
+| f 16x16x512 | 1024 | 1.64 / 1.45 | 1.43 / 1.41 | tile |
+| f 16x16x512 | 1536 | 1.62 / 1.46 | 1.10 / 1.11 | tile |
+| f 16x16x768 | 1024 | 1.68 / 1.50 | 1.44 / 1.43 | BASE (forfeit) |
+| f 16x16x768 | 1536 | 1.08 / 1.01 | 1.11 / 1.11 | BASE |
+| f 16x16x1024 | 1024 | 1.61 / 1.21 | 1.71 / 1.77 | BASE |
+| f 16x16x1024 | 1536 | 1.13 / 1.03 | 1.12 / 1.12 | BASE |
+| f 16x16x1024 | 2048 | 1.11 / 0.98 | 0.92 / 0.95 | tile |
+| f 16x16x2048 | 2048 | 1.23 / 1.10 | 0.96 / 0.97 | tile |
+| f 15x15x1024 | 1024 | 1.49 / 1.48 | 1.63 / 2.09 | BASE |
+| f 15x15x1024 | 2048 | 1.06 / 1.06 | 0.94 / 0.96 | tile |
+| f 32x32x384 | 1024 | 1.03 / 1.05 | 1.01 / 1.04 | tile (tie) |
+| f 32x32x512 | 1024 | 1.23 / 1.45 | 1.76 / 1.79 | BASE |
+| f 32x32x512 | 1536 | 1.45 / 1.71 | 1.31 / 1.32 | tile |
+| f 32x32x768 | 1024 | 1.27 / 1.55 | 1.66 / 1.73 | BASE |
+| f 32x32x768 | 1536 | 1.45 / 1.66 | 1.23 / 1.25 | tile |
+| f 32x32x1024 | 1024 | 1.29 / 1.47 | 1.76 / 1.77 | BASE |
+| f 32x32x1024 | 1536 | 1.43 / 1.54 | 1.29 / 1.26 | tile |
+| f 32x32x2048 | 1536 | 1.33 / 1.41 | 1.25 / 1.21 | tile |
+| f 32x32x2048 | 2048 | 1.23 / 1.30 | 1.01 / 1.00 | tile |
+| f 16x32x512 | 1024 | 1.25 / 1.05 | 1.16 / 1.09 | BASE |
+| f 16x32x1024 | 1024 | 1.32 / 1.19 | 1.83 / 1.86 | BASE |
+
+The tile's time barely moves from 1024 to 2048 tiles (16x16x1024: 0.176 -> 0.265 ms)
+while BASE doubles, so the crossover is a tile count that grows with k. The floor is
+now 2048 tiles for the float 16 tile from k = 768 and 1536 for the float 32 tile from
+k = 512. cfloat keeps 1024: at 1024 tiles and k = 1024 it wins (16x16 1.47 -> 1.02,
+32x32 1.72 -> 1.14).
+
+Confirmation after the fix, one run with four arms (BASE, the pre-fix head 6b6aa30b,
+the fix, vendor), 3 reps, /vendor at pad 0 / pad 1, kernel checked by trace:
+
+| cell | BASE | pre-fix | fix |
+|---|---|---|---|
+| f 16x16x1024 b1024 | 1.55 / 1.20 | 1.64 / 1.76 | 1.56 / 1.20 |
+| f 16x16x1024 b2048 | 1.12 / 0.99 | 0.92 / 0.94 | 0.93 / 0.94 |
+| f 16x16x768 b2048 | 1.05 / 0.94 | 0.92 / 0.93 | 0.92 / 0.93 |
+| f 32x32x512 b1024 | 1.22 / 1.38 | 1.75 / 1.76 | 1.22 / 1.48 |
+| f 32x32x512 b1536 | 1.44 / 1.71 | 1.31 / 1.32 | 1.31 / 1.32 |
+| f 32x32x1024 b1024 | 1.29 / 1.49 | 1.77 / 1.76 | 1.29 / 1.47 |
+| f 32x32x1024 b1536 | 1.43 / 1.55 | 1.28 / 1.26 | 1.28 / 1.26 |
+| f 32x32x1024 b2048 | 1.33 / 1.43 | 1.10 / 1.08 | 1.10 / 1.07 |
+
+32x32x512 b1024 at pad 1 runs the same kernel as BASE; a 7-rep recheck gives 1.47 vs
+1.41. Unchanged cells: f 16x16x32, 32x32x1024 b8192, 40x40x128, cfloat 16x16x1024 and
+32x32x1024 b1024.
+
+The rule forfeits gains on shapes that fill the tile badly, where the older kernel is
+slow: at 1024 tiles the tile wins f 8x8x1024 (2.93 vs 2.33), 12x12x1024 (2.22 vs
+1.85), 24x24x512 (2.30 vs 1.11), 24x24x1024 (2.48 vs 1.68), 20x20, 28x28 and 31x31
+x1024 (2.40-2.47 vs 1.66-1.75) and 32x8x1024 (2.56 vs 1.76), and these now stay on
+BASE until 1536/2048 tiles. A fill-based exception was not adopted: 15x15 (fill 0.88)
+loses and 31x31 (fill 0.94 of Tiled16) wins, so no single fill threshold separates
+the measured cells.
+- float 33..56 cubes stay on SmallBatched: 33^3 0.80 vs 64-wide 1.04, 56^3 0.94 vs
+  0.95. 40x40x128 (max 128) goes to the 64 tile, 1.02 vs 3.22.
+- float min(m,n) > 64: 65x65x64 128x128 1.18 vs 64-wide 1.22, 100x100x256 1.06 vs
+  1.48, 127x127x16 1.03 vs 1.46. 64x96x128 (min 64): 64-wide 0.84 vs 128x128 1.02.
+- cfloat 16 vs 32 tile at 16x16: 16x16x64 0.51 vs 0.87. At 32x32 (not fits16):
+  32x32x1024 16 tile 1.38 vs 32 tile 1.07.
+
+Two things tried and not adopted. k-split (2-4 slices of k per group with an SLM
+reduction) was never better than the unsplit 16/32 tiles: float 32x32x1024 ks2 0.91
+vs 0.98 was the only win, and cfloat 32x32x* ks2 ran 1.07-1.31. A 128x64 tile and a
+64x64 tile with K=32 for large cfloat were 1.28-1.55 vs 1.11-1.17 for the 64x64 K=16
+tile.
+
+cfloat k < 32 gate, BASE -> new (these cells are launch-bound, around 10-20 us):
+
+| cell | m*n*batch | BASE | 64 wide | shipped |
+|---|---|---|---|---|
+| 33x33x8 b64 | 70k | 0.86 | 1.02 | BASE |
+| 33x33x8 b256 | 279k | 0.98 | 1.01-1.03 | BASE |
+| 64x64x8 b64 | 262k | 0.87 | 1.00 | BASE |
+| 128x128x8 b16 | 262k | 1.02 | 1.11 | BASE |
+| 256x256x16 b4 | 262k | 1.10 | 0.90 | BASE (win given up) |
+| 64x64x8 b128 | 524k | 1.16 | 1.09 | wide |
+| 128x128x8 b32 | 524k | 1.25 | 1.10 | wide |
+| 48x48x16 b256 | 590k | 1.63 | 1.02 | wide |
+| 33x33x16 b512 | 558k | 1.39 | 0.86 | wide |
+
+A CTA count does not separate these cells: 33x33x8 b256 loses at 256 CTAs while
+64x64x8 b256 wins. The output element count does.
+
+### gemm complex double
+
+complex<double> NN on sm_120 goes to the 16x16 tile whenever max(m,n,k) > 8. At
+FP64's 1/64 rate the kernel is compute-bound, and the tile that puts the most groups
+in flight won or tied at every shape and batch measured: 16x16 >= 32x32 >= 64x64,
+and all three beat Tiled16 and Direct. The exception is 8^3, where Direct is 0.22 vs
+0.38. Final A/B (BASE -> new, /vendor):
+
+| cell | BASE | new |
+|---|---|---|
+| 8x8x16 b32768 | 0.40 | 0.37 |
+| 8x8x256 b16384 | 1.54 | 0.44 |
+| 16x16x16 b32768 | 1.54 | 0.41 |
+| 24x24x64 b32768 | 1.96 | 0.85 |
+| 32x32x8 b32768 | 1.72 | 0.81 |
+| 32x32x256 b8192 | 3.45 | 0.87 |
+| 48x48x16 b16384 | 2.41 | 0.62 |
+| 64x64x16 b16384 | 3.21 | 0.82 |
+| 64x64x64 b16384 | 0.89 | 0.86 |
+| 100x100x16 b8192 | 2.44 | 0.71 |
+| 128x128x128 b2048 | 0.89 | 0.87 |
+| 256x256x256 b512 | 0.89 | 0.89 (min_dim >= 256 keeps the 64 tile) |
+| 1024x1024x16 b64 | 2.83 | 0.83 |
+| 16x16x64 b16 | 0.61 | 0.60 |
+| 32x32x64 b64 | 1.29 | 0.60 |
+| 64x64x16 b16 | 1.14 | 0.66 |
+
+Brackets: 64x64x16 b16384 on the 16, 32 and 64 tiles is 0.82, 0.81 and 0.90.
+100x100x16 is 0.71, 0.90 and 0.90. 16x16x64 b512 on the 64 tile is 4.77, so the tile
+must not grow with the shape. 8^3 b64: Direct 0.46, 16 tile 0.60. double (real) was
+screened too. The 16 tile gains 5-25% (16x16x16 0.30 -> 0.22), but double already
+beats cuBLAS 1.1-4x there, so it is left alone.
+
+### gemm transposed fallback
+
+float and complex<float> one-transposed forms (TN/NT; complex only with ConjTrans)
+that would fall to Tiled16 or Direct now take a wide transposed tile when
+min(m,n) >= 32 and there are >= 128 64x64 CTAs. The tile is 64x64, except for float
+with a panel shape: 128x32 NC when n < 64 and m >= 128, 32x128 CN when m < 64 and
+n >= 128. Two things are unchanged: the float K32 family (m >= 128, n >= 32,
+k >= 128) and float SmallBatched (max <= 32). On the 4090 the real-scalar tile was a
+tie with Tiled16 (docs/perf/gemm.md#wide-scalar-transposed-tiles). Here Tiled16 is
+2-5x behind cuBLAS on these forms.
+
+Final A/B, `LD_PAD=1`, beta=1, BASE -> new, /vendor:
+
+| form | cell | BASE | new |
+|---|---|---|---|
+| f NT | 256x256x32 b2048 | 3.53 | 1.49 |
+| f NT | 512x512x64 b512 | 5.72 | 1.64 |
+| f NT | 64x64x16 b16384 | 1.73 | 0.98 |
+| f NT | 256x32x96 b1024 | 4.60 | 1.73 |
+| f NT | 32x256x256 b2048 | 3.94 | 1.64 |
+| f NT | 64x64x64 b128 | 1.66 | 1.48 |
+| f TN | 256x256x32 b2048 | 3.37 | 1.48 |
+| f TN | 32x256x256 b2048 | 3.12 | 1.20 |
+| f TN | 48x48x48 b16384 | 2.27 | 1.08 |
+| c NC | 64x64x64 b8192 | 2.96 | 1.02 |
+| c NC | 32x256x256 b2048 | 4.17 | 1.71 |
+| c NC | 32x32x32 b16384 | 2.55 | 1.45 |
+| c CN | 64x64x64 b8192 | 2.50 | 0.86 |
+| c CN | 256x32x256 b2048 | 3.29 | 1.44 |
+| c CN | 32x32x256 b8192 | 2.26 | 1.83 |
+
+Brackets. The 128-CTA floor counts CTAs of the tile actually launched (review fix:
+it used to count 64x64 CTAs for the panel tiles too). f NT 256x32x96 pad 0 on Tiled16
+vs 128x32 NC: b32 (64 panel CTAs, 128 64x64 ones) 1.51 vs 1.85, b64 (128) 2.17 vs
+1.81; b16 stays on Tiled16. f NT 64x64x64 b64 (64 CTAs) is 1.27 on Tiled16 vs 1.52
+on 64 NC, and b128 is 1.66 vs 1.48 (re-measured: b64 1.34 both, b128 1.78 vs 1.40). 128x128x32 b16 is 1.04 vs 1.38, and b64 is 1.65
+vs 1.39. The min(m,n) >= 32 floor: f NT 16x16x256 is 0.62 on Tiled16 vs 1.39, and
+c CN 16x16x256 is 0.93 vs 2.48. The panel-shaped tile: f NT 256x32x96 is 1.69 on 128x32
+vs 2.07 on 64x64, and 256x256x32 (pad 0) 1.28 vs 1.15. Cells that do not move: f NT and
+TN 256x32x256 (K32), c NC 256x32x256 and c CN 32x256x256 (existing 128x32 / 32x128
+selector), and f 16x16x256.
+
+Still behind cuBLAS: float NT/TN at a strided ld (1.2-1.7; e.g. NT 256x40x64 1.78 and
+256x32x96 1.51, both from 4.5-5x on BASE), and panel cells near the 128-CTA floor
+(256x32x96 b64 1.81, where the vendor is launch-bound at 14 us). The float K32 NT kernel
+at `LD_PAD=1` (256x32x256 NT 2.02; 128x32 NC measured 1.35 there, pad 0 a tie 0.69 vs
+0.71). cfloat 32x32 transposed, which has no 32x32 transposed tile (1.45-1.91).
+
+### gemm result
+
+Selector-reached kernels were confirmed per cell by `BATCHLAS_KERNEL_TRACE`. Tests
+are in tests/gemm_tests.cc: `SmallWideNNTilesMatchTiled16` (ragged m, n, k from 1 to
+257, sub-view ld, both betas), `SelectorChosenSmallTilesMatchTiled16` (auto-selected
+at batch 1024), `SmallWideSaturatingBatchIsBitIdentical` (batch 2048),
+`Sm120TransposedFallbackMatchesTiled16`, and the two selector straddle tests. Armed
+breaks: dropping the epilogue's `col >= n` guard turns exactly the shapes with a
+partial n tile red (whole-tile shapes stay green). Staging k one past its end turns
+exactly the k % 16 != 0 shapes red. Moving the transposed fallback's floor to
+`ctas > 128` and the float 16-tile deep-k edge to `k >= 769` (one build) turns red
+only the six exact-edge assertions of the two straddle tests (f NC/CN panel at b64,
+f/c 64x64x16 at b128, f 16x16x768 b1024); every correctness test stays green.
+
+Still losing in the NN native walk: float 8x8x1024 1.10, float 100x100x64 1.28
+(128x128 at 3/4 fill; no better tile measured), float 65x65x8 1.29 (128x128K8, BASE
+1.48), float 64x100x512 1.22 (64 wide tile, BASE 1.59), the deep-k float small cells
+below 1536/2048 tiles (1.2-2.9, see "Tiles in flight at deep k"), cfloat 32x32x1024 1.07, cfloat 256^3
+1.13 and the other large cfloat squares (1.11-1.17, not touched: gemm-7 territory).

@@ -349,6 +349,10 @@ losses**; cdouble `ctas >= 128` admits 24 cells, **worst 1.08×, zero losses**. 
 The `min_dim >= 256` arm is kept ahead of this one so nothing routing to the kernel today stops doing so; 256³b4 and 512³b1 were verified
 unchanged by trace.
 
+On sm_120 this gate is replaced for complex<float> (k no longer counts) and complex<double> (a 16x16 tile): see
+[blackwell.md#gemm-small-tiles](blackwell.md#gemm-small-tiles) and [#gemm-complex-double](blackwell.md#gemm-complex-double).
+Everything in this section is 4090 evidence.
+
 ### Wide-scalar transposed tiles
 
 `src/sycl/gemm/register_wide_transposed.hh` — the P6 family, now **measured**. Four variants, 4 types, 16 kernels. Two of them are
