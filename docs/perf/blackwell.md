@@ -75,6 +75,10 @@ The vector sB reads alone (`lp_ab_v1.csv`, 4 reps) gave float n=256 0.95 -> 1.11
 cfloat n=256 0.71 -> 0.89; the local-space `sA` views took cfloat n=256 on to 0.99.
 Not done: double-buffering sB to drop the second barrier (ncu attributed 54% of stall
 cycles to barriers before this change).
+Trap: sB is stored as the scalar type and read back as `sycl::vec<float,4>`, which is
+type punning. It is correct only because barrier B1 sits between the stores and the
+loads; a double-buffered sB that drops or moves B1 must do the stores through the vector
+type as well.
 
 `VectorSbReadIsBitIdenticalAcrossPackingAndBatch` arms it. Planted breaks, each rebuilt
 and run over all of `potrf_tests`: a float vector width for every type turns red only the
@@ -91,7 +95,8 @@ measured on the new kernel, final routing:
   pinned LPanel won in every rep from 224 to 320; at 352 LPanel is 0.72 (non-winner). n=192 at b=2048 ties (1.00, cuSOLVER is
   unusually fast at that batch; 1.23 at b=4096).
 - cfloat edge 128: Auto 1.51 (64), 1.19 (128); pinned LPanel at 144 is 0.98-1.02, 160 1.01, 192 0.78 and
-  256 0.99 (non-winners).
+  256 0.99 (non-winners). 144 and 160 are ties, not losses: the edge could sit anywhere in 128-160,
+  and 128 is the conservative choice.
 
 sm_89 (and `cuda_cc` 0) keeps 256 for both types.
 
@@ -102,7 +107,9 @@ LPanel vs Blocked (retuned constants, ms): 288 1.66 vs 1.97, 320 2.16 vs 2.44, 3
 vs 1.55, 384 2.31 vs 1.77, 512 4.47 vs 3.49. So float LPanel stops at 320, and only when
 Blocked can take the shape. cfloat LPanel matches or beats Blocked to its ceiling (256
 2.18 vs 3.01, 288 2.09 vs 2.14, 320 2.60 vs 2.58, 368 1.92 vs 2.11), so it is not
-capped. This reverses the diagnosis, which was measured on the scalar kernel.
+capped. The margin is real at 256 and 368 only; 288 and 320 are ties within noise,
+so "not capped" rests on LPanel never losing, not on it winning everywhere. This
+reverses the diagnosis, which was measured on the scalar kernel.
 
 Native arm, `r` BASE -> new: float 352 0.62 -> 0.88, 384 0.66 -> 0.99, 512 0.73 ->
 1.12; cfloat 368 0.54 -> 0.72.
@@ -121,7 +128,12 @@ The `BATCHLAS_POTRF_NB`/`_W` overrides on the BASE build, blocked vs vendor `r`:
 | 1024 (128) | 1.26-1.29 | 1.01 | | 1.30-1.32 |
 
 W=64 wins at every order; nb=64 wins up to 512 and nb=128 above it, so sm_120 float uses
-nb 64 through n=512 and 128 above, W 64. cfloat (96/32) did not move: 64/64 was 0.62 vs
+nb 64 through n=512 and 128 above, W 64. The switch point is bracketed only by 512
+(64 wins) and 768 (128 wins); 576-704 were not measured, so where in (512, 768) the
+crossover really lies is unknown and 512 is a guess. `PotrfBlockedTest.ResidualAboveTheCtaCeiling` judges
+each order against the blocking the driver uses at that order and asserts that the
+large-order pair ran (on sm_120 float, n=647 and 768 run 128/64); before, every size it
+chose was at most 512 and so ran 64/64. cfloat (96/32) did not move: 64/64 was 0.62 vs
 0.68 at 256, 0.75 vs 0.79 at 320, 0.89 vs 0.90 at 512, so it keeps the sm_89 pair. fp64
 was not swept and is unchanged.
 

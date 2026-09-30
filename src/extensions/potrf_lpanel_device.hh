@@ -97,7 +97,7 @@ inline void potrf_lpanel_body(const sycl::nd_item<1>& it,
                 static_assert((NB * sizeof(D)) % 16 == 0, "sB column must be whole vectors");
                 auto sBv = sycl::address_space_cast<sycl::access::address_space::local_space,
                                                     sycl::access::decorated::no>(
-                    reinterpret_cast<V*>(sB));
+                    reinterpret_cast<V*>(sB));  // TRAP: D-stored, V-read; only B1 orders them
 #pragma unroll
                 for (int kk = 0; kk < NB; ++kk) {
                     D col[NB];
