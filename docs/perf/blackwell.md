@@ -560,6 +560,13 @@ float n256 is flat (0.3%). Every nrhs>1 cell is within 0.4%, with no consistent 
 posv (native, potrf + fused potrs) is unchanged: float n256 r1 b1024 1.443 -> 1.443,
 cfloat n128 r1 b4096 1.597 -> 1.597, float n256 r4 1.392 -> 1.391. potrf dominates it.
 
+The NR == 1 gain is a float/cfloat result, not a general one. An independent review re-run
+(same harness, same card) reproduced the float and cfloat wins (float n64 b16384
+0.3256 -> 0.3205, also 4 of 4) and found fp64 flat: double n128 b4096 0.5586 -> 0.5601
+(+0.3%, new faster in 1 of 4 passes; vendor 1.75), cdouble n64 b16384 2.1045 -> 2.1052
+(vendor 5.52). Pre-existing and unchanged by this commit: posv double n128 r1 b4096 runs
+native 7.14 ms against vendor 6.14 ms, in BASE as well.
+
 Deliberate break: `c0 = nrhs` at NR == 1, i.e. no sub-group solves the single column.
 It was applied to one kernel at a time, with getrf/gesv/posv/potrf_tests run on GPU 3:
 
@@ -602,7 +609,19 @@ Effect on the sm_89 cap. The margin is +8 and allocation is rounded up to 8, so
 only three caps move, all toward a narrower launch: cdouble NoTrans nrhs 2..4
 1024 -> 896 lanes, double NoTrans nrhs 5..8 896 -> 768, and double potrs nrhs 5..8
 768 -> 640. The fused width only reaches the cap at n >= 1026 (wg = 1024), so no smaller order is
-touched. Those cells were not timed, because this machine has no sm_89. The in-library probe
+touched. Those cells were not timed, because this machine has no sm_89.
+
+This is a deliberate change of 4090 behaviour, and it applies to `cuda_cc == 0` as well:
+every non-sm_120 device (a 4090, and any non-CUDA GPU) reads these sm_89 rows. It is the
+one place in this package where cc 89 / cc 0 behaviour moves. Of the three caps, only one
+fixes a launch the driver would refuse: the icpx-built double potrs nrhs 5-8 kernel uses
+92 registers (88 before the round-robin), and at 768 lanes that is
+ceil(24/4) * 32 * 96 = 18432 > 16384, an abort. The other two narrowings restore the +8
+margin policy for launches that are legal today: cdouble NoTrans nrhs 2-4 at 54/56
+registers fits 1024 lanes, and double NoTrans nrhs 5-8 at 61 fits 1024. They are
+conservative, and they cost the 4090 some width at n >= 1026 for those two kernels.
+
+The in-library probe
 (`probe89.sh`, the link line re-targeted to sm_89) printed no ptxas counts for this
 library, in the LU round or this one. The evidence is therefore standalone TU compiles.
 
