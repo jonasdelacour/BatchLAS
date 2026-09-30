@@ -579,6 +579,18 @@ It was applied to one kernel at a time, with getrf/gesv/posv/potrf_tests run on 
 
 The restored file was md5-identical to the pre-break copy.
 
+That break proves the NR == 1 path is reached. It does not prove the sub-group-0 guard is
+needed. A second break tests the guard: `c_active = true` at NR == 1 while keeping
+c0 = 0 and cs = 1, so every sub-group solves column 0 at the same time. It was applied to
+each kernel in turn (NoTrans, Trans, potrs), with all four binaries rebuilt and run on
+GPU 3. Every result was **green**: getrf 208, gesv 40, posv 40, potrf 209 passed. The
+race writes identical values. A wrong answer needs one sub-group to load its column only
+after another has stored the solved one, which is a full jb-step recurrence later, and
+that never happened in these runs (the review also ran the fused tests 20 times with
+`--gtest_repeat`, all green). So the suite does not guard against this race. It is
+timing-dependent, and no deterministic test for it was written. The guard is there
+because of the data race, not because of an observed failure.
+
 ### LU getrs fused sm89 rows
 
 The round-robin commit changed the kernel bodies under the sm_89 `GetrsFusedRegs`
