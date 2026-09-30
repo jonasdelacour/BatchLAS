@@ -3,6 +3,7 @@ import os
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -334,6 +335,94 @@ class Compare(unittest.TestCase):
         fig = fig_speedup_n(paired(cmp.rows()), "stedc", cmp.config["provenance"])
         self.assertIn("Build aaaaaaa", fig.axes[0].get_ylabel())
         plt.close(fig)
+
+
+class RunEndpoint(unittest.TestCase):
+    """The page's Run button: a child that dies at startup must come back as an error, not "idle"."""
+
+    def post_run(self, child: str):
+        import json
+        import threading
+        import urllib.error
+        import urllib.request
+        from http.server import ThreadingHTTPServer
+        from unittest import mock
+        import server
+        with tempfile.TemporaryDirectory() as tmp:
+            exe = os.path.join(tmp, "child.sh")
+            with open(exe, "w") as f:
+                f.write("#!/bin/sh\n" + child + "\n")
+            os.chmod(exe, 0o755)
+            server.Handler.root = server.Path(tmp) / "runs"
+            server.Handler.build_dirs, server.Handler.read_only, server.Handler.token = [], False, ""
+            httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+            threading.Thread(target=httpd.serve_forever, daemon=True).start()
+            body = json.dumps({"ops": ["potrf"], "types": ["float"], "preset": "quick", "campaign": "t"}).encode()
+            req = urllib.request.Request(f"http://127.0.0.1:{httpd.server_port}/api/run", data=body, method="POST")
+            try:
+                with mock.patch.object(sys, "executable", exe), mock.patch("runner.detect_gpus", return_value=[]):
+                    try:
+                        with urllib.request.urlopen(req) as r:
+                            return json.loads(r.read())
+                    except urllib.error.HTTPError as e:
+                        return json.loads(e.read())
+            finally:
+                httpd.shutdown()
+                httpd.server_close()
+                p = server._procs.pop("t", None)
+                if p and p.poll() is None:
+                    p.kill()
+                    p.wait()
+
+    def test_a_child_that_crashes_at_startup_is_reported(self):
+        j = self.post_run("echo \"ModuleNotFoundError: No module named 'pandas'\"; exit 1")
+        self.assertNotIn("ok", j)
+        self.assertIn("exited immediately (code 1)", j["error"])
+        self.assertIn("pandas", j["error"])
+
+    def test_a_child_that_keeps_running_is_ok(self):
+        self.assertEqual(self.post_run("sleep 30"), {"ok": True, "campaign": "t"})
+
+
+class Rerender(unittest.TestCase):
+    """The page's Re-render button: progress, refusal of a second click, and the failure reason."""
+
+    def rerender(self, child: str, name: str):
+        import time
+        from unittest import mock
+        import server
+        from store import Campaign
+        exe = os.path.join(self.tmp.name, f"{name}.sh")
+        with open(exe, "w") as f:
+            f.write("#!/bin/sh\n" + child + "\n")
+        os.chmod(exe, 0o755)
+        camp = Campaign.create(self.tmp.name, name, {"ops": ["potrf"], "types": ["float"], "backend": "cuda"})
+        with mock.patch.object(sys, "executable", exe):
+            first = server._rerender(camp)
+            second = server._rerender(camp)
+        during = server.render_state(camp)
+        server._rendering[name][0].wait(10)
+        time.sleep(0.05)
+        return first, second, during, server.snapshot(Path(self.tmp.name), name)["render"]
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_success_and_refusal_while_active(self):
+        first, second, during, after = self.rerender("sleep 1", "good")
+        self.assertEqual(first, ({"ok": True}, 200))
+        self.assertEqual(second[1], 409)
+        self.assertTrue(during["active"])
+        self.assertEqual((after["active"], after["ok"], after.get("error")), (False, True, None))
+
+    def test_failure_names_the_error(self):
+        *_, after = self.rerender("sleep 1; echo 'RuntimeError: latex was not able to process'; exit 3", "bad")
+        self.assertFalse(after["active"] or after["ok"])
+        self.assertIn("code 3", after["error"])
+        self.assertIn("latex was not able", after["error"])
 
 
 if __name__ == "__main__":
