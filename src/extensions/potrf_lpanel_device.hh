@@ -85,11 +85,27 @@ inline void potrf_lpanel_body(const sycl::nd_item<1>& it,
                                  ? Ag[row + static_cast<std::ptrdiff_t>(k + kk) * ldg]
                                  : D{};
                 }
+                // Column kk of sB is lane-uniform: read it as 16-byte LOCAL-space vectors
+                // (one LDS.128 broadcast per 16 bytes), not NB scalar/generic loads. Each
+                // rS[i] still sums kk in ascending order, so the result is bit-identical.
+                // evidence: docs/perf/blackwell.md#potrf-lpanel-vector-sb
+                using V = sycl::vec<float, 4>;
+                constexpr int VW = 16 / static_cast<int>(sizeof(D));
+                static_assert((NB * sizeof(D)) % 16 == 0, "sB column must be whole vectors");
+                auto sBv = sycl::address_space_cast<sycl::access::address_space::local_space,
+                                                    sycl::access::decorated::no>(
+                    reinterpret_cast<V*>(sB));
 #pragma unroll
-                for (int i = 0; i < NB; ++i) {
+                for (int kk = 0; kk < NB; ++kk) {
+                    D col[NB];
 #pragma unroll
-                    for (int kk = 0; kk < NB; ++kk) {
-                        sycl_device::fma_acc(rS[i], rA[kk], sB[i + kk * NB]);
+                    for (int v = 0; v < NB / VW; ++v) {
+                        const V x = sBv[(kk * NB) / VW + v];
+                        __builtin_memcpy(&col[v * VW], &x, 16);
+                    }
+#pragma unroll
+                    for (int i = 0; i < NB; ++i) {
+                        sycl_device::fma_acc(rS[i], rA[kk], col[i]);
                     }
                 }
             }
