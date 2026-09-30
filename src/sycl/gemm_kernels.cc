@@ -682,8 +682,11 @@ KernelVariant select_kernel_variant(const MatrixView<T, MatrixFormat::Dense>& A,
         if (sm120 && std::is_same_v<Real, float>) {
             if (small16 && max_dim > 8) return KernelVariant::Tiled16x16RegisterK16Wide;
             if (small32) return KernelVariant::Tiled32x32RegisterK16Wide;
-            // k < 32 is launch-bound near the floor: 33x33x8 and 64x64x8 lose at 64-128 CTAs.
-            if (std::min(m, n) >= 32 && ctas >= (k >= 32 ? kMinCtas : 256)) {
+            // k < 32 is launch-bound near the floor: it needs 2^19 output elements
+            // in flight (33x33x8 b256 and 64x64x8 b64 lose below).
+            const bool enough = k >= 32 ? ctas >= kMinCtas
+                                        : static_cast<int64_t>(m) * n * A.batch_size() >= (1 << 19);
+            if (std::min(m, n) >= 32 && enough) {
                 return KernelVariant::Tiled64x64RegisterK16Wide;
             }
         }

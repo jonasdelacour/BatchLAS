@@ -2557,11 +2557,12 @@ TEST(GemmDispatchPolicyTest, Sm120SmallTilesAndTheirEdges) {
     EXPECT_EQ(c(8, 32, 64, kBw), KernelVariant::Tiled16x16RegisterK16Wide);
     EXPECT_EQ(c(17, 17, 8, kBw), KernelVariant::Tiled32x32RegisterK16Wide);
     EXPECT_EQ(c(32, 32, 256, kBw), KernelVariant::Tiled32x32RegisterK16Wide);
-    // k < 32 needs 256 CTAs, k >= 32 keeps the 4090's 64.
-    EXPECT_EQ(c(33, 33, 8, kBw, 256), KernelVariant::Tiled64x64RegisterK16Wide);
-    EXPECT_EQ(c(33, 33, 8, kBw, 255), KernelVariant::Direct);
-    EXPECT_EQ(c(33, 33, 31, kBw, 256), KernelVariant::Tiled64x64RegisterK16Wide);
-    EXPECT_EQ(c(33, 33, 31, kBw, 255), KernelVariant::Direct);
+    // k < 32 needs m * n * batch >= 2^19, k >= 32 keeps the 4090's 64 CTAs.
+    EXPECT_EQ(c(64, 64, 8, kBw, 128), KernelVariant::Tiled64x64RegisterK16Wide);
+    EXPECT_EQ(c(64, 64, 8, kBw, 127), KernelVariant::Direct);
+    EXPECT_EQ(c(33, 33, 31, kBw, 482), KernelVariant::Tiled64x64RegisterK16Wide);
+    EXPECT_EQ(c(33, 33, 31, kBw, 481), KernelVariant::Direct);
+    EXPECT_EQ(c(33, 33, 8, kBw, 256), KernelVariant::Direct);
     EXPECT_EQ(c(33, 33, 32, kBw, 64), KernelVariant::Tiled64x64RegisterK16Wide);
     EXPECT_EQ(c(33, 33, 32, kBw, 63), KernelVariant::Direct);
     EXPECT_EQ(c(1024, 1024, 8, kBw, 4), KernelVariant::Tiled64x64RegisterK16Wide);
