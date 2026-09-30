@@ -8,6 +8,7 @@
 
 #include "../math-helpers.hh"
 #include "../queue.hh"
+#include "syev_arch_tuning.hh"
 
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-local-accessor-helpers.hh>
@@ -94,17 +95,18 @@ inline bool use_device_latrd() { return latrd_impl() == LatrdImpl::Device; }
 // n=1024/128 is a dead heat, 475.5 vs 475.7 ms) -- which is the mechanism
 // working as designed, since once the batch alone saturates the SMs there is no
 // starvation left for the extra work-groups to absorb.
-inline int64_t latrd_grid_min_n() {
-    return batchlas::settings().geometry.latrd_grid_min_n;
+inline int64_t latrd_grid_min_n(Queue& q, bool is_complex, bool is_double) {  // 768 = sm_89; evidence: docs/perf/blackwell.md#latrd-grid-min-n
+    return batchlas::syev_tuning::latrd_grid_min_n(q.device().cuda_compute_capability(),
+                                                   is_complex, is_double);
 }
 
 // Grid path is the default above latrd_grid_min_n(); BATCHLAS_LATRD_IMPL still
 // forces either path explicitly at any size, which is what makes the two an
 // intra-run A/B (=legacy restores the old behaviour everywhere).
-inline bool use_grid_latrd(int64_t n) {
+inline bool use_grid_latrd(Queue& q, int64_t n, bool is_complex, bool is_double) {
     const char* v = batchlas::settings().selection.latrd_impl.get();
     if (v && *v) return latrd_impl() == LatrdImpl::Grid;
-    return n >= latrd_grid_min_n();
+    return n >= latrd_grid_min_n(q, is_complex, is_double);
 }
 
 // ---------------------------------------------------------------------------
@@ -1260,7 +1262,8 @@ Event latrd_lower_panel_batched(Queue& q,
         return latrd_lower_panel_batched_wg_device<T, WG, false>(q, a, e, tau, w);
     };
 
-    if (use_grid_latrd(n)) {
+    if (use_grid_latrd(q, n, internal::is_complex<T>::value,
+                       std::is_same_v<typename base_type<T>::type, double>)) {
         const GridLaunch gl = choose_grid_launch(q, n, a.batch_size());
         if (gl.groups > 1) {
             return latrd_lower_panel_batched_grid_dispatch<T>(q, a, e, tau, w, fuse_trailing_update, gl);
