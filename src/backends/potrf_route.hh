@@ -2,7 +2,7 @@
 
 // POTRF shape builder: device and environment queries live here so the route table reads
 // only its arguments. Do not add src/queue.hh or <sycl/sycl.hpp> -- the vendor-free facade
-// includes this. evidence: docs/perf/potrf.md#what-ships
+// includes this. evidence: docs/perf/potrf.md#potrf-what-ships
 
 #include <batchlas/blas/dispatch/route_env.hh>
 #include <batchlas/blas/dispatch/route_potrf.hh>

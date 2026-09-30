@@ -20,7 +20,7 @@ A capability ladder, not a preference: CTA cannot serve order > 32, so the vendo
 
 `supports()` (`route_trsm.hh:35-60`) holds correctness gates only — `is_gpu`, `!heterogeneous_batch` (the shape builder **does** populate it, at `src/backends/trsm_route.hh:51`; the claim that it never did was stale, see debt 12), `order >= 1 && q >= 1 && batch >= 1`, per-arm capacity. Nothing type-dependent, no speed number: a threshold in `supports()` makes a vendor-free `trsm` **throw**, not run slower. `Algorithm::Auto` is deliberately unsupported for native, since two native arms mean a bare "native" names neither. Capacities, all four types (`src/sycl/trsm_native.cc:529-532`, `:549-552`): `trsm_cta_max_n<T>() == 32` and `trsm_blocked_available<T>() == true`.
 
-### The `preferred()` window as implemented
+### TRSM: the `preferred()` window as implemented
 
 Quoted from `include/batchlas/blas/dispatch/route_trsm.hh:64-80`:
 
@@ -296,7 +296,7 @@ Suite state at the end of WP3: `trsm_tests` 91/91 vendor-present; vendor-free 59
 
 ---
 
-## What the spec got wrong
+## TRSM: what the spec got wrong
 
 `WP3_TRSM_SPEC.md` was written against a pre-WP1/WP2 tree; `WP3_TRSM_SPEC_CORRECTIONS.md` records 27 findings that survived adversarial refutation. Beyond the items already covered (the SLM size overrun, the `n_cta` derivation, the starvation guard, the ctest command):
 

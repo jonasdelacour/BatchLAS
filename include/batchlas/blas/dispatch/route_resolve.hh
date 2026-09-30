@@ -101,7 +101,7 @@ inline Route resolve_route_uninstrumented(Route forced, const Shape& s,
 }
 
 // The instrumented entry point, and the ONLY one ops should call; `s` is sliced
-// to OpShape on purpose. evidence: docs/design/vendor-independence.md#the-coverage-instrument
+// to OpShape on purpose. evidence: docs/design/vendor-independence.md#vendor-independence-the-coverage-instrument
 template <Op O, typename T, typename Shape>
 inline Route resolve_route(Route forced, const Shape& s, bool vendor_available = true) {
     const Route chosen = resolve_route_uninstrumented<O, T, Shape>(forced, s, vendor_available);

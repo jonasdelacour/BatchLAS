@@ -2,7 +2,7 @@
 
 // GEQRF shape builder: device and environment queries live here so the route table sees
 // a plain struct. Do not add src/queue.hh or <sycl/sycl.hpp> -- the vendor-free facade
-// includes this header. evidence: docs/perf/qr.md#route-arms
+// includes this header. evidence: docs/perf/qr.md#qr-route-arms
 
 #include <batchlas/blas/dispatch/route_env.hh>
 #include <batchlas/blas/dispatch/route_geqrf.hh>

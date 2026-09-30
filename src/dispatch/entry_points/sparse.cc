@@ -58,7 +58,7 @@ Event spmm(Queue& ctx,
     // type in EVERY build (complex<float> excepted when transB is transposed); the
     // transposed arm stays vendor-first by measurement. This is not a forced-only
     // route -- it moves the default.
-    // evidence: docs/perf/spmm.md#the-preferred-window-as-implemented
+    // evidence: docs/perf/spmm.md#spmm-the-preferred-window-as-implemented
     if (dispatch::is_native(route)) {
         // supports() refuses every non-CSR format, forced routes included.
         if constexpr (MFormat == MatrixFormat::CSR) {

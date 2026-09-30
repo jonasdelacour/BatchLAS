@@ -2,7 +2,7 @@
 // per SubGroupPartition<N>, lane r owning row r in registers. Zero local memory, zero
 // barriers, every cross-lane value a sub-group shuffle; the shared load/pad/store helpers
 // are in tiny_device.hh. It stays in EXTENSIONS_CTA_SOURCES with potrf_cta.cc, the same
-// device-code cluster. evidence: docs/perf/potrf.md#the-tiny-tier
+// device-code cluster. evidence: docs/perf/potrf.md#potrf-the-tiny-tier
 //
 // Why no local-memory scratch. Each of the two things a column publishes -- the pivot and
 // column j of L -- has exactly ONE producer lane, so an indexed shuffle delivers it. The
@@ -39,7 +39,7 @@ using tiny_native::kTinySubGroups;
 using tiny_native::kTinyWgSize;
 
 // A flat compile-time constant, not a budget walk: the tier owns no local memory.
-// evidence: docs/perf/potrf.md#the-tiny-tier
+// evidence: docs/perf/potrf.md#potrf-the-tiny-tier
 template <typename T>
 struct PotrfTinyCap { static constexpr int kMaxN = 32; };
 template <>
@@ -47,7 +47,7 @@ struct PotrfTinyCap<std::complex<double>> { static constexpr int kMaxN = 16; };
 
 // A LAUNCH gate: violating it aborts the enqueue. What binds is the SUB-PARTITION file --
 // 64 lanes is 2 warps in one partition, 1 x 32 x 176 = 5,632 of its 16,384. The gate that
-// actually bites here is the probe's STACK FRAME column. evidence: docs/perf/potrf.md#the-tiny-tier
+// actually bites here is the probe's STACK FRAME column. evidence: docs/perf/potrf.md#potrf-the-tiny-tier
 constexpr int kTinyWorstProbedRegs = 176;
 static_assert(resident::sm89_fits(kTinyWorstProbedRegs, kTinyWgSize),
               "kTinyWorstProbedRegs at kTinyWgSize overflows a register sub-partition; "
@@ -122,7 +122,7 @@ Event potrf_tiny_launch(Queue& ctx,
 
                 // The order guard is a PREDICATE, never a `break`: a runtime break
                 // defeats the unroll at N >= 16, after which rA[j] is a dynamic index.
-                // evidence: docs/perf/potrf.md#the-tiny-tier
+                // evidence: docs/perf/potrf.md#potrf-the-tiny-tier
 #pragma unroll
                 for (int j = 0; j < N; ++j) {
                     const bool col_live = (j < n);

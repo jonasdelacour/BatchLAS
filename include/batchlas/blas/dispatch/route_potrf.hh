@@ -122,7 +122,7 @@ struct RouteTable<Op::potrf, T> {
         return found ? first_supported : Route{};
     }
 
-    // Native-vs-native tie-break. evidence: docs/perf/potrf.md#native_tier_preferred
+    // Native-vs-native tie-break. evidence: docs/perf/potrf.md#potrf-native_tier_preferred
     static bool native_tier_preferred(Route r, const PotrfShape& s) {
         if (!is_native(r)) return true;
 

@@ -180,7 +180,7 @@ inline void getf2_panel_device(sycl::nd_item<1> it, Tile A, int m, int n, int km
         phase_barrier();                                               // B3
 
         // Flattened so the work-group saturates when one extent is short; the two
-        // runtime divisions beat a power-of-two split (docs/perf/lu.md#negative-results).
+        // runtime divisions beat a power-of-two split (docs/perf/lu.md#lu-negative-results).
         const int mm = m - k - 1;
         const int nn = n - k - 1;
         if (mm > 0 && nn > 0) {

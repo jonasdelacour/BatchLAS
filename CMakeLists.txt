@@ -11,6 +11,7 @@ include(cmake/BatchLASDependencies.cmake)
 include(cmake/BatchLASGeneratedHeaders.cmake)
 include(cmake/BatchLASTargetHelpers.cmake)
 include(cmake/BatchLASPackaging.cmake)
+include(cmake/BatchLASDocs.cmake)
 
 add_subdirectory(src)
 
@@ -28,6 +29,10 @@ endif()
 
 if(BATCHLAS_BUILD_PYTHON)
     add_subdirectory(python)
+endif()
+
+if(BATCHLAS_BUILD_DOCS)
+    batchlas_add_docs_target()
 endif()
 
 batchlas_install_package()

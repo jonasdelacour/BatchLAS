@@ -1,7 +1,7 @@
 #pragma once
 
 // Native batched GEQRF: the CTA tier and the blocked driver, whose panel leaf IS the CTA device
-// function -- both TUs must share one device-code cluster. evidence: docs/perf/qr.md#route-arms
+// function -- both TUs must share one device-code cluster. evidence: docs/perf/qr.md#qr-route-arms
 
 #include "../util/internal-api.hh"
 #include "../util/resident_capacity.hh"

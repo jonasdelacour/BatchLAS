@@ -3,7 +3,7 @@
 // against a global accessor -- correctness fixes belong there. preferred() ships a per-type
 // order-floor plus tall-panel window and best_native_tier() can resolve it to THIS arm, so it
 // is reachable in a vendor build, not only vendor-free or under a pin.
-// evidence: docs/perf/qr.md#route-arms
+// evidence: docs/perf/qr.md#qr-route-arms
 
 #include "geqrf_native.hh"
 #include "geqrf_cta_device.hh"
@@ -362,7 +362,7 @@ bool geqrf_cta_fits(int m, int n, std::size_t slm_budget_bytes, int min_blocks_p
 // The RESIDENCY predicate, at the whole budget: "can this panel be held in local memory
 // at all". The blocked driver's leading panel is chosen with it, because a panel that
 // stops being resident streams from global memory -- a large-n regression, not an
-// occupancy win. evidence: docs/perf/qr.md#the-panel-leaf-is-not-the-tier-ceiling
+// occupancy win. evidence: docs/perf/qr.md#qr-the-panel-leaf-is-not-the-tier-ceiling
 template <typename T>
 bool geqrf_leaf_fits(int m, int n, std::size_t slm_budget_bytes) {
     return geqrf_cta_fits<T>(m, n, slm_budget_bytes, 1);

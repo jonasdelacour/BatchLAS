@@ -1,4 +1,4 @@
-# benchviz: BatchLAS vs vendor LAPACK and BLAS
+# benchviz: BatchLAS vs vendor LAPACK and BLAS {#benchviz}
 
 This tool measures and plots BatchLAS against the vendor LAPACK library the build links:
 cuSOLVER/cuBLAS on CUDA, rocSOLVER/rocBLAS on ROCm. It covers every LAPACK op that has a

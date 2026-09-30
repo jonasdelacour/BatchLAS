@@ -69,7 +69,7 @@ The stale sentence survives in more shipped sources than the exploration notes, 
 
 **What clauses A and B actually moved, captured rather than reasoned about** (`route_diff.sh`, before/after with `preferred()` the only difference, `ctest -LE slow` both sides, `wp6_perf/README.md`): in the cuBLAS-present build, **27 decisions** moved `vendor:auto -> native:cta` -- float x18, double x3, cfloat x3, cdouble x3 -- and **`getrs` was the only op touched**, over 3600 decisions in 4012 rows. The vendor-free build moved 14, all at `Backend::AUTO`. A window that changes nothing is the failure mode this instrument exists to catch. [The `getrf`, `getri` and clause-C flips landed in the later closure pass; no equivalent `route_diff.sh` capture for them was found under `experiments/` -- unverified.]
 
-### `native_tier_preferred()`
+### LU: `native_tier_preferred()`
 
 The native-vs-native tie-break, consulted **only** in the vendor-free walk, so declaring it moves nothing in a vendor-present build. That is exactly why it is the right instrument and `preferred()` is not: `preferred()` runs above that walk regardless of `vendor_available`, so a window written to fix the tier choice would also drag vendor-present traffic onto that tier.
 
@@ -131,7 +131,7 @@ Individual collapses: `getrf` float n=2048 7.31 -> **2.33x**; `getri` float n=20
 
 **The saturation caveat is not uniform, and the WP6-era blanket form ("every n >= 512 ratio is against an unsaturated vendor") is wrong in both directions.** `route_getri.hh` corrects it: at n=512 the vendor IS saturated for all four types (us/item moves under 0.2% over the last doubling); at n=2048 it is unsaturated for all four by 19-50% per doubling. That is why the shipped `getri` window quotes n=2048 at batch 128 and 256 and never at the batch-32 grid schedule, where float n=2048 reads 33.9x and means nothing.
 
-**The roofline says which half is closed.** With each arm at its own best batch, cuBLAS runs cdouble `getrf` at 90% and 91% of this card's FP64 peak at n=512-1024 -- there is no 2x to find. For FP32 *both* arms sit at 1-10% of peak, and the cause is a decomposition, not a slow kernel (see [negative-results](#negative-results) item 1).
+**The roofline says which half is closed.** With each arm at its own best batch, cuBLAS runs cdouble `getrf` at 90% and 91% of this card's FP64 peak at n=512-1024 -- there is no 2x to find. For FP32 *both* arms sit at 1-10% of peak, and the cause is a decomposition, not a slow kernel (see [negative-results](#lu-negative-results) item 1).
 
 ## Measured boundaries
 
@@ -355,7 +355,7 @@ DRAM fraction of 1008 GB/s at nrhs=1, per cell:
 
 The original claim "82% of DRAM peak, the ceiling is reached" holds only in the n=256..512 band. Two named mechanisms, both open work rather than a ceiling: at large n the CTA count **is** the batch (32 work-groups on 128 SMs at n=2048); at small n `nb=16` leaves the block solve to 16 lanes of one sub-group.
 
-## Negative results
+## LU: negative results
 
 Everything here was built or measured and then rejected. Re-deriving any of it is wasted work.
 
@@ -387,10 +387,10 @@ spellings in it are load-bearing, and each is a wrong answer or a launch failure
 
 * **The pivot search is a sub-group butterfly plus a scan over 32 SLM slots**, never
   `sycl::reduce_over_group`. The collective fails to launch, deterministically, near 48 KB
-  of local memory -- see [the 48 KB launch hole](#the-48-kb-launch-hole).
+  of local memory -- see [the 48 KB launch hole](#lu-the-48-kb-launch-hole).
 * **The pivot metric is LAPACK's `cabs1`** (|Re| + |Im|), not the modulus cuBLAS uses for
   complex, so a pivot test must take the HOST as oracle -- see
-  [correctness findings](#correctness-findings).
+  [correctness findings](#lu-correctness-findings).
 * **`info` is exact-zero, 1-based, global and first-failure-wins**, with no epsilon pivot
   floor. An epsilon floor would make a singular matrix succeed silently.
 * **Barriers B1..B4 sit at the top level of the `k` loop**, whose trip count is
@@ -403,7 +403,7 @@ addresses its tile through a raw pointer because G matrices share one `local_acc
 each needs its own base; the launcher pads `ld` ODD, because a row exchange walks `wg`
 work-items at stride `ld` and an even `ld` puts them all in one local-memory bank.
 
-## Correctness findings
+## LU: correctness findings
 
 * **The `info` zero-fill raced the panel that reads it, in BOTH native `getrf` tiers.** `getf2_panel_device` *reads* `info[b]` to keep first-failure-wins across panels, so the fill is a read-after-write dependence, not a pure output. On an out-of-order queue (the public API) the panel read the caller's pre-call garbage and wrote it back: **6,979 of 1,638,400 items on the CTA tier and 3,743 of 983,040 on the blocked tier returned the caller's own `-12345`**. Fixed with the `if (!ctx.in_order()) ctx.wait();` guard every other dependent boundary in the family already carried; re-measured 0 wrong of 1,638,400 and 0 of 983,040. Guarded by `LuTest.InfoFillIsOrderedAheadOfThePanelOnAnOutOfOrderQueue`; deleting the guard from both tiers turns it RED (4,682 of 1,638,400 CTA items, 4,370 of 491,520 blocked items). **The first version of that test stayed green with both guards deleted**, because a 300 MB host copy serialised the queue and closed the window it was testing -- [unverified: the ordinal is this page's own, not the sources'. `tests/potrf_tests.cc:641-908` is recorded as the repository's *fifth*, and `getrs_forward` below as the "sixth-plus"; no source numbers this one] the seventh blind guard in this repository, and the second written in the same change as the fix it guards.
 * **`supports()` never gated on `s.backend`, so `Backend::NETLIB` on a GPU queue could select the native arm.** The native kernels write and read **packed 1-based int32** in the caller's `int64` pivot span (matching cuBLAS and rocSOLVER); netlib writes and reads **genuine int64**. Measured before the gate: `||A*C - I||_F / n = 5.32e-01` with `info == 0`, against 5.15e-07 when both arms agree -- silent, no throw, no flag, and invisible to the suite because its NETLIB rows run on a CPU queue. Now one predicate in each of the three tables, enumerated by the disagreeing backend rather than by an allow-list (so a new GPU backend that packs int32 needs no edit), plus a `RouteLuPivotFormat` test with a **backend axis** -- the axis the route tests did not have. Deleting the predicate from all three tables fires 5 assertions.
@@ -430,7 +430,7 @@ This repository has a recurring class of guards that cannot fail. LU produced si
 
 Two more results are findings rather than confirmations. `pivot_metric` (cabs1 -> modulus) **turned nothing red on the ordinary sweep** against a `|L| <= 1` oracle: on a random matrix the two selection rules agree at every step, so the elementwise pivot comparison -- the strongest oracle in that harness -- was blind to the metric, and a purpose-built probe matrix was needed. Under the metric-aware oracle it now turns the ordinary complex sweeps red, and it correctly turns nothing red for float and double, where the two functions coincide. And `short_final` (drop the short final panel) is red at n=33 and n=100 and correctly **green at n=64 and n=96** -- it discriminates exactly the short final panel, which is why the order sweep straddles `nb`.
 
-### The 48 KB launch hole
+### LU: the 48 KB launch hole
 
 Re-measured from scratch with a `PAD=` knob holding kernel, shape and work-group fixed and moving only the declared byte count, one process per point: **49,024 B PASS / 49,152 B FAIL / 49,280 B PASS**, 5/5 deterministic across five separate processes, at every work-group width (32/64/128/256/512). The control -- the identical shape with an explicit SLM tree at the identical byte count -- launches. The band is wider for wide scalars: the collective also fails at 48,896 B for double and cdouble. Both failure points lie inside the inherited band `(47104, 49664]`, checked rather than assumed. An `n` ladder finds nothing, because the hole is specific byte counts and an `n` ladder steps over them.
 
@@ -460,9 +460,9 @@ The shipped `getrf` CTA kernel uses no group collective (only `permute_group_by_
 * **Residual tolerances are `c*n*eps` with `c` in [200, 800]**, not tightened against a measured error distribution. No break in the record was caught by a tolerance -- every one was caught by an equality or a structural assertion.
 * **A latent vendor gate defect**, recorded not fixed: `cublas.cc`'s `getrs` sits in a TU gated on `BATCHLAS_HAS_CUBLAS`, so a cuBLAS-present / cuSOLVER-absent configure claims a vendor it cannot link. The fix belongs in `vendor_available.hh`.
 * **NETLIB `getri`'s `std::copy(..., n*n, ...)` ignores `ld`** -- pre-existing, not fixed.
-* **P4's register panel leaf is the DEFAULT panel leaf**, measured over 156 paired cells (1.01-2.13x; the only loss is double `n = 32`, at all three of its rungs), and it moved cfloat's `getrf` floor from 512 to 256 at batch >= 256. `BATCHLAS_GETRF_LEAF=slm` still selects the older local-memory panel. [The A/B](#the-register-leaf-ab), [the window](#the-cfloat-window-moves-to-256). Two things that grid found and did NOT fix: float `n = 65` takes CTA in a vendor-free build where blocked is 1.62x faster, and the float window below 256 is a batch question, not an order one ([which native tier serves 33 to 256](#which-native-tier-serves-33-to-256)).
+* **P4's register panel leaf is the DEFAULT panel leaf**, measured over 156 paired cells (1.01-2.13x; the only loss is double `n = 32`, at all three of its rungs), and it moved cfloat's `getrf` floor from 512 to 256 at batch >= 256. `BATCHLAS_GETRF_LEAF=slm` still selects the older local-memory panel. [The A/B](#lu-the-register-leaf-ab), [the window](#the-cfloat-window-moves-to-256). Two things that grid found and did NOT fix: float `n = 65` takes CTA in a vendor-free build where blocked is 1.62x faster, and the float window below 256 is a batch question, not an order one ([which native tier serves 33 to 256](#which-native-tier-serves-33-to-256)).
 * **The two later steps of P4 are not attempted.** The recursive panel (outer `nb = 128` split into 32-wide register leaves, so the trailing GEMM's `k` is 128 rather than 32) and the right-hand interchange gather are both untouched, and `nb` is still 32 for every type. The recursive step is the one that would actually move the trailing GEMM into `Tiled128x128RegisterK8` territory; the leaf swap alone does not.
-* **The P4 leaf is now measured against the vendor at 150 paired cells** ([the register leaf A/B](#the-register-leaf-ab)), but the PHASE SPLIT behind it is still the **pre-gather, double-only** profile (`nsys_splits.txt`, `lose_getrf_double_128`) that says "48.5% of a double n = 128 call is the panel". No float or cfloat `getrf` phase split exists at any order, so the A/B says the leaf is 1.3-2.1x faster without saying which phase paid. The nsys split is still owed.
+* **The P4 leaf is now measured against the vendor at 150 paired cells** ([the register leaf A/B](#lu-the-register-leaf-ab)), but the PHASE SPLIT behind it is still the **pre-gather, double-only** profile (`nsys_splits.txt`, `lose_getrf_double_128`) that says "48.5% of a double n = 128 call is the panel". No float or cfloat `getrf` phase split exists at any order, so the A/B says the leaf is 1.3-2.1x faster without saying which phase paid. The nsys split is still owed.
 
 ## Raw evidence
 
@@ -487,7 +487,7 @@ P4's own raw rows are **in the tree**, not at the tag: `benchmarks/results/p4_le
 
 ---
 
-## The occupancy rule
+## LU: the occupancy rule
 
 **P7, 2026-09-10.** `getrf_cta_max_n_for_slm<T>(budget, min_blocks_per_sm)` and
 `getrf_cta_fits<T>(n, budget, min_blocks_per_sm)` divide the device budget by an occupancy
@@ -518,7 +518,7 @@ The header's declarations carry the contracts; this is what they mean.
   `geqrf_cta.cc`'s `kGeqrfReferenceSlmBudget`.
 * `getrf_cta_fits` is the tier's admission test and is occupancy-scaled by default;
   `getrf_leaf_fits` is the residency question and is asked at the whole budget. See [the
-  panel leaf is not the tier ceiling](#the-panel-leaf-is-not-the-tier-ceiling).
+  panel leaf is not the tier ceiling](#lu-the-panel-leaf-is-not-the-tier-ceiling).
 * `getrf_tiny_max_n<T>()` is a compile-time property of the **kernel** — the {8, 16, 32}
   template ladder — not of the device: the tier holds no local memory at all, so no budget
   enters and there is no walk. 0 would spell "absent from this build"; it never is. It is
@@ -625,7 +625,7 @@ vendor throughout**, which is the flip's before-picture: `Auto` was taking cuSOL
 one of these orders. fp64 is not routed here and was not re-gridded: on this part fp64 runs
 at 1/64 the fp32 rate, so the ratio measures a crippled unit rather than a kernel.
 
-### The panel leaf is not the tier ceiling
+### LU: the panel leaf is not the tier ceiling
 
 `getrf_leaf_fits` is deliberately **not** occupancy-scaled, and `getrf_panel_factorize`
 and `getrf_blocked.cc` keep asking it at the whole budget. The residency question is
@@ -669,7 +669,7 @@ unpacked launcher gave it 64 to 512. The win is the barrier scope and the number
 matrices in flight per work-group, which is why it is gated on the band where one
 sub-group is enough work rather than applied wherever the tile fits.
 
-## The tiny tier
+## LU: the tiny tier
 
 `Algorithm::Tiny` (`src/extensions/getrf_tiny.cc`), the register-resident `getrf` arm
 for order `n <= 32`. It lands **pin-only**: `preferred()` is false for it and
@@ -1098,7 +1098,7 @@ either and the two must agree on `ipiv` **exactly**.
 at 153 of the 156 paired cells measured, by 1.01x to 2.13x, and the three exceptions are
 one cell (double `n = 32`) at its three batch rungs. It also moved one shipped route:
 cfloat's `getrf` floor from 512 down to 256 at batch >= 256. The grid, the discards and the one
-loss are in [the register leaf A/B](#the-register-leaf-ab); the tier question the grid
+loss are in [the register leaf A/B](#lu-the-register-leaf-ab); the tier question the grid
 raised but did not close is in [which native tier serves 33 to 256](#which-native-tier-serves-33-to-256);
 the window is in [the cfloat window moves to 256](#the-cfloat-window-moves-to-256).
 
@@ -1305,7 +1305,7 @@ unrounded 170 would have fitted at 16,320. (This line previously illustrated the
 a 320-lane cap divided into 65,536; 320 is not a multiple of 128, so the corrected rule
 cannot produce it, and that example went with the per-block spelling.)
 
-### The register leaf A/B
+### LU: the register leaf A/B
 
 **2026-09-11, the P4 integration grid.** GPU 1 through `benchmarks/gpu_guard.sh`, no run
 exited 5, `benchmarks/factor_bench.cc`, one process per cell, **three arms interleaved in
@@ -1552,7 +1552,7 @@ planted for the guards added at integration. Each was applied, built, observed, 
 
 Three orders x three batches x three types = **27 paired cells** whose `native` arm no
 longer resolves as the CSV's `resolved_route` column records, under a `native` pin or a
-vendor-free build. And [the tier table](#native_tier_preferred) says blocked is *slower*
+vendor-free build. And [the tier table](#lu-native_tier_preferred) says blocked is *slower*
 than CTA at every one of them — `blocked_ms / cta_ms` of 1.49 (float n=96 b8192), 1.13
 (float n=128 b4096), 1.39 / 1.30 (cfloat n=64 / 96), 1.37 (cdouble n=64). `potrf`
 recorded its equivalent cost explicitly; this page had no equivalent entry and now does.
@@ -1587,7 +1587,7 @@ with A's under the lazy relabel, so the lane holding row `r` of `P A` also holds
 vector is *not* permuted — `x_i` is the i-th unknown — so the RHS store writes at
 `rowid`, exactly as the factor store does.
 
-### P2: the window this tier expects
+### LU: P2: the window this tier expects
 
 **Arithmetic on committed CSVs, not a measurement.** No GPU time was spent on P2.
 The bound below is
@@ -1842,7 +1842,7 @@ No conclusion here rests on a discarded cell.
 - **Saturation is partial.** Several cells were still moving more than 5% on the
   last doubling; every ratio quoted above names its batch, per R8a.
 
-### P2: the register bound is assumed, not probed
+### LU: P2: the register bound is assumed, not probed
 
 `gesv_tiny.cc` carries `kWorstRegsPerThread = 224` and `posv_tiny.cc` carries 256,
 each in a `static_assert` against the 65,536-register per-block file at

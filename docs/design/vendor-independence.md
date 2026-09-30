@@ -295,7 +295,7 @@ The vocabulary is pinned by `tests/route_vocabulary_tests.cc`, including every l
 every collision above; the GEMM transcription itself is pinned by
 `tests/route_gemm_equivalence_tests.cc`.
 
-## The coverage instrument
+## Vendor independence: the coverage instrument
 
 Two tables answer different questions, and reading either as the other is how a working vendor-free
 `gemm` came to be claimed at a point when every such call threw (`coverage.hh:11-25`).

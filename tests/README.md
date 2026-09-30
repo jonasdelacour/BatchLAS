@@ -1,4 +1,4 @@
-# Running the BatchLAS tests
+# Running the BatchLAS tests {#testing}
 
 **Do not run the full suite on every edit.** It takes 15–20 minutes, and the
 time is extremely lopsided — a handful of binaries hold nearly all of it, so a

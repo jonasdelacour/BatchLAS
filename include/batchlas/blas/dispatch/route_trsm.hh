@@ -60,7 +60,7 @@ struct RouteTable<Op::trsm, T> {
     }
 
     // Native at batch >= 8, except float + Side::Right below batch 128 (order <= 32).
-    // evidence: docs/perf/trsm.md#the-preferred-window-as-implemented
+    // evidence: docs/perf/trsm.md#trsm-the-preferred-window-as-implemented
     static bool preferred(Route r, const TrsmShape& s) {
         if (!is_native(r)) return false;
 

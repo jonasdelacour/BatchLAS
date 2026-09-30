@@ -6,7 +6,7 @@ All timings: GPU 1 of a 2x RTX 4090 box (sm_89, 128 SMs), `CUDA_VISIBLE_DEVICES=
 
 ## What ships
 
-### Route arms
+### QR: route arms
 
 | op | arms, in `order` sequence | `preferred()` |
 |---|---|---|
@@ -32,7 +32,7 @@ Above the area bound the blocked driver serves the shape. Its panel leaf is the 
 
 ### The third predicate
 
-`preferred()` cannot express "which of two **native** tiers". It is consulted by the loop above the vendor-free walk and runs regardless of `vendor_available`, so a window written to fix the vendor-free tier choice also moves vendor-**present** traffic, including where cuSOLVER beats both natives. WP5 added an optional third predicate, `RouteTable::native_tier_preferred`, detected with a `requires` expression and defaulting to `true` so every table that does not declare it keeps its old answer (`route_resolve.hh:18-25`). It is consulted **only** on the vendor-free walk, which is now two passes (`route_resolve.hh:38-49`); `gemm`, `trsm`, `potrf` and `gesvd` were untouched by construction at WP5 and the route diff confirmed it. Since then WP6 has declared the hook for `getrf` (`route_getrf.hh:78`), `getrs` and — as of P7 — `potrf` ([potrf.md#native_tier_preferred](potrf.md#native_tier_preferred)); the debt recorded below is closed.
+`preferred()` cannot express "which of two **native** tiers". It is consulted by the loop above the vendor-free walk and runs regardless of `vendor_available`, so a window written to fix the vendor-free tier choice also moves vendor-**present** traffic, including where cuSOLVER beats both natives. WP5 added an optional third predicate, `RouteTable::native_tier_preferred`, detected with a `requires` expression and defaulting to `true` so every table that does not declare it keeps its old answer (`route_resolve.hh:18-25`). It is consulted **only** on the vendor-free walk, which is now two passes (`route_resolve.hh:38-49`); `gemm`, `trsm`, `potrf` and `gesvd` were untouched by construction at WP5 and the route diff confirmed it. Since then WP6 has declared the hook for `getrf` (`route_getrf.hh:78`), `getrs` and — as of P7 — `potrf` ([potrf.md#native_tier_preferred](potrf.md#potrf-native_tier_preferred)); the debt recorded below is closed.
 
 The shipped `geqrf` window, verbatim (`route_geqrf.hh:79-103`):
 
@@ -97,7 +97,7 @@ Second, independent sweep — the **shipped default** against the other tier for
 
 **Mechanism, and the limit of the window.** `geqrf_cta`'s capacity is a pure byte budget with no blocks-per-SM term, so above ~50 KB the tile forces one work-group per SM (256 of 1536 threads) and the per-reflector barrier chain has nothing to overlap with. The float crossover lands exactly there: n=96 → 36,864 B → 2 blocks/SM, CTA ahead 1.294; n=112 → 50,176 B → 1 block/SM, CTA behind 0.821. That arithmetic is consistent with the cliff but **was not verified with an occupancy counter**. `native_tier_preferred` routes around it; it does not fix it.
 
-### The vendor baseline
+### QR: the vendor baseline
 
 cuBLAS `geqrfBatched` saturates at ~380–390 GFLOP/s (float) and ~105–110 (cdouble) **regardless of n** — a small-matrix, one-column-at-a-time routine, latency-bound, whose ceiling does not move. Its wall time is nearly independent of batch at n >= 512: float n=2048 costs 21,361 ms at batch 32 and 23,151 ms at batch 256; float n=1024 costs 1,204 ms at batch 8 and 2,276 ms at batch 256 (32x the work for 1.9x the time). So the **ms column is a valid absolute target** at each stated cell and the **GFLOP/s column at n >= 512 is not a statement about cuBLAS's ceiling**. Do not quote the 181x below as "faster than cuBLAS". Ceiling-to-ceiling at n=1024: native 3564 / 1079 / 1683 / 132 GFLOP/s (float/double/cfloat/cdouble) against ~380–390 / ~200 / ~205 / ~105–110, i.e. **9.2x / 5.4x / 8.2x / 1.2x**.
 
@@ -281,7 +281,7 @@ One harness trap in the gate itself, since every number above is a `ctest` count
 8. **`geqrf_buffer_size` builds its shape twice and makes 6 uncached SYCL `get_info` calls per API call.** This lands on `band_reduction.cc:595`, which calls `geqrf(...).wait()` once per step, and on `sytrd_sy2sb.cc:504`, which calls `geqrf(...)` once per step **without** a `.wait()` (the source note says both wait; the code does not) — `O(n^2/kd^2)` steps, ~500 for n=1024. Pure host overhead, no wrong answer, and **not measured**. Measure before acting.
 9. **`resolve_ormqr_block_size` still returns the float-only 16/16/24/48/56 ladder keyed on `A.rows()`** (`include/batchlas/tuning_params.hh:45-47`, `include/batchlas/blas/functions/ormqr.hh:219-227`) for every `ormqr` caller that passes no hint. Measured wrong for three of four types, costing 1.11–1.55x. `geqrf` and `orgqr` bypass it with their own type-keyed widths; nothing else does. Read the *source* header, not the generated one: the `configure_file` copy at `build/include/batchlas/tuning_params.hh` says **16/32/64/128/128** and is never compiled, because `src/CMakeLists.txt` puts `${PROJECT_SOURCE_DIR}/include` ahead of `${PROJECT_BINARY_DIR}/include`. The harness prints the width it actually used, and it prints 16/24/48/56.
 10. **The CTA tier's workspace is zero but callers still pay the blocked layout.** The facade takes `max` over every *supported* native tier and `supports()` deliberately puts no lower extent bound on the Blocked arm, so a caller at n=64 batch=8192 pays 168 MB (float) / 671 MB (cdouble) even though the route it takes is CTA. Sizing W1/W2 on `n - nb` rather than `n` took ~28% off; the remainder is the deliberate `max` policy. (The vendor `orgqr` it replaces asks for 1164 MB / 4644 MB at that cell.)
-11. **`potrf` had WP5's dispatch gap. CLOSED at P7** ([potrf.md#native_tier_preferred](potrf.md#native_tier_preferred)); the reading below is what the debt was. `potrf` carries the same two native tiers ({CTA, Blocked}) and the same all-false `preferred()`, so its vendor-free walk still returns the first *supported* native route from a static order array that cannot follow a crossover — the exact defect `native_tier_preferred` was added for. `getrf` and `getrs` have since declared the hook; `route_potrf.hh` has not. Nobody has measured whether `potrf`'s vendor-free tier choice is wrong, which is the first step, not the fix.
+11. **`potrf` had WP5's dispatch gap. CLOSED at P7** ([potrf.md#native_tier_preferred](potrf.md#potrf-native_tier_preferred)); the reading below is what the debt was. `potrf` carries the same two native tiers ({CTA, Blocked}) and the same all-false `preferred()`, so its vendor-free walk still returns the first *supported* native route from a static order array that cannot follow a crossover — the exact defect `native_tier_preferred` was added for. `getrf` and `getrs` have since declared the hook; `route_potrf.hh` has not. Nobody has measured whether `potrf`'s vendor-free tier choice is wrong, which is the first step, not the fix.
 12. **`resolve_ormqr_route` is called with two arguments** (`ormqr.hh:209`), taking the `vendor_available = true` default, so `ormqr` never reaches `route_resolve.hh:38-49`'s vendor-free fallback. It gets away with it only because its `preferred()` is native-first. `geqrf` and `orgqr` pass the argument explicitly; do not inherit the omission.
 13. **The `geqrf` Tiny tier is supported at every square `n <= 32`, preferred nowhere, and has never been timed.** `supports()` admits it, `native_tier_preferred` hard-codes `false` for it, and `preferred()`'s order-floor/tall-aspect gate rejects the whole band before any tier is named — so the band is served by CTA in a vendor-free build and by cuSOLVER otherwise, and CTA is measured there at **0.78x / 0.21x / 0.71x / 0.33x**. The grid that would settle it, the flip gate, and the two-edit routing change (including why the `preferred()` clause must precede the existing gate or it is dead code) are in [the tiny tier is supported, never preferred, and never timed](#the-tiny-tier-is-supported-never-preferred-and-never-timed). An implemented, tested, linked tier that no `Auto` shape can reach.
 
@@ -454,7 +454,7 @@ which measured cell was refused as one.
 ### Why the floors sit where they do
 
 cuBLAS `geqrfBatched` is unblocked and saturates at ~380 GFLOP/s (float) **regardless of n**
-(see [the-vendor-baseline](#the-vendor-baseline)), so the native arm pulls away as n grows.
+(see [the-vendor-baseline](#qr-the-vendor-baseline)), so the native arm pulls away as n grows.
 Below the floor the reverse holds, because the native panel kernel is the whole cost at a size
 where there is no trailing work to amortise it.
 
@@ -544,7 +544,7 @@ resolves the fit first and consults the hook only among the tiers that can serve
 
 ---
 
-## The occupancy rule
+## QR: the occupancy rule
 
 **P7, 2026-09-10.** `geqrf_cta_max_elems_for_slm<T>(budget, min_blocks_per_sm)` divides
 the device budget by an occupancy target before converting it to an element count. The
@@ -687,12 +687,12 @@ is not settleable from the six cells here) and is **not** taken as part of this 
 panel's leaf in the high 16** (`1` = resident, `2` = global); the whole word is **0** when
 the driver is absent. It answers `geqrf_leaf_fits` at the whole SLM budget, not
 `geqrf_cta_fits` at the occupancy-scaled one -- see [the panel leaf is not the tier
-ceiling](#the-panel-leaf-is-not-the-tier-ceiling). `tests/geqrf_tests.cc` compares the
+ceiling](#qr-the-panel-leaf-is-not-the-tier-ceiling). `tests/geqrf_tests.cc` compares the
 high half against bare `1u`/`2u`, so this is the only definition of those two values in
 the tree. The `getrf` hook uses the same encoding; its record is at
 [lu.md](lu.md#one-spelling-per-ceiling).
 
-### The panel leaf is not the tier ceiling
+### QR: the panel leaf is not the tier ceiling
 
 `geqrf_cta_fits` is the TIER's predicate and is occupancy-scaled; `geqrf_leaf_fits` is the
 residency one and is asked at the whole budget. `geqrf_panel_factorize` and
@@ -1207,7 +1207,7 @@ ladder reported with both readings, ratios in time. Arms are pinned with
 `BATCHLAS_GEQRF_ROUTE=tiny|cta|blocked`, which `route_resolve.hh` honours regardless of
 `native_tier_preferred` -- **and the arm must be confirmed by kernel name before its ratio is
 read**, because a dead pin looks exactly like a null result ([the register leaf
-A/B](#the-register-leaf-ab) is the worked example of that mistake in this family). Flip gate is
+A/B](#qr-the-register-leaf-ab) is the worked example of that mistake in this family). Flip gate is
 the repository's: `t_native <= 0.90 t_vendor`, ratio >= 1.11, at saturation, with a bracketing
 non-winner at each edge of whatever window clears.
 
@@ -1523,7 +1523,7 @@ different kernel is the defect the assertion exists for.
 * **The exact register count of the shipped kernel.** Bounded to `(157.5, 170.6]` by bisection;
   `cuobjdump` cannot read it out of the library.
 
-### The register leaf A/B
+### QR: the register leaf A/B
 
 `BATCHLAS_GEQRF_LEAF = auto | reg` selects the panel leaf per call (`Settings::selection`,
 consumed in `geqrf_blocked.cc`), mirroring `BATCHLAS_GETRF_LEAF`. `factor_bench`'s `ArmEnv`

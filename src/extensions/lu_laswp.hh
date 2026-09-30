@@ -85,7 +85,7 @@ Event lu_laswp_launch(Queue& ctx,
 template <typename Tag, typename T> class LuLaswpGatherKernel;
 
 // The 48 KB launch hole: static shared-memory sizes in this band fail to launch
-// on this box, so pad past it. evidence: docs/perf/lu.md#the-48-kb-launch-hole
+// on this box, so pad past it. evidence: docs/perf/lu.md#lu-the-48-kb-launch-hole
 constexpr std::size_t kLuLaswpHoleLo = 47104;
 constexpr std::size_t kLuLaswpHoleHi = 49664;
 constexpr std::size_t kLuLaswpHolePadTo = 49920;

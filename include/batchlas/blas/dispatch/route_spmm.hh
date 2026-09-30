@@ -61,7 +61,7 @@ struct RouteTable<Op::spmm, T> {
     }
 
     // Window: the native CSR gather everywhere, minus complex<float> with transB.
-    // evidence: docs/perf/spmm.md#the-preferred-window-as-implemented
+    // evidence: docs/perf/spmm.md#spmm-the-preferred-window-as-implemented
     static bool preferred(Route r, const SpmmShape& s) {
         if (!is_native(r) || r.algo != Algorithm::Direct) return false;
         if (s.format != MatrixFormat::CSR) return false;

@@ -56,7 +56,7 @@ inline int geqrf_blocked_nb(int m, int n) {
     return std::max(1, std::min(geqrf_nb_for_type<T>(), k));
 }
 
-// WHICH PANEL LEAF, re-read per call. evidence: docs/perf/qr.md#the-register-leaf-ab
+// WHICH PANEL LEAF, re-read per call. evidence: docs/perf/qr.md#qr-the-register-leaf-ab
 inline GeqrfPanelLeaf geqrf_panel_leaf_from_env() {
     const char* s = batchlas::settings().selection.geqrf_leaf.get();
     if (s != nullptr && std::strcmp(s, "reg") == 0) return GeqrfPanelLeaf::Register;
@@ -115,7 +115,7 @@ GeqrfBlockedWs<T> geqrf_blocked_layout(Queue& ctx, BumpAllocator& pool,
 // (float 64, cfloat 48, double 96, cdouble 256) and for tall panels, so this flag also
 // gates the DEFAULT route and not only vendor-free builds: reporting false here sends
 // every in-window shape back to the vendor.
-// evidence: docs/perf/small-n-baseline.md#geqrf, docs/perf/qr.md#route-arms
+// evidence: docs/perf/small-n-baseline.md#geqrf, docs/perf/qr.md#qr-route-arms
 template <> bool geqrf_blocked_available<float>()                { return true; }
 template <> bool geqrf_blocked_available<double>()               { return true; }
 template <> bool geqrf_blocked_available<std::complex<float>>()  { return true; }

@@ -17,7 +17,7 @@ constexpr std::size_t device_slm_budget(std::size_t local_mem_bytes,
 inline constexpr int kMinBlocksPerSm = 4;  // design rule R1's occupancy target
 
 // The slice ONE work-group may own, hence the ADVERTISED capacity; min_blocks_per_sm = 1 asks
-// the other question, "can it be held at all". evidence: docs/perf/lu.md#the-panel-leaf-is-not-the-tier-ceiling
+// the other question, "can it be held at all". evidence: docs/perf/lu.md#lu-the-panel-leaf-is-not-the-tier-ceiling
 constexpr std::size_t occupancy_budget(std::size_t slm_budget_bytes,
                                        int min_blocks_per_sm = kMinBlocksPerSm) {
     const std::size_t blocks =

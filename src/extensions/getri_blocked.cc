@@ -215,7 +215,7 @@ Event getri_blocked_dispatch(Queue& ctx,
 
     const bool want_info = info_out.size() >= static_cast<std::size_t>(batch);
 
-    // wg is derived from n for portability, not speed (docs/perf/lu.md#negative-results).
+    // wg is derived from n for portability, not speed (docs/perf/lu.md#lu-negative-results).
     const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
     int wg = 32;
     while (wg < n && wg < 256) wg <<= 1;

@@ -7,7 +7,7 @@ also exist so a `-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF` build stops throwing `NoRout
 All numbers: RTX 4090 (sm_89, 128 SM), one card held per campaign, under `experiments/gpu_guard.sh`. Ratios are
 `vendor / native` — **> 1 means native wins** — unless the table says otherwise.
 
-## What ships
+## potrf: what ships
 
 | tier | file | orders | Uplo |
 |---|---|---|---|
@@ -36,7 +36,7 @@ those exclusions are *untested, not refuted*, with the grids that would settle t
 [unmeasured Tiny windows](#unmeasured-tiny-windows-upper-and-the-double-types).
 
 **Tiny is FIRST in the candidate order and is now routed there.** See
-[the-tiny-tier](#the-tiny-tier) for its register table and two negative results; at the tier edge, n = 32, it
+[the-tiny-tier](#potrf-the-tiny-tier) for its register table and two negative results; at the tier edge, n = 32, it
 measures **2.187 / 2.591x** the vendor at batch 16k / 32k (float), which is the cell that decided the boundary
 against LPanel. The rest of the candidate order (`route_potrf.hh`) is *mostly* a capability ladder:
 the blocked driver's diagonal leaf *is* the CTA kernel on a sub-view, so above `cta_max_n` only Blocked can serve.
@@ -156,7 +156,7 @@ Two formula corrections, both measured:
   49,700 stays 49,700), and `supports()` spells the capacity as a contiguous `order <= cta_max_n`, so the ceiling
   must be the largest `n` for which *every* order up to `n` launches.
 
-## The 48 KB launch hole
+## potrf: the 48 KB launch hole
 
 Measured cold: a dynamic local-memory request in `(49152 - static_shared, 49152]` fails with
 `CUDA_ERROR_INVALID_VALUE` at `enqueueKernelLaunch`; boundary located to 8 B, identical at wg = 32/64/128/256/1024.
@@ -388,7 +388,7 @@ variable (whole-potrf ms, `vendor trsm / native trsm`, `bad = 0` everywhere):
 | cdouble | 512 | 128 | 69.349 | 25.770 | 2.691 |
 
 Native wins in every cell tried. The *original* evidence ("46 of 48 panel cells") was taken on the racing kernel of
-[correctness-findings](#correctness-findings) and is evidence of nothing; the table above is post-fix. A bespoke
+[correctness-findings](#potrf-correctness-findings) and is evidence of nothing; the table above is post-fix. A bespoke
 kernel would also aim at the wrong stage — the panel solve is 5-22% of a vendor-free blocked potrf against 65-95%
 for the trailing update, so a hypothetical 2x there is worth 3-11% end to end.
 
@@ -419,7 +419,7 @@ for the trailing update, so a hypothetical 2x there is worth 3-11% end to end.
   launch-overhead rejection, and the route-typo trap (an unrecognised `BATCHLAS_POTRF_ROUTE`, and `cta` above the
   ceiling, both silently resolve to vendor).
 
-## Correctness findings
+## potrf: correctness findings
 
 **1. The panel trsm returned wrong answers on the default vendor-free path.** `build-novendor`, no env, float and
 double, `n = 1024`, `batch = 256`, condition number < 1.05, an input cuSOLVER factors to 1e-8/1e-16 in the same
@@ -656,7 +656,7 @@ Raw data is at tag `perf-evidence/vendor-independence`, retrievable with
 
 ---
 
-## The occupancy rule
+## potrf: the occupancy rule
 
 **P7, 2026-09-10.** `potrf_cta_max_n_for_slm<T>(budget, min_blocks_per_sm)` divides the
 device budget by an occupancy target before walking the footprint. The default target is
@@ -678,7 +678,7 @@ machine. The walk itself moved to `src/util/resident_capacity.hh`; its `break` (
 than `continue`) is unchanged and is now armed by a synthetic non-monotone table, because
 no budget on this box can reach the case that distinguishes the two.
 
-### native_tier_preferred
+### potrf: native_tier_preferred
 
 `route_potrf.hh` now declares the hook it was missing. The crossover **is** the capacity:
 below it the blocked driver at `n <= nb` is the CTA leaf plus a fixup launch and cannot
@@ -1013,7 +1013,7 @@ them is the defect the pin exists to catch.
 | complex\<double\> | **38** / 77 | **38** / 77 | **2,944** / 6,080 |
 
 **Where each number comes from, so it can be re-derived without a build.** Every potrf figure in this section and
-in [what ships](#what-ships) is `resident::resident_max_n(n -> potrf_hole_padded(potrf_slm_per_matrix(n, NB, TS,
+in [what ships](#potrf-what-ships) is `resident::resident_max_n(n -> potrf_hole_padded(potrf_slm_per_matrix(n, NB, TS,
 sizeof(D), sizeof(R))), 97280, min_blocks)` — `potrf_cta_max_n_for_slm<T>` verbatim (`potrf_cta.cc:136-149`), with
 `(NB, TS)` from `PotrfCtaConst` (8/4 for float, double and cfloat; 8/2 for cdouble). `min_blocks = 4` is the
 declared default (`potrf_native.hh:45-47`, `resident::kMinBlocksPerSm`) and gives the **advertised** row
@@ -1045,7 +1045,7 @@ everything (97,280 -> 101,376 raises all three ceilings), because the scaling is
 division and not a table.
 
 
-## The tiny tier
+## potrf: the tiny tier
 
 `Algorithm::Tiny`, `src/extensions/potrf_tiny.cc`, the P1 package of
 `docs/design/small-n-factorization-plan.md`. One matrix per `SubGroupPartition<N>`,
@@ -1389,7 +1389,7 @@ slm_per_matrix(n, NB, sizeof(T)) = (n*NB + NB*NB) * sizeof(T) + 256
 `sA` is the `n x NB` panel at `ld = n` — no odd padding, because lane `row` reads
 `sA[row + i*n]`, already stride 1 across lanes — `sB` the `NB x NB` broadcast block, and the
 256 over-covers `*fail` plus alignment slack. The band from
-[the 48 KB launch hole](#the-48-kb-launch-hole) is applied to the **total** request, and `G`
+[the 48 KB launch hole](#potrf-the-48-kb-launch-hole) is applied to the **total** request, and `G`
 is stepped back down if the pad pushes it over.
 
 The ceiling folds **two** independent caps: the local-memory slice, and
@@ -1702,7 +1702,7 @@ measurement phase, not a settled choice**; the transpose form shipped because it
 committed data either**: there is no `potrs` op and no `trsm`-composition baseline at
 these orders in `benchmarks/results/`, so `t_vendor_potrf + t_two_trsm` is not on
 record. What *is* on record is the tiny potrf tier's own standing against cuSOLVER
-([the tiny tier](#the-tiny-tier)), and the structural fact above that the fused
+([the tiny tier](#potrf-the-tiny-tier)), and the structural fact above that the fused
 kernel costs about 2x a `potrf_tiny`.
 
 Read together those two say the honest prior is: **a win where `potrf_tiny` wins by
@@ -1831,7 +1831,7 @@ per-block register file at `kTinyWgSize = 64`. It was **not measured**: it is
 means an unrolled loop was declined and `rA[]` left the register file, which is a
 slowdown and never a wrong answer, so only the probe can see it. The same note, and
 the 44-instantiation R7 count for both P2 kernels, is in
-`docs/perf/lu.md#p2-the-register-bound-is-assumed-not-probed`.
+`docs/perf/lu.md#lu-p2-the-register-bound-is-assumed-not-probed`.
 
 ## The probe's own gate could not fail
 

@@ -1,0 +1,3 @@
+# BatchLAS documentation {#mainpage}
+
+placeholder

@@ -23,7 +23,7 @@ refused by `preferred()` instead. Conflating correctness with speed is the trap 
 The unset default is `{Origin::Auto, Algorithm::Auto}` for every op (`route_env.hh:88-91`). GEMM used to be the one op defaulting to a *forced*
 Vendor; WP2 E6 removed that asymmetry.
 
-### The preferred window as implemented
+### GEMM: the preferred window as implemented
 
 Quoted from `include/batchlas/blas/dispatch/route_gemm.hh:34-67`, in order of evaluation:
 
@@ -69,7 +69,7 @@ throughput. Its whole register ladder for float sits inside `if constexpr (is_sa
 Consequence, and the reason `preferred()` refuses complex: **a widened `preferred()` for complex does not route complex to a register kernel, it
 routes it to `Tiled16`** — 3.2–7.1× slower than cuBLAS. Required order: port the kernel → widen the selector → widen the predicate.
 
-## Evidence for each boundary
+## GEMM: evidence for each boundary
 
 ### Double, the only fully native window
 

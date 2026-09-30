@@ -48,7 +48,7 @@ struct RouteTable<Op::getri, T> {
 
         // Wrong-answer gate: GPU backends pack 1-based int32 pivots into the
         // int64 span, netlib writes genuine int64 (is_gpu reads the QUEUE).
-        // evidence: docs/perf/lu.md#correctness-findings
+        // evidence: docs/perf/lu.md#lu-correctness-findings
         if (s.backend == Backend::NETLIB) return false;
 
         switch (r.algo) {

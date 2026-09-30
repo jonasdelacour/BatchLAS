@@ -1,6 +1,6 @@
 // Native batched GETRF, the register-resident tier for order n <= 32: one matrix per
 // SubGroupPartition<N>, row r in lane r of a `D rA[N]`, pivoting by lazy relabel.
-// evidence: docs/perf/lu.md#the-tiny-tier
+// evidence: docs/perf/lu.md#lu-the-tiny-tier
 // THE INVARIANT THAT REMOVES EVERY BARRIER: the lane that wins column j's argmax is, after
 // the relabel, the lane whose rowid IS j, so `act = (rowid > j)` is false for it and it never
 // writes rA[k] that iteration; every other lane therefore reads a value the source lane is

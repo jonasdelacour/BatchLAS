@@ -499,7 +499,7 @@ TYPED_TEST(GemvCoverageTest, TransposePaddedStrided) {
 }
 
 // ConjTrans is the live production path (ortho.cc); on the real types it must equal Trans.
-// evidence: docs/perf/gemv.md#correctness-findings
+// evidence: docs/perf/gemv.md#gemv-correctness-findings
 TYPED_TEST(GemvCoverageTest, ConjTransposePaddedStrided) {
     using S = typename TestFixture::ScalarType;
     typename TestFixture::Case c;

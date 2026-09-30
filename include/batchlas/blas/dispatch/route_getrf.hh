@@ -111,7 +111,7 @@ struct RouteTable<Op::getrf, T> {
         return tiny_window(s) || (kSingle && tiny_fits(s));
     }
 
-    // Native-vs-native tie-break, vendor-free walk only. evidence: docs/perf/lu.md#native_tier_preferred
+    // Native-vs-native tie-break, vendor-free walk only. evidence: docs/perf/lu.md#lu-native_tier_preferred
     static bool native_tier_preferred(Route r, const GetrfShape& s) {
         if (!is_native(r)) return true;
 

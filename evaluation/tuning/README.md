@@ -1,4 +1,4 @@
-# BatchLAS tuning harness (bottom-up)
+# BatchLAS tuning harness (bottom-up) {#tuning_harness}
 
 This directory contains a minimal grid-search tuner that reuses the existing benchmark executables under `build/benchmarks/`.
 

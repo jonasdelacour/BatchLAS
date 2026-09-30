@@ -385,7 +385,7 @@ Wrong answers found, how they hid, and what guards them now.
   `her2k_gemm_preferred` returned false and sent it to a per-batch loop — one sequential launch per batch member, for
   every panel with n2 > 128. Both halves now live together in `expansion_budget.hh:85-101`.
 
-## The coverage instrument
+## Dispatch: the coverage instrument
 
 Two tables, answering different questions (`coverage.hh:11-25`). **static** (`linked`) iterates the route predicates
 with no kernel run — exact, instant, no GPU needed — and answers *"is the kernel in the build"*, the planning

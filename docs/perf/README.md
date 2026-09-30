@@ -1,4 +1,4 @@
-# Routing and performance evidence
+# Routing and performance evidence {#perf_evidence}
 
 Every native kernel in BatchLAS competes with a vendor library, and the choice between them
 is a **measured window**, not a preference. These pages are the record of those measurements:

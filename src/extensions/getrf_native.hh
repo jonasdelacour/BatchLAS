@@ -20,7 +20,7 @@ namespace batchlas::sycl_getrf {
 
 // A RUNTIME local_mem_size budget, not device_limits.hh's build-time constant, and it must
 // cover the pivot-search scratch as well as the tile; 0 = absent. `min_blocks_per_sm` scales
-// the ADVERTISED capacity, residency is getrf_leaf_fits. evidence: docs/perf/lu.md#the-occupancy-rule
+// the ADVERTISED capacity, residency is getrf_leaf_fits. evidence: docs/perf/lu.md#lu-the-occupancy-rule
 template <typename T>
 BATCHLAS_INTERNAL_API int getrf_cta_max_n_for_slm(
     std::size_t slm_budget_bytes,
@@ -100,7 +100,7 @@ BATCHLAS_INTERNAL_API Event getrf_blocked_dispatch(Queue& ctx,
                                                    GetrfPanelSolveTrsm<T> panel_trsm = {});
 
 // Budgets an explicit SLM tree argmax: sycl::reduce_over_group fails to launch at
-// specific byte counts near 48 KB. evidence: docs/perf/lu.md#the-48-kb-launch-hole
+// specific byte counts near 48 KB. evidence: docs/perf/lu.md#lu-the-48-kb-launch-hole
 template <typename T>
 BATCHLAS_INTERNAL_API bool getrf_cta_fits(
     int n, std::size_t slm_budget_bytes,

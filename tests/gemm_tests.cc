@@ -1667,7 +1667,7 @@ TYPED_TEST(GemmTest, RouteAdapterAutoHonoursTheMeasuredWindow) {
         // reachable only through Tiled64x64RegisterK16Wide, which requires
         // min_dim >= 256 and an aligned NN shape; widening preferred() without
         // that gate firing routes complex to Tiled16, measured 3.2-7.1x slower
-        // than cuBLAS. See docs/perf/gemm.md#evidence-for-each-boundary.
+        // than cuBLAS. See docs/perf/gemm.md#gemm-evidence-for-each-boundary.
         EXPECT_TRUE(batchlas::dispatch::is_vendor(
             route_for<ScalarType>(*(this->ctx), 256, 256, 256, 128)));
     } else if constexpr (std::is_same_v<ScalarType, float>) {

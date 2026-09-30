@@ -1,7 +1,7 @@
 #pragma once
 
 // The 48 KB dynamic-local-memory launch hole, spelled once for both potrf leaves: a request
-// inside this band is refused at enqueue. evidence: docs/perf/potrf.md#the-48-kb-launch-hole
+// inside this band is refused at enqueue. evidence: docs/perf/potrf.md#potrf-the-48-kb-launch-hole
 
 #include <cstddef>
 

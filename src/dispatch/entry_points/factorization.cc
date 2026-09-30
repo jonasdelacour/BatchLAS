@@ -783,7 +783,7 @@ size_t potrf_buffer_size(Queue& ctx,
 // arms are assembled here out of the routed entry points above -- for gesv
 // `getrf; getrs`, for posv `potrf; trsm; trsm` -- which is also why the
 // composition lives in the facade rather than in a driver TU.
-// evidence: docs/perf/lu.md#p2-the-window-this-tier-expects
+// evidence: docs/perf/lu.md#lu-p2-the-window-this-tier-expects
 
 template <typename T>
 [[noreturn]] inline void solve_throw_unroutable(dispatch::Route route, const char* who) {

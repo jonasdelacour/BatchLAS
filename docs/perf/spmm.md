@@ -26,7 +26,7 @@ The env variable is `BATCHLAS_SPMM_ROUTE`, read through the shared `origin[:algo
 `ParsedRouteEnv::unparsed` is discarded and every decision goes to the vendor with no message; reproduced deliberately, see
 [Measurement harness and hygiene](#measurement-harness-and-hygiene).
 
-### The preferred window, as implemented
+### SpMM: the preferred window, as implemented
 
 `route_spmm.hh:65-75`, stripped of its ~140 lines of evidence comments:
 
@@ -364,7 +364,7 @@ Un-preferred is not unsupported.
    `lanczos_tests` — which *does* consume the moved gather — was re-run under `BATCHLAS_SPMM_ROUTE=vendor` and produced the same
    two failing cases (`LanczosTestBase.LanczosTest`, `LanczosTestBase.ToeplitzEigenpairs`), so it is pre-existing and not WP8's.
 
-## Correctness findings
+## SpMM: correctness findings
 
 ### Three vendor defects, found here and fixed
 

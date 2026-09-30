@@ -84,7 +84,7 @@ inline bool getrf_right_gather(int R) {
 
 // WHICH PANEL LEAF, re-read per call so one process can A/B the two. `Reg` is the
 // DEFAULT since the P4 grid measured it faster at 153 of 156 paired cells.
-// evidence: docs/perf/lu.md#the-register-leaf-ab
+// evidence: docs/perf/lu.md#lu-the-register-leaf-ab
 enum class PanelLeaf { Slm, Reg };
 
 inline PanelLeaf getrf_panel_leaf_mode() {

@@ -201,7 +201,7 @@ struct SelectionSettings {
     // BATCHLAS_GEQRF_LEAF = auto | reg (default `auto`, i.e. the local-memory or
     // global panel leaf the blocked driver has always used). `reg` asks for P5's
     // register panel leaf wherever the panel fits it. Re-read per call so one
-    // process can interleave the two arms. evidence: docs/perf/qr.md#the-register-leaf-ab
+    // process can interleave the two arms. evidence: docs/perf/qr.md#qr-the-register-leaf-ab
     EnvValue geqrf_leaf{};
 
     // BATCHLAS_GETRF_LASWP = inloop | defer_walk | defer_gather (default

@@ -110,7 +110,7 @@ inline int getrs_fused_wg(int n, int nrhs, int max_wg, bool trans) {
 // The 48 KB launch hole, carried verbatim from potrf_cta.cc so the two agree: a dynamic
 // local-memory request in (49152 - static_shared, 49152] fails at enqueue with
 // CUDA_ERROR_INVALID_VALUE, and is STICKY PER CUfunction, so a larger earlier launch
-// hides it from a warm test suite. evidence: docs/perf/lu.md#the-48-kb-launch-hole
+// hides it from a warm test suite. evidence: docs/perf/lu.md#lu-the-48-kb-launch-hole
 constexpr std::size_t kGetrsHoleLo    = 47104;
 constexpr std::size_t kGetrsHoleHi    = 49664;
 constexpr std::size_t kGetrsHolePadTo = 49920;
@@ -784,7 +784,7 @@ std::size_t getrs_fused_max_rhs_elems(std::size_t slm_budget_bytes) {
 
     // The floor division above can round the implied request BACK DOWN INTO the band,
     // where the pad raises it again and the launch is refused; the exact repair is the
-    // request that ends AT kGetrsHoleLo. evidence: docs/perf/lu.md#correctness-findings
+    // request that ends AT kGetrsHoleLo. evidence: docs/perf/lu.md#lu-correctness-findings
     if (getrs_fused_slm(elems, kGetrsFusedNbMax, sizeof(D)) > slm_budget_bytes) {
         if (kGetrsHoleLo <= blk_bytes) return 0;
         return (kGetrsHoleLo - blk_bytes) / sizeof(D);

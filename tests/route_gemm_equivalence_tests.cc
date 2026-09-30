@@ -4,7 +4,7 @@
 //
 // The replica is transcribed from src/backends/gemm_variant.hh rather than called;
 // `ReplicaIsFaithful` pins it, so a drift in the replica cannot make the diff pass
-// vacuously. Window and evidence: docs/perf/gemm.md#the-preferred-window-as-implemented
+// vacuously. Window and evidence: docs/perf/gemm.md#gemm-the-preferred-window-as-implemented
 
 #include <gtest/gtest.h>
 
@@ -148,7 +148,7 @@ std::vector<OpShape> shape_grid(ScalarKind scalar) {
 // The intended divergences. Deliberately an exception list rather than an edit to
 // the replica: editing the replica would make the two agree by construction. Each
 // divergence is counted separately below so none can quietly stop being reached.
-// evidence: docs/perf/gemm.md#evidence-for-each-boundary
+// evidence: docs/perf/gemm.md#gemm-evidence-for-each-boundary
 enum class Divergence { None, HeterogeneousWidened, FloatWindowNarrowed, DefaultFlipped,
                         DoubleWindowWidened, FloatSmallWidened };
 
@@ -247,7 +247,7 @@ void expect_equivalent(ScalarKind kind, const char* type_name) {
         EXPECT_EQ(default_flipped, 0u)
             << "complex must not route native by default: preferred() refuses it, "
                "and the register ladder for complex needs min_dim >= 256 and an "
-               "aligned NN shape (see docs/perf/gemm.md#evidence-for-each-boundary)";
+               "aligned NN shape (see docs/perf/gemm.md#gemm-evidence-for-each-boundary)";
     } else {
         EXPECT_GT(default_flipped, 0u)
             << "grid no longer reaches the WP2 E6 default flip for " << type_name

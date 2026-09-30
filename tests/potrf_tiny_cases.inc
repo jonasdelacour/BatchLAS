@@ -4,7 +4,7 @@
 //
 // Every case here drives sycl_potrf::potrf_tiny_dispatch DIRECTLY: a forced route that
 // supports() rejects silently becomes the vendor, which would make a green run mean
-// nothing. evidence: docs/perf/potrf.md#the-tiny-tier
+// nothing. evidence: docs/perf/potrf.md#potrf-the-tiny-tier
 
 // One batch of n x n matrices at an arbitrary (ld, stride), everything outside the `uplo`
 // triangle set to `pad`. Matrix<T>(n,n,batch) cannot express a padded ld or a stride that

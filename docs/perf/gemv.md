@@ -357,7 +357,7 @@ bandwidth that a streaming kernel never sees.
   not a regression**: 0.164 µs total (0.077 µs `sub_group_sizes`, 0.067 µs `getenv` plus two `std::string`
   constructions), 2–3% of a minimal batched launch.
 
-## Correctness findings
+## GEMV: correctness findings
 
 Across every timed sweep here `relerr` is exactly 0 (468 baseline rows, 840 A/B rows, 2052 audit rows, 1152 repair
 rows) — **and that is not evidence of numerical quality.** The A/B harness generates `h * 0.0625` for `h ∈ [0,16]`, so

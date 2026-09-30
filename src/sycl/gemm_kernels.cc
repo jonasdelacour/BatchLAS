@@ -597,7 +597,7 @@ KernelVariant select_kernel_variant(const MatrixView<T, MatrixFormat::Dense>& A,
 
     if constexpr (std::is_same_v<T, double>) {
         // The Direct/Tiled16 crossover for double is at 24, not 32.
-        // evidence: docs/perf/gemm.md#evidence-for-each-boundary
+        // evidence: docs/perf/gemm.md#gemm-evidence-for-each-boundary
         return max_dim <= 24 ? KernelVariant::Direct : KernelVariant::Tiled16;
     }
 

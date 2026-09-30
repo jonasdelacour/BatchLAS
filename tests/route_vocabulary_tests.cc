@@ -316,7 +316,7 @@ TEST(RouteVocabulary, ShapeClassCollapsesIterationsButNotRegimes) {
 // RouteTable<Op::trsm, T>. A route may be SUPPORTED while not PREFERRED: the
 // vendor-off fallback re-walks the candidate order testing supports() ALONE, so a
 // speed threshold in supports() leaves trsm with no route at all in a vendor-free
-// build. evidence: docs/perf/trsm.md#what-the-spec-got-wrong
+// build. evidence: docs/perf/trsm.md#trsm-what-the-spec-got-wrong
 // ---------------------------------------------------------------------------
 namespace {
 
@@ -1951,7 +1951,7 @@ TEST(RouteGetrf, Sg32GatesBothNativeArms) {
 // pivot span; netlib writes genuine int64. On a GPU queue built with
 // Backend::NETLIB the two arms silently disagree and getri returns wrong numbers
 // with info == 0, so this is a CORRECTNESS gate and lives in supports().
-// evidence: docs/perf/lu.md#correctness-findings
+// evidence: docs/perf/lu.md#lu-correctness-findings
 // ---------------------------------------------------------------------------
 TEST(RouteLuPivotFormat, NetlibOnAGpuQueueIsNotANativeShape) {
     // --- getrf, both tiers ---------------------------------------------
@@ -2120,7 +2120,7 @@ TEST(RouteGetrf, AbsentKernelIsUnsupportedRatherThanSelectable) {
 TEST(RouteGetrf, NativeTierPreferredIsDeclaredAndPinsTheMeasuredTierChoice) {
     // native_tier_preferred() is the third predicate, consulted ONLY in the vendor-free
     // branch. DOUBLE alone prefers the blocked driver below its own CTA ceiling.
-    // evidence: docs/perf/lu.md#native_tier_preferred
+    // evidence: docs/perf/lu.md#lu-native_tier_preferred
     EXPECT_TRUE((declares_native_tier_preferred<GetrfTable, GetrfShape>))
         << "the tier sweep has run; an undeclared hook now costs 1.18-1.29x at "
            "double n=76..96 in the vendor-free build";

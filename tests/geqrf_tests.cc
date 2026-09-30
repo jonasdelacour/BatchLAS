@@ -295,7 +295,7 @@ protected:
 
     // The RESIDENCY predicate, at the whole budget: which leaf geqrf_panel_factorize
     // takes. Strictly wider than cta_fits, and the only one that can reach the 48 KB
-    // launch hole. evidence: docs/perf/qr.md#the-occupancy-rule
+    // launch hole. evidence: docs/perf/qr.md#qr-the-occupancy-rule
     bool leaf_fits(int m, int n) const {
         return sycl_geqrf::geqrf_leaf_fits<T>(m, n, budget());
     }
@@ -1221,7 +1221,7 @@ TYPED_TEST(GeqrfTest, NativeTierTieBreakPicksTheFasterNativeVendorFree) {
     // BOTH shapes must be CTA-ELIGIBLE, or "blocked was chosen" proves nothing: the fit
     // gate, not the tie-break, made the decision. The above-crossover shape is SEARCHED for
     // rather than hardcoded -- the area ceiling can sit below the crossover.
-    // evidence: docs/perf/qr.md#the-occupancy-rule
+    // evidence: docs/perf/qr.md#qr-the-occupancy-rule
     const int square_cap = this->cta_max_square();
     int above = 0;
     if (square_cap > nc) above = nc + 1;

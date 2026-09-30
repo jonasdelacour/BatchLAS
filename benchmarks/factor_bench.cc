@@ -467,7 +467,7 @@ struct Arm {
 // (native blocked getrf) and differ only in which panel leaf the driver calls, which
 // is BATCHLAS_GETRF_LEAF. An arm named "blocked/leaf=reg" pins both, for that arm's
 // reps only, so the leaf A/B is interleaved in one process like every other arm here
-// instead of ratioed across two. evidence: docs/perf/lu.md#the-register-leaf-ab
+// instead of ratioed across two. evidence: docs/perf/lu.md#lu-the-register-leaf-ab
 // P5 needs the same A/B for geqrf's panel leaf, whose variable is BATCHLAS_GEQRF_LEAF, so the
 // leaf variable is chosen by OP rather than hardcoded: setting getrf's variable on a geqrf cell
 // is a silent no-op and the two arms would then be the same arm measured twice.
