@@ -69,15 +69,19 @@ struct RouteTable<Op::gesv, T> {
     // first, so exactly one tier answers. evidence: docs/perf/lu.md#p2-the-measured-gesv-window
     static bool native_tier_preferred(Route r, const GesvShape& s) {
         switch (r.algo) {
-            case Algorithm::Tiny:    return s.order() <= tiny_window_max_n();
+            case Algorithm::Tiny:    return s.order() <= tiny_window_max_n(s);
             case Algorithm::Blocked: return true;
             default:                 return false;
         }
     }
 
     // 0 = no window; cfloat 17..32 is under the gate. evidence: docs/perf/lu.md#end-to-end-after-the-column-bucket
-    static constexpr int64_t tiny_window_max_n() {
+    // sm_120 cfloat: evidence: docs/perf/blackwell.md#lu-gesv
+    static constexpr int64_t tiny_window_max_n(const GesvShape& s) {
         if constexpr (std::is_same_v<T, float>) return 32;
+        if constexpr (std::is_same_v<T, std::complex<float>>) {
+            if (is_sm120_family(s.cuda_cc)) return 3;
+        }
         if constexpr (std::is_same_v<T, std::complex<float>>) return 16;
         return 0;
     }

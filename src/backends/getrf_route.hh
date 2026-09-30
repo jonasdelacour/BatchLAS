@@ -51,6 +51,7 @@ inline std::optional<dispatch::GetrfShape> getrf_op_shape(
     // No budget argument: the register-resident tier holds no local memory, so its
     // ceiling is a property of the kernel's template ladder alone.
     s.tiny_max_n = sycl_getrf::getrf_tiny_max_n<T>();
+    s.cuda_cc = ctx.device().cuda_compute_capability();
     return s;
 }
 

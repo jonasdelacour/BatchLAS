@@ -77,6 +77,19 @@ BATCHLAS_INTERNAL_API Event getrs_fused_dispatch(Queue& ctx,
                                                  Span<int64_t> pivots,
                                                  Span<std::byte> workspace);
 
+// The register-resident tier (getrs_tiny.cc): order <= getrs_tiny_max_n<T>(), any nrhs
+// (solved a few columns at a time). No workspace.
+
+template <typename T>
+BATCHLAS_INTERNAL_API int getrs_tiny_max_n();
+
+template <typename T>
+BATCHLAS_INTERNAL_API Event getrs_tiny_dispatch(Queue& ctx,
+                                                const MatrixView<T, MatrixFormat::Dense>& A,
+                                                const MatrixView<T, MatrixFormat::Dense>& B,
+                                                Transpose transA,
+                                                Span<int64_t> pivots);
+
 // posv's CTA arm: both Cholesky solves in one kernel, same capacity and ceiling as above.
 template <typename T>
 BATCHLAS_INTERNAL_API Event potrs_fused_dispatch(Queue& ctx,

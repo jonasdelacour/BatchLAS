@@ -6,6 +6,7 @@
 #include <batchlas/blas/dispatch/route.hh>
 #include <batchlas/blas/dispatch/route_resolve.hh>
 
+#include <complex>
 #include <cstdint>
 #include <type_traits>
 
@@ -24,11 +25,15 @@ struct GetrsShape : OpShape {
     // The widest nrhs the fused kernel is instantiated for: a build fact, not a device one.
     int64_t fused_max_nrhs = 0;
 
+    // The register-resident tier's order ceiling (a build fact); 0 = absent. Any nrhs.
+    int64_t tiny_max_n = 0;
+
     int64_t order() const { return m; }
     int64_t nrhs() const { return n; }
 };
 
 inline constexpr Route kGetrsOrder[] = {
+    {Origin::Native, Algorithm::Tiny},
     {Origin::Native, Algorithm::CTA},
     {Origin::Native, Algorithm::Blocked},
     {Origin::Vendor, Algorithm::Auto},
@@ -42,7 +47,9 @@ struct RouteTable<Op::getrs, T> {
         if (is_vendor(r)) return true;   // the vendor serves everything it is given
         if (!is_native(r)) return false;
 
-        if (r.algo == Algorithm::CTA) {
+        if (r.algo == Algorithm::Tiny) {
+            if (s.tiny_max_n <= 0) return false;
+        } else if (r.algo == Algorithm::CTA) {
             if (s.fused_max_elems <= 0 || s.fused_max_nrhs <= 0) return false;
         } else if (r.algo == Algorithm::Blocked) {
             if (!s.blocked_available) return false;
@@ -61,10 +68,10 @@ struct RouteTable<Op::getrs, T> {
         if (s.backend == Backend::NETLIB) return false;
 
         switch (r.algo) {
+            case Algorithm::Tiny:
+                return s.order() <= s.tiny_max_n;
             case Algorithm::CTA:
-                if (s.order() * s.nrhs() > s.fused_max_elems) return false;
-                if (s.nrhs() > s.fused_max_nrhs) return false;
-                return true;
+                return cta_fits(s);
             case Algorithm::Blocked:
                 return true;
             default:
@@ -72,9 +79,27 @@ struct RouteTable<Op::getrs, T> {
         }
     }
 
+    static bool cta_fits(const GetrsShape& s) {
+        return s.fused_max_elems > 0 && s.fused_max_nrhs > 0 &&
+               s.order() * s.nrhs() <= s.fused_max_elems && s.nrhs() <= s.fused_max_nrhs;
+    }
+
+    static bool tiny_fits(const GetrsShape& s) {
+        return s.tiny_max_n > 0 && s.order() <= s.tiny_max_n;
+    }
+
+    // sm_120 float/cfloat only. evidence: docs/perf/blackwell.md#lu-getrs-tiny
+    static bool tiny_native(const GetrsShape& s) {
+        constexpr bool kSingle =
+            std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>;
+        return kSingle && is_sm120_family(s.cuda_cc) && tiny_fits(s);
+    }
+
     // Every clause below is a window EDGE. evidence: docs/perf/lu.md#getrs-fused-window-evidence
     static bool preferred(Route r, const GetrsShape& s) {
         if (!is_native(r)) return false;
+
+        if (r.algo == Algorithm::Tiny) return tiny_window(s);
 
         if (r.algo == Algorithm::Blocked) {
             // Deliberately conservative; it gives up measured wins below 128.
@@ -96,18 +121,30 @@ struct RouteTable<Op::getrs, T> {
         if constexpr (std::is_same_v<T, float>) {        // clause B
             if (s.nrhs() <= 4) return true;
         }
+        // evidence: docs/perf/blackwell.md#lu-getrs-fused
+        if (is_sm120_family(s.cuda_cc)) {
+            if constexpr (std::is_same_v<T, float>) return s.nrhs() <= 8 && s.order() >= 256;
+            if constexpr (std::is_same_v<T, std::complex<float>>) {
+                return (s.nrhs() <= 4 && s.order() >= 128) ||
+                       (s.nrhs() <= 8 && s.order() >= 512);
+            }
+        }
         return false;
     }
 
-    // Vendor-free tie-break: CTA leads everywhere inside supports(), so raising
-    // kGetrsFusedMaxRhs needs a measured window here first.
+    // Every measured sm_120 cell, n 2..32 x nrhs 1..64 x batch 64..32768, both types.
+    static bool tiny_window(const GetrsShape& s) { return tiny_native(s); }
+
+    // Vendor-free tie-break, EXHAUSTIVE: exactly one tier answers for every shape, so the
+    // plain walk never picks Tiny (first in the order) where it was not measured. Off
+    // sm_120 this is the pre-Tiny answer: CTA wherever it fits, Blocked elsewhere.
     static bool native_tier_preferred(Route r, const GetrsShape& s) {
         if (!is_native(r)) return true;
-        static_cast<void>(s);
         switch (r.algo) {
-            case Algorithm::CTA:     return true;
-            case Algorithm::Blocked: return false;
-            default:                 return true;
+            case Algorithm::Tiny:    return tiny_native(s);
+            case Algorithm::CTA:     return !tiny_native(s) && cta_fits(s);
+            case Algorithm::Blocked: return !tiny_native(s) && !cta_fits(s);
+            default:                 return false;
         }
     }
 

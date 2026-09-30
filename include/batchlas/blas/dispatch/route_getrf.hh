@@ -78,6 +78,7 @@ struct RouteTable<Op::getrf, T> {
         if (r.algo != Algorithm::Blocked) return false;
         if (tiny_window(s)) return false;  // defence in depth; no test observes it
 
+        if (is_sm120_family(s.cuda_cc)) return blocked_window_sm120(s);
         if constexpr (std::is_same_v<T, float>) return s.order() >= 256;
         if constexpr (std::is_same_v<T, std::complex<float>>) {
             return s.order() >= 512 || (s.order() >= 256 && s.batch >= 256);
@@ -85,11 +86,25 @@ struct RouteTable<Op::getrf, T> {
         return false;   // double and cdouble earn nothing at any order
     }
 
+    // evidence: docs/perf/blackwell.md#lu-getrf-windows
+    static bool blocked_window_sm120(const GetrfShape& s) {
+        constexpr int64_t kMidOrder = std::is_same_v<T, float> ? 48 : 64;
+        if constexpr (std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>) {
+            return s.order() >= 192 || (s.order() >= 128 && s.batch >= 256) ||
+                   (s.order() >= kMidOrder && s.batch >= 1024);
+        }
+        return false;   // fp64 was not measured on sm_120
+    }
+
     // Bounds are measured EDGES. n = 4 ties the vendor at the DRAM roof, cfloat 8 falls
     // under the gate, cfloat 25..32 ties the vendor (0.97-1.10x) and stays out.
     // evidence: docs/perf/lu.md#the-column-bucket
     static bool tiny_window(const GetrfShape& s) {
         if (!tiny_fits(s)) return false;
+        // evidence: docs/perf/blackwell.md#lu-getrf-windows
+        constexpr bool kSingle =
+            std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>;
+        if (kSingle && is_sm120_family(s.cuda_cc)) return s.order() >= 4;
         if constexpr (std::is_same_v<T, float>) {
             return s.order() >= 5 && s.order() <= 32;
         } else if constexpr (std::is_same_v<T, std::complex<float>>) {
@@ -115,10 +130,15 @@ struct RouteTable<Op::getrf, T> {
     static bool native_tier_preferred(Route r, const GetrfShape& s) {
         if (!is_native(r)) return true;
 
-        const int64_t cta_max_order = [] () -> int64_t {
+        const int64_t cta_max_order = [&s] () -> int64_t {
             if constexpr (std::is_same_v<T, double>) {
                 return 32;
             } else {
+                // evidence: docs/perf/blackwell.md#lu-getrf-native-tier
+                if (is_sm120_family(s.cuda_cc) && s.batch >= 1024) {
+                    if constexpr (std::is_same_v<T, float>) return 32;
+                    if constexpr (std::is_same_v<T, std::complex<float>>) return 39;
+                }
                 return 1 << 30;
             }
         }();
