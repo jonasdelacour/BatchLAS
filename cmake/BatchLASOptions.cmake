@@ -291,7 +291,14 @@ else()
     )
 endif()
 
+# icpx defaults to -fp-model=fast, which tags device code with a flush-to-zero
+# denormal mode that the linked libspirv builtins do not share. LLVM then refuses
+# to inline sycl::fma, barriers and id queries, and ~98% of kernels call them out
+# of line (cfloat gemm 8x, potrf cfloat 6x slower on sm_120). clang++/dpcpp
+# already defaults to precise; this makes both compilers agree.
+# evidence: docs/perf/blackwell.md#icpx-fast-fp-model
 target_compile_options(batchlas_build_options INTERFACE
+    $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CXX_COMPILER_ID:IntelLLVM>>:-ffp-model=precise>
     ${_BATCHLAS_DEBUG_COMPILE_OPTIONS}
     $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release>>:-O3>
     $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:MinSizeRel>>:-Os>

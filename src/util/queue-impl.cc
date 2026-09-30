@@ -1,4 +1,7 @@
 #include "../queue.hh"
+#include <cstdio>
+#include <map>
+#include <mutex>
 #include <batchlas/backend_config.h>
 #include <batchlas/settings.hh>
 #include <batchlas/util/sycl-span.hh>
@@ -373,6 +376,23 @@ bool Device::supports_sub_group_size(size_t size) const {
         if (s == size) return true;
     }
     return false;
+}
+
+int Device::cuda_compute_capability() const {
+    static std::mutex mu;
+    static std::map<std::pair<int, size_t>, int> memo;
+    std::lock_guard<std::mutex> lock(mu);
+    auto key = std::make_pair(static_cast<int>(type), idx);
+    if (auto it = memo.find(key); it != memo.end()) return it->second;
+    const auto& d = QueueImpl::device_arrays.at(static_cast<int>(type)).at(idx);
+    int cc = 0;
+    if (d.get_backend() == sycl::backend::ext_oneapi_cuda) {
+        const std::string v = d.get_info<sycl::info::device::version>();
+        int major = 0, minor = 0;
+        if (std::sscanf(v.c_str(), "%d.%d", &major, &minor) == 2) cc = major * 10 + minor;
+    }
+    memo.emplace(key, cc);
+    return cc;
 }
 
 }  // namespace batchlas

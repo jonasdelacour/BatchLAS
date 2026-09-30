@@ -162,6 +162,11 @@ inline std::string op_env_stem(Op o) {
 
 // Everything the routing predicates read, and nothing more. The device facts are
 // cached FIELDS rather than SYCL get_info queries, keeping the resolver pure.
+// Consumer Blackwell (RTX 50xx / RTX PRO 6000, sm_120/121). Windows measured on the
+// 4090 stay the default; a window re-measured on sm_120 branches on this.
+// evidence: docs/perf/blackwell.md
+constexpr bool is_sm120_family(int cuda_cc) { return cuda_cc >= 120 && cuda_cc < 130; }
+
 struct OpShape {
     Op op = Op::COUNT;
     ScalarKind scalar = ScalarKind::F32;
@@ -181,6 +186,10 @@ struct OpShape {
     bool is_gpu = false;
     int max_sub_group = 0;
     int compute_units = 0;
+    // Device::cuda_compute_capability(): 120 = sm_120, 89 = sm_89, 0 = unknown or
+    // non-CUDA. Per-architecture windows key on this; 0 must select the sm_89
+    // (as-measured) behaviour so other devices keep today's routing.
+    int cuda_cc = 0;
 
     int64_t max_dim() const { return m > n ? (m > k ? m : k) : (n > k ? n : k); }
     int64_t min_dim() const { return m < n ? (m < k ? m : k) : (n < k ? n : k); }
