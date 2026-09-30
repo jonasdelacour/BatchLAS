@@ -277,10 +277,15 @@ inline bool syev_prefer_vendor_over_cta(bool is_gpu,
 }
 
 
-// Eigenvector routing window, keyed on n alone (never on batch) and per scalar type.
+// sm_120's float blocked/two_stage edge; the sm_89 edge is 448.
+// evidence: docs/perf/blackwell.md#syev-float-blocked-two-stage-edge
+inline constexpr int64_t kSyevSm120FloatBlockedMaxN = 768;
+
+// Eigenvector routing window, keyed on n alone (never on batch), per scalar type
+// and, where re-measured, per architecture (cuda_cc 0 = the sm_89 window).
 // evidence: docs/perf/README.md#the-raw-data
 template <typename T>
-inline batchlas::dispatch::Algorithm syev_saturated_algorithm_for_n(int64_t n) {
+inline batchlas::dispatch::Algorithm syev_saturated_algorithm_for_n(int64_t n, int cuda_cc = 0) {
     // Auto means "no native algorithm preferred at this n"; the resolver, not this
     // function, then picks the origin.
     using A = batchlas::dispatch::Algorithm;
@@ -295,6 +300,10 @@ inline batchlas::dispatch::Algorithm syev_saturated_algorithm_for_n(int64_t n) {
     } else {
         if (n <= 448) return A::Blocked;
         if constexpr (!kDouble) {
+            if (batchlas::dispatch::is_sm120_family(cuda_cc) &&
+                n <= kSyevSm120FloatBlockedMaxN) {
+                return A::Blocked;
+            }
             if (n <= 1024) return A::TwoStage;
             return A::Auto;
         } else {
@@ -344,6 +353,11 @@ inline SyevShape syev_op_shape(const Queue& ctx,
             static_cast<int>(ctx.device().get_property(DeviceProperty::MAX_SUB_GROUP_SIZE));
     } catch (...) {
         // leave default
+    }
+    try {
+        s.cuda_cc = ctx.device().cuda_compute_capability();
+    } catch (...) {
+        // leave 0: the sm_89 windows
     }
     return s;
 }
@@ -400,7 +414,7 @@ struct RouteTable<Op::syev, T> {
                 // Eigenvalues-only first: its window overlaps the vendor's.
                 const Algorithm want = (s.jobtype != JobType::EigenVectors)
                     ? det::syev_saturated_algorithm_for_n_values(s.n)
-                    : det::syev_saturated_algorithm_for_n<T>(s.n);
+                    : det::syev_saturated_algorithm_for_n<T>(s.n, s.cuda_cc);
                 return r.algo == want;
             }
 
