@@ -643,6 +643,67 @@ TEST(RoutePotrf, TheMeasuredLpanelWindowAndNothingElse) {
     EXPECT_FALSE(PotrfTable::preferred(Route{Origin::Vendor, Algorithm::Auto}, sh));
 }
 
+// sm_120 re-bracketed both LPanel edges; cuda_cc 0 and 89 must route exactly as before.
+// Both edges are straddled per type, for both walks, and the edges are spelled out here
+// rather than read back from the table. evidence: docs/perf/blackwell.md#potrf-lpanel-auto-window
+TEST(RoutePotrf, Sm120LpanelEdgesArePerArchitecture) {
+    constexpr Route kLp{Origin::Native, Algorithm::LPanel};
+    using CTable = RouteTable<Op::potrf, std::complex<float>>;
+    auto at = [](int64_t order, int cc, bool blocked = true) {
+        auto s = potrf_shape(order, 2048, 155, Uplo::Lower, 512);
+        s.cuda_cc = cc;
+        s.blocked_available = blocked;
+        return s;
+    };
+    auto native_walk_f = [](const PotrfShape& s) { return resolve_potrf_route<float>(kPotrfAuto, s, false); };
+    auto native_walk_c = [](const PotrfShape& s) {
+        return resolve_potrf_route<std::complex<float>>(kPotrfAuto, s, false);
+    };
+    auto auto_f = [](const PotrfShape& s) { return resolve_potrf_route<float>(kPotrfAuto, s, true); };
+    auto auto_c = [](const PotrfShape& s) {
+        return resolve_potrf_route<std::complex<float>>(kPotrfAuto, s, true);
+    };
+
+    for (int cc : {0, 89, 120}) {
+        const bool b = (cc == 120);
+        // Vendor present: float 256 | 320 edges, cfloat 128 | 256 edges.
+        EXPECT_EQ(auto_f(at(256, cc)), kLp) << "cc=" << cc;
+        EXPECT_EQ(auto_f(at(320, cc)) == kLp, b) << "cc=" << cc;
+        EXPECT_TRUE(is_vendor(auto_f(at(321, cc)))) << "cc=" << cc;
+        EXPECT_EQ(auto_c(at(128, cc)), kLp) << "cc=" << cc;
+        EXPECT_EQ(is_vendor(auto_c(at(129, cc))), b) << "cc=" << cc;
+        EXPECT_EQ(is_vendor(auto_c(at(256, cc))), b) << "cc=" << cc;
+        EXPECT_TRUE(is_vendor(auto_c(at(257, cc)))) << "cc=" << cc;
+
+        // Vendor-free walk: float LPanel stops at 320 on sm_120 only; cfloat never caps.
+        EXPECT_EQ(native_walk_f(at(320, cc)), kLp) << "cc=" << cc;
+        EXPECT_EQ(native_walk_f(at(321, cc)), b ? kPotrfBlocked : kLp) << "cc=" << cc;
+        EXPECT_EQ(native_walk_f(at(512, cc)), b ? kPotrfBlocked : kLp) << "cc=" << cc;
+        EXPECT_EQ(native_walk_c(at(512, cc)), kLp) << "cc=" << cc;
+        // Where Blocked cannot take the shape the cap must not strand it.
+        EXPECT_EQ(native_walk_f(at(512, cc, /*blocked=*/false)), kLp) << "cc=" << cc;
+
+        // R8b from both hooks, every order, with and without Blocked.
+        for (bool blocked : {true, false}) {
+            for (int64_t n = 1; n <= 512; ++n) {
+                const auto s = at(n, cc, blocked);
+                int tier = 0, tier_c = 0, pref = 0, pref_c = 0;
+                for (const Route* it = PotrfTable::order_begin(); it != PotrfTable::order_end(); ++it) {
+                    if (!is_native(*it)) continue;
+                    tier += PotrfTable::supports(*it, s) && PotrfTable::native_tier_preferred(*it, s);
+                    tier_c += CTable::supports(*it, s) && CTable::native_tier_preferred(*it, s);
+                    pref += PotrfTable::supports(*it, s) && PotrfTable::preferred(*it, s);
+                    pref_c += CTable::supports(*it, s) && CTable::preferred(*it, s);
+                }
+                EXPECT_EQ(tier, 1) << "float n=" << n << " cc=" << cc << " blocked=" << blocked;
+                EXPECT_EQ(tier_c, 1) << "cfloat n=" << n << " cc=" << cc << " blocked=" << blocked;
+                EXPECT_LE(pref, 1) << "float n=" << n << " cc=" << cc;
+                EXPECT_LE(pref_c, 1) << "cfloat n=" << n << " cc=" << cc;
+            }
+        }
+    }
+}
+
 TEST(RouteVocabulary, AlgorithmEnumeratorValuesAreAbi) {
     auto value = [](Algorithm a) { return static_cast<int>(a); };
     EXPECT_EQ(value(Algorithm::Auto), 0);

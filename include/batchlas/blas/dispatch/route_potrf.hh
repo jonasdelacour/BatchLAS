@@ -6,6 +6,7 @@
 #include <batchlas/blas/dispatch/route_resolve.hh>
 
 #include <complex>
+#include <cstdint>
 #include <type_traits>
 
 namespace batchlas::dispatch {
@@ -76,8 +77,8 @@ struct RouteTable<Op::potrf, T> {
         }
     }
 
-    // Two windows: the register tier at n <= 32, LPanel at 32 < n <= 256 (Lower, fp32 only).
-    // evidence: docs/perf/potrf.md#the-measured-lpanel-window
+    // Two windows: the register tier at n <= 32, LPanel at 32 < n <= lpanel_window_max_order
+    // (Lower, fp32 only). evidence: docs/perf/potrf.md#the-measured-lpanel-window
     static bool preferred(Route r, const PotrfShape& s) {
         if (!is_native(r)) return false;
 
@@ -85,7 +86,7 @@ struct RouteTable<Op::potrf, T> {
         if (tiny_window(s)) return r.algo == Algorithm::Tiny;
 
         if (s.uplo != Uplo::Lower || !lpanel_types()) return false;
-        if (s.order() <= 32 || s.order() > 256) return false;
+        if (s.order() <= 32 || s.order() > lpanel_window_max_order(s.cuda_cc)) return false;
 
         // R8b: exactly ONE tier may answer true, because automatic() returns on the first
         // supports && preferred hit and never consults the tier hook.
@@ -129,10 +130,14 @@ struct RouteTable<Op::potrf, T> {
         // Enumerate EVERY tier: `default:` answers true, so an omitted arm takes every shape.
         // evidence: docs/perf/potrf.md#every-tier-is-enumerated-explicitly
         const bool cta_holds = (s.cta_max_n >= 1) && (s.order() <= s.cta_max_n);
+        const bool blocked_holds = (s.uplo == Uplo::Lower) && s.blocked_available &&
+                                   (s.cta_max_n >= 1);
         // LPanel takes a shape only where it was MEASURED: double and cdouble have no grid.
         const bool lpanel_holds = lpanel_types() && (s.uplo == Uplo::Lower) &&
                                   (s.lpanel_max_n >= 1) && (s.order() <= s.lpanel_max_n) &&
-                                  (s.order() > cta_last_order());
+                                  (s.order() > cta_last_order()) &&
+                                  (s.order() <= lpanel_tier_max_order(s.cuda_cc) ||
+                                   !blocked_holds);
         switch (r.algo) {
             case Algorithm::Tiny:    return tiny_window(s);
             case Algorithm::CTA:     return !tiny_window(s) && cta_holds && !lpanel_holds;
@@ -149,6 +154,19 @@ struct RouteTable<Op::potrf, T> {
     }
     static constexpr int64_t cta_last_order() {
         return std::is_same_v<T, float> ? 35 : 32;
+    }
+
+    // LPanel vs the vendor. evidence: docs/perf/blackwell.md#potrf-lpanel-auto-window
+    static constexpr int64_t lpanel_window_max_order(int cuda_cc) {
+        if (is_sm120_family(cuda_cc)) return std::is_same_v<T, float> ? 320 : 128;
+        return 256;
+    }
+
+    // LPanel vs Blocked in the native walk; never below lpanel_window_max_order, and it
+    // yields only to a Blocked that holds. evidence: docs/perf/blackwell.md#potrf-lpanel-native-tier-cap
+    static constexpr int64_t lpanel_tier_max_order(int cuda_cc) {
+        if (is_sm120_family(cuda_cc) && std::is_same_v<T, float>) return 320;
+        return INT64_MAX;
     }
 
     static constexpr const Route* order_begin() { return kPotrfOrder; }

@@ -38,6 +38,7 @@ inline std::optional<dispatch::PotrfShape> potrf_op_shape(
     s.uplo = uplo;
 
     s.is_gpu = (ctx.device().type == DeviceType::GPU);
+    s.cuda_cc = ctx.device().cuda_compute_capability();  // per-arch windows; 0 = sm_89's
 
     s.has_sg32 = ctx.device().supports_sub_group_size(32);  // enumerated, not `>= 32`
 
