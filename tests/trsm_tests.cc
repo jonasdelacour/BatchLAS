@@ -280,7 +280,7 @@ struct TrsmNativeCase {
 };
 
 template <typename T>
-void RunTrsmNative(const TrsmNativeCase<T>& tc) {
+void RunTrsmNativeOnce(const TrsmNativeCase<T>& tc, bool allow_sg) {
     auto ctx = std::make_shared<Queue>(Device("gpu"), Backend::CUDA);
 
     const int n = tc.n, q = tc.q, bs = tc.batch;
@@ -314,7 +314,7 @@ void RunTrsmNative(const TrsmNativeCase<T>& tc) {
     }
 
     (void)batchlas::sycl_trsm::trsm_native_v1_dispatch<T>(
-        *ctx, A.view(), B.view(), tc.alpha, tc.side, tc.uplo, tc.transA, tc.diag);
+        *ctx, A.view(), B.view(), tc.alpha, tc.side, tc.uplo, tc.transA, tc.diag, allow_sg);
     ctx->wait();
 
     // A real accumulator would drop the imaginary part and pass on wrong answers.
@@ -358,10 +358,18 @@ void RunTrsmNative(const TrsmNativeCase<T>& tc) {
                     << (tc.side == Side::Left ? "op(A)*X != alpha*B at b=" : "X*op(A) != alpha*B at b=") << b << " r=" << r << " c=" << c
                     << "  n=" << n << " q=" << q
                     << "  uplo=" << int(tc.uplo) << " transA=" << int(tc.transA)
-                    << " diag=" << int(tc.diag);
+                    << " diag=" << int(tc.diag) << " allow_sg=" << allow_sg;
             }
         }
     }
+}
+
+// V1 pinned first: on sm_120 the kernel choice sends small-q Side::Left to the
+// sub-group kernel, which would leave V1's Left path untested there.
+template <typename T>
+void RunTrsmNative(const TrsmNativeCase<T>& tc) {
+    RunTrsmNativeOnce(tc, false);
+    if (tc.side == Side::Left) RunTrsmNativeOnce(tc, true);
 }
 
 }  // namespace
@@ -526,17 +534,32 @@ int trsm_expected_wg(const Queue& ctx, int q, int bs) {
     const auto dev = ctx.device();
     const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
     const int cu = static_cast<int>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS));
-    int wg = 32;
-    for (int cand : {256, 128, 64, 32}) {
-        if (cand > max_wg) continue;
-        if (cand > 32 && cand / 2 >= q) continue;
-        wg = cand;
-        const int64_t groups_c = (q + cand - 1) / cand;
-        if (static_cast<int64_t>(bs) * groups_c >= static_cast<int64_t>(4) * cu) break;
-    }
-    return wg;
+    return batchlas::sycl_trsm::trsm_v1_ladder_wg(max_wg, cu, q, bs);
 }
 }  // namespace
+
+// The launcher calls this function, so these literals pin the ladder itself.
+// evidence: docs/perf/blackwell.md#trsm-v1-ladder-cap
+TEST(TrsmNativeCta, LadderRungsAreCappedByRhsCount) {
+    using batchlas::sycl_trsm::trsm_v1_ladder_wg;
+    // Saturated batch on 188 CUs: the cap alone decides the rung.
+    EXPECT_EQ(trsm_v1_ladder_wg(1024, 188, 8, 4096), 32);
+    EXPECT_EQ(trsm_v1_ladder_wg(1024, 188, 32, 4096), 32);
+    EXPECT_EQ(trsm_v1_ladder_wg(1024, 188, 33, 4096), 64);
+    EXPECT_EQ(trsm_v1_ladder_wg(1024, 188, 40, 4096), 64);
+    EXPECT_EQ(trsm_v1_ladder_wg(1024, 188, 64, 4096), 64);
+    EXPECT_EQ(trsm_v1_ladder_wg(1024, 188, 65, 4096), 128);
+    EXPECT_EQ(trsm_v1_ladder_wg(1024, 188, 128, 4096), 128);
+    EXPECT_EQ(trsm_v1_ladder_wg(1024, 188, 129, 4096), 256);
+    EXPECT_EQ(trsm_v1_ladder_wg(1024, 188, 976, 4096), 256);
+    // Unsaturated batch: the ladder keeps descending until 4*cu groups exist.
+    EXPECT_EQ(trsm_v1_ladder_wg(1024, 188, 976, 128), 128);
+    EXPECT_EQ(trsm_v1_ladder_wg(1024, 128, 976, 128), 256);
+    EXPECT_EQ(trsm_v1_ladder_wg(1024, 188, 976, 1), 32);
+    // A device work-group limit below a rung skips it.
+    EXPECT_EQ(trsm_v1_ladder_wg(128, 188, 976, 4096), 128);
+    EXPECT_EQ(trsm_v1_ladder_wg(64, 188, 976, 4096), 64);
+}
 
 TEST(TrsmNativeBlocked, MultiSubGroupWorkGroupStagesItsTriangleCorrectly) {
     auto probe = std::make_shared<Queue>(Device("gpu"), Backend::CUDA);

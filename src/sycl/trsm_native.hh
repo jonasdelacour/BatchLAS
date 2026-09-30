@@ -10,7 +10,6 @@
 #include <batchlas/blas/dispatch/route.hh>
 
 #include <complex>
-#include <cstdlib>
 #include <type_traits>
 #include <functional>
 #include <batchlas/util/sycl-device-queue.hh>
@@ -33,7 +32,24 @@ BATCHLAS_INTERNAL_API Event trsm_native_v1_dispatch(Queue& ctx,
                                                     Side side,
                                                     Uplo uplo,
                                                     Transpose transA,
-                                                    Diag diag);
+                                                    Diag diag,
+                                                    bool allow_sg = true);
+
+// V1's work-group width. A lane owns one rhs and dead lanes still run the whole
+// recurrence, so no rung may leave more than half its lanes without a column.
+// evidence: docs/perf/blackwell.md#trsm-v1-ladder-cap
+inline constexpr int kTrsmV1MaxWg = 256;
+constexpr int trsm_v1_ladder_wg(int max_wg, int cu, int q, int bs) {
+    int wg = 32;
+    for (int cand : {kTrsmV1MaxWg, 128, 64, 32}) {
+        if (cand > max_wg) continue;
+        if (cand > 32 && cand / 2 >= q) continue;
+        wg = cand;
+        const long long groups_c = (q + cand - 1) / cand;
+        if (static_cast<long long>(bs) * groups_c >= 4LL * cu) break;
+    }
+    return wg;
+}
 
 // Side::Left sub-group kernel (trsm_sg_left.cc), orders 1..32; throws above 32.
 template <typename T>
@@ -51,7 +67,6 @@ BATCHLAS_INTERNAL_API Event trsm_native_sg_left_dispatch(Queue& ctx,
 template <typename T>
 inline bool trsm_left_use_sg(int cuda_cc, int n, int q) {
     if (n > 32) return false;
-    if (const char* e = std::getenv("BATCHLAS_DEV_TRSM_SG")) return e[0] == '1';
     if (!dispatch::is_sm120_family(cuda_cc)) return false;
     if constexpr (std::is_same_v<T, float>) return q <= (n <= 4 ? 128 : n <= 8 ? 64 : 32);
     if constexpr (std::is_same_v<T, std::complex<float>>) {

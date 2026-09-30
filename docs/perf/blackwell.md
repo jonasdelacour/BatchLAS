@@ -620,8 +620,15 @@ column still run the whole N-step recurrence. Its work-group ladder over
 {256, 128, 64, 32} took the first rung with `batch * ceil(q / wg) >= 4 * CU`. At any
 saturated batch that is 256, so a q=8 solve ran 248 dead lanes per group. The ladder
 now skips a rung more than half of whose lanes would have no column
-(`cand > 32 && cand / 2 >= q`). This is an architecture-independent defect fix, so it
-is unconditional. `BATCHLAS_DEV_TRSM_CAP=0` restores the old ladder for A/B.
+(`cand > 32 && cand / 2 >= q`, in `trsm_v1_ladder_wg`). This is an
+architecture-independent defect fix, so it is unconditional. The A/B is against the
+BASE build; the development knob that restored the old ladder was removed.
+
+It was measured on sm_120 only. On the RTX 4090 (cc 89) V1's work-group geometry also
+changes for q < 128 at saturated batch, and routing there is otherwise unchanged. The
+change is correctness-neutral: the group barrier stays and the work-group only shrinks.
+Its sm_89 timing is not measured. Re-measure small-q V1 cells there before quoting a
+4090 number.
 
 V1 alone, BASE -> capped, ms (batch 32768): float n32 q8 0.994 -> 0.284, n16 q8
 0.280 -> 0.067, n32 q32 1.105 -> 0.43; cfloat n32 q8 1.551 -> 0.44, n16 q16
@@ -695,9 +702,19 @@ Tests (`TrsmNativeSgLeft.*`) call the kernel directly with a padded ld and batch
 stride and large finite poison. Three planted breaks were each rebuilt and run over all
 of `trsm_tests`. Reading A with ld = n turned red the three direct strided suites plus
 the routed Left orders and the blocked suites (10 tests). Dropping the store's
-`c0 + j < q` guard turned red only the `TrsmNativeSgLeft` suite, which aborts in the
-saturating-batch case. Ending the step loop one row early turned red every test that
-reaches the kernel (15) while the Right-side and V1-direct cases stayed green.
+`c0 + j < q` guard turned red 13 tests before the run aborted with an illegal address
+in the saturating-batch case: `TrsmNativeCta.Complex{CanonicalCrossProductFloat,
+AlphaHasImaginaryPart, PartialBucketAndRaggedRhs}`, `TrsmNativeBlocked.{FloatAndRaggedRhs,
+ComplexCrossoverAndAlpha, TwoLevelFloatAndComplex}`, the four `TrsmFloatLeftOrders` Left
+tests, and the three strided/edge `TrsmNativeSgLeft` tests (`break2.log`). Ending the
+step loop one row early turned red every test that reached the kernel (15), while the
+Right-side cases stayed green.
+
+These red sets were recorded before `RunTrsmNative` ran each Left case twice. It now
+runs V1 pinned (`allow_sg = false`) and then with the kernel choice. On sm_120 the
+choice sends small-q Left to this kernel, so V1's Left path stays covered on this box.
+`TrsmNativeCta.LadderRungsAreCappedByRhsCount` checks the ladder against literal
+(max_wg, CU, q, batch) cases.
 
 ### trsm on sm_120: result
 
@@ -790,6 +807,17 @@ and batch 2048 (0.0276 vs 0.0298). `cuda_cc` 0 and 89 route as before. Auto, BAS
 new, ms (`f_rauto.csv`, cuBLAS in brackets): n32 q8 b32768 1.041 -> 0.162 (0.163),
 n32 q8 b4096 0.122 -> 0.039 (0.039), n20 q8 b4096 0.107 -> 0.031 (0.031), n16 q8
 b32768 0.277 -> 0.059 (0.072).
+
+The window has no upper order bound. The review re-measured orders above 32 at q <= 8
+and found that the vendor wins at every one, native / cuBLAS in ms
+(`~/.claude/jobs/698ef31c/tmp/review2-trsm/r_rbig.csv`):
+
+- n48 q8 b8192: 0.141 / 0.082
+- n64 q8 b32768: 1.007 / 0.481
+- n128 q8 b16384: 1.330 / 0.855
+- n256 q4 b4096: 1.072 / 0.683
+
+Auto matched the vendor at each of them.
 
 Not done: rows 9..16 at order 17..24, and at order 32 with batch 32768, still lose
 5-18% (n20 q16, n32 q16 b32768). A Side::Right sub-group kernel (each row of B is a

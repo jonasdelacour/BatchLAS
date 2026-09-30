@@ -13,7 +13,6 @@
 #include <sycl/sycl.hpp>
 
 #include <complex>
-#include <cstdlib>
 #include <string>
 #include <type_traits>
 
@@ -198,8 +197,7 @@ Event trsm_native_sg_left_qc(Queue& ctx,
                              const MatrixView<T, MatrixFormat::Dense>& B,
                              T alpha, Uplo uplo, Transpose transA, Diag diag) {
     const int q = static_cast<int>(B.cols());
-    int qc = q <= 4 ? 4 : (q <= 8 ? 8 : 16);
-    if (const char* e = std::getenv("BATCHLAS_DEV_TRSM_SG_QC")) qc = std::atoi(e);
+    const int qc = q <= 4 ? 4 : (q <= 8 ? 8 : 16);
     if (qc == 4) return trsm_native_sg_left<T, N, 4>(ctx, A, B, alpha, uplo, transA, diag);
     // complex<double> at QC=16 needs 255 registers and a stack frame.
     if constexpr (std::is_same_v<T, std::complex<double>>) {
