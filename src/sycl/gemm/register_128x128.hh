@@ -131,7 +131,7 @@ struct Gemm128x128Body {
     T alpha, beta;
     sycl::local_accessor<T, 1> tile_a, tile_b;
 
-    [[intel::max_work_group_size(1, 1, Threads), intel::min_work_groups_per_cu(kMinGroupsPerCu)]]
+    [[BATCHLAS_LAUNCH_BOUNDS(Threads, kMinGroupsPerCu)]]
     void operator()(sycl::nd_item<3> item) const {
         const int bid = static_cast<int>(item.get_group(0));
         if (bid >= batch) {
