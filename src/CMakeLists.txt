@@ -165,7 +165,6 @@ function(batchlas_configure_component target)
             batchlas_build_options
             batchlas_dep_options
             ${_sycl_options}
-            tbb
     )
     # SONAME discipline. Without these every install wrote a bare
     # libbatchlas_*.so whose DT_SONAME was the same bare name, so two versions
