@@ -632,8 +632,9 @@ Windows (float and complex<float>; `fits16` = max(m,n) <= 16, or min(m,n) <= 8 w
 max(m,n) <= 32):
 
 - 16x16 tile: `fits16`, at least 1024 tiles in flight, and k >= 32 (float) or
-  max(m,n,k) > 8 (cfloat).
+  max(m,n,k) > 8 (cfloat). float needs 2048 tiles from k = 768 on.
 - 32x32 tile: max(m,n) <= 32 and not `fits16`, at least 1024 tiles, and k > 32 (float).
+  float needs 1536 tiles from k = 512 on (see "Tiles in flight at deep k" below).
 - float, 32 < min(m,n), max(m,n) < 128, max(m,n,k) > 56: the 64x64 wide tile when
   min(m,n) <= 64, otherwise 128x128x8 (gemm-3).
 - cfloat 64x64 wide gate: min(m,n) >= 32 instead of min(m,n,k) >= 32 (gemm-2).
@@ -675,9 +676,56 @@ Brackets (forced-kernel screens on the same card, as /vendor):
   tile is as good (0.39) and wins from k=64 up (8x8x64 0.57 vs Direct 0.83).
 - k edge of the float 32 tile: 32x32x32 SmallBatched 0.85 vs 0.89, and 32x32x64 1.10
   vs 0.93.
-- Tiles in flight: float 16x16x256 b512 is 1.77 on the 16 tile vs 1.25 on BASE, and
-  b1024 1.22 vs 1.35. Float 32x32x256 b512 1.85 vs 1.20, and b1024 1.08 vs 1.09. cfloat
-  32x32x64 b1024 1.05 vs 1.69.
+- Tiles in flight (k = 256): float 16x16x256 b512 is 1.77 on the 16 tile vs 1.25 on
+  BASE, and b1024 1.22 vs 1.35. Float 32x32x256 b512 1.85 vs 1.20, and b1024 1.08 vs
+  1.09. cfloat 32x32x64 b1024 1.05 vs 1.69. The 1024 floor holds only up to moderate k;
+  see the next subsection.
+
+#### Tiles in flight at deep k
+
+Review found the 1024-tile floor losing at deep k: one 64-thread group per tile walks k
+serially, and at 1024 tiles the older kernels (Tiled16 at 16x16, Tiled32x32Register at
+32x32) are not yet wave-limited. Forced-tile screens, GPU 1, beta = 1, 3 reps, BASE vs
+the tile, /vendor at `LD_PAD=0` / `LD_PAD=1`:
+
+| cell | tiles | BASE | tile | verdict |
+|---|---|---|---|---|
+| f 16x16x384 | 1024 | 1.49 / 1.32 | 1.34 / 1.33 | tile |
+| f 16x16x512 | 1024 | 1.64 / 1.45 | 1.43 / 1.41 | tile |
+| f 16x16x512 | 1536 | 1.62 / 1.46 | 1.10 / 1.11 | tile |
+| f 16x16x768 | 1024 | 1.68 / 1.50 | 1.44 / 1.43 | BASE (forfeit) |
+| f 16x16x768 | 1536 | 1.08 / 1.01 | 1.11 / 1.11 | BASE |
+| f 16x16x1024 | 1024 | 1.61 / 1.21 | 1.71 / 1.77 | BASE |
+| f 16x16x1024 | 1536 | 1.13 / 1.03 | 1.12 / 1.12 | BASE |
+| f 16x16x1024 | 2048 | 1.11 / 0.98 | 0.92 / 0.95 | tile |
+| f 16x16x2048 | 2048 | 1.23 / 1.10 | 0.96 / 0.97 | tile |
+| f 15x15x1024 | 1024 | 1.49 / 1.48 | 1.63 / 2.09 | BASE |
+| f 15x15x1024 | 2048 | 1.06 / 1.06 | 0.94 / 0.96 | tile |
+| f 32x32x384 | 1024 | 1.03 / 1.05 | 1.01 / 1.04 | tile (tie) |
+| f 32x32x512 | 1024 | 1.23 / 1.45 | 1.76 / 1.79 | BASE |
+| f 32x32x512 | 1536 | 1.45 / 1.71 | 1.31 / 1.32 | tile |
+| f 32x32x768 | 1024 | 1.27 / 1.55 | 1.66 / 1.73 | BASE |
+| f 32x32x768 | 1536 | 1.45 / 1.66 | 1.23 / 1.25 | tile |
+| f 32x32x1024 | 1024 | 1.29 / 1.47 | 1.76 / 1.77 | BASE |
+| f 32x32x1024 | 1536 | 1.43 / 1.54 | 1.29 / 1.26 | tile |
+| f 32x32x2048 | 1536 | 1.33 / 1.41 | 1.25 / 1.21 | tile |
+| f 32x32x2048 | 2048 | 1.23 / 1.30 | 1.01 / 1.00 | tile |
+| f 16x32x512 | 1024 | 1.25 / 1.05 | 1.16 / 1.09 | BASE |
+| f 16x32x1024 | 1024 | 1.32 / 1.19 | 1.83 / 1.86 | BASE |
+
+The tile's time barely moves from 1024 to 2048 tiles (16x16x1024: 0.176 -> 0.265 ms)
+while BASE doubles, so the crossover is a tile count that grows with k. The floor is
+now 2048 tiles for the float 16 tile from k = 768 and 1536 for the float 32 tile from
+k = 512. cfloat keeps 1024: at 1024 tiles and k = 1024 it wins (16x16 1.47 -> 1.02,
+32x32 1.72 -> 1.14).
+
+The rule forfeits gains on shapes that fill the tile badly, where the older kernel is
+slow: at 1024 tiles the tile wins f 8x8x1024 (2.93 vs 2.33), 12x12x1024 (2.22 vs
+1.85), 24x24x512 (2.30 vs 1.11), 24x24x1024 (2.48 vs 1.68), 20x20, 28x28 and 31x31
+x1024 (2.40-2.47 vs 1.66-1.75) and 32x8x1024 (2.56 vs 1.76), and these now stay on
+BASE until 1536/2048 tiles. A fill-based exception was not adopted: 15x15 (fill 0.88)
+loses and 31x31 (fill 0.94 of Tiled16) wins, so no single fill threshold separates
+the measured cells.
 - float 33..56 cubes stay on SmallBatched: 33^3 0.80 vs 64-wide 1.04, 56^3 0.94 vs
   0.95. 40x40x128 (max 128) goes to the 64 tile, 1.02 vs 3.22.
 - float min(m,n) > 64: 65x65x64 128x128 1.18 vs 64-wide 1.22, 100x100x256 1.06 vs
@@ -772,15 +820,20 @@ Final A/B, `LD_PAD=1`, beta=1, BASE -> new, /vendor:
 | c CN | 256x32x256 b2048 | 3.29 | 1.44 |
 | c CN | 32x32x256 b8192 | 2.26 | 1.83 |
 
-Brackets. The 128-CTA floor: f NT 64x64x64 b64 (64 CTAs) is 1.27 on Tiled16 vs 1.52
-on 64 NC, and b128 is 1.66 vs 1.48. 128x128x32 b16 is 1.04 vs 1.38, and b64 is 1.65
+Brackets. The 128-CTA floor counts CTAs of the tile actually launched (review fix:
+it used to count 64x64 CTAs for the panel tiles too). f NT 256x32x96 pad 0 on Tiled16
+vs 128x32 NC: b32 (64 panel CTAs, 128 64x64 ones) 1.51 vs 1.85, b64 (128) 2.17 vs
+1.81; b16 stays on Tiled16. f NT 64x64x64 b64 (64 CTAs) is 1.27 on Tiled16 vs 1.52
+on 64 NC, and b128 is 1.66 vs 1.48 (re-measured: b64 1.34 both, b128 1.78 vs 1.40). 128x128x32 b16 is 1.04 vs 1.38, and b64 is 1.65
 vs 1.39. The min(m,n) >= 32 floor: f NT 16x16x256 is 0.62 on Tiled16 vs 1.39, and
 c CN 16x16x256 is 0.93 vs 2.48. The panel-shaped tile: f NT 256x32x96 is 1.69 on 128x32
 vs 2.07 on 64x64, and 256x256x32 (pad 0) 1.28 vs 1.15. Cells that do not move: f NT and
 TN 256x32x256 (K32), c NC 256x32x256 and c CN 32x256x256 (existing 128x32 / 32x128
 selector), and f 16x16x256.
 
-Still behind cuBLAS: float NT/TN at a strided ld (1.2-1.7). The float K32 NT kernel
+Still behind cuBLAS: float NT/TN at a strided ld (1.2-1.7; e.g. NT 256x40x64 1.78 and
+256x32x96 1.51, both from 4.5-5x on BASE), and panel cells near the 128-CTA floor
+(256x32x96 b64 1.81, where the vendor is launch-bound at 14 us). The float K32 NT kernel
 at `LD_PAD=1` (256x32x256 NT 2.02; 128x32 NC measured 1.35 there, pad 0 a tie 0.69 vs
 0.71). cfloat 32x32 transposed, which has no 32x32 transposed tile (1.45-1.91).
 
@@ -796,5 +849,7 @@ partial n tile red (whole-tile shapes stay green). Staging k one past its end tu
 exactly the k % 16 != 0 shapes red.
 
 Still losing in the NN native walk: float 8x8x1024 1.10, float 100x100x64 1.28
-(128x128 at 3/4 fill; no better tile measured), cfloat 32x32x1024 1.07, cfloat 256^3
+(128x128 at 3/4 fill; no better tile measured), float 65x65x8 1.29 (128x128K8, BASE
+1.48), float 64x100x512 1.22 (64 wide tile, BASE 1.59), the deep-k float small cells
+below 1536/2048 tiles (1.2-2.9, see "Tiles in flight at deep k"), cfloat 32x32x1024 1.07, cfloat 256^3
 1.13 and the other large cfloat squares (1.11-1.17, not touched: gemm-7 territory).

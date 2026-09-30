@@ -2570,6 +2570,17 @@ TEST(GemmDispatchPolicyTest, Sm120SmallTilesAndTheirEdges) {
     EXPECT_EQ(f(16, 16, 256, kBw, 1024), KernelVariant::Tiled16x16RegisterK16Wide);
     EXPECT_EQ(f(16, 16, 256, kBw, 1023), KernelVariant::Tiled16);
     EXPECT_EQ(f(32, 32, 256, kBw, 1023), KernelVariant::Tiled32x32Register);
+    // float deep k raises the floor: 16 tile 2048 from k = 768, 32 tile 1536 from k = 512.
+    EXPECT_EQ(f(16, 16, 767, kBw, 1024), KernelVariant::Tiled16x16RegisterK16Wide);
+    EXPECT_EQ(f(16, 16, 768, kBw, 1024), KernelVariant::Tiled16);
+    EXPECT_EQ(f(16, 16, 768, kBw, 2048), KernelVariant::Tiled16x16RegisterK16Wide);
+    EXPECT_EQ(f(16, 16, 1024, kBw, 2047), KernelVariant::Tiled16);
+    EXPECT_EQ(f(32, 32, 511, kBw, 1024), KernelVariant::Tiled32x32RegisterK16Wide);
+    EXPECT_EQ(f(32, 32, 512, kBw, 1024), KernelVariant::Tiled32x32Register);
+    EXPECT_EQ(f(32, 32, 512, kBw, 1536), KernelVariant::Tiled32x32RegisterK16Wide);
+    EXPECT_EQ(f(32, 32, 1024, kBw, 1535), KernelVariant::Tiled32x32Register);
+    EXPECT_EQ(c(16, 16, 1024, kBw, 1024), KernelVariant::Tiled16x16RegisterK16Wide);
+    EXPECT_EQ(c(32, 32, 1024, kBw, 1024), KernelVariant::Tiled32x32RegisterK16Wide);
     EXPECT_EQ(c(32, 32, 64, kBw, 1024), KernelVariant::Tiled32x32RegisterK16Wide);
     EXPECT_EQ(c(32, 32, 64, kBw, 1023), KernelVariant::Tiled64x64RegisterK16Wide);
     EXPECT_EQ(c(8, 32, 64, kBw, 512), KernelVariant::Tiled16x16RegisterK16Wide);
@@ -2611,6 +2622,11 @@ TEST(GemmDispatchPolicyTest, Sm120TransposedFallbackAndItsEdges) {
     EXPECT_EQ(f(256, 32, 96, kN, kT, 1024), KernelVariant::Tiled128x32RegisterK16WideNC);
     EXPECT_EQ(f(32, 256, 96, kT, kN, 1024), KernelVariant::Tiled32x128RegisterK16WideCN);
     EXPECT_EQ(f(256, 256, 32, kT, kN, 1024), KernelVariant::Tiled64x64RegisterK16WideCN);
+    // The 128-CTA floor counts the launched tile: 256x32 is 2 panel CTAs per item.
+    EXPECT_EQ(f(256, 32, 96, kN, kT, 64), KernelVariant::Tiled128x32RegisterK16WideNC);
+    EXPECT_EQ(f(256, 32, 96, kN, kT, 63), KernelVariant::Tiled16);
+    EXPECT_EQ(f(32, 256, 96, kT, kN, 64), KernelVariant::Tiled32x128RegisterK16WideCN);
+    EXPECT_EQ(f(32, 256, 96, kT, kN, 63), KernelVariant::Tiled16);
     EXPECT_EQ(f(64, 64, 16, kN, kT, 128), KernelVariant::Tiled64x64RegisterK16WideNC);
     EXPECT_EQ(f(64, 64, 16, kN, kT, 127), KernelVariant::Tiled16);
     EXPECT_EQ(f(64, 64, 16, kN, kC, 128), KernelVariant::Tiled64x64RegisterK16WideNC);

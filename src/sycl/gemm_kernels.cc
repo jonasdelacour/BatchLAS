@@ -503,16 +503,24 @@ KernelVariant sm120_wide_transposed_fallback(Transpose transA, Transpose transB,
     if constexpr (!std::is_same_v<T, float> && !std::is_same_v<T, std::complex<float>>) {
         return KernelVariant::Tiled16;
     } else {
-        const int64_t ctas64 = static_cast<int64_t>((m + 63) / 64) * ((n + 63) / 64) * batch;
-        if (std::min(m, n) < 32 || ctas64 < 128) return KernelVariant::Tiled16;
+        if (std::min(m, n) < 32) return KernelVariant::Tiled16;
+        // The floor counts CTAs of the tile actually launched: 256x32 NT b32 is 128
+        // 64x64 CTAs but 64 128x32 ones, and loses there.
+        // evidence: docs/perf/blackwell.md#gemm-transposed-fallback
+        auto floor_or_tiled16 = [&](KernelVariant v, int tm, int tn) {
+            const int64_t ctas = static_cast<int64_t>((m + tm - 1) / tm) * ((n + tn - 1) / tn) * batch;
+            return ctas >= 128 ? v : KernelVariant::Tiled16;
+        };
         constexpr bool real = std::is_same_v<T, float>;
         if (transB == Transpose::NoTrans && wide_trans_matches<T>(transA, Transpose::ConjTrans)) {
-            return real && m < 64 && n >= 128 ? KernelVariant::Tiled32x128RegisterK16WideCN
-                                              : KernelVariant::Tiled64x64RegisterK16WideCN;
+            return real && m < 64 && n >= 128
+                ? floor_or_tiled16(KernelVariant::Tiled32x128RegisterK16WideCN, 32, 128)
+                : floor_or_tiled16(KernelVariant::Tiled64x64RegisterK16WideCN, 64, 64);
         }
         if (transA == Transpose::NoTrans && wide_trans_matches<T>(transB, Transpose::ConjTrans)) {
-            return real && n < 64 && m >= 128 ? KernelVariant::Tiled128x32RegisterK16WideNC
-                                              : KernelVariant::Tiled64x64RegisterK16WideNC;
+            return real && n < 64 && m >= 128
+                ? floor_or_tiled16(KernelVariant::Tiled128x32RegisterK16WideNC, 128, 32)
+                : floor_or_tiled16(KernelVariant::Tiled64x64RegisterK16WideNC, 64, 64);
         }
         return KernelVariant::Tiled16;
     }
@@ -580,11 +588,16 @@ KernelVariant select_kernel_variant(const MatrixView<T, MatrixFormat::Dense>& A,
     // m, n that fit the 16x16 tile, or a 32-long side against an <= 8 one,
     // where 16x16 wastes less than 32x32 does.
     // One 64-thread group per tile walks k serially, so below ~1024 tiles in
-    // flight the older kernels win (measured loss at 512, win or tie at 1024).
+    // flight the older kernels win. For float the floor grows with k: 32x32x512
+    // and 16x16x1024 lose at 1024 tiles. evidence: docs/perf/blackwell.md#gemm-small-tiles
     auto enough_tiles = [&](int t) {
-        constexpr int64_t kMinSmallTiles = 1024;
+        int64_t floor_tiles = 1024;
+        if constexpr (std::is_same_v<T, float>) {
+            if (t == 16 && k >= 768) floor_tiles = 2048;
+            if (t == 32 && k >= 512) floor_tiles = 1536;
+        }
         return static_cast<int64_t>((m + t - 1) / t) * ((n + t - 1) / t) * A.batch_size() >=
-            kMinSmallTiles;
+            floor_tiles;
     };
     [[maybe_unused]] const bool fits16 =
         std::max(m, n) <= 16 || (std::min(m, n) <= 8 && std::max(m, n) <= 32);
