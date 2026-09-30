@@ -132,6 +132,8 @@ ctest --test-dir build -R '^consumer_package_tests$' --output-on-failure
 
 Known Pitfalls
 	•	Silent CPU-only build on an NVIDIA box: the compiler has no CUDA adapter. `-- Using SYCL targets: spir64_x86_64` in the configure output is the tell. See the TL;DR and §2b.
+	•	icpx (oneAPI 2026) defaults to `-fp-model=fast`, which stops LLVM inlining libspirv builtins: `sycl::fma`, barriers and id queries become out-of-line CALLs in ~98% of kernels (cfloat gemm 6-15x, potrf cfloat 6x slower), and every test stays green. The build passes `-ffp-model=precise` for IntelLLVM; `ctest -R '^device_calls_tests$'` (scripts/check_device_calls.py) scans the built PTX and fails on any `__spirv_*` call. Never add a later `-ffp-model=fast`/`-ffast-math`: the last flag wins. benchviz warns about such a build.
+	•	oneAPI 2026 icpx on an NVIDIA box without the Codeplay plugin: oneAPI's own libsycl ships no CUDA UR adapter, so put a CUDA-enabled DPC++ runtime (`/opt/dpcpp-cuda/lib`) FIRST on `LD_LIBRARY_PATH`, ahead of `setvars.sh`'s entries, for configure, build and every run. Otherwise `sycl-ls` shows no `[cuda:gpu]` and configure silently picks `spir64_x86_64`.
 	•	Missing lapacke.h: install liblapacke-dev even if you already have libopenblas-dev.
 	•	Multiple BLAS providers: choose the backend with sudo update-alternatives --config libblas.so.3.
 	•	device not found at runtime: ensure your GPU driver and its SYCL adapter match the compiler version — the Level-Zero runtime for Intel, the CUDA adapter and driver for NVIDIA.
