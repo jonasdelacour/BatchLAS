@@ -39,8 +39,31 @@ REF = "red"
 CMAP = "viridis"
 
 
+PREAMBLE = r"\usepackage{amssymb}\usepackage{amsmath}"
+_usetex: bool | None = None
+
+
 def usetex_available() -> bool:
-    return all(shutil.which(b) for b in ("latex", "dvipng", "kpsewhich"))
+    """Render one string through LaTeX. The binaries alone are not enough:
+    matplotlib also needs TeX packages (cm-super's type1ec), and without them
+    every figure fails instead of falling back to mathtext."""
+    global _usetex
+    if _usetex is None:
+        _usetex = all(shutil.which(b) for b in ("latex", "dvipng", "kpsewhich"))
+        if _usetex:
+            fig = plt.figure(figsize=(1, 1))
+            try:
+                with plt.rc_context({"text.usetex": True, "text.latex.preamble": PREAMBLE}):
+                    fig.text(0.5, 0.5, r"$n$ lp")
+                    fig.canvas.draw()
+            except Exception as e:
+                _usetex = False
+                why = next((ln for ln in str(e).splitlines() if "Error" in ln), str(e).splitlines()[0])
+                print(f"benchviz: LaTeX text disabled, falling back to mathtext ({why.strip()}). "
+                      "On Debian/Ubuntu: sudo apt install cm-super dvipng", flush=True)
+            finally:
+                plt.close(fig)
+    return _usetex
 
 
 def apply(usetex: bool | None = None) -> bool:
@@ -52,7 +75,7 @@ def apply(usetex: bool | None = None) -> bool:
         "font.family": "serif",
         "font.serif": ["Computer Modern Roman", "CMU Serif", "DejaVu Serif"],
         "mathtext.fontset": "cm",
-        "text.latex.preamble": r"\usepackage{amssymb}\usepackage{amsmath}",
+        "text.latex.preamble": PREAMBLE,
         "font.size": FONTSIZE,
         "figure.figsize": PANEL,
         "lines.markersize": 10,
