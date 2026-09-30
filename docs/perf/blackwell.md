@@ -41,7 +41,9 @@ test stays green and only the timings move. `scripts/check_device_calls.py` (cte
 `device_calls_tests`, label `util`; also `BATCHLAS_BUILD_DIR=build
 .github/ci/run_local_checks.sh`) guards it. It walks each `build/src/libbatchlas_*.so`
 for embedded CUDA fatbins (magic `0xBA55ED50`), runs `cuobjdump -ptx` on each, and
-fails if any `.entry` contains a `call` to a `__spirv_*`/`__clc_*` function, or if
+fails if any `.entry` makes a `call` to a `__spirv_*`/`__clc_*` function, directly or
+through the local `.func` helpers it calls (followed transitively; body-less
+prototypes are skipped, bodies are found by brace matching), or if
 one of the representative kernels (`GemmRegister64x64K16WideKernel<complex<float>,true>`,
 `PotrfLpanelKernel`, `TrsmCtaKernel`) is missing. It exits 77 (ctest skip) when
 there is no NVPTX image or no `cuobjdump`.
@@ -63,7 +65,16 @@ library, with and without `-ffp-model=fast` appended (the last flag wins):
 
 208 BASE kernels do call something: device functions LLVM chose not to inline
 (`larfg`, `sec_solve_roc`, gesvdj and syrk/trmm tile lambdas). Those are reported but
-do not fail the check.
+do not fail the check, and following them transitively finds no builtin call inside
+them either. Transitive counts on the two real full-library builds (the rows above
+count direct call sites only):
+
+| build | kernels | with builtin calls | wide cfloat | potrf lpanel | trsm cta | exit |
+|---|---|---|---|---|---|---|
+| BASE (precise), 14 libraries | 6277 | 0 | 0 | 0 | 0 | 0 |
+| campaign build `~/BatchLAS/build` (icpx default fast) | 4539 | 4472 (direct only: 4452) | 1031 | 952 | 9576 (direct: 8548) | 1 |
+
+Scanning 158 images takes 4-7 s.
 
 ### `__builtin_fma` in `device_scalar.hh`: not adopted
 
@@ -82,3 +93,27 @@ neither bit-identity nor timing was measured for those 158 kernels. Since the fl
 is the real fix and the guard now enforces it, the switch was left out. The
 tiny-probe result (identical SASS for one loop, `tmp/gemm/probe`) does not carry
 over to the library.
+
+## Compute-capability key
+
+Machine: threadripper02, 4x RTX PRO 6000 Blackwell Max-Q (sm_120), CUDA 13.2.
+Per-architecture windows key on `Device::cuda_compute_capability()` (`major*10+minor`
+parsed from the CUDA device's SYCL version string, memoized per device) through
+`dispatch::is_sm120_family(cc)` (120 <= cc < 130). A value of 0 means "not a CUDA
+device", and 0 and 89 keep the sm_89 windows. `tests/util_device_queue_tests.cc`
+checks it against an independent oracle: every NVIDIA SYCL GPU is paired with its
+CUDA ordinal (the device name must match) and its value must equal the CUDA runtime's
+`prop.major*10+prop.minor`. CPU and non-NVIDIA devices must return 0. The family window
+is tested on both sides of each edge (119/120, 129/130) and at 0, 89 and 100.
+Deliberate break (non-CUDA default 89, `cc = major`): exactly the two
+`CudaComputeCapability*` cases go red. Returns 120 on all four GPUs here.
+
+Wiring the per-device pairing exposed an architecture-independent defect:
+`Device::get_devices()` returned `idx = 0` for every entry (its generator never
+incremented), so the cc test checked GPU 0 four times and `gpus.at(1)` in
+`linalg_layer_tests` was GPU 0. Fixed; `DeviceTest.GetDevices` now requires
+`devices[i].idx == i`. Breaks, all four GPUs visible: the old generator turns only
+`GetDevices` red (idx 1/2/3 read 0); forcing cc = 89 on device 1 turns only
+`CudaComputeCapabilityOnNvidiaGpu` red ("CUDA ordinal 1"). Before the fix the
+second break was invisible, because no Device had idx 1. With one GPU visible
+both pass, as expected.
