@@ -34,6 +34,7 @@ The superseded root documents these were filed in are preserved at the git tag
 | 8 | `src/backends/syrk_custom_dispatch.cc:261` | a forced native `syrk` lands on a route that writes both triangles | wrong answer, forced routes only |
 | 9 | `src/backends/syr2k_custom_dispatch.cc:210` | a forced native `syr2k` throws a cuBLASDx message it did not ask for | misleading diagnostic |
 | 10 | grid `latrd` (`src/extensions/latrd_lower_panel.cc`, the grid kernel's column-update / sumsq pair) | a cross-sub-group read-after-write on `Ab(r, i)` with no barrier between the two loops | **fixed; armed 20/20 red on deletion under the amplified geometry; residual rate at the default geometry not bounded** |
+| 11 | `src/sycl/gemm/epilogue_linear.hh`, `src/sycl/gemm_kernels.cc` (`launch_direct`) | native GEMM reads `C` at `beta == 0` | `NaN` from an unzeroed arena; worked around in `geqrf_blocked` |
 
 ## 1. `ortho`'s transposed arm builds a view that does not describe the memory
 
@@ -444,6 +445,32 @@ corrections to the filing, in opposite directions:
 The real remediation is a case that forces `G` **down** at a large `n` — the amplified repro
 above — because that is the only knob that inflates `chunk`. `BATCHLAS_LATRD_GRID_WG` alone
 cannot reach the defect no matter what it is set to.
+
+## 11. Native gemm reads C at beta zero
+
+**Status: located, worked around in `geqrf_blocked`, not fixed in `gemm`.** Found 2026-09-30
+on threadripper02 (RTX PRO 6000 Blackwell, sm_120) by
+`GeqrfTest.BlockedIgnoresAGarbageWorkspace` (`tests/geqrf_tests.cc`): a 64 x 64 blocked
+`geqrf` whose caller workspace is filled with `0xff` bytes (every float a NaN) returns NaN for
+all four scalar types when the trailing update runs through `sycl_gemm::gemm_custom`.
+
+**The mechanism.** The blocked driver's `W1 = V^H A22` and `W2 = T^H W1` are `beta = 0` GEMMs
+into scratch carved from the workspace. `LinearEpilogue::apply`
+(`src/sycl/gemm/epilogue_linear.hh`) computes `alpha * acc + beta * prior` unconditionally,
+and `launch_direct` (`src/sycl/gemm_kernels.cc`, the complex path here) reads
+`c_ptr[...]` the same way, so `0 * NaN` poisons the output. Reference BLAS does not read `C`
+at `beta == 0`. The arena behind `BumpAllocator` is not zeroed, so any op that feeds an
+unwritten scratch region to a native `beta = 0` GEMM is exposed.
+
+**The workaround.** `geqrf_blocked_dispatch` zero-fills W1 and W2 once per call
+(`src/extensions/geqrf_blocked.cc`). The first panel writes the whole W extent, so later
+panels read finite values.
+
+**What fixing it needs** (owned by the `gemm` package): do not read `C` when `beta == 0` in
+`LinearEpilogue` and in `launch_direct`. The resumed geqrf work package had a two-line patch
+for both (the test then passes for all four types), and dropped it because `gemm_kernels.cc`
+belongs to `gemm`. The epilogue branch needs a gemm timing A/B before it ships. When it lands,
+delete the memset in `geqrf_blocked.cc`; the test stays as the guard.
 
 ## One filed claim that did not survive re-checking
 
