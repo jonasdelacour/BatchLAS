@@ -62,9 +62,7 @@ enum class KernelVariant {
     Tiled32x128RegisterK16TT,
     // max(m, n, k) <= 32, real scalars: several matrices per work-group, coalesced.
     SmallBatched,
-    // NN wide-scalar tiles cut to small m, n (the 64x64 tile is 3/4 padding at
-    // 32x32). Every scalar. evidence: docs/perf/blackwell.md#gemm-small-tiles
-    Tiled32x32RegisterK16Wide,
+    Tiled32x32RegisterK16Wide,  // NN, small m, n. evidence: docs/perf/blackwell.md#gemm-small-tiles
     Tiled16x16RegisterK16Wide,
 };
 

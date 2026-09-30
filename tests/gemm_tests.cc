@@ -2557,8 +2557,13 @@ TEST(GemmDispatchPolicyTest, Sm120SmallTilesAndTheirEdges) {
     EXPECT_EQ(c(8, 32, 64, kBw), KernelVariant::Tiled16x16RegisterK16Wide);
     EXPECT_EQ(c(17, 17, 8, kBw), KernelVariant::Tiled32x32RegisterK16Wide);
     EXPECT_EQ(c(32, 32, 256, kBw), KernelVariant::Tiled32x32RegisterK16Wide);
-    EXPECT_EQ(c(33, 33, 8, kBw, 64), KernelVariant::Tiled64x64RegisterK16Wide);
-    EXPECT_EQ(c(33, 33, 8, kBw, 63), KernelVariant::Direct);
+    // k < 32 needs 256 CTAs, k >= 32 keeps the 4090's 64.
+    EXPECT_EQ(c(33, 33, 8, kBw, 256), KernelVariant::Tiled64x64RegisterK16Wide);
+    EXPECT_EQ(c(33, 33, 8, kBw, 255), KernelVariant::Direct);
+    EXPECT_EQ(c(33, 33, 31, kBw, 256), KernelVariant::Tiled64x64RegisterK16Wide);
+    EXPECT_EQ(c(33, 33, 31, kBw, 255), KernelVariant::Direct);
+    EXPECT_EQ(c(33, 33, 32, kBw, 64), KernelVariant::Tiled64x64RegisterK16Wide);
+    EXPECT_EQ(c(33, 33, 32, kBw, 63), KernelVariant::Direct);
     EXPECT_EQ(c(1024, 1024, 8, kBw, 4), KernelVariant::Tiled64x64RegisterK16Wide);
     // The small tiles need >= 1024 tiles in flight (they lose below, measured at 512).
     EXPECT_EQ(f(16, 16, 256, kBw, 1024), KernelVariant::Tiled16x16RegisterK16Wide);
@@ -2568,9 +2573,12 @@ TEST(GemmDispatchPolicyTest, Sm120SmallTilesAndTheirEdges) {
     EXPECT_EQ(c(32, 32, 64, kBw, 1023), KernelVariant::Tiled64x64RegisterK16Wide);
     EXPECT_EQ(c(8, 32, 64, kBw, 512), KernelVariant::Tiled16x16RegisterK16Wide);
     EXPECT_EQ(c(8, 32, 64, kBw, 511), KernelVariant::Direct);
-    // complex<double> is not re-measured: unchanged at cc 120.
-    EXPECT_EQ(z(16, 16, 16, kBw), KernelVariant::Direct);
-    EXPECT_EQ(z(64, 64, 16, kBw), KernelVariant::Direct);
+    // complex<double>: the 16x16 tile everywhere but 8^3, at every batch.
+    EXPECT_EQ(z(8, 8, 8, kBw), KernelVariant::Direct);
+    EXPECT_EQ(z(8, 8, 9, kBw), KernelVariant::Tiled16x16RegisterK16Wide);
+    EXPECT_EQ(z(16, 16, 16, kBw), KernelVariant::Tiled16x16RegisterK16Wide);
+    EXPECT_EQ(z(64, 64, 16, kBw), KernelVariant::Tiled16x16RegisterK16Wide);
+    EXPECT_EQ(z(1024, 1024, 16, kBw), KernelVariant::Tiled16x16RegisterK16Wide);
     for (int cc : {0, 89}) {
         EXPECT_EQ(f(16, 16, 32, cc), KernelVariant::SmallBatched) << cc;
         EXPECT_EQ(f(17, 17, 256, cc), KernelVariant::Tiled16) << cc;
@@ -2582,6 +2590,68 @@ TEST(GemmDispatchPolicyTest, Sm120SmallTilesAndTheirEdges) {
         EXPECT_EQ(c(32, 32, 8, cc), KernelVariant::Direct) << cc;
         EXPECT_EQ(c(32, 32, 256, cc), KernelVariant::Tiled64x64RegisterK16Wide) << cc;
         EXPECT_EQ(c(1024, 1024, 8, cc, 4), KernelVariant::Tiled16) << cc;
+        EXPECT_EQ(z(16, 16, 16, cc), KernelVariant::Direct) << cc;
+        EXPECT_EQ(z(64, 64, 16, cc), KernelVariant::Direct) << cc;
+    }
+}
+
+// sm_120 transposed fallback: float and complex<float> one-transposed forms
+// that would take Tiled16 take a wide transposed tile; both edges of the
+// min(m, n) >= 32 and 128-CTA bounds, and cc 89 / 0 unchanged.
+// evidence: docs/perf/blackwell.md#gemm-transposed-fallback
+TEST(GemmDispatchPolicyTest, Sm120TransposedFallbackAndItsEdges) {
+    constexpr Transpose kT = Transpose::Trans;
+    auto f = [](int m, int n, int k, Transpose ta, Transpose tb, int b, int cc = 120) {
+        return SelectSyclKernelVariantForTestT<float>(m, n, k, ta, tb, b, cc);
+    };
+    auto c = [](int m, int n, int k, Transpose ta, Transpose tb, int b, int cc = 120) {
+        return SelectSyclKernelVariantForTestT<std::complex<float>>(m, n, k, ta, tb, b, cc);
+    };
+    EXPECT_EQ(f(256, 32, 96, kN, kT, 1024), KernelVariant::Tiled128x32RegisterK16WideNC);
+    EXPECT_EQ(f(32, 256, 96, kT, kN, 1024), KernelVariant::Tiled32x128RegisterK16WideCN);
+    EXPECT_EQ(f(256, 256, 32, kT, kN, 1024), KernelVariant::Tiled64x64RegisterK16WideCN);
+    EXPECT_EQ(f(64, 64, 16, kN, kT, 128), KernelVariant::Tiled64x64RegisterK16WideNC);
+    EXPECT_EQ(f(64, 64, 16, kN, kT, 127), KernelVariant::Tiled16);
+    EXPECT_EQ(f(64, 64, 16, kN, kC, 128), KernelVariant::Tiled64x64RegisterK16WideNC);
+    EXPECT_EQ(f(32, 64, 64, kT, kN, 4096), KernelVariant::Tiled64x64RegisterK16WideCN);
+    EXPECT_EQ(f(31, 64, 64, kT, kN, 4096), KernelVariant::Tiled16);
+    EXPECT_EQ(f(32, 32, 32, kN, kT, 4096), KernelVariant::SmallBatched);
+    EXPECT_EQ(f(16, 16, 256, kN, kT, 4096), KernelVariant::Tiled16);
+    EXPECT_EQ(f(64, 64, 64, kT, kT, 4096), KernelVariant::Tiled16);
+    // The K32 family still owns m >= 128, n >= 32, k >= 128.
+    EXPECT_EQ(f(256, 32, 256, kT, kN, 1024), KernelVariant::Tiled128x32RegisterK32TN);
+    EXPECT_EQ(f(256, 32, 256, kN, kT, 1024), KernelVariant::Tiled128x32RegisterK32NT);
+    EXPECT_EQ(c(64, 64, 16, kN, kC, 128), KernelVariant::Tiled64x64RegisterK16WideNC);
+    EXPECT_EQ(c(64, 64, 16, kN, kC, 127), KernelVariant::Tiled16);
+    EXPECT_EQ(c(32, 32, 32, kC, kN, 4096), KernelVariant::Tiled64x64RegisterK16WideCN);
+    EXPECT_EQ(c(256, 32, 96, kN, kC, 1024), KernelVariant::Tiled128x32RegisterK16WideNC);
+    EXPECT_EQ(c(64, 64, 16, kN, kT, 4096), KernelVariant::Tiled16);
+    EXPECT_EQ(c(16, 16, 256, kC, kN, 4096), KernelVariant::Tiled16);
+    EXPECT_EQ(SelectSyclKernelVariantForTestT<std::complex<double>>(64, 64, 16, kN, kC, 4096, 120),
+              KernelVariant::Tiled16);
+    for (int cc : {0, 89}) {
+        EXPECT_EQ(f(256, 32, 96, kN, kT, 1024, cc), KernelVariant::Tiled16) << cc;
+        EXPECT_EQ(f(64, 64, 16, kT, kN, 4096, cc), KernelVariant::Tiled16) << cc;
+        EXPECT_EQ(c(64, 64, 16, kN, kC, 4096, cc), KernelVariant::Tiled16) << cc;
+        EXPECT_EQ(c(32, 32, 32, kC, kN, 4096, cc), KernelVariant::Direct) << cc;
+    }
+}
+
+// The transposed fallback through the selector at a sub-view ld, both betas.
+TYPED_TEST(GemmTest, Sm120TransposedFallbackMatchesTiled16) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr Transpose kOp = is_std_complex_v<ScalarType> ? Transpose::ConjTrans : Transpose::Trans;
+    const int shapes[][3] = {{64, 64, 16}, {70, 45, 33}, {200, 40, 96}, {40, 200, 96}, {33, 33, 1}};
+    for (const auto& s : shapes) {
+        for (ScalarType beta : {ScalarType(-1), ScalarType(0)}) {
+            for (bool a_side : {true, false}) {
+                SCOPED_TRACE("m=" + std::to_string(s[0]) + " n=" + std::to_string(s[1]) +
+                             " k=" + std::to_string(s[2]) + (a_side ? " opA" : " opB"));
+                RunForcedWideTransposedAgainstTiled16<ScalarType>(
+                    *(this->ctx), "", s[0], s[1], s[2], a_side ? kOp : Transpose::NoTrans,
+                    a_side ? Transpose::NoTrans : kOp, beta, 205, 3, 160);
+            }
+        }
     }
 }
 

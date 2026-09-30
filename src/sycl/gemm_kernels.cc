@@ -492,6 +492,32 @@ Event launch_wide_nn_tile(Queue& ctx,
     return launch_wide_transposed<T, WideTile{32, 32, 16, 4, 4}>(ctx, A, B, C, alpha, beta, name);
 }
 
+// sm_120 only: float and complex<float> one-transposed forms that would fall to
+// Tiled16 take a wide-scalar transposed tile instead; Tiled16 means "no opinion".
+// Complex needs ConjTrans exactly (see wide_trans_matches). The 4090 measured the
+// real-scalar tile as a tie with Tiled16, so cc 89 / 0 never get here.
+// evidence: docs/perf/blackwell.md#gemm-transposed-fallback
+template <typename T>
+KernelVariant sm120_wide_transposed_fallback(Transpose transA, Transpose transB,
+                                             int m, int n, int64_t batch) {
+    if constexpr (!std::is_same_v<T, float> && !std::is_same_v<T, std::complex<float>>) {
+        return KernelVariant::Tiled16;
+    } else {
+        const int64_t ctas64 = static_cast<int64_t>((m + 63) / 64) * ((n + 63) / 64) * batch;
+        if (std::min(m, n) < 32 || ctas64 < 128) return KernelVariant::Tiled16;
+        constexpr bool real = std::is_same_v<T, float>;
+        if (transB == Transpose::NoTrans && wide_trans_matches<T>(transA, Transpose::ConjTrans)) {
+            return real && m < 64 && n >= 128 ? KernelVariant::Tiled32x128RegisterK16WideCN
+                                              : KernelVariant::Tiled64x64RegisterK16WideCN;
+        }
+        if (transA == Transpose::NoTrans && wide_trans_matches<T>(transB, Transpose::ConjTrans)) {
+            return real && n < 64 && m >= 128 ? KernelVariant::Tiled128x32RegisterK16WideNC
+                                              : KernelVariant::Tiled64x64RegisterK16WideNC;
+        }
+        return KernelVariant::Tiled16;
+    }
+}
+
 } // namespace
 
 template <typename T>
@@ -542,6 +568,11 @@ KernelVariant select_kernel_variant(const MatrixView<T, MatrixFormat::Dense>& A,
         }
         if constexpr (std::is_same_v<T, float>) {
             if (max_dim <= 32) return KernelVariant::SmallBatched;
+        }
+        if (dispatch::is_sm120_family(cuda_cc)) {
+            const KernelVariant wide = sm120_wide_transposed_fallback<T>(
+                transA, transB, m, n, A.batch_size());
+            if (wide != KernelVariant::Tiled16) return wide;
         }
         return max_dim <= 32 ? KernelVariant::Direct : KernelVariant::Tiled16;
     }
@@ -651,7 +682,16 @@ KernelVariant select_kernel_variant(const MatrixView<T, MatrixFormat::Dense>& A,
         if (sm120 && std::is_same_v<Real, float>) {
             if (small16 && max_dim > 8) return KernelVariant::Tiled16x16RegisterK16Wide;
             if (small32) return KernelVariant::Tiled32x32RegisterK16Wide;
-            if (std::min(m, n) >= 32 && ctas >= kMinCtas) return KernelVariant::Tiled64x64RegisterK16Wide;
+            // k < 32 is launch-bound near the floor: 33x33x8 and 64x64x8 lose at 64-128 CTAs.
+            if (std::min(m, n) >= 32 && ctas >= (k >= 32 ? kMinCtas : 256)) {
+                return KernelVariant::Tiled64x64RegisterK16Wide;
+            }
+        }
+        // sm_120, complex<double>: FP64-bound at 1/64 rate, so the tile with the most
+        // groups in flight wins or ties at every measured shape and batch but 8^3.
+        // evidence: docs/perf/blackwell.md#gemm-complex-double
+        if (sm120 && std::is_same_v<Real, double> && max_dim > 8) {
+            return KernelVariant::Tiled16x16RegisterK16Wide;
         }
         if (min_dim >= 32 && ctas >= kMinCtas) {
             return KernelVariant::Tiled64x64RegisterK16Wide;
