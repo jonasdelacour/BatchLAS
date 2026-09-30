@@ -68,6 +68,11 @@ Event trsm_native_sg_left(Queue& ctx,
     constexpr int kSg = 32;
     constexpr int kMpw = kSg / N;
     constexpr int kSgPerWg = 4;
+    // Rolled, nL[] lives in local memory and is read once per step: fewer registers,
+    // which wins where the unrolled form's occupancy is lowest.
+    // evidence: docs/perf/blackwell.md#trsm-sub-group-left-kernel
+    constexpr bool kRolled = (sycl_device::dev_is_complex_v<D> && N >= 16) || (N == 32 && QC == 16);
+    constexpr int kUnrollS = kRolled ? 1 : N;
 
     const Canonical can = canonicalise(Side::Left, uplo, transA, diag);
     const int n = static_cast<int>(A.rows());
@@ -150,8 +155,12 @@ Event trsm_native_sg_left(Queue& ctx,
                 // The division path sits behind a sub-group-uniform branch: as a
                 // per-lane select it kept QC divisions live at every step (2x at q=64).
                 const bool any_divide = sycl::any_of_group(sg, divide);
-#pragma unroll
+#pragma unroll kUnrollS
                 for (int s = 0; s < N; ++s) {
+                    // Rows n..N-1 are identity padding. A break stops full unrolling.
+                    if (s >= n) {
+                        if constexpr (kRolled) break; else continue;
+                    }
                     if (r == s && !unit) {
                         if (any_divide) [[unlikely]] {
 #pragma unroll

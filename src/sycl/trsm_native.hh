@@ -35,8 +35,7 @@ BATCHLAS_INTERNAL_API Event trsm_native_v1_dispatch(Queue& ctx,
                                                     Transpose transA,
                                                     Diag diag);
 
-// The Side::Left sub-group kernel (trsm_sg_left.cc): one lane per triangular row,
-// 32/N matrices per sub-group, orders 1..32. Throws above 32.
+// Side::Left sub-group kernel (trsm_sg_left.cc), orders 1..32; throws above 32.
 template <typename T>
 BATCHLAS_INTERNAL_API Event trsm_native_sg_left_dispatch(Queue& ctx,
                                                          const MatrixView<T, MatrixFormat::Dense>& A,
@@ -51,10 +50,17 @@ BATCHLAS_INTERNAL_API Event trsm_native_sg_left_dispatch(Queue& ctx,
 // evidence: docs/perf/blackwell.md#trsm-sub-group-left-kernel
 template <typename T>
 inline bool trsm_left_use_sg(int cuda_cc, int n, int q) {
+    if (n > 32) return false;
     if (const char* e = std::getenv("BATCHLAS_DEV_TRSM_SG")) return e[0] == '1';
-    if (!dispatch::is_sm120_family(cuda_cc) || n > 32) return false;
-    if constexpr (std::is_same_v<T, float>) return q < 32;
-    if constexpr (std::is_same_v<T, std::complex<float>>) return q < 64;
+    if (!dispatch::is_sm120_family(cuda_cc)) return false;
+    if constexpr (std::is_same_v<T, float>) return q <= (n <= 4 ? 128 : n <= 8 ? 64 : 32);
+    if constexpr (std::is_same_v<T, std::complex<float>>) {
+        if (n <= 8) return q <= (n <= 4 ? 64 : 32);
+        if (n < 16) return q <= 8;
+        // n=16 only: V1 is slow at that one order, n=12 and n=24 are not.
+        if (n == 16) return q <= 16 || (q >= 32 && q <= 128);
+        return q <= 128;
+    }
     return false;   // double and complex<double> were not measured
 }
 

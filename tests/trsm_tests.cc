@@ -900,6 +900,10 @@ TEST(TrsmNativeSgLeft, BucketAndChunkEdges) {
         for (int q : {3, 8, 21})
             RunSgLeft<std::complex<float>>(
                 {n, q, 13, Uplo::Lower, Transpose::ConjTrans, Diag::NonUnit, {1.0f, 0.5f}});
+    // float N=32 at QC=16 is the rolled step loop; n < N exercises its early exit.
+    for (int n : {12, 20, 32})
+        for (int q : {9, 17, 40})
+            RunSgLeft<float>({n, q, 7, Uplo::Lower, Transpose::Trans, Diag::Unit, 0.5f});
 }
 
 // No SLM here, but the matrices of one sub-group share every broadcast, so a lane
@@ -963,13 +967,20 @@ TEST(TrsmNativeSgLeft, KernelChoiceWindow) {
                 EXPECT_FALSE(trsm_left_use_sg<float>(cc, n, q)) << cc << " " << n << " " << q;
                 EXPECT_FALSE(trsm_left_use_sg<cf>(cc, n, q)) << cc << " " << n << " " << q;
             }
+    // Each edge from both sides: {n, q, expected}.
+    struct E { int n, q; bool sg; };
+    const E fl[] = {{1, 1, true}, {4, 128, true}, {4, 129, false}, {5, 64, true}, {5, 65, false},
+                    {8, 64, true}, {9, 32, true}, {9, 33, false}, {32, 32, true},
+                    {32, 33, false}, {33, 8, false}};
+    const E cx[] = {{4, 64, true}, {4, 65, false}, {5, 32, true}, {8, 33, false}, {9, 8, true},
+                    {15, 9, false}, {16, 16, true}, {16, 17, false}, {16, 24, false},
+                    {16, 32, true}, {16, 128, true}, {16, 129, false}, {17, 128, true},
+                    {32, 129, false}, {33, 8, false}};
     for (int cc : {120, 121}) {
-        EXPECT_TRUE(trsm_left_use_sg<float>(cc, 32, 31));
-        EXPECT_FALSE(trsm_left_use_sg<float>(cc, 32, 32));
-        EXPECT_TRUE(trsm_left_use_sg<float>(cc, 1, 1));
-        EXPECT_TRUE(trsm_left_use_sg<cf>(cc, 32, 63));
-        EXPECT_FALSE(trsm_left_use_sg<cf>(cc, 32, 64));
-        EXPECT_FALSE(trsm_left_use_sg<float>(cc, 33, 8));
+        for (const E& e : fl)
+            EXPECT_EQ(trsm_left_use_sg<float>(cc, e.n, e.q), e.sg) << e.n << " " << e.q;
+        for (const E& e : cx)
+            EXPECT_EQ(trsm_left_use_sg<cf>(cc, e.n, e.q), e.sg) << e.n << " " << e.q;
         EXPECT_FALSE(trsm_left_use_sg<double>(cc, 8, 8));
         EXPECT_FALSE(trsm_left_use_sg<std::complex<double>>(cc, 8, 8));
     }

@@ -22,8 +22,7 @@ inline Canonical canonicalise(Side side, Uplo uplo, Transpose transA, Diag diag)
     c.do_conj = (transA == Transpose::ConjTrans);
     c.op_is_lower = (uplo == Uplo::Lower) ? !c.do_trans : c.do_trans;
     c.unit = (diag == Diag::Unit);
-    // fwd is the direction the canonical recurrence marches. Getting this
-    // backwards is silent: it solves a different triangle and still returns.
+    // Backwards fwd is silent: it solves a different triangle and still returns.
     c.fwd = (side == Side::Left) ? c.op_is_lower : !c.op_is_lower;
     return c;
 }
