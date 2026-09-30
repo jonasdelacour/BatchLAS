@@ -33,6 +33,10 @@ endif()
 # ---------------------------------------------------------------------------
 set(BatchLAS_CXX_COMPILER "@CMAKE_CXX_COMPILER@")
 set(BatchLAS_SYCL_TARGETS "@BATCHLAS_SYCL_TARGETS_STRING@")
+# Non-empty only when an NVIDIA architecture had no -fsycl-targets alias in the build's
+# compiler: BatchLAS_SYCL_TARGETS then names the generic nvptx64-nvidia-cuda, and this
+# carries the architecture (e.g. -Xsycl-target-backend=nvptx64-nvidia-cuda --cuda-gpu-arch=sm_120).
+set(BatchLAS_SYCL_BACKEND_OPTIONS "@BATCHLAS_SYCL_BACKEND_OPTION_STRING@")
 
 option(BATCHLAS_REQUIRE_MATCHING_COMPILER
     "Make a CMAKE_CXX_COMPILER that differs from the one BatchLAS was built with a hard error instead of a warning"
@@ -59,7 +63,7 @@ if(BatchLAS_CXX_COMPILER AND CMAKE_CXX_COMPILER)
             "-DCMAKE_CXX_COMPILER=${BatchLAS_CXX_COMPILER}.\n"
             "Note also that BatchLAS no longer forces its own SYCL flags onto your translation "
             "units; if your own sources use SYCL directly you must add -fsycl yourself. This "
-            "install is AOT-compiled for: ${BatchLAS_SYCL_TARGETS}.\n"
+            "install is AOT-compiled for: ${BatchLAS_SYCL_TARGETS} ${BatchLAS_SYCL_BACKEND_OPTIONS}.\n"
             "Set BATCHLAS_REQUIRE_MATCHING_COMPILER=ON to make this an error, or ignore it if "
             "you know the two compilers are ABI-compatible.")
         unset(_batchlas_compiler_message_type)

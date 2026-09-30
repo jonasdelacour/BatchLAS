@@ -173,6 +173,16 @@ target_compile_options(my_app PRIVATE -fsycl -fsycl-targets=nvidia_gpu_sm_89)
 target_link_options(my_app    PRIVATE -fsycl -fsycl-targets=nvidia_gpu_sm_89)
 ```
 
+If the building compiler had no `nvidia_gpu_sm_<N>` alias for the GPU (DPC++'s
+table ends at sm_90a, so Blackwell's sm_100/sm_120 have none), `BatchLAS_SYCL_TARGETS`
+is the generic `nvptx64-nvidia-cuda` and `BatchLAS_SYCL_BACKEND_OPTIONS` carries the
+architecture. Pass it too, or your kernels build for the triple's default, sm_75:
+
+```cmake
+target_compile_options(my_app PRIVATE "SHELL:${BatchLAS_SYCL_BACKEND_OPTIONS}")
+target_link_options(my_app    PRIVATE "SHELL:${BatchLAS_SYCL_BACKEND_OPTIONS}")
+```
+
 `find_package(BatchLAS)` pulls in `OpenMP` when the install was built with it,
 and `MKL` when the MKL backend is on. CUDA and LAPACK are linked privately into
 the component libraries, so a CPU-only machine can `find_package` a CUDA-enabled

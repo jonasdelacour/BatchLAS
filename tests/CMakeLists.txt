@@ -453,6 +453,14 @@ add_custom_target(batchlas_coverage
     VERBATIM
 )
 
+# Script-mode checks of the NVIDIA architecture recovery in BatchLASDetectSYCL.cmake
+# (sycl-ls "Architecture: unknown" -> nvidia_gpu_sm_<cc>, generic-triple rewrite).
+# No compiler or device needed.
+add_test(NAME cmake_detect_sycl_tests
+    COMMAND "${CMAKE_COMMAND}" "-DBATCHLAS_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/detect_sycl_arch_tests.cmake")
+set_tests_properties(cmake_detect_sycl_tests PROPERTIES LABELS "util")
+
 # ---------------------------------------------------------------------------
 # consumer_package_tests: the outside-in guard.
 #
