@@ -60,22 +60,31 @@ constexpr int getrs_fused_nr_bucket(int nrhs) {
     return (nrhs <= 1) ? 0 : (nrhs <= 2) ? 1 : (nrhs <= 4) ? 2 : 3;
 }
 
+// sm_89 rows: measured on the 4090, before the round-robin column spread. That spread moved
+// standalone sm_89 ptxas counts by up to +6 (NR > 1 only; NR == 1 compiles to the old form),
+// and the 4090 cannot be re-probed, so each row that moved up carries that delta on top.
+// `potrs` was max(notrans, trans) and still is, except where its own kernel moved further.
+// evidence: docs/perf/blackwell.md#lu-getrs-fused-sm89-rows
 template <typename S> struct GetrsFusedRegs;
 template <> struct GetrsFusedRegs<float> {
     static constexpr int notrans[4] = {39, 48, 48, 48};
     static constexpr int trans[4]   = {39, 40, 48, 68};
+    static constexpr int potrs[4]   = {39, 48, 48, 68};
 };
 template <> struct GetrsFusedRegs<double> {
-    static constexpr int notrans[4] = {39, 52, 44, 61};
-    static constexpr int trans[4]   = {46, 44, 51, 72};
+    static constexpr int notrans[4] = {39, 52, 44, 67};
+    static constexpr int trans[4]   = {46, 44, 55, 72};
+    static constexpr int potrs[4]   = {46, 54, 55, 76};
 };
 template <> struct GetrsFusedRegs<std::complex<float>> {
     static constexpr int notrans[4] = {40, 40, 40, 48};
-    static constexpr int trans[4]   = {42, 43, 48, 56};
+    static constexpr int trans[4]   = {42, 45, 48, 56};
+    static constexpr int potrs[4]   = {42, 45, 48, 56};
 };
 template <> struct GetrsFusedRegs<std::complex<double>> {
-    static constexpr int notrans[4] = {54, 56, 56, 72};
-    static constexpr int trans[4]   = {56, 58, 58, 86};
+    static constexpr int notrans[4] = {54, 60, 60, 72};
+    static constexpr int trans[4]   = {56, 58, 60, 86};
+    static constexpr int potrs[4]   = {56, 60, 60, 86};
 };
 
 // sm_120 ptxas counts (scripts/register_probe.sh, this TU): the sm_89 rows above undercount
@@ -111,17 +120,27 @@ enum class FusedBody { kNoTrans, kTrans, kPotrs };
 template <typename T>
 constexpr int getrs_fused_regs_for(int nrhs, FusedBody body, int cuda_cc) {
     const int i = getrs_fused_nr_bucket(nrhs);
+    const auto pick = [&](const int* nt, const int* tr, const int* po) {
+        return body == FusedBody::kTrans ? tr[i] : body == FusedBody::kNoTrans ? nt[i] : po[i];
+    };
     if (dispatch::is_sm120_family(cuda_cc)) {
         using R = GetrsFusedRegs120<T>;
-        return body == FusedBody::kTrans   ? R::trans[i]
-             : body == FusedBody::kNoTrans ? R::notrans[i]
-                                           : R::potrs[i];
+        return pick(R::notrans, R::trans, R::potrs);
     }
-    // Off sm_120 potrs is charged the wider getrs row, as before.
-    const int nt = GetrsFusedRegs<T>::notrans[i];
-    const int tr = GetrsFusedRegs<T>::trans[i];
-    return body == FusedBody::kTrans ? tr : body == FusedBody::kNoTrans ? nt : std::max(nt, tr);
+    using R = GetrsFusedRegs<T>;
+    return pick(R::notrans, R::trans, R::potrs);
 }
+
+// The sm_89 potrs row may only widen the old max(notrans, trans) charge, never narrow it.
+template <typename T> constexpr bool potrs_row_covers_getrs() {
+    using R = GetrsFusedRegs<T>;
+    for (int i = 0; i < 4; ++i)
+        if (R::potrs[i] < std::max(R::notrans[i], R::trans[i])) return false;
+    return true;
+}
+static_assert(potrs_row_covers_getrs<float>() && potrs_row_covers_getrs<double>() &&
+              potrs_row_covers_getrs<std::complex<float>>() &&
+              potrs_row_covers_getrs<std::complex<double>>());
 
 // The work-group width: ~ n/2 clamped to [64, 1024], then capped by the register gate.
 template <typename T>

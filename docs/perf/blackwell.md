@@ -771,6 +771,81 @@ sm_89 counts already exceeded some rows before the round-robin, e.g. double potr
 nrhs 5-8 88 vs 72 + 8, and cfloat Trans nrhs 5-8 70 vs 56 + 8. An icpx build for a
 4090 needs its own probe.
 
+### LU getrs fused NR 1
+
+threadripper02, GPU 3 (RTX PRO 6000 Blackwell Max-Q, sm_120), icpx 2026.0 RelWithDebInfo.
+At NR == 1 the three fused kernels (getrs NoTrans, getrs Trans, potrs) again run the block
+solves in sub-group 0 only. The round-robin `c = sgid; c += nsg` form is unchanged for
+NR > 1. The guard is `(NR != 1) || sgid == 0` on the block, so each NR folds to its old
+code. Standalone sm_89 ptxas counts are identical per kernel: NR == 1 matches the pre-round-robin TU,
+and NR > 1 matches BASE, under both icpx 2026.0 and DPC++ 7.2.
+
+BASE vs new, ms: `factor_bench` CTA arm (`getrs=native:cta`, and posv reached
+`native:cta`, both confirmed with `BATCHLAS_COVERAGE_OUT`), 9 in-process reps, median of
+4 alternating passes after a warm pass. Vendor is in brackets.
+
+| cell | nrhs 1 | 2 | 4 | 8 |
+|---|---|---|---|---|
+| cfloat n64 b16384 | 0.560 -> 0.541 (0.70) | 0.592 -> 0.592 | 0.927 -> 0.928 | 1.560 -> 1.556 |
+| float n256 b2048  | 0.572 -> 0.570 (0.88) | 0.503 -> 0.504 | 0.644 -> 0.645 | 0.986 -> 0.982 |
+| cfloat n128 b4096 | 0.484 -> 0.474 (0.70) | 0.490 -> 0.489 | 0.687 -> 0.686 | 1.416 -> 1.415 |
+
+nrhs=1 recovers 3.5% and 2.2% on the cfloat cells, and new beats BASE in 4 of 4 passes.
+float n256 is flat (0.3%). Every nrhs>1 cell is within 0.4%, with no consistent sign.
+posv (native, potrf + fused potrs) is unchanged: float n256 r1 b1024 1.443 -> 1.443,
+cfloat n128 r1 b4096 1.597 -> 1.597, float n256 r4 1.392 -> 1.391. potrf dominates it.
+
+Deliberate break: `c0 = nrhs` at NR == 1, i.e. no sub-group solves the single column.
+It was applied to one kernel at a time, with getrf/gesv/posv/potrf_tests run on GPU 3:
+
+- NoTrans kernel: `LuTest/{4..7}.FusedGetrsSolvesEveryTransposeAtEveryInstantiatedWidth`
+  and `LuTest/{4..7}.FusedGetrsAtBlockBoundariesAndTheNbSwitch`, 8 red. The other 200
+  getrf tests and all gesv/posv/potrf tests stayed green.
+- Trans kernel: the same 8 names. Both tests sweep both transposes.
+- potrs kernel: `PosvTest/{4..7}.FusedSolveArmSolvesOnBothTriangles`, 4 red. Everything
+  else stayed green.
+
+The restored file was md5-identical to the pre-break copy.
+
+### LU getrs fused sm89 rows
+
+The round-robin commit changed the kernel bodies under the sm_89 `GetrsFusedRegs`
+rows. Those rows were probed on the 4090, which cannot be re-probed from here. Standalone sm_89
+ptxas counts of `getrs_fused.cc`, pre-round-robin -> now, NR > 1 (NR == 1 is identical):
+
+| kernel, bucket | icpx 2026.0 | DPC++ 7.2 |
+|---|---|---|
+| cdouble NoTrans nrhs 2   | 50 -> 54 (+4) | 50 -> 51 (+1) |
+| cdouble NoTrans nrhs 3-4 | 52 -> 56 (+4) | 56 -> 56 |
+| cdouble Trans nrhs 3-4   | 62 -> 64 (+2) | 50 -> 50 |
+| cfloat Trans nrhs 2      | 44 -> 46 (+2) | 40 -> 39 |
+| double NoTrans nrhs 5-8  | 55 -> 61 (+6) | 54 -> 54 |
+| double Trans nrhs 3-4    | 50 -> 54 (+4) | 40 -> 40 |
+| double potrs nrhs 2      | 48 -> 50 (+2) | 48 -> 48 |
+| double potrs nrhs 3-4    | 60 -> 62 (+2) | 46 -> 46 |
+| double potrs nrhs 5-8    | 88 -> 92 (+4) | 70 -> 71 (+1) |
+| cdouble potrs nrhs 2     | 52 -> 54 (+2) | 60 -> 54 |
+
+Every other kernel moved by <= 0. Each row that moved up now carries the larger of the two
+deltas: cdouble notrans {56,56} -> {60,60} at nrhs 2 and 3-4, cdouble trans 58 -> 60 at
+3-4, cfloat trans 43 -> 45 at 2, double notrans 61 -> 67 at 5-8, double trans 51 -> 55
+at 3-4. potrs used to be charged max(notrans, trans). It now has its own sm_89 row,
+equal to that max except double nrhs 2 (52 -> 54) and nrhs 5-8 (72 -> 76), where the
+potrs kernel moved past it. A static_assert keeps the potrs row >= the old max.
+
+Effect on the sm_89 cap. The margin is +8 and allocation is rounded up to 8, so
+only three caps move, all toward a narrower launch: cdouble NoTrans nrhs 2..4
+1024 -> 896 lanes, double NoTrans nrhs 5..8 896 -> 768, and double potrs nrhs 5..8
+768 -> 640. The fused width only reaches the cap at n >= 1026 (wg = 1024), so no smaller order is
+touched. Those cells were not timed, because this machine has no sm_89. The in-library probe
+(`probe89.sh`, the link line re-targeted to sm_89) printed no ptxas counts for this
+library, in the LU round or this one. The evidence is therefore standalone TU compiles.
+
+Not fixed: these rows bound DPC++-built sm_89 kernels. Under icpx 2026.0 the standalone
+sm_89 counts already exceeded some rows before the round-robin, e.g. double potrs
+nrhs 5-8 88 vs 72 + 8, and cfloat Trans nrhs 5-8 70 vs 56 + 8. An icpx build for a
+4090 needs its own probe.
+
 ### LU getrf windows
 
 BASE build, 3 passes, ms, vendor / blocked (native tier in the next section):
