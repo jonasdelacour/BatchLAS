@@ -12,6 +12,13 @@
 #
 # A waiver that matches no scanned file is an error: delete it when the file
 # goes, rather than leaving the gate open for whatever takes that name next.
+#
+# Public headers (include/batchlas/, include/batchlas.hh) do not need a waiver
+# for their Doxygen API documentation: `///`, `//!`, `/** */` and `/*! */`
+# comment lines there are in neither count. That covers the contract only
+# (brief, params, returns, preconditions, throws, complexity); rationale in a
+# doc comment is still rationale and belongs in docs/. See
+# docs/developer/documentation.md#writing-api-documentation.
 
 # ---------------------------------------------------------------------
 # BURN-DOWN ASSESSMENT, 2026-09-15. 137 files remain waived, down one:
@@ -35,8 +42,12 @@
 # or the gate goes red.
 #
 # Counts above are from `check_comment_density.py --fix-suggest`, which now
-# reports waived files too. No waived file is currently under the ceiling,
-# so there is no waiver line here that can be deleted for free.
+# reports waived files too. They predate the public-API doc-comment
+# exemption (2026-09-30), which moved two waived headers under the ceiling
+# (blas/extensions.hh, util/sycl-local-accessor-helpers.hh); the checker
+# lists such lines as "free to delete". The remedy for the rest of the API
+# headers is converting their contract prose to Doxygen doc comments and
+# moving the rationale to docs/, not deletion.
 # ---------------------------------------------------------------------
 
 include/batchlas/blas/dispatch/route_ormqr.hh    # predates the budget, not touched by the small-n campaign
@@ -74,7 +85,6 @@ include/batchlas/blas/dispatch/route_resolve.hh       # predates the small-n com
 include/batchlas/blas/dispatch/route_spmm.hh          # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
 include/batchlas/blas/dispatch/vendor_available.hh    # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
 include/batchlas/blas/enums.hh                        # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
-include/batchlas/blas/extensions.hh                   # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
 include/batchlas/blas/extra.hh                        # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
 include/batchlas/blas/functions/gemm.hh               # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
 include/batchlas/blas/functions/gemv.hh               # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
@@ -108,7 +118,6 @@ include/batchlas/util/env.hh                          # predates the small-n com
 include/batchlas/util/kernel-heuristics.hh            # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
 include/batchlas/util/mempool.hh                      # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
 include/batchlas/util/sycl-device-queue.hh            # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
-include/batchlas/util/sycl-local-accessor-helpers.hh  # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
 include/batchlas/util/sycl-span.hh                    # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
 include/batchlas/util/workspace.hh                    # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
 src/backends/batch_launch.hh                          # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign

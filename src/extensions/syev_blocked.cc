@@ -255,7 +255,7 @@ Event syev_blocked(Queue& ctx,
             // Eigenvalues only: bisection straight off the tridiagonal. Running a
             // full eigenvector divide-and-conquer here and discarding Z was 28.3% of
             // the float eigenvalues-only solve at n=256, batch=1024
-            // (SYEV_PERF_RESEARCH.md 2.3), and `blocked` owns the whole
+            // (evidence: docs/perf/syev.md#syev-stebz-values-only-in-the-blocked-solver-wp1), and `blocked` owns the whole
             // 32 < n <= 320 values-mode region (syev.hh syev_saturated_provider_for_n_values).
             // STEDC cannot simply be asked for NoEigenVectors -- see the NOTE below --
             // so the call goes away entirely. Ordering is unchanged: STEDC ends in an

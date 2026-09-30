@@ -22,7 +22,8 @@ namespace batchlas {
     template <Backend B, typename T, MatrixFormat MFormat>
     struct SyevxResidualsKernel;
 
-    // Only used by the params.iterations == 0 cold path (SYEVX_PLAN.md 7.8).
+    // Only used by the params.iterations == 0 cold path.
+    // evidence: docs/perf/syevx.md#lobpcg-column-reversal-kernels-removed
     template <Backend B, typename T, MatrixFormat MFormat>
     struct SyevxReverseEigenvectorsKernel;
 
@@ -40,7 +41,8 @@ namespace {
 // Block power-iteration steps applied to the random start; meaningful only when
 // searching for the largest eigenpairs. Kept small deliberately: an over-compressed
 // block is rank-deficient in floating point, at which point the Cholesky-based ortho
-// returns NaN rather than an error. Evidence: SYEVX_PLAN.md §7.9.
+// returns NaN rather than an error.
+// evidence: docs/perf/syevx.md#lobpcg-x-only-fill-and-power-iteration-start
 constexpr int kDefaultInitPowerIterations = 4;
 
 inline int lobpcg_init_power_iterations(int from_params, bool find_largest) {
@@ -73,13 +75,14 @@ inline int64_t lobpcg_block_vectors(size_t neigs, size_t extra_directions, int64
 }
 
 // How often the host reads back the convergence flags; each check is a full pipeline
-// drain (SYEVX_PLAN.md §7.1).
+// drain. evidence: docs/perf/syevx.md#lobpcg-host-synchronization-only-at-convergence-checks
 inline int64_t lobpcg_check_every() {
     return batchlas::settings().geometry.syevx_check_every;
 }
 
-// Instrumentation staging plan (SYEVX_PLAN.md §7.2). The caller-supplied
-// SyevxInstrumentation spans are not guaranteed device-accessible -- the Python binding
+// Instrumentation staging plan.
+// evidence: docs/perf/syevx.md#lobpcg-device-staged-instrumentation
+// The caller-supplied SyevxInstrumentation spans are not guaranteed device-accessible -- the Python binding
 // hands us a plain std::vector -- so NO kernel may write them. The residual kernel stores
 // here instead, and one host pass after the loop scatters into the caller's spans.
 struct LobpcgInstrumentationPlan {
@@ -128,7 +131,8 @@ LobpcgInstrumentationPlan lobpcg_instrumentation_plan(const SyevxParams<T>& para
 
 // Soft locking, variant (a): column masking. OFF by default and deliberately so -- the
 // mechanism is implemented and correct, but it saves no flops (the block shapes are
-// fixed) and measured no benefit. Evidence: SYEVX_PLAN.md §7.5.
+// fixed) and measured no benefit.
+// evidence: docs/perf/syevx.md#lobpcg-soft-locking-by-column-masking
 // The test below is INVERTED -- anything not in the disable set enables the
 // feature, so "=off" and an empty value both turn it ON. Preserved deliberately
 // rather than normalised: changing it here would flip the feature for anyone
@@ -187,7 +191,7 @@ inline constexpr R jacobi_definiteness_floor() {
         // no il/iu to honour. `syevx` never routes a non-extremal request here, but this
         // is a public entry point too, and silently returning extremal eigenpairs to an
         // interior request is the one failure mode no downstream check can catch.
-        // See SYEVX_RANGE_PLAN.md §2.5.
+        // evidence: docs/design/syevx-range-selection.md#syevx-range-iterative-paths-cannot-answer-an-interior-range
         if (params.select != SyevxSelect::Extremal) {
             throw batchlas::invalid_argument(
                 "syevx_lobpcg: only SyevxSelect::Extremal is supported; LOBPCG converges to an "
@@ -505,7 +509,7 @@ inline constexpr R jacobi_definiteness_floor() {
         // Block power-iteration start: X <- ortho(A X), a few times. Powers of A amplify
         // the largest eigendirections, so this is valid *only* for find_largest;
         // lobpcg_init_power_iterations returns 0 otherwise and this loop does not run.
-        // Evidence: SYEVX_PLAN.md §7.9.
+        // evidence: docs/perf/syevx.md#lobpcg-x-only-fill-and-power-iteration-start
         const int init_power_steps =
             lobpcg_init_power_iterations(params.init_power_iterations, params.find_largest);
         for (int step = 0; step < init_power_steps; ++step) {
@@ -714,7 +718,8 @@ inline constexpr R jacobi_definiteness_floor() {
                     }
 
                     sycl::group_barrier(cta);
-                    // Instrumentation history, staged device-side (SYEVX_PLAN.md §7.2).
+                    // Instrumentation history, staged device-side.
+                    // evidence: docs/perf/syevx.md#lobpcg-device-staged-instrumentation
                     if (stage_best_ptr != nullptr) {
                         for (size_t i = tid; i < neigs; i += local_size) {
                             const size_t dst = static_cast<size_t>(bid) * neigs + i;
@@ -757,7 +762,8 @@ inline constexpr R jacobi_definiteness_floor() {
             // Drain only when a host-side reader needs the results this iteration: the
             // convergence check, or instrumentation that could not be staged on the
             // device. Overshooting the stopping point by a few iterations is far cheaper
-            // than a drain per iteration (SYEVX_PLAN.md §7.1).
+            // than a drain per iteration.
+            // evidence: docs/perf/syevx.md#lobpcg-host-synchronization-only-at-convergence-checks
             const bool instrumentation_host_readback = instr_plan.active && !stage_device_side;
             const bool last_iteration = (it + 1 >= static_cast<int64_t>(params.iterations));
             const bool check_convergence =
@@ -838,7 +844,8 @@ inline constexpr R jacobi_definiteness_floor() {
                 trace("syevx: ILU(k) apply done");
             }
 
-            // ---- Soft locking, variant (a): column masking (SYEVX_PLAN.md §7.5)
+            // ---- Soft locking, variant (a): column masking
+            // evidence: docs/perf/syevx.md#lobpcg-soft-locking-by-column-masking
             //
             // The masking happens in two places, and the reason is the one non-obvious
             // thing about the feature: `ortho` MIXES COLUMNS. Householder QR and the

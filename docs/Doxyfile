@@ -34,7 +34,7 @@ INLINE_SIMPLE_STRUCTS  = NO
 TYPEDEF_HIDES_STRUCT   = NO
 NUM_PROC_THREADS       = 0
 
-# Math in the algorithm and evidence pages is written GitHub-style ($...$).
+# Math in docs pages uses Doxygen \f$ ... \f$ / \f[ ... \f] (rendered by MathJax).
 USE_MATHJAX            = YES
 MATHJAX_VERSION        = MathJax_3
 MATHJAX_FORMAT         = chtml
@@ -93,6 +93,7 @@ INPUT_ENCODING         = UTF-8
 FILE_PATTERNS          = *.hh *.h *.md *.dox
 RECURSIVE              = YES
 EXCLUDE                = docs/theme \
+                         docs/_inbox \
                          docs/tools
 EXCLUDE_PATTERNS       = */minibench.hh \
                          */minibench_structured.hh \

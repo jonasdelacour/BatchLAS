@@ -1,0 +1,77 @@
+/**
+@defgroup api Public API
+@brief Everything reachable from `#include <batchlas.hh>`, plus the two opt-in SYCL headers.
+
+Every entry point enqueues on a batchlas::Queue and returns a batchlas::Event;
+nothing is readable until the queue (or the event) is waited on. The backend is
+taken from the Queue, options are designated-initialiser structs, and scratch
+comes from the Queue's workspace arena. The conventions shared by all entry
+points are in @ref md_docs_2cpp-api.
+
+@{
+
+@defgroup core Queues, devices and events
+@brief batchlas::Queue, batchlas::Device, batchlas::Event and SYCL interop.
+
+@defgroup matrix Matrices, views and vectors
+@brief Column-major batched containers and the non-owning views every entry point takes.
+
+@defgroup enums Enumerations and scalar concepts
+@brief Transpose, Uplo, Side, Diag, Backend and the scalar concepts that constrain every template.
+
+@defgroup options Option structs
+@brief Designated-initialiser option structs accepted by the entry points.
+
+@defgroup blas2 BLAS level 2
+@brief Batched matrix-vector operations.
+
+@defgroup blas3 BLAS level 3
+@brief Batched matrix-matrix operations: gemm, trsm, trmm, symm/hemm, syrk/herk, syr2k/her2k.
+
+@defgroup factorizations Factorizations and linear solvers
+@brief Cholesky and LU factorizations, their solves and inverses.
+
+@defgroup qr QR and orthogonal transforms
+@brief Householder QR, forming and applying Q, and batched orthogonalisation.
+
+@defgroup eigen Symmetric and Hermitian eigensolvers
+@brief syev and its tiers, selected-range syevx, and the iterative eigensolvers.
+
+@defgroup tridiag Tridiagonal and band reduction
+@brief Reduction to tridiagonal form and the tridiagonal eigensolvers (steqr, stedc, stebz, stein).
+
+@defgroup svd Singular value decomposition
+@brief gesvd and the bidiagonal pipeline stages.
+
+@defgroup sparse Sparse (CSR) operations
+@brief Sparse-dense products, ILU(k) and CSR test-matrix generators.
+
+@defgroup extra Norms, condition numbers and utilities
+@brief Matrix norms, condition estimates, inversion and scaling helpers.
+
+@defgroup linalg Convenience layer (batchlas::linalg)
+@brief Value-returning, NumPy-like wrappers over the entry points.
+
+@defgroup dispatch Dispatch and routing
+@brief How a call picks a Route{Origin, Algorithm}: RouteTable, supports(), preferred(), env overrides.
+
+Design record: @ref md_docs_2design_2vendor-independence. Measurements behind
+each window: @ref perf_evidence.
+
+@defgroup workspace Workspace and memory
+@brief The per-Queue workspace arena, leases and BumpAllocator sizing.
+
+@defgroup errors Errors and convergence status
+@brief The exception hierarchy and per-item info reporting.
+
+@defgroup config Configuration, environment and tuning
+@brief Runtime settings captured from the environment and the tuning constants.
+
+@defgroup device Device-side group BLAS
+@brief In-kernel work-group and sub-group BLAS templates (`#include <batchlas/blas/device.hh>`, needs `-fsycl`).
+
+@defgroup internal_helpers Kernel helpers (installed, not API)
+@brief Headers installed because public headers include them. Not a stable interface.
+
+@}
+*/

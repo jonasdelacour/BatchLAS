@@ -193,7 +193,7 @@ inline constexpr int64_t syev_cta_max_n_default_for() {
     constexpr bool kReal = std::is_same_v<T, Real>;
     constexpr bool kDouble = std::is_same_v<Real, double>;
     // complex<double> only, deliberately not all complex: complex<float> never crosses.
-    // evidence: docs/perf/README.md#the-raw-data
+    // evidence: docs/perf/syev.md#syev-the-complex-double-vendor-handover
     if constexpr (!kReal && kDouble) return 24;
     return 32;
 }
@@ -215,7 +215,7 @@ inline int64_t syev_cta_max_n_for_vectors() {
 }
 
 // The small-n (CTA) kernel, per type and n; BATCHLAS_SYEV_SMALL_KERNEL=cta|fused|jacobi
-// overrides it. evidence: docs/perf/README.md#the-raw-data
+// overrides it. evidence: docs/perf/syev.md#syev-the-2026-08-03-small-n-bake-off
 enum class SyevSmallKernel { Cta, CtaFused, Jacobi };
 
 inline SyevSmallKernel syev_small_kernel_env(bool& forced) {
@@ -278,7 +278,7 @@ inline bool syev_prefer_vendor_over_cta(bool is_gpu,
 
 
 // Eigenvector routing window, keyed on n alone (never on batch) and per scalar type.
-// evidence: docs/perf/README.md#the-raw-data
+// evidence: docs/perf/syev.md#syev-per-type-eigenvector-crossovers
 template <typename T>
 inline batchlas::dispatch::Algorithm syev_saturated_algorithm_for_n(int64_t n) {
     // Auto means "no native algorithm preferred at this n"; the resolver, not this
@@ -305,7 +305,7 @@ inline batchlas::dispatch::Algorithm syev_saturated_algorithm_for_n(int64_t n) {
 
 // The same window for eigenvalues-only. Keyed on n alone: adding a batch floor here
 // drops large-n solves at moderate batch onto the vendor at up to 2.75x the cost.
-// evidence: docs/perf/README.md#the-raw-data
+// evidence: docs/perf/syev.md#syev-eigenvalues-only-routing
 inline batchlas::dispatch::Algorithm syev_saturated_algorithm_for_n_values(int64_t n) {
     using A = batchlas::dispatch::Algorithm;
     if (n <= 320) return A::Blocked;
@@ -388,7 +388,7 @@ struct RouteTable<Op::syev, T> {
         }
     }
 
-    // The measured window; evidence: docs/perf/README.md#the-raw-data
+    // The measured window; evidence: docs/perf/syev.md#syev-eigenvector-routing-at-saturation
     static bool preferred(Route r, const Shape& s) {
         namespace det = batchlas::blas::dispatch::detail;
         if (!is_native(r)) return false;

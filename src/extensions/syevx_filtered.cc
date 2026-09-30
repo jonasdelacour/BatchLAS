@@ -1,6 +1,7 @@
 // syevx_filtered: Chebyshev-filtered subspace iteration.
 //
-// This is SYEVX_PLAN.md Tier 3. One outer iteration is
+// evidence: docs/perf/syevx.md#syevx-tier-3-filtered
+// One outer iteration is
 //
 //     Y  = p_m(A) X          Chebyshev filter, m matvecs
 //     Y  = ortho(Y)
@@ -29,8 +30,9 @@
 //
 // Known cost, not yet addressed: the convergence test reads a device flag on the
 // host once per outer iteration, which serializes the queue. That is the same
-// defect as SYEVX_PLAN.md §7.1 in LOBPCG. It costs one sync per outer iteration
+// defect LOBPCG had. It costs one sync per outer iteration
 // (not per matvec), so it is far less severe here than there.
+// evidence: docs/perf/syevx.md#lobpcg-host-synchronization-only-at-convergence-checks
 
 #include "../linalg-impl.hh"
 #include <batchlas/util/sycl-vector.hh>
@@ -71,7 +73,7 @@ namespace {
 // Default Chebyshev degree. Deliberately mid-range: too low and each outer
 // iteration barely separates the spectrum, too high and the extra matvecs are
 // wasted because the block is reorthogonalized anyway. Unmeasured on this
-// hardware -- see the benchmark note in SYEVX_PLAN.md §2.4.
+// hardware. evidence: docs/perf/syevx.md#syevx-automatic-chebyshev-filter-degree
 constexpr size_t kDefaultFilterDegree = 10;
 
 // Bounds for the automatically derived degree (see the note at the interval
@@ -123,7 +125,8 @@ Event syevx_filtered(Queue& ctx,
     // outside. An interior interval has unwanted spectrum on both sides, which that
     // construction cannot express -- it would quietly return an extremal block
     // instead of failing. `syevx` never routes a non-extremal request here, but
-    // this is also a public entry point. See SYEVX_RANGE_PLAN.md §2.5, §12.2.
+    // this is also a public entry point.
+    // evidence: docs/design/syevx-range-selection.md#syevx-range-iterative-paths-cannot-answer-an-interior-range
     if (params.select != SyevxSelect::Extremal) {
         throw batchlas::invalid_argument(
             "syevx_filtered: only SyevxSelect::Extremal is supported; the Chebyshev filter is a "
@@ -153,23 +156,11 @@ Event syevx_filtered(Queue& ctx,
     }
     // The derivation is OFF by default, opt in with BATCHLAS_SYEVX_FILTER_DEGREE_AUTO=1.
     //
-    // It is a large win at small batch and a large LOSS at batch >= 4, so it cannot
-    // ship on. MEASURED (RTX 4090, float, n=1024, neigs=8, derived / fixed-10, and
-    // the two modes agree to within 0.02x so this is not a jobz effect):
-    //
-    //   batch          1      2      4      8     16
-    //   NoEigenVectors 2.18x  2.25x  0.70x  0.50x  0.48x
-    //   EigenVectors   2.20x  2.30x  0.69x  0.49x  0.48x
-    //
-    // The mechanism is the batch reduction, not the derivation itself: the degree is
-    // derived per matrix and then reduced to a MIN across the batch, so the GEMM
-    // shapes stay uniform. As the batch grows, the chance that some matrix forces a
-    // low degree tends to 1, the whole batch runs at that worst-case degree, and the
-    // outer iteration count explodes -- which is exactly the plateau at ~0.48x.
-    //
-    // Fixing it means changing the batch reduction (a per-matrix degree costs the
-    // batched GEMM shape; a quantile instead of a min would keep it), not the
-    // per-matrix formula. Until then the constant is the safer default.
+    // It is a large win at small batch and a large LOSS at batch >= 4 (about 2.2x
+    // and 0.48x), so it cannot ship on. The cause is the MIN over the batch below,
+    // which keeps GEMM shapes uniform but runs every matrix at the worst degree; a
+    // fix changes that reduction, not the per-matrix formula.
+    // evidence: docs/perf/syevx.md#syevx-automatic-chebyshev-filter-degree
     bool auto_degree = false;
     if (const char* av = batchlas::settings().selection.syevx_filter_degree_auto.get()) {
         if (std::atoi(av) != 0 && !degree_explicit) auto_degree = true;

@@ -243,6 +243,7 @@ namespace batchlas {
                         int32_t end_ix,
                         T zero_threshold) {
         // `zero_threshold` is currently unused: deflation follows LAPACK's relative test.
+        // evidence: docs/algorithms/steqr.md#steqr-the-relative-deflation-criterion
         (void)zero_threshold;
         const int32_t lane = static_cast<int32_t>(partition.get_local_linear_id());
         const bool lane_in_active_range = (lane + 1 < n) && (lane >= start_ix) && (lane + 1 < end_ix);

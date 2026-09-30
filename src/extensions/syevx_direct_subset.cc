@@ -9,7 +9,7 @@
 //     unmqr_hb2st    Q2 back-transform, k columns not n
 //     ormqr_blocked  Q1 back-transform, k columns not n
 //
-// Design and evidence: SYEVX_PLAN.md (Tier 2).
+// evidence: docs/perf/syevx.md#syevx-tier-2-directsubset
 
 #include "../linalg-impl.hh"
 #include <batchlas/util/sycl-vector.hh>

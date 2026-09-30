@@ -35,8 +35,8 @@ class GesvdjCTAKernel;
 // sigma = sqrt(lambda). That squares the condition number: measured relative
 // error in the singular values is 7.8e-3 at kappa=10 and 2.13 at kappa=1e6
 // (float, n=32), against cuSOLVER gesvdjBatched's 4.1e-6 and 9.3e-3, and the
-// computed U/V stop being orthogonal at all by kappa=1e4. See GESVD_PLAN.md
-// section 2.1 and benchmarks/gesvd_relacc.cc.
+// computed U/V stop being orthogonal at all by kappa=1e4 (benchmarks/gesvd_relacc.cc).
+// evidence: docs/perf/gesvd.md#gesvd-defect-a-the-normal-equations-square-kappa
 //
 // One-sided Jacobi avoids that because sigma_i is a COLUMN NORM of the rotated
 // A, never the square root of a difference of large numbers, and the rotations
@@ -57,7 +57,8 @@ class GesvdjCTAKernel;
 // - Drmac & Veselic, LAPACK Working Notes 169/170 (threshold form, SVA
 //   recurrence, convergence test).
 // - Golub & Van Loan, Matrix Computations, Alg. 8.5.1 (2x2 rotation).
-// - GESVD_IMPL_SPEC.md Part C for the design decision and its review.
+// - The design decision and its review:
+//   evidence: docs/design/gesvd.md#gesvdj_cta-the-lane-equals-row-mapping-decision
 // ---------------------------------------------------------------------------
 
 namespace {
@@ -460,16 +461,10 @@ inline void gesvdj_cta_impl(Queue& ctx,
                 const Real inv_beta = Real(1) / beta;
 
                 // ---- Global rescale ----
-                // de Rijk pre-ordering (sorting columns by decreasing norm before
-                // the first sweep) was implemented here and REMOVED. Measured mean
-                // sweeps at n=32 float, kappa = 1e1 / 1e4 / 1e6:
-                //     with    : 8.91 / 13.52 / 15.53
-                //     without : 8.95 / 13.25 / 15.22
-                // i.e. no reduction, and slightly worse at high conditioning.
-                // Merely having the untaken branch in the kernel cost 13% of wall
-                // clock (7.80 -> 8.88 ms at n=32/batch=16384) through register
-                // pressure, so it is not worth keeping behind a runtime flag
-                // either. See GESVD_PLAN.md Tier 2.
+                // de Rijk pre-ordering was implemented here and REMOVED: it saved
+                // no sweeps, and even an untaken branch for it cost 13% of wall
+                // clock through register pressure. Do not re-add it behind a flag.
+                // evidence: docs/perf/gesvd.md#gesvdj_cta-tier-2-preconditioning-tested-and-rejected
                 if (beta != Real(1)) {
                     for (int32_t rr = 0; rr < static_cast<int32_t>(kRPL); ++rr) {
                         const int32_t row = lane + rr * static_cast<int32_t>(P);
@@ -567,7 +562,8 @@ inline void gesvdj_cta_impl(Queue& ctx,
                         // sums each dot product over only half the rows: the
                         // fifth `half` is 0 so its inner loop never runs. This
                         // was found by adversarial review before the kernel was
-                        // written; see GESVD_IMPL_SPEC.md C.5 G3.
+                        // written.
+                        // evidence: docs/design/gesvd.md#gesvdj_cta-the-reduce-scatter-g3-trap
 #pragma unroll
                         for (int32_t step = 0; step < 4; ++step) {
                             const uint32_t mask = static_cast<uint32_t>(kGramChunk) >> step;

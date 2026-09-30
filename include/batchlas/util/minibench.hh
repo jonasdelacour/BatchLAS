@@ -931,8 +931,9 @@ inline void SyevxBenchSizesNetlib(Benchmark* b) {
 
 // Crossover sweep for syevx: (n, batch, neigs, algorithm).
 //
-// neigs is generated as a fraction of n so the cost model in SYEVX_PLAN.md §2 can
-// be checked directly. The 4th argument is a batchlas::SyevxAlgorithm value:
+// neigs is generated as a fraction of n so the flop-count cost model can be
+// checked directly. evidence: docs/design/syevx.md#syevx-the-flop-count-cost-model
+// The 4th argument is a batchlas::SyevxAlgorithm value:
 // Direct = 1, DirectSubset = 2, Filtered = 3, LOBPCG = 4 — all four are now
 // implemented, and comparing them is the whole point of the sweep.
 //

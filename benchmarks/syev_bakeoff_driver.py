@@ -5,11 +5,12 @@ Saturation = the knee: the batch at which steady-state compute dominates launch
 overhead and timing is measurable. NOT the asymptote, NOT "all available memory".
 
 Caps (ceilings, not targets):
-  * batch chosen so estimated device footprint <= FOOTPRINT_BUDGET (2 GB)
+  * batch chosen so estimated device footprint <= FOOTPRINT_BUDGET (1.5 GB)
   * absolute batch ceiling BATCH_MAX
   * per-invocation wall timeout INVOCATION_TIMEOUT
   * climbing stops as soon as a 4x batch increase buys < KNEE_TOL
 Results are appended to a JSONL as they are produced, so a kill loses nothing.
+evidence: docs/perf/syev.md#syev-raw-data-and-provenance
 """
 import csv, json, os, subprocess, sys, time
 

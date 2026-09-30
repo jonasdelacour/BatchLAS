@@ -492,6 +492,7 @@ inline RocRoot<T> solve_root_ext_generic(const Adapter& adapter,
     // generic pointer, so a negative offset can fault). With a single pole the
     // secular equation 1/rho + z0^2/(d0 - x) = 0 solves exactly:
     //     x = d0 + rho * z0^2.
+    // evidence: docs/perf/stedc.md#stedc-the-dd--1-secular-solve-fault
     if (dd <= 1) {
         const T z0 = z_prob(0);
         return {d_prob(0), rho * z0 * z0};

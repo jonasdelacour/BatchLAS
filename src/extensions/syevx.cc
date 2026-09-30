@@ -1,8 +1,8 @@
 // syevx: dispatch over the partial-eigensolve algorithm families.
 //
 // `syevx` is not one algorithm. The right method depends on the matrix format and
-// on how much of the spectrum is wanted; see SYEVX_PLAN.md §2 for the cost model
-// that produces the thresholds below.
+// on the shape and batch; the thresholds below are measured.
+// evidence: docs/perf/syevx.md#syevx-routing-thresholds-as-they-stand
 //
 //   dense, n <= SMALL_N                       -> Direct
 //   dense, eigenvalues only                   -> Direct
@@ -46,38 +46,19 @@ struct SyevxFillCountsKernel;
 
 namespace {
 
-// MEASURED thresholds (RTX 4090, CUDA backend, float). These replace the
-// flop-count estimates that stood here until the sweep in
-// benchmarks/syevx_benchmark.cc was finally run on GPU; see SYEVX_PLAN.md §13.
-//
-// A correction to what this comment used to say. It attributed DirectSubset's
-// loss to cuSOLVER being "better optimized than our two-stage + subset chain".
-// That comparison never happened: `Direct` calls `syev`, and `syev`'s Auto order
-// listed BatchLAS_Blocked ahead of Vendor, so on a GPU with n > 32 the baseline
-// was always our own *blocked* solver, never cuSOLVER. The blocked reduction is
-// parallel over the batch and starves at small batch -- at n=1024, batch=1 its
-// panel kernel is 88% of the solve -- so the old baseline was slow for exactly
-// the same reason DirectSubset is slow there, and the two comparing "evenly" at
-// batch 1 was two starved kernels, not a fair fight.
-//
-// With that fixed (see syev_prefer_vendor in include/batchlas/blas/functions/syev.hh),
-// Direct got up to 15.4x faster and the thresholds below had to be re-measured
-// against it. What survives:
-//
-//   * eigenvalues-only: Direct still wins everywhere -- the subset path pays the
-//     full reduction with no back-transform to narrow, so it has nothing to win
-//     with. Unchanged conclusion, sounder baseline.
-//   * with eigenvectors: DirectSubset wins only at large n AND large batch, by
-//     up to 2.4x; at small batch it now loses by up to 16x. The old gate was n
-//     alone, which sent batch-1 calls into that loss.
+// MEASURED thresholds (RTX 4090, CUDA backend, float), against a Direct that
+// really is the vendor solver (syev_prefer_vendor). Trap: an earlier grid
+// compared against our own batch-starved blocked syev and drew the wrong
+// conclusions; do not reuse it.
+// evidence: docs/perf/syevx.md#syevx-the-direct-baseline-was-never-cusolver
 constexpr int64_t kSyevxSmallN = 64;
 
 // With eigenvectors, DirectSubset only starts paying at this dimension...
 constexpr int64_t kSyevxSubsetMinN = 1024;
 
-// ...and enough total work to fill the device. See the table at the use site:
-// n=1024 needs batch >= 128 and n=2048 needs batch >= 64, and both are this
-// product. Below it DirectSubset loses, by up to 16x at batch 1.
+// ...and enough total work to fill the device. Measured (evidence pointer at the
+// use site): n=1024 needs batch >= 128 and n=2048 needs batch >= 64, and both are
+// this product. Below it DirectSubset loses, by up to 16x at batch 1.
 constexpr int64_t kSyevxSubsetMinWork = 128 * 1024;
 
 SyevxAlgorithm parse_syevx_algorithm(const char* v) {
@@ -347,7 +328,8 @@ SyevxAlgorithm syevx_select_algorithm(MatrixFormat format,
     // an interior interval has unwanted spectrum on both sides, which that
     // construction cannot express. Neither would fail on an interior request;
     // both would quietly answer a different question, which is why this is a
-    // throw and not a degrade. See SYEVX_RANGE_PLAN.md §2.5 and §12.
+    // throw and not a degrade.
+    // evidence: docs/design/syevx-range-selection.md#syevx-range-throw-do-not-degrade
     if (!extremal) {
         // Sparse: LOBPCG is the only implemented path, so there is nothing to
         // fall back to. Returning the extremal eigenpairs instead would be the
@@ -448,31 +430,17 @@ SyevxAlgorithm syevx_select_algorithm(MatrixFormat format,
     // for the same reason. The previous gate was n alone, which sent batch-1
     // calls -- its worst case -- straight into it.
     //
-    // MEASURED (RTX 4090, float, eigenvectors, BM_SYEVX_CrossoverVectors),
-    // Direct/DirectSubset, so > 1 means DirectSubset wins:
-    //
-    //   n=1024, k=8:    b=1 0.09   b=4 0.34   b=16 0.36   b=64 1.00   b=256 2.40
-    //   n=2048, k=8:    b=1 0.06   b=4 0.28   b=16 0.43   b=64 1.12   b=256 1.98
-    //   n=1024, b=128:  k=8 1.47   k=25 1.57  k=51 1.38   k=102 1.51
-    //   n=1024, b=256:  k=8 2.12   k=25 1.93  k=51 1.96   k=102 1.83
-    //                   k=256 1.43  k=512 1.00
-    //
-    // Two anchors bound the win region: n=1024 needs batch >= 128, n=2048 needs
-    // batch >= 64. Both are `n * batch >= 128 * 1024`, which is the form used
-    // here. Above n=2048 that extrapolates rather than interpolates, but it
-    // extrapolates in the direction the two anchors already move.
-    //
-    // k is deliberately absent: the ratio is flat in k from 0.8% to 25% of the
-    // spectrum and only decays to a tie at 50%, so it does not discriminate.
+    // Two measured anchors bound the win region: n=1024 needs batch >= 128 and
+    // n=2048 needs batch >= 64; both are `n * batch >= 128 * 1024`. Above n=2048
+    // this extrapolates. k is deliberately absent: the ratio is flat in k from
+    // 0.8% to 25% of the spectrum.
+    // evidence: docs/perf/syevx.md#syevx-directsubset-batch-crossover-with-eigenvectors
     //
     // WHERE in the spectrum the k eigenpairs sit is absent for a stronger
-    // reason: it cannot enter the cost of either path. Direct always runs a full
-    // syev and then copies a block. DirectSubset's band width kd is a function of
-    // n alone, its bisection does the same number of steps for every index, and
-    // both back-transforms act on the same fixed n x k slice wherever the block
-    // sits. So the crossovers measured for extremal ranges carry over to Index
-    // and Value ranges unchanged, and no re-measurement was needed to extend
-    // this routing to them. (SYEVX_RANGE_PLAN.md §8.5, §9.2.)
+    // reason: it cannot enter the cost of either path, so these extremal-range
+    // crossovers are reused unchanged for Index and Value ranges. That is an
+    // argument, not a timing; BM_SYEVX_RangePosition would check it.
+    // evidence: docs/design/syevx-range-selection.md#syevx-range-why-the-thresholds-carry-over-unchanged
     if (subset_supported && n >= kSyevxSubsetMinN &&
         n * batch_size >= kSyevxSubsetMinWork) {
         return SyevxAlgorithm::DirectSubset;

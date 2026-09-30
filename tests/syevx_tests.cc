@@ -836,7 +836,8 @@ INSTANTIATE_TEST_SUITE_P(
         return std::string(info.param ? "Largest" : "Smallest");
     });
 
-// SYEVX_PLAN.md 7.2: the LOBPCG instrumentation histories used to be filled by a
+// evidence: docs/perf/syevx.md#lobpcg-device-staged-instrumentation
+// The LOBPCG instrumentation histories used to be filled by a
 // host loop over batch x neigs after a forced pipeline drain every iteration.
 // They are now stored device-side into a pool staging buffer and scattered into
 // the caller's spans once, at the end.
@@ -1037,7 +1038,8 @@ TEST(SyevxLobpcgInstrumentationTest, DeviceStagedHistoryMatchesHostReadPath) {
 }
 
 // -----------------------------------------------------------------------------
-// Jacobi preconditioner (SYEVX_PLAN.md 7.10)
+// Jacobi preconditioner
+// evidence: docs/perf/syevx.md#lobpcg-jacobi-preconditioners
 //
 // (diag(A) - lambda I)^{-1} applied to the LOBPCG residual. Unlike ILU(k) it needs
 // no factorization and is defined for dense and CSR alike, and unlike ILU(k) it is
@@ -1304,7 +1306,8 @@ TEST(SyevxJacobiIterations, DegradesGracefullyOnRandomSymmetric) {
 // available check that the shift is indexed to the right Ritz value per column.
 TEST(SyevxJacobiIterations, ShiftedIsANoOpOnConstantDiagonal) {
     if (syevx_algorithm_overridden_to_other("lobpcg")) GTEST_SKIP() << "algorithm forced via env";
-    // Soft locking (SYEVX_PLAN.md §7.5) substitutes filler vectors for converged
+    // evidence: docs/perf/syevx.md#lobpcg-soft-locking-by-column-masking
+    // Soft locking substitutes filler vectors for converged
     // columns, which perturbs the trajectory and breaks the exact equality this
     // test is built on. The invariant is real but only holds without locking, and
     // loosening the comparison would throw away precisely the sharpness that makes

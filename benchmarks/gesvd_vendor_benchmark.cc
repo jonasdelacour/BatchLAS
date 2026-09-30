@@ -4,7 +4,8 @@
 // Why a dedicated target rather than extending gesvd_cta_benchmark:
 //  - The batch sweep here starts where the GPU saturates. gesvd_cta_benchmark
 //    tops out at batch=64, which on a 4090 at n=32 measures launch overhead, not
-//    the algorithm (GESVD_PLAN.md defect D).
+//    the algorithm.
+//    evidence: docs/perf/gesvd.md#gesvd-defect-d-perf-sweeps-that-stopped-at-batch-64
 //  - `--name` is a substring filter, so BM_GESVD_CTA in the existing target would
 //    also select anything named BM_GESVD_CTA_*. Keeping the comparison in its own
 //    binary makes the filters unambiguous.

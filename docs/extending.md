@@ -9,6 +9,33 @@ An entry point is declared with its backend as an explicit template parameter:
 template <Backend Back, typename T, ...> Event name(Queue&, ...);
 ```
 
+## Where the declaration goes
+
+- **One header per dense op**, `include/batchlas/blas/functions/<op>.hh`,
+  included from the aggregator `include/batchlas/blas/functions.hh` (which
+  declares nothing itself). A new op gets its own header and one `#include`
+  line there. The extension surface (`steqr`, `stedc`, `syevx`, `lanczos`,
+  `ritz_values`, ...) lives in `include/batchlas/blas/extensions.hh` instead.
+- **The primary takes views.** Declare it for `MatrixView` / `VectorView` /
+  `Span`. Do not hand-write an owning-`Matrix` twin: close the header with
+  `BATCHLAS_ACCEPT_OWNING(<op>)` (owning containers accepted wherever the
+  primary takes a view) and `BATCHLAS_DISPATCH_ON_QUEUE(<op>)` (backend taken
+  from the queue), once per name including the sizing function —
+  `include/batchlas/blas/functions/gemv.hh` and `geqrf.hh` show the shape. The
+  one hand-written owning twin left, in `ritz_values`, documents in place why the
+  generated forwarder cannot take a partially-explicit call.
+- **The sizing function is `<op>_buffer_size`** and returns bytes. It must take
+  the same arguments as the run path, up to the workspace, and branch
+  identically; size it with `BumpAllocator::measuring()` + `required_bytes()`,
+  never by re-deriving the sizes by hand (the allocator checks the
+  alignment-rounded size but advances by the raw size, so an exact simulation is
+  too small). An older `*_workspace` / `*_workspace_size` spelling survives only
+  as a `[[deprecated]]` alias (`stedc_workspace_size`, `ritz_values_workspace`).
+- **Validation** of shapes and flags belongs in the checked overloads in
+  `include/batchlas/blas/options.hh` or a `<op>_validate_params` helper beside
+  the declaration, and must be tested through the ordinary spelling (see the
+  next section for why).
+
 ## Keep the `requires` clause on the queue-dispatch overload
 
 `BATCHLAS_DISPATCH_ON_QUEUE(name)`, in `<batchlas/blas/queue-dispatch.hh>`, adds

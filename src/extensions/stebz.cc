@@ -1,11 +1,12 @@
 // stebz: selected eigenvalues of a batch of symmetric tridiagonal matrices, by
 // bisection on Sturm sequence sign counts.
 //
-// This is the tridiagonal kernel for SYEVX (SYEVX_PLAN.md Tier 1). Bisection is
+// This is the tridiagonal kernel for syevx's subset paths. Bisection is
 // used rather than MRRR because in the subset regime its only real weakness --
 // O(nk^2) reorthogonalization of clustered eigenvectors, handled in `stein` --
 // is negligible against the O(n^3) tridiagonalization that precedes it, while
-// MRRR's implementation cost is very large. See SYEVX_PLAN.md §6.1-6.2.
+// MRRR's implementation cost is very large.
+// evidence: docs/design/syevx.md#bisection-and-inverse-iteration-stebz-and-stein-build
 //
 // Parallelization: one work-group per batch item, one work-item per wanted
 // eigenvalue. Eigenvalues are mutually independent, so no communication is needed

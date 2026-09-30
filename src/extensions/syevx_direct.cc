@@ -3,7 +3,8 @@
 // This is the correct choice whenever the requested fraction of the spectrum is
 // large enough that an iterative method cannot amortize its matvecs, and for small
 // n where a subset solver cannot beat the CTA-resident full solver at all.
-// See SYEVX_PLAN.md §2 (cost model) and §3.1.
+// evidence: docs/design/syevx.md#syevx-small-n-why-direct-is-the-answer
+// evidence: docs/perf/syevx.md#syevx-routing-thresholds-as-they-stand
 
 #include "../linalg-impl.hh"
 #include <batchlas/util/sycl-vector.hh>

@@ -1,10 +1,10 @@
 // Tests for gesvdj_cta, the one-sided Jacobi SVD.
 //
 // Checks are host-side and self-contained rather than shared with
-// gesvd_tests.cc, deliberately: the tolerances there (float: 5e-2 singular
-// values, 2e-1 orthogonality, 3e-1 reconstruction) are calibrated for a
-// normal-equations solver and are far too loose to detect a regression in this
-// kernel. See GESVD_PLAN.md section 2.1.
+// gesvd_tests.cc, deliberately: the tolerances there are solver-aware and
+// absolute (and fall back to 5e-2 / 2e-1 / 3e-1 under the normal-equations
+// bidiagonal), too loose to detect a regression in this kernel.
+// evidence: docs/perf/gesvd.md#gesvd-defect-a-the-normal-equations-square-kappa
 //
 // The rectangular, complex and rank-deficient cases are the ones NOT covered by
 // the n=32 square benchmark shape, so they are the reason this file exists.

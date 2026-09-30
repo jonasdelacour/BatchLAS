@@ -243,13 +243,12 @@ struct CountsFixture {
 //   (b) item 1's unused columns 3..7 are written as EXACTLY zero (they are
 //       pre-poisoned with a sentinel, so this proves stein wrote them).
 //
-// (b) is the discriminating assertion, and (a) is not. SYEVX_RANGE_PLAN.md 7.3
-// asks for (a) alone on the theory that the phase-2 cluster walk corrupts valid
-// eigenvectors; it does not. Measured on this test: with the counts bound removed
-// from BOTH phases, (a) reports zero failures and (b) reports 639. The phase-2
-// MGS writes only column j while reading columns i < j and cluster_start comes
-// only from w(0..j), so garbage past the prefix cannot reach a valid column.
+// (b) is the discriminating assertion, and (a) is not. The original design asked
+// for (a) alone, on the theory that the phase-2 cluster walk corrupts valid
+// eigenvectors; it does not. Measured on this test: with the counts bound
+// removed from BOTH phases, (a) reports zero failures and (b) reports 639.
 // Keep (b); it is what makes this test fail when the bound regresses.
+// evidence: docs/design/syevx-range-selection.md#syevx-range-the-stein-poisoned-tail-test
 TYPED_TEST(SteinTest, PerItemCountsIgnorePoisonedTail) {
     using Real = TypeParam;
     CountsFixture<Real> f;

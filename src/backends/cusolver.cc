@@ -334,7 +334,7 @@ namespace batchlas {
                     // Deliberately not silently falling back to a looped gesvdj: that is a
                     // different algorithm with a different cost, and reporting it under the
                     // same name would corrupt the very comparison this path exists to make.
-                    // See GESVD_PLAN.md Tier 0.
+                    // evidence: docs/perf/gesvd.md#gesvd-tier-0-the-cusolver-gesvdjbatched-binding
                     throw batchlas::unsupported(
                         "gesvd_vendor (CUSOLVER): only the gesvdjBatched route is implemented "
                         "(requires m <= 32, n <= 32 and a tightly packed batch)");

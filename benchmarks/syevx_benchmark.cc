@@ -58,8 +58,8 @@ static void BM_SYEVX(minibench::State& state) {
 // while returning a much less converged answer.
 //
 // state.range(3) is a batchlas::SyevxAlgorithm value (see SyevxCrossoverSizes).
-// This is the sweep that replaces the flop-count thresholds in SYEVX_PLAN.md §2
-// with measured ones.
+// This is the sweep that replaced the flop-count thresholds with measured ones.
+// evidence: docs/perf/syevx.md#syevx-the-first-gpu-crossover-measurement-superseded-baseline
 template <typename T, Backend B>
 static void BM_SYEVX_Crossover(minibench::State& state) {
     const size_t n = state.range(0);
@@ -164,12 +164,13 @@ static void BM_SYEVX_CrossoverVectors(minibench::State& state) {
 // sparse input to LOBPCG -- "Sparse input has no dense fallback" -- before any of
 // the (n, batch) heuristics run, so Filtered's rival here is not a tuned vendor
 // eigensolver but another iterative method, one that may not converge at all.
-// SYEVX_PLAN.md section 6.4 records the documented failure mode: UNPRECONDITIONED
+// The documented failure mode is that UNPRECONDITIONED
 // LOBPCG stagnates, its residuals oscillating around a floor rather than
 // descending. BatchLAS's only preconditioner is ILU(k), which requires
 // find_largest = false, so at the largest end LOBPCG is unpreconditioned BY
-// CONSTRUCTION and section 6.4's failure mode is the default configuration there,
+// CONSTRUCTION and that failure mode is the default configuration there,
 // not a hypothetical.
+// evidence: docs/design/syevx.md#chebyshev-davidson-consider-as-the-lobpcg-replacement-for-unpreconditioned-problems
 //
 // TIME ALONE CANNOT ANSWER THIS, and that is the structural difference from the
 // dense sweeps. A direct solver's time is its whole story; an iterative solver
@@ -216,10 +217,11 @@ SyevxParams<T> sparse_params(int config, size_t neigs) {
     SyevxParams<T> params;
     params.algorithm = OrthoAlgorithm::Chol2;
     params.iterations = 200;
-    // Same guard-block convention as the dense crossover. SYEVX_PLAN.md section
-    // 7.6 measured 34-50% fewer iterations with one, so omitting it would
-    // handicap LOBPCG for a reason that has nothing to do with filtering, and
-    // would flatter the conclusion this sweep exists to test.
+    // Same guard-block convention as the dense crossover. It measured 34-50%
+    // fewer iterations, so omitting it would handicap LOBPCG for a reason that
+    // has nothing to do with filtering, and would flatter the conclusion this
+    // sweep exists to test.
+    // evidence: docs/perf/syevx.md#lobpcg-guard-vectors-by-default
     params.extra_directions = std::max<size_t>(1, neigs / 4);
     params.absolute_tolerance = T(1e-6);
     params.relative_tolerance = T(1e-6);
@@ -391,9 +393,10 @@ static void BM_SYEVX_SparseShape(minibench::State& state) {
 }
 
 // Hardness sweep: one shape, spectral separation varied. This is the half that
-// probes section 6.4's stagnation claim directly -- if unpreconditioned LOBPCG
+// probes the LOBPCG stagnation claim directly -- if unpreconditioned LOBPCG
 // has a floor, closing the gap is what should expose it, and it shows up in the
 // accuracy column rather than the timing one.
+// evidence: docs/perf/syevx.md#syevx-the-diagonal-boost-gap-sweep-and-lobpcg-stagnation
 template <typename T, Backend B>
 static void BM_SYEVX_SparseGap(minibench::State& state) {
     BM_SYEVX_SparseImpl<T, B>(state);
@@ -406,9 +409,9 @@ static void BM_SYEVX_SparseGap(minibench::State& state) {
 // picks its band width kd from n alone, bisects the same number of steps for any
 // index, and back-transforms the same fixed n x k slice wherever the block sits.
 // So the crossover thresholds measured for extremal ranges were carried over to
-// Index and Value ranges without re-measurement (SYEVX_RANGE_PLAN.md sections
-// 8.5 and 9.2). This benchmark is the one point that CHECKS that argument
-// instead of trusting it.
+// Index and Value ranges without re-measurement. This benchmark is the one
+// point that CHECKS that argument instead of trusting it.
+// evidence: docs/design/syevx-range-selection.md#syevx-range-why-the-thresholds-carry-over-unchanged
 //
 // state.range(3) is the position: 0 = bottom of the spectrum, 1 = middle,
 // 2 = top. The block WIDTH is identical in all three, so any difference in the
@@ -417,7 +420,7 @@ static void BM_SYEVX_SparseGap(minibench::State& state) {
 // state.range(4) is the algorithm, and `Direct` is here as a CONTROL, not as a
 // second subject: it provably cannot depend on position, so whatever spread it
 // shows is this machine's noise floor. A DirectSubset spread inside that band
-// means flat; outside it means section 9.2 is wrong and syevx.cc's threshold
+// means flat; outside it means that argument is wrong and syevx.cc's threshold
 // needs a range-aware term.
 //
 // Eigenvector mode only. Eigenvalues-only routes to Direct at every shape, so

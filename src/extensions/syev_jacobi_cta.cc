@@ -46,7 +46,7 @@ class SyevJacobiCTAKernel;
 // - Drmac & Veselic, LAPACK Working Notes 169/170.  (threshold form, backward
 //   error, convergence test)
 // - Golub & Van Loan, Matrix Computations, Alg. 8.5.1.  (2x2 rotation formulas)
-// - See JACOBI_EIGENSOLVER_PLAN.md for the full design rationale.
+// - Measured speed/accuracy picture: evidence: docs/perf/syev.md#syev-the-2026-08-03-small-n-bake-off
 // ---------------------------------------------------------------------------
 
 namespace {

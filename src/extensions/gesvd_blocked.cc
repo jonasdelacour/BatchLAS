@@ -1030,8 +1030,9 @@ Event gesvd_native_impl(Queue& ctx,
         // tridiagonal of B^T B explicitly and takes sigma = sqrt(lambda), which
         // squares the condition number -- measured relative error 0.299 at
         // kappa=1e4 and 2.13 at 1e6 for n=32 float, with U/V no longer orthogonal
-        // at all (GESVD_PLAN.md section 2.1). Both direct solvers work on B, so
-        // the error stays proportional to eps*kappa.
+        // at all. Both direct solvers work on B, so the error stays proportional
+        // to eps*kappa.
+        // evidence: docs/perf/gesvd.md#gesvd-defect-a-the-normal-equations-square-kappa
         //
         // Both write only the leading k x k of U and V^H, so U's trailing columns
         // k..m-1 are seeded to the identity here and carried to an orthonormal

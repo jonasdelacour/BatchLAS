@@ -70,12 +70,9 @@ template <Backend B, typename T> class StedcComputeV;
 template <Backend B, typename T> class StedcDeflation;
 
 // Smallest subproblem size at which the deflation-aware back-transform is used.
-// It needs a host sync to learn the batch-wide non-deflated width, so for small
-// merges the sync costs more than the saved GEMM flops.
-// Smallest subproblem size at which the deflation-aware back-transform is used.
 // Learning the batch-wide non-deflated width needs a host sync, which stalls the
 // enqueue pipeline; below this size the saved GEMM flops do not pay for it.
-// Measured on an RTX 4090: neutral at n = 256, 5.8% at n = 512, 24% at n = 1024.
+// evidence: docs/perf/stedc.md#stedc-the-deflation-gemm-threshold
 inline constexpr int64_t stedc_deflation_gemm_min_n = 512;
 
 // Only take the narrow path when deflation actually removed enough columns to

@@ -41,6 +41,10 @@
 # consumer's global namespace - all of which compiled fine in-tree for 1116
 # commits.
 #
+# The hosted `docs` job builds the Doxygen site (docs/developer/documentation.md)
+# with a pinned Doxygen, warnings as errors, and `docs-deploy` publishes it to
+# GitHub Pages on a push to main. It is the only hosted job that installs a tool.
+#
 # Every check is a script under .github/ci/ so it is runnable locally:
 #   .github/ci/run_local_checks.sh                 # static only
 #   .github/ci/run_local_checks.sh /tmp/inst       # ...plus a real install
@@ -166,6 +170,113 @@ jobs:
         # Two of the 291 pointers in the tree were already dangling when this
         # was written.
         run: python3 .github/ci/check_evidence_anchors.py
+      - name: The Markdown location rule still discriminates
+        # Same self-test-first reason. Pins a root plan file, a nested docs/,
+        # a docs/ lookalike and a non-root AGENTS.md as flagged, and README.md
+        # anywhere plus .github/ as allowed.
+        run: python3 .github/ci/check_markdown_locations.py --self-test
+      - name: No Markdown outside docs/
+        # Plans and result write-ups used to pile up as root *.md files that the
+        # site never published and no check ever read, so their numbers were
+        # quoted from memory. The documentation site under docs/ is the one
+        # place that material goes; README.md, root AGENTS.md/CLAUDE.md/
+        # LICENSE.md and .github/ are the only exemptions. Python only, so it
+        # lives in this job rather than needing Doxygen.
+        run: python3 .github/ci/check_markdown_locations.py
+
+  docs:
+    name: Documentation site builds without warnings
+    runs-on: ubuntu-latest
+    # Builds on every trigger; the deploy is the separate docs-deploy job below,
+    # so this job (which runs PR code) never holds a Pages token.
+    env:
+      DOXYGEN_VERSION: 1.18.0
+      # sha256 of doxygen-1.18.0.linux.bin.tar.gz as published on the release page.
+      DOXYGEN_SHA256: 14fa81bdc34171edb5f1f02b1d60e74802f0439b77fa44e592565d517d72df90
+    steps:
+      # No `lfs: true`: the Results database page reports an LFS pointer as a
+      # pointer ("run git lfs pull"), so the site builds from pointers alone and
+      # the job never downloads the raw grids.
+      - uses: actions/checkout@v4
+        with:
+          # The Results database dates each grid by the commit that added it.
+          fetch-depth: 0
+      - name: The database page generator still generates
+        # Self-test first, as elsewhere: a Results database with zero rows must
+        # be distinguishable from a generator that cannot read the tree.
+        run: python3 docs/tools/gen_db_pages.py --self-test
+      - name: Install pinned Doxygen ${{ env.DOXYGEN_VERSION }}
+        # Pinned, not apt: Ubuntu's doxygen is far older than 1.18, and
+        # build_docs.sh refuses anything before 1.18. The heading ids
+        # (MARKDOWN_ID_STYLE=GITHUB, repeats numbered site-wide) that keep every
+        # `evidence: docs/<page>.md#<anchor>` pointer a live link, and the
+        # vendored doxygen-awesome 2.5.0 header, were verified on this version.
+        # The official release tarball is checksum-verified so a replaced asset
+        # fails the job instead of building the site with it.
+        run: |
+          set -eu
+          tag="Release_$(echo "$DOXYGEN_VERSION" | tr . _)"
+          tgz="doxygen-$DOXYGEN_VERSION.linux.bin.tar.gz"
+          curl -fsSL -o "$RUNNER_TEMP/$tgz" \
+            "https://github.com/doxygen/doxygen/releases/download/$tag/$tgz"
+          echo "$DOXYGEN_SHA256  $RUNNER_TEMP/$tgz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$tgz" -C "$RUNNER_TEMP"
+          "$RUNNER_TEMP/doxygen-$DOXYGEN_VERSION/bin/doxygen" --version
+          echo "DOXYGEN=$RUNNER_TEMP/doxygen-$DOXYGEN_VERSION/bin/doxygen" >> "$GITHUB_ENV"
+      - name: Install Graphviz
+        # Optional for the build (build_docs.sh turns HAVE_DOT off without it),
+        # but the published site should carry the include and group graphs.
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends graphviz
+      - name: Build the site, warnings are errors
+        # The same script as locally and as the CMake target batchlas_docs, so
+        # CI cannot pass a site that the documented command would not build.
+        # Strict: a broken @ref, a dangling page link or an undocumented group
+        # member is a warning, and a warning here is a red job.
+        run: BATCHLAS_DOCS_STRICT=1 sh scripts/build_docs.sh build/docs
+      - name: Upload the site
+        # Every run keeps the rendered site for 14 days, so a PR's docs can be
+        # browsed from the run page before merge.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-html
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            build/docs/html/
+            build/docs/doxygen-warnings.log
+      - name: Package the site for GitHub Pages
+        # The artifact docs-deploy publishes. Only built where it will be used.
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/docs/html
+
+  docs-deploy:
+    name: Publish the documentation site (main only)
+    needs: docs
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # Job-level, not workflow-level: the Pages and OIDC tokens exist in this job
+    # and nowhere else, and this job runs no repository code.
+    permissions:
+      pages: write
+      id-token: write
+    # One deploy at a time; a newer push supersedes a queued one.
+    concurrency:
+      group: pages
+      cancel-in-progress: true
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        # Needs Settings -> Pages -> Source: "GitHub Actions", set once by a
+        # repository admin; until then this step fails (see docs/ci.md).
+        id: deploy
+        uses: actions/deploy-pages@v4
 
   lfs-pointers:
     name: Benchmark results are stored in Git LFS

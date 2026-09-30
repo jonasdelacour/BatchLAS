@@ -1,7 +1,9 @@
 // stein: eigenvectors of a batch of symmetric tridiagonal matrices by inverse
 // iteration, given eigenvalues (from `stebz`).
 //
-// Companion to stebz for SYEVX Tier 1 (SYEVX_PLAN.md §8). Two phases:
+// Companion to stebz for syevx's subset paths.
+// evidence: docs/perf/syevx.md#syevx-tier-1-stebz-and-stein
+// Two phases:
 //
 //   1. One work-item per wanted eigenvector solves (T - lambda*I) x = b a few
 //      times from a pseudo-random start, using a tridiagonal LU factorization
@@ -9,7 +11,7 @@
 //      lambda, so it is per-vector and inherently serial in n -- hence one
 //      work-item rather than one work-group per vector. This is affordable
 //      because for medium n the tridiagonal stage is far off the critical path
-//      (SYEVX_PLAN.md §4).
+//      (evidence: docs/design/syevx.md#syevx-for-batches-of-medium-matrices).
 //
 //   2. Vectors whose eigenvalues form a cluster are reorthogonalized against each
 //      other by modified Gram-Schmidt. Inverse iteration alone does not deliver
@@ -311,9 +313,11 @@ Event stein(Queue& ctx,
                 // columns phase 1 already knows are zero.
                 //
                 // This bound is a COST and hygiene bound, not a correctness one, and
-                // the distinction is worth stating because SYEVX_RANGE_PLAN.md 2.4
-                // gets it wrong. The modified Gram-Schmidt below writes only column
-                // j while reading columns i < j, and cluster_start is derived only
+                // the distinction is worth stating because the original range
+                // design got it wrong.
+                // evidence: docs/design/syevx-range-selection.md#syevx-range-steins-per-item-count-bound
+                // The modified Gram-Schmidt below writes only column j while
+                // reading columns i < j, and cluster_start is derived only
                 // from w(0..j); so for every j < kb the result depends solely on
                 // valid data, and nothing past kb can flow back into a valid column.
                 // What actually protects the valid prefix is phase 1's kb bound (it

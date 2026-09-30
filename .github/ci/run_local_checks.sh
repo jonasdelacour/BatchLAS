@@ -13,7 +13,8 @@
 # The second and third are a ctest --output-junit report and the directory a run
 # under GTEST_OUTPUT=xml:<dir>/ wrote. Passing them gates that run against
 # tests/known-failures.txt. Only these two arguments involve a build at all;
-# everything above still runs on a bare checkout.
+# everything above still runs on a bare checkout. The documentation site is
+# built into build/docs when Doxygen 1.18+ is available, and skipped otherwise.
 set -eu
 
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -41,6 +42,27 @@ run python3 "$here/check_evidence_anchors.py"
 # Checks the INDEX, so it catches a raw benchmark file before it is committed, not after.
 run python3 "$here/check_lfs_pointers.py" --self-test
 run python3 "$here/check_lfs_pointers.py"
+# Plans and write-ups outside docs/ are what the documentation site replaced.
+run python3 "$here/check_markdown_locations.py" --self-test
+run python3 "$here/check_markdown_locations.py"
+
+# The docs build. The generator's self-test needs no Doxygen; the site does,
+# and only 1.18+ (MARKDOWN_ID_STYLE=GITHUB keeps evidence anchors live links),
+# so an older or missing doxygen is a skip, not a failure. CI's docs job pins
+# 1.18.0. Set DOXYGEN=/path/to/doxygen to use one off PATH, and
+# BATCHLAS_DOCS_STRICT=1 to fail on warnings as CI does.
+root=$(CDPATH= cd -- "$here/../.." && pwd)
+run python3 "$root/docs/tools/gen_db_pages.py" --self-test
+_doxygen=${DOXYGEN:-doxygen}
+_dver=$("$_doxygen" --version 2>/dev/null | sed 's/[^0-9.].*//') || _dver=""
+_dmaj=$(echo "${_dver:-0}" | cut -d. -f1)
+_dmin=$(echo "${_dver:-0.0}.0" | cut -d. -f2)
+if [ -n "$_dver" ] && { [ "$_dmaj" -gt 1 ] || { [ "$_dmaj" -eq 1 ] && [ "$_dmin" -ge 18 ]; }; }; then
+    run env DOXYGEN="$_doxygen" sh "$root/scripts/build_docs.sh" "$root/build/docs"
+else
+    printf '\n== docs build SKIPPED: %s\n' \
+        "no Doxygen 1.18+ ('$_doxygen' reports '${_dver:-nothing}'); set DOXYGEN=/path/to/doxygen"
+fi
 if [ "$#" -gt 0 ]; then
     run python3 "$here/check_exported_package.py" --package "$1"
 fi
