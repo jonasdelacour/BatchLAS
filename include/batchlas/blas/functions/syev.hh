@@ -277,12 +277,9 @@ inline bool syev_prefer_vendor_over_cta(bool is_gpu,
 }
 
 
-// sm_120's float blocked/two_stage edge; the sm_89 edge is 448.
-// evidence: docs/perf/blackwell.md#syev-float-blocked-two-stage-edge
-inline constexpr int64_t kSyevSm120FloatBlockedMaxN = 768;
+inline constexpr int64_t kSyevSm120FloatBlockedMaxN = 768;  // sm_89: 448. evidence: docs/perf/blackwell.md#syev-float-blocked-two-stage-edge
 
-// Eigenvector routing window, keyed on n alone (never on batch), per scalar type
-// and, where re-measured, per architecture (cuda_cc 0 = the sm_89 window).
+// Eigenvector routing window: n alone (never batch), per type, per arch (cc 0 = sm_89).
 // evidence: docs/perf/README.md#the-raw-data
 template <typename T>
 inline batchlas::dispatch::Algorithm syev_saturated_algorithm_for_n(int64_t n, int cuda_cc = 0) {
@@ -356,8 +353,7 @@ inline SyevShape syev_op_shape(const Queue& ctx,
     }
     try {
         s.cuda_cc = ctx.device().cuda_compute_capability();
-    } catch (...) {
-        // leave 0: the sm_89 windows
+    } catch (...) {  // leave 0: the sm_89 windows
     }
     return s;
 }
