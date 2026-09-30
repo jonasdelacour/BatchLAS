@@ -14,8 +14,7 @@ namespace batchlas::syev_tuning {
 
 inline constexpr int32_t kSm120SytrdBlockXlarge = 16;
 inline constexpr int32_t kSm120OrmqrBlockXlarge = 32;
-inline constexpr int32_t kSm120LatrdGridMinNReal = 320;
-inline constexpr int32_t kSm120LatrdGridMinNComplex = 256;
+inline constexpr int32_t kSm120LatrdLegacyMaxN[2][2] = {{320, 256}, {256, 128}};  // [complex][double]: largest legacy panel n
 inline constexpr int32_t kSm89LatrdGridMinN = 768;
 
 // syev_blocked's sytrd panel width, before its complex 256 < n <= 512 bucket.
@@ -40,15 +39,15 @@ inline int32_t ormqr_block_size_for_n(int32_t n, int cuda_cc) {
                                                ormqr_block_size_default_for_n(n, cuda_cc));
 }
 
-// The n from which latrd's grid path is the default (doubles: not measured).
-inline constexpr int32_t latrd_grid_min_n_default(int cuda_cc, bool is_complex) {
+// The n from which latrd's grid path is the default.
+inline constexpr int32_t latrd_grid_min_n_default(int cuda_cc, bool is_complex, bool is_double) {
     if (!dispatch::is_sm120_family(cuda_cc)) return kSm89LatrdGridMinN;
-    return is_complex ? kSm120LatrdGridMinNComplex : kSm120LatrdGridMinNReal;
+    return kSm120LatrdLegacyMaxN[is_complex][is_double] + 1;
 }
 
-inline int32_t latrd_grid_min_n(int cuda_cc, bool is_complex) {
+inline int32_t latrd_grid_min_n(int cuda_cc, bool is_complex, bool is_double) {
     const int32_t forced = settings().geometry.latrd_grid_min_n;   // BATCHLAS_LATRD_GRID_MIN_N
-    return forced > 0 ? forced : latrd_grid_min_n_default(cuda_cc, is_complex);
+    return forced > 0 ? forced : latrd_grid_min_n_default(cuda_cc, is_complex, is_double);
 }
 
 } // namespace batchlas::syev_tuning

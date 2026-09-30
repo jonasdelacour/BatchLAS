@@ -709,16 +709,20 @@ TEST(SyevArchTuning, PanelAndBackTransformBlocksPerArch) {
 			EXPECT_EQ(st::sytrd_block_size_default_for_n(n, cc), tuning::sytrd_block_size_default_for_n(n)) << n << " " << cc;
 			EXPECT_EQ(st::ormqr_block_size_default_for_n(n, cc), tuning::ormqr_block_size_default_for_n(n)) << n << " " << cc;
 		}
-		EXPECT_EQ(st::latrd_grid_min_n_default(cc, false), 768) << cc;
-		EXPECT_EQ(st::latrd_grid_min_n_default(cc, true), 768) << cc;
+		for (const bool dbl : {false, true}) {
+			EXPECT_EQ(st::latrd_grid_min_n_default(cc, false, dbl), 768) << cc;
+			EXPECT_EQ(st::latrd_grid_min_n_default(cc, true, dbl), 768) << cc;
+		}
 	}
 	for (const int cc : {120, 121}) {
 		EXPECT_EQ(st::sytrd_block_size_default_for_n(512, cc), tuning::sytrd_block_size_default_for_n(512));
 		EXPECT_EQ(st::sytrd_block_size_default_for_n(513, cc), st::kSm120SytrdBlockXlarge);
 		EXPECT_EQ(st::ormqr_block_size_default_for_n(512, cc), tuning::ormqr_block_size_default_for_n(512));
 		EXPECT_EQ(st::ormqr_block_size_default_for_n(513, cc), st::kSm120OrmqrBlockXlarge);
-		EXPECT_EQ(st::latrd_grid_min_n_default(cc, false), st::kSm120LatrdGridMinNReal);
-		EXPECT_EQ(st::latrd_grid_min_n_default(cc, true), st::kSm120LatrdGridMinNComplex);
+		EXPECT_EQ(st::latrd_grid_min_n_default(cc, false, false), 321);
+		EXPECT_EQ(st::latrd_grid_min_n_default(cc, false, true), 257);
+		EXPECT_EQ(st::latrd_grid_min_n_default(cc, true, false), 257);
+		EXPECT_EQ(st::latrd_grid_min_n_default(cc, true, true), 129);
 	}
 	// The shared constant the other consumers read did not move.
 	EXPECT_EQ(tuning::ormqr_block_size_default_for_n(1024), tuning::ORMQR_BLOCK_SIZE_XLARGE);
@@ -732,8 +736,10 @@ TEST(SyevArchTuning, EnvOverridesWinOnEveryArch) {
 	for (const int cc : {0, 89, 120}) {
 		EXPECT_EQ(st::sytrd_block_size_for_n(1024, cc), 24) << cc;
 		EXPECT_EQ(st::ormqr_block_size_for_n(1024, cc), 40) << cc;
-		EXPECT_EQ(st::latrd_grid_min_n(cc, false), 333) << cc;
-		EXPECT_EQ(st::latrd_grid_min_n(cc, true), 333) << cc;
+		for (const bool dbl : {false, true}) {
+			EXPECT_EQ(st::latrd_grid_min_n(cc, false, dbl), 333) << cc;
+			EXPECT_EQ(st::latrd_grid_min_n(cc, true, dbl), 333) << cc;
+		}
 	}
 }
 

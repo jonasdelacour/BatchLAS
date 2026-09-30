@@ -110,7 +110,7 @@ sweep, native:blocked on the new constants, 3 reps:
 
 | cell | 128 | 192 | 256 | 320 | 384 | 448 | 512 | 768 |
 |---|---|---|---|---|---|---|---|---|
-| cfloat 256 b8 | 13.17 | 12.03 | **11.47** | - | 11.41 | - | 11.41 | 11.41 |
+| cfloat 256 b8 | 13.17 | 12.03 | 11.47 | - | 11.41 | - | 11.41 | 11.41 |
 | cfloat 384 b16 | 38.55 | 37.68 | **37.06** | - | - | - | - | - |
 | cfloat 512 b32 | 59.54 | 58.75 | **58.07** | - | 60.67 | - | 68.07 | 70.40 |
 | cfloat 1024 b64 | 265.3 | 264.7 | **264.0** | - | 266.8 | - | 270.3 | 283.4 |
@@ -123,10 +123,90 @@ sweep, native:blocked on the new constants, 3 reps:
 
 (Columns 256/384/512/768 and 128/192/256 and 320/384/448 come from three separate
 sweeps; overlapping cells agree within 0.5%.) A complex column carries four times the
-flops, so the grid barrier pays for itself earlier: sm_120 uses 256 for complex, bracketed
-below by 192 (4.8% slower at cfloat 256 b8), and 320 for real, bracketed by 256 (4% slower
-at float 256 b32) and 448. The 4090 gate of 768 costs up to 2.1x at float 768 b32 here.
-The double types follow their float sibling without a measurement.
+flops, so the grid barrier pays for itself earlier. The 4090 gate of 768 costs up to
+2.1x at float 768 b32 here.
+
+#### latrd grid min-n: per-type brackets
+
+A second pass (review follow-up) re-bracketed every type under Auto, which is what ships
+at these small batches, 4 alternating reps after a discarded pass, spread under 0.3%.
+It found one systematic effect: a grid panel of *exactly* the threshold n loses to the
+legacy kernel (cfloat 256 b8 with min-n 256: 11.48 ms against 11.41 ms at 257, 288 or
+BASE, in every rep), while the next panel size up already wins. So the constant is the
+largest n that stays legacy, and the grid path starts one above it
+(`kSm120LatrdLegacyMaxN`, grid for n > 320 / 256 / 256 / 128). Values below are ms,
+the winner in bold; min-n = X means the grid runs for panels with n >= X:
+
+| cell | 256 | 257 | 288 | 320 | 384 | BASE (768) |
+|---|---|---|---|---|---|---|
+| cfloat 256 b8 | 11.48 | **11.41** | **11.41** | 11.41 | 11.41 | 11.41 |
+| cfloat 288 b8 | 24.24 | **24.10** | **24.12** | 24.61 | 24.63 | 24.62 |
+| cfloat 320 b16 | 28.03 | **27.91** | **27.90** | 28.46 | 29.43 | 29.42 |
+| cfloat 384 b16 | 37.08 | **36.90** | 36.92 | 37.41 | 39.48 | 40.78 |
+| cfloat 512 b32 | 58.06 | **57.92** | **57.89** | 58.49 | 60.70 | 70.50 |
+
+| cell | 96 | 128 | 129 | 160 | 192 | 256 | BASE (768) |
+|---|---|---|---|---|---|---|---|
+| cdouble 128 b8 | 15.17 | 14.86 | **14.77** | 14.78 | 14.77 | 14.77 | 14.77 |
+| cdouble 160 b8 | 25.53 | 25.27 | **25.14** | 25.40 | 25.68 | 25.68 | 25.66 |
+| cdouble 192 b8 | 32.91 | 32.64 | **32.53** | 32.79 | 33.50 | 33.98 | 33.95 |
+| cdouble 224 b8 | 40.16 | **39.91** | - | 40.04 | 40.76 | 42.62 | 42.62 |
+| cdouble 256 b8 | 51.67 | 51.24 | **51.13** | 51.61 | 52.32 | 55.19 | 56.25 |
+| cdouble 192 b32 | 36.28 | **36.02** | - | 36.18 | 36.88 | 37.33 | 37.34 |
+
+| cell | 160 | 192 | 224 | 256 | 257 | 320 | 321 | BASE (768) |
+|---|---|---|---|---|---|---|---|---|
+| double 192 b16 | 12.68 | 12.48 | **12.38** | 12.39 | - | **12.38** | - | 12.41 |
+| double 224 b16 | 16.28 | 16.07 | 15.91 | **15.82** | - | **15.82** | - | 15.82 |
+| double 256 b16 | 20.57 | 20.35 | 20.17 | 19.99 | **19.91** | **19.91** | - | 19.91 |
+| double 288 b16 | 29.86 | 29.57 | 29.31 | 29.05 | **28.99** | 29.28 | - | 29.27 |
+| double 320 b16 | 34.39 | 34.11 | 33.85 | 33.55 | **33.50** | 34.21 | - | 34.37 |
+| double 384 b16 | 47.14 | 46.85 | 46.57 | 46.29 | **46.21** | 46.91 | - | 48.47 |
+| double 256 b64 | 23.78 | 23.54 | 23.35 | 23.18 | **23.10** | 23.10 | - | 23.10 |
+| float 320 b16 | - | - | - | - | - | 10.71 | **10.69** | - |
+| float 384 b8 | - | - | - | 15.25 | - | 14.73 | **14.70** | 15.00 |
+| float 448 b16 | - | - | - | - | - | 19.02 | **19.01** | - |
+| float 512 b16 | - | - | - | 24.23 | - | 23.46 | **23.39** | 25.34 |
+
+So: float 321 (256 is 4% slower at float 256 b32, 384 and 448 lose at 384/448), double
+257 (224 and 320 lose on both sides), complex<float> 257 (256 loses at 256; 320 loses 2%
+at 288 and 320; 257 and 288 tie within 0.1%), complex<double> 129 (128 loses at 128; 96
+and 160 lose on both sides). Complex<double> goes lowest because a column carries four
+times the flops of a real one at a 1/64-rate FP64 unit. The first pass shipped
+320 / 320 / 256 / 256; the double values there were copied from the float siblings. The
+review re-measured those on the first-pass build and every shipped Auto cell improved
+over BASE (double 384 b16 48.46 -> 46.92, double 448 b32 71.53 -> 67.93, cdouble 256 b8
+56.24 -> 55.19), and the per-type values above improve on that again (46.21 and 51.13 ms).
+
+Final A/B, three arms in one alternating run, 4 reps after a discarded pass: BASE (the
+BASE build's libraries), first pass (min-n 320/320/256/256), and the per-type values. ms:
+
+| cell | route | BASE | first pass | per-type | vendor |
+|---|---|---|---|---|---|
+| cfloat 256 b8 | Auto | 11.41 | 11.48 | **11.41** | 5.95 |
+| cfloat 288 b8 | Auto | 24.60 | 24.26 | **24.09** | 9.10 |
+| cfloat 384 b16 | Auto | 40.77 | 37.06 | **36.90** | 11.05 |
+| cfloat 512 b32 | Auto | 70.53 | 58.08 | **57.93** | 19.11 |
+| cdouble 160 b8 | Auto | 25.67 | 25.67 | **25.14** | 8.54 |
+| cdouble 256 b8 | Auto | 56.23 | 55.17 | **51.11** | 19.46 |
+| double 256 b16 | Auto | 19.91 | 19.91 | 19.91 | 12.58 |
+| double 384 b16 | Auto | 48.45 | 46.91 | **46.22** | 24.14 |
+| double 448 b32 | Auto | 71.53 | 67.93 | **67.13** | 42.65 |
+| float 384 b32 | Auto | 15.49 | 15.20 | **15.17** | 9.74 |
+| float 512 b16 | Auto | 41.91 | 23.40 | **23.31** | 13.20 |
+| float 768 b32 | native | 96.28 | 46.12 | 46.02 | 32.89 |
+| float 512 b512 | native | 145.3 | 102.5 | 102.5 | 189.5 |
+| float 768 b256 | native | 234.2 | 181.5 | 181.5 | 242.6 |
+| float 1024 b128 | native | 286.4 | 281.0 | 281.0 | 232.7 |
+| cfloat 1024 b64 | native | 365.7 | 264.5 | 264.4 | 181.7 |
+
+The saturated cells do not reach the grid path (batch > 94), and they are unchanged
+between the two passes, as expected.
+
+All of these small-batch Auto cells are native and all still lose to the vendor by
+1.5-3x (vendor: cdouble 256 b8 19.5, cdouble 192 b8 10.7, double 384 b16 24.2, double
+256 b16 12.6, float 384 b32 9.7, cfloat 256 b8 6.0 ms). The native/vendor window is
+keyed on n alone and was chosen at saturation, so these cells are not addressed here.
 
 Not changed: the grid residency cap (`resident_cap = MAX_COMPUTE_UNITS`, one work-group
 per SM). At batch 128 on 188 SMs it gives G = 1. Raising it needs a blocks-per-SM
@@ -150,6 +230,14 @@ plus three small-batch cells, 4 alternating reps (3 for the small-batch cells), 
 | float 512 b16 | 42.0 | 23.5 | 1.79x | 13.2 | 1.78 |
 | float 768 b32 | 96.3 | 46.1 | 2.09x | 32.9 | 1.40 |
 | cfloat 512 b32 | 70.6 | 58.1 | 1.21x | 19.2 | 3.03 |
+
+Not changed by this package:
+
+* benchviz's `sytrd` stage (`benchmarks/benchviz/ops.py`, `sytrd_nb`) still mirrors the
+  sm_89 nb = 48 for n > 512. On sm_120 it therefore benchmarks a panel width that syev no
+  longer uses; benchviz has no architecture input to key it on.
+* Small-batch Auto cells where the vendor is 1.5-3x faster (see the per-type brackets
+  above): the native/vendor window is keyed on n alone.
 
 Unchanged within 0.2% (the new code does not reach them): float 64/128/256 and cfloat
 64/128/256/512 at their campaign batches. Auto on cfloat 1024 b64 is the vendor both
