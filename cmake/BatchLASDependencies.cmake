@@ -191,13 +191,23 @@ function(find_netlib_libs)
     find_library(LAPACKE_LIBRARY NAMES lapacke
         PATHS /usr/lib/x86_64-linux-gnu /lib/x86_64-linux-gnu
         NO_DEFAULT_PATH)
-    find_library(CBLAS_LIBRARY NAMES cblas blas
-        PATHS /usr/lib/x86_64-linux-gnu /lib/x86_64-linux-gnu
-        NO_DEFAULT_PATH)
-
     if(NOT LAPACKE_LIBRARY)
         find_library(LAPACKE_LIBRARY NAMES lapacke)
     endif()
+
+    # CBLAS must come from LAPACKE's own install. A netlib LAPACKE in /opt/lib
+    # calls dgemm_64_ etc. from its sibling libblas.so.3; pairing it with the
+    # distro OpenBLAS libblas.so (same SONAME, no _64_ symbols) shadows that
+    # sibling and the link fails on every *_64_ BLAS routine.
+    if(LAPACKE_LIBRARY)
+        get_filename_component(_lapacke_dir "${LAPACKE_LIBRARY}" DIRECTORY)
+        find_library(CBLAS_LIBRARY NAMES cblas blas
+            PATHS "${_lapacke_dir}"
+            NO_DEFAULT_PATH)
+    endif()
+    find_library(CBLAS_LIBRARY NAMES cblas blas
+        PATHS /usr/lib/x86_64-linux-gnu /lib/x86_64-linux-gnu
+        NO_DEFAULT_PATH)
     if(NOT CBLAS_LIBRARY)
         find_library(CBLAS_LIBRARY NAMES cblas blas)
     endif()
