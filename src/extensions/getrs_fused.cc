@@ -80,7 +80,9 @@ template <> struct GetrsFusedRegs<std::complex<double>> {
 
 // sm_120 ptxas counts (scripts/register_probe.sh, this TU): the sm_89 rows above undercount
 // here -- float Trans nrhs 5..8 uses 86, so the sm_89 row hands out a 768-lane launch the
-// driver refuses. `potrs` is the max over both PotrsFusedKernel uplo forms.
+// driver refuses. `potrs` is the max over both PotrsFusedKernel uplo forms. One probe of
+// an icpx 2026.0 RelWithDebInfo build: a compiler, build-type or kernel-body change needs
+// a re-probe, because this is a launch-abort guard.
 // evidence: docs/perf/blackwell.md#lu-getrs-fused
 template <typename S> struct GetrsFusedRegs120;
 template <> struct GetrsFusedRegs120<float> {
@@ -224,6 +226,10 @@ Event fused_launch_notrans(Queue& ctx,
                 const int lane = static_cast<int>(sg.get_local_linear_id());
                 const int sgid = static_cast<int>(sg.get_group_linear_id());
                 const int nsg = static_cast<int>(sg.get_group_linear_range());
+                // NR == 1 keeps the sub-group-0 form: the round-robin cannot help there and cost ~3%.
+                const bool c_active = (NR != 1) || sgid == 0;
+                const int c0 = (NR == 1) ? 0 : sgid;
+                const int cs = (NR == 1) ? 1 : nsg;
 
                 const D* const Ab = Ap + b * static_cast<std::size_t>(strideA);
                 D* const Bb = Bp + b * static_cast<std::size_t>(strideB);
@@ -265,8 +271,8 @@ Event fused_launch_notrans(Queue& ctx,
                     // a register and the recurrence takes no work-group barrier.
                     // group_broadcast is a collective and must not be called under
                     // divergence -- the lane guards are INSIDE it, not around.
-                    if (jb > 1) {
-                        for (int c = sgid; c < nrhs; c += nsg) {
+                    if (c_active && jb > 1) {
+                        for (int c = c0; c < nrhs; c += cs) {
                             D* const yc = y + static_cast<std::size_t>(c) * static_cast<std::size_t>(n);
                             D v = (lane < jb) ? yc[j + lane] : dev_zero_of<D>();
                             for (int kk = 0; kk < jb - 1; ++kk) {
@@ -322,8 +328,8 @@ Event fused_launch_notrans(Queue& ctx,
                     }
                     it.barrier(sycl::access::fence_space::local_space);
 
-                    {
-                        for (int c = sgid; c < nrhs; c += nsg) {
+                    if (c_active) {
+                        for (int c = c0; c < nrhs; c += cs) {
                             D* const yc = y + static_cast<std::size_t>(c) * static_cast<std::size_t>(n);
                             D v = (lane < jb) ? yc[j0 + lane] : dev_zero_of<D>();
                             for (int kk = jb - 1; kk >= 0; --kk) {
@@ -414,6 +420,10 @@ Event fused_launch_trans(Queue& ctx,
                 const auto sg = it.get_sub_group();
                 const int lane = static_cast<int>(sg.get_local_linear_id());
                 const int sgid = static_cast<int>(sg.get_group_linear_id());
+                // NR == 1 keeps the sub-group-0 form: the round-robin cannot help there and cost ~3%.
+                const bool c_active = (NR != 1) || sgid == 0;
+                const int c0 = (NR == 1) ? 0 : sgid;
+                const int cs = (NR == 1) ? 1 : nsg;
 
                 const D* const Ab = Ap + b * static_cast<std::size_t>(strideA);
                 D* const Bb = Bp + b * static_cast<std::size_t>(strideB);
@@ -476,8 +486,8 @@ Event fused_launch_trans(Queue& ctx,
 
                     // The diagonal block, by ONE sub-group. Lane t owns row t and
                     // reads blk[s + t*bld], stride bld across lanes -- the pad.
-                    {
-                        for (int c = sgid; c < nrhs; c += nsg) {
+                    if (c_active) {
+                        for (int c = c0; c < nrhs; c += cs) {
                             D* const yc = y + static_cast<std::size_t>(c) * static_cast<std::size_t>(n);
                             D v = (lane < jb) ? yc[j + lane] : dev_zero_of<D>();
                             for (int s = 0; s < jb; ++s) {
@@ -537,8 +547,8 @@ Event fused_launch_trans(Queue& ctx,
 
                     // UNIT diagonal: no division, and the recurrence runs
                     // BACKWARDS because op(L) is upper.
-                    if (jb > 1) {
-                        for (int c = sgid; c < nrhs; c += nsg) {
+                    if (c_active && jb > 1) {
+                        for (int c = c0; c < nrhs; c += cs) {
                             D* const yc = y + static_cast<std::size_t>(c) * static_cast<std::size_t>(n);
                             D v = (lane < jb) ? yc[j0 + lane] : dev_zero_of<D>();
                             for (int s = jb - 1; s > 0; --s) {
@@ -612,6 +622,10 @@ Event potrs_fused_launch(Queue& ctx,
                 const auto sg = it.get_sub_group();
                 const int lane = static_cast<int>(sg.get_local_linear_id());
                 const int sgid = static_cast<int>(sg.get_group_linear_id());
+                // NR == 1 keeps the sub-group-0 form: the round-robin cannot help there and cost ~3%.
+                const bool c_active = (NR != 1) || sgid == 0;
+                const int c0 = (NR == 1) ? 0 : sgid;
+                const int cs = (NR == 1) ? 1 : nsg;
 
                 const D* const Ab = Ap + b * static_cast<std::size_t>(strideA);
                 D* const Bb = Bp + b * static_cast<std::size_t>(strideB);
@@ -666,8 +680,8 @@ Event potrs_fused_launch(Queue& ctx,
                     }
                     it.barrier(sycl::access::fence_space::local_space);
 
-                    {
-                        for (int c = sgid; c < nrhs; c += nsg) {
+                    if (c_active) {
+                        for (int c = c0; c < nrhs; c += cs) {
                             D* const yc = y + c * nz;
                             D v = (lane < jb) ? yc[j + lane] : dev_zero_of<D>();
                             for (int s = 0; s < jb; ++s) {
@@ -734,8 +748,8 @@ Event potrs_fused_launch(Queue& ctx,
                     }
                     it.barrier(sycl::access::fence_space::local_space);
 
-                    {
-                        for (int c = sgid; c < nrhs; c += nsg) {
+                    if (c_active) {
+                        for (int c = c0; c < nrhs; c += cs) {
                             D* const yc = y + c * nz;
                             D v = (lane < jb) ? yc[j0 + lane] : dev_zero_of<D>();
                             for (int s = jb - 1; s >= 0; --s) {

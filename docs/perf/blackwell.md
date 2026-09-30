@@ -504,7 +504,9 @@ at six shapes. Tiny time / vendor time at batch 32768:
 
 The closest small-batch cells are cfloat n32 nrhs64 b64 (0.186 vs 0.197 ms) and cfloat
 n8 nrhs16 b64 (0.0246 vs 0.0271). The window is therefore the tier's whole fit:
-`tiny_window = tiny_native = sm_120 && single precision && n <= tiny_max_n`. fp64 was
+`tiny_window = tiny_native = sm_120 && single precision && n <= tiny_max_n`. That is
+wider than the measured grid: n=1 and batch < 64 were never timed and are admitted
+unmeasured (batch 1 is outside this project's scope, and n=1 is one division). fp64 was
 not measured, and it keeps the pre-Tiny walk.
 
 ### LU getrs fused
@@ -580,7 +582,10 @@ n<=3, where the composed getrf is the vendor's (n3 r1 0.018/0.022, n2 r4 0.018/0
 cfloat's fused window on sm_120 is therefore n <= 3. This supersedes the "widen to 32"
 proposal (LU-6d), which was measured before the tiny getrs existed. float keeps 32:
 fused and composed are within about 5% of each other, with the fused kernel ahead at
-nrhs=4.
+nrhs=4. That is a screen, not a bracket: the float edge was not re-bracketed against
+the tiny-getrs composition. The cfloat n <= 3 edge is bracketed only in the vendor
+build. In a vendor-free build the composed getrf at n <= 3 would be the tiny one, not
+cuSOLVER's, and that composition was not timed.
 
 ### LU end to end
 
