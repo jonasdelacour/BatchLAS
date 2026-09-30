@@ -73,6 +73,11 @@ struct RouteTable<Op::trsm, T> {
             if (s.side == Side::Left) {
                 return true;
             }
+            // evidence: docs/perf/blackwell.md#trsm-side-right-on-sm120
+            if (is_sm120_family(s.cuda_cc) && order > 16 && s.rhs_count() <= 8 &&
+                s.batch >= 4096) {
+                return false;
+            }
             return s.batch >= 128 || order <= 32;
         } else {
             return true;

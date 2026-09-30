@@ -384,6 +384,29 @@ TEST(RouteTrsm, FloatLeftIsPreferredAtEveryOrder) {
     }
 }
 
+// sm_120 sends float Side::Right with few rows to cuBLAS; every edge straddled, and
+// cuda_cc 0 / 89 must keep today's answer. evidence: docs/perf/blackwell.md#trsm-side-right-on-sm120
+TEST(RouteTrsm, Sm120FloatRightSmallRowsGoesToVendor) {
+    auto right = [](int64_t order, int64_t q, int64_t batch, int cc) {
+        auto s = trsm_shape(order, q, batch, 32, Side::Right);
+        s.cuda_cc = cc;
+        return s;
+    };
+    for (int cc : {0, 89, 120}) {
+        const bool sm120 = (cc == 120);
+        EXPECT_EQ(TrsmTable::preferred(kCta, right(32, 8, 32768, cc)), !sm120) << cc;
+        EXPECT_EQ(TrsmTable::preferred(kCta, right(17, 8, 4096, cc)), !sm120) << cc;
+        EXPECT_TRUE(TrsmTable::preferred(kCta, right(16, 8, 32768, cc))) << cc;
+        EXPECT_TRUE(TrsmTable::preferred(kCta, right(32, 9, 32768, cc))) << cc;
+        EXPECT_TRUE(TrsmTable::preferred(kCta, right(32, 8, 4095, cc))) << cc;
+        EXPECT_TRUE(TrsmTable::preferred(kCta, trsm_shape(32, 8, 32768, 32, Side::Left))) << cc;
+    }
+    auto s = right(32, 8, 32768, 120);
+    EXPECT_TRUE(is_vendor(resolve_trsm_route<float>(kAuto, s, /*vendor_available=*/true)));
+    EXPECT_TRUE(is_native(resolve_trsm_route<float>(kAuto, s, /*vendor_available=*/false)));
+    EXPECT_TRUE((RouteTable<Op::trsm, std::complex<float>>::preferred(kCta, s)));
+}
+
 TEST(RouteTrsm, BatchFloorIsSpeedNotCorrectness) {
     // The floor is batch 8, and it lives in preferred() rather than supports().
     const auto tiny = trsm_shape(16, 1024, 1, 32, Side::Right);

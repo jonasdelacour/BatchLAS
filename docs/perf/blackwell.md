@@ -712,3 +712,232 @@ are the blocked composition, which is TrsmCta-bound (the LU-2 work-group ladder)
 getrs vendor-present composition windows for nrhs >= 16 at n > 32 (LU-3) are left for
 re-bracketing after the trsm package lands. getrs cfloat n64 nrhs4 in the native walk
 is 1.05.
+
+## trsm
+
+Machine: threadripper02, GPU 0 (RTX PRO 6000 Blackwell Max-Q, sm_120), icpx 2026.0 with
+`-ffp-model=precise`, RelWithDebInfo, CUDA 13.2 cuBLAS as the vendor. BASE is
+worktree-blackwell-tuning @ 502ad378. `trsm_benchmark` (`BM_TRSM<`: Side::Left, Lower,
+NoTrans, ld = n) with `--warmup=3 --min_iters=8`, one process per (cell, arm), a
+throwaway JIT pass first, then 3 reps with the arm order alternated, medians. The
+vendor arm is `BATCHLAS_TRSM_ROUTE=vendor`; the others pin `native`. Batches are the
+benchviz campaign's. Raw logs, CSVs and the drivers (`ab.py`, `fb.py`) are in
+`~/.claude/jobs/698ef31c/tmp/wp2-trsm/` (`f_trsm.csv`, `f_win.csv`, `f_posv.csv`,
+`f_getrs.csv`, `r_edge.csv`, `r_right.csv`, `f_right.csv`).
+
+### trsm V1 ladder cap
+
+The V1 CTA kernel gives each lane one right-hand-side column, and lanes without a
+column still run the whole N-step recurrence. Its work-group ladder over
+{256, 128, 64, 32} took the first rung with `batch * ceil(q / wg) >= 4 * CU`. At any
+saturated batch that is 256, so a q=8 solve ran 248 dead lanes per group. The ladder
+now skips a rung more than half of whose lanes would have no column
+(`cand > 32 && cand / 2 >= q`, in `trsm_v1_ladder_wg`). This is an
+architecture-independent defect fix, so it is unconditional. The A/B is against the
+BASE build; the development knob that restored the old ladder was removed.
+
+It was measured on sm_120 only. On the RTX 4090 (cc 89) V1's work-group geometry also
+changes for q < 128 at saturated batch, and routing there is otherwise unchanged. The
+change is correctness-neutral: the group barrier stays and the work-group only shrinks.
+Its sm_89 timing is not measured. Re-measure small-q V1 cells there before quoting a
+4090 number.
+
+V1 alone, BASE -> capped, ms (batch 32768): float n32 q8 0.994 -> 0.284, n16 q8
+0.280 -> 0.067, n32 q32 1.105 -> 0.43; cfloat n32 q8 1.551 -> 0.44, n16 q16
+0.479 -> 0.162. The cap also applies to Side::Right (`r_right.csv`,
+`BM_TRSM_OrthoRight`, BASE -> new, with cuBLAS after the slash): float n32 q8
+1.042 -> 0.306 / 0.165, n32 q32 1.425 -> 0.400 / 0.740, n16 q16 0.277 -> 0.060 / 0.125,
+cfloat n32 q8 1.635 -> 0.426 / 1.147. The q >= 256 ortho shapes never reach a capped
+rung and stayed within 3% (`~/.claude/jobs/698ef31c/tmp/wp-trsm/r_ortho.log`).
+
+### trsm sub-group Left kernel
+
+`trsm_sg_left.cc` handles Side::Left at orders 1..32. Each lane is a (matrix, canonical
+row r) pair, so a sub-group holds 32/N matrices for the buckets N in {4, 8, 16, 32}.
+Each lane carries QC right-hand sides: 4 for q <= 4, 8 for q <= 8, else 16
+(complex<double> caps at 8). Lane r holds row r of the canonical Lc and its QC values
+of x, and step s broadcasts x[s] from lane s with `select_from_group`. There is no
+local memory and no barrier, and a lane exists only for a real (row, rhs-chunk) pair.
+The 24 (side, uplo, trans, diag) cases use V1's canonical fold (`trsm_canonical.hh`).
+The non-finite-reciprocal fallback to division is kept per matrix, as an xor-butterfly
+over the matrix's N lanes.
+
+Two register decisions, from `scripts/register_probe.sh` on the sm_120 link:
+
+- The step loop stops at the runtime order n, since rows n..N-1 are identity padding.
+  A `break` in the loop stops LLVM from unrolling it, and nL[] (the row of Lc) then
+  lands in local memory. That is slower at small QC (float n32 q8 0.116 -> 0.143 ms).
+  It is faster where the unrolled form's registers limit occupancy: at cfloat N=32
+  QC=16 the count drops from 168 to 77 registers, and n32 q64 goes from 1.91 to 1.39
+  ms. So the loop is rolled on purpose (`#pragma unroll 1` + `break`) for complex
+  N >= 16 and for N=32 QC=16, and fully unrolled with a `continue` everywhere else.
+  No variant spills.
+- The kernel's TU is built with `-pragma-unroll-threshold=262144`. Without it, the
+  unrolled variants put x[] on the stack.
+
+Kernel choice (`trsm_left_use_sg`): V1-capped time over sub-group time at batch 32768,
+so above 1 the sub-group kernel is faster (`f_win.csv`):
+
+| float n \ q | 8 | 16 | 24 | 32 | 48 | 64 | 128 |
+|---|---|---|---|---|---|---|---|
+| 4  | 3.18 | 2.67 | 2.22 | 2.15 | 2.03 | 1.89 | 1.81 |
+| 8  | 2.29 | 1.84 | 1.53 | 1.45 | 1.25 | 1.09 | 0.97 |
+| 12 | 2.76 | 1.89 | 1.31 | 1.28 | 1.20 | 0.92 | 0.91 |
+| 16 | 2.58 | 1.75 | 1.17 | 1.09 | 0.98 | 0.94 | 0.88 |
+| 24 | 3.18 | 1.51 | 1.09 | 1.20 | 1.01 | 0.87 | 0.84 |
+| 32 | 2.49 | 1.43 | 1.10 | 1.15 | 0.92 | 0.81 | 0.76 |
+
+| cfloat n \ q | 8 | 16 | 24 | 32 | 48 | 64 | 128 |
+|---|---|---|---|---|---|---|---|
+| 4  | 2.50 | 1.54 | 1.21 | 1.14 | 1.20 | 1.07 | 0.86 |
+| 8  | 1.73 | 1.27 | 0.99 | 1.39 | 0.88 | 0.96 | 0.97 |
+| 12 | 1.31 | 0.87 | 0.57 | 0.64 | 0.71 | 0.73 | 0.79 |
+| 16 | 1.26 | 1.08 | 0.88 | 1.61 | 1.47 | 1.79 | 1.66 |
+| 24 | 1.31 | 1.28 | 1.01 | 1.33 | 1.08 | 1.28 | 1.06 |
+| 32 | 1.32 | 1.36 | 0.99 | 1.32 | 1.26 | 1.37 | 1.12 |
+
+The shipped window applies on sm_120 only; `cuda_cc` 0 and 89 keep V1 at every shape.
+
+- float: q <= 128 at n <= 4, q <= 64 at n <= 8, q <= 32 above.
+- cfloat: q <= 64 at n <= 4, q <= 32 at n <= 8, q <= 8 for n in 9..15, n = 16 at
+  q <= 16 or 32 <= q <= 128, and q <= 128 for n in 17..32.
+
+Each edge is bracketed by the next measured column. Ties within 3% (float n8 q128,
+cfloat n8 q24/q64, cfloat n24/n32 q24) go to whichever side the neighbouring cells
+favour. The cfloat n=16 island comes from V1, not from the new kernel: V1 at cfloat
+n16 q64 takes 0.91 ms, against 0.31 ms at n=12 and 1.48 ms at n=24 (same bucket,
+power-of-two ld). double and complex<double> were not measured and keep V1. The
+blocked driver's diagonal solves are 32-wide Left CTA calls, so they take the same
+kernel through `trsm_native_v1_buckets`.
+
+Tests (`TrsmNativeSgLeft.*`) call the kernel directly with a padded ld and batch
+stride and large finite poison. Three planted breaks were each rebuilt and run over all
+of `trsm_tests`. Reading A with ld = n turned red the three direct strided suites plus
+the routed Left orders and the blocked suites (10 tests). Dropping the store's
+`c0 + j < q` guard turned red 13 tests before the run aborted with an illegal address
+in the saturating-batch case: `TrsmNativeCta.Complex{CanonicalCrossProductFloat,
+AlphaHasImaginaryPart, PartialBucketAndRaggedRhs}`, `TrsmNativeBlocked.{FloatAndRaggedRhs,
+ComplexCrossoverAndAlpha, TwoLevelFloatAndComplex}`, the four `TrsmFloatLeftOrders` Left
+tests, and the three strided/edge `TrsmNativeSgLeft` tests (`break2.log`). Ending the
+step loop one row early turned red every test that reached the kernel (15), while the
+Right-side cases stayed green.
+
+These red sets were recorded before `RunTrsmNative` ran each Left case twice. It now
+runs V1 pinned (`allow_sg = false`) and then with the kernel choice. On sm_120 the
+choice sends small-q Left to this kernel, so V1's Left path stays covered on this box.
+`TrsmNativeCta.LadderRungsAreCappedByRhsCount` checks the ladder against literal
+(max_wg, CU, q, batch) cases.
+
+### trsm on sm_120: result
+
+`BM_TRSM<`, BASE / new / cuBLAS in ms, plus the time ratios against cuBLAS
+(`f_trsm.csv`):
+
+| type | n | q | batch | BASE | new | cuBLAS | BASE/cuBLAS | new/cuBLAS |
+|---|---|---|---|---|---|---|---|---|
+| float | 8 | 8 | 32768 | 0.128 | 0.015 | 0.043 | 2.99 | 0.34 |
+| float | 8 | 32 | 32768 | 0.132 | 0.029 | 0.116 | 1.14 | 0.25 |
+| float | 16 | 8 | 32768 | 0.280 | 0.026 | 0.072 | 3.86 | 0.36 |
+| float | 16 | 64 | 32768 | 0.387 | 0.228 | 0.530 | 0.73 | 0.43 |
+| float | 32 | 8 | 32768 | 0.994 | 0.115 | 0.171 | 5.83 | 0.67 |
+| float | 32 | 16 | 32768 | 1.025 | 0.230 | 0.324 | 3.16 | 0.71 |
+| float | 32 | 32 | 32768 | 1.105 | 0.376 | 0.683 | 1.62 | 0.55 |
+| float | 32 | 64 | 32768 | 1.083 | 0.575 | 1.238 | 0.87 | 0.46 |
+| float | 64 | 8 | 32768 | 2.074 | 0.440 | 0.517 | 4.01 | 0.85 |
+| float | 64 | 16 | 32768 | 2.166 | 0.713 | 1.026 | 2.11 | 0.69 |
+| float | 128 | 8 | 32768 | 4.861 | 1.448 | 1.667 | 2.92 | 0.87 |
+| float | 128 | 64 | 32768 | 7.777 | 5.259 | 9.566 | 0.81 | 0.55 |
+| float | 256 | 8 | 8192 | 3.012 | 1.364 | 1.415 | 2.13 | 0.96 |
+| float | 256 | 256 | 4096 | 6.618 | 6.616 | 10.878 | 0.61 | 0.61 |
+| float | 512 | 8 | 2048 | 1.893 | 1.091 | 1.125 | 1.68 | 0.97 |
+| float | 512 | 16 | 2048 | 2.026 | 1.317 | 1.353 | 1.50 | 0.97 |
+| float | 512 | 512 | 1024 | 7.594 | 7.603 | 12.780 | 0.59 | 0.59 |
+| cfloat | 8 | 8 | 32768 | 0.141 | 0.020 | 0.053 | 2.67 | 0.39 |
+| cfloat | 16 | 8 | 32768 | 0.427 | 0.077 | 0.342 | 1.25 | 0.23 |
+| cfloat | 32 | 8 | 32768 | 1.551 | 0.333 | 1.391 | 1.12 | 0.24 |
+| cfloat | 32 | 64 | 32768 | 2.483 | 1.380 | 10.523 | 0.24 | 0.13 |
+| cfloat | 64 | 8 | 32768 | 3.588 | 1.131 | 7.382 | 0.49 | 0.15 |
+| cfloat | 128 | 64 | 16384 | 8.613 | 5.921 | 140.6 | 0.06 | 0.04 |
+| cfloat | 512 | 512 | 512 | 12.095 | 12.106 | 568.8 | 0.02 | 0.02 |
+
+Over the whole 62-cell grid (n = 8..512, q in {8, 16, 32, 64, n}):
+
+- float: the geomean time ratio against cuBLAS went from 1.44 to 0.57, and the cells
+  above 1 went from 21 to 0. The closest cells are float n=512 q=8/16 and n=256 q=8
+  at 0.96-0.97, where 15 trailing cuBLAS gemm launches remain.
+- cfloat: the geomean went from 0.18 to 0.09, and the cells above 1 from 5 to 0.
+
+The q = n cells at n >= 128 run V1 on uncapped rungs and did not move.
+
+The fixup that removed the development knobs was re-measured on the review's 23 Left
+and Right cells, 6 Auto cells, and 7 posv/getrs cells, against BASE and cuBLAS
+(`wp2-trsm/fx/m_*.csv`). Every cell matched the review within about 2%, for example
+float n32 q8 at 0.117 ms (cuBLAS 0.169) and cfloat n32 q8 at 0.335 ms (1.409). No cell
+moved against BASE in the wrong direction.
+
+`preferred()` is unchanged for Side::Left (Side::Right: next section). With the new
+kernel, native wins every measured Side::Left cell, so the diagnosis's interim small-q vendor window (trsm-interim-route-small-q) is
+not needed.
+
+posv (`factor_bench`): the native arm is the shipped native walk, which at these nrhs
+is potrf plus two routed trsm. Ratios are vendor time over native time in one process,
+so above 1 BatchLAS is faster. BASE -> new:
+
+- float: n4 q16 0.55 -> 5.68, n32 q16 0.51 -> 1.88, n64 q16 0.68 -> 1.61, n128 q16
+  0.77 -> 1.28, n128 q64 1.28 -> 1.74.
+- cfloat: n4 q16 0.39 -> 2.53, n8 q16 0.87 -> 3.43, n32 q16 1.56 -> 4.89, n128 q16
+  2.70 -> 4.02.
+
+All 24 cells (n = 4..128, nrhs 16/64) now beat the vendor composition; BASE lost 9 of
+them.
+
+getrs `native:blocked` is the TrsmCta-bound case (the LU-2 issue). Same ratios, BASE ->
+new:
+
+- float: n64 q16 0.71 -> 2.17, n128 q16 0.67 -> 1.63, n256 q16 0.75 -> 1.41, n512 q16
+  1.31 -> 1.89, n512 q64 3.10 -> 3.10.
+- cfloat: n64 q16 0.53 -> 1.41, n128 q16 0.51 -> 1.04, n256 q16 0.75 -> 1.17, n512 q16
+  1.26 -> 1.52.
+
+All 16 cells (n = 64..512, nrhs 16/64) now win; BASE lost 6. The getrs vendor-present
+windows for nrhs >= 16 at n > 32 (LU-3) still send these shapes to the vendor. They
+belong to the LU package, to re-bracket against these numbers.
+
+### trsm side right on sm120
+
+Side::Right has no sub-group kernel, so it keeps the capped V1. Even capped, float V1
+loses to cuBLAS when a solve has few rows (`BM_TRSM_OrthoRight`, `f_right.csv`, ms,
+native / cuBLAS):
+
+| float | b=2048 | 4096 | 8192 | 16384 | 32768 |
+|---|---|---|---|---|---|
+| n32 q8  | 0.0276 / 0.0298 | 0.047 / 0.039 | 0.070 / 0.053 | 0.128 / 0.087 | 0.305 / 0.164 |
+| n20 q8  | | 0.042 / 0.031 | 0.063 / 0.040 | 0.112 / 0.059 | 0.200 / 0.099 |
+| n16 q8  | | | | | 0.059 / 0.072 |
+| n32 q16 | | 0.047 / 0.054 | 0.070 / 0.087 | 0.134 / 0.155 | 0.342 / 0.312 |
+| n20 q16 | | 0.042 / 0.040 | 0.063 / 0.059 | 0.112 / 0.099 | 0.210 / 0.178 |
+| n32 q20 | | 0.047 / 0.075 | 0.071 / 0.124 | 0.150 / 0.230 | 0.360 / 0.497 |
+
+On sm_120, `preferred()` therefore declines native for float Side::Right when
+order > 16, rows <= 8 and batch >= 4096. The edges are brackets against measured
+non-losers: order 16 (native 0.059 vs 0.072), rows 16 at n=32 (native wins up to b=16384),
+and batch 2048 (0.0276 vs 0.0298). `cuda_cc` 0 and 89 route as before. Auto, BASE ->
+new, ms (`f_rauto.csv`, cuBLAS in brackets): n32 q8 b32768 1.041 -> 0.162 (0.163),
+n32 q8 b4096 0.122 -> 0.039 (0.039), n20 q8 b4096 0.107 -> 0.031 (0.031), n16 q8
+b32768 0.277 -> 0.059 (0.072).
+
+The window has no upper order bound. The review re-measured orders above 32 at q <= 8
+and found that the vendor wins at every one, native / cuBLAS in ms
+(`~/.claude/jobs/698ef31c/tmp/review2-trsm/r_rbig.csv`):
+
+- n48 q8 b8192: 0.141 / 0.082
+- n64 q8 b32768: 1.007 / 0.481
+- n128 q8 b16384: 1.330 / 0.855
+- n256 q4 b4096: 1.072 / 0.683
+
+Auto matched the vendor at each of them.
+
+Not done: rows 9..16 at order 17..24, and at order 32 with batch 32768, still lose
+5-18% (n20 q16, n32 q16 b32768). A Side::Right sub-group kernel (each row of B is a
+Left solve with op(A)^T, so the canonical fold carries over with the B access
+transposed) would fix both, but it was not written.

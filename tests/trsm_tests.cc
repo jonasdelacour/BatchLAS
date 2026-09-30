@@ -6,6 +6,7 @@
 #include <iostream>
 #include <vector>
 #include <cmath>
+#include <cstring>
 #include <random>
 #include <type_traits>
 #include "test_utils.hh"
@@ -279,7 +280,7 @@ struct TrsmNativeCase {
 };
 
 template <typename T>
-void RunTrsmNative(const TrsmNativeCase<T>& tc) {
+void RunTrsmNativeOnce(const TrsmNativeCase<T>& tc, bool allow_sg) {
     auto ctx = std::make_shared<Queue>(Device("gpu"), Backend::CUDA);
 
     const int n = tc.n, q = tc.q, bs = tc.batch;
@@ -313,7 +314,7 @@ void RunTrsmNative(const TrsmNativeCase<T>& tc) {
     }
 
     (void)batchlas::sycl_trsm::trsm_native_v1_dispatch<T>(
-        *ctx, A.view(), B.view(), tc.alpha, tc.side, tc.uplo, tc.transA, tc.diag);
+        *ctx, A.view(), B.view(), tc.alpha, tc.side, tc.uplo, tc.transA, tc.diag, allow_sg);
     ctx->wait();
 
     // A real accumulator would drop the imaginary part and pass on wrong answers.
@@ -357,10 +358,18 @@ void RunTrsmNative(const TrsmNativeCase<T>& tc) {
                     << (tc.side == Side::Left ? "op(A)*X != alpha*B at b=" : "X*op(A) != alpha*B at b=") << b << " r=" << r << " c=" << c
                     << "  n=" << n << " q=" << q
                     << "  uplo=" << int(tc.uplo) << " transA=" << int(tc.transA)
-                    << " diag=" << int(tc.diag);
+                    << " diag=" << int(tc.diag) << " allow_sg=" << allow_sg;
             }
         }
     }
+}
+
+// V1 pinned first: on sm_120 the kernel choice sends small-q Side::Left to the
+// sub-group kernel, which would leave V1's Left path untested there.
+template <typename T>
+void RunTrsmNative(const TrsmNativeCase<T>& tc) {
+    RunTrsmNativeOnce(tc, false);
+    if (tc.side == Side::Left) RunTrsmNativeOnce(tc, true);
 }
 
 }  // namespace
@@ -525,16 +534,32 @@ int trsm_expected_wg(const Queue& ctx, int q, int bs) {
     const auto dev = ctx.device();
     const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
     const int cu = static_cast<int>(dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS));
-    int wg = 32;
-    for (int cand : {256, 128, 64, 32}) {
-        if (cand > max_wg) continue;
-        wg = cand;
-        const int64_t groups_c = (q + cand - 1) / cand;
-        if (static_cast<int64_t>(bs) * groups_c >= static_cast<int64_t>(4) * cu) break;
-    }
-    return wg;
+    return batchlas::sycl_trsm::trsm_v1_ladder_wg(max_wg, cu, q, bs);
 }
 }  // namespace
+
+// The launcher calls this function, so these literals pin the ladder itself.
+// evidence: docs/perf/blackwell.md#trsm-v1-ladder-cap
+TEST(TrsmNativeCta, LadderRungsAreCappedByRhsCount) {
+    using batchlas::sycl_trsm::trsm_v1_ladder_wg;
+    // Saturated batch on 188 CUs: the cap alone decides the rung.
+    EXPECT_EQ(trsm_v1_ladder_wg(1024, 188, 8, 4096), 32);
+    EXPECT_EQ(trsm_v1_ladder_wg(1024, 188, 32, 4096), 32);
+    EXPECT_EQ(trsm_v1_ladder_wg(1024, 188, 33, 4096), 64);
+    EXPECT_EQ(trsm_v1_ladder_wg(1024, 188, 40, 4096), 64);
+    EXPECT_EQ(trsm_v1_ladder_wg(1024, 188, 64, 4096), 64);
+    EXPECT_EQ(trsm_v1_ladder_wg(1024, 188, 65, 4096), 128);
+    EXPECT_EQ(trsm_v1_ladder_wg(1024, 188, 128, 4096), 128);
+    EXPECT_EQ(trsm_v1_ladder_wg(1024, 188, 129, 4096), 256);
+    EXPECT_EQ(trsm_v1_ladder_wg(1024, 188, 976, 4096), 256);
+    // Unsaturated batch: the ladder keeps descending until 4*cu groups exist.
+    EXPECT_EQ(trsm_v1_ladder_wg(1024, 188, 976, 128), 128);
+    EXPECT_EQ(trsm_v1_ladder_wg(1024, 128, 976, 128), 256);
+    EXPECT_EQ(trsm_v1_ladder_wg(1024, 188, 976, 1), 32);
+    // A device work-group limit below a rung skips it.
+    EXPECT_EQ(trsm_v1_ladder_wg(128, 188, 976, 4096), 128);
+    EXPECT_EQ(trsm_v1_ladder_wg(64, 188, 976, 4096), 64);
+}
 
 TEST(TrsmNativeBlocked, MultiSubGroupWorkGroupStagesItsTriangleCorrectly) {
     auto probe = std::make_shared<Queue>(Device("gpu"), Backend::CUDA);
@@ -761,4 +786,243 @@ TEST(TrsmFloatLeftOrders, RightSideAlso) {
         for (Transpose tr : {Transpose::NoTrans, Transpose::Trans})
             RunTrsmBlocked<float>({n, 24, 2, Side::Right, Uplo::Lower, tr,
                                    Diag::NonUnit, -0.75f});
+}
+
+
+// ===========================================================================
+// The Side::Left sub-group kernel: lane = (matrix, canonical row), 32/N matrices
+// per sub-group, QC rhs per lane. Every case reads through a padded ld and batch
+// stride, with large finite poison in the padding, in the unused triangle and, for
+// Diag::Unit, on the diagonal: a kernel that derives ld or stride, or reads the
+// wrong triangle, still returns finite numbers and fails the multiply-back.
+// evidence: docs/perf/blackwell.md#trsm-sub-group-left-kernel
+// ===========================================================================
+namespace {
+
+template <typename T>
+struct SgCase {
+    int n, q, batch;
+    Uplo uplo;
+    Transpose transA;
+    Diag diag;
+    T alpha;
+    int pad_a = 3;         // lda = n + pad_a
+    int pad_b = 5;         // ldb = n + pad_b
+    bool same_items = false;
+};
+
+template <typename T>
+std::vector<T> RunSgLeft(const SgCase<T>& tc, bool check = true) {
+    auto ctx = std::make_shared<Queue>(Device("gpu"), Backend::CUDA);
+    const int n = tc.n, q = tc.q, bs = tc.batch;
+    const int lda = n + tc.pad_a, ldb = n + tc.pad_b;
+    const int sa = lda * n + 7, sb = ldb * q + 11;
+    const T poison = T(4096);
+    UnifiedVector<T> abuf(static_cast<size_t>(sa) * bs, poison);
+    UnifiedVector<T> bbuf(static_cast<size_t>(sb) * bs, poison);
+    std::vector<T> b_in(static_cast<size_t>(n) * q * bs);
+    for (int b = 0; b < bs; ++b) {
+        const int item = tc.same_items ? 0 : b;
+        for (int c = 0; c < n; ++c)
+            for (int r = 0; r < n; ++r) {
+                const bool in_tri = (tc.uplo == Uplo::Lower) ? (r > c) : (r < c);
+                T v = poison;
+                if (r == c && tc.diag == Diag::NonUnit) v = tri_fill<T>(r + item % 3, c, true);
+                if (in_tri) v = tri_fill<T>(r + item % 5, c, false);
+                abuf[static_cast<size_t>(b) * sa + c * lda + r] = v;
+            }
+        for (int c = 0; c < q; ++c)
+            for (int r = 0; r < n; ++r) {
+                const T v = rhs_fill<T>(r + item % 4, c);
+                bbuf[static_cast<size_t>(b) * sb + c * ldb + r] = v;
+                b_in[(static_cast<size_t>(b) * q + c) * n + r] = v;
+            }
+    }
+    const std::vector<T> a_host(abuf.begin(), abuf.begin() + abuf.size());
+    MatrixView<T, MatrixFormat::Dense> Av(abuf.data(), n, n, lda, sa, bs);
+    MatrixView<T, MatrixFormat::Dense> Bv(bbuf.data(), n, q, ldb, sb, bs);
+    (void)batchlas::sycl_trsm::trsm_native_sg_left_dispatch<T>(
+        *ctx, Av, Bv, tc.alpha, tc.uplo, tc.transA, tc.diag);
+    ctx->wait();
+
+    std::vector<T> x(static_cast<size_t>(n) * q * bs);
+    for (int b = 0; b < bs; ++b) {
+        for (int c = 0; c < q; ++c)
+            for (int r = 0; r < n; ++r)
+                x[(static_cast<size_t>(b) * q + c) * n + r] =
+                    bbuf[static_cast<size_t>(b) * sb + c * ldb + r];
+        // The padding rows of B are outside the view: a store there is a defect too.
+        for (int c = 0; c < q; ++c)
+            for (int r = n; r < ldb; ++r)
+                EXPECT_EQ(bbuf[static_cast<size_t>(b) * sb + c * ldb + r], poison)
+                    << "store into B's ld padding at b=" << b << " r=" << r << " c=" << c;
+    }
+    if (!check) return x;
+
+    using Acc = std::conditional_t<batchlas::is_std_complex_v<T>, std::complex<double>, double>;
+    const double tol = std::is_same_v<batchlas::float_t<T>, float> ? 2e-3 : 1e-10;
+    for (int b = 0; b < bs; ++b) {
+        auto opA = [&](int r, int c) -> Acc {
+            const int sr = (tc.transA == Transpose::NoTrans) ? r : c;
+            const int sc = (tc.transA == Transpose::NoTrans) ? c : r;
+            const bool in_tri = (tc.uplo == Uplo::Lower) ? (sr >= sc) : (sr <= sc);
+            if (!in_tri) return Acc(0);
+            T v = (sr == sc && tc.diag == Diag::Unit)
+                      ? T(1)
+                      : a_host[static_cast<size_t>(b) * sa + sc * lda + sr];
+            if (tc.transA == Transpose::ConjTrans) v = host_conj<T>(v);
+            return Acc(v);
+        };
+        for (int r = 0; r < n; ++r)
+            for (int c = 0; c < q; ++c) {
+                Acc got = Acc(0);
+                for (int t = 0; t < n; ++t)
+                    got += opA(r, t) * Acc(x[(static_cast<size_t>(b) * q + c) * n + t]);
+                const Acc want =
+                    Acc(tc.alpha) * Acc(b_in[(static_cast<size_t>(b) * q + c) * n + r]);
+                if (std::abs(got - want) > tol) {
+                    ADD_FAILURE() << "sg-left b=" << b << " r=" << r << " c=" << c << " n=" << n
+                                  << " q=" << q << " uplo=" << int(tc.uplo)
+                                  << " transA=" << int(tc.transA) << " diag=" << int(tc.diag)
+                                  << " err=" << std::abs(got - want);
+                    return x;
+                }
+            }
+    }
+    return x;
+}
+
+}  // namespace
+
+TEST(TrsmNativeSgLeft, CanonicalCrossProductStridedComplex) {
+    for (Uplo up : {Uplo::Lower, Uplo::Upper})
+        for (Transpose tr : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans})
+            for (Diag dg : {Diag::NonUnit, Diag::Unit}) {
+                RunSgLeft<std::complex<float>>({13, 9, 5, up, tr, dg, {0.5f, -1.25f}});
+                RunSgLeft<std::complex<double>>({29, 17, 3, up, tr, dg, {-1.5, 0.75}});
+            }
+}
+
+TEST(TrsmNativeSgLeft, CanonicalCrossProductStridedReal) {
+    for (Uplo up : {Uplo::Lower, Uplo::Upper})
+        for (Transpose tr : {Transpose::NoTrans, Transpose::Trans})
+            for (Diag dg : {Diag::NonUnit, Diag::Unit}) {
+                RunSgLeft<float>({6, 7, 9, up, tr, dg, -2.0f});
+                RunSgLeft<double>({32, 33, 3, up, tr, dg, 0.75});
+            }
+}
+
+// Orders straddle every bucket edge (4|5, 8|9, 16|17, 32) and q straddles every
+// QC edge (4|5, 8|9, 16|17); batches are not multiples of the 32/N matrices a
+// sub-group packs, so the tail sub-group carries absent matrices.
+TEST(TrsmNativeSgLeft, BucketAndChunkEdges) {
+    for (int n : {1, 3, 4, 5, 8, 9, 16, 17, 32})
+        for (int q : {1, 4, 5, 8, 9, 16, 17, 40})
+            RunSgLeft<double>({n, q, 11, Uplo::Upper, Transpose::Trans, Diag::NonUnit, -1.25});
+    for (int n : {4, 7, 12, 25})
+        for (int q : {3, 8, 21})
+            RunSgLeft<std::complex<float>>(
+                {n, q, 13, Uplo::Lower, Transpose::ConjTrans, Diag::NonUnit, {1.0f, 0.5f}});
+    // float N=32 at QC=16 is the rolled step loop; n < N exercises its early exit.
+    for (int n : {12, 20, 32})
+        for (int q : {9, 17, 40})
+            RunSgLeft<float>({n, q, 7, Uplo::Lower, Transpose::Trans, Diag::Unit, 0.5f});
+}
+
+// No SLM here, but the matrices of one sub-group share every broadcast, so a lane
+// index error shows up as a neighbour's data. Each item must equal item 0 bitwise.
+TEST(TrsmNativeSgLeft, SaturatingBatchIsBitIdentical) {
+    auto run = [](auto tag, int n, int q) {
+        using T = decltype(tag);
+        SgCase<T> tc{n, q, 2048, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, T(1)};
+        tc.same_items = true;
+        const auto x = RunSgLeft<T>(tc, false);
+        const size_t item = static_cast<size_t>(n) * q;
+        for (int b = 1; b < tc.batch; ++b)
+            ASSERT_EQ(0, std::memcmp(x.data(), x.data() + b * item, item * sizeof(T)))
+                << "item " << b << " differs from item 0 at n=" << n << " q=" << q;
+    };
+    run(std::complex<float>{}, 32, 17);
+    run(float{}, 8, 9);
+    run(double{}, 4, 3);
+    run(std::complex<double>{}, 16, 20);
+}
+
+// A subnormal diagonal has a reciprocal of inf while the division stays finite.
+// The fallback is per matrix: the neighbour sharing the sub-group must be exact too.
+TEST(TrsmNativeSgLeft, NonFiniteReciprocalFallsBackToDivision) {
+    auto ctx = std::make_shared<Queue>(Device("gpu"), Backend::CUDA);
+    const int n = 8, q = 3, bs = 4;
+    const float tiny = 1e-39f;
+    Matrix<float, MatrixFormat::Dense> A(n, n, bs);
+    Matrix<float, MatrixFormat::Dense> B(n, q, bs);
+    auto Av = A.view();
+    auto Bv = B.view();
+    for (int b = 0; b < bs; ++b) {
+        for (int c = 0; c < n; ++c)
+            for (int r = 0; r < n; ++r)
+                Av.at(r, c, b) = (r == c) ? ((b == 1 && r == 5) ? tiny : 2.0f) : 0.0f;
+        for (int c = 0; c < q; ++c)
+            for (int r = 0; r < n; ++r)
+                Bv.at(r, c, b) = (b == 1 && r == 5) ? tiny : 2.0f * (1 + c);
+    }
+    (void)batchlas::sycl_trsm::trsm_native_sg_left_dispatch<float>(
+        *ctx, A.view(), B.view(), 1.0f, Uplo::Lower, Transpose::NoTrans,
+        Diag::NonUnit);
+    ctx->wait();
+    for (int b = 0; b < bs; ++b)
+        for (int c = 0; c < q; ++c)
+            for (int r = 0; r < n; ++r) {
+                const float want = (b == 1 && r == 5) ? 1.0f : float(1 + c);
+                EXPECT_EQ(Bv.at(r, c, b), want) << "b=" << b << " r=" << r << " c=" << c;
+            }
+}
+
+// The kernel choice, straddled in both directions. Only sm_120 was measured, so
+// sm_89 and non-CUDA (cc 0) must keep V1 at every shape.
+// evidence: docs/perf/blackwell.md#trsm-sub-group-left-kernel
+TEST(TrsmNativeSgLeft, KernelChoiceWindow) {
+    using batchlas::sycl_trsm::trsm_left_use_sg;
+    using cf = std::complex<float>;
+    for (int cc : {0, 89, 90, 130})
+        for (int q : {1, 8, 31, 63})
+            for (int n : {4, 32}) {
+                EXPECT_FALSE(trsm_left_use_sg<float>(cc, n, q)) << cc << " " << n << " " << q;
+                EXPECT_FALSE(trsm_left_use_sg<cf>(cc, n, q)) << cc << " " << n << " " << q;
+            }
+    // Each edge from both sides: {n, q, expected}.
+    struct E { int n, q; bool sg; };
+    const E fl[] = {{1, 1, true}, {4, 128, true}, {4, 129, false}, {5, 64, true}, {5, 65, false},
+                    {8, 64, true}, {9, 32, true}, {9, 33, false}, {32, 32, true},
+                    {32, 33, false}, {33, 8, false}};
+    const E cx[] = {{4, 64, true}, {4, 65, false}, {5, 32, true}, {8, 33, false}, {9, 8, true},
+                    {15, 9, false}, {16, 16, true}, {16, 17, false}, {16, 24, false},
+                    {16, 32, true}, {16, 128, true}, {16, 129, false}, {17, 128, true},
+                    {32, 129, false}, {33, 8, false}};
+    for (int cc : {120, 121}) {
+        for (const E& e : fl)
+            EXPECT_EQ(trsm_left_use_sg<float>(cc, e.n, e.q), e.sg) << e.n << " " << e.q;
+        for (const E& e : cx)
+            EXPECT_EQ(trsm_left_use_sg<cf>(cc, e.n, e.q), e.sg) << e.n << " " << e.q;
+        EXPECT_FALSE(trsm_left_use_sg<double>(cc, 8, 8));
+        EXPECT_FALSE(trsm_left_use_sg<std::complex<double>>(cc, 8, 8));
+    }
+}
+
+// V1's ladder refuses a rung more than half of whose lanes own no column. At a
+// saturated batch that picks 64 lanes for q=40 (24 dead) and 32 for q=8, which
+// is a multi-sub-group group on the Right side that no other case reaches.
+// evidence: docs/perf/blackwell.md#trsm-v1-ladder-cap
+TEST(TrsmNativeCta, CappedLadderSaturatedSmallRhs) {
+    auto probe = std::make_shared<Queue>(Device("gpu"), Backend::CUDA);
+    ASSERT_EQ(trsm_expected_wg(*probe, 40, 4096), 64);
+    ASSERT_EQ(trsm_expected_wg(*probe, 8, 4096), 32);
+    for (int q : {8, 40}) {
+        RunTrsmNative<float>({32, q, 4096, Side::Right, Uplo::Lower, Transpose::Trans,
+                              Diag::NonUnit, 1.5f});
+        RunTrsmNative<std::complex<float>>({29, q, 4096, Side::Right, Uplo::Upper,
+                                            Transpose::ConjTrans, Diag::NonUnit, {1.0f, -0.5f}});
+    }
+    RunTrsmNative<double>({32, 40, 4096, Side::Left, Uplo::Lower, Transpose::NoTrans,
+                           Diag::NonUnit, -1.0});
 }
