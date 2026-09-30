@@ -219,6 +219,25 @@ function(find_netlib_libs)
         message(STATUS "Found CBLAS: ${CBLAS_LIBRARY}")
         set(BATCHLAS_NETLIB_LINK_LIBRARIES "${LAPACKE_LIBRARY};${CBLAS_LIBRARY}" PARENT_SCOPE)
         set(BATCHLAS_HAS_HOST_BACKEND TRUE PARENT_SCOPE)
+        # Headers are searched next to the libraries actually found, so a
+        # netlib install in <prefix>/lib (not the -dev package) still gives
+        # <prefix>/include to the tests and benchmarks that call LAPACKE_*.
+        get_filename_component(_lapacke_prefix "${LAPACKE_LIBRARY}" DIRECTORY)
+        get_filename_component(_cblas_prefix "${CBLAS_LIBRARY}" DIRECTORY)
+        find_path(LAPACKE_INCLUDE_DIR lapacke.h
+            HINTS "${_lapacke_prefix}/../include"
+            PATH_SUFFIXES lapacke)
+        find_path(CBLAS_INCLUDE_DIR cblas.h
+            HINTS "${_cblas_prefix}/../include"
+            PATH_SUFFIXES cblas openblas)
+        set(_netlib_includes)
+        foreach(_dir IN ITEMS "${LAPACKE_INCLUDE_DIR}" "${CBLAS_INCLUDE_DIR}")
+            if(_dir)
+                list(APPEND _netlib_includes "${_dir}")
+            endif()
+        endforeach()
+        list(REMOVE_DUPLICATES _netlib_includes)
+        set(BATCHLAS_NETLIB_INCLUDE_DIRS "${_netlib_includes}" PARENT_SCOPE)
     else()
         message(WARNING "LAPACKE/CBLAS libraries not found - disabling host backend")
         set(BATCHLAS_HAS_HOST_BACKEND FALSE PARENT_SCOPE)

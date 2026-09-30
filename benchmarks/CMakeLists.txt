@@ -94,6 +94,7 @@ function(batchlas_add_benchmark_target target_name)
     # an unused shared library on a link line costs nothing.
     if(BATCHLAS_HAS_HOST_BACKEND)
         target_link_libraries(${target_name} PRIVATE ${BATCHLAS_NETLIB_LINK_LIBRARIES})
+        target_include_directories(${target_name} SYSTEM PRIVATE ${BATCHLAS_NETLIB_INCLUDE_DIRS})
     endif()
     # CUDA headers: these #include ../src/backends/cusolverdx.hh, which reaches
     # <cuda_runtime_api.h>. CUDA::cudart is wanted here for its include dir; it
