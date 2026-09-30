@@ -421,10 +421,18 @@ class Handler(BaseHTTPRequestHandler):
             log = open(self.root / name / "run.log", "a")
             log.write(f"\n$ {' '.join(cmd)}\n")
             log.flush()
-            _procs[name] = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT,
-                                            env={**os.environ, "PYTHONUNBUFFERED": "1", "BENCHVIZ_STDOUT_IS_LOG": "1"},
-                                            start_new_session=True)
-        return self._json({"ok": True, "campaign": name})
+            p = _procs[name] = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT,
+                                                env={**os.environ, "PYTHONUNBUFFERED": "1", "BENCHVIZ_STDOUT_IS_LOG": "1"},
+                                                start_new_session=True)
+        # A child that dies at startup (e.g. a missing pandas) never writes a
+        # status, so without this the page just keeps showing "idle".
+        try:
+            code = p.wait(timeout=2.0)
+        except subprocess.TimeoutExpired:
+            return self._json({"ok": True, "campaign": name})
+        tail = (self.root / name / "run.log").read_text(errors="replace").strip().splitlines()[-3:]
+        return self._json({"error": f"run exited immediately (code {code}): " + " | ".join(tail),
+                           "campaign": name}, 500)
 
 
 def serve(root: Path, host: str, port: int, build_dirs: list, read_only: bool = False, token: str = ""):

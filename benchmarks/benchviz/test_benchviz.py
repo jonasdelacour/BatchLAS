@@ -336,5 +336,52 @@ class Compare(unittest.TestCase):
         plt.close(fig)
 
 
+class RunEndpoint(unittest.TestCase):
+    """The page's Run button: a child that dies at startup must come back as an error, not "idle"."""
+
+    def post_run(self, child: str):
+        import json
+        import threading
+        import urllib.error
+        import urllib.request
+        from http.server import ThreadingHTTPServer
+        from unittest import mock
+        import server
+        with tempfile.TemporaryDirectory() as tmp:
+            exe = os.path.join(tmp, "child.sh")
+            with open(exe, "w") as f:
+                f.write("#!/bin/sh\n" + child + "\n")
+            os.chmod(exe, 0o755)
+            server.Handler.root = server.Path(tmp) / "runs"
+            server.Handler.build_dirs, server.Handler.read_only, server.Handler.token = [], False, ""
+            httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+            threading.Thread(target=httpd.serve_forever, daemon=True).start()
+            body = json.dumps({"ops": ["potrf"], "types": ["float"], "preset": "quick", "campaign": "t"}).encode()
+            req = urllib.request.Request(f"http://127.0.0.1:{httpd.server_port}/api/run", data=body, method="POST")
+            try:
+                with mock.patch.object(sys, "executable", exe), mock.patch("runner.detect_gpus", return_value=[]):
+                    try:
+                        with urllib.request.urlopen(req) as r:
+                            return json.loads(r.read())
+                    except urllib.error.HTTPError as e:
+                        return json.loads(e.read())
+            finally:
+                httpd.shutdown()
+                httpd.server_close()
+                p = server._procs.pop("t", None)
+                if p and p.poll() is None:
+                    p.kill()
+                    p.wait()
+
+    def test_a_child_that_crashes_at_startup_is_reported(self):
+        j = self.post_run("echo \"ModuleNotFoundError: No module named 'pandas'\"; exit 1")
+        self.assertNotIn("ok", j)
+        self.assertIn("exited immediately (code 1)", j["error"])
+        self.assertIn("pandas", j["error"])
+
+    def test_a_child_that_keeps_running_is_ok(self):
+        self.assertEqual(self.post_run("sleep 30"), {"ok": True, "campaign": "t"})
+
+
 if __name__ == "__main__":
     unittest.main()
