@@ -740,8 +740,8 @@ Over the whole 62-cell grid (n = 8..512, q in {8, 16, 32, 64, n}):
 
 The q = n cells at n >= 128 run V1 on uncapped rungs and did not move.
 
-`preferred()` is unchanged. With the new kernel, native wins every measured Side::Left
-cell, so the diagnosis's interim small-q vendor window (trsm-interim-route-small-q) is
+`preferred()` is unchanged for Side::Left (Side::Right: next section). With the new
+kernel, native wins every measured Side::Left cell, so the diagnosis's interim small-q vendor window (trsm-interim-route-small-q) is
 not needed.
 
 posv (`factor_bench`): the native arm is the shipped native walk, which at these nrhs
@@ -767,3 +767,31 @@ new:
 All 16 cells (n = 64..512, nrhs 16/64) now win; BASE lost 6. The getrs vendor-present
 windows for nrhs >= 16 at n > 32 (LU-3) still send these shapes to the vendor. They
 belong to the LU package, to re-bracket against these numbers.
+
+### trsm side right on sm120
+
+Side::Right has no sub-group kernel, so it keeps the capped V1. Even capped, float V1
+loses to cuBLAS when a solve has few rows (`BM_TRSM_OrthoRight`, `f_right.csv`, ms,
+native / cuBLAS):
+
+| float | b=2048 | 4096 | 8192 | 16384 | 32768 |
+|---|---|---|---|---|---|
+| n32 q8  | 0.0276 / 0.0298 | 0.047 / 0.039 | 0.070 / 0.053 | 0.128 / 0.087 | 0.305 / 0.164 |
+| n20 q8  | | 0.042 / 0.031 | 0.063 / 0.040 | 0.112 / 0.059 | 0.200 / 0.099 |
+| n16 q8  | | | | | 0.059 / 0.072 |
+| n32 q16 | | 0.047 / 0.054 | 0.070 / 0.087 | 0.134 / 0.155 | 0.342 / 0.312 |
+| n20 q16 | | 0.042 / 0.040 | 0.063 / 0.059 | 0.112 / 0.099 | 0.210 / 0.178 |
+| n32 q20 | | 0.047 / 0.075 | 0.071 / 0.124 | 0.150 / 0.230 | 0.360 / 0.497 |
+
+On sm_120, `preferred()` therefore declines native for float Side::Right when
+order > 16, rows <= 8 and batch >= 4096. The edges are brackets against measured
+non-losers: order 16 (native 0.059 vs 0.072), rows 16 at n=32 (native wins up to b=16384),
+and batch 2048 (0.0276 vs 0.0298). `cuda_cc` 0 and 89 route as before. Auto, BASE ->
+new, ms (`f_rauto.csv`, cuBLAS in brackets): n32 q8 b32768 1.041 -> 0.162 (0.163),
+n32 q8 b4096 0.122 -> 0.039 (0.039), n20 q8 b4096 0.107 -> 0.031 (0.031), n16 q8
+b32768 0.277 -> 0.059 (0.072).
+
+Not done: rows 9..16 at order 17..24, and at order 32 with batch 32768, still lose
+5-18% (n20 q16, n32 q16 b32768). A Side::Right sub-group kernel (each row of B is a
+Left solve with op(A)^T, so the canonical fold carries over with the B access
+transposed) would fix both, but it was not written.
