@@ -2151,8 +2151,11 @@ TYPED_TEST(GemmTest, WideTransposedCN64BetaZero) {
 // The small NN wide tiles (32x32 and 16x16 macro tiles). Ragged
 // in every dimension, k from 1 to past two staged blocks, both betas, sub-views
 // of a wider parent (inherited ld, offset base).
-// ARMED BREAK: drop `if (col >= n) continue;` from the launch_wide_transposed epilogue.
-// EXPECTED: RED here only on the shapes whose n is not a whole tile (not 32x32, 16x16).
+// ARMED BREAK 1: drop `if (col >= n) continue;` from the launch_wide_transposed epilogue.
+// OBSERVED: red on every CUDA type for the shapes whose n is not a whole tile (32x32
+// and 16x16 on the 16 tile stay green), plus the WideTransposed* tests; the 64x64
+// NN kernel tests stay green. The selector test goes red for float/cfloat only.
+// ARMED BREAK 2: stage A and B with `gk <= k`. OBSERVED: red only where k % 16 != 0.
 TYPED_TEST(GemmTest, SmallWideNNTilesMatchTiled16) {
     using ScalarType = typename TestFixture::ScalarType;
     const char* kernels[] = {"32x32x16wide", "16x16x16wide"};
