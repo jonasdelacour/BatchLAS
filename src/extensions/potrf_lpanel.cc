@@ -197,8 +197,11 @@ Event potrf_lpanel_launch(Queue& ctx,
 
     ctx->submit([&](sycl::handler& h) {
         sycl::local_accessor<D, 1> panel(sycl::range<1>(panel_elems), h);
-        sycl::local_accessor<D, 1> block(
-            sycl::range<1>(static_cast<std::size_t>(G) * NB * NB), h);
+        // Declared as 16-byte vectors so the body's vector sB reads are aligned; same bytes.
+        static_assert((NB * NB * sizeof(D)) % sizeof(sycl::vec<float, 4>) == 0);
+        sycl::local_accessor<sycl::vec<float, 4>, 1> block(
+            sycl::range<1>(static_cast<std::size_t>(G) * NB * NB * sizeof(D) /
+                           sizeof(sycl::vec<float, 4>)), h);
         sycl::local_accessor<int, 1> fail(sycl::range<1>(static_cast<std::size_t>(G)), h);
 
         h.parallel_for<PotrfLpanelKernel<T, NB>>(
@@ -218,7 +221,8 @@ Event potrf_lpanel_launch(Queue& ctx,
                 const bool live = (matrix_id < batch);
 
                 D* sA = &panel[0] + static_cast<std::ptrdiff_t>(slot) * slda * NB;
-                D* sB = &block[0] + static_cast<std::ptrdiff_t>(slot) * NB * NB;
+                D* sB = reinterpret_cast<D*>(&block[0]) +
+                        static_cast<std::ptrdiff_t>(slot) * NB * NB;
                 int* fl = &fail[0] + slot;
 
                 // Built from data_ptr() + b*stride, never MatrixView::operator()(Slice,Slice):
