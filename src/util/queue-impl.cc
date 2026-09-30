@@ -332,7 +332,7 @@ Event Queue::create_event_after_external_work() {
 std::vector<Device> Device::get_devices(DeviceType type){
     std::vector<Device> devices(QueueImpl::device_arrays.at(static_cast<int>(type)).size());
     std::generate(devices.begin(), devices.end(), 
-        [i = 0, type]() mutable { return Device(i,type); });
+        [i = size_t{0}, type]() mutable { return Device(i++, type); });
     return devices;
 }
 

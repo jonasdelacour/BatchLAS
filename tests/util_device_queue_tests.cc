@@ -28,7 +28,12 @@ TEST(DeviceTest, GetDevices) {
     auto cpus = Device::get_devices(DeviceType::CPU);
     auto gpus = Device::get_devices(DeviceType::GPU);
     auto accelerators = Device::get_devices(DeviceType::ACCELERATOR);
-    
+    // Every entry must name its own device: get_devices() once returned idx 0 for
+    // all of them, so gpus.at(1) silently was GPU 0.
+    for (const auto* list : {&cpus, &gpus, &accelerators}) {
+        for (size_t i = 0; i < list->size(); ++i) EXPECT_EQ((*list)[i].idx, i);
+    }
+
     // We can't guarantee specific hardware is available on the test system
     // But we can at least check that the API returns something reasonable
     EXPECT_NO_THROW({
@@ -242,7 +247,7 @@ TEST(EnvHelpers, TruthyAndFalsyAreNotComplements) {
 
 // Per-architecture routing keys on this value, and 0 must mean "not CUDA" so every
 // other device keeps the as-measured (sm_89) windows.
-// evidence: docs/perf/blackwell.md#device-call-guard
+// evidence: docs/perf/blackwell.md#compute-capability-key
 TEST(DeviceTest, CudaComputeCapabilityIsZeroOffCuda) {
     for (const Device& d : Device::get_devices(DeviceType::CPU)) {
         EXPECT_EQ(d.cuda_compute_capability(), 0) << d.get_name();
@@ -260,17 +265,15 @@ TEST(DeviceTest, CudaComputeCapabilityOnNvidiaGpu) {
     if (nv.empty()) GTEST_SKIP() << "no NVIDIA GPU visible";
 #ifdef BATCHLAS_UTIL_TESTS_HAVE_CUDART
     // Independent oracle: the CUDA runtime, not the SYCL version string we parse.
-    std::set<int> cudart_cc;
+    // Paired per device (the CUDA adapter enumerates in CUDA ordinal order, and the
+    // name check proves the pairing), so on a mixed-GPU box one device reporting
+    // another's cc still fails.
     int count = 0;
     ASSERT_EQ(cudaGetDeviceCount(&count), cudaSuccess);
-    for (int i = 0; i < count; ++i) {
-        int major = 0, minor = 0;
-        ASSERT_EQ(cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, i), cudaSuccess);
-        ASSERT_EQ(cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, i), cudaSuccess);
-        cudart_cc.insert(major * 10 + minor);
-    }
+    ASSERT_EQ(static_cast<size_t>(count), nv.size()) << "SYCL and CUDA see different NVIDIA GPUs";
 #endif
-    for (const Device& d : nv) {
+    for (size_t i = 0; i < nv.size(); ++i) {
+        const Device& d = nv[i];
         const int cc = d.cuda_compute_capability();
 #if BATCHLAS_HAS_CUDA_BACKEND
         EXPECT_GE(cc, 50) << d.get_name();
@@ -278,7 +281,10 @@ TEST(DeviceTest, CudaComputeCapabilityOnNvidiaGpu) {
 #endif
         EXPECT_EQ(d.cuda_compute_capability(), cc) << "memoized value changed";
 #ifdef BATCHLAS_UTIL_TESTS_HAVE_CUDART
-        EXPECT_EQ(cudart_cc.count(cc), 1u) << d.get_name() << " reported " << cc;
+        cudaDeviceProp prop{};
+        ASSERT_EQ(cudaGetDeviceProperties(&prop, static_cast<int>(i)), cudaSuccess);
+        ASSERT_EQ(d.get_name(), std::string(prop.name)) << "SYCL/CUDA ordinal pairing broke at " << i;
+        EXPECT_EQ(cc, prop.major * 10 + prop.minor) << d.get_name() << " (CUDA ordinal " << i << ")";
 #endif
     }
 }
