@@ -137,6 +137,41 @@ def _replot_compare(camp: Campaign) -> None:
         _bg.append(p)
 
 
+_rendering: dict = {}  # campaign -> (Popen, start time), re-renders asked for from the page
+
+
+def _rerender(camp: Campaign) -> tuple[dict, int]:
+    with _lock:
+        was = _rendering.get(camp.name)
+        if was and was[0].poll() is None:
+            return {"error": f"{camp.name} is already re-rendering"}, 409
+        log = open(camp.dir / "plot.log", "w")
+        cmd = [sys.executable, str(HERE), "plot", camp.name, "--root", str(camp.root)]
+        log.write(f"$ {' '.join(cmd)}\n")
+        log.flush()
+        p = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
+                             env={**os.environ, "PYTHONUNBUFFERED": "1"})
+        log.close()
+        _rendering[camp.name] = (p, time.time())
+        _bg.append(p)
+    return {"ok": True}, 200
+
+
+def render_state(camp: Campaign) -> dict:
+    with _lock:
+        was = _rendering.get(camp.name)
+    if not was:
+        return {"active": False}
+    p, t0 = was
+    code = p.poll()
+    out = {"active": code is None, "started": t0, "ok": code == 0}
+    if code:
+        lines = (camp.dir / "plot.log").read_text(errors="replace").strip().splitlines()
+        out["error"] = f"re-render failed (code {code}): " + next(
+            (ln for ln in reversed(lines) if "Error" in ln), lines[-1] if lines else "")[:400]
+    return out
+
+
 def snapshot(root: Path, name: str) -> dict:
     camp = Campaign(root, name)
     if not (camp.dir / "campaign.json").exists():
@@ -175,6 +210,7 @@ def snapshot(root: Path, name: str) -> dict:
         "provenance": cfg.get("provenance", {}), "status": st, "eta_s": eta,
         "rate_per_min": an["rate_per_min"], "per_op": an["per_op"], "failures": an["failures"],
         "activity": an["activity"], "figures": figs, "log": tail, "rows": an["rows"], "planned": an["planned"],
+        "render": render_state(camp),
     }
 
 
@@ -371,11 +407,7 @@ class Handler(BaseHTTPRequestHandler):
             name = b.get("campaign", "")
             if name not in list_campaigns(self.root):
                 return self._json({"error": "no such campaign"}, 404)
-            cmd = [sys.executable, str(HERE), "plot", name, "--root", str(self.root)]
-            with _lock:
-                _bg.append(subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                            start_new_session=True))
-            return self._json({"ok": True})
+            return self._json(*_rerender(Campaign(self.root, name)))
         self._json({"error": "unknown endpoint"}, 404)
 
     def _compare(self, b: dict):
@@ -424,6 +456,7 @@ class Handler(BaseHTTPRequestHandler):
             p = _procs[name] = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT,
                                                 env={**os.environ, "PYTHONUNBUFFERED": "1", "BENCHVIZ_STDOUT_IS_LOG": "1"},
                                                 start_new_session=True)
+            log.close()
         # A child that dies at startup (e.g. a missing pandas) never writes a
         # status, so without this the page just keeps showing "idle".
         try:

@@ -249,6 +249,7 @@ dialog .acts a, dialog .acts button { font-size: 13px; color: #111; background: 
   </div>
   <label class="toggle hide-md" title="Jump to the op being measured"><input type="checkbox" id="follow" checked> Follow</label>
   <button class="btn danger" id="stop" hidden>Stop</button>
+  <button class="btn" id="rerender" hidden title="Re-render every figure of this campaign from its measurements">Re-render</button>
   <button class="btn" id="newcmp" title="Pair any two campaigns on this box, cell by cell">Compare<span class="hide-sm"> logs</span></button>
   <button class="btn primary" id="newrun">New run</button>
   <button class="btn ghost" id="theme" title="Toggle theme" aria-label="Toggle theme">◐</button>
@@ -429,8 +430,14 @@ function renderHeader() {
   patch($("count"), total ? `<b style="color:var(--ink)">${done}</b> / ${total}` : "");
   text($("rate"), running && S.rate_per_min ? `${S.rate_per_min.toFixed(1)} cells/min` : "");
   text($("eta"), running && S.eta_s ? `${dur(S.eta_s)} left` : "");
-  text($("current"), running ? st.current || "" : "");
+  const r = S.render || {};
+  text($("current"), running ? st.current || "" : r.error || "");
+  $("current").style.color = !running && r.error ? "var(--bad)" : "";
   $("stop").hidden = !running || meta.read_only || isCmp();
+  $("rerender").hidden = meta.read_only || !camp;
+  $("rerender").disabled = !!r.active;
+  text($("rerender"), r.active ? "Rendering…" : "Re-render");
+  $("rerender").title = r.error || "Re-render every figure of this campaign from its measurements";
 }
 
 function renderRail() {
@@ -727,6 +734,12 @@ $("dstart").onclick = async () => {
   const j = await post("/api/run", runBody());
   if (j.error) { $("estimate").textContent = j.error; return; }
   openDrawer(false); pinned = false; $("follow").checked = true; setTimeout(() => watch(j.campaign), 500);
+};
+$("rerender").onclick = async () => {
+  if (!camp) return;
+  $("rerender").disabled = true; text($("rerender"), "Rendering…");
+  const j = await post("/api/replot", { campaign: camp });
+  if (j.error) { $("rerender").disabled = false; text($("rerender"), "Re-render"); $("rerender").title = j.error; }
 };
 $("stop").onclick = async () => {
   if (!camp) return;
