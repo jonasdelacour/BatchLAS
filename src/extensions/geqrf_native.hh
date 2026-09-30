@@ -146,4 +146,20 @@ BATCHLAS_INTERNAL_API bool geqrf_leaf_fits(int m, int n, std::size_t slm_budget_
 template <typename T>
 BATCHLAS_INTERNAL_API unsigned geqrf_cta_debug_launch(Queue& ctx, int m, int n);  // G | wg<<16
 
+// The CTA tier's SKINNY leg. FITS is capability; PREFERRED adds dispatch::geqrf_skinny_window.
+template <typename T>
+BATCHLAS_INTERNAL_API bool geqrf_skinny_fits(int m, int n);
+
+template <typename T>
+BATCHLAS_INTERNAL_API bool geqrf_skinny_preferred(int cuda_cc, int m, int n);
+
+template <typename T>
+BATCHLAS_INTERNAL_API Event geqrf_skinny_launch(Queue& ctx, T* a_ptr, int ld, int stride,
+                                                int m, int n, int batch, T* tau_ptr,
+                                                int tau_bs, int tau_off);
+
+// Which leg geqrf_cta_dispatch runs: 1 = resident leaf, 2 = skinny leg, 0 = no fit.
+template <typename T>
+BATCHLAS_INTERNAL_API unsigned geqrf_cta_debug_leg(Queue& ctx, int m, int n);
+
 }  // namespace batchlas::sycl_geqrf

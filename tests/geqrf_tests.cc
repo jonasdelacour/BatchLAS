@@ -2595,6 +2595,392 @@ TYPED_TEST(GeqrfTest, AutoTakesTheRegisterLeafExactlyInsideTheHeightWindow) {
     ASSERT_GE(ran, 4) << "only " << ran << " shapes were admitted; this guard is near-vacuous";
 }
 
+// ---------------------------------------------------------------------------------------------
+// SK. THE CTA TIER'S SKINNY LEG (n <= 8, one sub-group's registers) and the sm_120 width rule.
+// evidence: docs/perf/blackwell.md#geqrf-the-skinny-register-leg
+
+namespace {
+
+// Every (column bucket, row bucket, lanes-per-matrix) the launcher dispatches to, with rows
+// just above each bucket edge so a wrong `r < m` guard lands on a live lane.
+struct SkinnyShape { int m, n; };
+constexpr SkinnyShape kSkinnyShapes[] = {
+    {5, 3},   {8, 4},   {8, 7},    {12, 4},   {16, 8},   {17, 5},  {32, 8},  {33, 4},
+    {64, 8},  {65, 1},  {128, 6},  {129, 8},  {200, 3},  {256, 8}, {257, 4}, {512, 2},
+};
+
+template <typename T>
+void skinny_run(Queue& q, Problem<T>& p, int tau_bs, int tau_off) {
+    (void)sycl_geqrf::geqrf_skinny_launch<T>(q, p.buf.data(), p.ld, p.stride, p.m, p.n,
+                                             p.batch, p.tau.data(), tau_bs, tau_off);
+    q.wait();
+}
+
+// Complex data with a nonzero imaginary part in every entry, one matrix per seed.
+template <typename T>
+void fill_item(Problem<T>& p, int b, unsigned seed, double scale) {
+    Rng rg(seed);
+    for (int j = 0; j < p.n; ++j)
+        for (int i = 0; i < p.m; ++i)
+            p.buf[static_cast<size_t>(b) * p.stride + static_cast<size_t>(j) * p.ld + i] =
+                mk<T>(scale * rg.next(), scale * (0.25 + std::fabs(rg.next())));
+}
+
+}  // namespace
+
+// SK1. Residual, orthogonality, pad and batch distinctness in every launch bucket, at a
+// non-natural ld and stride and an odd batch (a partly live sub-group at P = 8 and 16).
+TYPED_TEST(GeqrfTest, SkinnyLegResidualInEveryBucket) {
+    using T = typename TestFixture::T;
+    int ran = 0;
+    for (const SkinnyShape& s : kSkinnyShapes) {
+        if (!sycl_geqrf::geqrf_skinny_fits<T>(s.m, s.n)) continue;
+        ++ran;
+        auto p = make_problem<T>(s.m, s.n, 7, 7301u + unsigned(s.m * 16 + s.n));
+        ASSERT_NO_THROW(skinny_run<T>(*this->ctx, p, p.k, 0)) << s.m << "x" << s.n;
+        check_one(p, "skinny");
+        if (this->HasFailure()) return;
+    }
+    if constexpr (std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>) {
+        ASSERT_GE(ran, 14) << "the skinny leg admitted too few of its own buckets";
+    } else {
+        EXPECT_EQ(ran, 0) << "the skinny leg is float/cfloat only (never measured for fp64)";
+        auto p = make_problem<T>(64, 8, 2, 1u);
+        EXPECT_THROW(skinny_run<T>(*this->ctx, p, p.k, 0), batchlas::invalid_argument);
+    }
+}
+
+// SK2. Refusals: the fit predicate is the launcher's, and a pin never falls back.
+TYPED_TEST(GeqrfTest, SkinnyLegRefusesWhatItCannotHold) {
+    using T = typename TestFixture::T;
+    EXPECT_FALSE(sycl_geqrf::geqrf_skinny_fits<T>(64, 9)) << "n = 9 is above the column cap";
+    EXPECT_FALSE(sycl_geqrf::geqrf_skinny_fits<T>(4, 8)) << "wide panels are refused";
+    EXPECT_FALSE(sycl_geqrf::geqrf_skinny_fits<T>(513, 4)) << "513 rows exceed 16 slots";
+    if constexpr (std::is_same_v<T, std::complex<float>>) {
+        EXPECT_TRUE(sycl_geqrf::geqrf_skinny_fits<T>(256, 8));
+        EXPECT_FALSE(sycl_geqrf::geqrf_skinny_fits<T>(257, 2)) << "cfloat stops at 256 rows";
+    } else if constexpr (std::is_same_v<T, float>) {
+        EXPECT_TRUE(sycl_geqrf::geqrf_skinny_fits<T>(512, 8));
+    }
+    auto p = make_problem<T>(64, 9, 2, 2u);
+    EXPECT_THROW(skinny_run<T>(*this->ctx, p, p.k, 0), batchlas::invalid_argument);
+}
+
+// SK3. The tau contract with a caller's batch stride and offset: tau[b * bs + off + j].
+TYPED_TEST(GeqrfTest, SkinnyLegHonoursTauStrideAndOffset) {
+    using T = typename TestFixture::T;
+    if (!sycl_geqrf::geqrf_skinny_fits<T>(40, 5)) GTEST_SKIP() << "no skinny leg for this type";
+    auto a = make_problem<T>(40, 5, 5, 991u);
+    auto b = make_problem<T>(40, 5, 5, 991u);
+    const int bs = a.k + 3, off = 2;
+    b.tau = UnifiedVector<T>(static_cast<size_t>(bs) * b.batch + off, mk<T>(-777.0, 3.0));
+    skinny_run<T>(*this->ctx, a, a.k, 0);
+    skinny_run<T>(*this->ctx, b, bs, off);
+    for (size_t o = 0; o < b.tau.size(); ++o) {
+        const long rel = static_cast<long>(o) - off;
+        const bool slot = rel >= 0 && (rel % bs) < a.k && rel / bs < b.batch;
+        if (!slot) {
+            ASSERT_TRUE(same_or_both_nan(b.tau[o], mk<T>(-777.0, 3.0)))
+                << "tau written outside its slots at " << o;
+        } else {
+            const size_t ref = static_cast<size_t>(rel / bs) * a.k + static_cast<size_t>(rel % bs);
+            ASSERT_TRUE(same_or_both_nan(b.tau[o], a.tau[ref])) << "tau slot " << o << " moved";
+        }
+    }
+}
+
+// SK4. Against the resident leaf (a different kernel, not a shared table): tau and the factor
+// normwise, and R's diagonal sign exactly for real types.
+TYPED_TEST(GeqrfTest, SkinnyLegAgreesWithTheResidentLeaf) {
+    using T = typename TestFixture::T;
+    using R = typename TestFixture::R;
+    int ran = 0;
+    for (const SkinnyShape& s : kSkinnyShapes) {
+        if (!sycl_geqrf::geqrf_skinny_fits<T>(s.m, s.n) || !this->leaf_fits(s.m, s.n)) continue;
+        ++ran;
+        auto a = make_problem<T>(s.m, s.n, 3, 5519u + unsigned(s.m));
+        auto b = make_problem<T>(s.m, s.n, 3, 5519u + unsigned(s.m));
+        skinny_run<T>(*this->ctx, a, a.k, 0);
+        ASSERT_NO_THROW((void)sycl_geqrf::geqrf_panel_factorize<T>(
+            *this->ctx, b.buf.data(), b.ld, b.stride, s.m, s.n, b.batch, b.tau.data(), b.k, 0,
+            nullptr, sycl_geqrf::GeqrfPanelLeaf::Resident, nullptr));
+        this->ctx->wait();
+        const double tol = 64.0 * double(std::numeric_limits<R>::epsilon()) * double(s.m);
+        for (int item = 0; item < a.batch; ++item) {
+            double scale = 0.0;
+            for (int j = 0; j < s.n; ++j)
+                for (int i = 0; i < s.m; ++i)
+                    scale = std::max(scale, habs(up(b.buf[size_t(item) * b.stride +
+                                                          size_t(j) * b.ld + i])));
+            for (int j = 0; j < a.k; ++j) {
+                const size_t t = size_t(item) * a.k + j;
+                EXPECT_LE(habs(up(a.tau[t]) - up(b.tau[t])), tol)
+                    << "tau[" << j << "] differs from the resident leaf at " << s.m << "x"
+                    << s.n << " item " << item;
+                const size_t d = size_t(item) * a.stride + size_t(j) * a.ld + j;
+                if constexpr (!test_utils::is_complex<T>::value) {
+                    EXPECT_EQ(hreal(up(a.buf[d])) < 0.0, hreal(up(b.buf[d])) < 0.0)
+                        << "R(" << j << "," << j << ") sign differs at " << s.m << "x" << s.n;
+                } else {
+                    EXPECT_EQ(himag(up(a.buf[d])), 0.0) << "complex beta must be exactly real";
+                }
+            }
+            for (int j = 0; j < s.n; ++j)
+                for (int i = 0; i < s.m; ++i) {
+                    const size_t o = size_t(item) * a.stride + size_t(j) * a.ld + i;
+                    EXPECT_LE(habs(up(a.buf[o]) - up(b.buf[o])), tol * scale)
+                        << "factor differs at (" << i << "," << j << ") " << s.m << "x" << s.n;
+                }
+        }
+        if (this->HasFailure()) return;
+    }
+    if (sycl_geqrf::geqrf_skinny_fits<T>(64, 8)) ASSERT_GE(ran, 12);
+}
+
+// SK5. SATURATING BATCH (AGENTS.md §8.5): 2048 items alternating two matrices, the odd one a
+// large FINITE poison (1e15 scale) the kernel accepts. Every even item must be bit-identical
+// to a solo run of that matrix, every odd one to a solo run of the poison: partitions that
+// share a sub-group (P = 8, 16) or a work-group must not see each other.
+TYPED_TEST(GeqrfTest, SkinnyLegSaturatingBatchIsBitIdentical) {
+    using T = typename TestFixture::T;
+    const SkinnyShape shapes[] = {{8, 4}, {16, 8}, {32, 8}, {64, 4}, {200, 8}};
+    const int batch = 2048;
+    int ran = 0;
+    for (const SkinnyShape& s : shapes) {
+        if (!sycl_geqrf::geqrf_skinny_fits<T>(s.m, s.n)) continue;
+        ++ran;
+        auto big = make_problem<T>(s.m, s.n, batch, 1u);
+        auto solo = make_problem<T>(s.m, s.n, 2, 1u);
+        for (int b = 0; b < batch; ++b) fill_item(big, b, (b & 1) ? 77u : 55u, (b & 1) ? 1e15 : 1.0);
+        fill_item(solo, 0, 55u, 1.0);
+        fill_item(solo, 1, 77u, 1e15);
+        skinny_run<T>(*this->ctx, big, big.k, 0);
+        skinny_run<T>(*this->ctx, solo, solo.k, 0);
+        for (int b = 0; b < batch; ++b) {
+            const int ref = b & 1;
+            for (int j = 0; j < s.n; ++j)
+                for (int i = 0; i < s.m; ++i) {
+                    const size_t o = size_t(b) * big.stride + size_t(j) * big.ld + i;
+                    const size_t r = size_t(ref) * solo.stride + size_t(j) * solo.ld + i;
+                    ASSERT_TRUE(same_or_both_nan(big.buf[o], solo.buf[r]))
+                        << "item " << b << " differs from its solo run at (" << i << "," << j
+                        << ") " << s.m << "x" << s.n;
+                }
+            for (int j = 0; j < big.k; ++j)
+                ASSERT_TRUE(same_or_both_nan(big.tau[size_t(b) * big.k + j],
+                                             solo.tau[size_t(ref) * solo.k + j]))
+                    << "tau[" << j << "] of item " << b << " differs from its solo run";
+        }
+    }
+    if (sycl_geqrf::geqrf_skinny_fits<T>(64, 8)) ASSERT_EQ(ran, 5);
+}
+
+// SK6. An identity reflector in ONE partition while its sub-group neighbours reflect: the
+// per-partition `identity` must not branch around the shared butterflies.
+TYPED_TEST(GeqrfTest, SkinnyLegIdentityReflectorInOnePartition) {
+    using T = typename TestFixture::T;
+    if (!sycl_geqrf::geqrf_skinny_fits<T>(8, 4)) GTEST_SKIP() << "no skinny leg for this type";
+    for (const SkinnyShape s : {SkinnyShape{8, 4}, SkinnyShape{16, 4}, SkinnyShape{40, 4}}) {
+        auto p = make_problem<T>(s.m, s.n, 8, 3131u + unsigned(s.m));
+        // Item 1, column 0: real alpha, zero tail -> H_0 = I, tau[0] == 0 exactly.
+        const size_t base = size_t(1) * p.stride;
+        p.buf[base] = mk<T>(2.5, 0.0);
+        for (int i = 1; i < s.m; ++i) p.buf[base + i] = mk<T>(0.0, 0.0);
+        p.a0.assign(p.buf.begin(), p.buf.end());
+        skinny_run<T>(*this->ctx, p, p.k, 0);
+        EXPECT_TRUE(same_or_both_nan(p.tau[size_t(1) * p.k], mk<T>(0.0, 0.0)))
+            << "an identity reflector must give tau == 0 exactly at " << s.m << "x" << s.n;
+        EXPECT_NE(habs(up(p.tau[0])), 0.0) << "the neighbour item must still reflect";
+        check_one(p, "skinny/identity");
+        if (this->HasFailure()) return;
+    }
+}
+
+// SK7. The window: sm_120 only, n <= 8, strictly tall. Brackets both ways in every extent, and
+// exactly one native tier answers preferred() for every shape and every cc.
+TYPED_TEST(GeqrfTest, SkinnyWindowIsSm120OnlyAndPicksOneTier) {
+    using T = typename TestFixture::T;
+    using RT = dispatch::RouteTable<dispatch::Op::geqrf, T>;
+    const bool typed = std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>;
+    auto shape = [&](int cc, int m, int n) {
+        dispatch::GeqrfShape s;
+        s.op = dispatch::Op::geqrf;
+        s.m = m; s.n = n; s.k = std::min(m, n); s.batch = 32768;
+        s.is_gpu = true; s.has_sg32 = true; s.cuda_cc = cc;
+        s.cta_max_m = 1 << 20; s.cta_max_elems = 1 << 20;
+        s.tiny_max_n = 32; s.blocked_available = true;
+        return s;
+    };
+    const dispatch::Route cta{dispatch::Origin::Native, dispatch::Algorithm::CTA};
+    for (const int cc : {0, 89, 120}) {
+        for (int n = 1; n <= 12; ++n) {
+            for (int m = n; m <= 640; m += (m < 64 ? 1 : 29)) {
+                const auto s = shape(cc, m, n);
+                const bool win = dispatch::geqrf_skinny_window<T>(cc, m, n);
+                const bool tall = dispatch::geqrf_sm120_tall_window<T>(cc, m, n);
+                if (cc != 120 || !typed || n > 8 || m == n) {
+                    ASSERT_FALSE(win) << "cc=" << cc << " " << m << "x" << n;
+                }
+                if (cc != 120 || !typed || n <= 8 || m == n) {
+                    ASSERT_FALSE(tall) << "cc=" << cc << " " << m << "x" << n;
+                }
+                if (tall) ASSERT_TRUE(RT::preferred(cta, s)) << "tall " << m << "x" << n;
+                int npref = 0;
+                for (const auto* r = RT::order_begin(); r != RT::order_end(); ++r)
+                    if (dispatch::is_native(*r) && RT::supports(*r, s) && RT::preferred(*r, s))
+                        ++npref;
+                ASSERT_LE(npref, 1) << "two native tiers preferred at cc=" << cc << " " << m << "x" << n;
+                if (win) {
+                    ASSERT_TRUE(RT::preferred(cta, s)) << "window shape not routed to CTA " << m << "x" << n;
+                    ASSERT_TRUE(sycl_geqrf::geqrf_skinny_preferred<T>(cc, m, n))
+                        << "the launcher and preferred() disagree at " << m << "x" << n;
+                }
+            }
+        }
+    }
+    if (typed) {
+        // Measured edges, both sides (docs/perf/blackwell.md#geqrf-the-skinny-register-leg).
+        EXPECT_TRUE(dispatch::geqrf_skinny_window<T>(120, 64, 8));
+        EXPECT_TRUE(dispatch::geqrf_skinny_window<T>(120, 8, 4));
+        EXPECT_FALSE(dispatch::geqrf_skinny_window<T>(120, 64, 9));
+        EXPECT_FALSE(dispatch::geqrf_skinny_window<T>(120, 8, 8));
+        EXPECT_TRUE(dispatch::geqrf_skinny_window<T>(120, 256, 2));
+        constexpr bool kCf = std::is_same_v<T, std::complex<float>>;
+        constexpr bool kF = std::is_same_v<T, float>;
+        EXPECT_FALSE(dispatch::geqrf_skinny_window<T>(120, 257, 2) && kCf) << "cfloat 257x2 is a loss";
+        EXPECT_FALSE(dispatch::geqrf_skinny_window<T>(120, 400, 1)) << "400x1 is a loss";
+        EXPECT_EQ(dispatch::geqrf_skinny_window<T>(120, 512, 2), kF);
+        EXPECT_FALSE(dispatch::geqrf_sm120_tall_window<T>(120, 24, 12)) << "24x12 is a loss";
+        EXPECT_TRUE(dispatch::geqrf_sm120_tall_window<T>(120, 32, 16));
+        EXPECT_TRUE(dispatch::geqrf_sm120_tall_window<T>(120, 64, 9));
+        EXPECT_FALSE(dispatch::geqrf_sm120_tall_window<T>(120, 513, 16)) << "never measured";
+        EXPECT_FALSE(dispatch::geqrf_sm120_tall_window<T>(89, 64, 32));
+        EXPECT_FALSE(RT::preferred(cta, shape(89, 64, 32))) << "the 4090 window must not move";
+        EXPECT_FALSE(dispatch::geqrf_skinny_window<T>(89, 64, 8));
+        EXPECT_FALSE(RT::preferred(cta, shape(89, 64, 8))) << "the 4090 window must not move";
+        EXPECT_FALSE(RT::preferred(cta, shape(0, 64, 8)));
+    }
+}
+
+// SK8. The FACADE reaches the leg under a native:cta pin, and BATCHLAS_GEQRF_LEAF pins either
+// leg: resident is the resident leaf bit for bit, skinny is the skinny launch bit for bit.
+TYPED_TEST(GeqrfTest, FacadeReachesTheSkinnyLeg) {
+    using T = typename TestFixture::T;
+    static constexpr Backend B = TestFixture::BackendType;
+    const int m = 64, n = 8, batch = 5;
+    if (!sycl_geqrf::geqrf_skinny_fits<T>(m, n)) GTEST_SKIP() << "no skinny leg for this type";
+    const int cc = this->ctx->device().cuda_compute_capability();
+
+    auto run_facade = [&](Problem<T>& p) {
+        auto V = view_of(p);
+        UnifiedVector<std::byte> ws(std::max<std::size_t>(
+            1, geqrf_buffer_size<B, T>(*this->ctx, V, p.tau.to_span())));
+        (void)geqrf<B, T>(*this->ctx, V, p.tau.to_span(), ws.to_span());
+        this->ctx->wait();
+    };
+    auto same = [&](const Problem<T>& a, const Problem<T>& b, const char* what) {
+        for (size_t o = 0; o < a.buf.size(); ++o)
+            ASSERT_TRUE(same_or_both_nan(a.buf[o], b.buf[o])) << what << " at " << o;
+        for (size_t o = 0; o < a.tau.size(); ++o)
+            ASSERT_TRUE(same_or_both_nan(a.tau[o], b.tau[o])) << what << " tau at " << o;
+    };
+
+    ScopedEnvVar route("BATCHLAS_GEQRF_ROUTE", "native:cta");
+    auto sk = make_problem<T>(m, n, batch, 4242u);
+    skinny_run<T>(*this->ctx, sk, sk.k, 0);
+    auto rs = make_problem<T>(m, n, batch, 4242u);
+    (void)sycl_geqrf::geqrf_panel_factorize<T>(*this->ctx, rs.buf.data(), rs.ld, rs.stride, m, n,
+                                               batch, rs.tau.data(), rs.k, 0, nullptr,
+                                               sycl_geqrf::GeqrfPanelLeaf::Resident, nullptr);
+    this->ctx->wait();
+    {
+        auto p = make_problem<T>(m, n, batch, 4242u);
+        const bool want = sycl_geqrf::geqrf_skinny_preferred<T>(cc, m, n);
+        EXPECT_EQ(sycl_geqrf::geqrf_cta_debug_leg<T>(*this->ctx, m, n), want ? 2u : 1u);
+        run_facade(p);
+        same(p, want ? sk : rs, "native:cta policy leg");
+        check_one(p, "skinny/facade");
+    }
+    {
+        ScopedEnvVar leaf("BATCHLAS_GEQRF_LEAF", "skinny");
+        auto p = make_problem<T>(m, n, batch, 4242u);
+        EXPECT_EQ(sycl_geqrf::geqrf_cta_debug_leg<T>(*this->ctx, m, n), 2u);
+        run_facade(p);
+        same(p, sk, "LEAF=skinny");
+    }
+    {
+        ScopedEnvVar leaf("BATCHLAS_GEQRF_LEAF", "resident");
+        auto p = make_problem<T>(m, n, batch, 4242u);
+        EXPECT_EQ(sycl_geqrf::geqrf_cta_debug_leg<T>(*this->ctx, m, n), 1u);
+        run_facade(p);
+        same(p, rs, "LEAF=resident");
+    }
+}
+
+// SK9. The sm_120 width rule (tile bytes, packed to 4 KiB at any m) is what the launcher does,
+// straddled both ways; cc 0 / 89 and fp64 keep the column ladder. Then the newly packed SLM widths at a
+// saturating batch, bit-identical per item (AGENTS.md §8.5).
+TYPED_TEST(GeqrfTest, Sm120LeafWidthFollowsTileBytes) {
+    using T = typename TestFixture::T;
+    const bool sm120 = dispatch::is_sm120_family(this->ctx->device().cuda_compute_capability()) &&
+                       (std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>);
+    auto launch = [&](int m, int n) { return sycl_geqrf::geqrf_cta_debug_launch<T>(*this->ctx, m, n); };
+    auto wg = [&](int m, int n) { return int(launch(m, n) >> 16); };
+    auto G = [&](int m, int n) { return int(launch(m, n) & 0xffffu); };
+    const int packm = int(4096 / (8 * sizeof(T)));   // the tallest n = 8 panel of <= 4 KiB
+    if (sm120) {
+        EXPECT_GT(G(packm, 8), 1) << packm << "x8 is 4 KiB and must pack";
+        EXPECT_EQ(G(packm + 1, 8), 1) << packm + 1 << "x8 is over 4 KiB and must not pack";
+        const int m32k = int(32768 / (32 * sizeof(T)));
+        EXPECT_EQ(wg(m32k, 32), 256) << "32 KiB tiles keep the full ladder";
+        EXPECT_EQ(wg(m32k / 2, 32), 128) << "16 KiB is 128 work-items";
+        EXPECT_LE(wg(2 * packm, 8), 64) << "8 KiB at 128 B an item is 64 work-items";
+    } else {
+        EXPECT_EQ(G(64, 8), 1) << "the 4090 column ladder must not move";
+        EXPECT_EQ(wg(64, 8), 256);
+    }
+    const SkinnyShape shapes[] = {{packm, 8}, {64, 16}, {2 * packm, 8}};
+    for (const SkinnyShape& s : shapes) {
+        if (!this->cta_fits(s.m, s.n)) continue;
+        ScopedEnvVar leaf("BATCHLAS_GEQRF_LEAF", "resident");
+        auto big = make_problem<T>(s.m, s.n, 1024, 1u);
+        auto solo = make_problem<T>(s.m, s.n, 1, 1u);
+        for (int b = 0; b < big.batch; ++b) fill_item(big, b, 99u, 1.0);
+        fill_item(solo, 0, 99u, 1.0);
+        UnifiedVector<std::byte> ws(1);
+        (void)sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, view_of(big), big.tau.to_span(), ws.to_span());
+        (void)sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, view_of(solo), solo.tau.to_span(), ws.to_span());
+        this->ctx->wait();
+        for (int b = 0; b < big.batch; ++b) {
+            for (int j = 0; j < s.n; ++j)
+                for (int i = 0; i < s.m; ++i)
+                    ASSERT_TRUE(same_or_both_nan(big.buf[size_t(b) * big.stride + size_t(j) * big.ld + i],
+                                                 solo.buf[size_t(j) * solo.ld + i]))
+                        << "item " << b << " differs at (" << i << "," << j << ") " << s.m << "x" << s.n;
+        }
+        auto p = make_problem<T>(s.m, s.n, 5, 616u + unsigned(s.m));
+        (void)sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, view_of(p), p.tau.to_span(), ws.to_span());
+        this->ctx->wait();
+        check_one(p, "cta/width-rule");
+        if (this->HasFailure()) return;
+    }
+}
+
+// SK10. A caller's workspace is scratch, not zeros: the blocked driver's W1/W2 are outputs of
+// beta = 0 GEMMs, and a GEMM epilogue that computed beta * C read NaN out of a dirty arena.
+// Found because the skinny tests above left freed USM behind for later suites.
+TYPED_TEST(GeqrfTest, BlockedIgnoresAGarbageWorkspace) {
+    using T = typename TestFixture::T;
+    auto p = make_problem<T>(64, 64, 3, 77u);
+    auto V = view_of(p);
+    UnifiedVector<std::byte> wb(std::max<std::size_t>(
+        1, sycl_geqrf::geqrf_blocked_buffer_size<T>(*this->ctx, V)));
+    std::fill(wb.begin(), wb.end(), std::byte{0xff});   // every float in it is a NaN
+    (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span(), {});
+    this->ctx->wait();
+    check_one(p, "blocked/garbage-workspace");
+}
+
 // Break-sweep evidence for these tests: docs/perf/qr.md#break-sweeps
 
 int main(int argc, char** argv) {

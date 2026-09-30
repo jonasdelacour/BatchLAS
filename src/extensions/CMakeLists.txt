@@ -47,6 +47,8 @@ set(EXTENSIONS_CTA_SOURCES
     # a device-code cluster with the pair above. It is also GPU-only, which is what this
     # object library's NO_CPU_TARGETS configuration (src/CMakeLists.txt:67-71) wants.
     geqrf_tiny.cc
+    # The CTA tier's skinny register leg: reuses geqrf_cta_device.hh's larfg scalars.
+    geqrf_skinny.cc
     # WP6 scaffolding, and THIS list for the same W12 reason as the potrf and
     # geqrf pairs: the blocked getrf driver's diagonal-panel leaf will BE the CTA
     # device function, shared through a getrf_cta_device.hh, so the two sources
