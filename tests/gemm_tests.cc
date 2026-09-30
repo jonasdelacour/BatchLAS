@@ -8,6 +8,7 @@
 #include <type_traits>
 #include <cstdlib>
 #include <string>
+#include <cstring>
 
 #include <batchlas/backend_config.h>
 #include <batchlas/util/env.hh>
@@ -2147,6 +2148,91 @@ TYPED_TEST(GemmTest, WideTransposedCN64BetaZero) {
         Transpose::ConjTrans, Transpose::NoTrans, ScalarType(0));
 }
 
+// The small NN wide tiles (32x32 and 16x16 macro tiles). Ragged
+// in every dimension, k from 1 to past two staged blocks, both betas, sub-views
+// of a wider parent (inherited ld, offset base).
+// ARMED BREAK: drop `if (col >= n) continue;` from the launch_wide_transposed epilogue.
+// EXPECTED: RED here only on the shapes whose n is not a whole tile (not 32x32, 16x16).
+TYPED_TEST(GemmTest, SmallWideNNTilesMatchTiled16) {
+    using ScalarType = typename TestFixture::ScalarType;
+    const char* kernels[] = {"32x32x16wide", "16x16x16wide"};
+    const int shapes[][3] = {{32, 32, 1}, {32, 32, 70}, {29, 31, 257}, {16, 16, 33},
+                             {13, 7, 100}, {32, 17, 8}, {40, 70, 65}, {5, 3, 16}};
+    for (const char* kname : kernels) {
+        for (const auto& s : shapes) {
+            for (ScalarType beta : {ScalarType(-1), ScalarType(0)}) {
+                SCOPED_TRACE(std::string(kname) + " m=" + std::to_string(s[0]) + " n=" +
+                             std::to_string(s[1]) + " k=" + std::to_string(s[2]));
+                RunForcedWideTransposedAgainstTiled16<ScalarType>(
+                    *(this->ctx), kname, s[0], s[1], s[2],
+                    Transpose::NoTrans, Transpose::NoTrans, beta, 300, 3, 3);
+            }
+        }
+    }
+}
+
+// The same shapes through the selector (empty kernel name = no forcing), so the
+// kernel a cc-120 device auto-selects is the one checked on this machine. The
+// small tiles need >= 1024 tiles in flight, so those shapes run at batch 1024.
+TYPED_TEST(GemmTest, SelectorChosenSmallTilesMatchTiled16) {
+    using ScalarType = typename TestFixture::ScalarType;
+    const int small[][3] = {{16, 16, 64}, {8, 32, 64}, {17, 17, 64}, {29, 31, 40},
+                            {64, 64, 16}, {40, 69, 8}, {8, 8, 69}, {13, 7, 33}};
+    for (const auto& s : small) {
+        SCOPED_TRACE("m=" + std::to_string(s[0]) + " n=" + std::to_string(s[1]) +
+                     " k=" + std::to_string(s[2]) + " batch=1024");
+        RunForcedWideTransposedAgainstTiled16<ScalarType>(
+            *(this->ctx), "", s[0], s[1], s[2], Transpose::NoTrans, Transpose::NoTrans,
+            ScalarType(-1), 75, 3, 1024);
+    }
+    const int large[][3] = {{17, 17, 128}, {96, 70, 40}, {100, 100, 256}, {127, 64, 128}};
+    for (const auto& s : large) {
+        SCOPED_TRACE("m=" + std::to_string(s[0]) + " n=" + std::to_string(s[1]) +
+                     " k=" + std::to_string(s[2]));
+        RunForcedWideTransposedAgainstTiled16<ScalarType>(
+            *(this->ctx), "", s[0], s[1], s[2], Transpose::NoTrans, Transpose::NoTrans,
+            ScalarType(-1), 300, 3, 3);
+    }
+}
+
+// Saturating batch for the shared-memory staged tiles: every item holds the
+// same matrices, so every result must be bit-identical to item 0.
+TYPED_TEST(GemmTest, SmallWideSaturatingBatchIsBitIdentical) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr int m = 31, n = 29, k = 300, batch = 2048;
+    auto A1 = Matrix<ScalarType>::Random(m, k, false, 1);
+    auto B1 = Matrix<ScalarType>::Random(k, n, false, 1);
+    auto C1 = Matrix<ScalarType>::Random(m, n, false, 1);
+    Matrix<ScalarType> A(m, k, batch), B(k, n, batch);
+    auto a1 = A1.data(), b1 = B1.data(), c1 = C1.data();
+    for (const char* kname : {"32x32x16wide", "16x16x16wide"}) {
+        Matrix<ScalarType> C(m, n, batch);
+        auto a = A.data(), b = B.data(), c = C.data();
+        for (int item = 0; item < batch; ++item) {
+            for (int i = 0; i < m * k; ++i) a[item * m * k + i] = a1[i];
+            for (int i = 0; i < k * n; ++i) b[item * k * n + i] = b1[i];
+            for (int i = 0; i < m * n; ++i) c[item * m * n + i] = c1[i];
+        }
+        {
+            ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+            ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", kname);
+            (void)gemm(*(this->ctx), A.view(), B.view(), C.view(),
+                 {.alpha = ScalarType(2), .beta = ScalarType(-1)});
+        }
+        this->ctx->wait();
+        c = C.data();
+        int mismatched = 0;
+        for (int item = 1; item < batch; ++item) {
+            for (int i = 0; i < m * n; ++i) {
+                if (std::memcmp(&c[item * m * n + i], &c[i], sizeof(ScalarType)) != 0) {
+                    ++mismatched;
+                }
+            }
+        }
+        EXPECT_EQ(mismatched, 0) << kname;
+    }
+}
+
 // The small batched kernel (max(m, n, k) <= 64, real scalars; complex falls back to
 // Direct under the same name). Ragged edges in every bucket, both transposes of each
 // operand, beta = 0 (the C read is skipped) and beta != 0, and batch 67 so the last
@@ -2320,7 +2406,8 @@ batchlas::sycl_gemm::KernelVariant SelectSyclKernelVariantForTestT(int m,
                                                                    int k,
                                                                    Transpose transA,
                                                                    Transpose transB,
-                                                                   int batch = 64) {
+                                                                   int batch = 64,
+                                                                   int cuda_cc = 0) {
     const int a_rows = transA == Transpose::NoTrans ? m : k;
     const int a_cols = transA == Transpose::NoTrans ? k : m;
     const int b_rows = transB == Transpose::NoTrans ? k : n;
@@ -2331,7 +2418,7 @@ batchlas::sycl_gemm::KernelVariant SelectSyclKernelVariantForTestT(int m,
     Matrix<T> C(m, n, batch, 0);
 
     return batchlas::sycl_gemm::select_kernel_variant<T>(A.view(), B.view(), C.view(),
-                                                         transA, transB);
+                                                         transA, transB, cuda_cc);
 }
 
 }  // namespace
@@ -2427,6 +2514,71 @@ TEST(GemmDispatchPolicyTest, ComplexTransposedStaysOnTheVendorRoute) {
                                                          std::complex<double>>::preferred(native, s)))
                 << s.describe();
         }
+    }
+}
+
+// sm_120 selector windows, straddled on both sides of every bound, and the
+// same shapes at cc 89 and 0, which must keep the 4090 choice exactly.
+// evidence: docs/perf/blackwell.md#gemm-small-tiles
+TEST(GemmDispatchPolicyTest, Sm120SmallTilesAndTheirEdges) {
+    constexpr int kBw = 120;
+    auto f = [](int m, int n, int k, int cc, int batch = 1024) {
+        return SelectSyclKernelVariantForTestT<float>(m, n, k, kN, kN, batch, cc);
+    };
+    auto c = [](int m, int n, int k, int cc, int batch = 1024) {
+        return SelectSyclKernelVariantForTestT<std::complex<float>>(m, n, k, kN, kN, batch, cc);
+    };
+    auto z = [](int m, int n, int k, int cc) {
+        return SelectSyclKernelVariantForTestT<std::complex<double>>(m, n, k, kN, kN, 64, cc);
+    };
+    // float: k straddles 32 on the 16 tile, 32/33 on the 32 tile; m,n straddle 16/17, 32/33, 63/64, 127/128.
+    EXPECT_EQ(f(16, 16, 32, kBw), KernelVariant::Tiled16x16RegisterK16Wide);
+    EXPECT_EQ(f(16, 16, 16, kBw), KernelVariant::SmallBatched);
+    EXPECT_EQ(f(8, 32, 256, kBw), KernelVariant::Tiled16x16RegisterK16Wide);
+    EXPECT_EQ(f(17, 17, 256, kBw), KernelVariant::Tiled32x32RegisterK16Wide);
+    EXPECT_EQ(f(32, 32, 33, kBw), KernelVariant::Tiled32x32RegisterK16Wide);
+    EXPECT_EQ(f(32, 32, 32, kBw), KernelVariant::SmallBatched);
+    EXPECT_NE(f(33, 33, 256, kBw), KernelVariant::Tiled32x32RegisterK16Wide);
+    EXPECT_EQ(f(64, 64, 16, kBw), KernelVariant::Tiled64x64RegisterK16Wide);
+    EXPECT_EQ(f(127, 64, 128, kBw), KernelVariant::Tiled64x64RegisterK16Wide);
+    EXPECT_EQ(f(33, 33, 57, kBw), KernelVariant::Tiled64x64RegisterK16Wide);
+    EXPECT_EQ(f(33, 33, 56, kBw), KernelVariant::SmallBatched);
+    EXPECT_EQ(f(32, 64, 64, kBw), KernelVariant::Tiled32x32Register);
+    EXPECT_EQ(f(65, 65, 64, kBw), KernelVariant::Tiled128x128RegisterK8);
+    EXPECT_EQ(f(127, 127, 16, kBw), KernelVariant::Tiled128x128RegisterK8);
+    EXPECT_EQ(f(128, 128, 16, kBw), KernelVariant::Tiled128x128RegisterK8);
+    // complex<float>: 8^3 stays Direct, 16/32 tiles, the 64x64 gate ignores k but keeps its CTA floor.
+    EXPECT_EQ(c(8, 8, 8, kBw), KernelVariant::Direct);
+    EXPECT_EQ(c(8, 8, 9, kBw), KernelVariant::Tiled16x16RegisterK16Wide);
+    EXPECT_EQ(c(16, 16, 8, kBw), KernelVariant::Tiled16x16RegisterK16Wide);
+    EXPECT_EQ(c(8, 32, 64, kBw), KernelVariant::Tiled16x16RegisterK16Wide);
+    EXPECT_EQ(c(17, 17, 8, kBw), KernelVariant::Tiled32x32RegisterK16Wide);
+    EXPECT_EQ(c(32, 32, 256, kBw), KernelVariant::Tiled32x32RegisterK16Wide);
+    EXPECT_EQ(c(33, 33, 8, kBw, 64), KernelVariant::Tiled64x64RegisterK16Wide);
+    EXPECT_EQ(c(33, 33, 8, kBw, 63), KernelVariant::Direct);
+    EXPECT_EQ(c(1024, 1024, 8, kBw, 4), KernelVariant::Tiled64x64RegisterK16Wide);
+    // The small tiles need >= 1024 tiles in flight (they lose below, measured at 512).
+    EXPECT_EQ(f(16, 16, 256, kBw, 1024), KernelVariant::Tiled16x16RegisterK16Wide);
+    EXPECT_EQ(f(16, 16, 256, kBw, 1023), KernelVariant::Tiled16);
+    EXPECT_EQ(f(32, 32, 256, kBw, 1023), KernelVariant::Tiled32x32Register);
+    EXPECT_EQ(c(32, 32, 64, kBw, 1024), KernelVariant::Tiled32x32RegisterK16Wide);
+    EXPECT_EQ(c(32, 32, 64, kBw, 1023), KernelVariant::Tiled64x64RegisterK16Wide);
+    EXPECT_EQ(c(8, 32, 64, kBw, 512), KernelVariant::Tiled16x16RegisterK16Wide);
+    EXPECT_EQ(c(8, 32, 64, kBw, 511), KernelVariant::Direct);
+    // complex<double> is not re-measured: unchanged at cc 120.
+    EXPECT_EQ(z(16, 16, 16, kBw), KernelVariant::Direct);
+    EXPECT_EQ(z(64, 64, 16, kBw), KernelVariant::Direct);
+    for (int cc : {0, 89}) {
+        EXPECT_EQ(f(16, 16, 32, cc), KernelVariant::SmallBatched) << cc;
+        EXPECT_EQ(f(17, 17, 256, cc), KernelVariant::Tiled16) << cc;
+        EXPECT_EQ(f(64, 64, 16, cc), KernelVariant::Tiled16) << cc;
+        EXPECT_EQ(f(64, 64, 1024, cc), KernelVariant::Tiled64x64RegisterK16) << cc;
+        EXPECT_EQ(f(65, 65, 64, cc), KernelVariant::Tiled32x32Register) << cc;
+        EXPECT_EQ(f(33, 33, 57, cc), KernelVariant::SmallBatched) << cc;
+        EXPECT_EQ(c(8, 8, 9, cc), KernelVariant::Direct) << cc;
+        EXPECT_EQ(c(32, 32, 8, cc), KernelVariant::Direct) << cc;
+        EXPECT_EQ(c(32, 32, 256, cc), KernelVariant::Tiled64x64RegisterK16Wide) << cc;
+        EXPECT_EQ(c(1024, 1024, 8, cc, 4), KernelVariant::Tiled16) << cc;
     }
 }
 

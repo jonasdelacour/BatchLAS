@@ -18,6 +18,7 @@
 #include <string>
 #include <sycl/sycl.hpp>
 #include <batchlas/settings.hh>
+#include <batchlas/blas/dispatch/route.hh>
 
 namespace batchlas::sycl_gemm {
 
@@ -175,6 +176,10 @@ inline const char* kernel_trace_name(KernelVariant variant) {
         return "gemm_sycl_register_32x128_k16_tt";
     case KernelVariant::SmallBatched:
         return "gemm_sycl_small_batched";
+    case KernelVariant::Tiled32x32RegisterK16Wide:
+        return "gemm_sycl_register_32x32_k16_wide";
+    case KernelVariant::Tiled16x16RegisterK16Wide:
+        return "gemm_sycl_register_16x16_k16_wide";
     }
 
     return "gemm_sycl_unknown";
@@ -286,6 +291,10 @@ inline bool kernel_variant_matches_name(KernelVariant variant, const std::string
         return name == "register32x128k16tt" || name == "reg32x128k16tt" || name == "32x128x16tt";
     case KernelVariant::SmallBatched:
         return name == "small" || name == "smallbatched";
+    case KernelVariant::Tiled32x32RegisterK16Wide:
+        return name == "32x32x16wide";
+    case KernelVariant::Tiled16x16RegisterK16Wide:
+        return name == "16x16x16wide";
     }
 
     return false;
@@ -344,7 +353,9 @@ inline KernelVariant forced_kernel_variant() {
                                   KernelVariant::Tiled32x128RegisterK16,
                                   KernelVariant::Tiled32x128RegisterK16TN,
                                   KernelVariant::Tiled32x128RegisterK16TT,
-                                  KernelVariant::SmallBatched}) {
+                                  KernelVariant::SmallBatched,
+                                  KernelVariant::Tiled32x32RegisterK16Wide,
+                                  KernelVariant::Tiled16x16RegisterK16Wide}) {
         if (kernel_variant_matches_name(variant, name)) {
             return variant;
         }
@@ -465,6 +476,22 @@ Event launch_tiled(Queue& ctx,
         ctx, A, B, C, alpha, beta, kernel_trace_name);
 }
 
+template <typename T>
+Event launch_wide_nn_tile(Queue& ctx,
+                           KernelVariant variant,
+                           const MatrixView<T, MatrixFormat::Dense>& A,
+                           const MatrixView<T, MatrixFormat::Dense>& B,
+                           const MatrixView<T, MatrixFormat::Dense>& C,
+                           T alpha,
+                           T beta) {
+    // 64 threads each: a 2x2 thread tile at 16x16, 4x4 at 32x32.
+    const char* name = kernel_trace_name(variant);
+    if (variant == KernelVariant::Tiled16x16RegisterK16Wide) {
+        return launch_wide_transposed<T, WideTile{16, 16, 16, 2, 2}>(ctx, A, B, C, alpha, beta, name);
+    }
+    return launch_wide_transposed<T, WideTile{32, 32, 16, 4, 4}>(ctx, A, B, C, alpha, beta, name);
+}
+
 } // namespace
 
 template <typename T>
@@ -472,7 +499,8 @@ KernelVariant select_kernel_variant(const MatrixView<T, MatrixFormat::Dense>& A,
                                     const MatrixView<T, MatrixFormat::Dense>& B,
                                     const MatrixView<T, MatrixFormat::Dense>& C,
                                     Transpose transA,
-                                    Transpose transB) {
+                                    Transpose transB,
+                                    int cuda_cc) {
     static_cast<void>(C);
     if (has_forced_kernel_variant()) {
         return forced_kernel_variant();
@@ -517,7 +545,34 @@ KernelVariant select_kernel_variant(const MatrixView<T, MatrixFormat::Dense>& A,
         }
         return max_dim <= 32 ? KernelVariant::Direct : KernelVariant::Tiled16;
     }
+    [[maybe_unused]] const bool sm120 = dispatch::is_sm120_family(cuda_cc);
+    // m, n that fit the 16x16 tile, or a 32-long side against an <= 8 one,
+    // where 16x16 wastes less than 32x32 does.
+    // One 64-thread group per tile walks k serially, so below ~1024 tiles in
+    // flight the older kernels win (measured loss at 512, win or tie at 1024).
+    auto enough_tiles = [&](int t) {
+        constexpr int64_t kMinSmallTiles = 1024;
+        return static_cast<int64_t>((m + t - 1) / t) * ((n + t - 1) / t) * A.batch_size() >=
+            kMinSmallTiles;
+    };
+    [[maybe_unused]] const bool fits16 =
+        std::max(m, n) <= 16 || (std::min(m, n) <= 8 && std::max(m, n) <= 32);
+    [[maybe_unused]] const bool small16 = fits16 && enough_tiles(16);
+    [[maybe_unused]] const bool small32 = !fits16 && std::max(m, n) <= 32 && enough_tiles(32);
     if constexpr (std::is_same_v<T, float>) {
+        // sm_120 only: the 4090 windows below were never re-measured against
+        // these tiles, so cc 89 / 0 keep them. evidence: docs/perf/blackwell.md#gemm-small-tiles
+        if (sm120) {
+            const int mn_max = std::max(m, n);
+            if (small16 && k >= 32) return KernelVariant::Tiled16x16RegisterK16Wide;
+            if (small32 && k > 32) return KernelVariant::Tiled32x32RegisterK16Wide;
+            // Below 128 the 128x128 kernel only wins once BOTH sides spill a 64 tile;
+            // 33..56 cubes stay on the small tiled kernel.
+            if (mn_max < 128 && std::min(m, n) > 32 && max_dim > 56) {
+                return std::min(m, n) > 64 ? KernelVariant::Tiled128x128RegisterK8
+                                           : KernelVariant::Tiled64x64RegisterK16Wide;
+            }
+        }
         // 1.8-8x over Direct at batch 32768, and 2.1-3.5x over Tiled16 / 1.1x over the
         // 32x32 register tile on the squares above. evidence: docs/perf/gemm.md#the-small-batched-kernel
         if (max_dim <= 32) return KernelVariant::SmallBatched;
@@ -590,6 +645,14 @@ KernelVariant select_kernel_variant(const MatrixView<T, MatrixFormat::Dense>& A,
         const int64_t ctas = static_cast<int64_t>((m + 63) / 64) *
                              static_cast<int64_t>((n + 63) / 64) *
                              static_cast<int64_t>(A.batch_size());
+        // sm_120, complex<float>: small m, n get a tile cut to them, and the
+        // 64x64 gate stops counting k (small k was never the 4090's reason for
+        // it). evidence: docs/perf/blackwell.md#gemm-small-tiles
+        if (sm120 && std::is_same_v<Real, float>) {
+            if (small16 && max_dim > 8) return KernelVariant::Tiled16x16RegisterK16Wide;
+            if (small32) return KernelVariant::Tiled32x32RegisterK16Wide;
+            if (std::min(m, n) >= 32 && ctas >= kMinCtas) return KernelVariant::Tiled64x64RegisterK16Wide;
+        }
         if (min_dim >= 32 && ctas >= kMinCtas) {
             return KernelVariant::Tiled64x64RegisterK16Wide;
         }
@@ -625,7 +688,8 @@ Event gemm_custom(Queue& ctx,
         throw batchlas::invalid_argument("GEMM SYCL custom path received incompatible matrix dimensions");
     }
 
-    const KernelVariant variant = select_kernel_variant(A, B, C, transA, transB);
+    const KernelVariant variant = select_kernel_variant(A, B, C, transA, transB,
+                                                        ctx.device().cuda_compute_capability());
     if (is_experimental_kernel_variant(variant) && !experimental_kernel_variants_enabled()) {
         throw batchlas::unsupported(
             "Requested experimental GEMM SYCL kernel variant without BATCHLAS_GEMM_EXPERIMENTAL enabled");
@@ -849,6 +913,13 @@ Event gemm_custom(Queue& ctx,
             }
         }
         return launch_direct(ctx, A, B, C, alpha, beta, transA, transB);
+    // NN only, like Tiled64x64RegisterK16Wide; forceable, so fall back otherwise.
+    case KernelVariant::Tiled32x32RegisterK16Wide:
+    case KernelVariant::Tiled16x16RegisterK16Wide:
+        if (transA != Transpose::NoTrans || transB != Transpose::NoTrans) {
+            return launch_tiled<T, 16>(ctx, A, B, C, alpha, beta, transA, transB);
+        }
+        return launch_wide_nn_tile(ctx, variant, A, B, C, alpha, beta);
     }
 
     return ctx.get_event();
@@ -858,22 +929,22 @@ template KernelVariant select_kernel_variant<float>(const MatrixView<float, Matr
                                                     const MatrixView<float, MatrixFormat::Dense>&,
                                                     const MatrixView<float, MatrixFormat::Dense>&,
                                                     Transpose,
-                                                    Transpose);
+                                                    Transpose, int);
 template KernelVariant select_kernel_variant<double>(const MatrixView<double, MatrixFormat::Dense>&,
                                                      const MatrixView<double, MatrixFormat::Dense>&,
                                                      const MatrixView<double, MatrixFormat::Dense>&,
                                                      Transpose,
-                                                     Transpose);
+                                                     Transpose, int);
 template KernelVariant select_kernel_variant<std::complex<float>>(const MatrixView<std::complex<float>, MatrixFormat::Dense>&,
                                                                   const MatrixView<std::complex<float>, MatrixFormat::Dense>&,
                                                                   const MatrixView<std::complex<float>, MatrixFormat::Dense>&,
                                                                   Transpose,
-                                                                  Transpose);
+                                                                  Transpose, int);
 template KernelVariant select_kernel_variant<std::complex<double>>(const MatrixView<std::complex<double>, MatrixFormat::Dense>&,
                                                                    const MatrixView<std::complex<double>, MatrixFormat::Dense>&,
                                                                    const MatrixView<std::complex<double>, MatrixFormat::Dense>&,
                                                                    Transpose,
-                                                                   Transpose);
+                                                                   Transpose, int);
 
 template Event gemm_custom<float>(Queue&,
                                   const MatrixView<float, MatrixFormat::Dense>&,

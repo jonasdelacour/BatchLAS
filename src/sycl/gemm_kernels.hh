@@ -62,6 +62,10 @@ enum class KernelVariant {
     Tiled32x128RegisterK16TT,
     // max(m, n, k) <= 32, real scalars: several matrices per work-group, coalesced.
     SmallBatched,
+    // NN wide-scalar tiles cut to small m, n (the 64x64 tile is 3/4 padding at
+    // 32x32). Every scalar. evidence: docs/perf/blackwell.md#gemm-small-tiles
+    Tiled32x32RegisterK16Wide,
+    Tiled16x16RegisterK16Wide,
 };
 
 // Which wide-scalar TRANSPOSED tile a shape fits: the matching macro-tile
@@ -100,7 +104,8 @@ BATCHLAS_INTERNAL_API KernelVariant select_kernel_variant(const MatrixView<T, Ma
                                                           const MatrixView<T, MatrixFormat::Dense>& B,
                                                           const MatrixView<T, MatrixFormat::Dense>& C,
                                                           Transpose transA,
-                                                          Transpose transB);
+                                                          Transpose transB,
+                                                          int cuda_cc = 0);
 
 template <typename T>
 Event gemm_custom(Queue& ctx,
