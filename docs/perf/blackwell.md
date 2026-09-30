@@ -709,9 +709,22 @@ cfloat 257x8 (0.73) and 260x8 (0.75) win but sit between the skinny rows and the
 they were left to the vendor because 257x6 (0.95) and 260x5 (1.14) do not, and a
 per-n edge was not worth the extra clause.
 
-The same window holds at small batch (Auto = native, new, ms): b256 float 40x32 0.074 vs
-vendor 0.318 (BASE Auto took the vendor), 64x8 0.015 vs 0.041; b2048 float 64x32 0.27
-vs 0.50.
+The window is keyed on shape alone, and it holds at small batch as well. Final build,
+BASE vs new, ms: native is identical to BASE at b256 and b1024 (the batch gates) except
+where the skinny leg runs (b1024 float 400x8 0.061 -> 0.037, cfloat 256x8 0.058 -> 0.041),
+and Auto moves from the vendor to native:
+
+| cell | b256 vendor | BASE Auto | new Auto | b1024 vendor | BASE Auto | new Auto |
+|---|---|---|---|---|---|---|
+| float 40x32 | 0.319 | 0.319 | 0.073 | 0.320 | 0.320 | 0.161 |
+| float 64x32 | 0.379 | 0.379 | 0.078 | 0.382 | 0.382 | 0.173 |
+| float 128x16 | 0.136 | 0.136 | 0.041 | 0.137 | 0.137 | 0.088 |
+| float 400x8 | 0.094 | 0.094 | 0.030 | 0.096 | 0.096 | 0.037 |
+| cfloat 256x8 | 0.085 | 0.085 | 0.029 | 0.086 | 0.086 | 0.041 |
+| cfloat 64x32 | | | 0.096 | 0.499 | 0.499 | 0.219 |
+
+Routes checked with `BATCHLAS_COVERAGE_OUT` (Auto, `reached` rows): cfloat 400x5, float
+64x8 and float 40x32 at b256 are `native,cta`; cfloat 290x4 is `vendor,auto`.
 
 ### geqrf skinny panels: result
 
@@ -754,19 +767,23 @@ geomean time/vendor:
 | float (49 cells) | 0.846 | 0.537 | 1.038 | 0.544 |
 | cfloat (57 cells) | 0.867 | 0.652 | 0.904 | 0.622 |
 
-(new Auto here predates the cfloat band; with it, cfloat 300x8 / 384x8 / 512x6 / 512x8 Auto
-move from 1.00 to their native 0.60-0.67.) Worst new Auto cell: 1.02 (vendor-routed
+(new Auto here predates the cfloat band. Re-measured on the final build, Auto/vendor:
+300x4 0.89, 300x8 0.66, 384x8 0.61, 400x5 0.84, 512x6 0.64, 512x8 0.48; 290x4 stays
+vendor-routed at 1.00.) Worst new Auto cell: 1.02 (vendor-routed
 noise). Native cells slower than BASE by more than 2%: none in the final build (the first
 cut's cfloat 384x8 1.07 is fixed by the 256-row limit, and cfloat 257x2..384x2 by the
 8-column limit).
 
-Consumers: `syev` two-stage runs geqrf on m x 32 sy2sb panels at batch 64-512. syev
-BASE vs new (width rule then un-gated, native, ms, 4 alternating reps): float 1024 b256
-529.7 vs 557.7, float 1024 b128 291.8 vs 310.9, float 896 b512 727.4 vs 727.0, float 512
-b512 two_stage 160.5 vs 162.1, cfloat 512 b128 two_stage 130.5 vs 129.5, cfloat 1024 b64
-265.4 vs 265.3. The float 1024 rows are within this box's 10% cross-process drift but
-were one-sided; the batch gate, which came from the small-batch geqrf grid, returns
-those panels to BASE widths. `orgqr`, `ormqr` and `gesvd` do not call geqrf's leaves.
+Consumers: `syev` two-stage runs geqrf on m x 32 sy2sb panels at batch 64-512, and
+`ortho` (Householder) on tall panels. syev_benchmark, BASE vs final build, native, ms, 4
+alternating reps: float 1024 b256 494.3 / 493.8, float 1024 b128 283.9 / 283.0, float 896
+b512 648.2 / 647.4, float 512 b512 two_stage 151.4 / 150.6, cfloat 512 b128 two_stage
+129.9 / 128.7, cfloat 1024 b64 264.8 / 264.1. (An earlier cut without the batch gates
+read float 1024 b256 529.7 / 557.7 and b128 291.8 / 310.9; the gates removed that.)
+`sytrd_sy2sb_tests`, `syev_two_stage_tests` and `orgqr_tests` pass; `ortho_tests` passes
+through OrthoMatrixTest/6 and crashes in /7 (complex<double>, the pre-existing cuBLAS
+Zgemv segfault on this box; no double path changed). `orgqr`, `ormqr` and `gesvd` do not
+call geqrf's leaves.
 
 Break sweep (each break alone, `geqrf_tests` filtered to the CTA, blocked, facade and new
 suites; red set per break, float = /4, cfloat = /6):
