@@ -249,6 +249,7 @@ function(batchlas_add_test_target test_name)
     # LAPACKE: these two call LAPACKE_* directly for their reference results.
     if(BATCHLAS_HAS_HOST_BACKEND AND test_name MATCHES "^(gesvd_tests|sytrd_sb2st_tests|geqrf_tests|getrf_tests)$")
         target_link_libraries(${test_name} PRIVATE ${BATCHLAS_NETLIB_LINK_LIBRARIES})
+        target_include_directories(${test_name} SYSTEM PRIVATE ${BATCHLAS_NETLIB_INCLUDE_DIRS})
     endif()
     # geqrf_tests compares tau ELEMENTWISE against LAPACKE. NOT because the residual and
     # orthogonality probes are blind to tau -- that was the original rationale and it is
