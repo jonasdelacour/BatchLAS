@@ -155,6 +155,79 @@ function(batchlas_safe_subgroups_per_workgroup architecture device_type out_var)
     set(${out_var} "${_safe_subgroups}" PARENT_SCOPE)
 endfunction()
 
+# DPC++ names an NVIDIA device's architecture only if its SYCL table lists it, and that
+# table ends at sm_90a (intel/llvm sycl tip, 2026-09: no sm_100/sm_120). sycl-ls then
+# prints "Architecture: unknown", and a Blackwell card fell into the unrecognised-GPU
+# rows of the tables above and out of -fsycl-targets. The device's "Version" line still
+# carries the compute capability, so recover nvidia_gpu_sm_<cc> from it.
+function(batchlas_normalize_sycl_ls_architectures sycl_ls_text out_var)
+    string(REPLACE "\r\n" "\n" _text "${sycl_ls_text}")
+    string(REPLACE "\n" ";" _lines "${_text}")
+    set(_out "")
+    set(_cc "")
+    set(_vendor "")
+    foreach(_line IN LISTS _lines)
+        string(STRIP "${_line}" _trimmed)
+        if(_trimmed MATCHES "^(Platform|Device) \\[#")
+            set(_cc "")
+            set(_vendor "")
+        elseif(_trimmed MATCHES "^Version[ ]*:[ ]*([0-9]+)\\.([0-9]+)$")
+            set(_cc "${CMAKE_MATCH_1}${CMAKE_MATCH_2}")
+        elseif(_trimmed MATCHES "^Vendor[ ]*:[ ]*(.*)$")
+            set(_vendor "${CMAKE_MATCH_1}")
+        elseif(_trimmed STREQUAL "Architecture: unknown" AND _cc AND _vendor MATCHES "NVIDIA")
+            string(REPLACE "unknown" "nvidia_gpu_sm_${_cc}" _line "${_line}")
+        endif()
+        string(APPEND _out "${_line}\n")
+    endforeach()
+    set(${out_var} "${_out}" PARENT_SCOPE)
+endfunction()
+
+# An nvidia_gpu_sm_<N> the compiler has no -fsycl-targets alias for is spelled as the
+# generic triple plus a backend architecture, which gives the same codegen (-target-cpu,
+# __SYCL_CUDA_ARCH__ and the PTX .target are all sm_<N>). The bare triple would silently
+# build sm_75. The triple carries one architecture, so two unaliased ones cannot coexist.
+# The option is one SHELL: item because CMake de-duplicates options, and the FTZ link
+# option repeats -Xsycl-target-backend=nvptx64-nvidia-cuda.
+function(batchlas_rewrite_unaliased_nvidia_targets targets unaliased out_targets out_option)
+    list(LENGTH unaliased _count)
+    if(_count GREATER 1)
+        message(FATAL_ERROR
+            "This compiler has no -fsycl-targets alias for ${unaliased}, and the generic "
+            "nvptx64-nvidia-cuda target carries a single architecture. Build for one of "
+            "them with -DBATCHLAS_NVIDIA_ARCH=<sm_N>.")
+    endif()
+    set(_targets "")
+    set(_option "")
+    foreach(_target IN LISTS targets)
+        list(FIND unaliased "${_target}" _idx)
+        if(_idx EQUAL -1)
+            list(APPEND _targets "${_target}")
+        else()
+            string(REGEX REPLACE "^nvidia_gpu_" "" _sm "${_target}")
+            list(APPEND _targets "nvptx64-nvidia-cuda")
+            set(_option "SHELL:-Xsycl-target-backend=nvptx64-nvidia-cuda --cuda-gpu-arch=${_sm}")
+        endif()
+    endforeach()
+    set(${out_targets} "${_targets}" PARENT_SCOPE)
+    set(${out_option} "${_option}" PARENT_SCOPE)
+endfunction()
+
+# Asks the driver alone (-###, nothing is compiled) whether it knows the alias.
+function(batchlas_nvidia_target_has_alias target out_var)
+    set(_args -fsycl "-fsycl-targets=${target}" "-###" -x c++ -c /dev/null -o /dev/null)
+    if(BATCHLAS_CUDA_PATH)
+        list(APPEND _args "--cuda-path=${BATCHLAS_CUDA_PATH}")
+    endif()
+    execute_process(COMMAND "${CMAKE_CXX_COMPILER}" ${_args}
+        OUTPUT_QUIET ERROR_VARIABLE _err RESULT_VARIABLE _rc)
+    if(_err MATCHES "SYCL target is invalid")
+        set(${out_var} FALSE PARENT_SCOPE)
+    else()
+        set(${out_var} TRUE PARENT_SCOPE)
+    endif()
+endfunction()
+
 function(detect_sycl_gpu_architectures)
     if(NOT SYCL_LS)
         message(STATUS "sycl-ls not found, skipping automatic GPU target detection")
@@ -184,6 +257,7 @@ function(detect_sycl_gpu_architectures)
         message(WARNING "Failed to execute sycl-ls --verbose: ${SYCL_LS_ERROR}")
         return()
     endif()
+    batchlas_normalize_sycl_ls_architectures("${SYCL_LS_OUTPUT}" SYCL_LS_OUTPUT)
 
     set(_gpu_arch_flags "")
     set(_compile_options "")
@@ -335,6 +409,7 @@ function(collect_sycl_device_limit_info)
         return()
     endif()
 
+    batchlas_normalize_sycl_ls_architectures("${SYCL_LS_DEVICE_LIMITS_OUTPUT}" SYCL_LS_DEVICE_LIMITS_OUTPUT)
     string(REPLACE "\r\n" "\n" SYCL_LS_DEVICE_LIMITS_OUTPUT "${SYCL_LS_DEVICE_LIMITS_OUTPUT}")
     string(REPLACE "\r" "\n" SYCL_LS_DEVICE_LIMITS_OUTPUT "${SYCL_LS_DEVICE_LIMITS_OUTPUT}")
     string(REPLACE "\n" ";" _sycl_ls_lines "${SYCL_LS_DEVICE_LIMITS_OUTPUT}")
@@ -544,6 +619,26 @@ if(BATCHLAS_CUDA_ENABLED)
 endif()
 
 list(REMOVE_DUPLICATES BATCHLAS_SYCL_TARGETS)
+set(_unaliased_nvidia_targets "")
+foreach(_target IN LISTS BATCHLAS_SYCL_TARGETS)
+    if(_target MATCHES "^nvidia_gpu_sm_[0-9]+a?$")
+        batchlas_nvidia_target_has_alias("${_target}" _has_alias)
+        if(NOT _has_alias)
+            list(APPEND _unaliased_nvidia_targets "${_target}")
+        endif()
+    endif()
+endforeach()
+set(BATCHLAS_SYCL_BACKEND_OPTION "")
+set(BATCHLAS_SYCL_BACKEND_OPTION_STRING "")
+if(_unaliased_nvidia_targets)
+    batchlas_rewrite_unaliased_nvidia_targets("${BATCHLAS_SYCL_TARGETS}" "${_unaliased_nvidia_targets}"
+        BATCHLAS_SYCL_TARGETS BATCHLAS_SYCL_BACKEND_OPTION)
+    message(STATUS "No -fsycl-targets alias for ${_unaliased_nvidia_targets} in this compiler; "
+        "using nvptx64-nvidia-cuda with ${BATCHLAS_SYCL_BACKEND_OPTION}")
+    list(APPEND BATCHLAS_SYCL_EXTRA_CXX_OPTIONS "${BATCHLAS_SYCL_BACKEND_OPTION}")
+    list(APPEND BATCHLAS_SYCL_EXTRA_LINK_OPTIONS "${BATCHLAS_SYCL_BACKEND_OPTION}")
+    string(REGEX REPLACE "^SHELL:" "" BATCHLAS_SYCL_BACKEND_OPTION_STRING "${BATCHLAS_SYCL_BACKEND_OPTION}")
+endif()
 set(BATCHLAS_SYCL_TARGETS_STRING "")
 set(BATCHLAS_SYCL_TARGETS_NO_CPU "${BATCHLAS_SYCL_TARGETS}")
 list(FILTER BATCHLAS_SYCL_TARGETS_NO_CPU EXCLUDE REGEX "cpu|spir64")
