@@ -84,12 +84,16 @@ constexpr std::size_t kGeqrfBytesPerItem = 128;
 constexpr std::size_t kGeqrfPackBytes = 4096;
 constexpr int kGeqrfBytesRuleMinCols = 8;
 constexpr int kGeqrfBytesRuleMaxRows = 512;
+// Narrower groups only pay once the batch fills the device (float 40x32: 2.2x slower at
+// batch 512, 1.16x at 1024, 0.76x at 2048).
+constexpr int kGeqrfBytesRuleMinBatch = 2048;
 
 // Measured for float and cfloat only; fp64 keeps the ladder on every device.
 template <typename T>
-bool geqrf_bytes_rule(const Device& dev) {
+bool geqrf_bytes_rule(const Device& dev, int batch) {
     constexpr bool measured = std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>;
-    return measured && dispatch::is_sm120_family(dev.cuda_compute_capability());
+    return measured && batch >= kGeqrfBytesRuleMinBatch &&
+           dispatch::is_sm120_family(dev.cuda_compute_capability());
 }
 
 template <typename T>
@@ -505,7 +509,7 @@ Event geqrf_panel_factorize(Queue& ctx,
                                             geqrf_panel_wg(n, max_wg));
     }
 
-    const bool bytes_rule = geqrf_bytes_rule<T>(dev);
+    const bool bytes_rule = geqrf_bytes_rule<T>(dev, batch);
     const auto p =
         geqrf_leaf_launch<T>(m, n, resident::occupancy_budget(budget), max_wg, bytes_rule);
     if (p.packed) {
@@ -521,13 +525,13 @@ Event geqrf_panel_factorize(Queue& ctx,
 // Test hook: low 16 bits G (panels per work-group), high 16 the work-group width;
 // 0 when the panel is not resident. See geqrf_native.hh.
 template <typename T>
-unsigned geqrf_cta_debug_launch(Queue& ctx, int m, int n) {
+unsigned geqrf_cta_debug_launch(Queue& ctx, int m, int n, int batch) {
     const auto dev = ctx.device();
     const std::size_t budget = resident::device_slm_budget(
         dev.get_property(DeviceProperty::LOCAL_MEM_SIZE));
     if (!geqrf_leaf_fits<T>(m, n, budget)) return 0u;
     const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
-    const bool bytes_rule = geqrf_bytes_rule<T>(dev);
+    const bool bytes_rule = geqrf_bytes_rule<T>(dev, batch);
     const auto p =
         geqrf_leaf_launch<T>(m, n, resident::occupancy_budget(budget), max_wg, bytes_rule);
     return (static_cast<unsigned>(p.wg) << 16) | static_cast<unsigned>(p.G);
@@ -537,22 +541,22 @@ unsigned geqrf_cta_debug_launch(Queue& ctx, int m, int n) {
 enum class GeqrfCtaLeg { Resident, Skinny };
 
 template <typename T>
-GeqrfCtaLeg geqrf_cta_leg(Queue& ctx, int m, int n) {
+GeqrfCtaLeg geqrf_cta_leg(Queue& ctx, int m, int n, int batch) {
     const char* s = batchlas::settings().selection.geqrf_leaf.get();
     if (s != nullptr && std::strcmp(s, "resident") == 0) return GeqrfCtaLeg::Resident;
     if (s != nullptr && std::strcmp(s, "skinny") == 0) return GeqrfCtaLeg::Skinny;
-    return geqrf_skinny_preferred<T>(ctx.device().cuda_compute_capability(), m, n)
+    return geqrf_skinny_preferred<T>(ctx.device().cuda_compute_capability(), m, n, batch)
                ? GeqrfCtaLeg::Skinny
                : GeqrfCtaLeg::Resident;
 }
 
 template <typename T>
-unsigned geqrf_cta_debug_leg(Queue& ctx, int m, int n) {
+unsigned geqrf_cta_debug_leg(Queue& ctx, int m, int n, int batch) {
     const auto dev = ctx.device();
     const std::size_t budget = resident::device_slm_budget(
         dev.get_property(DeviceProperty::LOCAL_MEM_SIZE));
     if (!geqrf_cta_fits<T>(m, n, budget)) return 0u;
-    return geqrf_cta_leg<T>(ctx, m, n) == GeqrfCtaLeg::Skinny ? 2u : 1u;
+    return geqrf_cta_leg<T>(ctx, m, n, batch) == GeqrfCtaLeg::Skinny ? 2u : 1u;
 }
 
 // The CTA tier's direct entry point. Every gate supports() applies to the CTA arm is
@@ -614,7 +618,7 @@ Event geqrf_cta_dispatch(Queue& ctx,
     // evidence: docs/perf/qr.md#the-panel-height-window
     // The skinny leg is a DIFFERENT KERNEL behind the same route; a pin that does not fit
     // throws inside the launcher rather than falling back.
-    if (geqrf_cta_leg<T>(ctx, m, n) == GeqrfCtaLeg::Skinny) {
+    if (geqrf_cta_leg<T>(ctx, m, n, batch) == GeqrfCtaLeg::Skinny) {
         return geqrf_skinny_launch<T>(ctx, A.data_ptr(), A.ld(), A.stride(), m, n, batch,
                                       tau.data(), static_cast<int>(k), 0);
     }
@@ -639,8 +643,8 @@ Event geqrf_cta_dispatch(Queue& ctx,
     template int64_t geqrf_cta_max_elems<T>();                                                \
     template bool geqrf_cta_fits<T>(int, int, std::size_t, int);                              \
     template bool geqrf_leaf_fits<T>(int, int, std::size_t);                                  \
-    template unsigned geqrf_cta_debug_launch<T>(Queue&, int, int);                            \
-    template unsigned geqrf_cta_debug_leg<T>(Queue&, int, int);                               \
+    template unsigned geqrf_cta_debug_launch<T>(Queue&, int, int, int);                       \
+    template unsigned geqrf_cta_debug_leg<T>(Queue&, int, int, int);                          \
     template std::size_t geqrf_cta_buffer_size<T>(Queue&,                                     \
                                                   const MatrixView<T, MatrixFormat::Dense>&); \
     template int geqrf_panel_reg_cols<T>();                                                   \

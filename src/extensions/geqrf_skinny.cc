@@ -127,9 +127,25 @@ bool geqrf_skinny_fits(int m, int n) {
     }
 }
 
+// Bytes of A one lane holds (row slots x column bucket). From 512 B the leg needs a batch
+// of 1024: below it the resident leaf wins (cfloat 160x8..256x8 and float 400x8 1.1-1.4x at
+// batch 256-512, 0.52-0.77x at 1024). evidence: docs/perf/blackwell.md#geqrf-the-skinny-register-leg
+constexpr std::size_t kGeqrfSkinnyHeavyLaneBytes = 512;
+constexpr int kGeqrfSkinnyHeavyMinBatch = 1024;
+
 template <typename T>
-bool geqrf_skinny_preferred(int cuda_cc, int m, int n) {
-    return geqrf_skinny_fits<T>(m, n) && dispatch::geqrf_skinny_window<T>(cuda_cc, m, n);
+constexpr std::size_t geqrf_skinny_lane_bytes(int m, int n) {
+    const int rp = m <= 32 ? 1 : m <= 64 ? 2 : m <= 128 ? 4 : m <= 256 ? 8 : 16;
+    return static_cast<std::size_t>(rp) * (n <= 4 ? 4u : 8u) * sizeof(T);
+}
+
+template <typename T>
+bool geqrf_skinny_preferred(int cuda_cc, int m, int n, int batch) {
+    if (!geqrf_skinny_fits<T>(m, n) || !dispatch::geqrf_skinny_window<T>(cuda_cc, m, n)) {
+        return false;
+    }
+    return geqrf_skinny_lane_bytes<T>(m, n) < kGeqrfSkinnyHeavyLaneBytes ||
+           batch >= kGeqrfSkinnyHeavyMinBatch;
 }
 
 template <typename T>
@@ -158,7 +174,7 @@ Event geqrf_skinny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int m, int n
 
 #define BATCHLAS_GEQRF_SKINNY_INSTANTIATE(T)                                                  \
     template bool geqrf_skinny_fits<T>(int, int);                                             \
-    template bool geqrf_skinny_preferred<T>(int, int, int);                                   \
+    template bool geqrf_skinny_preferred<T>(int, int, int, int);                              \
     template Event geqrf_skinny_launch<T>(Queue&, T*, int, int, int, int, int, T*, int, int);
 
 BATCHLAS_GEQRF_SKINNY_INSTANTIATE(float)

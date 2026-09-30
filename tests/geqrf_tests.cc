@@ -2832,7 +2832,7 @@ TYPED_TEST(GeqrfTest, SkinnyWindowIsSm120OnlyAndPicksOneTier) {
                 ASSERT_LE(npref, 1) << "two native tiers preferred at cc=" << cc << " " << m << "x" << n;
                 if (win) {
                     ASSERT_TRUE(RT::preferred(cta, s)) << "window shape not routed to CTA " << m << "x" << n;
-                    ASSERT_TRUE(sycl_geqrf::geqrf_skinny_preferred<T>(cc, m, n))
+                    ASSERT_TRUE(sycl_geqrf::geqrf_skinny_preferred<T>(cc, m, n, 1024))
                         << "the launcher and preferred() disagree at " << m << "x" << n;
                 }
             }
@@ -2859,6 +2859,15 @@ TYPED_TEST(GeqrfTest, SkinnyWindowIsSm120OnlyAndPicksOneTier) {
         EXPECT_FALSE(dispatch::geqrf_skinny_window<T>(89, 64, 8));
         EXPECT_FALSE(RT::preferred(cta, shape(89, 64, 8))) << "the 4090 window must not move";
         EXPECT_FALSE(RT::preferred(cta, shape(0, 64, 8)));
+        // The leg's batch gate, both ways: heavy lanes (>= 512 B) need 1024, light ones never.
+        using sycl_geqrf::geqrf_skinny_preferred;
+        const int heavy_m = kCf ? 160 : 400;
+        EXPECT_FALSE(geqrf_skinny_preferred<T>(120, heavy_m, 8, 1023)) << heavy_m << "x8 b1023";
+        EXPECT_TRUE(geqrf_skinny_preferred<T>(120, heavy_m, 8, 1024)) << heavy_m << "x8 b1024";
+        EXPECT_TRUE(geqrf_skinny_preferred<T>(120, 128, 8, 1)) << "128x8 is light";
+        EXPECT_TRUE(geqrf_skinny_preferred<T>(120, 256, 4, 1)) << "256x4 is light";
+        EXPECT_EQ(geqrf_skinny_preferred<T>(120, 256, 8, 1), kF) << "256x8: heavy only for cfloat";
+        EXPECT_FALSE(geqrf_skinny_preferred<T>(89, 64, 8, 32768)) << "the 4090 leg must not move";
     }
 }
 
@@ -2895,8 +2904,8 @@ TYPED_TEST(GeqrfTest, FacadeReachesTheSkinnyLeg) {
     this->ctx->wait();
     {
         auto p = make_problem<T>(m, n, batch, 4242u);
-        const bool want = sycl_geqrf::geqrf_skinny_preferred<T>(cc, m, n);
-        EXPECT_EQ(sycl_geqrf::geqrf_cta_debug_leg<T>(*this->ctx, m, n), want ? 2u : 1u);
+        const bool want = sycl_geqrf::geqrf_skinny_preferred<T>(cc, m, n, batch);
+        EXPECT_EQ(sycl_geqrf::geqrf_cta_debug_leg<T>(*this->ctx, m, n, batch), want ? 2u : 1u);
         run_facade(p);
         same(p, want ? sk : rs, "native:cta policy leg");
         check_one(p, "skinny/facade");
@@ -2904,14 +2913,14 @@ TYPED_TEST(GeqrfTest, FacadeReachesTheSkinnyLeg) {
     {
         ScopedEnvVar leaf("BATCHLAS_GEQRF_LEAF", "skinny");
         auto p = make_problem<T>(m, n, batch, 4242u);
-        EXPECT_EQ(sycl_geqrf::geqrf_cta_debug_leg<T>(*this->ctx, m, n), 2u);
+        EXPECT_EQ(sycl_geqrf::geqrf_cta_debug_leg<T>(*this->ctx, m, n, batch), 2u);
         run_facade(p);
         same(p, sk, "LEAF=skinny");
     }
     {
         ScopedEnvVar leaf("BATCHLAS_GEQRF_LEAF", "resident");
         auto p = make_problem<T>(m, n, batch, 4242u);
-        EXPECT_EQ(sycl_geqrf::geqrf_cta_debug_leg<T>(*this->ctx, m, n), 1u);
+        EXPECT_EQ(sycl_geqrf::geqrf_cta_debug_leg<T>(*this->ctx, m, n, batch), 1u);
         run_facade(p);
         same(p, rs, "LEAF=resident");
     }
@@ -2924,9 +2933,13 @@ TYPED_TEST(GeqrfTest, Sm120LeafWidthFollowsTileBytes) {
     using T = typename TestFixture::T;
     const bool sm120 = dispatch::is_sm120_family(this->ctx->device().cuda_compute_capability()) &&
                        (std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>);
-    auto launch = [&](int m, int n) { return sycl_geqrf::geqrf_cta_debug_launch<T>(*this->ctx, m, n); };
-    auto wg = [&](int m, int n) { return int(launch(m, n) >> 16); };
-    auto G = [&](int m, int n) { return int(launch(m, n) & 0xffffu); };
+    // The rule is batch-gated (kGeqrfBytesRuleMinBatch = 2048): straddle it both ways.
+    const int kGate = 2048;
+    auto launch = [&](int m, int n, int b) {
+        return sycl_geqrf::geqrf_cta_debug_launch<T>(*this->ctx, m, n, b);
+    };
+    auto wg = [&](int m, int n, int b = 32768) { return int(launch(m, n, b) >> 16); };
+    auto G = [&](int m, int n, int b = 32768) { return int(launch(m, n, b) & 0xffffu); };
     const int packm = int(4096 / (8 * sizeof(T)));   // the tallest n = 8 panel of <= 4 KiB
     if (sm120) {
         EXPECT_GT(G(packm, 8), 1) << packm << "x8 is 4 KiB and must pack";
@@ -2935,6 +2948,9 @@ TYPED_TEST(GeqrfTest, Sm120LeafWidthFollowsTileBytes) {
         EXPECT_EQ(wg(m32k, 32), 256) << "32 KiB tiles keep the full ladder";
         EXPECT_EQ(wg(m32k / 2, 32), 128) << "16 KiB is 128 work-items";
         EXPECT_LE(wg(2 * packm, 8), 64) << "8 KiB at 128 B an item is 64 work-items";
+        EXPECT_EQ(wg(m32k / 2, 32, kGate), 128) << "the gate admits batch 2048";
+        EXPECT_EQ(wg(m32k / 2, 32, kGate - 1), 256) << "below the gate the ladder is kept";
+        EXPECT_EQ(G(packm, 8, kGate - 1), 1) << "below the gate a 4 KiB panel does not pack";
     } else {
         EXPECT_EQ(G(64, 8), 1) << "the 4090 column ladder must not move";
         EXPECT_EQ(wg(64, 8), 256);
@@ -2943,22 +2959,21 @@ TYPED_TEST(GeqrfTest, Sm120LeafWidthFollowsTileBytes) {
     for (const SkinnyShape& s : shapes) {
         if (!this->cta_fits(s.m, s.n)) continue;
         ScopedEnvVar leaf("BATCHLAS_GEQRF_LEAF", "resident");
-        auto big = make_problem<T>(s.m, s.n, 1024, 1u);
-        auto solo = make_problem<T>(s.m, s.n, 1, 1u);
+        // Saturating and at the gate, so the batch runs the rule's width; every item must be
+        // bit-identical to item 0 (a solo run would take the ladder's width).
+        auto big = make_problem<T>(s.m, s.n, kGate, 1u);
         for (int b = 0; b < big.batch; ++b) fill_item(big, b, 99u, 1.0);
-        fill_item(solo, 0, 99u, 1.0);
         UnifiedVector<std::byte> ws(1);
         (void)sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, view_of(big), big.tau.to_span(), ws.to_span());
-        (void)sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, view_of(solo), solo.tau.to_span(), ws.to_span());
         this->ctx->wait();
-        for (int b = 0; b < big.batch; ++b) {
+        for (int b = 1; b < big.batch; ++b) {
             for (int j = 0; j < s.n; ++j)
                 for (int i = 0; i < s.m; ++i)
                     ASSERT_TRUE(same_or_both_nan(big.buf[size_t(b) * big.stride + size_t(j) * big.ld + i],
-                                                 solo.buf[size_t(j) * solo.ld + i]))
+                                                 big.buf[size_t(j) * big.ld + i]))
                         << "item " << b << " differs at (" << i << "," << j << ") " << s.m << "x" << s.n;
         }
-        auto p = make_problem<T>(s.m, s.n, 5, 616u + unsigned(s.m));
+        auto p = make_problem<T>(s.m, s.n, kGate, 616u + unsigned(s.m));   // at the gate: the rule runs
         (void)sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, view_of(p), p.tau.to_span(), ws.to_span());
         this->ctx->wait();
         check_one(p, "cta/width-rule");
