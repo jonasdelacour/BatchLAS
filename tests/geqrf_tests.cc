@@ -2821,7 +2821,9 @@ TYPED_TEST(GeqrfTest, SkinnyWindowIsSm120OnlyAndPicksOneTier) {
                 if (cc != 120 || !typed || n > 8 || m == n) {
                     ASSERT_FALSE(win) << "cc=" << cc << " " << m << "x" << n;
                 }
-                if (cc != 120 || !typed || n <= 8 || m == n) {
+                const bool cf_band = std::is_same_v<T, std::complex<float>> && n >= 4 &&
+                                     n <= 8 && m >= 300 && m <= 512;
+                if (cc != 120 || !typed || (n <= 8 && !cf_band) || m == n) {
                     ASSERT_FALSE(tall) << "cc=" << cc << " " << m << "x" << n;
                 }
                 if (tall) ASSERT_TRUE(RT::preferred(cta, s)) << "tall " << m << "x" << n;
@@ -2854,6 +2856,14 @@ TYPED_TEST(GeqrfTest, SkinnyWindowIsSm120OnlyAndPicksOneTier) {
         EXPECT_TRUE(dispatch::geqrf_sm120_tall_window<T>(120, 32, 16));
         EXPECT_TRUE(dispatch::geqrf_sm120_tall_window<T>(120, 64, 9));
         EXPECT_FALSE(dispatch::geqrf_sm120_tall_window<T>(120, 513, 16)) << "never measured";
+        // cfloat's n = 4..8 band above the skinny rows, bracketed in m and n.
+        EXPECT_EQ(dispatch::geqrf_sm120_tall_window<T>(120, 300, 4), kCf) << "300x4: 0.90";
+        EXPECT_EQ(dispatch::geqrf_sm120_tall_window<T>(120, 512, 8), kCf) << "512x8: 0.48";
+        EXPECT_FALSE(dispatch::geqrf_sm120_tall_window<T>(120, 290, 4)) << "290x4: 0.91";
+        EXPECT_FALSE(dispatch::geqrf_sm120_tall_window<T>(120, 260, 6)) << "260x6: 0.98";
+        EXPECT_FALSE(dispatch::geqrf_sm120_tall_window<T>(120, 300, 3)) << "300x3: 1.10";
+        EXPECT_FALSE(dispatch::geqrf_sm120_tall_window<T>(120, 513, 8)) << "never measured";
+        EXPECT_TRUE(RT::preferred(cta, shape(120, 400, 5))) << "400x5: cfloat band 0.84, float skinny";
         EXPECT_FALSE(dispatch::geqrf_sm120_tall_window<T>(89, 64, 32));
         EXPECT_FALSE(RT::preferred(cta, shape(89, 64, 32))) << "the 4090 window must not move";
         EXPECT_FALSE(dispatch::geqrf_skinny_window<T>(89, 64, 8));

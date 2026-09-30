@@ -131,7 +131,8 @@ Event geqrf_panel_factorize(Queue& ctx,
                             T* tau_ptr, int tau_batch_stride, int tau_offset,
                             bool* used_resident_out = nullptr,
                             GeqrfPanelLeaf leaf = GeqrfPanelLeaf::Auto,
-                            GeqrfPanelLeaf* leaf_used_out = nullptr);
+                            GeqrfPanelLeaf* leaf_used_out = nullptr,
+                            bool width_rule = false);   // the CTA tier's sm_120 width rule
 
 // The CTA TIER's predicate, occupancy-scaled: capacity, this gate and the launcher's are ONE.
 template <typename T>

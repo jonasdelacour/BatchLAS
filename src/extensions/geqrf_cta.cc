@@ -83,7 +83,7 @@ inline bool geqrf_packable(int m, int n) { return m <= 32 && n <= 32; }
 constexpr std::size_t kGeqrfBytesPerItem = 128;
 constexpr std::size_t kGeqrfPackBytes = 4096;
 constexpr int kGeqrfBytesRuleMinCols = 8;
-constexpr int kGeqrfBytesRuleMaxRows = 512;
+constexpr int kGeqrfBytesRuleMaxRows = 256;
 // Narrower groups only pay once the batch fills the device (float 40x32: 2.2x slower at
 // batch 512, 1.16x at 1024, 0.76x at 2048).
 constexpr int kGeqrfBytesRuleMinBatch = 2048;
@@ -117,7 +117,7 @@ template <typename T>
 GeqrfLeafLaunch geqrf_leaf_launch(int m, int n, std::size_t wg_slm_budget, int max_wg,
                                   bool bytes_rule) {
     // Only where it was measured a win: below 8 columns it starves tall panels (cfloat
-    // 257x2..384x2 1.2-1.4x slower), and no panel taller than 512 was measured.
+    // 257x2..384x2 1.2-1.4x slower), and above 256 rows it is mixed (cfloat 384x8 1.07x).
     bytes_rule = bytes_rule && n >= kGeqrfBytesRuleMinCols && m <= kGeqrfBytesRuleMaxRows;
     GeqrfLeafLaunch p;
     const bool packable = bytes_rule ? geqrf_slm_bytes<T>(m, n) <= kGeqrfPackBytes
@@ -462,7 +462,8 @@ Event geqrf_panel_factorize(Queue& ctx,
                             T* tau_ptr, int tau_batch_stride, int tau_offset,
                             bool* used_resident_out,
                             GeqrfPanelLeaf leaf,
-                            GeqrfPanelLeaf* leaf_used_out) {
+                            GeqrfPanelLeaf* leaf_used_out,
+                            bool width_rule) {
     const auto dev = ctx.device();
     const std::size_t budget = resident::device_slm_budget(
         dev.get_property(DeviceProperty::LOCAL_MEM_SIZE));
@@ -509,7 +510,7 @@ Event geqrf_panel_factorize(Queue& ctx,
                                             geqrf_panel_wg(n, max_wg));
     }
 
-    const bool bytes_rule = geqrf_bytes_rule<T>(dev, batch);
+    const bool bytes_rule = width_rule && geqrf_bytes_rule<T>(dev, batch);
     const auto p =
         geqrf_leaf_launch<T>(m, n, resident::occupancy_budget(budget), max_wg, bytes_rule);
     if (p.packed) {
@@ -625,7 +626,7 @@ Event geqrf_cta_dispatch(Queue& ctx,
     bool resident = false;
     Event e = geqrf_panel_factorize<T>(ctx, A.data_ptr(), A.ld(), A.stride(), m, n, batch,
                                        tau.data(), static_cast<int>(k), 0, &resident,
-                                       GeqrfPanelLeaf::Resident);
+                                       GeqrfPanelLeaf::Resident, nullptr, /*width_rule=*/true);
     if (!resident) {
         // Unreachable; asserted because a silent tier swap passes a pinned-route test.
         throw batchlas::internal_error(
@@ -653,7 +654,8 @@ Event geqrf_cta_dispatch(Queue& ctx,
     template bool geqrf_panel_reg_preferred<T>(int, int, int);                                \
     template unsigned geqrf_panel_reg_debug_launch<T>(Queue&, int, int);                      \
     template Event geqrf_panel_factorize<T>(Queue&, T*, int, int, int, int, int, T*, int,     \
-                                            int, bool*, GeqrfPanelLeaf, GeqrfPanelLeaf*);     \
+                                            int, bool*, GeqrfPanelLeaf, GeqrfPanelLeaf*,      \
+                                            bool);                                            \
     template Event geqrf_cta_dispatch<T>(Queue&, const MatrixView<T, MatrixFormat::Dense>&,   \
                                          Span<T>, Span<std::byte>);
 

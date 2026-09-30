@@ -45,12 +45,15 @@ constexpr bool geqrf_skinny_window(int cuda_cc, int64_t m, int64_t n) {
     }
 }
 
-// sm_120 only: tall panels below the order floor, native under the tile-bytes width rule.
-// evidence: docs/perf/blackwell.md#geqrf-the-sm120-tall-window
+// sm_120 only: tall panels below the order floor, plus cfloat's 300..512-row n = 4..8 band
+// above the skinny leg's rows. evidence: docs/perf/blackwell.md#geqrf-the-sm120-tall-window
 template <typename T>
 constexpr bool geqrf_sm120_tall_window(int cuda_cc, int64_t m, int64_t n) {
     if (!is_sm120_family(cuda_cc)) return false;
     if constexpr (std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>) {
+        if (std::is_same_v<T, std::complex<float>> && n >= 4 && n <= 8 && m >= 300 && m <= 512) {
+            return true;
+        }
         return n >= 9 && m > n && m >= 32 && m <= 512;
     } else {
         return false;
