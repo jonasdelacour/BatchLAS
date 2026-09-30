@@ -1,9 +1,16 @@
 #include <gtest/gtest.h>
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
+#include <batchlas/backend_config.h>
+#include <batchlas/blas/dispatch/route.hh>
 
 #include <cstdlib>
+#include <set>
 #include <string>
+#include <vector>
+#ifdef BATCHLAS_UTIL_TESTS_HAVE_CUDART
+#include <cuda_runtime_api.h>
+#endif
 
 TEST(DeviceTest, DefaultConstruction) {
     Device device;
@@ -231,4 +238,59 @@ TEST(EnvHelpers, TruthyAndFalsyAreNotComplements) {
     EXPECT_TRUE(batchlas::env_falsy("0"));
     EXPECT_TRUE(batchlas::env_falsy("off"));
     EXPECT_FALSE(batchlas::env_falsy("False"));  // exact spellings only
+}
+
+// Per-architecture routing keys on this value, and 0 must mean "not CUDA" so every
+// other device keeps the as-measured (sm_89) windows.
+// evidence: docs/perf/blackwell.md#device-call-guard
+TEST(DeviceTest, CudaComputeCapabilityIsZeroOffCuda) {
+    for (const Device& d : Device::get_devices(DeviceType::CPU)) {
+        EXPECT_EQ(d.cuda_compute_capability(), 0) << d.get_name();
+    }
+    for (const Device& d : Device::get_devices(DeviceType::GPU)) {
+        if (d.get_vendor() != Vendor::NVIDIA) EXPECT_EQ(d.cuda_compute_capability(), 0) << d.get_name();
+    }
+}
+
+TEST(DeviceTest, CudaComputeCapabilityOnNvidiaGpu) {
+    std::vector<Device> nv;
+    for (const Device& d : Device::get_devices(DeviceType::GPU)) {
+        if (d.get_vendor() == Vendor::NVIDIA) nv.push_back(d);
+    }
+    if (nv.empty()) GTEST_SKIP() << "no NVIDIA GPU visible";
+#ifdef BATCHLAS_UTIL_TESTS_HAVE_CUDART
+    // Independent oracle: the CUDA runtime, not the SYCL version string we parse.
+    std::set<int> cudart_cc;
+    int count = 0;
+    ASSERT_EQ(cudaGetDeviceCount(&count), cudaSuccess);
+    for (int i = 0; i < count; ++i) {
+        int major = 0, minor = 0;
+        ASSERT_EQ(cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, i), cudaSuccess);
+        ASSERT_EQ(cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, i), cudaSuccess);
+        cudart_cc.insert(major * 10 + minor);
+    }
+#endif
+    for (const Device& d : nv) {
+        const int cc = d.cuda_compute_capability();
+#if BATCHLAS_HAS_CUDA_BACKEND
+        EXPECT_GE(cc, 50) << d.get_name();
+        EXPECT_LT(cc, 1000) << d.get_name();
+#endif
+        EXPECT_EQ(d.cuda_compute_capability(), cc) << "memoized value changed";
+#ifdef BATCHLAS_UTIL_TESTS_HAVE_CUDART
+        EXPECT_EQ(cudart_cc.count(cc), 1u) << d.get_name() << " reported " << cc;
+#endif
+    }
+}
+
+// Straddle both edges of the family window: sm_120 and sm_121 are in; sm_89,
+// sm_100 (datacenter Blackwell) and a future sm_130 are out.
+TEST(DeviceTest, Sm120FamilyWindow) {
+    using batchlas::dispatch::is_sm120_family;
+    static_assert(!is_sm120_family(0) && !is_sm120_family(89) && !is_sm120_family(100));
+    EXPECT_FALSE(is_sm120_family(119));
+    EXPECT_TRUE(is_sm120_family(120));
+    EXPECT_TRUE(is_sm120_family(121));
+    EXPECT_TRUE(is_sm120_family(129));
+    EXPECT_FALSE(is_sm120_family(130));
 }

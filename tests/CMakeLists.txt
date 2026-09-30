@@ -279,6 +279,13 @@ function(batchlas_add_test_target test_name)
        AND test_name MATCHES "^(gemm_tests|syr2k_tests|trmm_tests)$")
         target_link_libraries(${test_name} PRIVATE CUDA::cudart)
     endif()
+    # util_device_queue_tests checks Device::cuda_compute_capability() against the
+    # CUDA runtime's own answer, an oracle independent of the SYCL string it parses.
+    if(BATCHLAS_HAS_CUDA_BACKEND AND TARGET CUDA::cudart
+       AND test_name STREQUAL "util_device_queue_tests")
+        target_link_libraries(${test_name} PRIVATE CUDA::cudart)
+        target_compile_definitions(${test_name} PRIVATE BATCHLAS_UTIL_TESTS_HAVE_CUDART=1)
+    endif()
     # options_api_tests reads options.hh back to check that no backend-deducing
     # overload was added without its pointer check -- a rule no runtime test can
     # enforce for an entry point that does not exist yet.
