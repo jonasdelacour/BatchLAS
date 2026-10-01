@@ -185,6 +185,26 @@ straddle capacity limits in `supports()`.
   `t = t_launch·launches + waves·(max(f_g·s_flop, b_g·s_byte) + t_step·steps_g)`. Every
   group of a wave runs its own recurrence. This supersedes the formula in §3.
 - **Cross-validation is leave-one-n-out** within each (dtype, uplo).
+- **sm_120 fit on the dense forced-route sweep fails the gate on max only.** Held-out,
+  545 paired cells:
+
+  | | geomean | p95 | max |
+  |---|---|---|---|
+  | today's windows (sm_89 windows on sm_120) | 1.074 | 1.50 | 2.25 |
+  | #133 hand-tuned sm_120 windows | 1.070 | 1.47 | 2.25 |
+  | fitted cost model | 1.058 | 1.37 | 3.19 |
+  | nearest-measured lookup table (reference) | 1.037 | 1.30 | 3.05 |
+
+  - The per-route fits are poor: CTA, LPanel and Blocked have rms log errors of 0.27–0.64,
+    and the fitter drives their flop or byte terms to 0.
+  - Both the model and the table lose most at capacity edges, Tiny's buckets at n=16 and 32.
+  - sm_89 with the LPanel borrow still fails: LPanel's byte term is 0 on sm_120, and a zero
+    term is never borrowed.
+- **Direction (user, 2026-10-01): keep improving the cost model** rather than switching to a
+  lookup table.
+  - The next step is a per-route diagnosis (Tiny+CTA, LPanel, Blocked+vendor) of why the
+    analytic skeleton misses each kernel's scaling.
+  - The changes to plan features and the formula are then implemented in one place.
 - **Data:** existing campaigns time only the route the native walk picked, plus the vendor.
   A fit needs every supported route timed on the same cell, so benchviz gains a forced-route
   sweep mode with arms `route:<origin>:<algo>`.
