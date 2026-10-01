@@ -4554,7 +4554,7 @@ TYPED_TEST(LuTest, GetrsTinyTierTieBreakIsExhaustiveAndGatedOnSm120) {
     }
 
     // The composition's sm_120 window after the trsm fix: nrhs 16 and order 32 in, 15
-    // and 31 out; cc 0/89 keep float nrhs >= 64 only. evidence: docs/perf/blackwell.md#getrs-windows-after-the-trsm-fix
+    // and 31 out, and cfloat needs order 96 below nrhs 32; cc 0/89 keep float nrhs >= 64. evidence: docs/perf/blackwell.md#getrs-windows-after-the-trsm-fix
     constexpr bool kSingle = std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>;
     struct Cmp { int64_t n, nrhs, batch; bool f, cf; };
     for (const Cmp& c : {Cmp{32, 16, 4096, true, false}, Cmp{31, 16, 4096, false, false},

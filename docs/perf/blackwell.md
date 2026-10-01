@@ -535,6 +535,8 @@ Vendor-present window, added on sm_120 only: float nrhs <= 8 at n >= 256 (the
 brackets are n=128 nrhs 8 at 0.63 vs 0.57 ms, a loss, and n=256 at 0.47 vs 0.66, a
 win); cfloat nrhs <= 4 at n >= 128 (n=64 0.93 vs 0.85 loses, n=128 0.69 vs 0.86 wins)
 and nrhs <= 8 at n >= 512 (n=256 1.38 vs 0.93 loses, n=512 1.20 vs 1.40 wins).
+These edges were later moved to float n >= 192 and cfloat n >= 96 / n >= 384, see
+[getrs windows after the trsm fix](#getrs-windows-after-the-trsm-fix).
 
 ### LU getrs fused NR 1
 
@@ -710,12 +712,108 @@ Still losing in the native walk (Auto sends these to the vendor): getrs at n >= 
 nrhs=16 (float 1.32-1.46, cfloat 1.33-2.01) and gesv cfloat n64 nrhs16 (1.33). These
 are the blocked composition, which is TrsmCta-bound (the LU-2 work-group ladder). The
 getrs vendor-present composition windows for nrhs >= 16 at n > 32 (LU-3) are left for
-re-bracketing after the trsm package lands. getrs cfloat n64 nrhs4 in the native walk
+re-bracketing after the trsm package lands ([done](#getrs-windows-after-the-trsm-fix)). getrs cfloat n64 nrhs4 in the native walk
 is 1.05.
 
 ### getrs windows after the trsm fix
 
-LU-3. Measurement in progress; the bracket tables land in the next commit.
+LU-3, measured after the trsm V1 ladder cap and the sub-group Left kernel landed
+(worktree-blackwell-tuning @ d776064b). Same machine, GPU 3, same build flags.
+`factor_bench getrs` with arms vendor, auto, `native:blocked`, `native:cta` (nrhs <= 8)
+and `native:tiny` (n <= 32) interleaved in one process, 7 in-process reps. One warm pass,
+then 3 passes with the arm order reversed on alternate passes. Values are medians. The
+"speedup" column is the median of the in-process vendor/arm ratios, so above 1 means
+BatchLAS is faster. Saturated batch is the benchviz rule (about 3 GiB of matrices,
+capped at 32768). The grid is n in {32,48,64,96,128,192,256,384,512} by nrhs in
+{1,2,4,8,12,16,24,32,64,128}, both types. Batch ladders (128 to 16384) were added at
+every edge. The edge cells were re-run as two-arm processes (vendor plus one native
+arm, 5 passes). Those agree with the multi-arm runs to within 0.02, so arm position
+does not move these ratios. Raw data: `~/.claude/jobs/698ef31c/tmp/wp3-lu3/`
+(`grid.csv`, `edge.csv`, `mid.csv`, `lo.csv`, `conf.csv`, `gesv.csv`).
+
+**Composition (`native:blocked`), vendor-present window.** It now beats cuBLAS at every
+saturated nrhs >= 16 cell for n = 32..512 in both types. The weakest cells are cfloat
+n128 nrhs16 at 1.04 and n256 at 1.16, and float n256 at 1.37. nrhs <= 15 is erratic and
+loses at several orders. The composition's cost is not monotone in nrhs: float n512
+takes 2.04 ms at nrhs 13 and 1.09 ms at nrhs 14. The cfloat cells n = 48..64 with
+nrhs 16..24 dip below the vendor mid-ladder, at batch 4096-8192. Brackets, ms:
+
+| cell | vendor | blocked | speedup | side |
+|---|---|---|---|---|
+| float n32 nrhs16 b32768 | 1.270 | 0.613 | 2.07 | in (order edge) |
+| float n48 nrhs16 b4096 | 0.205 | 0.140 | 1.46 | in |
+| float n128 nrhs16 b4096 | 0.994 | 0.704 | 1.42 | in |
+| float n512 nrhs16 b603 | 1.865 | 1.084 | 1.72 | in |
+| float n256 nrhs15 b2374 | 1.669 | 1.713 | 0.97 | out |
+| float n512 nrhs13 b605 | 1.659 | 2.037 | 0.81 | out |
+| float n256 nrhs12 b2390 | 1.529 | 1.587 | 0.96 | out |
+| float n512 nrhs12 b605 | 1.588 | 1.920 | 0.83 | out |
+| cfloat n48 nrhs32 b4096 | 0.625 | 0.520 | 1.19 | in |
+| cfloat n48 nrhs32 b128 | 0.189 | 0.071 | 2.67 | in |
+| cfloat n96 nrhs16 b4096 | 0.944 | 0.883 | 1.07 | in (order edge) |
+| cfloat n96 nrhs16 b128 | 0.238 | 0.121 | 1.96 | in |
+| cfloat n128 nrhs16 b4096 | 1.473 | 1.400 | 1.05 | in |
+| cfloat n256 nrhs16 b1024 | 1.323 | 1.121 | 1.18 | in |
+| cfloat n48 nrhs16 b4096 | 0.299 | 0.330 | 0.90 | out |
+| cfloat n48 nrhs16 b8192 | 0.660 | 0.717 | 0.92 | out |
+| cfloat n48 nrhs24 b4096 | 0.462 | 0.507 | 0.90 | out |
+| cfloat n64 nrhs16 b4096 | 0.466 | 0.467 | 1.01 | out (tie) |
+| cfloat n64 nrhs15 b17236 | 2.927 | 3.018 | 0.97 | out |
+| cfloat n128 nrhs15 b4592 | 1.644 | 2.039 | 0.80 | out |
+| cfloat n512 nrhs15 b301 | 1.910 | 3.099 | 0.62 | out |
+
+At saturation the cfloat n48 nrhs16 cell wins (5.09 vs 2.63 ms), so the cfloat n < 96
+exclusion is a batch-ladder loss and not a saturation one. The batch floor stays at 128.
+Batch 128 wins in every probed cell, and smaller batches were not timed. Below order 32
+the composition also beats cuBLAS (float n8..24 nrhs 16/64 1.41-3.47, cfloat
+1.36-3.51), but the tiny tier is as fast or faster at every one of those cells and is first in the
+walk, so the clause stops at 32. The cfloat cells at 1.04-1.07 sit inside the 5% band,
+where AGENTS.md section 10 asks for 14-16 reps. They were reproduced in 3 multi-arm
+and 5 two-arm passes, so they are ties or small wins, not losses.
+
+**Fused tier (`native:cta`), vendor-present window.** The trsm fix does not touch this
+kernel. The grid adds orders the earlier brackets did not have (96, 192, 384), and
+the batch ladders move three edges down:
+
+| cell | vendor | cta | speedup | side |
+|---|---|---|---|---|
+| float n192 nrhs8 b4096 | 1.144 | 1.089 | 1.05 | in |
+| float n192 nrhs8 b256 | 0.281 | 0.172 | 1.63 | in |
+| float n192 nrhs5 b4096 | 1.127 | 0.999 | 1.13 | in |
+| float n128 nrhs8 b4096 | 0.578 | 0.623 | 0.92 | out |
+| float n96 nrhs8 b4096 | 0.403 | 0.404 | 0.99 | out |
+| cfloat n96 nrhs4 b4096 | 0.542 | 0.436 | 1.24 | in |
+| cfloat n96 nrhs4 b256 | 0.164 | 0.109 | 1.51 | in |
+| cfloat n96 nrhs3 b4096 | 0.542 | 0.407 | 1.33 | in |
+| cfloat n64 nrhs4 b4096 | 0.224 | 0.236 | 0.95 | out |
+| cfloat n64 nrhs4 b18950 | 0.974 | 1.057 | 0.92 | out |
+| cfloat n384 nrhs8 b539 | 1.277 | 0.908 | 1.40 | in |
+| cfloat n384 nrhs8 b256 | 0.983 | 0.801 | 1.23 | in |
+| cfloat n384 nrhs5 b541 | 1.369 | 0.818 | 1.68 | in |
+| cfloat n256 nrhs8 b1206 | 1.046 | 1.429 | 0.73 | out |
+| cfloat n256 nrhs6 b1211 | 1.121 | 1.294 | 0.87 | out |
+
+float nrhs 5..8 wins at saturation from n=48, but between n=48 and n=128 it loses at
+batch 4096. That is the same mid-ladder shape the earlier n=128 bracket recorded.
+
+**Native tier (`native_tier_preferred`): unchanged.** The LU-3 diagnosis proposed CTA only
+for n >= 32 with nrhs <= 4, which would send nrhs 5..8 to the composition. Over the 119
+measured cells with n > 32 and nrhs <= 8, CTA is faster in 111. The composition wins by
+more than 5% only at float n48..64 nrhs 6..8 with batch >= 16384 (1.07-1.12) and at
+cfloat n128 nrhs8 (CTA 1.77 ms, composition 1.31). At cfloat nrhs 8 the CTA times are
+1.61 / 1.77 / 1.22 / 1.30 ms at n = 112 / 128 / 144 / 160. So n=128 is a cost anomaly in
+the fused kernel, not a tier boundary, and both tiers lose to the vendor there anyway.
+Elsewhere the composition is far behind at nrhs 8, for example cfloat n384 CTA 0.90 ms
+against composition 2.29 ms.
+
+**Effect on Auto** (saturated grid, n = 48..512, geomean vendor/Auto): float
+1.63 -> 2.04 (25 cells move off the vendor, the smallest gain 1.08), cfloat
+1.15 -> 1.55 (38 cells, the smallest gain 1.04). No cell moves onto a losing route.
+gesv follows, because its composition calls the routed getrs. At saturated batch, gesv
+Auto vs the all-vendor composition goes cfloat n128 nrhs16 1.24, n512 nrhs16 2.03, float
+n48 nrhs16 1.66 and n512 nrhs64 2.94. With getrs pinned to the composition, cfloat n48
+nrhs16 would reach 1.29. The window leaves that to the vendor because of the mid-ladder
+loss above. `cuda_cc` 0 / 89 and fp64 route exactly as before.
 
 ## trsm
 
