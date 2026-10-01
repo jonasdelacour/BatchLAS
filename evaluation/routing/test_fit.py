@@ -25,7 +25,7 @@ PLAN_DUMP = os.environ.get("POTRF_PLAN_DUMP", os.path.join(fit.REPO, "build/test
 TRUTH = {
     "native:tiny": (3e-6, 2e-9, 2e-9, 4e-8),
     "native:cta": (4e-6, 4.5e-10, 1.5e-9, 6e-8),
-    "native:lpanel": (5e-6, 2e-10, 2e-9, 3e-8),
+    "native:lpanel": (5e-6, 2.6e-9, 1e-9, 3e-8),
     "native:blocked": (6e-6, 6e-11, 1e-9, 2e-8),
     "vendor": (4e-5, 2e-13, 6e-12, 2e-7),
 }
@@ -62,6 +62,32 @@ class FitterRecovery(unittest.TestCase):
         const, stats = fit.fit_constants(data)
         self.assertIn("s_per_byte", stats["inactive"])
         self.assertEqual(const[2], 0.0)
+
+
+class FallbackNeverBorrowsAnUnseenTerm(unittest.TestCase):
+    CFG = {"facts": {"fp64_rate": 1 / 64}, "borrows": []}
+
+    @staticmethod
+    def entry(c, inactive):
+        return {"constants": list(c), "fit": {"inactive": list(inactive)}, "fallback": None}
+
+    def test_inactive_term_comes_from_the_next_source(self):
+        # other_uplo never saw the flop term; the precision partner did.
+        m = {("native:cta", "double", "U"): self.entry((1e-6, 0.0, 2e-9, 3e-8), ["s_per_flop"]),
+             ("native:cta", "float", "L"): self.entry((9e-6, 5e-11, 7e-9, 8e-8), [])}
+        e = fit.fallback(m, "native:cta", "double", "L", self.CFG)
+        self.assertEqual(e["constants"], [1e-6, 5e-11 * 64, 2e-9, 3e-8])
+        self.assertEqual(e["fallback"]["terms"]["s_per_flop"]["rule"], "precision_scaled")
+        self.assertEqual(e["fallback"]["terms"]["t_launch"]["rule"], "other_uplo")
+
+    def test_a_term_no_source_saw_makes_the_key_unfittable(self):
+        m = {("native:cta", "cfloat", "L"): self.entry((6e-5, 0.0, 0.0, 1e-6),
+                                                       ["s_per_flop", "s_per_byte"])}
+        e = fit.fallback(m, "native:cta", "cdouble", "L", self.CFG)
+        self.assertEqual(e["unfittable"], ["s_per_flop", "s_per_byte"])
+        model = fit.complete(m, self.CFG, unfit := {})
+        self.assertNotIn(("native:cta", "cdouble", "L"), model)
+        self.assertIn(("native:cta", "cdouble", "L"), unfit)
 
 
 @unittest.skipUnless(os.path.exists(PLAN_DUMP), f"needs {PLAN_DUMP}")
