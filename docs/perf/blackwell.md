@@ -49,11 +49,15 @@ grid). Cells are batchlas time / vendor time with batchlas pinned to its native 
 | trsm | float | 49 | 1.51 | 0.52 | 27 | 0 |
 | **all** | | 1005 | 0.512 | 0.291 | 294 | 25 |
 
-Remaining losers (> 1.1, 25 cells):
+Remaining losers (> 1.1): 25 cells in this campaign, 21 after the spmm fix below.
 
+- cfloat spmm n=16384: 1.11-1.13 in the campaign. The precise fp model caused it (the flag
+  alone takes 5.51 -> 6.49 ms), and the pair-load fix in
+  [#cfloat-spmm-under-the-precise-fp-model](#cfloat-spmm-under-the-precise-fp-model), merged
+  after the campaign, makes all four cells 0.90-0.91 of cuSPARSE (re-measured on the
+  merged build, GPU 0, 3 alternating reps: nrhs 16/32/64/128 at 5.45/5.37/5.31/5.28 ms
+  against 6.05/5.92/5.84/5.87 ms). The cfloat spmm row in the table above predates the fix.
 - cfloat gemm m=n=128..1024: 1.10-1.18 (gemm-7, the large-tile residual; not attempted).
-- cfloat spmm n=16384: 1.11-1.13. A precise-fp-model regression (the flag alone takes
-  5.51 -> 6.49 ms on the main harness; cuSPARSE 5.76). See the spmm subsection if present.
 - cfloat potrf n=512 (Blocked) 1.48 and n=256 (LPanel) 1.16: the complex trailing update.
   Under Auto, n=256 goes to the vendor.
 - syev cfloat n=1024 b64 1.50 (Auto already ships cuSOLVER) and float n=1024 b128
