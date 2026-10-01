@@ -166,6 +166,25 @@ straddle capacity limits in `supports()`.
   - CTA beats the vendor for cdouble n=20..28;
   - Blocked beats the vendor at n>256, batch 1024;
   - the CTA/LPanel edge moves with batch.
+- **First sm_89 fit (2026-10-01) lost to the hand windows.**
+  - Held-out regret: geomean 1.053 / p95 1.20 / max 3.59, against the windows' 1.014 / 1.14 /
+    1.49.
+  - Cause: four free constants per route × dtype × uplo, fitted on 5–8 rows taken at one batch
+    size (cdouble CTA's t_launch came out at 0.33 ms).
+- **Shipping is gated per profile.** A profile's model replaces that profile's windows only
+  when its held-out regret beats the windows on the same paired cells, on both geomean and
+  p95, and its max is no worse than 1.25.
+- **No pooling across dtypes, but a minimum amount of data.**
+  - A (route, dtype, uplo) key is fitted only from at least 10 rows covering at least 2 batch
+    sizes.
+  - Otherwise the key borrows through the fallback rules: other uplo, then precision partner
+    (s_per_flop scaled by FP64:FP32), then complexity partner.
+- **sm_89 LPanel borrows its constants from the sm_120 sweep,** scaled by device facts. The
+  sm_89 archive has no LPanel rows on current kernels.
+- **Serial term inside the wave:**
+  `t = t_launch·launches + waves·(max(f_g·s_flop, b_g·s_byte) + t_step·steps_g)`. Every
+  group of a wave runs its own recurrence. This supersedes the formula in §3.
+- **Cross-validation is leave-one-n-out** within each (dtype, uplo).
 - **Data:** existing campaigns time only the route the native walk picked, plus the vendor.
   A fit needs every supported route timed on the same cell, so benchviz gains a forced-route
   sweep mode with arms `route:<origin>:<algo>`.
