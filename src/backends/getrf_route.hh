@@ -3,6 +3,7 @@
 // GETRF shape builder. Must not gain src/queue.hh or <sycl/sycl.hpp>: the vendor-free
 // facade includes this header. evidence: docs/perf/lu.md#getrf-window-evidence
 
+#include <batchlas/blas/dispatch/device_facts.hh>
 #include <batchlas/blas/dispatch/route_env.hh>
 #include <batchlas/blas/dispatch/route_getrf.hh>
 #include <batchlas/blas/enums.hh>
@@ -36,7 +37,7 @@ inline std::optional<dispatch::GetrfShape> getrf_op_shape(
     s.k = A.rows();
     s.batch = A.batch_size();
 
-    s.is_gpu = (ctx.device().type == DeviceType::GPU);
+    batchlas::dispatch::fill_device_facts(s, ctx);
 
     // Enumerated: the MAX_SUB_GROUP_SIZE property is wrong in both directions.
     s.has_sg32 = ctx.device().supports_sub_group_size(32);

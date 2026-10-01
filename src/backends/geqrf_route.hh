@@ -4,6 +4,7 @@
 // a plain struct. Do not add src/queue.hh or <sycl/sycl.hpp> -- the vendor-free facade
 // includes this header. evidence: docs/perf/qr.md#route-arms
 
+#include <batchlas/blas/dispatch/device_facts.hh>
 #include <batchlas/blas/dispatch/route_env.hh>
 #include <batchlas/blas/dispatch/route_geqrf.hh>
 #include <batchlas/blas/enums.hh>
@@ -38,7 +39,7 @@ inline std::optional<dispatch::GeqrfShape> geqrf_op_shape(
     s.k = std::min<int64_t>(A.rows(), A.cols());
     s.batch = A.batch_size();
 
-    s.is_gpu = (ctx.device().type == DeviceType::GPU);
+    batchlas::dispatch::fill_device_facts(s, ctx);
 
     s.has_sg32 = ctx.device().supports_sub_group_size(32);
 

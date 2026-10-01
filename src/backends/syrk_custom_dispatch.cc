@@ -207,7 +207,7 @@ Event syrk_cuda_custom(Queue& ctx,
     // level3_coverage.hh for why these four ops cannot simply use
     // dispatch::resolve_route.
     const auto rec = [&](dispatch::Route taken, bool native_supported) {
-        detail::record_level3_route(dispatch::Op::syrk, taken,
+        detail::record_level3_route(ctx, dispatch::Op::syrk, taken,
                                     C.rows(), C.cols(),
                                     transA == Transpose::NoTrans ? A.cols() : A.rows(),
                                     A.batch_size(), native_supported,

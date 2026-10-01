@@ -28,6 +28,7 @@ set(TEST_TARGETS
     resident_capacity_tests
     route_gemm_equivalence_tests
     settings_tests
+    routing_profile_tests
     error_model_tests
     linalg_layer_tests
     gemm_tests
@@ -149,7 +150,7 @@ set(BATCHLAS_TEST_LABELS_util
     sg_partition_tests util_span_tests util_vector_tests util_device_queue_tests
     mempool_tests matrix_tests matrix_view_tests minibench_cli_tests
     backend_dispatch_tests options_api_tests route_vocabulary_tests
-    route_gemm_equivalence_tests settings_tests error_model_tests
+    route_gemm_equivalence_tests settings_tests routing_profile_tests error_model_tests
     linalg_layer_tests)
 set(BATCHLAS_TEST_LABELS_blas
     device_blas_tests gemm_tests gemv_tests symm_tests hemm_tests herk_tests her2k_tests

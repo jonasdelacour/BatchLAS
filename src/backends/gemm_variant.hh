@@ -12,6 +12,7 @@
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 
+#include <batchlas/blas/dispatch/device_facts.hh>
 #include <batchlas/blas/dispatch/route.hh>
 #include <batchlas/blas/dispatch/route_env.hh>
 #include <batchlas/blas/dispatch/route_gemm.hh>
@@ -278,7 +279,7 @@ inline std::optional<dispatch::OpShape> gemm_op_shape(
     s.transB = transB;
     s.precision = precision;
     s.heterogeneous_batch = gemm_has_heterogeneous_batch(A, B, C);
-    s.is_gpu = ctx.device().type == DeviceType::GPU;
+    batchlas::dispatch::fill_device_facts(s, ctx);
     return s;
 }
 

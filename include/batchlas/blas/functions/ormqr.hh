@@ -15,6 +15,7 @@
 
 #include <batchlas/internal/ormqr_blocked.hh>
 
+#include <batchlas/blas/dispatch/device_facts.hh>
 #include <batchlas/blas/dispatch/route.hh>
 #include <batchlas/blas/dispatch/no_route.hh>
 #include <batchlas/blas/dispatch/vendor_available.hh>
@@ -153,7 +154,7 @@ inline batchlas::dispatch::OpShape ormqr_op_shape(const Queue& ctx,
     s.batch = A.batch_size();
     s.side = side;
     s.transA = trans;
-    s.is_gpu = ctx.device().type == DeviceType::GPU;
+    batchlas::dispatch::fill_device_facts(s, ctx);
     return s;
 }
 

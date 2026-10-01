@@ -191,7 +191,7 @@ Event symm(Queue& ctx,
         }
         // Record the decline: a shape moving OFF a native kernel shows up only here.
         backend::detail::record_level3_route(
-            dispatch::Op::symm,
+            ctx, dispatch::Op::symm,
             dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto},
             C.rows(), C.cols(), A.rows(), A.batch_size(),
             backend::detail::kNativeUnknown,
@@ -271,7 +271,7 @@ Event syrk(Queue& ctx,
         }
         // Record the decline: a shape moving OFF a native kernel shows up only here.
         backend::detail::record_level3_route(
-            dispatch::Op::syrk,
+            ctx, dispatch::Op::syrk,
             dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto},
             C.rows(), C.cols(),
             transA == Transpose::NoTrans ? A.cols() : A.rows(),
@@ -303,7 +303,7 @@ Event syr2k(Queue& ctx,
         }
         // Record the decline: a shape moving OFF a native kernel shows up only here.
         backend::detail::record_level3_route(
-            dispatch::Op::syr2k,
+            ctx, dispatch::Op::syr2k,
             dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto},
             C.rows(), C.cols(),
             transA == Transpose::NoTrans ? A.cols() : A.rows(),
@@ -336,7 +336,7 @@ Event trmm(Queue& ctx,
         }
         // Record the decline: a shape moving OFF a native kernel shows up only here.
         backend::detail::record_level3_route(
-            dispatch::Op::trmm,
+            ctx, dispatch::Op::trmm,
             dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto},
             C.rows(), C.cols(), A.rows(), A.batch_size(),
             backend::detail::kNativeUnknown, {uplo, side, diag, transA});

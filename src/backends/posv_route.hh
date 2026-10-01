@@ -3,6 +3,7 @@
 // The POSV shape builder and route resolution; see gesv_route.hh for why this lives
 // in src/ and what the include set may not gain.
 
+#include <batchlas/blas/dispatch/device_facts.hh>
 #include <batchlas/blas/dispatch/route_env.hh>
 #include <batchlas/blas/dispatch/route_posv.hh>
 #include <batchlas/blas/enums.hh>
@@ -45,7 +46,7 @@ inline std::optional<dispatch::PosvShape> posv_op_shape(
     // also the only field that separates one posv coverage row from another.
     s.uplo = uplo;
 
-    s.is_gpu = (ctx.device().type == DeviceType::GPU);
+    batchlas::dispatch::fill_device_facts(s, ctx);
     s.has_sg32 = ctx.device().supports_sub_group_size(32);
     s.heterogeneous_batch = A.is_heterogeneous() || Bmat.is_heterogeneous();
 

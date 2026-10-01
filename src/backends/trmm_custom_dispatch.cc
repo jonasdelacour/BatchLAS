@@ -183,7 +183,7 @@ Event trmm_cuda_custom(Queue& ctx,
     // a route row that cannot distinguish uplo is a row that cannot catch that
     // class of defect coming back.
     const auto rec = [&](dispatch::Route taken, bool native_supported) {
-        detail::record_level3_route(dispatch::Op::trmm, taken,
+        detail::record_level3_route(ctx, dispatch::Op::trmm, taken,
                                     C.rows(), C.cols(), A.rows(),
                                     A.batch_size(), native_supported,
                                     {uplo, side, diag, transA});

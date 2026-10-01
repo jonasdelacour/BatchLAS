@@ -1408,6 +1408,14 @@ documented word collisions.
 | --- | --- | --- | --- |
 | `canonical[Op]`, `canonical_route(op)` | `BATCHLAS_<OP>_ROUTE` | `EnvValue` per `dispatch::Op` | unset (→ `Route{Auto, Auto}` at the adapter) |
 | `legacy[Op]`, `legacy_route(op)` | `BATCHLAS_<OP>_VARIANT`, `BATCHLAS_<OP>_PROVIDER` | `EnvValue` per `dispatch::Op` | unset |
+| `routing_profile` | `BATCHLAS_ROUTING_PROFILE` | `EnvValue` (`sm_89` \| `sm_120`) | unset (the device's nearest measured profile) |
+
+`BATCHLAS_ROUTING_PROFILE` forces which measured architecture's profile routing reads
+(`arch::RoutingProfile`, recorded as the `profile` and `profile_nearest` columns of
+coverage `reached` rows). Any other value makes every routed call throw
+`batchlas::invalid_argument`: a typo that fell back to the device's own profile would
+make an A/B test measure the same arm twice. Today no route reads the profile; it is
+plumbing for per-architecture routing.
 
 `BATCHLAS_<OP>_ROUTE` works for the 17 ops that have a route adapter: `gemm`, `gemv`,
 `trsm`, `trmm`, `symm`, `syrk`, `syr2k`, `potrf`, `getrf`, `getrs`, `getri`, `geqrf`,

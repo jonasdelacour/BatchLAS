@@ -6,6 +6,7 @@ set(UTIL_SOURCES
     # constructor that latches configure() shut lives next door in queue-impl.cc.
     settings.cc
     sycl-util-impl.cc
+    device_facts.cc
 )
 
 target_sources(batchlas_util_obj PRIVATE ${UTIL_SOURCES})

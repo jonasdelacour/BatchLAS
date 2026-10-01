@@ -11,6 +11,7 @@
 #include <string_view>
 #include <type_traits>
 
+#include <batchlas/arch/arch_key.hh>
 #include <batchlas/blas/enums.hh>
 
 namespace batchlas::dispatch {
@@ -190,6 +191,10 @@ struct OpShape {
     // non-CUDA. Per-architecture windows key on this; 0 must select the sm_89
     // (as-measured) behaviour so other devices keep today's routing.
     int cuda_cc = 0;
+
+    // is_gpu..profile_nearest: written ONLY by dispatch::fill_device_facts().
+    arch::RoutingProfile profile = arch::RoutingProfile::Unset;
+    bool profile_nearest = false;
 
     int64_t max_dim() const { return m > n ? (m > k ? m : k) : (n > k ? n : k); }
     int64_t min_dim() const { return m < n ? (m < k ? m : k) : (n < k ? n : k); }
