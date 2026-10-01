@@ -164,8 +164,53 @@ TEST(PotrfPlan, TinyExecutesTheBucket) {
     EXPECT_EQ(p.serial_steps, 16);
     EXPECT_DOUBLE_EQ(p.flops, potrf_plan::useful_flops<float>(16, 64));
     EXPECT_DOUBLE_EQ(p.useful_flops, potrf_plan::useful_flops<float>(9, 64));
-    // 176 probed registers: 2 warps of 64 lanes per sub-partition, 8 warps per SM, wg=64.
-    EXPECT_EQ(p.resident_groups_per_cu, 4);
+    // No register data: threads (1536/64 = 24) and the group cap (32) bind -> 24.
+    EXPECT_EQ(p.regs_per_item, 0);
+    EXPECT_EQ(p.resident_groups_per_cu, 24);
+    // The bucket's register count binds: 104 regs -> 4 warps per sub-partition, 16 per CU,
+    // 2 warps per group -> 8. The N=8 and N=32 slots must not be read for n=9.
+    potrf_plan::KernelRegs r;
+    r.tiny[0] = 1;
+    r.tiny[1] = 104;
+    r.tiny[2] = 1;
+    const auto q = potrf_plan::tiny_plan<float>(9, 64, kRec, r);
+    EXPECT_EQ(q.regs_per_item, 104);
+    EXPECT_EQ(q.resident_groups_per_cu, 8);
+}
+
+// CTA reads the register count of the scope its L selects; the leaf of Blocked reads CTA's.
+TEST(PotrfPlan, CtaRegistersFollowTheScope) {
+    potrf_plan::KernelRegs r;
+    r.cta_sg = 71;
+    r.cta_wg = 56;
+    EXPECT_EQ(potrf_plan::cta_plan<float>(10, 64, kRec, r).regs_per_item, 71);    // L == 32
+    EXPECT_EQ(potrf_plan::cta_plan<float>(77, 64, kRec, r).regs_per_item, 56);    // L > 32
+    EXPECT_EQ(potrf_plan::blocked_plan<float>(300, 64, kRec, kTrsmLeaf, r).regs_per_item, 56);
+}
+
+// The CTA body walks whole NB = 8 panels; LPanel's chain is 3n + (sizeof(T)/2)*P(P-1)/2.
+TEST(PotrfPlan, SerialChainsAreHandCounted) {
+    EXPECT_EQ(potrf_plan::cta_plan<float>(13, 64, kRec).serial_steps, 16);
+    EXPECT_EQ(potrf_plan::cta_plan<float>(16, 64, kRec).serial_steps, 16);
+    const auto lp = potrf_plan::lpanel_plan<float>(20, 64, kRec);    // P = 3
+    EXPECT_EQ(lp.serial_steps, 3 * 20 + 2 * 3);
+    EXPECT_DOUBLE_EQ(lp.slot_chain, 66.0);
+    const auto lz = potrf_plan::lpanel_plan<std::complex<double>>(20, 64, kRec);
+    EXPECT_DOUBLE_EQ(lz.slot_chain, 3 * 20 + 8 * 3);
+    EXPECT_EQ(potrf_plan::cta_plan<float>(20, 64, kRec).slot_chain, 0.0);
+}
+
+// Blocked's sub-op work is batch-wide, and the W x W scratch fill is counted when n > nb.
+TEST(PotrfPlan, BlockedWorkIsBatchWideWithTheScratchFill) {
+    const auto p = potrf_plan::blocked_plan<float>(300, 1000, kRec, kTrsmLeaf);
+    EXPECT_TRUE(p.batch_wide_work);
+    const auto t = launch_plan::cost_terms(p, kRec);
+    EXPECT_DOUBLE_EQ(t.flop, p.flops);
+    EXPECT_DOUBLE_EQ(t.byte, p.bytes);
+    // n = 20 is one 20 x 20 leaf (nb = n); n = 300 has nb = 128 < n, so the fill is counted.
+    const auto small = potrf_plan::blocked_plan<float>(20, 1000, kRec, kTrsmLeaf);
+    EXPECT_DOUBLE_EQ(small.bytes, (2 * (20.0 * 21 / 2) * 4 + 8.0) * 1000);
+    EXPECT_GE(p.bytes, 128.0 * 128 * 4 * 1000);
 }
 
 TEST(LaunchPlanOccupancy, TightestKnownCapBinds) {
@@ -188,24 +233,28 @@ TEST(LaunchPlanCost, WavesAndTermsAreHandComputed) {
     p.bytes = 4.0e6;
     p.serial_steps = 50;
     const DeviceFacts d{101376, 1024, 188, 0, 0};
+    p.wg_size = 64;
+    p.slot_chain = 10;
     const auto t = launch_plan::cost_terms(p, d);
-    // 1000 groups over 752 slots = 2 waves; one group's share is 2e6 flops, 4000 bytes.
+    // Throughput: ceil(1000/188) = 6 groups per CU, one group's share 2e6 flops / 4000 bytes.
+    // Latency: 1000 groups over 752 resident slots = 2 waves.
     EXPECT_DOUBLE_EQ(t.launch, 3);
-    EXPECT_DOUBLE_EQ(t.flop, 2 * 2.0e6);
-    EXPECT_DOUBLE_EQ(t.byte, 2 * 4000.0);
+    EXPECT_DOUBLE_EQ(t.flop, 6 * 2.0e6);
+    EXPECT_DOUBLE_EQ(t.byte, 6 * 4000.0);
     EXPECT_DOUBLE_EQ(t.step, 2 * 50.0);
-    const CostConstants c{1e-6, 1e-9, 1e-6, 1e-7};
-    // The byte side (8e-3) binds over the flop side (4e-3).
-    EXPECT_DOUBLE_EQ(launch_plan::cost(p, d, c), 3e-6 + 8e-3 + 1e-5);
+    EXPECT_DOUBLE_EQ(t.slot, 6 * 2 * 10.0);
+    const CostConstants c{1e-6, 1e-9, 1e-6, 1e-7, 1e-6};
+    // The byte side (2.4e-2) binds over the flop (1.2e-2) and slot (1.2e-4) sides.
+    EXPECT_DOUBLE_EQ(launch_plan::cost(p, d, c), 3e-6 + 2.4e-2 + 1e-5);
     static_assert(launch_plan::combine({1, 2, 3, 4}, {1, 1, 1, 1}) == 1 + 3 + 4);
 }
 
 // evaluation/routing/fit.py re-states combine() in one line; this is the same arithmetic on
 // the values tests/test_fit.py pins, so the two cannot drift silently.
 TEST(LaunchPlanCost, CombineMatchesTheFitterPin) {
-    const launch_plan::CostTerms t{2, 1e6, 3e5, 40};
-    const CostConstants c{5e-6, 2e-12, 1e-11, 3e-8};
-    EXPECT_DOUBLE_EQ(launch_plan::combine(t, c), 1e-5 + 3e-6 + 1.2e-6);
+    const launch_plan::CostTerms t{2, 1e6, 3e5, 40, 5e5};
+    const CostConstants c{5e-6, 2e-12, 1e-11, 3e-8, 1e-11};
+    EXPECT_DOUBLE_EQ(launch_plan::combine(t, c), 1e-5 + 5e-6 + 1.2e-6);
 }
 
 TEST(LaunchPlanCost, PredictionsOutsideTheMeasuredBoxAreFlagged) {

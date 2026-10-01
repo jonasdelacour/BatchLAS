@@ -301,8 +301,20 @@ constexpr void blocked_schedule(int n, int nb, int W, Leaf&& leaf, Solve&& solve
 
 // ---- plans ---------------------------------------------------------------------------------
 
+// Probed registers per thread of each kernel instantiation, for ONE scalar type on ONE arch.
+// A per-arch capacity fact: it comes from evaluation/routing/profiles/registers.json (through
+// potrf_plan_dump), never from here; 0 = unknown, and the occupancy estimate ignores it.
+struct KernelRegs {
+    int tiny[3] = {0, 0, 0};   // register buckets N = 8, 16, 32
+    int cta_sg = 0;            // CTA at L == 32 (sub-group scope)
+    int cta_wg = 0;            // CTA at L > 32 (work-group scope)
+    int lpanel = 0;            // LPanel at the type's default NB
+    int lpanel_nb16 = 0;       // LPanel float NB = 16
+};
+
 template <typename T>
-constexpr LaunchPlan tiny_plan(int n, std::int64_t batch, const DeviceFacts& d) {
+constexpr LaunchPlan tiny_plan(int n, std::int64_t batch, const DeviceFacts& d,
+                               const KernelRegs& r = {}) {
     const TinyGeometry g = tiny_geometry<T>(n, batch, d.max_wg_size);
     LaunchPlan p;
     p.fits = g.fits;
@@ -312,7 +324,7 @@ constexpr LaunchPlan tiny_plan(int n, std::int64_t batch, const DeviceFacts& d) 
     p.wave_launches = 1;
     p.groups = g.num_wg;
     p.wg_size = g.wg_size;
-    p.regs_per_item = kTinyWorstProbedRegs;
+    p.regs_per_item = r.tiny[g.N == 8 ? 0 : g.N == 16 ? 1 : 2];
     p.resident_groups_per_cu = launch_plan::resident_groups_per_cu(d, 0, g.wg_size, p.regs_per_item);
     // The unrolled recurrence runs the whole bucket; padding is masked, not skipped.
     p.flops = useful_flops<T>(g.N, batch);
@@ -324,6 +336,7 @@ constexpr LaunchPlan tiny_plan(int n, std::int64_t batch, const DeviceFacts& d) 
 
 template <typename T>
 constexpr LaunchPlan cta_plan(int n, std::int64_t batch, const DeviceFacts& d,
+                              const KernelRegs& r = {},
                               int min_blocks_per_sm = resident::kMinBlocksPerSm) {
     const CtaGeometry g = cta_geometry<T>(n, batch, d, min_blocks_per_sm);
     LaunchPlan p;
@@ -334,11 +347,15 @@ constexpr LaunchPlan cta_plan(int n, std::int64_t batch, const DeviceFacts& d,
     p.groups = g.num_wg;
     p.wg_size = g.wg_size;
     p.slm_per_group = g.slm_total;
-    p.resident_groups_per_cu = launch_plan::resident_groups_per_cu(d, g.slm_total, g.wg_size, 0);
+    p.regs_per_item = g.subgroup_scope ? r.cta_sg : r.cta_wg;
+    p.resident_groups_per_cu =
+        launch_plan::resident_groups_per_cu(d, g.slm_total, g.wg_size, p.regs_per_item);
     p.flops = useful_flops<T>(n, batch);
     p.useful_flops = p.flops;
     p.bytes = (2 * tri(n) * kSzD<T> + 4) * static_cast<double>(batch);
-    p.serial_steps = n;
+    // The body walks whole NB-wide panels, so the chain is NB*ceil(n/NB), not n.
+    p.serial_steps = static_cast<std::int64_t>(CtaConst<T>::NB) *
+                     ((n + CtaConst<T>::NB - 1) / CtaConst<T>::NB);
     return p;
 }
 
@@ -346,6 +363,7 @@ constexpr LaunchPlan cta_plan(int n, std::int64_t batch, const DeviceFacts& d,
 // NB x NB broadcast block per earlier panel.
 template <typename T>
 constexpr LaunchPlan lpanel_plan(int n, std::int64_t batch, const DeviceFacts& d,
+                                 const KernelRegs& r = {},
                                  int min_blocks_per_sm = resident::kMinBlocksPerSm,
                                  int nb_hint = 0) {
     const LpanelGeometry g = lpanel_geometry<T>(n, batch, d, min_blocks_per_sm, nb_hint);
@@ -366,11 +384,18 @@ constexpr LaunchPlan lpanel_plan(int n, std::int64_t batch, const DeviceFacts& d
     p.groups = g.num_wg;
     p.wg_size = g.wg_size;
     p.slm_per_group = g.slm_total;
-    p.resident_groups_per_cu = launch_plan::resident_groups_per_cu(d, g.slm_total, g.wg_size, 0);
+    p.regs_per_item = (g.nb == 16) ? r.lpanel_nb16 : r.lpanel;
+    p.resident_groups_per_cu =
+        launch_plan::resident_groups_per_cu(d, g.slm_total, g.wg_size, p.regs_per_item);
     p.flops = useful_flops<T>(n, batch);
     p.useful_flops = p.flops;
     p.bytes = (elems * kSzD<T> + 4) * static_cast<double>(batch);
-    p.serial_steps = n;
+    // Per-lane barrier chain: three barriers per column plus the k-loop's broadcast-block
+    // steps, weighted by scalar width. evidence: docs/perf/potrf.md#launch-plans
+    const double P = (n + g.nb - 1) / g.nb;
+    const double chain = 3.0 * n + (static_cast<double>(kSzD<T>) / 2) * P * (P - 1) / 2;
+    p.serial_steps = static_cast<std::int64_t>(chain);
+    p.slot_chain = chain;
     return p;
 }
 
@@ -378,7 +403,7 @@ constexpr LaunchPlan lpanel_plan(int n, std::int64_t batch, const DeviceFacts& d
 // gemms count as ONE submission each: they are routed calls whose own launch count is theirs.
 template <typename T>
 constexpr LaunchPlan blocked_plan(int n, std::int64_t batch, const DeviceFacts& d, int leaf_trsm,
-                                  int nb_env = 0, int w_env = 0) {
+                                  const KernelRegs& r = {}, int nb_env = 0, int w_env = 0) {
     const BlockedParams bp = blocked_params<T>(n, d.local_mem_bytes, leaf_trsm, nb_env, w_env);
     const CtaGeometry leaf = cta_geometry<T>(std::min(bp.nb, n), batch, d, bp.leaf_min_blocks);
     LaunchPlan p;
@@ -419,11 +444,16 @@ constexpr LaunchPlan blocked_plan(int n, std::int64_t batch, const DeviceFacts& 
     p.groups = leaf.num_wg;
     p.wg_size = leaf.wg_size;
     p.slm_per_group = leaf.slm_total;
-    p.resident_groups_per_cu = launch_plan::resident_groups_per_cu(d, leaf.slm_total, leaf.wg_size, 0);
+    p.regs_per_item = leaf.subgroup_scope ? r.cta_sg : r.cta_wg;
+    p.resident_groups_per_cu =
+        launch_plan::resident_groups_per_cu(d, leaf.slm_total, leaf.wg_size, p.regs_per_item);
     p.flops = flops * b;
     p.useful_flops = useful_flops<T>(n, batch);
-    p.bytes = (elems * kSzD<T> + 8.0 * panels) * b;
+    // The driver zero-fills the W x W product scratch per matrix whenever n > nb.
+    const double fill = (n > bp.nb) ? static_cast<double>(bp.W) * bp.W * kSzD<T> : 0.0;
+    p.bytes = (elems * kSzD<T> + 8.0 * panels + fill) * b;
     p.serial_steps = n;
+    p.batch_wide_work = true;   // gemm/trsm/fold work is spread over the GPU, not per group
     return p;
 }
 

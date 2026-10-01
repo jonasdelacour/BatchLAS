@@ -1,0 +1,18 @@
+{
+ "_doc": "Registers per thread of each potrf kernel instantiation, per arch: capacity facts that feed the plan's occupancy estimate (fit.py passes them to potrf_plan_dump --regs). Keys: t8/t16/t32 = Tiny buckets N, cta_sg = CTA at L == 32 (Scope::SubGroup), cta_wg = CTA at L > 32 (Scope::WorkGroup; also the Blocked leaf), lp = LPanel at NB 8, lp16 = LPanel float NB 16. A key absent means unknown (the cap is not applied).",
+ "sm_120": {
+  "_source": "PROBED 2026-10-01: ptxas -v on an sm_120 device link of build/src/.../potrf_{tiny,cta,lpanel}.cc.o (dpcpp-cuda clang++ 24.0.0, CUDA 13.2, Release); 0 B stack, 0 spill for every entry",
+  "float":   {"t8": 48, "t16": 55, "t32": 64,  "cta_sg": 71,  "cta_wg": 56,  "lp": 72, "lp16": 146},
+  "double":  {"t8": 60, "t16": 72, "t32": 100, "cta_sg": 94,  "cta_wg": 72,  "lp": 72},
+  "cfloat":  {"t8": 62, "t16": 87, "t32": 156, "cta_sg": 128, "cta_wg": 96,  "lp": 76},
+  "cdouble": {"t8": 74, "t16": 100,            "cta_sg": 127, "cta_wg": 110, "lp": 114}
+ },
+ "sm_89": {
+  "_source": "Tiny: docs/perf/potrf.md register-probe table; CTA: the sm_89 probe (SG / non-SG); LPanel: NOT probed on sm_89 -- the sm_120 probe is reused (flagged)",
+  "_borrowed": ["lp", "lp16"],
+  "float":   {"t8": 54, "t16": 64,  "t32": 78,  "cta_sg": 64,  "cta_wg": 56,  "lp": 72, "lp16": 146},
+  "double":  {"t8": 70, "t16": 82,  "t32": 104, "cta_sg": 94,  "cta_wg": 80,  "lp": 72},
+  "cfloat":  {"t8": 64, "t16": 112, "t32": 166, "cta_sg": 102, "cta_wg": 92,  "lp": 76},
+  "cdouble": {"t8": 84, "t16": 128,             "cta_sg": 128, "cta_wg": 109, "lp": 114}
+ }
+}

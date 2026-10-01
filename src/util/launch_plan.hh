@@ -30,12 +30,14 @@ struct LaunchPlan {
     std::int64_t groups = 0;        // work-groups per wave launch
     int wg_size = 0;
     std::size_t slm_per_group = 0;  // bytes, after any hole pad
-    int regs_per_item = 0;          // a PROBED demand where one exists; 0 = never probed
+    int regs_per_item = 0;          // probed demand from the profile data; 0 = unknown
     int resident_groups_per_cu = 0;
     double flops = 0;               // what the schedule executes
     double useful_flops = 0;        // LAPACK's count for the order, x4 for complex
     double bytes = 0;               // global traffic
     std::int64_t serial_steps = 0;  // dependent steps on one group's critical path, per call
+    double slot_chain = 0;          // per-lane barrier chain for the slot term; 0 = no slot term
+    bool batch_wide_work = false;   // flops/bytes are sub-op work spread over the whole GPU
 };
 
 // Groups one compute unit can hold: the tightest of the SLM, thread, register and group caps
@@ -67,20 +69,24 @@ struct CostConstants {
     double s_per_flop = 0;    // seconds per flop for ONE resident group (1 / F_route)
     double s_per_byte = 0;    // seconds per byte for ONE resident group (1 / B_route)
     double t_step = 0;        // seconds per serial step of one group
+    double s_per_slot = 0;    // seconds per warp-slot of a CU's lane chain
 };
 
 // The plan-dependent half of the cost, one coefficient per constant. The fitter reads these
-// (tools/potrf_plan_dump prints them) so the wave arithmetic exists only here.
+// (potrf_plan_dump prints them) so the wave arithmetic exists only here.
 struct CostTerms {
     double launch = 0;   // x t_launch
     double flop = 0;     // x s_per_flop, inside the max
     double byte = 0;     // x s_per_byte, inside the max
     double step = 0;     // x t_step
+    double slot = 0;     // x s_per_slot, inside the max
 };
 
-// waves = wave_launches * ceil(groups / (resident * CUs)); flop, byte and step are ONE
-// group's share of a wave launch, times waves. The serial term sits inside the wave because
-// every group of a wave runs its own recurrence concurrently.
+// Throughput is per CU and residency-free: a CU executes load = wave_launches*ceil(groups/CUs)
+// groups, so flop and byte are that load times one group's share (or the batch-wide totals for
+// sub-op work). Latency is per wave: step = waves * steps per wave launch, waves counted with
+// the register-aware residency. slot = load * warps per group * the lane chain.
+// evidence: docs/perf/potrf.md#launch-plans
 constexpr CostTerms cost_terms(const LaunchPlan& p, const DeviceFacts& d) {
     CostTerms t;
     t.launch = p.launches;
@@ -90,19 +96,25 @@ constexpr CostTerms cost_terms(const LaunchPlan& p, const DeviceFacts& d) {
     const long long per_wave = res * cus;
     const double waves =
         static_cast<double>(p.wave_launches) * static_cast<double>((p.groups + per_wave - 1) / per_wave);
+    const double load =
+        static_cast<double>(p.wave_launches) * static_cast<double>((p.groups + cus - 1) / cus);
     const double denom = static_cast<double>(p.groups) * p.wave_launches;
-    t.flop = waves * p.flops / denom;
-    t.byte = waves * p.bytes / denom;
+    t.flop = p.batch_wide_work ? p.flops : load * p.flops / denom;
+    t.byte = p.batch_wide_work ? p.bytes : load * p.bytes / denom;
     t.step = waves * static_cast<double>(p.serial_steps) / p.wave_launches;
+    const double warps = static_cast<double>((p.wg_size + 31) / 32);
+    t.slot = load * warps * p.slot_chain;
     return t;
 }
 
-// t = t_launch*launch + max(s_per_flop*flop, s_per_byte*byte) + t_step*step.
+// t = t_launch*launch + max(s_per_flop*flop, s_per_byte*byte, s_per_slot*slot) + t_step*step.
 // evaluation/routing/fit.py's `combine` is this line; potrf_plan_tests pins the two together.
 constexpr double combine(const CostTerms& t, const CostConstants& c) {
     const double tf = t.flop * c.s_per_flop;
     const double tb = t.byte * c.s_per_byte;
-    return c.t_launch * t.launch + (tf > tb ? tf : tb) + c.t_step * t.step;
+    const double ts = t.slot * c.s_per_slot;
+    const double m = tf > tb ? tf : tb;
+    return c.t_launch * t.launch + (m > ts ? m : ts) + c.t_step * t.step;
 }
 
 constexpr double cost(const LaunchPlan& p, const DeviceFacts& d, const CostConstants& c) {
