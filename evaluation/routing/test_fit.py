@@ -27,7 +27,7 @@ TRUTH = {
     "native:cta": (4e-6, 4.5e-10, 1.5e-9, 6e-8),
     "native:lpanel": (5e-6, 2.6e-9, 1e-9, 3e-8, 2e-9),
     "native:blocked": (6e-6, 1e-13, 5e-12, 2e-8),   # batch-wide work: GPU-wide rates
-    "vendor": (4e-5, 2e-13, 6e-12, 2e-7),
+    "vendor": (4e-5, 2e-13, 6e-12, 2e-7, 0.0, 1e-9),
 }
 
 
@@ -36,6 +36,9 @@ class CombinePin(unittest.TestCase):
         # potrf_plan_tests LaunchPlanCost.CombineMatchesTheFitterPin holds the same numbers.
         got = fit.combine((2, 1e6, 3e5, 40, 5e5), (5e-6, 2e-12, 1e-11, 3e-8, 1e-11))
         self.assertAlmostEqual(got, 1e-5 + 5e-6 + 1.2e-6, delta=1e-18)
+        # Additive (vendor) form: flop and byte add; item outside the max.
+        got = fit.combine((1, 2, 3, 4, 0, 5, 1), (1, 1, 1, 1, 0, 1))
+        self.assertEqual(got, 15)
 
 
 class FitterRecovery(unittest.TestCase):
@@ -76,7 +79,7 @@ class FallbackNeverBorrowsAnUnseenTerm(unittest.TestCase):
         m = {("native:cta", "double", "U"): self.entry((1e-6, 0.0, 2e-9, 3e-8), ["s_per_flop"]),
              ("native:cta", "float", "L"): self.entry((9e-6, 5e-11, 7e-9, 8e-8), [])}
         e = fit.fallback(m, "native:cta", "double", "L", self.CFG)
-        self.assertEqual(e["constants"], [1e-6, 5e-11 * 64, 2e-9, 3e-8, 0.0])
+        self.assertEqual(e["constants"], [1e-6, 5e-11 * 64, 2e-9, 3e-8, 0.0, 0.0])
         self.assertEqual(e["fallback"]["terms"]["s_per_flop"]["rule"], "precision_scaled")
         self.assertEqual(e["fallback"]["terms"]["t_launch"]["rule"], "other_uplo")
 

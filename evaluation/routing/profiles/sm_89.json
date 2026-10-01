@@ -52,20 +52,20 @@
  "fallback_rule": "The rule for a (route, dtype, uplo) without a fit of its own. Sources, in this order:\n    1. the same route and dtype on the other uplo, copied;\n    2. the precision partner (float<->double, cfloat<->cdouble), s_per_flop scaled by the\n       profile's FP64:FP32 PEAK rate, the rest copied (latency-bound kernels violate this:\n       sm_89 tiny double measures ~2x float, not 64x);\n    3. the complexity partner (float<->cfloat, double<->cdouble), copied -- the plan already\n       counts a complex multiply-add as four;\n    4. the same (route, dtype, uplo) MEASURED in another profile (--borrow), s_per_flop scaled\n       by the per-CU peak FP rate of that precision (source/target) and s_per_byte by the\n       per-CU DRAM bandwidth (source/target); t_launch and t_step copied.\n    PER TERM: each constant comes from the first source whose fit SAW that term (it is not in\n    the source's `inactive` list); an inactive 0 is never borrowed. A term no source saw leaves\n    the key unfittable, so the route is not a candidate for it. Only measured entries are\n    sources, never another fallback. Returns the entry, or {\"unfittable\": [terms]}.\n    5. LAST, the key's OWN THIN FIT: its own rows (>= 3) fitted although below the minimum-data\n       rule, flagged `thin`. It supplies every term the sources above did not -- including a\n       term it saw as 0 -- so a key's own data is never discarded in favour of dropping it.",
  "gate": {
   "model": {
-   "cells": 128,
-   "geomean": 1.1951780002793473,
+   "cells": 125,
+   "geomean": 1.1548513802765095,
    "max": 6.310083256244218,
-   "over_1.1": 32,
-   "p95": 3.539526555169574
+   "over_1.1": 24,
+   "p95": 2.9487856881339867
   },
-  "paired_cells": 128,
+  "paired_cells": 125,
   "rule": "PASS only if, on the cells where BOTH today's pick and the held-out model's pick were\n    measured, the model beats today's windows on geomean AND p95, and its max is no worse than\n    the windows' max on those same cells.",
   "today": {
-   "cells": 128,
-   "geomean": 1.0057809601224923,
+   "cells": 125,
+   "geomean": 1.005961827503591,
    "max": 1.1807164595295725,
    "over_1.1": 4,
-   "p95": 1.0
+   "p95": 1.005196968737545
   },
   "verdict": "FAIL"
  },
@@ -80,9 +80,9 @@
  "profile": "sm_89",
  "provenance": {
   "campaigns": [],
-  "created": "2026-10-01T21:30:46",
+  "created": "2026-10-01T22:05:39",
   "fit_git_dirty": true,
-  "fit_git_sha": "89e76508",
+  "fit_git_sha": "6bf5dee5",
   "plan_dump": "build/tests/potrf_plan_dump",
   "sources": [
    {
@@ -99,6 +99,7 @@
       "s_per_byte": 8.336241951895958e-13,
       "s_per_flop": 6.65297532788511e-13,
       "s_per_slot": 0.0,
+      "t_item": 0.0,
       "t_launch": 3.247856681607938e-06,
       "t_step": 2.892878538864711e-06
      },
@@ -119,6 +120,11 @@
         "rule": "complexity_borrow"
        },
        "s_per_slot": {
+        "factor": 1.0,
+        "from": "native:blocked/cfloat/L",
+        "rule": "precision_scaled"
+       },
+       "t_item": {
         "factor": 1.0,
         "from": "native:blocked/cfloat/L",
         "rule": "precision_scaled"
@@ -146,16 +152,19 @@
       "s_per_byte": 8.336241951895958e-13,
       "s_per_flop": 0.0,
       "s_per_slot": 0.0,
+      "t_item": 0.0,
       "t_launch": 0.0,
       "t_step": 2.892878538864711e-06
      },
      "fallback": null,
      "fit": {
       "absent": [
-       "s_per_slot"
+       "s_per_slot",
+       "t_item"
       ],
       "inactive": [
        "s_per_slot",
+       "t_item",
        "t_launch",
        "s_per_flop"
       ],
@@ -183,16 +192,19 @@
       "s_per_byte": 2.0622831327487236e-12,
       "s_per_flop": 6.65297532788511e-13,
       "s_per_slot": 0.0,
+      "t_item": 0.0,
       "t_launch": 0.0,
       "t_step": 3.3453616396592102e-06
      },
      "fallback": null,
      "fit": {
       "absent": [
-       "s_per_slot"
+       "s_per_slot",
+       "t_item"
       ],
       "inactive": [
        "s_per_slot",
+       "t_item",
        "t_launch"
       ],
       "max_abs_log": 0.20168448543025175,
@@ -217,6 +229,7 @@
       "s_per_byte": 2.0622831327487236e-12,
       "s_per_flop": 6.65297532788511e-13,
       "s_per_slot": 0.0,
+      "t_item": 0.0,
       "t_launch": 7.5166454262088576e-06,
       "t_step": 3.3453616396592102e-06
      },
@@ -237,6 +250,11 @@
         "rule": "other_uplo"
        },
        "s_per_slot": {
+        "factor": 1.0,
+        "from": "native:blocked/double/L",
+        "rule": "other_uplo"
+       },
+       "t_item": {
         "factor": 1.0,
         "from": "native:blocked/double/L",
         "rule": "other_uplo"
@@ -264,16 +282,19 @@
       "s_per_byte": 1.5118967139754295e-12,
       "s_per_flop": 0.0,
       "s_per_slot": 0.0,
+      "t_item": 0.0,
       "t_launch": 7.5166454262088576e-06,
       "t_step": 6.237468934629479e-07
      },
      "fallback": null,
      "fit": {
       "absent": [
-       "s_per_slot"
+       "s_per_slot",
+       "t_item"
       ],
       "inactive": [
        "s_per_slot",
+       "t_item",
        "s_per_flop"
       ],
       "max_abs_log": 0.3107515618183019,
@@ -298,6 +319,7 @@
       "s_per_byte": 1.5118967139754295e-12,
       "s_per_flop": 1.0395273949820484e-14,
       "s_per_slot": 0.0,
+      "t_item": 0.0,
       "t_launch": 7.5166454262088576e-06,
       "t_step": 6.237468934629479e-07
      },
@@ -318,6 +340,11 @@
         "rule": "precision_scaled"
        },
        "s_per_slot": {
+        "factor": 1.0,
+        "from": "native:blocked/float/L",
+        "rule": "other_uplo"
+       },
+       "t_item": {
         "factor": 1.0,
         "from": "native:blocked/float/L",
         "rule": "other_uplo"
@@ -347,6 +374,7 @@
       "s_per_byte": 2.0140758858438517e-10,
       "s_per_flop": 2.577098421163243e-09,
       "s_per_slot": 0.0,
+      "t_item": 0.0,
       "t_launch": 0.0001971531411534654,
       "t_step": 6.362830912111608e-07
      },
@@ -371,6 +399,11 @@
         "from": "native:cta/cfloat/L",
         "rule": "precision_scaled"
        },
+       "t_item": {
+        "factor": 1.0,
+        "from": "native:cta/cfloat/L",
+        "rule": "precision_scaled"
+       },
        "t_launch": {
         "factor": 1.0,
         "from": "native:cta/cdouble/L",
@@ -385,10 +418,12 @@
      },
      "fit": {
       "absent": [
-       "s_per_slot"
+       "s_per_slot",
+       "t_item"
       ],
       "inactive": [
        "s_per_slot",
+       "t_item",
        "s_per_flop"
       ],
       "max_abs_log": 0.4108568297460353,
@@ -414,16 +449,19 @@
       "s_per_byte": 2.0140758858438517e-10,
       "s_per_flop": 4.0267162830675674e-11,
       "s_per_slot": 0.0,
+      "t_item": 0.0,
       "t_launch": 0.0,
       "t_step": 6.362830912111608e-07
      },
      "fallback": null,
      "fit": {
       "absent": [
-       "s_per_slot"
+       "s_per_slot",
+       "t_item"
       ],
       "inactive": [
        "s_per_slot",
+       "t_item",
        "t_launch"
       ],
       "max_abs_log": 0.16287455330764367,
@@ -449,6 +487,7 @@
       "s_per_byte": 1.859773956003289e-10,
       "s_per_flop": 0.0,
       "s_per_slot": 0.0,
+      "t_item": 0.0,
       "t_launch": 1.9102857286204292e-06,
       "t_step": 5.38190428987269e-07
      },
@@ -473,6 +512,11 @@
         "from": "native:cta/float/L",
         "rule": "precision_scaled"
        },
+       "t_item": {
+        "factor": 1.0,
+        "from": "native:cta/float/L",
+        "rule": "precision_scaled"
+       },
        "t_launch": {
         "factor": 1.0,
         "from": "sm_120/native:cta/double/L",
@@ -487,10 +531,12 @@
      },
      "fit": {
       "absent": [
-       "s_per_slot"
+       "s_per_slot",
+       "t_item"
       ],
       "inactive": [
        "s_per_slot",
+       "t_item",
        "s_per_flop"
       ],
       "max_abs_log": 0.3446786512613267,
@@ -516,16 +562,19 @@
       "s_per_byte": 1.859773956003289e-10,
       "s_per_flop": 0.0,
       "s_per_slot": 0.0,
+      "t_item": 0.0,
       "t_launch": 0.0,
       "t_step": 5.38190428987269e-07
      },
      "fallback": null,
      "fit": {
       "absent": [
-       "s_per_slot"
+       "s_per_slot",
+       "t_item"
       ],
       "inactive": [
        "s_per_slot",
+       "t_item",
        "t_launch",
        "s_per_flop"
       ],
@@ -555,6 +604,7 @@
       "s_per_byte": 8.567616866907471e-11,
       "s_per_flop": 3.097397066625564e-09,
       "s_per_slot": 0.0,
+      "t_item": 0.0,
       "t_launch": 3.922195710337551e-06,
       "t_step": 1.6191055143947864e-06
      },
@@ -575,6 +625,11 @@
         "rule": "precision_scaled"
        },
        "s_per_slot": {
+        "factor": 1.0,
+        "from": "native:tiny/cfloat/L",
+        "rule": "precision_scaled"
+       },
+       "t_item": {
         "factor": 1.0,
         "from": "native:tiny/cfloat/L",
         "rule": "precision_scaled"
@@ -600,6 +655,7 @@
       "s_per_byte": 8.567616866907471e-11,
       "s_per_flop": 3.097397066625564e-09,
       "s_per_slot": 0.0,
+      "t_item": 0.0,
       "t_launch": 3.922195710337551e-06,
       "t_step": 1.4006202330163105e-06
      },
@@ -624,6 +680,11 @@
         "from": "native:tiny/cfloat/L",
         "rule": "precision_scaled"
        },
+       "t_item": {
+        "factor": 1.0,
+        "from": "native:tiny/cfloat/L",
+        "rule": "precision_scaled"
+       },
        "t_launch": {
         "factor": 1.0,
         "from": "native:tiny/cfloat/L",
@@ -638,10 +699,12 @@
      },
      "fit": {
       "absent": [
-       "s_per_slot"
+       "s_per_slot",
+       "t_item"
       ],
       "inactive": [
-       "s_per_slot"
+       "s_per_slot",
+       "t_item"
       ],
       "max_abs_log": 0.028730350080101275,
       "rms_log": 0.013894845742769666,
@@ -666,16 +729,19 @@
       "s_per_byte": 8.567616866907471e-11,
       "s_per_flop": 4.8396829166024436e-11,
       "s_per_slot": 0.0,
+      "t_item": 0.0,
       "t_launch": 3.922195710337551e-06,
       "t_step": 0.0
      },
      "fallback": null,
      "fit": {
       "absent": [
-       "s_per_slot"
+       "s_per_slot",
+       "t_item"
       ],
       "inactive": [
        "s_per_slot",
+       "t_item",
        "t_step"
       ],
       "max_abs_log": 0.41145744102970205,
@@ -700,6 +766,7 @@
       "s_per_byte": 8.567616866907471e-11,
       "s_per_flop": 4.8396829166024436e-11,
       "s_per_slot": 0.0,
+      "t_item": 0.0,
       "t_launch": 3.922195710337551e-06,
       "t_step": 2.9569291686922713e-07
      },
@@ -720,6 +787,11 @@
         "rule": "other_uplo"
        },
        "s_per_slot": {
+        "factor": 1.0,
+        "from": "native:tiny/cfloat/L",
+        "rule": "other_uplo"
+       },
+       "t_item": {
         "factor": 1.0,
         "from": "native:tiny/cfloat/L",
         "rule": "other_uplo"
@@ -747,6 +819,7 @@
       "s_per_byte": 6.616196733075495e-11,
       "s_per_flop": 2.2546429611090126e-09,
       "s_per_slot": 0.0,
+      "t_item": 0.0,
       "t_launch": 4.7585280700413935e-06,
       "t_step": 2.9569291686922713e-07
      },
@@ -767,6 +840,11 @@
         "rule": "precision_scaled"
        },
        "s_per_slot": {
+        "factor": 1.0,
+        "from": "native:tiny/float/L",
+        "rule": "precision_scaled"
+       },
+       "t_item": {
         "factor": 1.0,
         "from": "native:tiny/float/L",
         "rule": "precision_scaled"
@@ -792,6 +870,7 @@
       "s_per_byte": 6.616196733075495e-11,
       "s_per_flop": 2.2546429611090126e-09,
       "s_per_slot": 0.0,
+      "t_item": 0.0,
       "t_launch": 4.7585280700413935e-06,
       "t_step": 2.9569291686922713e-07
      },
@@ -812,6 +891,11 @@
         "rule": "precision_scaled"
        },
        "s_per_slot": {
+        "factor": 1.0,
+        "from": "native:tiny/float/L",
+        "rule": "precision_scaled"
+       },
+       "t_item": {
         "factor": 1.0,
         "from": "native:tiny/float/L",
         "rule": "precision_scaled"
@@ -839,16 +923,19 @@
       "s_per_byte": 6.616196733075495e-11,
       "s_per_flop": 3.522879626732832e-11,
       "s_per_slot": 0.0,
+      "t_item": 0.0,
       "t_launch": 4.7585280700413935e-06,
       "t_step": 2.9569291686922713e-07
      },
      "fallback": null,
      "fit": {
       "absent": [
-       "s_per_slot"
+       "s_per_slot",
+       "t_item"
       ],
       "inactive": [
-       "s_per_slot"
+       "s_per_slot",
+       "t_item"
       ],
       "max_abs_log": 0.3579725909714302,
       "rms_log": 0.11172819189086729,
@@ -872,6 +959,7 @@
       "s_per_byte": 6.616196733075495e-11,
       "s_per_flop": 3.522879626732832e-11,
       "s_per_slot": 0.0,
+      "t_item": 0.0,
       "t_launch": 4.7585280700413935e-06,
       "t_step": 2.9569291686922713e-07
      },
@@ -892,6 +980,11 @@
         "rule": "other_uplo"
        },
        "s_per_slot": {
+        "factor": 1.0,
+        "from": "native:tiny/float/L",
+        "rule": "other_uplo"
+       },
+       "t_item": {
         "factor": 1.0,
         "from": "native:tiny/float/L",
         "rule": "other_uplo"
@@ -918,11 +1011,12 @@
    "cdouble": {
     "L": {
      "constants": {
-      "s_per_byte": 1.2800739264249227e-11,
-      "s_per_flop": 9.088972892005594e-13,
+      "s_per_byte": 3.843401772944122e-12,
+      "s_per_flop": 8.31970399939673e-13,
       "s_per_slot": 0.0,
-      "t_launch": 9.139868660089439e-05,
-      "t_step": 2.486109925236829e-06
+      "t_item": 1.3666583010660513e-09,
+      "t_launch": 4.3945053402067924e-05,
+      "t_step": 2.4788965794560346e-06
      },
      "fallback": null,
      "fit": {
@@ -932,8 +1026,8 @@
       "inactive": [
        "s_per_slot"
       ],
-      "max_abs_log": 0.6870213282027211,
-      "rms_log": 0.21185201802330836,
+      "max_abs_log": 0.3998968931578437,
+      "rms_log": 0.11385286044952721,
       "rows": 209
      },
      "support": {
@@ -953,11 +1047,12 @@
     },
     "U": {
      "constants": {
-      "s_per_byte": 1.2800739264249227e-11,
-      "s_per_flop": 9.088972892005594e-13,
+      "s_per_byte": 3.843401772944122e-12,
+      "s_per_flop": 8.31970399939673e-13,
       "s_per_slot": 0.0,
-      "t_launch": 9.139868660089439e-05,
-      "t_step": 2.486109925236829e-06
+      "t_item": 1.3666583010660513e-09,
+      "t_launch": 4.3945053402067924e-05,
+      "t_step": 2.4788965794560346e-06
      },
      "fallback": {
       "byte_factor": 1.0,
@@ -976,6 +1071,11 @@
         "rule": "other_uplo"
        },
        "s_per_slot": {
+        "factor": 1.0,
+        "from": "vendor/cdouble/L",
+        "rule": "other_uplo"
+       },
+       "t_item": {
         "factor": 1.0,
         "from": "vendor/cdouble/L",
         "rule": "other_uplo"
@@ -1000,10 +1100,11 @@
    "cfloat": {
     "L": {
      "constants": {
-      "s_per_byte": 3.863134524469014e-12,
-      "s_per_flop": 7.536127099968692e-14,
+      "s_per_byte": 1.769096173471974e-12,
+      "s_per_flop": 6.422853644313453e-14,
       "s_per_slot": 0.0,
-      "t_launch": 3.4313286350876084e-05,
+      "t_item": 1.2506731244887963e-10,
+      "t_launch": 3.103460864663634e-05,
       "t_step": 0.0
      },
      "fallback": null,
@@ -1015,8 +1116,8 @@
        "s_per_slot",
        "t_step"
       ],
-      "max_abs_log": 0.6479884394983735,
-      "rms_log": 0.2706555516837467,
+      "max_abs_log": 0.5149636444111625,
+      "rms_log": 0.20390957975744844,
       "rows": 248
      },
      "support": {
@@ -1036,11 +1137,12 @@
     },
     "U": {
      "constants": {
-      "s_per_byte": 3.863134524469014e-12,
-      "s_per_flop": 7.536127099968692e-14,
+      "s_per_byte": 1.769096173471974e-12,
+      "s_per_flop": 6.422853644313453e-14,
       "s_per_slot": 0.0,
-      "t_launch": 3.4313286350876084e-05,
-      "t_step": 2.486109925236829e-06
+      "t_item": 1.2506731244887963e-10,
+      "t_launch": 3.103460864663634e-05,
+      "t_step": 2.4788965794560346e-06
      },
      "fallback": {
       "byte_factor": 1.0,
@@ -1059,6 +1161,11 @@
         "rule": "other_uplo"
        },
        "s_per_slot": {
+        "factor": 1.0,
+        "from": "vendor/cfloat/L",
+        "rule": "other_uplo"
+       },
+       "t_item": {
         "factor": 1.0,
         "from": "vendor/cfloat/L",
         "rule": "other_uplo"
@@ -1083,11 +1190,12 @@
    "double": {
     "L": {
      "constants": {
-      "s_per_byte": 8.701361531079591e-12,
-      "s_per_flop": 9.236709902385997e-13,
+      "s_per_byte": 2.259365374607857e-12,
+      "s_per_flop": 8.415779223932924e-13,
       "s_per_slot": 0.0,
-      "t_launch": 7.979608096119285e-05,
-      "t_step": 1.1355823887403774e-06
+      "t_item": 8.002039038352151e-10,
+      "t_launch": 3.1348890482811314e-05,
+      "t_step": 7.644535963849293e-07
      },
      "fallback": null,
      "fit": {
@@ -1097,8 +1205,8 @@
       "inactive": [
        "s_per_slot"
       ],
-      "max_abs_log": 0.5751171401660784,
-      "rms_log": 0.19260621919863308,
+      "max_abs_log": 0.3246938797764658,
+      "rms_log": 0.08851816395341303,
       "rows": 187
      },
      "support": {
@@ -1118,11 +1226,12 @@
     },
     "U": {
      "constants": {
-      "s_per_byte": 8.701361531079591e-12,
-      "s_per_flop": 9.236709902385997e-13,
+      "s_per_byte": 2.259365374607857e-12,
+      "s_per_flop": 8.415779223932924e-13,
       "s_per_slot": 0.0,
-      "t_launch": 7.979608096119285e-05,
-      "t_step": 1.1355823887403774e-06
+      "t_item": 8.002039038352151e-10,
+      "t_launch": 3.1348890482811314e-05,
+      "t_step": 7.644535963849293e-07
      },
      "fallback": {
       "byte_factor": 1.0,
@@ -1141,6 +1250,11 @@
         "rule": "other_uplo"
        },
        "s_per_slot": {
+        "factor": 1.0,
+        "from": "vendor/double/L",
+        "rule": "other_uplo"
+       },
+       "t_item": {
         "factor": 1.0,
         "from": "vendor/double/L",
         "rule": "other_uplo"
@@ -1165,11 +1279,12 @@
    "float": {
     "L": {
      "constants": {
-      "s_per_byte": 4.5437276848985565e-12,
-      "s_per_flop": 1.7397756794272823e-13,
+      "s_per_byte": 1.5274108675406845e-12,
+      "s_per_flop": 1.5107260021501386e-13,
       "s_per_slot": 0.0,
-      "t_launch": 4.4363865375856194e-05,
-      "t_step": 1.5558484711907626e-07
+      "t_item": 2.1551410311863875e-10,
+      "t_launch": 2.3930072275594756e-05,
+      "t_step": 1.941173509622879e-07
      },
      "fallback": null,
      "fit": {
@@ -1179,8 +1294,8 @@
       "inactive": [
        "s_per_slot"
       ],
-      "max_abs_log": 0.7490692366094498,
-      "rms_log": 0.2563907043048824,
+      "max_abs_log": 0.7236885631522112,
+      "rms_log": 0.1832045012611321,
       "rows": 331
      },
      "support": {
@@ -1200,11 +1315,12 @@
     },
     "U": {
      "constants": {
-      "s_per_byte": 4.5437276848985565e-12,
-      "s_per_flop": 1.7397756794272823e-13,
+      "s_per_byte": 1.5274108675406845e-12,
+      "s_per_flop": 1.5107260021501386e-13,
       "s_per_slot": 0.0,
-      "t_launch": 4.4363865375856194e-05,
-      "t_step": 1.5558484711907626e-07
+      "t_item": 2.1551410311863875e-10,
+      "t_launch": 2.3930072275594756e-05,
+      "t_step": 1.941173509622879e-07
      },
      "fallback": {
       "byte_factor": 1.0,
@@ -1223,6 +1339,11 @@
         "rule": "other_uplo"
        },
        "s_per_slot": {
+        "factor": 1.0,
+        "from": "vendor/float/L",
+        "rule": "other_uplo"
+       },
+       "t_item": {
         "factor": 1.0,
         "from": "vendor/float/L",
         "rule": "other_uplo"

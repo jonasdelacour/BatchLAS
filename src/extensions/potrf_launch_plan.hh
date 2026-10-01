@@ -457,20 +457,25 @@ constexpr LaunchPlan blocked_plan(int n, std::int64_t batch, const DeviceFacts& 
     return p;
 }
 
-// The vendor has no launch plan. This single-group pseudo-plan (LAPACK's flops, one
-// read+write of the triangle, n serial steps) lets one fitted constant set price it.
+// The vendor has no launch plan; this is its black-box form (V1c):
+//   t = t0 + t_step*n_e + batch*(s_flop*f(n_e) + s_byte*n_e(n_e+1)*sz + t_item*n_e),
+// n_e = n up to 16, then rounded up to whole 16-blocks (cuSOLVER's step), f = LAPACK's count.
+// evidence: docs/perf/potrf.md#launch-plans
 template <typename T>
 constexpr LaunchPlan vendor_pseudo_plan(int n, std::int64_t batch) {
     LaunchPlan p;
     p.fits = n >= 1 && batch >= 1;
+    const int ne = (n <= 16) ? n : 16 * ((n + 15) / 16);
     p.launches = 1;
     p.wave_launches = 1;
     p.groups = 1;
     p.resident_groups_per_cu = 1;
-    p.flops = useful_flops<T>(n, batch);
-    p.useful_flops = p.flops;
-    p.bytes = 2 * tri(n) * kSzD<T> * static_cast<double>(batch);
-    p.serial_steps = n;
+    p.flops = useful_flops<T>(ne, batch);
+    p.useful_flops = useful_flops<T>(n, batch);
+    p.bytes = 2 * tri(ne) * kSzD<T> * static_cast<double>(batch);
+    p.serial_steps = ne;
+    p.additive_work = true;
+    p.item_steps = static_cast<double>(ne) * static_cast<double>(batch);
     return p;
 }
 

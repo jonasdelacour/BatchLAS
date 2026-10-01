@@ -43,7 +43,8 @@ from collections import defaultdict
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 ROUTES = ("native:tiny", "native:cta", "native:lpanel", "native:blocked", "vendor")
 DTYPES = ("float", "double", "cfloat", "cdouble")
-PARAMS = ("t_launch", "s_per_flop", "s_per_byte", "t_step", "s_per_slot")
+PARAMS = ("t_launch", "s_per_flop", "s_per_byte", "t_step", "s_per_slot", "t_item")
+NPAR = len(PARAMS)
 
 # Device facts per profile live in ONE file; see its _doc for where each number comes from.
 FACTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "profiles", "device_facts.json")
@@ -69,9 +70,14 @@ IS_FP64 = {"float": False, "cfloat": False, "double": True, "cdouble": True}
 
 
 def combine(terms, c):
-    """launch_plan::combine. terms = (launch, flop, byte, step[, slot]), c = PARAMS order."""
+    """launch_plan::combine. terms = (launch, flop, byte, step[, slot[, item[, additive]]]),
+    c in PARAMS order."""
     slot = c[4] * terms[4] if len(terms) > 4 and len(c) > 4 else 0.0
-    return c[0] * terms[0] + max(c[1] * terms[1], c[2] * terms[2], slot) + c[3] * terms[3]
+    item = c[5] * terms[5] if len(terms) > 5 and len(c) > 5 else 0.0
+    additive = len(terms) > 6 and terms[6]
+    tf, tb = c[1] * terms[1], c[2] * terms[2]
+    m = tf + tb if additive else max(tf, tb)
+    return c[0] * terms[0] + max(m, slot) + c[3] * terms[3] + item
 
 
 # ---- data -------------------------------------------------------------------------------
@@ -167,23 +173,29 @@ def _solve(A, b):
     return x
 
 
-MAXED = (1, 2, 4)   # the terms inside the max: flop, byte, slot
-
-
 def _terms5(terms):
-    return list(terms) + [0.0] * (5 - len(terms))
+    """Pad to the 6 cost terms plus the additive flag (index 6)."""
+    t = list(terms)
+    flag = t[6] if len(t) > 6 else 0
+    t = t[:6] + [0.0] * (6 - len(t[:6]))
+    return t + [flag]
 
 
 def _model(terms, c):
-    """combine() plus which max term won and the per-parameter partials (for the Jacobian)."""
-    m_in = [c[j] * terms[j] for j in MAXED]
-    k = max(range(3), key=lambda i: m_in[i])
-    m = c[0] * terms[0] + m_in[k] + c[3] * terms[3]
-    return m, MAXED[k]
+    """combine() plus the parameters whose term enters the result (for the Jacobian)."""
+    tf, tb, ts = c[1] * terms[1], c[2] * terms[2], c[4] * terms[4]
+    if terms[6]:
+        inner, live = tf + tb, {1, 2}
+    else:
+        inner, live = (tf, {1}) if tf >= tb else (tb, {2})
+    if ts > inner:
+        inner, live = ts, {4}
+    m = c[0] * terms[0] + inner + c[3] * terms[3] + c[5] * terms[5]
+    return m, live | {0, 3, 5}
 
 
 def _loss(theta, data, active):
-    c = [0.0] * 5
+    c = [0.0] * NPAR
     for i, j in enumerate(active):
         c[j] = math.exp(theta[i])
     s = 0.0
@@ -200,20 +212,15 @@ def _lm(theta, data, lo, hi, active, iters=80):
     mu = 1e-3
     loss = _loss(theta, data, active)
     for _ in range(iters):
-        c = [0.0] * 5
+        c = [0.0] * NPAR
         for i, j in enumerate(active):
             c[j] = math.exp(theta[i])
         JTJ = [[0.0] * k for _ in range(k)]
         JTr = [0.0] * k
         for terms, t in data:
-            m, win = _model(terms, c)
+            m, live = _model(terms, c)
             r = math.log(m) - math.log(t)
-            g = []
-            for j in active:
-                if j in MAXED:
-                    g.append(c[j] * terms[j] / m if j == win else 0.0)
-                else:
-                    g.append(c[j] * terms[j] / m)
+            g = [c[j] * terms[j] / m if j in live else 0.0 for j in active]
             for a in range(k):
                 JTr[a] += g[a] * r
                 for b in range(k):
@@ -242,7 +249,7 @@ def fit_constants(data):
     """data: [(terms, seconds)]. Returns (constants, stats). Only parameters whose term is
     non-zero somewhere are fitted; the rest, and any term the data cannot see, are 0."""
     data = [(_terms5(terms), t) for terms, t in data]
-    active = [j for j in range(5) if any(terms[j] > 0 for terms, _ in data)]
+    active = [j for j in range(NPAR) if any(terms[j] > 0 for terms, _ in data)]
     scale = {}
     for j in active:
         scale[j] = statistics.median([t / terms[j] for terms, t in data if terms[j] > 0])
@@ -255,11 +262,11 @@ def fit_constants(data):
         th, ls = _lm(th0, data, lo, hi, active)
         if best is None or ls < best[1]:
             best = (th, ls)
-    const = [0.0] * 5
+    const = [0.0] * NPAR
     for i, j in enumerate(active):
         const[j] = math.exp(best[0][i])
     base = best[1]
-    inactive = [PARAMS[j] for j in range(5) if j not in active]
+    inactive = [PARAMS[j] for j in range(NPAR) if j not in active]
     # Parsimony: a term the data cannot see is 0, not whatever value the optimiser left.
     for j in active:
         trial = const[:]
@@ -272,7 +279,7 @@ def fit_constants(data):
     resid = [math.log(combine(terms, const)) - math.log(t) for terms, t in data]
     stats = {"rows": len(data), "rms_log": math.sqrt(sum(r * r for r in resid) / len(resid)),
              "max_abs_log": max(abs(r) for r in resid), "inactive": inactive,
-             "absent": [PARAMS[j] for j in range(5) if j not in active]}
+             "absent": [PARAMS[j] for j in range(NPAR) if j not in active]}
     return const, stats
 
 
@@ -335,7 +342,7 @@ def fit_all(train, cfg):
 
 
 def _c5(c):
-    return list(c) + [0.0] * (5 - len(c))
+    return list(c) + [0.0] * (NPAR - len(c))
 
 
 def fallback(measured, route, dtype, uplo, cfg, own_rows=()):
@@ -392,7 +399,7 @@ def fallback(measured, route, dtype, uplo, cfg, own_rows=()):
         cands.append((thin_src, "thin", (route, dtype, uplo), 1.0, 1.0))
     if not cands:
         return None
-    const, terms, missing = [0.0] * 5, {}, []
+    const, terms, missing = [0.0] * NPAR, {}, []
     for j, name in enumerate(PARAMS):
         for src, rule, frm, ff, bf in cands:
             # An ABSENT term (the plan never sets it for this route) is a structural 0 and
@@ -662,15 +669,15 @@ def write_report(path, args, cv, full_by_cell, feats, full_model, skipped, dropp
     L.append("* precision_scaled uses the PEAK FP64:FP32 rate; latency-bound kernels violate it "
              "(sm_89 tiny double measures ~2x float, not 64x).\n")
     L.append("## Constants (full fit)\n")
-    L.append("| route | dtype | uplo | t_launch s | s/flop | s/byte | t_step s | s/slot | rows | rms log | inactive | fallback |")
-    L.append("|---|---|---|---|---|---|---|---|---|---|---|---|")
+    L.append("| route | dtype | uplo | t_launch s | s/flop | s/byte | t_step s | s/slot | t_item s | rows | rms log | inactive | fallback |")
+    L.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     for (route, dtype, uplo), e in sorted(full_model.items()):
         c = e["constants"]
         fit = e["fit"] or {}
         fb = e["fallback"]
         c = _c5(c)
         L.append(f"| {route} | {dtype} | {uplo} | {c[0]:.3g} | {c[1]:.3g} | {c[2]:.3g} | {c[3]:.3g} "
-                 f"| {c[4]:.3g} "
+                 f"| {c[4]:.3g} | {c[5]:.3g} "
                  f"| {fit.get('rows', 0)} | {fit.get('rms_log', float('nan')):.3f} "
                  f"| {','.join(fit.get('inactive', [])) or '-'} "
                  f"| {(fb['rule'] + ' <- ' + fb['from']) if fb else '-'} |")
