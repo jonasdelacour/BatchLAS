@@ -5,6 +5,7 @@
 // supports()'s gates -- a rejected forced route silently runs the vendor. evidence: docs/perf/potrf.md
 
 #include "../util/internal-api.hh"
+#include "../util/launch_plan.hh"
 #include "../util/resident_capacity.hh"
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>
@@ -16,6 +17,14 @@
 #include <functional>
 
 namespace batchlas::sycl_potrf {
+
+// The two device facts every potrf launch geometry reads (potrf_launch_plan.hh), queried once.
+inline launch_plan::DeviceFacts potrf_device_facts(const Device& dev) {
+    launch_plan::DeviceFacts d;
+    d.local_mem_bytes = static_cast<std::size_t>(dev.get_property(DeviceProperty::LOCAL_MEM_SIZE));
+    d.max_wg_size = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
+    return d;
+}
 
 // TINY tier (potrf_tiny.cc): it owns NO local memory, so the ceiling takes no budget argument
 // and is a flat compile-time constant; 0 = absent. evidence: docs/perf/potrf.md#the-tiny-tier

@@ -9,6 +9,7 @@
 // decisive argument is portability: sg_compat.hh's group_barrier(part) expands to NOTHING
 // off NVPTX, so a publish/read pair ordered only by it is silently unordered elsewhere.
 
+#include "potrf_launch_plan.hh"
 #include "potrf_native.hh"
 #include "tiny_device.hh"
 
@@ -38,36 +39,24 @@ using tiny_native::kTinySubGroupSize;
 using tiny_native::kTinySubGroups;
 using tiny_native::kTinyWgSize;
 
-// A flat compile-time constant, not a budget walk: the tier owns no local memory.
-// evidence: docs/perf/potrf.md#the-tiny-tier
+// The cap and the geometry live in potrf_launch_plan.hh, the one definition the plan reads.
 template <typename T>
-struct PotrfTinyCap { static constexpr int kMaxN = 32; };
-template <>
-struct PotrfTinyCap<std::complex<double>> { static constexpr int kMaxN = 16; };
+using PotrfTinyCap = potrf_plan::TinyCap<T>;
 
 // A LAUNCH gate: violating it aborts the enqueue. What binds is the SUB-PARTITION file --
 // 64 lanes is 2 warps in one partition, 1 x 32 x 176 = 5,632 of its 16,384. The gate that
 // actually bites here is the probe's STACK FRAME column. evidence: docs/perf/potrf.md#the-tiny-tier
-constexpr int kTinyWorstProbedRegs = 176;
+using potrf_plan::kTinyWorstProbedRegs;
 static_assert(resident::sm89_fits(kTinyWorstProbedRegs, kTinyWgSize),
               "kTinyWorstProbedRegs at kTinyWgSize overflows a register sub-partition; "
               "re-run scripts/register_probe.sh before raising either");
-
-// Matrices per work-group, through the shared helper. The byte argument is a nominal 1
-// against an unbounded budget because this tier owns no local memory.
-inline int potrf_tiny_matrices_per_wg(int N, int max_wg) {
-    return resident::pack_matrices_per_wg(/*bytes_per_matrix=*/1, /*lanes_per_matrix=*/N,
-                                          /*wg_slm_budget_bytes=*/~std::size_t(0), max_wg,
-                                          /*target_wg_size=*/kTinyWgSize,
-                                          /*max_pack=*/kTinyWgSize / N);
-}
 
 template <typename T, int N>
 Event potrf_tiny_launch(Queue& ctx,
                         const MatrixView<T, MatrixFormat::Dense>& A,
                         bool upper,
                         Span<int32_t> info,
-                        int n, int batch, int per_wg) {
+                        int n, int batch, const potrf_plan::TinyGeometry& g) {
     // std::complex is re-typed to the POD device scalar at the pointer boundary: its
     // Annex-G operator* costs an isnan branch and a __mulsc3 call in device code.
     using DM = sycl_device::DevMap<T>;
@@ -83,8 +72,9 @@ Event potrf_tiny_launch(Queue& ctx,
     const int stride_a = A.stride();
     int32_t* info_ptr = info.data();
 
-    const int wg_size = per_wg * N;
-    const int num_wg = (batch + per_wg - 1) / per_wg;
+    const int per_wg = g.per_wg;
+    const int wg_size = g.wg_size;
+    const std::int64_t num_wg = g.num_wg;
 
     // A Hermitian diagonal's imaginary part is contractually ignored; for a real type
     // the transform is the identity.
@@ -212,14 +202,11 @@ template <typename T>
 unsigned potrf_tiny_debug_launch(Queue& ctx, int n) {
     const auto dev = ctx.device();
     if (dev.type != DeviceType::GPU) return 0u;
-    const int N = tiny_native::tiny_bucket_ge(n);
-    if (N == 0 || n > potrf_tiny_max_n<T>()) return 0u;
     const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
-    const int per_wg = potrf_tiny_matrices_per_wg(N, max_wg);
-    const int wg = per_wg * N;
-    if (wg % kTinySubGroupSize != 0) return 0u;
-    const int S = wg / kTinySubGroupSize;                 // sub-groups per work-group
-    const int G = per_wg / S;                             // partitions per sub-group
+    const auto g = potrf_plan::tiny_geometry<T>(n, 1, max_wg);
+    if (!g.fits) return 0u;
+    const int S = g.wg_size / kTinySubGroupSize;          // sub-groups per work-group
+    const int G = g.per_wg / S;                           // partitions per sub-group
     return (static_cast<unsigned>(S) << 16) | static_cast<unsigned>(G);
 }
 
@@ -273,21 +260,18 @@ Event potrf_tiny_dispatch(Queue& ctx,
                              : potrf_tiny_layout<T>(ctx, pool, batch);
 
     const bool upper = (uplo == Uplo::Upper);
-    const int N = tiny_native::tiny_bucket_ge(n);
+    const auto g = potrf_plan::tiny_geometry<T>(n, batch, max_wg);
 
     // Only the per-type OUTER entry points are explicitly instantiated; this switch
     // pulls the three N in (trsm_native.cc's discipline).
-    switch (N) {
+    switch (g.fits ? g.N : 0) {
         case 8:
-            return potrf_tiny_launch<T, 8>(ctx, A, upper, info, n, batch,
-                                           potrf_tiny_matrices_per_wg(8, max_wg));
+            return potrf_tiny_launch<T, 8>(ctx, A, upper, info, n, batch, g);
         case 16:
-            return potrf_tiny_launch<T, 16>(ctx, A, upper, info, n, batch,
-                                            potrf_tiny_matrices_per_wg(16, max_wg));
+            return potrf_tiny_launch<T, 16>(ctx, A, upper, info, n, batch, g);
         case 32:
             if constexpr (PotrfTinyCap<T>::kMaxN >= 32) {
-                return potrf_tiny_launch<T, 32>(ctx, A, upper, info, n, batch,
-                                                potrf_tiny_matrices_per_wg(32, max_wg));
+                return potrf_tiny_launch<T, 32>(ctx, A, upper, info, n, batch, g);
             }
             break;
         default:

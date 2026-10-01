@@ -656,6 +656,45 @@ Raw data is at tag `perf-evidence/vendor-independence`, retrievable with
 
 ---
 
+## Launch plans
+
+Every native tier's geometry is decided in one place, `src/extensions/potrf_launch_plan.hh`
+(SYCL-free, constexpr): `tiny_geometry`, `cta_geometry` (the `L` ladder, `G` packing, the hole
+pad), `lpanel_geometry`, `blocked_params` (nb, W, the occupancy target) and `blocked_schedule`
+(the panel walk). The launchers, the `*_max_n_for_slm` ceilings `supports()` reads, the
+`*_debug_*` introspection, the shape builder (`potrf_op_shape_from_facts`) and
+`potrf_plan_dump` all call them; nothing re-derives a launch value.
+
+`tiny_plan` / `cta_plan` / `lpanel_plan` / `blocked_plan` wrap the geometry in a
+`launch_plan::LaunchPlan` (`src/util/launch_plan.hh`) for the routing cost model of
+`docs/design/routing-cost-model.md`:
+
+| field | tiny | cta | lpanel | blocked |
+|---|---|---|---|---|
+| launches | 1 | 1 | 1 | fills + per panel: leaf, fixup, solve, then 2 or 3 per W column (each routed sub-op counted once) |
+| groups, wg, SLM | `tiny_geometry` | `cta_geometry` | `lpanel_geometry` | the leaf's `cta_geometry` at nb |
+| resident groups/CU | register cap at the probed 176 regs | SLM, threads, group cap | SLM, threads, group cap | leaf's |
+| flops | LAPACK count at the **bucket** N (padding is masked, not skipped) | LAPACK count | LAPACK count | the schedule's executed work (W-block gemms included) |
+| bytes | triangle read + write | triangle read + write | left-looking re-reads, from the panel walk | per sub-op, from the panel walk |
+| serial steps | N | n | n | n |
+
+`useful_flops` is LAPACK's count at n (x4 complex) for every tier. The cost is
+`t_launch*T0 + max(s_per_flop*T1, s_per_byte*T2) + t_step*T3`, where `cost_terms` turns the plan
+into `T0..T3` (waves, per-group shares) and `combine` applies the constants; the vendor is
+priced through `vendor_pseudo_plan`, a single-group plan, since it has no geometry of its own.
+
+The refactor moved no launch value: `potrf_plan_tests` compares the plan geometry against
+`tests/potrf_plan_golden*.inc`, the pre-refactor launchers' `*_debug_*` codes at every order
+where a code changes (1,468 edges, both sides, four types, batch 1/3/1000, three occupancy
+targets, both LPanel NB), and a full before/after dump of the same introspection (50,996 codes)
+was identical. Armed breaks, each red only on its own tier's rows: `kCtaMaxL` 256->128 (24
+CTA rows), LPanel lanes rounded to 64 (436 LPanel rows), `kOccupancyNbMaxOrder` 256->255 (4
+blocked rows), cdouble tiny cap 16->32 (1 tiny row + the unfit-plan case), hole pad disabled
+(18 CTA rows). `kCtaElemsPerItem` 24->25 moves no edge (the work-element steps skip that band),
+so it is not a usable break.
+
+---
+
 ## The occupancy rule
 
 **P7, 2026-09-10.** `potrf_cta_max_n_for_slm<T>(budget, min_blocks_per_sm)` divides the

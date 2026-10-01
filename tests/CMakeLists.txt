@@ -40,6 +40,7 @@ set(TEST_TARGETS
     matrix_view_tests
     trsm_tests
     potrf_tests
+    potrf_plan_tests
     geqrf_tests
     getrf_tests
     gesv_tests
@@ -155,7 +156,7 @@ set(BATCHLAS_TEST_LABELS_util
 set(BATCHLAS_TEST_LABELS_blas
     device_blas_tests gemm_tests gemv_tests symm_tests hemm_tests herk_tests her2k_tests
     syrk_tests syr2k_tests
-    trmm_tests trsm_tests potrf_tests geqrf_tests getrf_tests resident_capacity_tests
+    trmm_tests trsm_tests potrf_tests potrf_plan_tests geqrf_tests getrf_tests resident_capacity_tests
     gesv_tests posv_tests
     transpose_tests norm_tests cond_tests inverse_tests)
 set(BATCHLAS_TEST_LABELS_ortho
@@ -206,6 +207,14 @@ function(batchlas_add_test_target test_name)
     if(test_name STREQUAL "sg_partition_tests")
         # Header-only: compiles src/extensions/sg_partition/ directly and links
         # no batchlas library, only the SYCL compiler and include paths.
+        batchlas_configure_binary_target(${test_name}
+            NO_FACADE
+            LIBRARIES
+                GTest::gtest
+                GTest::gtest_main
+        )
+    elseif(test_name STREQUAL "potrf_plan_tests")
+        # Header-only launch plans: no queue, no kernel, no batchlas library.
         batchlas_configure_binary_target(${test_name}
             NO_FACADE
             LIBRARIES
@@ -421,6 +430,11 @@ endforeach()
 if(BATCHLAS_SMOKE_TEST_TARGETS)
     add_custom_target(batchlas_smoke_tests DEPENDS ${BATCHLAS_SMOKE_TEST_TARGETS})
 endif()
+
+# potrf_plan_dump: launch-plan features for evaluation/routing/fit.py. A tool, not a test;
+# it needs no GPU because the device is described on its command line.
+add_executable(potrf_plan_dump ${PROJECT_SOURCE_DIR}/evaluation/routing/potrf_plan_dump.cc)
+batchlas_configure_binary_target(potrf_plan_dump)
 
 # ---------------------------------------------------------------------------
 # batchlas_coverage: what this build can do, and what a run reached.
