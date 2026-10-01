@@ -4,6 +4,7 @@
 // only its arguments. Do not add src/queue.hh or <sycl/sycl.hpp> -- the vendor-free facade
 // includes this. evidence: docs/perf/potrf.md#what-ships
 
+#include <batchlas/blas/dispatch/device_facts.hh>
 #include <batchlas/blas/dispatch/route_env.hh>
 #include <batchlas/blas/dispatch/route_potrf.hh>
 #include <batchlas/blas/enums.hh>
@@ -37,7 +38,7 @@ inline std::optional<dispatch::PotrfShape> potrf_op_shape(
     s.batch = A.batch_size();
     s.uplo = uplo;
 
-    s.is_gpu = (ctx.device().type == DeviceType::GPU);
+    batchlas::dispatch::fill_device_facts(s, ctx);
 
     s.has_sg32 = ctx.device().supports_sub_group_size(32);  // enumerated, not `>= 32`
 

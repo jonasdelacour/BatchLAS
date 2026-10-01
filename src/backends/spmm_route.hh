@@ -5,6 +5,7 @@
 // here: the vendor-free facade (dispatch/entry_points/sparse.cc) includes this
 // header. evidence: docs/perf/spmm.md
 
+#include <batchlas/blas/dispatch/device_facts.hh>
 #include <batchlas/blas/dispatch/route_env.hh>
 #include <batchlas/blas/dispatch/route_spmm.hh>
 #include <batchlas/blas/enums.hh>
@@ -70,8 +71,8 @@ inline std::optional<dispatch::SpmmShape> spmm_op_shape(
 
     s.format = MF;
 
-    // Recorded for coverage; supports() deliberately ignores it -- the bodies have no GPU gate.
-    s.is_gpu = (ctx.device().type == DeviceType::GPU);
+    // Recorded for coverage; supports() ignores is_gpu -- the bodies have no GPU gate.
+    batchlas::dispatch::fill_device_facts(s, ctx);
 
     // Only the dense operands can be heterogeneous; a CSR view varies per item only through nnz.
     s.heterogeneous_batch = B_mat.is_heterogeneous() || C.is_heterogeneous();

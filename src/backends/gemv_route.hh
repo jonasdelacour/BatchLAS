@@ -11,6 +11,7 @@
 // the last such include is what made the routing adapters includable from the
 // vendor-free facade, and this header is included by that facade.
 
+#include <batchlas/blas/dispatch/device_facts.hh>
 #include <batchlas/blas/dispatch/route_env.hh>
 #include <batchlas/blas/dispatch/route_gemv.hh>
 #include <batchlas/blas/enums.hh>
@@ -103,7 +104,7 @@ inline std::optional<dispatch::GemvShape> gemv_op_shape(
     // coverage row and makes route_diff blind to the distinction.
     s.transA = transA;
 
-    s.is_gpu = (ctx.device().type == DeviceType::GPU);
+    batchlas::dispatch::fill_device_facts(s, ctx);
 
     // ENUMERATED, not `max_sub_group >= 32`. Device::supports_sub_group_size
     // (sycl-device-queue.hh:178-190) walks sycl::info::device::sub_group_sizes;

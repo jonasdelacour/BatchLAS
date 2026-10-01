@@ -14,6 +14,7 @@
 
 #include <batchlas/backend_config.h>
 
+#include <batchlas/blas/dispatch/device_facts.hh>
 #include <batchlas/blas/dispatch/route.hh>
 #include <batchlas/blas/dispatch/no_route.hh>
 #include <batchlas/blas/dispatch/vendor_available.hh>
@@ -235,17 +236,7 @@ inline batchlas::dispatch::GesvdShape gesvd_op_shape(const Queue& ctx,
     s.jobu = jobu;
     s.jobvh = jobvh;
     s.hermitian_uplo = hermitian_uplo;
-    try {
-        s.is_gpu = ctx.device().type == DeviceType::GPU;
-    } catch (...) {
-        // query_caps was best-effort and never threw; keep that contract.
-    }
-    try {
-        s.max_sub_group =
-            static_cast<int>(ctx.device().get_property(DeviceProperty::MAX_SUB_GROUP_SIZE));
-    } catch (...) {
-        // leave default
-    }
+    batchlas::dispatch::fill_device_facts(s, ctx);
     return s;
 }
 

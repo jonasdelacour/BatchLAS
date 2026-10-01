@@ -401,6 +401,34 @@ shape" with "something does but the heuristic preferred the vendor" (`level3_cov
 are instrumented directly at each terminal, beside every `return` and never in place of one, because they do not go
 through `resolve_route` (`:18-37`); `uplo`/`side`/`diag`/`transA` are part of the coverage **key**, not decoration.
 
+### Routing profiles
+
+Every routing window was measured on a handful of GPUs; a device that is none of them borrows the **nearest
+measured** profile (`arch::nearest_profile`, `include/batchlas/arch/arch_key.hh`): exact sm_89 and sm_120 are
+themselves; sm_80/86/87/90 borrow sm_89; sm_100..121 borrow sm_120; everything else (other CUDA, AMD, Intel, CPU)
+borrows sm_89. Every borrow, and every `BATCHLAS_ROUTING_PROFILE` force that is not the device's exact profile, is
+flagged `nearest`. The map is constexpr so it is tested without a GPU (`tests/routing_profile_tests.cc`).
+
+The device facts on an `OpShape` (`is_gpu`, `max_sub_group`, `compute_units`, `cuda_cc`, `profile`,
+`profile_nearest`) are written only by `dispatch::fill_device_facts()` (`device_facts.hh`). Before it, each of the
+16 builders set them by hand and only some set each one; a builder that missed `cuda_cc` routed as an sm_89 with
+no error. The per-device queries are memoized in `dispatch::device_facts()`; the override is re-read per call so a
+`ScopedEnvVar` takes effect. An unrecognised `BATCHLAS_ROUTING_PROFILE` throws `batchlas::invalid_argument` from
+every builder, because a typo that fell back to the device profile would make an A/B measure one arm twice.
+`tests/routing_profile_tests.cc` calls every builder on a GPU queue and requires every `Op` to have either a probe
+or a listed exemption (`hemm`, `herk`, `her2k`, `iluk` have no builder).
+
+`reached` rows end with `profile,profile_nearest`: the measured architecture whose routing the call used
+(`arch::RoutingProfile`, `sm_89` or `sm_120`) and whether that was a substitution for an unmeasured device
+(`include/batchlas/arch/arch_key.hh`) or a `BATCHLAS_ROUTING_PROFILE` force. Both are in the key, which has a side effect worth knowing when diffing against
+an older capture: a CPU-queue call (sm_89, nearest) and a GPU-queue call with the same op/scalar/shape class used to
+merge into ONE row whose route was whichever ran first, and now they are two rows. Measured on the sm_120 box
+(18 test binaries): with the CPU instantiations included, 14 added rows and 0 removed, two of them ormqr keys whose
+old merged row showed the CPU call's `vendor:auto` and hid the GPU's `native:blocked`; with
+`BATCHLAS_TEST_BACKEND=CUDA`, 1138 decisions byte-identical. A row reading
+`unset` came from a shape builder that skipped `dispatch::fill_device_facts()`. They are appended, so positional
+readers (`route_diff.sh`, `gemm_demand.py`, benchviz's `parse_coverage`) see the old columns unchanged.
+
 `scripts/route_diff.sh capture|compare` is the only tool that sees vendor-to-vendor route changes: the kernel trace
 cannot (its `Record` holds a `sycl::event`) and timing cannot (an unsaturated ratio is overhead, and routing a shape
 to cuBLAS may well be faster). It treats a capture with **zero `reached` rows as a hard error** rather than as

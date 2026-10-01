@@ -15,6 +15,7 @@
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/blas/extensions.hh>
 
+#include <batchlas/blas/dispatch/device_facts.hh>
 #include <batchlas/blas/dispatch/route.hh>
 #include <batchlas/blas/dispatch/no_route.hh>
 #include <batchlas/blas/dispatch/vendor_available.hh>
@@ -334,17 +335,7 @@ inline SyevShape syev_op_shape(const Queue& ctx,
     s.batch = A.batch_size();
     s.uplo = uplo;
     s.jobtype = jobtype;
-    try {
-        s.is_gpu = ctx.device().type == DeviceType::GPU;
-    } catch (...) {
-        // best-effort; leave default
-    }
-    try {
-        s.max_sub_group =
-            static_cast<int>(ctx.device().get_property(DeviceProperty::MAX_SUB_GROUP_SIZE));
-    } catch (...) {
-        // leave default
-    }
+    batchlas::dispatch::fill_device_facts(s, ctx);
     return s;
 }
 

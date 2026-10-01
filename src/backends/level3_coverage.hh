@@ -39,6 +39,7 @@
 #include <cstdint>
 
 #include <batchlas/blas/dispatch/coverage.hh>
+#include <batchlas/blas/dispatch/device_facts.hh>
 #include <batchlas/blas/dispatch/route.hh>
 #include <batchlas/blas/enums.hh>
 
@@ -76,14 +77,10 @@ struct Level3Variant {
     Transpose transA = Transpose::NoTrans;
 };
 
-inline void record_level3_route(dispatch::Op op,
-                                dispatch::Route taken,
-                                int64_t m, int64_t n, int64_t k, int64_t batch,
-                                int native_supported,
-                                Level3Variant v = {}) {
-    if (!dispatch::coverage::dynamic_enabled()) {
-        return;
-    }
+// The builder half, separate so tests/routing_profile_tests.cc can check its device facts.
+inline dispatch::OpShape level3_op_shape(const Queue& ctx, dispatch::Op op,
+                                         int64_t m, int64_t n, int64_t k, int64_t batch,
+                                         Level3Variant v = {}) {
     dispatch::OpShape s;
     s.op      = op;
     s.scalar  = dispatch::ScalarKind::F32;
@@ -96,6 +93,20 @@ inline void record_level3_route(dispatch::Op op,
     s.side   = v.side;
     s.diag   = v.diag;
     s.transA = v.transA;
+    batchlas::dispatch::fill_device_facts(s, ctx);
+    return s;
+}
+
+inline void record_level3_route(const Queue& ctx,
+                                dispatch::Op op,
+                                dispatch::Route taken,
+                                int64_t m, int64_t n, int64_t k, int64_t batch,
+                                int native_supported,
+                                Level3Variant v = {}) {
+    if (!dispatch::coverage::dynamic_enabled()) {
+        return;
+    }
+    const dispatch::OpShape s = level3_op_shape(ctx, op, m, n, k, batch, v);
     dispatch::coverage::record(op, s.scalar, s.backend, s, taken,
                                /*native_existed=*/true, native_supported);
 }
