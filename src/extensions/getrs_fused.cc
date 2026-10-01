@@ -13,6 +13,8 @@
 #include "../sycl/device_scalar.hh"
 #include "../util/resident_capacity.hh"
 
+#include <batchlas/blas/dispatch/route.hh>
+
 #include <sycl/sycl.hpp>
 
 #include <algorithm>
@@ -58,33 +60,91 @@ constexpr int getrs_fused_nr_bucket(int nrhs) {
     return (nrhs <= 1) ? 0 : (nrhs <= 2) ? 1 : (nrhs <= 4) ? 2 : 3;
 }
 
+// sm_89 rows: measured on the 4090, before the round-robin column spread. That spread moved
+// standalone sm_89 ptxas counts by up to +6 (NR > 1 only; NR == 1 compiles to the old form),
+// and the 4090 cannot be re-probed, so each row that moved up carries that delta on top.
+// `potrs` was max(notrans, trans) and still is, except where its own kernel moved further.
+// evidence: docs/perf/blackwell.md#lu-getrs-fused-sm89-rows
 template <typename S> struct GetrsFusedRegs;
 template <> struct GetrsFusedRegs<float> {
     static constexpr int notrans[4] = {39, 48, 48, 48};
     static constexpr int trans[4]   = {39, 40, 48, 68};
+    static constexpr int potrs[4]   = {39, 48, 48, 68};
 };
 template <> struct GetrsFusedRegs<double> {
-    static constexpr int notrans[4] = {39, 52, 44, 61};
-    static constexpr int trans[4]   = {46, 44, 51, 72};
+    static constexpr int notrans[4] = {39, 52, 44, 67};
+    static constexpr int trans[4]   = {46, 44, 55, 72};
+    static constexpr int potrs[4]   = {46, 54, 55, 76};
 };
 template <> struct GetrsFusedRegs<std::complex<float>> {
     static constexpr int notrans[4] = {40, 40, 40, 48};
-    static constexpr int trans[4]   = {42, 43, 48, 56};
+    static constexpr int trans[4]   = {42, 45, 48, 56};
+    static constexpr int potrs[4]   = {42, 45, 48, 56};
 };
 template <> struct GetrsFusedRegs<std::complex<double>> {
-    static constexpr int notrans[4] = {54, 56, 56, 72};
-    static constexpr int trans[4]   = {56, 58, 58, 86};
+    static constexpr int notrans[4] = {54, 60, 60, 72};
+    static constexpr int trans[4]   = {56, 58, 60, 86};
+    static constexpr int potrs[4]   = {56, 60, 60, 86};
 };
 
+// sm_120 ptxas counts (scripts/register_probe.sh, this TU): the sm_89 rows above undercount
+// here -- float Trans nrhs 5..8 uses 86, so the sm_89 row hands out a 768-lane launch the
+// driver refuses. `potrs` is the max over both PotrsFusedKernel uplo forms. One probe of
+// an icpx 2026.0 RelWithDebInfo build: a compiler, build-type or kernel-body change needs
+// a re-probe, because this is a launch-abort guard.
+// evidence: docs/perf/blackwell.md#lu-getrs-fused
+template <typename S> struct GetrsFusedRegs120;
+template <> struct GetrsFusedRegs120<float> {
+    static constexpr int notrans[4] = {56, 69, 54, 56};
+    static constexpr int trans[4]   = {50, 56, 64, 86};
+    static constexpr int potrs[4]   = {57, 64, 72, 96};
+};
+template <> struct GetrsFusedRegs120<double> {
+    static constexpr int notrans[4] = {64, 68, 59, 72};
+    static constexpr int trans[4]   = {59, 58, 64, 95};
+    static constexpr int potrs[4]   = {68, 66, 72, 96};
+};
+template <> struct GetrsFusedRegs120<std::complex<float>> {
+    static constexpr int notrans[4] = {59, 72, 67, 69};
+    static constexpr int trans[4]   = {56, 62, 64, 101};
+    static constexpr int potrs[4]   = {62, 64, 87, 96};
+};
+template <> struct GetrsFusedRegs120<std::complex<double>> {
+    static constexpr int notrans[4] = {74, 80, 80, 96};
+    static constexpr int trans[4]   = {74, 72, 80, 126};
+    static constexpr int potrs[4]   = {80, 82, 93, 128};
+};
+
+enum class FusedBody { kNoTrans, kTrans, kPotrs };
+
 template <typename T>
-constexpr int getrs_fused_regs_for(int nrhs, bool trans) {
+constexpr int getrs_fused_regs_for(int nrhs, FusedBody body, int cuda_cc) {
     const int i = getrs_fused_nr_bucket(nrhs);
-    return trans ? GetrsFusedRegs<T>::trans[i] : GetrsFusedRegs<T>::notrans[i];
+    const auto pick = [&](const int* nt, const int* tr, const int* po) {
+        return body == FusedBody::kTrans ? tr[i] : body == FusedBody::kNoTrans ? nt[i] : po[i];
+    };
+    if (dispatch::is_sm120_family(cuda_cc)) {
+        using R = GetrsFusedRegs120<T>;
+        return pick(R::notrans, R::trans, R::potrs);
+    }
+    using R = GetrsFusedRegs<T>;
+    return pick(R::notrans, R::trans, R::potrs);
 }
+
+// The sm_89 potrs row may only widen the old max(notrans, trans) charge, never narrow it.
+template <typename T> constexpr bool potrs_row_covers_getrs() {
+    using R = GetrsFusedRegs<T>;
+    for (int i = 0; i < 4; ++i)
+        if (R::potrs[i] < std::max(R::notrans[i], R::trans[i])) return false;
+    return true;
+}
+static_assert(potrs_row_covers_getrs<float>() && potrs_row_covers_getrs<double>() &&
+              potrs_row_covers_getrs<std::complex<float>>() &&
+              potrs_row_covers_getrs<std::complex<double>>());
 
 // The work-group width: ~ n/2 clamped to [64, 1024], then capped by the register gate.
 template <typename T>
-inline int getrs_fused_wg(int n, int nrhs, int max_wg, bool trans) {
+inline int getrs_fused_wg(int n, int nrhs, int max_wg, FusedBody body, int cuda_cc) {
     int wg = 32;
     while (wg < n / 2 && wg < 1024) wg *= 2;
     if (wg < 64) wg = 64;
@@ -97,7 +157,7 @@ inline int getrs_fused_wg(int n, int nrhs, int max_wg, bool trans) {
     // probed 86 registers is 6 x 32 x 88 = 16,896), but that cell is UNREACHABLE: the 672-lane
     // width needs n >= 1025, and getrs_fused_dispatch throws invalid_argument on n * nrhs past
     // the resident-RHS capacity long before it. Seven cells narrow, the widest by 96 lanes.
-    const int regs = getrs_fused_regs_for<T>(nrhs, trans) + kGetrsFusedRegMargin;
+    const int regs = getrs_fused_regs_for<T>(nrhs, body, cuda_cc) + kGetrsFusedRegMargin;
     int cap = resident::sm89_max_work_group(regs);   // already a multiple of the sub-group
     if (cap < 32) cap = 32;
     if (wg > cap) wg = cap;
@@ -184,6 +244,11 @@ Event fused_launch_notrans(Queue& ctx,
                 const auto sg = it.get_sub_group();
                 const int lane = static_cast<int>(sg.get_local_linear_id());
                 const int sgid = static_cast<int>(sg.get_group_linear_id());
+                const int nsg = static_cast<int>(sg.get_group_linear_range());
+                // NR == 1 keeps the sub-group-0 form: the round-robin cannot help there and cost ~3%.
+                const bool c_active = (NR != 1) || sgid == 0;
+                const int c0 = (NR == 1) ? 0 : sgid;
+                const int cs = (NR == 1) ? 1 : nsg;
 
                 const D* const Ab = Ap + b * static_cast<std::size_t>(strideA);
                 D* const Bb = Bp + b * static_cast<std::size_t>(strideB);
@@ -225,8 +290,8 @@ Event fused_launch_notrans(Queue& ctx,
                     // a register and the recurrence takes no work-group barrier.
                     // group_broadcast is a collective and must not be called under
                     // divergence -- the lane guards are INSIDE it, not around.
-                    if (sgid == 0 && jb > 1) {
-                        for (int c = 0; c < nrhs; ++c) {
+                    if (c_active && jb > 1) {
+                        for (int c = c0; c < nrhs; c += cs) {
                             D* const yc = y + static_cast<std::size_t>(c) * static_cast<std::size_t>(n);
                             D v = (lane < jb) ? yc[j + lane] : dev_zero_of<D>();
                             for (int kk = 0; kk < jb - 1; ++kk) {
@@ -282,8 +347,8 @@ Event fused_launch_notrans(Queue& ctx,
                     }
                     it.barrier(sycl::access::fence_space::local_space);
 
-                    if (sgid == 0) {
-                        for (int c = 0; c < nrhs; ++c) {
+                    if (c_active) {
+                        for (int c = c0; c < nrhs; c += cs) {
                             D* const yc = y + static_cast<std::size_t>(c) * static_cast<std::size_t>(n);
                             D v = (lane < jb) ? yc[j0 + lane] : dev_zero_of<D>();
                             for (int kk = jb - 1; kk >= 0; --kk) {
@@ -374,6 +439,10 @@ Event fused_launch_trans(Queue& ctx,
                 const auto sg = it.get_sub_group();
                 const int lane = static_cast<int>(sg.get_local_linear_id());
                 const int sgid = static_cast<int>(sg.get_group_linear_id());
+                // NR == 1 keeps the sub-group-0 form: the round-robin cannot help there and cost ~3%.
+                const bool c_active = (NR != 1) || sgid == 0;
+                const int c0 = (NR == 1) ? 0 : sgid;
+                const int cs = (NR == 1) ? 1 : nsg;
 
                 const D* const Ab = Ap + b * static_cast<std::size_t>(strideA);
                 D* const Bb = Bp + b * static_cast<std::size_t>(strideB);
@@ -436,8 +505,8 @@ Event fused_launch_trans(Queue& ctx,
 
                     // The diagonal block, by ONE sub-group. Lane t owns row t and
                     // reads blk[s + t*bld], stride bld across lanes -- the pad.
-                    if (sgid == 0) {
-                        for (int c = 0; c < nrhs; ++c) {
+                    if (c_active) {
+                        for (int c = c0; c < nrhs; c += cs) {
                             D* const yc = y + static_cast<std::size_t>(c) * static_cast<std::size_t>(n);
                             D v = (lane < jb) ? yc[j + lane] : dev_zero_of<D>();
                             for (int s = 0; s < jb; ++s) {
@@ -497,8 +566,8 @@ Event fused_launch_trans(Queue& ctx,
 
                     // UNIT diagonal: no division, and the recurrence runs
                     // BACKWARDS because op(L) is upper.
-                    if (sgid == 0 && jb > 1) {
-                        for (int c = 0; c < nrhs; ++c) {
+                    if (c_active && jb > 1) {
+                        for (int c = c0; c < nrhs; c += cs) {
                             D* const yc = y + static_cast<std::size_t>(c) * static_cast<std::size_t>(n);
                             D v = (lane < jb) ? yc[j0 + lane] : dev_zero_of<D>();
                             for (int s = jb - 1; s > 0; --s) {
@@ -572,6 +641,10 @@ Event potrs_fused_launch(Queue& ctx,
                 const auto sg = it.get_sub_group();
                 const int lane = static_cast<int>(sg.get_local_linear_id());
                 const int sgid = static_cast<int>(sg.get_group_linear_id());
+                // NR == 1 keeps the sub-group-0 form: the round-robin cannot help there and cost ~3%.
+                const bool c_active = (NR != 1) || sgid == 0;
+                const int c0 = (NR == 1) ? 0 : sgid;
+                const int cs = (NR == 1) ? 1 : nsg;
 
                 const D* const Ab = Ap + b * static_cast<std::size_t>(strideA);
                 D* const Bb = Bp + b * static_cast<std::size_t>(strideB);
@@ -626,8 +699,8 @@ Event potrs_fused_launch(Queue& ctx,
                     }
                     it.barrier(sycl::access::fence_space::local_space);
 
-                    if (sgid == 0) {
-                        for (int c = 0; c < nrhs; ++c) {
+                    if (c_active) {
+                        for (int c = c0; c < nrhs; c += cs) {
                             D* const yc = y + c * nz;
                             D v = (lane < jb) ? yc[j + lane] : dev_zero_of<D>();
                             for (int s = 0; s < jb; ++s) {
@@ -694,8 +767,8 @@ Event potrs_fused_launch(Queue& ctx,
                     }
                     it.barrier(sycl::access::fence_space::local_space);
 
-                    if (sgid == 0) {
-                        for (int c = 0; c < nrhs; ++c) {
+                    if (c_active) {
+                        for (int c = c0; c < nrhs; c += cs) {
                             D* const yc = y + c * nz;
                             D v = (lane < jb) ? yc[j0 + lane] : dev_zero_of<D>();
                             for (int s = jb - 1; s >= 0; --s) {
@@ -875,7 +948,9 @@ Event getrs_fused_dispatch(Queue& ctx,
 
     const int nb = getrs_fused_nb(n);
     const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
-    const int wg = getrs_fused_wg<T>(n, nrhs, max_wg, trans);
+    const int wg = getrs_fused_wg<T>(n, nrhs, max_wg,
+                                     trans ? FusedBody::kTrans : FusedBody::kNoTrans,
+                                     dev.cuda_compute_capability());
 
     return fused_dispatch_nr<T>(
         ctx,
@@ -926,8 +1001,8 @@ Event potrs_fused_dispatch(Queue& ctx,
     const int nb = getrs_fused_nb(n);
     const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
     // One body holds BOTH getrs forms, so it is charged the wider of their register rows.
-    const int wg = std::min(getrs_fused_wg<T>(n, nrhs, max_wg, /*trans=*/false),
-                            getrs_fused_wg<T>(n, nrhs, max_wg, /*trans=*/true));
+    const int wg = getrs_fused_wg<T>(n, nrhs, max_wg, FusedBody::kPotrs,
+                                     dev.cuda_compute_capability());
 
     #define BATCHLAS_POTRS_FUSED_ARM(NRV)                                                  \
         if (uplo == Uplo::Lower)                                                           \

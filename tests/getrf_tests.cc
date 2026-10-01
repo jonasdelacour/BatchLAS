@@ -2481,19 +2481,22 @@ TYPED_TEST(LuTest, RouteTableAndTheVendorFreeFallback) {
             const auto r_in  = backend::getrf_route<B, T>(*this->ctx, Vin, true);
             const auto r_sb  = backend::getrf_route<B, T>(*this->ctx, Vsb, true);
             const auto r_out = backend::getrf_route<B, T>(*this->ctx, Vout, true);
+            // sm_120 moved these edges: GetrfSm120WindowsAreBracketedAndSm89IsUnchanged.
+            const bool sm120 =
+                dispatch::is_sm120_family(this->ctx->device().cuda_compute_capability());
             if constexpr (kCF) {
                 EXPECT_TRUE(dispatch::is_native(r_in) &&
                             r_in.algo == dispatch::Algorithm::Blocked)
                     << "cfloat n=256 batch=256 is inside the window P4 measured "
                        "(1.285 there, 1.146-1.295 at the saturating rungs)";
-                EXPECT_TRUE(dispatch::is_vendor(r_sb))
+                if (!sm120) EXPECT_TRUE(dispatch::is_vendor(r_sb))
                     << "cfloat n=256 batch=2 is OUTSIDE it: the 256..511 band reads 0.92 "
                        "at batch 128 and the clause carries a batch >= 256 term";
             } else if constexpr (!kF) {
                 EXPECT_TRUE(dispatch::is_vendor(r_in))
                     << "only float and cfloat earned a getrf window";
             }
-            if constexpr (!kF) {
+            if (!kF && !(kCF && sm120)) {
                 EXPECT_TRUE(dispatch::is_vendor(r_out))
                     << "n=192 is the bracketing NON-winner below the cfloat floor";
             }
@@ -3986,8 +3989,12 @@ TYPED_TEST(LuTest, TinyRoutesInsideItsMeasuredWindowAndNowhereElse) {
 
     auto p = make_dominant_permuted<T>(std::min(in_n, this->tiny_max_n()), 3, 21u);
     auto V = view_of(p);
-    const auto shape = backend::getrf_op_shape<B, T>(*this->ctx, V);
+    // The sm_89 windows; sm_120's are GetrfSm120WindowsAreBracketedAndSm89IsUnchanged.
+    auto shape = backend::getrf_op_shape<B, T>(*this->ctx, V);
     ASSERT_TRUE(shape.has_value());
+    shape->cuda_cc = 89;
+    const bool sm120 =
+        dispatch::is_sm120_family(this->ctx->device().cuda_compute_capability());
     EXPECT_EQ(shape->tiny_max_n, this->tiny_max_n())
         << "the shape builder and the kernel disagree about the tier's ceiling";
 
@@ -4009,16 +4016,19 @@ TYPED_TEST(LuTest, TinyRoutesInsideItsMeasuredWindowAndNowhereElse) {
     {
         auto q = make_dominant_permuted<T>(out_n, 3, 23u);
         auto QV = view_of(q);
-        const auto qs = backend::getrf_op_shape<B, T>(*this->ctx, QV);
+        auto qs = backend::getrf_op_shape<B, T>(*this->ctx, QV);
         ASSERT_TRUE(qs.has_value());
+        qs->cuda_cc = 89;
         EXPECT_TRUE(Tbl::supports(tiny, *qs)) << "the TIER still holds this order";
         EXPECT_FALSE(Tbl::preferred(tiny, *qs))
             << "order " << out_n << " is a measured non-winner and must stay on the vendor";
         ScopedEnvVar unpinned("BATCHLAS_GETRF_ROUTE", nullptr);
         const auto def = backend::getrf_route<B, T>(*this->ctx, QV,
                                                     dispatch::factorization_vendor_available<B>);
-        EXPECT_NE(def.algo, dispatch::Algorithm::Tiny)
-            << "automatic() took Tiny below its measured floor";
+        if (!sm120) {
+            EXPECT_NE(def.algo, dispatch::Algorithm::Tiny)
+                << "automatic() took Tiny below its measured floor";
+        }
         if constexpr (kWindowed) {
             // A tie with the vendor, but ~3x the CTA tier: the native walk takes Tiny.
             ScopedEnvVar pin("BATCHLAS_GETRF_ROUTE", "native");
@@ -4039,7 +4049,9 @@ TYPED_TEST(LuTest, TinyRoutesInsideItsMeasuredWindowAndNowhereElse) {
         const auto shape_at = [&](int n, uint32_t seed) {
             auto q = make_dominant_permuted<T>(n, 3, seed);
             auto QV = view_of(q);
-            return backend::getrf_op_shape<B, T>(*this->ctx, QV);
+            auto sh = backend::getrf_op_shape<B, T>(*this->ctx, QV);
+            if (sh) sh->cuda_cc = 89;
+            return sh;
         };
         const auto s24 = shape_at(24, 24u);
         ASSERT_TRUE(s24.has_value());
@@ -4335,6 +4347,382 @@ TEST(GetrfTinySource, OnlySubGroupBarriersAndNoGroupCollective) {
     std::fclose(f);
 }
 #endif  // BATCHLAS_GETRF_TINY_CC_PATH
+
+// T1. THE REGISTER-RESIDENT GETRS TIER (getrs_tiny.cc), DIRECT. Orders straddle every
+// partition width (8/16/32) and nrhs straddles every RHS bucket and the 16-column chunk
+// loop (17, 40). The batch of 11 leaves dead partitions in the last work-group. The
+// oracle is ||op(A) X - B|| against the ORIGINAL A, so a wrong permutation DIRECTION
+// fails; ld and batch stride are padded on both operands.
+// evidence: docs/perf/blackwell.md#lu-getrs-tiny
+TYPED_TEST(LuTest, TinyGetrsSolvesEveryTransposeOrderAndChunk) {
+    using T = typename TestFixture::T;
+    const int cap = sycl_getrs::getrs_tiny_max_n<T>();
+    ASSERT_GE(cap, 16) << "the tier's ceiling is below its smallest documented rung";
+    const int batch = 11;
+
+    for (int n : {1, 3, 7, 8, 9, 16, 17, 31, 32}) {
+        if (n > cap) continue;
+        auto p = make_dominant_permuted<T>(n, batch, 4400u + unsigned(n));
+        this->run_blocked(p);
+        if (n >= 3) {
+            ASSERT_FALSE(interchange_is_involution(p.expect_piv))
+                << "n=" << n << ": a self-inverse permutation hides a direction defect";
+        }
+        if (n >= 2) check_factor(p, "tiny getrs/factor");   // n=1 items coincide by design
+        if (this->HasFailure()) return;
+
+        for (int nrhs : {1, 2, 3, 5, 8, 16, 17, 40}) {
+            auto rhs = make_rhs<T>(n, nrhs, batch, 5500u + unsigned(n * 64 + nrhs));
+            std::vector<std::vector<T>> solutions;
+            for (Transpose op : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans}) {
+                reset_rhs(rhs);
+                auto A = view_of(p);
+                auto Bv = view_of(rhs);
+                ASSERT_NO_THROW((void)sycl_getrs::getrs_tiny_dispatch<T>(
+                    *this->ctx, A, Bv, op, p.piv.to_span()));
+                this->ctx->wait();
+                for (int b = 0; b < batch; ++b) {
+                    const double res = solve_residual<T>(
+                        p.a0.data() + size_t(b) * p.stride,
+                        rhs.buf.data() + size_t(b) * rhs.stride,
+                        rhs.b0.data() + size_t(b) * rhs.stride, n, nrhs, p.ld, rhs.ld, op);
+                    EXPECT_LE(res, solve_tol<T>(n)) << "tiny getrs n=" << n << " nrhs=" << nrhs
+                                                    << " transA=" << int(op) << " b=" << b;
+                }
+                check_rhs_pad_intact(rhs, "tiny getrs");
+                check_items_differ(rhs, "tiny getrs");
+                solutions.emplace_back(rhs.buf.begin(), rhs.buf.end());
+                if (this->HasFailure()) return;
+            }
+            if (n >= 2) {
+                EXPECT_NE(solutions[0], solutions[1])
+                    << "n=" << n << " nrhs=" << nrhs << ": transA is not being read";
+            }
+            if constexpr (test_utils::is_complex_type_v<T>) {
+                if (n >= 2) {   // a 1x1 factor has a real diagonal: conj is the identity
+                    EXPECT_NE(solutions[1], solutions[2])
+                        << "n=" << n << " nrhs=" << nrhs << ": ConjTrans is not conjugating";
+                }
+            }
+        }
+    }
+}
+
+// T2. SATURATING BATCH: 2051 copies of ONE factor and ONE RHS must come back
+// bit-identical to item 0 at every order bucket, NoTrans and Trans, across two RHS
+// chunks. A partition-id or batch-stride defect writes some item twice or never.
+TYPED_TEST(LuTest, TinyGetrsSaturatingBatchIsBitIdentical) {
+    using T = typename TestFixture::T;
+    const int cap = sycl_getrs::getrs_tiny_max_n<T>();
+    const int batch = 2051, nrhs = 19;
+
+    for (int n : {5, 13, 29}) {
+        if (n > cap) continue;
+        auto one = make_dominant_permuted<T>(n, 1, 777u + unsigned(n));
+        this->run_blocked(one);
+        Lu<T> p;
+        alloc(p, n, batch, 5, 11);
+        for (int b = 0; b < batch; ++b) {
+            std::copy(one.buf.begin(), one.buf.begin() + one.stride,
+                      p.buf.begin() + size_t(b) * p.stride);
+            std::copy(reinterpret_cast<const int*>(one.piv.data()),
+                      reinterpret_cast<const int*>(one.piv.data()) + n,
+                      reinterpret_cast<int*>(p.piv.data()) + size_t(b) * n);
+        }
+        auto rhs = make_rhs<T>(n, nrhs, batch, 99u);
+        for (int b = 1; b < batch; ++b)
+            std::copy(rhs.b0.begin(), rhs.b0.begin() + rhs.stride,
+                      rhs.b0.begin() + size_t(b) * rhs.stride);
+
+        for (Transpose op : {Transpose::NoTrans, Transpose::Trans}) {
+            reset_rhs(rhs);
+            auto A = view_of(p);
+            auto Bv = view_of(rhs);
+            ASSERT_NO_THROW((void)sycl_getrs::getrs_tiny_dispatch<T>(*this->ctx, A, Bv, op,
+                                                                     p.piv.to_span()));
+            this->ctx->wait();
+            const double res = solve_residual<T>(one.a0.data(), rhs.buf.data(), rhs.b0.data(),
+                                                 n, nrhs, one.ld, rhs.ld, op);
+            ASSERT_LE(res, solve_tol<T>(n)) << "n=" << n << " transA=" << int(op);
+            for (int b = 1; b < batch; ++b)
+                for (int c = 0; c < nrhs; ++c)
+                    for (int i = 0; i < n; ++i) {
+                        const size_t k0 = size_t(c) * rhs.ld + i;
+                        ASSERT_EQ(habs(up(rhs.buf[size_t(b) * rhs.stride + k0]) -
+                                       up(rhs.buf[k0])), 0.0)
+                            << "n=" << n << " transA=" << int(op) << ": item " << b
+                            << " differs from item 0 at (" << i << "," << c << ")";
+                    }
+        }
+    }
+}
+
+// T3. THE GETRS NATIVE TIE-BREAK IS EXHAUSTIVE AND PER-ARCHITECTURE. Exactly one native
+// tier answers native_tier_preferred for every shape; off sm_120 (cuda_cc 0 and 89) the
+// answer is the pre-Tiny one -- CTA wherever the fused kernel fits, Blocked elsewhere --
+// and Tiny is never chosen, not even by the vendor-free walk. Orders straddle the tiny
+// ceiling and nrhs the fused ceiling. evidence: docs/perf/blackwell.md#lu-getrs-tiny
+TYPED_TEST(LuTest, GetrsTinyTierTieBreakIsExhaustiveAndGatedOnSm120) {
+    using T = typename TestFixture::T;
+    constexpr Backend B = TestFixture::BackendType;
+    using Tbl = dispatch::RouteTable<dispatch::Op::getrs, T>;
+
+    auto p = make_dominant_permuted<T>(8, 1, 3u);
+    auto rhs = make_rhs<T>(8, 1, 1, 4u);
+    auto A = view_of(p);
+    auto Bv = view_of(rhs);
+    const auto built = backend::getrs_op_shape<B, T>(*this->ctx, A, Bv, Transpose::NoTrans);
+    ASSERT_TRUE(built.has_value());
+    EXPECT_EQ(built->tiny_max_n, int64_t(sycl_getrs::getrs_tiny_max_n<T>()));
+    EXPECT_EQ(built->cuda_cc, this->ctx->device().cuda_compute_capability())
+        << "the builder must fill cuda_cc or every sm_120 window is dead";
+
+    const dispatch::Route tiers[] = {{dispatch::Origin::Native, dispatch::Algorithm::Tiny},
+                                     {dispatch::Origin::Native, dispatch::Algorithm::CTA},
+                                     {dispatch::Origin::Native, dispatch::Algorithm::Blocked}};
+    const int64_t tmax = built->tiny_max_n;
+    for (int cc : {0, 89, 120}) {
+        for (int64_t n : {int64_t(1), int64_t(4), int64_t(8), int64_t(16), int64_t(17),
+                          tmax, tmax + 1, int64_t(64), int64_t(512)}) {
+            for (int64_t nrhs : {int64_t(1), int64_t(4), int64_t(8), int64_t(9), int64_t(16),
+                                 int64_t(64)}) {
+                auto s = *built;
+                s.cuda_cc = cc;
+                s.m = n; s.k = n; s.n = nrhs;
+                s.batch = 4096;
+                int answered = 0;
+                dispatch::Route pick{};
+                for (const auto& r : tiers) {
+                    if (Tbl::supports(r, s) && Tbl::native_tier_preferred(r, s)) {
+                        ++answered;
+                        pick = r;
+                    }
+                }
+                EXPECT_EQ(answered, 1) << "cc=" << cc << " n=" << n << " nrhs=" << nrhs;
+                // The vendor-free walk takes a preferred() window first, the tie-break after.
+                dispatch::Route want = pick;
+                for (const auto& r : tiers) {
+                    if (Tbl::supports(r, s) && Tbl::preferred(r, s)) { want = r; break; }
+                }
+                const auto freer = dispatch::resolve_getrs_route<T>(
+                    dispatch::Route{dispatch::Origin::Auto, dispatch::Algorithm::Auto}, s,
+                    /*vendor_available=*/false);
+                EXPECT_EQ(int(freer.algo), int(want.algo)) << "cc=" << cc << " n=" << n
+                                                           << " nrhs=" << nrhs;
+                constexpr bool kSingle =
+                    std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>;
+                if (cc != 120 || !kSingle) {
+                    const bool cta_fits = Tbl::supports(tiers[1], s);
+                    EXPECT_EQ(pick.algo, cta_fits ? dispatch::Algorithm::CTA
+                                                  : dispatch::Algorithm::Blocked)
+                        << "cc=" << cc << " n=" << n << " nrhs=" << nrhs
+                        << ": the non-sm_120 walk moved";
+                    EXPECT_FALSE(Tbl::preferred(tiers[0], s));
+                } else if (n <= tmax) {
+                    EXPECT_EQ(pick.algo, dispatch::Algorithm::Tiny)
+                        << "sm_120 n=" << n << " nrhs=" << nrhs;
+                    EXPECT_TRUE(Tbl::preferred(tiers[0], s)) << "sm_120 n=" << n;
+                } else {
+                    EXPECT_NE(pick.algo, dispatch::Algorithm::Tiny) << "sm_120 n=" << n;
+                }
+            }
+        }
+    }
+
+    // The fused tier's sm_120 vendor-present widening, both sides of each edge, and the
+    // sm_89 answer at the same cells. evidence: docs/perf/blackwell.md#lu-getrs-fused
+    struct Cta { int64_t n, nrhs; bool f, cf; };
+    for (const Cta& c : {Cta{256, 8, true, false}, Cta{128, 8, false, false},
+                         Cta{128, 4, true, true}, Cta{64, 4, true, false},
+                         Cta{512, 8, true, true}, Cta{256, 3, true, true},
+                         Cta{192, 8, true, false}, Cta{191, 8, false, false},
+                         Cta{96, 4, true, true}, Cta{95, 4, true, false},
+                         Cta{384, 8, true, true}, Cta{383, 8, true, false}}) {
+        for (int cc : {89, 120}) {
+            auto s = *built;
+            s.cuda_cc = cc;
+            s.m = s.k = c.n;
+            s.n = c.nrhs;
+            s.batch = 1024;
+            if (!Tbl::supports(tiers[1], s)) continue;
+            bool want = c.nrhs <= 2 || (std::is_same_v<T, float> && c.nrhs <= 4);
+            if (cc == 120 && std::is_same_v<T, float>) want = want || c.f;
+            if (cc == 120 && std::is_same_v<T, std::complex<float>>) want = want || c.cf;
+            EXPECT_EQ(Tbl::preferred(tiers[1], s), want)
+                << "cc=" << cc << " n=" << c.n << " nrhs=" << c.nrhs;
+        }
+    }
+
+    // The composition's sm_120 window after the trsm fix: nrhs 16 and order 32 in, 15
+    // and 31 out, and cfloat needs order 96 below nrhs 32; cc 0/89 keep float nrhs >= 64. evidence: docs/perf/blackwell.md#getrs-windows-after-the-trsm-fix
+    constexpr bool kSingle = std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>;
+    struct Cmp { int64_t n, nrhs, batch; bool f, cf; };
+    for (const Cmp& c : {Cmp{32, 16, 4096, true, false}, Cmp{31, 16, 4096, false, false},
+                         Cmp{512, 16, 256, true, true}, Cmp{512, 15, 256, false, false},
+                         Cmp{48, 16, 128, true, false}, Cmp{48, 16, 127, false, false},
+                         Cmp{96, 16, 1024, true, true}, Cmp{95, 31, 1024, true, false},
+                         Cmp{48, 32, 4096, true, true}, Cmp{31, 32, 4096, false, false},
+                         Cmp{64, 64, 4096, true, true}, Cmp{128, 12, 4096, false, false}}) {
+        for (int cc : {0, 89, 120}) {
+            auto s = *built;
+            s.cuda_cc = cc;
+            s.m = s.k = c.n;
+            s.n = c.nrhs;
+            s.batch = c.batch;
+            if (!Tbl::supports(tiers[2], s)) continue;
+            bool want = c.batch >= 128 &&
+                        ((std::is_same_v<T, float> && c.nrhs >= 64) ||
+                         (std::is_same_v<T, double> && c.nrhs >= 128));
+            if (cc == 120 && kSingle) want = std::is_same_v<T, float> ? c.f : c.cf;
+            EXPECT_EQ(Tbl::preferred(tiers[2], s), want)
+                << "cc=" << cc << " n=" << c.n << " nrhs=" << c.nrhs << " b=" << c.batch;
+        }
+    }
+}
+
+// T4. THE FACADE REACHES THE TINY TIER, BIT-EXACTLY: a `tiny` pin through the public
+// getrs must reproduce the direct entry point bit for bit, ConjTrans included.
+TYPED_TEST(LuTest, FacadeReachesTheTinyGetrsBitExactly) {
+    using T = typename TestFixture::T;
+    constexpr Backend B = TestFixture::BackendType;
+    const int n = 13, nrhs = 6, batch = 37;
+    auto p = make_dominant_permuted<T>(n, batch, 2468u);
+    this->run_blocked(p);
+    auto A = view_of(p);
+
+    ScopedEnvVar g("BATCHLAS_GETRS_ROUTE", "native:tiny");
+    auto r1 = make_rhs<T>(n, nrhs, batch, 13u);
+    auto r2 = make_rhs<T>(n, nrhs, batch, 13u);
+    auto V1 = view_of(r1);
+    auto V2 = view_of(r2);
+    const Transpose op = test_utils::is_complex_type_v<T> ? Transpose::ConjTrans
+                                                           : Transpose::Trans;
+    const auto rr = backend::getrs_route<B, T>(*this->ctx, A, V2, op,
+                                               dispatch::factorization_vendor_available<B>);
+    ASSERT_TRUE(dispatch::is_native(rr) && rr.algo == dispatch::Algorithm::Tiny)
+        << "the tiny getrs pin did not take";
+
+    (void)sycl_getrs::getrs_tiny_dispatch<T>(*this->ctx, A, V1, op, p.piv.to_span());
+    this->ctx->wait();
+    UnifiedVector<std::byte> w2(std::max<std::size_t>(
+        1, getrs_buffer_size<B, T>(*this->ctx, A, V2, op)));
+    ASSERT_NO_THROW(((void)getrs<B, T>(*this->ctx, A, V2, op, p.piv.to_span(), w2.to_span())));
+    this->ctx->wait();
+    for (size_t i = 0; i < r1.buf.size(); ++i)
+        ASSERT_EQ(habs(up(r1.buf[i]) - up(r2.buf[i])), 0.0)
+            << "the facade's tiny getrs differs from the direct entry point at " << i;
+    for (int b = 0; b < batch; ++b)
+        EXPECT_LE(solve_residual<T>(p.a0.data() + size_t(b) * p.stride,
+                                    r2.buf.data() + size_t(b) * r2.stride,
+                                    r2.b0.data() + size_t(b) * r2.stride, n, nrhs, p.ld,
+                                    r2.ld, op),
+                  solve_tol<T>(n));
+}
+
+// T5. GETRF'S sm_120 WINDOWS, BOTH SIDES OF EVERY EDGE, AND THE sm_89 ONES UNMOVED.
+// Synthetic orders and batches over the real builder's capacities; each bracket is a
+// measured cell. evidence: docs/perf/blackwell.md#lu-getrf-windows
+TYPED_TEST(LuTest, GetrfSm120WindowsAreBracketedAndSm89IsUnchanged) {
+    using T = typename TestFixture::T;
+    constexpr Backend B = TestFixture::BackendType;
+    using Tbl = dispatch::RouteTable<dispatch::Op::getrf, T>;
+    constexpr bool kF = std::is_same_v<T, float>;
+    constexpr bool kCF = std::is_same_v<T, std::complex<float>>;
+
+    auto p = make_dominant_permuted<T>(8, 1, 3u);
+    auto V = view_of(p);
+    const auto built = backend::getrf_op_shape<B, T>(*this->ctx, V);
+    ASSERT_TRUE(built.has_value());
+    EXPECT_EQ(built->cuda_cc, this->ctx->device().cuda_compute_capability())
+        << "the builder must fill cuda_cc or every sm_120 window is dead";
+
+    const dispatch::Route tiny{dispatch::Origin::Native, dispatch::Algorithm::Tiny};
+    const dispatch::Route cta{dispatch::Origin::Native, dispatch::Algorithm::CTA};
+    const dispatch::Route blk{dispatch::Origin::Native, dispatch::Algorithm::Blocked};
+    auto shape = [&](int cc, int64_t n, int64_t batch) {
+        auto s = *built;
+        s.cuda_cc = cc;
+        s.m = s.n = s.k = n;
+        s.batch = batch;
+        return s;
+    };
+    auto native_pick = [&](const dispatch::GetrfShape& s) {
+        int answered = 0;
+        dispatch::Algorithm a = dispatch::Algorithm::Auto;
+        for (const auto& r : {tiny, cta, blk}) {
+            if (Tbl::supports(r, s) && Tbl::native_tier_preferred(r, s)) {
+                ++answered;
+                a = r.algo;
+            }
+        }
+        EXPECT_EQ(answered, 1) << "cc=" << s.cuda_cc << " n=" << s.order()
+                               << " batch=" << s.batch;
+        return a;
+    };
+
+    // Off sm_120 the pre-retune predicates, spelled out.
+    for (int cc : {0, 89}) {
+        for (int64_t n : {int64_t(3), int64_t(4), int64_t(8), int64_t(25), int64_t(32),
+                          int64_t(48), int64_t(64), int64_t(128), int64_t(256), int64_t(512)}) {
+            for (int64_t b : {int64_t(64), int64_t(256), int64_t(1024), int64_t(32768)}) {
+                const auto s = shape(cc, n, b);
+                bool want = false;
+                if constexpr (kF) want = n >= 256;
+                if constexpr (kCF) want = n >= 512 || (n >= 256 && b >= 256);
+                if (Tbl::tiny_window(s)) want = false;
+                EXPECT_EQ(Tbl::preferred(blk, s), want) << "cc=" << cc << " n=" << n
+                                                        << " b=" << b;
+                bool tw = false;
+                if constexpr (kF) tw = n >= 5 && n <= 32;
+                if constexpr (kCF) tw = (n >= 5 && n <= 7) || (n >= 9 && n <= 24);
+                EXPECT_EQ(Tbl::preferred(tiny, s), tw && n <= s.tiny_max_n)
+                    << "cc=" << cc << " n=" << n;
+                if (n > 32 && n <= s.cta_max_n && (kF || kCF)) {
+                    EXPECT_EQ(native_pick(s), dispatch::Algorithm::CTA)
+                        << "cc=" << cc << " n=" << n << " b=" << b;
+                }
+            }
+        }
+    }
+    if constexpr (!(kF || kCF)) {   // fp64 was not re-measured: sm_120 must equal sm_89
+        for (int64_t n : {int64_t(4), int64_t(16), int64_t(33), int64_t(64), int64_t(300)})
+            for (int64_t b : {int64_t(64), int64_t(4096)})
+                for (const auto& r : {tiny, cta, blk}) {
+                    EXPECT_EQ(Tbl::preferred(r, shape(120, n, b)), Tbl::preferred(r, shape(89, n, b)));
+                    EXPECT_EQ(Tbl::native_tier_preferred(r, shape(120, n, b)),
+                              Tbl::native_tier_preferred(r, shape(89, n, b)));
+                }
+        return;
+    }
+
+    struct Cell { int64_t n, b; bool blocked_wins; };
+    const std::vector<Cell> cells = kF
+        ? std::vector<Cell>{{40, 32768, false}, {48, 256, false}, {48, 1024, true},
+                            {64, 1024, true}, {96, 256, false}, {96, 1024, true},
+                            {128, 64, false}, {128, 256, true}, {192, 64, true}}
+        : std::vector<Cell>{{48, 1024, false}, {48, 16384, false}, {64, 256, false},
+                            {64, 1024, true}, {96, 256, false}, {96, 1024, true},
+                            {128, 64, false}, {128, 256, true}, {192, 64, true},
+                            {256, 64, true}};
+    for (const auto& c : cells) {
+        EXPECT_EQ(Tbl::preferred(blk, shape(120, c.n, c.b)), c.blocked_wins)
+            << "sm_120 n=" << c.n << " b=" << c.b;
+    }
+    EXPECT_FALSE(Tbl::preferred(tiny, shape(120, 3, 32768)));
+    for (int64_t n : {int64_t(4), int64_t(8), int64_t(25), int64_t(32)}) {
+        EXPECT_EQ(Tbl::preferred(tiny, shape(120, n, 32768)), n <= built->tiny_max_n)
+            << "sm_120 tiny n=" << n;
+    }
+
+    // The native tie-break: CTA below the sm_120 crossover or at small batch.
+    const int64_t first_blocked = kF ? 33 : 40;
+    if (built->cta_max_n >= first_blocked) {
+        EXPECT_EQ(native_pick(shape(120, first_blocked - 1 > 32 ? first_blocked - 1 : 33, 1024)),
+                  kF ? dispatch::Algorithm::Blocked : dispatch::Algorithm::CTA);
+        EXPECT_EQ(native_pick(shape(120, first_blocked, 1024)), dispatch::Algorithm::Blocked);
+        EXPECT_EQ(native_pick(shape(120, first_blocked, 256)), dispatch::Algorithm::CTA);
+    }
+}
 
 // The break record for every guarded property, including the breaks that turned
 // nothing red: docs/perf/lu.md#blind-guards-and-what-made-them-blind

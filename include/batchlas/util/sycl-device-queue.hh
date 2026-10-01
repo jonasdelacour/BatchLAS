@@ -174,6 +174,12 @@ struct BATCHLAS_API Device{
     // [[sycl::reqd_sub_group_size]] launch. evidence: docs/perf/gemv.md#the-sub-route-gates
     bool supports_sub_group_size(size_t size) const;
 
+    // CUDA compute capability as major*10+minor (89 = sm_89, 120 = sm_120), or 0
+    // for a non-CUDA device. Parsed from info::device::version, because
+    // ext_oneapi_architecture reports "unknown" for sm_100/sm_120 on current DPC++.
+    // For per-architecture routing windows; memoized per device.
+    int cuda_compute_capability() const;
+
 
 
     size_t     idx  = 0;

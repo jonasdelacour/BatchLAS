@@ -914,26 +914,36 @@ TYPED_TEST(PotrfBlockedTest, ResidualAboveTheCtaCeiling) {
 
     const int cap = this->ceiling();
     ASSERT_GT(cap, 0) << "no CTA capacity for this type -- the leaf is not linked";
-    const auto bp = this->blocking(1 << 20);   // the unclamped blocking
-    const int nb = bp.nb, W = bp.W;
-    ASSERT_GT(nb, 0);
-    ASSERT_GT(W, 0);
-    // leaf_ceiling(), not cap: at this test's orders nb comes from the residency branch,
-    // and the leaf is launched at that same target.
-    ASSERT_LE(nb, this->leaf_ceiling())
-        << "nb is above the leaf's own capacity: the leaf would throw";
+    // nb depends on n (sm_120 float: 64 through 512, 128 above), so the structures are
+    // generated from BOTH the small-order and the unclamped blocking, and each n's
+    // bookkeeping uses the blocking the driver really runs at that n.
+    const auto big = this->blocking(1 << 20);
+    const auto small = this->blocking(cap + 1);
+    ASSERT_GT(big.nb, 0);
+    ASSERT_GT(big.W, 0);
 
-    std::vector<int> sizes = {cap + 1, 2 * nb, 2 * nb + nb / 2, nb + 2 * W + 6, 3 * nb + 7};
+    std::vector<int> sizes = {cap + 1, 5 * big.nb + 7, 6 * big.nb};
+    for (const auto& b : {big, small}) {
+        for (int n : {2 * b.nb, 2 * b.nb + b.nb / 2, b.nb + 2 * b.W + 6, 3 * b.nb + 7})
+            sizes.push_back(n);
+    }
     std::sort(sizes.begin(), sizes.end());
     sizes.erase(std::unique(sizes.begin(), sizes.end()), sizes.end());
 
     int saw_short_block = 0, saw_exact_multiple = 0, saw_short_panel = 0;
+    int saw_big_exact = 0, saw_big_short_panel = 0;
     for (int n : sizes) {
         ASSERT_GT(n, cap) << "n=" << n << " is inside the CTA tier; this case proves "
                              "nothing the leaf's own tests do not";
-        if (n % nb == 0) ++saw_exact_multiple; else ++saw_short_block;
+        const auto bp = this->blocking(n);
+        const int nb = bp.nb, W = bp.W;
+        // leaf_ceiling(), not cap: nb above the leaf's own capacity would throw.
+        ASSERT_LE(nb, this->leaf_ceiling()) << "n=" << n << " nb=" << nb;
+        const bool is_big = (nb == big.nb && W == big.W);
+        if (n % nb == 0) { ++saw_exact_multiple; saw_big_exact += is_big; }
+        else ++saw_short_block;
         const int m2_first = n - nb;
-        if (m2_first > W && (m2_first % W) != 0) ++saw_short_panel;
+        if (m2_first > W && (m2_first % W) != 0) { ++saw_short_panel; saw_big_short_panel += is_big; }
 
         const int batch = 3;
         Matrix<T, MatrixFormat::Dense> A(n, n, batch);
@@ -959,6 +969,8 @@ TYPED_TEST(PotrfBlockedTest, ResidualAboveTheCtaCeiling) {
     ASSERT_GT(saw_exact_multiple, 0) << "no n in the sweep was an exact multiple of nb";
     ASSERT_GT(saw_short_block, 0)    << "no n in the sweep had a short final block";
     ASSERT_GT(saw_short_panel, 0)    << "no n in the sweep had a short trailing column panel";
+    ASSERT_GT(saw_big_exact, 0)       << "the large-order blocking never ran on an exact multiple";
+    ASSERT_GT(saw_big_short_panel, 0) << "the large-order blocking never ran a short panel";
 }
 
 // The other triangle is neither read nor written -- THE FOLD'S ONLY GUARD: with the gemm

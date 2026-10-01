@@ -203,6 +203,10 @@ def main(argv):
     for rel, lineno, target, why in findings:
         print("%s:%d: error: dangling evidence pointer `%s` -- %s" % (rel, lineno, target, why))
     print("check_evidence_anchors: %d reference(s) resolved, %d dangling" % (refs, len(findings)))
+    if refs == 0:
+        # The tree carries hundreds of pointers; zero means the wrong root, not a clean one.
+        print("check_evidence_anchors: error: no evidence pointers under %s -- wrong root?" % root)
+        return 1
     return 1 if findings else 0
 
 

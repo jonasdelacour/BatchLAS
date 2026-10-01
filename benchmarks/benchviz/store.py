@@ -57,6 +57,10 @@ def build_info(build_dir: Path) -> Dict[str, object]:
                 src = Path(line.split("=", 1)[1])
             elif line.startswith("CMAKE_CXX_COMPILER:"):
                 info["compiler"] = line.split("=", 1)[1]
+            elif line.startswith("CMAKE_BUILD_TYPE:"):
+                info["build_type"] = line.split("=", 1)[1] or "(none)"
+    info.update(_compile_flags(b))
+    info["warnings"] = build_warnings(info, _has_nvidia_gpu())
     if src is None or not (src / ".git").exists():
         return info
     git = ("git", "-C", str(src))
@@ -77,6 +81,44 @@ def build_info(build_dir: Path) -> Dict[str, object]:
     return info
 
 
+def _compile_flags(b: Path) -> Dict[str, object]:
+    """Compiler id, fp model and SYCL targets, read from what the build compiled with."""
+    out: Dict[str, object] = {}
+    for f in sorted((b / "CMakeFiles").glob("*/CMakeCXXCompiler.cmake")):
+        for line in f.read_text(errors="replace").splitlines():
+            if line.startswith('set(CMAKE_CXX_COMPILER_ID "'):
+                out["compiler_id"] = line.split('"')[1]
+    flags = b / "src" / "CMakeFiles" / "batchlas_sycl_obj.dir" / "flags.make"
+    if not flags.exists():
+        flags = next(iter(sorted((b / "src" / "CMakeFiles").glob("*/flags.make"))), None)
+    if flags and flags.exists():
+        text = " ".join(l for l in flags.read_text(errors="replace").splitlines() if l.startswith("CXX_FLAGS"))
+        models = [t.split("=", 1)[1] for t in text.split() if t.startswith("-ffp-model=")]
+        out["fp_model"] = models[-1] if models else "(compiler default)"  # the last one wins
+        targets = [t.split("=", 1)[1] for t in text.split() if t.startswith("-fsycl-targets=")]
+        out["sycl_targets"] = targets[-1] if targets else ""
+    return out
+
+
+def _has_nvidia_gpu() -> bool:
+    return bool(_sh("nvidia-smi", "-L"))
+
+
+def build_warnings(info: dict, nvidia_box: bool) -> List[str]:
+    """Build configurations whose numbers are wrong for a known reason.
+
+    evidence: docs/perf/blackwell.md#device-call-guard
+    """
+    w = []
+    if info.get("compiler_id") == "IntelLLVM" and "fp_model" in info and info["fp_model"] != "precise":
+        w.append(f"icpx build without -ffp-model=precise (fp model: {info['fp_model']}): device code "
+                 "calls sycl::fma and barriers out of line, native kernels run 2-15x slow")
+    if nvidia_box and "sycl_targets" in info and "nvptx" not in str(info["sycl_targets"]):
+        w.append(f"NVIDIA GPU present but SYCL targets are '{info['sycl_targets'] or 'none'}': "
+                 "a CPU-only build (put /opt/dpcpp-cuda/lib first on LD_LIBRARY_PATH and reconfigure)")
+    return w
+
+
 def harness_targets() -> List[str]:
     from ops import OPS
     return sorted({op.binary for op in OPS.values()})
@@ -88,6 +130,11 @@ def describe_build(bi: dict) -> str:
     s = f"{bi['dir']}  built {bi.get('built')}"
     if bi.get("built_from"):
         s += f" from ~{bi['built_from']} ({bi.get('branch')}, HEAD {bi.get('head')})"
+    if bi.get("build_type") or bi.get("compiler_id"):
+        s += f"\n  {bi.get('compiler_id', '?')} {bi.get('build_type', '?')}, fp model {bi.get('fp_model', '?')}," \
+             f" targets {bi.get('sycl_targets', '?')}"
+    for w in bi.get("warnings") or []:
+        s += f"\n  WARNING: {w}"
     if bi.get("behind_main"):
         s += f"\n  NOTE: {bi['behind_main']} source commit(s) on main are not in this build"
     if bi.get("stale"):

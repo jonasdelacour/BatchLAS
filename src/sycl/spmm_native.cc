@@ -69,7 +69,42 @@ inline void spmm_atomic_add(Cx<R>* p, Cx<R> v) {
     spmm_atomic_add(&p->im, v.im);
 }
 
-template <typename T, int NC> class SpmmGatherKernel;
+// One two-component load per complex element. As two scalar loads, both halves of
+// a missing sector go to L2 separately, and the gather is L2-bound: 24% more L2
+// sectors and 18% slower for cfloat under -ffp-model=precise, whose schedule
+// issues every column's pair at once. evidence: docs/perf/blackwell.md#cfloat-spmm-under-the-precise-fp-model
+template <bool Pair, typename D>
+inline D spmm_ld(const D* p) {
+    if constexpr (Pair && dev_is_complex_v<D>) {
+        using R = decltype(D{}.re);
+        const sycl::vec<R, 2> v = *reinterpret_cast<const sycl::vec<R, 2>*>(p);
+        return D{v[0], v[1]};
+    } else {
+        return *p;
+    }
+}
+
+template <bool Pair, typename D>
+inline void spmm_st(D* p, D x) {
+    if constexpr (Pair && dev_is_complex_v<D>) {
+        using R = decltype(D{}.re);
+        *reinterpret_cast<sycl::vec<R, 2>*>(p) = sycl::vec<R, 2>(x.re, x.im);
+    } else {
+        *p = x;
+    }
+}
+
+// The pair load needs 2*sizeof(R) alignment, which std::complex<R> does not
+// promise: a view built on a raw pointer may be offset by one R.
+template <typename D>
+inline bool spmm_pair_aligned(const void* a, const void* b, const void* c) {
+    const auto mis = [](const void* p) {
+        return reinterpret_cast<std::uintptr_t>(p) % sizeof(D) != 0;
+    };
+    return dev_is_complex_v<D> && !mis(a) && !mis(b) && !mis(c);
+}
+
+template <typename T, int NC, bool Pair> class SpmmGatherKernel;
 template <typename T> class SpmmScaleKernel;
 template <typename T> class SpmmScatterKernel;
 
@@ -78,7 +113,7 @@ template <typename T> class SpmmScatterKernel;
 //             + beta * C[i, c]
 // One work-item per (batch item, row i, block of NC output columns), flattened
 // rows-fastest. The item owns every element it writes: no atomic, no barrier.
-template <typename T, int NC>
+template <typename T, int NC, bool Pair>
 Event spmm_gather(Queue& ctx,
                   const MatrixView<T, MatrixFormat::CSR>& A,
                   const MatrixView<T, MatrixFormat::Dense>& B_mat,
@@ -138,7 +173,7 @@ Event spmm_gather(Queue& ctx,
         const int64_t rowblocks = rc;
         const int64_t total = items;
 
-        h.parallel_for<SpmmGatherKernel<T, NC>>(
+        h.parallel_for<SpmmGatherKernel<T, NC, Pair>>(
             sycl::nd_range<1>(sycl::range<1>(static_cast<size_t>(groups) * wg),
                               sycl::range<1>(wg)),
             [=](sycl::nd_item<1> it) {
@@ -169,7 +204,7 @@ Event spmm_gather(Queue& ctx,
 
                 if (!alpha_zero) {
                     for (int p = rs; p < re; ++p) {
-                        const D av = a_val[vb + p];
+                        const D av = spmm_ld<Pair>(a_val + vb + p);
                         const int j = a_ci[vb + p];  // a COLUMN of A: a row of B
 #pragma unroll
                         for (int t = 0; t < NC; ++t) {
@@ -177,9 +212,9 @@ Event spmm_gather(Queue& ctx,
                             if (c < width) {
                                 // op(B)[j,c]: NoTrans -> Bb[c*ldb+j], else
                                 // Bb[j*ldb+c] (conjugated for ConjTrans).
-                                D bv = b_notrans
-                                           ? Bb[static_cast<int64_t>(c) * ldb + j]
-                                           : Bb[static_cast<int64_t>(j) * ldb + c];
+                                D bv = spmm_ld<Pair>(
+                                    b_notrans ? Bb + static_cast<int64_t>(c) * ldb + j
+                                              : Bb + static_cast<int64_t>(j) * ldb + c);
                                 if constexpr (dev_is_complex_v<D>) {
                                     if (conj_b) bv = dev_conj(bv);
                                 }
@@ -196,14 +231,29 @@ Event spmm_gather(Queue& ctx,
                         const int64_t ci = static_cast<int64_t>(c) * ldc + i;
                         D out{};
                         fma_acc(out, alpha_d, acc[t]);
-                        if (!beta_zero) fma_acc(out, beta_d, Cb[ci]);
-                        Cb[ci] = out;
+                        if (!beta_zero) fma_acc(out, beta_d, spmm_ld<Pair>(Cb + ci));
+                        spmm_st<Pair>(Cb + ci, out);
                     }
                 }
             });
     });
 
     return ctx.get_event();
+}
+
+template <typename T, int NC>
+Event spmm_gather_pair(Queue& ctx,
+                       const MatrixView<T, MatrixFormat::CSR>& A,
+                       const MatrixView<T, MatrixFormat::Dense>& B_mat,
+                       const MatrixView<T, MatrixFormat::Dense>& C,
+                       T alpha, T beta, Transpose transB) {
+    using D = typename DevMap<T>::type;
+    if constexpr (dev_is_complex_v<D>) {
+        if (spmm_pair_aligned<D>(A.data_ptr(), B_mat.data_ptr(), C.data_ptr())) {
+            return spmm_gather<T, NC, true>(ctx, A, B_mat, C, alpha, beta, transB);
+        }
+    }
+    return spmm_gather<T, NC, false>(ctx, A, B_mat, C, alpha, beta, transB);
 }
 
 // Scale arm: runs only ahead of the scatter, which cannot fold beta into its
@@ -403,9 +453,9 @@ Event spmm_native_csr(Queue& ctx,
     if (a_notrans) {
         // nrhs <= 2 is the lanczos shape; everything else gets the full block.
         if (nrhs <= 2) {
-            return spmm_gather<T, 2>(ctx, A, B_mat, C, alpha, beta, transB);
+            return spmm_gather_pair<T, 2>(ctx, A, B_mat, C, alpha, beta, transB);
         }
-        return spmm_gather<T, kNCmax<D>>(ctx, A, B_mat, C, alpha, beta, transB);
+        return spmm_gather_pair<T, kNCmax<D>>(ctx, A, B_mat, C, alpha, beta, transB);
     }
 
     // Ordered: the scale must complete before the first atomic. The default queue

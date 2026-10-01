@@ -384,6 +384,29 @@ TEST(RouteTrsm, FloatLeftIsPreferredAtEveryOrder) {
     }
 }
 
+// sm_120 sends float Side::Right with few rows to cuBLAS; every edge straddled, and
+// cuda_cc 0 / 89 must keep today's answer. evidence: docs/perf/blackwell.md#trsm-side-right-on-sm120
+TEST(RouteTrsm, Sm120FloatRightSmallRowsGoesToVendor) {
+    auto right = [](int64_t order, int64_t q, int64_t batch, int cc) {
+        auto s = trsm_shape(order, q, batch, 32, Side::Right);
+        s.cuda_cc = cc;
+        return s;
+    };
+    for (int cc : {0, 89, 120}) {
+        const bool sm120 = (cc == 120);
+        EXPECT_EQ(TrsmTable::preferred(kCta, right(32, 8, 32768, cc)), !sm120) << cc;
+        EXPECT_EQ(TrsmTable::preferred(kCta, right(17, 8, 4096, cc)), !sm120) << cc;
+        EXPECT_TRUE(TrsmTable::preferred(kCta, right(16, 8, 32768, cc))) << cc;
+        EXPECT_TRUE(TrsmTable::preferred(kCta, right(32, 9, 32768, cc))) << cc;
+        EXPECT_TRUE(TrsmTable::preferred(kCta, right(32, 8, 4095, cc))) << cc;
+        EXPECT_TRUE(TrsmTable::preferred(kCta, trsm_shape(32, 8, 32768, 32, Side::Left))) << cc;
+    }
+    auto s = right(32, 8, 32768, 120);
+    EXPECT_TRUE(is_vendor(resolve_trsm_route<float>(kAuto, s, /*vendor_available=*/true)));
+    EXPECT_TRUE(is_native(resolve_trsm_route<float>(kAuto, s, /*vendor_available=*/false)));
+    EXPECT_TRUE((RouteTable<Op::trsm, std::complex<float>>::preferred(kCta, s)));
+}
+
 TEST(RouteTrsm, BatchFloorIsSpeedNotCorrectness) {
     // The floor is batch 8, and it lives in preferred() rather than supports().
     const auto tiny = trsm_shape(16, 1024, 1, 32, Side::Right);
@@ -641,6 +664,67 @@ TEST(RoutePotrf, TheMeasuredLpanelWindowAndNothingElse) {
 
     // The vendor is where the walk ENDS, never itself preferred.
     EXPECT_FALSE(PotrfTable::preferred(Route{Origin::Vendor, Algorithm::Auto}, sh));
+}
+
+// sm_120 re-bracketed both LPanel edges; cuda_cc 0 and 89 must route exactly as before.
+// Both edges are straddled per type, for both walks, and the edges are spelled out here
+// rather than read back from the table. evidence: docs/perf/blackwell.md#potrf-lpanel-auto-window
+TEST(RoutePotrf, Sm120LpanelEdgesArePerArchitecture) {
+    constexpr Route kLp{Origin::Native, Algorithm::LPanel};
+    using CTable = RouteTable<Op::potrf, std::complex<float>>;
+    auto at = [](int64_t order, int cc, bool blocked = true) {
+        auto s = potrf_shape(order, 2048, 155, Uplo::Lower, 512);
+        s.cuda_cc = cc;
+        s.blocked_available = blocked;
+        return s;
+    };
+    auto native_walk_f = [](const PotrfShape& s) { return resolve_potrf_route<float>(kPotrfAuto, s, false); };
+    auto native_walk_c = [](const PotrfShape& s) {
+        return resolve_potrf_route<std::complex<float>>(kPotrfAuto, s, false);
+    };
+    auto auto_f = [](const PotrfShape& s) { return resolve_potrf_route<float>(kPotrfAuto, s, true); };
+    auto auto_c = [](const PotrfShape& s) {
+        return resolve_potrf_route<std::complex<float>>(kPotrfAuto, s, true);
+    };
+
+    for (int cc : {0, 89, 120}) {
+        const bool b = (cc == 120);
+        // Vendor present: float 256 | 320 edges, cfloat 128 | 256 edges.
+        EXPECT_EQ(auto_f(at(256, cc)), kLp) << "cc=" << cc;
+        EXPECT_EQ(auto_f(at(320, cc)) == kLp, b) << "cc=" << cc;
+        EXPECT_TRUE(is_vendor(auto_f(at(321, cc)))) << "cc=" << cc;
+        EXPECT_EQ(auto_c(at(128, cc)), kLp) << "cc=" << cc;
+        EXPECT_EQ(is_vendor(auto_c(at(129, cc))), b) << "cc=" << cc;
+        EXPECT_EQ(is_vendor(auto_c(at(256, cc))), b) << "cc=" << cc;
+        EXPECT_TRUE(is_vendor(auto_c(at(257, cc)))) << "cc=" << cc;
+
+        // Vendor-free walk: float LPanel stops at 320 on sm_120 only; cfloat never caps.
+        EXPECT_EQ(native_walk_f(at(320, cc)), kLp) << "cc=" << cc;
+        EXPECT_EQ(native_walk_f(at(321, cc)), b ? kPotrfBlocked : kLp) << "cc=" << cc;
+        EXPECT_EQ(native_walk_f(at(512, cc)), b ? kPotrfBlocked : kLp) << "cc=" << cc;
+        EXPECT_EQ(native_walk_c(at(512, cc)), kLp) << "cc=" << cc;
+        // Where Blocked cannot take the shape the cap must not strand it.
+        EXPECT_EQ(native_walk_f(at(512, cc, /*blocked=*/false)), kLp) << "cc=" << cc;
+
+        // R8b from both hooks, every order, with and without Blocked.
+        for (bool blocked : {true, false}) {
+            for (int64_t n = 1; n <= 512; ++n) {
+                const auto s = at(n, cc, blocked);
+                int tier = 0, tier_c = 0, pref = 0, pref_c = 0;
+                for (const Route* it = PotrfTable::order_begin(); it != PotrfTable::order_end(); ++it) {
+                    if (!is_native(*it)) continue;
+                    tier += PotrfTable::supports(*it, s) && PotrfTable::native_tier_preferred(*it, s);
+                    tier_c += CTable::supports(*it, s) && CTable::native_tier_preferred(*it, s);
+                    pref += PotrfTable::supports(*it, s) && PotrfTable::preferred(*it, s);
+                    pref_c += CTable::supports(*it, s) && CTable::preferred(*it, s);
+                }
+                EXPECT_EQ(tier, 1) << "float n=" << n << " cc=" << cc << " blocked=" << blocked;
+                EXPECT_EQ(tier_c, 1) << "cfloat n=" << n << " cc=" << cc << " blocked=" << blocked;
+                EXPECT_LE(pref, 1) << "float n=" << n << " cc=" << cc;
+                EXPECT_LE(pref_c, 1) << "cfloat n=" << n << " cc=" << cc;
+            }
+        }
+    }
 }
 
 TEST(RouteVocabulary, AlgorithmEnumeratorValuesAreAbi) {
@@ -2602,6 +2686,60 @@ TEST(RouteGetrs, BatchlasGetrsRouteIsActuallyRead) {
         const auto p = parse_route_env(Op::getrs);
         EXPECT_FALSE(p.found);
         EXPECT_TRUE(p.unparsed) << "a typo must be reported, not silently Auto";
+    }
+}
+
+// sm_120's getrs windows after the trsm fix, both sides of every edge, with cc 0 and 89
+// answering exactly as before. evidence: docs/perf/blackwell.md#getrs-windows-after-the-trsm-fix
+TEST(RouteGetrs, Sm120WindowsAfterTheTrsmFixAreBracketedAndSm89IsUnchanged) {
+    auto at = [](int64_t n, int64_t q, int64_t b, int cc) {
+        auto s = getrs_shape(n, q, b);
+        s.cuda_cc = cc;
+        return s;
+    };
+    for (int cc : {0, 89, 120}) {
+        const bool sm120 = (cc == 120);
+        // Composition: nrhs 16 in, 15 out; order 32 in, 31 out; batch 128 in, 127 out.
+        for (int64_t n : {32, 48, 128, 512}) {
+            EXPECT_EQ(GetrsTable::preferred(kGetrsBlocked, at(n, 16, 4096, cc)), sm120)
+                << "cc=" << cc << " n=" << n;
+            EXPECT_EQ(GetrsTableCF::preferred(kGetrsBlocked, at(n, 16, 4096, cc)), sm120 && n >= 96)
+                << "cc=" << cc << " n=" << n;
+            EXPECT_EQ(GetrsTableCF::preferred(kGetrsBlocked, at(n, 32, 4096, cc)), sm120);
+            EXPECT_FALSE(GetrsTable::preferred(kGetrsBlocked, at(n, 15, 4096, cc)));
+            EXPECT_FALSE(GetrsTableCF::preferred(kGetrsBlocked, at(n, 15, 4096, cc)));
+            EXPECT_EQ(GetrsTableCF::preferred(kGetrsBlocked, at(n, 64, 4096, cc)), sm120);
+            EXPECT_TRUE(GetrsTable::preferred(kGetrsBlocked, at(n, 64, 4096, cc)));
+            const Route r = resolve_getrs_route<float>(kGetrsAuto, at(n, 16, 4096, cc), true);
+            EXPECT_EQ(is_native(r) && r.algo == Algorithm::Blocked, sm120) << "cc=" << cc;
+        }
+        EXPECT_FALSE(GetrsTableCF::preferred(kGetrsBlocked, at(31, 32, 4096, cc)));
+        // cfloat's second edge: order 96 at nrhs 16..31, nrhs 32 below it.
+        EXPECT_EQ(GetrsTableCF::preferred(kGetrsBlocked, at(96, 16, 4096, cc)), sm120);
+        EXPECT_FALSE(GetrsTableCF::preferred(kGetrsBlocked, at(95, 16, 4096, cc)));
+        EXPECT_FALSE(GetrsTableCF::preferred(kGetrsBlocked, at(95, 31, 4096, cc)));
+        EXPECT_EQ(GetrsTableCF::preferred(kGetrsBlocked, at(48, 32, 4096, cc)), sm120);
+        EXPECT_EQ(GetrsTable::preferred(kGetrsBlocked, at(48, 16, 4096, cc)), sm120);
+        EXPECT_EQ(GetrsTable::preferred(kGetrsBlocked, at(31, 64, 4096, cc)), !sm120)
+            << "cc=" << cc << ": sm_120 leaves order < 32 to the tiny tier";
+        EXPECT_EQ(GetrsTableCF::preferred(kGetrsBlocked, at(256, 16, 128, cc)), sm120);
+        EXPECT_FALSE(GetrsTableCF::preferred(kGetrsBlocked, at(256, 16, 127, cc)));
+        // fp64 never moves.
+        EXPECT_FALSE(GetrsTableD::preferred(kGetrsBlocked, at(128, 16, 4096, cc)));
+        EXPECT_FALSE(GetrsTableCD::preferred(kGetrsBlocked, at(128, 64, 4096, cc)));
+
+        // Fused tier: float nrhs 5..8 from order 192; cfloat nrhs 3..4 from 96 and
+        // nrhs 5..8 from 384. Off sm_120 none of these widenings exist.
+        EXPECT_EQ(GetrsTable::preferred(kGetrsCta, at(192, 8, 1024, cc)), sm120) << cc;
+        EXPECT_FALSE(GetrsTable::preferred(kGetrsCta, at(191, 8, 1024, cc))) << cc;
+        EXPECT_EQ(GetrsTable::preferred(kGetrsCta, at(192, 5, 1024, cc)), sm120) << cc;
+        EXPECT_TRUE(GetrsTable::preferred(kGetrsCta, at(191, 4, 1024, cc))) << "clause B";
+        EXPECT_EQ(GetrsTableCF::preferred(kGetrsCta, at(96, 4, 1024, cc)), sm120) << cc;
+        EXPECT_FALSE(GetrsTableCF::preferred(kGetrsCta, at(95, 4, 1024, cc))) << cc;
+        EXPECT_FALSE(GetrsTableCF::preferred(kGetrsCta, at(96, 5, 1024, cc))) << cc;
+        EXPECT_EQ(GetrsTableCF::preferred(kGetrsCta, at(384, 8, 256, cc)), sm120) << cc;
+        EXPECT_FALSE(GetrsTableCF::preferred(kGetrsCta, at(383, 8, 256, cc))) << cc;
+        EXPECT_FALSE(GetrsTableD::preferred(kGetrsCta, at(512, 8, 256, cc))) << cc;
     }
 }
 

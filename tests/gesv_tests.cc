@@ -425,8 +425,12 @@ TYPED_TEST(GesvTest, AutoTakesTheMeasuredWindow) {
 
     // The window as the grid measured it, restated here rather than read back from the
     // header: a test that asks the header what the header says cannot fail.
+    // sm_120 cfloat: the composition (tiny getrf + tiny getrs) wins from n=4, the fused
+    // kernel at n<=3. evidence: docs/perf/blackwell.md#lu-gesv
+    const bool sm120 =
+        dispatch::is_sm120_family(this->ctx->device().cuda_compute_capability());
     const int win = std::is_same_v<T, float>                ? 32
-                  : std::is_same_v<T, std::complex<float>>  ? 16
+                  : std::is_same_v<T, std::complex<float>>  ? (sm120 ? 3 : 16)
                                                             : 0;
 
     for (int n : {4, 8, 16, 17, 32, 64}) {
@@ -450,6 +454,26 @@ TYPED_TEST(GesvTest, AutoTakesTheMeasuredWindow) {
             << "n=" << n << ": Auto resolved to "
             << std::string(dispatch::to_string(r.algo));
         EXPECT_EQ(r.origin, dispatch::Origin::Native);
+    }
+
+    // Both architectures on synthetic shapes, straddling each edge.
+    auto p = make_system<T>(8, 1, 4, 5u);
+    auto A = a_view(p);
+    auto Bv = b_view(p);
+    const auto built = backend::gesv_op_shape<B, T>(*this->ctx, A, Bv);
+    ASSERT_TRUE(built.has_value());
+    EXPECT_EQ(built->cuda_cc, this->ctx->device().cuda_compute_capability());
+    const dispatch::Route tiny{dispatch::Origin::Native, dispatch::Algorithm::Tiny};
+    for (int cc : {0, 89, 120}) {
+        const int w = std::is_same_v<T, float>               ? 32
+                    : std::is_same_v<T, std::complex<float>> ? (cc == 120 ? 3 : 16)
+                                                             : 0;
+        for (int64_t n : {int64_t(1), int64_t(3), int64_t(4), int64_t(16), int64_t(17), int64_t(32)}) {
+            auto s = *built;
+            s.cuda_cc = cc;
+            s.m = s.k = n;
+            EXPECT_EQ(Tbl::native_tier_preferred(tiny, s), n <= w) << "cc=" << cc << " n=" << n;
+        }
     }
 }
 

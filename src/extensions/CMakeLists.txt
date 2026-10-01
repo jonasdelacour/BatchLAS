@@ -47,6 +47,8 @@ set(EXTENSIONS_CTA_SOURCES
     # a device-code cluster with the pair above. It is also GPU-only, which is what this
     # object library's NO_CPU_TARGETS configuration (src/CMakeLists.txt:67-71) wants.
     geqrf_tiny.cc
+    # The CTA tier's skinny register leg: reuses geqrf_cta_device.hh's larfg scalars.
+    geqrf_skinny.cc
     # WP6 scaffolding, and THIS list for the same W12 reason as the potrf and
     # geqrf pairs: the blocked getrf driver's diagonal-panel leaf will BE the CTA
     # device function, shared through a getrf_cta_device.hh, so the two sources
@@ -75,6 +77,8 @@ set(EXTENSIONS_CTA_SOURCES
     # for the shared-device-symbol one: it borrows only lu_cabs1, an inline template,
     # and the tier is GPU-only.
     gesv_tiny.cc
+    # The register-resident getrs tier; GPU-only like gesv_tiny.cc, no shared device symbol.
+    getrs_tiny.cc
     # WP6/P4, the register-resident PANEL leaf for the blocked driver. HERE by the
     # ":77-86" rule and not by the GPU-only one: getrf_panel_reg_device.hh includes
     # getrf_cta_device.hh for lu_cabs1 and lu_zero, and getrf_blocked.cc calls this

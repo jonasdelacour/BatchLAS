@@ -95,6 +95,8 @@ inline std::optional<dispatch::GetrsShape> getrs_op_shape(
     // gets {Vendor, Auto} everywhere, because preferred() is all-false, not
     // because the arm is missing.
     s.blocked_available = sycl_getrs::getrs_blocked_available<T>();
+    s.tiny_max_n = sycl_getrs::getrs_tiny_max_n<T>();
+    s.cuda_cc = ctx.device().cuda_compute_capability();
 
     // THE FUSED TIER'S TWO CAPACITY NUMBERS, and the local-memory one is ASKED OF
     // THE DEVICE rather than taken from a constant -- route_potrf.hh's

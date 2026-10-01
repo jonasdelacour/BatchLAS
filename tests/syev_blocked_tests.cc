@@ -10,6 +10,7 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include "test_utils.hh"
+#include "../src/extensions/syev_arch_tuning.hh"
 
 #include <algorithm>
 #include <cmath>
@@ -616,6 +617,214 @@ TYPED_TEST(SyevBlockedTest, UpperTwoStageMatchesNetlib) {
 				EXPECT_NEAR(W_ours[i + j * n], W_ref[i + j * n], tol)
 					<< "(i,b)= (" << i << "," << j << ")";
 			}
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Per-architecture syev windows and constants (sm_120 retune).
+// evidence: docs/perf/blackwell.md#syev-retune
+//
+// The pure tests pin both sides: cuda_cc 0 (non-CUDA) and 89 must keep the
+// sm_89 values bit for bit, and 120/121 must take the re-measured ones. Every
+// threshold is straddled from both sides.
+// ---------------------------------------------------------------------------
+namespace {
+
+template <typename T>
+batchlas::blas::dispatch::detail::SyevShape syev_arch_shape(int64_t n, int cuda_cc) {
+	batchlas::blas::dispatch::detail::SyevShape s;
+	s.op = batchlas::dispatch::Op::syev;
+	s.backend = Backend::CUDA;
+	s.m = s.n = s.k = n;
+	s.batch = 64;
+	s.is_gpu = true;
+	s.max_sub_group = 32;
+	s.cuda_cc = cuda_cc;
+	s.jobtype = JobType::EigenVectors;
+	return s;
+}
+
+template <typename T>
+batchlas::dispatch::Algorithm syev_arch_preferred(int64_t n, int cuda_cc) {
+	namespace d = batchlas::dispatch;
+	using Table = d::RouteTable<d::Op::syev, T>;
+	const auto s = syev_arch_shape<T>(n, cuda_cc);
+	d::Algorithm got = d::Algorithm::Auto;
+	int count = 0;
+	for (const d::Route* r = Table::order_begin(); r != Table::order_end(); ++r) {
+		if (d::is_native(*r) && Table::supports(*r, s) && Table::preferred(*r, s)) {
+			got = r->algo;
+			++count;
+		}
+	}
+	EXPECT_LE(count, 1) << "more than one native syev route preferred at n=" << n << " cc=" << cuda_cc;
+	return got;
+}
+
+} // namespace
+
+TEST(SyevArchWindow, FloatEdgeKeepsSm89WindowOffSm120) {
+	using A = batchlas::dispatch::Algorithm;
+	for (const int cc : {0, 89, 90, 130}) {
+		EXPECT_EQ(syev_arch_preferred<float>(448, cc), A::Blocked) << cc;
+		EXPECT_EQ(syev_arch_preferred<float>(449, cc), A::TwoStage) << cc;
+		EXPECT_EQ(syev_arch_preferred<float>(768, cc), A::TwoStage) << cc;
+		EXPECT_EQ(syev_arch_preferred<float>(769, cc), A::TwoStage) << cc;
+		EXPECT_EQ(syev_arch_preferred<float>(1024, cc), A::TwoStage) << cc;
+		EXPECT_EQ(syev_arch_preferred<float>(1025, cc), A::Auto) << cc;
+	}
+}
+
+TEST(SyevArchWindow, FloatEdgeMovesOnSm120) {
+	using A = batchlas::dispatch::Algorithm;
+	constexpr int64_t edge = batchlas::blas::dispatch::detail::kSyevSm120FloatBlockedMaxN;
+	for (const int cc : {120, 121}) {
+		EXPECT_EQ(syev_arch_preferred<float>(448, cc), A::Blocked) << cc;
+		EXPECT_EQ(syev_arch_preferred<float>(449, cc), A::Blocked) << cc;
+		EXPECT_EQ(syev_arch_preferred<float>(edge, cc), A::Blocked) << cc;
+		EXPECT_EQ(syev_arch_preferred<float>(edge + 1, cc), A::TwoStage) << cc;
+		EXPECT_EQ(syev_arch_preferred<float>(1024, cc), A::TwoStage) << cc;
+		EXPECT_EQ(syev_arch_preferred<float>(1025, cc), A::Auto) << cc;
+	}
+}
+
+TEST(SyevArchWindow, OtherScalarsIgnoreTheArchitecture) {
+	for (int64_t n = 33; n <= 1100; n += 7) {
+		EXPECT_EQ(syev_arch_preferred<double>(n, 120), syev_arch_preferred<double>(n, 0)) << n;
+		EXPECT_EQ(syev_arch_preferred<std::complex<float>>(n, 120),
+				  syev_arch_preferred<std::complex<float>>(n, 0)) << n;
+		EXPECT_EQ(syev_arch_preferred<std::complex<double>>(n, 120),
+				  syev_arch_preferred<std::complex<double>>(n, 0)) << n;
+	}
+	for (int64_t n = 33; n <= 1100; ++n) {
+		(void)syev_arch_preferred<float>(n, 120);   // the at-most-one check
+	}
+}
+
+TEST(SyevArchTuning, PanelAndBackTransformBlocksPerArch) {
+	namespace st = batchlas::syev_tuning;
+	for (const int cc : {0, 89, 130}) {
+		for (const int32_t n : {64, 256, 512, 513, 1024, 2048}) {
+			EXPECT_EQ(st::sytrd_block_size_default_for_n(n, cc), tuning::sytrd_block_size_default_for_n(n)) << n << " " << cc;
+			EXPECT_EQ(st::ormqr_block_size_default_for_n(n, cc), tuning::ormqr_block_size_default_for_n(n)) << n << " " << cc;
+		}
+		for (const bool dbl : {false, true}) {
+			EXPECT_EQ(st::latrd_grid_min_n_default(cc, false, dbl), 768) << cc;
+			EXPECT_EQ(st::latrd_grid_min_n_default(cc, true, dbl), 768) << cc;
+		}
+	}
+	for (const int cc : {120, 121}) {
+		EXPECT_EQ(st::sytrd_block_size_default_for_n(512, cc), tuning::sytrd_block_size_default_for_n(512));
+		EXPECT_EQ(st::sytrd_block_size_default_for_n(513, cc), st::kSm120SytrdBlockXlarge);
+		EXPECT_EQ(st::ormqr_block_size_default_for_n(512, cc), tuning::ormqr_block_size_default_for_n(512));
+		EXPECT_EQ(st::ormqr_block_size_default_for_n(513, cc), st::kSm120OrmqrBlockXlarge);
+		EXPECT_EQ(st::latrd_grid_min_n_default(cc, false, false), 321);
+		EXPECT_EQ(st::latrd_grid_min_n_default(cc, false, true), 257);
+		EXPECT_EQ(st::latrd_grid_min_n_default(cc, true, false), 257);
+		EXPECT_EQ(st::latrd_grid_min_n_default(cc, true, true), 129);
+	}
+	// The shared constant the other consumers read did not move.
+	EXPECT_EQ(tuning::ormqr_block_size_default_for_n(1024), tuning::ORMQR_BLOCK_SIZE_XLARGE);
+}
+
+TEST(SyevArchTuning, EnvOverridesWinOnEveryArch) {
+	namespace st = batchlas::syev_tuning;
+	ScopedEnvVar nb("BATCHLAS_TUNE_SYTRD_BLOCK_SIZE", "24");
+	ScopedEnvVar ob("BATCHLAS_TUNE_ORMQR_BLOCK_SIZE", "40");
+	ScopedEnvVar mn("BATCHLAS_LATRD_GRID_MIN_N", "333");
+	for (const int cc : {0, 89, 120}) {
+		EXPECT_EQ(st::sytrd_block_size_for_n(1024, cc), 24) << cc;
+		EXPECT_EQ(st::ormqr_block_size_for_n(1024, cc), 40) << cc;
+		for (const bool dbl : {false, true}) {
+			EXPECT_EQ(st::latrd_grid_min_n(cc, false, dbl), 333) << cc;
+			EXPECT_EQ(st::latrd_grid_min_n(cc, true, dbl), 333) << cc;
+		}
+	}
+}
+
+// The re-measured constants take effect only above n = 512 on sm_120, where
+// nothing else in this file runs. Both paths that read them are pinned (called
+// directly), on a view with ld != n and a batch stride with a gap, both padded
+// with a large finite poison.
+TYPED_TEST(SyevBlockedTest, AboveXlargeBucketNonNaturalLayoutMatchesNetlib) {
+	using Scalar = typename TestFixture::ScalarType;
+	using Real = typename base_type<Scalar>::type;
+	constexpr Backend B = TestFixture::BackendType;
+	if constexpr (B == Backend::NETLIB) {
+		GTEST_SKIP() << "native blocked/two-stage paths are GPU only";
+	} else {
+		const int n = 520;
+		const int batch = 2;
+		const int ld = n + 5;
+		const int stride = ld * n + 13;
+		const Scalar poison = Scalar(Real(1e3));
+
+		Matrix<Scalar, MatrixFormat::Dense> A0 =
+			Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, true, batch, 2468);
+		UnifiedVector<Real> W_ref(static_cast<std::size_t>(n) * batch);
+		{
+			Matrix<Scalar, MatrixFormat::Dense> A_ref = A0;
+			auto ws = UnifiedVector<std::byte>(syev_buffer_size<Backend::NETLIB>(
+				*this->ctx, A_ref.view(), W_ref.to_span(), JobType::NoEigenVectors, Uplo::Lower));
+			syev<Backend::NETLIB>(*this->ctx, A_ref.view(), W_ref.to_span(),
+								  JobType::NoEigenVectors, Uplo::Lower, ws.to_span()).wait();
+		}
+
+		for (const bool two_stage : {true, false}) {
+			if (two_stage && !std::is_same_v<Scalar, float>) continue;   // two_stage's window is float-only
+			Matrix<Scalar, MatrixFormat::Dense> Big(n, n, batch, ld, stride);
+			Scalar* big = Big.view().data().data();
+			std::fill(big, big + static_cast<std::size_t>(stride) * batch, poison);
+			for (int b = 0; b < batch; ++b) {
+				for (int c = 0; c < n; ++c) {
+					for (int r = 0; r < n; ++r) {
+						big[static_cast<std::size_t>(b) * stride + c * ld + r] = A0(r, c, b);
+					}
+				}
+			}
+			UnifiedVector<Real> W(static_cast<std::size_t>(n) * batch);
+			StedcParams<Real> params;
+			if (two_stage) {
+				auto ws = UnifiedVector<std::byte>(syev_two_stage_buffer_size<B, Scalar>(
+					*this->ctx, Big.view(), JobType::EigenVectors, Uplo::Lower, params));
+				syev_two_stage<B, Scalar>(*this->ctx, Big.view(), W.to_span(), JobType::EigenVectors,
+										  Uplo::Lower, ws.to_span(), params).wait();
+			} else {
+				auto ws = UnifiedVector<std::byte>(syev_blocked_buffer_size<B, Scalar>(
+					*this->ctx, Big.view(), JobType::EigenVectors, Uplo::Lower, params));
+				syev_blocked<B, Scalar>(*this->ctx, Big.view(), W.to_span(), JobType::EigenVectors,
+										Uplo::Lower, ws.to_span(), params).wait();
+			}
+
+			const Real tol_w = std::max(tol_eig_for<Real>(), blocked_cuda_tolerance_floor_eig<Scalar, B>()) * Real(4);
+			for (std::size_t i = 0; i < W.size(); ++i) {
+				ASSERT_NEAR(W[i], W_ref[i], tol_w) << "two_stage=" << two_stage << " i=" << i;
+			}
+			for (int b = 0; b < batch; ++b) {
+				for (int c = 0; c < n; ++c) {
+					for (int r = n; r < ld; ++r) {
+						ASSERT_EQ(big[static_cast<std::size_t>(b) * stride + c * ld + r], poison)
+							<< "padding row written, b=" << b << " r=" << r << " c=" << c;
+					}
+				}
+			}
+
+			// Residual and orthogonality of the second item: its offset is the stride.
+			Matrix<Scalar, MatrixFormat::Dense> V(n, n, 1);
+			Matrix<Scalar, MatrixFormat::Dense> A1(n, n, 1);
+			UnifiedVector<Real> W1(static_cast<std::size_t>(n));
+			for (int c = 0; c < n; ++c) {
+				W1[c] = W[static_cast<std::size_t>(n) + c];
+				for (int r = 0; r < n; ++r) {
+					V(r, c, 0) = big[static_cast<std::size_t>(stride) + c * ld + r];
+					A1(r, c, 0) = A0(r, c, 1);
+				}
+			}
+			check_orthonormal_columns(V.view(), W1,
+				std::max(tol_ortho_for<Real>(), blocked_cuda_tolerance_floor_ortho<Scalar, B>()));
+			check_eigen_residual(A1.view(), V.view(), W1,
+				std::max(tol_resid_for<Real>(), blocked_cuda_tolerance_floor_resid<Scalar, B>()));
 		}
 	}
 }

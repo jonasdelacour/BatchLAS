@@ -1,5 +1,6 @@
 #include <batchlas/blas/extensions.hh>
 #include "uplo_mirror.hh"
+#include "syev_arch_tuning.hh"
 #include "info_span.hh"
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/matrix.hh>
@@ -85,8 +86,8 @@ inline void validate_syev_blocked_dims(const MatrixView<T, MatrixFormat::Dense>&
 // overwritten by the next retune. See the note in docs on when the consumer
 // overrules the bench.
 template <typename T>
-inline int32_t sytrd_block_size_default(int32_t n) {
-    const int32_t harness = tuning::sytrd_block_size_for_n(n);
+inline int32_t sytrd_block_size_default(int32_t n, int cuda_cc) {
+    const int32_t harness = syev_tuning::sytrd_block_size_for_n(n, cuda_cc);
     if constexpr (internal::is_complex<T>::value) {
         if (n > 256 && n <= 512) return 32;
     }
@@ -94,10 +95,10 @@ inline int32_t sytrd_block_size_default(int32_t n) {
 }
 
 template <typename T>
-inline int32_t sytrd_block_size_override(int32_t n) {
+inline int32_t sytrd_block_size_override(int32_t n, int cuda_cc) {
     // 0 on the field means unset. The fallback is both n-bucketed and
     // type-dependent, so it cannot be a scalar default on the field.
-    const int32_t fallback = sytrd_block_size_default<T>(n);
+    const int32_t fallback = sytrd_block_size_default<T>(n, cuda_cc);
     const int32_t value = batchlas::settings().geometry.sytrd_block_size;
     return value > 0 ? value : fallback;
 }
@@ -149,8 +150,9 @@ Event syev_blocked(Queue& ctx,
     const int32_t n = static_cast<int32_t>(a_in.rows());
     const int32_t batch = static_cast<int32_t>(a_in.batch_size());
     const int32_t p = std::max<int32_t>(0, n - 1);
-    const int32_t sytrd_block_size = sytrd_block_size_override<T>(n);
-    const int32_t ormqr_block_size = tuning::ormqr_block_size_for_n(n);
+    const int cuda_cc = ctx.device().cuda_compute_capability();
+    const int32_t sytrd_block_size = sytrd_block_size_override<T>(n, cuda_cc);
+    const int32_t ormqr_block_size = syev_tuning::ormqr_block_size_for_n(n, cuda_cc);
 
     // Overwrite A only when jobz==EigenVectors.
     auto& a = const_cast<MatrixView<T, MatrixFormat::Dense>&>(a_in);
@@ -516,8 +518,9 @@ size_t syev_blocked_buffer_size(Queue& ctx,
 
     const int32_t n = static_cast<int32_t>(a.rows());
     const int32_t batch = static_cast<int32_t>(a.batch_size());
-    const int32_t sytrd_block_size = sytrd_block_size_override<T>(n);
-    const int32_t ormqr_block_size = tuning::ormqr_block_size_for_n(n);
+    const int cuda_cc = ctx.device().cuda_compute_capability();
+    const int32_t sytrd_block_size = sytrd_block_size_override<T>(n, cuda_cc);
+    const int32_t ormqr_block_size = syev_tuning::ormqr_block_size_for_n(n, cuda_cc);
 
     size_t bytes = 0;
 
