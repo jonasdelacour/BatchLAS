@@ -87,7 +87,11 @@ def load_rows(paths, op, include_stale):
                 if not line:
                     continue
                 row = json.loads(line)
-                if row.get("op") != op:
+                # benchviz names the Upper variant of an op "<op>_upper".
+                row_uplo = row.get("uplo") or "L"
+                if row.get("op") == op + "_upper":
+                    row_uplo = "U"
+                elif row.get("op") != op:
                     continue
                 if not row.get("ok", False) or not row.get("time_ms"):
                     skipped["not ok"] += 1
@@ -101,11 +105,11 @@ def load_rows(paths, op, include_stale):
                     skipped["unknown route/dtype"] += 1
                     continue
                 n = int(row.get("n") or row.get("m"))
-                key = (dtype, row.get("uplo", "L") or "L", n, int(row["batch"]), route)
+                key = (dtype, row_uplo, n, int(row["batch"]), route)
                 cells[key]["times"].append(float(row["time_ms"]) * 1e-3)
                 src = row.get("era") or row.get("source") or os.path.basename(path)
                 cells[key]["sources"].add(str(src))
-    out = {k: {"t": statistics.median(v["times"]), "reps": len(v["times"]),
+    out = {k: {"t": statistics.median(v["times"]), "times": v["times"], "reps": len(v["times"]),
                "sources": sorted(v["sources"])} for k, v in cells.items()}
     return out, dict(skipped)
 
@@ -247,7 +251,9 @@ def training_set(cells, feats, keep):
         if not plan["fits"] or not plan["supported"]:
             dropped[route] += 1   # measured under an older capacity, or refused today
             continue
-        out[(route, dtype, uplo)].append((plan["terms"], v["t"], n, batch, v["sources"]))
+        # Every pass is a row of its own; regret scores the cell's median.
+        for t in v["times"]:
+            out[(route, dtype, uplo)].append((plan["terms"], t, n, batch, v["sources"]))
     return out, dict(dropped)
 
 
@@ -349,7 +355,8 @@ def fallback(measured, route, dtype, uplo, cfg, own_rows=()):
     const, terms, missing = [0.0] * 4, {}, []
     for j, name in enumerate(PARAMS):
         for src, rule, frm, ff, bf in cands:
-            if name in ((src.get("fit") or {}).get("inactive") or []):
+            seen_zero_ok = rule == "other_profile" and cfg.get("borrow_inactive")
+            if not seen_zero_ok and name in ((src.get("fit") or {}).get("inactive") or []):
                 continue
             const[j] = src["constants"][j] * (ff if j == 1 else bf if j == 2 else 1.0)
             terms[name] = {"rule": rule, "from": "/".join(frm),
@@ -456,6 +463,70 @@ def cross_validate(cells, feats, train_full, measured_full, cfg, margin):
 
 def fmt_cell(c):
     return f"{c[0]} {c[1]} n={c[2]} b={c[3]}"
+
+
+def pr133_choice(feat):
+    """PR #133's hand-tuned sm_120 potrf windows, replayed in Python as a DELTA on today's
+    choice (a C++ replay would need #133's route header in this tree). With a vendor present
+    #133 differs from today only in lpanel_window_max_order on sm_120: float LPanel up to
+    n <= 320 (today 256), cfloat up to n <= 128 (today 256). lpanel_tier_max_order only acts
+    in the vendor-free walk, so it does not enter here. Informational, not a gate input."""
+    today = feat["auto"]
+    n, dtype = feat["n"], feat["dtype"]
+    if feat["uplo"] != "L":
+        return today
+    lp = feat["routes"]["native:lpanel"]
+    if dtype == "float" and 256 < n <= 320 and lp["supported"] and lp["fits"]:
+        return "native:lpanel"
+    if dtype == "cfloat" and 128 < n <= 256 and today == "native:lpanel":
+        return "vendor"
+    return today
+
+
+def paired_vs(cv, full_by_cell, choice):
+    """(baseline, model) regret summaries on cells where both picks were measured."""
+    held = {s["cell"]: s for s in cv}
+    pt, pm = [], []
+    for cell, measured in full_by_cell.items():
+        s = held.get(cell)
+        rt = regret_of(choice(cell), measured)
+        if len(measured) >= 2 and s and s["regret"] is not None and rt is not None:
+            pt.append(rt)
+            pm.append(s["regret"])
+    return summarise(pt), summarise(pm)
+
+
+def diff_bands(diffs, all_cells):
+    """Route-diff cells merged into bands: per (dtype, uplo, today -> model), runs of orders
+    that are consecutive in that dtype's measured grid. Gain = geomean t(today)/t(model) over
+    cells where both were measured (> 1 means the model's route is faster)."""
+    grid = defaultdict(set)
+    for c in all_cells:
+        grid[(c[0], c[1])].add(c[2])
+    groups = defaultdict(list)
+    for cell, today, pick, measured, _ in diffs:
+        groups[(cell[0], cell[1], today, pick)].append((cell, measured))
+    bands = []
+    for (dtype, uplo, today, pick), items in sorted(groups.items(), key=str):
+        order = sorted(grid[(dtype, uplo)])
+        ns = sorted({c[2] for c, _ in items})
+        runs, cur = [], [ns[0]]
+        for n in ns[1:]:
+            if order.index(n) == order.index(cur[-1]) + 1:
+                cur.append(n)
+            else:
+                runs.append(cur)
+                cur = [n]
+        runs.append(cur)
+        for run in runs:
+            sel = [(c, m) for c, m in items if c[2] in run]
+            r = [m[today] / m[pick] for _, m in sel if today in m and pick in m]
+            gain = math.exp(sum(math.log(x) for x in r) / len(r)) if r else None
+            bs = sorted({c[3] for c, _ in sel})
+            bands.append({"dtype": dtype, "uplo": uplo, "n": (run[0], run[-1]),
+                          "batch": (bs[0], bs[-1]), "cells": len(sel), "today": today,
+                          "model": pick, "gain": gain, "measured": len(r)})
+    return bands
 
 
 def ship_gate(cv, full_by_cell, feats, max_regret=1.25):
@@ -600,8 +671,24 @@ def write_report(path, args, cv, full_by_cell, feats, full_model, skipped, dropp
             f"geomean {st['geomean']:.4f}, p95 {st['p95']:.4f}, max {st['max']:.4f}"
             if st.get("cells") else "none scorable"))
         L.append(f"* paired, gate population: see 'Ship gate' above ({gate['verdict']})")
+        if args.compare_pr133:
+            t3, m3 = paired_vs(cv, full_by_cell, lambda c: pr133_choice(feats[c]))
+            if t3.get("cells"):
+                L.append(f"* PR #133 sm_120 windows (Python replay, see pr133_choice), "
+                         f"{t3['cells']} paired cells: #133 geomean {t3['geomean']:.4f} / p95 "
+                         f"{t3['p95']:.4f} / max {t3['max']:.4f}; model held-out "
+                         f"{m3['geomean']:.4f} / {m3['p95']:.4f} / {m3['max']:.4f}")
         L.append(f"\n### Route diff: {len(diffs)} measured cells where the full-fit model "
                  f"differs from today\n")
+        L.append("Bands (gain = geomean t(today)/t(model) where both measured):\n")
+        L.append("| dtype | uplo | n | batch | cells | today -> model | gain |")
+        L.append("|---|---|---|---|---|---|---|")
+        for b in diff_bands(diffs, full_by_cell):
+            g = f"{b['gain']:.3f} ({b['measured']})" if b["gain"] else "unmeasured"
+            L.append(f"| {b['dtype']} | {b['uplo']} | {b['n'][0]}..{b['n'][1]} | "
+                     f"{b['batch'][0]}..{b['batch'][1]} | {b['cells']} | {b['today']} -> "
+                     f"{b['model']} | {g} |")
+        L.append("\nPer cell:\n")
         L.append("| cell | today | model | t(today) | t(model) | best measured | extrapolated |")
         L.append("|---|---|---|---|---|---|---|")
         for cell, today, pick, measured, costs in diffs:
@@ -668,9 +755,14 @@ def main(argv=None):
     ap.add_argument("--min-batches", type=int, default=2)
     ap.add_argument("--borrow", action="append", default=[], metavar="PROFILE=profile.json",
                     help="a fitted profile of ANOTHER device to borrow unmeasured routes from")
+    ap.add_argument("--borrow-inactive", action="store_true",
+                    help="let an --borrow profile supply a term its fit saw as 0 (the same "
+                         "route measured on another device), instead of leaving it unfittable")
     ap.add_argument("--include-stale", action="store_true",
                     help="keep rows with kernel_current=false (archive rows of an older kernel)")
     ap.add_argument("--compare-windows", action="store_true")
+    ap.add_argument("--compare-pr133", action="store_true",
+                    help="also score PR #133's sm_120 windows (informational)")
     ap.add_argument("--grid", action="store_true", help="also price a synthetic grid")
     args = ap.parse_args(argv)
 
@@ -690,7 +782,7 @@ def main(argv=None):
         with open(path) as f:
             borrows.append((name, json.load(f), dict(all_facts[name])))
     cfg = {"facts": preset, "min_rows": args.min_rows, "min_batches": args.min_batches,
-           "borrows": borrows}
+           "borrows": borrows, "borrow_inactive": args.borrow_inactive}
 
     cells, skipped = load_rows(args.results, args.op, args.include_stale)
     if not cells:

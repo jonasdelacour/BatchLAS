@@ -1,0 +1,1233 @@
+{
+ "borrowed_profiles": [],
+ "device_facts": {
+  "cus": 188,
+  "device": "NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition",
+  "dram_gbps": 1792,
+  "fp32_tflops": 110.0,
+  "fp64_rate": 0.015625,
+  "fp64_tflops": 1.72,
+  "local_mem": 101376,
+  "max_groups_per_cu": 32,
+  "max_threads_per_cu": 1536,
+  "max_wg": 1024,
+  "source": "local_mem/max_wg/cus: potrf_plan_dump --query-device on threadripper02 GPU 0 (cuda_cc 120), 2026-10-01; caps: CC 12.0 table; peaks: datasheet (Max-Q), unverified"
+ },
+ "fallback_rule": "The rule for a (route, dtype, uplo) without a fit of its own. Sources, in this order:\n    1. the same route and dtype on the other uplo, copied;\n    2. the precision partner (float<->double, cfloat<->cdouble), s_per_flop scaled by the\n       profile's FP64:FP32 PEAK rate, the rest copied (latency-bound kernels violate this:\n       sm_89 tiny double measures ~2x float, not 64x);\n    3. the complexity partner (float<->cfloat, double<->cdouble), copied -- the plan already\n       counts a complex multiply-add as four;\n    4. the same (route, dtype, uplo) MEASURED in another profile (--borrow), s_per_flop scaled\n       by the per-CU peak FP rate of that precision (source/target) and s_per_byte by the\n       per-CU DRAM bandwidth (source/target); t_launch and t_step copied.\n    PER TERM: each constant comes from the first source whose fit SAW that term (it is not in\n    the source's `inactive` list); an inactive 0 is never borrowed. A term no source saw leaves\n    the key unfittable, so the route is not a candidate for it. Only measured entries are\n    sources, never another fallback. Returns the entry, or {\"unfittable\": [terms]}.\n    5. LAST, the key's OWN THIN FIT: its own rows (>= 3) fitted although below the minimum-data\n       rule, flagged `thin`. It supplies every term the sources above did not -- including a\n       term it saw as 0 -- so a key's own data is never discarded in favour of dropping it.",
+ "gate": {
+  "model": {
+   "cells": 545,
+   "geomean": 1.0579051187359696,
+   "max": 3.189998327479511,
+   "over_1.1": 98,
+   "p95": 1.3728256251191033
+  },
+  "paired_cells": 545,
+  "rule": "PASS only if, on the cells where BOTH today's pick and the held-out model's pick were\n    measured, the model beats today's windows on geomean AND p95, and its max <= max_regret.",
+  "today": {
+   "cells": 545,
+   "geomean": 1.0738106108069563,
+   "max": 2.2489176348497253,
+   "over_1.1": 115,
+   "p95": 1.504527527613618
+  },
+  "verdict": "FAIL"
+ },
+ "margin": 0.05,
+ "min_data_rule": {
+  "batches": 2,
+  "rows": 10
+ },
+ "model": "t = t_launch*T0 + max(s_per_flop*T1, s_per_byte*T2) + t_step*T3 (launch_plan::combine over launch_plan::cost_terms)",
+ "objective": "least squares on log(time); constants = exp(theta)",
+ "op": "potrf",
+ "profile": "sm_120",
+ "provenance": {
+  "campaigns": [],
+  "created": "2026-10-01T19:44:31",
+  "fit_git_dirty": true,
+  "fit_git_sha": "b3dcd41e",
+  "plan_dump": "build/tests/potrf_plan_dump",
+  "sources": [
+   {
+    "path": "benchmarks/results/routing/sm120_potrf_sweep.jsonl",
+    "sha256_16": "f367559cf676a6db"
+   }
+  ]
+ },
+ "routes": {
+  "native:blocked": {
+   "cdouble": {
+    "L": {
+     "constants": {
+      "s_per_byte": 9.754172655362623e-10,
+      "s_per_flop": 0.0,
+      "t_launch": 3.1479013274835197e-06,
+      "t_step": 5.8829868186345e-06
+     },
+     "fallback": null,
+     "fit": {
+      "inactive": [
+       "s_per_flop"
+      ],
+      "max_abs_log": 1.2776048879754516,
+      "rms_log": 0.4798855127397895,
+      "rows": 252
+     },
+     "support": {
+      "batch_max": 32768,
+      "batch_min": 128,
+      "n_max": 1024,
+      "n_min": 2,
+      "rows": 252,
+      "sources": [
+       "sm120_potrf_sweep.jsonl"
+      ]
+     },
+     "thin": false
+    },
+    "U": {
+     "constants": {
+      "s_per_byte": 9.754172655362623e-10,
+      "s_per_flop": 9.530297245025848e-11,
+      "t_launch": 3.1479013274835197e-06,
+      "t_step": 5.8829868186345e-06
+     },
+     "fallback": {
+      "byte_factor": 1.0,
+      "flop_factor": 1.0,
+      "from": "native:blocked/cdouble/L",
+      "rule": "other_uplo",
+      "terms": {
+       "s_per_byte": {
+        "factor": 1.0,
+        "from": "native:blocked/cdouble/L",
+        "rule": "other_uplo"
+       },
+       "s_per_flop": {
+        "factor": 1.0,
+        "from": "native:blocked/double/L",
+        "rule": "complexity_borrow"
+       },
+       "t_launch": {
+        "factor": 1.0,
+        "from": "native:blocked/cdouble/L",
+        "rule": "other_uplo"
+       },
+       "t_step": {
+        "factor": 1.0,
+        "from": "native:blocked/cdouble/L",
+        "rule": "other_uplo"
+       }
+      }
+     },
+     "fit": null,
+     "support": null,
+     "thin": false
+    }
+   },
+   "cfloat": {
+    "L": {
+     "constants": {
+      "s_per_byte": 1.278237762528862e-10,
+      "s_per_flop": 0.0,
+      "t_launch": 2.7565179591386494e-06,
+      "t_step": 1.7491348861952452e-06
+     },
+     "fallback": null,
+     "fit": {
+      "inactive": [
+       "s_per_flop"
+      ],
+      "max_abs_log": 1.0789973089436962,
+      "rms_log": 0.41505175027921787,
+      "rows": 274
+     },
+     "support": {
+      "batch_max": 32768,
+      "batch_min": 128,
+      "n_max": 1024,
+      "n_min": 2,
+      "rows": 274,
+      "sources": [
+       "sm120_potrf_sweep.jsonl"
+      ]
+     },
+     "thin": false
+    }
+   },
+   "double": {
+    "L": {
+     "constants": {
+      "s_per_byte": 3.6778653161605674e-10,
+      "s_per_flop": 9.530297245025848e-11,
+      "t_launch": 2.353910317779642e-06,
+      "t_step": 3.8946928684803305e-06
+     },
+     "fallback": null,
+     "fit": {
+      "inactive": [],
+      "max_abs_log": 1.33870314568704,
+      "rms_log": 0.5335702139081707,
+      "rows": 274
+     },
+     "support": {
+      "batch_max": 32768,
+      "batch_min": 128,
+      "n_max": 1024,
+      "n_min": 2,
+      "rows": 274,
+      "sources": [
+       "sm120_potrf_sweep.jsonl"
+      ]
+     },
+     "thin": false
+    },
+    "U": {
+     "constants": {
+      "s_per_byte": 3.6778653161605674e-10,
+      "s_per_flop": 9.530297245025848e-11,
+      "t_launch": 2.353910317779642e-06,
+      "t_step": 3.8946928684803305e-06
+     },
+     "fallback": {
+      "byte_factor": 1.0,
+      "flop_factor": 1.0,
+      "from": "native:blocked/double/L",
+      "rule": "other_uplo",
+      "terms": {
+       "s_per_byte": {
+        "factor": 1.0,
+        "from": "native:blocked/double/L",
+        "rule": "other_uplo"
+       },
+       "s_per_flop": {
+        "factor": 1.0,
+        "from": "native:blocked/double/L",
+        "rule": "other_uplo"
+       },
+       "t_launch": {
+        "factor": 1.0,
+        "from": "native:blocked/double/L",
+        "rule": "other_uplo"
+       },
+       "t_step": {
+        "factor": 1.0,
+        "from": "native:blocked/double/L",
+        "rule": "other_uplo"
+       }
+      }
+     },
+     "fit": null,
+     "support": null,
+     "thin": false
+    }
+   },
+   "float": {
+    "L": {
+     "constants": {
+      "s_per_byte": 1.1752814168288662e-10,
+      "s_per_flop": 0.0,
+      "t_launch": 3.163030243575154e-06,
+      "t_step": 1.475551222649873e-06
+     },
+     "fallback": null,
+     "fit": {
+      "inactive": [
+       "s_per_flop"
+      ],
+      "max_abs_log": 1.4639054622319003,
+      "rms_log": 0.44618412399551827,
+      "rows": 282
+     },
+     "support": {
+      "batch_max": 32768,
+      "batch_min": 128,
+      "n_max": 1024,
+      "n_min": 2,
+      "rows": 282,
+      "sources": [
+       "sm120_potrf_sweep.jsonl"
+      ]
+     },
+     "thin": false
+    },
+    "U": {
+     "constants": {
+      "s_per_byte": 1.1752814168288662e-10,
+      "s_per_flop": 1.4891089445352887e-12,
+      "t_launch": 3.163030243575154e-06,
+      "t_step": 1.475551222649873e-06
+     },
+     "fallback": {
+      "byte_factor": 1.0,
+      "flop_factor": 0.015625,
+      "from": "native:blocked/float/L",
+      "rule": "other_uplo",
+      "terms": {
+       "s_per_byte": {
+        "factor": 1.0,
+        "from": "native:blocked/float/L",
+        "rule": "other_uplo"
+       },
+       "s_per_flop": {
+        "factor": 0.015625,
+        "from": "native:blocked/double/L",
+        "rule": "precision_scaled"
+       },
+       "t_launch": {
+        "factor": 1.0,
+        "from": "native:blocked/float/L",
+        "rule": "other_uplo"
+       },
+       "t_step": {
+        "factor": 1.0,
+        "from": "native:blocked/float/L",
+        "rule": "other_uplo"
+       }
+      }
+     },
+     "fit": null,
+     "support": null,
+     "thin": false
+    }
+   }
+  },
+  "native:cta": {
+   "cdouble": {
+    "L": {
+     "constants": {
+      "s_per_byte": 0.0,
+      "s_per_flop": 0.0,
+      "t_launch": 6.7194226916145705e-06,
+      "t_step": 5.452456357702686e-06
+     },
+     "fallback": null,
+     "fit": {
+      "inactive": [
+       "s_per_flop",
+       "s_per_byte"
+      ],
+      "max_abs_log": 1.2344909201003382,
+      "rms_log": 0.5998263867179882,
+      "rows": 120
+     },
+     "support": {
+      "batch_max": 32768,
+      "batch_min": 128,
+      "n_max": 36,
+      "n_min": 2,
+      "rows": 120,
+      "sources": [
+       "sm120_potrf_sweep.jsonl"
+      ]
+     },
+     "thin": false
+    }
+   },
+   "cfloat": {
+    "L": {
+     "constants": {
+      "s_per_byte": 0.0,
+      "s_per_flop": 0.0,
+      "t_launch": 7.184501378052487e-06,
+      "t_step": 1.4094603074828057e-06
+     },
+     "fallback": null,
+     "fit": {
+      "inactive": [
+       "s_per_flop",
+       "s_per_byte"
+      ],
+      "max_abs_log": 0.8663880075875365,
+      "rms_log": 0.32313984612606567,
+      "rows": 140
+     },
+     "support": {
+      "batch_max": 32768,
+      "batch_min": 128,
+      "n_max": 48,
+      "n_min": 2,
+      "rows": 140,
+      "sources": [
+       "sm120_potrf_sweep.jsonl"
+      ]
+     },
+     "thin": false
+    }
+   },
+   "double": {
+    "L": {
+     "constants": {
+      "s_per_byte": 0.0,
+      "s_per_flop": 0.0,
+      "t_launch": 6.853310837244134e-06,
+      "t_step": 3.5622665768993767e-06
+     },
+     "fallback": null,
+     "fit": {
+      "inactive": [
+       "s_per_flop",
+       "s_per_byte"
+      ],
+      "max_abs_log": 1.4359853369665787,
+      "rms_log": 0.5888274090732182,
+      "rows": 140
+     },
+     "support": {
+      "batch_max": 32768,
+      "batch_min": 128,
+      "n_max": 48,
+      "n_min": 2,
+      "rows": 140,
+      "sources": [
+       "sm120_potrf_sweep.jsonl"
+      ]
+     },
+     "thin": false
+    }
+   },
+   "float": {
+    "L": {
+     "constants": {
+      "s_per_byte": 0.0,
+      "s_per_flop": 0.0,
+      "t_launch": 7.709802616671647e-06,
+      "t_step": 9.67753311625557e-07
+     },
+     "fallback": null,
+     "fit": {
+      "inactive": [
+       "s_per_flop",
+       "s_per_byte"
+      ],
+      "max_abs_log": 0.7383277135617483,
+      "rms_log": 0.2688643052737481,
+      "rows": 160
+     },
+     "support": {
+      "batch_max": 32768,
+      "batch_min": 128,
+      "n_max": 64,
+      "n_min": 2,
+      "rows": 160,
+      "sources": [
+       "sm120_potrf_sweep.jsonl"
+      ]
+     },
+     "thin": false
+    },
+    "U": {
+     "constants": {
+      "s_per_byte": 1.1703980157728979e-09,
+      "s_per_flop": 0.0,
+      "t_launch": 7.709802616671647e-06,
+      "t_step": 9.67753311625557e-07
+     },
+     "fallback": {
+      "byte_factor": 1.0,
+      "flop_factor": 1.0,
+      "from": "native:cta/float/L",
+      "rule": "other_uplo",
+      "terms": {
+       "s_per_byte": {
+        "factor": 1.0,
+        "from": "native:cta/float/U",
+        "rule": "thin"
+       },
+       "s_per_flop": {
+        "factor": 1.0,
+        "from": "native:cta/float/U",
+        "rule": "thin"
+       },
+       "t_launch": {
+        "factor": 1.0,
+        "from": "native:cta/float/L",
+        "rule": "other_uplo"
+       },
+       "t_step": {
+        "factor": 1.0,
+        "from": "native:cta/float/L",
+        "rule": "other_uplo"
+       }
+      }
+     },
+     "fit": {
+      "inactive": [
+       "s_per_flop"
+      ],
+      "max_abs_log": 0.1795691639407817,
+      "rms_log": 0.10967682293660136,
+      "rows": 8
+     },
+     "support": {
+      "batch_max": 8192,
+      "batch_min": 8192,
+      "n_max": 64,
+      "n_min": 8,
+      "rows": 8,
+      "sources": [
+       "sm120_potrf_sweep.jsonl"
+      ]
+     },
+     "thin": true
+    }
+   }
+  },
+  "native:lpanel": {
+   "cdouble": {
+    "L": {
+     "constants": {
+      "s_per_byte": 0.0,
+      "s_per_flop": 4.5270886767936926e-10,
+      "t_launch": 0.0,
+      "t_step": 5.563073892282098e-06
+     },
+     "fallback": null,
+     "fit": {
+      "inactive": [
+       "t_launch",
+       "s_per_byte"
+      ],
+      "max_abs_log": 1.112565590680461,
+      "rms_log": 0.5425426837159677,
+      "rows": 202
+     },
+     "support": {
+      "batch_max": 32768,
+      "batch_min": 128,
+      "n_max": 160,
+      "n_min": 2,
+      "rows": 202,
+      "sources": [
+       "sm120_potrf_sweep.jsonl"
+      ]
+     },
+     "thin": false
+    }
+   },
+   "cfloat": {
+    "L": {
+     "constants": {
+      "s_per_byte": 0.0,
+      "s_per_flop": 3.3613607659546725e-11,
+      "t_launch": 3.605754475431422e-06,
+      "t_step": 1.5093787446874313e-06
+     },
+     "fallback": null,
+     "fit": {
+      "inactive": [
+       "s_per_byte"
+      ],
+      "max_abs_log": 0.8483045777702198,
+      "rms_log": 0.44959438328564905,
+      "rows": 244
+     },
+     "support": {
+      "batch_max": 32768,
+      "batch_min": 128,
+      "n_max": 320,
+      "n_min": 2,
+      "rows": 244,
+      "sources": [
+       "sm120_potrf_sweep.jsonl"
+      ]
+     },
+     "thin": false
+    }
+   },
+   "double": {
+    "L": {
+     "constants": {
+      "s_per_byte": 0.0,
+      "s_per_flop": 4.075302310114877e-10,
+      "t_launch": 0.0,
+      "t_step": 4.337420483655419e-06
+     },
+     "fallback": null,
+     "fit": {
+      "inactive": [
+       "t_launch",
+       "s_per_byte"
+      ],
+      "max_abs_log": 1.0055995592417917,
+      "rms_log": 0.6392705236327181,
+      "rows": 244
+     },
+     "support": {
+      "batch_max": 32768,
+      "batch_min": 128,
+      "n_max": 320,
+      "n_min": 2,
+      "rows": 244,
+      "sources": [
+       "sm120_potrf_sweep.jsonl"
+      ]
+     },
+     "thin": false
+    }
+   },
+   "float": {
+    "L": {
+     "constants": {
+      "s_per_byte": 0.0,
+      "s_per_flop": 4.9610371768154534e-11,
+      "t_launch": 4.3247347215764385e-06,
+      "t_step": 1.1580190720734038e-06
+     },
+     "fallback": null,
+     "fit": {
+      "inactive": [
+       "s_per_byte"
+      ],
+      "max_abs_log": 0.7889443465124186,
+      "rms_log": 0.43811842883461244,
+      "rows": 274
+     },
+     "support": {
+      "batch_max": 32768,
+      "batch_min": 128,
+      "n_max": 640,
+      "n_min": 2,
+      "rows": 274,
+      "sources": [
+       "sm120_potrf_sweep.jsonl"
+      ]
+     },
+     "thin": false
+    }
+   }
+  },
+  "native:tiny": {
+   "cdouble": {
+    "L": {
+     "constants": {
+      "s_per_byte": 1.2970604409677241e-09,
+      "s_per_flop": 1.7625352265852388e-09,
+      "t_launch": 0.0,
+      "t_step": 7.369249430699018e-07
+     },
+     "fallback": null,
+     "fit": {
+      "inactive": [
+       "t_launch"
+      ],
+      "max_abs_log": 0.25932239398089774,
+      "rms_log": 0.11389838713005429,
+      "rows": 70
+     },
+     "support": {
+      "batch_max": 32768,
+      "batch_min": 128,
+      "n_max": 16,
+      "n_min": 2,
+      "rows": 70,
+      "sources": [
+       "sm120_potrf_sweep.jsonl"
+      ]
+     },
+     "thin": false
+    },
+    "U": {
+     "constants": {
+      "s_per_byte": 1.2970604409677241e-09,
+      "s_per_flop": 1.7625352265852388e-09,
+      "t_launch": 7.255866967617727e-06,
+      "t_step": 7.369249430699018e-07
+     },
+     "fallback": {
+      "byte_factor": 1.0,
+      "flop_factor": 1.0,
+      "from": "native:tiny/cfloat/L",
+      "rule": "precision_scaled",
+      "terms": {
+       "s_per_byte": {
+        "factor": 1.0,
+        "from": "native:tiny/cdouble/L",
+        "rule": "other_uplo"
+       },
+       "s_per_flop": {
+        "factor": 1.0,
+        "from": "native:tiny/cdouble/L",
+        "rule": "other_uplo"
+       },
+       "t_launch": {
+        "factor": 1.0,
+        "from": "native:tiny/cfloat/L",
+        "rule": "precision_scaled"
+       },
+       "t_step": {
+        "factor": 1.0,
+        "from": "native:tiny/cdouble/L",
+        "rule": "other_uplo"
+       }
+      }
+     },
+     "fit": null,
+     "support": null,
+     "thin": false
+    }
+   },
+   "cfloat": {
+    "L": {
+     "constants": {
+      "s_per_byte": 2.5660069058854407e-10,
+      "s_per_flop": 1.3314414727301594e-10,
+      "t_launch": 7.255866967617727e-06,
+      "t_step": 1.754674646525675e-08
+     },
+     "fallback": null,
+     "fit": {
+      "inactive": [],
+      "max_abs_log": 0.4614521604865782,
+      "rms_log": 0.14293491650272175,
+      "rows": 110
+     },
+     "support": {
+      "batch_max": 32768,
+      "batch_min": 128,
+      "n_max": 32,
+      "n_min": 2,
+      "rows": 110,
+      "sources": [
+       "sm120_potrf_sweep.jsonl"
+      ]
+     },
+     "thin": false
+    },
+    "U": {
+     "constants": {
+      "s_per_byte": 2.5660069058854407e-10,
+      "s_per_flop": 1.3314414727301594e-10,
+      "t_launch": 7.255866967617727e-06,
+      "t_step": 1.754674646525675e-08
+     },
+     "fallback": {
+      "byte_factor": 1.0,
+      "flop_factor": 1.0,
+      "from": "native:tiny/cfloat/L",
+      "rule": "other_uplo",
+      "terms": {
+       "s_per_byte": {
+        "factor": 1.0,
+        "from": "native:tiny/cfloat/L",
+        "rule": "other_uplo"
+       },
+       "s_per_flop": {
+        "factor": 1.0,
+        "from": "native:tiny/cfloat/L",
+        "rule": "other_uplo"
+       },
+       "t_launch": {
+        "factor": 1.0,
+        "from": "native:tiny/cfloat/L",
+        "rule": "other_uplo"
+       },
+       "t_step": {
+        "factor": 1.0,
+        "from": "native:tiny/cfloat/L",
+        "rule": "other_uplo"
+       }
+      }
+     },
+     "fit": null,
+     "support": null,
+     "thin": false
+    }
+   },
+   "double": {
+    "L": {
+     "constants": {
+      "s_per_byte": 0.0,
+      "s_per_flop": 1.7053838530904166e-09,
+      "t_launch": 0.0,
+      "t_step": 1.1636919901749415e-06
+     },
+     "fallback": null,
+     "fit": {
+      "inactive": [
+       "t_launch",
+       "s_per_byte"
+      ],
+      "max_abs_log": 0.2496406650959715,
+      "rms_log": 0.13623792819584749,
+      "rows": 110
+     },
+     "support": {
+      "batch_max": 32768,
+      "batch_min": 128,
+      "n_max": 32,
+      "n_min": 2,
+      "rows": 110,
+      "sources": [
+       "sm120_potrf_sweep.jsonl"
+      ]
+     },
+     "thin": false
+    },
+    "U": {
+     "constants": {
+      "s_per_byte": 1.776859482627962e-10,
+      "s_per_flop": 1.7053838530904166e-09,
+      "t_launch": 7.14331053925399e-06,
+      "t_step": 1.1636919901749415e-06
+     },
+     "fallback": {
+      "byte_factor": 1.0,
+      "flop_factor": 1.0,
+      "from": "native:tiny/float/L",
+      "rule": "precision_scaled",
+      "terms": {
+       "s_per_byte": {
+        "factor": 1.0,
+        "from": "native:tiny/float/L",
+        "rule": "precision_scaled"
+       },
+       "s_per_flop": {
+        "factor": 1.0,
+        "from": "native:tiny/double/L",
+        "rule": "other_uplo"
+       },
+       "t_launch": {
+        "factor": 1.0,
+        "from": "native:tiny/float/L",
+        "rule": "precision_scaled"
+       },
+       "t_step": {
+        "factor": 1.0,
+        "from": "native:tiny/double/L",
+        "rule": "other_uplo"
+       }
+      }
+     },
+     "fit": null,
+     "support": null,
+     "thin": false
+    }
+   },
+   "float": {
+    "L": {
+     "constants": {
+      "s_per_byte": 1.776859482627962e-10,
+      "s_per_flop": 1.7831899060370367e-10,
+      "t_launch": 7.14331053925399e-06,
+      "t_step": 6.009253932524199e-08
+     },
+     "fallback": null,
+     "fit": {
+      "inactive": [],
+      "max_abs_log": 0.4577644407648407,
+      "rms_log": 0.1071570416183107,
+      "rows": 110
+     },
+     "support": {
+      "batch_max": 32768,
+      "batch_min": 128,
+      "n_max": 32,
+      "n_min": 2,
+      "rows": 110,
+      "sources": [
+       "sm120_potrf_sweep.jsonl"
+      ]
+     },
+     "thin": false
+    },
+    "U": {
+     "constants": {
+      "s_per_byte": 1.776859482627962e-10,
+      "s_per_flop": 1.7831899060370367e-10,
+      "t_launch": 7.14331053925399e-06,
+      "t_step": 6.009253932524199e-08
+     },
+     "fallback": {
+      "byte_factor": 1.0,
+      "flop_factor": 1.0,
+      "from": "native:tiny/float/L",
+      "rule": "other_uplo",
+      "terms": {
+       "s_per_byte": {
+        "factor": 1.0,
+        "from": "native:tiny/float/L",
+        "rule": "other_uplo"
+       },
+       "s_per_flop": {
+        "factor": 1.0,
+        "from": "native:tiny/float/L",
+        "rule": "other_uplo"
+       },
+       "t_launch": {
+        "factor": 1.0,
+        "from": "native:tiny/float/L",
+        "rule": "other_uplo"
+       },
+       "t_step": {
+        "factor": 1.0,
+        "from": "native:tiny/float/L",
+        "rule": "other_uplo"
+       }
+      }
+     },
+     "fit": null,
+     "support": null,
+     "thin": false
+    }
+   }
+  },
+  "vendor": {
+   "cdouble": {
+    "L": {
+     "constants": {
+      "s_per_byte": 1.2500137650386187e-11,
+      "s_per_flop": 9.02280277883148e-13,
+      "t_launch": 1.5248980586269461e-05,
+      "t_step": 1.0273913192294693e-06
+     },
+     "fallback": null,
+     "fit": {
+      "inactive": [],
+      "max_abs_log": 0.9218592925431501,
+      "rms_log": 0.2512537365316935,
+      "rows": 252
+     },
+     "support": {
+      "batch_max": 32768,
+      "batch_min": 128,
+      "n_max": 1024,
+      "n_min": 2,
+      "rows": 252,
+      "sources": [
+       "sm120_potrf_sweep.jsonl"
+      ]
+     },
+     "thin": false
+    },
+    "U": {
+     "constants": {
+      "s_per_byte": 1.2500137650386187e-11,
+      "s_per_flop": 9.02280277883148e-13,
+      "t_launch": 1.5248980586269461e-05,
+      "t_step": 1.0273913192294693e-06
+     },
+     "fallback": {
+      "byte_factor": 1.0,
+      "flop_factor": 1.0,
+      "from": "vendor/cdouble/L",
+      "rule": "other_uplo",
+      "terms": {
+       "s_per_byte": {
+        "factor": 1.0,
+        "from": "vendor/cdouble/L",
+        "rule": "other_uplo"
+       },
+       "s_per_flop": {
+        "factor": 1.0,
+        "from": "vendor/cdouble/L",
+        "rule": "other_uplo"
+       },
+       "t_launch": {
+        "factor": 1.0,
+        "from": "vendor/cdouble/L",
+        "rule": "other_uplo"
+       },
+       "t_step": {
+        "factor": 1.0,
+        "from": "vendor/cdouble/L",
+        "rule": "other_uplo"
+       }
+      }
+     },
+     "fit": null,
+     "support": null,
+     "thin": false
+    }
+   },
+   "cfloat": {
+    "L": {
+     "constants": {
+      "s_per_byte": 2.802521110611555e-12,
+      "s_per_flop": 5.979092768822994e-14,
+      "t_launch": 1.7265703349350338e-05,
+      "t_step": 1.9909789877934678e-07
+     },
+     "fallback": null,
+     "fit": {
+      "inactive": [],
+      "max_abs_log": 0.8164175914135114,
+      "rms_log": 0.2277297274703426,
+      "rows": 274
+     },
+     "support": {
+      "batch_max": 32768,
+      "batch_min": 128,
+      "n_max": 1024,
+      "n_min": 2,
+      "rows": 274,
+      "sources": [
+       "sm120_potrf_sweep.jsonl"
+      ]
+     },
+     "thin": false
+    },
+    "U": {
+     "constants": {
+      "s_per_byte": 2.802521110611555e-12,
+      "s_per_flop": 5.979092768822994e-14,
+      "t_launch": 1.7265703349350338e-05,
+      "t_step": 1.9909789877934678e-07
+     },
+     "fallback": {
+      "byte_factor": 1.0,
+      "flop_factor": 1.0,
+      "from": "vendor/cfloat/L",
+      "rule": "other_uplo",
+      "terms": {
+       "s_per_byte": {
+        "factor": 1.0,
+        "from": "vendor/cfloat/L",
+        "rule": "other_uplo"
+       },
+       "s_per_flop": {
+        "factor": 1.0,
+        "from": "vendor/cfloat/L",
+        "rule": "other_uplo"
+       },
+       "t_launch": {
+        "factor": 1.0,
+        "from": "vendor/cfloat/L",
+        "rule": "other_uplo"
+       },
+       "t_step": {
+        "factor": 1.0,
+        "from": "vendor/cfloat/L",
+        "rule": "other_uplo"
+       }
+      }
+     },
+     "fit": null,
+     "support": null,
+     "thin": false
+    }
+   },
+   "double": {
+    "L": {
+     "constants": {
+      "s_per_byte": 7.614690361564064e-12,
+      "s_per_flop": 9.11308634544203e-13,
+      "t_launch": 1.8268305317734306e-05,
+      "t_step": 6.648069217054507e-07
+     },
+     "fallback": null,
+     "fit": {
+      "inactive": [],
+      "max_abs_log": 0.9895625136228574,
+      "rms_log": 0.2493956400611507,
+      "rows": 274
+     },
+     "support": {
+      "batch_max": 32768,
+      "batch_min": 128,
+      "n_max": 1024,
+      "n_min": 2,
+      "rows": 274,
+      "sources": [
+       "sm120_potrf_sweep.jsonl"
+      ]
+     },
+     "thin": false
+    },
+    "U": {
+     "constants": {
+      "s_per_byte": 7.614690361564064e-12,
+      "s_per_flop": 9.11308634544203e-13,
+      "t_launch": 1.8268305317734306e-05,
+      "t_step": 6.648069217054507e-07
+     },
+     "fallback": {
+      "byte_factor": 1.0,
+      "flop_factor": 1.0,
+      "from": "vendor/double/L",
+      "rule": "other_uplo",
+      "terms": {
+       "s_per_byte": {
+        "factor": 1.0,
+        "from": "vendor/double/L",
+        "rule": "other_uplo"
+       },
+       "s_per_flop": {
+        "factor": 1.0,
+        "from": "vendor/double/L",
+        "rule": "other_uplo"
+       },
+       "t_launch": {
+        "factor": 1.0,
+        "from": "vendor/double/L",
+        "rule": "other_uplo"
+       },
+       "t_step": {
+        "factor": 1.0,
+        "from": "vendor/double/L",
+        "rule": "other_uplo"
+       }
+      }
+     },
+     "fit": null,
+     "support": null,
+     "thin": false
+    }
+   },
+   "float": {
+    "L": {
+     "constants": {
+      "s_per_byte": 3.981227811461949e-12,
+      "s_per_flop": 1.3356871931997023e-13,
+      "t_launch": 1.813726437535097e-05,
+      "t_step": 2.3654742577950334e-07
+     },
+     "fallback": null,
+     "fit": {
+      "inactive": [],
+      "max_abs_log": 0.8265979587474934,
+      "rms_log": 0.2246536763838081,
+      "rows": 282
+     },
+     "support": {
+      "batch_max": 32768,
+      "batch_min": 128,
+      "n_max": 1024,
+      "n_min": 2,
+      "rows": 282,
+      "sources": [
+       "sm120_potrf_sweep.jsonl"
+      ]
+     },
+     "thin": false
+    },
+    "U": {
+     "constants": {
+      "s_per_byte": 3.981227811461949e-12,
+      "s_per_flop": 1.3356871931997023e-13,
+      "t_launch": 1.813726437535097e-05,
+      "t_step": 2.3654742577950334e-07
+     },
+     "fallback": {
+      "byte_factor": 1.0,
+      "flop_factor": 1.0,
+      "from": "vendor/float/L",
+      "rule": "other_uplo",
+      "terms": {
+       "s_per_byte": {
+        "factor": 1.0,
+        "from": "vendor/float/L",
+        "rule": "other_uplo"
+       },
+       "s_per_flop": {
+        "factor": 1.0,
+        "from": "vendor/float/L",
+        "rule": "other_uplo"
+       },
+       "t_launch": {
+        "factor": 1.0,
+        "from": "vendor/float/L",
+        "rule": "other_uplo"
+       },
+       "t_step": {
+        "factor": 1.0,
+        "from": "vendor/float/L",
+        "rule": "other_uplo"
+       }
+      }
+     },
+     "fit": null,
+     "support": null,
+     "thin": false
+    }
+   }
+  }
+ },
+ "schema": 1,
+ "unfittable": {
+  "native:blocked/cfloat/U": {
+   "tried": [
+    "native:blocked/cfloat/L",
+    "native:blocked/cdouble/L",
+    "native:blocked/float/L"
+   ],
+   "unfittable": [
+    "s_per_flop"
+   ]
+  },
+  "native:cta/cdouble/U": {
+   "tried": [
+    "native:cta/cdouble/L",
+    "native:cta/cfloat/L",
+    "native:cta/double/L"
+   ],
+   "unfittable": [
+    "s_per_flop",
+    "s_per_byte"
+   ]
+  },
+  "native:cta/cfloat/U": {
+   "tried": [
+    "native:cta/cfloat/L",
+    "native:cta/cdouble/L",
+    "native:cta/float/L"
+   ],
+   "unfittable": [
+    "s_per_flop",
+    "s_per_byte"
+   ]
+  },
+  "native:cta/double/U": {
+   "tried": [
+    "native:cta/double/L",
+    "native:cta/float/L",
+    "native:cta/cdouble/L"
+   ],
+   "unfittable": [
+    "s_per_flop",
+    "s_per_byte"
+   ]
+  },
+  "native:lpanel/cdouble/U": {
+   "tried": [
+    "native:lpanel/cdouble/L",
+    "native:lpanel/cfloat/L",
+    "native:lpanel/double/L"
+   ],
+   "unfittable": [
+    "s_per_byte"
+   ]
+  },
+  "native:lpanel/cfloat/U": {
+   "tried": [
+    "native:lpanel/cfloat/L",
+    "native:lpanel/cdouble/L",
+    "native:lpanel/float/L"
+   ],
+   "unfittable": [
+    "s_per_byte"
+   ]
+  },
+  "native:lpanel/double/U": {
+   "tried": [
+    "native:lpanel/double/L",
+    "native:lpanel/float/L",
+    "native:lpanel/cdouble/L"
+   ],
+   "unfittable": [
+    "s_per_byte"
+   ]
+  },
+  "native:lpanel/float/U": {
+   "tried": [
+    "native:lpanel/float/L",
+    "native:lpanel/double/L",
+    "native:lpanel/cfloat/L"
+   ],
+   "unfittable": [
+    "s_per_byte"
+   ]
+  }
+ }
+}
