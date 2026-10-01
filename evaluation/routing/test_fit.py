@@ -31,6 +31,18 @@ TRUTH = {
 }
 
 
+class BoundaryCells(unittest.TestCase):
+    def test_order_one_and_capped_tops_only(self):
+        t, v = "native:tiny", "vendor"
+        cells = {("double", "L", n, 128): ({t: 1.0, v: 2.0} if n <= 32 else {v: 2.0})
+                 for n in (1, 2, 16, 32, 36, 64)}
+        b = fit.boundary_cells(cells)
+        self.assertIn(("double", "L", 1, 128), b)      # order 1
+        self.assertIn(("double", "L", 32, 128), b)     # tiny's ceiling: absent at 36
+        self.assertNotIn(("double", "L", 64, 128), b)  # vendor's top is uncapped
+        self.assertNotIn(("double", "L", 16, 128), b)
+
+
 class CombinePin(unittest.TestCase):
     def test_matches_launch_plan_combine(self):
         # potrf_plan_tests LaunchPlanCost.CombineMatchesTheFitterPin holds the same numbers.

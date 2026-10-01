@@ -592,6 +592,21 @@ def edge_cells(full_by_cell):
             if any(c[2] in span[(c[0], c[1], r)] for r in m)}
 
 
+def boundary_cells(full_by_cell):
+    """Cells at a TRUE domain boundary, where deployment never extrapolates: order 1, or the
+    order at a route's supports() ceiling (the grid has a larger order where it is absent)."""
+    top = defaultdict(lambda: -1)
+    orders = defaultdict(set)
+    for (d, u, n, b), m in full_by_cell.items():
+        orders[(d, u)].add(n)
+        for r in m:
+            top[(d, u, r)] = max(top[(d, u, r)], n)
+    capped = {k for k, n in top.items() if max(orders[k[:2]]) > n}
+    return {c for c, m in full_by_cell.items()
+            if c[2] == 1 or any((c[0], c[1], r) in capped and c[2] == top[(c[0], c[1], r)]
+                                for r in m)}
+
+
 def paired_summary(cv, full_by_cell, choice, cells=None):
     held = {s["cell"]: s for s in cv}
     pt, pm = [], []
@@ -608,11 +623,15 @@ def paired_summary(cv, full_by_cell, choice, cells=None):
 
 def ship_gate(cv, full_by_cell, feats):
     """PASS only if, on the cells where BOTH today's pick and the held-out model's pick were
-    measured, the model beats today's windows on geomean AND p95, and its max is no worse than
-    the windows' max on those same cells."""
+    measured, minus true-boundary cells (order 1 or a route's supports() ceiling, where no
+    deployed call is extrapolated to), the model beats today's windows on geomean AND p95, and
+    its max is no worse than the windows' max on those same cells."""
     held = {s["cell"]: s for s in cv}
+    boundary = boundary_cells(full_by_cell)
     pt, pm, cells = [], [], []
     for cell, measured in full_by_cell.items():
+        if cell in boundary:
+            continue
         s = held.get(cell)
         rt = regret_of(feats[cell]["auto"], measured)
         if len(measured) >= 2 and s and s["regret"] is not None and rt is not None:
@@ -623,7 +642,7 @@ def ship_gate(cv, full_by_cell, feats):
     ok = bool(t.get("cells")) and m["geomean"] < t["geomean"] and m["p95"] < t["p95"] \
         and m["max"] <= t["max"]
     return {"verdict": "PASS" if ok else "FAIL", "paired_cells": len(cells), "today": t,
-            "model": m, "rule": ship_gate.__doc__.strip()}
+            "model": m, "boundary_cells": len(boundary), "rule": ship_gate.__doc__.strip()}
 
 
 def write_report(path, args, cv, full_by_cell, feats, full_model, skipped, dropped,
