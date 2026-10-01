@@ -173,7 +173,7 @@ straddle capacity limits in `supports()`.
     size (cdouble CTA's t_launch came out at 0.33 ms).
 - **Shipping is gated per profile.** A profile's model replaces that profile's windows only
   when its held-out regret beats the windows on the same paired cells, on both geomean and
-  p95, and its max is no worse than 1.25.
+  p95, and its max is no worse than the windows' max (clarified 2026-10-01: relative, not an absolute 1.25).
 - **No pooling across dtypes, but a minimum amount of data.**
   - A (route, dtype, uplo) key is fitted only from at least 10 rows covering at least 2 batch
     sizes.
