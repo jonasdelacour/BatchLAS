@@ -130,6 +130,29 @@ actually ran (`route`) plus every sub-op route (`subroutes`). A pin is never tak
 - For getrs, orgqr and ormqr this cannot be determined. Their harness runs an untimed
   setup factorization in the same process, and its routes land in the same coverage file.
 
+### Forced-route sweeps (`--sweep routes`)
+
+A routing cost model needs every route timed on the same cell, not only the one the native
+walk picks. `--sweep routes` replaces the `batchlas` arm with one arm per native route,
+named `route:<origin>:<algorithm>` (e.g. `route:native:lpanel`), plus the usual `vendor` arm.
+The routes come from the op's `k<Op>Order` in `include/batchlas/blas/dispatch/route_<op>.hh`
+(`ops.native_routes`), and each arm pins `BATCHLAS_<OP>_ROUTE` to its route.
+
+A forced route skips `preferred()` but not `supports()`, so an unsupported pin falls back
+to the automatic walk. Such a row is kept with `ok=false` and a reason starting
+`unsupported/fallback: pinned X, reached Y`: it records `supports()`, and it is not retried
+on resume. Every row also carries `cc` (the card's compute capability).
+
+`--pass N` makes each pass its own rows (field `pass`), and odd passes run a cell's arms in
+reverse order, so two passes give cross-pass reproduction with alternated A/B order. Run a
+throwaway JIT pass into a separate campaign first. `potrf_upper` is potrf with
+`--uplo=upper`; it is left out of `--ops all`.
+
+```sh
+python3 benchmarks/benchviz run --campaign potrf-routes --sweep routes --ops potrf --types all \
+    --batches 128,2048,32768 --no-rect --no-plot --gpu 1,2,3 --pass 1
+```
+
 ## Figures
 
 | Figure | Content |

@@ -3,11 +3,14 @@ count. Why only these ten ops, and why the BatchLAS arm is pinned `native`
 rather than `auto`: README.md, "What is compared"."""
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
 TYPES = ("float", "double", "cfloat", "cdouble")
 TYPE_BYTES = {"float": 4, "double": 8, "cfloat": 8, "cdouble": 16}
 # LAPACK's one-letter precision prefix; what a paper labels its curves with.
@@ -144,6 +147,13 @@ class OpSpec:
     composed_of: Tuple[str, ...] = ()
     # Rectangular ops also get a 2-D shape sweep; None for the square-only ones.
     plane: Optional[Plane] = None
+    # The dispatch Op this spec measures (coverage rows, BATCHLAS_<OP>_ROUTE); default name.
+    dispatch_op: str = ""
+    fb_flags: Tuple[str, ...] = ()   # extra factor_bench flags, e.g. --uplo=upper
+    opt_in: bool = False             # left out of `--ops all`
+
+    def __post_init__(self):
+        self.dispatch_op = self.dispatch_op or self.name
 
     @property
     def single(self) -> bool:
@@ -348,6 +358,82 @@ for _s in (
 ):
     OPS[_s.name] = _s
 
+# potrf Upper as its own op: Cell has no uplo field, and LPanel/Blocked are Lower-only
+# in supports(), so an Upper sweep is mostly a record of which routes refuse it.
+OPS["potrf_upper"] = OpSpec(**{**OPS["potrf"].__dict__, "name": "potrf_upper",
+                               "title": "Cholesky factorization (Upper)",
+                               "dispatch_op": "potrf", "fb_flags": ("--uplo=upper",), "opt_in": True})
+
+
+# ----------------------------------------------------------------- route sweep
+# Arm `route:<origin>:<algorithm>` pins BATCHLAS_<OP>_ROUTE to that route, so a cost
+# model can be fitted to every route on the same cell (docs/design/routing-cost-model.md).
+ROUTE_ARM = "route:"
+_DISPATCH = REPO_ROOT / "include" / "batchlas" / "blas" / "dispatch"
+# Fallback when the headers are unreadable; source of truth is k<Op>Order in
+# include/batchlas/blas/dispatch/route_<op>.hh (native entries only, in order).
+ROUTE_FALLBACK: Dict[str, Tuple[str, ...]] = {
+    "potrf": ("native:tiny", "native:cta", "native:lpanel", "native:blocked"),
+    "getrf": ("native:tiny", "native:cta", "native:blocked"),
+    "getrs": ("native:cta", "native:blocked"),
+    "geqrf": ("native:tiny", "native:cta", "native:blocked"),
+    "orgqr": ("native:blocked",),
+    "gesv": ("native:tiny", "native:blocked"),
+    "posv": ("native:tiny", "native:cta", "native:blocked"),
+}
+
+
+def _algorithm_names() -> Dict[str, str]:
+    """Algorithm enumerator -> its to_string() spelling, read from route.hh."""
+    text = (_DISPATCH / "route.hh").read_text()
+    return dict(re.findall(r'case Algorithm::(\w+):\s*return "(\w+)";', text))
+
+
+def native_routes(op: str) -> Tuple[str, ...]:
+    """The op's native routes in the library's k<Op>Order, as `native:<algorithm>`.
+    The vendor route is the separate `vendor` arm."""
+    op = OPS[op].dispatch_op if op in OPS else op
+    try:
+        names = _algorithm_names()
+        text = (_DISPATCH / f"route_{op}.hh").read_text()
+        body = re.search(r"inline constexpr Route k\w+Order\[\]\s*=\s*\{(.*?)\};", text, re.S).group(1)
+        out = tuple(f"native:{names[a]}" for o, a in re.findall(r"\{Origin::(\w+),\s*Algorithm::(\w+)\}", body)
+                    if o == "Native")
+        if out:
+            return out
+    except (OSError, AttributeError, KeyError):
+        pass
+    return ROUTE_FALLBACK.get(op, ())
+
+
+def route_arm(op: str, route: str) -> Arm:
+    """The arm pinning `route` (e.g. "native:lpanel"). factor_bench takes the arm's
+    name as its pin; the minibench harnesses read the env var."""
+    spec = OPS[op]
+    var = f"BATCHLAS_{spec.dispatch_op.upper()}_ROUTE"
+    bench = next((a.bench_name for a in spec.arms if a.bench_name), None)
+    return Arm(ROUTE_ARM + route, env=((var, route),), fb_arm=route, bench_name=bench)
+
+
+def op_arms(op: str, sweep: str = "ab") -> Tuple[Arm, ...]:
+    """`ab`: the batchlas/vendor pair. `routes`: every native route plus vendor."""
+    spec = OPS[op]
+    if sweep == "ab":
+        return tuple(spec.arms)
+    if sweep != "routes":
+        raise ValueError(f"sweep {sweep!r}")
+    vendor = tuple(a for a in spec.arms if a.key == "vendor")
+    return tuple(route_arm(op, r) for r in native_routes(op)) + vendor
+
+
+def find_arm(op: str, key: str) -> Arm:
+    for a in OPS[op].arms:
+        if a.key == key:
+            return a
+    if key.startswith(ROUTE_ARM):
+        return route_arm(op, key[len(ROUTE_ARM):])
+    raise KeyError(f"{op} has no arm {key}")
+
 
 # ----------------------------------------------------------------- the grid
 def parse_list(spec) -> List[int]:
@@ -484,8 +570,14 @@ class Cell:
     nrhs: int
     batch: int
 
-    def key(self, arm: str) -> str:
-        return f"{self.op}|{self.dtype}|{self.m}|{self.n}|{self.nrhs}|{self.batch}|{arm}"
+    def key(self, arm: str, pass_: int = 0) -> str:
+        return row_key(self.__dict__, arm, pass_)
+
+
+def row_key(r: dict, arm: str, pass_: int = 0) -> str:
+    """A (cell, arm) result's identity; a repeat pass (route sweeps) is its own row."""
+    k = f"{r['op']}|{r['dtype']}|{r['m']}|{r['n']}|{r['nrhs']}|{r['batch']}|{arm}"
+    return f"{k}|p{pass_}" if pass_ else k
 
 
 def plan_cells(ops: Sequence[str], types: Sequence[str], grid: Grid, mem_gib: Optional[float] = None,
