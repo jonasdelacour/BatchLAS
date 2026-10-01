@@ -270,7 +270,7 @@ def fit_measured(train, cfg):
     return {key: fit_key(rows) for key, rows in train.items() if eligible(rows, cfg)}
 
 
-def complete(measured, cfg, unfittable=None):
+def complete(measured, cfg, unfittable=None, train=None):
     """Every (route, dtype, uplo) without a fit of its own gets the documented fallback;
     keys the fallback cannot price are recorded in `unfittable` and left out."""
     model = dict(measured)
@@ -278,7 +278,8 @@ def complete(measured, cfg, unfittable=None):
         for dtype in DTYPES:
             for uplo in ("L", "U"):
                 if (route, dtype, uplo) not in model:
-                    fb = fallback(measured, route, dtype, uplo, cfg)
+                    fb = fallback(measured, route, dtype, uplo, cfg,
+                                  (train or {}).get((route, dtype, uplo), []))
                     if fb and "unfittable" in fb:
                         if unfittable is not None:
                             unfittable[(route, dtype, uplo)] = fb
@@ -288,10 +289,10 @@ def complete(measured, cfg, unfittable=None):
 
 
 def fit_all(train, cfg):
-    return complete(fit_measured(train, cfg), cfg)
+    return complete(fit_measured(train, cfg), cfg, None, train)
 
 
-def fallback(measured, route, dtype, uplo, cfg):
+def fallback(measured, route, dtype, uplo, cfg, own_rows=()):
     """The rule for a (route, dtype, uplo) without a fit of its own. Sources, in this order:
     1. the same route and dtype on the other uplo, copied;
     2. the precision partner (float<->double, cfloat<->cdouble), s_per_flop scaled by the
@@ -305,7 +306,10 @@ def fallback(measured, route, dtype, uplo, cfg):
     PER TERM: each constant comes from the first source whose fit SAW that term (it is not in
     the source's `inactive` list); an inactive 0 is never borrowed. A term no source saw leaves
     the key unfittable, so the route is not a candidate for it. Only measured entries are
-    sources, never another fallback. Returns the entry, or {"unfittable": [terms]}."""
+    sources, never another fallback. Returns the entry, or {"unfittable": [terms]}.
+    5. LAST, the key's OWN THIN FIT: its own rows (>= 3) fitted although below the minimum-data
+       rule, flagged `thin`. It supplies every term the sources above did not -- including a
+       term it saw as 0 -- so a key's own data is never discarded in favour of dropping it."""
     other = "U" if uplo == "L" else "L"
     cands = []
     src = measured.get((route, dtype, other))
@@ -335,6 +339,11 @@ def fallback(measured, route, dtype, uplo, cfg):
         bf = (sf["dram_gbps"] / sf["cus"]) / (tgt["dram_gbps"] / tgt["cus"])
         src = {"constants": [e["constants"][k] for k in PARAMS], "fit": e.get("fit")}
         cands.append((src, "other_profile", (name, route, dtype, uplo), ff, bf))
+    thin = None
+    if len(own_rows) >= 3:
+        thin = fit_key(list(own_rows))
+        thin_src = {"constants": thin["constants"], "fit": {"inactive": []}}
+        cands.append((thin_src, "thin", (route, dtype, uplo), 1.0, 1.0))
     if not cands:
         return None
     const, terms, missing = [0.0] * 4, {}, []
@@ -351,7 +360,9 @@ def fallback(measured, route, dtype, uplo, cfg):
     if missing:
         return {"unfittable": missing, "tried": ["/".join(c[2]) for c in cands]}
     first = terms[PARAMS[0]]
-    return {"constants": const, "fit": None, "support": None,
+    used_thin = any(v["rule"] == "thin" for v in terms.values())
+    return {"constants": const, "fit": thin["fit"] if used_thin else None,
+            "support": thin["support"] if used_thin else None, "thin": used_thin,
             "fallback": {"rule": first["rule"], "from": first["from"],
                          "flop_factor": terms["s_per_flop"]["factor"],
                          "byte_factor": terms["s_per_byte"]["factor"], "terms": terms}}
@@ -427,7 +438,9 @@ def cross_validate(cells, feats, train_full, measured_full, cfg, margin):
             kept = [r for r in rows if r[2] != n]
             if eligible(kept, cfg):
                 measured[key] = fit_key(kept)
-        model = complete(measured, cfg)
+        train_fold = {k: ([r for r in v if r[2] != n] if (k[1], k[2]) == (dtype, uplo) else v)
+                      for k, v in train_full.items()}
+        model = complete(measured, cfg, None, train_fold)
         for cell, meas in by_cell.items():
             if cell[:3] != (dtype, uplo, n):
                 continue
@@ -546,7 +559,10 @@ def write_report(path, args, cv, full_by_cell, feats, full_model, skipped, dropp
         s = e["support"]
         if s:
             L.append(f"| {route} | {dtype} | {uplo} | {s['n_min']}..{s['n_max']} "
-                     f"| {s['batch_min']}..{s['batch_max']} | {s['rows']} | {', '.join(s['sources'])} |")
+                     f"| {s['batch_min']}..{s['batch_max']} | {s['rows']} | {', '.join(s['sources'])}"
+                     + (" **THIN** (own rows below the rule; other terms: " + ", ".join(
+                         f"{t}:{v['rule']}" for t, v in e['fallback']['terms'].items()) + ")"
+                        if e.get('thin') else "") + " |")
         else:
             fb = e["fallback"]
             L.append(f"| {route} | {dtype} | {uplo} | none | none | 0 "
@@ -688,7 +704,7 @@ def main(argv=None):
     train, dropped = training_set(cells, feats, lambda *a: True)
     measured_full = fit_measured(train, cfg)
     unfittable = {}
-    full_model = complete(measured_full, cfg, unfittable)
+    full_model = complete(measured_full, cfg, unfittable, train)
     cv = cross_validate(cells, feats, train, measured_full, cfg, args.margin)
     full_by_cell = group_cells(cells, feats)
     gate = ship_gate(cv, full_by_cell, feats)
@@ -714,7 +730,7 @@ def main(argv=None):
     for (route, dtype, uplo), e in sorted(full_model.items()):
         prof["routes"][route][dtype][uplo] = {
             "constants": dict(zip(PARAMS, e["constants"])), "fit": e["fit"],
-            "support": e["support"], "fallback": e["fallback"]}
+            "support": e["support"], "fallback": e["fallback"], "thin": e.get("thin", False)}
     with open(os.path.join(args.out, "profile.json"), "w") as f:
         json.dump(prof, f, indent=1, sort_keys=True)
     write_report(os.path.join(args.out, "report.md"), args, cv, full_by_cell, feats,

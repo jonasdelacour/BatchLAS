@@ -89,6 +89,27 @@ class FallbackNeverBorrowsAnUnseenTerm(unittest.TestCase):
         self.assertNotIn(("native:cta", "cdouble", "L"), model)
         self.assertIn(("native:cta", "cdouble", "L"), unfit)
 
+    def test_own_rows_below_the_rule_give_a_thin_fit_not_unfittable(self):
+        # Same unusable source, but the key has 6 rows of its own at ONE batch size.
+        m = {("native:cta", "cfloat", "L"): self.entry((6e-5, 0.0, 0.0, 1e-6),
+                                                       ["s_per_flop", "s_per_byte"])}
+        truth = (2e-6, 3e-11, 1e-9, 5e-8)
+        rows = []
+        for n in (4, 8, 12, 16, 24, 32):
+            terms = (1, 1e3 * n ** 3, 40.0 * n * n, float(n))
+            rows.append((terms, fit.combine(terms, truth), n, 32768, ["x"]))
+        key = ("native:cta", "cdouble", "L")
+        model = fit.complete(m, self.CFG, unfit := {}, {key: rows})
+        self.assertNotIn(key, unfit)
+        e = model[key]
+        self.assertTrue(e["thin"])
+        self.assertEqual(e["fallback"]["terms"]["s_per_flop"]["rule"], "thin")
+        self.assertEqual(e["fallback"]["terms"]["t_launch"]["rule"], "precision_scaled")
+        self.assertEqual(e["support"]["batch_min"], 32768)
+        # Fewer than 3 own rows is still unfittable.
+        model = fit.complete(m, self.CFG, unfit := {}, {key: rows[:2]})
+        self.assertIn(key, unfit)
+
 
 @unittest.skipUnless(os.path.exists(PLAN_DUMP), f"needs {PLAN_DUMP}")
 class PipelineRecovery(unittest.TestCase):
