@@ -458,6 +458,9 @@ TYPED_TEST(PotrfLpanelTest, DirectEntryPointRefusesWhatSupportsRefuses) {
 // on the first supports && preferred hit, so two arms answering is a silent mis-route.
 // evidence: docs/perf/potrf.md#the-measured-lpanel-window
 TYPED_TEST(PotrfLpanelTest, RouteWindowIsExactlyTheMeasuredOne) {
+    // Pins the HAND WINDOWS: on a profile whose cost-model gate passed (sm_120) the walk is
+    // argmin predicted cost instead -- tested by PotrfCostModel. evidence: docs/perf/potrf.md#the-cost-model-route-choice
+    const ScopedEnvVar windows_profile("BATCHLAS_ROUTING_PROFILE", "sm_89");
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
     static constexpr Backend B = TestFixture::BackendType;

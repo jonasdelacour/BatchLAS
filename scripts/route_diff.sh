@@ -93,6 +93,12 @@ capture() {
         | awk -F, '{print ($21 == "" ? "(none)" : $21 ",nearest=" $22)}' \
         | sort -u > "$STORE/$label.profiles"
 
+    # Column 23 (cost_extrapolated: -1 hand windows, 0/1 cost model) is NOT a decision column;
+    # it is kept beside the capture so a model-routed row outside its fitted box is visible.
+    grep '^reached,' "$raw" | tr -d '\r' \
+        | awk -F, '$23 == "1" {print $2","$3","$5","$10","$11}' \
+        | sort -u > "$STORE/$label.extrapolated"
+
     printf 'captured %s: %s reached rows -> %s distinct decisions (ctest exit %s)\n' \
         "$label" "$reached" "$(wc -l < "$STORE/$label.routes")" "$ctest_status"
 }

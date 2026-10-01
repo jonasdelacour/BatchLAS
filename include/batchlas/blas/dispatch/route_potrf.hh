@@ -21,6 +21,14 @@ struct PotrfShape : OpShape {
     // entry [0], not the max, so it admits a device that rejects the sg32 launch.
     bool has_sg32 = false;
 
+    // The cost model, priced by the shape builder from the routing profile. With
+    // model_enabled false every predicate below is the hand-written window, unchanged.
+    // evidence: docs/perf/potrf.md#the-cost-model-route-choice
+    bool model_enabled = false;
+    double model_margin = 0;
+    double model_cost[5] = {-1, -1, -1, -1, -1};   // per kPotrfOrder entry; < 0 = not priced
+    bool model_extrapolated[5] = {};
+
     int64_t order() const { return k; }
 };
 
@@ -80,6 +88,10 @@ struct RouteTable<Op::potrf, T> {
     // evidence: docs/perf/potrf.md#the-measured-lpanel-window
     static bool preferred(Route r, const PotrfShape& s) {
         if (!is_native(r)) return false;
+        if (s.model_enabled) {
+            const Route pick = model_pick(s, /*with_vendor=*/true);
+            return is_native(pick) && r == pick;
+        }
 
         // The only window measured on Upper or for fp64, so it precedes both gates below.
         if (tiny_window(s)) return r.algo == Algorithm::Tiny;
@@ -125,6 +137,7 @@ struct RouteTable<Op::potrf, T> {
     // Native-vs-native tie-break. evidence: docs/perf/potrf.md#native_tier_preferred
     static bool native_tier_preferred(Route r, const PotrfShape& s) {
         if (!is_native(r)) return true;
+        if (s.model_enabled) return r == model_pick(s, /*with_vendor=*/false);
 
         // Enumerate EVERY tier: `default:` answers true, so an omitted arm takes every shape.
         // evidence: docs/perf/potrf.md#every-tier-is-enumerated-explicitly
@@ -140,6 +153,39 @@ struct RouteTable<Op::potrf, T> {
             case Algorithm::Blocked: return !cta_holds && !lpanel_holds;
             default:                 return true;
         }
+    }
+
+    static constexpr int order_index(Route r) {
+        for (int i = 0; i < 5; ++i) {
+            if (kPotrfOrder[i] == r) return i;
+        }
+        return -1;
+    }
+
+    // argmin predicted cost over the supported, priced routes; the vendor keeps a shape
+    // unless the best native is cheaper by the profile's margin. Auto/Auto = nothing priced.
+    static Route model_pick(const PotrfShape& s, bool with_vendor) {
+        Route best{};
+        double best_cost = 0;
+        for (int i = 0; i < 4; ++i) {
+            if (s.model_cost[i] < 0 || !supports(kPotrfOrder[i], s)) continue;
+            if (best.origin == Origin::Auto || s.model_cost[i] < best_cost) {
+                best = kPotrfOrder[i];
+                best_cost = s.model_cost[i];
+            }
+        }
+        if (!with_vendor || s.model_cost[4] < 0) return best;
+        if (best.origin == Origin::Auto || !(best_cost < (1 - s.model_margin) * s.model_cost[4])) {
+            return kPotrfOrder[4];
+        }
+        return best;
+    }
+
+    // For coverage: -1 when the hand windows chose, else whether `r`'s cost was extrapolated.
+    static int cost_extrapolated(Route r, const PotrfShape& s) {
+        const int i = order_index(r);
+        if (!s.model_enabled || i < 0) return -1;
+        return s.model_extrapolated[i] ? 1 : 0;
     }
 
     // Measured types and the measured CTA/LPanel boundary inside them.

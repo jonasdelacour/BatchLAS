@@ -11,7 +11,13 @@
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 
+#include "../extensions/potrf_launch_plan.hh"
 #include "../extensions/potrf_native.hh"
+#include "../sycl/trsm_native.hh"
+#include "potrf_profile_constants.hh"
+
+#include <complex>
+#include <type_traits>
 
 #include <cstddef>
 #include <optional>
@@ -55,6 +61,53 @@ inline dispatch::PotrfShape potrf_op_shape_from_facts(const launch_plan::DeviceF
     return s;
 }
 
+template <typename T>
+constexpr int potrf_dtype_index() {
+    if constexpr (std::is_same_v<T, float>) return 0;
+    else if constexpr (std::is_same_v<T, double>) return 1;
+    else if constexpr (std::is_same_v<T, std::complex<float>>) return 2;
+    else return 3;
+}
+
+// Prices every kPotrfOrder route with the SAME plan functions and cost_terms/combine that
+// evaluation/routing/fit.py fitted, when the shape's profile passed its ship gate. `d` carries
+// the queried facts (local memory, max work-group, CUs); the thread/group caps and register
+// counts come from the profile. Leaves model_enabled false -- the hand windows -- otherwise,
+// and also when the vendor has no constants. evidence: docs/perf/potrf.md#the-cost-model-route-choice
+template <typename T>
+inline void potrf_price_routes(dispatch::PotrfShape& s, launch_plan::DeviceFacts d,
+                               int leaf_trsm, int nb_env, int w_env) {
+    const potrf_profile::Profile* prof = potrf_profile::profile_for(s.profile);
+    if (!prof || !prof->model_enabled || !s.is_gpu || s.m != s.n || s.order() < 1 ||
+        s.batch < 1) {
+        return;
+    }
+    constexpr int ti = potrf_dtype_index<T>();
+    const int ui = (s.uplo == Uplo::Upper) ? 1 : 0;
+    d.max_threads_per_cu = prof->max_threads_per_cu;
+    d.max_groups_per_cu = prof->max_groups_per_cu;
+    const potrf_plan::KernelRegs& regs = prof->regs[ti];
+    const int n = static_cast<int>(s.order());
+    const std::int64_t b = s.batch;
+    const launch_plan::LaunchPlan plans[5] = {
+        potrf_plan::tiny_plan<T>(n, b, d, regs),
+        potrf_plan::cta_plan<T>(n, b, d, regs),
+        potrf_plan::lpanel_plan<T>(n, b, d, regs),
+        potrf_plan::blocked_plan<T>(n, b, d, leaf_trsm, regs, nb_env, w_env),
+        potrf_plan::vendor_pseudo_plan<T>(n, b),
+    };
+    for (int i = 0; i < 5; ++i) {
+        const potrf_profile::Entry& e = prof->e[i][ti][ui];
+        if (!e.present || !plans[i].fits) continue;
+        const auto pr = launch_plan::predict(plans[i], d, e.c, e.box, n, b);
+        s.model_cost[i] = pr.seconds;
+        s.model_extrapolated[i] = pr.extrapolated;
+    }
+    if (s.model_cost[4] < 0) return;
+    s.model_enabled = true;
+    s.model_margin = prof->margin;
+}
+
 template <Backend B, typename T>
 inline std::optional<dispatch::PotrfShape> potrf_op_shape(
     const Queue& ctx,
@@ -67,6 +120,11 @@ inline std::optional<dispatch::PotrfShape> potrf_op_shape(
         ctx.device().type == DeviceType::GPU, ctx.device().supports_sub_group_size(32),
         A.is_heterogeneous(), sycl_potrf::potrf_blocked_available<T>());
     batchlas::dispatch::fill_device_facts(s, ctx);
+    launch_plan::DeviceFacts d = sycl_potrf::potrf_device_facts(ctx.device());
+    d.compute_units = s.compute_units;
+    int nb_env = 0, w_env = 0;
+    sycl_potrf::potrf_blocked_overrides(nb_env, w_env);
+    potrf_price_routes<T>(s, d, sycl_trsm::trsm_cta_max_n<T>(), nb_env, w_env);
     return s;
 }
 

@@ -120,6 +120,11 @@ std::size_t potrf_blocked_buffer_size(Queue& ctx,
     });
 }
 
+void potrf_blocked_overrides(int& nb_env, int& w_env) {
+    nb_env = potrf_nb_env();
+    w_env = potrf_w_env();
+}
+
 template <typename T>
 unsigned potrf_blocked_debug_params(Queue& ctx, int n) {
     const auto p = potrf_blocked_params<T>(ctx, n);

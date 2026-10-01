@@ -500,6 +500,11 @@ if(Python3_Interpreter_FOUND)
                 ${_device_calls_args})
     set_tests_properties(device_calls_tests PROPERTIES
         LABELS "util" SKIP_RETURN_CODE 77 TIMEOUT 600)
+    # The committed potrf profile header must be what the committed profile JSON generates.
+    add_test(NAME potrf_profile_header_tests
+        COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/evaluation/routing/gen_profile_header.py"
+                --check)
+    set_tests_properties(potrf_profile_header_tests PROPERTIES LABELS "blas")
 endif()
 
 # ---------------------------------------------------------------------------

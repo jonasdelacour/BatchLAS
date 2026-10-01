@@ -529,6 +529,9 @@ TYPED_TEST(PotrfTinyTest, TinyLaunchGeometryIsReported) {
 
 // The route table sees the tier, and the tier sits FIRST in the order array.
 TYPED_TEST(PotrfTinyTest, TinyRouteTableAndVocabulary) {
+    // Pins the HAND WINDOWS: on a profile whose cost-model gate passed (sm_120) the walk is
+    // argmin predicted cost instead -- tested by PotrfCostModel. evidence: docs/perf/potrf.md#the-cost-model-route-choice
+    const ScopedEnvVar windows_profile("BATCHLAS_ROUTING_PROFILE", "sm_89");
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::BackendType;
     using Tbl = dispatch::RouteTable<dispatch::Op::potrf, T>;

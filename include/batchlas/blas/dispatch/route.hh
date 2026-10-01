@@ -196,6 +196,10 @@ struct OpShape {
     arch::RoutingProfile profile = arch::RoutingProfile::Unset;
     bool profile_nearest = false;
 
+    // Set by resolve_route for coverage only: -1 = no cost model chose, else whether the
+    // chosen route's predicted cost was outside its fitted support box.
+    int8_t cost_extrapolated = -1;
+
     int64_t max_dim() const { return m > n ? (m > k ? m : k) : (n > k ? n : k); }
     int64_t min_dim() const { return m < n ? (m < k ? m : k) : (n < k ? n : k); }
 

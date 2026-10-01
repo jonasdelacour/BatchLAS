@@ -703,6 +703,33 @@ blocked rows), cdouble tiny cap 16->32 (1 tiny row + the unfit-plan case), hole 
 (18 CTA rows). `kCtaElemsPerItem` 24->25 moves no edge (the work-element steps skip that band),
 so it is not a usable break.
 
+### The cost-model route choice
+
+On a routing profile whose ship gate passed (`model_enabled` in the generated
+`src/backends/potrf_profile_constants.hh`; today sm_120 only), the automatic walk is argmin
+predicted cost instead of the hand windows:
+
+* `potrf_op_shape` (src/backends/potrf_route.hh) calls `potrf_price_routes`, which prices every
+  kPotrfOrder route with the plan functions above and `launch_plan::predict` (cost_terms +
+  combine), using the queried local memory, max work-group and CU count plus the profile's
+  thread/group caps and register counts. The costs and their extrapolated flags ride on
+  `PotrfShape`; the table stays pure.
+* `RouteTable<Op::potrf,T>::model_pick`: argmin over supported, priced routes; a native route
+  beats the vendor only below `(1 - margin) * cost_vendor` (margin 0.05). `preferred()` names
+  that route, `native_tier_preferred()` the native argmin for the vendor-free walk.
+* An unfittable key is not a candidate. No vendor constants, a gate-failed profile (sm_89 and
+  everything mapped to it), a CPU queue or `BATCHLAS_ROUTING_PROFILE=sm_89` keep the windows,
+  byte-identical (route_diff over potrf_tests + posv_tests against main: IDENTICAL).
+* Forced routes and `potrf_buffer_size` are untouched: both still go through `potrf_route`.
+* Coverage `reached` rows carry `cost_extrapolated` (-1 windows, 0/1 model) as column 23;
+  `scripts/route_diff.sh` keeps the extrapolated rows in `<label>.extrapolated`.
+
+`evaluation/routing/gen_profile_header.py` writes the header from `profiles/*.json`
+(`potrf_profile_header_tests` fails when it is stale), and
+`evaluation/routing/check_model_routes.py --device` proves, cell by cell on the GPU, that the
+library's route equals fit.py's full-model pick and that the moved cells are exactly the
+profile report's route-diff table.
+
 ---
 
 ## The occupancy rule
