@@ -2689,6 +2689,60 @@ TEST(RouteGetrs, BatchlasGetrsRouteIsActuallyRead) {
     }
 }
 
+// sm_120's getrs windows after the trsm fix, both sides of every edge, with cc 0 and 89
+// answering exactly as before. evidence: docs/perf/blackwell.md#getrs-windows-after-the-trsm-fix
+TEST(RouteGetrs, Sm120WindowsAfterTheTrsmFixAreBracketedAndSm89IsUnchanged) {
+    auto at = [](int64_t n, int64_t q, int64_t b, int cc) {
+        auto s = getrs_shape(n, q, b);
+        s.cuda_cc = cc;
+        return s;
+    };
+    for (int cc : {0, 89, 120}) {
+        const bool sm120 = (cc == 120);
+        // Composition: nrhs 16 in, 15 out; order 32 in, 31 out; batch 128 in, 127 out.
+        for (int64_t n : {32, 48, 128, 512}) {
+            EXPECT_EQ(GetrsTable::preferred(kGetrsBlocked, at(n, 16, 4096, cc)), sm120)
+                << "cc=" << cc << " n=" << n;
+            EXPECT_EQ(GetrsTableCF::preferred(kGetrsBlocked, at(n, 16, 4096, cc)), sm120 && n >= 96)
+                << "cc=" << cc << " n=" << n;
+            EXPECT_EQ(GetrsTableCF::preferred(kGetrsBlocked, at(n, 32, 4096, cc)), sm120);
+            EXPECT_FALSE(GetrsTable::preferred(kGetrsBlocked, at(n, 15, 4096, cc)));
+            EXPECT_FALSE(GetrsTableCF::preferred(kGetrsBlocked, at(n, 15, 4096, cc)));
+            EXPECT_EQ(GetrsTableCF::preferred(kGetrsBlocked, at(n, 64, 4096, cc)), sm120);
+            EXPECT_TRUE(GetrsTable::preferred(kGetrsBlocked, at(n, 64, 4096, cc)));
+            const Route r = resolve_getrs_route<float>(kGetrsAuto, at(n, 16, 4096, cc), true);
+            EXPECT_EQ(is_native(r) && r.algo == Algorithm::Blocked, sm120) << "cc=" << cc;
+        }
+        EXPECT_FALSE(GetrsTableCF::preferred(kGetrsBlocked, at(31, 32, 4096, cc)));
+        // cfloat's second edge: order 96 at nrhs 16..31, nrhs 32 below it.
+        EXPECT_EQ(GetrsTableCF::preferred(kGetrsBlocked, at(96, 16, 4096, cc)), sm120);
+        EXPECT_FALSE(GetrsTableCF::preferred(kGetrsBlocked, at(95, 16, 4096, cc)));
+        EXPECT_FALSE(GetrsTableCF::preferred(kGetrsBlocked, at(95, 31, 4096, cc)));
+        EXPECT_EQ(GetrsTableCF::preferred(kGetrsBlocked, at(48, 32, 4096, cc)), sm120);
+        EXPECT_EQ(GetrsTable::preferred(kGetrsBlocked, at(48, 16, 4096, cc)), sm120);
+        EXPECT_EQ(GetrsTable::preferred(kGetrsBlocked, at(31, 64, 4096, cc)), !sm120)
+            << "cc=" << cc << ": sm_120 leaves order < 32 to the tiny tier";
+        EXPECT_EQ(GetrsTableCF::preferred(kGetrsBlocked, at(256, 16, 128, cc)), sm120);
+        EXPECT_FALSE(GetrsTableCF::preferred(kGetrsBlocked, at(256, 16, 127, cc)));
+        // fp64 never moves.
+        EXPECT_FALSE(GetrsTableD::preferred(kGetrsBlocked, at(128, 16, 4096, cc)));
+        EXPECT_FALSE(GetrsTableCD::preferred(kGetrsBlocked, at(128, 64, 4096, cc)));
+
+        // Fused tier: float nrhs 5..8 from order 192; cfloat nrhs 3..4 from 96 and
+        // nrhs 5..8 from 384. Off sm_120 none of these widenings exist.
+        EXPECT_EQ(GetrsTable::preferred(kGetrsCta, at(192, 8, 1024, cc)), sm120) << cc;
+        EXPECT_FALSE(GetrsTable::preferred(kGetrsCta, at(191, 8, 1024, cc))) << cc;
+        EXPECT_EQ(GetrsTable::preferred(kGetrsCta, at(192, 5, 1024, cc)), sm120) << cc;
+        EXPECT_TRUE(GetrsTable::preferred(kGetrsCta, at(191, 4, 1024, cc))) << "clause B";
+        EXPECT_EQ(GetrsTableCF::preferred(kGetrsCta, at(96, 4, 1024, cc)), sm120) << cc;
+        EXPECT_FALSE(GetrsTableCF::preferred(kGetrsCta, at(95, 4, 1024, cc))) << cc;
+        EXPECT_FALSE(GetrsTableCF::preferred(kGetrsCta, at(96, 5, 1024, cc))) << cc;
+        EXPECT_EQ(GetrsTableCF::preferred(kGetrsCta, at(384, 8, 256, cc)), sm120) << cc;
+        EXPECT_FALSE(GetrsTableCF::preferred(kGetrsCta, at(383, 8, 256, cc))) << cc;
+        EXPECT_FALSE(GetrsTableD::preferred(kGetrsCta, at(512, 8, 256, cc))) << cc;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // GETRI. One native arm: a composition over the routed trsm.
 // ---------------------------------------------------------------------------

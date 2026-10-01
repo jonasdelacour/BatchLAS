@@ -4534,7 +4534,10 @@ TYPED_TEST(LuTest, GetrsTinyTierTieBreakIsExhaustiveAndGatedOnSm120) {
     struct Cta { int64_t n, nrhs; bool f, cf; };
     for (const Cta& c : {Cta{256, 8, true, false}, Cta{128, 8, false, false},
                          Cta{128, 4, true, true}, Cta{64, 4, true, false},
-                         Cta{512, 8, true, true}, Cta{256, 3, true, true}}) {
+                         Cta{512, 8, true, true}, Cta{256, 3, true, true},
+                         Cta{192, 8, true, false}, Cta{191, 8, false, false},
+                         Cta{96, 4, true, true}, Cta{95, 4, true, false},
+                         Cta{384, 8, true, true}, Cta{383, 8, true, false}}) {
         for (int cc : {89, 120}) {
             auto s = *built;
             s.cuda_cc = cc;
@@ -4547,6 +4550,32 @@ TYPED_TEST(LuTest, GetrsTinyTierTieBreakIsExhaustiveAndGatedOnSm120) {
             if (cc == 120 && std::is_same_v<T, std::complex<float>>) want = want || c.cf;
             EXPECT_EQ(Tbl::preferred(tiers[1], s), want)
                 << "cc=" << cc << " n=" << c.n << " nrhs=" << c.nrhs;
+        }
+    }
+
+    // The composition's sm_120 window after the trsm fix: nrhs 16 and order 32 in, 15
+    // and 31 out; cc 0/89 keep float nrhs >= 64 only. evidence: docs/perf/blackwell.md#getrs-windows-after-the-trsm-fix
+    constexpr bool kSingle = std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>;
+    struct Cmp { int64_t n, nrhs, batch; bool f, cf; };
+    for (const Cmp& c : {Cmp{32, 16, 4096, true, false}, Cmp{31, 16, 4096, false, false},
+                         Cmp{512, 16, 256, true, true}, Cmp{512, 15, 256, false, false},
+                         Cmp{48, 16, 128, true, false}, Cmp{48, 16, 127, false, false},
+                         Cmp{96, 16, 1024, true, true}, Cmp{95, 31, 1024, true, false},
+                         Cmp{48, 32, 4096, true, true}, Cmp{31, 32, 4096, false, false},
+                         Cmp{64, 64, 4096, true, true}, Cmp{128, 12, 4096, false, false}}) {
+        for (int cc : {0, 89, 120}) {
+            auto s = *built;
+            s.cuda_cc = cc;
+            s.m = s.k = c.n;
+            s.n = c.nrhs;
+            s.batch = c.batch;
+            if (!Tbl::supports(tiers[2], s)) continue;
+            bool want = c.batch >= 128 &&
+                        ((std::is_same_v<T, float> && c.nrhs >= 64) ||
+                         (std::is_same_v<T, double> && c.nrhs >= 128));
+            if (cc == 120 && kSingle) want = std::is_same_v<T, float> ? c.f : c.cf;
+            EXPECT_EQ(Tbl::preferred(tiers[2], s), want)
+                << "cc=" << cc << " n=" << c.n << " nrhs=" << c.nrhs << " b=" << c.batch;
         }
     }
 }

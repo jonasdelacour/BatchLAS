@@ -105,6 +105,7 @@ struct RouteTable<Op::getrs, T> {
             // Deliberately conservative; it gives up measured wins below 128.
             // evidence: docs/perf/lu.md#getrs-composition-window-evidence
             if (s.batch < 128) return false;
+            if (sm120_single(s)) return composition_sm120(s);
             if constexpr (std::is_same_v<T, float>)  return s.nrhs() >= 64;
             if constexpr (std::is_same_v<T, double>) return s.nrhs() >= 128;
             return false;   // cfloat and cdouble earn nothing at any width
@@ -121,15 +122,32 @@ struct RouteTable<Op::getrs, T> {
         if constexpr (std::is_same_v<T, float>) {        // clause B
             if (s.nrhs() <= 4) return true;
         }
-        // evidence: docs/perf/blackwell.md#lu-getrs-fused
+        // evidence: docs/perf/blackwell.md#getrs-windows-after-the-trsm-fix
         if (is_sm120_family(s.cuda_cc)) {
-            if constexpr (std::is_same_v<T, float>) return s.nrhs() <= 8 && s.order() >= 256;
+            if constexpr (std::is_same_v<T, float>) return s.nrhs() <= 8 && s.order() >= 192;
             if constexpr (std::is_same_v<T, std::complex<float>>) {
-                return (s.nrhs() <= 4 && s.order() >= 128) ||
-                       (s.nrhs() <= 8 && s.order() >= 512);
+                return (s.nrhs() <= 4 && s.order() >= 96) ||
+                       (s.nrhs() <= 8 && s.order() >= 384);
             }
         }
         return false;
+    }
+
+    static bool sm120_single(const GetrsShape& s) {
+        constexpr bool kSingle =
+            std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>;
+        return kSingle && is_sm120_family(s.cuda_cc);
+    }
+
+    // sm_120 composition window, re-bracketed after the trsm fix. cfloat dips below the
+    // vendor at n 48..64, nrhs 16..24, batch 4096-8192, hence its second edge.
+    // evidence: docs/perf/blackwell.md#getrs-windows-after-the-trsm-fix
+    static bool composition_sm120(const GetrsShape& s) {
+        if (s.order() < 32 || s.nrhs() < 16) return false;
+        if constexpr (std::is_same_v<T, std::complex<float>>) {
+            return s.nrhs() >= 32 || s.order() >= 96;
+        }
+        return true;
     }
 
     // Every measured sm_120 cell, n 2..32 x nrhs 1..64 x batch 64..32768, both types.

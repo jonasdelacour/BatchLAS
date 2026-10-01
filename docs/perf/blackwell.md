@@ -713,6 +713,10 @@ getrs vendor-present composition windows for nrhs >= 16 at n > 32 (LU-3) are lef
 re-bracketing after the trsm package lands. getrs cfloat n64 nrhs4 in the native walk
 is 1.05.
 
+### getrs windows after the trsm fix
+
+LU-3. Measurement in progress; the bracket tables land in the next commit.
+
 ## trsm
 
 Machine: threadripper02, GPU 0 (RTX PRO 6000 Blackwell Max-Q, sm_120), icpx 2026.0 with
