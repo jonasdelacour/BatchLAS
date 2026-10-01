@@ -125,11 +125,11 @@ void emit() {
     std::fputs("kind,op,scalar,backend,shape_class,m,n,k,batch,"
                "chosen_origin,chosen_algo,calls,native_route_existed,"
                "native_route_supported,library,uplo,side,diag,transA,transB,"
-               "profile,profile_nearest\n", f);
+               "profile,profile_nearest,cost_extrapolated\n", f);
 
     std::lock_guard<std::mutex> lock(table_mutex());
     for (const auto& [k, r] : table()) {
-        std::fprintf(f, "reached,%s,%s,%s,%u,%lld,%lld,%lld,%lld,%s,%s,%llu,%d,%d,,%d,%d,%d,%d,%d,%s,%d\n",
+        std::fprintf(f, "reached,%s,%s,%s,%u,%lld,%lld,%lld,%lld,%s,%s,%llu,%d,%d,,%d,%d,%d,%d,%d,%s,%d,%d\n",
                      std::string(op_name(r.op)).c_str(),
                      std::string(to_string(r.scalar)).c_str(),
                      backend_name(r.backend),
@@ -144,7 +144,7 @@ void emit() {
                      static_cast<int>(r.shape.diag), static_cast<int>(r.shape.transA),
                      static_cast<int>(r.shape.transB),
                      std::string(arch::to_string(r.shape.profile)).c_str(),
-                     r.shape.profile_nearest ? 1 : 0);
+                     r.shape.profile_nearest ? 1 : 0, static_cast<int>(r.shape.cost_extrapolated));
     }
     for (const auto& [k, m] : misses()) {
         std::fprintf(f, "miss,%s,%s,%s,,,,,,,,%llu,0,0,%s\n",

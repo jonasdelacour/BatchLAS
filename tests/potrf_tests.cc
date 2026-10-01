@@ -26,6 +26,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <random>
 #include <string>
 #include <vector>
@@ -1417,6 +1418,9 @@ TYPED_TEST(PotrfBlockedTest, BlockedDirectEntryPointRefusesWhatSupportsRefuses) 
 // The route table above the CTA ceiling, including the VENDOR-FREE FALLBACK.
 // evidence: docs/perf/potrf.md#route-arms-and-the-supports-gates
 TYPED_TEST(PotrfBlockedTest, BlockedRouteTableAndTheVendorFreeFallback) {
+    // Pins the HAND WINDOWS: on a profile whose cost-model gate passed (sm_120) the walk is
+    // argmin predicted cost instead -- tested by PotrfCostModel. evidence: docs/perf/potrf.md#the-cost-model-route-choice
+    const ScopedEnvVar windows_profile("BATCHLAS_ROUTING_PROFILE", "sm_89");
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
     static constexpr Backend B = TestFixture::BackendType;
@@ -1662,5 +1666,8 @@ TYPED_TEST(PotrfBlockedTest, BlockedDoesNotReadUninitialisedWorkspace) {
 
 // The LPANEL tier's cases, here for the same reason: one set of oracles.
 #include "potrf_lpanel_cases.inc"
+
+// The cost-model route choice on a gated profile.
+#include "potrf_model_cases.inc"
 
 }  // namespace

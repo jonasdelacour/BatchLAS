@@ -6,6 +6,11 @@
 //   flags : --local-mem B --max-wg N --cus N --max-threads-per-cu N --max-groups-per-cu N
 //           --regs <dtype>=t8:R,t16:R,t32:R,cta_sg:R,cta_wg:R,lp:R,lp16:R  (repeatable; from
 //           evaluation/routing/profiles/registers.json via fit.py)
+//           --profile sm_89|sm_120: also price with that profile's generated constants and
+//             print "auto_model" (the RouteTable choice with the cost model, if its gate passed)
+//           --device: also resolve each shape through the LIBRARY's potrf_route on GPU 0's
+//             queue ("device_route", "device_route_vendor_free"); honours
+//             BATCHLAS_ROUTING_PROFILE and BATCHLAS_POTRF_ROUTE like a real call
 //
 // "auto" is today's RouteTable choice with a vendor present, "auto_vendor_free" without one.
 // The vendor row is potrf_plan::vendor_pseudo_plan: it has no launch plan of its own.
@@ -20,6 +25,8 @@
 #include <cstring>
 #include <iostream>
 #include <map>
+#include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 
@@ -57,6 +64,8 @@ std::string route_name(dispatch::Route r) {
 }
 
 std::map<std::string, potrf_plan::KernelRegs> g_regs;
+arch::RoutingProfile g_profile = arch::RoutingProfile::Unset;
+std::unique_ptr<Queue> g_queue;
 
 // "t8:54,t16:64,cta_sg:64" -> KernelRegs; unknown keys are an error, not a silent 0.
 bool parse_regs(const std::string& spec, potrf_plan::KernelRegs& r) {
@@ -97,8 +106,25 @@ void dump(std::ostream& o, const char* dtype, int n, std::int64_t batch, Uplo up
 
     o << "{\"dtype\":\"" << dtype << "\",\"n\":" << n << ",\"batch\":" << batch
       << ",\"uplo\":\"" << (uplo == Uplo::Upper ? "U" : "L") << "\",\"auto\":\""
-      << route_name(pick) << "\",\"auto_vendor_free\":\"" << route_name(pick_vf)
-      << "\",\"routes\":{";
+      << route_name(pick) << "\",\"auto_vendor_free\":\"" << route_name(pick_vf) << "\"";
+    if (g_profile != arch::RoutingProfile::Unset) {
+        auto sm = s;
+        sm.profile = g_profile;
+        int nb_env = 0, w_env = 0;
+        sycl_potrf::potrf_blocked_overrides(nb_env, w_env);
+        backend::potrf_price_routes<T>(sm, d, sycl_trsm::trsm_cta_max_n<T>(), nb_env, w_env);
+        const auto pm = dispatch::resolve_route_uninstrumented<dispatch::Op::potrf, T>(none, sm, true);
+        o << ",\"model_enabled\":" << (sm.model_enabled ? "true" : "false")
+          << ",\"auto_model\":\"" << route_name(pm) << "\"";
+    }
+    if (g_queue) {
+        const MatrixView<T, MatrixFormat::Dense> A(nullptr, n, n, n, n * n, static_cast<int>(batch));
+        const auto dr = backend::potrf_route<Backend::CUDA, T>(*g_queue, A, uplo, true);
+        const auto dv = backend::potrf_route<Backend::CUDA, T>(*g_queue, A, uplo, false);
+        o << ",\"device_route\":\"" << route_name(dr) << "\",\"device_route_vendor_free\":\""
+          << route_name(dv) << "\"";
+    }
+    o << ",\"routes\":{";
     emit_plan(o, "native:tiny", sup(Algorithm::Tiny), potrf_plan::tiny_plan<T>(n, batch, d, r), d);
     o << ",";
     emit_plan(o, "native:cta", sup(Algorithm::CTA), potrf_plan::cta_plan<T>(n, batch, d, r), d);
@@ -146,6 +172,19 @@ int main(int argc, char** argv) {
         if (eq == std::string::npos || !parse_regs(spec.substr(eq + 1), g_regs[spec.substr(0, eq)])) {
             std::fprintf(stderr, "potrf_plan_dump: bad --regs %s\n", spec.c_str());
             return 2;
+        }
+    }
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--device") == 0) {
+            g_queue = std::make_unique<Queue>(Device("gpu"), Backend::CUDA, true);
+        }
+        if (std::strcmp(argv[i], "--profile") == 0 && i + 1 < argc) {
+            const auto p = arch::parse_routing_profile(argv[i + 1]);
+            if (!p) {
+                std::fprintf(stderr, "potrf_plan_dump: unknown profile %s\n", argv[i + 1]);
+                return 2;
+            }
+            g_profile = *p;
         }
     }
     if (d.local_mem_bytes == 0 || d.compute_units == 0) {

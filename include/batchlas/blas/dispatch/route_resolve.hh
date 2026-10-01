@@ -115,7 +115,11 @@ inline Route resolve_route(Route forced, const Shape& s, bool vendor_available =
             native_existed = true;
             if (Table::supports(*r, s)) native_supported = true;
         }
-        coverage::record_if_enabled(s.op, s.scalar, s.backend, static_cast<const OpShape&>(s),
+        OpShape row = static_cast<const OpShape&>(s);
+        if constexpr (requires { Table::cost_extrapolated(chosen, s); }) {
+            row.cost_extrapolated = static_cast<int8_t>(Table::cost_extrapolated(chosen, s));
+        }
+        coverage::record_if_enabled(s.op, s.scalar, s.backend, row,
                                     chosen, native_existed, native_supported);
     }
 
