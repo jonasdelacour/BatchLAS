@@ -38,6 +38,8 @@ struct LaunchPlan {
     std::int64_t serial_steps = 0;  // dependent steps on one group's critical path, per call
     double slot_chain = 0;          // per-lane barrier chain for the slot term; 0 = no slot term
     bool batch_wide_work = false;   // flops/bytes are sub-op work spread over the whole GPU
+    bool additive_work = false;     // flop and byte times ADD (the vendor's black-box form)
+    double item_steps = 0;          // per-item serial work, batch * steps (vendor); x t_item
 };
 
 // Groups one compute unit can hold: the tightest of the SLM, thread, register and group caps
@@ -70,6 +72,7 @@ struct CostConstants {
     double s_per_byte = 0;    // seconds per byte for ONE resident group (1 / B_route)
     double t_step = 0;        // seconds per serial step of one group
     double s_per_slot = 0;    // seconds per warp-slot of a CU's lane chain
+    double t_item = 0;        // seconds per item step (batch * steps), vendor only
 };
 
 // The plan-dependent half of the cost, one coefficient per constant. The fitter reads these
@@ -80,6 +83,8 @@ struct CostTerms {
     double byte = 0;     // x s_per_byte, inside the max
     double step = 0;     // x t_step
     double slot = 0;     // x s_per_slot, inside the max
+    double item = 0;     // x t_item
+    bool additive = false;   // flop and byte add instead of entering the max
 };
 
 // Throughput is per CU and residency-free: a CU executes load = wave_launches*ceil(groups/CUs)
@@ -90,6 +95,8 @@ struct CostTerms {
 constexpr CostTerms cost_terms(const LaunchPlan& p, const DeviceFacts& d) {
     CostTerms t;
     t.launch = p.launches;
+    t.item = p.item_steps;
+    t.additive = p.additive_work;
     if (p.wave_launches < 1 || p.groups < 1) return t;
     const long long cus = d.compute_units > 0 ? d.compute_units : 1;
     const long long res = p.resident_groups_per_cu > 0 ? p.resident_groups_per_cu : 1;
@@ -107,14 +114,15 @@ constexpr CostTerms cost_terms(const LaunchPlan& p, const DeviceFacts& d) {
     return t;
 }
 
-// t = t_launch*launch + max(s_per_flop*flop, s_per_byte*byte, s_per_slot*slot) + t_step*step.
+// t = t_launch*launch + max(s_per_flop*flop, s_per_byte*byte, s_per_slot*slot) + t_step*step
+//     + t_item*item; with `additive`, flop and byte are summed before the max.
 // evaluation/routing/fit.py's `combine` is this line; potrf_plan_tests pins the two together.
 constexpr double combine(const CostTerms& t, const CostConstants& c) {
     const double tf = t.flop * c.s_per_flop;
     const double tb = t.byte * c.s_per_byte;
     const double ts = t.slot * c.s_per_slot;
-    const double m = tf > tb ? tf : tb;
-    return c.t_launch * t.launch + (m > ts ? m : ts) + c.t_step * t.step;
+    const double m = t.additive ? tf + tb : (tf > tb ? tf : tb);
+    return c.t_launch * t.launch + (m > ts ? m : ts) + c.t_step * t.step + c.t_item * t.item;
 }
 
 constexpr double cost(const LaunchPlan& p, const DeviceFacts& d, const CostConstants& c) {

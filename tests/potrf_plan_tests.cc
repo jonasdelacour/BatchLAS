@@ -247,6 +247,23 @@ TEST(LaunchPlanCost, WavesAndTermsAreHandComputed) {
     // The byte side (2.4e-2) binds over the flop (1.2e-2) and slot (1.2e-4) sides.
     EXPECT_DOUBLE_EQ(launch_plan::cost(p, d, c), 3e-6 + 2.4e-2 + 1e-5);
     static_assert(launch_plan::combine({1, 2, 3, 4}, {1, 1, 1, 1}) == 1 + 3 + 4);
+    // Additive (the vendor form): flop and byte sum, and the item term is outside the max.
+    static_assert(launch_plan::combine({1, 2, 3, 4, 0, 5, true}, {1, 1, 1, 1, 0, 1}) == 15);
+}
+
+// Vendor V1c: n_e = n up to 16, then whole 16-blocks; work at n_e, additive, item = n_e*batch.
+TEST(PotrfPlan, VendorPseudoPlanIsTheV1cForm) {
+    const auto v = potrf_plan::vendor_pseudo_plan<double>(20, 1000);   // n_e = 32
+    const auto t = launch_plan::cost_terms(v, kRec);
+    EXPECT_TRUE(t.additive);
+    EXPECT_DOUBLE_EQ(t.flop, potrf_plan::useful_flops<double>(32, 1000));
+    EXPECT_DOUBLE_EQ(t.byte, 32.0 * 33 * 8 * 1000);
+    EXPECT_DOUBLE_EQ(t.step, 32);
+    EXPECT_DOUBLE_EQ(t.item, 32.0 * 1000);
+    EXPECT_DOUBLE_EQ(v.useful_flops, potrf_plan::useful_flops<double>(20, 1000));
+    EXPECT_EQ(potrf_plan::vendor_pseudo_plan<float>(16, 1).serial_steps, 16);
+    EXPECT_EQ(potrf_plan::vendor_pseudo_plan<float>(17, 1).serial_steps, 32);
+    EXPECT_DOUBLE_EQ(launch_plan::cost_terms(potrf_plan::cta_plan<float>(20, 64, kRec), kRec).item, 0);
 }
 
 // evaluation/routing/fit.py re-states combine() in one line; this is the same arithmetic on

@@ -41,7 +41,8 @@ void emit_plan(std::ostream& o, const char* name, bool supported, const LaunchPl
       << ",\"resident_groups_per_cu\":" << p.resident_groups_per_cu << ",\"flops\":" << p.flops
       << ",\"useful_flops\":" << p.useful_flops << ",\"bytes\":" << p.bytes
       << ",\"serial_steps\":" << p.serial_steps << ",\"terms\":[" << t.launch << "," << t.flop
-      << "," << t.byte << "," << t.step << "," << t.slot << "]}";
+      << "," << t.byte << "," << t.step << "," << t.slot << "," << t.item << ","
+      << (t.additive ? 1 : 0) << "]}";
 }
 
 std::string route_name(dispatch::Route r) {

@@ -51,9 +51,9 @@
  "gate": {
   "model": {
    "cells": 545,
-   "geomean": 1.0255244924323816,
+   "geomean": 1.0213557270038744,
    "max": 2.2810194554411543,
-   "over_1.1": 44,
+   "over_1.1": 43,
    "p95": 1.1763088630026324
   },
   "paired_cells": 545,
@@ -78,9 +78,9 @@
  "profile": "sm_120",
  "provenance": {
   "campaigns": [],
-  "created": "2026-10-01T21:27:05",
+  "created": "2026-10-01T21:55:01",
   "fit_git_dirty": true,
-  "fit_git_sha": "89e76508",
+  "fit_git_sha": "6bf5dee5",
   "plan_dump": "build/tests/potrf_plan_dump",
   "sources": [
    {
@@ -97,16 +97,19 @@
       "s_per_byte": 3.404363912712432e-12,
       "s_per_flop": 1.0089915596062013e-12,
       "s_per_slot": 0.0,
+      "t_item": 0.0,
       "t_launch": 3.247856681607938e-06,
       "t_step": 3.983834650102428e-06
      },
      "fallback": null,
      "fit": {
       "absent": [
-       "s_per_slot"
+       "s_per_slot",
+       "t_item"
       ],
       "inactive": [
-       "s_per_slot"
+       "s_per_slot",
+       "t_item"
       ],
       "max_abs_log": 0.6490465101933012,
       "rms_log": 0.24039243616752629,
@@ -129,6 +132,7 @@
       "s_per_byte": 3.404363912712432e-12,
       "s_per_flop": 1.0089915596062013e-12,
       "s_per_slot": 0.0,
+      "t_item": 0.0,
       "t_launch": 3.247856681607938e-06,
       "t_step": 3.983834650102428e-06
      },
@@ -149,6 +153,11 @@
         "rule": "other_uplo"
        },
        "s_per_slot": {
+        "factor": 1.0,
+        "from": "native:blocked/cdouble/L",
+        "rule": "other_uplo"
+       },
+       "t_item": {
         "factor": 1.0,
         "from": "native:blocked/cdouble/L",
         "rule": "other_uplo"
@@ -176,16 +185,19 @@
       "s_per_byte": 6.040005856217279e-13,
       "s_per_flop": 4.50603552695576e-14,
       "s_per_slot": 0.0,
+      "t_item": 0.0,
       "t_launch": 3.219925184977569e-06,
       "t_step": 1.1335361368062058e-06
      },
      "fallback": null,
      "fit": {
       "absent": [
-       "s_per_slot"
+       "s_per_slot",
+       "t_item"
       ],
       "inactive": [
-       "s_per_slot"
+       "s_per_slot",
+       "t_item"
       ],
       "max_abs_log": 0.5643838614014776,
       "rms_log": 0.14140484223866318,
@@ -208,6 +220,7 @@
       "s_per_byte": 6.040005856217279e-13,
       "s_per_flop": 4.50603552695576e-14,
       "s_per_slot": 0.0,
+      "t_item": 0.0,
       "t_launch": 3.219925184977569e-06,
       "t_step": 1.1335361368062058e-06
      },
@@ -228,6 +241,11 @@
         "rule": "other_uplo"
        },
        "s_per_slot": {
+        "factor": 1.0,
+        "from": "native:blocked/cfloat/L",
+        "rule": "other_uplo"
+       },
+       "t_item": {
         "factor": 1.0,
         "from": "native:blocked/cfloat/L",
         "rule": "other_uplo"
@@ -255,16 +273,19 @@
       "s_per_byte": 1.4392866158309524e-12,
       "s_per_flop": 6.462242982984405e-13,
       "s_per_slot": 0.0,
+      "t_item": 0.0,
       "t_launch": 2.2731059490870434e-06,
       "t_step": 2.83557043442171e-06
      },
      "fallback": null,
      "fit": {
       "absent": [
-       "s_per_slot"
+       "s_per_slot",
+       "t_item"
       ],
       "inactive": [
-       "s_per_slot"
+       "s_per_slot",
+       "t_item"
       ],
       "max_abs_log": 0.7242941911986494,
       "rms_log": 0.24301810280551175,
@@ -287,6 +308,7 @@
       "s_per_byte": 1.4392866158309524e-12,
       "s_per_flop": 6.462242982984405e-13,
       "s_per_slot": 0.0,
+      "t_item": 0.0,
       "t_launch": 2.2731059490870434e-06,
       "t_step": 2.83557043442171e-06
      },
@@ -307,6 +329,11 @@
         "rule": "other_uplo"
        },
        "s_per_slot": {
+        "factor": 1.0,
+        "from": "native:blocked/double/L",
+        "rule": "other_uplo"
+       },
+       "t_item": {
         "factor": 1.0,
         "from": "native:blocked/double/L",
         "rule": "other_uplo"
@@ -334,16 +361,19 @@
       "s_per_byte": 7.484569596515366e-13,
       "s_per_flop": 6.875515529194959e-14,
       "s_per_slot": 0.0,
+      "t_item": 0.0,
       "t_launch": 3.82697822403457e-06,
       "t_step": 7.938236601340221e-07
      },
      "fallback": null,
      "fit": {
       "absent": [
-       "s_per_slot"
+       "s_per_slot",
+       "t_item"
       ],
       "inactive": [
-       "s_per_slot"
+       "s_per_slot",
+       "t_item"
       ],
       "max_abs_log": 0.7814841414886136,
       "rms_log": 0.1515623790654384,
@@ -366,6 +396,7 @@
       "s_per_byte": 7.484569596515366e-13,
       "s_per_flop": 6.875515529194959e-14,
       "s_per_slot": 0.0,
+      "t_item": 0.0,
       "t_launch": 3.82697822403457e-06,
       "t_step": 7.938236601340221e-07
      },
@@ -386,6 +417,11 @@
         "rule": "other_uplo"
        },
        "s_per_slot": {
+        "factor": 1.0,
+        "from": "native:blocked/float/L",
+        "rule": "other_uplo"
+       },
+       "t_item": {
         "factor": 1.0,
         "from": "native:blocked/float/L",
         "rule": "other_uplo"
@@ -415,16 +451,19 @@
       "s_per_byte": 1.336859057193905e-09,
       "s_per_flop": 0.0,
       "s_per_slot": 0.0,
+      "t_item": 0.0,
       "t_launch": 0.0,
       "t_step": 1.9650430236300825e-06
      },
      "fallback": null,
      "fit": {
       "absent": [
-       "s_per_slot"
+       "s_per_slot",
+       "t_item"
       ],
       "inactive": [
        "s_per_slot",
+       "t_item",
        "t_launch",
        "s_per_flop"
       ],
@@ -449,6 +488,7 @@
       "s_per_byte": 1.336859057193905e-09,
       "s_per_flop": 4.080091646819978e-09,
       "s_per_slot": 0.0,
+      "t_item": 0.0,
       "t_launch": 6.2224585554278734e-06,
       "t_step": 1.9650430236300825e-06
      },
@@ -469,6 +509,11 @@
         "rule": "precision_scaled"
        },
        "s_per_slot": {
+        "factor": 1.0,
+        "from": "native:cta/cdouble/L",
+        "rule": "other_uplo"
+       },
+       "t_item": {
         "factor": 1.0,
         "from": "native:cta/cdouble/L",
         "rule": "other_uplo"
@@ -496,16 +541,19 @@
       "s_per_byte": 2.7898621345207105e-10,
       "s_per_flop": 6.375143198156216e-11,
       "s_per_slot": 0.0,
+      "t_item": 0.0,
       "t_launch": 6.2224585554278734e-06,
       "t_step": 5.905811933582697e-07
      },
      "fallback": null,
      "fit": {
       "absent": [
-       "s_per_slot"
+       "s_per_slot",
+       "t_item"
       ],
       "inactive": [
-       "s_per_slot"
+       "s_per_slot",
+       "t_item"
       ],
       "max_abs_log": 0.509919839815419,
       "rms_log": 0.15185056989933024,
@@ -528,6 +576,7 @@
       "s_per_byte": 2.7898621345207105e-10,
       "s_per_flop": 6.375143198156216e-11,
       "s_per_slot": 0.0,
+      "t_item": 0.0,
       "t_launch": 6.2224585554278734e-06,
       "t_step": 5.905811933582697e-07
      },
@@ -548,6 +597,11 @@
         "rule": "other_uplo"
        },
        "s_per_slot": {
+        "factor": 1.0,
+        "from": "native:cta/cfloat/L",
+        "rule": "other_uplo"
+       },
+       "t_item": {
         "factor": 1.0,
         "from": "native:cta/cfloat/L",
         "rule": "other_uplo"
@@ -575,16 +629,19 @@
       "s_per_byte": 1.178401140093283e-09,
       "s_per_flop": 0.0,
       "s_per_slot": 0.0,
+      "t_item": 0.0,
       "t_launch": 1.9102857286204292e-06,
       "t_step": 1.3980987653251777e-06
      },
      "fallback": null,
      "fit": {
       "absent": [
-       "s_per_slot"
+       "s_per_slot",
+       "t_item"
       ],
       "inactive": [
        "s_per_slot",
+       "t_item",
        "s_per_flop"
       ],
       "max_abs_log": 0.4793713628548879,
@@ -610,16 +667,19 @@
       "s_per_byte": 2.37543466653691e-10,
       "s_per_flop": 0.0,
       "s_per_slot": 0.0,
+      "t_item": 0.0,
       "t_launch": 5.784622836978703e-06,
       "t_step": 5.823389170803159e-07
      },
      "fallback": null,
      "fit": {
       "absent": [
-       "s_per_slot"
+       "s_per_slot",
+       "t_item"
       ],
       "inactive": [
        "s_per_slot",
+       "t_item",
        "s_per_flop"
       ],
       "max_abs_log": 0.3367537211732934,
@@ -643,6 +703,7 @@
       "s_per_byte": 2.37543466653691e-10,
       "s_per_flop": 6.375143198156216e-11,
       "s_per_slot": 0.0,
+      "t_item": 0.0,
       "t_launch": 5.784622836978703e-06,
       "t_step": 5.823389170803159e-07
      },
@@ -663,6 +724,11 @@
         "rule": "complexity_borrow"
        },
        "s_per_slot": {
+        "factor": 1.0,
+        "from": "native:cta/float/L",
+        "rule": "other_uplo"
+       },
+       "t_item": {
         "factor": 1.0,
         "from": "native:cta/float/L",
         "rule": "other_uplo"
@@ -692,13 +758,17 @@
       "s_per_byte": 3.879078218885972e-10,
       "s_per_flop": 0.0,
       "s_per_slot": 7.56861817409635e-08,
+      "t_item": 0.0,
       "t_launch": 2.728801951983481e-06,
       "t_step": 4.897632022503569e-07
      },
      "fallback": null,
      "fit": {
-      "absent": [],
+      "absent": [
+       "t_item"
+      ],
       "inactive": [
+       "t_item",
        "s_per_flop"
       ],
       "max_abs_log": 0.6209488134649419,
@@ -724,13 +794,17 @@
       "s_per_byte": 0.0,
       "s_per_flop": 0.0,
       "s_per_slot": 8.558006399875989e-09,
+      "t_item": 0.0,
       "t_launch": 6.5455796311321015e-06,
       "t_step": 1.60543885435572e-07
      },
      "fallback": null,
      "fit": {
-      "absent": [],
+      "absent": [
+       "t_item"
+      ],
       "inactive": [
+       "t_item",
        "s_per_flop",
        "s_per_byte"
       ],
@@ -757,13 +831,17 @@
       "s_per_byte": 0.0,
       "s_per_flop": 0.0,
       "s_per_slot": 4.491828847657894e-08,
+      "t_item": 0.0,
       "t_launch": 5.377318935537218e-06,
       "t_step": 2.6905173752127704e-07
      },
      "fallback": null,
      "fit": {
-      "absent": [],
+      "absent": [
+       "t_item"
+      ],
       "inactive": [
+       "t_item",
        "s_per_flop",
        "s_per_byte"
       ],
@@ -790,13 +868,17 @@
       "s_per_byte": 5.650622389865867e-11,
       "s_per_flop": 0.0,
       "s_per_slot": 6.0569357430004666e-09,
+      "t_item": 0.0,
       "t_launch": 6.703035206192977e-06,
       "t_step": 1.3280715175115758e-07
      },
      "fallback": null,
      "fit": {
-      "absent": [],
+      "absent": [
+       "t_item"
+      ],
       "inactive": [
+       "t_item",
        "s_per_flop"
       ],
       "max_abs_log": 0.22711935531573602,
@@ -824,16 +906,19 @@
       "s_per_byte": 4.0521490908795587e-10,
       "s_per_flop": 5.475892139496155e-10,
       "s_per_slot": 0.0,
+      "t_item": 0.0,
       "t_launch": 0.0,
       "t_step": 1.6191055143947864e-06
      },
      "fallback": null,
      "fit": {
       "absent": [
-       "s_per_slot"
+       "s_per_slot",
+       "t_item"
       ],
       "inactive": [
        "s_per_slot",
+       "t_item",
        "t_launch"
       ],
       "max_abs_log": 0.18331204411141755,
@@ -857,6 +942,7 @@
       "s_per_byte": 4.0521490908795587e-10,
       "s_per_flop": 5.475892139496155e-10,
       "s_per_slot": 0.0,
+      "t_item": 0.0,
       "t_launch": 4.719738150448563e-06,
       "t_step": 1.6191055143947864e-06
      },
@@ -877,6 +963,11 @@
         "rule": "other_uplo"
        },
        "s_per_slot": {
+        "factor": 1.0,
+        "from": "native:tiny/cdouble/L",
+        "rule": "other_uplo"
+       },
+       "t_item": {
         "factor": 1.0,
         "from": "native:tiny/cdouble/L",
         "rule": "other_uplo"
@@ -904,16 +995,19 @@
       "s_per_byte": 4.027325946187414e-11,
       "s_per_flop": 1.222002336937299e-11,
       "s_per_slot": 0.0,
+      "t_item": 0.0,
       "t_launch": 4.719738150448563e-06,
       "t_step": 4.2209783765341375e-07
      },
      "fallback": null,
      "fit": {
       "absent": [
-       "s_per_slot"
+       "s_per_slot",
+       "t_item"
       ],
       "inactive": [
-       "s_per_slot"
+       "s_per_slot",
+       "t_item"
       ],
       "max_abs_log": 0.4005759917494487,
       "rms_log": 0.09641511378392792,
@@ -936,6 +1030,7 @@
       "s_per_byte": 4.027325946187414e-11,
       "s_per_flop": 1.222002336937299e-11,
       "s_per_slot": 0.0,
+      "t_item": 0.0,
       "t_launch": 4.719738150448563e-06,
       "t_step": 4.2209783765341375e-07
      },
@@ -956,6 +1051,11 @@
         "rule": "other_uplo"
        },
        "s_per_slot": {
+        "factor": 1.0,
+        "from": "native:tiny/cfloat/L",
+        "rule": "other_uplo"
+       },
+       "t_item": {
         "factor": 1.0,
         "from": "native:tiny/cfloat/L",
         "rule": "other_uplo"
@@ -983,16 +1083,19 @@
       "s_per_byte": 4.6070227448402735e-10,
       "s_per_flop": 1.0051154730844124e-09,
       "s_per_slot": 0.0,
+      "t_item": 0.0,
       "t_launch": 4.197219424103054e-06,
       "t_step": 8.268033560929005e-07
      },
      "fallback": null,
      "fit": {
       "absent": [
-       "s_per_slot"
+       "s_per_slot",
+       "t_item"
       ],
       "inactive": [
-       "s_per_slot"
+       "s_per_slot",
+       "t_item"
       ],
       "max_abs_log": 0.2521951191714411,
       "rms_log": 0.11602446312562119,
@@ -1015,6 +1118,7 @@
       "s_per_byte": 4.6070227448402735e-10,
       "s_per_flop": 1.0051154730844124e-09,
       "s_per_slot": 0.0,
+      "t_item": 0.0,
       "t_launch": 4.197219424103054e-06,
       "t_step": 8.268033560929005e-07
      },
@@ -1035,6 +1139,11 @@
         "rule": "other_uplo"
        },
        "s_per_slot": {
+        "factor": 1.0,
+        "from": "native:tiny/double/L",
+        "rule": "other_uplo"
+       },
+       "t_item": {
         "factor": 1.0,
         "from": "native:tiny/double/L",
         "rule": "other_uplo"
@@ -1062,16 +1171,19 @@
       "s_per_byte": 9.210986882871437e-11,
       "s_per_flop": 5.965989834557354e-11,
       "s_per_slot": 0.0,
+      "t_item": 0.0,
       "t_launch": 7.084869333797788e-06,
       "t_step": 1.062689240832668e-07
      },
      "fallback": null,
      "fit": {
       "absent": [
-       "s_per_slot"
+       "s_per_slot",
+       "t_item"
       ],
       "inactive": [
-       "s_per_slot"
+       "s_per_slot",
+       "t_item"
       ],
       "max_abs_log": 0.42570474127335345,
       "rms_log": 0.09609309059209553,
@@ -1094,6 +1206,7 @@
       "s_per_byte": 9.210986882871437e-11,
       "s_per_flop": 5.965989834557354e-11,
       "s_per_slot": 0.0,
+      "t_item": 0.0,
       "t_launch": 7.084869333797788e-06,
       "t_step": 1.062689240832668e-07
      },
@@ -1114,6 +1227,11 @@
         "rule": "other_uplo"
        },
        "s_per_slot": {
+        "factor": 1.0,
+        "from": "native:tiny/float/L",
+        "rule": "other_uplo"
+       },
+       "t_item": {
         "factor": 1.0,
         "from": "native:tiny/float/L",
         "rule": "other_uplo"
@@ -1140,11 +1258,12 @@
    "cdouble": {
     "L": {
      "constants": {
-      "s_per_byte": 1.2500137650386187e-11,
-      "s_per_flop": 9.02280277883148e-13,
+      "s_per_byte": 3.6173368579248263e-12,
+      "s_per_flop": 7.953940196549514e-13,
       "s_per_slot": 0.0,
-      "t_launch": 1.5248980586269461e-05,
-      "t_step": 1.0273913192294693e-06
+      "t_item": 1.360984052524126e-09,
+      "t_launch": 1.142340938950829e-05,
+      "t_step": 1.1196306612644795e-06
      },
      "fallback": null,
      "fit": {
@@ -1154,8 +1273,8 @@
       "inactive": [
        "s_per_slot"
       ],
-      "max_abs_log": 0.9218592925431501,
-      "rms_log": 0.2512537365316935,
+      "max_abs_log": 0.399991177422681,
+      "rms_log": 0.13070945943605508,
       "rows": 252
      },
      "support": {
@@ -1172,11 +1291,12 @@
     },
     "U": {
      "constants": {
-      "s_per_byte": 1.2500137650386187e-11,
-      "s_per_flop": 9.02280277883148e-13,
+      "s_per_byte": 3.6173368579248263e-12,
+      "s_per_flop": 7.953940196549514e-13,
       "s_per_slot": 0.0,
-      "t_launch": 1.5248980586269461e-05,
-      "t_step": 1.0273913192294693e-06
+      "t_item": 1.360984052524126e-09,
+      "t_launch": 1.142340938950829e-05,
+      "t_step": 1.1196306612644795e-06
      },
      "fallback": {
       "byte_factor": 1.0,
@@ -1195,6 +1315,11 @@
         "rule": "other_uplo"
        },
        "s_per_slot": {
+        "factor": 1.0,
+        "from": "vendor/cdouble/L",
+        "rule": "other_uplo"
+       },
+       "t_item": {
         "factor": 1.0,
         "from": "vendor/cdouble/L",
         "rule": "other_uplo"
@@ -1219,11 +1344,12 @@
    "cfloat": {
     "L": {
      "constants": {
-      "s_per_byte": 2.802521110611555e-12,
-      "s_per_flop": 5.979092768822994e-14,
+      "s_per_byte": 1.1540187090306404e-12,
+      "s_per_flop": 4.692527913378251e-14,
       "s_per_slot": 0.0,
-      "t_launch": 1.7265703349350338e-05,
-      "t_step": 1.9909789877934678e-07
+      "t_item": 2.139019923108867e-10,
+      "t_launch": 1.4532694064953733e-05,
+      "t_step": 2.448577862230005e-07
      },
      "fallback": null,
      "fit": {
@@ -1233,8 +1359,8 @@
       "inactive": [
        "s_per_slot"
       ],
-      "max_abs_log": 0.8164175914135114,
-      "rms_log": 0.2277297274703426,
+      "max_abs_log": 0.48040108535110804,
+      "rms_log": 0.17713750670975106,
       "rows": 274
      },
      "support": {
@@ -1251,11 +1377,12 @@
     },
     "U": {
      "constants": {
-      "s_per_byte": 2.802521110611555e-12,
-      "s_per_flop": 5.979092768822994e-14,
+      "s_per_byte": 1.1540187090306404e-12,
+      "s_per_flop": 4.692527913378251e-14,
       "s_per_slot": 0.0,
-      "t_launch": 1.7265703349350338e-05,
-      "t_step": 1.9909789877934678e-07
+      "t_item": 2.139019923108867e-10,
+      "t_launch": 1.4532694064953733e-05,
+      "t_step": 2.448577862230005e-07
      },
      "fallback": {
       "byte_factor": 1.0,
@@ -1274,6 +1401,11 @@
         "rule": "other_uplo"
        },
        "s_per_slot": {
+        "factor": 1.0,
+        "from": "vendor/cfloat/L",
+        "rule": "other_uplo"
+       },
+       "t_item": {
         "factor": 1.0,
         "from": "vendor/cfloat/L",
         "rule": "other_uplo"
@@ -1298,11 +1430,12 @@
    "double": {
     "L": {
      "constants": {
-      "s_per_byte": 7.614690361564064e-12,
-      "s_per_flop": 9.11308634544203e-13,
+      "s_per_byte": 1.493769066989949e-12,
+      "s_per_flop": 8.201335186991472e-13,
       "s_per_slot": 0.0,
-      "t_launch": 1.8268305317734306e-05,
-      "t_step": 6.648069217054507e-07
+      "t_item": 7.994539776785231e-10,
+      "t_launch": 1.2576175146572946e-05,
+      "t_step": 7.698434598150195e-07
      },
      "fallback": null,
      "fit": {
@@ -1312,8 +1445,8 @@
       "inactive": [
        "s_per_slot"
       ],
-      "max_abs_log": 0.9895625136228574,
-      "rms_log": 0.2493956400611507,
+      "max_abs_log": 0.33538856656427996,
+      "rms_log": 0.1256838023028938,
       "rows": 274
      },
      "support": {
@@ -1330,11 +1463,12 @@
     },
     "U": {
      "constants": {
-      "s_per_byte": 7.614690361564064e-12,
-      "s_per_flop": 9.11308634544203e-13,
+      "s_per_byte": 1.493769066989949e-12,
+      "s_per_flop": 8.201335186991472e-13,
       "s_per_slot": 0.0,
-      "t_launch": 1.8268305317734306e-05,
-      "t_step": 6.648069217054507e-07
+      "t_item": 7.994539776785231e-10,
+      "t_launch": 1.2576175146572946e-05,
+      "t_step": 7.698434598150195e-07
      },
      "fallback": {
       "byte_factor": 1.0,
@@ -1353,6 +1487,11 @@
         "rule": "other_uplo"
        },
        "s_per_slot": {
+        "factor": 1.0,
+        "from": "vendor/double/L",
+        "rule": "other_uplo"
+       },
+       "t_item": {
         "factor": 1.0,
         "from": "vendor/double/L",
         "rule": "other_uplo"
@@ -1377,11 +1516,12 @@
    "float": {
     "L": {
      "constants": {
-      "s_per_byte": 3.981227811461949e-12,
-      "s_per_flop": 1.3356871931997023e-13,
+      "s_per_byte": 1.5341555032671367e-12,
+      "s_per_flop": 1.047108034958994e-13,
       "s_per_slot": 0.0,
-      "t_launch": 1.813726437535097e-05,
-      "t_step": 2.3654742577950334e-07
+      "t_item": 2.2851542009981764e-10,
+      "t_launch": 1.4330831467498558e-05,
+      "t_step": 2.937875541186131e-07
      },
      "fallback": null,
      "fit": {
@@ -1391,8 +1531,8 @@
       "inactive": [
        "s_per_slot"
       ],
-      "max_abs_log": 0.8265979587474934,
-      "rms_log": 0.2246536763838081,
+      "max_abs_log": 0.4487938209114599,
+      "rms_log": 0.15015947408255434,
       "rows": 282
      },
      "support": {
@@ -1409,11 +1549,12 @@
     },
     "U": {
      "constants": {
-      "s_per_byte": 3.981227811461949e-12,
-      "s_per_flop": 1.3356871931997023e-13,
+      "s_per_byte": 1.5341555032671367e-12,
+      "s_per_flop": 1.047108034958994e-13,
       "s_per_slot": 0.0,
-      "t_launch": 1.813726437535097e-05,
-      "t_step": 2.3654742577950334e-07
+      "t_item": 2.2851542009981764e-10,
+      "t_launch": 1.4330831467498558e-05,
+      "t_step": 2.937875541186131e-07
      },
      "fallback": {
       "byte_factor": 1.0,
@@ -1432,6 +1573,11 @@
         "rule": "other_uplo"
        },
        "s_per_slot": {
+        "factor": 1.0,
+        "from": "vendor/float/L",
+        "rule": "other_uplo"
+       },
+       "t_item": {
         "factor": 1.0,
         "from": "vendor/float/L",
         "rule": "other_uplo"
