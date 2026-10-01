@@ -54,6 +54,7 @@ inline std::optional<dispatch::TrsmShape> trsm_op_shape(
     s.transA = transA;
     s.diag = diag;
     s.is_gpu = (ctx.device().type == DeviceType::GPU);
+    s.cuda_cc = ctx.device().cuda_compute_capability();
     s.cta_max_n = sycl_trsm::trsm_cta_max_n<T>();
     s.blocked_available = sycl_trsm::trsm_blocked_available<T>();
     return s;

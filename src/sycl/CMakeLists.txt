@@ -15,6 +15,7 @@
 set(SYCL_SOURCES
     gemm_kernels.cc
     trsm_native.cc
+    trsm_sg_left.cc
     gemv_native.cc
     spmm_native.cc
 )

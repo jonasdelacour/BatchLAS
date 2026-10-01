@@ -6,6 +6,7 @@
 // runtime variable moves it to local memory). Rows n..N-1 pad with Lc(s,s)=1.
 
 #include "trsm_native.hh"
+#include "trsm_canonical.hh"
 
 #include "../linalg-impl.hh"
 #include "../util/resident_capacity.hh"
@@ -25,28 +26,6 @@
 namespace batchlas::sycl_trsm {
 
 namespace {
-
-// The 24 (side, uplo, transA, diag) combinations fold into ONE recurrence over a
-// canonical unit-lower Lc. evidence: docs/perf/trsm.md#design-v1-v2-and-the-canonical-fold
-struct Canonical {
-    bool do_trans;
-    bool do_conj;
-    bool op_is_lower;
-    bool unit;
-    bool fwd;
-};
-
-inline Canonical canonicalise(Side side, Uplo uplo, Transpose transA, Diag diag) {
-    Canonical c{};
-    c.do_trans = (transA != Transpose::NoTrans);
-    c.do_conj = (transA == Transpose::ConjTrans);
-    c.op_is_lower = (uplo == Uplo::Lower) ? !c.do_trans : c.do_trans;
-    c.unit = (diag == Diag::Unit);
-    // fwd is the direction the canonical recurrence marches. Getting this
-    // backwards is silent: it solves a different triangle and still returns.
-    c.fwd = (side == Side::Left) ? c.op_is_lower : !c.op_is_lower;
-    return c;
-}
 
 // Smallest compile-time bucket >= n, or 0 for none: a narrower bucket would
 // silently solve the leading NxN system. evidence: docs/perf/trsm.md#the-bucket-ladder-that-truncated
@@ -109,20 +88,14 @@ Event trsm_native_v1(Queue& ctx,
 
     // Both operands are named so the assert is driven by the ladder it guards:
     // adding a rung above kMaxWg now fails to compile instead of aborting at launch.
-    constexpr int kMaxWg = 256;
+    constexpr int kMaxWg = kTrsmV1MaxWg;
     constexpr int kWorstRegsPerThread = 226;   // complex<double>, N=32
     // 256 lanes is 8 warps, 2 per sub-partition: 2 x 32 x ceil8(226) = 14,848 of 16,384.
     // evidence: docs/perf/lu.md#the-register-cap-that-binds-is-per-sub-partition
     static_assert(resident::sm89_fits(kWorstRegsPerThread, kMaxWg),
                   "the work-group ceiling is set by registers per sub-partition, not by "
                   "occupancy; re-run scripts/register_probe.sh before raising it");
-    int wg = 32;
-    for (int cand : {kMaxWg, 128, 64, 32}) {
-        if (cand > max_wg) continue;
-        wg = cand;
-        const int64_t groups_c = (q + cand - 1) / cand;
-        if (static_cast<int64_t>(bs) * groups_c >= static_cast<int64_t>(4) * cu) break;
-    }
+    const int wg = trsm_v1_ladder_wg(max_wg, cu, q, bs);
 
     const int groups = (q + wg - 1) / wg;
     const size_t tri_elems = static_cast<size_t>(N) * (N + 1) / 2;
@@ -340,8 +313,15 @@ template <typename T, Side SideV>
 Event trsm_native_v1_buckets(Queue& ctx,
                              const MatrixView<T, MatrixFormat::Dense>& A,
                              const MatrixView<T, MatrixFormat::Dense>& B,
-                             T alpha, Uplo uplo, Transpose transA, Diag diag) {
+                             T alpha, Uplo uplo, Transpose transA, Diag diag,
+                             bool allow_sg) {
     using D_ = typename sycl_device::DevMap<T>::type;
+    if constexpr (SideV == Side::Left) {
+        if (allow_sg && trsm_left_use_sg<T>(ctx.device().cuda_compute_capability(),
+                                static_cast<int>(A.rows()), static_cast<int>(B.cols()))) {
+            return trsm_native_sg_left_dispatch<T>(ctx, A, B, alpha, uplo, transA, diag);
+        }
+    }
     switch (smallest_bucket_ge(static_cast<int>(A.rows()))) {
         case 8:  return trsm_native_v1<T, 8, SideV>(ctx, A, B, alpha, uplo, transA, diag);
         case 16: return trsm_native_v1<T, 16, SideV>(ctx, A, B, alpha, uplo, transA, diag);
@@ -509,26 +489,29 @@ Event trsm_native_v1_dispatch(Queue& ctx,
                               Side side,
                               Uplo uplo,
                               Transpose transA,
-                              Diag diag) {
+                              Diag diag,
+                              bool allow_sg) {
     return (side == Side::Left)
-               ? trsm_native_v1_buckets<T, Side::Left>(ctx, A, B, alpha, uplo, transA, diag)
-               : trsm_native_v1_buckets<T, Side::Right>(ctx, A, B, alpha, uplo, transA, diag);
+               ? trsm_native_v1_buckets<T, Side::Left>(ctx, A, B, alpha, uplo, transA, diag,
+                                                       allow_sg)
+               : trsm_native_v1_buckets<T, Side::Right>(ctx, A, B, alpha, uplo, transA, diag,
+                                                        allow_sg);
 }
 
 template Event trsm_native_v1_dispatch<float>(
     Queue&, const MatrixView<float, MatrixFormat::Dense>&,
-    const MatrixView<float, MatrixFormat::Dense>&, float, Side, Uplo, Transpose, Diag);
+    const MatrixView<float, MatrixFormat::Dense>&, float, Side, Uplo, Transpose, Diag, bool);
 template Event trsm_native_v1_dispatch<double>(
     Queue&, const MatrixView<double, MatrixFormat::Dense>&,
-    const MatrixView<double, MatrixFormat::Dense>&, double, Side, Uplo, Transpose, Diag);
+    const MatrixView<double, MatrixFormat::Dense>&, double, Side, Uplo, Transpose, Diag, bool);
 template Event trsm_native_v1_dispatch<std::complex<float>>(
     Queue&, const MatrixView<std::complex<float>, MatrixFormat::Dense>&,
     const MatrixView<std::complex<float>, MatrixFormat::Dense>&, std::complex<float>,
-    Side, Uplo, Transpose, Diag);
+    Side, Uplo, Transpose, Diag, bool);
 template Event trsm_native_v1_dispatch<std::complex<double>>(
     Queue&, const MatrixView<std::complex<double>, MatrixFormat::Dense>&,
     const MatrixView<std::complex<double>, MatrixFormat::Dense>&, std::complex<double>,
-    Side, Uplo, Transpose, Diag);
+    Side, Uplo, Transpose, Diag, bool);
 
 // Measured CTA capacity per type; the gate is stack frame == 0, zero spill and
 // resident::sm89_fits at the widest rung of the ladder above -- registers per SUB-PARTITION,
