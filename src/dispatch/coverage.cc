@@ -54,10 +54,16 @@ uint32_t variant_key(const OpShape& s) {
 // Keyed on shape_class, not the exact shape: it buckets max(m,n,k) and batch by
 // power of two, so a 10,000-iteration test collapses to a handful of rows.
 uint64_t key_of(Op op, ScalarKind s, Backend b, uint32_t shape_class,
-                uint32_t variant = 0) {
+                uint32_t variant = 0, uint32_t profile = 0) {
     return (static_cast<uint64_t>(op) << 56) | (static_cast<uint64_t>(s) << 48) |
            (static_cast<uint64_t>(b) << 40) |
-           (static_cast<uint64_t>(variant) << 24) | shape_class;
+           (static_cast<uint64_t>(variant) << 24) |
+           (static_cast<uint64_t>(profile & 0xFF) << 16) | (shape_class & 0xFFFF);
+}
+
+// A forced BATCHLAS_ROUTING_PROFILE mid-process must not merge into the natural row.
+uint32_t profile_key(const OpShape& s) {
+    return (static_cast<uint32_t>(s.profile) << 1) | (s.profile_nearest ? 1u : 0u);
 }
 
 std::mutex& table_mutex() {
@@ -118,11 +124,12 @@ void emit() {
 
     std::fputs("kind,op,scalar,backend,shape_class,m,n,k,batch,"
                "chosen_origin,chosen_algo,calls,native_route_existed,"
-               "native_route_supported,library,uplo,side,diag,transA,transB\n", f);
+               "native_route_supported,library,uplo,side,diag,transA,transB,"
+               "profile,profile_nearest\n", f);
 
     std::lock_guard<std::mutex> lock(table_mutex());
     for (const auto& [k, r] : table()) {
-        std::fprintf(f, "reached,%s,%s,%s,%u,%lld,%lld,%lld,%lld,%s,%s,%llu,%d,%d,,%d,%d,%d,%d,%d\n",
+        std::fprintf(f, "reached,%s,%s,%s,%u,%lld,%lld,%lld,%lld,%s,%s,%llu,%d,%d,,%d,%d,%d,%d,%d,%s,%d\n",
                      std::string(op_name(r.op)).c_str(),
                      std::string(to_string(r.scalar)).c_str(),
                      backend_name(r.backend),
@@ -135,7 +142,9 @@ void emit() {
                      r.native_existed ? 1 : 0, r.native_supported,
                      static_cast<int>(r.shape.uplo), static_cast<int>(r.shape.side),
                      static_cast<int>(r.shape.diag), static_cast<int>(r.shape.transA),
-                     static_cast<int>(r.shape.transB));
+                     static_cast<int>(r.shape.transB),
+                     std::string(arch::to_string(r.shape.profile)).c_str(),
+                     r.shape.profile_nearest ? 1 : 0);
     }
     for (const auto& [k, m] : misses()) {
         std::fprintf(f, "miss,%s,%s,%s,,,,,,,,%llu,0,0,%s\n",
@@ -212,7 +221,7 @@ void record(Op op, ScalarKind scalar, Backend backend, const OpShape& shape,
             Route chosen, bool native_existed, int native_supported) {
     std::lock_guard<std::mutex> lock(table_mutex());
     auto& row = table()[key_of(op, scalar, backend, shape.shape_class(),
-                               variant_key(shape))];
+                               variant_key(shape), profile_key(shape))];
     if (row.calls == 0) {
         row.op = op;
         row.scalar = scalar;

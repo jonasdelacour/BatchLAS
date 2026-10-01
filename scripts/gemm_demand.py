@@ -31,7 +31,8 @@ NOTRANS, TRANS, CONJTRANS = 0, 1, 2
 
 COL = {name: i for i, name in enumerate(
     "kind op scalar backend shape_class m n k batch chosen_origin chosen_algo calls "
-    "native_route_existed native_route_supported library uplo side diag transA transB".split())}
+    "native_route_existed native_route_supported library uplo side diag transA transB "
+    "profile profile_nearest".split())}
 
 
 def supports(m, n, k, heterogeneous=False):
