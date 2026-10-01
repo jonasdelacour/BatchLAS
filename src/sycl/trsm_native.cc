@@ -109,20 +109,14 @@ Event trsm_native_v1(Queue& ctx,
 
     // Both operands are named so the assert is driven by the ladder it guards:
     // adding a rung above kMaxWg now fails to compile instead of aborting at launch.
-    constexpr int kMaxWg = 256;
+    constexpr int kMaxWg = kTrsmV1MaxWg;
     constexpr int kWorstRegsPerThread = 226;   // complex<double>, N=32
     // 256 lanes is 8 warps, 2 per sub-partition: 2 x 32 x ceil8(226) = 14,848 of 16,384.
     // evidence: docs/perf/lu.md#the-register-cap-that-binds-is-per-sub-partition
     static_assert(resident::sm89_fits(kWorstRegsPerThread, kMaxWg),
                   "the work-group ceiling is set by registers per sub-partition, not by "
                   "occupancy; re-run scripts/register_probe.sh before raising it");
-    int wg = 32;
-    for (int cand : {kMaxWg, 128, 64, 32}) {
-        if (cand > max_wg) continue;
-        wg = cand;
-        const int64_t groups_c = (q + cand - 1) / cand;
-        if (static_cast<int64_t>(bs) * groups_c >= static_cast<int64_t>(4) * cu) break;
-    }
+    const int wg = trsm_v1_ladder_wg(max_wg, cu, q, bs);
 
     const int groups = (q + wg - 1) / wg;
     const size_t tri_elems = static_cast<size_t>(N) * (N + 1) / 2;
