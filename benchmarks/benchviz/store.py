@@ -30,7 +30,8 @@ def _sh(*argv) -> str:
 
 
 # What the binaries are compiled from; benchviz's own Python is not.
-_SOURCE_PATHS = ("src", "include", "benchmarks", "cmake", "CMakeLists.txt", ":(exclude)benchmarks/benchviz")
+_SOURCE_PATHS = ("src", "include", "benchmarks", "cmake", "CMakeLists.txt", ":(exclude)benchmarks/benchviz",
+                 ":(exclude)benchmarks/results")
 
 
 def build_info(build_dir: Path) -> Dict[str, object]:
