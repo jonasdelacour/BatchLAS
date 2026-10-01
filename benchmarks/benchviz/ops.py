@@ -187,7 +187,7 @@ def _fb(name, title, flops, nrhs=0, footprint=4.0, orders=None, notes="", setup_
         types=TYPES,
         orders=orders or (4, 8, 16, 32, 64, 128, 256, 512),
         arms=(Arm("batchlas", fb_arm="native"), Arm("vendor", fb_arm="vendor")),
-        flops=flops, nrhs=nrhs, footprint=footprint, notes=notes, setup_ops=setup_ops, max_order=1024,
+        flops=flops, nrhs=nrhs, footprint=footprint, notes=notes, setup_ops=setup_ops, max_order=2048,
         composed_of=composed_of, plane=plane,
     )
 
