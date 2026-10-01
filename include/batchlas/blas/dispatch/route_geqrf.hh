@@ -31,7 +31,9 @@ struct GeqrfShape : OpShape {
 };
 
 // sm_120 only (cc 0 / 89 never measured): the CTA skinny leg beats cuSOLVER and the resident
-// leaf. Launcher and preferred() share it. evidence: docs/perf/blackwell.md#geqrf-the-skinny-register-leg
+// leaf. Launcher and preferred() share it. Deliberately batch-free: below the launcher's
+// heavy-lane batch gate the resident leaf runs instead, and still beats the vendor (b256
+// 0.10-0.37x). evidence: docs/perf/blackwell.md#geqrf-the-skinny-register-leg
 template <typename T>
 constexpr bool geqrf_skinny_window(int cuda_cc, int64_t m, int64_t n) {
     if (!is_sm120_family(cuda_cc)) return false;

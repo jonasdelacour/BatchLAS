@@ -84,6 +84,8 @@ constexpr std::size_t kGeqrfBytesPerItem = 128;
 constexpr std::size_t kGeqrfPackBytes = 4096;
 constexpr int kGeqrfBytesRuleMinCols = 8;
 constexpr int kGeqrfBytesRuleMaxRows = 256;
+// Above 16 KiB a narrower group loses (float 256x24 / 224x32 1.08-1.09x BASE at wg128).
+constexpr std::size_t kGeqrfNarrowMaxBytes = 16384;
 // Narrower groups only pay once the batch fills the device (float 40x32: 2.2x slower at
 // batch 512, 1.16x at 1024, 0.76x at 2048).
 constexpr int kGeqrfBytesRuleMinBatch = 2048;
@@ -99,6 +101,7 @@ bool geqrf_bytes_rule(const Device& dev, int batch) {
 template <typename T>
 inline int geqrf_panel_wg_bytes(int m, int n, int max_wg) {
     const int cap = geqrf_panel_wg(n, max_wg);
+    if (geqrf_slm_bytes<T>(m, n) > kGeqrfNarrowMaxBytes) return cap;
     const std::size_t per = geqrf_slm_bytes<T>(m, n) / kGeqrfBytesPerItem;
     int wg = 32;
     while (wg * 2 <= cap && static_cast<std::size_t>(wg * 2) <= per) wg *= 2;
