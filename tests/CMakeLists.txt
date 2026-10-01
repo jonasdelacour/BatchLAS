@@ -279,6 +279,13 @@ function(batchlas_add_test_target test_name)
        AND test_name MATCHES "^(gemm_tests|syr2k_tests|trmm_tests)$")
         target_link_libraries(${test_name} PRIVATE CUDA::cudart)
     endif()
+    # util_device_queue_tests checks Device::cuda_compute_capability() against the
+    # CUDA runtime's own answer, an oracle independent of the SYCL string it parses.
+    if(BATCHLAS_HAS_CUDA_BACKEND AND TARGET CUDA::cudart
+       AND test_name STREQUAL "util_device_queue_tests")
+        target_link_libraries(${test_name} PRIVATE CUDA::cudart)
+        target_compile_definitions(${test_name} PRIVATE BATCHLAS_UTIL_TESTS_HAVE_CUDART=1)
+    endif()
     # options_api_tests reads options.hh back to check that no backend-deducing
     # overload was added without its pointer check -- a rule no runtime test can
     # enforce for an entry point that does not exist yet.
@@ -461,6 +468,24 @@ add_test(NAME cmake_detect_sycl_tests
     COMMAND "${CMAKE_COMMAND}" "-DBATCHLAS_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/detect_sycl_arch_tests.cmake")
 set_tests_properties(cmake_detect_sycl_tests PROPERTIES LABELS "util")
+
+# device_calls_tests: scans the built libraries' NVPTX images and fails if any
+# kernel calls a SPIR-V builtin (sycl::fma, barriers, id queries) out of line --
+# what an icpx build without -ffp-model=precise produces, 6-15x slower and green
+# in every functional test. Skips (77) when there is no NVPTX image or no cuobjdump.
+# evidence: docs/perf/blackwell.md#device-call-guard
+find_package(Python3 QUIET COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+    set(_device_calls_args "${PROJECT_BINARY_DIR}")
+    if(CUDAToolkit_BIN_DIR AND EXISTS "${CUDAToolkit_BIN_DIR}/cuobjdump")
+        list(APPEND _device_calls_args --cuobjdump "${CUDAToolkit_BIN_DIR}/cuobjdump")
+    endif()
+    add_test(NAME device_calls_tests
+        COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/scripts/check_device_calls.py"
+                ${_device_calls_args})
+    set_tests_properties(device_calls_tests PROPERTIES
+        LABELS "util" SKIP_RETURN_CODE 77 TIMEOUT 600)
+endif()
 
 # ---------------------------------------------------------------------------
 # consumer_package_tests: the outside-in guard.

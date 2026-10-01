@@ -33,6 +33,11 @@ inline void potrf_lpanel_body(const sycl::nd_item<1>& it,
                               int* __restrict fail,
                               D* __restrict Ag, int ldg,
                               int n) {
+    // Local-space views (generic cfloat reads were LD.E). evidence: docs/perf/blackwell.md#potrf-lpanel-vector-sb
+    const auto sAl = sycl::address_space_cast<sycl::access::address_space::local_space,
+                                              sycl::access::decorated::no>(sA);
+    const auto sBl = sycl::address_space_cast<sycl::access::address_space::local_space,
+                                              sycl::access::decorated::no>(sB);
     if (tid == 0) *fail = 0;
     sycl::group_barrier(it.get_group());  // B0
 
@@ -73,7 +78,7 @@ inline void potrf_lpanel_body(const sycl::nd_item<1>& it,
                     v = sycl_device::dev_conj(
                         Ag[(j + i) + static_cast<std::ptrdiff_t>(k + kk) * ldg]);
                 }
-                sB[i + kk * NB] = v;
+                sBl[i + kk * NB] = v;
             }
             sycl::group_barrier(it.get_group());  // B1
 
@@ -85,11 +90,25 @@ inline void potrf_lpanel_body(const sycl::nd_item<1>& it,
                                  ? Ag[row + static_cast<std::ptrdiff_t>(k + kk) * ldg]
                                  : D{};
                 }
+                // Lane-uniform sB column as 16-byte local vectors; each rS[i] still sums kk
+                // in ascending order. evidence: docs/perf/blackwell.md#potrf-lpanel-vector-sb
+                using V = sycl::vec<float, 4>;
+                constexpr int VW = 16 / static_cast<int>(sizeof(D));
+                static_assert((NB * sizeof(D)) % 16 == 0, "sB column must be whole vectors");
+                auto sBv = sycl::address_space_cast<sycl::access::address_space::local_space,
+                                                    sycl::access::decorated::no>(
+                    reinterpret_cast<V*>(sB));
 #pragma unroll
-                for (int i = 0; i < NB; ++i) {
+                for (int kk = 0; kk < NB; ++kk) {
+                    D col[NB];
 #pragma unroll
-                    for (int kk = 0; kk < NB; ++kk) {
-                        sycl_device::fma_acc(rS[i], rA[kk], sB[i + kk * NB]);
+                    for (int v = 0; v < NB / VW; ++v) {
+                        const V x = sBv[(kk * NB) / VW + v];
+                        __builtin_memcpy(&col[v * VW], &x, 16);
+                    }
+#pragma unroll
+                    for (int i = 0; i < NB; ++i) {
+                        sycl_device::fma_acc(rS[i], rA[kk], col[i]);
                     }
                 }
             }
@@ -109,14 +128,14 @@ inline void potrf_lpanel_body(const sycl::nd_item<1>& it,
                             v = sycl_device::dev_from_real<D>(sycl_device::dev_real(v));
                         }
                     }
-                    sA[row + static_cast<std::ptrdiff_t>(i) * slda] = v;
+                    sAl[row + static_cast<std::ptrdiff_t>(i) * slda] = v;
                 }
             }
         }
         sycl::group_barrier(it.get_group());  // B3
 
         for (int i = 0; i < ib; ++i) {
-            const R d = sycl_device::dev_real(sA[(j + i) + static_cast<std::ptrdiff_t>(i) * slda]);
+            const R d = sycl_device::dev_real(sAl[(j + i) + static_cast<std::ptrdiff_t>(i) * slda]);
 
             // `!(d > 0)`, not `d <= 0`, so NaN is rejected too, as LAPACK does; every lane
             // reads the same local cell, so `bad` needs no broadcast.
@@ -133,21 +152,21 @@ inline void potrf_lpanel_body(const sycl::nd_item<1>& it,
                 const R dkk = sycl::sqrt(d);
                 const R rs = R(1) / dkk;  // NOT rsqrt: rsqrt.approx is not the reference
                 if (row == j + i) {
-                    sA[row + static_cast<std::ptrdiff_t>(i) * slda] =
+                    sAl[row + static_cast<std::ptrdiff_t>(i) * slda] =
                         sycl_device::dev_from_real<D>(dkk);
                 } else if (row > j + i && row < n) {
-                    sA[row + static_cast<std::ptrdiff_t>(i) * slda] = sycl_device::dev_mul_real(
-                        sA[row + static_cast<std::ptrdiff_t>(i) * slda], rs);
+                    sAl[row + static_cast<std::ptrdiff_t>(i) * slda] = sycl_device::dev_mul_real(
+                        sAl[row + static_cast<std::ptrdiff_t>(i) * slda], rs);
                 }
             }
             sycl::group_barrier(it.get_group());  // B4
 
             if (ok && row > j + i && row < n) {
-                const D lri = sA[row + static_cast<std::ptrdiff_t>(i) * slda];
+                const D lri = sAl[row + static_cast<std::ptrdiff_t>(i) * slda];
                 for (int c = i + 1; c < ib; ++c) {
-                    const D ljc = sA[(j + c) + static_cast<std::ptrdiff_t>(i) * slda];
-                    sA[row + static_cast<std::ptrdiff_t>(c) * slda] = sycl_device::dev_sub(
-                        sA[row + static_cast<std::ptrdiff_t>(c) * slda],
+                    const D ljc = sAl[(j + c) + static_cast<std::ptrdiff_t>(i) * slda];
+                    sAl[row + static_cast<std::ptrdiff_t>(c) * slda] = sycl_device::dev_sub(
+                        sAl[row + static_cast<std::ptrdiff_t>(c) * slda],
                         sycl_device::dev_mul(lri, sycl_device::dev_conj(ljc)));
                 }
             }
@@ -160,7 +179,7 @@ inline void potrf_lpanel_body(const sycl::nd_item<1>& it,
             for (int i = 0; i < ib; ++i) {
                 if (row >= j + i) {
                     Ag[row + static_cast<std::ptrdiff_t>(j + i) * ldg] =
-                        sA[row + static_cast<std::ptrdiff_t>(i) * slda];
+                        sAl[row + static_cast<std::ptrdiff_t>(i) * slda];
                 }
             }
         }

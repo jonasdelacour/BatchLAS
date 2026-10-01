@@ -425,5 +425,54 @@ class Rerender(unittest.TestCase):
         self.assertIn("latex was not able", after["error"])
 
 
+class BuildProvenance(unittest.TestCase):
+    """A campaign records how its binaries were compiled, and flags the known-bad configs."""
+
+    def fake_build(self, compiler_id, flags, build_type="RelWithDebInfo"):
+        b = Path(tempfile.mkdtemp(dir=self.tmp.name))
+        (b / "src" / "CMakeFiles" / "batchlas_sycl_obj.dir").mkdir(parents=True)
+        (b / "CMakeFiles" / "3.28.3").mkdir(parents=True)
+        (b / "src" / "libbatchlas_sycl.so.0.1.0").write_bytes(b"")
+        (b / "CMakeCache.txt").write_text(f"CMAKE_BUILD_TYPE:STRING={build_type}\nCMAKE_CXX_COMPILER:FILEPATH=/x/cxx\n")
+        (b / "CMakeFiles" / "3.28.3" / "CMakeCXXCompiler.cmake").write_text(
+            f'set(CMAKE_CXX_COMPILER_ID "{compiler_id}")\nset(CMAKE_CXX_COMPILER_ID_RUN 1)\n')
+        (b / "src" / "CMakeFiles" / "batchlas_sycl_obj.dir" / "flags.make").write_text(f"CXX_FLAGS = {flags}\n")
+        return b
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def info(self, *args, nvidia=True, **kw):
+        import store
+        real = store._has_nvidia_gpu
+        store._has_nvidia_gpu = lambda: nvidia
+        try:
+            return store.build_info(self.fake_build(*args, **kw))
+        finally:
+            store._has_nvidia_gpu = real
+
+    def test_clean_icpx_cuda_build_records_type_and_has_no_warning(self):
+        i = self.info("IntelLLVM", "-O2 -ffp-model=precise -fsycl-targets=nvptx64-nvidia-cuda,spir64_x86_64")
+        self.assertEqual((i["build_type"], i["compiler_id"], i["fp_model"]), ("RelWithDebInfo", "IntelLLVM", "precise"))
+        self.assertEqual(i["warnings"], [])
+
+    def test_icpx_without_precise_warns_and_the_last_flag_wins(self):
+        self.assertIn("fp-model", " ".join(self.info("IntelLLVM", "-O2 -fsycl-targets=nvptx64-nvidia-cuda")["warnings"]))
+        late = self.info("IntelLLVM", "-ffp-model=precise -ffp-model=fast -fsycl-targets=nvptx64-nvidia-cuda")
+        self.assertEqual(late["fp_model"], "fast")
+        self.assertEqual(len(late["warnings"]), 1)
+
+    def test_clang_default_is_not_flagged(self):
+        self.assertEqual(self.info("Clang", "-O3 -fsycl-targets=nvptx64-nvidia-cuda")["warnings"], [])
+
+    def test_cpu_only_targets_warn_only_on_an_nvidia_box(self):
+        flags = "-ffp-model=precise -fsycl-targets=spir64_x86_64"
+        self.assertIn("CPU-only", " ".join(self.info("IntelLLVM", flags, nvidia=True)["warnings"]))
+        self.assertEqual(self.info("IntelLLVM", flags, nvidia=False)["warnings"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

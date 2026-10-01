@@ -211,6 +211,13 @@ Event geqrf_blocked_dispatch(Queue& ctx,
 
     BumpAllocator pool(workspace);
     auto ws = geqrf_blocked_layout<T>(ctx, pool, m, n, nb, batch);
+    // W1/W2 are beta = 0 GEMM outputs, but the native GEMM epilogues still read C (0 * NaN
+    // from a dirty arena is NaN). Remove once that is fixed. evidence: docs/design/known-defects.md#11-native-gemm-reads-c-at-beta-zero
+    if (n - nb > 0) {
+        ctx->memset(ws.w1.data(), 0, ws.w1.size() * sizeof(T));
+        ctx->memset(ws.w2.data(), 0, ws.w2.size() * sizeof(T));
+        if (!ctx.in_order()) ctx.wait();
+    }
 
     const int ld = A.ld();
     const int stride = A.stride();
