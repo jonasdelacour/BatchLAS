@@ -9,6 +9,64 @@ float + cfloat). Worst batchlas/vendor time ratios: cfloat gemm 3.0x geomean (15
 32x32x1024), trsm float 1.5x (11x at n=32 q=8), getrs cfloat 1.8x (10x at nrhs=16),
 potrf cfloat 1.6x (9.5x at n=256), geqrf skinny 2-3.7x.
 
+## Result
+
+Same campaign re-run on the tuned branch: `cuda-blackwell-tuned` (worktree-blackwell-tuning
+@ ba07a99f, icpx 2026.0 RelWithDebInfo, fp model precise, 4 GPUs, 2066 arm-cells, same
+grid). Cells are batchlas time / vendor time with batchlas pinned to its native walk
+(benchviz's batchlas arm), so cells that Auto routes to the vendor still count here.
+
+| op | type | cells | geomean before | geomean after | cells > 1.1 before | after |
+|---|---|---|---|---|---|---|
+| gemm | cfloat | 64 | 3.01 | 0.80 | 55 | 15 |
+| gemm | float | 64 | 1.12 | 0.82 | 46 | 1 |
+| gemv | cfloat | 64 | 1.02 | 1.00 | 1 | 0 |
+| gemv | float | 64 | 1.01 | 0.97 | 5 | 0 |
+| geqrf | cfloat | 35 | 0.77 | 0.44 | 14 | 0 |
+| geqrf | float | 36 | 0.71 | 0.39 | 12 | 0 |
+| gesv | cfloat | 40 | 1.23 | 0.46 | 18 | 0 |
+| gesv | float | 40 | 0.65 | 0.34 | 9 | 0 |
+| gesvd | float | 5 | 0.24 | 0.20 | 0 | 0 |
+| getrf | cfloat | 8 | 1.04 | 0.63 | 3 | 0 |
+| getrf | float | 8 | 0.61 | 0.47 | 1 | 0 |
+| getrs | cfloat | 40 | 1.76 | 0.43 | 28 | 0 |
+| getrs | float | 40 | 0.94 | 0.34 | 17 | 0 |
+| orgqr | cfloat | 36 | 0.05 | 0.05 | 0 | 0 |
+| orgqr | float | 34 | 0.04 | 0.04 | 0 | 0 |
+| ormqr | float | 28 | 0.01 | 0.01 | 0 | 0 |
+| posv | cfloat | 40 | 0.57 | 0.19 | 11 | 0 |
+| posv | float | 40 | 1.05 | 0.44 | 23 | 0 |
+| potrf | cfloat | 8 | 1.56 | 0.53 | 5 | 2 |
+| potrf | float | 8 | 0.66 | 0.39 | 3 | 0 |
+| spmm | cfloat | 42 | 0.48 | 0.44 | 0 | 4 |
+| spmm | float | 42 | 0.33 | 0.26 | 0 | 0 |
+| syev | cfloat | 8 | 0.69 | 0.64 | 1 | 1 |
+| syev | float | 8 | 0.66 | 0.52 | 1 | 1 |
+| syr2k | float | 49 | 0.07 | 0.06 | 0 | 0 |
+| syrk | float | 49 | 0.07 | 0.06 | 0 | 0 |
+| trmm | float | 7 | 0.79 | 0.77 | 1 | 1 |
+| trsm | cfloat | 49 | 0.46 | 0.10 | 13 | 0 |
+| trsm | float | 49 | 1.51 | 0.52 | 27 | 0 |
+| **all** | | 1005 | 0.512 | 0.291 | 294 | 25 |
+
+Remaining losers (> 1.1, 25 cells):
+
+- cfloat gemm m=n=128..1024: 1.10-1.18 (gemm-7, the large-tile residual; not attempted).
+- cfloat spmm n=16384: 1.11-1.13. A precise-fp-model regression (the flag alone takes
+  5.51 -> 6.49 ms on the main harness; cuSPARSE 5.76). See the spmm subsection if present.
+- cfloat potrf n=512 (Blocked) 1.48 and n=256 (LPanel) 1.16: the complex trailing update.
+  Under Auto, n=256 goes to the vendor.
+- syev cfloat n=1024 b64 1.50 (Auto already ships cuSOLVER) and float n=1024 b128
+  two_stage 1.18 (SYEV-4: the sb2st chase is one work-group per matrix).
+- trmm float n=16 b32768 1.43 and float gemm 8x8x1024 1.12: not addressed.
+
+Full ctest, tuned branch against the main build it replaces (both on this machine): 10
+failing suites against 15. bdsdc, gesvd, stedc, syev_jacobi_cta, syev_two_stage, syevx and
+sytrd_blocked now pass. `cond_tests` (CondTest/2.RandomHermitianTridiagonalLogCondSpectral,
+0.52 decades vs a 0.5 tolerance) and `sytrd_cta_tests` (SytrdCtaTest/0.RandomSymmetricUpper,
+2.3e-5 vs 2e-5) newly fail. Both fail identically at 43b9f806, which is main plus only the
+`-ffp-model=precise` flag, and on dpcpp builds of main: the fast fp model was hiding them.
+
 ## icpx fast fp-model
 
 The campaign build used oneAPI icpx 2026.0, whose default is `-fp-model=fast`. Device
