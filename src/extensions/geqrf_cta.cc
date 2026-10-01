@@ -77,10 +77,11 @@ inline int geqrf_panel_wg(int n, int max_wg) {
 // geqrf_panel_wg gives it, and with them work-group barriers.
 inline bool geqrf_packable(int m, int n) { return m <= 32 && n <= 32; }
 
-// sm_120's width rule: about 128 B of tile per work-item, capped by the column ladder above,
-// and one packed sub-group per panel for tiles up to 4 KiB at any m. cc 0 / 89 keep the two
-// predicates above. evidence: docs/perf/blackwell.md#geqrf-leaf-width-from-tile-bytes
-constexpr std::size_t kGeqrfBytesPerItem = 128;
+// sm_120's width rule: a fixed tile share per work-item (float 72 B, cfloat 96 B), capped by
+// the column ladder above, and one packed sub-group per panel for tiles up to 4 KiB at any m.
+// cc 0 / 89 keep the two predicates above. evidence: docs/perf/blackwell.md#geqrf-leaf-width-from-tile-bytes
+template <typename T>
+constexpr std::size_t kGeqrfBytesPerItem = std::is_same_v<T, float> ? 72 : 96;
 constexpr std::size_t kGeqrfPackBytes = 4096;
 constexpr int kGeqrfBytesRuleMinCols = 8;
 constexpr int kGeqrfBytesRuleMaxRows = 256;
@@ -102,7 +103,7 @@ template <typename T>
 inline int geqrf_panel_wg_bytes(int m, int n, int max_wg) {
     const int cap = geqrf_panel_wg(n, max_wg);
     if (geqrf_slm_bytes<T>(m, n) > kGeqrfNarrowMaxBytes) return cap;
-    const std::size_t per = geqrf_slm_bytes<T>(m, n) / kGeqrfBytesPerItem;
+    const std::size_t per = geqrf_slm_bytes<T>(m, n) / kGeqrfBytesPerItem<T>;
     int wg = 32;
     while (wg * 2 <= cap && static_cast<std::size_t>(wg * 2) <= per) wg *= 2;
     return wg;

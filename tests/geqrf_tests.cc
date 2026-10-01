@@ -2959,7 +2959,11 @@ TYPED_TEST(GeqrfTest, Sm120LeafWidthFollowsTileBytes) {
         EXPECT_EQ(wg(m32k / 2, 32), 128) << "16 KiB is 128 work-items";
         EXPECT_EQ(wg(m32k / 2 + 1, 32), 256) << "over 16 KiB keeps the ladder";
         EXPECT_EQ(wg(3 * m32k / 4, 32), 256) << "24 KiB keeps the ladder";
-        EXPECT_LE(wg(2 * packm, 8), 64) << "8 KiB at 128 B an item is 64 work-items";
+        EXPECT_LE(wg(2 * packm, 8), 64) << "8 KiB is at most 64 work-items";
+        // 128 work-items from float 72 B / cfloat 96 B of tile each: straddle that edge.
+        const int m128 = int(128 * (std::is_same_v<T, float> ? 72 : 96) / (32 * sizeof(T)));
+        EXPECT_EQ(wg(m128, 32), 128) << m128 << "x32";
+        EXPECT_EQ(wg(m128 - 1, 32), 64) << m128 - 1 << "x32";
         EXPECT_EQ(wg(m32k / 2, 32, kGate), 128) << "the gate admits batch 2048";
         EXPECT_EQ(wg(m32k / 2, 32, kGate - 1), 256) << "below the gate the ladder is kept";
         EXPECT_EQ(G(packm, 8, kGate - 1), 1) << "below the gate a 4 KiB panel does not pack";
