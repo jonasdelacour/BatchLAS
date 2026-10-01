@@ -4,6 +4,7 @@
 // device-code cluster across libraries is a `ptxas fatal: Unresolved extern function`.
 // evidence: docs/perf/potrf.md
 
+#include "potrf_launch_plan.hh"
 #include "potrf_native.hh"
 #include "potrf_cta_device.hh"
 #include "potrf_slm_hole.hh"
@@ -33,119 +34,31 @@ namespace {
 
 using potrf_native::PotrfScope;
 
-// Per scalar type: NB is the panel width and the length of the d[]/x[] register
-// arrays, TS the thread tile. evidence: docs/perf/potrf.md#register-gate
+// Geometry, capacity and the L ladder live in potrf_launch_plan.hh: the launcher, the
+// ceiling supports() advertises and the cost model read that one definition.
 template <typename T>
-struct PotrfCtaConst;
-template <> struct PotrfCtaConst<float>                { static constexpr int NB = 8;  static constexpr int TS = 4; };
-template <> struct PotrfCtaConst<double>               { static constexpr int NB = 8;  static constexpr int TS = 4; };
-template <> struct PotrfCtaConst<std::complex<float>>  { static constexpr int NB = 8;  static constexpr int TS = 4; };
-template <> struct PotrfCtaConst<std::complex<double>> { static constexpr int NB = 8;  static constexpr int TS = 2; };
+using PotrfCtaConst = potrf_plan::CtaConst<T>;
 
 // Convenience overloads only; every real decision re-reads the device. NOT device_limits.hh's
 // constant, which is hardcoded per architecture and never queried.
 // evidence: docs/perf/potrf.md#the-slm-budget-and-the-fit-ceilings
 constexpr std::size_t kPotrfReferenceSlmBudget = 97280;
 
-constexpr int kPotrfMaxL = 256;
-constexpr int kPotrfElemsPerItem = 24;
+using PotrfCtaLaunch = potrf_plan::CtaGeometry;
 
-// Called by BOTH the capability query and the launcher, so the ceiling supports() advertises
-// cannot disagree with what the kernel allocates: under-estimating here advertises an order whose
-// launch fails at enqueue. lda = n | 1 is odd so a stride-lda row read is conflict-free; the 256
-// over-covers *fail plus alignment slack. evidence: docs/perf/potrf.md#the-slm-budget-and-the-fit-ceilings
-constexpr std::size_t potrf_slm_per_matrix(int n, int NB, int TS,
-                                           std::size_t sz_d, std::size_t sz_r) {
-    const std::size_t lda = static_cast<std::size_t>(n | 1);
-    const int m2_0 = (n > NB) ? (n - NB) : 0;
-    const int Rt0 = (m2_0 + TS - 1) / TS;
-    return lda * static_cast<std::size_t>(n) * sz_d
-         + static_cast<std::size_t>(NB) * sz_r
-         + 256
-         + 4 * static_cast<std::size_t>(Rt0 + 1);
-}
-
-// The 48 KB launch hole is spelled ONCE, in potrf_slm_hole.hh, because the LPanel leaf pads
-// against the same band. Inert only while these kernels have zero static shared.
-using potrf_native::potrf_hole_padded;
-
-// Scope is derived here and nowhere else, so no caller can assert one the L ladder disagrees with.
-struct PotrfCtaLaunch {
-    int L = 32;               // work-items per matrix
-    int G = 1;                // matrices per work-group; > 1 only when L == 32
-    int wg_size = 32;
-    int num_wg = 0;
-    int lda = 1;
-    int Rt0 = 0;
-    std::size_t slm_per_matrix = 0;
-    std::size_t slm_total = 0;   // G * slm_per_matrix, after the hole pad
-    PotrfScope scope = PotrfScope::SubGroup;
-    bool fits = false;
-};
-
-template <int NB, int TS>
-PotrfCtaLaunch potrf_cta_launch_params(int n, int batch, std::size_t sz_d, std::size_t sz_r,
-                                       std::size_t slm_budget, int max_wg) {
-    PotrfCtaLaunch p;
-    p.lda = n | 1;
-    const int m2_0 = (n > NB) ? (n - NB) : 0;
-    p.Rt0 = (m2_0 + TS - 1) / TS;
-    const long long Ntiles_0 = static_cast<long long>(p.Rt0) * (p.Rt0 + 1) / 2;
-
-    // L follows m2_0 = n - NB, the first trailing update, not n, and counts elements
-    // rather than tiles because TS varies. evidence: docs/perf/potrf.md#the-l-ladder
-    {
-        const long long work_elems = Ntiles_0 * static_cast<long long>(TS) * TS;
-        int want = 32;
-        while (want < kPotrfMaxL &&
-               static_cast<long long>(want) * kPotrfElemsPerItem < work_elems) {
-            want <<= 1;
-        }
-        p.L = want;
-    }
-    while (p.L > 32 && p.L > max_wg) p.L >>= 1;
-
-    p.slm_per_matrix = potrf_slm_per_matrix(n, NB, TS, sz_d, sz_r);
-
-    // G > 1 only at L == 32, where the scope below is SubGroup and the G sub-groups
-    // of the work-group are independent. slm_budget is already the ONE work-group's
-    // slice, so the pack helper's budget argument is that same number.
-    if (p.L == 32 && p.slm_per_matrix > 0) {
-        p.G = resident::pack_matrices_per_wg(p.slm_per_matrix, p.L, slm_budget, max_wg);
-    } else {
-        p.G = 1;
-    }
-
-    p.wg_size = p.G * p.L;
-    p.num_wg = (batch + p.G - 1) / p.G;
-    p.scope = (p.L == 32) ? PotrfScope::SubGroup : PotrfScope::WorkGroup;
-    p.slm_total = potrf_hole_padded(static_cast<std::size_t>(p.G) * p.slm_per_matrix);
-    p.fits = (p.slm_total <= slm_budget) && (p.wg_size <= max_wg);
-
-    // Under Scope::WorkGroup the phase barriers are work-group barriers, which is
-    // correct only when the work-group holds exactly one matrix.
-    if (p.scope == PotrfScope::WorkGroup && p.G != 1) {
+// Under Scope::WorkGroup the phase barriers are work-group barriers, which is correct only
+// when the work-group holds exactly one matrix.
+inline void potrf_cta_check_scope(const PotrfCtaLaunch& p) {
+    if (!p.subgroup_scope && p.G != 1) {
         throw batchlas::internal_error("potrf_cta: Scope::WorkGroup with G != 1 is a race by construction");
     }
-    return p;
 }
 
 }  // namespace
 
 template <typename T>
 int potrf_cta_max_n_for_slm(std::size_t slm_budget_bytes, int min_blocks_per_sm) {
-    // The pad is applied inside the walked function, so this ceiling and the launcher's
-    // p.fits test remain one predicate; the walk's `break` clause lives in
-    // resident_max_n and is documented there.
-    return resident::resident_max_n(
-        [](int n) {
-            using C = PotrfCtaConst<T>;
-            using DM = sycl_device::DevMap<T>;
-            return potrf_hole_padded(potrf_slm_per_matrix(n, C::NB, C::TS,
-                                                          sizeof(typename DM::type),
-                                                          sizeof(typename DM::real)));
-        },
-        slm_budget_bytes, min_blocks_per_sm);
+    return potrf_plan::cta_max_n<T>(slm_budget_bytes, min_blocks_per_sm);
 }
 
 template <typename T>
@@ -173,15 +86,9 @@ std::size_t potrf_cta_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::
 // The launch geometry, for tests; see potrf_native.hh.
 template <typename T>
 unsigned potrf_cta_debug_launch(Queue& ctx, int n, int batch, int min_blocks_per_sm) {
-    using C = PotrfCtaConst<T>;
-    using DM = sycl_device::DevMap<T>;
-    const auto dev = ctx.device();
-    const std::size_t budget = resident::device_slm_budget(
-        dev.get_property(DeviceProperty::LOCAL_MEM_SIZE));
-    const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
-    const auto p = potrf_cta_launch_params<C::NB, C::TS>(
-        n, batch, sizeof(typename DM::type), sizeof(typename DM::real),
-        resident::occupancy_budget(budget, min_blocks_per_sm), max_wg);
+    const auto p = potrf_plan::cta_geometry<T>(n, batch, potrf_device_facts(ctx.device()),
+                                               min_blocks_per_sm);
+    potrf_cta_check_scope(p);
     if (!p.fits) return 0u;
     return (static_cast<unsigned>(p.L) << 16) | static_cast<unsigned>(p.G);
 }
@@ -210,7 +117,7 @@ Event potrf_cta_launch(Queue& ctx,
     const int G = p.G;
     const int L = p.L;
     const int wg_size = p.wg_size;
-    const int num_wg = p.num_wg;
+    const std::int64_t num_wg = p.num_wg;
     int32_t* info_ptr = info.data();
 
     // Padded into the TILE accessor: a fifth, unused local_accessor is plausibly eliminated.
@@ -284,9 +191,6 @@ Event potrf_cta_dispatch(Queue& ctx,
                          Span<int32_t> info_out,
                          int min_blocks_per_sm) {
     using C = PotrfCtaConst<T>;
-    using DM = sycl_device::DevMap<T>;
-    constexpr std::size_t sz_d = sizeof(typename DM::type);
-    constexpr std::size_t sz_r = sizeof(typename DM::real);
 
     const int n = static_cast<int>(A.rows());
     const int batch = static_cast<int>(A.batch_size());
@@ -316,13 +220,13 @@ Event potrf_cta_dispatch(Queue& ctx,
     // The OCCUPANCY slice, not the whole budget: at the default target this gate is the
     // same predicate supports() advertises, so a routed order cannot fail at enqueue. The
     // blocked driver passes the target ITS block width was clamped against, which above
-    // kPotrfOccupancyNbMaxOrder is 1 -- the leaf's order and its gate stay one decision.
-    const std::size_t device_budget = resident::device_slm_budget(
-        dev.get_property(DeviceProperty::LOCAL_MEM_SIZE));
+    // potrf_plan::kOccupancyNbMaxOrder is 1 -- the leaf's order and its gate stay one decision.
+    const auto facts = potrf_device_facts(dev);
+    const std::size_t device_budget = resident::device_slm_budget(facts.local_mem_bytes);
     const std::size_t budget = resident::occupancy_budget(device_budget, min_blocks_per_sm);
-    const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
 
-    const auto p = potrf_cta_launch_params<C::NB, C::TS>(n, batch, sz_d, sz_r, budget, max_wg);
+    const auto p = potrf_plan::cta_geometry<T>(n, batch, facts, min_blocks_per_sm);
+    potrf_cta_check_scope(p);
     if (!p.fits) {
         throw batchlas::invalid_argument(
             "potrf_cta: order " + std::to_string(n) +
@@ -341,7 +245,7 @@ Event potrf_cta_dispatch(Queue& ctx,
 
     const bool upper = (uplo == Uplo::Upper);
 
-    if (p.scope == PotrfScope::SubGroup) {
+    if (p.subgroup_scope) {
         return potrf_cta_launch<T, C::NB, C::TS, PotrfScope::SubGroup>(
             ctx, A, upper, info, p, n, batch);
     }

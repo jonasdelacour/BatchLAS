@@ -2,6 +2,7 @@
 // the leaf potrf on the ib x ib diagonal block, an info-merge/quench fixup, the panel solve
 // L21 = A21 L11^{-H}, and A22 -= L21 L21^H. See docs/perf/potrf.md#the-blocked-driver
 
+#include "potrf_launch_plan.hh"
 #include "potrf_native.hh"
 #include "symmetric_product_fold.hh"
 
@@ -39,64 +40,26 @@ template <typename T>
 constexpr Transpose kTrailingTransB =
     PotrfIsComplex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
 
-// nb is the diagonal block order -- the leaf's order and the trailing update's k -- and W
-// the trailing panel width; neither is potrf_cta_max_n<T>(). evidence: docs/perf/potrf.md#nb-and-w
-template <typename T> struct PotrfBlockedConst;
-template <> struct PotrfBlockedConst<float>                { static constexpr int NB = 128; static constexpr int W = 128; };
-template <> struct PotrfBlockedConst<double>               { static constexpr int NB = 96;  static constexpr int W = 32; };
-template <> struct PotrfBlockedConst<std::complex<float>>  { static constexpr int NB = 96;  static constexpr int W = 32; };
-template <> struct PotrfBlockedConst<std::complex<double>> { static constexpr int NB = 64;  static constexpr int W = 16; };
-
 // Blocking overrides only, never routing; read once so the sizing query and the
 // call agree. The function-local statics are kept for exactly that reason: the
 // settings() snapshot is re-readable, and a reload landing between
 // potrf_buffer_size() and the matching potrf would desynchronise the allocated
 // workspace from the block width actually used. 0 means "unset" on both fields,
-// which is what the per-type PotrfBlockedConst defaults below fall back to.
+// which is what potrf_plan::BlockedConst falls back to.
 inline int potrf_nb_env() { static const int v = batchlas::settings().geometry.potrf_nb; return v; }
 inline int potrf_w_env()  { static const int v = batchlas::settings().geometry.potrf_w;  return v; }
 
-// Above this order the diagonal leaf stops being where the time goes and the trailing
-// update's k -- which IS nb -- starts to be; clamping nb to the occupancy ceiling there
-// buys occupancy in the leaf and pays for it several times over in the GEMM.
-// evidence: docs/perf/potrf.md#the-occupancy-clamp-on-nb
-constexpr int kPotrfOccupancyNbMaxOrder = 256;
-
-struct PotrfBlockedParams {
-    int nb;                 // diagonal block order, and the trailing update's k
-    int W;                  // trailing-update column-panel width
-    int leaf_min_blocks;    // the occupancy target nb was clamped against
-};
+// nb, W and the occupancy target live in potrf_launch_plan.hh (blocked_params), as does the
+// panel schedule (blocked_schedule): the driver below and the cost model walk the same one.
+using PotrfBlockedParams = potrf_plan::BlockedParams;
 
 template <typename T>
 PotrfBlockedParams potrf_blocked_params(Queue& ctx, int n) {
-    using C = PotrfBlockedConst<T>;
-
     // From THIS device's SLM: the hardcoded potrf_cta_max_n<T>() can name a block the leaf
-    // refuses. WHICH ceiling is the choice above: the advertised (occupancy-scaled) one
-    // while the leaf dominates, the residency one once the trailing GEMM does. The leaf
-    // is launched at the same target, so the two can never disagree.
-    const std::size_t budget = resident::device_slm_budget(
-        static_cast<std::size_t>(ctx.device().get_property(DeviceProperty::LOCAL_MEM_SIZE)));
-    const int leaf_min_blocks =
-        (n > 0 && n <= kPotrfOccupancyNbMaxOrder) ? resident::kMinBlocksPerSm : 1;
-    const int ceiling = potrf_cta_max_n_for_slm<T>(budget, leaf_min_blocks);
-
-    const int want = potrf_nb_env() ? potrf_nb_env() : C::NB;
-    int nb = std::min(want, std::max(ceiling, 1));
-    if (n > 0) nb = std::min(nb, n);
-
-    // Rounded to whole trsm_cta_max_n<T>() blocks, so a hand-set BATCHLAS_POTRF_NB stays measured.
-    const int leaf_trsm = sycl_trsm::trsm_cta_max_n<T>();
-    if (leaf_trsm > 0 && nb >= leaf_trsm) {
-        nb = (nb / leaf_trsm) * leaf_trsm;
-    }
-    if (nb < 1) nb = 1;
-
-    int W = potrf_w_env() ? potrf_w_env() : C::W;
-    if (W < 1) W = 1;
-
-    return {nb, W, leaf_min_blocks};
+    // refuses. The leaf is launched at the same occupancy target, so the two cannot disagree.
+    return potrf_plan::blocked_params<T>(
+        n, potrf_device_facts(ctx.device()).local_mem_bytes, sycl_trsm::trsm_cta_max_n<T>(),
+        potrf_nb_env(), potrf_w_env());
 }
 
 template <typename T>
@@ -316,47 +279,44 @@ Event potrf_blocked_dispatch(Queue& ctx,
         128, std::max<int>(32, static_cast<int>(
                                    dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE))));
 
-    for (int j = 0; j < n; j += nb) {
-        // ib < nb implies m2 == 0, so a short final block issues no panel solve or trailing update.
-        const int ib = std::min(nb, n - j);
-        const int m2 = n - j - ib;
+    potrf_plan::blocked_schedule(
+        n, nb, W,
+        [&](int j, int ib, int m2) {
+            const auto A11 = sub(j, ib, j, ib, ws.a11_ptrs.data());
+            // (void) on an Event: deliberate. This Queue is in-order, so the next submission
+            // is already ordered after this one and the Event carries nothing the caller needs.
+            // The SAME occupancy target nb was clamped against: the leaf's gate and the block
+            // width are one decision, and a mismatch makes the leaf throw on a legal block.
+            (void)potrf_cta_dispatch<T>(ctx, A11, Uplo::Lower, ws.leaf_ws, ws.leaf_info,
+                                        p.leaf_min_blocks);
 
-        const auto A11 = sub(j, ib, j, ib, ws.a11_ptrs.data());
-        // (void) on an Event: deliberate. This Queue is in-order, so the next submission
-        // is already ordered after this one and the Event carries nothing the caller needs.
-        // The SAME occupancy target nb was clamped against: the leaf's gate and the block
-        // width are one decision, and a mismatch makes the leaf throw on a legal block.
-        (void)potrf_cta_dispatch<T>(ctx, A11, Uplo::Lower, ws.leaf_ws, ws.leaf_info,
-                                    p.leaf_min_blocks);
+            // Unguarded: stale leaf_info, and a solve dividing by a pivot the quench has not replaced.
+            if (!ctx.in_order()) ctx.wait();
 
-        // Unguarded: stale leaf_info, and a solve dividing by a pivot the quench has not replaced.
-        if (!ctx.in_order()) ctx.wait();
+            (void)potrf_blocked_panel_fixup<T>(ctx, a_ptr, ld, stride, j, ib, m2, batch,
+                                               info.data(), ws.leaf_info.data(), fixup_wg);
+        },
+        [&](int j, int ib, int m2) {
+            if (!ctx.in_order()) ctx.wait();
 
-        (void)potrf_blocked_panel_fixup<T>(ctx, a_ptr, ld, stride, j, ib, m2, batch,
-                                     info.data(), ws.leaf_info.data(), fixup_wg);
+            const auto A11 = sub(j, ib, j, ib, ws.a11_ptrs.data());
+            const auto A21 = sub(j + ib, m2, j, ib, ws.a21_ptrs.data());
+            (void)panel_solve(ctx, A11, A21, T(1), Side::Right, Uplo::Lower,
+                              Transpose::ConjTrans, Diag::NonUnit);
 
-        if (m2 == 0) break;
-
-        if (!ctx.in_order()) ctx.wait();
-
-        const auto A21 = sub(j + ib, m2, j, ib, ws.a21_ptrs.data());
-        (void)panel_solve(ctx, A11, A21, T(1), Side::Right, Uplo::Lower,
-                    Transpose::ConjTrans, Diag::NonUnit);
-
-        if (!ctx.in_order()) ctx.wait();
-
-        // A plain square gemm over A22 would write the upper triangle, which potrf(Lower) must leave
-        // untouched; the W x W block is folded in instead. Only a poisoned-upper test sees a lost fold.
-        for (int c = 0; c < m2; c += W) {
-            const int w = std::min(W, m2 - c);
-
+            if (!ctx.in_order()) ctx.wait();
+        },
+        // A plain square gemm over A22 would write the upper triangle, which potrf(Lower) must
+        // leave untouched; the W x W block is folded in instead. Only a poisoned-upper test sees
+        // a lost fold.
+        [&](int j, int ib, int c, int w, int mr) {
             const auto Lrow = sub(j + ib + c, w, j, ib, nullptr);
             const auto Cd = sub(j + ib + c, w, j + ib + c, w, nullptr);
             const MatrixView<T, MatrixFormat::Dense> Sc(prod_ptr, w, w, W, W * W, batch);
 
             (void)trailing_gemm(ctx, Lrow, Lrow, Sc, T(-1), T(0),
-                          Transpose::NoTrans, kTrailingTransB<T>,
-                          ComputePrecision::Default);
+                                Transpose::NoTrans, kTrailingTransB<T>,
+                                ComputePrecision::Default);
 
             // RAW: out of order the fold reads stale scratch -- a wrong factor with info == 0.
             if (!ctx.in_order()) ctx.wait();
@@ -364,21 +324,20 @@ Event potrf_blocked_dispatch(Queue& ctx,
             (void)::batchlas::detail::fold_symmetric_product_into_triangle<T>(
                 ctx, Cd, Sc, T(1), Uplo::Lower);
 
-            const int mr = m2 - c - w;
             if (mr > 0) {
                 const auto Lr = sub(j + ib + c + w, mr, j, ib, nullptr);
                 const auto Cr = sub(j + ib + c + w, mr, j + ib + c, w, nullptr);
                 (void)trailing_gemm(ctx, Lr, Lrow, Cr, T(-1), T(1),
-                              Transpose::NoTrans, kTrailingTransB<T>,
-                              ComputePrecision::Default);
+                                    Transpose::NoTrans, kTrailingTransB<T>,
+                                    ComputePrecision::Default);
             }
 
             // WAR: the next panel's gemm overwrites the scratch this fold still reads.
             if (!ctx.in_order()) ctx.wait();
-        }
-
-        if (!ctx.in_order()) ctx.wait();
-    }
+        },
+        [&] {
+            if (!ctx.in_order()) ctx.wait();
+        });
 
     return ctx.get_event();
 }

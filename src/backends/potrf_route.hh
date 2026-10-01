@@ -17,6 +17,43 @@
 
 namespace batchlas::backend {
 
+// Everything but the device queries, so tools/potrf_plan_dump builds the SAME shape from a
+// described device. evidence: docs/perf/potrf.md#launch-plans
+template <Backend B, typename T>
+inline dispatch::PotrfShape potrf_op_shape_from_facts(const launch_plan::DeviceFacts& d,
+                                                      int64_t rows, int64_t cols, int64_t batch,
+                                                      Uplo uplo, bool is_gpu, bool has_sg32,
+                                                      bool heterogeneous, bool blocked_available) {
+    dispatch::PotrfShape s;
+    s.op = dispatch::Op::potrf;
+    s.scalar = dispatch::scalar_kind_of<T>;
+    s.backend = B;
+
+    // m and n stay separate so the `m == n` gate is representable; k is the order.
+    s.m = rows;
+    s.n = cols;
+    s.k = rows;
+    s.batch = batch;
+    s.uplo = uplo;
+    s.is_gpu = is_gpu;
+    s.has_sg32 = has_sg32;  // enumerated, not `>= 32`
+
+    // Not dead code: this becomes a correctness gate the moment the CTA kernel lands.
+    s.heterogeneous_batch = heterogeneous;
+
+    // Query THIS device; a hardcoded budget admits a route that cannot launch.
+    // evidence: docs/perf/potrf.md#the-slm-budget-and-the-fit-ceilings
+    const std::size_t budget = resident::device_slm_budget(d.local_mem_bytes);
+    s.cta_max_n = sycl_potrf::potrf_cta_max_n_for_slm<T>(budget);
+    s.lpanel_max_n = sycl_potrf::potrf_lpanel_max_n_for_slm<T>(budget, d.max_wg_size);  // SLM and max WG
+
+    // No budget argument: the tiny tier holds the matrix in REGISTERS and allocates no
+    // local memory, so its ceiling is a compile-time constant of the type alone.
+    s.tiny_max_n = sycl_potrf::potrf_tiny_max_n<T>();
+    s.blocked_available = blocked_available;
+    return s;
+}
+
 template <Backend B, typename T>
 inline std::optional<dispatch::PotrfShape> potrf_op_shape(
     const Queue& ctx,
@@ -24,41 +61,10 @@ inline std::optional<dispatch::PotrfShape> potrf_op_shape(
     Uplo uplo) {
 
     if (A.rows() != A.cols()) return std::nullopt;
-
-    dispatch::PotrfShape s;
-    s.op = dispatch::Op::potrf;
-    s.scalar = dispatch::scalar_kind_of<T>;
-    s.backend = B;
-
-    // m and n stay separate so the `m == n` gate is representable; k is the order.
-    s.m = A.rows();
-    s.n = A.cols();
-    s.k = A.rows();
-    s.batch = A.batch_size();
-    s.uplo = uplo;
-
-    s.is_gpu = (ctx.device().type == DeviceType::GPU);
-
-    s.has_sg32 = ctx.device().supports_sub_group_size(32);  // enumerated, not `>= 32`
-
-    // Not dead code: this becomes a correctness gate the moment the CTA kernel lands.
-    s.heterogeneous_batch = A.is_heterogeneous();
-
-    // Query THIS device; a hardcoded budget admits a route that cannot launch.
-    // evidence: docs/perf/potrf.md#the-slm-budget-and-the-fit-ceilings
-    const std::size_t budget = resident::device_slm_budget(
-        static_cast<std::size_t>(ctx.device().get_property(DeviceProperty::LOCAL_MEM_SIZE)));
-    s.cta_max_n = sycl_potrf::potrf_cta_max_n_for_slm<T>(budget);
-
-    s.lpanel_max_n = sycl_potrf::potrf_lpanel_max_n_for_slm<T>(   // two caps: SLM and max WG
-        budget,
-        static_cast<int>(ctx.device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE)));
-
-    // No budget argument: the tiny tier holds the matrix in REGISTERS and allocates no
-    // local memory, so its ceiling is a compile-time constant of the type alone.
-    s.tiny_max_n = sycl_potrf::potrf_tiny_max_n<T>();
-    s.blocked_available = sycl_potrf::potrf_blocked_available<T>();
-    return s;
+    return potrf_op_shape_from_facts<B, T>(
+        sycl_potrf::potrf_device_facts(ctx.device()), A.rows(), A.cols(), A.batch_size(), uplo,
+        ctx.device().type == DeviceType::GPU, ctx.device().supports_sub_group_size(32),
+        A.is_heterogeneous(), sycl_potrf::potrf_blocked_available<T>());
 }
 
 // The only env read on this path, and potrf / potrf_buffer_size must call it with
