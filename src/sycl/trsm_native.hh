@@ -30,8 +30,7 @@ BATCHLAS_INTERNAL_API Event trsm_native_v1_dispatch(Queue& ctx,
                                                     Transpose transA,
                                                     Diag diag);
 
-// V1's work-group width. A lane owns one rhs and dead lanes still run the whole
-// recurrence, so no rung may leave more than half its lanes without a column.
+// V1's work-group width: no rung may leave over half its lanes without a rhs column.
 // evidence: docs/perf/blackwell.md#trsm-v1-ladder-cap
 inline constexpr int kTrsmV1MaxWg = 256;
 constexpr int trsm_v1_ladder_wg(int max_wg, int cu, int q, int bs) {
