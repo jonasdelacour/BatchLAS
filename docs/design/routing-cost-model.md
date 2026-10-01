@@ -141,13 +141,18 @@ straddle capacity limits in `supports()`.
 | 3 | Roll out op by op; gemm `KernelVariant` and the nb pickers become sub-routes; delete `is_sm120_family` and every `preferred()` | per op |
 | 4 | Land #133's sm_120 kernels (getrs Tiny, geqrf skinny, trsm sub-group Left, gemm small tiles) as routes the model prices | sm_120 gains |
 
-## Open questions
+## Decisions taken (2026-10-01, after #134 merged)
 
-- **The sm_89 profile** has to be fitted from archived evidence (the
-  `perf-evidence/vendor-independence` tag and `benchmarks/results/`, in LFS), because the 4090
-  cannot be re-measured. Is that data dense enough, or does sm_89 keep its hand windows,
-  frozen as a "window profile", until a 4090 is available?
-- **The pilot op.** Candidates are getrs (four tiers, both arches measured, a clean vendor
-  baseline) or potrf (smallest table).
-- **fp64** was never measured on sm_120, and the model would extrapolate it. Should fp64 stay
-  on the nearest arch's fp64 constants until it is measured?
+- **Pilot op: potrf.** All four native tiers (Tiny, CTA, LPanel, Blocked) and the vendor
+  route exist on main.
+- **sm_89 profile: fitted from archived evidence** (`perf-evidence/vendor-independence` and
+  `benchmarks/results/`). The fit report has to state per dtype and route where that evidence
+  is too thin.
+- **fp64 is measured now** on sm_120, in the same forced-route sweep as float and cfloat.
+- **GPU budget:** all four GPUs on threadripper02.
+  - The sweep uses GPUs 1–3, and GPU 0 is kept for functional tests, so no test process runs
+    next to a measured cell.
+  - A follow-up pass can use GPU 0 once nothing else needs it.
+- **Data:** existing campaigns time only the route the native walk picked, plus the vendor.
+  A fit needs every supported route timed on the same cell, so benchviz gains a forced-route
+  sweep mode with arms `route:<origin>:<algo>`.
