@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 """Fit the routing cost model's constants from benchviz-schema timings, and score it.
 
-    python3 evaluation/routing/fit.py --results R.jsonl [R2.jsonl ...] --profile sm_120 \
-        --plan-dump build/tests/potrf_plan_dump --out evaluation/routing/out/sm_120 \
-        [--compare-windows] [--grid] [--include-stale]
+    python3 evaluation/routing/fit.py --results R.jsonl [R2.jsonl ...] --profile sm_89 \
+        --plan-dump build/tests/potrf_plan_dump --out OUT/sm_89 \
+        [--borrow sm_120=OUT/sm_120/profile.json] [--compare-windows] [--grid] [--include-stale]
+
+Device facts come from profiles/device_facts.json. A (route, dtype, uplo) key is fitted only
+from >= --min-rows rows over >= --min-batches batch sizes; otherwise it borrows (see
+`fallback`). Held-out regret is leave-one-n-out within (dtype, uplo), and the ship gate
+(`ship_gate`) is printed as PASS/FAIL.
 
 Model (docs/design/routing-cost-model.md section 3, src/util/launch_plan.hh):
 
@@ -39,15 +44,15 @@ ROUTES = ("native:tiny", "native:cta", "native:lpanel", "native:blocked", "vendo
 DTYPES = ("float", "double", "cfloat", "cdouble")
 PARAMS = ("t_launch", "s_per_flop", "s_per_byte", "t_step")
 
-# Device facts the plan reads, per profile. local_mem/max_wg are what DPC++ reports on both
-# boxes (potrf_plan_tests' recording device); CU/thread/group caps are the CUDA CC tables.
-# fp64_rate is FP64:FP32 throughput, used only by the precision fallback.
-PRESETS = {
-    "sm_89": dict(local_mem=101376, max_wg=1024, cus=128, max_threads_per_cu=1536,
-                  max_groups_per_cu=24, fp64_rate=1 / 64),
-    "sm_120": dict(local_mem=101376, max_wg=1024, cus=188, max_threads_per_cu=1536,
-                   max_groups_per_cu=32, fp64_rate=1 / 64),
-}
+# Device facts per profile live in ONE file; see its _doc for where each number comes from.
+FACTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "profiles", "device_facts.json")
+FACT_KEYS = ("local_mem", "max_wg", "cus", "max_threads_per_cu", "max_groups_per_cu",
+             "fp64_rate", "fp32_tflops", "fp64_tflops", "dram_gbps")
+
+
+def load_facts(profile, path=FACTS_FILE):
+    with open(path) as f:
+        return dict(json.load(f)[profile])
 
 PRECISION_PARTNER = {"float": "double", "double": "float", "cfloat": "cdouble", "cdouble": "cfloat"}
 COMPLEXITY_PARTNER = {"float": "cfloat", "cfloat": "float", "double": "cdouble", "cdouble": "double"}
@@ -246,60 +251,89 @@ def training_set(cells, feats, keep):
     return out, dict(dropped)
 
 
-def fit_all(train, fp64_rate, min_rows):
-    """Constants per (route, dtype, uplo), then the documented fallback for every gap."""
-    model = {}
-    for key, rows in train.items():
-        if len(rows) < min_rows:
-            continue
-        const, stats = fit_constants([(r[0], r[1]) for r in rows])
-        ns = [r[2] for r in rows]
-        bs = [r[3] for r in rows]
-        model[key] = {"constants": const, "fit": stats, "fallback": None,
-                      "support": {"n_min": min(ns), "n_max": max(ns), "batch_min": min(bs),
-                                  "batch_max": max(bs), "rows": len(rows),
-                                  "sources": sorted({s for r in rows for s in r[4]})}}
+def fit_key(rows):
+    const, stats = fit_constants([(r[0], r[1]) for r in rows])
+    ns = [r[2] for r in rows]
+    bs = [r[3] for r in rows]
+    return {"constants": const, "fit": stats, "fallback": None,
+            "support": {"n_min": min(ns), "n_max": max(ns), "batch_min": min(bs),
+                        "batch_max": max(bs), "rows": len(rows),
+                        "sources": sorted({s for r in rows for s in r[4]})}}
+
+
+def eligible(rows, cfg):
+    """The minimum-data rule: >= min_rows rows over >= min_batches distinct batch sizes."""
+    return len(rows) >= cfg["min_rows"] and len({r[3] for r in rows}) >= cfg["min_batches"]
+
+
+def fit_measured(train, cfg):
+    return {key: fit_key(rows) for key, rows in train.items() if eligible(rows, cfg)}
+
+
+def complete(measured, cfg):
+    """Every (route, dtype, uplo) without a fit of its own gets the documented fallback."""
+    model = dict(measured)
     for route in ROUTES:
         for dtype in DTYPES:
             for uplo in ("L", "U"):
                 if (route, dtype, uplo) not in model:
-                    fb = fallback(model, route, dtype, uplo, fp64_rate)
+                    fb = fallback(measured, route, dtype, uplo, cfg)
                     if fb:
                         model[(route, dtype, uplo)] = fb
     return model
 
 
-def fallback(model, route, dtype, uplo, fp64_rate):
-    """The rule for a (route, dtype, uplo) with no rows, tried in this order:
+def fit_all(train, cfg):
+    return complete(fit_measured(train, cfg), cfg)
+
+
+def fallback(measured, route, dtype, uplo, cfg):
+    """The rule for a (route, dtype, uplo) without a fit of its own, tried in this order:
     1. the same route and dtype on the other uplo, copied;
     2. the precision partner (float<->double, cfloat<->cdouble), s_per_flop scaled by the
-       FP64:FP32 rate, the rest copied;
+       profile's FP64:FP32 rate, the rest copied;
     3. the complexity partner (float<->cfloat, double<->cdouble), copied -- the plan already
-       counts a complex multiply-add as four.
-    Only MEASURED entries are borrowed from, never another fallback."""
+       counts a complex multiply-add as four;
+    4. the same (route, dtype, uplo) MEASURED in another profile (--borrow), s_per_flop scaled
+       by the per-CU peak FP rate of that precision (source/target) and s_per_byte by the
+       per-CU DRAM bandwidth (source/target); t_launch and t_step copied.
+    Only measured entries are borrowed from, never another fallback."""
     other = "U" if uplo == "L" else "L"
-    src = model.get((route, dtype, other))
-    if src and not src["fallback"]:
-        return _borrow(src, "other_uplo", (route, dtype, other), 1.0)
+    src = measured.get((route, dtype, other))
+    if src:
+        return _borrow(src, "other_uplo", (route, dtype, other), 1.0, 1.0)
     p = PRECISION_PARTNER[dtype]
+    rate = cfg["facts"]["fp64_rate"]
     for u in (uplo, other):
-        src = model.get((route, p, u))
-        if src and not src["fallback"]:
-            f = (1 / fp64_rate) if IS_FP64[dtype] else fp64_rate
-            return _borrow(src, "precision_scaled", (route, p, u), f)
+        src = measured.get((route, p, u))
+        if src:
+            f = (1 / rate) if IS_FP64[dtype] else rate
+            return _borrow(src, "precision_scaled", (route, p, u), f, 1.0)
     q = COMPLEXITY_PARTNER[dtype]
     for u in (uplo, other):
-        src = model.get((route, q, u))
-        if src and not src["fallback"]:
-            return _borrow(src, "complexity_borrow", (route, q, u), 1.0)
+        src = measured.get((route, q, u))
+        if src:
+            return _borrow(src, "complexity_borrow", (route, q, u), 1.0, 1.0)
+    tgt = cfg["facts"]
+    for name, prof, sf in cfg["borrows"]:
+        e = prof["routes"].get(route, {}).get(dtype, {}).get(uplo)
+        if not e or e.get("fallback"):
+            continue
+        peak = "fp64_tflops" if IS_FP64[dtype] else "fp32_tflops"
+        ff = (sf[peak] / sf["cus"]) / (tgt[peak] / tgt["cus"])
+        bf = (sf["dram_gbps"] / sf["cus"]) / (tgt["dram_gbps"] / tgt["cus"])
+        src = {"constants": [e["constants"][k] for k in PARAMS]}
+        return _borrow(src, "other_profile", (name, route, dtype, uplo), ff, bf)
     return None
 
 
-def _borrow(src, rule, frm, flop_factor):
+def _borrow(src, rule, frm, flop_factor, byte_factor):
     c = list(src["constants"])
     c[1] *= flop_factor
+    c[2] *= byte_factor
     return {"constants": c, "fit": None, "support": None,
-            "fallback": {"rule": rule, "from": "/".join(frm), "flop_factor": flop_factor}}
+            "fallback": {"rule": rule, "from": "/".join(frm), "flop_factor": flop_factor,
+                         "byte_factor": byte_factor}}
 
 
 # ---- choice and regret ------------------------------------------------------------------
@@ -357,28 +391,29 @@ def summarise(regrets):
             "over_1.1": sum(1 for r in rs if r > 1.1)}
 
 
-def cross_validate(cells, feats, folds, fp64_rate, min_rows, margin):
-    """Fold by n within each (dtype, uplo): every cell is scored by a model that never saw
-    its order."""
-    ns = defaultdict(set)
-    for (dtype, uplo, n, _b, _r) in cells:
-        ns[(dtype, uplo)].add(n)
-    fold_of = {}
-    for g, s in ns.items():
-        for i, n in enumerate(sorted(s)):
-            fold_of[(g[0], g[1], n)] = i % folds
+def cross_validate(cells, feats, train_full, measured_full, cfg, margin):
+    """Leave-one-n-out within each (dtype, uplo): every cell is scored by a model that never
+    saw its order. Only that (dtype, uplo)'s keys hold rows at that order, so only they are
+    refitted; the rest of the full fit is reused unchanged."""
     by_cell = group_cells(cells, feats)
+    folds = sorted({(c[0], c[1], c[2]) for c in by_cell})
     scored = []
-    for f in range(folds):
-        train, _ = training_set(cells, feats, lambda d, u, n, b: fold_of[(d, u, n)] != f)
-        model = fit_all(train, fp64_rate, min_rows)
-        for cell, measured in by_cell.items():
-            if fold_of[(cell[0], cell[1], cell[2])] != f:
+    for (dtype, uplo, n) in folds:
+        measured = {k: v for k, v in measured_full.items() if not (k[1] == dtype and k[2] == uplo)}
+        for key, rows in train_full.items():
+            if key[1] != dtype or key[2] != uplo:
+                continue
+            kept = [r for r in rows if r[2] != n]
+            if eligible(kept, cfg):
+                measured[key] = fit_key(kept)
+        model = complete(measured, cfg)
+        for cell, meas in by_cell.items():
+            if cell[:3] != (dtype, uplo, n):
                 continue
             pick, costs = choose(model, feats[cell], margin)
             entry = model.get((pick, cell[0], cell[1])) if pick else None
-            scored.append({"cell": cell, "measured": measured, "pick": pick, "fold": f,
-                           "predicted": costs, "regret": regret_of(pick, measured),
+            scored.append({"cell": cell, "measured": meas, "pick": pick,
+                           "predicted": costs, "regret": regret_of(pick, meas),
                            "extrapolated": entry is None or extrapolated(entry, cell[2], cell[3])})
     return scored
 
@@ -389,13 +424,54 @@ def fmt_cell(c):
     return f"{c[0]} {c[1]} n={c[2]} b={c[3]}"
 
 
-def write_report(path, args, model, cv, full_by_cell, feats, full_model, skipped, dropped,
-                 grid_rows):
+def ship_gate(cv, full_by_cell, feats, max_regret=1.25):
+    """PASS only if, on the cells where BOTH today's pick and the held-out model's pick were
+    measured, the model beats today's windows on geomean AND p95, and its max <= max_regret."""
+    held = {s["cell"]: s for s in cv}
+    pt, pm, cells = [], [], []
+    for cell, measured in full_by_cell.items():
+        s = held.get(cell)
+        rt = regret_of(feats[cell]["auto"], measured)
+        if len(measured) >= 2 and s and s["regret"] is not None and rt is not None:
+            pt.append(rt)
+            pm.append(s["regret"])
+            cells.append(cell)
+    t, m = summarise(pt), summarise(pm)
+    ok = bool(t.get("cells")) and m["geomean"] < t["geomean"] and m["p95"] < t["p95"] \
+        and m["max"] <= max_regret
+    return {"verdict": "PASS" if ok else "FAIL", "paired_cells": len(cells), "today": t,
+            "model": m, "rule": ship_gate.__doc__.strip()}
+
+
+def write_report(path, args, cv, full_by_cell, feats, full_model, skipped, dropped,
+                 grid_rows, train, gate):
     L = []
     L.append(f"# potrf cost-model fit: profile `{args.profile}`\n")
     L.append(f"Sources: {', '.join(args.results)}. Rows skipped: {skipped or 'none'}. "
              f"Measured rows whose plan does not fit or is refused today (dropped): "
              f"{dropped or 'none'}.\n")
+    t, m = gate["today"], gate["model"]
+    L.append(f"## Ship gate: **{gate['verdict']}**\n")
+    L.append(gate["rule"] + "\n")
+    if t.get("cells"):
+        L.append(f"* {gate['paired_cells']} paired cells. Today: geomean {t['geomean']:.4f}, "
+                 f"p95 {t['p95']:.4f}, max {t['max']:.4f}. Model (held-out): geomean "
+                 f"{m['geomean']:.4f}, p95 {m['p95']:.4f}, max {m['max']:.4f}.\n")
+    else:
+        L.append("* no paired cells: nothing to compare, so the gate fails.\n")
+    L.append("## Fitted vs borrowed keys\n")
+    L.append(f"Minimum-data rule: >= {args.min_rows} rows over >= {args.min_batches} distinct "
+             f"batch sizes. Below it a key borrows (see the fallback rule in profile.json).\n")
+    fitted = sorted(k for k, e in full_model.items() if not e["fallback"])
+    L.append("* fitted: " + (", ".join("/".join(k) for k in fitted) or "none"))
+    short = sorted(k for k, rows in train.items() if not eligible(rows, vars(args)))
+    if short:
+        L.append("* measured but below the rule (borrowed instead): " + ", ".join(
+            f"{'/'.join(k)} ({len(train[k])} rows, {len({r[3] for r in train[k]})} batches)"
+            for k in short))
+    borrowed = sorted((k, e["fallback"]) for k, e in full_model.items() if e["fallback"])
+    L.append("* borrowed: " + (", ".join(f"{'/'.join(k)} <- {fb['rule']} {fb['from']}"
+                                       for k, fb in borrowed) or "none") + "\n")
     L.append("## Constants (full fit)\n")
     L.append("| route | dtype | uplo | t_launch s | s/flop | s/byte | t_step s | rows | rms log | inactive | fallback |")
     L.append("|---|---|---|---|---|---|---|---|---|---|---|")
@@ -409,8 +485,8 @@ def write_report(path, args, model, cv, full_by_cell, feats, full_model, skipped
                  f"| {(fb['rule'] + ' <- ' + fb['from']) if fb else '-'} |")
     multi = [s for s in cv if len(s["measured"]) >= 2]
     single = [s for s in cv if len(s["measured"]) < 2]
-    L.append("\n## Held-out regret (fold by n)\n")
-    L.append(f"{args.folds}-fold by order within each (dtype, uplo). Regret = time(model pick) / "
+    L.append("\n## Held-out regret (leave one n out)\n")
+    L.append(f"Leave-one-n-out within each (dtype, uplo). Regret = time(model pick) / "
              f"time(best measured route the table supports). Margin {args.margin}.\n")
     st = summarise([s["regret"] for s in multi if s["regret"] is not None])
     L.append(f"* cells with >= 2 measured routes: {len(multi)}; scored {st.get('cells', 0)}; "
@@ -446,7 +522,8 @@ def write_report(path, args, model, cv, full_by_cell, feats, full_model, skipped
         else:
             fb = e["fallback"]
             L.append(f"| {route} | {dtype} | {uplo} | none | none | 0 "
-                     f"| fallback {fb['rule']} <- {fb['from']} (x{fb['flop_factor']:.3g} on s/flop) |")
+                     f"| fallback {fb['rule']} <- {fb['from']} (x{fb['flop_factor']:.3g} on s/flop, "
+                     f"x{fb['byte_factor']:.3g} on s/byte) |")
     absent = [(r, d, u) for r in ROUTES for d in DTYPES for u in ("L", "U")
               if (r, d, u) not in full_model]
     if absent:
@@ -468,7 +545,6 @@ def write_report(path, args, model, cv, full_by_cell, feats, full_model, skipped
             tw.append(regret_of(today, measured))
             if pick != today:
                 diffs.append((cell, today, pick, measured, costs))
-        held = {s["cell"]: s for s in cv}
         tst = summarise([r for r, cell in zip(tw, sorted(full_by_cell))
                          if r is not None and len(full_by_cell[cell]) >= 2])
         L.append("Today's choice is RouteTable<Op::potrf,T> resolved by potrf_plan_dump on the "
@@ -479,18 +555,7 @@ def write_report(path, args, model, cv, full_by_cell, feats, full_model, skipped
         L.append(f"* model (held-out), its own scorable cells: " + (
             f"geomean {st['geomean']:.4f}, p95 {st['p95']:.4f}, max {st['max']:.4f}"
             if st.get("cells") else "none scorable"))
-        pair_t, pair_m = [], []
-        for cell, measured in full_by_cell.items():
-            s = held.get(cell)
-            rt = regret_of(feats[cell]["auto"], measured)
-            if len(measured) >= 2 and s and s["regret"] is not None and rt is not None:
-                pair_t.append(rt)
-                pair_m.append(s["regret"])
-        pt, pm = summarise(pair_t), summarise(pair_m)
-        if pt.get("cells"):
-            L.append(f"* PAIRED (both picks measured, {pt['cells']} cells): today geomean "
-                     f"{pt['geomean']:.4f} / p95 {pt['p95']:.4f} / max {pt['max']:.4f}; model "
-                     f"held-out geomean {pm['geomean']:.4f} / p95 {pm['p95']:.4f} / max {pm['max']:.4f}")
+        L.append(f"* paired, gate population: see 'Ship gate' above ({gate['verdict']})")
         L.append(f"\n### Route diff: {len(diffs)} measured cells where the full-fit model "
                  f"differs from today\n")
         L.append("| cell | today | model | t(today) | t(model) | best measured | extrapolated |")
@@ -548,26 +613,40 @@ def grid_shapes(dtypes, uplos):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--results", nargs="+", required=True)
-    ap.add_argument("--profile", required=True, help="profile name; a key of PRESETS unless --facts")
-    ap.add_argument("--facts", help="JSON object overriding the preset's device facts")
+    ap.add_argument("--profile", required=True, help="a key of profiles/device_facts.json")
+    ap.add_argument("--facts-file", default=FACTS_FILE)
+    ap.add_argument("--facts", help="JSON object overriding the profile's device facts")
     ap.add_argument("--plan-dump", default=os.path.join(REPO, "build/tests/potrf_plan_dump"))
     ap.add_argument("--out", required=True, help="output directory")
     ap.add_argument("--op", default="potrf")
-    ap.add_argument("--folds", type=int, default=2)
     ap.add_argument("--margin", type=float, default=0.05)
-    ap.add_argument("--min-rows", type=int, default=3)
+    ap.add_argument("--min-rows", type=int, default=10)
+    ap.add_argument("--min-batches", type=int, default=2)
+    ap.add_argument("--borrow", action="append", default=[], metavar="PROFILE=profile.json",
+                    help="a fitted profile of ANOTHER device to borrow unmeasured routes from")
     ap.add_argument("--include-stale", action="store_true",
                     help="keep rows with kernel_current=false (archive rows of an older kernel)")
     ap.add_argument("--compare-windows", action="store_true")
     ap.add_argument("--grid", action="store_true", help="also price a synthetic grid")
     args = ap.parse_args(argv)
 
-    preset = dict(PRESETS.get(args.profile, {}))
+    with open(args.facts_file) as f:
+        all_facts = json.load(f)
+    if args.profile not in all_facts and not args.facts:
+        ap.error(f"profile {args.profile} not in {args.facts_file}; pass --facts")
+    preset = dict(all_facts.get(args.profile, {}))
     if args.facts:
         preset.update(json.loads(args.facts))
-    for k in ("local_mem", "max_wg", "cus", "max_threads_per_cu", "max_groups_per_cu", "fp64_rate"):
+    for k in FACT_KEYS:
         if k not in preset:
-            ap.error(f"device fact {k} unknown for profile {args.profile}; pass --facts")
+            ap.error(f"device fact {k} unknown for profile {args.profile}")
+    borrows = []
+    for spec in args.borrow:
+        name, path = spec.split("=", 1)
+        with open(path) as f:
+            borrows.append((name, json.load(f), dict(all_facts[name])))
+    cfg = {"facts": preset, "min_rows": args.min_rows, "min_batches": args.min_batches,
+           "borrows": borrows}
 
     cells, skipped = load_rows(args.results, args.op, args.include_stale)
     if not cells:
@@ -579,9 +658,11 @@ def main(argv=None):
     feats = plan_features(args.plan_dump, preset, list(shapes) + gshapes)
 
     train, dropped = training_set(cells, feats, lambda *a: True)
-    full_model = fit_all(train, preset["fp64_rate"], args.min_rows)
-    cv = cross_validate(cells, feats, args.folds, preset["fp64_rate"], args.min_rows, args.margin)
+    measured_full = fit_measured(train, cfg)
+    full_model = complete(measured_full, cfg)
+    cv = cross_validate(cells, feats, train, measured_full, cfg, args.margin)
     full_by_cell = group_cells(cells, feats)
+    gate = ship_gate(cv, full_by_cell, feats)
 
     grid_rows = []
     for g in gshapes:
@@ -596,6 +677,8 @@ def main(argv=None):
             "model": "t = t_launch*T0 + max(s_per_flop*T1, s_per_byte*T2) + t_step*T3 "
                      "(launch_plan::combine over launch_plan::cost_terms)",
             "fallback_rule": fallback.__doc__.strip(),
+            "min_data_rule": {"rows": args.min_rows, "batches": args.min_batches},
+            "borrowed_profiles": [b[0] for b in borrows], "gate": gate,
             "routes": defaultdict(lambda: defaultdict(dict)),
             "provenance": provenance(args.results, args.plan_dump)}
     for (route, dtype, uplo), e in sorted(full_model.items()):
@@ -604,12 +687,14 @@ def main(argv=None):
             "support": e["support"], "fallback": e["fallback"]}
     with open(os.path.join(args.out, "profile.json"), "w") as f:
         json.dump(prof, f, indent=1, sort_keys=True)
-    write_report(os.path.join(args.out, "report.md"), args, None, cv, full_by_cell, feats,
-                 full_model, skipped, dropped, grid_rows)
+    write_report(os.path.join(args.out, "report.md"), args, cv, full_by_cell, feats,
+                 full_model, skipped, dropped, grid_rows, train, gate)
     multi = [s["regret"] for s in cv if len(s["measured"]) >= 2 and s["regret"] is not None]
     st = summarise(multi)
     print(json.dumps({"profile": args.profile, "cells": len(full_by_cell), "heldout": st,
-                      "out": args.out}))
+                      "gate": gate["verdict"], "out": args.out}))
+    print(f"ship gate {args.profile}: {gate['verdict']}")
+    st["gate"] = gate
     return st
 
 

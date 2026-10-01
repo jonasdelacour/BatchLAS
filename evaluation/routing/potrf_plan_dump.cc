@@ -94,6 +94,17 @@ long long flag(int argc, char** argv, const char* name, long long dflt) {
 }  // namespace
 
 int main(int argc, char** argv) {
+    // --query-device: what this box's GPU reports, to check evaluation/routing/profiles/.
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--query-device") == 0) {
+            Device dev("gpu");
+            std::cout << "{\"local_mem\":" << dev.get_property(DeviceProperty::LOCAL_MEM_SIZE)
+                      << ",\"max_wg\":" << dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE)
+                      << ",\"cus\":" << dev.get_property(DeviceProperty::MAX_COMPUTE_UNITS)
+                      << ",\"cuda_cc\":" << dev.cuda_compute_capability() << "}\n";
+            return 0;
+        }
+    }
     DeviceFacts d;
     d.local_mem_bytes = static_cast<std::size_t>(flag(argc, argv, "--local-mem", 0));
     d.max_wg_size = static_cast<int>(flag(argc, argv, "--max-wg", 1024));

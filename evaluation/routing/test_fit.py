@@ -10,6 +10,7 @@ import json
 import math
 import os
 import random
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -72,7 +73,7 @@ class PipelineRecovery(unittest.TestCase):
                                       320, 384, 448, 512]
         shapes = [(d, u, n, b) for d in ("float", "double") for u in ("L", "U") for n in ns
                   for b in (256, 4096, 32768)]
-        feats = fit.plan_features(PLAN_DUMP, fit.PRESETS["sm_120"], shapes)
+        feats = fit.plan_features(PLAN_DUMP, fit.load_facts("sm_120"), shapes)
         rng = random.Random(11)
         cls.results = os.path.join(cls.tmp, "results.jsonl")
         with open(cls.results, "w") as f:
@@ -129,6 +130,74 @@ class PipelineRecovery(unittest.TestCase):
         self.assertIn("## Extrapolated regions", rep)
         self.assertIn("fallback precision_scaled <- native:lpanel/float/L", rep)
         self.assertIn("### Route diff", rep)
+
+
+    def test_gate_passes_against_its_own_truth(self):
+        # Synthetic truth is the model's own form, so it must beat or tie today's windows.
+        g = self.stats["gate"]
+        self.assertGreater(g["paired_cells"], 50)
+        self.assertLessEqual(g["model"]["max"], 1.25)
+
+    def test_cross_profile_borrow_scales_by_device_facts(self):
+        # A second, synthetic "sm_89" profile with NO LPanel rows borrows sm_120's LPanel.
+        src = os.path.join(self.tmp, "b.jsonl")
+        with open(self.results) as f, open(src, "w") as g:
+            for line in f:
+                if '"native:lpanel"' not in line:
+                    g.write(line)
+        out = os.path.join(self.tmp, "out_b")
+        fit.main(["--results", src, "--profile", "sm_89", "--plan-dump", PLAN_DUMP, "--out", out,
+                  "--borrow", "sm_120=" + os.path.join(self.out, "profile.json")])
+        with open(os.path.join(out, "profile.json")) as f:
+            prof = json.load(f)
+        e = prof["routes"]["native:lpanel"]["float"]["L"]
+        self.assertEqual(e["fallback"]["rule"], "other_profile")
+        self.assertEqual(e["fallback"]["from"], "sm_120/native:lpanel/float/L")
+        a, b = fit.load_facts("sm_120"), fit.load_facts("sm_89")
+        ff = (a["fp32_tflops"] / a["cus"]) / (b["fp32_tflops"] / b["cus"])
+        bf = (a["dram_gbps"] / a["cus"]) / (b["dram_gbps"] / b["cus"])
+        s = self.profile["routes"]["native:lpanel"]["float"]["L"]["constants"]
+        self.assertAlmostEqual(e["constants"]["s_per_flop"], s["s_per_flop"] * ff, delta=1e-30)
+        self.assertAlmostEqual(e["constants"]["s_per_byte"], s["s_per_byte"] * bf, delta=1e-25)
+        self.assertEqual(e["constants"]["t_launch"], s["t_launch"])
+        self.assertEqual(e["constants"]["t_step"], s["t_step"])
+        # Only MEASURED entries are borrowed: sm_120's double LPanel is itself a fallback,
+        # so double LPanel has no source anywhere and is never a candidate.
+        self.assertNotIn("double", prof["routes"]["native:lpanel"])
+
+    def test_min_data_rule_borrows_a_single_batch_key(self):
+        src = os.path.join(self.tmp, "c.jsonl")
+        with open(self.results) as f, open(src, "w") as g:
+            for line in f:
+                j = json.loads(line)
+                if (j["route"], j["dtype"], j["uplo"]) == ("native:cta", "float", "L") \
+                        and j["batch"] != 4096:
+                    continue
+                g.write(line)
+        out = os.path.join(self.tmp, "out_c")
+        fit.main(["--results", src, "--profile", "sm_120", "--plan-dump", PLAN_DUMP, "--out", out])
+        with open(os.path.join(out, "profile.json")) as f:
+            e = json.load(f)["routes"]["native:cta"]["float"]["L"]
+        self.assertEqual(e["fallback"]["rule"], "other_uplo")
+
+
+@unittest.skipUnless(os.path.exists(PLAN_DUMP), f"needs {PLAN_DUMP}")
+class FactsFileMatchesThisDevice(unittest.TestCase):
+    def test_queried_facts(self):
+        env = dict(os.environ)
+        env["LD_LIBRARY_PATH"] = "/opt/dpcpp-cuda/lib:" + env.get("LD_LIBRARY_PATH", "")
+        try:
+            out = subprocess.run([PLAN_DUMP, "--query-device"], capture_output=True, text=True,
+                                 env=env, timeout=120, check=True).stdout
+            q = json.loads(out)
+        except Exception as e:
+            self.skipTest(f"no GPU query: {e}")
+        prof = {89: "sm_89", 120: "sm_120"}.get(q["cuda_cc"])
+        if not prof:
+            self.skipTest(f"no profile for cc {q['cuda_cc']}")
+        f = fit.load_facts(prof)
+        self.assertEqual((f["local_mem"], f["max_wg"], f["cus"]),
+                         (q["local_mem"], q["max_wg"], q["cus"]))
 
 
 if __name__ == "__main__":

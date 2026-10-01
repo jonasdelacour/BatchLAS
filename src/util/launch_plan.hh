@@ -14,6 +14,7 @@ namespace batchlas::launch_plan {
 
 // What a plan reads of the device. The launchers fill only the first two: geometry never
 // depends on the rest, which feed the occupancy estimate and the cost. 0 means unknown.
+// NOT dispatch::DeviceFacts (routing facts, public, memoized): merge when routing reads plans.
 struct DeviceFacts {
     std::size_t local_mem_bytes = 0;   // DeviceProperty::LOCAL_MEM_SIZE
     int max_wg_size = 0;               // DeviceProperty::MAX_WORK_GROUP_SIZE
