@@ -91,6 +91,71 @@ why this never appeared there. Fix: `-ffp-model=precise` for IntelLLVM in
 `cmake/BatchLASOptions.cmake`. `-fdenormal-fp-math=ieee` alone also restores inlining
 but leaves reassoc/afn on, which section 11 of AGENTS.md rules out.
 
+### cfloat spmm under the precise fp model
+
+The flag made one kernel slower: the native CSR gather (`SpmmGatherKernel`,
+`src/sycl/spmm_native.cc`) for cfloat, 5.51 -> 6.49 ms at n=16384, 16 nnz/row,
+nrhs=64, batch=32 (cuSPARSE 5.76). Not occupancy: 74 vs 80 registers both round to
+80, 3 blocks of 256, 24 warps/SM, no spills. Not instruction count either: precise
+issues 414M instructions against fast's 1199M (its 100 `CALL.REL` are gone).
+
+The kernel is L2-bound (L2 throughput 98-99%, DRAM 6%: B is L2-resident and the
+gather is random). Each `Cx<float>` element of B was two 4-byte `LDG.E` of the same
+sector. ncu on that cell, one launch:
+
+| libs | time ms | L1 sectors | L1 hit | L2 sectors read |
+|---|---|---|---|---|
+| fast (out-of-line fma) | 5.04 | 1256M | 619M | 637M |
+| precise | 6.06 | 1256M | 464M | 791M |
+| precise + pair loads | 4.83 | 662M | 23M | 639M |
+
+The 619M fast-build hits are the second half of each pair finding its sector
+already in L1: there is almost no real reuse (23M once the pair is one load). The
+fast build issued one column's pair, then called the fma stub, so the first half
+had landed before the second was issued. Precise if-converts the 8-column block and
+issues all 16 halves at once, so both halves of a pair miss and each sends its own
+L2 request: 24% more L2 sectors, 20% more time.
+
+Fix: load and store a complex element as one `sycl::vec<R, 2>` (`LDG.E.64` for
+cfloat, `LDG.E.128` for cdouble). That needs `2*sizeof(R)` alignment, which
+`std::complex<R>` does not promise, so the launcher checks A's values, B and C and
+falls back to the scalar kernel for a view that starts one R off. cuSPARSE does not
+accept that case at all ("matB had an illegal value: NULL pointer", status
+unchecked by the vendor arm), so the misaligned tests skip unless the native
+route is pinned. It is not an sm_120 constant: the halves-miss-twice effect is
+how L1 handles two in-flight misses on one sector, so it is not gated by arch.
+
+Median ms, GPU 0 only, main's `spmm_benchmark` with the libraries swapped through
+`LD_LIBRARY_PATH`, `BATCHLAS_SPMM_ROUTE=native`, 16 nnz/row random pattern, benchviz
+batches (~3 GiB). One warm pass discarded, then 3 reps in alternating arm order (5
+for the headline, whose per-rep ranges do not overlap: fast 5.46-5.54, BASE
+6.44-6.54, pair 5.18-5.26, cuSPARSE 5.67-5.78). BASE is
+`worktree-blackwell-tuning` @ ba07a99f, whose kernel SASS is identical to the
+flag-only build's.
+
+| type | n | nrhs | batch | fast | precise BASE | pair | cuSPARSE | pair/BASE |
+|---|---|---|---|---|---|---|---|---|
+| cfloat | 1024 | 4 | 4096 | 2.12 | 1.68 | 1.62 | 9.18 | 0.97 |
+| cfloat | 1024 | 16 | 2048 | 3.48 | 2.85 | 2.55 | 5.21 | 0.90 |
+| cfloat | 1024 | 64 | 512 | 3.35 | 2.73 | 2.43 | 7.33 | 0.89 |
+| cfloat | 1024 | 128 | 256 | 3.32 | 2.69 | 2.40 | 8.54 | 0.89 |
+| cfloat | 4096 | 4 | 1024 | 3.08 | 3.35 | 2.86 | 10.87 | 0.85 |
+| cfloat | 4096 | 16 | 512 | 5.08 | 5.73 | 4.77 | 5.96 | 0.83 |
+| cfloat | 4096 | 64 | 128 | 4.94 | 5.57 | 4.63 | 5.75 | 0.83 |
+| cfloat | 4096 | 128 | 64 | 4.92 | 5.54 | 4.61 | 5.82 | 0.83 |
+| cfloat | 16384 | 4 | 256 | 3.56 | 4.16 | 3.41 | 11.03 | 0.82 |
+| cfloat | 16384 | 16 | 128 | 5.85 | 6.87 | 5.56 | 6.15 | 0.81 |
+| cfloat | 16384 | 64 | 32 | 5.49 | 6.49 | 5.23 | 5.74 | 0.81 |
+| cfloat | 16384 | 128 | 16 | 5.65 | 6.66 | 5.37 | 5.97 | 0.81 |
+| cdouble | 4096 | 16 | 256 | 4.02 | 4.36 | 3.68 | 8.31 | 0.84 |
+| cdouble | 4096 | 64 | 64 | 3.93 | 4.25 | 3.59 | 8.29 | 0.84 |
+| cdouble | 16384 | 16 | 64 | 4.13 | 4.67 | 3.92 | 8.85 | 0.84 |
+| cdouble | 16384 | 64 | 16 | 4.01 | 4.55 | 3.81 | 8.83 | 0.84 |
+
+Geomean pair/BASE: cfloat 0.85, cdouble 0.84, float 1.00 (same 12 n x nrhs cells,
+every cell 0.99-1.00; the real kernels are unchanged). The pair build is faster
+than the fast build on every complex cell, and than cuSPARSE on every cell here.
+
 ## Device-call guard
 
 Machine: threadripper02, RTX PRO 6000 Blackwell Max-Q (sm_120), icpx 2026.0, CUDA 13.2.
