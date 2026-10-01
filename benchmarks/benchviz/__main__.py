@@ -21,13 +21,13 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from ops import OPS, PRESETS, TYPES, Grid, parse_list, plan_cells  # noqa: E402
+from ops import OPS, PRESETS, TYPES, Grid, op_arms, parse_list, plan_cells  # noqa: E402
 from store import DEFAULT_ROOT, REPO, Campaign, build_info, describe_build, provenance  # noqa: E402
 
 
 def _csv_list(s: str, allowed) -> list:
-    if s == "all":
-        return list(allowed)
+    if s == "all":  # opt-in variants (potrf_upper) only when named
+        return [x for x in allowed if not (allowed is OPS and OPS[x].opt_in)]
     out = [x.strip() for x in s.split(",") if x.strip()]
     bad = [x for x in out if x not in allowed]
     if bad:
@@ -85,7 +85,8 @@ def make_campaign(a, build_dirs) -> Campaign:
     name = a.campaign or time.strftime(f"{a.backend}-%Y%m%d-%H%M%S")
     cfg = {
         "ops": ops, "types": types, "preset": a.grid.name, "backend": a.backend,
-        "gpu": a.gpus[0], "gpus": a.gpus, "grid": a.grid.to_dict(),
+        "gpu": a.gpus[0], "gpus": a.gpus, "grid": a.grid.to_dict(), "pass": a.pass_,
+        **({"sweep": a.sweep} if a.sweep != "ab" else {}),
         "provenance": {**provenance(a.backend, a.gpus[0]), "builds": [build_info(d) for d in build_dirs]},
     }
     return Campaign.create(Path(a.root), name, cfg)
@@ -104,13 +105,13 @@ def cmd_run(a):
     cells = plan_cells(_csv_list(a.ops, OPS), _csv_list(a.types, TYPES), a.grid)
     if a.dry_run:
         print(f"grid: {a.grid.to_dict()}")
-        print(f"{len(cells)} cells, {sum(len(OPS[c.op].arms) for c in cells)} arm-cells")
+        print(f"{len(cells)} cells, {sum(len(op_arms(c.op, a.sweep)) for c in cells)} arm-cells")
         for c in cells:
             print(f"  {c.op:6s} {c.dtype:8s} n={c.n:5d} batch={c.batch}")
         return
     build_dirs = [Path(p) for p in a.build_dir] if a.build_dir else default_build_dirs()
     camp = make_campaign(a, build_dirs)
-    print(f"campaign {camp.name}: {len(cells)} cells, {sum(len(OPS[c.op].arms) for c in cells)} arm-cells -> {camp.dir}")
+    print(f"campaign {camp.name}: {len(cells)} cells, {sum(len(op_arms(c.op, a.sweep)) for c in cells)} arm-cells -> {camp.dir}")
     # The dashboard tails run.log. A dashboard-started run already has its
     # stdout redirected there; a terminal run appends as well as printing.
     logf = None if os.environ.get("BENCHVIZ_STDOUT_IS_LOG") else open(camp.dir / "run.log", "a")
@@ -301,6 +302,12 @@ def main():
                    help="also sweep the rectangular ops over m x n (or n x k) at the saturated batch "
                         "(on in every preset)")
     r.add_argument("--grid-json", help="a whole grid as JSON (what the dashboard sends)")
+    r.add_argument("--sweep", choices=["ab", "routes"], default="ab",
+                   help="ab: the batchlas/vendor pair; routes: one arm per native route of the op "
+                        "(route:native:<algorithm>, pinned through BATCHLAS_<OP>_ROUTE) plus vendor")
+    r.add_argument("--pass", dest="pass_", type=int, default=0,
+                   help="repeat-pass index: each pass is its own rows (field `pass`), and odd passes "
+                        "run a cell's arms in reverse order")
     r.add_argument("--backend", default="cuda", choices=["cuda", "rocm"])
     r.add_argument("--gpu", default="1", help="GPU index, or a list (0,1) to split the cells across cards; "
                    "both arms of a cell always share a card (default 1)")

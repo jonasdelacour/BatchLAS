@@ -26,8 +26,8 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from ops import OPS, Cell, Grid, plan_cells
-from store import Campaign
+from ops import OPS, ROUTE_ARM, Cell, Grid, find_arm, op_arms, plan_cells
+from store import Campaign, compute_caps
 
 GUARD_CONTAMINATED = 5
 
@@ -70,6 +70,14 @@ def parse_coverage(path_base: str, op: str) -> Dict[str, object]:
 def classify(rec: dict, op, arm_key: str) -> dict:
     """The gate the plots rely on: an arm whose route is not the one it is named
     for is not that library's measurement, whatever the pin said."""
+    if arm_key.startswith(ROUTE_ARM):
+        # A forced route skips preferred() but not supports(): an unsupported pin falls
+        # back to the automatic walk. The row stays, with its time, as a supports() record.
+        pinned = arm_key[len(ROUTE_ARM):]
+        if rec.get("route") != pinned:
+            rec.update(ok=False, reason=f"unsupported/fallback: pinned {pinned}, reached {rec.get('route')}"
+                       + ("" if rec.get("ok") else f"; {rec.get('reason')}"))
+        return rec
     effective = [rec["route"]]
     if op.composed_of:
         mine = [s for s in rec.get("subroutes", []) if s.split("=", 1)[0] in op.composed_of]
@@ -125,6 +133,10 @@ class Runner:
         self.repo = Path(__file__).resolve().parents[2]
         self._stop = threading.Event()
         self._lock = threading.Lock()
+        cfg = camp.config
+        self.sweep = cfg.get("sweep", "ab")
+        self.pass_ = int((cfg.get("request") or {}).get("pass", 0))
+        self._cc = compute_caps() if backend == "cuda" else {}
         known = detect_gpus(backend)
         if known:
             bad = [g for g in self.gpus if g not in {k["index"] for k in known}]
@@ -174,10 +186,14 @@ class Runner:
 
     def _run_arm(self, gpu: int, cell: Cell, arm_key: str, reps: int, tmp: str) -> dict:
         op = OPS[cell.op]
-        arm = next(a for a in op.arms if a.key == arm_key)
+        arm = find_arm(cell.op, arm_key)
         binary = find_binary(op.binary, self.build_dirs)
         base = dict(asdict(cell), arm=arm_key, backend=self.backend, gpu=gpu, t=time.time(),
                     binary=str(binary) if binary else None)
+        if self._cc.get(gpu):
+            base["cc"] = self._cc[gpu]
+        if self.pass_:
+            base["pass"] = self.pass_
         if binary is None:
             return {**base, "ok": False, "reason": f"binary {op.binary} not built"}
         csv_path = os.path.join(tmp, "out.csv")
@@ -187,8 +203,8 @@ class Runner:
         env = dict(arm.env)
         env["BATCHLAS_COVERAGE_OUT"] = cov
         if op.harness == "factor_bench":
-            argv = [str(binary), cell.op, cell.dtype, str(cell.m), str(cell.n), str(cell.nrhs),
-                    str(cell.batch), str(reps), f"--arms={arm.fb_arm}", f"--csv={csv_path}"]
+            argv = [str(binary), op.dispatch_op, cell.dtype, str(cell.m), str(cell.n), str(cell.nrhs),
+                    str(cell.batch), str(reps), f"--arms={arm.fb_arm}", f"--csv={csv_path}", *op.fb_flags]
         else:
             argv = [str(binary), f"--backend={self.backend.upper()}", f"--type={cell.dtype}",
                     f"--name={arm.bench_name}", "--warmup=3", f"--min_iters={reps}",
@@ -230,11 +246,11 @@ class Runner:
         if arm.fixed_route:
             # The top route is known by construction; the sub-ops under it (stedc's
             # merge gemm, say) still record coverage, and decide vendor-freedom.
-            subs = parse_coverage(cov, cell.op)["subroutes"]
+            subs = parse_coverage(cov, op.dispatch_op)["subroutes"]
             rec.update(route=arm.fixed_route, subroutes=subs,
                        vendor_free=arm.key != "vendor" and not any("=vendor" in s for s in subs))
         else:
-            rec.update(parse_coverage(cov, cell.op))
+            rec.update(parse_coverage(cov, op.dispatch_op))
             if op.setup_ops:
                 rec["vendor_free"] = None
         return classify(rec, op, arm_key)
@@ -244,7 +260,7 @@ class Runner:
         with self._lock:
             missing = self._failed_ops.get(cell.op, "")
         if missing:  # an op whose binary is missing fails every cell the same way
-            return dict(asdict(cell), arm=arm, gpu=gpu, ok=False, reason=missing)
+            return dict(asdict(cell), arm=arm, gpu=gpu, ok=False, reason=missing, **({"pass": self.pass_} if self.pass_ else {}))
         rec = self._run_arm(gpu, cell, arm, reps, tmp)
         for _ in range(2):  # factor_bench's noise gate: re-measure rather than leave a hole
             if rec.get("ok") or "relsd" not in str(rec.get("reason")):
@@ -301,11 +317,16 @@ class Runner:
         cells = plan_cells(req["ops"], req["types"], grid)
         done = self.camp.done_keys()
         self._queue = []
+        total = 0
         for c in cells:
-            arms = [a.key for a in OPS[c.op].arms if c.key(a.key) not in done]
+            keys = [a.key for a in op_arms(c.op, self.sweep)]
+            if self.pass_ % 2:  # alternate the arm order between passes (AGENTS.md section 10)
+                keys.reverse()
+            total += len(keys)
+            arms = [k for k in keys if c.key(k, self.pass_) not in done]
             if arms:
                 self._queue.append((c, arms))
-        self._total = sum(len(OPS[c.op].arms) for c in cells)
+        self._total = total
         self._done = self._total - sum(len(a) for _, a in self._queue)
         self._current, self._failed_ops, self._errors = {}, {}, []
         self.camp.set_status("running", total=self._total, done=self._done, pid=os.getpid(),
