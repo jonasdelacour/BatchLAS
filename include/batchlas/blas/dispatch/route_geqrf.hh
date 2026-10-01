@@ -30,6 +30,38 @@ struct GeqrfShape : OpShape {
     int64_t reflectors() const { return k; }   // k is min(rows, cols)
 };
 
+// sm_120 only (cc 0 / 89 never measured): the CTA skinny leg beats cuSOLVER and the resident
+// leaf. Launcher and preferred() share it. Deliberately batch-free: below the launcher's
+// heavy-lane batch gate the resident leaf runs instead, and still beats the vendor (b256
+// 0.10-0.37x). evidence: docs/perf/blackwell.md#geqrf-the-skinny-register-leg
+template <typename T>
+constexpr bool geqrf_skinny_window(int cuda_cc, int64_t m, int64_t n) {
+    if (!is_sm120_family(cuda_cc)) return false;
+    if (n < 1 || n > 8 || m <= n) return false;
+    if constexpr (std::is_same_v<T, float>) {
+        return m <= 256 || (m <= 512 && n >= 2);
+    } else if constexpr (std::is_same_v<T, std::complex<float>>) {
+        return m <= 256;
+    } else {
+        return false;
+    }
+}
+
+// sm_120 only: tall panels below the order floor, plus cfloat's 300..512-row n = 4..8 band
+// above the skinny leg's rows. evidence: docs/perf/blackwell.md#geqrf-the-sm120-tall-window
+template <typename T>
+constexpr bool geqrf_sm120_tall_window(int cuda_cc, int64_t m, int64_t n) {
+    if (!is_sm120_family(cuda_cc)) return false;
+    if constexpr (std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>) {
+        if (std::is_same_v<T, std::complex<float>> && n >= 4 && n <= 8 && m >= 300 && m <= 512) {
+            return true;
+        }
+        return n >= 9 && m > n && m >= 32 && m <= 512;
+    } else {
+        return false;
+    }
+}
+
 // Walk order is this array, never Algorithm's numeric value; Tiny first, the narrowest tier.
 inline constexpr Route kGeqrfOrder[] = {
     {Origin::Native, Algorithm::Tiny},
@@ -112,6 +144,16 @@ struct RouteTable<Op::geqrf, T> {
 
         // BEFORE the floor/tall gate below, which every square n <= 32 fails: dead code after it.
         if (tiny_window(s)) return r.algo == Algorithm::Tiny;
+
+        // Before the floor, which both fail; CTA's launcher is what runs the skinny leg.
+        if (geqrf_skinny_window<T>(s.cuda_cc, s.rows(), s.cols())) {
+            const Route best = best_native_tier(s);
+            return best.algo == Algorithm::CTA && r == best;
+        }
+        if (geqrf_sm120_tall_window<T>(s.cuda_cc, s.rows(), s.cols())) {
+            const Route best = best_native_tier(s);
+            return best.origin != Origin::Auto && r == best;
+        }
 
         const int64_t floor_n = [] () -> int64_t {
             if constexpr (std::is_same_v<T, float>)  return 64;

@@ -815,6 +815,299 @@ n48 nrhs16 1.66 and n512 nrhs64 2.94. With getrs pinned to the composition, cflo
 nrhs16 would reach 1.29. The window leaves that to the vendor because of the mid-ladder
 loss above. `cuda_cc` 0 / 89 and fp64 route exactly as before.
 
+## geqrf skinny panels
+
+Machine: threadripper02, GPU 2 (RTX PRO 6000 Blackwell Max-Q, sm_120), icpx 2026.0 with
+`-ffp-model=precise`, RelWithDebInfo, CUDA 13.2 cuSOLVER as the vendor. Harness:
+`factor_bench geqrf <T> m n 0 <batch> 10` (every quoted row is `ok`: verified, rel_sd
+within the harness gate), one throwaway JIT pass, 3 passes with the BASE/new order
+alternated, medians. BASE is `worktree-blackwell-tuning` @ 502ad378. Ratios are
+time/vendor, so below 1 means faster than cuSOLVER. The campaign losses were all on
+the native-pinned walk (benchviz's batchlas arm); Auto sent every one of them to the
+vendor, so the vendor build lost nothing before this package.
+
+Everything below applies only to `is_sm120_family(cuda_cc)` and to float and cfloat.
+cc 0 and 89, and fp64, keep BASE's behaviour; `SkinnyWindowIsSm120OnlyAndPicksOneTier`
+and `Sm120LeafWidthFollowsTileBytes` assert that.
+
+### geqrf: leaf width from tile bytes
+
+The CTA tier's resident leaf took its work-group width from the column count alone
+(`geqrf_panel_wg`: 128 threads at n=4, 256 from n=8) and packed one panel per sub-group
+only at m <= 32. A 64x8 float panel (a 2 KiB tile) therefore ran on 8 warps behind three
+work-group barriers per reflector. On sm_120 the CTA tier now sizes the group at a fixed
+tile share per work-item (float 72 B, cfloat 96 B; 128 B for both before the review fixup,
+see [the fixup](#geqrf-width-rule-review-fixup)), capped by the old ladder, keeps the
+ladder above 16 KiB of tile, and packs panels of up to 4 KiB
+into one sub-group at any m (`geqrf_cta.cc`, `geqrf_leaf_launch`). The investigation's
+kernel-only probe (tmp probe of the shipped device body, float, batch 32768, ms):
+64x8 wg256 0.93 vs packed 0.21; 128x8 wg256 1.11 vs wg64 0.46; 256x8 wg256 1.16 vs wg128
+0.81; 64x32 wg256 5.25 vs wg64 3.24. cfloat 512x4 was already best at the ladder's 128.
+
+Four limits, each measured:
+
+- **Tile <= 16 KiB** (`kGeqrfNarrowMaxBytes`). Above it the group keeps the ladder's
+  width. Found by the review: at 128 B an item, float 24-28 KiB panels ran wg128 and lost
+  (native/BASE 256x24 1.08, 256x28 1.09, 192x32 1.07, 224x32 1.09, Auto too on the last
+  two). Brackets after the fixup are in the fixup section.
+
+- **Columns >= 8.** Below that the ladder already gives 128 and the rule starved tall
+  panels (cfloat 257x2..384x2 1.2-1.4x slower in the first cut).
+- **Rows <= 256.** Above 256 it was mixed at batch 32768: cfloat 300x8 0.90x, 384x8 1.07x
+  (native, new/BASE). Both are 1.00 with the limit.
+- **Batch >= 2048** (`kGeqrfBytesRuleMinBatch`). Narrower groups starve the device when
+  the batch is small. Native new/BASE with the rule at every batch:
+
+  | cell | b256 | b512 | b1024 | b2048 |
+  |---|---|---|---|---|
+  | float 40x32 | 2.46 | 2.15 | 1.16 | 0.76 |
+  | float 64x32 | 1.58 | 1.42 | 0.77 | 0.96 |
+  | float 128x16 | 1.45 | 1.34 | 0.73 | 0.92 |
+  | float 128x32 | 1.19 | 1.05 | 1.06 | 1.00 |
+  | cfloat 64x32 | 1.13 | 0.97 | 1.00 | 0.96 |
+
+- **CTA tier only.** The blocked driver's panel leaf keeps the ladder. With the rule in
+  the blocked leaf, float 256x64 and 256x128 were 1.02x BASE and 128x128 0.97x; without
+  it every blocked cell is 1.00-1.01x (the remaining ~0.5% is the W1/W2 zero fill, see
+  [known-defects #11](../design/known-defects.md#11-native-gemm-reads-c-at-beta-zero)).
+
+### geqrf: width rule review fixup
+
+Same machine and GPU 2, BASE build at d776064b (502ad378 plus gemm and trsm; the CTA tier
+calls no gemm), fixup build at 1114fbc1. `factor_bench geqrf`, a JIT pass, then 3 passes
+with the BASE/new order alternated, medians, ms, every row `ok`.
+
+Two changes. (1) Tiles over 16 KiB keep the ladder (the regression above). (2) The tile
+share per work-item became float 72 B, cfloat 96 B. A sweep of the share inside one
+binary (a temporary env knob, not shipped; native, batch 32768, 4 rotated passes) showed
+that 128 B left 12-15 KiB float panels on wg64 where wg128 is faster, and 4-7 KiB panels on
+wg32 where wg64 is faster. The two types disagree at 10 KiB, which is why each type gets
+its own share. Time at each share over time at 128 B:
+
+| cell | KiB | 112 B | 96 B | 80 B | 64 B |
+|---|---|---|---|---|---|
+| float 48x32 | 6 | | 0.85 | 0.85 | 0.85 |
+| float 64x32 | 8 | | 1.00 | 1.00 | 1.01 |
+| float 128x16 | 8 | 1.00 | 1.00 | 1.00 | 1.01 |
+| float 96x24 | 9 | | 1.00 | 1.00 | 0.96 |
+| float 128x20 | 10 | 1.00 | 1.00 | 0.96 | 0.96 |
+| float 192x16 | 12 | 1.00 | 0.92 | | 0.91 |
+| float 224x16 | 14 | 0.85 | 0.85 | | 0.85 |
+| float 128x32 | 16 | 1.00 | 1.00 | | 1.07 |
+| cfloat 32x24 | 6 | | 0.93 | 0.93 | 0.93 |
+| cfloat 64x16 | 8 | | 1.00 | 1.00 | 1.11 |
+| cfloat 64x20 | 10 | | 1.00 | 1.03 | 1.02 |
+| cfloat 80x16 | 10 | | 1.00 | 1.02 | 1.02 |
+| cfloat 96x16 | 12 | 1.00 | 0.97 | | 0.97 |
+| cfloat 112x16 | 14 | 0.95 | 0.95 | 0.95 | 0.95 |
+| cfloat 128x16 | 16 | 1.00 | 1.00 | | 1.21 |
+
+So float wants wg128 from 9 KiB (72 B: 9 KiB is exactly 128 items) and not at 8 KiB;
+cfloat wants wg64 at 10 KiB and wg128 at 12 KiB (96 B: 12 KiB is 128 items).
+
+Final build against BASE, batch 32768 (native new/BASE; new native/vendor; new
+Auto/vendor). Every cell is at or below 1.00 on both arms:
+
+| cell | KiB | nat new/BASE | nat/vendor | Auto/vendor |
+|---|---|---|---|---|
+| float 40x32 | 5 | 0.56 | 0.69 | 0.69 |
+| float 64x28 | 7 | 0.63 | 0.72 | 0.72 |
+| float 96x24 | 9 | 0.73 | 0.79 | 0.79 |
+| float 128x20 | 10 | 0.75 | 0.75 | 0.76 |
+| float 128x28 | 14 | 0.86 | 0.65 | 0.65 |
+| float 224x16 | 14 | 0.87 | 0.67 | 0.67 |
+| float 128x32 | 16 | 0.93 | 0.64 | 0.64 |
+| float 256x16 | 16 | 0.95 | 0.64 | 0.64 |
+| float 160x32 | 20 | 1.00 | 0.57 | 0.57 |
+| float 256x20 | 20 | 1.00 | 0.57 | 0.57 |
+| float 224x24 | 21 | 1.00 | 0.54 | 0.54 |
+| float 192x32 | 24 | 1.00 | 0.52 | 0.52 |
+| float 256x24 | 24 | 1.00 | 0.52 | 0.52 |
+| float 256x28 | 28 | 1.00 | 0.45 | 0.45 |
+| float 224x32 | 28 | 1.00 | 0.45 | 0.45 |
+| float 256x32 | 32 | 1.00 | 0.41 | 0.41 |
+| cfloat 48x16 | 6 | 0.53 | 0.82 | 0.83 |
+| cfloat 40x32 | 10 | 0.72 | 0.81 | 0.81 |
+| cfloat 64x20 | 10 | 0.68 | 0.78 | 0.78 |
+| cfloat 112x16 | 14 | 0.77 | 0.70 | 0.70 |
+| cfloat 128x16 | 16 | 0.83 | 0.68 | 0.68 |
+| cfloat 128x20 | 20 | 1.00 | 0.68 | 0.68 |
+| cfloat 192x16 | 24 | 1.00 | 0.56 | 0.56 |
+| cfloat 256x12 | 24 | 1.00 | 0.57 | 0.57 |
+| cfloat 256x16 | 32 | 1.00 | 0.43 | 0.43 |
+
+The 48-cell run (m 32..256, n 16..32 plus float 64x16, 256x8) has its worst native
+new/BASE at 1.00 (float 192x24, 224x24, 256x20..32, cfloat 32x32, 128x20, 192x16, 256x12,
+256x16) and its worst Auto/vendor at 0.90 (cfloat 32x24). At the batch gate (batch 2048)
+the new widths are also faster than BASE: native new/BASE 0.56-0.97 on 11 cells
+(float 40x32 0.59, 224x16 0.82; cfloat 48x16 0.56, 64x32 0.97), Auto/vendor 0.36-0.60.
+
+Tests: `Sm120LeafWidthFollowsTileBytes` now also checks 16 KiB + 1 row and 24 KiB (ladder)
+and the 128-item edge per type (float 72x32 / 71x32, cfloat 48x32 / 47x32). Breaks: ceiling
+raised to 32 KiB turns red `Sm120LeafWidthFollowsTileBytes` for float and cfloat only; float
+share 80 B turns red the float instance only (50 suites otherwise green).
+
+### geqrf: the skinny register leg
+
+`geqrf_skinny.cc` / `geqrf_skinny_device.hh`: a second leg of the CTA tier (the route is
+still `native:cta`) for n <= 8. The panel lives in one sub-group's registers: P lanes own a
+matrix (P = 8 or 16 below 17 rows, so 2-4 matrices share a sub-group; else 32), row r sits
+on lane r % P in slot r / P, and there is no local memory and no barrier. The n-1-j column
+reductions of each reflector are independent butterflies instead of one SLM reduction per
+column. The Householder scalars are `geqrf_larfg_scalars`, so tau and beta follow the
+resident body's LAPACK convention. Instantiations: N in {4, 8} columns, RP in
+{1, 2, 4, 8, 16} row slots (m <= 512 for float, <= 256 for cfloat: its 16-slot bucket
+measured slower than the resident leaf at 257x4 and 300x3). It is a functor, so the launch
+bound can be spelled; MinBlocks = 1, because a tighter cap spilled the RP >= 8 buckets and
+bought nothing measurable elsewhere (float 8x4: MB1 0.0118, MB4 0.0108, MB8 0.0107 ms;
+64x8 0.090/0.089/0.089).
+
+The leg is chosen inside the CTA launcher by `geqrf_skinny_preferred`, which is the route
+window below plus a batch gate: a lane holding >= 512 B of A (cfloat RP 8 with 8 columns,
+float RP 16 with 8 columns) needs batch >= 1024, below which the resident leaf wins.
+Skinny/resident, pinned with `BATCHLAS_GEQRF_LEAF`:
+
+| cell | b256 | b512 | b1024 |
+|---|---|---|---|
+| cfloat 160x8 (heavy) | 1.41 | 1.25 | 0.75 |
+| cfloat 256x8 (heavy) | 1.29 | 1.13 | 0.69 |
+| cfloat 256x6 (heavy) | 1.36 | 1.24 | 0.77 |
+| float 400x8 (heavy) | 1.13 | 1.02 | 0.60 |
+| cfloat 128x8 | 1.00 | 0.90 | 0.55 |
+| cfloat 256x4 | 0.90 | 0.86 | 0.87 |
+| float 256x8 | 0.77 | 0.72 | 0.46 |
+| float 512x8 | 0.96 | 0.86 | 0.52 |
+| float 512x4 | 0.69 | 0.68 | 0.68 |
+
+`BATCHLAS_GEQRF_LEAF=resident|skinny` pins the leg (a pin that does not fit throws).
+
+### geqrf: the sm120 tall window
+
+`route_geqrf.hh` gains two sm_120-only clauses in `preferred()`, both before the order
+floor, both answering for exactly one native tier (`best_native_tier`):
+
+- `geqrf_skinny_window`: float n <= 8 with m <= 256, or m <= 512 with n >= 2; cfloat
+  n <= 8 with m <= 256; strictly tall (m > n). Square shapes stay with the tiny tier.
+- `geqrf_sm120_tall_window`: float and cfloat, 9 <= n < m, 32 <= m <= 512; plus cfloat
+  300 <= m <= 512 with 4 <= n <= 8 (resident leaf, above the skinny leg's rows).
+
+Brackets (native/vendor at batch 32768; excluded cells in the right column):
+
+| edge | inside | outside |
+|---|---|---|
+| float skinny, m | 512x2 0.80, 512x4 0.52 | 400x1 1.39, 512x1 1.36 |
+| tall, m >= 32 | 32x16 float 0.72, cfloat 0.87 | 24x12 float 1.15, cfloat 1.17 |
+| tall, m <= 512 | 512x16 float 0.44, cfloat 0.48 | not measured above 512 |
+| cfloat band, m | 300x4 0.90, 300x6 0.86, 400x5 0.84 | 290x4 0.91, 260x6 0.98, 260x5 1.14 |
+| cfloat band, n | 512x4 0.82 | 300x3 1.10, 512x2 1.13 |
+| cfloat skinny, m | 256x4 0.62 | 257x2 1.03, 257x4 0.97 |
+
+cfloat 257x8 (0.73) and 260x8 (0.75) win but sit between the skinny rows and the band;
+they were left to the vendor because 257x6 (0.95) and 260x5 (1.14) do not, and a
+per-n edge was not worth the extra clause.
+
+The window is keyed on shape alone, and it holds at small batch as well. Final build,
+BASE vs new, ms: native is identical to BASE at b256 and b1024 (the batch gates) except
+where the skinny leg runs (b1024 float 400x8 0.061 -> 0.037, cfloat 256x8 0.058 -> 0.041),
+and Auto moves from the vendor to native:
+
+| cell | b256 vendor | BASE Auto | new Auto | b1024 vendor | BASE Auto | new Auto |
+|---|---|---|---|---|---|---|
+| float 40x32 | 0.319 | 0.319 | 0.073 | 0.320 | 0.320 | 0.161 |
+| float 64x32 | 0.379 | 0.379 | 0.078 | 0.382 | 0.382 | 0.173 |
+| float 128x16 | 0.136 | 0.136 | 0.041 | 0.137 | 0.137 | 0.088 |
+| float 400x8 | 0.094 | 0.094 | 0.030 | 0.096 | 0.096 | 0.037 |
+| cfloat 256x8 | 0.085 | 0.085 | 0.029 | 0.086 | 0.086 | 0.041 |
+| cfloat 64x32 | | | 0.096 | 0.499 | 0.499 | 0.219 |
+
+Routes checked with `BATCHLAS_COVERAGE_OUT` (Auto, `reached` rows): cfloat 400x5, float
+64x8 and float 40x32 at b256 are `native,cta`; cfloat 290x4 is `vendor,auto`.
+
+### geqrf skinny panels: result
+
+Campaign loser cells (the native-pinned benchviz arm), batch 32768, ms:
+
+| cell | vendor | BASE native | new native | new/vendor |
+|---|---|---|---|---|
+| float 8x4 | 0.0283 | 0.0534 | 0.0129 | 0.46 |
+| float 16x4 | 0.0412 | 0.0585 | 0.0184 | 0.45 |
+| float 16x8 | 0.1085 | 0.1672 | 0.0382 | 0.35 |
+| float 64x4 | 0.0920 | 0.1961 | 0.0371 | 0.40 |
+| float 64x8 | 0.309 | 0.833 | 0.104 | 0.34 |
+| float 64x16 | 1.145 | 1.919 | 0.982 | 0.86 |
+| float 64x32 | 4.487 | 4.684 | 3.313 | 0.74 |
+| float 128x4 | 0.133 | 0.270 | 0.070 | 0.53 |
+| float 128x8 | 0.479 | 1.031 | 0.194 | 0.40 |
+| float 128x16 | 1.893 | 2.357 | 1.643 | 0.87 |
+| float 256x4 | 0.287 | 0.414 | 0.163 | 0.57 |
+| float 256x8 | 1.106 | 1.359 | 0.406 | 0.37 |
+| cfloat 8x4 | 0.0321 | 0.0680 | 0.0160 | 0.50 |
+| cfloat 16x4 | 0.0499 | 0.0773 | 0.0252 | 0.50 |
+| cfloat 16x8 | 0.146 | 0.229 | 0.064 | 0.44 |
+| cfloat 32x4 | 0.105 | 0.097 | 0.047 | 0.45 |
+| cfloat 32x8 | 0.313 | 0.266 | 0.133 | 0.43 |
+| cfloat 32x16 | 1.221 | 1.066 | 1.068 | 0.87 |
+| cfloat 64x4 | 0.132 | 0.282 | 0.071 | 0.54 |
+| cfloat 64x16 | 1.984 | 2.660 | 1.558 | 0.79 |
+| cfloat 64x32 | 8.577 | 6.832 | 5.711 | 0.67 |
+| cfloat 128x4 | 0.250 | 0.380 | 0.172 | 0.69 |
+| cfloat 128x8 | 0.926 | 1.405 | 0.542 | 0.58 |
+| cfloat 128x16 | 4.053 | 3.349 | 2.779 | 0.69 |
+| cfloat 256x4 | 0.620 | 0.611 | 0.387 | 0.62 |
+| cfloat 512x4 | 1.465 | 1.203 | 1.205 | 0.82 |
+
+The 106-cell grid (m 4..512, n 1..128, the benchviz geqrf cells plus the brackets),
+geomean time/vendor:
+
+| | BASE Auto | new Auto | BASE native | new native |
+|---|---|---|---|---|
+| float (49 cells) | 0.846 | 0.537 | 1.038 | 0.544 |
+| cfloat (57 cells) | 0.867 | 0.652 | 0.904 | 0.622 |
+
+(new Auto here predates the cfloat band. Re-measured on the final build, Auto/vendor:
+300x4 0.89, 300x8 0.66, 384x8 0.61, 400x5 0.84, 512x6 0.64, 512x8 0.48; 290x4 stays
+vendor-routed at 1.00.) Worst new Auto cell: 1.02 (vendor-routed
+noise). Native cells slower than BASE by more than 2%: none in this grid (the first
+cut's cfloat 384x8 1.07 is fixed by the 256-row limit, and cfloat 257x2..384x2 by the
+8-column limit). The grid had no float cell between 16 and 32 KiB of tile at n >= 8, which
+is where the review found 1.07-1.09x losses; see
+[the fixup](#geqrf-width-rule-review-fixup). This grid predates the fixup and was not
+re-run; the fixup leaves every campaign cell's width unchanged.
+
+Consumers: `syev` two-stage runs geqrf on m x 32 sy2sb panels at batch 64-512, and
+`ortho` (Householder) on tall panels. syev_benchmark, BASE vs final build, native, ms, 4
+alternating reps: float 1024 b256 494.3 / 493.8, float 1024 b128 283.9 / 283.0, float 896
+b512 648.2 / 647.4, float 512 b512 two_stage 151.4 / 150.6, cfloat 512 b128 two_stage
+129.9 / 128.7, cfloat 1024 b64 264.8 / 264.1. (An earlier cut without the batch gates
+read float 1024 b256 529.7 / 557.7 and b128 291.8 / 310.9; the gates removed that.)
+`sytrd_sy2sb_tests`, `syev_two_stage_tests` and `orgqr_tests` pass; `ortho_tests` passes
+through OrthoMatrixTest/6 and crashes in /7 (complex<double>, the pre-existing cuBLAS
+Zgemv segfault on this box; no double path changed). `orgqr`, `ormqr` and `gesvd` do not
+call geqrf's leaves.
+
+Break sweep (each break alone, `geqrf_tests` filtered to the CTA, blocked, facade and new
+suites; red set per break, float = /4, cfloat = /6):
+
+| break | red |
+|---|---|
+| partition butterfly starts at 16 for every P (cross-matrix leak) | SkinnyLegResidualInEveryBucket, SkinnyLegAgreesWithTheResidentLeaf, SkinnyLegIdentityReflectorInOnePartition, SkinnyLegSaturatingBatchIsBitIdentical (float, cfloat) |
+| skinny store uses m instead of ld | the three residual/agreement/identity suites, FacadeReachesTheSkinnyLeg, CtaResidualAndOrthogonality (float, cfloat) |
+| width gate 2048 -> 2049 | Sm120LeafWidthFollowsTileBytes (float, cfloat) |
+| heavy-lane gate 1024 -> 1025 | SkinnyWindowIsSm120OnlyAndPicksOneTier (float, cfloat) |
+| skinny window without the sm_120 guard | SkinnyWindowIsSm120OnlyAndPicksOneTier (float, cfloat) |
+| no W1/W2 zero fill | BlockedIgnoresAGarbageWorkspace (all four types) |
+
+`CtaResidualAndOrthogonality` going red under the ld break shows the pre-existing CTA suite
+reaches the skinny leg through the ordinary route on this device.
+
+Not done:
+
+- The multi-matrix packing for m <= 16 exists (P = 8/16) but no per-n window refinement
+  between 257 and 299 cfloat rows (see the bracket note above).
+- fp64: no skinny instantiation, no width rule, no window. Not measured.
+- float 400x1 / 512x1 (1.36-1.39 native/vendor): n = 1 above 256 rows stays with the vendor.
+- The skinny N = 16 bucket (the probe showed a 64-512 B stack frame at N = 16).
+
 ## trsm
 
 Machine: threadripper02, GPU 0 (RTX PRO 6000 Blackwell Max-Q, sm_120), icpx 2026.0 with

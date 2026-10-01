@@ -39,6 +39,7 @@ inline std::optional<dispatch::GeqrfShape> geqrf_op_shape(
     s.batch = A.batch_size();
 
     s.is_gpu = (ctx.device().type == DeviceType::GPU);
+    s.cuda_cc = ctx.device().cuda_compute_capability();
 
     s.has_sg32 = ctx.device().supports_sub_group_size(32);
 
