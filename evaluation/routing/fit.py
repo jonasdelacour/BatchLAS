@@ -31,6 +31,7 @@ provenance) and report.md (held-out regret, extrapolated regions, route diff).
 import argparse
 import datetime
 import hashlib
+import itertools
 import json
 import math
 import os
@@ -42,7 +43,7 @@ from collections import defaultdict
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 ROUTES = ("native:tiny", "native:cta", "native:lpanel", "native:blocked", "vendor")
 DTYPES = ("float", "double", "cfloat", "cdouble")
-PARAMS = ("t_launch", "s_per_flop", "s_per_byte", "t_step")
+PARAMS = ("t_launch", "s_per_flop", "s_per_byte", "t_step", "s_per_slot")
 
 # Device facts per profile live in ONE file; see its _doc for where each number comes from.
 FACTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "profiles", "device_facts.json")
@@ -50,9 +51,17 @@ FACT_KEYS = ("local_mem", "max_wg", "cus", "max_threads_per_cu", "max_groups_per
              "fp64_rate", "fp32_tflops", "fp64_tflops", "dram_gbps")
 
 
-def load_facts(profile, path=FACTS_FILE):
+REGS_FILE = os.path.join(os.path.dirname(FACTS_FILE), "registers.json")
+
+
+def load_facts(profile, path=FACTS_FILE, regs_path=REGS_FILE):
+    """The profile's device facts, plus its per-kernel register counts under "regs"."""
     with open(path) as f:
-        return dict(json.load(f)[profile])
+        facts = dict(json.load(f)[profile])
+    with open(regs_path) as f:
+        regs = json.load(f).get(profile, {})
+    facts["regs"] = {d: v for d, v in regs.items() if not d.startswith("_")}
+    return facts
 
 PRECISION_PARTNER = {"float": "double", "double": "float", "cfloat": "cdouble", "cdouble": "cfloat"}
 COMPLEXITY_PARTNER = {"float": "cfloat", "cfloat": "float", "double": "cdouble", "cdouble": "double"}
@@ -60,8 +69,9 @@ IS_FP64 = {"float": False, "cfloat": False, "double": True, "cdouble": True}
 
 
 def combine(terms, c):
-    """launch_plan::combine. terms = (T0..T3), c = (t_launch, s_per_flop, s_per_byte, t_step)."""
-    return c[0] * terms[0] + max(c[1] * terms[1], c[2] * terms[2]) + c[3] * terms[3]
+    """launch_plan::combine. terms = (launch, flop, byte, step[, slot]), c = PARAMS order."""
+    slot = c[4] * terms[4] if len(terms) > 4 and len(c) > 4 else 0.0
+    return c[0] * terms[0] + max(c[1] * terms[1], c[2] * terms[2], slot) + c[3] * terms[3]
 
 
 # ---- data -------------------------------------------------------------------------------
@@ -120,6 +130,8 @@ def plan_features(plan_dump, preset, shapes):
     cmd = [plan_dump, "--local-mem", str(preset["local_mem"]), "--max-wg", str(preset["max_wg"]),
            "--cus", str(preset["cus"]), "--max-threads-per-cu", str(preset["max_threads_per_cu"]),
            "--max-groups-per-cu", str(preset["max_groups_per_cu"])]
+    for dtype, r in sorted((preset.get("regs") or {}).items()):
+        cmd += ["--regs", dtype + "=" + ",".join(f"{k}:{v}" for k, v in sorted(r.items()))]
     stdin = "".join(f"{d} {n} {b} {u}\n" for (d, u, n, b) in shapes)
     env = dict(os.environ)
     env["LD_LIBRARY_PATH"] = "/opt/dpcpp-cuda/lib:" + env.get("LD_LIBRARY_PATH", "")
@@ -155,8 +167,25 @@ def _solve(A, b):
     return x
 
 
-def _loss(theta, data):
-    c = [math.exp(t) for t in theta]
+MAXED = (1, 2, 4)   # the terms inside the max: flop, byte, slot
+
+
+def _terms5(terms):
+    return list(terms) + [0.0] * (5 - len(terms))
+
+
+def _model(terms, c):
+    """combine() plus which max term won and the per-parameter partials (for the Jacobian)."""
+    m_in = [c[j] * terms[j] for j in MAXED]
+    k = max(range(3), key=lambda i: m_in[i])
+    m = c[0] * terms[0] + m_in[k] + c[3] * terms[3]
+    return m, MAXED[k]
+
+
+def _loss(theta, data, active):
+    c = [0.0] * 5
+    for i, j in enumerate(active):
+        c[j] = math.exp(theta[i])
     s = 0.0
     for terms, t in data:
         m = combine(terms, c)
@@ -166,33 +195,39 @@ def _loss(theta, data):
     return s
 
 
-def _lm(theta, data, lo, hi, iters=80):
+def _lm(theta, data, lo, hi, active, iters=80):
+    k = len(active)
     mu = 1e-3
-    loss = _loss(theta, data)
+    loss = _loss(theta, data, active)
     for _ in range(iters):
-        c = [math.exp(t) for t in theta]
-        JTJ = [[0.0] * 4 for _ in range(4)]
-        JTr = [0.0] * 4
+        c = [0.0] * 5
+        for i, j in enumerate(active):
+            c[j] = math.exp(theta[i])
+        JTJ = [[0.0] * k for _ in range(k)]
+        JTr = [0.0] * k
         for terms, t in data:
-            tf, tb = c[1] * terms[1], c[2] * terms[2]
-            m = c[0] * terms[0] + max(tf, tb) + c[3] * terms[3]
+            m, win = _model(terms, c)
             r = math.log(m) - math.log(t)
-            g = [c[0] * terms[0] / m, (tf / m) if tf >= tb else 0.0,
-                 (tb / m) if tb > tf else 0.0, c[3] * terms[3] / m]
-            for i in range(4):
-                JTr[i] += g[i] * r
-                for k in range(4):
-                    JTJ[i][k] += g[i] * g[k]
-        improved = False
+            g = []
+            for j in active:
+                if j in MAXED:
+                    g.append(c[j] * terms[j] / m if j == win else 0.0)
+                else:
+                    g.append(c[j] * terms[j] / m)
+            for a in range(k):
+                JTr[a] += g[a] * r
+                for b in range(k):
+                    JTJ[a][b] += g[a] * g[b]
+        improved = done = False
         while mu < 1e12:
-            A = [[JTJ[i][k] + (mu * (JTJ[i][i] + 1e-12) if i == k else 0.0) for k in range(4)]
-                 for i in range(4)]
+            A = [[JTJ[a][b] + (mu * (JTJ[a][a] + 1e-12) if a == b else 0.0) for b in range(k)]
+                 for a in range(k)]
             step = _solve(A, [-v for v in JTr])
             if step is None:
                 mu *= 10
                 continue
-            cand = [min(hi[i], max(lo[i], theta[i] + step[i])) for i in range(4)]
-            cl = _loss(cand, data)
+            cand = [min(hi[a], max(lo[a], theta[a] + step[a])) for a in range(k)]
+            cl = _loss(cand, data, active)
             if cl < loss:
                 done = loss - cl < 1e-12 * max(1.0, loss)
                 theta, loss, mu, improved = cand, cl, max(mu / 10, 1e-9), True
@@ -204,29 +239,29 @@ def _lm(theta, data, lo, hi, iters=80):
 
 
 def fit_constants(data):
-    """data: [(terms, seconds)]. Returns (constants, stats). Inactive terms are set to 0."""
-    scale = []
-    for j in range(4):
-        ratios = [t / terms[j] for terms, t in data if terms[j] > 0]
-        scale.append(statistics.median(ratios) if ratios else 1.0)
-    lo = [math.log(s) - 40 for s in scale]
-    hi = [math.log(s) + 3 for s in scale]
+    """data: [(terms, seconds)]. Returns (constants, stats). Only parameters whose term is
+    non-zero somewhere are fitted; the rest, and any term the data cannot see, are 0."""
+    data = [(_terms5(terms), t) for terms, t in data]
+    active = [j for j in range(5) if any(terms[j] > 0 for terms, _ in data)]
+    scale = {}
+    for j in active:
+        scale[j] = statistics.median([t / terms[j] for terms, t in data if terms[j] > 0])
+    lo = [math.log(scale[j]) - 40 for j in active]
+    hi = [math.log(scale[j]) + 3 for j in active]
     best = None
     levels = (0.5, 0.03, 0.002)
-    for a in levels:
-        for b in levels:
-            for c in levels:
-                for d in levels:
-                    th0 = [math.log(scale[0] * a), math.log(scale[1] * b),
-                           math.log(scale[2] * c), math.log(scale[3] * d)]
-                    th, ls = _lm(th0, data, lo, hi)
-                    if best is None or ls < best[1]:
-                        best = (th, ls)
-    const = [math.exp(t) for t in best[0]]
+    for combo in itertools.product(levels, repeat=len(active)):
+        th0 = [math.log(scale[j] * f) for j, f in zip(active, combo)]
+        th, ls = _lm(th0, data, lo, hi, active)
+        if best is None or ls < best[1]:
+            best = (th, ls)
+    const = [0.0] * 5
+    for i, j in enumerate(active):
+        const[j] = math.exp(best[0][i])
     base = best[1]
-    inactive = []
+    inactive = [PARAMS[j] for j in range(5) if j not in active]
     # Parsimony: a term the data cannot see is 0, not whatever value the optimiser left.
-    for j in range(4):
+    for j in active:
         trial = const[:]
         trial[j] = 0.0
         if all(combine(terms, trial) > 0 for terms, _ in data):
@@ -236,7 +271,8 @@ def fit_constants(data):
                 inactive.append(PARAMS[j])
     resid = [math.log(combine(terms, const)) - math.log(t) for terms, t in data]
     stats = {"rows": len(data), "rms_log": math.sqrt(sum(r * r for r in resid) / len(resid)),
-             "max_abs_log": max(abs(r) for r in resid), "inactive": inactive}
+             "max_abs_log": max(abs(r) for r in resid), "inactive": inactive,
+             "absent": [PARAMS[j] for j in range(5) if j not in active]}
     return const, stats
 
 
@@ -298,6 +334,10 @@ def fit_all(train, cfg):
     return complete(fit_measured(train, cfg), cfg, None, train)
 
 
+def _c5(c):
+    return list(c) + [0.0] * (5 - len(c))
+
+
 def fallback(measured, route, dtype, uplo, cfg, own_rows=()):
     """The rule for a (route, dtype, uplo) without a fit of its own. Sources, in this order:
     1. the same route and dtype on the other uplo, copied;
@@ -343,7 +383,7 @@ def fallback(measured, route, dtype, uplo, cfg, own_rows=()):
         peak = "fp64_tflops" if IS_FP64[dtype] else "fp32_tflops"
         ff = (sf[peak] / sf["cus"]) / (tgt[peak] / tgt["cus"])
         bf = (sf["dram_gbps"] / sf["cus"]) / (tgt["dram_gbps"] / tgt["cus"])
-        src = {"constants": [e["constants"][k] for k in PARAMS], "fit": e.get("fit")}
+        src = {"constants": [e["constants"].get(k, 0.0) for k in PARAMS], "fit": e.get("fit")}
         cands.append((src, "other_profile", (name, route, dtype, uplo), ff, bf))
     thin = None
     if len(own_rows) >= 3:
@@ -352,13 +392,17 @@ def fallback(measured, route, dtype, uplo, cfg, own_rows=()):
         cands.append((thin_src, "thin", (route, dtype, uplo), 1.0, 1.0))
     if not cands:
         return None
-    const, terms, missing = [0.0] * 4, {}, []
+    const, terms, missing = [0.0] * 5, {}, []
     for j, name in enumerate(PARAMS):
         for src, rule, frm, ff, bf in cands:
-            seen_zero_ok = rule == "other_profile" and cfg.get("borrow_inactive")
-            if not seen_zero_ok and name in ((src.get("fit") or {}).get("inactive") or []):
+            # An ABSENT term (the plan never sets it for this route) is a structural 0 and
+            # may be copied; a term SEEN as 0 may not.
+            sf_ = src.get("fit") or {}
+            seen_zero_ok = (rule == "other_profile" and cfg.get("borrow_inactive")) or \
+                name in (sf_.get("absent") or [])
+            if not seen_zero_ok and name in (sf_.get("inactive") or []):
                 continue
-            const[j] = src["constants"][j] * (ff if j == 1 else bf if j == 2 else 1.0)
+            const[j] = _c5(src["constants"])[j] * (ff if j == 1 else bf if j == 2 else 1.0)
             terms[name] = {"rule": rule, "from": "/".join(frm),
                            "factor": ff if j == 1 else bf if j == 2 else 1.0}
             break
@@ -529,9 +573,36 @@ def diff_bands(diffs, all_cells):
     return bands
 
 
-def ship_gate(cv, full_by_cell, feats, max_regret=1.25):
+def edge_cells(full_by_cell):
+    """Cells whose order is the smallest or largest measured order of some route measured in
+    them (per dtype, uplo): there leave-one-n-out EXTRAPOLATES that route's fit."""
+    span = defaultdict(lambda: [10 ** 9, -1])
+    for (d, u, n, b), m in full_by_cell.items():
+        for r in m:
+            sp = span[(d, u, r)]
+            sp[0], sp[1] = min(sp[0], n), max(sp[1], n)
+    return {c for c, m in full_by_cell.items()
+            if any(c[2] in span[(c[0], c[1], r)] for r in m)}
+
+
+def paired_summary(cv, full_by_cell, choice, cells=None):
+    held = {s["cell"]: s for s in cv}
+    pt, pm = [], []
+    for cell, measured in full_by_cell.items():
+        if cells is not None and cell not in cells:
+            continue
+        s = held.get(cell)
+        rt = regret_of(choice(cell), measured)
+        if len(measured) >= 2 and s and s["regret"] is not None and rt is not None:
+            pt.append(rt)
+            pm.append(s["regret"])
+    return summarise(pt), summarise(pm)
+
+
+def ship_gate(cv, full_by_cell, feats):
     """PASS only if, on the cells where BOTH today's pick and the held-out model's pick were
-    measured, the model beats today's windows on geomean AND p95, and its max <= max_regret."""
+    measured, the model beats today's windows on geomean AND p95, and its max is no worse than
+    the windows' max on those same cells."""
     held = {s["cell"]: s for s in cv}
     pt, pm, cells = [], [], []
     for cell, measured in full_by_cell.items():
@@ -543,7 +614,7 @@ def ship_gate(cv, full_by_cell, feats, max_regret=1.25):
             cells.append(cell)
     t, m = summarise(pt), summarise(pm)
     ok = bool(t.get("cells")) and m["geomean"] < t["geomean"] and m["p95"] < t["p95"] \
-        and m["max"] <= max_regret
+        and m["max"] <= t["max"]
     return {"verdict": "PASS" if ok else "FAIL", "paired_cells": len(cells), "today": t,
             "model": m, "rule": ship_gate.__doc__.strip()}
 
@@ -564,6 +635,12 @@ def write_report(path, args, cv, full_by_cell, feats, full_model, skipped, dropp
                  f"{m['geomean']:.4f}, p95 {m['p95']:.4f}, max {m['max']:.4f}.\n")
     else:
         L.append("* no paired cells: nothing to compare, so the gate fails.\n")
+    inner = set(full_by_cell) - edge_cells(full_by_cell)
+    te, me = paired_summary(cv, full_by_cell, lambda c: feats[c]["auto"], inner)
+    if te.get("cells"):
+        L.append(f"* no-edge cells only ({te['cells']}; edge = the held-out order is a measured "
+                 f"route's smallest or largest): today {te['geomean']:.4f} / {te['p95']:.4f} / "
+                 f"{te['max']:.4f}, model {me['geomean']:.4f} / {me['p95']:.4f} / {me['max']:.4f}\n")
     L.append("## Fitted vs borrowed keys\n")
     L.append(f"Minimum-data rule: >= {args.min_rows} rows over >= {args.min_batches} distinct "
              f"batch sizes. Below it a key borrows (see the fallback rule in profile.json).\n")
@@ -585,13 +662,15 @@ def write_report(path, args, cv, full_by_cell, feats, full_model, skipped, dropp
     L.append("* precision_scaled uses the PEAK FP64:FP32 rate; latency-bound kernels violate it "
              "(sm_89 tiny double measures ~2x float, not 64x).\n")
     L.append("## Constants (full fit)\n")
-    L.append("| route | dtype | uplo | t_launch s | s/flop | s/byte | t_step s | rows | rms log | inactive | fallback |")
-    L.append("|---|---|---|---|---|---|---|---|---|---|---|")
+    L.append("| route | dtype | uplo | t_launch s | s/flop | s/byte | t_step s | s/slot | rows | rms log | inactive | fallback |")
+    L.append("|---|---|---|---|---|---|---|---|---|---|---|---|")
     for (route, dtype, uplo), e in sorted(full_model.items()):
         c = e["constants"]
         fit = e["fit"] or {}
         fb = e["fallback"]
+        c = _c5(c)
         L.append(f"| {route} | {dtype} | {uplo} | {c[0]:.3g} | {c[1]:.3g} | {c[2]:.3g} | {c[3]:.3g} "
+                 f"| {c[4]:.3g} "
                  f"| {fit.get('rows', 0)} | {fit.get('rms_log', float('nan')):.3f} "
                  f"| {','.join(fit.get('inactive', [])) or '-'} "
                  f"| {(fb['rule'] + ' <- ' + fb['from']) if fb else '-'} |")
@@ -770,7 +849,7 @@ def main(argv=None):
         all_facts = json.load(f)
     if args.profile not in all_facts and not args.facts:
         ap.error(f"profile {args.profile} not in {args.facts_file}; pass --facts")
-    preset = dict(all_facts.get(args.profile, {}))
+    preset = load_facts(args.profile, args.facts_file) if args.profile in all_facts else {}
     if args.facts:
         preset.update(json.loads(args.facts))
     for k in FACT_KEYS:
@@ -780,7 +859,7 @@ def main(argv=None):
     for spec in args.borrow:
         name, path = spec.split("=", 1)
         with open(path) as f:
-            borrows.append((name, json.load(f), dict(all_facts[name])))
+            borrows.append((name, json.load(f), load_facts(name, args.facts_file)))
     cfg = {"facts": preset, "min_rows": args.min_rows, "min_batches": args.min_batches,
            "borrows": borrows, "borrow_inactive": args.borrow_inactive}
 

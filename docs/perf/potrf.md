@@ -673,15 +673,25 @@ pad), `lpanel_geometry`, `blocked_params` (nb, W, the occupancy target) and `blo
 |---|---|---|---|---|
 | launches | 1 | 1 | 1 | fills + per panel: leaf, fixup, solve, then 2 or 3 per W column (each routed sub-op counted once) |
 | groups, wg, SLM | `tiny_geometry` | `cta_geometry` | `lpanel_geometry` | the leaf's `cta_geometry` at nb |
-| resident groups/CU | register cap at the probed 176 regs | SLM, threads, group cap | SLM, threads, group cap | leaf's |
+| resident groups/CU | registers of the bucket, threads, group cap | SLM, registers of the scope (L == 32 or not), threads, group cap | SLM, registers at NB, threads, group cap | leaf's |
 | flops | LAPACK count at the **bucket** N (padding is masked, not skipped) | LAPACK count | LAPACK count | the schedule's executed work (W-block gemms included) |
-| bytes | triangle read + write | triangle read + write | left-looking re-reads, from the panel walk | per sub-op, from the panel walk |
-| serial steps | N | n | n | n |
+| bytes | triangle read + write | triangle read + write | left-looking re-reads, from the panel walk | per sub-op, from the panel walk, + the W x W scratch fill when n > nb |
+| serial steps | N | NB*ceil(n/NB) (whole panels) | lane chain 3n + (sizeof(T)/2)*P(P-1)/2, P = ceil(n/NB) | n |
+| work scope | per group | per group | per group, + slot term | batch-wide (`batch_wide_work`) |
+
+Register counts are per-arch capacity data, not code: `evaluation/routing/profiles/registers.json`
+(sm_120 probed with `ptxas -v` on a device link of each TU; sm_89 from the register-probe table
+below, LPanel borrowed from sm_120). `potrf_plan_dump --regs` hands them to the plan as
+`potrf_plan::KernelRegs`; with none the register cap is simply not applied. `kTinyWorstProbedRegs`
+stays the tiny tier's LAUNCH gate and is not a cost input.
 
 `useful_flops` is LAPACK's count at n (x4 complex) for every tier. The cost is
-`t_launch*T0 + max(s_per_flop*T1, s_per_byte*T2) + t_step*T3`, where `cost_terms` turns the plan
-into `T0..T3` (waves, per-group shares) and `combine` applies the constants; the vendor is
-priced through `vendor_pseudo_plan`, a single-group plan, since it has no geometry of its own.
+`t_launch*T0 + max(s_per_flop*T1, s_per_byte*T2, s_per_slot*T4) + t_step*T3`. `cost_terms` turns
+the plan into the terms: throughput per CU (load = wave_launches*ceil(groups/CUs) groups, times one
+group's flops/bytes, or the batch-wide totals for Blocked), latency per wave (waves counted with
+the register-aware residency, times the serial chain), and for LPanel slot = load * warps per
+group * lane chain. `combine` applies the constants; the vendor is priced through
+`vendor_pseudo_plan`, a single-group plan, since it has no geometry of its own.
 
 The refactor moved no launch value: `potrf_plan_tests` compares the plan geometry against
 `tests/potrf_plan_golden*.inc`, the pre-refactor launchers' `*_debug_*` codes at every order
