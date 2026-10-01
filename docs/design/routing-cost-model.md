@@ -205,6 +205,32 @@ straddle capacity limits in `supports()`.
   - The next step is a per-route diagnosis (Tiny+CTA, LPanel, Blocked+vendor) of why the
     analytic skeleton misses each kernel's scaling.
   - The changes to plan features and the formula are then implemented in one place.
+- **Model fixes from a per-route diagnosis, landed together** (fixing one route alone made
+  overall regret worse, because the old errors were cancelling):
+  - register-aware residency, with per-arch probed registers in
+    `evaluation/routing/profiles/registers.json`;
+  - throughput per CU;
+  - CTA panel-quantised steps;
+  - LPanel's barrier chain plus an issue-slot term;
+  - batch-wide pricing of Blocked's sub-ops, plus its scratch fill;
+  - a vendor form with n rounded up to multiples of 16 and a per-item batch term.
+- **The edge sweep added n=1, 1280 and 1536.** The gate (user decision) now skips held-out
+  cells at a true domain boundary: order 1, or a route's supports() ceiling. No deployed call
+  is extrapolated past those.
+- **sm_120 ship gate: PASS.** 499 paired cells, 76 boundary cells excluded:
+
+  | | geomean | p95 | max |
+  |---|---|---|---|
+  | today's windows | 1.075 | 1.52 | 2.25 |
+  | model, held-out | 1.023 | 1.18 | 1.75 |
+
+- **sm_89 gate: FAIL.** sm_89, and every device mapped to it, keeps today's windows.
+- **Kernel defects the sweep surfaced** (not routing; recorded for follow-up):
+  - Tiny's fp64 path costs a flat ~0.069 ms (cdouble ~0.108 ms) for n=1..8. LPanel is 3x
+    faster at n <= 2.
+  - The Blocked driver zero-fills a W·W scratch per matrix whatever n is
+    (potrf_blocked.cc). At float n=36, b=32768 that is 7.5x the plan's bytes: the
+    0.41 -> 2.35 ms cliff between n=32 and 36.
 - **Data:** existing campaigns time only the route the native walk picked, plus the vendor.
   A fit needs every supported route timed on the same cell, so benchviz gains a forced-route
   sweep mode with arms `route:<origin>:<algo>`.
