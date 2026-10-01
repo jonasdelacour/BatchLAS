@@ -153,6 +153,19 @@ straddle capacity limits in `supports()`.
   - The sweep uses GPUs 1–3, and GPU 0 is kept for functional tests, so no test process runs
     next to a measured cell.
   - A follow-up pass can use GPU 0 once nothing else needs it.
+- **Coverage gaps: extrapolate, flagged.**
+  - Each profile records every route's measured support region (dtype, uplo, n and batch
+    range, row count).
+  - Predictions outside it are still made, but marked `extrapolated`.
+  - The fit report lists those regions, and coverage records the flag on `reached` rows.
+  - A route with no rows at all for a dtype gets constants from a documented fallback rule.
+- **The fitted model is authoritative, including on sm_89.** Where it disagrees with today's
+  windows, the model's choice ships. The fit report lists every cell where the route changes.
+  The archive already shows today's sm_89 windows losing in four places:
+  - LPanel beats Tiny at fp32 n=17..32;
+  - CTA beats the vendor for cdouble n=20..28;
+  - Blocked beats the vendor at n>256, batch 1024;
+  - the CTA/LPanel edge moves with batch.
 - **Data:** existing campaigns time only the route the native walk picked, plus the vendor.
   A fit needs every supported route timed on the same cell, so benchviz gains a forced-route
   sweep mode with arms `route:<origin>:<algo>`.
