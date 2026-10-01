@@ -11,6 +11,7 @@
 // src/queue.hh, no <sycl/sycl.hpp> -- this header is included by the vendor-free
 // facade (gemm_variant.hh:1-9).
 
+#include <batchlas/blas/dispatch/device_facts.hh>
 #include <batchlas/blas/dispatch/route_env.hh>
 #include <batchlas/blas/dispatch/route_orgqr.hh>
 #include <batchlas/blas/enums.hh>
@@ -66,7 +67,7 @@ inline std::optional<dispatch::OrgqrShape> orgqr_op_shape(
     s.side = Side::Left;
     s.transA = Transpose::NoTrans;
 
-    s.is_gpu = (ctx.device().type == DeviceType::GPU);
+    batchlas::dispatch::fill_device_facts(s, ctx);
 
     // THE GATE AND ITS WRITER LAND TOGETHER (potrf_route.hh). ormqr's table
     // has no heterogeneous_batch gate and its builder never sets the field, so

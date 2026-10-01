@@ -1,0 +1,1682 @@
+{
+ "borrowed_profiles": [],
+ "device_facts": {
+  "cus": 188,
+  "device": "NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition",
+  "dram_gbps": 1792,
+  "fp32_tflops": 110.0,
+  "fp64_rate": 0.015625,
+  "fp64_tflops": 1.72,
+  "local_mem": 101376,
+  "max_groups_per_cu": 32,
+  "max_threads_per_cu": 1536,
+  "max_wg": 1024,
+  "regs": {
+   "cdouble": {
+    "cta_sg": 127,
+    "cta_wg": 110,
+    "lp": 114,
+    "t16": 100,
+    "t8": 74
+   },
+   "cfloat": {
+    "cta_sg": 128,
+    "cta_wg": 96,
+    "lp": 76,
+    "t16": 87,
+    "t32": 156,
+    "t8": 62
+   },
+   "double": {
+    "cta_sg": 94,
+    "cta_wg": 72,
+    "lp": 72,
+    "t16": 72,
+    "t32": 100,
+    "t8": 60
+   },
+   "float": {
+    "cta_sg": 71,
+    "cta_wg": 56,
+    "lp": 72,
+    "lp16": 146,
+    "t16": 55,
+    "t32": 64,
+    "t8": 48
+   }
+  },
+  "source": "local_mem/max_wg/cus: potrf_plan_dump --query-device on threadripper02 GPU 0 (cuda_cc 120), 2026-10-01; caps: CC 12.0 table; peaks: datasheet (Max-Q), unverified"
+ },
+ "fallback_rule": "The rule for a (route, dtype, uplo) without a fit of its own. Sources, in this order:\n    1. the same route and dtype on the other uplo, copied;\n    2. the precision partner (float<->double, cfloat<->cdouble), s_per_flop scaled by the\n       profile's FP64:FP32 PEAK rate, the rest copied (latency-bound kernels violate this:\n       sm_89 tiny double measures ~2x float, not 64x);\n    3. the complexity partner (float<->cfloat, double<->cdouble), copied -- the plan already\n       counts a complex multiply-add as four;\n    4. the same (route, dtype, uplo) MEASURED in another profile (--borrow), s_per_flop scaled\n       by the per-CU peak FP rate of that precision (source/target) and s_per_byte by the\n       per-CU DRAM bandwidth (source/target); t_launch and t_step copied.\n    PER TERM: each constant comes from the first source whose fit SAW that term (it is not in\n    the source's `inactive` list); an inactive 0 is never borrowed. A term no source saw leaves\n    the key unfittable, so the route is not a candidate for it. Only measured entries are\n    sources, never another fallback. Returns the entry, or {\"unfittable\": [terms]}.\n    5. LAST, the key's OWN THIN FIT: its own rows (>= 3) fitted although below the minimum-data\n       rule, flagged `thin`. It supplies every term the sources above did not -- including a\n       term it saw as 0 -- so a key's own data is never discarded in favour of dropping it.",
+ "gate": {
+  "boundary_cells": 76,
+  "model": {
+   "cells": 499,
+   "geomean": 1.0232489884046518,
+   "max": 1.7523523103840295,
+   "over_1.1": 44,
+   "p95": 1.1834925224486073
+  },
+  "paired_cells": 499,
+  "rule": "PASS only if, on the cells where BOTH today's pick and the held-out model's pick were\n    measured, minus true-boundary cells (order 1 or a route's supports() ceiling, where no\n    deployed call is extrapolated to), the model beats today's windows on geomean AND p95, and\n    its max is no worse than the windows' max on those same cells.",
+  "today": {
+   "cells": 499,
+   "geomean": 1.0749868256392288,
+   "max": 2.2489176348497253,
+   "over_1.1": 102,
+   "p95": 1.521654811060701
+  },
+  "verdict": "PASS"
+ },
+ "margin": 0.05,
+ "min_data_rule": {
+  "batches": 2,
+  "rows": 10
+ },
+ "model": "t = t_launch*T0 + max(s_per_flop*T1, s_per_byte*T2) + t_step*T3 (launch_plan::combine over launch_plan::cost_terms)",
+ "objective": "least squares on log(time); constants = exp(theta)",
+ "op": "potrf",
+ "profile": "sm_120",
+ "provenance": {
+  "campaigns": [],
+  "created": "2026-10-01T22:57:11",
+  "fit_git_dirty": true,
+  "fit_git_sha": "0fbf828e",
+  "plan_dump": "build/tests/potrf_plan_dump",
+  "sources": [
+   {
+    "path": "benchmarks/results/routing/sm120_potrf_sweep.jsonl",
+    "sha256_16": "f367559cf676a6db"
+   },
+   {
+    "path": "benchmarks/results/routing/sm120_potrf_sweep_edges.jsonl",
+    "sha256_16": "90fc9ce0d47f6ed2"
+   }
+  ]
+ },
+ "routes": {
+  "native:blocked": {
+   "cdouble": {
+    "L": {
+     "constants": {
+      "s_per_byte": 3.3613299100305913e-12,
+      "s_per_flop": 9.961012552676128e-13,
+      "s_per_slot": 0.0,
+      "t_item": 0.0,
+      "t_launch": 3.859630417143464e-06,
+      "t_step": 3.98755448838169e-06
+     },
+     "fallback": null,
+     "fit": {
+      "absent": [
+       "s_per_slot",
+       "t_item"
+      ],
+      "inactive": [
+       "s_per_slot",
+       "t_item"
+      ],
+      "max_abs_log": 0.8546341612246557,
+      "rms_log": 0.25339296134884404,
+      "rows": 266
+     },
+     "support": {
+      "batch_max": 32768,
+      "batch_min": 64,
+      "n_max": 1536,
+      "n_min": 1,
+      "rows": 266,
+      "sources": [
+       "sm120_potrf_sweep.jsonl",
+       "sm120_potrf_sweep_edges.jsonl"
+      ]
+     },
+     "thin": false
+    },
+    "U": {
+     "constants": {
+      "s_per_byte": 3.3613299100305913e-12,
+      "s_per_flop": 9.961012552676128e-13,
+      "s_per_slot": 0.0,
+      "t_item": 0.0,
+      "t_launch": 3.859630417143464e-06,
+      "t_step": 3.98755448838169e-06
+     },
+     "fallback": {
+      "byte_factor": 1.0,
+      "flop_factor": 1.0,
+      "from": "native:blocked/cdouble/L",
+      "rule": "other_uplo",
+      "terms": {
+       "s_per_byte": {
+        "factor": 1.0,
+        "from": "native:blocked/cdouble/L",
+        "rule": "other_uplo"
+       },
+       "s_per_flop": {
+        "factor": 1.0,
+        "from": "native:blocked/cdouble/L",
+        "rule": "other_uplo"
+       },
+       "s_per_slot": {
+        "factor": 1.0,
+        "from": "native:blocked/cdouble/L",
+        "rule": "other_uplo"
+       },
+       "t_item": {
+        "factor": 1.0,
+        "from": "native:blocked/cdouble/L",
+        "rule": "other_uplo"
+       },
+       "t_launch": {
+        "factor": 1.0,
+        "from": "native:blocked/cdouble/L",
+        "rule": "other_uplo"
+       },
+       "t_step": {
+        "factor": 1.0,
+        "from": "native:blocked/cdouble/L",
+        "rule": "other_uplo"
+       }
+      }
+     },
+     "fit": null,
+     "support": null,
+     "thin": false
+    }
+   },
+   "cfloat": {
+    "L": {
+     "constants": {
+      "s_per_byte": 5.997881123474908e-13,
+      "s_per_flop": 4.311901951225734e-14,
+      "s_per_slot": 0.0,
+      "t_item": 0.0,
+      "t_launch": 3.501925001694122e-06,
+      "t_step": 1.1220845495117023e-06
+     },
+     "fallback": null,
+     "fit": {
+      "absent": [
+       "s_per_slot",
+       "t_item"
+      ],
+      "inactive": [
+       "s_per_slot",
+       "t_item"
+      ],
+      "max_abs_log": 0.8378206189179398,
+      "rms_log": 0.16287793268634343,
+      "rows": 288
+     },
+     "support": {
+      "batch_max": 32768,
+      "batch_min": 128,
+      "n_max": 1536,
+      "n_min": 1,
+      "rows": 288,
+      "sources": [
+       "sm120_potrf_sweep.jsonl",
+       "sm120_potrf_sweep_edges.jsonl"
+      ]
+     },
+     "thin": false
+    },
+    "U": {
+     "constants": {
+      "s_per_byte": 5.997881123474908e-13,
+      "s_per_flop": 4.311901951225734e-14,
+      "s_per_slot": 0.0,
+      "t_item": 0.0,
+      "t_launch": 3.501925001694122e-06,
+      "t_step": 1.1220845495117023e-06
+     },
+     "fallback": {
+      "byte_factor": 1.0,
+      "flop_factor": 1.0,
+      "from": "native:blocked/cfloat/L",
+      "rule": "other_uplo",
+      "terms": {
+       "s_per_byte": {
+        "factor": 1.0,
+        "from": "native:blocked/cfloat/L",
+        "rule": "other_uplo"
+       },
+       "s_per_flop": {
+        "factor": 1.0,
+        "from": "native:blocked/cfloat/L",
+        "rule": "other_uplo"
+       },
+       "s_per_slot": {
+        "factor": 1.0,
+        "from": "native:blocked/cfloat/L",
+        "rule": "other_uplo"
+       },
+       "t_item": {
+        "factor": 1.0,
+        "from": "native:blocked/cfloat/L",
+        "rule": "other_uplo"
+       },
+       "t_launch": {
+        "factor": 1.0,
+        "from": "native:blocked/cfloat/L",
+        "rule": "other_uplo"
+       },
+       "t_step": {
+        "factor": 1.0,
+        "from": "native:blocked/cfloat/L",
+        "rule": "other_uplo"
+       }
+      }
+     },
+     "fit": null,
+     "support": null,
+     "thin": false
+    }
+   },
+   "double": {
+    "L": {
+     "constants": {
+      "s_per_byte": 1.4414924591676796e-12,
+      "s_per_flop": 6.495669775223057e-13,
+      "s_per_slot": 0.0,
+      "t_item": 0.0,
+      "t_launch": 3.023150268020084e-06,
+      "t_step": 2.757362448108208e-06
+     },
+     "fallback": null,
+     "fit": {
+      "absent": [
+       "s_per_slot",
+       "t_item"
+      ],
+      "inactive": [
+       "s_per_slot",
+       "t_item"
+      ],
+      "max_abs_log": 0.9103636501505736,
+      "rms_log": 0.25830010109204476,
+      "rows": 288
+     },
+     "support": {
+      "batch_max": 32768,
+      "batch_min": 128,
+      "n_max": 1536,
+      "n_min": 1,
+      "rows": 288,
+      "sources": [
+       "sm120_potrf_sweep.jsonl",
+       "sm120_potrf_sweep_edges.jsonl"
+      ]
+     },
+     "thin": false
+    },
+    "U": {
+     "constants": {
+      "s_per_byte": 1.4414924591676796e-12,
+      "s_per_flop": 6.495669775223057e-13,
+      "s_per_slot": 0.0,
+      "t_item": 0.0,
+      "t_launch": 3.023150268020084e-06,
+      "t_step": 2.757362448108208e-06
+     },
+     "fallback": {
+      "byte_factor": 1.0,
+      "flop_factor": 1.0,
+      "from": "native:blocked/double/L",
+      "rule": "other_uplo",
+      "terms": {
+       "s_per_byte": {
+        "factor": 1.0,
+        "from": "native:blocked/double/L",
+        "rule": "other_uplo"
+       },
+       "s_per_flop": {
+        "factor": 1.0,
+        "from": "native:blocked/double/L",
+        "rule": "other_uplo"
+       },
+       "s_per_slot": {
+        "factor": 1.0,
+        "from": "native:blocked/double/L",
+        "rule": "other_uplo"
+       },
+       "t_item": {
+        "factor": 1.0,
+        "from": "native:blocked/double/L",
+        "rule": "other_uplo"
+       },
+       "t_launch": {
+        "factor": 1.0,
+        "from": "native:blocked/double/L",
+        "rule": "other_uplo"
+       },
+       "t_step": {
+        "factor": 1.0,
+        "from": "native:blocked/double/L",
+        "rule": "other_uplo"
+       }
+      }
+     },
+     "fit": null,
+     "support": null,
+     "thin": false
+    }
+   },
+   "float": {
+    "L": {
+     "constants": {
+      "s_per_byte": 7.589193278769985e-13,
+      "s_per_flop": 6.192935237386684e-14,
+      "s_per_slot": 0.0,
+      "t_item": 0.0,
+      "t_launch": 4.06274273615266e-06,
+      "t_step": 7.823759457610951e-07
+     },
+     "fallback": null,
+     "fit": {
+      "absent": [
+       "s_per_slot",
+       "t_item"
+      ],
+      "inactive": [
+       "s_per_slot",
+       "t_item"
+      ],
+      "max_abs_log": 0.9535472230434952,
+      "rms_log": 0.1718842886943581,
+      "rows": 298
+     },
+     "support": {
+      "batch_max": 32768,
+      "batch_min": 128,
+      "n_max": 1536,
+      "n_min": 1,
+      "rows": 298,
+      "sources": [
+       "sm120_potrf_sweep.jsonl",
+       "sm120_potrf_sweep_edges.jsonl"
+      ]
+     },
+     "thin": false
+    },
+    "U": {
+     "constants": {
+      "s_per_byte": 7.589193278769985e-13,
+      "s_per_flop": 6.192935237386684e-14,
+      "s_per_slot": 0.0,
+      "t_item": 0.0,
+      "t_launch": 4.06274273615266e-06,
+      "t_step": 7.823759457610951e-07
+     },
+     "fallback": {
+      "byte_factor": 1.0,
+      "flop_factor": 1.0,
+      "from": "native:blocked/float/L",
+      "rule": "other_uplo",
+      "terms": {
+       "s_per_byte": {
+        "factor": 1.0,
+        "from": "native:blocked/float/L",
+        "rule": "other_uplo"
+       },
+       "s_per_flop": {
+        "factor": 1.0,
+        "from": "native:blocked/float/L",
+        "rule": "other_uplo"
+       },
+       "s_per_slot": {
+        "factor": 1.0,
+        "from": "native:blocked/float/L",
+        "rule": "other_uplo"
+       },
+       "t_item": {
+        "factor": 1.0,
+        "from": "native:blocked/float/L",
+        "rule": "other_uplo"
+       },
+       "t_launch": {
+        "factor": 1.0,
+        "from": "native:blocked/float/L",
+        "rule": "other_uplo"
+       },
+       "t_step": {
+        "factor": 1.0,
+        "from": "native:blocked/float/L",
+        "rule": "other_uplo"
+       }
+      }
+     },
+     "fit": null,
+     "support": null,
+     "thin": false
+    }
+   }
+  },
+  "native:cta": {
+   "cdouble": {
+    "L": {
+     "constants": {
+      "s_per_byte": 1.4731283037769372e-09,
+      "s_per_flop": 0.0,
+      "s_per_slot": 0.0,
+      "t_item": 0.0,
+      "t_launch": 0.0,
+      "t_step": 1.7466667139846462e-06
+     },
+     "fallback": null,
+     "fit": {
+      "absent": [
+       "s_per_slot",
+       "t_item"
+      ],
+      "inactive": [
+       "s_per_slot",
+       "t_item",
+       "t_launch",
+       "s_per_flop"
+      ],
+      "max_abs_log": 0.5118099383544212,
+      "rms_log": 0.19877454184153587,
+      "rows": 130
+     },
+     "support": {
+      "batch_max": 32768,
+      "batch_min": 128,
+      "n_max": 36,
+      "n_min": 1,
+      "rows": 130,
+      "sources": [
+       "sm120_potrf_sweep.jsonl",
+       "sm120_potrf_sweep_edges.jsonl"
+      ]
+     },
+     "thin": false
+    },
+    "U": {
+     "constants": {
+      "s_per_byte": 1.4731283037769372e-09,
+      "s_per_flop": 4.596515757148432e-09,
+      "s_per_slot": 0.0,
+      "t_item": 0.0,
+      "t_launch": 6.529862029719774e-06,
+      "t_step": 1.7466667139846462e-06
+     },
+     "fallback": {
+      "byte_factor": 1.0,
+      "flop_factor": 64.0,
+      "from": "native:cta/cfloat/L",
+      "rule": "precision_scaled",
+      "terms": {
+       "s_per_byte": {
+        "factor": 1.0,
+        "from": "native:cta/cdouble/L",
+        "rule": "other_uplo"
+       },
+       "s_per_flop": {
+        "factor": 64.0,
+        "from": "native:cta/cfloat/L",
+        "rule": "precision_scaled"
+       },
+       "s_per_slot": {
+        "factor": 1.0,
+        "from": "native:cta/cdouble/L",
+        "rule": "other_uplo"
+       },
+       "t_item": {
+        "factor": 1.0,
+        "from": "native:cta/cdouble/L",
+        "rule": "other_uplo"
+       },
+       "t_launch": {
+        "factor": 1.0,
+        "from": "native:cta/cfloat/L",
+        "rule": "precision_scaled"
+       },
+       "t_step": {
+        "factor": 1.0,
+        "from": "native:cta/cdouble/L",
+        "rule": "other_uplo"
+       }
+      }
+     },
+     "fit": null,
+     "support": null,
+     "thin": false
+    }
+   },
+   "cfloat": {
+    "L": {
+     "constants": {
+      "s_per_byte": 3.301925323921683e-10,
+      "s_per_flop": 7.182055870544425e-11,
+      "s_per_slot": 0.0,
+      "t_item": 0.0,
+      "t_launch": 6.529862029719774e-06,
+      "t_step": 5.071551033979868e-07
+     },
+     "fallback": null,
+     "fit": {
+      "absent": [
+       "s_per_slot",
+       "t_item"
+      ],
+      "inactive": [
+       "s_per_slot",
+       "t_item"
+      ],
+      "max_abs_log": 0.5773723652221907,
+      "rms_log": 0.168073455184455,
+      "rows": 150
+     },
+     "support": {
+      "batch_max": 32768,
+      "batch_min": 128,
+      "n_max": 48,
+      "n_min": 1,
+      "rows": 150,
+      "sources": [
+       "sm120_potrf_sweep.jsonl",
+       "sm120_potrf_sweep_edges.jsonl"
+      ]
+     },
+     "thin": false
+    },
+    "U": {
+     "constants": {
+      "s_per_byte": 3.301925323921683e-10,
+      "s_per_flop": 7.182055870544425e-11,
+      "s_per_slot": 0.0,
+      "t_item": 0.0,
+      "t_launch": 6.529862029719774e-06,
+      "t_step": 5.071551033979868e-07
+     },
+     "fallback": {
+      "byte_factor": 1.0,
+      "flop_factor": 1.0,
+      "from": "native:cta/cfloat/L",
+      "rule": "other_uplo",
+      "terms": {
+       "s_per_byte": {
+        "factor": 1.0,
+        "from": "native:cta/cfloat/L",
+        "rule": "other_uplo"
+       },
+       "s_per_flop": {
+        "factor": 1.0,
+        "from": "native:cta/cfloat/L",
+        "rule": "other_uplo"
+       },
+       "s_per_slot": {
+        "factor": 1.0,
+        "from": "native:cta/cfloat/L",
+        "rule": "other_uplo"
+       },
+       "t_item": {
+        "factor": 1.0,
+        "from": "native:cta/cfloat/L",
+        "rule": "other_uplo"
+       },
+       "t_launch": {
+        "factor": 1.0,
+        "from": "native:cta/cfloat/L",
+        "rule": "other_uplo"
+       },
+       "t_step": {
+        "factor": 1.0,
+        "from": "native:cta/cfloat/L",
+        "rule": "other_uplo"
+       }
+      }
+     },
+     "fit": null,
+     "support": null,
+     "thin": false
+    }
+   },
+   "double": {
+    "L": {
+     "constants": {
+      "s_per_byte": 1.2977839581421837e-09,
+      "s_per_flop": 0.0,
+      "s_per_slot": 0.0,
+      "t_item": 0.0,
+      "t_launch": 2.5537692267131848e-06,
+      "t_step": 1.2214701548478866e-06
+     },
+     "fallback": null,
+     "fit": {
+      "absent": [
+       "s_per_slot",
+       "t_item"
+      ],
+      "inactive": [
+       "s_per_slot",
+       "t_item",
+       "s_per_flop"
+      ],
+      "max_abs_log": 0.47610341447802984,
+      "rms_log": 0.19648414621346183,
+      "rows": 150
+     },
+     "support": {
+      "batch_max": 32768,
+      "batch_min": 128,
+      "n_max": 48,
+      "n_min": 1,
+      "rows": 150,
+      "sources": [
+       "sm120_potrf_sweep.jsonl",
+       "sm120_potrf_sweep_edges.jsonl"
+      ]
+     },
+     "thin": false
+    }
+   },
+   "float": {
+    "L": {
+     "constants": {
+      "s_per_byte": 2.5980597874449207e-10,
+      "s_per_flop": 0.0,
+      "s_per_slot": 0.0,
+      "t_item": 0.0,
+      "t_launch": 5.800230855305621e-06,
+      "t_step": 5.517070342591879e-07
+     },
+     "fallback": null,
+     "fit": {
+      "absent": [
+       "s_per_slot",
+       "t_item"
+      ],
+      "inactive": [
+       "s_per_slot",
+       "t_item",
+       "s_per_flop"
+      ],
+      "max_abs_log": 0.39074059638949343,
+      "rms_log": 0.11988333374870482,
+      "rows": 170
+     },
+     "support": {
+      "batch_max": 32768,
+      "batch_min": 128,
+      "n_max": 64,
+      "n_min": 1,
+      "rows": 170,
+      "sources": [
+       "sm120_potrf_sweep.jsonl",
+       "sm120_potrf_sweep_edges.jsonl"
+      ]
+     },
+     "thin": false
+    },
+    "U": {
+     "constants": {
+      "s_per_byte": 2.5980597874449207e-10,
+      "s_per_flop": 7.182055870544425e-11,
+      "s_per_slot": 0.0,
+      "t_item": 0.0,
+      "t_launch": 5.800230855305621e-06,
+      "t_step": 5.517070342591879e-07
+     },
+     "fallback": {
+      "byte_factor": 1.0,
+      "flop_factor": 1.0,
+      "from": "native:cta/float/L",
+      "rule": "other_uplo",
+      "terms": {
+       "s_per_byte": {
+        "factor": 1.0,
+        "from": "native:cta/float/L",
+        "rule": "other_uplo"
+       },
+       "s_per_flop": {
+        "factor": 1.0,
+        "from": "native:cta/cfloat/L",
+        "rule": "complexity_borrow"
+       },
+       "s_per_slot": {
+        "factor": 1.0,
+        "from": "native:cta/float/L",
+        "rule": "other_uplo"
+       },
+       "t_item": {
+        "factor": 1.0,
+        "from": "native:cta/float/L",
+        "rule": "other_uplo"
+       },
+       "t_launch": {
+        "factor": 1.0,
+        "from": "native:cta/float/L",
+        "rule": "other_uplo"
+       },
+       "t_step": {
+        "factor": 1.0,
+        "from": "native:cta/float/L",
+        "rule": "other_uplo"
+       }
+      }
+     },
+     "fit": null,
+     "support": null,
+     "thin": false
+    }
+   }
+  },
+  "native:lpanel": {
+   "cdouble": {
+    "L": {
+     "constants": {
+      "s_per_byte": 4.0568253902581443e-10,
+      "s_per_flop": 0.0,
+      "s_per_slot": 6.988030380905416e-08,
+      "t_item": 0.0,
+      "t_launch": 3.877538780111479e-06,
+      "t_step": 4.80396753833228e-07
+     },
+     "fallback": null,
+     "fit": {
+      "absent": [
+       "t_item"
+      ],
+      "inactive": [
+       "t_item",
+       "s_per_flop"
+      ],
+      "max_abs_log": 0.6478749338500815,
+      "rms_log": 0.16824487432679258,
+      "rows": 212
+     },
+     "support": {
+      "batch_max": 32768,
+      "batch_min": 128,
+      "n_max": 160,
+      "n_min": 1,
+      "rows": 212,
+      "sources": [
+       "sm120_potrf_sweep.jsonl",
+       "sm120_potrf_sweep_edges.jsonl"
+      ]
+     },
+     "thin": false
+    }
+   },
+   "cfloat": {
+    "L": {
+     "constants": {
+      "s_per_byte": 0.0,
+      "s_per_flop": 0.0,
+      "s_per_slot": 8.62272022166544e-09,
+      "t_item": 0.0,
+      "t_launch": 6.697623636527344e-06,
+      "t_step": 1.5895377311828133e-07
+     },
+     "fallback": null,
+     "fit": {
+      "absent": [
+       "t_item"
+      ],
+      "inactive": [
+       "t_item",
+       "s_per_flop",
+       "s_per_byte"
+      ],
+      "max_abs_log": 0.2944607977329232,
+      "rms_log": 0.08333715104399098,
+      "rows": 254
+     },
+     "support": {
+      "batch_max": 32768,
+      "batch_min": 128,
+      "n_max": 320,
+      "n_min": 1,
+      "rows": 254,
+      "sources": [
+       "sm120_potrf_sweep.jsonl",
+       "sm120_potrf_sweep_edges.jsonl"
+      ]
+     },
+     "thin": false
+    }
+   },
+   "double": {
+    "L": {
+     "constants": {
+      "s_per_byte": 0.0,
+      "s_per_flop": 0.0,
+      "s_per_slot": 4.45358758613396e-08,
+      "t_item": 0.0,
+      "t_launch": 5.60072618981627e-06,
+      "t_step": 2.6875921102605275e-07
+     },
+     "fallback": null,
+     "fit": {
+      "absent": [
+       "t_item"
+      ],
+      "inactive": [
+       "t_item",
+       "s_per_flop",
+       "s_per_byte"
+      ],
+      "max_abs_log": 0.41100731409773417,
+      "rms_log": 0.12068394163813892,
+      "rows": 254
+     },
+     "support": {
+      "batch_max": 32768,
+      "batch_min": 128,
+      "n_max": 320,
+      "n_min": 1,
+      "rows": 254,
+      "sources": [
+       "sm120_potrf_sweep.jsonl",
+       "sm120_potrf_sweep_edges.jsonl"
+      ]
+     },
+     "thin": false
+    }
+   },
+   "float": {
+    "L": {
+     "constants": {
+      "s_per_byte": 5.737738957129561e-11,
+      "s_per_flop": 0.0,
+      "s_per_slot": 6.143667632875704e-09,
+      "t_item": 0.0,
+      "t_launch": 6.905085819357792e-06,
+      "t_step": 1.3061277599708535e-07
+     },
+     "fallback": null,
+     "fit": {
+      "absent": [
+       "t_item"
+      ],
+      "inactive": [
+       "t_item",
+       "s_per_flop"
+      ],
+      "max_abs_log": 0.22811027808492845,
+      "rms_log": 0.08030668933788697,
+      "rows": 284
+     },
+     "support": {
+      "batch_max": 32768,
+      "batch_min": 128,
+      "n_max": 640,
+      "n_min": 1,
+      "rows": 284,
+      "sources": [
+       "sm120_potrf_sweep.jsonl",
+       "sm120_potrf_sweep_edges.jsonl"
+      ]
+     },
+     "thin": false
+    }
+   }
+  },
+  "native:tiny": {
+   "cdouble": {
+    "L": {
+     "constants": {
+      "s_per_byte": 4.07893825885871e-10,
+      "s_per_flop": 5.492262515749818e-10,
+      "s_per_slot": 0.0,
+      "t_item": 0.0,
+      "t_launch": 0.0,
+      "t_step": 1.6059254295513492e-06
+     },
+     "fallback": null,
+     "fit": {
+      "absent": [
+       "s_per_slot",
+       "t_item"
+      ],
+      "inactive": [
+       "s_per_slot",
+       "t_item",
+       "t_launch"
+      ],
+      "max_abs_log": 0.1818801856928065,
+      "rms_log": 0.07560966685921636,
+      "rows": 80
+     },
+     "support": {
+      "batch_max": 32768,
+      "batch_min": 128,
+      "n_max": 16,
+      "n_min": 1,
+      "rows": 80,
+      "sources": [
+       "sm120_potrf_sweep.jsonl",
+       "sm120_potrf_sweep_edges.jsonl"
+      ]
+     },
+     "thin": false
+    },
+    "U": {
+     "constants": {
+      "s_per_byte": 4.07893825885871e-10,
+      "s_per_flop": 5.492262515749818e-10,
+      "s_per_slot": 0.0,
+      "t_item": 0.0,
+      "t_launch": 4.653359093768394e-06,
+      "t_step": 1.6059254295513492e-06
+     },
+     "fallback": {
+      "byte_factor": 1.0,
+      "flop_factor": 1.0,
+      "from": "native:tiny/cfloat/L",
+      "rule": "precision_scaled",
+      "terms": {
+       "s_per_byte": {
+        "factor": 1.0,
+        "from": "native:tiny/cdouble/L",
+        "rule": "other_uplo"
+       },
+       "s_per_flop": {
+        "factor": 1.0,
+        "from": "native:tiny/cdouble/L",
+        "rule": "other_uplo"
+       },
+       "s_per_slot": {
+        "factor": 1.0,
+        "from": "native:tiny/cdouble/L",
+        "rule": "other_uplo"
+       },
+       "t_item": {
+        "factor": 1.0,
+        "from": "native:tiny/cdouble/L",
+        "rule": "other_uplo"
+       },
+       "t_launch": {
+        "factor": 1.0,
+        "from": "native:tiny/cfloat/L",
+        "rule": "precision_scaled"
+       },
+       "t_step": {
+        "factor": 1.0,
+        "from": "native:tiny/cdouble/L",
+        "rule": "other_uplo"
+       }
+      }
+     },
+     "fit": null,
+     "support": null,
+     "thin": false
+    }
+   },
+   "cfloat": {
+    "L": {
+     "constants": {
+      "s_per_byte": 4.074626567429681e-11,
+      "s_per_flop": 1.1999683533105055e-11,
+      "s_per_slot": 0.0,
+      "t_item": 0.0,
+      "t_launch": 4.653359093768394e-06,
+      "t_step": 4.24195320344033e-07
+     },
+     "fallback": null,
+     "fit": {
+      "absent": [
+       "s_per_slot",
+       "t_item"
+      ],
+      "inactive": [
+       "s_per_slot",
+       "t_item"
+      ],
+      "max_abs_log": 0.40330798957401015,
+      "rms_log": 0.0943708855640129,
+      "rows": 120
+     },
+     "support": {
+      "batch_max": 32768,
+      "batch_min": 128,
+      "n_max": 32,
+      "n_min": 1,
+      "rows": 120,
+      "sources": [
+       "sm120_potrf_sweep.jsonl",
+       "sm120_potrf_sweep_edges.jsonl"
+      ]
+     },
+     "thin": false
+    },
+    "U": {
+     "constants": {
+      "s_per_byte": 4.074626567429681e-11,
+      "s_per_flop": 1.1999683533105055e-11,
+      "s_per_slot": 0.0,
+      "t_item": 0.0,
+      "t_launch": 4.653359093768394e-06,
+      "t_step": 4.24195320344033e-07
+     },
+     "fallback": {
+      "byte_factor": 1.0,
+      "flop_factor": 1.0,
+      "from": "native:tiny/cfloat/L",
+      "rule": "other_uplo",
+      "terms": {
+       "s_per_byte": {
+        "factor": 1.0,
+        "from": "native:tiny/cfloat/L",
+        "rule": "other_uplo"
+       },
+       "s_per_flop": {
+        "factor": 1.0,
+        "from": "native:tiny/cfloat/L",
+        "rule": "other_uplo"
+       },
+       "s_per_slot": {
+        "factor": 1.0,
+        "from": "native:tiny/cfloat/L",
+        "rule": "other_uplo"
+       },
+       "t_item": {
+        "factor": 1.0,
+        "from": "native:tiny/cfloat/L",
+        "rule": "other_uplo"
+       },
+       "t_launch": {
+        "factor": 1.0,
+        "from": "native:tiny/cfloat/L",
+        "rule": "other_uplo"
+       },
+       "t_step": {
+        "factor": 1.0,
+        "from": "native:tiny/cfloat/L",
+        "rule": "other_uplo"
+       }
+      }
+     },
+     "fit": null,
+     "support": null,
+     "thin": false
+    }
+   },
+   "double": {
+    "L": {
+     "constants": {
+      "s_per_byte": 4.624316914338788e-10,
+      "s_per_flop": 1.0206351757954682e-09,
+      "s_per_slot": 0.0,
+      "t_item": 0.0,
+      "t_launch": 4.256801438279113e-06,
+      "t_step": 8.151081142601034e-07
+     },
+     "fallback": null,
+     "fit": {
+      "absent": [
+       "s_per_slot",
+       "t_item"
+      ],
+      "inactive": [
+       "s_per_slot",
+       "t_item"
+      ],
+      "max_abs_log": 0.2672088583337704,
+      "rms_log": 0.1174151904382596,
+      "rows": 120
+     },
+     "support": {
+      "batch_max": 32768,
+      "batch_min": 128,
+      "n_max": 32,
+      "n_min": 1,
+      "rows": 120,
+      "sources": [
+       "sm120_potrf_sweep.jsonl",
+       "sm120_potrf_sweep_edges.jsonl"
+      ]
+     },
+     "thin": false
+    },
+    "U": {
+     "constants": {
+      "s_per_byte": 4.624316914338788e-10,
+      "s_per_flop": 1.0206351757954682e-09,
+      "s_per_slot": 0.0,
+      "t_item": 0.0,
+      "t_launch": 4.256801438279113e-06,
+      "t_step": 8.151081142601034e-07
+     },
+     "fallback": {
+      "byte_factor": 1.0,
+      "flop_factor": 1.0,
+      "from": "native:tiny/double/L",
+      "rule": "other_uplo",
+      "terms": {
+       "s_per_byte": {
+        "factor": 1.0,
+        "from": "native:tiny/double/L",
+        "rule": "other_uplo"
+       },
+       "s_per_flop": {
+        "factor": 1.0,
+        "from": "native:tiny/double/L",
+        "rule": "other_uplo"
+       },
+       "s_per_slot": {
+        "factor": 1.0,
+        "from": "native:tiny/double/L",
+        "rule": "other_uplo"
+       },
+       "t_item": {
+        "factor": 1.0,
+        "from": "native:tiny/double/L",
+        "rule": "other_uplo"
+       },
+       "t_launch": {
+        "factor": 1.0,
+        "from": "native:tiny/double/L",
+        "rule": "other_uplo"
+       },
+       "t_step": {
+        "factor": 1.0,
+        "from": "native:tiny/double/L",
+        "rule": "other_uplo"
+       }
+      }
+     },
+     "fit": null,
+     "support": null,
+     "thin": false
+    }
+   },
+   "float": {
+    "L": {
+     "constants": {
+      "s_per_byte": 9.24838599502496e-11,
+      "s_per_flop": 5.951485765594452e-11,
+      "s_per_slot": 0.0,
+      "t_item": 0.0,
+      "t_launch": 7.038595241992671e-06,
+      "t_step": 1.0789907015628574e-07
+     },
+     "fallback": null,
+     "fit": {
+      "absent": [
+       "s_per_slot",
+       "t_item"
+      ],
+      "inactive": [
+       "s_per_slot",
+       "t_item"
+      ],
+      "max_abs_log": 0.42874327497059106,
+      "rms_log": 0.09238255916908882,
+      "rows": 120
+     },
+     "support": {
+      "batch_max": 32768,
+      "batch_min": 128,
+      "n_max": 32,
+      "n_min": 1,
+      "rows": 120,
+      "sources": [
+       "sm120_potrf_sweep.jsonl",
+       "sm120_potrf_sweep_edges.jsonl"
+      ]
+     },
+     "thin": false
+    },
+    "U": {
+     "constants": {
+      "s_per_byte": 9.24838599502496e-11,
+      "s_per_flop": 5.951485765594452e-11,
+      "s_per_slot": 0.0,
+      "t_item": 0.0,
+      "t_launch": 7.038595241992671e-06,
+      "t_step": 1.0789907015628574e-07
+     },
+     "fallback": {
+      "byte_factor": 1.0,
+      "flop_factor": 1.0,
+      "from": "native:tiny/float/L",
+      "rule": "other_uplo",
+      "terms": {
+       "s_per_byte": {
+        "factor": 1.0,
+        "from": "native:tiny/float/L",
+        "rule": "other_uplo"
+       },
+       "s_per_flop": {
+        "factor": 1.0,
+        "from": "native:tiny/float/L",
+        "rule": "other_uplo"
+       },
+       "s_per_slot": {
+        "factor": 1.0,
+        "from": "native:tiny/float/L",
+        "rule": "other_uplo"
+       },
+       "t_item": {
+        "factor": 1.0,
+        "from": "native:tiny/float/L",
+        "rule": "other_uplo"
+       },
+       "t_launch": {
+        "factor": 1.0,
+        "from": "native:tiny/float/L",
+        "rule": "other_uplo"
+       },
+       "t_step": {
+        "factor": 1.0,
+        "from": "native:tiny/float/L",
+        "rule": "other_uplo"
+       }
+      }
+     },
+     "fit": null,
+     "support": null,
+     "thin": false
+    }
+   }
+  },
+  "vendor": {
+   "cdouble": {
+    "L": {
+     "constants": {
+      "s_per_byte": 3.687736014459892e-12,
+      "s_per_flop": 7.81163822080975e-13,
+      "s_per_slot": 0.0,
+      "t_item": 1.3851905996187444e-09,
+      "t_launch": 1.2446975302960596e-05,
+      "t_step": 1.060796483152354e-06
+     },
+     "fallback": null,
+     "fit": {
+      "absent": [
+       "s_per_slot"
+      ],
+      "inactive": [
+       "s_per_slot"
+      ],
+      "max_abs_log": 0.4162420025447737,
+      "rms_log": 0.13456285836899512,
+      "rows": 266
+     },
+     "support": {
+      "batch_max": 32768,
+      "batch_min": 64,
+      "n_max": 1536,
+      "n_min": 1,
+      "rows": 266,
+      "sources": [
+       "sm120_potrf_sweep.jsonl",
+       "sm120_potrf_sweep_edges.jsonl"
+      ]
+     },
+     "thin": false
+    },
+    "U": {
+     "constants": {
+      "s_per_byte": 3.687736014459892e-12,
+      "s_per_flop": 7.81163822080975e-13,
+      "s_per_slot": 0.0,
+      "t_item": 1.3851905996187444e-09,
+      "t_launch": 1.2446975302960596e-05,
+      "t_step": 1.060796483152354e-06
+     },
+     "fallback": {
+      "byte_factor": 1.0,
+      "flop_factor": 1.0,
+      "from": "vendor/cdouble/L",
+      "rule": "other_uplo",
+      "terms": {
+       "s_per_byte": {
+        "factor": 1.0,
+        "from": "vendor/cdouble/L",
+        "rule": "other_uplo"
+       },
+       "s_per_flop": {
+        "factor": 1.0,
+        "from": "vendor/cdouble/L",
+        "rule": "other_uplo"
+       },
+       "s_per_slot": {
+        "factor": 1.0,
+        "from": "vendor/cdouble/L",
+        "rule": "other_uplo"
+       },
+       "t_item": {
+        "factor": 1.0,
+        "from": "vendor/cdouble/L",
+        "rule": "other_uplo"
+       },
+       "t_launch": {
+        "factor": 1.0,
+        "from": "vendor/cdouble/L",
+        "rule": "other_uplo"
+       },
+       "t_step": {
+        "factor": 1.0,
+        "from": "vendor/cdouble/L",
+        "rule": "other_uplo"
+       }
+      }
+     },
+     "fit": null,
+     "support": null,
+     "thin": false
+    }
+   },
+   "cfloat": {
+    "L": {
+     "constants": {
+      "s_per_byte": 1.1662461280941143e-12,
+      "s_per_flop": 4.571465056566035e-14,
+      "s_per_slot": 0.0,
+      "t_item": 2.193669242038653e-10,
+      "t_launch": 1.4926318165755961e-05,
+      "t_step": 2.3557143367884396e-07
+     },
+     "fallback": null,
+     "fit": {
+      "absent": [
+       "s_per_slot"
+      ],
+      "inactive": [
+       "s_per_slot"
+      ],
+      "max_abs_log": 0.5684782768280563,
+      "rms_log": 0.18209992156440885,
+      "rows": 288
+     },
+     "support": {
+      "batch_max": 32768,
+      "batch_min": 128,
+      "n_max": 1536,
+      "n_min": 1,
+      "rows": 288,
+      "sources": [
+       "sm120_potrf_sweep.jsonl",
+       "sm120_potrf_sweep_edges.jsonl"
+      ]
+     },
+     "thin": false
+    },
+    "U": {
+     "constants": {
+      "s_per_byte": 1.1662461280941143e-12,
+      "s_per_flop": 4.571465056566035e-14,
+      "s_per_slot": 0.0,
+      "t_item": 2.193669242038653e-10,
+      "t_launch": 1.4926318165755961e-05,
+      "t_step": 2.3557143367884396e-07
+     },
+     "fallback": {
+      "byte_factor": 1.0,
+      "flop_factor": 1.0,
+      "from": "vendor/cfloat/L",
+      "rule": "other_uplo",
+      "terms": {
+       "s_per_byte": {
+        "factor": 1.0,
+        "from": "vendor/cfloat/L",
+        "rule": "other_uplo"
+       },
+       "s_per_flop": {
+        "factor": 1.0,
+        "from": "vendor/cfloat/L",
+        "rule": "other_uplo"
+       },
+       "s_per_slot": {
+        "factor": 1.0,
+        "from": "vendor/cfloat/L",
+        "rule": "other_uplo"
+       },
+       "t_item": {
+        "factor": 1.0,
+        "from": "vendor/cfloat/L",
+        "rule": "other_uplo"
+       },
+       "t_launch": {
+        "factor": 1.0,
+        "from": "vendor/cfloat/L",
+        "rule": "other_uplo"
+       },
+       "t_step": {
+        "factor": 1.0,
+        "from": "vendor/cfloat/L",
+        "rule": "other_uplo"
+       }
+      }
+     },
+     "fit": null,
+     "support": null,
+     "thin": false
+    }
+   },
+   "double": {
+    "L": {
+     "constants": {
+      "s_per_byte": 1.535839044348887e-12,
+      "s_per_flop": 8.05567261320124e-13,
+      "s_per_slot": 0.0,
+      "t_item": 8.086307302705346e-10,
+      "t_launch": 1.318346398901643e-05,
+      "t_step": 7.477936490496223e-07
+     },
+     "fallback": null,
+     "fit": {
+      "absent": [
+       "s_per_slot"
+      ],
+      "inactive": [
+       "s_per_slot"
+      ],
+      "max_abs_log": 0.34546277364652056,
+      "rms_log": 0.12936732817548238,
+      "rows": 288
+     },
+     "support": {
+      "batch_max": 32768,
+      "batch_min": 128,
+      "n_max": 1536,
+      "n_min": 1,
+      "rows": 288,
+      "sources": [
+       "sm120_potrf_sweep.jsonl",
+       "sm120_potrf_sweep_edges.jsonl"
+      ]
+     },
+     "thin": false
+    },
+    "U": {
+     "constants": {
+      "s_per_byte": 1.535839044348887e-12,
+      "s_per_flop": 8.05567261320124e-13,
+      "s_per_slot": 0.0,
+      "t_item": 8.086307302705346e-10,
+      "t_launch": 1.318346398901643e-05,
+      "t_step": 7.477936490496223e-07
+     },
+     "fallback": {
+      "byte_factor": 1.0,
+      "flop_factor": 1.0,
+      "from": "vendor/double/L",
+      "rule": "other_uplo",
+      "terms": {
+       "s_per_byte": {
+        "factor": 1.0,
+        "from": "vendor/double/L",
+        "rule": "other_uplo"
+       },
+       "s_per_flop": {
+        "factor": 1.0,
+        "from": "vendor/double/L",
+        "rule": "other_uplo"
+       },
+       "s_per_slot": {
+        "factor": 1.0,
+        "from": "vendor/double/L",
+        "rule": "other_uplo"
+       },
+       "t_item": {
+        "factor": 1.0,
+        "from": "vendor/double/L",
+        "rule": "other_uplo"
+       },
+       "t_launch": {
+        "factor": 1.0,
+        "from": "vendor/double/L",
+        "rule": "other_uplo"
+       },
+       "t_step": {
+        "factor": 1.0,
+        "from": "vendor/double/L",
+        "rule": "other_uplo"
+       }
+      }
+     },
+     "fit": null,
+     "support": null,
+     "thin": false
+    }
+   },
+   "float": {
+    "L": {
+     "constants": {
+      "s_per_byte": 1.5634878104142542e-12,
+      "s_per_flop": 1.0148970947974393e-13,
+      "s_per_slot": 0.0,
+      "t_item": 2.310660964544181e-10,
+      "t_launch": 1.4781337957728957e-05,
+      "t_step": 2.8414614914368794e-07
+     },
+     "fallback": null,
+     "fit": {
+      "absent": [
+       "s_per_slot"
+      ],
+      "inactive": [
+       "s_per_slot"
+      ],
+      "max_abs_log": 0.5666088834506855,
+      "rms_log": 0.1563635388912076,
+      "rows": 298
+     },
+     "support": {
+      "batch_max": 32768,
+      "batch_min": 128,
+      "n_max": 1536,
+      "n_min": 1,
+      "rows": 298,
+      "sources": [
+       "sm120_potrf_sweep.jsonl",
+       "sm120_potrf_sweep_edges.jsonl"
+      ]
+     },
+     "thin": false
+    },
+    "U": {
+     "constants": {
+      "s_per_byte": 1.5634878104142542e-12,
+      "s_per_flop": 1.0148970947974393e-13,
+      "s_per_slot": 0.0,
+      "t_item": 2.310660964544181e-10,
+      "t_launch": 1.4781337957728957e-05,
+      "t_step": 2.8414614914368794e-07
+     },
+     "fallback": {
+      "byte_factor": 1.0,
+      "flop_factor": 1.0,
+      "from": "vendor/float/L",
+      "rule": "other_uplo",
+      "terms": {
+       "s_per_byte": {
+        "factor": 1.0,
+        "from": "vendor/float/L",
+        "rule": "other_uplo"
+       },
+       "s_per_flop": {
+        "factor": 1.0,
+        "from": "vendor/float/L",
+        "rule": "other_uplo"
+       },
+       "s_per_slot": {
+        "factor": 1.0,
+        "from": "vendor/float/L",
+        "rule": "other_uplo"
+       },
+       "t_item": {
+        "factor": 1.0,
+        "from": "vendor/float/L",
+        "rule": "other_uplo"
+       },
+       "t_launch": {
+        "factor": 1.0,
+        "from": "vendor/float/L",
+        "rule": "other_uplo"
+       },
+       "t_step": {
+        "factor": 1.0,
+        "from": "vendor/float/L",
+        "rule": "other_uplo"
+       }
+      }
+     },
+     "fit": null,
+     "support": null,
+     "thin": false
+    }
+   }
+  }
+ },
+ "schema": 1,
+ "unfittable": {
+  "native:cta/double/U": {
+   "tried": [
+    "native:cta/double/L",
+    "native:cta/float/L",
+    "native:cta/cdouble/L"
+   ],
+   "unfittable": [
+    "s_per_flop"
+   ]
+  },
+  "native:lpanel/cdouble/U": {
+   "tried": [
+    "native:lpanel/cdouble/L",
+    "native:lpanel/cfloat/L",
+    "native:lpanel/double/L"
+   ],
+   "unfittable": [
+    "s_per_flop"
+   ]
+  },
+  "native:lpanel/cfloat/U": {
+   "tried": [
+    "native:lpanel/cfloat/L",
+    "native:lpanel/cdouble/L",
+    "native:lpanel/float/L"
+   ],
+   "unfittable": [
+    "s_per_flop"
+   ]
+  },
+  "native:lpanel/double/U": {
+   "tried": [
+    "native:lpanel/double/L",
+    "native:lpanel/float/L",
+    "native:lpanel/cdouble/L"
+   ],
+   "unfittable": [
+    "s_per_flop"
+   ]
+  },
+  "native:lpanel/float/U": {
+   "tried": [
+    "native:lpanel/float/L",
+    "native:lpanel/double/L",
+    "native:lpanel/cfloat/L"
+   ],
+   "unfittable": [
+    "s_per_flop"
+   ]
+  }
+ }
+}

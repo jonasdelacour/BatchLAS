@@ -1,14 +1,12 @@
 #pragma once
 
-// Shared device helpers for the register-resident "tiny" factorization tier
-// (potrf_tiny.cc, getrf_tiny.cc, geqrf_tiny.cc): one matrix per SubGroupPartition<N>,
-// lane r owning row r of a compile-time `D rA[N]`, every cross-lane value a sub-group
-// shuffle. THREE INVARIANTS, each breaking SILENTLY: rA[] is never dynamically indexed
-// nor a by-reference parameter; N must divide the 32-lane sub-group; every lane of a
-// partition must reach every partition collective, so no kernel here returns early.
-// evidence: docs/perf/potrf.md#the-shared-tiny-tier-invariants
+// Device helpers for the register-resident tiny tier (potrf/getrf/geqrf_tiny.cc): lane r owns
+// row r of `D rA[N]`. THREE SILENT INVARIANTS: rA[] is never dynamically indexed nor passed by
+// reference; N divides the sub-group; no kernel returns early (every lane reaches every
+// collective). evidence: docs/perf/potrf.md#the-shared-tiny-tier-invariants
 
 #include "sg_compat.hh"
+#include "tiny_geometry.hh"  // kTinyWgSize, tiny_bucket_ge: host-side, SYCL-free
 
 #include "../sycl/device_scalar.hh"
 
@@ -18,22 +16,6 @@
 #include <cstdint>
 
 namespace batchlas::tiny_native {
-
-inline constexpr int kTinySubGroupSize = 32;  // every tiny kernel: reqd_sub_group_size(32)
-inline constexpr int kTinySubGroups = 2;      // a tuning constant, not a contract
-inline constexpr int kTinyWgSize = kTinySubGroups * kTinySubGroupSize;
-
-constexpr bool tiny_n_is_legal(int N) {  // invariant 2: N must divide the sub-group
-    return N == 8 || N == 16 || N == 32;
-}
-
-constexpr int tiny_bucket_ge(int n) {  // order -> bucket; 0 means "above the tier"
-    if (n < 1) return 0;
-    if (n <= 8) return 8;
-    if (n <= 16) return 16;
-    if (n <= 32) return 32;
-    return 0;
-}
 
 // COLLECTIVE: `src` must be partition-uniform, every lane must reach this call, and a
 // lane guard belongs INSIDE it. Complex shuffles as two reals: permute/select reject an

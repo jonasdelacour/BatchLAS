@@ -11,6 +11,7 @@
 // the last such include is what made the routing adapters includable from the
 // vendor-free facade, and this header is included by that facade.
 
+#include <batchlas/blas/dispatch/device_facts.hh>
 #include <batchlas/blas/dispatch/route_env.hh>
 #include <batchlas/blas/dispatch/route_getrs.hh>
 #include <batchlas/blas/enums.hh>
@@ -78,7 +79,7 @@ inline std::optional<dispatch::GetrsShape> getrs_op_shape(
     // and applies P^T LAST, on the output, in reverse. See route_getrs.hh.
     s.transA = transA;
 
-    s.is_gpu = (ctx.device().type == DeviceType::GPU);
+    batchlas::dispatch::fill_device_facts(s, ctx);
 
     // ENUMERATED, not `max_sub_group >= 32`. See GetrfShape::has_sg32 for why
     // MAX_SUB_GROUP_SIZE is wrong in both directions.

@@ -3,6 +3,7 @@
 // The GESV shape builder; its include set must stay free of src/queue.hh and
 // <sycl/sycl.hpp>, which the vendor-free facade could not follow.
 
+#include <batchlas/blas/dispatch/device_facts.hh>
 #include <batchlas/blas/dispatch/route_env.hh>
 #include <batchlas/blas/dispatch/route_gesv.hh>
 #include <batchlas/blas/enums.hh>
@@ -38,7 +39,7 @@ inline std::optional<dispatch::GesvShape> gesv_op_shape(
     s.k = A.rows();
     s.batch = A.batch_size();
 
-    s.is_gpu = (ctx.device().type == DeviceType::GPU);
+    batchlas::dispatch::fill_device_facts(s, ctx);
     // ENUMERATED, not `max_sub_group >= 32`, which reports entry [0].
     s.has_sg32 = ctx.device().supports_sub_group_size(32);
     // Either view heterogeneous breaks the single-tuple launch; one flag, so OR.

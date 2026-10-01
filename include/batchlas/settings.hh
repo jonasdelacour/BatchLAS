@@ -144,6 +144,11 @@ struct RoutingSettings {
     const EnvValue& legacy_route(dispatch::Op op) const {
         return legacy[static_cast<std::size_t>(op)];
     }
+
+    // BATCHLAS_ROUTING_PROFILE = sm_89 | sm_120. RAW: parsed by
+    // dispatch::routing_profile_override(), which THROWS on any other value -- a typo
+    // that fell back to the device's own profile would make an A/B measure one arm twice.
+    EnvValue routing_profile{};
 };
 
 // ---------------------------------------------------------------------------

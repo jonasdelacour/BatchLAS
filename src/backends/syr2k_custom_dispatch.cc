@@ -158,7 +158,7 @@ Event syr2k_cuda_custom(Queue& ctx,
     // WP1 S0 instrumentation -- beside every return, never in place of one, and
     // inert unless BATCHLAS_COVERAGE_OUT is set. See level3_coverage.hh.
     const auto rec = [&](dispatch::Route taken, bool native_supported) {
-        detail::record_level3_route(dispatch::Op::syr2k, taken,
+        detail::record_level3_route(ctx, dispatch::Op::syr2k, taken,
                                     C.rows(), C.cols(),
                                     transA == Transpose::NoTrans ? A.cols() : A.rows(),
                                     A.batch_size(), native_supported,

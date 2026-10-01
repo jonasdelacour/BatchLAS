@@ -30,7 +30,8 @@ def _sh(*argv) -> str:
 
 
 # What the binaries are compiled from; benchviz's own Python is not.
-_SOURCE_PATHS = ("src", "include", "benchmarks", "cmake", "CMakeLists.txt", ":(exclude)benchmarks/benchviz")
+_SOURCE_PATHS = ("src", "include", "benchmarks", "cmake", "CMakeLists.txt", ":(exclude)benchmarks/benchviz",
+                 ":(exclude)benchmarks/results")
 
 
 def build_info(build_dir: Path) -> Dict[str, object]:
@@ -52,7 +53,9 @@ def build_info(build_dir: Path) -> Dict[str, object]:
     cache = b / "CMakeCache.txt"
     src = None
     if cache.exists():
-        for line in cache.read_text(errors="replace").splitlines():
+        lines = cache.read_text(errors="replace").splitlines()
+        info["vendor_libs"] = _vendor_libs(lines)
+        for line in lines:
             if line.startswith("CMAKE_HOME_DIRECTORY:"):
                 src = Path(line.split("=", 1)[1])
             elif line.startswith("CMAKE_CXX_COMPILER:"):
@@ -88,6 +91,12 @@ def _compile_flags(b: Path) -> Dict[str, object]:
         for line in f.read_text(errors="replace").splitlines():
             if line.startswith('set(CMAKE_CXX_COMPILER_ID "'):
                 out["compiler_id"] = line.split('"')[1]
+            elif line.startswith('set(CMAKE_CXX_COMPILER_VERSION "'):
+                out["compiler_version"] = line.split('"')[1]
+    for f in sorted((b / "CMakeFiles").glob("*/CMakeCUDACompiler.cmake")):
+        for line in f.read_text(errors="replace").splitlines():
+            if line.startswith('set(CMAKE_CUDA_COMPILER_VERSION "'):
+                out["cuda_version"] = line.split('"')[1]
     flags = b / "src" / "CMakeFiles" / "batchlas_sycl_obj.dir" / "flags.make"
     if not flags.exists():
         flags = next(iter(sorted((b / "src" / "CMakeFiles").glob("*/flags.make"))), None)
@@ -97,6 +106,33 @@ def _compile_flags(b: Path) -> Dict[str, object]:
         out["fp_model"] = models[-1] if models else "(compiler default)"  # the last one wins
         targets = [t.split("=", 1)[1] for t in text.split() if t.startswith("-fsycl-targets=")]
         out["sycl_targets"] = targets[-1] if targets else ""
+    return out
+
+
+def compute_caps() -> Dict[int, str]:
+    """GPU index -> compute capability ("12.0"); empty without nvidia-smi. Routing
+    windows are per architecture, so every row carries its card's."""
+    out: Dict[int, str] = {}
+    for line in _sh("nvidia-smi", "--query-gpu=index,compute_cap", "--format=csv,noheader").splitlines():
+        idx, _, cc = line.partition(",")
+        if idx.strip().isdigit():
+            out[int(idx)] = cc.strip()
+    return out
+
+
+def _vendor_libs(cache_lines: List[str]) -> Dict[str, str]:
+    """Versions of the vendor libraries the build linked, from the soname the
+    CMakeCache path resolves to (libcublas.so -> libcublas.so.13.4.1.2)."""
+    out: Dict[str, str] = {}
+    for line in cache_lines:
+        for lib in ("cublas", "cusolver", "cusparse", "rocblas", "rocsolver"):
+            if line.startswith((f"CUDA_{lib}_LIBRARY:", f"{lib.upper()}_LIBRARY:")) and lib not in out:
+                real = os.path.realpath(line.split("=", 1)[1])
+                if not os.path.isfile(real):
+                    continue
+                name = os.path.basename(real)
+                ver = name.split(".so.", 1)[1] if ".so." in name else ""
+                out[lib] = ver or real
     return out
 
 
@@ -155,6 +191,10 @@ def provenance(backend: str, gpu: int) -> Dict[str, str]:
         if q:
             name, _, drv = q.partition(",")
             p.update(device=name.strip(), driver=drv.strip())
+        cc = compute_caps()
+        if cc:
+            p["compute_cap"] = cc.get(gpu)
+            p["compute_caps"] = {str(k): v for k, v in cc.items()}
         p["vendor_label"] = "cuSOLVER"
     else:
         p["device"] = _sh("bash", "-c", "rocminfo 2>/dev/null | grep -m1 'Marketing Name' | cut -d: -f2").strip()
@@ -178,7 +218,8 @@ class Campaign:
         c.figures.mkdir(exist_ok=True)
         cfg_path = c.dir / "campaign.json"
         # What THIS invocation runs; the unions below are what the plots show.
-        config["request"] = {"ops": list(config["ops"]), "types": list(config["types"])}
+        config["request"] = {"ops": list(config["ops"]), "types": list(config["types"]),
+                             "pass": int(config.pop("pass", 0))}
         if cfg_path.exists():
             # Resuming or extending: ops and types accumulate, so the plots keep
             # showing what earlier invocations measured; everything else is the
@@ -186,6 +227,8 @@ class Campaign:
             old = json.loads(cfg_path.read_text())
             if old.get("kind") == "compare":
                 raise ValueError(f"{name} is a log comparison, not a campaign that can be run")
+            if old.get("sweep", "ab") != config.get("sweep", "ab"):
+                raise ValueError(f"campaign {name} is a {old.get('sweep', 'ab')} sweep")
             if old.get("backend") != config.get("backend"):
                 raise ValueError(f"campaign {name} is a {old.get('backend')} campaign")
             for k in ("ops", "types"):
@@ -247,8 +290,9 @@ class Campaign:
 
     def done_keys(self) -> set:
         # Failed cells are retried on resume, except deterministic failures.
-        keep = ("batchlas arm resolved", "vendor arm resolved", "binary ")
-        return {f"{r['op']}|{r['dtype']}|{r['m']}|{r['n']}|{r['nrhs']}|{r['batch']}|{r['arm']}"
+        from ops import row_key
+        keep = ("batchlas arm resolved", "vendor arm resolved", "binary ", "unsupported/fallback")
+        return {row_key(r, r["arm"], r.get("pass", 0))
                 for r in self.rows() if r.get("ok") or str(r.get("reason", "")).startswith(keep)}
 
     # ------------------------------------------------------------ status

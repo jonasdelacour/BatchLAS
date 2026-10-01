@@ -7,6 +7,7 @@
 // getenv, no SYCL query -- so everything that has to ask the device or the
 // environment happens here, and the table sees a plain struct.
 
+#include <batchlas/blas/dispatch/device_facts.hh>
 #include <batchlas/blas/dispatch/route_env.hh>
 #include <batchlas/blas/dispatch/route_trsm.hh>
 #include <batchlas/blas/enums.hh>
@@ -53,7 +54,7 @@ inline std::optional<dispatch::TrsmShape> trsm_op_shape(
     s.uplo = uplo;
     s.transA = transA;
     s.diag = diag;
-    s.is_gpu = (ctx.device().type == DeviceType::GPU);
+    batchlas::dispatch::fill_device_facts(s, ctx);
     s.cta_max_n = sycl_trsm::trsm_cta_max_n<T>();
     s.blocked_available = sycl_trsm::trsm_blocked_available<T>();
     return s;

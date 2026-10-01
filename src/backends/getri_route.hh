@@ -6,6 +6,7 @@
 // The shape is built from A alone because getri_buffer_size has no C, and both call
 // sites must build it identically to reach the same route.
 
+#include <batchlas/blas/dispatch/device_facts.hh>
 #include <batchlas/blas/dispatch/route_env.hh>
 #include <batchlas/blas/dispatch/route_getri.hh>
 #include <batchlas/blas/enums.hh>
@@ -40,7 +41,7 @@ inline std::optional<dispatch::GetriShape> getri_op_shape(
     s.k = A.rows();
     s.batch = A.batch_size();
 
-    s.is_gpu = (ctx.device().type == DeviceType::GPU);
+    batchlas::dispatch::fill_device_facts(s, ctx);
 
     // Enumerated, not `max_sub_group >= 32`. See GetrfShape::has_sg32.
     s.has_sg32 = ctx.device().supports_sub_group_size(32);

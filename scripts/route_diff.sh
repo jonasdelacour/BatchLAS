@@ -21,6 +21,16 @@
 # Any ordinary build works -- recording is gated at runtime on
 # BATCHLAS_COVERAGE_OUT, which this script sets. No special configuration.
 #
+# ROUTE_DIFF_CTEST_ARGS narrows the workload (default: `-LE slow`), e.g.
+#   ROUTE_DIFF_CTEST_ARGS="-R ^(potrf|getrf)_tests$" scripts/route_diff.sh capture ...
+# Both captures of a comparison must use the same value.
+#
+# The decision columns are compared by POSITION, so a capture from before the
+# profile/profile_nearest columns existed compares cleanly against one after. The
+# routing profile each capture ran under is kept in <label>.profiles; `compare`
+# reports a profile difference separately, because a decision that moved because
+# the profile moved is a different finding from one that moved under the same profile.
+#
 # What this script WILL NOT do is report success on an empty measurement. A
 # capture with zero `reached` rows is treated as a hard error, not as "nothing
 # changed". That is not hypothetical: the instrument has already produced a
@@ -46,8 +56,10 @@ capture() {
 
     # Tests are EXPECTED to fail in a vendor-free build; a non-zero ctest is not
     # a capture failure. What matters is that rows appear.
+    local -a ctest_args
+    read -r -a ctest_args <<< "${ROUTE_DIFF_CTEST_ARGS:--LE slow}"
     BATCHLAS_COVERAGE_OUT="$abs" \
-        ctest --test-dir "$build_dir" -LE slow >"$STORE/$label.ctest.log" 2>&1
+        ctest --test-dir "$build_dir" "${ctest_args[@]}" >"$STORE/$label.ctest.log" 2>&1
     local ctest_status=$?
 
     # Each test BINARY writes its own shard; without this merge the capture is
@@ -70,9 +82,16 @@ capture() {
     # that are not route changes.
     #  kind op scalar backend shape_class m n k batch origin algo calls  ... uplo side diag transA transB
     #  1    2  3      4       5           6 7 8 9     10     11   12        16   17   18   19     20
-    grep '^reached,' "$raw" \
+    # tr: coverage_merge.sh writes CRLF, so the LAST field carries a \r -- transB
+    # in a capture without the profile columns, profile_nearest in one with them.
+    grep '^reached,' "$raw" | tr -d '\r' \
         | awk -F, '{print $1","$2","$3","$4","$5","$10","$11","$13","$14","$16","$17","$18","$19","$20}' \
         | sort -u > "$STORE/$label.routes"
+
+    # Columns 21-22 (profile, profile_nearest); "(none)" for a capture that predates them.
+    grep '^reached,' "$raw" | tr -d '\r' \
+        | awk -F, '{print ($21 == "" ? "(none)" : $21 ",nearest=" $22)}' \
+        | sort -u > "$STORE/$label.profiles"
 
     printf 'captured %s: %s reached rows -> %s distinct decisions (ctest exit %s)\n' \
         "$label" "$reached" "$(wc -l < "$STORE/$label.routes")" "$ctest_status"
@@ -83,6 +102,13 @@ compare() {
     for l in "$a" "$b"; do
         [[ -s "$STORE/$l.routes" ]] || die "no capture named '$l' (run capture first)"
     done
+
+    if [[ -s "$STORE/$a.profiles" && -s "$STORE/$b.profiles" ]] \
+        && ! cmp -s "$STORE/$a.profiles" "$STORE/$b.profiles"; then
+        printf 'NOTE: routing profiles differ (%s: %s; %s: %s)\n' \
+            "$a" "$(paste -sd' ' "$STORE/$a.profiles")" \
+            "$b" "$(paste -sd' ' "$STORE/$b.profiles")"
+    fi
 
     if diff -u "$STORE/$a.routes" "$STORE/$b.routes" > "$STORE/$a-vs-$b.diff"; then
         printf 'IDENTICAL: every decision in %s matches %s (%s decisions)\n' \

@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from ops import OPS, PRESETS, Grid, batch_ladder, memory_cap, parse_list, plan_cells  # noqa: E402
+from ops import OPS, PRESETS, Grid, batch_ladder, find_arm, memory_cap, native_routes, op_arms, parse_list, plan_cells  # noqa: E402
 from plots import paired, saturated  # noqa: E402
 from runner import classify, parse_coverage  # noqa: E402
 
@@ -40,6 +40,70 @@ class Classify(unittest.TestCase):
 
     def test_composed_op_with_no_sub_op_rows_is_not_trusted(self):
         self.assertFalse(classify(rec("native:blocked"), OPS["posv"], "vendor")["ok"])
+
+
+class RouteSweep(unittest.TestCase):
+    def test_potrf_routes_follow_the_library_order(self):
+        # kPotrfOrder in include/batchlas/blas/dispatch/route_potrf.hh, native entries.
+        self.assertEqual(native_routes("potrf"),
+                         ("native:tiny", "native:cta", "native:lpanel", "native:blocked"))
+        self.assertEqual(native_routes("potrf_upper"), native_routes("potrf"))
+        self.assertEqual([a.key for a in op_arms("potrf", "routes")],
+                         ["route:native:tiny", "route:native:cta", "route:native:lpanel",
+                          "route:native:blocked", "vendor"])
+        self.assertEqual([a.key for a in op_arms("potrf")], ["batchlas", "vendor"])
+
+    def test_arm_pins_the_ops_route_variable(self):
+        a = find_arm("potrf", "route:native:lpanel")
+        self.assertEqual(a.env, (("BATCHLAS_POTRF_ROUTE", "native:lpanel"),))
+        self.assertEqual(a.fb_arm, "native:lpanel")  # factor_bench: the arm's name is its pin
+        # The Upper variant pins potrf's variable, not a POTRF_UPPER one nothing reads.
+        self.assertEqual(find_arm("potrf_upper", "route:native:cta").env,
+                         (("BATCHLAS_POTRF_ROUTE", "native:cta"),))
+        self.assertEqual(find_arm("gemm", "route:native:register_tiled").env,
+                         (("BATCHLAS_GEMM_ROUTE", "native:register_tiled"),))
+        self.assertEqual(find_arm("potrf", "vendor").fb_arm, "vendor")
+
+    def test_reached_pin_passes_and_fallback_is_kept_as_unsupported(self):
+        self.assertTrue(classify(rec("native:lpanel"), OPS["potrf"], "route:native:lpanel")["ok"])
+        # LPanel is Lower-only: an Upper pin falls back to the automatic walk.
+        r = classify({**rec("native:cta"), "time_ms": 1.0}, OPS["potrf_upper"], "route:native:lpanel")
+        self.assertFalse(r["ok"])
+        self.assertTrue(r["reason"].startswith("unsupported/fallback"))
+        self.assertIn("native:cta", r["reason"])
+        self.assertEqual(r["time_ms"], 1.0)
+        # Falling back to the vendor, or to another native tier, is the same verdict.
+        self.assertFalse(classify(rec("vendor:auto"), OPS["potrf"], "route:native:tiny")["ok"])
+        # A pin that landed but failed verification keeps the harness's reason.
+        bad = {**rec("native:tiny", ok=False), "reason": "residual"}
+        self.assertEqual(classify(bad, OPS["potrf"], "route:native:tiny")["reason"], "residual")
+
+    def test_fallback_is_not_retried_and_passes_are_distinct(self):
+        from store import Campaign
+        with tempfile.TemporaryDirectory() as d:
+            c = Campaign.create(Path(d), "s", {"ops": ["potrf"], "types": ["float"], "backend": "cuda",
+                                               "sweep": "routes", "pass": 1})
+            cell = dict(op="potrf", dtype="float", m=64, n=64, nrhs=0, batch=128)
+            c.append({**cell, "arm": "route:native:tiny", "pass": 1, "ok": False,
+                      "reason": "unsupported/fallback: pinned native:tiny, reached native:lpanel"})
+            c.append({**cell, "arm": "vendor", "pass": 1, "ok": True})
+            from ops import Cell
+            k = Cell(**cell)
+            self.assertIn(k.key("route:native:tiny", 1), c.done_keys())
+            self.assertIn(k.key("vendor", 1), c.done_keys())
+            self.assertNotIn(k.key("vendor", 2), c.done_keys())
+            self.assertNotIn(k.key("vendor"), c.done_keys())
+            with self.assertRaises(ValueError):  # a sweep cannot resume as an A/B campaign
+                Campaign.create(Path(d), "s", {"ops": ["potrf"], "types": ["float"], "backend": "cuda"})
+
+    def test_all_leaves_out_opt_in_variants(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("benchviz_cli", Path(__file__).with_name("__main__.py"))
+        cli = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cli)
+        _csv_list = cli._csv_list
+        self.assertNotIn("potrf_upper", _csv_list("all", OPS))
+        self.assertEqual(_csv_list("potrf_upper", OPS), ["potrf_upper"])
 
 
 class Coverage(unittest.TestCase):

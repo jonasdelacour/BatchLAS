@@ -117,6 +117,7 @@ void load_routing(RoutingSettings& r) {
         const std::string_view legacy = dispatch::legacy_variable_for(op);
         r.legacy[i] = legacy.empty() ? EnvValue::unset() : raw(std::string(legacy).c_str());
     }
+    r.routing_profile = raw("BATCHLAS_ROUTING_PROFILE");
 }
 
 void load_selection(SelectionSettings& s) {

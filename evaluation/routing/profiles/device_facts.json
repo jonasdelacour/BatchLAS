@@ -1,0 +1,19 @@
+{
+ "_doc": "Device facts per routing profile: the one source fit.py passes to potrf_plan_dump and uses for cross-profile scaling. local_mem/max_wg/cus are DPC++ device queries (potrf_plan_dump --query-device); thread/group caps are the CUDA compute-capability tables; peaks are vendor datasheet numbers (per device, not measured) and only scale cross-profile borrows.",
+ "sm_89": {
+  "device": "NVIDIA GeForce RTX 4090",
+  "local_mem": 101376, "max_wg": 1024, "cus": 128,
+  "max_threads_per_cu": 1536, "max_groups_per_cu": 24,
+  "fp32_tflops": 82.6, "fp64_tflops": 1.29, "dram_gbps": 1008,
+  "fp64_rate": 0.015625,
+  "source": "local_mem/max_wg: docs/perf/potrf.md (budget 97280 = 101376 - 4096); cus: AGENTS.md section 13; caps: CC 8.9 table; peaks: datasheet"
+ },
+ "sm_120": {
+  "device": "NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition",
+  "local_mem": 101376, "max_wg": 1024, "cus": 188,
+  "max_threads_per_cu": 1536, "max_groups_per_cu": 32,
+  "fp32_tflops": 110.0, "fp64_tflops": 1.72, "dram_gbps": 1792,
+  "fp64_rate": 0.015625,
+  "source": "local_mem/max_wg/cus: potrf_plan_dump --query-device on threadripper02 GPU 0 (cuda_cc 120), 2026-10-01; caps: CC 12.0 table; peaks: datasheet (Max-Q), unverified"
+ }
+}
