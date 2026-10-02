@@ -1,8 +1,11 @@
 #pragma once
 
 // Selection policy as data: a generated first-match RuleSet per (arch, op) ranks tier ids,
-// and one engine returns the first ranked tier whose legal() admits the shape. SYCL-free,
-// so tools and offline tests include it. See evaluation/routing/compile_rules.py.
+// and one engine returns the first ranked tier whose legal() admits the shape. A RuleSet is a
+// compiled CACHE of the op's policy for one device's facts: off those facts, in a box the
+// compiler saw the policy change inside (nrank == 0), or in a hole, the op's live pricer
+// decides instead. SYCL-free, so tools and offline tests include it.
+// See evaluation/routing/compile_rules.py.
 
 #include <batchlas/blas/dispatch/route.hh>
 
@@ -13,7 +16,9 @@
 #include <cstdlib>
 #include <limits>
 #include <mutex>
+#include <optional>
 #include <set>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -27,9 +32,12 @@ using Features = std::array<std::int64_t, kMaxF>;
 inline constexpr std::int64_t kInf = std::numeric_limits<std::int64_t>::max();
 
 struct Knobs { std::array<std::int16_t, kMaxKnobs> v{}; };   // 0 = the plan's own default
-struct Candidate { std::uint8_t name = 0; Knobs knobs{}; };  // name: index into RuleSet::names
-enum class Source : std::uint8_t { Hand, Model, Measured, Override };
+struct Candidate { std::uint8_t name = 0; Knobs knobs{}; };  // name: index into kNames
+// Live: the op's run-time pricer decided, because no compiled rule is valid for the call.
+enum class Source : std::uint8_t { Hand, Model, Measured, Override, Live };
 
+// nrank == 0 is a CONTESTED box: the compiler saw the policy change inside it (batch waves),
+// so the engine asks the live pricer rather than guess.
 struct Rule {
     std::uint32_t id;
     std::uint16_t key;
@@ -46,7 +54,14 @@ struct RuleSet {
     // Rules are sorted by key; key_off[k]..key_off[k+1] is key k's slice.
     const std::uint32_t* key_off;
     std::uint16_t nkeys;
-    Features compiled_for;   // cus, local_mem, max_wg, sub-group
+    // The device facts the policy was compiled against (cus, local_mem, max_wg, sub-group);
+    // all zero = facts-independent (legality is left entirely to run time).
+    Features compiled_for;
+    Source kind;   // Model: serves `arch` only; Hand: serves any arch whose model is off
+
+    bool valid_for(const Features& facts) const {
+        return compiled_for == Features{} || compiled_for == facts;
+    }
 
     const Rule* match(std::uint16_t key, const Features& f) const {
         if (key >= nkeys) return nullptr;
@@ -59,7 +74,29 @@ struct RuleSet {
     }
 };
 
+// The RuleSet that may decide a call, or null (= price live). A model set is bound to its
+// arch AND to the facts it was compiled for (one set per SKU); a hand set serves an arch
+// whose model is off. An arch with model sets but none for these facts is priced live.
+inline const RuleSet* pick_rules(std::span<const RuleSet* const> sets, std::string_view arch,
+                                 const Features& facts, bool model_on) {
+    bool arch_has_model = false;
+    for (const RuleSet* rs : sets) {
+        if (rs->kind == Source::Model && rs->arch == arch) {
+            if (rs->valid_for(facts)) return rs;
+            arch_has_model = true;
+        }
+    }
+    if (model_on || arch_has_model) return nullptr;
+    for (const RuleSet* rs : sets) {
+        if (rs->kind == Source::Hand && rs->valid_for(facts)) return rs;
+    }
+    return nullptr;
+}
+
 enum class Reason : std::uint8_t { Rule, RankFallback, NoRule, Pinned, PinRefused };
+// Why the live pricer decided: no RuleSet is valid for this device, the box is contested, or
+// the rules have a hole (a generator bug; reason NoRule makes it visible).
+enum class LiveCause : std::uint8_t { None, NoRuleSet, Contested, Hole };
 
 inline constexpr std::string_view to_string(Reason r) {
     switch (r) {
@@ -77,6 +114,16 @@ inline constexpr std::string_view to_string(Source s) {
         case Source::Model: return "model";
         case Source::Measured: return "measured";
         case Source::Override: return "override";
+        case Source::Live: return "live";
+    }
+    return "?";
+}
+inline constexpr std::string_view to_string(LiveCause c) {
+    switch (c) {
+        case LiveCause::None: return "-";
+        case LiveCause::NoRuleSet: return "no_ruleset";
+        case LiveCause::Contested: return "contested";
+        case LiveCause::Hole: return "hole";
     }
     return "?";
 }
@@ -133,6 +180,9 @@ struct TierList {
         ((i == I ? (out.template emplace<I>(Tiers::plan(c, k)), 0) : 0), ...);
         return out;
     }
+    static bool fits(const PlanVariant& p) {
+        return std::visit([](const auto& x) { return static_cast<bool>(x.fits); }, p);
+    }
     template <class Ctx>
     static std::size_t workspace(const PlanVariant& p, const Ctx& c) {
         return ws_impl(p, c, std::index_sequence_for<Tiers...>{});
@@ -175,14 +225,18 @@ struct Selection {
     Reason reason = Reason::NoRule;
     std::uint32_t rule_id = 0;
     Source source = Source::Hand;
+    LiveCause live = LiveCause::None;
     std::string forced;   // the pin text, empty when none
-    const RuleSet* rules = nullptr;
+    const RuleSet* rules = nullptr;   // null when no RuleSet was valid for the call
     std::string_view id() const { return Tiers::ids[tier]; }
     dispatch::Route route() const { return Tiers::routes[tier]; }
 };
 
 class no_route_error : public std::runtime_error {
     using std::runtime_error::runtime_error;
+};
+class rules_hole_error : public std::logic_error {
+    using std::logic_error::logic_error;
 };
 
 // Warn once per (op, pin) under a lock; strict mode throws instead.
@@ -218,58 +272,84 @@ Pin parse_pin(const char* raw, bool strict) {
     return p;
 }
 
-template <class Tiers, class Ctx, std::size_t N>
-Selection<Tiers> select(const RuleSet& rs, const std::array<std::uint8_t, N>& bound,
-                        const Ctx& c, const Pin& pin) {
-    auto make = [&](std::size_t t, const Knobs& k, Reason why, const Rule* r) {
+// For an op without a live pricer: a hole or a contested box is a generator bug.
+inline constexpr auto no_live = [](const auto&) -> std::optional<Rule> { return std::nullopt; };
+
+// `live(c)` returns the rule the op's run-time pricer writes for exactly this call, or nullopt.
+template <class Tiers, class Ctx, std::size_t N, class Live>
+Selection<Tiers> select(const RuleSet* rs, std::string_view op,
+                        const std::array<std::uint8_t, N>& bound, const Ctx& c, const Pin& pin,
+                        Live&& live) {
+    const Rule* r = nullptr;
+    LiveCause cause = LiveCause::None;
+    auto make = [&](std::size_t t, const Knobs& k, Reason why) {
         Selection<Tiers> s;
         s.tier = static_cast<std::uint8_t>(t);
         s.plan = Tiers::plan(t, c, k);
         s.ws_bytes = Tiers::workspace(s.plan, c);
         s.reason = why;
         s.rule_id = r ? r->id : 0u;
-        s.source = r ? r->source : (why == Reason::Pinned ? Source::Override : Source::Hand);
+        s.source = r ? r->source : Source::Override;
+        s.live = cause;
         s.forced = pin.active ? pin.text : std::string();
-        s.rules = &rs;
+        s.rules = rs;
         return s;
     };
+    Reason miss = Reason::RankFallback;
+    // A legal tier pin decides alone: no rule is consulted and nothing is priced.
+    if (pin.active && !pin.origin_only) {
+        if (pin.tier >= 0 && Tiers::legal(static_cast<std::size_t>(pin.tier), c)) {
+            return make(static_cast<std::size_t>(pin.tier), pin.knobs, Reason::Pinned);
+        }
+        report_refused_pin(op, pin.text, pin.strict);
+        miss = Reason::PinRefused;
+    }
+
+    r = rs ? rs->match(c.key(), c.features()) : nullptr;
+    cause = !rs ? LiveCause::NoRuleSet
+          : !r ? LiveCause::Hole
+          : r->nrank == 0 ? LiveCause::Contested : LiveCause::None;
+    std::optional<Rule> priced;
+    if (cause != LiveCause::None) {
+        priced = live(c);
+        if (!priced) {
+            throw rules_hole_error("BatchLAS routing: no rule decides this " + std::string(op) +
+                                   " shape (" + std::string(to_string(cause)) +
+                                   ") and the op has no live pricer");
+        }
+        priced->id = r ? r->id : 0u;
+        r = &*priced;
+    }
+
     bool restrict_origin = pin.active && pin.origin_only;
     auto admitted = [&](std::size_t t) {
         if (restrict_origin && Tiers::routes[t].origin != pin.origin) return false;
         return Tiers::legal(t, c);
     };
-    Reason miss = Reason::RankFallback;
-    if (pin.active && !pin.origin_only) {
-        if (pin.tier >= 0 && Tiers::legal(static_cast<std::size_t>(pin.tier), c)) {
-            return make(static_cast<std::size_t>(pin.tier), pin.knobs, Reason::Pinned, nullptr);
-        }
-        report_refused_pin(rs.op, pin.text, pin.strict);
-        miss = Reason::PinRefused;
-    }
     if (restrict_origin) {
         bool any = false;
         for (std::size_t t = 0; t < Tiers::size; ++t) any = any || admitted(t);
         if (any) {
             miss = Reason::Pinned;
         } else {
-            report_refused_pin(rs.op, pin.text, pin.strict);
+            report_refused_pin(op, pin.text, pin.strict);
             restrict_origin = false;
             miss = Reason::PinRefused;
         }
     }
-    if (const Rule* r = rs.match(c.key(), c.features())) {
-        for (std::uint8_t i = 0; i < r->nrank; ++i) {
-            const std::size_t t = bound[r->rank[i].name];
-            if (admitted(t)) {
-                const Reason why = (i == 0 && miss == Reason::RankFallback) ? Reason::Rule : miss;
-                return make(t, r->rank[i].knobs, why, r);
-            }
+    // No TierList-order safety net: the rank IS the policy, and an exhausted rank means no
+    // tier the policy would take can serve the call.
+    for (std::uint8_t i = 0; i < r->nrank; ++i) {
+        const std::size_t t = bound[r->rank[i].name];
+        if (admitted(t)) {
+            const Reason why = miss != Reason::RankFallback ? miss
+                               : cause == LiveCause::Hole   ? Reason::NoRule
+                               : i == 0                     ? Reason::Rule
+                                                            : Reason::RankFallback;
+            return make(t, r->rank[i].knobs, why);
         }
     }
-    for (std::size_t t = 0; t < Tiers::size; ++t) {
-        if (admitted(t)) return make(t, Knobs{}, Reason::NoRule, nullptr);
-    }
-    throw no_route_error("BatchLAS routing: no legal tier for " + std::string(rs.op));
+    throw no_route_error("BatchLAS routing: no legal tier for " + std::string(op));
 }
 
 }  // namespace batchlas::routing

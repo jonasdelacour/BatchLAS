@@ -45,10 +45,12 @@ std::string new_pick(Queue& q, const MatrixView<T, MatrixFormat::Dense>& A, Uplo
     try {
         const auto s = rp::potrf_select<kB, T>(q, A, u, vendor, false);
         if (why) {
-            char b[96];
-            std::snprintf(b, sizeof b, "%s R%04u %s/%s", std::string(to_string(s.reason)).c_str(),
-                          s.rule_id, std::string(s.rules->arch).c_str(),
-                          std::string(to_string(s.source)).c_str());
+            char b[128];
+            std::snprintf(b, sizeof b, "%s R%04u %s/%s live=%s",
+                          std::string(to_string(s.reason)).c_str(), s.rule_id,
+                          s.rules ? std::string(s.rules->arch).c_str() : "-",
+                          std::string(to_string(s.source)).c_str(),
+                          std::string(to_string(s.live)).c_str());
             *why = b;
         }
         return std::string(s.id());
@@ -146,11 +148,13 @@ int run(Uplo u, int n, int batch, bool do_run) {
     const std::size_t old_ws = potrf_buffer_size<kB, T>(q, V1, u);
     const auto sel = rp::potrf_select<kB, T>(q, V2, u);
     const std::size_t new_ws = rp::potrf_rules_buffer_size<kB, T>(q, V2, u);
-    std::printf("SIZE n=%d batch=%d uplo=%c old=%zu new=%zu tier=%s reason=%s rule=R%04u (%s/%s)\n",
+    std::printf("SIZE n=%d batch=%d uplo=%c old=%zu new=%zu tier=%s reason=%s rule=R%04u (%s/%s) "
+                "live=%s\n",
                 n, batch, u == Uplo::Upper ? 'U' : 'L', old_ws, new_ws,
                 std::string(sel.id()).c_str(), std::string(to_string(sel.reason)).c_str(),
-                sel.rule_id, std::string(sel.rules->arch).c_str(),
-                std::string(to_string(sel.source)).c_str());
+                sel.rule_id, sel.rules ? std::string(sel.rules->arch).c_str() : "-",
+                std::string(to_string(sel.source)).c_str(),
+                std::string(to_string(sel.live)).c_str());
     if (!do_run) return 0;
     const std::string old_route = name_of(backend::potrf_route<kB, T>(q, V1, u, true));
     UnifiedVector<std::byte> w1(old_ws ? old_ws : 1), w2(new_ws ? new_ws : 1);
@@ -246,6 +250,32 @@ int main(int argc, char** argv) {
         getrs_equiv<std::complex<double>>(q, "cdouble", cells, bad);
         std::printf("SUMMARY getrs %d decisions on the device, %d differ\n", cells, bad);
         return bad ? 1 : 0;
+    }
+    if (mode == "noroute") {
+        // The public facade on a shape nothing serves (vendor-free Upper 128): which exception
+        // type escapes, from the size query and from the call.
+        Queue q(Device("gpu"));
+        UnifiedVector<float> a(128 * 128 * 4, 1.0f);
+        const MatrixView<float, MatrixFormat::Dense> A(a.data(), 128, 128, 128, 128 * 128, 4);
+        auto probe = [&](const char* what, auto&& f) {
+            try {
+                f();
+                std::printf("NOROUTE %s: no exception\n", what);
+            } catch (const dispatch::NoRouteError& e) {
+                std::printf("NOROUTE %s: dispatch::NoRouteError\n", what);
+            } catch (const routing::no_route_error& e) {
+                std::printf("NOROUTE %s: routing::no_route_error (WRONG TYPE)\n", what);
+            } catch (const std::exception& e) {
+                std::printf("NOROUTE %s: other: %s\n", what, e.what());
+            }
+        };
+        probe("potrf_buffer_size", [&] { (void)potrf_buffer_size<kB, float>(q, A, Uplo::Upper); });
+        probe("potrf", [&] {
+            UnifiedVector<std::byte> ws(1 << 20);
+            (void)potrf<kB, float>(q, A, Uplo::Upper, ws.to_span(), {});
+            q.wait();
+        });
+        return 0;
     }
     if (argc < 3) return 2;
     if (mode == "equiv") {

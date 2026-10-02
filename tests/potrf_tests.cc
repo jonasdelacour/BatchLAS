@@ -1513,6 +1513,53 @@ TYPED_TEST(PotrfBlockedTest, BufferSizeCoversEverySupportedNativeTier) {
         << "the blocked tier does not need more workspace than the CTA tier here, so a "
            "chosen-route-only query would pass this test by accident";
 
+#if defined(BATCHLAS_ROUTING_RULES_PROTOTYPE)
+    // The rules facade's contract: potrf_buffer_size sizes the tier potrf() selects under the
+    // SAME environment (the max over every tier was 537 MB for float n=36 b=8192). A pin
+    // changed between query and call must therefore fail LOUDLY -- workspace_error naming the
+    // tier, before anything is enqueued, A untouched -- never run under-sized.
+    const std::size_t q_cta = [&] {
+        const ScopedEnvVar route_pin("BATCHLAS_POTRF_ROUTE", "cta");
+        return potrf_buffer_size<B, T>(*this->ctx, A.view(), Uplo::Lower);
+    }();
+    const std::size_t q_blk = [&] {
+        const ScopedEnvVar route_pin("BATCHLAS_POTRF_ROUTE", "blocked");
+        return potrf_buffer_size<B, T>(*this->ctx, A.view(), Uplo::Lower);
+    }();
+    EXPECT_EQ(q_cta, cta_need) << "the query under `cta` did not size the CTA tier";
+    EXPECT_EQ(q_blk, blk_need) << "the query under `blocked` did not size the blocked tier";
+
+    const ScopedEnvVar route_pin("BATCHLAS_POTRF_ROUTE", "blocked");
+    std::vector<T> before;
+    for (int b = 0; b < batch; ++b) {
+        for (int j = 0; j < n; ++j) {
+            for (int i = 0; i < n; ++i) before.push_back(A(i, j, b));
+        }
+    }
+    {
+        UnifiedVector<std::byte> ws(q_cta);
+        UnifiedVector<int32_t> info(batch, int32_t(-12345));
+        bool refused = false;
+        try {
+            (void)potrf<B, T>(*this->ctx, A.view(), Uplo::Lower, ws.to_span(), info.to_span());
+        } catch (const batchlas::workspace_error& e) {
+            refused = true;
+            EXPECT_NE(std::string(e.what()).find("native:blocked"), std::string::npos) << e.what();
+        }
+        this->ctx->wait();
+        ASSERT_TRUE(refused) << "a workspace sized for `cta` was accepted by the blocked tier";
+        std::size_t k = 0;
+        for (int b = 0; b < batch; ++b) {
+            for (int j = 0; j < n; ++j) {
+                for (int i = 0; i < n; ++i, ++k) {
+                    ASSERT_TRUE(A(i, j, b) == before[k])
+                        << "the refused call wrote A at (" << i << "," << j << "," << b << ")";
+                }
+            }
+        }
+    }
+    const std::size_t queried = q_blk;
+#else
     // The query and the call deliberately run under DIFFERENT pinned routes -- that
     // mismatch is the property under test. One ScopedEnvVar per arm rather than one
     // mutable guard: the shared class pins for a scope and reloads the settings snapshot
@@ -1530,6 +1577,7 @@ TYPED_TEST(PotrfBlockedTest, BufferSizeCoversEverySupportedNativeTier) {
     // Pinned for the rest of the test; its destructor restores the surrounding value,
     // which is what the single hand-rolled guard did once at end of scope.
     const ScopedEnvVar route_pin("BATCHLAS_POTRF_ROUTE", "blocked");
+#endif
     UnifiedVector<std::byte> ws(queried);
     UnifiedVector<int32_t> info(batch, int32_t(-12345));
     ASSERT_NO_THROW(

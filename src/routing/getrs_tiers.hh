@@ -123,8 +123,9 @@ inline constexpr auto kBound = bind<Tiers<Bk, T>>(getrs_rules::kNames);
 
 template <Backend Bk, class T>
 Selection<Tiers<Bk, T>> select_ctx(const Ctx<T>& c, const Pin& pin = {}) {
-    return routing::select<Tiers<Bk, T>>(getrs_rules::rules_for_profile(c.s.profile),
-                                         kBound<Bk, T>, c, pin);
+    // getrs's rules are facts-independent (legal() decides capacity), so no live pricer.
+    return routing::select<Tiers<Bk, T>>(pick_rules(getrs_rules::kSets, {}, {}, false), "getrs",
+                                         kBound<Bk, T>, c, pin, no_live);
 }
 
 template <Backend Bk, class T>

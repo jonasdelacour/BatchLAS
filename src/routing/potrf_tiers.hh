@@ -1,13 +1,15 @@
 #pragma once
 
 // potrf as tier descriptors run by routing::select: legal() is RouteTable::supports verbatim,
-// plan() is the launch-plan geometry, launch() is today's dispatcher. Nothing here prices a
-// route; the policy is the generated RuleSet. See evaluation/routing/compile_rules.py.
+// plan() is the launch-plan geometry, launch() is today's dispatcher. The policy is the
+// generated RuleSet; live_rule() prices the call with today's resolver wherever no RuleSet is
+// valid (other device facts, NB/W overrides, a contested box). See compile_rules.py.
 
 #include <batchlas/routing/rules.hh>
 
 #include <batchlas/blas/dispatch/coverage.hh>
 #include <batchlas/blas/dispatch/device_facts.hh>
+#include <batchlas/blas/dispatch/no_route.hh>
 #include <batchlas/blas/dispatch/route_env.hh>
 #include <batchlas/blas/dispatch/vendor_available.hh>
 #include <batchlas/blas/functions/gemm.hh>
@@ -46,6 +48,8 @@ struct Ctx {
     int leaf_trsm = 0;
     int nb_env = 0, w_env = 0;
     bool vendor_legal = true;   // false = the vendor-free walk
+    bool model_on = false;      // today's path would price this profile (gate passed)
+    std::string arch;           // the RuleSet key: "sm_<cc>", or the forced routing profile
     Queue* q = nullptr;         // null: offline (no workspace query)
     const View<T>* A = nullptr;
     bool size_ws = true;
@@ -55,6 +59,10 @@ struct Ctx {
                                           (s.uplo == Uplo::Upper ? 1 : 0));
     }
     Features features() const { return {s.order(), s.batch, 0, 0}; }
+    Features facts() const {
+        return {d.compute_units, static_cast<std::int64_t>(d.local_mem_bytes), d.max_wg_size,
+                s.has_sg32 ? 32 : 0};
+    }
 };
 
 template <class T>
@@ -116,7 +124,8 @@ struct CtaTier {
 };
 
 // CTA at work-group scope. No RouteTable arm exists for it: legal() is CTA's correctness gate
-// plus this tier's own geometry, and coverage records it under CTA's Route.
+// plus this tier's own geometry, and coverage records it under CTA's Route (the explain log
+// names the tier). Pinnable only, and only by its id: no legacy word maps to it.
 template <class T>
 struct CtaWgTier {
     static constexpr std::string_view id = "native:cta_wg";
@@ -246,6 +255,7 @@ struct VendorTier {
     }
 };
 
+// Order is not policy: neither Auto nor any pin word reads it (see legacy_tier_id).
 template <Backend B, class T>
 using Tiers = TierList<TinyTier<T>, CtaTier<T>, LpanelTier<T>, BlockedTier<B, T>, VendorTier<B, T>,
                        CtaWgTier<T>>;
@@ -253,10 +263,65 @@ using Tiers = TierList<TinyTier<T>, CtaTier<T>, LpanelTier<T>, BlockedTier<B, T>
 template <Backend B, class T>
 inline constexpr auto kBound = bind<Tiers<B, T>>(potrf_rules::kNames);
 
-// Offline context from described facts: what tests and tools use instead of a Queue.
+// Today's Route vocabulary, mapped EXPLICITLY: two tiers share {Native, CTA}, and a legacy
+// pin word ("cta") must keep naming the kernel it named before. Empty: no tier.
+inline constexpr std::string_view legacy_tier_id(dispatch::Route r) {
+    if (dispatch::is_vendor(r)) return "vendor";
+    if (r.origin != Origin::Native) return {};
+    switch (r.algo) {
+        case Algorithm::Tiny: return "native:tiny";
+        case Algorithm::CTA: return "native:cta";
+        case Algorithm::LPanel: return "native:lpanel";
+        case Algorithm::Blocked: return "native:blocked";
+        default: return {};
+    }
+}
+
+inline constexpr std::uint8_t name_index(std::string_view id) {
+    for (std::size_t i = 0; i < potrf_rules::kNames.size(); ++i) {
+        if (potrf_rules::kNames[i] == id) return static_cast<std::uint8_t>(i);
+    }
+    throw "potrf: a tier id the rules vocabulary does not name";
+}
+
+// The live pricer: today's resolver, Auto, vendor present and vendor-free, written as the
+// rule the compiler would have emitted for exactly this call.
+template <Backend B, class T>
+std::optional<Rule> live_rule(const Ctx<T>& c) {
+    dispatch::PotrfShape s = c.s;
+    backend::potrf_price_routes<T>(s, c.d, c.leaf_trsm, c.nb_env, c.w_env);
+    const dispatch::Route v =
+        dispatch::resolve_route_uninstrumented<dispatch::Op::potrf, T>(dispatch::Route{}, s, true);
+    const dispatch::Route nv =
+        dispatch::resolve_route_uninstrumented<dispatch::Op::potrf, T>(dispatch::Route{}, s, false);
+    Rule r{};
+    r.key = c.key();
+    r.source = Source::Live;
+    auto push = [&](std::string_view id) {
+        const std::uint8_t k = name_index(id);
+        for (std::uint8_t i = 0; i < r.nrank; ++i) {
+            if (r.rank[i].name == k) return;
+        }
+        r.rank[r.nrank++] = Candidate{k, {}};
+    };
+    push(legacy_tier_id(v));
+    if (dispatch::is_native(nv)) push(legacy_tier_id(nv));
+    push("vendor");
+    return r;
+}
+
+template <class T>
+bool model_on_for(const dispatch::PotrfShape& s) {
+    const potrf_profile::Profile* p = potrf_profile::profile_for(s.profile);
+    return p && p->model_enabled;
+}
+
+// Offline context from described facts: what tests and tools use instead of a Queue. `arch`
+// defaults to the profile's name, which is what a device of that family reports.
 template <Backend B, class T>
 Ctx<T> ctx_from_facts(const DeviceFacts& d, std::int64_t n, std::int64_t batch, Uplo uplo,
-                      arch::RoutingProfile profile, bool vendor_legal) {
+                      arch::RoutingProfile profile, bool vendor_legal,
+                      std::string_view arch_name = {}) {
     Ctx<T> c;
     c.s = backend::potrf_op_shape_from_facts<B, T>(d, n, n, batch, uplo, true, true, false,
                                                    sycl_potrf::potrf_blocked_available<T>());
@@ -264,6 +329,8 @@ Ctx<T> ctx_from_facts(const DeviceFacts& d, std::int64_t n, std::int64_t batch, 
     c.d = d;
     c.leaf_trsm = sycl_trsm::trsm_cta_max_n<T>();
     c.vendor_legal = vendor_legal;
+    c.model_on = model_on_for<T>(c.s);
+    c.arch = arch_name.empty() ? std::string(arch::to_string(profile)) : std::string(arch_name);
     return c;
 }
 
@@ -302,13 +369,19 @@ Ctx<T> ctx_from_queue(Queue& q, const View<T>& A, Uplo uplo, bool vendor_legal, 
     c.leaf_trsm = sycl_trsm::trsm_cta_max_n<T>();
     sycl_potrf::potrf_blocked_overrides(c.nb_env, c.w_env);
     c.vendor_legal = vendor_legal;
+    c.model_on = model_on_for<T>(c.s);
+    if (const auto forced = dispatch::routing_profile_override()) {
+        c.arch = std::string(arch::to_string(*forced));
+    } else if (c.s.cuda_cc > 0) {
+        c.arch = "sm_" + std::to_string(c.s.cuda_cc);
+    }
     c.q = &q;
     c.A = &A;
     c.size_ws = size_ws;
     return c;
 }
 
-// The pin grammar: a tier id, or today's BATCHLAS_POTRF_ROUTE words mapped onto tier ids.
+// The pin grammar: a tier id, or today's BATCHLAS_POTRF_ROUTE words through legacy_tier_id.
 template <class Tiers>
 Pin pin_from_env() {
     const char* raw = std::getenv("BATCHLAS_POTRF_ROUTE");
@@ -323,17 +396,38 @@ Pin pin_from_env() {
             p.origin = Origin::Native;
             return p;
         }
-        for (std::size_t i = 0; i < Tiers::size; ++i) {
-            if (Tiers::routes[i] == *r) p.tier = static_cast<int>(i);
-        }
+        if (const auto id = legacy_tier_id(*r); !id.empty()) p.tier = Tiers::index_of(id);
     }
     return p;
 }
 
+// No RuleSet under the NB/W overrides: the rules were compiled at the default blocking.
+template <class T>
+const RuleSet* rules_for(const Ctx<T>& c) {
+    if (c.nb_env != 0 || c.w_env != 0) return nullptr;
+    return pick_rules(potrf_rules::kSets, c.arch, c.facts(), c.model_on);
+}
+
 template <Backend B, class T>
 Selection<Tiers<B, T>> select_ctx(const Ctx<T>& c, const Pin& pin) {
-    return routing::select<Tiers<B, T>>(potrf_rules::rules_for_profile(c.s.profile), kBound<B, T>,
-                                        c, pin);
+    return routing::select<Tiers<B, T>>(rules_for<T>(c), "potrf", kBound<B, T>, c, pin,
+                                        [](const Ctx<T>& x) { return live_rule<B, T>(x); });
+}
+
+// What the old facade did when nothing serves the call: the coverage miss, then NoRouteError.
+template <Backend B, class T>
+Selection<Tiers<B, T>> select_or_no_route(const Ctx<T>& c, const Pin& pin) {
+    try {
+        return select_ctx<B, T>(c, pin);
+    } catch (const no_route_error& e) {
+        if constexpr (!dispatch::solver_vendor_available<B>) {
+            dispatch::throw_no_vendor_route<T>(dispatch::Op::potrf, B,
+                                               dispatch::kSolverLibrary<B>);
+        } else {
+            throw batchlas::internal_error(std::string("potrf: ") + e.what() +
+                                           " although the vendor is linked");
+        }
+    }
 }
 
 inline void record_explain(std::string_view line);
@@ -352,14 +446,15 @@ void record(const Ctx<T>& c, const Selection<Tiers<B, T>>& sel) {
     }
     if (std::getenv("BATCHLAS_ROUTING_EXPLAIN_OUT")) {
         char buf[512];
-        std::snprintf(buf, sizeof buf, "potrf,%d,%d,%lld,%lld,%c,%s,%s,R%04u,%s,%s,%s,%zu,",
+        std::snprintf(buf, sizeof buf, "potrf,%d,%d,%lld,%lld,%c,%s,%s,R%04u,%s,%s,%s,%zu,%s",
                       backend::potrf_dtype_index<T>(), static_cast<int>(B),
                       static_cast<long long>(c.s.order()), static_cast<long long>(c.s.batch),
                       c.s.uplo == Uplo::Upper ? 'U' : 'L', std::string(sel.id()).c_str(),
                       std::string(to_string(sel.reason)).c_str(), sel.rule_id,
                       std::string(to_string(sel.source)).c_str(),
                       sel.rules ? std::string(sel.rules->arch).c_str() : "-",
-                      sel.forced.empty() ? "-" : sel.forced.c_str(), sel.ws_bytes);
+                      sel.forced.empty() ? "-" : sel.forced.c_str(), sel.ws_bytes,
+                      std::string(to_string(sel.live)).c_str());
         record_explain(buf);
     }
 }
@@ -372,10 +467,13 @@ Selection<Tiers<B, T>> potrf_select(Queue& q, const View<T>& A, Uplo uplo,
     return select_ctx<B, T>(c, pin_from_env<Tiers<B, T>>());
 }
 
+// Sizes the tier potrf() will select under the SAME environment; see potrf_rules for what
+// happens when the environment changes in between.
 template <Backend B, class T>
 std::size_t potrf_rules_buffer_size(Queue& q, const View<T>& A, Uplo uplo) {
     potrf_validate_params<T>(A, uplo);
-    return potrf_select<B, T>(q, A, uplo).ws_bytes;
+    const Ctx<T> c = ctx_from_queue<B, T>(q, A, uplo, dispatch::solver_vendor_available<B>, true);
+    return select_or_no_route<B, T>(c, pin_from_env<Tiers<B, T>>()).ws_bytes;
 }
 
 template <Backend B, class T>
@@ -383,10 +481,27 @@ Event potrf_rules(Queue& q, const View<T>& A, Uplo uplo, Span<std::byte> ws,
                   Span<int32_t> info = {}) {
     potrf_validate_params<T>(A, uplo);
     const Ctx<T> c = ctx_from_queue<B, T>(q, A, uplo, dispatch::solver_vendor_available<B>, false);
-    const auto sel = select_ctx<B, T>(c, pin_from_env<Tiers<B, T>>());
+    const auto sel = select_or_no_route<B, T>(c, pin_from_env<Tiers<B, T>>());
     record<B, T>(c, sel);
+    // Not a debug check: legal() admitting a tier whose plan does not fit is a legality bug,
+    // and launching it would be undefined. Refuse it here, on every call.
+    if (!Tiers<B, T>::fits(sel.plan)) {
+        throw batchlas::internal_error("potrf: legal() admitted " + std::string(sel.id()) +
+                                       " but its launch plan does not fit this device");
+    }
     Call<T> call{q, A, uplo, ws, info};
-    return Tiers<B, T>::template launch<Event>(sel.plan, call);
+    try {
+        return Tiers<B, T>::template launch<Event>(sel.plan, call);
+    } catch (const batchlas::workspace_error& e) {
+        // Every tier lays its workspace out before enqueuing anything, so A is untouched here.
+        Ctx<T> sized = c;
+        sized.size_ws = true;
+        throw batchlas::workspace_error(
+            std::string(e.what()) + " [potrf: tier " + std::string(sel.id()) + " needs " +
+            std::to_string(Tiers<B, T>::workspace(sel.plan, sized)) + " B, the workspace has " +
+            std::to_string(ws.size()) + " B. potrf_buffer_size sizes the tier selected under the "
+            "current BATCHLAS_POTRF_ROUTE and device: query it again after changing either.]");
+    }
 }
 
 // Out-of-line state for the two loggers; one definition per program.

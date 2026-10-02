@@ -437,7 +437,11 @@ add_executable(potrf_plan_dump ${PROJECT_SOURCE_DIR}/evaluation/routing/potrf_pl
 batchlas_configure_binary_target(potrf_plan_dump)
 
 # Routing rules as data (prototype): the offline engine-vs-resolver test, the generated-header
-# check, the bind<> compile-fail probe, and the GPU driver.
+# check, the bind<> compile-fail probe, and the GPU driver. The prototype facade sizes the
+# selected tier, so potrf_tests asserts that contract when the facade is switched on.
+if(BATCHLAS_ROUTING_RULES_PROTOTYPE AND TARGET potrf_tests)
+    target_compile_definitions(potrf_tests PRIVATE BATCHLAS_ROUTING_RULES_PROTOTYPE)
+endif()
 add_executable(routing_rules_tests routing_rules_tests.cc)
 batchlas_configure_binary_target(routing_rules_tests LIBRARIES GTest::gtest GTest::gtest_main)
 add_test(NAME routing_rules_tests COMMAND routing_rules_tests)
