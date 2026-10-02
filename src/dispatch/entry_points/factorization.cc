@@ -60,10 +60,14 @@
 #include <cstddef>
 #include <stdexcept>
 #include <string>
+#include <algorithm>
 #include <atomic>
-#include <map>
+#include <deque>
+#include <functional>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
+#include <unordered_map>
 #include <vector>
 
 namespace batchlas {
@@ -667,12 +671,33 @@ std::atomic<int> g_planner_mode{-1};
 std::atomic<bool> g_log_on{false};
 std::mutex* log_mu() { static auto* m = new std::mutex(); return m; }
 std::vector<LogRow>* log_rows() { static auto* v = new std::vector<LogRow>(); return v; }
-std::mutex* cache_mu() { static auto* m = new std::mutex(); return m; }
-std::map<std::string, std::shared_ptr<const Node>>* cache_map() {
-    static auto* c = new std::map<std::string, std::shared_ptr<const Node>>();   // leaked
-    return c;
+// The plan cache: kShards independent shards, each a shared_mutex (concurrent readers) over a
+// map plus its FIFO insertion order; past capacity the oldest entry of that shard is evicted.
+// Hits are counted in cache-line-padded stripes so the hit path writes no shared line.
+constexpr std::size_t kShards = 16;
+struct Shard {
+    std::shared_mutex mu;
+    std::unordered_map<std::string, std::shared_ptr<const Node>> map;
+    std::deque<std::string> order;
+};
+Shard* shards() { static auto* s = new Shard[kShards]; return s; }   // leaked
+std::size_t shard_capacity() {
+    static const std::size_t cap = [] {
+        const char* v = std::getenv("BATCHLAS_PLAN_CACHE_CAPACITY");
+        const long total = (v && *v) ? std::atol(v) : 1024;
+        return static_cast<std::size_t>(std::max<long>(1, total / static_cast<long>(kShards)));
+    }();
+    return cap;
 }
-std::atomic<std::uint64_t> g_hits{0}, g_misses{0};
+struct alignas(64) Stripe { std::atomic<std::uint64_t> v{0}; };
+Stripe g_hit_stripes[64];
+std::atomic<std::uint64_t> g_misses{0}, g_evictions{0}, g_generation{1};
+std::size_t this_stripe() {
+    static std::atomic<std::size_t> next{0};
+    thread_local const std::size_t mine = next.fetch_add(1, std::memory_order_relaxed) % 64;
+    return mine;
+}
+Shard& shard_of(const std::string& key) { return shards()[std::hash<std::string>{}(key) % kShards]; }
 }  // namespace
 
 void set_potrf_planner(int mode) { g_planner_mode.store(mode); }
@@ -694,25 +719,54 @@ std::vector<LogRow> log_take() {
     out.swap(*log_rows());
     return out;
 }
+void cache_note_hit() { g_hit_stripes[this_stripe()].v.fetch_add(1, std::memory_order_relaxed); }
+std::uint64_t cache_generation() { return g_generation.load(std::memory_order_acquire); }
 std::shared_ptr<const Node> cache_find(const std::string& key) {
-    std::lock_guard<std::mutex> lock(*cache_mu());
-    const auto it = cache_map()->find(key);
-    if (it == cache_map()->end()) return nullptr;
-    g_hits.fetch_add(1, std::memory_order_relaxed);
+    Shard& s = shard_of(key);
+    std::shared_lock<std::shared_mutex> lock(s.mu);
+    const auto it = s.map.find(key);
+    if (it == s.map.end()) return nullptr;
+    cache_note_hit();
     return it->second;
 }
 std::shared_ptr<const Node> cache_insert(const std::string& key, Node nd) {
     auto p = std::make_shared<const Node>(std::move(nd));
-    std::lock_guard<std::mutex> lock(*cache_mu());
+    Shard& s = shard_of(key);
+    std::unique_lock<std::shared_mutex> lock(s.mu);
     g_misses.fetch_add(1, std::memory_order_relaxed);
-    return cache_map()->emplace(key, std::move(p)).first->second;
+    const auto [it, inserted] = s.map.emplace(key, std::move(p));
+    std::shared_ptr<const Node> out = it->second;   // copied before any eviction below
+    if (inserted) {
+        s.order.push_back(key);
+        while (s.map.size() > shard_capacity()) {
+            s.map.erase(s.order.front());
+            s.order.pop_front();
+            g_evictions.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+    return out;
 }
-CacheStats cache_stats() { return {g_hits.load(), g_misses.load()}; }
+CacheStats cache_stats() {
+    CacheStats st;
+    for (const Stripe& h : g_hit_stripes) st.hits += h.v.load(std::memory_order_relaxed);
+    st.misses = g_misses.load();
+    st.evictions = g_evictions.load();
+    for (std::size_t i = 0; i < kShards; ++i) {
+        std::shared_lock<std::shared_mutex> lock(shards()[i].mu);
+        st.size += shards()[i].map.size();
+    }
+    return st;
+}
 void cache_clear() {
-    std::lock_guard<std::mutex> lock(*cache_mu());
-    cache_map()->clear();
-    g_hits = 0;
+    for (std::size_t i = 0; i < kShards; ++i) {
+        std::unique_lock<std::shared_mutex> lock(shards()[i].mu);
+        shards()[i].map.clear();
+        shards()[i].order.clear();
+    }
+    for (Stripe& h : g_hit_stripes) h.v = 0;
     g_misses = 0;
+    g_evictions = 0;
+    g_generation.fetch_add(1, std::memory_order_acq_rel);   // invalidates every thread's memo
 }
 
 template <Backend B, typename T>

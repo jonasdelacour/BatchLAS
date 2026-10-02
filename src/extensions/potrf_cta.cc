@@ -16,11 +16,14 @@
 #include <batchlas/util/mempool.hh>
 
 #include <algorithm>
+#include <atomic>
 #include <complex>
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace batchlas {
 
@@ -55,6 +58,25 @@ inline void potrf_cta_check_scope(const PotrfCtaLaunch& p) {
 }
 
 }  // namespace
+
+namespace {
+std::atomic<bool> g_launch_record_on{false};
+std::mutex* launch_record_mu() { static auto* m = new std::mutex(); return m; }   // leaked
+std::vector<PotrfLaunchRecord>* launch_records() { static auto* v = new std::vector<PotrfLaunchRecord>(); return v; }
+}  // namespace
+
+void potrf_launch_record_enable(bool on) { g_launch_record_on.store(on); }
+bool potrf_launch_record_on() { return g_launch_record_on.load(std::memory_order_relaxed); }
+void potrf_launch_record(const PotrfLaunchRecord& r) {
+    std::lock_guard<std::mutex> lock(*launch_record_mu());
+    launch_records()->push_back(r);
+}
+std::vector<PotrfLaunchRecord> potrf_launch_record_take() {
+    std::lock_guard<std::mutex> lock(*launch_record_mu());
+    std::vector<PotrfLaunchRecord> out;
+    out.swap(*launch_records());
+    return out;
+}
 
 template <typename T>
 int potrf_cta_max_n_for_slm(std::size_t slm_budget_bytes, int min_blocks_per_sm) {
@@ -127,6 +149,9 @@ Event potrf_cta_launch(Queue& ctx,
     const std::size_t pad_bytes = (p.slm_total > natural) ? (p.slm_total - natural) : 0;
     const std::size_t tile_elems = tile_elems_used + (pad_bytes + sizeof(D) - 1) / sizeof(D);
 
+    if (potrf_launch_record_on()) {
+        potrf_launch_record({"cta", NB, SC == PotrfScope::SubGroup, n, batch, wg_size, num_wg, G, L});
+    }
     ctx->submit([&](sycl::handler& h) {
         sycl::local_accessor<D, 1> tile(sycl::range<1>(tile_elems), h);
         sycl::local_accessor<R, 1> diag(sycl::range<1>(static_cast<std::size_t>(G) * NB), h);

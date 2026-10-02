@@ -26,6 +26,8 @@ inline std::string_view to_string(Why w) {
     return "?";
 }
 
+inline namespace BATCHLAS_PLAN_ABI {   // see plan.hh: ODR isolation
+
 inline std::string route_name(Route r) {
     return std::string(dispatch::to_string(r.origin)) + ":" + std::string(dispatch::to_string(r.algo));
 }
@@ -45,7 +47,7 @@ inline Choice CostModelChooser::choose(std::span<const Candidate> cs) const {
     for (int i = 0; i < static_cast<int>(cs.size()); ++i) {
         const Candidate& c = cs[i];
         if (dispatch::is_vendor(c.route)) continue;
-        if (!c.legal.ok || !c.candidate || c.seconds < 0) continue;
+        if (!c.legal.ok || !c.selectable || !c.candidate || c.seconds < 0) continue;
         if (best < 0 || c.seconds < cs[best].seconds) best = i;
     }
     if (v >= 0 && cs[v].legal.ok && cs[v].seconds >= 0) {
@@ -56,7 +58,7 @@ inline Choice CostModelChooser::choose(std::span<const Candidate> cs) const {
     }
     if (best >= 0) return {best, Why::Cheapest};
     for (int i = 0; i < static_cast<int>(cs.size()); ++i) {
-        if (cs[i].legal.ok) {
+        if (cs[i].legal.ok && cs[i].selectable) {
             return {i, dispatch::is_vendor(cs[i].route) ? Why::OnlyLegal : Why::FirstLegal};
         }
     }
@@ -75,7 +77,7 @@ inline Choice WindowChooser::choose(std::span<const Candidate> cs, ScalarKind dt
     for (const WindowRow& r : rows) {
         if (r.dtype != dt || r.mode != mode || key < r.lo || key > r.hi) continue;
         const int i = find_tier(cs, r.tier);
-        if (i >= 0 && cs[i].legal.ok && (cs[i].candidate || !require_candidate)) {
+        if (i >= 0 && cs[i].legal.ok && cs[i].selectable && (cs[i].candidate || !require_candidate)) {
             return {i, Why::Window};
         }
         if (first_match_decides) return {-2, Why::NoWindow};
@@ -85,7 +87,7 @@ inline Choice WindowChooser::choose(std::span<const Candidate> cs, ScalarKind dt
 
 inline Choice FirstLegalChooser::choose(std::span<const Candidate> cs) const {
     for (int i = 0; i < static_cast<int>(cs.size()); ++i) {
-        if (cs[i].legal.ok && dispatch::is_native(cs[i].route)) return {i, Why::FirstLegal};
+        if (cs[i].legal.ok && cs[i].selectable && dispatch::is_native(cs[i].route)) return {i, Why::FirstLegal};
     }
     return {};
 }
@@ -146,6 +148,7 @@ Node plan_op(const OpContext& ctx, const Shape& s, const Facts& f, const Request
         c.name = D::name;
         c.legal = D::legal(s, f);
         c.candidate = ctx.measured && ctx.measured(f.arch, D::name, ctx.dt, ctx.mode);
+        c.selectable = !ctx.selectable || ctx.selectable(D::name);
         if (!c.legal.ok && !dispatch::is_vendor(D::route)) return;   // the incumbent is priced always
         sk[i] = D::sketch(s, f, req);
         sk[i].tier = D::name;
@@ -185,9 +188,9 @@ Node plan_op(const OpContext& ctx, const Shape& s, const Facts& f, const Request
         ch = automatic(false);   // a bare `native` pin IS the vendor-free walk
         if (ch.index < 0) { d.honoured = false; ch = automatic(f.vendor_available); ch.why = Why::PinRejected; }
     } else {
-        int i = 0;
-        while (i < static_cast<int>(N) && !(cs[static_cast<std::size_t>(i)].route == req.forced)) ++i;
-        if (i < static_cast<int>(N) && cs[static_cast<std::size_t>(i)].legal.ok) ch = {i, Why::Forced};
+        // A route pin means the route's OWNER, never "the first tier with that route".
+        const int i = Tiers::owner_index(req.forced);
+        if (i >= 0 && cs[static_cast<std::size_t>(i)].legal.ok) ch = {i, Why::Forced};
         else { d.honoured = false; ch = automatic(f.vendor_available); ch.why = Why::PinRejected; }
     }
     if (ch.index < 0) ch.index = vi;   // nothing serves it: the vendor arm throws NoRoute
@@ -213,6 +216,21 @@ Node plan_op(const OpContext& ctx, const Shape& s, const Facts& f, const Request
     Tiers::visit(out.tier, [&]<class D>() { D::expand(out, s, f, req); return 0; });
     return out;
 }
+
+// One tier's expanded plan outside any choice: the covering size binds one per legal native tier.
+template <class Tiers, class Shape>
+Node plan_tier(std::string_view name, const Shape& s, const Facts& f, const Request& req) {
+    Node out;
+    Tiers::visit(name, [&]<class D>() {
+        out = D::sketch(s, f, req);
+        out.tier = D::name;
+        D::expand(out, s, f, req);
+        return 0;
+    });
+    return out;
+}
+
+}  // inline namespace BATCHLAS_PLAN_ABI
 
 inline std::string explain(const Node& nd, int indent) {
     std::ostringstream o;

@@ -19,6 +19,7 @@
 
 #include "../src/extensions/potrf_native.hh"
 #include "../src/backends/potrf_route.hh"
+#include "../src/sycl/trsm_native.hh"
 
 #include <algorithm>
 #include <cmath>
@@ -1506,9 +1507,21 @@ TYPED_TEST(PotrfBlockedTest, BufferSizeCoversEverySupportedNativeTier) {
     }
 
     // ANTI-VACUITY: the two tiers must actually want different amounts.
+    // blk_need is what the call under the `blocked` pin actually draws. The shipping path's
+    // driver runs at the configured W; the planner (BATCHLAS_POTRF_PLANNER=1, src/plan/) runs
+    // it at W clamped to n - nb, which is re-derived here from blocked_params, not read off a plan.
     const std::size_t cta_need = sycl_potrf::potrf_cta_buffer_size<T>(*this->ctx, A.view());
-    const std::size_t blk_need =
-        sycl_potrf::potrf_blocked_buffer_size<T>(*this->ctx, A.view(), Uplo::Lower);
+    const bool planner = [] {
+        const char* v = std::getenv("BATCHLAS_POTRF_PLANNER");
+        return v && *v == '1';
+    }();
+    const std::size_t blk_need = [&] {
+        if (!planner) return sycl_potrf::potrf_blocked_buffer_size<T>(*this->ctx, A.view(), Uplo::Lower);
+        const auto facts = sycl_potrf::potrf_device_facts(this->ctx->device());
+        auto bp = potrf_plan::blocked_params<T>(n, facts.local_mem_bytes, sycl_trsm::trsm_cta_max_n<T>());
+        bp.W = std::max(1, std::min(bp.W, n - bp.nb));
+        return sycl_potrf::potrf_blocked_buffer_size_planned<T>(*this->ctx, A.view(), bp);
+    }();
     ASSERT_GT(blk_need, cta_need)
         << "the blocked tier does not need more workspace than the CTA tier here, so a "
            "chosen-route-only query would pass this test by accident";

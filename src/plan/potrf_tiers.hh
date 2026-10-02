@@ -17,11 +17,8 @@
 #include <limits>
 #include <type_traits>
 
-#ifndef BATCHLAS_PLAN_MUTANT   // test-only deliberate breaks (scripts/planner_mutants.sh); 0 = none
-#define BATCHLAS_PLAN_MUTANT 0
-#endif
-
 namespace batchlas::plan::potrf {
+inline namespace BATCHLAS_PLAN_ABI {   // plan.hh: a mutant TU must not interpose the library's copy
 
 inline constexpr int kMutant = BATCHLAS_PLAN_MUTANT;
 
@@ -30,6 +27,7 @@ struct Shape {
     Uplo uplo = Uplo::Lower;
     bool hetero = false;
     int tiny_max = 0, cta_max = 0, lpanel_max = 0;
+    int lpanel_nb = 0;                      // the LPanel block hint (0 = default); lpanel_max is AT it
     bool blocked_built = false;
     int leaf_trsm = 0;
     std::int64_t order() const { return m; }
@@ -39,16 +37,20 @@ constexpr std::uint8_t mode_of(Uplo u) { return u == Uplo::Upper ? 1 : 0; }
 
 template <class T>
 Shape shape_of(std::int64_t rows, std::int64_t cols, std::int64_t batch, Uplo uplo, bool hetero,
-               const Facts& f) {
+               const Facts& f, int lpanel_nb = 0) {
     Shape s;
     s.m = rows;
     s.n = cols;
     s.batch = batch;
     s.uplo = uplo;
     s.hetero = hetero;
+    s.lpanel_nb = lpanel_nb;
     const std::size_t budget = resident::device_slm_budget(f.launch.local_mem_bytes);
     s.cta_max = sycl_potrf::potrf_cta_max_n_for_slm<T>(budget);
-    s.lpanel_max = sycl_potrf::potrf_lpanel_max_n_for_slm<T>(budget, f.launch.max_wg_size);
+    s.lpanel_max = potrf_plan::lpanel_nb_is_built<T>(potrf_plan::lpanel_nb_for<T>(lpanel_nb))
+                       ? sycl_potrf::potrf_lpanel_max_n_for_slm<T>(budget, f.launch.max_wg_size,
+                                                                   resident::kMinBlocksPerSm, lpanel_nb)
+                       : 0;
     s.tiny_max = sycl_potrf::potrf_tiny_max_n<T>();
     s.blocked_built = sycl_potrf::potrf_blocked_available<T>();
     s.leaf_trsm = sycl_trsm::trsm_cta_max_n<T>();
@@ -131,6 +133,7 @@ template <class T> struct Cta {
 // measured anywhere, so Auto never picks it; a name pin or a strategy override can.
 template <class T> struct CtaWg {
     static constexpr Route route{Origin::Native, Algorithm::CTA};
+    static constexpr bool owns_route = false;   // `native:cta` (pin, coverage) means Cta<T>
     static constexpr std::string_view name = "native:cta_wg";
     static Legality legal(const Shape& s, const Facts& f) {
         if (auto c = Cta<T>::legal(s, f); !c.ok) return c;
@@ -160,9 +163,10 @@ template <class T> struct LPanel {
     }
     static Node sketch(const Shape& s, const Facts& f, const Request&) {
         const int n = static_cast<int>(s.order());
-        const auto g = potrf_plan::lpanel_geometry<T>(n, s.batch, f.launch, resident::kMinBlocksPerSm, 0);
+        const auto g = potrf_plan::lpanel_geometry<T>(n, s.batch, f.launch, resident::kMinBlocksPerSm, s.lpanel_nb);
         Node nd = make_node(route, "PotrfLpanelKernel<T,NB>", s);
-        nd.launch = potrf_plan::lpanel_plan<T>(n, s.batch, f.launch, regs<T>(f));
+        nd.launch = potrf_plan::lpanel_plan<T>(n, s.batch, f.launch, regs<T>(f), resident::kMinBlocksPerSm,
+                                               s.lpanel_nb);
         nd.geometry = g;
         nd.set("NB", g.nb).set("L", g.L).set("G", g.G);
         return nd;
@@ -278,11 +282,15 @@ template <class T> struct Vendor {
     static void expand(Node&, const Shape&, const Facts&, const Request&) {}
 };
 
-// THE list of potrf tiers. Order = first-legal tie order only.
+// THE list of potrf tiers. Order = the FirstLegal tie order among SELECTABLE tiers only; a
+// shared Route resolves to its owner and an unmeasured tier is never chosen, so moving CtaWg
+// (mutant 5) changes nothing.
 template <class T>
 using Tiers = std::conditional_t<kMutant == 3,
     TierList<Tiny<T>, Cta<T>, CtaWg<T>, Blocked<T>, LPanel<T>, Vendor<T>>,
-    TierList<Tiny<T>, Cta<T>, CtaWg<T>, LPanel<T>, Blocked<T>, Vendor<T>>>;
+    std::conditional_t<kMutant == 5,
+    TierList<Tiny<T>, CtaWg<T>, Cta<T>, LPanel<T>, Blocked<T>, Vendor<T>>,
+    TierList<Tiny<T>, Cta<T>, CtaWg<T>, LPanel<T>, Blocked<T>, Vendor<T>>>>;
 
 // ---- data: profile rows by NAME, candidacy, hand windows ----------------------------------
 
@@ -340,6 +348,15 @@ inline const WindowPolicy kWindows{{kVsVendor, true, true}, {kNativeTier, false,
 // failure rather than a silent non-candidate.
 inline constexpr std::string_view kUnmeasured[] = {"native:cta_wg"};
 
+// Auto may pick every tier but these; a pin still can (mutant 6 drops the net).
+inline bool selectable(std::string_view tier) {
+    if (kMutant == 6) return true;
+    for (std::string_view u : kUnmeasured) {
+        if (u == tier) return false;
+    }
+    return true;
+}
+
 // Candidacy: ONE answer, read by the cost model and the windows alike.
 inline bool measured(arch::RoutingProfile a, std::string_view tier, ScalarKind dt, std::uint8_t mode) {
     if (tier == "vendor") return true;
@@ -361,6 +378,7 @@ OpContext context(const Shape& s, const Facts& f) {
     c.box_batch = s.batch;
     c.model_row = &model_row;
     c.measured = &measured;
+    c.selectable = &selectable;
     c.windows = &kWindows;
     const auto* p = potrf_profile::profile_for(f.arch);
     c.model_gate = p && p->model_enabled && s.m == s.n && s.order() >= 1 && s.batch >= 1;
@@ -373,4 +391,5 @@ Node plan_potrf(const Shape& s, const Facts& f, const Request& r) {
     return plan_op<Tiers<T>>(context<T>(s, f), s, f, r);
 }
 
+}  // inline namespace BATCHLAS_PLAN_ABI
 }  // namespace batchlas::plan::potrf

@@ -111,6 +111,9 @@ Event potrf_lpanel_launch(Queue& ctx,
     const std::size_t pad_bytes = (p.slm_total > natural) ? (p.slm_total - natural) : 0;
     const std::size_t panel_elems = panel_used + (pad_bytes + sizeof(D) - 1) / sizeof(D);
 
+    if (potrf_launch_record_on()) {
+        potrf_launch_record({"lpanel", NB, false, n, batch, wg_size, num_wg, G, L});
+    }
     ctx->submit([&](sycl::handler& h) {
         sycl::local_accessor<D, 1> panel(sycl::range<1>(panel_elems), h);
         // Declared as 16-byte vectors so the body's vector sB reads are aligned; same bytes.

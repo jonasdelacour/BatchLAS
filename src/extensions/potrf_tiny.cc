@@ -80,6 +80,9 @@ Event potrf_tiny_launch(Queue& ctx,
     // the transform is the identity.
     constexpr bool real_diag = DM::is_complex;
 
+    if (potrf_launch_record_on()) {
+        potrf_launch_record({"tiny", N, false, n, batch, wg_size, num_wg, per_wg, 0});
+    }
     ctx->submit([&](sycl::handler& h) {
         h.parallel_for<PotrfTinyKernel<T, N>>(
             sycl::nd_range<1>(sycl::range<1>(static_cast<std::size_t>(num_wg) * wg_size),

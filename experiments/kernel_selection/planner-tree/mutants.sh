@@ -1,9 +1,14 @@
 #!/bin/sh
 # Deliberate breaks of the PlanTree planner, one per axis (AGENTS.md s8). Each mutant
 # recompiles ONLY tests/potrf_planner_tests.cc with -DBATCHLAS_PLAN_MUTANT=<k> (or the
-# missing-Exec mock) against the already-built library, then runs the equivalence test.
+# missing-Exec mock) against the already-built library, then runs the equivalence, order and
+# plan==launch tests. The planner headers' ABI tag (plan.hh) gives the mutant TU its own
+# symbols, so the LIBRARY column (mismatches=) must stay 0 while tu-mismatches= goes red.
 #   1 window edge 256 -> 255      2 cost-model margin ignored
 #   3 Tiers order LPanel<->Blocked 4 LPanel legality drops the Upper gate
+#   5 CtaWg moved before Cta (shared Route: must change NOTHING)
+#   6 CtaWg made selectable (the candidacy net removed: TierOrder test must go red)
+#   7 LPanel Exec ignores the plan's NB   8 Cta Exec launches a re-derived scope/geometry
 #   drop-exec: Exec<B, CtaWg> removed -> must FAIL TO COMPILE
 # usage: mutants.sh <repo> <outdir> [mutant ...]   (GPU picked by CUDA_VISIBLE_DEVICES)
 set -u
@@ -34,7 +39,8 @@ for m in "$@"; do
     -Xsycl-target-backend=nvptx64-nvidia-cuda --cuda-gpu-arch=sm_120 "$O/m_$m.o" -o "$O/m_$m" \
     -Wl,-rpath,$S /usr/lib/x86_64-linux-gnu/libgtest.a /usr/lib/x86_64-linux-gnu/libgtest_main.a \
     /usr/lib/x86_64-linux-gnu/libgtest.a $LIBS > "$O/m_$m.link.log" 2>&1 || { echo "link failed"; continue; }
-  "$O/m_$m" --gtest_filter='PlannerTest.Equivalence*' > "$O/m_$m.run.log" 2>&1
+  "$O/m_$m" --gtest_filter='PlannerTest.Equivalence*:PlannerTest.TierOrder*:PlannerTest.PlanEqualsLaunch' > "$O/m_$m.run.log" 2>&1
   echo "mutant $m: run exit $?"
-  grep "^\[equiv\]" "$O/m_$m.run.log" | grep -v "tu-mismatches=0 " | cut -c1-120
+  grep "^\[equiv\]" "$O/m_$m.run.log" | grep -v "mismatches=0 tu-mismatches=0 " | cut -c1-120
+  grep "^\[order\]\|FAILED  \]" "$O/m_$m.run.log" | sort -u | cut -c1-120
 done

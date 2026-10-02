@@ -16,8 +16,27 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <vector>
 
 namespace batchlas::sycl_potrf {
+
+// What a potrf kernel ACTUALLY launched, recorded at the submit site (after every geometry
+// decision): the ground truth a plan's geometry is checked against. Off by default; a relaxed
+// atomic load per launch when off. Defined in potrf_cta.cc (one library holds every potrf kernel).
+struct PotrfLaunchRecord {
+    const char* kernel = "";        // "tiny" | "cta" | "lpanel"
+    int tparam = 0;                 // the instantiated N (tiny) or NB (cta, lpanel)
+    bool subgroup_scope = false;    // cta only
+    int n = 0;
+    std::int64_t batch = 0;
+    int wg_size = 0;
+    std::int64_t num_wg = 0;
+    int G = 0, L = 0;               // matrices per group, work-items per matrix (0 = n/a)
+};
+BATCHLAS_INTERNAL_API void potrf_launch_record_enable(bool on);
+BATCHLAS_INTERNAL_API bool potrf_launch_record_on();
+BATCHLAS_INTERNAL_API void potrf_launch_record(const PotrfLaunchRecord& r);
+BATCHLAS_INTERNAL_API std::vector<PotrfLaunchRecord> potrf_launch_record_take();
 
 // The two device facts every potrf launch geometry reads (potrf_launch_plan.hh), queried once.
 inline launch_plan::DeviceFacts potrf_device_facts(const Device& dev) {

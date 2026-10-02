@@ -1,1140 +1,1140 @@
-cdouble n=1 b=128 L native:lpanel old=3584 new=512
-cdouble n=1 b=128 U vendor old=512 new=512
-cdouble n=1 b=512 L native:lpanel old=14336 new=2048
-cdouble n=1 b=512 U vendor old=2048 new=2048
-cdouble n=1 b=2048 L native:lpanel old=57344 new=8192
-cdouble n=1 b=2048 U vendor old=8192 new=8192
-cdouble n=1 b=8192 L native:lpanel old=229376 new=32768
-cdouble n=1 b=8192 U vendor old=32768 new=32768
-cdouble n=1 b=32768 L native:lpanel old=917504 new=131072
-cdouble n=1 b=32768 U vendor old=131072 new=131072
-cdouble n=2 b=128 L native:lpanel old=3584 new=512
-cdouble n=2 b=128 U vendor old=512 new=512
-cdouble n=2 b=512 L native:lpanel old=14336 new=2048
-cdouble n=2 b=512 U vendor old=2048 new=2048
-cdouble n=2 b=2048 L native:lpanel old=57344 new=8192
-cdouble n=2 b=2048 U vendor old=8192 new=8192
-cdouble n=2 b=8192 L native:lpanel old=229376 new=32768
-cdouble n=2 b=8192 U vendor old=32768 new=32768
-cdouble n=2 b=32768 L native:tiny old=917504 new=131072
-cdouble n=2 b=32768 U native:tiny old=131072 new=131072
-cdouble n=3 b=128 L native:lpanel old=3584 new=512
-cdouble n=3 b=128 U vendor old=512 new=512
-cdouble n=3 b=512 L native:lpanel old=14336 new=2048
-cdouble n=3 b=512 U vendor old=2048 new=2048
-cdouble n=3 b=2048 L native:lpanel old=57344 new=8192
-cdouble n=3 b=2048 U native:cta old=8192 new=8192
-cdouble n=3 b=8192 L native:tiny old=229376 new=32768
-cdouble n=3 b=8192 U native:tiny old=32768 new=32768
-cdouble n=3 b=32768 L native:tiny old=917504 new=131072
-cdouble n=3 b=32768 U native:tiny old=131072 new=131072
-cdouble n=4 b=128 L native:lpanel old=3584 new=512
-cdouble n=4 b=128 U vendor old=512 new=512
-cdouble n=4 b=512 L native:lpanel old=14336 new=2048
-cdouble n=4 b=512 U vendor old=2048 new=2048
-cdouble n=4 b=2048 L native:cta old=57344 new=8192
-cdouble n=4 b=2048 U native:tiny old=8192 new=8192
-cdouble n=4 b=8192 L native:tiny old=229376 new=32768
-cdouble n=4 b=8192 U native:tiny old=32768 new=32768
-cdouble n=4 b=32768 L native:tiny old=917504 new=131072
-cdouble n=4 b=32768 U native:tiny old=131072 new=131072
-cdouble n=6 b=128 L native:tiny old=3584 new=512
-cdouble n=6 b=128 U vendor old=512 new=512
-cdouble n=6 b=512 L native:tiny old=14336 new=2048
-cdouble n=6 b=512 U native:tiny old=2048 new=2048
-cdouble n=6 b=2048 L native:tiny old=57344 new=8192
-cdouble n=6 b=2048 U native:tiny old=8192 new=8192
-cdouble n=6 b=8192 L native:tiny old=229376 new=32768
-cdouble n=6 b=8192 U native:tiny old=32768 new=32768
-cdouble n=6 b=32768 L native:tiny old=917504 new=131072
-cdouble n=6 b=32768 U native:tiny old=131072 new=131072
-cdouble n=8 b=128 L native:tiny old=3584 new=512
-cdouble n=8 b=128 U native:tiny old=512 new=512
-cdouble n=8 b=512 L native:tiny old=14336 new=2048
-cdouble n=8 b=512 U native:tiny old=2048 new=2048
-cdouble n=8 b=2048 L native:tiny old=57344 new=8192
-cdouble n=8 b=2048 U native:tiny old=8192 new=8192
-cdouble n=8 b=8192 L native:tiny old=229376 new=32768
-cdouble n=8 b=8192 U native:tiny old=32768 new=32768
-cdouble n=8 b=32768 L native:tiny old=917504 new=131072
-cdouble n=8 b=32768 U native:tiny old=131072 new=131072
-cdouble n=12 b=128 L vendor old=512 new=512
-cdouble n=12 b=128 U vendor old=512 new=512
-cdouble n=12 b=512 L native:lpanel old=14336 new=2048
-cdouble n=12 b=512 U vendor old=2048 new=2048
-cdouble n=12 b=2048 L native:lpanel old=57344 new=8192
-cdouble n=12 b=2048 U native:tiny old=8192 new=8192
-cdouble n=12 b=8192 L native:tiny old=229376 new=32768
-cdouble n=12 b=8192 U native:tiny old=32768 new=32768
-cdouble n=12 b=32768 L native:tiny old=917504 new=131072
-cdouble n=12 b=32768 U native:tiny old=131072 new=131072
-cdouble n=16 b=128 L vendor old=512 new=512
-cdouble n=16 b=128 U vendor old=512 new=512
-cdouble n=16 b=512 L native:tiny old=14336 new=2048
-cdouble n=16 b=512 U native:tiny old=2048 new=2048
-cdouble n=16 b=2048 L native:tiny old=57344 new=8192
-cdouble n=16 b=2048 U native:tiny old=8192 new=8192
-cdouble n=16 b=8192 L native:tiny old=229376 new=32768
-cdouble n=16 b=8192 U native:tiny old=32768 new=32768
-cdouble n=16 b=32768 L native:tiny old=917504 new=131072
-cdouble n=16 b=32768 U native:tiny old=131072 new=131072
-cdouble n=20 b=128 L vendor old=512 new=512
-cdouble n=20 b=128 U vendor old=512 new=512
-cdouble n=20 b=512 L native:lpanel old=14336 new=2048
-cdouble n=20 b=512 U vendor old=2048 new=2048
-cdouble n=20 b=2048 L native:lpanel old=57344 new=8192
-cdouble n=20 b=2048 U vendor old=8192 new=8192
-cdouble n=20 b=8192 L native:lpanel old=229376 new=32768
-cdouble n=20 b=8192 U vendor old=32768 new=32768
-cdouble n=20 b=32768 L native:lpanel old=917504 new=131072
-cdouble n=20 b=32768 U vendor old=131072 new=131072
-cdouble n=24 b=128 L vendor old=512 new=512
-cdouble n=24 b=128 U vendor old=512 new=512
-cdouble n=24 b=512 L native:lpanel old=14336 new=2048
-cdouble n=24 b=512 U vendor old=2048 new=2048
-cdouble n=24 b=2048 L native:lpanel old=57344 new=8192
-cdouble n=24 b=2048 U vendor old=8192 new=8192
-cdouble n=24 b=8192 L native:lpanel old=229376 new=32768
-cdouble n=24 b=8192 U vendor old=32768 new=32768
-cdouble n=24 b=32768 L native:lpanel old=917504 new=131072
-cdouble n=24 b=32768 U vendor old=131072 new=131072
-cdouble n=28 b=128 L vendor old=512 new=512
-cdouble n=28 b=128 U vendor old=512 new=512
-cdouble n=28 b=512 L native:lpanel old=14336 new=2048
-cdouble n=28 b=512 U vendor old=2048 new=2048
-cdouble n=28 b=2048 L native:lpanel old=57344 new=8192
-cdouble n=28 b=2048 U vendor old=8192 new=8192
-cdouble n=28 b=8192 L native:lpanel old=229376 new=32768
-cdouble n=28 b=8192 U vendor old=32768 new=32768
-cdouble n=28 b=32768 L native:lpanel old=917504 new=131072
-cdouble n=28 b=32768 U vendor old=131072 new=131072
-cdouble n=32 b=128 L vendor old=512 new=512
-cdouble n=32 b=128 U vendor old=512 new=512
-cdouble n=32 b=512 L vendor old=2048 new=2048
-cdouble n=32 b=512 U vendor old=2048 new=2048
-cdouble n=32 b=2048 L native:lpanel old=57344 new=8192
-cdouble n=32 b=2048 U vendor old=8192 new=8192
-cdouble n=32 b=8192 L native:lpanel old=229376 new=32768
-cdouble n=32 b=8192 U vendor old=32768 new=32768
-cdouble n=32 b=32768 L native:lpanel old=917504 new=131072
-cdouble n=32 b=32768 U vendor old=131072 new=131072
-cdouble n=36 b=128 L vendor old=512 new=512
-cdouble n=36 b=128 U vendor old=512 new=512
-cdouble n=36 b=512 L native:cta old=2111488 new=2048
-cdouble n=36 b=512 U vendor old=2048 new=2048
-cdouble n=36 b=2048 L native:lpanel old=8445952 new=8192
-cdouble n=36 b=2048 U vendor old=8192 new=8192
-cdouble n=36 b=8192 L native:lpanel old=33783808 new=32768
-cdouble n=36 b=8192 U vendor old=32768 new=32768
-cdouble n=36 b=32768 L native:lpanel old=135135232 new=131072
-cdouble n=36 b=32768 U vendor old=131072 new=131072
-cdouble n=40 b=128 L vendor old=512 new=512
-cdouble n=40 b=128 U vendor old=512 new=512
-cdouble n=40 b=512 L native:lpanel old=2111488 new=2048
-cdouble n=40 b=512 U vendor old=2048 new=2048
-cdouble n=40 b=2048 L native:lpanel old=8445952 new=8192
-cdouble n=40 b=2048 U vendor old=8192 new=8192
-cdouble n=40 b=8192 L native:lpanel old=33783808 new=32768
-cdouble n=40 b=8192 U vendor old=32768 new=32768
-cdouble n=40 b=32768 L native:lpanel old=135135232 new=131072
-cdouble n=40 b=32768 U vendor old=131072 new=131072
-cdouble n=48 b=128 L vendor old=512 new=512
-cdouble n=48 b=128 U vendor old=512 new=512
-cdouble n=48 b=512 L vendor old=2048 new=2048
-cdouble n=48 b=512 U vendor old=2048 new=2048
-cdouble n=48 b=2048 L vendor old=8192 new=8192
-cdouble n=48 b=2048 U vendor old=8192 new=8192
-cdouble n=48 b=8192 L native:lpanel old=33783808 new=32768
-cdouble n=48 b=8192 U vendor old=32768 new=32768
-cdouble n=48 b=32768 L native:lpanel old=135135232 new=131072
-cdouble n=48 b=32768 U vendor old=131072 new=131072
-cdouble n=56 b=128 L vendor old=512 new=512
-cdouble n=56 b=128 U vendor old=512 new=512
-cdouble n=56 b=512 L vendor old=2048 new=2048
-cdouble n=56 b=512 U vendor old=2048 new=2048
-cdouble n=56 b=2048 L native:lpanel old=8445952 new=8192
-cdouble n=56 b=2048 U vendor old=8192 new=8192
-cdouble n=56 b=8192 L native:lpanel old=33783808 new=32768
-cdouble n=56 b=8192 U vendor old=32768 new=32768
-cdouble n=56 b=32768 L native:lpanel old=135135232 new=131072
-cdouble n=56 b=32768 U vendor old=131072 new=131072
-cdouble n=64 b=128 L vendor old=512 new=512
-cdouble n=64 b=128 U vendor old=512 new=512
-cdouble n=64 b=512 L vendor old=2048 new=2048
-cdouble n=64 b=512 U vendor old=2048 new=2048
-cdouble n=64 b=2048 L vendor old=8192 new=8192
-cdouble n=64 b=2048 U vendor old=8192 new=8192
-cdouble n=64 b=8192 L native:lpanel old=33783808 new=32768
-cdouble n=64 b=8192 U vendor old=32768 new=32768
-cdouble n=64 b=32768 L native:lpanel old=135135232 new=131072
-cdouble n=64 b=32768 U vendor old=131072 new=131072
-cdouble n=80 b=128 L vendor old=512 new=512
-cdouble n=80 b=128 U vendor old=512 new=512
-cdouble n=80 b=512 L vendor old=2048 new=2048
-cdouble n=80 b=512 U vendor old=2048 new=2048
-cdouble n=80 b=2048 L vendor old=8192 new=8192
-cdouble n=80 b=2048 U vendor old=8192 new=8192
-cdouble n=80 b=8192 L vendor old=32768 new=32768
-cdouble n=80 b=8192 U vendor old=32768 new=32768
-cdouble n=80 b=32768 L vendor old=131072 new=131072
-cdouble n=80 b=32768 U vendor old=131072 new=131072
-cdouble n=96 b=128 L vendor old=512 new=512
-cdouble n=96 b=128 U vendor old=512 new=512
-cdouble n=96 b=512 L vendor old=2048 new=2048
-cdouble n=96 b=512 U vendor old=2048 new=2048
-cdouble n=96 b=2048 L vendor old=8192 new=8192
-cdouble n=96 b=2048 U vendor old=8192 new=8192
-cdouble n=96 b=8192 L vendor old=32768 new=32768
-cdouble n=96 b=8192 U vendor old=32768 new=32768
-cdouble n=112 b=128 L vendor old=512 new=512
-cdouble n=112 b=128 U vendor old=512 new=512
-cdouble n=112 b=512 L vendor old=2048 new=2048
-cdouble n=112 b=512 U vendor old=2048 new=2048
-cdouble n=112 b=2048 L vendor old=8192 new=8192
-cdouble n=112 b=2048 U vendor old=8192 new=8192
-cdouble n=112 b=8192 L vendor old=32768 new=32768
-cdouble n=112 b=8192 U vendor old=32768 new=32768
-cdouble n=128 b=128 L vendor old=512 new=512
-cdouble n=128 b=128 U vendor old=512 new=512
-cdouble n=128 b=512 L vendor old=2048 new=2048
-cdouble n=128 b=512 U vendor old=2048 new=2048
-cdouble n=128 b=2048 L vendor old=8192 new=8192
-cdouble n=128 b=2048 U vendor old=8192 new=8192
-cdouble n=128 b=8192 L vendor old=32768 new=32768
-cdouble n=128 b=8192 U vendor old=32768 new=32768
-cdouble n=160 b=128 L vendor old=512 new=512
-cdouble n=160 b=128 U vendor old=512 new=512
-cdouble n=160 b=512 L vendor old=2048 new=2048
-cdouble n=160 b=512 U vendor old=2048 new=2048
-cdouble n=160 b=2048 L vendor old=8192 new=8192
-cdouble n=160 b=2048 U vendor old=8192 new=8192
-cdouble n=160 b=8192 L vendor old=32768 new=32768
-cdouble n=160 b=8192 U vendor old=32768 new=32768
-cdouble n=192 b=128 L vendor old=512 new=512
-cdouble n=192 b=128 U vendor old=512 new=512
-cdouble n=192 b=512 L vendor old=2048 new=2048
-cdouble n=192 b=512 U vendor old=2048 new=2048
-cdouble n=192 b=2048 L vendor old=8192 new=8192
-cdouble n=192 b=2048 U vendor old=8192 new=8192
-cdouble n=224 b=128 L vendor old=512 new=512
-cdouble n=224 b=128 U vendor old=512 new=512
-cdouble n=224 b=512 L vendor old=2048 new=2048
-cdouble n=224 b=512 U vendor old=2048 new=2048
-cdouble n=224 b=2048 L vendor old=8192 new=8192
-cdouble n=224 b=2048 U vendor old=8192 new=8192
-cdouble n=256 b=128 L vendor old=512 new=512
-cdouble n=256 b=128 U vendor old=512 new=512
-cdouble n=256 b=512 L vendor old=2048 new=2048
-cdouble n=256 b=512 U vendor old=2048 new=2048
-cdouble n=256 b=2048 L vendor old=8192 new=8192
-cdouble n=256 b=2048 U vendor old=8192 new=8192
-cdouble n=288 b=128 L vendor old=512 new=512
-cdouble n=288 b=128 U vendor old=512 new=512
-cdouble n=288 b=512 L vendor old=2048 new=2048
-cdouble n=288 b=512 U vendor old=2048 new=2048
-cdouble n=288 b=2048 L vendor old=8192 new=8192
-cdouble n=288 b=2048 U vendor old=8192 new=8192
-cdouble n=320 b=128 L vendor old=512 new=512
-cdouble n=320 b=128 U vendor old=512 new=512
-cdouble n=320 b=512 L vendor old=2048 new=2048
-cdouble n=320 b=512 U vendor old=2048 new=2048
-cdouble n=320 b=2048 L vendor old=8192 new=8192
-cdouble n=320 b=2048 U vendor old=8192 new=8192
-cdouble n=384 b=128 L vendor old=512 new=512
-cdouble n=384 b=128 U vendor old=512 new=512
-cdouble n=384 b=512 L vendor old=2048 new=2048
-cdouble n=384 b=512 U vendor old=2048 new=2048
-cdouble n=448 b=128 L vendor old=512 new=512
-cdouble n=448 b=128 U vendor old=512 new=512
-cdouble n=448 b=512 L vendor old=2048 new=2048
-cdouble n=448 b=512 U vendor old=2048 new=2048
-cdouble n=512 b=128 L vendor old=512 new=512
-cdouble n=512 b=128 U vendor old=512 new=512
-cdouble n=512 b=512 L vendor old=2048 new=2048
-cdouble n=512 b=512 U vendor old=2048 new=2048
-cdouble n=640 b=128 L vendor old=512 new=512
-cdouble n=640 b=128 U vendor old=512 new=512
-cdouble n=640 b=512 L vendor old=2048 new=2048
-cdouble n=640 b=512 U vendor old=2048 new=2048
-cdouble n=768 b=128 L vendor old=512 new=512
-cdouble n=768 b=128 U vendor old=512 new=512
-cdouble n=1024 b=128 L vendor old=512 new=512
-cdouble n=1024 b=128 U vendor old=512 new=512
-cdouble n=1280 b=128 L vendor old=512 new=512
-cdouble n=1280 b=128 U vendor old=512 new=512
-cdouble n=1536 b=64 L vendor old=512 new=512
-cdouble n=1536 b=64 U vendor old=512 new=512
-cfloat n=1 b=128 L native:lpanel old=3584 new=512
-cfloat n=1 b=128 U native:tiny old=512 new=512
-cfloat n=1 b=512 L native:lpanel old=14336 new=2048
-cfloat n=1 b=512 U native:tiny old=2048 new=2048
-cfloat n=1 b=2048 L native:lpanel old=57344 new=8192
-cfloat n=1 b=2048 U native:tiny old=8192 new=8192
-cfloat n=1 b=8192 L native:tiny old=229376 new=32768
-cfloat n=1 b=8192 U native:tiny old=32768 new=32768
-cfloat n=1 b=32768 L native:tiny old=917504 new=131072
-cfloat n=1 b=32768 U native:tiny old=131072 new=131072
-cfloat n=2 b=128 L native:lpanel old=3584 new=512
-cfloat n=2 b=128 U native:tiny old=512 new=512
-cfloat n=2 b=512 L native:lpanel old=14336 new=2048
-cfloat n=2 b=512 U native:tiny old=2048 new=2048
-cfloat n=2 b=2048 L native:tiny old=57344 new=8192
-cfloat n=2 b=2048 U native:tiny old=8192 new=8192
-cfloat n=2 b=8192 L native:tiny old=229376 new=32768
-cfloat n=2 b=8192 U native:tiny old=32768 new=32768
-cfloat n=2 b=32768 L native:tiny old=917504 new=131072
-cfloat n=2 b=32768 U native:tiny old=131072 new=131072
-cfloat n=3 b=128 L native:tiny old=3584 new=512
-cfloat n=3 b=128 U native:tiny old=512 new=512
-cfloat n=3 b=512 L native:tiny old=14336 new=2048
-cfloat n=3 b=512 U native:tiny old=2048 new=2048
-cfloat n=3 b=2048 L native:tiny old=57344 new=8192
-cfloat n=3 b=2048 U native:tiny old=8192 new=8192
-cfloat n=3 b=8192 L native:tiny old=229376 new=32768
-cfloat n=3 b=8192 U native:tiny old=32768 new=32768
-cfloat n=3 b=32768 L native:tiny old=917504 new=131072
-cfloat n=3 b=32768 U native:tiny old=131072 new=131072
-cfloat n=4 b=128 L native:tiny old=3584 new=512
-cfloat n=4 b=128 U native:tiny old=512 new=512
-cfloat n=4 b=512 L native:tiny old=14336 new=2048
-cfloat n=4 b=512 U native:tiny old=2048 new=2048
-cfloat n=4 b=2048 L native:tiny old=57344 new=8192
-cfloat n=4 b=2048 U native:tiny old=8192 new=8192
-cfloat n=4 b=8192 L native:tiny old=229376 new=32768
-cfloat n=4 b=8192 U native:tiny old=32768 new=32768
-cfloat n=4 b=32768 L native:tiny old=917504 new=131072
-cfloat n=4 b=32768 U native:tiny old=131072 new=131072
-cfloat n=6 b=128 L native:tiny old=3584 new=512
-cfloat n=6 b=128 U native:tiny old=512 new=512
-cfloat n=6 b=512 L native:tiny old=14336 new=2048
-cfloat n=6 b=512 U native:tiny old=2048 new=2048
-cfloat n=6 b=2048 L native:tiny old=57344 new=8192
-cfloat n=6 b=2048 U native:tiny old=8192 new=8192
-cfloat n=6 b=8192 L native:tiny old=229376 new=32768
-cfloat n=6 b=8192 U native:tiny old=32768 new=32768
-cfloat n=6 b=32768 L native:tiny old=917504 new=131072
-cfloat n=6 b=32768 U native:tiny old=131072 new=131072
-cfloat n=8 b=128 L native:tiny old=3584 new=512
-cfloat n=8 b=128 U native:tiny old=512 new=512
-cfloat n=8 b=512 L native:tiny old=14336 new=2048
-cfloat n=8 b=512 U native:tiny old=2048 new=2048
-cfloat n=8 b=2048 L native:tiny old=57344 new=8192
-cfloat n=8 b=2048 U native:tiny old=8192 new=8192
-cfloat n=8 b=8192 L native:tiny old=229376 new=32768
-cfloat n=8 b=8192 U native:tiny old=32768 new=32768
-cfloat n=8 b=32768 L native:tiny old=917504 new=131072
-cfloat n=8 b=32768 U native:tiny old=131072 new=131072
-cfloat n=12 b=128 L native:tiny old=3584 new=512
-cfloat n=12 b=128 U native:tiny old=512 new=512
-cfloat n=12 b=512 L native:tiny old=14336 new=2048
-cfloat n=12 b=512 U native:tiny old=2048 new=2048
-cfloat n=12 b=2048 L native:tiny old=57344 new=8192
-cfloat n=12 b=2048 U native:tiny old=8192 new=8192
-cfloat n=12 b=8192 L native:tiny old=229376 new=32768
-cfloat n=12 b=8192 U native:tiny old=32768 new=32768
-cfloat n=12 b=32768 L native:tiny old=917504 new=131072
-cfloat n=12 b=32768 U native:tiny old=131072 new=131072
-cfloat n=16 b=128 L native:tiny old=3584 new=512
-cfloat n=16 b=128 U native:tiny old=512 new=512
-cfloat n=16 b=512 L native:tiny old=14336 new=2048
-cfloat n=16 b=512 U native:tiny old=2048 new=2048
-cfloat n=16 b=2048 L native:tiny old=57344 new=8192
-cfloat n=16 b=2048 U native:tiny old=8192 new=8192
-cfloat n=16 b=8192 L native:tiny old=229376 new=32768
-cfloat n=16 b=8192 U native:tiny old=32768 new=32768
-cfloat n=16 b=32768 L native:tiny old=917504 new=131072
-cfloat n=16 b=32768 U native:tiny old=131072 new=131072
-cfloat n=20 b=128 L native:tiny old=3584 new=512
-cfloat n=20 b=128 U native:tiny old=512 new=512
-cfloat n=20 b=512 L native:tiny old=14336 new=2048
-cfloat n=20 b=512 U native:tiny old=2048 new=2048
-cfloat n=20 b=2048 L native:tiny old=57344 new=8192
-cfloat n=20 b=2048 U native:tiny old=8192 new=8192
-cfloat n=20 b=8192 L native:lpanel old=229376 new=32768
-cfloat n=20 b=8192 U native:tiny old=32768 new=32768
-cfloat n=20 b=32768 L native:lpanel old=917504 new=131072
-cfloat n=20 b=32768 U native:tiny old=131072 new=131072
-cfloat n=24 b=128 L native:tiny old=3584 new=512
-cfloat n=24 b=128 U native:tiny old=512 new=512
-cfloat n=24 b=512 L native:tiny old=14336 new=2048
-cfloat n=24 b=512 U native:tiny old=2048 new=2048
-cfloat n=24 b=2048 L native:tiny old=57344 new=8192
-cfloat n=24 b=2048 U native:tiny old=8192 new=8192
-cfloat n=24 b=8192 L native:lpanel old=229376 new=32768
-cfloat n=24 b=8192 U native:tiny old=32768 new=32768
-cfloat n=24 b=32768 L native:lpanel old=917504 new=131072
-cfloat n=24 b=32768 U native:tiny old=131072 new=131072
-cfloat n=28 b=128 L native:tiny old=3584 new=512
-cfloat n=28 b=128 U native:tiny old=512 new=512
-cfloat n=28 b=512 L native:tiny old=14336 new=2048
-cfloat n=28 b=512 U native:tiny old=2048 new=2048
-cfloat n=28 b=2048 L native:tiny old=57344 new=8192
-cfloat n=28 b=2048 U native:tiny old=8192 new=8192
-cfloat n=28 b=8192 L native:lpanel old=229376 new=32768
-cfloat n=28 b=8192 U native:tiny old=32768 new=32768
-cfloat n=28 b=32768 L native:tiny old=917504 new=131072
-cfloat n=28 b=32768 U native:tiny old=131072 new=131072
-cfloat n=32 b=128 L native:tiny old=3584 new=512
-cfloat n=32 b=128 U native:tiny old=512 new=512
-cfloat n=32 b=512 L native:tiny old=14336 new=2048
-cfloat n=32 b=512 U native:tiny old=2048 new=2048
-cfloat n=32 b=2048 L native:tiny old=57344 new=8192
-cfloat n=32 b=2048 U native:tiny old=8192 new=8192
-cfloat n=32 b=8192 L native:tiny old=229376 new=32768
-cfloat n=32 b=8192 U native:tiny old=32768 new=32768
-cfloat n=32 b=32768 L native:tiny old=917504 new=131072
-cfloat n=32 b=32768 U native:tiny old=131072 new=131072
-cfloat n=36 b=128 L vendor old=512 new=512
-cfloat n=36 b=128 U vendor old=512 new=512
-cfloat n=36 b=512 L native:lpanel old=4208640 new=2048
-cfloat n=36 b=512 U vendor old=2048 new=2048
-cfloat n=36 b=2048 L native:lpanel old=16834560 new=8192
-cfloat n=36 b=2048 U vendor old=8192 new=8192
-cfloat n=36 b=8192 L native:lpanel old=67338240 new=32768
-cfloat n=36 b=8192 U vendor old=32768 new=32768
-cfloat n=36 b=32768 L native:lpanel old=269352960 new=131072
-cfloat n=36 b=32768 U vendor old=131072 new=131072
-cfloat n=40 b=128 L vendor old=512 new=512
-cfloat n=40 b=128 U vendor old=512 new=512
-cfloat n=40 b=512 L native:lpanel old=4208640 new=2048
-cfloat n=40 b=512 U vendor old=2048 new=2048
-cfloat n=40 b=2048 L native:lpanel old=16834560 new=8192
-cfloat n=40 b=2048 U vendor old=8192 new=8192
-cfloat n=40 b=8192 L native:lpanel old=67338240 new=32768
-cfloat n=40 b=8192 U vendor old=32768 new=32768
-cfloat n=40 b=32768 L native:lpanel old=269352960 new=131072
-cfloat n=40 b=32768 U vendor old=131072 new=131072
-cfloat n=48 b=128 L vendor old=512 new=512
-cfloat n=48 b=128 U vendor old=512 new=512
-cfloat n=48 b=512 L vendor old=2048 new=2048
-cfloat n=48 b=512 U vendor old=2048 new=2048
-cfloat n=48 b=2048 L native:lpanel old=16834560 new=8192
-cfloat n=48 b=2048 U vendor old=8192 new=8192
-cfloat n=48 b=8192 L native:lpanel old=67338240 new=32768
-cfloat n=48 b=8192 U vendor old=32768 new=32768
-cfloat n=48 b=32768 L native:lpanel old=269352960 new=131072
-cfloat n=48 b=32768 U vendor old=131072 new=131072
-cfloat n=56 b=128 L vendor old=512 new=512
-cfloat n=56 b=128 U vendor old=512 new=512
-cfloat n=56 b=512 L vendor old=2048 new=2048
-cfloat n=56 b=512 U vendor old=2048 new=2048
-cfloat n=56 b=2048 L native:lpanel old=16834560 new=8192
-cfloat n=56 b=2048 U vendor old=8192 new=8192
-cfloat n=56 b=8192 L native:lpanel old=67338240 new=32768
-cfloat n=56 b=8192 U vendor old=32768 new=32768
-cfloat n=56 b=32768 L native:lpanel old=269352960 new=131072
-cfloat n=56 b=32768 U vendor old=131072 new=131072
-cfloat n=64 b=128 L vendor old=512 new=512
-cfloat n=64 b=128 U vendor old=512 new=512
-cfloat n=64 b=512 L vendor old=2048 new=2048
-cfloat n=64 b=512 U vendor old=2048 new=2048
-cfloat n=64 b=2048 L native:lpanel old=16834560 new=8192
-cfloat n=64 b=2048 U vendor old=8192 new=8192
-cfloat n=64 b=8192 L native:lpanel old=67338240 new=32768
-cfloat n=64 b=8192 U vendor old=32768 new=32768
-cfloat n=64 b=32768 L native:lpanel old=269352960 new=131072
-cfloat n=64 b=32768 U vendor old=131072 new=131072
-cfloat n=80 b=128 L vendor old=512 new=512
-cfloat n=80 b=128 U vendor old=512 new=512
-cfloat n=80 b=512 L vendor old=2048 new=2048
-cfloat n=80 b=512 U vendor old=2048 new=2048
-cfloat n=80 b=2048 L vendor old=8192 new=8192
-cfloat n=80 b=2048 U vendor old=8192 new=8192
-cfloat n=80 b=8192 L native:lpanel old=67338240 new=32768
-cfloat n=80 b=8192 U vendor old=32768 new=32768
-cfloat n=80 b=32768 L native:lpanel old=269352960 new=131072
-cfloat n=80 b=32768 U vendor old=131072 new=131072
-cfloat n=96 b=128 L vendor old=512 new=512
-cfloat n=96 b=128 U vendor old=512 new=512
-cfloat n=96 b=512 L vendor old=2048 new=2048
-cfloat n=96 b=512 U vendor old=2048 new=2048
-cfloat n=96 b=2048 L native:lpanel old=16834560 new=8192
-cfloat n=96 b=2048 U vendor old=8192 new=8192
-cfloat n=96 b=8192 L native:lpanel old=67338240 new=32768
-cfloat n=96 b=8192 U vendor old=32768 new=32768
-cfloat n=96 b=32768 L native:lpanel old=269352960 new=131072
-cfloat n=96 b=32768 U vendor old=131072 new=131072
-cfloat n=112 b=128 L vendor old=512 new=512
-cfloat n=112 b=128 U vendor old=512 new=512
-cfloat n=112 b=512 L vendor old=2048 new=2048
-cfloat n=112 b=512 U vendor old=2048 new=2048
-cfloat n=112 b=2048 L vendor old=8192 new=8192
-cfloat n=112 b=2048 U vendor old=8192 new=8192
-cfloat n=112 b=8192 L vendor old=32768 new=32768
-cfloat n=112 b=8192 U vendor old=32768 new=32768
-cfloat n=112 b=32768 L vendor old=131072 new=131072
-cfloat n=112 b=32768 U vendor old=131072 new=131072
-cfloat n=128 b=128 L vendor old=512 new=512
-cfloat n=128 b=128 U vendor old=512 new=512
-cfloat n=128 b=512 L vendor old=2048 new=2048
-cfloat n=128 b=512 U vendor old=2048 new=2048
-cfloat n=128 b=2048 L native:lpanel old=16834560 new=8192
-cfloat n=128 b=2048 U vendor old=8192 new=8192
-cfloat n=128 b=8192 L native:lpanel old=67338240 new=32768
-cfloat n=128 b=8192 U vendor old=32768 new=32768
-cfloat n=128 b=32768 L native:lpanel old=269352960 new=131072
-cfloat n=128 b=32768 U vendor old=131072 new=131072
-cfloat n=160 b=128 L vendor old=512 new=512
-cfloat n=160 b=128 U vendor old=512 new=512
-cfloat n=160 b=512 L vendor old=2048 new=2048
-cfloat n=160 b=512 U vendor old=2048 new=2048
-cfloat n=160 b=2048 L vendor old=8192 new=8192
-cfloat n=160 b=2048 U vendor old=8192 new=8192
-cfloat n=160 b=8192 L vendor old=32768 new=32768
-cfloat n=160 b=8192 U vendor old=32768 new=32768
-cfloat n=192 b=128 L vendor old=512 new=512
-cfloat n=192 b=128 U vendor old=512 new=512
-cfloat n=192 b=512 L vendor old=2048 new=2048
-cfloat n=192 b=512 U vendor old=2048 new=2048
-cfloat n=192 b=2048 L vendor old=8192 new=8192
-cfloat n=192 b=2048 U vendor old=8192 new=8192
-cfloat n=192 b=8192 L vendor old=32768 new=32768
-cfloat n=192 b=8192 U vendor old=32768 new=32768
-cfloat n=224 b=128 L vendor old=512 new=512
-cfloat n=224 b=128 U vendor old=512 new=512
-cfloat n=224 b=512 L vendor old=2048 new=2048
-cfloat n=224 b=512 U vendor old=2048 new=2048
-cfloat n=224 b=2048 L vendor old=8192 new=8192
-cfloat n=224 b=2048 U vendor old=8192 new=8192
-cfloat n=224 b=8192 L vendor old=32768 new=32768
-cfloat n=224 b=8192 U vendor old=32768 new=32768
-cfloat n=256 b=128 L vendor old=512 new=512
-cfloat n=256 b=128 U vendor old=512 new=512
-cfloat n=256 b=512 L vendor old=2048 new=2048
-cfloat n=256 b=512 U vendor old=2048 new=2048
-cfloat n=256 b=2048 L vendor old=8192 new=8192
-cfloat n=256 b=2048 U vendor old=8192 new=8192
-cfloat n=256 b=8192 L vendor old=32768 new=32768
-cfloat n=256 b=8192 U vendor old=32768 new=32768
-cfloat n=288 b=128 L vendor old=512 new=512
-cfloat n=288 b=128 U vendor old=512 new=512
-cfloat n=288 b=512 L vendor old=2048 new=2048
-cfloat n=288 b=512 U vendor old=2048 new=2048
-cfloat n=288 b=2048 L vendor old=8192 new=8192
-cfloat n=288 b=2048 U vendor old=8192 new=8192
-cfloat n=320 b=128 L vendor old=512 new=512
-cfloat n=320 b=128 U vendor old=512 new=512
-cfloat n=320 b=512 L vendor old=2048 new=2048
-cfloat n=320 b=512 U vendor old=2048 new=2048
-cfloat n=320 b=2048 L vendor old=8192 new=8192
-cfloat n=320 b=2048 U vendor old=8192 new=8192
-cfloat n=384 b=128 L vendor old=512 new=512
-cfloat n=384 b=128 U vendor old=512 new=512
-cfloat n=384 b=512 L vendor old=2048 new=2048
-cfloat n=384 b=512 U vendor old=2048 new=2048
-cfloat n=384 b=2048 L vendor old=8192 new=8192
-cfloat n=384 b=2048 U vendor old=8192 new=8192
-cfloat n=448 b=128 L vendor old=512 new=512
-cfloat n=448 b=128 U vendor old=512 new=512
-cfloat n=448 b=512 L vendor old=2048 new=2048
-cfloat n=448 b=512 U vendor old=2048 new=2048
-cfloat n=448 b=2048 L vendor old=8192 new=8192
-cfloat n=448 b=2048 U vendor old=8192 new=8192
-cfloat n=512 b=128 L vendor old=512 new=512
-cfloat n=512 b=128 U vendor old=512 new=512
-cfloat n=512 b=512 L vendor old=2048 new=2048
-cfloat n=512 b=512 U vendor old=2048 new=2048
-cfloat n=512 b=2048 L vendor old=8192 new=8192
-cfloat n=512 b=2048 U vendor old=8192 new=8192
-cfloat n=640 b=128 L vendor old=512 new=512
-cfloat n=640 b=128 U vendor old=512 new=512
-cfloat n=640 b=512 L vendor old=2048 new=2048
-cfloat n=640 b=512 U vendor old=2048 new=2048
-cfloat n=768 b=128 L vendor old=512 new=512
-cfloat n=768 b=128 U vendor old=512 new=512
-cfloat n=768 b=512 L vendor old=2048 new=2048
-cfloat n=768 b=512 U vendor old=2048 new=2048
-cfloat n=1024 b=128 L vendor old=512 new=512
-cfloat n=1024 b=128 U vendor old=512 new=512
-cfloat n=1024 b=512 L vendor old=2048 new=2048
-cfloat n=1024 b=512 U vendor old=2048 new=2048
-cfloat n=1280 b=128 L vendor old=512 new=512
-cfloat n=1280 b=128 U vendor old=512 new=512
-cfloat n=1536 b=128 L vendor old=512 new=512
-cfloat n=1536 b=128 U vendor old=512 new=512
-double n=1 b=128 L native:lpanel old=3584 new=512
-double n=1 b=128 U native:tiny old=512 new=512
-double n=1 b=512 L native:lpanel old=14336 new=2048
-double n=1 b=512 U native:tiny old=2048 new=2048
-double n=1 b=2048 L native:lpanel old=57344 new=8192
-double n=1 b=2048 U native:tiny old=8192 new=8192
-double n=1 b=8192 L native:lpanel old=229376 new=32768
-double n=1 b=8192 U vendor old=32768 new=32768
-double n=1 b=32768 L native:lpanel old=917504 new=131072
-double n=1 b=32768 U vendor old=131072 new=131072
-double n=2 b=128 L native:lpanel old=3584 new=512
-double n=2 b=128 U native:tiny old=512 new=512
-double n=2 b=512 L native:lpanel old=14336 new=2048
-double n=2 b=512 U native:tiny old=2048 new=2048
-double n=2 b=2048 L native:lpanel old=57344 new=8192
-double n=2 b=2048 U native:tiny old=8192 new=8192
-double n=2 b=8192 L native:lpanel old=229376 new=32768
-double n=2 b=8192 U native:tiny old=32768 new=32768
-double n=2 b=32768 L native:tiny old=917504 new=131072
-double n=2 b=32768 U native:tiny old=131072 new=131072
-double n=3 b=128 L native:lpanel old=3584 new=512
-double n=3 b=128 U native:tiny old=512 new=512
-double n=3 b=512 L native:lpanel old=14336 new=2048
-double n=3 b=512 U native:tiny old=2048 new=2048
-double n=3 b=2048 L native:lpanel old=57344 new=8192
-double n=3 b=2048 U native:tiny old=8192 new=8192
-double n=3 b=8192 L native:tiny old=229376 new=32768
-double n=3 b=8192 U native:tiny old=32768 new=32768
-double n=3 b=32768 L native:tiny old=917504 new=131072
-double n=3 b=32768 U native:tiny old=131072 new=131072
-double n=4 b=128 L native:lpanel old=3584 new=512
-double n=4 b=128 U native:tiny old=512 new=512
-double n=4 b=512 L native:lpanel old=14336 new=2048
-double n=4 b=512 U native:tiny old=2048 new=2048
-double n=4 b=2048 L native:tiny old=57344 new=8192
-double n=4 b=2048 U native:tiny old=8192 new=8192
-double n=4 b=8192 L native:tiny old=229376 new=32768
-double n=4 b=8192 U native:tiny old=32768 new=32768
-double n=4 b=32768 L native:tiny old=917504 new=131072
-double n=4 b=32768 U native:tiny old=131072 new=131072
-double n=6 b=128 L native:tiny old=3584 new=512
-double n=6 b=128 U native:tiny old=512 new=512
-double n=6 b=512 L native:tiny old=14336 new=2048
-double n=6 b=512 U native:tiny old=2048 new=2048
-double n=6 b=2048 L native:tiny old=57344 new=8192
-double n=6 b=2048 U native:tiny old=8192 new=8192
-double n=6 b=8192 L native:tiny old=229376 new=32768
-double n=6 b=8192 U native:tiny old=32768 new=32768
-double n=6 b=32768 L native:tiny old=917504 new=131072
-double n=6 b=32768 U native:tiny old=131072 new=131072
-double n=8 b=128 L native:tiny old=3584 new=512
-double n=8 b=128 U native:tiny old=512 new=512
-double n=8 b=512 L native:tiny old=14336 new=2048
-double n=8 b=512 U native:tiny old=2048 new=2048
-double n=8 b=2048 L native:tiny old=57344 new=8192
-double n=8 b=2048 U native:tiny old=8192 new=8192
-double n=8 b=8192 L native:tiny old=229376 new=32768
-double n=8 b=8192 U native:tiny old=32768 new=32768
-double n=8 b=32768 L native:tiny old=917504 new=131072
-double n=8 b=32768 U native:tiny old=131072 new=131072
-double n=12 b=128 L vendor old=512 new=512
-double n=12 b=128 U vendor old=512 new=512
-double n=12 b=512 L native:tiny old=14336 new=2048
-double n=12 b=512 U native:tiny old=2048 new=2048
-double n=12 b=2048 L native:tiny old=57344 new=8192
-double n=12 b=2048 U native:tiny old=8192 new=8192
-double n=12 b=8192 L native:tiny old=229376 new=32768
-double n=12 b=8192 U native:tiny old=32768 new=32768
-double n=12 b=32768 L native:tiny old=917504 new=131072
-double n=12 b=32768 U native:tiny old=131072 new=131072
-double n=16 b=128 L native:tiny old=3584 new=512
-double n=16 b=128 U native:tiny old=512 new=512
-double n=16 b=512 L native:tiny old=14336 new=2048
-double n=16 b=512 U native:tiny old=2048 new=2048
-double n=16 b=2048 L native:tiny old=57344 new=8192
-double n=16 b=2048 U native:tiny old=8192 new=8192
-double n=16 b=8192 L native:tiny old=229376 new=32768
-double n=16 b=8192 U native:tiny old=32768 new=32768
-double n=16 b=32768 L native:tiny old=917504 new=131072
-double n=16 b=32768 U native:tiny old=131072 new=131072
-double n=20 b=128 L native:lpanel old=3584 new=512
-double n=20 b=128 U vendor old=512 new=512
-double n=20 b=512 L native:lpanel old=14336 new=2048
-double n=20 b=512 U vendor old=2048 new=2048
-double n=20 b=2048 L native:lpanel old=57344 new=8192
-double n=20 b=2048 U vendor old=8192 new=8192
-double n=20 b=8192 L native:lpanel old=229376 new=32768
-double n=20 b=8192 U vendor old=32768 new=32768
-double n=20 b=32768 L native:blocked old=917504 new=917504
-double n=20 b=32768 U vendor old=131072 new=131072
-double n=24 b=128 L vendor old=512 new=512
-double n=24 b=128 U vendor old=512 new=512
-double n=24 b=512 L native:lpanel old=14336 new=2048
-double n=24 b=512 U vendor old=2048 new=2048
-double n=24 b=2048 L native:lpanel old=57344 new=8192
-double n=24 b=2048 U vendor old=8192 new=8192
-double n=24 b=8192 L native:lpanel old=229376 new=32768
-double n=24 b=8192 U vendor old=32768 new=32768
-double n=24 b=32768 L native:lpanel old=917504 new=131072
-double n=24 b=32768 U vendor old=131072 new=131072
-double n=28 b=128 L vendor old=512 new=512
-double n=28 b=128 U vendor old=512 new=512
-double n=28 b=512 L native:lpanel old=14336 new=2048
-double n=28 b=512 U vendor old=2048 new=2048
-double n=28 b=2048 L native:lpanel old=57344 new=8192
-double n=28 b=2048 U vendor old=8192 new=8192
-double n=28 b=8192 L native:lpanel old=229376 new=32768
-double n=28 b=8192 U vendor old=32768 new=32768
-double n=28 b=32768 L native:lpanel old=917504 new=131072
-double n=28 b=32768 U vendor old=131072 new=131072
-double n=32 b=128 L vendor old=512 new=512
-double n=32 b=128 U vendor old=512 new=512
-double n=32 b=512 L vendor old=2048 new=2048
-double n=32 b=512 U vendor old=2048 new=2048
-double n=32 b=2048 L native:lpanel old=57344 new=8192
-double n=32 b=2048 U vendor old=8192 new=8192
-double n=32 b=8192 L native:lpanel old=229376 new=32768
-double n=32 b=8192 U vendor old=32768 new=32768
-double n=32 b=32768 L native:lpanel old=917504 new=131072
-double n=32 b=32768 U vendor old=131072 new=131072
-double n=36 b=128 L vendor old=512 new=512
-double n=36 b=128 U vendor old=512 new=512
-double n=36 b=512 L vendor old=2048 new=2048
-double n=36 b=512 U vendor old=2048 new=2048
-double n=36 b=2048 L native:lpanel old=16834560 new=8192
-double n=36 b=2048 U vendor old=8192 new=8192
-double n=36 b=8192 L native:lpanel old=67338240 new=32768
-double n=36 b=8192 U vendor old=32768 new=32768
-double n=36 b=32768 L native:lpanel old=269352960 new=131072
-double n=36 b=32768 U vendor old=131072 new=131072
-double n=40 b=128 L vendor old=512 new=512
-double n=40 b=128 U vendor old=512 new=512
-double n=40 b=512 L vendor old=2048 new=2048
-double n=40 b=512 U vendor old=2048 new=2048
-double n=40 b=2048 L native:lpanel old=16834560 new=8192
-double n=40 b=2048 U vendor old=8192 new=8192
-double n=40 b=8192 L native:lpanel old=67338240 new=32768
-double n=40 b=8192 U vendor old=32768 new=32768
-double n=40 b=32768 L native:lpanel old=269352960 new=131072
-double n=40 b=32768 U vendor old=131072 new=131072
-double n=48 b=128 L vendor old=512 new=512
-double n=48 b=128 U vendor old=512 new=512
-double n=48 b=512 L vendor old=2048 new=2048
-double n=48 b=512 U vendor old=2048 new=2048
-double n=48 b=2048 L vendor old=8192 new=8192
-double n=48 b=2048 U vendor old=8192 new=8192
-double n=48 b=8192 L vendor old=32768 new=32768
-double n=48 b=8192 U vendor old=32768 new=32768
-double n=48 b=32768 L vendor old=131072 new=131072
-double n=48 b=32768 U vendor old=131072 new=131072
-double n=56 b=128 L vendor old=512 new=512
-double n=56 b=128 U vendor old=512 new=512
-double n=56 b=512 L vendor old=2048 new=2048
-double n=56 b=512 U vendor old=2048 new=2048
-double n=56 b=2048 L native:lpanel old=16834560 new=8192
-double n=56 b=2048 U vendor old=8192 new=8192
-double n=56 b=8192 L native:lpanel old=67338240 new=32768
-double n=56 b=8192 U vendor old=32768 new=32768
-double n=56 b=32768 L native:lpanel old=269352960 new=131072
-double n=56 b=32768 U vendor old=131072 new=131072
-double n=64 b=128 L vendor old=512 new=512
-double n=64 b=128 U vendor old=512 new=512
-double n=64 b=512 L vendor old=2048 new=2048
-double n=64 b=512 U vendor old=2048 new=2048
-double n=64 b=2048 L vendor old=8192 new=8192
-double n=64 b=2048 U vendor old=8192 new=8192
-double n=64 b=8192 L vendor old=32768 new=32768
-double n=64 b=8192 U vendor old=32768 new=32768
-double n=64 b=32768 L vendor old=131072 new=131072
-double n=64 b=32768 U vendor old=131072 new=131072
-double n=80 b=128 L vendor old=512 new=512
-double n=80 b=128 U vendor old=512 new=512
-double n=80 b=512 L vendor old=2048 new=2048
-double n=80 b=512 U vendor old=2048 new=2048
-double n=80 b=2048 L vendor old=8192 new=8192
-double n=80 b=2048 U vendor old=8192 new=8192
-double n=80 b=8192 L vendor old=32768 new=32768
-double n=80 b=8192 U vendor old=32768 new=32768
-double n=80 b=32768 L vendor old=131072 new=131072
-double n=80 b=32768 U vendor old=131072 new=131072
-double n=96 b=128 L vendor old=512 new=512
-double n=96 b=128 U vendor old=512 new=512
-double n=96 b=512 L vendor old=2048 new=2048
-double n=96 b=512 U vendor old=2048 new=2048
-double n=96 b=2048 L vendor old=8192 new=8192
-double n=96 b=2048 U vendor old=8192 new=8192
-double n=96 b=8192 L vendor old=32768 new=32768
-double n=96 b=8192 U vendor old=32768 new=32768
-double n=96 b=32768 L vendor old=131072 new=131072
-double n=96 b=32768 U vendor old=131072 new=131072
-double n=112 b=128 L vendor old=512 new=512
-double n=112 b=128 U vendor old=512 new=512
-double n=112 b=512 L vendor old=2048 new=2048
-double n=112 b=512 U vendor old=2048 new=2048
-double n=112 b=2048 L vendor old=8192 new=8192
-double n=112 b=2048 U vendor old=8192 new=8192
-double n=112 b=8192 L vendor old=32768 new=32768
-double n=112 b=8192 U vendor old=32768 new=32768
-double n=112 b=32768 L vendor old=131072 new=131072
-double n=112 b=32768 U vendor old=131072 new=131072
-double n=128 b=128 L vendor old=512 new=512
-double n=128 b=128 U vendor old=512 new=512
-double n=128 b=512 L vendor old=2048 new=2048
-double n=128 b=512 U vendor old=2048 new=2048
-double n=128 b=2048 L vendor old=8192 new=8192
-double n=128 b=2048 U vendor old=8192 new=8192
-double n=128 b=8192 L vendor old=32768 new=32768
-double n=128 b=8192 U vendor old=32768 new=32768
-double n=128 b=32768 L vendor old=131072 new=131072
-double n=128 b=32768 U vendor old=131072 new=131072
-double n=160 b=128 L vendor old=512 new=512
-double n=160 b=128 U vendor old=512 new=512
-double n=160 b=512 L vendor old=2048 new=2048
-double n=160 b=512 U vendor old=2048 new=2048
-double n=160 b=2048 L vendor old=8192 new=8192
-double n=160 b=2048 U vendor old=8192 new=8192
-double n=160 b=8192 L vendor old=32768 new=32768
-double n=160 b=8192 U vendor old=32768 new=32768
-double n=192 b=128 L vendor old=512 new=512
-double n=192 b=128 U vendor old=512 new=512
-double n=192 b=512 L vendor old=2048 new=2048
-double n=192 b=512 U vendor old=2048 new=2048
-double n=192 b=2048 L vendor old=8192 new=8192
-double n=192 b=2048 U vendor old=8192 new=8192
-double n=192 b=8192 L vendor old=32768 new=32768
-double n=192 b=8192 U vendor old=32768 new=32768
-double n=224 b=128 L vendor old=512 new=512
-double n=224 b=128 U vendor old=512 new=512
-double n=224 b=512 L vendor old=2048 new=2048
-double n=224 b=512 U vendor old=2048 new=2048
-double n=224 b=2048 L vendor old=8192 new=8192
-double n=224 b=2048 U vendor old=8192 new=8192
-double n=224 b=8192 L vendor old=32768 new=32768
-double n=224 b=8192 U vendor old=32768 new=32768
-double n=256 b=128 L vendor old=512 new=512
-double n=256 b=128 U vendor old=512 new=512
-double n=256 b=512 L vendor old=2048 new=2048
-double n=256 b=512 U vendor old=2048 new=2048
-double n=256 b=2048 L vendor old=8192 new=8192
-double n=256 b=2048 U vendor old=8192 new=8192
-double n=256 b=8192 L vendor old=32768 new=32768
-double n=256 b=8192 U vendor old=32768 new=32768
-double n=288 b=128 L vendor old=512 new=512
-double n=288 b=128 U vendor old=512 new=512
-double n=288 b=512 L vendor old=2048 new=2048
-double n=288 b=512 U vendor old=2048 new=2048
-double n=288 b=2048 L vendor old=8192 new=8192
-double n=288 b=2048 U vendor old=8192 new=8192
-double n=320 b=128 L vendor old=512 new=512
-double n=320 b=128 U vendor old=512 new=512
-double n=320 b=512 L vendor old=2048 new=2048
-double n=320 b=512 U vendor old=2048 new=2048
-double n=320 b=2048 L vendor old=8192 new=8192
-double n=320 b=2048 U vendor old=8192 new=8192
-double n=384 b=128 L vendor old=512 new=512
-double n=384 b=128 U vendor old=512 new=512
-double n=384 b=512 L vendor old=2048 new=2048
-double n=384 b=512 U vendor old=2048 new=2048
-double n=384 b=2048 L vendor old=8192 new=8192
-double n=384 b=2048 U vendor old=8192 new=8192
-double n=448 b=128 L vendor old=512 new=512
-double n=448 b=128 U vendor old=512 new=512
-double n=448 b=512 L vendor old=2048 new=2048
-double n=448 b=512 U vendor old=2048 new=2048
-double n=448 b=2048 L vendor old=8192 new=8192
-double n=448 b=2048 U vendor old=8192 new=8192
-double n=512 b=128 L vendor old=512 new=512
-double n=512 b=128 U vendor old=512 new=512
-double n=512 b=512 L vendor old=2048 new=2048
-double n=512 b=512 U vendor old=2048 new=2048
-double n=512 b=2048 L vendor old=8192 new=8192
-double n=512 b=2048 U vendor old=8192 new=8192
-double n=640 b=128 L vendor old=512 new=512
-double n=640 b=128 U vendor old=512 new=512
-double n=640 b=512 L native:blocked old=4208640 new=4208640
-double n=640 b=512 U vendor old=2048 new=2048
-double n=768 b=128 L native:blocked old=1052160 new=1052160
-double n=768 b=128 U vendor old=512 new=512
-double n=768 b=512 L native:blocked old=4208640 new=4208640
-double n=768 b=512 U vendor old=2048 new=2048
-double n=1024 b=128 L native:blocked old=1052160 new=1052160
-double n=1024 b=128 U vendor old=512 new=512
-double n=1024 b=512 L native:blocked old=4208640 new=4208640
-double n=1024 b=512 U vendor old=2048 new=2048
-double n=1280 b=128 L native:blocked old=1052160 new=1052160
-double n=1280 b=128 U vendor old=512 new=512
-double n=1536 b=128 L native:blocked old=1052160 new=1052160
-double n=1536 b=128 U vendor old=512 new=512
-float n=1 b=128 L native:lpanel old=3584 new=512
-float n=1 b=128 U native:tiny old=512 new=512
-float n=1 b=512 L native:lpanel old=14336 new=2048
-float n=1 b=512 U native:tiny old=2048 new=2048
-float n=1 b=2048 L native:lpanel old=57344 new=8192
-float n=1 b=2048 U native:tiny old=8192 new=8192
-float n=1 b=8192 L native:tiny old=229376 new=32768
-float n=1 b=8192 U native:tiny old=32768 new=32768
-float n=1 b=32768 L native:tiny old=917504 new=131072
-float n=1 b=32768 U native:tiny old=131072 new=131072
-float n=2 b=128 L native:lpanel old=3584 new=512
-float n=2 b=128 U native:tiny old=512 new=512
-float n=2 b=512 L native:lpanel old=14336 new=2048
-float n=2 b=512 U native:tiny old=2048 new=2048
-float n=2 b=2048 L native:tiny old=57344 new=8192
-float n=2 b=2048 U native:tiny old=8192 new=8192
-float n=2 b=8192 L native:tiny old=229376 new=32768
-float n=2 b=8192 U native:tiny old=32768 new=32768
-float n=2 b=32768 L native:tiny old=917504 new=131072
-float n=2 b=32768 U native:tiny old=131072 new=131072
-float n=3 b=128 L native:tiny old=3584 new=512
-float n=3 b=128 U native:tiny old=512 new=512
-float n=3 b=512 L native:tiny old=14336 new=2048
-float n=3 b=512 U native:tiny old=2048 new=2048
-float n=3 b=2048 L native:tiny old=57344 new=8192
-float n=3 b=2048 U native:tiny old=8192 new=8192
-float n=3 b=8192 L native:tiny old=229376 new=32768
-float n=3 b=8192 U native:tiny old=32768 new=32768
-float n=3 b=32768 L native:tiny old=917504 new=131072
-float n=3 b=32768 U native:tiny old=131072 new=131072
-float n=4 b=128 L native:tiny old=3584 new=512
-float n=4 b=128 U native:tiny old=512 new=512
-float n=4 b=512 L native:tiny old=14336 new=2048
-float n=4 b=512 U native:tiny old=2048 new=2048
-float n=4 b=2048 L native:tiny old=57344 new=8192
-float n=4 b=2048 U native:tiny old=8192 new=8192
-float n=4 b=8192 L native:tiny old=229376 new=32768
-float n=4 b=8192 U native:tiny old=32768 new=32768
-float n=4 b=32768 L native:tiny old=917504 new=131072
-float n=4 b=32768 U native:tiny old=131072 new=131072
-float n=6 b=128 L native:tiny old=3584 new=512
-float n=6 b=128 U native:tiny old=512 new=512
-float n=6 b=512 L native:tiny old=14336 new=2048
-float n=6 b=512 U native:tiny old=2048 new=2048
-float n=6 b=2048 L native:tiny old=57344 new=8192
-float n=6 b=2048 U native:tiny old=8192 new=8192
-float n=6 b=8192 L native:tiny old=229376 new=32768
-float n=6 b=8192 U native:tiny old=32768 new=32768
-float n=6 b=32768 L native:tiny old=917504 new=131072
-float n=6 b=32768 U native:tiny old=131072 new=131072
-float n=8 b=128 L native:tiny old=3584 new=512
-float n=8 b=128 U native:tiny old=512 new=512
-float n=8 b=512 L native:tiny old=14336 new=2048
-float n=8 b=512 U native:tiny old=2048 new=2048
-float n=8 b=2048 L native:tiny old=57344 new=8192
-float n=8 b=2048 U native:tiny old=8192 new=8192
-float n=8 b=8192 L native:tiny old=229376 new=32768
-float n=8 b=8192 U native:tiny old=32768 new=32768
-float n=8 b=32768 L native:tiny old=917504 new=131072
-float n=8 b=32768 U native:tiny old=131072 new=131072
-float n=12 b=128 L native:tiny old=3584 new=512
-float n=12 b=128 U native:tiny old=512 new=512
-float n=12 b=512 L native:tiny old=14336 new=2048
-float n=12 b=512 U native:tiny old=2048 new=2048
-float n=12 b=2048 L native:tiny old=57344 new=8192
-float n=12 b=2048 U native:tiny old=8192 new=8192
-float n=12 b=8192 L native:tiny old=229376 new=32768
-float n=12 b=8192 U native:tiny old=32768 new=32768
-float n=12 b=32768 L native:tiny old=917504 new=131072
-float n=12 b=32768 U native:tiny old=131072 new=131072
-float n=16 b=128 L native:tiny old=3584 new=512
-float n=16 b=128 U native:tiny old=512 new=512
-float n=16 b=512 L native:tiny old=14336 new=2048
-float n=16 b=512 U native:tiny old=2048 new=2048
-float n=16 b=2048 L native:tiny old=57344 new=8192
-float n=16 b=2048 U native:tiny old=8192 new=8192
-float n=16 b=8192 L native:tiny old=229376 new=32768
-float n=16 b=8192 U native:tiny old=32768 new=32768
-float n=16 b=32768 L native:tiny old=917504 new=131072
-float n=16 b=32768 U native:tiny old=131072 new=131072
-float n=20 b=128 L native:tiny old=3584 new=512
-float n=20 b=128 U native:tiny old=512 new=512
-float n=20 b=512 L native:tiny old=14336 new=2048
-float n=20 b=512 U native:tiny old=2048 new=2048
-float n=20 b=2048 L native:tiny old=57344 new=8192
-float n=20 b=2048 U native:tiny old=8192 new=8192
-float n=20 b=8192 L native:lpanel old=229376 new=32768
-float n=20 b=8192 U native:tiny old=32768 new=32768
-float n=20 b=32768 L native:lpanel old=917504 new=131072
-float n=20 b=32768 U native:tiny old=131072 new=131072
-float n=24 b=128 L native:tiny old=3584 new=512
-float n=24 b=128 U native:tiny old=512 new=512
-float n=24 b=512 L native:tiny old=14336 new=2048
-float n=24 b=512 U native:tiny old=2048 new=2048
-float n=24 b=2048 L native:tiny old=57344 new=8192
-float n=24 b=2048 U native:tiny old=8192 new=8192
-float n=24 b=8192 L native:tiny old=229376 new=32768
-float n=24 b=8192 U native:tiny old=32768 new=32768
-float n=24 b=32768 L native:tiny old=917504 new=131072
-float n=24 b=32768 U native:tiny old=131072 new=131072
-float n=28 b=128 L native:tiny old=3584 new=512
-float n=28 b=128 U native:tiny old=512 new=512
-float n=28 b=512 L native:tiny old=14336 new=2048
-float n=28 b=512 U native:tiny old=2048 new=2048
-float n=28 b=2048 L native:tiny old=57344 new=8192
-float n=28 b=2048 U native:tiny old=8192 new=8192
-float n=28 b=8192 L native:tiny old=229376 new=32768
-float n=28 b=8192 U native:tiny old=32768 new=32768
-float n=28 b=32768 L native:tiny old=917504 new=131072
-float n=28 b=32768 U native:tiny old=131072 new=131072
-float n=32 b=128 L native:tiny old=3584 new=512
-float n=32 b=128 U native:tiny old=512 new=512
-float n=32 b=512 L native:tiny old=14336 new=2048
-float n=32 b=512 U native:tiny old=2048 new=2048
-float n=32 b=2048 L native:tiny old=57344 new=8192
-float n=32 b=2048 U native:tiny old=8192 new=8192
-float n=32 b=8192 L native:tiny old=229376 new=32768
-float n=32 b=8192 U native:tiny old=32768 new=32768
-float n=32 b=32768 L native:tiny old=917504 new=131072
-float n=32 b=32768 U native:tiny old=131072 new=131072
-float n=36 b=128 L native:lpanel old=8392192 new=512
-float n=36 b=128 U vendor old=512 new=512
-float n=36 b=512 L native:lpanel old=33568768 new=2048
-float n=36 b=512 U native:cta old=2048 new=2048
-float n=36 b=2048 L native:lpanel old=134275072 new=8192
-float n=36 b=2048 U native:cta old=8192 new=8192
-float n=36 b=8192 L native:cta old=537100288 new=32768
-float n=36 b=8192 U native:cta old=32768 new=32768
-float n=36 b=32768 L native:cta old=2148401152 new=131072
-float n=36 b=32768 U native:cta old=131072 new=131072
-float n=40 b=128 L native:lpanel old=8392192 new=512
-float n=40 b=128 U vendor old=512 new=512
-float n=40 b=512 L native:lpanel old=33568768 new=2048
-float n=40 b=512 U native:cta old=2048 new=2048
-float n=40 b=2048 L native:lpanel old=134275072 new=8192
-float n=40 b=2048 U native:cta old=8192 new=8192
-float n=40 b=8192 L native:lpanel old=537100288 new=32768
-float n=40 b=8192 U native:cta old=32768 new=32768
-float n=40 b=32768 L native:lpanel old=2148401152 new=131072
-float n=40 b=32768 U native:cta old=131072 new=131072
-float n=48 b=128 L vendor old=512 new=512
-float n=48 b=128 U vendor old=512 new=512
-float n=48 b=512 L native:lpanel old=33568768 new=2048
-float n=48 b=512 U native:cta old=2048 new=2048
-float n=48 b=2048 L native:lpanel old=134275072 new=8192
-float n=48 b=2048 U vendor old=8192 new=8192
-float n=48 b=8192 L native:lpanel old=537100288 new=32768
-float n=48 b=8192 U vendor old=32768 new=32768
-float n=48 b=32768 L native:lpanel old=2148401152 new=131072
-float n=48 b=32768 U vendor old=131072 new=131072
-float n=56 b=128 L vendor old=512 new=512
-float n=56 b=128 U vendor old=512 new=512
-float n=56 b=512 L native:lpanel old=33568768 new=2048
-float n=56 b=512 U native:cta old=2048 new=2048
-float n=56 b=2048 L native:lpanel old=134275072 new=8192
-float n=56 b=2048 U native:cta old=8192 new=8192
-float n=56 b=8192 L native:lpanel old=537100288 new=32768
-float n=56 b=8192 U native:cta old=32768 new=32768
-float n=56 b=32768 L native:lpanel old=2148401152 new=131072
-float n=56 b=32768 U native:cta old=131072 new=131072
-float n=64 b=128 L vendor old=512 new=512
-float n=64 b=128 U vendor old=512 new=512
-float n=64 b=512 L native:lpanel old=14336 new=2048
-float n=64 b=512 U vendor old=2048 new=2048
-float n=64 b=2048 L native:lpanel old=57344 new=8192
-float n=64 b=2048 U vendor old=8192 new=8192
-float n=64 b=8192 L native:lpanel old=229376 new=32768
-float n=64 b=8192 U vendor old=32768 new=32768
-float n=64 b=32768 L native:lpanel old=917504 new=131072
-float n=64 b=32768 U vendor old=131072 new=131072
-float n=80 b=128 L vendor old=512 new=512
-float n=80 b=128 U vendor old=512 new=512
-float n=80 b=512 L native:lpanel old=33568768 new=2048
-float n=80 b=512 U vendor old=2048 new=2048
-float n=80 b=2048 L native:lpanel old=134275072 new=8192
-float n=80 b=2048 U vendor old=8192 new=8192
-float n=80 b=8192 L native:lpanel old=537100288 new=32768
-float n=80 b=8192 U vendor old=32768 new=32768
-float n=80 b=32768 L native:lpanel old=2148401152 new=131072
-float n=80 b=32768 U vendor old=131072 new=131072
-float n=96 b=128 L vendor old=512 new=512
-float n=96 b=128 U vendor old=512 new=512
-float n=96 b=512 L native:lpanel old=33568768 new=2048
-float n=96 b=512 U vendor old=2048 new=2048
-float n=96 b=2048 L native:lpanel old=134275072 new=8192
-float n=96 b=2048 U vendor old=8192 new=8192
-float n=96 b=8192 L native:lpanel old=537100288 new=32768
-float n=96 b=8192 U vendor old=32768 new=32768
-float n=96 b=32768 L native:lpanel old=2148401152 new=131072
-float n=96 b=32768 U vendor old=131072 new=131072
-float n=112 b=128 L vendor old=512 new=512
-float n=112 b=128 U vendor old=512 new=512
-float n=112 b=512 L native:lpanel old=33568768 new=2048
-float n=112 b=512 U vendor old=2048 new=2048
-float n=112 b=2048 L native:lpanel old=134275072 new=8192
-float n=112 b=2048 U vendor old=8192 new=8192
-float n=112 b=8192 L native:lpanel old=537100288 new=32768
-float n=112 b=8192 U vendor old=32768 new=32768
-float n=112 b=32768 L native:lpanel old=2148401152 new=131072
-float n=112 b=32768 U vendor old=131072 new=131072
-float n=128 b=128 L vendor old=512 new=512
-float n=128 b=128 U vendor old=512 new=512
-float n=128 b=512 L native:lpanel old=33568768 new=2048
-float n=128 b=512 U vendor old=2048 new=2048
-float n=128 b=2048 L native:lpanel old=134275072 new=8192
-float n=128 b=2048 U vendor old=8192 new=8192
-float n=128 b=8192 L native:lpanel old=537100288 new=32768
-float n=128 b=8192 U vendor old=32768 new=32768
-float n=128 b=32768 L native:lpanel old=2148401152 new=131072
-float n=128 b=32768 U vendor old=131072 new=131072
-float n=160 b=128 L vendor old=512 new=512
-float n=160 b=128 U vendor old=512 new=512
-float n=160 b=512 L native:lpanel old=33568768 new=2048
-float n=160 b=512 U vendor old=2048 new=2048
-float n=160 b=2048 L native:lpanel old=134275072 new=8192
-float n=160 b=2048 U vendor old=8192 new=8192
-float n=160 b=8192 L native:lpanel old=537100288 new=32768
-float n=160 b=8192 U vendor old=32768 new=32768
-float n=160 b=32768 L native:lpanel old=2148401152 new=131072
-float n=160 b=32768 U vendor old=131072 new=131072
-float n=192 b=128 L vendor old=512 new=512
-float n=192 b=128 U vendor old=512 new=512
-float n=192 b=512 L native:lpanel old=33568768 new=2048
-float n=192 b=512 U vendor old=2048 new=2048
-float n=192 b=2048 L native:lpanel old=134275072 new=8192
-float n=192 b=2048 U vendor old=8192 new=8192
-float n=192 b=8192 L native:lpanel old=537100288 new=32768
-float n=192 b=8192 U vendor old=32768 new=32768
-float n=224 b=128 L vendor old=512 new=512
-float n=224 b=128 U vendor old=512 new=512
-float n=224 b=512 L native:lpanel old=33568768 new=2048
-float n=224 b=512 U vendor old=2048 new=2048
-float n=224 b=2048 L native:lpanel old=134275072 new=8192
-float n=224 b=2048 U vendor old=8192 new=8192
-float n=224 b=8192 L native:lpanel old=537100288 new=32768
-float n=224 b=8192 U vendor old=32768 new=32768
-float n=256 b=128 L vendor old=512 new=512
-float n=256 b=128 U vendor old=512 new=512
-float n=256 b=512 L native:lpanel old=33568768 new=2048
-float n=256 b=512 U vendor old=2048 new=2048
-float n=256 b=2048 L native:lpanel old=134275072 new=8192
-float n=256 b=2048 U vendor old=8192 new=8192
-float n=256 b=8192 L native:lpanel old=537100288 new=32768
-float n=256 b=8192 U vendor old=32768 new=32768
-float n=288 b=128 L vendor old=512 new=512
-float n=288 b=128 U vendor old=512 new=512
-float n=288 b=512 L native:lpanel old=33568768 new=2048
-float n=288 b=512 U vendor old=2048 new=2048
-float n=288 b=2048 L native:lpanel old=134275072 new=8192
-float n=288 b=2048 U vendor old=8192 new=8192
-float n=288 b=8192 L native:lpanel old=537100288 new=32768
-float n=288 b=8192 U vendor old=32768 new=32768
-float n=320 b=128 L vendor old=512 new=512
-float n=320 b=128 U vendor old=512 new=512
-float n=320 b=512 L vendor old=2048 new=2048
-float n=320 b=512 U vendor old=2048 new=2048
-float n=320 b=2048 L vendor old=8192 new=8192
-float n=320 b=2048 U vendor old=8192 new=8192
-float n=320 b=8192 L vendor old=32768 new=32768
-float n=320 b=8192 U vendor old=32768 new=32768
-float n=384 b=128 L vendor old=512 new=512
-float n=384 b=128 U vendor old=512 new=512
-float n=384 b=512 L vendor old=2048 new=2048
-float n=384 b=512 U vendor old=2048 new=2048
-float n=384 b=2048 L vendor old=8192 new=8192
-float n=384 b=2048 U vendor old=8192 new=8192
-float n=448 b=128 L vendor old=512 new=512
-float n=448 b=128 U vendor old=512 new=512
-float n=448 b=512 L vendor old=2048 new=2048
-float n=448 b=512 U vendor old=2048 new=2048
-float n=448 b=2048 L vendor old=8192 new=8192
-float n=448 b=2048 U vendor old=8192 new=8192
-float n=512 b=128 L vendor old=512 new=512
-float n=512 b=128 U vendor old=512 new=512
-float n=512 b=512 L native:blocked old=33568768 new=33568768
-float n=512 b=512 U vendor old=2048 new=2048
-float n=512 b=2048 L native:blocked old=134275072 new=134275072
-float n=512 b=2048 U vendor old=8192 new=8192
-float n=640 b=128 L native:blocked old=8392192 new=8392192
-float n=640 b=128 U vendor old=512 new=512
-float n=640 b=512 L native:blocked old=33568768 new=33568768
-float n=640 b=512 U vendor old=2048 new=2048
-float n=640 b=2048 L native:blocked old=134275072 new=134275072
-float n=640 b=2048 U vendor old=8192 new=8192
-float n=768 b=128 L native:blocked old=8392192 new=8392192
-float n=768 b=128 U vendor old=512 new=512
-float n=768 b=512 L native:blocked old=33568768 new=33568768
-float n=768 b=512 U vendor old=2048 new=2048
-float n=1024 b=128 L native:blocked old=8392192 new=8392192
-float n=1024 b=128 U vendor old=512 new=512
-float n=1024 b=512 L native:blocked old=33568768 new=33568768
-float n=1024 b=512 U vendor old=2048 new=2048
-float n=1280 b=128 L native:blocked old=8392192 new=8392192
-float n=1280 b=128 U vendor old=512 new=512
-float n=1280 b=512 L native:blocked old=33568768 new=33568768
-float n=1280 b=512 U vendor old=2048 new=2048
-float n=1536 b=128 L native:blocked old=8392192 new=8392192
-float n=1536 b=128 U vendor old=512 new=512
+cdouble n=1 b=128 L native:lpanel old=3584 new=3584 chosen=512
+cdouble n=1 b=128 U vendor old=512 new=512 chosen=512
+cdouble n=1 b=512 L native:lpanel old=14336 new=14336 chosen=2048
+cdouble n=1 b=512 U vendor old=2048 new=2048 chosen=2048
+cdouble n=1 b=2048 L native:lpanel old=57344 new=57344 chosen=8192
+cdouble n=1 b=2048 U vendor old=8192 new=8192 chosen=8192
+cdouble n=1 b=8192 L native:lpanel old=229376 new=229376 chosen=32768
+cdouble n=1 b=8192 U vendor old=32768 new=32768 chosen=32768
+cdouble n=1 b=32768 L native:lpanel old=917504 new=917504 chosen=131072
+cdouble n=1 b=32768 U vendor old=131072 new=131072 chosen=131072
+cdouble n=2 b=128 L native:lpanel old=3584 new=3584 chosen=512
+cdouble n=2 b=128 U vendor old=512 new=512 chosen=512
+cdouble n=2 b=512 L native:lpanel old=14336 new=14336 chosen=2048
+cdouble n=2 b=512 U vendor old=2048 new=2048 chosen=2048
+cdouble n=2 b=2048 L native:lpanel old=57344 new=57344 chosen=8192
+cdouble n=2 b=2048 U vendor old=8192 new=8192 chosen=8192
+cdouble n=2 b=8192 L native:lpanel old=229376 new=229376 chosen=32768
+cdouble n=2 b=8192 U vendor old=32768 new=32768 chosen=32768
+cdouble n=2 b=32768 L native:tiny old=917504 new=917504 chosen=131072
+cdouble n=2 b=32768 U native:tiny old=131072 new=131072 chosen=131072
+cdouble n=3 b=128 L native:lpanel old=3584 new=3584 chosen=512
+cdouble n=3 b=128 U vendor old=512 new=512 chosen=512
+cdouble n=3 b=512 L native:lpanel old=14336 new=14336 chosen=2048
+cdouble n=3 b=512 U vendor old=2048 new=2048 chosen=2048
+cdouble n=3 b=2048 L native:lpanel old=57344 new=57344 chosen=8192
+cdouble n=3 b=2048 U native:cta old=8192 new=8192 chosen=8192
+cdouble n=3 b=8192 L native:tiny old=229376 new=229376 chosen=32768
+cdouble n=3 b=8192 U native:tiny old=32768 new=32768 chosen=32768
+cdouble n=3 b=32768 L native:tiny old=917504 new=917504 chosen=131072
+cdouble n=3 b=32768 U native:tiny old=131072 new=131072 chosen=131072
+cdouble n=4 b=128 L native:lpanel old=3584 new=3584 chosen=512
+cdouble n=4 b=128 U vendor old=512 new=512 chosen=512
+cdouble n=4 b=512 L native:lpanel old=14336 new=14336 chosen=2048
+cdouble n=4 b=512 U vendor old=2048 new=2048 chosen=2048
+cdouble n=4 b=2048 L native:cta old=57344 new=57344 chosen=8192
+cdouble n=4 b=2048 U native:tiny old=8192 new=8192 chosen=8192
+cdouble n=4 b=8192 L native:tiny old=229376 new=229376 chosen=32768
+cdouble n=4 b=8192 U native:tiny old=32768 new=32768 chosen=32768
+cdouble n=4 b=32768 L native:tiny old=917504 new=917504 chosen=131072
+cdouble n=4 b=32768 U native:tiny old=131072 new=131072 chosen=131072
+cdouble n=6 b=128 L native:tiny old=3584 new=3584 chosen=512
+cdouble n=6 b=128 U vendor old=512 new=512 chosen=512
+cdouble n=6 b=512 L native:tiny old=14336 new=14336 chosen=2048
+cdouble n=6 b=512 U native:tiny old=2048 new=2048 chosen=2048
+cdouble n=6 b=2048 L native:tiny old=57344 new=57344 chosen=8192
+cdouble n=6 b=2048 U native:tiny old=8192 new=8192 chosen=8192
+cdouble n=6 b=8192 L native:tiny old=229376 new=229376 chosen=32768
+cdouble n=6 b=8192 U native:tiny old=32768 new=32768 chosen=32768
+cdouble n=6 b=32768 L native:tiny old=917504 new=917504 chosen=131072
+cdouble n=6 b=32768 U native:tiny old=131072 new=131072 chosen=131072
+cdouble n=8 b=128 L native:tiny old=3584 new=3584 chosen=512
+cdouble n=8 b=128 U native:tiny old=512 new=512 chosen=512
+cdouble n=8 b=512 L native:tiny old=14336 new=14336 chosen=2048
+cdouble n=8 b=512 U native:tiny old=2048 new=2048 chosen=2048
+cdouble n=8 b=2048 L native:tiny old=57344 new=57344 chosen=8192
+cdouble n=8 b=2048 U native:tiny old=8192 new=8192 chosen=8192
+cdouble n=8 b=8192 L native:tiny old=229376 new=229376 chosen=32768
+cdouble n=8 b=8192 U native:tiny old=32768 new=32768 chosen=32768
+cdouble n=8 b=32768 L native:tiny old=917504 new=917504 chosen=131072
+cdouble n=8 b=32768 U native:tiny old=131072 new=131072 chosen=131072
+cdouble n=12 b=128 L vendor old=512 new=512 chosen=512
+cdouble n=12 b=128 U vendor old=512 new=512 chosen=512
+cdouble n=12 b=512 L native:lpanel old=14336 new=14336 chosen=2048
+cdouble n=12 b=512 U vendor old=2048 new=2048 chosen=2048
+cdouble n=12 b=2048 L native:lpanel old=57344 new=57344 chosen=8192
+cdouble n=12 b=2048 U native:tiny old=8192 new=8192 chosen=8192
+cdouble n=12 b=8192 L native:tiny old=229376 new=229376 chosen=32768
+cdouble n=12 b=8192 U native:tiny old=32768 new=32768 chosen=32768
+cdouble n=12 b=32768 L native:tiny old=917504 new=917504 chosen=131072
+cdouble n=12 b=32768 U native:tiny old=131072 new=131072 chosen=131072
+cdouble n=16 b=128 L vendor old=512 new=512 chosen=512
+cdouble n=16 b=128 U vendor old=512 new=512 chosen=512
+cdouble n=16 b=512 L native:tiny old=14336 new=14336 chosen=2048
+cdouble n=16 b=512 U native:tiny old=2048 new=2048 chosen=2048
+cdouble n=16 b=2048 L native:tiny old=57344 new=57344 chosen=8192
+cdouble n=16 b=2048 U native:tiny old=8192 new=8192 chosen=8192
+cdouble n=16 b=8192 L native:tiny old=229376 new=229376 chosen=32768
+cdouble n=16 b=8192 U native:tiny old=32768 new=32768 chosen=32768
+cdouble n=16 b=32768 L native:tiny old=917504 new=917504 chosen=131072
+cdouble n=16 b=32768 U native:tiny old=131072 new=131072 chosen=131072
+cdouble n=20 b=128 L vendor old=512 new=512 chosen=512
+cdouble n=20 b=128 U vendor old=512 new=512 chosen=512
+cdouble n=20 b=512 L native:lpanel old=14336 new=14336 chosen=2048
+cdouble n=20 b=512 U vendor old=2048 new=2048 chosen=2048
+cdouble n=20 b=2048 L native:lpanel old=57344 new=57344 chosen=8192
+cdouble n=20 b=2048 U vendor old=8192 new=8192 chosen=8192
+cdouble n=20 b=8192 L native:lpanel old=229376 new=229376 chosen=32768
+cdouble n=20 b=8192 U vendor old=32768 new=32768 chosen=32768
+cdouble n=20 b=32768 L native:lpanel old=917504 new=917504 chosen=131072
+cdouble n=20 b=32768 U vendor old=131072 new=131072 chosen=131072
+cdouble n=24 b=128 L vendor old=512 new=512 chosen=512
+cdouble n=24 b=128 U vendor old=512 new=512 chosen=512
+cdouble n=24 b=512 L native:lpanel old=14336 new=14336 chosen=2048
+cdouble n=24 b=512 U vendor old=2048 new=2048 chosen=2048
+cdouble n=24 b=2048 L native:lpanel old=57344 new=57344 chosen=8192
+cdouble n=24 b=2048 U vendor old=8192 new=8192 chosen=8192
+cdouble n=24 b=8192 L native:lpanel old=229376 new=229376 chosen=32768
+cdouble n=24 b=8192 U vendor old=32768 new=32768 chosen=32768
+cdouble n=24 b=32768 L native:lpanel old=917504 new=917504 chosen=131072
+cdouble n=24 b=32768 U vendor old=131072 new=131072 chosen=131072
+cdouble n=28 b=128 L vendor old=512 new=512 chosen=512
+cdouble n=28 b=128 U vendor old=512 new=512 chosen=512
+cdouble n=28 b=512 L native:lpanel old=14336 new=14336 chosen=2048
+cdouble n=28 b=512 U vendor old=2048 new=2048 chosen=2048
+cdouble n=28 b=2048 L native:lpanel old=57344 new=57344 chosen=8192
+cdouble n=28 b=2048 U vendor old=8192 new=8192 chosen=8192
+cdouble n=28 b=8192 L native:lpanel old=229376 new=229376 chosen=32768
+cdouble n=28 b=8192 U vendor old=32768 new=32768 chosen=32768
+cdouble n=28 b=32768 L native:lpanel old=917504 new=917504 chosen=131072
+cdouble n=28 b=32768 U vendor old=131072 new=131072 chosen=131072
+cdouble n=32 b=128 L vendor old=512 new=512 chosen=512
+cdouble n=32 b=128 U vendor old=512 new=512 chosen=512
+cdouble n=32 b=512 L vendor old=2048 new=2048 chosen=2048
+cdouble n=32 b=512 U vendor old=2048 new=2048 chosen=2048
+cdouble n=32 b=2048 L native:lpanel old=57344 new=57344 chosen=8192
+cdouble n=32 b=2048 U vendor old=8192 new=8192 chosen=8192
+cdouble n=32 b=8192 L native:lpanel old=229376 new=229376 chosen=32768
+cdouble n=32 b=8192 U vendor old=32768 new=32768 chosen=32768
+cdouble n=32 b=32768 L native:lpanel old=917504 new=917504 chosen=131072
+cdouble n=32 b=32768 U vendor old=131072 new=131072 chosen=131072
+cdouble n=36 b=128 L vendor old=512 new=512 chosen=512
+cdouble n=36 b=128 U vendor old=512 new=512 chosen=512
+cdouble n=36 b=512 L native:cta old=2111488 new=145408 chosen=2048
+cdouble n=36 b=512 U vendor old=2048 new=2048 chosen=2048
+cdouble n=36 b=2048 L native:lpanel old=8445952 new=581632 chosen=8192
+cdouble n=36 b=2048 U vendor old=8192 new=8192 chosen=8192
+cdouble n=36 b=8192 L native:lpanel old=33783808 new=2326528 chosen=32768
+cdouble n=36 b=8192 U vendor old=32768 new=32768 chosen=32768
+cdouble n=36 b=32768 L native:lpanel old=135135232 new=9306112 chosen=131072
+cdouble n=36 b=32768 U vendor old=131072 new=131072 chosen=131072
+cdouble n=40 b=128 L vendor old=512 new=512 chosen=512
+cdouble n=40 b=128 U vendor old=512 new=512 chosen=512
+cdouble n=40 b=512 L native:lpanel old=2111488 new=538624 chosen=2048
+cdouble n=40 b=512 U vendor old=2048 new=2048 chosen=2048
+cdouble n=40 b=2048 L native:lpanel old=8445952 new=2154496 chosen=8192
+cdouble n=40 b=2048 U vendor old=8192 new=8192 chosen=8192
+cdouble n=40 b=8192 L native:lpanel old=33783808 new=8617984 chosen=32768
+cdouble n=40 b=8192 U vendor old=32768 new=32768 chosen=32768
+cdouble n=40 b=32768 L native:lpanel old=135135232 new=34471936 chosen=131072
+cdouble n=40 b=32768 U vendor old=131072 new=131072 chosen=131072
+cdouble n=48 b=128 L vendor old=512 new=512 chosen=512
+cdouble n=48 b=128 U vendor old=512 new=512 chosen=512
+cdouble n=48 b=512 L vendor old=2048 new=2048 chosen=2048
+cdouble n=48 b=512 U vendor old=2048 new=2048 chosen=2048
+cdouble n=48 b=2048 L vendor old=8192 new=8192 chosen=8192
+cdouble n=48 b=2048 U vendor old=8192 new=8192 chosen=8192
+cdouble n=48 b=8192 L native:lpanel old=33783808 new=33783808 chosen=32768
+cdouble n=48 b=8192 U vendor old=32768 new=32768 chosen=32768
+cdouble n=48 b=32768 L native:lpanel old=135135232 new=135135232 chosen=131072
+cdouble n=48 b=32768 U vendor old=131072 new=131072 chosen=131072
+cdouble n=56 b=128 L vendor old=512 new=512 chosen=512
+cdouble n=56 b=128 U vendor old=512 new=512 chosen=512
+cdouble n=56 b=512 L vendor old=2048 new=2048 chosen=2048
+cdouble n=56 b=512 U vendor old=2048 new=2048 chosen=2048
+cdouble n=56 b=2048 L native:lpanel old=8445952 new=8445952 chosen=8192
+cdouble n=56 b=2048 U vendor old=8192 new=8192 chosen=8192
+cdouble n=56 b=8192 L native:lpanel old=33783808 new=33783808 chosen=32768
+cdouble n=56 b=8192 U vendor old=32768 new=32768 chosen=32768
+cdouble n=56 b=32768 L native:lpanel old=135135232 new=135135232 chosen=131072
+cdouble n=56 b=32768 U vendor old=131072 new=131072 chosen=131072
+cdouble n=64 b=128 L vendor old=512 new=512 chosen=512
+cdouble n=64 b=128 U vendor old=512 new=512 chosen=512
+cdouble n=64 b=512 L vendor old=2048 new=2048 chosen=2048
+cdouble n=64 b=512 U vendor old=2048 new=2048 chosen=2048
+cdouble n=64 b=2048 L vendor old=8192 new=8192 chosen=8192
+cdouble n=64 b=2048 U vendor old=8192 new=8192 chosen=8192
+cdouble n=64 b=8192 L native:lpanel old=33783808 new=33783808 chosen=32768
+cdouble n=64 b=8192 U vendor old=32768 new=32768 chosen=32768
+cdouble n=64 b=32768 L native:lpanel old=135135232 new=135135232 chosen=131072
+cdouble n=64 b=32768 U vendor old=131072 new=131072 chosen=131072
+cdouble n=80 b=128 L vendor old=512 new=512 chosen=512
+cdouble n=80 b=128 U vendor old=512 new=512 chosen=512
+cdouble n=80 b=512 L vendor old=2048 new=2048 chosen=2048
+cdouble n=80 b=512 U vendor old=2048 new=2048 chosen=2048
+cdouble n=80 b=2048 L vendor old=8192 new=8192 chosen=8192
+cdouble n=80 b=2048 U vendor old=8192 new=8192 chosen=8192
+cdouble n=80 b=8192 L vendor old=32768 new=32768 chosen=32768
+cdouble n=80 b=8192 U vendor old=32768 new=32768 chosen=32768
+cdouble n=80 b=32768 L vendor old=131072 new=131072 chosen=131072
+cdouble n=80 b=32768 U vendor old=131072 new=131072 chosen=131072
+cdouble n=96 b=128 L vendor old=512 new=512 chosen=512
+cdouble n=96 b=128 U vendor old=512 new=512 chosen=512
+cdouble n=96 b=512 L vendor old=2048 new=2048 chosen=2048
+cdouble n=96 b=512 U vendor old=2048 new=2048 chosen=2048
+cdouble n=96 b=2048 L vendor old=8192 new=8192 chosen=8192
+cdouble n=96 b=2048 U vendor old=8192 new=8192 chosen=8192
+cdouble n=96 b=8192 L vendor old=32768 new=32768 chosen=32768
+cdouble n=96 b=8192 U vendor old=32768 new=32768 chosen=32768
+cdouble n=112 b=128 L vendor old=512 new=512 chosen=512
+cdouble n=112 b=128 U vendor old=512 new=512 chosen=512
+cdouble n=112 b=512 L vendor old=2048 new=2048 chosen=2048
+cdouble n=112 b=512 U vendor old=2048 new=2048 chosen=2048
+cdouble n=112 b=2048 L vendor old=8192 new=8192 chosen=8192
+cdouble n=112 b=2048 U vendor old=8192 new=8192 chosen=8192
+cdouble n=112 b=8192 L vendor old=32768 new=32768 chosen=32768
+cdouble n=112 b=8192 U vendor old=32768 new=32768 chosen=32768
+cdouble n=128 b=128 L vendor old=512 new=512 chosen=512
+cdouble n=128 b=128 U vendor old=512 new=512 chosen=512
+cdouble n=128 b=512 L vendor old=2048 new=2048 chosen=2048
+cdouble n=128 b=512 U vendor old=2048 new=2048 chosen=2048
+cdouble n=128 b=2048 L vendor old=8192 new=8192 chosen=8192
+cdouble n=128 b=2048 U vendor old=8192 new=8192 chosen=8192
+cdouble n=128 b=8192 L vendor old=32768 new=32768 chosen=32768
+cdouble n=128 b=8192 U vendor old=32768 new=32768 chosen=32768
+cdouble n=160 b=128 L vendor old=512 new=512 chosen=512
+cdouble n=160 b=128 U vendor old=512 new=512 chosen=512
+cdouble n=160 b=512 L vendor old=2048 new=2048 chosen=2048
+cdouble n=160 b=512 U vendor old=2048 new=2048 chosen=2048
+cdouble n=160 b=2048 L vendor old=8192 new=8192 chosen=8192
+cdouble n=160 b=2048 U vendor old=8192 new=8192 chosen=8192
+cdouble n=160 b=8192 L vendor old=32768 new=32768 chosen=32768
+cdouble n=160 b=8192 U vendor old=32768 new=32768 chosen=32768
+cdouble n=192 b=128 L vendor old=512 new=512 chosen=512
+cdouble n=192 b=128 U vendor old=512 new=512 chosen=512
+cdouble n=192 b=512 L vendor old=2048 new=2048 chosen=2048
+cdouble n=192 b=512 U vendor old=2048 new=2048 chosen=2048
+cdouble n=192 b=2048 L vendor old=8192 new=8192 chosen=8192
+cdouble n=192 b=2048 U vendor old=8192 new=8192 chosen=8192
+cdouble n=224 b=128 L vendor old=512 new=512 chosen=512
+cdouble n=224 b=128 U vendor old=512 new=512 chosen=512
+cdouble n=224 b=512 L vendor old=2048 new=2048 chosen=2048
+cdouble n=224 b=512 U vendor old=2048 new=2048 chosen=2048
+cdouble n=224 b=2048 L vendor old=8192 new=8192 chosen=8192
+cdouble n=224 b=2048 U vendor old=8192 new=8192 chosen=8192
+cdouble n=256 b=128 L vendor old=512 new=512 chosen=512
+cdouble n=256 b=128 U vendor old=512 new=512 chosen=512
+cdouble n=256 b=512 L vendor old=2048 new=2048 chosen=2048
+cdouble n=256 b=512 U vendor old=2048 new=2048 chosen=2048
+cdouble n=256 b=2048 L vendor old=8192 new=8192 chosen=8192
+cdouble n=256 b=2048 U vendor old=8192 new=8192 chosen=8192
+cdouble n=288 b=128 L vendor old=512 new=512 chosen=512
+cdouble n=288 b=128 U vendor old=512 new=512 chosen=512
+cdouble n=288 b=512 L vendor old=2048 new=2048 chosen=2048
+cdouble n=288 b=512 U vendor old=2048 new=2048 chosen=2048
+cdouble n=288 b=2048 L vendor old=8192 new=8192 chosen=8192
+cdouble n=288 b=2048 U vendor old=8192 new=8192 chosen=8192
+cdouble n=320 b=128 L vendor old=512 new=512 chosen=512
+cdouble n=320 b=128 U vendor old=512 new=512 chosen=512
+cdouble n=320 b=512 L vendor old=2048 new=2048 chosen=2048
+cdouble n=320 b=512 U vendor old=2048 new=2048 chosen=2048
+cdouble n=320 b=2048 L vendor old=8192 new=8192 chosen=8192
+cdouble n=320 b=2048 U vendor old=8192 new=8192 chosen=8192
+cdouble n=384 b=128 L vendor old=512 new=512 chosen=512
+cdouble n=384 b=128 U vendor old=512 new=512 chosen=512
+cdouble n=384 b=512 L vendor old=2048 new=2048 chosen=2048
+cdouble n=384 b=512 U vendor old=2048 new=2048 chosen=2048
+cdouble n=448 b=128 L vendor old=512 new=512 chosen=512
+cdouble n=448 b=128 U vendor old=512 new=512 chosen=512
+cdouble n=448 b=512 L vendor old=2048 new=2048 chosen=2048
+cdouble n=448 b=512 U vendor old=2048 new=2048 chosen=2048
+cdouble n=512 b=128 L vendor old=512 new=512 chosen=512
+cdouble n=512 b=128 U vendor old=512 new=512 chosen=512
+cdouble n=512 b=512 L vendor old=2048 new=2048 chosen=2048
+cdouble n=512 b=512 U vendor old=2048 new=2048 chosen=2048
+cdouble n=640 b=128 L vendor old=512 new=512 chosen=512
+cdouble n=640 b=128 U vendor old=512 new=512 chosen=512
+cdouble n=640 b=512 L vendor old=2048 new=2048 chosen=2048
+cdouble n=640 b=512 U vendor old=2048 new=2048 chosen=2048
+cdouble n=768 b=128 L vendor old=512 new=512 chosen=512
+cdouble n=768 b=128 U vendor old=512 new=512 chosen=512
+cdouble n=1024 b=128 L vendor old=512 new=512 chosen=512
+cdouble n=1024 b=128 U vendor old=512 new=512 chosen=512
+cdouble n=1280 b=128 L vendor old=512 new=512 chosen=512
+cdouble n=1280 b=128 U vendor old=512 new=512 chosen=512
+cdouble n=1536 b=64 L vendor old=512 new=512 chosen=512
+cdouble n=1536 b=64 U vendor old=512 new=512 chosen=512
+cfloat n=1 b=128 L native:lpanel old=3584 new=3584 chosen=512
+cfloat n=1 b=128 U native:tiny old=512 new=512 chosen=512
+cfloat n=1 b=512 L native:lpanel old=14336 new=14336 chosen=2048
+cfloat n=1 b=512 U native:tiny old=2048 new=2048 chosen=2048
+cfloat n=1 b=2048 L native:lpanel old=57344 new=57344 chosen=8192
+cfloat n=1 b=2048 U native:tiny old=8192 new=8192 chosen=8192
+cfloat n=1 b=8192 L native:tiny old=229376 new=229376 chosen=32768
+cfloat n=1 b=8192 U native:tiny old=32768 new=32768 chosen=32768
+cfloat n=1 b=32768 L native:tiny old=917504 new=917504 chosen=131072
+cfloat n=1 b=32768 U native:tiny old=131072 new=131072 chosen=131072
+cfloat n=2 b=128 L native:lpanel old=3584 new=3584 chosen=512
+cfloat n=2 b=128 U native:tiny old=512 new=512 chosen=512
+cfloat n=2 b=512 L native:lpanel old=14336 new=14336 chosen=2048
+cfloat n=2 b=512 U native:tiny old=2048 new=2048 chosen=2048
+cfloat n=2 b=2048 L native:tiny old=57344 new=57344 chosen=8192
+cfloat n=2 b=2048 U native:tiny old=8192 new=8192 chosen=8192
+cfloat n=2 b=8192 L native:tiny old=229376 new=229376 chosen=32768
+cfloat n=2 b=8192 U native:tiny old=32768 new=32768 chosen=32768
+cfloat n=2 b=32768 L native:tiny old=917504 new=917504 chosen=131072
+cfloat n=2 b=32768 U native:tiny old=131072 new=131072 chosen=131072
+cfloat n=3 b=128 L native:tiny old=3584 new=3584 chosen=512
+cfloat n=3 b=128 U native:tiny old=512 new=512 chosen=512
+cfloat n=3 b=512 L native:tiny old=14336 new=14336 chosen=2048
+cfloat n=3 b=512 U native:tiny old=2048 new=2048 chosen=2048
+cfloat n=3 b=2048 L native:tiny old=57344 new=57344 chosen=8192
+cfloat n=3 b=2048 U native:tiny old=8192 new=8192 chosen=8192
+cfloat n=3 b=8192 L native:tiny old=229376 new=229376 chosen=32768
+cfloat n=3 b=8192 U native:tiny old=32768 new=32768 chosen=32768
+cfloat n=3 b=32768 L native:tiny old=917504 new=917504 chosen=131072
+cfloat n=3 b=32768 U native:tiny old=131072 new=131072 chosen=131072
+cfloat n=4 b=128 L native:tiny old=3584 new=3584 chosen=512
+cfloat n=4 b=128 U native:tiny old=512 new=512 chosen=512
+cfloat n=4 b=512 L native:tiny old=14336 new=14336 chosen=2048
+cfloat n=4 b=512 U native:tiny old=2048 new=2048 chosen=2048
+cfloat n=4 b=2048 L native:tiny old=57344 new=57344 chosen=8192
+cfloat n=4 b=2048 U native:tiny old=8192 new=8192 chosen=8192
+cfloat n=4 b=8192 L native:tiny old=229376 new=229376 chosen=32768
+cfloat n=4 b=8192 U native:tiny old=32768 new=32768 chosen=32768
+cfloat n=4 b=32768 L native:tiny old=917504 new=917504 chosen=131072
+cfloat n=4 b=32768 U native:tiny old=131072 new=131072 chosen=131072
+cfloat n=6 b=128 L native:tiny old=3584 new=3584 chosen=512
+cfloat n=6 b=128 U native:tiny old=512 new=512 chosen=512
+cfloat n=6 b=512 L native:tiny old=14336 new=14336 chosen=2048
+cfloat n=6 b=512 U native:tiny old=2048 new=2048 chosen=2048
+cfloat n=6 b=2048 L native:tiny old=57344 new=57344 chosen=8192
+cfloat n=6 b=2048 U native:tiny old=8192 new=8192 chosen=8192
+cfloat n=6 b=8192 L native:tiny old=229376 new=229376 chosen=32768
+cfloat n=6 b=8192 U native:tiny old=32768 new=32768 chosen=32768
+cfloat n=6 b=32768 L native:tiny old=917504 new=917504 chosen=131072
+cfloat n=6 b=32768 U native:tiny old=131072 new=131072 chosen=131072
+cfloat n=8 b=128 L native:tiny old=3584 new=3584 chosen=512
+cfloat n=8 b=128 U native:tiny old=512 new=512 chosen=512
+cfloat n=8 b=512 L native:tiny old=14336 new=14336 chosen=2048
+cfloat n=8 b=512 U native:tiny old=2048 new=2048 chosen=2048
+cfloat n=8 b=2048 L native:tiny old=57344 new=57344 chosen=8192
+cfloat n=8 b=2048 U native:tiny old=8192 new=8192 chosen=8192
+cfloat n=8 b=8192 L native:tiny old=229376 new=229376 chosen=32768
+cfloat n=8 b=8192 U native:tiny old=32768 new=32768 chosen=32768
+cfloat n=8 b=32768 L native:tiny old=917504 new=917504 chosen=131072
+cfloat n=8 b=32768 U native:tiny old=131072 new=131072 chosen=131072
+cfloat n=12 b=128 L native:tiny old=3584 new=3584 chosen=512
+cfloat n=12 b=128 U native:tiny old=512 new=512 chosen=512
+cfloat n=12 b=512 L native:tiny old=14336 new=14336 chosen=2048
+cfloat n=12 b=512 U native:tiny old=2048 new=2048 chosen=2048
+cfloat n=12 b=2048 L native:tiny old=57344 new=57344 chosen=8192
+cfloat n=12 b=2048 U native:tiny old=8192 new=8192 chosen=8192
+cfloat n=12 b=8192 L native:tiny old=229376 new=229376 chosen=32768
+cfloat n=12 b=8192 U native:tiny old=32768 new=32768 chosen=32768
+cfloat n=12 b=32768 L native:tiny old=917504 new=917504 chosen=131072
+cfloat n=12 b=32768 U native:tiny old=131072 new=131072 chosen=131072
+cfloat n=16 b=128 L native:tiny old=3584 new=3584 chosen=512
+cfloat n=16 b=128 U native:tiny old=512 new=512 chosen=512
+cfloat n=16 b=512 L native:tiny old=14336 new=14336 chosen=2048
+cfloat n=16 b=512 U native:tiny old=2048 new=2048 chosen=2048
+cfloat n=16 b=2048 L native:tiny old=57344 new=57344 chosen=8192
+cfloat n=16 b=2048 U native:tiny old=8192 new=8192 chosen=8192
+cfloat n=16 b=8192 L native:tiny old=229376 new=229376 chosen=32768
+cfloat n=16 b=8192 U native:tiny old=32768 new=32768 chosen=32768
+cfloat n=16 b=32768 L native:tiny old=917504 new=917504 chosen=131072
+cfloat n=16 b=32768 U native:tiny old=131072 new=131072 chosen=131072
+cfloat n=20 b=128 L native:tiny old=3584 new=3584 chosen=512
+cfloat n=20 b=128 U native:tiny old=512 new=512 chosen=512
+cfloat n=20 b=512 L native:tiny old=14336 new=14336 chosen=2048
+cfloat n=20 b=512 U native:tiny old=2048 new=2048 chosen=2048
+cfloat n=20 b=2048 L native:tiny old=57344 new=57344 chosen=8192
+cfloat n=20 b=2048 U native:tiny old=8192 new=8192 chosen=8192
+cfloat n=20 b=8192 L native:lpanel old=229376 new=229376 chosen=32768
+cfloat n=20 b=8192 U native:tiny old=32768 new=32768 chosen=32768
+cfloat n=20 b=32768 L native:lpanel old=917504 new=917504 chosen=131072
+cfloat n=20 b=32768 U native:tiny old=131072 new=131072 chosen=131072
+cfloat n=24 b=128 L native:tiny old=3584 new=3584 chosen=512
+cfloat n=24 b=128 U native:tiny old=512 new=512 chosen=512
+cfloat n=24 b=512 L native:tiny old=14336 new=14336 chosen=2048
+cfloat n=24 b=512 U native:tiny old=2048 new=2048 chosen=2048
+cfloat n=24 b=2048 L native:tiny old=57344 new=57344 chosen=8192
+cfloat n=24 b=2048 U native:tiny old=8192 new=8192 chosen=8192
+cfloat n=24 b=8192 L native:lpanel old=229376 new=229376 chosen=32768
+cfloat n=24 b=8192 U native:tiny old=32768 new=32768 chosen=32768
+cfloat n=24 b=32768 L native:lpanel old=917504 new=917504 chosen=131072
+cfloat n=24 b=32768 U native:tiny old=131072 new=131072 chosen=131072
+cfloat n=28 b=128 L native:tiny old=3584 new=3584 chosen=512
+cfloat n=28 b=128 U native:tiny old=512 new=512 chosen=512
+cfloat n=28 b=512 L native:tiny old=14336 new=14336 chosen=2048
+cfloat n=28 b=512 U native:tiny old=2048 new=2048 chosen=2048
+cfloat n=28 b=2048 L native:tiny old=57344 new=57344 chosen=8192
+cfloat n=28 b=2048 U native:tiny old=8192 new=8192 chosen=8192
+cfloat n=28 b=8192 L native:lpanel old=229376 new=229376 chosen=32768
+cfloat n=28 b=8192 U native:tiny old=32768 new=32768 chosen=32768
+cfloat n=28 b=32768 L native:tiny old=917504 new=917504 chosen=131072
+cfloat n=28 b=32768 U native:tiny old=131072 new=131072 chosen=131072
+cfloat n=32 b=128 L native:tiny old=3584 new=3584 chosen=512
+cfloat n=32 b=128 U native:tiny old=512 new=512 chosen=512
+cfloat n=32 b=512 L native:tiny old=14336 new=14336 chosen=2048
+cfloat n=32 b=512 U native:tiny old=2048 new=2048 chosen=2048
+cfloat n=32 b=2048 L native:tiny old=57344 new=57344 chosen=8192
+cfloat n=32 b=2048 U native:tiny old=8192 new=8192 chosen=8192
+cfloat n=32 b=8192 L native:tiny old=229376 new=229376 chosen=32768
+cfloat n=32 b=8192 U native:tiny old=32768 new=32768 chosen=32768
+cfloat n=32 b=32768 L native:tiny old=917504 new=917504 chosen=131072
+cfloat n=32 b=32768 U native:tiny old=131072 new=131072 chosen=131072
+cfloat n=36 b=128 L vendor old=512 new=512 chosen=512
+cfloat n=36 b=128 U vendor old=512 new=512 chosen=512
+cfloat n=36 b=512 L native:lpanel old=4208640 new=79872 chosen=2048
+cfloat n=36 b=512 U vendor old=2048 new=2048 chosen=2048
+cfloat n=36 b=2048 L native:lpanel old=16834560 new=319488 chosen=8192
+cfloat n=36 b=2048 U vendor old=8192 new=8192 chosen=8192
+cfloat n=36 b=8192 L native:lpanel old=67338240 new=1277952 chosen=32768
+cfloat n=36 b=8192 U vendor old=32768 new=32768 chosen=32768
+cfloat n=36 b=32768 L native:lpanel old=269352960 new=5111808 chosen=131072
+cfloat n=36 b=32768 U vendor old=131072 new=131072 chosen=131072
+cfloat n=40 b=128 L vendor old=512 new=512 chosen=512
+cfloat n=40 b=128 U vendor old=512 new=512 chosen=512
+cfloat n=40 b=512 L native:lpanel old=4208640 new=276480 chosen=2048
+cfloat n=40 b=512 U vendor old=2048 new=2048 chosen=2048
+cfloat n=40 b=2048 L native:lpanel old=16834560 new=1105920 chosen=8192
+cfloat n=40 b=2048 U vendor old=8192 new=8192 chosen=8192
+cfloat n=40 b=8192 L native:lpanel old=67338240 new=4423680 chosen=32768
+cfloat n=40 b=8192 U vendor old=32768 new=32768 chosen=32768
+cfloat n=40 b=32768 L native:lpanel old=269352960 new=17694720 chosen=131072
+cfloat n=40 b=32768 U vendor old=131072 new=131072 chosen=131072
+cfloat n=48 b=128 L vendor old=512 new=512 chosen=512
+cfloat n=48 b=128 U vendor old=512 new=512 chosen=512
+cfloat n=48 b=512 L vendor old=2048 new=2048 chosen=2048
+cfloat n=48 b=512 U vendor old=2048 new=2048 chosen=2048
+cfloat n=48 b=2048 L native:lpanel old=16834560 new=4251648 chosen=8192
+cfloat n=48 b=2048 U vendor old=8192 new=8192 chosen=8192
+cfloat n=48 b=8192 L native:lpanel old=67338240 new=17006592 chosen=32768
+cfloat n=48 b=8192 U vendor old=32768 new=32768 chosen=32768
+cfloat n=48 b=32768 L native:lpanel old=269352960 new=68026368 chosen=131072
+cfloat n=48 b=32768 U vendor old=131072 new=131072 chosen=131072
+cfloat n=56 b=128 L vendor old=512 new=512 chosen=512
+cfloat n=56 b=128 U vendor old=512 new=512 chosen=512
+cfloat n=56 b=512 L vendor old=2048 new=2048 chosen=2048
+cfloat n=56 b=512 U vendor old=2048 new=2048 chosen=2048
+cfloat n=56 b=2048 L native:lpanel old=16834560 new=9494528 chosen=8192
+cfloat n=56 b=2048 U vendor old=8192 new=8192 chosen=8192
+cfloat n=56 b=8192 L native:lpanel old=67338240 new=37978112 chosen=32768
+cfloat n=56 b=8192 U vendor old=32768 new=32768 chosen=32768
+cfloat n=56 b=32768 L native:lpanel old=269352960 new=151912448 chosen=131072
+cfloat n=56 b=32768 U vendor old=131072 new=131072 chosen=131072
+cfloat n=64 b=128 L vendor old=512 new=512 chosen=512
+cfloat n=64 b=128 U vendor old=512 new=512 chosen=512
+cfloat n=64 b=512 L vendor old=2048 new=2048 chosen=2048
+cfloat n=64 b=512 U vendor old=2048 new=2048 chosen=2048
+cfloat n=64 b=2048 L native:lpanel old=16834560 new=16834560 chosen=8192
+cfloat n=64 b=2048 U vendor old=8192 new=8192 chosen=8192
+cfloat n=64 b=8192 L native:lpanel old=67338240 new=67338240 chosen=32768
+cfloat n=64 b=8192 U vendor old=32768 new=32768 chosen=32768
+cfloat n=64 b=32768 L native:lpanel old=269352960 new=269352960 chosen=131072
+cfloat n=64 b=32768 U vendor old=131072 new=131072 chosen=131072
+cfloat n=80 b=128 L vendor old=512 new=512 chosen=512
+cfloat n=80 b=128 U vendor old=512 new=512 chosen=512
+cfloat n=80 b=512 L vendor old=2048 new=2048 chosen=2048
+cfloat n=80 b=512 U vendor old=2048 new=2048 chosen=2048
+cfloat n=80 b=2048 L vendor old=8192 new=8192 chosen=8192
+cfloat n=80 b=2048 U vendor old=8192 new=8192 chosen=8192
+cfloat n=80 b=8192 L native:lpanel old=67338240 new=67338240 chosen=32768
+cfloat n=80 b=8192 U vendor old=32768 new=32768 chosen=32768
+cfloat n=80 b=32768 L native:lpanel old=269352960 new=269352960 chosen=131072
+cfloat n=80 b=32768 U vendor old=131072 new=131072 chosen=131072
+cfloat n=96 b=128 L vendor old=512 new=512 chosen=512
+cfloat n=96 b=128 U vendor old=512 new=512 chosen=512
+cfloat n=96 b=512 L vendor old=2048 new=2048 chosen=2048
+cfloat n=96 b=512 U vendor old=2048 new=2048 chosen=2048
+cfloat n=96 b=2048 L native:lpanel old=16834560 new=16834560 chosen=8192
+cfloat n=96 b=2048 U vendor old=8192 new=8192 chosen=8192
+cfloat n=96 b=8192 L native:lpanel old=67338240 new=67338240 chosen=32768
+cfloat n=96 b=8192 U vendor old=32768 new=32768 chosen=32768
+cfloat n=96 b=32768 L native:lpanel old=269352960 new=269352960 chosen=131072
+cfloat n=96 b=32768 U vendor old=131072 new=131072 chosen=131072
+cfloat n=112 b=128 L vendor old=512 new=512 chosen=512
+cfloat n=112 b=128 U vendor old=512 new=512 chosen=512
+cfloat n=112 b=512 L vendor old=2048 new=2048 chosen=2048
+cfloat n=112 b=512 U vendor old=2048 new=2048 chosen=2048
+cfloat n=112 b=2048 L vendor old=8192 new=8192 chosen=8192
+cfloat n=112 b=2048 U vendor old=8192 new=8192 chosen=8192
+cfloat n=112 b=8192 L vendor old=32768 new=32768 chosen=32768
+cfloat n=112 b=8192 U vendor old=32768 new=32768 chosen=32768
+cfloat n=112 b=32768 L vendor old=131072 new=131072 chosen=131072
+cfloat n=112 b=32768 U vendor old=131072 new=131072 chosen=131072
+cfloat n=128 b=128 L vendor old=512 new=512 chosen=512
+cfloat n=128 b=128 U vendor old=512 new=512 chosen=512
+cfloat n=128 b=512 L vendor old=2048 new=2048 chosen=2048
+cfloat n=128 b=512 U vendor old=2048 new=2048 chosen=2048
+cfloat n=128 b=2048 L native:lpanel old=16834560 new=16834560 chosen=8192
+cfloat n=128 b=2048 U vendor old=8192 new=8192 chosen=8192
+cfloat n=128 b=8192 L native:lpanel old=67338240 new=67338240 chosen=32768
+cfloat n=128 b=8192 U vendor old=32768 new=32768 chosen=32768
+cfloat n=128 b=32768 L native:lpanel old=269352960 new=269352960 chosen=131072
+cfloat n=128 b=32768 U vendor old=131072 new=131072 chosen=131072
+cfloat n=160 b=128 L vendor old=512 new=512 chosen=512
+cfloat n=160 b=128 U vendor old=512 new=512 chosen=512
+cfloat n=160 b=512 L vendor old=2048 new=2048 chosen=2048
+cfloat n=160 b=512 U vendor old=2048 new=2048 chosen=2048
+cfloat n=160 b=2048 L vendor old=8192 new=8192 chosen=8192
+cfloat n=160 b=2048 U vendor old=8192 new=8192 chosen=8192
+cfloat n=160 b=8192 L vendor old=32768 new=32768 chosen=32768
+cfloat n=160 b=8192 U vendor old=32768 new=32768 chosen=32768
+cfloat n=192 b=128 L vendor old=512 new=512 chosen=512
+cfloat n=192 b=128 U vendor old=512 new=512 chosen=512
+cfloat n=192 b=512 L vendor old=2048 new=2048 chosen=2048
+cfloat n=192 b=512 U vendor old=2048 new=2048 chosen=2048
+cfloat n=192 b=2048 L vendor old=8192 new=8192 chosen=8192
+cfloat n=192 b=2048 U vendor old=8192 new=8192 chosen=8192
+cfloat n=192 b=8192 L vendor old=32768 new=32768 chosen=32768
+cfloat n=192 b=8192 U vendor old=32768 new=32768 chosen=32768
+cfloat n=224 b=128 L vendor old=512 new=512 chosen=512
+cfloat n=224 b=128 U vendor old=512 new=512 chosen=512
+cfloat n=224 b=512 L vendor old=2048 new=2048 chosen=2048
+cfloat n=224 b=512 U vendor old=2048 new=2048 chosen=2048
+cfloat n=224 b=2048 L vendor old=8192 new=8192 chosen=8192
+cfloat n=224 b=2048 U vendor old=8192 new=8192 chosen=8192
+cfloat n=224 b=8192 L vendor old=32768 new=32768 chosen=32768
+cfloat n=224 b=8192 U vendor old=32768 new=32768 chosen=32768
+cfloat n=256 b=128 L vendor old=512 new=512 chosen=512
+cfloat n=256 b=128 U vendor old=512 new=512 chosen=512
+cfloat n=256 b=512 L vendor old=2048 new=2048 chosen=2048
+cfloat n=256 b=512 U vendor old=2048 new=2048 chosen=2048
+cfloat n=256 b=2048 L vendor old=8192 new=8192 chosen=8192
+cfloat n=256 b=2048 U vendor old=8192 new=8192 chosen=8192
+cfloat n=256 b=8192 L vendor old=32768 new=32768 chosen=32768
+cfloat n=256 b=8192 U vendor old=32768 new=32768 chosen=32768
+cfloat n=288 b=128 L vendor old=512 new=512 chosen=512
+cfloat n=288 b=128 U vendor old=512 new=512 chosen=512
+cfloat n=288 b=512 L vendor old=2048 new=2048 chosen=2048
+cfloat n=288 b=512 U vendor old=2048 new=2048 chosen=2048
+cfloat n=288 b=2048 L vendor old=8192 new=8192 chosen=8192
+cfloat n=288 b=2048 U vendor old=8192 new=8192 chosen=8192
+cfloat n=320 b=128 L vendor old=512 new=512 chosen=512
+cfloat n=320 b=128 U vendor old=512 new=512 chosen=512
+cfloat n=320 b=512 L vendor old=2048 new=2048 chosen=2048
+cfloat n=320 b=512 U vendor old=2048 new=2048 chosen=2048
+cfloat n=320 b=2048 L vendor old=8192 new=8192 chosen=8192
+cfloat n=320 b=2048 U vendor old=8192 new=8192 chosen=8192
+cfloat n=384 b=128 L vendor old=512 new=512 chosen=512
+cfloat n=384 b=128 U vendor old=512 new=512 chosen=512
+cfloat n=384 b=512 L vendor old=2048 new=2048 chosen=2048
+cfloat n=384 b=512 U vendor old=2048 new=2048 chosen=2048
+cfloat n=384 b=2048 L vendor old=8192 new=8192 chosen=8192
+cfloat n=384 b=2048 U vendor old=8192 new=8192 chosen=8192
+cfloat n=448 b=128 L vendor old=512 new=512 chosen=512
+cfloat n=448 b=128 U vendor old=512 new=512 chosen=512
+cfloat n=448 b=512 L vendor old=2048 new=2048 chosen=2048
+cfloat n=448 b=512 U vendor old=2048 new=2048 chosen=2048
+cfloat n=448 b=2048 L vendor old=8192 new=8192 chosen=8192
+cfloat n=448 b=2048 U vendor old=8192 new=8192 chosen=8192
+cfloat n=512 b=128 L vendor old=512 new=512 chosen=512
+cfloat n=512 b=128 U vendor old=512 new=512 chosen=512
+cfloat n=512 b=512 L vendor old=2048 new=2048 chosen=2048
+cfloat n=512 b=512 U vendor old=2048 new=2048 chosen=2048
+cfloat n=512 b=2048 L vendor old=8192 new=8192 chosen=8192
+cfloat n=512 b=2048 U vendor old=8192 new=8192 chosen=8192
+cfloat n=640 b=128 L vendor old=512 new=512 chosen=512
+cfloat n=640 b=128 U vendor old=512 new=512 chosen=512
+cfloat n=640 b=512 L vendor old=2048 new=2048 chosen=2048
+cfloat n=640 b=512 U vendor old=2048 new=2048 chosen=2048
+cfloat n=768 b=128 L vendor old=512 new=512 chosen=512
+cfloat n=768 b=128 U vendor old=512 new=512 chosen=512
+cfloat n=768 b=512 L vendor old=2048 new=2048 chosen=2048
+cfloat n=768 b=512 U vendor old=2048 new=2048 chosen=2048
+cfloat n=1024 b=128 L vendor old=512 new=512 chosen=512
+cfloat n=1024 b=128 U vendor old=512 new=512 chosen=512
+cfloat n=1024 b=512 L vendor old=2048 new=2048 chosen=2048
+cfloat n=1024 b=512 U vendor old=2048 new=2048 chosen=2048
+cfloat n=1280 b=128 L vendor old=512 new=512 chosen=512
+cfloat n=1280 b=128 U vendor old=512 new=512 chosen=512
+cfloat n=1536 b=128 L vendor old=512 new=512 chosen=512
+cfloat n=1536 b=128 U vendor old=512 new=512 chosen=512
+double n=1 b=128 L native:lpanel old=3584 new=3584 chosen=512
+double n=1 b=128 U native:tiny old=512 new=512 chosen=512
+double n=1 b=512 L native:lpanel old=14336 new=14336 chosen=2048
+double n=1 b=512 U native:tiny old=2048 new=2048 chosen=2048
+double n=1 b=2048 L native:lpanel old=57344 new=57344 chosen=8192
+double n=1 b=2048 U native:tiny old=8192 new=8192 chosen=8192
+double n=1 b=8192 L native:lpanel old=229376 new=229376 chosen=32768
+double n=1 b=8192 U vendor old=32768 new=32768 chosen=32768
+double n=1 b=32768 L native:lpanel old=917504 new=917504 chosen=131072
+double n=1 b=32768 U vendor old=131072 new=131072 chosen=131072
+double n=2 b=128 L native:lpanel old=3584 new=3584 chosen=512
+double n=2 b=128 U native:tiny old=512 new=512 chosen=512
+double n=2 b=512 L native:lpanel old=14336 new=14336 chosen=2048
+double n=2 b=512 U native:tiny old=2048 new=2048 chosen=2048
+double n=2 b=2048 L native:lpanel old=57344 new=57344 chosen=8192
+double n=2 b=2048 U native:tiny old=8192 new=8192 chosen=8192
+double n=2 b=8192 L native:lpanel old=229376 new=229376 chosen=32768
+double n=2 b=8192 U native:tiny old=32768 new=32768 chosen=32768
+double n=2 b=32768 L native:tiny old=917504 new=917504 chosen=131072
+double n=2 b=32768 U native:tiny old=131072 new=131072 chosen=131072
+double n=3 b=128 L native:lpanel old=3584 new=3584 chosen=512
+double n=3 b=128 U native:tiny old=512 new=512 chosen=512
+double n=3 b=512 L native:lpanel old=14336 new=14336 chosen=2048
+double n=3 b=512 U native:tiny old=2048 new=2048 chosen=2048
+double n=3 b=2048 L native:lpanel old=57344 new=57344 chosen=8192
+double n=3 b=2048 U native:tiny old=8192 new=8192 chosen=8192
+double n=3 b=8192 L native:tiny old=229376 new=229376 chosen=32768
+double n=3 b=8192 U native:tiny old=32768 new=32768 chosen=32768
+double n=3 b=32768 L native:tiny old=917504 new=917504 chosen=131072
+double n=3 b=32768 U native:tiny old=131072 new=131072 chosen=131072
+double n=4 b=128 L native:lpanel old=3584 new=3584 chosen=512
+double n=4 b=128 U native:tiny old=512 new=512 chosen=512
+double n=4 b=512 L native:lpanel old=14336 new=14336 chosen=2048
+double n=4 b=512 U native:tiny old=2048 new=2048 chosen=2048
+double n=4 b=2048 L native:tiny old=57344 new=57344 chosen=8192
+double n=4 b=2048 U native:tiny old=8192 new=8192 chosen=8192
+double n=4 b=8192 L native:tiny old=229376 new=229376 chosen=32768
+double n=4 b=8192 U native:tiny old=32768 new=32768 chosen=32768
+double n=4 b=32768 L native:tiny old=917504 new=917504 chosen=131072
+double n=4 b=32768 U native:tiny old=131072 new=131072 chosen=131072
+double n=6 b=128 L native:tiny old=3584 new=3584 chosen=512
+double n=6 b=128 U native:tiny old=512 new=512 chosen=512
+double n=6 b=512 L native:tiny old=14336 new=14336 chosen=2048
+double n=6 b=512 U native:tiny old=2048 new=2048 chosen=2048
+double n=6 b=2048 L native:tiny old=57344 new=57344 chosen=8192
+double n=6 b=2048 U native:tiny old=8192 new=8192 chosen=8192
+double n=6 b=8192 L native:tiny old=229376 new=229376 chosen=32768
+double n=6 b=8192 U native:tiny old=32768 new=32768 chosen=32768
+double n=6 b=32768 L native:tiny old=917504 new=917504 chosen=131072
+double n=6 b=32768 U native:tiny old=131072 new=131072 chosen=131072
+double n=8 b=128 L native:tiny old=3584 new=3584 chosen=512
+double n=8 b=128 U native:tiny old=512 new=512 chosen=512
+double n=8 b=512 L native:tiny old=14336 new=14336 chosen=2048
+double n=8 b=512 U native:tiny old=2048 new=2048 chosen=2048
+double n=8 b=2048 L native:tiny old=57344 new=57344 chosen=8192
+double n=8 b=2048 U native:tiny old=8192 new=8192 chosen=8192
+double n=8 b=8192 L native:tiny old=229376 new=229376 chosen=32768
+double n=8 b=8192 U native:tiny old=32768 new=32768 chosen=32768
+double n=8 b=32768 L native:tiny old=917504 new=917504 chosen=131072
+double n=8 b=32768 U native:tiny old=131072 new=131072 chosen=131072
+double n=12 b=128 L vendor old=512 new=512 chosen=512
+double n=12 b=128 U vendor old=512 new=512 chosen=512
+double n=12 b=512 L native:tiny old=14336 new=14336 chosen=2048
+double n=12 b=512 U native:tiny old=2048 new=2048 chosen=2048
+double n=12 b=2048 L native:tiny old=57344 new=57344 chosen=8192
+double n=12 b=2048 U native:tiny old=8192 new=8192 chosen=8192
+double n=12 b=8192 L native:tiny old=229376 new=229376 chosen=32768
+double n=12 b=8192 U native:tiny old=32768 new=32768 chosen=32768
+double n=12 b=32768 L native:tiny old=917504 new=917504 chosen=131072
+double n=12 b=32768 U native:tiny old=131072 new=131072 chosen=131072
+double n=16 b=128 L native:tiny old=3584 new=3584 chosen=512
+double n=16 b=128 U native:tiny old=512 new=512 chosen=512
+double n=16 b=512 L native:tiny old=14336 new=14336 chosen=2048
+double n=16 b=512 U native:tiny old=2048 new=2048 chosen=2048
+double n=16 b=2048 L native:tiny old=57344 new=57344 chosen=8192
+double n=16 b=2048 U native:tiny old=8192 new=8192 chosen=8192
+double n=16 b=8192 L native:tiny old=229376 new=229376 chosen=32768
+double n=16 b=8192 U native:tiny old=32768 new=32768 chosen=32768
+double n=16 b=32768 L native:tiny old=917504 new=917504 chosen=131072
+double n=16 b=32768 U native:tiny old=131072 new=131072 chosen=131072
+double n=20 b=128 L native:lpanel old=3584 new=3584 chosen=512
+double n=20 b=128 U vendor old=512 new=512 chosen=512
+double n=20 b=512 L native:lpanel old=14336 new=14336 chosen=2048
+double n=20 b=512 U vendor old=2048 new=2048 chosen=2048
+double n=20 b=2048 L native:lpanel old=57344 new=57344 chosen=8192
+double n=20 b=2048 U vendor old=8192 new=8192 chosen=8192
+double n=20 b=8192 L native:lpanel old=229376 new=229376 chosen=32768
+double n=20 b=8192 U vendor old=32768 new=32768 chosen=32768
+double n=20 b=32768 L native:blocked old=917504 new=917504 chosen=917504
+double n=20 b=32768 U vendor old=131072 new=131072 chosen=131072
+double n=24 b=128 L vendor old=512 new=512 chosen=512
+double n=24 b=128 U vendor old=512 new=512 chosen=512
+double n=24 b=512 L native:lpanel old=14336 new=14336 chosen=2048
+double n=24 b=512 U vendor old=2048 new=2048 chosen=2048
+double n=24 b=2048 L native:lpanel old=57344 new=57344 chosen=8192
+double n=24 b=2048 U vendor old=8192 new=8192 chosen=8192
+double n=24 b=8192 L native:lpanel old=229376 new=229376 chosen=32768
+double n=24 b=8192 U vendor old=32768 new=32768 chosen=32768
+double n=24 b=32768 L native:lpanel old=917504 new=917504 chosen=131072
+double n=24 b=32768 U vendor old=131072 new=131072 chosen=131072
+double n=28 b=128 L vendor old=512 new=512 chosen=512
+double n=28 b=128 U vendor old=512 new=512 chosen=512
+double n=28 b=512 L native:lpanel old=14336 new=14336 chosen=2048
+double n=28 b=512 U vendor old=2048 new=2048 chosen=2048
+double n=28 b=2048 L native:lpanel old=57344 new=57344 chosen=8192
+double n=28 b=2048 U vendor old=8192 new=8192 chosen=8192
+double n=28 b=8192 L native:lpanel old=229376 new=229376 chosen=32768
+double n=28 b=8192 U vendor old=32768 new=32768 chosen=32768
+double n=28 b=32768 L native:lpanel old=917504 new=917504 chosen=131072
+double n=28 b=32768 U vendor old=131072 new=131072 chosen=131072
+double n=32 b=128 L vendor old=512 new=512 chosen=512
+double n=32 b=128 U vendor old=512 new=512 chosen=512
+double n=32 b=512 L vendor old=2048 new=2048 chosen=2048
+double n=32 b=512 U vendor old=2048 new=2048 chosen=2048
+double n=32 b=2048 L native:lpanel old=57344 new=57344 chosen=8192
+double n=32 b=2048 U vendor old=8192 new=8192 chosen=8192
+double n=32 b=8192 L native:lpanel old=229376 new=229376 chosen=32768
+double n=32 b=8192 U vendor old=32768 new=32768 chosen=32768
+double n=32 b=32768 L native:lpanel old=917504 new=917504 chosen=131072
+double n=32 b=32768 U vendor old=131072 new=131072 chosen=131072
+double n=36 b=128 L vendor old=512 new=512 chosen=512
+double n=36 b=128 U vendor old=512 new=512 chosen=512
+double n=36 b=512 L vendor old=2048 new=2048 chosen=2048
+double n=36 b=512 U vendor old=2048 new=2048 chosen=2048
+double n=36 b=2048 L native:lpanel old=16834560 new=319488 chosen=8192
+double n=36 b=2048 U vendor old=8192 new=8192 chosen=8192
+double n=36 b=8192 L native:lpanel old=67338240 new=1277952 chosen=32768
+double n=36 b=8192 U vendor old=32768 new=32768 chosen=32768
+double n=36 b=32768 L native:lpanel old=269352960 new=5111808 chosen=131072
+double n=36 b=32768 U vendor old=131072 new=131072 chosen=131072
+double n=40 b=128 L vendor old=512 new=512 chosen=512
+double n=40 b=128 U vendor old=512 new=512 chosen=512
+double n=40 b=512 L vendor old=2048 new=2048 chosen=2048
+double n=40 b=512 U vendor old=2048 new=2048 chosen=2048
+double n=40 b=2048 L native:lpanel old=16834560 new=1105920 chosen=8192
+double n=40 b=2048 U vendor old=8192 new=8192 chosen=8192
+double n=40 b=8192 L native:lpanel old=67338240 new=4423680 chosen=32768
+double n=40 b=8192 U vendor old=32768 new=32768 chosen=32768
+double n=40 b=32768 L native:lpanel old=269352960 new=17694720 chosen=131072
+double n=40 b=32768 U vendor old=131072 new=131072 chosen=131072
+double n=48 b=128 L vendor old=512 new=512 chosen=512
+double n=48 b=128 U vendor old=512 new=512 chosen=512
+double n=48 b=512 L vendor old=2048 new=2048 chosen=2048
+double n=48 b=512 U vendor old=2048 new=2048 chosen=2048
+double n=48 b=2048 L vendor old=8192 new=8192 chosen=8192
+double n=48 b=2048 U vendor old=8192 new=8192 chosen=8192
+double n=48 b=8192 L vendor old=32768 new=32768 chosen=32768
+double n=48 b=8192 U vendor old=32768 new=32768 chosen=32768
+double n=48 b=32768 L vendor old=131072 new=131072 chosen=131072
+double n=48 b=32768 U vendor old=131072 new=131072 chosen=131072
+double n=56 b=128 L vendor old=512 new=512 chosen=512
+double n=56 b=128 U vendor old=512 new=512 chosen=512
+double n=56 b=512 L vendor old=2048 new=2048 chosen=2048
+double n=56 b=512 U vendor old=2048 new=2048 chosen=2048
+double n=56 b=2048 L native:lpanel old=16834560 new=9494528 chosen=8192
+double n=56 b=2048 U vendor old=8192 new=8192 chosen=8192
+double n=56 b=8192 L native:lpanel old=67338240 new=37978112 chosen=32768
+double n=56 b=8192 U vendor old=32768 new=32768 chosen=32768
+double n=56 b=32768 L native:lpanel old=269352960 new=151912448 chosen=131072
+double n=56 b=32768 U vendor old=131072 new=131072 chosen=131072
+double n=64 b=128 L vendor old=512 new=512 chosen=512
+double n=64 b=128 U vendor old=512 new=512 chosen=512
+double n=64 b=512 L vendor old=2048 new=2048 chosen=2048
+double n=64 b=512 U vendor old=2048 new=2048 chosen=2048
+double n=64 b=2048 L vendor old=8192 new=8192 chosen=8192
+double n=64 b=2048 U vendor old=8192 new=8192 chosen=8192
+double n=64 b=8192 L vendor old=32768 new=32768 chosen=32768
+double n=64 b=8192 U vendor old=32768 new=32768 chosen=32768
+double n=64 b=32768 L vendor old=131072 new=131072 chosen=131072
+double n=64 b=32768 U vendor old=131072 new=131072 chosen=131072
+double n=80 b=128 L vendor old=512 new=512 chosen=512
+double n=80 b=128 U vendor old=512 new=512 chosen=512
+double n=80 b=512 L vendor old=2048 new=2048 chosen=2048
+double n=80 b=512 U vendor old=2048 new=2048 chosen=2048
+double n=80 b=2048 L vendor old=8192 new=8192 chosen=8192
+double n=80 b=2048 U vendor old=8192 new=8192 chosen=8192
+double n=80 b=8192 L vendor old=32768 new=32768 chosen=32768
+double n=80 b=8192 U vendor old=32768 new=32768 chosen=32768
+double n=80 b=32768 L vendor old=131072 new=131072 chosen=131072
+double n=80 b=32768 U vendor old=131072 new=131072 chosen=131072
+double n=96 b=128 L vendor old=512 new=512 chosen=512
+double n=96 b=128 U vendor old=512 new=512 chosen=512
+double n=96 b=512 L vendor old=2048 new=2048 chosen=2048
+double n=96 b=512 U vendor old=2048 new=2048 chosen=2048
+double n=96 b=2048 L vendor old=8192 new=8192 chosen=8192
+double n=96 b=2048 U vendor old=8192 new=8192 chosen=8192
+double n=96 b=8192 L vendor old=32768 new=32768 chosen=32768
+double n=96 b=8192 U vendor old=32768 new=32768 chosen=32768
+double n=96 b=32768 L vendor old=131072 new=131072 chosen=131072
+double n=96 b=32768 U vendor old=131072 new=131072 chosen=131072
+double n=112 b=128 L vendor old=512 new=512 chosen=512
+double n=112 b=128 U vendor old=512 new=512 chosen=512
+double n=112 b=512 L vendor old=2048 new=2048 chosen=2048
+double n=112 b=512 U vendor old=2048 new=2048 chosen=2048
+double n=112 b=2048 L vendor old=8192 new=8192 chosen=8192
+double n=112 b=2048 U vendor old=8192 new=8192 chosen=8192
+double n=112 b=8192 L vendor old=32768 new=32768 chosen=32768
+double n=112 b=8192 U vendor old=32768 new=32768 chosen=32768
+double n=112 b=32768 L vendor old=131072 new=131072 chosen=131072
+double n=112 b=32768 U vendor old=131072 new=131072 chosen=131072
+double n=128 b=128 L vendor old=512 new=512 chosen=512
+double n=128 b=128 U vendor old=512 new=512 chosen=512
+double n=128 b=512 L vendor old=2048 new=2048 chosen=2048
+double n=128 b=512 U vendor old=2048 new=2048 chosen=2048
+double n=128 b=2048 L vendor old=8192 new=8192 chosen=8192
+double n=128 b=2048 U vendor old=8192 new=8192 chosen=8192
+double n=128 b=8192 L vendor old=32768 new=32768 chosen=32768
+double n=128 b=8192 U vendor old=32768 new=32768 chosen=32768
+double n=128 b=32768 L vendor old=131072 new=131072 chosen=131072
+double n=128 b=32768 U vendor old=131072 new=131072 chosen=131072
+double n=160 b=128 L vendor old=512 new=512 chosen=512
+double n=160 b=128 U vendor old=512 new=512 chosen=512
+double n=160 b=512 L vendor old=2048 new=2048 chosen=2048
+double n=160 b=512 U vendor old=2048 new=2048 chosen=2048
+double n=160 b=2048 L vendor old=8192 new=8192 chosen=8192
+double n=160 b=2048 U vendor old=8192 new=8192 chosen=8192
+double n=160 b=8192 L vendor old=32768 new=32768 chosen=32768
+double n=160 b=8192 U vendor old=32768 new=32768 chosen=32768
+double n=192 b=128 L vendor old=512 new=512 chosen=512
+double n=192 b=128 U vendor old=512 new=512 chosen=512
+double n=192 b=512 L vendor old=2048 new=2048 chosen=2048
+double n=192 b=512 U vendor old=2048 new=2048 chosen=2048
+double n=192 b=2048 L vendor old=8192 new=8192 chosen=8192
+double n=192 b=2048 U vendor old=8192 new=8192 chosen=8192
+double n=192 b=8192 L vendor old=32768 new=32768 chosen=32768
+double n=192 b=8192 U vendor old=32768 new=32768 chosen=32768
+double n=224 b=128 L vendor old=512 new=512 chosen=512
+double n=224 b=128 U vendor old=512 new=512 chosen=512
+double n=224 b=512 L vendor old=2048 new=2048 chosen=2048
+double n=224 b=512 U vendor old=2048 new=2048 chosen=2048
+double n=224 b=2048 L vendor old=8192 new=8192 chosen=8192
+double n=224 b=2048 U vendor old=8192 new=8192 chosen=8192
+double n=224 b=8192 L vendor old=32768 new=32768 chosen=32768
+double n=224 b=8192 U vendor old=32768 new=32768 chosen=32768
+double n=256 b=128 L vendor old=512 new=512 chosen=512
+double n=256 b=128 U vendor old=512 new=512 chosen=512
+double n=256 b=512 L vendor old=2048 new=2048 chosen=2048
+double n=256 b=512 U vendor old=2048 new=2048 chosen=2048
+double n=256 b=2048 L vendor old=8192 new=8192 chosen=8192
+double n=256 b=2048 U vendor old=8192 new=8192 chosen=8192
+double n=256 b=8192 L vendor old=32768 new=32768 chosen=32768
+double n=256 b=8192 U vendor old=32768 new=32768 chosen=32768
+double n=288 b=128 L vendor old=512 new=512 chosen=512
+double n=288 b=128 U vendor old=512 new=512 chosen=512
+double n=288 b=512 L vendor old=2048 new=2048 chosen=2048
+double n=288 b=512 U vendor old=2048 new=2048 chosen=2048
+double n=288 b=2048 L vendor old=8192 new=8192 chosen=8192
+double n=288 b=2048 U vendor old=8192 new=8192 chosen=8192
+double n=320 b=128 L vendor old=512 new=512 chosen=512
+double n=320 b=128 U vendor old=512 new=512 chosen=512
+double n=320 b=512 L vendor old=2048 new=2048 chosen=2048
+double n=320 b=512 U vendor old=2048 new=2048 chosen=2048
+double n=320 b=2048 L vendor old=8192 new=8192 chosen=8192
+double n=320 b=2048 U vendor old=8192 new=8192 chosen=8192
+double n=384 b=128 L vendor old=512 new=512 chosen=512
+double n=384 b=128 U vendor old=512 new=512 chosen=512
+double n=384 b=512 L vendor old=2048 new=2048 chosen=2048
+double n=384 b=512 U vendor old=2048 new=2048 chosen=2048
+double n=384 b=2048 L vendor old=8192 new=8192 chosen=8192
+double n=384 b=2048 U vendor old=8192 new=8192 chosen=8192
+double n=448 b=128 L vendor old=512 new=512 chosen=512
+double n=448 b=128 U vendor old=512 new=512 chosen=512
+double n=448 b=512 L vendor old=2048 new=2048 chosen=2048
+double n=448 b=512 U vendor old=2048 new=2048 chosen=2048
+double n=448 b=2048 L vendor old=8192 new=8192 chosen=8192
+double n=448 b=2048 U vendor old=8192 new=8192 chosen=8192
+double n=512 b=128 L vendor old=512 new=512 chosen=512
+double n=512 b=128 U vendor old=512 new=512 chosen=512
+double n=512 b=512 L vendor old=2048 new=2048 chosen=2048
+double n=512 b=512 U vendor old=2048 new=2048 chosen=2048
+double n=512 b=2048 L vendor old=8192 new=8192 chosen=8192
+double n=512 b=2048 U vendor old=8192 new=8192 chosen=8192
+double n=640 b=128 L vendor old=512 new=512 chosen=512
+double n=640 b=128 U vendor old=512 new=512 chosen=512
+double n=640 b=512 L native:blocked old=4208640 new=4208640 chosen=4208640
+double n=640 b=512 U vendor old=2048 new=2048 chosen=2048
+double n=768 b=128 L native:blocked old=1052160 new=1052160 chosen=1052160
+double n=768 b=128 U vendor old=512 new=512 chosen=512
+double n=768 b=512 L native:blocked old=4208640 new=4208640 chosen=4208640
+double n=768 b=512 U vendor old=2048 new=2048 chosen=2048
+double n=1024 b=128 L native:blocked old=1052160 new=1052160 chosen=1052160
+double n=1024 b=128 U vendor old=512 new=512 chosen=512
+double n=1024 b=512 L native:blocked old=4208640 new=4208640 chosen=4208640
+double n=1024 b=512 U vendor old=2048 new=2048 chosen=2048
+double n=1280 b=128 L native:blocked old=1052160 new=1052160 chosen=1052160
+double n=1280 b=128 U vendor old=512 new=512 chosen=512
+double n=1536 b=128 L native:blocked old=1052160 new=1052160 chosen=1052160
+double n=1536 b=128 U vendor old=512 new=512 chosen=512
+float n=1 b=128 L native:lpanel old=3584 new=3584 chosen=512
+float n=1 b=128 U native:tiny old=512 new=512 chosen=512
+float n=1 b=512 L native:lpanel old=14336 new=14336 chosen=2048
+float n=1 b=512 U native:tiny old=2048 new=2048 chosen=2048
+float n=1 b=2048 L native:lpanel old=57344 new=57344 chosen=8192
+float n=1 b=2048 U native:tiny old=8192 new=8192 chosen=8192
+float n=1 b=8192 L native:tiny old=229376 new=229376 chosen=32768
+float n=1 b=8192 U native:tiny old=32768 new=32768 chosen=32768
+float n=1 b=32768 L native:tiny old=917504 new=917504 chosen=131072
+float n=1 b=32768 U native:tiny old=131072 new=131072 chosen=131072
+float n=2 b=128 L native:lpanel old=3584 new=3584 chosen=512
+float n=2 b=128 U native:tiny old=512 new=512 chosen=512
+float n=2 b=512 L native:lpanel old=14336 new=14336 chosen=2048
+float n=2 b=512 U native:tiny old=2048 new=2048 chosen=2048
+float n=2 b=2048 L native:tiny old=57344 new=57344 chosen=8192
+float n=2 b=2048 U native:tiny old=8192 new=8192 chosen=8192
+float n=2 b=8192 L native:tiny old=229376 new=229376 chosen=32768
+float n=2 b=8192 U native:tiny old=32768 new=32768 chosen=32768
+float n=2 b=32768 L native:tiny old=917504 new=917504 chosen=131072
+float n=2 b=32768 U native:tiny old=131072 new=131072 chosen=131072
+float n=3 b=128 L native:tiny old=3584 new=3584 chosen=512
+float n=3 b=128 U native:tiny old=512 new=512 chosen=512
+float n=3 b=512 L native:tiny old=14336 new=14336 chosen=2048
+float n=3 b=512 U native:tiny old=2048 new=2048 chosen=2048
+float n=3 b=2048 L native:tiny old=57344 new=57344 chosen=8192
+float n=3 b=2048 U native:tiny old=8192 new=8192 chosen=8192
+float n=3 b=8192 L native:tiny old=229376 new=229376 chosen=32768
+float n=3 b=8192 U native:tiny old=32768 new=32768 chosen=32768
+float n=3 b=32768 L native:tiny old=917504 new=917504 chosen=131072
+float n=3 b=32768 U native:tiny old=131072 new=131072 chosen=131072
+float n=4 b=128 L native:tiny old=3584 new=3584 chosen=512
+float n=4 b=128 U native:tiny old=512 new=512 chosen=512
+float n=4 b=512 L native:tiny old=14336 new=14336 chosen=2048
+float n=4 b=512 U native:tiny old=2048 new=2048 chosen=2048
+float n=4 b=2048 L native:tiny old=57344 new=57344 chosen=8192
+float n=4 b=2048 U native:tiny old=8192 new=8192 chosen=8192
+float n=4 b=8192 L native:tiny old=229376 new=229376 chosen=32768
+float n=4 b=8192 U native:tiny old=32768 new=32768 chosen=32768
+float n=4 b=32768 L native:tiny old=917504 new=917504 chosen=131072
+float n=4 b=32768 U native:tiny old=131072 new=131072 chosen=131072
+float n=6 b=128 L native:tiny old=3584 new=3584 chosen=512
+float n=6 b=128 U native:tiny old=512 new=512 chosen=512
+float n=6 b=512 L native:tiny old=14336 new=14336 chosen=2048
+float n=6 b=512 U native:tiny old=2048 new=2048 chosen=2048
+float n=6 b=2048 L native:tiny old=57344 new=57344 chosen=8192
+float n=6 b=2048 U native:tiny old=8192 new=8192 chosen=8192
+float n=6 b=8192 L native:tiny old=229376 new=229376 chosen=32768
+float n=6 b=8192 U native:tiny old=32768 new=32768 chosen=32768
+float n=6 b=32768 L native:tiny old=917504 new=917504 chosen=131072
+float n=6 b=32768 U native:tiny old=131072 new=131072 chosen=131072
+float n=8 b=128 L native:tiny old=3584 new=3584 chosen=512
+float n=8 b=128 U native:tiny old=512 new=512 chosen=512
+float n=8 b=512 L native:tiny old=14336 new=14336 chosen=2048
+float n=8 b=512 U native:tiny old=2048 new=2048 chosen=2048
+float n=8 b=2048 L native:tiny old=57344 new=57344 chosen=8192
+float n=8 b=2048 U native:tiny old=8192 new=8192 chosen=8192
+float n=8 b=8192 L native:tiny old=229376 new=229376 chosen=32768
+float n=8 b=8192 U native:tiny old=32768 new=32768 chosen=32768
+float n=8 b=32768 L native:tiny old=917504 new=917504 chosen=131072
+float n=8 b=32768 U native:tiny old=131072 new=131072 chosen=131072
+float n=12 b=128 L native:tiny old=3584 new=3584 chosen=512
+float n=12 b=128 U native:tiny old=512 new=512 chosen=512
+float n=12 b=512 L native:tiny old=14336 new=14336 chosen=2048
+float n=12 b=512 U native:tiny old=2048 new=2048 chosen=2048
+float n=12 b=2048 L native:tiny old=57344 new=57344 chosen=8192
+float n=12 b=2048 U native:tiny old=8192 new=8192 chosen=8192
+float n=12 b=8192 L native:tiny old=229376 new=229376 chosen=32768
+float n=12 b=8192 U native:tiny old=32768 new=32768 chosen=32768
+float n=12 b=32768 L native:tiny old=917504 new=917504 chosen=131072
+float n=12 b=32768 U native:tiny old=131072 new=131072 chosen=131072
+float n=16 b=128 L native:tiny old=3584 new=3584 chosen=512
+float n=16 b=128 U native:tiny old=512 new=512 chosen=512
+float n=16 b=512 L native:tiny old=14336 new=14336 chosen=2048
+float n=16 b=512 U native:tiny old=2048 new=2048 chosen=2048
+float n=16 b=2048 L native:tiny old=57344 new=57344 chosen=8192
+float n=16 b=2048 U native:tiny old=8192 new=8192 chosen=8192
+float n=16 b=8192 L native:tiny old=229376 new=229376 chosen=32768
+float n=16 b=8192 U native:tiny old=32768 new=32768 chosen=32768
+float n=16 b=32768 L native:tiny old=917504 new=917504 chosen=131072
+float n=16 b=32768 U native:tiny old=131072 new=131072 chosen=131072
+float n=20 b=128 L native:tiny old=3584 new=3584 chosen=512
+float n=20 b=128 U native:tiny old=512 new=512 chosen=512
+float n=20 b=512 L native:tiny old=14336 new=14336 chosen=2048
+float n=20 b=512 U native:tiny old=2048 new=2048 chosen=2048
+float n=20 b=2048 L native:tiny old=57344 new=57344 chosen=8192
+float n=20 b=2048 U native:tiny old=8192 new=8192 chosen=8192
+float n=20 b=8192 L native:lpanel old=229376 new=229376 chosen=32768
+float n=20 b=8192 U native:tiny old=32768 new=32768 chosen=32768
+float n=20 b=32768 L native:lpanel old=917504 new=917504 chosen=131072
+float n=20 b=32768 U native:tiny old=131072 new=131072 chosen=131072
+float n=24 b=128 L native:tiny old=3584 new=3584 chosen=512
+float n=24 b=128 U native:tiny old=512 new=512 chosen=512
+float n=24 b=512 L native:tiny old=14336 new=14336 chosen=2048
+float n=24 b=512 U native:tiny old=2048 new=2048 chosen=2048
+float n=24 b=2048 L native:tiny old=57344 new=57344 chosen=8192
+float n=24 b=2048 U native:tiny old=8192 new=8192 chosen=8192
+float n=24 b=8192 L native:tiny old=229376 new=229376 chosen=32768
+float n=24 b=8192 U native:tiny old=32768 new=32768 chosen=32768
+float n=24 b=32768 L native:tiny old=917504 new=917504 chosen=131072
+float n=24 b=32768 U native:tiny old=131072 new=131072 chosen=131072
+float n=28 b=128 L native:tiny old=3584 new=3584 chosen=512
+float n=28 b=128 U native:tiny old=512 new=512 chosen=512
+float n=28 b=512 L native:tiny old=14336 new=14336 chosen=2048
+float n=28 b=512 U native:tiny old=2048 new=2048 chosen=2048
+float n=28 b=2048 L native:tiny old=57344 new=57344 chosen=8192
+float n=28 b=2048 U native:tiny old=8192 new=8192 chosen=8192
+float n=28 b=8192 L native:tiny old=229376 new=229376 chosen=32768
+float n=28 b=8192 U native:tiny old=32768 new=32768 chosen=32768
+float n=28 b=32768 L native:tiny old=917504 new=917504 chosen=131072
+float n=28 b=32768 U native:tiny old=131072 new=131072 chosen=131072
+float n=32 b=128 L native:tiny old=3584 new=3584 chosen=512
+float n=32 b=128 U native:tiny old=512 new=512 chosen=512
+float n=32 b=512 L native:tiny old=14336 new=14336 chosen=2048
+float n=32 b=512 U native:tiny old=2048 new=2048 chosen=2048
+float n=32 b=2048 L native:tiny old=57344 new=57344 chosen=8192
+float n=32 b=2048 U native:tiny old=8192 new=8192 chosen=8192
+float n=32 b=8192 L native:tiny old=229376 new=229376 chosen=32768
+float n=32 b=8192 U native:tiny old=32768 new=32768 chosen=32768
+float n=32 b=32768 L native:tiny old=917504 new=917504 chosen=131072
+float n=32 b=32768 U native:tiny old=131072 new=131072 chosen=131072
+float n=36 b=128 L native:lpanel old=8392192 new=11776 chosen=512
+float n=36 b=128 U vendor old=512 new=512 chosen=512
+float n=36 b=512 L native:lpanel old=33568768 new=47104 chosen=2048
+float n=36 b=512 U native:cta old=2048 new=2048 chosen=2048
+float n=36 b=2048 L native:lpanel old=134275072 new=188416 chosen=8192
+float n=36 b=2048 U native:cta old=8192 new=8192 chosen=8192
+float n=36 b=8192 L native:cta old=537100288 new=753664 chosen=32768
+float n=36 b=8192 U native:cta old=32768 new=32768 chosen=32768
+float n=36 b=32768 L native:cta old=2148401152 new=3014656 chosen=131072
+float n=36 b=32768 U native:cta old=131072 new=131072 chosen=131072
+float n=40 b=128 L native:lpanel old=8392192 new=36352 chosen=512
+float n=40 b=128 U vendor old=512 new=512 chosen=512
+float n=40 b=512 L native:lpanel old=33568768 new=145408 chosen=2048
+float n=40 b=512 U native:cta old=2048 new=2048 chosen=2048
+float n=40 b=2048 L native:lpanel old=134275072 new=581632 chosen=8192
+float n=40 b=2048 U native:cta old=8192 new=8192 chosen=8192
+float n=40 b=8192 L native:lpanel old=537100288 new=2326528 chosen=32768
+float n=40 b=8192 U native:cta old=32768 new=32768 chosen=32768
+float n=40 b=32768 L native:lpanel old=2148401152 new=9306112 chosen=131072
+float n=40 b=32768 U native:cta old=131072 new=131072 chosen=131072
+float n=48 b=128 L vendor old=512 new=512 chosen=512
+float n=48 b=128 U vendor old=512 new=512 chosen=512
+float n=48 b=512 L native:lpanel old=33568768 new=538624 chosen=2048
+float n=48 b=512 U native:cta old=2048 new=2048 chosen=2048
+float n=48 b=2048 L native:lpanel old=134275072 new=2154496 chosen=8192
+float n=48 b=2048 U vendor old=8192 new=8192 chosen=8192
+float n=48 b=8192 L native:lpanel old=537100288 new=8617984 chosen=32768
+float n=48 b=8192 U vendor old=32768 new=32768 chosen=32768
+float n=48 b=32768 L native:lpanel old=2148401152 new=34471936 chosen=131072
+float n=48 b=32768 U vendor old=131072 new=131072 chosen=131072
+float n=56 b=128 L vendor old=512 new=512 chosen=512
+float n=56 b=128 U vendor old=512 new=512 chosen=512
+float n=56 b=512 L native:lpanel old=33568768 new=1193984 chosen=2048
+float n=56 b=512 U native:cta old=2048 new=2048 chosen=2048
+float n=56 b=2048 L native:lpanel old=134275072 new=4775936 chosen=8192
+float n=56 b=2048 U native:cta old=8192 new=8192 chosen=8192
+float n=56 b=8192 L native:lpanel old=537100288 new=19103744 chosen=32768
+float n=56 b=8192 U native:cta old=32768 new=32768 chosen=32768
+float n=56 b=32768 L native:lpanel old=2148401152 new=76414976 chosen=131072
+float n=56 b=32768 U native:cta old=131072 new=131072 chosen=131072
+float n=64 b=128 L vendor old=512 new=512 chosen=512
+float n=64 b=128 U vendor old=512 new=512 chosen=512
+float n=64 b=512 L native:lpanel old=14336 new=14336 chosen=2048
+float n=64 b=512 U vendor old=2048 new=2048 chosen=2048
+float n=64 b=2048 L native:lpanel old=57344 new=57344 chosen=8192
+float n=64 b=2048 U vendor old=8192 new=8192 chosen=8192
+float n=64 b=8192 L native:lpanel old=229376 new=229376 chosen=32768
+float n=64 b=8192 U vendor old=32768 new=32768 chosen=32768
+float n=64 b=32768 L native:lpanel old=917504 new=917504 chosen=131072
+float n=64 b=32768 U vendor old=131072 new=131072 chosen=131072
+float n=80 b=128 L vendor old=512 new=512 chosen=512
+float n=80 b=128 U vendor old=512 new=512 chosen=512
+float n=80 b=512 L native:lpanel old=33568768 new=538624 chosen=2048
+float n=80 b=512 U vendor old=2048 new=2048 chosen=2048
+float n=80 b=2048 L native:lpanel old=134275072 new=2154496 chosen=8192
+float n=80 b=2048 U vendor old=8192 new=8192 chosen=8192
+float n=80 b=8192 L native:lpanel old=537100288 new=8617984 chosen=32768
+float n=80 b=8192 U vendor old=32768 new=32768 chosen=32768
+float n=80 b=32768 L native:lpanel old=2148401152 new=34471936 chosen=131072
+float n=80 b=32768 U vendor old=131072 new=131072 chosen=131072
+float n=96 b=128 L vendor old=512 new=512 chosen=512
+float n=96 b=128 U vendor old=512 new=512 chosen=512
+float n=96 b=512 L native:lpanel old=33568768 new=2111488 chosen=2048
+float n=96 b=512 U vendor old=2048 new=2048 chosen=2048
+float n=96 b=2048 L native:lpanel old=134275072 new=8445952 chosen=8192
+float n=96 b=2048 U vendor old=8192 new=8192 chosen=8192
+float n=96 b=8192 L native:lpanel old=537100288 new=33783808 chosen=32768
+float n=96 b=8192 U vendor old=32768 new=32768 chosen=32768
+float n=96 b=32768 L native:lpanel old=2148401152 new=135135232 chosen=131072
+float n=96 b=32768 U vendor old=131072 new=131072 chosen=131072
+float n=112 b=128 L vendor old=512 new=512 chosen=512
+float n=112 b=128 U vendor old=512 new=512 chosen=512
+float n=112 b=512 L native:lpanel old=33568768 new=4732928 chosen=2048
+float n=112 b=512 U vendor old=2048 new=2048 chosen=2048
+float n=112 b=2048 L native:lpanel old=134275072 new=18931712 chosen=8192
+float n=112 b=2048 U vendor old=8192 new=8192 chosen=8192
+float n=112 b=8192 L native:lpanel old=537100288 new=75726848 chosen=32768
+float n=112 b=8192 U vendor old=32768 new=32768 chosen=32768
+float n=112 b=32768 L native:lpanel old=2148401152 new=302907392 chosen=131072
+float n=112 b=32768 U vendor old=131072 new=131072 chosen=131072
+float n=128 b=128 L vendor old=512 new=512 chosen=512
+float n=128 b=128 U vendor old=512 new=512 chosen=512
+float n=128 b=512 L native:lpanel old=33568768 new=8402944 chosen=2048
+float n=128 b=512 U vendor old=2048 new=2048 chosen=2048
+float n=128 b=2048 L native:lpanel old=134275072 new=33611776 chosen=8192
+float n=128 b=2048 U vendor old=8192 new=8192 chosen=8192
+float n=128 b=8192 L native:lpanel old=537100288 new=134447104 chosen=32768
+float n=128 b=8192 U vendor old=32768 new=32768 chosen=32768
+float n=128 b=32768 L native:lpanel old=2148401152 new=537788416 chosen=131072
+float n=128 b=32768 U vendor old=131072 new=131072 chosen=131072
+float n=160 b=128 L vendor old=512 new=512 chosen=512
+float n=160 b=128 U vendor old=512 new=512 chosen=512
+float n=160 b=512 L native:lpanel old=33568768 new=18888704 chosen=2048
+float n=160 b=512 U vendor old=2048 new=2048 chosen=2048
+float n=160 b=2048 L native:lpanel old=134275072 new=75554816 chosen=8192
+float n=160 b=2048 U vendor old=8192 new=8192 chosen=8192
+float n=160 b=8192 L native:lpanel old=537100288 new=302219264 chosen=32768
+float n=160 b=8192 U vendor old=32768 new=32768 chosen=32768
+float n=160 b=32768 L native:lpanel old=2148401152 new=1208877056 chosen=131072
+float n=160 b=32768 U vendor old=131072 new=131072 chosen=131072
+float n=192 b=128 L vendor old=512 new=512 chosen=512
+float n=192 b=128 U vendor old=512 new=512 chosen=512
+float n=192 b=512 L native:lpanel old=33568768 new=33568768 chosen=2048
+float n=192 b=512 U vendor old=2048 new=2048 chosen=2048
+float n=192 b=2048 L native:lpanel old=134275072 new=134275072 chosen=8192
+float n=192 b=2048 U vendor old=8192 new=8192 chosen=8192
+float n=192 b=8192 L native:lpanel old=537100288 new=537100288 chosen=32768
+float n=192 b=8192 U vendor old=32768 new=32768 chosen=32768
+float n=224 b=128 L vendor old=512 new=512 chosen=512
+float n=224 b=128 U vendor old=512 new=512 chosen=512
+float n=224 b=512 L native:lpanel old=33568768 new=33568768 chosen=2048
+float n=224 b=512 U vendor old=2048 new=2048 chosen=2048
+float n=224 b=2048 L native:lpanel old=134275072 new=134275072 chosen=8192
+float n=224 b=2048 U vendor old=8192 new=8192 chosen=8192
+float n=224 b=8192 L native:lpanel old=537100288 new=537100288 chosen=32768
+float n=224 b=8192 U vendor old=32768 new=32768 chosen=32768
+float n=256 b=128 L vendor old=512 new=512 chosen=512
+float n=256 b=128 U vendor old=512 new=512 chosen=512
+float n=256 b=512 L native:lpanel old=33568768 new=33568768 chosen=2048
+float n=256 b=512 U vendor old=2048 new=2048 chosen=2048
+float n=256 b=2048 L native:lpanel old=134275072 new=134275072 chosen=8192
+float n=256 b=2048 U vendor old=8192 new=8192 chosen=8192
+float n=256 b=8192 L native:lpanel old=537100288 new=537100288 chosen=32768
+float n=256 b=8192 U vendor old=32768 new=32768 chosen=32768
+float n=288 b=128 L vendor old=512 new=512 chosen=512
+float n=288 b=128 U vendor old=512 new=512 chosen=512
+float n=288 b=512 L native:lpanel old=33568768 new=33568768 chosen=2048
+float n=288 b=512 U vendor old=2048 new=2048 chosen=2048
+float n=288 b=2048 L native:lpanel old=134275072 new=134275072 chosen=8192
+float n=288 b=2048 U vendor old=8192 new=8192 chosen=8192
+float n=288 b=8192 L native:lpanel old=537100288 new=537100288 chosen=32768
+float n=288 b=8192 U vendor old=32768 new=32768 chosen=32768
+float n=320 b=128 L vendor old=512 new=512 chosen=512
+float n=320 b=128 U vendor old=512 new=512 chosen=512
+float n=320 b=512 L vendor old=2048 new=2048 chosen=2048
+float n=320 b=512 U vendor old=2048 new=2048 chosen=2048
+float n=320 b=2048 L vendor old=8192 new=8192 chosen=8192
+float n=320 b=2048 U vendor old=8192 new=8192 chosen=8192
+float n=320 b=8192 L vendor old=32768 new=32768 chosen=32768
+float n=320 b=8192 U vendor old=32768 new=32768 chosen=32768
+float n=384 b=128 L vendor old=512 new=512 chosen=512
+float n=384 b=128 U vendor old=512 new=512 chosen=512
+float n=384 b=512 L vendor old=2048 new=2048 chosen=2048
+float n=384 b=512 U vendor old=2048 new=2048 chosen=2048
+float n=384 b=2048 L vendor old=8192 new=8192 chosen=8192
+float n=384 b=2048 U vendor old=8192 new=8192 chosen=8192
+float n=448 b=128 L vendor old=512 new=512 chosen=512
+float n=448 b=128 U vendor old=512 new=512 chosen=512
+float n=448 b=512 L vendor old=2048 new=2048 chosen=2048
+float n=448 b=512 U vendor old=2048 new=2048 chosen=2048
+float n=448 b=2048 L vendor old=8192 new=8192 chosen=8192
+float n=448 b=2048 U vendor old=8192 new=8192 chosen=8192
+float n=512 b=128 L vendor old=512 new=512 chosen=512
+float n=512 b=128 U vendor old=512 new=512 chosen=512
+float n=512 b=512 L native:blocked old=33568768 new=33568768 chosen=33568768
+float n=512 b=512 U vendor old=2048 new=2048 chosen=2048
+float n=512 b=2048 L native:blocked old=134275072 new=134275072 chosen=134275072
+float n=512 b=2048 U vendor old=8192 new=8192 chosen=8192
+float n=640 b=128 L native:blocked old=8392192 new=8392192 chosen=8392192
+float n=640 b=128 U vendor old=512 new=512 chosen=512
+float n=640 b=512 L native:blocked old=33568768 new=33568768 chosen=33568768
+float n=640 b=512 U vendor old=2048 new=2048 chosen=2048
+float n=640 b=2048 L native:blocked old=134275072 new=134275072 chosen=134275072
+float n=640 b=2048 U vendor old=8192 new=8192 chosen=8192
+float n=768 b=128 L native:blocked old=8392192 new=8392192 chosen=8392192
+float n=768 b=128 U vendor old=512 new=512 chosen=512
+float n=768 b=512 L native:blocked old=33568768 new=33568768 chosen=33568768
+float n=768 b=512 U vendor old=2048 new=2048 chosen=2048
+float n=1024 b=128 L native:blocked old=8392192 new=8392192 chosen=8392192
+float n=1024 b=128 U vendor old=512 new=512 chosen=512
+float n=1024 b=512 L native:blocked old=33568768 new=33568768 chosen=33568768
+float n=1024 b=512 U vendor old=2048 new=2048 chosen=2048
+float n=1280 b=128 L native:blocked old=8392192 new=8392192 chosen=8392192
+float n=1280 b=128 U vendor old=512 new=512 chosen=512
+float n=1280 b=512 L native:blocked old=33568768 new=33568768 chosen=33568768
+float n=1280 b=512 U vendor old=2048 new=2048 chosen=2048
+float n=1536 b=128 L native:blocked old=8392192 new=8392192 chosen=8392192
+float n=1536 b=128 U vendor old=512 new=512 chosen=512
