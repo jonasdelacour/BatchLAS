@@ -32,6 +32,7 @@
 // Routing adapters and native drivers: each is a src/ header over public includes
 // only, so the facade can include it in a vendor-free build.
 #include "../../backends/potrf_route.hh"
+#include "../../backends/potrf_select.hh"
 #include "../../extensions/potrf_native.hh"
 
 #include "../../backends/geqrf_route.hh"
@@ -654,8 +655,13 @@ template <typename T>
         "capability the facade cannot service.");
 }
 
+// The pre-registry potrf: RouteTable resolve + this if-chain, sized as the max over every
+// supported tier. Kept as the non-CUDA facade and as the reference potrf_select_tests compares
+// the registry path against. evidence: experiments/kernel_selection/descriptor-registry/README.md
+namespace backend {
+
 template <Backend B, typename T>
-Event potrf(Queue& ctx,
+Event potrf_legacy(Queue& ctx,
                 const MatrixView<T, MatrixFormat::Dense>& descrA,
                 Uplo uplo,
                 Span<std::byte> workspace,
@@ -715,7 +721,7 @@ Event potrf(Queue& ctx,
 }
 
 template <Backend B, typename T>
-size_t potrf_buffer_size(Queue& ctx,
+size_t potrf_buffer_size_legacy(Queue& ctx,
                         const MatrixView<T,MatrixFormat::Dense>& A,
                         Uplo uplo) {
     potrf_validate_params<T>(A, uplo);
@@ -773,6 +779,36 @@ size_t potrf_buffer_size(Queue& ctx,
     } else {
         return std::max(native_need,
                         backend::potrf_vendor_buffer_size<B, T>(ctx, A, uplo));
+    }
+}
+
+}  // namespace backend
+
+// CUDA: the descriptor registry decides, sizes the CHOSEN route only, and launches exactly the
+// planned geometry. evidence: experiments/kernel_selection/descriptor-registry/README.md
+template <Backend B, typename T>
+Event potrf(Queue& ctx,
+            const MatrixView<T, MatrixFormat::Dense>& descrA,
+            Uplo uplo,
+            Span<std::byte> workspace,
+            Span<int32_t> info_out) {
+    if constexpr (B == Backend::CUDA) {
+        potrf_validate_params<T>(descrA, uplo);
+        return potrf_v2::potrf<B, T>(ctx, descrA, uplo, workspace, info_out);
+    } else {
+        return backend::potrf_legacy<B, T>(ctx, descrA, uplo, workspace, info_out);
+    }
+}
+
+template <Backend B, typename T>
+size_t potrf_buffer_size(Queue& ctx,
+                         const MatrixView<T, MatrixFormat::Dense>& A,
+                         Uplo uplo) {
+    if constexpr (B == Backend::CUDA) {
+        potrf_validate_params<T>(A, uplo);
+        return potrf_v2::buffer_size<B, T>(ctx, A, uplo);
+    } else {
+        return backend::potrf_buffer_size_legacy<B, T>(ctx, A, uplo);
     }
 }
 
@@ -967,6 +1003,17 @@ size_t posv_buffer_size(Queue& ctx,
 FACTORIZATION_ALL(Backend::CUDA)
 POTRF_ALL(Backend::CUDA)
 SOLVE_ALL(Backend::CUDA)
+
+#define POTRF_LEGACY_ONE(fp)                                                                     \
+    template Event backend::potrf_legacy<Backend::CUDA, fp>(                                      \
+        Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Uplo, Span<std::byte>, Span<int32_t>); \
+    template size_t backend::potrf_buffer_size_legacy<Backend::CUDA, fp>(                         \
+        Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Uplo);
+POTRF_LEGACY_ONE(float)
+POTRF_LEGACY_ONE(double)
+POTRF_LEGACY_ONE(std::complex<float>)
+POTRF_LEGACY_ONE(std::complex<double>)
+#undef POTRF_LEGACY_ONE
 #endif
 
 #if BATCHLAS_HAS_ROCM_BACKEND

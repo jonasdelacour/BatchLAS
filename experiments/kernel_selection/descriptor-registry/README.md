@@ -1,180 +1,231 @@
 # Kernel selection prototype: route descriptors, pluggable choosers, Selection value
 
-This directory holds a working prototype of the "Route Descriptor Tables with Pluggable
-Choosers" design for potrf. It runs next to the shipped path (`RouteTable<Op::potrf>` +
-`resolve_route` + the facade if-chain in `src/dispatch/entry_points/factorization.cc`), so the two
-can be compared cell by cell in one process. The shipped path is unchanged apart from three
-caller-decided launcher entry points, listed below.
+This directory holds the evidence for the "Route Descriptor Tables with Pluggable Choosers" design
+for potrf. **The CUDA facade now runs it**: `potrf<Backend::CUDA, T>` and
+`potrf_buffer_size<Backend::CUDA, T>` go through `potrf_v2::potrf` and `potrf_v2::buffer_size`
+(`src/dispatch/potrf_select.cc`, a library TU). The pre-registry facade, which resolves with
+`RouteTable<Op::potrf>` and runs the if-chain, is kept as `backend::potrf_legacy` and
+`backend::potrf_buffer_size_legacy`. It serves the non-CUDA backends, and it is the reference
+the tests compare against in one process.
 
-Machine: threadripper02, RTX PRO 6000 Blackwell Max-Q (cc 12.0, 188 SMs), GPU 1, DPC++
-`/opt/dpcpp-cuda`, CUDA 13.2, Release, SYCL target `nvptx64-nvidia-cuda` (sm_120), base commit
-`14ccca77` (origin/routing-cost-model-core).
+Machine: threadripper02, RTX PRO 6000 Blackwell Max-Q (cc 12.0, 188 SMs, local_mem 101,376 B,
+max work-group 1024), GPU 1. DPC++ `/opt/dpcpp-cuda`, CUDA 13.2, Release, SYCL target
+`nvptx64-nvidia-cuda` (sm_120), `BATCHLAS_CPU_TARGET=none`. Base commit `14ccca77`.
 
 ## Layout
 
 | file | role |
 |---|---|
-| `src/dispatch/selection/select.hh` | op-agnostic core: `Verdict`, `Candidate(s)`, `Decision`, `Chooser` concept, `ModelChooser`, `WindowChooser`, `Pin`, `decide()` |
-| `src/dispatch/selection/route_table.hh` | `RouteDescriptor` concept, `Table<Op, R...>` (derives the Plan variant, the keys and the candidate rows), `Selection`, `explain()` |
-| `src/backends/potrf_routes.hh` | potrf descriptors `Tiny`, `Cta`, `LPanel`, `Blocked`, `CtaWg` (the extension), `Cusolver`, and `PotrfTable` |
+| `src/dispatch/selection/select.hh` | op-agnostic: `Verdict`, `Candidate(s)`, `Decision`, `Chooser`, `ModelChooser`, `WindowChooser`, `Pin`, `decide()` |
+| `src/dispatch/selection/route_table.hh` | `SelectableOp` and `RouteDescriptor` concepts, `Table<Op, R...>` (the Plan variant, keys and candidate rows derived from the type list), `Selection`, `explain()` |
+| `src/dispatch/selection/run.hh` | op-agnostic glue: `parse_pin`, pin policy (warn once / strict), `decide_selection`, `enforce_pin`, `size_selection`, `run_selection` (checked launch), `explain(Selection)`, `record_coverage` |
+| `src/backends/potrf_routes.hh` | potrf descriptors `Tiny`, `Cta`, `LPanel`, `Blocked`, `CtaWg`, `Cusolver`, `PotrfOp` (incl. `matches`), `PotrfTable` |
 | `src/backends/potrf_windows.hh` | the sm_89 hand windows as first-match data rows |
-| `potrf_routes.cc` (here) | descriptor `workspace()`/`launch()`, `select()`, `run()`, `potrf_buffer_size()`, `potrf()`, `explain()`, pin parsing, coverage |
-| `potrf_select_tests.cc` | gtest T1 to T7, target `potrf_select_tests` (EXCLUDE_FROM_ALL, CUDA builds only) |
-| `getrs_offline.cc`, `build_offline.sh` | getrs on the same core, offline (g++) |
-| `mutate_compile.py`, `mutate_runtime.py` | deliberate breaks: compile-time and on the GPU |
-| `sweep_cells.py`, `sweep_cells.txt` | the 577 (dtype, uplo, n, batch) cells of `benchmarks/results/routing/sm120_potrf_sweep{,_edges}.jsonl` |
+| `src/backends/potrf_select.hh`, `src/dispatch/potrf_select.cc` | the library entry points `potrf_v2::{select, run, explain, buffer_size, potrf}`, the descriptor bodies, the cost-book shim and the shape builder |
+| `potrf_select_tests.cc` | gtest T0..T12, target `potrf_select_tests` (EXCLUDE_FROM_ALL, CUDA + cuSOLVER builds) |
+| `getrs_offline.cc`, `build_offline.sh` | getrs on the same core, through the same glue, offline (g++) |
+| `mutate_compile.py`, `mutate_runtime.py` | deliberate breaks, at compile time and on the GPU |
+| `sweep_cells.py`, `sweep_cells.txt` | the 577 sweep cells |
 
-Library changes, all additive:
-- `potrf_cta_dispatch_geometry`: the CTA launcher with a caller-decided `CtaGeometry`.
-- `potrf_blocked_{dispatch,buffer_size}_params`: the Blocked driver with caller-decided nb/W.
-- `detail::settings_epoch()`.
-
-The shipped entry points now forward to these, with unchanged behaviour (`potrf_tests`,
-`posv_tests`, `potrf_plan_tests` and `settings_tests` pass).
+Other library changes: `potrf_cta_dispatch_geometry` (the CTA launcher with a caller-decided
+geometry) and `potrf_blocked_{dispatch,buffer_size}_params` (Blocked with caller-decided nb/W).
+The shipped launchers forward to both. The `settings_epoch` API of the first prototype is gone,
+and `run()` no longer checks it (see "Selection and run" below).
 
 ## Build and run
 
-    cmake --build build --target potrf_select_tests -j20
-    CUDA_VISIBLE_DEVICES=1 ./build/tests/potrf_select_tests     # T1..T7
-    experiments/kernel_selection/descriptor-registry/build_offline.sh       # getrs + compile guards
-    python3 experiments/kernel_selection/descriptor-registry/mutate_runtime.py <build-script>
+    cmake --build build --target potrf_select_tests -j48
+    CUDA_VISIBLE_DEVICES=1 ./build/tests/potrf_select_tests
+    BUILD_DIR=build experiments/kernel_selection/descriptor-registry/build_offline.sh
+    BUILD_DIR=build python3 experiments/kernel_selection/descriptor-registry/mutate_runtime.py <build-script>
 
 `BATCHLAS_V2_EQUIV_CSV=<prefix>` makes T1 write every decision as a CSV.
+`--gtest_also_run_disabled_tests --gtest_filter='*Probe*'` reprints the `kOnlyCtaWg` ranges.
 
-## Results
+## What changed for library users (CUDA)
 
-**T1 equivalence.** For each cell, the test calls the shipped `backend::potrf_route` with
-vendor_available true and false, and the new `select()` with the vendor table and the
-vendor-free table. It does this under the default profile (sm_120, the model) and under
-`BATCHLAS_ROUTING_PROFILE=sm_89` (the windows).
+- `potrf_buffer_size` returns the CHOSEN route's own bytes. Float L n=36 b=8192 drops from
+  537,100,288 B to 32,768 B. Pinned Blocked double L n=36 b=8192 drops from 67,338,240 B to
+  1,277,952 B, because W is clamped to n - nb. Pricing still uses the unclamped W.
+- A pin the route cannot honour is no longer silent. `BATCHLAS_POTRF_ROUTE=native:lpanel` on
+  Upper runs the vendor and prints the explain table once per (op, pin).
+  `BATCHLAS_PIN_POLICY=strict` turns that into `std::invalid_argument`.
+- `native:cta_wg` is an exact-key pin word. The shipped parser's "not a recognised route"
+  warning no longer fires on the public path, because the exact key is matched before the shared
+  grammar.
+- A route change between `potrf_buffer_size` and `potrf` raises `std::length_error` before any
+  launch. The legacy facade over-allocated instead (max over tiers). This is the one public
+  contract change: `PotrfBlockedTest.BufferSizeCoversEverySupportedNativeTier` now asserts it on
+  CUDA (A and info untouched, a re-query succeeds), and keeps the old assertion elsewhere.
+- Vendor-free: Upper orders that subgroup CTA cannot hold but cta_wg can are served instead of
+  throwing `NoRouteError`. The ranges are float 78..155, double/cfloat 55..109 and
+  cdouble 39..77.
+- A bare `native` pin on Upper in those ranges now runs cta_wg. Before, it silently ran the
+  vendor. T12 times this change (below): cta_wg is 0.99x to 2.92x the vendor's time.
+- A routing profile measured on another architecture (`ProfileChoice::nearest`) prints one
+  warning per process.
 
-| set | decisions | differences | unintended |
+## Results (GPU 1)
+
+**T1: route and launch-geometry equivalence against an explicit list.** For each cell, T1
+compares the legacy `backend::potrf_route` (vendor and vendor-free) with `select()` on the
+vendor table and on the vendor-free table. It does this under the default profile (sm_120,
+model) and under `BATCHLAS_ROUTING_PROFILE=sm_89` (windows). Every difference must be in
+`kOnlyCtaWg`: vendor-free, Upper, the order in the dtype's range, legacy without a native route,
+new on cta_wg. Every listed cell must also differ. Where both pick the same native route, the
+planned geometry is compared with the shipped launcher's own debug hook. The hooks are
+`potrf_{tiny,cta,lpanel}_debug_launch` and `potrf_blocked_debug_params`, with W clamped. The
+group count must also follow the packing.
+
+| set | decisions | listed and moved | geometry compared | unintended |
+|---|---|---|---|---|
+| sweep (577 cells) | 2,308 | 2 of 2 | 1,821 | 0 |
+| boundary grid (4 dtypes x L/U x 41 orders x 6 batches) | 7,872 | 348 of 348 | 4,021 | 0 |
+
+The grid now includes both edges of every listed range (38/39, 54/55, 77/78, 109/110, 155/156).
+The list was recorded by `DISABLED_ProbeCtaWgOnlyRanges` for local_mem 101,376 and max_wg 1024.
+On another device T1 fails until the list is re-derived.
+
+**T2 sizing** (legacy = max over tiers; new = chosen route):
+
+| shape | route | legacy | new |
 |---|---|---|---|
-| sweep cells (577 cells x 2 profiles x {vendor, vendor-free}) | 2,308 | 2 | 0 |
-| boundary grid (4 dtypes x L/U x 31 orders x 6 batches x 2 x 2) | 5,952 | 168 | 0 |
+| float L n=36 b=8192 | native:cta | 537,100,288 | 32,768 |
+| double L n=36 b=8192, pinned blocked | native:blocked | 67,338,240 | 1,277,952 |
+| float L n=128 b=8192 | native:lpanel | 537,100,288 | 32,768 |
+| float L n=640 b=512 | native:blocked | 33,568,768 | 33,568,768 |
+| cdouble L n=20 b=2048 | native:lpanel | 57,344 | 8,192 |
+| double L n=36 b=8192 | native:lpanel | 67,338,240 | 32,768 |
+| float U n=128 b=8192 | vendor:cusolver | 32,768 | 32,768 |
 
-Every difference is the same intended class: the vendor-free walk on Upper shapes that CTA
-cannot hold (float n=78..128, double/cfloat n=64..96, cdouble n=48..77). The shipped walk finds
-no native route there and answers vendor (that is, "no route" in a vendor-free build). The new
-table also lists the extension tier `native:cta_wg`, which can hold those shapes, so it picks it
-as the only eligible route. In the sweep set this is float Upper n=128 b=8192 under both
-profiles.
+The Blocked figure is asserted equal to the layout replay with params rebuilt in the test from
+the driver's own `potrf_blocked_debug_params`, and at most 1/16 of the legacy figure. Sufficiency
+is checked by running, not by re-computing: every T3, T5 and T8 run uses exactly `sel.workspace`
+bytes followed by a 4 KiB canary, and the canary must be untouched.
 
-With the extension removed from the type list, the result is **0 differences in all 8,260
-decisions** (`mutate_runtime.py no-extension-tier`).
+**T3 execution**: 20 runs. Each compares bitwise with the legacy path on the same input, and
+checks the residual, info, untouched poisoned padding (1e6, in range) and the canary. The per-route
+set (natural layout) covers tiny, cta, lpanel (float, cdouble), blocked (float n=640, n=1024,
+pinned double n=36), vendor (cdouble L, float U) and cta_wg (cfloat U n=48, float U/L n=128). The
+strided set uses ld = n + {1..7} and stride = ld*n + {1..64} on tiny, cta, lpanel, blocked,
+pinned blocked, vendor and cta_wg (Upper and Lower). Every run has 0 items differing from legacy,
+except cta_wg, which legacy cannot run. Padding and canary are untouched everywhere. Residuals are
+1.2e-07 (float), 1.8e-16 (double) and 1.4e-16 (cdouble) or below the 50*n*eps bound.
 
-**T2 sizing.** The workspace that `potrf_buffer_size` reports. Old is the maximum over the
-supported tiers; new is the chosen route's own size.
+**T5 saturating batches**, every item the same matrix, bit-identical to item 0:
+- Blocked: double L n=36 b=8192, also identical to legacy.
+- cta_wg (L=256, so cross-sub-group SLM traffic is exercised): float U and L n=128 b=2048,
+  cfloat U n=64 b=4096 and cdouble L n=48 b=4096. 0 items differ in every case.
 
-| shape | route | old | new |
+**T8 (rule 9)**: cta_wg is launched at its advertised ceiling (the largest order whose cta_wg row
+is eligible), Upper and Lower, b=256. The ceilings are float 155, double 109, cfloat 109 and
+cdouble 77. All run with info 0 and residual within bounds. The scan must end below n=2048, so a
+missing capacity gate fails.
+
+**T6** asserts `extrapolated=0` at f128 b=8192, and `extrapolated=1` at b=4M, both decided
+`by=model`. **T9**: on a heterogeneous batch every native row is illegal, the vendor table picks
+vendor, and the vendor-free table has no route. **T10**: a CostBook without a vendor row makes
+`ModelChooser` decline, and windows decide. **T11**: `run()` rejects a DecideOnly selection, a
+selection made for another n or uplo, and a short workspace. It accepts a `reload_settings()`
+between select and run. **T7**: legacy `potrf_route` 0.85 us, `select` decide-only 0.77 us,
+select + size 0.93 us.
+
+**T12: the behaviour changes, timed.** Upper, vendor vs pinned cta_wg. Each figure is the median
+of 10 reps after 3 warm-up reps, in two passes in A/B/B/A order; the table shows the minimum of
+the two. Fresh input is copied on the device per rep, outside the timed region. This is a
+screen, not a verdict.
+
+| dtype | n | b=1024 cta_wg/vendor | b=8192 cta_wg/vendor |
 |---|---|---|---|
-| float L n=36 b=8192 | native:cta | 537,100,288 B | 32,768 B |
-| float L n=128 b=8192 | native:lpanel | 537,100,288 B | 32,768 B |
-| double L n=36 b=8192 | native:lpanel | 67,338,240 B | 32,768 B |
-| cdouble L n=20 b=2048 | native:lpanel | 57,344 B | 8,192 B |
-| float L n=640 b=512 | native:blocked | 33,568,768 B | 33,568,768 B |
-| float U n=128 b=8192 | vendor:cusolver | 32,768 B | 32,768 B |
+| float | 78 / 96 / 128 / 140 | 1.01 / 1.37 / 2.15 / 1.79 | 0.99 / 1.15 / 1.67 / 1.34 |
+| double | 64 / 96 | 1.64 / 1.95 | 1.59 / 1.80 |
+| cfloat | 64 / 96 | 1.85 / 2.92 | 1.52 / 1.81 |
+| cdouble | 48 / 64 | 1.23 / 1.89 | 1.21 / 1.77 |
 
-The pinned Blocked run of double n=36 b=8192 needs 1,277,952 B (W clamped to n-nb=4), against
-67,338,240 B on the shipped path.
+cta_wg has no cost row, so Auto on a vendor build never picks it. The slowdown applies only to an
+explicit `native` / `native:cta_wg` pin. Vendor-free, the alternative is `NoRouteError`.
 
-**T3 execution.** Each case runs through `select()` + `run()` with exactly `sel.workspace`
-bytes. The residual is ||LL^H-A||_F/||A||_F on items 0, b/2 and b-1. The result is then
-compared bitwise, item by item, against the shipped `potrf` on the same input.
+**Library regression (GPU 1, this build):** `potrf_tests` 209/209, `posv_tests` 40/40,
+`potrf_plan_tests`, `settings_tests`, `options_api_tests`, `linalg_layer_tests`,
+`error_model_tests`, `routing_profile_tests`, `route_vocabulary_tests` and
+`resident_capacity_tests` all pass. `cond_tests`: 1 failure,
+`CondTest/0.RandomHermitianTridiagonalLogCondSpectral` (float). It is deterministic and does not
+reach potrf (Spectral cond goes through syev), and it is listed among this machine's pre-existing
+failures. It was not re-attributed by a base rebuild.
 
-| shape | route | residual | items differing from shipped |
-|---|---|---|---|
-| float L n=16 b=8192 | native:tiny | 1.2e-07 | 0 |
-| float L n=36 b=8192 | native:cta | 8.8e-08 | 0 |
-| float L n=128 b=8192 | native:lpanel | 1.0e-07 | 0 |
-| cdouble L n=20 b=2048 | native:lpanel | 1.4e-16 | 0 |
-| float L n=640 b=512 | native:blocked (routed trsm and gemm) | 1.1e-07 | 0 |
-| float L n=1024 b=128 | native:blocked | 1.7e-07 | 0 |
-| double L n=36 b=8192, pinned blocked | native:blocked, W clamped | 2.1e-16 | 0 |
-| cdouble L n=32 b=512 | vendor:cusolver | 2.7e-16 | 0 |
-| float U n=128 b=8192 | vendor:cusolver | 1.2e-07 | 0 |
-| cfloat U n=48 b=2048, pinned cta_wg | native:cta_wg (WorkGroup, L=64, G=1) | 7.8e-08 | n/a (shipped runs CTA) |
-| float U n=128 b=512, pinned cta_wg | native:cta_wg (WorkGroup, L=256, G=1) | 1.3e-07 | n/a (shipped runs the vendor) |
+**Vendor-free build** (`-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`, cuBLAS and cuSOLVER 0): the library
+links, with 36 `potrf_v2` symbols and no `potrf_vendor` reference. `potrf_select_tests` is not
+configured there, because CMake gates it on cuSOLVER. `potrf_tests` passes 209/209. `posv_tests`
+has 1 failure, `PosvTest/3.FusedSolveArmSolvesOnBothTriangles` (cdouble Upper n=100 with the
+`native` pin). That order is above cdouble cta_wg's ceiling of 77, so no route exists and the
+call throws `NoRouteError`. T1 shows the legacy vendor-free walk has no native route there
+either. Float, double and cfloat at n=64 and n=100 are now served by cta_wg.
 
-The f128 costs in `explain()` are lpanel 1270.3 us, blocked 2420.5 us and vendor 1727.4 us,
-which match the verified figures.
+## Deliberate breaks
 
-**T4 pins.**
-- `native:lpanel` on Upper: honoured=0, the vendor runs, exactly one warning across two
-  calls, and Strict mode throws with "Lower only". The shipped path does the same routing
-  silently.
-- `native:cta` at n=128: honoured=0 and reported as `unfit`.
-- `native:blocked`: honoured=1.
-- A bare `native` on Upper n=128 now reaches `native:cta_wg`.
+These are in `mutate_runtime.py`. Each one edits a source in place, relinks the library, runs
+everything except T7/T12, and restores the file (md5-checked). All 14 go red, and each red set is
+narrow. After the run, all 6 sources matched their pre-run md5.
 
-**T5.** Saturating batch through Blocked (double n=36, b=8192, every item the same matrix,
-pinned blocked): 0 items differ from item 0, and 0 differ from the shipped unclamped-W path.
+| break | red tests | what moved |
+|---|---|---|
+| no-extension-tier | T0, T1 x2, T3 x2, T4, T5 cta_wg, T8 | the 348 + 2 listed cells no longer move |
+| margin-zero | T1 x2 | only default-model/vendor cells, vendor to native (48 grid, 26 sweep) |
+| window-off-by-one | T1 x2 | only sm_89 float L n=36 (lpanel to cta) |
+| lpanel-not-lower-only | T0, T1 x2, T4 | only vendor-free Upper (vendor to lpanel) |
+| ctawg-no-capacity-gate | T1 x2, T8 | 804 unlisted vendor-free Upper cells above each ceiling |
+| blocked-no-w-clamp | T1 x2, T2 | Blocked planned W != the launcher's clamped W (double/cdouble L) |
+| cta-unpacked-geometry | T1 x2 | CTA planned G != the launcher's packed G |
+| extrapolated-inverted | T6 | - |
+| no-heterogeneous-check | T9 | - |
+| unpriced-vendor-rows-dropped | T1 x2, T2, T3 x2, T6 | default-model cells only (model declines, windows decide) |
+| tiny-no-cap-check | T6 | explain text only: Tiny's plan is unfit above its cap anyway |
+| model-ignores-unpriced-vendor | T10 | - |
+| run-skips-shape-check | T11 | - |
+| run-skips-sized-check | T11 | - |
 
-**T7 host cost** of one decision (f128): shipped `potrf_route` 0.76 us, new `select` 0.67 us.
+## Compile-time guards
 
-**Deliberate breaks.** These are in `mutate_runtime.py`, and each turns a narrow set red.
-- margin = 0: only `default-model/vendor` cells move (32 grid, 26 sweep), all vendor to native.
-- Window boundary `cta_last<float>` 35 to 36: only `sm_89-windows` float L n=36 moves
-  (lpanel to cta).
-- `lower_only` removed from LPanel's `legal()`: only vendor-free Upper cells move (vendor to
-  lpanel), plus T4. The model never picks it on its own, because it has no Upper cost row for
-  lpanel; candidacy is data.
-- Extension removed from the type list: T1 goes to 0 differences, and T3 and T4 go red (the
-  pin names no row).
-
-**Compile-time guards.** These are in `mutate_compile.py`, and each one fails to build:
-- forgetting `launch` or `kernel`, or a `Geometry` without `.fits`: the `RouteDescriptor`
-  constraint fails;
-- a duplicated key: "two descriptors share a key";
-- a window naming an unknown route: "a potrf window names no route in the table";
-- a declared but undefined `launch`: the symbol is left undefined at link.
+These are in `mutate_compile.py`. Each one fails to build:
+- `launch` or `kernel` is missing, or a `Geometry` has no `.fits`: `RouteDescriptor` fails.
+- An op has no `matches()`: `SelectableOp` fails.
+- A key is duplicated: "two descriptors share a key".
+- A window names an unknown route: "a potrf window names no route in the table".
+- A `launch` is declared but not defined: the symbol is left undefined.
 
 ## Extension (a): a new tier, `native:cta_wg`
 
-This is the CTA kernel forced to WorkGroup scope with one matrix per work-group, so its
-capacity is the device SLM budget rather than the occupancy slice. It took:
-- `src/backends/potrf_routes.hh`: one 30-line descriptor and one type-list entry in each of the
-  two table aliases;
-- `potrf_routes.cc`: 8 lines (`workspace`, `launch`).
-
-It also uses `potrf_cta_dispatch_geometry`, which the `Cta` descriptor uses too.
-
-The new tier did not need edits to the facade, `buffer_size`, the resolver, the coverage code,
-`explain()` or any parallel array. Auto routing on a vendor build is unchanged, because the
-tier has no cost row and no window. Pins and the vendor-free walk reach it.
+This is CTA forced to WorkGroup scope with one matrix per work-group. It took one descriptor in
+`potrf_routes.hh`, one entry in each of the two table aliases, and 8 lines in `potrf_select.cc`.
+No facade, `buffer_size`, resolver, coverage or `explain` edit was needed.
 
 ## Extension (b): getrs on the same core (offline)
 
-`getrs_offline.cc` defines `GetrsOp` with Shape (n, nrhs, batch, trans), a 3-D `coords()`,
-`cost_variant = trans`, three descriptors, and the shipped `preferred()` as 3 window rows. Its
-decisions match `resolve_route_uninstrumented<Op::getrs>` in 20,736 of 20,736 cells (4 dtypes x
-vendor/vendor-free). The unchanged `ModelChooser` prices a synthetic 3-D CostBook correctly:
-- the nrhs box is honoured;
-- the trans variant selects its own rows;
-- extrapolation is flagged outside the n box.
+`getrs_offline.cc` writes only getrs's Shape, Args, `matches()`, three descriptors and three
+window rows. Decisions go through the shared `decide_selection` and `explain(Selection)`. They
+match `resolve_route_uninstrumented<Op::getrs>` in 20,736 of 20,736 cells, and the 3-D
+ModelChooser checks pass (0 failed). Pin parsing, the policy, sizing, the checked run and coverage
+are also shared (`run.hh`), but a live getrs would exercise them on the GPU, and that is not done
+here.
 
-None of the chooser code was copied.
+## Selection and run
+
+`Selection` carries the shape it was made for and a `sized` flag. `run_selection` refuses a
+selection with no route, a DecideOnly selection, a different call (`Op::matches`: n, batch, uplo,
+heterogeneity) and a short workspace. It does not compare settings epochs. The plan carries every
+knob it was made with, so a later `configure()` or `reload_settings()` on another thread cannot
+make it inconsistent. The epoch check was a spurious failure mode, and it is gone.
 
 ## Deviations from the design and open issues
 
-- The core headers live in `src/dispatch/selection/`, not in `include/batchlas/blas/dispatch/`.
-  They include `src/util/launch_plan.hh`, which is not installed.
-- `potrf_routes.cc` and the v2 entry points are compiled into the test executable, not into
-  the library. This avoids a device relink per iteration. The design says
-  `src/backends/potrf_routes.cc` in the library, with `BATCHLAS_INTERNAL_API` entry points.
-- The CostBook is re-keyed by name at first use from the positional generated profile, instead
-  of being emitted by `gen_profile_header.py`.
-- Coverage rows are recorded once, with backend = B. They carry no pin, honoured or by
-  columns yet. `cta_wg` records as `native:cta`, because the key, not the Route, is its
-  identity.
-- `Blocked`'s gemm and trsm sub-ops still go through the shipped `gemm<B,T>` and `trsm<B,T>`,
-  not through a nested `select<gemm>`.
-- Tiny and LPanel launchers still re-derive their geometry: LPanel gets `nb` from the plan, and
-  Tiny gets nothing. Cta, CtaWg and Blocked launch exactly the planned geometry.
-- `select()` makes two device property queries per call (`potrf_device_facts`). They are not
-  memoised per device yet.
-- Blocked is priced with the unclamped W, as today, and laid out with the clamped W. Pricing
-  the clamped W moves 12 offline cells (double L n=33..36, b >= 8192), which needs an A/B
-  measurement first.
-- `Selection` cannot travel between the existing `potrf_buffer_size` and `potrf` calls.
-  `run()` checks `settings_epoch()` and the workspace size instead.
+- The core headers live in `src/dispatch/selection/` and include `src/util/launch_plan.hh`, which
+  is not installed.
+- The CostBook is re-keyed by name at first use from the positional generated profile; the
+  generator does not emit it directly.
+- Blocked's gemm and trsm sub-ops go through `gemm<B,T>` and `trsm<B,T>`, not a nested
+  `select<gemm>`.
+- Tiny and LPanel still re-derive their geometry in the launcher. T1 compares the plan against the
+  launcher's derivation over 5,842 decisions. Cta, CtaWg and Blocked launch the plan as given.
+- `select()` makes two device property queries per call; they are not memoised.
+- Blocked is priced with the unclamped W and laid out with the clamped W.
+- Only CUDA routes through the registry. ROCm and NETLIB keep the legacy facade.

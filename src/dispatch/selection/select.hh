@@ -93,6 +93,7 @@ struct ModelChooser {
         return false;
     }
     // argmin natives vs argmin vendors; the vendor keeps the call unless beaten by the margin.
+    // An eligible vendor with no row DECLINES the model: nothing can be shown to beat it.
     std::optional<Decision> choose(const Candidates& c, Mask m) const {
         if (!book || !book->gate) return std::nullopt;
         Decision d;
@@ -102,7 +103,8 @@ struct ModelChooser {
             const Candidate& r = c.row[i];
             if (!(m >> i & 1u) || !r.eligible()) continue;
             const CostRow* row = find(r.key, c.variant);
-            if (!row) continue;   // not a candidate on this (arch, op, dtype)
+            if (!row && is_vendor(r.route)) return std::nullopt;
+            if (!row) continue;   // a native the book never fitted is not a model candidate
             d.cost[i] = launch_plan::cost(r.lp, facts, row->c);
             int& best = is_vendor(r.route) ? best_ven : best_nat;
             if (best < 0 || d.cost[i] < d.cost[best]) best = i;
@@ -111,7 +113,7 @@ struct ModelChooser {
         const bool native_wins = best_nat >= 0 &&
             (best_ven < 0 || d.cost[best_nat] < (1 - book->margin) * d.cost[best_ven]);
         d.index = native_wins ? best_nat : best_ven;
-        d.why = native_wins ? (best_ven < 0 ? "model: cheapest native (no vendor in play)"
+        d.why = native_wins ? (best_ven < 0 ? "model: cheapest native (no vendor eligible)"
                                             : "model: cheapest native beats vendor by margin")
                             : "model: vendor within margin";
         d.extrapolated = static_cast<std::int8_t>(outside(*find(c.row[d.index].key, c.variant), c));

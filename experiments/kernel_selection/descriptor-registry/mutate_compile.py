@@ -4,7 +4,7 @@ and must FAIL to compile (or leave an undefined symbol), with a narrow, named di
 
 Host-only: the selection path is SYCL-free, so g++ checks it in about a second per case.
 Files are mutated in place and restored byte-for-byte (md5 checked).
-Usage: python3 mutate_compile.py   (from anywhere; paths are relative to this file)
+Usage: [BUILD_DIR=<configured build dir>] python3 mutate_compile.py
 """
 import hashlib
 import os
@@ -16,8 +16,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, '../../..'))
 ROUTES = os.path.join(ROOT, 'src/backends/potrf_routes.hh')
 WINDOWS = os.path.join(ROOT, 'src/backends/potrf_windows.hh')
-IMPL = os.path.join(HERE, 'potrf_routes.cc')
-GXX = ['g++', '-std=c++20', '-Wall', '-Wextra', '-I' + ROOT + '/include', '-I' + ROOT + '/build/include',
+IMPL = os.path.join(ROOT, 'src/dispatch/potrf_select.cc')
+BUILD = os.environ.get('BUILD_DIR', os.path.join(ROOT, 'build'))
+GXX = ['g++', '-std=c++20', '-Wall', '-Wextra', '-I' + ROOT + '/include', '-I' + BUILD + '/include',
        '-I' + ROOT + '/src', '-isystem', '/opt/include']
 
 CASES = [
@@ -38,6 +39,9 @@ CASES = [
     ('Geometry without .fits', ROUTES,
      'struct Geometry { bool fits = true; };', 'struct Geometry { bool ok = true; };', 'syntax',
      r'RouteDescriptor|constraints not satisfied'),
+    ('an op without matches(): run() could not check the call', ROUTES,
+     '    static bool matches(const Shape& s, const Args& a) {', '    static bool matches_(const Shape& s, const Args& a) {',
+     'syntax', r'SelectableOp|constraints not satisfied'),
     ('forget CtaWg::launch DEFINITION (declared only)', IMPL,
      re.compile(r'template <class T>\nEvent CtaWg<T>::launch\(.*?\n}\n', re.S), '', 'object',
      r'CtaWg.*launch'),

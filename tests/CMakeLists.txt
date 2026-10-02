@@ -551,15 +551,15 @@ if(BATCHLAS_TEST_TARGET_SET STREQUAL "all")
 endif()
 
 # ---------------------------------------------------------------------------
-# Prototype: the descriptor-registry potrf selection path, compared in-process against the
-# shipped resolver. EXCLUDE_FROM_ALL; GPU-only (CUDA backend).
+# Prototype: the descriptor-registry potrf selection path (now the CUDA facade), compared
+# in-process against the pre-registry resolver. EXCLUDE_FROM_ALL; GPU-only. It needs the
+# cuSOLVER table (vendor rows, the legacy max-over-tiers sizing), so a vendor-free build skips it.
 # evidence: experiments/kernel_selection/descriptor-registry/README.md
 # ---------------------------------------------------------------------------
-if(BATCHLAS_HAS_CUDA_BACKEND)
+if(BATCHLAS_HAS_CUDA_BACKEND AND BATCHLAS_HAS_CUSOLVER)
     set(_ks_dir "${PROJECT_SOURCE_DIR}/experiments/kernel_selection/descriptor-registry")
     add_executable(potrf_select_tests EXCLUDE_FROM_ALL
-        "${_ks_dir}/potrf_select_tests.cc"
-        "${_ks_dir}/potrf_routes.cc")
+        "${_ks_dir}/potrf_select_tests.cc")
     batchlas_configure_binary_target(potrf_select_tests
         LIBRARIES
             GTest::gtest

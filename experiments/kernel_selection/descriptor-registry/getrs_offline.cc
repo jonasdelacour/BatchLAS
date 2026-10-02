@@ -1,10 +1,12 @@
 // Extension (b), offline: getrs -- a second op with an nrhs axis and a trans variant -- on the
-// SAME op-agnostic select.hh/route_table.hh. No chooser code is copied: WindowChooser carries
-// today's getrs windows as data, and ModelChooser prices a 3-D (n, nrhs, batch) support box.
+// SAME op-agnostic select.hh/route_table.hh/run.hh. No chooser or glue code is copied:
+// WindowChooser carries today's getrs windows as data, ModelChooser prices a 3-D (n, nrhs, batch)
+// support box, and decide_selection/explain/run_selection's call check are the shared ones.
+// What getrs writes is only its Shape, Args, matches(), descriptors and window rows.
 // Decision-level only (descriptors declare workspace/launch, nothing odr-uses them).
 // Build and run: experiments/kernel_selection/descriptor-registry/build_offline.sh (g++, no GPU).
 
-#include "../../../src/dispatch/selection/route_table.hh"
+#include "../../../src/dispatch/selection/run.hh"
 
 #include <batchlas/blas/dispatch/route_getrs.hh>
 
@@ -27,12 +29,16 @@ struct GetrsShape {
     bool is_gpu = true, has_sg32 = true, homogeneous = true, blocked_available = true;
     std::int64_t fused_max_elems = 0, fused_max_nrhs = 0;   // device-derived capacity
 };
-template <class T> struct GetrsArgs {};
+template <class T> struct GetrsArgs { int n = 0, nrhs = 0; std::int64_t batch = 0; Transpose trans{}; };
 
 template <class T>
 struct GetrsOp {
     using Shape = GetrsShape;
     using Args = GetrsArgs<T>;
+    static constexpr dispatch::Op op = dispatch::Op::getrs;
+    static bool matches(const Shape& s, const Args& a) {
+        return a.n == s.n && a.nrhs == s.nrhs && a.batch == s.batch && a.trans == s.trans;
+    }
     static std::uint8_t cost_variant(const Shape& s) { return static_cast<std::uint8_t>(s.trans); }
     static int coords(const Shape& s, std::array<std::int64_t, 4>& c) {
         c = {s.n, s.nrhs, s.batch, 0};
@@ -176,12 +182,13 @@ long sweep(bool vendor, long& cells) {
         s.fused_max_elems = cap; s.fused_max_nrhs = cap ? 64 : 0;
         std::string got;
         auto run = [&]<class Tbl>() {
-            typename Tbl::Geoms g;
-            const ds::Candidates c = Tbl::candidates(s, g);
             const ds::WindowChooser<GetrsShape> w{kGetrsWindows<T>, &s};
             const ds::ModelChooser m{nullptr, {}};   // no getrs CostBook fitted: windows decide
-            const ds::Decision d = ds::decide(c, std::nullopt, m, w);
-            got = d.index < 0 ? "vendor:cusolver" : std::string(c.row[d.index].key);
+            const ds::Selection<Tbl> sel = ds::decide_selection<Tbl>(s, std::nullopt, m, w);
+            got = sel.decision.index < 0 ? "vendor:cusolver" : std::string(sel.key());
+            if (sel.decision.index >= 0 && ds::explain(sel).find("kernel: ") == std::string::npos) {
+                got = "explain-without-kernel";
+            }
         };
         if (vendor) run.template operator()<GetrsTable<T, true>>();
         else run.template operator()<GetrsTable<T, false>>();

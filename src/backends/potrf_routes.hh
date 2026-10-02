@@ -56,6 +56,10 @@ struct PotrfOp {
         c = {s.n, s.batch, 0, 0};
         return 2;
     }
+    static bool matches(const Shape& s, const Args& a) {
+        return a.A && a.uplo == s.uplo && a.A->rows() == s.n && a.A->cols() == s.n &&
+               a.A->batch_size() == s.batch && a.A->is_heterogeneous() == !s.homogeneous;
+    }
 };
 
 inline Verdict native_common(const PotrfShape& s) {

@@ -1482,9 +1482,12 @@ TYPED_TEST(PotrfBlockedTest, BlockedRouteTableAndTheVendorFreeFallback) {
         << "a vendor-free build does not reach the blocked driver above the LPanel ceiling";
 }
 
-// potrf_buffer_size SURVIVES THE ROUTE CHANGING BETWEEN QUERY AND CALL: the route is
-// resolved twice, so a query that sizes only the route it resolved under-allocates.
-// evidence: docs/perf/potrf.md#workspace-sizing
+// A ROUTE CHANGE BETWEEN QUERY AND CALL. Legacy facade (non-CUDA): potrf_buffer_size sizes the
+// max over every supported tier, so the call survives it. CUDA facade (descriptor registry): the
+// query sizes the CHOSEN route only, and the call re-checks the bytes its own route needs, so the
+// same change is a loud std::length_error before any launch -- never a silent overrun.
+// evidence: docs/perf/potrf.md#workspace-sizing,
+// experiments/kernel_selection/descriptor-registry/README.md
 TYPED_TEST(PotrfBlockedTest, BufferSizeCoversEverySupportedNativeTier) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
@@ -1522,6 +1525,30 @@ TYPED_TEST(PotrfBlockedTest, BufferSizeCoversEverySupportedNativeTier) {
         const ScopedEnvVar route_pin("BATCHLAS_POTRF_ROUTE", "cta");
         return potrf_buffer_size<B, T>(*this->ctx, A.view(), Uplo::Lower);
     }();
+    if constexpr (B == Backend::CUDA) {
+        EXPECT_EQ(queried, cta_need) << "the registry sizes the chosen route, nothing else";
+        const ScopedEnvVar route_pin("BATCHLAS_POTRF_ROUTE", "blocked");
+        const std::vector<T> before(A.view().data_ptr(),
+                                    A.view().data_ptr() + static_cast<size_t>(A.view().stride()) * batch);
+        UnifiedVector<std::byte> small(queried);
+        UnifiedVector<int32_t> info(batch, int32_t(-12345));
+        EXPECT_THROW(((void)potrf<B, T>(*this->ctx, A.view(), Uplo::Lower, small.to_span(), info.to_span())),
+                     std::length_error);
+        this->ctx->wait();
+        EXPECT_EQ(std::memcmp(before.data(), A.view().data_ptr(), before.size() * sizeof(T)), 0)
+            << "the refused call touched A";
+        EXPECT_EQ(info[0], -12345) << "the refused call launched";
+        UnifiedVector<std::byte> ws(potrf_buffer_size<B, T>(*this->ctx, A.view(), Uplo::Lower));
+        ASSERT_NO_THROW(
+            ((void)potrf<B, T>(*this->ctx, A.view(), Uplo::Lower, ws.to_span(), info.to_span())));
+        this->ctx->wait();
+        for (int b = 0; b < batch; ++b) {
+            ASSERT_EQ(info[b], 0) << "b=" << b;
+            const auto L = this->extract_L(A, b, n, Uplo::Lower);
+            EXPECT_LE((multiply_back_residual<T>(ref[b], L, n)), blocked_residual_tol<T>(n)) << "b=" << b;
+        }
+        return;
+    }
     ASSERT_GE(queried, blk_need)
         << "potrf_buffer_size resolved `cta` and sized only that tier; a caller whose "
            "environment changes between the query and the call (options.hh:546-552 reads "

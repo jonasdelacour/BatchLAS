@@ -19,6 +19,17 @@
 
 namespace batchlas::dispatch::sel {
 
+// An op: its Shape (inputs only), its call Args, and the check that a Selection made for one
+// shape is being run on that same call.
+template <class Op>
+concept SelectableOp = requires(const typename Op::Shape& s, const typename Op::Args& a,
+                                std::array<std::int64_t, 4>& c) {
+    { Op::op } -> std::convertible_to<dispatch::Op>;
+    { Op::cost_variant(s) } -> std::convertible_to<std::uint8_t>;
+    { Op::coords(s, c) } -> std::convertible_to<int>;
+    { Op::matches(s, a) } -> std::same_as<bool>;
+};
+
 template <class R, class Op>
 concept RouteDescriptor = requires(const typename Op::Shape& s, const typename R::Geometry& g,
                                    Queue& q, const typename Op::Args& a) {
@@ -33,10 +44,12 @@ concept RouteDescriptor = requires(const typename Op::Shape& s, const typename R
     { g.fits } -> std::convertible_to<bool>;
 };
 
-template <class Op, class... Rs>
+template <SelectableOp Op, class... Rs>
     requires(RouteDescriptor<Rs, Op> && ...)
 struct Table {
+    using OpT = Op;
     using Shape = typename Op::Shape;
+    using Args = typename Op::Args;
     using Plan = std::variant<typename Rs::Geometry...>;   // index == row == Decision::index
     using Geoms = std::tuple<typename Rs::Geometry...>;
     static constexpr int size = static_cast<int>(sizeof...(Rs));
@@ -114,15 +127,19 @@ private:
     }
 };
 
-// The decision as a value, consumed by sizing and by running.
+// The decision as a value, consumed by sizing and by running. It is self-contained: the plan
+// carries every knob it was made with, so a later settings change cannot make it inconsistent.
 template <class Tbl>
 struct Selection {
+    typename Tbl::Shape shape{};   // the call it was made for; run checks Op::matches
     typename Tbl::Plan plan;
     Candidates candidates;
     Decision decision;
-    std::size_t workspace = 0;   // of THIS route only
-    std::uint64_t settings_epoch = 0;
-    std::string_view key() const { return candidates.row[decision.index].key; }
+    std::size_t workspace = 0;   // of THIS route only, valid when `sized`
+    bool sized = false;
+    std::string_view key() const {
+        return decision.index < 0 ? std::string_view{} : candidates.row[decision.index].key;
+    }
 };
 
 enum class PinPolicy : std::uint8_t { Warn, Strict };

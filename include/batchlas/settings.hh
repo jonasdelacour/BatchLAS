@@ -40,7 +40,6 @@
 #include <batchlas/export.hh>
 #include <array>
 #include <cstddef>
-#include <cstdint>
 #include <optional>
 #include <string>
 
@@ -781,9 +780,6 @@ namespace detail {
 // reason ScopedEnvVar is not: the process environment is not thread-safe either.
 // Call it from a test body or a benchmark setup, never from a parallel region.
 BATCHLAS_API void reload_settings();
-
-// Incremented by configure() and reload_settings(); a cached selection compares it.
-BATCHLAS_API std::uint64_t settings_epoch() noexcept;
 
 // Latch: records that a Queue has been constructed, which is what closes
 // configure(). Called from Queue's constructors; nothing else should call it.
