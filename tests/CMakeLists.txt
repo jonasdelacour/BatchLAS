@@ -436,6 +436,32 @@ endif()
 add_executable(potrf_plan_dump ${PROJECT_SOURCE_DIR}/evaluation/routing/potrf_plan_dump.cc)
 batchlas_configure_binary_target(potrf_plan_dump)
 
+# Routing rules as data (prototype): the offline engine-vs-resolver test, the generated-header
+# check, the bind<> compile-fail probe, and the GPU driver.
+add_executable(routing_rules_tests routing_rules_tests.cc)
+batchlas_configure_binary_target(routing_rules_tests LIBRARIES GTest::gtest GTest::gtest_main)
+add_test(NAME routing_rules_tests COMMAND routing_rules_tests)
+set_tests_properties(routing_rules_tests PROPERTIES LABELS "blas" TIMEOUT 1200)
+if(Python3_EXECUTABLE)
+    add_test(NAME potrf_rules_header_tests
+        COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/evaluation/routing/gen_rules_header.py"
+                --check)
+    set_tests_properties(potrf_rules_header_tests PROPERTIES LABELS "blas")
+endif()
+foreach(_probe good bad)
+    add_library(routing_rules_bind_${_probe} OBJECT EXCLUDE_FROM_ALL routing_rules_bind.cc)
+    target_include_directories(routing_rules_bind_${_probe} PRIVATE
+        ${PROJECT_SOURCE_DIR}/include ${PROJECT_BINARY_DIR}/include)
+    target_compile_features(routing_rules_bind_${_probe} PRIVATE cxx_std_20)
+    add_test(NAME routing_rules_bind_${_probe}
+        COMMAND ${CMAKE_COMMAND} --build ${PROJECT_BINARY_DIR} --target routing_rules_bind_${_probe})
+endforeach()
+target_compile_definitions(routing_rules_bind_bad PRIVATE ROUTING_BIND_BAD)
+set_tests_properties(routing_rules_bind_bad PROPERTIES WILL_FAIL TRUE)
+add_executable(potrf_rules_gpu
+    ${PROJECT_SOURCE_DIR}/experiments/kernel_selection/rules-as-data/potrf_rules_gpu.cc)
+batchlas_configure_binary_target(potrf_rules_gpu)
+
 # ---------------------------------------------------------------------------
 # batchlas_coverage: what this build can do, and what a run reached.
 #

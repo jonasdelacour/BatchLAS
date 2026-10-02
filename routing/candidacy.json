@@ -1,0 +1,130 @@
+{
+ "_doc": "Which tiers each strategy may RANK for (op, dtype, uplo). Read by compile_rules.py for the model and for the hand transcription alike. A rules file that ranks a tier outside this set fails to compile. A key where the model and the hand windows rank different native tiers fails too unless a waiver names it. evidence: docs/design/routing-rules-as-data.md#candidacy",
+ "potrf": {
+  "tiers": [
+   "native:tiny",
+   "native:cta",
+   "native:lpanel",
+   "native:blocked",
+   "vendor"
+  ],
+  "candidates": {
+   "float/L": [
+    "native:tiny",
+    "native:cta",
+    "native:lpanel",
+    "native:blocked",
+    "vendor"
+   ],
+   "float/U": [
+    "native:tiny",
+    "native:cta",
+    "vendor"
+   ],
+   "double/L": [
+    "native:tiny",
+    "native:cta",
+    "native:lpanel",
+    "native:blocked",
+    "vendor"
+   ],
+   "double/U": [
+    "native:tiny",
+    "native:cta",
+    "vendor"
+   ],
+   "cfloat/L": [
+    "native:tiny",
+    "native:cta",
+    "native:lpanel",
+    "native:blocked",
+    "vendor"
+   ],
+   "cfloat/U": [
+    "native:tiny",
+    "native:cta",
+    "vendor"
+   ],
+   "cdouble/L": [
+    "native:tiny",
+    "native:cta",
+    "native:lpanel",
+    "native:blocked",
+    "vendor"
+   ],
+   "cdouble/U": [
+    "native:tiny",
+    "native:cta",
+    "vendor"
+   ]
+  },
+  "waivers": [
+   {
+    "key": "float/L",
+    "tier": "native:blocked",
+    "only_in": "model",
+    "reason": "the hand windows never route to Blocked while a vendor is present; the model does at large n. Kept to reproduce today's routing."
+   },
+   {
+    "key": "float/U",
+    "tier": "native:cta",
+    "only_in": "model",
+    "reason": "the hand windows give CTA only to float/cfloat Lower 33..35 (Upper: Tiny-only with a vendor); the model ranks CTA wherever it is cheapest."
+   },
+   {
+    "key": "double/L",
+    "tier": "native:blocked",
+    "only_in": "model",
+    "reason": "the hand windows never route to Blocked while a vendor is present; the model does at large n. Kept to reproduce today's routing."
+   },
+   {
+    "key": "double/L",
+    "tier": "native:lpanel",
+    "only_in": "model",
+    "reason": "the model prices LPanel for fp64 Lower; the hand windows (lpanel_types) have no fp64 LPanel grid. Verified defect: cdouble n=20 b=8192 runs LPanel under the model only. Kept to reproduce today's routing; resolve by measuring or by dropping the candidate."
+   },
+   {
+    "key": "cfloat/L",
+    "tier": "native:blocked",
+    "only_in": "model",
+    "reason": "the hand windows never route to Blocked while a vendor is present; the model does at large n. Kept to reproduce today's routing."
+   },
+   {
+    "key": "cfloat/U",
+    "tier": "native:cta",
+    "only_in": "model",
+    "reason": "the hand windows give CTA only to float/cfloat Lower 33..35 (Upper: Tiny-only with a vendor); the model ranks CTA wherever it is cheapest."
+   },
+   {
+    "key": "cdouble/L",
+    "tier": "native:blocked",
+    "only_in": "model",
+    "reason": "the hand windows never route to Blocked while a vendor is present; the model does at large n. Kept to reproduce today's routing."
+   },
+   {
+    "key": "cdouble/L",
+    "tier": "native:cta",
+    "only_in": "model",
+    "reason": "the hand windows give CTA only to float/cfloat Lower 33..35 (Upper: Tiny-only with a vendor); the model ranks CTA wherever it is cheapest."
+   },
+   {
+    "key": "double/L",
+    "tier": "native:cta",
+    "only_in": "model",
+    "reason": "the hand windows give CTA only to float/cfloat Lower 33..35 (Upper: Tiny-only with a vendor); the model ranks CTA wherever it is cheapest."
+   },
+   {
+    "key": "cdouble/L",
+    "tier": "native:lpanel",
+    "only_in": "model",
+    "reason": "the model prices LPanel for fp64 Lower; the hand windows (lpanel_types) have no fp64 LPanel grid. Verified defect: cdouble n=20 b=8192 runs LPanel under the model only. Kept to reproduce today's routing; resolve by measuring or by dropping the candidate."
+   },
+   {
+    "key": "cdouble/U",
+    "tier": "native:cta",
+    "only_in": "model",
+    "reason": "the hand windows give CTA only to float/cfloat Lower 33..35 (Upper: Tiny-only with a vendor); the model ranks CTA wherever it is cheapest."
+   }
+  ]
+ }
+}
