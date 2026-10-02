@@ -7,6 +7,7 @@
 #include "../util/internal-api.hh"
 #include "../util/launch_plan.hh"
 #include "../util/resident_capacity.hh"
+#include "potrf_launch_plan.hh"
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>
@@ -138,6 +139,30 @@ template <typename T>
 BATCHLAS_INTERNAL_API unsigned potrf_blocked_debug_params(Queue& ctx, int n);  // nb | W<<16
 
 BATCHLAS_INTERNAL_API void potrf_blocked_overrides(int& nb_env, int& w_env);  // the driver's NB/W env snapshot
+
+// PlanTree entry points (src/plan/): the geometry/params come FROM the plan node and are
+// executed as given; the gates are re-checked, never re-derived.
+template <typename T>
+BATCHLAS_INTERNAL_API Event potrf_cta_dispatch_planned(Queue& ctx,
+                                                       const MatrixView<T, MatrixFormat::Dense>& A,
+                                                       Uplo uplo,
+                                                       Span<std::byte> workspace,
+                                                       Span<int32_t> info,
+                                                       const potrf_plan::CtaGeometry& geometry);
+
+template <typename T>
+BATCHLAS_INTERNAL_API std::size_t potrf_blocked_buffer_size_planned(
+    Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const potrf_plan::BlockedParams& p);
+
+template <typename T>
+BATCHLAS_INTERNAL_API Event potrf_blocked_dispatch_planned(Queue& ctx,
+                                                           const MatrixView<T, MatrixFormat::Dense>& A,
+                                                           Uplo uplo,
+                                                           Span<std::byte> workspace,
+                                                           Span<int32_t> info,
+                                                           const potrf_plan::BlockedParams& p,
+                                                           PotrfTrailingGemm<T> trailing_gemm,
+                                                           PotrfPanelSolve<T> panel_solve);
 
 // Uplo::LOWER ONLY -- the right-looking schedule overwrites the wrong triangle for Upper,
 // so it throws. `info` is LAPACK's (1-based, GLOBAL, first failure wins) while the leaf

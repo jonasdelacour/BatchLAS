@@ -120,6 +120,20 @@ std::size_t potrf_blocked_buffer_size(Queue& ctx,
     });
 }
 
+// The plan's params as given: W is already clamped to n - nb, so the scratch is W_eff^2*batch.
+template <typename T>
+std::size_t potrf_blocked_buffer_size_planned(Queue& ctx,
+                                              const MatrixView<T, MatrixFormat::Dense>& A,
+                                              const potrf_plan::BlockedParams& p) {
+    const int batch = static_cast<int>(A.batch_size());
+    const int n = static_cast<int>(A.rows());
+    if (batch < 1 || n < 1) return 0;
+    const std::size_t leaf_bytes = potrf_cta_buffer_size<T>(ctx, A);
+    return workspace_bytes([&](BumpAllocator& pool) {
+        return potrf_blocked_layout<T>(ctx, pool, n, p.nb, batch, p.W, leaf_bytes);
+    });
+}
+
 void potrf_blocked_overrides(int& nb_env, int& w_env) {
     nb_env = potrf_nb_env();
     w_env = potrf_w_env();
@@ -190,6 +204,14 @@ Event potrf_blocked_panel_fixup(Queue& ctx,
 
 }  // namespace
 
+namespace {
+template <typename T>
+Event potrf_blocked_run(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo,
+                        Span<std::byte> workspace, Span<int32_t> info_out,
+                        PotrfTrailingGemm<T> trailing_gemm, PotrfPanelSolve<T> panel_solve,
+                        const PotrfBlockedParams* planned);
+}  // namespace
+
 template <typename T>
 Event potrf_blocked_dispatch(Queue& ctx,
                              const MatrixView<T, MatrixFormat::Dense>& A,
@@ -198,6 +220,32 @@ Event potrf_blocked_dispatch(Queue& ctx,
                              Span<int32_t> info_out,
                              PotrfTrailingGemm<T> trailing_gemm,
                              PotrfPanelSolve<T> panel_solve) {
+    return potrf_blocked_run<T>(ctx, A, uplo, workspace, info_out, std::move(trailing_gemm),
+                                std::move(panel_solve), nullptr);
+}
+
+template <typename T>
+Event potrf_blocked_dispatch_planned(Queue& ctx,
+                                     const MatrixView<T, MatrixFormat::Dense>& A,
+                                     Uplo uplo,
+                                     Span<std::byte> workspace,
+                                     Span<int32_t> info_out,
+                                     const potrf_plan::BlockedParams& p,
+                                     PotrfTrailingGemm<T> trailing_gemm,
+                                     PotrfPanelSolve<T> panel_solve) {
+    if (!trailing_gemm || !panel_solve) {
+        throw batchlas::internal_error("potrf_blocked (planned): sub-op seams must be injected");
+    }
+    return potrf_blocked_run<T>(ctx, A, uplo, workspace, info_out, std::move(trailing_gemm),
+                                std::move(panel_solve), &p);
+}
+
+namespace {
+template <typename T>
+Event potrf_blocked_run(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo,
+                        Span<std::byte> workspace, Span<int32_t> info_out,
+                        PotrfTrailingGemm<T> trailing_gemm, PotrfPanelSolve<T> panel_solve,
+                        const PotrfBlockedParams* planned) {
     // Both seams default to the NATIVE kernels; the facade injects the ROUTED ones.
     if (!trailing_gemm) {
         trailing_gemm = [](Queue& c,
@@ -242,7 +290,7 @@ Event potrf_blocked_dispatch(Queue& ctx,
         throw batchlas::invalid_argument("potrf_blocked: GPU queues only");
     }
 
-    const auto p = potrf_blocked_params<T>(ctx, n);
+    const auto p = planned ? *planned : potrf_blocked_params<T>(ctx, n);
     const int nb = p.nb;
     const int W = p.W;
 
@@ -346,6 +394,7 @@ Event potrf_blocked_dispatch(Queue& ctx,
 
     return ctx.get_event();
 }
+}  // namespace
 
 template <> bool potrf_blocked_available<float>()                { return true; }
 template <> bool potrf_blocked_available<double>()               { return true; }
@@ -358,7 +407,13 @@ template <> bool potrf_blocked_available<std::complex<double>>() { return true; 
         Queue&, const MatrixView<T, MatrixFormat::Dense>&, Uplo);                             \
     template Event potrf_blocked_dispatch<T>(                                                 \
         Queue&, const MatrixView<T, MatrixFormat::Dense>&, Uplo, Span<std::byte>,             \
-        Span<int32_t>, PotrfTrailingGemm<T>, PotrfPanelSolve<T>);
+        Span<int32_t>, PotrfTrailingGemm<T>, PotrfPanelSolve<T>);                             \
+    template std::size_t potrf_blocked_buffer_size_planned<T>(                                \
+        Queue&, const MatrixView<T, MatrixFormat::Dense>&, const potrf_plan::BlockedParams&); \
+    template Event potrf_blocked_dispatch_planned<T>(                                         \
+        Queue&, const MatrixView<T, MatrixFormat::Dense>&, Uplo, Span<std::byte>,             \
+        Span<int32_t>, const potrf_plan::BlockedParams&, PotrfTrailingGemm<T>,                \
+        PotrfPanelSolve<T>);
 
 BATCHLAS_POTRF_BLOCKED_INSTANTIATE(float)
 BATCHLAS_POTRF_BLOCKED_INSTANTIATE(double)

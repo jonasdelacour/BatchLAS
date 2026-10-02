@@ -33,6 +33,7 @@
 // only, so the facade can include it in a vendor-free build.
 #include "../../backends/potrf_route.hh"
 #include "../../extensions/potrf_native.hh"
+#include "../../plan/potrf_exec.hh"
 
 #include "../../backends/geqrf_route.hh"
 #include "../../backends/orgqr_route.hh"
@@ -59,6 +60,11 @@
 #include <cstddef>
 #include <stdexcept>
 #include <string>
+#include <atomic>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <vector>
 
 namespace batchlas {
 
@@ -654,6 +660,68 @@ template <typename T>
         "capability the facade cannot service.");
 }
 
+// ---- PlanTree prototype: the library-side state behind src/plan/potrf_exec.hh -------------
+namespace plan {
+namespace {
+std::atomic<int> g_planner_mode{-1};
+std::atomic<bool> g_log_on{false};
+std::mutex* log_mu() { static auto* m = new std::mutex(); return m; }
+std::vector<LogRow>* log_rows() { static auto* v = new std::vector<LogRow>(); return v; }
+std::mutex* cache_mu() { static auto* m = new std::mutex(); return m; }
+std::map<std::string, std::shared_ptr<const Node>>* cache_map() {
+    static auto* c = new std::map<std::string, std::shared_ptr<const Node>>();   // leaked
+    return c;
+}
+std::atomic<std::uint64_t> g_hits{0}, g_misses{0};
+}  // namespace
+
+void set_potrf_planner(int mode) { g_planner_mode.store(mode); }
+bool potrf_planner_enabled() {
+    const int m = g_planner_mode.load(std::memory_order_relaxed);
+    if (m >= 0) return m == 1;
+    const char* v = std::getenv("BATCHLAS_POTRF_PLANNER");
+    return v && *v == '1';
+}
+void log_enable(bool on) { g_log_on.store(on); }
+bool log_enabled() { return g_log_on.load(std::memory_order_relaxed); }
+void log_row(LogRow row) {
+    std::lock_guard<std::mutex> lock(*log_mu());
+    log_rows()->push_back(std::move(row));
+}
+std::vector<LogRow> log_take() {
+    std::lock_guard<std::mutex> lock(*log_mu());
+    std::vector<LogRow> out;
+    out.swap(*log_rows());
+    return out;
+}
+std::shared_ptr<const Node> cache_find(const std::string& key) {
+    std::lock_guard<std::mutex> lock(*cache_mu());
+    const auto it = cache_map()->find(key);
+    if (it == cache_map()->end()) return nullptr;
+    g_hits.fetch_add(1, std::memory_order_relaxed);
+    return it->second;
+}
+std::shared_ptr<const Node> cache_insert(const std::string& key, Node nd) {
+    auto p = std::make_shared<const Node>(std::move(nd));
+    std::lock_guard<std::mutex> lock(*cache_mu());
+    g_misses.fetch_add(1, std::memory_order_relaxed);
+    return cache_map()->emplace(key, std::move(p)).first->second;
+}
+CacheStats cache_stats() { return {g_hits.load(), g_misses.load()}; }
+void cache_clear() {
+    std::lock_guard<std::mutex> lock(*cache_mu());
+    cache_map()->clear();
+    g_hits = 0;
+    g_misses = 0;
+}
+
+template <Backend B, typename T>
+Node potrf_plan_node(Queue& q, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo, bool vendor_free) {
+    if (vendor_free) return potrf_build<B, T>(q, A, uplo, request_for_potrf(), true);
+    return *potrf_plan_cached<B, T>(q, A, uplo);
+}
+}  // namespace plan
+
 template <Backend B, typename T>
 Event potrf(Queue& ctx,
                 const MatrixView<T, MatrixFormat::Dense>& descrA,
@@ -661,6 +729,9 @@ Event potrf(Queue& ctx,
                 Span<std::byte> workspace,
                 Span<int32_t> info_out) {
     potrf_validate_params<T>(descrA, uplo);
+    if (plan::potrf_planner_enabled()) {
+        return plan::potrf_planned<B, T>(ctx, descrA, uplo, workspace, info_out);
+    }
 
     // solver_vendor_available, NOT factorization_vendor_available -- see the file header.
     const dispatch::Route route = backend::potrf_route<B, T>(
@@ -719,6 +790,9 @@ size_t potrf_buffer_size(Queue& ctx,
                         const MatrixView<T,MatrixFormat::Dense>& A,
                         Uplo uplo) {
     potrf_validate_params<T>(A, uplo);
+    if (plan::potrf_planner_enabled()) {
+        return plan::potrf_planned_buffer_size<B, T>(ctx, A, uplo);
+    }
 
     const dispatch::Route route = backend::potrf_route<B, T>(
         ctx, A, uplo,
@@ -958,7 +1032,15 @@ size_t posv_buffer_size(Queue& ctx,
     OP_INSTANTIATE(potrf_buffer_size, B_, float)                \
     OP_INSTANTIATE(potrf_buffer_size, B_, double)               \
     OP_INSTANTIATE(potrf_buffer_size, B_, std::complex<float>)  \
-    OP_INSTANTIATE(potrf_buffer_size, B_, std::complex<double>)
+    OP_INSTANTIATE(potrf_buffer_size, B_, std::complex<double>) \
+    PLAN_INSTANTIATE(B_, float)                     \
+    PLAN_INSTANTIATE(B_, double)                    \
+    PLAN_INSTANTIATE(B_, std::complex<float>)       \
+    PLAN_INSTANTIATE(B_, std::complex<double>)
+
+#define PLAN_INSTANTIATE(B_, fp)                                                         \
+    template plan::Node plan::potrf_plan_node<B_, fp>(                                   \
+        Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Uplo, bool);
 
 // Keyed on the DEVICE FAMILY, not on the vendor library: the bodies above compile to
 // a throw when the library is absent, so the symbol exists in every build with the
@@ -984,6 +1066,7 @@ SOLVE_ALL(Backend::NETLIB)
 #undef SOLVE_ALL
 #undef SOLVE_ONE
 #undef POTRF_ALL
+#undef PLAN_INSTANTIATE
 #undef FACTORIZATION_ALL
 #undef FACTORIZATION_ONE
 #undef OP_INSTANTIATE

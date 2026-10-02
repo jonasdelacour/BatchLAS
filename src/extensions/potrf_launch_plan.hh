@@ -335,10 +335,8 @@ constexpr LaunchPlan tiny_plan(int n, std::int64_t batch, const DeviceFacts& d,
 }
 
 template <typename T>
-constexpr LaunchPlan cta_plan(int n, std::int64_t batch, const DeviceFacts& d,
-                              const KernelRegs& r = {},
-                              int min_blocks_per_sm = resident::kMinBlocksPerSm) {
-    const CtaGeometry g = cta_geometry<T>(n, batch, d, min_blocks_per_sm);
+constexpr LaunchPlan cta_plan_from(const CtaGeometry& g, int n, std::int64_t batch,
+                                   const DeviceFacts& d, const KernelRegs& r = {}) {
     LaunchPlan p;
     p.fits = g.fits;
     if (!g.fits) return p;
@@ -356,6 +354,31 @@ constexpr LaunchPlan cta_plan(int n, std::int64_t batch, const DeviceFacts& d,
     // The body walks whole NB-wide panels, so the chain is NB*ceil(n/NB), not n.
     p.serial_steps = static_cast<std::int64_t>(CtaConst<T>::NB) *
                      ((n + CtaConst<T>::NB - 1) / CtaConst<T>::NB);
+    return p;
+}
+
+template <typename T>
+constexpr LaunchPlan cta_plan(int n, std::int64_t batch, const DeviceFacts& d,
+                              const KernelRegs& r = {},
+                              int min_blocks_per_sm = resident::kMinBlocksPerSm) {
+    return cta_plan_from<T>(cta_geometry<T>(n, batch, d, min_blocks_per_sm), n, batch, d, r);
+}
+
+// The planner prototype's extension tier: the CTA body at work-group scope, ONE matrix per
+// group (G == 1 is what makes work-group barriers correct) and at least two sub-groups.
+template <typename T>
+constexpr CtaGeometry cta_wg_geometry(int n, std::int64_t batch, const DeviceFacts& d,
+                                      int min_blocks_per_sm = resident::kMinBlocksPerSm) {
+    CtaGeometry p = cta_geometry<T>(n, batch, d, min_blocks_per_sm);
+    p.L = (p.L < 64) ? 64 : p.L;
+    p.G = 1;
+    p.wg_size = p.L;
+    p.num_wg = batch;
+    p.subgroup_scope = false;
+    p.slm_total = potrf_hole_padded(p.slm_per_matrix);
+    const std::size_t budget = resident::occupancy_budget(
+        resident::device_slm_budget(d.local_mem_bytes), min_blocks_per_sm);
+    p.fits = n >= 1 && p.slm_total <= budget && p.wg_size <= d.max_wg_size;
     return p;
 }
 

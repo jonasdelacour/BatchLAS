@@ -41,6 +41,7 @@ set(TEST_TARGETS
     trsm_tests
     potrf_tests
     potrf_plan_tests
+    potrf_planner_tests
     geqrf_tests
     getrf_tests
     gesv_tests
@@ -156,7 +157,7 @@ set(BATCHLAS_TEST_LABELS_util
 set(BATCHLAS_TEST_LABELS_blas
     device_blas_tests gemm_tests gemv_tests symm_tests hemm_tests herk_tests her2k_tests
     syrk_tests syr2k_tests
-    trmm_tests trsm_tests potrf_tests potrf_plan_tests geqrf_tests getrf_tests resident_capacity_tests
+    trmm_tests trsm_tests potrf_tests potrf_plan_tests potrf_planner_tests geqrf_tests getrf_tests resident_capacity_tests
     gesv_tests posv_tests
     transpose_tests norm_tests cond_tests inverse_tests)
 set(BATCHLAS_TEST_LABELS_ortho
@@ -313,6 +314,10 @@ function(batchlas_add_test_target test_name)
     # partition kernel is a race and a local_accessor is an occupancy cost, and
     # both stay green in a functional test -- so a source check is the only guard
     # that can fail.
+    if(test_name STREQUAL "potrf_planner_tests")
+        target_compile_definitions(${test_name} PRIVATE
+            BATCHLAS_ROUTING_RESULTS_DIR="${PROJECT_SOURCE_DIR}/benchmarks/results/routing")
+    endif()
     if(test_name STREQUAL "potrf_tests")
         target_compile_definitions(${test_name} PRIVATE
             BATCHLAS_POTRF_TINY_CC_PATH="${PROJECT_SOURCE_DIR}/src/extensions/potrf_tiny.cc")
