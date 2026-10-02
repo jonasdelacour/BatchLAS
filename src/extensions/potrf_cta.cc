@@ -183,6 +183,34 @@ Event potrf_cta_launch(Queue& ctx,
 
 }  // namespace
 
+namespace {
+
+// Everything after the geometry is decided; both entry points end here.
+template <typename T>
+Event potrf_cta_run(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo,
+                    Span<std::byte> workspace, Span<int32_t> info_out, const PotrfCtaLaunch& p) {
+    using C = PotrfCtaConst<T>;
+    const int n = static_cast<int>(A.rows());
+    const int batch = static_cast<int>(A.batch_size());
+    BumpAllocator pool(workspace);
+    // detail::info_target's rule, inlined to avoid including src/linalg-impl.hh: an empty
+    // or short caller span means "not requested" and draws pool scratch instead.
+    Span<int32_t> info = (info_out.size() >= static_cast<std::size_t>(batch))
+                             ? info_out
+                             : potrf_cta_layout<T>(ctx, pool, batch);
+
+    const bool upper = (uplo == Uplo::Upper);
+
+    if (p.subgroup_scope) {
+        return potrf_cta_launch<T, C::NB, C::TS, PotrfScope::SubGroup>(
+            ctx, A, upper, info, p, n, batch);
+    }
+    return potrf_cta_launch<T, C::NB, C::TS, PotrfScope::WorkGroup>(
+        ctx, A, upper, info, p, n, batch);
+}
+
+}  // namespace
+
 template <typename T>
 Event potrf_cta_dispatch(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& A,
@@ -190,7 +218,6 @@ Event potrf_cta_dispatch(Queue& ctx,
                          Span<std::byte> workspace,
                          Span<int32_t> info_out,
                          int min_blocks_per_sm) {
-    using C = PotrfCtaConst<T>;
 
     const int n = static_cast<int>(A.rows());
     const int batch = static_cast<int>(A.batch_size());
@@ -236,21 +263,32 @@ Event potrf_cta_dispatch(Queue& ctx,
             std::to_string(potrf_cta_max_n_for_slm<T>(device_budget, min_blocks_per_sm)));
     }
 
-    BumpAllocator pool(workspace);
-    // detail::info_target's rule, inlined to avoid including src/linalg-impl.hh: an empty
-    // or short caller span means "not requested" and draws pool scratch instead.
-    Span<int32_t> info = (info_out.size() >= static_cast<std::size_t>(batch))
-                             ? info_out
-                             : potrf_cta_layout<T>(ctx, pool, batch);
+    return potrf_cta_run<T>(ctx, A, uplo, workspace, info_out, p);
+}
 
-    const bool upper = (uplo == Uplo::Upper);
-
-    if (p.subgroup_scope) {
-        return potrf_cta_launch<T, C::NB, C::TS, PotrfScope::SubGroup>(
-            ctx, A, upper, info, p, n, batch);
+template <typename T>
+Event potrf_cta_dispatch_geometry(Queue& ctx,
+                                  const MatrixView<T, MatrixFormat::Dense>& A,
+                                  Uplo uplo,
+                                  Span<std::byte> workspace,
+                                  Span<int32_t> info_out,
+                                  const potrf_plan::CtaGeometry& g) {
+    const int n = static_cast<int>(A.rows());
+    if (A.rows() != A.cols() || n < 1 || A.batch_size() < 1 || A.is_heterogeneous()) {
+        throw batchlas::invalid_argument("potrf_cta_dispatch_geometry: shape the plan cannot serve");
     }
-    return potrf_cta_launch<T, C::NB, C::TS, PotrfScope::WorkGroup>(
-        ctx, A, upper, info, p, n, batch);
+    const auto dev = ctx.device();
+    if (dev.type != DeviceType::GPU || !dev.supports_sub_group_size(32)) {
+        throw batchlas::unsupported("potrf_cta_dispatch_geometry: needs a GPU with sub-group 32");
+    }
+    potrf_cta_check_scope(g);
+    const auto facts = potrf_device_facts(dev);
+    if (!g.fits || g.lda != (n | 1) || g.wg_size > facts.max_wg_size || g.L < 32 ||
+        g.slm_total > resident::device_slm_budget(facts.local_mem_bytes) ||
+        g.num_wg * g.G < A.batch_size()) {
+        throw batchlas::internal_error("potrf_cta_dispatch_geometry: geometry does not match the call");
+    }
+    return potrf_cta_run<T>(ctx, A, uplo, workspace, info_out, g);
 }
 
 // Per scalar type only, no Backend cross-product: the kernel has no Backend parameter.
@@ -261,7 +299,11 @@ Event potrf_cta_dispatch(Queue& ctx,
     template std::size_t potrf_cta_buffer_size<T>(Queue&,                                   \
                                                   const MatrixView<T, MatrixFormat::Dense>&); \
     template Event potrf_cta_dispatch<T>(Queue&, const MatrixView<T, MatrixFormat::Dense>&, \
-                                         Uplo, Span<std::byte>, Span<int32_t>, int);
+                                         Uplo, Span<std::byte>, Span<int32_t>, int);          \
+    template Event potrf_cta_dispatch_geometry<T>(Queue&,                                    \
+                                                  const MatrixView<T, MatrixFormat::Dense>&, \
+                                                  Uplo, Span<std::byte>, Span<int32_t>,      \
+                                                  const potrf_plan::CtaGeometry&);
 
 BATCHLAS_POTRF_CTA_INSTANTIATE(float)
 BATCHLAS_POTRF_CTA_INSTANTIATE(double)

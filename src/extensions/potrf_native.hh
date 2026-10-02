@@ -6,6 +6,7 @@
 
 #include "../util/internal-api.hh"
 #include "../util/launch_plan.hh"
+#include "potrf_launch_plan.hh"
 #include "../util/resident_capacity.hh"
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>
@@ -103,6 +104,16 @@ BATCHLAS_INTERNAL_API unsigned potrf_cta_debug_launch(
     Queue& ctx, int n, int batch,
     int min_blocks_per_sm = resident::kMinBlocksPerSm);  // G | L<<16, 0 if unfit
 
+// The launcher with the geometry DECIDED by the caller (route descriptors): no re-derivation.
+// Re-checks only what a wrong geometry would turn into a race or an abort.
+template <typename T>
+BATCHLAS_INTERNAL_API Event potrf_cta_dispatch_geometry(Queue& ctx,
+                                                        const MatrixView<T, MatrixFormat::Dense>& A,
+                                                        Uplo uplo,
+                                                        Span<std::byte> workspace,
+                                                        Span<int32_t> info,
+                                                        const potrf_plan::CtaGeometry& g);
+
 template <typename T>
 BATCHLAS_INTERNAL_API Event potrf_cta_dispatch(Queue& ctx,
                                                const MatrixView<T, MatrixFormat::Dense>& A,
@@ -134,6 +145,11 @@ BATCHLAS_INTERNAL_API std::size_t potrf_blocked_buffer_size(Queue& ctx,
                                                             const MatrixView<T, MatrixFormat::Dense>& A,
                                                             Uplo uplo);
 
+// The same driver with nb/W chosen by the caller; the layout uses exactly `p`.
+template <typename T>
+BATCHLAS_INTERNAL_API std::size_t potrf_blocked_buffer_size_params(
+    Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const potrf_plan::BlockedParams& p);
+
 template <typename T>
 BATCHLAS_INTERNAL_API unsigned potrf_blocked_debug_params(Queue& ctx, int n);  // nb | W<<16
 
@@ -150,5 +166,15 @@ BATCHLAS_INTERNAL_API Event potrf_blocked_dispatch(Queue& ctx,
                                                    Span<int32_t> info,
                                                    PotrfTrailingGemm<T> trailing_gemm = {},
                                                    PotrfPanelSolve<T> panel_solve = {});
+
+template <typename T>
+BATCHLAS_INTERNAL_API Event potrf_blocked_dispatch_params(Queue& ctx,
+                                                          const MatrixView<T, MatrixFormat::Dense>& A,
+                                                          Uplo uplo,
+                                                          Span<std::byte> workspace,
+                                                          Span<int32_t> info,
+                                                          const potrf_plan::BlockedParams& p,
+                                                          PotrfTrailingGemm<T> trailing_gemm,
+                                                          PotrfPanelSolve<T> panel_solve);
 
 }  // namespace batchlas::sycl_potrf

@@ -60,6 +60,10 @@ std::optional<Settings>& configured_settings() {
 
 std::once_flag g_load_once;
 
+// Bumped by every configure()/reload_settings(): a Selection made under one epoch is stale in
+// another (docs/design/routing-cost-model.md, descriptor-registry prototype).
+std::atomic<std::uint64_t> g_settings_epoch{0};
+
 // Closes configure(). std::atomic rather than a plain bool because a Queue may
 // legitimately be constructed on a thread other than the one that would call
 // configure(), and this is the one flag in this file that can race.
@@ -385,11 +389,15 @@ void configure(const Settings& s) {
     (void)settings();
     mutable_settings() = s;
     configured_settings() = s;
+    g_settings_epoch.fetch_add(1, std::memory_order_relaxed);
 }
 
 namespace detail {
 
+std::uint64_t settings_epoch() noexcept { return g_settings_epoch.load(std::memory_order_relaxed); }
+
 void reload_settings() {
+    g_settings_epoch.fetch_add(1, std::memory_order_relaxed);
     // settings() first, for the same reason configure() does it: the load must
     // have happened once before this overwrite, or std::call_once would run it
     // afterwards and discard the reload.

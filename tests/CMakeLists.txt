@@ -549,3 +549,24 @@ if(BATCHLAS_TEST_TARGET_SET STREQUAL "all")
         message(STATUS "Skipping consumer_package_tests (bash or examples/consumer_test.sh not found)")
     endif()
 endif()
+
+# ---------------------------------------------------------------------------
+# Prototype: the descriptor-registry potrf selection path, compared in-process against the
+# shipped resolver. EXCLUDE_FROM_ALL; GPU-only (CUDA backend).
+# evidence: experiments/kernel_selection/descriptor-registry/README.md
+# ---------------------------------------------------------------------------
+if(BATCHLAS_HAS_CUDA_BACKEND)
+    set(_ks_dir "${PROJECT_SOURCE_DIR}/experiments/kernel_selection/descriptor-registry")
+    add_executable(potrf_select_tests EXCLUDE_FROM_ALL
+        "${_ks_dir}/potrf_select_tests.cc"
+        "${_ks_dir}/potrf_routes.cc")
+    batchlas_configure_binary_target(potrf_select_tests
+        LIBRARIES
+            GTest::gtest
+            GTest::gtest_main
+    )
+    target_compile_definitions(potrf_select_tests PRIVATE
+        BATCHLAS_V2_CELLS="${_ks_dir}/sweep_cells.txt")
+    add_test(NAME potrf_select_tests COMMAND potrf_select_tests)
+    set_tests_properties(potrf_select_tests PROPERTIES LABELS "blas;prototype")
+endif()
