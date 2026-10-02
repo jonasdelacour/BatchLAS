@@ -9,6 +9,7 @@
 // Honours BATCHLAS_ROUTING_PROFILE and BATCHLAS_POTRF_ROUTE in both paths.
 
 #include "../../../src/routing/potrf_tiers.hh"
+#include "../../../src/routing/getrs_tiers.hh"
 
 #include <batchlas/util/sycl-vector.hh>
 
@@ -194,9 +195,59 @@ int by_type(const std::string& t, F&& f) {
 
 }  // namespace
 
+template <class T>
+void getrs_equiv(Queue& q, const char* dt, int& cells, int& bad) {
+    namespace rg = batchlas::routing::getrs;
+    const int ns[] = {1, 16, 31, 32, 64, 128, 512, 2048, 4096};
+    const int rs[] = {1, 2, 4, 5, 8, 9, 64, 128, 300};
+    const int bs[] = {1, 127, 128, 4096};
+    for (Transpose tr : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans}) {
+        for (int n : ns) {
+            for (int r : rs) {
+                for (int b : bs) {
+                    const MatrixView<T, MatrixFormat::Dense> A(nullptr, n, n, n, n * n, b);
+                    const MatrixView<T, MatrixFormat::Dense> B(nullptr, n, r, n, n * r, b);
+                    for (bool vendor : {true, false}) {
+                        const auto old = backend::getrs_route<kB, T>(q, A, B, tr, vendor);
+                        const std::string o = dispatch::is_vendor(old) ? "vendor"
+                                              : old.algo == dispatch::Algorithm::CTA ? "native:fused"
+                                                                                    : "native:blocked";
+                        rg::Ctx<T> c;
+                        c.s = *backend::getrs_op_shape<kB, T>(q, A, B, tr);
+                        c.vendor_legal = vendor;
+                        std::string g;
+                        try {
+                            g = std::string(rg::select_ctx<kB, T>(c).id());
+                        } catch (const routing::no_route_error&) {
+                            g = "vendor";
+                        }
+                        ++cells;
+                        if (o != g) {
+                            ++bad;
+                            std::printf("DIFF getrs %s n=%d nrhs=%d b=%d vendor=%d today=%s rules=%s\n",
+                                        dt, n, r, b, vendor, o.c_str(), g.c_str());
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 int main(int argc, char** argv) {
-    if (argc < 3) return 2;
+    if (argc < 2) return 2;
     const std::string mode = argv[1];
+    if (mode == "equiv_getrs") {
+        Queue q(Device("gpu"));
+        int cells = 0, bad = 0;
+        getrs_equiv<float>(q, "float", cells, bad);
+        getrs_equiv<double>(q, "double", cells, bad);
+        getrs_equiv<std::complex<float>>(q, "cfloat", cells, bad);
+        getrs_equiv<std::complex<double>>(q, "cdouble", cells, bad);
+        std::printf("SUMMARY getrs %d decisions on the device, %d differ\n", cells, bad);
+        return bad ? 1 : 0;
+    }
+    if (argc < 3) return 2;
     if (mode == "equiv") {
         Queue q(Device("gpu"));
         std::ifstream in(argv[2]);

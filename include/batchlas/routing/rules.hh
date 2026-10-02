@@ -2,7 +2,7 @@
 
 // Selection policy as data: a generated first-match RuleSet per (arch, op) ranks tier ids,
 // and one engine returns the first ranked tier whose legal() admits the shape. SYCL-free,
-// so tools and offline tests include it. evidence: docs/design/routing-rules-as-data.md
+// so tools and offline tests include it. See evaluation/routing/compile_rules.py.
 
 #include <batchlas/blas/dispatch/route.hh>
 
@@ -233,7 +233,7 @@ Selection<Tiers> select(const RuleSet& rs, const std::array<std::uint8_t, N>& bo
         s.rules = &rs;
         return s;
     };
-    const bool restrict_origin = pin.active && pin.origin_only;
+    bool restrict_origin = pin.active && pin.origin_only;
     auto admitted = [&](std::size_t t) {
         if (restrict_origin && Tiers::routes[t].origin != pin.origin) return false;
         return Tiers::legal(t, c);
@@ -246,7 +246,17 @@ Selection<Tiers> select(const RuleSet& rs, const std::array<std::uint8_t, N>& bo
         report_refused_pin(rs.op, pin.text, pin.strict);
         miss = Reason::PinRefused;
     }
-    if (restrict_origin) miss = Reason::Pinned;
+    if (restrict_origin) {
+        bool any = false;
+        for (std::size_t t = 0; t < Tiers::size; ++t) any = any || admitted(t);
+        if (any) {
+            miss = Reason::Pinned;
+        } else {
+            report_refused_pin(rs.op, pin.text, pin.strict);
+            restrict_origin = false;
+            miss = Reason::PinRefused;
+        }
+    }
     if (const Rule* r = rs.match(c.key(), c.features())) {
         for (std::uint8_t i = 0; i < r->nrank; ++i) {
             const std::size_t t = bound[r->rank[i].name];

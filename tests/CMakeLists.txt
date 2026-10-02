@@ -442,6 +442,7 @@ add_executable(routing_rules_tests routing_rules_tests.cc)
 batchlas_configure_binary_target(routing_rules_tests LIBRARIES GTest::gtest GTest::gtest_main)
 add_test(NAME routing_rules_tests COMMAND routing_rules_tests)
 set_tests_properties(routing_rules_tests PROPERTIES LABELS "blas" TIMEOUT 1200)
+find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_EXECUTABLE)
     add_test(NAME potrf_rules_header_tests
         COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/evaluation/routing/gen_rules_header.py"

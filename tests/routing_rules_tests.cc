@@ -326,8 +326,12 @@ TEST(RoutingRules, PinsAreHonouredOrRefused) {
     auto nat = routing::parse_pin<Ts>("native", true);
     const auto s3 = routing::select<Ts>(rs, rp::kBound<kB, T>, up64, nat);
     EXPECT_EQ(s3.id(), "native:cta");
-    // Nothing native serves Upper 128: the origin pin has no legal tier at all.
-    EXPECT_THROW((void)routing::select<Ts>(rs, rp::kBound<kB, T>, up, nat), routing::no_route_error);
+    // Nothing native serves Upper 128: the origin pin is refused (strict throws), not dropped.
+    EXPECT_THROW((void)routing::select<Ts>(rs, rp::kBound<kB, T>, up, nat), std::invalid_argument);
+    auto nat_lax = routing::parse_pin<Ts>("native", false);
+    const auto s4 = routing::select<Ts>(rs, rp::kBound<kB, T>, up, nat_lax);
+    EXPECT_EQ(s4.reason, routing::Reason::PinRefused);
+    EXPECT_EQ(s4.id(), "vendor");
 }
 
 // Selection latency: shape build + match + plan, offline (no workspace query).

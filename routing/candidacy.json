@@ -1,5 +1,5 @@
 {
- "_doc": "Which tiers each strategy may RANK for (op, dtype, uplo). Read by compile_rules.py for the model and for the hand transcription alike. A rules file that ranks a tier outside this set fails to compile. A key where the model and the hand windows rank different native tiers fails too unless a waiver names it. evidence: docs/design/routing-rules-as-data.md#candidacy",
+ "_doc": "Which tiers each strategy may RANK for (op, dtype, uplo). Read by compile_rules.py for the model and for the hand transcription alike. A rules file that ranks a tier outside this set fails to compile. A key where the model and the hand windows rank different native tiers fails too unless a waiver names it.",
  "potrf": {
   "tiers": [
    "native:tiny",

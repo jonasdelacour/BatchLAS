@@ -2,7 +2,7 @@
 
 // getrs on the same engine as potrf: a second op is a schema (features {n, nrhs, batch}, key
 // {dtype, trans}), three descriptors and a generated RuleSet. No chooser code is copied.
-// evidence: docs/design/routing-rules-as-data.md
+// See evaluation/routing/compile_rules.py.
 
 #include <batchlas/routing/rules.hh>
 

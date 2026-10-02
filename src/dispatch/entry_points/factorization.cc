@@ -33,6 +33,9 @@
 // only, so the facade can include it in a vendor-free build.
 #include "../../backends/potrf_route.hh"
 #include "../../extensions/potrf_native.hh"
+#if defined(BATCHLAS_ROUTING_RULES_PROTOTYPE)
+#include "../../routing/potrf_tiers.hh"   // potrf routed by rules-as-data
+#endif
 
 #include "../../backends/geqrf_route.hh"
 #include "../../backends/orgqr_route.hh"
@@ -660,6 +663,9 @@ Event potrf(Queue& ctx,
                 Uplo uplo,
                 Span<std::byte> workspace,
                 Span<int32_t> info_out) {
+#if defined(BATCHLAS_ROUTING_RULES_PROTOTYPE)
+    return routing::potrf::potrf_rules<B, T>(ctx, descrA, uplo, workspace, info_out);
+#endif
     potrf_validate_params<T>(descrA, uplo);
 
     // solver_vendor_available, NOT factorization_vendor_available -- see the file header.
@@ -718,6 +724,9 @@ template <Backend B, typename T>
 size_t potrf_buffer_size(Queue& ctx,
                         const MatrixView<T,MatrixFormat::Dense>& A,
                         Uplo uplo) {
+#if defined(BATCHLAS_ROUTING_RULES_PROTOTYPE)
+    return routing::potrf::potrf_rules_buffer_size<B, T>(ctx, A, uplo);   // the tier that runs
+#endif
     potrf_validate_params<T>(A, uplo);
 
     const dispatch::Route route = backend::potrf_route<B, T>(

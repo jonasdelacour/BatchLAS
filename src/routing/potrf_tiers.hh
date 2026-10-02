@@ -2,7 +2,7 @@
 
 // potrf as tier descriptors run by routing::select: legal() is RouteTable::supports verbatim,
 // plan() is the launch-plan geometry, launch() is today's dispatcher. Nothing here prices a
-// route; the policy is the generated RuleSet. evidence: docs/design/routing-rules-as-data.md
+// route; the policy is the generated RuleSet. See evaluation/routing/compile_rules.py.
 
 #include <batchlas/routing/rules.hh>
 

@@ -15,3 +15,9 @@ target_sources(batchlas_dispatch_obj PRIVATE
     entry_points/sparse.cc
     entry_points/eigen.cc
 )
+
+# Prototype: potrf and potrf_buffer_size routed by the generated rules (src/routing/).
+option(BATCHLAS_ROUTING_RULES_PROTOTYPE "Route potrf through routing/rules (prototype)" OFF)
+if(BATCHLAS_ROUTING_RULES_PROTOTYPE)
+    target_compile_definitions(batchlas_dispatch_obj PRIVATE BATCHLAS_ROUTING_RULES_PROTOTYPE)
+endif()
