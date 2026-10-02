@@ -115,6 +115,31 @@ struct CtaTier {
     }
 };
 
+// CTA at work-group scope. No RouteTable arm exists for it: legal() is CTA's correctness gate
+// plus this tier's own geometry, and coverage records it under CTA's Route.
+template <class T>
+struct CtaWgTier {
+    static constexpr std::string_view id = "native:cta_wg";
+    static constexpr dispatch::Route route{Origin::Native, Algorithm::CTA};
+    using Plan = potrf_plan::CtaGeometry;
+    static Plan plan(const Ctx<T>& c, Knobs) {
+        return potrf_plan::cta_wg_geometry<T>(static_cast<int>(c.s.order()), c.s.batch, c.d);
+    }
+    static bool legal(const Ctx<T>& c) {
+        return Tbl<T>::supports(CtaTier<T>::route, c.s) && plan(c, {}).fits;
+    }
+    static std::size_t workspace(const Plan&, const Ctx<T>& c) {
+        return (c.q && c.size_ws) ? sycl_potrf::potrf_cta_buffer_size<T>(*c.q, *c.A) : 0;
+    }
+    static Event launch(const Plan& p, Call<T>& k) {
+        const unsigned want = static_cast<unsigned>(p.G) | (static_cast<unsigned>(p.L) << 16);
+        const unsigned got = sycl_potrf::potrf_cta_wg_debug_launch<T>(
+            k.q, static_cast<int>(k.A.rows()), static_cast<int>(k.A.batch_size()));
+        if (!p.fits || want != got) plan_mismatch("native:cta_wg", want, got);
+        return sycl_potrf::potrf_cta_wg_dispatch<T>(k.q, k.A, k.uplo, k.ws, k.info);
+    }
+};
+
 // Knob 0 = nb (0: the type's default NB).
 template <class T>
 struct LpanelTier {
@@ -222,7 +247,8 @@ struct VendorTier {
 };
 
 template <Backend B, class T>
-using Tiers = TierList<TinyTier<T>, CtaTier<T>, LpanelTier<T>, BlockedTier<B, T>, VendorTier<B, T>>;
+using Tiers = TierList<TinyTier<T>, CtaTier<T>, LpanelTier<T>, BlockedTier<B, T>, VendorTier<B, T>,
+                       CtaWgTier<T>>;
 
 template <Backend B, class T>
 inline constexpr auto kBound = bind<Tiers<B, T>>(potrf_rules::kNames);

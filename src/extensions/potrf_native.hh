@@ -111,6 +111,17 @@ BATCHLAS_INTERNAL_API Event potrf_cta_dispatch(Queue& ctx,
                                                Span<int32_t> info,
                                                int min_blocks_per_sm = resident::kMinBlocksPerSm);
 
+// CTA forced to work-group scope (potrf_plan::cta_wg_geometry): a separate tier.
+template <typename T>
+BATCHLAS_INTERNAL_API unsigned potrf_cta_wg_debug_launch(Queue& ctx, int n, int batch);  // G | L<<16
+
+template <typename T>
+BATCHLAS_INTERNAL_API Event potrf_cta_wg_dispatch(Queue& ctx,
+                                                  const MatrixView<T, MatrixFormat::Dense>& A,
+                                                  Uplo uplo,
+                                                  Span<std::byte> workspace,
+                                                  Span<int32_t> info);
+
 // Trailing-update GEMM, injected to reach the ROUTED gemm; empty means gemm_custom.
 template <typename T>
 using PotrfTrailingGemm = std::function<Event(

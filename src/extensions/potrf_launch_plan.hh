@@ -147,6 +147,23 @@ constexpr CtaGeometry cta_geometry(int n, std::int64_t batch, const DeviceFacts&
     return cta_geometry_raw<C::NB, C::TS>(n, batch, kSzD<T>, kSzR<T>, budget, d.max_wg_size);
 }
 
+// CTA held at WORK-GROUP scope: one matrix per work-group, L >= 64, never packed. The same
+// kernel body the ladder uses above L = 32, offered as its own tier (rules-as-data extension).
+template <typename T>
+constexpr CtaGeometry cta_wg_geometry(int n, std::int64_t batch, const DeviceFacts& d) {
+    CtaGeometry p = cta_geometry<T>(n, batch, d);
+    const std::size_t budget = resident::occupancy_budget(
+        resident::device_slm_budget(d.local_mem_bytes), resident::kMinBlocksPerSm);
+    p.L = std::max(p.L, 64);
+    p.G = 1;
+    p.wg_size = p.L;
+    p.num_wg = batch;
+    p.subgroup_scope = false;
+    p.slm_total = potrf_hole_padded(p.slm_per_matrix);
+    p.fits = (p.slm_total <= budget) && (p.wg_size <= d.max_wg_size);
+    return p;
+}
+
 // The ceiling supports() advertises; the pad is inside the walked function, so this and the
 // launcher's `fits` stay one predicate. slm_budget_bytes is the DEVICE budget.
 template <typename T>

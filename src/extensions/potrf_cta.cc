@@ -253,6 +253,40 @@ Event potrf_cta_dispatch(Queue& ctx,
         ctx, A, upper, info, p, n, batch);
 }
 
+template <typename T>
+unsigned potrf_cta_wg_debug_launch(Queue& ctx, int n, int batch) {
+    const auto p = potrf_plan::cta_wg_geometry<T>(n, batch, potrf_device_facts(ctx.device()));
+    potrf_cta_check_scope(p);
+    if (!p.fits) return 0u;
+    return (static_cast<unsigned>(p.L) << 16) | static_cast<unsigned>(p.G);
+}
+
+template <typename T>
+Event potrf_cta_wg_dispatch(Queue& ctx,
+                            const MatrixView<T, MatrixFormat::Dense>& A,
+                            Uplo uplo,
+                            Span<std::byte> workspace,
+                            Span<int32_t> info_out) {
+    using C = PotrfCtaConst<T>;
+    const int n = static_cast<int>(A.rows());
+    const int batch = static_cast<int>(A.batch_size());
+    if (A.rows() != A.cols() || n < 1 || batch < 1 || A.is_heterogeneous()) {
+        throw batchlas::invalid_argument("potrf_cta_wg: square, non-empty, homogeneous only");
+    }
+    const auto p = potrf_plan::cta_wg_geometry<T>(n, batch, potrf_device_facts(ctx.device()));
+    potrf_cta_check_scope(p);
+    if (!p.fits) {
+        throw batchlas::invalid_argument("potrf_cta_wg: order " + std::to_string(n) +
+                                         " does not fit this device's local memory");
+    }
+    BumpAllocator pool(workspace);
+    Span<int32_t> info = (info_out.size() >= static_cast<std::size_t>(batch))
+                             ? info_out
+                             : potrf_cta_layout<T>(ctx, pool, batch);
+    return potrf_cta_launch<T, C::NB, C::TS, PotrfScope::WorkGroup>(
+        ctx, A, uplo == Uplo::Upper, info, p, n, batch);
+}
+
 // Per scalar type only, no Backend cross-product: the kernel has no Backend parameter.
 #define BATCHLAS_POTRF_CTA_INSTANTIATE(T)                                                   \
     template int potrf_cta_max_n_for_slm<T>(std::size_t, int);                              \
@@ -261,7 +295,10 @@ Event potrf_cta_dispatch(Queue& ctx,
     template std::size_t potrf_cta_buffer_size<T>(Queue&,                                   \
                                                   const MatrixView<T, MatrixFormat::Dense>&); \
     template Event potrf_cta_dispatch<T>(Queue&, const MatrixView<T, MatrixFormat::Dense>&, \
-                                         Uplo, Span<std::byte>, Span<int32_t>, int);
+                                         Uplo, Span<std::byte>, Span<int32_t>, int);       \
+    template unsigned potrf_cta_wg_debug_launch<T>(Queue&, int, int);                       \
+    template Event potrf_cta_wg_dispatch<T>(Queue&, const MatrixView<T, MatrixFormat::Dense>&, \
+                                            Uplo, Span<std::byte>, Span<int32_t>);
 
 BATCHLAS_POTRF_CTA_INSTANTIATE(float)
 BATCHLAS_POTRF_CTA_INSTANTIATE(double)
