@@ -2,6 +2,7 @@
 // committed RuleSets, and resolve_route over the shape the library would build.
 
 #include "../src/routing/potrf_tiers.hh"
+#include "../src/routing/getrs_tiers.hh"
 
 #include <gtest/gtest.h>
 
@@ -194,7 +195,109 @@ TEST(RoutingRules, NoUnrankedTier) {
             }
         }
     }
+    for (auto id : routing::potrf_rules::kPinnableOnly) named.insert(std::string(id));
     for (auto id : Ts::ids) EXPECT_TRUE(named.count(std::string(id))) << id << " is never ranked";
+}
+
+// ---- getrs: the second op, (n, nrhs, batch) x (dtype, trans), hand rules from route_oracle --
+
+namespace {
+
+template <class T>
+dispatch::GetrsShape getrs_shape(int64_t n, int64_t nrhs, int64_t batch, Transpose tr) {
+    dispatch::GetrsShape s;
+    s.op = dispatch::Op::getrs;
+    s.scalar = dispatch::scalar_kind_of<T>;
+    s.backend = kB;
+    s.m = n;
+    s.n = nrhs;
+    s.k = n;
+    s.batch = batch;
+    s.transA = tr;
+    s.is_gpu = true;
+    s.has_sg32 = true;
+    s.blocked_available = sycl_getrs::getrs_blocked_available<T>();
+    if (sycl_getrs::getrs_fused_available<T>()) {
+        s.fused_max_elems =
+            static_cast<int64_t>(sycl_getrs::getrs_fused_max_rhs_elems<T>(101376 - 4096));
+        s.fused_max_nrhs = sycl_getrs::kGetrsFusedMaxRhs;
+    }
+    return s;
+}
+
+std::string getrs_name(Route r) {
+    if (dispatch::is_vendor(r)) return "vendor";
+    return r.algo == dispatch::Algorithm::CTA ? "native:fused" : "native:blocked";
+}
+
+template <class T>
+int getrs_compare(int64_t n, int64_t r, int64_t b, Transpose tr, bool verbose) {
+    namespace rg = batchlas::routing::getrs;
+    int bad = 0;
+    for (bool vendor : {true, false}) {
+        rg::Ctx<T> c;
+        c.s = getrs_shape<T>(n, r, b, tr);
+        c.vendor_legal = vendor;
+        const auto want = getrs_name(
+            dispatch::resolve_route_uninstrumented<dispatch::Op::getrs, T>(Route{}, c.s, vendor));
+        std::string got;
+        try {
+            got = std::string(rg::select_ctx<kB, T>(c).id());
+        } catch (const routing::no_route_error&) {
+            got = "vendor";
+        }
+        if (want != got) {
+            ++bad;
+            if (verbose) {
+                std::printf("GETRS MISMATCH n=%lld nrhs=%lld b=%lld vendor=%d: today %s rules %s\n",
+                            static_cast<long long>(n), static_cast<long long>(r),
+                            static_cast<long long>(b), vendor, want.c_str(), got.c_str());
+            }
+        }
+    }
+    return bad;
+}
+
+}  // namespace
+
+TEST(RoutingRulesGetrs, MatchesResolver) {
+    const int64_t ns[] = {1, 2, 31, 32, 33, 64, 100, 127, 128, 129, 512, 1000, 2048, 3000, 4096, 9000};
+    const int64_t rs[] = {1, 2, 3, 4, 5, 8, 9, 16, 63, 64, 65, 127, 128, 129, 1000};
+    const int64_t bs[] = {1, 64, 127, 128, 129, 1000, 65536, 2000000};
+    int cells = 0, bad = 0;
+    for (Transpose tr : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans}) {
+        for (int64_t n : ns) {
+            for (int64_t r : rs) {
+                for (int64_t b : bs) {
+                    cells += 8;
+                    bad += getrs_compare<float>(n, r, b, tr, bad < 10);
+                    bad += getrs_compare<double>(n, r, b, tr, bad < 10);
+                    bad += getrs_compare<std::complex<float>>(n, r, b, tr, bad < 10);
+                    bad += getrs_compare<std::complex<double>>(n, r, b, tr, bad < 10);
+                }
+            }
+        }
+    }
+    std::mt19937_64 rng(5);
+    std::uniform_real_distribution<double> lg(0, 13), lb(0, 21);
+    for (int i = 0; i < 20000; ++i) {
+        const int64_t n = std::max<int64_t>(1, static_cast<int64_t>(std::pow(2.0, lg(rng))));
+        const int64_t r = std::max<int64_t>(1, static_cast<int64_t>(std::pow(2.0, lg(rng))));
+        const int64_t b = std::max<int64_t>(1, static_cast<int64_t>(std::pow(2.0, lb(rng))));
+        const Transpose tr = (i % 3 == 0) ? Transpose::NoTrans : (i % 3 == 1 ? Transpose::Trans
+                                                                            : Transpose::ConjTrans);
+        cells += 2;
+        switch (i % 4) {
+            case 0: bad += getrs_compare<float>(n, r, b, tr, bad < 10); break;
+            case 1: bad += getrs_compare<double>(n, r, b, tr, bad < 10); break;
+            case 2: bad += getrs_compare<std::complex<float>>(n, r, b, tr, bad < 10); break;
+            default: bad += getrs_compare<std::complex<double>>(n, r, b, tr, bad < 10); break;
+        }
+    }
+    std::printf("getrs: %d decisions, %d mismatches; %zu rules\n", cells, bad,
+                static_cast<std::size_t>(routing::getrs_rules::k_hand.end -
+                                         routing::getrs_rules::k_hand.begin));
+    EXPECT_EQ(bad, 0);
 }
 
 // Pins: an illegal pin is refused loudly (strict throws) and the rules decide; a legal pin wins.

@@ -4,7 +4,10 @@
 
 namespace batchlas::routing::potrf_rules {
 
+// key = dtype * 2 + index of ['L', 'U']; features = ['n', 'batch']
 inline constexpr std::array<std::string_view, 5> kNames{"native:tiny", "native:cta", "native:lpanel", "native:blocked", "vendor"};
+// Registered tiers that no rule ranks ON PURPOSE (pinnable, never auto-chosen).
+inline constexpr std::array<std::string_view, 1> kPinnableOnly{"native:cta_wg"};
 
 inline constexpr Rule k_hand_rules[] = {
     {1u, 0, {1, 1, 0, 0}, {32, kInf, 0, 0}, {Candidate{0, {}}, Candidate{4, {}}}, 2, Source::Hand},

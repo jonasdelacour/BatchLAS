@@ -125,6 +125,79 @@
     "only_in": "model",
     "reason": "the hand windows give CTA only to float/cfloat Lower 33..35 (Upper: Tiny-only with a vendor); the model ranks CTA wherever it is cheapest."
    }
+  ],
+  "pinnable_only": [
+   "native:cta_wg"
   ]
+ },
+ "getrs": {
+  "tiers": [
+   "native:fused",
+   "native:blocked",
+   "vendor"
+  ],
+  "candidates": {
+   "float/N": [
+    "native:fused",
+    "native:blocked",
+    "vendor"
+   ],
+   "float/T": [
+    "native:fused",
+    "native:blocked",
+    "vendor"
+   ],
+   "float/C": [
+    "native:fused",
+    "native:blocked",
+    "vendor"
+   ],
+   "double/N": [
+    "native:fused",
+    "native:blocked",
+    "vendor"
+   ],
+   "double/T": [
+    "native:fused",
+    "native:blocked",
+    "vendor"
+   ],
+   "double/C": [
+    "native:fused",
+    "native:blocked",
+    "vendor"
+   ],
+   "cfloat/N": [
+    "native:fused",
+    "native:blocked",
+    "vendor"
+   ],
+   "cfloat/T": [
+    "native:fused",
+    "native:blocked",
+    "vendor"
+   ],
+   "cfloat/C": [
+    "native:fused",
+    "native:blocked",
+    "vendor"
+   ],
+   "cdouble/N": [
+    "native:fused",
+    "native:blocked",
+    "vendor"
+   ],
+   "cdouble/T": [
+    "native:fused",
+    "native:blocked",
+    "vendor"
+   ],
+   "cdouble/C": [
+    "native:fused",
+    "native:blocked",
+    "vendor"
+   ]
+  },
+  "waivers": []
  }
 }

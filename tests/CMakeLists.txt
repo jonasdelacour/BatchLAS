@@ -458,6 +458,8 @@ foreach(_probe good bad)
 endforeach()
 target_compile_definitions(routing_rules_bind_bad PRIVATE ROUTING_BIND_BAD)
 set_tests_properties(routing_rules_bind_bad PROPERTIES WILL_FAIL TRUE)
+add_executable(route_oracle ${PROJECT_SOURCE_DIR}/evaluation/routing/route_oracle.cc)
+batchlas_configure_binary_target(route_oracle)
 add_executable(potrf_rules_gpu
     ${PROJECT_SOURCE_DIR}/experiments/kernel_selection/rules-as-data/potrf_rules_gpu.cc)
 batchlas_configure_binary_target(potrf_rules_gpu)
