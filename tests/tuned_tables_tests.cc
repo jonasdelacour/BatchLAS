@@ -4,6 +4,7 @@
 
 #include <batchlas/util/env.hh>
 
+#include "../src/ops/posv/choice.hh"
 #include "../src/ops/potrf/choice.hh"
 #include "../src/select/select.hh"
 
@@ -12,6 +13,7 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -39,6 +41,13 @@ std::vector<std::string> candidates(const std::string& op, const std::string& dt
         if (dtype == "double") return spellings(potrf::candidates<double>());
         if (dtype == "cfloat") return spellings(potrf::candidates<std::complex<float>>());
         if (dtype == "cdouble") return spellings(potrf::candidates<std::complex<double>>());
+    }
+    namespace posv = batchlas::ops::posv;
+    if (op == "posv") {
+        if (dtype == "float") return spellings(posv::candidates<float>());
+        if (dtype == "double") return spellings(posv::candidates<double>());
+        if (dtype == "cfloat") return spellings(posv::candidates<std::complex<float>>());
+        if (dtype == "cdouble") return spellings(posv::candidates<std::complex<double>>());
     }
     return {};
 }
@@ -156,18 +165,22 @@ TEST(TunedTables, TranscribedRowsSkipTheTieRuleButNotTheSpellingCheck) {
                                                                   "line 3: times not ascending after the tie band"}));
 }
 
-// choice.hh's key_names is the spec every potrf table declares, weights included.
-TEST(TunedTables, PotrfTablesDeclareChoiceKeyNames) {
+// choice.hh's key_names is the spec every table of that op declares, weights included.
+template <class Names>
+void expect_tables_declare(const std::string& op, const Names& names) {
     std::string want = "# keys:";
-    for (auto k : batchlas::ops::potrf::key_names) want += " " + std::string(k);
+    for (auto k : names) want += " " + std::string(k);
     int seen = 0;
     for (const auto& e : sel::embedded_tables()) {
-        if (std::string_view(e.name).rfind("potrf.", 0) != 0) continue;
+        if (std::string_view(e.name).rfind(op + ".", 0) != 0) continue;
         EXPECT_NE(std::string(e.text).find("\n" + want + "\n"), std::string::npos) << e.name;
         ++seen;
     }
-    EXPECT_GT(seen, 0);
+    EXPECT_GT(seen, 0) << op;
 }
+
+TEST(TunedTables, PotrfTablesDeclareChoiceKeyNames) { expect_tables_declare("potrf", batchlas::ops::potrf::key_names); }
+TEST(TunedTables, PosvTablesDeclareChoiceKeyNames) { expect_tables_declare("posv", batchlas::ops::posv::key_names); }
 
 const sel::Table& embedded(const std::string& name) {
     static std::map<std::string, sel::Table> cache;
@@ -177,6 +190,27 @@ const sel::Table& embedded(const std::string& name) {
             if (e.name == name) it = cache.emplace(name, sel::parse_table(e.text, e.name)).first;
     if (it == cache.end()) throw std::runtime_error(name + " is not embedded");
     return it->second;
+}
+
+// The transcriber spells choice.hh's grid by hand (it builds against the deleted router), so
+// each transcribed sm_89 posv table must hold exactly one row per grid cell, both triangles.
+TEST(TunedTables, PosvSm89TablesHoldExactlyTheChoiceGrid) {
+    namespace posv = batchlas::ops::posv;
+    std::set<std::string> want;
+    for (const char* u : {"L", "U"})
+        for (int n : posv::grid_n)
+            for (int r : posv::grid_nrhs)
+                for (int b : posv::grid_batch)
+                    want.insert(std::string(u) + " " + std::to_string(n) + " " + std::to_string(r) + " " +
+                                std::to_string(b));
+    for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
+        const sel::Table& t = embedded(std::string("posv.") + dt + ".sm_89.txt");
+        std::set<std::string> got;
+        for (const auto& row : t.rows)
+            got.insert(row.keys[0] + " " + row.keys[1] + " " + row.keys[2] + " " + row.keys[3]);
+        EXPECT_EQ(got, want) << dt;
+        EXPECT_EQ(t.rows.size(), want.size()) << dt;
+    }
 }
 
 // The sparse sm_89 tables (final-review finding): with equal weights, float n=24 batch=512

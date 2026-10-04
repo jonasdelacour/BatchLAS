@@ -489,7 +489,7 @@ void pop_pin(std::string_view op) {
 }
 
 bool trace_open(std::string_view op, const std::string& spelling, bool vendor, const dispatch::OpShape& shape,
-                const NativeFacts& facts) {
+                const NativeFacts& facts, const Key& fields) {
     if (dispatch::coverage::dynamic_enabled()) {
         if (const auto o = op_from_name(op)) {
             dispatch::OpShape s = shape;
@@ -501,8 +501,10 @@ bool trace_open(std::string_view op, const std::string& spelling, bool vendor, c
     if (!trace_enabled()) return false;
     const auto dec = std::find_if(t_decisions.begin(), t_decisions.end(),
                                   [&](const Decision& d) { return d.op == op && d.spelling == spelling; });
-    std::string line = indent() + std::string(op) + " " + std::string(dtype_from_scalar(shape.scalar)) +
-                       " n=" + std::to_string(shape.n) + " batch=" + std::to_string(shape.batch) + " -> " + spelling;
+    std::string line = indent() + std::string(op) + " " + std::string(dtype_from_scalar(shape.scalar));
+    if (fields.empty()) line += " n=" + std::to_string(shape.n) + " batch=" + std::to_string(shape.batch);
+    for (const KeyField& f : fields) line += " " + f.name + "=" + f.value;
+    line += " -> " + spelling;
     if (dec != t_decisions.end()) {
         if (!dec->detail.empty()) line += "  " + dec->detail;
         line += "  [" + dec->tag + "]";

@@ -44,6 +44,7 @@
 #include <batchlas/settings.hh>
 
 #include "../src/extensions/potrf_native.hh"
+#include "../src/ops/posv/choice.hh"
 #include "../src/ops/potrf/choice.hh"
 
 #include <lapacke.h>
@@ -227,22 +228,26 @@ static const char* op_text(OpKind k) {
 // pre-main snapshot, so a raw ::setenv is invisible to it and only
 // ScopedEnvVar's reload_settings() makes the pin readable at all.
 //
-// potrf has migrated to flat selection (src/ops/potrf/): its pins are choice spellings
-// (`lpanel:panel=8`), the legacy aliases (`native:lpanel`) or auto/native/vendor, and a
-// pin that cannot run THROWS instead of falling through. Its coverage rows carry the
-// spelling in chosen_algo, so the readback reads e.g. `native:lpanel:panel=8`.
-static bool potrf_pin_parsed(std::string text) {
+// potrf and posv have migrated to flat selection (src/ops/<op>/): their pins are choice
+// spellings (`lpanel:panel=8`, `cta`), the legacy aliases (`native:lpanel`) or
+// auto/native/vendor, and a pin that cannot run THROWS instead of falling through. Their
+// coverage rows carry the spelling in chosen_algo, so the readback reads e.g.
+// `native:lpanel:panel=8`.
+template <class Choice, class Aliases>
+static bool select_pin_parsed(std::string text, const Aliases& aliases) {
     for (char& ch : text) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
     if (text == "auto" || text == "native" || text == "vendor") return true;
-    for (const auto& a : ops::potrf::aliases)
+    for (const auto& a : aliases)
         if (text == a.name) return true;
-    return select::parse<ops::potrf::PotrfChoice>(text).has_value();
+    return select::parse<Choice>(text).has_value();
 }
 
 static bool pin_parsed_now(OpKind k) {
-    if (k == OpKind::potrf) {
-        const char* raw = settings().routing.canonical_route(dispatch::Op::potrf).get();
-        return raw != nullptr && potrf_pin_parsed(raw);
+    if (k == OpKind::potrf || k == OpKind::posv) {
+        const char* raw = settings().routing.canonical_route(dispatch_op(k)).get();
+        if (raw == nullptr) return false;
+        return k == OpKind::potrf ? select_pin_parsed<ops::potrf::PotrfChoice>(raw, ops::potrf::aliases)
+                                  : select_pin_parsed<ops::posv::PosvChoice>(raw, ops::posv::aliases);
     }
     const auto p = dispatch::parse_route_env(dispatch_op(k));
     return p.found && !p.unparsed;

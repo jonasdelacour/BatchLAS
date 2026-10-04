@@ -8,6 +8,14 @@ the first runnable entry of the nearest row. Format, lookup and borrowing rules:
 
 These files are plain git, not LFS, so that table changes stay readable in diffs.
 
+## What is here
+
+| op | device | source | file |
+|---|---|---|---|
+| potrf | sm_120, sm_89 | converted route sweeps (timed) | `potrf.<dtype>.<device>.txt` |
+| posv | sm_89 | **transcribed** old router, untimed (`source=transcribed:7e71a6e0`) | `posv.<dtype>.sm_89.txt`, from `transcribed/posv.sm_89.csv` |
+| posv | sm_120 | none yet: the sweep `benchmarks/results/routing/sm120_posv_sweep.jsonl` is converted later; until then sm_120 borrows the sm_89 posv tables and warns once | — |
+
 ## How they are produced
 
 The current `potrf.*` tables are seed tables, converted from the forced-route sweeps in
@@ -27,10 +35,24 @@ sha must be hex (`--sha` is resolved with `git rev-parse`); a table may hold bot
 C++ loader and `--check` both apply exactly these rules. The converter's module docstring documents both input schemas and
 how to add an op.
 
+The posv sm_89 tables are the first transcribed ones. `tools/transcribe/posv_transcribe.cc` is
+built host-only against a checkout that still has `route_posv.hh` (its header gives the g++ line)
+and evaluates that router's own predicates at every cell of the `src/ops/posv/choice.hh` grid,
+so a row reads `tiny - | cta - | blocked -` inside the old tiny window and `cta - | blocked -`
+elsewhere. Transcriber CSVs live in `transcribed/` (plain git; the embed only reads `*.txt` at
+this level). Regenerate with
+
+    g++ -std=c++20 -I$OLD/include -I$OLD/build/include tools/transcribe/posv_transcribe.cc -o /tmp/pt
+    /tmp/pt sm_89 > tuned/transcribed/posv.sm_89.csv
+    python3 scripts/sweep_to_table.py --transcribe tuned/transcribed/posv.sm_89.csv --sha 7e71a6e0
+
+A transcribed row reproduces a deleted window; it is not a measurement. It is replaced by a timed
+row when the tuner sweeps that device.
+
 ## Staleness
 
-Every converted table says `kernels=unknown` and is therefore reported stale. That is intended:
-they stay stale until phase 4, when `tools/tune` retunes potrf on each device and stamps the
-kernel-source hash. sm_89 tables come from an archive across several kernel eras (only
+Every converted or transcribed table says `kernels=unknown` and is therefore reported stale. That
+is intended: they stay stale until phase 4, when `tools/tune` retunes each op on each device and
+stamps the kernel-source hash. The potrf sm_89 tables come from an archive across several kernel eras (only
 `kernel_current` rows are kept) and have no `lpanel` timings at all; `Lpanel{16}` has never been
 timed on any device.

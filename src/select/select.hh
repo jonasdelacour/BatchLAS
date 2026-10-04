@@ -276,8 +276,9 @@ BATCHLAS_API std::optional<std::string> pin_text(std::string_view op, std::strin
 BATCHLAS_API void push_pin(std::string_view op, std::string text);
 BATCHLAS_API void pop_pin(std::string_view op);
 struct NativeFacts;
+// `fields` is what the trace line prints after the dtype; empty means the shape's n and batch.
 BATCHLAS_API bool trace_open(std::string_view op, const std::string& spelling, bool vendor,
-                             const dispatch::OpShape& shape, const NativeFacts& facts);
+                             const dispatch::OpShape& shape, const NativeFacts& facts, const Key& fields);
 BATCHLAS_API void trace_close();
 
 // A bad spelling in a table is a build defect, so it fails loudly on first use.
@@ -450,12 +451,14 @@ NativeFacts native_facts(const std::array<Choice, N>& candidates, CanRun&& can_r
 // Prints the last choose() decision for `op` under BATCHLAS_SELECT_TRACE=1, indents nested
 // scopes, and records the coverage row. The shape is required: with coverage on and trace
 // off no decision is noted, so scalar, backend and uplo can come from nowhere else.
+// `fields` are the key fields the line shows (posv: n, nrhs, batch); empty prints n and batch.
 class TraceScope {
 public:
     template <class Choice>
-    TraceScope(std::string_view op, const Choice& c, const dispatch::OpShape& shape, NativeFacts facts = {}) {
+    TraceScope(std::string_view op, const Choice& c, const dispatch::OpShape& shape, NativeFacts facts = {},
+               const Key& fields = {}) {
         if (detail::trace_enabled() || dispatch::coverage::dynamic_enabled())
-            active_ = detail::trace_open(op, to_string(c), family_of(c) == "vendor", shape, facts);
+            active_ = detail::trace_open(op, to_string(c), family_of(c) == "vendor", shape, facts, fields);
     }
     ~TraceScope() {
         if (active_) detail::trace_close();

@@ -1,7 +1,9 @@
 # Flat kernel selection
 
 Status: **phases 1-2 implemented on branch worktree-flat-select (2026-10-04). §10 gate: passed on
-sm_120; the sm_89 live gate (needs the RTX 4090 box) is still open. See §12 "Gate results".**
+sm_120; the sm_89 live gate (needs the RTX 4090 box) is still open. See §12 "Gate results".
+Phase 3: P3.0 (select infrastructure) and P3.1 (posv, sm_89 table transcribed, sm_120 table pending)
+are built; see §12 and §13.**
 Plan agreed 2026-10-02; deviations from the sketch are in §12. Written against `main` at `a1063892`. It is meant
 to be executed from `main` in a fresh session, phase by phase. Nothing here depends on PRs #133,
 #135 or #136, or on any branch other than `main`. The only exception is the potrf route-sweep
@@ -656,15 +658,16 @@ The sm_89 gate needs the RTX 4090 box. The sm_120 gate needs the Blackwell box (
 - **The CPU backend runs no native potrf tier on `main`.** Tuning it is still worth doing for
   ops whose native kernels do run on host queues. It does not add native potrf coverage to CPU
   CI.
-- **`posv` calls the potrf tier drivers directly** (`factorization.cc:871,876`). It keeps working
-  through phase 2 and migrates first in phase 3.
+- ~~**`posv` calls the potrf tier drivers directly**~~ (struck, P3.1): it never did. posv calls the
+  public `potrf` and `trsm`; its only direct driver calls are its own kernels. It is migrated in
+  `src/ops/posv/` (§13).
 - **Stale comments on `main`** to fix when touching these files:
   - `potrf_native.hh:4` ("preferred() is false for every tier");
   - `coverage.cc:195` (LPanel missing);
   - `potrf.hh:51-53` (wrong `options.hh` line numbers);
   - `factorization.cc:727-730` ("both tiers").
 
-## 12. As built (phases 1-2)
+## 12. As built (phases 1-3)
 
 Where the code differs from the sketches above, the code wins. These are the differences.
 
@@ -767,6 +770,72 @@ Where the code differs from the sketches above, the code wins. These are the dif
   `nearest()` mirrors it.
 - **Untimed rows** (`<spelling> -`) and `source=transcribed:<hex sha>` (§5.4, §13).
 - **`Device::has_vendor_blas`** beside `has_vendor_solver`, both part of `describe()`'s memo key.
+
+**Phase 3.1, posv** (`src/ops/posv/{choice.hh,posv.cc}`, plan §1.1):
+- Families `Tiny`, `Cta`, `Blocked`, all `NoFields`, the same for every dtype; aliases
+  `native:{tiny,cta,blocked}`; `last_resort {"blocked"}`; `# keys: uplo:exact n:log:3 nrhs:log batch:log`.
+  No vendor family: bare `native` is Auto, `vendor` warns and falls back to Auto. The old names are
+  kept, so `factor_bench`, `run_solve_grid.sh` and benchviz needed no vocabulary change.
+- **New `can_run` term: Tiny requires `d.max_wg >= kPosvTinyWgSize` (64).** The old `supports()`
+  lacked the driver's own work-group check (`posv_tiny.cc`), so on a device with `max_wg < 64` Auto
+  could pick a driver that then throws. `kPosvTinyWgSize` lives in the sycl-free `solve_native.hh`, with a
+  `static_assert(kTinyWg == kPosvTinyWgSize)` in `posv_tiny.cc` (the `kPotrfTinyWgSize` precedent).
+  Cta's clause and the common `native` term are the old ones unchanged.
+- **sm_89 tables are transcribed, untimed** (§13). `tools/transcribe/posv_transcribe.cc` builds
+  host-only with g++ against a tree that still has `route_posv.hh` (`7e71a6e0`). It specialises
+  `RouteTable` for a private `Op` value that forwards to the real `RouteTable<Op::posv, T>` but
+  reports already-ranked routes as unsupported, then calls the real
+  `resolve_route_uninstrumented(Auto, s, vendor_available = false)` repeatedly per cell, so the
+  order comes from the deleted predicates, not a hand list. Capacities are unlimited, the device is a
+  sub-group-32 GPU; the list stops after `blocked` (always runnable). Output:
+  `tuned/transcribed/posv.sm_89.csv` (7920 rows, plain git, not LFS) and
+  `tuned/posv.{float,double,cfloat,cdouble}.sm_89.txt` (1980 rows each, `source=transcribed:7e71a6e0`).
+  Rows are `tiny | cta | blocked` inside the old `tiny_window` (float/double 720, cfloat 680,
+  cdouble 480 rows) and `cta | blocked` elsewhere. Rebuilding the transcriber reproduces the CSV
+  md5; `scripts/sweep_to_table.py --check` passes.
+- **sm_120 posv table pending.** It comes from `benchmarks/results/routing/sm120_posv_sweep.jsonl`,
+  still running when P3.1 was written, and is converted separately. Until then an sm_120 device
+  borrows the sm_89 transcription with the R8 warning, and no test asserts sm_120 posv rows.
+- Cross-check: on 22 sm_120 cells (four dtypes, both uplo, the window edges cfloat n = 24/28 at
+  nrhs 2 vs 4, cdouble n = 16 vs 20, float n = 32 vs 36, nrhs 8/16/64, float n = 1024 and cdouble
+  n = 256) the coverage `reached` rows of the new build equal the parent build's. Off-grid cells
+  use nearest-row lookup and can differ from the old thresholds at window edges (cfloat n = 25, 26
+  at nrhs <= 2); those are what the sm_89 gate times.
+- Deleted: `include/batchlas/blas/dispatch/route_posv.hh` (installed header),
+  `src/backends/posv_route.hh`, and posv's half of `SOLVE_ONE` in `factorization.cc`.
+  `Op::posv` stays in the enum until phase 5.
+- **Implementer deviations from plan §1.1:**
+  - **Embed generator (P3.0 infrastructure).** With ~0.5 MB of tables, `constexpr EmbeddedTable
+    kTables[]` exceeded clang's constexpr step limit (building a `string_view` from a literal runs
+    strlen at compile time). `cmake/BatchLASEmbedTables.cmake` now emits one `constexpr char kTextN[]`
+    per table, with the length taken from `sizeof`.
+  - **Empty shapes** (n, nrhs or batch 0) and **heterogeneous batches** (active dims on A or B) still
+    throw `batchlas::internal_error`, from an explicit `throw_if_unservable` before `choose()`; the type
+    is unchanged, the message is new. `can_run(Blocked)` is `homogeneous`, not the plan's `true`: the
+    plan's premise that a failing child surfaces its own error does not hold here, because vendor
+    `potrf` and `trsm` accept a heterogeneous batch and solve at the full storage order (known-defects
+    [#12](known-defects.md#12-vendor-potrf-and-trsm-accept-a-heterogeneous-batch)).
+    Under the first draft (`true`) such a call ran silently instead of throwing.
+  - **Trace line.** `TraceScope` and `detail::trace_open` take an optional `const Key& fields`; empty
+    prints `n= batch=` as before, posv passes `{n, nrhs, batch}`.
+  - **Coverage** records posv's `reached` row at launch only, not in `posv_buffer_size` (as potrf),
+    so a solve's `calls` count drops by one.
+  - **Tests.** `tests/posv_candidates_tests.cc` (ctest label `blas`) holds the §8 suite: pinned
+    straddles of every limit, Cta launched at exactly `getrs_fused_max_rhs_elems` and refused one
+    past it, each pin bit-for-bit against the direct kernels, a saturating batch of 1024, the exact
+    workspace in a poisoned arena, the pin rules, `AutoReadsEveryKeyField` on a synthetic table, the
+    coverage native flags, and `HeterogeneousBatchIsRefusedUnderEveryPin` (A-only and B-only
+    heterogeneous, Auto and every pin, `posv` and `posv_buffer_size`). P6
+    `TinyRefusesShapesAboveItsCeilings` is deleted from `posv_tests.cc`; `CanRunEqualsLaunch`
+    absorbs it. P7 is deleted; P7b pins posv with `ScopedPin(Cta{})` and potrf with
+    `ScopedPin<PotrfChoice>("potrf", "native")`, without the readback; P8 pins `ScopedPin(Blocked{})`.
+    Known gaps: the Tiny `max_wg` gate cannot go red on hardware whose `max_wg >= 64` (the predicate
+    sees only the real device, as potrf's `kPotrfTinyWgSize` gate), and no test runs posv on NETLIB
+    (the fixture is GPU-only). `tuned_tables_tests` gains `PosvTablesDeclareChoiceKeyNames` and
+    `PosvSm89TablesHoldExactlyTheChoiceGrid`; the second exists because the transcriber spells the
+    `choice.hh` grid by hand (it cannot include `select.hh`).
+  - `factor_bench`'s posv pins go through select via a `select_pin_parsed<Choice>` shared with potrf;
+    a refused pin is that arm's `bad=1` row.
 
 **Behaviour changes visible to callers:**
 - A bad pin throws. `factor_bench`'s posv `composed` arm therefore pins potrf to `tiny` only up to

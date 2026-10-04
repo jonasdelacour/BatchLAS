@@ -47,6 +47,8 @@ namespace batchlas::sycl_posv {
 
 inline constexpr int kPosvTinyMaxRhs = 4;
 
+inline constexpr int kPosvTinyWgSize = 64;  // posv_tiny_dispatch refuses a smaller max work-group
+
 template <typename T>
 BATCHLAS_INTERNAL_API int posv_tiny_max_n();
 

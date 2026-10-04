@@ -72,7 +72,7 @@ grid_n      = potrf grid_n ∩ [1,1024];  grid_nrhs {1,2,4,8,16,64};  grid_batch
 |---|---|---|
 | Tiny | `native && n <= posv_tiny_max_n<T>()` (16 for cdouble, else 32) `&& nrhs <= kPosvTinyMaxRhs` (4) `&& d.max_wg >= kPosvTinyWgSize` | `posv_tiny.cc:463-504`. The last term is **new**: today `supports()` (`route_posv.hh:47-55`) lacks the `:487-490` check. Add a sycl-free `kPosvTinyWgSize` in `solve_native.hh`, plus a `static_assert` against `kTinyWg` (`posv_tiny.cc:46`), following the `kPotrfTinyWgSize` precedent. |
 | Cta | `native && nrhs <= kGetrsFusedMaxRhs` (8) `&& n*nrhs <= getrs_fused_max_rhs_elems<T>(d.slm_budget)` | `getrs_fused.cc:976-998`. `d.slm_budget` equals `LOCAL_MEM-4096`, the same budget `posv_route.hh:61-62` uses. |
-| Blocked | `true` once `posv_validate_params` has passed | It has no checks of its own. A failing child surfaces as the child's own error (§3 "each op decides for itself"; option (a) in the posv map). |
+| Blocked | `true` once `posv_validate_params` has passed | It has no checks of its own. A failing child surfaces as the child's own error (§3 "each op decides for itself"; option (a) in the posv map). **As built: `!A.het && !B.het`**, because vendor potrf/trsm do not fail on a heterogeneous batch, they solve at the full order (flat-kernel-selection.md §12, Phase 3.1). |
 
 - Empty shapes (n=0 or nrhs=0) need a decision. Today the call reaches `solve_throw_unroutable`. Keep that, as an explicit early throw before `choose()`. Do not add a silent no-op.
 

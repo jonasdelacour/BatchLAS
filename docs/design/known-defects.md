@@ -35,6 +35,7 @@ The superseded root documents these were filed in are preserved at the git tag
 | 9 | `src/backends/syr2k_custom_dispatch.cc:210` | a forced native `syr2k` throws a cuBLASDx message it did not ask for | misleading diagnostic |
 | 10 | grid `latrd` (`src/extensions/latrd_lower_panel.cc`, the grid kernel's column-update / sumsq pair) | a cross-sub-group read-after-write on `Ab(r, i)` with no barrier between the two loops | **fixed; armed 20/20 red on deletion under the amplified geometry; residual rate at the default geometry not bounded** |
 | 11 | `src/sycl/gemm/epilogue_linear.hh`, `src/sycl/gemm_kernels.cc` (`launch_direct`) | native GEMM reads `C` at `beta == 0` | `NaN` from an unzeroed arena; worked around in `geqrf_blocked` |
+| 12 | `src/ops/potrf/potrf.cc` (`can_run(Vendor)`), `src/backends/cusolver.cc:72-77`, `route_trsm.hh:36` | vendor `potrf` and vendor `trsm` accept a heterogeneous batch and run at the full storage order | silent wrong answer on a direct heterogeneous call; posv refuses it upstream |
 
 ## 1. `ortho`'s transposed arm builds a view that does not describe the memory
 
@@ -471,6 +472,24 @@ panels read finite values.
 for both (the test then passes for all four types), and dropped it because `gemm_kernels.cc`
 belongs to `gemm`. The epilogue branch needs a gemm timing A/B before it ships. When it lands,
 delete the memset in `geqrf_blocked.cc`; the test stays as the guard.
+
+## 12. Vendor potrf and trsm accept a heterogeneous batch
+
+potrf's `can_run(Vendor)` is `d.has_vendor_solver` with no heterogeneity term (the native families
+carry `!A.is_heterogeneous()`), and `potrf_vendor` (`src/backends/cusolver.cc:72-77`) passes
+`descrA.rows()`, the full storage order, to `cusolverDn?potrf[Batched]`. `RouteTable<Op::trsm>`
+returns true for any vendor route (`route_trsm.hh:36`) before its heterogeneous gate (`:43`), and the
+cuBLAS trsm path has no active-dims handling either. A heterogeneous call therefore factors and
+solves the padded matrix with no error: the leading block of a Cholesky factor is still right, but
+the backward `L^H` solve couples the active rows to the padding through `L21`.
+
+Found during the P3.1 posv migration, whose first draft made `can_run(Blocked)` unconditional and so
+turned posv's old `internal_error` on a heterogeneous batch into exactly this silent answer. posv now
+refuses heterogeneous A or B before `choose()` (`throw_if_unservable` in `src/ops/posv/posv.cc`,
+test `PosvCandidates.HeterogeneousBatchIsRefusedUnderEveryPin`). The potrf and trsm gaps themselves
+are unfixed: the fix is a `!A.is_heterogeneous()` term on potrf's Vendor `can_run` (or a per-item
+loop) and a heterogeneity check before the vendor short-circuit in `route_trsm.hh`, each a routing
+change for its own phase. No test constructs a heterogeneous potrf or trsm.
 
 ## One filed claim that did not survive re-checking
 

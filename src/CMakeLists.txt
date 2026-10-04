@@ -152,7 +152,7 @@ add_custom_command(
 target_sources(batchlas_dispatch_obj PRIVATE select/select.cc "${BATCHLAS_TUNED_TABLES_CC}")
 # Migrated ops (src/ops/<op>/<op>.cc): each holds its op's public entry points, so it sits
 # in the facade library next to entry_points/. Includes are relative, as for src/select.
-target_sources(batchlas_dispatch_obj PRIVATE ops/potrf/potrf.cc)
+target_sources(batchlas_dispatch_obj PRIVATE ops/potrf/potrf.cc ops/posv/posv.cc)
 add_subdirectory(extensions)
 add_subdirectory(util)
 add_subdirectory(extra)

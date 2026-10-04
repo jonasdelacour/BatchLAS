@@ -476,7 +476,9 @@ n=512 b=512; cfloat half that). Routes were confirmed with `BATCHLAS_COVERAGE_OU
 and its `native_tier_preferred` cap. potrf now takes the first runnable entry of the nearest row of
 `tuned/potrf.<dtype>.sm_120.txt`, converted from the sm_120 route sweeps
 ([potrf.md](potrf.md#selection-since-flat-kernel-selection-phase-2)). The kernel and tuning-constant
-results stand; the posv windows are still `RouteTable` routing.
+results stand. posv's `RouteTable` windows are deleted too: posv reads `tuned/posv.<dtype>.<device>.txt`
+([potrf.md](potrf.md#posv-selection-since-flat-kernel-selection-phase-3)); sm_120 has no posv table yet and borrows
+the transcribed sm_89 one until its sweep is converted.
 
 ### potrf LPanel vector sB
 
@@ -589,7 +591,7 @@ The remaining posv losses are nrhs > 8 at small n (float 32/16 0.52, 64/16 0.68,
 0.79), which run `potrf=tiny|lpanel` plus the native trsm. Pinning only
 `BATCHLAS_TRSM_ROUTE=vendor` makes the same composition 1.26x faster than the vendor
 arm at 32/16 and 1.09x at 128/16, so the whole loss is the trsm kernel, which the trsm
-package owns. posv routing is left unchanged.
+package owns. posv routing was left unchanged here (it has since moved to flat selection, see above).
 
 ## LU (getrf, getrs, gesv)
 

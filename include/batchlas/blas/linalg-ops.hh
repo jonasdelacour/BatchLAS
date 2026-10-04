@@ -299,7 +299,7 @@ inline Eigh<T> eigh(Queue& ctx,
 // extent is degenerate (n, nrhs or batch < 1), and the entry point then throws
 // (solve_throw_unroutable). The old hand-composed body enqueued nothing instead.
 // This makes `solve` agree with `solve_spd`, which has thrown on the identical
-// guard in route_posv.hh since P2.
+// guard (posv's empty-problem throw, src/ops/posv/posv.cc) since P2.
 template <typename T>
 inline Matrix<T, MatrixFormat::Dense> solve(Queue& ctx,
                                             const MatrixView<T, MatrixFormat::Dense>& A,

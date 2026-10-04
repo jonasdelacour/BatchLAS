@@ -1,6 +1,7 @@
-// P2: the fused factor-and-solve tier for POSV, and the routing that (deliberately)
-// does not yet reach it. There is no batched vendor posv and no `potrs` op, so the
-// only oracles here are a host residual and potrf itself.
+// P2: the fused factor-and-solve tier for POSV and the composed choices, pinned. There is
+// no batched vendor posv and no `potrs` op, so the only oracles here are a host residual
+// and potrf itself. Selection, and the drivers' refusals (old P6), are tested in
+// posv_candidates_tests.cc.
 // evidence: docs/perf/potrf.md#the-fused-posv-tier
 #include <gtest/gtest.h>
 
@@ -8,7 +9,6 @@
 #include <batchlas/blas/functions/potrf.hh>
 #include <batchlas/blas/linalg-ops.hh>
 #include <batchlas/blas/matrix.hh>
-#include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
@@ -17,7 +17,7 @@
 
 #include "../src/extensions/solve_native.hh"
 #include "../src/extensions/potrf_native.hh"
-#include "../src/backends/posv_route.hh"
+#include "../src/ops/posv/choice.hh"
 #include "../src/ops/potrf/choice.hh"
 
 #include <batchlas/blas/dispatch/no_route.hh>
@@ -257,7 +257,7 @@ protected:
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
         if (!this->ctx) GTEST_SKIP() << "no queue";
         if (this->ctx->device().type != DeviceType::GPU)
-            GTEST_SKIP() << "the fused posv tier is GPU-only (route_posv.hh)";
+            GTEST_SKIP() << "the fused posv tier is GPU-only (src/ops/posv/posv.cc can_run)";
         if (!this->ctx->device().supports_sub_group_size(32))
             GTEST_SKIP() << "device does not offer sub-group size 32";
     }
@@ -410,68 +410,6 @@ TYPED_TEST(PosvTest, TinyPackedLaunchCoversEveryBatchItem) {
     }
 }
 
-// P6. Every supports() gate is re-applied at the launcher, because there is no
-// vendor to fall through to. See gesv_tests.cc G6 for the armed break.
-TYPED_TEST(PosvTest, TinyRefusesShapesAboveItsCeilings) {
-    using T = typename TestFixture::T;
-    const int cap = this->cap();
-    UnifiedVector<std::byte> ws(size_t(1024));
-
-    auto wide = make_spd<T>(8, 5, 2, Uplo::Lower, 3u);
-    auto Aw = a_view(wide); auto Bw = b_view(wide);
-    EXPECT_THROW((void)sycl_posv::posv_tiny_dispatch<T>(*this->ctx, Aw, Bw, Uplo::Lower,
-                                                  ws.to_span(), wide.info.to_span()),
-                 batchlas::unsupported);
-
-    auto big = make_spd<T>(cap + 1, 1, 2, Uplo::Lower, 4u);
-    auto Ab = a_view(big); auto Bb = b_view(big);
-    EXPECT_THROW((void)sycl_posv::posv_tiny_dispatch<T>(*this->ctx, Ab, Bb, Uplo::Lower,
-                                                  ws.to_span(), big.info.to_span()),
-                 batchlas::unsupported);
-}
-
-// P7. THE ROUTE, pinned to the MEASURED window; preferred() is asserted all-false
-// permanently because this op passes vendor_available=false and the window therefore
-// lives in native_tier_preferred. Outside the tiny window the fused-solve CTA arm takes
-// every shape it can hold. evidence: docs/perf/potrf.md#the-posv-local-memory-transpose
-// ARMED BREAK (R9): make route_posv.hh's cfloat tiny_window return `order() <= 24`.
-// EXPECTED: RED for cfloat at n = 25 and 32 with nrhs = 4.
-// ARMED BREAK (R9): restore the float window `order() <= 16 || nrhs() != 2`.
-// EXPECTED: RED for float at n = 17, 24, 25 and 32 with nrhs = 2.
-TYPED_TEST(PosvTest, AutoTakesTheMeasuredWindow) {
-    using T = typename TestFixture::T;
-    constexpr Backend B = TestFixture::BackendType;
-    using Tbl = dispatch::RouteTable<dispatch::Op::posv, T>;
-
-    // Restated, not read back from the header: a test that asks the header what the
-    // header says cannot fail. Tiny holds every width up to the tier ceiling, except
-    // cfloat above 24 at nrhs <= 2, which is CTA's (a tie at 2, a loss at 1).
-    constexpr bool kC = std::is_same_v<T, std::complex<float>>;
-
-    for (int nrhs : {1, 2, 4}) {
-        for (int n : {4, 8, 9, 16, 17, 24, 25, 32, 64}) {
-            auto p = make_spd<T>(n, nrhs, 4, Uplo::Lower, 12u + unsigned(n));
-            auto A = a_view(p); auto Bv = b_view(p);
-            const auto shape = backend::posv_op_shape<B, T>(*this->ctx, A, Bv, Uplo::Lower);
-            ASSERT_TRUE(shape.has_value()) << "n=" << n;
-
-            EXPECT_FALSE(Tbl::preferred({dispatch::Origin::Native, dispatch::Algorithm::Tiny},
-                                        *shape))
-                << "n=" << n << ": preferred() is not this op's shipping hook";
-
-            const bool fits = (n <= sycl_posv::posv_tiny_max_n<T>());
-            const bool win = !kC || n <= 24 || nrhs > 2;
-            const auto want = (fits && win) ? dispatch::Algorithm::Tiny
-                                            : dispatch::Algorithm::CTA;
-            const auto r = backend::posv_route<B, T>(*this->ctx, A, Bv, Uplo::Lower);
-            EXPECT_EQ(r.algo, want)
-                << "n=" << n << " nrhs=" << nrhs << ": Auto resolved to "
-                << std::string(dispatch::to_string(r.algo));
-            EXPECT_EQ(r.origin, dispatch::Origin::Native);
-        }
-    }
-}
-
 // P7b. The fused-solve CTA arm, pinned, on both triangles. n = 17 and 100 leave a short
 // final nb block, n = 33 and 64 are whole blocks; nrhs covers every accumulator bucket.
 // Batch 96 gives a missing barrier many resident work-groups to race against.
@@ -482,17 +420,14 @@ TYPED_TEST(PosvTest, AutoTakesTheMeasuredWindow) {
 TYPED_TEST(PosvTest, FusedSolveArmSolvesOnBothTriangles) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::BackendType;
-    const ScopedEnvVar pin("BATCHLAS_POSV_ROUTE", "cta");
-    const ScopedEnvVar pin_potrf("BATCHLAS_POTRF_ROUTE", "native");
+    const select::ScopedPin<ops::posv::PosvChoice> pin("posv", ops::posv::Cta{});
+    const select::ScopedPin<ops::potrf::PotrfChoice> pin_potrf("potrf", "native");
 
     for (Uplo uplo : {Uplo::Lower, Uplo::Upper}) {
         for (int nrhs : {1, 2, 3, 8}) {
             for (int n : {1, 17, 33, 64, 100}) {
                 auto p = make_spd<T>(n, nrhs, 96, uplo, 4242u + unsigned(n * 16 + nrhs));
                 auto A = a_view(p); auto Bv = b_view(p);
-                const auto r = backend::posv_route<B, T>(*this->ctx, A, Bv, uplo);
-                ASSERT_EQ(r.algo, dispatch::Algorithm::CTA)
-                    << "the pin fell through at n=" << n << " nrhs=" << nrhs;
                 // Upper above both Upper-capable potrf tiers has no native potrf, and a
                 // vendor-free build no cuSOLVER either: the composed potrf has no route
                 // (main's old router threw the same NoRouteError here).
@@ -530,12 +465,12 @@ TYPED_TEST(PosvTest, FusedSolveArmSolvesOnBothTriangles) {
 // P8. The public op on the COMPOSED arm, both triangles: the only test that exercises
 // the Upper composition's transpose arguments. THE ROUTE IS PINNED because Auto now
 // sends n <= 32 to the fused tier, which would leave this guard covering n = 33 alone.
-// ARMED BREAK (R9): swap factorization.cc's two Upper trsm calls.
+// ARMED BREAK (R9): swap src/ops/posv/posv.cc's two Upper trsm calls.
 // EXPECTED: RED for Uplo::Upper only, GREEN for Lower.
 TYPED_TEST(PosvTest, PublicPosvSolvesOnBothTriangles) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::BackendType;
-    const ScopedEnvVar pin("BATCHLAS_POSV_ROUTE", "blocked");
+    const select::ScopedPin<ops::posv::PosvChoice> pin("posv", ops::posv::Blocked{});
 
     for (Uplo uplo : {Uplo::Lower, Uplo::Upper}) {
         for (int n : {4, 16, 33}) {

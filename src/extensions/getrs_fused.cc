@@ -962,7 +962,7 @@ Event getrs_fused_dispatch(Queue& ctx,
         n, nrhs, batch, wg, nb);
 }
 
-// Every gate RouteTable<Op::posv,T>::supports() applies to the CTA arm is re-applied here.
+// src/ops/posv/posv.cc's can_run(Cta) mirrors these checks; keep the two in step.
 template <typename T>
 Event potrs_fused_dispatch(Queue& ctx,
                            const MatrixView<T, MatrixFormat::Dense>& A,

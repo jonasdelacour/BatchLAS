@@ -1,6 +1,6 @@
-// The public factorization entry points -- geqrf, orgqr, getrf, getrs, getri, gesv
-// and posv -- defined once here rather than inside a vendor TU, so dropping a vendor
-// library does not drop the public symbol.
+// The public factorization entry points -- geqrf, orgqr, getrf, getrs, getri and gesv
+// (posv is in src/ops/posv/) -- defined once here rather than inside a vendor TU, so
+// dropping a vendor library does not drop the public symbol.
 // See docs/design/vendor-independence.md#the-entry-point-facade.
 //
 // Each op MUST stay next to its buffer-size query: separated, the two can resolve
@@ -19,7 +19,6 @@
 // the entry points above, in this file, because only this layer can name a route for
 // getrf / getrs / potrf / trsm.
 #include <batchlas/blas/functions/gesv.hh>
-#include <batchlas/blas/functions/posv.hh>
 
 // The routed ops the blocked drivers inject: their kernel TUs carry no Backend
 // parameter, so only this layer can name a route for them.
@@ -40,7 +39,6 @@
 #include "../../backends/getrs_route.hh"
 #include "../../backends/getri_route.hh"
 #include "../../backends/gesv_route.hh"
-#include "../../backends/posv_route.hh"
 #include "../../extensions/solve_native.hh"
 #include "../../extensions/getrf_native.hh"
 #include "../../extensions/getrs_native.hh"
@@ -641,12 +639,11 @@ size_t getri_buffer_size(Queue& ctx,
 }
 
 // ---------------------------------------------------------------------------
-// P2: gesv and posv. THE TWO OPS WITH NO VENDOR ARM ON ANY BACKEND, so neither
-// has a `*_vendor` declaration, neither reads factorization_vendor_available, and
-// neither can fall back the way every other op in this file does. Their composed
-// arms are assembled here out of the routed entry points above -- for gesv
-// `getrf; getrs`, for posv `potrf; trsm; trsm` -- which is also why the
-// composition lives in the facade rather than in a driver TU.
+// P2: gesv. With posv (now src/ops/posv/), THE OPS WITH NO VENDOR ARM ON ANY BACKEND,
+// so gesv has no `*_vendor` declaration, does not read factorization_vendor_available,
+// and cannot fall back the way every other op in this file does. Its composed arm,
+// `getrf; getrs`, is assembled here out of the routed entry points above, which is
+// also why the composition lives in the facade rather than in a driver TU.
 // evidence: docs/perf/lu.md#p2-the-window-this-tier-expects
 
 template <typename T>
@@ -715,71 +712,6 @@ size_t gesv_buffer_size(Queue& ctx,
     solve_throw_unroutable<T>(route, "gesv_buffer_size");
 }
 
-template <Backend Back, typename T>
-Event posv(Queue& ctx,
-           const MatrixView<T, MatrixFormat::Dense>& A,
-           const MatrixView<T, MatrixFormat::Dense>& B,
-           Uplo uplo,
-           Span<std::byte> work_space,
-           Span<int32_t> info) {
-    posv_validate_params<T>(A, B, uplo);
-
-    const dispatch::Route route = backend::posv_route<Back, T>(ctx, A, B, uplo);
-
-    if (route.algo == dispatch::Algorithm::Tiny) {
-        return sycl_posv::posv_tiny_dispatch<T>(ctx, A, B, uplo, work_space, info);
-    }
-    if (route.algo == dispatch::Algorithm::CTA) {
-        // The routed potrf, then BOTH triangular solves in one kernel: two nrhs = 1 trsm
-        // launches stream L twice at a fraction of the bandwidth one fused pass gets.
-        (void)potrf<Back, T>(ctx, A, uplo, work_space, info);
-        return sycl_getrs::potrs_fused_dispatch<T>(ctx, A, B, uplo);
-    }
-    if (route.algo == dispatch::Algorithm::Blocked) {
-        // No split here: `trsm` takes no workspace, so potrf owns the whole span.
-        (void)potrf<Back, T>(ctx, A, uplo, work_space, info);
-
-        // ConjTrans only for a complex scalar. A real backend is entitled to treat
-        // ConjTrans as unsupported rather than as Trans, and the two are identical
-        // for a real matrix, so asking for the one that always exists is free.
-        // `internal::is_complex` is private to another src/ header, so detect
-        // complex via base_type, as syev.hh:243 does: for a real T, base_type<T>
-        // IS T.
-        constexpr bool kReal = std::is_same_v<T, typename base_type<T>::type>;
-        constexpr Transpose kAdj = kReal ? Transpose::Trans : Transpose::ConjTrans;
-        const T one = T(1);
-        if (uplo == Uplo::Lower) {
-            (void)trsm<Back, T>(ctx, A, B, one, Side::Left, Uplo::Lower,
-                                Transpose::NoTrans, Diag::NonUnit);
-            return trsm<Back, T>(ctx, A, B, one, Side::Left, Uplo::Lower, kAdj,
-                                 Diag::NonUnit);
-        }
-        (void)trsm<Back, T>(ctx, A, B, one, Side::Left, Uplo::Upper, kAdj,
-                            Diag::NonUnit);
-        return trsm<Back, T>(ctx, A, B, one, Side::Left, Uplo::Upper,
-                             Transpose::NoTrans, Diag::NonUnit);
-    }
-    solve_throw_unroutable<T>(route, "posv");
-}
-
-template <Backend Back, typename T>
-size_t posv_buffer_size(Queue& ctx,
-                        const MatrixView<T, MatrixFormat::Dense>& A,
-                        const MatrixView<T, MatrixFormat::Dense>& B,
-                        Uplo uplo) {
-    posv_validate_params<T>(A, B, uplo);
-
-    const dispatch::Route route = backend::posv_route<Back, T>(ctx, A, B, uplo);
-
-    if (route.algo == dispatch::Algorithm::Tiny) {
-        return sycl_posv::posv_tiny_buffer_size<T>(ctx, A, B);
-    }
-    if (route.algo == dispatch::Algorithm::CTA || route.algo == dispatch::Algorithm::Blocked) {
-        return potrf_buffer_size<Back, T>(ctx, A, uplo);   // neither solve takes workspace
-    }
-    solve_throw_unroutable<T>(route, "posv_buffer_size");
-}
-
 #define OP_INSTANTIATE(OP, B_, fp) BATCHLAS_INSTANTIATE(sig::OP<fp>, OP, B_, fp)
 
 #define FACTORIZATION_ONE(B_, fp)              \
@@ -800,13 +732,11 @@ size_t posv_buffer_size(Queue& ctx,
     FACTORIZATION_ONE(B_, std::complex<float>)      \
     FACTORIZATION_ONE(B_, std::complex<double>)
 
-// P2's two ops. A separate driver from FACTORIZATION_ALL only because they landed
-// separately; they have the same four-type domain.
+// P2's gesv. A separate driver from FACTORIZATION_ALL only because it landed
+// separately; it has the same four-type domain.
 #define SOLVE_ONE(B_, fp)                      \
     OP_INSTANTIATE(gesv, B_, fp)               \
-    OP_INSTANTIATE(gesv_buffer_size, B_, fp)   \
-    OP_INSTANTIATE(posv, B_, fp)               \
-    OP_INSTANTIATE(posv_buffer_size, B_, fp)
+    OP_INSTANTIATE(gesv_buffer_size, B_, fp)
 
 #define SOLVE_ALL(B_)                               \
     SOLVE_ONE(B_, float)                            \

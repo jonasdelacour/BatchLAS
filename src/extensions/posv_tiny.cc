@@ -44,6 +44,7 @@ namespace tn = ::batchlas::tiny_native;
 namespace sd = ::batchlas::sycl_device;
 
 constexpr int kTinyWg = tn::kTinyWgSize;
+static_assert(kTinyWg == kPosvTinyWgSize, "src/ops/posv/posv.cc's can_run reads kPosvTinyWgSize");
 
 // A launch ABORT, not a slowdown, so it is encoded to fail at COMPILE time. NOW PROBED, and
 // the old assumed 256 was a tell: it is above the 255-register ISA ceiling, so no kernel could

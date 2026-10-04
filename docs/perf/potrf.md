@@ -2,6 +2,9 @@
 
 ## Selection since flat kernel selection (phase 2)
 
+posv moved the same way in phase 3; see
+[posv selection since flat kernel selection](#posv-selection-since-flat-kernel-selection-phase-3).
+
 potrf no longer routes through `RouteTable`. `route_potrf.hh`, `src/backends/potrf_route.hh` and the
 `preferred()` / `native_tier_preferred()` / `tiny_window()` windows described below are **deleted**; the sections that
 quote them are kept as the measurement record that produced the old windows, not as a description of the code.
@@ -43,6 +46,52 @@ Known gaps, carried to the phase-2 gate (docs/design/flat-kernel-selection.md §
   dropped and the nearest `uplo=L` row is used, so double/cfloat/cdouble Upper on sm_120 take the first
   Upper-capable entry (`tiny`, `cta` or `vendor`) of a Lower ranking;
 * a pin is now strict, so factor_bench's posv `composed` arm pins potrf to `tiny` only up to the type's tiny ceiling (16 for cdouble, 32 otherwise) and to `native` above it.
+
+## posv selection since flat kernel selection (phase 3)
+
+posv no longer routes through `RouteTable` either. `route_posv.hh`, `src/backends/posv_route.hh`, its
+`preferred()` / `native_tier_preferred()` / `tiny_window()` / `tiny_window_max_n()` and `resolve_posv_route` are
+**deleted**, and posv left `SOLVE_ONE` in `factorization.cc`. Every posv section below that quotes them
+([the fused posv tier](#the-fused-posv-tier) onwards) is the measurement record that produced the old window, not a
+description of the code. What runs is decided in `src/ops/posv/posv.cc`:
+
+* three fieldless families, the same for all four dtypes (`src/ops/posv/choice.hh`): `tiny` (the fused
+  factor-and-solve kernel, `posv_tiny_dispatch`), `cta` (the public `potrf`, then `potrs_fused_dispatch` for both
+  solves) and `blocked` (the public `potrf`, then two public `trsm`). Each child picks its own kernel through its
+  own selection, so a `cta` or `blocked` posv can still run cuSOLVER `potrf` underneath. There is **no vendor
+  family**, because there is no batched vendor posv, as before;
+* the choice is the first runnable entry of the nearest row of `tuned/posv.<dtype>.<device>.txt`, keyed on
+  `# keys: uplo:exact n:log:3 nrhs:log batch:log` (work ~ n^3/3 + 2 n^2 nrhs); the last resort is `blocked`;
+* `can_run()` is correctness only. The common term is a GPU with sub-group 32, no heterogeneous batch, and n, nrhs
+  and batch >= 1. `tiny` adds `n <= posv_tiny_max_n<T>()` (16 for cdouble, 32 otherwise), `nrhs <= 4` and
+  `max_wg >= kPosvTinyWgSize` (64). That last term is **new**: the old `supports()` lacked the driver's own
+  work-group check. `cta` adds `nrhs <= kGetrsFusedMaxRhs` (8) and
+  `n * nrhs <= getrs_fused_max_rhs_elems<T>(slm_budget)`, the old clause unchanged. `blocked` is true on every
+  homogeneous batch. It is false on a heterogeneous one because its children do not refuse it: vendor `potrf`
+  (cuSOLVER at `descrA.rows()`) and vendor `trsm` would solve at the full storage order, a silent wrong answer;
+* **the sm_89 tables are the old window transcribed, untimed** (`source=transcribed:7e71a6e0`, entries
+  `<spelling> -`). `tools/transcribe/posv_transcribe.cc` evaluated the deleted router's own predicates
+  (`resolve_route_uninstrumented`, vendor absent, capacities unlimited) at every cell of the
+  `grid_n` x `grid_nrhs` {1,2,4,8,16,64} x `grid_batch` {128..32768} x uplo grid, ranking by repeated
+  resolve-and-exclude and stopping after `blocked`. Inside the old `tiny_window` a row reads `tiny | cta | blocked`,
+  elsewhere `cta | blocked`; at nrhs > 4 `can_run` drops `tiny` and `cta` runs, as the old capacity walk did.
+  The CSV is `tuned/transcribed/posv.sm_89.csv`. On-grid cells choose what the old router chose by construction.
+  Off-grid cells take the nearest row and may differ at the old window edges: e.g. cfloat n = 25 and 26 at
+  nrhs <= 2 take the `tiny` n = 24 row, where the old window chose `cta` (n = 27 lands on the `cta` n = 28 row).
+  Those are the cells the sm_89 gate times;
+* **sm_120 has no posv table yet.** Its sweep (`benchmarks/results/routing/sm120_posv_sweep.jsonl`) is converted
+  separately; until then an sm_120 device borrows the sm_89 transcription, with the one-time warning. On 22 sample
+  cells on sm_120 (all dtypes, both uplo, the old window edges, nrhs 8/16/64, large n) Auto chose the same kernel as
+  the deleted router;
+* `posv_buffer_size` returns the chosen family's workspace: `posv_tiny_buffer_size` for `tiny`,
+  `potrf_buffer_size` for `cta` and `blocked` (neither solve takes workspace);
+* an empty problem (n, nrhs or batch 0) and a heterogeneous batch (per-item active dims on A or B) still throw
+  `batchlas::internal_error`, as the old router's `solve_throw_unroutable` did, now from an explicit check
+  (`throw_if_unservable`) before `choose()`, so no pin can take them either;
+* `BATCHLAS_POSV_ROUTE` takes `auto`, `tiny`, `cta`, `blocked` or the legacy `native:tiny` / `native:cta` /
+  `native:blocked`. A pin that does not parse or cannot run the shape **throws**; bare `native` is Auto, and
+  `vendor` warns and falls back to Auto. Coverage records `reached` at launch only, not in the buffer-size query;
+  the readback spelling (`native,tiny`, ...) is unchanged.
 
 ## The RouteTable era (historical)
 
@@ -857,6 +906,10 @@ per lane, so occupancy at N = 32 is where a loss would appear first. `kTinyWorst
 instantiations that already ship, these two included, so no new launch gate is needed — only a number to quote.
 
 ### The posv window is not a no-op
+
+*Historical routing; the lesson stands.* `route_posv.hh` is deleted, and posv's `tiny` vs
+`cta`/`blocked` order now comes from `tuned/posv.*`. A posv table row must still be ranked against
+the arm it replaces, never against a vendor-pinned composition.
 
 **2026-09-14.** A review flagged `route_posv.hh`'s `tiny_window_max_n()` as vacuous: it
 returns 32, which is the tier's own instantiation cap, so a ceiling alone excludes nothing
@@ -1708,6 +1761,10 @@ with L still in registers. Zero local memory, zero barriers, every cross-lane va
 a sub-group shuffle, exactly as the tiny tier requires
 ([the shared tiny-tier invariants](#the-shared-tiny-tier-invariants)).
 
+*Historical routing.* The next paragraph and the P2 sections describe the deleted
+`route_posv.hh`; today `tiny` is chosen wherever its `tuned/posv.*` row ranks it first
+([posv selection since flat kernel selection](#posv-selection-since-flat-kernel-selection-phase-3)).
+
 **It is not routed.** `route_posv.hh`'s `preferred()` is all-false and
 `native_tier_preferred` answers false for `Tiny`, so `Auto` takes the composed
 `potrf; trsm; trsm` arm. As with `gesv`, there is no batched vendor `posv` anywhere
@@ -1956,6 +2013,10 @@ functions, 541 distinct kernels):
 premise: `complex<double>` at N=16/NR=4 spills 184 bytes over a 96-byte frame, and
 `complex<float>` at N=32/NR=4 carries a 256-byte frame with no spill at all. A non-zero stack
 frame is the gate for a residency claim and the probe never used to report it.
+
+*Still true under flat selection:* the transcribed sm_89 table ranks `tiny` first at cdouble
+n <= 16 and at every order up to 32 for the other types where the old window admitted it, so these
+kernels remain on the `Auto` path.
 
 **Both are on the default `Auto` path, not pin-only.** `route_posv.hh`'s `tiny_window()` admits
 every order up to `tiny_window_max_n()`, which is 16 for cdouble and 32 otherwise, so a caller
@@ -2232,3 +2293,7 @@ wins 1.3-2.6x at n <= 24 and at nrhs = 4 above it (1.24x / 1.19x at 28 / 32); nr
 `n <= 24 || nrhs > 2`. float: tiny 1.84-5.32x of the vendor at every cell and 1.3-3.5x over
 CTA, including the nrhs = 2 band above 16 that was CTA's, so float `tiny_window` is the
 whole tier.
+
+This was the last `tiny_window`. It is what `tuned/posv.*.sm_89.txt` transcribes, cell by cell
+([posv selection since flat kernel selection](#posv-selection-since-flat-kernel-selection-phase-3));
+the code that held it is deleted.
