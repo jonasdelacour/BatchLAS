@@ -24,21 +24,26 @@ namespace batchlas {
 
     namespace backend {
 
+    // Lwork is a count of T, not of bytes: read as bytes it under-allocated 4-16x and
+    // cuSOLVER failed with error 7 (INTERNAL_ERROR) from n ~ 600 at batch 1.
+    template <Backend B, typename T>
+    int potrf_vendor_lwork(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo) {
+        static LinalgHandle<B> handle;
+        handle.setStream(ctx);
+        int lwork = 0;
+        call_backend<T, BackendLibrary::CUSOLVER, B>(cusolverDnSpotrf_bufferSize, cusolverDnDpotrf_bufferSize, cusolverDnCpotrf_bufferSize, cusolverDnZpotrf_bufferSize,
+            handle, uplo, A.rows(), A.data_ptr(), A.ld(), &lwork);
+        return lwork;
+    }
+
     template <Backend B, typename T>
     size_t potrf_vendor_buffer_size(Queue& ctx,
                             const MatrixView<T,MatrixFormat::Dense>& A,
                             Uplo uplo) {
-        static LinalgHandle<B> handle;
-        handle.setStream(ctx);
-        int size = 0;
-        if (A.batch_size() == 1) {
-            call_backend<T, BackendLibrary::CUSOLVER, B>(cusolverDnSpotrf_bufferSize, cusolverDnDpotrf_bufferSize, cusolverDnCpotrf_bufferSize, cusolverDnZpotrf_bufferSize,
-                handle, uplo, A.rows(), A.data_ptr(), A.ld(), &size);
-            size = BumpAllocator::allocation_size<std::byte>(ctx, size) + BumpAllocator::allocation_size<int>(ctx, 1);
-        } else {
-            size =  BumpAllocator::allocation_size<int>(ctx, A.batch_size());
-        }
-        return size;
+        if (A.batch_size() == 1)
+            return BumpAllocator::allocation_size<T>(ctx, potrf_vendor_lwork<B, T>(ctx, A, uplo)) +
+                   BumpAllocator::allocation_size<int>(ctx, 1);
+        return BumpAllocator::allocation_size<int>(ctx, A.batch_size());
     }
 
     } // namespace backend
@@ -64,13 +69,12 @@ namespace batchlas {
         // same public query and both terms are alignment multiples, so
         // `pool.allocate` below fits exactly and only cusolverDnXpotrf sees the
         // wrong number -- as its workspace-size argument.
-        auto Lwork = backend::potrf_vendor_buffer_size<B, T>(ctx, descrA, uplo)
-                     - BumpAllocator::allocation_size<int>(ctx, 1);
         if (descrA.batch_size() == 1) {
-            auto potrf_span = pool.allocate<std::byte>(ctx, Lwork);
+            const int Lwork = backend::potrf_vendor_lwork<B, T>(ctx, descrA, uplo);
+            auto potrf_span = pool.allocate<T>(ctx, Lwork);
             auto info = detail::info_target(ctx, pool, info_out, 1);
-            auto status = call_backend<T, BackendLibrary::CUSOLVER, B>(cusolverDnSpotrf, cusolverDnDpotrf, cusolverDnCpotrf, cusolverDnZpotrf,
-                handle, uplo, descrA.rows(), descrA.data_ptr(), descrA.ld(), reinterpret_cast<T*>(potrf_span.data()), Lwork, info.data());
+            call_backend<T, BackendLibrary::CUSOLVER, B>(cusolverDnSpotrf, cusolverDnDpotrf, cusolverDnCpotrf, cusolverDnZpotrf,
+                handle, uplo, descrA.rows(), descrA.data_ptr(), descrA.ld(), potrf_span.data(), Lwork, info.data());
         } else {
             auto info = detail::info_target(ctx, pool, info_out, descrA.batch_size());
             call_backend<T, BackendLibrary::CUSOLVER, B>(cusolverDnSpotrfBatched, cusolverDnDpotrfBatched, cusolverDnCpotrfBatched, cusolverDnZpotrfBatched,

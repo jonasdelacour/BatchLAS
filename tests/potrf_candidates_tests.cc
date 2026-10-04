@@ -572,7 +572,11 @@ TYPED_TEST(PotrfCandidates, CoverageRowCarriesNativeFlags) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
     constexpr bool kVendor = dispatch::solver_vendor_available<B>;  // vendor-free, Upper has no route
+#ifdef GTEST_FLAG_SET
     GTEST_FLAG_SET(death_test_style, "threadsafe");
+#else  // gtest < 1.12 (Ubuntu 22.04 ships 1.11)
+    ::testing::GTEST_FLAG(death_test_style) = "threadsafe";
+#endif
     const int up = std::max(this->limit(C{pc::Tiny{}}, Uplo::Upper), this->limit(C{pc::Cta{}}, Uplo::Upper)) + 1;
     const std::string dir = ::testing::TempDir() + "potrf_cov." + std::string(select::dtype_name<T>());
     std::filesystem::remove_all(dir);

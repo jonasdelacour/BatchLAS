@@ -654,7 +654,18 @@ TEST_F(Select, TraceLinesAndIndentation) {
 // The capture mode of run_factor_grid.sh / route_diff.sh: coverage on, trace off, so no
 // decision is noted and the row's scalar/backend/uplo must come from the shape alone.
 TEST(SelectCoverageDeathTest, RowCarriesScalarBackendAndUploWithTraceOff) {
-    TempDir dir;
+    // threadsafe: a forked child's exit() tears down the parent's SYCL threads (SIGSEGV on sm_89).
+#ifdef GTEST_FLAG_SET
+    GTEST_FLAG_SET(death_test_style, "threadsafe");
+#else
+    ::testing::GTEST_FLAG(death_test_style) = "threadsafe";
+#endif
+    // Not TempDir: its name is per-pid, and the re-executed child has a different pid.
+    struct Dir {
+        std::filesystem::path path = std::filesystem::temp_directory_path() / "select_tests.cov_trace_off";
+        Dir() { std::filesystem::remove_all(path), std::filesystem::create_directories(path); }
+        ~Dir() { std::filesystem::remove_all(path); }
+    } dir;
     const std::string out = (dir.path / "cov").string();
     auto child = [&] {
         ScopedEnvVar trace("BATCHLAS_SELECT_TRACE", nullptr);
