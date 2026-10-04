@@ -32,13 +32,14 @@ What runs is decided in one file, `src/ops/potrf/potrf.cc` (docs/design/flat-ker
 
 Known gaps, carried to the phase-2 gate (docs/design/flat-kernel-selection.md §12):
 
-* the sm_89 archive has no current-era `lpanel` timings, so the sm_89 tables never pick `lpanel`, although
-  [the measured LPanel window](#the-measured-lpanel-window) shows it winning there. `lpanel:panel=16` has never been
+* the sm_89 tables were first converted from an archive with no current-era `lpanel` timings, never picked `lpanel`,
+  and failed the sm_89 gate (28 cells 1.08-3.10x slower). They are now converted from a fresh sm_89 sweep
+  (`sm89_potrf_sweep.jsonl`), and the gate passes (0 FAIL, worst 1.017x). `lpanel:panel=16` has never been
   timed on any device, so no table picks it; only a pin reaches it;
 * `n` and `batch` used to weigh equally in the log distance, so an off-grid shape near the 4 GiB sweep cap landed on
-  a row far away in `n` (float n=704 batch=8192 on the n=320 row), and on the sparse sm_89 tables float n=24
+  a row far away in `n` (float n=704 batch=8192 on the n=320 row), and on the then-sparse sm_89 tables float n=24
   batch=512 landed on the n=80 `vendor` row. `n` now weighs 3 (work ~ n^3 x batch); the first maps to n=640
-  batch=2048, the second to n=24 batch=16384 (`cta`). Off-grid cells are still guesses until the grid is filled;
+  batch=2048, the second to its own small-n row. Off-grid cells are still guesses until the grid is filled;
 * the sm_120 sweeps have `uplo=U` rows for float only. When a table has no row with the exact key, the exact key is
   dropped and the nearest `uplo=L` row is used, so double/cfloat/cdouble Upper on sm_120 take the first
   Upper-capable entry (`tiny`, `cta` or `vendor`) of a Lower ranking;
@@ -1516,9 +1517,8 @@ P7 and is stale in five places. Recorded so nobody re-derives them:
 ### The measured LPanel window
 
 **Historical routing, current evidence.** The `preferred()` window this grid set is deleted. On sm_120 the tuned
-table picks `lpanel:panel=8` from its own sweep; the sm_89 tables never pick it, because the sm_89 sweep archive has
-no current-era `lpanel` rows ([selection](#selection-since-flat-kernel-selection-phase-2)). This grid is the evidence
-that sm_89 should, once it is re-swept.
+table picks `lpanel:panel=8` from its own sweep, and since the sm_89 re-sweep (`sm89_potrf_sweep.jsonl`) so does the
+sm_89 table ([selection](#selection-since-flat-kernel-selection-phase-2)). This grid is the older evidence for it.
 
 **2026-09-14, integration.** `benchmarks/factor_bench` one process per cell, arms
 INTERLEAVED in the timed loop (`--arms=vendor,lpanel,cta,blocked`), 7 reps, medians,

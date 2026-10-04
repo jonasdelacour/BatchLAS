@@ -22,6 +22,5 @@ Do not edit them by hand: `--check` fails on any difference from the sweeps.
 
 Every converted table says `kernels=unknown` and is therefore reported stale. That is intended:
 they stay stale until phase 4, when `tools/tune` retunes potrf on each device and stamps the
-kernel-source hash. sm_89 tables come from an archive across several kernel eras (only
-`kernel_current` rows are kept) and have no `lpanel` timings at all; `Lpanel{16}` has never been
-timed on any device.
+kernel-source hash. Both devices' tables come from a forced-route sweep of the current kernels
+(`benchmarks/results/routing/README.md`); `Lpanel{16}` has never been timed on any device.

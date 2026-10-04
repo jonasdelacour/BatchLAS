@@ -69,10 +69,10 @@ SOURCES = {
         "current_only": False,
     },
     "sm_89": {
-        "files": ["sm89_potrf_archive.jsonl"],
-        "batchlas": "unknown",
-        "note": "converted, kernel_current rows only; repeated medians averaged",
-        "current_only": True,
+        "files": ["sm89_potrf_sweep.jsonl"],
+        "batchlas": "95a49651",
+        "note": "converted, passes 1+2",
+        "current_only": False,
     },
 }
 

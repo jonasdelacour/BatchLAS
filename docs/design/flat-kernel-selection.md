@@ -515,7 +515,8 @@ The first tables are converted from the data this PR brings to `main`. See
 |---|---|---|
 | `sm120_potrf_sweep.jsonl` | RTX PRO 6000 Blackwell (sm_120), build `a1063892` | Lower; 4 dtypes; n 2–1024 × batch 128–32768 (541 cells × 5 arms × 2 passes); plus Upper float, n 8–256, batch 8192 |
 | `sm120_potrf_sweep_edges.jsonl` | same | n = 1, 1280, 1536 edges |
-| `sm89_potrf_archive.jsonl` | RTX 4090 (sm_89) | an archive across several kernel eras; field `kernel_current` |
+| `sm89_potrf_sweep.jsonl` | RTX 4090 (sm_89), build `95a49651` | the sm_120 grid and edges (570 Lower cells) plus Upper float; arms interleaved per process; 2 passes |
+| `sm89_potrf_archive.jsonl` | RTX 4090 (sm_89) | superseded: an archive across several kernel eras; field `kernel_current` |
 
 Conversion rules:
 1. `op == "potrf"` rows are `uplo=L`; `op == "potrf_upper"` rows are `uplo=U`. Keep rows with `ok == true` whose reached `route` equals the pinned arm. Rows with
@@ -748,8 +749,8 @@ Where the code differs from the sketches above, the code wins. These are the dif
   `startswith("vendor")` and the converter accepts both.
 
 **Data findings from the converter** (for the gate and phase 4):
-- The sm_89 archive has no current-era `lpanel` timings, so the sm_89 tables never pick `lpanel`,
-  although `docs/perf/potrf.md#the-measured-lpanel-window` measured it winning there.
+- The sm_89 archive had no current-era `lpanel` timings, so tables converted from it never picked
+  `lpanel` and failed the sm_89 gate. The sm_89 tables now come from `sm89_potrf_sweep.jsonl`.
 - The sm_120 sweeps have `uplo=U` rows for float only. The other sm_120 dtypes serve Upper from
   the nearest Lower row (the exact-key drop of §5.4), so they rank only the Upper-capable entries
   of a Lower measurement.
@@ -775,6 +776,20 @@ Where the code differs from the sketches above, the code wins. These are the dif
    `benchmarks/results/routing/sm120_potrf_phase2_gate.csv` and its README section.
 4. Readable: `potrf float n=100 batch=8192` on sm_120 → `potrf.cc` `choose()` → nearest row
    `uplo=L n=96 batch=8192` in `tuned/potrf.float.sm_120.txt` → `lpanel:panel=8`.
-5. Open: the sm_89 live gate. The sm_89 tables are sparse (32-88 rows) and contain no current-era
-   lpanel timings, so on sm_89 the new choices are least certain; run it before merging, or accept
-   it as a phase-4 retune item.
+
+**Gate results (2026-10-04, RTX 4090, sm_89, GPU 1):**
+1. Correctness: the five §10.1 tests pass in the vendor build (the vendor-free build was not run
+   on sm_89). Three fixes were needed first: `GTEST_FLAG_SET` does not exist in gtest 1.11 (Ubuntu
+   22.04); the coverage death test in `select_tests` forked a 44-thread SYCL process and its child
+   segfaulted on exit; and cuSOLVER batch-1 potrf received `Lwork` in bytes where it wants elements
+   of T (pre-existing on `main`: error 7 from float n~600), which `CanRunEqualsLaunch` reaches on
+   sm_89 because the straddled float lpanel limit there is 743.
+2. `scripts/sweep_to_table.py --check`: OK.
+3. Live: with the archive-converted tables, **28 FAIL** (float and cfloat n=44-208, `main`'s lpanel
+   -> vendor, 1.08-3.10x). After re-sweeping sm_89 (`sm89_potrf_sweep.jsonl`, 2 h 48 min) and
+   reconverting: **0 FAIL**, 51 same, 36 changed: worst 1.017x (float n=480 b512 vendor -> lpanel),
+   the rest 0.35-0.997x. Evidence: `benchmarks/results/routing/sm89_potrf_phase2_gate.csv` and the
+   README there.
+4. The hand-read sm_89 rows in `AutoReadsEveryKeyField` are re-read from the new tables, and the
+   weighted-key regression test now uses a synthetic sparse table (the shipped sm_89 table has a row
+   at every grid `n`, so it can no longer show the weight).

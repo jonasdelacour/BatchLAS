@@ -848,8 +848,10 @@ TYPED_TEST(PotrfCandidates, AutoReadsEveryKeyField) {
         {"sm_120", "cfloat", Uplo::Lower, 24, 8192, "lpanel:panel=8", "lpanel:panel=8"},
         {"sm_120", "cdouble", Uplo::Lower, 16, 512, "vendor", "tiny"},
         {"sm_120", "cdouble", Uplo::Lower, 16, 8192, "tiny", "tiny"},
-        {"sm_89", "float", Uplo::Lower, 44, 8192, "vendor", "cta"},
-        {"sm_89", "float", Uplo::Lower, 44, 16384, "cta", "cta"},
+        {"sm_89", "float", Uplo::Lower, 24, 8192, "tiny", "tiny"},
+        {"sm_89", "float", Uplo::Lower, 24, 32768, "lpanel:panel=8", "lpanel:panel=8"},
+        {"sm_89", "float", Uplo::Upper, 64, 8192, "cta", "cta"},  // the L row gives lpanel
+        {"sm_89", "float", Uplo::Lower, 64, 8192, "lpanel:panel=8", "lpanel:panel=8"},
     };
     int checked = 0;
     for (const Row& r : rows) {

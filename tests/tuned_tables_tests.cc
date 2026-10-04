@@ -95,15 +95,22 @@ TEST(TunedTables, RankedTimesFollowTheTieRule) {
             double best = row.ranked[0].ms;
             for (const auto& x : row.ranked) best = std::min(best, x.ms);
             const double band = best * (1.0 + kTie);
-            std::size_t i = 0;
-            for (; i < row.ranked.size() && row.ranked[i].ms <= band * (1.0 + kPrintSlack); ++i)
-                if (i > 0) EXPECT_LT(pos(row.ranked[i - 1].spelling), pos(row.ranked[i].spelling))
-                               << "line " << row.line << ": tied entries out of candidate order";
-            for (std::size_t j = i; j < row.ranked.size(); ++j) {
-                EXPECT_GT(row.ranked[j].ms, band * (1.0 - kPrintSlack))
-                    << "line " << row.line << ": " << row.ranked[j].spelling << " is tied but ranked late";
-                if (j > i) EXPECT_GE(row.ranked[j].ms, row.ranked[j - 1].ms)
-                               << "line " << row.line << ": times not ascending after the tie band";
+            // Within the print slack of the band edge the converter's unrounded call may go either
+            // way (cfloat sm_89 n=24 b512: 1.03003x, ranked apart), so such entries are skipped.
+            const sel::TableEntry* last_tied = nullptr;
+            const sel::TableEntry* last_apart = nullptr;
+            for (const auto& x : row.ranked) {
+                if (x.ms <= band * (1.0 - kPrintSlack)) {
+                    EXPECT_EQ(last_apart, nullptr)
+                        << "line " << row.line << ": " << x.spelling << " is tied but ranked late";
+                    if (last_tied) EXPECT_LT(pos(last_tied->spelling), pos(x.spelling))
+                                       << "line " << row.line << ": tied entries out of candidate order";
+                    last_tied = &x;
+                } else if (x.ms > band * (1.0 + kPrintSlack)) {
+                    if (last_apart) EXPECT_GE(x.ms, last_apart->ms)
+                                        << "line " << row.line << ": times not ascending after the tie band";
+                    last_apart = &x;
+                }
             }
         }
     }
@@ -122,31 +129,20 @@ TEST(TunedTables, PotrfTablesDeclareChoiceKeyNames) {
     EXPECT_GT(seen, 0);
 }
 
-const sel::Table& embedded(const std::string& name) {
-    static std::map<std::string, sel::Table> cache;
-    auto it = cache.find(name);
-    if (it == cache.end())
-        for (const auto& e : sel::embedded_tables())
-            if (e.name == name) it = cache.emplace(name, sel::parse_table(e.text, e.name)).first;
-    if (it == cache.end()) throw std::runtime_error(name + " is not embedded");
-    return it->second;
-}
-
-// The sparse sm_89 tables (final-review finding): with equal weights, float n=24 batch=512
-// fell to the n=80 batch=2048 row (vendor; the native tiers are ~2.2x faster there) and
-// double n=3 batch=128 to n=256 batch=256. n:log:3 keeps both on their own small-n rows.
-TEST(TunedTables, Sm89SmallOrdersStayOnSmallOrderRows) {
+// The once-sparse sm_89 tables (final-review finding): with equal weights, float n=24 batch=512
+// fell to the n=80 batch=2048 row (vendor; the native tiers are ~2.2x faster there). The
+// re-swept tables have a row at every grid n, so that shape is reproduced on synthetic rows,
+// and the unweighted spelling must take the far row, or this test cannot see the weight.
+TEST(TunedTables, WeightedNKeepsSmallOrdersOnSmallOrderRows) {
+    const std::string rows = "uplo=L n=24 batch=16384 | cta 1\nuplo=L n=80 batch=2048 | vendor 1\n";
     const sel::Key f{{"uplo", "L"}, {"n", 24}, {"batch", 512}};
-    const auto* r = embedded("potrf.float.sm_89.txt").nearest(f);
-    ASSERT_NE(r, nullptr);
-    EXPECT_EQ(r->keys[1], "24") << "line " << r->line;
-    EXPECT_EQ(r->ranked.front().spelling, "cta") << "line " << r->line;
-    const sel::Key d{{"uplo", "L"}, {"n", 3}, {"batch", 128}};
-    r = embedded("potrf.double.sm_89.txt").nearest(d);
-    ASSERT_NE(r, nullptr);
-    EXPECT_LE(std::stoi(r->keys[1]), 4) << "line " << r->line;
-    EXPECT_EQ(r->ranked.front().spelling, "tiny") << "line " << r->line;
-    // The same through choose(): what an sm_89 device runs with every candidate runnable.
+    const auto w = sel::parse_table("# keys: uplo:exact n:log:3 batch:log\n" + rows, "synth.float.sm_89.txt");
+    const auto u = sel::parse_table("# keys: uplo:exact n:log batch:log\n" + rows, "synth.float.sm_89.txt");
+    ASSERT_NE(w.nearest(f), nullptr);
+    ASSERT_NE(u.nearest(f), nullptr);
+    EXPECT_EQ(w.nearest(f)->keys[1], "24");
+    EXPECT_EQ(u.nearest(f)->keys[1], "80");
+    // The shipped sm_89 table through choose(): float n=24 batch=512 is its own row, tiny first.
     ScopedEnvVar dir("BATCHLAS_TUNED_DIR", nullptr);
     ScopedEnvVar pin("BATCHLAS_POTRF_ROUTE", nullptr);
     sel::testing::use_embedded_tables();
@@ -154,7 +150,7 @@ TEST(TunedTables, Sm89SmallOrdersStayOnSmallOrderRows) {
                                          batchlas::ops::potrf::candidates<float>(),
                                          [](const batchlas::ops::potrf::PotrfChoice&) { return true; },
                                          batchlas::ops::potrf::rules)),
-              "cta");
+              "tiny");
 }
 
 // ---- the shipped tables through choose() ------------------------------------------------
