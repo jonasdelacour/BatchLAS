@@ -1452,6 +1452,7 @@ sharpest form of the problem this section exists to fix.
 | `sytrd_fuse_panel_update` | `BATCHLAS_SYTRD_FUSE_PANEL_UPDATE` | `std::optional<bool>` | `nullopt` (tuned per `n`) — the tri-state knob |
 | `sytrd_impl` | `BATCHLAS_SYTRD_IMPL` | `EnvValue` | unset (legacy); only `device` has an effect |
 | `sytrd_trailing_update` | `BATCHLAS_SYTRD_TRAILING_UPDATE` | `EnvValue` | unset (per backend) |
+| `tuned_dir` | `BATCHLAS_TUNED_DIR` | `EnvValue` | unset (built-in select tables only) |
 
 **`geometry`** — launch geometry, block widths and iteration counts.
 
@@ -1512,6 +1513,7 @@ changes a numeric result; several cost a full pipeline drain.
 | `kernel_trace` | `BATCHLAS_KERNEL_TRACE`, `BATCHLAS_TRACE_KERNELS` | `bool` | `false` — likewise; implies profiling |
 | `kernel_trace_path` | `BATCHLAS_KERNEL_TRACE_PATH`, `BATCHLAS_TRACE_PATH` | `std::string` | `"batchlas_kernels.trace.json"` — first **non-empty** wins |
 | `coverage_out` | `BATCHLAS_COVERAGE_OUT` | `EnvValue` | unset (coverage off) |
+| `select_trace` | `BATCHLAS_SELECT_TRACE` | `bool` | `false` |
 | `debug_filter_degree` | `BATCHLAS_DEBUG_FILTER_DEGREE` | `bool` | `false` — presence alone enables, empty string included |
 | `debug_sytrd_small` | `BATCHLAS_DEBUG_SYTRD_SMALL` | `bool` | `false` |
 | `gesvd_profile` | `BATCHLAS_GESVD_PROFILE` | `bool` | `false` (drains per stage) |

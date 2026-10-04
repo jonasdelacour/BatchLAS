@@ -132,6 +132,24 @@ endif()
 # Add source files from subdirectories
 add_subdirectory(backends)
 add_subdirectory(dispatch)
+
+# Flat kernel selection (src/select/) rides with the dispatch facade. tuned/*.txt are
+# embedded into one generated TU; the CONFIGURE_DEPENDS glob reconfigures when a table
+# appears or disappears, DEPENDS regenerates when one changes.
+file(GLOB BATCHLAS_TUNED_TABLES CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/tuned/*.txt")
+set(BATCHLAS_TUNED_TABLES_CC "${PROJECT_BINARY_DIR}/generated/select/tuned_tables.cc")
+add_custom_command(
+    OUTPUT "${BATCHLAS_TUNED_TABLES_CC}"
+    COMMAND "${CMAKE_COMMAND}"
+            "-DTUNED_DIR=${PROJECT_SOURCE_DIR}/tuned"
+            "-DOUT=${BATCHLAS_TUNED_TABLES_CC}"
+            "-DSELECT_HH=${CMAKE_CURRENT_SOURCE_DIR}/select/select.hh"
+            -P "${PROJECT_SOURCE_DIR}/cmake/BatchLASEmbedTables.cmake"
+    DEPENDS ${BATCHLAS_TUNED_TABLES} "${PROJECT_SOURCE_DIR}/cmake/BatchLASEmbedTables.cmake"
+    COMMENT "Embedding tuned selection tables"
+    VERBATIM
+)
+target_sources(batchlas_dispatch_obj PRIVATE select/select.cc "${BATCHLAS_TUNED_TABLES_CC}")
 add_subdirectory(extensions)
 add_subdirectory(util)
 add_subdirectory(extra)

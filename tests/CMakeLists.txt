@@ -28,6 +28,8 @@ set(TEST_TARGETS
     resident_capacity_tests
     route_gemm_equivalence_tests
     settings_tests
+    select_tests
+    tuned_tables_tests
     error_model_tests
     linalg_layer_tests
     gemm_tests
@@ -150,7 +152,7 @@ set(BATCHLAS_TEST_LABELS_util
     mempool_tests matrix_tests matrix_view_tests minibench_cli_tests
     backend_dispatch_tests options_api_tests route_vocabulary_tests
     route_gemm_equivalence_tests settings_tests error_model_tests
-    linalg_layer_tests)
+    linalg_layer_tests select_tests tuned_tables_tests)
 set(BATCHLAS_TEST_LABELS_blas
     device_blas_tests gemm_tests gemv_tests symm_tests hemm_tests herk_tests her2k_tests
     syrk_tests syr2k_tests
@@ -328,6 +330,12 @@ function(batchlas_add_test_target test_name)
     if(test_name STREQUAL "error_model_tests")
         target_compile_definitions(${test_name} PRIVATE
             BATCHLAS_INCLUDE_DIR_PATH="${PROJECT_SOURCE_DIR}/include/batchlas")
+    endif()
+    # tuned_tables_tests compares the embedded set against tuned/*.txt by name and bytes,
+    # so a broken embed step fails instead of leaving nothing to check.
+    if(test_name STREQUAL "tuned_tables_tests")
+        target_compile_definitions(${test_name} PRIVATE
+            BATCHLAS_TUNED_SOURCE_DIR="${PROJECT_SOURCE_DIR}/tuned")
     endif()
 
     add_test(NAME ${test_name} COMMAND ${test_name})

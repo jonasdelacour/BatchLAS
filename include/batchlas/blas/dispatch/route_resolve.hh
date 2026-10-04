@@ -118,6 +118,9 @@ inline Route resolve_route(Route forced, const Shape& s, bool vendor_available =
         coverage::record_if_enabled(s.op, s.scalar, s.backend, static_cast<const OpShape&>(s),
                                     chosen, native_existed, native_supported);
     }
+    if (coverage::select_trace_active()) {
+        coverage::select_trace_old_route(static_cast<const OpShape&>(s), chosen);
+    }
 
     return chosen;
 }

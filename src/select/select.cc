@@ -1,0 +1,512 @@
+#include "select.hh"
+
+#include "../util/resident_capacity.hh"
+
+#include <batchlas/settings.hh>
+
+#include <cctype>
+#include <cmath>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <map>
+#include <memory>
+#include <sstream>
+#include <tuple>
+
+namespace batchlas::select {
+
+namespace {
+
+std::string_view trim(std::string_view s) {
+    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) s.remove_prefix(1);
+    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) s.remove_suffix(1);
+    return s;
+}
+
+std::vector<std::string_view> words(std::string_view s) {
+    std::vector<std::string_view> out;
+    std::size_t i = 0;
+    while (i < s.size()) {
+        while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i]))) ++i;
+        const std::size_t start = i;
+        while (i < s.size() && !std::isspace(static_cast<unsigned char>(s[i]))) ++i;
+        if (i > start) out.push_back(s.substr(start, i - start));
+    }
+    return out;
+}
+
+int leading_int(std::string_view s) {
+    int v = 0;
+    std::from_chars(s.data(), s.data() + s.size(), v);
+    return v;
+}
+
+std::optional<dispatch::Op> op_from_name(std::string_view op) {
+    for (std::size_t i = 0; i < static_cast<std::size_t>(dispatch::Op::COUNT); ++i) {
+        const auto o = static_cast<dispatch::Op>(i);
+        if (dispatch::op_name(o) == op) return o;
+    }
+    return std::nullopt;
+}
+
+std::string_view dtype_from_scalar(dispatch::ScalarKind s) {
+    switch (s) {
+        case dispatch::ScalarKind::F32: return "float";
+        case dispatch::ScalarKind::F64: return "double";
+        case dispatch::ScalarKind::C32: return "cfloat";
+        case dispatch::ScalarKind::C64: return "cdouble";
+    }
+    return "?";
+}
+
+// "<op>.<dtype>.<device>.txt" -> {op, dtype, device}; empty strings when it does not fit.
+std::array<std::string, 3> split_file_name(std::string_view file) {
+    std::array<std::string, 3> out;
+    const auto slash = file.find_last_of('/');
+    if (slash != std::string_view::npos) file = file.substr(slash + 1);
+    const auto parts = detail::split(file, '.');
+    if (parts.size() == 4 && parts[3] == "txt")
+        for (std::size_t i = 0; i < 3; ++i) out[i] = std::string(parts[i]);
+    return out;
+}
+
+std::mutex& state_mutex() {
+    static auto* m = new std::mutex();  // leaked: choose() may run from static destructors
+    return *m;
+}
+
+std::set<std::string>& warned() {
+    static auto* s = new std::set<std::string>();
+    return *s;
+}
+
+bool warn_once(const std::string& tag) {
+    std::lock_guard<std::mutex> lock(state_mutex());
+    return warned().insert(tag).second;
+}
+
+struct TableState {
+    std::optional<std::vector<std::pair<std::string, std::string>>> test_builtin;
+    int generation = 0;
+    std::map<std::string, std::vector<const Table*>> cache;
+};
+
+TableState& tables_state() {
+    static auto* s = new TableState();  // leaked, and Table objects are never freed
+    return *s;
+}
+
+std::vector<const Table*> load_tables(const TableState& st, std::string_view op, std::string_view dtype,
+                                      const std::string& dir) {
+    std::map<std::string, const Table*> by_name;
+    // Only <op>.<dtype>.<device>.txt names take part: a stray README.txt or a .bak.txt copy in
+    // the override dir would otherwise throw from every choose() or compete with the real table.
+    // The embed step rejects such names in tuned/ at configure time.
+    auto consider = [&](const std::string& name, std::string_view text, bool is_override) {
+        const auto f = split_file_name(name);
+        if (f[0].empty()) {
+            if (is_override && warned().insert("tuned_name:" + dir + "/" + name).second)
+                std::fprintf(stderr, "batchlas: BATCHLAS_TUNED_DIR: skipping %s (not <op>.<dtype>.<device>.txt)\n",
+                             name.c_str());
+            return;
+        }
+        if (f[0] != op || f[1] != dtype) return;
+        auto* t = new Table(parse_table(text, name));
+        t->is_override = is_override;
+        if (t->op == op && t->dtype == dtype) by_name[t->file] = t;
+    };
+    if (st.test_builtin) {
+        for (const auto& [name, text] : *st.test_builtin) consider(name, text, false);
+    } else {
+        for (const auto& e : embedded_tables()) consider(std::string(e.name), e.text, false);
+    }
+    if (!dir.empty()) {
+        std::error_code ec;
+        if (!std::filesystem::is_directory(dir, ec)) {
+            if (warned().insert("tuned_dir:" + dir).second)
+                std::fprintf(stderr, "batchlas: BATCHLAS_TUNED_DIR=%s is not a directory; ignoring it\n",
+                             dir.c_str());
+        } else {
+            for (const auto& ent : std::filesystem::directory_iterator(dir, ec)) {
+                if (!ent.is_regular_file() || ent.path().extension() != ".txt") continue;
+                std::ifstream in(ent.path());
+                std::stringstream buf;
+                buf << in.rdbuf();
+                consider(ent.path().filename().string(), buf.str(), true);
+            }
+        }
+    }
+    std::vector<const Table*> out;
+    for (const auto& [name, t] : by_name) out.push_back(t);
+    return out;
+}
+
+int family_rank(std::string_view f) {
+    if (f == "sm") return 0;
+    if (f == "gfx") return 1;
+    if (f == "intel") return 2;
+    if (f == "cpu") return 4;
+    return 3;
+}
+
+struct Decision {
+    std::string op, spelling, detail, tag;
+};
+
+thread_local std::vector<std::pair<std::string, std::string>> t_pins;
+thread_local std::vector<Decision> t_decisions;
+thread_local int t_depth = 0;
+
+std::string indent() { return std::string(static_cast<std::size_t>(2 * t_depth), ' '); }
+
+std::string format_ms(double ms) {
+    char buf[32];
+    std::snprintf(buf, sizeof buf, ms < 1.0 ? "%.3g" : "%.2f", ms);
+    return buf;
+}
+
+}  // namespace
+
+Device device_from_key(std::string_view key) {
+    Device d;
+    d.key = std::string(key);
+    d.family = d.key;
+    if (key.rfind("sm_", 0) == 0) {
+        d.family = "sm";
+        d.arch_number = leading_int(key.substr(3));
+    } else if (key.rfind("gfx", 0) == 0) {
+        d.family = "gfx";
+        d.arch_number = leading_int(key.substr(3));
+    } else if (key == "rocm") {
+        d.family = "gfx";  // Device has no gcnArchName query yet; borrows like an unknown gfx
+    } else if (key.rfind("intel", 0) == 0) {
+        d.family = "intel";
+        if (key.size() > 6) d.arch_number = leading_int(key.substr(6));
+    }
+    return d;
+}
+
+const Device& describe(const batchlas::Device& dev, Backend b, bool has_vendor_solver) {
+    static auto* memo = new std::map<std::tuple<int, std::size_t, int, bool>, Device>();
+    const auto k = std::make_tuple(static_cast<int>(dev.type), dev.idx, static_cast<int>(b), has_vendor_solver);
+    {
+        std::lock_guard<std::mutex> lock(state_mutex());
+        if (auto it = memo->find(k); it != memo->end()) return it->second;
+    }
+    const bool is_gpu = dev.type == DeviceType::GPU;
+    std::string key = "gpu";
+    if (!is_gpu) key = "cpu";
+    else if (b == Backend::CUDA && dev.cuda_compute_capability() > 0)
+        key = "sm_" + std::to_string(dev.cuda_compute_capability());
+    else if (b == Backend::ROCM) key = "rocm";
+    else if (dev.get_vendor() == Vendor::INTEL) key = "intel";
+    Device d = device_from_key(key);
+    d.is_gpu = is_gpu;
+    d.has_sg32 = dev.supports_sub_group_size(32);
+    d.has_vendor_solver = has_vendor_solver;
+    d.slm_budget = static_cast<std::int64_t>(resident::device_slm_budget(
+        static_cast<std::size_t>(dev.get_property(DeviceProperty::LOCAL_MEM_SIZE))));
+    d.max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
+    std::lock_guard<std::mutex> lock(state_mutex());
+    return memo->emplace(k, std::move(d)).first->second;
+}
+
+Table parse_table(std::string_view text, std::string_view file) {
+    Table t;
+    t.file = std::string(file);
+    if (const auto slash = t.file.find_last_of('/'); slash != std::string::npos) t.file = t.file.substr(slash + 1);
+    std::map<std::string, std::string> header;
+    std::map<std::vector<std::string>, int> seen_rows;
+    bool have_keys = false;
+    int line_no = 0;
+    auto fail = [&](const std::string& why) {
+        throw std::runtime_error(t.file + ":" + std::to_string(line_no) + ": " + why);
+    };
+    for (std::string_view raw : detail::split(text, '\n')) {
+        ++line_no;
+        std::string_view line = trim(raw);
+        if (line.empty()) continue;
+        if (line.front() == '#') {
+            if (!t.rows.empty()) continue;
+            const std::string_view body = trim(line.substr(1));
+            if (body.rfind("keys:", 0) == 0) {
+                if (have_keys) fail("second '# keys:' line");
+                for (std::string_view w : words(body.substr(5))) {
+                    const auto c = w.find(':');
+                    const std::string_view kind = c == std::string_view::npos ? "" : w.substr(c + 1);
+                    if (kind != "exact" && kind != "log") fail("key '" + std::string(w) + "' needs :exact or :log");
+                    for (const auto& k : t.keys)
+                        if (k.name == w.substr(0, c)) fail("key '" + k.name + "' declared twice");
+                    t.keys.push_back({std::string(w.substr(0, c)), kind == "log"});
+                }
+                if (t.keys.empty()) fail("'# keys:' names no keys");
+                have_keys = true;
+                continue;
+            }
+            for (std::string_view w : words(body))
+                if (const auto eq = w.find('='); eq != std::string_view::npos)
+                    header[std::string(w.substr(0, eq))] = std::string(w.substr(eq + 1));
+            continue;
+        }
+        if (!have_keys) fail("row before the '# keys:' line");
+        if (const auto hash = line.find('#'); hash != std::string_view::npos) line = trim(line.substr(0, hash));
+        const auto segs = detail::split(line, '|');
+        TableRow row;
+        row.line = line_no;
+        row.keys.resize(t.keys.size());
+        row.log2_keys.assign(t.keys.size(), 0.0);
+        std::vector<bool> got(t.keys.size(), false);
+        for (std::string_view w : words(segs[0])) {
+            const auto eq = w.find('=');
+            const std::string name(w.substr(0, eq));
+            std::size_t i = 0;
+            while (i < t.keys.size() && t.keys[i].name != name) ++i;
+            if (eq == std::string_view::npos || i == t.keys.size()) fail("unknown key '" + std::string(w) + "'");
+            if (got[i]) fail("key '" + name + "' given twice");
+            got[i] = true;
+            row.keys[i] = std::string(w.substr(eq + 1));
+            if (t.keys[i].log) {
+                std::int64_t v = 0;
+                const auto& s = row.keys[i];
+                const auto r = std::from_chars(s.data(), s.data() + s.size(), v);
+                if (r.ec != std::errc{} || r.ptr != s.data() + s.size() || v <= 0)
+                    fail("log key '" + name + "' must be a positive integer, got '" + s + "'");
+                row.log2_keys[i] = std::log2(static_cast<double>(v));
+            }
+        }
+        for (std::size_t i = 0; i < got.size(); ++i)
+            if (!got[i]) fail("row lacks key '" + t.keys[i].name + "'");
+        for (std::size_t s = 1; s < segs.size(); ++s) {
+            const auto w = words(segs[s]);
+            if (w.size() != 2) fail("ranked entry '" + std::string(trim(segs[s])) + "' is not '<choice> <ms>'");
+            double ms = 0.0;  // from_chars: strtod obeys a host app's comma-decimal LC_NUMERIC
+            const auto r = std::from_chars(w[1].data(), w[1].data() + w[1].size(), ms);
+            if (r.ec != std::errc{} || r.ptr != w[1].data() + w[1].size() || !std::isfinite(ms) || ms < 0)
+                fail("time '" + std::string(w[1]) + "' is not a non-negative number");
+            for (const auto& e : row.ranked)
+                if (e.spelling == w[0]) fail("'" + e.spelling + "' ranked twice");
+            row.ranked.push_back({std::string(w[0]), ms});
+        }
+        if (row.ranked.empty()) fail("row has no ranked entries");
+        if (const auto [it, fresh] = seen_rows.emplace(row.keys, line_no); !fresh)
+            fail("duplicate row (first at line " + std::to_string(it->second) + ")");
+        t.rows.push_back(std::move(row));
+    }
+    const auto from_name = split_file_name(t.file);
+    const char* names[3] = {"op", "dtype", "device"};
+    std::string* fields[3] = {&t.op, &t.dtype, &t.device};
+    line_no = 1;
+    for (int i = 0; i < 3; ++i) {
+        const auto h = header.find(names[i]);
+        if (h != header.end() && !from_name[i].empty() && h->second != from_name[i])
+            fail(std::string(names[i]) + "=" + h->second + " disagrees with the file name");
+        *fields[i] = h != header.end() ? h->second : from_name[i];
+        if (fields[i]->empty()) fail(std::string("no ") + names[i] + " in the header or the file name");
+    }
+    const Device d = device_from_key(t.device);
+    t.family = d.family;
+    t.arch_number = d.arch_number;
+    return t;
+}
+
+const TableRow* Table::nearest(const Key& key) const {
+    std::vector<std::string> kv(keys.size());
+    std::vector<double> kl(keys.size(), 0.0);
+    for (std::size_t i = 0; i < keys.size(); ++i) {
+        const auto it = std::find_if(key.begin(), key.end(), [&](const KeyField& f) { return f.name == keys[i].name; });
+        if (it == key.end()) throw std::invalid_argument(file + ": key '" + keys[i].name + "' not supplied by the op");
+        kv[i] = it->value;
+        if (keys[i].log) kl[i] = std::log2(std::max(1.0, std::strtod(it->value.c_str(), nullptr)));
+    }
+    auto exact_match = [&](const TableRow& r) {
+        for (std::size_t i = 0; i < keys.size(); ++i)
+            if (!keys[i].log && r.keys[i] != kv[i]) return false;
+        return true;
+    };
+    const bool filter = std::any_of(rows.begin(), rows.end(), exact_match);
+    const TableRow* best = nullptr;
+    double best_d = 0.0;
+    for (const auto& r : rows) {
+        if (filter && !exact_match(r)) continue;
+        double dist = 0.0;
+        for (std::size_t i = 0; i < keys.size(); ++i)
+            if (keys[i].log) dist += std::fabs(r.log2_keys[i] - kl[i]);
+        const bool tie = best && std::fabs(dist - best_d) <= 1e-9;
+        if (!best || (!tie && dist < best_d) || (tie && r.log2_keys < best->log2_keys)) {
+            best = &r;
+            best_d = dist;
+        }
+    }
+    return best;
+}
+
+std::vector<const Table*> tables_in_borrow_order(std::string_view op, std::string_view dtype, const Device& d) {
+    const EnvValue& dir_env = settings().selection.tuned_dir;
+    const std::string dir = dir_env.is_set() ? dir_env.value() : std::string();
+    std::vector<const Table*> all;
+    {
+        std::lock_guard<std::mutex> lock(state_mutex());
+        auto& st = tables_state();
+        const std::string ck = std::string(op) + "|" + std::string(dtype) + "|" + dir + "|" +
+                               std::to_string(st.generation);
+        auto it = st.cache.find(ck);
+        if (it == st.cache.end()) it = st.cache.emplace(ck, load_tables(st, op, dtype, dir)).first;
+        all = it->second;
+    }
+    auto rank = [&](const Table* t) {
+        if (t->device == d.key) return std::make_tuple(0, 0, 0);
+        if (t->family == d.family) {
+            if (t->arch_number <= d.arch_number) return std::make_tuple(1, 0, d.arch_number - t->arch_number);
+            return std::make_tuple(1, 1, t->arch_number - d.arch_number);
+        }
+        return std::make_tuple(2 + family_rank(t->family), 0, -t->arch_number);
+    };
+    // §3/§7.6: the CPU never borrows a GPU table; without its own it reaches the last resort.
+    if (d.family == "cpu")
+        std::erase_if(all, [&](const Table* t) { return t->device != d.key; });
+    std::stable_sort(all.begin(), all.end(), [&](const Table* a, const Table* b) { return rank(a) < rank(b); });
+    return all;
+}
+
+namespace detail {
+
+bool trace_enabled() noexcept { return settings().diagnostics.select_trace; }
+
+void note_decision(std::string_view op, std::string spelling, std::string detail, std::string tag) {
+    Decision dec{std::string(op), std::move(spelling), std::move(detail), std::move(tag)};
+    for (auto& d : t_decisions)
+        if (d.op == op) {
+            d = std::move(dec);
+            return;
+        }
+    t_decisions.push_back(std::move(dec));
+}
+
+void note_borrow(std::string_view op, std::string_view dtype, const Device& d, const Table& t) {
+    if (!warn_once("borrow:" + std::string(op))) return;
+    std::fprintf(stderr, "batchlas: %.*s has no %.*s table for %s; borrowing %s (run tools/tune to tune this device)\n",
+                 static_cast<int>(op.size()), op.data(), static_cast<int>(dtype.size()), dtype.data(),
+                 d.key.c_str(), t.device.c_str());
+}
+
+void warn_native_fallback(std::string_view op, const Device& d) {
+    if (!warn_once("native:" + std::string(op))) return;
+    std::fprintf(stderr, "batchlas: %.*s pinned \"native\", but no native candidate can run this shape on %s; "
+                 "using the automatic choice\n", static_cast<int>(op.size()), op.data(), d.key.c_str());
+}
+
+std::string table_tag(const Table& t, const Device& d, bool own_table_exists) {
+    const std::string pre = t.is_override ? "override " : "";
+    if (t.device == d.key) return pre + t.device;
+    return pre + t.device + (t.is_override ? "" : " table") +
+           (own_table_exists ? ", fallthrough from " : ", borrowed for ") + d.key;
+}
+
+std::string format_detail(double ms, const std::string* next, double next_ms) {
+    std::string s = format_ms(ms) + " ms";
+    if (!next) return s;
+    const double rel = ms > 0 ? std::fabs(next_ms - ms) / ms : (next_ms == ms ? 0.0 : 1.0);
+    if (rel <= 0.03)
+        return s + ", tied with " + *next + " " + format_ms(next_ms) + " ms (" +
+               std::to_string(static_cast<int>(std::lround(rel * 100))) + "%)";
+    return s + ", next " + *next + " " + format_ms(next_ms) + " ms";
+}
+
+std::optional<std::string> pin_text(std::string_view op, std::string* source) {
+    std::string text;
+    if (auto it = std::find_if(t_pins.rbegin(), t_pins.rend(), [&](const auto& p) { return p.first == op; });
+        it != t_pins.rend()) {
+        text = it->second;
+        *source = "ScopedPin";
+    } else if (const auto o = op_from_name(op)) {
+        const char* raw = settings().routing.canonical_route(*o).get();
+        if (!raw) return std::nullopt;
+        text = raw;
+        *source = "BATCHLAS_" + dispatch::op_env_stem(*o) + "_ROUTE";
+    } else {
+        return std::nullopt;
+    }
+    text = std::string(trim(text));
+    for (char& c : text) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (text.empty()) return std::nullopt;
+    return text;
+}
+
+void push_pin(std::string_view op, std::string text) { t_pins.emplace_back(std::string(op), std::move(text)); }
+
+void pop_pin(std::string_view op) {
+    const auto it = std::find_if(t_pins.rbegin(), t_pins.rend(), [&](const auto& p) { return p.first == op; });
+    if (it != t_pins.rend()) t_pins.erase(std::next(it).base());
+}
+
+bool trace_open(std::string_view op, const std::string& spelling, bool vendor, const dispatch::OpShape& shape) {
+    if (dispatch::coverage::dynamic_enabled()) {
+        if (const auto o = op_from_name(op)) {
+            dispatch::OpShape s = shape;
+            s.op = *o;
+            dispatch::coverage::record_choice(*o, s.scalar, s.backend, s, vendor ? "vendor" : "native",
+                                              spelling.c_str());
+        }
+    }
+    if (!trace_enabled()) return false;
+    const auto dec = std::find_if(t_decisions.begin(), t_decisions.end(),
+                                  [&](const Decision& d) { return d.op == op && d.spelling == spelling; });
+    std::string line = indent() + std::string(op) + " " + std::string(dtype_from_scalar(shape.scalar)) +
+                       " n=" + std::to_string(shape.n) + " batch=" + std::to_string(shape.batch) + " -> " + spelling;
+    if (dec != t_decisions.end()) {
+        if (!dec->detail.empty()) line += "  " + dec->detail;
+        line += "  [" + dec->tag + "]";
+        t_decisions.erase(dec);
+    } else {
+        line += "  [untraced]";
+    }
+    std::fprintf(stderr, "%s\n", line.c_str());
+    ++t_depth;
+    return true;
+}
+
+void trace_close() {
+    if (t_depth > 0) --t_depth;
+}
+
+}  // namespace detail
+
+namespace testing {
+
+void set_builtin_tables(std::vector<std::pair<std::string, std::string>> files) {
+    std::lock_guard<std::mutex> lock(state_mutex());
+    tables_state().test_builtin = std::move(files);
+    ++tables_state().generation;
+}
+
+void use_embedded_tables() {
+    std::lock_guard<std::mutex> lock(state_mutex());
+    tables_state().test_builtin.reset();
+    ++tables_state().generation;
+}
+
+void reset_warnings() {
+    std::lock_guard<std::mutex> lock(state_mutex());
+    warned().clear();
+}
+
+}  // namespace testing
+
+}  // namespace batchlas::select
+
+namespace batchlas::dispatch::coverage {
+
+bool select_trace_active() noexcept { return select::t_depth > 0 && select::detail::trace_enabled(); }
+
+void select_trace_old_route(const OpShape& s, Route chosen) {
+    std::string route(to_string(chosen.origin));
+    if (chosen.algo != Algorithm::Auto) route += ":" + std::string(to_string(chosen.algo));
+    std::fprintf(stderr, "%s%s %s m=%lld n=%lld k=%lld batch=%lld -> (old routing: %s)\n",
+                 select::indent().c_str(), std::string(op_name(s.op)).c_str(),
+                 std::string(select::dtype_from_scalar(s.scalar)).c_str(), static_cast<long long>(s.m),
+                 static_cast<long long>(s.n), static_cast<long long>(s.k), static_cast<long long>(s.batch),
+                 route.c_str());
+}
+
+}  // namespace batchlas::dispatch::coverage

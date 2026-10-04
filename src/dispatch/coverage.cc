@@ -39,6 +39,8 @@ struct Row {
     bool native_existed = false;
     int  native_supported = 0;   // tri-state; -1 = call site could not tell
     uint64_t calls = 0;
+    std::string origin_text;     // record_choice rows: printed instead of `chosen`
+    std::string algo_text;
 };
 
 // Structural flags belong in the KEY; without them calls differing only in
@@ -70,6 +72,12 @@ std::mutex& table_mutex() {
 // up not as a crash but as an output file with no `miss` rows at all.
 std::unordered_map<uint64_t, Row>& table() {
     static auto* t = new std::unordered_map<uint64_t, Row>();
+    return *t;
+}
+
+// Keyed by text too: one shape class can reach several spellings of one family.
+std::unordered_map<std::string, Row>& choice_table() {
+    static auto* t = new std::unordered_map<std::string, Row>();  // leaked; see table()
     return *t;
 }
 
@@ -121,7 +129,11 @@ void emit() {
                "native_route_supported,library,uplo,side,diag,transA,transB\n", f);
 
     std::lock_guard<std::mutex> lock(table_mutex());
-    for (const auto& [k, r] : table()) {
+    auto print_reached = [f](const Row& r) {
+        const std::string origin =
+            r.origin_text.empty() ? std::string(to_string(r.chosen.origin)) : r.origin_text;
+        const std::string algo =
+            r.algo_text.empty() ? std::string(to_string(r.chosen.algo)) : r.algo_text;
         std::fprintf(f, "reached,%s,%s,%s,%u,%lld,%lld,%lld,%lld,%s,%s,%llu,%d,%d,,%d,%d,%d,%d,%d\n",
                      std::string(op_name(r.op)).c_str(),
                      std::string(to_string(r.scalar)).c_str(),
@@ -129,14 +141,15 @@ void emit() {
                      r.shape.shape_class(),
                      static_cast<long long>(r.shape.m), static_cast<long long>(r.shape.n),
                      static_cast<long long>(r.shape.k), static_cast<long long>(r.shape.batch),
-                     std::string(to_string(r.chosen.origin)).c_str(),
-                     std::string(to_string(r.chosen.algo)).c_str(),
+                     origin.c_str(), algo.c_str(),
                      static_cast<unsigned long long>(r.calls),
                      r.native_existed ? 1 : 0, r.native_supported,
                      static_cast<int>(r.shape.uplo), static_cast<int>(r.shape.side),
                      static_cast<int>(r.shape.diag), static_cast<int>(r.shape.transA),
                      static_cast<int>(r.shape.transB));
-    }
+    };
+    for (const auto& [k, r] : table()) print_reached(r);
+    for (const auto& [k, r] : choice_table()) print_reached(r);
     for (const auto& [k, m] : misses()) {
         std::fprintf(f, "miss,%s,%s,%s,,,,,,,,%llu,0,0,%s\n",
                      std::string(op_name(m.op)).c_str(),
@@ -221,6 +234,27 @@ void record(Op op, ScalarKind scalar, Backend backend, const OpShape& shape,
         row.chosen = chosen;
         row.native_existed = native_existed;
         row.native_supported = native_supported;
+    }
+    ++row.calls;
+}
+
+void record_choice(Op op, ScalarKind scalar, Backend backend, const OpShape& shape,
+                   const char* origin, const char* spelling) {
+    const std::string o = origin ? origin : "";
+    const std::string a = spelling ? spelling : "";
+    const std::string key = std::to_string(key_of(op, scalar, backend, shape.shape_class(),
+                                                  variant_key(shape))) + "|" + o + "|" + a;
+    std::lock_guard<std::mutex> lock(table_mutex());
+    auto& row = choice_table()[key];
+    if (row.calls == 0) {
+        row.op = op;
+        row.scalar = scalar;
+        row.backend = backend;
+        row.shape = shape;
+        row.native_existed = true;
+        row.native_supported = -1;   // TraceScope sees the choice, not the candidate walk
+        row.origin_text = o;
+        row.algo_text = a;
     }
     ++row.calls;
 }

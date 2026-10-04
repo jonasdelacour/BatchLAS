@@ -149,6 +149,7 @@ void load_selection(SelectionSettings& s) {
     s.syevx_soft_lock = raw("BATCHLAS_SYEVX_SOFT_LOCK");
     s.sytrd_impl = raw("BATCHLAS_SYTRD_IMPL");
     s.sytrd_trailing_update = raw("BATCHLAS_SYTRD_TRAILING_UPDATE");
+    s.tuned_dir = raw("BATCHLAS_TUNED_DIR");
 
     s.sytrd_force_local_small = env_truthy(std::getenv("BATCHLAS_SYTRD_FORCE_LOCAL_SMALL"));
 
@@ -267,6 +268,7 @@ void load_diagnostics(DiagnosticsSettings& d) {
     }
 
     d.coverage_out = raw("BATCHLAS_COVERAGE_OUT");
+    d.select_trace = env_truthy(std::getenv("BATCHLAS_SELECT_TRACE"));
 
     // PRESENCE ONLY, empty string included: the call site tests the pointer.
     d.debug_filter_degree = raw_or_null("BATCHLAS_DEBUG_FILTER_DEGREE") != nullptr;

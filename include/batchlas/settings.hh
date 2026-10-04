@@ -322,6 +322,10 @@ struct SelectionSettings {
     // accepted in upper and lower case. syr2k and her2k map to one route on
     // purpose.
     EnvValue sytrd_trailing_update{};
+
+    // BATCHLAS_TUNED_DIR. A directory of select tables (src/select/select.hh): a
+    // file there replaces the built-in table of the same name.
+    EnvValue tuned_dir{};
 };
 
 // ---------------------------------------------------------------------------
@@ -548,6 +552,10 @@ struct DiagnosticsSettings {
     // re-reads it to build the filename), which is a pair that could already
     // disagree. One capture removes that.
     EnvValue coverage_out{};
+
+    // BATCHLAS_SELECT_TRACE, via env_truthy. One stderr line per select::choose
+    // decision (src/select/select.hh).
+    bool select_trace = false;
 
     // BATCHLAS_DEBUG_FILTER_DEGREE. PRESENCE ONLY: any value, INCLUDING THE
     // EMPTY STRING, enables it, because the call site only tests the getenv

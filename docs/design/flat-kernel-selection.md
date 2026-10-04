@@ -256,7 +256,9 @@ Event potrf(Queue& q, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo, Sp
             Span<int32_t> info) {
   potrf_validate_params(A, uplo);
   const auto c = ops::potrf::choose<B, T>(q, A, uplo);
-  select::TraceScope trace("potrf", c, A.rows(), A.batch_size());   // prints, records coverage, indents children
+  auto shape = select::square_shape<B, T>(A.rows(), A.batch_size());   // coverage key: scalar, backend
+  shape.uplo = uplo;                                                     // ... and uplo, never inferred
+  select::TraceScope trace("potrf", c, shape);   // prints, records coverage, indents children
   ops::potrf::launch<B, T>(q, c, A, uplo, ws, info);
   return q.get_event();
 }

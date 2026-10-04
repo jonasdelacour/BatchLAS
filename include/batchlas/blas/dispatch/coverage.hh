@@ -68,6 +68,16 @@ namespace batchlas::dispatch::coverage {
 BATCHLAS_API void record(Op op, ScalarKind scalar, Backend backend, const OpShape& shape,
                          Route chosen, bool native_route_existed, int native_route_supported);
 
+// select::TraceScope's row: the same `reached` CSV row, with the choice spelling
+// ("lpanel:panel=8") in chosen_algo and "native"/"vendor" in chosen_origin.
+BATCHLAS_API void record_choice(Op op, ScalarKind scalar, Backend backend, const OpShape& shape,
+                                const char* origin, const char* spelling);
+
+// Defined in src/select/select.cc: prints an old resolver's Route as an indented child
+// line under an active select::TraceScope. Deleted with this resolver.
+BATCHLAS_API bool select_trace_active() noexcept;
+BATCHLAS_API void select_trace_old_route(const OpShape& shape, Route chosen);
+
 // A call that found no route at all. Recorded separately because it is the row
 // that matters most: it is a gap, not a preference.
 BATCHLAS_API void record_miss(Op op, ScalarKind scalar, Backend backend, const char* library);
