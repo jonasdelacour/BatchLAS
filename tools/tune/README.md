@@ -47,6 +47,7 @@ refuses to run without the launcher, and its guard dies if the driver's pid ever
 | `--ld-pad` | 0 | ld = n + pad (non-natural leading dimension) |
 | `--n-list`, `--batches`, `--nrhs-list`, `--uplo`, `--grid key=v1:v2` | the op's `choice.hh` grid | replace whole grid axes |
 | `--no-guard`, `--guard-wait`, `--util-ceiling` | on, 300 s, 5 % | the idle guard; see "Guard" |
+| `--allow-idle-foreign` | off | tolerate another user's idle CUDA contexts; see "Guard" |
 | `--lock-dir` | `/tmp` | per-GPU flock files `batchlas_tune_gpu<N>.lock` |
 | `--cell-timeout` | 1800 s | a child running longer is killed and counts as a failed child |
 | `--gate`, `--old-csv`, `--parent-bin`, `--gate-csv`, `--gate-limit` | 1.05 | gate mode |
@@ -101,14 +102,25 @@ At start the tuner warns when a listed GPU drives a display (AGENTS.md §13) or 
 on the box has compute processes (AGENTS.md §10). Without nvidia-smi the tuner stops; `--no-guard`
 measures without the guard.
 
+`--allow-idle-foreign` is for a shared box where another user holds idle contexts on every GPU
+(maintainer decision, 2026-10-04). Before each child, foreign compute processes are tolerated
+while utilization is at most `--util-ceiling`, and that child remembers their pids. After the
+child, only a pid that was not in that set discards the numbers. A busy GPU still refuses, and
+so does any entry nvidia-smi cannot show as a pid (`[N/A]`), since a new one could not be told
+apart from it. At start the tuner prints one warning per listed GPU naming the tolerated
+`pid(user)` entries. The raw files record `allow_idle_foreign` and `tolerated_foreign`
+(`gpu:pid(user),..;..` as seen at start) in `meta` (gate mode: a `guard` record), and each
+`pass`/`rep` record carries the pids that child ran beside. Without the flag the guard is strict
+as above.
+
 ## Raw JSONL (schema 1)
 
 One file per (op, dtype, device): `<raw>/<op>.<dtype>.<device>.jsonl`, one flat JSON object per line.
 
 | kind | fields |
 |---|---|
-| `meta` (first line) | `schema`, `op`, `dtype`, `device`, `device_name`, `batchlas` (8-hex HEAD, `-dirty` when tracked files differ), `kernels` (§6.4 hash), `kernel_sources` (`\|`-joined), `date`, `keys` (the `# keys:` line), `candidates` (`\|`-joined, list order), `reps`, `warm_s`, `passes`, `tie`, `remeasure`, `refine_ratio` (0 = off), `cap_gib`, `ld_pad`, `devices`, `argv` |
-| `rep` | `op`, `dtype`, `device`, the key fields, `pass` (1-based), `attempt` (0, or 1 for a re-measure), `reverse`, `gpu`, `cand`, `rep`, `slot` (position in that rep's rotated order), `ms` |
+| `meta` (first line) | `schema`, `op`, `dtype`, `device`, `device_name`, `batchlas` (8-hex HEAD, `-dirty` when tracked files differ), `kernels` (§6.4 hash), `kernel_sources` (`\|`-joined), `date`, `keys` (the `# keys:` line), `candidates` (`\|`-joined, list order), `reps`, `warm_s`, `passes`, `tie`, `remeasure`, `refine_ratio` (0 = off), `cap_gib`, `ld_pad`, `devices`, `allow_idle_foreign`, `tolerated_foreign` (see "Guard"), `argv` |
+| `rep` | `op`, `dtype`, `device`, the key fields, `pass` (1-based), `attempt` (0, or 1 for a re-measure), `reverse`, `gpu`, `tolerated_foreign` (only with `--allow-idle-foreign`), `cand`, `rep`, `slot` (position in that rep's rotated order), `ms` |
 | `pass` | as `rep` without `rep`/`slot`/`ms`, plus `status` (`ok`, `skipped`, `bad`, `error`), `reason`, `median_ms`, `residual`, `info_nonzero`, `reps` |
 | `retry` | `op`, `dtype`, the key fields, `mode`, `error`: a child that failed and was run again |
 | `cell` (last lines) | the key fields, `round` (0 = coarse grid), `refined`, `status` (`ok`, `none` = no candidate timed in every pass of any attempt, `skipped` = over the cap), `reason`, `final_attempt` (the attempt used, -1 when none), `ranked` (`\|`-joined) |

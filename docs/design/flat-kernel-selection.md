@@ -1083,4 +1083,5 @@ The full plan, with file:line maps, is in `flat-kernel-selection-phase3-plan.md`
 - **Blackwell kernels before trsm/gemm.** The kernels from `worktree-blackwell-tuning` (`trsm_sg_left.cc`, 2 wide gemm configs) are ported first, as kernels only, with every `is_sm120_family`/`cuda_cc` predicate dropped. The sweeps then rank them as ordinary candidates.
 - **gemm:** delete the 5 experimental variants and the 4 pin-only register variants. Rejected: a screening pass (the full §6.3 protocol is used); vendor before direct in last resort; routing symm/syrk/syr2k/trmm through the public gemm. These are to be revisited when P3.4 starts.
 - **§11 posv bullet is wrong.** posv calls the public `potrf`/`trsm`. Its only direct driver calls are its own kernels (`posv_tiny_dispatch`, `potrs_fused_dispatch`). Nothing needs migrating there.
-
+- **Shared box: idle foreign contexts are allowed** (`--allow-idle-foreign`, and benchmarks' posv sweep resume used an equivalent guard); a busy GPU or a new foreign process still refuses.
+- **gemm, decided 2026-10-04 (before P3.4):** symm, syrk, syr2k and trmm call the public `gemm<B,T>` instead of `gemm_vendor`, so they get the table-driven choice once the `cublas.cc`/`rocblas.cc` reroute is deleted. gemm's `last_resort` is native first: `direct`, then `vendor` (`can_run` keeps `precision != Default` and the CPU on vendor).

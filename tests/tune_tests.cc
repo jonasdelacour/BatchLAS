@@ -443,3 +443,41 @@ TEST(TuneGuard, EveryOtherLineIsForeignIncludingUnparseableOnes) {
     EXPECT_EQ(b.foreign.size(), 2u);
     EXPECT_TRUE(scan_compute_apps(" \n", 7).foreign.empty());
 }
+
+AppScan foreign(std::vector<std::string> f) { return AppScan{std::move(f), false}; }
+
+TEST(TuneGuard, StrictModeRefusesAnyForeignProcessAndDiscardsOnAny) {
+    EXPECT_EQ(guard_before(foreign({"610696"}), 0, 5, false).refuse, "compute processes [610696]");
+    EXPECT_EQ(guard_before(foreign({}), 6, 5, false).refuse, "utilization 6%");
+    const GuardCheck ok = guard_before(foreign({}), 5, 5, false);
+    EXPECT_EQ(ok.refuse, "");
+    EXPECT_TRUE(ok.tolerated.empty());
+    EXPECT_EQ(guard_new_foreign(foreign({"610696"}), ok.tolerated), (std::vector<std::string>{"610696"}));
+    EXPECT_TRUE(guard_new_foreign(foreign({}), ok.tolerated).empty());
+}
+
+TEST(TuneGuard, IdleForeignPidsAreToleratedAtStart) {
+    const GuardCheck g = guard_before(foreign({"610696", "671125"}), 3, 5, true);
+    EXPECT_EQ(g.refuse, "");
+    EXPECT_EQ(g.tolerated, (std::vector<std::string>{"610696", "671125"}));
+    EXPECT_TRUE(guard_new_foreign(foreign({"671125", "610696"}), g.tolerated).empty());
+    EXPECT_TRUE(guard_new_foreign(foreign({"610696"}), g.tolerated).empty());  // one exited
+}
+
+TEST(TuneGuard, NewForeignPidDuringTheChildDiscards) {
+    const GuardCheck g = guard_before(foreign({"610696"}), 0, 5, true);
+    ASSERT_EQ(g.refuse, "");
+    EXPECT_EQ(guard_new_foreign(foreign({"610696", "700001"}), g.tolerated), (std::vector<std::string>{"700001"}));
+    EXPECT_EQ(guard_new_foreign(foreign({"[N/A]"}), g.tolerated), (std::vector<std::string>{"[N/A]"}));
+}
+
+TEST(TuneGuard, BusyUtilizationRefusesEvenWithIdleForeignAllowed) {
+    EXPECT_EQ(guard_before(foreign({"610696"}), 57, 5, true).refuse,
+              "utilization 57% with compute processes [610696]");
+    EXPECT_EQ(guard_before(foreign({}), 6, 5, true).refuse, "utilization 6%");
+    EXPECT_TRUE(guard_before(foreign({"610696"}), 57, 5, true).tolerated.empty());
+}
+
+TEST(TuneGuard, UnparseableEntriesRefuseEvenWithIdleForeignAllowed) {
+    EXPECT_EQ(guard_before(foreign({"610696", "[N/A]"}), 0, 5, true).refuse, "compute processes [610696,[N/A]]");
+}

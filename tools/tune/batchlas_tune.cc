@@ -73,6 +73,7 @@ struct Opts {
     double warm = 1.5, remeasure = 0.10, refine_ratio = 1.1, cap_gib = 4.0, cell_timeout = 1800, guard_wait = 300;
     double util_ceiling = 5;  // benchmarks/gpu_guard.sh UTIL_CEILING
     bool jit = true, refine = true, guard = true, devices_given = false, dtype_given = false;
+    bool allow_idle_foreign = false;
     std::string lock_dir = "/tmp";
     std::map<std::string, std::vector<std::string>> grid;
     bool gate = false;
@@ -232,6 +233,7 @@ struct ChildOut {
     bool ok = false;
     bool guard = false;  // a foreign process was on the GPU when the child finished
     std::string error;
+    std::vector<std::string> tolerated;  // idle foreign pids accepted before the child
     std::vector<Record> records;
     pid_t pid = -1;
 };
@@ -252,7 +254,7 @@ public:
     ChildOut child(int gpu, const std::string& bin, const std::string& dtype, const CellKey& key,
                    const std::vector<std::string>& arms, const std::string& mode, bool reverse,
                    const std::string& coverage = "") {
-        guard(gpu);
+        const std::vector<std::string> tolerated = guard(gpu);
         const std::string id = std::to_string(gpu) + "_" + std::to_string(counter_++);
         const std::string res = tmp_ + "/r" + id + ".jsonl", log = tmp_ + "/l" + id + ".log";
         std::vector<std::string> argv{bin, "--cell", spec_.op(), "--dtype", dtype, "--key", key_arg(key),
@@ -266,14 +268,17 @@ public:
         const Spawned s = spawn_wait(argv, env, log, o_.cell_timeout);
         ChildOut c;
         c.pid = s.pid;
+        c.tolerated = tolerated;
         if (s.status != 0) {
             c.error = (s.timed_out ? "timeout" : "exit " + std::to_string(s.status)) + ": " + tail(log);
             return c;
         }
         // gpu_guard.sh's after-check: a process that landed on the GPU mid-child voids its numbers.
-        if (const std::string who = o_.guard ? busy(gpu, false) : ""; !who.empty()) {
+        // Strict mode tolerated nothing, so any foreign entry is new.
+        if (const auto fresh = o_.guard ? guard_new_foreign(apps(gpu), tolerated) : std::vector<std::string>{};
+            !fresh.empty()) {
             c.guard = true;
-            c.error = "guard: " + who + " on GPU " + std::to_string(gpu) + " after the child; numbers discarded";
+            c.error = "guard: compute processes [" + join(fresh, ",") + "] on GPU " + std::to_string(gpu) + " after the child; numbers discarded";
             return c;
         }
         try {
@@ -341,8 +346,10 @@ private:
     std::ofstream raw_;
     std::vector<std::string> cands_;
 
-    std::string busy(int gpu, bool check_util);
-    void guard(int gpu);
+    std::string tolerated_at_start_;  // "gpu:pid(user),..;.." for the meta record
+    AppScan apps(int gpu);
+    double utilization(int gpu);
+    std::vector<std::string> guard(int gpu);
     std::string preflight();
     void write(const std::string& line) {
         std::lock_guard<std::mutex> lock(out_mu_);
@@ -356,8 +363,7 @@ private:
     void convert(const std::string& jsonl);
 };
 
-// "" when the GPU may be measured on, else what is on it (compute processes, then utilization).
-std::string Driver::busy(int gpu, bool check_util) {
+AppScan Driver::apps(int gpu) {
     const std::string id = "nvidia-smi --id=" + std::to_string(gpu);
     std::string out = capture(id + " --query-compute-apps=pid --format=csv,noheader 2>/dev/null; echo rc=$?");
     const auto rc = out.rfind("rc=");
@@ -366,21 +372,26 @@ std::string Driver::busy(int gpu, bool check_util) {
     out.resize(rc);
     const AppScan scan = scan_compute_apps(out, long(::getpid()));
     if (scan.self) die("the driver holds a CUDA context on GPU " + std::to_string(gpu) + ": start it via the launcher");
-    if (!scan.foreign.empty()) return "compute processes [" + join(scan.foreign, ",") + "]";
-    if (!check_util) return "";
-    const std::string util = capture(id + " --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null");
-    if (util.empty() || util.find_first_not_of("0123456789") != std::string::npos)
-        die("cannot read GPU " + std::to_string(gpu) + " utilization ('" + util + "'); --no-guard skips the guard");
-    if (std::stod(util) > o_.util_ceiling) return "utilization " + util + "%";
-    return "";
+    return scan;
 }
 
-void Driver::guard(int gpu) {
-    if (!o_.guard) return;
+double Driver::utilization(int gpu) {
+    const std::string util = capture("nvidia-smi --id=" + std::to_string(gpu) +
+                                     " --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null");
+    if (util.empty() || util.find_first_not_of("0123456789") != std::string::npos)
+        die("cannot read GPU " + std::to_string(gpu) + " utilization ('" + util + "'); --no-guard skips the guard");
+    return std::stod(util);
+}
+
+// The foreign pids this child runs beside (always empty in strict mode).
+std::vector<std::string> Driver::guard(int gpu) {
+    if (!o_.guard) return {};
     for (double waited = 0;; waited += 1) {
-        const std::string who = busy(gpu, true);
-        if (who.empty()) return;
-        if (waited >= o_.guard_wait) die("GPU " + std::to_string(gpu) + " is busy (" + who + "); refusing to measure");
+        const AppScan scan = apps(gpu);
+        const GuardCheck g = guard_before(scan, utilization(gpu), o_.util_ceiling, o_.allow_idle_foreign);
+        if (g.refuse.empty()) return g.tolerated;
+        if (waited >= o_.guard_wait)
+            die("GPU " + std::to_string(gpu) + " is busy (" + g.refuse + "); refusing to measure");
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
 }
@@ -398,6 +409,16 @@ std::string Driver::preflight() {
         if (capture(q + " --query-gpu=display_active --format=csv,noheader 2>/dev/null") == "Enabled")
             std::fprintf(stderr, "batchlas_tune: warning: GPU %d drives a display, which slows L2-resident cells "
                                  "(AGENTS.md §13); prefer a headless GPU\n", gpu);
+        if (!o_.allow_idle_foreign || !o_.guard) continue;
+        std::vector<std::string> who;
+        for (const std::string& pid : apps(gpu).foreign) {
+            const std::string user = pid.find_first_not_of("0123456789") == std::string::npos
+                                         ? capture("ps -o user= -p " + pid + " 2>/dev/null") : "";
+            who.push_back(pid + "(" + (user.empty() ? "?" : user) + ")");
+        }
+        std::fprintf(stderr, "batchlas_tune: warning: --allow-idle-foreign: GPU %d tolerates idle foreign compute "
+                             "processes [%s] while utilization <= %g%%\n", gpu, join(who, ",").c_str(), o_.util_ceiling);
+        tolerated_at_start_ += (tolerated_at_start_.empty() ? "" : ";") + std::to_string(gpu) + ":" + join(who, ",");
     }
     for (const std::string& idx : split(capture("nvidia-smi --query-gpu=index --format=csv,noheader 2>/dev/null"), '\n')) {
         if (idx.find_first_not_of("0123456789") != std::string::npos ||
@@ -433,6 +454,7 @@ PassData Driver::timed(Cell& c, int pass, int attempt) {
         Json j;
         j.str("kind", kind).str("op", spec_.op()).str("dtype", dtype_).str("device", device_).key(c.key)
             .integer("pass", pass + 1).integer("attempt", attempt).boolean("reverse", reverse).integer("gpu", c.gpu);
+        if (o_.allow_idle_foreign) j.str("tolerated_foreign", join(ch.tolerated, ","));
         return j;
     };
     for (const auto& cand : cands_) {
@@ -513,6 +535,7 @@ std::string Driver::meta_line(const std::string& name) const {
         .integer("reps", o_.reps).num("warm_s", o_.warm).integer("passes", o_.passes).num("tie", kTie)
         .num("remeasure", o_.remeasure).num("refine_ratio", o_.refine ? o_.refine_ratio : 0.0)
         .num("cap_gib", o_.cap_gib).integer("ld_pad", o_.ld_pad).str("devices", join(devs, ","))
+        .boolean("allow_idle_foreign", o_.allow_idle_foreign).str("tolerated_foreign", tolerated_at_start_)
         .str("argv", join(o_.argv, " ")).line();
 }
 
@@ -613,6 +636,10 @@ int Driver::gate() {
     if (!o_.raw.empty()) {
         fs::create_directories(o_.raw);
         raw_.open(o_.raw + "/gate." + spec_.op() + "." + device_ + ".jsonl", std::ios::trunc);
+        if (raw_.is_open())
+            write(Json().str("kind", "guard").boolean("guard", o_.guard)
+                      .boolean("allow_idle_foreign", o_.allow_idle_foreign)
+                      .str("tolerated_foreign", tolerated_at_start_).line());
     }
     const double cap = o_.cap_gib * 1024.0 * 1024.0 * 1024.0;
     std::vector<std::string> rows(cells.size());
@@ -710,7 +737,7 @@ void usage() {
         "options: --dtype float,double,cfloat,cdouble  --raw DIR  --out DIR\n"
         "         --reps 16 --warm 1.5 --passes 2 --remeasure 0.10 --refine-ratio 1.1 --no-refine\n"
         "         --no-jit --cap-gib 4 --ld-pad 0 --cell-timeout 1800 --no-guard --guard-wait 300\n"
-        "         --util-ceiling 5\n"
+        "         --util-ceiling 5 --allow-idle-foreign\n"
         "         --lock-dir /tmp --repo DIR  grid: --n-list --batches --nrhs-list --uplo  --grid key=v1:v2\n"
         "         gate: --gate-limit 1.05\n"
         "see tools/tune/README.md");
@@ -771,6 +798,7 @@ int main(int argc, char** argv) {
         else if (f == "--no-guard") o.guard = false;
         else if (f == "--guard-wait") o.guard_wait = std::stod(val());
         else if (f == "--util-ceiling") o.util_ceiling = std::stod(val());
+        else if (f == "--allow-idle-foreign") o.allow_idle_foreign = true;
         else if (f == "--lock-dir") o.lock_dir = val();
         else if (f == "--n-list") o.grid["n"] = csv_list(val());
         else if (f == "--batches") o.grid["batch"] = csv_list(val());

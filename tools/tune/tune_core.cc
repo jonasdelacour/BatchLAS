@@ -599,4 +599,40 @@ AppScan scan_compute_apps(std::string_view out, long self_pid) {
     return s;
 }
 
+namespace {
+bool is_pid(const std::string& s) {
+    return !s.empty() && s.find_first_not_of("0123456789") == std::string::npos;
+}
+std::string bracket(const std::vector<std::string>& v) {
+    std::string out;
+    for (const auto& s : v) out += (out.empty() ? "" : ",") + s;
+    return "[" + out + "]";
+}
+}  // namespace
+
+GuardCheck guard_before(const AppScan& scan, double util, double ceiling, bool allow_idle_foreign) {
+    GuardCheck g;
+    const bool all_pids = std::all_of(scan.foreign.begin(), scan.foreign.end(), is_pid);
+    if (!scan.foreign.empty() && (!allow_idle_foreign || !all_pids)) {
+        g.refuse = "compute processes " + bracket(scan.foreign);
+        return g;
+    }
+    char u[32];
+    std::snprintf(u, sizeof(u), "%g", util);
+    if (util > ceiling) {
+        g.refuse = "utilization " + std::string(u) + "%";
+        if (!scan.foreign.empty()) g.refuse += " with compute processes " + bracket(scan.foreign);
+        return g;
+    }
+    g.tolerated = scan.foreign;
+    return g;
+}
+
+std::vector<std::string> guard_new_foreign(const AppScan& after, const std::vector<std::string>& tolerated) {
+    std::vector<std::string> fresh;
+    for (const auto& f : after.foreign)
+        if (!is_pid(f) || std::find(tolerated.begin(), tolerated.end(), f) == tolerated.end()) fresh.push_back(f);
+    return fresh;
+}
+
 }  // namespace batchlas::tune

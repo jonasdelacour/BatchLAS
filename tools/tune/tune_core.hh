@@ -151,4 +151,12 @@ struct AppScan {
 };
 AppScan scan_compute_apps(std::string_view nvidia_smi_out, long self_pid);
 
+// Before/after a child (README "Guard"): refuse "" = measure; after: untolerated entries = discard.
+struct GuardCheck {
+    std::string refuse;
+    std::vector<std::string> tolerated;
+};
+GuardCheck guard_before(const AppScan& scan, double util, double ceiling, bool allow_idle_foreign);
+std::vector<std::string> guard_new_foreign(const AppScan& after, const std::vector<std::string>& tolerated);
+
 }  // namespace batchlas::tune
