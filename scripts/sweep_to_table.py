@@ -10,14 +10,20 @@ tables); flat-kernel-selection-phase3-plan.md section 2 option D.
     scripts/sweep_to_table.py --check                # re-derive and diff every table, check nearest()
     scripts/sweep_to_table.py --check --check-points pts.txt
     scripts/sweep_to_table.py --self-test            # converter rules on real rows (also run by --check)
+    scripts/sweep_to_table.py --tuner JSONL... [--out DIR]   # tables from batchlas_tune raw output
 
-A table comes from one of two sources:
+A table comes from one of three sources:
 
 * converted: forced-route sweeps (JSONL) in benchmarks/results/routing/, one timed ranked
   list per measured cell, "uplo=L n=64 batch=8192 | lpanel:panel=8 0.302 | vendor 0.490".
 * transcribed: the old router's preference order, evaluated at every grid cell by a per-op
   C++ transcriber, "uplo=L n=8 nrhs=1 batch=128 | tiny - | cta - | blocked -". The header
   carries source=transcribed:<sha> and transcriber_csv=<path>.
+* tuner: tools/tune/batchlas_tune's raw JSONL (schema in tools/tune/README.md). The header
+  carries kernels=<hash> from the run and source=tuner:<jsonl>. Rows are formatted by the
+  same code as converted ones (table_text), so tuner and converted tables differ only in
+  their header. The tuner pins each candidate with select::ScopedPin, and a concrete pin
+  either runs or throws (rule R6), so its rows need no reached-route readback.
 
 --check is the pure-data half of the acceptance gate (section 10.2). Every file in tuned/
 must belong to a registered op and equal what its source produces (a transcribed table
@@ -43,6 +49,7 @@ THE FRAMEWORK. Everything op-specific is one OpSpec in OPS:
   sources          converted inputs per device; a source whose first file is absent is pending,
                    one with adopted=False is read and validated but writes no table yet
   review           optional extra --check report
+  tuner_key        tuner "pass" record -> key tuple (default: the '# keys:' fields by name)
 
 To add an op: write its OpSpec (copy POSV), append it to OPS, run without flags to write the
 converted tables or --transcribe for untimed ones, then --check.
@@ -68,6 +75,15 @@ A cell's time per arm is the mean of its pass medians; >10% spread marks the row
 and so does any kept ok=false row. A non-pending source that yields no cell, or any row
 whose key is malformed, is a hard failure: a drifted contract must not convert to nothing.
 An unterminated last line (a sweep still appending) is skipped with a note.
+
+TUNER JSONL (--tuner input), read by read_tuner: the first line is the "meta" record (op,
+dtype, device, batchlas, kernels, date, keys, candidates, passes, reps, warm_s, ld_pad); the
+"pass" records carry the op's key fields, cand, status, pass, attempt and median_ms. Per cell
+only the highest attempt that timed anything counts (a re-measured cell replaces its first
+measurement, unless every re-measure child failed); a
+candidate counts when it is status "ok" in all `passes` passes of that attempt, and its time
+is the mean of those pass medians, ">10% spread" marking the row "# noisy" as above. OpSpec
+field tuner_key turns a record into the key tuple; the default reads each '# keys:' name.
 
 TRANSCRIBER CSV (--transcribe input), with a header row:
   op,dtype,device,<one column per '# keys:' name>,ranked
@@ -133,6 +149,7 @@ class OpSpec:
     route_field: str = "route"
     keep_not_ok: Callable = lambda r: False
     review: Optional[Callable] = None
+    tuner_key: Optional[Callable] = None
 
 
 UPLO = {"L": "L", "Lower": "L", "lower": "L", "U": "U", "Upper": "U", "upper": "U"}
@@ -321,12 +338,13 @@ def fmt_key(spec, key):
     return " ".join(f"{name}={v}" for (name, _, _), v in zip(parse_keys(spec.keys), key))
 
 
-def converted_text(spec, src, dtype, rows, date):
-    source = " + ".join(f"{ROUTING}/{f}" for f in src.files)
+def table_text(spec, dtype, device, batchlas, kernels, date, source, rows):
+    """The section 5.4 text of a timed table; rows maps key -> (times, noisy). The one
+    formatter for converted and tuner tables."""
     lines = [
-        f"# op={spec.op} dtype={dtype} device={src.device} batchlas={src.batchlas} "
-        f"kernels=unknown date={date}",
-        f"# source={source} ({src.note})",
+        f"# op={spec.op} dtype={dtype} device={device} batchlas={batchlas} "
+        f"kernels={kernels} date={date}",
+        f"# source={source}",
         f"# keys: {spec.keys}",
     ]
     for key in sorted(rows):
@@ -334,6 +352,79 @@ def converted_text(spec, src, dtype, rows, date):
         entries = " | ".join(f"{c} {fmt_ms(times[c])}" for c in rank(times, spec.candidate_order))
         lines.append(f"{fmt_key(spec, key)} | {entries}" + ("   # noisy" if noisy else ""))
     return "\n".join(lines) + "\n"
+
+
+def converted_text(spec, src, dtype, rows, date):
+    source = " + ".join(f"{ROUTING}/{f}" for f in src.files)
+    return table_text(spec, dtype, src.device, src.batchlas, "unknown", date,
+                      f"{source} ({src.note})", rows)
+
+
+TUNER = "tuner:"
+TUNER_SCHEMA = 1
+
+
+def tuner_rel(path):
+    """The JSONL path as a tuner table header names it: repo-relative when inside the repo."""
+    rel = os.path.relpath(os.path.abspath(path), REPO)
+    return os.path.abspath(path) if rel.startswith("..") else rel
+
+
+def read_tuner(path):
+    """Return (spec, meta, {key: (times, noisy)}) from one batchlas_tune raw JSONL file."""
+    recs = load_rows(path)
+    if not recs or recs[0].get("kind") != "meta":
+        raise SystemExit(f"{path}: the first record is not a tuner 'meta' record")
+    meta = recs[0]
+    if meta.get("schema") != TUNER_SCHEMA:
+        raise SystemExit(f"{path}: tuner schema {meta.get('schema')} != {TUNER_SCHEMA}")
+    spec = OP_BY_NAME.get(meta.get("op"))
+    if spec is None:
+        raise SystemExit(f"{path}: op '{meta.get('op')}' has no OpSpec")
+    if meta.get("keys") != spec.keys:
+        raise SystemExit(f"{path}: keys '{meta.get('keys')}' != the {spec.op} OpSpec '{spec.keys}'")
+    cands = meta.get("candidates", "").split("|")
+    if [c for c in spec.candidate_order if c in cands] != cands:
+        raise SystemExit(f"{path}: candidates {cands} are not in the OpSpec order {spec.candidate_order}")
+    keyspec = parse_keys(spec.keys)
+    key_of = spec.tuner_key or (lambda r: tuple(int(r[n]) if is_log else str(r[n]) for n, is_log, _ in keyspec))
+    passes = int(meta["passes"])
+    by_cell = defaultdict(list)
+    for r in recs[1:]:
+        if r.get("kind") == "pass":
+            by_cell[key_of(r)].append(r)
+    rows = {}
+    for key, rs in by_cell.items():
+        for final in sorted({int(r["attempt"]) for r in rs}, reverse=True):
+            meds = defaultdict(list)
+            for r in rs:
+                if int(r["attempt"]) == final and r["status"] == "ok" and r.get("median_ms"):
+                    meds[r["cand"]].append(float(r["median_ms"]))
+            times = {c: sum(v) / len(v) for c, v in meds.items() if len(v) == passes}
+            if times:
+                rows[key] = (times, any(max(meds[c]) / min(meds[c]) - 1.0 > NOISY for c in times))
+                break
+    return spec, meta, rows
+
+
+def tuner_text(spec, meta, rows, jsonl):
+    note = (f"tuner: {meta['passes']} passes x {meta['reps']} reps, warm {meta['warm_s']} s, "
+            f"ld_pad {meta.get('ld_pad', 0)}")
+    return table_text(spec, meta["dtype"], meta["device"], meta["batchlas"], meta["kernels"],
+                      meta["date"], f"{TUNER}{tuner_rel(jsonl)} ({note})", rows)
+
+
+def write_tuner_tables(paths, out_dir):
+    os.makedirs(out_dir, exist_ok=True)
+    for p in paths:
+        spec, meta, rows = read_tuner(p)
+        if not rows:
+            raise SystemExit(f"{p}: no cell has a candidate timed in every pass")
+        dest = os.path.join(out_dir, f"{spec.op}.{meta['dtype']}.{meta['device']}.txt")
+        with open(dest, "w") as f:
+            f.write(tuner_text(spec, meta, rows, p))
+        noisy = sum(1 for _, nz in rows.values() if nz)
+        print(f"wrote {dest}: {len(rows)} rows, {noisy} noisy (kernels={meta['kernels']})")
 
 
 def build_converted(date, stats_by_source, problems):
@@ -564,6 +655,7 @@ def check(converted, points):
     on_disk = sorted(f for f in os.listdir(tuned_dir) if f.endswith(".txt"))
     expected = sorted(os.path.basename(table_path(*k)) for k in converted)
     disk_converted = []
+    tuner_tables = set()  # a tuned table supersedes a converted source for its (op, dtype, device)
     review_texts = defaultdict(dict)
     for fname in on_disk:
         path = os.path.join(tuned_dir, fname)
@@ -585,6 +677,11 @@ def check(converted, points):
                     failures.append(f"{rel}: nearest{key} -> {hit and hit[0]}")
             print(f"check {rel}: {len(parsed)} transcribed rows looked up")
             continue
+        if header.get("source", "").startswith(TUNER):
+            check_tuner(rel, header, disk, parsed, keyspec, failures)
+            tuner_tables.add(fname)
+            review_texts[op][(dtype, device)] = disk
+            continue
         disk_converted.append(fname)
         if untimed or (op, dtype, device) not in converted:
             continue
@@ -601,12 +698,31 @@ def check(converted, points):
                 failures.append(f"{path}: {key} first {hit[1][0][0]} != winner {winner}")
         review_texts[op][(dtype, device)] = disk
         print(f"check {rel}: {len(rows)} measured cells looked up")
+    expected = [f for f in expected if f not in tuner_tables]
     if disk_converted != expected:
         failures.append(f"tuned/ files {disk_converted} != derived {expected}")
     for spec in OPS:
         if spec.review and review_texts[spec.op]:
             spec.review(review_texts[spec.op], points)
     return failures
+
+
+def check_tuner(rel, header, disk, parsed, keyspec, failures):
+    """Re-derive a tuner table from the raw JSONL its source= names, when that file exists;
+    either way every row must look up to itself (section 5.4)."""
+    for key, _ in parsed:
+        hit = nearest(parsed, key, keyspec)
+        if hit is None or hit[0] != key:
+            failures.append(f"{rel}: nearest{key} -> {hit and hit[0]}")
+    jsonl = header["source"][len(TUNER):]
+    path = jsonl if os.path.isabs(jsonl) else os.path.join(REPO, jsonl)
+    if not os.path.exists(path):
+        print(f"note {rel}: {jsonl} absent, re-derive skipped (self-check only)")
+        return
+    spec, meta, rows = read_tuner(path)
+    if disk != tuner_text(spec, meta, rows, path):
+        failures.append(f"{rel}: differs from {jsonl} (re-run --tuner)")
+    print(f"check {rel}: {len(parsed)} tuned rows re-derived from {jsonl}")
 
 
 def check_transcribed(rel, spec, ident, disk, header, failures):
@@ -721,7 +837,44 @@ def self_test():
     expect(stats["dropped_not_ok"] == 3 and stats["dropped_op"] == 6, f"potrf stats {dict(stats)}")
     cells, _, _ = run(POTRF, [dict(potrf[0], route=None, reached=potrf[0]["route"])])
     expect(not cells, "potrf read its route from 'reached'")
+    bad += self_test_tuner()
     return bad
+
+
+def self_test_tuner():
+    """read_tuner: the final attempt replaces the first, a candidate must be ok in every pass."""
+    meta = {"kind": "meta", "schema": TUNER_SCHEMA, "op": "posv", "dtype": "float", "device": "sm_0",
+            "batchlas": "x", "kernels": "y", "date": "d", "keys": POSV.keys,
+            "candidates": "tiny|cta|blocked", "passes": 2, "reps": 1, "warm_s": 0}
+    cell = {"kind": "pass", "uplo": "L", "n": 8, "nrhs": 2, "batch": 128}
+    rows = [dict(cell, cand=c, status=s, attempt=a, median_ms=t, **{"pass": p}) for c, s, a, p, t in [
+        ("tiny", "ok", 0, 1, 9.0), ("tiny", "ok", 0, 2, 1.0), ("tiny", "ok", 1, 1, 1.0), ("tiny", "ok", 1, 2, 1.02),
+        ("cta", "ok", 1, 1, 0.5), ("cta", "error", 1, 2, None), ("blocked", "ok", 1, 1, 2.0),
+        ("blocked", "ok", 1, 2, 2.0)]]
+    # A re-measure whose children all failed leaves the complete first attempt in force.
+    lost = dict(cell, n=16)
+    rows += [dict(lost, cand=c, status=s, attempt=a, median_ms=t, **{"pass": p}) for c, s, a, p, t in [
+        ("cta", "ok", 0, 1, 3.0), ("cta", "ok", 0, 2, 3.6), ("cta", "error", 1, 1, None),
+        ("cta", "error", 1, 2, None)]]
+    bad = []
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "t.jsonl")
+        with open(path, "w") as f:
+            f.write("".join(json.dumps(r) + "\n" for r in [meta] + rows))
+        spec, meta_read, got = read_tuner(path)
+        # check_tuner re-derives a written table from its JSONL and catches a hand edit.
+        text = tuner_text(spec, meta_read, got, path)
+        for disk, want_fail in ((text, False), (text.replace("tiny 1.010", "tiny 1.011"), True)):
+            header, _, parsed = parse_table(disk)
+            failures = []
+            check_tuner("t.txt", header, disk, parsed, parse_keys(spec.keys), failures)
+            if bool(failures) != want_fail:
+                bad.append(f"self-test: check_tuner on {'an edited' if want_fail else 'a fresh'} table -> {failures}")
+    want = {("L", 8, 2, 128): ({"tiny": 1.01, "blocked": 2.0}, False), ("L", 16, 2, 128): ({"cta": 3.3}, True)}
+    ok = got.keys() == want.keys() and all(
+        abs(got[k][0][c] - v) < 1e-12 and set(got[k][0]) == set(want[k][0]) and got[k][1] == want[k][1]
+        for k in want for c, v in want[k][0].items())
+    return bad + ([] if ok else [f"self-test: read_tuner -> {got}"])
 
 
 def main():
@@ -732,8 +885,13 @@ def main():
     ap.add_argument("--sha", help="--transcribe: the transcribed router's commit (default HEAD)")
     ap.add_argument("--date", default=datetime.date.today().isoformat())
     ap.add_argument("--self-test", action="store_true", help="run the converter self-test only")
+    ap.add_argument("--tuner", nargs="+", metavar="JSONL", help="batchlas_tune raw files to write")
+    ap.add_argument("--out", default=os.path.join(REPO, TUNED), help="--tuner: table directory")
     args = ap.parse_args()
 
+    if args.tuner:
+        write_tuner_tables(args.tuner, args.out)
+        return 0
     if args.self_test:
         bad = self_test()
         print("\n".join(bad + [f"--self-test: {'FAILED' if bad else 'OK'}"]))

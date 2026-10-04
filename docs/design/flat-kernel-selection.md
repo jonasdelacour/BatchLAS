@@ -2,8 +2,8 @@
 
 Status: **phases 1-2 implemented on branch worktree-flat-select (2026-10-04). §10 gate: passed on
 sm_120; the sm_89 live gate (needs the RTX 4090 box) is still open. See §12 "Gate results".
-Phase 3: P3.0 (select infrastructure) and P3.1 (posv, sm_89 table transcribed, sm_120 table pending)
-are built; see §12 and §13.**
+Phase 3: P3.0 (select infrastructure), P3.1 (posv, sm_89 table transcribed, sm_120 table pending)
+and P3.2 (the tuner core, `tools/tune`, with `--gate`) are built; see §12 and §13.**
 Plan agreed 2026-10-02; deviations from the sketch are in §12. Written against `main` at `a1063892`. It is meant
 to be executed from `main` in a fresh session, phase by phase. Nothing here depends on PRs #133,
 #135 or #136, or on any branch other than `main`. The only exception is the potrf route-sweep
@@ -459,7 +459,7 @@ The tuner produces every number the library runs on, so it follows the measureme
 AGENTS.md §10 without exception.
 
 ```
-batchlas_tune potrf --dtype float,double,cfloat,cdouble --device 1 --out tuned/ \
+batchlas_tune potrf --dtype float,double,cfloat,cdouble --devices 1 --out tuned/ \
               --raw benchmarks/results/tuning/
 ```
 
@@ -836,6 +836,72 @@ Where the code differs from the sketches above, the code wins. These are the dif
     `choice.hh` grid by hand (it cannot include `select.hh`).
   - `factor_bench`'s posv pins go through select via a `select_pin_parsed<Choice>` shared with potrf;
     a refused pin is that arm's `bad=1` row.
+
+**Phase 3.2, the tuner core** (`tools/tune/`, usage and raw schema in `tools/tune/README.md`):
+- `batchlas_tune` builds with the benchmarks. Specs for potrf and posv (`<op>_spec.cc` behind
+  `spec.hh`'s `OpSpec`); trsm and gemm specs land with their PRs. The host-only logic (tie rule,
+  rotation, bisection and the refinement round, attempt selection and the re-measure rule,
+  JSONL, SHA-256, the coverage `reached` parser, the `--old-csv` parser, the gate exit code,
+  the `--devices` fence, the guard's process scan) is `tune_core.cc`, tested by
+  `tests/tune_tests.cc` (label `util`, no GPU), which also checks the CMake staleness hash
+  against the driver's and C++ `rank()` against the converter's on 400 random cells.
+  Deliberate breaks of each of these turned exactly one or two named tests red.
+- **The driver holds no CUDA context.** Linking libbatchlas enumerates devices during static
+  init, which retains a primary context (about 550 MiB) on every visible GPU. `batchlas_tune` is
+  therefore a SYCL-free launcher (`launcher.cc`) that starts `batchlas_tune_impl` with
+  `CUDA_VISIBLE_DEVICES=""` for driver modes; children get their GPU set explicitly. The guard
+  dies if the driver's pid ever appears on a GPU.
+- **Tables go through the converter.** The tuner writes raw JSONL and runs
+  `scripts/sweep_to_table.py --tuner`, which formats rows with the same `table_text` as converted
+  tables. Header: `kernels=<hash>`, `source=tuner:<jsonl>`. `--check` re-derives a tuned table from
+  its JSONL when present, and a tuned table supersedes the converted source of its (op, dtype,
+  device).
+- **§6.4 hash definition:** `sha256sum <files> | sha256sum`, first 8 hex digits, over the paths
+  between the `kernel-sources-begin`/`-end` markers of `tools/tune/<op>_spec.cc`. The driver, the
+  CI checker (`.github/ci/check_tuned_tables.py`, also in `run_local_checks.sh` and a CI job) and the
+  CMake configure step (`cmake/BatchLASTunedStaleness.cmake`, one `WARNING` listing every stale
+  table) each compute it. potrf: its tier kernels and `choice.hh`; posv: its own kernels and
+  `choice.hh` only (children's coupling not followed yet, plan §2).
+- **Departures from §6:** the flag is `--devices` (a list), not `--device`, and it is required (no
+  default can land on a display GPU); when the caller exported `CUDA_VISIBLE_DEVICES`, every
+  `--devices` entry must lie inside it. All listed GPUs must report the same device key. Multi-GPU
+  runs one child per GPU behind a per-GPU flock, which departs from AGENTS.md §10 as the seed
+  sweeps did. The guard is built in rather than `gpu_guard.sh`, with the same checks: no foreign
+  compute process and utilization ≤ 5% before each child, no foreign process after it (else the
+  child's numbers are discarded and it is retried), unparseable process entries counted as
+  foreign; other busy GPUs on the box draw a warning. A failed child is retried once; if it fails
+  again, each arm is run alone, the arms that crash alone are recorded as errors and the rest are
+  timed together. The
+  re-measure (§6.3 step 5) triggers when any candidate's two pass medians differ by more than 10%,
+  repeats both passes, and the repeat replaces the first attempt unless no child of the repeat
+  timed anything, in which case the first attempt stands. Refinement midpoints are
+  geometric, round(sqrt(lo·hi)). The cap counts one copy of the op's inputs (potrf n²·batch,
+  posv (n²+n·nrhs)·batch, times the scalar size). A candidate whose verification fails is dropped
+  from that cell (`bad` in the raw file), not written as a flagged row. A refinement midpoint
+  that exists but has no winner is not re-measured; its bracket is reported as `stalled`. The
+  legacy CMake custom
+  target `batchlas_tune` (`evaluation/tuning`, tuning_params constants) is renamed
+  `batchlas_tune_constants` to free the name.
+- **`--gate`** takes old choices from a CSV (legacy aliases normalised) or probes a parent
+  `batchlas_tune` (`--parent-bin`, P3.2 or later) through its coverage `reached` row; the branch's
+  Auto is probed the same way, and only differing cells are timed (`auto` vs the old pin, two
+  passes, reversed). FAIL needs new/old > 1.05 in both passes. The gate cannot pass silently:
+  exit 1 on any FAIL, else exit 3 when any row is `ERROR` or `BAD_ROW` or no cell was gated;
+  cells over the cap get the verdict `cap`; an `--old-csv` row of the wrong width or of a dtype
+  outside an explicit `--dtype` is an error, never a skipped cell.
+- **Self-test (GPU 0, threadripper02, against `tuned/potrf.float.sm_120.txt`, full protocol):**
+  potrf float L n=64 b8192: lpanel:panel=8 0.2851 ms (table 0.3023, -5.7%), vendor 0.4800 (-2.0%),
+  cta 0.5561 (+4.9%), blocked 0.5587 (+4.3%), same first entry. n=128 b8192: lpanel 1.392 (+2.5%),
+  vendor 1.808 (+2.5%), blocked 2.568 (+2.2%), same first entry (its pass 2 hit the re-measure).
+  n=512 b2048: vendor 13.52 (-1.6%), blocked 14.09 (-0.1%), lpanel 14.73 (-0.7%); the first entry
+  flips from `blocked` to `vendor` because blocked/vendor is 1.042 here against 1.026 in the sweep,
+  either side of the 3% tie edge. posv float L nrhs=2 b8192 against the sm_120 posv sweep (single
+  pass): n=24 tiny 0.04768 (+1.5%), cta 0.1022 (+4.3%), blocked 0.1691 (+5.8%); n=32 tiny 0.06917
+  (-1.4%), cta 0.1223 (-0.7%), blocked 0.1779 (-0.2%). **These numbers are not protocol evidence:**
+  they were taken with `--no-guard` while a three-GPU posv measurement sweep ran on the same box
+  (AGENTS.md §10), and with the pre-launcher driver holding its own context on GPU 0. The -5.7% at
+  n=64 and the n=512 flip need a re-run on an otherwise idle box before anything is read into
+  them.
 
 **Behaviour changes visible to callers:**
 - A bad pin throws. `factor_bench`'s posv `composed` arm therefore pins potrf to `tiny` only up to

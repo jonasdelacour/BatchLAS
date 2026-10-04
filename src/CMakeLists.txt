@@ -137,6 +137,8 @@ add_subdirectory(dispatch)
 # embedded into one generated TU; the CONFIGURE_DEPENDS glob reconfigures when a table
 # appears or disappears, DEPENDS regenerates when one changes.
 file(GLOB BATCHLAS_TUNED_TABLES CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/tuned/*.txt")
+include("${PROJECT_SOURCE_DIR}/cmake/BatchLASTunedStaleness.cmake")
+batchlas_check_tuned_tables("${PROJECT_SOURCE_DIR}/tuned")
 set(BATCHLAS_TUNED_TABLES_CC "${PROJECT_BINARY_DIR}/generated/select/tuned_tables.cc")
 add_custom_command(
     OUTPUT "${BATCHLAS_TUNED_TABLES_CC}"

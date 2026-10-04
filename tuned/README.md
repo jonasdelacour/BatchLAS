@@ -49,6 +49,16 @@ this level). Regenerate with
 A transcribed row reproduces a deleted window; it is not a measurement. It is replaced by a timed
 row when the tuner sweeps that device.
 
+Tuned tables (header `source=tuner:<raw jsonl>` and a real `kernels=<hash>`) come from
+`tools/tune/batchlas_tune` (usage, protocol and raw schema: `tools/tune/README.md`). The tuner writes
+raw JSONL and calls `python3 scripts/sweep_to_table.py --tuner <jsonl> --out tuned`, so rows are
+formatted by the same code as the converted tables; `--check` re-derives a tuned table from its raw
+file when that file is present, and a tuned table replaces the converted one for its
+(op, dtype, device). Staleness (§6.5): `python3 .github/ci/check_tuned_tables.py` and the CMake
+configure step recompute each op's kernel hash from the source list in `tools/tune/<op>_spec.cc`
+and warn, never fail, on a table whose `kernels=` differs or says `unknown`. Every table here is
+still `unknown` until phase 4 retunes it.
+
 ## Staleness
 
 Every converted or transcribed table says `kernels=unknown` and is therefore reported stale. That

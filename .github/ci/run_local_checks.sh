@@ -46,6 +46,10 @@ run python3 "$here/check_evidence_anchors.py"
 # Checks the INDEX, so it catches a raw benchmark file before it is committed, not after.
 run python3 "$here/check_lfs_pointers.py" --self-test
 run python3 "$here/check_lfs_pointers.py"
+# Stale tuned tables are a warning (flat-kernel-selection.md §6.5): the check always exits 0;
+# only its self-test can fail.
+run python3 "$here/check_tuned_tables.py" --self-test
+run python3 "$here/check_tuned_tables.py"
 if [ "$#" -gt 0 ]; then
     run python3 "$here/check_exported_package.py" --package "$1"
 fi
