@@ -175,6 +175,10 @@ inline const char* kernel_trace_name(KernelVariant variant) {
         return "gemm_sycl_register_32x128_k16_tt";
     case KernelVariant::SmallBatched:
         return "gemm_sycl_small_batched";
+    case KernelVariant::Tiled32x32RegisterK16Wide:
+        return "gemm_sycl_register_32x32_k16_wide";
+    case KernelVariant::Tiled16x16RegisterK16Wide:
+        return "gemm_sycl_register_16x16_k16_wide";
     }
 
     return "gemm_sycl_unknown";
@@ -286,6 +290,10 @@ inline bool kernel_variant_matches_name(KernelVariant variant, const std::string
         return name == "register32x128k16tt" || name == "reg32x128k16tt" || name == "32x128x16tt";
     case KernelVariant::SmallBatched:
         return name == "small" || name == "smallbatched";
+    case KernelVariant::Tiled32x32RegisterK16Wide:
+        return name == "32x32x16wide";
+    case KernelVariant::Tiled16x16RegisterK16Wide:
+        return name == "16x16x16wide";
     }
 
     return false;
@@ -344,7 +352,9 @@ inline KernelVariant forced_kernel_variant() {
                                   KernelVariant::Tiled32x128RegisterK16,
                                   KernelVariant::Tiled32x128RegisterK16TN,
                                   KernelVariant::Tiled32x128RegisterK16TT,
-                                  KernelVariant::SmallBatched}) {
+                                  KernelVariant::SmallBatched,
+                                  KernelVariant::Tiled32x32RegisterK16Wide,
+                                  KernelVariant::Tiled16x16RegisterK16Wide}) {
         if (kernel_variant_matches_name(variant, name)) {
             return variant;
         }
@@ -463,6 +473,22 @@ Event launch_tiled(Queue& ctx,
 
     return launch_tiled_general<T, Tile, Transpose::ConjTrans, Transpose::ConjTrans>(
         ctx, A, B, C, alpha, beta, kernel_trace_name);
+}
+
+template <typename T>
+Event launch_wide_nn_tile(Queue& ctx,
+                          KernelVariant variant,
+                          const MatrixView<T, MatrixFormat::Dense>& A,
+                          const MatrixView<T, MatrixFormat::Dense>& B,
+                          const MatrixView<T, MatrixFormat::Dense>& C,
+                          T alpha,
+                          T beta) {
+    // 64 threads each: a 2x2 thread tile at 16x16, 4x4 at 32x32.
+    const char* name = kernel_trace_name(variant);
+    if (variant == KernelVariant::Tiled16x16RegisterK16Wide) {
+        return launch_wide_transposed<T, WideTile{16, 16, 16, 2, 2}>(ctx, A, B, C, alpha, beta, name);
+    }
+    return launch_wide_transposed<T, WideTile{32, 32, 16, 4, 4}>(ctx, A, B, C, alpha, beta, name);
 }
 
 } // namespace
@@ -849,6 +875,13 @@ Event gemm_custom(Queue& ctx,
             }
         }
         return launch_direct(ctx, A, B, C, alpha, beta, transA, transB);
+    // NN only, like Tiled64x64RegisterK16Wide; forceable, so fall back otherwise.
+    case KernelVariant::Tiled32x32RegisterK16Wide:
+    case KernelVariant::Tiled16x16RegisterK16Wide:
+        if (transA != Transpose::NoTrans || transB != Transpose::NoTrans) {
+            return launch_tiled<T, 16>(ctx, A, B, C, alpha, beta, transA, transB);
+        }
+        return launch_wide_nn_tile(ctx, variant, A, B, C, alpha, beta);
     }
 
     return ctx.get_event();

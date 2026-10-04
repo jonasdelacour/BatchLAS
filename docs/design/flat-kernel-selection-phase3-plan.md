@@ -134,6 +134,7 @@ last_resort {"blocked","vendor"}                  // potrf precedent; CPU: block
 key_names   {"side:exact","trans:exact","order:log:2","q:log","batch:log"}   // work ∝ order²·q·batch
 ```
 
+- **sg-left family (from P3.2b).** P3.2b ports `trsm_native_sg_left_dispatch` (Side::Left, order ≤ 32) with no route, env pin or bench arm. Before the sm_120 and sm_89 trsm sweeps, P3.3 must add it to `candidates<T>()` as its own family with a pin spelling (R7), so the tuner can rank it (design doc §13).
 - **trans key:** {N, T}. C folds to T because `do_conj` is the only difference (`trsm_native.cc:42,196`).
 - **uplo and diag are not keys.** That is valid only after a one-time A/B shows they make ≤3% difference for cta, blocked and vendor on both GPUs, as part of the P3.3 sweep. If vendor is not invariant, add `uplo:exact` and accept 2× the rows.
 - **Fields deferred to phase 4:** `cta:wg` {32,64,128,256} would delete ladder rules T4/T5 (`trsm_native.hh:40,43`). `blocked:outer` {32,64,128,256} would delete `BATCHLAS_TRSM_OUTER_NB` and T6 (`trsm_native.cc:366-383`). A static alias cannot express today's side-dependent outer default.

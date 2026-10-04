@@ -1282,6 +1282,11 @@ rung and stayed within 3% (`~/.claude/jobs/698ef31c/tmp/wp-trsm/r_ortho.log`).
 
 ### trsm sub-group Left kernel
 
+> On the flat-selection line the kernel was ported pin-only in P3.2b (direct C++
+> entry `sycl_trsm::trsm_native_sg_left_dispatch`). The `trsm_left_use_sg` routing
+> and the sm_120 windows described below are not in that tree: routing is
+> deferred to flat selection (P3.3).
+
 `trsm_sg_left.cc` handles Side::Left at orders 1..32. Each lane is a (matrix, canonical
 row r) pair, so a sub-group holds 32/N matrices for the buckets N in {4, 8, 16, 32}.
 Each lane carries QC right-hand sides: 4 for q <= 4, 8 for q <= 8, else 16
@@ -1492,6 +1497,10 @@ cuBLAS. The consumers are the native walk, vendor-free builds and direct
 and geqrf in float, cfloat and cdouble at n=128-512 measured new/base 0.996-1.003.
 
 ### gemm small tiles
+
+> On the flat-selection line both tiles were ported pin-only in P3.2b (reachable
+> only through `BATCHLAS_GEMM_SYCL_KERNEL`). The sm_120 selector windows described
+> below are not in that tree: routing is deferred to flat selection (P3.4).
 
 There are two new NN instantiations of the wide-scalar template
 (`launch_wide_transposed`, 64 threads each): 16x16 with a 2x2 thread tile and 32x32

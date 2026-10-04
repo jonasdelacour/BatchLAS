@@ -70,6 +70,7 @@ set_source_files_properties(
     ${CMAKE_CURRENT_SOURCE_DIR}/extensions/getrf_tiny.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/extensions/gesv_tiny.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/extensions/posv_tiny.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/sycl/trsm_sg_left.cc
     PROPERTIES COMPILE_OPTIONS "-mllvm;-pragma-unroll-threshold=262144")
 
 foreach(_obj ${BATCHLAS_OBJECT_LIBS})

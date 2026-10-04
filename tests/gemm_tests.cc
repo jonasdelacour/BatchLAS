@@ -8,6 +8,7 @@
 #include <type_traits>
 #include <cstdlib>
 #include <string>
+#include <cstring>
 
 #include <batchlas/backend_config.h>
 #include <batchlas/util/env.hh>
@@ -2147,6 +2148,132 @@ TYPED_TEST(GemmTest, WideTransposedCN64BetaZero) {
         Transpose::ConjTrans, Transpose::NoTrans, ScalarType(0));
 }
 
+// The small NN wide tiles (32x32 and 16x16 macro tiles). Ragged
+// in every dimension, k from 1 to past two staged blocks, both betas, sub-views
+// of a wider parent (inherited ld, offset base).
+// ARMED BREAK: pass beta = T(0) to the 16x16 tile only. OBSERVED on this branch:
+// red only on GemmTest/{4..7} (CUDA), only the 16x16x16wide beta=-1 cases.
+TYPED_TEST(GemmTest, SmallWideNNTilesMatchTiled16) {
+    using ScalarType = typename TestFixture::ScalarType;
+    const char* kernels[] = {"32x32x16wide", "16x16x16wide"};
+    const int shapes[][3] = {{32, 32, 1}, {32, 32, 70}, {29, 31, 257}, {16, 16, 33},
+                             {13, 7, 100}, {32, 17, 8}, {40, 70, 65}, {5, 3, 16}};
+    for (const char* kname : kernels) {
+        for (const auto& s : shapes) {
+            for (ScalarType beta : {ScalarType(-1), ScalarType(0)}) {
+                SCOPED_TRACE(std::string(kname) + " m=" + std::to_string(s[0]) + " n=" +
+                             std::to_string(s[1]) + " k=" + std::to_string(s[2]));
+                RunForcedWideTransposedAgainstTiled16<ScalarType>(
+                    *(this->ctx), kname, s[0], s[1], s[2],
+                    Transpose::NoTrans, Transpose::NoTrans, beta, 300, 3, 3);
+            }
+        }
+    }
+}
+
+// The small tiles are NN kernels reachable only by a forced name, so the
+// transposed-request fallback in gemm_custom is all that keeps a Trans/ConjTrans
+// call from being computed as NN.
+// ARMED BREAK: delete that fallback. OBSERVED: red only on this test, GemmTest/{4..7}.
+TYPED_TEST(GemmTest, SmallWideTilesFallBackOnTransposedRequest) {
+    using ScalarType = typename TestFixture::ScalarType;
+    const Transpose pairs[][2] = {{Transpose::ConjTrans, Transpose::NoTrans},
+                                  {Transpose::NoTrans, Transpose::Trans},
+                                  {Transpose::Trans, Transpose::ConjTrans}};
+    for (const char* kname : {"32x32x16wide", "16x16x16wide"}) {
+        for (const auto& p : pairs) {
+            SCOPED_TRACE(std::string(kname) + " ta=" + std::to_string(int(p[0])) +
+                         " tb=" + std::to_string(int(p[1])));
+            RunForcedWideTransposedAgainstTiled16<ScalarType>(
+                *(this->ctx), kname, 29, 21, 70, p[0], p[1], ScalarType(-1), 300, 3, 3);
+        }
+    }
+}
+
+// beta = 0 must not read C: NaN in the C sub-view has to vanish. The reference
+// runs tiled16 on a zeroed C, since tiled16 may read C (known-defects.md #11).
+// AssertBatchedMatrixNear passes a NaN, hence the explicit finite check.
+// ARMED BREAK: `prior = *p` unconditionally in the launch_wide_transposed
+// epilogue. OBSERVED: red only on this test, GemmTest/{4..7}.
+TYPED_TEST(GemmTest, SmallWideBetaZeroNeverReadsC) {
+    using ScalarType = typename TestFixture::ScalarType;
+    using Real = typename batchlas::base_type<ScalarType>::type;
+    constexpr int parent = 300, off = 3, batch = 3, m = 29, n = 21, k = 70;
+    for (const char* kname : {"32x32x16wide", "16x16x16wide"}) {
+        SCOPED_TRACE(kname);
+        auto PA = Matrix<ScalarType>::Random(parent, parent, false, batch);
+        auto PB = Matrix<ScalarType>::Random(parent, parent, false, batch);
+        auto PC = Matrix<ScalarType>::Random(parent, parent, false, batch);
+        auto PC_ref = PC.clone();
+        for (int b = 0; b < batch; ++b)
+            for (int c = 0; c < n; ++c)
+                for (int r = off; r < off + m; ++r) {
+                    PC(r, c, b) = ScalarType(std::numeric_limits<Real>::quiet_NaN());
+                    PC_ref(r, c, b) = ScalarType(0);
+                }
+        auto sub = [&](Matrix<ScalarType>& M, int rows, int cols) {
+            return M.view()(Slice(off, off + rows), Slice(0, cols));
+        };
+        const GemmOptions<ScalarType> opts{.alpha = ScalarType(2), .beta = ScalarType(0)};
+        {
+            ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+            ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", kname);
+            (void)gemm(*(this->ctx), sub(PA, m, k), sub(PB, k, n), sub(PC, m, n), opts);
+        }
+        {
+            ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+            ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "tiled16");
+            (void)gemm(*(this->ctx), sub(PA, m, k), sub(PB, k, n), sub(PC_ref, m, n), opts);
+        }
+        this->ctx->wait();
+        for (int b = 0; b < batch; ++b)
+            for (int c = 0; c < n; ++c)
+                for (int r = off; r < off + m; ++r)
+                    ASSERT_TRUE(std::isfinite(std::abs(PC(r, c, b))))
+                        << "b=" << b << " r=" << r << " c=" << c;
+        auto tol = test_utils::tolerance<ScalarType>() * 100;
+        ASSERT_TRUE(AssertBatchedMatrixNear(PC, PC_ref, parent, parent, batch, tol));
+    }
+}
+
+// Saturating batch for the shared-memory staged tiles: every item holds the
+// same matrices, so every result must be bit-identical to item 0.
+TYPED_TEST(GemmTest, SmallWideSaturatingBatchIsBitIdentical) {
+    using ScalarType = typename TestFixture::ScalarType;
+    constexpr int m = 31, n = 29, k = 300, batch = 2048;
+    auto A1 = Matrix<ScalarType>::Random(m, k, false, 1);
+    auto B1 = Matrix<ScalarType>::Random(k, n, false, 1);
+    auto C1 = Matrix<ScalarType>::Random(m, n, false, 1);
+    Matrix<ScalarType> A(m, k, batch), B(k, n, batch);
+    auto a1 = A1.data(), b1 = B1.data(), c1 = C1.data();
+    for (const char* kname : {"32x32x16wide", "16x16x16wide"}) {
+        Matrix<ScalarType> C(m, n, batch);
+        auto a = A.data(), b = B.data(), c = C.data();
+        for (int item = 0; item < batch; ++item) {
+            for (int i = 0; i < m * k; ++i) a[item * m * k + i] = a1[i];
+            for (int i = 0; i < k * n; ++i) b[item * k * n + i] = b1[i];
+            for (int i = 0; i < m * n; ++i) c[item * m * n + i] = c1[i];
+        }
+        {
+            ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+            ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", kname);
+            (void)gemm(*(this->ctx), A.view(), B.view(), C.view(),
+                 {.alpha = ScalarType(2), .beta = ScalarType(-1)});
+        }
+        this->ctx->wait();
+        c = C.data();
+        int mismatched = 0;
+        for (int item = 1; item < batch; ++item) {
+            for (int i = 0; i < m * n; ++i) {
+                if (std::memcmp(&c[item * m * n + i], &c[i], sizeof(ScalarType)) != 0) {
+                    ++mismatched;
+                }
+            }
+        }
+        EXPECT_EQ(mismatched, 0) << kname;
+    }
+}
+
 // The small batched kernel (max(m, n, k) <= 64, real scalars; complex falls back to
 // Direct under the same name). Ragged edges in every bucket, both transposes of each
 // operand, beta = 0 (the C read is skipped) and beta != 0, and batch 67 so the last
@@ -2428,6 +2555,44 @@ TEST(GemmDispatchPolicyTest, ComplexTransposedStaysOnTheVendorRoute) {
                 << s.describe();
         }
     }
+}
+
+// The two small NN wide tiles are pin-only until flat selection measures them:
+// Auto must never return them, for any type, transpose, shape or batch.
+// evidence: docs/perf/blackwell.md#gemm-small-tiles
+TEST(GemmDispatchPolicyTest, SmallWideNNTilesAreNeverAutoSelected) {
+    auto never = [](auto tag) {
+        using T = decltype(tag);
+        // One shared buffer at batch stride 0: the selector reads shapes, not data.
+        Matrix<T> buf(1024, 1024, 1);
+        T* p = buf.view().data_ptr();
+        auto select = [&](int m, int n, int k, Transpose ta, Transpose tb, int batch) {
+            const int ar = ta == kN ? m : k, ac = ta == kN ? k : m;
+            const int br = tb == kN ? k : n, bc = tb == kN ? n : k;
+            MatrixView<T, MatrixFormat::Dense> A(p, ar, ac, ar, 0, batch);
+            MatrixView<T, MatrixFormat::Dense> B(p, br, bc, br, 0, batch);
+            MatrixView<T, MatrixFormat::Dense> C(p, m, n, m, 0, batch);
+            return batchlas::sycl_gemm::select_kernel_variant<T>(A, B, C, ta, tb);
+        };
+        for (Transpose ta : {kN, Transpose::Trans, kC})
+            for (Transpose tb : {kN, kC})
+                for (int mn : {8, 9, 16, 17, 32, 33, 64, 127, 128, 256})
+                    for (int k : {8, 31, 32, 33, 256, 1024})
+                        for (int batch : {1, 128, 1024, 4096}) {
+                            const KernelVariant v = select(mn, (mn + 1) / 2 + 1, k, ta, tb, batch);
+                            const KernelVariant w = select(mn, mn, k, ta, tb, batch);
+                            for (KernelVariant got : {v, w}) {
+                                EXPECT_NE(got, KernelVariant::Tiled32x32RegisterK16Wide)
+                                    << mn << " " << k << " " << batch;
+                                EXPECT_NE(got, KernelVariant::Tiled16x16RegisterK16Wide)
+                                    << mn << " " << k << " " << batch;
+                            }
+                        }
+    };
+    never(float{});
+    never(double{});
+    never(std::complex<float>{});
+    never(std::complex<double>{});
 }
 
 int main(int argc, char **argv) {

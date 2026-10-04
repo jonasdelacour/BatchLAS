@@ -62,6 +62,8 @@ enum class KernelVariant {
     Tiled32x128RegisterK16TT,
     // max(m, n, k) <= 32, real scalars: several matrices per work-group, coalesced.
     SmallBatched,
+    Tiled32x32RegisterK16Wide,  // NN, pin-only. evidence: docs/perf/blackwell.md#gemm-small-tiles
+    Tiled16x16RegisterK16Wide,
 };
 
 // Which wide-scalar TRANSPOSED tile a shape fits: the matching macro-tile

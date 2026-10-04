@@ -45,6 +45,16 @@ constexpr int trsm_v1_ladder_wg(int max_wg, int cu, int q, int bs) {
     return wg;
 }
 
+// Side::Left sub-group kernel, orders 1..32 (throws above). No route reaches it yet.
+template <typename T>
+BATCHLAS_INTERNAL_API Event trsm_native_sg_left_dispatch(Queue& ctx,
+                                                         const MatrixView<T, MatrixFormat::Dense>& A,
+                                                         const MatrixView<T, MatrixFormat::Dense>& B,
+                                                         T alpha,
+                                                         Uplo uplo,
+                                                         Transpose transA,
+                                                         Diag diag);
+
 // Trailing-update GEMM. An EMPTY function means sycl_gemm::gemm_custom, keeping
 // this layer dispatch-free; inject the routed gemm where dispatch is available,
 // since the native kernel collapses on the strided sub-views a panel passes.
