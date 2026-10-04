@@ -66,47 +66,94 @@ TEST(TunedTables, EmbeddedSetIsExactlyTunedDirByNameAndBytes) {
     }
 }
 
+// Every ranked spelling, timed or transcribed, must be a long-form candidate of the op.
+std::vector<std::string> spelling_problems(const sel::Table& t) {
+    std::vector<std::string> out;
+    const auto cands = candidates(t.op, t.dtype);
+    if (cands.empty()) return {"op " + t.op + " has no candidate list in this test's registry"};
+    for (const auto& row : t.rows)
+        for (const auto& entry : row.ranked)
+            if (std::find(cands.begin(), cands.end(), entry.spelling) == cands.end())
+                out.push_back("line " + std::to_string(row.line) + ": " + entry.spelling + " is not a " + t.op +
+                              " " + t.dtype + " candidate (spellings must be the long form)");
+    return out;
+}
+
+// §6.3: entries within 3% of the best lead, in candidate-list order; the rest ascend in time.
+// A transcribed row has no times: its order is the old router's, so it is not checked here.
+std::vector<std::string> tie_rule_problems(const sel::Table& t) {
+    std::vector<std::string> out;
+    const auto cands = candidates(t.op, t.dtype);
+    auto pos = [&](const std::string& s) { return std::find(cands.begin(), cands.end(), s) - cands.begin(); };
+    for (const auto& row : t.rows) {
+        if (!row.timed) continue;
+        const std::string at = "line " + std::to_string(row.line) + ": ";
+        double best = row.ranked[0].ms;
+        for (const auto& x : row.ranked) best = std::min(best, x.ms);
+        const double band = best * (1.0 + kTie);
+        std::size_t i = 0;
+        for (; i < row.ranked.size() && row.ranked[i].ms <= band * (1.0 + kPrintSlack); ++i)
+            if (i > 0 && pos(row.ranked[i - 1].spelling) >= pos(row.ranked[i].spelling))
+                out.push_back(at + "tied entries out of candidate order");
+        for (std::size_t j = i; j < row.ranked.size(); ++j) {
+            if (row.ranked[j].ms <= band * (1.0 - kPrintSlack))
+                out.push_back(at + row.ranked[j].spelling + " is tied but ranked late");
+            if (j > i && row.ranked[j].ms < row.ranked[j - 1].ms)
+                out.push_back(at + "times not ascending after the tie band");
+        }
+    }
+    return out;
+}
+
+std::string joined(const std::vector<std::string>& v) {
+    std::string s;
+    for (const auto& x : v) s += x + "\n";
+    return s;
+}
+
 TEST(TunedTables, EveryEmbeddedTableParsesAndNamesOnlyCandidates) {
     ASSERT_FALSE(sel::embedded_tables().empty());
     for (const auto& e : sel::embedded_tables()) {
         SCOPED_TRACE(std::string(e.name));
         sel::Table t;
         ASSERT_NO_THROW(t = sel::parse_table(e.text, e.name));
-        const auto cands = candidates(t.op, t.dtype);
-        ASSERT_FALSE(cands.empty()) << "op " << t.op << " has no candidate list in this test's registry";
         EXPECT_FALSE(t.rows.empty());
-        for (const auto& row : t.rows)
-            for (const auto& entry : row.ranked)
-                EXPECT_NE(std::find(cands.begin(), cands.end(), entry.spelling), cands.end())
-                    << "line " << row.line << ": " << entry.spelling << " is not a " << t.op << " " << t.dtype
-                    << " candidate (spellings must be the long form)";
+        const auto p = spelling_problems(t);
+        EXPECT_TRUE(p.empty()) << joined(p);
     }
 }
 
-// §6.3: entries within 3% of the best lead, in candidate-list order; the rest ascend in time.
 TEST(TunedTables, RankedTimesFollowTheTieRule) {
     ASSERT_FALSE(sel::embedded_tables().empty());
     for (const auto& e : sel::embedded_tables()) {
         SCOPED_TRACE(std::string(e.name));
-        const auto t = sel::parse_table(e.text, e.name);
-        const auto cands = candidates(t.op, t.dtype);
-        auto pos = [&](const std::string& s) { return std::find(cands.begin(), cands.end(), s) - cands.begin(); };
-        for (const auto& row : t.rows) {
-            double best = row.ranked[0].ms;
-            for (const auto& x : row.ranked) best = std::min(best, x.ms);
-            const double band = best * (1.0 + kTie);
-            std::size_t i = 0;
-            for (; i < row.ranked.size() && row.ranked[i].ms <= band * (1.0 + kPrintSlack); ++i)
-                if (i > 0) EXPECT_LT(pos(row.ranked[i - 1].spelling), pos(row.ranked[i].spelling))
-                               << "line " << row.line << ": tied entries out of candidate order";
-            for (std::size_t j = i; j < row.ranked.size(); ++j) {
-                EXPECT_GT(row.ranked[j].ms, band * (1.0 - kPrintSlack))
-                    << "line " << row.line << ": " << row.ranked[j].spelling << " is tied but ranked late";
-                if (j > i) EXPECT_GE(row.ranked[j].ms, row.ranked[j - 1].ms)
-                               << "line " << row.line << ": times not ascending after the tie band";
-            }
-        }
+        const auto p = tie_rule_problems(sel::parse_table(e.text, e.name));
+        EXPECT_TRUE(p.empty()) << joined(p);
     }
+}
+
+// The two checks above on a synthetic potrf table: a transcribed row out of candidate order
+// is exempt from the tie rule, but its spellings are still checked; timed rows still are.
+TEST(TunedTables, TranscribedRowsSkipTheTieRuleButNotTheSpellingCheck) {
+    const std::string keys = "# keys: uplo:exact n:log:3 batch:log\n";
+    const std::string tr = "# op=potrf dtype=float device=sm_89 source=transcribed:2b46acab\n" + keys;
+    const std::string sw = "# op=potrf dtype=float device=sm_89 source=sweep.jsonl\n" + keys;
+    const auto good = sel::parse_table(tr + "uplo=L n=8 batch=8192 | vendor - | blocked - | tiny -\n"
+                                            "uplo=L n=64 batch=8192 | blocked - | vendor -\n",
+                                       "potrf.float.sm_89.txt");
+    EXPECT_FALSE(good.rows[0].timed);
+    EXPECT_TRUE(tie_rule_problems(good).empty()) << joined(tie_rule_problems(good));
+    EXPECT_TRUE(spelling_problems(good).empty()) << joined(spelling_problems(good));
+    const auto bad = sel::parse_table(tr + "uplo=L n=8 batch=8192 | vendor - | lpanel:8 -\n"
+                                           "uplo=L n=64 batch=8192 | vendor - | blocked -\n",
+                                      "potrf.float.sm_89.txt");
+    EXPECT_EQ(spelling_problems(bad), std::vector<std::string>{"line 3: lpanel:8 is not a potrf float candidate "
+                                                               "(spellings must be the long form)"});
+    EXPECT_TRUE(tie_rule_problems(bad).empty()) << joined(tie_rule_problems(bad));
+    const auto timed = sel::parse_table(sw + "uplo=L n=64 batch=8192 | vendor 2.0 | blocked 1.0\n",
+                                        "potrf.float.sm_89.txt");
+    EXPECT_EQ(tie_rule_problems(timed), (std::vector<std::string>{"line 3: blocked is tied but ranked late",
+                                                                  "line 3: times not ascending after the tie band"}));
 }
 
 // choice.hh's key_names is the spec every potrf table declares, weights included.

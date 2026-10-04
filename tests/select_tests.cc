@@ -167,6 +167,36 @@ TEST(SelectTable, LogKeyWeightsDefaultToOne) {
     EXPECT_TRUE(t.keys[3].log);
 }
 
+TEST(SelectTable, TranscribedRowsAreRankedWithoutTimes) {
+    const auto t = sel::parse_table(
+        "# op=synth dtype=float device=sm_89 source=transcribed:2b46acab\n"
+        "# keys: uplo:exact n:log batch:log\n"
+        "uplo=L n=20 batch=8192 | tiny - | cta - | blocked -\n"
+        "uplo=L n=64 batch=8192 | blocked - | cta -\n", "synth.float.sm_89.txt");
+    EXPECT_EQ(t.source, "transcribed:2b46acab");
+    ASSERT_EQ(t.rows.size(), 2u);
+    EXPECT_FALSE(t.rows[0].timed);
+    EXPECT_FALSE(t.rows[1].timed);
+    ASSERT_EQ(t.rows[0].ranked.size(), 3u);
+    EXPECT_EQ(t.rows[0].ranked[2].spelling, "blocked");
+    EXPECT_DOUBLE_EQ(t.rows[0].ranked[2].ms, 0.0);
+    EXPECT_EQ(t.rows[1].ranked[0].spelling, "blocked");
+    const auto timed = sel::parse_table("# op=synth dtype=float device=sm_89 source=sweep.jsonl\n"
+                                        "# keys: uplo:exact n:log batch:log\n"
+                                        "uplo=L n=64 batch=8192 | blocked 1.5 | cta 2\n", "synth.float.sm_89.txt");
+    EXPECT_TRUE(timed.rows[0].timed);
+    EXPECT_DOUBLE_EQ(timed.rows[0].ranked[0].ms, 1.5);
+    // A transcribed table may mix row kinds (each row is one kind); the Python --check agrees.
+    const auto mixed = sel::parse_table("# op=synth dtype=float device=sm_89 source=transcribed:2b46acab\n"
+                                        "# keys: uplo:exact n:log batch:log\n"
+                                        "uplo=L n=20 batch=8192 | tiny - | cta -\n"
+                                        "uplo=L n=64 batch=8192 | blocked 1.5 | cta 2\n", "synth.float.sm_89.txt");
+    ASSERT_EQ(mixed.rows.size(), 2u);
+    EXPECT_FALSE(mixed.rows[0].timed);
+    EXPECT_TRUE(mixed.rows[1].timed);
+    EXPECT_DOUBLE_EQ(mixed.rows[1].ranked[1].ms, 2.0);
+}
+
 TEST(SelectTable, DeviceFromFileNameWhenHeaderOmitsIt) {
     const auto t = sel::parse_table("# keys: uplo:exact n:log\nuplo=L n=4 | tiny 1\n", "dir/op.cfloat.gfx90a.txt");
     EXPECT_EQ(t.file, "op.cfloat.gfx90a.txt");
@@ -205,6 +235,19 @@ TEST(SelectTable, EveryParseErrorNamesFileAndLine) {
         {head + keys + "uplo=L n=1 batch=1 | tiny 1 | tiny 2\n", ":3:", "ranked twice"},
         {head + keys + "uplo=L n=1 batch=1 | tiny 1\n\nuplo=L batch=1 n=1 | cta 1\n", ":5:", "first at line 3"},
         {"# op=other dtype=float\n" + keys, ":1:", "disagrees with the file name"},
+        {head + "# source=transcribed:abc\n" + keys + "uplo=L n=1 batch=1 | tiny - | cta 1\n", ":4:",
+         "mixes timed and untimed"},
+        {head + "# source=transcribed:abc\n" + keys + "uplo=L n=1 batch=1 | tiny 1 | cta -\n", ":4:",
+         "mixes timed and untimed"},
+        {head + "# source=transcribed:abc\n" + keys + "uplo=L n=1 batch=1 | tiny -\nuplo=L n=2 batch=1 | tiny 1 | c -\n",
+         ":5:", "mixes timed and untimed"},
+        {head + "# source=sweep.jsonl\n" + keys + "uplo=L n=1 batch=1 | tiny 1\nuplo=L n=2 batch=1 | tiny -\n",
+         ":5:", "needs a 'source=transcribed:<sha>' header"},
+        {head + keys + "uplo=L n=1 batch=1 | tiny -\n", ":3:", "needs a 'source=transcribed:<sha>' header"},
+        {head + "# source=transcribed:\n" + keys + "uplo=L n=1 batch=1 | tiny -\n", ":2:", "must be a hex sha"},
+        {head + "# source=transcribed:HEAD\n" + keys + "uplo=L n=1 batch=1 | tiny -\n", ":2:", "must be a hex sha"},
+        {head + "# source=transcribed:abc\n" + keys + "uplo=L n=1 batch=1 | tiny --\n", ":4:", "or '-'"},
+        {head + "# source=transcribed:abc\n" + keys + "uplo=L n=1 batch=1 | tiny - -\n", ":4:", "or '<choice> -'"},
     };
     for (const auto& [text, where, why] : bad) {
         try {
@@ -285,6 +328,34 @@ TEST(SelectNearest, KeyWeightScalesThatKeysDistance) {
                                       "uplo=L n=32 batch=8192 | cta 1\nuplo=L n=16 batch=1024 | tiny 1\n",
                                       "synth.float.sm_120.txt");
     EXPECT_EQ(tie.nearest(key("L", 32, 1024))->line, 4);
+}
+
+// Two exact keys, (R,T) missing. The (L,T) row is nearer in n, so an all-or-nothing drop
+// lands on it and a drop from the left (keeping trans) does too; only dropping trans keeps R.
+TEST(SelectNearest, ExactKeysAreDroppedFromTheRightOneAtATime) {
+    const std::string rows = "side=L trans=N n=64 batch=1024 | tiny 1\n"     // line 3
+                             "side=L trans=T n=64 batch=1024 | cta 1\n"      // 4
+                             "side=R trans=N n=512 batch=1024 | blocked 1\n" // 5
+                             "side=R trans=N n=8 batch=1024 | vendor 1\n";   // 6
+    const std::string head = "# op=synth dtype=float device=sm_120\n";
+    auto k = [](const char* side, const char* trans, std::int64_t n) {
+        return sel::Key{{"side", side}, {"trans", trans}, {"n", n}, {"batch", 1024}};
+    };
+    const auto st = sel::parse_table(head + "# keys: side:exact trans:exact n:log batch:log\n" + rows,
+                                     "synth.float.sm_120.txt");
+    EXPECT_EQ(st.nearest(k("L", "T", 512))->line, 4);   // both exact keys match
+    EXPECT_EQ(st.nearest(k("R", "T", 32))->line, 6);    // trans dropped: side=R kept, 8 beats 512
+    EXPECT_EQ(st.nearest(k("R", "T", 300))->line, 5);   // ... and the log distance still decides
+    EXPECT_EQ(st.nearest(k("R", "Z", 32))->line, 6);
+    EXPECT_EQ(st.nearest(k("X", "T", 64))->line, 3);    // side unmatched: both dropped, pure distance
+    // Declared order decides which key is kept: trans first keeps trans=T over side.
+    const auto ts = sel::parse_table(head + "# keys: trans:exact n:log side:exact batch:log\n" + rows,
+                                     "synth.float.sm_120.txt");
+    EXPECT_EQ(ts.nearest(k("R", "T", 8))->line, 4);
+    EXPECT_EQ(ts.nearest(k("R", "N", 8))->line, 6);
+    // exact = {0, 2} is not {0, 1}: comparing by prefix position j instead of exact[j] never
+    // matches side, drops it, and lets the nearer (L,N,64) row in.
+    EXPECT_EQ(ts.nearest(k("R", "N", 32))->line, 6);
 }
 
 TEST(SelectNearest, MissingKeyThrows) {
@@ -649,6 +720,49 @@ TEST_F(Select, TraceLinesAndIndentation) {
               "batchlas: synth has no float table for sm_86; borrowing sm_89 (run tools/tune to tune this device)\n"
               "synth float n=64 batch=1024 -> lpanel:panel=8  0.302 ms  [sm_89 table, borrowed for sm_86]\n"
               "synth float n=8 batch=8 -> cta  [untraced]\n");
+}
+
+// A transcribed row is walked like a timed one (rank order, can_run, candidates); the trace
+// says "transcribed" where a timed row prints its times.
+TEST_F(Select, TranscribedRowsWalkInRankOrderAndTraceAsTranscribed) {
+    sel::testing::set_builtin_tables({{"synth.float.sm_89.txt",
+        "# op=synth dtype=float device=sm_89 source=transcribed:2b46acab\n"
+        "# keys: uplo:exact n:log batch:log\n"
+        "uplo=L n=20 batch=8192 | tiny - | cta - | blocked -\n"
+        "uplo=L n=512 batch=8192 | blocked - | vendor -\n"}});
+    ScopedEnvVar trace("BATCHLAS_SELECT_TRACE", "1");
+    ::testing::internal::CaptureStderr();
+    for (const auto& [n, ok] : std::vector<std::pair<int, Pred>>{{20, kAll}, {20, all_but({"tiny"})}, {512, kAll}}) {
+        const C c = choose("sm_89", key("L", n, 8192), ok);
+        sel::TraceScope ts("synth", c, shape(n, 8192));
+    }
+    EXPECT_EQ(::testing::internal::GetCapturedStderr(),
+              "synth float n=20 batch=8192 -> tiny  transcribed  [sm_89]\n"
+              "synth float n=20 batch=8192 -> cta  transcribed  [sm_89]\n"
+              "synth float n=512 batch=8192 -> blocked  transcribed  [sm_89]\n");
+}
+
+// describe() keys its memo on both vendor flags, and device_of fills them from the two
+// compile-time predicates (cuSOLVER for potrf/syev, cuBLAS for the level-3 ops).
+TEST(SelectDevice, VendorFlagsAreSeparateAndPartOfTheMemoKey) {
+    const batchlas::Device dev = batchlas::Device::default_device();
+    constexpr auto B = batchlas::Backend::CUDA;
+    const sel::Device& none = sel::describe(dev, B, false, false);
+    const sel::Device& blas = sel::describe(dev, B, false, true);
+    const sel::Device& solver = sel::describe(dev, B, true, false);
+    EXPECT_FALSE(none.has_vendor_blas);
+    EXPECT_FALSE(none.has_vendor_solver);
+    EXPECT_TRUE(blas.has_vendor_blas);
+    EXPECT_FALSE(blas.has_vendor_solver);
+    EXPECT_FALSE(solver.has_vendor_blas);
+    EXPECT_TRUE(solver.has_vendor_solver);
+    EXPECT_EQ(&sel::describe(dev, B, false, true), &blas);  // memoized
+    batchlas::Queue q(dev, B);
+    const sel::Device& d = sel::device_of<B>(q);
+    EXPECT_EQ(d.has_vendor_blas, batchlas::dispatch::level3_vendor_available<B>);
+    EXPECT_EQ(d.has_vendor_solver, batchlas::dispatch::solver_vendor_available<B>);
+    EXPECT_FALSE(sel::device_of<B>(q, true, false).has_vendor_blas);
+    EXPECT_TRUE(sel::device_of<B>(q, false, true).has_vendor_blas);
 }
 
 // The capture mode of run_factor_grid.sh / route_diff.sh: coverage on, trace off, so no

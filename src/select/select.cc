@@ -195,9 +195,10 @@ Device device_from_key(std::string_view key) {
     return d;
 }
 
-const Device& describe(const batchlas::Device& dev, Backend b, bool has_vendor_solver) {
-    static auto* memo = new std::map<std::tuple<int, std::size_t, int, bool>, Device>();
-    const auto k = std::make_tuple(static_cast<int>(dev.type), dev.idx, static_cast<int>(b), has_vendor_solver);
+const Device& describe(const batchlas::Device& dev, Backend b, bool has_vendor_solver, bool has_vendor_blas) {
+    static auto* memo = new std::map<std::tuple<int, std::size_t, int, bool, bool>, Device>();
+    const auto k = std::make_tuple(static_cast<int>(dev.type), dev.idx, static_cast<int>(b), has_vendor_solver,
+                                   has_vendor_blas);
     {
         std::lock_guard<std::mutex> lock(state_mutex());
         if (auto it = memo->find(k); it != memo->end()) return it->second;
@@ -213,6 +214,7 @@ const Device& describe(const batchlas::Device& dev, Backend b, bool has_vendor_s
     d.is_gpu = is_gpu;
     d.has_sg32 = dev.supports_sub_group_size(32);
     d.has_vendor_solver = has_vendor_solver;
+    d.has_vendor_blas = has_vendor_blas;
     d.slm_budget = static_cast<std::int64_t>(resident::device_slm_budget(
         static_cast<std::size_t>(dev.get_property(DeviceProperty::LOCAL_MEM_SIZE))));
     d.max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
@@ -225,6 +227,7 @@ Table parse_table(std::string_view text, std::string_view file) {
     t.file = std::string(file);
     if (const auto slash = t.file.find_last_of('/'); slash != std::string::npos) t.file = t.file.substr(slash + 1);
     std::map<std::string, std::string> header;
+    std::map<std::string, int> header_line;
     std::map<std::vector<std::string>, int> seen_rows;
     bool have_keys = false;
     int line_no = 0;
@@ -258,8 +261,10 @@ Table parse_table(std::string_view text, std::string_view file) {
                 continue;
             }
             for (std::string_view w : words(body))
-                if (const auto eq = w.find('='); eq != std::string_view::npos)
+                if (const auto eq = w.find('='); eq != std::string_view::npos) {
                     header[std::string(w.substr(0, eq))] = std::string(w.substr(eq + 1));
+                    header_line[std::string(w.substr(0, eq))] = line_no;
+                }
             continue;
         }
         if (!have_keys) fail("row before the '# keys:' line");
@@ -290,18 +295,23 @@ Table parse_table(std::string_view text, std::string_view file) {
         }
         for (std::size_t i = 0; i < got.size(); ++i)
             if (!got[i]) fail("row lacks key '" + t.keys[i].name + "'");
+        std::size_t untimed = 0;
         for (std::size_t s = 1; s < segs.size(); ++s) {
             const auto w = words(segs[s]);
-            if (w.size() != 2) fail("ranked entry '" + std::string(trim(segs[s])) + "' is not '<choice> <ms>'");
+            if (w.size() != 2)
+                fail("ranked entry '" + std::string(trim(segs[s])) + "' is not '<choice> <ms>' or '<choice> -'");
             double ms = 0.0;  // from_chars: strtod obeys a host app's comma-decimal LC_NUMERIC
             const auto r = std::from_chars(w[1].data(), w[1].data() + w[1].size(), ms);
-            if (r.ec != std::errc{} || r.ptr != w[1].data() + w[1].size() || !std::isfinite(ms) || ms < 0)
-                fail("time '" + std::string(w[1]) + "' is not a non-negative number");
+            if (w[1] == "-") ++untimed;
+            else if (r.ec != std::errc{} || r.ptr != w[1].data() + w[1].size() || !std::isfinite(ms) || ms < 0)
+                fail("time '" + std::string(w[1]) + "' is not a non-negative number or '-'");
             for (const auto& e : row.ranked)
                 if (e.spelling == w[0]) fail("'" + e.spelling + "' ranked twice");
             row.ranked.push_back({std::string(w[0]), ms});
         }
         if (row.ranked.empty()) fail("row has no ranked entries");
+        if (untimed != 0 && untimed != row.ranked.size()) fail("row mixes timed and untimed ('-') entries");
+        row.timed = untimed == 0;
         if (const auto [it, fresh] = seen_rows.emplace(row.keys, line_no); !fresh)
             fail("duplicate row (first at line " + std::to_string(it->second) + ")");
         t.rows.push_back(std::move(row));
@@ -316,6 +326,21 @@ Table parse_table(std::string_view text, std::string_view file) {
             fail(std::string(names[i]) + "=" + h->second + " disagrees with the file name");
         *fields[i] = h != header.end() ? h->second : from_name[i];
         if (fields[i]->empty()) fail(std::string("no ") + names[i] + " in the header or the file name");
+    }
+    if (const auto h = header.find("source"); h != header.end()) t.source = h->second;
+    // Each row is all-timed or all-untimed (checked above); a table may hold both kinds, but
+    // an untimed row needs a transcribed:<hex sha> source. sweep_to_table.py --check agrees.
+    const std::string_view tr = "transcribed:";
+    if (t.source.rfind(tr, 0) == 0) {
+        const std::string sha = t.source.substr(tr.size());
+        line_no = header_line["source"];
+        if (sha.empty() || !std::all_of(sha.begin(), sha.end(), [](char c) { return std::isxdigit(
+                static_cast<unsigned char>(c)); }))
+            fail("source=" + t.source + ": the commit after 'transcribed:' must be a hex sha");
+    } else if (const auto u = std::find_if(t.rows.begin(), t.rows.end(), [](const TableRow& r) { return !r.timed; });
+               u != t.rows.end()) {
+        line_no = u->line;
+        fail("untimed ('-') row needs a 'source=transcribed:<sha>' header");
     }
     const Device d = device_from_key(t.device);
     t.family = d.family;
@@ -332,16 +357,20 @@ const TableRow* Table::nearest(const Key& key) const {
         kv[i] = it->value;
         if (keys[i].log) kl[i] = std::log2(std::max(1.0, std::strtod(it->value.c_str(), nullptr)));
     }
-    auto exact_match = [&](const TableRow& r) {
-        for (std::size_t i = 0; i < keys.size(); ++i)
-            if (!keys[i].log && r.keys[i] != kv[i]) return false;
+    std::vector<std::size_t> exact;
+    for (std::size_t i = 0; i < keys.size(); ++i)
+        if (!keys[i].log) exact.push_back(i);
+    std::size_t prefix = exact.size();
+    auto matches = [&](const TableRow& r) {
+        for (std::size_t j = 0; j < prefix; ++j)
+            if (r.keys[exact[j]] != kv[exact[j]]) return false;
         return true;
     };
-    const bool filter = std::any_of(rows.begin(), rows.end(), exact_match);
+    while (prefix > 0 && std::none_of(rows.begin(), rows.end(), matches)) --prefix;
     const TableRow* best = nullptr;
     double best_d = 0.0;
     for (const auto& r : rows) {
-        if (filter && !exact_match(r)) continue;
+        if (!matches(r)) continue;
         double dist = 0.0;
         for (std::size_t i = 0; i < keys.size(); ++i)
             if (keys[i].log) dist += keys[i].weight * std::fabs(r.log2_keys[i] - kl[i]);
@@ -425,6 +454,11 @@ std::string format_detail(double ms, const std::string* next, double next_ms) {
         return s + ", tied with " + *next + " " + format_ms(next_ms) + " ms (" +
                std::to_string(static_cast<int>(std::lround(rel * 100))) + "%)";
     return s + ", next " + *next + " " + format_ms(next_ms) + " ms";
+}
+
+std::string entry_detail(const TableRow& row, std::size_t i, const TableEntry* next) {
+    if (!row.timed) return "transcribed";
+    return format_detail(row.ranked[i].ms, next ? &next->spelling : nullptr, next ? next->ms : 0.0);
 }
 
 std::optional<std::string> pin_text(std::string_view op, std::string* source) {

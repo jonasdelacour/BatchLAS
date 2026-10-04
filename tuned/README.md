@@ -18,6 +18,15 @@ The current `potrf.*` tables are seed tables, converted from the forced-route sw
 
 Do not edit them by hand: `--check` fails on any difference from the sweeps.
 
+Transcribed tables (header `source=transcribed:<sha>`, entries `<spelling> -`) hold an old
+router's preference order per grid cell, untimed. A per-op C++ transcriber writes a CSV and
+`python3 scripts/sweep_to_table.py --transcribe <csv> --sha <sha>` turns it into tables;
+`--check` re-derives them from the CSV named in their `transcriber_csv=` header line. Each row
+is all-timed or all-untimed, an untimed row needs a `source=transcribed:<sha>` header, and the
+sha must be hex (`--sha` is resolved with `git rev-parse`); a table may hold both row kinds. The
+C++ loader and `--check` both apply exactly these rules. The converter's module docstring documents both input schemas and
+how to add an op.
+
 ## Staleness
 
 Every converted table says `kernels=unknown` and is therefore reported stale. That is intended:

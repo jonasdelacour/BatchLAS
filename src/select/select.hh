@@ -42,7 +42,8 @@ struct Device {
     int arch_number = 0; // 120, 89, 90 (gfx90a), 0 for cpu
     bool is_gpu = false;
     bool has_sg32 = false;
-    bool has_vendor_solver = false;
+    bool has_vendor_solver = false;  // potrf/syev library (solver_vendor_available)
+    bool has_vendor_blas = false;    // level-3 library: gemm/trsm/... (level3_vendor_available)
     std::int64_t slm_budget = 0;
     int max_wg = 0;
 };
@@ -50,12 +51,14 @@ struct Device {
 // Key, family and arch only; the capability fields stay default. Tables and tests use it.
 BATCHLAS_API Device device_from_key(std::string_view key);
 
-// Memoized per (device, backend, has_vendor_solver).
-BATCHLAS_API const Device& describe(const batchlas::Device& dev, Backend b, bool has_vendor_solver);
+// Memoized per (device, backend, has_vendor_solver, has_vendor_blas).
+BATCHLAS_API const Device& describe(const batchlas::Device& dev, Backend b, bool has_vendor_solver,
+                                    bool has_vendor_blas);
 
 template <Backend B>
-const Device& device_of(const Queue& q, bool has_vendor_solver = dispatch::solver_vendor_available<B>) {
-    return describe(q.device(), B, has_vendor_solver);
+const Device& device_of(const Queue& q, bool has_vendor_solver = dispatch::solver_vendor_available<B>,
+                        bool has_vendor_blas = dispatch::level3_vendor_available<B>) {
+    return describe(q.device(), B, has_vendor_solver, has_vendor_blas);
 }
 
 template <class T>
@@ -221,18 +224,24 @@ struct TableRow {
     std::vector<double> log2_keys;  // log2 of each :log key, 0 for :exact
     std::vector<TableEntry> ranked;
     int line = 0;
+    // False for a transcribed row ("<spelling> -" entries, every ms 0): ranked, never timed.
+    // Untimed rows need a source=transcribed:<sha> header; such a table may also hold timed rows.
+    bool timed = true;
 };
 
 struct Table {
     std::string file;  // basename, e.g. "potrf.float.sm_120.txt"
     std::string op, dtype, device, family;
     int arch_number = 0;
+    std::string source;  // the header's source= value, e.g. "transcribed:2b46acab"
     bool is_override = false;
     std::vector<TableKey> keys;
     std::vector<TableRow> rows;
 
-    // Exact keys filter (dropped if no row matches), then min sum w*|log2(row/key)|, ties
-    // lexicographic by the :log keys in declared order. Throws if `key` lacks a table key.
+    // Rows matching the longest prefix of the :exact keys (in '# keys:' order; exact keys are
+    // dropped from the right until some row matches, possibly all of them), then min
+    // sum w*|log2(row/key)|, ties lexicographic by the :log keys in declared order.
+    // Throws if `key` lacks a table key.
     BATCHLAS_API const TableRow* nearest(const Key& key) const;
 };
 
@@ -261,6 +270,8 @@ BATCHLAS_API void warn_pin_fallback(std::string_view op, std::string_view word, 
 // as opposed to an untuned device ("borrowed").
 BATCHLAS_API std::string table_tag(const Table& t, const Device& d, bool own_table_exists);
 BATCHLAS_API std::string format_detail(double ms, const std::string* next, double next_ms);
+// The trace detail for a ranked entry: "transcribed" on an untimed row, else format_detail.
+BATCHLAS_API std::string entry_detail(const TableRow& row, std::size_t i, const TableEntry* next);
 BATCHLAS_API std::optional<std::string> pin_text(std::string_view op, std::string* source);
 BATCHLAS_API void push_pin(std::string_view op, std::string text);
 BATCHLAS_API void pop_pin(std::string_view op);
@@ -315,10 +326,7 @@ std::optional<Choice> walk(std::string_view op, std::string_view dtype, const De
                 const TableEntry* next = nullptr;
                 for (std::size_t j = i + 1; j < row->ranked.size() && !next; ++j)
                     if (eligible(*parse<Choice>(row->ranked[j].spelling))) next = &row->ranked[j];
-                note_decision(op, to_string(*c),
-                              format_detail(row->ranked[i].ms, next ? &next->spelling : nullptr,
-                                            next ? next->ms : 0.0),
-                              table_tag(*t, d, own) + pin_note);
+                note_decision(op, to_string(*c), entry_detail(*row, i, next), table_tag(*t, d, own) + pin_note);
             }
             return c;
         }

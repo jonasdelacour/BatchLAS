@@ -369,6 +369,13 @@ uplo=U n=64  batch=8192  | cta 0.543 | vendor 0.654
 Times are milliseconds per call for the whole batch, which matches `time_ms` in the sweep data.
 The `| choice time` pairs are in rank order.
 
+A transcribed table (§13) writes `-` for every time: `uplo=L n=8 nrhs=1 batch=128 | tiny - | cta -`.
+Each row is all-timed or all-untimed, and the loader rejects a mixed row at its line. An untimed
+row needs a `source=transcribed:<sha>` header, which is rejected at its line unless `<sha>` is
+non-empty hex (`scripts/sweep_to_table.py --transcribe` resolves `--sha` with `git rev-parse`). A
+table may hold both row kinds; `sweep_to_table.py --check` applies the same three rules. Untimed rows are walked in rank order like timed ones, are exempt from the
+§6.3 tie rule, and trace as `transcribed` where a timed row prints its times.
+
 Embedding:
 - CMake turns each `tuned/*.txt` into a `constexpr std::string_view` in one generated `.cc`.
   C++23 `#embed` is not available in DPC++ yet, so this is a short CMake `file(READ)` script.
@@ -385,7 +392,7 @@ Choice choose(std::string_view op, std::string_view dtype, const Device& d, cons
   if (auto pin = read_pin<Choice>(op))                       // ScopedPin, else BATCHLAS_<OP>_ROUTE
     return resolve_pin(*pin, candidates, can_run, op);       // throws on unknown or !can_run (R6)
   for (const Table<Choice>* t : tables_in_borrow_order(op, dtype, d)) {   // own table first (§5.5)
-    if (const Row<Choice>* row = t->nearest(key))            // exact keys must match; log keys: min distance
+    if (const Row<Choice>* row = t->nearest(key))            // longest matching exact prefix; log keys: min distance
       for (const auto& [c, ms] : row->ranked)
         if (can_run(c)) return note(t, d, c);                // note(): warn-once if borrowed, trace tag
   }
@@ -395,12 +402,15 @@ Choice choose(std::string_view op, std::string_view dtype, const Device& d, cons
 }
 ```
 
-- **Nearest:** rows must match every `:exact` key. Among those, the row with the smallest
-  `Σ w·|log2(row_key / key)|` over the `:log` keys wins, where `<name>:log:<w>` sets the weight `w`
-  (1 when omitted; see §12). On a tie, the smaller `n` wins, then the
-  smaller `batch`. If no row matches the exact keys, the exact-key filter is dropped for that
-  table. This is how Upper calls use a Lower-only table, with `can_run` removing the Lower-only
-  choices.
+- **Nearest:** the `:exact` keys form a prefix in `# keys:` order. The rows that match all of them
+  are kept; if none does, the last exact key is dropped and the shorter prefix is tried, down to
+  no exact key at all. With `side:exact trans:exact`, a missing (R,T) combination keeps the
+  `side=R` rows rather than jumping to the nearest row of any side. Among the kept rows, the row
+  with the smallest `Σ w·|log2(row_key / key)|` over the `:log` keys wins, where `<name>:log:<w>`
+  sets the weight `w` (1 when omitted; see §12). On a tie (within 1e-9), the row with the smaller
+  log keys wins, compared in `# keys:` order (`n` first). With potrf's single exact key this is
+  the all-or-nothing drop: Upper calls use a Lower-only table, with `can_run` removing the
+  Lower-only choices.
 
 ### 5.5 Borrow order and last resort
 
@@ -520,6 +530,12 @@ The first tables are converted from the data this PR brings to `main`. See
 Conversion rules:
 1. `op == "potrf"` rows are `uplo=L`; `op == "potrf_upper"` rows are `uplo=U`. Keep rows with `ok == true` whose reached `route` equals the pinned arm. Rows with
    `ok == false` record `supports()`, not timings.
+   posv (phase 3) reads its reached route from the sweep's `reached` field and its `uplo` as
+   `Lower`/`Upper`. Its driver's `ok` also fails `rel_sd > 0.10`, which hits launch-bound n=1
+   cells; a row whose `reason` is exactly `relsd` (`info_nonzero == 0`, finite `residual`, reached
+   = pinned) is a measurement, so it is kept and its row marked `# noisy` as in rule 3. Fallback,
+   unsupported, residual, info and error rows still drop. `--self-test` (also run by `--check`)
+   checks these rules on rows copied from the live sweeps, `tests/data/sweep_to_table_rows.jsonl`.
 2. For sm_89, keep only `kernel_current == true`. Cells left with fewer than two current arms are
    dropped, and the script prints how many were dropped.
 3. A cell's time per arm is the mean of the pass medians (sm_120 has passes 1 and 2). If the
@@ -740,6 +756,17 @@ Where the code differs from the sketches above, the code wins. These are the dif
   Upper-capable potrf tiers has no route without cuSOLVER); the test now expects `NoRouteError`
   there. `factor_bench` reports a refused pin as that arm's `bad=1` row
   (`pin refused: ...`) and keeps running the other arms.
+
+**Phase 3.0 (select infrastructure):**
+- **Exact keys drop one at a time, from the right.** §5.4 described an all-or-nothing exact-key
+  filter. `Table::nearest` now keeps the rows matching the longest prefix of the `:exact` keys in
+  `# keys:` order, so with `side:exact trans:exact` a missing (R,T) keeps the `side=R` rows; the
+  weighted `Σ w·|log2(row/key)|` then decides among them. The exact keys need not be contiguous
+  (`trans:exact n:log side:exact` works; `SelectNearest.ExactKeysAreDroppedFromTheRightOneAtATime`).
+  For potrf's single exact key the behaviour is unchanged. `scripts/sweep_to_table.py`'s
+  `nearest()` mirrors it.
+- **Untimed rows** (`<spelling> -`) and `source=transcribed:<hex sha>` (§5.4, §13).
+- **`Device::has_vendor_blas`** beside `has_vendor_solver`, both part of `describe()`'s memo key.
 
 **Behaviour changes visible to callers:**
 - A bad pin throws. `factor_bench`'s posv `composed` arm therefore pins potrf to `tiny` only up to
