@@ -692,6 +692,8 @@ is RED on all four types (`inf`, 1.99e+266, 9.39e+25, 6.75e+234).
     `(0.2, 1] * n * eps`, so a defect degrading accuracy by less than ~4x still passes.
 13. **`heterogeneous_batch` is written by potrf's shape builder but not trsm's**, so `route_trsm.hh`'s own
     heterogeneous gate is decorative. Adding it is a strict de-risking but it *is* a route change.
+    *(Superseded: trsm's builder did write it (known-defects #7), and since P3.3 both are deleted;
+    trsm's native `can_run` refuses heterogeneous operands, the vendor's does not, known-defects #12.)*
 14. **The burn-down instrument cannot see Phase 2**: 26/54 before, 26/54 after, because no unpinned vendor-present
     call reaches the driver by design. An `IDENTICAL` `route_diff` across such a change is not evidence of anything.
     Write the facade-routed over-ceiling test *first*, capture second, and give it an `n` in a `shape_class` bucket

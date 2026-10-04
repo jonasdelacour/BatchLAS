@@ -53,9 +53,9 @@ inline std::optional<dispatch::GetrsShape> getrs_op_shape(
     s.op = dispatch::Op::getrs;
     s.scalar = dispatch::scalar_kind_of<T>;
 
-    // SET. trsm's builder (trsm_route.hh:40-56) and ormqr's (ormqr.hh:182-192) do
-    // not, which is why every trsm and every ormqr coverage row reads
-    // Backend::AUTO and the burn-down is unreadable for them. resolve_route slices
+    // SET. ormqr's builder (ormqr.hh:182-192) does not (nor did trsm's old one),
+    // which is why every ormqr coverage row reads Backend::AUTO and the
+    // burn-down is unreadable for it. resolve_route slices
     // this straight into the coverage table (route_resolve.hh).
     s.backend = B;
 
@@ -103,10 +103,10 @@ inline std::optional<dispatch::GetrsShape> getrs_op_shape(
     // device-BLAS sizing decision in this library, and the formula behind the
     // number lives in src/extensions/getrs_fused.cc beside the launcher so the
     // ceiling this table advertises and the allocation that launcher makes cannot
-    // disagree (route_trsm.hh:62-72).
+    // disagree.
     //
     // BOTH ARE ZERO WHEN THE KERNEL IS ABSENT, which correctly makes the CTA route
-    // unsupported rather than selectable-but-unimplemented -- TrsmShape::cta_max_n's
+    // unsupported rather than selectable-but-unimplemented -- trsm_cta_max_n's
     // convention.
     if (sycl_getrs::getrs_fused_available<T>()) {
         const std::size_t local_mem = ctx.device().get_property(DeviceProperty::LOCAL_MEM_SIZE);

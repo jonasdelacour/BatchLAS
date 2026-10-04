@@ -25,9 +25,11 @@ refuses to run without the launcher, and its guard dies if the driver's pid ever
 
     # §10.3 gate: old choice pinned vs Auto, two passes with the arm order reversed
     batchlas_tune potrf --devices 1 --gate --old-csv old.csv --gate-csv gate.csv   # old choices given
-    # (trsm once its spec lands with P3.3)
-    batchlas_tune trsm --devices 1 --gate --parent-bin ../parent/build/tools/tune/batchlas_tune \
-                  --grid order=44:72:104 --grid q=24:96 --batches 512,8192,32768 --gate-csv gate.csv
+    # trsm: the old choices come from --old-csv (no parent tuner has a trsm spec)
+    # uplo/diag invariance A/B (raw only; the converter refuses it as a table):
+    batchlas_tune trsm --devices 1 --dtype float --grid uplo=L:U --grid diag=N:U --no-refine \
+                  --grid order=16:64:256 --grid q=8:128 --batches 8192 --raw /tmp/ab
+    batchlas_tune trsm --devices 1 --gate --old-csv trsm_old.csv --gate-csv gate.csv
 
     batchlas_tune --list        # ops, key names, candidates per dtype, current kernel hash
 
@@ -138,11 +140,15 @@ else 0. The last line counts every verdict.
 ## Specs
 
 `<op>_spec.cc` implements `OpSpec` (`spec.hh`): key names, candidates and grid axes from the op's
-`choice.hh`, a problem builder (potrf, posv: SPD A; posv: random B), host verification, the 4 GiB
+`choice.hh`, a problem builder (potrf, posv: SPD A; posv, trsm: random B; trsm: a diagonally
+dominant triangular A, the other triangle poisoned), host verification, the 4 GiB
 cap, how an old coverage route maps to a spelling, and the kernel-source list for the §6.4 hash
 between the `kernel-sources-begin` / `kernel-sources-end` markers. `check_tuned_tables.py` and
 `cmake/BatchLASTunedStaleness.cmake` parse that block from the source, and the driver refuses to
 run when the block and its compiled list differ (rebuild). The hash is
 `sha256sum <files> | sha256sum`, first 8 hex digits, paths relative to the repository.
 posv's list holds only its own kernels: its `cta` and `blocked` times also depend on potrf's and
-trsm's choices (plan §2 "Coupling"), which the hash does not follow yet.
+trsm's choices (plan §2 "Coupling"), which the hash does not follow yet. trsm's list is its native
+kernels (not the vendor TU); its `uplo` and `diag` are hidden grid axes fixed at L and N (not table
+keys, plan §1.2), its `trans=T` times ConjTrans for a complex scalar, and trsm has no workspace,
+so a pin is probed by one untimed run instead of a sizing call.

@@ -371,17 +371,8 @@ Event trsm_native_blocked(Queue& ctx,
                           Transpose transA,
                           Diag diag,
                           TrsmTrailingGemm<T> trailing_gemm) {
-    // Default to the native kernel so this TU stands alone; the facade passes the ROUTED gemm.
     if (!trailing_gemm) {
-        trailing_gemm = [](Queue& c,
-                           const MatrixView<T, MatrixFormat::Dense>& ga,
-                           const MatrixView<T, MatrixFormat::Dense>& gb,
-                           const MatrixView<T, MatrixFormat::Dense>& gc,
-                           T galpha, T gbeta, Transpose gta, Transpose gtb,
-                           ComputePrecision gp) {
-            return sycl_gemm::gemm_custom<T>(c, ga, gb, gc, galpha, gbeta,
-                                             gta, gtb, gp);
-        };
+        throw batchlas::invalid_argument("trsm_native_blocked: trailing_gemm is required (pass the public gemm)");
     }
     const Canonical can = canonicalise(side, uplo, transA, diag);
     const int n = static_cast<int>(A.rows());

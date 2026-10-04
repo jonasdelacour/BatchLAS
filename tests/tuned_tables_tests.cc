@@ -6,6 +6,7 @@
 
 #include "../src/ops/posv/choice.hh"
 #include "../src/ops/potrf/choice.hh"
+#include "../src/ops/trsm/choice.hh"
 #include "../src/select/select.hh"
 
 #include <algorithm>
@@ -48,6 +49,13 @@ std::vector<std::string> candidates(const std::string& op, const std::string& dt
         if (dtype == "double") return spellings(posv::candidates<double>());
         if (dtype == "cfloat") return spellings(posv::candidates<std::complex<float>>());
         if (dtype == "cdouble") return spellings(posv::candidates<std::complex<double>>());
+    }
+    namespace trsm = batchlas::ops::trsm;
+    if (op == "trsm") {
+        if (dtype == "float") return spellings(trsm::candidates<float>());
+        if (dtype == "double") return spellings(trsm::candidates<double>());
+        if (dtype == "cfloat") return spellings(trsm::candidates<std::complex<float>>());
+        if (dtype == "cdouble") return spellings(trsm::candidates<std::complex<double>>());
     }
     return {};
 }
@@ -181,6 +189,7 @@ void expect_tables_declare(const std::string& op, const Names& names) {
 
 TEST(TunedTables, PotrfTablesDeclareChoiceKeyNames) { expect_tables_declare("potrf", batchlas::ops::potrf::key_names); }
 TEST(TunedTables, PosvTablesDeclareChoiceKeyNames) { expect_tables_declare("posv", batchlas::ops::posv::key_names); }
+TEST(TunedTables, TrsmTablesDeclareChoiceKeyNames) { expect_tables_declare("trsm", batchlas::ops::trsm::key_names); }
 
 const sel::Table& embedded(const std::string& name) {
     static std::map<std::string, sel::Table> cache;
@@ -208,6 +217,27 @@ TEST(TunedTables, PosvSm89TablesHoldExactlyTheChoiceGrid) {
         std::set<std::string> got;
         for (const auto& row : t.rows)
             got.insert(row.keys[0] + " " + row.keys[1] + " " + row.keys[2] + " " + row.keys[3]);
+        EXPECT_EQ(got, want) << dt;
+        EXPECT_EQ(t.rows.size(), want.size()) << dt;
+    }
+}
+
+// Likewise trsm's transcriber: one row per (side, trans, order, q, batch) cell of choice.hh.
+TEST(TunedTables, TrsmSm89TablesHoldExactlyTheChoiceGrid) {
+    namespace trsm = batchlas::ops::trsm;
+    std::set<std::string> want;
+    for (const char* s : {"L", "R"})
+        for (const char* tr : {"N", "T"})
+            for (int o : trsm::grid_order)
+                for (int q : trsm::grid_q)
+                    for (int b : trsm::grid_batch)
+                        want.insert(std::string(s) + " " + tr + " " + std::to_string(o) + " " + std::to_string(q) +
+                                    " " + std::to_string(b));
+    for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
+        const sel::Table& t = embedded(std::string("trsm.") + dt + ".sm_89.txt");
+        std::set<std::string> got;
+        for (const auto& row : t.rows)
+            got.insert(row.keys[0] + " " + row.keys[1] + " " + row.keys[2] + " " + row.keys[3] + " " + row.keys[4]);
         EXPECT_EQ(got, want) << dt;
         EXPECT_EQ(t.rows.size(), want.size()) << dt;
     }

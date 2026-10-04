@@ -230,7 +230,8 @@ Event potrf_blocked_dispatch(Queue& ctx,
                              Span<int32_t> info_out,
                              PotrfTrailingGemm<T> trailing_gemm,
                              PotrfPanelSolve<T> panel_solve) {
-    // Both seams default to the NATIVE kernels; the facade injects the ROUTED ones.
+    // An empty trailing_gemm still means the native kernel until gemm migrates (plan §1.3);
+    // the panel solve has no default: a hidden native trsm here bypassed trsm's selection.
     if (!trailing_gemm) {
         trailing_gemm = [](Queue& c,
                            const MatrixView<T, MatrixFormat::Dense>& ga,
@@ -242,14 +243,7 @@ Event potrf_blocked_dispatch(Queue& ctx,
         };
     }
     if (!panel_solve) {
-        panel_solve = [](Queue& c,
-                         const MatrixView<T, MatrixFormat::Dense>& ta,
-                         const MatrixView<T, MatrixFormat::Dense>& tb,
-                         T talpha, Side tside, Uplo tuplo, Transpose ttrans, Diag tdiag) {
-            // V2, not V1: it degenerates to a single V1 solve when the order fits the CTA.
-            return sycl_trsm::trsm_native_blocked<T>(c, ta, tb, talpha, tside, tuplo,
-                                                     ttrans, tdiag);
-        };
+        throw batchlas::invalid_argument("potrf_blocked: panel_solve is required (pass the public trsm)");
     }
 
     const int n = static_cast<int>(A.rows());

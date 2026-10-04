@@ -30,12 +30,13 @@ The superseded root documents these were filed in are preserved at the git tag
 | 4 | `src/backends/rocsparse.cc:30-31,62-63` | `ConjTrans` maps to the conjugating enum for **real** scalars | inferred wrong answers on AMD; unobservable here |
 | 5 | `src/backends/netlib_lapack.cc:508,520,537,549` | `trsm` reads `B` when `alpha == 0` | `NaN` from unwritten workspace |
 | 6 | `src/backends/netlib_lapack.cc:1389` | `getri` copies `n*n` contiguous elements and ignores both `ld`s | wrong answer at padded `ld` |
-| 7 | `src/backends/trsm_route.hh:51` | ~~the heterogeneous-batch rejection has no writer~~ | **not a defect — the field IS written; entry closed 2026-09-15** |
+| 7 | `src/backends/trsm_route.hh:51` (deleted in P3.3) | ~~the heterogeneous-batch rejection has no writer~~ | **not a defect — the field IS written; entry closed 2026-09-15** |
 | 8 | `src/backends/syrk_custom_dispatch.cc:261` | a forced native `syrk` lands on a route that writes both triangles | wrong answer, forced routes only |
 | 9 | `src/backends/syr2k_custom_dispatch.cc:210` | a forced native `syr2k` throws a cuBLASDx message it did not ask for | misleading diagnostic |
 | 10 | grid `latrd` (`src/extensions/latrd_lower_panel.cc`, the grid kernel's column-update / sumsq pair) | a cross-sub-group read-after-write on `Ab(r, i)` with no barrier between the two loops | **fixed; armed 20/20 red on deletion under the amplified geometry; residual rate at the default geometry not bounded** |
 | 11 | `src/sycl/gemm/epilogue_linear.hh`, `src/sycl/gemm_kernels.cc` (`launch_direct`) | native GEMM reads `C` at `beta == 0` | `NaN` from an unzeroed arena; worked around in `geqrf_blocked` |
-| 12 | `src/ops/potrf/potrf.cc` (`can_run(Vendor)`), `src/backends/cusolver.cc:72-77`, `route_trsm.hh:36` | vendor `potrf` and vendor `trsm` accept a heterogeneous batch and run at the full storage order | silent wrong answer on a direct heterogeneous call; posv refuses it upstream |
+| 12 | `src/ops/potrf/potrf.cc`, `src/ops/trsm/trsm.cc` (each `can_run(Vendor)`), `src/backends/cusolver.cc:72-77` | vendor `potrf` and vendor `trsm` accept a heterogeneous batch and run at the full storage order | silent wrong answer on a direct heterogeneous call; posv refuses it upstream |
+| 13 | `src/backends/cublas.cc` (`gemm_vendor_impl`, `gemv_vendor`), cuBLASLt | complex<double> gemm/gemv with a unit dimension segfault inside cuBLASLt on one box, root cause unknown | gemm worked around; gemv crashes `ortho_tests` |
 
 ## 1. `ortho`'s transposed arm builds a view that does not describe the memory
 
@@ -220,6 +221,15 @@ is argued, not armed. Per this page's own checklist item 1, a gate nobody has wa
 not a verified gate. Anyone picking this up should build a heterogeneous `A` or `B`, assert
 `resolve_trsm_route` returns the vendor arm, and — the part that actually matters — assert it
 under `vendor_available == false`, where the route walk has nowhere left to go.
+
+**Since P3.3 (flat selection)** `route_trsm.hh` and `trsm_route.hh` are deleted. The heterogeneity
+term now sits in the native families' `can_run` (`src/ops/trsm/trsm.cc`); the vendor's `can_run`
+does not carry it, which is entry 12. The arming test is
+`TrsmCandidates.HeterogeneousBatchHasNoNativeRoute` (`tests/trsm_candidates_tests.cc`): every native
+pin must refuse a heterogeneous A and a heterogeneous B with "cannot run this shape", and Auto must
+take the vendor, or throw `NoRouteError` vendor-free. Armed: dropping the term from the native
+`can_run` turns exactly that test red for all four CUDA dtypes (cta, sg_left and blocked are then
+"accepted") and nothing else. The vendor arm still lacks the term (entry 12).
 
 ## 8, 9. Two forced-route defects in the level-3 dispatchers
 
@@ -477,8 +487,8 @@ delete the memset in `geqrf_blocked.cc`; the test stays as the guard.
 
 potrf's `can_run(Vendor)` is `d.has_vendor_solver` with no heterogeneity term (the native families
 carry `!A.is_heterogeneous()`), and `potrf_vendor` (`src/backends/cusolver.cc:72-77`) passes
-`descrA.rows()`, the full storage order, to `cusolverDn?potrf[Batched]`. `RouteTable<Op::trsm>`
-returns true for any vendor route (`route_trsm.hh:36`) before its heterogeneous gate (`:43`), and the
+`descrA.rows()`, the full storage order, to `cusolverDn?potrf[Batched]`. trsm's `can_run(Vendor)`
+(`src/ops/trsm/trsm.cc`, P3.3; before it `route_trsm.hh:36`) is likewise `d.has_vendor_blas` alone, and the
 cuBLAS trsm path has no active-dims handling either. A heterogeneous call therefore factors and
 solves the padded matrix with no error: the leading block of a Cholesky factor is still right, but
 the backward `L^H` solve couples the active rows to the padding through `L21`.
@@ -488,8 +498,27 @@ turned posv's old `internal_error` on a heterogeneous batch into exactly this si
 refuses heterogeneous A or B before `choose()` (`throw_if_unservable` in `src/ops/posv/posv.cc`,
 test `PosvCandidates.HeterogeneousBatchIsRefusedUnderEveryPin`). The potrf and trsm gaps themselves
 are unfixed: the fix is a `!A.is_heterogeneous()` term on potrf's Vendor `can_run` (or a per-item
-loop) and a heterogeneity check before the vendor short-circuit in `route_trsm.hh`, each a routing
+loop) and the same term on trsm's Vendor `can_run`, each a routing
 change for its own phase. No test constructs a heterogeneous potrf or trsm.
+
+## 13. complex<double> cuBLAS calls with a unit dimension segfault inside cuBLASLt
+
+Seen on threadripper02 (RTX PRO 6000 Blackwell, cuBLAS 13.4.1 from HPC SDK 26.5, 2026-10-04). Every
+complex<double> `cublasGemmEx` / `cublasGemmStridedBatchedEx` with m or n == 1, and
+`cublasZgemvStridedBatched`, segfaults on the host inside `cublasLtZZZMatmul` when called from a
+BatchLAS process. The same calls from a standalone program (plain CUDA, or a SYCL queue's native
+stream with SYCL USM, same libraries) do not crash, and neither LD_PRELOADing the netlib libraries
+into it nor the cuBLASLt log (algo 13, workspace 0 in both) separated the two. Root cause unknown.
+
+- Reached through trsm: `blocked` with one right-hand side makes every trailing update a
+  complex<double> gemm with n == 1 (or m == 1 on Side::Right). The parent build crashes on
+  `trsm cdouble L/R order 64-384 q 1 batch 128` under Auto; `getrf_tests`
+  (`LuTest/7.BlockedFactorisesAndPivotsExactly`) and `ortho_tests`
+  (`OrthoMatrixTest/7.OrthogonalizeMatrix`, through gemv) crash on the parent too.
+- **gemm worked around (P3.3):** `gemm_vendor_impl` (`src/backends/cublas.cc`) calls the typed
+  `cublasZgemmStridedBatched` for complex<double> when m or n is 1. Guard:
+  `TrsmNativeBlocked.ComplexDoubleSingleRhsTrailingGemm`. getrf_tests passes with it.
+- **gemv open:** `ortho_tests` still crashes in `gemv_vendor` for complex<double>, as on the parent.
 
 ## One filed claim that did not survive re-checking
 

@@ -474,8 +474,11 @@ void RunTrsmBlocked(const TrsmNativeCase<T>& tc) {
                 b_in[(static_cast<size_t>(b) * bcols + c) * brows + r] = v;
             }
     }
+    using MV = MatrixView<T, MatrixFormat::Dense>;
     (void)batchlas::sycl_trsm::trsm_native_blocked<T>(
-        *ctx, A.view(), B.view(), tc.alpha, tc.side, tc.uplo, tc.transA, tc.diag);
+        *ctx, A.view(), B.view(), tc.alpha, tc.side, tc.uplo, tc.transA, tc.diag,
+        [](Queue& c, const MV& ga, const MV& gb, const MV& gc, T al, T be, Transpose ta, Transpose tb,
+           ComputePrecision p) { return gemm<Backend::CUDA, T>(c, ga, gb, gc, al, be, ta, tb, p); });
     ctx->wait();
 
     using Acc = std::conditional_t<batchlas::is_std_complex_v<T>, std::complex<double>, double>;
@@ -651,6 +654,15 @@ TEST(TrsmNativeCta, ComplexPartialBucketAndRaggedRhs) {
                 {8, q, 2, sd, Uplo::Upper, Transpose::ConjTrans, Diag::NonUnit,
                  std::complex<float>(1.0f, 0.0f)});
     }
+}
+
+// One right-hand side makes every trailing update a complex<double> gemm with m or n == 1,
+// which segfaulted inside cuBLASLt through cublasGemm*Ex (cublas.cc gemm_vendor_impl).
+TEST(TrsmNativeBlocked, ComplexDoubleSingleRhsTrailingGemm) {
+    for (Side sd : {Side::Left, Side::Right})
+        for (Transpose t : {Transpose::NoTrans, Transpose::ConjTrans})
+            RunTrsmBlocked<std::complex<double>>(
+                {64, 1, 3, sd, Uplo::Lower, t, Diag::NonUnit, std::complex<double>(1.0, 0.5)});
 }
 
 TEST(TrsmNativeBlocked, ComplexCrossoverAndAlpha) {
@@ -1004,4 +1016,50 @@ TEST(TrsmNativeCta, CappedLadderSaturatedSmallRhs) {
     }
     RunTrsmNative<double>({32, 40, 4096, Side::Left, Uplo::Lower, Transpose::NoTrans,
                            Diag::NonUnit, -1.0});
+}
+
+// Complex "vendor" trsm on CUDA is BatchLAS's own substitute kernel (cublas.cc). Its batch
+// offset b * strideA was an int product: at order 512 and batch 8193 the last item starts at
+// element 2^31 and the kernel faulted (CUDA_ERROR_ILLEGAL_ADDRESS). Needs ~17 GB of device
+// memory, so it skips on smaller GPUs; only items 0 and batch-1 hold a system.
+TEST(TrsmVendor, ComplexSubstituteIndexesPast2To31Elements) {
+    using T = std::complex<float>;
+    if constexpr (!batchlas::dispatch::level3_vendor_available<Backend::CUDA>) {
+        GTEST_SKIP() << "no vendor BLAS in this build";
+    } else {
+        auto ctx = std::make_shared<Queue>(Device("gpu"), Backend::CUDA);
+        const std::size_t mem = ctx->device().get_property(DeviceProperty::GLOBAL_MEM_SIZE);
+        if (mem < (std::size_t(32) << 30)) GTEST_SKIP() << "needs 32 GiB of device memory, has " << (mem >> 30);
+        const int n = 512, bs = 8193;
+        Matrix<T, MatrixFormat::Dense> A(n, n, bs);
+        Matrix<T, MatrixFormat::Dense> B(n, 1, bs);
+        const std::size_t sa = static_cast<std::size_t>(A.view().stride());
+        ASSERT_GE(sa * (bs - 1), std::size_t(1) << 31) << "the last item must start at or past 2^31 elements";
+        std::vector<T> a0(static_cast<std::size_t>(n) * n), b0(n);
+        for (int j = 0; j < n; ++j) {
+            b0[j] = T(1.0f + 0.01f * j, -0.5f + 0.003f * j);
+            for (int i = 0; i < n; ++i)
+                a0[i + static_cast<std::size_t>(j) * n] =
+                    i == j ? T(float(n + 1), 0.5f) : (i > j ? T(0.3f * std::sin(i + 2.0f * j), 0.2f) : T(9e9f, 0));
+        }
+        for (int b : {0, bs - 1}) {
+            std::copy(a0.begin(), a0.end(), A.view().data_ptr() + sa * b);
+            std::copy(b0.begin(), b0.end(), B.view().data_ptr() + static_cast<std::size_t>(n) * b);
+        }
+        (void)backend::trsm_vendor<Backend::CUDA, T>(*ctx, A.view(), B.view(), Side::Left, Uplo::Lower,
+                                                     Transpose::NoTrans, Diag::NonUnit, T(1));
+        ctx->wait();
+        for (int b : {0, bs - 1}) {
+            const T* x = B.view().data_ptr() + static_cast<std::size_t>(n) * b;
+            double num = 0, den = 0;
+            for (int i = 0; i < n; ++i) {
+                std::complex<double> s = 0;
+                for (int k = 0; k <= i; ++k)
+                    s += std::complex<double>(a0[i + static_cast<std::size_t>(k) * n]) * std::complex<double>(x[k]);
+                num += std::norm(s - std::complex<double>(b0[i]));
+                den += std::norm(std::complex<double>(b0[i]));
+            }
+            EXPECT_LT(std::sqrt(num / den), 1e-5) << "item " << b;
+        }
+    }
 }

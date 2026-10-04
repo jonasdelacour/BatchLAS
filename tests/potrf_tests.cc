@@ -807,6 +807,14 @@ protected:
 
     struct Blocking { int nb; int W; };
 
+    // The driver's panel solve is required: the public trsm, as the potrf facade passes it.
+    static sycl_potrf::PotrfPanelSolve<T> panel_solve() {
+        return [](Queue& c, const MatrixView<T, MatrixFormat::Dense>& a, const MatrixView<T, MatrixFormat::Dense>& b,
+                  T alpha, Side s, Uplo u, Transpose t, Diag d) {
+            return trsm<BackendType, T>(c, a, b, alpha, s, u, t, d);
+        };
+    }
+
     // The blocking the driver WOULD use; `n` is passed because nb is clamped by it.
     Blocking blocking(int n) const {
         const unsigned p = sycl_potrf::potrf_blocked_debug_params<T>(*this->ctx, n);
@@ -840,10 +848,10 @@ protected:
         if (len > 0) {
             (void)sycl_potrf::potrf_blocked_dispatch<T>(
                 *this->ctx, V, uplo, ws.to_span(),
-                Span<int32_t>(info.data(), static_cast<size_t>(len)));
+                Span<int32_t>(info.data(), static_cast<size_t>(len)), {}, panel_solve());
         } else {
             (void)sycl_potrf::potrf_blocked_dispatch<T>(*this->ctx, V, uplo, ws.to_span(),
-                                                  Span<int32_t>{});
+                                                  Span<int32_t>{}, {}, panel_solve());
         }
         this->ctx->wait();
         return std::vector<int32_t>(info.begin(), info.end());
@@ -1407,7 +1415,7 @@ TYPED_TEST(PotrfBlockedTest, BlockedDoesNotReadUninitialisedWorkspace) {
 
     UnifiedVector<int32_t> info(batch, int32_t(-12345));
     (void)sycl_potrf::potrf_blocked_dispatch<T>(*this->ctx, A.view(), Uplo::Lower,
-                                          ws.to_span(), info.to_span());
+                                          ws.to_span(), info.to_span(), {}, TestFixture::panel_solve());
     this->ctx->wait();
 
     for (int b = 0; b < batch; ++b) {

@@ -49,6 +49,7 @@ inline int sg_left_bucket(int n) {
     if (n <= 32) return 32;
     return 0;
 }
+static_assert(kTrsmSgLeftMaxN == 32, "sg_left_bucket's largest bucket is trsm's can_run ceiling");
 
 }  // namespace
 
@@ -67,6 +68,7 @@ Event trsm_native_sg_left(Queue& ctx,
     constexpr int kSg = 32;
     constexpr int kMpw = kSg / N;
     constexpr int kSgPerWg = 4;
+    static_assert(kSgPerWg * kSg == kTrsmSgLeftWgSize, "trsm's can_run gates on kTrsmSgLeftWgSize");
     // Rolled, nL[] lives in local memory and is read once per step: fewer registers,
     // which wins where the unrolled form's occupancy is lowest.
     // evidence: docs/perf/blackwell.md#trsm-sub-group-left-kernel

@@ -88,8 +88,14 @@ inline void trsm_validate_params(
         }
 
         if (ldb < std::max(1, m)) {
-                throw batchlas::invalid_argument("TRSM: ldb must be >= max(1, m). Got ldb=" + 
+                throw batchlas::invalid_argument("TRSM: ldb must be >= max(1, m). Got ldb=" +
                                         std::to_string(ldb) + ", m=" + std::to_string(m));
+        }
+        // Every kernel walks one batch count over both operands; a mismatch indexes past one.
+        if (A.batch_size() != B.batch_size()) {
+                throw batchlas::invalid_argument("TRSM: A and B must have the same batch size. Got " +
+                                        std::to_string(A.batch_size()) + " and " +
+                                        std::to_string(B.batch_size()));
         }
 }
 

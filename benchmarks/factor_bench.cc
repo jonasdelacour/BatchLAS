@@ -44,6 +44,7 @@
 #include <batchlas/settings.hh>
 
 #include "../src/extensions/potrf_native.hh"
+#include "../src/sycl/trsm_native.hh"
 #include "../src/ops/posv/choice.hh"
 #include "../src/ops/potrf/choice.hh"
 
@@ -508,9 +509,9 @@ struct Arm {
 // ROUTE, not the timing" defect; these pins make the composition explicit and
 // `pin_parsed_now` still proves the OUTER pin landed.
 // A potrf pin the shape cannot run throws, so `composed` pins tiny only inside its ceiling
-// (16 for cdouble) and the best runnable native tier above it.
+// (16 for cdouble) and the best runnable native tier above it; trsm `cta` likewise (order <= 32).
 static std::vector<std::pair<std::string, std::string>>
-composed_pins(OpKind op, const std::string& arm_name, bool potrf_tiny_fits) {
+composed_pins(OpKind op, const std::string& arm_name, bool potrf_tiny_fits, bool trsm_cta_fits) {
     if (op == OpKind::gesv) {
         if (arm_name == "vendor")
             return {{"BATCHLAS_GETRF_ROUTE", "vendor"}, {"BATCHLAS_GETRS_ROUTE", "vendor"}};
@@ -525,7 +526,8 @@ composed_pins(OpKind op, const std::string& arm_name, bool potrf_tiny_fits) {
         if (arm_name == "native")
             return {{"BATCHLAS_POTRF_ROUTE", "native"}, {"BATCHLAS_TRSM_ROUTE", "native"}};
         if (arm_name == "composed")
-            return {{"BATCHLAS_POTRF_ROUTE", potrf_tiny_fits ? "tiny" : "native"}, {"BATCHLAS_TRSM_ROUTE", "cta"}};
+            return {{"BATCHLAS_POTRF_ROUTE", potrf_tiny_fits ? "tiny" : "native"},
+                    {"BATCHLAS_TRSM_ROUTE", trsm_cta_fits ? "cta" : "native"}};
     }
     return {};
 }
@@ -723,7 +725,7 @@ static int run(const Cfg& c) {
         }
         a.pin = (pin == "native" && !c.route_pin.empty()) ? c.route_pin : pin;
         if (is_solve_op(c.op)) {
-            a.sub_pins = composed_pins(c.op, pin, n <= sycl_potrf::potrf_tiny_max_n<T>());
+            a.sub_pins = composed_pins(c.op, pin, n <= sycl_potrf::potrf_tiny_max_n<T>(), n <= sycl_trsm::trsm_cta_max_n<T>());
             if (a.pin == pin) a.pin = solve_outer_pin(pin);
         }
         arms.push_back(a);

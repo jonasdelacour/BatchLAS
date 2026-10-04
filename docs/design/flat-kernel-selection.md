@@ -2,8 +2,9 @@
 
 Status: **phases 1-2 implemented on branch worktree-flat-select (2026-10-04). §10 gate: passed on
 sm_120; the sm_89 live gate (needs the RTX 4090 box) is still open. See §12 "Gate results".
-Phase 3: P3.0 (select infrastructure), P3.1 (posv, sm_89 table transcribed, sm_120 table pending)
-and P3.2 (the tuner core, `tools/tune`, with `--gate`) are built; see §12 and §13.**
+Phase 3: P3.0 (select infrastructure), P3.1 (posv, sm_89 table transcribed, sm_120 table pending),
+P3.2 (the tuner core, `tools/tune`, with `--gate`), P3.2b (blackwell kernels) and P3.3 (trsm, sm_89
+table transcribed, sm_120 sweep pending) are built; see §12 and §13.**
 Plan agreed 2026-10-02; deviations from the sketch are in §12. Written against `main` at `a1063892`. It is meant
 to be executed from `main` in a fresh session, phase by phase. Nothing here depends on PRs #133,
 #135 or #136, or on any branch other than `main`. The only exception is the potrf route-sweep
@@ -902,6 +903,139 @@ Where the code differs from the sketches above, the code wins. These are the dif
   (AGENTS.md §10), and with the pre-launcher driver holding its own context on GPU 0. The -5.7% at
   n=64 and the n=512 flip need a re-run on an otherwise idle box before anything is read into
   them.
+
+**Phase 3.3, trsm** (`src/ops/trsm/{choice.hh,trsm.cc}`, plan §1.2):
+- Families `Cta`, `SgLeft` (spelling `sg_left`, P3.2b's `trsm_native_sg_left_dispatch`, its own
+  family as the P3.2b note asks), `Blocked`, `Vendor`, all `NoFields`, the same for every dtype;
+  aliases `native:{cta,blocked}`; `last_resort {"blocked","vendor"}`;
+  `# keys: side:exact trans:exact order:log:2 q:log batch:log` with `q = side==Left ? B.cols : B.rows`
+  and ConjTrans folded to `T`. uplo and diag are not keys, pending the invariance A/B (below).
+  `cta:wg` and `blocked:outer` stay derived (phase 4). trsm has no `_buffer_size`, so R5 is vacuous.
+- `can_run`: the common term is `is_gpu && !A.het && !B.het && order, q, batch >= 1`. Cta adds
+  `order <= trsm_cta_max_n<T>()`; SgLeft adds `side == Left && has_sg32 && order <= 32 &&
+  max_wg >= kTrsmSgLeftWgSize` (128; its `reqd_sub_group_size(32)` and work-group, with
+  `static_assert`s in `trsm_sg_left.cc` against the sycl-free constants in `trsm_native.hh`);
+  Blocked adds `trsm_blocked_available<T>() && trsm_cta_max_n<T>() >= 1`; Vendor is
+  `d.has_vendor_blas`. **New term: Cta and Blocked require `max_wg >= 32`**, because V1's ladder
+  (`trsm_v1_ladder_wg`) launches at least 32 lanes whatever `max_wg` says; it cannot go red on real
+  hardware. Heterogeneous batches still go to the vendor (known-defects #12, unchanged).
+- **`A.batch_size() != B.batch_size()` throws `invalid_argument` in `trsm_validate_params`** (Q6).
+  It used to reach the vendor silently because the old shape builder returned nullopt.
+- The public `trsm` moved out of `src/dispatch/entry_points/level3.cc`. Its coverage row now
+  carries the real backend (the old builder never set it, so every trsm row read `AUTO`), keeps
+  `m = B.rows, n = B.cols, k = order`, and records uplo, side, transA and diag; the trace prints
+  `side trans order q batch`. Deleted: `include/batchlas/blas/dispatch/route_trsm.hh` (installed),
+  `src/backends/trsm_route.hh`, and old rules T1 (`batch < 8` -> vendor) and T2 (float Side::Right
+  at batch < 128 above order 32 -> vendor). `Op::trsm` stays in the enum.
+- **Seams made mandatory.** `trsm_native_blocked`'s trailing gemm and `potrf_blocked_dispatch`'s
+  panel solve no longer default to `gemm_custom` / `trsm_native_blocked`; an empty one throws
+  `invalid_argument`. Every library caller already injected the public op; three direct-driver
+  tests in `potrf_tests.cc` and the V2 helper in `trsm_tests.cc` now pass the public trsm / gemm.
+  `potrf_blocked_dispatch`'s trailing gemm keeps its `gemm_custom` fallback until P3.4 (a default
+  argument cannot precede the now-mandatory one, so both defaults are gone and callers pass `{}`).
+- **sm_89 tables are transcribed, untimed.** `tools/transcribe/trsm_transcribe.cc` (host g++
+  against 8b9adeb3) re-runs the real `resolve_route_uninstrumented` over the old table, first with
+  the vendor present, then (after the vendor is ranked) vendor-free for the remaining natives. The
+  CTA capacity is applied, not unlimited: `trsm_cta_max_n<T>()` is a build constant (32 for every
+  type and device), and an unlimited one would rank `cta` first in every row. On the grid
+  (batch >= 128) the old preference was native everywhere, so rows are `cta | blocked | vendor` at
+  order <= 32 (7680 of 17280) and `blocked | vendor` above (9600). Below the grid T1 and T2 are lost
+  (checked with the same transcriber on batch {4, 64}: `vendor|cta|blocked`, `vendor|blocked`). No
+  transcribed row names `sg_left`. Output `tuned/transcribed/trsm.sm_89.csv`,
+  `tuned/trsm.<dtype>.sm_89.txt` (4320 rows each); `--check` passes. sm_120 borrows them (R8) until
+  the tuner sweep.
+- Cross-check against the parent build (886537e8, old routing) on GPU 0 of threadripper02, one
+  process per cell, coverage `reached` rows: 25 cells (4 dtypes, both sides, N/T/C, order 1-1024
+  across the 32/48 edge, q 1-4096, batch 128-32768, on- and off-grid) agree. A 26th (cdouble R T
+  order 384 q 1 b128) crashes on both builds (known-defects #13; the new trace names `blocked`, the
+  old predicate gives `blocked`). Three below-grid cells differ as expected: float L N 16/4/b4,
+  float R N 64/8/b64 and cdouble L N 8/8/b1 went to the vendor and now run `cta`, `blocked`, `cta`.
+- **K4, the complex "vendor" trsm** (BatchLAS's own kernel in `cublas.cc`): the `int` batch offset
+  `b * strideA` wrapped at 2^31 elements and faulted (`CUDA_ERROR_ILLEGAL_ADDRESS`). The plan's
+  shape, cfloat order 512 x batch 8192, is exactly 2^31 elements and just fits (last offset
+  2^31 - 1); batch 8193 faulted on the parent. Fixed with 64-bit offsets; guarded by
+  `TrsmVendor.ComplexSubstituteIndexesPast2To31Elements` (order 512, batch 8193, about 17 GB, skips
+  below 32 GiB of device memory; the pre-fix source faults it).
+- **cuBLASLt crash workaround** (known-defects #13): with T1 gone, trsm at batch <= 5 runs
+  `blocked`, whose single-rhs trailing updates are complex<double> gemms with a unit dimension, which
+  segfault inside cuBLASLt on threadripper02 (the parent crashes the same way at batch >= 8).
+  `gemm_vendor_impl` now uses the typed `cublasZgemmStridedBatched` there. Without it
+  `posv_tests`, `posv_candidates_tests` and `getrf_tests` crashed (getrf also crashes on the parent).
+- Tuner spec `tools/tune/trsm_spec.cc`: diagonally dominant triangular A with the other triangle
+  poisoned (1e6), random B, alpha 1.5-0.5i; verification is the componentwise backward error
+  max_i |op(A) X - alpha B|_i / (|op(A)| |X| + |alpha| |B|)_i on items 0 and batch-1 over at most
+  32 sampled right-hand sides; `trans=T` times ConjTrans for a complex scalar. The off-diagonal
+  coupling is 0.5/(1+|r-c|)^2, independent of order. The first draft (coupling 0.5/order/(1+|r-c|),
+  normwise residual) let a `blocked` whose trailing gemm did nothing pass Tol<float> from order 256
+  up (review finding, modelled at 3e-5..2e-6). Armed: with the trailing gemm's alpha forced to 0,
+  every `blocked` cell of a float/cfloat/double probe (L/R x N/T x order 64/256/1024, q 32, b128)
+  is `bad` at 0.14-0.82 while the vendor stays `ok`; unbroken, the worst is 6.6e-7 (float) and
+  3.3e-15 (double). `bytes()` counts A, B0 and X (it counted B once), so `--cap-gib` means what
+  it says; `posv_spec` likewise now counts A0, A, B0 and X.
+  **The uplo/diag A/B is a flag:** `uplo` and `diag` are hidden grid axes fixed at L and N, so
+  `--grid uplo=L:U --grid diag=N:U --no-refine` times all four; the converter refuses to make a
+  table from such a run. A pin is probed by one untimed run (no sizing call). Smoke (GPU 0, 2 passes
+  x 4 reps, other GPUs busy, not evidence): float/cfloat order 16/64 x q 4/64 x b8192 ranked all
+  four candidates with no bad verification; `sg_left` led every Left order-16 q=4 cell (2.2x over
+  cta for float). The A/B smoke (double, order 24/96, q 8, b2048) showed vendor Side::Right order 24
+  0.45 -> 0.32 ms from diag N to U, so the vendor may fail the <= 3% invariance; the real A/B is
+  part of the sm_120 sweep.
+- `factor_bench`'s posv `composed` arm pins trsm `cta` only up to `sycl_trsm::trsm_cta_max_n<T>()`
+  (asked at run time, like potrf's `potrf_tiny_max_n<T>()`) and `native` above (a `cta` pin past
+  its ceiling now throws). `trsm_benchmark` announces the pin without the old parser.
+- Tests: `route_vocabulary_tests` loses `trsm_shape` and its 9 `RouteTrsm.*` tests; the four the
+  plan names are ported to `trsm_candidates_tests`: `:422` -> `VendorFreeLastResortIsBlocked`;
+  `:437`/`:445` -> `CanRunFalsePinsThrow`, `BlockedServesPastTheCtaCeiling`,
+  `HeterogeneousBatchHasNoNativeRoute` and `TrsmCandidatesCpu.CpuQueueRunsNoNativeFamily` (`:437`
+  not exactly: `trsm_cta_max_n` is a build constant, so "cta_max = 0" cannot be simulated);
+  `:474` -> `TraceKeyQFollowsSide`. `RouteGetri`'s citations of
+  `route_trsm.hh` now cite trsm's `can_run`. `tuned_tables_tests` gains
+  `TrsmTablesDeclareChoiceKeyNames` and `TrsmSm89TablesHoldExactlyTheChoiceGrid`.
+- `trsm_candidates_tests` (typed over 4 dtypes, GPU 0, vendor build): every candidate straddling
+  its limits on both sides, all 24 side/uplo/trans/diag combinations, non-natural ld/stride with
+  large finite poison, parent-ld sub-views, pinned-equals-direct bit for bit, a batch-1024
+  saturating case, pins/errors, tables, coverage columns, and ortho's Right-side shapes
+  (`OrthoCallerShapes`: order 2-3, q 12, T and C, both uplo). Deliberate breaks, each restored and
+  md5-verified, red sets per dtype /4-/7: cta cap widened -> 6 tests; sg_left allowed on Right ->
+  `PinnedCandidatesStraddleTheirLimits`, `CanRunEqualsLaunch`, `CanRunFalsePinsThrow`; C->T fold
+  dropped -> `AutoReadsEveryKeyField` ("trans (C folds to T)" row only); cta on Left running the
+  sg_left driver -> `PinnedRunIsTheDirectKernelBitForBit`; q always `B.cols` ->
+  `AutoReadsEveryKeyField` (Right q row), `TraceKeyQFollowsSide`, `CanRunFalsePinsThrow`; batch
+  check dropped -> `BatchMismatchThrows`; heterogeneity term dropped from the native `can_run` ->
+  `HeterogeneousBatchHasNoNativeRoute` only (cta, sg_left, blocked "accepted"); `key_of` order =
+  `B.rows()` -> `AutoReadsEveryKeyField` ("order (Right: A.rows)" row only),
+  `TraceKeyQFollowsSide`, `AutoReadsTheSm89TranscribedTable` (the last skips once sm_120 has its
+  own table; the first two do not). The trace key is `key_of()` itself, so the trace always shows
+  the key the table lookup used.
+- **sm_120 is pending.** No sm_120 trsm table exists; every sm_120 call borrows the sm_89
+  transcribed table and warns once (R8). The tuner sweep, with the uplo/diag invariance A/B as a
+  separate raw run, replaces it once GPUs 1-3 are free of the posv sweep. If the A/B shows a
+  family moving more than 3% with uplo or diag, those become keys before the table is converted.
+- **Implementer deviations from the plan / orchestrator brief:** (1) the transcriber applies
+  `trsm_cta_max_n` (32) instead of unlimited capacities (see above); (2) the new `max_wg >= 32`
+  term on Cta/Blocked and `max_wg >= 128` + sub-group 32 on SgLeft; (3) Vendor `can_run` is still
+  `has_vendor_blas` alone (known-defects #12 left for its own phase); (4) both `potrf_blocked`
+  default arguments removed, not only the panel-solve one; (5) the out-of-scope `cublas.cc`
+  typed-ZGEMM workaround (#13); (6) the vendor-free failure baseline came from the main snapshot's
+  `build-vf` (same old trsm/getrf/ortho routing), since the parent tree has none; (7)
+  `trsm_candidates_tests` and the four ported cases were written by a separate pass (see Tests
+  above); (8) `trsm_native.cc` still includes the now-unused `gemm_kernels.hh` (left to avoid another
+  device-link rebuild).
+- **Gate status (threadripper02, GPU 0):** the vendor build's 15 affected suites pass except
+  `ortho_tests`, which segfaults at the same case on the parent (#13, gemv path). The crash
+  masks more than that case: excluding `OrthoMatrixTest/7.OrthogonalizeMatrix`, the next cdouble
+  case (`OrthoAgainstMTest/7.OrthogonalizeMatrixAgainstM`) segfaults too, in both builds, so no
+  cdouble CUDA ortho case completes. Its trsm calls (Right, T, order 2-3, q 12, batch 2) moved
+  from the vendor to `cta`; `trsm_candidates_tests`' `OrthoCallerShapes` covers that shape
+  directly. The vendor-free
+  build fails the same 42 names as the old-routing baseline, none added or removed (NETLIB-only
+  cases plus `LuTest/{4,6}.TinyRoutesInsideItsMeasuredWindowAndNowhereElse`).
+  `facade_symbol_check trsm` is OK; `run_local_checks.sh` fails only `check_cmake_syntax` on the
+  untracked `build-vf/` in the worktree. The ROCm syntax check was not run (no ROCm headers on
+  this box). Plan risks: K3 materialised (the batch <= 5 suites moving to native exposed #13,
+  worked around for gemm); K4 is real and fixed (above); K6 (C folded to T) moves no cell on the
+  grid, since the sm_89 rows are side/order-determined and identical for N, T and C, and the
+  26-cell cross-check covered all three; it starts to matter only once a timed table differs.
 
 **Behaviour changes visible to callers:**
 - A bad pin throws. `factor_bench`'s posv `composed` arm therefore pins potrf to `tiny` only up to

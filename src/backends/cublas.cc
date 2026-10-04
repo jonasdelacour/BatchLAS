@@ -68,6 +68,20 @@ namespace batchlas {
 
         auto [m, k] = get_effective_dims(A, transA);
         auto [kB, n] = get_effective_dims(B, transB);
+        // Workaround: cdouble m or n == 1 through the Ex calls segfaults in cuBLASLt (known-defects #13).
+        if constexpr (std::is_same_v<T, std::complex<double>>) {
+            if (m == 1 || n == 1) {
+                cublasZgemmStridedBatched(handle,
+                    enum_convert<BackendLibrary::CUBLAS>(transA), enum_convert<BackendLibrary::CUBLAS>(transB),
+                    m, n, k, reinterpret_cast<const cuDoubleComplex*>(&alpha),
+                    reinterpret_cast<const cuDoubleComplex*>(A.data_ptr()), A.ld(), A.stride(),
+                    reinterpret_cast<const cuDoubleComplex*>(B.data_ptr()), B.ld(), B.stride(),
+                    reinterpret_cast<const cuDoubleComplex*>(&beta),
+                    reinterpret_cast<cuDoubleComplex*>(C.data_ptr()), C.ld(), C.stride(),
+                    std::max(1, A.batch_size()));
+                return ctx.create_event_after_external_work();
+            }
+        }
         if (A.batch_size() <= 1) {
             cublasGemmEx(handle,
                 enum_convert<BackendLibrary::CUBLAS>(transA), enum_convert<BackendLibrary::CUBLAS>(transB),
@@ -866,15 +880,16 @@ namespace batchlas {
             T* B_ptr = B.data_ptr();
             const int m = B.rows();
             const int nrhs = B.cols();
-            const int lda = A.ld();
-            const int ldb = B.ld();
-            const int strideA = A.stride();
-            const int strideB = B.stride();
+            // 64-bit: b * strideA passes 2^31 at cfloat order 512, batch 8193 (an int wrapped).
+            const std::int64_t lda = A.ld();
+            const std::int64_t ldb = B.ld();
+            const std::int64_t strideA = A.stride();
+            const std::int64_t strideB = B.stride();
             const int work_dim = (side == Side::Left) ? nrhs : m;
 
             ctx->parallel_for(sycl::range<2>(static_cast<size_t>(batch_size), static_cast<size_t>(work_dim)),
                               [=](sycl::id<2> tid) {
-                                  const int b = static_cast<int>(tid[0]);
+                                  const std::int64_t b = static_cast<std::int64_t>(tid[0]);
                                   const int p = static_cast<int>(tid[1]);
 
                                   const T* Ab = A_ptr + b * strideA;

@@ -24,8 +24,8 @@ template <typename T>
 BATCHLAS_INTERNAL_API std::size_t getri_blocked_buffer_size(Queue& ctx,
                                                             const MatrixView<T, MatrixFormat::Dense>& A);
 
-// Must be the ROUTED trsm -- a native trsm entry point called from a driver TU
-// bypasses RouteTable<Op::trsm>. alpha comes THIRD, not last. Absent injection throws.
+// Must be the public trsm -- a native trsm entry point called from a driver TU
+// bypasses trsm's selection (src/ops/trsm). alpha comes THIRD, not last. Absent injection throws.
 template <typename T>
 using GetriSolveTrsm = std::function<Event(
     Queue&,

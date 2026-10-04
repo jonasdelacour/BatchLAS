@@ -113,7 +113,7 @@ using PotrfTrailingGemm = std::function<Event(
     const MatrixView<T, MatrixFormat::Dense>&,
     T, T, Transpose, Transpose, ComputePrecision)>;
 
-// Injected likewise; empty means sycl_trsm::trsm_native_blocked. ALPHA IS IN POSITION 4.
+// The panel solve, REQUIRED (empty throws): pass the public trsm. ALPHA IS IN POSITION 4.
 template <typename T>
 using PotrfPanelSolve = std::function<Event(
     Queue&,
@@ -139,7 +139,7 @@ BATCHLAS_INTERNAL_API Event potrf_blocked_dispatch(Queue& ctx,
                                                    Uplo uplo,
                                                    Span<std::byte> workspace,
                                                    Span<int32_t> info,
-                                                   PotrfTrailingGemm<T> trailing_gemm = {},
-                                                   PotrfPanelSolve<T> panel_solve = {});
+                                                   PotrfTrailingGemm<T> trailing_gemm,
+                                                   PotrfPanelSolve<T> panel_solve);
 
 }  // namespace batchlas::sycl_potrf

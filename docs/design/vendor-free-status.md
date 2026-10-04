@@ -56,7 +56,7 @@ The structural reason every native tier in this campaign is invisible to the hos
 `supports()` carries `if (!s.is_gpu) return false;` for `geqrf` (`route_geqrf.hh:48`), `orgqr`
 (`route_orgqr.hh:32`), `ormqr` (`route_ormqr.hh:59`), `getrf` (`route_getrf.hh:41`), `getrs`
 (`route_getrs.hh:52`), `getri` (`route_getri.hh:39`), `potrf` (`can_run` in `src/ops/potrf/potrf.cc`), `trsm`
-(`route_trsm.hh:39`) and `gemm` (`route_gemm.hh:34-67`). **`gemv`'s `Direct` arm and `spmm`'s
+(`can_run` in `src/ops/trsm/trsm.cc`; before P3.3 `route_trsm.hh:39`) and `gemm` (`route_gemm.hh:34-67`). **`gemv`'s `Direct` arm and `spmm`'s
 gather are the only two exceptions in the tree** — both run on a `native_cpu` `Device("cpu")`
 queue, which is exactly why `gemv_tests` went 40 failed → 0 vendor-free when nothing else did.
 
@@ -102,7 +102,7 @@ native route still runs: `automatic()` accepts a merely *supported* native route
 |---|---|---|---|
 | `gemm` | `RegisterTiled` | GPU, homogeneous, `batch >= 64`; **`double` at `k >= 2`**; `float` NN square `max_dim <= 32`; **complex never** | `route_gemm.hh:34-67` |
 | `gemv` | `CTA`, `Direct` | one window: `complex<double>`, transposed, `64 <= red_len <= 352`, `out_len >= 256`, `batch >= 320` | `route_gemv.hh:60-71` |
-| `trsm` | `CTA`, `Blocked` | native from `batch >= 8`; `float`/`Side::Right` additionally needs `batch >= 128 \|\| order <= 32`; everything else true | `route_trsm.hh:64-80` |
+| `trsm` | `Cta`, `SgLeft`, `Blocked` | no `preferred()` any more: tuned tables (`tuned/trsm.*.txt`) since flat selection (P3.3). The deleted window was native from `batch >= 8`, `float`/`Side::Right` also needing `batch >= 128 \|\| order <= 32` | `src/ops/trsm/trsm.cc` |
 | `potrf` | `Tiny`, `CTA`, `LPanel`, `Blocked` | no `preferred()` any more: tuned tables (`tuned/potrf.*.txt`) since flat selection | `src/ops/potrf/potrf.cc` |
 | `geqrf` | `CTA`, `Blocked` | native above a per-type order floor (`float` 64, `cfloat` 48, `double` 96, `cdouble` 256), plus tall panels `rows >= 128 && cols >= 32 && rows >= 4*cols`; the window answers true for **one** tier, resolved through `best_native_tier` so it cannot pre-empt `native_tier_preferred` | `route_geqrf.hh:preferred` |
 | `orgqr` | `Blocked` | native at `rows <= 512 && cols <= 512` | `route_orgqr.hh:preferred` |
@@ -267,9 +267,10 @@ measurement:
   not guarded by `forced`.
 * **`symm` has no `expansion_fits()` ceiling** where `hemm`/`herk`/`her2k` all have one, so a
   large enough `symm` hits the 2³¹-element SYCL range failure instead of falling back.
-* **`trsm`'s heterogeneous-batch correctness gate can never fire.** `supports()` rejects the
-  field at `route_trsm.hh:43`, but `trsm_op_shape` never *writes* it, so it keeps `OpShape`'s
-  default `false`. A documented intention, not an enforced one.
+* ~~**`trsm`'s heterogeneous-batch correctness gate can never fire.**~~ Withdrawn: the field was
+  written (known-defects #7), and since P3.3 `route_trsm.hh` and `trsm_op_shape` are deleted;
+  the native families' `can_run` in `src/ops/trsm/trsm.cc` refuses a heterogeneous A or B, while
+  the vendor's still accepts one (known-defects #12).
 * **`resolve_ormqr_route` is called with two arguments** (`ormqr.hh:209`), taking
   `vendor_available = true`, so `ormqr` never reaches the vendor-free fallback. It gets away
   with it only because its `preferred()` is native-first. Do not inherit the omission.

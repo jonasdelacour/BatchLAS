@@ -85,7 +85,7 @@ public:
     }
     double bytes(const std::string& dtype, const CellKey& k) const override {
         const double n = double(key_int(k, "n"));
-        return (n * n + n * double(key_int(k, "nrhs"))) * double(key_int(k, "batch")) * dtype_bytes(dtype);
+        return (2.0 * n * n + 2.0 * n * double(key_int(k, "nrhs"))) * double(key_int(k, "batch")) * dtype_bytes(dtype);  // A0, A, B0, X
     }
     std::vector<std::string> kernel_sources() const override {
         // kernel-sources-begin

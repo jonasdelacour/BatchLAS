@@ -15,6 +15,8 @@ These files are plain git, not LFS, so that table changes stay readable in diffs
 | potrf | sm_120, sm_89 | converted route sweeps (timed) | `potrf.<dtype>.<device>.txt` |
 | posv | sm_89 | **transcribed** old router, untimed (`source=transcribed:7e71a6e0`) | `posv.<dtype>.sm_89.txt`, from `transcribed/posv.sm_89.csv` |
 | posv | sm_120 | none yet: the sweep `benchmarks/results/routing/sm120_posv_sweep.jsonl` is converted later; until then sm_120 borrows the sm_89 posv tables and warns once | — |
+| trsm | sm_89 | **transcribed** old router, untimed (`source=transcribed:8b9adeb3`) | `trsm.<dtype>.sm_89.txt`, from `transcribed/trsm.sm_89.csv` |
+| trsm | sm_120 | none yet: a `tools/tune` sweep; until then sm_120 borrows the sm_89 trsm tables and warns once | — |
 
 ## How they are produced
 
@@ -45,6 +47,13 @@ this level). Regenerate with
     g++ -std=c++20 -I$OLD/include -I$OLD/build/include tools/transcribe/posv_transcribe.cc -o /tmp/pt
     /tmp/pt sm_89 > tuned/transcribed/posv.sm_89.csv
     python3 scripts/sweep_to_table.py --transcribe tuned/transcribed/posv.sm_89.csv --sha 7e71a6e0
+
+The trsm sm_89 tables come from `tools/transcribe/trsm_transcribe.cc` the same way (built against
+8b9adeb3, which still has `route_trsm.hh`; the g++ line is in its header, then `--transcribe
+tuned/transcribed/trsm.sm_89.csv --sha 8b9adeb3`). On the grid (batch >= 128) the old router
+preferred every native route, so a row is `cta - | blocked - | vendor -` at order <= 32 and
+`blocked - | vendor -` above. Its batch floor (batch < 8 went to the vendor) and the float
+Side::Right rule (batch < 128 above order 32) sit below the grid and are not transcribed.
 
 A transcribed row reproduces a deleted window; it is not a measurement. It is replaced by a timed
 row when the tuner sweeps that device.

@@ -9,9 +9,7 @@
 
 #include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/blas/functions/gemv.hh>
-#include <batchlas/blas/functions/trsm.hh>
 
-#include "../../backends/trsm_route.hh"
 #include "../../backends/gemv_route.hh"
 #include "../../sycl/gemv_native.hh"
 #include <batchlas/blas/functions/symm.hh>
@@ -118,60 +116,6 @@ Event gemv(Queue& ctx,
             dispatch::Op::gemv, Back, dispatch::kLevel3Library<Back>);
     } else {
         return backend::gemv_vendor<Back, T>(ctx, A, X, Y, alpha, beta, transA);
-    }
-}
-
-template <Backend Back, typename T>
-Event trsm(Queue& ctx,
-           const MatrixView<T,MatrixFormat::Dense>& A,
-           const MatrixView<T,MatrixFormat::Dense>& B,
-           T alpha,
-           Side side,
-           Uplo uplo,
-           Transpose transA,
-           Diag diag) {
-    // Validation is hoisted here so every backend gets it, and must precede the
-    // shape builder, which reads A.rows()/B.rows()/B.cols() and would index a
-    // non-conforming shape.
-    trsm_validate_params(A, B, side, uplo, transA, diag);
-
-    // The gate runs BEFORE the vendor-available test: anything below that test
-    // is unreachable in the vendor-free build.
-    const dispatch::Route route = backend::trsm_route<T>(
-        ctx, A, B, side, uplo, transA, diag,
-        /*vendor_available=*/dispatch::level3_vendor_available<Back>);
-
-    {
-        if (dispatch::is_native(route)) {
-            if (route.algo == dispatch::Algorithm::CTA) {
-                return sycl_trsm::trsm_native_v1_dispatch<T>(
-                    ctx, A, B, alpha, side, uplo, transA, diag);
-            }
-            if (route.algo == dispatch::Algorithm::Blocked) {
-                // Routed, not a direct sycl_gemm::gemm_custom call: trsm's operands
-                // are sub-views carrying the parent's ld, and the native GEMM
-                // collapses on a strided ld. The lambda keeps dispatch out of the
-                // kernel TU. evidence: docs/perf/gemm.md#the-strided-ld-defect-and-the-routing-fix
-                return sycl_trsm::trsm_native_blocked<T>(
-                    ctx, A, B, alpha, side, uplo, transA, diag,
-                    [](Queue& c,
-                       const MatrixView<T, MatrixFormat::Dense>& ga,
-                       const MatrixView<T, MatrixFormat::Dense>& gb,
-                       const MatrixView<T, MatrixFormat::Dense>& gc,
-                       T galpha, T gbeta, Transpose gta, Transpose gtb,
-                       ComputePrecision gp) {
-                        return gemm<Back, T>(c, ga, gb, gc, galpha, gbeta,
-                                             gta, gtb, gp);
-                    });
-            }
-        }
-    }
-
-    if constexpr (!dispatch::level3_vendor_available<Back>) {
-        dispatch::throw_no_vendor_route<T>(
-            dispatch::Op::trsm, Back, dispatch::kLevel3Library<Back>);
-    } else {
-        return backend::trsm_vendor<Back, T>(ctx, A, B, side, uplo, transA, diag, alpha);
     }
 }
 
@@ -377,7 +321,6 @@ Event trmm(Queue& ctx,
 #define ALL_TYPE_OPS_ONE(B_, fp)  \
     OP_INSTANTIATE(gemm, B_, fp)  \
     OP_INSTANTIATE(gemv, B_, fp)  \
-    OP_INSTANTIATE(trsm, B_, fp)  \
     OP_INSTANTIATE(trmm, B_, fp)
 
 #define LEVEL3_INSTANTIATE(B_)                       \

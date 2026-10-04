@@ -79,10 +79,9 @@ inline std::optional<dispatch::GemvShape> gemv_op_shape(
     s.op = dispatch::Op::gemv;
     s.scalar = dispatch::scalar_kind_of<T>;
 
-    // SET. trsm's builder (trsm_route.hh:40-56) does not, which is why every
-    // trsm coverage row reads Backend::AUTO and the burn-down is unreadable for
-    // it. resolve_route slices this straight into the coverage table
-    // (route_resolve.hh).
+    // SET. trsm's old builder did not, so every trsm coverage row read
+    // Backend::AUTO and the burn-down was unreadable for it. resolve_route slices
+    // this straight into the coverage table (route_resolve.hh).
     s.backend = B;
 
     // FIELD MAPPING. m and n are A's extents as STORED, not as transposed --
@@ -119,7 +118,7 @@ inline std::optional<dispatch::GemvShape> gemv_op_shape(
     s.heterogeneous_batch = A.is_heterogeneous();
 
     // The capabilities, asked of the kernel TU so the table describes the BUILD
-    // and not the design (route_trsm.hh:62-84).
+    // and not the design.
     s.direct_available = sycl_gemv::gemv_direct_available<T>();
     s.cta_available = sycl_gemv::gemv_cta_available<T>();
     return s;

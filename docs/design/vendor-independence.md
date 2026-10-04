@@ -112,7 +112,8 @@ build *is* the vendor. `BATCHLAS_SPMM_ROUTE=cta` resolves to `{Native, CTA}`, `s
 because no CTA body exists, and the run silently measures cuSPARSE. A **misspelled** value is worse:
 `parse_route_value` fails, the resulting `ParsedRouteEnv::unparsed` flag is discarded at every
 adapter's `parsed.found ? parsed.route : legacy_unset_default(...)` (`gemv_route.hh:151`,
-`trsm_route.hh:75`, `spmm_route.hh:102`, and eight more identically), and every decision goes to the
+`spmm_route.hh:102`, and others identically; trsm's `trsm_route.hh:75` was one until P3.3, and a
+flat-selected op now throws on an unparsable pin), and every decision goes to the
 vendor with no message. Confirm a pin with the resolved-route column, never with the exit status.
 
 ## Route tables and shape structs
@@ -120,7 +121,9 @@ vendor with no message. Confirm a pin with the resolved-route column, never with
 Thirteen ops have a `RouteTable<Op, T>` specialisation: `gemm`, `gemv`, `trsm`, `potrf`, `getrf`,
 `getrs`, `getri`, `geqrf`, `orgqr`, `ormqr`, `gesvd` and `spmm` get one header each under
 `include/batchlas/blas/dispatch/`; `syev`'s lives with the op, in
-`include/batchlas/blas/functions/syev.hh`.
+`include/batchlas/blas/functions/syev.hh`. Since flat selection, `potrf` and `trsm` have none
+(their headers and builders are deleted; see `flat-kernel-selection.md` §12); the `trsm` references
+below describe the code before P3.3.
 
 Each table is paired with a **shape builder** — `src/backends/<op>_route.hh`, or the op header for
 `gemm`/`gesvd`/`syev`/`ormqr` — which is where everything impure happens: the `getenv`, the SYCL

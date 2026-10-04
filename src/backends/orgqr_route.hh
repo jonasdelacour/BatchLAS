@@ -76,8 +76,8 @@ inline std::optional<dispatch::OrgqrShape> orgqr_op_shape(
     // NO has_sg32 AND NO SLM CAPACITY. Deliberate, and the reason is in
     // route_orgqr.hh: ormqr_blocked carries no [[sycl::reqd_sub_group_size(32)]]
     // and holds nothing resident, so a sub-group field or a capacity here would
-    // be a DECORATIVE input -- the state route_trsm.hh was criticised
-    // for. They arrive with the arm that needs them.
+    // be a DECORATIVE input -- the state trsm's old route table was
+    // criticised for. They arrive with the arm that needs them.
     //
     // TRUE for all four scalar types: orgqr_blocked.cc ships the identity fill
     // plus a routed ormqr, so the native arm is supported and a vendor-free build

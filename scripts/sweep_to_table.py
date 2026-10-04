@@ -234,6 +234,38 @@ POSV = OpSpec(
 )
 
 
+def trsm_key(r):
+    try:
+        key = (str(r["side"]), str(r["trans"]), int(r["order"]), int(r["q"]), int(r["batch"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+    return key if key[0] in ("L", "R") and key[1] in ("N", "T") and min(key[2:]) >= 1 else None
+
+
+def trsm_tuner_key(r):
+    """uplo and diag are hidden tuner axes for the invariance A/B (tools/tune/trsm_spec.cc):
+    a run that varied them would fold several cells into one row, so it never becomes a table."""
+    if r.get("uplo", "L") != "L" or r.get("diag", "N") != "N":
+        raise SystemExit(f"trsm tuner record with uplo={r.get('uplo')} diag={r.get('diag')}: "
+                         "an uplo/diag A/B run is raw data, not a table")
+    return (str(r["side"]), str(r["trans"]), int(r["order"]), int(r["q"]), int(r["batch"]))
+
+
+# trsm (plan section 1.2): work ~ order^2 q batch. ConjTrans folds to T; uplo and diag are not
+# keys. No sweep source: sm_89 is transcribed, sm_120 comes from the tuner (--tuner).
+TRSM_CHOICES = ("cta", "sg_left", "blocked", "vendor")
+TRSM = OpSpec(
+    op="trsm",
+    keys="side:exact trans:exact order:log:2 q:log batch:log",
+    row_ops=("trsm",),
+    row_key=trsm_key,
+    arm_spelling={c: c for c in TRSM_CHOICES},
+    arm_route={c: (("vendor:vendor",) if c == "vendor" else (f"native:{c}",)) for c in TRSM_CHOICES},
+    candidate_order=list(TRSM_CHOICES),
+    tuner_key=trsm_tuner_key,
+)
+
+
 def parse_keys(spec):
     """'# keys:' text -> [(name, is_log, weight)]; a :log weight defaults to 1."""
     out = []
@@ -604,7 +636,7 @@ def potrf_offgrid(texts, points):
 
 
 POTRF.review = potrf_offgrid
-OPS = [POTRF, POSV]
+OPS = [POTRF, POSV, TRSM]
 OP_BY_NAME = {s.op: s for s in OPS}
 
 
