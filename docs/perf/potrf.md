@@ -10,7 +10,7 @@ What runs is decided in one file, `src/ops/potrf/potrf.cc` (docs/design/flat-ker
 * the candidates are `tiny`, `cta`, `lpanel:panel=8`, `lpanel:panel=16` (float only), `blocked`, `vendor`
   (`src/ops/potrf/choice.hh`);
 * the choice is the first runnable entry of the nearest row of `tuned/potrf.<dtype>.<device>.txt`, keyed on
-  `uplo` (exact), `n` and `batch` (log distance); a device with no table borrows one and warns once, a CPU device
+  `uplo` (exact), `n` and `batch` (log distance, `n` weighted 3: `# keys: uplo:exact n:log:3 batch:log`); a device with no table borrows one and warns once, a CPU device
   never borrows a GPU table; if no row entry can run, the last resort is `blocked`, then `vendor`;
 * the tables are the old route sweeps, converted: `scripts/sweep_to_table.py` reads
   `benchmarks/results/routing/*.jsonl` (provenance in `tuned/README.md`); `--check` is the CI gate that the tables
@@ -23,8 +23,9 @@ What runs is decided in one file, `src/ops/potrf/potrf.cc` (docs/design/flat-ker
 * `potrf_buffer_size` returns exactly the chosen family's workspace, no longer the maximum over every tier;
 * `BATCHLAS_POTRF_ROUTE` takes `auto`, `native`, `vendor`, a spelling (`lpanel:panel=8`, `lpanel:8`) or a legacy alias
   (`native:tiny`, `native:cta`, `native:lpanel`, `native:blocked`, `lpanel`). A pin that does not parse, or names a
-  choice that cannot run the shape, **throws `std::invalid_argument`**; it used to fall through to Auto. `native`
-  with no runnable native candidate still falls back to Auto, with a warning. No legacy `_VARIANT`/`_PROVIDER`
+  choice that cannot run the shape, **throws `std::invalid_argument`**; it used to fall through to Auto. The class
+  words `native` and `vendor` with no runnable candidate of their class (e.g. `vendor` in a vendor-free build) fall
+  back to Auto, with a warning. No legacy `_VARIANT`/`_PROVIDER`
   variable ever existed for potrf, so none is read;
 * `BATCHLAS_SELECT_TRACE=1` prints each decision; coverage `reached` rows carry the spelling in `chosen_algo` and
   `native`/`vendor` in `chosen_origin` (so a readback is e.g. `native:lpanel:panel=8`).
@@ -34,8 +35,10 @@ Known gaps, carried to the phase-2 gate (docs/design/flat-kernel-selection.md §
 * the sm_89 archive has no current-era `lpanel` timings, so the sm_89 tables never pick `lpanel`, although
   [the measured LPanel window](#the-measured-lpanel-window) shows it winning there. `lpanel:panel=16` has never been
   timed on any device, so no table picks it; only a pin reaches it;
-* `n` and `batch` weigh equally in the log distance, so an off-grid shape near the 4 GiB sweep cap can land on a row
-  far away in `n` (float n=704 batch=8192 maps to the n=320 row);
+* `n` and `batch` used to weigh equally in the log distance, so an off-grid shape near the 4 GiB sweep cap landed on
+  a row far away in `n` (float n=704 batch=8192 on the n=320 row), and on the sparse sm_89 tables float n=24
+  batch=512 landed on the n=80 `vendor` row. `n` now weighs 3 (work ~ n^3 x batch); the first maps to n=640
+  batch=2048, the second to n=24 batch=16384 (`cta`). Off-grid cells are still guesses until the grid is filled;
 * the sm_120 sweeps have `uplo=U` rows for float only. When a table has no row with the exact key, the exact key is
   dropped and the nearest `uplo=L` row is used, so double/cfloat/cdouble Upper on sm_120 take the first
   Upper-capable entry (`tiny`, `cta` or `vendor`) of a Lower ranking;

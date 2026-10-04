@@ -59,6 +59,7 @@
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -483,6 +484,7 @@ struct Arm {
     int info_nonzero = 0;
     int bad = 0;
     std::string reason;
+    bool refused = false;  // a pin this shape cannot run: the arm is reported, never timed
 };
 
 // P4 needs an A/B the route pin cannot express: both arms are the SAME route
@@ -552,6 +554,17 @@ static void flag(Arm& a, const char* why) {
     a.reason += why;
 }
 
+// A refused pin (std::invalid_argument from choose()) costs only that arm, never the cell.
+// The message goes in a CSV field, so its commas and quotes are replaced.
+static void refuse(Arm& a, const std::invalid_argument& e) {
+    std::string why = std::string("pin refused: ") + e.what();
+    for (char& ch : why)
+        if (ch == ',') ch = ';';
+        else if (ch == '"') ch = '\'';
+    a.refused = true;
+    flag(a, why.c_str());
+}
+
 static void gate(Arm& a, double tol, int reps) {
     if (!std::isfinite(a.residual)) flag(a, "residual_nonfinite");
     else if (a.residual > tol) flag(a, "residual");
@@ -581,7 +594,7 @@ struct Cfg {
 static Uplo up_of(const Cfg& c) { return c.upper ? Uplo::Upper : Uplo::Lower; }
 
 static void emit(const Cfg& c, const Arm& a, std::FILE* csv) {
-    char buf[512];
+    char buf[2048];
     std::snprintf(buf, sizeof(buf),
                   "%s,%s,%d,%d,%d,%d,%s,%s,%d,%.6f,%.6f,%.4f,%d,%.3e,%.3e,%d,%d,%s\n",
                   op_text(c.op), c.type.c_str(), c.m, c.n, c.nrhs, c.batch,
@@ -723,14 +736,18 @@ static int run(const Cfg& c) {
         ArmEnv pinned(var, arms[i], leaf_variable(c.op));
         arms[i].pin_parsed = pin_parsed_now(c.op);
         size_t need = 0;
-        switch (c.op) {
-            case OpKind::potrf: need = potrf_buffer_size<BE, T>(*q, Av, up_of(c)); break;
-            case OpKind::getrf: need = getrf_buffer_size<BE, T>(*q, Av); break;
-            case OpKind::getrs: need = getrs_buffer_size<BE, T>(*q, Av, Xv, Transpose::NoTrans); break;
-            case OpKind::geqrf: need = geqrf_buffer_size<BE, T>(*q, Av, tau.to_span()); break;
-            case OpKind::orgqr: need = orgqr_buffer_size<BE, T>(*q, Av, tau.to_span()); break;
-            case OpKind::gesv: need = gesv_buffer_size<BE, T>(*q, Av, Xv); break;
-            case OpKind::posv: need = posv_buffer_size<BE, T>(*q, Av, Xv, up_of(c)); break;
+        try {
+            switch (c.op) {
+                case OpKind::potrf: need = potrf_buffer_size<BE, T>(*q, Av, up_of(c)); break;
+                case OpKind::getrf: need = getrf_buffer_size<BE, T>(*q, Av); break;
+                case OpKind::getrs: need = getrs_buffer_size<BE, T>(*q, Av, Xv, Transpose::NoTrans); break;
+                case OpKind::geqrf: need = geqrf_buffer_size<BE, T>(*q, Av, tau.to_span()); break;
+                case OpKind::orgqr: need = orgqr_buffer_size<BE, T>(*q, Av, tau.to_span()); break;
+                case OpKind::gesv: need = gesv_buffer_size<BE, T>(*q, Av, Xv); break;
+                case OpKind::posv: need = posv_buffer_size<BE, T>(*q, Av, Xv, up_of(c)); break;
+            }
+        } catch (const std::invalid_argument& e) {
+            refuse(arms[i], e);
         }
         wneed = std::max(wneed, need);
     }
@@ -753,6 +770,17 @@ static int run(const Cfg& c) {
         }
         q->wait();
     };
+    // One arm's run under its pin; false (and the arm refused) if the pin throws.
+    auto run_arm = [&](Arm& a) {
+        if (a.refused) return false;
+        try {
+            call();
+            return true;
+        } catch (const std::invalid_argument& e) {
+            refuse(a, e);
+            return false;
+        }
+    };
 
     // TIME-BASED WARM-UP, DISCARDED, and INTERLEAVED in the timed loop's arm order -- measured,
     // not stylistic: a per-arm warm-up made arm 0's first timed rep 2.2x slow every time and
@@ -762,9 +790,10 @@ static int run(const Cfg& c) {
         const auto w0 = std::chrono::steady_clock::now();
         do {
             for (size_t i = 0; i < arms.size(); ++i) {
+                if (arms[i].refused) continue;
                 ArmEnv pinned(var, arms[i], leaf_variable(c.op));
                 reset();
-                call();
+                (void)run_arm(arms[i]);
             }
         } while (std::chrono::duration<double>(std::chrono::steady_clock::now() - w0).count() < budget);
     }
@@ -774,10 +803,11 @@ static int run(const Cfg& c) {
     std::vector<std::vector<double>> ms(arms.size());
     for (int r = 0; r < c.reps; ++r) {
         for (size_t i = 0; i < arms.size(); ++i) {
+            if (arms[i].refused) continue;
             ArmEnv pinned(var, arms[i], leaf_variable(c.op));
             reset();
             const auto t0 = std::chrono::steady_clock::now();
-            call();
+            if (!run_arm(arms[i])) continue;
             const auto t1 = std::chrono::steady_clock::now();
             ms[i].push_back(std::chrono::duration<double, std::milli>(t1 - t0).count());
         }
@@ -799,12 +829,13 @@ static int run(const Cfg& c) {
     // that arm's route -- so a fast wrong answer cannot be reported as a win.
     for (size_t i = 0; i < arms.size(); ++i) {
         Arm& a = arms[i];
+        if (a.refused) continue;
         a.st = stat_of(ms[i]);
         {
             ArmEnv pinned(var, a, leaf_variable(c.op));
             for (int b = 0; b < batch; ++b) info[b] = 0;
             reset();
-            call();
+            if (!run_arm(a)) continue;
         }
         switch (c.op) {
             case OpKind::potrf:

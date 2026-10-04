@@ -50,8 +50,9 @@ inline constexpr std::array<select::Alias, 5> aliases{{
 inline constexpr std::array<std::string_view, 2> last_resort{"blocked", "vendor"};
 inline constexpr select::Rules rules{aliases, last_resort};
 
-// Table keys: the exact-match key first, then the log-distance keys (§5.4).
-inline constexpr std::array<std::string_view, 3> key_names{"uplo:exact", "n:log", "batch:log"};
+// Table keys: the exact-match key first, then the log-distance keys (§5.4). n weighs 3: work
+// grows as n^3 and linearly in batch, so the distance approximates log-cost.
+inline constexpr std::array<std::string_view, 3> key_names{"uplo:exact", "n:log:3", "batch:log"};
 
 // The tuner's coarse grid (§6.2): today's sweep grid, so converted and tuned tables line up.
 inline constexpr std::array<int, 34> grid_n{1, 2, 3, 4, 6, 8, 12, 16, 20, 24, 28, 32, 36, 40, 48,

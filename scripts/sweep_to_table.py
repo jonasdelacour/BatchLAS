@@ -57,6 +57,10 @@ DTYPES = {
 TIE = 0.03
 NOISY = 0.10
 
+# Section 5.4 key spec, the same text as choice.hh's key_names. n weighs 3 because potrf
+# work grows as n^3 and linearly in batch: the distance then approximates log-cost.
+KEYS = "uplo:exact n:log:3 batch:log"
+
 SOURCES = {
     "sm_120": {
         "files": ["sm120_potrf_sweep.jsonl", "sm120_potrf_sweep_edges.jsonl"],
@@ -167,7 +171,7 @@ def build_tables(date, stats_by_device):
                 f"# op=potrf dtype={dtype} device={device} batchlas={spec['batchlas']} "
                 f"kernels=unknown date={date}",
                 f"# source={source} ({spec['note']})",
-                "# keys: uplo:exact n:log batch:log",
+                f"# keys: {KEYS}",
             ]
             for (uplo, n, batch) in sorted(rows):
                 times, noisy = rows[(uplo, n, batch)]
@@ -182,10 +186,25 @@ def table_path(dtype, device):
     return os.path.join(REPO, TUNED, f"potrf.{dtype}.{device}.txt")
 
 
+def key_weights(spec):
+    """{name: weight} of the :log keys in a '# keys:' spec; the weight defaults to 1."""
+    out = {}
+    for tok in spec.split():
+        part = tok.split(":")
+        if part[1] == "log":
+            out[part[0]] = float(part[2]) if len(part) > 2 else 1.0
+    return out
+
+
 def parse_table(text):
-    """Parse the section 5.4 format: header dict and [((uplo, n, batch), [(choice, ms)])]."""
+    """Parse the section 5.4 format: header dict and [((uplo, n, batch), [(choice, ms)])].
+
+    The header's "weights" entry holds key_weights() of the '# keys:' line."""
     header, rows = {}, []
     for line in text.splitlines():
+        if line.startswith("# keys:"):
+            header["weights"] = key_weights(line[len("# keys:"):])
+            continue
         if line.startswith("#"):
             for tok in line[1:].split():
                 if "=" in tok:
@@ -205,9 +224,10 @@ def parse_table(text):
     return header, rows
 
 
-def nearest(rows, key):
-    """Section 5.4 lookup: exact uplo, min sum |log2(row/key)|, ties to smaller n then batch."""
+def nearest(rows, key, weights):
+    """Section 5.4 lookup: exact uplo, min sum w*|log2(row/key)|, ties to smaller n then batch."""
     uplo, n, batch = key
+    wn, wb = weights["n"], weights["batch"]
     pool = [r for r in rows if r[0][0] == uplo] or rows
     # Same arithmetic and 1e-9 tie window as Table::nearest (src/select/select.cc): with
     # log2(rn / n) the two sides of a geometric midpoint differ by an ulp and the tie is lost.
@@ -215,7 +235,7 @@ def nearest(rows, key):
     best, best_d = None, 0.0
     for r in pool:
         _, rn, rb = r[0]
-        d = abs(math.log2(rn) - ln) + abs(math.log2(rb) - lb)
+        d = wn * abs(math.log2(rn) - ln) + wb * abs(math.log2(rb) - lb)
         tie = best is not None and abs(d - best_d) <= 1e-9
         if best is None or (not tie and d < best_d) or (tie and (rn, rb) < best[0][1:]):
             best, best_d = r, d
@@ -259,11 +279,11 @@ def check(tables, points):
         derived = build_tables(date, {})[(dtype, device)][0]
         if disk != derived:
             failures.append(f"{path}: differs from the sweeps (re-run without --check)")
-        _, parsed = parse_table(disk)
+        disk_header, parsed = parse_table(disk)
         if len({k for k, _ in parsed}) != len(parsed):
             failures.append(f"{path}: duplicate row keys")
         for key, (times, _) in rows.items():
-            hit = nearest(parsed, key)
+            hit = nearest(parsed, key, disk_header["weights"])
             if hit is None or hit[0] != key:
                 failures.append(f"{path}: nearest{key} -> {hit and hit[0]}")
                 continue
@@ -278,14 +298,14 @@ def print_offgrid(tables, points):
     print("\noff-grid lookup (uplo=L): n batch -> row n/batch : first entry"
           " [first entry within the measured n envelope, if different]")
     for (dtype, device) in sorted(tables, key=lambda k: (k[1], k[0])):
-        _, parsed = parse_table(tables[(dtype, device)][0])
+        header, parsed = parse_table(tables[(dtype, device)][0])
         env = support_envelope(parsed)
         print(f"-- {dtype} {device}")
         for n, b in points:
             batches = [b] if b else DEFAULT_OFFGRID_BATCH
             cells = []
             for batch in batches:
-                (_, rn, rb), ranked = nearest(parsed, ("L", n, batch))
+                (_, rn, rb), ranked = nearest(parsed, ("L", n, batch), header["weights"])
                 first = ranked[0][0]
                 fit = next((c for c, _ in ranked if env[("L", c)] >= n), "none")
                 extra = f" [{fit}]" if fit != first else ""

@@ -207,7 +207,8 @@ using Key = std::vector<KeyField>;
 
 struct TableKey {
     std::string name;
-    bool log = false;  // false: ":exact", compared as text
+    bool log = false;     // false: ":exact", compared as text
+    double weight = 1.0;  // ":log:<w>": this key's share of the distance
 };
 
 struct TableEntry {
@@ -230,7 +231,7 @@ struct Table {
     std::vector<TableKey> keys;
     std::vector<TableRow> rows;
 
-    // Exact keys filter (dropped if no row matches), then min sum |log2(row/key)|, ties
+    // Exact keys filter (dropped if no row matches), then min sum w*|log2(row/key)|, ties
     // lexicographic by the :log keys in declared order. Throws if `key` lacks a table key.
     BATCHLAS_API const TableRow* nearest(const Key& key) const;
 };
@@ -254,7 +255,8 @@ namespace detail {
 BATCHLAS_API bool trace_enabled() noexcept;
 BATCHLAS_API void note_decision(std::string_view op, std::string spelling, std::string detail, std::string tag);
 BATCHLAS_API void note_borrow(std::string_view op, std::string_view dtype, const Device& d, const Table& t);
-BATCHLAS_API void warn_native_fallback(std::string_view op, const Device& d);
+// A class-word pin ("native", "vendor") that nothing in its class can serve: once per op and word.
+BATCHLAS_API void warn_pin_fallback(std::string_view op, std::string_view word, const Device& d);
 // `own_table_exists`: the device has a table but its row had nothing runnable ("fallthrough"),
 // as opposed to an untuned device ("borrowed").
 BATCHLAS_API std::string table_tag(const Table& t, const Device& d, bool own_table_exists);
@@ -262,8 +264,9 @@ BATCHLAS_API std::string format_detail(double ms, const std::string* next, doubl
 BATCHLAS_API std::optional<std::string> pin_text(std::string_view op, std::string* source);
 BATCHLAS_API void push_pin(std::string_view op, std::string text);
 BATCHLAS_API void pop_pin(std::string_view op);
+struct NativeFacts;
 BATCHLAS_API bool trace_open(std::string_view op, const std::string& spelling, bool vendor,
-                             const dispatch::OpShape& shape);
+                             const dispatch::OpShape& shape, const NativeFacts& facts);
 BATCHLAS_API void trace_close();
 
 // A bad spelling in a table is a build defect, so it fails loudly on first use.
@@ -335,7 +338,8 @@ std::optional<Choice> walk(std::string_view op, std::string_view dtype, const De
     throw std::runtime_error(std::string(op) + ": no runnable kernel on " + d.key);
 }
 
-// §5.3 / R6. nullopt means "auto": the caller runs the normal walk.
+// §5.3 / R6. nullopt means "auto": the caller runs the normal walk. The class words
+// `native` and `vendor` fall back to auto with a warning; every other spelling throws.
 template <class Choice, std::size_t N, class CanRun>
 std::optional<Choice> resolve_pin(std::string_view op, std::string_view dtype, const Device& d, const Key& key,
                                   const std::array<Choice, N>& candidates, CanRun& can_run, const Rules& rules,
@@ -344,24 +348,26 @@ std::optional<Choice> resolve_pin(std::string_view op, std::string_view dtype, c
     if (text == "auto") return std::nullopt;
     if (text == "native") {
         if (auto c = walk(op, dtype, d, key, candidates, can_run, rules, true)) return c;
-        warn_native_fallback(op, d);
+        warn_pin_fallback(op, "native", d);
+        return std::nullopt;
+    }
+    if (text == "vendor") {
+        for (const Choice& k : candidates)
+            if (family_of(k) == "vendor" && can_run(k)) {
+                if (trace_enabled()) note_decision(op, to_string(k), "", "pinned");
+                return k;
+            }
+        warn_pin_fallback(op, "vendor", d);  // a vendor-free build: the old router fell through too
         return std::nullopt;
     }
     for (const Alias& a : rules.aliases)
         if (text == a.name) text = std::string(a.spelling);
-    std::optional<Choice> c;
-    if (text == "vendor") {
-        for (const Choice& k : candidates)
-            if (family_of(k) == "vendor") c = k;
-        if (!c) throw std::invalid_argument(where + ": " + std::string(op) + " has no vendor candidate");
-    } else {
-        std::string err;
-        c = parse<Choice>(text, &err);
-        if (!c) throw std::invalid_argument(where + " is not a valid choice: " + err);
-        if (!is_candidate(*c, candidates))
-            throw std::invalid_argument(where + ": " + to_string(*c) + " is not a compiled " +
-                                        std::string(op) + " " + std::string(dtype) + " candidate");
-    }
+    std::string err;
+    const std::optional<Choice> c = parse<Choice>(text, &err);
+    if (!c) throw std::invalid_argument(where + " is not a valid choice: " + err);
+    if (!is_candidate(*c, candidates))
+        throw std::invalid_argument(where + ": " + to_string(*c) + " is not a compiled " + std::string(op) + " " +
+                                    std::string(dtype) + " candidate");
     if (!can_run(*c))
         throw std::invalid_argument(where + ": " + to_string(*c) + " cannot run this shape on " + d.key);
     if (trace_enabled()) note_decision(op, to_string(*c), "", "pinned");
@@ -412,15 +418,36 @@ dispatch::OpShape square_shape(std::int64_t n, std::int64_t batch) {
     return s;
 }
 
+// The coverage row's native_route_existed / native_route_supported (tri-state, -1 unknown).
+namespace detail {
+struct NativeFacts {
+    bool existed = true;
+    int supported = -1;
+};
+}  // namespace detail
+using detail::NativeFacts;
+
+// Over the op's candidates: any non-vendor compiled, and any of those passing can_run.
+template <class Choice, std::size_t N, class CanRun>
+NativeFacts native_facts(const std::array<Choice, N>& candidates, CanRun&& can_run) {
+    NativeFacts f{false, 0};
+    for (const Choice& c : candidates)
+        if (family_of(c) != "vendor") {
+            f.existed = true;
+            if (can_run(c)) f.supported = 1;
+        }
+    return f;
+}
+
 // Prints the last choose() decision for `op` under BATCHLAS_SELECT_TRACE=1, indents nested
 // scopes, and records the coverage row. The shape is required: with coverage on and trace
 // off no decision is noted, so scalar, backend and uplo can come from nowhere else.
 class TraceScope {
 public:
     template <class Choice>
-    TraceScope(std::string_view op, const Choice& c, const dispatch::OpShape& shape) {
+    TraceScope(std::string_view op, const Choice& c, const dispatch::OpShape& shape, NativeFacts facts = {}) {
         if (detail::trace_enabled() || dispatch::coverage::dynamic_enabled())
-            active_ = detail::trace_open(op, to_string(c), family_of(c) == "vendor", shape);
+            active_ = detail::trace_open(op, to_string(c), family_of(c) == "vendor", shape, facts);
     }
     ~TraceScope() {
         if (active_) detail::trace_close();

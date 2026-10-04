@@ -47,9 +47,10 @@ using C = std::variant<Tiny, Cta, Lpanel, Wide, Blocked, Vendor>;
 const std::array<C, 6> kCands{Tiny{}, Cta{}, Lpanel{8}, Lpanel{16}, Blocked{}, Vendor{}};
 const std::array<C, 4> kNoVendor{Tiny{}, Cta{}, Lpanel{8}, Blocked{}};
 constexpr std::array<std::string_view, 2> kLastResort{"blocked", "vendor"};
-constexpr std::array<sel::Alias, 3> kAliases{{{"native:tiny", "tiny"},
+constexpr std::array<sel::Alias, 4> kAliases{{{"native:tiny", "tiny"},
                                               {"native:lpanel", "lpanel:panel=8"},
-                                              {"native:bogus", "lpanel:panel=99"}}};
+                                              {"native:bogus", "lpanel:panel=99"},
+                                              {"lib", "vendor"}}};
 const sel::Rules kRules{kAliases, kLastResort};
 
 using Pred = std::function<bool(const C&)>;
@@ -155,6 +156,17 @@ TEST(SelectTable, ParsesRowsCommentsAndHeader) {
     EXPECT_EQ(t.rows[1].keys[2], "2048");
 }
 
+TEST(SelectTable, LogKeyWeightsDefaultToOne) {
+    const auto t = sel::parse_table("# keys: uplo:exact n:log:3 batch:log m:log:0.5\nuplo=L n=4 batch=1 m=2 | tiny 1\n",
+                                    "synth.float.sm_120.txt");
+    ASSERT_EQ(t.keys.size(), 4u);
+    EXPECT_DOUBLE_EQ(t.keys[0].weight, 1.0);
+    EXPECT_DOUBLE_EQ(t.keys[1].weight, 3.0);
+    EXPECT_DOUBLE_EQ(t.keys[2].weight, 1.0);
+    EXPECT_DOUBLE_EQ(t.keys[3].weight, 0.5);
+    EXPECT_TRUE(t.keys[3].log);
+}
+
 TEST(SelectTable, DeviceFromFileNameWhenHeaderOmitsIt) {
     const auto t = sel::parse_table("# keys: uplo:exact n:log\nuplo=L n=4 | tiny 1\n", "dir/op.cfloat.gfx90a.txt");
     EXPECT_EQ(t.file, "op.cfloat.gfx90a.txt");
@@ -170,6 +182,14 @@ TEST(SelectTable, EveryParseErrorNamesFileAndLine) {
         {head + "uplo=L n=1 batch=1 | tiny 1\n", ":2:", "before the '# keys:'"},
         {head + "# keys: uplo n:log\n", ":2:", "needs :exact or :log"},
         {head + "# keys: n:log n:log\n", ":2:", "declared twice"},
+        {head + "# keys: n:log:0\n", ":2:", "weight must be a positive number"},
+        {head + "# keys: n:log:-1\n", ":2:", "weight must be a positive number"},
+        {head + "# keys: n:log:1e3\n", ":2:", "weight must be a positive number"},
+        {head + "# keys: n:log:3x\n", ":2:", "weight must be a positive number"},
+        {head + "# keys: n:log:1.2.3\n", ":2:", "weight must be a positive number"},
+        {head + "# keys: n:log:\n", ":2:", "weight must be a positive number"},
+        {head + "# keys: n:log:3:4\n", ":2:", "only a :log key takes a weight"},
+        {head + "# keys: uplo:exact:2\n", ":2:", "only a :log key takes a weight"},
         {head + keys + keys, ":3:", "second '# keys:'"},
         {head + keys + "uplo=L n=1 batch=1 m=3 | tiny 1\n", ":3:", "unknown key 'm=3'"},
         {head + keys + "uplo=L n=1 | tiny 1\n", ":3:", "lacks key 'batch'"},
@@ -246,6 +266,25 @@ TEST(SelectNearest, TiesGoToSmallerNThenSmallerBatch) {
     EXPECT_EQ(t.nearest(key("L", 64, 1024))->line, 4);  // n=128 and n=32 tie: smaller n
     EXPECT_EQ(t.nearest(key("L", 64, 512))->line, 4);   // three-way tie at 2: n decides before
                                                         // batch, so (128,256) loses to (32,1024)
+}
+
+// From key (32, 1024): row A is one octave off in n, row B two octaves off in batch. Equal
+// weights pick A (1 < 2); n:log:3 picks B (3 > 2). The weight is the only difference.
+TEST(SelectNearest, KeyWeightScalesThatKeysDistance) {
+    const std::string rows = "uplo=L n=16 batch=1024 | tiny 1\n"   // line 3: A
+                             "uplo=L n=32 batch=4096 | cta 1\n";   // 4: B
+    const std::string head = "# op=synth dtype=float device=sm_120\n";
+    const auto plain = sel::parse_table(head + "# keys: uplo:exact n:log batch:log\n" + rows, "synth.float.sm_120.txt");
+    const auto cubed = sel::parse_table(head + "# keys: uplo:exact n:log:3 batch:log\n" + rows, "synth.float.sm_120.txt");
+    const auto light = sel::parse_table(head + "# keys: uplo:exact n:log batch:log:0.4\n" + rows, "synth.float.sm_120.txt");
+    EXPECT_EQ(plain.nearest(key("L", 32, 1024))->line, 3);
+    EXPECT_EQ(cubed.nearest(key("L", 32, 1024))->line, 4);
+    EXPECT_EQ(light.nearest(key("L", 32, 1024))->line, 4);  // 0.4 * 2 < 1: a fractional weight
+    // A weighted tie (3*1 == 3) still goes to the smaller n.
+    const auto tie = sel::parse_table(head + "# keys: uplo:exact n:log:3 batch:log\n"
+                                      "uplo=L n=32 batch=8192 | cta 1\nuplo=L n=16 batch=1024 | tiny 1\n",
+                                      "synth.float.sm_120.txt");
+    EXPECT_EQ(tie.nearest(key("L", 32, 1024))->line, 4);
 }
 
 TEST(SelectNearest, MissingKeyThrows) {
@@ -382,18 +421,31 @@ TEST_F(Select, BadPinsThrow) {
               std::string::npos);
     EXPECT_NE(pin_error("wide:1:2").find("not a compiled"), std::string::npos);
     EXPECT_NE(pin_error("cta", all_but({"cta"})).find("cta cannot run this shape on sm_120"), std::string::npos);
-    EXPECT_NE(pin_error("vendor", all_but({"vendor"})).find("vendor cannot run"), std::string::npos);
+    EXPECT_EQ(pin_error("vendor", all_but({"vendor"})), "<no throw>");  // a class word, like native
+    EXPECT_NE(pin_error("lib", all_but({"vendor"})).find("vendor cannot run"), std::string::npos);  // an alias
     EXPECT_NE(pin_error("native:bogus").find("lpanel:panel=99 is not a compiled"), std::string::npos);
     EXPECT_EQ(pin_error("cta"), "<no throw>");
 }
 
-TEST_F(Select, VendorPinNeedsAVendorCandidate) {
-    sel::testing::set_builtin_tables({file("sm_120", kPinRow)});
+// Bare `vendor` is a class word (§12): with no runnable vendor candidate -- none compiled, or
+// a vendor-free build -- it warns once per op and runs the automatic choice instead of throwing.
+TEST_F(Select, VendorPinWithNoRunnableVendorFallsBackToAutoAndWarnsOnce) {
+    sel::testing::set_builtin_tables({file("sm_120", kPinRow), file("sm_120", kPinRow, "synth2")});
     sel::ScopedPin<C> p("synth", "vendor");
+    sel::ScopedPin<C> p2("synth2", "vendor");
     EXPECT_EQ(S(choose("sm_120", key("L", 64, 1024))), "vendor");
-    EXPECT_THROW(sel::choose("synth", "float", sel::device_from_key("sm_120"), key("L", 64, 1024), kNoVendor, kAll,
-                             kRules),
-                 std::invalid_argument);
+    EXPECT_EQ(S(choose("sm_120", key("L", 64, 1024), only({"tiny", "vendor"}))), "vendor");  // pinned over the row
+    ::testing::internal::CaptureStderr();
+    EXPECT_EQ(S(choose("sm_120", key("L", 64, 1024), all_but({"vendor"}))), "lpanel:panel=8");
+    EXPECT_EQ(S(sel::choose("synth", "float", sel::device_from_key("sm_120"), key("L", 64, 1024), kNoVendor, kAll,
+                            kRules)),
+              "lpanel:panel=8");
+    EXPECT_EQ(S(choose("sm_120", key("L", 64, 1024), all_but({"vendor"}), "synth2")), "lpanel:panel=8");
+    const std::string err = ::testing::internal::GetCapturedStderr();
+    EXPECT_EQ(err, "batchlas: synth pinned \"vendor\", but no vendor candidate can run this shape on sm_120; "
+                   "using the automatic choice\n"
+                   "batchlas: synth2 pinned \"vendor\", but no vendor candidate can run this shape on sm_120; "
+                   "using the automatic choice\n");
 }
 
 TEST_F(Select, ConcretePinsAliasesAndNormalisation) {
@@ -529,6 +581,15 @@ TEST_F(Select, TunedDirThatIsNotADirectoryIsIgnoredWithOneWarning) {
     EXPECT_EQ(err, "batchlas: BATCHLAS_TUNED_DIR=/nonexistent/select_tests is not a directory; ignoring it\n");
 }
 
+TEST(SelectNativeFacts, OverTheCandidateList) {
+    const auto f = sel::native_facts(kCands, only({"vendor"}));
+    EXPECT_TRUE(f.existed);
+    EXPECT_EQ(f.supported, 0);
+    EXPECT_EQ(sel::native_facts(kCands, only({"lpanel:panel=16"})).supported, 1);
+    const std::array<C, 1> vendor_only{Vendor{}};
+    EXPECT_FALSE(sel::native_facts(vendor_only, kAll).existed);
+}
+
 // ---- trace ------------------------------------------------------------------------------
 
 TEST_F(Select, TraceLinesAndIndentation) {
@@ -601,7 +662,7 @@ TEST(SelectCoverageDeathTest, RowCarriesScalarBackendAndUploWithTraceOff) {
         batchlas::dispatch::coverage::g_dynamic_enabled = true;  // latched at static init
         auto s = sel::square_shape<batchlas::Backend::CUDA, std::complex<double>>(64, 1024);
         s.uplo = batchlas::Uplo::Upper;
-        { sel::TraceScope ts("potrf", C{Cta{}}, s); }
+        { sel::TraceScope ts("potrf", C{Cta{}}, s, sel::NativeFacts{true, 0}); }
         std::exit(0);  // emit() runs from atexit
     };
     EXPECT_EXIT(child(), ::testing::ExitedWithCode(0), "");
@@ -621,6 +682,8 @@ TEST(SelectCoverageDeathTest, RowCarriesScalarBackendAndUploWithTraceOff) {
     EXPECT_EQ(row[8], "1024");
     EXPECT_EQ(row[9], "native");
     EXPECT_EQ(row[10], "cta");
+    EXPECT_EQ(row[12], "1");  // native_route_existed, from the NativeFacts passed in
+    EXPECT_EQ(row[13], "0");  // native_route_supported: 0, not the old constant -1
     EXPECT_EQ(row[15], std::to_string(static_cast<int>(batchlas::Uplo::Upper)));
 }
 

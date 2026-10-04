@@ -79,6 +79,14 @@ PotrfChoice choose(Queue& q, const MatrixView<T, MatrixFormat::Dense>& A, Uplo u
     }
 }
 
+// The coverage row's native flags (§5.6): computed only when coverage records a row.
+template <Backend B, class T>
+select::NativeFacts native_facts(Queue& q, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo) {
+    if (!dispatch::coverage::dynamic_enabled()) return {};
+    const select::Device& d = select::device_of<B>(q);
+    return select::native_facts(candidates<T>(), [&](const PotrfChoice& c) { return can_run<T>(c, d, A, uplo); });
+}
+
 template <Backend B, class T>
 Event launch(Queue& q, const PotrfChoice& c, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo,
              Span<std::byte> ws, Span<int32_t> info) {
@@ -135,7 +143,7 @@ Event potrf(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo, 
     const auto c = ops::potrf::choose<B, T>(ctx, A, uplo);
     auto shape = select::square_shape<B, T>(A.rows(), A.batch_size());
     shape.uplo = uplo;  // part of the coverage key; never inferred
-    select::TraceScope trace("potrf", c, shape);
+    select::TraceScope trace("potrf", c, shape, ops::potrf::native_facts<B, T>(ctx, A, uplo));
     return ops::potrf::launch<B, T>(ctx, c, A, uplo, workspace, info);
 }
 

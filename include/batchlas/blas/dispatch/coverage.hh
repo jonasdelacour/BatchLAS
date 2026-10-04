@@ -69,9 +69,11 @@ BATCHLAS_API void record(Op op, ScalarKind scalar, Backend backend, const OpShap
                          Route chosen, bool native_route_existed, int native_route_supported);
 
 // select::TraceScope's row: the same `reached` CSV row, with the choice spelling
-// ("lpanel:panel=8") in chosen_algo and "native"/"vendor" in chosen_origin.
+// ("lpanel:panel=8") in chosen_algo and "native"/"vendor" in chosen_origin. The native
+// flags come from the op's own candidate list (select::native_facts).
 BATCHLAS_API void record_choice(Op op, ScalarKind scalar, Backend backend, const OpShape& shape,
-                                const char* origin, const char* spelling);
+                                const char* origin, const char* spelling, bool native_route_existed,
+                                int native_route_supported);
 
 // Defined in src/select/select.cc: prints an old resolver's Route as an indented child
 // line under an active select::TraceScope. Deleted with this resolver.

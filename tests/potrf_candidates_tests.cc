@@ -6,6 +6,7 @@
 #include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/blas/functions/potrf.hh>
 #include <batchlas/blas/functions/trsm.hh>
+#include <batchlas/blas/dispatch/no_route.hh>
 #include <batchlas/blas/dispatch/vendor_available.hh>
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
@@ -22,7 +23,10 @@
 #include <cmath>
 #include <complex>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <limits>
+#include <map>
 #include <optional>
 #include <random>
 #include <sstream>
@@ -370,6 +374,12 @@ TYPED_TEST(PotrfCandidates, PinnedCandidatesStraddleTheirLimits) {
     for (const C& c : pc::candidates<T>()) {
         for (Uplo uplo : {Uplo::Lower, Uplo::Upper}) {
             const int lim = this->limit(c, uplo);
+            if (lim == 0 && std::holds_alternative<pc::Vendor>(c)) {
+                // Vendor compiled out: bare `vendor` is a class word, so it runs Auto (§12).
+                auto p = make_prob<T>(8, 2, uplo, 11u);
+                expect_factored(p, this->run_pinned(c, p), this->name(c, uplo, 8) + " (vendor-free fallback)");
+                continue;
+            }
             if (lim == 0) {
                 auto p = make_prob<T>(8, 2, uplo, 11u);
                 EXPECT_FALSE(this->pin_accepted(c, p.view(), uplo)) << this->name(c, uplo, 8);
@@ -463,6 +473,8 @@ TYPED_TEST(PotrfCandidates, CanRunEqualsLaunch) {
     shapes.push_back({16, 5});
     int disagreements = 0;
     for (const C& c : pc::candidates<T>()) {
+        // Compiled out, the vendor pin falls back to Auto (§12): PinnedCandidates covers it.
+        if (std::holds_alternative<pc::Vendor>(c) && !dispatch::solver_vendor_available<TestFixture::B>) continue;
         for (Uplo uplo : {Uplo::Lower, Uplo::Upper}) {
             for (auto [n, batch] : shapes) {
                 auto p = make_prob<T>(n, batch, uplo, 61u);
@@ -553,6 +565,56 @@ TYPED_TEST(PotrfCandidates, UnknownAndUncompiledPinsThrow) {
     }
 }
 
+// The coverage row's native flags come from the candidate list and can_run (§5.6), not the
+// old constants 1/-1: Lower n=16 has a native tier, Upper above every Upper-capable tier none.
+// threadsafe: the child re-executes the binary, so CUDA is initialised fresh, never forked.
+TYPED_TEST(PotrfCandidates, CoverageRowCarriesNativeFlags) {
+    using T = typename TestFixture::T;
+    static constexpr Backend B = TestFixture::B;
+    constexpr bool kVendor = dispatch::solver_vendor_available<B>;  // vendor-free, Upper has no route
+    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    const int up = std::max(this->limit(C{pc::Tiny{}}, Uplo::Upper), this->limit(C{pc::Cta{}}, Uplo::Upper)) + 1;
+    const std::string dir = ::testing::TempDir() + "potrf_cov." + std::string(select::dtype_name<T>());
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    const std::string out = dir + "/cov";
+    auto child = [&] {
+        const ScopedEnvVar cov("BATCHLAS_COVERAGE_OUT", out.c_str());
+        const ScopedEnvVar clear("BATCHLAS_POTRF_ROUTE", nullptr);
+        dispatch::coverage::g_dynamic_enabled = true;
+        auto lo = make_prob<T>(16, 2, Uplo::Lower, 51u);
+        (void)this->run_auto(lo);
+        if (kVendor) {
+            auto hi = make_prob<T>(up, 2, Uplo::Upper, 52u);
+            (void)this->run_auto(hi);
+        }
+        std::exit(0);
+    };
+    EXPECT_EXIT(child(), ::testing::ExitedWithCode(0), "");
+    std::map<std::string, std::pair<std::string, std::string>> flags;  // "n uplo" -> (existed, supported)
+    for (const auto& ent : std::filesystem::directory_iterator(dir)) {
+        std::ifstream in(ent.path());
+        for (std::string line; std::getline(in, line);) {
+            if (line.rfind("reached,potrf,", 0) != 0) continue;
+            std::vector<std::string> f;
+            std::stringstream ss(line);
+            for (std::string tok; std::getline(ss, tok, ',');) f.push_back(tok);
+            ASSERT_GE(f.size(), 16u) << line;
+            flags[f[6] + " " + f[15]] = {f[12], f[13]};
+        }
+    }
+    std::filesystem::remove_all(dir);
+    const std::string lower = "16 " + std::to_string(static_cast<int>(Uplo::Lower));
+    const std::string upper = std::to_string(up) + " " + std::to_string(static_cast<int>(Uplo::Upper));
+    ASSERT_EQ(flags.size(), kVendor ? 2u : 1u);
+    ASSERT_TRUE(flags.count(lower)) << "no Lower n=16 row";
+    EXPECT_EQ(flags[lower], std::make_pair(std::string("1"), std::string("1")));
+    if (kVendor) {
+        ASSERT_TRUE(flags.count(upper)) << "no Upper n=" << up << " row";
+        EXPECT_EQ(flags[upper], std::make_pair(std::string("1"), std::string("0")));
+    }
+}
+
 // §8.5: the named can_run-false cases, each with its message.
 TYPED_TEST(PotrfCandidates, CanRunFalsePinsThrow) {
     using T = typename TestFixture::T;
@@ -577,22 +639,37 @@ TYPED_TEST(PotrfCandidates, CanRunFalsePinsThrow) {
 // §5.3: the legacy spellings select their choice. Read back from the trace line, not assumed.
 TYPED_TEST(PotrfCandidates, LegacyAliasesSelectTheirChoice) {
     using T = typename TestFixture::T;
+    static constexpr Backend B = TestFixture::B;
+    const ScopedEnvVar clear("BATCHLAS_POTRF_ROUTE", nullptr);
+    // Without the vendor library, bare `vendor` falls back to the automatic choice (§12).
+    std::string auto_pick;
+    {
+        auto p = make_prob<T>(16, 4, Uplo::Lower, 5u);
+        auto_pick = traced_choice([&] { (void)this->run_auto(p); });
+    }
+    const std::string vendor_pick = dispatch::solver_vendor_available<B> ? "vendor" : auto_pick;
+    ASSERT_NE(vendor_pick, "") << "no auto trace line";
     const std::pair<const char*, const char*> expect[] = {
         {"native:tiny", "tiny"},         {"native:cta", "cta"}, {"native:lpanel", "lpanel:panel=8"},
-        {"native:blocked", "blocked"},   {"lpanel", "lpanel:panel=8"}, {"vendor", "vendor"},
+        {"native:blocked", "blocked"},   {"lpanel", "lpanel:panel=8"}, {"vendor", vendor_pick.c_str()},
         {"lpanel:8", "lpanel:panel=8"},  {"NATIVE:CTA", "cta"}};
     for (const auto& [word, spelling] : expect) {
         for (bool via_env : {false, true}) {
             auto p = make_prob<T>(16, 4, Uplo::Lower, 5u);
             std::vector<int32_t> info;
+            select::testing::reset_warnings();
+            std::string err;
             const std::string got = traced_choice([&] {
                 const ScopedEnvVar env("BATCHLAS_POTRF_ROUTE", via_env ? word : nullptr);
                 std::optional<Pin> pin;
                 if (!via_env) pin.emplace("potrf", std::string_view(word));
                 info = this->run_auto(p);
-            });
+            }, &err);
             const std::string what = std::string(word) + (via_env ? " via BATCHLAS_POTRF_ROUTE" : " via ScopedPin");
             EXPECT_EQ(got, spelling) << what;
+            const bool fell_back = std::string(word) == "vendor" && !dispatch::solver_vendor_available<B>;
+            EXPECT_EQ(err.find("pinned \"vendor\", but no vendor candidate") != std::string::npos, fell_back)
+                << what << ": " << err;
             expect_factored(p, info, what);
         }
     }
@@ -619,7 +696,9 @@ TYPED_TEST(PotrfCandidates, BareNativePicksTheBestRunnableNonVendor) {
         if (!sm120 || dtype != r.dtype) continue;
         auto a = make_prob<T>(r.n, 128, Uplo::Lower, 21u);
         std::vector<int32_t> info;
-        EXPECT_EQ(traced_choice([&] { info = this->run_auto(a); }), "vendor") << "auto, n=" << r.n;
+        // Vendor-free, Auto skips the vendor entry and lands where `native` does.
+        const char* auto_pick = dispatch::solver_vendor_available<B> ? "vendor" : r.native;
+        EXPECT_EQ(traced_choice([&] { info = this->run_auto(a); }), auto_pick) << "auto, n=" << r.n;
         expect_factored(a, info, "auto");
         auto p = make_prob<T>(r.n, 128, Uplo::Lower, 22u);
         EXPECT_EQ(traced_choice([&] {
@@ -642,12 +721,21 @@ TYPED_TEST(PotrfCandidates, BareNativePicksTheBestRunnableNonVendor) {
         EXPECT_NE(got.rfind("vendor", 0), 0u) << "native ran " << got << " at n=" << n;
     }
 
-    // Upper above both Upper-capable tiers: nothing native runs, so a warning and Auto.
+    // Upper above both Upper-capable tiers: nothing native runs, so a warning and Auto --
+    // which, vendor-free, has nothing either and throws the no-route error.
     const int n = std::max(this->limit(C{pc::Tiny{}}, Uplo::Upper), this->limit(C{pc::Cta{}}, Uplo::Upper)) + 1;
     auto p = make_prob<T>(n, 2, Uplo::Upper, 24u);
     select::testing::reset_warnings();
     std::string err;
     std::vector<int32_t> info;
+    if constexpr (!dispatch::solver_vendor_available<B>) {
+        const Pin pin("potrf", "native");
+        ::testing::internal::CaptureStderr();
+        EXPECT_THROW((void)this->run_auto(p), dispatch::NoRouteError);
+        err = ::testing::internal::GetCapturedStderr();
+        EXPECT_NE(err.find("pinned \"native\", but no native candidate"), std::string::npos) << err;
+        return;
+    }
     EXPECT_EQ(traced_choice([&] {
                   const Pin pin("potrf", "native");
                   info = this->run_auto(p);
@@ -720,6 +808,7 @@ TYPED_TEST(PotrfCandidates, ShippedRowsRunOnTheirOwnDevice) {
         const int n = std::stoi(row.keys[in]);
         Matrix<T, MatrixFormat::Dense> A(n, n, 1);
         for (const auto& e : row.ranked) {
+            if (e.spelling == "vendor" && !dispatch::solver_vendor_available<B>) continue;  // compiled out
             const Pin pin("potrf", std::string_view(e.spelling));
             try {
                 (void)potrf_buffer_size<B, T>(*this->ctx, A.view(), uplo);
@@ -742,20 +831,21 @@ TYPED_TEST(PotrfCandidates, AutoReadsEveryKeyField) {
     const ScopedEnvVar clear("BATCHLAS_POTRF_ROUTE", nullptr);
     const std::string dev = select::device_of<B>(*this->ctx).key;
     const std::string dtype(select::dtype_name<T>());
-    struct Row { const char* dev; const char* dtype; Uplo uplo; int n, batch; const char* expect; };
+    // `vf`: the vendor-free pick, the row's first non-vendor entry (each runs at its n).
+    struct Row { const char* dev; const char* dtype; Uplo uplo; int n, batch; const char* expect; const char* vf; };
     const Row rows[] = {
-        {"sm_120", "float", Uplo::Lower, 128, 128, "vendor"},
-        {"sm_120", "float", Uplo::Lower, 128, 512, "lpanel:panel=8"},
-        {"sm_120", "float", Uplo::Upper, 64, 8192, "cta"},  // the L row gives lpanel, then vendor
-        {"sm_120", "float", Uplo::Upper, 16, 8192, "tiny"},
-        {"sm_120", "double", Uplo::Lower, 32, 512, "vendor"},
-        {"sm_120", "double", Uplo::Lower, 32, 2048, "lpanel:panel=8"},
-        {"sm_120", "cfloat", Uplo::Lower, 24, 2048, "tiny"},
-        {"sm_120", "cfloat", Uplo::Lower, 24, 8192, "lpanel:panel=8"},
-        {"sm_120", "cdouble", Uplo::Lower, 16, 512, "vendor"},
-        {"sm_120", "cdouble", Uplo::Lower, 16, 8192, "tiny"},
-        {"sm_89", "float", Uplo::Lower, 44, 8192, "vendor"},
-        {"sm_89", "float", Uplo::Lower, 44, 16384, "cta"},
+        {"sm_120", "float", Uplo::Lower, 128, 128, "vendor", "lpanel:panel=8"},
+        {"sm_120", "float", Uplo::Lower, 128, 512, "lpanel:panel=8", "lpanel:panel=8"},
+        {"sm_120", "float", Uplo::Upper, 64, 8192, "cta", "cta"},  // the L row gives lpanel, then vendor
+        {"sm_120", "float", Uplo::Upper, 16, 8192, "tiny", "tiny"},
+        {"sm_120", "double", Uplo::Lower, 32, 512, "vendor", "lpanel:panel=8"},
+        {"sm_120", "double", Uplo::Lower, 32, 2048, "lpanel:panel=8", "lpanel:panel=8"},
+        {"sm_120", "cfloat", Uplo::Lower, 24, 2048, "tiny", "tiny"},
+        {"sm_120", "cfloat", Uplo::Lower, 24, 8192, "lpanel:panel=8", "lpanel:panel=8"},
+        {"sm_120", "cdouble", Uplo::Lower, 16, 512, "vendor", "tiny"},
+        {"sm_120", "cdouble", Uplo::Lower, 16, 8192, "tiny", "tiny"},
+        {"sm_89", "float", Uplo::Lower, 44, 8192, "vendor", "cta"},
+        {"sm_89", "float", Uplo::Lower, 44, 16384, "cta", "cta"},
     };
     int checked = 0;
     for (const Row& r : rows) {
@@ -764,8 +854,9 @@ TYPED_TEST(PotrfCandidates, AutoReadsEveryKeyField) {
         std::vector<int32_t> info;
         const std::string what = std::string(r.uplo == Uplo::Lower ? "L" : "U") + " n=" + std::to_string(r.n) +
                                  " batch=" + std::to_string(r.batch);
-        EXPECT_EQ(traced_choice([&] { info = this->run_auto(p); }), r.expect) << what;
-        expect_factored(p, info, what, r.uplo == Uplo::Upper && std::string(r.expect) == "vendor");
+        const char* want = dispatch::solver_vendor_available<B> ? r.expect : r.vf;
+        EXPECT_EQ(traced_choice([&] { info = this->run_auto(p); }), want) << what;
+        expect_factored(p, info, what, r.uplo == Uplo::Upper && std::string(want) == "vendor");
         ++checked;
     }
     if (dev == "sm_120" || (dev == "sm_89" && dtype == "float")) EXPECT_GT(checked, 0) << dev << " " << dtype;

@@ -36,6 +36,14 @@ std::vector<std::string_view> words(std::string_view s) {
     return out;
 }
 
+// A plain positive decimal: digits with at most one '.', no sign, no exponent.
+bool parse_weight(std::string_view s, double& out) {
+    if (s.empty() || std::count(s.begin(), s.end(), '.') > 1) return false;
+    if (!std::all_of(s.begin(), s.end(), [](char c) { return c == '.' || (c >= '0' && c <= '9'); })) return false;
+    const auto r = std::from_chars(s.data(), s.data() + s.size(), out);
+    return r.ec == std::errc{} && r.ptr == s.data() + s.size() && std::isfinite(out) && out > 0;
+}
+
 int leading_int(std::string_view s) {
     int v = 0;
     std::from_chars(s.data(), s.data() + s.size(), v);
@@ -233,12 +241,17 @@ Table parse_table(std::string_view text, std::string_view file) {
             if (body.rfind("keys:", 0) == 0) {
                 if (have_keys) fail("second '# keys:' line");
                 for (std::string_view w : words(body.substr(5))) {
-                    const auto c = w.find(':');
-                    const std::string_view kind = c == std::string_view::npos ? "" : w.substr(c + 1);
+                    const auto part = detail::split(w, ':');
+                    const std::string_view kind = part.size() > 1 ? part[1] : "";
                     if (kind != "exact" && kind != "log") fail("key '" + std::string(w) + "' needs :exact or :log");
+                    if (part.size() > (kind == "log" ? 3u : 2u))
+                        fail("key '" + std::string(w) + "': only a :log key takes a weight");
+                    double weight = 1.0;
+                    if (part.size() == 3 && !parse_weight(part[2], weight))
+                        fail("key '" + std::string(w) + "': weight must be a positive number like 3 or 0.5");
                     for (const auto& k : t.keys)
-                        if (k.name == w.substr(0, c)) fail("key '" + k.name + "' declared twice");
-                    t.keys.push_back({std::string(w.substr(0, c)), kind == "log"});
+                        if (k.name == part[0]) fail("key '" + k.name + "' declared twice");
+                    t.keys.push_back({std::string(part[0]), kind == "log", weight});
                 }
                 if (t.keys.empty()) fail("'# keys:' names no keys");
                 have_keys = true;
@@ -331,7 +344,7 @@ const TableRow* Table::nearest(const Key& key) const {
         if (filter && !exact_match(r)) continue;
         double dist = 0.0;
         for (std::size_t i = 0; i < keys.size(); ++i)
-            if (keys[i].log) dist += std::fabs(r.log2_keys[i] - kl[i]);
+            if (keys[i].log) dist += keys[i].weight * std::fabs(r.log2_keys[i] - kl[i]);
         const bool tie = best && std::fabs(dist - best_d) <= 1e-9;
         if (!best || (!tie && dist < best_d) || (tie && r.log2_keys < best->log2_keys)) {
             best = &r;
@@ -390,10 +403,11 @@ void note_borrow(std::string_view op, std::string_view dtype, const Device& d, c
                  d.key.c_str(), t.device.c_str());
 }
 
-void warn_native_fallback(std::string_view op, const Device& d) {
-    if (!warn_once("native:" + std::string(op))) return;
-    std::fprintf(stderr, "batchlas: %.*s pinned \"native\", but no native candidate can run this shape on %s; "
-                 "using the automatic choice\n", static_cast<int>(op.size()), op.data(), d.key.c_str());
+void warn_pin_fallback(std::string_view op, std::string_view word, const Device& d) {
+    if (!warn_once(std::string(word) + ":" + std::string(op))) return;
+    const int ol = static_cast<int>(op.size()), wl = static_cast<int>(word.size());
+    std::fprintf(stderr, "batchlas: %.*s pinned \"%.*s\", but no %.*s candidate can run this shape on %s; "
+                 "using the automatic choice\n", ol, op.data(), wl, word.data(), wl, word.data(), d.key.c_str());
 }
 
 std::string table_tag(const Table& t, const Device& d, bool own_table_exists) {
@@ -440,13 +454,14 @@ void pop_pin(std::string_view op) {
     if (it != t_pins.rend()) t_pins.erase(std::next(it).base());
 }
 
-bool trace_open(std::string_view op, const std::string& spelling, bool vendor, const dispatch::OpShape& shape) {
+bool trace_open(std::string_view op, const std::string& spelling, bool vendor, const dispatch::OpShape& shape,
+                const NativeFacts& facts) {
     if (dispatch::coverage::dynamic_enabled()) {
         if (const auto o = op_from_name(op)) {
             dispatch::OpShape s = shape;
             s.op = *o;
             dispatch::coverage::record_choice(*o, s.scalar, s.backend, s, vendor ? "vendor" : "native",
-                                              spelling.c_str());
+                                              spelling.c_str(), facts.existed, facts.supported);
         }
     }
     if (!trace_enabled()) return false;

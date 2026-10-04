@@ -1,6 +1,7 @@
 # Flat kernel selection
 
-Status: **phases 1-2 implemented on branch worktree-flat-select (2026-10-04); gate results pending.**
+Status: **phases 1-2 implemented on branch worktree-flat-select (2026-10-04). §10 gate: passed on
+sm_120; the sm_89 live gate (needs the RTX 4090 box) is still open. See §12 "Gate results".**
 Plan agreed 2026-10-02; deviations from the sketch are in §12. Written against `main` at `a1063892`. It is meant
 to be executed from `main` in a fresh session, phase by phase. Nothing here depends on PRs #133,
 #135 or #136, or on any branch other than `main`. The only exception is the potrf route-sweep
@@ -171,9 +172,9 @@ constexpr auto candidates() {
     return std::array<PotrfChoice, 5>{Tiny{}, Cta{}, Lpanel{8}, Blocked{}, Vendor{}};
 }
 
-// Table keys: an exact-match key first, then log-distance keys (§5.4).
+// Table keys: an exact-match key first, then log-distance keys (§5.4); n weighs 3 (§12).
 struct Key { int uplo; int64_t n; int64_t batch; };
-inline constexpr std::array<std::string_view, 3> key_names{"uplo:exact", "n:log", "batch:log"};
+inline constexpr std::array<std::string_view, 3> key_names{"uplo:exact", "n:log:3", "batch:log"};
 
 // The tuner's coarse grid (§6.2). This is today's sweep grid, so converted tables and tuned
 // tables line up.
@@ -358,7 +359,7 @@ Text format (one file per op × dtype × device):
 ```
 # op=potrf dtype=float device=sm_120 batchlas=a1063892 kernels=unknown date=2026-10-02
 # source=benchmarks/results/routing/sm120_potrf_sweep.jsonl (converted, passes 1+2)
-# keys: uplo:exact n:log batch:log
+# keys: uplo:exact n:log:3 batch:log
 uplo=L n=64  batch=8192  | lpanel:panel=8 0.302 | vendor 0.490 | cta 0.530 | blocked 0.536
 uplo=L n=128 batch=8192  | lpanel:panel=8 1.358 | vendor 1.764 | blocked 2.512
 uplo=L n=512 batch=2048  | blocked 14.10 | vendor 13.74 | lpanel:panel=8 14.84   # tie: within 3%, list order
@@ -395,7 +396,8 @@ Choice choose(std::string_view op, std::string_view dtype, const Device& d, cons
 ```
 
 - **Nearest:** rows must match every `:exact` key. Among those, the row with the smallest
-  `Σ |log2(row_key / key)|` over the `:log` keys wins. On a tie, the smaller `n` wins, then the
+  `Σ w·|log2(row_key / key)|` over the `:log` keys wins, where `<name>:log:<w>` sets the weight `w`
+  (1 when omitted; see §12). On a tie, the smaller `n` wins, then the
   smaller `batch`. If no row matches the exact keys, the exact-key filter is dropped for that
   table. This is how Upper calls use a Lower-only table, with `can_run` removing the Lower-only
   choices.
@@ -651,10 +653,13 @@ The sm_89 gate needs the RTX 4090 box. The sm_120 gate needs the Blackwell box (
 Where the code differs from the sketches above, the code wins. These are the differences.
 
 **Phase 1, `src/select/`:**
-- **A bare `native` pin with no runnable non-vendor candidate falls back to Auto with a warning**
-  (once per op). It does not throw. This is the one exception to R6; it keeps today's meaning of
-  `native`, which the `route-native` re-run of `potrf_tests` relies on. Every other bad pin throws
-  `std::invalid_argument`.
+- **The class words `native` and `vendor` fall back to Auto with a warning** (once per op and
+  word) when nothing in their class can run the shape. They do not throw. These are the two
+  exceptions to R6. Bare `native` keeps today's meaning, which the `route-native` re-run of
+  `potrf_tests` relies on. Bare `vendor` joined it after the final review: in a vendor-free build
+  a `vendor` pin threw, so `factor_bench`'s default `vendor,native` arms aborted the process,
+  where the old router had fallen through to automatic. Concrete spellings and aliases still throw
+  `std::invalid_argument` (an alias that maps to `vendor` is concrete).
 - **A CPU device never borrows a GPU table.** Without its own `*.cpu.txt` it goes straight to the
   last resort. A GPU device can still borrow across families (§5.5 step 3).
 - **Tables store spellings, validated on first use.** A table is parsed into spellings without
@@ -706,8 +711,35 @@ Where the code differs from the sketches above, the code wins. These are the dif
   are gone. Deliberate breaks B1-B9 (tests report) each gave a narrow red set.
 - **Vendor-free misses:** when no candidate can run and the vendor is compiled out, `choose()`
   funnels into `throw_no_vendor_route`, so the `NoRouteError` and the coverage `miss` row survive.
-- **Not done in phase 2:** the `potrf.hh:51-53` stale line numbers (§11) are not fixed. No
-  vendor-free build and no §10.3 speed gate were run.
+- **Not done in phase 2:** the `potrf.hh:51-53` stale line numbers (§11) are not fixed. The sm_89
+  half of the §10 gate is not run (see "Gate results").
+
+**After the final review:**
+- **Weighted `:log` keys.** A key spec may give a `:log` key a weight, `<name>:log:<w>` (a positive
+  integer or decimal, default 1), and `nearest()` minimises `Σ w·|log2(row/key)|`; the tie rule is
+  unchanged. potrf declares `uplo:exact n:log:3 batch:log`: its work grows as `n^3` and linearly in
+  `batch`, so the distance approximates a log-cost distance. The trigger was the sparse sm_89
+  tables: with equal weights float L n=24 batch=512 mapped to the n=80 batch=2048 row (`vendor`,
+  where the native tiers are about 2.2x faster), double n=3 batch=128 to the n=256 row, and
+  vendor-free sm_89 ran `blocked` on 3x3 matrices. With `n:log:3` the first two land on their
+  own-n rows (`cta` and `tiny`). `scripts/sweep_to_table.py` writes the weighted `# keys:` line and
+  its `nearest()` reads the weights from it; only the `# keys:` lines of `tuned/*.txt` changed.
+  Over a 46-n x 5-batch grid of `uplo=L` points, 279 of 1840 table lookups changed their first
+  entry (80 on sm_120, all at n >= 256 with batch >= 8192, which used to fall back to an n <= 320
+  row, and now take `vendor` or `blocked` from an own-n row; 199 on sm_89: 84 at n <= 32, 82 of
+  them `vendor` -> a native tier, 60 large-n `vendor` -> `blocked`, 12 `vendor` -> `cta`, and 43
+  mid-n batch=32768 cells that used to borrow an n=32 row and now take a nearer-n row: 41 `vendor`,
+  2 `cta`).
+  Before/after lists: `--check --check-points` over that grid.
+- **Coverage native flags.** potrf's `reached` row carries `native_route_existed` = any non-vendor
+  candidate compiled and `native_route_supported` = any of them passes `can_run` for this shape
+  (`select::native_facts`, passed through `TraceScope`), instead of the constants 1 and -1.
+- **Vendor-free.** `potrf_candidates_tests` keys its expectations on `solver_vendor_available<B>`
+  (Auto skips `vendor`; a `vendor` pin falls back). `posv_tests`'
+  `FusedSolveArmSolvesOnBothTriangles` failed vendor-free on main too (Upper above both
+  Upper-capable potrf tiers has no route without cuSOLVER); the test now expects `NoRouteError`
+  there. `factor_bench` reports a refused pin as that arm's `bad=1` row
+  (`pin refused: ...`) and keeps running the other arms.
 
 **Behaviour changes visible to callers:**
 - A bad pin throws. `factor_bench`'s posv `composed` arm therefore pins potrf to `tiny` only up to
@@ -721,7 +753,28 @@ Where the code differs from the sketches above, the code wins. These are the dif
 - The sm_120 sweeps have `uplo=U` rows for float only. The other sm_120 dtypes serve Upper from
   the nearest Lower row (the exact-key drop of §5.4), so they rank only the Upper-capable entries
   of a Lower measurement.
-- **Off-grid lookups near the 4 GiB sweep cap can land far away in `n`**, because `n` and
-  `batch` weigh equally in the log distance: float n=704 batch=8192 maps to the n=320 row, since
-  the large-n rows at that batch were never measured. Known gap for the §10.3 gate and phase 4
-  (weight the keys, or fill the grid).
+- **Off-grid lookups near the 4 GiB sweep cap landed far away in `n`** while `n` and `batch`
+  weighed equally: float n=704 batch=8192 mapped to the n=320 row, since the large-n rows at that
+  batch were never measured. With `n:log:3` it maps to the n=640 batch=2048 row (`blocked`). The
+  grid is still unfilled there (phase 4).
+
+**Gate results (2026-10-04, threadripper02, sm_120):**
+1. Correctness: `select_tests`, `tuned_tables_tests`, `potrf_candidates_tests`, `potrf_tests`,
+   `potrf_tests_native`, `posv_tests`, `route_vocabulary_tests` pass in the vendor build and in a
+   `-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF` build. In the vendor-free build, `posv_tests`
+   `FusedSolveArmSolvesOnBothTriangles` failed identically on `main` (no native potrf for Upper
+   past the CTA ceiling); the test now expects `NoRouteError` there. `ctest -LE slow` over all
+   built tests: the branch and `main` have the same 11 failing names on this box (all pre-existing),
+   plus three new tests that pass.
+2. `scripts/sweep_to_table.py --check`: OK.
+3. Live, at saturation: 120 off-grid cells (§10.3 n points × batch 512/8192/32768 × 4 dtypes,
+   Lower). 54 chose the same kernel as `main`; 33 changed and were timed interleaved in two passes
+   with reversed arm order: 0 FAIL, worst 1.014x (cdouble n=44 b8192), the rest 0.60-0.994x. 33
+   cells were not timed: 32 have matrices over 12 GiB, and n²·batch ≥ 2³¹ aborts in `factor_bench`
+   on `main` and on the branch alike (float n=272 b32768), independent of the route. Evidence:
+   `benchmarks/results/routing/sm120_potrf_phase2_gate.csv` and its README section.
+4. Readable: `potrf float n=100 batch=8192` on sm_120 → `potrf.cc` `choose()` → nearest row
+   `uplo=L n=96 batch=8192` in `tuned/potrf.float.sm_120.txt` → `lpanel:panel=8`.
+5. Open: the sm_89 live gate. The sm_89 tables are sparse (32-88 rows) and contain no current-era
+   lpanel timings, so on sm_89 the new choices are least certain; run it before merging, or accept
+   it as a phase-4 retune item.

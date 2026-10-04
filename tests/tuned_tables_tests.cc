@@ -13,6 +13,7 @@
 #include <fstream>
 #include <map>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <variant>
 #include <vector>
@@ -106,6 +107,54 @@ TEST(TunedTables, RankedTimesFollowTheTieRule) {
             }
         }
     }
+}
+
+// choice.hh's key_names is the spec every potrf table declares, weights included.
+TEST(TunedTables, PotrfTablesDeclareChoiceKeyNames) {
+    std::string want = "# keys:";
+    for (auto k : batchlas::ops::potrf::key_names) want += " " + std::string(k);
+    int seen = 0;
+    for (const auto& e : sel::embedded_tables()) {
+        if (std::string_view(e.name).rfind("potrf.", 0) != 0) continue;
+        EXPECT_NE(std::string(e.text).find("\n" + want + "\n"), std::string::npos) << e.name;
+        ++seen;
+    }
+    EXPECT_GT(seen, 0);
+}
+
+const sel::Table& embedded(const std::string& name) {
+    static std::map<std::string, sel::Table> cache;
+    auto it = cache.find(name);
+    if (it == cache.end())
+        for (const auto& e : sel::embedded_tables())
+            if (e.name == name) it = cache.emplace(name, sel::parse_table(e.text, e.name)).first;
+    if (it == cache.end()) throw std::runtime_error(name + " is not embedded");
+    return it->second;
+}
+
+// The sparse sm_89 tables (final-review finding): with equal weights, float n=24 batch=512
+// fell to the n=80 batch=2048 row (vendor; the native tiers are ~2.2x faster there) and
+// double n=3 batch=128 to n=256 batch=256. n:log:3 keeps both on their own small-n rows.
+TEST(TunedTables, Sm89SmallOrdersStayOnSmallOrderRows) {
+    const sel::Key f{{"uplo", "L"}, {"n", 24}, {"batch", 512}};
+    const auto* r = embedded("potrf.float.sm_89.txt").nearest(f);
+    ASSERT_NE(r, nullptr);
+    EXPECT_EQ(r->keys[1], "24") << "line " << r->line;
+    EXPECT_EQ(r->ranked.front().spelling, "cta") << "line " << r->line;
+    const sel::Key d{{"uplo", "L"}, {"n", 3}, {"batch", 128}};
+    r = embedded("potrf.double.sm_89.txt").nearest(d);
+    ASSERT_NE(r, nullptr);
+    EXPECT_LE(std::stoi(r->keys[1]), 4) << "line " << r->line;
+    EXPECT_EQ(r->ranked.front().spelling, "tiny") << "line " << r->line;
+    // The same through choose(): what an sm_89 device runs with every candidate runnable.
+    ScopedEnvVar dir("BATCHLAS_TUNED_DIR", nullptr);
+    ScopedEnvVar pin("BATCHLAS_POTRF_ROUTE", nullptr);
+    sel::testing::use_embedded_tables();
+    EXPECT_EQ(sel::to_string(sel::choose("potrf", "float", sel::device_from_key("sm_89"), f,
+                                         batchlas::ops::potrf::candidates<float>(),
+                                         [](const batchlas::ops::potrf::PotrfChoice&) { return true; },
+                                         batchlas::ops::potrf::rules)),
+              "cta");
 }
 
 // ---- the shipped tables through choose() ------------------------------------------------

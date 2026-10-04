@@ -20,6 +20,7 @@
 #include "../src/backends/posv_route.hh"
 #include "../src/ops/potrf/choice.hh"
 
+#include <batchlas/blas/dispatch/no_route.hh>
 #include <batchlas/blas/dispatch/vendor_available.hh>
 
 #include <algorithm>
@@ -492,6 +493,15 @@ TYPED_TEST(PosvTest, FusedSolveArmSolvesOnBothTriangles) {
                 const auto r = backend::posv_route<B, T>(*this->ctx, A, Bv, uplo);
                 ASSERT_EQ(r.algo, dispatch::Algorithm::CTA)
                     << "the pin fell through at n=" << n << " nrhs=" << nrhs;
+                // Upper above both Upper-capable potrf tiers has no native potrf, and a
+                // vendor-free build no cuSOLVER either: the composed potrf has no route
+                // (main's old router threw the same NoRouteError here).
+                const bool native = potrf_native_runs<B, T>(*this->ctx, A, uplo);
+                if (!native && !dispatch::solver_vendor_available<B>) {
+                    EXPECT_THROW(((void)posv_buffer_size<B, T>(*this->ctx, A, Bv, uplo)), dispatch::NoRouteError)
+                        << "n=" << n;
+                    continue;
+                }
                 const size_t need = posv_buffer_size<B, T>(*this->ctx, A, Bv, uplo);
                 UnifiedVector<std::byte> ws(need > 0 ? need : size_t(1));
                 (void)posv<B, T>(*this->ctx, A, Bv, uplo, Span<std::byte>(ws.data(), need),
@@ -506,7 +516,7 @@ TYPED_TEST(PosvTest, FusedSolveArmSolvesOnBothTriangles) {
                 }
                 // The poison in the other triangle is what makes a wrong-triangle READ
                 // in the solve visible, so a native potrf must leave it in place.
-                if (potrf_native_runs<B, T>(*this->ctx, A, uplo)) {
+                if (native) {
                     size_t where = 0;
                     EXPECT_TRUE(untouched_outside_triangle(p, uplo, &where))
                         << "n=" << n << " uplo=" << (uplo == Uplo::Lower ? "L" : "U")

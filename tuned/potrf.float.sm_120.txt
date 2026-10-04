@@ -1,6 +1,6 @@
 # op=potrf dtype=float device=sm_120 batchlas=a1063892 kernels=unknown date=2026-10-04
 # source=benchmarks/results/routing/sm120_potrf_sweep.jsonl + benchmarks/results/routing/sm120_potrf_sweep_edges.jsonl (converted, passes 1+2)
-# keys: uplo:exact n:log batch:log
+# keys: uplo:exact n:log:3 batch:log
 uplo=L n=1 batch=128 | lpanel:panel=8 0.007451 | tiny 0.007766 | cta 0.008759 | blocked 0.01240 | vendor 0.01430
 uplo=L n=1 batch=512 | lpanel:panel=8 0.007697 | tiny 0.007962 | cta 0.008919 | blocked 0.01289 | vendor 0.01496
 uplo=L n=1 batch=2048 | tiny 0.007787 | lpanel:panel=8 0.008002 | cta 0.009244 | blocked 0.01310 | vendor 0.01614

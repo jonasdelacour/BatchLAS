@@ -1,6 +1,6 @@
 # op=potrf dtype=double device=sm_89 batchlas=unknown kernels=unknown date=2026-10-04
 # source=benchmarks/results/routing/sm89_potrf_archive.jsonl (converted, kernel_current rows only; repeated medians averaged)
-# keys: uplo:exact n:log batch:log
+# keys: uplo:exact n:log:3 batch:log
 uplo=L n=1 batch=32768 | vendor 0.05775 | tiny 0.08076
 uplo=L n=2 batch=32768 | tiny 0.08077 | vendor 0.09353
 uplo=L n=3 batch=32768 | tiny 0.08090 | vendor 0.1318

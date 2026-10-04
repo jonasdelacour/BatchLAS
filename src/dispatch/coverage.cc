@@ -239,7 +239,7 @@ void record(Op op, ScalarKind scalar, Backend backend, const OpShape& shape,
 }
 
 void record_choice(Op op, ScalarKind scalar, Backend backend, const OpShape& shape,
-                   const char* origin, const char* spelling) {
+                   const char* origin, const char* spelling, bool native_existed, int native_supported) {
     const std::string o = origin ? origin : "";
     const std::string a = spelling ? spelling : "";
     const std::string key = std::to_string(key_of(op, scalar, backend, shape.shape_class(),
@@ -251,8 +251,8 @@ void record_choice(Op op, ScalarKind scalar, Backend backend, const OpShape& sha
         row.scalar = scalar;
         row.backend = backend;
         row.shape = shape;
-        row.native_existed = true;
-        row.native_supported = -1;   // TraceScope sees the choice, not the candidate walk
+        row.native_existed = native_existed;
+        row.native_supported = native_supported;
         row.origin_text = o;
         row.algo_text = a;
     }
