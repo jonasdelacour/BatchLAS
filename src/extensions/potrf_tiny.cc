@@ -37,6 +37,7 @@ namespace {
 using tiny_native::kTinySubGroupSize;
 using tiny_native::kTinySubGroups;
 using tiny_native::kTinyWgSize;
+static_assert(kTinyWgSize == kPotrfTinyWgSize, "potrf.cc's can_run reads kPotrfTinyWgSize");
 
 // A flat compile-time constant, not a budget walk: the tier owns no local memory.
 // evidence: docs/perf/potrf.md#the-tiny-tier
@@ -200,8 +201,7 @@ int potrf_tiny_max_n() {
 
 template <typename T>
 std::size_t potrf_tiny_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
-    // NOT zero: an empty or short caller `info` span draws `batch` int32s of pool
-    // scratch, and potrf_buffer_size diagnoses "unimplemented" by native_need == 0.
+    // NOT zero: an empty or short caller `info` span draws `batch` int32s of pool scratch.
     const int batch = A.batch_size();
     return workspace_bytes([&](BumpAllocator& p) {
         return potrf_tiny_layout<T>(ctx, p, batch);
@@ -232,8 +232,7 @@ Event potrf_tiny_dispatch(Queue& ctx,
     const int n = static_cast<int>(A.rows());
     const int batch = static_cast<int>(A.batch_size());
 
-    // supports()'s gates, re-applied: a forced route that supports() rejects falls back
-    // to automatic() and silently runs the vendor, so this entry point throws instead.
+    // can_run()'s gates (src/ops/potrf/potrf.cc), re-applied: this entry point is public.
     if (A.rows() != A.cols()) {
         throw batchlas::invalid_argument("potrf_tiny: A must be square");
     }

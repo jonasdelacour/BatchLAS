@@ -18,7 +18,7 @@
 #include "../src/extensions/solve_native.hh"
 #include "../src/extensions/potrf_native.hh"
 #include "../src/backends/posv_route.hh"
-#include "../src/backends/potrf_route.hh"
+#include "../src/ops/potrf/choice.hh"
 
 #include <batchlas/blas/dispatch/vendor_available.hh>
 
@@ -27,6 +27,7 @@
 #include <complex>
 #include <cstdint>
 #include <cstring>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -36,6 +37,22 @@ namespace {
 
 template <typename T>
 using RealOf = typename batchlas::base_type<T>::type;
+
+// Whether a `native` potrf pin runs a native kernel here: some non-vendor candidate accepts
+// a concrete pin. A pin whose can_run is false throws, so this asks potrf.cc itself.
+template <Backend B, typename T>
+bool potrf_native_runs(Queue& q, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo) {
+    for (const auto& c : ops::potrf::candidates<T>()) {
+        if (select::family_of(c) == "vendor") continue;
+        const select::ScopedPin<ops::potrf::PotrfChoice> pin("potrf", c);
+        try {
+            (void)potrf_buffer_size<B, T>(q, A, uplo);
+            return true;
+        } catch (const std::invalid_argument&) {
+        }
+    }
+    return false;
+}
 
 inline double up(float x) { return double(x); }
 inline double up(double x) { return x; }
@@ -489,9 +506,7 @@ TYPED_TEST(PosvTest, FusedSolveArmSolvesOnBothTriangles) {
                 }
                 // The poison in the other triangle is what makes a wrong-triangle READ
                 // in the solve visible, so a native potrf must leave it in place.
-                const auto pr = backend::potrf_route<B, T>(
-                    *this->ctx, A, uplo, dispatch::factorization_vendor_available<B>);
-                if (dispatch::is_native(pr)) {
+                if (potrf_native_runs<B, T>(*this->ctx, A, uplo)) {
                     size_t where = 0;
                     EXPECT_TRUE(untouched_outside_triangle(p, uplo, &where))
                         << "n=" << n << " uplo=" << (uplo == Uplo::Lower ? "L" : "U")

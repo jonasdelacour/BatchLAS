@@ -40,13 +40,14 @@ ARM_SPELLING = {
     "route:native:blocked": "blocked",
     "vendor": "vendor",
 }
-# The coverage spelling of the route each arm must have reached (rule 1).
+# The coverage spellings (chosen_origin:chosen_algo) each arm may have reached (rule 1):
+# the RouteTable era's, then flat selection's, whose chosen_algo is the choice spelling.
 ARM_ROUTE = {
-    "route:native:tiny": "native:tiny",
-    "route:native:cta": "native:cta",
-    "route:native:lpanel": "native:lpanel",
-    "route:native:blocked": "native:blocked",
-    "vendor": "vendor:auto",
+    "route:native:tiny": ("native:tiny",),
+    "route:native:cta": ("native:cta",),
+    "route:native:lpanel": ("native:lpanel", "native:lpanel:panel=8"),
+    "route:native:blocked": ("native:blocked",),
+    "vendor": ("vendor:auto", "vendor:vendor"),
 }
 DTYPES = {
     "float": "float", "double": "double", "cfloat": "cfloat", "cdouble": "cdouble",
@@ -110,7 +111,7 @@ def collect(device, stats):
             if not r["ok"]:
                 stats["dropped_not_ok"] += 1
                 continue
-            if r["route"] != ARM_ROUTE[arm]:
+            if r["route"] not in ARM_ROUTE[arm]:
                 stats["dropped_route_mismatch"] += 1
                 continue
             if r["m"] != r["n"] or not r.get("time_ms"):

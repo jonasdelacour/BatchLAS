@@ -4,9 +4,11 @@
 
 #include <batchlas/util/env.hh>
 
+#include "../src/ops/potrf/choice.hh"
 #include "../src/select/select.hh"
 
 #include <algorithm>
+#include <complex>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -20,13 +22,22 @@ using batchlas::ScopedEnvVar;
 
 namespace {
 
-// op -> dtype -> candidate spellings in candidate-list (tie-break) order. Phase 2 replaces
-// potrf's literal list with to_string over ops::potrf::candidates<T>(); every migrated op
-// adds its own entry here.
+template <class Array>
+std::vector<std::string> spellings(const Array& cands) {
+    std::vector<std::string> out;
+    for (const auto& c : cands) out.push_back(sel::to_string(c));
+    return out;
+}
+
+// op -> dtype -> candidate spellings in candidate-list (tie-break) order, from the op's own
+// choice.hh. Every migrated op adds its entry here.
 std::vector<std::string> candidates(const std::string& op, const std::string& dtype) {
+    namespace potrf = batchlas::ops::potrf;
     if (op == "potrf") {
-        if (dtype == "float") return {"tiny", "cta", "lpanel:panel=8", "lpanel:panel=16", "blocked", "vendor"};
-        return {"tiny", "cta", "lpanel:panel=8", "blocked", "vendor"};
+        if (dtype == "float") return spellings(potrf::candidates<float>());
+        if (dtype == "double") return spellings(potrf::candidates<double>());
+        if (dtype == "cfloat") return spellings(potrf::candidates<std::complex<float>>());
+        if (dtype == "cdouble") return spellings(potrf::candidates<std::complex<double>>());
     }
     return {};
 }
@@ -99,26 +110,13 @@ TEST(TunedTables, RankedTimesFollowTheTieRule) {
 
 // ---- the shipped tables through choose() ------------------------------------------------
 
-struct Tiny : sel::NoFields<"tiny"> {};
-struct Cta : sel::NoFields<"cta"> {};
-struct Blocked : sel::NoFields<"blocked"> {};
-struct Vendor : sel::NoFields<"vendor"> {};
-struct Lpanel {
-    int panel = 8;
-    static constexpr std::string_view name = "lpanel";
-    static constexpr std::array<std::string_view, 1> fields{"panel"};
-    std::array<int, 1> values() const { return {panel}; }
-    static Lpanel from(std::array<int, 1> v) { return {v[0]}; }
-    bool operator==(const Lpanel&) const = default;
-};
-using C = std::variant<Tiny, Cta, Lpanel, Blocked, Vendor>;
-const std::array<C, 6> kFloat{Tiny{}, Cta{}, Lpanel{8}, Lpanel{16}, Blocked{}, Vendor{}};
-constexpr std::array<std::string_view, 2> kLastResort{"blocked", "vendor"};
+using C = batchlas::ops::potrf::PotrfChoice;
 
 std::string pick(const std::string& device, const char* uplo, std::int64_t n, std::int64_t batch) {
     const sel::Key k{{"uplo", uplo}, {"n", n}, {"batch", batch}};
-    return sel::to_string(sel::choose("potrf", "float", sel::device_from_key(device), k, kFloat,
-                                      [](const C&) { return true; }, sel::Rules{{}, kLastResort}));
+    return sel::to_string(sel::choose("potrf", "float", sel::device_from_key(device), k,
+                                      batchlas::ops::potrf::candidates<float>(),
+                                      [](const C&) { return true; }, batchlas::ops::potrf::rules));
 }
 
 TEST(TunedTables, ShippedPotrfRowsAreWhatChooseReturns) {

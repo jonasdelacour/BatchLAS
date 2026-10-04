@@ -1,5 +1,5 @@
-// The public factorization entry points -- geqrf, orgqr, getrf, getrs, getri and
-// potrf -- defined once here rather than inside a vendor TU, so dropping a vendor
+// The public factorization entry points -- geqrf, orgqr, getrf, getrs, getri, gesv
+// and posv -- defined once here rather than inside a vendor TU, so dropping a vendor
 // library does not drop the public symbol.
 // See docs/design/vendor-independence.md#the-entry-point-facade.
 //
@@ -31,9 +31,6 @@
 
 // Routing adapters and native drivers: each is a src/ header over public includes
 // only, so the facade can include it in a vendor-free build.
-#include "../../backends/potrf_route.hh"
-#include "../../extensions/potrf_native.hh"
-
 #include "../../backends/geqrf_route.hh"
 #include "../../backends/orgqr_route.hh"
 #include "../../extensions/geqrf_native.hh"
@@ -62,9 +59,10 @@
 
 namespace batchlas {
 
-// potrf uses solver_vendor_available<B> (cuSOLVER); geqrf/orgqr and the LU family
-// use factorization_vendor_available<B> (cuBLAS). The two differ on CUDA and are NOT
-// interchangeable -- swapping one also changes which builds get the entry point.
+// geqrf/orgqr and the LU family use factorization_vendor_available<B> (cuBLAS); potrf
+// (src/ops/potrf/potrf.cc) uses solver_vendor_available<B> (cuSOLVER). The two differ on
+// CUDA and are NOT interchangeable -- swapping one also changes which builds get the
+// entry point.
 // A latent defect in that gate: docs/design/known-defects.md.
 
 // These THROW rather than falling through to the vendor, which would silently keep
@@ -642,140 +640,6 @@ size_t getri_buffer_size(Queue& ctx,
     }
 }
 
-template <typename T>
-[[noreturn]] inline void potrf_throw_native_unimplemented(dispatch::Route route,
-                                                          const char* who) {
-    throw batchlas::internal_error(
-        std::string(who) + ": resolved to a native route (" +
-        std::string(dispatch::to_string(route.origin)) + ":" +
-        std::string(dispatch::to_string(route.algo)) +
-        ") but no native potrf kernel is linked into this build. "
-        "sycl_potrf::potrf_cta_max_n / potrf_blocked_available reported a "
-        "capability the facade cannot service.");
-}
-
-template <Backend B, typename T>
-Event potrf(Queue& ctx,
-                const MatrixView<T, MatrixFormat::Dense>& descrA,
-                Uplo uplo,
-                Span<std::byte> workspace,
-                Span<int32_t> info_out) {
-    potrf_validate_params<T>(descrA, uplo);
-
-    // solver_vendor_available, NOT factorization_vendor_available -- see the file header.
-    const dispatch::Route route = backend::potrf_route<B, T>(
-        ctx, descrA, uplo,
-        /*vendor_available=*/dispatch::solver_vendor_available<B>);
-
-    // A vendor-present build enters this block inside potrf's ONE measured window, or when
-    // a caller pins BATCHLAS_POTRF_ROUTE; a vendor-free build takes any supported native
-    // route. evidence: docs/perf/potrf.md#the-measured-lpanel-window
-    if (dispatch::is_native(route)) {
-        // Tiny before CTA: it is the tier BELOW CTA at the same orders, so the arm order
-        // here must match kPotrfOrder's or a resolved Tiny route would land on the CTA
-        // kernel and the coverage row would name a kernel that never ran.
-        if (route.algo == dispatch::Algorithm::Tiny) {
-            return sycl_potrf::potrf_tiny_dispatch<T>(ctx, descrA, uplo, workspace, info_out);
-        }
-        if (route.algo == dispatch::Algorithm::CTA) {
-            return sycl_potrf::potrf_cta_dispatch<T>(ctx, descrA, uplo, workspace, info_out);
-        }
-        // WP6/P3. evidence: docs/perf/potrf.md#the-measured-lpanel-window
-        if (route.algo == dispatch::Algorithm::LPanel) {
-            return sycl_potrf::potrf_lpanel_dispatch<T>(ctx, descrA, uplo, workspace, info_out);
-        }
-        if (route.algo == dispatch::Algorithm::Blocked) {
-            // GEMM and TRSM go through the ROUTER -- see geqrf above.
-            return sycl_potrf::potrf_blocked_dispatch<T>(
-                ctx, descrA, uplo, workspace, info_out,
-                [](Queue& c,
-                   const MatrixView<T, MatrixFormat::Dense>& ga,
-                   const MatrixView<T, MatrixFormat::Dense>& gb,
-                   const MatrixView<T, MatrixFormat::Dense>& gc,
-                   T galpha, T gbeta, Transpose gta, Transpose gtb,
-                   ComputePrecision gp) {
-                    return gemm<B, T>(c, ga, gb, gc, galpha, gbeta, gta, gtb, gp);
-                },
-                [](Queue& c,
-                   const MatrixView<T, MatrixFormat::Dense>& ta,
-                   const MatrixView<T, MatrixFormat::Dense>& tb,
-                   T talpha, Side tside, Uplo tuplo, Transpose ttrans, Diag tdiag) {
-                    return trsm<B, T>(c, ta, tb, talpha, tside, tuplo, ttrans, tdiag);
-                });
-        }
-        potrf_throw_native_unimplemented<T>(route, "potrf");
-    }
-
-    if constexpr (!dispatch::solver_vendor_available<B>) {
-        dispatch::throw_no_vendor_route<T>(
-            dispatch::Op::potrf, B, dispatch::kSolverLibrary<B>);
-    } else {
-        return backend::potrf_vendor<B, T>(ctx, descrA, uplo, workspace, info_out);
-    }
-}
-
-template <Backend B, typename T>
-size_t potrf_buffer_size(Queue& ctx,
-                        const MatrixView<T,MatrixFormat::Dense>& A,
-                        Uplo uplo) {
-    potrf_validate_params<T>(A, uplo);
-
-    const dispatch::Route route = backend::potrf_route<B, T>(
-        ctx, A, uplo,
-        /*vendor_available=*/dispatch::solver_vendor_available<B>);
-
-    // max over EVERY supported native tier and the vendor -- see geqrf_buffer_size.
-    // Unlike the ops above, the consistency check reads `native_need == 0` rather than
-    // a fired flag: safe only while both tiers have a non-zero workspace.
-    // evidence: docs/perf/qr.md#the-orgqr_buffer_size-latent-defect
-    std::size_t native_need = 0;
-    if (dispatch::is_native(route)) {
-        const auto shape = backend::potrf_op_shape<B, T>(ctx, A, uplo);
-        using Tbl = dispatch::RouteTable<dispatch::Op::potrf, T>;
-        if (shape) {
-            // The Tiny tier's workspace is NOT zero -- it draws the same `batch` int32s
-            // of info scratch the CTA tier does -- which is what keeps the
-            // `native_need == 0` unimplemented check above honest at n <= 32.
-            if (Tbl::supports({dispatch::Origin::Native, dispatch::Algorithm::Tiny}, *shape)) {
-                native_need = std::max(native_need,
-                                       sycl_potrf::potrf_tiny_buffer_size<T>(ctx, A));
-            }
-            if (Tbl::supports({dispatch::Origin::Native, dispatch::Algorithm::CTA}, *shape)) {
-                native_need = std::max(native_need,
-                                       sycl_potrf::potrf_cta_buffer_size<T>(ctx, A));
-            }
-            if (Tbl::supports({dispatch::Origin::Native, dispatch::Algorithm::Blocked},
-                              *shape)) {
-                native_need = std::max(
-                    native_need, sycl_potrf::potrf_blocked_buffer_size<T>(ctx, A, uplo));
-            }
-            // P3 made {Native, LPanel} reachable from Auto, so it must be sized here
-            // too. Without this arm, a device whose CTA capacity is 0 refuses CTA AND
-            // Blocked (which inherits CTA's presence gate), leaving native_need == 0 and
-            // throwing for exactly the shapes potrf() then runs on LPanel.
-            if (Tbl::supports({dispatch::Origin::Native, dispatch::Algorithm::LPanel},
-                              *shape)) {
-                native_need = std::max(
-                    native_need, sycl_potrf::potrf_lpanel_buffer_size<T>(ctx, A));
-            }
-        }
-        if (native_need == 0) {
-            potrf_throw_native_unimplemented<T>(route, "potrf_buffer_size");
-        }
-    }
-
-    if constexpr (!dispatch::solver_vendor_available<B>) {
-        if (native_need == 0) {
-            dispatch::throw_no_vendor_route<T>(
-                dispatch::Op::potrf, B, dispatch::kSolverLibrary<B>);
-        }
-        return native_need;
-    } else {
-        return std::max(native_need,
-                        backend::potrf_vendor_buffer_size<B, T>(ctx, A, uplo));
-    }
-}
-
 // ---------------------------------------------------------------------------
 // P2: gesv and posv. THE TWO OPS WITH NO VENDOR ARM ON ANY BACKEND, so neither
 // has a `*_vendor` declaration, neither reads factorization_vendor_available, and
@@ -950,40 +814,26 @@ size_t posv_buffer_size(Queue& ctx,
     SOLVE_ONE(B_, std::complex<float>)              \
     SOLVE_ONE(B_, std::complex<double>)
 
-#define POTRF_ALL(B_)                               \
-    OP_INSTANTIATE(potrf, B_, float)                \
-    OP_INSTANTIATE(potrf, B_, double)               \
-    OP_INSTANTIATE(potrf, B_, std::complex<float>)  \
-    OP_INSTANTIATE(potrf, B_, std::complex<double>) \
-    OP_INSTANTIATE(potrf_buffer_size, B_, float)                \
-    OP_INSTANTIATE(potrf_buffer_size, B_, double)               \
-    OP_INSTANTIATE(potrf_buffer_size, B_, std::complex<float>)  \
-    OP_INSTANTIATE(potrf_buffer_size, B_, std::complex<double>)
-
 // Keyed on the DEVICE FAMILY, not on the vendor library: the bodies above compile to
 // a throw when the library is absent, so the symbol exists in every build with the
 // device.
 #if BATCHLAS_HAS_CUDA_BACKEND
 FACTORIZATION_ALL(Backend::CUDA)
-POTRF_ALL(Backend::CUDA)
 SOLVE_ALL(Backend::CUDA)
 #endif
 
 #if BATCHLAS_HAS_ROCM_BACKEND
 FACTORIZATION_ALL(Backend::ROCM)
-POTRF_ALL(Backend::ROCM)
 SOLVE_ALL(Backend::ROCM)
 #endif
 
 #if BATCHLAS_HAS_HOST_BACKEND
 FACTORIZATION_ALL(Backend::NETLIB)
-POTRF_ALL(Backend::NETLIB)
 SOLVE_ALL(Backend::NETLIB)
 #endif
 
 #undef SOLVE_ALL
 #undef SOLVE_ONE
-#undef POTRF_ALL
 #undef FACTORIZATION_ALL
 #undef FACTORIZATION_ONE
 #undef OP_INSTANTIATE

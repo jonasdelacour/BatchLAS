@@ -55,7 +55,7 @@ therefore fail entirely on host rows while every CUDA case in it passes. Two dem
 The structural reason every native tier in this campaign is invisible to the host half:
 `supports()` carries `if (!s.is_gpu) return false;` for `geqrf` (`route_geqrf.hh:48`), `orgqr`
 (`route_orgqr.hh:32`), `ormqr` (`route_ormqr.hh:59`), `getrf` (`route_getrf.hh:41`), `getrs`
-(`route_getrs.hh:52`), `getri` (`route_getri.hh:39`), `potrf` (`route_potrf.hh:38`), `trsm`
+(`route_getrs.hh:52`), `getri` (`route_getri.hh:39`), `potrf` (`can_run` in `src/ops/potrf/potrf.cc`), `trsm`
 (`route_trsm.hh:39`) and `gemm` (`route_gemm.hh:34-67`). **`gemv`'s `Direct` arm and `spmm`'s
 gather are the only two exceptions in the tree** — both run on a `native_cpu` `Device("cpu")`
 queue, which is exactly why `gemv_tests` went 40 failed → 0 vendor-free when nothing else did.
@@ -103,7 +103,7 @@ native route still runs: `automatic()` accepts a merely *supported* native route
 | `gemm` | `RegisterTiled` | GPU, homogeneous, `batch >= 64`; **`double` at `k >= 2`**; `float` NN square `max_dim <= 32`; **complex never** | `route_gemm.hh:34-67` |
 | `gemv` | `CTA`, `Direct` | one window: `complex<double>`, transposed, `64 <= red_len <= 352`, `out_len >= 256`, `batch >= 320` | `route_gemv.hh:60-71` |
 | `trsm` | `CTA`, `Blocked` | native from `batch >= 8`; `float`/`Side::Right` additionally needs `batch >= 128 \|\| order <= 32`; everything else true | `route_trsm.hh:64-80` |
-| `potrf` | `CTA`, `Blocked` | **false everywhere** | `route_potrf.hh:65-69` |
+| `potrf` | `Tiny`, `CTA`, `LPanel`, `Blocked` | no `preferred()` any more: tuned tables (`tuned/potrf.*.txt`) since flat selection | `src/ops/potrf/potrf.cc` |
 | `geqrf` | `CTA`, `Blocked` | native above a per-type order floor (`float` 64, `cfloat` 48, `double` 96, `cdouble` 256), plus tall panels `rows >= 128 && cols >= 32 && rows >= 4*cols`; the window answers true for **one** tier, resolved through `best_native_tier` so it cannot pre-empt `native_tier_preferred` | `route_geqrf.hh:preferred` |
 | `orgqr` | `Blocked` | native at `rows <= 512 && cols <= 512` | `route_orgqr.hh:preferred` |
 | `ormqr` | `Blocked` | `is_native(r) && supports(r, s)` — native-first, and predates WP5 | `route_ormqr.hh:77-79` |
@@ -160,12 +160,11 @@ And these are vendor-first because **no decision was taken**, which is a differe
   is the smallest tall panel ever measured and not a bracketed boundary, and the same clause is
   type-independent while `double`/`cdouble` 128x32 measure **0.68×**
   ([`small-n-baseline.md`](../perf/small-n-baseline.md#geqrf)).
-* **`potrf`.** `preferred()` all-false, though vendor-free `potrf` works at every order and
-  `float` at `n >= 1024` is **1.13–1.40× faster than cuSOLVER**. `potrf` also still has not
-  declared `native_tier_preferred`, although it has the same two native tiers and the same
-  all-false `preferred()` as `getrf` — so its vendor-free tier choice is a static order walk
-  that cannot follow a crossover. Whether that choice is wrong is unmeasured; measuring it is
-  the first step, not fixing it.
+* **`potrf`.** *Superseded by flat selection* (docs/design/flat-kernel-selection.md): potrf
+  has no `preferred()` or `native_tier_preferred` any more. Auto and the vendor-free tier choice
+  both read the measured ranking in `tuned/potrf.<dtype>.<device>.txt`, so a crossover the sweep
+  saw is followed. When this was written, `preferred()` was all-false although vendor-free
+  `potrf` works at every order and `float` at `n >= 1024` is **1.13–1.40× faster than cuSOLVER**.
 
 ## M1 — self-sufficient. Not reached.
 
@@ -194,7 +193,7 @@ And these are vendor-first because **no decision was taken**, which is a differe
    the tree, inside the float-only dispatcher. `double` `symm` has no expansion route at all.
 5. **`geqrf` 44, `ormqr` 24, `getri` 16** — host rows as above, plus the shapes each table's
    `supports()` refuses.
-6. **`potrf` refuses `Uplo::Upper`** in the blocked driver (`route_potrf.hh:55`), and that is
+6. **`potrf` refuses `Uplo::Upper`** in the blocked driver (`can_run` in `src/ops/potrf/potrf.cc`), and that is
    the correctness kind of false, not the slower kind. `syev` shows the cheap route: mirror the
    upper triangle and run the Lower pipeline.
 

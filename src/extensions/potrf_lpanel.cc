@@ -50,7 +50,7 @@ constexpr int potrf_lpanel_nb_for(int hint) {
     return (hint == 0) ? PotrfLpanelConst<T>::NB : hint;
 }
 
-// Called by BOTH the capability query and the launcher, so the ceiling supports() advertises
+// Called by BOTH the capability query and the launcher, so the ceiling can_run() advertises
 // cannot disagree with what the kernel allocates. sA is the n x NB panel at ld = n -- no odd
 // padding, because lane `row` reads sA[row + i*n], already stride 1 across lanes -- sB is the
 // NB x NB broadcast block, and the 256 over-covers *fail plus alignment slack.
@@ -257,7 +257,7 @@ Event potrf_lpanel_dispatch(Queue& ctx,
     const int n = static_cast<int>(A.rows());
     const int batch = static_cast<int>(A.batch_size());
 
-    // supports()'s gates, re-applied: this entry point is reachable without the table.
+    // can_run()'s gates (src/ops/potrf/potrf.cc), re-applied: this entry point is public.
     if (A.rows() != A.cols()) {
         throw batchlas::invalid_argument("potrf_lpanel: A must be square");
     }
@@ -271,7 +271,7 @@ Event potrf_lpanel_dispatch(Queue& ctx,
         // blocked driver already refuses it, so refusing here preserves the status quo.
         throw batchlas::invalid_argument(
             "potrf_lpanel: Uplo::Upper is not implemented; see "
-            "RouteTable<Op::potrf, T>::supports, LPanel arm");
+            "can_run in src/ops/potrf/potrf.cc");
     }
     if (A.is_heterogeneous()) {
         throw batchlas::invalid_argument("potrf_lpanel: heterogeneous batch is not supported");

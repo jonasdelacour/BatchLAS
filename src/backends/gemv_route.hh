@@ -113,7 +113,7 @@ inline std::optional<dispatch::GemvShape> gemv_op_shape(
     // no 32" direction is a launch abort.
     s.has_sg32 = ctx.device().supports_sub_group_size(32);
 
-    // THE GATE AND ITS WRITER LAND TOGETHER (potrf_route.hh). Only A can
+    // THE GATE AND ITS WRITER LAND TOGETHER. Only A can
     // be heterogeneous -- VectorView has no active-size concept at all, which
     // is itself why gemv cannot have gemm's heterogeneous walker.
     s.heterogeneous_batch = A.is_heterogeneous();

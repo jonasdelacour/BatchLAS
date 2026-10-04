@@ -2,7 +2,7 @@
 //
 // Tests call sycl_potrf::potrf_{cta,blocked}_dispatch DIRECTLY and check a host
 // multiply-back residual computed here: a vendor reference is inert in a vendor-free
-// build, and a forced route that supports() rejects silently becomes the vendor.
+// build. Pinned-facade cases use ScopedPin; potrf_candidates_tests covers every pin.
 // evidence: docs/perf/potrf.md#correctness-findings
 #include <gtest/gtest.h>
 
@@ -18,7 +18,7 @@
 #include "test_utils.hh"
 
 #include "../src/extensions/potrf_native.hh"
-#include "../src/backends/potrf_route.hh"
+#include "../src/ops/potrf/choice.hh"
 
 #include <algorithm>
 #include <cmath>
@@ -211,7 +211,7 @@ protected:
         test_utils::BatchLASTest<Config>::SetUp();
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
         if (!this->ctx) GTEST_SKIP() << "no queue";
-        // GPU-only and sub-group 32 are supports()' own correctness gates.
+        // GPU-only and sub-group 32 are can_run()'s own correctness gates.
         if (this->ctx->device().type != DeviceType::GPU) {
             GTEST_SKIP() << "potrf_cta is a GPU kernel";
         }
@@ -220,7 +220,7 @@ protected:
         }
     }
 
-    // THE DEVICE'S ceiling, not the reference budget's: supports() and
+    // THE DEVICE'S ceiling, not the reference budget's: can_run() and
     // potrf_cta_dispatch both gate on the RUNTIME budget LOCAL_MEM_SIZE - 4096.
     // evidence: docs/perf/potrf.md#the-slm-budget-and-the-fit-ceilings
     int ceiling() const {
@@ -326,7 +326,7 @@ TYPED_TEST(PotrfCtaTest, ResidualBothTriangles) {
     }
 }
 
-// The ceiling is a HARD capacity: one past it must not launch, and supports() agrees.
+// The ceiling is a HARD capacity: one past it must not launch, and a `cta` pin refuses it.
 TYPED_TEST(PotrfCtaTest, JustPastTheCeilingHasNoCtaRoute) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::BackendType;
@@ -339,15 +339,14 @@ TYPED_TEST(PotrfCtaTest, JustPastTheCeilingHasNoCtaRoute) {
     for (int i = 0; i < cap + 1; ++i) A(i, i, 0) = make_scalar<T>(typename TestFixture::R(1),
                                                                     typename TestFixture::R(0));
 
-    const auto shape = backend::potrf_op_shape<B, T>(*this->ctx, A.view(), Uplo::Lower);
-    ASSERT_TRUE(shape.has_value());
-    // Anti-vacuity: the CTA arm must be supported AT the ceiling, or this proves nothing.
-    auto at_cap = *shape;
-    at_cap.m = at_cap.n = at_cap.k = cap;
-    EXPECT_TRUE((dispatch::RouteTable<dispatch::Op::potrf, T>::supports(
-        dispatch::Route{dispatch::Origin::Native, dispatch::Algorithm::CTA}, at_cap)));
-    EXPECT_FALSE((dispatch::RouteTable<dispatch::Op::potrf, T>::supports(
-        dispatch::Route{dispatch::Origin::Native, dispatch::Algorithm::CTA}, *shape)));
+    {
+        // Anti-vacuity: the pin must be accepted AT the ceiling, or this proves nothing.
+        const select::ScopedPin<ops::potrf::PotrfChoice> pin("potrf", ops::potrf::Cta{});
+        Matrix<T, MatrixFormat::Dense> At(cap, cap, 1);
+        EXPECT_NO_THROW(((void)potrf_buffer_size<B, T>(*this->ctx, At.view(), Uplo::Lower)));
+        EXPECT_THROW(((void)potrf_buffer_size<B, T>(*this->ctx, A.view(), Uplo::Lower)),
+                     std::invalid_argument);
+    }
 
     UnifiedVector<std::byte> ws(sycl_potrf::potrf_cta_buffer_size<T>(*this->ctx, A.view()));
     UnifiedVector<int32_t> info(1, int32_t(0));
@@ -648,7 +647,7 @@ TYPED_TEST(PotrfCtaTest, EmptyInfoSpanStillFactorises) {
     }
 }
 
-// The facade actually reaches the CTA kernel. The table answering {Native, CTA} says
+// The facade actually reaches the CTA kernel. A pin being accepted says
 // nothing about what ran, so the guard is a BIT-EXACT comparison against the direct call.
 TYPED_TEST(PotrfCtaTest, FacadeReachesTheCtaKernel) {
     using T = typename TestFixture::T;
@@ -658,11 +657,7 @@ TYPED_TEST(PotrfCtaTest, FacadeReachesTheCtaKernel) {
     const int n = std::min(48, this->ceiling());
     const int batch = 3;
 
-    // A bare ::setenv is invisible to the library: batchlas::settings() snapshots the
-    // environment before main() and parse_route_env reads only that snapshot. The shared
-    // guard reloads it at both ends, and restores the caller's previous value (or unsets
-    // it) exactly as the hand-rolled EnvGuard here did.
-    const ScopedEnvVar route_pin("BATCHLAS_POTRF_ROUTE", "cta");
+    const select::ScopedPin<ops::potrf::PotrfChoice> route_pin("potrf", ops::potrf::Cta{});
 
     Matrix<T, MatrixFormat::Dense> A(n, n, batch);
     std::vector<std::vector<T>> ref(batch);
@@ -670,13 +665,6 @@ TYPED_TEST(PotrfCtaTest, FacadeReachesTheCtaKernel) {
         ref[b] = make_spd<T>(n, 8080u + b);
         this->load_triangle(A, b, n, ref[b], Uplo::Lower, make_scalar<T>(R(0), R(0)));
     }
-
-    // The route assertion LOCALISES a failure -- which link broke -- but is NOT the guard.
-    const auto route = backend::potrf_route<B, T>(*this->ctx, A.view(), Uplo::Lower,
-                                                  /*vendor_available=*/true);
-    ASSERT_TRUE(dispatch::is_native(route))
-        << "BATCHLAS_POTRF_ROUTE=cta did not resolve to a native route";
-    ASSERT_EQ(route.algo, dispatch::Algorithm::CTA);
 
     UnifiedVector<std::byte> ws(potrf_buffer_size<B, T>(*this->ctx, A.view(), Uplo::Lower));
     UnifiedVector<int32_t> info(batch, int32_t(-7));
@@ -759,49 +747,12 @@ TYPED_TEST(PotrfCtaTest, PaddedLeadingDimensionAndNonDefaultStride) {
     }
 }
 
-// The direct entry point re-applies every gate supports() applies, because it is
-// reachable WITHOUT the table. Dropping the heterogeneous gate is a SILENT WRONG ANSWER.
-TYPED_TEST(PotrfCtaTest, DirectEntryPointRefusesWhatSupportsRefuses) {
-    using T = typename TestFixture::T;
-    using R = typename TestFixture::R;
-
-    UnifiedVector<int32_t> info(8, int32_t(0));
-
-    // (a) not square.
-    {
-        Matrix<T, MatrixFormat::Dense> A(8, 5, 1);
-        A.fill(make_scalar<T>(R(1), R(0)));
-        UnifiedVector<std::byte> ws(64);
-        EXPECT_THROW((void)sycl_potrf::potrf_cta_dispatch<T>(*this->ctx, A.view(), Uplo::Lower,
-                                                       ws.to_span(), info.to_span()),
-                     std::invalid_argument);
-    }
-
-    // (b) heterogeneous batch -- the silent-wrong-answer one.
-    {
-        const int n = std::min(16, this->ceiling());
-        Matrix<T, MatrixFormat::Dense> A(n, n, 4);
-        A.fill(make_scalar<T>(R(0), R(0)));
-        for (int b = 0; b < 4; ++b)
-            for (int i = 0; i < n; ++i) A(i, i, b) = make_scalar<T>(R(2), R(0));
-        UnifiedVector<int> act_r(4), act_c(4);
-        for (int b = 0; b < 4; ++b) { act_r[b] = n - b; act_c[b] = n - b; }
-        auto V = A.view().with_active_dims(act_r.to_span(), act_c.to_span());
-        ASSERT_TRUE(V.is_heterogeneous())
-            << "the view is not actually heterogeneous; this case would prove nothing";
-        UnifiedVector<std::byte> ws(sycl_potrf::potrf_cta_buffer_size<T>(*this->ctx, A.view()));
-        EXPECT_THROW((void)sycl_potrf::potrf_cta_dispatch<T>(*this->ctx, V, Uplo::Lower,
-                                                       ws.to_span(), info.to_span()),
-                     std::invalid_argument);
-    }
-}
-
 // The fit ceilings, pinned against the BUDGET-parameterised query, not against a device.
 // evidence: docs/perf/potrf.md#the-slm-budget-and-the-fit-ceilings
 TYPED_TEST(PotrfCtaTest, MeasuredFitCeilings) {
     using T = typename TestFixture::T;
 
-    // ADVERTISED: what supports() promises, at the default occupancy target of 4 resident
+    // ADVERTISED: what can_run() promises, at the default occupancy target of 4 resident
     // work-groups per SM, i.e. a quarter of the 97,280 B budget.
     const int advertised = std::is_same_v<T, float>               ? 77
                          : std::is_same_v<T, double>              ? 54
@@ -1316,8 +1267,8 @@ TYPED_TEST(PotrfBlockedTest, BlockedInfoSpanStatesAndTheZeroPrePass) {
     }
 }
 
-// THE TIER OVERLAP, and the single-block path. supports()'s Blocked arm deliberately
-// carries NO LOWER BOUND on order: a forced `blocked` below one would become the VENDOR.
+// THE TIER OVERLAP, and the single-block path. can_run()'s Blocked arm deliberately
+// carries NO LOWER BOUND on order: a `blocked` pin below one would throw.
 //   n == nb   ONE block, m2 == 0, and the W x W x batch scratch is NOT DRAWN
 //   n == cap  the CTA ceiling itself, where both tiers are supported
 TYPED_TEST(PotrfBlockedTest, BlockedIsCorrectInsideTheCtaTierAndDrawsNoScratchAtOneBlock) {
@@ -1362,183 +1313,6 @@ TYPED_TEST(PotrfBlockedTest, BlockedIsCorrectInsideTheCtaTierAndDrawsNoScratchAt
     }
 }
 
-// The direct entry point's correctness gates throw rather than launch. This cannot go
-// through the facade: supports() REJECTS Upper, so a forced `blocked` becomes the vendor.
-TYPED_TEST(PotrfBlockedTest, BlockedDirectEntryPointRefusesWhatSupportsRefuses) {
-    using T = typename TestFixture::T;
-    using R = typename TestFixture::R;
-
-    const int nb = this->blocking(1 << 20).nb;
-    const int n = nb + nb / 2;
-    UnifiedVector<int32_t> info(8, int32_t(0));
-
-    // (a) Uplo::Upper -- CORRECTNESS, not fit. The schedule is Lower-shaped.
-    {
-        Matrix<T, MatrixFormat::Dense> A(n, n, 2);
-        A.fill(make_scalar<T>(R(0), R(0)));
-        for (int b = 0; b < 2; ++b)
-            for (int i = 0; i < n; ++i) A(i, i, b) = make_scalar<T>(R(2), R(0));
-        UnifiedVector<std::byte> ws(
-            sycl_potrf::potrf_blocked_buffer_size<T>(*this->ctx, A.view(), Uplo::Lower));
-        EXPECT_THROW((void)sycl_potrf::potrf_blocked_dispatch<T>(*this->ctx, A.view(), Uplo::Upper,
-                                                           ws.to_span(), info.to_span()),
-                     std::invalid_argument);
-    }
-
-    // (b) not square.
-    {
-        Matrix<T, MatrixFormat::Dense> A(n, n - 3, 1);
-        A.fill(make_scalar<T>(R(1), R(0)));
-        UnifiedVector<std::byte> ws(64);
-        EXPECT_THROW((void)sycl_potrf::potrf_blocked_dispatch<T>(*this->ctx, A.view(), Uplo::Lower,
-                                                           ws.to_span(), info.to_span()),
-                     std::invalid_argument);
-    }
-
-    // (c) heterogeneous batch -- the silent-wrong-answer one.
-    {
-        Matrix<T, MatrixFormat::Dense> A(n, n, 4);
-        A.fill(make_scalar<T>(R(0), R(0)));
-        for (int b = 0; b < 4; ++b)
-            for (int i = 0; i < n; ++i) A(i, i, b) = make_scalar<T>(R(2), R(0));
-        UnifiedVector<int> act_r(4), act_c(4);
-        for (int b = 0; b < 4; ++b) { act_r[b] = n - b; act_c[b] = n - b; }
-        auto V = A.view().with_active_dims(act_r.to_span(), act_c.to_span());
-        ASSERT_TRUE(V.is_heterogeneous())
-            << "the view is not actually heterogeneous; this case would prove nothing";
-        UnifiedVector<std::byte> ws(
-            sycl_potrf::potrf_blocked_buffer_size<T>(*this->ctx, A.view(), Uplo::Lower));
-        EXPECT_THROW((void)sycl_potrf::potrf_blocked_dispatch<T>(*this->ctx, V, Uplo::Lower,
-                                                           ws.to_span(), info.to_span()),
-                     std::invalid_argument);
-    }
-}
-
-// The route table above the CTA ceiling, including the VENDOR-FREE FALLBACK.
-// evidence: docs/perf/potrf.md#route-arms-and-the-supports-gates
-TYPED_TEST(PotrfBlockedTest, BlockedRouteTableAndTheVendorFreeFallback) {
-    using T = typename TestFixture::T;
-    using R = typename TestFixture::R;
-    static constexpr Backend B = TestFixture::BackendType;
-    using Tbl = dispatch::RouteTable<dispatch::Op::potrf, T>;
-    const dispatch::Route cta{dispatch::Origin::Native, dispatch::Algorithm::CTA};
-    const dispatch::Route blk{dispatch::Origin::Native, dispatch::Algorithm::Blocked};
-
-    const int n = this->ceiling() + 1;
-    Matrix<T, MatrixFormat::Dense> A(n, n, 4);
-    A.fill(T{});
-    for (int b = 0; b < 4; ++b)
-        for (int i = 0; i < n; ++i) A(i, i, b) = make_scalar<T>(R(1), R(0));
-
-    const auto lower = backend::potrf_op_shape<B, T>(*this->ctx, A.view(), Uplo::Lower);
-    const auto upper = backend::potrf_op_shape<B, T>(*this->ctx, A.view(), Uplo::Upper);
-    ASSERT_TRUE(lower.has_value());
-    ASSERT_TRUE(upper.has_value());
-
-    // (1) Above the ceiling the CTA tier is gone and the Blocked tier is there.
-    EXPECT_FALSE(Tbl::supports(cta, *lower));
-    EXPECT_TRUE(Tbl::supports(blk, *lower));
-
-    // (2) Uplo::Upper is a CORRECTNESS gate on the Blocked arm and must stay one until
-    //     the driver mirrors, or a forced `blocked` there silently becomes cuSOLVER.
-    EXPECT_FALSE(Tbl::supports(blk, *upper));
-
-    // (3) The blocked driver is never what `preferred()` names: inside the measured window
-    //     that is LPanel, outside it nothing at all.
-    //     evidence: docs/perf/potrf.md#the-measured-lpanel-window
-    EXPECT_FALSE(Tbl::preferred(blk, *lower));
-    EXPECT_FALSE(Tbl::preferred(cta, *lower));
-
-    // (4) With no vendor in the build resolve_route hands over a SUPPORTED native route.
-    //     Since P3 the tier immediately above the CTA ceiling is LPanel for the types the
-    //     grid covers; double and complex<double> still fall to the blocked driver there.
-    const dispatch::Route lp{dispatch::Origin::Native, dispatch::Algorithm::LPanel};
-    constexpr bool lpanel_measured =
-        std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>;
-    const auto free_route = backend::potrf_route<B, T>(*this->ctx, A.view(), Uplo::Lower,
-                                                       /*vendor_available=*/false);
-    EXPECT_TRUE(dispatch::is_native(free_route));
-    EXPECT_EQ(free_route.algo, (lpanel_measured && Tbl::supports(lp, *lower))
-                                   ? dispatch::Algorithm::LPanel
-                                   : dispatch::Algorithm::Blocked)
-        << "the vendor-free tier above the CTA ceiling is not the measured one";
-
-    // (5) ... and the blocked driver is still REACHABLE, above LPanel's own ceiling, which
-    //     is the claim (4) used to carry. 1100 is over the 1024 work-item cap the LPanel
-    //     body needs (one work-item per row) for every type.
-    Matrix<T, MatrixFormat::Dense> Big(1100, 1100, 1);
-    Big.fill(T{});
-    for (int i = 0; i < 1100; ++i) Big(i, i, 0) = make_scalar<T>(R(1), R(0));
-    const auto big_lower = backend::potrf_op_shape<B, T>(*this->ctx, Big.view(), Uplo::Lower);
-    ASSERT_TRUE(big_lower.has_value());
-    EXPECT_FALSE(Tbl::supports(lp, *big_lower));
-    const auto big_free = backend::potrf_route<B, T>(*this->ctx, Big.view(), Uplo::Lower,
-                                                     /*vendor_available=*/false);
-    EXPECT_EQ(big_free.algo, dispatch::Algorithm::Blocked)
-        << "a vendor-free build does not reach the blocked driver above the LPanel ceiling";
-}
-
-// potrf_buffer_size SURVIVES THE ROUTE CHANGING BETWEEN QUERY AND CALL: the route is
-// resolved twice, so a query that sizes only the route it resolved under-allocates.
-// evidence: docs/perf/potrf.md#workspace-sizing
-TYPED_TEST(PotrfBlockedTest, BufferSizeCoversEverySupportedNativeTier) {
-    using T = typename TestFixture::T;
-    using R = typename TestFixture::R;
-    static constexpr Backend B = TestFixture::BackendType;
-
-    const int cap = this->ceiling();
-    const int n = cap;                       // inside the CTA tier
-    const int nb = this->blocking(n).nb;     // the width used AT that order
-    const int batch = 16;
-    ASSERT_GT(n, nb) << "at this order the blocked driver is a single block and draws no "
-                        "trailing scratch, so the two tiers cost the same and this test "
-                        "would be vacuous";
-
-    Matrix<T, MatrixFormat::Dense> A(n, n, batch);
-    std::vector<std::vector<T>> ref(batch);
-    for (int b = 0; b < batch; ++b) {
-        ref[b] = make_spd<T>(n, 5959u + b);
-        this->load_triangle(A, b, n, ref[b], Uplo::Lower, make_scalar<T>(R(0), R(0)));
-    }
-
-    // ANTI-VACUITY: the two tiers must actually want different amounts.
-    const std::size_t cta_need = sycl_potrf::potrf_cta_buffer_size<T>(*this->ctx, A.view());
-    const std::size_t blk_need =
-        sycl_potrf::potrf_blocked_buffer_size<T>(*this->ctx, A.view(), Uplo::Lower);
-    ASSERT_GT(blk_need, cta_need)
-        << "the blocked tier does not need more workspace than the CTA tier here, so a "
-           "chosen-route-only query would pass this test by accident";
-
-    // The query and the call deliberately run under DIFFERENT pinned routes -- that
-    // mismatch is the property under test. One ScopedEnvVar per arm rather than one
-    // mutable guard: the shared class pins for a scope and reloads the settings snapshot
-    // at both ends, which is the only thing that makes a pin visible to parse_route_env.
-    // Nothing reads the variable between the arms, so the momentary restore is unobservable.
-    const std::size_t queried = [&] {
-        const ScopedEnvVar route_pin("BATCHLAS_POTRF_ROUTE", "cta");
-        return potrf_buffer_size<B, T>(*this->ctx, A.view(), Uplo::Lower);
-    }();
-    ASSERT_GE(queried, blk_need)
-        << "potrf_buffer_size resolved `cta` and sized only that tier; a caller whose "
-           "environment changes between the query and the call (options.hh:546-552 reads "
-           "getenv twice) under-allocates by " << (blk_need - queried) << " bytes";
-
-    // Pinned for the rest of the test; its destructor restores the surrounding value,
-    // which is what the single hand-rolled guard did once at end of scope.
-    const ScopedEnvVar route_pin("BATCHLAS_POTRF_ROUTE", "blocked");
-    UnifiedVector<std::byte> ws(queried);
-    UnifiedVector<int32_t> info(batch, int32_t(-12345));
-    ASSERT_NO_THROW(
-        ((void)potrf<B, T>(*this->ctx, A.view(), Uplo::Lower, ws.to_span(), info.to_span())));
-    this->ctx->wait();
-    for (int b = 0; b < batch; ++b) {
-        ASSERT_EQ(info[b], 0) << "b=" << b;
-        const auto L = this->extract_L(A, b, n, Uplo::Lower);
-        EXPECT_LE((multiply_back_residual<T>(ref[b], L, n)), blocked_residual_tol<T>(n))
-            << "b=" << b;
-    }
-}
-
 // The facade actually reaches the BLOCKED driver, guarded BIT-EXACTLY against the direct
 // entry point with the same routed gemm and trsm injected -- the INJECTION SEAM too.
 TYPED_TEST(PotrfBlockedTest, FacadeReachesTheBlockedDriver) {
@@ -1551,8 +1325,7 @@ TYPED_TEST(PotrfBlockedTest, FacadeReachesTheBlockedDriver) {
     const int batch = 3;
     ASSERT_GT(n, this->ceiling());
 
-    // Same reload requirement as the CTA facade test above; same restore-on-exit.
-    const ScopedEnvVar route_pin("BATCHLAS_POTRF_ROUTE", "blocked");
+    const select::ScopedPin<ops::potrf::PotrfChoice> route_pin("potrf", ops::potrf::Blocked{});
 
     std::vector<std::vector<T>> ref(batch);
     for (int b = 0; b < batch; ++b) ref[b] = make_spd<T>(n, 4040u + b);
@@ -1560,13 +1333,6 @@ TYPED_TEST(PotrfBlockedTest, FacadeReachesTheBlockedDriver) {
     Matrix<T, MatrixFormat::Dense> A(n, n, batch);
     for (int b = 0; b < batch; ++b)
         this->load_triangle(A, b, n, ref[b], Uplo::Lower, make_scalar<T>(R(0), R(0)));
-
-    // The route assertion LOCALISES a failure but is NOT the guard.
-    const auto route = backend::potrf_route<B, T>(*this->ctx, A.view(), Uplo::Lower,
-                                                  /*vendor_available=*/true);
-    ASSERT_TRUE(dispatch::is_native(route))
-        << "BATCHLAS_POTRF_ROUTE=blocked did not resolve to a native route";
-    ASSERT_EQ(route.algo, dispatch::Algorithm::Blocked);
 
     UnifiedVector<std::byte> ws(potrf_buffer_size<B, T>(*this->ctx, A.view(), Uplo::Lower));
     UnifiedVector<int32_t> info(batch, int32_t(-7));

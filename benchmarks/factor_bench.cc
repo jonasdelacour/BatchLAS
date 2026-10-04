@@ -41,10 +41,15 @@
 #include <batchlas/util/sycl-vector.hh>
 
 #include <batchlas/blas/dispatch/route_env.hh>
+#include <batchlas/settings.hh>
+
+#include "../src/extensions/potrf_native.hh"
+#include "../src/ops/potrf/choice.hh"
 
 #include <lapacke.h>
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <complex>
@@ -220,7 +225,24 @@ static const char* op_text(OpKind k) {
 // It is queried INSIDE the ScopedEnvVar scope on purpose: settings() is a
 // pre-main snapshot, so a raw ::setenv is invisible to it and only
 // ScopedEnvVar's reload_settings() makes the pin readable at all.
+//
+// potrf has migrated to flat selection (src/ops/potrf/): its pins are choice spellings
+// (`lpanel:panel=8`), the legacy aliases (`native:lpanel`) or auto/native/vendor, and a
+// pin that cannot run THROWS instead of falling through. Its coverage rows carry the
+// spelling in chosen_algo, so the readback reads e.g. `native:lpanel:panel=8`.
+static bool potrf_pin_parsed(std::string text) {
+    for (char& ch : text) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    if (text == "auto" || text == "native" || text == "vendor") return true;
+    for (const auto& a : ops::potrf::aliases)
+        if (text == a.name) return true;
+    return select::parse<ops::potrf::PotrfChoice>(text).has_value();
+}
+
 static bool pin_parsed_now(OpKind k) {
+    if (k == OpKind::potrf) {
+        const char* raw = settings().routing.canonical_route(dispatch::Op::potrf).get();
+        return raw != nullptr && potrf_pin_parsed(raw);
+    }
     const auto p = dispatch::parse_route_env(dispatch_op(k));
     return p.found && !p.unparsed;
 }
@@ -478,8 +500,10 @@ struct Arm {
 // measure whatever the composed ops happened to route to, which is the "diff the
 // ROUTE, not the timing" defect; these pins make the composition explicit and
 // `pin_parsed_now` still proves the OUTER pin landed.
+// A potrf pin the shape cannot run throws, so `composed` pins tiny only inside its ceiling
+// (16 for cdouble) and the best runnable native tier above it.
 static std::vector<std::pair<std::string, std::string>>
-composed_pins(OpKind op, const std::string& arm_name) {
+composed_pins(OpKind op, const std::string& arm_name, bool potrf_tiny_fits) {
     if (op == OpKind::gesv) {
         if (arm_name == "vendor")
             return {{"BATCHLAS_GETRF_ROUTE", "vendor"}, {"BATCHLAS_GETRS_ROUTE", "vendor"}};
@@ -494,7 +518,7 @@ composed_pins(OpKind op, const std::string& arm_name) {
         if (arm_name == "native")
             return {{"BATCHLAS_POTRF_ROUTE", "native"}, {"BATCHLAS_TRSM_ROUTE", "native"}};
         if (arm_name == "composed")
-            return {{"BATCHLAS_POTRF_ROUTE", "tiny"}, {"BATCHLAS_TRSM_ROUTE", "cta"}};
+            return {{"BATCHLAS_POTRF_ROUTE", potrf_tiny_fits ? "tiny" : "native"}, {"BATCHLAS_TRSM_ROUTE", "cta"}};
     }
     return {};
 }
@@ -681,7 +705,7 @@ static int run(const Cfg& c) {
         }
         a.pin = (pin == "native" && !c.route_pin.empty()) ? c.route_pin : pin;
         if (is_solve_op(c.op)) {
-            a.sub_pins = composed_pins(c.op, pin);
+            a.sub_pins = composed_pins(c.op, pin, n <= sycl_potrf::potrf_tiny_max_n<T>());
             if (a.pin == pin) a.pin = solve_outer_pin(pin);
         }
         arms.push_back(a);

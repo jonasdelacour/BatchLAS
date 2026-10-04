@@ -264,7 +264,7 @@ Event potrf_blocked_dispatch(Queue& ctx,
     if (uplo != Uplo::Lower) {
         throw batchlas::invalid_argument(
             "potrf_blocked: Uplo::Upper is not implemented; the driver factors the "
-            "lower triangle only; see RouteTable<Op::potrf, T>::supports, Blocked arm)");
+            "lower triangle only; see can_run in src/ops/potrf/potrf.cc)");
     }
     if (A.is_heterogeneous()) {
         throw batchlas::invalid_argument("potrf_blocked: heterogeneous batch is not supported");

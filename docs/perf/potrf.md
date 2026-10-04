@@ -1,8 +1,51 @@
 # POTRF: the CTA kernel, the blocked driver, and the 48 KB SLM launch hole (WP4)
 
-Four native tiers ship, all linked and correct, and **two windows are routed**: a vendor-present build takes a
-native tier for `Uplo::Lower`, `float` and `complex<float>`, at `n <= 256`, and cuSOLVER everywhere else. The tiers
-also exist so a `-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF` build stops throwing `NoRouteError`.
+## Selection since flat kernel selection (phase 2)
+
+potrf no longer routes through `RouteTable`. `route_potrf.hh`, `src/backends/potrf_route.hh` and the
+`preferred()` / `native_tier_preferred()` / `tiny_window()` windows described below are **deleted**; the sections that
+quote them are kept as the measurement record that produced the old windows, not as a description of the code.
+What runs is decided in one file, `src/ops/potrf/potrf.cc` (docs/design/flat-kernel-selection.md §4):
+
+* the candidates are `tiny`, `cta`, `lpanel:panel=8`, `lpanel:panel=16` (float only), `blocked`, `vendor`
+  (`src/ops/potrf/choice.hh`);
+* the choice is the first runnable entry of the nearest row of `tuned/potrf.<dtype>.<device>.txt`, keyed on
+  `uplo` (exact), `n` and `batch` (log distance); a device with no table borrows one and warns once, a CPU device
+  never borrows a GPU table; if no row entry can run, the last resort is `blocked`, then `vendor`;
+* the tables are the old route sweeps, converted: `scripts/sweep_to_table.py` reads
+  `benchmarks/results/routing/*.jsonl` (provenance in `tuned/README.md`); `--check` is the CI gate that the tables
+  still match the sweeps. `BATCHLAS_TUNED_DIR=<dir>` replaces the embedded tables without a rebuild;
+* the windows below are therefore no longer hand-written: a window edge moves when the sweep moves. The tables keep
+  the measured order of every candidate per cell, so `tuned/potrf.float.sm_120.txt` row `uplo=L n=96 batch=8192`
+  is the evidence for that cell's choice;
+* `can_run()` in `potrf.cc` is correctness only and mirrors each driver's own argument checks (the `supports()`
+  gates tabled below, plus Tiny's `MAX_WORK_GROUP_SIZE >= 64`);
+* `potrf_buffer_size` returns exactly the chosen family's workspace, no longer the maximum over every tier;
+* `BATCHLAS_POTRF_ROUTE` takes `auto`, `native`, `vendor`, a spelling (`lpanel:panel=8`, `lpanel:8`) or a legacy alias
+  (`native:tiny`, `native:cta`, `native:lpanel`, `native:blocked`, `lpanel`). A pin that does not parse, or names a
+  choice that cannot run the shape, **throws `std::invalid_argument`**; it used to fall through to Auto. `native`
+  with no runnable native candidate still falls back to Auto, with a warning. No legacy `_VARIANT`/`_PROVIDER`
+  variable ever existed for potrf, so none is read;
+* `BATCHLAS_SELECT_TRACE=1` prints each decision; coverage `reached` rows carry the spelling in `chosen_algo` and
+  `native`/`vendor` in `chosen_origin` (so a readback is e.g. `native:lpanel:panel=8`).
+
+Known gaps, carried to the phase-2 gate (docs/design/flat-kernel-selection.md §12):
+
+* the sm_89 archive has no current-era `lpanel` timings, so the sm_89 tables never pick `lpanel`, although
+  [the measured LPanel window](#the-measured-lpanel-window) shows it winning there. `lpanel:panel=16` has never been
+  timed on any device, so no table picks it; only a pin reaches it;
+* `n` and `batch` weigh equally in the log distance, so an off-grid shape near the 4 GiB sweep cap can land on a row
+  far away in `n` (float n=704 batch=8192 maps to the n=320 row);
+* the sm_120 sweeps have `uplo=U` rows for float only. When a table has no row with the exact key, the exact key is
+  dropped and the nearest `uplo=L` row is used, so double/cfloat/cdouble Upper on sm_120 take the first
+  Upper-capable entry (`tiny`, `cta` or `vendor`) of a Lower ranking;
+* a pin is now strict, so factor_bench's posv `composed` arm pins potrf to `tiny` only up to the type's tiny ceiling (16 for cdouble, 32 otherwise) and to `native` above it.
+
+## The RouteTable era (historical)
+
+Four native tiers ship, all linked and correct. Before flat selection **two windows were routed**: a vendor-present
+build took a native tier for `Uplo::Lower`, `float` and `complex<float>`, at `n <= 256`, and cuSOLVER everywhere
+else. The tiers also exist so a `-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF` build stops throwing `NoRouteError`.
 
 All numbers: RTX 4090 (sm_89, 128 SM), one card held per campaign, under `experiments/gpu_guard.sh`. Ratios are
 `vendor / native` — **> 1 means native wins** — unless the table says otherwise.
@@ -11,41 +54,27 @@ All numbers: RTX 4090 (sm_89, 128 SM), one card held per campaign, under `experi
 
 | tier | file | orders | Uplo |
 |---|---|---|---|
-| `{Native, Tiny}` | `src/extensions/potrf_tiny.cc`, `tiny_device.hh` | `<= potrf_tiny_max_n<T>()` = 32, and 16 for cdouble | both |
-| `{Native, CTA}` | `src/extensions/potrf_cta.cc`, `potrf_cta_device.hh` | `<= potrf_cta_max_n_for_slm<T>(local_mem - 4096)` = **77/54/54/38** here (advertised, at the default target of 4 blocks/SM); 155/109/109/77 is the *resident* ceiling, `min_blocks_per_sm = 1` | both |
-| `{Native, LPanel}` | `src/extensions/potrf_lpanel.cc`, `potrf_lpanel_device.hh` | `<= potrf_lpanel_max_n_for_slm<T>(local_mem - 4096, max_wg)` = **744/368/368/180** here (advertised); see [the LPanel tier](#the-lpanel-tier) | **Lower only** |
-| `{Native, Blocked}` | `src/extensions/potrf_blocked.cc` | any | **Lower only** |
-| `{Vendor, Auto}` | cuSOLVER | any | both |
+| `tiny` (was `{Native, Tiny}`) | `src/extensions/potrf_tiny.cc`, `tiny_device.hh` | `<= potrf_tiny_max_n<T>()` = 32, and 16 for cdouble | both |
+| `cta` (was `{Native, CTA}`) | `src/extensions/potrf_cta.cc`, `potrf_cta_device.hh` | `<= potrf_cta_max_n_for_slm<T>(local_mem - 4096)` = **77/54/54/38** here (advertised, at the default target of 4 blocks/SM); 155/109/109/77 is the *resident* ceiling, `min_blocks_per_sm = 1` | both |
+| `lpanel:panel=8`, `lpanel:panel=16` (float) (was `{Native, LPanel}`) | `src/extensions/potrf_lpanel.cc`, `potrf_lpanel_device.hh` | `<= potrf_lpanel_max_n_for_slm<T>(local_mem - 4096, max_wg)` = **744/368/368/180** here (advertised); see [the LPanel tier](#the-lpanel-tier) | **Lower only** |
+| `blocked` (was `{Native, Blocked}`) | `src/extensions/potrf_blocked.cc` | any | **Lower only** |
+| `vendor` (was `{Vendor, Auto}`) | cuSOLVER | any | both |
 
 All four scalar types on every arm (cdouble n = 17..32 excepted on Tiny).
 
-**`preferred()` is no longer false, and it now carries TWO windows** (`route_potrf.hh:80-110`), both
-`Uplo::Lower` and both `float` and `complex<float>` only — `lpanel_types()` and an explicit `uplo` test gate the
-whole predicate before either window is consulted:
+**Historical: what `preferred()` routed before flat selection.** `route_potrf.hh` (deleted) carried two
+hand-written windows, both `Uplo::Lower` and both `float`/`complex<float>` only: `n <= 32` went to Tiny
+([the tiny potrf window](#the-tiny-potrf-window)), `32 < n <= 256` to CTA (float to 35, cfloat to 32) and LPanel
+above ([the measured LPanel window](#the-measured-lpanel-window)), and everything else, including `Upper`, the
+fp64 types and `n > 256`, to cuSOLVER. In a vendor-free build a static order array decided between CTA and Blocked
+([open debts](#open-debts) item 16; the one data point is float n=128 b=512, CTA 0.293 ms against blocked 0.301 ms).
+Today each cell is decided by its tuned row, `Upper` and fp64 included, where the later grids found native wins
+([the tiny potrf window, extended](#the-tiny-potrf-window-extended-to-upper-and-to-fp64)). The blocked driver's
+diagonal leaf is still the CTA kernel on a sub-view.
 
-* **`n <= 32` is the register tier.** `tiny_window(s)` is tested FIRST and, when it holds, `preferred()` answers
-  for `Algorithm::Tiny` and for nothing else (`route_potrf.hh:87`). Its bound is
-  `min(s.tiny_max_n, 32)`, so cdouble's lower instantiation cap would apply if the type reached the predicate at
-  all. Grid: [the tiny potrf window](#the-tiny-potrf-window).
-* **`32 < n <= 256` is CTA-or-LPanel.** `best_native_tier` picks one arm and `preferred()` additionally requires
-  it to be the tier the grid measured at that order — CTA to 35 for float, 32 for cfloat, LPanel above. Grid:
-  [the measured LPanel window](#the-measured-lpanel-window).
-
-Everything outside both windows — `Upper`, `double`, `cdouble`, and **n > 256** — still takes cuSOLVER. Two of
-those exclusions are *untested, not refuted*, with the grids that would settle them at
-[unmeasured Tiny windows](#unmeasured-tiny-windows-upper-and-the-double-types).
-
-**Tiny is FIRST in the candidate order and is now routed there.** See
-[the-tiny-tier](#the-tiny-tier) for its register table and two negative results; at the tier edge, n = 32, it
-measures **2.187 / 2.591x** the vendor at batch 16k / 32k (float), which is the cell that decided the boundary
-against LPanel. The rest of the candidate order (`route_potrf.hh`) is *mostly* a capability ladder:
-the blocked driver's diagonal leaf *is* the CTA kernel on a sub-view, so above `cta_max_n` only Blocked can serve.
-**Below it the two arms overlap and the static array decides** — `supports(Blocked)` carries no lower order bound, so
-for `Uplo::Lower` at `n <= cta_max_n` both are supported and the vendor-free walk takes CTA because it is listed
-first. That is a tuned guess nobody has measured; see [open-debts](#open-debts) item 16 and the one data point that
-exists (float n=128 b=512: CTA 0.293 ms against blocked 0.301 ms). Env var `BATCHLAS_POTRF_ROUTE` (`cta`/`blocked`/`native`/`vendor`/`native:cta`), synthesised from
-`op_env_stem(Op::potrf)`; no legacy spelling exists and none must be invented. `BATCHLAS_POTRF_NB` /
-`BATCHLAS_POTRF_W` are tuning, read once per process in the driver, never in the table.
+`BATCHLAS_POTRF_ROUTE` is the only potrf env variable; its spellings are in the
+[selection section](#selection-since-flat-kernel-selection-phase-2). `BATCHLAS_POTRF_NB` / `BATCHLAS_POTRF_W` are
+tuning, read once per process in the blocked driver, never by selection.
 
 | | float | double | complex\<float\> | complex\<double\> |
 |---|---|---|---|---|
@@ -60,7 +89,9 @@ every type.
 
 ### Route arms and the `supports()` gates
 
-`supports()` (`route_potrf.hh:32-61`) is correctness-only; every gate means "wrong answer or cannot launch":
+**Historical line numbers.** These gates were `supports()` in `route_potrf.hh` (deleted). They now live in
+`can_run()` in `src/ops/potrf/potrf.cc`, which a pin cannot bypass. Every gate means "wrong answer or cannot
+launch":
 
 | line | gate | why it is correctness |
 |---|---|---|
@@ -77,7 +108,7 @@ load/store transform, swept under both `Uplo` by `ResidualBothTriangles` and
 `OtherTriangleIsNeitherReadNorWritten`. Deliberately **no** lower order bound on the Blocked arm: in `supports()` it
 would make a forced `blocked` at small `n` fall through `automatic()` to cuSOLVER and measure nothing. `PotrfShape`
 adds `cta_max_n` (asked of the *device*), `blocked_available` (does the driver exist in this *build*) and
-`has_sg32`; the builder is `src/backends/potrf_route.hh:20-55`, so the table stays pure.
+`has_sg32`. That builder (`src/backends/potrf_route.hh`) is deleted; `can_run()` asks the device directly.
 
 ### What `preferred()` answered before P3
 
@@ -587,7 +618,7 @@ is RED on all four types (`inf`, 1.99e+266, 9.39e+25, 6.75e+234).
 4. **The strided-`ld` cost of the trailing gemm has never been isolated.** Every operand is a sub-view at the parent
    `ld`, `OpShape` carries no leading dimension so the router cannot see it, and the cheap probe (pack `L21`
    contiguous once per panel step; ~59 MB, ~0.5 ms of copy at n=1024 b=256) was never run.
-5. **`Uplo::Upper` is unimplemented in the blocked driver** and `supports()` refuses it (`route_potrf.hh:55`).
+5. **`Uplo::Upper` is unimplemented in the blocked driver** and `can_run()` refuses it (`src/ops/potrf/potrf.cc`; formerly `route_potrf.hh:55`).
    Routes: mirror (as syev does) or a transposed schedule.
 6. **WP3's trsm `preferred()` windows were measured on the racing kernel** above `q*batch ~ 65k` and have not been
    re-run. The barrier costs one `__syncthreads()` per work-group so the timings are approximately still valid, but
@@ -680,7 +711,10 @@ no budget on this box can reach the case that distinguishes the two.
 
 ### native_tier_preferred
 
-`route_potrf.hh` now declares the hook it was missing. The crossover **is** the capacity:
+**Historical.** The hook is deleted with `route_potrf.hh`. The vendor-free tier choice is now the first runnable
+non-vendor entry of the tuned row. What follows records the old predicate.
+
+`route_potrf.hh` declared the hook it was missing. The crossover **is** the capacity:
 below it the blocked driver at `n <= nb` is the CTA leaf plus a fixup launch and cannot
 win; above it the CTA arm is not supported. Declaring it matters because the absent hook
 defaulted to `true` for every route, making the choice an accident of the order array.
@@ -710,6 +744,9 @@ The other two arms split on the capacity, `cta_holds = (cta_max_n >= 1) && (orde
 cta_max_n)`: CTA takes it, Blocked takes its complement.
 
 ### The tiny potrf window
+
+**Historical routing, current evidence.** `tiny_window()` is deleted; Tiny runs wherever its tuned row ranks it
+first. The grid below is the sm_89 measurement behind that choice.
 
 **2026-09-14.** potrf's register tier shipped with P1 and was never routed: `preferred()`
 excluded `order <= 32` outright and `native_tier_preferred` answered **false** for Tiny, so
@@ -760,6 +797,9 @@ kernel has no uplo gate in `supports()` because Upper is the same recurrence on 
 transposed tile -- so the cost of the restriction is an unclaimed win, not a wrong answer.
 
 ### Unmeasured Tiny windows: Upper and the double types
+
+**Historical.** Both were measured later ([extended window](#the-tiny-potrf-window-extended-to-upper-and-to-fp64)).
+The tests and predicates cited below (`TinyRouteTableAndVocabulary`, `lpanel_types()`) are deleted.
 
 Two exclusions from [the tiny potrf window](#the-tiny-potrf-window) are **untested, not refuted**. Neither is a
 correctness gate and neither needs new device code — both kernels are already instantiated and linked. What is
@@ -1472,6 +1512,11 @@ P7 and is stale in five places. Recorded so nobody re-derives them:
 
 ### The measured LPanel window
 
+**Historical routing, current evidence.** The `preferred()` window this grid set is deleted. On sm_120 the tuned
+table picks `lpanel:panel=8` from its own sweep; the sm_89 tables never pick it, because the sm_89 sweep archive has
+no current-era `lpanel` rows ([selection](#selection-since-flat-kernel-selection-phase-2)). This grid is the evidence
+that sm_89 should, once it is re-swept.
+
 **2026-09-14, integration.** `benchmarks/factor_bench` one process per cell, arms
 INTERLEAVED in the timed loop (`--arms=vendor,lpanel,cta,blocked`), 7 reps, medians,
 `gpu_guard.sh 1`, host residual on items 0 and batch-1 of every timed row. Raw CSVs:
@@ -1942,6 +1987,11 @@ residency claim its own probe refutes.
 
 ## The tiny potrf window, extended to Upper and to fp64
 
+**Historical routing, current evidence.** The windows armed below lived in `route_potrf.hh` and are deleted; the
+tuned tables carry fp64 rows for both devices, and `uplo=U` rows for all four types on sm_89 but for float only on
+sm_120 (see the gaps under [selection](#selection-since-flat-kernel-selection-phase-2)). The breaks in
+[arming both windows](#arming-both-windows) tested the deleted predicate, not the tables.
+
 Two things this page previously recorded as *untested, not refuted* are now measured, and both
 turned out to be wins — one of them the widest margin in the campaign. Both grids are at batch
 **32768**, R8, interleaved arms in one process, ratios in time against the **vendor** arm, and
@@ -2026,6 +2076,8 @@ Inside the window `Auto` tracks the pinned tier to three digits (pinned: 3.014, 
 1.000x, which is the vendor. The window does what it says and nothing else.
 
 ### Arming both windows
+
+**Historical.** These breaks targeted `route_potrf.hh` and `route_vocabulary_tests`' RoutePotrf suite, both deleted.
 
 R9, four breaks, each rebuilt and run against `potrf_tests` and `route_vocabulary_tests`:
 

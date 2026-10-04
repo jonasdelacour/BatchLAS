@@ -1,6 +1,7 @@
 # Flat kernel selection
 
-Status: **plan, agreed 2026-10-02, not started.** Written against `main` at `a1063892`. It is meant
+Status: **phases 1-2 implemented on branch worktree-flat-select (2026-10-04); gate results pending.**
+Plan agreed 2026-10-02; deviations from the sketch are in §12. Written against `main` at `a1063892`. It is meant
 to be executed from `main` in a fresh session, phase by phase. Nothing here depends on PRs #133,
 #135 or #136, or on any branch other than `main`. The only exception is the potrf route-sweep
 data, which this doc's PR copies onto `main` (`benchmarks/results/routing/`).
@@ -644,3 +645,83 @@ The sm_89 gate needs the RTX 4090 box. The sm_120 gate needs the Blackwell box (
   - `coverage.cc:195` (LPanel missing);
   - `potrf.hh:51-53` (wrong `options.hh` line numbers);
   - `factorization.cc:727-730` ("both tiers").
+
+## 12. As built (phases 1-2)
+
+Where the code differs from the sketches above, the code wins. These are the differences.
+
+**Phase 1, `src/select/`:**
+- **A bare `native` pin with no runnable non-vendor candidate falls back to Auto with a warning**
+  (once per op). It does not throw. This is the one exception to R6; it keeps today's meaning of
+  `native`, which the `route-native` re-run of `potrf_tests` relies on. Every other bad pin throws
+  `std::invalid_argument`.
+- **A CPU device never borrows a GPU table.** Without its own `*.cpu.txt` it goes straight to the
+  last resort. A GPU device can still borrow across families (§5.5 step 3).
+- **Tables store spellings, validated on first use.** A table is parsed into spellings without
+  knowing the op's `Choice` type; each entry is checked against `candidates<T>()` the first time
+  `choose()` reads that table. `tuned_tables_tests` does the same check for every shipped table
+  without a GPU.
+- **`Key` is a list of name/value pairs** (`select::Key = std::vector<KeyField>`), not a
+  per-op struct. Field names must match the table's `# keys:` line; a missing one throws.
+- **`TraceScope` takes an `OpShape`** (the coverage key), built with `square_shape<B, T>(n, batch)`
+  plus the fields the op sets itself (`uplo`).
+- **`choose()` takes a `Rules{aliases, last_resort}`** from the op. The aliases and the
+  last-resort order are op data, not helper code.
+- Zero-field families use `NoFields<"name">`, as §4.2 allows.
+
+**Phase 2, potrf:**
+- No `struct Key` in `choice.hh`; `key_of` in `potrf.cc` builds a `select::Key`. `key_names`
+  stays in `choice.hh`.
+- `aliases`, `last_resort` and `rules` live in `choice.hh`, so tests and `factor_bench` use the
+  library's list.
+- **One alias beyond §5.3: bare `lpanel` → `lpanel:panel=8`.** In the old vocabulary a bare
+  algorithm word meant native; `tiny`, `cta` and `blocked` already parse as themselves.
+  potrf never had a `_VARIANT`/`_PROVIDER` variable, so no other legacy spelling exists.
+- Tiny's work-group gate uses a new `kPotrfTinyWgSize` in `potrf_native.hh`, because the real
+  `kTinyWgSize` lives in a header that pulls in `<sycl/sycl.hpp>`. A `static_assert` in
+  `potrf_tiny.cc` keeps them equal.
+- `Lpanel`'s `can_run` calls `potrf_lpanel_max_n_for_slm<T>(budget, max_wg, kMinBlocksPerSm,
+  panel)`, which returns 0 for a panel width the type does not instantiate. That one call covers
+  the width check (no separate `lpanel_nb_built`) and the SLM/work-group limits for that width.
+- CTA's `can_run` is exactly the old `supports()` clause. The driver's `wg_size <= max_wg` check
+  is left out: it can only fail when `max_wg < 32`, which the sub-group-32 gate already excludes.
+- **Blocked's workspace is `potrf_blocked_buffer_size` alone.** gemm and trsm take no workspace,
+  so the "adds gemm/trsm buffer sizes" line in §4.3 does not apply.
+- The `posv_tests` readback (§8) is replaced, not deleted: `FusedSolveArmSolvesOnBothTriangles`
+  must know whether a native potrf ran, so a helper pins each non-vendor candidate with
+  `ScopedPin` and asks `potrf_buffer_size` whether it accepts the pin.
+- Three test edits outside §8's deletion list: `JustPastTheCeilingHasNoCtaRoute` now checks a
+  `cta` pin is accepted at the ceiling and throws one past it; the "NOT the guard" `potrf_route`
+  lines in the CTA, Blocked, Tiny and LPanel facade tests are gone (the bit-exact guards stay);
+  `RouteVocabulary.AlgorithmEnumeratorValuesAreAbi` is kept and the Tiny round trip moved to
+  `RouteVocabulary.TinyVocabularyRoundTrip`.
+- **Tests (§8):** `tests/potrf_candidates_tests.cc` (label `blas`) holds §8.1-8.3 and §8.5:
+  pinned candidates straddling their ceilings, pinned-equals-direct-driver bit for bit, a
+  saturating batch of 1024, `CanRunEqualsLaunch`, the exact workspace in a poisoned arena, and the
+  pin tests (unknown/uncompiled/can_run-false pins throw, aliases, bare `native`, `ScopedPin` over
+  the environment). The §8.4 device half is `ShippedRowsRunOnTheirOwnDevice` (every entry of every
+  row of the own-device table is accepted as a pin at that row's key) and
+  `AutoReadsEveryKeyField` (hand-read Auto rows straddling `batch` per dtype and `uplo` for
+  float, on sm_120 and sm_89). The tier suites pin with `ScopedPin`; the potrf direct-refusal tests
+  are gone. Deliberate breaks B1-B9 (tests report) each gave a narrow red set.
+- **Vendor-free misses:** when no candidate can run and the vendor is compiled out, `choose()`
+  funnels into `throw_no_vendor_route`, so the `NoRouteError` and the coverage `miss` row survive.
+- **Not done in phase 2:** the `potrf.hh:51-53` stale line numbers (§11) are not fixed. No
+  vendor-free build and no §10.3 speed gate were run.
+
+**Behaviour changes visible to callers:**
+- A bad pin throws. `factor_bench`'s posv `composed` arm therefore pins potrf to `tiny` only up to
+  the type's tiny ceiling (16 for cdouble, 32 otherwise) and to `native` above it.
+- The vendor coverage readback is `vendor:vendor`, not `vendor:auto`. benchviz matches
+  `startswith("vendor")` and the converter accepts both.
+
+**Data findings from the converter** (for the gate and phase 4):
+- The sm_89 archive has no current-era `lpanel` timings, so the sm_89 tables never pick `lpanel`,
+  although `docs/perf/potrf.md#the-measured-lpanel-window` measured it winning there.
+- The sm_120 sweeps have `uplo=U` rows for float only. The other sm_120 dtypes serve Upper from
+  the nearest Lower row (the exact-key drop of §5.4), so they rank only the Upper-capable entries
+  of a Lower measurement.
+- **Off-grid lookups near the 4 GiB sweep cap can land far away in `n`**, because `n` and
+  `batch` weigh equally in the log distance: float n=704 batch=8192 maps to the n=320 row, since
+  the large-n rows at that batch were never measured. Known gap for the §10.3 gate and phase 4
+  (weight the keys, or fill the grid).

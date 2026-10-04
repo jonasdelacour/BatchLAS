@@ -3,7 +3,7 @@
 // The ORGQR shape builder and route resolution.
 //
 // Same split, and same reason, as src/backends/geqrf_route.hh and
-// potrf_route.hh: route_resolve.hh:19-20 requires the table to read ONLY its
+// getrf_route.hh: route_resolve.hh:19-20 requires the table to read ONLY its
 // arguments, so every getenv and every SYCL query lives here and the table sees
 // a plain struct.
 //
@@ -68,7 +68,7 @@ inline std::optional<dispatch::OrgqrShape> orgqr_op_shape(
 
     s.is_gpu = (ctx.device().type == DeviceType::GPU);
 
-    // THE GATE AND ITS WRITER LAND TOGETHER (potrf_route.hh). ormqr's table
+    // THE GATE AND ITS WRITER LAND TOGETHER. ormqr's table
     // has no heterogeneous_batch gate and its builder never sets the field, so
     // ormqr's routing is blind to per-item extents today; orgqr's is not.
     s.heterogeneous_batch = A.is_heterogeneous();
@@ -76,7 +76,7 @@ inline std::optional<dispatch::OrgqrShape> orgqr_op_shape(
     // NO has_sg32 AND NO SLM CAPACITY. Deliberate, and the reason is in
     // route_orgqr.hh: ormqr_blocked carries no [[sycl::reqd_sub_group_size(32)]]
     // and holds nothing resident, so a sub-group field or a capacity here would
-    // be a DECORATIVE input -- the state route_potrf.hh criticises trsm
+    // be a DECORATIVE input -- the state route_trsm.hh was criticised
     // for. They arrive with the arm that needs them.
     //
     // TRUE for all four scalar types: orgqr_blocked.cc ships the identity fill

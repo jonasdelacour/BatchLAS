@@ -14,7 +14,7 @@ conservative. Most of the obvious moves in here have already been made and measu
 | [gemm.md](gemm.md) | `gemm` | **yes** — `double` broadly, `float` NN squares at `max_dim <= 32`; complex never |
 | [level3.md](level3.md) | `symm` `hemm` `syrk` `herk` `syr2k` `her2k` `trmm` | hand-rolled `if`-chains in the facade, not route tables |
 | [trsm.md](trsm.md) | `trsm` | **yes**, broadly — but see its open debts before trusting a ratio |
-| [potrf.md](potrf.md) | `potrf` | no — two native tiers ship, neither is preferred |
+| [potrf.md](potrf.md) | `potrf` | **yes**, per cell — flat selection over `tuned/potrf.<dtype>.<device>.txt`, no route table; five native kernels ship |
 | [qr.md](qr.md) | `geqrf` `orgqr` `ormqr` | **yes** — `ormqr` native-first; `geqrf` above a per-type order floor plus a tall-panel clause; `orgqr` to n = 512 |
 | [lu.md](lu.md) | `getrf` `getrs` `getri` | **yes** — four windows, all `float`/`cfloat`-leaning |
 | [gemv.md](gemv.md) | `gemv` | **yes** — one `complex<double>` transposed window |

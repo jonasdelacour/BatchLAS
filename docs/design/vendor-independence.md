@@ -63,7 +63,8 @@ Three rules follow, and each has cost this codebase something:
 * **Never put a speed threshold in `supports()`.** A forced route bypasses `preferred()` — that is
   what forcing is for — but never `supports()` (`route_resolve.hh:76`). A speed cutoff there makes a
   pinned route fall through to `automatic()`, so the test that pinned it silently measures something
-  else. `route_potrf.hh` and `route_geqrf.hh` both warn against this at their own tables. Conversely,
+  else. `route_geqrf.hh` warns against this at its own table (potrf's `can_run` in
+  `src/ops/potrf/potrf.cc` follows the same rule). Conversely,
   moving a measured window into `supports()` leaves a working shape with **no supported route at all**
   the moment the vendor goes away.
 * **Never fix a vendor-free tier choice in `preferred()`.** `preferred()` is consulted by the loop

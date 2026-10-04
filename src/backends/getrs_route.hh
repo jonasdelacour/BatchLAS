@@ -30,7 +30,7 @@ namespace batchlas::backend {
 //
 // THE THREE STRUCTURAL AGREEMENTS ARE TESTED HERE AND NOWHERE ELSE IN THE ROUTING
 // LAYER: A square, A.rows() == B.rows(), and equal batch. They duplicate
-// options.hh:646-650's checks deliberately (the potrf_route.hh:43-47 rule): the
+// options.hh:646-650's checks deliberately: the
 // builder must not describe a non-conforming pair even if a future caller reaches
 // it without the arena spelling.
 //
@@ -84,7 +84,7 @@ inline std::optional<dispatch::GetrsShape> getrs_op_shape(
     // MAX_SUB_GROUP_SIZE is wrong in both directions.
     s.has_sg32 = ctx.device().supports_sub_group_size(32);
 
-    // THE GATE AND ITS WRITER LAND TOGETHER (potrf_route.hh). Both views
+    // THE GATE AND ITS WRITER LAND TOGETHER. Both views
     // are asked, because either one being heterogeneous breaks the single-tuple
     // launch -- and OpShape has one flag, so the honest reduction is OR.
     s.heterogeneous_batch = A.is_heterogeneous() || Bmat.is_heterogeneous();
@@ -97,7 +97,7 @@ inline std::optional<dispatch::GetrsShape> getrs_op_shape(
     s.blocked_available = sycl_getrs::getrs_blocked_available<T>();
 
     // THE FUSED TIER'S TWO CAPACITY NUMBERS, and the local-memory one is ASKED OF
-    // THE DEVICE rather than taken from a constant -- route_potrf.hh's
+    // THE DEVICE rather than taken from a constant -- the same
     // rule, and getrf_route.hh does the same for cta_max_n. The 4096 B reserve is
     // the one cmake/BatchLASDetectSYCL.cmake:57-67 applies to every other
     // device-BLAS sizing decision in this library, and the formula behind the

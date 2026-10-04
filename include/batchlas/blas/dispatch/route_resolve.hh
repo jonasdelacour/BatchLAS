@@ -78,7 +78,7 @@ inline Route resolve_route_uninstrumented(Route forced, const Shape& s,
         // The native-tier tie-break belongs here too, not only in the vendor-free
         // walk. Without it, pinning a bare `native` on a vendor-present box picks
         // the FIRST merely-supported arm, which for an op whose preferred() is
-        // all-false (geqrf, orgqr, potrf) is a different tier than the vendor-free
+        // all-false (geqrf, orgqr) is a different tier than the vendor-free
         // build actually takes -- so benchmarking or bisecting the native path
         // with the env var measures a route that never ships.
         for (const Route* r = Table::order_begin(); r != Table::order_end(); ++r) {

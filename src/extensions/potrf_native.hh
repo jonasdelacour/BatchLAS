@@ -1,8 +1,7 @@
 #pragma once
 
-// Native batched POTRF, declarations only: the route table and the vendor-free facade need no
-// <sycl/sycl.hpp>. preferred() is false for every tier. EVERY *_dispatch re-applies
-// supports()'s gates -- a rejected forced route silently runs the vendor. evidence: docs/perf/potrf.md
+// Native batched POTRF, declarations only (no <sycl/sycl.hpp>). EVERY *_dispatch re-checks its
+// limits, and can_run() in src/ops/potrf/potrf.cc must agree exactly. evidence: docs/perf/potrf.md
 
 #include "../util/internal-api.hh"
 #include "../util/resident_capacity.hh"
@@ -21,6 +20,9 @@ namespace batchlas::sycl_potrf {
 // and is a flat compile-time constant; 0 = absent. evidence: docs/perf/potrf.md#the-tiny-tier
 template <typename T>
 BATCHLAS_INTERNAL_API int potrf_tiny_max_n();
+
+// The tier's fixed work-group size; potrf_tiny_dispatch refuses a smaller MAX_WORK_GROUP_SIZE.
+inline constexpr int kPotrfTinyWgSize = 64;
 
 // NOT zero: an empty or SHORT caller `info` span means "not requested" and draws scratch.
 template <typename T>

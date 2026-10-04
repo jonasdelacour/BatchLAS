@@ -472,6 +472,12 @@ n=512 b=512; cfloat half that). Routes were confirmed with `BATCHLAS_COVERAGE_OU
 `~/.claude/jobs/698ef31c/tmp/wp-potrf/` (`lp_ab_v1.csv`, `v2_ab.csv`, `final_ab.csv`,
 `nbw_base.csv`, `nbw2_base.csv`, `bw_new.csv`, `posv_base.csv`).
 
+**potrf routing below is historical.** Flat selection deleted `route_potrf.hh`, its sm_120 edges
+and its `native_tier_preferred` cap. potrf now takes the first runnable entry of the nearest row of
+`tuned/potrf.<dtype>.sm_120.txt`, converted from the sm_120 route sweeps
+([potrf.md](potrf.md#selection-since-flat-kernel-selection-phase-2)). The kernel and tuning-constant
+results stand; the posv windows are still `RouteTable` routing.
+
 ### potrf LPanel vector sB
 
 `potrf_lpanel_body`'s left-looking update read its lane-uniform sB operand with one

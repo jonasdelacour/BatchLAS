@@ -41,7 +41,7 @@ enum class Algorithm : uint8_t {
 
     // APPENDED, never inserted: route.hh is an installed header behind a SOVERSION, so
     // every enumerator above keeps the number it shipped with. Walk order is the
-    // kPotrfOrder / kGetrfOrder / kGeqrfOrder arrays, never this numeric value, so Tiny
+    // kGetrfOrder / kGeqrfOrder arrays, never this numeric value, so Tiny
     // is still the first arm tried despite being last here.
     Tiny,             // one matrix per sub-group PARTITION, held in registers
     LPanel,           // left-looking fused panel: local memory holds ONE n x NB panel

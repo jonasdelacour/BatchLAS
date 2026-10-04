@@ -56,10 +56,11 @@ Rules, as implemented:
   the vendor-free walk, so flipping it moves nothing in a vendor-present build (`:32-83`). Tables that do not declare
   it get `true`.
 
-`RouteTable<Op, T>` specialisations exist for thirteen ops: `gemm`, `gemv`, `trsm`, `potrf`, `getrf`, `getrs`,
+`RouteTable<Op, T>` specialisations exist for twelve ops: `gemm`, `gemv`, `trsm`, `getrf`, `getrs`,
 `getri`, `geqrf`, `orgqr`, `ormqr`, `gesvd` and `spmm` get one header each under `include/batchlas/blas/dispatch/`;
 `syev`'s lives with the op instead, at `include/batchlas/blas/functions/syev.hh:330`. The four level-3 tile ops have
-none. (`level3_coverage.hh:21` still says only "gemm, gesvd, ormqr and syev" have tables — that comment is stale, the
+none. `potrf` had one until flat selection; it now chooses from `tuned/potrf.*.txt` in `src/ops/potrf/potrf.cc`
+([potrf.md](potrf.md#selection-since-flat-kernel-selection-phase-2), docs/design/flat-kernel-selection.md). (`level3_coverage.hh:21` still says only "gemm, gesvd, ormqr and syev" have tables — that comment is stale, the
 sentence it supports is not.)
 
 ### The vendor-availability gate

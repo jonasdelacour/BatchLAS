@@ -205,7 +205,7 @@ void append_static_rows(std::ostringstream& out) {
         {"getrs", factorization_vendor_available<B>, true},   // getrs_native (laswp + 2 routed trsm)
         {"getri", factorization_vendor_available<B>, true},   // getri_blocked (P into C + 2 routed trsm)
         {"ormqr", factorization_vendor_available<B>, true},   // ormqr_blocked
-        {"potrf", solver_vendor_available<B>,        true},   // potrf_tiny + potrf_cta + potrf_blocked
+        {"potrf", solver_vendor_available<B>,        true},   // tiny + cta + lpanel + blocked
         {"syev",  solver_vendor_available<B>,        true},   // cta/blocked/two_stage
         {"gesvd", solver_vendor_available<B>,        true},   // jacobi/cta/blocked
         {"spmm",  sparse_vendor_available<B>,        true},   // spmm_native_csr (gather + atomic scatter)
