@@ -778,3 +778,13 @@ Where the code differs from the sketches above, the code wins. These are the dif
 5. Open: the sm_89 live gate. The sm_89 tables are sparse (32-88 rows) and contain no current-era
    lpanel timings, so on sm_89 the new choices are least certain; run it before merging, or accept
    it as a phase-4 retune item.
+
+## 13. Phase 3 decisions (maintainer, 2026-10-04)
+
+The full plan, with file:line maps, is in `flat-kernel-selection-phase3-plan.md`. These decisions were made after it:
+- **Stack.** P3.0 select infrastructure → P3.1 posv → P3.2 tuner core (`tools/tune`, plus a `--gate` mode, pulled forward from phase 4) → P3.2b blackwell kernels → P3.3 trsm → P3.4 gemm. Each PR is based on the one before it.
+- **sm_89 tables are transcribed old routing.** For posv, trsm and gemm, today's router is evaluated at every grid cell. Its preference order becomes an untimed ranked row (`tiny - | cta - | blocked -`, header `source=transcribed:<sha>`). This departs from §3 "ranked list with times" until a phase-4 retune on the 4090. On-grid cells are unchanged by construction. The sm_89 gate times only the off-grid cells where the nearest transcribed row disagrees with the old predicate.
+- **Blackwell kernels before trsm/gemm.** The kernels from `worktree-blackwell-tuning` (`trsm_sg_left.cc`, 2 wide gemm configs) are ported first, as kernels only, with every `is_sm120_family`/`cuda_cc` predicate dropped. The sweeps then rank them as ordinary candidates.
+- **gemm:** delete the 5 experimental variants and the 4 pin-only register variants. Rejected: a screening pass (the full §6.3 protocol is used); vendor before direct in last resort; routing symm/syrk/syr2k/trmm through the public gemm. These are to be revisited when P3.4 starts.
+- **§11 posv bullet is wrong.** posv calls the public `potrf`/`trsm`. Its only direct driver calls are its own kernels (`posv_tiny_dispatch`, `potrs_fused_dispatch`). Nothing needs migrating there.
+
