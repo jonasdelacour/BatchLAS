@@ -617,7 +617,8 @@ TYPED_TEST(GeqrfCandidates, AutoReadsTheTranscribedTable) {
                 {21, 21, "tiny", "tiny"},     {33, 33, "vendor", "cta"},  {63, 63, "vendor", "cta"},
                 {64, 64, "cta", "cta"},       {96, 96, "cta", "cta"},     {97, 97, "blocked", "blocked"},
                 {160, 40, "cta", "cta"},      {159, 40, "vendor", "cta"}, {124, 31, "vendor", "cta"},
-                {400, 100, "blocked", "blocked"}, {130, 70, "blocked", "blocked"}};
+                {400, 100, "blocked", "blocked"}, {130, 70, "cta", "cta"},
+                {400, 90, "blocked", "blocked"}};  // 400x90 is past Cta's area: the fit, not the crossover
     else if constexpr (std::is_same_v<T, std::complex<float>>)
         rows = {{4, 4, "vendor", "tiny"},  {5, 5, "tiny", "tiny"},    {9, 9, "vendor", "tiny"},
                 {17, 17, "vendor", "cta"}, {20, 20, "vendor", "cta"}, {22, 22, "vendor", "tiny"},

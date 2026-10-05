@@ -7,7 +7,7 @@
 #include "geqrf_panel_reg_device.hh"
 #include "larft_wy.hh"
 
-#include "../sycl/gemm_kernels.hh"
+#include <batchlas/blas/functions/gemm.hh>
 #include "../queue.hh"
 #include "../util/template-instantiations.hh"
 
@@ -111,10 +111,9 @@ GeqrfBlockedWs<T> geqrf_blocked_layout(Queue& ctx, BumpAllocator& pool,
 }  // namespace
 
 // Co-located with the driver so "the flag is true" and "this TU is compiled" are one fact.
-// RouteTable<Op::geqrf,T>::preferred() now routes native above a per-type order floor
-// (float 64, cfloat 48, double 96, cdouble 256) and for tall panels, so this flag also
-// gates the DEFAULT route and not only vendor-free builds: reporting false here sends
-// every in-window shape back to the vendor.
+// geqrf's can_run reads it, and tuned/geqrf.*.txt ranks blocked first on large and tall
+// shapes, so this flag also gates the DEFAULT choice and not only vendor-free builds:
+// reporting false here sends every such shape back to the vendor.
 // evidence: docs/perf/small-n-baseline.md#geqrf, docs/perf/qr.md#route-arms
 template <> bool geqrf_blocked_available<float>()                { return true; }
 template <> bool geqrf_blocked_available<double>()               { return true; }
@@ -158,8 +157,19 @@ Event geqrf_blocked_dispatch(Queue& ctx,
                              Span<std::byte> workspace,
                              GeqrfTrailingGemm<T> trailing_gemm,
                              GeqrfPanelLeaf panel_leaf) {
-    if (!trailing_gemm) {  // mandatory: geqrf injects the public gemm, which picks its own kernel
-        throw batchlas::invalid_argument("geqrf_blocked: no trailing gemm injected");
+    // An empty seam means the public gemm on the queue's backend: never a fixed kernel, which
+    // would bypass gemm's selection.
+    if (!trailing_gemm) {
+        trailing_gemm = [](Queue& c,
+                           const MatrixView<T, MatrixFormat::Dense>& ga,
+                           const MatrixView<T, MatrixFormat::Dense>& gb,
+                           const MatrixView<T, MatrixFormat::Dense>& gc,
+                           T galpha, T gbeta, Transpose gta, Transpose gtb,
+                           ComputePrecision gp) {
+            return with_backend(c, [&](auto Back) {
+                return ::batchlas::gemm<Back.value, T>(c, ga, gb, gc, galpha, gbeta, gta, gtb, gp);
+            });
+        };
     }
 
     const int m = static_cast<int>(A.rows());

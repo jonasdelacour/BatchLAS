@@ -24,7 +24,7 @@
 //
 // --offgrid COUNT SEED: random off-grid (m, n) points instead, with the old Auto choice at the
 // capacities given as `dtype:tiny_max_n:cta_max_m:cta_max_elems` arguments, vendor present and
-// vendor-free. scripts/geqrf_offgrid_gate.py replays them against the tables.
+// vendor-free. tools/transcribe/geqrf_offgrid_gate.py replays them against the tables.
 
 #include <batchlas/blas/dispatch/route_geqrf.hh>
 

@@ -58,10 +58,7 @@ bool can_run(const GeqrfChoice& c, const select::Device& d, const MV<T>& A) {
     const bool native = d.is_gpu && d.has_sg32 && !A.is_heterogeneous() && m >= n && n >= 1 && A.batch_size() >= 1;
     const auto budget = static_cast<std::size_t>(d.slm_budget);
     return std::visit(overloaded{
-        [&](Tiny) {
-            return native && m == n && n <= sycl_geqrf::geqrf_tiny_max_n_for_slm<T>(budget) &&
-                   d.max_wg >= sycl_geqrf::kGeqrfTinyWgSize;
-        },
+        [&](Tiny) { return native && m == n && n <= sycl_geqrf::geqrf_tiny_max_n_for_slm<T>(budget); },
         [&](Cta) { return native && sycl_geqrf::geqrf_cta_fits<T>(static_cast<int>(m), static_cast<int>(n), budget); },
         // Blocked's panel leaf IS Cta's device function: it needs the tier present, not the fit.
         [&](Blocked) {
