@@ -8,6 +8,14 @@ achievable roof**; two cards in the chassis, device 0 drives the display. Ratio 
 
 ## What ships
 
+**Flat selection (phase 5, `docs/design/flat-select-p5/gemv.md`).** `route_gemv.hh` and `src/backends/gemv_route.hh`
+are deleted. gemv now decides in `src/ops/gemv/gemv.cc` over the families `cta`, `direct` and `vendor`; the
+`supports()` clauses below are its `can_run()` (plus the x/y length and batch agreement the old shape builder checked),
+and the `preferred()` window is data: `tuned/gemv.<dtype>.{sm_89,sm_120}.txt`, transcribed from the old router with
+grid points on both sides of every edge (red 63/64 and 352/353, out 255/256, batch 319/320), so nearest-row lookup
+reproduces the window exactly. A pin the shape cannot take now throws instead of falling through. The sections below
+describe the deleted code and remain the evidence for the window.
+
 ### The route arms
 
 `kGemvOrder` (`include/batchlas/blas/dispatch/route_gemv.hh:26-30`) is a **capability ladder, tighter first**, not a

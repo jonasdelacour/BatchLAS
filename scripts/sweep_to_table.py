@@ -266,6 +266,28 @@ TRSM = OpSpec(
 )
 
 
+def gemv_key(r):
+    try:
+        key = (str(r["trans"]), int(r["out"]), int(r["red"]), int(r["batch"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+    return key if key[0] in ("N", "T") and min(key[1:]) >= 1 else None
+
+
+# gemv (phase 5): work ~ out red batch; ConjTrans folds to T. No sweep source: both sm_89 and
+# sm_120 are transcribed old routing (docs/design/flat-select-p5/gemv.md).
+GEMV_CHOICES = ("cta", "direct", "vendor")
+GEMV = OpSpec(
+    op="gemv",
+    keys="trans:exact out:log red:log batch:log",
+    row_ops=("gemv",),
+    row_key=gemv_key,
+    arm_spelling={c: c for c in GEMV_CHOICES},
+    arm_route={c: (("vendor:vendor",) if c == "vendor" else (f"native:{c}",)) for c in GEMV_CHOICES},
+    candidate_order=list(GEMV_CHOICES),
+)
+
+
 def parse_keys(spec):
     """'# keys:' text -> [(name, is_log, weight)]; a :log weight defaults to 1."""
     out = []
@@ -636,7 +658,7 @@ def potrf_offgrid(texts, points):
 
 
 POTRF.review = potrf_offgrid
-OPS = [POTRF, POSV, TRSM]
+OPS = [POTRF, POSV, TRSM, GEMV]
 OP_BY_NAME = {s.op: s for s in OPS}
 
 

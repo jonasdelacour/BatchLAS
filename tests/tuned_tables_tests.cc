@@ -7,6 +7,7 @@
 #include "../src/ops/posv/choice.hh"
 #include "../src/ops/potrf/choice.hh"
 #include "../src/ops/trsm/choice.hh"
+#include "../src/ops/gemv/choice.hh"
 #include "../src/select/select.hh"
 
 #include <algorithm>
@@ -56,6 +57,13 @@ std::vector<std::string> candidates(const std::string& op, const std::string& dt
         if (dtype == "double") return spellings(trsm::candidates<double>());
         if (dtype == "cfloat") return spellings(trsm::candidates<std::complex<float>>());
         if (dtype == "cdouble") return spellings(trsm::candidates<std::complex<double>>());
+    }
+    namespace gemv = batchlas::ops::gemv;
+    if (op == "gemv") {
+        if (dtype == "float") return spellings(gemv::candidates<float>());
+        if (dtype == "double") return spellings(gemv::candidates<double>());
+        if (dtype == "cfloat") return spellings(gemv::candidates<std::complex<float>>());
+        if (dtype == "cdouble") return spellings(gemv::candidates<std::complex<double>>());
     }
     return {};
 }
@@ -190,6 +198,7 @@ void expect_tables_declare(const std::string& op, const Names& names) {
 TEST(TunedTables, PotrfTablesDeclareChoiceKeyNames) { expect_tables_declare("potrf", batchlas::ops::potrf::key_names); }
 TEST(TunedTables, PosvTablesDeclareChoiceKeyNames) { expect_tables_declare("posv", batchlas::ops::posv::key_names); }
 TEST(TunedTables, TrsmTablesDeclareChoiceKeyNames) { expect_tables_declare("trsm", batchlas::ops::trsm::key_names); }
+TEST(TunedTables, GemvTablesDeclareChoiceKeyNames) { expect_tables_declare("gemv", batchlas::ops::gemv::key_names); }
 
 const sel::Table& embedded(const std::string& name) {
     static std::map<std::string, sel::Table> cache;
@@ -240,6 +249,38 @@ TEST(TunedTables, TrsmSm89TablesHoldExactlyTheChoiceGrid) {
             got.insert(row.keys[0] + " " + row.keys[1] + " " + row.keys[2] + " " + row.keys[3] + " " + row.keys[4]);
         EXPECT_EQ(got, want) << dt;
         EXPECT_EQ(t.rows.size(), want.size()) << dt;
+    }
+}
+
+// gemv's transcriber likewise, for both transcribed devices: one row per (trans, out, red,
+// batch) cell of choice.hh, and identical rows on sm_89 and sm_120 (the old predicates read no
+// architecture).
+TEST(TunedTables, GemvTranscribedTablesHoldExactlyTheChoiceGrid) {
+    namespace gemv = batchlas::ops::gemv;
+    std::set<std::string> want;
+    for (const char* tr : {"N", "T"})
+        for (int o : gemv::grid_out)
+            for (int r : gemv::grid_red)
+                for (int b : gemv::grid_batch)
+                    want.insert(std::string(tr) + " " + std::to_string(o) + " " + std::to_string(r) + " " +
+                                std::to_string(b));
+    for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
+        std::map<std::string, std::string> first;
+        for (const char* dev : {"sm_89", "sm_120"}) {
+            const sel::Table& t = embedded(std::string("gemv.") + dt + "." + dev + ".txt");
+            std::set<std::string> got;
+            std::map<std::string, std::string> ranked;
+            for (const auto& row : t.rows) {
+                const std::string k = row.keys[0] + " " + row.keys[1] + " " + row.keys[2] + " " + row.keys[3];
+                got.insert(k);
+                for (const auto& e : row.ranked) ranked[k] += e.spelling + "|";
+            }
+            EXPECT_EQ(got, want) << dt << " " << dev;
+            EXPECT_EQ(t.rows.size(), want.size()) << dt << " " << dev;
+            EXPECT_EQ(t.source.rfind("transcribed:", 0), 0u) << t.file;
+            if (first.empty()) first = ranked;
+            else EXPECT_EQ(ranked, first) << dt << ": sm_120 rows differ from sm_89";
+        }
     }
 }
 

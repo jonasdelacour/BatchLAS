@@ -10,7 +10,6 @@
 #include <algorithm>
 #include "test_utils.hh"
 #include "../src/sycl/gemv_native.hh"
-#include "../src/backends/gemv_route.hh"
 #include <utility>
 // The WRITE side of the knob this file pins. settings() snapshots the environment
 // once, before main(), so a bare ::setenv in a test body is read by nothing;
@@ -907,16 +906,6 @@ TYPED_TEST(GemvCoverageTest, SegTransCasesAreReachable) {
                         "batch before trusting any break result.";
     }
     const int64_t kItems = kItems8;
-    UnifiedVector<S> a(16 * 8), x(8), y(16);
-    UnifiedVector<S*> pa(1);
-    MatrixView<S, MatrixFormat::Dense> Av(a.data(), 8, 16, 8, 8 * 16, 1, pa.data());
-    VectorView<S> Xv(x.data(), 8, 1, Inc{1}, Stride{8});
-    VectorView<S> Yv(y.data(), 16, 1, Inc{1}, Stride{16});
-    const auto rt = backend::gemv_route<TestFixture::BackendType, S>(
-        *this->ctx, Av, Xv, Yv, Transpose::Trans, /*vendor_available=*/false);
-    std::cout << "[ROUTE] gemv Trans (vendor_available=false) resolves to "
-              << dispatch::to_string(rt.origin) << ":" << dispatch::to_string(rt.algo)
-              << std::endl;
 
     // Every m used by a body-5 case below; 40 and 44 are inside the double gates only.
     for (int m : {1, 3, 5, 16}) {
