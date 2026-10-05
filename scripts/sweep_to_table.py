@@ -323,6 +323,28 @@ GEMV = OpSpec(
 )
 
 
+def orgqr_key(r):
+    try:
+        key = (int(r["m"]), int(r["n"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+    return key if min(key) >= 1 else None
+
+
+# orgqr (phase 5): work ~ m n^2; the old predicates read m and n only (no batch, no arch), so
+# sm_89 and sm_120 carry the same transcription. No sweep source.
+ORGQR_CHOICES = ("blocked", "vendor")
+ORGQR = OpSpec(
+    op="orgqr",
+    keys="m:log n:log:2",
+    row_ops=("orgqr",),
+    row_key=orgqr_key,
+    arm_spelling={c: c for c in ORGQR_CHOICES},
+    arm_route={c: (("vendor:vendor",) if c == "vendor" else (f"native:{c}",)) for c in ORGQR_CHOICES},
+    candidate_order=list(ORGQR_CHOICES),
+)
+
+
 def parse_keys(spec):
     """'# keys:' text -> [(name, is_log, weight)]; a :log weight defaults to 1."""
     out = []
@@ -714,7 +736,7 @@ GEQRF = OpSpec(
 )
 
 POTRF.review = potrf_offgrid
-OPS = [POTRF, POSV, TRSM, GEMM, GEMV, GEQRF]
+OPS = [POTRF, POSV, TRSM, GEMM, GEMV, GEQRF, ORGQR]
 OP_BY_NAME = {s.op: s for s in OPS}
 
 

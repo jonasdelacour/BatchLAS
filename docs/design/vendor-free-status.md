@@ -54,7 +54,7 @@ therefore fail entirely on host rows while every CUDA case in it passes. Two dem
 
 The structural reason every native tier in this campaign is invisible to the host half:
 `supports()` carries `if (!s.is_gpu) return false;` for `geqrf` (`route_geqrf.hh:48`), `orgqr`
-(`route_orgqr.hh:32`), `ormqr` (`route_ormqr.hh:59`), `getrf` (`route_getrf.hh:41`), `getrs`
+(`can_run` in `src/ops/orgqr/orgqr.cc`), `ormqr` (`route_ormqr.hh:59`), `getrf` (`route_getrf.hh:41`), `getrs`
 (`route_getrs.hh:52`), `getri` (`route_getri.hh:39`), `potrf` (`can_run` in `src/ops/potrf/potrf.cc`), `trsm`
 (`can_run` in `src/ops/trsm/trsm.cc`; before P3.3 `route_trsm.hh:39`) and `gemm` (before P3.4 `preferred()` in
 `route_gemm.hh:34-67`). **`gemv`'s `Direct` arm and `spmm`'s
@@ -109,7 +109,7 @@ native route still runs: `automatic()` accepts a merely *supported* native route
 | `trsm` | `Cta`, `SgLeft`, `Blocked` | no `preferred()` any more: tuned tables (`tuned/trsm.*.txt`) since flat selection (P3.3). The deleted window was native from `batch >= 8`, `float`/`Side::Right` also needing `batch >= 128 \|\| order <= 32` | `src/ops/trsm/trsm.cc` |
 | `potrf` | `Tiny`, `CTA`, `LPanel`, `Blocked` | no `preferred()` any more: tuned tables (`tuned/potrf.*.txt`) since flat selection | `src/ops/potrf/potrf.cc` |
 | `geqrf` | `CTA`, `Blocked` | native above a per-type order floor (`float` 64, `cfloat` 48, `double` 96, `cdouble` 256), plus tall panels `rows >= 128 && cols >= 32 && rows >= 4*cols`; the window answers true for **one** tier, resolved through `best_native_tier` so it cannot pre-empt `native_tier_preferred` | `route_geqrf.hh:preferred` |
-| `orgqr` | `Blocked` | native at `rows <= 512 && cols <= 512` | `route_orgqr.hh:preferred` |
+| `orgqr` | `Blocked` | no `preferred()` any more: transcribed tables (`tuned/orgqr.*.txt`), native at `rows <= 512 && cols <= 512` | `src/ops/orgqr/orgqr.cc` |
 | `ormqr` | `Blocked` | `is_native(r) && supports(r, s)` — native-first, and predates WP5 | `route_ormqr.hh:77-79` |
 | `getrf` | `CTA`, `Blocked` | `float` order ≥ 256, `cfloat` order ≥ 512 | `route_getrf.hh:67-74` |
 | `getrs` | `CTA`, `Blocked` | CTA at `nrhs <= 2` (all types) and `nrhs <= 4` (`float`); Blocked at `batch >= 128` with `float nrhs >= 64` / `double nrhs >= 128` | `route_getrs.hh:79-98` |

@@ -1,5 +1,5 @@
-// The public factorization entry points -- orgqr, getrf, getrs, getri and gesv (posv and
-// geqrf are in src/ops/) -- defined once here rather than inside a vendor TU, so
+// The public factorization entry points -- getrf, getrs, getri and gesv (posv, geqrf and
+// orgqr are in src/ops/<op>/) -- defined once here rather than inside a vendor TU, so
 // dropping a vendor library does not drop the public symbol.
 // See docs/design/vendor-independence.md#the-entry-point-facade.
 //
@@ -9,7 +9,6 @@
 #include <batchlas/backend_config.h>
 
 #include <batchlas/blas/functions/geqrf.hh>
-#include <batchlas/blas/functions/orgqr.hh>
 #include <batchlas/blas/functions/getrf.hh>
 #include <batchlas/blas/functions/getrs.hh>
 #include <batchlas/blas/functions/getri.hh>
@@ -30,9 +29,6 @@
 
 // Routing adapters and native drivers: each is a src/ header over public includes
 // only, so the facade can include it in a vendor-free build.
-#include "../../backends/orgqr_route.hh"
-#include "../../extensions/orgqr_native.hh"
-
 #include "../../backends/getrf_route.hh"
 #include "../../backends/getrs_route.hh"
 #include "../../backends/getri_route.hh"
@@ -41,9 +37,6 @@
 #include "../../extensions/getrf_native.hh"
 #include "../../extensions/getrs_native.hh"
 #include "../../extensions/getri_native.hh"
-
-// orgqr's native arm is ormqr against an identity, applied through the router.
-#include <batchlas/blas/functions/ormqr.hh>
 
 #include "../../util/template-instantiations.hh"
 
@@ -55,133 +48,18 @@
 
 namespace batchlas {
 
-// geqrf/orgqr and the LU family use factorization_vendor_available<B> (cuBLAS); potrf
+// The LU family uses factorization_vendor_available<B> (cuBLAS); potrf
 // (src/ops/potrf/potrf.cc) uses solver_vendor_available<B> (cuSOLVER). The two differ on
 // CUDA and are NOT interchangeable -- swapping one also changes which builds get the
 // entry point.
 // A latent defect in that gate: docs/design/known-defects.md.
 
-// These THROW rather than falling through to the vendor, which would silently keep
-// taking the vendor the day a native capability comes off zero.
-template <typename T>
-[[noreturn]] inline void orgqr_throw_native_unimplemented(dispatch::Route route,
-                                                          const char* who) {
-    throw batchlas::internal_error(
-        std::string(who) + ": resolved to a native route (" +
-        std::string(dispatch::to_string(route.origin)) + ":" +
-        std::string(dispatch::to_string(route.algo)) +
-        ") but no native orgqr driver is linked into this build. "
-        "sycl_orgqr::orgqr_blocked_available reported a capability the facade "
-        "cannot service.");
-}
-
-template <Backend B, typename T>
-Event orgqr(Queue& ctx,
-            const MatrixView<T, MatrixFormat::Dense>& A,
-            Span<T> tau,
-            Span<std::byte> workspace) {
-    orgqr_validate_params<T>(A);
-
-    const dispatch::Route route = backend::orgqr_route<B, T>(
-        ctx, A,
-        /*vendor_available=*/dispatch::factorization_vendor_available<B>);
-
-    if (dispatch::is_native(route)) {
-        if (route.algo == dispatch::Algorithm::Blocked) {
-            // The apply goes through the ROUTER, and its SIZE comes from the same
-            // routed query, so call and size cannot resolve differently.
-            return sycl_orgqr::orgqr_blocked_dispatch<T>(
-                ctx, A, tau, workspace,
-                [](Queue& c,
-                   const MatrixView<T, MatrixFormat::Dense>& oa,
-                   const MatrixView<T, MatrixFormat::Dense>& oc,
-                   Side oside, Transpose otrans, Span<T> otau,
-                   Span<std::byte> ows, int32_t obs) {
-                    return ormqr<B, T>(c, oa, oc, oside, otrans, otau, ows, obs);
-                },
-                [](Queue& c,
-                   const MatrixView<T, MatrixFormat::Dense>& oa,
-                   const MatrixView<T, MatrixFormat::Dense>& oc,
-                   Side oside, Transpose otrans, Span<T> otau, int32_t obs) {
-                    return ormqr_buffer_size<B, T>(c, oa, oc, oside, otrans, otau, obs);
-                });
-        }
-        orgqr_throw_native_unimplemented<T>(route, "orgqr");
-    }
-
-    if constexpr (!dispatch::factorization_vendor_available<B>) {
-        dispatch::throw_no_vendor_route<T>(
-            dispatch::Op::orgqr, B, dispatch::kFactorizationLibrary<B>);
-    } else {
-        return backend::orgqr_vendor<B, T>(ctx, A, tau, workspace);
-    }
-}
-
-template <Backend B, typename T>
-size_t orgqr_buffer_size(Queue& ctx,
-                         const MatrixView<T, MatrixFormat::Dense>& A,
-                         Span<T> tau) {
-    // Same validator, builder, route function and arguments as the call above.
-    orgqr_validate_params<T>(A);
-
-    const dispatch::Route route = backend::orgqr_route<B, T>(
-        ctx, A,
-        /*vendor_available=*/dispatch::factorization_vendor_available<B>);
-
-    // max(native, vendor), and `native_fired` rather than a zero size -- see
-    // geqrf_buffer_size. evidence: docs/perf/qr.md#the-orgqr_buffer_size-latent-defect
-    std::size_t native_need = 0;
-    bool native_fired = false;
-    if (dispatch::is_native(route)) {
-        const auto shape = backend::orgqr_op_shape<B, T>(ctx, A);
-        using Tbl = dispatch::RouteTable<dispatch::Op::orgqr, T>;
-        if (shape &&
-            Tbl::supports({dispatch::Origin::Native, dispatch::Algorithm::Blocked}, *shape)) {
-            // `tau` travels with the size query only because ormqr_buffer_size
-            // validates tau.size() >= k * batch; the C view built for it is null.
-            native_need = std::max(
-                native_need,
-                sycl_orgqr::orgqr_blocked_buffer_size<T>(
-                    ctx, A, tau,
-                    [](Queue& c,
-                       const MatrixView<T, MatrixFormat::Dense>& oa,
-                       const MatrixView<T, MatrixFormat::Dense>& oc,
-                       Side oside, Transpose otrans, Span<T> otau, int32_t obs) {
-                        return ormqr_buffer_size<B, T>(c, oa, oc, oside, otrans, otau, obs);
-                    }));
-            native_fired = true;
-        }
-        if (!native_fired) {
-            orgqr_throw_native_unimplemented<T>(route, "orgqr_buffer_size");
-        }
-    }
-
-    if constexpr (!dispatch::factorization_vendor_available<B>) {
-        if (!native_fired) {
-            dispatch::throw_no_vendor_route<T>(
-                dispatch::Op::orgqr, B, dispatch::kFactorizationLibrary<B>);
-        }
-        return native_need;
-    } else {
-        // A native-routed call is not sized by the vendor. orgqr's vendor arm is a
-        // per-item loop, so its buffer size is batch-LINEAR (single * batch_size):
-        // at cdouble n=64 batch=8192 that is the ~4.6 GB the comment on the vendor
-        // sizer names, and the caller allocates whatever this returns -- so the
-        // native arm could OOM on a shape it serves in a few megabytes. The query
-        // and the call share one orgqr_route() with identical arguments, so the
-        // max() was only ever guarding a getenv change between the two.
-        if (dispatch::is_native(route) && native_fired) {
-            return native_need;
-        }
-        return std::max(native_need,
-                        backend::orgqr_vendor_buffer_size<B, T>(ctx, A, tau));
-    }
-}
-
 // The LU family. preferred() is all-false in all three route tables: a vendor-present
 // build always resolves {Vendor, Auto}, a vendor-free build takes the native arm for
 // every square shape. evidence: docs/perf/lu.md#the-shipped-preferred-windows
 
+// These THROW rather than falling through to the vendor, which would silently keep
+// taking the vendor the day a native capability comes off zero.
 template <typename T>
 [[noreturn]] inline void getrf_throw_native_unimplemented(dispatch::Route route,
                                                           const char* who) {
@@ -583,8 +461,6 @@ size_t gesv_buffer_size(Queue& ctx,
 #define OP_INSTANTIATE(OP, B_, fp) BATCHLAS_INSTANTIATE(sig::OP<fp>, OP, B_, fp)
 
 #define FACTORIZATION_ONE(B_, fp)              \
-    OP_INSTANTIATE(orgqr, B_, fp)              \
-    OP_INSTANTIATE(orgqr_buffer_size, B_, fp)  \
     OP_INSTANTIATE(getrf, B_, fp)              \
     OP_INSTANTIATE(getrf_buffer_size, B_, fp)  \
     OP_INSTANTIATE(getrs, B_, fp)              \

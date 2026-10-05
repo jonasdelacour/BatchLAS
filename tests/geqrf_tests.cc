@@ -26,7 +26,7 @@
 #include "../src/extensions/geqrf_native.hh"
 #include "../src/extensions/orgqr_native.hh"
 #include "../src/ops/geqrf/choice.hh"
-#include "../src/backends/orgqr_route.hh"
+#include "../src/ops/orgqr/choice.hh"
 
 #include <algorithm>
 #include <cmath>
@@ -1113,32 +1113,6 @@ TYPED_TEST(GeqrfTest, DirectEntryPointsRefuseWhatSupportsRefuses) {
                  std::invalid_argument);
 }
 
-// G9. The route table and the vendor-free fallback, through the SHAPE BUILDER against
-// a real device -- the half tests/route_vocabulary_tests.cc cannot see.
-TYPED_TEST(GeqrfTest, RouteTableAndTheVendorFreeFallback) {
-    using T = typename TestFixture::T;
-    static constexpr Backend B = TestFixture::BackendType;
-
-    auto p = make_problem<T>(96, 96, 2, 15u);
-    auto V = view_of(p);
-
-    // geqrf's half (vendor-free fallback, per-type Auto at 96x96) moved to
-    // geqrf_candidates_tests: VendorFreeWalkIsTheOldTieBreak and AutoReadsEveryKeyField.
-    // The vendor-free fallback for orgqr.
-    const auto ofree = backend::orgqr_route<B, T>(*this->ctx, V, /*vendor_available=*/false);
-    ASSERT_TRUE(dispatch::is_native(ofree))
-        << "a vendor-free build has no orgqr route for 96x96";
-    if (!std::getenv("BATCHLAS_ORGQR_ROUTE")) {
-        const auto oauto = backend::orgqr_route<B, T>(*this->ctx, V, /*vendor_available=*/true);
-        EXPECT_TRUE(dispatch::is_native(oauto))
-            << "96x96 is inside orgqr's measured window (native to n = 512, every "
-               "type: float 18.87x, cfloat 10.67x, double 22.09x, cdouble 9.69x "
-               "against the per-item vendor loop -- docs/perf/small-n-baseline.md#orgqr)";
-        EXPECT_EQ(oauto.algo, dispatch::Algorithm::Blocked)
-            << "orgqr has ONE native tier; anything else means the arm list moved";
-    }
-}
-
 // G9c. THE OCCUPANCY TARGET ITSELF IS PINNED. Every other capacity assertion here asks the
 // predicate rather than a literal, which leaves kGeqrfMinBlocksPerSm free to move without a
 // single red -- and it is not a free knob: it places the CTA/Blocked routing cut.
@@ -1285,11 +1259,9 @@ TYPED_TEST(GeqrfTest, FacadeReachesTheNativeOrgqr) {
     this->ctx->wait();
     const std::vector<T> F(p.buf.begin(), p.buf.end());
 
-    ScopedEnvVar oguard("BATCHLAS_ORGQR_ROUTE", "blocked");
-    const auto route = backend::orgqr_route<B, T>(*this->ctx, V, /*vendor_available=*/true);
-    ASSERT_TRUE(dispatch::is_native(route))
-        << "BATCHLAS_ORGQR_ROUTE=blocked did not resolve to a native route";
-    ASSERT_EQ(route.algo, dispatch::Algorithm::Blocked);
+    // A pin that cannot run throws (R6), so a pin that returns ran blocked; the bit-for-bit
+    // comparison below is the guard that it was the native driver.
+    const select::ScopedPin<ops::orgqr::OrgqrChoice> opin("orgqr", ops::orgqr::Blocked{});
 
     UnifiedVector<std::byte> ows(std::max<std::size_t>(
         1, orgqr_buffer_size<B, T>(*this->ctx, V, p.tau.to_span())));

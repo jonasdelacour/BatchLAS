@@ -6,6 +6,7 @@
 
 #include "../src/ops/gemm/choice.hh"
 #include "../src/ops/geqrf/choice.hh"
+#include "../src/ops/orgqr/choice.hh"
 #include "../src/ops/posv/choice.hh"
 #include "../src/ops/potrf/choice.hh"
 #include "../src/ops/trsm/choice.hh"
@@ -81,6 +82,13 @@ std::vector<std::string> candidates(const std::string& op, const std::string& dt
         if (dtype == "double") return spellings(geqrf::candidates<double>());
         if (dtype == "cfloat") return spellings(geqrf::candidates<std::complex<float>>());
         if (dtype == "cdouble") return spellings(geqrf::candidates<std::complex<double>>());
+    }
+    namespace orgqr = batchlas::ops::orgqr;
+    if (op == "orgqr") {
+        if (dtype == "float") return spellings(orgqr::candidates<float>());
+        if (dtype == "double") return spellings(orgqr::candidates<double>());
+        if (dtype == "cfloat") return spellings(orgqr::candidates<std::complex<float>>());
+        if (dtype == "cdouble") return spellings(orgqr::candidates<std::complex<double>>());
     }
     return {};
 }
@@ -218,6 +226,7 @@ TEST(TunedTables, TrsmTablesDeclareChoiceKeyNames) { expect_tables_declare("trsm
 TEST(TunedTables, GemmTablesDeclareChoiceKeyNames) { expect_tables_declare("gemm", batchlas::ops::gemm::key_names); }
 TEST(TunedTables, GemvTablesDeclareChoiceKeyNames) { expect_tables_declare("gemv", batchlas::ops::gemv::key_names); }
 TEST(TunedTables, GeqrfTablesDeclareChoiceKeyNames) { expect_tables_declare("geqrf", batchlas::ops::geqrf::key_names); }
+TEST(TunedTables, OrgqrTablesDeclareChoiceKeyNames) { expect_tables_declare("orgqr", batchlas::ops::orgqr::key_names); }
 
 const sel::Table& embedded(const std::string& name) {
     static std::map<std::string, sel::Table> cache;
@@ -399,6 +408,31 @@ TEST(TunedTables, GeqrfTablesHoldExactlyTheChoiceGridOnBothDevices) {
             }
             EXPECT_EQ(got, want) << dt << " " << dev;
             EXPECT_EQ(t.rows.size(), want.size()) << dt << " " << dev;
+        }
+    }
+}
+
+// orgqr's transcription serves sm_89 and sm_120 alike (the old predicates read no arch): one row
+// per n <= m cell of choice.hh's grid in each, and the two tables row-for-row identical.
+TEST(TunedTables, OrgqrTablesHoldExactlyTheChoiceGridOnBothDevices) {
+    namespace orgqr = batchlas::ops::orgqr;
+    std::set<std::string> want;
+    for (int m : orgqr::grid)
+        for (int n : orgqr::grid)
+            if (n <= m) want.insert(std::to_string(m) + " " + std::to_string(n));
+    for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
+        const sel::Table& a = embedded(std::string("orgqr.") + dt + ".sm_89.txt");
+        const sel::Table& b = embedded(std::string("orgqr.") + dt + ".sm_120.txt");
+        std::set<std::string> got;
+        for (const auto& row : a.rows) got.insert(row.keys[0] + " " + row.keys[1]);
+        EXPECT_EQ(got, want) << dt;
+        ASSERT_EQ(a.rows.size(), want.size()) << dt;
+        ASSERT_EQ(b.rows.size(), a.rows.size()) << dt;
+        for (std::size_t i = 0; i < a.rows.size(); ++i) {
+            EXPECT_EQ(a.rows[i].keys, b.rows[i].keys) << dt << " row " << i;
+            ASSERT_EQ(a.rows[i].ranked.size(), b.rows[i].ranked.size()) << dt << " row " << i;
+            for (std::size_t j = 0; j < a.rows[i].ranked.size(); ++j)
+                EXPECT_EQ(a.rows[i].ranked[j].spelling, b.rows[i].ranked[j].spelling) << dt << " row " << i;
         }
     }
 }

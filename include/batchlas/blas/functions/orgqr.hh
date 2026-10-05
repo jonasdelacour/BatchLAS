@@ -47,11 +47,11 @@ using orgqr_vendor_buffer_size = size_t(Queue&,
 // geqrf_validate_params and potrf_validate_params (potrf.hh:66-84).
 //
 // SCOPE IS DELIBERATELY MINIMAL. In particular this does NOT check `n <= m`,
-// although RouteTable<Op::orgqr,T>::supports() does. Q's columns live in R^m, so
+// although the native family's can_run (src/ops/orgqr/orgqr.cc) does. Q's columns live in R^m, so
 // n > m is meaningless -- but every backend in this tree currently accepts such a
 // view and hands it to a vendor, and turning that into a throw is a user-visible
 // behaviour change that belongs in its own commit with its own test
-// (potrf.hh:59-65). In supports() the same condition merely routes the view to
+// (potrf.hh:59-65). In can_run the same condition merely routes the view to
 // the vendor, which is what happens today. It also does not check tau's length:
 // options.hh:731-732 already does require_span_at_least on the arena spellings.
 template <typename T>

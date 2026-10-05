@@ -97,9 +97,8 @@ std::size_t orgqr_apply_bytes(Queue& ctx,
 
 }  // namespace
 
-// True for all four types, but RouteTable<Op::orgqr,T>::preferred() is still
-// false: only a vendor-free build or an explicit BATCHLAS_ORGQR_ROUTE lands
-// here. evidence: docs/perf/qr.md#route-arms
+// True for all four types; Auto takes this driver where tuned/orgqr.*.txt ranks
+// blocked first (m, n <= 512). evidence: docs/perf/qr.md#route-arms
 template <> bool orgqr_blocked_available<float>()                { return true; }
 template <> bool orgqr_blocked_available<double>()               { return true; }
 template <> bool orgqr_blocked_available<std::complex<float>>()  { return true; }
@@ -142,14 +141,13 @@ Event orgqr_blocked_dispatch(Queue& ctx,
     const int batch = static_cast<int>(A.batch_size());
     const int k = std::min(m, n);
 
-    // supports()'s gates are re-applied here: a forced route that is unsupported
-    // falls through to automatic(), so a wrong gate silently measures the vendor.
+    // can_run's gates are re-applied here: direct callers bypass select::choose.
     if (m < 1 || n < 1 || batch < 1) {
         throw batchlas::invalid_argument("orgqr_blocked: degenerate extents");
     }
     if (m < n) {
         throw batchlas::invalid_argument(
-            "orgqr_blocked: n > m is not supported (route_orgqr.hh's supports() refuses it)");
+            "orgqr_blocked: n > m is not supported (orgqr's can_run refuses it)");
     }
     if (A.is_heterogeneous()) {
         throw batchlas::invalid_argument("orgqr_blocked: heterogeneous batch is not supported");
