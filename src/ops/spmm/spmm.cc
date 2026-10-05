@@ -71,8 +71,9 @@ bool one_spmm(const MatrixView<T, MF>& A, const Dense<T>& Bm, const Dense<T>& C,
 // with one (ld, stride) per dense operand, so neither may be heterogeneous; a CSR view varies per
 // item only through nnz(b), which the bodies bound by row_offsets. m, k or nrhs 0 is a legal call
 // (the driver quick-returns on the host); an empty batch is not. `d.has_vendor_blas` carries the
-// SPARSE library here (device() passes it). cuSPARSE rejects a conjugated single-row B with an
-// error status the vendor arm never checks, leaving C unwritten: a silent wrong answer.
+// SPARSE library here (device() passes it). Two cuSPARSE terms, both off the old Auto path:
+// a conjugated single-row B is an error status the vendor arm never checks (C unwritten, a silent
+// wrong answer), and complex<double> N/N with one column segfaults on the host (known-defects #13).
 template <Backend B, class T, MatrixFormat MF>
 bool can_run(const SpmmChoice& c, const select::Device& d, const MatrixView<T, MF>& A, const Dense<T>& Bm,
              const Dense<T>& C, Transpose transA, Transpose transB) {
@@ -89,8 +90,11 @@ bool can_run(const SpmmChoice& c, const select::Device& d, const MatrixView<T, M
         },
         [&](Vendor) {
             constexpr bool cx = !std::is_same_v<T, typename base_type<T>::type>;
+            constexpr bool zz = std::is_same_v<T, std::complex<double>>;
+            const bool nn = transA == Transpose::NoTrans && transB == Transpose::NoTrans;
             return d.has_vendor_blas &&
-                   !(B == Backend::CUDA && cx && transB == Transpose::ConjTrans && Bm.rows() == 1);
+                   !(B == Backend::CUDA && cx && transB == Transpose::ConjTrans && Bm.rows() == 1) &&
+                   !(B == Backend::CUDA && zz && nn && C.cols() == 1);
         },
     }, c);
 }

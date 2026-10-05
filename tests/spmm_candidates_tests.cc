@@ -302,10 +302,18 @@ protected:
     static bool vendor_conj_row(const Spec& s) {
         return B == Backend::CUDA && kCx<T> && s.tb == Transpose::ConjTrans && s.nrhs == 1;
     }
-    static bool expect_runs(const C& c, const Spec& s) {
-        return std::holds_alternative<sp::Direct>(c) || (kVendor && !vendor_conj_row(s));
+    // cuSPARSE: complex<double> N/N with one column segfaults on the host (known-defects #13).
+    static bool vendor_zz_column(const Spec& s) {
+        return B == Backend::CUDA && std::is_same_v<T, std::complex<double>> && s.ta == Transpose::NoTrans &&
+               s.tb == Transpose::NoTrans && s.nrhs == 1;
     }
-    static bool vendor_word_falls_back(const C& c) { return std::holds_alternative<sp::Vendor>(c) && !kVendor; }
+    static bool expect_runs(const C& c, const Spec& s) {
+        return std::holds_alternative<sp::Direct>(c) || (kVendor && !vendor_conj_row(s) && !vendor_zz_column(s));
+    }
+    // `vendor` is also the class word: a vendor pin nothing can serve warns and runs Auto (§5.3).
+    static bool vendor_word_falls_back(const C& c, const Spec& s) {
+        return std::holds_alternative<sp::Vendor>(c) && !expect_runs(c, s);
+    }
     static bool vendor_refuses(const C& c, const Spec& s) {
         return std::holds_alternative<sp::Vendor>(c) && kVendorNoTransOnly &&
                (s.ta != Transpose::NoTrans || s.tb != Transpose::NoTrans);
@@ -374,15 +382,12 @@ TYPED_TEST(SpmmCandidates, PinnedCandidatesRunEveryTransposeCombination) {
                         s.seed = 100u + 7u * m + 3u * nrhs + unsigned(ta) * 11u + unsigned(tb);
                         auto p = make<T>(s);
                         const std::string what = name(c, s);
-                        if (TestFixture::vendor_word_falls_back(c)) {
+                        if (TestFixture::vendor_word_falls_back(c, s)) {
                             auto q = make<T>(s);
                             const std::string want = this->auto_choice(q);
+                            EXPECT_EQ(want, "direct") << what << ": Auto took a vendor can_run refuses";
                             EXPECT_EQ(traced_choice([&] { this->run_pinned(c, p); }), want) << what;
-                            expect_correct(p, what + " (vendor-free: Auto)");
-                            continue;
-                        }
-                        if (!TestFixture::expect_runs(c, s)) {
-                            EXPECT_FALSE(this->pin_accepted(c, p)) << what << " was accepted";
+                            expect_correct(p, what + " (refused vendor pin: Auto)");
                             continue;
                         }
                         if (TestFixture::vendor_refuses(c, s)) {
@@ -399,7 +404,9 @@ TYPED_TEST(SpmmCandidates, PinnedCandidatesRunEveryTransposeCombination) {
 
 // The pinned facade runs exactly that family's driver: bit-identical to the direct call. Only the
 // gather (transA == N) is deterministic; the scatter's atomics reorder sums run to run. Long rows
-// make the two families' roundings differ, so a swapped launch arm shows.
+// make the two families' roundings differ, so a swapped launch arm shows. cuSPARSE's default
+// algorithm is not bit-reproducible run to run (measured on CUDA), so a vendor whose own two runs
+// differ is identified by the trace line alone.
 TYPED_TEST(SpmmCandidates, PinnedRunIsTheDirectKernelBitForBit) {
     using T = typename TestFixture::T;
     int compared = 0;
@@ -412,9 +419,17 @@ TYPED_TEST(SpmmCandidates, PinnedRunIsTheDirectKernelBitForBit) {
                 auto pinned = make<T>(s);
                 auto direct = make<T>(s);
                 const std::string what = name(c, s);
-                this->run_pinned(c, pinned);
+                EXPECT_EQ(traced_choice([&] { this->run_pinned(c, pinned); }), select::to_string(c)) << what;
                 this->direct(c, direct);
                 expect_correct(pinned, what);
+                if (std::holds_alternative<sp::Vendor>(c)) {
+                    auto again = make<T>(s);
+                    this->direct(c, again);
+                    bool reproducible = true;
+                    for (std::size_t e = 0; e < again.mem.size(); ++e)
+                        reproducible = reproducible && same_bits(again.mem[e], direct.mem[e]);
+                    if (!reproducible) continue;
+                }
                 for (std::size_t e = 0; e < pinned.mem.size(); ++e)
                     ASSERT_TRUE(same_bits(pinned.mem[e], direct.mem[e]))
                         << what << ": the pinned facade did not run this family's driver; element " << e;
@@ -425,7 +440,7 @@ TYPED_TEST(SpmmCandidates, PinnedRunIsTheDirectKernelBitForBit) {
 }
 
 // A saturating batch: 1024 items repeating 5 distinct problems; every item correct, and on the
-// deterministic gather each item bit-identical to its representative.
+// deterministic gather each item bit-identical to its representative (not cuSPARSE: see above).
 TYPED_TEST(SpmmCandidates, SaturatingBatchIsBitIdenticalToItsRepresentative) {
     using T = typename TestFixture::T;
     constexpr int kBatch = 1024, kPeriod = 5;
@@ -438,7 +453,7 @@ TYPED_TEST(SpmmCandidates, SaturatingBatchIsBitIdenticalToItsRepresentative) {
                 const std::string what = name(c, s);
                 this->run_pinned(c, p);
                 expect_correct(p, what);
-                if (ta != Transpose::NoTrans) continue;
+                if (ta != Transpose::NoTrans || std::holds_alternative<sp::Vendor>(c)) continue;
                 for (int b = kPeriod; b < kBatch; ++b)
                     for (int j = 0; j < s.nrhs; ++j)
                         for (int i = 0; i < p.out_rows; ++i)
@@ -504,22 +519,25 @@ TYPED_TEST(SpmmCandidates, CanRunEqualsTheOracle) {
     }
 }
 
-// The one Vendor term (R3): cuSPARSE refuses a ConjTrans single-row B ("opB ==
+// The two Vendor terms (R3): cuSPARSE refuses a ConjTrans single-row B ("opB ==
 // OPERATION_CONJUGATE_TRANSPOSE is unsupported when B is a single row"), the vendor arm drops the
-// status and C is never written. Straddled on nrhs 1/2 and Trans/ConjTrans; Auto then runs Direct.
+// status and C is never written; complex<double> N/N with one column segfaults. Straddled on
+// nrhs 1/2, transA N/T and transB N/T/C; Auto then runs Direct.
 TYPED_TEST(SpmmCandidates, VendorRefusesAConjugatedSingleRowB) {
     using T = typename TestFixture::T;
     if (!TestFixture::kVendor) GTEST_SKIP() << "no vendor in this build";
     for (Transpose ta : {Transpose::NoTrans, Transpose::Trans})
-        for (Transpose tb : {Transpose::Trans, Transpose::ConjTrans})
+        for (Transpose tb : kAllTrans)
             for (int nrhs : {1, 2}) {
                 Spec s{5, 7, nrhs, 3, ta, tb};
-                const bool refused = TestFixture::vendor_conj_row(s);
+                const bool refused = TestFixture::vendor_conj_row(s) || TestFixture::vendor_zz_column(s);
                 auto p = make<T>(s);
                 const std::string what = name(C{sp::Vendor{}}, s);
                 if (TestFixture::vendor_refuses(C{sp::Vendor{}}, s)) continue;  // netlib: no transposes
-                EXPECT_EQ(this->pin_accepted(C{sp::Vendor{}}, p), !refused) << what;
-                if (!refused) expect_correct(p, what);
+                // A refused `vendor` pin is the class word's fallback to Auto, not an error (§5.3).
+                EXPECT_EQ(traced_choice([&] { this->run_pinned(C{sp::Vendor{}}, p); }), refused ? "direct" : "vendor")
+                    << what;
+                expect_correct(p, what);
                 auto q = make<T>(s);
                 const std::string got = this->auto_choice(q);
                 if (refused) EXPECT_EQ(got, "direct") << label(s);
