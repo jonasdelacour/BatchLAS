@@ -46,7 +46,7 @@ using geqrf_vendor_buffer_size = size_t(Queue&,
 // It runs in the facade (src/ops/geqrf/geqrf.cc), AHEAD of
 // the shape builder, because the builder reads A.rows()/A.cols() and must not
 // describe a non-conforming view. Same hoist, and same reason, as potrf's
-// (potrf.hh:66-84) and trsm's (entry_points/level3.cc:167-174).
+// (potrf.hh:66-84) and trsm's (src/ops/trsm/trsm.cc:127).
 //
 // SCOPE IS DELIBERATELY MINIMAL -- EXACTLY WHAT THE SHAPE BUILDER NEEDS, and for
 // geqrf that is one line. Three things it deliberately does NOT check, each for a
