@@ -71,12 +71,23 @@ regenerated from scratch on this branch, and the output is byte-identical (CSV m
 geqrf_tests (orgqr's caller in tests), ortho_tests (`src/extensions/ortho.cc` calls orgqr),
 select_tests, tuned_tables_tests, route_vocabulary_tests and options_api_tests.
 
-- `build`: 7/8 pass. ortho_tests segfaults, as it does in the 424a45bc baseline. The set of
-  failing gtest case names is empty on both sides.
+- `build`: 7/8 pass. ortho_tests segfaults in its full run, as it does in the 424a45bc
+  baseline. A segfault hides every case after it, so ortho_tests was also run with
+  `--gtest_filter=-*/7.*` on both trees. That filter drops the two `complex<double>` CUDA cases,
+  which crash in cuBLAS (known-defects #13) on both trees when run alone. The other 14 cases pass
+  on both trees, and the passing names are identical.
+- The route-pinned variants `orgqr_tests_native` and `geqrf_tests_native` pass in `build` on
+  both trees. In `build-vf`, `orgqr_tests_native` fails the same 12 Backend-6 (NETLIB) case
+  names on both trees, and `geqrf_tests_native` passes. The ORGQR pin was removed from
+  `geqrf_tests_native` (tests/CMakeLists.txt). Its only orgqr facade call holds a `ScopedPin`,
+  which wins over the env var, and the getenv-guarded orgqr half of G9 moved to
+  orgqr_candidates_tests.
 - `build-vf`: orgqr_candidates_tests, select_tests, tuned_tables_tests, route_vocabulary_tests
   and geqrf_tests pass. options_api_tests, ortho_tests and orgqr_tests fail, and those 21
   failing case names (`OptionsApi.Blas3OptionsMatchPositional`, `OrgqrTest/0-3` on Backend 6,
   `OrthoMatrixTest` / `OrthoAgainstMTest`) are identical to the 424a45bc vendor-free baseline.
+  ortho_tests does not crash in build-vf (no cuBLAS), so all 16 of its cases ran on both trees:
+  the same 8 pass and the same 8 Backend-6 cases fail.
   orgqr_candidates_tests first failed three cases in build-vf: its fixture factored wide inputs
   with a geqrf that has no vendor-free route. That is fixed in the test.
 - Deliberate breaks, each restored from a saved copy and md5-verified
@@ -124,5 +135,5 @@ spelling, `auto` before and `vendor` now, as for trsm.
 - `AGENTS.md` §9: nothing orgqr-specific.
 - These were already updated on this branch: `docs/perf/qr.md` (route-arms table, the shipped
   ceiling section, gate references), `docs/design/vendor-free-status.md` (orgqr row and GPU-only
-  list), `include/batchlas/blas/functions/orgqr.hh` and `src/extensions/orgqr_blocked.cc`
+  list), `include/batchlas/blas/functions/orgqr.hh`, `src/extensions/orgqr_blocked.cc`, `src/extensions/orgqr_native.hh`
   comments.
