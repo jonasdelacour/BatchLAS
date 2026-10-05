@@ -12,11 +12,10 @@
 // instantiation here is the whole change.
 //
 // The backend::*_vendor instantiations stay behind in the vendor TUs, as for
-// every other op.
+// every other op. syev has since moved to src/ops/syev/syev.cc (flat selection).
 
 #include <batchlas/backend_config.h>
 
-#include <batchlas/blas/functions/syev.hh>
 #include <batchlas/blas/functions/ormqr.hh>
 
 #include "../../util/template-instantiations.hh"
@@ -28,8 +27,6 @@ namespace batchlas {
 #define OP_INSTANTIATE(OP, B_, fp) BATCHLAS_INSTANTIATE(sig::OP<fp>, OP, B_, fp)
 
 #define EIGEN_ONE(B_, fp)                          \
-    OP_INSTANTIATE(syev, B_, fp)                   \
-    OP_INSTANTIATE(syev_buffer_size, B_, fp)       \
     OP_INSTANTIATE(ormqr, B_, fp)                  \
     OP_INSTANTIATE(ormqr_buffer_size, B_, fp)
 

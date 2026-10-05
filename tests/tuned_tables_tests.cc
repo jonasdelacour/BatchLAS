@@ -6,6 +6,7 @@
 
 #include "../src/ops/posv/choice.hh"
 #include "../src/ops/potrf/choice.hh"
+#include "../src/ops/syev/choice.hh"
 #include "../src/ops/trsm/choice.hh"
 #include "../src/select/select.hh"
 
@@ -56,6 +57,13 @@ std::vector<std::string> candidates(const std::string& op, const std::string& dt
         if (dtype == "double") return spellings(trsm::candidates<double>());
         if (dtype == "cfloat") return spellings(trsm::candidates<std::complex<float>>());
         if (dtype == "cdouble") return spellings(trsm::candidates<std::complex<double>>());
+    }
+    namespace syev = batchlas::ops::syev;
+    if (op == "syev") {
+        if (dtype == "float") return spellings(syev::candidates<float>());
+        if (dtype == "double") return spellings(syev::candidates<double>());
+        if (dtype == "cfloat") return spellings(syev::candidates<std::complex<float>>());
+        if (dtype == "cdouble") return spellings(syev::candidates<std::complex<double>>());
     }
     return {};
 }
@@ -190,6 +198,7 @@ void expect_tables_declare(const std::string& op, const Names& names) {
 TEST(TunedTables, PotrfTablesDeclareChoiceKeyNames) { expect_tables_declare("potrf", batchlas::ops::potrf::key_names); }
 TEST(TunedTables, PosvTablesDeclareChoiceKeyNames) { expect_tables_declare("posv", batchlas::ops::posv::key_names); }
 TEST(TunedTables, TrsmTablesDeclareChoiceKeyNames) { expect_tables_declare("trsm", batchlas::ops::trsm::key_names); }
+TEST(TunedTables, SyevTablesDeclareChoiceKeyNames) { expect_tables_declare("syev", batchlas::ops::syev::key_names); }
 
 const sel::Table& embedded(const std::string& name) {
     static std::map<std::string, sel::Table> cache;
@@ -241,6 +250,23 @@ TEST(TunedTables, TrsmSm89TablesHoldExactlyTheChoiceGrid) {
         EXPECT_EQ(got, want) << dt;
         EXPECT_EQ(t.rows.size(), want.size()) << dt;
     }
+}
+
+// syev's transcriber spells choice.hh's grid by hand too; one transcription serves both devices.
+TEST(TunedTables, SyevTablesHoldExactlyTheChoiceGridOnBothDevices) {
+    namespace syev = batchlas::ops::syev;
+    std::set<std::string> want;
+    for (const char* j : {"N", "V"})
+        for (int n : syev::grid_n)
+            for (int b : syev::grid_batch) want.insert(std::string(j) + " " + std::to_string(n) + " " + std::to_string(b));
+    for (const char* dev : {"sm_89", "sm_120"})
+        for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
+            const sel::Table& t = embedded(std::string("syev.") + dt + "." + dev + ".txt");
+            std::set<std::string> got;
+            for (const auto& row : t.rows) got.insert(row.keys[0] + " " + row.keys[1] + " " + row.keys[2]);
+            EXPECT_EQ(got, want) << dt << " " << dev;
+            EXPECT_EQ(t.rows.size(), want.size()) << dt << " " << dev;
+        }
 }
 
 // The sparse sm_89 tables (final-review finding): with equal weights, float n=24 batch=512
