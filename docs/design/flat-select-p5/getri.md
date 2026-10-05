@@ -47,10 +47,16 @@ batch key cannot change any decision (the data gate below confirms this). If the
   These are getri_blocked_dispatch's own checks on A, plus the pivot-format clause (a NETLIB backend on a GPU
   queue writes genuine int64, while Blocked reads packed int32). C's extents and A/C aliasing remain argument
   errors that the driver itself reports. The choice is a function of A alone, because `getri_buffer_size` has no C.
-- `Vendor`: `d.has_vendor_solver && d.has_vendor_blas`. On CUDA this equals `factorization_vendor_available`
-  (cuBLAS && cuSOLVER), and on NETLIB both reduce to kHasNetlib. On ROCm it additionally requires rocBLAS, which
-  a rocSOLVER build always has. There is no dedicated "factorization" flag on `select::Device`. If the
-  integrator adds one for getrf, getrs, geqrf and the rest, switch this to that flag.
+- `Vendor`: `dispatch::factorization_vendor_available<B>`, the same constexpr that guards the Vendor arms of
+  `launch` and `workspace` and that the old router used. Review fix: the first version read
+  `d.has_vendor_solver && d.has_vendor_blas`. That is equal on CUDA and NETLIB, but on ROCm it also required
+  rocBLAS. `BATCHLAS_ENABLE_ROCBLAS` and `BATCHLAS_ENABLE_ROCSOLVER` are separate options
+  (cmake/BatchLASDependencies.cmake:117-122), and `getri_vendor<ROCM>` needs only rocSOLVER. So a rocSOLVER-only
+  build would have refused a runnable vendor, and on a wave64-only GPU or a non-square A it would have thrown a
+  plain `runtime_error` where 424a45bc ran rocSOLVER. Nothing builds that configuration, so no test can see
+  the difference; the clause is now the launch guard by construction.
+- `has_sg32` in `can_run(Blocked)` cannot be broken on this hardware, because every NVIDIA device has sub-group
+  size 32 and dropping the clause stays green. It is covered only by matching getri_blocked_dispatch's own check.
 - No capacity terms exist, so none are capped in the transcription.
 
 Sizing stays pure: `getri_buffer_size` → `choose` → `workspace` reads metadata only. A `SizingReadsMetadataOnly` test
@@ -99,6 +105,17 @@ Every red set is narrow and named. The /4-/7 suffixes are the CUDA float, double
 | Vendor workspace 0 | `ExactWorkspaceInAPoisonedArena` ×4, `GetriCandidatesCpu.CpuQueueRunsNoNativeFamily` ×4 |
 | float sm_120 row n=127 batch=512 flipped to blocked | `GetriTranscribedTable.RowsHoldTheOldPreference` |
 
+Two more breaks hit code that is reachable only in a vendor-free build: choose()'s catch and the Vendor arms'
+compile-time throw. They were run in build-vf (review follow-up) and restored the same way (getri.cc
+`b01c7ac6…`, md5-verified). In build-vf /4-/7 are the CUDA instantiations and Cpu/0-/3 the NETLIB-on-CPU ones.
+
+| break (build-vf) | red set |
+|---|---|
+| choose()'s catch no longer catches select's `runtime_error` | `HeterogeneousBatchHasNoNativeRoute`, `NetlibBackendOnAGpuQueueRefusesBlocked`, `CanRunEqualsLaunch`, `CanRunFalsePinsThrow` ×4; `GetriCandidatesCpu.CpuQueueRunsNoNativeFamily` ×4 |
+| can_run(Vendor) returns true | `AutoReadsTheTranscribedTable`, `VendorFreeLastResortIsBlocked`, `LegacyAliasesAndClassWords`, `PinnedCandidatesStraddleTheirLimits`, `ScopedPinBeatsTheEnvironment`, `SizingReadsMetadataOnly`, `TraceLineShowsTheKey` ×4 |
+
+`d.has_sg32` was not broken: see can_run above.
+
 ### (b) Data gate: old predicate vs select on the new tables, off-grid
 
 `getri_transcribe --offgrid 4000 7`: 4000 random off-grid points, log-uniform n ∈ [1, 8192] and batch ∈ [1, 65536],
@@ -129,5 +146,6 @@ the vendor row, which was `vendor,auto` and is now `vendor,vendor`, because flat
 - `docs/design/vendor-free-status.md:58` and `:112` cite `route_getri.hh:39` and `:65-72`. The equivalent is now
   `can_run` in `src/ops/getri/getri.cc` (vendor-free last resort `blocked`).
 - `docs/design/flat-kernel-selection.md` §12/§13: add getri to the migrated ops, recording the transcribed
-  sm_89 and sm_120 tables, `batch` as a no-op key, and the Vendor can_run flag pair noted above.
+  sm_89 and sm_120 tables, `batch` as a no-op key, and that Vendor's can_run is the launch's own
+  `factorization_vendor_available<B>`, not a pair of `select::Device` flags.
 - `tuned/README.md`: list `getri.*.{sm_89,sm_120}.txt` as transcribed.

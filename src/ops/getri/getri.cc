@@ -48,7 +48,8 @@ select::Key key_of(const MV<T>& A) {
 // errors the driver reports itself), plus the pivot format: GPU backends pack 1-based int32 into
 // the int64 span and netlib writes genuine int64, so a NETLIB backend on a GPU queue would read
 // netlib's pivots wrongly. evidence: docs/perf/lu.md#correctness-findings
-// Vendor: factorization_vendor_available<B> is cuBLAS and cuSOLVER on CUDA.
+// Vendor: exactly the launch's own guard. Not d.has_vendor_solver && d.has_vendor_blas: on ROCm
+// rocSOLVER and rocBLAS are separate options, and getri_vendor<ROCM> needs only rocSOLVER.
 template <Backend B, class T>
 bool can_run(const GetriChoice& c, const select::Device& d, const MV<T>& A) {
     return std::visit(overloaded{
@@ -56,7 +57,7 @@ bool can_run(const GetriChoice& c, const select::Device& d, const MV<T>& A) {
             return d.is_gpu && d.has_sg32 && B != Backend::NETLIB && sycl_getri::getri_blocked_available<T>() &&
                    A.rows() == A.cols() && A.rows() >= 1 && A.batch_size() >= 1 && !A.is_heterogeneous();
         },
-        [&](Vendor) { return d.has_vendor_solver && d.has_vendor_blas; },
+        [&](Vendor) { return dispatch::factorization_vendor_available<B>; },
     }, c);
 }
 
