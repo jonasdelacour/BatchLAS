@@ -43,7 +43,12 @@ Heterogeneous batches and empty problems (n, nrhs or batch 0) throw `internal_er
 `choose()` (`throw_if_unservable`), so a pin cannot take them either; the old router refused both
 the same way (empty: through `solve_throw_unroutable`). Last resort: `blocked`. Aliases:
 `native:tiny`, `native:blocked`. Unknown spellings (`cta`, `native:cta`, `composed`, `tiny:1`)
-throw (R6); under the old router they silently meant Auto.
+throw (R6); under the old router they silently meant Auto. Wider break: spellings that the old
+`dispatch::parse_route_value` (`route_env.hh`) *recognised* also throw now, namely
+`batchlas_tiny`/`batchlas-tiny` and `batchlas_blocked`/`batchlas-blocked` (old: Tiny / Blocked),
+the `batchlas:` origin such as `batchlas:tiny` (old: native origin), and `netlib` (old: vendor
+origin, so Auto for gesv). posv made the same choice; a grep of `benchmarks/`, `scripts/` and
+`evaluation/` finds no user. Integrator: carry this into the AGENTS.md §9 / design §12 note.
 
 Workspace (R5): `gesv_buffer_size` runs the same `choose()`. Tiny: `gesv_tiny_buffer_size`.
 Blocked: `getrf_buffer_size + getrs_buffer_size` (a sum: the launch cuts the span at getrf's size).
