@@ -507,6 +507,16 @@ TYPED_TEST(SyevCandidates, CanRunFalsePinsThrow) {
                      std::invalid_argument)
             << word;
     }
+    // The Python binding's introspection asks the same can_run: no family takes a rectangle.
+    namespace det = blas::dispatch::detail;
+    EXPECT_FALSE(det::syev_supports_cta<T>(*this->ctx, rect));
+    EXPECT_FALSE(det::syev_supports_blocked<T>(*this->ctx, rect, Uplo::Lower));
+    EXPECT_FALSE(det::syev_supports_two_stage<T>(*this->ctx, rect, Uplo::Upper));
+    const MVof<T> sq32(a.data(), 32, 32, 32, 0, 1), sq33(a.data(), 33, 33, 33, 0, 1);
+    EXPECT_TRUE(det::syev_supports_cta<T>(*this->ctx, sq32));
+    EXPECT_FALSE(det::syev_supports_cta<T>(*this->ctx, sq33));
+    EXPECT_TRUE(det::syev_supports_blocked<T>(*this->ctx, sq33, Uplo::Upper));
+    EXPECT_TRUE(det::syev_supports_two_stage<T>(*this->ctx, sq33, Uplo::Lower));
 }
 
 // §5.3: legacy spellings, the class words, and the legacy variable BATCHLAS_SYEV_PROVIDER.
