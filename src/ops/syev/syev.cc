@@ -47,21 +47,24 @@ select::Key key_of(const MV<T>& A, JobType jobz) {
     return {{"jobz", jobz == JobType::EigenVectors ? "V" : "N"}, {"n", A.rows()}, {"batch", A.batch_size()}};
 }
 
-// Correctness only (R3): false means the driver would throw. Every native driver needs a square,
-// non-empty batch on a GPU; the three small solvers add n <= 32 and a 32-wide sub-group.
-// Blocked and TwoStage take Upper by mirroring into Lower (uplo_mirror.hh). No term reads
-// heterogeneity: neither the old router nor any driver checks it.
-template <class T>
+// Correctness only (R3): false means the driver would throw or compute garbage. The native
+// drivers are GPU kernels on a GPU backend (a NETLIB instantiation would call netlib on device
+// memory) and need a square A with n >= 1; the small solvers add n <= 32 and a 32-wide
+// sub-group, Blocked and TwoStage a batch >= 1 (the small drivers do not check it). Blocked and
+// TwoStage take Upper by mirroring into Lower (uplo_mirror.hh). No term reads heterogeneity:
+// neither the old router nor any driver checks it.
+template <Backend B, class T>
 bool can_run(const SyevChoice& c, const select::Device& d, const MV<T>& A) {
     const std::int64_t n = A.rows();
-    const bool native = d.is_gpu && A.rows() == A.cols() && n >= 1 && A.batch_size() >= 1;
+    const bool native = B != Backend::NETLIB && d.is_gpu && A.rows() == A.cols() && n >= 1;
     const bool small = native && n <= kSmallMaxN && d.has_sg32;
+    const bool large = native && A.batch_size() >= 1;
     return std::visit(overloaded{
         [&](Cta) { return small; },
         [&](CtaFused) { return small; },
         [&](Jacobi) { return small; },
-        [&](Blocked) { return native; },
-        [&](TwoStage) { return native; },
+        [&](Blocked) { return large; },
+        [&](TwoStage) { return large; },
         [&](Vendor) { return d.has_vendor_solver; },
     }, c);
 }
@@ -85,7 +88,7 @@ template <Backend B, class T>
 SyevChoice choose(Queue& q, const MV<T>& A, JobType jobz) {
     warn_retired_env();
     const select::Device& d = select::device_of<B>(q);
-    auto ok = [&](const SyevChoice& c) { return can_run<T>(c, d, A); };
+    auto ok = [&](const SyevChoice& c) { return can_run<B, T>(c, d, A); };
     // BATCHLAS_SYEV_PROVIDER, the legacy variable, still pins when nothing newer does.
     std::optional<select::ScopedPin<SyevChoice>> legacy;
     std::string source;
@@ -94,6 +97,9 @@ SyevChoice choose(Queue& q, const MV<T>& A, JobType jobz) {
             legacy.emplace("syev", v);
     try {
         return select::choose("syev", select::dtype_name<T>(), d, key_of<T>(A, jobz), candidates<T>(), ok, rules);
+    } catch (const std::invalid_argument& e) {
+        if (!legacy) throw;
+        throw std::invalid_argument(std::string(e.what()) + " (from BATCHLAS_SYEV_PROVIDER)");
     } catch (const std::runtime_error&) {
         // Vendor-free burn-down reads coverage `miss` rows; a plain runtime_error records none.
         const auto all = candidates<T>();
@@ -108,7 +114,7 @@ template <Backend B, class T>
 select::NativeFacts native_facts(Queue& q, const MV<T>& A) {
     if (!dispatch::coverage::dynamic_enabled()) return {};
     const select::Device& d = select::device_of<B>(q);
-    return select::native_facts(candidates<T>(), [&](const SyevChoice& c) { return can_run<T>(c, d, A); });
+    return select::native_facts(candidates<T>(), [&](const SyevChoice& c) { return can_run<B, T>(c, d, A); });
 }
 
 // Deliberately slower and more robust than the CTA STEQR defaults: syev runs inside syevx,
@@ -162,7 +168,7 @@ void validate(const MV<T>& A, const char* who) {
 // Capability only, for the Python binding's introspection: the same can_run, no backend.
 template <class T>
 bool supports(const Queue& q, const MV<T>& A, const SyevChoice& c) {
-    return can_run<T>(c, select::describe(q.device(), Backend::AUTO, false, false), A);
+    return can_run<Backend::AUTO, T>(c, select::describe(q.device(), Backend::AUTO, false, false), A);
 }
 
 }  // namespace ops::syev

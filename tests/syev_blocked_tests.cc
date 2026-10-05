@@ -188,9 +188,9 @@ TYPED_TEST(SyevBlockedTest, EigenvaluesOnlyLowerMatchesNetlib) {
 
 		// Reference: the VENDOR solver for this backend, called directly.
 		//
-		// Not the queue-dispatching syev(): on the CUDA fixture that enters
-		// syev_dispatch<CUDA>, and choose_syev_provider sends
-		// (NoEigenVectors && n > 32) straight to BatchLAS_Blocked -- so the
+		// Not the queue-dispatching syev(): on the CUDA fixture its table
+		// (tuned/syev.<dtype>.<device>.txt) sends
+		// (NoEigenVectors && 32 < n <= 320) straight to blocked -- so the
 		// n = 96 and n = 320 arms would compare syev_blocked against itself and
 		// could not fail. Checked by injection: flipping bp.order to Descending
 		// in syev_blocked.cc, or making stebz drop every slot >= local_size,
@@ -429,10 +429,9 @@ TYPED_TEST(SyevBlockedTest, AutoEigenvectorsAtRetunedPanelWidth) {
 // from Auto for complex before, so neither was covered.
 //
 // n = 6 and n = 28 sit one on each side of those two new boundaries. The sizes
-// are driven through the public `syev` so that syev_dispatch's buffer-size query
-// and its solve both run syev_choose_small_kernel -- that selector reads its env
-// override fresh on every call and is documented as having to agree between the
-// two, which is exactly the kind of disagreement a routing change can introduce.
+// are driven through the public `syev` so that its buffer-size query and its
+// solve both run choose() (src/ops/syev/syev.cc) -- the two have to agree, which
+// is exactly the kind of disagreement a routing change can introduce.
 TYPED_TEST(SyevBlockedTest, AutoEigenvectorsSmallNKernelBoundaries) {
 	using Scalar = typename TestFixture::ScalarType;
 	using Real = typename base_type<Scalar>::type;
