@@ -62,15 +62,11 @@ bool can_run(const GemvChoice& c, const select::Device& d, const MV<T>& A, const
     const bool native = !A.is_heterogeneous() && A.rows() >= 0 && A.cols() >= 0 && A.batch_size() >= 1 &&
                         X.batch_size() == A.batch_size() && Y.batch_size() == A.batch_size() &&
                         X.size() == red_len<T>(A, transA) && Y.size() == out_len<T>(A, transA);
+    if (!device_allows(c, d, transA != Transpose::NoTrans)) return false;
     return std::visit(overloaded{
-        // Body 3 carries reqd_sub_group_size(32); the driver throws on NoTrans.
-        [&](Cta) {
-            return native && sycl_gemv::gemv_cta_available<T>() && d.is_gpu && d.has_sg32 &&
-                   transA != Transpose::NoTrans;
-        },
-        // No GPU gate: vendor-free builds run it on native_cpu.
+        [&](Cta) { return native && sycl_gemv::gemv_cta_available<T>(); },
         [&](Direct) { return native && sycl_gemv::gemv_direct_available<T>(); },
-        [&](Vendor) { return d.has_vendor_blas; },
+        [&](Vendor) { return true; },
     }, c);
 }
 

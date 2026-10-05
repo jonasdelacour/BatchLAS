@@ -564,6 +564,32 @@ TYPED_TEST(GemvCandidates, CanRunFalsePinsThrow) {
     }
 }
 
+// RouteGemv.CtaRequiresTransposedGpuWithAnEnumeratedSubGroup32's device clauses, ported: no test
+// device lacks sub-group 32 and the host queue flips is_gpu and has_sg32 together, so each clause
+// is checked alone on synthetic devices.
+TEST(GemvDeviceAllows, CtaNeedsAGpuWithSubGroup32AndATransposedCall) {
+    auto dev = [](bool gpu, bool sg32, bool vendor) {
+        select::Device d;
+        d.is_gpu = gpu;
+        d.has_sg32 = sg32;
+        d.has_vendor_blas = vendor;
+        return d;
+    };
+    struct Case { select::Device d; bool transposed; bool cta, direct, vendor; const char* what; };
+    const Case cases[] = {
+        {dev(true, true, true), true, true, true, true, "gpu sg32 T"},
+        {dev(true, false, true), true, false, true, true, "gpu no-sg32 T"},
+        {dev(false, true, true), true, false, true, true, "cpu sg32 T"},
+        {dev(true, true, true), false, false, true, true, "gpu sg32 N"},
+        {dev(true, true, false), true, true, true, false, "gpu sg32 T, no vendor"},
+    };
+    for (const auto& k : cases) {
+        EXPECT_EQ(gv::device_allows(C{gv::Cta{}}, k.d, k.transposed), k.cta) << k.what;
+        EXPECT_EQ(gv::device_allows(C{gv::Direct{}}, k.d, k.transposed), k.direct) << k.what;
+        EXPECT_EQ(gv::device_allows(C{gv::Vendor{}}, k.d, k.transposed), k.vendor) << k.what;
+    }
+}
+
 // RouteGemv.HeterogeneousBatchIsRefusedByBothNativeTiers, ported: a heterogeneous A has no
 // native family; Auto is the vendor, and vendor-free there is no route.
 TYPED_TEST(GemvCandidates, HeterogeneousBatchHasNoNativeRoute) {

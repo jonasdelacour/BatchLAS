@@ -83,8 +83,11 @@ Both steps were re-run on this branch and reproduce the committed CSVs and table
   comment-density waivers.
 - The `RouteGemv.*` suite in `tests/route_vocabulary_tests.cc` (16 tests). Ported into
   `tests/gemv_candidates_tests.cc`: HelperIsArmed (by `CanRunEqualsLaunch`), DirectHasNoGpuGate
-  (`GemvCandidatesCpu.CpuQueueRunsDirectOrTheVendor`), CtaRequiresTransposedGpu... and
-  ZeroExtent... (`CanRunFalsePinsThrow`, `PinnedCandidatesStraddleTheirLimits`),
+  (`GemvCandidatesCpu.CpuQueueRunsDirectOrTheVendor`), CtaRequiresTransposedGpu... (NoTrans
+  clause: `CanRunFalsePinsThrow`; the `is_gpu` and `has_sg32` clauses, each alone on synthetic
+  devices: `GemvDeviceAllows.CtaNeedsAGpuWithSubGroup32AndATransposedCall`, which calls
+  `device_allows` in `choice.hh`, the device/trans half of `can_run`), ZeroExtent...
+  (`CanRunFalsePinsThrow`, `PinnedCandidatesStraddleTheirLimits`),
   HeterogeneousBatch... (`HeterogeneousBatchHasNoNativeRoute`), the window/boundary/preferred
   tests (`AutoReadsTheTranscribedTable`, `GemvTranscribedTable.RowsHoldTheOldPreference`),
   OutLenAndRedLenSwap (`TraceKeyOutRedFollowTrans`), AutoTakesTheVendor...
@@ -99,6 +102,9 @@ Both steps were re-run on this branch and reproduce the committed CSVs and table
 
 - `docs/perf/gemv.md`: a "Flat selection" paragraph was added under "What ships" (done on this
   branch); the `route_gemv.hh:line` citations below it now describe deleted code.
+- `docs/design/vendor-free-status.md:104`: the gemv row cites `route_gemv.hh:60-71` for the
+  cdouble window; point it at `src/ops/gemv/gemv.cc` `can_run` (with `device_allows` in
+  `src/ops/gemv/choice.hh`) plus `tuned/gemv.cdouble.*.txt` (48 cta-first rows).
 - `docs/design/known-defects.md:65` and `docs/design/vendor-independence.md:114` cite
   `gemv_route.hh` lines; the agreement checks now live in `can_run` (`src/ops/gemv/gemv.cc`).
 - `docs/design/small-n-factorization-plan.md:1141` and the `orgqr_route.hh` waiver text cite
@@ -146,6 +152,19 @@ Deliberate breaks (restored from a saved copy, md5 `5a95cd0b...` verified):
    `TraceKeyOutRedFollowTrans` red (float/double/cfloat; cdouble `TraceKeyOutRedFollowTrans`);
    complex<double> `AutoReadsTheTranscribedTable` / `AutoReadsEveryKeyField` then reach the
    cuBLAS Zgemv and segfault (known-defects #13) rather than failing cleanly.
+
+Review fix (device clauses): `can_run`'s device and trans terms moved into
+`ops::gemv::device_allows` (`src/ops/gemv/choice.hh`, host-callable); `can_run` calls it first.
+No test GPU lacks sub-group 32, and the host queue flips `is_gpu` and `has_sg32` together, so a
+host-only test now checks each clause alone. Deliberate breaks (restored, md5 `fbaa3142...`):
+3. `device_allows(Cta)` without `d.has_sg32` -> exactly
+   `GemvDeviceAllows.CtaNeedsAGpuWithSubGroup32AndATransposedCall` red (68 passed).
+4. `device_allows(Cta)` without `d.is_gpu` -> that test red, then
+   `GemvCandidatesCpu/0.CpuQueueRunsDirectOrTheVendor` fails its cta-pin EXPECT_THROW and the
+   launch of the sub-group body on native_cpu segfaults (native_cpu reports sub-group 32).
+After the fix: gemv_candidates_tests 69 (vendor) / 70 (vf) passed; gemv_tests `-*/7.*` 326,
+`BATCHLAS_GEMV_ROUTE=native` 372, vf 372; select_tests 37/37; tuned_tables_tests 13/13; data
+gate rerun 32/32 cells at 100.00%.
 
 **(b) Data gate.** Host replay: 3000 random points per dtype, off-grid in every coordinate (one
 third over out, red in [1, 131072], batch in [1, 65536]; two thirds concentrated around the

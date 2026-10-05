@@ -22,6 +22,13 @@ constexpr auto candidates() {
     return std::array<GemvChoice, 3>{Cta{}, Direct{}, Vendor{}};  // the old ladder
 }
 
+// can_run's device terms (host-callable for tests). Cta body 3 is reqd_sub_group_size(32).
+inline bool device_allows(const GemvChoice& c, const select::Device& d, bool transposed) {
+    if (std::holds_alternative<Cta>(c)) return d.is_gpu && d.has_sg32 && transposed;
+    if (std::holds_alternative<Vendor>(c)) return d.has_vendor_blas;
+    return true;
+}
+
 inline constexpr std::array<select::Alias, 2> aliases{{  // legacy spellings until phase 5
     {"native:cta", "cta"},
     {"native:direct", "direct"},
