@@ -1,8 +1,8 @@
 // Batched CSR SpMM -- C = alpha * A * op(B) + beta * C -- at the shapes lanczos and
 // LOBPCG use. Two arms: WARM reuses long-lived MatrixViews (the honest vendor
 // baseline); COLD rebuilds a MatrixView per call to price the per-call host chain.
-// Route is chosen per process by BATCHLAS_SPMM_ROUTE=vendor|direct; an unrecognised
-// word falls back SILENTLY, so confirm the route from the coverage table.
+// Route is chosen per process by BATCHLAS_SPMM_ROUTE=vendor|direct (src/ops/spmm/choice.hh);
+// an unrecognised word throws. Confirm the route from the coverage table.
 // evidence: docs/perf/spmm.md#measurement-harness-and-hygiene
 
 #include <batchlas/util/minibench.hh>

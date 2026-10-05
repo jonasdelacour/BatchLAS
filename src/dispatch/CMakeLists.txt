@@ -11,6 +11,5 @@
 target_sources(batchlas_dispatch_obj PRIVATE
     coverage.cc
     entry_points/level3.cc
-    entry_points/sparse.cc
     entry_points/eigen.cc
 )
