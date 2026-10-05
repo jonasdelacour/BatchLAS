@@ -29,7 +29,7 @@ inline constexpr select::Rules rules{last_resort};  // §5.5: Blocked serves the
 inline constexpr std::array<std::string_view, 4> key_names{"herm:exact", "vec:exact", "m:log:1.5", "n:log:1.5"};
 
 // Both sides of every driver ceiling (32 for cta, 64 for jacobi) plus a coarse log grid;
-// tools/transcribe/gesvd_transcribe.cc spells the same grid.
+// the transcriber (tuned/README.md) spells the same grid.
 inline constexpr std::array<int, 15> grid_mn{1, 2, 4, 8, 16, 24, 32, 33, 48, 64, 65, 128, 256, 512, 1024};
 inline constexpr std::array<std::string_view, 3> grid_herm{"N", "L", "U"};
 inline constexpr std::array<std::string_view, 3> grid_vec{"none", "all", "thin"};

@@ -70,7 +70,7 @@ description of the code. What runs is decided in `src/ops/posv/posv.cc`:
   homogeneous batch. It is false on a heterogeneous one because its children do not refuse it: vendor `potrf`
   (cuSOLVER at `descrA.rows()`) and vendor `trsm` would solve at the full storage order, a silent wrong answer;
 * **the sm_89 tables are the old window transcribed, untimed** (`source=transcribed:7e71a6e0`, entries
-  `<spelling> -`). `tools/transcribe/posv_transcribe.cc` evaluated the deleted router's own predicates
+  `<spelling> -`). `tools/transcribe/posv_transcribe.cc` (deleted in phase 5, `tuned/README.md`) evaluated the deleted router's own predicates
   (`resolve_route_uninstrumented`, vendor absent, capacities unlimited) at every cell of the
   `grid_n` x `grid_nrhs` {1,2,4,8,16,64} x `grid_batch` {128..32768} x uplo grid, ranking by repeated
   resolve-and-exclude and stopping after `blocked`. Inside the old `tiny_window` a row reads `tiny | cta | blocked`,

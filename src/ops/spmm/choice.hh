@@ -28,7 +28,7 @@ inline constexpr select::Rules rules{last_resort};  // vendor: every format; dir
 inline constexpr std::array<std::string_view, 5> key_names{
     "transA:exact", "transB:exact", "m:log", "nrhs:log", "batch:log"};
 
-// tools/transcribe/spmm_transcribe.cc spells the same grid; the old predicates read no extent.
+// The transcriber (tuned/README.md) spells the same grid; the old predicates read no extent.
 inline constexpr std::array<int, 5> grid_m{1, 16, 256, 4096, 65536};
 inline constexpr std::array<int, 5> grid_nrhs{1, 2, 4, 16, 64};
 inline constexpr std::array<int, 5> grid_batch{1, 8, 128, 1024, 16384};

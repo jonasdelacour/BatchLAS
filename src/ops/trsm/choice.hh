@@ -31,7 +31,7 @@ inline constexpr select::Rules rules{last_resort};  // §5.5: Blocked runs every
 inline constexpr std::array<std::string_view, 5> key_names{
     "side:exact", "trans:exact", "order:log:2", "q:log", "batch:log"};
 
-// The tuner's grid (plan §3); tools/transcribe/trsm_transcribe.cc spells the same grid.
+// The tuner's grid (plan §3); the transcriber (tuned/README.md) spells the same grid.
 inline constexpr std::array<int, 18> grid_order{1, 2, 4, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512,
                                                 768, 1024};
 inline constexpr std::array<int, 12> grid_q{1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 4096};

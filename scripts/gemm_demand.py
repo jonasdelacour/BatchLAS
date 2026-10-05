@@ -13,7 +13,7 @@ Since P3.4 (flat kernel selection) a gemm coverage row names the choice that ran
 `wide:m=64:n=64:k=16`, ...) in chosen_algo. Rows carry the key fields the table is keyed on
 (src/ops/gemm/choice.hh: ta, tb, layout, m, n, k, batch), except layout.
 
-This script used to carry a Python replica of the old route_gemm.hh preferred() so it could
+This script used to carry a Python replica of the deleted router's gemm preferred() so it could
 say what a Vendor->Auto flip "would" move. Both the predicate and the flip are gone: Auto
 reads tuned/gemm.<dtype>.<arch>.txt, so "what Auto does" is the capture itself. To ask what a
 different table would do, capture again under that table (or under BATCHLAS_GEMM_ROUTE=native
@@ -137,7 +137,7 @@ if __name__ == "__main__":
     if not args:
         sys.exit(__doc__)
     if "--check" in sys.argv:
-        sys.exit("--check re-derived the old route_gemm.hh preferred(), which P3.4 deleted; "
+        sys.exit("--check re-derived the deleted router's gemm preferred() (gone since P3.4); "
                  "diff two captures with scripts/route_diff.sh instead")
     minus = None
     for a in sys.argv[1:]:

@@ -9,6 +9,12 @@ float + cfloat). Worst batchlas/vendor time ratios: cfloat gemm 3.0x geomean (15
 32x32x1024), trsm float 1.5x (11x at n=32 q=8), getrs cfloat 1.8x (10x at nrhs=16),
 potrf cfloat 1.6x (9.5x at n=256), geqrf skinny 2-3.7x.
 
+> **Routing on this page is historical.** Every `RouteTable`, `preferred()`,
+> `native_tier_preferred` and `route_<op>.hh` clause quoted below was deleted by flat kernel
+> selection (phases 2-5, `docs/design/flat-kernel-selection.md`). Each op now takes the first
+> runnable entry of the nearest row of `tuned/<op>.<dtype>.<device>.txt`. The kernels and the
+> measurements stand.
+
 ## Result
 
 Same campaign re-run on the tuned branch: `cuda-blackwell-tuned` (worktree-blackwell-tuning

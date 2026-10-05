@@ -149,7 +149,7 @@ inline constexpr select::Rules rules{last_resort};
 inline constexpr std::array<std::string_view, 7> key_names{"ta:exact", "tb:exact", "layout:exact", "m:log",
                                                            "n:log",    "k:log",    "batch:log"};
 
-// The tuner's demand-driven grid (plan §3); tools/transcribe/gemm_transcribe.cc spells it again.
+// The tuner's demand-driven grid (plan §3); the transcriber (tuned/README.md) spells it again.
 // Squares for every form and both layouts; panels and skinny shapes for the issued forms only,
 // packed panels from m, n >= 128.
 inline constexpr std::array<int, 14> grid_square{8, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024};

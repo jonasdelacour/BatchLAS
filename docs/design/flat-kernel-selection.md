@@ -5,7 +5,10 @@ sm_120; the sm_89 live gate (needs the RTX 4090 box) is still open. See §12 "Ga
 Phase 3: P3.0 (select infrastructure), P3.1 (posv, sm_89 table transcribed, sm_120 converted),
 P3.2 (the tuner core, `tools/tune`, with `--gate`), P3.2b (blackwell kernels), P3.3 (trsm, sm_89
 transcribed, sm_120 float/double tuned) and P3.4 (gemm, transcribed) are built; see §12 and §13.
-Every op ships tables for every dtype on sm_89 and sm_120 (inventory: `tuned/README.md`).**
+Phase 5 (2026-10-05, one mega PR on `flat-select-mega`): gemv, geqrf, gesv, gesvd, getrf, getri,
+getrs, orgqr, ormqr, spmm and syev migrated (transcribed), the old dispatch layer, the legacy env
+vocabulary and its aliases deleted; no `RouteTable` is left (§12 "Phase 5"). Every op ships tables
+for every dtype on sm_89 and sm_120 (inventory: `tuned/README.md`).**
 Plan agreed 2026-10-02; deviations from the sketch are in §12. Written against `main` at `a1063892`. It is meant
 to be executed from `main` in a fresh session, phase by phase. Nothing here depends on PRs #133,
 #135 or #136, or on any branch other than `main`. The only exception is the potrf route-sweep
@@ -590,7 +593,8 @@ Conversion rules:
    row's own key.
 5. **Pins and borrowing** (no GPU needed). This test checks that:
    - an unknown pin throws, and so does a `can_run`-false pin;
-   - the legacy aliases parse;
+   - ~~the legacy aliases parse~~ (phase 5 removed every alias; each op's should-throw test now
+     lists the old spellings);
    - with synthetic tables, the borrow order of §5.5 holds, and the warning is printed once.
 
 **Deleted in the same PR**, because they assert the old predicates:
@@ -614,7 +618,8 @@ The `route-native` ctest re-run of `potrf_tests` (`tests/CMakeLists.txt:372-375`
 | 4 | Build `tools/tune`; retune potrf on sm_120, sm_89 and cpu, replacing the converted tables (hashes stamped) | tables no longer stale; gate re-run |
 | 5 | The remaining ops, one PR each; then delete `include/batchlas/blas/dispatch/`, the `src/backends/*_route.hh` adapters, `route_vocabulary_tests.cc`, the legacy env aliases and the route vocabulary docs | no `RouteTable` left |
 
-Phases 3–5 are planned but not committed to. The maintainer decides after phase 2.
+Phases 3–5 are planned but not committed to. The maintainer decides after phase 2. (Done: phase 3
+as P3.0-P3.4; phase 4's tuner as P3.2; phase 5 as one mega PR, §12. Phase 4's retunes are open.)
 
 ## 10. Acceptance gate (for every migrated op)
 
@@ -671,12 +676,11 @@ The sm_89 gate needs the RTX 4090 box. The sm_120 gate needs the Blackwell box (
   3-D range aborts past 65535 work-groups there. gemm's `can_run` now carries it (§12 Phase 3.4);
   the migrated ops' kernels were not audited for it.
 - **Stale comments on `main`** to fix when touching these files:
-  - `potrf_native.hh:4` ("preferred() is false for every tier");
-  - `coverage.cc:195` (LPanel missing);
-  - `potrf.hh:51-53` (wrong `options.hh` line numbers);
-  - `factorization.cc:727-730` ("both tiers").
+  - ~~`potrf_native.hh:4`~~, ~~`coverage.cc:195`~~, ~~`factorization.cc:727-730`~~ (rewritten or
+    deleted by phase 5);
+  - `potrf.hh:51-53` (wrong `options.hh` line numbers).
 
-## 12. As built (phases 1-3)
+## 12. As built (phases 1-5)
 
 Where the code differs from the sketches above, the code wins. These are the differences.
 
@@ -687,7 +691,7 @@ Where the code differs from the sketches above, the code wins. These are the dif
   `potrf_tests` relies on. Bare `vendor` joined it after the final review: in a vendor-free build
   a `vendor` pin threw, so `factor_bench`'s default `vendor,native` arms aborted the process,
   where the old router had fallen through to automatic. Concrete spellings and aliases still throw
-  `std::invalid_argument` (an alias that maps to `vendor` is concrete).
+  `std::invalid_argument` (an alias that maps to `vendor` is concrete). Phase 5 deleted the aliases.
 - **A CPU device never borrows a GPU table.** Without its own `*.cpu.txt` it goes straight to the
   last resort. A GPU device can still borrow across families (§5.5 step 3).
 - **Tables store spellings, validated on first use.** A table is parsed into spellings without
@@ -699,14 +703,14 @@ Where the code differs from the sketches above, the code wins. These are the dif
 - **`TraceScope` takes an `OpShape`** (the coverage key), built with `square_shape<B, T>(n, batch)`
   plus the fields the op sets itself (`uplo`).
 - **`choose()` takes a `Rules{aliases, last_resort}`** from the op. The aliases and the
-  last-resort order are op data, not helper code.
+  last-resort order are op data, not helper code. Phase 5: `Rules{last_resort}`, no aliases.
 - Zero-field families use `NoFields<"name">`, as §4.2 allows.
 
 **Phase 2, potrf:**
 - No `struct Key` in `choice.hh`; `key_of` in `potrf.cc` builds a `select::Key`. `key_names`
   stays in `choice.hh`.
 - `aliases`, `last_resort` and `rules` live in `choice.hh`, so tests and `factor_bench` use the
-  library's list.
+  library's list (`aliases` deleted in phase 5, with the bare-`lpanel` alias below).
 - **One alias beyond §5.3: bare `lpanel` → `lpanel:panel=8`.** In the old vocabulary a bare
   algorithm word meant native; `tiny`, `cta` and `blocked` already parse as themselves.
   potrf never had a `_VARIANT`/`_PROVIDER` variable, so no other legacy spelling exists.
@@ -790,7 +794,7 @@ Where the code differs from the sketches above, the code wins. These are the dif
   could pick a driver that then throws. `kPosvTinyWgSize` lives in the sycl-free `solve_native.hh`, with a
   `static_assert(kTinyWg == kPosvTinyWgSize)` in `posv_tiny.cc` (the `kPotrfTinyWgSize` precedent).
   Cta's clause and the common `native` term are the old ones unchanged.
-- **sm_89 tables are transcribed, untimed** (§13). `tools/transcribe/posv_transcribe.cc` builds
+- **sm_89 tables are transcribed, untimed** (§13). `tools/transcribe/posv_transcribe.cc` (deleted in phase 5, `tuned/README.md`) builds
   host-only with g++ against a tree that still has `route_posv.hh` (`7e71a6e0`). It specialises
   `RouteTable` for a private `Op` value that forwards to the real `RouteTable<Op::posv, T>` but
   reports already-ranked routes as unsupported, then calls the real
@@ -942,7 +946,7 @@ Where the code differs from the sketches above, the code wins. These are the dif
   `potrf_blocked_dispatch`'s trailing gemm keeps its `gemm_custom` fallback until P3.4 (a default
   argument cannot precede the now-mandatory one, so both defaults are gone and callers pass `{}`).
   P3.4 made that empty fallback the public gemm (see Phase 3.4).
-- **sm_89 tables are transcribed, untimed.** `tools/transcribe/trsm_transcribe.cc` (host g++
+- **sm_89 tables are transcribed, untimed.** `tools/transcribe/trsm_transcribe.cc` (deleted in phase 5, `tuned/README.md`; host g++
   against 8b9adeb3) re-runs the real `resolve_route_uninstrumented` over the old table, first with
   the vendor present, then (after the vendor is ranked) vendor-free for the remaining natives. The
   CTA capacity is applied, not unlimited: `trsm_cta_max_n<T>()` is a build constant (32 for every
@@ -1121,12 +1125,13 @@ Where the code differs from the sketches above, the code wins. These are the dif
   into homogeneous items before `choose()` in every build; each item chooses for itself.
 - **select changes.** `Rules` gains `class_aliases` (`register_tiled`, `sycl`, `custom` ->
   `native`; `vendor:auto` -> `vendor`) and `legacy_aliases`, applied before the class words, so an
-  alias to `vendor` stays concrete (§12 phase 1). `pin_text` reads `BATCHLAS_GEMM_VARIANT` only when
+  alias to `vendor` stays concrete (§12 phase 1; both arrays and the `_VARIANT` read are deleted in
+  phase 5). `pin_text` reads `BATCHLAS_GEMM_VARIANT` only when
   `_ROUTE` is unset, with its own words (`native`, `cuda-native`, `direct-cuda`, `cublasdx`, `dx` ->
   `vendor`; `sycl`, `custom` -> `native`). `Table::nearest` is memoized per table (the gemm tables
   hold thousands of rows); host cost measured +2-4 µs per tiny call against old routing, noisy.
   `TraceScope` records m, n, k, transA, transB, backend and precision; the trace prints the key.
-- **sm_89 tables are transcribed, untimed** (decision 6). `tools/transcribe/gemm_transcribe.cc`
+- **sm_89 tables are transcribed, untimed** (decision 6). `tools/transcribe/gemm_transcribe.cc` (deleted in phase 5, `tuned/README.md`)
   links against a built 424a45bc tree and calls the real old `preferred()` and the exported
   `select_kernel_variant<T>`. `packed` cells use contiguous aligned views, `strided` ones
   ld = rows + 1 with an odd batch stride (fails every aligned-leg predicate). A row is the old
@@ -1196,61 +1201,6 @@ Where the code differs from the sketches above, the code wins. These are the dif
   of the heterogeneous benchmark became `native`. Not in `can_run`, unchanged from before: the
   direct kernel's `int` batch offsets can overflow at large batch x stride (§11).
 
-**Phase 5 fold, tuned tables (2026-10-05; maintainer: one mega PR, no new tuning or measurement):**
-every table that already existed went into `tuned/`, and every op now ships all four dtypes on
-sm_89 and sm_120 (spmm also cpu), so neither device borrows. Inventory, per op x dtype x device
-(measured / converted / transcribed): `tuned/README.md`; `EveryOpShipsATableForEveryDtypeOnEveryShippedDevice`
-in `tuned_tables_tests` holds it.
-- **posv sm_120, converted** from `benchmarks/results/routing/sm120_posv_sweep.jsonl` (now committed
-  through LFS, with its driver scripts; provenance and resume in the routing README). 3329 cells,
-  4 tables (891/827/827/784 rows, 150 `# noisy`), `batchlas=886537e8`. The sweep's resume re-ran
-  224 complete pass-2 cells, so 672 (cell, arm, pass) appear twice; the converter's new
-  `Source.dedupe_latest` (set for this source only; elsewhere a duplicate stays fatal) keeps the
-  later kept row, and a dropped row (a refused re-run) never displaces a measurement: 422
-  replacements, the duplicate pairs agreeing to a median ratio of 0.9995. Against the transcription
-  sm_120 used to borrow, the first runnable entry changes in 86-239 rows per dtype, mostly `cta` ->
-  `blocked` (float 86 of 891 rows, cdouble 239 of 784).
-- **trsm sm_120 float/double, tuner tables**: raw in `benchmarks/results/tuning/`, tables
-  re-derived byte for byte from it (the only header change is the raw path). The first entry changes
-  in 1975 of 4452 float rows (`blocked` -> `vendor` 1007, `cta` -> `sg_left` 876) and 898 of 4098
-  double rows: the first time Auto picks `sg_left`. `kernels=c923160f` is reported stale against
-  `a33fbfee`, a false alarm (an unused include was removed from `trsm_native.cc`). cfloat/cdouble
-  stay transcribed (sweep stopped during cfloat; its partial raw is not used).
-- **Transcribed sm_120 tables written from the sm_89 CSVs**: gemm (all four dtypes) and trsm
-  cfloat/cdouble. New `--transcribe ... --device sm_120` writes a one-device CSV's rows for another
-  device, with `transcriber_device=sm_89` in the header for `--check`; it never overwrites a tuner
-  table. Valid because neither transcriber reads a device fact (their device argument only labels
-  rows); `tuned_tables_tests` checks the sm_120 rows equal the sm_89 rows.
-- Tests: the trsm and gemm `AutoReadsTheSm89TranscribedTable` cases now run on any device whose
-  table is the transcription (sm_120 gemm, sm_120 complex trsm) instead of requiring device sm_89;
-  three posv cases that hard-coded the sm_89 Auto pick (`LegacyAliasesSelectTheirChoice`,
-  `ScopedPinBeatsTheEnvironment`, `CoverageRowCarriesNativeFlags`) now compare against the Auto
-  pick the device's table makes. The tie-rule check in `tuned_tables_tests` exempts an entry within
-  print rounding of the 3% edge (the trsm and posv tables had 17 rows like `blocked 19.30 | cta
-  19.89`, tied by the printed digits but not by the converter's unrounded times).
-- `python3 scripts/sweep_to_table.py --check` passes on all 124 files; potrf's tables are byte-identical.
-
-**Phase 5, the old layer removed (2026-10-05; maintainer: rip out all legacy):**
-- `include/batchlas/blas/dispatch/` is gone, with `route_vocabulary_tests` and every `RouteTable`. New homes:
-  `batchlas::Op`, `ScalarKind` and `NoRouteError` in the installed, SYCL-free `<batchlas/no_route.hh>` (`Op::iluk`
-  dropped, renumbered: an ABI break, pre-1.0); the coverage instrument in `src/select/coverage.{hh,cc}` (`batchlas::coverage`,
-  CSV columns unchanged; `OpShape` is `coverage::Shape` without the never-read device fields); the vendor-availability
-  constants, `level3_tile_route_available` and `throw_no_vendor_route` in `src/select/vendor.hh` (`batchlas::select`);
-  the syev/ormqr `*_vendor_or_throw` shims in `src/ops/{syev,ormqr}/vendor.hh`; `is_sm120_family` next to
-  `Device::cuda_compute_capability`; `op_external` inlined at its 19 call sites. `src/dispatch/` is gone too: the
-  level-3 entry points are `src/ops/level3/level3.cc`.
-- `Settings::routing` is `route(std::string_view op)` over the 19 ops that read `BATCHLAS_<OP>_ROUTE` (throws for any
-  other name); `legacy[]`, `legacy_route()`, `canonical[]` and the inert hemm/herk/her2k/iluk slots are gone, as are
-  `selection.gemm_sycl_kernel`, `selection.syev_small_kernel` and `geometry.syev_cta_max_n`.
-- No aliases: `select::Rules` keeps only `last_resort`; every op's `aliases` array and gemm's `class_aliases` /
-  `legacy_aliases` are deleted, and each op's should-throw test lists the removed spellings. `BATCHLAS_<OP>_VARIANT`,
-  `BATCHLAS_<OP>_PROVIDER` and `BATCHLAS_GEMM_SYCL_KERNEL` are not read (tests assert that setting them changes nothing).
-- The level-3 four parse their own `BATCHLAS_<OP>_ROUTE` words (`src/backends/route_common.hh`, `level3_pin`), throw on
-  an unknown word, and record coverage with `record_choice` (`vendor:vendor`, `native:triangular`, ...). The
-  deliberately wrong `DiagFullGemm` measurement route is deleted; `native` now takes the tile kernel (it used to fall
-  to `DiagFullGemm` for syrk and to an unrequested cuBLASDx throw for syr2k), and a `cublasdx` pin that cannot run
-  throws instead of falling back. symm's `cublasdx`-pinned tests pin `expand`, the route they always measured.
-
 **Behaviour changes visible to callers:**
 - A bad pin throws. `factor_bench`'s posv `composed` arm therefore pins potrf to `tiny` only up to
   the type's tiny ceiling (16 for cdouble, 32 otherwise) and to `native` above it.
@@ -1288,6 +1238,168 @@ in `tuned_tables_tests` holds it.
 5. Open: the sm_89 live gate. The sm_89 tables are sparse (32-88 rows) and contain no current-era
    lpanel timings, so on sm_89 the new choices are least certain; run it before merging, or accept
    it as a phase-4 retune item.
+
+### Phase 5, gemv
+
+`src/ops/gemv/{choice.hh,gemv.cc}`; families `cta`, `direct`, `vendor`, all `NoFields`. Tables
+`tuned/gemv.<dtype>.<device>.txt`, transcribed from the old router at `424a45bc`. Off-grid data
+gate: 100.00% in all 32 (device, dtype, scenario) cells; the coverage readback matches the old
+binary on 21/26 cells with a vendor (the other 5 crash inside cuBLAS Zgemv in both binaries,
+known-defects #13) and 26/26 vendor-free. As-built notes, deviations and gate detail:
+`docs/design/flat-select-p5/gemv.md`.
+
+### Phase 5, geqrf
+
+`src/ops/geqrf/{choice.hh,geqrf.cc}`; families `tiny`, `cta`, `blocked`, `vendor`, all `NoFields`.
+Tables `tuned/geqrf.<dtype>.<device>.txt`, transcribed from the old router at `424a45bc`. Off-grid
+data gate: 100.000% in all 16 (dtype, device, vendor) cells at the real capacities, also at a 48 KiB
+budget and at small synthetic capacities; removing two grid edges drops it to ~99% and exits 1.
+`can_run` lives in `src/ops/geqrf/can_run.hh` so a host test can call it. As-built notes, deviations
+and gate detail: `docs/design/flat-select-p5/geqrf.md`.
+
+### Phase 5, gesv
+
+`src/ops/gesv/{choice.hh,gesv.cc}`; families `tiny`, `blocked` (no vendor arm on any backend, like
+posv), all `NoFields`. Tables `tuned/gesv.<dtype>.<device>.txt`, transcribed from the old router at
+`424a45bc`. Off-grid data gate: 100.00% in every cell (2500/2500 per dtype and device): every old
+threshold sits between two adjacent grid points; the coverage readback agrees on 21/21. As-built
+notes, deviations and gate detail: `docs/design/flat-select-p5/gesv.md`.
+
+### Phase 5, gesvd
+
+`src/ops/gesvd/{choice.hh,gesvd.cc}`; families `jacobi`, `cta`, `blocked`, `vendor`, all `NoFields`.
+Tables `tuned/gesvd.<dtype>.<device>.txt`, transcribed from the old router at `424a45bc`. Off-grid
+data gate: 100.00% in every dtype, vendor and vendor-free, on sm_89 and sm_120 (4000 off-grid
+points); the public `gesvd`/`gesvd_buffer_size` moved out of the installed header. As-built notes,
+deviations and gate detail: `docs/design/flat-select-p5/gesvd.md`.
+
+### Phase 5, getrf
+
+`src/ops/getrf/{choice.hh,getrf.cc}`; families `tiny`, `cta`, `blocked`, `vendor`, all `NoFields`.
+Tables `tuned/getrf.<dtype>.<device>.txt`, transcribed from the old router at `424a45bc`. Off-grid
+data gate: 100.00% in every dtype on both devices; the coverage readback agrees on 22/22. As-built
+notes, deviations and gate detail: `docs/design/flat-select-p5/getrf.md`.
+
+### Phase 5, getri
+
+`src/ops/getri/{choice.hh,getri.cc}`; families `blocked`, `vendor`, all `NoFields`. Tables
+`tuned/getri.<dtype>.<device>.txt`, transcribed from the old router at `424a45bc`. Off-grid data
+gate: 100.000% in every (device, dtype, vendor) cell, 4000/4000 each; dropping the below-edge grid
+points 127 and 255 drops it to ~98%. The coverage readback agrees on 22/22. As-built notes,
+deviations and gate detail: `docs/design/flat-select-p5/getri.md`.
+
+### Phase 5, getrs
+
+`src/ops/getrs/{choice.hh,getrs.cc}`; families `cta`, `blocked`, `vendor`, all `NoFields`. Tables
+`tuned/getrs.<dtype>.<device>.txt`, transcribed from the old router at `424a45bc`. Off-grid data
+gate: 100.000% in all 32 configurations (3300 points each); the coverage readback agrees on 22/22.
+As-built notes, deviations and gate detail: `docs/design/flat-select-p5/getrs.md`.
+
+### Phase 5, orgqr
+
+`src/ops/orgqr/{choice.hh,orgqr.cc}`; families `blocked`, `vendor`, all `NoFields`. Tables
+`tuned/orgqr.<dtype>.<device>.txt`, transcribed from the old router at `424a45bc`. Off-grid data
+gate: 100.00% in all 32 (dtype, device, vendor) cells for both bands; deleting the 513 rows drops
+float to 98.36%. As-built notes, deviations and gate detail: `docs/design/flat-select-p5/orgqr.md`.
+
+### Phase 5, ormqr
+
+`src/ops/ormqr/{choice.hh,ormqr.cc}`; families `blocked`, `vendor`, all `NoFields`. Tables
+`tuned/ormqr.<dtype>.<device>.txt`, transcribed from the old router at `424a45bc`. Off-grid data
+gate: 100.00% in every (dtype, device, vendor) cell (the old predicates read no extent); the
+coverage readback agrees on 18 cells. Blocked's WY width stays derived, so it is not a field.
+As-built notes, deviations and gate detail: `docs/design/flat-select-p5/ormqr.md`.
+
+### Phase 5, spmm
+
+`src/ops/spmm/{choice.hh,spmm.cc}`; families `direct`, `vendor`; tables for sm_89, sm_120 and cpu
+(12), all `NoFields`. Tables `tuned/spmm.<dtype>.<device>.txt`, transcribed from the old router at
+`424a45bc`. Off-grid data gate: 100.000% in every (dtype, device, build) cell over 10 000 off-grid
+points; the rows are constant across the size axes. As-built notes, deviations and gate detail:
+`docs/design/flat-select-p5/spmm.md`.
+
+### Phase 5, syev
+
+`src/ops/syev/{choice.hh,syev.cc}`; families `cta`, `cta_fused`, `jacobi`, `blocked`, `two_stage`,
+`vendor`, all `NoFields`. Tables `tuned/syev.<dtype>.<device>.txt`, transcribed from the old router
+at `424a45bc`. Off-grid data gate: 100.00% on all 8 (device, dtype) pairs for the first runnable
+choice with and without the vendor and for the whole ranking (24224 lookups); dropping the n = 33
+and 449 rows drops it to 98.08-99.44%. `syev`/`syev_buffer_size` moved out of the installed header.
+As-built notes, deviations and gate detail: `docs/design/flat-select-p5/syev.md`.
+
+### Phase 5 fold, tuned tables
+
+(2026-10-05; maintainer: one mega PR, no new tuning or measurement.)
+every table that already existed went into `tuned/`, and every op now ships all four dtypes on
+sm_89 and sm_120 (spmm also cpu), so neither device borrows. Inventory, per op x dtype x device
+(measured / converted / transcribed): `tuned/README.md`; `EveryOpShipsATableForEveryDtypeOnEveryShippedDevice`
+in `tuned_tables_tests` holds it.
+- **posv sm_120, converted** from `benchmarks/results/routing/sm120_posv_sweep.jsonl` (now committed
+  through LFS, with its driver scripts; provenance and resume in the routing README). 3329 cells,
+  4 tables (891/827/827/784 rows, 150 `# noisy`), `batchlas=886537e8`. The sweep's resume re-ran
+  224 complete pass-2 cells, so 672 (cell, arm, pass) appear twice; the converter's new
+  `Source.dedupe_latest` (set for this source only; elsewhere a duplicate stays fatal) keeps the
+  later kept row, and a dropped row (a refused re-run) never displaces a measurement: 422
+  replacements, the duplicate pairs agreeing to a median ratio of 0.9995. Against the transcription
+  sm_120 used to borrow, the first runnable entry changes in 86-239 rows per dtype, mostly `cta` ->
+  `blocked` (float 86 of 891 rows, cdouble 239 of 784).
+- **trsm sm_120 float/double, tuner tables**: raw in `benchmarks/results/tuning/`, tables
+  re-derived byte for byte from it (the only header change is the raw path). The first entry changes
+  in 1975 of 4452 float rows (`blocked` -> `vendor` 1007, `cta` -> `sg_left` 876) and 898 of 4098
+  double rows: the first time Auto picks `sg_left`. `kernels=c923160f` is reported stale against
+  `a33fbfee`, a false alarm (an unused include was removed from `trsm_native.cc`). cfloat/cdouble
+  stay transcribed (sweep stopped during cfloat; its partial raw is not used).
+- **Transcribed sm_120 tables written from the sm_89 CSVs**: gemm (all four dtypes) and trsm
+  cfloat/cdouble. New `--transcribe ... --device sm_120` writes a one-device CSV's rows for another
+  device, with `transcriber_device=sm_89` in the header for `--check`; it never overwrites a tuner
+  table. Valid because neither transcriber reads a device fact (their device argument only labels
+  rows); `tuned_tables_tests` checks the sm_120 rows equal the sm_89 rows.
+- Tests: the trsm and gemm `AutoReadsTheSm89TranscribedTable` cases now run on any device whose
+  table is the transcription (sm_120 gemm, sm_120 complex trsm) instead of requiring device sm_89;
+  three posv cases that hard-coded the sm_89 Auto pick (`LegacyAliasesSelectTheirChoice`,
+  `ScopedPinBeatsTheEnvironment`, `CoverageRowCarriesNativeFlags`) now compare against the Auto
+  pick the device's table makes. The tie-rule check in `tuned_tables_tests` exempts an entry within
+  print rounding of the 3% edge (the trsm and posv tables had 17 rows like `blocked 19.30 | cta
+  19.89`, tied by the printed digits but not by the converter's unrounded times).
+- `python3 scripts/sweep_to_table.py --check` passes on all 124 files; potrf's tables are byte-identical.
+
+### Phase 5 rip, the old layer removed
+
+(2026-10-05; maintainer: rip out all legacy.)
+- `include/batchlas/blas/dispatch/` is gone, with `route_vocabulary_tests` and every `RouteTable`. New homes:
+  `batchlas::Op`, `ScalarKind` and `NoRouteError` in the installed, SYCL-free `<batchlas/no_route.hh>` (`Op::iluk`
+  dropped, renumbered: an ABI break, pre-1.0); the coverage instrument in `src/select/coverage.{hh,cc}` (`batchlas::coverage`,
+  CSV columns unchanged; `OpShape` is `coverage::Shape` without the never-read device fields); the vendor-availability
+  constants, `level3_tile_route_available` and `throw_no_vendor_route` in `src/select/vendor.hh` (`batchlas::select`);
+  the syev/ormqr `*_vendor_or_throw` shims in `src/ops/{syev,ormqr}/vendor.hh`; `is_sm120_family` next to
+  `Device::cuda_compute_capability`; `op_external` inlined at its 19 call sites. `src/dispatch/` is gone too: the
+  level-3 entry points are `src/ops/level3/level3.cc`.
+- `Settings::routing` is `route(std::string_view op)` over the 19 ops that read `BATCHLAS_<OP>_ROUTE` (throws for any
+  other name); `legacy[]`, `legacy_route()`, `canonical[]` and the inert hemm/herk/her2k/iluk slots are gone, as are
+  `selection.gemm_sycl_kernel`, `selection.syev_small_kernel` and `geometry.syev_cta_max_n`.
+- No aliases: `select::Rules` keeps only `last_resort`; every op's `aliases` array and gemm's `class_aliases` /
+  `legacy_aliases` are deleted, and each op's should-throw test lists the removed spellings. `BATCHLAS_<OP>_VARIANT`,
+  `BATCHLAS_<OP>_PROVIDER` and `BATCHLAS_GEMM_SYCL_KERNEL` are not read (tests assert that setting them changes nothing).
+- The level-3 four parse their own `BATCHLAS_<OP>_ROUTE` words (`src/backends/route_common.hh`, `level3_pin`), throw on
+  an unknown word, and record coverage with `record_choice` (`vendor:vendor`, `native:triangular`, ...). The
+  deliberately wrong `DiagFullGemm` measurement route is deleted; `native` now takes the tile kernel (it used to fall
+  to `DiagFullGemm` for syrk and to an unrequested cuBLASDx throw for syr2k), and a `cublasdx` pin that cannot run
+  throws instead of falling back. symm's `cublasdx`-pinned tests pin `expand`, the route they always measured.
+- **Transcribers deleted.** `tools/transcribe/` (14 C++ transcribers and their 8 off-grid gate
+  scripts) compiled only against a tree that still had the old router. The tables keep their
+  provenance in the header: `source=transcribed:424a45bc` (100 tables), `7e71a6e0` (posv sm_89, 4),
+  `8b9adeb3` (trsm sm_89, 6). The sources are `git show 0bd26dfe:tools/transcribe/<file>`;
+  `tuned/transcribed/*.csv` stay, so `--check` still re-derives every table (`tuned/README.md`).
+- **Dead code deleted** (each proven unreferenced: one definition, no caller, no `nm` U reference):
+  `backend::gemm_cublasdx()`, `gemm_vendor_cuda_raw()` and their helpers; the cuSolverDx wrapper
+  (its kernels were gated on `BATCHLAS_ENABLE_CUSOLVERDX_WRAPPER`, defined nowhere, so it always
+  fell back to cuSOLVER) with its two benchmarks; six internal capacity/debug probes
+  (`geqrf_cta_max_m`, `geqrf_cta_max_elems`, `geqrf_cta_debug_launch`, `geqrf_tiny_max_n`,
+  `getrf_cta_max_n`, `orgqr_blocked_debug_block_size`); unused internal templates; the unbuilt
+  `benchmarks/gemm_custom.cc`; and, once `gemm_cublasdx()` was gone, `cublasdx_gemm::launch_float`,
+  `variant_supported`, `GemmLaunchDescriptor` and the cuBLASDx GEMM kernel templates.
+  `gemm_cublasdx.cu` keeps only `cublasdx_gemm::available()`, which the level-3 fused gate reads;
+  it no longer includes `<cublasdx.hpp>`, so it compiles the same with or without MathDx.
 
 ## 13. Phase 3 decisions (maintainer, 2026-10-04)
 

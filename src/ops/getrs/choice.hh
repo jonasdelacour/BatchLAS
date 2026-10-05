@@ -28,7 +28,7 @@ inline constexpr select::Rules rules{last_resort};
 inline constexpr std::array<std::string_view, 3> key_names{"n:log:2", "nrhs:log", "batch:log"};  // work ~ n^2 nrhs batch
 
 // A log grid plus both sides of every old threshold (n 31/32; nrhs 2/3, 4/5, 63/64, 127/128;
-// batch 127/128); tools/transcribe/getrs_transcribe.cc spells the same grid.
+// batch 127/128); the transcriber (tuned/README.md) spells the same grid.
 inline constexpr std::array<int, 18> grid_n{1, 2, 4, 8, 16, 24, 31, 32, 48, 64, 96, 128, 192, 256, 384, 512,
                                             768, 1024};
 inline constexpr std::array<int, 15> grid_nrhs{1, 2, 3, 4, 5, 8, 16, 32, 63, 64, 127, 128, 256, 512, 1024};

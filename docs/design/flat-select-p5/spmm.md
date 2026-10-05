@@ -1,5 +1,7 @@
 # Phase 5: spmm on flat kernel selection (as built)
 
+> `tools/transcribe/` was deleted in the phase 5 rip. Every `tools/transcribe/...` path on this page is the git path `0bd26dfe:tools/transcribe/...` (`git show` it); provenance in `tuned/README.md`.
+
 Branch `flat-select-p5-spmm`, based on `424a45bc` (the flat-selection stack head: phases 1-2,
 P3.0-P3.3). Written for the integrator. Nothing in `docs/design/flat-kernel-selection.md`,
 `AGENTS.md` or `tuned/README.md` was edited; the changes they need are listed at the end.

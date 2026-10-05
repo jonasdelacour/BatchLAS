@@ -28,7 +28,7 @@ inline constexpr select::Rules rules{last_resort};  // §5.5: Blocked runs every
 inline constexpr std::array<std::string_view, 6> key_names{
     "side:exact", "trans:exact", "m:log", "k:log", "q:log", "batch:log"};
 
-// The transcription grid; tools/transcribe/ormqr_transcribe.cc spells the same one (k <= m).
+// The transcription grid; the transcriber (tuned/README.md) spells the same one (k <= m).
 inline constexpr std::array<int, 4> grid_m{1, 8, 64, 512};
 inline constexpr std::array<int, 3> grid_q{1, 32, 1024};
 inline constexpr std::array<int, 3> grid_batch{128, 2048, 32768};

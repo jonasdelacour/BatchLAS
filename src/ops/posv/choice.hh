@@ -30,7 +30,7 @@ inline constexpr select::Rules rules{last_resort};
 inline constexpr std::array<std::string_view, 4> key_names{  // work: n^3/3 + 2 n^2 nrhs
     "uplo:exact", "n:log:3", "nrhs:log", "batch:log"};
 
-// potrf's grid_n within [1, 1024]; tools/transcribe/posv_transcribe.cc spells the same grid.
+// potrf's grid_n within [1, 1024]; the transcriber (tuned/README.md) spells the same grid.
 inline constexpr std::array<int, 33> grid_n{1, 2, 3, 4, 6, 8, 12, 16, 20, 24, 28, 32, 36, 40, 48, 56,
     64, 80, 96, 112, 128, 160, 192, 224, 256, 288, 320, 384, 448, 512, 640, 768, 1024};
 inline constexpr std::array<int, 6> grid_nrhs{1, 2, 4, 8, 16, 64};

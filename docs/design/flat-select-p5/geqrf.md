@@ -1,5 +1,7 @@
 # geqrf on flat kernel selection (phase 5)
 
+> `tools/transcribe/` was deleted in the phase 5 rip. Every `tools/transcribe/...` path on this page is the git path `0bd26dfe:tools/transcribe/...` (`git show` it); provenance in `tuned/README.md`.
+
 As-built notes for the integrator. Specs: `docs/design/flat-kernel-selection.md` (§2, §4, §5, §8,
 §12, §13) and `docs/design/flat-kernel-selection-phase3-plan.md`. Templates mirrored: posv and trsm.
 

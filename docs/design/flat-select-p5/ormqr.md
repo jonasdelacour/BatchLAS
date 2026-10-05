@@ -1,5 +1,7 @@
 # P5: ormqr flat selection (as built)
 
+> `tools/transcribe/` was deleted in the phase 5 rip. Every `tools/transcribe/...` path on this page is the git path `0bd26dfe:tools/transcribe/...` (`git show` it); provenance in `tuned/README.md`.
+
 Branch `flat-select-p5-ormqr`, based on `424a45bc`. Notes for the integrator who merges the P5
 branches and folds them into `docs/design/flat-kernel-selection.md` §12. This file is the only
 place the branch records its deviations. AGENTS.md, the design doc and `tuned/README.md` are not

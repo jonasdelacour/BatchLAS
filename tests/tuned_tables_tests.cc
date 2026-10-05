@@ -402,10 +402,10 @@ TEST(TunedTables, Sm120MeasuredTablesAreTimedAndNameTheirRawData) {
 
 // Likewise gemm's transcriber: one row per demand-grid cell of choice.hh (plan §3): squares for
 // every form and layout, panels (packed from m, n >= 128) and skinny shapes for the issued forms;
-// plus the edge rows that bracket the old predicate below the grid (gemm_transcribe.cc header):
+// plus the edge rows that bracket the old predicate below the grid (the transcriber's header):
 // real batch {1, 63, 64}, double k {1, 2} per (form, layout, m, n), float NN extra squares and
 // one-axis-off neighbours of the small squares.
-// The sm_120 tables are the same transcription (gemm_transcribe.cc read no device fact): row for row.
+// The sm_120 tables are the same transcription (the transcriber read no device fact): row for row.
 TEST(TunedTables, GemmTranscribedTablesHoldExactlyTheChoiceGrid) {
     namespace gemm = batchlas::ops::gemm;
     for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {

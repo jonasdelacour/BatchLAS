@@ -27,7 +27,7 @@ inline constexpr select::Rules rules{last_resort};  // §5.5: Vendor runs every 
 // The old predicates read m and n only (no batch, no arch). Work ~ m n^2.
 inline constexpr std::array<std::string_view, 2> key_names{"m:log", "n:log:2"};
 
-// Both sides of the old 512 ceiling, a coarse log grid elsewhere, n <= m (orgqr_transcribe.cc).
+// Both sides of the old 512 ceiling, a coarse log grid elsewhere, n <= m (transcriber: tuned/README.md).
 inline constexpr std::array<int, 17> grid{1, 2, 4, 8, 16, 32, 64, 128, 256, 384, 512, 513, 768, 1024, 2048, 4096,
                                           8192};
 

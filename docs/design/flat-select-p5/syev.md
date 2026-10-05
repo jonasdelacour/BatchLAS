@@ -1,5 +1,7 @@
 # Phase 5: syev on flat kernel selection (as built)
 
+> `tools/transcribe/` was deleted in the phase 5 rip. Every `tools/transcribe/...` path on this page is the git path `0bd26dfe:tools/transcribe/...` (`git show` it); provenance in `tuned/README.md`.
+
 Branch `flat-select-p5-syev`, based on `424a45bc` (the flat-selection stack head). This file is the
 op's §12 entry for [flat-kernel-selection.md](../flat-kernel-selection.md); the integrator folds
 it in. It also lists the shared-doc edits this PR leaves to the integrator (last section).

@@ -39,7 +39,7 @@ constexpr std::int64_t aspect_of(Int m, Int n) {
 }
 
 // Rows: sq x grid_n, tall x grid_n x grid_aspect, wide x grid_wide_n x grid_wide_aspect; both
-// sides of every old threshold (tools/transcribe/geqrf_transcribe.cc spells the same grid).
+// sides of every old threshold (the transcriber, tuned/README.md, spells the same grid).
 inline constexpr std::array<int, 52> grid_n{1,  2,  3,  4,  5,  6,  8,   9,   10,  11,  12,  14,  16,  17,  20,  21,  22,
                                             23, 24, 28, 31, 32, 33, 40,  47,  48,  49,  56,  63,  64,  75,  76,  80,  96,
                                             97, 112, 128, 160, 192, 224, 255, 256, 288, 384, 512, 768, 1024, 1536, 2048,

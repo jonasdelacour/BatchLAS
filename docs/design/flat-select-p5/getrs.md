@@ -1,5 +1,7 @@
 # getrs on flat kernel selection (phase 5)
 
+> `tools/transcribe/` was deleted in the phase 5 rip. Every `tools/transcribe/...` path on this page is the git path `0bd26dfe:tools/transcribe/...` (`git show` it); provenance in `tuned/README.md`.
+
 Branch `flat-select-p5-getrs`, based on `424a45bc` (the flat-selection stack head). These are
 the as-built notes for the integrator. They cover the deviations, the gate results and the doc
 edits this branch leaves for others, because the shared docs are not edited here.

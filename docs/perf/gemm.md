@@ -65,7 +65,7 @@ before `choose()` in every build, and each item makes its own choice (vendor bui
 
 **sm_89 and sm_120 are transcribed.** `tuned/gemm.*.sm_89.txt` are the old decision (the `route_gemm.hh` `preferred()` window, the
 `gemm_use_sycl_custom` re-route in the cuBLAS TU, and `select_kernel_variant`) evaluated at every grid cell by
-`tools/transcribe/gemm_transcribe.cc`, untimed (`tuned/README.md`). Each row is the old kernel, then its old forced-name fallback
+`tools/transcribe/gemm_transcribe.cc` (deleted in phase 5), untimed (`tuned/README.md`). Each row is the old kernel, then its old forced-name fallback
 (`reg`/`wide` -> `tiled`, `small` -> `direct`), then the other of `tiled`/`direct`, with `vendor` first where the old route was the vendor
 and last otherwise. What the rows say: float, `small` leads the 30 NN squares up to 48 and everything else is `vendor` first, then the old
 native kernel; double, native everywhere (`tiled` 4395 rows, `direct` 102, `wide:m=64:n=64:k=16` 15); complex, `vendor` first everywhere.

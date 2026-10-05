@@ -32,7 +32,7 @@ inline constexpr select::Rules rules{last_resort};  // §5.5: Blocked runs every
 // jobz N|V; uplo is no key (Upper mirrors into Lower). Work ~ n^3 batch.
 inline constexpr std::array<std::string_view, 3> key_names{"jobz:exact", "n:log:3", "batch:log"};
 
-// Both sides of every old threshold plus a log grid; syev_transcribe.cc spells the same grid.
+// Both sides of every old threshold plus a log grid; the transcriber (tuned/README.md) spells the same grid.
 inline constexpr std::array<int, 37> grid_n{1,   2,   3,   4,   6,   8,   9,   12,  16,  20,  24,   25,   28,
                                             32,  33,  40,  48,  64,  96,  128, 192, 256, 257, 320, 321,  384,
                                             448, 449, 512, 513, 640, 768, 1024, 1025, 1536, 2048, 4096};

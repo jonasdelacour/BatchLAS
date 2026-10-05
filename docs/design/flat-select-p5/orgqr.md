@@ -1,5 +1,7 @@
 # Phase 5: orgqr on flat kernel selection
 
+> `tools/transcribe/` was deleted in the phase 5 rip. Every `tools/transcribe/...` path on this page is the git path `0bd26dfe:tools/transcribe/...` (`git show` it); provenance in `tuned/README.md`.
+
 As-built notes for the integrator. Branch `flat-select-p5-orgqr`, based on `424a45bc` (the
 flat-selection stack head after P3.3 trsm). The spec is
 [flat-kernel-selection.md](../flat-kernel-selection.md); this file records what orgqr did, where
