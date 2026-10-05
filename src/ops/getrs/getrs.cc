@@ -36,7 +36,7 @@ using MV = MatrixView<T, MatrixFormat::Dense>;
 
 template <class T>
 select::Key key_of(const MV<T>& A, const MV<T>& B) {
-    return {{"n", A.rows()}, {"nrhs", 1}, {"batch", A.batch_size()}};
+    return {{"n", A.rows()}, {"nrhs", B.cols()}, {"batch", A.batch_size()}};
 }
 
 // getrs's vendor is the factorization library (cuBLAS + cuSOLVER on CUDA), carried in
