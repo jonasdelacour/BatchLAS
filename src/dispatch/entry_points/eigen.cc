@@ -1,9 +1,10 @@
-// The public syev / ormqr entry points' instantiations, outside the vendor TUs.
+// The public syev entry points' instantiations, outside the vendor TUs. (ormqr's
+// moved to src/ops/ormqr/ormqr.cc with its flat selection.)
 //
-// These two differ from every other op S5 moves. Their public templates are
-// already DEFINED in headers -- functions/syev.hh and functions/ormqr.hh, each
-// forwarding to its *_dispatch, which resolves a Route and may call a native
-// kernel instead of the vendor. So there was never a definition to relocate.
+// syev differs from every other op S5 moves. Its public template is already
+// DEFINED in a header -- functions/syev.hh, forwarding to its *_dispatch, which
+// resolves a Route and may call a native kernel instead of the vendor. So there
+// was never a definition to relocate.
 //
 // What did live in the vendor TUs was their explicit INSTANTIATION, which is
 // just as binding: with the instantiation in cusolver.cc, `syev<Backend::CUDA,
@@ -17,7 +18,6 @@
 #include <batchlas/backend_config.h>
 
 #include <batchlas/blas/functions/syev.hh>
-#include <batchlas/blas/functions/ormqr.hh>
 
 #include "../../util/template-instantiations.hh"
 
@@ -29,9 +29,7 @@ namespace batchlas {
 
 #define EIGEN_ONE(B_, fp)                          \
     OP_INSTANTIATE(syev, B_, fp)                   \
-    OP_INSTANTIATE(syev_buffer_size, B_, fp)       \
-    OP_INSTANTIATE(ormqr, B_, fp)                  \
-    OP_INSTANTIATE(ormqr_buffer_size, B_, fp)
+    OP_INSTANTIATE(syev_buffer_size, B_, fp)
 
 #define EIGEN_ALL(B_)                              \
     EIGEN_ONE(B_, float)                           \

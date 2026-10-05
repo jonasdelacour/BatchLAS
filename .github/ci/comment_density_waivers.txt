@@ -39,7 +39,6 @@
 # so there is no waiver line here that can be deleted for free.
 # ---------------------------------------------------------------------
 
-include/batchlas/blas/dispatch/route_ormqr.hh    # predates the budget, not touched by the small-n campaign
 include/batchlas/blas/dispatch/route_compiled.hh # predates the budget, not touched by the small-n campaign
 src/util/resident_capacity.hh                    # 45 lines of constexpr helpers, one invariant each (barrier scope, the non-monotone walk, the single budget spelling); every measured number is in docs/perf/potrf.md#the-shared-helper-budget-slice-walk-and-pack
 src/extensions/geqrf_tiny_device.hh              # 129 lines of constexpr gates and tables, 16 invariants each of which breaks silently (the ceil8 bank rule, the pin, the one-step fixed point, the odd tile stride, the separate y vector, no reqd_work_group_size); every measured number is in docs/perf/qr.md#the-tiny-tier-register-table, #the-chunk-width-and-the-one-cell-that-is-pinned and #the-two-partition-butterflies. 36.45% -> 20.73%; the remaining 5 lines cannot go without deleting a rationale.
@@ -180,7 +179,6 @@ tests/error_model_tests.cc                            # predates the small-n com
 tests/herk_tests.cc                                   # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
 tests/lanczos_tests.cc                                # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
 tests/mempool_tests.cc                                # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
-tests/ormqr_tests.cc                                  # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
 tests/settings_tests.cc                               # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
 tests/stedc_tests.cc                                  # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
 tests/syev_tests.cc                                   # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#6-the-comment-density-burn-down); untouched by this campaign
