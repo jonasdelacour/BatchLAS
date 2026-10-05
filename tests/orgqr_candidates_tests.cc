@@ -99,7 +99,8 @@ Prob<T> make_prob(Queue& q, int m, int n, int batch, unsigned seed, int period =
         for (int j = 0; j < n; ++j)
             for (int i = 0; i < m; ++i) p.mem[p.at(it, i, j)] = mk<T>(u(gen), u(gen));
     p.a0.assign(p.mem.begin(), p.mem.end());
-    if (m >= 1 && n >= 1 && batch >= 1) {
+    // A wide A (n > m) has no vendor-free geqrf; only a refused pin or the vendor ever sees one.
+    if (m >= 1 && n >= 1 && batch >= 1 && (n <= m || dispatch::factorization_vendor_available<B>)) {
         UnifiedVector<std::byte> ws(std::max<std::size_t>(1, geqrf_buffer_size<B, T>(q, p.A(), p.tau.to_span())));
         (void)geqrf<B, T>(q, p.A(), p.tau.to_span(), ws.to_span());
         q.wait();
