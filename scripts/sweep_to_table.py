@@ -446,6 +446,29 @@ GESV = OpSpec(
 )
 
 
+def gesvd_key(r):
+    try:
+        key = (str(r["herm"]), str(r["vec"]), int(r["m"]), int(r["n"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+    ok = key[0] in ("N", "L", "U") and key[1] in ("none", "all", "thin") and min(key[2:]) >= 1
+    return key if ok else None
+
+
+# gesvd (P5): herm N|L|U, vec none|all|thin (canonical jobs), m and n; work ~ m n min(m, n).
+# No sweep source: sm_89 and sm_120 are both transcribed from the arch-free old router.
+GESVD_CHOICES = ("jacobi", "cta", "blocked", "vendor")
+GESVD = OpSpec(
+    op="gesvd",
+    keys="herm:exact vec:exact m:log:1.5 n:log:1.5",
+    row_ops=("gesvd",),
+    row_key=gesvd_key,
+    arm_spelling={c: c for c in GESVD_CHOICES},
+    arm_route={c: (("vendor:vendor",) if c == "vendor" else (f"native:{c}",)) for c in GESVD_CHOICES},
+    candidate_order=list(GESVD_CHOICES),
+)
+
+
 def parse_keys(spec):
     """'# keys:' text -> [(name, is_log, weight)]; a :log weight defaults to 1."""
     out = []
@@ -837,7 +860,7 @@ GEQRF = OpSpec(
 )
 
 POTRF.review = potrf_offgrid
-OPS = [POTRF, POSV, TRSM, GEMM, GEMV, GEQRF, ORGQR, ORMQR, GETRF, GETRS, GETRI, GESV]
+OPS = [POTRF, POSV, TRSM, GEMM, GEMV, GEQRF, ORGQR, ORMQR, GETRF, GETRS, GETRI, GESV, GESVD]
 OP_BY_NAME = {s.op: s for s in OPS}
 
 

@@ -5,6 +5,7 @@
 #include <batchlas/util/kernel-heuristics.hh>
 #include <batchlas/util/mempool.hh>
 #include <batchlas/util/group-invoke.hh>
+#include "gesvd_native.hh"
 #include "sg_compat.hh"
 #include <batchlas/backend_config.h>
 #include "../math-helpers.hh"
@@ -1034,14 +1035,11 @@ inline void gesvdj_cta_impl(Queue& ctx,
 //
 // Values-only halves it (no V tile), which is why the cap is job-dependent.
 // The specific numbers here are set by measurement, not by the limit -- see
-// the table in gesvd_supports_jacobi.
+// the LDS figures above.
+// The values live in gesvd_native.hh so gesvd's can_run states the same ceiling.
 template <typename T>
 constexpr int32_t gesvdj_cta_max_dim(bool want_vectors) {
-    if constexpr (std::is_same_v<T, std::complex<double>>) {
-        return want_vectors ? 32 : 64;
-    } else {
-        return 64;
-    }
+    return static_cast<int32_t>(sycl_gesvd::gesvd_jacobi_max_dim<T>(want_vectors));
 }
 
 inline bool want_vectors_for_cap(SvdVectors jobu, SvdVectors jobvh) {
