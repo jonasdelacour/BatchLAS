@@ -1,5 +1,5 @@
-// The public factorization entry points -- getrf, getrs, getri and gesv (posv, geqrf and
-// orgqr are in src/ops/<op>/) -- defined once here rather than inside a vendor TU, so
+// The public factorization entry points -- getrs, getri and gesv (posv, geqrf, orgqr and
+// getrf are in src/ops/<op>/) -- defined once here rather than inside a vendor TU, so
 // dropping a vendor library does not drop the public symbol.
 // See docs/design/vendor-independence.md#the-entry-point-facade.
 //
@@ -29,7 +29,6 @@
 
 // Routing adapters and native drivers: each is a src/ header over public includes
 // only, so the facade can include it in a vendor-free build.
-#include "../../backends/getrf_route.hh"
 #include "../../backends/getrs_route.hh"
 #include "../../backends/getri_route.hh"
 #include "../../backends/gesv_route.hh"
@@ -54,24 +53,8 @@ namespace batchlas {
 // entry point.
 // A latent defect in that gate: docs/design/known-defects.md.
 
-// The LU family. preferred() is all-false in all three route tables: a vendor-present
-// build always resolves {Vendor, Auto}, a vendor-free build takes the native arm for
-// every square shape. evidence: docs/perf/lu.md#the-shipped-preferred-windows
-
 // These THROW rather than falling through to the vendor, which would silently keep
 // taking the vendor the day a native capability comes off zero.
-template <typename T>
-[[noreturn]] inline void getrf_throw_native_unimplemented(dispatch::Route route,
-                                                          const char* who) {
-    throw batchlas::internal_error(
-        std::string(who) + ": resolved to a native route (" +
-        std::string(dispatch::to_string(route.origin)) + ":" +
-        std::string(dispatch::to_string(route.algo)) +
-        ") but no native getrf kernel is linked into this build. "
-        "sycl_getrf::getrf_cta_max_n_for_slm / getrf_blocked_available reported a "
-        "capability the facade cannot service.");
-}
-
 template <typename T>
 [[noreturn]] inline void getrs_throw_native_unimplemented(dispatch::Route route,
                                                           const char* who) {
@@ -94,111 +77,6 @@ template <typename T>
         ") but no native getri driver is linked into this build. "
         "sycl_getri::getri_blocked_available reported a capability the facade "
         "cannot service.");
-}
-
-template <Backend B, typename T>
-Event getrf(Queue& ctx,
-            const MatrixView<T, MatrixFormat::Dense>& A,
-            Span<int64_t> pivots,
-            Span<std::byte> work_space,
-            Span<int32_t> info) {
-    // Must precede the shape builder, which reads A.rows()/A.cols().
-    getrf_validate_params<T>(A);
-
-    const dispatch::Route route = backend::getrf_route<B, T>(
-        ctx, A,
-        /*vendor_available=*/dispatch::factorization_vendor_available<B>);
-
-    if (dispatch::is_native(route)) {
-        // Tiny BEFORE CTA: it is the narrower tier, and its arm re-applies every
-        // supports() gate itself rather than trusting the resolver.
-        if (route.algo == dispatch::Algorithm::Tiny) {
-            return sycl_getrf::getrf_tiny_dispatch<T>(ctx, A, pivots, work_space, info);
-        }
-        if (route.algo == dispatch::Algorithm::CTA) {
-            return sycl_getrf::getrf_cta_dispatch<T>(ctx, A, pivots, work_space, info);
-        }
-        if (route.algo == dispatch::Algorithm::Blocked) {
-            // GEMM and TRSM go through the ROUTER -- see geqrf above.
-            return sycl_getrf::getrf_blocked_dispatch<T>(
-                ctx, A, pivots, work_space, info,
-                [](Queue& c,
-                   const MatrixView<T, MatrixFormat::Dense>& ga,
-                   const MatrixView<T, MatrixFormat::Dense>& gb,
-                   const MatrixView<T, MatrixFormat::Dense>& gc,
-                   T galpha, T gbeta, Transpose gta, Transpose gtb,
-                   ComputePrecision gp) {
-                    return gemm<B, T>(c, ga, gb, gc, galpha, gbeta, gta, gtb, gp);
-                },
-                [](Queue& c,
-                   const MatrixView<T, MatrixFormat::Dense>& ta,
-                   const MatrixView<T, MatrixFormat::Dense>& tb,
-                   T talpha, Side tside, Uplo tuplo, Transpose ttrans, Diag tdiag) {
-                    return trsm<B, T>(c, ta, tb, talpha, tside, tuplo, ttrans, tdiag);
-                });
-        }
-        getrf_throw_native_unimplemented<T>(route, "getrf");
-    }
-
-    if constexpr (!dispatch::factorization_vendor_available<B>) {
-        dispatch::throw_no_vendor_route<T>(
-            dispatch::Op::getrf, B, dispatch::kFactorizationLibrary<B>);
-    } else {
-        return backend::getrf_vendor<B, T>(ctx, A, pivots, work_space, info);
-    }
-}
-
-template <Backend B, typename T>
-size_t getrf_buffer_size(Queue& ctx,
-                         const MatrixView<T, MatrixFormat::Dense>& A) {
-    getrf_validate_params<T>(A);
-
-    const dispatch::Route route = backend::getrf_route<B, T>(
-        ctx, A,
-        /*vendor_available=*/dispatch::factorization_vendor_available<B>);
-
-    // max over every supported native tier and the vendor, and `native_fired`
-    // rather than a zero size -- see geqrf_buffer_size for both.
-    std::size_t native_need = 0;
-    bool native_fired = false;
-    if (dispatch::is_native(route)) {
-        const auto shape = backend::getrf_op_shape<B, T>(ctx, A);
-        using Tbl = dispatch::RouteTable<dispatch::Op::getrf, T>;
-        if (shape) {
-            if (Tbl::supports({dispatch::Origin::Native, dispatch::Algorithm::Tiny}, *shape)) {
-                // Without this arm a shape that ONLY Tiny supports throws out of the
-                // sizing query while the call itself succeeds.
-                native_need = std::max(native_need,
-                                       sycl_getrf::getrf_tiny_buffer_size<T>(ctx, A));
-                native_fired = true;
-            }
-            if (Tbl::supports({dispatch::Origin::Native, dispatch::Algorithm::CTA}, *shape)) {
-                native_need = std::max(native_need,
-                                       sycl_getrf::getrf_cta_buffer_size<T>(ctx, A));
-                native_fired = true;
-            }
-            if (Tbl::supports({dispatch::Origin::Native, dispatch::Algorithm::Blocked},
-                              *shape)) {
-                native_need = std::max(native_need,
-                                       sycl_getrf::getrf_blocked_buffer_size<T>(ctx, A));
-                native_fired = true;
-            }
-        }
-        if (!native_fired) {
-            getrf_throw_native_unimplemented<T>(route, "getrf_buffer_size");
-        }
-    }
-
-    if constexpr (!dispatch::factorization_vendor_available<B>) {
-        if (!native_fired) {
-            dispatch::throw_no_vendor_route<T>(
-                dispatch::Op::getrf, B, dispatch::kFactorizationLibrary<B>);
-        }
-        return native_need;
-    } else {
-        return std::max(native_need,
-                        backend::getrf_vendor_buffer_size<B, T>(ctx, A));
-    }
 }
 
 template <Backend Back, typename T>
@@ -461,8 +339,6 @@ size_t gesv_buffer_size(Queue& ctx,
 #define OP_INSTANTIATE(OP, B_, fp) BATCHLAS_INSTANTIATE(sig::OP<fp>, OP, B_, fp)
 
 #define FACTORIZATION_ONE(B_, fp)              \
-    OP_INSTANTIATE(getrf, B_, fp)              \
-    OP_INSTANTIATE(getrf_buffer_size, B_, fp)  \
     OP_INSTANTIATE(getrs, B_, fp)              \
     OP_INSTANTIATE(getrs_buffer_size, B_, fp)  \
     OP_INSTANTIATE(getri, B_, fp)              \

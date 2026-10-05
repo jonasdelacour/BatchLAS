@@ -7,7 +7,6 @@
 
 #include <batchlas/blas/dispatch/route.hh>
 #include <batchlas/blas/dispatch/route_env.hh>
-#include <batchlas/blas/dispatch/route_getrf.hh>
 #include <batchlas/blas/dispatch/route_getrs.hh>
 #include <batchlas/blas/dispatch/route_getri.hh>
 #include <batchlas/blas/dispatch/route_spmm.hh>
@@ -309,33 +308,12 @@ TEST(RouteVocabulary, TinyVocabularyRoundTrip) {
 // ported to tests/geqrf_candidates_tests.cc.
 
 // ---------------------------------------------------------------------------
-// The LU family: getrf, getrs, getri. These cases are SYNTHETIC -- they call
-// supports()/preferred() on hand-built shapes and never reach a kernel;
-// tests/getrf_tests.cc is where the real device shapes are asserted. getrf and
-// getri DO take potrf's `m == n` gate, unlike geqrf. evidence: docs/perf/lu.md
+// The LU family: getrs, getri (getrf moved to flat selection, tests/getrf_candidates_tests.cc).
+// These cases are SYNTHETIC -- they call supports()/preferred() on hand-built shapes and never
+// reach a kernel; tests/getrf_tests.cc is where the real device shapes are asserted. getri DOES
+// take potrf's `m == n` gate, unlike geqrf. evidence: docs/perf/lu.md
 // ---------------------------------------------------------------------------
 namespace {
-
-// PERMISSIVE DEFAULTS, one hostile field per case -- as in geqrf_shape above.
-GetrfShape getrf_shape(int64_t order, int64_t batch, int cta_max_n, int tiny_max = 0) {
-    GetrfShape s;
-    s.op = Op::getrf;
-    s.scalar = ScalarKind::F32;
-    // AUTO, deliberately -- the same reason as geqrf_shape's.
-    s.backend = Backend::AUTO;
-    s.m = order;
-    s.n = order;
-    s.k = order;          // THE ORDER, potrf's mapping and not geqrf's
-    s.batch = batch;
-    s.is_gpu = true;
-    s.has_sg32 = true;
-    s.cta_max_n = cta_max_n;
-    // 0 means "the register tier is absent from this build". It must be set explicitly by
-    // any case that asserts on the tiny window, or that case holds vacuously.
-    s.tiny_max_n = tiny_max;
-    s.blocked_available = (cta_max_n > 0);
-    return s;
-}
 
 // THE FUSED TIER'S TWO CAPACITIES, AND THEY DEFAULT TO PRESENT: a helper leaving them
 // at 0 makes RouteTable<getrs>::supports({Native, CTA}, s) false on every shape here,
@@ -388,12 +366,6 @@ template <typename Tbl, typename Shape>
 inline constexpr bool declares_native_tier_preferred =
     requires(Route r, const Shape& s) { Tbl::native_tier_preferred(r, s); };
 
-using GetrfTable = RouteTable<Op::getrf, float>;
-constexpr Route kGetrfCta{Origin::Native, Algorithm::CTA};
-constexpr Route kGetrfBlocked{Origin::Native, Algorithm::Blocked};
-constexpr Route kGetrfNativeBare{Origin::Native, Algorithm::Auto};
-constexpr Route kGetrfAuto{Origin::Auto, Algorithm::Auto};
-
 using GetrsTable = RouteTable<Op::getrs, float>;
 constexpr Route kGetrsCta{Origin::Native, Algorithm::CTA};
 constexpr Route kGetrsBlocked{Origin::Native, Algorithm::Blocked};
@@ -409,9 +381,6 @@ constexpr Route kVendorAuto{Origin::Vendor, Algorithm::Auto};
 
 // ---- THE OTHER THREE SCALAR TYPES, NAMED ONCE ------------------------------
 // preferred() decides on the TABLE's T and NOT on s.scalar.
-using GetrfTableD  = RouteTable<Op::getrf, double>;
-using GetrfTableCF = RouteTable<Op::getrf, std::complex<float>>;
-using GetrfTableCD = RouteTable<Op::getrf, std::complex<double>>;
 using GetrsTableD  = RouteTable<Op::getrs, double>;
 using GetrsTableCF = RouteTable<Op::getrs, std::complex<float>>;
 using GetrsTableCD = RouteTable<Op::getrs, std::complex<double>>;
@@ -420,217 +389,6 @@ using GetriTableCF = RouteTable<Op::getri, std::complex<float>>;
 using GetriTableCD = RouteTable<Op::getri, std::complex<double>>;
 
 } // namespace
-
-TEST(RouteGetrf, TheMeasuredTinyWindowAndNothingElse) {
-    // Tiny: float 5..32, cfloat 5..7 and 9..24. Every edge is a MEASURED non-winner.
-    // evidence: docs/perf/lu.md#the-column-bucket
-    // ARMED BREAK (R9): cfloat tiny_window upper edge 24 -> 16. EXPECTED: RED at 17, 20, 24.
-    using F   = RouteTable<Op::getrf, float>;
-    using CF  = RouteTable<Op::getrf, std::complex<float>>;
-    using D   = RouteTable<Op::getrf, double>;
-    using CD  = RouteTable<Op::getrf, std::complex<double>>;
-    constexpr Route kTiny{Origin::Native, Algorithm::Tiny};
-    constexpr Route kCta{Origin::Native, Algorithm::CTA};
-    constexpr Route kAuto{Origin::Auto, Algorithm::Auto};
-
-    auto hits = [](auto tbl, const GetrfShape& sh) {
-        using Tbl = decltype(tbl);
-        int n = 0;
-        for (const Route* it = Tbl::order_begin(); it != Tbl::order_end(); ++it)
-            if (Tbl::preferred(*it, sh)) ++n;
-        return n;
-    };
-
-    // IN the window, exactly ONE tier answers (R8b) and Auto takes a native route.
-    for (int64_t n : {5, 7, 8, 9, 12, 16, 17, 20, 22, 24, 32}) {
-        const auto sh = getrf_shape(n, 16384, /*cta_max_n=*/128, /*tiny_max=*/32);
-        EXPECT_TRUE(F::preferred(kTiny, sh)) << "float n=" << n;
-        EXPECT_EQ(hits(F{}, sh), 1) << "float n=" << n;
-        EXPECT_TRUE(is_native(resolve_getrf_route<float>(kAuto, sh, true))) << "float n=" << n;
-    }
-    for (int64_t n : {17, 20, 22}) {                    // the retired CTA band: tiny 1.36-1.53x
-        const auto sh = getrf_shape(n, 16384, 128, 32);
-        EXPECT_FALSE(F::preferred(kCta, sh)) << "float n=" << n;
-        EXPECT_EQ(resolve_getrf_route<float>(kAuto, sh, true), kTiny) << "float n=" << n;
-    }
-    for (int64_t n : {5, 7, 9, 12, 16, 17, 20, 24}) {   // the column bucket: 17..24 1.15-1.45x
-        const auto sh = getrf_shape(n, 16384, 128, 32);
-        EXPECT_TRUE(CF::preferred(kTiny, sh)) << "cfloat n=" << n;
-        EXPECT_EQ(hits(CF{}, sh), 1) << "cfloat n=" << n;
-    }
-
-    // The MEASURED brackets. Each of these is a cell that lost or tied, not a guess.
-    for (int64_t n : {1, 4}) {                          // float n=4 ties at the DRAM roof
-        const auto sh = getrf_shape(n, 65536, 128, 32);
-        EXPECT_FALSE(F::preferred(kTiny, sh)) << "float n=" << n << " measured 0.99x at n=4";
-        EXPECT_TRUE(is_vendor(resolve_getrf_route<float>(kAuto, sh, true)));
-        // ...but the vendor-FREE walk still takes Tiny: ~3x the CTA tier here.
-        EXPECT_EQ(resolve_getrf_route<float>(kAuto, sh, false), kTiny) << "float n=" << n;
-    }
-    for (int64_t n : {4, 8}) {                          // cfloat's two ties
-        const auto sh = getrf_shape(n, 65536, 128, 32);
-        EXPECT_FALSE(CF::preferred(kTiny, sh))
-            << "cfloat n=" << n << ": n=8 falls to 1.086x one doubling deeper";
-        EXPECT_EQ(resolve_getrf_route<std::complex<float>>(kAuto, sh, false), kTiny)
-            << "cfloat n=" << n;
-    }
-    for (int64_t n : {25, 28, 32}) {                    // cfloat ties above 24: 0.97-1.10x
-        const auto sh = getrf_shape(n, 65536, 128, 32);
-        EXPECT_FALSE(CF::preferred(kTiny, sh)) << "cfloat n=" << n << " ties the vendor";
-        EXPECT_TRUE(is_vendor(resolve_getrf_route<std::complex<float>>(kAuto, sh, true)));
-    }
-
-    // fp64 is unrouted here on purpose: 1/64 rate on this part, and no grid.
-    for (int64_t n : {8, 12, 16, 32}) {
-        const auto sh = getrf_shape(n, 16384, 128, 32);
-        EXPECT_FALSE(D::preferred(kTiny, sh));
-        EXPECT_FALSE(CD::preferred(kTiny, sh));
-    }
-
-    // A build WITHOUT the tier must not fire the window, or Auto sends the shape to a
-    // tier that cannot serve it and the walk falls through to an unmeasured arm.
-    const auto absent = getrf_shape(12, 16384, /*cta_max_n=*/128, /*tiny_max=*/0);
-    EXPECT_FALSE(F::preferred(kTiny, absent));
-    EXPECT_EQ(hits(F{}, absent), 0);
-    EXPECT_TRUE(is_vendor(resolve_getrf_route<float>(kAuto, absent, true)));
-
-    // The tier ceiling still gates: n beyond tiny_max_n is refused even inside 8..32.
-    const auto capped = getrf_shape(24, 16384, /*cta_max_n=*/128, /*tiny_max=*/16);
-    EXPECT_FALSE(F::preferred(kTiny, capped));
-
-    // The Blocked window is untouched and still disjoint from this one.
-    const auto big = getrf_shape(256, 16384, 128, 32);
-    EXPECT_TRUE(F::preferred(Route{Origin::Native, Algorithm::Blocked}, big));
-    EXPECT_EQ(hits(F{}, big), 1);
-}
-
-TEST(RouteGetrf, VendorFreeFallbackHandsOverTheNativeRoute) {
-    // THE TEST THAT FAILS IF A SPEED THRESHOLD EVER LANDS IN supports(): the
-    // vendor-free walk tests supports() ALONE. order=40, batch=2 are inverse_tests' extents.
-    const auto s = getrf_shape(/*order=*/40, /*batch=*/2, /*cta_max_n=*/128);
-
-    EXPECT_TRUE(GetrfTable::supports(kGetrfCta, s))
-        << "batch size and order are speed questions; neither may gate CORRECTNESS "
-           "-- and these are inverse_tests' own extents";
-    EXPECT_TRUE(GetrfTable::supports(kGetrfBlocked, s));
-    EXPECT_FALSE(GetrfTable::preferred(kGetrfCta, s))
-        << "getrf's preferred() is all-false BY DECISION, not by absence: both "
-           "native arms exist and are measured, and the window is withheld "
-           "because the crossover moves with batch as much as with order "
-           "(docs/perf/lu.md#the-vendor-baseline-and-saturation). Flip this only together with "
-           "a measured grid";
-
-    EXPECT_TRUE(is_native(resolve_getrf_route<float>(kGetrfAuto, s,
-                                                     /*vendor_available=*/false)))
-        << "un-preferred must never mean unroutable when there is no vendor";
-    EXPECT_TRUE(is_vendor(resolve_getrf_route<float>(kGetrfAuto, s,
-                                                     /*vendor_available=*/true)))
-        << "and with a vendor present it must take it -- the WP6 scaffolding gate "
-           "is zero behaviour change";
-}
-
-TEST(RouteGetrf, SquarenessIsAGateHereAndDeliberatelyNotInGeqrf) {
-    // getrf takes potrf's `m != n` line and geqrf refuses it; the two are one edit
-    // apart, so both halves are pinned here. BatchLAS's public getrf is square.
-    auto wide = getrf_shape(/*order=*/64, /*batch=*/128, /*cta_max_n=*/256);
-    wide.n = 1024;                    // m=64, n=1024, k=64
-    EXPECT_FALSE(GetrfTable::supports(kGetrfCta, wide));
-    EXPECT_FALSE(GetrfTable::supports(kGetrfBlocked, wide));
-
-    auto tall = getrf_shape(/*order=*/1024, /*batch=*/128, /*cta_max_n=*/2048);
-    tall.n = 32;                      // m=1024, n=32, k=1024
-    EXPECT_FALSE(GetrfTable::supports(kGetrfCta, tall));
-    EXPECT_FALSE(GetrfTable::supports(kGetrfBlocked, tall));
-
-    // GUARD AGAINST VACUITY: the square shape at the same extents must be supported.
-    const auto square = getrf_shape(64, 128, 256);
-    ASSERT_TRUE(GetrfTable::supports(kGetrfCta, square));
-
-    // geqrf's half (rectangular A stays native) is geqrf_candidates_tests'
-    // CanRunEqualsLaunch on tall shapes.
-}
-
-TEST(RouteGetrf, CtaCapacityIsTheOrderAndBlockedInheritsOnlyThePresence) {
-    // The CTA tile holds the whole n x n matrix PLUS the pivot-search scratch: a hard
-    // launch limit, not a tuning knob.
-    const auto fits = getrf_shape(/*order=*/128, /*batch=*/64, /*cta_max_n=*/128);
-    ASSERT_TRUE(GetrfTable::supports(kGetrfCta, fits))
-        << "guard: order 128 is exactly the capacity";
-
-    const auto over = getrf_shape(/*order=*/129, /*batch=*/64, /*cta_max_n=*/128);
-    EXPECT_FALSE(GetrfTable::supports(kGetrfCta, over));
-
-    // The BLOCKED arm inherits the PRESENCE of the leaf but not its capacity.
-    EXPECT_TRUE(GetrfTable::supports(kGetrfBlocked, over));
-
-    // ...but only when it exists.
-    auto no_blocked = over;
-    no_blocked.blocked_available = false;
-    EXPECT_FALSE(GetrfTable::supports(kGetrfBlocked, no_blocked));
-
-    // AND THE BLOCKED ARM CARRIES NO LOWER BOUND: in supports(), "order <= the CTA
-    // capacity so blocked should be false" makes a forced `blocked` measure the vendor.
-    const auto tiny = getrf_shape(/*order=*/1, /*batch=*/256, /*cta_max_n=*/128);
-    EXPECT_TRUE(GetrfTable::supports(kGetrfBlocked, tiny));
-}
-
-TEST(RouteGetrf, CorrectnessGatesAreNotSpeedGates) {
-    const auto ok = getrf_shape(/*order=*/64, /*batch=*/256, /*cta_max_n=*/128);
-    ASSERT_TRUE(GetrfTable::supports(kGetrfCta, ok))
-        << "guard: the permissive shape must be supported, or every EXPECT_FALSE "
-           "below passes for the wrong reason";
-
-    auto cpu = ok;  cpu.is_gpu = false;
-    EXPECT_FALSE(GetrfTable::supports(kGetrfCta, cpu));
-    EXPECT_FALSE(GetrfTable::supports(kGetrfBlocked, cpu));
-
-    auto het = ok;  het.heterogeneous_batch = true;
-    EXPECT_FALSE(GetrfTable::supports(kGetrfCta, het))
-        << "one launch, one (order, ld, stride) tuple, no batch walker -- and "
-           "netlib's getrf hoists n outside its loop too (netlib_lapack.cc:1291), "
-           "so nothing in this tree serves a heterogeneous LU";
-    EXPECT_FALSE(GetrfTable::supports(kGetrfBlocked, het));
-
-    auto empty = ok;  empty.m = 0; empty.n = 0; empty.k = 0;
-    EXPECT_FALSE(GetrfTable::supports(kGetrfCta, empty));
-    EXPECT_FALSE(GetrfTable::supports(kGetrfBlocked, empty));
-
-    auto no_batch = ok;  no_batch.batch = 0;
-    EXPECT_FALSE(GetrfTable::supports(kGetrfCta, no_batch));
-    EXPECT_FALSE(GetrfTable::supports(kGetrfBlocked, no_batch));
-
-    // THE THINGS THAT ARE *NOT* CORRECTNESS GATES; each must stay SUPPORTED.
-    auto tiny_batch = ok;  tiny_batch.batch = 1;
-    EXPECT_TRUE(GetrfTable::supports(kGetrfCta, tiny_batch))
-        << "a minimum-batch threshold belongs in preferred()";
-    auto two_batch = ok;  two_batch.batch = 2;
-    EXPECT_TRUE(GetrfTable::supports(kGetrfCta, two_batch))
-        << "inverse_tests runs at batch 2; a batch floor here keeps the one suite "
-           "WP6 can close red however good the kernel is";
-    auto huge_batch = ok;  huge_batch.batch = 1 << 20;
-    EXPECT_TRUE(GetrfTable::supports(kGetrfCta, huge_batch));
-}
-
-TEST(RouteGetrf, Sg32GatesBothNativeArms) {
-    // The blocked driver's diagonal-panel leaf IS the reqd_sub_group_size(32) device
-    // function, so one missing capability must close BOTH arms.
-    auto big = getrf_shape(/*order=*/1024, /*batch=*/64, /*cta_max_n=*/128);
-    ASSERT_FALSE(GetrfTable::supports(kGetrfCta, big))
-        << "guard: this order must NOT fit the CTA tile, or the next assertions "
-           "test the wrong arm";
-    ASSERT_TRUE(GetrfTable::supports(kGetrfBlocked, big))
-        << "guard: the blocked arm must be OPEN before we close it";
-
-    big.has_sg32 = false;
-    EXPECT_FALSE(GetrfTable::supports(kGetrfBlocked, big));
-
-    auto small = getrf_shape(/*order=*/64, /*batch=*/64, /*cta_max_n=*/128);
-    ASSERT_TRUE(GetrfTable::supports(kGetrfCta, small));
-    small.has_sg32 = false;
-    EXPECT_FALSE(GetrfTable::supports(kGetrfCta, small));
-
-    EXPECT_TRUE(is_vendor(resolve_getrf_route<float>(kGetrfAuto, small, false)));
-}
 
 // ---------------------------------------------------------------------------
 // THE PIVOT-FORMAT GATE, the one route test here with a BACKEND axis. The native
@@ -641,33 +399,6 @@ TEST(RouteGetrf, Sg32GatesBothNativeArms) {
 // evidence: docs/perf/lu.md#correctness-findings
 // ---------------------------------------------------------------------------
 TEST(RouteLuPivotFormat, NetlibOnAGpuQueueIsNotANativeShape) {
-    // --- getrf, both tiers ---------------------------------------------
-    auto f = getrf_shape(/*order=*/40, /*batch=*/2, /*cta_max_n=*/128);
-    f.backend = Backend::CUDA;
-    ASSERT_TRUE(GetrfTable::supports(kGetrfCta, f))
-        << "guard: this shape must be OPEN at a packed-int32 backend, or the "
-           "NETLIB assertion below passes for the wrong reason";
-    ASSERT_TRUE(GetrfTable::supports(kGetrfBlocked, f));
-
-    f.backend = Backend::NETLIB;
-    EXPECT_FALSE(GetrfTable::supports(kGetrfCta, f))
-        << "the native kernel writes packed int32; netlib's getri/getrs read "
-           "genuine int64 out of the same span";
-    EXPECT_FALSE(GetrfTable::supports(kGetrfBlocked, f))
-        << "both tiers write the same format, so one gate must close both";
-    EXPECT_TRUE(GetrfTable::supports(kVendorAuto, f))
-        << "the vendor arm is exactly what must still serve this configuration";
-
-    // ROCm packs int32 like CUDA, so the gate must NOT be an allow-list of one backend.
-    f.backend = Backend::ROCM;
-    EXPECT_TRUE(GetrfTable::supports(kGetrfCta, f));
-
-    // A forced route must be REFUSED, not silently honoured.
-    f.backend = Backend::NETLIB;
-    EXPECT_TRUE(is_vendor(resolve_getrf_route<float>(kGetrfBlocked, f, true)))
-        << "route_resolve.hh:165 honours a forced route only if supports() says "
-           "yes; this is the clause that makes the env var safe";
-
     // --- getrs ---------------------------------------------------------
     auto rs = getrs_shape(/*order=*/40, /*nrhs=*/3, /*batch=*/2);
     rs.backend = Backend::CUDA;
@@ -685,225 +416,17 @@ TEST(RouteLuPivotFormat, NetlibOnAGpuQueueIsNotANativeShape) {
     EXPECT_FALSE(GetriTable::supports(kGetriBlocked, ri))
         << "the native getri READS packed int32; a netlib getrf wrote int64";
     EXPECT_TRUE(is_vendor(resolve_getri_route<float>(kGetriBlocked, ri, true)));
-
-    // With no vendor at all there is no route, which is the honest answer here.
-    EXPECT_FALSE(is_native(resolve_getrf_route<float>(kGetrfAuto, f, false)));
 }
 
-// THE MEASURED ORDER WINDOW, per type. The clause names Algorithm::Blocked, NOT
-// "native": cta_max_n is passed large below so CTA is SUPPORTED at every order in
-// the loop and a clause that forgot the algo test is caught.
-// evidence: docs/perf/lu.md#getrf-window-evidence
-TEST(RouteGetrf, PreferredIsTheMeasuredOrderWindowPerTypeAndBlockedOnly) {
-    for (int64_t batch : {1, 2, 128, 8192}) {
-        for (int64_t order : {256, 257, 512, 2048}) {
-            const auto s = getrf_shape(order, batch, /*cta_max_n=*/4096);
-            EXPECT_TRUE(GetrfTable::preferred(kGetrfBlocked, s))
-                << "float order " << order << " batch " << batch;
-            EXPECT_FALSE(GetrfTable::preferred(kGetrfCta, s))
-                << "the CTA arm is NOT in the window: float n=128, where it "
-                   "serves, reads 0.825/0.773/0.872 at batch 256/512/1024";
-            EXPECT_FALSE(GetrfTable::preferred(kVendorAuto, s))
-                << "the vendor is where the walk ENDS, never itself preferred";
-            const Route r = resolve_getrf_route<float>(kGetrfAuto, s, true);
-            EXPECT_TRUE(is_native(r) && r.algo == Algorithm::Blocked)
-                << "float order " << order << " batch " << batch
-                << ": CTA is supported here (cta_max_n = 4096) and must still not "
-                   "be selected -- the clause names Blocked";
-        }
-        for (int64_t order : {1, 32, 40, 128, 255}) {
-            const auto s = getrf_shape(order, batch, 4096);
-            EXPECT_FALSE(GetrfTable::preferred(kGetrfBlocked, s)) << "float order " << order;
-            EXPECT_FALSE(GetrfTable::preferred(kGetrfCta, s));
-            EXPECT_TRUE(is_vendor(resolve_getrf_route<float>(kGetrfAuto, s, true)))
-                << "order " << order << " batch " << batch;
-        }
-        // cfloat since P4: >= 512 at any batch, and 256..511 ONLY at batch >= 256.
-        // The register panel leaf is what makes 256 clear the gate at all, and the
-        // batch term is a measured loss at batch 64..128, not caution.
-        // evidence: docs/perf/lu.md#the-cfloat-window-moves-to-256
-        for (int64_t order : {512, 513, 2048}) {
-            const auto s = getrf_shape(order, batch, 4096);
-            EXPECT_TRUE(GetrfTableCF::preferred(kGetrfBlocked, s)) << "cfloat order " << order;
-            const Route r = resolve_getrf_route<std::complex<float>>(kGetrfAuto, s, true);
-            EXPECT_TRUE(is_native(r) && r.algo == Algorithm::Blocked);
-        }
-        for (int64_t order : {256, 257, 511}) {
-            const auto s = getrf_shape(order, batch, 4096);
-            EXPECT_EQ(GetrfTableCF::preferred(kGetrfBlocked, s), batch >= 256)
-                << "cfloat order " << order << " batch " << batch
-                << ": the 256..511 band is batch-gated -- 0.92 at batch 128, 1.285 at 256";
-            const Route r = resolve_getrf_route<std::complex<float>>(kGetrfAuto, s, true);
-            EXPECT_EQ(is_native(r) && r.algo == Algorithm::Blocked, batch >= 256);
-        }
-        for (int64_t order : {1, 128, 192, 255}) {
-            const auto s = getrf_shape(order, batch, 4096);
-            EXPECT_FALSE(GetrfTableCF::preferred(kGetrfBlocked, s))
-                << "cfloat order " << order << ": n=192 is 1.101/0.915/0.859 up the "
-                   "batch ladder, below the gate at every saturating rung";
-            EXPECT_TRUE(is_vendor(
-                resolve_getrf_route<std::complex<float>>(kGetrfAuto, s, true)));
-        }
-        // double and cdouble: nothing, at any order.
-        for (int64_t order : {1, 128, 256, 512, 1024, 2048}) {
-            const auto s = getrf_shape(order, batch, 4096);
-            EXPECT_FALSE(GetrfTableD::preferred(kGetrfBlocked, s)) << "double order " << order;
-            EXPECT_FALSE(GetrfTableCD::preferred(kGetrfBlocked, s)) << "cdouble order " << order;
-            EXPECT_TRUE(is_vendor(resolve_getrf_route<double>(kGetrfAuto, s, true)));
-            EXPECT_TRUE(is_vendor(
-                resolve_getrf_route<std::complex<double>>(kGetrfAuto, s, true)));
-        }
-    }
-
-    // THE WINDOW IS NOT A CORRECTNESS GATE: preferred() must not repeat the capability test.
-    const auto absent = getrf_shape(512, 256, /*cta_max_n=*/0);
-    EXPECT_TRUE(GetrfTable::preferred(kGetrfBlocked, absent));
-    EXPECT_FALSE(GetrfTable::supports(kGetrfBlocked, absent));
-    EXPECT_TRUE(is_vendor(resolve_getrf_route<float>(kGetrfAuto, absent, true)));
-}
-
-TEST(RouteGetrf, BareOriginResolvesToASpecificAlgorithm) {
-    // getrf has TWO native routes, so {Native, Auto} names neither.
-    const auto small = getrf_shape(64, 256, 128);
-    const auto big   = getrf_shape(1024, 64, 128);
-
-    const Route rs = resolve_getrf_route<float>(kGetrfNativeBare, small,
-                                                /*vendor_available=*/true);
-    EXPECT_EQ(rs.origin, Origin::Native);
-    EXPECT_EQ(rs.algo, Algorithm::CTA);
-
-    const Route rb = resolve_getrf_route<float>(kGetrfAuto, big,
-                                                /*vendor_available=*/false);
-    EXPECT_TRUE(is_native(rb));
-    EXPECT_EQ(rb.algo, Algorithm::Blocked)
-        << "an order above the tile capacity must fall to the blocked driver, not "
-           "vanish";
-}
-
-TEST(RouteGetrf, AbsentKernelIsUnsupportedRatherThanSelectable) {
-    // Zero capacity / blocked_available == false is what a build without the kernels reports.
-    const auto s = getrf_shape(/*order=*/64, /*batch=*/256, /*cta_max_n=*/0);
-    EXPECT_FALSE(GetrfTable::supports(kGetrfCta, s));
-    EXPECT_FALSE(GetrfTable::supports(kGetrfBlocked, s));
-    EXPECT_TRUE(is_vendor(resolve_getrf_route<float>(kGetrfAuto, s, true)));
-    EXPECT_TRUE(is_vendor(resolve_getrf_route<float>(kGetrfAuto, s, false)))
-        << "vendor-free with nothing supported must say 'needs a vendor', not "
-           "invent a native route";
-
-    // AND FORCING MUST NOT ESCAPE IT: a forced route is gated on supports().
-    EXPECT_TRUE(is_vendor(resolve_getrf_route<float>(kGetrfCta, s, true)));
-    EXPECT_TRUE(is_vendor(resolve_getrf_route<float>(kGetrfBlocked, s, true)));
-    EXPECT_TRUE(is_vendor(resolve_getrf_route<float>(kGetrfNativeBare, s, true)));
-    EXPECT_TRUE(is_vendor(resolve_getrf_route<float>(kGetrfCta, s, false)));
-
-    // Half a capability is still absent: the blocked leaf IS the CTA device function.
-    auto half = getrf_shape(64, 256, /*cta_max_n=*/0);
-    half.blocked_available = true;
-    EXPECT_FALSE(GetrfTable::supports(kGetrfBlocked, half))
-        << "the blocked driver's diagonal-panel leaf IS the CTA device function, "
-           "so it inherits the presence gate";
-}
-
-TEST(RouteGetrf, NativeTierPreferredIsDeclaredAndPinsTheMeasuredTierChoice) {
-    // native_tier_preferred() is the third predicate, consulted ONLY in the vendor-free
-    // branch. DOUBLE alone prefers the blocked driver below its own CTA ceiling.
-    // evidence: docs/perf/lu.md#native_tier_preferred
-    EXPECT_TRUE((declares_native_tier_preferred<GetrfTable, GetrfShape>))
-        << "the tier sweep has run; an undeclared hook now costs 1.18-1.29x at "
-           "double n=76..96 in the vendor-free build";
-
-    // float: CTA below the capacity ceiling, from the hook and not the order array.
-    const auto small_f = getrf_shape(64, 8192, 128);
-    EXPECT_TRUE((GetrfTable::native_tier_preferred(kGetrfCta, small_f)));
-    EXPECT_FALSE((GetrfTable::native_tier_preferred(kGetrfBlocked, small_f)));
-    EXPECT_EQ(resolve_getrf_route<float>(kGetrfAuto, small_f,
-                                         /*vendor_available=*/false).algo,
-              Algorithm::CTA);
-
-    // double: the ONE type where the hook overrides kGetrfOrder's CTA-first ladder.
-    using GetrfTableD = RouteTable<Op::getrf, double>;
-    auto small_d = getrf_shape(64, 8192, 128);
-    small_d.scalar = ScalarKind::F64;
-    EXPECT_FALSE((GetrfTableD::native_tier_preferred(kGetrfCta, small_d)));
-    EXPECT_TRUE((GetrfTableD::native_tier_preferred(kGetrfBlocked, small_d)));
-    EXPECT_EQ(resolve_getrf_route<double>(kGetrfAuto, small_d,
-                                          /*vendor_available=*/false).algo,
-              Algorithm::Blocked)
-        << "double's vendor-free tier choice must come from the measured hook, "
-           "not from kGetrfOrder's CTA-first ladder";
-
-    // ...and at n <= 32 double goes back to CTA: the blocked driver runs ONE panel
-    // whose leaf IS the CTA device function, so CTA is the cheaper spelling of it.
-    auto tiny_d = getrf_shape(32, 8192, 128);
-    tiny_d.scalar = ScalarKind::F64;
-    EXPECT_TRUE((GetrfTableD::native_tier_preferred(kGetrfCta, tiny_d)));
-    EXPECT_EQ(resolve_getrf_route<double>(kGetrfAuto, tiny_d,
-                                          /*vendor_available=*/false).algo,
-              Algorithm::CTA);
-
-    // IT IS NOT A CORRECTNESS GATE: both arms stay supports()-able wherever the window moves.
-    EXPECT_TRUE((GetrfTableD::supports(kGetrfCta, small_d)));
-    EXPECT_TRUE((GetrfTableD::supports(kGetrfBlocked, small_d)));
-    EXPECT_EQ(resolve_getrf_route<double>(kGetrfCta, small_d,
-                                          /*vendor_available=*/false).algo,
-              Algorithm::CTA);
-
-    // The hook is consulted only inside the `!vendor_available` branch.
-    EXPECT_TRUE(is_vendor(resolve_getrf_route<double>(kGetrfAuto, small_d,
-                                                      /*vendor_available=*/true)));
-
-    // getrs declares it too: it has two native tiers, which the order array alone cannot follow.
+// getrf's own hook went with its RouteTable (flat selection); the others keep theirs.
+TEST(RouteLuFamily, TierHookDeclarationsOfTheRemainingOps) {
+    // getrs declares it: it has two native tiers, which the order array alone cannot follow.
     EXPECT_TRUE((declares_native_tier_preferred<GetrsTable, GetrsShape>))
         << "getrs has two native tiers; the order array alone cannot follow a "
            "crossover between them";
 
     // getri is single-arm and must NOT declare it.
     EXPECT_FALSE((declares_native_tier_preferred<GetriTable, GetriShape>));
-}
-
-TEST(RouteGetrf, BatchlasGetrfRouteIsActuallyRead) {
-    // The canonical spelling needs no registry entry; parse_route_env synthesises it.
-    ClearRouteEnv clear(Op::getrf);
-
-    EXPECT_EQ(op_env_stem(Op::getrf), "GETRF");
-    EXPECT_TRUE(std::string(legacy_variable_for(Op::getrf)).empty())
-        << "no legacy getrf variable ever shipped; a case in legacy_variable_for "
-           "would INVENT a legacy spelling. Note that Op::ormqr DOES have one "
-           "(route_env.hh:118) -- that is not a precedent for this op";
-
-    {
-        const auto unset = parse_route_env(Op::getrf);
-        EXPECT_FALSE(unset.found);
-        EXPECT_FALSE(unset.unparsed);
-        EXPECT_EQ(legacy_unset_default(Op::getrf).origin, Origin::Auto);
-    }
-    {
-        ScopedEnvVar e("BATCHLAS_GETRF_ROUTE", "cta");
-        const auto p = parse_route_env(Op::getrf);
-        ASSERT_TRUE(p.found) << "BATCHLAS_GETRF_ROUTE was not read at all";
-        EXPECT_EQ(p.route, (Route{Origin::Native, Algorithm::CTA}))
-            << "a bare algorithm implies Origin::Native";
-        EXPECT_EQ(p.source.variable, "BATCHLAS_GETRF_ROUTE");
-        EXPECT_FALSE(p.source.legacy);
-    }
-    {
-        ScopedEnvVar e("BATCHLAS_GETRF_ROUTE", "native:blocked");
-        const auto p = parse_route_env(Op::getrf);
-        ASSERT_TRUE(p.found);
-        EXPECT_EQ(p.route, (Route{Origin::Native, Algorithm::Blocked}));
-    }
-    {
-        ScopedEnvVar e("BATCHLAS_GETRF_ROUTE", "vendor");
-        const auto p = parse_route_env(Op::getrf);
-        ASSERT_TRUE(p.found);
-        EXPECT_EQ(p.route, (Route{Origin::Vendor, Algorithm::Auto}));
-    }
-    {
-        ScopedEnvVar e("BATCHLAS_GETRF_ROUTE", "not-a-route");
-        const auto p = parse_route_env(Op::getrf);
-        EXPECT_FALSE(p.found);
-        EXPECT_TRUE(p.unparsed) << "a typo must be reported, not silently Auto";
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1497,10 +1020,8 @@ TEST(RouteLuFamily, TheThreeOpsResolveIndependentlyAndThatIsThePivotHazard) {
     EXPECT_FALSE(parse_route_env(Op::getrs).found)
         << "and the third is untouched -- the three do not share a variable";
 
-    // Today both resolve to the vendor, which is why this asserts on the PARSED routes.
-    const auto fs = getrf_shape(/*order=*/64, /*batch=*/128, /*cta_max_n=*/128);
+    // Today getri resolves to the vendor, which is why this asserts on the PARSED routes.
     const auto is_ = getri_shape(/*order=*/64, /*batch=*/128);
-    EXPECT_TRUE(GetrfTable::supports(kGetrfCta, fs));
     EXPECT_TRUE(GetriTable::supports(kGetriBlocked, is_));
     EXPECT_TRUE(is_vendor(resolve_getri_route<float>(
         Route{Origin::Vendor, Algorithm::Auto}, is_, /*vendor_available=*/true)))
@@ -2169,25 +1690,3 @@ TEST(RouteSpmm, BatchlasSpmmRouteIsActuallyRead) {
     }
 }
 
-// The vendor-free getrf walk for cfloat: Tiny wherever it fits (1.2-1.5x over the better of
-// CTA and Blocked at 25..32), CTA above -- each the measured best native tier.
-// evidence: docs/perf/lu.md#the-column-bucket
-// ARMED BREAK (R9): restore tiny_native's `n <= 8` clause in place of `tiny_fits`.
-// EXPECTED: RED at 25, 28 and 32 (the walk leaves Tiny).
-TEST(RouteGetrf, CfloatNativeWalkTakesTinyWhereverItFits) {
-    constexpr Route kTiny{Origin::Native, Algorithm::Tiny};
-    constexpr Route kCta{Origin::Native, Algorithm::CTA};
-    constexpr Route kAuto{Origin::Auto, Algorithm::Auto};
-    using CF = std::complex<float>;
-    for (int64_t n : {17, 24, 25, 28, 32}) {
-        const auto sh = getrf_shape(n, 32768, /*cta_max_n=*/128, /*tiny_max=*/32);
-        EXPECT_EQ(resolve_getrf_route<CF>(kAuto, sh, false), kTiny) << "cfloat n=" << n;
-    }
-    for (int64_t n : {25, 28, 32}) {
-        // Vendor-present Auto is unchanged: native against native only.
-        const auto sh = getrf_shape(n, 32768, 128, 32);
-        EXPECT_TRUE(is_vendor(resolve_getrf_route<CF>(kAuto, sh, true))) << "cfloat n=" << n;
-    }
-    const auto above = getrf_shape(40, 32768, 128, 32);
-    EXPECT_EQ(resolve_getrf_route<CF>(kAuto, above, false), kCta) << "cfloat n=40";
-}

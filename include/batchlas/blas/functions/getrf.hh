@@ -43,17 +43,18 @@ using getrf_vendor_buffer_size = size_t(Queue&,
 
 
 // WP6: the one thing that is invalid for EVERY route, checked once, hoisted above
-// the shape builder in src/dispatch/entry_points/factorization.cc because the
-// builder reads A.rows()/A.cols(). Modelled on geqrf_validate_params
+// kernel selection in src/ops/getrf/getrf.cc because choose() reads
+// A.rows()/A.cols(). Modelled on geqrf_validate_params
 // (geqrf.hh:71-77) and potrf_validate_params, and it obeys geqrf.hh:55-70's rule:
 // validate only what no route could serve.
 //
 // TWO THINGS IT DELIBERATELY DOES NOT CHECK, and both omissions are load-bearing:
 //
-//   * NO SQUARENESS CHECK, although RouteTable<Op::getrf,T>::supports() carries
-//     one and the arena spellings check it (options.hh:615's require_square).
-//     supports() saying "the native drivers cannot serve this" ROUTES the call to
-//     the vendor; it does not say the CALL is invalid. A validator that threw here
+//   * NO SQUARENESS CHECK, although every native family's can_run in
+//     src/ops/getrf/getrf.cc carries one and the arena spellings check it
+//     (options.hh:615's require_square). can_run saying "the native drivers cannot
+//     serve this" sends the call to the vendor (vendor-free: NoRouteError); it
+//     does not say the CALL is invalid. A validator that threw here
 //     would turn a currently-working positional call into an error -- a
 //     user-visible behaviour change that belongs in its own commit with its own
 //     test, which is exactly the rule potrf.hh:59-65 states.

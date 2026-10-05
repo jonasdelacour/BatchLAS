@@ -368,6 +368,27 @@ ORMQR = OpSpec(
 )
 
 
+def getrf_key(r):
+    try:
+        key = (int(r["n"]), int(r["batch"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+    return key if min(key) >= 1 else None
+
+
+# getrf (phase 5): work ~ n^3 batch, no exact key. sm_89 and sm_120 are both transcribed.
+GETRF_CHOICES = ("tiny", "cta", "blocked", "vendor")
+GETRF = OpSpec(
+    op="getrf",
+    keys="n:log:3 batch:log",
+    row_ops=("getrf",),
+    row_key=getrf_key,
+    arm_spelling={c: c for c in GETRF_CHOICES},
+    arm_route={c: (("vendor:vendor",) if c == "vendor" else (f"native:{c}",)) for c in GETRF_CHOICES},
+    candidate_order=list(GETRF_CHOICES),
+)
+
+
 def parse_keys(spec):
     """'# keys:' text -> [(name, is_log, weight)]; a :log weight defaults to 1."""
     out = []
@@ -759,7 +780,7 @@ GEQRF = OpSpec(
 )
 
 POTRF.review = potrf_offgrid
-OPS = [POTRF, POSV, TRSM, GEMM, GEMV, GEQRF, ORGQR, ORMQR]
+OPS = [POTRF, POSV, TRSM, GEMM, GEMV, GEQRF, ORGQR, ORMQR, GETRF]
 OP_BY_NAME = {s.op: s for s in OPS}
 
 

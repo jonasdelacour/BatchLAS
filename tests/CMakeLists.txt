@@ -46,6 +46,7 @@ set(TEST_TARGETS
     trsm_candidates_tests
     gemm_candidates_tests
     gemv_candidates_tests
+    getrf_candidates_tests
     geqrf_tests
     geqrf_candidates_tests
     getrf_tests

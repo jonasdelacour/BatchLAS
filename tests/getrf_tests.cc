@@ -32,7 +32,6 @@
 #include "../src/extensions/getrf_native.hh"
 #include "../src/extensions/getrs_native.hh"
 #include "../src/extensions/getri_native.hh"
-#include "../src/backends/getrf_route.hh"
 #include "../src/backends/getrs_route.hh"
 #include "../src/backends/getri_route.hh"
 
@@ -387,13 +386,13 @@ protected:
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
         if (!this->ctx) GTEST_SKIP() << "no queue";
         if (this->ctx->device().type != DeviceType::GPU)
-            GTEST_SKIP() << "the native LU kernels are GPU-only (route_getrf.hh gate 2)";
+            GTEST_SKIP() << "the native LU kernels are GPU-only (getrf.cc can_run)";
         if (!this->ctx->device().supports_sub_group_size(32))
-            GTEST_SKIP() << "device does not offer sub-group size 32 (route_getrf.hh gate 3)";
+            GTEST_SKIP() << "device does not offer sub-group size 32 (getrf.cc can_run)";
     }
 
     // The DEVICE's local-memory budget, spelled exactly as
-    // src/backends/getrf_route.hh spells it, NOT device_limits.hh's hardcoded 49152.
+    // select::Device::slm_budget spells it, NOT device_limits.hh's hardcoded 49152.
     std::size_t budget() const {
         const std::size_t lm = static_cast<std::size_t>(
             this->ctx->device().get_property(DeviceProperty::LOCAL_MEM_SIZE));
@@ -1691,7 +1690,7 @@ TYPED_TEST(LuTest, BlockedDriverTakesTheRegisterLeafUnderTheKnob) {
 
     // AND THE DEFAULT IS THE REGISTER LEAF. Every P4 ratio on the page was measured
     // against a driver that takes it with the variable UNSET, so a silent revert of
-    // the default would leave the window in route_getrf.hh scored against an arm
+    // the default would leave the transcribed getrf rows scored against an arm
     // nothing runs. evidence: docs/perf/lu.md#the-register-leaf-ab
     {
         const ScopedEnvVar unset("BATCHLAS_GETRF_LEAF", nullptr);
@@ -2401,6 +2400,7 @@ TYPED_TEST(LuTest, VendorFactorFeedsTheNativeSolvers) {
 // builder on the REAL device. route_vocabulary_tests.cc exercises the table
 // against SYNTHETIC shapes; what it cannot see is whether the builder reports a
 // capacity at all here -- an LU versus a NoRouteError in a vendor-free build.
+// getrf's half lives in getrf_candidates_tests (flat selection).
 TYPED_TEST(LuTest, RouteTableAndTheVendorFreeFallback) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::BackendType;
@@ -2419,21 +2419,6 @@ TYPED_TEST(LuTest, RouteTableAndTheVendorFreeFallback) {
     auto Vs = view_of(small);
     auto Vl = view_of(large);
 
-    const auto shape = backend::getrf_op_shape<B, T>(*this->ctx, Vs);
-    ASSERT_TRUE(shape.has_value());
-    EXPECT_EQ(shape->backend, B) << "the builder must SET s.backend or every coverage row for "
-                                    "this op reads Backend::AUTO";
-    EXPECT_GE(shape->cta_max_n, 1) << "the CTA capacity is 0 on this device, so the tier is "
-                                      "advertised as absent";
-    EXPECT_TRUE(shape->blocked_available);
-
-    for (auto* V : {&Vs, &Vl}) {
-        const auto free_r = backend::getrf_route<B, T>(*this->ctx, *V, /*vendor_available=*/false);
-        EXPECT_TRUE(dispatch::is_native(free_r))
-            << "getrf has NO route in a vendor-free build at n=" << V->rows();
-        EXPECT_TRUE(free_r.algo == dispatch::Algorithm::CTA ||
-                    free_r.algo == dispatch::Algorithm::Blocked);
-    }
     {
         auto Bv = make_rhs<T>(large.n, 3, large.batch, 77u);
         auto Bview = view_of(Bv);
@@ -2446,74 +2431,23 @@ TYPED_TEST(LuTest, RouteTableAndTheVendorFreeFallback) {
         EXPECT_TRUE(dispatch::is_native(ri)) << "getri has no vendor-free route";
     }
 
-    // THE SHIPPED WINDOWS, met here at BATCH 2; neither carries a batch term.
-    //   getrf: native:blocked for float at order >= 256; cfloat at >= 512, or
-    //          >= 256 when batch >= 256 (P4).
+    // THE SHIPPED getri WINDOW, met here at BATCH 2; it carries no batch term.
     //   getri: native:blocked for float at order >= 128, cfloat at >= 256.
-    //   double and cdouble earn no window in either op, at any order.
-    // evidence: docs/perf/lu.md#getrf-window-evidence
-    //           docs/perf/lu.md#getri-window-evidence
+    //   double and cdouble earn no window, at any order.
+    // evidence: docs/perf/lu.md#getri-window-evidence
     if constexpr (dispatch::factorization_vendor_available<B>) {
         constexpr bool kF  = std::is_same_v<T, float>;
         constexpr bool kCF = std::is_same_v<T, std::complex<float>>;
-
-        // Vs (order <= 40) is below EVERY boundary of both windows, for every
-        // type: this is what catches a window that forgets its lower bound.
-        EXPECT_TRUE(dispatch::is_vendor(
-            backend::getrf_route<B, T>(*this->ctx, Vs, /*vendor_available=*/true)))
-            << "getrf routed NATIVE at n=" << Vs.rows()
-            << ", below every measured boundary";
         EXPECT_TRUE(dispatch::is_vendor(
             backend::getri_route<B, T>(*this->ctx, Vs, /*vendor_available=*/true)));
 
-        // THE CFLOAT EDGE P4 MOVED, on BOTH of its axes: n=256 at batch 256 is in;
-        // the same order at batch 2 is out, because 256..511 LOSES at small batch; and
-        // n=192 is out at any batch. Asserting only n=512 cannot fail when the floor
-        // slides back to 512, and asserting only the order cannot fail when the batch
-        // term is dropped. evidence: docs/perf/lu.md#the-cfloat-window-moves-to-256
-        {
-            auto in_band   = make_dominant_permuted<T>(256, 256, 9501u);
-            auto small_bat = make_dominant_permuted<T>(256, 2, 9502u);
-            auto out_band  = make_dominant_permuted<T>(192, 256, 9503u);
-            auto Vin  = view_of(in_band);
-            auto Vsb  = view_of(small_bat);
-            auto Vout = view_of(out_band);
-            const auto r_in  = backend::getrf_route<B, T>(*this->ctx, Vin, true);
-            const auto r_sb  = backend::getrf_route<B, T>(*this->ctx, Vsb, true);
-            const auto r_out = backend::getrf_route<B, T>(*this->ctx, Vout, true);
-            if constexpr (kCF) {
-                EXPECT_TRUE(dispatch::is_native(r_in) &&
-                            r_in.algo == dispatch::Algorithm::Blocked)
-                    << "cfloat n=256 batch=256 is inside the window P4 measured "
-                       "(1.285 there, 1.146-1.295 at the saturating rungs)";
-                EXPECT_TRUE(dispatch::is_vendor(r_sb))
-                    << "cfloat n=256 batch=2 is OUTSIDE it: the 256..511 band reads 0.92 "
-                       "at batch 128 and the clause carries a batch >= 256 term";
-            } else if constexpr (!kF) {
-                EXPECT_TRUE(dispatch::is_vendor(r_in))
-                    << "only float and cfloat earned a getrf window";
-            }
-            if constexpr (!kF) {
-                EXPECT_TRUE(dispatch::is_vendor(r_out))
-                    << "n=192 is the bracketing NON-winner below the cfloat floor";
-            }
-        }
-
-        // Vl is n = 512: inside both windows for float and cfloat, outside for the doubles.
-        const auto rf512 = backend::getrf_route<B, T>(*this->ctx, Vl, true);
+        // Vl is n = 512: inside the window for float and cfloat, outside for the doubles.
         const auto ri512 = backend::getri_route<B, T>(*this->ctx, Vl, true);
         if constexpr (kF || kCF) {
-            EXPECT_TRUE(dispatch::is_native(rf512) &&
-                        rf512.algo == dispatch::Algorithm::Blocked)
-                << "getrf n=512 batch=2 is inside the measured window for this type "
-                   "and must resolve native:blocked";
             EXPECT_TRUE(dispatch::is_native(ri512) &&
                         ri512.algo == dispatch::Algorithm::Blocked)
                 << "getri n=512 batch=2 is inside the measured window for this type";
         } else {
-            EXPECT_TRUE(dispatch::is_vendor(rf512))
-                << "double and cdouble earned NO getrf window: their best cell "
-                   "anywhere is 1.067 and 1.012";
             EXPECT_TRUE(dispatch::is_vendor(ri512))
                 << "double and cdouble earned NO getri window: cdouble n=512 LOSES "
                    "at 0.954 and double n=1024 is 1.155 and falling";
@@ -2560,28 +2494,6 @@ TYPED_TEST(LuTest, RouteTableAndTheVendorFreeFallback) {
         }
     }
 
-    // supports() is CORRECTNESS ONLY. A non-square view has no shape at all, and
-    // a heterogeneous batch is refused outright.
-    {
-        UnifiedVector<T> wide(size_t(40) * 64, mk<T>(1.0, 0.0));
-        UnifiedVector<T*> wp(1, nullptr);
-        MatrixView<T, MatrixFormat::Dense> W(wide.data(), 40, 64, 40, 40 * 64, 1, wp.data());
-        EXPECT_FALSE((backend::getrf_op_shape<B, T>(*this->ctx, W).has_value()))
-            << "a non-square view must not describe a getrf";
-    }
-    {
-        using Tbl = dispatch::RouteTable<dispatch::Op::getrf, T>;
-        auto s = *shape;
-        s.heterogeneous_batch = true;
-        EXPECT_FALSE(Tbl::supports({dispatch::Origin::Native, dispatch::Algorithm::CTA}, s));
-        EXPECT_FALSE(Tbl::supports({dispatch::Origin::Native, dispatch::Algorithm::Blocked}, s));
-        s = *shape;
-        s.is_gpu = false;
-        EXPECT_FALSE(Tbl::supports({dispatch::Origin::Native, dispatch::Algorithm::Blocked}, s));
-        s = *shape;
-        s.batch = 0;
-        EXPECT_FALSE(Tbl::supports({dispatch::Origin::Native, dispatch::Algorithm::CTA}, s));
-    }
 }
 
 // L13. THE FACADE REACHES THE NATIVE KERNELS, ASSERTED BIT-EXACTLY. A route
@@ -2601,15 +2513,9 @@ TYPED_TEST(LuTest, FacadeReachesTheNativeKernelsBitExactly) {
         auto direct = make_dominant_permuted<T>(n, batch, 1234u);
         auto viafac = make_dominant_permuted<T>(n, batch, 1234u);
 
-        // THE PIN IS VERIFIED, NEVER ASSUMED: an unrecognised value, or one supports()
-        // refuses, silently resolves to the VENDOR and this test compares it with itself.
+        // A getrf pin that cannot run throws (flat selection, R6) instead of falling to the
+        // vendor, so the bit-exact comparison below is against the pinned tier.
         auto Vf = view_of(viafac);
-        const auto route = backend::getrf_route<B, T>(
-            *this->ctx, Vf, dispatch::factorization_vendor_available<B>);
-        ASSERT_TRUE(dispatch::is_native(route)) << "the '" << pin << "' pin did not take";
-        ASSERT_EQ(route.algo, std::strcmp(pin, "cta") == 0 ? dispatch::Algorithm::CTA
-                                                           : dispatch::Algorithm::Blocked)
-            << "the '" << pin << "' pin resolved to the other native tier";
 
         if (std::strcmp(pin, "cta") == 0) this->run_cta(direct);
         else                              this->run_blocked(direct);
@@ -2727,6 +2633,12 @@ TYPED_TEST(LuTest, DirectEntryPointsRefuseWhatSupportsRefuses) {
                                                        ws.to_span(), Span<int32_t>{}),
                      std::invalid_argument);
     }
+    // An empty trailing-update seam. NOT defaulted to gemm_custom any more.
+    EXPECT_THROW((void)sycl_getrf::getrf_blocked_dispatch<T>(*this->ctx, A, p.piv.to_span(),
+                                                       ws.to_span(), Span<int32_t>{},
+                                                       sycl_getrf::GetrfTrailingGemm<T>{},
+                                                       this->trsm_seam()),
+                 std::invalid_argument);
     // An empty panel-solve seam. NOT defaulted to a native trsm.
     EXPECT_THROW((void)sycl_getrf::getrf_blocked_dispatch<T>(*this->ctx, A, p.piv.to_span(),
                                                        ws.to_span(), Span<int32_t>{},
@@ -2785,7 +2697,7 @@ TYPED_TEST(LuTest, DirectEntryPointsRefuseWhatSupportsRefuses) {
 // L15. THE WORKSPACE QUERY COVERS EVERY SUPPORTED ROUTE, AND DEREFERENCES
 // NOTHING: getrf_buffer_size and getri_buffer_size are reached from inside a
 // layout function under BumpAllocator::measuring() (src/extensions/inv.cc), where
-// A arrives with a NULL data pointer. The facade's figure is max(native, vendor).
+// A arrives with a NULL data pointer. getrf's figure is exactly the chosen tier's (R5).
 TYPED_TEST(LuTest, BufferSizeCoversEveryRouteAndNeverDereferences) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::BackendType;
@@ -2807,17 +2719,13 @@ TYPED_TEST(LuTest, BufferSizeCoversEveryRouteAndNeverDereferences) {
         ScopedEnvVar g("BATCHLAS_GETRF_ROUTE", pin);
         auto p = make_dominant_permuted<T>(n, batch, 2u);
         auto V = view_of(p);
-        const auto route = backend::getrf_route<B, T>(
-            *this->ctx, V, dispatch::factorization_vendor_available<B>);
-        ASSERT_TRUE(dispatch::is_native(route)) << "pin '" << pin << "' did not take";
-
         const std::size_t need = getrf_buffer_size<B, T>(*this->ctx, V);
         const std::size_t native_need =
-            (route.algo == dispatch::Algorithm::CTA)
+            (std::strcmp(pin, "cta") == 0)
                 ? sycl_getrf::getrf_cta_buffer_size<T>(*this->ctx, V)
                 : sycl_getrf::getrf_blocked_buffer_size<T>(*this->ctx, V);
-        EXPECT_GE(need, native_need)
-            << "pin '" << pin << "': the facade's figure is smaller than the arm it resolved to";
+        EXPECT_EQ(need, native_need)
+            << "pin '" << pin << "': the facade's figure is not the pinned tier's own (R5)";
 
         // Serve EXACTLY that many bytes: a short workspace is a silent heap overflow.
         UnifiedVector<std::byte> ws(std::max<std::size_t>(1, need));
@@ -3967,152 +3875,6 @@ TYPED_TEST(LuTest, TinyDirectEntryPointRefusesWhatSupportsRefuses) {
     }
 }
 
-// T9. ROUTING. Tiny is in the order array FIRST and its supports() gate answers on the
-// tier's own ceiling. Its window is MEASURED -- float 5..32, cfloat 5..7 and 9..24 -- so this
-// case asserts the window from both sides rather than "never preferred", which is what it
-// said while the grid was outstanding. fp64 has no window on this part at any order.
-// evidence: docs/perf/lu.md#the-tiny-getrf-window
-TYPED_TEST(LuTest, TinyRoutesInsideItsMeasuredWindowAndNowhereElse) {
-    using T = typename TestFixture::T;
-    constexpr Backend B = TestFixture::BackendType;
-    using Tbl = dispatch::RouteTable<dispatch::Op::getrf, T>;
-    const dispatch::Route tiny{dispatch::Origin::Native, dispatch::Algorithm::Tiny};
-
-    // The window, per type, transcribed from the grid and NOT from the predicate.
-    constexpr bool kWindowed =
-        std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>;
-    const int in_n  = std::is_same_v<T, float> ? 8 : 9;    // float n=8 1.256x, cfloat 9 1.993x
-    const int out_n = std::is_same_v<T, float> ? 4 : 8;    // float n=4 0.99x, cfloat 8 1.086x
-
-    auto p = make_dominant_permuted<T>(std::min(in_n, this->tiny_max_n()), 3, 21u);
-    auto V = view_of(p);
-    const auto shape = backend::getrf_op_shape<B, T>(*this->ctx, V);
-    ASSERT_TRUE(shape.has_value());
-    EXPECT_EQ(shape->tiny_max_n, this->tiny_max_n())
-        << "the shape builder and the kernel disagree about the tier's ceiling";
-
-    EXPECT_TRUE(Tbl::supports(tiny, *shape));
-    EXPECT_EQ(Tbl::preferred(tiny, *shape), kWindowed)
-        << "order " << in_n << " is inside the measured window for this type";
-    EXPECT_EQ(Tbl::native_tier_preferred(tiny, *shape), kWindowed)
-        << "the vendor-free walk must land on the same tier the window picks";
-
-    // Exactly ONE tier may answer true, or the order array becomes the decision (R8b).
-    if (kWindowed) {
-        int hits = 0;
-        for (const auto* it = Tbl::order_begin(); it != Tbl::order_end(); ++it)
-            if (Tbl::preferred(*it, *shape)) ++hits;
-        EXPECT_EQ(hits, 1);
-    }
-
-    // BELOW the window: a measured non-winner, and the route must not move there.
-    {
-        auto q = make_dominant_permuted<T>(out_n, 3, 23u);
-        auto QV = view_of(q);
-        const auto qs = backend::getrf_op_shape<B, T>(*this->ctx, QV);
-        ASSERT_TRUE(qs.has_value());
-        EXPECT_TRUE(Tbl::supports(tiny, *qs)) << "the TIER still holds this order";
-        EXPECT_FALSE(Tbl::preferred(tiny, *qs))
-            << "order " << out_n << " is a measured non-winner and must stay on the vendor";
-        ScopedEnvVar unpinned("BATCHLAS_GETRF_ROUTE", nullptr);
-        const auto def = backend::getrf_route<B, T>(*this->ctx, QV,
-                                                    dispatch::factorization_vendor_available<B>);
-        EXPECT_NE(def.algo, dispatch::Algorithm::Tiny)
-            << "automatic() took Tiny below its measured floor";
-        if constexpr (kWindowed) {
-            // A tie with the vendor, but ~3x the CTA tier: the native walk takes Tiny.
-            ScopedEnvVar pin("BATCHLAS_GETRF_ROUTE", "native");
-            const auto nat = backend::getrf_route<B, T>(*this->ctx, QV,
-                                                        /*vendor_available=*/false);
-            EXPECT_EQ(nat.algo, dispatch::Algorithm::Tiny)
-                << "the vendor-free walk left Tiny for CTA at order " << out_n;
-        }
-    }
-
-    // THE UPPER EDGE, cfloat only, at the column bucket's measured edge: n = 24 (1.15x)
-    // is in, n = 25 (1.03x) is out -- and at 25 and 32 the vendor-free walk still takes
-    // Tiny, 1.2-1.5x over the better of CTA and Blocked. evidence: docs/perf/lu.md#the-column-bucket
-    // ARMED BREAK (R9): cfloat tiny_window upper edge 24 -> 32. EXPECTED: n=25 preferred, red.
-    // ARMED BREAK (R9): tiny_native back to `tiny_window || n <= 8`. EXPECTED: n=25/32 walk
-    // leaves Tiny, red.
-    if constexpr (std::is_same_v<T, std::complex<float>>) {
-        const auto shape_at = [&](int n, uint32_t seed) {
-            auto q = make_dominant_permuted<T>(n, 3, seed);
-            auto QV = view_of(q);
-            return backend::getrf_op_shape<B, T>(*this->ctx, QV);
-        };
-        const auto s24 = shape_at(24, 24u);
-        ASSERT_TRUE(s24.has_value());
-        EXPECT_TRUE(Tbl::preferred(tiny, *s24)) << "cfloat n=24 measured 1.15x";
-        const dispatch::Route blocked{dispatch::Origin::Native, dispatch::Algorithm::Blocked};
-        const dispatch::Route cta{dispatch::Origin::Native, dispatch::Algorithm::CTA};
-        for (int n : {25, 32}) {
-            const auto qs = shape_at(n, 25u + static_cast<uint32_t>(n));
-            ASSERT_TRUE(qs.has_value());
-            EXPECT_TRUE(Tbl::supports(tiny, *qs));
-            EXPECT_FALSE(Tbl::preferred(tiny, *qs)) << "cfloat n=" << n << " ties the vendor";
-            EXPECT_TRUE(Tbl::native_tier_preferred(tiny, *qs))
-                << "cfloat n=" << n << ": Tiny is the fastest native tier";
-            EXPECT_FALSE(Tbl::native_tier_preferred(blocked, *qs));
-            EXPECT_FALSE(Tbl::native_tier_preferred(cta, *qs));
-        }
-    }
-
-    // Each correctness gate, one at a time.
-    for (auto mutate : std::vector<std::function<void(dispatch::GetrfShape&)>>{
-             [](dispatch::GetrfShape& s) { s.tiny_max_n = 0; },
-             [](dispatch::GetrfShape& s) { s.is_gpu = false; },
-             [](dispatch::GetrfShape& s) { s.has_sg32 = false; },
-             [](dispatch::GetrfShape& s) { s.heterogeneous_batch = true; },
-             [](dispatch::GetrfShape& s) { s.m = s.n + 1; },
-             [](dispatch::GetrfShape& s) { s.k = s.tiny_max_n + 1; },
-             [](dispatch::GetrfShape& s) { s.backend = Backend::NETLIB; }}) {
-        dispatch::GetrfShape s = *shape;
-        mutate(s);
-        EXPECT_FALSE(Tbl::supports(tiny, s));
-    }
-
-    // INSIDE the window the default route MOVES -- that is the change -- and the
-    // vendor-free walk must land on the same tier rather than on an arm the grid
-    // measured slower.
-    {
-        ScopedEnvVar unpinned("BATCHLAS_GETRF_ROUTE", nullptr);
-        const auto def = backend::getrf_route<B, T>(*this->ctx, V,
-                                                    dispatch::factorization_vendor_available<B>);
-        if (kWindowed) {
-            EXPECT_EQ(def.algo, dispatch::Algorithm::Tiny)
-                << "automatic() did not reach the Tiny tier inside its measured window";
-        } else {
-            EXPECT_NE(def.algo, dispatch::Algorithm::Tiny)
-                << "fp64 has no measured window on this part and must not route here";
-        }
-    }
-    {
-        ScopedEnvVar pin("BATCHLAS_GETRF_ROUTE", "native");
-        const auto nat = backend::getrf_route<B, T>(*this->ctx, V, /*vendor_available=*/false);
-        if (kWindowed) {
-            EXPECT_EQ(nat.algo, dispatch::Algorithm::Tiny)
-                << "the vendor-free walk disagrees with the window; native_tier_preferred "
-                   "and preferred() must name the same tier";
-        } else {
-            EXPECT_NE(nat.algo, dispatch::Algorithm::Tiny)
-                << "the vendor-free walk reached an unmeasured Tiny tier for fp64";
-        }
-    }
-    {
-        ScopedEnvVar pin("BATCHLAS_GETRF_ROUTE", "tiny");
-        const auto forced = backend::getrf_route<B, T>(
-            *this->ctx, V, dispatch::factorization_vendor_available<B>);
-        ASSERT_TRUE(dispatch::is_native(forced)) << "the 'tiny' pin did not take";
-        EXPECT_EQ(forced.algo, dispatch::Algorithm::Tiny)
-            << "BATCHLAS_GETRF_ROUTE=tiny did not parse -- parse_algorithm_word is the "
-               "third place that has to know the arm, and a miss is silent";
-    }
-    EXPECT_EQ(dispatch::to_string(dispatch::Algorithm::Tiny), "tiny")
-        << "to_string is the coverage CSV's chosen_algo column and route_diff.sh's "
-           "printed name";
-}
-
 // T10. THE FACADE REACHES THE TINY KERNEL, ASSERTED BIT-EXACTLY. A route assertion
 // plus a residual can stay green while every number comes from the vendor, so the
 // comparison is bit-exact against the direct entry point -- factor AND pivots --
@@ -4128,17 +3890,13 @@ TYPED_TEST(LuTest, FacadeReachesTheTinyKernelBitExactly) {
     auto direct = make_dominant_permuted<T>(n, batch, 5150u);
     auto viafac = make_dominant_permuted<T>(n, batch, 5150u);
 
-    auto Vf = view_of(viafac);
-    const auto route = backend::getrf_route<B, T>(*this->ctx, Vf,
-                                                  dispatch::factorization_vendor_available<B>);
-    ASSERT_TRUE(dispatch::is_native(route) && route.algo == dispatch::Algorithm::Tiny)
-        << "the 'tiny' pin did not take, so this test compares the vendor with itself";
+    auto Vf = view_of(viafac);  // a 'tiny' pin that cannot run throws rather than reach the vendor
 
     this->run_tiny(direct);
 
     const std::size_t need = getrf_buffer_size<B, T>(*this->ctx, Vf);
-    EXPECT_GE(need, sycl_getrf::getrf_tiny_buffer_size<T>(*this->ctx, Vf))
-        << "getrf_buffer_size does not cover the Tiny tier's info scratch";
+    EXPECT_EQ(need, sycl_getrf::getrf_tiny_buffer_size<T>(*this->ctx, Vf))
+        << "getrf_buffer_size is not exactly the Tiny tier's info scratch (R5)";
     UnifiedVector<std::byte> ws(std::max<std::size_t>(1, need));
     ASSERT_NO_THROW(((void)getrf<B, T>(*this->ctx, Vf, viafac.piv.to_span(), ws.to_span(),
                                  viafac.info.to_span())));
