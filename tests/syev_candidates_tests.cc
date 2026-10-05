@@ -428,18 +428,21 @@ TYPED_TEST(SyevCandidates, SaturatingBatchIsBitIdenticalToItsRepresentative) {
         }
 }
 
-// §8.2 R3: can_run (the pin accepted by the sizing call) equals the driver accepting the shape.
+// §8.2 R3: can_run (the pin accepted by the sizing call) equals the driver accepting the shape,
+// including the degenerate n = 0 and batch = 0 (small and large n) that the drivers check.
 TYPED_TEST(SyevCandidates, CanRunEqualsLaunch) {
     using T = typename TestFixture::T;
+    const std::pair<int, int> shapes[] = {{1, 2}, {31, 2}, {32, 2}, {33, 2}, {64, 2}, {0, 2}, {8, 0}, {40, 0}};
     for (const C& c : sy::candidates<T>())
-        for (int n : {1, 31, 32, 33, 64})
-            for (JobType j : {JobType::NoEigenVectors, JobType::EigenVectors}) {
-                if (TestFixture::vendor_word_falls_back(c)) continue;
-                const Spec s{n, 2, j, Uplo::Lower};
-                auto p = make_eig<T>(s), q = make_eig<T>(s);
-                std::string why;
-                EXPECT_EQ(this->pin_accepted(c, p), this->direct(c, q, &why)) << name(c, s) << ": " << why;
-            }
+        for (const auto& [n, batch] : shapes)
+            for (JobType j : {JobType::NoEigenVectors, JobType::EigenVectors})
+                for (Uplo u : {Uplo::Lower, Uplo::Upper}) {
+                    if (TestFixture::vendor_word_falls_back(c)) continue;
+                    const Spec s{n, batch, j, u};
+                    auto p = make_eig<T>(s), q = make_eig<T>(s);
+                    std::string why;
+                    EXPECT_EQ(this->pin_accepted(c, p), this->direct(c, q, &why)) << name(c, s) << ": " << why;
+                }
 }
 
 // §8.3 R5: under each pin, a workspace of exactly syev_buffer_size bytes inside a poisoned
@@ -724,6 +727,14 @@ TYPED_TEST(SyevCandidatesCpu, CpuQueueRunsNoNativeFamily) {
         EXPECT_THROW(((void)syev_buffer_size<B, T>(*this->ctx, p.A(), p.w.to_span(), s.jobz, s.uplo)),
                      std::invalid_argument)
             << select::to_string(c);
+    }
+    // The binding's supports() asks can_run with Backend::AUTO, so only the is_gpu term refuses.
+    {
+        namespace det = blas::dispatch::detail;
+        auto sq = make_eig<T>(s);
+        EXPECT_FALSE(det::syev_supports_cta<T>(*this->ctx, sq.A()));
+        EXPECT_FALSE(det::syev_supports_blocked<T>(*this->ctx, sq.A(), Uplo::Lower));
+        EXPECT_FALSE(det::syev_supports_two_stage<T>(*this->ctx, sq.A(), Uplo::Upper));
     }
     auto p = make_eig<T>(s);
     auto call = [&] {
