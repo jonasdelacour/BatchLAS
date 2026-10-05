@@ -141,8 +141,7 @@ Event orgqr_blocked_dispatch(Queue& ctx,
     const int batch = static_cast<int>(A.batch_size());
     const int k = std::min(m, n);
 
-    // supports()'s gates are re-applied here: a forced route that is unsupported
-    // falls through to automatic(), so a wrong gate silently measures the vendor.
+    // can_run's gates are re-applied here: direct callers bypass select::choose.
     if (m < 1 || n < 1 || batch < 1) {
         throw batchlas::invalid_argument("orgqr_blocked: degenerate extents");
     }

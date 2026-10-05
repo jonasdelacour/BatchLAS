@@ -1146,7 +1146,7 @@ TYPED_TEST(GeqrfTest, RouteTableAndTheVendorFreeFallback) {
     }
 
     // orgqr's half (vendor-free and Auto both take blocked at 96x96) moved to
-    // orgqr_candidates_tests AutoReadsTheTranscribedTable / VendorFreeTakesBlockedEverywhereItRuns.
+    // orgqr_candidates_tests AutoReadsTheTranscribedTable (row {96, 96}, both fixtures).
 }
 
 // G9c. THE OCCUPANCY TARGET ITSELF IS PINNED. Every other capacity assertion here asks the

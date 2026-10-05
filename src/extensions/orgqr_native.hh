@@ -1,7 +1,7 @@
 #pragma once
 
 // Native batched ORGQR: one tier, Algorithm::Blocked -- ormqr applied to an identity.
-// preferred() is true to n = 512 on both extents, so this is the DEFAULT route inside
+// tuned/orgqr.*.txt picks it to n = 512 on both extents, so it is the DEFAULT inside
 // that window, not a vendor-free fallback. evidence: docs/perf/qr.md#the-shipped-orgqr-ceiling
 
 #include "../util/internal-api.hh"
@@ -52,8 +52,8 @@ BATCHLAS_INTERNAL_API std::size_t orgqr_blocked_buffer_size(Queue& ctx,
                                                             Span<T> tau,
                                                             OrgqrApplyQBufferSize<T> apply_q_buffer_size = {});
 
-// Reachable without the route table, so it re-checks every supports() gate itself --
-// a rejected forced route otherwise falls through and silently runs the vendor.
+// Callable directly (tests, benchmarks), bypassing select::choose, so it re-checks every
+// can_run gate itself and throws rather than computing a wrong Q.
 template <typename T>
 BATCHLAS_INTERNAL_API Event orgqr_blocked_dispatch(Queue& ctx,
                                                    const MatrixView<T, MatrixFormat::Dense>& A,
