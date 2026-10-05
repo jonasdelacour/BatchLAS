@@ -171,14 +171,15 @@ Event run(Queue& ctx, const MV<T>& A, SV<T> s, const MV<T>& U, const MV<T>& Vh, 
           std::optional<Uplo> herm, Span<std::byte> ws, Span<int32_t> info) {
     const Job j = canonical<T>(A, jobu, jobvh, herm);
     const GesvdChoice c = choose<B, T>(ctx, A, j);
-    if (ws.size() < workspace<B, T>(ctx, c, A, s, U, Vh, j))
-        throw batchlas::workspace_error("gesvd: insufficient workspace for chosen provider");
     // The coverage row's key: m, n, k = min(m, n); uplo is the Hermitian triangle (general: Lower).
+    // Opened before sizing, so a driver that refuses the shape still leaves its row, as before.
     auto shape = select::square_shape<B, T>(std::min<std::int64_t>(A.rows(), A.cols()), A.batch_size());
     shape.m = A.rows();
     shape.n = A.cols();
     shape.uplo = herm.value_or(Uplo::Lower);
     select::TraceScope trace("gesvd", c, shape, native_facts<B, T>(ctx, A, j), key_of<T>(A, j));
+    if (ws.size() < workspace<B, T>(ctx, c, A, s, U, Vh, j))
+        throw batchlas::workspace_error("gesvd: insufficient workspace for chosen provider");
     // The native drivers need an in-order queue. std::optional, not a Queue: the default
     // constructor builds a real sycl::queue on the default device.
     Queue* run_q = &ctx;

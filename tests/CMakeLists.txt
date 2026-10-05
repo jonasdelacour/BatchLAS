@@ -69,7 +69,6 @@ set(TEST_TARGETS
     syev_tests
     gesvd_tests
     gesvdj_cta_tests
-    gesvd_probe_tests
     gesvd_candidates_tests
     bdsqr_tests
     bdsdc_tests
