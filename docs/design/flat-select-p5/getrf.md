@@ -141,6 +141,28 @@ and cfloat 9 and 24; native blocked at float 256 and 600, cfloat 300 at batch 51
 batch 128; vendor everywhere else. The only textual difference is the algorithm column of a vendor
 row, which reads `auto` in the old router and `vendor` (the choice spelling) in the new one.
 
+## Review fixes
+
+- `can_run`'s `batch >= 1` clause now has a test that a deletion turns red: `CanRunFalsePinsThrow`
+  pins tiny/cta/blocked at n = 8, batch = 0 and requires the R6 "cannot run this shape" message, and
+  `CanRunEqualsLaunch` checks that pin and driver both refuse batch 0. Deliberate break: with the
+  clause deleted, exactly `CanRunEqualsLaunch` and `CanRunFalsePinsThrow` go red, for all 4 dtypes,
+  and every message names `n=8 batch=0`. The source was restored from a saved copy and its md5
+  (`93e0b3c0...`) checked. After the fixes the gates are unchanged: `build` 11/11,
+  `build-vf` 10/11 (the same baseline `OptionsApi.Blas3OptionsMatchPositional` failure), and the
+  data gate at 100.00%.
+- The `tiny_n()` test oracle reads `sycl_getrf::kGetrfTinyWgSize` instead of a literal 64.
+- `can_run` clauses that no test on the test hardware can turn red:
+  - tiny's `d.max_wg >= kGetrfTinyWgSize`: NVIDIA reports 1024.
+  - blocked's `getrf_cta_max_n_for_slm<T>(budget, 1) >= 1`: it fails only with a very small SLM,
+    which neither sm_89 nor sm_120 has (deviation 3).
+- The driver comments in `getrf_tiny.cc` / `getrf_cta.cc` no longer say a failing forced route
+  "falls through to the vendor". They now say the gates are re-applied because the drivers are
+  also called directly and `can_run` must match them (R3).
+- `include/batchlas/blas/functions/getrf.hh`, an installed header, cited the deleted
+  `RouteTable<Op::getrf,T>::supports()`. Its comment now points to `can_run` in
+  `src/ops/getrf/getrf.cc`, so it is no longer on the integrator's list.
+
 ## Doc changes for the integrator
 
 - `flat-kernel-selection.md` §12: add a "Phase 5, getrf" paragraph from this page (families,

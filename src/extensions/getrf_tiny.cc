@@ -340,8 +340,8 @@ std::size_t getrf_tiny_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat:
     });
 }
 
-// Every can_run gate is re-applied here: a forced route that fails one falls through
-// to the vendor and passes green regardless.
+// Every can_run gate is re-applied here: the driver is also reached directly
+// (tests), and can_run must equal it exactly (R3).
 template <typename T>
 Event getrf_tiny_dispatch(Queue& ctx,
                           const MatrixView<T, MatrixFormat::Dense>& A,

@@ -218,7 +218,9 @@ protected:
     int max_wg() const {
         return static_cast<int>(this->ctx->device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
     }
-    int tiny_n() const { return max_wg() >= 64 ? sycl_getrf::getrf_tiny_max_n<T>() : 0; }
+    int tiny_n() const {
+        return max_wg() >= sycl_getrf::kGetrfTinyWgSize ? sycl_getrf::getrf_tiny_max_n<T>() : 0;
+    }
     int cta_n() const { return sycl_getrf::getrf_cta_max_n_for_slm<T>(budget()); }
     bool expect_runs(const C& c, int n) const {
         if (n < 1) return false;
@@ -392,6 +394,17 @@ TYPED_TEST(GetrfCandidates, CanRunEqualsLaunch) {
             EXPECT_EQ(pin, this->expect_runs(c, n)) << TestFixture::name(c, n, 2) << ": can_run disagrees with the oracle";
             disagreements += pin != run;
         }
+        // An empty batch: every native driver refuses it as degenerate extents.
+        {
+            auto a = make_lu<T>(8, 0, 67u);
+            auto b = make_lu<T>(8, 0, 67u);
+            const bool pin = this->pin_accepted(c, a.A());
+            std::string why;
+            const bool run = this->direct(c, b, &why);
+            EXPECT_EQ(pin, run) << TestFixture::name(c, 8, 0) << ": the driver " << (run ? "launches" : why);
+            EXPECT_FALSE(pin) << TestFixture::name(c, 8, 0);
+            disagreements += pin != run;
+        }
         // A non-square view: refused by the pin and by the driver alike.
         UnifiedVector<T> w(std::size_t(24) * 32, mk<T>(1.0, 0.5));
         UnifiedVector<T*> wp(1, nullptr);
@@ -494,21 +507,23 @@ TYPED_TEST(GetrfCandidates, UnknownPinsThrow) {
     }
 }
 
-// The named can_run-false cases, each with its message: one past each ceiling, and n = 0.
+// The named can_run-false cases, each with its message: one past each ceiling, n = 0 and batch = 0.
 TYPED_TEST(GetrfCandidates, CanRunFalsePinsThrow) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
-    const std::vector<std::pair<C, int>> cases{{gf::Tiny{}, this->tiny_n() + 1}, {gf::Cta{}, this->cta_n() + 1},
-                                               {gf::Tiny{}, 0}, {gf::Cta{}, 0}, {gf::Blocked{}, 0}};
-    for (const auto& [c, n] : cases) {
-        auto p = make_lu<T>(n, 1, 7u);
+    struct Case { C c; int n, batch; };
+    const std::vector<Case> cases{{gf::Tiny{}, this->tiny_n() + 1, 1}, {gf::Cta{}, this->cta_n() + 1, 1},
+                                  {gf::Tiny{}, 0, 1},  {gf::Cta{}, 0, 1},  {gf::Blocked{}, 0, 1},
+                                  {gf::Tiny{}, 8, 0},  {gf::Cta{}, 8, 0},  {gf::Blocked{}, 8, 0}};
+    for (const auto& [c, n, batch] : cases) {
+        auto p = make_lu<T>(n, batch, 7u);
         const Pin pin("getrf", c);
         try {
             (void)getrf_buffer_size<B, T>(*this->ctx, p.A());
-            ADD_FAILURE() << TestFixture::name(c, n, 1) << " was accepted";
+            ADD_FAILURE() << TestFixture::name(c, n, batch) << " was accepted";
         } catch (const std::invalid_argument& e) {
             EXPECT_NE(std::string(e.what()).find("cannot run this shape"), std::string::npos)
-                << TestFixture::name(c, n, 1) << ": " << e.what();
+                << TestFixture::name(c, n, batch) << ": " << e.what();
         }
     }
 }

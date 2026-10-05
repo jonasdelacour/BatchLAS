@@ -390,8 +390,8 @@ unsigned getrf_cta_debug_launch(Queue& ctx, int m, int n) {
     return (static_cast<unsigned>(p.wg) << 16) | static_cast<unsigned>(p.G);
 }
 
-// Direct entry point. Every can_run gate is re-applied here, because a forced
-// route that fails one falls through to the vendor and passes green regardless.
+// Direct entry point. Every can_run gate is re-applied here: the driver is also
+// reached directly (tests), and can_run must equal it exactly (R3).
 template <typename T>
 Event getrf_cta_dispatch(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& A,
