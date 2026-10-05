@@ -3,7 +3,7 @@
 #include <batchlas/backend_config.h>
 #include <batchlas/blas/linalg.hh>
 // gesvdj_cta and GesvdjParams: the `info` cases below reach the Jacobi tier
-// directly, because gesvd_dispatch hands it a default-constructed GesvdjParams
+// directly, because ops::gesvd::launch hands it a default-constructed GesvdjParams
 // and so no sweep cap is reachable from the public entry point.
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/util/env.hh>
@@ -112,7 +112,7 @@ protected:
 };
 
 // Complex GENERAL input, as distinct from the Hermitian-complex fixture above.
-// The suite had no such case at all: gesvd_supports_blocked declines complex,
+// The suite had no such case at all: blocked runs complex only Hermitian (can_run),
 // so before gesvdj_cta covered the 33..64 band these shapes fell through to
 // Vendor and threw.
 template <typename Config>
@@ -1539,8 +1539,8 @@ TYPED_TEST(GesvdTest, BlockedGebrdMatchesUnblockedAtSmallN) {
 // ---------------------------------------------------------------------------
 // Complex GENERAL SVD above n = 32 (follow-up item 5).
 //
-// This used to throw. gesvd_supports_blocked returns false for complex and
-// gesvd_supports_cta does too outside the Hermitian branch, so complex general
+// This used to throw. The old router's blocked predicate returned false for complex
+// and its cta predicate did too outside the Hermitian branch, so complex general
 // input fell through to Vendor, whose only binding is gesvdjBatched at
 // max(m,n) <= 32. Widening gesvdj_cta to 64 is what closes the band.
 //
@@ -1631,7 +1631,7 @@ TYPED_TEST(GesvdGeneralComplexTest, GeneralComplexAboveCapStillRefused) {
 // threw for the WHOLE batch; the netlib arm captured LAPACKE_?gesvd's info and
 // destroyed it in the same throw; gesvdj_cta's sweep loop had no flag at all,
 // only an optional sweep COUNT that the public gesvd cannot even reach because
-// gesvd_dispatch passes a default-constructed GesvdjParams.
+// ops::gesvd::launch passes a default-constructed GesvdjParams.
 //
 // A batch-wide throw is not a status: it says some item failed, never which, and
 // it takes the good items' answers down with it.
@@ -1763,7 +1763,7 @@ TYPED_TEST(GesvdTest, EmptyInfoSpanChangesNeitherAnswerNorWorkspace) {
 
 // THE FORCED DIRECTION, through the tier rather than the facade.
 //
-// gesvd_dispatch hands gesvdj_cta a DEFAULT GesvdjParams (blas/functions/gesvd.hh:285),
+// ops::gesvd::launch hands gesvdj_cta a DEFAULT GesvdjParams (src/ops/gesvd/gesvd.cc),
 // so no sweep cap is reachable from the public entry point -- not even the
 // sweep_counts channel that has existed all along. gesvdj_cta itself takes its
 // params, so that is where the cap goes.

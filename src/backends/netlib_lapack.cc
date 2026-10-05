@@ -1033,8 +1033,8 @@ namespace batchlas{
             throw batchlas::invalid_argument("gesvd_vendor (NETLIB): singular_values span too small");
         }
 
-        // NETLIB implements Thin rather than refusing it. gesvd_dispatch pins
-        // this backend to Vendor unconditionally, so refusing would leave the
+        // NETLIB implements Thin rather than refusing it. On this backend can_run
+        // (src/ops/gesvd/gesvd.cc) admits only Vendor, so refusing would leave the
         // whole CPU backend unable to serve Thin -- and this is the reference
         // the GPU thin results are checked against.
         jobu = canonical_jobu(jobu, m, k);

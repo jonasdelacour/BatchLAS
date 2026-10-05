@@ -99,7 +99,7 @@ are deliberately not R3-exact, and `CanRunEqualsLaunch` documents both:
 
 ## Tests
 
-- `tests/gesvd_candidates_tests.cc` (label `eig`, 57 cases on GPU 0) implements §8:
+- `tests/gesvd_candidates_tests.cc` (label `eig`, 65 cases on GPU 0 after the review follow-up) implements §8:
   - every native family pinned on 11 shapes straddling 32/33/64/65, square and not, times
     herm N/L/U, times 4 job sets, with closed-form singular values and reconstruction;
   - `CanRunEqualsLaunch` against the direct drivers, plus an oracle that reads the drivers' own
@@ -135,6 +135,12 @@ are deliberately not R3-exact, and `CanRunEqualsLaunch` documents both:
   - B5 `key_of` swaps m and n -> `AutoReadsEveryKeyField` and `TraceShowsTheLookupKey`, float and
     double;
   - B6 the legacy variable ignored -> `LegacyAliasesAndClassWords`, all four dtypes.
+- Review follow-up: `EmptyShapesRunNoNativeFamily` (m, n or batch = 0: every native pin refused,
+  Auto takes the base outcome) and `OutOfOrderQueueRunsThePinnedDriver` (a pinned run on an
+  out-of-order `Queue` equals the direct driver bit for bit). Breaks:
+  - B7 the empty-shape term dropped from `native` -> `EmptyShapesRunNoNativeFamily`, all dtypes;
+  - B8 the in-order wrapper in `run()` disabled -> `OutOfOrderQueueRunsThePinnedDriver`, all dtypes.
+  The event join of the wrapper (`enqueue(dep)`) is not separately covered.
 - Known gaps: the `has_sg32` and `is_gpu` terms cannot go red on this hardware. There is no vendor
   Auto cell inside cuSOLVER's envelope (only non-square Hermitian input goes there).
 
@@ -146,7 +152,7 @@ callers' suites (linalg_layer_tests, error_model_tests, cond_tests). Failing nam
 with the same targets built from `424a45bc` (`build-base`, `build-base-vf`):
 - Vendor build: identical failing names. There is one failure on both:
   `CondTest/2.RandomHermitianTridiagonalLogCondSpectral` (float CUDA). gesvd_candidates_tests passes
-  57/57.
+  57/57 (65/65 after the review follow-up, re-run in both trees with identical failing names).
 - Vendor-free build: identical failing names on both. These are 14 `gesvd_tests` NETLIB cases and
   24 `cond_tests` cases, because the host backend has no LAPACKE in this build.
   gesvd_candidates_tests passes.
@@ -201,3 +207,8 @@ refusal comes from `gesvd_buffer_size`, which records no row.
 - Stale citations of the deleted header: `docs/design/vendor-free-status.md:115`
   (`route_gesvd.hh:100`, the wide-band rule, which is now the transcribed `blocked|vendor|jacobi`
   rows for real 33..64) and `docs/design/vendor-independence.md:137` (`GesvdShape`).
+- Code comments citing the old router (`gesvd_dispatch`, `gesvd_supports_cta/_blocked`, "a forced
+  provider resets to Auto") are already reworded on this branch: `src/extensions/gesvd_blocked.cc`
+  (both thin refusals in `gesvd_cta`), `src/backends/netlib_lapack.cc` (Thin), `tests/gesvd_tests.cc`
+  and `tests/gesvdj_cta_tests.cc`. The only remaining `route_gesvd.hh` mentions are in
+  `tools/transcribe/gesvd_transcribe.cc`, which is built against `424a45bc` on purpose.

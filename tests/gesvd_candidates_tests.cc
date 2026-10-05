@@ -269,8 +269,8 @@ protected:
                (vectors(s) || s.m == s.n);
     }
 
-    void run(Svd<T>& p) {
-        Queue& q = *this->ctx;
+    void run(Svd<T>& p, Queue* on = nullptr) {
+        Queue& q = on ? *on : *this->ctx;
         const auto h = uplo_of(p.s.herm);
         const MV A = p.A(), U = p.U.view(), Vh = p.Vh.view();
         const std::size_t bytes = h ? gesvd_buffer_size<B, T>(q, A, p.sv.to_span(), U, Vh, p.s.ju, p.s.jv, *h)
@@ -466,6 +466,70 @@ TYPED_TEST(GesvdCandidates, CanRunEqualsLaunch) {
                 }
     }
     EXPECT_EQ(disagreements, 0);
+}
+
+// An empty shape (m, n or batch = 0) is refused by every native family's can_run, as the old
+// router's size gate had it: the drivers' validate throws on it. Auto takes the base outcome,
+// the vendor where it exists and a NoRouteError vendor-free, never a native family.
+TYPED_TEST(GesvdCandidates, EmptyShapesRunNoNativeFamily) {
+    using T = typename TestFixture::T;
+    const ScopedEnvVar clear("BATCHLAS_GESVD_ROUTE", nullptr);
+    const ScopedEnvVar clear_legacy("BATCHLAS_GESVD_PROVIDER", nullptr);
+    const Spec shapes[] = {{0, 8, 2, 'N', SvdVectors::None, SvdVectors::None},
+                           {8, 0, 2, 'N', SvdVectors::None, SvdVectors::None},
+                           {8, 8, 0, 'N', SvdVectors::None, SvdVectors::None},
+                           {8, 8, 0, 'L', SvdVectors::None, SvdVectors::None}};
+    for (const Spec& s : shapes) {
+        for (const C& c : gs::candidates<T>()) {
+            if (std::holds_alternative<gs::Vendor>(c)) continue;
+            auto p = make_svd<T>(s);
+            EXPECT_FALSE(this->pin_accepted(c, p)) << name(c, s);
+        }
+        auto p = make_svd<T>(s);
+        if constexpr (!TestFixture::kVendor) {
+            EXPECT_THROW(this->run(p), dispatch::NoRouteError) << label(s);
+        } else {
+            std::string refused;
+            const std::string got = traced_choice([&] {
+                try {
+                    this->run(p);
+                } catch (const std::exception& e) {
+                    refused = e.what();
+                }
+            });
+            // cuSOLVER may refuse the empty call in its sizing step, before any trace line.
+            if (got.rfind("<no gesvd", 0) == 0 && !refused.empty())
+                EXPECT_NE(refused.find("CUSOLVER"), std::string::npos) << label(s) << ": " << refused;
+            else
+                EXPECT_EQ(got, "vendor") << label(s) << " " << refused;
+        }
+    }
+}
+
+// The native drivers refuse an out-of-order Queue; the op layer runs them on an in-order queue
+// joined to the caller's. A pinned run on an out-of-order Queue is the direct kernel bit for bit.
+TYPED_TEST(GesvdCandidates, OutOfOrderQueueRunsThePinnedDriver) {
+    using T = typename TestFixture::T;
+    Queue ooo(*this->ctx, false);
+    ASSERT_FALSE(ooo.in_order());
+    const Spec shapes[] = {{12, 12, 3, 'N'}, {16, 16, 3, 'L'}, {40, 24, 2, 'N'}};
+    for (const C& c : gs::candidates<T>()) {
+        if (std::holds_alternative<gs::Vendor>(c)) continue;
+        for (const Spec& s : shapes) {
+            if (!this->expect_runs(c, s)) continue;
+            auto a = make_svd<T>(s);
+            auto b = make_svd<T>(s);
+            {
+                const Pin pin("gesvd", c);
+                ASSERT_NO_THROW(this->run(a, &ooo)) << name(c, s);
+            }
+            std::string why;
+            ASSERT_TRUE(this->direct(c, b, &why)) << name(c, s) << ": " << why;
+            for (std::size_t i = 0; i < a.sv.size(); ++i)
+                ASSERT_EQ(std::memcmp(&a.sv[i], &b.sv[i], sizeof(a.sv[i])), 0) << name(c, s) << " sv " << i;
+            expect_solved(a, "out-of-order " + name(c, s));
+        }
+    }
 }
 
 // The pinned public call runs exactly the family's driver: identical singular values and U.

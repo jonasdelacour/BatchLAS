@@ -1561,9 +1561,9 @@ Event gesvd_cta(Queue& ctx,
     }
     // Mode CTA always takes the normal-equations branch, whose
     // patch_zero_left_vectors writes m columns of U unconditionally. Refuse a
-    // genuinely thin request rather than overrun. Dispatch never gets here --
-    // gesvd_supports_cta already declines, and a forced-but-unsupported
-    // provider resets to Auto -- so this guards DIRECT callers.
+    // genuinely thin request rather than overrun. can_run (src/ops/gesvd/gesvd.cc)
+    // refuses canonical Thin, so Auto never gets here and a `cta` pin throws;
+    // this guards DIRECT callers.
     {
         const int64_t k = std::min<int64_t>(a_in.rows(), a_in.cols());
         if (canonical_jobu(jobu, a_in.rows(), k) == SvdVectors::Thin ||
@@ -1605,9 +1605,9 @@ Event gesvd_cta(Queue& ctx,
     }
     // Mode CTA always takes the normal-equations branch, whose
     // patch_zero_left_vectors writes m columns of U unconditionally. Refuse a
-    // genuinely thin request rather than overrun. Dispatch never gets here --
-    // gesvd_supports_cta already declines, and a forced-but-unsupported
-    // provider resets to Auto -- so this guards DIRECT callers.
+    // genuinely thin request rather than overrun. can_run (src/ops/gesvd/gesvd.cc)
+    // refuses canonical Thin, so Auto never gets here and a `cta` pin throws;
+    // this guards DIRECT callers.
     {
         const int64_t k = std::min<int64_t>(a_in.rows(), a_in.cols());
         if (canonical_jobu(jobu, a_in.rows(), k) == SvdVectors::Thin ||
