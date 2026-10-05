@@ -97,9 +97,8 @@ std::size_t orgqr_apply_bytes(Queue& ctx,
 
 }  // namespace
 
-// True for all four types, but RouteTable<Op::orgqr,T>::preferred() is still
-// false: only a vendor-free build or an explicit BATCHLAS_ORGQR_ROUTE lands
-// here. evidence: docs/perf/qr.md#route-arms
+// True for all four types; Auto takes this driver where tuned/orgqr.*.txt ranks
+// blocked first (m, n <= 512). evidence: docs/perf/qr.md#route-arms
 template <> bool orgqr_blocked_available<float>()                { return true; }
 template <> bool orgqr_blocked_available<double>()               { return true; }
 template <> bool orgqr_blocked_available<std::complex<float>>()  { return true; }
