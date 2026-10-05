@@ -7,6 +7,7 @@
 #include "../src/ops/posv/choice.hh"
 #include "../src/ops/potrf/choice.hh"
 #include "../src/ops/trsm/choice.hh"
+#include "../src/ops/spmm/choice.hh"
 #include "../src/select/select.hh"
 
 #include <algorithm>
@@ -56,6 +57,13 @@ std::vector<std::string> candidates(const std::string& op, const std::string& dt
         if (dtype == "double") return spellings(trsm::candidates<double>());
         if (dtype == "cfloat") return spellings(trsm::candidates<std::complex<float>>());
         if (dtype == "cdouble") return spellings(trsm::candidates<std::complex<double>>());
+    }
+    namespace spmm = batchlas::ops::spmm;
+    if (op == "spmm") {
+        if (dtype == "float") return spellings(spmm::candidates<float>());
+        if (dtype == "double") return spellings(spmm::candidates<double>());
+        if (dtype == "cfloat") return spellings(spmm::candidates<std::complex<float>>());
+        if (dtype == "cdouble") return spellings(spmm::candidates<std::complex<double>>());
     }
     return {};
 }
@@ -241,6 +249,32 @@ TEST(TunedTables, TrsmSm89TablesHoldExactlyTheChoiceGrid) {
         EXPECT_EQ(got, want) << dt;
         EXPECT_EQ(t.rows.size(), want.size()) << dt;
     }
+}
+
+TEST(TunedTables, SpmmTablesDeclareChoiceKeyNames) { expect_tables_declare("spmm", batchlas::ops::spmm::key_names); }
+
+// spmm's transcriber likewise: one row per (transA, transB, m, nrhs, batch) cell of choice.hh, in
+// each of the three transcribed devices (the old predicates read no device fact).
+TEST(TunedTables, SpmmTranscribedTablesHoldExactlyTheChoiceGrid) {
+    namespace sp = batchlas::ops::spmm;
+    std::set<std::string> want;
+    for (const char* ta : {"N", "T"})
+        for (const char* tb : {"N", "T"})
+            for (int m : sp::grid_m)
+                for (int r : sp::grid_nrhs)
+                    for (int b : sp::grid_batch)
+                        want.insert(std::string(ta) + " " + tb + " " + std::to_string(m) + " " + std::to_string(r) +
+                                    " " + std::to_string(b));
+    for (const char* dev : {"sm_89", "sm_120", "cpu"})
+        for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
+            const sel::Table& t = embedded(std::string("spmm.") + dt + "." + dev + ".txt");
+            std::set<std::string> got;
+            for (const auto& row : t.rows)
+                got.insert(row.keys[0] + " " + row.keys[1] + " " + row.keys[2] + " " + row.keys[3] + " " +
+                           row.keys[4]);
+            EXPECT_EQ(got, want) << dt << " " << dev;
+            EXPECT_EQ(t.rows.size(), want.size()) << dt << " " << dev;
+        }
 }
 
 // The sparse sm_89 tables (final-review finding): with equal weights, float n=24 batch=512

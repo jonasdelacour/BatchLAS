@@ -266,6 +266,28 @@ TRSM = OpSpec(
 )
 
 
+def spmm_key(r):
+    try:
+        key = (str(r["transA"]), str(r["transB"]), int(r["m"]), int(r["nrhs"]), int(r["batch"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+    return key if key[0] in ("N", "T") and key[1] in ("N", "T") and min(key[2:]) >= 1 else None
+
+
+# spmm (docs/design/flat-select-p5/spmm.md): work ~ nnz nrhs batch, nnz ~ m. ConjTrans folds
+# to T on both operands. No sweep source: sm_89, sm_120 and cpu are transcribed.
+SPMM_CHOICES = ("direct", "vendor")
+SPMM = OpSpec(
+    op="spmm",
+    keys="transA:exact transB:exact m:log nrhs:log batch:log",
+    row_ops=("spmm",),
+    row_key=spmm_key,
+    arm_spelling={c: c for c in SPMM_CHOICES},
+    arm_route={"direct": ("native:direct",), "vendor": ("vendor:vendor",)},
+    candidate_order=list(SPMM_CHOICES),
+)
+
+
 def parse_keys(spec):
     """'# keys:' text -> [(name, is_log, weight)]; a :log weight defaults to 1."""
     out = []
@@ -636,7 +658,7 @@ def potrf_offgrid(texts, points):
 
 
 POTRF.review = potrf_offgrid
-OPS = [POTRF, POSV, TRSM]
+OPS = [POTRF, POSV, TRSM, SPMM]
 OP_BY_NAME = {s.op: s for s in OPS}
 
 
