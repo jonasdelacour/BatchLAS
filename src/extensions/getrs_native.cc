@@ -246,8 +246,8 @@ Event getrs_blocked_dispatch(Queue& ctx,
     const int nrhs = static_cast<int>(B.cols());
     const int batch = static_cast<int>(A.batch_size());
 
-    // supports()'s gates, re-applied: this entry point is reachable WITHOUT the
-    // table, and an unsupported forced route falls through to automatic().
+    // src/ops/getrs/getrs.cc's can_run(Blocked) mirrors these checks (R3); keep the
+    // two in step. The entry point is also reachable directly.
     if (n < 1 || nrhs < 1 || batch < 1) {
         throw batchlas::invalid_argument("getrs_blocked: degenerate extents");
     }

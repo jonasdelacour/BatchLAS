@@ -47,16 +47,15 @@ using getrs_vendor_buffer_size = size_t(Queue&,
 }  // namespace sig
 
 
-// WP6: the one thing that is invalid for EVERY route, checked once, hoisted above
-// the shape builder in src/dispatch/entry_points/factorization.cc because the
-// builder reads A.rows()/B.cols(). Modelled on geqrf_validate_params
-// (geqrf.hh:71-77) and it obeys geqrf.hh:55-70's rule: validate only what no route
-// could serve.
+// WP6: the one thing that is invalid for EVERY route, checked once, before
+// selection in src/ops/getrs/getrs.cc reads A.rows()/B.cols(). Modelled on
+// geqrf_validate_params (geqrf.hh:71-77) and it obeys geqrf.hh:55-70's rule:
+// validate only what no route could serve.
 //
 // WHAT IT DELIBERATELY DOES NOT CHECK: squareness of A, A.rows() == B.rows(),
 // equal batch, and the pivot span's length. All four ARE checked on the arena
-// spellings (options.hh:646-650) and the first three make
-// backend::getrs_op_shape return nullopt, which routes the call to the vendor.
+// spellings (options.hh:646-650) and the first three make every native can_run
+// false in src/ops/getrs/getrs.cc, which routes the call to the vendor.
 // Routing a call away from the native arms is not the same as rejecting it, and a
 // validator that threw would turn a currently-working positional call into an
 // error -- the behaviour change potrf.hh:59-65 rules out of scope for a

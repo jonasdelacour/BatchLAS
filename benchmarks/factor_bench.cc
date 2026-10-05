@@ -49,6 +49,7 @@
 #include "../src/ops/geqrf/choice.hh"
 #include "../src/ops/orgqr/choice.hh"
 #include "../src/ops/getrf/choice.hh"
+#include "../src/ops/getrs/choice.hh"
 #include "../src/ops/posv/choice.hh"
 #include "../src/ops/potrf/choice.hh"
 
@@ -233,7 +234,7 @@ static const char* op_text(OpKind k) {
 // pre-main snapshot, so a raw ::setenv is invisible to it and only
 // ScopedEnvVar's reload_settings() makes the pin readable at all.
 //
-// potrf, posv and getrf have migrated to flat selection (src/ops/<op>/): their pins are choice
+// potrf, posv, getrf and getrs have migrated to flat selection (src/ops/<op>/): their pins are choice
 // spellings (`lpanel:panel=8`, `cta`), the legacy aliases (`native:lpanel`) or
 // auto/native/vendor, and a pin that cannot run THROWS instead of falling through. Their
 // coverage rows carry the spelling in chosen_algo, so the readback reads e.g.
@@ -252,10 +253,11 @@ static bool pin_parsed_now(OpKind k) {
         const char* raw = settings().routing.canonical_route(dispatch_op(k)).get();
         return raw != nullptr && select_pin_parsed<ops::orgqr::OrgqrChoice>(raw, ops::orgqr::aliases);
     }
-    if (k == OpKind::potrf || k == OpKind::posv || k == OpKind::getrf) {
+    if (k == OpKind::potrf || k == OpKind::posv || k == OpKind::getrf || k == OpKind::getrs) {
         const char* raw = settings().routing.canonical_route(dispatch_op(k)).get();
         if (raw == nullptr) return false;
         if (k == OpKind::getrf) return select_pin_parsed<ops::getrf::GetrfChoice>(raw, ops::getrf::aliases);
+        if (k == OpKind::getrs) return select_pin_parsed<ops::getrs::GetrsChoice>(raw, ops::getrs::aliases);
         return k == OpKind::potrf ? select_pin_parsed<ops::potrf::PotrfChoice>(raw, ops::potrf::aliases)
                                   : select_pin_parsed<ops::posv::PosvChoice>(raw, ops::posv::aliases);
     }
