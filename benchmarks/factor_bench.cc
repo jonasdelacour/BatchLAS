@@ -45,6 +45,7 @@
 
 #include "../src/extensions/potrf_native.hh"
 #include "../src/sycl/trsm_native.hh"
+#include "../src/ops/orgqr/choice.hh"
 #include "../src/ops/posv/choice.hh"
 #include "../src/ops/potrf/choice.hh"
 
@@ -244,6 +245,10 @@ static bool select_pin_parsed(std::string text, const Aliases& aliases) {
 }
 
 static bool pin_parsed_now(OpKind k) {
+    if (k == OpKind::orgqr) {
+        const char* raw = settings().routing.canonical_route(dispatch_op(k)).get();
+        return raw != nullptr && select_pin_parsed<ops::orgqr::OrgqrChoice>(raw, ops::orgqr::aliases);
+    }
     if (k == OpKind::potrf || k == OpKind::posv) {
         const char* raw = settings().routing.canonical_route(dispatch_op(k)).get();
         if (raw == nullptr) return false;

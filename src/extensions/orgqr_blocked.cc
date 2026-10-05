@@ -149,7 +149,7 @@ Event orgqr_blocked_dispatch(Queue& ctx,
     }
     if (m < n) {
         throw batchlas::invalid_argument(
-            "orgqr_blocked: n > m is not supported (route_orgqr.hh's supports() refuses it)");
+            "orgqr_blocked: n > m is not supported (orgqr's can_run refuses it)");
     }
     if (A.is_heterogeneous()) {
         throw batchlas::invalid_argument("orgqr_blocked: heterogeneous batch is not supported");

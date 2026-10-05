@@ -11,7 +11,7 @@ All timings: GPU 1 of a 2x RTX 4090 box (sm_89, 128 SMs), `CUDA_VISIBLE_DEVICES=
 | op | arms, in `order` sequence | `preferred()` |
 |---|---|---|
 | `geqrf` | `{Native, Tiny}`, `{Native, CTA}`, `{Native, Blocked}`, `{Vendor, Auto}` (`route_geqrf.hh:kGeqrfOrder`) | **`Tiny` is false, and `native_tier_preferred(Tiny)` is false too** — see [the tiny tier](#the-tiny-tier-wp6--p1-square-n--32-in-registers). Otherwise native above a per-type **order floor** — `float` 64, `cfloat` 48, `double` **76** (P5 moved it from 96, [the double order floor moves to 76](#the-double-order-floor-moves-to-76)), `cdouble` 256 — plus a **tall-panel clause**, `rows >= 128 && cols >= 32 && rows >= tall_aspect*cols`, where `tall_aspect` is **4 for the 32-bit types and 8 for the 64-bit ones** (`route_geqrf.hh:preferred`) -- the split is load-bearing, see [tall panels cross over earlier](#tall-panels-cross-over-earlier) |
-| `orgqr` | `{Native, Blocked}`, `{Vendor, Auto}` (`route_orgqr.hh:21-24`) | native at `rows <= 512 && cols <= 512`, every type (`route_orgqr.hh:preferred`) |
+| `orgqr` | `blocked`, `vendor` (`src/ops/orgqr/choice.hh`; flat selection since phase 5) | no `preferred()` any more: `tuned/orgqr.*.{sm_89,sm_120}.txt` transcribe the old window, native at `rows <= 512 && cols <= 512`, every type |
 | `ormqr` | `{Native, Blocked}`, `{Vendor, Auto}` (`route_ormqr.hh:45-48`) | `is_native(r) && supports(r, s)` (`route_ormqr.hh:77-79`) |
 
 `geqrf` and `orgqr` no longer ship route-neutral. A vendor-present build now takes the native arm inside the windows above; outside them — `geqrf` below its floor and off the tall clause, `orgqr` above n = 512 — it still takes cuSOLVER, and the kernels are then reachable only from a vendor-free build (`route_resolve.hh:38-49`), from `BATCHLAS_GEQRF_ROUTE` / `BATCHLAS_ORGQR_ROUTE`, or from the direct entry points `geqrf_cta_dispatch` / `geqrf_blocked_dispatch` / `orgqr_blocked_dispatch`. The windows are the cells that clear the repository's flip gate on the n = 4..512 grid, bracketed on both sides; the grid, including every excluded cell, is [`small-n-baseline.md`](small-n-baseline.md#geqrf). The 3.24x (`geqrf`) and 7.85x (`orgqr`) geomeans below span the whole grid and so are **still not** what the default build realises — only the in-window part of them is.
@@ -378,8 +378,9 @@ The per-type tier cover therefore lives in the pure layer, where shapes are free
 
 ## The shipped `orgqr` ceiling
 
-Why `route_orgqr.hh`'s `preferred()` is `rows <= 512 && cols <= 512`, every type. Relocated
-verbatim from that predicate's comment block; the grid it summarises is
+Why the old `route_orgqr.hh` `preferred()` was `rows <= 512 && cols <= 512`, every type; the
+transcribed `tuned/orgqr.*.txt` tables carry it unchanged (docs/design/flat-select-p5/orgqr.md).
+Relocated verbatim from that predicate's comment block; the grid it summarises is
 [`small-n-baseline.md`](small-n-baseline.md#orgqr), and the losing cells that bracket it are in
 [`orgqr` grid](#orgqr-grid) above.
 

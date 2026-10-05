@@ -45,7 +45,6 @@ src/util/resident_capacity.hh                    # 45 lines of constexpr helpers
 src/extensions/geqrf_tiny_device.hh              # 129 lines of constexpr gates and tables, 16 invariants each of which breaks silently (the ceil8 bank rule, the pin, the one-step fixed point, the odd tile stride, the separate y vector, no reqd_work_group_size); every measured number is in docs/perf/qr.md#the-tiny-tier-register-table, #the-chunk-width-and-the-one-cell-that-is-pinned and #the-two-partition-butterflies. 36.45% -> 20.73%; the remaining 5 lines cannot go without deleting a rationale.
 
 # Files this campaign touched that still earn more than the ceiling.
-src/backends/orgqr_route.hh  # a shape-builder header, the same form and density as its untouched siblings src/backends/getrs_route.hh (56.72%) and gemv_route.hh (56.30%); 46 code lines of pure dispatch plumbing where every one carries a trap (the two-variable ORGQR/ORMQR pin, the deliberate absence of has_sg32, the fixed Left/NoTrans apply that makes the inherited complex-Trans gate honest). No measured numbers remain in it -- those are at docs/perf/qr.md#the-shipped-orgqr-ceiling. A density ceiling on a 46-line file measures the file's size, not its prose.
 
 # ---------------------------------------------------------------------
 # BATCH WAIVER, 2026-09-11. The 18% ceiling was introduced by the small-n
