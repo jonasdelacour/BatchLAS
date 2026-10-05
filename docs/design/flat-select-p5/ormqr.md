@@ -86,4 +86,62 @@ edited here.
 
 ## Gate
 
-GATE_RESULTS_PLACEHOLDER
+All runs were on threadripper02, GPU 0 (`CUDA_VISIBLE_DEVICES=0`), 2026-10-05.
+
+**(a) Correctness.** These targets were run in this branch's vendor build (`build`), in its
+vendor-free build (`build-vf`, `-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`), and in the 424a45bc
+baseline trees (`git archive` copy, vendor and vendor-free): `ormqr_candidates_tests`,
+`ormqr_tests`, `ormqr_blocked_tests`, `ormqr_cta_tests`, `orgqr_tests`, `geqrf_tests`,
+`sytrd_sy2sb_tests`, `sytrd_cta_tests`, `syev_two_stage_tests`, `select_tests`,
+`tuned_tables_tests` and `route_vocabulary_tests`. The baseline has no `ormqr_candidates_tests`.
+- Vendor build: 12/12 pass, and the baseline passes all of the same targets.
+- Vendor-free build: the failing ctest targets are the same on both sides: `ormqr_tests`,
+  `ormqr_cta_tests`, `ormqr_blocked_tests` and `orgqr_tests`. These are NETLIB instantiations with
+  no host LAPACK route, plus `OrmqrBlockedTest/{4,5}`, whose reference is the vendor. The
+  failing-name diff (baseline minus branch) is exactly the 8
+  `OrmqrTest/*.BufferSizeAgreesWithDispatchUnderAnUnmatchedForcedRoute` names, which the branch
+  deletes (ported). No name is added. `ormqr_candidates_tests` passes vendor-free.
+- Deliberate breaks of `ormqr.cc`. Each was restored from a saved copy and md5-verified
+  (`fbfa62e9...`). Red sets, where /4-7 means the CUDA dtype instantiations:
+  - B1, the complex-Trans validation dropped -> `CanRunEqualsLaunch`,
+    `ComplexTransIsRefusedUnderEveryPin` and `PinnedCandidatesStraddleTheirLimits` (complex only,
+    /6-7).
+  - B2, C folded to T in `key_of` -> `AutoReadsEveryKeyField` and
+    `TraceKeyFollowsSideAndKeepsTrans` (/4-7), and `AutoReadsTheTranscribedTable` (/6-7: complex C
+    lands on the vendor-only T rows).
+  - B3, q always `C.cols` -> `AutoReadsEveryKeyField` and `TraceKeyFollowsSideAndKeepsTrans`.
+  - B4, no real ConjTrans -> Trans for the vendor -> `PinnedCandidatesStraddleTheirLimits`,
+    `PinnedRunIsTheDirectKernelBitForBit`, `OutOfOrderQueueIsSequenced` and
+    `AutoReadsEveryKeyField` (real only, /4-5).
+  - B5, block-size hint ignored -> `PinnedRunIsTheDirectKernelBitForBit`. The first run was green;
+    a hinted spec where the hint differs from the ladder (m=100, k=37, hint 5) was then added.
+  - B6, blocked allowed on the CPU -> `OrmqrCandidatesCpu/*.CpuQueueRunsNoNativeFamily` only.
+  - B7, the Blocked arm runs the vendor -> broad (46), as expected for a launch swap.
+  - B8, the legacy variable ignored -> `LegacyProviderVariablePins` only.
+  - B10, vendor workspace sized as blocked -> every test that runs a vendor pin or Auto-vendor (38).
+  - B11, key k = A.rows -> `AutoReadsEveryKeyField` and `TraceKeyFollowsSideAndKeepsTrans`.
+
+**(b) Data gate** (`tools/transcribe/ormqr_offgrid_gate.py`, seed 20261005). The test drew 4000
+random off-grid points: m in [1, 8192], k in [1, m], q in [1, 16384] and batch in [1, 131072],
+all log-uniform, with a random dtype, side and trans. At each point the OLD predicate (the
+transcriber's `--points` mode against the 424a45bc headers) was compared with
+`sweep_to_table.nearest` on the shipped table plus `can_run` on a GPU, for both devices and with
+the vendor present and absent (16000 lookups). Agreement is **100.00% in every
+(dtype, device, vendor) cell**, and no region disagrees. This was expected: the old predicates
+read no extent, so every row with the same (dtype, trans) is identical and any nearest row
+reproduces the decision. No grid refinement was needed.
+
+**(c) Cross-check against the 424a45bc binary.** 22 cells were run one process each, with the
+coverage `reached` row as the readback (probe: `ormqr_buffer_size` + `ormqr`). The cells covered
+4 dtypes, L/R, N/T/C, m 1-1024, k 1-512, q 1-4096 and batch 7-65536, on and off the grid.
+- 18 cells agree (`native:blocked` -> `blocked`). This includes float L T b65536, which throws
+  the same work-group-limit error in both builds (see Known gaps).
+- The 4 complex-T cells (cfloat L/R, cdouble L/R) differ, as intended. Old: `vendor:auto`, which
+  then threw `CUSOLVER error: 3`. New: `invalid_argument` before selection, with no coverage
+  row. This is deviation 1.
+
+`scripts/sweep_to_table.py --check`: OK (8 ormqr tables, 540 rows each, re-derived from the CSV).
+Comment density: every touched file is under 18%, except `eigen.cc`, which was already waived.
+
+**Not run:** `ctest` beyond the targets above, the ROCm syntax check (no headers on this box), and
+`run_local_checks.sh`.

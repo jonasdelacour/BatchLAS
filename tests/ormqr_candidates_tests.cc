@@ -420,7 +420,8 @@ TYPED_TEST(OrmqrCandidates, PinnedRunIsTheDirectKernelBitForBit) {
     using T = typename TestFixture::T;
     for (const C& c : om::candidates<T>())
         for (const Spec& s : {Spec{Side::Left, Transpose::ConjTrans, 48, 20, 6, 3, 0, 0, 7},
-                              Spec{Side::Right, Transpose::NoTrans, 33, 33, 4, 2, 16, 0, 8}}) {
+                              Spec{Side::Right, Transpose::NoTrans, 33, 33, 4, 2, 16, 0, 8},
+                              Spec{Side::Left, Transpose::NoTrans, 100, 37, 4, 2, 5, 0, 9}}) {  // hint 5 != ladder
             if (!this->expect_runs(c, s.trans)) continue;
             auto a = make_apply<T>(s);
             auto b = make_apply<T>(s);
