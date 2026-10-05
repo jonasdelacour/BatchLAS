@@ -1,5 +1,5 @@
-// The public factorization entry points -- geqrf, orgqr, getrf, getrs, getri and gesv
-// (posv is in src/ops/posv/) -- defined once here rather than inside a vendor TU, so
+// The public factorization entry points -- geqrf, orgqr, getrf, getrs and gesv
+// (posv and getri are in src/ops/) -- defined once here rather than inside a vendor TU, so
 // dropping a vendor library does not drop the public symbol.
 // See docs/design/vendor-independence.md#the-entry-point-facade.
 //
@@ -12,7 +12,6 @@
 #include <batchlas/blas/functions/orgqr.hh>
 #include <batchlas/blas/functions/getrf.hh>
 #include <batchlas/blas/functions/getrs.hh>
-#include <batchlas/blas/functions/getri.hh>
 #include <batchlas/blas/functions/potrf.hh>
 
 // P2: the two ops with no vendor arm anywhere. Their composed routes are built from
@@ -37,12 +36,10 @@
 
 #include "../../backends/getrf_route.hh"
 #include "../../backends/getrs_route.hh"
-#include "../../backends/getri_route.hh"
 #include "../../backends/gesv_route.hh"
 #include "../../extensions/solve_native.hh"
 #include "../../extensions/getrf_native.hh"
 #include "../../extensions/getrs_native.hh"
-#include "../../extensions/getri_native.hh"
 
 // orgqr's native arm is ormqr against an identity, applied through the router.
 #include <batchlas/blas/functions/ormqr.hh>
@@ -338,18 +335,6 @@ template <typename T>
         "cannot service.");
 }
 
-template <typename T>
-[[noreturn]] inline void getri_throw_native_unimplemented(dispatch::Route route,
-                                                          const char* who) {
-    throw batchlas::internal_error(
-        std::string(who) + ": resolved to a native route (" +
-        std::string(dispatch::to_string(route.origin)) + ":" +
-        std::string(dispatch::to_string(route.algo)) +
-        ") but no native getri driver is linked into this build. "
-        "sycl_getri::getri_blocked_available reported a capability the facade "
-        "cannot service.");
-}
-
 template <Backend B, typename T>
 Event getrf(Queue& ctx,
             const MatrixView<T, MatrixFormat::Dense>& A,
@@ -553,91 +538,6 @@ size_t getrs_buffer_size(Queue& ctx,
     }
 }
 
-template <Backend B, typename T>
-Event getri(Queue& ctx,
-            const MatrixView<T, MatrixFormat::Dense>& A,
-            const MatrixView<T, MatrixFormat::Dense>& C,
-            Span<int64_t> pivots,
-            Span<std::byte> work_space,
-            Span<int32_t> info) {
-    // Validation takes C here; the query below validates A alone, because
-    // getri_buffer_size has no C and the route is a function of A alone.
-    getri_validate_params<T>(A, C);
-
-    const dispatch::Route route = backend::getri_route<B, T>(
-        ctx, A,
-        /*vendor_available=*/dispatch::factorization_vendor_available<B>);
-
-    if (dispatch::is_native(route)) {
-        if (route.algo == dispatch::Algorithm::Blocked) {
-            // Both solves go through the ROUTER. The permutation is NOT injected:
-            // P is written straight into C rather than permuting an identity, so
-            // there is no second routed op and no workspace.
-            return sycl_getri::getri_blocked_dispatch<T>(
-                ctx, A, C, pivots, work_space, info,
-                [](Queue& c,
-                   const MatrixView<T, MatrixFormat::Dense>& ta,
-                   const MatrixView<T, MatrixFormat::Dense>& tb,
-                   T talpha, Side tside, Uplo tuplo, Transpose ttrans, Diag tdiag) {
-                    return trsm<B, T>(c, ta, tb, talpha, tside, tuplo, ttrans, tdiag);
-                });
-        }
-        getri_throw_native_unimplemented<T>(route, "getri");
-    }
-
-    if constexpr (!dispatch::factorization_vendor_available<B>) {
-        dispatch::throw_no_vendor_route<T>(
-            dispatch::Op::getri, B, dispatch::kFactorizationLibrary<B>);
-    } else {
-        return backend::getri_vendor<B, T>(ctx, A, C, pivots, work_space, info);
-    }
-}
-
-template <Backend B, typename T>
-size_t getri_buffer_size(Queue& ctx,
-                         const MatrixView<T, MatrixFormat::Dense>& A) {
-    // THIS QUERY RUNS UNDER BumpAllocator::measuring() (inv.cc replays inv_layout
-    // through it): everything reachable from here must be pure with respect to the
-    // workspace -- no read, no write, no kernel launch -- and must not dereference
-    // A.data_ptr().
-    getri_validate_params<T>(A);
-
-    const dispatch::Route route = backend::getri_route<B, T>(
-        ctx, A,
-        /*vendor_available=*/dispatch::factorization_vendor_available<B>);
-
-    // `native_fired`, not a zero size: the native arm's workspace is expected
-    // to be zero.
-    std::size_t native_need = 0;
-    bool native_fired = false;
-    if (dispatch::is_native(route)) {
-        const auto shape = backend::getri_op_shape<B, T>(ctx, A);
-        using Tbl = dispatch::RouteTable<dispatch::Op::getri, T>;
-        if (shape) {
-            if (Tbl::supports({dispatch::Origin::Native, dispatch::Algorithm::Blocked},
-                              *shape)) {
-                native_need = std::max(native_need,
-                                       sycl_getri::getri_blocked_buffer_size<T>(ctx, A));
-                native_fired = true;
-            }
-        }
-        if (!native_fired) {
-            getri_throw_native_unimplemented<T>(route, "getri_buffer_size");
-        }
-    }
-
-    if constexpr (!dispatch::factorization_vendor_available<B>) {
-        if (!native_fired) {
-            dispatch::throw_no_vendor_route<T>(
-                dispatch::Op::getri, B, dispatch::kFactorizationLibrary<B>);
-        }
-        return native_need;
-    } else {
-        return std::max(native_need,
-                        backend::getri_vendor_buffer_size<B, T>(ctx, A));
-    }
-}
-
 // ---------------------------------------------------------------------------
 // P2: gesv. With posv (now src/ops/posv/), THE OPS WITH NO VENDOR ARM ON ANY BACKEND,
 // so gesv has no `*_vendor` declaration, does not read factorization_vendor_available,
@@ -722,9 +622,7 @@ size_t gesv_buffer_size(Queue& ctx,
     OP_INSTANTIATE(getrf, B_, fp)              \
     OP_INSTANTIATE(getrf_buffer_size, B_, fp)  \
     OP_INSTANTIATE(getrs, B_, fp)              \
-    OP_INSTANTIATE(getrs_buffer_size, B_, fp)  \
-    OP_INSTANTIATE(getri, B_, fp)              \
-    OP_INSTANTIATE(getri_buffer_size, B_, fp)
+    OP_INSTANTIATE(getrs_buffer_size, B_, fp)
 
 #define FACTORIZATION_ALL(B_)                       \
     FACTORIZATION_ONE(B_, float)                    \

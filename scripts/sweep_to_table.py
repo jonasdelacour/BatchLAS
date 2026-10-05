@@ -266,6 +266,19 @@ TRSM = OpSpec(
 )
 
 
+# getri (P5): work ~ n^3 batch. Transcribed old routing for sm_89 and sm_120 (no sweep source).
+GETRI_CHOICES = ("blocked", "vendor")
+GETRI = OpSpec(
+    op="getri",
+    keys="n:log:3 batch:log",
+    row_ops=("getri",),
+    row_key=lambda r: (int(r["n"]), int(r["batch"])),
+    arm_spelling={c: c for c in GETRI_CHOICES},
+    arm_route={c: (("vendor:vendor",) if c == "vendor" else (f"native:{c}",)) for c in GETRI_CHOICES},
+    candidate_order=list(GETRI_CHOICES),
+)
+
+
 def parse_keys(spec):
     """'# keys:' text -> [(name, is_log, weight)]; a :log weight defaults to 1."""
     out = []
@@ -636,7 +649,7 @@ def potrf_offgrid(texts, points):
 
 
 POTRF.review = potrf_offgrid
-OPS = [POTRF, POSV, TRSM]
+OPS = [POTRF, POSV, TRSM, GETRI]
 OP_BY_NAME = {s.op: s for s in OPS}
 
 

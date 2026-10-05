@@ -34,7 +34,7 @@
 #include "../src/extensions/getri_native.hh"
 #include "../src/backends/getrf_route.hh"
 #include "../src/backends/getrs_route.hh"
-#include "../src/backends/getri_route.hh"
+#include "../src/ops/getri/choice.hh"
 
 #include <algorithm>
 #include <cmath>
@@ -2442,17 +2442,14 @@ TYPED_TEST(LuTest, RouteTableAndTheVendorFreeFallback) {
             EXPECT_TRUE(dispatch::is_native(r)) << "getrs has no vendor-free route, transA="
                                                 << int(op);
         }
-        const auto ri = backend::getri_route<B, T>(*this->ctx, Vl, false);
-        EXPECT_TRUE(dispatch::is_native(ri)) << "getri has no vendor-free route";
     }
 
     // THE SHIPPED WINDOWS, met here at BATCH 2; neither carries a batch term.
     //   getrf: native:blocked for float at order >= 256; cfloat at >= 512, or
     //          >= 256 when batch >= 256 (P4).
-    //   getri: native:blocked for float at order >= 128, cfloat at >= 256.
-    //   double and cdouble earn no window in either op, at any order.
+    //   getri moved to flat selection: getri_candidates_tests reads its transcribed table.
+    //   double and cdouble earn no getrf window, at any order.
     // evidence: docs/perf/lu.md#getrf-window-evidence
-    //           docs/perf/lu.md#getri-window-evidence
     if constexpr (dispatch::factorization_vendor_available<B>) {
         constexpr bool kF  = std::is_same_v<T, float>;
         constexpr bool kCF = std::is_same_v<T, std::complex<float>>;
@@ -2463,8 +2460,6 @@ TYPED_TEST(LuTest, RouteTableAndTheVendorFreeFallback) {
             backend::getrf_route<B, T>(*this->ctx, Vs, /*vendor_available=*/true)))
             << "getrf routed NATIVE at n=" << Vs.rows()
             << ", below every measured boundary";
-        EXPECT_TRUE(dispatch::is_vendor(
-            backend::getri_route<B, T>(*this->ctx, Vs, /*vendor_available=*/true)));
 
         // THE CFLOAT EDGE P4 MOVED, on BOTH of its axes: n=256 at batch 256 is in;
         // the same order at batch 2 is out, because 256..511 LOSES at small batch; and
@@ -2501,22 +2496,15 @@ TYPED_TEST(LuTest, RouteTableAndTheVendorFreeFallback) {
 
         // Vl is n = 512: inside both windows for float and cfloat, outside for the doubles.
         const auto rf512 = backend::getrf_route<B, T>(*this->ctx, Vl, true);
-        const auto ri512 = backend::getri_route<B, T>(*this->ctx, Vl, true);
         if constexpr (kF || kCF) {
             EXPECT_TRUE(dispatch::is_native(rf512) &&
                         rf512.algo == dispatch::Algorithm::Blocked)
                 << "getrf n=512 batch=2 is inside the measured window for this type "
                    "and must resolve native:blocked";
-            EXPECT_TRUE(dispatch::is_native(ri512) &&
-                        ri512.algo == dispatch::Algorithm::Blocked)
-                << "getri n=512 batch=2 is inside the measured window for this type";
         } else {
             EXPECT_TRUE(dispatch::is_vendor(rf512))
                 << "double and cdouble earned NO getrf window: their best cell "
                    "anywhere is 1.067 and 1.012";
-            EXPECT_TRUE(dispatch::is_vendor(ri512))
-                << "double and cdouble earned NO getri window: cdouble n=512 LOSES "
-                   "at 0.954 and double n=1024 is 1.155 and falling";
         }
     }
 
@@ -2666,7 +2654,8 @@ TYPED_TEST(LuTest, FacadeReachesTheNativeKernelsBitExactly) {
         this->run_blocked(p);
         auto A = view_of(p);
 
-        ScopedEnvVar g("BATCHLAS_GETRI_ROUTE", "blocked");
+        // A ScopedPin throws when Blocked cannot run this shape, so it needs no readback.
+        const select::ScopedPin<ops::getri::GetriChoice> g("getri", ops::getri::Blocked{});
         Lu<T> c1, c2;
         alloc(c1, n, batch, 7, 13);
         alloc(c2, n, batch, 7, 13);
@@ -2675,10 +2664,6 @@ TYPED_TEST(LuTest, FacadeReachesTheNativeKernelsBitExactly) {
         UnifiedVector<int32_t> i1(size_t(batch), -12345), i2(size_t(batch), -12345);
         auto C1 = view_of(c1);
         auto C2 = view_of(c2);
-        const auto rr = backend::getri_route<B, T>(*this->ctx, A,
-                                                   dispatch::factorization_vendor_available<B>);
-        ASSERT_TRUE(dispatch::is_native(rr)) << "the getri pin did not take";
-
         UnifiedVector<std::byte> w1(std::max<std::size_t>(
             1, sycl_getri::getri_blocked_buffer_size<T>(*this->ctx, A)));
         (void)sycl_getri::getri_blocked_dispatch<T>(*this->ctx, A, C1, p.piv.to_span(), w1.to_span(),

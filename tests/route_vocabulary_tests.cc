@@ -11,7 +11,6 @@
 #include <batchlas/blas/dispatch/route_orgqr.hh>
 #include <batchlas/blas/dispatch/route_getrf.hh>
 #include <batchlas/blas/dispatch/route_getrs.hh>
-#include <batchlas/blas/dispatch/route_getri.hh>
 #include <batchlas/blas/dispatch/route_gemv.hh>
 #include <batchlas/blas/dispatch/route_spmm.hh>
 #include <batchlas/util/env.hh>
@@ -1079,10 +1078,10 @@ TEST(RouteOrgqr, BatchlasOrgqrRouteIsActuallyRead) {
 }
 
 // ---------------------------------------------------------------------------
-// The LU family: getrf, getrs, getri. These cases are SYNTHETIC -- they call
-// supports()/preferred() on hand-built shapes and never reach a kernel;
+// The LU family: getrf, getrs (getri: getri_candidates_tests.cc). These cases
+// are SYNTHETIC -- they call supports()/preferred() on hand-built shapes and never reach a kernel;
 // tests/getrf_tests.cc is where the real device shapes are asserted. getrf and
-// getri DO take potrf's `m == n` gate, unlike geqrf. evidence: docs/perf/lu.md
+// getrs DO take potrf's `m == n` gate, unlike geqrf. evidence: docs/perf/lu.md
 // ---------------------------------------------------------------------------
 namespace {
 
@@ -1135,22 +1134,6 @@ GetrsShape getrs_shape(int64_t order, int64_t nrhs, int64_t batch,
     return s;
 }
 
-GetriShape getri_shape(int64_t order, int64_t batch,
-                       bool blocked_available = true) {
-    GetriShape s;
-    s.op = Op::getri;
-    s.scalar = ScalarKind::F32;
-    s.backend = Backend::AUTO;
-    s.m = order;
-    s.n = order;
-    s.k = order;
-    s.batch = batch;
-    s.is_gpu = true;
-    s.has_sg32 = true;
-    s.blocked_available = blocked_available;
-    return s;
-}
-
 // "Does this table DECLARE the optional third predicate?" -- the same detection
 // route_resolve.hh performs. IT HAS TO BE A TEMPLATE: written against a concrete
 // table the name lookup is a hard error rather than a substitution failure.
@@ -1170,11 +1153,6 @@ constexpr Route kGetrsBlocked{Origin::Native, Algorithm::Blocked};
 constexpr Route kGetrsNativeBare{Origin::Native, Algorithm::Auto};
 constexpr Route kGetrsAuto{Origin::Auto, Algorithm::Auto};
 
-using GetriTable = RouteTable<Op::getri, float>;
-constexpr Route kGetriBlocked{Origin::Native, Algorithm::Blocked};
-constexpr Route kGetriNativeBare{Origin::Native, Algorithm::Auto};
-constexpr Route kGetriAuto{Origin::Auto, Algorithm::Auto};
-
 constexpr Route kVendorAuto{Origin::Vendor, Algorithm::Auto};
 
 // ---- THE OTHER THREE SCALAR TYPES, NAMED ONCE ------------------------------
@@ -1185,9 +1163,6 @@ using GetrfTableCD = RouteTable<Op::getrf, std::complex<double>>;
 using GetrsTableD  = RouteTable<Op::getrs, double>;
 using GetrsTableCF = RouteTable<Op::getrs, std::complex<float>>;
 using GetrsTableCD = RouteTable<Op::getrs, std::complex<double>>;
-using GetriTableD  = RouteTable<Op::getri, double>;
-using GetriTableCF = RouteTable<Op::getri, std::complex<float>>;
-using GetriTableCD = RouteTable<Op::getri, std::complex<double>>;
 
 } // namespace
 
@@ -1461,15 +1436,6 @@ TEST(RouteLuPivotFormat, NetlibOnAGpuQueueIsNotANativeShape) {
         << "the native getrs READS packed int32; a netlib getrf wrote int64";
     EXPECT_TRUE(is_vendor(resolve_getrs_route<float>(kGetrsBlocked, rs, true)));
 
-    // --- getri ---------------------------------------------------------
-    auto ri = getri_shape(/*order=*/40, /*batch=*/2);
-    ri.backend = Backend::CUDA;
-    ASSERT_TRUE(GetriTable::supports(kGetriBlocked, ri)) << "guard";
-    ri.backend = Backend::NETLIB;
-    EXPECT_FALSE(GetriTable::supports(kGetriBlocked, ri))
-        << "the native getri READS packed int32; a netlib getrf wrote int64";
-    EXPECT_TRUE(is_vendor(resolve_getri_route<float>(kGetriBlocked, ri, true)));
-
     // With no vendor at all there is no route, which is the honest answer here.
     EXPECT_FALSE(is_native(resolve_getrf_route<float>(kGetrfAuto, f, false)));
 }
@@ -1644,9 +1610,6 @@ TEST(RouteGetrf, NativeTierPreferredIsDeclaredAndPinsTheMeasuredTierChoice) {
     EXPECT_TRUE((declares_native_tier_preferred<GetrsTable, GetrsShape>))
         << "getrs has two native tiers; the order array alone cannot follow a "
            "crossover between them";
-
-    // getri is single-arm and must NOT declare it.
-    EXPECT_FALSE((declares_native_tier_preferred<GetriTable, GetriShape>));
 }
 
 TEST(RouteGetrf, BatchlasGetrfRouteIsActuallyRead) {
@@ -2077,194 +2040,6 @@ TEST(RouteGetrs, BatchlasGetrsRouteIsActuallyRead) {
 }
 
 // ---------------------------------------------------------------------------
-// GETRI. One native arm: a composition over the routed trsm.
-// ---------------------------------------------------------------------------
-
-TEST(RouteGetri, VendorFreeFallbackHandsOverTheNativeRoute) {
-    // n=40, batch=2 are inverse_tests' actual extents.
-    const auto s = getri_shape(/*order=*/40, /*batch=*/2);
-
-    EXPECT_TRUE(GetriTable::supports(kGetriBlocked, s))
-        << "batch size and order are speed questions; neither may gate CORRECTNESS "
-           "-- and these are inverse_tests' own extents";
-    EXPECT_FALSE(GetriTable::preferred(kGetriBlocked, s));
-
-    EXPECT_TRUE(is_native(resolve_getri_route<float>(kGetriAuto, s, false)));
-    EXPECT_TRUE(is_vendor(resolve_getri_route<float>(kGetriAuto, s, true)));
-}
-
-TEST(RouteGetri, CorrectnessGatesIncludeTheOnesInheritedFromTrsm) {
-    // getri's native arm is a composition over the ROUTED trsm, so trsm's structural
-    // gates are TRANSCRIBED here; omitting one is the wrong-answer class.
-    const auto ok = getri_shape(/*order=*/64, /*batch=*/256);
-    ASSERT_TRUE(GetriTable::supports(kGetriBlocked, ok))
-        << "guard: the permissive shape must be supported, or every EXPECT_FALSE "
-           "below passes for the wrong reason";
-
-    auto cpu = ok;  cpu.is_gpu = false;
-    EXPECT_FALSE(GetriTable::supports(kGetriBlocked, cpu))
-        << "INHERITED from trsm's can_run (src/ops/trsm/trsm.cc: native needs is_gpu)";
-
-    auto het = ok;  het.heterogeneous_batch = true;
-    EXPECT_FALSE(GetriTable::supports(kGetriBlocked, het))
-        << "INHERITED from trsm's can_run (no native heterogeneous batch), and getri's own besides -- the "
-           "pivot list is read at b*order + k with a single order";
-
-    auto nosg = ok;  nosg.has_sg32 = false;
-    EXPECT_FALSE(GetriTable::supports(kGetriBlocked, nosg));
-
-    auto wide = ok;  wide.n = 1024;
-    EXPECT_FALSE(GetriTable::supports(kGetriBlocked, wide))
-        << "getri's operand is square (options.hh:687-690)";
-
-    auto empty = ok;  empty.m = 0; empty.n = 0; empty.k = 0;
-    EXPECT_FALSE(GetriTable::supports(kGetriBlocked, empty));
-
-    auto no_batch = ok;  no_batch.batch = 0;
-    EXPECT_FALSE(GetriTable::supports(kGetriBlocked, no_batch));
-
-    // NOT correctness gates.
-    auto tiny_batch = ok;  tiny_batch.batch = 1;
-    EXPECT_TRUE(GetriTable::supports(kGetriBlocked, tiny_batch));
-    auto two = ok;  two.batch = 2;
-    EXPECT_TRUE(GetriTable::supports(kGetriBlocked, two))
-        << "inverse_tests runs at batch 2";
-    auto small = getri_shape(32, 8192);
-    EXPECT_TRUE(GetriTable::supports(kGetriBlocked, small))
-        << "n=32 is where the composition LOSES 0.23-0.54x; that is preferred()'s "
-           "business, not supports()'";
-    auto huge = ok;  huge.m = 1 << 20; huge.n = 1 << 20; huge.k = 1 << 20;
-    EXPECT_TRUE(GetriTable::supports(kGetriBlocked, huge))
-        << "the routed trsm's blocked tier carries no upper bound on the order; a "
-           "transcribed ceiling here could not fire and would read as live";
-}
-
-// THE MEASURED ORDER WINDOW, per type. THE AXIS IS GetriShape::order(), which is
-// `k`, and there is NO batch term.
-// evidence: docs/perf/lu.md#getri-window-evidence
-TEST(RouteGetri, PreferredIsTheMeasuredOrderWindowPerType) {
-    for (int64_t batch : {1, 2, 4, 128, 8192}) {
-        // ---- float: IN at 128, OUT at 127 and at 64 -----------------------
-        for (int64_t order : {128, 129, 256, 512, 2048}) {
-            const auto s = getri_shape(order, batch);
-            EXPECT_TRUE(GetriTable::preferred(kGetriBlocked, s))
-                << "float order " << order << " batch " << batch;
-            EXPECT_FALSE(GetriTable::preferred(kVendorAuto, s))
-                << "preferred() is asked only of NATIVE routes";
-            const Route r = resolve_getri_route<float>(kGetriAuto, s, true);
-            EXPECT_TRUE(is_native(r) && r.algo == Algorithm::Blocked)
-                << "float order " << order << " batch " << batch;
-        }
-        for (int64_t order : {1, 32, 40, 64, 127}) {
-            const auto s = getri_shape(order, batch);
-            EXPECT_FALSE(GetriTable::preferred(kGetriBlocked, s))
-                << "float order " << order << ": n=64 LOSES at 0.856 (batch 8192) "
-                   "and 0.853 (batch 16384)";
-            EXPECT_TRUE(is_vendor(resolve_getri_route<float>(kGetriAuto, s, true)));
-        }
-
-        // ---- cfloat: IN at 256, OUT at 255 and at 128 ---------------------
-        for (int64_t order : {256, 257, 512, 2048}) {
-            const auto s = getri_shape(order, batch);
-            EXPECT_TRUE(GetriTableCF::preferred(kGetriBlocked, s))
-                << "cfloat order " << order << " batch " << batch;
-            const Route r = resolve_getri_route<std::complex<float>>(kGetriAuto, s, true);
-            EXPECT_TRUE(is_native(r) && r.algo == Algorithm::Blocked);
-        }
-        for (int64_t order : {1, 64, 128, 129, 255}) {
-            const auto s = getri_shape(order, batch);
-            EXPECT_FALSE(GetriTableCF::preferred(kGetriBlocked, s))
-                << "cfloat order " << order << ": n=128 is 0.71 at batch 512";
-            EXPECT_TRUE(is_vendor(
-                resolve_getri_route<std::complex<float>>(kGetriAuto, s, true)));
-        }
-
-        // ---- double and cdouble: NOTHING, at any order --------------------
-        for (int64_t order : {1, 64, 128, 256, 512, 1024, 2048}) {
-            const auto s = getri_shape(order, batch);
-            EXPECT_FALSE(GetriTableD::preferred(kGetriBlocked, s))
-                << "double order " << order << " earned no window";
-            EXPECT_FALSE(GetriTableCD::preferred(kGetriBlocked, s))
-                << "cdouble order " << order << " earned no window";
-            EXPECT_TRUE(is_vendor(resolve_getri_route<double>(kGetriAuto, s, true)));
-            EXPECT_TRUE(is_vendor(
-                resolve_getri_route<std::complex<double>>(kGetriAuto, s, true)));
-        }
-    }
-}
-
-TEST(RouteGetri, AbsentDriverIsUnsupported) {
-    // ABSENT DRIVER -- what this build reports today.
-    const auto absent = getri_shape(64, 256, /*blocked_available=*/false);
-    EXPECT_FALSE(GetriTable::supports(kGetriBlocked, absent));
-    EXPECT_TRUE(is_vendor(resolve_getri_route<float>(kGetriAuto, absent, true)));
-    EXPECT_TRUE(is_vendor(resolve_getri_route<float>(kGetriAuto, absent, false)));
-    EXPECT_TRUE(is_vendor(resolve_getri_route<float>(kGetriBlocked, absent, true)));
-    EXPECT_TRUE(is_vendor(resolve_getri_route<float>(kGetriNativeBare, absent, true)));
-
-    // ...AND INSIDE THE WINDOW: preferred() must still say yes while supports() says no.
-    const auto in_window_absent = getri_shape(512, 256, /*blocked_available=*/false);
-    EXPECT_TRUE(GetriTable::preferred(kGetriBlocked, in_window_absent));
-    EXPECT_FALSE(GetriTable::supports(kGetriBlocked, in_window_absent));
-    EXPECT_TRUE(is_vendor(resolve_getri_route<float>(kGetriAuto, in_window_absent, true)));
-    EXPECT_TRUE(is_vendor(resolve_getri_route<float>(kGetriAuto, in_window_absent, false)))
-        << "vendor-free with no driver must say 'needs a vendor', not invent a route";
-
-    // A NETLIB queue is a CORRECTNESS refusal (the pivot format disagrees), and the
-    // window must not override it.
-    auto netlib = getri_shape(512, 256);
-    netlib.backend = Backend::NETLIB;
-    EXPECT_TRUE(GetriTable::preferred(kGetriBlocked, netlib));
-    EXPECT_FALSE(GetriTable::supports(kGetriBlocked, netlib));
-    EXPECT_TRUE(is_vendor(resolve_getri_route<float>(kGetriAuto, netlib, true)));
-}
-
-TEST(RouteGetri, BareOriginResolvesToASpecificAlgorithm) {
-    const auto s = getri_shape(64, 256);
-    const Route r = resolve_getri_route<float>(kGetriNativeBare, s,
-                                               /*vendor_available=*/true);
-    EXPECT_EQ(r.origin, Origin::Native);
-    EXPECT_EQ(r.algo, Algorithm::Blocked);
-    EXPECT_FALSE(GetriTable::supports(kGetriNativeBare, s))
-        << "{Native, Auto} itself must never be reported supported";
-}
-
-TEST(RouteGetri, BatchlasGetriRouteIsActuallyRead) {
-    ClearRouteEnv clear(Op::getri);
-
-    EXPECT_EQ(op_env_stem(Op::getri), "GETRI");
-    EXPECT_TRUE(std::string(legacy_variable_for(Op::getri)).empty())
-        << "no legacy getri variable ever shipped; a case in legacy_variable_for "
-           "would INVENT a legacy spelling";
-
-    {
-        const auto unset = parse_route_env(Op::getri);
-        EXPECT_FALSE(unset.found);
-        EXPECT_EQ(legacy_unset_default(Op::getri).origin, Origin::Auto);
-    }
-    {
-        ScopedEnvVar e("BATCHLAS_GETRI_ROUTE", "blocked");
-        const auto p = parse_route_env(Op::getri);
-        ASSERT_TRUE(p.found) << "BATCHLAS_GETRI_ROUTE was not read at all";
-        EXPECT_EQ(p.route, (Route{Origin::Native, Algorithm::Blocked}));
-        EXPECT_EQ(p.source.variable, "BATCHLAS_GETRI_ROUTE");
-        EXPECT_FALSE(p.source.legacy);
-    }
-    {
-        ScopedEnvVar e("BATCHLAS_GETRI_ROUTE", "vendor");
-        const auto p = parse_route_env(Op::getri);
-        ASSERT_TRUE(p.found);
-        EXPECT_EQ(p.route, (Route{Origin::Vendor, Algorithm::Auto}));
-    }
-    {
-        ScopedEnvVar e("BATCHLAS_GETRI_ROUTE", "not-a-route");
-        const auto p = parse_route_env(Op::getri);
-        EXPECT_FALSE(p.found);
-        EXPECT_TRUE(p.unparsed) << "a typo must be reported, not silently Auto";
-    }
-}
-
-// ---------------------------------------------------------------------------
 // THE THREE LU OPS ARE PINNED BY THREE INDEPENDENT VARIABLES, which is the
 // silent-wrong-answer channel the pivot contract has to close.
 // ---------------------------------------------------------------------------
@@ -2287,14 +2062,9 @@ TEST(RouteLuFamily, TheThreeOpsResolveIndependentlyAndThatIsThePivotHazard) {
 
     // Today both resolve to the vendor, which is why this asserts on the PARSED routes.
     const auto fs = getrf_shape(/*order=*/64, /*batch=*/128, /*cta_max_n=*/128);
-    const auto is_ = getri_shape(/*order=*/64, /*batch=*/128);
     EXPECT_TRUE(GetrfTable::supports(kGetrfCta, fs));
-    EXPECT_TRUE(GetriTable::supports(kGetriBlocked, is_));
-    EXPECT_TRUE(is_vendor(resolve_getri_route<float>(
-        Route{Origin::Vendor, Algorithm::Auto}, is_, /*vendor_available=*/true)))
-        << "a pinned vendor getri reading a natively-written pivot buffer is the "
-           "channel getrf_native.hh's PIVOT CONTRACT section exists to close; it "
-           "needs a CROSS-OP test with the kernel, which no pure-layer case can be";
+    // getri's half (a vendor pin accepted on a blocked-capable shape) is
+    // getri_candidates_tests' PinsAreIndependentOfGetrf.
 }
 
 // ===========================================================================

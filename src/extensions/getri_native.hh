@@ -33,8 +33,8 @@ using GetriSolveTrsm = std::function<Event(
     const MatrixView<T, MatrixFormat::Dense>&,
     T, Side, Uplo, Transpose, Diag)>;
 
-// Reachable without the route table, so it must re-check every
-// RouteTable<Op::getri,T>::supports() gate and throw. A is read-only, A == C is
+// Reachable without choose(), so it must re-check every clause of can_run(Blocked)
+// (src/ops/getri/getri.cc) and throw. A is read-only, A == C is
 // unsupported, and info is exact-zero semantics, not a tolerance. pivots keep getrf's
 // format: a 1-based interchange list, int32 packed into the int64 span on CUDA/ROCm.
 template <typename T>
