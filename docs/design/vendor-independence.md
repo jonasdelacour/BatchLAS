@@ -248,7 +248,7 @@ native driver is instantiated per scalar type with no `Backend` parameter, so it
 `gemm<B, T>` itself; the facade passes a lambda. `trsm`'s blocked driver takes its trailing GEMM this
 way (`level3.cc:155-165`), `potrf`/`getrf`/`getrs`/`getri` take routed `gemm`/`trsm`, and `orgqr`'s
 native arm takes a routed `ormqr` (`factorization.cc:18-21`, `:60-65`). The alternative — the driver
-calling `sycl_gemm::gemm_custom` directly — bypasses `RouteTable<Op::gemm>` and pins the native GEMM
+calling `sycl_gemm::gemm_custom` directly (deleted in P3.4) — bypasses gemm's selection and pins the native GEMM
 even on shapes it is measured to lose; see [`docs/perf/trsm.md`](../perf/trsm.md) and
 [`docs/perf/gemm.md`](../perf/gemm.md).
 
@@ -296,8 +296,8 @@ call-site guard that replicates only half of such a predicate is a shipped-and-f
 (`route_env.hh:3-6`).
 
 The vocabulary is pinned by `tests/route_vocabulary_tests.cc`, including every legacy spelling and
-every collision above; the GEMM transcription itself is pinned by
-`tests/route_gemm_equivalence_tests.cc`.
+every collision above; the GEMM transcription itself was pinned by
+`tests/route_gemm_equivalence_tests.cc` until P3.4 deleted it with `route_gemm.hh`. gemm no longer reads `route_env.hh`; `legacy_aliases` in `src/ops/gemm/choice.hh` keep the `BATCHLAS_GEMM_VARIANT=native` -> vendor collision, and `BATCHLAS_GEMM_ROUTE=custom` is the class word `native` (docs/design/flat-kernel-selection.md §12 Phase 3.4).
 
 ## The coverage instrument
 

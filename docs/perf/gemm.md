@@ -135,8 +135,8 @@ nothing.
 
 Two sources disagree with the shipped predicate, and the code wins: `experiments/wp2_e6/README.md` and `route_env.hh:88` describe the flip's
 double half as "square, n=4..512", and `scripts/gemm_demand.py:50-68` transcribes `m == n == k && max_dim <= 512` with no `k >= 2`. Both are the
-pre-E5 predicate; E5 landed after E6 and removed squareness and the bound. The `gemm_demand.py` copy is a live defect — see [Open
-debts](#open-debts).
+pre-E5 predicate; E5 landed after E6 and removed squareness and the bound. (Historical: `gemm_demand.py` no longer carries a
+`preferred()` copy since P3.4; it reports issued demand by the choice actually taken.)
 
 ### The kernel selector is the second gate
 
@@ -911,8 +911,9 @@ deprecation warning, so a deliberate override is never silently lost.
   1.79× of `Tiled16` unexploited. See above.
 * ~~`scripts/gemm_demand.py`'s `preferred()` replica has drifted~~ — **paid**. `scripts/gemm_demand.py:50-77` now transcribes the shipped
   predicate exactly (float NN square `max_dim <= 32`; double `k >= 2`, no squareness, no upper bound). Verified against
-  `route_gemm.hh` rather than re-asserted (and since widened to `max_dim <= 48` with it). P3.4 deleted `route_gemm.hh`; the script's
-  replica now describes the transcribed sm_89 rows, not live code.
+  `route_gemm.hh` rather than re-asserted (and since widened to `max_dim <= 48` with it). P3.4 deleted `route_gemm.hh` and, with it,
+  the script's replica: `gemm_demand.py` now reports demand by the choice taken, and the predicate lives on only in the transcribed sm_89
+  rows.
 * **The double window deliberately reaches past its measurements.** No upper size bound; largest measured 2048³. The FP64-ceiling argument is an
   argument, not a measurement, above 2048.
 * ~~**`scripts/route_diff.sh` records resolver `Route`s, not `KernelVariant`s**~~ — **paid by P3.4.** The kernel is the choice, and the

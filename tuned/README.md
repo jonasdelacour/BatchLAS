@@ -62,9 +62,12 @@ BUILT 424a45bc tree (the old `select_kernel_variant` lives in libbatchlas_sycl; 
 in its header), then `--transcribe tuned/transcribed/gemm.sm_89.csv --sha 424a45bc`. A row is the
 old vendor-vs-native decision (`route_gemm.hh` preferred(), the predicate the cuBLAS TU's
 re-route consulted) with the old native kernel (`select_kernel_variant`) mapped to its family
-spelling, then the old fallbacks (tiled/direct); `vendor` leads where the old route was the
+spelling, then the old fallbacks (tiled/direct, plus `small` for a real max(m, n, k) <= 64: the
+one native launch that survives batch > 65535); `vendor` leads where the old route was the
 vendor. `layout=packed` cells were evaluated on contiguous 16-byte-aligned views, `strided` on
-ld = rows + 1.
+ld = rows + 1. Beyond the tuner grid the CSV carries edge rows that bracket the old predicate's
+below-grid edges: real types at batch {1, 63, 64}, double at k {1, 2}, float NN squares 1, 2, 4,
+40, 49, 56 and one-axis-off neighbours of the small squares (the transcriber's header lists them).
 
 A transcribed row reproduces a deleted window; it is not a measurement. It is replaced by a timed
 row when the tuner sweeps that device.

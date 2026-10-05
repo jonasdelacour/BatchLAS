@@ -1470,7 +1470,7 @@ dip. It closes by batch 192 (1.135) and the gate is cleared from 256 up. So the 
 `order >= 512 || (order >= 256 && batch >= 256)`, with 128 (0.922, a LOSS) as the
 bracketing non-winner on the batch axis and 192 as the first winner — 256 is the
 conservative side of a crossover that sits between them. `route_getrs.hh` (`batch < 128`)
-and `route_gemm.hh` (`batch < 64`) are the precedent for a batch term in `preferred()`.
+and `route_gemm.hh` (`batch < 64`; deleted in P3.4, transcribed into `tuned/gemm.*.sm_89.txt`) are the precedent for a batch term in `preferred()`.
 
 **A measurement trap this cost an hour to.** The first probe of batch 128/256 read the two
 leaves as *identical* (3.036 vs 3.016 ms) and was quoted here as a win. It was taken after

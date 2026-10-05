@@ -16,6 +16,7 @@
 #include <fstream>
 #include <map>
 #include <set>
+#include <tuple>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -253,7 +254,10 @@ TEST(TunedTables, TrsmSm89TablesHoldExactlyTheChoiceGrid) {
 }
 
 // Likewise gemm's transcriber: one row per demand-grid cell of choice.hh (plan §3): squares for
-// every form and layout, panels (packed from m, n >= 128) and skinny shapes for the issued forms.
+// every form and layout, panels (packed from m, n >= 128) and skinny shapes for the issued forms;
+// plus the edge rows that bracket the old predicate below the grid (gemm_transcribe.cc header):
+// real batch {1, 63, 64}, double k {1, 2} per (form, layout, m, n), float NN extra squares and
+// one-axis-off neighbours of the small squares.
 TEST(TunedTables, GemmSm89TablesHoldExactlyTheChoiceGrid) {
     namespace gemm = batchlas::ops::gemm;
     for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
@@ -267,8 +271,12 @@ TEST(TunedTables, GemmSm89TablesHoldExactlyTheChoiceGrid) {
             panel.assign(gemm::grid_real_panel_forms.begin(), gemm::grid_real_panel_forms.end());
         }
         std::set<std::string> want;
+        std::set<std::tuple<std::string, std::string, int, int, int>> cells;
+        std::vector<int> batches(gemm::grid_batch.begin(), gemm::grid_batch.end());
+        if (!cplx) batches.insert(batches.end(), {1, 63, 64});
         auto add = [&](std::string_view f, const char* layout, int m, int n, int k) {
-            for (int b : gemm::grid_batch)
+            cells.insert({std::string(f), layout, m, n, k});
+            for (int b : batches)
                 want.insert(std::string(1, f[0]) + " " + f[1] + " " + layout + " " + std::to_string(m) + " " +
                             std::to_string(n) + " " + std::to_string(k) + " " + std::to_string(b));
         };
@@ -291,6 +299,19 @@ TEST(TunedTables, GemmSm89TablesHoldExactlyTheChoiceGrid) {
                     add(f, "strided", 32, mn, k);
                 }
         }
+        if (std::string(dt) == "double")
+            for (const auto& [f, layout, m, n, k] : std::set(cells))
+                for (int kk : {1, 2}) add(f, layout.c_str(), m, n, kk);
+        if (std::string(dt) == "float")
+            for (const char* layout : {"strided", "packed"}) {
+                for (int s : {1, 2, 4, 40, 49, 56}) add("NN", layout, s, s, s);
+                for (int s : {8, 16, 24, 32, 40, 48})
+                    for (int v : {1, 2, 4, 8, 16, 24, 32, 40, 48, 56, 64}) {
+                        add("NN", layout, v, s, s);
+                        add("NN", layout, s, v, s);
+                        add("NN", layout, s, s, v);
+                    }
+            }
         const sel::Table& t = embedded(std::string("gemm.") + dt + ".sm_89.txt");
         std::set<std::string> got;
         for (const auto& row : t.rows) {

@@ -7,9 +7,9 @@
 // everything that has to ask the device or the environment happens here.
 //
 // The include set is public headers plus one private kernel header, and must NOT
-// gain src/queue.hh or <sycl/sycl.hpp>: gemm_variant.hh:1-9 records that dropping
-// the last such include is what made the routing adapters includable from the
-// vendor-free facade, and this header is included by that facade.
+// gain src/queue.hh or <sycl/sycl.hpp>: dropping the last such include (from gemm's
+// route adapter, deleted in P3.4) is what made the routing adapters includable from
+// the vendor-free facade, and this header is included by that facade.
 
 #include <batchlas/blas/dispatch/route_env.hh>
 #include <batchlas/blas/dispatch/route_gemv.hh>
@@ -26,8 +26,8 @@ namespace batchlas::backend {
 // nullopt means "these three views do not describe one GEMV". OpShape is a POD
 // of scalars and holds ONE batch and ONE shape, so it cannot represent
 // disagreement between A, x and y -- absence is the honest encoding, and a
-// caller with no shape takes the vendor. Same pattern as gemm_op_shape
-// (gemm_variant.hh:189-197) and getrs_op_shape.
+// caller with no shape takes the vendor. Same pattern as getrs_op_shape (and the
+// old gemm_op_shape, deleted with gemm's route adapter in P3.4).
 //
 // THE AGREEMENT CHECKS ARE MADE HERE AND NOWHERE ELSE. There is no
 // gemv_validate_params in this tree: the public entry has never validated

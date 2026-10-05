@@ -126,15 +126,11 @@ struct RoutingSettings {
     // results use them, so they must keep working. The canonical spelling wins
     // when both are set (pinned: RouteVocabulary.CanonicalSpellingWinsOverLegacy).
     //
-    // NOTE: legacy[Op::gemm] is BATCHLAS_GEMM_VARIANT, which has TWO readers
-    // with two vocabularies and two different unset defaults --
-    // parse_route_env(Op::gemm) defaults to {Auto,Auto}, and
-    // gemm_variant_request() in src/backends/gemm_variant.hh defaults to
-    // GemmVariantRequest::Vendor. Both now read this one field, so they can no
-    // longer disagree about what the user typed; they still keep their own
-    // defaults for the unset case, which is deliberate -- unifying those is a
-    // behaviour change (it moves which kernel a bare gemm() call runs) and is
-    // not part of this work.
+    // NOTE: legacy[Op::gemm] is BATCHLAS_GEMM_VARIANT. gemm itself reads it
+    // through select::detail::pin_text, only when BATCHLAS_GEMM_ROUTE is unset, mapping
+    // its words with choice.hh's legacy_aliases (its `native` meant the raw
+    // vendor call, so it pins `vendor`; `sycl`/`custom` pin the native family).
+    // Unset, gemm is Auto: the tuned table picks.
     std::array<EnvValue, static_cast<std::size_t>(dispatch::Op::COUNT)> legacy{};
 
     const EnvValue& canonical_route(dispatch::Op op) const {
@@ -164,7 +160,8 @@ struct SelectionSettings {
     // field. Not op-keyed, so parse_route_env never sees it.
     EnvValue expand_route{};
 
-    // BATCHLAS_GEMM_CUBLASDX_KERNEL. Kernel selection INSIDE the vendor route;
+    // BATCHLAS_GEMM_CUBLASDX_KERNEL. Read only by the level-3 cuBLASDx paths
+    // (cublasdx_gemm_select_variant); gemm never reaches cuBLASDx since P3.4.
     // ~20 accepted spellings, unset means CuBLASDxGemmVariant::VendorFallback.
     // Two reads in one file, one asking "is it set" and one asking "what does it
     // say"; both now read this field, so they cannot see different answers.

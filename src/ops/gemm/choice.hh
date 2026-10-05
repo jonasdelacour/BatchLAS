@@ -7,6 +7,7 @@
 
 #include <array>
 #include <complex>
+#include <cstdint>
 #include <string_view>
 #include <type_traits>
 #include <variant>
@@ -94,9 +95,24 @@ constexpr int small_wg(bool nn, int max_dim) {
 }
 inline constexpr int kDirectWg = 64;
 inline constexpr int kTiledWg = 256;
+// direct, tiled, reg and wide put the batch in SYCL dim 0 = CUDA grid z (65535); small is 1-D.
+inline constexpr std::int64_t kMaxGridBatch = 65535;
 
 template <class T>
 inline constexpr bool is_complex_v = !std::is_same_v<T, float> && !std::is_same_v<T, double>;
+
+// small's batched leg is [[sycl::reqd_sub_group_size(32)]]; only the float NN tiled leg is not.
+template <class T>
+constexpr bool small_needs_sg32(bool nn, int max_dim) {
+    return !(std::is_same_v<T, float> && nn && max_dim > 32 && max_dim <= kSmallTiledMaxDim);
+}
+// The shape-and-device half of small's can_run, here so tests can probe synthetic devices.
+template <class T>
+bool small_fits(const select::Device& d, bool nn, std::int64_t max_dim) {
+    if (is_complex_v<T> || max_dim < 1 || max_dim > kSmallMaxDim) return false;
+    const int mx = static_cast<int>(max_dim);
+    return d.max_wg >= small_wg<T>(nn, mx) && (d.has_sg32 || !small_needs_sg32<T>(nn, mx));
+}
 
 // Every compiled choice, once, in tie-break order (§6.3): simpler first, vendor last.
 template <class T>

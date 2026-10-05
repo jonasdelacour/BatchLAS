@@ -9,7 +9,7 @@
 //
 // The include set is public headers plus one private kernel header. No
 // src/queue.hh, no <sycl/sycl.hpp> -- this header is included by the vendor-free
-// facade (gemm_variant.hh:1-9).
+// facade.
 
 #include <batchlas/blas/dispatch/route_env.hh>
 #include <batchlas/blas/dispatch/route_orgqr.hh>
@@ -25,8 +25,8 @@
 
 namespace batchlas::backend {
 
-// nullopt means "this view does not describe one ORGQR" -- the gemm_op_shape
-// pattern (gemm_variant.hh:189-197). Only negative extents qualify: n > m is a
+// nullopt means "this view does not describe one ORGQR" -- the gemv_op_shape
+// pattern (gemv_route.hh). Only negative extents qualify: n > m is a
 // well-formed view that simply has no native route, and it is reported by
 // supports() returning false rather than by withholding the shape, so the
 // coverage row still records that a call arrived.

@@ -20,9 +20,16 @@
 // ld happens to be a multiple of 4 could pass can_use_128x128_fast_path in the old code; the new
 // key does not distinguish it (plan §1.3: the leg is derived in the launcher, never a gate).
 //
+// Edge rows (transcription only, not in the tuner grid): the old preferred() had edges below the
+// grid -- batch < 64 and double k < 2 went to the vendor, and float was native only on NN squares
+// up to 48. Nearest lookup would carry the grid's native rows across them, so real types also get
+// batch {1, 63, 64}, double gets k {1, 2} at every (form, layout, m, n), and float NN gets the
+// squares 1, 2, 4, 40, 49, 56 plus one-axis-off neighbours of the small squares.
+//
 // Ranked list: the old first choice, then the old code's forced-name fallback for that kernel
 // (register/wide tiles fell back to Tiled16, SmallBatched to Direct), then the other of
-// tiled/direct; vendor is first when the old route was the vendor, else last. Old variants
+// tiled/direct, then small for a real max(m, n, k) <= 64 (it alone survives batch > 65535);
+// vendor is first when the old route was the vendor, else last. Old variants
 // never returned by Auto (the four pin-only register variants, the five experimental ones)
 // cannot appear.
 
@@ -55,7 +62,11 @@ constexpr std::array<int, 6> kPanelK{8, 16, 32, 64, 96, 128};
 constexpr std::array<int, 6> kSkinnyMn{64, 128, 256, 512, 1024, 2048};
 constexpr std::array<int, 2> kSkinnyK{256, 1024};
 constexpr std::array<int, 3> kBatch{128, 2048, 32768};
+constexpr std::array<int, 6> kRealBatch{1, 63, 64, 128, 2048, 32768};
 constexpr int kPackedPanelMin = 128;
+constexpr std::array<int, 6> kSmallSquares{8, 16, 24, 32, 40, 48};
+constexpr std::array<int, 11> kOffAxis{1, 2, 4, 8, 16, 24, 32, 40, 48, 56, 64};
+constexpr std::array<int, 6> kEdgeSquares{1, 2, 4, 40, 49, 56};
 
 struct Form {
     char a, b;
@@ -150,13 +161,16 @@ std::string ranked(Form f, bool packed, int m, int n, int k, int batch) {
     if (first == "small") natives.push_back("direct");
     for (const char* s : {"tiled", "direct"})
         if (std::find(natives.begin(), natives.end(), s) == natives.end()) natives.push_back(s);
+    // small is the one 1-D launch: it still runs where batch > 65535 refuses every other native.
+    constexpr bool cplx = !std::is_same_v<T, float> && !std::is_same_v<T, double>;
+    if (!cplx && std::max({m, n, k}) <= 64 && natives.front() != "small") natives.push_back("small");
     std::string out = old_route_native<T>(ta, tb, m, n, k, batch) ? "" : "vendor";
     for (const auto& s : natives) out += (out.empty() ? "" : "|") + s;
     if (out.rfind("vendor", 0) != 0) out += "|vendor";
     return out;
 }
 
-template <std::size_t NF, std::size_t NP>
+template <typename T, std::size_t NF, std::size_t NP>
 std::vector<std::tuple<Form, bool, int, int, int>> cells(const std::array<Form, NF>& forms,
                                                           const std::array<Form, NP>& panel_forms) {
     std::vector<std::tuple<Form, bool, int, int, int>> out;
@@ -182,15 +196,34 @@ std::vector<std::tuple<Form, bool, int, int, int>> cells(const std::array<Form, 
                 add(f, false, 32, mn, k);
             }
     }
+    if constexpr (std::is_same_v<T, double>) {
+        const auto grid = out;
+        for (const auto& [f, packed, m, n, k] : grid)
+            for (int kk : {1, 2}) add(f, packed, m, n, kk);
+    }
+    if constexpr (std::is_same_v<T, float>) {
+        const Form nn{'N', 'N'};
+        for (bool packed : {false, true}) {
+            for (int s : kEdgeSquares) add(nn, packed, s, s, s);
+            for (int s : kSmallSquares)
+                for (int v : kOffAxis) {
+                    add(nn, packed, v, s, s);
+                    add(nn, packed, s, v, s);
+                    add(nn, packed, s, s, v);
+                }
+        }
+    }
     return out;
 }
 
 template <typename T>
 void emit(const char* dtype, const char* device) {
     constexpr bool cplx = !std::is_same_v<T, float> && !std::is_same_v<T, double>;
-    const auto cs = cplx ? cells(kCplxForms, kCplxPanelForms) : cells(kRealForms, kRealPanelForms);
+    const auto cs = cplx ? cells<T>(kCplxForms, kCplxPanelForms) : cells<T>(kRealForms, kRealPanelForms);
+    const std::vector<int> batches = cplx ? std::vector<int>(kBatch.begin(), kBatch.end())
+                                          : std::vector<int>(kRealBatch.begin(), kRealBatch.end());
     for (const auto& [f, packed, m, n, k] : cs)
-        for (int batch : kBatch)
+        for (int batch : batches)
             std::printf("gemm,%s,%s,%c,%c,%s,%d,%d,%d,%d,%s\n", dtype, device, f.a, f.b,
                         packed ? "packed" : "strided", m, n, k, batch, ranked<T>(f, packed, m, n, k, batch).c_str());
 }

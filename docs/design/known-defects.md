@@ -463,7 +463,7 @@ cannot reach the defect no matter what it is set to.
 on threadripper02 (RTX PRO 6000 Blackwell, sm_120) by
 `GeqrfTest.BlockedIgnoresAGarbageWorkspace` (`tests/geqrf_tests.cc`): a 64 x 64 blocked
 `geqrf` whose caller workspace is filled with `0xff` bytes (every float a NaN) returns NaN for
-all four scalar types when the trailing update runs through `sycl_gemm::gemm_custom`.
+all four scalar types when the trailing update runs through `sycl_gemm::gemm_custom` (since P3.4, any native gemm choice; `launch_direct` is behind the `direct` choice).
 
 **The mechanism.** The blocked driver's `W1 = V^H A22` and `W2 = T^H W1` are `beta = 0` GEMMs
 into scratch carved from the workspace. `LinearEpilogue::apply`

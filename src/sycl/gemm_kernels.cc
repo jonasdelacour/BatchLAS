@@ -79,6 +79,18 @@ inline const char* kernel_trace_name(KernelVariant variant) {
     return "gemm_sycl_unknown";
 }
 
+// The unpredicated leg's name where both legs used to share one, so a fast-leg predicate stuck
+// at false shows in the kernel trace (the 128x32x32 NN legs have always been named apart).
+const char* aligned_trace_name(KernelVariant variant) {
+    switch (variant) {
+    case KernelVariant::Tiled128x64RegisterK32Large: return "gemm_sycl_register_128x64_k32_large_aligned";
+    case KernelVariant::Tiled128x64RegisterK32LargeU2: return "gemm_sycl_register_128x64_k32_large_u2_aligned";
+    case KernelVariant::Tiled128x128RegisterK8: return "gemm_sycl_register_128x128_k8_aligned";
+    case KernelVariant::Tiled64x64RegisterK16Wide: return "gemm_sycl_register_64x64_k16_wide_aligned";
+    default: return kernel_trace_name(variant);
+    }
+}
+
 template <typename T>
 Event launch_direct(Queue& ctx,
                     const MatrixView<T, MatrixFormat::Dense>& A,
@@ -224,7 +236,7 @@ Event launch_reg_cfg(Queue& ctx, const MatrixView<float, MatrixFormat::Dense>& A
         static_assert(F == kNN && c.threads() == 256, "the 128x128 kernel is NN only, 256 threads");
         // The leg is derived: the unpredicated path whenever the layout allows it.
         if (can_use_128x128_fast_path<float>(A, B, C))
-            return launch_register_128x128_k8<float, true>(ctx, A, B, C, alpha, beta, kernel_trace_name);
+            return launch_register_128x128_k8<float, true>(ctx, A, B, C, alpha, beta, aligned_trace_name);
         return launch_register_128x128_k8<float, false>(ctx, A, B, C, alpha, beta, kernel_trace_name);
     } else {
         constexpr bool aligned_leg = F == kNN && c.aligned_leg;
@@ -232,7 +244,7 @@ Event launch_reg_cfg(Queue& ctx, const MatrixView<float, MatrixFormat::Dense>& A
         static_assert(RegisterTilePolicy<P.M, P.N, P.K, P.TR, P.TC>::ThreadsPerGroup == c.threads(),
                       "choice.hh's thread count must match the tile");
         return launch_reg<float, P>(ctx, A, B, C, alpha, beta, kernel_trace_name(reg_variant(I, F, false)),
-                                    aligned_leg ? kernel_trace_name(reg_variant(I, F, true)) : nullptr);
+                                    aligned_leg ? aligned_trace_name(reg_variant(I, F, true)) : nullptr);
     }
 }
 
@@ -259,7 +271,7 @@ Event launch_wide_cfg(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
     if constexpr (Fm == 'N' && c.m == 64 && c.n == 64) {
         // The NN 64x64 tile is its own kernel; its leg is derived from the layout.
         if (can_use_64x64_k16_wide_fast_path<T>(A, B, C))
-            return launch_register_64x64_k16_wide<T, true>(ctx, A, B, C, alpha, beta, kernel_trace_name);
+            return launch_register_64x64_k16_wide<T, true>(ctx, A, B, C, alpha, beta, aligned_trace_name);
         return launch_register_64x64_k16_wide<T, false>(ctx, A, B, C, alpha, beta, kernel_trace_name);
     } else {
         constexpr Transpose OA = Fm == 'A' ? Transpose::ConjTrans : Transpose::NoTrans;

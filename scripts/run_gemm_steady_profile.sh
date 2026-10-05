@@ -28,7 +28,6 @@ run_profile_pair() {
     echo
     echo "=== $label ==="
 
-    BATCHLAS_GEMM_VARIANT=sycl \
     BATCHLAS_GEMM_ROUTE="$kernel" \
     "$nsys_bin" profile \
         --trace=cuda,nvtx,osrt \
@@ -47,7 +46,6 @@ run_profile_pair() {
         --min_time=0 \
         512 512 512 512
 
-    BATCHLAS_GEMM_VARIANT=sycl \
     BATCHLAS_GEMM_ROUTE="$kernel" \
     "$ncu_bin" \
         --section SchedulerStats \
@@ -72,5 +70,5 @@ run_profile_pair() {
         512 512 512 512
 }
 
-run_profile_pair s2_u2 128x32x32_s2_u2
-run_profile_pair k32_large 128x64x32large
+run_profile_pair reg_128x32x32 "reg:m=128:n=32:k=32:u=1"
+run_profile_pair reg_128x64x32_u4 "reg:m=128:n=64:k=32:u=4"

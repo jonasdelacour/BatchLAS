@@ -115,9 +115,9 @@ Event geqrf(Queue& ctx,
             return sycl_geqrf::geqrf_cta_dispatch<T>(ctx, A, tau, work_space);
         }
         if (route.algo == dispatch::Algorithm::Blocked) {
-            // The trailing GEMM goes through the ROUTER: a direct sycl_gemm call
-            // bypasses RouteTable<Op::gemm> and takes the native kernel even on the
-            // shapes it loses.
+            // The trailing GEMM goes through the public gemm (flat selection,
+            // src/ops/gemm/gemm.cc): a direct sycl_gemm launcher call would skip the
+            // table and run one fixed native kernel even on the shapes it loses.
             return sycl_geqrf::geqrf_blocked_dispatch<T>(
                 ctx, A, tau, work_space,
                 [](Queue& c,

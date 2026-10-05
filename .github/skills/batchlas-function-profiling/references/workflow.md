@@ -115,5 +115,5 @@ nvprof --print-gpu-trace --print-api-trace build/benchmarks/<target> ...
 - Benchmark executables live in `build/benchmarks/`.
 - Benchmark CLI options are shared and include `--warmup`, `--min_iters`, `--max_iters`, `--min_time`, `--backend`, `--type`, and `--name`.
 - `evaluation/perf_eval.py` supports trace-aware regression cases for `stedc`, `steqr`, `sytrd_cta`, `ormqr_cta`, and `syev_cta`.
-- Existing variant selectors matter for reproducibility. For GEMM, common selectors include `BATCHLAS_GEMM_VARIANT` and `BATCHLAS_GEMM_SYCL_KERNEL`.
+- Existing variant selectors matter for reproducibility. For GEMM the selector is `BATCHLAS_GEMM_ROUTE` (`native`, `vendor`, or a choice spelling such as `reg:m=128:n=32:k=32:u=1`, see `src/ops/gemm/choice.hh`); `BATCHLAS_GEMM_SYCL_KERNEL` is retired and makes gemm throw.
 - Search for `BATCHLAS_KERNEL_TRACE_SCOPE` in the implementation before assuming you need new instrumentation.

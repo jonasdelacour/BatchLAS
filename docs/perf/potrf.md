@@ -440,7 +440,7 @@ vendor-free build's 15.784 — 0.02%, so the forced-vs-resolved trap does not bi
 * **Vendor-free float beats cuSOLVER at `n >= 1024`** — 1.108x at 1024, 1.396x at 2048, bracketed below by 0.614 at
   n=512. double is at parity across n=512..2048 (0.988-1.057). The WP4 goal, met for the real types.
 * **Complex is not there**, 0.311-0.509 vendor-free, and the gap *widens* with `n` (cdouble 0.44 at n=128 → 0.28 at
-  n=2048). Cause is outside this driver: `route_gemm.hh:43-45` returns false for complex and
+  n=2048). Cause is outside this driver (as measured, parent-tree lines; since P3.4 gemm chooses from `tuned/gemm.*.txt`, [gemm.md](gemm.md#choices-flat-selection-p34)): `route_gemm.hh:43-45` returns false for complex and
   `gemm_kernels.cc:465` keeps the register ladder inside `if constexpr (is_same_v<T,float>)`, so every complex
   trailing gemm lands on `Tiled16`. At cdouble n=1024 that gemm is **97.6%** of the call and 2.95x slower than
   cuBLAS (0.40 TFLOP/s against 1.18, on a card whose FP64 ceiling is ~1.29). Substituting cuBLAS's gemm time into

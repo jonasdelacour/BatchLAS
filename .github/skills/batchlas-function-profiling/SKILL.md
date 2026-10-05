@@ -16,7 +16,7 @@ Use `scripts/find_batchlas_profile_targets.py <symbol-or-path>` to map a source 
 Most profiling work should start from `build/benchmarks/*`. For regression-style cases that already exist in `evaluation/perf_eval.py`, prefer that harness instead of inventing a new runner.
 
 3. Capture a non-profiler baseline.
-Run the chosen benchmark once without a profiler and record the exact command, backend, type, args, and any environment selectors such as `BATCHLAS_GEMM_VARIANT` or `BATCHLAS_GEMM_SYCL_KERNEL`.
+Run the chosen benchmark once without a profiler and record the exact command, backend, type, args, and any environment selectors such as `BATCHLAS_GEMM_ROUTE` (or another `BATCHLAS_<OP>_ROUTE`).
 
 4. Choose the lightest profiling mode that answers the question.
 - Use built-in kernel trace first when you need BatchLAS phase names or function-level scope labels.
@@ -37,7 +37,7 @@ Name the benchmark used, the exact profiler command, the hottest kernels or trac
 - Emit a kernel trace command for a specific benchmark case:
   `python3 .github/skills/batchlas-function-profiling/scripts/emit_profile_commands.py --benchmark gemm_steady_benchmark --tool trace --output-stem gemm_steady_512 -- 512 512 512 512`
 - Emit `nsys` and `ncu` commands for a known hotspot kernel:
-  `python3 .github/skills/batchlas-function-profiling/scripts/emit_profile_commands.py --benchmark gemm_steady_benchmark --tool all --kernel-regex GemmRegisterTiledKernel --env BATCHLAS_GEMM_VARIANT=sycl --env BATCHLAS_GEMM_SYCL_KERNEL=128x32x32_s2_u2 -- 512 512 512 512`
+  `python3 .github/skills/batchlas-function-profiling/scripts/emit_profile_commands.py --benchmark gemm_steady_benchmark --tool all --kernel-regex GemmRegisterTiledKernel --env BATCHLAS_GEMM_ROUTE=reg:m=128:n=32:k=32:u=1 -- 512 512 512 512`
 
 ## Rules
 

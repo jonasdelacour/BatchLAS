@@ -20,6 +20,7 @@
 #include "../src/sycl/gemm_kernels.hh"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <complex>
 #include <cstring>
@@ -29,6 +30,8 @@
 #include <map>
 #include <optional>
 #include <random>
+#include <regex>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -98,17 +101,21 @@ const std::vector<RegRow>& reg_rows() {
         {32, 128, 16, 1, {"NN", "TN", "TT"},
          {{"NN", "gemm_sycl_register_32x128_k16"}, {"TN", "gemm_sycl_register_32x128_k16_tn"},
           {"TT", "gemm_sycl_register_32x128_k16_tt"}}},
-        {128, 64, 32, 4, {"NN"}, {{"NN", "gemm_sycl_register_128x64_k32_large"}}},
-        {128, 64, 32, 2, {"NN"}, {{"NN", "gemm_sycl_register_128x64_k32_large_u2"}}},
-        {128, 128, 8, 1, {"NN"}, {{"NN", "gemm_sycl_register_128x128_k8"}}},
+        {128, 64, 32, 4, {"NN"},
+         {{"NN", "gemm_sycl_register_128x64_k32_large"}, {"NN+aligned", "gemm_sycl_register_128x64_k32_large_aligned"}}},
+        {128, 64, 32, 2, {"NN"},
+         {{"NN", "gemm_sycl_register_128x64_k32_large_u2"},
+          {"NN+aligned", "gemm_sycl_register_128x64_k32_large_u2_aligned"}}},
+        {128, 128, 8, 1, {"NN"},
+         {{"NN", "gemm_sycl_register_128x128_k8"}, {"NN+aligned", "gemm_sycl_register_128x128_k8_aligned"}}},
     };
     return rows;
 }
 struct WideRow { int m, n, k; std::map<std::string, std::string> trace; };  // forms NN, CN, NC
 const std::vector<WideRow>& wide_rows() {
     static const std::vector<WideRow> rows{
-        {64, 64, 16, {{"NN", "gemm_sycl_register_64x64_k16_wide"}, {"CN", "gemm_sycl_register_64x64_k16_wide_cn"},
-                      {"NC", "gemm_sycl_register_64x64_k16_wide_nc"}}},
+        {64, 64, 16, {{"NN", "gemm_sycl_register_64x64_k16_wide"}, {"NN+aligned", "gemm_sycl_register_64x64_k16_wide_aligned"},
+                      {"CN", "gemm_sycl_register_64x64_k16_wide_cn"}, {"NC", "gemm_sycl_register_64x64_k16_wide_nc"}}},
         {128, 32, 16, {{"NC", "gemm_sycl_register_128x32_k16_wide_nc"}}},
         {32, 128, 16, {{"CN", "gemm_sycl_register_32x128_k16_wide_cn"}}},
         {32, 32, 16, {{"NN", "gemm_sycl_register_32x32_k16_wide"}}},
@@ -178,7 +185,14 @@ std::string expected_kernel(const C& c, Transpose ta, Transpose tb, bool aligned
             if (f == "NN" && aligned_nn && row->trace.count("NN+aligned")) f = "NN+aligned";
             return row->trace.at(f);
         },
-        [&](const og::Wide& w) { return wide_row(w)->trace.at(wide_form<T>(ta, tb)); },
+        [&](const og::Wide& w) {
+            const WideRow* row = wide_row(w);
+            std::string f = wide_form<T>(ta, tb);
+            // A complex<double> is one 16-byte vector, so its strided views take the aligned leg too.
+            const bool aligned = aligned_nn || sizeof(T) == 16;
+            if (f == "NN" && aligned && row->trace.count("NN+aligned")) f = "NN+aligned";
+            return row->trace.at(f);
+        },
         [](og::Vendor) { return std::string(); },
     }, c);
 }
@@ -643,8 +657,9 @@ TYPED_TEST(GemmCandidates, CanRunEqualsLaunch) {
 }
 
 // A pinned choice launches its own instantiation: the kernel-trace name for every native choice
-// on every instantiated form, and the 128x32x32 NN leg derived from the layout (aligned on a
-// packed tile multiple, predicated on a strided view). A swapped launch arm shows here even
+// on every instantiated form, and the NN leg of every two-leg config (reg 128x32x32, 128x64x32
+// u4/u2, 128x128x8, wide 64x64) derived from the layout: aligned on a packed tile multiple,
+// predicated on a strided view, so a fast-leg predicate stuck at false goes red here. A swapped launch arm shows here even
 // where both kernels give the same bits. threadsafe: the child re-executes the binary with
 // BATCHLAS_KERNEL_TRACE set from the start, so its queue is created with profiling.
 TYPED_TEST(GemmCandidates, PinnedChoiceLaunchesItsOwnKernel) {
@@ -658,7 +673,7 @@ TYPED_TEST(GemmCandidates, PinnedChoiceLaunchesItsOwnKernel) {
             for (Transpose tb : kForms) {
                 const bool small = std::holds_alternative<og::Small>(c);
                 for (Layout lay : {Layout::Packed, Layout::Strided}) {
-                    Spec s{ta, tb, small ? 48 : 128, small ? 40 : 64, small ? 33 : 64, 2, lay};
+                    Spec s{ta, tb, small ? 48 : 128, small ? 40 : 128, small ? 33 : 64, 2, lay};  // every tile divides
                     if (!oracle_native<T>(c, ta, tb, s.m, s.n, s.k)) continue;
                     cases.push_back({c, s, expected_kernel<T>(c, ta, tb, lay == Layout::Packed)});
                 }
@@ -771,18 +786,85 @@ TYPED_TEST(GemmCandidates, MismatchedViewsThrowUnderEveryPin) {
     auto p = make_problem<T>(Spec{kN, kN, 16, 12, 8, 3, Layout::Strided});
     std::vector<std::optional<C>> pins{std::nullopt};
     for (const C& c : og::candidates<T>()) pins.push_back(c);
-    struct Bad { const char* what; int a_batch, c_rows; };
-    for (const Bad& bad : {Bad{"A.batch != C.batch", 2, 16}, Bad{"C.rows != m", 3, 15}})
+    // Each case breaks exactly one validate() term; every view stays inside its region. The
+    // `< 0` terms are unreachable here: the MatrixView constructor rejects negative extents.
+    struct Bad { const char* what; int a_batch, b_batch, b_rows, b_cols, c_rows, c_cols; Transpose tb; };
+    const Bad bads[] = {{"A.batch != C.batch", 2, 2, 8, 12, 16, 12, kN}, {"A.batch != B.batch", 3, 2, 8, 12, 16, 12, kN},
+                        {"C.rows != m", 3, 3, 8, 12, 15, 12, kN},        {"C.cols != n", 3, 3, 8, 12, 16, 11, kN},
+                        {"B.rows != k (NN)", 3, 3, 7, 12, 16, 12, kN},  {"op(B).rows != k (NT)", 3, 3, 12, 7, 16, 12, kT}};
+    for (const Bad& bad : bads)
         for (const auto& c : pins) {
             const MVof<T> A(p.mem.data() + p.a.off, 16, 8, p.a.ld, p.a.stride, bad.a_batch);
-            const MVof<T> Cm(p.mem.data() + p.c.off, bad.c_rows, 12, p.c.ld, p.c.stride, 3);
+            const bool nt = bad.tb != kN;  // B is n x k' there: ld 12, inside the region
+            const MVof<T> Bm(p.mem.data() + p.b.off, bad.b_rows, bad.b_cols, nt ? 12 : p.b.ld, nt ? 84 : p.b.stride,
+                             bad.b_batch);
+            const MVof<T> Cm(p.mem.data() + p.c.off, bad.c_rows, bad.c_cols, p.c.ld, p.c.stride, 3);
             std::optional<Pin> pin;
             if (c) pin.emplace("gemm", *c);
-            EXPECT_THROW(((void)gemm<B, T>(*this->ctx, A, p.B(), Cm, p.alpha, p.beta, kN, kN)), std::invalid_argument)
+            EXPECT_THROW(((void)gemm<B, T>(*this->ctx, A, Bm, Cm, p.alpha, p.beta, kN, bad.tb)), std::invalid_argument)
                 << bad.what << " under " << (c ? select::to_string(*c) : std::string("auto"));
         }
     for (std::size_t e = 0; e < p.mem.size(); ++e)
         ASSERT_TRUE(same_bits(p.mem[e], p.mem0[e])) << "a refused call wrote element " << e;
+}
+
+// can_run's grid term (R3): direct, tiled, reg and wide put the batch in grid z (<= 65535), so a
+// pin is a launch at the ceiling and a refusal one past it; small (1-D) and Auto serve the
+// larger batch (real: the transcribed rows' trailing small; complex: the vendor, if any).
+TYPED_TEST(GemmCandidates, GridCeilingIsACanRunTerm) {
+    using T = typename TestFixture::T;
+    const int ceiling = int(og::kMaxGridBatch);
+    const Spec at{kN, kN, 2, 2, 2, ceiling, Layout::Packed};
+    const Spec past{kN, kN, 2, 2, 2, ceiling + 1, Layout::Packed};
+    for (const C& c : og::candidates<T>()) {
+        if (std::holds_alternative<og::Vendor>(c) || std::holds_alternative<og::Small>(c)) continue;
+        if (!oracle_native<T>(c, kN, kN, 2, 2, 2)) continue;
+        auto p = make_problem<T>(at);
+        ASSERT_TRUE(this->pin_accepted(c, p)) << name(c, at);
+        expect_gemm(p, name(c, at));
+        auto q = make_problem<T>(past);
+        EXPECT_FALSE(this->pin_accepted(c, q)) << name(c, past);
+        for (std::size_t e = 0; e < q.mem.size(); ++e)
+            ASSERT_TRUE(same_bits(q.mem[e], q.mem0[e])) << name(c, past) << ": a refused pin wrote element " << e;
+    }
+    if constexpr (!kCx<T>) {
+        auto p = make_problem<T>(past);
+        ASSERT_TRUE(this->pin_accepted(C{og::Small{}}, p)) << "small is a 1-D launch";
+        expect_gemm(p, "small past the grid ceiling");
+    }
+    const ScopedEnvVar clear("BATCHLAS_GEMM_ROUTE", nullptr);
+    auto p = make_problem<T>(past);
+    if constexpr (kCx<T> && !TestFixture::kVendor) {
+        EXPECT_THROW(this->run(p), dispatch::NoRouteError) << "complex has no 1-D native launch";
+    } else {
+        const std::string got = traced_choice([&] { this->run(p); });
+        EXPECT_EQ(got, kCx<T> ? "vendor" : "small") << label(past) << ": small ranks above the vendor here";
+        expect_gemm(p, "auto past the grid ceiling");
+    }
+}
+
+// An empty batch is a no-op under Auto and every pin, vendor-free too (the old native range
+// launched nothing; can_run's batch >= 1 term alone would leave it no route).
+TYPED_TEST(GemmCandidates, EmptyBatchIsANoOp) {
+    using T = typename TestFixture::T;
+    static constexpr Backend B = TestFixture::B;
+    auto p = make_problem<T>(Spec{kN, kN, 8, 8, 8, 1, Layout::Packed});
+    const MVof<T> A(p.mem.data() + p.a.off, 8, 8, 8, 64, 0), Bm(p.mem.data() + p.b.off, 8, 8, 8, 64, 0),
+        Cm(p.mem.data() + p.c.off, 8, 8, 8, 64, 0);
+    std::vector<std::optional<C>> pins{std::nullopt};
+    for (const C& c : og::candidates<T>()) pins.push_back(c);
+    const ScopedEnvVar clear("BATCHLAS_GEMM_ROUTE", nullptr);
+    for (const auto& c : pins) {
+        std::optional<Pin> pin;
+        if (c) pin.emplace("gemm", *c);
+        auto call = [&] {
+            (void)gemm<B, T>(*this->ctx, A, Bm, Cm, p.alpha, p.beta, kN, kN);
+            this->ctx->wait();
+        };
+        EXPECT_NO_THROW(call()) << (c ? select::to_string(*c) : std::string("auto"));
+    }
+    for (std::size_t e = 0; e < p.mem.size(); ++e)
+        ASSERT_TRUE(same_bits(p.mem[e], p.mem0[e])) << "an empty batch wrote element " << e;
 }
 
 // A non-default precision is a correctness condition: every native pin refuses it, and Auto
@@ -848,7 +930,7 @@ TYPED_TEST(GemmCandidates, LegacyKernelNamesAndClassWords) {
     const std::string vendor_pick = TestFixture::kVendor ? "vendor" : auto_pick;
     struct Want { const char* word; Spec s; std::string spelling; };
     std::vector<Want> want{
-        {"tiled16", nn, "tiled"}, {"tile16", nn, "tiled"}, {"TILED", nn, "tiled"}, {"native:tiled", nn, "tiled"},
+        {"tiled16", nn, "tiled"}, {"tile16", nn, "tiled"}, {"TILED", nn, "tiled"},
         {"direct", tt, "direct"}, {"64x64x16wide", nn, "wide:m=64:n=64:k=16"},
         {"64x64x16wide_cn", Spec{kC, kN, 64, 48, 32, 4, Layout::Packed}, "wide:m=64:n=64:k=16"},
         {"128x32x16wide_nc", Spec{kN, kC, 64, 48, 32, 4, Layout::Packed}, "wide:m=128:n=32:k=16"},
@@ -1016,6 +1098,15 @@ TYPED_TEST(GemmCandidates, TraceKeyFoldsAndClassifiesLayout) {
         });
         EXPECT_NE(line.find("layout=strided"), std::string::npos) << line;
     }
+    // A sub-batch: ld == rows and a 16-byte base, but the batch stride is padded.
+    auto q = make_problem<T>(Spec{kN, kN, 8, 8, 8, 2, Layout::Packed});
+    const MVof<T> padded(q.mem.data() + q.a.off, 8, 8, 8, 68, 2);
+    ASSERT_EQ(reinterpret_cast<std::uintptr_t>(padded.data_ptr()) % 16, 0u);
+    const std::string line = traced_line([&] {
+        (void)gemm<TestFixture::B, T>(*this->ctx, padded, q.B(), q.Cv(), T(1), T(0), kN, kN);
+        this->ctx->wait();
+    });
+    EXPECT_NE(line.find("layout=strided"), std::string::npos) << line;
 }
 
 // Auto against the sm_89 transcribed table on a device that reads it (its own, or borrowed):
@@ -1156,6 +1247,194 @@ TYPED_TEST(GemmCandidatesCpu, CpuQueueRunsNativeOnlyWithoutAHostBlas) {
     auto p = make_problem<T>(s);
     EXPECT_EQ(traced_choice([&] { call(p); }), kVendor ? "vendor" : "direct");
     expect_gemm(p, "cpu auto");
+}
+
+// The transcribed sm_89 rows, read with Table::nearest directly so every device checks them
+// (AutoReadsTheSm89TranscribedTable runs Auto where sm_89 is read): small leads the float NN
+// squares to 48 and the vendor the rest of float; double is native first; complex is vendor
+// first; a real C folds to T; the old forced-name fallback follows the old kernel.
+TEST(GemmTranscribedTable, Sm89RowsHoldTheOldPreference) {
+    struct Row {
+        const char* dtype; const char* ta; const char* tb; const char* layout; int m, n, k, batch;
+        std::vector<std::string> ranked;
+    };
+    const Row rows[] = {
+        {"float", "N", "N", "packed", 32, 32, 32, 128, {"small", "direct", "tiled", "vendor"}},
+        {"float", "N", "N", "packed", 64, 64, 64, 128, {"vendor", "small", "direct", "tiled"}},
+        {"float", "N", "N", "packed", 256, 256, 256, 128, {"vendor", "reg:m=128:n=128:k=8:u=1", "tiled", "direct"}},
+        {"float", "T", "N", "strided", 256, 128, 128, 128, {"vendor", "reg:m=128:n=32:k=32:u=1", "tiled", "direct"}},
+        {"float", "N", "T", "strided", 256, 32, 96, 2048, {"vendor", "tiled", "direct"}},
+        {"double", "N", "N", "packed", 16, 16, 16, 128, {"direct", "tiled", "small", "vendor"}},
+        {"double", "N", "N", "packed", 256, 256, 256, 128, {"wide:m=64:n=64:k=16", "tiled", "direct", "vendor"}},
+        {"double", "N", "T", "strided", 256, 32, 96, 2048, {"tiled", "direct", "vendor"}},
+        {"cfloat", "N", "C", "strided", 256, 32, 96, 2048, {"vendor", "wide:m=128:n=32:k=16", "tiled", "direct"}},
+        {"cfloat", "N", "N", "packed", 256, 256, 256, 128, {"vendor", "wide:m=64:n=64:k=16", "tiled", "direct"}},
+        {"cdouble", "C", "N", "strided", 32, 256, 128, 2048, {"vendor", "wide:m=32:n=128:k=16", "tiled", "direct"}}};
+    for (const Row& r : rows) {
+        const auto tables = select::tables_in_borrow_order("gemm", r.dtype, select::device_from_key("sm_89"));
+        ASSERT_FALSE(tables.empty()) << r.dtype;
+        const select::Table& t = *tables.front();
+        ASSERT_EQ(t.device, "sm_89") << r.dtype;
+        EXPECT_EQ(t.source.rfind("transcribed:", 0), 0u) << t.file;
+        const select::Key key{{"ta", r.ta}, {"tb", r.tb}, {"layout", r.layout}, {"m", r.m},
+                              {"n", r.n},   {"k", r.k},   {"batch", r.batch}};
+        const select::TableRow* row = t.nearest(key);
+        ASSERT_NE(row, nullptr) << t.file;
+        const std::string what = t.file + ":" + std::to_string(row->line);
+        std::vector<std::string> got;
+        for (const auto& e : row->ranked) got.push_back(e.spelling);
+        EXPECT_EQ(got, r.ranked) << what;
+        EXPECT_FALSE(row->timed) << what;
+    }
+    // No real table has a C row: key_of folds it to T before the lookup.
+    for (const char* dt : {"float", "double"}) {
+        const auto tables = select::tables_in_borrow_order("gemm", dt, select::device_from_key("sm_89"));
+        ASSERT_FALSE(tables.empty());
+        const select::Table& t = *tables.front();
+        ASSERT_GE(t.keys.size(), 2u);
+        ASSERT_EQ(t.keys[0].name, "ta");
+        ASSERT_EQ(t.keys[1].name, "tb");
+        for (const auto& row : t.rows)
+            ASSERT_TRUE(row.keys[0] != "C" && row.keys[1] != "C") << t.file << ":" << row.line;
+    }
+}
+
+// The old preferred() edges below the grid (batch < 64, double k < 2, float native only on NN
+// squares to 48) survive nearest lookup: the transcriber brackets each on both sides.
+TEST(GemmTranscribedTable, Sm89BracketsTheOldVendorEdges) {
+    struct Cell { const char* dtype; const char* ta; const char* tb; const char* layout; int m, n, k, batch; const char* first; };
+    const Cell cells[] = {
+        {"double", "N", "N", "packed", 256, 256, 256, 8, "vendor"},
+        {"double", "N", "N", "packed", 256, 256, 256, 63, "vendor"},
+        {"double", "N", "N", "packed", 256, 256, 256, 64, "wide:m=64:n=64:k=16"},
+        {"double", "N", "N", "packed", 512, 512, 1, 2048, "vendor"},
+        {"double", "N", "N", "packed", 512, 512, 2, 2048, "tiled"},
+        {"double", "N", "T", "strided", 300, 300, 1, 1000, "vendor"},
+        {"double", "T", "T", "strided", 20, 20, 1, 500, "vendor"},
+        {"float", "N", "N", "packed", 52, 52, 52, 2048, "vendor"},
+        {"float", "N", "N", "packed", 48, 48, 48, 2048, "small"},
+        {"float", "N", "N", "packed", 49, 49, 49, 2048, "vendor"},
+        {"float", "N", "N", "packed", 40, 40, 48, 2048, "vendor"},
+        {"float", "N", "N", "strided", 40, 40, 40, 2048, "small"},
+        {"float", "N", "N", "packed", 32, 32, 1, 2048, "vendor"},
+        {"float", "N", "N", "packed", 32, 32, 32, 16, "vendor"},
+        {"float", "N", "N", "packed", 32, 32, 32, 64, "small"},
+        {"float", "N", "N", "packed", 8, 8, 8, 1, "vendor"},
+        {"float", "N", "N", "packed", 2, 2, 2, 2048, "small"},
+        {"float", "N", "N", "strided", 2, 8, 8, 2048, "vendor"}};
+    for (const Cell& c : cells) {
+        const auto tables = select::tables_in_borrow_order("gemm", c.dtype, select::device_from_key("sm_89"));
+        ASSERT_FALSE(tables.empty()) << c.dtype;
+        const select::Table& t = *tables.front();
+        const select::Key key{{"ta", c.ta}, {"tb", c.tb}, {"layout", c.layout}, {"m", c.m},
+                              {"n", c.n},   {"k", c.k},   {"batch", c.batch}};
+        const select::TableRow* row = t.nearest(key);
+        ASSERT_NE(row, nullptr) << t.file;
+        EXPECT_EQ(row->ranked.front().spelling, c.first)
+            << c.dtype << " " << c.ta << c.tb << " " << c.layout << " " << c.m << "x" << c.n << "x" << c.k
+            << " batch=" << c.batch << " -> " << t.file << ":" << row->line;
+    }
+}
+
+// small's batched leg requires sub-group size 32; only the float NN tiled leg (33..56) does not.
+TEST(GemmCanRun, SmallNeedsSubGroup32OutsideTheFloatTiledLeg) {
+    select::Device sg = select::device_from_key("sm_89");
+    sg.is_gpu = true;
+    sg.max_wg = 1024;
+    sg.has_sg32 = true;
+    select::Device nosg = sg;
+    nosg.has_sg32 = false;
+    struct Probe { bool is_float, nn; int mx; bool without_sg32; };
+    const Probe probes[] = {{true, true, 32, false}, {true, true, 33, true}, {true, true, 56, true},
+                            {true, true, 57, false}, {true, false, 40, false}, {false, true, 40, false},
+                            {false, false, 8, false}};
+    for (const Probe& p : probes) {
+        const bool with = p.is_float ? og::small_fits<float>(sg, p.nn, p.mx) : og::small_fits<double>(sg, p.nn, p.mx);
+        const bool without =
+            p.is_float ? og::small_fits<float>(nosg, p.nn, p.mx) : og::small_fits<double>(nosg, p.nn, p.mx);
+        const std::string what = std::string(p.is_float ? "float" : "double") + (p.nn ? " NN" : " NT") +
+                                 " max_dim=" + std::to_string(p.mx);
+        EXPECT_TRUE(with) << what;
+        EXPECT_EQ(without, p.without_sg32) << what;
+    }
+    EXPECT_FALSE(og::small_fits<float>(sg, true, 65));
+    EXPECT_FALSE(og::small_fits<std::complex<float>>(sg, true, 8));
+}
+
+// candidates<T>() holds exactly the oracle's configs: a dropped entry would otherwise just
+// shorten every per-candidate loop.
+template <typename T>
+void expect_candidate_set() {
+    std::set<std::string> got, want{"direct", "tiled", "vendor"};
+    for (const C& c : og::candidates<T>()) EXPECT_TRUE(got.insert(select::to_string(c)).second) << select::to_string(c);
+    if constexpr (!kCx<T>) want.insert("small");
+    if constexpr (std::is_same_v<T, float>)
+        for (const auto& r : reg_rows())
+            want.insert("reg:m=" + std::to_string(r.m) + ":n=" + std::to_string(r.n) + ":k=" + std::to_string(r.k) +
+                        ":u=" + std::to_string(r.u));
+    for (const auto& w : wide_rows())
+        want.insert("wide:m=" + std::to_string(w.m) + ":n=" + std::to_string(w.n) + ":k=" + std::to_string(w.k));
+    EXPECT_EQ(got, want) << select::dtype_name<T>();
+}
+TEST(GemmCandidateSet, EqualsTheOracleRows) {
+    expect_candidate_set<float>();
+    expect_candidate_set<double>();
+    expect_candidate_set<std::complex<float>>();
+    expect_candidate_set<std::complex<double>>();
+}
+
+// Every legacy alias, decoded from its own text (not from choice.hh): the config its name
+// spells, and that config has an instantiation for the form a suffix (tn/nt/tt, cn/nc) names.
+TEST(GemmLegacyAliases, EveryNameDecodesToItsConfigAndForm) {
+    const std::regex xyz(R"(^(?:register|reg)?(\d+)x(\d+)(?:x|k)(\d+)(.*)$)");
+    const std::regex sqk(R"(^(?:register|reg)(\d+)k(\d+)(.*)$)");
+    const std::regex sq(R"(^(?:register|reg)?(32|64)(?:x(32|64))?$)");
+    int decoded = 0;
+    for (const auto& a : og::aliases) {
+        const std::string name(a.name);
+        std::string want, rest;
+        std::smatch mt;
+        int m = 0, n = 0, k = 0;
+        if (name == "tiled16" || name == "tile16") want = "tiled";
+        else if (name == "smallbatched") want = "small";
+        else if (name == "vendor:direct") want = "vendor";
+        else if (std::regex_match(name, mt, sq) && (!mt[2].matched || mt[1] == mt[2])) {
+            m = n = std::stoi(mt[1]);
+            k = 8;
+        } else if (std::regex_match(name, mt, xyz)) {
+            m = std::stoi(mt[1]);
+            n = std::stoi(mt[2]);
+            k = std::stoi(mt[3]);
+            rest = mt[4];
+        } else if (std::regex_match(name, mt, sqk)) {
+            m = n = std::stoi(mt[1]);
+            k = std::stoi(mt[2]);
+            rest = mt[3];
+        } else {
+            ADD_FAILURE() << "undecodable legacy name " << name;
+            continue;
+        }
+        std::string form = "NN";
+        for (const char* f : {"tn", "nt", "tt", "cn", "nc"})
+            if (rest.ends_with(f)) form = {char(std::toupper(f[0])), char(std::toupper(f[1]))};
+        if (want.empty() && rest.find("wide") != std::string::npos) {
+            want = "wide:m=" + std::to_string(m) + ":n=" + std::to_string(n) + ":k=" + std::to_string(k);
+            const WideRow* row = wide_row(og::Wide{m, n, k});
+            ASSERT_NE(row, nullptr) << name;
+            EXPECT_EQ(row->trace.count(form), 1u) << name << ": its config has no " << form << " instantiation";
+        } else if (want.empty()) {
+            const int u = rest.find("large") == std::string::npos ? 1 : (rest.find("u2") != std::string::npos ? 2 : 4);
+            want = "reg:m=" + std::to_string(m) + ":n=" + std::to_string(n) + ":k=" + std::to_string(k) +
+                   ":u=" + std::to_string(u);
+            const RegRow* row = reg_row(og::Reg{m, n, k, u});
+            ASSERT_NE(row, nullptr) << name;
+            EXPECT_NE(std::find(row->forms.begin(), row->forms.end(), form), row->forms.end())
+                << name << ": its config has no " << form << " instantiation";
+        }
+        EXPECT_EQ(std::string(a.spelling), want) << name;
+        ++decoded;
+    }
+    EXPECT_EQ(decoded, int(og::aliases.size()));
 }
 
 }  // namespace

@@ -662,6 +662,13 @@ The sm_89 gate needs the RTX 4090 box. The sm_120 gate needs the Blackwell box (
 - ~~**`posv` calls the potrf tier drivers directly**~~ (struck, P3.1): it never did. posv calls the
   public `potrf` and `trsm`; its only direct driver calls are its own kernels. It is migrated in
   `src/ops/posv/` (§13).
+- **gemm's `direct` kernel indexes the batch with `int` offsets** (`b * stride`), which can
+  overflow at large batch x stride, as trsm's complex substitute did (K4). It predates P3.4 and is
+  not a `can_run` term; fix it with 64-bit offsets rather than a capacity gate.
+- **gemm's sm_120 table** is open after P3.4 (§12 Phase 3.4).
+- **Other ops may share gemm's grid-z ceiling**: any kernel that puts the batch in SYCL dim 0 of a
+  3-D range aborts past 65535 work-groups there. gemm's `can_run` now carries it (§12 Phase 3.4);
+  the migrated ops' kernels were not audited for it.
 - **Stale comments on `main`** to fix when touching these files:
   - `potrf_native.hh:4` ("preferred() is false for every tier");
   - `coverage.cc:195` (LPanel missing);
@@ -933,6 +940,7 @@ Where the code differs from the sketches above, the code wins. These are the dif
   tests in `potrf_tests.cc` and the V2 helper in `trsm_tests.cc` now pass the public trsm / gemm.
   `potrf_blocked_dispatch`'s trailing gemm keeps its `gemm_custom` fallback until P3.4 (a default
   argument cannot precede the now-mandatory one, so both defaults are gone and callers pass `{}`).
+  P3.4 made that empty fallback the public gemm (see Phase 3.4).
 - **sm_89 tables are transcribed, untimed.** `tools/transcribe/trsm_transcribe.cc` (host g++
   against 8b9adeb3) re-runs the real `resolve_route_uninstrumented` over the old table, first with
   the vendor present, then (after the vendor is ranked) vendor-free for the remaining natives. The
@@ -1036,6 +1044,124 @@ Where the code differs from the sketches above, the code wins. These are the dif
   worked around for gemm); K4 is real and fixed (above); K6 (C folded to T) moves no cell on the
   grid, since the sm_89 rows are side/order-determined and identical for N, T and C, and the
   26-cell cross-check covered all three; it starts to matter only once a timed table differs.
+
+**Phase 3.4, gemm** (`src/ops/gemm/{choice.hh,gemm.cc}`, plan §1.3; per-kernel detail in
+`docs/perf/gemm.md#choices-flat-selection-p34`):
+- Families `direct`, `tiled`, `small` (real only), `reg:m=..:n=..:k=..:u=..` (float only, 10
+  configs), `wide:m=..:n=..:k=..` (5 configs, every scalar), `vendor`. Candidates: float 19,
+  double 9, cfloat/cdouble 8. `# keys: ta:exact tb:exact layout:exact m:log n:log k:log batch:log`,
+  ConjTrans folded to `T` for real scalars; `layout=packed` when A, B, C are contiguous with
+  16-byte-aligned bases, else `strided`. `last_resort {"direct","vendor"}` (§13). No workspace, so
+  R5 is vacuous. The old `RouteTable<Op::gemm>`, `select_kernel_variant` and the cuBLAS/rocBLAS
+  `gemm_use_sycl_custom` re-route were three deciders; they are now one table row.
+- **Fold table** (forms after the C->T fold; the old variant list is in gemm.md):
+
+  | choice | forms | old `KernelVariant`s |
+  |---|---|---|
+  | `direct` / `tiled` / `small` | any | `Direct` / `Tiled16` / `SmallBatched` |
+  | `reg` 32·32·8, 64·64·8, 128·64·32 u=4 and u=2, 128·128·8 | NN | the NN-only register tiles |
+  | `reg` 64·64·16, 128·32·16, 128·32·32 | NN NT TN TT | `{,TN,NT,TT}`; 128·32·32 also `S2U1{,Aligned,Generic}` (legs) |
+  | `reg` 128·64·16 / 32·128·16 | NT TN TT / NN TN TT | `Tiled128x64RegisterK16*` / `Tiled32x128RegisterK16*` |
+  | `wide` 64·64·16 / 128·32·16 / 32·128·16 | NN CN NC / NC / CN | the `...Wide{,CN,NC}` tiles |
+  | `wide` 32·32·16, 16·16·16 | NN | the two P3.2b tiles (decision 5) |
+
+  A real `Trans` is served by a wide `ConjTrans` instantiation; a complex `Trans` is not.
+- **Deleted** (decision 1): the four pin-only `Tiled128x32RegisterK32{S1U1,S2U2,S2U2TT8x4,S2U2TT4x8}`
+  and the five experimental `Tiled128x32RegisterK32{Persistent,SplitK4,S1U4}`,
+  `Tiled128x64RegisterK32LargeTT4x8{,U2}`, with `src/sycl/gemm/{persistent,split_k}.hh`, the
+  `BATCHLAS_GEMM_EXPERIMENTAL` gate, `include/batchlas/blas/dispatch/route_gemm.hh` (installed),
+  the routing half of `src/backends/gemm_variant.hh`, `gemm_custom`, `wide_transposed_tile_for`,
+  the cuBLASDx env path in `gemm_vendor` (cuBLASDx is unreachable from gemm; its TUs still build for
+  the level-3 ops) and `tests/route_gemm_equivalence_tests.cc`. Their names have no alias and throw.
+- **Correctness.** `can_run` lists exactly the instantiated (config, ta, tb) forms, so the 18
+  NN-only register variants that silently computed NN on a transposed call (`launch_reg` took no
+  transpose) can no longer be chosen, and a pin onto such a form throws. The launchers
+  (`gemm_direct`, `gemm_tiled`, `gemm_small`, `gemm_reg`, `gemm_wide` in `gemm_kernels.cc`) throw
+  too instead of falling back to `Tiled16`. The aligned vs predicated leg, the transpose
+  instantiation, the `small` bucket and TR/TC/stages are derived in the launcher, never a field, a
+  key or a `can_run` term (`layout` is a key, not a gate), so the leg-predicate-as-routing-gate
+  defect (`docs/perf/gemm.md#the-strided-ld-defect-and-the-routing-fix`) cannot recur.
+- **Callers (decision 4, risk K5).** The six `gemm_vendor` calls in `cublas.cc` (hemm x2, herk,
+  her2k, trmm x2) call the public `gemm<B,T>`; float symm/syrk/syr2k's custom dispatch already did.
+  The potrf, geqrf and getrf blocked drivers' empty trailing-gemm seam is the public gemm through
+  `with_backend`, not `gemm_custom`, so direct-driver tests need no edit. `trsm_native.cc` drops
+  its unused `gemm_kernels.hh` include (P3.3 deviation 8 closed). A heterogeneous batch is split
+  into homogeneous items before `choose()` in every build; each item chooses for itself.
+- **select changes.** `Rules` gains `class_aliases` (`register_tiled`, `sycl`, `custom` ->
+  `native`; `vendor:auto` -> `vendor`) and `legacy_aliases`, applied before the class words, so an
+  alias to `vendor` stays concrete (§12 phase 1). `pin_text` reads `BATCHLAS_GEMM_VARIANT` only when
+  `_ROUTE` is unset, with its own words (`native`, `cuda-native`, `direct-cuda`, `cublasdx`, `dx` ->
+  `vendor`; `sycl`, `custom` -> `native`). `Table::nearest` is memoized per table (the gemm tables
+  hold thousands of rows); host cost measured +2-4 µs per tiny call against old routing, noisy.
+  `TraceScope` records m, n, k, transA, transB, backend and precision; the trace prints the key.
+- **sm_89 tables are transcribed, untimed** (decision 6). `tools/transcribe/gemm_transcribe.cc`
+  links against a built 424a45bc tree and calls the real old `preferred()` and the exported
+  `select_kernel_variant<T>`. `packed` cells use contiguous aligned views, `strided` ones
+  ld = rows + 1 with an odd batch stride (fails every aligned-leg predicate). A row is the old
+  kernel, its old forced-name fallback (`reg`/`wide` -> `tiled`, `small` -> `direct`), the other
+  of `tiled`/`direct`, then `small` for a real max(m, n, k) <= 64 (the only 1-D launch, so the
+  one native that survives batch > 65535), with `vendor` first where the old route was the vendor
+  and last otherwise. **Edge rows** (review fix; transcription only, not in the tuner grid): the
+  old `preferred()` had edges below the grid (batch < 64 and double k < 2 went to the vendor; float
+  was native only on NN squares <= 48), which nearest lookup carried the native rows across. Real
+  types also get batch {1, 63, 64}, double gets k {1, 2} at every (form, layout, m, n), and float NN
+  gets the squares 1, 2, 4, 40, 49, 56 plus one-axis-off neighbours (1..64) of the squares 8..48.
+  Batch and double-k edges are now exact; float near-squares between a square and its off-axis
+  neighbours (e.g. 40x40x41) still land on whichever row is nearer, an accepted deviation for the
+  gate. Pinned by `GemmTranscribedTable.Sm89BracketsTheOldVendorEdges` (red with the pre-fix
+  tables). Output `tuned/transcribed/gemm.sm_89.csv` (38,826 rows), `tuned/gemm.float.sm_89.txt`
+  (11,226 rows), `tuned/gemm.double.sm_89.txt` (12,672), `tuned/gemm.{cfloat,cdouble}.sm_89.txt`
+  (7,464 each, unchanged); `--check` passes (run
+  through a wrapper: the live `sm120_posv_sweep.jsonl` carried a duplicate row). The rows: float
+  `small` first on the 30 NN squares up to 48, else `vendor` then the old native kernel; double
+  native everywhere (`tiled` 4,395 rows, `direct` 102, `wide:m=64:n=64:k=16` 15); complex `vendor`
+  first everywhere. Cross-check against the parent (GPU 0, kernel trace + coverage, Auto and
+  `ROUTE=native`, 5 cells off-grid): 34 of 34 cells pick the same kernel, outputs correct; the
+  pre-fix tables disagreed on every below-grid cell (batch 8/16, double k = 1, float 52^3 and
+  40x40x48), which the edge rows fix.
+- **Review fixes to `can_run` (R3).** `small` requires `d.has_sg32` except on the float NN tiled
+  leg (33..56), whose kernel has no `reqd_sub_group_size` (`small_fits` in `choice.hh`, probed on
+  synthetic devices). `direct`, `tiled`, `reg` and `wide` put the batch in SYCL dim 0 = CUDA grid z,
+  so they require batch <= `kMaxGridBatch` (65535); before, Auto chose them past it and the launch
+  threw ("Number of work-groups exceed limit"), in the parent too. `GridCeilingIsACanRunTerm` pins
+  every such choice at 65535 (runs) and 65536 (refused, C untouched); Auto past it runs `small`
+  (real) or the vendor (complex; vendor-free complex has no 1-D native and throws `NoRouteError`).
+  An empty batch returns before `choose()` under any pin (the old native range was a no-op; the
+  `batch >= 1` term alone left vendor-free no route). The unpredicated leg of reg 128·64·32 u=4/u=2,
+  reg 128·128·8 and wide 64·64·16 NN now has its own kernel-trace name (`..._aligned`, as 128·32·32
+  had), so a fast-leg predicate stuck at false goes red in `PinnedChoiceLaunchesItsOwnKernel`.
+- **sm_120 is pending.** No sm_120 gemm table; sm_120 borrows sm_89 with the R8 warning, so Auto
+  there runs what the 4090 router chose (the blackwell.md windows are hypotheses for the sweep).
+  The sweep uses `tools/tune/gemm_spec.cc` (beta = 1, alpha with an imaginary part, strided cells
+  padded by max(1, `--ld-pad`), componentwise error against a double/cdouble host reference on items
+  0 and batch-1 over 64 sampled columns, the plan §3 demand-driven grid per dtype, refinement on `k`,
+  full §6.3 protocol, no screening pass: decision 2). `OpSpec::grid` became virtual and takes the
+  dtype; `--grid` filters the declared grid instead of replacing axes. Armed: NN run on the
+  128·32·16 NT form gave `bad` (0.52) for that arm only on a square cell and an illegal address on
+  a panel cell, and exactly one red gtest; restored and md5-verified.
+- **Gate status (GPU 0).** Vendor build `ctest -LE slow`: apart from `gemm_tests` and
+  `gemm_tests_native` the failing names match the parent log (syevx, lanczos, gemv and ortho
+  segfaults from #13, cond, syev_blocked). Every gemm consumer suite (trsm, potrf, posv, geqrf,
+  getrf, orgqr, symm, hemm, herk, her2k, syrk, syr2k, trmm, the candidates suites, `_native`
+  reruns, tuned_tables, select, route_vocabulary, settings, tune, device_calls) passes. The 142
+  `gemm_tests` failures were pinned-kernel tests that now throw instead of falling back (120 GPU
+  pins on NETLIB instantiations, 22 on CUDA: deleted names, NN-only small tiles on transposed
+  calls, `reg` for non-float, `small` for complex, complex `Trans` on wide), none a wrong answer;
+  `gemm_tests` was then ported to `ScopedPin` and refusal assertions and passes, and
+  `gemm_candidates_tests` covers every candidate. The vendor-free build's non-gemm
+  failing names equal a parent vendor-free build (`p34base/build-vf`). `facade_symbol_check gemm`
+  OK; `--gate` against the parent reads old gemm coverage as `native:register_tiled`, which now
+  means "best native", so gate gemm from a kernel-trace old-choice CSV.
+- **Implementer deviations from plan §1.3:** (1) last resort `{direct, vendor}` (§13);
+  (2) native families run when `d.is_gpu || !d.has_vendor_blas`: without the second term a
+  vendor-free host queue lost gemm and 32 parent-green names went red; (3) `wide` has 5 configs,
+  not 3 (the P3.2b tiles); (4) the `small` work-group term is exact (`small_wg`: 144 or 196 lanes for
+  float NN 33-56), not 128, and cannot go red on real hardware; (5) a set `BATCHLAS_GEMM_SYCL_KERNEL`
+  throws (its names are `BATCHLAS_GEMM_ROUTE` aliases) instead of being ignored; (6) a heterogeneous
+  batch chooses per item in vendor builds too (it used to loop on the vendor); (7) the gemm
+  benchmarks and `scripts/run_gemm_*.sh` were ported to `BATCHLAS_GEMM_ROUTE`, and the cuBLASDx row
+  of the heterogeneous benchmark became `native`. Not in `can_run`, unchanged from before: the
+  direct kernel's `int` batch offsets can overflow at large batch x stride (§11).
 
 **Behaviour changes visible to callers:**
 - A bad pin throws. `factor_bench`'s posv `composed` arm therefore pins potrf to `tiny` only up to

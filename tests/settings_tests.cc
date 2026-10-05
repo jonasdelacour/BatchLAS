@@ -33,7 +33,8 @@
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 
-// The second reader of BATCHLAS_GEMM_VARIANT, and not on the public path.
+// The second reader of BATCHLAS_GEMM_VARIANT: gemm's flat-selection pin.
+#include "../src/select/select.hh"
 
 #include <stdexcept>
 #include <string>
@@ -234,15 +235,47 @@ TEST(SettingsRouting, BothReadersOfGemmVariantSeeTheSameValue) {
         EXPECT_EQ(parsed.source.variable, "BATCHLAS_GEMM_VARIANT");
         EXPECT_EQ(parsed.source.value, "sycl");
         EXPECT_EQ(gemm_legacy().value(), "sycl");
+        std::string pin_source;
+        const auto pin = select::detail::pin_text("gemm", &pin_source);
+        ASSERT_TRUE(pin.has_value());
+        EXPECT_EQ(*pin, "sycl");
+        EXPECT_EQ(pin_source, "BATCHLAS_GEMM_VARIANT");
     }
     {
         ScopedEnvVar v("BATCHLAS_GEMM_VARIANT", "cublasdx");
         EXPECT_EQ(parse_route_env(Op::gemm).source.value, "cublasdx");
         EXPECT_EQ(gemm_legacy().value(), "cublasdx");
+        std::string pin_source;
+        const auto pin = select::detail::pin_text("gemm", &pin_source);
+        ASSERT_TRUE(pin.has_value());
+        EXPECT_EQ(*pin, "cublasdx");
+        EXPECT_EQ(pin_source, "BATCHLAS_GEMM_VARIANT");
     }
     {
         ScopedEnvVar v("BATCHLAS_GEMM_VARIANT", nullptr);
         EXPECT_FALSE(parse_route_env(Op::gemm).found);
         EXPECT_FALSE(gemm_legacy().is_set());
+        std::string pin_source;
+        EXPECT_FALSE(select::detail::pin_text("gemm", &pin_source).has_value());
     }
+    {
+        // A set BATCHLAS_GEMM_ROUTE wins over the legacy variable in both readers.
+        ScopedEnvVar v("BATCHLAS_GEMM_VARIANT", "native");
+        ScopedEnvVar r("BATCHLAS_GEMM_ROUTE", "tiled");
+        EXPECT_EQ(parse_route_env(Op::gemm).source.variable, "BATCHLAS_GEMM_ROUTE");
+        std::string pin_source;
+        EXPECT_EQ(select::detail::pin_text("gemm", &pin_source).value_or(""), "tiled");
+        EXPECT_EQ(pin_source, "BATCHLAS_GEMM_ROUTE");
+    }
+}
+
+// (f) BATCHLAS_GEMM_SYCL_KERNEL is retired but still read, so gemm can throw on it rather
+// than let an old script time Auto (gemm_candidates_tests.cc UnknownAndDeletedPinsThrow
+// runs the throw). The field must follow the environment through reloads.
+TEST(SettingsRouting, RetiredGemmSyclKernelIsStillRead) {
+    {
+        ScopedEnvVar v("BATCHLAS_GEMM_SYCL_KERNEL", "tiled16");
+        EXPECT_EQ(settings().selection.gemm_sycl_kernel.value(), "tiled16");
+    }
+    EXPECT_FALSE(settings().selection.gemm_sycl_kernel.is_set());
 }

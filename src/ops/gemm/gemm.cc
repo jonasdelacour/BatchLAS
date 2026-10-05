@@ -105,25 +105,25 @@ bool can_run(const GemmChoice& c, const select::Device& d, const MV<T>& A, const
     const bool native = device && precision == ComputePrecision::Default && s.m > 0 && s.n > 0 && s.k > 0 &&
                         A.batch_size() >= 1 && !A.is_heterogeneous() && !B.is_heterogeneous() &&
                         !C.is_heterogeneous();
+    const bool grid = native && A.batch_size() <= kMaxGridBatch;  // every 3-D launch but small's
     return std::visit(overloaded{
-        [&](Direct) { return native && d.max_wg >= kDirectWg; },
-        [&](Tiled) { return native && d.max_wg >= kTiledWg; },
+        [&](Direct) { return grid && d.max_wg >= kDirectWg; },
+        [&](Tiled) { return grid && d.max_wg >= kTiledWg; },
         [&](Small) {
-            const auto mx = std::max({s.m, s.n, s.k});
             const bool nn = ta == Transpose::NoTrans && tb == Transpose::NoTrans;
-            return native && !is_complex_v<T> && mx <= kSmallMaxDim && d.max_wg >= small_wg<T>(nn, int(mx));
+            return native && small_fits<T>(d, nn, std::max({s.m, s.n, s.k}));
         },
         [&](const Reg& r) {
             if constexpr (!std::is_same_v<T, float>) return false;
             const auto* cfg = std::find_if(reg_configs.begin(), reg_configs.end(), [&](const RegCfg& g) {
                 return g.m == r.m && g.n == r.n && g.k == r.k && g.u == r.u;
             });
-            return native && cfg != reg_configs.end() && reg_form(*cfg, ta, tb) && d.max_wg >= cfg->threads();
+            return grid && cfg != reg_configs.end() && reg_form(*cfg, ta, tb) && d.max_wg >= cfg->threads();
         },
         [&](const Wide& w) {
             const auto* cfg = std::find_if(wide_configs.begin(), wide_configs.end(),
                                            [&](const WideCfg& g) { return g.m == w.m && g.n == w.n && g.k == w.k; });
-            return native && cfg != wide_configs.end() && wide_form<T>(*cfg, ta, tb) && d.max_wg >= cfg->threads();
+            return grid && cfg != wide_configs.end() && wide_form<T>(*cfg, ta, tb) && d.max_wg >= cfg->threads();
         },
         [&](Vendor) { return d.has_vendor_blas; },
     }, c);
@@ -202,6 +202,8 @@ Event gemm(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const Matrix
             });
     }
     ops::gemm::validate<T>(A, B, C, transA, transB);
+    // An empty batch launches nothing under any pin, as the old native range did.
+    if (A.batch_size() == 0) return ctx.create_event_after_external_work();
     const auto c = ops::gemm::choose<Back, T>(ctx, A, B, C, transA, transB, precision);
     const auto d = ops::gemm::dims_of<T>(A, B, transA, transB);
     auto shape = select::square_shape<Back, T>(d.m, A.batch_size());
