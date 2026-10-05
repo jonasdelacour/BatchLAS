@@ -428,7 +428,16 @@ TYPED_TEST(SpmmCandidates, PinnedRunIsTheDirectKernelBitForBit) {
                     bool reproducible = true;
                     for (std::size_t e = 0; e < again.mem.size(); ++e)
                         reproducible = reproducible && same_bits(again.mem[e], direct.mem[e]);
-                    if (!reproducible) continue;
+                    if (!reproducible) {
+                        // Then the deterministic gather's exact bits would mean Direct ran.
+                        auto gather = make<T>(s);
+                        this->direct(C{sp::Direct{}}, gather);
+                        bool same = true;
+                        for (std::size_t e = 0; e < gather.mem.size(); ++e)
+                            same = same && same_bits(gather.mem[e], pinned.mem[e]);
+                        EXPECT_FALSE(same) << what << ": the pinned vendor produced the gather's exact bits";
+                        continue;
+                    }
                 }
                 for (std::size_t e = 0; e < pinned.mem.size(); ++e)
                     ASSERT_TRUE(same_bits(pinned.mem[e], direct.mem[e]))

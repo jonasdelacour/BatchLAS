@@ -7,7 +7,9 @@ old preference with N/T/C spellings). For every point and device table, fold C -
 Table::nearest (scripts/sweep_to_table.py's mirror), and walk the row under can_run's
 assumptions for a valid CSR call: direct always runnable (both bodies compiled; capacities in
 can_run, none for spmm), vendor runnable when present. Compared with the old first choice in
-the vendor-present build and the vendor-free build. Exit 1 if agreement < 99% anywhere.
+the vendor-present build and the vendor-free build, and (GPU devices) with spmm.cc's two CUDA
+vendor terms applied, which the old router lacked: those rows count the deliberate R3 fixes, not
+table error. Exit 1 if a table-only cell agrees < 99%.
 """
 
 import collections
@@ -22,6 +24,14 @@ import sweep_to_table as stt  # noqa: E402
 
 def first(ranked, vendor):
     return next(c for c in ranked if vendor or c != "vendor")
+
+
+def cusparse_refuses(p):
+    """spmm.cc can_run's CUDA vendor terms: conjugated single-row B, cdouble N/N one column."""
+    one = int(p["nrhs"]) == 1
+    nn = p["transA"] == "N" and p["transB"] == "N"
+    cx = p["dtype"] in ("cfloat", "cdouble")
+    return one and ((cx and p["transB"] == "C") or (p["dtype"] == "cdouble" and nn))
 
 
 def main(points_csv, devices=("sm_89", "sm_120", "cpu")):
@@ -43,12 +53,16 @@ def main(points_csv, devices=("sm_89", "sm_120", "cpu")):
             keyspec, rows = tables[ident]
             row = stt.nearest(rows, key, keyspec)
             new = [c for c, _ in row[1]]
-            for vendor in (True, False):
-                cell = (p["dtype"], dev, "vendor" if vendor else "vendor-free")
+            builds = [("vendor", True, True), ("vendor-free", False, False)]
+            if dev != "cpu":
+                builds.append(("cuda-can_run", not cusparse_refuses(p), True))
+            for label, vendor, old_vendor in builds:
+                cell = (p["dtype"], dev, label)
                 tally[cell] += 1
-                if first(new, vendor) != first(old, vendor):
+                if first(new, vendor) != first(old, old_vendor):
                     bad[cell] += 1
-                    bad[cell + (p["transA"] + p["transB"],)] += 1
+                    one = " nrhs=1" if p["nrhs"] == "1" else ""
+                    bad[cell + (p["transA"] + p["transB"] + one,)] += 1
     worst = 1.0
     for cell in sorted(tally):
         rate = 1.0 - bad[cell] / tally[cell]
@@ -58,7 +72,9 @@ def main(points_csv, devices=("sm_89", "sm_120", "cpu")):
         if len(cell) == 4:
             print(f"  disagree: {cell} x{n}")
     print(f"points {len(pts)}, worst agreement {worst * 100:.3f}%")
-    return 0 if worst >= 0.99 else 1
+    table = min(1.0 - bad[c] / tally[c] for c in tally if c[2] != "cuda-can_run")
+    print(f"table-only worst agreement {table * 100:.3f}% (cuda-can_run rows: the intended R3 fixes)")
+    return 0 if table >= 0.99 else 1
 
 
 if __name__ == "__main__":
