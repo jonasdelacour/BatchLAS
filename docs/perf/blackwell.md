@@ -477,8 +477,8 @@ and its `native_tier_preferred` cap. potrf now takes the first runnable entry of
 `tuned/potrf.<dtype>.sm_120.txt`, converted from the sm_120 route sweeps
 ([potrf.md](potrf.md#selection-since-flat-kernel-selection-phase-2)). The kernel and tuning-constant
 results stand. posv's `RouteTable` windows are deleted too: posv reads `tuned/posv.<dtype>.<device>.txt`
-([potrf.md](potrf.md#posv-selection-since-flat-kernel-selection-phase-3)); sm_120 has no posv table yet and borrows
-the transcribed sm_89 one until its sweep is converted.
+([potrf.md](potrf.md#posv-selection-since-flat-kernel-selection-phase-3)); the sm_120 posv tables are converted
+from the sm_120 posv seed sweep (`benchmarks/results/routing/sm120_posv_sweep.jsonl`).
 
 ### potrf LPanel vector sB
 
@@ -1490,8 +1490,8 @@ against the new libraries. Ratios are time/vendor. Kernel choice was checked wit
 > On the flat-selection line (P3.4) none of the windows in this section is code:
 > `select_kernel_variant` and `is_sm120_family` routing are deleted, and gemm
 > chooses from `tuned/gemm.<dtype>.<device>.txt` (docs/perf/gemm.md#choices-flat-selection-p34).
-> sm_120 has no gemm table yet and borrows the transcribed sm_89 one (R8 warning),
-> so Auto on sm_120 runs what the 4090 router chose. The tiles named below are ordinary
+> sm_120's gemm tables are the transcribed sm_89 rows written for sm_120 (no gemm sweep
+> has run), so Auto on sm_120 runs what the 4090 router chose. The tiles named below are ordinary
 > candidates (`wide:m=16:n=16:k=16`, `wide:m=32:n=32:k=16`, NN only;
 > `wide:m=64:n=64:k=16`, `wide:m=128:n=32:k=16`, `wide:m=32:n=128:k=16` for the
 > transposed fallback), and the measurements below are the hypotheses the

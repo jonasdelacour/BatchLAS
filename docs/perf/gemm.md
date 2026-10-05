@@ -63,14 +63,16 @@ contiguous with 16-byte-aligned bases, else `strided`; every log key weighs 1, s
 then `vendor` (the CPU and `precision != Default`). gemm takes no workspace. A heterogeneous batch is split into homogeneous items
 before `choose()` in every build, and each item makes its own choice (vendor builds used to loop on the vendor).
 
-**sm_89 is transcribed, sm_120 is pending.** `tuned/gemm.*.sm_89.txt` are the old decision (the `route_gemm.hh` `preferred()` window, the
+**sm_89 and sm_120 are transcribed.** `tuned/gemm.*.sm_89.txt` are the old decision (the `route_gemm.hh` `preferred()` window, the
 `gemm_use_sycl_custom` re-route in the cuBLAS TU, and `select_kernel_variant`) evaluated at every grid cell by
 `tools/transcribe/gemm_transcribe.cc`, untimed (`tuned/README.md`). Each row is the old kernel, then its old forced-name fallback
 (`reg`/`wide` -> `tiled`, `small` -> `direct`), then the other of `tiled`/`direct`, with `vendor` first where the old route was the vendor
 and last otherwise. What the rows say: float, `small` leads the 30 NN squares up to 48 and everything else is `vendor` first, then the old
 native kernel; double, native everywhere (`tiled` 4395 rows, `direct` 102, `wide:m=64:n=64:k=16` 15); complex, `vendor` first everywhere.
 So the windows on the rest of this page still decide what Auto runs on sm_89 (34 of 34 cross-checked cells chose the parent's kernel).
-sm_120 borrows the sm_89 tables with the R8 warning until a `tools/tune` sweep (`tools/tune/gemm_spec.cc`) replaces them.
+`tuned/gemm.*.sm_120.txt` are the same CSV written for sm_120 (`--transcribe ... --device sm_120`; the transcriber reads no device
+fact), so sm_120 no longer borrows but still runs what the 4090 router chose, until a `tools/tune` sweep (`tools/tune/gemm_spec.cc`)
+replaces them. No gemm sweep was run (maintainer, 2026-10-05: no new measurement before the phase-5 merge).
 
 **Callers.** symm, syrk and syr2k (float custom dispatch) already called the public `gemm`; the six `gemm_vendor` calls left in
 `src/backends/cublas.cc` (hemm x2, herk, her2k, trmm x2) now do too, so they get the table's choice rather than the deleted re-route. The
@@ -946,7 +948,7 @@ deprecation warning, so a deliberate override is never silently lost.
   spec now times every form); and ~~the two dead `Tiled128x32RegisterK32` enum entries~~ — gone with the enum's routing role in P3.4.
 * **The direct kernel's batch offsets are `int`.** `gemm_direct` can overflow at large batch x stride; unchanged by P3.4 and not a
   `can_run` term (the K4 fix in trsm is the precedent).
-* **sm_120 has no gemm table.** It borrows the sm_89 transcription (R8 warning), so none of the sm_120 windows in
+* **sm_120 has no measured gemm table.** Its tables are the sm_89 transcription written for sm_120, so none of the sm_120 windows in
   [blackwell.md](blackwell.md#gemm-native-register-tiled-selector) is reachable by Auto until the `tools/tune` sweep.
 * **TF32 is reachable but unmeasured.** `experiments/sycl_vs_cuda/tf32_smoke.cpp` compiles `joint_matrix` with `precision::tf32` for sm_89 and
   its PTX carries 64 real `mma.sync...m16n16k8.f32.tf32.tf32.f32` instructions with correct results — reachability only, no staging and no reuse,

@@ -1109,15 +1109,16 @@ TYPED_TEST(GemmCandidates, TraceKeyFoldsAndClassifiesLayout) {
     EXPECT_NE(line.find("layout=strided"), std::string::npos) << line;
 }
 
-// Auto against the sm_89 transcribed table on a device that reads it (its own, or borrowed):
-// the old router's choice at grid cells, the vendor where it ranks first (the first runnable
-// native entry vendor-free).
+// Auto against the transcribed table on a device that reads it (sm_89, sm_120, which carries the
+// same rows, or borrowed): the old router's choice at grid cells, the vendor where it ranks
+// first (the first runnable native entry vendor-free).
 TYPED_TEST(GemmCandidates, AutoReadsTheSm89TranscribedTable) {
     using T = typename TestFixture::T;
     const ScopedEnvVar clear("BATCHLAS_GEMM_ROUTE", nullptr);
     const auto tables = select::tables_in_borrow_order("gemm", select::dtype_name<T>(),
                                                        select::device_of<TestFixture::B>(*this->ctx));
-    if (tables.empty() || tables.front()->device != "sm_89") GTEST_SKIP() << "this device does not read sm_89";
+    if (tables.empty() || tables.front()->source != "transcribed:424a45bc")
+        GTEST_SKIP() << "this device reads a measured gemm table";
     struct Row { Spec s; std::string with_vendor, without; };
     std::vector<Row> rows;
     if constexpr (std::is_same_v<T, float>)

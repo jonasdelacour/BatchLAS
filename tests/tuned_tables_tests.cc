@@ -207,8 +207,11 @@ std::vector<std::string> tie_rule_problems(const sel::Table& t) {
         const double band = best * (1.0 + kTie);
         std::size_t i = 0;
         for (; i < row.ranked.size() && row.ranked[i].ms <= band * (1.0 + kPrintSlack); ++i)
-            if (i > 0 && pos(row.ranked[i - 1].spelling) >= pos(row.ranked[i].spelling))
+            if (i > 0 && pos(row.ranked[i - 1].spelling) >= pos(row.ranked[i].spelling)) {
+                // Within print rounding of the band edge the converter may have ranked it untied.
+                if (row.ranked[i].ms > band * (1.0 - kPrintSlack)) break;
                 out.push_back(at + "tied entries out of candidate order");
+            }
         for (std::size_t j = i; j < row.ranked.size(); ++j) {
             if (row.ranked[j].ms <= band * (1.0 - kPrintSlack))
                 out.push_back(at + row.ranked[j].spelling + " is tied but ranked late");
@@ -268,6 +271,13 @@ TEST(TunedTables, TranscribedRowsSkipTheTieRuleButNotTheSpellingCheck) {
                                         "potrf.float.sm_89.txt");
     EXPECT_EQ(tie_rule_problems(timed), (std::vector<std::string>{"line 3: blocked is tied but ranked late",
                                                                   "line 3: times not ascending after the tie band"}));
+    // 19.89 / 19.30 prints as 1.0306 but may be <= 1.03 unrounded, so either order passes; a
+    // clearly tied pair (19.40) out of candidate order still fails.
+    const auto edge = sel::parse_table(sw + "uplo=L n=64 batch=8192 | blocked 19.30 | cta 19.89\n"
+                                            "uplo=L n=128 batch=8192 | cta 19.30 | blocked 19.89\n"
+                                            "uplo=L n=256 batch=8192 | blocked 19.30 | cta 19.40\n",
+                                       "potrf.float.sm_89.txt");
+    EXPECT_EQ(tie_rule_problems(edge), std::vector<std::string>{"line 5: tied entries out of candidate order"});
 }
 
 // choice.hh's key_names is the spec every table of that op declares, weights included.
@@ -325,8 +335,9 @@ TEST(TunedTables, PosvSm89TablesHoldExactlyTheChoiceGrid) {
     }
 }
 
-// Likewise trsm's transcriber: one row per (side, trans, order, q, batch) cell of choice.hh.
-TEST(TunedTables, TrsmSm89TablesHoldExactlyTheChoiceGrid) {
+// Likewise trsm's transcriber: one row per (side, trans, order, q, batch) cell of choice.hh, on
+// sm_89 and on sm_120 where no tuner table exists (complex), with identical rows on both.
+TEST(TunedTables, TrsmTranscribedTablesHoldExactlyTheChoiceGrid) {
     namespace trsm = batchlas::ops::trsm;
     std::set<std::string> want;
     for (const char* s : {"L", "R"})
@@ -336,13 +347,56 @@ TEST(TunedTables, TrsmSm89TablesHoldExactlyTheChoiceGrid) {
                     for (int b : trsm::grid_batch)
                         want.insert(std::string(s) + " " + tr + " " + std::to_string(o) + " " + std::to_string(q) +
                                     " " + std::to_string(b));
+    std::map<std::string, std::map<std::string, std::string>> rows_89;
+    for (const char* dev : {"sm_89", "sm_120"})
+        for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
+            if (std::string(dev) == "sm_120" && dt[0] != 'c') continue;  // tuner tables, below
+            const sel::Table& t = embedded(std::string("trsm.") + dt + "." + dev + ".txt");
+            EXPECT_EQ(t.source, "transcribed:8b9adeb3") << t.file;
+            std::set<std::string> got;
+            for (const auto& row : t.rows) {
+                const std::string k =
+                    row.keys[0] + " " + row.keys[1] + " " + row.keys[2] + " " + row.keys[3] + " " + row.keys[4];
+                got.insert(k);
+                std::string ranked;
+                for (const auto& e : row.ranked) ranked += e.spelling + "|";
+                if (std::string(dev) == "sm_89") rows_89[dt][k] = ranked;
+                else EXPECT_EQ(ranked, rows_89[dt][k]) << dt << " " << k << ": sm_120 differs from sm_89";
+            }
+            EXPECT_EQ(got, want) << dt << " " << dev;
+            EXPECT_EQ(t.rows.size(), want.size()) << dt << " " << dev;
+        }
+}
+
+// Coverage of devices is explicit: every migrated op ships a table for every dtype on sm_89 and
+// sm_120 (spmm also on the CPU), so no shipped device borrows. Which ones are measured and which
+// are transcribed is tuned/README.md's inventory; the measured sm_120 ones are checked below.
+TEST(TunedTables, EveryOpShipsATableForEveryDtypeOnEveryShippedDevice) {
+    std::set<std::string> names;
+    for (const auto& e : sel::embedded_tables()) names.insert(std::string(e.name));
+    for (const char* op : {"potrf", "posv", "trsm", "gemm", "gemv", "geqrf", "orgqr", "ormqr", "getrf", "getrs",
+                           "getri", "gesv", "gesvd", "spmm", "syev"})
+        for (const char* dev : {"sm_89", "sm_120", "cpu"})
+            for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
+                if (std::string(dev) == "cpu" && std::string(op) != "spmm") continue;
+                EXPECT_TRUE(names.count(std::string(op) + "." + dt + "." + dev + ".txt"))
+                    << op << " " << dt << " " << dev;
+            }
+}
+
+// The sm_120 tables that come from measurements: posv (converted seed sweep) and trsm float and
+// double (tuner). Every row timed, and the source names the committed raw data.
+TEST(TunedTables, Sm120MeasuredTablesAreTimedAndNameTheirRawData) {
     for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
-        const sel::Table& t = embedded(std::string("trsm.") + dt + ".sm_89.txt");
-        std::set<std::string> got;
-        for (const auto& row : t.rows)
-            got.insert(row.keys[0] + " " + row.keys[1] + " " + row.keys[2] + " " + row.keys[3] + " " + row.keys[4]);
-        EXPECT_EQ(got, want) << dt;
-        EXPECT_EQ(t.rows.size(), want.size()) << dt;
+        const sel::Table& t = embedded(std::string("posv.") + dt + ".sm_120.txt");
+        EXPECT_EQ(t.source.rfind("benchmarks/results/routing/sm120_posv_sweep.jsonl", 0), 0u) << t.file;
+        for (const auto& row : t.rows) EXPECT_TRUE(row.timed) << t.file << " line " << row.line;
+    }
+    for (const char* dt : {"float", "double"}) {
+        const sel::Table& t = embedded(std::string("trsm.") + dt + ".sm_120.txt");
+        EXPECT_EQ(t.source.rfind(std::string("tuner:benchmarks/results/tuning/trsm.") + dt + ".sm_120.jsonl", 0), 0u)
+            << t.file;
+        for (const auto& row : t.rows) EXPECT_TRUE(row.timed) << t.file << " line " << row.line;
     }
 }
 
@@ -351,7 +405,8 @@ TEST(TunedTables, TrsmSm89TablesHoldExactlyTheChoiceGrid) {
 // plus the edge rows that bracket the old predicate below the grid (gemm_transcribe.cc header):
 // real batch {1, 63, 64}, double k {1, 2} per (form, layout, m, n), float NN extra squares and
 // one-axis-off neighbours of the small squares.
-TEST(TunedTables, GemmSm89TablesHoldExactlyTheChoiceGrid) {
+// The sm_120 tables are the same transcription (gemm_transcribe.cc read no device fact): row for row.
+TEST(TunedTables, GemmTranscribedTablesHoldExactlyTheChoiceGrid) {
     namespace gemm = batchlas::ops::gemm;
     for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
         const bool cplx = dt[0] == 'c';
@@ -405,15 +460,23 @@ TEST(TunedTables, GemmSm89TablesHoldExactlyTheChoiceGrid) {
                         add("NN", layout, s, s, v);
                     }
             }
-        const sel::Table& t = embedded(std::string("gemm.") + dt + ".sm_89.txt");
-        std::set<std::string> got;
-        for (const auto& row : t.rows) {
-            std::string k = row.keys[0];
-            for (std::size_t i = 1; i < row.keys.size(); ++i) k += " " + row.keys[i];
-            got.insert(k);
+        std::map<std::string, std::string> rows_89;
+        for (const char* dev : {"sm_89", "sm_120"}) {
+            const sel::Table& t = embedded(std::string("gemm.") + dt + "." + dev + ".txt");
+            EXPECT_EQ(t.source, "transcribed:424a45bc") << t.file;
+            std::set<std::string> got;
+            for (const auto& row : t.rows) {
+                std::string k = row.keys[0];
+                for (std::size_t i = 1; i < row.keys.size(); ++i) k += " " + row.keys[i];
+                got.insert(k);
+                std::string ranked;
+                for (const auto& e : row.ranked) ranked += e.spelling + "|";
+                if (std::string(dev) == "sm_89") rows_89[k] = ranked;
+                else EXPECT_EQ(ranked, rows_89[k]) << dt << " " << k << ": sm_120 differs from sm_89";
+            }
+            EXPECT_EQ(got, want) << dt << " " << dev;
+            EXPECT_EQ(t.rows.size(), want.size()) << dt << " " << dev;
         }
-        EXPECT_EQ(got, want) << dt;
-        EXPECT_EQ(t.rows.size(), want.size()) << dt;
     }
 }
 

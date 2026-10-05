@@ -10,25 +10,53 @@ These files are plain git, not LFS, so that table changes stay readable in diffs
 
 ## What is here
 
-| op | device | source | file |
-|---|---|---|---|
-| potrf | sm_120, sm_89 | converted route sweeps (timed) | `potrf.<dtype>.<device>.txt` |
-| posv | sm_89 | **transcribed** old router, untimed (`source=transcribed:7e71a6e0`) | `posv.<dtype>.sm_89.txt`, from `transcribed/posv.sm_89.csv` |
-| posv | sm_120 | none yet: the sweep `benchmarks/results/routing/sm120_posv_sweep.jsonl` is converted later; until then sm_120 borrows the sm_89 posv tables and warns once | — |
-| trsm | sm_89 | **transcribed** old router, untimed (`source=transcribed:8b9adeb3`) | `trsm.<dtype>.sm_89.txt`, from `transcribed/trsm.sm_89.csv` |
-| trsm | sm_120 | none yet: a `tools/tune` sweep; until then sm_120 borrows the sm_89 trsm tables and warns once | — |
-| gemm | sm_89 | **transcribed** old routing, untimed (`source=transcribed:424a45bc`) | `gemm.<dtype>.sm_89.txt`, from `transcribed/gemm.sm_89.csv` |
-| gemm | sm_120 | none yet: a `tools/tune` sweep; until then sm_120 borrows the sm_89 gemm tables and warns once | — |
+Every op ships a table for every dtype (float, double, cfloat, cdouble) on sm_89 and sm_120, and
+spmm also on the CPU, so none of these devices borrows (R8); any other device borrows and warns
+once. `tuned_tables_tests` (`EveryOpShipsATableForEveryDtypeOnEveryShippedDevice`) holds this
+inventory. Three kinds of source:
+
+- **measured**: timed by the tuner (`source=tuner:<raw jsonl>`, raw in `benchmarks/results/tuning/`);
+- **converted**: timed forced-route sweeps (`source=benchmarks/results/routing/<sweep>.jsonl`);
+- **transcribed**: the old router's preference order, untimed (`source=transcribed:<sha>`, CSV in
+  `transcribed/`). A transcription marked "relabelled" is the sm_89 CSV written for sm_120 with
+  `--device sm_120` (header `transcriber_device=sm_89`): the old router read no architecture.
+
+| op | dtype | sm_89 | sm_120 | cpu |
+|---|---|---|---|---|
+| potrf | all | converted (`sm89_potrf_archive.jsonl`) | converted (`sm120_potrf_sweep{,_edges}.jsonl`) | — |
+| posv | all | transcribed `7e71a6e0` (`posv.sm_89.csv`) | converted (`sm120_posv_sweep.jsonl`) | — |
+| trsm | float, double | transcribed `8b9adeb3` (`trsm.sm_89.csv`) | **measured** (`tuning/trsm.<dtype>.sm_120.jsonl`) | — |
+| trsm | cfloat, cdouble | transcribed `8b9adeb3` (`trsm.sm_89.csv`) | transcribed, relabelled from `trsm.sm_89.csv` | — |
+| gemm | all | transcribed `424a45bc` (`gemm.sm_89.csv`) | transcribed, relabelled from `gemm.sm_89.csv` | — |
+| gemv | all | transcribed `424a45bc` (`gemv.sm_89.csv`) | transcribed `424a45bc` (`gemv.sm_120.csv`) | — |
+| geqrf | all | transcribed `424a45bc` (`geqrf.csv`, both devices) | transcribed (same CSV) | — |
+| orgqr | all | transcribed `424a45bc` (`orgqr.csv`, both devices) | transcribed (same CSV) | — |
+| ormqr | all | transcribed `424a45bc` (`ormqr.csv`, both devices) | transcribed (same CSV) | — |
+| getrf | all | transcribed `424a45bc` (`getrf.csv`, both devices) | transcribed (same CSV) | — |
+| getrs | all | transcribed `424a45bc` (`getrs.csv`, both devices) | transcribed (same CSV) | — |
+| getri | all | transcribed `424a45bc` (`getri.sm_89.csv`) | transcribed `424a45bc` (`getri.sm_120.csv`) | — |
+| gesv | all | transcribed `424a45bc` (`gesv.sm_89.csv`) | transcribed `424a45bc` (`gesv.sm_120.csv`) | — |
+| gesvd | all | transcribed `424a45bc` (`gesvd.csv`, both devices) | transcribed (same CSV) | — |
+| spmm | all | transcribed `424a45bc` (`spmm.sm_89.csv`) | transcribed `424a45bc` (`spmm.sm_120.csv`) | transcribed (`spmm.cpu.csv`) |
+| syev | all | transcribed `424a45bc` (`syev.sm_89.csv`) | transcribed `424a45bc` (`syev.sm_120.csv`) | — |
+
+124 files: 60 per GPU device (15 ops x 4 dtypes) and 4 cpu. Timed: 10 on sm_120 (potrf x 4 and posv
+x 4 converted, trsm float and double measured) and the 4 sm_89 potrf tables; the other 110 replay an
+old router.
 
 ## How they are produced
 
-The current `potrf.*` tables are seed tables, converted from the forced-route sweeps in
-`benchmarks/results/routing/` (provenance in the README there):
+The `potrf.*` tables and the sm_120 `posv.*` tables are seed tables, converted from the forced-route
+sweeps in `benchmarks/results/routing/` (provenance in the README there):
 
-    python3 scripts/sweep_to_table.py           # rewrite tuned/potrf.*.txt
-    python3 scripts/sweep_to_table.py --check   # verify tuned/ matches the sweeps (CI gate §10.2)
+    python3 scripts/sweep_to_table.py --date 2026-10-04   # rewrite tuned/potrf.*.txt, posv.*.sm_120.txt
+    python3 scripts/sweep_to_table.py --check             # verify tuned/ matches the sweeps (§10.2)
 
-Do not edit them by hand: `--check` fails on any difference from the sweeps.
+Do not edit them by hand: `--check` fails on any difference from the sweeps (the header date
+included, hence `--date`). The posv sweep was resumed after guard refusals, and its resume re-ran
+224 complete pass-2 cells; its OpSpec source sets `dedupe_latest`, so a later kept row replaces
+an earlier one for the same (cell, arm, pass) instead of failing as a duplicate (details in the
+routing README).
 
 Transcribed tables (header `source=transcribed:<sha>`, entries `<spelling> -`) hold an old
 router's preference order per grid cell, untimed. A per-op C++ transcriber writes a CSV and
@@ -69,6 +97,15 @@ ld = rows + 1. Beyond the tuner grid the CSV carries edge rows that bracket the 
 below-grid edges: real types at batch {1, 63, 64}, double at k {1, 2}, float NN squares 1, 2, 4,
 40, 49, 56 and one-axis-off neighbours of the small squares (the transcriber's header lists them).
 
+The sm_120 gemm tables and the sm_120 trsm cfloat/cdouble tables are those same sm_89 CSVs written
+for sm_120 (neither transcriber reads a device fact; its device argument only labels the rows):
+
+    python3 scripts/sweep_to_table.py --transcribe tuned/transcribed/gemm.sm_89.csv --sha 424a45bc --device sm_120
+    python3 scripts/sweep_to_table.py --transcribe tuned/transcribed/trsm.sm_89.csv --sha 8b9adeb3 --device sm_120
+
+The second command leaves `trsm.{float,double}.sm_120.txt` alone: `--transcribe` never overwrites
+a tuner table.
+
 A transcribed row reproduces a deleted window; it is not a measurement. It is replaced by a timed
 row when the tuner sweeps that device.
 
@@ -79,13 +116,19 @@ formatted by the same code as the converted tables; `--check` re-derives a tuned
 file when that file is present, and a tuned table replaces the converted one for its
 (op, dtype, device). Staleness (§6.5): `python3 .github/ci/check_tuned_tables.py` and the CMake
 configure step recompute each op's kernel hash from the source list in `tools/tune/<op>_spec.cc`
-and warn, never fail, on a table whose `kernels=` differs or says `unknown`. Every table here is
-still `unknown` until phase 4 retunes it.
+and warn, never fail, on a table whose `kernels=` differs or says `unknown`.
+
+The two tuner tables are `trsm.{float,double}.sm_120.txt`, from
+`benchmarks/results/tuning/trsm.{float,double}.sm_120.jsonl` (provenance in the README there). The
+tuner was stopped during cfloat, so cfloat and cdouble stay transcribed.
 
 ## Staleness
 
 Every converted or transcribed table says `kernels=unknown` and is therefore reported stale. That
 is intended: they stay stale until phase 4, when `tools/tune` retunes each op on each device and
-stamps the kernel-source hash. The potrf sm_89 tables come from an archive across several kernel eras (only
+stamps the kernel-source hash. The trsm tuner tables say `kernels=c923160f` and are reported stale
+against today's `a33fbfee`: the only change to the hashed sources since the sweep is the removal of
+an unused `#include "gemm_kernels.hh"` from `src/sycl/trsm_native.cc`, so the timings still describe
+the shipped kernels. The potrf sm_89 tables come from an archive across several kernel eras (only
 `kernel_current` rows are kept) and have no `lpanel` timings at all; `Lpanel{16}` has never been
 timed on any device.

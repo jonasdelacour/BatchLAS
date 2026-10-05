@@ -791,15 +791,16 @@ TYPED_TEST(TrsmCandidates, ScopedPinBeatsTheEnvironment) {
     expect_solved(r, "outer cta");
 }
 
-// Auto against the sm_89 transcribed table on a device that reads it (its own, or borrowed):
-// cta up to order 32, blocked above (33 lands on the order-32 row, where cta cannot run),
-// both sides, every trans, at grid and off-grid batches.
+// Auto against the transcribed table on a device that reads it (sm_89, sm_120 complex, which
+// carries the same rows, or borrowed): cta up to order 32, blocked above (33 lands on the
+// order-32 row, where cta cannot run), both sides, every trans, at grid and off-grid batches.
 TYPED_TEST(TrsmCandidates, AutoReadsTheSm89TranscribedTable) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
     const ScopedEnvVar clear("BATCHLAS_TRSM_ROUTE", nullptr);
     const auto tables = select::tables_in_borrow_order("trsm", select::dtype_name<T>(), select::device_of<B>(*this->ctx));
-    if (tables.empty() || tables.front()->device != "sm_89") GTEST_SKIP() << "this device does not read sm_89";
+    if (tables.empty() || tables.front()->source != "transcribed:8b9adeb3")
+        GTEST_SKIP() << "this device reads a measured trsm table";
     struct Row { int n, q, batch; const char* expect; };
     const Row rows[] = {{8, 4, 512, "cta"},     {32, 64, 128, "cta"},     {33, 8, 512, "blocked"},
                         {48, 8, 300, "blocked"}, {200, 3, 128, "blocked"}, {1, 1, 2048, "cta"}};
@@ -885,7 +886,7 @@ TYPED_TEST(TrsmCandidates, VendorFreeLastResortIsBlocked) {
         auto p = make_solve<T>(s32);
         const std::string got = traced_choice([&] { this->run(p); });
         const auto tables = select::tables_in_borrow_order("trsm", dtype, select::device_of<TestFixture::B>(*this->ctx));
-        if (!tables.empty() && tables.front()->device == "sm_89") EXPECT_EQ(got, "cta");
+        if (!tables.empty() && tables.front()->source == "transcribed:8b9adeb3") EXPECT_EQ(got, "cta");
         else EXPECT_NE(got, "vendor") << "nothing ranks the vendor at order 32 on " << dev;
         expect_solved(p, "auto order 32");
     }

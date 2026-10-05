@@ -79,10 +79,11 @@ description of the code. What runs is decided in `src/ops/posv/posv.cc`:
   Off-grid cells take the nearest row and may differ at the old window edges: e.g. cfloat n = 25 and 26 at
   nrhs <= 2 take the `tiny` n = 24 row, where the old window chose `cta` (n = 27 lands on the `cta` n = 28 row).
   Those are the cells the sm_89 gate times;
-* **sm_120 has no posv table yet.** Its sweep (`benchmarks/results/routing/sm120_posv_sweep.jsonl`) is converted
-  separately; until then an sm_120 device borrows the sm_89 transcription, with the one-time warning. On 22 sample
-  cells on sm_120 (all dtypes, both uplo, the old window edges, nrhs 8/16/64, large n) Auto chose the same kernel as
-  the deleted router;
+* **sm_120 posv tables are converted from its seed sweep** (`benchmarks/results/routing/sm120_posv_sweep.jsonl`,
+  3329 cells, tiny/cta/blocked timed in two passes; provenance, the resume and its duplicate rows in the README
+  there), so sm_120 now chooses by measured times, not by the old window. Before the conversion, when sm_120
+  borrowed the sm_89 transcription, Auto chose the same kernel as the deleted router on 22 sample cells (all
+  dtypes, both uplo, the old window edges, nrhs 8/16/64, large n);
 * `posv_buffer_size` returns the chosen family's workspace: `posv_tiny_buffer_size` for `tiny`,
   `potrf_buffer_size` for `cta` and `blocked` (neither solve takes workspace);
 * an empty problem (n, nrhs or batch 0) and a heterogeneous batch (per-item active dims on A or B) still throw

@@ -2,9 +2,10 @@
 
 Status: **phases 1-2 implemented on branch worktree-flat-select (2026-10-04). §10 gate: passed on
 sm_120; the sm_89 live gate (needs the RTX 4090 box) is still open. See §12 "Gate results".
-Phase 3: P3.0 (select infrastructure), P3.1 (posv, sm_89 table transcribed, sm_120 table pending),
-P3.2 (the tuner core, `tools/tune`, with `--gate`), P3.2b (blackwell kernels) and P3.3 (trsm, sm_89
-table transcribed, sm_120 sweep pending) are built; see §12 and §13.**
+Phase 3: P3.0 (select infrastructure), P3.1 (posv, sm_89 table transcribed, sm_120 converted),
+P3.2 (the tuner core, `tools/tune`, with `--gate`), P3.2b (blackwell kernels), P3.3 (trsm, sm_89
+transcribed, sm_120 float/double tuned) and P3.4 (gemm, transcribed) are built; see §12 and §13.
+Every op ships tables for every dtype on sm_89 and sm_120 (inventory: `tuned/README.md`).**
 Plan agreed 2026-10-02; deviations from the sketch are in §12. Written against `main` at `a1063892`. It is meant
 to be executed from `main` in a fresh session, phase by phase. Nothing here depends on PRs #133,
 #135 or #136, or on any branch other than `main`. The only exception is the potrf route-sweep
@@ -801,9 +802,9 @@ Where the code differs from the sketches above, the code wins. These are the dif
   Rows are `tiny | cta | blocked` inside the old `tiny_window` (float/double 720, cfloat 680,
   cdouble 480 rows) and `cta | blocked` elsewhere. Rebuilding the transcriber reproduces the CSV
   md5; `scripts/sweep_to_table.py --check` passes.
-- **sm_120 posv table pending.** It comes from `benchmarks/results/routing/sm120_posv_sweep.jsonl`,
-  still running when P3.1 was written, and is converted separately. Until then an sm_120 device
-  borrows the sm_89 transcription with the R8 warning, and no test asserts sm_120 posv rows.
+- **sm_120 posv tables: converted in the phase-5 fold** (below, "Phase 5 fold"), from
+  `benchmarks/results/routing/sm120_posv_sweep.jsonl`, which was still running when P3.1 was
+  written. Until then sm_120 borrowed the sm_89 transcription with the R8 warning.
 - Cross-check: on 22 sm_120 cells (four dtypes, both uplo, the window edges cfloat n = 24/28 at
   nrhs 2 vs 4, cdouble n = 16 vs 20, float n = 32 vs 36, nrhs 8/16/64, float n = 1024 and cdouble
   n = 256) the coverage `reached` rows of the new build equal the parent build's. Off-grid cells
@@ -998,7 +999,8 @@ Where the code differs from the sketches above, the code wins. These are the dif
   not exactly: `trsm_cta_max_n` is a build constant, so "cta_max = 0" cannot be simulated);
   `:474` -> `TraceKeyQFollowsSide`. `RouteGetri`'s citations of
   `route_trsm.hh` now cite trsm's `can_run`. `tuned_tables_tests` gains
-  `TrsmTablesDeclareChoiceKeyNames` and `TrsmSm89TablesHoldExactlyTheChoiceGrid`.
+  `TrsmTablesDeclareChoiceKeyNames` and `TrsmSm89TablesHoldExactlyTheChoiceGrid` (since the
+  phase-5 fold `TrsmTranscribedTablesHoldExactlyTheChoiceGrid`, which also covers sm_120 complex).
 - `trsm_candidates_tests` (typed over 4 dtypes, GPU 0, vendor build): every candidate straddling
   its limits on both sides, all 24 side/uplo/trans/diag combinations, non-natural ld/stride with
   large finite poison, parent-ld sub-views, pinned-equals-direct bit for bit, a batch-1024
@@ -1015,10 +1017,40 @@ Where the code differs from the sketches above, the code wins. These are the dif
   `TraceKeyQFollowsSide`, `AutoReadsTheSm89TranscribedTable` (the last skips once sm_120 has its
   own table; the first two do not). The trace key is `key_of()` itself, so the trace always shows
   the key the table lookup used.
-- **sm_120 is pending.** No sm_120 trsm table exists; every sm_120 call borrows the sm_89
-  transcribed table and warns once (R8). The tuner sweep, with the uplo/diag invariance A/B as a
-  separate raw run, replaces it once GPUs 1-3 are free of the posv sweep. If the A/B shows a
-  family moving more than 3% with uplo or diag, those become keys before the table is converted.
+- **sm_120 (phase-5 fold):** float and double are tuner tables
+  (`benchmarks/results/tuning/trsm.{float,double}.sm_120.jsonl`); the maintainer stopped the sweep
+  during cfloat, so cfloat and cdouble are the sm_89 transcription written for sm_120. Until the
+  fold, sm_120 borrowed sm_89 with the R8 warning. The plan said that if the A/B showed a family
+  moving more than 3% with uplo or diag, those would become keys before conversion; the A/B
+  below fails that literal test, mostly on diag, and the keys were left unchanged for the
+  maintainer to decide.
+- **uplo/diag invariance A/B (sm_120 only, run before the sweep).** `batchlas_tune trsm --grid
+  uplo=L:U --grid diag=N:U --no-refine`, float and cdouble, side L/R x trans N/T x order 8, 32,
+  128, 512 x q 4, 64 x batch 2048, full protocol: 32 float and 24 cdouble cells x 4 (uplo, diag)
+  combinations (float L T 128/64 lost its U,N combination). Per candidate, the spread is max/min - 1
+  over the 4 combinations:
+
+  | dtype | candidate | spread <= 3% | median | max | uplo only <= 3% (max) | diag only <= 3% (max) | pass-to-pass noise (median / p90) |
+  |---|---|---|---|---|---|---|---|
+  | float | cta | 3/16 | 5.6% | 16.3% | 7/16 (13.1%) | 5/16 (16.3%) | 0.7% / 6.6% |
+  | float | sg_left | 1/8 | 4.6% | 5.9% | 4/8 (5.3%) | 4/8 (5.8%) | 0.6% / 3.2% |
+  | float | blocked | 6/31 | 5.8% | 19.0% | 9/31 (16.7%) | 8/31 (18.9%) | 0.5% / 4.8% |
+  | float | vendor | 0/31 | 10.6% | 20.2% | 5/31 (15.4%) | 2/31 (20.2%) | 0.8% / 4.6% |
+  | cdouble | cta | 0/16 | 13.2% | 26.0% | 14/16 (5.0%) | 0/16 (23.4%) | 0.2% / 1.2% |
+  | cdouble | sg_left | 0/8 | 58.9% | 82.1% | 7/8 (4.0%) | 0/8 (82.1%) | 0.2% / 0.9% |
+  | cdouble | blocked | 4/24 | 7.4% | 26.8% | 22/24 (5.2%) | 4/24 (22.6%) | 0.2% / 1.2% |
+  | cdouble | vendor | 1/24 | 26.9% | 93.6% | 24/24 (2.3%) | 1/24 (91.5%) | 0.1% / 0.4% |
+
+  So the plan's per-candidate test fails. diag=U is clearly faster for cdouble (no complex
+  division: vendor 0.21 -> 0.11 ms at order 8 q 64, sg_left 1.47 -> 0.81 ms at order 32 q 64).
+  uplo moves cdouble by at most 5.2% (vendor 2.3%). The float spreads in both axes, 4-20%, sit
+  near float's pass-to-pass noise (p90 3-7%). **The ranking is invariant**: in all 56 cells
+  every combination has the same first entry, and the full ranked list differs in 2 cells,
+  where entries 2 and 3 swap (float L T 32/4, cdouble L N 32/4). The table answers "which
+  candidate", not "how fast", so a key on uplo or diag would add rows without changing a
+  choice on this grid. Keys unchanged (`side trans order q batch`), as decided in the fold;
+  adding `diag:exact` is the maintainer's call if a timed diag=U table is ever wanted. Not run
+  on sm_89. Raw and the script that prints this table: `benchmarks/results/tuning/trsm_uplo_diag_ab/`.
 - **Implementer deviations from the plan / orchestrator brief:** (1) the transcriber applies
   `trsm_cta_max_n` (32) instead of unlimited capacities (see above); (2) the new `max_wg >= 32`
   term on Cta/Blocked and `max_wg >= 128` + sub-group 32 on SgLeft; (3) Vendor `can_run` is still
@@ -1130,8 +1162,9 @@ Where the code differs from the sketches above, the code wins. These are the dif
   `batch >= 1` term alone left vendor-free no route). The unpredicated leg of reg 128·64·32 u=4/u=2,
   reg 128·128·8 and wide 64·64·16 NN now has its own kernel-trace name (`..._aligned`, as 128·32·32
   had), so a fast-leg predicate stuck at false goes red in `PinnedChoiceLaunchesItsOwnKernel`.
-- **sm_120 is pending.** No sm_120 gemm table; sm_120 borrows sm_89 with the R8 warning, so Auto
-  there runs what the 4090 router chose (the blackwell.md windows are hypotheses for the sweep).
+- **sm_120 is transcribed (phase-5 fold).** No gemm sweep ran; `tuned/gemm.*.sm_120.txt` are the
+  sm_89 CSV written for sm_120 (`--device sm_120`), so Auto there runs what the 4090 router chose
+  without borrowing (the blackwell.md windows are hypotheses for the sweep).
   The sweep uses `tools/tune/gemm_spec.cc` (beta = 1, alpha with an imaginary part, strided cells
   padded by max(1, `--ld-pad`), componentwise error against a double/cdouble host reference on items
   0 and batch-1 over 64 sampled columns, the plan §3 demand-driven grid per dtype, refinement on `k`,
@@ -1162,6 +1195,40 @@ Where the code differs from the sketches above, the code wins. These are the dif
   benchmarks and `scripts/run_gemm_*.sh` were ported to `BATCHLAS_GEMM_ROUTE`, and the cuBLASDx row
   of the heterogeneous benchmark became `native`. Not in `can_run`, unchanged from before: the
   direct kernel's `int` batch offsets can overflow at large batch x stride (§11).
+
+**Phase 5 fold, tuned tables (2026-10-05; maintainer: one mega PR, no new tuning or measurement):**
+every table that already existed went into `tuned/`, and every op now ships all four dtypes on
+sm_89 and sm_120 (spmm also cpu), so neither device borrows. Inventory, per op x dtype x device
+(measured / converted / transcribed): `tuned/README.md`; `EveryOpShipsATableForEveryDtypeOnEveryShippedDevice`
+in `tuned_tables_tests` holds it.
+- **posv sm_120, converted** from `benchmarks/results/routing/sm120_posv_sweep.jsonl` (now committed
+  through LFS, with its driver scripts; provenance and resume in the routing README). 3329 cells,
+  4 tables (891/827/827/784 rows, 150 `# noisy`), `batchlas=886537e8`. The sweep's resume re-ran
+  224 complete pass-2 cells, so 672 (cell, arm, pass) appear twice; the converter's new
+  `Source.dedupe_latest` (set for this source only; elsewhere a duplicate stays fatal) keeps the
+  later kept row, and a dropped row (a refused re-run) never displaces a measurement: 422
+  replacements, the duplicate pairs agreeing to a median ratio of 0.9995. Against the transcription
+  sm_120 used to borrow, the first runnable entry changes in 86-239 rows per dtype, mostly `cta` ->
+  `blocked` (float 86 of 891 rows, cdouble 239 of 784).
+- **trsm sm_120 float/double, tuner tables**: raw in `benchmarks/results/tuning/`, tables
+  re-derived byte for byte from it (the only header change is the raw path). The first entry changes
+  in 1975 of 4452 float rows (`blocked` -> `vendor` 1007, `cta` -> `sg_left` 876) and 898 of 4098
+  double rows: the first time Auto picks `sg_left`. `kernels=c923160f` is reported stale against
+  `a33fbfee`, a false alarm (an unused include was removed from `trsm_native.cc`). cfloat/cdouble
+  stay transcribed (sweep stopped during cfloat; its partial raw is not used).
+- **Transcribed sm_120 tables written from the sm_89 CSVs**: gemm (all four dtypes) and trsm
+  cfloat/cdouble. New `--transcribe ... --device sm_120` writes a one-device CSV's rows for another
+  device, with `transcriber_device=sm_89` in the header for `--check`; it never overwrites a tuner
+  table. Valid because neither transcriber reads a device fact (their device argument only labels
+  rows); `tuned_tables_tests` checks the sm_120 rows equal the sm_89 rows.
+- Tests: the trsm and gemm `AutoReadsTheSm89TranscribedTable` cases now run on any device whose
+  table is the transcription (sm_120 gemm, sm_120 complex trsm) instead of requiring device sm_89;
+  three posv cases that hard-coded the sm_89 Auto pick (`LegacyAliasesSelectTheirChoice`,
+  `ScopedPinBeatsTheEnvironment`, `CoverageRowCarriesNativeFlags`) now compare against the Auto
+  pick the device's table makes. The tie-rule check in `tuned_tables_tests` exempts an entry within
+  print rounding of the 3% edge (the trsm and posv tables had 17 rows like `blocked 19.30 | cta
+  19.89`, tied by the printed digits but not by the converter's unrounded times).
+- `python3 scripts/sweep_to_table.py --check` passes on all 124 files; potrf's tables are byte-identical.
 
 **Behaviour changes visible to callers:**
 - A bad pin throws. `factor_bench`'s posv `composed` arm therefore pins potrf to `tiny` only up to

@@ -661,7 +661,8 @@ TYPED_TEST(PosvCandidates, CanRunFalsePinsThrow) {
 }
 
 // §5.3: the legacy spellings select their choice, via ScopedPin and via the environment. posv
-// has no vendor family, so bare `vendor` warns and runs Auto; bare `native` is Auto's pick.
+// has no vendor family, so bare `vendor` warns and runs Auto; bare `native` is Auto's pick
+// (whatever this device's table ranks first at n=16 nrhs=2: tiny on sm_89, measured on sm_120).
 TYPED_TEST(PosvCandidates, LegacyAliasesSelectTheirChoice) {
     using T = typename TestFixture::T;
     const ScopedEnvVar clear("BATCHLAS_POSV_ROUTE", nullptr);
@@ -670,11 +671,11 @@ TYPED_TEST(PosvCandidates, LegacyAliasesSelectTheirChoice) {
         auto p = make_sys<T>(16, 2, 4, Uplo::Lower, 5u);
         auto_pick = traced_choice([&] { (void)this->run_auto(p); });
     }
-    ASSERT_EQ(auto_pick, "tiny") << "every table ranks tiny first at n=16 nrhs=2";
+    const char* a = auto_pick.c_str();
     const std::pair<const char*, const char*> expect[] = {
         {"native:tiny", "tiny"}, {"native:cta", "cta"}, {"native:blocked", "blocked"}, {"NATIVE:CTA", "cta"},
-        {"tiny", "tiny"},        {"Blocked", "blocked"}, {"vendor", "tiny"},           {"native", "tiny"},
-        {"auto", "tiny"}};
+        {"tiny", "tiny"},        {"Blocked", "blocked"}, {"vendor", a},                {"native", a},
+        {"auto", a}};
     for (const auto& [word, spelling] : expect) {
         for (bool via_env : {false, true}) {
             auto p = make_sys<T>(16, 2, 4, Uplo::Lower, 5u);
@@ -717,12 +718,19 @@ TYPED_TEST(PosvCandidates, ScopedPinBeatsTheEnvironment) {
               }),
               "cta");
     expect_solved(p, info, "cta over env tiny");
+    std::string auto_pick;
+    {
+        const ScopedEnvVar clear("BATCHLAS_POSV_ROUTE", nullptr);
+        auto probe = make_sys<T>(n, 2, 2, Uplo::Lower, 32u);
+        auto_pick = traced_choice([&] { (void)this->run_auto(probe); });
+    }
+    ASSERT_NE(auto_pick, "tiny") << "n = tiny_n() + 1 must be past tiny's ceiling";
     auto q = make_sys<T>(n, 2, 2, Uplo::Lower, 32u);
     EXPECT_EQ(traced_choice([&] {
                   const Pin pin("posv", "auto");
                   info = this->run_auto(q);
               }),
-              "cta");
+              auto_pick);
     expect_solved(q, info, "auto over env tiny");
 
     const Pin outer("posv", C{ps::Cta{}});
@@ -812,6 +820,12 @@ TYPED_TEST(PosvCandidates, CoverageRowCarriesNativeFlags) {
     std::filesystem::remove_all(dir);
     std::filesystem::create_directories(dir);
     const std::string out = dir + "/cov";
+    std::string want_lo;  // this device's table decides the Lower n=8 nrhs=2 tier
+    {
+        const ScopedEnvVar clear("BATCHLAS_POSV_ROUTE", nullptr);
+        auto lo = make_sys<T>(8, 2, 2, Uplo::Lower, 51u);
+        want_lo = traced_choice([&] { (void)this->run_auto(lo); });
+    }
     auto child = [&] {
         const ScopedEnvVar cov("BATCHLAS_COVERAGE_OUT", out.c_str());
         const ScopedEnvVar clear("BATCHLAS_POSV_ROUTE", nullptr);
@@ -845,8 +859,8 @@ TYPED_TEST(PosvCandidates, CoverageRowCarriesNativeFlags) {
         EXPECT_EQ(rows[key][12], "1") << key;
         EXPECT_EQ(rows[key][13], "1") << key;
     }
-    EXPECT_EQ(rows[lo][10], "tiny");
-    EXPECT_EQ(rows[hi][10], "blocked");
+    EXPECT_EQ(rows[lo][10], want_lo);
+    EXPECT_EQ(rows[hi][10], "blocked");  // nrhs 9 is past tiny's and cta's ceilings
 }
 
 // An empty problem has no kernel: an explicit throw before choose(), never a silent no-op.

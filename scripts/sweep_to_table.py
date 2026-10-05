@@ -6,7 +6,7 @@ Spec: docs/design/flat-kernel-selection.md section 7 (conversion rules), section
 tables); flat-kernel-selection-phase3-plan.md section 2 option D.
 
     scripts/sweep_to_table.py                        # convert every op's sweeps, write tuned/
-    scripts/sweep_to_table.py --transcribe CSV...    # write untimed tables from transcriber CSVs
+    scripts/sweep_to_table.py --transcribe CSV... [--device DEV]   # untimed tables from transcriber CSVs
     scripts/sweep_to_table.py --check                # re-derive and diff every table, check nearest()
     scripts/sweep_to_table.py --check --check-points pts.txt
     scripts/sweep_to_table.py --self-test            # converter rules on real rows (also run by --check)
@@ -61,7 +61,10 @@ SWEEP JSONL (converted input), one JSON object per line. Fields read:
   n, batch  int    and for posv nrhs (int); potrf rows also carry m, which must equal n
   arm       str    the pinned arm: potrf "route:native:<tier>" | "vendor"; posv
                    "route:native:<tier>" or the bare factor_bench arm "<tier>"
-  pass      int    pass number; (file, cell, arm, pass) must be unique
+  pass      int    pass number; (file, cell, arm, pass) must be unique among the rows kept,
+                   unless the Source sets dedupe_latest: then the later kept row replaces the
+                   earlier one (a resumed sweep that re-measured a cell; a dropped row, such as
+                   a refused re-run, never displaces a measurement)
   time_ms   float  median ms per call for the whole batch
   ok        bool   false rows record a refused or failed arm and are dropped, except those
                    the op's keep_not_ok accepts. posv keeps reason == "relsd" exactly (its
@@ -90,7 +93,10 @@ TRANSCRIBER CSV (--transcribe input), with a header row:
   e.g.  posv,float,sm_89,L,8,1,128,tiny|cta|blocked
 ranked is the old router's preference order, '|'-separated choice spellings, most
 preferred first; it should list every candidate that router could pick at the cell.
-One CSV may hold several (op, dtype, device) tables. The sha in the headers is --sha
+One CSV may hold several (op, dtype, device) tables. --device DEV writes a one-device CSV's
+rows as DEV's tables (for a router that read no architecture); their header adds
+transcriber_device=<the CSV device>, which --check reads back. --transcribe never overwrites a
+tuner table: a measurement outranks a transcription. The sha in the headers is --sha
 (default: the repository HEAD), resolved with git rev-parse to an 8-digit hex sha, and
 should name the commit whose router was transcribed.
 
@@ -134,6 +140,7 @@ class Source:
     note: str
     current_only: bool = False
     adopted: bool = True
+    dedupe_latest: bool = False
 
 
 @dataclass
@@ -214,7 +221,8 @@ def relsd_only(r):
             and isinstance(res, (int, float)) and math.isfinite(res))
 
 
-# posv (plan section 1.1): flops n^3/3 + 2 n^2 nrhs. No vendor family. sm_89 is transcribed.
+# posv (plan section 1.1): flops n^3/3 + 2 n^2 nrhs. No vendor family. sm_89 is transcribed,
+# sm_120 converted from its seed sweep.
 POSV_TIERS = ("tiny", "cta", "blocked")
 POSV = OpSpec(
     op="posv",
@@ -225,10 +233,11 @@ POSV = OpSpec(
     arm_route={**{f"route:native:{t}": (f"native:{t}",) for t in POSV_TIERS},
                **{t: (f"native:{t}",) for t in POSV_TIERS}},
     candidate_order=list(POSV_TIERS),
-    # TODO(P3.1): once the sweep has finished, set batchlas (the sweep binary is a snapshot
-    # of 886537e8) and adopted=True, then write the tables.
-    sources=[Source("sm_120", ["sm120_posv_sweep.jsonl"], "unknown", "converted, passes 1+2",
-                    adopted=False)],
+    # The binary is a snapshot of 886537e8. Its resume re-ran some complete pass-2 cells, so a
+    # (cell, arm, pass) can appear twice: the later row wins (routing/README.md).
+    sources=[Source("sm_120", ["sm120_posv_sweep.jsonl"], "886537e8",
+                    "converted, passes 1+2, resumed rows replace earlier duplicates",
+                    dedupe_latest=True)],
     route_field="reached",
     keep_not_ok=relsd_only,
 )
@@ -546,7 +555,8 @@ def collect(spec, src, stats, noisy_keys, root=ROUTING):
     measurement on sm_89. Rule 2's drop of current-only cells with < 2 arms happens here.
     """
     cells = defaultdict(lambda: defaultdict(list))
-    seen = set()
+    seen = {}  # (file, cell, arm, pass) -> its entry in `kept`
+    kept = []  # [key, spelling, time_ms, kept_not_ok], in file order
     for fname in src.files:
         for r in load_rows(os.path.join(REPO, root, fname)):
             if r["op"] not in spec.row_ops:
@@ -571,15 +581,23 @@ def collect(spec, src, stats, noisy_keys, root=ROUTING):
                 stats["dropped_malformed"] += 1
                 continue
             key = (DTYPES[r["dtype"]],) + key
-            if "pass" in r:
-                ident = (fname, key, arm, r["pass"])
-                if ident in seen:
+            entry = [key, spec.arm_spelling[arm], float(r["time_ms"]), kept_not_ok]
+            ident = (fname, key, arm, r["pass"]) if "pass" in r else None
+            if ident in seen:
+                if not src.dedupe_latest:
                     raise SystemExit(f"duplicate pass row: {ident}")
-                seen.add(ident)
-            if kept_not_ok:
-                stats["kept_not_ok"] += 1
-                noisy_keys.add(key)
-            cells[key][spec.arm_spelling[arm]].append(float(r["time_ms"]))
+                # A resumed sweep re-measured the cell: the later surviving row replaces it.
+                stats["replaced_by_later_row"] += 1
+                seen[ident][:] = entry
+                continue
+            if ident is not None:
+                seen[ident] = entry
+            kept.append(entry)
+    for key, spelling, time_ms, kept_not_ok in kept:
+        if kept_not_ok:
+            stats["kept_not_ok"] += 1
+            noisy_keys.add(key)
+        cells[key][spelling].append(time_ms)
     if src.current_only:
         for key in [k for k, arms in cells.items() if len(arms) < 2]:
             stats["dropped_cells_lt2_arms"] += 1
@@ -765,11 +783,16 @@ def read_transcriber_csv(path):
     return out
 
 
-def transcribed_text(spec, dtype, device, rows, sha, date, csv_rel):
+def transcribed_text(spec, dtype, device, rows, sha, date, csv_rel, from_device=None):
+    """from_device: the CSV's device when its rows are written for another one (--device)."""
+    what = "the old router's preference order per grid cell, untimed"
+    if from_device:
+        csv_rel += f" transcriber_device={from_device}"
+        what += f"; its {from_device} rows, the router read no architecture"
     lines = [
         f"# op={spec.op} dtype={dtype} device={device} batchlas={sha} kernels=unknown "
         f"date={date} source={TRANSCRIBED}{sha}",
-        f"# transcriber_csv={csv_rel} (the old router's preference order per grid cell, untimed)",
+        f"# transcriber_csv={csv_rel} ({what})",
         f"# keys: {spec.keys}",
     ]
     for key in sorted(rows):
@@ -1029,25 +1052,44 @@ def check_transcribed(rel, spec, ident, disk, header, failures):
         return
     if header.get("batchlas") != sha:
         failures.append(f"{rel}: batchlas={header.get('batchlas')} != transcribed sha {sha}")
-    rows = read_transcriber_csv(os.path.join(REPO, csv_rel)).get(ident)
+    from_device = header.get("transcriber_device")
+    rows = read_transcriber_csv(os.path.join(REPO, csv_rel)).get((ident[0], ident[1], from_device or ident[2]))
     if rows is None:
         failures.append(f"{rel}: {csv_rel} has no {ident} rows")
-    elif disk != transcribed_text(spec, ident[1], ident[2], rows, sha, header.get("date", ""), csv_rel):
+    elif disk != transcribed_text(spec, ident[1], ident[2], rows, sha, header.get("date", ""), csv_rel,
+                                  from_device):
         failures.append(f"{rel}: differs from {csv_rel} (re-run --transcribe)")
 
 
-def transcribe(csv_paths, sha, date, converted):
+def is_tuner_table(path):
+    if not os.path.exists(path):
+        return False
+    with open(path) as f:
+        return parse_table(f.read())[0].get("source", "").startswith(TUNER)
+
+
+def transcribe(csv_paths, sha, date, converted, device=None):
+    """device: write the CSV's rows for this device instead (a router that read no
+    architecture); the header's transcriber_device= names the CSV device for --check."""
     for p in csv_paths:
         csv_rel = os.path.relpath(os.path.abspath(p), REPO)
         if csv_rel.startswith(".."):
             raise SystemExit(f"{p}: the transcriber CSV must live inside the repository")
-        for (op, dtype, device), rows in sorted(read_transcriber_csv(p).items()):
-            if (op, dtype, device) in converted:
-                raise SystemExit(f"{op}.{dtype}.{device}: already converted from a sweep; "
+        tables = read_transcriber_csv(p)
+        if device and len({d for _, _, d in tables}) != 1:
+            raise SystemExit(f"{p}: --device needs a CSV with exactly one device")
+        for (op, dtype, from_device), rows in sorted(tables.items()):
+            target = device or from_device
+            if (op, dtype, target) in converted:
+                raise SystemExit(f"{op}.{dtype}.{target}: already converted from a sweep; "
                                  "a device's table has one source")
-            path = table_path(op, dtype, device)
+            path = table_path(op, dtype, target)
+            if is_tuner_table(path):
+                print(f"kept {os.path.relpath(path, REPO)}: a measured tuner table outranks a transcription")
+                continue
+            relabel = from_device if target != from_device else None
             with open(path, "w") as f:
-                f.write(transcribed_text(OP_BY_NAME[op], dtype, device, rows, sha, date, csv_rel))
+                f.write(transcribed_text(OP_BY_NAME[op], dtype, target, rows, sha, date, csv_rel, relabel))
             print(f"wrote {os.path.relpath(path, REPO)}: {len(rows)} transcribed rows")
 
 
@@ -1097,12 +1139,13 @@ def self_test():
         except SystemExit:
             pass
 
-    def run(spec, rows, partial=""):
+    def run(spec, rows, partial="", dedupe=False):
         with tempfile.TemporaryDirectory() as d:
             with open(os.path.join(d, "rows.jsonl"), "w") as f:
                 f.write("".join(json.dumps(r) + "\n" for r in rows) + partial)
             stats, noisy = defaultdict(int), set()
-            return collect(spec, Source("fixture", ["rows.jsonl"], "x", "x"), stats, noisy, d), stats, noisy
+            src = Source("fixture", ["rows.jsonl"], "x", "x", dedupe_latest=dedupe)
+            return collect(spec, src, stats, noisy, d), stats, noisy
 
     real = load_rows(os.path.join(REPO, FIXTURE))
     posv = [r for r in real if r["op"] in POSV.row_ops]
@@ -1124,6 +1167,22 @@ def self_test():
     ucell = ("float", "U", 1, 1, 128)
     expect(set(cells) == {ucell} and all(len(v) == 2 for v in cells[ucell].values()),
            f"Upper/pass 2 cells {dict(cells)}")
+    # Duplicate (cell, arm, pass): fatal by default; with dedupe_latest the later kept row wins,
+    # its noisy mark goes with the replaced row, and a dropped (refused) re-run displaces nothing.
+    ok_row = next(r for r in posv if r["ok"])
+    again = dict(ok_row, time_ms=2 * ok_row["time_ms"])
+    try:
+        run(POSV, [ok_row, again])
+        expect(False, "duplicate pass row accepted without dedupe_latest")
+    except SystemExit:
+        pass
+    cells, stats, noisy = run(POSV, [relsd, dict(relsd, ok=True, reason="ok", time_ms=1.0)], dedupe=True)
+    got = cells.get(cell, {}).get(POSV.arm_spelling[relsd["arm"]])
+    expect(got == [1.0] and not noisy and stats["replaced_by_later_row"] == 1,
+           f"dedupe_latest kept {got}, noisy {noisy}, stats {dict(stats)}")
+    cells, _, _ = run(POSV, [ok_row, dict(ok_row, ok=False, reason="error: gpu_guard", time_ms=None)], dedupe=True)
+    got = cells.get(cell, {}).get(POSV.arm_spelling[ok_row["arm"]])
+    expect(got == [ok_row["time_ms"]], f"a refused re-run displaced the measurement: {got}")
     cells, stats, _ = run(POTRF, real)
     expect(set(cells) == {("float", "L", 2, 32768), ("float", "U", 8, 8192)}, f"potrf cells {sorted(cells)}")
     expect(stats["dropped_not_ok"] == 3 and stats["dropped_op"] == 6, f"potrf stats {dict(stats)}")
@@ -1175,6 +1234,7 @@ def main():
     ap.add_argument("--check-points", help="file of off-grid 'n [batch]' points for --check")
     ap.add_argument("--transcribe", nargs="+", metavar="CSV", help="transcriber CSVs to write")
     ap.add_argument("--sha", help="--transcribe: the transcribed router's commit (default HEAD)")
+    ap.add_argument("--device", help="--transcribe: write the CSV's rows for this device instead")
     ap.add_argument("--date", default=datetime.date.today().isoformat())
     ap.add_argument("--self-test", action="store_true", help="run the converter self-test only")
     ap.add_argument("--tuner", nargs="+", metavar="JSONL", help="batchlas_tune raw files to write")
@@ -1208,7 +1268,7 @@ def main():
         raise SystemExit("\n".join(problems))
     os.makedirs(os.path.join(REPO, TUNED), exist_ok=True)
     if args.transcribe:
-        transcribe(args.transcribe, resolve_sha(args.sha or "HEAD"), args.date, converted)
+        transcribe(args.transcribe, resolve_sha(args.sha or "HEAD"), args.date, converted, args.device)
         return 0
     for (op, device), s in stats.items():
         print(f"{op} {device}: " + ", ".join(f"{k}={v}" for k, v in sorted(s.items())))
