@@ -4,6 +4,7 @@
 
 #include <batchlas/util/env.hh>
 
+#include "../src/ops/gesv/choice.hh"
 #include "../src/ops/posv/choice.hh"
 #include "../src/ops/potrf/choice.hh"
 #include "../src/ops/trsm/choice.hh"
@@ -56,6 +57,13 @@ std::vector<std::string> candidates(const std::string& op, const std::string& dt
         if (dtype == "double") return spellings(trsm::candidates<double>());
         if (dtype == "cfloat") return spellings(trsm::candidates<std::complex<float>>());
         if (dtype == "cdouble") return spellings(trsm::candidates<std::complex<double>>());
+    }
+    namespace gesv = batchlas::ops::gesv;
+    if (op == "gesv") {
+        if (dtype == "float") return spellings(gesv::candidates<float>());
+        if (dtype == "double") return spellings(gesv::candidates<double>());
+        if (dtype == "cfloat") return spellings(gesv::candidates<std::complex<float>>());
+        if (dtype == "cdouble") return spellings(gesv::candidates<std::complex<double>>());
     }
     return {};
 }
@@ -190,6 +198,7 @@ void expect_tables_declare(const std::string& op, const Names& names) {
 TEST(TunedTables, PotrfTablesDeclareChoiceKeyNames) { expect_tables_declare("potrf", batchlas::ops::potrf::key_names); }
 TEST(TunedTables, PosvTablesDeclareChoiceKeyNames) { expect_tables_declare("posv", batchlas::ops::posv::key_names); }
 TEST(TunedTables, TrsmTablesDeclareChoiceKeyNames) { expect_tables_declare("trsm", batchlas::ops::trsm::key_names); }
+TEST(TunedTables, GesvTablesDeclareChoiceKeyNames) { expect_tables_declare("gesv", batchlas::ops::gesv::key_names); }
 
 const sel::Table& embedded(const std::string& name) {
     static std::map<std::string, sel::Table> cache;
@@ -241,6 +250,23 @@ TEST(TunedTables, TrsmSm89TablesHoldExactlyTheChoiceGrid) {
         EXPECT_EQ(got, want) << dt;
         EXPECT_EQ(t.rows.size(), want.size()) << dt;
     }
+}
+
+// gesv's transcriber likewise spells choice.hh's grid by hand: one row per (n, nrhs) cell, on
+// both transcribed devices.
+TEST(TunedTables, GesvTranscribedTablesHoldExactlyTheChoiceGrid) {
+    namespace gesv = batchlas::ops::gesv;
+    std::set<std::string> want;
+    for (int n : gesv::grid_n)
+        for (int r : gesv::grid_nrhs) want.insert(std::to_string(n) + " " + std::to_string(r));
+    for (const char* dev : {"sm_89", "sm_120"})
+        for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
+            const sel::Table& t = embedded(std::string("gesv.") + dt + "." + dev + ".txt");
+            std::set<std::string> got;
+            for (const auto& row : t.rows) got.insert(row.keys[0] + " " + row.keys[1]);
+            EXPECT_EQ(got, want) << dt << " " << dev;
+            EXPECT_EQ(t.rows.size(), want.size()) << dt << " " << dev;
+        }
 }
 
 // The sparse sm_89 tables (final-review finding): with equal weights, float n=24 batch=512

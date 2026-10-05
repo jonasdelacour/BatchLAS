@@ -22,6 +22,8 @@ namespace batchlas::sycl_gesv {
 
 inline constexpr int kGesvTinyMaxRhs = 4;
 
+inline constexpr int kGesvTinyWgSize = 64;  // gesv_tiny_dispatch refuses a smaller max work-group
+
 // The ONE place the order ceiling is spelled; there is no vendor arm to absorb a fork.
 template <typename T>
 BATCHLAS_INTERNAL_API int gesv_tiny_max_n();

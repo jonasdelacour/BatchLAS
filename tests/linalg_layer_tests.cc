@@ -554,7 +554,7 @@ TEST(LinalgLayer, SolveSatisfiesTheSystem) {
 // `solve` now sends Transpose::NoTrans to the fused `gesv` and keeps the
 // hand-composed getrf + getrs for Trans/ConjTrans, because gesv has no Transpose
 // parameter. Both arms therefore need their own residual. The NoTrans shapes below
-// straddle route_gesv's fused window (float n <= 32, complex<float> n <= 16, and
+// straddle the sm_89 gesv table's fused window (float n <= 32, complex<float> n <= 16, and
 // nrhs <= 4 for both); on a CPU queue, or a device without sub-group 32, the fused
 // tier is gated off and every shape takes the composed arm -- so these are
 // correctness rows that hold on any device, not routing rows.

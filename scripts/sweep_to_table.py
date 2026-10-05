@@ -266,6 +266,28 @@ TRSM = OpSpec(
 )
 
 
+def gesv_key(r):
+    try:
+        key = (int(r["n"]), int(r["nrhs"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+    return key if min(key) >= 1 else None
+
+
+# gesv (flat-select-p5/gesv.md): flops 2n^3/3 + 2 n^2 nrhs. No vendor family; the old predicates
+# read only n and nrhs. sm_89 and sm_120 are both transcribed (no measurement).
+GESV_TIERS = ("tiny", "blocked")
+GESV = OpSpec(
+    op="gesv",
+    keys="n:log:3 nrhs:log",
+    row_ops=("gesv",),
+    row_key=gesv_key,
+    arm_spelling={**{f"route:native:{t}": t for t in GESV_TIERS}, **{t: t for t in GESV_TIERS}},
+    arm_route={t: (f"native:{t}",) for t in GESV_TIERS},
+    candidate_order=list(GESV_TIERS),
+)
+
+
 def parse_keys(spec):
     """'# keys:' text -> [(name, is_log, weight)]; a :log weight defaults to 1."""
     out = []
@@ -636,7 +658,7 @@ def potrf_offgrid(texts, points):
 
 
 POTRF.review = potrf_offgrid
-OPS = [POTRF, POSV, TRSM]
+OPS = [POTRF, POSV, TRSM, GESV]
 OP_BY_NAME = {s.op: s for s in OPS}
 
 
