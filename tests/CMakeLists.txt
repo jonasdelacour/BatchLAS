@@ -48,6 +48,7 @@ set(TEST_TARGETS
     gemv_candidates_tests
     getrf_candidates_tests
     getrs_candidates_tests
+    getri_candidates_tests
     geqrf_tests
     geqrf_candidates_tests
     getrf_tests
@@ -168,7 +169,7 @@ set(BATCHLAS_TEST_LABELS_blas
     trmm_tests trsm_tests potrf_tests potrf_candidates_tests geqrf_tests getrf_tests resident_capacity_tests
     geqrf_candidates_tests
     gesv_tests posv_tests posv_candidates_tests trsm_candidates_tests gemm_candidates_tests
-    gemv_candidates_tests getrf_candidates_tests getrs_candidates_tests
+    gemv_candidates_tests getrf_candidates_tests getrs_candidates_tests getri_candidates_tests
     transpose_tests norm_tests cond_tests inverse_tests)
 set(BATCHLAS_TEST_LABELS_ortho
     ortho_tests ormqr_tests ormqr_cta_tests ormqr_blocked_tests orgqr_tests

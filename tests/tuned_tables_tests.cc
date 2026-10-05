@@ -14,6 +14,7 @@
 #include "../src/ops/trsm/choice.hh"
 #include "../src/ops/gemv/choice.hh"
 #include "../src/ops/ormqr/choice.hh"
+#include "../src/ops/getri/choice.hh"
 #include "../src/select/select.hh"
 
 #include <algorithm>
@@ -113,6 +114,13 @@ std::vector<std::string> candidates(const std::string& op, const std::string& dt
         if (dtype == "double") return spellings(getrs::candidates<double>());
         if (dtype == "cfloat") return spellings(getrs::candidates<std::complex<float>>());
         if (dtype == "cdouble") return spellings(getrs::candidates<std::complex<double>>());
+    }
+    namespace getri = batchlas::ops::getri;
+    if (op == "getri") {
+        if (dtype == "float") return spellings(getri::candidates<float>());
+        if (dtype == "double") return spellings(getri::candidates<double>());
+        if (dtype == "cfloat") return spellings(getri::candidates<std::complex<float>>());
+        if (dtype == "cdouble") return spellings(getri::candidates<std::complex<double>>());
     }
     return {};
 }
@@ -464,6 +472,7 @@ TEST(TunedTables, OrgqrTablesHoldExactlyTheChoiceGridOnBothDevices) {
 }
 
 TEST(TunedTables, OrmqrTablesDeclareChoiceKeyNames) { expect_tables_declare("ormqr", batchlas::ops::ormqr::key_names); }
+TEST(TunedTables, GetriTablesDeclareChoiceKeyNames) { expect_tables_declare("getri", batchlas::ops::getri::key_names); }
 
 // ormqr's transcriber spells choice.hh's grid by hand (k over grid_m up to m), and one
 // transcription serves both devices: every table holds exactly that grid, both sides, N/T/C.
@@ -534,6 +543,23 @@ TEST(TunedTables, GetrsTranscribedTablesHoldExactlyTheChoiceGrid) {
             for (const auto& row : t.rows) got.insert(row.keys[0] + " " + row.keys[1] + " " + row.keys[2]);
             EXPECT_EQ(got, want) << t.file;
             EXPECT_EQ(t.rows.size(), want.size()) << t.file;
+        }
+}
+
+// Likewise getri's transcriber, whose one transcription is written for sm_89 and sm_120 alike.
+TEST(TunedTables, GetriTranscribedTablesHoldExactlyTheChoiceGrid) {
+    namespace getri = batchlas::ops::getri;
+    std::set<std::string> want;
+    for (int n : getri::grid_n)
+        for (int b : getri::grid_batch) want.insert(std::to_string(n) + " " + std::to_string(b));
+    for (const char* dev : {"sm_89", "sm_120"})
+        for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
+            const sel::Table& t = embedded(std::string("getri.") + dt + "." + dev + ".txt");
+            std::set<std::string> got;
+            for (const auto& row : t.rows) got.insert(row.keys[0] + " " + row.keys[1]);
+            EXPECT_EQ(got, want) << dt << " " << dev;
+            EXPECT_EQ(t.rows.size(), want.size()) << dt << " " << dev;
+            EXPECT_EQ(t.source.rfind("transcribed:", 0), 0u) << t.file;
         }
 }
 

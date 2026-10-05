@@ -44,9 +44,9 @@ using getri_vendor_buffer_size = size_t(Queue&,
 }  // namespace sig
 
 
-// WP6: the one thing that is invalid for EVERY route, checked once, hoisted above
-// the shape builder in src/dispatch/entry_points/factorization.cc because the
-// builder reads A.rows()/A.cols(). Modelled on geqrf_validate_params
+// WP6: the one thing that is invalid for EVERY route, checked once, before
+// choose() in src/ops/getri/getri.cc, because the key reads A.rows()/A.cols().
+// Modelled on geqrf_validate_params
 // (geqrf.hh:71-77); it obeys geqrf.hh:55-70's rule of validating only what no
 // route could serve.
 //
@@ -54,15 +54,15 @@ using getri_vendor_buffer_size = size_t(Queue&,
 // CONVENIENCE. getri_buffer_size takes A ALONE (getri.hh) while the call
 // takes A and C, so a single two-argument validator could not be used by both --
 // and the query must validate exactly the view its route is built from, because
-// the route builder itself is a function of A alone (see the header note in
-// src/backends/getri_route.hh for why it cannot take C). The two arities check A
+// getri's key and can_run are functions of A alone (getri_buffer_size has no C to
+// read; src/ops/getri/getri.cc). The two arities check A
 // identically; the second adds C's extents, which nothing else on the positional
 // path looks at.
 //
 // WHAT NEITHER DELIBERATELY CHECKS: squareness of A or C, their agreement in order
 // and batch, and the pivot span's length. All are checked on the arena spellings
-// (options.hh:687-693); a non-square A additionally makes
-// backend::getri_op_shape return nullopt, which routes the call to the vendor.
+// (options.hh:687-693); a non-square A additionally fails can_run(Blocked),
+// which routes the call to the vendor.
 // Routing a call away from the native arm is not the same as rejecting it, and a
 // validator that threw would turn a currently-working positional call into an
 // error (potrf.hh:59-65).
