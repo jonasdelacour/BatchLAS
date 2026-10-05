@@ -15,7 +15,7 @@
 // with sub-group 32. The list stops after `blocked`, which can_run never refuses.
 //
 // `--points FILE` (lines "dtype,n,nrhs") instead prints the old router's FIRST choice with the
-// real capacities applied, for the off-grid data gate (scripts/gesv_offgrid_gate.py).
+// real capacities applied, for the off-grid data gate (tools/transcribe/gesv_offgrid_gate.py).
 
 #include <batchlas/blas/dispatch/route_gesv.hh>
 

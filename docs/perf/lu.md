@@ -1564,6 +1564,16 @@ credit or debit the register leaf for a tier flip that happened in P7.
 
 ## The fused gesv tier
 
+> **gesv selection since flat kernel selection (phase 5).** `route_gesv.hh`,
+> `src/backends/gesv_route.hh`, `tiny_window_max_n()` and `resolve_gesv_route` are
+> **deleted**; every gesv section below that quotes them is the measurement record
+> that produced the window, not a description of the code. What runs is decided in
+> `src/ops/gesv/gesv.cc`: two fieldless families, `tiny` (`gesv_tiny_dispatch`) and
+> `blocked` (public `getrf`, then public `getrs`), ranked by the transcribed tables
+> `tuned/gesv.<dtype>.{sm_89,sm_120}.txt`, which hold the same window (float
+> `n <= 32`, cfloat `n <= 16`, none for double and cdouble). As-built notes:
+> `docs/design/flat-select-p5/gesv.md`.
+
 `src/extensions/gesv_tiny.cc`, one launch for `A X = B` at order `n <= 32` and
 `nrhs <= 4`: `getrf_tiny.cc`'s elimination with the RHS carried in `D rB[NR]`
 alongside `D rA[N]`, forward substitution fused into the elimination loop, back

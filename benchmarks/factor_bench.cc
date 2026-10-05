@@ -230,7 +230,7 @@ static const char* op_text(OpKind k) {
 // pre-main snapshot, so a raw ::setenv is invisible to it and only
 // ScopedEnvVar's reload_settings() makes the pin readable at all.
 //
-// potrf and posv have migrated to flat selection (src/ops/<op>/): their pins are choice
+// potrf, posv and gesv have migrated to flat selection (src/ops/<op>/): their pins are choice
 // spellings (`lpanel:panel=8`, `cta`), the legacy aliases (`native:lpanel`) or
 // auto/native/vendor, and a pin that cannot run THROWS instead of falling through. Their
 // coverage rows carry the spelling in chosen_algo, so the readback reads e.g.
