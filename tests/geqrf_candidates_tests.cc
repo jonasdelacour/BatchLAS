@@ -17,6 +17,7 @@
 #include "test_utils.hh"
 
 #include "../src/extensions/geqrf_native.hh"
+#include "../src/ops/geqrf/can_run.hh"
 #include "../src/ops/geqrf/choice.hh"
 #include "../src/ops/geqrf/geqrf.hh"
 
@@ -250,7 +251,7 @@ protected:
         if (m < n || n < 1) return false;
         if (std::holds_alternative<gq::Tiny>(c)) return m == n && n <= tiny_max();
         if (std::holds_alternative<gq::Cta>(c)) return cta_fits(m, n);
-        return sycl_geqrf::geqrf_blocked_available<T>();
+        return sycl_geqrf::geqrf_blocked_available<T>() && sycl_geqrf::geqrf_cta_max_elems_for_slm<T>(budget()) >= 1;
     }
     // The Vendor choice spells the class word `vendor`, which falls back to Auto where no vendor
     // can run, instead of throwing (§5.3).
@@ -839,6 +840,44 @@ TEST(GeqrfTranscribedTable, RowsHoldTheOldPreference) {
             EXPECT_EQ(got, r.ranked) << t.file << ":" << row->line;
             EXPECT_FALSE(row->timed) << t.file;
         }
+}
+
+// can_run's device clauses on a synthetic select::Device, host-only: every GPU here has
+// sub-group size 32 and SLM for a CTA element, so the queue-driven tests cannot break them.
+template <typename T>
+class GeqrfCanRunDevice : public ::testing::Test {};
+using ScalarTypes = ::testing::Types<float, double, std::complex<float>, std::complex<double>>;
+TYPED_TEST_SUITE(GeqrfCanRunDevice, ScalarTypes);
+
+TYPED_TEST(GeqrfCanRunDevice, DeviceClausesRefuseTheNativeFamilies) {
+    using T = TypeParam;
+    if (!sycl_geqrf::geqrf_blocked_available<T>()) GTEST_SKIP() << "no blocked tier compiled";
+    select::Device ok;
+    ok.is_gpu = ok.has_sg32 = true;
+    ok.slm_budget = 97280;
+    const MVof<T> sq(nullptr, 8, 8, 8, 64, 2), big(nullptr, 400, 90, 400, 36000, 2);
+    auto runs = [](const select::Device& d, const MVof<T>& A, const C& c) { return gq::can_run<T>(c, d, A); };
+    const C tiny = gq::Tiny{}, cta = gq::Cta{}, blocked = gq::Blocked{}, vendor = gq::Vendor{};
+    ASSERT_TRUE(runs(ok, sq, tiny) && runs(ok, sq, cta) && runs(ok, sq, blocked) && runs(ok, big, blocked));
+    EXPECT_FALSE(runs(ok, sq, vendor));
+
+    auto cpu = ok;   cpu.is_gpu = false;
+    auto nosg = ok;  nosg.has_sg32 = false;
+    for (const select::Device* d : {&cpu, &nosg})
+        for (const C& c : {tiny, cta, blocked}) EXPECT_FALSE(runs(*d, sq, c)) << select::to_string(c);
+    auto vendor_cpu = cpu;  vendor_cpu.has_vendor_solver = true;
+    EXPECT_TRUE(runs(vendor_cpu, sq, vendor));
+
+    // Blocked needs one CTA element of SLM, not the fit: straddle the smallest such budget.
+    std::int64_t lo = 0;
+    while (lo < 97280 && sycl_geqrf::geqrf_cta_max_elems_for_slm<T>(std::size_t(lo)) < 1) ++lo;
+    ASSERT_GT(lo, 0) << "a zero budget already holds a CTA element";
+    ASSERT_LT(lo, 97280);
+    auto starved = ok;  starved.slm_budget = lo - 1;
+    auto least = ok;    least.slm_budget = lo;
+    EXPECT_FALSE(runs(starved, big, blocked));
+    EXPECT_TRUE(runs(least, big, blocked));
+    EXPECT_FALSE(runs(least, big, cta));
 }
 
 }  // namespace

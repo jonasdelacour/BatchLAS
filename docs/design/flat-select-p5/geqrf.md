@@ -10,7 +10,8 @@ Branch `flat-select-p5-geqrf`, based on `424a45bc`.
 | Path | Change |
 |---|---|
 | `src/ops/geqrf/choice.hh` | the vocabulary: `Tiny`, `Cta`, `Blocked`, `Vendor` (all fieldless), aliases, last resort, key names, the grid |
-| `src/ops/geqrf/geqrf.cc` | the public `geqrf` / `geqrf_buffer_size`, `can_run`, `choose`, `launch`, `workspace`, `native_facts`, and `geqrf_buffer_size_bound` |
+| `src/ops/geqrf/geqrf.cc` | the public `geqrf` / `geqrf_buffer_size`, `choose`, `launch`, `workspace`, `native_facts`, and `geqrf_buffer_size_bound` |
+| `src/ops/geqrf/can_run.hh` | `can_run`, in a header so the host test `GeqrfCanRunDevice` can call it with a synthetic `select::Device` |
 | `src/ops/geqrf/geqrf.hh` | internal header declaring `geqrf_buffer_size_bound` |
 | `src/dispatch/entry_points/factorization.cc` | geqrf's entry points and `geqrf_throw_native_unimplemented` removed |
 | `include/batchlas/blas/dispatch/route_geqrf.hh`, `src/backends/geqrf_route.hh` | deleted |
@@ -126,7 +127,7 @@ eight tables from it, and they match (636 rows each).
 Deleted from `tests/route_vocabulary_tests.cc`, the whole `RouteGeqrf.*` suite:
 
 - `VendorFreeFallbackHandsOverTheNativeRoute` → `VendorFreeWalkIsTheOldTieBreak`
-- `WideIsUnsupportedByEveryNativeArm`, `CorrectnessGatesAreNotSpeedGates`, `CtaCapacityIsAnAreaAndAHeightNotTwoExtentBounds`, `Sg32GatesBothNativeArms` → `CanRunFalsePinsThrow`, `CanRunEqualsLaunch`, `GeqrfCandidatesCpu.CpuQueueRunsNoNativeFamily`
+- `WideIsUnsupportedByEveryNativeArm`, `CorrectnessGatesAreNotSpeedGates`, `CtaCapacityIsAnAreaAndAHeightNotTwoExtentBounds`, `Sg32GatesBothNativeArms` → `CanRunFalsePinsThrow`, `CanRunEqualsLaunch`, `GeqrfCandidatesCpu.CpuQueueRunsNoNativeFamily`, and for the device clauses `GeqrfCanRunDevice.DeviceClausesRefuseTheNativeFamilies`. The queue-driven tests skip without a GPU or sub-group size 32, and every GPU here has both plus SLM for a CTA element, so on these boxes only the host test (synthetic `select::Device`: `is_gpu = false`, `has_sg32 = false`, and an SLM budget straddling the smallest that holds one CTA element) can catch a dropped `is_gpu`, `has_sg32` or Blocked CTA-tier clause. It ports `Sg32GatesBothNativeArms`, which ran on the host
 - `PreferredIsTheMeasuredOrderFloorAndTheTallClause`, `NativeWalkTakesTinyInTheWindowGaps` → `AutoReadsTheTranscribedTable`, `GeqrfTranscribedTable.RowsHoldTheOldPreference`
 - `BareOriginResolvesToASpecificAlgorithm`, `BatchlasGeqrfRouteIsActuallyRead` → `LegacyAliasesAndClassWords`
 - `RectangularIsSupportedAndSquarenessIsNotAGate`, `AbsentKernelIsUnsupportedRatherThanSelectable` → `CanRunEqualsLaunch` on tall shapes
@@ -166,6 +167,17 @@ Targets: `geqrf_tests`, `geqrf_candidates_tests`, `geqrf_tests_native`, `orgqr_t
 | `workspace(blocked)` returns 0 | `ExactWorkspaceInAPoisonedArena` plus every test that runs blocked (the driver's allocator throws) |
 | `launch(cta)` runs the blocked driver | `PinnedRunIsTheDirectKernelBitForBit` plus every test that runs cta (cta's 0-byte workspace is too small for blocked) |
 
+Review round, breaks in `can_run.hh` (restored from a saved copy, md5 `80b5bec2…` verified after
+each; `geqrf_candidates_tests` in `build`, GPU 0, all four dtypes):
+
+| Break | Red set |
+|---|---|
+| `d.is_gpu` dropped | `GeqrfCanRunDevice.DeviceClausesRefuseTheNativeFamilies`, `GeqrfCandidatesCpu.CpuQueueRunsNoNativeFamily` (the NETLIB instantiations get a CPU queue) |
+| `d.has_sg32` dropped | `GeqrfCanRunDevice.DeviceClausesRefuseTheNativeFamilies` only |
+| Blocked's `geqrf_cta_max_elems_for_slm(budget) >= 1` dropped | `GeqrfCanRunDevice.DeviceClausesRefuseTheNativeFamilies` only |
+
+The oracle `expect_runs()` now also carries Blocked's CTA-tier clause.
+
 ### (b) Data gate: off-grid replay
 
 `geqrf_transcribe --offgrid` evaluates the OLD `resolve_route` at 3,000 random points per dtype
@@ -181,9 +193,14 @@ the grid.
 | 97,280 B budget (sm_89 and sm_120): tiny 32/32/32/16, CTA area 11776/5888/5888/2944 | 2,316 - 2,329 | **100.000%** in all 16 cells |
 | 45,056 B budget (a 48 KiB device) | ~2,320 | 100.000% |
 | small capacities (tiny 16/8/16/8, CTA max_m and area 3000/2500, 1500/1200, 4000/1000, 700/700 for float/double/cfloat/cdouble) | ~2,300 | 100.000% |
-| negative control: grid points 31/63 (float) and 47/75 (double) removed | 2,328 / 2,333 | 99.01% / 99.10% (vendor), so the gate does see a missing threshold |
+| negative control: grid points 31/63 (float) and 47/75 (double) removed | 2,328 / 2,333 | 99.01% / 99.10% (vendor): **exit 1** |
 
-No region disagrees.
+No region disagrees. The gate requires 100% agreement (any disagreement exits 1): the
+transcription is exact by construction, and a missing threshold costs only about 1%, so a 99%
+tolerance (the first version) passed the negative control. The gate checks the tables against
+the OLD router through a Python model: its `can_run` is the old `supports()` (`m <= cta_max_m`
+and `m*n <= cta_max_elems`), not `geqrf_cta_fits`, and its `nearest` is the converter's. The
+shipped C++ select path is covered by `AutoReadsTheTranscribedTable` and by (c).
 
 ### (c) Cross-check against the 424a45bc binary
 

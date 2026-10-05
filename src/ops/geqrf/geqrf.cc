@@ -1,7 +1,7 @@
 // geqrf: the whole selection path (docs/design/flat-kernel-selection.md §4.3, rule R1;
 // docs/design/flat-select-p5/geqrf.md). public geqrf() -> choose() -> std::visit -> launch.
 // The kernel for a shape is the first runnable entry of the nearest row in
-// tuned/geqrf.<dtype>.<device>.txt; can_run() below only removes entries that cannot run.
+// tuned/geqrf.<dtype>.<device>.txt; can_run() (can_run.hh) only removes entries that cannot run.
 // Tiny factors a square n <= 32 in registers, Cta holds the whole panel in local memory, and
 // Blocked factors nb-wide panels with Cta's device function and updates the trailing matrix
 // with the public gemm, which picks its own kernel.
@@ -13,6 +13,7 @@
 #include <batchlas/blas/dispatch/no_route.hh>
 #include <batchlas/blas/dispatch/vendor_available.hh>
 
+#include "can_run.hh"
 #include "choice.hh"
 #include "geqrf.hh"
 #include "../../select/select.hh"
@@ -28,14 +29,6 @@
 namespace batchlas {
 namespace ops::geqrf {
 
-template <class... F>
-struct overloaded : F... { using F::operator()...; };
-template <class... F>
-overloaded(F...) -> overloaded<F...>;
-
-template <class T>
-using MV = MatrixView<T, MatrixFormat::Dense>;
-
 template <class T>
 select::Key key_of(const MV<T>& A) {
     const std::int64_t m = A.rows(), n = A.cols();
@@ -47,26 +40,6 @@ select::Key key_of(const MV<T>& A) {
 template <Backend B>
 const select::Device& device(Queue& q) {
     return select::device_of<B>(q, dispatch::factorization_vendor_available<B>);
-}
-
-// Correctness only (R3): each clause is the argument check at the top of that driver's
-// *_dispatch. One launch covers the batch with a single (m, n, ld, stride), and on a wide view
-// the trailing update runs off the panel, so no native family takes either.
-template <class T>
-bool can_run(const GeqrfChoice& c, const select::Device& d, const MV<T>& A) {
-    const std::int64_t m = A.rows(), n = A.cols();
-    const bool native = d.is_gpu && d.has_sg32 && !A.is_heterogeneous() && m >= n && n >= 1 && A.batch_size() >= 1;
-    const auto budget = static_cast<std::size_t>(d.slm_budget);
-    return std::visit(overloaded{
-        [&](Tiny) { return native && m == n && n <= sycl_geqrf::geqrf_tiny_max_n_for_slm<T>(budget); },
-        [&](Cta) { return native && sycl_geqrf::geqrf_cta_fits<T>(static_cast<int>(m), static_cast<int>(n), budget); },
-        // Blocked's panel leaf IS Cta's device function: it needs the tier present, not the fit.
-        [&](Blocked) {
-            return native && sycl_geqrf::geqrf_blocked_available<T>() &&
-                   sycl_geqrf::geqrf_cta_max_elems_for_slm<T>(budget) >= 1;
-        },
-        [&](Vendor) { return d.has_vendor_solver; },
-    }, c);
 }
 
 template <Backend B, class T>

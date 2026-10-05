@@ -8,6 +8,9 @@ this script takes the nearest row of tuned/geqrf.<dtype>.<device>.txt with the c
 nearest() (the same rule as select's Table::nearest) and walks it with a can_run model at the
 same capacities: tiny needs m == n <= tiny_max_n, cta m <= cta_max_m and m*n <= cta_max_elems,
 blocked m >= n >= 1, vendor only when present. Then the last resort (blocked, vendor).
+Any disagreement fails (exit 1). This checks the tables against the OLD router through a Python
+model (its can_run is the old supports(), not geqrf_cta_fits); it does not run the shipped C++
+select path, which geqrf_candidates_tests and the binary cross-check cover.
 
     python3 tools/transcribe/geqrf_offgrid_gate.py points.csv [--device sm_89 sm_120]
 """
@@ -101,7 +104,8 @@ def main():
         for what, cnt in regions[tag].most_common(8):
             print(f"    {cnt:5d}  {what}")
     print(f"worst agreement {100 * worst:.3f}%")
-    return 0 if worst >= 0.99 else 1
+    # The transcription is exact by construction; a missing threshold costs only ~1% (99.01%).
+    return 0 if worst == 1.0 else 1
 
 
 if __name__ == "__main__":
