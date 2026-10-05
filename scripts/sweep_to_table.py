@@ -345,6 +345,29 @@ ORGQR = OpSpec(
 )
 
 
+def ormqr_key(r):
+    try:
+        key = (str(r["side"]), str(r["trans"]), int(r["m"]), int(r["k"]), int(r["q"]), int(r["batch"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+    ok = key[0] in ("L", "R") and key[1] in ("N", "T", "C") and min(key[2:]) >= 1 and key[3] <= key[2]
+    return key if ok else None
+
+
+# ormqr: work ~ m k q batch; trans keeps T and C apart (complex Trans has no native kernel). No
+# sweep source: sm_89 and sm_120 are both transcribed from the arch-blind old router.
+ORMQR_CHOICES = ("blocked", "vendor")
+ORMQR = OpSpec(
+    op="ormqr",
+    keys="side:exact trans:exact m:log k:log q:log batch:log",
+    row_ops=("ormqr",),
+    row_key=ormqr_key,
+    arm_spelling={c: c for c in ORMQR_CHOICES},
+    arm_route={c: (("vendor:vendor",) if c == "vendor" else (f"native:{c}",)) for c in ORMQR_CHOICES},
+    candidate_order=list(ORMQR_CHOICES),
+)
+
+
 def parse_keys(spec):
     """'# keys:' text -> [(name, is_log, weight)]; a :log weight defaults to 1."""
     out = []
@@ -736,7 +759,7 @@ GEQRF = OpSpec(
 )
 
 POTRF.review = potrf_offgrid
-OPS = [POTRF, POSV, TRSM, GEMM, GEMV, GEQRF, ORGQR]
+OPS = [POTRF, POSV, TRSM, GEMM, GEMV, GEQRF, ORGQR, ORMQR]
 OP_BY_NAME = {s.op: s for s in OPS}
 
 

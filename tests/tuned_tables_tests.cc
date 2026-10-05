@@ -11,6 +11,7 @@
 #include "../src/ops/potrf/choice.hh"
 #include "../src/ops/trsm/choice.hh"
 #include "../src/ops/gemv/choice.hh"
+#include "../src/ops/ormqr/choice.hh"
 #include "../src/select/select.hh"
 
 #include <algorithm>
@@ -89,6 +90,13 @@ std::vector<std::string> candidates(const std::string& op, const std::string& dt
         if (dtype == "double") return spellings(orgqr::candidates<double>());
         if (dtype == "cfloat") return spellings(orgqr::candidates<std::complex<float>>());
         if (dtype == "cdouble") return spellings(orgqr::candidates<std::complex<double>>());
+    }
+    namespace ormqr = batchlas::ops::ormqr;
+    if (op == "ormqr") {
+        if (dtype == "float") return spellings(ormqr::candidates<float>());
+        if (dtype == "double") return spellings(ormqr::candidates<double>());
+        if (dtype == "cfloat") return spellings(ormqr::candidates<std::complex<float>>());
+        if (dtype == "cdouble") return spellings(ormqr::candidates<std::complex<double>>());
     }
     return {};
 }
@@ -435,6 +443,35 @@ TEST(TunedTables, OrgqrTablesHoldExactlyTheChoiceGridOnBothDevices) {
                 EXPECT_EQ(a.rows[i].ranked[j].spelling, b.rows[i].ranked[j].spelling) << dt << " row " << i;
         }
     }
+}
+
+TEST(TunedTables, OrmqrTablesDeclareChoiceKeyNames) { expect_tables_declare("ormqr", batchlas::ops::ormqr::key_names); }
+
+// ormqr's transcriber spells choice.hh's grid by hand (k over grid_m up to m), and one
+// transcription serves both devices: every table holds exactly that grid, both sides, N/T/C.
+TEST(TunedTables, OrmqrTablesHoldExactlyTheChoiceGridOnBothDevices) {
+    namespace om = batchlas::ops::ormqr;
+    std::set<std::string> want;
+    for (const char* s : {"L", "R"})
+        for (const char* tr : {"N", "T", "C"})
+            for (int m : om::grid_m)
+                for (int k : om::grid_m)
+                    for (int q : om::grid_q)
+                        for (int b : om::grid_batch)
+                            if (k <= m)
+                                want.insert(std::string(s) + " " + tr + " " + std::to_string(m) + " " +
+                                            std::to_string(k) + " " + std::to_string(q) + " " + std::to_string(b));
+    for (const char* dev : {"sm_89", "sm_120"})
+        for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
+            const sel::Table& t = embedded(std::string("ormqr.") + dt + "." + dev + ".txt");
+            std::set<std::string> got;
+            for (const auto& row : t.rows)
+                got.insert(row.keys[0] + " " + row.keys[1] + " " + row.keys[2] + " " + row.keys[3] + " " +
+                           row.keys[4] + " " + row.keys[5]);
+            EXPECT_EQ(got, want) << dt << " " << dev;
+            EXPECT_EQ(t.rows.size(), want.size()) << dt << " " << dev;
+            EXPECT_EQ(t.source.rfind("transcribed:", 0), 0u) << t.file;
+        }
 }
 
 // The sparse sm_89 tables (final-review finding): with equal weights, float n=24 batch=512

@@ -159,6 +159,7 @@ target_sources(batchlas_dispatch_obj PRIVATE ops/potrf/potrf.cc ops/posv/posv.cc
 target_sources(batchlas_dispatch_obj PRIVATE ops/gemv/gemv.cc)
 target_sources(batchlas_dispatch_obj PRIVATE ops/geqrf/geqrf.cc)
 target_sources(batchlas_dispatch_obj PRIVATE ops/orgqr/orgqr.cc)
+target_sources(batchlas_dispatch_obj PRIVATE ops/ormqr/ormqr.cc)
 add_subdirectory(extensions)
 add_subdirectory(util)
 add_subdirectory(extra)

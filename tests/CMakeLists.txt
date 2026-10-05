@@ -58,6 +58,7 @@ set(TEST_TARGETS
     ormqr_tests
     ormqr_cta_tests
     ormqr_blocked_tests
+    ormqr_candidates_tests
     orgqr_tests
     orgqr_candidates_tests
     transpose_tests
@@ -169,7 +170,7 @@ set(BATCHLAS_TEST_LABELS_blas
     transpose_tests norm_tests cond_tests inverse_tests)
 set(BATCHLAS_TEST_LABELS_ortho
     ortho_tests ormqr_tests ormqr_cta_tests ormqr_blocked_tests orgqr_tests
-    orgqr_candidates_tests)
+    orgqr_candidates_tests ormqr_candidates_tests)
 set(BATCHLAS_TEST_LABELS_tridiag
     steqr_tests stedc_tests stebz_tests stein_tests
     sytrd_sy2sb_tests sytrd_sb2st_tests sytrd_sb2st_hh_tests
