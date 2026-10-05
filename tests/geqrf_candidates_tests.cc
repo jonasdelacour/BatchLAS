@@ -470,6 +470,7 @@ TYPED_TEST(GeqrfCandidates, BoundCoversEverySubViewChoice) {
             geqrf_buffer_size_bound<B, T>(*this->ctx, bound_view, Span<T>(nullptr, std::size_t(bn) * batch));
         for (int m = 1; m <= bm; m += std::max(1, bm / 9))
             for (int n = 1; n <= bn; n += std::max(1, bn / 7)) {
+                if (m < n && !TestFixture::kVendor) continue;  // vendor-free wide: no route at all
                 const MVof<T> sub(nullptr, m, n, m, m * n, batch);
                 const Span<T> tau(nullptr, std::size_t(std::min(m, n)) * batch);
                 EXPECT_LE((geqrf_buffer_size<B, T>(*this->ctx, sub, tau)), bound) << m << "x" << n << " under Auto";
