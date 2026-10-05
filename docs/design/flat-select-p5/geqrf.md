@@ -139,6 +139,69 @@ In `tests/geqrf_tests.cc`:
 - `WideIsRefusedAndTallAndSquareAreNot` (a) now asks pins instead of `supports()`.
 - The env pins became `select::ScopedPin`.
 
-## Gate
+## Gate results (RTX 4090 box, GPU 0)
 
-See the "Gate results" section below.
+### (a) Correctness
+
+Targets: `geqrf_tests`, `geqrf_candidates_tests`, `geqrf_tests_native`, `orgqr_tests`,
+`ormqr_tests`, `ortho_tests`, `gesvd_tests`, `sytrd_sy2sb_tests`, `sytrd_sb2st_tests`,
+`syev_two_stage_tests`, `select_tests`, `tuned_tables_tests`, `route_vocabulary_tests`,
+`backend_dispatch_tests` and `options_api_tests`. Each was built and run in `build` and in
+`build-vf`, and the failing names were compared with the same targets built from `424a45bc`.
+
+- **Vendor build:** the failing set is the same on both sides: `ortho_tests` segfaults (a known
+  defect on this box). Every other test passes, `geqrf_candidates_tests` included.
+- **Vendor-free build:** the failing case names are the same on both sides, a set of 71 that
+  were already failing at `424a45bc` (`options_api`, `ortho`, `ormqr`, `orgqr`, `gesvd` and
+  `sytrd_sb2st`). `geqrf_candidates_tests` passes. Its one vendor-free failure was a test bug,
+  fixed in `535523dc`: wide sub-views have no route without a vendor.
+
+**Deliberate breaks** in `geqrf.cc`. Each was restored from a saved copy and md5-verified
+(`7204a3a2…`). Each red set below covers all four CUDA dtypes:
+
+| Break | Red set |
+|---|---|
+| `key_of`: aspect always 1 | `AutoReadsEveryKeyField`, `AutoReadsTheTranscribedTable`, `TraceShowsTheLookupKey` |
+| `can_run(cta)`: the fit check dropped | `CanRunEqualsLaunch`, `CanRunFalsePinsThrow`, `PinnedCandidatesStraddleTheirLimits`, `AutoReadsTheTranscribedTable` |
+| `workspace(blocked)` returns 0 | `ExactWorkspaceInAPoisonedArena` plus every test that runs blocked (the driver's allocator throws) |
+| `launch(cta)` runs the blocked driver | `PinnedRunIsTheDirectKernelBitForBit` plus every test that runs cta (cta's 0-byte workspace is too small for blocked) |
+
+### (b) Data gate: off-grid replay
+
+`geqrf_transcribe --offgrid` evaluates the OLD `resolve_route` at 3,000 random points per dtype
+and capacity set. `n` and `m` are log-uniform in [1, 8192]: a third square, half tall (half of
+those within aspect 16), the rest wide. Each point gets the old choice with a vendor and without
+one. `tools/transcribe/geqrf_offgrid_gate.py` takes the nearest row of each new table (the
+converter's `nearest`, which applies the same rule as `Table::nearest`), walks it with a
+`can_run` model at the same capacities, then the last resort, and skips the points that fall on
+the grid.
+
+| Capacities | Off-grid points per (dtype, device, vendor or vendor-free) | Agreement |
+|---|---|---|
+| 97,280 B budget (sm_89 and sm_120): tiny 32/32/32/16, CTA area 11776/5888/5888/2944 | 2,316 - 2,329 | **100.000%** in all 16 cells |
+| 45,056 B budget (a 48 KiB device) | ~2,320 | 100.000% |
+| small capacities (tiny 16/8/16/8, CTA max_m and area 3000/2500, 1500/1200, 4000/1000, 700/700 for float/double/cfloat/cdouble) | ~2,300 | 100.000% |
+| negative control: grid points 31/63 (float) and 47/75 (double) removed | 2,328 / 2,333 | 99.01% / 99.10% (vendor), so the gate does see a missing threshold |
+
+No region disagrees.
+
+### (c) Cross-check against the 424a45bc binary
+
+A host program runs Auto `geqrf` on 24 cells (each dtype, threshold edges and off-grid shapes),
+one process per cell, with `BATCHLAS_COVERAGE_OUT`. It was linked once against `424a45bc` and
+once against the branch.
+
+- **Vendor build:** 24/24 cells choose the same family. The old row spells the vendor
+  `vendor,auto` and the new one `vendor,vendor`.
+- **Vendor-free build:** 23/23 runnable cells agree. The wide cell (`float 10x20`) throws
+  `NoRouteError` in both builds. The old build also wrote a `reached ... vendor,auto` row for
+  it, a route that never ran. The new build writes only the `miss` row.
+
+### Repository checks
+
+`run_local_checks.sh` passes everything except `check_cmake_syntax`, which trips over CMake's
+generated files under the in-tree `build-vf/` directory. That is an artifact of where the
+directory sits, not of this change. `check_tuned_tables.py` prints `no tools/tune/geqrf_spec.cc,
+geqrf tables not checked`. The tables are transcribed, so there is no tuner spec yet.
+`check_evidence_anchors.py` reports 0 dangling references. `factor_bench geqrf ...
+--arms=vendor,cta,native:blocked,bogus` reports `pin_parsed` 1/1/1/0.
