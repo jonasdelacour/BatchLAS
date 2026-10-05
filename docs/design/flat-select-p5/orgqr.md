@@ -73,7 +73,18 @@ select_tests, tuned_tables_tests, route_vocabulary_tests and options_api_tests.
 
 - `build`: 7/8 pass. ortho_tests segfaults, as it does in the 424a45bc baseline. The set of
   failing gtest case names is empty on both sides.
-- `build-vf`: see the vendor-free row in the summary below.
+- `build-vf`: orgqr_candidates_tests, select_tests, tuned_tables_tests, route_vocabulary_tests
+  and geqrf_tests pass. options_api_tests, ortho_tests and orgqr_tests fail, and those 21
+  failing case names (`OptionsApi.Blas3OptionsMatchPositional`, `OrgqrTest/0-3` on Backend 6,
+  `OrthoMatrixTest` / `OrthoAgainstMTest`) are identical to the 424a45bc vendor-free baseline.
+  orgqr_candidates_tests first failed three cases in build-vf: its fixture factored wide inputs
+  with a geqrf that has no vendor-free route. That is fixed in the test.
+- Deliberate breaks, each restored from a saved copy and md5-verified
+  (`bee1b1e3a7c9161864578d8cbcb78a21`):
+  - Dropping `n <= m` from Blocked's `can_run` turns exactly `CanRunEqualsLaunch`,
+    `CanRunFalsePinsThrow` and `PinnedCandidatesStraddleTheirLimits` red (x4 dtypes).
+  - Keying `n` on `A.rows()` in `key_of` turns exactly `AutoReadsEveryKeyField` and
+    `TraceKeyIsMAndN` red.
 
 **(b) Data gate.** The transcriber's `--random` mode evaluates the OLD router at 2500 off-grid
 points per dtype. The points are log-uniform `(m, n)` with log2 extents in [0, 14), both
