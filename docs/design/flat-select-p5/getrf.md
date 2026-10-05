@@ -105,7 +105,41 @@ tuned/transcribed/getrf.csv --sha 424a45bc`. `--check` passes.
 - `tuned_tables_tests`: getrf candidates, key names, and
   `GetrfTablesHoldExactlyTheChoiceGridOnBothDevices` (sm_89 rows == sm_120 rows).
 
-GATE_RESULTS_PLACEHOLDER
+## Gate results (2026-10-05, RTX 4090 GPU 0)
+
+**(a) Correctness.** Targets `getrf_candidates_tests getrf_tests (+ getrf_tests_native) gesv_tests
+inverse_tests linalg_layer_tests options_api_tests select_tests tuned_tables_tests
+route_vocabulary_tests resident_capacity_tests`.
+- `build`: 11/11 pass. `getrf_candidates_tests`: 69 pass, 68 skipped (the NETLIB instantiations
+  on a GPU queue and the CUDA ones of the CPU suite).
+- `build-vf`: 10/11; the one failure, `OptionsApi.Blas3OptionsMatchPositional`, also fails in the
+  424a45bc vendor-free baseline. That baseline's other failure,
+  `LuTest/{4,6}.TinyRoutesInsideItsMeasuredWindowAndNowhereElse`, is a test this branch deletes
+  (ported into `AutoReproducesTheOldRouterOnTheRealDevice`). The vendor-present baseline is all
+  green, the same as this branch. No new failing names.
+- Deliberate breaks (restored from a saved copy, md5 `93e0b3c0...` checked): `key_of`'s batch fixed
+  at 128 makes `AutoReadsEveryKeyField` red for all 4 dtypes and `AutoReproducesTheOldRouterOnTheRealDevice`
+  red for cfloat only (its batch-gated 256..511 window). A `cta` `can_run` that admits one past the
+  ceiling makes `CanRunEqualsLaunch`, `CanRunFalsePinsThrow` and `PinnedCandidatesStraddleTheirLimits`
+  red. Nothing else turned red.
+
+**(b) Data gate** (`tools/transcribe/getrf_gate.py`, oracle = the transcriber's `--eval` mode built
+against 424a45bc): 3000 random log-uniform off-grid points per dtype and device (n in [1, 2048],
+batch in [1, 65536]; about 1850-1900 per set are off-grid in both keys). Each point is checked
+vendor-present and vendor-free, at CTA capacity unlimited, 48 and 24, which is 18000 comparisons
+per dtype and device. **Agreement: 100.00% in every dtype on both devices**, with no disagreeing
+region. The grid is a full Cartesian product with points on both sides of every threshold, so
+nearest-point lookup separates per key and reproduces each step exactly. Check that the gate can
+fail: removing the n = 4, 25, 255, 511 rows from `getrf.cfloat.sm_89.txt` drops it to 95.70% and
+names the 256/512 rows. The file was restored and md5-checked afterwards.
+
+**(c) Coverage cross-check** (`factor_bench getrf <t> n n 0 batch 1 --arms=auto`, coverage
+`reached` rows, 424a45bc binary against this branch): 22 cells straddling every threshold (float
+4/5, 32/33, 100, 255/256, 600; cfloat 8/9, 24/25, 300 at batch 128/512, 512; double 16, 64, 520;
+cdouble 8, 16/17, 300). **22/22 agree** on the origin and the kernel: native tiny at float 5 and 32
+and cfloat 9 and 24; native blocked at float 256 and 600, cfloat 300 at batch 512 and cfloat 512 at
+batch 128; vendor everywhere else. The only textual difference is the algorithm column of a vendor
+row, which reads `auto` in the old router and `vendor` (the choice spelling) in the new one.
 
 ## Doc changes for the integrator
 
