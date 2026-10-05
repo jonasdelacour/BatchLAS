@@ -27,9 +27,6 @@ BATCHLAS_INTERNAL_API int getrf_cta_max_n_for_slm(
     int min_blocks_per_sm = resident::kMinBlocksPerSm);
 
 template <typename T>
-int getrf_cta_max_n();
-
-template <typename T>
 BATCHLAS_INTERNAL_API bool getrf_blocked_available();
 
 // THE REGISTER-RESIDENT TIER, and the ONE place its ceiling is spelled: a compile-time

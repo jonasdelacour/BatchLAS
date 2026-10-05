@@ -53,16 +53,15 @@ std::vector<std::string> spellings(const std::array<Choice, N>& candidates) {
     return out;
 }
 
-// A coverage `reached` row (chosen_origin, chosen_algo) -> a pin spelling for this op. Old
-// RouteTable rows read native:<algo> or vendor:auto; flat-selection rows carry the spelling.
+// A coverage `reached` row (chosen_origin, chosen_algo) -> a pin spelling for this op.
+// Flat-selection rows carry the spelling; a pre-flat-selection binary (--old-csv) wrote
+// native:<algo> or vendor:auto, and its bare `lpanel` is the only algo that is not a spelling.
 template <class Choice>
-std::string normalize_route(const select::Rules& rules, const std::string& origin, const std::string& algo) {
+std::string normalize_route(const std::string& origin, const std::string& algo) {
     if (origin == "vendor") return "vendor";
-    const std::string legacy = origin + ":" + algo;
-    for (const select::Alias& a : rules.aliases)
-        if (legacy == a.name) return std::string(a.spelling);
-    if (auto c = select::parse<Choice>(algo)) return select::to_string(*c);
-    return legacy;
+    const std::string text = algo == "lpanel" ? "lpanel:panel=8" : algo;
+    if (auto c = select::parse<Choice>(text)) return select::to_string(*c);
+    return origin + ":" + algo;
 }
 
 template <class Choice, class Problem>

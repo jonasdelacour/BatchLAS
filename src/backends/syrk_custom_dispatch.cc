@@ -7,15 +7,6 @@
 #include "level3_fused.hh"
 #include "level3_vendor_fallback.hh"
 
-// WP1 S2: the expansions' terminal GEMM is the PUBLIC entry point, not
-// gemm_cublasdx. Vendor-free by inspection -- gemm.hh reaches only
-// sycl-device-queue.hh, sycl-span.hh, matrix.hh, enums.hh and
-// queue-dispatch.hh.
-#include <batchlas/blas/functions/gemm.hh>
-
-#include <batchlas/blas/dispatch/route.hh>
-#include <batchlas/blas/dispatch/route_env.hh>
-
 #include "../util/kernel-trace.hh"
 
 #include <algorithm>
@@ -30,32 +21,14 @@ namespace {
 
 constexpr int kSyrkCublasDxTile = 32;
 
-// BATCHLAS_SYRK_VARIANT selects a route. The custom routes are named
-// separately so each stays independently measurable and testable: `triangular`
-// is the tile-masked kernel that computes only the requested half of a wide C,
-// `gram` the single-tile kernel for a narrow C over a long reduction,
-// `cublasdx` the fused kernel, and `gemm` the full n x n batched GEMM the
-// triangular route replaces.
-//
-// `gemm` computes and stores both triangles, which is not what SYRK means: the
-// half the caller did not name is the caller's storage. It exists to measure
-// the arithmetic the triangular route saves, and the automatic choice never
-// selects it -- reaching it takes naming it here.
-// The private SyrkRoute enum this used to declare is gone: it named the same
-// six things dispatch::Route names, in a spelling only this file understood.
-// The legacy values are unchanged and pinned by tests/route_vocabulary_tests.cc
-// -- including the two that do NOT mean what the canonical vocabulary would
-// read them as: "custom" is the fused cuBLASDx kernel here (not the
-// register-tiled GEMM family), and "gemm" is a vendor route (it runs through
-// gemm_cublasdx). See parse_legacy_route_value.
-dispatch::Route syrk_route_request() {
-    const auto parsed = dispatch::parse_route_env(dispatch::Op::syrk);
-    return parsed.found ? parsed.route
-                        : dispatch::legacy_unset_default(dispatch::Op::syrk);
-}
-
-bool syrk_route_is(dispatch::Algorithm a) {
-    return syrk_route_request().algo == a;
+// BATCHLAS_SYRK_ROUTE: vendor; triangular, the tile-masked kernel that computes only
+// the requested half of a wide C; gram, the single-tile kernel for a narrow C over a
+// long reduction; native, whichever of the two Auto would take; cublasdx, the fused
+// MathDx kernel (throws when it cannot run).
+detail::Level3Pin syrk_pin() {
+    using detail::Level3Pin;
+    return detail::level3_pin("syrk", {Level3Pin::Native, Level3Pin::Vendor, Level3Pin::Triangular,
+                                       Level3Pin::Gram, Level3Pin::Cublasdx});
 }
 
 bool syrk_problem_supported(const MatrixView<float, MatrixFormat::Dense>& A,
@@ -143,28 +116,14 @@ bool syrk_prefer_cuda_custom_heuristic(const MatrixView<float, MatrixFormat::Den
     return min_dim * 2 >= max_dim && tiled_work >= 8;
 }
 
-Event syrk_cublasdx_fallback_gemm(Queue& ctx,
-                                  const MatrixView<float, MatrixFormat::Dense>& A,
-                                  const MatrixView<float, MatrixFormat::Dense>& C,
-                                  float alpha,
-                                  float beta,
-                                  Transpose transA) {
-    const Transpose transB = transA == Transpose::NoTrans ? Transpose::Trans : Transpose::NoTrans;
-    BATCHLAS_KERNEL_TRACE_SCOPE("syrk_cuda_custom.gemm_fallback");
-    return ::batchlas::gemm<Backend::CUDA, float>(ctx, A, A, C, alpha, beta, transA, transB, ComputePrecision::Default);
-}
-
 } // namespace
 
 bool syrk_route_prefers_vendor() {
-    const auto r = syrk_route_request();
-    // The DiagFullGemm measurement route is a vendor route but is emphatically
-    // NOT "prefer the vendor syrk": it exists to run the full n x n GEMM.
-    return dispatch::is_plain_vendor(r);
+    return syrk_pin() == detail::Level3Pin::Vendor;
 }
 
 bool syrk_route_requests_gram() {
-    return syrk_route_is(dispatch::Algorithm::GramTiles);
+    return syrk_pin() == detail::Level3Pin::Gram;
 }
 
 bool syrk_use_cuda_custom(const Queue& ctx,
@@ -172,11 +131,12 @@ bool syrk_use_cuda_custom(const Queue& ctx,
                           const MatrixView<float, MatrixFormat::Dense>& C,
                           Uplo,
                           Transpose transA) {
-    const auto route = syrk_route_request();
-    if (route.origin != dispatch::Origin::Auto && !dispatch::is_plain_vendor(route)) {
+    using detail::Level3Pin;
+    const Level3Pin pin = syrk_pin();
+    if (pin != Level3Pin::Auto && pin != Level3Pin::Vendor) {
         return true;
     }
-    if (dispatch::is_plain_vendor(route) || !detail::is_gpu_queue(ctx) ||
+    if (pin == Level3Pin::Vendor || !detail::is_gpu_queue(ctx) ||
         !syrk_problem_supported(A, C, transA) || !syrk_triangular_supported(A, C)) {
         return false;
     }
@@ -201,65 +161,51 @@ Event syrk_cuda_custom(Queue& ctx,
                        float beta,
                        Uplo uplo,
                        Transpose transA) {
-    // WP1 S0 instrumentation. Every `record` below sits BESIDE a return, never
-    // in place of one, and is a no-op unless BATCHLAS_COVERAGE_OUT is set --
-    // so this function's decisions are unchanged by construction. See
-    // level3_coverage.hh for why these four ops cannot simply use
-    // dispatch::resolve_route.
-    const auto rec = [&](dispatch::Route taken, bool native_supported) {
-        detail::record_level3_route(dispatch::Op::syrk, taken,
+    const auto rec = [&](const char* taken, bool native_supported) {
+        detail::record_level3_route(Op::syrk, taken,
                                     C.rows(), C.cols(),
                                     transA == Transpose::NoTrans ? A.cols() : A.rows(),
                                     A.batch_size(), native_supported,
                                     {uplo, Side::Left, Diag::NonUnit, transA});
     };
 
+    using detail::Level3Pin;
+    const Level3Pin pin = syrk_pin();
     if (!syrk_problem_supported(A, C, transA)) {
-        rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto}, false);
+        if (pin == Level3Pin::Cublasdx) {
+            detail::throw_forced_cublasdx_unavailable("syrk", "the problem shape or transpose mode is unsupported");
+        }
+        rec("vendor", false);
         return detail::syrk_vendor_fallback(ctx, A, C, alpha, beta, uplo, transA);
     }
 
-    const auto route = syrk_route_request();
-    if (route.algo == dispatch::Algorithm::DiagFullGemm) {
-        rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::DiagFullGemm}, true);
-        return syrk_cublasdx_fallback_gemm(ctx, A, C, alpha, beta, transA);
+    if (pin == Level3Pin::Cublasdx) {
+        auto fused = detail::syrk_fused_try(ctx, A, C, alpha, beta, uplo, transA);
+        if (fused.outcome == detail::FusedResult::Outcome::Ran) {
+            rec("cublasdx", true);
+            return std::move(fused.event);
+        }
+        detail::throw_forced_cublasdx_unavailable("syrk", "no fused kernel ran for this problem");
     }
+
+    const bool any_tile = pin == Level3Pin::Auto || pin == Level3Pin::Native;
     if (syrk_triangular_supported(A, C)) {
-        // A narrow C is one tile wide, so the triangular grid has nothing to
-        // skip and would charge a full 128-wide tile for it. Auto splits the
-        // range at that point; either kernel can still be pinned by name.
-        const bool gram = route.algo == dispatch::Algorithm::GramTiles ||
-            (route.origin == dispatch::Origin::Auto && syrk_prefer_gram_tiles(C));
-        if (gram) {
-            rec(dispatch::Route{dispatch::Origin::Native, dispatch::Algorithm::GramTiles}, true);
+        // A narrow C is one tile wide, so the triangular grid has nothing to skip and
+        // would charge a full 128-wide tile for it. Auto splits the range there.
+        if (pin == Level3Pin::Gram || (any_tile && syrk_prefer_gram_tiles(C))) {
+            rec("gram", true);
             return detail::syrk_gram_tiles(ctx, A, C, alpha, beta, uplo, transA);
         }
-        if (route.algo == dispatch::Algorithm::TriangularTiles ||
-            route.origin == dispatch::Origin::Auto) {
-            rec(dispatch::Route{dispatch::Origin::Native, dispatch::Algorithm::TriangularTiles}, true);
-            return detail::syrk_triangular_tiles(ctx, A, C, alpha, beta, uplo, transA);
-        }
+        rec("triangular", true);
+        return detail::syrk_triangular_tiles(ctx, A, C, alpha, beta, uplo, transA);
     }
-    if (route.origin == dispatch::Origin::Auto) {
-        // Reached when the batch is heterogeneous, so the tile kernels cannot
-        // serve it -- native_supported is false, and that is the distinction
-        // the row exists to record.
-        rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto}, false);
-        return detail::syrk_vendor_fallback(ctx, A, C, alpha, beta, uplo, transA);
+    if (!any_tile) {
+        throw std::invalid_argument("syrk: BATCHLAS_SYRK_ROUTE=" + std::string(detail::level3_pin_word(pin)) +
+                                    " cannot run a heterogeneous batch");
     }
-
-    // The fused tail lives in level3_fused_cuda.cc now (WP1 S3).
-    auto fused = detail::syrk_fused_try(ctx, A, C, alpha, beta, uplo, transA);
-    if (fused.outcome == detail::FusedResult::Outcome::Ran) {
-        rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::FusedDevice}, true);
-        return std::move(fused.event);
-    }
-
-    // The route TAKEN, not the one requested: with MathDx absent the fused
-    // kernel is never available, so every forced FusedDevice request lands
-    // here. Recording FusedDevice would make the table lie about what ran.
-    rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::DiagFullGemm}, true);
-    return syrk_cublasdx_fallback_gemm(ctx, A, C, alpha, beta, transA);
+    // A heterogeneous batch: the tile kernels index base + batch * stride.
+    rec("vendor", false);
+    return detail::syrk_vendor_fallback(ctx, A, C, alpha, beta, uplo, transA);
 }
 
 } // namespace batchlas::backend

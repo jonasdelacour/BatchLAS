@@ -4,6 +4,7 @@
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/blas/functions/syev.hh>
 #include <batchlas/util/env.hh>
+#include <batchlas/settings.hh>
 
 #include <algorithm>
 #include <optional>

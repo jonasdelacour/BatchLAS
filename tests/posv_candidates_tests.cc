@@ -7,8 +7,8 @@
 #include <batchlas/blas/functions/posv.hh>
 #include <batchlas/blas/functions/potrf.hh>
 #include <batchlas/blas/functions/trsm.hh>
-#include <batchlas/blas/dispatch/no_route.hh>
-#include <batchlas/blas/dispatch/vendor_available.hh>
+#include <batchlas/no_route.hh>
+#include "../src/select/vendor.hh"
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
@@ -269,7 +269,7 @@ protected:
     // Tiny never calls potrf, so only the composed families depend on it.
     bool keeps_other(const C& c, Sys<T>& p) { return std::holds_alternative<ps::Tiny>(c) || potrf_native(p); }
     bool child_has_no_route(const C& c, Sys<T>& p) {
-        return !keeps_other(c, p) && !dispatch::solver_vendor_available<B>;
+        return !keeps_other(c, p) && !batchlas::select::solver_vendor_available<B>;
     }
 
     // Whether a pin of `c` is accepted: posv_buffer_size runs choose() and launches nothing.
@@ -279,7 +279,7 @@ protected:
         try {
             (void)posv_buffer_size<B, T>(*this->ctx, A, Bm, uplo);
             return true;
-        } catch (const dispatch::NoRouteError&) {
+        } catch (const batchlas::NoRouteError&) {
             return true;
         } catch (const std::invalid_argument& e) {
             if (std::string(e.what()).find("cannot run this shape") == std::string::npos) throw;
@@ -401,7 +401,7 @@ TYPED_TEST(PosvCandidates, PinnedCandidatesStraddleTheirLimits) {
                     }
                     ASSERT_TRUE(this->pin_accepted(c, p.A(), p.B(), uplo)) << what << " was refused";
                     if (this->child_has_no_route(c, p)) {
-                        EXPECT_THROW((void)this->run_pinned(c, p), dispatch::NoRouteError) << what;
+                        EXPECT_THROW((void)this->run_pinned(c, p), batchlas::NoRouteError) << what;
                         continue;
                     }
                     expect_solved(p, this->run_pinned(c, p), what, !this->keeps_other(c, p));
@@ -625,7 +625,9 @@ TYPED_TEST(PosvCandidates, UnknownPinsThrow) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
     Matrix<T, MatrixFormat::Dense> A(8, 8, 2), Bm(8, 2, 2);
-    for (const char* word : {"bogus", "tiny:1", "cta:nb=8", "native:lpanel", "lpanel:panel=8", "native:tiny:4"}) {
+    for (const char* word : {"bogus", "tiny:1", "cta:nb=8", "native:lpanel", "lpanel:panel=8", "native:tiny:4",
+                             // removed aliases (phase 5): each must stay an error
+                             "native:tiny", "native:cta", "native:blocked"}) {
         const Pin pin("posv", std::string_view(word));
         EXPECT_THROW(((void)posv_buffer_size<B, T>(*this->ctx, A.view(), Bm.view(), Uplo::Lower)),
                      std::invalid_argument) << word;
@@ -660,10 +662,10 @@ TYPED_TEST(PosvCandidates, CanRunFalsePinsThrow) {
     }
 }
 
-// §5.3: the legacy spellings select their choice, via ScopedPin and via the environment. posv
+// §5.3: spellings (case-folded) and the class words select their choice, via ScopedPin and via the environment. posv
 // has no vendor family, so bare `vendor` warns and runs Auto; bare `native` is Auto's pick
 // (whatever this device's table ranks first at n=16 nrhs=2: tiny on sm_89, measured on sm_120).
-TYPED_TEST(PosvCandidates, LegacyAliasesSelectTheirChoice) {
+TYPED_TEST(PosvCandidates, ClassWordsAndSpellings) {
     using T = typename TestFixture::T;
     const ScopedEnvVar clear("BATCHLAS_POSV_ROUTE", nullptr);
     std::string auto_pick;
@@ -673,7 +675,7 @@ TYPED_TEST(PosvCandidates, LegacyAliasesSelectTheirChoice) {
     }
     const char* a = auto_pick.c_str();
     const std::pair<const char*, const char*> expect[] = {
-        {"native:tiny", "tiny"}, {"native:cta", "cta"}, {"native:blocked", "blocked"}, {"NATIVE:CTA", "cta"},
+        {"CTA", "cta"},
         {"tiny", "tiny"},        {"Blocked", "blocked"}, {"vendor", a},                {"native", a},
         {"auto", a}};
     for (const auto& [word, spelling] : expect) {
@@ -829,7 +831,7 @@ TYPED_TEST(PosvCandidates, CoverageRowCarriesNativeFlags) {
     auto child = [&] {
         const ScopedEnvVar cov("BATCHLAS_COVERAGE_OUT", out.c_str());
         const ScopedEnvVar clear("BATCHLAS_POSV_ROUTE", nullptr);
-        dispatch::coverage::g_dynamic_enabled = true;
+        batchlas::coverage::g_dynamic_enabled = true;
         auto lo = make_sys<T>(8, 2, 2, Uplo::Lower, 51u);
         (void)this->run_auto(lo);
         auto hi = make_sys<T>(8, 9, 2, Uplo::Upper, 52u);

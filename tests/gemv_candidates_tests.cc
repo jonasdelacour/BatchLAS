@@ -7,9 +7,9 @@
 #include <batchlas/backend_config.h>
 
 #include <batchlas/blas/functions/gemv.hh>
-#include <batchlas/blas/dispatch/coverage.hh>
-#include <batchlas/blas/dispatch/no_route.hh>
-#include <batchlas/blas/dispatch/vendor_available.hh>
+#include "../src/select/coverage.hh"
+#include <batchlas/no_route.hh>
+#include "../src/select/vendor.hh"
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
@@ -256,7 +256,7 @@ bool zgemv_vendor_usable() {
 TEST(GemvVendorProbe, ZgemvRuns) {
     if (!std::getenv("BATCHLAS_GEMV_VENDOR_PROBE")) GTEST_SKIP() << "the known-defects #13 probe, run as a child";
 #if BATCHLAS_HAS_CUDA_BACKEND
-    if constexpr (dispatch::level3_vendor_available<Backend::CUDA>) {
+    if constexpr (batchlas::select::level3_vendor_available<Backend::CUDA>) {
         using Z = std::complex<double>;
         Queue q(Device("gpu"), Backend::CUDA);
         UnifiedVector<Z> a(12, Z(1, 1)), x(3, Z(1, 0)), y(4, Z(0, 0));
@@ -279,7 +279,7 @@ class GemvCandidates : public test_utils::BatchLASTest<Config> {
 protected:
     using T = typename Config::ScalarType;
     static constexpr Backend B = Config::BackendVal;
-    static constexpr bool kVendor = dispatch::level3_vendor_available<B>;
+    static constexpr bool kVendor = batchlas::select::level3_vendor_available<B>;
 
     void SetUp() override {
         test_utils::BatchLASTest<Config>::SetUp();
@@ -508,7 +508,7 @@ TYPED_TEST(GemvCandidates, MismatchedViewsHaveNoNativeRoute) {
             }
         }
         if constexpr (!TestFixture::kVendor) {
-            EXPECT_THROW(((void)gemv<B, T>(*this->ctx, p.A(), X, Y, p.alpha, p.beta, s.trans)), dispatch::NoRouteError)
+            EXPECT_THROW(((void)gemv<B, T>(*this->ctx, p.A(), X, Y, p.alpha, p.beta, s.trans)), batchlas::NoRouteError)
                 << k.what;
         }
     }
@@ -532,7 +532,9 @@ TYPED_TEST(GemvCandidates, MismatchedViewsHaveNoNativeRoute) {
 // R6: a spelling that names nothing compiled throws instead of meaning Auto.
 TYPED_TEST(GemvCandidates, UnknownPinsThrow) {
     using T = typename TestFixture::T;
-    for (const char* word : {"bogus", "cta:1", "direct:w=2", "native:vendor", "native:segt", "body5", "native:cta:8"}) {
+    for (const char* word : {"bogus", "cta:1", "direct:w=2", "native:vendor", "native:segt", "body5", "native:cta:8",
+                             // removed aliases (phase 5): each must stay an error
+                             "native:cta", "native:direct"}) {
         auto p = make_problem<T>(Spec{});
         const Pin pin("gemv", std::string_view(word));
         EXPECT_THROW(this->run(p), std::invalid_argument) << word;
@@ -618,13 +620,13 @@ TYPED_TEST(GemvCandidates, HeterogeneousBatchHasNoNativeRoute) {
     if constexpr (TestFixture::kVendor) {
         if (TestFixture::vendor_launch_ok()) EXPECT_EQ(traced_choice(call), "vendor");
     } else {
-        EXPECT_THROW(call(), dispatch::NoRouteError);
+        EXPECT_THROW(call(), batchlas::NoRouteError);
     }
 }
 
-// §5.3: the legacy spellings and the class words, via ScopedPin and the environment. Bare
+// §5.3: spellings (case-folded) and the class words, via ScopedPin and the environment. Bare
 // `native` is the row's best runnable non-vendor: cta under Trans, direct under NoTrans.
-TYPED_TEST(GemvCandidates, LegacyAliasesAndClassWords) {
+TYPED_TEST(GemvCandidates, ClassWordsAndSpellings) {
     using T = typename TestFixture::T;
     const ScopedEnvVar clear("BATCHLAS_GEMV_ROUTE", nullptr);
     for (Transpose t : {Transpose::NoTrans, Transpose::ConjTrans}) {
@@ -636,15 +638,14 @@ TYPED_TEST(GemvCandidates, LegacyAliasesAndClassWords) {
         }
         const std::string native_pick = t == Transpose::NoTrans ? "direct" : "cta";
         std::vector<std::pair<const char*, std::string>> expect{
-            {"native:direct", "direct"}, {"Direct", "direct"}, {"NATIVE:DIRECT", "direct"}, {"native", native_pick}};
+            {"Direct", "direct"}, {"DIRECT", "direct"}, {"native", native_pick}};
         if (TestFixture::vendor_launch_ok()) {
             expect.emplace_back("vendor", auto_pick);
             expect.emplace_back("auto", auto_pick);
         }
         if (t != Transpose::NoTrans) {
-            expect.emplace_back("native:cta", "cta");
             expect.emplace_back("cta", "cta");
-            expect.emplace_back("NATIVE:CTA", "cta");
+            expect.emplace_back("CTA", "cta");
         }
         for (const auto& [word, spelling] : expect)
             for (bool via_env : {false, true}) {
@@ -836,7 +837,7 @@ TYPED_TEST(GemvCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     auto child = [&] {
         const ScopedEnvVar cov("BATCHLAS_COVERAGE_OUT", out.c_str());
         const ScopedEnvVar clear("BATCHLAS_GEMV_ROUTE", nullptr);
-        dispatch::coverage::g_dynamic_enabled = true;
+        batchlas::coverage::g_dynamic_enabled = true;
         {
             const Pin pin("gemv", C{gv::Direct{}});
             auto p = make_problem<T>(lo);
@@ -902,7 +903,7 @@ TYPED_TEST(GemvCandidatesCpu, CpuQueueRunsDirectOrTheVendor) {
                       (void)gemv<B, T>(*this->ctx, p.A(), p.X(), p.Y(), p.alpha, p.beta, t);
                       this->ctx->wait();
                   }),
-                  dispatch::level3_vendor_available<B> ? "vendor" : "direct")
+                  batchlas::select::level3_vendor_available<B> ? "vendor" : "direct")
             << trans_s(t);
         expect_gemv(p, std::string("cpu auto ") + trans_s(t));
         auto d = make_problem<T>(s);

@@ -12,8 +12,8 @@
 
 #include <batchlas/blas/functions/getri.hh>
 #include <batchlas/blas/functions/trsm.hh>
-#include <batchlas/blas/dispatch/no_route.hh>
-#include <batchlas/blas/dispatch/vendor_available.hh>
+#include <batchlas/no_route.hh>
+#include "../../select/vendor.hh"
 
 #include "choice.hh"
 #include "../../select/select.hh"
@@ -57,7 +57,7 @@ bool can_run(const GetriChoice& c, const select::Device& d, const MV<T>& A) {
             return d.is_gpu && d.has_sg32 && B != Backend::NETLIB && sycl_getri::getri_blocked_available<T>() &&
                    A.rows() == A.cols() && A.rows() >= 1 && A.batch_size() >= 1 && !A.is_heterogeneous();
         },
-        [&](Vendor) { return dispatch::factorization_vendor_available<B>; },
+        [&](Vendor) { return select::factorization_vendor_available<B>; },
     }, c);
 }
 
@@ -70,8 +70,8 @@ GetriChoice choose(Queue& q, const MV<T>& A) {
     } catch (const std::runtime_error&) {
         // Vendor-free burn-down reads coverage `miss` rows; a plain runtime_error records none.
         const auto all = candidates<T>();
-        if (!dispatch::factorization_vendor_available<B> && std::none_of(all.begin(), all.end(), ok))
-            dispatch::throw_no_vendor_route<T>(dispatch::Op::getri, B, dispatch::kFactorizationLibrary<B>);
+        if (!select::factorization_vendor_available<B> && std::none_of(all.begin(), all.end(), ok))
+            select::throw_no_vendor_route<T>(Op::getri, B, select::kFactorizationLibrary<B>);
         throw;
     }
 }
@@ -79,7 +79,7 @@ GetriChoice choose(Queue& q, const MV<T>& A) {
 // The coverage row's native flags (§5.6): computed only when coverage records a row.
 template <Backend B, class T>
 select::NativeFacts native_facts(Queue& q, const MV<T>& A) {
-    if (!dispatch::coverage::dynamic_enabled()) return {};
+    if (!coverage::dynamic_enabled()) return {};
     const select::Device& d = select::device_of<B>(q);
     return select::native_facts(candidates<T>(), [&](const GetriChoice& c) { return can_run<B, T>(c, d, A); });
 }
@@ -95,10 +95,10 @@ Event launch(Queue& q, const GetriChoice& c, const MV<T>& A, const MV<T>& C, Spa
                    Diag tdiag) { return trsm<B, T>(c2, ta, tb, talpha, tside, tuplo, ttrans, tdiag); });
         },
         [&](Vendor) -> Event {
-            if constexpr (dispatch::factorization_vendor_available<B>)
+            if constexpr (select::factorization_vendor_available<B>)
                 return backend::getri_vendor<B, T>(q, A, C, pivots, ws, info);
             else
-                dispatch::throw_no_vendor_route<T>(dispatch::Op::getri, B, dispatch::kFactorizationLibrary<B>);
+                select::throw_no_vendor_route<T>(Op::getri, B, select::kFactorizationLibrary<B>);
         },
     }, c);
 }
@@ -109,10 +109,10 @@ std::size_t workspace(Queue& q, const GetriChoice& c, const MV<T>& A) {
     return std::visit(overloaded{
         [&](Blocked) { return sycl_getri::getri_blocked_buffer_size<T>(q, A); },
         [&](Vendor) -> std::size_t {
-            if constexpr (dispatch::factorization_vendor_available<B>)
+            if constexpr (select::factorization_vendor_available<B>)
                 return backend::getri_vendor_buffer_size<B, T>(q, A);
             else
-                dispatch::throw_no_vendor_route<T>(dispatch::Op::getri, B, dispatch::kFactorizationLibrary<B>);
+                select::throw_no_vendor_route<T>(Op::getri, B, select::kFactorizationLibrary<B>);
         },
     }, c);
 }

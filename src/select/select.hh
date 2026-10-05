@@ -6,9 +6,8 @@
 // the library must share (pins, table cache, trace depth) lives in select.cc behind
 // BATCHLAS_API: a header-local static would be one copy per DSO under -fvisibility=hidden.
 
-#include <batchlas/blas/dispatch/coverage.hh>
-#include <batchlas/blas/dispatch/route.hh>
-#include <batchlas/blas/dispatch/vendor_available.hh>
+#include "coverage.hh"
+#include "vendor.hh"
 #include <batchlas/blas/enums.hh>
 #include <batchlas/export.hh>
 #include <batchlas/util/sycl-device-queue.hh>
@@ -57,8 +56,8 @@ BATCHLAS_API const Device& describe(const batchlas::Device& dev, Backend b, bool
                                     bool has_vendor_blas);
 
 template <Backend B>
-const Device& device_of(const Queue& q, bool has_vendor_solver = dispatch::solver_vendor_available<B>,
-                        bool has_vendor_blas = dispatch::level3_vendor_available<B>) {
+const Device& device_of(const Queue& q, bool has_vendor_solver = select::solver_vendor_available<B>,
+                        bool has_vendor_blas = select::level3_vendor_available<B>) {
     return describe(q.device(), B, has_vendor_solver, has_vendor_blas);
 }
 
@@ -188,21 +187,9 @@ std::optional<Choice> parse(std::string_view text, std::string* err = nullptr) {
 
 // ---- op-supplied rules ------------------------------------------------------------------
 
-struct Alias {
-    std::string_view name;      // e.g. "native:tiny"
-    std::string_view spelling;  // e.g. "tiny"
-};
-
 struct Rules {
-    std::span<const Alias> aliases{};
     // Families in generality order (§5.5); the rest follow in candidate-list order.
     std::span<const std::string_view> last_resort{};
-    // Legacy words for a class word (auto|native|vendor), resolved before the class words;
-    // `aliases` stay concrete (an alias to vendor throws when vendor cannot run).
-    std::span<const Alias> class_aliases{};
-    // The op's legacy variable (BATCHLAS_<OP>_VARIANT, read only when _ROUTE is unset) has its
-    // own vocabulary: these map its values first, wherever the pin came from that variable.
-    std::span<const Alias> legacy_aliases{};
 };
 
 // ---- keys and tables (§5.4) -------------------------------------------------------------
@@ -290,7 +277,7 @@ BATCHLAS_API void pop_pin(std::string_view op);
 struct NativeFacts;
 // `fields` is what the trace line prints after the dtype; empty means the shape's n and batch.
 BATCHLAS_API bool trace_open(std::string_view op, const std::string& spelling, bool vendor,
-                             const dispatch::OpShape& shape, const NativeFacts& facts, const Key& fields);
+                             const coverage::Shape& shape, const NativeFacts& facts, const Key& fields);
 BATCHLAS_API void trace_close();
 
 // A bad spelling in a table is a build defect, so it fails loudly on first use.
@@ -364,17 +351,8 @@ std::optional<Choice> walk(std::string_view op, std::string_view dtype, const De
 template <class Choice, std::size_t N, class CanRun>
 std::optional<Choice> resolve_pin(std::string_view op, std::string_view dtype, const Device& d, const Key& key,
                                   const std::array<Choice, N>& candidates, CanRun& can_run, const Rules& rules,
-                                  std::string text, const std::string& source) {
+                                  const std::string& text, const std::string& source) {
     const std::string where = std::string(op) + ": " + source + "=\"" + text + "\"";
-    auto map_once = [&](std::span<const Alias> table) {
-        for (const Alias& a : table)
-            if (text == a.name) {
-                text = std::string(a.spelling);
-                return;
-            }
-    };
-    if (source.ends_with("_VARIANT")) map_once(rules.legacy_aliases);
-    map_once(rules.class_aliases);
     if (text == "auto") return std::nullopt;
     if (text == "native") {
         if (auto c = walk(op, dtype, d, key, candidates, can_run, rules, true)) return c;
@@ -390,8 +368,6 @@ std::optional<Choice> resolve_pin(std::string_view op, std::string_view dtype, c
         warn_pin_fallback(op, "vendor", d);  // a vendor-free build: the old router fell through too
         return std::nullopt;
     }
-    for (const Alias& a : rules.aliases)
-        if (text == a.name) text = std::string(a.spelling);
     std::string err;
     const std::optional<Choice> c = parse<Choice>(text, &err);
     if (!c) throw std::invalid_argument(where + " is not a valid choice: " + err);
@@ -409,7 +385,7 @@ std::optional<Choice> resolve_pin(std::string_view op, std::string_view dtype, c
 // ---- pins (§5.3) ------------------------------------------------------------------------
 
 // Wins over BATCHLAS_<OP>_ROUTE on this thread; nests, restoring the outer pin on exit.
-// Takes a choice, or any pin word ("auto", "native", "vendor", an alias, a spelling).
+// Takes a choice, or any pin word ("auto", "native", "vendor", a spelling).
 template <class Choice>
 class ScopedPin {
 public:
@@ -439,9 +415,9 @@ Choice choose(std::string_view op, std::string_view dtype, const Device& d, cons
 
 // The coverage key for a square op; the op sets uplo/side/... on the result.
 template <Backend B, class T>
-dispatch::OpShape square_shape(std::int64_t n, std::int64_t batch) {
-    dispatch::OpShape s;
-    s.scalar = dispatch::scalar_kind_of<T>;
+coverage::Shape square_shape(std::int64_t n, std::int64_t batch) {
+    coverage::Shape s;
+    s.scalar = scalar_kind_of<T>;
     s.backend = B;
     s.m = s.n = s.k = n;
     s.batch = batch;
@@ -476,9 +452,9 @@ NativeFacts native_facts(const std::array<Choice, N>& candidates, CanRun&& can_r
 class TraceScope {
 public:
     template <class Choice>
-    TraceScope(std::string_view op, const Choice& c, const dispatch::OpShape& shape, NativeFacts facts = {},
+    TraceScope(std::string_view op, const Choice& c, const coverage::Shape& shape, NativeFacts facts = {},
                const Key& fields = {}) {
-        if (detail::trace_enabled() || dispatch::coverage::dynamic_enabled())
+        if (detail::trace_enabled() || coverage::dynamic_enabled())
             active_ = detail::trace_open(op, to_string(c), family_of(c) == "vendor", shape, facts, fields);
     }
     ~TraceScope() {

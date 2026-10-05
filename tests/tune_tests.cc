@@ -408,7 +408,7 @@ TEST(TuneRefine, RoundGroupsLinesSkipsKnownCellsAndReportsStalls) {
 }
 
 TEST(TuneCoverage, ReachedRouteFindsColumnsByTheHeader) {
-    // The emit() format of src/dispatch/coverage.cc.
+    // The emit() format of src/select/coverage.cc.
     const std::string head = "kind,op,scalar,backend,shape_class,m,n,k,batch,chosen_origin,chosen_algo,calls,"
                              "native_route_existed,native_route_supported,library,uplo,side,diag,transA,transB\n";
     const std::string rows = "reached,trsm,float,CUDA,0,0,64,0,8192,vendor,auto,1,1,1,,0,0,0,0,0\n"

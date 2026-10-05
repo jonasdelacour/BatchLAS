@@ -138,80 +138,11 @@ constexpr auto candidates() {
     }
 }
 
-// Legacy BATCHLAS_GEMM_SYCL_KERNEL names (now BATCHLAS_GEMM_ROUTE values) until phase 5. A
-// transposed variant's name maps to its config's family spelling; the form is derived per call.
-// The deleted variants (S1U1, S2U2, TT8x4/4x8, persistent, split-K, S1U4, Large TT4x8) have no
-// alias, so their names throw (R6).
-inline constexpr std::array<select::Alias, 102> aliases{{
-    {"tiled16", "tiled"}, {"tile16", "tiled"}, {"smallbatched", "small"},
-    {"register32", "reg:m=32:n=32:k=8:u=1"}, {"reg32", "reg:m=32:n=32:k=8:u=1"}, {"32x32", "reg:m=32:n=32:k=8:u=1"},
-    {"register64", "reg:m=64:n=64:k=8:u=1"}, {"reg64", "reg:m=64:n=64:k=8:u=1"}, {"64x64", "reg:m=64:n=64:k=8:u=1"},
-    {"register64k16", "reg:m=64:n=64:k=16:u=1"}, {"reg64k16", "reg:m=64:n=64:k=16:u=1"},
-    {"64x64x16", "reg:m=64:n=64:k=16:u=1"}, {"register64k16tn", "reg:m=64:n=64:k=16:u=1"},
-    {"reg64k16tn", "reg:m=64:n=64:k=16:u=1"}, {"64x64x16tn", "reg:m=64:n=64:k=16:u=1"},
-    {"register64k16nt", "reg:m=64:n=64:k=16:u=1"}, {"reg64k16nt", "reg:m=64:n=64:k=16:u=1"},
-    {"64x64x16nt", "reg:m=64:n=64:k=16:u=1"}, {"register64k16tt", "reg:m=64:n=64:k=16:u=1"},
-    {"reg64k16tt", "reg:m=64:n=64:k=16:u=1"}, {"64x64x16tt", "reg:m=64:n=64:k=16:u=1"},
-    {"register128x32k16", "reg:m=128:n=32:k=16:u=1"}, {"reg128x32k16", "reg:m=128:n=32:k=16:u=1"},
-    {"128x32x16", "reg:m=128:n=32:k=16:u=1"}, {"register128x32k16tn", "reg:m=128:n=32:k=16:u=1"},
-    {"reg128x32k16tn", "reg:m=128:n=32:k=16:u=1"}, {"128x32x16tn", "reg:m=128:n=32:k=16:u=1"},
-    {"register128x32k16nt", "reg:m=128:n=32:k=16:u=1"}, {"reg128x32k16nt", "reg:m=128:n=32:k=16:u=1"},
-    {"128x32x16nt", "reg:m=128:n=32:k=16:u=1"}, {"register128x32k16tt", "reg:m=128:n=32:k=16:u=1"},
-    {"reg128x32k16tt", "reg:m=128:n=32:k=16:u=1"}, {"128x32x16tt", "reg:m=128:n=32:k=16:u=1"},
-    {"register128x32k32tn", "reg:m=128:n=32:k=32:u=1"}, {"reg128x32k32tn", "reg:m=128:n=32:k=32:u=1"},
-    {"128x32x32tn", "reg:m=128:n=32:k=32:u=1"}, {"128x32x32_s2_u1_tn", "reg:m=128:n=32:k=32:u=1"},
-    {"register128x32k32nt", "reg:m=128:n=32:k=32:u=1"}, {"reg128x32k32nt", "reg:m=128:n=32:k=32:u=1"},
-    {"128x32x32nt", "reg:m=128:n=32:k=32:u=1"}, {"128x32x32_s2_u1_nt", "reg:m=128:n=32:k=32:u=1"},
-    {"register128x32k32tt", "reg:m=128:n=32:k=32:u=1"}, {"reg128x32k32tt", "reg:m=128:n=32:k=32:u=1"},
-    {"128x32x32tt", "reg:m=128:n=32:k=32:u=1"}, {"128x32x32_s2_u1_tt", "reg:m=128:n=32:k=32:u=1"},
-    {"register128x32k32", "reg:m=128:n=32:k=32:u=1"}, {"reg128x32k32", "reg:m=128:n=32:k=32:u=1"},
-    {"128x32x32", "reg:m=128:n=32:k=32:u=1"}, {"register128x32k32s2u1", "reg:m=128:n=32:k=32:u=1"},
-    {"reg128x32k32s2u1", "reg:m=128:n=32:k=32:u=1"}, {"128x32x32_s2_u1", "reg:m=128:n=32:k=32:u=1"},
-    {"register128x32k32s2u1aligned", "reg:m=128:n=32:k=32:u=1"}, {"reg128x32k32s2u1aligned", "reg:m=128:n=32:k=32:u=1"},
-    {"128x32x32_s2_u1_aligned", "reg:m=128:n=32:k=32:u=1"}, {"register128x32k32s2u1generic", "reg:m=128:n=32:k=32:u=1"},
-    {"reg128x32k32s2u1generic", "reg:m=128:n=32:k=32:u=1"}, {"128x32x32_s2_u1_generic", "reg:m=128:n=32:k=32:u=1"},
-    {"register128x64k16tn", "reg:m=128:n=64:k=16:u=1"}, {"reg128x64k16tn", "reg:m=128:n=64:k=16:u=1"},
-    {"128x64x16tn", "reg:m=128:n=64:k=16:u=1"}, {"register128x64k16nt", "reg:m=128:n=64:k=16:u=1"},
-    {"reg128x64k16nt", "reg:m=128:n=64:k=16:u=1"}, {"128x64x16nt", "reg:m=128:n=64:k=16:u=1"},
-    {"register128x64k16tt", "reg:m=128:n=64:k=16:u=1"}, {"reg128x64k16tt", "reg:m=128:n=64:k=16:u=1"},
-    {"128x64x16tt", "reg:m=128:n=64:k=16:u=1"},
-    {"register128x64k32large", "reg:m=128:n=64:k=32:u=4"}, {"reg128x64k32large", "reg:m=128:n=64:k=32:u=4"},
-    {"128x64x32large", "reg:m=128:n=64:k=32:u=4"}, {"register128x64k32largeu2", "reg:m=128:n=64:k=32:u=2"},
-    {"reg128x64k32largeu2", "reg:m=128:n=64:k=32:u=2"}, {"128x64x32large_u2", "reg:m=128:n=64:k=32:u=2"},
-    {"register128x128k8", "reg:m=128:n=128:k=8:u=1"}, {"reg128x128k8", "reg:m=128:n=128:k=8:u=1"},
-    {"128x128x8", "reg:m=128:n=128:k=8:u=1"},
-    {"register32x128k16", "reg:m=32:n=128:k=16:u=1"}, {"reg32x128k16", "reg:m=32:n=128:k=16:u=1"},
-    {"32x128x16", "reg:m=32:n=128:k=16:u=1"}, {"register32x128k16tn", "reg:m=32:n=128:k=16:u=1"},
-    {"reg32x128k16tn", "reg:m=32:n=128:k=16:u=1"}, {"32x128x16tn", "reg:m=32:n=128:k=16:u=1"},
-    {"register32x128k16tt", "reg:m=32:n=128:k=16:u=1"}, {"reg32x128k16tt", "reg:m=32:n=128:k=16:u=1"},
-    {"32x128x16tt", "reg:m=32:n=128:k=16:u=1"},
-    {"register64x64k16wide", "wide:m=64:n=64:k=16"}, {"reg64x64k16wide", "wide:m=64:n=64:k=16"},
-    {"64x64x16wide", "wide:m=64:n=64:k=16"}, {"register64x64k16widecn", "wide:m=64:n=64:k=16"},
-    {"reg64x64k16widecn", "wide:m=64:n=64:k=16"}, {"64x64x16wide_cn", "wide:m=64:n=64:k=16"},
-    {"register64x64k16widenc", "wide:m=64:n=64:k=16"}, {"reg64x64k16widenc", "wide:m=64:n=64:k=16"},
-    {"64x64x16wide_nc", "wide:m=64:n=64:k=16"},
-    {"register128x32k16widenc", "wide:m=128:n=32:k=16"}, {"reg128x32k16widenc", "wide:m=128:n=32:k=16"},
-    {"128x32x16wide_nc", "wide:m=128:n=32:k=16"},
-    {"register32x128k16widecn", "wide:m=32:n=128:k=16"}, {"reg32x128k16widecn", "wide:m=32:n=128:k=16"},
-    {"32x128x16wide_cn", "wide:m=32:n=128:k=16"},
-    {"32x32x16wide", "wide:m=32:n=32:k=16"}, {"16x16x16wide", "wide:m=16:n=16:k=16"},
-    {"vendor:direct", "vendor"},
-}};
 
-// BATCHLAS_GEMM_ROUTE words that meant "the native kernel family" or "the vendor library".
-inline constexpr std::array<select::Alias, 7> class_aliases{{
-    {"register_tiled", "native"}, {"native:register_tiled", "native"}, {"native:auto", "native"},
-    {"sycl", "native"}, {"custom", "native"}, {"vendor:auto", "vendor"}, {"auto:auto", "auto"},
-}};
-// BATCHLAS_GEMM_VARIANT's own vocabulary: its `native` was the raw cuBLAS call (route_env.hh).
-inline constexpr std::array<select::Alias, 7> legacy_aliases{{
-    {"native", "vendor"}, {"cuda-native", "vendor"}, {"direct-cuda", "vendor"}, {"cublasdx", "vendor"},
-    {"dx", "vendor"}, {"sycl", "native"}, {"custom", "native"},
-}};
 
 // Generality order (§5.5): direct serves every GPU shape, vendor everything else (CPU, precision).
 inline constexpr std::array<std::string_view, 2> last_resort{"direct", "vendor"};
-inline constexpr select::Rules rules{aliases, last_resort, class_aliases, legacy_aliases};
+inline constexpr select::Rules rules{last_resort};
 
 // C folds to T for a real scalar. layout: packed = A, B, C contiguous with 16-byte bases.
 // Work ~ m n k batch, so every log key weighs 1.

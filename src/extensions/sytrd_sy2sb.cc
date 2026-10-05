@@ -54,7 +54,7 @@ namespace {
 //   0 / "off"      -> never hint; restores the pre-change tuning-table behaviour
 //   <positive int> -> force that block width unconditionally
 //
-// Read fresh on every call (like dispatch::parse_route_env) so an A/B harness can flip it
+// Read fresh on every call (like the BATCHLAS_<OP>_ROUTE pins) so an A/B harness can flip it
 // inside one process. It must NOT be changed between a sytrd_sy2sb_buffer_size
 // query and the matching sytrd_sy2sb call -- that would desynchronise the
 // workspace size from the block width actually used.
@@ -92,16 +92,6 @@ inline int32_t sy2sb_ormqr_block_size_hint(int n, int batch, int kd) {
     // Shape gate: only where the win was measured.
     if (n >= 1024 && batch >= 32) return kd;
     return 0;
-}
-
-template <typename U>
-inline U conj_if_needed(const U& x, bool do_conj) {
-    if (!do_conj) return x;
-    if constexpr (internal::is_complex<U>::value) {
-        return U(x.real(), -x.imag());
-    } else {
-        return x;
-    }
 }
 
 template <typename T>
@@ -204,132 +194,6 @@ Event copy_band_lower(Queue& q,
     });
 
     return q.get_event();
-}
-
-template <typename T>
-class SetUnitLowerPanelKernel;
-
-template <typename T>
-Event set_unit_lower_panel(Queue& q,
-                           const MatrixView<T, MatrixFormat::Dense>& v,
-                           int pk) {
-    const int ldv = v.ld();
-    const int stride_v = v.stride();
-    T* v_ptr = v.data_ptr();
-    const int batch = v.batch_size();
-
-    (void)q->submit([&](sycl::handler& h) {
-        h.parallel_for<SetUnitLowerPanelKernel<T>>(
-            sycl::range<3>(static_cast<size_t>(batch), static_cast<size_t>(pk), static_cast<size_t>(pk)),
-            [=](sycl::id<3> idx) {
-                const int b = static_cast<int>(idx[0]);
-                const int r = static_cast<int>(idx[1]);
-                const int c = static_cast<int>(idx[2]);
-                T* V = v_ptr + b * stride_v;
-                if (r <= c) {
-                    V[r + c * ldv] = (r == c) ? T(1) : T(0);
-                }
-            });
-    });
-
-    return q.get_event();
-}
-
-// Form T for a block of Householder vectors V (Forward, Columnwise), like LAPACK LARFT.
-//
-// V is (m x ib) unit-lower (diag=1, upper=0). T is (ib x ib) upper triangular.
-//
-// tau is packed by-panel: tau[b*ib + j].
-template <typename T>
-class LarftKernel;
-
-template <typename T>
-sycl::event larft_forward_columnwise_batched(Queue& q,
-                                            T* t_data,
-                                            int ld_t,
-                                            int stride_t,
-                                            const T* v_data,
-                                            int ld_v,
-                                            int stride_v,
-                                            int m,
-                                            int ib,
-                                            const T* tau_data,
-                                            int tau_ld,
-                                            int batch) {
-    auto reduce_sum = [](const sycl::group<1>& g, T x) {
-        if constexpr (internal::is_complex<T>::value) {
-            using R = typename T::value_type;
-            const R re = sycl::reduce_over_group(g, x.real(), sycl::plus<R>());
-            const R im = sycl::reduce_over_group(g, x.imag(), sycl::plus<R>());
-            return T(re, im);
-        } else {
-            return sycl::reduce_over_group(g, x, sycl::plus<T>());
-        }
-    };
-
-    const size_t wg = 256;
-    const size_t groups = static_cast<size_t>(batch) * static_cast<size_t>(ib);
-
-    return q->submit([&](sycl::handler& h) {
-        h.parallel_for<LarftKernel<T>>(
-            sycl::nd_range<1>(sycl::range<1>(groups * wg), sycl::range<1>(wg)),
-            [=](sycl::nd_item<1> it) {
-                const size_t gid = it.get_group_linear_id();
-                const int b = static_cast<int>(gid / static_cast<size_t>(ib));
-                const int j = static_cast<int>(gid - static_cast<size_t>(b) * static_cast<size_t>(ib));
-                if (b >= batch || j >= ib) return;
-
-                T* t_b = t_data + b * stride_t;
-                const T* v_b = v_data + b * stride_v;
-                const T* tau_b = tau_data + b * tau_ld;
-
-                const T tauj = tau_b[j];
-
-                if (it.get_local_linear_id() == 0) {
-                    for (int i = 0; i < ib; ++i) {
-                        t_b[i + j * ld_t] = T(0);
-                    }
-                }
-                it.barrier(sycl::access::fence_space::local_space);
-
-                if (tauj == T(0)) {
-                    if (it.get_local_linear_id() == 0) {
-                        t_b[j + j * ld_t] = T(0);
-                    }
-                    return;
-                }
-
-                const sycl::group<1> g = it.get_group();
-
-                for (int col = 0; col < j; ++col) {
-                    T partial = T(0);
-                    for (int r = j + 1 + static_cast<int>(it.get_local_linear_id()); r < m;
-                         r += static_cast<int>(wg)) {
-                        const T v_rc = v_b[r + col * ld_v];
-                        const T v_rj = v_b[r + j * ld_v];
-                        partial += conj_if_needed(v_rc, /*do_conj=*/true) * v_rj;
-                    }
-
-                    const T sum_r = reduce_sum(g, partial);
-                    if (it.get_local_linear_id() == 0) {
-                        T sum = conj_if_needed(v_b[j + col * ld_v], /*do_conj=*/true) + sum_r;
-                        t_b[col + j * ld_t] = -tauj * sum;
-                    }
-                    it.barrier(sycl::access::fence_space::global_space);
-                }
-
-                if (it.get_local_linear_id() == 0) {
-                    for (int row = 0; row < j; ++row) {
-                        T acc = T(0);
-                        for (int col = row; col < j; ++col) {
-                            acc += t_b[row + col * ld_t] * t_b[col + j * ld_t];
-                        }
-                        t_b[row + j * ld_t] = acc;
-                    }
-                    t_b[j + j * ld_t] = tauj;
-                }
-            });
-    });
 }
 
 template <typename T>

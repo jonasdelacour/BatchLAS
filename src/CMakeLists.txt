@@ -7,7 +7,8 @@ add_library(batchlas_core_obj OBJECT
     #util/sycl-util-impl.cc
 )
 add_library(batchlas_backends_obj OBJECT)
-# The vendor-independent facade -- see src/dispatch/CMakeLists.txt.
+# The vendor-independent public entry points: src/select/ and src/ops/<op>/. Compiled
+# unconditionally; the vendor calls inside are `if constexpr`-gated on the BATCHLAS_HAS_* macros.
 add_library(batchlas_dispatch_obj OBJECT)
 # WP0 S6: these carry the VENDOR wrapper TUs, so they exist only when at least
 # one vendor library for that family does. "There is a CUDA device" is no longer
@@ -132,9 +133,8 @@ endif()
 
 # Add source files from subdirectories
 add_subdirectory(backends)
-add_subdirectory(dispatch)
 
-# Flat kernel selection (src/select/) rides with the dispatch facade. tuned/*.txt are
+# Flat kernel selection (src/select/). tuned/*.txt are
 # embedded into one generated TU; the CONFIGURE_DEPENDS glob reconfigures when a table
 # appears or disappears, DEPENDS regenerates when one changes.
 file(GLOB BATCHLAS_TUNED_TABLES CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/tuned/*.txt")
@@ -152,9 +152,9 @@ add_custom_command(
     COMMENT "Embedding tuned selection tables"
     VERBATIM
 )
-target_sources(batchlas_dispatch_obj PRIVATE select/select.cc "${BATCHLAS_TUNED_TABLES_CC}")
-# Migrated ops (src/ops/<op>/<op>.cc): each holds its op's public entry points, so it sits
-# in the facade library next to entry_points/. Includes are relative, as for src/select.
+target_sources(batchlas_dispatch_obj PRIVATE select/select.cc select/coverage.cc "${BATCHLAS_TUNED_TABLES_CC}")
+# src/ops/<op>/<op>.cc: each holds its op's public entry points. Includes are relative, as for
+# src/select. ops/level3 holds symm/hemm/herk/her2k/syrk/syr2k/trmm.
 target_sources(batchlas_dispatch_obj PRIVATE ops/potrf/potrf.cc ops/posv/posv.cc ops/trsm/trsm.cc ops/gemm/gemm.cc)
 target_sources(batchlas_dispatch_obj PRIVATE ops/gemv/gemv.cc)
 target_sources(batchlas_dispatch_obj PRIVATE ops/geqrf/geqrf.cc)
@@ -167,6 +167,7 @@ target_sources(batchlas_dispatch_obj PRIVATE ops/gesv/gesv.cc)
 target_sources(batchlas_dispatch_obj PRIVATE ops/gesvd/gesvd.cc)
 target_sources(batchlas_dispatch_obj PRIVATE ops/spmm/spmm.cc)
 target_sources(batchlas_dispatch_obj PRIVATE ops/syev/syev.cc)
+target_sources(batchlas_dispatch_obj PRIVATE ops/level3/level3.cc)
 add_subdirectory(extensions)
 add_subdirectory(util)
 add_subdirectory(extra)

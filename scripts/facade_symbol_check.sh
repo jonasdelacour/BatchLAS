@@ -3,7 +3,7 @@
 # Did the public entry points actually leave the vendor component?
 #
 # WP0 S5 moves each public op's DEFINITION out of the vendor TU and into
-# src/dispatch/entry_points/. That is not something a diff can confirm -- a
+# src/ops/. That is not something a diff can confirm -- a
 # forwarder left behind, or an instantiation pointing at the wrong template,
 # still compiles and links. So this asks the object files instead:
 #

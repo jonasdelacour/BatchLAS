@@ -21,7 +21,6 @@
 
 #include <batchlas/blas/functions/ormqr.hh>
 #include <batchlas/blas/functions/syev.hh>
-#include <batchlas/blas/dispatch/op.hh>
 
 #include "gemm_variant.hh"
 #include "../util/template-instantiations.hh"
@@ -963,28 +962,26 @@ namespace batchlas{
         // syev_vendor_buffer_size still returns 0 whether or not status is asked for.
         auto info = info_out;
         const bool want_info = info.size() >= static_cast<size_t>(descrA.batch_size());
-        return op_external("lapacke.syev", [&, A_view, eig, jobtype, uplo, info, want_info] {
-            return detail::submit_host_task<T>(ctx, "lapacke.syev", [=] {
-                if (A_view.batch_size() == 1) {
+        return detail::submit_host_task<T>(ctx, "lapacke.syev", [=] {
+            if (A_view.batch_size() == 1) {
+                auto st = call_backend_nh_r<T, BackendLibrary::LAPACKE>(
+                    LAPACKE_ssyev, LAPACKE_dsyev, LAPACKE_cheev, LAPACKE_zheev,
+                    Layout::ColMajor, jobtype, uplo,
+                    A_view.rows(), A_view.data_ptr(), A_view.ld(),
+                    base_float_ptr_convert(eig.data()));
+                if (want_info) info[0] = static_cast<int32_t>(st);
+            } else {
+                for (int i = 0; i < A_view.batch_size(); ++i) {
                     auto st = call_backend_nh_r<T, BackendLibrary::LAPACKE>(
                         LAPACKE_ssyev, LAPACKE_dsyev, LAPACKE_cheev, LAPACKE_zheev,
                         Layout::ColMajor, jobtype, uplo,
-                        A_view.rows(), A_view.data_ptr(), A_view.ld(),
-                        base_float_ptr_convert(eig.data()));
-                    if (want_info) info[0] = static_cast<int32_t>(st);
-                } else {
-                    for (int i = 0; i < A_view.batch_size(); ++i) {
-                        auto st = call_backend_nh_r<T, BackendLibrary::LAPACKE>(
-                            LAPACKE_ssyev, LAPACKE_dsyev, LAPACKE_cheev, LAPACKE_zheev,
-                            Layout::ColMajor, jobtype, uplo,
-                            A_view[i].rows(),
-                            A_view[i].data_ptr(),
-                            A_view[i].ld(),
-                            base_float_ptr_convert(eig.subspan(i * A_view.rows()).data()));
-                        if (want_info) info[i] = static_cast<int32_t>(st);
-                    }
+                        A_view[i].rows(),
+                        A_view[i].data_ptr(),
+                        A_view[i].ld(),
+                        base_float_ptr_convert(eig.subspan(i * A_view.rows()).data()));
+                    if (want_info) info[i] = static_cast<int32_t>(st);
                 }
-            });
+            }
         });
     }
 
@@ -995,7 +992,7 @@ namespace batchlas{
                                    JobType /*jobtype*/,
                                    Uplo /*uplo*/) {
         // LAPACKE path uses no user-provided workspace.
-        return op_external("lapacke.syev_buffer_size", [&] { return static_cast<size_t>(0); });
+        return static_cast<size_t>(0);
     }
 
     // Moved verbatim from include/batchlas/blas/functions/gesvd.hh, which used to *define*
@@ -1136,7 +1133,7 @@ namespace batchlas{
                                     SvdVectors /*jobu*/,
                                     SvdVectors /*jobvh*/) {
         // LAPACKE path uses no user-provided workspace.
-        return op_external("lapacke.gesvd_buffer_size", [&] { return static_cast<size_t>(0); });
+        return static_cast<size_t>(0);
     }
 
     } // namespace backend
@@ -1419,28 +1416,26 @@ namespace batchlas{
         auto A_view = A;
         auto C_view = C;
         auto tau_view = tau;
-        return op_external("lapacke.ormqr_vendor", [&, A_view, C_view, tau_view, side, trans] {
-            return detail::submit_host_task<T>(ctx, "lapacke.ormqr_vendor", [=] {
-                static_cast<void>(workspace);
-                int m = C_view.rows();
-                int n = C_view.cols();
-                int k = std::min(A_view.rows(), A_view.cols());
-                for (int i = 0; i < A_view.batch_size(); ++i) {
-                    call_backend_nh<T, BackendLibrary::LAPACKE>(
-                        LAPACKE_sormqr, LAPACKE_dormqr, LAPACKE_cunmqr, LAPACKE_zunmqr,
-                        Layout::ColMajor,
-                        side,
-                        trans,
-                        m,
-                        n,
-                        k,
-                        A_view[i].data_ptr(),
-                        A_view.ld(),
-                        tau_view.data() + i * k,
-                        C_view[i].data_ptr(),
-                        C_view.ld());
-                }
-            });
+        return detail::submit_host_task<T>(ctx, "lapacke.ormqr_vendor", [=] {
+            static_cast<void>(workspace);
+            int m = C_view.rows();
+            int n = C_view.cols();
+            int k = std::min(A_view.rows(), A_view.cols());
+            for (int i = 0; i < A_view.batch_size(); ++i) {
+                call_backend_nh<T, BackendLibrary::LAPACKE>(
+                    LAPACKE_sormqr, LAPACKE_dormqr, LAPACKE_cunmqr, LAPACKE_zunmqr,
+                    Layout::ColMajor,
+                    side,
+                    trans,
+                    m,
+                    n,
+                    k,
+                    A_view[i].data_ptr(),
+                    A_view.ld(),
+                    tau_view.data() + i * k,
+                    C_view[i].data_ptr(),
+                    C_view.ld());
+            }
         });
     }
 
@@ -1451,15 +1446,13 @@ namespace batchlas{
                                     Side side,
                                     Transpose trans,
                                     Span<T> tau) {
-        return op_external("lapacke.ormqr_vendor_buffer_size", [&] {
-            static_cast<void>(ctx);
-            static_cast<void>(A);
-            static_cast<void>(C);
-            static_cast<void>(side);
-            static_cast<void>(trans);
-            static_cast<void>(tau);
-            return static_cast<size_t>(0);
-        });
+        static_cast<void>(ctx);
+        static_cast<void>(A);
+        static_cast<void>(C);
+        static_cast<void>(side);
+        static_cast<void>(trans);
+        static_cast<void>(tau);
+        return static_cast<size_t>(0);
     }
 
     } // namespace backend
@@ -1485,7 +1478,7 @@ namespace batchlas{
     #define B_ Backend::NETLIB
 
     // WP0b moved every public entry point out of the vendor TUs into
-    // src/dispatch/entry_points/, so the tables below name only the
+    // src/ops/, so the tables below name only the
     // `backend::<op>_vendor` symbols this file still defines. Adding a public
     // op row back here would collide with those TUs at link time.
     //

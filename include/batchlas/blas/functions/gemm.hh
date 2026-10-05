@@ -58,7 +58,7 @@ namespace batchlas::backend {
 // rocblas.cc:99, netlib_lapack.cc:288 -- so dropping a vendor TU dropped the
 // public entry point with it. No amount of enum or CMake work fixes that: the
 // definition has to leave the vendor file. It now lives in
-// src/dispatch/entry_points/level3.cc, and what remains behind is this: one
+// src/ops/gemm/gemm.cc, and what remains behind is this: one
 // vendor implementation per backend, named as such.
 //
 // Each vendor wrapper TU defines this primary template for its own Backend

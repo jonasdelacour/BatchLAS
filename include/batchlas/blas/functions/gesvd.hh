@@ -14,10 +14,6 @@
 
 #include <batchlas/backend_config.h>
 
-#include <batchlas/blas/dispatch/route.hh>
-#include <batchlas/blas/dispatch/no_route.hh>
-#include <batchlas/blas/dispatch/vendor_available.hh>
-#include <batchlas/blas/dispatch/route_env.hh>
 #include <batchlas/blas/queue-dispatch.hh>
 
 namespace batchlas {

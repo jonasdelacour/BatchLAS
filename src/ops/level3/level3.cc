@@ -1,9 +1,8 @@
-// The public level-3 entry points, defined once, outside every vendor TU.
-//
-// Vendor TUs define backend::<op>_vendor<B, T>; this file defines and explicitly
-// instantiates the public <op><B, T> that routes to it. Keeping the public
-// definitions out of the vendor TUs is what lets the API link in a build with no
-// vendor library. See docs/design/vendor-independence.md#the-entry-point-facade.
+// The public symm/hemm/herk/her2k/syrk/syr2k/trmm entry points, defined outside every
+// vendor TU so the API links in a build with no vendor library. The float CUDA tile
+// routes are chosen by rule in src/backends/*_custom_dispatch.cc (BATCHLAS_<OP>_ROUTE);
+// everything else goes to backend::<op>_vendor<B, T>, or throws NoRouteError when no
+// vendor library is compiled in.
 
 #include <batchlas/backend_config.h>
 
@@ -16,8 +15,8 @@
 #include <batchlas/blas/functions/syr2k.hh>
 #include <batchlas/blas/functions/trmm.hh>
 
-#include <batchlas/blas/dispatch/no_route.hh>
-#include <batchlas/blas/dispatch/vendor_available.hh>
+#include <batchlas/no_route.hh>
+#include "../../select/vendor.hh"
 
 // The four level-3 custom-route gates. They have to run before the
 // vendor-available test, so they live here rather than in cublas.cc.
@@ -51,16 +50,15 @@ Event symm(Queue& ctx,
         }
         // Record the decline: a shape moving OFF a native kernel shows up only here.
         backend::detail::record_level3_route(
-            dispatch::Op::symm,
-            dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto},
+            Op::symm, "vendor",
             C.rows(), C.cols(), A.rows(), A.batch_size(),
             backend::detail::kNativeUnknown,
             {uplo, side, Diag::NonUnit, Transpose::NoTrans});
     }
 
-    if constexpr (!dispatch::level3_vendor_available<Back>) {
-        dispatch::throw_no_vendor_route<T>(
-            dispatch::Op::symm, Back, dispatch::kLevel3Library<Back>);
+    if constexpr (!select::level3_vendor_available<Back>) {
+        select::throw_no_vendor_route<T>(
+            Op::symm, Back, select::kLevel3Library<Back>);
     } else {
         return backend::symm_vendor<Back, T>(ctx, A, B, C, alpha, beta, side, uplo);
     }
@@ -75,9 +73,9 @@ Event hemm(Queue& ctx,
            T beta,
            Side side,
            Uplo uplo) {
-    if constexpr (!dispatch::level3_vendor_available<Back>) {
-        dispatch::throw_no_vendor_route<T>(
-            dispatch::Op::hemm, Back, dispatch::kLevel3Library<Back>);
+    if constexpr (!select::level3_vendor_available<Back>) {
+        select::throw_no_vendor_route<T>(
+            Op::hemm, Back, select::kLevel3Library<Back>);
     } else {
         return backend::hemm_vendor<Back, T>(ctx, A, B, C, alpha, beta, side, uplo);
     }
@@ -91,9 +89,9 @@ Event herk(Queue& ctx,
            float_t<T> beta,
            Uplo uplo,
            Transpose transA) {
-    if constexpr (!dispatch::level3_vendor_available<Back>) {
-        dispatch::throw_no_vendor_route<T>(
-            dispatch::Op::herk, Back, dispatch::kLevel3Library<Back>);
+    if constexpr (!select::level3_vendor_available<Back>) {
+        select::throw_no_vendor_route<T>(
+            Op::herk, Back, select::kLevel3Library<Back>);
     } else {
         return backend::herk_vendor<Back, T>(ctx, A, C, alpha, beta, uplo, transA);
     }
@@ -108,9 +106,9 @@ Event her2k(Queue& ctx,
             float_t<T> beta,
             Uplo uplo,
             Transpose transA) {
-    if constexpr (!dispatch::level3_vendor_available<Back>) {
-        dispatch::throw_no_vendor_route<T>(
-            dispatch::Op::her2k, Back, dispatch::kLevel3Library<Back>);
+    if constexpr (!select::level3_vendor_available<Back>) {
+        select::throw_no_vendor_route<T>(
+            Op::her2k, Back, select::kLevel3Library<Back>);
     } else {
         return backend::her2k_vendor<Back, T>(ctx, A, B, C, alpha, beta, uplo, transA);
     }
@@ -131,17 +129,16 @@ Event syrk(Queue& ctx,
         }
         // Record the decline: a shape moving OFF a native kernel shows up only here.
         backend::detail::record_level3_route(
-            dispatch::Op::syrk,
-            dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto},
+            Op::syrk, "vendor",
             C.rows(), C.cols(),
             transA == Transpose::NoTrans ? A.cols() : A.rows(),
             A.batch_size(), backend::detail::kNativeUnknown,
             {uplo, Side::Left, Diag::NonUnit, transA});
     }
 
-    if constexpr (!dispatch::level3_vendor_available<Back>) {
-        dispatch::throw_no_vendor_route<T>(
-            dispatch::Op::syrk, Back, dispatch::kLevel3Library<Back>);
+    if constexpr (!select::level3_vendor_available<Back>) {
+        select::throw_no_vendor_route<T>(
+            Op::syrk, Back, select::kLevel3Library<Back>);
     } else {
         return backend::syrk_vendor<Back, T>(ctx, A, C, alpha, beta, uplo, transA);
     }
@@ -163,17 +160,16 @@ Event syr2k(Queue& ctx,
         }
         // Record the decline: a shape moving OFF a native kernel shows up only here.
         backend::detail::record_level3_route(
-            dispatch::Op::syr2k,
-            dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto},
+            Op::syr2k, "vendor",
             C.rows(), C.cols(),
             transA == Transpose::NoTrans ? A.cols() : A.rows(),
             A.batch_size(), backend::detail::kNativeUnknown,
             {uplo, Side::Left, Diag::NonUnit, transA});
     }
 
-    if constexpr (!dispatch::level3_vendor_available<Back>) {
-        dispatch::throw_no_vendor_route<T>(
-            dispatch::Op::syr2k, Back, dispatch::kLevel3Library<Back>);
+    if constexpr (!select::level3_vendor_available<Back>) {
+        select::throw_no_vendor_route<T>(
+            Op::syr2k, Back, select::kLevel3Library<Back>);
     } else {
         return backend::syr2k_vendor<Back, T>(ctx, A, B, C, alpha, beta, uplo, transA);
     }
@@ -196,15 +192,14 @@ Event trmm(Queue& ctx,
         }
         // Record the decline: a shape moving OFF a native kernel shows up only here.
         backend::detail::record_level3_route(
-            dispatch::Op::trmm,
-            dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto},
+            Op::trmm, "vendor",
             C.rows(), C.cols(), A.rows(), A.batch_size(),
             backend::detail::kNativeUnknown, {uplo, side, diag, transA});
     }
 
-    if constexpr (!dispatch::level3_vendor_available<Back>) {
-        dispatch::throw_no_vendor_route<T>(
-            dispatch::Op::trmm, Back, dispatch::kLevel3Library<Back>);
+    if constexpr (!select::level3_vendor_available<Back>) {
+        select::throw_no_vendor_route<T>(
+            Op::trmm, Back, select::kLevel3Library<Back>);
     } else {
         return backend::trmm_vendor<Back, T>(ctx, A, B, C, alpha, side, uplo, transA, diag);
     }

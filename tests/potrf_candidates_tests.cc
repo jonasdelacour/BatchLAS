@@ -6,8 +6,8 @@
 #include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/blas/functions/potrf.hh>
 #include <batchlas/blas/functions/trsm.hh>
-#include <batchlas/blas/dispatch/no_route.hh>
-#include <batchlas/blas/dispatch/vendor_available.hh>
+#include <batchlas/no_route.hh>
+#include "../src/select/vendor.hh"
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
@@ -255,7 +255,7 @@ protected:
                          : 0;
         if (std::holds_alternative<pc::Blocked>(c))
             return lower && sycl_potrf::potrf_blocked_available<T>() ? kUnbounded : 0;
-        return dispatch::solver_vendor_available<B> ? kUnbounded : 0;
+        return batchlas::select::solver_vendor_available<B> ? kUnbounded : 0;
     }
 
     // Orders that straddle every candidate's ceiling, for every candidate to face.
@@ -333,7 +333,7 @@ protected:
                         });
                 });
             } else {
-                if constexpr (dispatch::solver_vendor_available<B>) {
+                if constexpr (batchlas::select::solver_vendor_available<B>) {
                     go(backend::potrf_vendor_buffer_size<B, T>(q, A, uplo), [&](Span<std::byte> w) {
                         return backend::potrf_vendor<B, T>(q, A, uplo, w, info);
                     });
@@ -474,7 +474,7 @@ TYPED_TEST(PotrfCandidates, CanRunEqualsLaunch) {
     int disagreements = 0;
     for (const C& c : pc::candidates<T>()) {
         // Compiled out, the vendor pin falls back to Auto (§12): PinnedCandidates covers it.
-        if (std::holds_alternative<pc::Vendor>(c) && !dispatch::solver_vendor_available<TestFixture::B>) continue;
+        if (std::holds_alternative<pc::Vendor>(c) && !batchlas::select::solver_vendor_available<TestFixture::B>) continue;
         for (Uplo uplo : {Uplo::Lower, Uplo::Upper}) {
             for (auto [n, batch] : shapes) {
                 auto p = make_prob<T>(n, batch, uplo, 61u);
@@ -552,7 +552,9 @@ TYPED_TEST(PotrfCandidates, UnknownAndUncompiledPinsThrow) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
     Matrix<T, MatrixFormat::Dense> A(8, 8, 2);
-    std::vector<std::string> bad{"regsiter_tiled", "lpanel:panel=12", "lpanel:panel", "native:lpanel:8", "cta:1"};
+    std::vector<std::string> bad{"regsiter_tiled", "lpanel:panel=12", "lpanel:panel", "native:lpanel:8", "cta:1",
+                             // removed aliases (phase 5): each must stay an error
+                             "native:tiny", "native:cta", "native:lpanel", "native:blocked", "lpanel"};
     if (!std::is_same_v<T, float>) bad.push_back("lpanel:panel=16");
     for (const auto& word : bad) {
         const Pin pin("potrf", std::string_view(word));
@@ -571,7 +573,7 @@ TYPED_TEST(PotrfCandidates, UnknownAndUncompiledPinsThrow) {
 TYPED_TEST(PotrfCandidates, CoverageRowCarriesNativeFlags) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
-    constexpr bool kVendor = dispatch::solver_vendor_available<B>;  // vendor-free, Upper has no route
+    constexpr bool kVendor = batchlas::select::solver_vendor_available<B>;  // vendor-free, Upper has no route
     GTEST_FLAG_SET(death_test_style, "threadsafe");
     const int up = std::max(this->limit(C{pc::Tiny{}}, Uplo::Upper), this->limit(C{pc::Cta{}}, Uplo::Upper)) + 1;
     const std::string dir = ::testing::TempDir() + "potrf_cov." + std::string(select::dtype_name<T>());
@@ -581,7 +583,7 @@ TYPED_TEST(PotrfCandidates, CoverageRowCarriesNativeFlags) {
     auto child = [&] {
         const ScopedEnvVar cov("BATCHLAS_COVERAGE_OUT", out.c_str());
         const ScopedEnvVar clear("BATCHLAS_POTRF_ROUTE", nullptr);
-        dispatch::coverage::g_dynamic_enabled = true;
+        batchlas::coverage::g_dynamic_enabled = true;
         auto lo = make_prob<T>(16, 2, Uplo::Lower, 51u);
         (void)this->run_auto(lo);
         if (kVendor) {
@@ -636,8 +638,9 @@ TYPED_TEST(PotrfCandidates, CanRunFalsePinsThrow) {
     }
 }
 
-// §5.3: the legacy spellings select their choice. Read back from the trace line, not assumed.
-TYPED_TEST(PotrfCandidates, LegacyAliasesSelectTheirChoice) {
+// §5.3: spellings (case-folded, trimmed, positional) and the class words select their choice.
+// Read back from the trace line, not assumed. The removed aliases are in UnknownAndUncompiledPinsThrow.
+TYPED_TEST(PotrfCandidates, ClassWordsAndSpellingsSelectTheirChoice) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
     const ScopedEnvVar clear("BATCHLAS_POTRF_ROUTE", nullptr);
@@ -647,12 +650,11 @@ TYPED_TEST(PotrfCandidates, LegacyAliasesSelectTheirChoice) {
         auto p = make_prob<T>(16, 4, Uplo::Lower, 5u);
         auto_pick = traced_choice([&] { (void)this->run_auto(p); });
     }
-    const std::string vendor_pick = dispatch::solver_vendor_available<B> ? "vendor" : auto_pick;
+    const std::string vendor_pick = batchlas::select::solver_vendor_available<B> ? "vendor" : auto_pick;
     ASSERT_NE(vendor_pick, "") << "no auto trace line";
     const std::pair<const char*, const char*> expect[] = {
-        {"native:tiny", "tiny"},         {"native:cta", "cta"}, {"native:lpanel", "lpanel:panel=8"},
-        {"native:blocked", "blocked"},   {"lpanel", "lpanel:panel=8"}, {"vendor", vendor_pick.c_str()},
-        {"lpanel:8", "lpanel:panel=8"},  {"NATIVE:CTA", "cta"}};
+        {"tiny", "tiny"},       {" CTA ", "cta"},  {"lpanel:8", "lpanel:panel=8"}, {"Blocked", "blocked"},
+        {"vendor", vendor_pick.c_str()}, {"LPanel:Panel=8", "lpanel:panel=8"}};
     for (const auto& [word, spelling] : expect) {
         for (bool via_env : {false, true}) {
             auto p = make_prob<T>(16, 4, Uplo::Lower, 5u);
@@ -667,7 +669,7 @@ TYPED_TEST(PotrfCandidates, LegacyAliasesSelectTheirChoice) {
             }, &err);
             const std::string what = std::string(word) + (via_env ? " via BATCHLAS_POTRF_ROUTE" : " via ScopedPin");
             EXPECT_EQ(got, spelling) << what;
-            const bool fell_back = std::string(word) == "vendor" && !dispatch::solver_vendor_available<B>;
+            const bool fell_back = std::string(word) == "vendor" && !batchlas::select::solver_vendor_available<B>;
             EXPECT_EQ(err.find("pinned \"vendor\", but no vendor candidate") != std::string::npos, fell_back)
                 << what << ": " << err;
             expect_factored(p, info, what);
@@ -697,7 +699,7 @@ TYPED_TEST(PotrfCandidates, BareNativePicksTheBestRunnableNonVendor) {
         auto a = make_prob<T>(r.n, 128, Uplo::Lower, 21u);
         std::vector<int32_t> info;
         // Vendor-free, Auto skips the vendor entry and lands where `native` does.
-        const char* auto_pick = dispatch::solver_vendor_available<B> ? "vendor" : r.native;
+        const char* auto_pick = batchlas::select::solver_vendor_available<B> ? "vendor" : r.native;
         EXPECT_EQ(traced_choice([&] { info = this->run_auto(a); }), auto_pick) << "auto, n=" << r.n;
         expect_factored(a, info, "auto");
         auto p = make_prob<T>(r.n, 128, Uplo::Lower, 22u);
@@ -728,10 +730,10 @@ TYPED_TEST(PotrfCandidates, BareNativePicksTheBestRunnableNonVendor) {
     select::testing::reset_warnings();
     std::string err;
     std::vector<int32_t> info;
-    if constexpr (!dispatch::solver_vendor_available<B>) {
+    if constexpr (!batchlas::select::solver_vendor_available<B>) {
         const Pin pin("potrf", "native");
         ::testing::internal::CaptureStderr();
-        EXPECT_THROW((void)this->run_auto(p), dispatch::NoRouteError);
+        EXPECT_THROW((void)this->run_auto(p), batchlas::NoRouteError);
         err = ::testing::internal::GetCapturedStderr();
         EXPECT_NE(err.find("pinned \"native\", but no native candidate"), std::string::npos) << err;
         return;
@@ -808,7 +810,7 @@ TYPED_TEST(PotrfCandidates, ShippedRowsRunOnTheirOwnDevice) {
         const int n = std::stoi(row.keys[in]);
         Matrix<T, MatrixFormat::Dense> A(n, n, 1);
         for (const auto& e : row.ranked) {
-            if (e.spelling == "vendor" && !dispatch::solver_vendor_available<B>) continue;  // compiled out
+            if (e.spelling == "vendor" && !batchlas::select::solver_vendor_available<B>) continue;  // compiled out
             const Pin pin("potrf", std::string_view(e.spelling));
             try {
                 (void)potrf_buffer_size<B, T>(*this->ctx, A.view(), uplo);
@@ -854,7 +856,7 @@ TYPED_TEST(PotrfCandidates, AutoReadsEveryKeyField) {
         std::vector<int32_t> info;
         const std::string what = std::string(r.uplo == Uplo::Lower ? "L" : "U") + " n=" + std::to_string(r.n) +
                                  " batch=" + std::to_string(r.batch);
-        const char* want = dispatch::solver_vendor_available<B> ? r.expect : r.vf;
+        const char* want = batchlas::select::solver_vendor_available<B> ? r.expect : r.vf;
         EXPECT_EQ(traced_choice([&] { info = this->run_auto(p); }), want) << what;
         expect_factored(p, info, what, r.uplo == Uplo::Upper && std::string(want) == "vendor");
         ++checked;

@@ -12,12 +12,13 @@
 #include <batchlas/blas/functions/getri.hh>
 #include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/blas/functions/trsm.hh>
-#include <batchlas/blas/dispatch/vendor_available.hh>
+#include "../src/select/vendor.hh"
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
+#include <batchlas/settings.hh>
 
 #include "test_utils.hh"
 
@@ -2297,7 +2298,7 @@ TYPED_TEST(LuTest, GetriInvertsAndLeavesTheFactorUntouched) {
 TYPED_TEST(LuTest, NativeFactorFeedsTheVendorSolvers) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::BackendType;
-    if constexpr (!dispatch::factorization_vendor_available<B>) {
+    if constexpr (!batchlas::select::factorization_vendor_available<B>) {
         GTEST_SKIP() << "no factorization vendor in this build";
     } else {
         const int n = 72, batch = 3, nrhs = 4;
@@ -2348,7 +2349,7 @@ TYPED_TEST(LuTest, NativeFactorFeedsTheVendorSolvers) {
 TYPED_TEST(LuTest, VendorFactorFeedsTheNativeSolvers) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::BackendType;
-    if constexpr (!dispatch::factorization_vendor_available<B>) {
+    if constexpr (!batchlas::select::factorization_vendor_available<B>) {
         GTEST_SKIP() << "no factorization vendor in this build";
     } else {
         const int n = 72, batch = 3, nrhs = 4;
@@ -2408,11 +2409,10 @@ TYPED_TEST(LuTest, VendorFactorFeedsTheNativeSolvers) {
     }
 }
 
-// L12. THE ROUTE TABLE AND THE VENDOR-FREE FALLBACK, asked of the REAL shape
-// builder on the REAL device. route_vocabulary_tests.cc exercises the table
-// against SYNTHETIC shapes; what it cannot see is whether the builder reports a
-// capacity at all here -- an LU versus a NoRouteError in a vendor-free build.
-// getrf's half lives in getrf_candidates_tests (flat selection).
+// L12. THE TUNED TABLES AND THE VENDOR-FREE FALLBACK, asked of the REAL shape
+// builder on the REAL device: whether the builder reports a capacity at all
+// here -- an LU versus a NoRouteError in a vendor-free build. getrf's half lives
+// in getrf_candidates_tests (flat selection).
 TYPED_TEST(LuTest, RouteTableAndTheVendorFreeFallback) {
     using T = typename TestFixture::T;
 
@@ -2420,7 +2420,7 @@ TYPED_TEST(LuTest, RouteTableAndTheVendorFreeFallback) {
     // so: an inherited BATCHLAS_GET*_ROUTE -- exported in a shell, or set by the
     // route-pinned ctest rerun -- otherwise forces the answer and the test reports
     // a window defect that is really just its own environment. Empty reads as
-    // unset in parse_route_env.
+    // unset in select's pin reader.
     ScopedEnvVar clear_getrf("BATCHLAS_GETRF_ROUTE", "");
     ScopedEnvVar clear_getrs("BATCHLAS_GETRS_ROUTE", "");
     ScopedEnvVar clear_getri("BATCHLAS_GETRI_ROUTE", "");
@@ -2808,9 +2808,9 @@ TYPED_TEST(LuTest, FusedGetrsAtBlockBoundariesAndTheNbSwitch) {
 
 // F3. THE TWO CEILINGS: THE WIDTH THE BUILD INSTANTIATED (kGetrsFusedMaxRhs = 8)
 // AND THE DEVICE'S RESIDENT-RHS CAPACITY. BOTH MUST HAND BACK, NOT PRODUCE
-// GARBAGE. Both live in supports() and never in preferred(), because above either
-// the kernel does not launch -- and a SPEED threshold in supports() would make a
-// pinned `native:cta` fall through to automatic() and measure the vendor instead.
+// GARBAGE. Both live in can_run() and never in a table, because above either the
+// kernel does not launch -- and a pinned `cta` past them throws (R6) rather than
+// measuring another kernel.
 TYPED_TEST(LuTest, FusedGetrsHandsBackAtBothCeilings) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::BackendType;
@@ -2951,7 +2951,7 @@ TYPED_TEST(LuTest, FusedGetrsConsumesEveryFactorProducer) {
         if (this->HasFailure()) return;
         solve_and_check(p, "NATIVE CTA getrf's");
     }
-    if constexpr (dispatch::factorization_vendor_available<B>) {
+    if constexpr (batchlas::select::factorization_vendor_available<B>) {
         // VENDOR getrf. Its pivot CHOICE differs from ours for complex types, which is why
         // the oracle is a residual against the ORIGINAL A and not a factor comparison.
         auto p = make_dominant_permuted<T>(n, batch, 3737u);

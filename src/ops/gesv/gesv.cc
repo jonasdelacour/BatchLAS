@@ -65,7 +65,7 @@ GesvChoice choose(Queue& q, const MV<T>& A, const MV<T>& Bm) {
 // The coverage row's native flags (§5.6): computed only when coverage records a row.
 template <Backend B, class T>
 select::NativeFacts native_facts(Queue& q, const MV<T>& A, const MV<T>& Bm) {
-    if (!dispatch::coverage::dynamic_enabled()) return {};
+    if (!coverage::dynamic_enabled()) return {};
     const select::Device& d = select::device_of<B>(q);
     return select::native_facts(candidates<T>(), [&](const GesvChoice& c) { return can_run<B, T>(c, d, A, Bm); });
 }

@@ -20,8 +20,8 @@
 #include "../src/ops/posv/choice.hh"
 #include "../src/ops/potrf/choice.hh"
 
-#include <batchlas/blas/dispatch/no_route.hh>
-#include <batchlas/blas/dispatch/vendor_available.hh>
+#include <batchlas/no_route.hh>
+#include "../src/select/vendor.hh"
 
 #include <algorithm>
 #include <cmath>
@@ -432,8 +432,8 @@ TYPED_TEST(PosvTest, FusedSolveArmSolvesOnBothTriangles) {
                 // vendor-free build no cuSOLVER either: the composed potrf has no route
                 // (main's old router threw the same NoRouteError here).
                 const bool native = potrf_native_runs<B, T>(*this->ctx, A, uplo);
-                if (!native && !dispatch::solver_vendor_available<B>) {
-                    EXPECT_THROW(((void)posv_buffer_size<B, T>(*this->ctx, A, Bv, uplo)), dispatch::NoRouteError)
+                if (!native && !batchlas::select::solver_vendor_available<B>) {
+                    EXPECT_THROW(((void)posv_buffer_size<B, T>(*this->ctx, A, Bv, uplo)), batchlas::NoRouteError)
                         << "n=" << n;
                     continue;
                 }

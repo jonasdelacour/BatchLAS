@@ -38,17 +38,8 @@ constexpr auto candidates() {
         return std::array<PotrfChoice, 5>{Tiny{}, Cta{}, Lpanel{8}, Blocked{}, Vendor{}};
 }
 
-// Legacy BATCHLAS_POTRF_ROUTE spellings, accepted until phase 5 (§5.3); bare `lpanel` meant native.
-inline constexpr std::array<select::Alias, 5> aliases{{
-    {"native:tiny", "tiny"},
-    {"native:cta", "cta"},
-    {"native:lpanel", "lpanel:panel=8"},
-    {"native:blocked", "blocked"},
-    {"lpanel", "lpanel:panel=8"},
-}};
-// Generality order (§5.5): Blocked runs every Lower shape on a GPU, Vendor everything else.
 inline constexpr std::array<std::string_view, 2> last_resort{"blocked", "vendor"};
-inline constexpr select::Rules rules{aliases, last_resort};
+inline constexpr select::Rules rules{last_resort};  // §5.5: Blocked runs every Lower shape on a GPU, Vendor everything else.
 
 // Table keys: the exact-match key first, then the log-distance keys (§5.4). n weighs 3: work
 // grows as n^3 and linearly in batch, so the distance approximates log-cost.

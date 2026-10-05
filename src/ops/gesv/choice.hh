@@ -10,8 +10,7 @@
 
 namespace batchlas::ops::gesv {
 
-// Both fieldless: Tiny's N/NR buckets are derived from the shape in the driver.
-struct Tiny : select::NoFields<"tiny"> {};        // gesv_tiny_dispatch: fused LU factor + solve
+struct Tiny : select::NoFields<"tiny"> {};        // gesv_tiny_dispatch: fused LU factor + solve (buckets derived)
 struct Blocked : select::NoFields<"blocked"> {};  // public getrf + public getrs
 
 using GesvChoice = std::variant<Tiny, Blocked>;
@@ -22,12 +21,8 @@ constexpr auto candidates() {
     return std::array<GesvChoice, 2>{Tiny{}, Blocked{}};
 }
 
-inline constexpr std::array<select::Alias, 2> aliases{{  // legacy spellings until phase 5
-    {"native:tiny", "tiny"},
-    {"native:blocked", "blocked"},
-}};
 inline constexpr std::array<std::string_view, 1> last_resort{"blocked"};
-inline constexpr select::Rules rules{aliases, last_resort};
+inline constexpr select::Rules rules{last_resort};
 
 // What the old predicates read: the order and nrhs (batch only as >= 1). Work: 2n^3/3 + 2 n^2 nrhs.
 inline constexpr std::array<std::string_view, 2> key_names{"n:log:3", "nrhs:log"};

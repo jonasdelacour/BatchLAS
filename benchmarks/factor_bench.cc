@@ -40,7 +40,6 @@
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
 
-#include <batchlas/blas/dispatch/route_env.hh>
 #include <batchlas/settings.hh>
 
 #include "../src/extensions/getrf_native.hh"
@@ -198,18 +197,6 @@ static const char* leaf_variable(OpKind op) {
         default: return nullptr;
     }
 }
-static dispatch::Op dispatch_op(OpKind k) {
-    switch (k) {
-        case OpKind::potrf: return dispatch::Op::potrf;
-        case OpKind::getrf: return dispatch::Op::getrf;
-        case OpKind::getrs: return dispatch::Op::getrs;
-        case OpKind::geqrf: return dispatch::Op::geqrf;
-        case OpKind::orgqr: return dispatch::Op::orgqr;
-        case OpKind::gesv:  return dispatch::Op::gesv;
-        case OpKind::posv:  return dispatch::Op::posv;
-    }
-    return dispatch::Op::COUNT;
-}
 static const char* op_text(OpKind k) {
     switch (k) {
         case OpKind::potrf: return "potrf";
@@ -223,55 +210,36 @@ static const char* op_text(OpKind k) {
     return "?";
 }
 
-// PIN_PARSED SAYS THE VALUE WAS UNDERSTOOD, NOT THAT THE ROUTE TOOK. Route
-// resolution falls through to automatic() when a forced route does not support
-// the shape, so `--route=cta` on an order the CTA tier cannot hold reports
-// pin_parsed=1 and then silently runs whatever automatic() picks -- in a vendor
-// build, the vendor. The RESOLVED route is a separate readback:
-// run_factor_grid.sh re-runs each cell once, untimed, with BATCHLAS_COVERAGE_OUT
-// set and greps the `reached,` row. Never read this column as "the route ran".
+// PIN_PARSED SAYS THE VALUE WAS UNDERSTOOD, NOT THAT THE ROUTE TOOK: the resolved
+// route is a separate readback (run_factor_grid.sh re-runs each cell once, untimed, with
+// BATCHLAS_COVERAGE_OUT set and greps the `reached,` row). Every op here is flat-selected
+// (src/ops/<op>/): a pin is auto, native, vendor or a choice spelling (`lpanel:panel=8`), and
+// one that cannot run THROWS. The coverage readback carries the spelling in chosen_algo,
+// e.g. `native:lpanel:panel=8`.
 //
-// It is queried INSIDE the ScopedEnvVar scope on purpose: settings() is a
-// pre-main snapshot, so a raw ::setenv is invisible to it and only
-// ScopedEnvVar's reload_settings() makes the pin readable at all.
-//
-// potrf, posv, getrf, getrs and gesv have migrated to flat selection (src/ops/<op>/): their
-// pins are choice spellings (`lpanel:panel=8`, `cta`), the legacy aliases (`native:lpanel`) or
-// auto/native/vendor, and a pin that cannot run THROWS instead of falling through. Their
-// coverage rows carry the spelling in chosen_algo, so the readback reads e.g.
-// `native:lpanel:panel=8`.
-template <class Choice, class Aliases>
-static bool select_pin_parsed(std::string text, const Aliases& aliases) {
+// It is queried INSIDE the ScopedEnvVar scope on purpose: settings() is a pre-main
+// snapshot, and only ScopedEnvVar's reload_settings() makes the pin readable at all.
+template <class Choice>
+static bool select_pin_parsed(OpKind k) {
+    const char* raw = settings().routing.route(op_text(k)).get();
+    if (raw == nullptr) return false;
+    std::string text = raw;
     for (char& ch : text) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
     if (text == "auto" || text == "native" || text == "vendor") return true;
-    for (const auto& a : aliases)
-        if (text == a.name) return true;
     return select::parse<Choice>(text).has_value();
 }
 
 static bool pin_parsed_now(OpKind k) {
-    if (k == OpKind::gesv) {
-        const char* raw = settings().routing.canonical_route(dispatch_op(k)).get();
-        return raw != nullptr && select_pin_parsed<ops::gesv::GesvChoice>(raw, ops::gesv::aliases);
+    switch (k) {
+        case OpKind::potrf: return select_pin_parsed<ops::potrf::PotrfChoice>(k);
+        case OpKind::getrf: return select_pin_parsed<ops::getrf::GetrfChoice>(k);
+        case OpKind::getrs: return select_pin_parsed<ops::getrs::GetrsChoice>(k);
+        case OpKind::geqrf: return select_pin_parsed<ops::geqrf::GeqrfChoice>(k);
+        case OpKind::orgqr: return select_pin_parsed<ops::orgqr::OrgqrChoice>(k);
+        case OpKind::gesv:  return select_pin_parsed<ops::gesv::GesvChoice>(k);
+        case OpKind::posv:  return select_pin_parsed<ops::posv::PosvChoice>(k);
     }
-    if (k == OpKind::orgqr) {
-        const char* raw = settings().routing.canonical_route(dispatch_op(k)).get();
-        return raw != nullptr && select_pin_parsed<ops::orgqr::OrgqrChoice>(raw, ops::orgqr::aliases);
-    }
-    if (k == OpKind::potrf || k == OpKind::posv || k == OpKind::getrf || k == OpKind::getrs) {
-        const char* raw = settings().routing.canonical_route(dispatch_op(k)).get();
-        if (raw == nullptr) return false;
-        if (k == OpKind::getrf) return select_pin_parsed<ops::getrf::GetrfChoice>(raw, ops::getrf::aliases);
-        if (k == OpKind::getrs) return select_pin_parsed<ops::getrs::GetrsChoice>(raw, ops::getrs::aliases);
-        return k == OpKind::potrf ? select_pin_parsed<ops::potrf::PotrfChoice>(raw, ops::potrf::aliases)
-                                  : select_pin_parsed<ops::posv::PosvChoice>(raw, ops::posv::aliases);
-    }
-    if (k == OpKind::geqrf) {  // flat selection too (src/ops/geqrf/)
-        const char* raw = settings().routing.canonical_route(dispatch_op(k)).get();
-        return raw != nullptr && select_pin_parsed<ops::geqrf::GeqrfChoice>(raw, ops::geqrf::aliases);
-    }
-    const auto p = dispatch::parse_route_env(dispatch_op(k));
-    return p.found && !p.unparsed;
+    return false;
 }
 
 // ------------------------------------------------------------- inputs

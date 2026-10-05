@@ -250,7 +250,7 @@ The conjugating path through the same kernel was built and **measured and reject
 float it loses to the existing GEMM-plus-Hermitian-fold at every Gram shape — 0.217 vs **0.206**
 ms at n=32 batch 2048, 2.08 vs **1.57** at n=128 batch 512. A complex multiply is four real ones,
 so herk is compute bound where real syrk is bandwidth bound, and cuBLAS's cgemm is better at
-compute. The route stays reachable as `BATCHLAS_SYRK_VARIANT=gram` so it stays measurable and the
+compute. The route stays reachable as `BATCHLAS_SYRK_ROUTE=gram` so it stays measurable and the
 conjugation stays under test (`syrk_custom_dispatch.hh:16-24`).
 
 ### trmm for the WY block factor
@@ -389,22 +389,18 @@ none of BatchLAS present; fixed with `alignas(16) T alpha_aligned = alpha` (`cub
 
 ### Forced-route defects
 
-1. **`BATCHLAS_SYRK_ROUTE=native` produces a wrong answer.** `{Native, Auto}` passes
-   `syrk_use_cuda_custom`, then fails every arm inside `syrk_cuda_custom` (`gram` requires
-   `origin == Auto`; the tile arm requires `algo == TriangularTiles || origin == Auto`) and lands
-   on `syrk_cublasdx_fallback_gemm` at `syrk_custom_dispatch.cc:261` — the `DiagFullGemm`
-   route, which **writes both triangles**. `WP1_LEVEL3_SPEC.md` describes this fall-through as
-   landing "into raw cuBLAS"; after WP1 S2 the terminal is the public `gemm`, so the note's
-   destination is stale, but the defect is unchanged and unfixed.
-2. **`BATCHLAS_SYR2K_ROUTE=native` throws a cuBLASDx message it did not ask for**
-   (`syr2k_custom_dispatch.cc:199-211`); the throw is not guarded by `forced`. Pre-existing,
-   preserved exactly rather than quietly improved.
+1. ~~`BATCHLAS_SYRK_ROUTE=native` produces a wrong answer~~ (it fell through to the
+   both-triangles `DiagFullGemm` route) and
+2. ~~`BATCHLAS_SYR2K_ROUTE=native` throws a cuBLASDx message it did not ask for~~: fixed in flat
+   selection phase 5, which replaced the route vocabulary with per-op words
+   ([dispatch.md](dispatch.md#the-level-3-pin-words)) and deleted `DiagFullGemm`. `native` takes
+   the tile kernel; `SyrkCudaCustomTest.AutoAndNativeRoutesLeaveTheOtherHalfUntouched` holds it.
 
 ### Routing and reachability
 
 3. **`symm` has no `expansion_fits` ceiling** where hemm, herk and her2k all have one:
-   `symm_cublasdx_fallback_gemm` allocates the k x k x batch scratch unconditionally
-   (`symm_custom_dispatch.cc:95-99`), so a large enough symm hits the 2^31-element SYCL range
+   `symm_expand_gemm` allocates the k x k x batch scratch unconditionally
+   (`symm_custom_dispatch.cc`), so a large enough symm hits the 2^31-element SYCL range
    failure instead of falling back. Adding the check *is* a route change and needs measuring.
 4. **`double` symm has no expansion route at all** — the facade gate is float-only and
    `symm_vendor` forwards to a per-batch `cublasDsymm` loop, while complex `hemm` and float

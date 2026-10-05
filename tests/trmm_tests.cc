@@ -116,7 +116,7 @@ TEST(TrmmCudaCustomTest, ForcedCuBLASDxPathMatchesVendor) {
         Matrix<float> C_vendor(n, n, batch);
 
         {
-            ScopedEnvVar force_variant("BATCHLAS_TRMM_VARIANT", "cublasdx");
+            ScopedEnvVar force_route("BATCHLAS_TRMM_ROUTE", "cublasdx");
             try {
                 trmm(ctx,
                                     A.view(),
@@ -127,13 +127,13 @@ TEST(TrmmCudaCustomTest, ForcedCuBLASDxPathMatchesVendor) {
 #if BATCHLAS_HAS_CUBLAS
                 EXPECT_FALSE(batchlas::backend::trmm_cublasdx::available());
 #endif
-                EXPECT_NE(std::string(err.what()).find("BATCHLAS_TRMM_VARIANT=cublasdx"), std::string::npos);
+                EXPECT_NE(std::string(err.what()).find("BATCHLAS_TRMM_ROUTE=cublasdx"), std::string::npos);
                 return;
             }
         }
 
         {
-            ScopedEnvVar vendor_variant("BATCHLAS_TRMM_VARIANT", "vendor");
+            ScopedEnvVar vendor_route("BATCHLAS_TRMM_ROUTE", "vendor");
             trmm(ctx,
                                 A.view(),
                                 B.view(),
@@ -154,6 +154,20 @@ TEST(TrmmCudaCustomTest, ForcedCuBLASDxPathMatchesVendor) {
         }
     }
 }
+// BATCHLAS_TRMM_ROUTE takes only its own words; the removed legacy spellings (and any typo)
+// throw rather than silently meaning Auto.
+TEST(TrmmCudaCustomTest, RemovedRouteWordsThrow) {
+    Queue ctx;
+    if (ctx.device().type != DeviceType::GPU) {
+        GTEST_SKIP() << "CUDA custom trmm test requires a GPU device";
+    }
+    Matrix<float, MatrixFormat::Dense> A(16, 16, 2), B(16, 4, 2), C(16, 4, 2);
+    for (const char* word : {"tiles", "narrow", "gemm", "custom", "dx", "fused", "diag_full_gemm", "triangular_tiles", "gram_tiles", "expand_gemm", "fused_device", "register_tiled", "native:auto", "vendor:auto", "bogus", "gram", "expand"}) {
+        ScopedEnvVar route("BATCHLAS_TRMM_ROUTE", word);
+        EXPECT_THROW(trmm(ctx, A.view(), B.view(), C.view(), {.alpha = 1.0f}).wait(), std::invalid_argument) << word;
+    }
+}
+
 #endif
 
 // TRMM must not reference the opposite triangle of A, nor its diagonal when

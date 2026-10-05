@@ -47,11 +47,7 @@ using C = std::variant<Tiny, Cta, Lpanel, Wide, Blocked, Vendor>;
 const std::array<C, 6> kCands{Tiny{}, Cta{}, Lpanel{8}, Lpanel{16}, Blocked{}, Vendor{}};
 const std::array<C, 4> kNoVendor{Tiny{}, Cta{}, Lpanel{8}, Blocked{}};
 constexpr std::array<std::string_view, 2> kLastResort{"blocked", "vendor"};
-constexpr std::array<sel::Alias, 4> kAliases{{{"native:tiny", "tiny"},
-                                              {"native:lpanel", "lpanel:panel=8"},
-                                              {"native:bogus", "lpanel:panel=99"},
-                                              {"lib", "vendor"}}};
-const sel::Rules kRules{kAliases, kLastResort};
+const sel::Rules kRules{kLastResort};
 
 using Pred = std::function<bool(const C&)>;
 const Pred kAll = [](const C&) { return true; };
@@ -81,7 +77,7 @@ C choose(const std::string& device, const sel::Key& k, const Pred& ok = kAll, co
 
 std::string S(const C& c) { return sel::to_string(c); }
 
-batchlas::dispatch::OpShape shape(std::int64_t n, std::int64_t batch) {
+batchlas::coverage::Shape shape(std::int64_t n, std::int64_t batch) {
     return sel::square_shape<batchlas::Backend::CUDA, float>(n, batch);
 }
 
@@ -493,8 +489,11 @@ TEST_F(Select, BadPinsThrow) {
     EXPECT_NE(pin_error("wide:1:2").find("not a compiled"), std::string::npos);
     EXPECT_NE(pin_error("cta", all_but({"cta"})).find("cta cannot run this shape on sm_120"), std::string::npos);
     EXPECT_EQ(pin_error("vendor", all_but({"vendor"})), "<no throw>");  // a class word, like native
-    EXPECT_NE(pin_error("lib", all_but({"vendor"})).find("vendor cannot run"), std::string::npos);  // an alias
-    EXPECT_NE(pin_error("native:bogus").find("lpanel:panel=99 is not a compiled"), std::string::npos);
+    // There are no aliases: the old router's origin:algorithm spellings are not choices.
+    for (const char* old : {"native:tiny", "native:lpanel", "vendor:auto", "auto:auto", "netlib"})
+        EXPECT_NE(pin_error(old).find("is not a valid choice: '" + std::string(old) + "'"),
+                  std::string::npos)
+            << old;
     EXPECT_EQ(pin_error("cta"), "<no throw>");
 }
 
@@ -519,12 +518,12 @@ TEST_F(Select, VendorPinWithNoRunnableVendorFallsBackToAutoAndWarnsOnce) {
                    "using the automatic choice\n");
 }
 
-TEST_F(Select, ConcretePinsAliasesAndNormalisation) {
+TEST_F(Select, ConcretePinsAndNormalisation) {
     sel::testing::set_builtin_tables({file("sm_120", kPinRow)});
     EXPECT_EQ(S(choose("sm_120", key("L", 64, 1024))), "vendor");
     const std::vector<std::pair<std::string, std::string>> pins{
         {"tiny", "tiny"}, {"lpanel:16", "lpanel:panel=16"}, {"  LPanel:Panel=16 ", "lpanel:panel=16"},
-        {"native:tiny", "tiny"}, {"native:lpanel", "lpanel:panel=8"}, {"blocked", "blocked"}};
+        {"Blocked", "blocked"}, {"blocked", "blocked"}};
     for (const auto& [pin, want] : pins) {
         sel::ScopedPin<C> p("synth", pin);
         EXPECT_EQ(S(choose("sm_120", key("L", 64, 1024))), want) << pin;
@@ -670,25 +669,16 @@ TEST_F(Select, TraceLinesAndIndentation) {
         file("sm_120", "uplo=L n=64 batch=1024 | cta 0.5\n", "child"),
         file("sm_89", "uplo=L n=64 batch=1024 | lpanel:8 0.302\n")});
     ScopedEnvVar trace("BATCHLAS_SELECT_TRACE", "1");
-    batchlas::dispatch::OpShape old;
-    old.op = batchlas::dispatch::Op::trsm;
-    old.scalar = batchlas::dispatch::ScalarKind::C64;
-    old.m = old.n = old.k = 4;
-    old.batch = 2;
     ::testing::internal::CaptureStderr();
-    EXPECT_FALSE(batchlas::dispatch::coverage::select_trace_active());
     {
         const C c = choose("sm_120", key("L", 64, 1024), all_but({"cta"}));
         sel::TraceScope ts("synth", c, shape(64, 1024));
-        EXPECT_TRUE(batchlas::dispatch::coverage::select_trace_active());
         {
             const C k = choose("sm_120", key("L", 64, 1024), kAll, "child");
             sel::TraceScope tk("child", k, shape(64, 1024));
-            batchlas::dispatch::coverage::select_trace_old_route(
-                old, {batchlas::dispatch::Origin::Native, batchlas::dispatch::Algorithm::CTA});
+            const C g = choose("sm_120", key("L", 64, 1024), kAll, "child");
+            sel::TraceScope tg("child", g, shape(64, 1024));
         }
-        batchlas::dispatch::coverage::select_trace_old_route(
-            old, {batchlas::dispatch::Origin::Vendor, batchlas::dispatch::Algorithm::Auto});
     }
     {
         const C c = choose("sm_120", key("L", 512, 2048));
@@ -712,8 +702,7 @@ TEST_F(Select, TraceLinesAndIndentation) {
     EXPECT_EQ(err,
               "synth float n=64 batch=1024 -> lpanel:panel=8  0.302 ms, next vendor 0.49 ms  [sm_120]\n"
               "  child float n=64 batch=1024 -> cta  0.5 ms  [sm_120]\n"
-              "    trsm cdouble m=4 n=4 k=4 batch=2 -> (old routing: native:cta)\n"
-              "  trsm cdouble m=4 n=4 k=4 batch=2 -> (old routing: vendor)\n"
+              "    child float n=64 batch=1024 -> cta  0.5 ms  [sm_120]\n"
               "synth float n=512 batch=2048 -> blocked  14.10 ms, tied with vendor 13.74 ms (3%)  [sm_120]\n"
               "synth float n=64 batch=1024 -> tiny  [pinned]\n"
               "synth float n=64 batch=1024 -> blocked  [last resort]\n"
@@ -759,8 +748,8 @@ TEST(SelectDevice, VendorFlagsAreSeparateAndPartOfTheMemoKey) {
     EXPECT_EQ(&sel::describe(dev, B, false, true), &blas);  // memoized
     batchlas::Queue q(dev, B);
     const sel::Device& d = sel::device_of<B>(q);
-    EXPECT_EQ(d.has_vendor_blas, batchlas::dispatch::level3_vendor_available<B>);
-    EXPECT_EQ(d.has_vendor_solver, batchlas::dispatch::solver_vendor_available<B>);
+    EXPECT_EQ(d.has_vendor_blas, batchlas::select::level3_vendor_available<B>);
+    EXPECT_EQ(d.has_vendor_solver, batchlas::select::solver_vendor_available<B>);
     EXPECT_FALSE(sel::device_of<B>(q, true, false).has_vendor_blas);
     EXPECT_TRUE(sel::device_of<B>(q, false, true).has_vendor_blas);
 }
@@ -773,7 +762,7 @@ TEST(SelectCoverageDeathTest, RowCarriesScalarBackendAndUploWithTraceOff) {
     auto child = [&] {
         ScopedEnvVar trace("BATCHLAS_SELECT_TRACE", nullptr);
         ScopedEnvVar cov("BATCHLAS_COVERAGE_OUT", out.c_str());
-        batchlas::dispatch::coverage::g_dynamic_enabled = true;  // latched at static init
+        batchlas::coverage::g_dynamic_enabled = true;  // latched at static init
         auto s = sel::square_shape<batchlas::Backend::CUDA, std::complex<double>>(64, 1024);
         s.uplo = batchlas::Uplo::Upper;
         { sel::TraceScope ts("potrf", C{Cta{}}, s, sel::NativeFacts{true, 0}); }
@@ -808,7 +797,6 @@ TEST_F(Select, TraceIsSilentWhenOff) {
     {
         const C c = choose("sm_120", key("L", 64, 1024));
         sel::TraceScope ts("synth", c, shape(64, 1024));
-        EXPECT_FALSE(batchlas::dispatch::coverage::select_trace_active());
     }
     EXPECT_EQ(::testing::internal::GetCapturedStderr(), "");
 }

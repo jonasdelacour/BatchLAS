@@ -5,9 +5,9 @@
 #include <gtest/gtest.h>
 
 #include <batchlas/blas/functions/spmm.hh>
-#include <batchlas/blas/dispatch/coverage.hh>
-#include <batchlas/blas/dispatch/no_route.hh>
-#include <batchlas/blas/dispatch/vendor_available.hh>
+#include "../src/select/coverage.hh"
+#include <batchlas/no_route.hh>
+#include "../src/select/vendor.hh"
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
@@ -286,7 +286,7 @@ class SpmmCandidates : public test_utils::BatchLASTest<Config> {
 protected:
     using T = typename Config::ScalarType;
     static constexpr Backend B = Config::BackendVal;
-    static constexpr bool kVendor = dispatch::sparse_vendor_available<B>;
+    static constexpr bool kVendor = batchlas::select::sparse_vendor_available<B>;
 
     void SetUp() override {
         test_utils::BatchLASTest<Config>::SetUp();
@@ -614,7 +614,7 @@ TYPED_TEST(SpmmCandidates, HeterogeneousDenseBatchHasNoNativeRoute) {
         bool threw = false;
         EXPECT_EQ(traced_choice(call, nullptr, &threw), "vendor");
     } else {
-        EXPECT_THROW(call(), dispatch::NoRouteError);
+        EXPECT_THROW(call(), batchlas::NoRouteError);
     }
 }
 
@@ -623,7 +623,9 @@ TYPED_TEST(SpmmCandidates, HeterogeneousDenseBatchHasNoNativeRoute) {
 TYPED_TEST(SpmmCandidates, UnknownPinsThrow) {
     using T = typename TestFixture::T;
     for (const char* word : {"bogus", "cta", "blocked", "native:cta", "direct:1", "native:vendor", "gather",
-                             "native:direct:2"}) {
+                             "native:direct:2",
+                             // removed aliases (phase 5): each must stay an error
+                             "native:direct"}) {
         auto p = make<T>(Spec{});
         const Pin pin("spmm", std::string_view(word));
         EXPECT_THROW(this->run(p), std::invalid_argument) << word;
@@ -634,9 +636,9 @@ TYPED_TEST(SpmmCandidates, UnknownPinsThrow) {
 }
 
 // §5.3 / RouteSpmm.BatchlasSpmmRouteIsActuallyRead and ForcedNativeStillReachesTheRefusedScatter:
-// the legacy spellings and class words via ScopedPin and the environment, on a transposed A
+// spellings (case-folded) and class words via ScopedPin and the environment, on a transposed A
 // (outside the old preferred window) so `native` must reach the scatter.
-TYPED_TEST(SpmmCandidates, LegacyAliasesAndClassWords) {
+TYPED_TEST(SpmmCandidates, ClassWordsAndSpellings) {
     using T = typename TestFixture::T;
     for (Transpose ta : {Transpose::NoTrans, Transpose::ConjTrans}) {
         const Spec s{9, 7, 4, 3, ta, Transpose::Trans};
@@ -650,7 +652,7 @@ TYPED_TEST(SpmmCandidates, LegacyAliasesAndClassWords) {
         const bool vendor_ok = TestFixture::expect_runs(C{sp::Vendor{}}, s);
         const std::string vendor_pick = vendor_ok ? "vendor" : auto_pick;
         const std::pair<const char*, std::string> expect[] = {
-            {"native:direct", "direct"}, {"NATIVE:DIRECT", "direct"}, {"direct", "direct"}, {"Direct", "direct"},
+            {"DIRECT", "direct"}, {"direct", "direct"}, {"Direct", "direct"},
             {"native", "direct"},        {"vendor", vendor_pick},     {"auto", auto_pick}};
         for (const auto& [word, spelling] : expect)
             for (bool via_env : {false, true}) {
@@ -828,7 +830,7 @@ TYPED_TEST(SpmmCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     auto child = [&] {
         const ScopedEnvVar cov("BATCHLAS_COVERAGE_OUT", out.c_str());
         const ScopedEnvVar clear("BATCHLAS_SPMM_ROUTE", nullptr);
-        dispatch::coverage::g_dynamic_enabled = true;
+        batchlas::coverage::g_dynamic_enabled = true;
         const Pin pin("spmm", C{sp::Direct{}});
         auto a = make<T>(lo);
         this->run(a);

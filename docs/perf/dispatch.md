@@ -1,163 +1,85 @@
-# Dispatch, routing vocabulary and the vendor gate (WP0, WP1)
+# Dispatch: the vendor gate, the level-3 route arms and the coverage instrument (WP0, WP1)
 
-The durable record of two work packages: **WP0**, which replaced `Provider` with a two-axis `Route`, moved the 21
-public op definitions out of the vendor translation units, and built the coverage instrument; and **WP1**, which freed
-the four level-3 tile dispatchers (`symm`/`syrk`/`syr2k`/`trmm`) from the cuBLAS object library.
+The durable record of two work packages: **WP0**, which moved the public op definitions out of the vendor
+translation units and built the coverage instrument, and **WP1**, which freed the four level-3 tile dispatchers
+(`symm`/`syrk`/`syr2k`/`trmm`) from the cuBLAS object library. The `Route{Origin, Algorithm}` vocabulary, the
+`RouteTable` resolver and the legacy `_VARIANT`/`_PROVIDER` spellings WP0 introduced are gone: every other op chooses
+from tuned tables (`src/ops/<op>/`, docs/design/flat-kernel-selection.md), and phase 5 of that design deleted
+`include/batchlas/blas/dispatch/`.
 
-The shipped code is the authority on **what** ships; the exploration notes are the authority on **why**. Where they
-disagree the disagreement is stated in place. Ops covered: `symm`, `syrk`, `syr2k`, `trmm` (their route gates and
-windows), plus the dispatch machinery every op uses. The same four ops' kernel design and per-dtype tables live in
-[`level3.md`](level3.md); this page is the routing half. Measured windows for `gemm`, `trsm`, `potrf`,
-`geqrf`/`orgqr`, `getrf`/`getrs`/`getri`, `gemv` and `spmm` live with their own packages.
-
-## The three axes
-
-Three questions were previously answered by one enum. They are now separate:
-
-| axis | type | question | where |
-|---|---|---|---|
-| device family | `Backend` (`AUTO`/`CUDA`/`ROCM`/`MKL`/`MAGMA`/`SYCL`/`NETLIB`) — only `CUDA`, `ROCM`, `MKL`, `NETLIB` are dispatch targets | which instantiation family is this call compiled for | `enums.hh:78-87` |
-| library present | `BackendLibrary` + `BATCHLAS_HAS_<LIB>` | which third-party math library exists in this build | `backend_config.h` |
-| route | `Route{Origin, Algorithm}` | whose code runs, and which strategy | `include/batchlas/blas/dispatch/route.hh:43-53` |
-
-`Origin ∈ {Auto, Native, Vendor}` answers "whose code"; `Algorithm` answers "which strategy" (`route.hh:22-39`).
-`Route::library` is *declared* as an output — deliberately excluded from `operator==` (`route.hh:46-51`) — but
-**nothing in the tree ever writes it**: no resolver, no table, no facade assigns `library` or `library_valid`, so every
-resolved `Route` still carries the default `BackendLibrary::CBLAS` with `library_valid == false`. A consumer that
-believes the header comment and reads the field gets a wrong answer silently. The library name a coverage `miss` row
-carries comes from `throw_no_vendor_route`'s own `library` argument (`no_route.hh:69`), not from this field.
-
-There is deliberately no `Origin::SYCL`: every route in the tree is SYCL, so the value would name nothing and would
-collide with the device-family axis (`route.hh:3-5`). **`Backend::SYCL`, by contrast, does exist** — it is in the
-enum at `enums.hh:84`, predating this work and untouched by it; what WP0 declined was *adding* one. It is not a
-dispatch target: `Queue::backend_available(Backend::SYCL)` is false and `set_backend` throws
-(`src/util/queue-impl.cc:63-75`, pinned by `tests/backend_dispatch_tests.cc:72,80`), and `with_backend` can reach four
-backends, not seven. "NVIDIA GPU with no cuBLAS" is
-spelled `Backend::CUDA` + `BATCHLAS_HAS_CUBLAS == 0`, which costs zero new instantiations. The MathDx device libraries
-are `Origin::Vendor` even though their kernels compile into our `.so`: the source is NVIDIA's and ships only for
-NVIDIA, so vendor independence must be measurable without them (`route.hh:20-57`).
+The shipped code is the authority on **what** ships; the exploration notes are the authority on **why**. Ops covered:
+`symm`, `syrk`, `syr2k`, `trmm` (their route gates and windows), plus the vendor gate and coverage instrument every op
+uses. The same four ops' kernel design and per-dtype tables live in [`level3.md`](level3.md); this page is the routing
+half.
 
 ## What ships
 
-### The resolver
-
-`dispatch::resolve_route<Op, T>` (`route_resolve.hh:85-103`) wraps a pure `resolve_route_uninstrumented` (`:89-176`).
-Rules, as implemented:
-
-* a forced route bypasses `preferred()` but **never** `supports()` — `supports` is correctness only, and a speed
-  threshold placed there makes a pinned route fall through to `automatic()`, so the test that pinned it measures
-  something else (`:38-45`);
-* a forced route that cannot serve the shape falls back to the ordinary automatic choice, not to the vendor
-  (`:167-175`); a requested vendor that does not exist does the same (`:136-144`);
-* `automatic()` takes the first route that is both `supports` and `preferred`; only when `vendor_available == false`
-  does it accept a merely *supported* native route (`:109-130`). Taking "first merely supported" unconditionally
-  inverts the default for small shapes — see [negative-results](#negative-results);
-* an optional third predicate `native_tier_preferred(r, s)` breaks native-vs-native ties and is consulted **only** in
-  the vendor-free walk, so flipping it moves nothing in a vendor-present build (`:32-83`). Tables that do not declare
-  it get `true`.
-
-`RouteTable<Op, T>` specialisations exist for eleven ops: `gemv`, `getrf`, `getrs`, `gesv`,
-`getri`, `geqrf`, `orgqr`, `ormqr`, `gesvd` and `spmm` get one header each under `include/batchlas/blas/dispatch/`;
-`syev`'s lives with the op instead, at `include/batchlas/blas/functions/syev.hh:330`. The four level-3 tile ops have
-none. `potrf`, `posv`, `trsm` and `gemm` had one until flat selection; each now chooses from `tuned/<op>.*.txt` in
-`src/ops/<op>/<op>.cc` ([potrf.md](potrf.md#selection-since-flat-kernel-selection-phase-2),
-[trsm.md](trsm.md#choices-flat-selection-p33), [gemm.md](gemm.md#choices-flat-selection-p34),
-docs/design/flat-kernel-selection.md). (`level3_coverage.hh:21` still says only "gemm, gesvd, ormqr and syev" have tables — that comment is stale, the
-sentence it supports is not.)
-
 ### The vendor-availability gate
 
-`dispatch/vendor_available.hh` asks per **library**, not per device family, because the map is not uniform: on NVIDIA
-`geqrf`/`getrf`/`ormqr` come from cuBLAS while `potrf`/`syev` come from cuSOLVER, on AMD all from rocSOLVER.
+`src/select/vendor.hh` asks per **library**, not per device family, because the map is not uniform: on NVIDIA
+`getrf`/`getri` come from cuBLAS while `potrf`/`syev` come from cuSOLVER, on AMD all from rocSOLVER.
 
 ```cpp
-// vendor_available.hh:34-38
-template <Backend B>
+template <Backend B>  // gemm gemv trsm trmm symm syrk syr2k hemm herk her2k
 inline constexpr bool level3_vendor_available =
     B == Backend::CUDA   ? bool(BATCHLAS_HAS_CUBLAS)  :
     B == Backend::ROCM   ? bool(BATCHLAS_HAS_ROCBLAS) :
     B == Backend::NETLIB ? kHasNetlib : false;
 ```
 
-with `factorization_` (`:42-45`), `solver_` (`:49-52`) and `sparse_` (`:56-59`) siblings, and `kHasNetlib =
-BATCHLAS_HAS_LAPACKE && BATCHLAS_HAS_CBLAS` (`:31`). When nothing serves a call, `throw_no_vendor_route<T>`
-(`no_route.hh:62-72`) records a coverage miss and throws `NoRouteError`, whose message names op, scalar type and the
-switch that would restore it (`build_message`, `no_route.hh:36-53`) — and deliberately *not* the backend, which
-`NoRouteError` carries but discards when formatting (`:51`).
+with `factorization_`, `solver_` and `sparse_` siblings, and `kHasNetlib = BATCHLAS_HAS_LAPACKE &&
+BATCHLAS_HAS_CBLAS`. When nothing serves a call, `select::throw_no_vendor_route<T>` records a coverage miss and throws
+`batchlas::NoRouteError` (`include/batchlas/no_route.hh`), whose message names op, scalar type and the switch that
+would restore it.
 
 The spec's `src/dispatch/absent/*.cc` stub design was **declined**: it restates all 26 vendor signatures a second
 time, and S5's two real bugs were signature divergence between restated copies. The shipped gate is an `if constexpr`
-in the facade, so the vendor call is not compiled at all when the library is absent (`vendor_available.hh:15-21`). The
-"is the kernel linked" predicate four `src/extensions/` sites previously spelled `B == Backend::CUDA` is now
-`level3_tile_route_available<B, T> = B == Backend::CUDA && (std::is_same_v<T, float> || bool(BATCHLAS_HAS_CUBLAS))`
-(`route_compiled.hh:62-64`). The four sites are `ormqr_blocked.cc:57`, `ortho.cc:179` and `:182`, and
-`sytrd_blocked.cc:819`; `coverage.cc:164` is a fifth consumer outside `src/extensions/`.
+at the call site, so the vendor call is not compiled at all when the library is absent. The "is the kernel linked"
+predicate four `src/extensions/` sites previously spelled `B == Backend::CUDA` is
+`select::level3_tile_route_available<B, T> = B == Backend::CUDA && (std::is_same_v<T, float> ||
+bool(BATCHLAS_HAS_CUBLAS))`; its users are `ormqr_blocked.cc`, `ortho.cc` (twice), `sytrd_blocked.cc` and the static
+coverage table.
 
 ### Level-3 route arms
 
-The four level-3 dispatchers have **no `RouteTable` and never call `resolve_route`**; their thresholds are hand-rolled
-`if`-chains, expressed as neither `supports()` nor `preferred()` (`src/backends/level3_coverage.hh:18-37`). The gates
-live in the facade (`src/dispatch/entry_points/level3.cc:189`, `:380`, `:418`, `:457`), guarded `Back == Backend::CUDA
-&& std::is_same_v<T, float>`, and run **before** the vendor-available test — anything below that test is unreachable
-in the vendor-free build.
+The four level-3 dispatchers have **no tables**: their thresholds are hand-rolled `if`-chains. The gates live in the
+public entry points (`src/ops/level3/level3.cc`), guarded `Back == Backend::CUDA && std::is_same_v<T, float>`, and run
+**before** the vendor-available test, so they are reachable vendor-free.
 
 | op | native arms | gate (float, CUDA, GPU queue) | source |
 |---|---|---|---|
-| `symm` | `ExpandGemm` (mirrored expansion + public `gemm`) — **no tile kernel** | `squareish && shared_dim == k && expansion_preferred(max_dim, batch)` | `symm_custom_dispatch.cc:59-77, 142-156` |
-| `syrk` | `GramTiles`, `TriangularTiles` | `prefer_gram \|\| prefer_triangular \|\| cublasdx_heuristic` | `syrk_custom_dispatch.cc:170-195` |
-| `syr2k` | `TriangularTiles` (float only, one call site, `syr2k_custom_dispatch.cc:193`) | `batch >= 2` | `syr2k_custom_dispatch.cc:95-97, 130-148` |
-| `trmm` | `TriangularTiles` (`Side::Left` only) | `is_gpu && trmm_triangular_supported(...) && (tiles pinned \|\| the route is not the plain vendor)` — **no size threshold** | `trmm_custom_dispatch.cc:141-166` |
+| `symm` | `expand` (mirrored expansion + public `gemm`) — **no tile kernel** | `squareish && shared_dim == k && expansion_preferred(max_dim, batch)` | `symm_custom_dispatch.cc` |
+| `syrk` | `gram`, `triangular` | `prefer_gram \|\| prefer_triangular \|\| cublasdx_heuristic` | `syrk_custom_dispatch.cc` |
+| `syr2k` | `triangular` (float only) | `batch >= 2` | `syr2k_custom_dispatch.cc` |
+| `trmm` | `triangular` (`Side::Left` only) | `trmm_triangular_supported(...)` — **no size threshold** | `trmm_custom_dispatch.cc` |
 
-Their inner GEMMs go through the public `gemm` since P3.4 (the expansion and fold calls in `src/backends/cublas.cc` —
-hemm x2, herk, her2k, trmm x2 — used to call `gemm_vendor`, which the deleted `gemm_use_sycl_custom` then re-routed to
-the native kernel on some shapes), so they take the gemm table's choice like any other caller.
+Their inner GEMMs go through the public `gemm`, so they take the gemm table's choice like any other caller.
 
 Correctness gates, all of which must hold before any window is consulted: square `A` and matching batch sizes for
-`symm` (`:41-57`); `transA != ConjTrans`, square `C`, matching batch for `syrk` (`:61-78`) and `syr2k` (`:47-67`);
-`Side::Left`, `Uplo::Lower`, `transA == NoTrans` for `trmm`'s cuBLASDx arm (`:96-112`) and `Side::Left` plus
-homogeneous batch for its tile arm (`:54-74`). Every tile kernel refuses a heterogeneous batch, because it indexes
-operands as `base + batch * stride`. `trmm`'s third clause is easy to miss and is load-bearing: `=vendor` has to keep
-meaning the vendor even though the tile kernel is now the default, or the pin reports the new route as the old one
-(`trmm_custom_dispatch.cc:149-157`).
+`symm`; `transA != ConjTrans`, square `C`, matching batch for `syrk` and `syr2k`; `Side::Left`, `Uplo::Lower`,
+`transA == NoTrans` for `trmm`'s cuBLASDx arm and `Side::Left` plus homogeneous batch for its tile arm. Every tile
+kernel refuses a heterogeneous batch, because it indexes operands as `base + batch * stride`.
 
-`Algorithm::DiagFullGemm` is a deliberately **wrong** route retained only so the arithmetic the triangular kernels
-save can be measured — it stores both triangles, and the half the caller did not name is the caller's storage
-(`route.hh:38-86`). `Auto` cannot reach it, but *not* because no `order()` array contains it: these four ops have no
-`RouteTable` and therefore no order array at all. It is unreachable because each dispatcher tests
-`route.algo == DiagFullGemm` explicitly *before* its `Auto` arms (`syrk_custom_dispatch.cc:223-226`,
-`syr2k_custom_dispatch.cc:185-188`). It is reachable **by name**: `BATCHLAS_SYRK_VARIANT=gemm` (and the `syr2k`
-spelling) parse to `{Vendor, DiagFullGemm}` (`route_env.hh:116-120`), which is what the sweep scripts and
-`tests/route_vocabulary_tests.cc:212-221` use.
+### The level-3 pin words
 
-### The environment vocabulary
+`BATCHLAS_<OP>_ROUTE` for these four ops is parsed by `detail::level3_pin` (`src/backends/route_common.hh`):
+lowercased and trimmed like select's pins, unset or empty is `auto`, and any other word the op does not take throws
+`std::invalid_argument`.
 
-Canonical spelling is `BATCHLAS_<OP>_ROUTE`, taking an origin (`vendor`, `native`), an algorithm (`cta`,
-`expand_gemm`, …), or both joined by a colon (`native:register_tiled`) (`route_env.hh:3-6`; parser at `:76-99`,
-canonical-then-legacy lookup at `:214-245`). Legacy spellings keep working because they appear in committed benchmark
-scripts and in recorded results' provenance (`:21-26`). The collisions between the two vocabularies are load-bearing
-and must not be "simplified" away (`:150-199`):
+| op | words besides `auto` | meaning |
+|---|---|---|
+| `symm` | `native`, `expand`, `vendor`, `cublasdx` | `native` = `expand` |
+| `syrk` | `native`, `triangular`, `gram`, `vendor`, `cublasdx` | `native` = the tile kernel Auto would take |
+| `syr2k` | `native`, `triangular`, `vendor`, `cublasdx` | `native` = `triangular` |
+| `trmm` | `native`, `triangular`, `vendor`, `cublasdx` | `native` = `triangular` where it fits, else the vendor |
 
-* `BATCHLAS_GEMM_VARIANT=native` means the **raw CUDA vendor path**, consumed purely as an exclusion — the opposite of
-  canonical `native`. It maps to `{Vendor, Direct}` (`:178-182`). gemm no longer reads `route_env.hh` (flat selection,
-  P3.4); `legacy_aliases` in `src/ops/gemm/choice.hh` keep the meaning: on `_VARIANT` only, `native`, `cuda-native`,
-  `direct-cuda`, `cublasdx` and `dx` mean `vendor`, and `sycl`/`custom` mean `native`.
-* `custom` means the fused cuBLASDx kernel in the four level-3 ops (`:185`, mapping to `{Vendor, FusedDevice}`) and
-  "the native gemm family" in gemm (`BATCHLAS_GEMM_ROUTE=custom` is the class word `native` since P3.4; before it,
-  `{Native, RegisterTiled}`). Same word, different kernel — and the two spellings therefore do *not* agree even for the
-  same op: `BATCHLAS_SYMM_VARIANT=custom` reaches the fused arm, `BATCHLAS_SYMM_ROUTE=custom` does not.
-* For gemm the old `BATCHLAS_GEMM_SYCL_KERNEL` names are `BATCHLAS_GEMM_ROUTE` aliases (`128x128x8` ->
-  `reg:m=128:n=128:k=8:u=1`), and setting the retired variable itself makes gemm throw.
-* `gemm` means the deliberately wrong `DiagFullGemm` measurement route in `syrk`/`syr2k` (`:190-198`), not the `gemm`
-  op. `tiles` and `narrow` exist only in the level-3 legacy parser (`:186-189`).
-
-A bare algorithm word implies `Native`, **except** `FusedDevice`, which is vendor code by definition (`:92-97`).
-
-`BATCHLAS_TRMM_VARIANT` was previously read by **two** parsers that disagreed about its vocabulary, so `=triangular`
-was simultaneously "no opinion" to one and "pin the tile kernel" to the other (`trmm_custom_dispatch.cc:26-36`). There
-is now one parse and one value, pinned by `tests/route_vocabulary_tests.cc:223-231`. `legacy_unset_default` returns
-`{Auto, Auto}` for every op (`route_env.hh:88-91`, with the WP2 E6 rationale at `:123-144`);
-GEMM used to be the odd one out at `{Vendor, Auto}`, and WP2 E6 removed the asymmetry. (The migrated ops — potrf, posv,
-trsm, gemm — do not consult `legacy_unset_default`; unset means their table.)
+`vendor` keeps meaning the vendor even though the tile kernels are the default: it is the "before" a measurement is
+taken against. `cublasdx` names the fused MathDx kernel and throws when it cannot run (MathDx is absent on this box,
+so it always throws here). A named tile kernel that cannot serve the shape (a heterogeneous batch) throws; `native`
+falls back to the vendor there. The deliberately wrong both-triangles `DiagFullGemm` measurement route and the legacy
+`tiles`/`narrow`/`gemm`/`custom` words were deleted with the route vocabulary; `syrk`/`syr2k`/`trmm`/`symm` tests
+assert that each of them now throws (`*CudaCustomTest.RemovedRouteWordsThrow`). `herk` reaches syrk's Gram kernel
+only through `BATCHLAS_SYRK_ROUTE=gram`.
 
 ## Measured boundaries
 
@@ -300,7 +222,7 @@ Built, measured, rejected. These cost as much to establish as the wins.
    3/4/6 against the shipped `retarget-only` design's 9/7/8.
 2. **Making the sideways vendor fallback the public entry point.** Every `*_vendor_cuda_raw` site is reached *after* a
    gate that already returned true, so a public call from there re-enters the same gate with the same environment and
-   views: unbounded recursion, reachable with `BATCHLAS_SYMM_ROUTE=custom` on a CPU queue. The shipped fix is a
+   views: unbounded recursion, reachable with a forced fused pin on a CPU queue. The shipped fix is a
    dedicated seam (`level3_vendor_fallback.hh:5-27`).
 3. **`syrk`/`herk` for `ortho`'s Gram matrix, pre-kernel.** 73x–96x **slower** at the shapes `ortho` actually issues
    (m 256..2048, k 32..128, batch 256..2048), because k < 384 failed both router disjuncts and dropped to one
@@ -320,7 +242,7 @@ Built, measured, rejected. These cost as much to establish as the wins.
 5. **Complex Gram tiles (`herk`).** Loses to the existing GEMM-plus-Hermitian-fold at every Gram shape: 0.217 vs 0.206
    ms at n=32/batch 2048; 2.08 vs 1.57 at n=128/batch 512. A complex multiply is four real ones, so herk is compute
    bound where real syrk is bandwidth bound. `herk` keeps its route; the conjugating path stays reachable as
-   `BATCHLAS_SYRK_VARIANT=gram` so it stays measurable and tested.
+   `BATCHLAS_SYRK_ROUTE=gram` so it stays measurable and tested.
 6. **`syr2k` for the `sytrd_blocked` trailing update, in `double`.** 7.7x and 7.4x slower at n2=256/batch 1024, 1.9x
    slower at n2=512/batch 512; 1.55x *faster* only at n2=2048/batch 32. Double wins only where the batch is small
    enough that per-item launch cost amortises — the opposite of the regime that matters. The route stays CUDA + float.
@@ -353,12 +275,12 @@ Wrong answers found, how they hid, and what guards them now.
 * **`ormqr`'s buffer size and call disagreed by 108x.** `cta`, `two_stage` and `jacobi` all parsed but matched no
   branch, so `ormqr_dispatch` ran on the vendor while `ormqr_buffer_size` returned the *blocked* size — 2560 bytes
   against the 276480 the call then demanded, so sizing a workspace with the public API and passing it to the public
-  call threw deterministically on every GPU type. Structurally prevented now: the resolver is pure, so an op and its
-  `*_buffer_size` query reach the same route by construction (`route_resolve.hh:3-4`).
+  call threw deterministically on every GPU type. Structurally prevented now: an op and its `*_buffer_size` query
+  call the same `choose()` (flat selection, rule R5).
 * **`{Vendor, FusedDevice}` satisfies `is_vendor` but is not "the plain vendor call".** The level-3 dispatchers'
   `request == Vendor` tests meant `cublasSsyrk` specifically; rendering them as `is_vendor()` makes a forced cuBLASDx
-  request answer yes to "did the caller ask for the vendor?". `is_plain_vendor` now names the distinction
-  (`route.hh:61-63`).
+  request answer yes to "did the caller ask for the vendor?". The level-3 pin words now keep `vendor` and `cublasdx`
+  apart (`Level3Pin` in `src/backends/route_common.hh`).
 * **The order-walk fallback inverted GEMM's default.** Taking "the first merely supported route" picks Native, because
   the orders list natives first — moving an 8×8×8 batch-1 GEMM from vendor to native. Guarded by
   `tests/route_gemm_equivalence_tests.cc`, whose `ReplicaIsFaithful` case pinned the transcription itself, until P3.4
@@ -401,19 +323,20 @@ Wrong answers found, how they hid, and what guards them now.
 
 ## The coverage instrument
 
-Two tables, answering different questions (`coverage.hh:11-25`). **static** (`linked`) iterates the route predicates
+Two tables, answering different questions (`src/select/coverage.hh`). **static** (`linked`) iterates the route predicates
 with no kernel run — exact, instant, no GPU needed — and answers *"is the kernel in the build"*, the planning
 question. **dynamic** (`reached`) counts `(op, scalar, backend, shape_class)` and records the chosen route plus
 `native_route_existed` / `native_route_supported`, answering *"did a call get there"*, the burn-down question. Reading
 either as the other is how `VENDOR_FREE_BASELINE.md` came to claim a working vendor-free `gemm`
-(`src/dispatch/coverage.cc:164-219`). **Linked is not reachable**, and a symbol being present is never evidence it
+(`src/select/coverage.cc`, `append_static_rows`). **Linked is not reachable**, and a symbol being present is never evidence it
 runs.
 
 `native_route_supported` is a **tri-state** (`1` yes, `0` no, `-1` the call site could not tell); the third value is
 load-bearing, because a declining gate never enters `*_cuda_custom` and so conflates "nothing native serves this
-shape" with "something does but the heuristic preferred the vendor" (`level3_coverage.hh:47-61`). The four level-3 ops
-are instrumented directly at each terminal, beside every `return` and never in place of one, because they do not go
-through `resolve_route` (`:18-37`); `uplo`/`side`/`diag`/`transA` are part of the coverage **key**, not decoration.
+shape" with "something does but the heuristic preferred the vendor" (`src/backends/level3_coverage.hh`). Every
+other op records its row from `select::TraceScope`; the four level-3 ops record directly at each terminal, beside every
+`return` and never in place of one, with the route word (`triangular`, `gram`, `expand`, `cublasdx`, `vendor`) as the
+algorithm. `uplo`/`side`/`diag`/`transA` are part of the coverage **key**, not decoration.
 
 `scripts/route_diff.sh capture|compare` is the only tool that sees vendor-to-vendor route changes: the kernel trace
 cannot (its `Record` holds a `sycl::event`) and timing cannot (an unsaturated ratio is overhead, and routing a shape
@@ -460,20 +383,15 @@ names moved to `BACKEND_COMMON_SOURCES` (`src/backends/CMakeLists.txt:136-141`).
 
 ## Open debts
 
-1. **`BATCHLAS_SYRK_ROUTE=native` reaches a route that writes both triangles.** With `{Native, Auto}`,
-   `syrk_use_cuda_custom` returns true (`:176-178`); in `syrk_cuda_custom` the gram test needs `origin == Auto`
-   (`:231-232`) and the triangular test needs `algo == TriangularTiles || origin == Auto` (`:237-238`) — both false —
-   so the call falls through to `syrk_cublasdx_fallback_gemm`, recorded as `DiagFullGemm` (`:261-262`), which clobbers
-   the triangle the caller did not name. Pre-existing, preserved deliberately rather than fixed in passing. **No test
-   in the tree sets `BATCHLAS_SYRK_ROUTE`.**
-2. **`BATCHLAS_SYR2K_ROUTE=native` throws a cuBLASDx message it did not ask for.** The throw at
-   `syr2k_custom_dispatch.cc:206` is not guarded by `forced`. Same status.
-3. **The four level-3 ops still have no `RouteTable` and never call `resolve_route`.** Adding the tables as pure
-   unwired additions alongside an equivalence test is cheap; *wiring* them is the change that moved n = 256 onto the
-   wrong kernel and needs its own measurement.
+1. ~~`BATCHLAS_SYRK_ROUTE=native` reaches a route that writes both triangles~~ and
+2. ~~`BATCHLAS_SYR2K_ROUTE=native` throws a cuBLASDx message it did not ask for~~: fixed by the level-3 pin words
+   (flat selection phase 5). `native` now takes the tile kernel, and
+   `SyrkCudaCustomTest.AutoAndNativeRoutesLeaveTheOtherHalfUntouched` poisons the other triangle under it.
+3. **The four level-3 ops still have no tables.** Their windows are hand-rolled; moving them to `tuned/` is the change
+   that once moved n = 256 onto the wrong kernel and needs its own measurement.
 4. **`symm` has no `expansion_fits()` ceiling** where `hemm`/`herk`/`her2k` all have one (`cublas.cc:297-298`, `:517`,
-   `:611`) — `symm_cublasdx_fallback_gemm` allocates the expansion workspace unconditionally
-   (`symm_custom_dispatch.cc:88-95`). A real gap; adding it *is* a route change and needs its own measurement.
+   `:611`) — `symm_expand_gemm` allocates the expansion workspace unconditionally
+   (`symm_expand_gemm` in `symm_custom_dispatch.cc`). A real gap; adding it *is* a route change and needs its own measurement.
 5. **Heterogeneous `symm` is unmeasured and untested.** `symm_problem_supported` does not reject a heterogeneous
    batch, unlike its syrk and syr2k counterparts, so after WP1 S2 its expanded GEMM reaches
    `gemm_heterogeneous_vendor_impl` where it previously reached the strided-batched call on max dims. Probably a
@@ -483,22 +401,17 @@ names moved to `BACKEND_COMMON_SOURCES` (`src/backends/CMakeLists.txt:136-141`).
 7. **Level-3 non-float is still cuBLAS-only.** `syrk`'s gram branch and `trmm`'s tile branch for double/complex are
    reachable only from `cublas.cc`, and **`syr2k` has no non-float tile route at all** — `syr2k_triangular_tiles` has
    exactly one call site in the tree, in the float-only dispatcher.
-8. **The static coverage table's `trsm` row is hardcoded `false`** (`src/dispatch/coverage.cc:168`) after WP3 shipped
-   a native `trsm`. The `linked` half answers "does this build have a native route *registered*", not "is there a
-   native kernel", and it is stale in both directions. Read the `reached` rows and the resolved route.
-9. **A stale comment claims a build option that does not exist.** `route_resolve.hh:85-103` says `record_if_enabled`
-   "compiles to nothing unless the build was configured with `-DBATCHLAS_ENABLE_COVERAGE=ON`"; the gate has been a
-   runtime bool since the weak-symbol incident, and `cmake/BatchLASOptions.cmake:109` states the option was
-   deliberately never added (`tests/route_vocabulary_tests.cc:742` repeats the stale claim). And a coverage row cannot
-   confirm that a particular shape ran: rows are keyed on a power-of-two `shape_class`, first-writer-wins, so the
-   m/n/k/batch columns can report a *different* call's shape. Prove a shape with a break that is red only for it.
+8. ~~The static coverage table's `trsm` row is hardcoded `false`~~: it reads `true` (WP3).
+9. **A coverage row cannot confirm that a particular shape ran**: rows are keyed on a power-of-two `shape_class`,
+   first-writer-wins, so the m/n/k/batch columns can report a *different* call's shape. Prove a shape with a break
+   that is red only for it.
 10. **`symm_benchmark`, `syrk_benchmark` and `syr2k_benchmark` abort before printing anything** — a SYCL scheduler
     assertion (`adjustNDRangePerKernel: NDR.LocalSize[0] == 0`) on the host backend at tiny shapes, attributed by
     revert-and-rebuild as pre-existing and not WP1's. WP1 S2 needed a standalone harness.
 11. **`Backend::INTEL` is hard-wired FALSE and oneMKL cannot be tested here**; WP0 only removed the dead branch that
     produced undefined references. Separately, `syev.hh`'s measured-grid guard still reads `s.backend ==
     Backend::CUDA`, left alone deliberately: there it is measurement *provenance*, not wiring, so rewriting it as
-    `route_compiled` would assert something false.
+    `level3_tile_route_available` would assert something false.
 12. **Unverified windows, in one place:** the 257 ≤ n ≤ 383 band admitted by `syrk_prefer_triangular_tiles`; the
     batch-3 and `128 < n < 256` bands refused by `expansion_preferred`; and `syrk_prefer_cuda_custom_heuristic`'s
     `tiled_work >= 8` and 2:1 aspect ratio, none of which has a bracketing grid in these sources.

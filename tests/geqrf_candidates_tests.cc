@@ -6,9 +6,9 @@
 
 #include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/blas/functions/geqrf.hh>
-#include <batchlas/blas/dispatch/coverage.hh>
-#include <batchlas/blas/dispatch/no_route.hh>
-#include <batchlas/blas/dispatch/vendor_available.hh>
+#include "../src/select/coverage.hh"
+#include <batchlas/no_route.hh>
+#include "../src/select/vendor.hh"
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
@@ -223,7 +223,7 @@ protected:
     using T = typename Config::ScalarType;
     using MV = MVof<T>;
     static constexpr Backend B = Config::BackendVal;
-    static constexpr bool kVendor = dispatch::factorization_vendor_available<B>;
+    static constexpr bool kVendor = batchlas::select::factorization_vendor_available<B>;
 
     void SetUp() override {
         test_utils::BatchLASTest<Config>::SetUp();
@@ -489,7 +489,9 @@ TYPED_TEST(GeqrfCandidates, BoundCoversEverySubViewChoice) {
 TYPED_TEST(GeqrfCandidates, UnknownPinsThrow) {
     using T = typename TestFixture::T;
     for (const char* word : {"bogus", "cta:1", "blocked:nb=32", "native:vendor", "native:lpanel", "lpanel",
-                             "fused", "native:cta:8"}) {
+                             "fused", "native:cta:8",
+                             // removed aliases (phase 5): each must stay an error
+                             "native:tiny", "native:cta", "native:blocked"}) {
         auto p = make_qr<T>(Spec{});
         const Pin pin("geqrf", std::string_view(word));
         EXPECT_THROW(this->run(p), std::invalid_argument) << word;
@@ -539,19 +541,19 @@ TYPED_TEST(GeqrfCandidates, HeterogeneousBatchHasNoNativeRoute) {
     const ScopedEnvVar clear("BATCHLAS_GEQRF_ROUTE", nullptr);
     auto size = [&] { (void)geqrf_buffer_size<B, T>(*this->ctx, H, p.tau.to_span()); };
     if constexpr (TestFixture::kVendor) EXPECT_NO_THROW(size());
-    else EXPECT_THROW(size(), dispatch::NoRouteError);
+    else EXPECT_THROW(size(), batchlas::NoRouteError);
 }
 
-// §5.3, and RouteGeqrf.BatchlasGeqrfRouteIsActuallyRead ported: the legacy spellings and the
+// §5.3, and RouteGeqrf.BatchlasGeqrfRouteIsActuallyRead ported: spellings (case-folded) and the
 // class words, via ScopedPin and via BATCHLAS_GEQRF_ROUTE. Bare `native` is the row's best
 // runnable non-vendor; bare `vendor` falls back to Auto where there is no vendor.
-TYPED_TEST(GeqrfCandidates, LegacyAliasesAndClassWords) {
+TYPED_TEST(GeqrfCandidates, ClassWordsAndSpellings) {
     using T = typename TestFixture::T;
     const Spec s{40, 24, 3};
     const std::string auto_pick = this->auto_choice(s);
     const std::string vendor_pick = TestFixture::kVendor ? "vendor" : auto_pick;
     const std::pair<const char*, std::string> expect[] = {
-        {"native:cta", "cta"}, {"native:blocked", "blocked"}, {"NATIVE:CTA", "cta"}, {"cta", "cta"},
+        {"CTA", "cta"}, {"cta", "cta"},
         {"Blocked", "blocked"}, {"vendor", vendor_pick},       {"native", "cta"},    {"auto", auto_pick}};
     for (const auto& [word, spelling] : expect)
         for (bool via_env : {false, true}) {
@@ -567,14 +569,14 @@ TYPED_TEST(GeqrfCandidates, LegacyAliasesAndClassWords) {
             EXPECT_EQ(got, spelling) << what;
             expect_factored(p, what);
         }
-    {   // native:tiny on a square order inside the ceiling.
+    {   // tiny on a square order inside the ceiling.
         auto p = make_qr<T>(Spec{9, 9, 2});
         EXPECT_EQ(traced_choice([&] {
-                      const Pin pin("geqrf", std::string_view("native:tiny"));
+                      const Pin pin("geqrf", std::string_view("tiny"));
                       this->run(p);
                   }),
                   "tiny");
-        expect_factored(p, "native:tiny");
+        expect_factored(p, "tiny");
     }
 }
 
@@ -736,7 +738,7 @@ TYPED_TEST(GeqrfCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     auto child = [&] {
         const ScopedEnvVar cov("BATCHLAS_COVERAGE_OUT", out.c_str());
         const ScopedEnvVar clear("BATCHLAS_GEQRF_ROUTE", nullptr);
-        dispatch::coverage::g_dynamic_enabled = true;
+        batchlas::coverage::g_dynamic_enabled = true;
         {
             const Pin pin("geqrf", C{gq::Cta{}});
             auto p = make_qr<T>(Spec{40, 24, 2});
@@ -800,7 +802,7 @@ TYPED_TEST(GeqrfCandidatesCpu, CpuQueueRunsNoNativeFamily) {
             << select::to_string(c);
     }
     auto size = [&] { (void)geqrf_buffer_size<B, T>(*this->ctx, p.A(), p.tau.to_span()); };
-    if constexpr (dispatch::factorization_vendor_available<B>) {
+    if constexpr (batchlas::select::factorization_vendor_available<B>) {
         EXPECT_EQ(traced_choice([&] {
                       const std::size_t ws = geqrf_buffer_size<B, T>(*this->ctx, p.A(), p.tau.to_span());
                       UnifiedVector<std::byte> w(std::max<std::size_t>(1, ws));
@@ -809,7 +811,7 @@ TYPED_TEST(GeqrfCandidatesCpu, CpuQueueRunsNoNativeFamily) {
                   }),
                   "vendor");
     } else {
-        EXPECT_THROW(size(), dispatch::NoRouteError);
+        EXPECT_THROW(size(), batchlas::NoRouteError);
     }
 }
 

@@ -123,13 +123,6 @@ std::size_t orgqr_blocked_buffer_size(Queue& ctx,
 }
 
 template <typename T>
-int orgqr_blocked_debug_block_size(Queue& ctx, int m, int n) {
-    static_cast<void>(ctx);
-    if (m < 1 || n < 1) return 0;
-    return static_cast<int>(orgqr_nb<T>(m, n));
-}
-
-template <typename T>
 Event orgqr_blocked_dispatch(Queue& ctx,
                              const MatrixView<T, MatrixFormat::Dense>& A,
                              Span<T> tau,
@@ -235,7 +228,6 @@ Event orgqr_blocked_dispatch(Queue& ctx,
     template std::size_t orgqr_blocked_buffer_size<T>(                                        \
         Queue&, const MatrixView<T, MatrixFormat::Dense>&, Span<T>,                           \
         OrgqrApplyQBufferSize<T>);                                                            \
-    template int orgqr_blocked_debug_block_size<T>(Queue&, int, int);                         \
     template Event orgqr_blocked_dispatch<T>(Queue&,                                          \
                                              const MatrixView<T, MatrixFormat::Dense>&,       \
                                              Span<T>, Span<std::byte>, OrgqrApplyQ<T>,        \

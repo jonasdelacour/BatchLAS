@@ -1,6 +1,5 @@
 #include <batchlas/util/minibench.hh>
 #include <batchlas/blas/linalg.hh>
-#include <batchlas/blas/dispatch/route.hh>
 #include <batchlas/settings.hh>
 #include <batchlas/backend_config.h>
 #include "bench_utils.hh"
@@ -98,7 +97,7 @@ static void trsm_announce_route_env() {
     static bool done = false;
     if (done) return;
     done = true;
-    const char* raw = batchlas::settings().routing.canonical_route(batchlas::dispatch::Op::trsm).get();
+    const char* raw = batchlas::settings().routing.route("trsm").get();
     if (raw && *raw) {
         std::fprintf(stderr, "trsm route pinned: BATCHLAS_TRSM_ROUTE=%s (choices: %s)\n", raw,
                      "auto | native | vendor | cta | sg_left | blocked");

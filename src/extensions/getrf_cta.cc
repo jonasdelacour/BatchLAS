@@ -313,11 +313,6 @@ int getrf_cta_max_n_for_slm(std::size_t slm_budget_bytes, int min_blocks_per_sm)
         slm_budget_bytes, min_blocks_per_sm, hi);
 }
 
-template <typename T>
-int getrf_cta_max_n() {
-    return getrf_cta_max_n_for_slm<T>(kGetrfReferenceSlmBudget);
-}
-
 // ONE term: the fallback `info` span for a caller that supplied none -- an empty OR SHORT span
 // means "not requested". A may carry a null data_ptr() here.
 namespace {
@@ -475,7 +470,6 @@ Event getrf_cta_dispatch(Queue& ctx,
 // Per scalar type only, no Backend cross-product: this build is device-link-bound.
 #define BATCHLAS_GETRF_CTA_INSTANTIATE(T)                                                     \
     template int getrf_cta_max_n_for_slm<T>(std::size_t, int);                                \
-    template int getrf_cta_max_n<T>();                                                        \
     template bool getrf_cta_fits<T>(int, std::size_t, int);                                   \
     template bool getrf_leaf_fits<T>(int, int, std::size_t);                                  \
     template unsigned getrf_cta_debug_launch<T>(Queue&, int, int);                            \

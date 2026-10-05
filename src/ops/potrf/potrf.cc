@@ -9,8 +9,8 @@
 #include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/blas/functions/potrf.hh>
 #include <batchlas/blas/functions/trsm.hh>
-#include <batchlas/blas/dispatch/no_route.hh>
-#include <batchlas/blas/dispatch/vendor_available.hh>
+#include <batchlas/no_route.hh>
+#include "../../select/vendor.hh"
 
 #include "choice.hh"
 #include "../../select/select.hh"
@@ -73,8 +73,8 @@ PotrfChoice choose(Queue& q, const MatrixView<T, MatrixFormat::Dense>& A, Uplo u
     } catch (const std::runtime_error&) {
         // Vendor-free burn-down reads coverage `miss` rows; a plain runtime_error records none.
         const auto all = candidates<T>();
-        if (!dispatch::solver_vendor_available<B> && std::none_of(all.begin(), all.end(), ok))
-            dispatch::throw_no_vendor_route<T>(dispatch::Op::potrf, B, dispatch::kSolverLibrary<B>);
+        if (!select::solver_vendor_available<B> && std::none_of(all.begin(), all.end(), ok))
+            select::throw_no_vendor_route<T>(Op::potrf, B, select::kSolverLibrary<B>);
         throw;
     }
 }
@@ -82,7 +82,7 @@ PotrfChoice choose(Queue& q, const MatrixView<T, MatrixFormat::Dense>& A, Uplo u
 // The coverage row's native flags (§5.6): computed only when coverage records a row.
 template <Backend B, class T>
 select::NativeFacts native_facts(Queue& q, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo) {
-    if (!dispatch::coverage::dynamic_enabled()) return {};
+    if (!coverage::dynamic_enabled()) return {};
     const select::Device& d = select::device_of<B>(q);
     return select::native_facts(candidates<T>(), [&](const PotrfChoice& c) { return can_run<T>(c, d, A, uplo); });
 }
@@ -109,10 +109,10 @@ Event launch(Queue& q, const PotrfChoice& c, const MatrixView<T, MatrixFormat::D
                 });
         },
         [&](Vendor) -> Event {
-            if constexpr (dispatch::solver_vendor_available<B>)
+            if constexpr (select::solver_vendor_available<B>)
                 return backend::potrf_vendor<B, T>(q, A, uplo, ws, info);
             else
-                dispatch::throw_no_vendor_route<T>(dispatch::Op::potrf, B, dispatch::kSolverLibrary<B>);
+                select::throw_no_vendor_route<T>(Op::potrf, B, select::kSolverLibrary<B>);
         },
     }, c);
 }
@@ -126,10 +126,10 @@ std::size_t workspace(Queue& q, const PotrfChoice& c, const MatrixView<T, Matrix
         [&](const Lpanel&) { return sycl_potrf::potrf_lpanel_buffer_size<T>(q, A); },
         [&](Blocked) { return sycl_potrf::potrf_blocked_buffer_size<T>(q, A, uplo); },
         [&](Vendor) -> std::size_t {
-            if constexpr (dispatch::solver_vendor_available<B>)
+            if constexpr (select::solver_vendor_available<B>)
                 return backend::potrf_vendor_buffer_size<B, T>(q, A, uplo);
             else
-                dispatch::throw_no_vendor_route<T>(dispatch::Op::potrf, B, dispatch::kSolverLibrary<B>);
+                select::throw_no_vendor_route<T>(Op::potrf, B, select::kSolverLibrary<B>);
         },
     }, c);
 }

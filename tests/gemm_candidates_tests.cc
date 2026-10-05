@@ -6,9 +6,9 @@
 #include <gtest/gtest.h>
 
 #include <batchlas/blas/functions/gemm.hh>
-#include <batchlas/blas/dispatch/coverage.hh>
-#include <batchlas/blas/dispatch/no_route.hh>
-#include <batchlas/blas/dispatch/vendor_available.hh>
+#include "../src/select/coverage.hh"
+#include <batchlas/no_route.hh>
+#include "../src/select/vendor.hh"
 #include <batchlas/error.hh>
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
@@ -30,7 +30,6 @@
 #include <map>
 #include <optional>
 #include <random>
-#include <regex>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -444,7 +443,7 @@ class GemmCandidates : public test_utils::BatchLASTest<Config> {
 protected:
     using T = typename Config::ScalarType;
     static constexpr Backend B = Config::BackendVal;
-    static constexpr bool kVendor = dispatch::level3_vendor_available<B>;
+    static constexpr bool kVendor = batchlas::select::level3_vendor_available<B>;
 
     void SetUp() override {
         test_utils::BatchLASTest<Config>::SetUp();
@@ -835,7 +834,7 @@ TYPED_TEST(GemmCandidates, GridCeilingIsACanRunTerm) {
     const ScopedEnvVar clear("BATCHLAS_GEMM_ROUTE", nullptr);
     auto p = make_problem<T>(past);
     if constexpr (kCx<T> && !TestFixture::kVendor) {
-        EXPECT_THROW(this->run(p), dispatch::NoRouteError) << "complex has no 1-D native launch";
+        EXPECT_THROW(this->run(p), batchlas::NoRouteError) << "complex has no 1-D native launch";
     } else {
         const std::string got = traced_choice([&] { this->run(p); });
         EXPECT_EQ(got, kCx<T> ? "vendor" : "small") << label(past) << ": small ranks above the vendor here";
@@ -886,12 +885,13 @@ TYPED_TEST(GemmCandidates, NonDefaultPrecisionHasNoNativeRoute) {
         EXPECT_EQ(traced_choice([&] { this->run(p, prec); }), "vendor");
         expect_gemm(p, "auto, non-default precision");
     } else {
-        EXPECT_THROW(this->run(p, prec), dispatch::NoRouteError);
+        EXPECT_THROW(this->run(p, prec), batchlas::NoRouteError);
     }
 }
 
 // R6: a spelling that names nothing compiled throws instead of meaning Auto, including the
-// deleted variants' legacy names and the design doc's never-compiled `tiled:tile=64:k=8`.
+// deleted variants' names, the design doc's never-compiled `tiled:tile=64:k=8`, and the removed
+// aliases (old kernel names and old router words), so a resurrected alias goes red.
 TYPED_TEST(GemmCandidates, UnknownAndDeletedPinsThrow) {
     using T = typename TestFixture::T;
     const std::vector<std::string> words{
@@ -899,25 +899,26 @@ TYPED_TEST(GemmCandidates, UnknownAndDeletedPinsThrow) {
         "128x32x32_s2_u2", "128x32x32_s1_u1", "128x32x32_persistent", "128x32x32_splitk4",
         "128x32x32_s2_u2_tt8x4", "128x32x32_s2_u2_tt4x8", "reg128x64k32largett4x8", "reg128x64k32largett4x8u2",
         std::is_same_v<T, float> ? "reg:m=64:n=64:k=8:u=2" : "reg:m=32:n=32:k=8:u=1",
-        kCx<T> ? "small" : "wide:m=16:n=16:k=8"};
+        kCx<T> ? "small" : "wide:m=16:n=16:k=8",
+        "tiled16", "tile16", "smallbatched", "reg32", "reg64", "64x64", "reg64k16tt", "128x128x8",
+        "128x32x32_s2_u1", "128x32x32_s2_u1_aligned", "reg128x64k32large", "64x64x16wide", "32x32x16wide",
+        "register_tiled", "native:register_tiled", "native:auto", "sycl", "custom", "vendor:auto", "auto:auto",
+        "vendor:direct", "cuda-native", "direct-cuda", "cublasdx", "dx"};
     for (const std::string& w : words) {
         auto p = make_problem<T>(Spec{kN, kN, 16, 16, 16, 2, Layout::Packed});
         const Pin pin("gemm", std::string_view(w));
         EXPECT_THROW(this->run(p), std::invalid_argument) << w;
     }
-    // The retired variable fails loudly instead of being ignored by an old script.
-    auto p = make_problem<T>(Spec{kN, kN, 16, 16, 16, 2, Layout::Packed});
-    const ScopedEnvVar old("BATCHLAS_GEMM_SYCL_KERNEL", "tiled16");
-    EXPECT_THROW(this->run(p), std::invalid_argument);
 }
 
-// §5.3: the legacy BATCHLAS_GEMM_SYCL_KERNEL names (now BATCHLAS_GEMM_ROUTE aliases) and the
-// class words, via ScopedPin and via BATCHLAS_GEMM_ROUTE. A transposed variant's name means its
-// config; the form is the call's.
-TYPED_TEST(GemmCandidates, LegacyKernelNamesAndClassWords) {
+// §5.3: spellings (case-folded, trimmed) and the class words, via ScopedPin and via
+// BATCHLAS_GEMM_ROUTE. A spelling names a config; the form is the call's. The retired
+// BATCHLAS_GEMM_VARIANT and BATCHLAS_GEMM_SYCL_KERNEL are not read.
+TYPED_TEST(GemmCandidates, ClassWordsAndSpellings) {
     using T = typename TestFixture::T;
     const ScopedEnvVar clear_route("BATCHLAS_GEMM_ROUTE", nullptr);
-    const ScopedEnvVar clear_variant("BATCHLAS_GEMM_VARIANT", nullptr);
+    const ScopedEnvVar retired_variant("BATCHLAS_GEMM_VARIANT", "tiled");
+    const ScopedEnvVar retired_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "tiled16");
     const Spec nn{kN, kN, 64, 48, 32, 4, Layout::Packed};
     const Spec tt{kT, kT, 64, 48, 32, 4, Layout::Packed};
     const std::string auto_pick = this->auto_choice(nn);
@@ -930,28 +931,27 @@ TYPED_TEST(GemmCandidates, LegacyKernelNamesAndClassWords) {
     const std::string vendor_pick = TestFixture::kVendor ? "vendor" : auto_pick;
     struct Want { const char* word; Spec s; std::string spelling; };
     std::vector<Want> want{
-        {"tiled16", nn, "tiled"}, {"tile16", nn, "tiled"}, {"TILED", nn, "tiled"},
-        {"direct", tt, "direct"}, {"64x64x16wide", nn, "wide:m=64:n=64:k=16"},
-        {"64x64x16wide_cn", Spec{kC, kN, 64, 48, 32, 4, Layout::Packed}, "wide:m=64:n=64:k=16"},
-        {"128x32x16wide_nc", Spec{kN, kC, 64, 48, 32, 4, Layout::Packed}, "wide:m=128:n=32:k=16"},
-        {"32x32x16wide", nn, "wide:m=32:n=32:k=16"}, {"16x16x16wide", nn, "wide:m=16:n=16:k=16"},
-        {"register_tiled", nn, native_best}, {"native:register_tiled", nn, native_best}, {"sycl", nn, native_best},
-        {"custom", nn, native_best}, {"native", nn, native_best}, {"native:auto", nn, native_best},
-        {"vendor", nn, vendor_pick}, {"vendor:auto", nn, vendor_pick}, {"auto", nn, auto_pick},
-        {"auto:auto", nn, auto_pick}};
-    if constexpr (!kCx<T>) want.push_back({"smallbatched", nn, "small"});
+        {"tiled", nn, "tiled"}, {" TILED ", nn, "tiled"}, {"direct", tt, "direct"},
+        {"wide:m=64:n=64:k=16", nn, "wide:m=64:n=64:k=16"},
+        {"Wide:M=64:N=64:K=16", Spec{kC, kN, 64, 48, 32, 4, Layout::Packed}, "wide:m=64:n=64:k=16"},
+        {"wide:128:32:16", Spec{kN, kC, 64, 48, 32, 4, Layout::Packed}, "wide:m=128:n=32:k=16"},
+        {"wide:m=32:n=32:k=16", nn, "wide:m=32:n=32:k=16"}, {"wide:m=16:n=16:k=16", nn, "wide:m=16:n=16:k=16"},
+        {"native", nn, native_best}, {"Native", nn, native_best}, {"vendor", nn, vendor_pick},
+        {"auto", nn, auto_pick}};
+    if constexpr (!kCx<T>) want.push_back({"small", nn, "small"});
     if constexpr (std::is_same_v<T, float>) {
         const std::vector<Want> reg{
-            {"reg32", nn, "reg:m=32:n=32:k=8:u=1"}, {"64x64", nn, "reg:m=64:n=64:k=8:u=1"},
-            {"reg64k16tt", tt, "reg:m=64:n=64:k=16:u=1"}, {"64x64x16tn", Spec{kT, kN, 64, 48, 32, 4, Layout::Packed},
-                                                           "reg:m=64:n=64:k=16:u=1"},
-            {"reg128x32k16nt", Spec{kN, kT, 64, 48, 32, 4, Layout::Packed}, "reg:m=128:n=32:k=16:u=1"},
-            {"128x32x32_s2_u1_aligned", nn, "reg:m=128:n=32:k=32:u=1"},
-            {"128x32x32_s2_u1_generic", nn, "reg:m=128:n=32:k=32:u=1"},
-            {"128x32x32_s2_u1_tn", Spec{kT, kN, 64, 48, 32, 4, Layout::Packed}, "reg:m=128:n=32:k=32:u=1"},
-            {"reg128x64k16tt", tt, "reg:m=128:n=64:k=16:u=1"}, {"32x128x16tt", tt, "reg:m=32:n=128:k=16:u=1"},
-            {"reg128x64k32large", nn, "reg:m=128:n=64:k=32:u=4"},
-            {"128x64x32large_u2", nn, "reg:m=128:n=64:k=32:u=2"}, {"128x128x8", nn, "reg:m=128:n=128:k=8:u=1"}};
+            {"reg:m=32:n=32:k=8:u=1", nn, "reg:m=32:n=32:k=8:u=1"}, {"reg:64:64:8:1", nn, "reg:m=64:n=64:k=8:u=1"},
+            {"reg:m=64:n=64:k=16:u=1", tt, "reg:m=64:n=64:k=16:u=1"},
+            {"reg:m=64:n=64:k=16:u=1", Spec{kT, kN, 64, 48, 32, 4, Layout::Packed}, "reg:m=64:n=64:k=16:u=1"},
+            {"reg:m=128:n=32:k=16:u=1", Spec{kN, kT, 64, 48, 32, 4, Layout::Packed}, "reg:m=128:n=32:k=16:u=1"},
+            {"reg:m=128:n=32:k=32:u=1", nn, "reg:m=128:n=32:k=32:u=1"},
+            {"reg:m=128:n=32:k=32:u=1", Spec{kT, kN, 64, 48, 32, 4, Layout::Packed}, "reg:m=128:n=32:k=32:u=1"},
+            {"reg:m=128:n=64:k=16:u=1", tt, "reg:m=128:n=64:k=16:u=1"},
+            {"reg:m=32:n=128:k=16:u=1", tt, "reg:m=32:n=128:k=16:u=1"},
+            {"reg:m=128:n=64:k=32:u=4", nn, "reg:m=128:n=64:k=32:u=4"},
+            {"reg:m=128:n=64:k=32:u=2", nn, "reg:m=128:n=64:k=32:u=2"},
+            {"reg:m=128:n=128:k=8:u=1", nn, "reg:m=128:n=128:k=8:u=1"}};
         want.insert(want.end(), reg.begin(), reg.end());
     }
     for (const auto& w : want)
@@ -968,38 +968,6 @@ TYPED_TEST(GemmCandidates, LegacyKernelNamesAndClassWords) {
             EXPECT_EQ(got, w.spelling) << what;
             expect_gemm(p, what);
         }
-}
-
-// BATCHLAS_GEMM_VARIANT keeps its own vocabulary, on that variable only: its `native` was the
-// raw cuBLAS call (vendor), while BATCHLAS_GEMM_ROUTE=native is the native family; `sycl` and
-// `custom` mean native; and a set BATCHLAS_GEMM_ROUTE wins over it.
-TYPED_TEST(GemmCandidates, LegacyVariantVocabularyStaysOnItsVariable) {
-    using T = typename TestFixture::T;
-    const ScopedEnvVar clear_route("BATCHLAS_GEMM_ROUTE", nullptr);
-    const Spec s{kN, kN, 64, 48, 32, 4, Layout::Packed};
-    const std::string auto_pick = this->auto_choice(s);
-    const std::string vendor_pick = TestFixture::kVendor ? "vendor" : auto_pick;
-    std::string native_pick;
-    {
-        auto p = make_problem<T>(s);
-        const ScopedEnvVar route("BATCHLAS_GEMM_ROUTE", "native");
-        native_pick = traced_choice([&] { this->run(p); });
-    }
-    EXPECT_NE(native_pick, "vendor") << "BATCHLAS_GEMM_ROUTE=native is the native family";
-    struct Case { const char* route; const char* variant; std::string expect; };
-    const Case cases[] = {{nullptr, "native", vendor_pick},  {nullptr, "cuda-native", vendor_pick},
-                          {nullptr, "cublasdx", vendor_pick}, {nullptr, "vendor", vendor_pick},
-                          {nullptr, "sycl", native_pick},     {nullptr, "custom", native_pick},
-                          {nullptr, "auto", auto_pick},       {"native", "native", native_pick},
-                          {"tiled", "vendor", "tiled"}};
-    for (const Case& k : cases) {
-        auto p = make_problem<T>(s);
-        const ScopedEnvVar route("BATCHLAS_GEMM_ROUTE", k.route);
-        const ScopedEnvVar variant("BATCHLAS_GEMM_VARIANT", k.variant);
-        EXPECT_EQ(traced_choice([&] { this->run(p); }), k.expect)
-            << "ROUTE=" << (k.route ? k.route : "<unset>") << " VARIANT=" << k.variant;
-        expect_gemm(p, std::string("VARIANT=") + k.variant);
-    }
 }
 
 // §5.3: a ScopedPin wins over BATCHLAS_GEMM_ROUTE, and nested pins restore the outer one.
@@ -1174,7 +1142,7 @@ TYPED_TEST(GemmCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     auto child = [&] {
         const ScopedEnvVar cov("BATCHLAS_COVERAGE_OUT", out.c_str());
         const ScopedEnvVar clear("BATCHLAS_GEMM_ROUTE", nullptr);
-        dispatch::coverage::g_dynamic_enabled = true;
+        batchlas::coverage::g_dynamic_enabled = true;
         {
             const Pin pin("gemm", C{og::Tiled{}});
             auto p = make_problem<T>(lo);
@@ -1226,7 +1194,7 @@ TYPED_TEST_SUITE(GemmCandidatesCpu, Types);
 TYPED_TEST(GemmCandidatesCpu, CpuQueueRunsNativeOnlyWithoutAHostBlas) {
     using T = typename TypeParam::ScalarType;
     static constexpr Backend B = TypeParam::BackendVal;
-    static constexpr bool kVendor = dispatch::level3_vendor_available<B>;
+    static constexpr bool kVendor = batchlas::select::level3_vendor_available<B>;
     if (!this->ctx) GTEST_SKIP() << "no queue";
     if (this->ctx->device().type == DeviceType::GPU) GTEST_SKIP() << "a GPU queue";
     const ScopedEnvVar clear("BATCHLAS_GEMM_ROUTE", nullptr);
@@ -1382,60 +1350,6 @@ TEST(GemmCandidateSet, EqualsTheOracleRows) {
     expect_candidate_set<double>();
     expect_candidate_set<std::complex<float>>();
     expect_candidate_set<std::complex<double>>();
-}
-
-// Every legacy alias, decoded from its own text (not from choice.hh): the config its name
-// spells, and that config has an instantiation for the form a suffix (tn/nt/tt, cn/nc) names.
-TEST(GemmLegacyAliases, EveryNameDecodesToItsConfigAndForm) {
-    const std::regex xyz(R"(^(?:register|reg)?(\d+)x(\d+)(?:x|k)(\d+)(.*)$)");
-    const std::regex sqk(R"(^(?:register|reg)(\d+)k(\d+)(.*)$)");
-    const std::regex sq(R"(^(?:register|reg)?(32|64)(?:x(32|64))?$)");
-    int decoded = 0;
-    for (const auto& a : og::aliases) {
-        const std::string name(a.name);
-        std::string want, rest;
-        std::smatch mt;
-        int m = 0, n = 0, k = 0;
-        if (name == "tiled16" || name == "tile16") want = "tiled";
-        else if (name == "smallbatched") want = "small";
-        else if (name == "vendor:direct") want = "vendor";
-        else if (std::regex_match(name, mt, sq) && (!mt[2].matched || mt[1] == mt[2])) {
-            m = n = std::stoi(mt[1]);
-            k = 8;
-        } else if (std::regex_match(name, mt, xyz)) {
-            m = std::stoi(mt[1]);
-            n = std::stoi(mt[2]);
-            k = std::stoi(mt[3]);
-            rest = mt[4];
-        } else if (std::regex_match(name, mt, sqk)) {
-            m = n = std::stoi(mt[1]);
-            k = std::stoi(mt[2]);
-            rest = mt[3];
-        } else {
-            ADD_FAILURE() << "undecodable legacy name " << name;
-            continue;
-        }
-        std::string form = "NN";
-        for (const char* f : {"tn", "nt", "tt", "cn", "nc"})
-            if (rest.ends_with(f)) form = {char(std::toupper(f[0])), char(std::toupper(f[1]))};
-        if (want.empty() && rest.find("wide") != std::string::npos) {
-            want = "wide:m=" + std::to_string(m) + ":n=" + std::to_string(n) + ":k=" + std::to_string(k);
-            const WideRow* row = wide_row(og::Wide{m, n, k});
-            ASSERT_NE(row, nullptr) << name;
-            EXPECT_EQ(row->trace.count(form), 1u) << name << ": its config has no " << form << " instantiation";
-        } else if (want.empty()) {
-            const int u = rest.find("large") == std::string::npos ? 1 : (rest.find("u2") != std::string::npos ? 2 : 4);
-            want = "reg:m=" + std::to_string(m) + ":n=" + std::to_string(n) + ":k=" + std::to_string(k) +
-                   ":u=" + std::to_string(u);
-            const RegRow* row = reg_row(og::Reg{m, n, k, u});
-            ASSERT_NE(row, nullptr) << name;
-            EXPECT_NE(std::find(row->forms.begin(), row->forms.end(), form), row->forms.end())
-                << name << ": its config has no " << form << " instantiation";
-        }
-        EXPECT_EQ(std::string(a.spelling), want) << name;
-        ++decoded;
-    }
-    EXPECT_EQ(decoded, int(og::aliases.size()));
 }
 
 }  // namespace

@@ -22,15 +22,10 @@ constexpr auto candidates() {
     return std::array<GetrsChoice, 3>{Cta{}, Blocked{}, Vendor{}};
 }
 
-inline constexpr std::array<select::Alias, 2> aliases{{
-    {"native:cta", "cta"},
-    {"native:blocked", "blocked"},
-}};
 inline constexpr std::array<std::string_view, 2> last_resort{"blocked", "vendor"};
-inline constexpr select::Rules rules{aliases, last_resort};
+inline constexpr select::Rules rules{last_resort};
 
-// The keys the old predicates read (not transA). Work ~ n^2 nrhs batch.
-inline constexpr std::array<std::string_view, 3> key_names{"n:log:2", "nrhs:log", "batch:log"};
+inline constexpr std::array<std::string_view, 3> key_names{"n:log:2", "nrhs:log", "batch:log"};  // work ~ n^2 nrhs batch
 
 // A log grid plus both sides of every old threshold (n 31/32; nrhs 2/3, 4/5, 63/64, 127/128;
 // batch 127/128); tools/transcribe/getrs_transcribe.cc spells the same grid.

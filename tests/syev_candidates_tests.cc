@@ -6,9 +6,9 @@
 
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/functions/syev.hh>
-#include <batchlas/blas/dispatch/coverage.hh>
-#include <batchlas/blas/dispatch/no_route.hh>
-#include <batchlas/blas/dispatch/vendor_available.hh>
+#include "../src/select/coverage.hh"
+#include <batchlas/no_route.hh>
+#include "../src/select/vendor.hh"
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
@@ -34,6 +34,7 @@
 #include <tuple>
 #include <variant>
 #include <vector>
+#include "../src/ops/syev/vendor.hh"
 
 using namespace batchlas;
 
@@ -265,7 +266,7 @@ protected:
     using T = typename Config::ScalarType;
     using R = RealOf<T>;
     static constexpr Backend B = Config::BackendVal;
-    static constexpr bool kVendor = dispatch::solver_vendor_available<B>;
+    static constexpr bool kVendor = batchlas::select::solver_vendor_available<B>;
 
     void SetUp() override {
         test_utils::BatchLASTest<Config>::SetUp();
@@ -480,7 +481,12 @@ TYPED_TEST(SyevCandidates, ExactWorkspaceInAPoisonedArena) {
 TYPED_TEST(SyevCandidates, UnknownPinsThrow) {
     using T = typename TestFixture::T;
     for (const char* word : {"bogus", "cta:1", "jacobi_cta", "native:vendor", "native:cta_fused:8", "twostage",
-                             "native:tiny"}) {
+                             "native:tiny",
+                             // removed aliases (phase 5): each must stay an error
+                             "native:cta", "native:blocked", "native:two_stage", "native:two-stage",
+                             "two-stage", "native:jacobi", "batchlas_cta", "batchlas-cta", "batchlas_blocked",
+                             "batchlas-blocked", "batchlas_two_stage", "batchlas-two-stage", "fused",
+                             "native:cta_fused", "netlib", "vendor:auto"}) {
         auto p = make_eig<T>(Spec{});
         const Pin pin("syev", std::string_view(word));
         EXPECT_THROW(this->run(p), std::invalid_argument) << word;
@@ -522,11 +528,12 @@ TYPED_TEST(SyevCandidates, CanRunFalsePinsThrow) {
     EXPECT_TRUE(det::syev_supports_two_stage<T>(*this->ctx, sq33, Uplo::Lower));
 }
 
-// §5.3: legacy spellings, the class words, and the legacy variable BATCHLAS_SYEV_PROVIDER.
-TYPED_TEST(SyevCandidates, LegacyAliasesAndClassWords) {
+// §5.3: spellings (case-folded) and the class words, via ScopedPin and BATCHLAS_SYEV_ROUTE. The
+// retired BATCHLAS_SYEV_PROVIDER is not read: setting it changes nothing.
+TYPED_TEST(SyevCandidates, ClassWordsAndSpellings) {
     using T = typename TestFixture::T;
     const ScopedEnvVar clear("BATCHLAS_SYEV_ROUTE", nullptr);
-    const ScopedEnvVar clear_legacy("BATCHLAS_SYEV_PROVIDER", nullptr);
+
     const Spec s{12, 3};
     std::string auto_pick;
     {
@@ -535,13 +542,17 @@ TYPED_TEST(SyevCandidates, LegacyAliasesAndClassWords) {
     }
     const std::string vendor_pick = TestFixture::kVendor ? "vendor" : auto_pick;
     const std::string native_pick = auto_pick == "vendor" ? "cta" : auto_pick;
+    {
+        const ScopedEnvVar retired("BATCHLAS_SYEV_PROVIDER", auto_pick == "blocked" ? "cta" : "blocked");
+        auto p = make_eig<T>(s);
+        EXPECT_EQ(traced_choice([&] { this->run(p); }), auto_pick) << "BATCHLAS_SYEV_PROVIDER was read";
+    }
     const std::pair<const char*, std::string> expect[] = {
-        {"native:cta", "cta"},         {"NATIVE:BLOCKED", "blocked"}, {"native:two_stage", "two_stage"},
-        {"two-stage", "two_stage"},    {"fused", "cta_fused"},        {"native:jacobi", "jacobi"},
-        {"batchlas_cta", "cta"},       {"jacobi", "jacobi"},          {"vendor", vendor_pick},
-        {"native", native_pick},       {"auto", auto_pick}};
+        {"cta", "cta"},             {"BLOCKED", "blocked"}, {"Two_Stage", "two_stage"},
+        {"cta_fused", "cta_fused"}, {"jacobi", "jacobi"},   {"vendor", vendor_pick},
+        {"native", native_pick},    {"auto", auto_pick}};
     for (const auto& [word, spelling] : expect)
-        for (const char* var : {"", "BATCHLAS_SYEV_ROUTE", "BATCHLAS_SYEV_PROVIDER"}) {
+        for (const char* var : {"", "BATCHLAS_SYEV_ROUTE"}) {
             auto p = make_eig<T>(s);
             const std::string got = traced_choice([&] {
                 const ScopedEnvVar env(*var ? var : "BATCHLAS_SYEV_UNUSED", word);
@@ -555,20 +566,17 @@ TYPED_TEST(SyevCandidates, LegacyAliasesAndClassWords) {
         }
 }
 
-// ScopedPin beats BATCHLAS_SYEV_ROUTE, which beats BATCHLAS_SYEV_PROVIDER.
+// ScopedPin beats BATCHLAS_SYEV_ROUTE.
 TYPED_TEST(SyevCandidates, PinPrecedence) {
     using T = typename TestFixture::T;
     const Spec s{10, 2};
-    const ScopedEnvVar legacy("BATCHLAS_SYEV_PROVIDER", "jacobi");
-    auto a = make_eig<T>(s);
-    EXPECT_EQ(traced_choice([&] { this->run(a); }), "jacobi");
     const ScopedEnvVar route("BATCHLAS_SYEV_ROUTE", "blocked");
     auto b = make_eig<T>(s);
     EXPECT_EQ(traced_choice([&] { this->run(b); }), "blocked");
     const Pin pin("syev", C{sy::CtaFused{}});
     auto c = make_eig<T>(s);
     EXPECT_EQ(traced_choice([&] { this->run(c); }), "cta_fused");
-    expect_solved(c, "cta_fused over both variables");
+    expect_solved(c, "cta_fused over the variable");
 }
 
 // key_of's fields reach choose(): a synthetic table whose first entry changes with jobz, n and
@@ -576,7 +584,6 @@ TYPED_TEST(SyevCandidates, PinPrecedence) {
 TYPED_TEST(SyevCandidates, AutoReadsEveryKeyField) {
     using T = typename TestFixture::T;
     const ScopedEnvVar clear("BATCHLAS_SYEV_ROUTE", nullptr);
-    const ScopedEnvVar clear_legacy("BATCHLAS_SYEV_PROVIDER", nullptr);
     const std::string dtype(select::dtype_name<T>());
     const std::string dev = select::device_of<TestFixture::B>(*this->ctx).key;
     auto files = tables_without_syev();
@@ -615,7 +622,6 @@ TYPED_TEST(SyevCandidates, TraceLineShowsTheKey) {
 TYPED_TEST(SyevCandidates, AutoReadsTheTranscribedTable) {
     using T = typename TestFixture::T;
     const ScopedEnvVar clear("BATCHLAS_SYEV_ROUTE", nullptr);
-    const ScopedEnvVar clear_legacy("BATCHLAS_SYEV_PROVIDER", nullptr);
     const auto tables = select::tables_in_borrow_order("syev", select::dtype_name<T>(),
                                                        select::device_of<TestFixture::B>(*this->ctx));
     if (tables.empty() || tables.front()->source.rfind("transcribed:", 0) != 0)
@@ -639,7 +645,6 @@ TYPED_TEST(SyevCandidates, AutoReadsTheTranscribedTable) {
 TYPED_TEST(SyevCandidates, VendorFreeLastResortIsBlocked) {
     using T = typename TestFixture::T;
     const ScopedEnvVar clear("BATCHLAS_SYEV_ROUTE", nullptr);
-    const ScopedEnvVar clear_legacy("BATCHLAS_SYEV_PROVIDER", nullptr);
     const std::string dtype(select::dtype_name<T>());
     const std::string dev = select::device_of<TestFixture::B>(*this->ctx).key;
     auto files = tables_without_syev();
@@ -669,7 +674,7 @@ TYPED_TEST(SyevCandidates, CoverageRowCarriesChoiceAndNativeFlags) {
     const std::string out = dir + "/cov";
     auto child = [&] {
         const ScopedEnvVar cov("BATCHLAS_COVERAGE_OUT", out.c_str());
-        dispatch::coverage::g_dynamic_enabled = true;
+        batchlas::coverage::g_dynamic_enabled = true;
         {
             const Pin pin("syev", C{sy::Jacobi{}});
             auto p = make_eig<T>(Spec{12, 2});
@@ -718,7 +723,6 @@ TYPED_TEST(SyevCandidatesCpu, CpuQueueRunsNoNativeFamily) {
     if (!this->ctx) GTEST_SKIP() << "no queue";
     if (this->ctx->device().type == DeviceType::GPU) GTEST_SKIP() << "a GPU queue";
     const ScopedEnvVar clear("BATCHLAS_SYEV_ROUTE", nullptr);
-    const ScopedEnvVar clear_legacy("BATCHLAS_SYEV_PROVIDER", nullptr);
     const Spec s{8, 2};
     for (const C& c : sy::candidates<T>()) {
         if (std::holds_alternative<sy::Vendor>(c)) continue;
@@ -743,11 +747,11 @@ TYPED_TEST(SyevCandidatesCpu, CpuQueueRunsNoNativeFamily) {
         (void)syev<B, T>(*this->ctx, p.A(), p.w.to_span(), s.jobz, s.uplo, ws.to_span(), Span<int32_t>{});
         this->ctx->wait();
     };
-    if constexpr (dispatch::solver_vendor_available<B>) {
+    if constexpr (batchlas::select::solver_vendor_available<B>) {
         EXPECT_EQ(traced_choice(call), "vendor");
         expect_solved(p, "cpu vendor");
     } else {
-        EXPECT_THROW(call(), dispatch::NoRouteError);
+        EXPECT_THROW(call(), batchlas::NoRouteError);
     }
 }
 

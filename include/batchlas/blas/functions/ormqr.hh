@@ -15,8 +15,6 @@
 
 #include <batchlas/internal/ormqr_blocked.hh>
 
-#include <batchlas/blas/dispatch/no_route.hh>
-#include <batchlas/blas/dispatch/vendor_available.hh>
 #include <batchlas/blas/queue-dispatch.hh>
 
 namespace batchlas {
@@ -99,35 +97,6 @@ BATCHLAS_API size_t ormqr_vendor_buffer_size(Queue& ctx,
 
 } // namespace batchlas::backend
 
-
-namespace batchlas::blas::dispatch::detail {
-
-// The vendor call, gated on the vendor actually being compiled in.
-//
-// Without this, a build with no cuBLAS / rocSOLVER / netlib library leaves backend::ormqr_vendor<B, T> undefined and the LINK fails -- which is
-// the state WP0 exists to remove. Being `if constexpr`, the vendor call is not
-// compiled at all when the library is absent, so there is no symbol to satisfy.
-template <Backend B, typename T, typename... Args>
-Event ormqr_vendor_or_throw(Args&&... args) {
-    if constexpr (!batchlas::dispatch::factorization_vendor_available<B>) {
-        batchlas::dispatch::throw_no_vendor_route<T>(
-            batchlas::dispatch::Op::ormqr, B, batchlas::dispatch::kFactorizationLibrary<B>);
-    } else {
-        return batchlas::backend::ormqr_vendor<B, T>(std::forward<Args>(args)...);
-    }
-}
-
-template <Backend B, typename T, typename... Args>
-size_t ormqr_vendor_buffer_size_or_throw(Args&&... args) {
-    if constexpr (!batchlas::dispatch::factorization_vendor_available<B>) {
-        batchlas::dispatch::throw_no_vendor_route<T>(
-            batchlas::dispatch::Op::ormqr, B, batchlas::dispatch::kFactorizationLibrary<B>);
-    } else {
-        return batchlas::backend::ormqr_vendor_buffer_size<B, T>(std::forward<Args>(args)...);
-    }
-}
-
-} // namespace batchlas::blas::dispatch::detail
 
 namespace batchlas {
 

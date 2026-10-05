@@ -25,14 +25,9 @@ constexpr auto candidates() {
     return std::array<GeqrfChoice, 4>{Tiny{}, Cta{}, Blocked{}, Vendor{}};
 }
 
-inline constexpr std::array<select::Alias, 3> aliases{{  // legacy spellings until phase 5
-    {"native:tiny", "tiny"},
-    {"native:cta", "cta"},
-    {"native:blocked", "blocked"},
-}};
 // Generality order (§5.5): Blocked runs every m >= n shape on a GPU, Vendor everything else.
 inline constexpr std::array<std::string_view, 2> last_resort{"blocked", "vendor"};
-inline constexpr select::Rules rules{aliases, last_resort};
+inline constexpr select::Rules rules{last_resort};
 
 // form: sq | tall (m > n) | wide (m < n); aspect = max(m,n) / min(m,n). Work ~ n^3 * aspect.
 inline constexpr std::array<std::string_view, 3> key_names{"form:exact", "n:log:3", "aspect:log"};

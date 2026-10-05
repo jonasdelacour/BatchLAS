@@ -1,14 +1,14 @@
 // ormqr's flat-selection suite (docs/design/flat-kernel-selection.md §8): every candidate
 // pinned on shapes straddling its limits, pinned-equals-direct bit for bit, a saturating batch,
-// can_run equals launch, the exact workspace in a poisoned arena, the pin rules (including the
-// legacy BATCHLAS_ORMQR_PROVIDER), key fields, coverage and the transcribed tables.
+// can_run equals launch, the exact workspace in a poisoned arena, the pin rules, key fields,
+// coverage and the transcribed tables.
 
 #include <gtest/gtest.h>
 
 #include <batchlas/blas/functions/ormqr.hh>
-#include <batchlas/blas/dispatch/coverage.hh>
-#include <batchlas/blas/dispatch/no_route.hh>
-#include <batchlas/blas/dispatch/vendor_available.hh>
+#include "../src/select/coverage.hh"
+#include <batchlas/no_route.hh>
+#include "../src/select/vendor.hh"
 #include <batchlas/internal/ormqr_blocked.hh>
 #include <batchlas/tuning_params.hh>
 #include <batchlas/util/env.hh>
@@ -284,7 +284,7 @@ protected:
     using T = typename Config::ScalarType;
     using MV = MVof<T>;
     static constexpr Backend B = Config::BackendVal;
-    static constexpr bool kVendor = dispatch::factorization_vendor_available<B>;
+    static constexpr bool kVendor = batchlas::select::factorization_vendor_available<B>;
 
     void SetUp() override {
         test_utils::BatchLASTest<Config>::SetUp();
@@ -341,7 +341,6 @@ protected:
     }
     std::string auto_choice(Apply<T>& p) {
         const ScopedEnvVar clear("BATCHLAS_ORMQR_ROUTE", nullptr);
-        const ScopedEnvVar clear_legacy("BATCHLAS_ORMQR_PROVIDER", nullptr);
         return traced_choice([&] { run(p); });
     }
 
@@ -519,7 +518,9 @@ TYPED_TEST(OrmqrCandidates, OutOfOrderQueueIsSequenced) {
 // R6: spellings that name nothing compiled throw instead of meaning Auto.
 TYPED_TEST(OrmqrCandidates, UnknownPinsThrow) {
     using T = typename TestFixture::T;
-    for (const char* word : {"bogus", "cta", "native:cta", "blocked:64", "blocked:nb=32", "two_stage", "tiny"}) {
+    for (const char* word : {"bogus", "cta", "native:cta", "blocked:64", "blocked:nb=32", "two_stage", "tiny",
+                             // removed aliases (phase 5): each must stay an error
+                             "native:blocked", "vendor:auto"}) {
         auto p = make_apply<T>(Spec{});
         const Pin pin("ormqr", std::string_view(word));
         EXPECT_THROW((void)this->size(p), std::invalid_argument) << word;
@@ -569,11 +570,10 @@ TYPED_TEST(OrmqrCandidates, ComplexTransIsRefusedUnderEveryPin) {
     }
 }
 
-// §5.3: legacy route spellings and the class words, via ScopedPin and via the environment.
-TYPED_TEST(OrmqrCandidates, LegacyAliasesAndClassWords) {
+// §5.3: spellings (case-folded) and the class words, via ScopedPin and via the environment.
+TYPED_TEST(OrmqrCandidates, ClassWordsAndSpellings) {
     using T = typename TestFixture::T;
     const ScopedEnvVar clear("BATCHLAS_ORMQR_ROUTE", nullptr);
-    const ScopedEnvVar clear_legacy("BATCHLAS_ORMQR_PROVIDER", nullptr);
     const Spec s{Side::Left, Transpose::NoTrans, 12, 8, 4, 3};
     std::string auto_pick;
     {
@@ -582,7 +582,7 @@ TYPED_TEST(OrmqrCandidates, LegacyAliasesAndClassWords) {
     }
     const std::string vendor_pick = TestFixture::kVendor ? "vendor" : auto_pick;
     const std::pair<const char*, std::string> expect[] = {
-        {"native:blocked", "blocked"}, {"NATIVE:BLOCKED", "blocked"}, {"blocked", "blocked"}, {"native", "blocked"},
+        {"BLOCKED", "blocked"}, {"blocked", "blocked"}, {"native", "blocked"},
         {"vendor", vendor_pick},       {"auto", auto_pick}};
     for (const auto& [word, spelling] : expect)
         for (bool via_env : {false, true}) {
@@ -601,39 +601,28 @@ TYPED_TEST(OrmqrCandidates, LegacyAliasesAndClassWords) {
         }
     if constexpr (TestFixture::kVendor) {
         auto p = make_apply<T>(s);
-        const Pin pin("ormqr", std::string_view("vendor:auto"));
+        const Pin pin("ormqr", std::string_view("vendor"));
         EXPECT_EQ(traced_choice([&] { this->run(p); }), "vendor");
     }
 }
 
-// The legacy variable still pins, below BATCHLAS_ORMQR_ROUTE and below a ScopedPin, and a bad
-// value throws like any pin (it used to fall back silently).
-TYPED_TEST(OrmqrCandidates, LegacyProviderVariablePins) {
+// The retired BATCHLAS_ORMQR_PROVIDER is not read: neither a valid word nor a bad one changes
+// the choice or throws.
+TYPED_TEST(OrmqrCandidates, RetiredProviderVariableIsNotRead) {
     using T = typename TestFixture::T;
     const ScopedEnvVar clear("BATCHLAS_ORMQR_ROUTE", nullptr);
     const Spec s{Side::Right, Transpose::NoTrans, 10, 7, 3, 2};
-    const std::string vendor_or_auto = TestFixture::kVendor ? "vendor" : "blocked";
+    std::string auto_pick;
     {
-        const ScopedEnvVar legacy("BATCHLAS_ORMQR_PROVIDER", "vendor");
         auto p = make_apply<T>(s);
-        EXPECT_EQ(traced_choice([&] { this->run(p); }), vendor_or_auto) << "legacy vendor";
-        auto r = make_apply<T>(s);
-        const ScopedEnvVar canonical("BATCHLAS_ORMQR_ROUTE", "blocked");
-        EXPECT_EQ(traced_choice([&] { this->run(r); }), "blocked") << "the canonical variable must win";
+        auto_pick = this->auto_choice(p);
     }
-    {
-        const ScopedEnvVar legacy("BATCHLAS_ORMQR_PROVIDER", "blocked");
+    for (const char* word : {"vendor", "blocked", "cta"}) {
+        const ScopedEnvVar retired("BATCHLAS_ORMQR_PROVIDER", word);
         auto p = make_apply<T>(s);
-        EXPECT_EQ(traced_choice([&] { this->run(p); }), "blocked") << "legacy blocked";
-        if constexpr (TestFixture::kVendor) {
-            auto r = make_apply<T>(s);
-            const Pin pin("ormqr", C{om::Vendor{}});
-            EXPECT_EQ(traced_choice([&] { this->run(r); }), "vendor") << "a ScopedPin must win";
-        }
+        EXPECT_NO_THROW((void)this->size(p)) << word;
+        EXPECT_EQ(traced_choice([&] { this->run(p); }), auto_pick) << word;
     }
-    const ScopedEnvVar legacy("BATCHLAS_ORMQR_PROVIDER", "cta");
-    auto p = make_apply<T>(s);
-    EXPECT_THROW((void)this->size(p), std::invalid_argument);
 }
 
 // Auto against the shipped transcribed tables on a device that reads them: blocked first
@@ -741,7 +730,7 @@ TYPED_TEST(OrmqrCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     auto child = [&] {
         const ScopedEnvVar cov("BATCHLAS_COVERAGE_OUT", out.c_str());
         const ScopedEnvVar clear("BATCHLAS_ORMQR_ROUTE", nullptr);
-        dispatch::coverage::g_dynamic_enabled = true;
+        batchlas::coverage::g_dynamic_enabled = true;
         for (const Spec& s : {lo, hi}) {
             const Pin pin("ormqr", C{om::Blocked{}});
             auto p = make_apply<T>(s);
@@ -802,11 +791,11 @@ TYPED_TEST(OrmqrCandidatesCpu, CpuQueueRunsNoNativeFamily) {
         (void)ormqr<B, T>(*this->ctx, p.A(), p.Cm(), s.side, s.trans, p.Tau(), ws.to_span());
         this->ctx->wait();
     };
-    if constexpr (dispatch::factorization_vendor_available<B>) {
+    if constexpr (batchlas::select::factorization_vendor_available<B>) {
         EXPECT_EQ(traced_choice(call), "vendor");
         expect_applied(p, "cpu vendor");
     } else {
-        EXPECT_THROW(call(), dispatch::NoRouteError);
+        EXPECT_THROW(call(), batchlas::NoRouteError);
     }
 }
 

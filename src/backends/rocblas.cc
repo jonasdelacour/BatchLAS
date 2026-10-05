@@ -259,7 +259,7 @@ namespace batchlas {
     // Every row names a `backend::`-qualified `_vendor` symbol, hence
     // BATCHLAS_INSTANTIATE_BACKEND_OP rather than the plain _OP: WP0b moved the
     // public gemm/gemv/trsm/trmm/syrk/syr2k definitions out of every vendor TU
-    // and into src/dispatch/entry_points/level3.cc, so instantiating a public op
+    // and into src/ops/, so instantiating a public op
     // here would collide with the one defined there. The alias itself still
     // lives in `sig` (not `backend::sig`) -- only the function is qualified --
     // and sig::trsm_vendor is deliberately NOT an alias of sig::trsm, because

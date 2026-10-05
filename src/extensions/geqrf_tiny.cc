@@ -273,11 +273,6 @@ int geqrf_tiny_max_n_for_slm(std::size_t slm_budget_bytes) {
 }
 
 template <typename T>
-int geqrf_tiny_max_n() {
-    return geqrf_tiny_max_n_for_slm<T>(gn::kGeqrfTinyReferenceSlm);
-}
-
-template <typename T>
 std::size_t geqrf_tiny_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
     // Zero, and monotone in (rows, cols, batch) by being constant. Must not dereference
     // A.data_ptr(): band_reduction.cc sizes against a null-data dummy view.
@@ -375,7 +370,6 @@ Event geqrf_tiny_dispatch(Queue& ctx,
 // Per scalar type only; the ladder above pulls the <T, N, C> cross-product in implicitly.
 #define BATCHLAS_GEQRF_TINY_INSTANTIATE(T)                                                     \
     template int geqrf_tiny_max_n_for_slm<T>(std::size_t);                                     \
-    template int geqrf_tiny_max_n<T>();                                                        \
     template unsigned geqrf_tiny_debug_launch<T>(Queue&, int);                                 \
     template std::size_t geqrf_tiny_buffer_size<T>(                                            \
         Queue&, const MatrixView<T, MatrixFormat::Dense>&);                                    \

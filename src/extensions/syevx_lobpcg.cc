@@ -17,6 +17,7 @@
 #include "../util/template-instantiations.hh"
 #include "../sort.hh"
 #include <batchlas/settings.hh>
+#include "../ops/syev/vendor.hh"
 
 namespace batchlas {
     template <Backend B, typename T, MatrixFormat MFormat>

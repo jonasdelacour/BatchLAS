@@ -112,16 +112,9 @@ if(BATCHLAS_HAS_CUBLAS)
         trmm_cublasdx_fused.cu
     )
 endif()
-if(BATCHLAS_HAS_CUSOLVER)
-    list(APPEND BACKEND_CUDA_SOURCES
-        cusolverdx.cc
-        cusolverdx_kernels.cu
-    )
-endif()
 
-# gemm_cublasdx_dispatch.cc stays gated: it genuinely calls gemm_vendor_cuda_raw
-# and hosts the cuBLASDx variant machinery, so cuBLAS is the library it actually
-# depends on.
+# gemm_cublasdx_dispatch.cc stays gated with the fused level-3 kernels whose
+# cuBLASDx variant machinery it hosts.
 if(BATCHLAS_HAS_CUBLAS)
     list(APPEND BACKEND_CUDA_SOURCES
         gemm_cublasdx_dispatch.cc
@@ -151,7 +144,7 @@ endif()
 # ...but not on a box with no CUDA device backend at all. Three of the four name
 # ::batchlas::gemm<Backend::CUDA, float> for their expansion's terminal GEMM, and
 # that instantiation lives behind #if BATCHLAS_HAS_CUDA_BACKEND in
-# dispatch/entry_points/level3.cc -- so compiling them into the always-built
+# ops/level3/level3.cc -- so compiling them into the always-built
 # object library left batchlas_backends.so carrying an undefined reference on any
 # CPU-only or ROCm-only configure. The gate below is the DEVICE FAMILY, not the
 # library: the vendor-free build WP1 exists for is HAS_CUDA_BACKEND=1 with

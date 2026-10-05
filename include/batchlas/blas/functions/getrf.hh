@@ -116,7 +116,7 @@ namespace batchlas::backend {
 // DECLARATION ONLY -- see the note on gemm_vendor in gemm.hh. The public
 // `getrf` used to be defined inside each vendor TU, so dropping a vendor library
 // dropped the public entry point with it; WP0 S5 moves that definition to
-// src/dispatch/entry_points/factorization.cc and leaves the vendor
+// src/ops/getrf/getrf.cc and leaves the vendor
 // implementation here, named as such.
 template <Backend B, typename T>
 BATCHLAS_API Event getrf_vendor(Queue& ctx,

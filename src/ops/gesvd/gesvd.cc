@@ -9,8 +9,8 @@
 
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/functions/gesvd.hh>
-#include <batchlas/blas/dispatch/no_route.hh>
-#include <batchlas/blas/dispatch/vendor_available.hh>
+#include <batchlas/no_route.hh>
+#include "../../select/vendor.hh"
 #include <batchlas/settings.hh>
 
 #include "choice.hh"
@@ -84,29 +84,17 @@ bool can_run(const GesvdChoice& c, const select::Device& d, const MV<T>& A, cons
     }, c);
 }
 
-// BATCHLAS_GESVD_PROVIDER, the pre-route spelling, still pins when neither a ScopedPin nor
-// BATCHLAS_GESVD_ROUTE does. It is applied as a pin for this one choose().
-inline std::optional<std::string> legacy_pin() {
-    std::string source;
-    if (select::detail::pin_text("gesvd", &source)) return std::nullopt;
-    const char* raw = settings().routing.legacy_route(dispatch::Op::gesvd).get();
-    if (!raw || !*raw) return std::nullopt;
-    return std::string(raw);
-}
-
 template <Backend B, class T>
 GesvdChoice choose(Queue& q, const MV<T>& A, const Job& j) {
     const select::Device& d = select::device_of<B>(q);
     auto ok = [&](const GesvdChoice& c) { return can_run<T>(c, d, A, j); };
-    std::optional<select::ScopedPin<GesvdChoice>> legacy;
-    if (auto word = legacy_pin()) legacy.emplace("gesvd", std::string_view(*word));
     try {
         return select::choose("gesvd", select::dtype_name<T>(), d, key_of<T>(A, j), candidates<T>(), ok, rules);
     } catch (const std::runtime_error&) {
         // Vendor-free burn-down reads coverage `miss` rows; a plain runtime_error records none.
         const auto all = candidates<T>();
-        if (!dispatch::solver_vendor_available<B> && std::none_of(all.begin(), all.end(), ok))
-            dispatch::throw_no_vendor_route<T>(dispatch::Op::gesvd, B, dispatch::kSolverLibrary<B>);
+        if (!select::solver_vendor_available<B> && std::none_of(all.begin(), all.end(), ok))
+            select::throw_no_vendor_route<T>(Op::gesvd, B, select::kSolverLibrary<B>);
         throw;
     }
 }
@@ -114,7 +102,7 @@ GesvdChoice choose(Queue& q, const MV<T>& A, const Job& j) {
 // The coverage row's native flags (§5.6): computed only when coverage records a row.
 template <Backend B, class T>
 select::NativeFacts native_facts(Queue& q, const MV<T>& A, const Job& j) {
-    if (!dispatch::coverage::dynamic_enabled()) return {};
+    if (!coverage::dynamic_enabled()) return {};
     const select::Device& d = select::device_of<B>(q);
     return select::native_facts(candidates<T>(), [&](const GesvdChoice& c) { return can_run<T>(c, d, A, j); });
 }
@@ -134,10 +122,10 @@ std::size_t workspace(Queue& q, const GesvdChoice& c, const MV<T>& A, SV<T> s, c
                           : gesvd_blocked_buffer_size<B, T>(q, A, s, U, Vh, j.jobu, j.jobvh);
         },
         [&](Vendor) -> std::size_t {
-            if constexpr (dispatch::solver_vendor_available<B>)
+            if constexpr (select::solver_vendor_available<B>)
                 return backend::gesvd_vendor_buffer_size<B, T>(q, A, s, U, Vh, j.jobu, j.jobvh);
             else
-                dispatch::throw_no_vendor_route<T>(dispatch::Op::gesvd, B, dispatch::kSolverLibrary<B>);
+                select::throw_no_vendor_route<T>(Op::gesvd, B, select::kSolverLibrary<B>);
         },
     }, c);
 }
@@ -158,10 +146,10 @@ Event launch(Queue& q, const GesvdChoice& c, const MV<T>& A, SV<T> s, const MV<T
                           : gesvd_blocked<B, T>(q, A, s, U, Vh, j.jobu, j.jobvh, ws, info);
         },
         [&](Vendor) -> Event {
-            if constexpr (dispatch::solver_vendor_available<B>)
+            if constexpr (select::solver_vendor_available<B>)
                 return backend::gesvd_vendor<B, T>(q, A, s, U, Vh, j.jobu, j.jobvh, ws, info);
             else
-                dispatch::throw_no_vendor_route<T>(dispatch::Op::gesvd, B, dispatch::kSolverLibrary<B>);
+                select::throw_no_vendor_route<T>(Op::gesvd, B, select::kSolverLibrary<B>);
         },
     }, c);
 }

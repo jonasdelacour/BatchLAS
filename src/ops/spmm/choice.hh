@@ -21,12 +21,8 @@ constexpr auto candidates() {
     return std::array<SpmmChoice, 2>{Direct{}, Vendor{}};
 }
 
-inline constexpr std::array<select::Alias, 1> aliases{{
-    {"native:direct", "direct"},
-}};
-// The vendor serves every format, Direct only CSR; also the old resolver's "nothing serves" answer.
 inline constexpr std::array<std::string_view, 2> last_resort{"vendor", "direct"};
-inline constexpr select::Rules rules{aliases, last_resort};
+inline constexpr select::Rules rules{last_resort};  // vendor: every format; direct: CSR only
 
 // ConjTrans folds to T; m = A.rows() as stored; no nnz key (device memory). Work ~ m nrhs batch.
 inline constexpr std::array<std::string_view, 5> key_names{

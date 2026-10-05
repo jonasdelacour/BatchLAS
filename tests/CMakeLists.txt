@@ -24,7 +24,6 @@ set(TEST_TARGETS
     mempool_tests
     backend_dispatch_tests
     options_api_tests
-    route_vocabulary_tests
     resident_capacity_tests
     settings_tests
     select_tests
@@ -113,11 +112,6 @@ set(BATCHLAS_SMOKE_TEST_TARGETS
     # is wrong in a way that is hard to trace back here.
     backend_dispatch_tests
     options_api_tests
-    # The route vocabulary pins the legacy BATCHLAS_*_VARIANT / _PROVIDER
-    # spellings onto the new Route type. Those spellings appear in committed
-    # benchmark scripts and in the provenance of recorded results, so a silent
-    # change of meaning would invalidate measurements rather than fail loudly.
-    route_vocabulary_tests
     # settings() decides which kernel runs and whether arguments are checked, for
     # every op at once, and it is read once per process -- so a regression here is
     # not one suite going red, it is the whole suite silently measuring the default
@@ -164,7 +158,7 @@ endif()
 set(BATCHLAS_TEST_LABELS_util
     sg_partition_tests util_span_tests util_vector_tests util_device_queue_tests
     mempool_tests matrix_tests matrix_view_tests minibench_cli_tests
-    backend_dispatch_tests options_api_tests route_vocabulary_tests
+    backend_dispatch_tests options_api_tests
     settings_tests error_model_tests
     linalg_layer_tests select_tests tuned_tables_tests tune_tests)
 set(BATCHLAS_TEST_LABELS_blas
@@ -393,16 +387,15 @@ endfunction()
 # ---------------------------------------------------------------------------
 # Route-pinned reruns.
 #
-# preferred() decides the DEFAULT route, so on a vendor-present box a suite for an
-# op whose window is narrow -- or, like potrf and geqrf/orgqr, deliberately empty
-# -- measures the vendor and validates none of the native kernel it was written
-# for. That is how spmm's whole transposed arm (two of its three kernel bodies)
+# The tuned table decides the DEFAULT kernel, so on a vendor-present box a suite for
+# an op whose tables rank the vendor first measures the vendor and validates none of
+# the native kernel it was written for. That is how spmm's whole transposed arm (two of its three kernel bodies)
 # and every one of gemv's 264 cases came to run cuSPARSE/cuBLAS under ctest while
 # the coverage table reported a native route available: LINKED IS NOT REACHABLE.
 #
-# Each entry below reruns one suite with its op pinned native. The pins are a
-# bare origin, so an op with two native arms resolves through its own order walk
-# rather than naming an arm that may not serve the shape. Labelled route-native
+# Each entry below reruns one suite with its op pinned native. `native` is select's
+# class word: the table walk restricted to native candidates, so an op with several
+# native kernels never names one that cannot serve the shape. Labelled route-native
 # so `ctest -LE route-native` gets the old, shorter run.
 set(BATCHLAS_ROUTE_PINNED_TESTS
     gemm_tests   "BATCHLAS_GEMM_ROUTE=native"
@@ -468,10 +461,10 @@ endif()
 #   miss,<op>,<scalar>,...       -- a call that found no route, with the library
 #                                   that would have served it.
 #   reached,<op>,...             -- DYNAMIC, per shape_class: the route the
-#                                   resolver actually returned. Recorded by any
+#                                   selection actually took. Recorded by any
 #                                   build whenever BATCHLAS_COVERAGE_OUT is set,
 #                                   which this target sets. No special configure
-#                                   step -- see dispatch/coverage.hh for why the
+#                                   step -- see src/select/coverage.hh for why the
 #                                   compile-time option was removed.
 #
 # scripts/route_diff.sh captures and diffs the `reached` rows, which is how a

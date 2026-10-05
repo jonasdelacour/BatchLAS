@@ -13,7 +13,6 @@
 #include "../sycl/device_scalar.hh"
 #include "../util/resident_capacity.hh"
 
-#include <batchlas/blas/dispatch/route.hh>
 
 #include <sycl/sycl.hpp>
 
@@ -123,7 +122,7 @@ constexpr int getrs_fused_regs_for(int nrhs, FusedBody body, int cuda_cc) {
     const auto pick = [&](const int* nt, const int* tr, const int* po) {
         return body == FusedBody::kTrans ? tr[i] : body == FusedBody::kNoTrans ? nt[i] : po[i];
     };
-    if (dispatch::is_sm120_family(cuda_cc)) {
+    if (batchlas::is_sm120_family(cuda_cc)) {
         using R = GetrsFusedRegs120<T>;
         return pick(R::notrans, R::trans, R::potrs);
     }

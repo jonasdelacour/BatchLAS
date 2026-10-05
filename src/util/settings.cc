@@ -17,10 +17,10 @@
 #include <batchlas/error.hh>
 
 #include <batchlas/backend_config.h>
-#include <batchlas/blas/dispatch/route_env.hh>  // legacy_variable_for
 #include <batchlas/util/env.hh>
 
 #include <atomic>
+#include <cctype>
 #include <cstdio>
 #include <optional>
 #include <cstdlib>
@@ -100,29 +100,20 @@ EnvValue raw(const char* name) { return EnvValue(std::getenv(name)); }
 const char* raw_or_null(const char* name) { return std::getenv(name); }
 
 void load_routing(RoutingSettings& r) {
-    // Both arrays are indexed by Op and both are rebuilt from scratch, so a
-    // reload cannot leave a stale entry behind for a variable that has since
-    // been unset.
-    for (std::size_t i = 0; i < static_cast<std::size_t>(dispatch::Op::COUNT); ++i) {
-        const auto op = static_cast<dispatch::Op>(i);
-
-        // The canonical name is SYNTHESISED, exactly as parse_route_env
-        // synthesised it: "BATCHLAS_" + the upper-cased op name + "_ROUTE".
-        // This is why a grep for BATCHLAS_* string literals misses thirteen live
-        // routing variables -- no literal for them exists anywhere in the tree.
-        r.canonical[i] = raw(("BATCHLAS_" + dispatch::op_env_stem(op) + "_ROUTE").c_str());
-
-        // legacy_variable_for() returns an empty view for the ops that never had
-        // a legacy spelling; the entry stays unset for those.
-        const std::string_view legacy = dispatch::legacy_variable_for(op);
-        r.legacy[i] = legacy.empty() ? EnvValue::unset() : raw(std::string(legacy).c_str());
+    // The names are synthesised ("BATCHLAS_" + upper-cased op + "_ROUTE"), so a grep
+    // for BATCHLAS_* string literals misses them.
+    for (std::size_t i = 0; i < RoutingSettings::ops.size(); ++i) {
+        std::string name = "BATCHLAS_";
+        for (const char c : RoutingSettings::ops[i])
+            name += static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        name += "_ROUTE";
+        r.values[i] = raw(name.c_str());
     }
 }
 
 void load_selection(SelectionSettings& s) {
     s.expand_route = raw("BATCHLAS_EXPAND_ROUTE");
     s.gemm_cublasdx_kernel = raw("BATCHLAS_GEMM_CUBLASDX_KERNEL");
-    s.gemm_sycl_kernel = raw("BATCHLAS_GEMM_SYCL_KERNEL");
     s.gemv_segt = raw("BATCHLAS_GEMV_SEGT");
     s.gesvd_bidiag = raw("BATCHLAS_GESVD_BIDIAG");
     s.geqrf_leaf = raw("BATCHLAS_GEQRF_LEAF");
@@ -137,7 +128,6 @@ void load_selection(SelectionSettings& s) {
     s.ortho_gram = raw("BATCHLAS_ORTHO_GRAM");
     s.sb2st_back_wave = raw("BATCHLAS_SB2ST_BACK_WAVE");
     s.sb2st_subgroup = raw("BATCHLAS_SB2ST_SUBGROUP");
-    s.syev_small_kernel = raw("BATCHLAS_SYEV_SMALL_KERNEL");
     s.syev_two_stage_chase = raw("BATCHLAS_SYEV_TWO_STAGE_CHASE");
     s.syevx_algorithm = raw("BATCHLAS_SYEVX_ALGORITHM");
     s.syevx_preconditioner = raw("BATCHLAS_SYEVX_PRECONDITIONER");
@@ -192,7 +182,6 @@ void load_geometry(GeometrySettings& g) {
         env_positive_int_or("BATCHLAS_SYEV_TWO_STAGE_SB2ST_BLOCK", 32);
 
     g.sy2sb_ormqr_nb = raw("BATCHLAS_SY2SB_ORMQR_NB");   // three-valued: unset / off / n
-    g.syev_cta_max_n = raw("BATCHLAS_SYEV_CTA_MAX_N");   // strtol, range-checked, typed default
 
     g.sytrd_block_size = env_positive_int_or("BATCHLAS_SYTRD_BLOCK_SIZE", 0);
     g.trmm_tile_m = env_positive_int_or("BATCHLAS_TRMM_TILE_M", 0);

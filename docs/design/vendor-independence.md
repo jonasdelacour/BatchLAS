@@ -1,5 +1,13 @@
 # Vendor independence: how dispatch works
 
+> **Historical (WP0/WP1 design).** The `Route{Origin, Algorithm}` vocabulary, `RouteTable`, the
+> resolver and the legacy `_VARIANT`/`_PROVIDER` spellings described below were deleted by flat
+> kernel selection phase 5 (docs/design/flat-kernel-selection.md): ops now choose from tuned tables in
+> `src/ops/<op>/`, the vendor gate lives in `src/select/vendor.hh`, `NoRouteError` in
+> `<batchlas/no_route.hh>` and the coverage instrument in `src/select/coverage.hh`. What still holds
+> is the vendor-free build itself and the `if constexpr` gate; [`docs/perf/dispatch.md`](../perf/dispatch.md)
+> is the current page.
+
 BatchLAS configures, compiles, links, loads and runs with no vendor math library. `cmake -B
 build-novendor -DBATCHLAS_ENABLE_VENDOR_BLAS=OFF -DBATCHLAS_ENABLE_CUDA=ON` yields
 `BATCHLAS_HAS_CUDA_BACKEND 1` with every CUDA math library at `0` — a CUDA device with no cuBLAS,

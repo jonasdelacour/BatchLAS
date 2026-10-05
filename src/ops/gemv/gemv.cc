@@ -8,8 +8,8 @@
 #include <batchlas/backend_config.h>
 
 #include <batchlas/blas/functions/gemv.hh>
-#include <batchlas/blas/dispatch/no_route.hh>
-#include <batchlas/blas/dispatch/vendor_available.hh>
+#include <batchlas/no_route.hh>
+#include "../../select/vendor.hh"
 
 #include "choice.hh"
 #include "../../select/select.hh"
@@ -79,8 +79,8 @@ GemvChoice choose(Queue& q, const MV<T>& A, const VectorView<T>& X, const Vector
     } catch (const std::runtime_error&) {
         // Vendor-free burn-down reads coverage `miss` rows; a plain runtime_error records none.
         const auto all = candidates<T>();
-        if (!dispatch::level3_vendor_available<B> && std::none_of(all.begin(), all.end(), ok))
-            dispatch::throw_no_vendor_route<T>(dispatch::Op::gemv, B, dispatch::kLevel3Library<B>);
+        if (!select::level3_vendor_available<B> && std::none_of(all.begin(), all.end(), ok))
+            select::throw_no_vendor_route<T>(Op::gemv, B, select::kLevel3Library<B>);
         throw;
     }
 }
@@ -89,7 +89,7 @@ GemvChoice choose(Queue& q, const MV<T>& A, const VectorView<T>& X, const Vector
 template <Backend B, class T>
 select::NativeFacts native_facts(Queue& q, const MV<T>& A, const VectorView<T>& X, const VectorView<T>& Y,
                                  Transpose transA) {
-    if (!dispatch::coverage::dynamic_enabled()) return {};
+    if (!coverage::dynamic_enabled()) return {};
     const select::Device& d = select::device_of<B>(q);
     return select::native_facts(candidates<T>(),
                                 [&](const GemvChoice& c) { return can_run<T>(c, d, A, X, Y, transA); });
@@ -102,10 +102,10 @@ Event launch(Queue& q, const GemvChoice& c, const MV<T>& A, const VectorView<T>&
         [&](Cta) { return sycl_gemv::gemv_native_cta<T>(q, A, X, Y, alpha, beta, transA); },
         [&](Direct) { return sycl_gemv::gemv_native_direct<T>(q, A, X, Y, alpha, beta, transA); },
         [&](Vendor) -> Event {
-            if constexpr (dispatch::level3_vendor_available<B>)
+            if constexpr (select::level3_vendor_available<B>)
                 return backend::gemv_vendor<B, T>(q, A, X, Y, alpha, beta, transA);
             else
-                dispatch::throw_no_vendor_route<T>(dispatch::Op::gemv, B, dispatch::kLevel3Library<B>);
+                select::throw_no_vendor_route<T>(Op::gemv, B, select::kLevel3Library<B>);
         },
     }, c);
 }
@@ -121,8 +121,6 @@ Event gemv(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const Vector
     auto shape = select::square_shape<Back, T>(A.rows(), A.batch_size());
     shape.n = A.cols();
     shape.transA = transA;
-    shape.is_gpu = ctx.device().type == DeviceType::GPU;
-    shape.heterogeneous_batch = A.is_heterogeneous();
     const select::Key trace_key = ops::gemv::key_of<T>(A, transA);
     select::TraceScope trace("gemv", c, shape, ops::gemv::native_facts<Back, T>(ctx, A, X, Y, transA), trace_key);
     return ops::gemv::launch<Back, T>(ctx, c, A, X, Y, alpha, beta, transA);

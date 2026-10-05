@@ -8,11 +8,12 @@
 #include <batchlas/backend_config.h>
 
 #include <batchlas/blas/functions/syev.hh>
-#include <batchlas/blas/dispatch/no_route.hh>
-#include <batchlas/blas/dispatch/vendor_available.hh>
+#include <batchlas/no_route.hh>
+#include "../../select/vendor.hh"
 #include <batchlas/settings.hh>
 
 #include "choice.hh"
+#include "vendor.hh"
 #include "../../select/select.hh"
 #include "../../util/template-instantiations.hh"
 
@@ -69,42 +70,17 @@ bool can_run(const SyevChoice& c, const select::Device& d, const MV<T>& A) {
     }, c);
 }
 
-// The two speed knobs the old router read are table data now; say so rather than ignore them.
-inline void warn_retired_env() {
-    static const bool once = [] {
-        const auto& s = batchlas::settings();
-        if (s.selection.syev_small_kernel.get())
-            std::fprintf(stderr, "batchlas: BATCHLAS_SYEV_SMALL_KERNEL is no longer read; pin "
-                                 "BATCHLAS_SYEV_ROUTE=cta|cta_fused|jacobi instead.\n");
-        if (s.geometry.syev_cta_max_n.get())
-            std::fprintf(stderr, "batchlas: BATCHLAS_SYEV_CTA_MAX_N is no longer read; the CTA-vs-vendor "
-                                 "window is tuned/syev.<dtype>.<device>.txt.\n");
-        return true;
-    }();
-    (void)once;
-}
-
 template <Backend B, class T>
 SyevChoice choose(Queue& q, const MV<T>& A, JobType jobz) {
-    warn_retired_env();
     const select::Device& d = select::device_of<B>(q);
     auto ok = [&](const SyevChoice& c) { return can_run<B, T>(c, d, A); };
-    // BATCHLAS_SYEV_PROVIDER, the legacy variable, still pins when nothing newer does.
-    std::optional<select::ScopedPin<SyevChoice>> legacy;
-    std::string source;
-    if (!select::detail::pin_text("syev", &source))
-        if (const char* v = batchlas::settings().routing.legacy_route(dispatch::Op::syev).get(); v && *v)
-            legacy.emplace("syev", v);
     try {
         return select::choose("syev", select::dtype_name<T>(), d, key_of<T>(A, jobz), candidates<T>(), ok, rules);
-    } catch (const std::invalid_argument& e) {
-        if (!legacy) throw;
-        throw std::invalid_argument(std::string(e.what()) + " (from BATCHLAS_SYEV_PROVIDER)");
     } catch (const std::runtime_error&) {
         // Vendor-free burn-down reads coverage `miss` rows; a plain runtime_error records none.
         const auto all = candidates<T>();
-        if (!dispatch::solver_vendor_available<B> && std::none_of(all.begin(), all.end(), ok))
-            dispatch::throw_no_vendor_route<T>(dispatch::Op::syev, B, dispatch::kSolverLibrary<B>);
+        if (!select::solver_vendor_available<B> && std::none_of(all.begin(), all.end(), ok))
+            select::throw_no_vendor_route<T>(Op::syev, B, select::kSolverLibrary<B>);
         throw;
     }
 }
@@ -112,7 +88,7 @@ SyevChoice choose(Queue& q, const MV<T>& A, JobType jobz) {
 // The coverage row's native flags (§5.6): computed only when coverage records a row.
 template <Backend B, class T>
 select::NativeFacts native_facts(Queue& q, const MV<T>& A) {
-    if (!dispatch::coverage::dynamic_enabled()) return {};
+    if (!coverage::dynamic_enabled()) return {};
     const select::Device& d = select::device_of<B>(q);
     return select::native_facts(candidates<T>(), [&](const SyevChoice& c) { return can_run<B, T>(c, d, A); });
 }

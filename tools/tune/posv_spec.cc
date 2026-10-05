@@ -100,7 +100,7 @@ public:
     }
     std::string spec_file() const override { return "tools/tune/posv_spec.cc"; }
     std::string normalize_route(const std::string& origin, const std::string& algo) const override {
-        return tune::normalize_route<S::PosvChoice>(S::rules, origin, algo);
+        return tune::normalize_route<S::PosvChoice>(origin, algo);
     }
     std::vector<ArmOutcome> run_cell(const CellRequest& req) const override {
         return with_dtype(req.dtype, [&]<class T>() {

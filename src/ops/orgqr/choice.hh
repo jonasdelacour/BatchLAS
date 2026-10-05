@@ -21,13 +21,8 @@ constexpr auto candidates() {
     return std::array<OrgqrChoice, 2>{Blocked{}, Vendor{}};
 }
 
-inline constexpr std::array<select::Alias, 2> aliases{{  // legacy spellings until phase 5
-    {"native:blocked", "blocked"},
-    {"vendor:auto", "vendor"},
-}};
-// Generality order (§5.5): Vendor runs every shape it is given (n > m, CPU, heterogeneous).
 inline constexpr std::array<std::string_view, 2> last_resort{"vendor", "blocked"};
-inline constexpr select::Rules rules{aliases, last_resort};
+inline constexpr select::Rules rules{last_resort};  // §5.5: Vendor runs every shape it is given (n > m, CPU, heterogeneous).
 
 // The old predicates read m and n only (no batch, no arch). Work ~ m n^2.
 inline constexpr std::array<std::string_view, 2> key_names{"m:log", "n:log:2"};

@@ -11,8 +11,8 @@
 #include <batchlas/backend_config.h>
 
 #include <batchlas/blas/functions/spmm.hh>
-#include <batchlas/blas/dispatch/no_route.hh>
-#include <batchlas/blas/dispatch/vendor_available.hh>
+#include <batchlas/no_route.hh>
+#include "../../select/vendor.hh"
 
 #include "choice.hh"
 #include "../../select/select.hh"
@@ -103,7 +103,7 @@ bool can_run(const SpmmChoice& c, const select::Device& d, const MatrixView<T, M
 
 template <Backend B>
 const select::Device& device(const Queue& q) {
-    return select::device_of<B>(q, dispatch::solver_vendor_available<B>, dispatch::sparse_vendor_available<B>);
+    return select::device_of<B>(q, select::solver_vendor_available<B>, select::sparse_vendor_available<B>);
 }
 
 template <Backend B, class T, MatrixFormat MF>
@@ -117,8 +117,8 @@ SpmmChoice choose(Queue& q, const MatrixView<T, MF>& A, const Dense<T>& Bm, cons
     } catch (const std::runtime_error&) {
         // Vendor-free burn-down reads coverage `miss` rows; a plain runtime_error records none.
         const auto all = candidates<T>();
-        if (!dispatch::sparse_vendor_available<B> && std::none_of(all.begin(), all.end(), ok))
-            dispatch::throw_no_vendor_route<T>(dispatch::Op::spmm, B, dispatch::kSparseLibrary<B>);
+        if (!select::sparse_vendor_available<B> && std::none_of(all.begin(), all.end(), ok))
+            select::throw_no_vendor_route<T>(Op::spmm, B, select::kSparseLibrary<B>);
         throw;
     }
 }
@@ -127,7 +127,7 @@ SpmmChoice choose(Queue& q, const MatrixView<T, MF>& A, const Dense<T>& Bm, cons
 template <Backend B, class T, MatrixFormat MF>
 select::NativeFacts native_facts(Queue& q, const MatrixView<T, MF>& A, const Dense<T>& Bm, const Dense<T>& C,
                                  Transpose transA, Transpose transB) {
-    if (!dispatch::coverage::dynamic_enabled()) return {};
+    if (!coverage::dynamic_enabled()) return {};
     const select::Device& d = device<B>(q);
     return select::native_facts(candidates<T>(), [&](const SpmmChoice& c) {
         return can_run<B, T, MF>(c, d, A, Bm, C, transA, transB);
@@ -145,10 +145,10 @@ Event launch(Queue& q, const SpmmChoice& c, const MatrixView<T, MF>& A, const De
                 throw batchlas::internal_error("spmm: direct chosen for a non-CSR view");  // can_run refuses
         },
         [&](Vendor) -> Event {
-            if constexpr (dispatch::sparse_vendor_available<B>)
+            if constexpr (select::sparse_vendor_available<B>)
                 return backend::spmm_vendor<B, T, MF>(q, A, Bm, C, alpha, beta, transA, transB, ws);
             else
-                dispatch::throw_no_vendor_route<T>(dispatch::Op::spmm, B, dispatch::kSparseLibrary<B>);
+                select::throw_no_vendor_route<T>(Op::spmm, B, select::kSparseLibrary<B>);
         },
     }, c);
 }
@@ -161,10 +161,10 @@ std::size_t workspace(Queue& q, const SpmmChoice& c, const MatrixView<T, MF>& A,
     return std::visit(overloaded{
         [&](Direct) -> std::size_t { return 0; },
         [&](Vendor) -> std::size_t {
-            if constexpr (dispatch::sparse_vendor_available<B>)
+            if constexpr (select::sparse_vendor_available<B>)
                 return backend::spmm_vendor_buffer_size<B, T, MF>(q, A, Bm, C, alpha, beta, transA, transB);
             else
-                dispatch::throw_no_vendor_route<T>(dispatch::Op::spmm, B, dispatch::kSparseLibrary<B>);
+                select::throw_no_vendor_route<T>(Op::spmm, B, select::kSparseLibrary<B>);
         },
     }, c);
 }
@@ -184,8 +184,6 @@ Event spmm(Queue& ctx, const MatrixView<T, MFormat>& A, const MatrixView<T, Matr
     shape.n = C.cols();
     shape.transA = transA;
     shape.transB = transB;
-    shape.is_gpu = ctx.device().type == DeviceType::GPU;
-    shape.heterogeneous_batch = B_mat.is_heterogeneous() || C.is_heterogeneous();
     const select::Key trace_key = ops::spmm::key_of<T, MFormat>(A, C, transA, transB);
     select::TraceScope trace("spmm", c, shape,
                              ops::spmm::native_facts<Back, T, MFormat>(ctx, A, B_mat, C, transA, transB), trace_key);

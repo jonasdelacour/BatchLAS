@@ -351,7 +351,7 @@ There are two compatibility notes:
 - The env var name stays `BATCHLAS_POTRF_ROUTE`, so `factor_bench`, `run_factor_grid.sh` and
   benchviz keep working.
 - The old spellings `native:tiny`, `native:cta`, `native:lpanel` and `native:blocked` are accepted
-  as aliases for `tiny`, `cta`, `lpanel:panel=8` and `blocked` until phase 5. The bare word
+  as aliases for `tiny`, `cta`, `lpanel:panel=8` and `blocked` until phase 5 (removed there). The bare word
   `native` keeps its meaning.
 
 A pin whose `can_run` is false throws. Today it silently falls back to Auto.
@@ -1229,6 +1229,27 @@ in `tuned_tables_tests` holds it.
   print rounding of the 3% edge (the trsm and posv tables had 17 rows like `blocked 19.30 | cta
   19.89`, tied by the printed digits but not by the converter's unrounded times).
 - `python3 scripts/sweep_to_table.py --check` passes on all 124 files; potrf's tables are byte-identical.
+
+**Phase 5, the old layer removed (2026-10-05; maintainer: rip out all legacy):**
+- `include/batchlas/blas/dispatch/` is gone, with `route_vocabulary_tests` and every `RouteTable`. New homes:
+  `batchlas::Op`, `ScalarKind` and `NoRouteError` in the installed, SYCL-free `<batchlas/no_route.hh>` (`Op::iluk`
+  dropped, renumbered: an ABI break, pre-1.0); the coverage instrument in `src/select/coverage.{hh,cc}` (`batchlas::coverage`,
+  CSV columns unchanged; `OpShape` is `coverage::Shape` without the never-read device fields); the vendor-availability
+  constants, `level3_tile_route_available` and `throw_no_vendor_route` in `src/select/vendor.hh` (`batchlas::select`);
+  the syev/ormqr `*_vendor_or_throw` shims in `src/ops/{syev,ormqr}/vendor.hh`; `is_sm120_family` next to
+  `Device::cuda_compute_capability`; `op_external` inlined at its 19 call sites. `src/dispatch/` is gone too: the
+  level-3 entry points are `src/ops/level3/level3.cc`.
+- `Settings::routing` is `route(std::string_view op)` over the 19 ops that read `BATCHLAS_<OP>_ROUTE` (throws for any
+  other name); `legacy[]`, `legacy_route()`, `canonical[]` and the inert hemm/herk/her2k/iluk slots are gone, as are
+  `selection.gemm_sycl_kernel`, `selection.syev_small_kernel` and `geometry.syev_cta_max_n`.
+- No aliases: `select::Rules` keeps only `last_resort`; every op's `aliases` array and gemm's `class_aliases` /
+  `legacy_aliases` are deleted, and each op's should-throw test lists the removed spellings. `BATCHLAS_<OP>_VARIANT`,
+  `BATCHLAS_<OP>_PROVIDER` and `BATCHLAS_GEMM_SYCL_KERNEL` are not read (tests assert that setting them changes nothing).
+- The level-3 four parse their own `BATCHLAS_<OP>_ROUTE` words (`src/backends/route_common.hh`, `level3_pin`), throw on
+  an unknown word, and record coverage with `record_choice` (`vendor:vendor`, `native:triangular`, ...). The
+  deliberately wrong `DiagFullGemm` measurement route is deleted; `native` now takes the tile kernel (it used to fall
+  to `DiagFullGemm` for syrk and to an unrequested cuBLASDx throw for syr2k), and a `cublasdx` pin that cannot run
+  throws instead of falling back. symm's `cublasdx`-pinned tests pin `expand`, the route they always measured.
 
 **Behaviour changes visible to callers:**
 - A bad pin throws. `factor_bench`'s posv `composed` arm therefore pins potrf to `tiny` only up to

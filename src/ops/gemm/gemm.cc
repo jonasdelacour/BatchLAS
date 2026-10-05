@@ -8,8 +8,8 @@
 #include <batchlas/backend_config.h>
 
 #include <batchlas/blas/functions/gemm.hh>
-#include <batchlas/blas/dispatch/no_route.hh>
-#include <batchlas/blas/dispatch/vendor_available.hh>
+#include <batchlas/no_route.hh>
+#include "../../select/vendor.hh"
 #include <batchlas/settings.hh>
 
 #include "choice.hh"
@@ -132,10 +132,6 @@ bool can_run(const GemmChoice& c, const select::Device& d, const MV<T>& A, const
 template <Backend B, class T>
 GemmChoice choose(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, Transpose ta, Transpose tb,
                   ComputePrecision precision) {
-    // A retired variable fails loudly: an old script setting it would otherwise time Auto.
-    if (const char* old = settings().selection.gemm_sycl_kernel.get(); old && *old)
-        throw std::invalid_argument(std::string("gemm: BATCHLAS_GEMM_SYCL_KERNEL=\"") + old +
-                                    "\" is retired; set BATCHLAS_GEMM_ROUTE (its names are aliases there)");
     const select::Device& d = select::device_of<B>(q);
     auto ok = [&](const GemmChoice& c) { return can_run<T>(c, d, A, Bm, C, ta, tb, precision); };
     try {
@@ -144,8 +140,8 @@ GemmChoice choose(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, Tra
     } catch (const std::runtime_error&) {
         // Vendor-free burn-down reads coverage `miss` rows; a plain runtime_error records none.
         const auto all = candidates<T>();
-        if (!dispatch::level3_vendor_available<B> && std::none_of(all.begin(), all.end(), ok))
-            dispatch::throw_no_vendor_route<T>(dispatch::Op::gemm, B, dispatch::kLevel3Library<B>);
+        if (!select::level3_vendor_available<B> && std::none_of(all.begin(), all.end(), ok))
+            select::throw_no_vendor_route<T>(Op::gemm, B, select::kLevel3Library<B>);
         throw;
     }
 }
@@ -154,7 +150,7 @@ GemmChoice choose(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, Tra
 template <Backend B, class T>
 select::NativeFacts native_facts(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, Transpose ta,
                                  Transpose tb, ComputePrecision precision) {
-    if (!dispatch::coverage::dynamic_enabled()) return {};
+    if (!coverage::dynamic_enabled()) return {};
     const select::Device& d = select::device_of<B>(q);
     return select::native_facts(candidates<T>(),
                                 [&](const GemmChoice& c) { return can_run<T>(c, d, A, Bm, C, ta, tb, precision); });
@@ -177,10 +173,10 @@ Event launch(Queue& q, const GemmChoice& c, const MV<T>& A, const MV<T>& Bm, con
         },
         [&](const Wide& w) { return sycl_gemm::gemm_wide<T>(q, w.m, w.n, w.k, A, Bm, C, alpha, beta, ta, tb); },
         [&](Vendor) -> Event {
-            if constexpr (dispatch::level3_vendor_available<B>)
+            if constexpr (select::level3_vendor_available<B>)
                 return backend::gemm_vendor<B, T>(q, A, Bm, C, alpha, beta, ta, tb, precision);
             else
-                dispatch::throw_no_vendor_route<T>(dispatch::Op::gemm, B, dispatch::kLevel3Library<B>);
+                select::throw_no_vendor_route<T>(Op::gemm, B, select::kLevel3Library<B>);
         },
     }, c);
 }
@@ -211,7 +207,6 @@ Event gemm(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const Matrix
     shape.k = d.k;
     shape.transA = transA;
     shape.transB = transB;
-    shape.precision = precision;
     const select::Key trace_key = ops::gemm::key_of<T>(A, B, C, transA, transB);
     select::TraceScope trace("gemm", c, shape,
                              ops::gemm::native_facts<Back, T>(ctx, A, B, C, transA, transB, precision), trace_key);

@@ -10,12 +10,13 @@
 #include <batchlas/blas/functions/orgqr.hh>
 #include <batchlas/blas/functions/ormqr.hh>
 #include <batchlas/blas/functions/gemm.hh>
-#include <batchlas/blas/dispatch/vendor_available.hh>
+#include "../src/select/vendor.hh"
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
+#include <batchlas/settings.hh>
 
 #ifdef BATCHLAS_GEQRF_TESTS_HAVE_LAPACKE
 #include <lapacke.h>
@@ -706,7 +707,7 @@ TYPED_TEST(GeqrfTest, TauConventionSurvivesTheRoutedOrmqr) {
 TYPED_TEST(GeqrfTest, VendorFactorFeedsTheNativeOrgqr) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::BackendType;
-    if constexpr (!dispatch::factorization_vendor_available<B>) {
+    if constexpr (!batchlas::select::factorization_vendor_available<B>) {
         GTEST_SKIP() << "no factorization vendor in this build";
     } else {
         const int m = 64, n = 40, batch = 3;
@@ -970,7 +971,7 @@ TYPED_TEST(GeqrfTest, SubnormalScaleColumnsTakeTheDivisionPath) {
 TYPED_TEST(GeqrfTest, NativeFactorMatchesTheVendorElementwise) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::BackendType;
-    if constexpr (!dispatch::factorization_vendor_available<B>) {
+    if constexpr (!batchlas::select::factorization_vendor_available<B>) {
         GTEST_SKIP() << "no factorization vendor in this build";
     } else {
         struct S { int m, n; bool blocked; };

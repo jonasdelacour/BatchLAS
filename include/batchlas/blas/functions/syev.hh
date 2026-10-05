@@ -15,9 +15,6 @@
 #include <batchlas/blas/linalg.hh>
 #include <batchlas/blas/extensions.hh>
 
-#include <batchlas/blas/dispatch/route.hh>
-#include <batchlas/blas/dispatch/no_route.hh>
-#include <batchlas/blas/dispatch/vendor_available.hh>
 #include <batchlas/blas/queue-dispatch.hh>
 
 namespace batchlas {
@@ -103,10 +100,9 @@ namespace batchlas::backend {
 // argument is a property of the declaration and not of the function type, so
 // sig::syev_vendor still names the full seven-parameter signature and the
 // explicit instantiations in the vendor TUs still match. That default is what
-// keeps the six-argument call sites in src/extra/norm.cc, src/extra/cond.cc,
-// src/extensions/syevx_lobpcg.cc and src/backends/cusolverdx.cc compiling with no
-// extra overload -- none of them is public API, so none needs a forwarder of its
-// own.
+// keeps the six-argument call sites in src/extra/norm.cc, src/extra/cond.cc and
+// src/extensions/syevx_lobpcg.cc compiling with no extra overload -- none of them
+// is public API, so none needs a forwarder of its own.
 template <Backend B, typename T>
 BATCHLAS_API Event syev_vendor(Queue& ctx,
                                const MatrixView<T, MatrixFormat::Dense>& descrA,
@@ -126,28 +122,6 @@ BATCHLAS_API size_t syev_vendor_buffer_size(Queue& ctx,
 } // namespace batchlas::backend
 
 namespace batchlas::blas::dispatch::detail {
-
-// `if constexpr`, not a runtime check: with the vendor absent the call is never
-// compiled, so there is no symbol to link.
-template <Backend B, typename T, typename... Args>
-Event syev_vendor_or_throw(Args&&... args) {
-    if constexpr (!batchlas::dispatch::solver_vendor_available<B>) {
-        batchlas::dispatch::throw_no_vendor_route<T>(
-            batchlas::dispatch::Op::syev, B, batchlas::dispatch::kSolverLibrary<B>);
-    } else {
-        return batchlas::backend::syev_vendor<B, T>(std::forward<Args>(args)...);
-    }
-}
-
-template <Backend B, typename T, typename... Args>
-size_t syev_vendor_buffer_size_or_throw(Args&&... args) {
-    if constexpr (!batchlas::dispatch::solver_vendor_available<B>) {
-        batchlas::dispatch::throw_no_vendor_route<T>(
-            batchlas::dispatch::Op::syev, B, batchlas::dispatch::kSolverLibrary<B>);
-    } else {
-        return batchlas::backend::syev_vendor_buffer_size<B, T>(std::forward<Args>(args)...);
-    }
-}
 
 // Capability introspection for the Python binding: whether the cta / blocked / two_stage
 // kernel can run A on this queue's device. They ask syev's own can_run (src/ops/syev/syev.cc),

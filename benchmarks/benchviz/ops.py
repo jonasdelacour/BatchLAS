@@ -304,9 +304,10 @@ for _s in (
            args=lambda m, n, k, b: [n, b, two_stage_kd(n), 0],
            notes="syev_two_stage's bulge chase from kd = 32; throughput in matrices/s"),
     # ---------------------------------------------------------------- BLAS
-    # The square cells are m = n = k and store k as 0. Arms are the canonical
-    # BATCHLAS_<OP>_ROUTE only: legacy spellings mean different things per op
-    # (route_env.hh:106-134).
+    # The square cells are m = n = k and store k as 0. Arms are BATCHLAS_<OP>_ROUTE
+    # values: choice spellings for the flat-selected ops (src/ops/<op>/choice.hh), the
+    # level-3 words (auto|native|vendor|triangular|gram|expand|cublasdx) for
+    # trmm/syrk/syr2k/symm (src/backends/route_common.hh).
     _blas("gemm", "General matrix multiply", "gemm_benchmark", "BM_GEMM<", flops_gemm,
           orders=(8, 16, 32, 64, 128, 256, 512, 1024), footprint=3.0, args=lambda m, n, k, b: [m, n, k or n, b],
           plane=_third("k", "Inner Dimension $k$ [1]", "Output Order $m = n$ [1]",
@@ -327,7 +328,7 @@ for _s in (
           args=lambda m, n, k, b: [n, k or n, k or n, b],
           plane=_third("k", "Rank $k$ [1]", "Matrix Order $n$ [1]",
                        area=lambda m, n, k: (n * n + 2.0 * n * (k or n)) / 3.0),
-          notes="native triangular-tile kernel is float only (double records no route); plain native is a wrong-answer route"),
+          notes="native triangular-tile kernel is float only (double records no route)"),
     _blas("syr2k", "Symmetric rank-2k update", "syr2k_benchmark", "BM_SYR2K<", flops_syr2k, native="triangular",
           types=("float",), orders=(16, 32, 64, 128, 256, 512, 1024), footprint=4.0,
           args=lambda m, n, k, b: [n, k or n, k or n, b],

@@ -29,13 +29,8 @@ inline bool device_allows(const GemvChoice& c, const select::Device& d, bool tra
     return true;
 }
 
-inline constexpr std::array<select::Alias, 2> aliases{{  // legacy spellings until phase 5
-    {"native:cta", "cta"},
-    {"native:direct", "direct"},
-}};
-// No table (CPU): the vendor where compiled, else Direct, the one native tier without a GPU gate.
 inline constexpr std::array<std::string_view, 2> last_resort{"vendor", "direct"};
-inline constexpr select::Rules rules{aliases, last_resort};
+inline constexpr select::Rules rules{last_resort};  // CPU: vendor, else Direct (no GPU gate)
 
 // out/red: y's and x's lengths (they swap with trans); ConjTrans folds to T. Work ~ out red batch.
 inline constexpr std::array<std::string_view, 4> key_names{"trans:exact", "out:log", "red:log", "batch:log"};

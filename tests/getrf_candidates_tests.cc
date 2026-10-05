@@ -6,9 +6,9 @@
 #include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/blas/functions/getrf.hh>
 #include <batchlas/blas/functions/trsm.hh>
-#include <batchlas/blas/dispatch/coverage.hh>
-#include <batchlas/blas/dispatch/no_route.hh>
-#include <batchlas/blas/dispatch/vendor_available.hh>
+#include "../src/select/coverage.hh"
+#include <batchlas/no_route.hh>
+#include "../src/select/vendor.hh"
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
@@ -201,7 +201,7 @@ protected:
     using T = typename Config::ScalarType;
     using MV = MVof<T>;
     static constexpr Backend B = Config::BackendVal;
-    static constexpr bool kVendor = dispatch::factorization_vendor_available<B>;
+    static constexpr bool kVendor = batchlas::select::factorization_vendor_available<B>;
 
     void SetUp() override {
         test_utils::BatchLASTest<Config>::SetUp();
@@ -440,7 +440,7 @@ TYPED_TEST(GetrfCandidates, HeterogeneousBatchHasNoNativeRoute) {
                   }),
                   "vendor");
     } else {
-        EXPECT_THROW(((void)getrf_buffer_size<B, T>(*this->ctx, het)), dispatch::NoRouteError);
+        EXPECT_THROW(((void)getrf_buffer_size<B, T>(*this->ctx, het)), batchlas::NoRouteError);
     }
 }
 
@@ -456,7 +456,7 @@ TYPED_TEST(GetrfCandidates, NonSquareIsTheVendorsOnly) {
     if constexpr (TestFixture::kVendor)
         EXPECT_EQ((getrf_buffer_size<B, T>(*this->ctx, W)), (backend::getrf_vendor_buffer_size<B, T>(*this->ctx, W)));
     else
-        EXPECT_THROW(((void)getrf_buffer_size<B, T>(*this->ctx, W)), dispatch::NoRouteError);
+        EXPECT_THROW(((void)getrf_buffer_size<B, T>(*this->ctx, W)), batchlas::NoRouteError);
 }
 
 // §8.3 (R5): exactly getrf_buffer_size bytes inside a larger arena whose tail is a guard. The
@@ -495,7 +495,9 @@ TYPED_TEST(GetrfCandidates, ExactWorkspaceInAPoisonedArena) {
 // R6: a spelling that names nothing compiled throws instead of meaning Auto.
 TYPED_TEST(GetrfCandidates, UnknownPinsThrow) {
     using T = typename TestFixture::T;
-    for (const char* word : {"bogus", "tiny:1", "cta:nb=8", "native:vendor", "native:tiny:8", "lu", "native:auto"}) {
+    for (const char* word : {"bogus", "tiny:1", "cta:nb=8", "native:vendor", "native:tiny:8", "lu", "native:auto",
+                             // removed aliases (phase 5): each must stay an error
+                             "native:tiny", "native:cta", "native:blocked"}) {
         auto p = make_lu<T>(8, 2, 5u);
         const Pin pin("getrf", std::string_view(word));
         EXPECT_THROW(this->run(p), std::invalid_argument) << word;
@@ -546,10 +548,10 @@ TYPED_TEST(GetrfCandidates, NetlibBackendRunsNoNativeFamily) {
 #endif
 }
 
-// §5.3: the legacy spellings and the class words, via ScopedPin and via the environment.
+// §5.3: spellings (case-folded) and the class words, via ScopedPin and via the environment.
 // Bare `native` is the row's best runnable non-vendor; bare `vendor` falls back to Auto
 // (with the warning) where there is no vendor.
-TYPED_TEST(GetrfCandidates, LegacyAliasesAndClassWords) {
+TYPED_TEST(GetrfCandidates, ClassWordsAndSpellings) {
     using T = typename TestFixture::T;
     const int n = std::min(16, this->tiny_n());
     std::string auto_pick;
@@ -568,7 +570,7 @@ TYPED_TEST(GetrfCandidates, LegacyAliasesAndClassWords) {
         EXPECT_NE(native_pick, "vendor");
     }
     const std::pair<const char*, std::string> expect[] = {
-        {"native:tiny", "tiny"}, {"native:cta", "cta"}, {"native:blocked", "blocked"}, {"NATIVE:CTA", "cta"},
+        {"CTA", "cta"},
         {"Tiny", "tiny"},        {"vendor", vendor_pick}, {"native", native_pick},     {"auto", auto_pick}};
     for (const auto& [word, spelling] : expect) {
         for (bool via_env : {false, true}) {
@@ -723,7 +725,7 @@ TYPED_TEST(GetrfCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     auto child = [&] {
         const ScopedEnvVar cov("BATCHLAS_COVERAGE_OUT", out.c_str());
         const ScopedEnvVar clear("BATCHLAS_GETRF_ROUTE", nullptr);
-        dispatch::coverage::g_dynamic_enabled = true;
+        batchlas::coverage::g_dynamic_enabled = true;
         {
             const Pin pin("getrf", C{gf::Cta{}});
             auto p = make_lu<T>(16, 2, 1u);
@@ -780,11 +782,11 @@ TYPED_TEST(GetrfCandidatesCpu, CpuQueueRunsNoNativeFamily) {
         EXPECT_THROW(((void)getrf_buffer_size<B, T>(*this->ctx, p.A())), std::invalid_argument) << select::to_string(c);
     }
     auto p = make_lu<T>(8, 2, 3u);
-    if constexpr (dispatch::factorization_vendor_available<B>) {
+    if constexpr (batchlas::select::factorization_vendor_available<B>) {
         const std::size_t bytes = getrf_buffer_size<B, T>(*this->ctx, p.A());
         EXPECT_EQ(bytes, (backend::getrf_vendor_buffer_size<B, T>(*this->ctx, p.A())));
     } else {
-        EXPECT_THROW(((void)getrf_buffer_size<B, T>(*this->ctx, p.A())), dispatch::NoRouteError);
+        EXPECT_THROW(((void)getrf_buffer_size<B, T>(*this->ctx, p.A())), batchlas::NoRouteError);
     }
 }
 

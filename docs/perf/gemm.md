@@ -81,15 +81,11 @@ longer exists.
 
 ### Pins and environment
 
-* `BATCHLAS_GEMM_ROUTE`: `auto`, `native`, `vendor`, a spelling (`reg:m=128:n=128:k=8:u=1`, `wide:m=64:n=64:k=16`, `small`) or a legacy
-  name. Every old `BATCHLAS_GEMM_SYCL_KERNEL` name except the deleted variants' is an alias (`128x128x8`, `tiled16`, `64x64x16tn`, ...); a
-  transposed variant's name maps to its config, and the form comes from the call. `register_tiled`, `native:register_tiled`, `sycl` and
-  `custom` mean the class word `native`; `vendor:direct` means `vendor`. A spelling the shape cannot run **throws**; `native` and `vendor`
-  fall back to Auto with a warning.
-* `BATCHLAS_GEMM_VARIANT` is read only when `_ROUTE` is unset, with its own vocabulary: `native`, `cuda-native`, `direct-cuda`, `cublasdx`
-  and `dx` mean `vendor`; `sycl` and `custom` mean `native`.
-* `BATCHLAS_GEMM_SYCL_KERNEL` is retired: when set, gemm throws `invalid_argument` instead of silently timing Auto.
-  `BATCHLAS_GEMM_EXPERIMENTAL` is read by nothing.
+* `BATCHLAS_GEMM_ROUTE`: `auto`, `native`, `vendor` or a spelling (`reg:m=128:n=128:k=8:u=1`, `wide:m=64:n=64:k=16`, `small`). A
+  spelling names a config and the form comes from the call. The old kernel names (`128x128x8`, `tiled16`, `64x64x16tn`, ...) and router
+  words (`register_tiled`, `sycl`, `custom`, `vendor:auto`) were aliases until flat selection phase 5 and now throw, like any spelling the
+  shape cannot run; `native` and `vendor` fall back to Auto with a warning.
+* `BATCHLAS_GEMM_VARIANT`, `BATCHLAS_GEMM_SYCL_KERNEL` and `BATCHLAS_GEMM_EXPERIMENTAL` are read by nothing.
 * Observing: `BATCHLAS_SELECT_TRACE=1` prints the key, the choice and the runner-up; the coverage `reached` row's `chosen_algo` is the
   spelling; `BATCHLAS_KERNEL_TRACE=1` still names the kernel, which is the only place the derived aligned/predicated leg is visible.
 
@@ -275,13 +271,11 @@ was load-bearing: without it, float would have moved in all nine forms at 0.34�
 vendor→native, zero regressions, zero complex.
 
 The flip changes nothing in a vendor-free build (the Vendor default was never reached there; failing set verified byte-identical) and nothing for
-explicit requests — `BATCHLAS_GEMM_VARIANT=vendor` still means vendor, which is the escape hatch if a future cuBLAS turns a cell around. That is
+explicit requests — a vendor pin (then `BATCHLAS_GEMM_VARIANT=vendor`, now `BATCHLAS_GEMM_ROUTE=vendor`) is the escape hatch if a future cuBLAS turns a cell around. That is
 not hypothetical; see the aged-out parity claim below.
 
-Vocabulary trap (`route_env.hh:97-160`): `BATCHLAS_GEMM_VARIANT=native` does **not** mean BatchLAS's own kernel — it aliases
-`cuda-native`/`direct-cuda`, is consumed only as an exclusion, and is `Origin::Vendor` in the canonical vocabulary. Since P3.4 gemm reads
-`_VARIANT` through `legacy_aliases` in `src/ops/gemm/choice.hh`, which keep that meaning (`native` -> `vendor`); `BATCHLAS_GEMM_ROUTE=vendor`
-is the escape hatch now.
+Vocabulary trap, historical: the old `BATCHLAS_GEMM_VARIANT=native` meant the raw vendor call, not BatchLAS's own kernel. The variable is
+no longer read (flat selection phase 5); `BATCHLAS_GEMM_ROUTE=vendor` is the escape hatch.
 
 ### The 128x128 float kernel
 

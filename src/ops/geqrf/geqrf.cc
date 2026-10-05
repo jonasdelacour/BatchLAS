@@ -10,8 +10,8 @@
 
 #include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/blas/functions/geqrf.hh>
-#include <batchlas/blas/dispatch/no_route.hh>
-#include <batchlas/blas/dispatch/vendor_available.hh>
+#include <batchlas/no_route.hh>
+#include "../../select/vendor.hh"
 
 #include "can_run.hh"
 #include "choice.hh"
@@ -39,7 +39,7 @@ select::Key key_of(const MV<T>& A) {
 // has_vendor_solver; select's default for that flag is cuSOLVER alone.
 template <Backend B>
 const select::Device& device(Queue& q) {
-    return select::device_of<B>(q, dispatch::factorization_vendor_available<B>);
+    return select::device_of<B>(q, select::factorization_vendor_available<B>);
 }
 
 template <Backend B, class T>
@@ -51,8 +51,8 @@ GeqrfChoice choose(Queue& q, const MV<T>& A) {
     } catch (const std::runtime_error&) {
         // Vendor-free burn-down reads coverage `miss` rows; a plain runtime_error records none.
         const auto all = candidates<T>();
-        if (!dispatch::factorization_vendor_available<B> && std::none_of(all.begin(), all.end(), ok))
-            dispatch::throw_no_vendor_route<T>(dispatch::Op::geqrf, B, dispatch::kFactorizationLibrary<B>);
+        if (!select::factorization_vendor_available<B> && std::none_of(all.begin(), all.end(), ok))
+            select::throw_no_vendor_route<T>(Op::geqrf, B, select::kFactorizationLibrary<B>);
         throw;
     }
 }
@@ -60,7 +60,7 @@ GeqrfChoice choose(Queue& q, const MV<T>& A) {
 // The coverage row's native flags (§5.6): computed only when coverage records a row.
 template <Backend B, class T>
 select::NativeFacts native_facts(Queue& q, const MV<T>& A) {
-    if (!dispatch::coverage::dynamic_enabled()) return {};
+    if (!coverage::dynamic_enabled()) return {};
     const select::Device& d = device<B>(q);
     return select::native_facts(candidates<T>(), [&](const GeqrfChoice& c) { return can_run<T>(c, d, A); });
 }
@@ -81,10 +81,10 @@ Event launch(Queue& q, const GeqrfChoice& c, const MV<T>& A, Span<T> tau, Span<s
                 });
         },
         [&](Vendor) -> Event {
-            if constexpr (dispatch::factorization_vendor_available<B>)
+            if constexpr (select::factorization_vendor_available<B>)
                 return backend::geqrf_vendor<B, T>(q, A, tau, ws);
             else
-                dispatch::throw_no_vendor_route<T>(dispatch::Op::geqrf, B, dispatch::kFactorizationLibrary<B>);
+                select::throw_no_vendor_route<T>(Op::geqrf, B, select::kFactorizationLibrary<B>);
         },
     }, c);
 }
@@ -98,10 +98,10 @@ std::size_t workspace(Queue& q, const GeqrfChoice& c, const MV<T>& A, Span<T> ta
         [&](Cta) { return sycl_geqrf::geqrf_cta_buffer_size<T>(q, A); },
         [&](Blocked) { return sycl_geqrf::geqrf_blocked_buffer_size<T>(q, A); },
         [&](Vendor) -> std::size_t {
-            if constexpr (dispatch::factorization_vendor_available<B>)
+            if constexpr (select::factorization_vendor_available<B>)
                 return backend::geqrf_vendor_buffer_size<B, T>(q, A, tau);
             else
-                dispatch::throw_no_vendor_route<T>(dispatch::Op::geqrf, B, dispatch::kFactorizationLibrary<B>);
+                select::throw_no_vendor_route<T>(Op::geqrf, B, select::kFactorizationLibrary<B>);
         },
     }, c);
 }

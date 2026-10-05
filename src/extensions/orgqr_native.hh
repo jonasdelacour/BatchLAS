@@ -19,13 +19,8 @@ namespace batchlas::sycl_orgqr {
 template <typename T>
 BATCHLAS_INTERNAL_API bool orgqr_blocked_available();
 
-// Test hook. evidence: docs/perf/qr.md#block-width-evidence
-template <typename T>
-int orgqr_blocked_debug_block_size(Queue& ctx, int m,
-                                   int n);  // multiple of 16; >= 32 for complex (gemm min_dim)
-
-// Must be the ROUTED ormqr: a native entry point called from a driver TU bypasses
-// RouteTable<Op::ormqr>. Positional argument order; absent injection throws.
+// Must be the SELECTED ormqr: a native entry point called from a driver TU bypasses
+// ormqr's choose(). Positional argument order; absent injection throws.
 template <typename T>
 using OrgqrApplyQ = std::function<Event(
     Queue&,

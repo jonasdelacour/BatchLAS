@@ -9,8 +9,8 @@
 
 #include <batchlas/blas/functions/getrs.hh>
 #include <batchlas/blas/functions/trsm.hh>
-#include <batchlas/blas/dispatch/no_route.hh>
-#include <batchlas/blas/dispatch/vendor_available.hh>
+#include <batchlas/no_route.hh>
+#include "../../select/vendor.hh"
 
 #include "choice.hh"
 #include "../../select/select.hh"
@@ -43,7 +43,7 @@ select::Key key_of(const MV<T>& A, const MV<T>& B) {
 // Device::has_vendor_solver for this op.
 template <Backend B>
 const select::Device& device_for(Queue& q) {
-    return select::device_of<B>(q, dispatch::factorization_vendor_available<B>);
+    return select::device_of<B>(q, select::factorization_vendor_available<B>);
 }
 
 // Correctness only (R3): false means the driver would throw or answer wrongly. Both natives
@@ -78,8 +78,8 @@ GetrsChoice choose(Queue& q, const MV<T>& A, const MV<T>& Bm) {
     } catch (const std::runtime_error&) {
         // Vendor-free burn-down reads coverage `miss` rows; a plain runtime_error records none.
         const auto all = candidates<T>();
-        if (!dispatch::factorization_vendor_available<B> && std::none_of(all.begin(), all.end(), ok))
-            dispatch::throw_no_vendor_route<T>(dispatch::Op::getrs, B, dispatch::kFactorizationLibrary<B>);
+        if (!select::factorization_vendor_available<B> && std::none_of(all.begin(), all.end(), ok))
+            select::throw_no_vendor_route<T>(Op::getrs, B, select::kFactorizationLibrary<B>);
         throw;
     }
 }
@@ -87,7 +87,7 @@ GetrsChoice choose(Queue& q, const MV<T>& A, const MV<T>& Bm) {
 // The coverage row's native flags (§5.6): computed only when coverage records a row.
 template <Backend B, class T>
 select::NativeFacts native_facts(Queue& q, const MV<T>& A, const MV<T>& Bm) {
-    if (!dispatch::coverage::dynamic_enabled()) return {};
+    if (!coverage::dynamic_enabled()) return {};
     const select::Device& d = device_for<B>(q);
     return select::native_facts(candidates<T>(), [&](const GetrsChoice& c) { return can_run<B, T>(c, d, A, Bm); });
 }
@@ -104,10 +104,10 @@ Event launch(Queue& q, const GetrsChoice& c, const MV<T>& A, const MV<T>& Bm, Tr
                    Diag tdiag) { return trsm<B, T>(c2, ta, tb, talpha, tside, tuplo, ttrans, tdiag); });
         },
         [&](Vendor) -> Event {
-            if constexpr (dispatch::factorization_vendor_available<B>)
+            if constexpr (select::factorization_vendor_available<B>)
                 return backend::getrs_vendor<B, T>(q, A, Bm, transA, pivots, ws);
             else
-                dispatch::throw_no_vendor_route<T>(dispatch::Op::getrs, B, dispatch::kFactorizationLibrary<B>);
+                select::throw_no_vendor_route<T>(Op::getrs, B, select::kFactorizationLibrary<B>);
         },
     }, c);
 }
@@ -120,10 +120,10 @@ std::size_t workspace(Queue& q, const GetrsChoice& c, const MV<T>& A, const MV<T
         [&](Cta) { return sycl_getrs::getrs_fused_buffer_size<T>(q, A, Bm, transA); },
         [&](Blocked) { return sycl_getrs::getrs_blocked_buffer_size<T>(q, A, Bm, transA); },
         [&](Vendor) -> std::size_t {
-            if constexpr (dispatch::factorization_vendor_available<B>)
+            if constexpr (select::factorization_vendor_available<B>)
                 return backend::getrs_vendor_buffer_size<B, T>(q, A, Bm, transA);
             else
-                dispatch::throw_no_vendor_route<T>(dispatch::Op::getrs, B, dispatch::kFactorizationLibrary<B>);
+                select::throw_no_vendor_route<T>(Op::getrs, B, select::kFactorizationLibrary<B>);
         },
     }, c);
 }

@@ -9,8 +9,8 @@
 
 #include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/blas/functions/trsm.hh>
-#include <batchlas/blas/dispatch/no_route.hh>
-#include <batchlas/blas/dispatch/vendor_available.hh>
+#include <batchlas/no_route.hh>
+#include "../../select/vendor.hh"
 
 #include "choice.hh"
 #include "../../select/select.hh"
@@ -78,8 +78,8 @@ TrsmChoice choose(Queue& q, const MV<T>& A, const MV<T>& Bm, Side side, Transpos
     } catch (const std::runtime_error&) {
         // Vendor-free burn-down reads coverage `miss` rows; a plain runtime_error records none.
         const auto all = candidates<T>();
-        if (!dispatch::level3_vendor_available<B> && std::none_of(all.begin(), all.end(), ok))
-            dispatch::throw_no_vendor_route<T>(dispatch::Op::trsm, B, dispatch::kLevel3Library<B>);
+        if (!select::level3_vendor_available<B> && std::none_of(all.begin(), all.end(), ok))
+            select::throw_no_vendor_route<T>(Op::trsm, B, select::kLevel3Library<B>);
         throw;
     }
 }
@@ -87,7 +87,7 @@ TrsmChoice choose(Queue& q, const MV<T>& A, const MV<T>& Bm, Side side, Transpos
 // The coverage row's native flags (§5.6): computed only when coverage records a row.
 template <Backend B, class T>
 select::NativeFacts native_facts(Queue& q, const MV<T>& A, const MV<T>& Bm, Side side) {
-    if (!dispatch::coverage::dynamic_enabled()) return {};
+    if (!coverage::dynamic_enabled()) return {};
     const select::Device& d = select::device_of<B>(q);
     return select::native_facts(candidates<T>(), [&](const TrsmChoice& c) { return can_run<T>(c, d, A, Bm, side); });
 }
@@ -110,10 +110,10 @@ Event launch(Queue& q, const TrsmChoice& c, const MV<T>& A, const MV<T>& Bm, T a
                 });
         },
         [&](Vendor) -> Event {
-            if constexpr (dispatch::level3_vendor_available<B>)
+            if constexpr (select::level3_vendor_available<B>)
                 return backend::trsm_vendor<B, T>(q, A, Bm, side, uplo, transA, diag, alpha);
             else
-                dispatch::throw_no_vendor_route<T>(dispatch::Op::trsm, B, dispatch::kLevel3Library<B>);
+                select::throw_no_vendor_route<T>(Op::trsm, B, select::kLevel3Library<B>);
         },
     }, c);
 }

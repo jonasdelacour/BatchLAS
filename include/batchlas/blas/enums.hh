@@ -314,7 +314,7 @@ namespace batchlas {
     // (auto|direct|direct_subset|filtered|lobpcg).
     //
     // Precedence: the environment variable WINS over SyevxParams::method, matching
-    // the BATCHLAS_SYEV_PROVIDER convention, so that a whole application can be
+    // the BATCHLAS_<OP>_ROUTE convention, so that a whole application can be
     // forced onto one algorithm for diagnosis or benchmarking.
     //
     // A choice that is not available for the given scalar type or matrix format

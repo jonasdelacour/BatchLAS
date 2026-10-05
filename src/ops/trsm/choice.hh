@@ -24,13 +24,8 @@ constexpr auto candidates() {
     return std::array<TrsmChoice, 4>{Cta{}, SgLeft{}, Blocked{}, Vendor{}};
 }
 
-inline constexpr std::array<select::Alias, 2> aliases{{  // legacy spellings until phase 5
-    {"native:cta", "cta"},
-    {"native:blocked", "blocked"},
-}};
-// Generality order (§5.5): Blocked runs every GPU shape, Vendor everything else (CPU).
 inline constexpr std::array<std::string_view, 2> last_resort{"blocked", "vendor"};
-inline constexpr select::Rules rules{aliases, last_resort};
+inline constexpr select::Rules rules{last_resort};  // §5.5: Blocked runs every GPU shape, Vendor everything else (CPU).
 
 // q: B.cols (Left) or B.rows (Right); ConjTrans folds to T; no uplo/diag key. Work ~ order^2 q batch.
 inline constexpr std::array<std::string_view, 5> key_names{

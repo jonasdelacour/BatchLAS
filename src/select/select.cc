@@ -2,7 +2,6 @@
 
 #include "../util/resident_capacity.hh"
 
-#include <batchlas/blas/dispatch/route_env.hh>  // legacy_variable_for
 #include <batchlas/settings.hh>
 
 #include <cctype>
@@ -57,20 +56,20 @@ int leading_int(std::string_view s) {
     return v;
 }
 
-std::optional<dispatch::Op> op_from_name(std::string_view op) {
-    for (std::size_t i = 0; i < static_cast<std::size_t>(dispatch::Op::COUNT); ++i) {
-        const auto o = static_cast<dispatch::Op>(i);
-        if (dispatch::op_name(o) == op) return o;
+std::optional<Op> op_from_name(std::string_view op) {
+    for (std::size_t i = 0; i < static_cast<std::size_t>(Op::COUNT); ++i) {
+        const auto o = static_cast<Op>(i);
+        if (op_name(o) == op) return o;
     }
     return std::nullopt;
 }
 
-std::string_view dtype_from_scalar(dispatch::ScalarKind s) {
+std::string_view dtype_from_scalar(ScalarKind s) {
     switch (s) {
-        case dispatch::ScalarKind::F32: return "float";
-        case dispatch::ScalarKind::F64: return "double";
-        case dispatch::ScalarKind::C32: return "cfloat";
-        case dispatch::ScalarKind::C64: return "cdouble";
+        case ScalarKind::F32: return "float";
+        case ScalarKind::F64: return "double";
+        case ScalarKind::C32: return "cfloat";
+        case ScalarKind::C64: return "cdouble";
     }
     return "?";
 }
@@ -498,14 +497,11 @@ std::optional<std::string> pin_text(std::string_view op, std::string* source) {
         it != t_pins.rend()) {
         text = it->second;
         *source = "ScopedPin";
-    } else if (const auto o = op_from_name(op)) {
-        const char* raw = settings().routing.canonical_route(*o).get();
-        *source = "BATCHLAS_" + dispatch::op_env_stem(*o) + "_ROUTE";
-        // The legacy variable (gemm's _VARIANT) only when _ROUTE is unset, as parse_route_env did.
-        if ((!raw || trim(raw).empty()) && !dispatch::legacy_variable_for(*o).empty()) {
-            raw = settings().routing.legacy_route(*o).get();
-            *source = std::string(dispatch::legacy_variable_for(*o));
-        }
+    } else if (RoutingSettings::index_of(op) < RoutingSettings::ops.size()) {
+        const char* raw = settings().routing.route(op).get();
+        *source = "BATCHLAS_";
+        for (const char c : op) *source += static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        *source += "_ROUTE";
         if (!raw) return std::nullopt;
         text = raw;
     } else {
@@ -524,14 +520,14 @@ void pop_pin(std::string_view op) {
     if (it != t_pins.rend()) t_pins.erase(std::next(it).base());
 }
 
-bool trace_open(std::string_view op, const std::string& spelling, bool vendor, const dispatch::OpShape& shape,
+bool trace_open(std::string_view op, const std::string& spelling, bool vendor, const coverage::Shape& shape,
                 const NativeFacts& facts, const Key& fields) {
-    if (dispatch::coverage::dynamic_enabled()) {
+    if (coverage::dynamic_enabled()) {
         if (const auto o = op_from_name(op)) {
-            dispatch::OpShape s = shape;
+            coverage::Shape s = shape;
             s.op = *o;
-            dispatch::coverage::record_choice(*o, s.scalar, s.backend, s, vendor ? "vendor" : "native",
-                                              spelling.c_str(), facts.existed, facts.supported);
+            coverage::record_choice(*o, s.scalar, s.backend, s, vendor ? "vendor" : "native",
+                                    spelling.c_str(), facts.existed, facts.supported);
         }
     }
     if (!trace_enabled()) return false;
@@ -581,19 +577,3 @@ void reset_warnings() {
 }  // namespace testing
 
 }  // namespace batchlas::select
-
-namespace batchlas::dispatch::coverage {
-
-bool select_trace_active() noexcept { return select::t_depth > 0 && select::detail::trace_enabled(); }
-
-void select_trace_old_route(const OpShape& s, Route chosen) {
-    std::string route(to_string(chosen.origin));
-    if (chosen.algo != Algorithm::Auto) route += ":" + std::string(to_string(chosen.algo));
-    std::fprintf(stderr, "%s%s %s m=%lld n=%lld k=%lld batch=%lld -> (old routing: %s)\n",
-                 select::indent().c_str(), std::string(op_name(s.op)).c_str(),
-                 std::string(select::dtype_from_scalar(s.scalar)).c_str(), static_cast<long long>(s.m),
-                 static_cast<long long>(s.n), static_cast<long long>(s.k), static_cast<long long>(s.batch),
-                 route.c_str());
-}
-
-}  // namespace batchlas::dispatch::coverage

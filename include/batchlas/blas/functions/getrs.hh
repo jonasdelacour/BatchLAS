@@ -97,7 +97,7 @@ namespace batchlas::backend {
 // DECLARATION ONLY -- see the note on gemm_vendor in gemm.hh. The public
 // `getrs` used to be defined inside each vendor TU, so dropping a vendor library
 // dropped the public entry point with it; WP0 S5 moves that definition to
-// src/dispatch/entry_points/factorization.cc and leaves the vendor
+// src/ops/getrs/getrs.cc and leaves the vendor
 // implementation here, named as such.
 template <Backend Back, typename T>
 BATCHLAS_API Event getrs_vendor(Queue& ctx,

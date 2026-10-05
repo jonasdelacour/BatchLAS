@@ -7,13 +7,14 @@
 #include <batchlas/backend_config.h>
 
 #include <batchlas/blas/functions/ormqr.hh>
-#include <batchlas/blas/dispatch/no_route.hh>
-#include <batchlas/blas/dispatch/vendor_available.hh>
+#include <batchlas/no_route.hh>
+#include "../../select/vendor.hh"
 #include <batchlas/internal/ormqr_blocked.hh>
 #include <batchlas/settings.hh>
 #include <batchlas/tuning_params.hh>
 
 #include "choice.hh"
+#include "vendor.hh"
 #include "../../select/select.hh"
 #include "../../util/template-instantiations.hh"
 
@@ -72,32 +73,21 @@ void throw_if_undefined(Transpose trans, const char* who) {
 // ormqr's vendor is cuBLAS + cuSOLVER (factorization_vendor_available), not the potrf solver set.
 template <Backend B>
 const select::Device& device(Queue& q) {
-    return select::device_of<B>(q, dispatch::factorization_vendor_available<B>, dispatch::level3_vendor_available<B>);
-}
-
-// BATCHLAS_ORMQR_PROVIDER, the legacy variable, still pins when nothing else does (phase 5).
-inline std::optional<std::string> legacy_pin() {
-    std::string source;
-    if (select::detail::pin_text("ormqr", &source)) return std::nullopt;
-    const char* raw = settings().routing.legacy_route(dispatch::Op::ormqr).get();
-    if (!raw || !*raw) return std::nullopt;
-    return std::string(raw);
+    return select::device_of<B>(q, select::factorization_vendor_available<B>, select::level3_vendor_available<B>);
 }
 
 template <Backend B, class T>
 OrmqrChoice choose(Queue& q, const MV<T>& A, const MV<T>& C, Side side, Transpose trans) {
     const select::Device& d = device<B>(q);
     auto ok = [&](const OrmqrChoice& c) { return can_run<T>(c, d, trans); };
-    std::optional<select::ScopedPin<OrmqrChoice>> legacy;
-    if (auto text = legacy_pin()) legacy.emplace("ormqr", *text);
     try {
         return select::choose("ormqr", select::dtype_name<T>(), d, key_of<T>(A, C, side, trans), candidates<T>(), ok,
                               rules);
     } catch (const std::runtime_error&) {
         // Vendor-free burn-down reads coverage `miss` rows; a plain runtime_error records none.
         const auto all = candidates<T>();
-        if (!dispatch::factorization_vendor_available<B> && std::none_of(all.begin(), all.end(), ok))
-            dispatch::throw_no_vendor_route<T>(dispatch::Op::ormqr, B, dispatch::kFactorizationLibrary<B>);
+        if (!select::factorization_vendor_available<B> && std::none_of(all.begin(), all.end(), ok))
+            select::throw_no_vendor_route<T>(Op::ormqr, B, select::kFactorizationLibrary<B>);
         throw;
     }
 }
@@ -105,7 +95,7 @@ OrmqrChoice choose(Queue& q, const MV<T>& A, const MV<T>& C, Side side, Transpos
 // The coverage row's native flags (§5.6): computed only when coverage records a row.
 template <Backend B, class T>
 select::NativeFacts native_facts(Queue& q, Transpose trans) {
-    if (!dispatch::coverage::dynamic_enabled()) return {};
+    if (!coverage::dynamic_enabled()) return {};
     const select::Device& d = device<B>(q);
     return select::native_facts(candidates<T>(), [&](const OrmqrChoice& c) { return can_run<T>(c, d, trans); });
 }

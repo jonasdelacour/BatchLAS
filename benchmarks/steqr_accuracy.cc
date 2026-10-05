@@ -22,6 +22,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include "../src/ops/syev/vendor.hh"
 
 using namespace batchlas;
 

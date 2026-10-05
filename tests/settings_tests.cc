@@ -10,7 +10,7 @@
 //                               environment; std::runtime_error once a Queue exists
 //   detail::reload_settings()   re-read, called from BOTH ends of ScopedEnvVar
 //   the unsafe gate             BATCHLAS_ALLOW_UNSAFE_ENV, default OFF
-//   one field, one reader       BATCHLAS_GEMM_VARIANT had two
+//   one route variable per op   BATCHLAS_<OP>_ROUTE, read by select's pin reader
 //
 // ORDERING CONTRACT: configure() is permitted only until the first Queue exists, so
 // the two SettingsConfigure cases must run in definition order and before any case
@@ -24,8 +24,6 @@
 
 #include <batchlas/backend_config.h>
 #include <batchlas/settings.hh>
-#include <batchlas/blas/dispatch/route.hh>
-#include <batchlas/blas/dispatch/route_env.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/blas/options.hh>
@@ -33,11 +31,13 @@
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 
-// The second reader of BATCHLAS_GEMM_VARIANT: gemm's flat-selection pin.
+// The reader of BATCHLAS_<OP>_ROUTE: select's pin text.
 #include "../src/select/select.hh"
 
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // #cmakedefine01: always defined, to 0 or 1, so `#if` is the correct test. Drop the
@@ -53,23 +53,19 @@ reached, or this build tree predates the option. Re-run cmake."
 #endif
 
 using namespace batchlas;
-using batchlas::dispatch::Op;
-using batchlas::dispatch::Origin;
-using batchlas::dispatch::parse_route_env;
 
 namespace {
 
-constexpr size_t kGemm = static_cast<size_t>(Op::gemm);
+const EnvValue& gemm_route() { return settings().routing.route("gemm"); }
 
-const EnvValue& gemm_route() { return settings().routing.canonical_route(Op::gemm); }
-const EnvValue& gemm_legacy() { return settings().routing.legacy_route(Op::gemm); }
+// What gemm's choose() reads: the pin text and the variable it came from.
+std::optional<std::string> gemm_pin(std::string* source) { return select::detail::pin_text("gemm", source); }
 
-// Both spellings cleared, so a case starts from a known state whatever the shell or
-// the ctest ENVIRONMENT property said -- tests/CMakeLists.txt pins
-// BATCHLAS_GEMM_ROUTE=native for one rerun, and a bisect leaves one exported.
+// Cleared, so a case starts from a known state whatever the shell or the ctest
+// ENVIRONMENT property said -- tests/CMakeLists.txt pins BATCHLAS_GEMM_ROUTE=native
+// for one rerun, and a bisect leaves one exported.
 struct ClearGemmRoute {
     ScopedEnvVar canonical{"BATCHLAS_GEMM_ROUTE", nullptr};
-    ScopedEnvVar legacy{"BATCHLAS_GEMM_VARIANT", nullptr};
 };
 
 }  // namespace
@@ -88,15 +84,17 @@ TEST(SettingsConfigure, ConfigureBeatsTheEnvironment) {
     // nothing: a configure() that "wins" against a variable nobody read is vacuous.
     ScopedEnvVar pin("BATCHLAS_GEMM_ROUTE", "vendor");
     ASSERT_EQ(gemm_route().value(), "vendor");
-    ASSERT_EQ(parse_route_env(Op::gemm).route.origin, Origin::Vendor);
+    std::string source;
+    ASSERT_EQ(gemm_pin(&source).value_or(""), "vendor");
 
     Settings s = settings();
-    s.routing.canonical[kGemm] = EnvValue::of("native");
+    s.routing.route("gemm") = EnvValue::of("native");
     ASSERT_NO_THROW(configure(s));
 
     EXPECT_EQ(gemm_route().value(), "native");
-    EXPECT_EQ(parse_route_env(Op::gemm).route.origin, Origin::Native)
-        << "the route adapters still read the environment directly rather than settings()";
+    EXPECT_EQ(gemm_pin(&source).value_or(""), "native")
+        << "select's pin reader still reads the environment directly rather than settings()";
+    EXPECT_EQ(source, "BATCHLAS_GEMM_ROUTE");
 
     // Restore, while configure() is still permitted, so the cases below start clean.
     // (pin's destructor reloads from the environment on the way out anyway; this is
@@ -119,7 +117,7 @@ TEST(SettingsConfigure, ConfigureAfterAQueueExistsThrows) {
     EXPECT_TRUE(detail::queue_constructed());
 
     Settings s = settings();
-    s.routing.canonical[kGemm] = EnvValue::of("vendor");
+    s.routing.route("gemm") = EnvValue::of("vendor");
     EXPECT_THROW(configure(s), std::runtime_error);
 
     // ...and the refusal is a refusal, not a partial application.
@@ -130,31 +128,28 @@ TEST(SettingsConfigure, ConfigureAfterAQueueExistsThrows) {
 // Fifteen test files mutate the environment through it and then expect the new value
 // to take effect; a call_once settings() on its own makes every one of them silently
 // measure the default arm and pass. reload_settings() from both the constructor and
-// the destructor is what keeps them working unchanged. Observed through
-// parse_route_env as well as through the field, because parse_route_env is what
-// those fifteen files actually reach.
+// the destructor is what keeps them working unchanged. Observed through select's
+// pin reader as well as through the field, because the pin reader is what those
+// fifteen files actually reach.
 TEST(SettingsEnvironment, ScopedEnvVarIsStillObservedAndStillReverts) {
     ClearGemmRoute clear;
+    std::string source;
 
-    ASSERT_FALSE(parse_route_env(Op::gemm).found);
+    ASSERT_FALSE(gemm_pin(&source).has_value());
     ASSERT_FALSE(gemm_route().is_set());
 
     {
-        ScopedEnvVar pin("BATCHLAS_GEMM_ROUTE", "native");
+        ScopedEnvVar pin("BATCHLAS_GEMM_ROUTE", " Native ");
 
-        EXPECT_EQ(gemm_route().value(), "native")
+        EXPECT_EQ(gemm_route().value(), " Native ")
             << "settings() cached the environment and never re-read it";
-
-        const auto parsed = parse_route_env(Op::gemm);
-        EXPECT_TRUE(parsed.found);
-        EXPECT_EQ(parsed.route.origin, Origin::Native);
-        EXPECT_EQ(parsed.source.variable, "BATCHLAS_GEMM_ROUTE");
-        EXPECT_FALSE(parsed.source.legacy);
+        EXPECT_EQ(gemm_pin(&source).value_or(""), "native") << "the pin reader trims and lowercases";
+        EXPECT_EQ(source, "BATCHLAS_GEMM_ROUTE");
     }
 
     EXPECT_FALSE(gemm_route().is_set())
         << "ScopedEnvVar's destructor did not reload; a pin leaked into the next case";
-    EXPECT_FALSE(parse_route_env(Op::gemm).found);
+    EXPECT_FALSE(gemm_pin(&source).has_value());
 
     // Nested, as the route suites write it: the inner pin wins, then hands the
     // outer one back rather than unsetting it.
@@ -219,63 +214,24 @@ TEST(SettingsUnsafe, SkipPointerChecksHonoursTheBuildOption) {
 #endif
 }
 
-// (e) BATCHLAS_GEMM_VARIANT has one source: the settings() snapshot, which both
-// parse_route_env(Op::gemm) and gemm's flat-selection pin (select.cc pin_text, the
-// legacy variable) read. The later blocks are the load-bearing ones: one call_once
-// read with the reload hook missing gives a first answer that is right and every
-// one after it stale.
-TEST(SettingsRouting, BothReadersOfGemmVariantSeeTheSameValue) {
-    ScopedEnvVar clear_canonical("BATCHLAS_GEMM_ROUTE", nullptr);
+// (e) BATCHLAS_<OP>_ROUTE is the only route variable: the retired per-op spellings are
+// not read by anyone, and an op without a route variable has no slot.
+TEST(SettingsRouting, OnlyTheRouteVariableIsRead) {
+    ClearGemmRoute clear;
+    ScopedEnvVar variant("BATCHLAS_GEMM_VARIANT", "vendor");
+    ScopedEnvVar provider("BATCHLAS_SYEV_PROVIDER", "vendor");
+    ScopedEnvVar syev("BATCHLAS_SYEV_ROUTE", nullptr);
+    std::string source;
+    EXPECT_FALSE(gemm_pin(&source).has_value());
+    EXPECT_FALSE(select::detail::pin_text("syev", &source).has_value());
 
-    {
-        ScopedEnvVar v("BATCHLAS_GEMM_VARIANT", "sycl");
-        const auto parsed = parse_route_env(Op::gemm);
-        EXPECT_TRUE(parsed.found);
-        EXPECT_TRUE(parsed.source.legacy);
-        EXPECT_EQ(parsed.source.variable, "BATCHLAS_GEMM_VARIANT");
-        EXPECT_EQ(parsed.source.value, "sycl");
-        EXPECT_EQ(gemm_legacy().value(), "sycl");
-        std::string pin_source;
-        const auto pin = select::detail::pin_text("gemm", &pin_source);
-        ASSERT_TRUE(pin.has_value());
-        EXPECT_EQ(*pin, "sycl");
-        EXPECT_EQ(pin_source, "BATCHLAS_GEMM_VARIANT");
-    }
-    {
-        ScopedEnvVar v("BATCHLAS_GEMM_VARIANT", "cublasdx");
-        EXPECT_EQ(parse_route_env(Op::gemm).source.value, "cublasdx");
-        EXPECT_EQ(gemm_legacy().value(), "cublasdx");
-        std::string pin_source;
-        const auto pin = select::detail::pin_text("gemm", &pin_source);
-        ASSERT_TRUE(pin.has_value());
-        EXPECT_EQ(*pin, "cublasdx");
-        EXPECT_EQ(pin_source, "BATCHLAS_GEMM_VARIANT");
-    }
-    {
-        ScopedEnvVar v("BATCHLAS_GEMM_VARIANT", nullptr);
-        EXPECT_FALSE(parse_route_env(Op::gemm).found);
-        EXPECT_FALSE(gemm_legacy().is_set());
-        std::string pin_source;
-        EXPECT_FALSE(select::detail::pin_text("gemm", &pin_source).has_value());
-    }
-    {
-        // A set BATCHLAS_GEMM_ROUTE wins over the legacy variable in both readers.
-        ScopedEnvVar v("BATCHLAS_GEMM_VARIANT", "native");
-        ScopedEnvVar r("BATCHLAS_GEMM_ROUTE", "tiled");
-        EXPECT_EQ(parse_route_env(Op::gemm).source.variable, "BATCHLAS_GEMM_ROUTE");
-        std::string pin_source;
-        EXPECT_EQ(select::detail::pin_text("gemm", &pin_source).value_or(""), "tiled");
-        EXPECT_EQ(pin_source, "BATCHLAS_GEMM_ROUTE");
-    }
-}
+    EXPECT_EQ(RoutingSettings::ops.size(), 19u);
+    for (const std::string_view op : RoutingSettings::ops) EXPECT_NO_THROW((void)settings().routing.route(op));
+    for (const char* op : {"hemm", "herk", "her2k", "iluk", "nosuchop"})
+        EXPECT_THROW((void)settings().routing.route(op), std::invalid_argument) << op;
+    EXPECT_FALSE(select::detail::pin_text("iluk", &source).has_value());
 
-// (f) BATCHLAS_GEMM_SYCL_KERNEL is retired but still read, so gemm can throw on it rather
-// than let an old script time Auto (gemm_candidates_tests.cc UnknownAndDeletedPinsThrow
-// runs the throw). The field must follow the environment through reloads.
-TEST(SettingsRouting, RetiredGemmSyclKernelIsStillRead) {
-    {
-        ScopedEnvVar v("BATCHLAS_GEMM_SYCL_KERNEL", "tiled16");
-        EXPECT_EQ(settings().selection.gemm_sycl_kernel.value(), "tiled16");
-    }
-    EXPECT_FALSE(settings().selection.gemm_sycl_kernel.is_set());
+    // Every op's variable is synthesised from its name.
+    ScopedEnvVar syr2k("BATCHLAS_SYR2K_ROUTE", "triangular");
+    EXPECT_EQ(settings().routing.route("syr2k").value(), "triangular");
 }

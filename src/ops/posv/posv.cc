@@ -74,7 +74,7 @@ PosvChoice choose(Queue& q, const MatrixView<T, MatrixFormat::Dense>& A, const M
 template <Backend B, class T>
 select::NativeFacts native_facts(Queue& q, const MatrixView<T, MatrixFormat::Dense>& A,
                                  const MatrixView<T, MatrixFormat::Dense>& Bm) {
-    if (!dispatch::coverage::dynamic_enabled()) return {};
+    if (!coverage::dynamic_enabled()) return {};
     const select::Device& d = select::device_of<B>(q);
     return select::native_facts(candidates<T>(), [&](const PosvChoice& c) { return can_run<T>(c, d, A, Bm); });
 }

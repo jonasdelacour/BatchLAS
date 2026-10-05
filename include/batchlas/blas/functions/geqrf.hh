@@ -43,7 +43,7 @@ using geqrf_vendor_buffer_size = size_t(Queue&,
 
 // Validation for the POSITIONAL entry point, which had none.
 //
-// It runs in the facade (src/dispatch/entry_points/factorization.cc), AHEAD of
+// It runs in the facade (src/ops/geqrf/geqrf.cc), AHEAD of
 // the shape builder, because the builder reads A.rows()/A.cols() and must not
 // describe a non-conforming view. Same hoist, and same reason, as potrf's
 // (potrf.hh:66-84) and trsm's (entry_points/level3.cc:167-174).
@@ -99,7 +99,7 @@ namespace batchlas::backend {
 // DECLARATION ONLY -- see the note on gemm_vendor in gemm.hh. The public
 // `geqrf` used to be defined inside each vendor TU, so dropping a vendor library
 // dropped the public entry point with it; WP0 S5 moves that definition to
-// src/dispatch/entry_points/factorization.cc and leaves the vendor
+// src/ops/geqrf/geqrf.cc and leaves the vendor
 // implementation here, named as such.
 template <Backend B, typename T>
 BATCHLAS_API Event geqrf_vendor(Queue& ctx,

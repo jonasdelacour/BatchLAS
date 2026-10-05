@@ -29,10 +29,6 @@ namespace {
 
 namespace gn = ::batchlas::geqrf_native;
 
-// Convenience capacity overloads only; every real decision reads LOCAL_MEM_SIZE from the
-// device, never device_limits.hh's hardcoded constant. evidence: docs/perf/qr.md#cta-capacity
-constexpr std::size_t kGeqrfReferenceSlmBudget = 97280;
-
 // Exactly m*n scalars with NO leading-dimension padding: both hot access patterns are
 // bank-conflict-free at any ld, and the missing pad keeps the element ceiling monotone.
 template <typename T>
@@ -333,16 +329,6 @@ int geqrf_cta_max_m_for_slm(std::size_t slm_budget_bytes, int min_blocks_per_sm)
     return static_cast<int>(std::min<int64_t>(e, 0x7fffffff));
 }
 
-template <typename T>
-int geqrf_cta_max_m() {
-    return geqrf_cta_max_m_for_slm<T>(kGeqrfReferenceSlmBudget);
-}
-
-template <typename T>
-int64_t geqrf_cta_max_elems() {
-    return geqrf_cta_max_elems_for_slm<T>(kGeqrfReferenceSlmBudget);
-}
-
 // The TIER's fit predicate, occupancy-scaled by default: the table's capacity, the CTA
 // entry point's gate and this must be one predicate, or a routed shape fails at enqueue.
 // The blocked driver asks geqrf_leaf_fits instead -- see below.
@@ -482,19 +468,6 @@ Event geqrf_panel_factorize(Queue& ctx,
         p.wg, 1);
 }
 
-// Test hook: low 16 bits G (panels per work-group), high 16 the work-group width;
-// 0 when the panel is not resident. See geqrf_native.hh.
-template <typename T>
-unsigned geqrf_cta_debug_launch(Queue& ctx, int m, int n) {
-    const auto dev = ctx.device();
-    const std::size_t budget = resident::device_slm_budget(
-        dev.get_property(DeviceProperty::LOCAL_MEM_SIZE));
-    if (!geqrf_leaf_fits<T>(m, n, budget)) return 0u;
-    const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
-    const auto p = geqrf_leaf_launch<T>(m, n, resident::occupancy_budget(budget), max_wg);
-    return (static_cast<unsigned>(p.wg) << 16) | static_cast<unsigned>(p.G);
-}
-
 // The CTA tier's direct entry point. Every gate supports() applies to the CTA arm is
 // re-applied here, because a forced route reaches this without the table.
 template <typename T>
@@ -569,11 +542,8 @@ Event geqrf_cta_dispatch(Queue& ctx,
 #define BATCHLAS_GEQRF_CTA_INSTANTIATE(T)                                                     \
     template int geqrf_cta_max_m_for_slm<T>(std::size_t, int);                                \
     template int64_t geqrf_cta_max_elems_for_slm<T>(std::size_t, int);                        \
-    template int geqrf_cta_max_m<T>();                                                        \
-    template int64_t geqrf_cta_max_elems<T>();                                                \
     template bool geqrf_cta_fits<T>(int, int, std::size_t, int);                              \
     template bool geqrf_leaf_fits<T>(int, int, std::size_t);                                  \
-    template unsigned geqrf_cta_debug_launch<T>(Queue&, int, int);                            \
     template std::size_t geqrf_cta_buffer_size<T>(Queue&,                                     \
                                                   const MatrixView<T, MatrixFormat::Dense>&); \
     template int geqrf_panel_reg_cols<T>();                                                   \

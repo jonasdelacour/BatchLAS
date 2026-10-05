@@ -20,10 +20,9 @@ constexpr auto candidates() {  // tie-break order (§6.3): native first
     return std::array<GetriChoice, 2>{Blocked{}, Vendor{}};
 }
 
-inline constexpr std::array<select::Alias, 1> aliases{{{"native:blocked", "blocked"}}};
 // Generality order (§5.5): Vendor also runs CPU, NETLIB and heterogeneous batches.
 inline constexpr std::array<std::string_view, 2> last_resort{"vendor", "blocked"};
-inline constexpr select::Rules rules{aliases, last_resort};
+inline constexpr select::Rules rules{last_resort};
 
 // Work ~ n^3 batch; the old router read only n (batch >= 1 was a correctness term).
 inline constexpr std::array<std::string_view, 2> key_names{"n:log:3", "batch:log"};

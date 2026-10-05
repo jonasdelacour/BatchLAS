@@ -9,6 +9,7 @@
 #include <batchlas/backend_config.h>
 #include <batchlas/util/env.hh>
 #include <batchlas/util/mempool.hh>
+#include <batchlas/settings.hh>
 #include "test_utils.hh"
 #include <tuple>
 #include <cstdlib>
@@ -16,6 +17,7 @@
 #include <limits>
 #include <algorithm>
 #include <type_traits>
+#include "../src/ops/syev/vendor.hh"
 
 using namespace batchlas;
 #if BATCHLAS_HAS_GPU_BACKEND
@@ -384,7 +386,7 @@ TEST_F(SyevxOperationsTest, ComplexShiftInverToeplitzEigenpairs) {
 
 namespace {
 // BATCHLAS_SYEVX_ALGORITHM takes precedence over SyevxParams::method (matching the
-// BATCHLAS_SYEV_PROVIDER convention), so a test that pins one algorithm cannot run
+// BATCHLAS_<OP>_ROUTE convention), so a test that pins one algorithm cannot run
 // meaningfully while a different one is forced. Skip rather than fail: this keeps
 // "run the suite under every algorithm" sweeps honest.
 inline bool syevx_algorithm_overridden_to_other(const char* pinned) {

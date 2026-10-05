@@ -183,8 +183,8 @@ def posv_key(r):
 
 
 # potrf: n weighs 3 because the work grows as n^3 and linearly in batch, so the distance
-# approximates log-cost. The coverage spellings are the RouteTable era's, then flat
-# selection's, whose chosen_algo is the choice spelling.
+# approximates log-cost. The coverage spellings are the old router's (native:<algo>,
+# vendor:auto), then flat selection's, whose chosen_algo is the choice spelling.
 POTRF = OpSpec(
     op="potrf",
     keys="uplo:exact n:log:3 batch:log",

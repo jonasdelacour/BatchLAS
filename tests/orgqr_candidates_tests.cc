@@ -7,9 +7,9 @@
 #include <batchlas/blas/functions/geqrf.hh>
 #include <batchlas/blas/functions/orgqr.hh>
 #include <batchlas/blas/functions/ormqr.hh>
-#include <batchlas/blas/dispatch/coverage.hh>
-#include <batchlas/blas/dispatch/no_route.hh>
-#include <batchlas/blas/dispatch/vendor_available.hh>
+#include "../src/select/coverage.hh"
+#include <batchlas/no_route.hh>
+#include "../src/select/vendor.hh"
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
@@ -100,7 +100,7 @@ Prob<T> make_prob(Queue& q, int m, int n, int batch, unsigned seed, int period =
             for (int i = 0; i < m; ++i) p.mem[p.at(it, i, j)] = mk<T>(u(gen), u(gen));
     p.a0.assign(p.mem.begin(), p.mem.end());
     // A wide A (n > m) has no vendor-free geqrf; only a refused pin or the vendor ever sees one.
-    if (m >= 1 && n >= 1 && batch >= 1 && (n <= m || dispatch::factorization_vendor_available<B>)) {
+    if (m >= 1 && n >= 1 && batch >= 1 && (n <= m || batchlas::select::factorization_vendor_available<B>)) {
         UnifiedVector<std::byte> ws(std::max<std::size_t>(1, geqrf_buffer_size<B, T>(q, p.A(), p.tau.to_span())));
         (void)geqrf<B, T>(q, p.A(), p.tau.to_span(), ws.to_span());
         q.wait();
@@ -231,7 +231,7 @@ protected:
     using T = typename Config::ScalarType;
     using MV = MVof<T>;
     static constexpr Backend B = Config::BackendVal;
-    static constexpr bool kVendor = dispatch::factorization_vendor_available<B>;
+    static constexpr bool kVendor = batchlas::select::factorization_vendor_available<B>;
 
     void SetUp() override {
         test_utils::BatchLASTest<Config>::SetUp();
@@ -438,7 +438,9 @@ TYPED_TEST(OrgqrCandidates, ExactWorkspaceInAPoisonedArena) {
 TYPED_TEST(OrgqrCandidates, UnknownPinsThrow) {
     using T = typename TestFixture::T;
     for (const char* word : {"bogus", "blocked:nb=32", "blocked:16", "native:vendor", "cta", "native:cta",
-                             "vendor:blocked", "native:tiny"}) {
+                             "vendor:blocked", "native:tiny",
+                             // removed aliases (phase 5): each must stay an error
+                             "native:blocked", "vendor:auto"}) {
         auto p = this->prob(16, 8, 2, 5u);
         const Pin pin("orgqr", std::string_view(word));
         EXPECT_THROW(this->run(p), std::invalid_argument) << word;
@@ -505,18 +507,18 @@ TYPED_TEST(OrgqrCandidates, HeterogeneousBatchHasNoNativeRoute) {
         this->ctx->wait();
     };
     if constexpr (TestFixture::kVendor) EXPECT_EQ(traced_choice(call), "vendor");
-    else EXPECT_THROW(call(), dispatch::NoRouteError);
+    else EXPECT_THROW(call(), batchlas::NoRouteError);
 }
 
-// §5.3: the legacy spellings and the class words, via ScopedPin and via the environment.
-// `vendor:auto` is a concrete alias, so vendor-free it throws where bare `vendor` falls back.
-TYPED_TEST(OrgqrCandidates, LegacyAliasesAndClassWords) {
+// §5.3: spellings (case-folded) and the class words, via ScopedPin and via the environment.
+// `vendor:auto` (an old alias) throws; bare `vendor` falls back vendor-free.
+TYPED_TEST(OrgqrCandidates, ClassWordsAndSpellings) {
     const ScopedEnvVar clear("BATCHLAS_ORGQR_ROUTE", nullptr);
     const bool v = TestFixture::kVendor;
     const std::pair<const char*, const char*> expect[] = {
-        {"native:blocked", "blocked"}, {"NATIVE:BLOCKED", "blocked"}, {"blocked", "blocked"}, {"Blocked", "blocked"},
+        {"BLOCKED", "blocked"}, {"blocked", "blocked"}, {"Blocked", "blocked"},
         {"native", "blocked"},         {"auto", "blocked"},           {"vendor", v ? "vendor" : "blocked"},
-        {"vendor:auto", v ? "vendor" : nullptr}};
+        {"vendor:auto", nullptr}};
     for (const auto& [word, spelling] : expect)
         for (bool via_env : {false, true}) {
             auto p = this->prob(40, 24, 3, 81u);
@@ -666,7 +668,7 @@ TYPED_TEST(OrgqrCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     auto child = [&] {
         const ScopedEnvVar cov("BATCHLAS_COVERAGE_OUT", out.c_str());
         const ScopedEnvVar clear("BATCHLAS_ORGQR_ROUTE", nullptr);
-        dispatch::coverage::g_dynamic_enabled = true;
+        batchlas::coverage::g_dynamic_enabled = true;
         {
             auto p = this->prob(40, 24, 2, 57u);
             const Pin pin("orgqr", C{oq::Blocked{}});
@@ -729,10 +731,10 @@ TYPED_TEST(OrgqrCandidatesCpu, CpuQueueRunsNoNativeFamily) {
         EXPECT_THROW(((void)orgqr_buffer_size<B, T>(*this->ctx, A, tau.to_span())), std::invalid_argument);
     }
     const ScopedEnvVar clear("BATCHLAS_ORGQR_ROUTE", nullptr);
-    if constexpr (dispatch::factorization_vendor_available<B>)
+    if constexpr (batchlas::select::factorization_vendor_available<B>)
         EXPECT_NO_THROW(((void)orgqr_buffer_size<B, T>(*this->ctx, A, tau.to_span())));
     else
-        EXPECT_THROW(((void)orgqr_buffer_size<B, T>(*this->ctx, A, tau.to_span())), dispatch::NoRouteError);
+        EXPECT_THROW(((void)orgqr_buffer_size<B, T>(*this->ctx, A, tau.to_span())), batchlas::NoRouteError);
 }
 
 // The transcribed rows, read with Table::nearest directly so every device checks them: at grid

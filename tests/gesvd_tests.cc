@@ -1173,7 +1173,7 @@ TYPED_TEST(GesvdTest, DefaultProviderKeepsSingularValuesAtHighCondition) {
         Matrix<Scalar, MatrixFormat::Dense> U(n, n, batch);
         Matrix<Scalar, MatrixFormat::Dense> Vh(n, n, batch);
 
-        // nullptr => no BATCHLAS_GESVD_PROVIDER override, i.e. the Auto order.
+        // nullptr => no pin, i.e. the Auto order.
         const std::string err = run_gesvd_with_provider<Scalar, B>(*this->ctx,
                                                                    A,
                                                                    s,

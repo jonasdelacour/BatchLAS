@@ -11,6 +11,8 @@
 #include <type_traits>
 #include "test_utils.hh"
 #include <batchlas/util/env.hh>
+#include <batchlas/settings.hh>
+#include "../src/select/vendor.hh"
 #include "../src/sycl/trsm_native.hh"
 
 using namespace batchlas;
@@ -1024,7 +1026,7 @@ TEST(TrsmNativeCta, CappedLadderSaturatedSmallRhs) {
 // memory, so it skips on smaller GPUs; only items 0 and batch-1 hold a system.
 TEST(TrsmVendor, ComplexSubstituteIndexesPast2To31Elements) {
     using T = std::complex<float>;
-    if constexpr (!batchlas::dispatch::level3_vendor_available<Backend::CUDA>) {
+    if constexpr (!batchlas::select::level3_vendor_available<Backend::CUDA>) {
         GTEST_SKIP() << "no vendor BLAS in this build";
     } else {
         auto ctx = std::make_shared<Queue>(Device("gpu"), Backend::CUDA);

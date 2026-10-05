@@ -641,7 +641,7 @@ def main() -> None:
     parser.add_argument(
         "--bench-run-vendor-syev",
         action="store_true",
-        help="run an additional eigensolver_accuracy --impl=syev pass with BATCHLAS_SYEV_PROVIDER=VENDOR",
+        help="run an additional eigensolver_accuracy --impl=syev pass with BATCHLAS_SYEV_ROUTE=vendor",
     )
 
     parser.add_argument("--impls", default=None, help="comma-separated impl list for plots")
@@ -724,7 +724,7 @@ def main() -> None:
                     f"--seed={args.bench_seed}",
                     f"--output={out_path}",
                 ]
-                _run_command(cmd, env={"BATCHLAS_SYEV_PROVIDER": "VENDOR"})
+                _run_command(cmd, env={"BATCHLAS_SYEV_ROUTE": "vendor"})
                 temp_paths.append(out_path)
 
         if temp_paths:

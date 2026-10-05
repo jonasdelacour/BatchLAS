@@ -30,7 +30,7 @@ The coverage `reached` row keeps the old mapping (`m = B.rows()`, `n = B.cols()`
 
 ### Tuning knobs and environment
 
-* `BATCHLAS_TRSM_ROUTE` — a pin (`auto`, `native`, `vendor`, `cta`, `sg_left`, `blocked`, or the legacy `native:cta` / `native:blocked`). A spelling the shape cannot run (`cta` or `sg_left` above order 32, `sg_left` on Side::Right) **throws**; `native` and `vendor` fall back to Auto with a warning when nothing of their class can run. **`BATCHLAS_TRSM_VARIANT` is read by nothing**; `legacy_variable_for` has no `Op::trsm` case. The spec instructs pinning the native path with that variable, which would pin nothing.
+* `BATCHLAS_TRSM_ROUTE` — a pin (`auto`, `native`, `vendor`, `cta`, `sg_left`, `blocked`; the old `native:cta` / `native:blocked` aliases throw since flat selection phase 5). A spelling the shape cannot run (`cta` or `sg_left` above order 32, `sg_left` on Side::Right) **throws**; `native` and `vendor` fall back to Auto with a warning when nothing of their class can run. **`BATCHLAS_TRSM_VARIANT` is read by nothing.** The spec instructs pinning the native path with that variable, which would pin nothing.
 * `BATCHLAS_TRSM_OUTER_NB` — V2's outer block width; a **tuning** knob, never a routing one (`trsm_native.cc:375-385`). Default 128 for `Side::Left`, `cta_max_n` (32) for `Side::Right`, rounded down to a whole number of CTA blocks. The parse is cached in a function-local static, so the first blocked call in a process fixes it.
 
 ---

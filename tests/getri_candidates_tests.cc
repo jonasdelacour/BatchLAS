@@ -8,9 +8,9 @@
 #include <batchlas/blas/functions/getrf.hh>
 #include <batchlas/blas/functions/getri.hh>
 #include <batchlas/blas/functions/trsm.hh>
-#include <batchlas/blas/dispatch/coverage.hh>
-#include <batchlas/blas/dispatch/no_route.hh>
-#include <batchlas/blas/dispatch/vendor_available.hh>
+#include "../src/select/coverage.hh"
+#include <batchlas/no_route.hh>
+#include "../src/select/vendor.hh"
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
@@ -225,7 +225,7 @@ protected:
     using T = typename Config::ScalarType;
     using MV = MatrixView<T, MatrixFormat::Dense>;
     static constexpr Backend B = Config::BackendVal;
-    static constexpr bool kVendor = dispatch::factorization_vendor_available<B>;
+    static constexpr bool kVendor = batchlas::select::factorization_vendor_available<B>;
 
     void SetUp() override {
         test_utils::BatchLASTest<Config>::SetUp();
@@ -491,7 +491,9 @@ TYPED_TEST(GetriCandidates, UnknownPinsThrow) {
     static constexpr Backend B = TestFixture::B;
     const auto A = meta_view<T>(64, 64, 8);
     for (const char* word : {"bogus", "blocked:1", "blocked:nb=32", "native:vendor", "cta", "native:cta", "tiny",
-                             "native:tiny", "vendor:auto"}) {
+                             "native:tiny", "vendor:auto",
+                             // removed aliases (phase 5): each must stay an error
+                             "native:blocked"}) {
         const Pin pin("getri", std::string_view(word));
         EXPECT_THROW((void)(getri_buffer_size<B, T>)(*this->ctx, A), std::invalid_argument) << word;
     }
@@ -535,7 +537,7 @@ TYPED_TEST(GetriCandidates, HeterogeneousBatchHasNoNativeRoute) {
     if constexpr (TestFixture::kVendor) {
         EXPECT_NO_THROW((void)(getri_buffer_size<B, T>)(*this->ctx, het)) << "Auto must take the vendor";
     } else {
-        EXPECT_THROW((void)(getri_buffer_size<B, T>)(*this->ctx, het), dispatch::NoRouteError);
+        EXPECT_THROW((void)(getri_buffer_size<B, T>)(*this->ctx, het), batchlas::NoRouteError);
     }
 }
 
@@ -562,19 +564,19 @@ TYPED_TEST(GetriCandidates, NetlibBackendOnAGpuQueueRefusesBlocked) {
     bool no_route = false;
     try {
         (void)getri_buffer_size<Backend::NETLIB, T>(*this->ctx, A);
-    } catch (const dispatch::NoRouteError&) {
+    } catch (const batchlas::NoRouteError&) {
         no_route = true;
     }
     const std::string err = ::testing::internal::GetCapturedStderr();
     EXPECT_NE(err.find("getri pinned \"native\", but no native candidate"), std::string::npos) << err;
     // Without netlib the warned fall-back to Auto has nothing left: a NoRouteError, never Blocked.
-    EXPECT_EQ(no_route, !dispatch::factorization_vendor_available<Backend::NETLIB>);
+    EXPECT_EQ(no_route, !batchlas::select::factorization_vendor_available<Backend::NETLIB>);
 }
 #endif
 
-// §5.3: the legacy spellings and the class words, via ScopedPin and via the environment
+// §5.3: spellings (case-folded) and the class words, via ScopedPin and via the environment
 // (RouteGetri.BareOriginResolvesToASpecificAlgorithm and BatchlasGetriRouteIsActuallyRead).
-TYPED_TEST(GetriCandidates, LegacyAliasesAndClassWords) {
+TYPED_TEST(GetriCandidates, ClassWordsAndSpellings) {
     using T = typename TestFixture::T;
     const ScopedEnvVar clear("BATCHLAS_GETRI_ROUTE", nullptr);
     const Spec s{40, 2, 0, 3u};
@@ -586,7 +588,7 @@ TYPED_TEST(GetriCandidates, LegacyAliasesAndClassWords) {
     ASSERT_TRUE(auto_pick == "blocked" || auto_pick == "vendor") << auto_pick;
     const std::string vendor_pick = TestFixture::kVendor ? "vendor" : auto_pick;
     const std::pair<const char*, std::string> expect[] = {
-        {"native:blocked", "blocked"}, {"NATIVE:BLOCKED", "blocked"}, {"blocked", "blocked"}, {"Blocked", "blocked"},
+        {"BLOCKED", "blocked"}, {"blocked", "blocked"}, {"Blocked", "blocked"},
         {"native", "blocked"},         {"vendor", vendor_pick},       {"auto", auto_pick}};
     for (const auto& [word, spelling] : expect)
         for (bool via_env : {false, true}) {
@@ -751,7 +753,7 @@ TYPED_TEST(GetriCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     auto child = [&] {
         const ScopedEnvVar cov("BATCHLAS_COVERAGE_OUT", out.c_str());
         const ScopedEnvVar clear("BATCHLAS_GETRI_ROUTE", nullptr);
-        dispatch::coverage::g_dynamic_enabled = true;
+        batchlas::coverage::g_dynamic_enabled = true;
         {
             auto p = this->make(Spec{16, 2, 0, 3u});
             this->run_pinned(C{gi::Blocked{}}, p);
@@ -820,8 +822,8 @@ TYPED_TEST(GetriCandidatesCpu, CpuQueueRunsNoNativeFamily) {
         (void)getri<B, T>(*this->ctx, A.view(), Ai.view(), piv.to_span(), ws.to_span());
         this->ctx->wait();
     };
-    if constexpr (dispatch::factorization_vendor_available<B>) EXPECT_EQ(traced_choice(call), "vendor");
-    else EXPECT_THROW(call(), dispatch::NoRouteError);
+    if constexpr (batchlas::select::factorization_vendor_available<B>) EXPECT_EQ(traced_choice(call), "vendor");
+    else EXPECT_THROW(call(), batchlas::NoRouteError);
 }
 
 // The transcribed rows, read with Table::nearest directly so every device checks them: the old

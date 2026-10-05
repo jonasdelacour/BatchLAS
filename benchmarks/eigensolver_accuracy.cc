@@ -60,20 +60,15 @@ const char* scheme_name(SteqrUpdateScheme scheme) {
     return (scheme == SteqrUpdateScheme::PG) ? "pg" : "exp";
 }
 
-// The pinned syev family (src/ops/syev/choice.hh words and aliases); BATCHLAS_SYEV_ROUTE wins.
+// The pinned syev family: BATCHLAS_SYEV_ROUTE's words (src/ops/syev/choice.hh).
 std::string syev_dispatch_impl_name() {
     const char* raw = std::getenv("BATCHLAS_SYEV_ROUTE");
-    if (!raw || !*raw) raw = std::getenv("BATCHLAS_SYEV_PROVIDER");
     if (!raw || !*raw) return "syev_auto";
 
-    auto key = to_lower(std::string(raw));
-    if (starts_with(key, "native:")) key = key.substr(7);
-    if (starts_with(key, "batchlas_") || starts_with(key, "batchlas-")) key = key.substr(9);
-    for (char& ch : key)
-        if (ch == '-') ch = '_';
-    if (key == "vendor" || key == "vendor:auto" || key == "netlib") return "syev_vendor";
+    const auto key = to_lower(std::string(raw));
+    if (key == "vendor") return "syev_vendor";
     if (key == "cta") return "syev_cta_dispatch";
-    if (key == "cta_fused" || key == "fused") return "syev_cta_fused_dispatch";
+    if (key == "cta_fused") return "syev_cta_fused_dispatch";
     if (key == "jacobi") return "syev_jacobi_dispatch";
     if (key == "blocked") return "syev_blocked_dispatch";
     if (key == "two_stage") return "syev_two_stage_dispatch";

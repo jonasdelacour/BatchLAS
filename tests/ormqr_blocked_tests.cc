@@ -10,6 +10,7 @@
 #include <type_traits>
 
 #include "test_utils.hh"
+#include "../src/ops/ormqr/vendor.hh"
 
 using namespace batchlas;
 

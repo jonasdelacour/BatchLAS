@@ -7,13 +7,13 @@
 
 namespace batchlas::backend {
 
-// True unless BATCHLAS_SYRK_VARIANT pins the vendor. The float router reads the
-// variable through its own enum; double and complex reach only the single-tile
+// True when BATCHLAS_SYRK_ROUTE=vendor. The float router reads the whole pin;
+// double and complex reach only the single-tile
 // Gram kernel, so they need just this one bit of it -- but they do need it, or
 // `=vendor` would silently measure the new route and report it as the old one.
 bool syrk_route_prefers_vendor();
 
-// True only when BATCHLAS_SYRK_VARIANT names the Gram kernel outright. HERK
+// True only when BATCHLAS_SYRK_ROUTE=gram names the Gram kernel outright. HERK
 // does not take it automatically: measured on RTX 4090 / sm_89 in complex float
 // against the GEMM-plus-Hermitian-fold route it would replace, the tile kernel
 // loses at every Gram shape -- 0.217 vs 0.206 ms at n=32/batch 2048, 2.08 vs

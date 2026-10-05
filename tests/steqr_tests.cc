@@ -49,6 +49,7 @@ struct SteqrConfig {
 };
 
 #include "test_utils.hh"
+#include "../src/ops/syev/vendor.hh"
 // STEQR tests are not meaningful for complex types.
 using SteqrTestTypes = typename test_utils::backend_types_filtered<SteqrConfig, false>::type;
 

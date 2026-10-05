@@ -23,14 +23,9 @@ constexpr auto candidates() {
     return std::array<PosvChoice, 3>{Tiny{}, Cta{}, Blocked{}};
 }
 
-inline constexpr std::array<select::Alias, 3> aliases{{  // legacy spellings until phase 5
-    {"native:tiny", "tiny"},
-    {"native:cta", "cta"},
-    {"native:blocked", "blocked"},
-}};
 // Blocked runs every shape the validator accepts; a failing child reports its own error.
 inline constexpr std::array<std::string_view, 1> last_resort{"blocked"};
-inline constexpr select::Rules rules{aliases, last_resort};
+inline constexpr select::Rules rules{last_resort};
 
 inline constexpr std::array<std::string_view, 4> key_names{  // work: n^3/3 + 2 n^2 nrhs
     "uplo:exact", "n:log:3", "nrhs:log", "batch:log"};

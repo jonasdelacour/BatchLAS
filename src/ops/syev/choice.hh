@@ -26,30 +26,8 @@ constexpr auto candidates() {
     return std::array<SyevChoice, 6>{Cta{}, CtaFused{}, Jacobi{}, Blocked{}, TwoStage{}, Vendor{}};
 }
 
-// Legacy BATCHLAS_SYEV_ROUTE / BATCHLAS_SYEV_PROVIDER spellings until phase 5. The old `cta`
-// meant "the small-n tier", whose driver the type and n picked; it now names syev_cta itself.
-// `netlib` and `vendor:auto` were the old vendor spellings; an alias to vendor is concrete (§12).
-inline constexpr std::array<select::Alias, 16> aliases{{
-    {"native:cta", "cta"},
-    {"native:blocked", "blocked"},
-    {"native:two_stage", "two_stage"},
-    {"native:two-stage", "two_stage"},
-    {"two-stage", "two_stage"},
-    {"native:jacobi", "jacobi"},
-    {"batchlas_cta", "cta"},
-    {"batchlas-cta", "cta"},
-    {"batchlas_blocked", "blocked"},
-    {"batchlas-blocked", "blocked"},
-    {"batchlas_two_stage", "two_stage"},
-    {"batchlas-two-stage", "two_stage"},
-    {"fused", "cta_fused"},
-    {"native:cta_fused", "cta_fused"},
-    {"netlib", "vendor"},
-    {"vendor:auto", "vendor"},
-}};
-// Generality order (§5.5): Blocked runs every square GPU shape, Vendor everything else (CPU).
 inline constexpr std::array<std::string_view, 2> last_resort{"blocked", "vendor"};
-inline constexpr select::Rules rules{aliases, last_resort};
+inline constexpr select::Rules rules{last_resort};  // §5.5: Blocked runs every square GPU shape, Vendor everything else (CPU).
 
 // jobz N|V; uplo is no key (Upper mirrors into Lower). Work ~ n^3 batch.
 inline constexpr std::array<std::string_view, 3> key_names{"jobz:exact", "n:log:3", "batch:log"};

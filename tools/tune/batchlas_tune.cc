@@ -623,7 +623,7 @@ int Driver::gate() {
         std::string err;
         const auto rows = parse_old_csv(ss.str(), names, o_.dtype_given ? o_.dtypes : std::vector<std::string>{}, &err);
         if (!rows) die(o_.old_csv + ": " + err);
-        // An old spelling may be a legacy alias ("native:lpanel"): compare canonical forms.
+        // An old binary wrote native:<algo> (e.g. "native:lpanel"): compare canonical forms.
         for (const OldChoice& r : *rows) {
             const auto [origin, algo] = split_origin(r.old);
             cells.push_back({r.dtype, r.key, spec_.normalize_route(origin, algo)});
@@ -839,7 +839,7 @@ int main(int argc, char** argv) {
         else if (parse_kernel_list(ss.str()) != spec->kernel_sources())
             die(spec->spec_file() + ": its kernel-sources block differs from this binary's list (rebuild)");
     }
-    for (const char* var : {"ROUTE", "VARIANT", "PROVIDER"})
+    for (const char* var : {"ROUTE"})
         for (char** e = environ; *e; ++e)
             if (std::strncmp(*e, "BATCHLAS_", 9) == 0 && std::strstr(*e, (std::string("_") + var + "=").c_str()))
                 std::fprintf(stderr, "batchlas_tune: warning: %s is set and reaches the op's children\n", *e);

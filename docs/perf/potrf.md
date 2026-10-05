@@ -24,8 +24,8 @@ What runs is decided in one file, `src/ops/potrf/potrf.cc` (docs/design/flat-ker
 * `can_run()` in `potrf.cc` is correctness only and mirrors each driver's own argument checks (the `supports()`
   gates tabled below, plus Tiny's `MAX_WORK_GROUP_SIZE >= 64`);
 * `potrf_buffer_size` returns exactly the chosen family's workspace, no longer the maximum over every tier;
-* `BATCHLAS_POTRF_ROUTE` takes `auto`, `native`, `vendor`, a spelling (`lpanel:panel=8`, `lpanel:8`) or a legacy alias
-  (`native:tiny`, `native:cta`, `native:lpanel`, `native:blocked`, `lpanel`). A pin that does not parse, or names a
+* `BATCHLAS_POTRF_ROUTE` takes `auto`, `native`, `vendor` or a spelling (`lpanel:panel=8`, `lpanel:8`); the old aliases
+  (`native:tiny`, `native:cta`, `native:lpanel`, `native:blocked`, `lpanel`) throw since phase 5. A pin that does not parse, or names a
   choice that cannot run the shape, **throws `std::invalid_argument`**; it used to fall through to Auto. The class
   words `native` and `vendor` with no runnable candidate of their class (e.g. `vendor` in a vendor-free build) fall
   back to Auto, with a warning. No legacy `_VARIANT`/`_PROVIDER`

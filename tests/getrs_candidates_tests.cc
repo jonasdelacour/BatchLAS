@@ -7,9 +7,9 @@
 
 #include <batchlas/blas/functions/getrs.hh>
 #include <batchlas/blas/functions/trsm.hh>
-#include <batchlas/blas/dispatch/coverage.hh>
-#include <batchlas/blas/dispatch/no_route.hh>
-#include <batchlas/blas/dispatch/vendor_available.hh>
+#include "../src/select/coverage.hh"
+#include <batchlas/no_route.hh>
+#include "../src/select/vendor.hh"
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
@@ -280,7 +280,7 @@ protected:
     using T = typename Config::ScalarType;
     using MV = MatrixView<T, MatrixFormat::Dense>;
     static constexpr Backend B = Config::BackendVal;
-    static constexpr bool kVendor = dispatch::factorization_vendor_available<B>;
+    static constexpr bool kVendor = batchlas::select::factorization_vendor_available<B>;
 
     void SetUp() override {
         test_utils::BatchLASTest<Config>::SetUp();
@@ -551,7 +551,9 @@ TYPED_TEST(GetrsCandidates, WorkspaceIsExactlyWhatTheChoiceNeeds) {
 // R6: a spelling that names nothing compiled throws instead of meaning Auto.
 TYPED_TEST(GetrsCandidates, UnknownPinsThrow) {
     using T = typename TestFixture::T;
-    for (const char* word : {"bogus", "cta:1", "blocked:nb=16", "native:vendor", "native:tiny", "fused", "v1"}) {
+    for (const char* word : {"bogus", "cta:1", "blocked:nb=16", "native:vendor", "native:tiny", "fused", "v1",
+                             // removed aliases (phase 5): each must stay an error
+                             "native:cta", "native:blocked"}) {
         auto p = make_sys<T>(Spec{});
         const Pin pin("getrs", std::string_view(word));
         EXPECT_THROW(this->run(p), std::invalid_argument) << word;
@@ -630,13 +632,13 @@ TYPED_TEST(GetrsCandidates, HeterogeneousBatchHasNoNativeRoute) {
         }
         const ScopedEnvVar clear("BATCHLAS_GETRS_ROUTE", nullptr);
         if constexpr (!TestFixture::kVendor)
-            EXPECT_THROW(((void)getrs_buffer_size<B, T>(*this->ctx, k.a, k.b, Transpose::NoTrans)), dispatch::NoRouteError)
+            EXPECT_THROW(((void)getrs_buffer_size<B, T>(*this->ctx, k.a, k.b, Transpose::NoTrans)), batchlas::NoRouteError)
                 << k.what;
     }
 }
 
-// §5.3: the legacy spellings and the class words, via ScopedPin and via the environment.
-TYPED_TEST(GetrsCandidates, LegacyAliasesAndClassWords) {
+// §5.3: spellings (case-folded) and the class words, via ScopedPin and via the environment.
+TYPED_TEST(GetrsCandidates, ClassWordsAndSpellings) {
     using T = typename TestFixture::T;
     const ScopedEnvVar clear("BATCHLAS_GETRS_ROUTE", nullptr);
     const Spec s{40, 6, 4};  // the old router: vendor with a vendor, cta without
@@ -648,7 +650,7 @@ TYPED_TEST(GetrsCandidates, LegacyAliasesAndClassWords) {
     ASSERT_EQ(auto_pick, TestFixture::kVendor ? "vendor" : "cta");
     const std::string native_pick = "cta";
     const std::pair<const char*, std::string> expect[] = {
-        {"native:cta", "cta"}, {"native:blocked", "blocked"}, {"NATIVE:CTA", "cta"}, {"cta", "cta"},
+        {"CTA", "cta"}, {"cta", "cta"},
         {"Blocked", "blocked"}, {"vendor", TestFixture::kVendor ? "vendor" : auto_pick}, {"native", native_pick},
         {"auto", auto_pick}};
     for (const auto& [word, spelling] : expect)
@@ -785,7 +787,7 @@ TYPED_TEST(GetrsCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     auto child = [&] {
         const ScopedEnvVar cov("BATCHLAS_COVERAGE_OUT", out.c_str());
         const ScopedEnvVar clear("BATCHLAS_GETRS_ROUTE", nullptr);
-        dispatch::coverage::g_dynamic_enabled = true;
+        batchlas::coverage::g_dynamic_enabled = true;
         {
             auto p = make_sys<T>(lo);
             this->run_pinned(C{gs::Cta{}}, p);
@@ -843,10 +845,10 @@ TYPED_TEST(GetrsCandidatesCpu, CpuQueueRunsNoNativeFamily) {
         EXPECT_THROW(((void)getrs_buffer_size<B, T>(*this->ctx, A, Bm, Transpose::NoTrans)), std::invalid_argument)
             << select::to_string(c);
     }
-    if constexpr (dispatch::factorization_vendor_available<B>)
+    if constexpr (batchlas::select::factorization_vendor_available<B>)
         EXPECT_NO_THROW(((void)getrs_buffer_size<B, T>(*this->ctx, A, Bm, Transpose::NoTrans)));
     else
-        EXPECT_THROW(((void)getrs_buffer_size<B, T>(*this->ctx, A, Bm, Transpose::NoTrans)), dispatch::NoRouteError);
+        EXPECT_THROW(((void)getrs_buffer_size<B, T>(*this->ctx, A, Bm, Transpose::NoTrans)), batchlas::NoRouteError);
 }
 
 // The transcribed rows, read with Table::nearest directly so every machine checks them: for

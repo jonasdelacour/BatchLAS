@@ -6,9 +6,9 @@
 
 #include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/blas/functions/trsm.hh>
-#include <batchlas/blas/dispatch/coverage.hh>
-#include <batchlas/blas/dispatch/no_route.hh>
-#include <batchlas/blas/dispatch/vendor_available.hh>
+#include "../src/select/coverage.hh"
+#include <batchlas/no_route.hh>
+#include "../src/select/vendor.hh"
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
@@ -316,7 +316,7 @@ protected:
     using T = typename Config::ScalarType;
     using MV = MatrixView<T, MatrixFormat::Dense>;
     static constexpr Backend B = Config::BackendVal;
-    static constexpr bool kVendor = dispatch::level3_vendor_available<B>;
+    static constexpr bool kVendor = batchlas::select::level3_vendor_available<B>;
 
     void SetUp() override {
         test_utils::BatchLASTest<Config>::SetUp();
@@ -616,7 +616,9 @@ TYPED_TEST(TrsmCandidates, BatchMismatchThrows) {
 TYPED_TEST(TrsmCandidates, UnknownPinsThrow) {
     using T = typename TestFixture::T;
     for (const char* word : {"bogus", "cta:1", "blocked:outer=64", "native:sg_left", "sg-left", "native:vendor",
-                             "native:cta:8", "v1"}) {
+                             "native:cta:8", "v1",
+                             // removed aliases (phase 5): each must stay an error
+                             "native:cta", "native:blocked"}) {
         auto p = make_solve<T>(Spec{});
         const Pin pin("trsm", std::string_view(word));
         EXPECT_THROW(this->run(p), std::invalid_argument) << word;
@@ -718,14 +720,14 @@ TYPED_TEST(TrsmCandidates, HeterogeneousBatchHasNoNativeRoute) {
             this->ctx->wait();
         };
         if constexpr (TestFixture::kVendor) EXPECT_EQ(traced_choice(call), "vendor") << k.what;
-        else EXPECT_THROW(call(), dispatch::NoRouteError) << k.what;
+        else EXPECT_THROW(call(), batchlas::NoRouteError) << k.what;
     }
 }
 
-// §5.3: the legacy spellings and the class words, via ScopedPin and via the environment.
+// §5.3: spellings (case-folded) and the class words, via ScopedPin and via the environment.
 // Bare `native` is the row's best runnable non-vendor; bare `vendor` falls back to Auto
 // (with the warning) where there is no vendor.
-TYPED_TEST(TrsmCandidates, LegacyAliasesAndClassWords) {
+TYPED_TEST(TrsmCandidates, ClassWordsAndSpellings) {
     using T = typename TestFixture::T;
     const ScopedEnvVar clear("BATCHLAS_TRSM_ROUTE", nullptr);
     const Spec s16{Side::Left, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, 16, 4, 4};
@@ -739,7 +741,7 @@ TYPED_TEST(TrsmCandidates, LegacyAliasesAndClassWords) {
     const std::string vendor_pick = TestFixture::kVendor ? "vendor" : auto_pick;
     const std::string native_pick = auto_pick == "vendor" ? "cta" : auto_pick;
     const std::pair<const char*, std::string> expect[] = {
-        {"native:cta", "cta"}, {"native:blocked", "blocked"}, {"NATIVE:CTA", "cta"}, {"cta", "cta"},
+        {"CTA", "cta"}, {"cta", "cta"},
         {"sg_left", "sg_left"}, {"Blocked", "blocked"},       {"vendor", vendor_pick}, {"native", native_pick},
         {"auto", auto_pick}};
     for (const auto& [word, spelling] : expect) {
@@ -925,7 +927,7 @@ TYPED_TEST(TrsmCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     auto child = [&] {
         const ScopedEnvVar cov("BATCHLAS_COVERAGE_OUT", out.c_str());
         const ScopedEnvVar clear("BATCHLAS_TRSM_ROUTE", nullptr);
-        dispatch::coverage::g_dynamic_enabled = true;
+        batchlas::coverage::g_dynamic_enabled = true;
         {
             const Pin pin("trsm", C{ts::Cta{}});
             auto p = make_solve<T>(lo);
@@ -996,11 +998,11 @@ TYPED_TEST(TrsmCandidatesCpu, CpuQueueRunsNoNativeFamily) {
         (void)trsm<B, T>(*this->ctx, p.A(), p.B(), p.alpha, s.side, s.uplo, s.trans, s.diag);
         this->ctx->wait();
     };
-    if constexpr (dispatch::level3_vendor_available<B>) {
+    if constexpr (batchlas::select::level3_vendor_available<B>) {
         EXPECT_EQ(traced_choice(call), "vendor");
         expect_solved(p, "cpu vendor");
     } else {
-        EXPECT_THROW(call(), dispatch::NoRouteError);
+        EXPECT_THROW(call(), batchlas::NoRouteError);
     }
 }
 

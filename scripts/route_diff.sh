@@ -60,8 +60,8 @@ capture() {
     local reached
     reached=$(grep -c '^reached,' "$raw" || true)
     [[ "$reached" -gt 0 ]] || die "coverage file has 0 'reached' rows.
-        The dynamic half is not recording. Check that resolve_route still calls
-        coverage::record_if_enabled, and that coverage.cc's g_dynamic_enabled
+        The dynamic half is not recording. Check that select::TraceScope still
+        calls coverage::record_choice, and that coverage.cc's g_dynamic_enabled
         initialiser saw BATCHLAS_COVERAGE_OUT."
 
     # Normalise for comparison: keep only the routing decision, drop the call

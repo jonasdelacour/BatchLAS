@@ -7,8 +7,8 @@
 #include <batchlas/blas/functions/gesv.hh>
 #include <batchlas/blas/functions/getrf.hh>
 #include <batchlas/blas/functions/getrs.hh>
-#include <batchlas/blas/dispatch/no_route.hh>
-#include <batchlas/blas/dispatch/vendor_available.hh>
+#include <batchlas/no_route.hh>
+#include "../src/select/vendor.hh"
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
@@ -239,7 +239,7 @@ protected:
         try {
             (void)gesv_buffer_size<B, T>(*this->ctx, A, Bm);
             return true;
-        } catch (const dispatch::NoRouteError&) {
+        } catch (const batchlas::NoRouteError&) {
             return true;  // a child (getrf/getrs) without a route: the gesv pin itself was taken
         } catch (const std::invalid_argument& e) {
             if (std::string(e.what()).find("cannot run this shape") == std::string::npos) throw;
@@ -300,7 +300,7 @@ protected:
         }
     }
     // The vendor-free build may have no getrf/getrs route for a child shape.
-    static bool child_may_lack_route() { return !dispatch::factorization_vendor_available<B>; }
+    static bool child_may_lack_route() { return !batchlas::select::factorization_vendor_available<B>; }
 
     static std::string name(const C& c, int n, int nrhs) {
         return select::to_string(c) + " n=" + std::to_string(n) + " nrhs=" + std::to_string(nrhs);
@@ -340,7 +340,7 @@ TYPED_TEST(GesvCandidates, PinnedCandidatesStraddleTheirLimits) {
                 try {
                     expect_solved(p, this->run_pinned(c, p), what);
                     ++ran;
-                } catch (const dispatch::NoRouteError& e) {
+                } catch (const batchlas::NoRouteError& e) {
                     if (!this->child_may_lack_route()) ADD_FAILURE() << what << ": " << e.what();
                 }
             }
@@ -364,7 +364,7 @@ TYPED_TEST(GesvCandidates, PinnedRunIsTheDirectKernelBitForBit) {
             std::vector<int32_t> info;
             try {
                 info = this->run_pinned(c, pinned);
-            } catch (const dispatch::NoRouteError&) {
+            } catch (const batchlas::NoRouteError&) {
                 if (this->child_may_lack_route()) continue;
                 throw;
             }
@@ -397,7 +397,7 @@ TYPED_TEST(GesvCandidates, SaturatingBatchIsBitIdentical) {
         std::vector<int32_t> info;
         try {
             info = this->run_pinned(k.c, p);
-        } catch (const dispatch::NoRouteError&) {
+        } catch (const batchlas::NoRouteError&) {
             if (this->child_may_lack_route()) continue;
             throw;
         }
@@ -504,7 +504,7 @@ TYPED_TEST(GesvCandidates, ExactWorkspaceInAPoisonedArena) {
                 std::size_t bytes = 0;
                 try {
                     bytes = gesv_buffer_size<B, T>(*this->ctx, p.A(), p.B());
-                } catch (const dispatch::NoRouteError&) {
+                } catch (const batchlas::NoRouteError&) {
                     if (this->child_may_lack_route()) continue;
                     throw;
                 }
@@ -535,7 +535,9 @@ TYPED_TEST(GesvCandidates, UnknownPinsThrow) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
     Matrix<T, MatrixFormat::Dense> A(8, 8, 2), Bm(8, 2, 2);
-    for (const char* word : {"bogus", "tiny:1", "cta", "native:cta", "composed", "native:tiny:4"}) {
+    for (const char* word : {"bogus", "tiny:1", "cta", "native:cta", "composed", "native:tiny:4",
+                             // removed aliases (phase 5): each must stay an error
+                             "native:tiny", "native:blocked"}) {
         const Pin pin("gesv", std::string_view(word));
         EXPECT_THROW(((void)gesv_buffer_size<B, T>(*this->ctx, A.view(), Bm.view())), std::invalid_argument) << word;
     }
@@ -563,10 +565,10 @@ TYPED_TEST(GesvCandidates, CanRunFalsePinsThrow) {
     }
 }
 
-// §5.3: the legacy spellings select their choice, via ScopedPin and via the environment. gesv
+// §5.3: spellings (case-folded) and the class words select their choice, via ScopedPin and via the environment. gesv
 // has no vendor family, so bare `vendor` warns and runs Auto; bare `native` is Auto's pick.
 // float n=16 is inside every transcribed window except double/cdouble's, so Auto differs by type.
-TYPED_TEST(GesvCandidates, LegacyAliasesSelectTheirChoice) {
+TYPED_TEST(GesvCandidates, ClassWordsAndSpellings) {
     using T = typename TestFixture::T;
     const ScopedEnvVar clear("BATCHLAS_GESV_ROUTE", nullptr);
     std::string auto_pick;
@@ -577,7 +579,7 @@ TYPED_TEST(GesvCandidates, LegacyAliasesSelectTheirChoice) {
     const bool window = std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>;
     ASSERT_EQ(auto_pick, window ? "tiny" : "blocked") << "the transcribed tables at n=16 nrhs=2";
     const std::pair<const char*, const char*> expect[] = {
-        {"native:tiny", "tiny"}, {"native:blocked", "blocked"}, {"NATIVE:BLOCKED", "blocked"}, {"tiny", "tiny"},
+        {"BLOCKED", "blocked"}, {"tiny", "tiny"},
         {"Blocked", "blocked"},  {"vendor", auto_pick.c_str()}, {"native", auto_pick.c_str()},
         {"auto", auto_pick.c_str()}};
     for (const auto& [word, spelling] : expect) {
@@ -666,7 +668,7 @@ TYPED_TEST(GesvCandidates, AutoReadsTheTranscribedTables) {
         try {
             EXPECT_EQ(traced_choice([&] { info = this->run_auto(p); }), r.expect) << what;
             expect_solved(p, info, what);
-        } catch (const dispatch::NoRouteError& e) {
+        } catch (const batchlas::NoRouteError& e) {
             if (!this->child_may_lack_route()) ADD_FAILURE() << what << ": " << e.what();
         }
         ++checked;
@@ -716,7 +718,7 @@ TYPED_TEST(GesvCandidates, CoverageRowCarriesNativeFlags) {
     auto child = [&] {
         const ScopedEnvVar cov("BATCHLAS_COVERAGE_OUT", out.c_str());
         const ScopedEnvVar clear("BATCHLAS_GESV_ROUTE", nullptr);
-        dispatch::coverage::g_dynamic_enabled = true;
+        batchlas::coverage::g_dynamic_enabled = true;
         auto lo = make_sys<T>(8, 2, 2, 51u);
         {
             const Pin pin("gesv", C{gs::Tiny{}});
@@ -817,7 +819,7 @@ TEST(GesvNetlib, TinyRefusedBlockedSolves) {
             EXPECT_NE(std::string(e.what()).find("cannot run this shape"), std::string::npos) << dev << e.what();
         }
         // Blocked's children need netlib LAPACKE, absent from a vendor-free build.
-        if (std::string(dev) != "cpu" || !dispatch::factorization_vendor_available<B>) continue;
+        if (std::string(dev) != "cpu" || !batchlas::select::factorization_vendor_available<B>) continue;
 #if BATCHLAS_HAS_CPU_TARGET
         auto p = make_sys<T>(8, 2, 3, 71u);
         std::vector<int32_t> info(p.batch, -7);

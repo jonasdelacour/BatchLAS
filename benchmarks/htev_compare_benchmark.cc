@@ -1,19 +1,12 @@
 // htev_compare_benchmark.cc
 //
-// Head-to-head benchmark: BatchLAS STEQR and STEDC vs cuSolverDx HTEV
-// for batched tridiagonal eigenvalue decomposition.
-//
-// All three solvers use the same SteqrBenchSizes grid so their output columns
-// are directly comparable when plotted together.
+// Head-to-head benchmark: BatchLAS STEQR vs STEDC for batched tridiagonal
+// eigenvalue decomposition, on one grid so the columns are directly comparable.
 
 #include <batchlas/util/minibench.hh>
 #include <batchlas/blas/linalg.hh>
 #include "bench_utils.hh"
 #include <batchlas/backend_config.h>
-
-#if BATCHLAS_HAS_CUDA_BACKEND
-#include "../src/backends/cusolverdx.hh"
-#endif
 
 using namespace batchlas;
 
@@ -116,54 +109,11 @@ static void BM_HTEV_STEDC(minibench::State& state) {
     state.SetMetric("Time (µs) / matrix", (1.0 / static_cast<double>(batch)) * 1e6, minibench::Reciprocal);
 }
 
-// ── cuSolverDx HTEV ──────────────────────────────────────────────────────────
-
-template <typename T, Backend B>
-static void BM_HTEV_DX(minibench::State& state) {
-#if BATCHLAS_HAS_CUDA_BACKEND
-    const size_t n     = state.range(0);
-    const size_t batch = state.range(1);
-
-    auto q         = std::make_shared<Queue>(Device("gpu"), B);
-    auto diags     = Vector<T>::random(static_cast<int>(n), static_cast<int>(batch));
-    auto off_diags = Vector<T>::random(static_cast<int>(n - 1), static_cast<int>(batch));
-    auto eigvals   = Vector<T>::zeros(static_cast<int>(n), static_cast<int>(batch));
-    auto eigvects  = Matrix<T>::Identity(static_cast<int>(n), static_cast<int>(batch));
-
-    const size_t ws_size = backend::cusolverdx::htev_buffer_size<T>(
-        *q,
-        static_cast<VectorView<T>>(diags),
-        static_cast<VectorView<T>>(off_diags),
-        JobType::EigenVectors,
-        Uplo::Lower);
-    UnifiedVector<std::byte> workspace(ws_size);
-
-    state.SetKernel(q,
-                    bench::pristine(diags),
-                    bench::pristine(off_diags),
-                    std::move(eigvals),
-                    JobType::EigenVectors,
-                    bench::pristine(eigvects),
-                    std::move(workspace),
-                    Uplo::Lower,
-                    [](Queue& q_ref, auto&&... xs) {
-                        (void)backend::cusolverdx::htev<T>(q_ref, std::forward<decltype(xs)>(xs)...);
-                    });
-
-    state.SetMetric("Time (µs) / matrix", (1.0 / static_cast<double>(batch)) * 1e6, minibench::Reciprocal);
-#else
-    static_cast<void>(state);
-    static_cast<void>(B);
-#endif
-}
-
 // ── Registration ─────────────────────────────────────────────────────────────
 
 #if BATCHLAS_HAS_CUDA_BACKEND
 BATCHLAS_BENCH_CUDA(BM_HTEV_STEQR, HtevDxCompareBenchSizes)
 BATCHLAS_BENCH_CUDA(BM_HTEV_STEDC, HtevDxCompareBenchSizes)
-MINI_BENCHMARK_REGISTER_SIZES((BM_HTEV_DX<float,  batchlas::Backend::CUDA>), HtevDxCompareBenchSizes);
-MINI_BENCHMARK_REGISTER_SIZES((BM_HTEV_DX<double, batchlas::Backend::CUDA>), HtevDxCompareBenchSizes);
 #endif
 
 #if BATCHLAS_HAS_ROCM_BACKEND

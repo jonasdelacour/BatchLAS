@@ -23,14 +23,8 @@ constexpr auto candidates() {
     return std::array<GetrfChoice, 4>{Tiny{}, Cta{}, Blocked{}, Vendor{}};
 }
 
-inline constexpr std::array<select::Alias, 3> aliases{{  // legacy spellings until phase 5
-    {"native:tiny", "tiny"},
-    {"native:cta", "cta"},
-    {"native:blocked", "blocked"},
-}};
-// Generality order (§5.5): Blocked runs every square GPU shape, Vendor everything else (CPU).
 inline constexpr std::array<std::string_view, 2> last_resort{"blocked", "vendor"};
-inline constexpr select::Rules rules{aliases, last_resort};
+inline constexpr select::Rules rules{last_resort};  // §5.5: Blocked runs every square GPU shape, Vendor everything else (CPU).
 
 inline constexpr std::array<std::string_view, 2> key_names{"n:log:3", "batch:log"};  // work ~ n^3 batch
 

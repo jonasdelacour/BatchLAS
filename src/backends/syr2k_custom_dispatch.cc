@@ -6,15 +6,6 @@
 #include "level3_fused.hh"
 #include "level3_vendor_fallback.hh"
 
-// WP1 S2: the expansions' terminal GEMM is the PUBLIC entry point, not
-// gemm_cublasdx. Vendor-free by inspection -- gemm.hh reaches only
-// sycl-device-queue.hh, sycl-span.hh, matrix.hh, enums.hh and
-// queue-dispatch.hh.
-#include <batchlas/blas/functions/gemm.hh>
-
-#include <batchlas/blas/dispatch/route.hh>
-#include <batchlas/blas/dispatch/route_env.hh>
-
 #include "../util/kernel-trace.hh"
 
 #include <cctype>
@@ -26,22 +17,13 @@ namespace batchlas::backend {
 
 namespace {
 
-// BATCHLAS_SYR2K_VARIANT selects a route. The custom routes are named
-// separately so each stays independently measurable and testable: `triangular`
-// is the tile-masked kernel that computes only the requested half of C,
-// `cublasdx` the fused kernel, and `gemm` the pair of full n x n batched GEMMs
-// the triangular route replaces.
-//
-// `gemm` computes and stores both triangles, which is not what SYR2K means: the
-// half the caller did not name is the caller's storage. It exists to measure
-// what the triangular route saves, and the automatic choice never selects it --
-// reaching it takes naming it here.
-// The private Syr2kRoute enum is gone; see the note in syrk_custom_dispatch.cc.
-// Legacy spellings are unchanged and pinned by tests/route_vocabulary_tests.cc.
-dispatch::Route syr2k_route_request() {
-    const auto parsed = dispatch::parse_route_env(dispatch::Op::syr2k);
-    return parsed.found ? parsed.route
-                        : dispatch::legacy_unset_default(dispatch::Op::syr2k);
+// BATCHLAS_SYR2K_ROUTE: vendor; triangular or native, the tile-masked kernel that
+// computes only the requested half of C; cublasdx, the fused MathDx kernel (throws
+// when it cannot run).
+detail::Level3Pin syr2k_pin() {
+    using detail::Level3Pin;
+    return detail::level3_pin("syr2k", {Level3Pin::Native, Level3Pin::Vendor, Level3Pin::Triangular,
+                                        Level3Pin::Cublasdx});
 }
 
 bool syr2k_problem_supported(const MatrixView<float, MatrixFormat::Dense>& A,
@@ -96,35 +78,10 @@ bool syr2k_prefer_triangular_tiles(const MatrixView<float, MatrixFormat::Dense>&
     return A.batch_size() >= 2;
 }
 
-Event syr2k_cublasdx_fallback_gemm(Queue& ctx,
-                                   const MatrixView<float, MatrixFormat::Dense>& A,
-                                   const MatrixView<float, MatrixFormat::Dense>& B,
-                                   const MatrixView<float, MatrixFormat::Dense>& C,
-                                   float alpha,
-                                   float beta,
-                                   Transpose transA) {
-    const Transpose transB = transA == Transpose::NoTrans ? Transpose::Trans : Transpose::NoTrans;
-    BATCHLAS_KERNEL_TRACE_SCOPE("syr2k_cuda_custom.gemm_fallback");
-
-    // The second product accumulates into the C the first one wrote, so the two
-    // have to be ordered. An in-order queue already orders them: both run on
-    // its native stream. An out-of-order queue orders nothing across the
-    // SYCL/native boundary, so there the first has to be waited out.
-    Event first = ::batchlas::gemm<Backend::CUDA, float>(ctx, A, B, C, alpha, beta, transA, transB, ComputePrecision::Default);
-    if (!ctx.in_order()) {
-        first.wait();
-    }
-    return ::batchlas::gemm<Backend::CUDA, float>(ctx, B, A, C, alpha, 1.0f, transA, transB, ComputePrecision::Default);
-}
-
-[[noreturn]] void throw_forced_syr2k_unavailable(const std::string& reason) {
-    detail::throw_forced_cublasdx_unavailable("BATCHLAS_SYR2K_VARIANT", "SYR2K", reason);
-}
-
 } // namespace
 
 bool syr2k_cuda_custom_forced() {
-    return syr2k_route_request().algo == dispatch::Algorithm::FusedDevice;
+    return syr2k_pin() == detail::Level3Pin::Cublasdx;
 }
 
 bool syr2k_use_cuda_custom(const Queue& ctx,
@@ -133,11 +90,12 @@ bool syr2k_use_cuda_custom(const Queue& ctx,
                            const MatrixView<float, MatrixFormat::Dense>& C,
                            Uplo,
                            Transpose transA) {
-    const auto route = syr2k_route_request();
-    if (route.origin != dispatch::Origin::Auto && !dispatch::is_plain_vendor(route)) {
+    using detail::Level3Pin;
+    const Level3Pin pin = syr2k_pin();
+    if (pin != Level3Pin::Auto && pin != Level3Pin::Vendor) {
         return true;
     }
-    if (dispatch::is_plain_vendor(route) || !detail::is_gpu_queue(ctx) ||
+    if (pin == Level3Pin::Vendor || !detail::is_gpu_queue(ctx) ||
         !syr2k_problem_supported(A, B, C, transA) || !syr2k_triangular_supported(A, B, C)) {
         return false;
     }
@@ -155,72 +113,57 @@ Event syr2k_cuda_custom(Queue& ctx,
                         float beta,
                         Uplo uplo,
                         Transpose transA) {
-    // WP1 S0 instrumentation -- beside every return, never in place of one, and
-    // inert unless BATCHLAS_COVERAGE_OUT is set. See level3_coverage.hh.
-    const auto rec = [&](dispatch::Route taken, bool native_supported) {
-        detail::record_level3_route(dispatch::Op::syr2k, taken,
+    const auto rec = [&](const char* taken, bool native_supported) {
+        detail::record_level3_route(Op::syr2k, taken,
                                     C.rows(), C.cols(),
                                     transA == Transpose::NoTrans ? A.cols() : A.rows(),
                                     A.batch_size(), native_supported,
                                     {uplo, Side::Left, Diag::NonUnit, transA});
     };
 
-    const auto route = syr2k_route_request();
-    const bool forced = route.algo == dispatch::Algorithm::FusedDevice;
+    using detail::Level3Pin;
+    const Level3Pin pin = syr2k_pin();
+    const bool forced = pin == Level3Pin::Cublasdx;
     if (!detail::is_gpu_queue(ctx)) {
         if (forced) {
-            throw_forced_syr2k_unavailable("the active queue is not a GPU queue");
+            detail::throw_forced_cublasdx_unavailable("syr2k", "the active queue is not a GPU queue");
         }
-        rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto}, false);
+        rec("vendor", false);
         return detail::syr2k_vendor_fallback(ctx, A, B, C, alpha, beta, uplo, transA);
     }
     if (!syr2k_problem_supported(A, B, C, transA)) {
         if (forced) {
-            throw_forced_syr2k_unavailable("the problem shape or transpose mode is unsupported");
+            detail::throw_forced_cublasdx_unavailable("syr2k", "the problem shape or transpose mode is unsupported");
         }
-        rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto}, false);
+        rec("vendor", false);
         return detail::syr2k_vendor_fallback(ctx, A, B, C, alpha, beta, uplo, transA);
     }
 
-    if (route.algo == dispatch::Algorithm::DiagFullGemm) {
-        rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::DiagFullGemm}, true);
-        return syr2k_cublasdx_fallback_gemm(ctx, A, B, C, alpha, beta, transA);
-    }
-    if (route.algo == dispatch::Algorithm::TriangularTiles ||
-        route.origin == dispatch::Origin::Auto) {
+    if (!forced) {
         if (syr2k_triangular_supported(A, B, C)) {
-            rec(dispatch::Route{dispatch::Origin::Native, dispatch::Algorithm::TriangularTiles}, true);
+            rec("triangular", true);
             return detail::syr2k_triangular_tiles(ctx, A, B, C, alpha, beta, uplo, transA);
         }
-        rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto}, false);
+        if (pin == Level3Pin::Triangular) {
+            throw std::invalid_argument("syr2k: BATCHLAS_SYR2K_ROUTE=triangular cannot run a heterogeneous batch");
+        }
+        rec("vendor", false);
         return detail::syr2k_vendor_fallback(ctx, A, B, C, alpha, beta, uplo, transA);
     }
 
-    // The fused tail lives in level3_fused_cuda.cc now (WP1 S3). syr2k is the
-    // op that does NOT fall back on NoKernel -- it throws, and the throw is not
-    // guarded by `forced`, so a non-fused named route reaching here gets a
-    // cuBLASDx message it did not ask for. Pre-existing; preserved exactly
-    // rather than quietly improved, and recorded in docs/perf/level3.md.
+    // There is no uplo-respecting fallback for a fused kernel that did not run, so a
+    // cublasdx pin it cannot serve throws rather than overwrite the caller's triangle.
     auto fused = detail::syr2k_fused_try(ctx, A, B, C, alpha, beta, uplo, transA);
     if (fused.outcome == detail::FusedResult::Outcome::Ran) {
-        rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::FusedDevice}, true);
+        rec("cublasdx", true);
         return std::move(fused.event);
     }
     if (fused.outcome == detail::FusedResult::Outcome::NoKernel) {
-        throw_forced_syr2k_unavailable("no compatible fused kernel is available in this build for the requested problem");
+        detail::throw_forced_cublasdx_unavailable(
+            "syr2k", "no compatible fused kernel is available in this build for the requested problem");
     }
-
-    // DeviceUnsupported only: the kernel existed but the device refused it.
-    //
-    // This must NOT fall back to syr2k_cublasdx_fallback_gemm. That routine takes
-    // no uplo and writes BOTH triangles of C (see its header), which is not what
-    // SYR2K means -- it is reachable only by naming Algorithm::DiagFullGemm above,
-    // as a deliberate opt-in. Reaching it from a refusal the caller did not ask
-    // for silently overwrites the triangle the caller owns, and every level-3 test
-    // uses a single uplo per call, so nothing would catch it. Throw, as before.
-    throw_forced_syr2k_unavailable(
-        "the fused kernel exists but this device refused to launch it; "
-        "no uplo-respecting fused fallback exists, so the request cannot be served");
+    detail::throw_forced_cublasdx_unavailable(
+        "syr2k", "the fused kernel exists but this device refused to launch it");
 }
 
 } // namespace batchlas::backend

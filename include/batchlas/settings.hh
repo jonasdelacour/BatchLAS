@@ -41,14 +41,9 @@
 #include <array>
 #include <cstddef>
 #include <optional>
+#include <stdexcept>
 #include <string>
-
-// For batchlas::dispatch::Op, which keys the per-op route arrays. route.hh is
-// enums plus <string>, no SYCL: this header is INSTALLED and must stay out of
-// <sycl/sycl.hpp>'s way. See the note at the top of blas/linalg.hh -- pulling
-// SYCL into a public header costs ~4.1 s per consumer translation unit, and
-// route_env.hh (which will include this one) is reached by every device TU.
-#include <batchlas/blas/dispatch/route.hh>
+#include <string_view>
 
 namespace batchlas {
 
@@ -57,8 +52,8 @@ namespace batchlas {
 // The distinction between "unset" and "set to the empty string" is load-bearing
 // at several sites: kernel-trace.hh falls through from BATCHLAS_KERNEL_TRACE_PATH
 // to BATCHLAS_TRACE_PATH only when the first is set-but-empty, and
-// parse_route_env treats a set-but-empty canonical route variable as absent so
-// the legacy spelling still gets a turn. A std::optional<std::string> would
+// the route pin reader treats a set-but-empty BATCHLAS_<OP>_ROUTE as unset. A
+// std::optional<std::string> would
 // carry that too; this type exists to also hand back a const char* so the
 // migrated call site keeps the parser it already has.
 class EnvValue {
@@ -97,48 +92,36 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-// routing -- the route vocabulary, BATCHLAS_<OP>_ROUTE and its legacy spellings.
+// routing -- BATCHLAS_<OP>_ROUTE, one raw string per op that selects a kernel.
 //
-// These are RAW STRINGS on purpose. dispatch::parse_route_env(Op) is the single
-// route parser: it handles three documented word collisions (legacy
-// BATCHLAS_GEMM_VARIANT=native selects the VENDOR path, the opposite of
-// canonical "native"; legacy `custom` means the fused cuBLASDx kernel for the
-// level-3 tile ops and the register-tiled family for gemm; syrk/syr2k legacy
-// `gemm` selects a deliberately WRONG both-triangles baseline), and
-// tests/route_vocabulary_tests.cc pins every one of them. Nothing here
-// reimplements any of that -- parse_route_env keeps its parsers and loses only
-// its two std::getenv calls.
+// RAW STRINGS on purpose: src/select parses them (auto | native | vendor | a choice
+// spelling such as lpanel:panel=8), and the level-3 ops (trmm, symm, syrk, syr2k)
+// parse their own word list. A value an op does not understand throws there.
 struct RoutingSettings {
-    // BATCHLAS_<OP>_ROUTE, indexed by dispatch::Op.
-    //
-    // FOUR SLOTS ARE INERT and will stay so until somebody wires them: hemm,
-    // herk, her2k and iluk have no parse_route_env call site anywhere in src/,
-    // include/, tests/ or benchmarks/ -- Op::hemm/herk/her2k appear only as
-    // coverage labels. op_env_stem() can spell BATCHLAS_HEMM_ROUTE, and this
-    // array will faithfully capture it, but no adapter reads it. The array is
-    // indexed by Op rather than listing 17 named fields precisely so that
-    // wiring one later is a one-line change at the adapter and not here; do not
-    // read "there is a slot" as "the variable works".
-    std::array<EnvValue, static_cast<std::size_t>(dispatch::Op::COUNT)> canonical{};
+    static constexpr std::array<std::string_view, 19> ops{
+        "gemm", "gemv", "trsm", "trmm", "symm", "syrk", "syr2k", "potrf", "posv", "getrf",
+        "getrs", "getri", "gesv", "geqrf", "orgqr", "ormqr", "syev", "gesvd", "spmm"};
 
-    // The legacy per-op spellings: BATCHLAS_{GEMM,SYMM,SYRK,SYR2K,TRMM}_VARIANT
-    // and BATCHLAS_{SYEV,GESVD,ORMQR}_PROVIDER. Benchmark scripts and recorded
-    // results use them, so they must keep working. The canonical spelling wins
-    // when both are set (pinned: RouteVocabulary.CanonicalSpellingWinsOverLegacy).
-    //
-    // NOTE: legacy[Op::gemm] is BATCHLAS_GEMM_VARIANT. gemm itself reads it
-    // through select::detail::pin_text, only when BATCHLAS_GEMM_ROUTE is unset, mapping
-    // its words with choice.hh's legacy_aliases (its `native` meant the raw
-    // vendor call, so it pins `vendor`; `sycl`/`custom` pin the native family).
-    // Unset, gemm is Auto: the tuned table picks.
-    std::array<EnvValue, static_cast<std::size_t>(dispatch::Op::COUNT)> legacy{};
+    // BATCHLAS_<OP>_ROUTE, in `ops` order.
+    std::array<EnvValue, ops.size()> values{};
 
-    const EnvValue& canonical_route(dispatch::Op op) const {
-        return canonical[static_cast<std::size_t>(op)];
+    // ops.size() when `op` reads no route variable.
+    static constexpr std::size_t index_of(std::string_view op) {
+        for (std::size_t i = 0; i < ops.size(); ++i)
+            if (ops[i] == op) return i;
+        return ops.size();
     }
 
-    const EnvValue& legacy_route(dispatch::Op op) const {
-        return legacy[static_cast<std::size_t>(op)];
+    // Throws std::invalid_argument for an op not in `ops`.
+    const EnvValue& route(std::string_view op) const { return values[checked(op)]; }
+    EnvValue& route(std::string_view op) { return values[checked(op)]; }
+
+private:
+    static std::size_t checked(std::string_view op) {
+        const std::size_t i = index_of(op);
+        if (i == ops.size())
+            throw std::invalid_argument("batchlas: no BATCHLAS_<OP>_ROUTE for op '" + std::string(op) + "'");
+        return i;
     }
 };
 
@@ -157,7 +140,7 @@ struct SelectionSettings {
     // a test can reach the arm the shape would not have picked. Read at two
     // sites (src/expansion_budget.hh and src/backends/triangular_expand.hh) with
     // two independent parsers that currently agree; both now read this one
-    // field. Not op-keyed, so parse_route_env never sees it.
+    // field. Not op-keyed, so RoutingSettings does not hold it.
     EnvValue expand_route{};
 
     // BATCHLAS_GEMM_CUBLASDX_KERNEL. Read only by the level-3 cuBLASDx paths
@@ -166,11 +149,6 @@ struct SelectionSettings {
     // Two reads in one file, one asking "is it set" and one asking "what does it
     // say"; both now read this field, so they cannot see different answers.
     EnvValue gemm_cublasdx_kernel{};
-
-    // BATCHLAS_GEMM_SYCL_KERNEL. Retired: it no longer selects a kernel. Its names are
-    // BATCHLAS_GEMM_ROUTE aliases (src/ops/gemm/choice.hh), and a set value makes
-    // gemm throw rather than be silently ignored by an old script.
-    EnvValue gemm_sycl_kernel{};
 
     // BATCHLAS_GEMV_SEGT = off | auto | 2 | 4 | 8. Segmented-tail width for the
     // native gemv. Its call site carries an explicit prohibition on latching the
@@ -241,11 +219,6 @@ struct SelectionSettings {
     // when kd > 32 or the device lacks sub_group_size 32, so the three states
     // are genuinely distinct and a bool would lose one.
     EnvValue sb2st_subgroup{};
-
-    // BATCHLAS_SYEV_SMALL_KERNEL = cta | fused | cta_fused | jacobi. Its parser
-    // returns a `forced` out-parameter so the caller can tell "set to cta" from
-    // "unset"; is_set() is what preserves that distinction.
-    EnvValue syev_small_kernel{};
 
     // BATCHLAS_SYEV_TWO_STAGE_CHASE. Only the exact value "givens" has an
     // effect. Read by BOTH the solve and its *_buffer_size query in two callers,
@@ -411,13 +384,6 @@ struct GeometrySettings {
     // clamped to 0..1024. A plain int cannot represent that. Stacks above
     // tune.sy2sb_ormqr_nb.
     EnvValue sy2sb_ormqr_nb{};
-
-    // BATCHLAS_SYEV_CTA_MAX_N -- RAW. Its parser is strtol with an explicit
-    // reject outside 0..32, and its default is TYPE-DEPENDENT (24 for
-    // complex<double>, 32 otherwise). 32 means "off"; lowering it speeds up
-    // LOBPCG's projected solve but flips a marginal case in
-    // ILUKTests.SyevxInstrumentationAndPreconditioner, which is why it is opt-in.
-    EnvValue syev_cta_max_n{};
 
     // BATCHLAS_SYTRD_BLOCK_SIZE. 0 = unset. The default is both n-bucketed and
     // type-dependent (with a complex override for 256 < n <= 512 that

@@ -51,7 +51,7 @@ namespace batchlas::backend {
 // DECLARATION ONLY. The public `gemv<Back, T>` used to be DEFINED inside each
 // vendor TU, so dropping a vendor library dropped the public entry point along
 // with the vendor path. WP0 S5 moves that definition to
-// src/dispatch/entry_points/level3.cc; what stays behind is the vendor
+// src/ops/gemv/gemv.cc; what stays behind is the vendor
 // implementation, named as such. Each vendor wrapper TU defines this primary
 // template for its own Backend value and instantiates it there.
 template <Backend B, typename T>

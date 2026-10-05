@@ -5,9 +5,9 @@ carve-out attribute is sticky per CUfunction, so an earlier launch in the same
 process can change whether a later one succeeds; and dispatch coverage is
 emitted at exit, so one process is exactly one coverage file. Unlike that
 script, coverage is on DURING the timed run rather than in a second untimed
-run: resolve_route records once per op invocation behind a predicted branch
-(coverage.hh), which is noise next to a batched LAPACK call, and it halves the
-process count.
+run: selection records once per op invocation behind a predicted branch
+(src/select/coverage.hh), which is noise next to a batched LAPACK call, and it
+halves the process count.
 """
 from __future__ import annotations
 

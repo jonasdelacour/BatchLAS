@@ -1,9 +1,7 @@
-#include <batchlas/blas/dispatch/coverage.hh>
+#include "coverage.hh"
 
-#include <batchlas/blas/dispatch/route_compiled.hh>
-#include <batchlas/blas/dispatch/vendor_available.hh>
+#include "vendor.hh"
 
-#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <mutex>
@@ -14,15 +12,9 @@
 #include <unistd.h>   // getpid; see emit()
 #include <batchlas/settings.hh>
 
-namespace batchlas::dispatch::coverage {
+namespace batchlas::coverage {
 
-// One definition in one TU, keyed on the same Settings field emit() reads.
-//
-// This runs at STATIC INIT, before main and therefore before any configure()
-// call could have replaced the snapshot. That is unchanged from the direct
-// environment read it replaces, which saw the same ambient state at the same
-// moment; settings() is documented safe to call from a static initialiser and
-// this is the call site that requires it.
+// Runs at static init, before any configure() call; settings() is safe there.
 bool g_dynamic_enabled = [] {
     const char* p = batchlas::settings().diagnostics.coverage_out.get();
     return p != nullptr && *p != '\0';
@@ -34,18 +26,17 @@ struct Row {
     Op op{};
     ScalarKind scalar{};
     Backend backend{};
-    OpShape shape{};
-    Route chosen{};
+    Shape shape{};
     bool native_existed = false;
     int  native_supported = 0;   // tri-state; -1 = call site could not tell
     uint64_t calls = 0;
-    std::string origin_text;     // record_choice rows: printed instead of `chosen`
-    std::string algo_text;
+    std::string origin;
+    std::string algo;
 };
 
 // Structural flags belong in the KEY; without them calls differing only in
 // `uplo` collapse into one row. evidence: docs/perf/dispatch.md#instrument-defects
-uint32_t variant_key(const OpShape& s) {
+uint32_t variant_key(const Shape& s) {
     return (static_cast<uint32_t>(s.uplo)   << 12) |
            (static_cast<uint32_t>(s.side)   <<  9) |
            (static_cast<uint32_t>(s.diag)   <<  6) |
@@ -53,8 +44,6 @@ uint32_t variant_key(const OpShape& s) {
            (static_cast<uint32_t>(s.transB));
 }
 
-// Keyed on shape_class, not the exact shape: it buckets max(m,n,k) and batch by
-// power of two, so a 10,000-iteration test collapses to a handful of rows.
 uint64_t key_of(Op op, ScalarKind s, Backend b, uint32_t shape_class,
                 uint32_t variant = 0) {
     return (static_cast<uint64_t>(op) << 56) | (static_cast<uint64_t>(s) << 48) |
@@ -63,21 +52,16 @@ uint64_t key_of(Op op, ScalarKind s, Backend b, uint32_t shape_class,
 }
 
 std::mutex& table_mutex() {
-    static auto* m = new std::mutex();  // leaked; see table()
+    static auto* m = new std::mutex();  // leaked; see choice_table()
     return *m;
 }
 
 // DELIBERATELY LEAKED: emit() runs from atexit, and a function-local static
 // constructed after the installer is destroyed before it runs -- which showed
 // up not as a crash but as an output file with no `miss` rows at all.
-std::unordered_map<uint64_t, Row>& table() {
-    static auto* t = new std::unordered_map<uint64_t, Row>();
-    return *t;
-}
-
 // Keyed by text too: one shape class can reach several spellings of one family.
 std::unordered_map<std::string, Row>& choice_table() {
-    static auto* t = new std::unordered_map<std::string, Row>();  // leaked; see table()
+    static auto* t = new std::unordered_map<std::string, Row>();
     return *t;
 }
 
@@ -90,7 +74,7 @@ struct MissRow {
 };
 
 std::unordered_map<uint64_t, MissRow>& misses() {
-    static auto* t = new std::unordered_map<uint64_t, MissRow>();  // leaked; see table()
+    static auto* t = new std::unordered_map<uint64_t, MissRow>();  // leaked; see choice_table()
     return *t;
 }
 
@@ -100,8 +84,6 @@ const char* backend_name(Backend b) {
         case Backend::ROCM:   return "ROCM";
         case Backend::NETLIB: return "NETLIB";
         case Backend::MKL:    return "MKL";
-        // Expected, not a defect: adapters that build an OpShape leave `backend`
-        // unset (it is a template parameter), so `reached` rows read AUTO.
         case Backend::AUTO:   return "AUTO";
         default:              return "?";
     }
@@ -117,8 +99,7 @@ void emit() {
     // appending tears lines under `ctest -j`. Merge with scripts/coverage_merge.sh.
     const std::string out = std::string(path) + "." + std::to_string(::getpid());
 
-    // FILE* and no SYCL object: this runs from atexit, where any SYCL handle is
-    // already a use-after-free risk.
+    // FILE* and no SYCL object: this runs from atexit.
     std::FILE* f = std::fopen(out.c_str(), "w");
     if (!f) {
         return;
@@ -129,11 +110,7 @@ void emit() {
                "native_route_supported,library,uplo,side,diag,transA,transB\n", f);
 
     std::lock_guard<std::mutex> lock(table_mutex());
-    auto print_reached = [f](const Row& r) {
-        const std::string origin =
-            r.origin_text.empty() ? std::string(to_string(r.chosen.origin)) : r.origin_text;
-        const std::string algo =
-            r.algo_text.empty() ? std::string(to_string(r.chosen.algo)) : r.algo_text;
+    for (const auto& [k, r] : choice_table()) {
         std::fprintf(f, "reached,%s,%s,%s,%u,%lld,%lld,%lld,%lld,%s,%s,%llu,%d,%d,,%d,%d,%d,%d,%d\n",
                      std::string(op_name(r.op)).c_str(),
                      std::string(to_string(r.scalar)).c_str(),
@@ -141,15 +118,13 @@ void emit() {
                      r.shape.shape_class(),
                      static_cast<long long>(r.shape.m), static_cast<long long>(r.shape.n),
                      static_cast<long long>(r.shape.k), static_cast<long long>(r.shape.batch),
-                     origin.c_str(), algo.c_str(),
+                     r.origin.c_str(), r.algo.c_str(),
                      static_cast<unsigned long long>(r.calls),
                      r.native_existed ? 1 : 0, r.native_supported,
                      static_cast<int>(r.shape.uplo), static_cast<int>(r.shape.side),
                      static_cast<int>(r.shape.diag), static_cast<int>(r.shape.transA),
                      static_cast<int>(r.shape.transB));
-    };
-    for (const auto& [k, r] : table()) print_reached(r);
-    for (const auto& [k, r] : choice_table()) print_reached(r);
+    }
     for (const auto& [k, m] : misses()) {
         std::fprintf(f, "miss,%s,%s,%s,,,,,,,,%llu,0,0,%s\n",
                      std::string(op_name(m.op)).c_str(),
@@ -168,8 +143,6 @@ struct AtExitInstaller {
 };
 AtExitInstaller installer;
 
-// --- the static half --------------------------------------------------------
-
 template <Backend B>
 void append_static_rows(std::ostringstream& out) {
     struct Entry {
@@ -181,34 +154,30 @@ void append_static_rows(std::ostringstream& out) {
     // it; the `reached` rows answer that. Float is reported because tile-route
     // availability is per (backend, scalar).
     // evidence: docs/perf/dispatch.md#the-coverage-instrument
+    using namespace batchlas::select;
     const bool tiles_f32 = level3_tile_route_available<B, float>;
     const Entry entries[] = {
         {"gemm",  level3_vendor_available<B>,        true},
         {"gemv",  level3_vendor_available<B>,        true},
-        // WP3 shipped trsm_native_cta and trsm_native_blocked, and
-        // trsm_blocked_available<T>() is true for all four scalar types, so by
-        // this column's own meaning -- is the kernel IN THIS BUILD -- the row was
-        // stale in the direction that makes the burn-down look worse than it is.
         {"trsm",  level3_vendor_available<B>,        true},
         {"trmm",  level3_vendor_available<B>,        tiles_f32},
-        // symm has no tile kernel; its portable path is the mirrored expansion
-        // (triangular_expand.hh) feeding a GEMM, which must itself be native.
+        // symm's portable path is the mirrored expansion feeding the public gemm.
         {"symm",  level3_vendor_available<B>,        tiles_f32},
         {"syrk",  level3_vendor_available<B>,        tiles_f32},
         {"syr2k", level3_vendor_available<B>,        tiles_f32},
         {"hemm",  level3_vendor_available<B>,        false},
         {"herk",  level3_vendor_available<B>,        false},
         {"her2k", level3_vendor_available<B>,        false},
-        {"geqrf", factorization_vendor_available<B>, true},   // geqrf_tiny + _cta + _blocked
-        {"orgqr", factorization_vendor_available<B>, true},   // orgqr_blocked (ormqr on I)
-        {"getrf", factorization_vendor_available<B>, true},   // getrf_tiny + _cta + _blocked
-        {"getrs", factorization_vendor_available<B>, true},   // getrs_native (laswp + 2 routed trsm)
-        {"getri", factorization_vendor_available<B>, true},   // getri_blocked (P into C + 2 routed trsm)
-        {"ormqr", factorization_vendor_available<B>, true},   // ormqr_blocked
-        {"potrf", solver_vendor_available<B>,        true},   // tiny + cta + lpanel + blocked
-        {"syev",  solver_vendor_available<B>,        true},   // cta/blocked/two_stage
-        {"gesvd", solver_vendor_available<B>,        true},   // jacobi/cta/blocked
-        {"spmm",  sparse_vendor_available<B>,        true},   // spmm_native_csr (gather + atomic scatter)
+        {"geqrf", factorization_vendor_available<B>, true},
+        {"orgqr", factorization_vendor_available<B>, true},
+        {"getrf", factorization_vendor_available<B>, true},
+        {"getrs", factorization_vendor_available<B>, true},
+        {"getri", factorization_vendor_available<B>, true},
+        {"ormqr", factorization_vendor_available<B>, true},
+        {"potrf", solver_vendor_available<B>,        true},
+        {"syev",  solver_vendor_available<B>,        true},
+        {"gesvd", solver_vendor_available<B>,        true},
+        {"spmm",  sparse_vendor_available<B>,        true},
     };
     for (const auto& e : entries) {
         out << "linked," << e.op << ",float,"
@@ -221,24 +190,7 @@ void append_static_rows(std::ostringstream& out) {
 
 } // namespace
 
-void record(Op op, ScalarKind scalar, Backend backend, const OpShape& shape,
-            Route chosen, bool native_existed, int native_supported) {
-    std::lock_guard<std::mutex> lock(table_mutex());
-    auto& row = table()[key_of(op, scalar, backend, shape.shape_class(),
-                               variant_key(shape))];
-    if (row.calls == 0) {
-        row.op = op;
-        row.scalar = scalar;
-        row.backend = backend;
-        row.shape = shape;
-        row.chosen = chosen;
-        row.native_existed = native_existed;
-        row.native_supported = native_supported;
-    }
-    ++row.calls;
-}
-
-void record_choice(Op op, ScalarKind scalar, Backend backend, const OpShape& shape,
+void record_choice(Op op, ScalarKind scalar, Backend backend, const Shape& shape,
                    const char* origin, const char* spelling, bool native_existed, int native_supported) {
     const std::string o = origin ? origin : "";
     const std::string a = spelling ? spelling : "";
@@ -253,8 +205,8 @@ void record_choice(Op op, ScalarKind scalar, Backend backend, const OpShape& sha
         row.shape = shape;
         row.native_existed = native_existed;
         row.native_supported = native_supported;
-        row.origin_text = o;
-        row.algo_text = a;
+        row.origin = o;
+        row.algo = a;
     }
     ++row.calls;
 }
@@ -285,4 +237,4 @@ std::string static_table() {
     return out.str();
 }
 
-} // namespace batchlas::dispatch::coverage
+} // namespace batchlas::coverage

@@ -21,13 +21,8 @@ constexpr auto candidates() {
     return std::array<OrmqrChoice, 2>{Blocked{}, Vendor{}};
 }
 
-inline constexpr std::array<select::Alias, 2> aliases{{  // legacy spellings until phase 5
-    {"native:blocked", "blocked"},
-    {"vendor:auto", "vendor"},
-}};
-// Generality order (§5.5): Blocked runs every GPU shape but complex Trans, Vendor the rest.
 inline constexpr std::array<std::string_view, 2> last_resort{"blocked", "vendor"};
-inline constexpr select::Rules rules{aliases, last_resort};
+inline constexpr select::Rules rules{last_resort};  // §5.5: Blocked runs every GPU shape but complex Trans, Vendor the rest.
 
 // m = order of Q, k = reflectors, q = C's other extent (work ~ m k q batch); T and C stay apart.
 inline constexpr std::array<std::string_view, 6> key_names{

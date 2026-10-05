@@ -134,8 +134,8 @@ when it is `ok` in all `passes` passes of that attempt. Gate mode writes `gate.<
 
 ## Gate mode (§10.3, plan §4)
 
-Cells come from `--old-csv` (columns `dtype`, every key name, `old`; legacy aliases such as
-`native:lpanel` are normalised; empty fields and `"..."` quoting are read, so a previous gate CSV
+Cells come from `--old-csv` (columns `dtype`, every key name, `old`; an old binary's `native:<algo>` and
+`vendor:auto` readbacks are normalised; empty fields and `"..."` quoting are read, so a previous gate CSV
 works; a row of the wrong width, an empty `old`, or a dtype outside an explicit `--dtype` stops
 the gate) or from the grid flags with `--parent-bin`, a `batchlas_tune` built
 from the parent commit, whose Auto choice is read from its coverage `reached` row (`--mode probe`).

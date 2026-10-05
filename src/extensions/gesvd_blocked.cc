@@ -253,16 +253,6 @@ SteqrParams<T> gesvd_cta_steqr_params() {
 }
 
 template <typename T>
-SteqrParams<T> gesvd_blocked_steqr_params() {
-    SteqrParams<T> params{};
-    params.max_sweeps = 400;
-    params.sort = true;
-    params.sort_order = SortOrder::Ascending;
-    params.back_transform = false;
-    return params;
-}
-
-template <typename T>
 StedcParams<T> gesvd_blocked_stedc_params() {
     StedcParams<T> params{};
     params.leaf_steqr_params.sort = true;

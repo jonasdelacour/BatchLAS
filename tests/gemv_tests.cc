@@ -15,6 +15,7 @@
 // once, before main(), so a bare ::setenv in a test body is read by nothing;
 // ScopedEnvVar is the guard that reloads that snapshot at both ends of a scope.
 #include <batchlas/util/env.hh>
+#include <batchlas/settings.hh>
 
 using namespace batchlas;
 
@@ -853,7 +854,7 @@ TYPED_TEST(GemvCoverageTest, PaddedBatchStrideSegmented) {
 // Body 5, the segmented TRANSPOSED CTA kernel, GemvSegTKernel<T, W>. Its gate is on
 // red_len (= m under Trans/ConjTrans), not out_len as body 4's is, and it is per scalar
 // type: float <= 32, cfloat <= 16, double <= 48, cdouble <= 64. Bodies 3 and 5 both
-// resolve to native:cta, so a break shows only under build-novendor or a pinned route.
+// resolve to the cta choice, so a break shows only under build-novendor or a pinned route.
 // evidence: docs/perf/gemv.md#the-body-5-gates
 
 // Which kernel runs, asserted at both sides of every boundary of the per-type tables.

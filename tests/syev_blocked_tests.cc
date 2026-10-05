@@ -154,6 +154,7 @@ struct SyevBlockedConfig {
 } // namespace
 
 #include "test_utils.hh"
+#include "../src/ops/syev/vendor.hh"
 using SyevBlockedTestTypes = typename test_utils::backend_types<SyevBlockedConfig>::type;
 
 template <typename Config>
@@ -305,7 +306,7 @@ TYPED_TEST(SyevBlockedTest, TwoStageProviderEigenvaluesOnlySmoke) {
 	auto W_two_stage = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
 
 	{
-		ScopedEnvVar provider("BATCHLAS_SYEV_PROVIDER", "two_stage");
+		ScopedEnvVar route("BATCHLAS_SYEV_ROUTE", "two_stage");
 		auto ws_two_stage = UnifiedVector<std::byte>(syev_buffer_size(*this->ctx,
 																								  A_two_stage.view(),
 																								  W_two_stage.to_span(),
@@ -344,7 +345,7 @@ TYPED_TEST(SyevBlockedTest, TwoStageProviderEigenvectorsSmoke) {
 	auto W_two_stage = UnifiedVector<Real>(static_cast<std::size_t>(n * batch));
 
 	{
-		ScopedEnvVar provider("BATCHLAS_SYEV_PROVIDER", "two_stage");
+		ScopedEnvVar route("BATCHLAS_SYEV_ROUTE", "two_stage");
 		auto ws_two_stage = UnifiedVector<std::byte>(syev_buffer_size(*this->ctx,
 															  A_two_stage.view(),
 															  W_two_stage.to_span(),

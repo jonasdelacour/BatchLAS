@@ -5,9 +5,9 @@
 
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/functions/gesvd.hh>
-#include <batchlas/blas/dispatch/coverage.hh>
-#include <batchlas/blas/dispatch/no_route.hh>
-#include <batchlas/blas/dispatch/vendor_available.hh>
+#include "../src/select/coverage.hh"
+#include <batchlas/no_route.hh>
+#include "../src/select/vendor.hh"
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
@@ -235,7 +235,7 @@ protected:
     using T = typename Config::ScalarType;
     using MV = MVof<T>;
     static constexpr Backend B = Config::BackendVal;
-    static constexpr bool kVendor = dispatch::solver_vendor_available<B>;
+    static constexpr bool kVendor = batchlas::select::solver_vendor_available<B>;
     static constexpr bool kReal = !kCx<T>;
 
     void SetUp() override {
@@ -474,7 +474,6 @@ TYPED_TEST(GesvdCandidates, CanRunEqualsLaunch) {
 TYPED_TEST(GesvdCandidates, EmptyShapesRunNoNativeFamily) {
     using T = typename TestFixture::T;
     const ScopedEnvVar clear("BATCHLAS_GESVD_ROUTE", nullptr);
-    const ScopedEnvVar clear_legacy("BATCHLAS_GESVD_PROVIDER", nullptr);
     const Spec shapes[] = {{0, 8, 2, 'N', SvdVectors::None, SvdVectors::None},
                            {8, 0, 2, 'N', SvdVectors::None, SvdVectors::None},
                            {8, 8, 0, 'N', SvdVectors::None, SvdVectors::None},
@@ -487,7 +486,7 @@ TYPED_TEST(GesvdCandidates, EmptyShapesRunNoNativeFamily) {
         }
         auto p = make_svd<T>(s);
         if constexpr (!TestFixture::kVendor) {
-            EXPECT_THROW(this->run(p), dispatch::NoRouteError) << label(s);
+            EXPECT_THROW(this->run(p), batchlas::NoRouteError) << label(s);
         } else {
             std::string refused;
             const std::string got = traced_choice([&] {
@@ -618,66 +617,61 @@ TYPED_TEST(GesvdCandidates, ExactWorkspaceInAPoisonedArena) {
 // R6: a spelling that names nothing compiled throws instead of meaning Auto.
 TYPED_TEST(GesvdCandidates, UnknownPinsThrow) {
     using T = typename TestFixture::T;
-    for (const char* word : {"bogus", "jacobi:1", "native:vendor", "gesvdj", "native:two_stage", "cta:wg=32"}) {
+    for (const char* word : {"bogus", "jacobi:1", "native:vendor", "gesvdj", "native:two_stage", "cta:wg=32",
+                             // removed aliases (phase 5): each must stay an error
+                             "native:jacobi", "native:cta", "native:blocked", "batchlas_jacobi",
+                             "batchlas-jacobi", "batchlas_cta", "batchlas-cta", "batchlas_blocked",
+                             "batchlas-blocked", "vendor:auto", "netlib", "netlib:auto"}) {
         auto p = make_svd<T>(Spec{});
         const Pin pin("gesvd", std::string_view(word));
         EXPECT_THROW(this->run(p), std::invalid_argument) << word;
     }
 }
 
-// §5.3: the legacy spellings and the class words, through ScopedPin, BATCHLAS_GESVD_ROUTE and the
-// pre-route variable BATCHLAS_GESVD_PROVIDER. A Lower-Hermitian 16 x 16 runs on cta and blocked
-// for every type; general 16 x 16 on jacobi.
-TYPED_TEST(GesvdCandidates, LegacyAliasesAndClassWords) {
+// §5.3: spellings (case-folded) and the class words, through ScopedPin and BATCHLAS_GESVD_ROUTE.
+// A Lower-Hermitian 16 x 16 runs on cta and blocked for every type; general 16 x 16 on jacobi.
+TYPED_TEST(GesvdCandidates, ClassWordsAndSpellings) {
     using T = typename TestFixture::T;
     const ScopedEnvVar clear("BATCHLAS_GESVD_ROUTE", nullptr);
-    const ScopedEnvVar clear_legacy("BATCHLAS_GESVD_PROVIDER", nullptr);
     Spec herm{16, 16, 2, 'L'};
     herm.gap = 0;  // packed, so a vendor pin reaches cuSOLVER
     herm.ldpad = 0;
     const std::string vendor_pick = TestFixture::kVendor ? "vendor" : "cta";
     const std::pair<const char*, std::string> expect[] = {
-        {"native:cta", "cta"},  {"native:blocked", "blocked"}, {"batchlas_cta", "cta"}, {"batchlas-blocked", "blocked"},
-        {"BLOCKED", "blocked"}, {"cta", "cta"},                {"native", "cta"},       {"auto", "cta"},
-        {"vendor", vendor_pick}, {"netlib", "vendor"},         {"vendor:auto", "vendor"}};
+        {"BLOCKED", "blocked"}, {" Cta ", "cta"},  {"cta", "cta"},          {"native", "cta"},
+        {"auto", "cta"},        {"vendor", vendor_pick}};
     for (const auto& [word, spelling] : expect)
-        for (const char* via : {"pin", "BATCHLAS_GESVD_ROUTE", "BATCHLAS_GESVD_PROVIDER"}) {
+        for (const char* via : {"pin", "BATCHLAS_GESVD_ROUTE"}) {
             auto p = make_svd<T>(herm);
             const std::string what = std::string(word) + " via " + via;
-            const bool concrete_vendor = spelling == "vendor" && std::string(word) != "vendor";
             auto call = [&] {
-                const ScopedEnvVar env(std::string(via) == "pin" ? "BATCHLAS_GESVD_ROUTE" : via,
-                                       std::string(via) == "pin" ? nullptr : word);
+                const ScopedEnvVar env("BATCHLAS_GESVD_ROUTE", std::string(via) == "pin" ? nullptr : word);
                 std::optional<Pin> pin;
                 if (std::string(via) == "pin") pin.emplace("gesvd", std::string_view(word));
                 this->run(p);
             };
-            if (concrete_vendor && !TestFixture::kVendor) {
-                EXPECT_THROW(call(), std::invalid_argument) << what;
-                continue;
-            }
             // The vendor reads the whole matrix; the Hermitian input stores poison in its upper half.
-            if (concrete_vendor || spelling == "vendor") {
+            if (spelling == "vendor") {
                 EXPECT_EQ(traced_choice(call), "vendor") << what;
                 continue;
             }
             EXPECT_EQ(traced_choice(call), spelling) << what;
             expect_solved(p, what);
         }
-    auto p = make_svd<T>(Spec{16, 16, 2, 'N'});
-    const ScopedEnvVar legacy("BATCHLAS_GESVD_PROVIDER", "jacobi");
-    EXPECT_EQ(traced_choice([&] { this->run(p); }), "jacobi") << "the legacy variable alone";
+    // The retired BATCHLAS_GESVD_PROVIDER is not read.
+    auto p = make_svd<T>(herm);
+    const ScopedEnvVar retired("BATCHLAS_GESVD_PROVIDER", "blocked");
+    EXPECT_EQ(traced_choice([&] { this->run(p); }), "cta") << "BATCHLAS_GESVD_PROVIDER was read";
 }
 
-// A ScopedPin beats BATCHLAS_GESVD_ROUTE, which beats BATCHLAS_GESVD_PROVIDER; nested pins restore.
+// A ScopedPin beats BATCHLAS_GESVD_ROUTE; nested pins restore.
 TYPED_TEST(GesvdCandidates, PinPrecedence) {
     using T = typename TestFixture::T;
     const Spec herm{16, 16, 2, 'L'};
-    const ScopedEnvVar legacy("BATCHLAS_GESVD_PROVIDER", "blocked");
     {
         const ScopedEnvVar canon("BATCHLAS_GESVD_ROUTE", "cta");
         auto p = make_svd<T>(herm);
-        EXPECT_EQ(traced_choice([&] { this->run(p); }), "cta") << "the canonical variable lost to the legacy one";
+        EXPECT_EQ(traced_choice([&] { this->run(p); }), "cta") << "BATCHLAS_GESVD_ROUTE was not read";
         auto r = make_svd<T>(herm);
         EXPECT_EQ(traced_choice([&] {
                       const Pin pin("gesvd", C{gs::Blocked{}});
@@ -702,7 +696,6 @@ TYPED_TEST(GesvdCandidates, PinPrecedence) {
 TYPED_TEST(GesvdCandidates, AutoReadsTheTranscribedTable) {
     using T = typename TestFixture::T;
     const ScopedEnvVar clear("BATCHLAS_GESVD_ROUTE", nullptr);
-    const ScopedEnvVar clear_legacy("BATCHLAS_GESVD_PROVIDER", nullptr);
     constexpr bool kCd = std::is_same_v<T, std::complex<double>>;
     const char* none = TestFixture::kVendor ? "vendor" : "<none>";
     struct Row { Spec s; const char* expect; };
@@ -719,7 +712,7 @@ TYPED_TEST(GesvdCandidates, AutoReadsTheTranscribedTable) {
     for (const Row& r : rows) {
         auto p = make_svd<T>(r.s);
         if (std::string(r.expect) == "<none>") {
-            EXPECT_THROW(this->run(p), dispatch::NoRouteError) << label(r.s);
+            EXPECT_THROW(this->run(p), batchlas::NoRouteError) << label(r.s);
             continue;
         }
         // cuSOLVER refuses past 32 (the old outcome too), in its sizing call, before any trace.
@@ -746,7 +739,6 @@ TYPED_TEST(GesvdCandidates, AutoReadsTheTranscribedTable) {
 TYPED_TEST(GesvdCandidates, AutoReadsEveryKeyField) {
     using T = typename TestFixture::T;
     const ScopedEnvVar clear("BATCHLAS_GESVD_ROUTE", nullptr);
-    const ScopedEnvVar clear_legacy("BATCHLAS_GESVD_PROVIDER", nullptr);
     const std::string dtype(select::dtype_name<T>());
     const std::string dev = select::device_of<TestFixture::B>(*this->ctx).key;
     std::vector<std::pair<std::string, std::string>> files;
@@ -833,7 +825,7 @@ TYPED_TEST(GesvdCandidates, VendorFreeLastResortIsBlocked) {
             expect_solved(p, "last resort");
         } else {
             auto q = make_svd<T>(Spec{96, 96, 2, 'N'});
-            EXPECT_THROW(this->run(q), dispatch::NoRouteError);
+            EXPECT_THROW(this->run(q), batchlas::NoRouteError);
         }
     }
 }
@@ -853,7 +845,7 @@ TYPED_TEST(GesvdCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     auto child = [&] {
         const ScopedEnvVar cov("BATCHLAS_COVERAGE_OUT", out.c_str());
         const ScopedEnvVar clear("BATCHLAS_GESVD_ROUTE", nullptr);
-        dispatch::coverage::g_dynamic_enabled = true;
+        batchlas::coverage::g_dynamic_enabled = true;
         {
             const Pin pin("gesvd", C{gs::Jacobi{}});
             auto p = make_svd<T>(lo);
@@ -922,11 +914,11 @@ TYPED_TEST(GesvdCandidatesCpu, CpuQueueRunsNoNativeFamily) {
         EXPECT_THROW(run(p), std::invalid_argument) << select::to_string(c);
     }
     auto p = make_svd<T>(s);
-    if constexpr (dispatch::solver_vendor_available<B>) {
+    if constexpr (batchlas::select::solver_vendor_available<B>) {
         EXPECT_EQ(traced_choice([&] { run(p); }), "vendor");
         expect_solved(p, "cpu vendor");
     } else {
-        EXPECT_THROW(run(p), dispatch::NoRouteError);
+        EXPECT_THROW(run(p), batchlas::NoRouteError);
     }
 }
 

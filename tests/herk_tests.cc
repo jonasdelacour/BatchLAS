@@ -391,7 +391,7 @@ TYPED_TEST(HerkTest, MatchesGemmReference) {
         // The Gram kernel is not on herk's automatic path -- it loses to the
         // GEMM-plus-fold in complex -- so without pinning it the conjugation
         // this test exists to check would never run.
-        ScopedEnvVar pin("BATCHLAS_SYRK_VARIANT", "gram");
+        ScopedEnvVar pin("BATCHLAS_SYRK_ROUTE", "gram");
         sweep("gram");
     }
 }
