@@ -65,6 +65,19 @@ cfloat transA=N transB=T), for all three devices.
   `ops::spmm::device<B>()` calls `select::device_of<B>(q, solver_vendor_available<B>,
   sparse_vendor_available<B>)`. `select::Device` has no sparse flag and `select.hh` is shared, so
   no field was added; the integrator may want a `has_vendor_sparse`.
+- **Two new CUDA vendor terms (R3, not in the old `supports()`)**, both measured on GPU 0 of
+  this box (cuSPARSE from HPC SDK 26.5 / CUDA 13.2) by calling `backend::spmm_vendor` directly,
+  so they are vendor behaviour and not the facade:
+  1. complex (cfloat, cdouble) with `transB == ConjTrans` and a single-row B (nrhs 1): cuSPARSE
+     returns an error status the vendor arm never checks, C is left unwritten (a silent wrong
+     answer: 5 failures per probe, any transA). The old Auto *did* route here (complex transA=T/C
+     with transB=C, and cfloat transA=N transB=C), so these shapes now run `direct` instead of
+     producing a wrong answer. This is the only Auto change of the migration.
+  2. complex<double> `N/N` with one column: segfault on the host inside cuSPARSE (cf.
+     known-defects #13, the cuBLASLt unit-dimension crash). Never on the old Auto path (N/N is
+     `direct` first), so only a `vendor` pin changes: it now falls back to Auto (the class word's
+     §5.3 behaviour) instead of crashing.
+  Both terms carry `B == Backend::CUDA`; known-defects.md should gain these two (#13 extension).
 - **Known R3 gaps, inherited unchanged** (the old `supports()` said "the vendor serves
   everything"): netlib's spmm throws `unsupported` on any transpose (so on a NETLIB queue Auto
   for transA=T, or cfloat transB=T, still picks `vendor` and throws, exactly as before; the
@@ -93,7 +106,11 @@ carries the real backend; `native_facts` gives `native_route_existed/supported`.
    predicates read no device fact, not even is_gpu).
 2. `Vendor` uses `has_vendor_blas` carrying the sparse flag (above), not `has_vendor_solver`/blas
    as such.
-3. The vendor `can_run` R3 gaps above are kept.
+3. The netlib-transpose and cuSPARSE-alignment R3 gaps above are kept; the two CUDA vendor terms
+   above are added (one moves Auto off a wrong answer, see can_run).
+6. cuSPARSE's `CUSPARSE_SPMM_ALG_DEFAULT` is not bit-reproducible run to run on this box, so
+   `spmm_candidates_tests` identifies a pinned vendor by its trace line plus "not the gather's
+   exact bits", and its saturating-batch bit-identity check covers Direct only.
 4. No `tools/tune/spmm_spec.cc` (no tuner spec in scope), so the staleness checker skips spmm
    tables (`kernels=unknown`, no warning).
 5. Old pins that silently fell through (`cta`, `blocked`, typos) now throw; a `direct` pin on an
@@ -101,16 +118,41 @@ carries the real backend; `native_facts` gives `native_route_existed/supported`.
 
 ## Gates
 
-See the commit message / final report for the run logs; summary:
+All on GPU 0 (`CUDA_VISIBLE_DEVICES=0`), threadripper02 (sm_120), 2026-10-05.
 
-- (a) correctness: see "ctest name diff" below.
+- (a) correctness: `spmm_tests spmm_tests_native spmm_candidates_tests select_tests
+  tuned_tables_tests route_vocabulary_tests lanczos_tests syevx_tests syevx_range_tests
+  ritz_values_tests`, built in `build` and `build-vf`, against the same targets built from
+  424a45bc (`build-base`, `build-base-vf`). Failing gtest names are identical to the baseline in
+  both trees: in `build`, `lanczos_tests::LanczosTestBase.{LanczosTest,ToeplitzEigenpairs}` and
+  `syevx_tests::SyevxInfoTest.InfoIsZeroWhenEveryItemConverges` (pre-existing on this box); in
+  `build-vf` the same two lanczos cases plus 20 `syevx_tests` cases (Jacobi/LOBPCG/range, all
+  failing identically on 424a45bc vendor-free). No new failure, none fixed; `spmm_candidates_tests` passes (5 repeats clean).
+  Deliberate breaks (restored from saved copies, md5 verified):
+  - `key_of` ignores transB -> red exactly `AutoReadsEveryKeyField` + `TraceKeyIsKeyOf` (all 8
+    configs) and `AutoReadsTheTranscribedTables` (cfloat, both backends);
+  - conj single-row vendor term disabled -> red `VendorRefusesAConjugatedSingleRowB`,
+    `PinnedCandidatesRunEveryTransposeCombination` (CUDA cfloat, cdouble) and
+    `AutoReadsTheTranscribedTables` (CUDA cdouble);
+  - Vendor launch arm runs Direct -> red `PinnedRunIsTheDirectKernelBitForBit` (all 8),
+    `PinnedCandidatesRunEveryTransposeCombination` + `LegacyAliasesAndClassWords` (NETLIB: netlib
+    no longer throws on a transpose). Before the "not the gather's bits" check this break was
+    green on CUDA.
 - (b) data gate: `spmm_transcribe --random 2500 20261005` (10 000 off-grid points: log-uniform
   m, k in [1, 3e5], nrhs [1, 256], batch [1, 65536], all nine N/T/C spellings) replayed by
   `tools/transcribe/spmm_offgrid_gate.py` against all 12 tables, vendor-present and vendor-free:
   **100.000% agreement in every (dtype, device, build) cell**, no disagreeing region. It cannot be
   otherwise: rows are constant across the size axes and the categorical keys are exact. The
   gate is armed: swapping the old ranking on 50 points drops the float cells to 98% and lists them.
-- (c) cross-check vs the 424a45bc binary: see below.
+  A third column, `cuda-can_run`, applies the two CUDA vendor terms (sm_89/sm_120 only): cfloat
+  96.2%, cdouble 97.24%, every disagreement in `{N,T,C}C nrhs=1` (cfloat) / `{T,C}C nrhs=1`
+  (cdouble), i.e. exactly the conj single-row region where the old router picked a vendor that
+  returns a wrong answer. No grid point can or should change that; the gate exits on the
+  table-only cells.
+- (c) cross-check vs the 424a45bc binary: `spmm_tests` under Auto with `BATCHLAS_COVERAGE_OUT`
+  in both builds, `reached` rows keyed (scalar, m, n, k, batch, transA, transB): 80 cells common,
+  **80/80 choose the same family** (direct for N/N, N/T, N/C except cfloat N/T, N/C; vendor for
+  every transposed A), no cell only in one build.
 
 ## Doc changes the integrator should make
 
