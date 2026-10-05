@@ -559,9 +559,16 @@ TYPED_TEST(GetriCandidates, NetlibBackendOnAGpuQueueRefusesBlocked) {
     select::testing::reset_warnings();
     const Pin pin("getri", std::string_view("native"));
     ::testing::internal::CaptureStderr();
-    (void)getri_buffer_size<Backend::NETLIB, T>(*this->ctx, A);
+    bool no_route = false;
+    try {
+        (void)getri_buffer_size<Backend::NETLIB, T>(*this->ctx, A);
+    } catch (const dispatch::NoRouteError&) {
+        no_route = true;
+    }
     const std::string err = ::testing::internal::GetCapturedStderr();
     EXPECT_NE(err.find("getri pinned \"native\", but no native candidate"), std::string::npos) << err;
+    // Without netlib the warned fall-back to Auto has nothing left: a NoRouteError, never Blocked.
+    EXPECT_EQ(no_route, !dispatch::factorization_vendor_available<Backend::NETLIB>);
 }
 #endif
 
