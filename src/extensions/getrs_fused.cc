@@ -838,7 +838,7 @@ template <> bool getrs_fused_available<std::complex<float>>()  { return true; }
 template <> bool getrs_fused_available<std::complex<double>>() { return true; }
 
 // THE CAPACITY, IN RHS ELEMENTS (n * nrhs). The RHS vector is resident, so this is a
-// HARD launch ceiling -- a supports() question and not a preferred() one. The budget is
+// HARD launch ceiling -- a can_run question and not a table one. The budget is
 // asked of the DEVICE, and the largest nb the tier ever uses is charged, not this
 // call's. getrs_hole_padded is NOT monotone, so the largest admissible request is the
 // budget when it exceeds kGetrsHoleHi and min(budget, kGetrsHoleLo) otherwise.
@@ -929,13 +929,13 @@ Event getrs_fused_dispatch(Queue& ctx,
             " exceeds this device's resident-RHS capacity (" +
             std::to_string(getrs_fused_max_rhs_elems<T>(budget)) +
             " elements). This is a CAPACITY ceiling, not a speed one: route the "
-            "call to Algorithm::Blocked instead.");
+            "call to the `blocked` choice instead (BATCHLAS_GETRS_ROUTE=blocked).");
     }
     if (nrhs > kGetrsFusedMaxRhs) {
         throw batchlas::invalid_argument(
             "getrs_fused: nrhs = " + std::to_string(nrhs) + " is above the widest "
             "instantiated accumulator (" + std::to_string(kGetrsFusedMaxRhs) +
-            "). Route to Algorithm::Blocked.");
+            "). Use the `blocked` choice (BATCHLAS_GETRS_ROUTE=blocked).");
     }
 
     // PACKED 1-BASED int32 -- the format cublas.cc and rocsolver.cc read through
@@ -993,7 +993,7 @@ Event potrs_fused_dispatch(Queue& ctx,
         throw batchlas::invalid_argument(
             "potrs_fused: n * nrhs = " + std::to_string(need) + " (nrhs " +
             std::to_string(nrhs) + ") is past the resident-RHS capacity; route posv to "
-            "Algorithm::Blocked.");
+            "the `blocked` choice (BATCHLAS_POSV_ROUTE=blocked).");
     }
 
     const int nb = getrs_fused_nb(n);

@@ -379,7 +379,7 @@ TYPED_TEST(GesvTest, TinyPackedLaunchCoversEveryBatchItem) {
     }
 }
 
-// G6. The launcher re-applies every supports() gate, because there is no vendor to
+// G6. The launcher re-applies every can_run gate, because there is no vendor to
 // fall through to: an unservable shape must throw, never silently solve a leading
 // submatrix or a truncated RHS.
 // ARMED BREAK (R9): delete the `rbucket < 1` test in gesv_tiny_dispatch. EXPECTED:
@@ -404,7 +404,7 @@ TYPED_TEST(GesvTest, TinyRefusesShapesAboveItsCeilings) {
                  batchlas::unsupported);
 }
 
-// G7 (the old window) and G8 (supports() vs the launcher) moved to gesv_candidates_tests:
+// G7 (the old window) and G8 (can_run vs the launcher) moved to gesv_candidates_tests:
 // AutoReadsTheTranscribedTables and CanRunEqualsLaunch.
 
 // G9. THE PUBLIC OP end to end against the same residual bound and the same pivot

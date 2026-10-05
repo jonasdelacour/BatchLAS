@@ -944,7 +944,8 @@ Where the code differs from the sketches above, the code wins. These are the dif
   tests in `potrf_tests.cc` and the V2 helper in `trsm_tests.cc` now pass the public trsm / gemm.
   `potrf_blocked_dispatch`'s trailing gemm keeps its `gemm_custom` fallback until P3.4 (a default
   argument cannot precede the now-mandatory one, so both defaults are gone and callers pass `{}`).
-  P3.4 made that empty fallback the public gemm (see Phase 3.4).
+  P3.4 made that empty fallback the public gemm (see Phase 3.4); the phase-5 rip made it
+  mandatory too.
 - **sm_89 tables are transcribed, untimed.** `tools/transcribe/trsm_transcribe.cc` (deleted in phase 5, `tuned/README.md`; host g++
   against 8b9adeb3) re-runs the real `resolve_route_uninstrumented` over the old table, first with
   the vendor present, then (after the vendor is ranked) vendor-free for the remaining natives. The
@@ -1118,8 +1119,9 @@ Where the code differs from the sketches above, the code wins. These are the dif
   defect (`docs/perf/gemm.md#the-strided-ld-defect-and-the-routing-fix`) cannot recur.
 - **Callers (decision 4, risk K5).** The six `gemm_vendor` calls in `cublas.cc` (hemm x2, herk,
   her2k, trmm x2) call the public `gemm<B,T>`; float symm/syrk/syr2k's custom dispatch already did.
-  The potrf, geqrf and getrf blocked drivers' empty trailing-gemm seam is the public gemm through
-  `with_backend`, not `gemm_custom`, so direct-driver tests need no edit. `trsm_native.cc` drops
+  The potrf, geqrf and getrf blocked drivers' trailing-gemm seam is the public gemm, not
+  `gemm_custom` (P3.4 made an empty seam fall back to it through `with_backend`; the phase-5 rip
+  made the seam mandatory in all three). `trsm_native.cc` drops
   its unused `gemm_kernels.hh` include (P3.3 deviation 8 closed). A heterogeneous batch is split
   into homogeneous items before `choose()` in every build; each item chooses for itself.
 - **select changes.** `Rules` gains `class_aliases` (`register_tiled`, `sycl`, `custom` ->
@@ -1154,7 +1156,36 @@ Where the code differs from the sketches above, the code wins. These are the dif
   first everywhere. Cross-check against the parent (GPU 0, kernel trace + coverage, Auto and
   `ROUTE=native`, 5 cells off-grid): 34 of 34 cells pick the same kernel, outputs correct; the
   pre-fix tables disagreed on every below-grid cell (batch 8/16, double k = 1, float 52^3 and
-  40x40x48), which the edge rows fix.
+  40x40x48), which the edge rows fix. Five off-grid cells did not sample the rectangle edges; see
+  the two phase-5 review bullets below.
+- **Off-grid disagreement with the old router (phase-5 review; recorded, not fixed).** The
+  transcribed rows are exact on the grid (a Python replica of 7f9e65ca's `select_kernel_variant`
+  reproduces 12,672/12,672 double and 11,226/11,226 float rows), but nearest-row lookup does not
+  reproduce the old predicates between grid points. On random off-grid shapes (every dim >= 8,
+  half of them panel shapes with k in 8..128) the first runnable native entry differs from the old
+  kernel on 6.7% of double and 31.7% of float shapes. Cause: the double `max_dim <= 24` (NN) and
+  `<= 32` (transposed) Direct/Tiled16 edges and the float `min(m,n)` 32|64|128 and k 128 edges are
+  bracketed only on squares, so a rectangle snaps to a square row. Kernel traces confirm it on the
+  factorizations' panel updates: geqrf double 80x80 b256 (NN 32x16x16, TN 16x64x16: Tiled16 ->
+  direct); vendor-free getrf/gesv double n=100 and getrs n=200 (4x4x32: Tiled16 -> direct);
+  vendor-free geqrf float 600x90 b64 (NN 600x58x32: reg 32x32 -> reg 128x128; NN 568x26x32:
+  Tiled16 -> reg 32x32; TN 32x58x32: Tiled16 -> small); vendor-free orgqr float 600x300 (TN
+  32x300x600: Tiled16 -> reg 128x32x32, which main gated on m >= 128; NN 344x12x32: Tiled16 -> reg
+  32x32). Impact: double gemm in every build (it was native everywhere), every real dtype in
+  vendor-free builds; float and complex stay vendor-first in vendor builds. The §13 sm_89 off-grid
+  gate was never run for gemm, so "Auto equals the old routing" does NOT hold off-grid for gemm.
+  Accepted as a pending-retune deviation (no measurement pass in phase 5); a re-transcription would
+  need rectangle points straddling those edges (`git show 0bd26dfe:tools/transcribe/gemm_transcribe.cc`).
+- **Fast-path divisibility is not a key (phase-5 review; recorded).** Main sent double/complex NN
+  to `Tiled64x64RegisterK16Wide` only when `min_dim >= 256 && can_use_64x64_k16_wide_fast_path`
+  (m, n multiples of 64, k of 16, aligned), and the float reg 128x128 and aligned 128x64/128x32 NN
+  tiles only on their own divisibility predicates; the predicated wide leg was never chosen. The
+  transcriber evaluated `packed` grid points, all multiples of 64, and the key has no divisibility
+  term (by design: the leg is derived in the launcher, R3 keeps it out of `can_run`). So a packed
+  non-multiple shape near those rows now takes the predicated leg: double 304^3 b64 runs
+  `wide:m=64:n=64:k=16` where main ran Tiled16 (also syev double n=300's 304^3 update), as do
+  668x3x904 and 541x680x1657 (rows at 768^3); vendor-free float shows the same on the reg tiles.
+  Untimed against Tiled16 (`docs/perf/gemm.md`); accepted pending the phase-4 retune.
 - **Review fixes to `can_run` (R3).** `small` requires `d.has_sg32` except on the float NN tiled
   leg (33..56), whose kernel has no `reqd_sub_group_size` (`small_fits` in `choice.hh`, probed on
   synthetic devices). `direct`, `tiled`, `reg` and `wide` put the batch in SYCL dim 0 = CUDA grid z,
@@ -1315,8 +1346,8 @@ the tiny windows, the order floors (64/76/48/256), the tall clause and the CTA/b
 (float 96, double 48); 636 rows. Deviations: `geqrf_buffer_size` is the chosen family's only, so the
 three callers that size once at a bounding panel and factor smaller sub-views (`band_reduction.cc`
 twice, `sytrd_sy2sb.cc`) call the internal `geqrf_buffer_size_bound` (`src/ops/geqrf/geqrf.hh`, the
-maximum over every family this device can run; guard `BoundCoversEverySubViewChoice`); an empty
-trailing-gemm seam means the public gemm (P3.4's hunk); the tiny driver has no `max_wg` check, so
+maximum over every family this device can run; guard `BoundCoversEverySubViewChoice`); the
+trailing-gemm seam is the public gemm (mandatory since the phase-5 rip); the tiny driver has no `max_wg` check, so
 `can_run(tiny)` has none either. Gate: (b) 100.000% in all 16 cells at the real capacities, a 48 KiB
 budget and small synthetic capacities; removing four threshold points drops it to ~99% and exits 1;
 (c) 24/24 vendor, 23/23 vendor-free (the wide cell throws `NoRouteError` in both).
@@ -1538,7 +1569,22 @@ in `tuned_tables_tests` holds it.
   `benchmarks/gemm_custom.cc`; and, once `gemm_cublasdx()` was gone, `cublasdx_gemm::launch_float`,
   `variant_supported`, `GemmLaunchDescriptor` and the cuBLASDx GEMM kernel templates.
   `gemm_cublasdx.cu` keeps only `cublasdx_gemm::available()`, which the level-3 fused gate reads;
-  it no longer includes `<cublasdx.hpp>`, so it compiles the same with or without MathDx.
+  it no longer includes `<cublasdx.hpp>`, so it compiles the same with or without MathDx. With
+  the cuSolverDx wrapper gone, its build plumbing is gone too: the `BATCHLAS_ENABLE_CUSOLVERDX`
+  option, the `cusolverdx.hpp` probe and `mathdx::cusolverdx` link, and the installed
+  `BATCHLAS_HAS_CUSOLVERDX` macro in `backend_config.h` (nothing read it). Also deleted: the
+  unbuilt `benchmarks/device_blas_level1_benchmark.cc` and the never-called CMake function
+  `batchlas_add_device_blas_variant_target`.
+- **One seam contract.** The potrf, geqrf and getrf blocked drivers all REQUIRE their injected
+  child ops (trailing gemm; potrf's and getrf's panel trsm): an empty `std::function` throws
+  `invalid_argument`. The `with_backend` fallbacks in potrf and geqrf were reachable only from
+  direct-driver tests (every `src/ops` caller injects the public op) and are deleted; the tests
+  pass the public gemm (`gemm_seam()`) and assert the throw (`GeqrfTest.DirectEntryPoints...`,
+  `PotrfBlockedTest.BlockedEmptySeamsThrow`).
+- **`NoRouteError` stays reachable from the umbrella.** `<batchlas/blas/functions.hh>` (so
+  `<batchlas.hh>`) includes `<batchlas/no_route.hh>`, as main's gesvd/ormqr/syev headers did for
+  the old path; spelling migration `batchlas::dispatch::NoRouteError` -> `batchlas::NoRouteError`
+  (`docs/cpp-api.md`). `examples/consumer` static-asserts it with only the umbrella included.
 
 ## 13. Phase 3 decisions (maintainer, 2026-10-04)
 

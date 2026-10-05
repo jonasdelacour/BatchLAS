@@ -101,12 +101,6 @@ foreach(test ${BENCHMARK_TARGETS})
     batchlas_add_benchmark_target(${test})
 endforeach()
 
-function(batchlas_add_device_blas_variant_target target_name source)
-    add_executable(${target_name} ${source})
-    batchlas_configure_binary_target(${target_name})
-    batchlas_register_benchmark(${target_name})
-endfunction()
-
 function(batchlas_add_device_blas_vector_target target_name mode policy)
     add_executable(${target_name} device_blas_level2_benchmark.cc)
     target_compile_definitions(${target_name} PRIVATE DEVICE_BLAS_VECTOR_MODE=${mode} DEVICE_BLAS_POLICY=${policy} DEVICE_BLAS_BENCHMARK_NAME="${target_name}")

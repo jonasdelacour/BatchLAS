@@ -40,7 +40,7 @@ BATCHLAS_INTERNAL_API Event potrf_tiny_dispatch(Queue& ctx,
                                                 Span<int32_t> info);
 
 // Per-type CTA capacity for a budget in BYTES: the budget is a device property, and a
-// hardcoded ceiling makes supports() promise an unlaunchable route. `min_blocks_per_sm`
+// hardcoded ceiling makes can_run promise an unlaunchable choice. `min_blocks_per_sm`
 // scales it to the ADVERTISED capacity; 1 asks the residency question, which has a different
 // answer. evidence: docs/perf/potrf.md#the-occupancy-rule
 template <typename T>
@@ -104,7 +104,7 @@ BATCHLAS_INTERNAL_API Event potrf_cta_dispatch(Queue& ctx,
                                                Span<int32_t> info,
                                                int min_blocks_per_sm = resident::kMinBlocksPerSm);
 
-// Trailing-update GEMM; empty means the public gemm on the queue's backend.
+// Trailing-update GEMM, REQUIRED (empty throws): pass the public gemm.
 template <typename T>
 using PotrfTrailingGemm = std::function<Event(
     Queue&,

@@ -7,7 +7,6 @@
 #include "geqrf_panel_reg_device.hh"
 #include "larft_wy.hh"
 
-#include <batchlas/blas/functions/gemm.hh>
 #include "../queue.hh"
 #include "../util/template-instantiations.hh"
 
@@ -157,19 +156,11 @@ Event geqrf_blocked_dispatch(Queue& ctx,
                              Span<std::byte> workspace,
                              GeqrfTrailingGemm<T> trailing_gemm,
                              GeqrfPanelLeaf panel_leaf) {
-    // An empty seam means the public gemm on the queue's backend: never a fixed kernel, which
-    // would bypass gemm's selection.
     if (!trailing_gemm) {
-        trailing_gemm = [](Queue& c,
-                           const MatrixView<T, MatrixFormat::Dense>& ga,
-                           const MatrixView<T, MatrixFormat::Dense>& gb,
-                           const MatrixView<T, MatrixFormat::Dense>& gc,
-                           T galpha, T gbeta, Transpose gta, Transpose gtb,
-                           ComputePrecision gp) {
-            return with_backend(c, [&](auto Back) {
-                return ::batchlas::gemm<Back.value, T>(c, ga, gb, gc, galpha, gbeta, gta, gtb, gp);
-            });
-        };
+        throw batchlas::invalid_argument(
+            "geqrf_blocked: the trailing-update gemm seam is empty. Inject the public "
+            "batchlas::gemm (src/ops/geqrf/geqrf.cc does; a direct caller must too) -- "
+            "gemm, not this driver, chooses the gemm kernel.");
     }
 
     const int m = static_cast<int>(A.rows());
@@ -180,9 +171,8 @@ Event geqrf_blocked_dispatch(Queue& ctx,
     // The caller wins; the environment only fills in Auto, so a pin cannot be redirected.
     if (panel_leaf == GeqrfPanelLeaf::Auto) panel_leaf = geqrf_panel_leaf_from_env();
 
-    // Re-applies every gate supports() applies: this entry point is reachable without the
-    // table, and an unsupported forced route falls back to automatic(), so a gate that is
-    // wrong here silently measures the vendor instead.
+    // Re-applies every gate can_run applies: this entry point is reachable without the
+    // selector, so a gate missing here would launch a shape the kernel cannot run.
     if (m < 1 || n < 1 || batch < 1) {
         throw batchlas::invalid_argument("geqrf_blocked: degenerate extents");
     }

@@ -2203,7 +2203,7 @@ TYPED_TEST(LuTest, GetrsPermSpellingDecisionSurface) {
 }
 
 // L8d. THE GATHER BUYS NO WORKSPACE, AT ANY WIDTH. The facade takes the workspace
-// maximum over EVERY NATIVE TIER THAT supports() the shape, not over the tier the
+// maximum over EVERY NATIVE TIER WHOSE can_run ACCEPTS the shape, not over the tier the
 // route named, so a gather that bought an out-of-place RHS here would bill every
 // narrow call that routes to the FUSED tier and needs nothing.
 TYPED_TEST(LuTest, GetrsPermGatherBuysNoWorkspace) {
@@ -2291,7 +2291,7 @@ TYPED_TEST(LuTest, GetriInvertsAndLeavesTheFactorUntouched) {
 }
 
 // L10 / L11. THE DROP-IN CONTRACT, BOTH DIRECTIONS. getrf, getrs and getri carry
-// INDEPENDENT env variables and INDEPENDENT preferred() windows, so every mixture
+// INDEPENDENT env variables and INDEPENDENT tuned tables, so every mixture
 // of native and vendor arms is reachable in a shipped build. The two getrf
 // implementations are NOT required to agree on the PIVOTS they choose: cuBLAS
 // pivots on the modulus for complex.
@@ -2549,7 +2549,7 @@ TYPED_TEST(LuTest, FacadeReachesTheNativeKernelsBitExactly) {
     }
 }
 
-// L14. THE DIRECT ENTRY POINTS REFUSE WHAT supports() REFUSES. They are reachable
+// L14. THE DIRECT ENTRY POINTS REFUSE WHAT can_run REFUSES. They are reachable
 // WITHOUT the table, so every gate has to be re-applied there or a pinned-route
 // caller walks into an unlaunchable configuration.
 TYPED_TEST(LuTest, DirectEntryPointsRefuseWhatSupportsRefuses) {
@@ -3122,7 +3122,7 @@ TYPED_TEST(LuTest, FacadeReachesTheFusedGetrsBitExactly) {
     // PinnedRunIsTheDirectKernelBitForBit.
 }
 
-// F7. THE FUSED DIRECT ENTRY POINT REFUSES WHAT supports() REFUSES, AND ITS
+// F7. THE FUSED DIRECT ENTRY POINT REFUSES WHAT can_run REFUSES, AND ITS
 // WORKSPACE QUERY DEREFERENCES NOTHING. The workspace is ZERO in every mode for
 // this tier by design (the RHS is permuted and solved in LOCAL memory, in place),
 // and the facade's figure is a max over BOTH native tiers; the query and the call
@@ -3209,7 +3209,7 @@ TYPED_TEST(LuTest, FusedGetrsDirectEntryPointRefusesWhatSupportsRefuses) {
 }
 
 // ===========================================================================
-// THE REGISTER-RESIDENT TIER (Algorithm::Tiny, src/extensions/getrf_tiny.cc).
+// THE REGISTER-RESIDENT TIER (the `tiny` choice, src/extensions/getrf_tiny.cc).
 // One matrix per SubGroupPartition<N>, N in {8, 16, 32}, row r in lane r's
 // registers, no local memory and no barriers. These cases guard the three
 // properties a functional test otherwise stays green through: a padded row must
@@ -3688,8 +3688,8 @@ TYPED_TEST(LuTest, TinyBreaksAnExactCabs1TieTowardsTheLowestRow) {
     }
 }
 
-// T8. THE DIRECT ENTRY POINT REFUSES WHAT supports() REFUSES. A forced route that
-// supports() rejects falls through to the vendor and passes green regardless, so
+// T8. THE DIRECT ENTRY POINT REFUSES WHAT can_run REFUSES. The entry point is
+// reachable without the selector and nothing else would catch a missing gate, so
 // each gate is re-applied inside the dispatch and throws.
 TYPED_TEST(LuTest, TinyDirectEntryPointRefusesWhatSupportsRefuses) {
     using T = typename TestFixture::T;

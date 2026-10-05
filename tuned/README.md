@@ -118,6 +118,15 @@ a tuner table.
 A transcribed row reproduces a deleted window; it is not a measurement. It is replaced by a timed
 row when the tuner sweeps that device.
 
+A transcribed row reproduces the old decision only AT its grid point. Between grid points the
+gemm tables differ from the old `select_kernel_variant` (phase-5 review, spec §12 Phase 3.4):
+the first native entry differs on ~6.7% of random off-grid double shapes and ~31.7% of float
+ones, including the factorizations' panel updates (e.g. geqrf double NN 32x16x16 now `direct`,
+was Tiled16), because the double Direct/Tiled16 and float register-tile edges are bracketed only
+on squares. And `wide`/`reg` rows transcribed at aligned (multiple-of-64) `packed` points now also
+serve packed NON-multiple shapes, which run the predicated leg the old router never chose (e.g.
+double 304^3 b64: `wide:m=64:n=64:k=16`, was Tiled16). Both are untimed and pending the retune.
+
 Tuned tables (header `source=tuner:<raw jsonl>` and a real `kernels=<hash>`) come from
 `tools/tune/batchlas_tune` (usage, protocol and raw schema: `tools/tune/README.md`). The tuner writes
 raw JSONL and calls `python3 scripts/sweep_to_table.py --tuner <jsonl> --out tuned`, so rows are
@@ -136,8 +145,10 @@ tuner was stopped during cfloat, so cfloat and cdouble stay transcribed.
 Every converted or transcribed table says `kernels=unknown` and is therefore reported stale. That
 is intended: they stay stale until phase 4, when `tools/tune` retunes each op on each device and
 stamps the kernel-source hash. The trsm tuner tables say `kernels=c923160f` and are reported stale
-against today's `a33fbfee`: the only change to the hashed sources since the sweep is the removal of
-an unused `#include "gemm_kernels.hh"` from `src/sycl/trsm_native.cc`, so the timings still describe
-the shipped kernels. The potrf sm_89 tables come from an archive across several kernel eras (only
+against today's `1dbe529b`. Two changes to the hashed sources sit between the sweep and HEAD, and
+neither touches a kernel or a candidate: the removal of an unused `#include "gemm_kernels.hh"` from
+`src/sycl/trsm_native.cc`, and the phase-5 rip's edit of `src/ops/trsm/choice.hh` (the `aliases`
+array deleted, `Rules{aliases, last_resort}` -> `Rules{last_resort}`, two comments reworded). So
+the timings still describe the shipped kernels. The potrf sm_89 tables come from an archive across several kernel eras (only
 `kernel_current` rows are kept) and have no `lpanel` timings at all; `Lpanel{16}` has never been
 timed on any device.

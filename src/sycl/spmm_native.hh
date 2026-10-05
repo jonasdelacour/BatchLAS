@@ -28,7 +28,7 @@
 
 namespace batchlas::sycl_spmm {
 
-// Was the kernel COMPILED into this build? Not a device query; gates supports().
+// Was the kernel COMPILED into this build? Not a device query; gates can_run.
 // Gather (transA == NoTrans) and scatter are independent capabilities.
 template <typename T>
 bool spmm_gather_available();

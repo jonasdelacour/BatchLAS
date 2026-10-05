@@ -38,13 +38,12 @@
 // not change any behaviour. What they enable is asking "is cuSOLVER here?"
 // without that being the same question as "is there a CUDA backend?".
 //
-// CUBLASDX/CUSOLVERDX count as vendor: third-party NVIDIA source, NVIDIA-only,
-// so never the portable path.
+// CUBLASDX counts as vendor: third-party NVIDIA source, NVIDIA-only, so never
+// the portable path.
 #cmakedefine01 BATCHLAS_HAS_CUBLAS
 #cmakedefine01 BATCHLAS_HAS_CUSOLVER
 #cmakedefine01 BATCHLAS_HAS_CUSPARSE
 #cmakedefine01 BATCHLAS_HAS_CUBLASDX
-#cmakedefine01 BATCHLAS_HAS_CUSOLVERDX
 #cmakedefine01 BATCHLAS_HAS_ROCBLAS
 #cmakedefine01 BATCHLAS_HAS_ROCSOLVER
 #cmakedefine01 BATCHLAS_HAS_ROCSPARSE

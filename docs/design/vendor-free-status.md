@@ -28,10 +28,9 @@ with the campaign's changes reverted; its coverage dump holds only `linked` rows
 `reached` rows** for `gemv`, i.e. it never calls the op it was once blamed on.
 
 `BATCHLAS_ENABLE_VENDOR_BLAS` is a master switch over per-library options
-(`cmake/BatchLASOptions.cmake:180-198`), and the vendor list deliberately includes
-**cuBLASDx/cuSOLVERDx**: they are third-party NVIDIA source that ships only for NVIDIA, so a
-vendor-independence measurement that let them through would be measuring the wrong thing
-(`:185-189`). MathDx is absent on this box (`BATCHLAS_HAS_CUBLASDX 0`), so every "cublasdx"
+(`BATCHLAS_VENDOR_LIBRARIES` in `cmake/BatchLASOptions.cmake`), and the vendor list deliberately
+includes **cuBLASDx**: it is third-party NVIDIA source that ships only for NVIDIA, so a
+vendor-independence measurement that let it through would be measuring the wrong thing. MathDx is absent on this box (`BATCHLAS_HAS_CUBLASDX 0`), so every "cublasdx"
 route in the tree is silently its fallback.
 
 Both pass counts are the last **recorded** runs, not re-run for this document. Treat them as

@@ -732,7 +732,7 @@ TYPED_TEST(SyevCandidatesCpu, CpuQueueRunsNoNativeFamily) {
                      std::invalid_argument)
             << select::to_string(c);
     }
-    // The binding's supports() asks can_run with Backend::AUTO, so only the is_gpu term refuses.
+    // The syev_supports_* bindings ask can_run with Backend::AUTO, so only the is_gpu term refuses.
     {
         namespace det = blas::dispatch::detail;
         auto sq = make_eig<T>(s);

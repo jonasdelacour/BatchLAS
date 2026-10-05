@@ -449,7 +449,7 @@ std::size_t posv_tiny_buffer_size(Queue& ctx,
     });
 }
 
-// Every supports() gate is re-applied here; there is no vendor posv to fall through to.
+// Every can_run gate is re-applied here; direct callers reach this without the selector.
 template <typename T>
 Event posv_tiny_dispatch(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& A,

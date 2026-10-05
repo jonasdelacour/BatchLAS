@@ -239,12 +239,12 @@ option(BATCHLAS_ENABLE_VENDOR_BLAS
     "Build against vendor math libraries (cuBLAS/cuSOLVER/cuSPARSE, roc*, oneMKL, netlib, MathDx)"
     ON)
 
-# CUBLASDX/CUSOLVERDX are counted as vendor: they are third-party NVIDIA source
-# shipped in the MathDx package, they exist only for NVIDIA, and so they can
-# never be the portable path. A vendor-independence measurement that let them
+# CUBLASDX is counted as vendor: it is third-party NVIDIA source shipped in
+# the MathDx package, it exists only for NVIDIA, and so it can never be the
+# portable path. A vendor-independence measurement that let them
 # through would be measuring the wrong thing.
 set(BATCHLAS_VENDOR_LIBRARIES
-    CUBLAS CUSOLVER CUSPARSE CUBLASDX CUSOLVERDX
+    CUBLAS CUSOLVER CUSPARSE CUBLASDX
     ROCBLAS ROCSOLVER ROCSPARSE
     LAPACKE CBLAS ONEMKL)
 

@@ -807,7 +807,12 @@ protected:
 
     struct Blocking { int nb; int W; };
 
-    // The driver's panel solve is required: the public trsm, as the potrf facade passes it.
+    // Both driver seams are required: the public gemm and trsm, as the potrf facade passes them.
+    static sycl_potrf::PotrfTrailingGemm<T> gemm_seam() {
+        return [](Queue& c, const MatrixView<T, MatrixFormat::Dense>& a, const MatrixView<T, MatrixFormat::Dense>& b,
+                  const MatrixView<T, MatrixFormat::Dense>& r, T al, T be, Transpose ta, Transpose tb,
+                  ComputePrecision p) { return gemm<BackendType, T>(c, a, b, r, al, be, ta, tb, p); };
+    }
     static sycl_potrf::PotrfPanelSolve<T> panel_solve() {
         return [](Queue& c, const MatrixView<T, MatrixFormat::Dense>& a, const MatrixView<T, MatrixFormat::Dense>& b,
                   T alpha, Side s, Uplo u, Transpose t, Diag d) {
@@ -848,10 +853,10 @@ protected:
         if (len > 0) {
             (void)sycl_potrf::potrf_blocked_dispatch<T>(
                 *this->ctx, V, uplo, ws.to_span(),
-                Span<int32_t>(info.data(), static_cast<size_t>(len)), {}, panel_solve());
+                Span<int32_t>(info.data(), static_cast<size_t>(len)), gemm_seam(), panel_solve());
         } else {
             (void)sycl_potrf::potrf_blocked_dispatch<T>(*this->ctx, V, uplo, ws.to_span(),
-                                                  Span<int32_t>{}, {}, panel_solve());
+                                                  Span<int32_t>{}, gemm_seam(), panel_solve());
         }
         this->ctx->wait();
         return std::vector<int32_t>(info.begin(), info.end());
@@ -1415,7 +1420,8 @@ TYPED_TEST(PotrfBlockedTest, BlockedDoesNotReadUninitialisedWorkspace) {
 
     UnifiedVector<int32_t> info(batch, int32_t(-12345));
     (void)sycl_potrf::potrf_blocked_dispatch<T>(*this->ctx, A.view(), Uplo::Lower,
-                                          ws.to_span(), info.to_span(), {}, TestFixture::panel_solve());
+                                          ws.to_span(), info.to_span(), TestFixture::gemm_seam(),
+                                          TestFixture::panel_solve());
     this->ctx->wait();
 
     for (int b = 0; b < batch; ++b) {
@@ -1426,6 +1432,24 @@ TYPED_TEST(PotrfBlockedTest, BlockedDoesNotReadUninitialisedWorkspace) {
         EXPECT_LE((multiply_back_residual<T>(ref[b], L, n)), blocked_residual_tol<T>(n))
             << "b=" << b;
     }
+}
+
+// Neither seam has a hidden default: gemm and trsm, not the driver, choose their kernels.
+TYPED_TEST(PotrfBlockedTest, BlockedEmptySeamsThrow) {
+    using T = typename TestFixture::T;
+    const int n = 64, batch = 2;
+    Matrix<T, MatrixFormat::Dense> A(n, n, batch);
+    UnifiedVector<std::byte> ws(std::max<std::size_t>(
+        1, sycl_potrf::potrf_blocked_buffer_size<T>(*this->ctx, A.view(), Uplo::Lower)));
+    UnifiedVector<int32_t> info(batch, 0);
+    EXPECT_THROW((void)sycl_potrf::potrf_blocked_dispatch<T>(*this->ctx, A.view(), Uplo::Lower, ws.to_span(),
+                                                             info.to_span(), sycl_potrf::PotrfTrailingGemm<T>{},
+                                                             TestFixture::panel_solve()),
+                 std::invalid_argument);
+    EXPECT_THROW((void)sycl_potrf::potrf_blocked_dispatch<T>(*this->ctx, A.view(), Uplo::Lower, ws.to_span(),
+                                                             info.to_span(), TestFixture::gemm_seam(),
+                                                             sycl_potrf::PotrfPanelSolve<T>{}),
+                 std::invalid_argument);
 }
 
 

@@ -1,8 +1,7 @@
 // Native batched GEQRF: the CTA tier, and the panel leaf both native tiers share. The device
 // body lives in geqrf_cta_device.hh because geqrf_blocked.cc's panel step runs the SAME code
-// against a global accessor -- correctness fixes belong there. preferred() ships a per-type
-// order-floor plus tall-panel window and best_native_tier() can resolve it to THIS arm, so it
-// is reachable in a vendor build, not only vendor-free or under a pin.
+// against a global accessor -- correctness fixes belong there. Whether Auto picks THIS arm is
+// the tuned/geqrf.* table's call; a pin (BATCHLAS_GEQRF_ROUTE=cta) reaches it on any build.
 // evidence: docs/perf/qr.md#route-arms
 
 #include "geqrf_native.hh"
@@ -312,7 +311,7 @@ BATCHLAS_GEQRF_PANEL_REG_CELL_ASSERT(sycl_device::Cx<double>);
 
 // CAPABILITY. The capacity is an AREA -- the tile is m*n scalars, so per-extent ceilings
 // would admit panels needing many times the budget. A speed threshold here rather than in
-// preferred() would remove the vendor-free route. evidence: docs/perf/qr.md#cta-capacity
+// the table would remove the vendor-free route. evidence: docs/perf/qr.md#cta-capacity
 // The occupancy rule enters as a division of the budget, and the hole clamp is applied
 // AFTER it: a scaled budget can land inside the band even when the whole one did not,
 // and a budget inside the band cannot host a tile inside it.
@@ -468,8 +467,8 @@ Event geqrf_panel_factorize(Queue& ctx,
         p.wg, 1);
 }
 
-// The CTA tier's direct entry point. Every gate supports() applies to the CTA arm is
-// re-applied here, because a forced route reaches this without the table.
+// The CTA tier's direct entry point. Every gate can_run applies to the CTA arm is
+// re-applied here, because direct callers reach this without the selector.
 template <typename T>
 Event geqrf_cta_dispatch(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& A,
@@ -510,7 +509,7 @@ Event geqrf_cta_dispatch(Queue& ctx,
 
     const std::size_t budget = resident::device_slm_budget(
         dev.get_property(DeviceProperty::LOCAL_MEM_SIZE));
-    // The occupancy-scaled gate, matching supports().
+    // The occupancy-scaled gate, matching can_run.
     if (!geqrf_cta_fits<T>(m, n, budget)) {
         throw batchlas::invalid_argument(
             "geqrf_cta: " + std::to_string(m) + " x " + std::to_string(n) +

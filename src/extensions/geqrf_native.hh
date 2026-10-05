@@ -86,7 +86,7 @@ template <typename T>
 BATCHLAS_INTERNAL_API unsigned geqrf_panel_reg_debug_launch(
     Queue& ctx, int m, int n);  // wg | leaf<<16; 0 = no fit
 
-// Empty means the public gemm on the queue's backend (its own table-driven choice).
+// REQUIRED (empty throws): pass the public gemm, which makes its own table-driven choice.
 template <typename T>
 using GeqrfTrailingGemm = std::function<Event(
     Queue&,
@@ -106,7 +106,7 @@ BATCHLAS_INTERNAL_API Event geqrf_blocked_dispatch(Queue& ctx,
                                                    const MatrixView<T, MatrixFormat::Dense>& A,
                                                    Span<T> tau,
                                                    Span<std::byte> workspace,
-                                                   GeqrfTrailingGemm<T> trailing_gemm = {},
+                                                   GeqrfTrailingGemm<T> trailing_gemm,
                                                    GeqrfPanelLeaf panel_leaf =
                                                        GeqrfPanelLeaf::Auto);
 

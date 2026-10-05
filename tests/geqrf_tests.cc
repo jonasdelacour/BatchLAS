@@ -1,9 +1,8 @@
 // Native batched GEQRF and the ORGQR that consumes its output.
 //
-// A forced route that supports() rejects falls through to the vendor silently, so every
-// numerical test calls the native entry points directly against a host reference in
-// double. Residuals are blind to the tau/beta convention -- geqrf's real contract --
-// which is why the convention tests exist. evidence: docs/perf/qr.md
+// Every numerical test calls the native entry points directly, bypassing the selector,
+// against a host reference in double. Residuals are blind to the tau/beta convention --
+// geqrf's real contract -- which is why the convention tests exist. evidence: docs/perf/qr.md
 #include <gtest/gtest.h>
 
 #include <batchlas/blas/functions/geqrf.hh>
@@ -269,6 +268,13 @@ protected:
     using D = typename Prom<T>::type;
     static constexpr Backend BackendType = Config::BackendVal;
 
+    // The blocked driver's trailing gemm is required: the public gemm, as src/ops/geqrf passes it.
+    static sycl_geqrf::GeqrfTrailingGemm<T> gemm_seam() {
+        return [](Queue& c, const MatrixView<T, MatrixFormat::Dense>& a, const MatrixView<T, MatrixFormat::Dense>& b,
+                  const MatrixView<T, MatrixFormat::Dense>& r, T al, T be, Transpose ta, Transpose tb,
+                  ComputePrecision p) { return gemm<BackendType, T>(c, a, b, r, al, be, ta, tb, p); };
+    }
+
     void SetUp() override {
         test_utils::BatchLASTest<Config>::SetUp();
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
@@ -416,7 +422,7 @@ TYPED_TEST(GeqrfTest, ResidentLeafLaunchHoleAt48KiB) {
     using T = typename TestFixture::T;
 
     // Byte sizes as element counts for THIS scalar type, as an m x n panel with
-    // m >= n (supports() gate 2).
+    // m >= n (can_run gate 2).
     struct S { std::size_t bytes; int m, n; };
     const std::size_t sz = sizeof(T);
     const S rows[] = {
@@ -495,7 +501,7 @@ TYPED_TEST(GeqrfTest, BlockedResidualAndOrthogonality) {
         const std::size_t ws = sycl_geqrf::geqrf_blocked_buffer_size<T>(*this->ctx, V);
         UnifiedVector<std::byte> w(ws ? ws : 1);
         ASSERT_NO_THROW(
-            (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), w.to_span()));
+            (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), w.to_span(), this->gemm_seam()));
         this->ctx->wait();
         check_one(p, "blocked");
         if (this->HasFailure()) return;
@@ -532,7 +538,7 @@ TYPED_TEST(GeqrfTest, ShortFinalPanelStraddlesTheBlockWidth) {
         const std::size_t ws = sycl_geqrf::geqrf_blocked_buffer_size<T>(*this->ctx, V);
         UnifiedVector<std::byte> wbuf(ws ? ws : 1);
         ASSERT_NO_THROW((void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(),
-                                                              wbuf.to_span()));
+                                                              wbuf.to_span(), this->gemm_seam()));
         this->ctx->wait();
         check_one(p, (s.n % w) ? "blocked/short-final-panel" : "blocked/exact-multiple");
         if (this->HasFailure()) return;
@@ -555,7 +561,7 @@ TYPED_TEST(GeqrfTest, BothPanelLeavesFactoriseCorrectly) {
         UnifiedVector<std::byte> wb(std::max<std::size_t>(
             1, sycl_geqrf::geqrf_blocked_buffer_size<T>(*this->ctx, V)));
         ASSERT_NO_THROW((void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(),
-                                                              wb.to_span()));
+                                                              wb.to_span(), this->gemm_seam()));
         this->ctx->wait();
         check_one(p, "blocked/resident-leaf");
         if (this->HasFailure()) return;
@@ -573,7 +579,7 @@ TYPED_TEST(GeqrfTest, BothPanelLeavesFactoriseCorrectly) {
         UnifiedVector<std::byte> wb(std::max<std::size_t>(
             1, sycl_geqrf::geqrf_blocked_buffer_size<T>(*this->ctx, V)));
         ASSERT_NO_THROW((void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(),
-                                                              wb.to_span()));
+                                                              wb.to_span(), this->gemm_seam()));
         this->ctx->wait();
         check_one(p, "blocked/global-leaf");
     }
@@ -604,7 +610,7 @@ TYPED_TEST(GeqrfTest, RankDeficientColumnsStillFactorise) {
                     : sycl_geqrf::geqrf_cta_buffer_size<T>(*this->ctx, V)));
         if (pass) {
             ASSERT_NO_THROW((void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(),
-                                                                  wb.to_span()));
+                                                                  wb.to_span(), this->gemm_seam()));
         } else {
             ASSERT_TRUE(this->cta_fits(m, n));
             ASSERT_NO_THROW((void)sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, V, p.tau.to_span(),
@@ -640,7 +646,7 @@ TYPED_TEST(GeqrfTest, ComplexRDiagonalIsExactlyReal) {
                 1, s.blocked ? sycl_geqrf::geqrf_blocked_buffer_size<T>(*this->ctx, V)
                              : sycl_geqrf::geqrf_cta_buffer_size<T>(*this->ctx, V)));
             if (s.blocked)
-                (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span());
+                (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span(), this->gemm_seam());
             else
                 (void)sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span());
             this->ctx->wait();
@@ -670,7 +676,7 @@ TYPED_TEST(GeqrfTest, TauConventionSurvivesTheRoutedOrmqr) {
     auto V = view_of(p);
     UnifiedVector<std::byte> wb(std::max<std::size_t>(
         1, sycl_geqrf::geqrf_blocked_buffer_size<T>(*this->ctx, V)));
-    (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span());
+    (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span(), this->gemm_seam());
     this->ctx->wait();
 
     // C = the first n columns of I_m; then C <- Q C, so Q's first n columns come
@@ -828,7 +834,7 @@ TYPED_TEST(GeqrfTest, ConventionMatchesReferenceLapackWithoutAVendor) {
             1, s.blocked ? sycl_geqrf::geqrf_blocked_buffer_size<T>(*this->ctx, V)
                          : sycl_geqrf::geqrf_cta_buffer_size<T>(*this->ctx, V)));
         if (s.blocked) {
-            (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span(), {});
+            (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span(), this->gemm_seam());
         } else {
             (void)sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span());
         }
@@ -922,7 +928,7 @@ TYPED_TEST(GeqrfTest, SubnormalScaleColumnsTakeTheDivisionPath) {
             1, s.blocked ? sycl_geqrf::geqrf_blocked_buffer_size<T>(*this->ctx, V)
                          : sycl_geqrf::geqrf_cta_buffer_size<T>(*this->ctx, V)));
         if (s.blocked) {
-            (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span(), {});
+            (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span(), this->gemm_seam());
         } else {
             (void)sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span());
         }
@@ -992,7 +998,7 @@ TYPED_TEST(GeqrfTest, NativeFactorMatchesTheVendorElementwise) {
                 1, s.blocked ? sycl_geqrf::geqrf_blocked_buffer_size<T>(*this->ctx, V)
                              : sycl_geqrf::geqrf_cta_buffer_size<T>(*this->ctx, V)));
             if (s.blocked)
-                (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span());
+                (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span(), this->gemm_seam());
             else
                 (void)sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span());
             this->ctx->wait();
@@ -1078,7 +1084,7 @@ TYPED_TEST(GeqrfTest, WideIsRefusedAndTallAndSquareAreNot) {
             (void)sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span()),
             std::invalid_argument);
         EXPECT_THROW(
-            (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span()),
+            (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span(), this->gemm_seam()),
             std::invalid_argument);
     }
 }
@@ -1102,7 +1108,7 @@ TYPED_TEST(GeqrfTest, DirectEntryPointsRefuseWhatSupportsRefuses) {
     EXPECT_THROW((void)sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, H, p.tau.to_span(), wb.to_span()),
                  std::invalid_argument);
     EXPECT_THROW(
-        (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, H, p.tau.to_span(), wb.to_span()),
+        (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, H, p.tau.to_span(), wb.to_span(), this->gemm_seam()),
         std::invalid_argument);
 
     // (b) a tau span shorter than k * batch. tau is packed per matrix with stride k OF
@@ -1110,7 +1116,12 @@ TYPED_TEST(GeqrfTest, DirectEntryPointsRefuseWhatSupportsRefuses) {
     Span<T> shortTau(p.tau.data(), p.tau.size() - 1);
     EXPECT_THROW((void)sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, V, shortTau, wb.to_span()),
                  std::invalid_argument);
-    EXPECT_THROW((void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, shortTau, wb.to_span()),
+    EXPECT_THROW((void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, shortTau, wb.to_span(), this->gemm_seam()),
+                 std::invalid_argument);
+
+    // (c) an empty trailing-gemm seam: gemm, not the driver, chooses the gemm kernel.
+    EXPECT_THROW((void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span(),
+                                                             sycl_geqrf::GeqrfTrailingGemm<T>{}),
                  std::invalid_argument);
 }
 
@@ -1256,7 +1267,7 @@ TYPED_TEST(GeqrfTest, FacadeReachesTheNativeOrgqr) {
     auto V = view_of(p);
     UnifiedVector<std::byte> gws(std::max<std::size_t>(
         1, sycl_geqrf::geqrf_blocked_buffer_size<T>(*this->ctx, V)));
-    (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), gws.to_span());
+    (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), gws.to_span(), this->gemm_seam());
     this->ctx->wait();
     const std::vector<T> F(p.buf.begin(), p.buf.end());
 
@@ -2003,7 +2014,7 @@ TYPED_TEST(GeqrfTest, RegisterPanelLeafCapabilityIsSelfConsistent) {
     const int wg_max = static_cast<int>(
         this->ctx->device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
 
-    // CONTIGUOUS IN m. supports()-style ceilings are spelled `m <= max_m` everywhere, so a
+    // CONTIGUOUS IN m. can_run-style ceilings are spelled `m <= max_m` everywhere, so a
     // predicate with a hole in it advertises a range it cannot serve.
     for (int m = 1; m <= max_m; ++m) {
         ASSERT_TRUE(sycl_geqrf::geqrf_panel_reg_fits<T>(m, 1, wg_max))
@@ -2247,7 +2258,7 @@ TYPED_TEST(GeqrfTest, BlockedDriverWithTheRegisterLeaf) {
         const std::size_t ws = sycl_geqrf::geqrf_blocked_buffer_size<T>(*this->ctx, V);
         UnifiedVector<std::byte> w(ws ? ws : 1);
         ASSERT_NO_THROW((void)sycl_geqrf::geqrf_blocked_dispatch<T>(
-            *this->ctx, V, p.tau.to_span(), w.to_span(), {},
+            *this->ctx, V, p.tau.to_span(), w.to_span(), this->gemm_seam(),
             sycl_geqrf::GeqrfPanelLeaf::Register));
         this->ctx->wait();
         check_one(p, "blocked/register-leaf");

@@ -2,17 +2,16 @@
 #
 # Prove a change did not move any dispatch decision.
 #
-# WHY THIS EXISTS. WP1 retargets the terminal GEMM of the level-3 expand/tile
-# routes at the public entry point. On a vendor-present box that MUST be a
-# no-op: same route chosen for every shape any test reaches. Reading the diff
-# cannot establish that -- the whole point of routing through a resolver is that
-# the decision is not visible at the call site -- and timing cannot establish it
-# either, because an unsaturated benchmark's ratios are overhead, not algorithm.
+# WHY THIS EXISTS. A refactor or a table edit that is meant to be a no-op MUST
+# leave the choice unchanged for every shape any test reaches. Reading the diff
+# cannot establish that -- the choice comes from the tuned tables, not the call
+# site -- and timing cannot establish it either, because an unsaturated
+# benchmark's ratios are overhead, not algorithm.
 #
 # So compare the DECISION. A coverage build records, per (op, scalar,
-# shape_class), which Route the resolver returned. Two runs, one before and one
-# after, must produce byte-identical `reached` rows. Anything else is a route
-# change, and a route change has to be argued for rather than discovered later.
+# shape_class), which choice the selector reached. Two runs, one before and one
+# after, must produce byte-identical `reached` rows. Anything else is a choice
+# change, and a choice change has to be argued for rather than discovered later.
 #
 # USAGE
 #   scripts/route_diff.sh capture <build-dir> <label>

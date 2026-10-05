@@ -1580,7 +1580,8 @@ alongside `D rA[N]`, forward substitution fused into the elimination loop, back
 substitution in the same kernel. **It is not routed.** `preferred()` is all-false
 and `native_tier_preferred` answers false for `Tiny`, so `Auto` takes the composed
 `getrf; getrs` arm at every shape; the tier is reachable only through
-`BATCHLAS_GESV_ROUTE=native:tiny` or the dispatch entry point directly.
+`BATCHLAS_GESV_ROUTE=native:tiny` (today's spelling: `BATCHLAS_GESV_ROUTE=tiny`; `native:tiny`
+now throws) or the dispatch entry point directly.
 
 Two structural facts separate this op from every other one in this file.
 

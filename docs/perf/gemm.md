@@ -921,8 +921,10 @@ deprecation warning, so a deliberate override is never silently lost.
   with the 52 selector and route-adapter cases of `gemm_tests.cc`. Their replacement is `AutoReadsEveryKeyField`-style table tests per
   dtype in the pending `gemm_candidates_tests.cc`; until it lands the double `max_dim <= 24` boundary, the complex CTA gate and the
   `min_dim >= 256` arm are guarded only by `scripts/sweep_to_table.py --check` against the transcriber CSV.
-* **The wide kernel's predicated leg has never been timed against `Tiled16`.** It is correct (round-off on 70×53×37) and reachable, but both
-  routing arms gate on the aligned fast path or on a CTA count, so no timing of the predicated leg exists.
+* **The wide kernel's predicated leg has never been timed against `Tiled16`.** It is correct (round-off on 70×53×37). The old routing
+  gated it on the aligned fast path, but since P3.4 Auto reaches it: the table key has no divisibility term, so a packed non-multiple
+  shape near a transcribed `wide` row (double 304³ b64, syev double n=300's update) runs the predicated leg where main ran `Tiled16`.
+  No timing of that choice exists (spec §12 Phase 3.4, "Fast-path divisibility is not a key").
 * **The 12-cell subset behind the 1.74× / 1.75× routing geomean is not identified in the preserved data.**
   `experiments/wp4_gemm_ld/routing/summary.csv` holds 15 cells (geomean 1.51 / 1.53 over all of them); the four quoted cells reproduce from
   `routing/raw/e4-*`, but the aggregate is not re-derivable without knowing which 12 were used.

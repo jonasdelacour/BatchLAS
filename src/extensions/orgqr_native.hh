@@ -1,6 +1,6 @@
 #pragma once
 
-// Native batched ORGQR: one tier, Algorithm::Blocked -- ormqr applied to an identity.
+// Native batched ORGQR: one tier, the `blocked` choice -- ormqr applied to an identity.
 // tuned/orgqr.*.txt picks it to n = 512 on both extents, so it is the DEFAULT inside
 // that window, not a vendor-free fallback. evidence: docs/perf/qr.md#the-shipped-orgqr-ceiling
 
