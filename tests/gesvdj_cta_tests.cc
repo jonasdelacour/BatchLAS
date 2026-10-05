@@ -486,9 +486,8 @@ TYPED_TEST(GesvdjCtaTest, JobCombinations) {
 
 
 // Routing. Two things are checked here, both behavioural:
-//  1. BATCHLAS_GESVD_PROVIDER=jacobi actually reaches gesvdj_cta. A forced
-//     provider that is unsupported degrades to Auto SILENTLY, so "it ran" is not
-//     evidence that the right thing ran -- the accuracy is.
+//  1. Auto at n = 12 reaches gesvdj_cta (jacobi leads that table row). "It ran"
+//     is not evidence that the right thing ran -- the accuracy is.
 //  2. Complex GENERAL input through the public gesvd() no longer throws. Before
 //     this kernel, gesvd_supports_cta and gesvd_supports_blocked both returned
 //     false for complex outside the Hermitian branch and dispatch fell through

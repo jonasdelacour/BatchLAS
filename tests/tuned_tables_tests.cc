@@ -4,6 +4,7 @@
 
 #include <batchlas/util/env.hh>
 
+#include "../src/ops/gesvd/choice.hh"
 #include "../src/ops/posv/choice.hh"
 #include "../src/ops/potrf/choice.hh"
 #include "../src/ops/trsm/choice.hh"
@@ -56,6 +57,13 @@ std::vector<std::string> candidates(const std::string& op, const std::string& dt
         if (dtype == "double") return spellings(trsm::candidates<double>());
         if (dtype == "cfloat") return spellings(trsm::candidates<std::complex<float>>());
         if (dtype == "cdouble") return spellings(trsm::candidates<std::complex<double>>());
+    }
+    namespace gesvd = batchlas::ops::gesvd;
+    if (op == "gesvd") {
+        if (dtype == "float") return spellings(gesvd::candidates<float>());
+        if (dtype == "double") return spellings(gesvd::candidates<double>());
+        if (dtype == "cfloat") return spellings(gesvd::candidates<std::complex<float>>());
+        if (dtype == "cdouble") return spellings(gesvd::candidates<std::complex<double>>());
     }
     return {};
 }
@@ -190,6 +198,7 @@ void expect_tables_declare(const std::string& op, const Names& names) {
 TEST(TunedTables, PotrfTablesDeclareChoiceKeyNames) { expect_tables_declare("potrf", batchlas::ops::potrf::key_names); }
 TEST(TunedTables, PosvTablesDeclareChoiceKeyNames) { expect_tables_declare("posv", batchlas::ops::posv::key_names); }
 TEST(TunedTables, TrsmTablesDeclareChoiceKeyNames) { expect_tables_declare("trsm", batchlas::ops::trsm::key_names); }
+TEST(TunedTables, GesvdTablesDeclareChoiceKeyNames) { expect_tables_declare("gesvd", batchlas::ops::gesvd::key_names); }
 
 const sel::Table& embedded(const std::string& name) {
     static std::map<std::string, sel::Table> cache;
@@ -240,6 +249,37 @@ TEST(TunedTables, TrsmSm89TablesHoldExactlyTheChoiceGrid) {
             got.insert(row.keys[0] + " " + row.keys[1] + " " + row.keys[2] + " " + row.keys[3] + " " + row.keys[4]);
         EXPECT_EQ(got, want) << dt;
         EXPECT_EQ(t.rows.size(), want.size()) << dt;
+    }
+}
+
+// gesvd's transcriber: one row per (herm, vec, m, n) cell of choice.hh, and the sm_89 and
+// sm_120 transcriptions identical row for row (the old predicates read no architecture).
+TEST(TunedTables, GesvdTablesHoldExactlyTheChoiceGridOnBothDevices) {
+    namespace gesvd = batchlas::ops::gesvd;
+    std::set<std::string> want;
+    for (auto h : gesvd::grid_herm)
+        for (auto v : gesvd::grid_vec)
+            for (int m : gesvd::grid_mn)
+                for (int n : gesvd::grid_mn)
+                    want.insert(std::string(h) + " " + std::string(v) + " " + std::to_string(m) + " " +
+                                std::to_string(n));
+    for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
+        std::map<std::string, std::string> rows[2];
+        int i = 0;
+        for (const char* dev : {"sm_89", "sm_120"}) {
+            const sel::Table& t = embedded(std::string("gesvd.") + dt + "." + dev + ".txt");
+            EXPECT_EQ(t.source.rfind("transcribed:", 0), 0u) << t.file;
+            std::set<std::string> got;
+            for (const auto& row : t.rows) {
+                const std::string k = row.keys[0] + " " + row.keys[1] + " " + row.keys[2] + " " + row.keys[3];
+                got.insert(k);
+                for (const auto& e : row.ranked) rows[i][k] += e.spelling + "|";
+            }
+            EXPECT_EQ(got, want) << t.file;
+            EXPECT_EQ(t.rows.size(), want.size()) << t.file;
+            ++i;
+        }
+        EXPECT_EQ(rows[0], rows[1]) << dt << ": sm_89 and sm_120 transcriptions differ";
     }
 }
 

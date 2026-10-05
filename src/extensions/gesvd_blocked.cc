@@ -8,6 +8,7 @@
 
 #include "../math-helpers.hh"
 #include "../util/template-instantiations.hh"
+#include "gesvd_native.hh"
 #include "info_span.hh"
 #include "stedc_internal.hh"
 
@@ -1555,7 +1556,7 @@ Event gesvd_cta(Queue& ctx,
                 const Span<std::byte>& ws,
                 Span<int32_t> info) {
     validate_gesvd_dims(a_in, singular_values, u_out, vh_out, jobu, jobvh, "gesvd_cta");
-    if (std::max(a_in.rows(), a_in.cols()) > 32) {
+    if (std::max(a_in.rows(), a_in.cols()) > sycl_gesvd::kGesvdCtaMaxDim) {
         throw batchlas::invalid_argument("gesvd_cta: currently supports max(m, n) <= 32");
     }
     // Mode CTA always takes the normal-equations branch, whose
@@ -1599,7 +1600,7 @@ Event gesvd_cta(Queue& ctx,
     if (a_in.rows() != a_in.cols()) {
         throw batchlas::invalid_argument("gesvd_cta: Hermitian path requires square matrices");
     }
-    if (std::max(a_in.rows(), a_in.cols()) > 32) {
+    if (std::max(a_in.rows(), a_in.cols()) > sycl_gesvd::kGesvdCtaMaxDim) {
         throw batchlas::invalid_argument("gesvd_cta: currently supports max(m, n) <= 32");
     }
     // Mode CTA always takes the normal-equations branch, whose
@@ -1638,7 +1639,7 @@ size_t gesvd_cta_buffer_size(Queue& ctx,
                              SvdVectors jobu,
                              SvdVectors jobvh) {
     validate_gesvd_dims(a, singular_values, u_out, vh_out, jobu, jobvh, "gesvd_cta_buffer_size");
-    if (std::max(a.rows(), a.cols()) > 32) {
+    if (std::max(a.rows(), a.cols()) > sycl_gesvd::kGesvdCtaMaxDim) {
         throw batchlas::invalid_argument("gesvd_cta_buffer_size: currently supports max(m, n) <= 32");
     }
     {
@@ -1673,7 +1674,7 @@ size_t gesvd_cta_buffer_size(Queue& ctx,
     if (a.rows() != a.cols()) {
         throw batchlas::invalid_argument("gesvd_cta_buffer_size: Hermitian path requires square matrices");
     }
-    if (std::max(a.rows(), a.cols()) > 32) {
+    if (std::max(a.rows(), a.cols()) > sycl_gesvd::kGesvdCtaMaxDim) {
         throw batchlas::invalid_argument("gesvd_cta_buffer_size: currently supports max(m, n) <= 32");
     }
     {

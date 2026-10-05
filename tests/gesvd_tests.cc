@@ -30,6 +30,8 @@
 
 #include "test_utils.hh"
 
+#include "../src/ops/gesvd/choice.hh"
+
 using namespace batchlas;
 
 template <typename T, Backend B>
@@ -120,7 +122,7 @@ protected:
     using Real = typename base_type<Scalar>::type;
     static constexpr Backend B = Config::BackendVal;
 
-    // Mirrors gesvd_jacobi_max_dim: complex<double> with vectors does not fit
+    // Mirrors sycl_gesvd::gesvd_jacobi_max_dim: complex<double> with vectors does not fit
     // local memory at the C=64 rung on this device.
     static constexpr int max_dim_with_vectors() {
         return std::is_same_v<Scalar, std::complex<double>> ? 32 : 64;
@@ -427,9 +429,10 @@ std::string run_gesvd_with_provider(Queue& ctx,
                                     SvdVectors jobvh,
                                     const char* provider,
                                     std::optional<Uplo> hermitian_uplo = std::nullopt) {
-    std::unique_ptr<ScopedEnvVar> env;
+    // A pin is a ScopedPin: a refused one throws (R6) and lands in the returned message.
+    std::optional<select::ScopedPin<ops::gesvd::GesvdChoice>> pin;
     if (provider != nullptr) {
-        env = std::make_unique<ScopedEnvVar>("BATCHLAS_GESVD_PROVIDER", provider);
+        pin.emplace("gesvd", std::string_view(provider));
     }
 
     try {
@@ -1077,12 +1080,12 @@ TYPED_TEST(GesvdTest, BlockedProviderLargeTallRectangularFullVectors) {
 // Auto never reached it for real input. The CTA path forms the normal
 // equations; measured at n=32/float/256 samples, its singular-value relative
 // error runs 1.4e-6 -> 3.1e-3 -> 0.235 -> 1.857 across log10(kappa) 1..6 while
-// gesvdj_cta holds 4.8e-6 -> 1.2e-5 -> 7.1e-5 -> 5.6e-3. The order is now
-// per-op (now kGesvdOrder in blas/dispatch/route_gesvd.hh) and Jacobi leads.
+// gesvdj_cta holds 4.8e-6 -> 1.2e-5 -> 7.1e-5 -> 5.6e-3. Jacobi leads every
+// n <= 32 row of tuned/gesvd.*.txt.
 //
-// These two tests guard that from opposite sides: the first pins the dispatch
-// decision itself, the second pins the numerical consequence on the default
-// path, so neither a reordering nor a predicate change can quietly undo it.
+// The dispatch decision itself is pinned by gesvd_candidates_tests
+// (AutoReadsTheTranscribedTable); the test below pins the numerical consequence
+// on the default path, so neither a table nor a can_run change can undo it.
 // ---------------------------------------------------------------------------
 
 namespace {
@@ -1151,66 +1154,6 @@ Matrix<Scalar, MatrixFormat::Dense> make_graded_dense_matrix(int n,
 }
 
 }  // namespace
-
-TYPED_TEST(GesvdTest, DefaultProviderRoutesSmallGeneralToJacobi) {
-    using Scalar = typename TestFixture::Scalar;
-    constexpr Backend B = TestFixture::B;
-    namespace disp = batchlas::blas::dispatch;
-    namespace d = batchlas::dispatch;
-
-    if constexpr (B != Backend::CUDA && B != Backend::ROCM) {
-        GTEST_SKIP() << "Native gesvd providers are only dispatched on GPU backends.";
-    } else {
-        // A stray BATCHLAS_GESVD_PROVIDER (or the newer _ROUTE spelling) in the
-        // environment would make every expectation below pass or fail for the
-        // wrong reason.
-        ASSERT_FALSE(d::parse_route_env(d::Op::gesvd).found)
-            << "a gesvd route is forced in the environment; this test asserts the Auto order";
-
-        Matrix<Scalar, MatrixFormat::Dense> A(32, 32, 2);
-
-        // Every job combination at n <= 32, including values-only: the CTA path
-        // is ~2.2x faster values-only at n=32 but has no correct digits past
-        // kappa = 1e3, so it is not the default for any of them.
-        for (SvdVectors jobu : {SvdVectors::None, SvdVectors::All}) {
-            for (SvdVectors jobvh : {SvdVectors::None, SvdVectors::All}) {
-                const d::Route r = disp::detail::gesvd_route<Scalar>(
-                    *this->ctx, A.view(), jobu, jobvh, std::nullopt);
-                EXPECT_TRUE(d::is_native(r));
-                EXPECT_EQ(r.algo, d::Algorithm::Jacobi)
-                    << "jobu=" << static_cast<int>(jobu)
-                    << " jobvh=" << static_cast<int>(jobvh);
-            }
-        }
-
-        // Hermitian input is untouched: the Jacobi route declines it, so these
-        // still land on the CTA path.
-        EXPECT_EQ(disp::detail::gesvd_route<Scalar>(
-                      *this->ctx, A.view(), SvdVectors::All, SvdVectors::All, Uplo::Lower).algo,
-                  d::Algorithm::CTA);
-
-        // And n > 32 still reaches the blocked path rather than being captured
-        // by the promoted Jacobi entry. This is the wide-band rule, which is now
-        // `preferred` rather than a test inside the order walk...
-        Matrix<Scalar, MatrixFormat::Dense> Big(64, 64, 2);
-        EXPECT_EQ(disp::detail::gesvd_route<Scalar>(
-                      *this->ctx, Big.view(), SvdVectors::All, SvdVectors::All, std::nullopt).algo,
-                  d::Algorithm::Blocked);
-
-        // ...and that distinction is load-bearing, not cosmetic. Being merely
-        // un-preferred, Jacobi is still ELIGIBLE for this shape, so with no
-        // vendor compiled in the same 64x64 is served natively instead of being
-        // routed to a library that is not there. Under the old order walk the
-        // wide-band test sat next to the support checks and would have made the
-        // route ineligible outright.
-        d::GesvdShape big_shape = disp::detail::gesvd_op_shape<Scalar>(
-            *this->ctx, Big.view(), SvdVectors::All, SvdVectors::All, std::nullopt);
-        using GesvdTable = d::RouteTable<d::Op::gesvd, Scalar>;
-        EXPECT_TRUE(GesvdTable::supports(
-            d::Route{d::Origin::Native, d::Algorithm::Jacobi}, big_shape))
-            << "the wide-band rule is a preference, not a capability";
-    }
-}
 
 TYPED_TEST(GesvdTest, DefaultProviderKeepsSingularValuesAtHighCondition) {
     using Scalar = typename TestFixture::Scalar;
@@ -1426,13 +1369,10 @@ TYPED_TEST(GesvdTest, ThinMatchesFullLeadingColumns) {
 //
 //  * A DIRECT gesvd_cta call must throw. Silently writing m columns into a U
 //    that has k is an overrun.
-//  * Going through gesvd() with BATCHLAS_GESVD_PROVIDER=cta must still return
-//    the right answer. Dispatch resets an unsupported forced provider to Auto
-//    (gesvd.hh), so the request lands on a route that can serve it. That
-//    degrade is pre-existing behaviour shared by every provider, not something
-//    specific to Thin -- which is exactly why "it ran" is never by itself
-//    evidence that a forced provider was used.
-TYPED_TEST(GesvdTest, CtaRejectsGenuinelyThinButDispatchStillSucceeds) {
+//  * A `cta` pin through gesvd() throws (R6: a pin whose can_run is false is an
+//    error, where the old router silently fell back to Auto), and Auto still
+//    returns the right answer on a family that can serve it.
+TYPED_TEST(GesvdTest, CtaRejectsGenuinelyThinAndItsPinThrows) {
     using Scalar = typename TestFixture::Scalar;
     using Real = typename TestFixture::Real;
     constexpr Backend B = TestFixture::B;
@@ -1454,8 +1394,12 @@ TYPED_TEST(GesvdTest, CtaRejectsGenuinelyThinButDispatchStillSucceeds) {
                                               SvdVectors::Thin, SvdVectors::Thin)),
             std::invalid_argument);
 
-        const std::string err = run_gesvd_with_provider<Scalar, B>(
+        const std::string pinned = run_gesvd_with_provider<Scalar, B>(
             *this->ctx, A, s, U, Vh, SvdVectors::Thin, SvdVectors::Thin, "cta");
+        EXPECT_NE(pinned.find("cannot run this shape"), std::string::npos) << pinned;
+        MatrixView<Scalar, MatrixFormat::Dense>::copy(*this->ctx, A.view(), A_ref.view()).wait();
+        const std::string err = run_gesvd_with_provider<Scalar, B>(
+            *this->ctx, A, s, U, Vh, SvdVectors::Thin, SvdVectors::Thin, nullptr);
         ASSERT_TRUE(err.empty()) << err;
         expect_orthonormal_columns(U);
         expect_reconstruction(A_ref, s, U, Vh);
