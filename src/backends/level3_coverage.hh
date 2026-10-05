@@ -18,8 +18,8 @@
 // The dispatch coverage table can, and scripts/route_diff.sh diffs it. But it
 // was blind to these four ops: dispatch::resolve_route records every op that
 // goes through it, and symm/syrk/syr2k/trmm do not go through it. They have no
-// RouteTable<Op, T> specialisation at all -- only gemm, gesvd, ormqr and syev
-// do. WP0 gave these ops the Route VOCABULARY (parse_route_env, is_plain_vendor)
+// RouteTable<Op, T> specialisation at all -- only gemm, gesvd and ormqr do
+// (syev now selects from tuned/ tables, src/ops/syev). WP0 gave these ops the Route VOCABULARY (parse_route_env, is_plain_vendor)
 // but never the RESOLVER; their thresholds are still hand-rolled if-chains.
 //
 // So they are instrumented directly, at each terminal, reporting the branch

@@ -140,8 +140,13 @@ Deliberate breaks (each restored from a saved copy, md5-verified; red sets per C
 | B8 | cdouble sm_120 row n=25 V reordered | `AutoReadsTheTranscribedTable` (cdouble), `RowsHoldTheOldPreference` |
 | B9 | square term dropped from blocked/two_stage `can_run` | `CanRunFalsePinsThrow` (green before the `syev_supports_*` checks were added: the public entry validates first) |
 | B10 | `OtherTriangleIsNeverRead` skip list removed | `OtherTriangleIsNeverRead` (the located defects) |
+| BX1 | `batch >= 1` dropped from `large` | `CanRunEqualsLaunch` (batch=0 cells; `sytrd_blocked: invalid batch size` from the sizing call) |
+| BX2 | `n >= 1` dropped from `native` | `CanRunEqualsLaunch` (n=0 cells) |
+| BX3 | `d.is_gpu` dropped from `native` | `SyevCandidatesCpu.CpuQueueRunsNoNativeFamily` (the binding's `syev_supports_*` on a CPU queue: `Backend::AUTO` skips the NETLIB term) |
 | — | Jacobi workspace halved | nothing: `syev_jacobi_cta_buffer_size` is 0 |
 
+BX1-BX3 came from review: `CanRunEqualsLaunch` now also runs n=0 (batch 2), batch=0 (n=8 and
+n=40) and Upper as well as Lower; the vendor accepts every degenerate cell, as `can_run` says.
 Known gaps: the NETLIB term of `can_run` cannot go red here (no test has a GPU queue on the NETLIB
 backend); `has_sg32` cannot go red on this hardware.
 
@@ -182,11 +187,26 @@ pair, off-grid n = 100, 600, 700, 1500 and batch 1-5000), one process per cell, 
 `reached` row of an Auto `syev` built against each tree: **25/25 agree** (old `cta` compared with
 the transcriber's small-kernel pick; old `vendor:auto` = new `vendor:vendor`).
 
+**Re-run after the review fixes** (16 suites, `ortho_tests` not included). Vendor build: 7 failing
+names, the 6 above plus `SyevBlockedTest/3.EigenvaluesOnlyLowerMatchesNetlib`. That name is the
+NETLIB "no image" exception. Earlier runs never reached it because the nondeterministic segfault
+came first, and run alone it fails identically on the 424a45bc binary. CUDA instantiations of
+`syev_blocked_tests` pass 32/32, and `syev_candidates_tests` passes 65. Vendor-free: 72 failing
+names, which are the earlier 80 minus the 8 `ortho_tests` names, so nothing new. The data gate
+again gives 100.00% on all 8 pairs (98.08% worst with `DROP_N=33,449`).
+
 ## Shared-doc edits left to the integrator
 
 - `flat-kernel-selection.md` §12: a syev entry (this file).
 - `docs/design/known-defects.md`: the three located defects above.
 - `AGENTS.md` (§9 routing line: "syev's table is in functions/syev.hh"), `docs/perf/dispatch.md:61`
-  and `docs/design/vendor-independence.md:124` cite the deleted header table.
+  `docs/design/vendor-independence.md:124` and `docs/design/vendor-free-status.md:114`
+  (`syev.hh:357-385`, the `syev` row's preferred-window citation) cite the deleted header table.
+  The in-tree code comments that cited it (`sytrd_blocked.cc`, `sytrd_sb2st_hh.cc`,
+  `syev_blocked.cc`, `entry_points/eigen.cc`, `level3_coverage.hh`, `syev_blocked_tests.cc`) are
+  fixed in this PR, and `benchmarks/eigensolver_accuracy.cc` labels runs by the new family words
+  (`BATCHLAS_SYEV_ROUTE` first, then `BATCHLAS_SYEV_PROVIDER`; `cta_fused`, `jacobi` added).
+  The old root-level notes (`SYEV_PERF_*.md`, `SYEV_RETUNE_*.md`, `GESVD_IMPL_SPEC.md`) cite
+  pre-move `include/blas/functions/syev.hh` lines and were already stale before this PR.
 - `tuned/README.md`: syev's tables are transcribed (source=transcribed:424a45bc) for sm_89 and sm_120.
 - `include/batchlas/settings.hh`: mark `syev_small_kernel` and `syev_cta_max_n` retired.

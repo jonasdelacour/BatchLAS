@@ -171,7 +171,7 @@ TYPED_TEST(SyevBlockedTest, EigenvaluesOnlyLowerMatchesNetlib) {
 	// (stebz, not stedc), so it needs its own shape coverage: n=8/32 below the
 	// point where Auto would route here at all but reachable by direct call,
 	// n=96 the historical case, n=320 the top of the blocked values-mode region
-	// (syev_saturated_provider_for_n_values). Batch shrinks with n to keep the
+	// (jobz=N rows of tuned/syev.<dtype>.<device>.txt). Batch shrinks with n to keep the
 	// dense host reference solve cheap.
 	struct Shape { int n; int batch; };
 	for (const Shape s : {Shape{8, 16}, Shape{32, 16}, Shape{96, 16}, Shape{320, 4}}) {
@@ -374,8 +374,8 @@ TYPED_TEST(SyevBlockedTest, TwoStageProviderEigenvectorsSmoke) {
 // depends on it were both untested.
 //
 // This goes through the public `syev` on Auto rather than calling syev_blocked
-// directly, so it also covers the per-type routing in
-// syev_saturated_provider_for_n: at n = 320 that is blocked for float, double
+// directly, so it also covers the per-type rows of
+// tuned/syev.<dtype>.<device>.txt: at n = 320 that is blocked for float, double
 // and complex<float>, and the vendor for complex<double>. Whichever provider
 // Auto picks, the answer must satisfy the same residual and orthogonality
 // bounds.

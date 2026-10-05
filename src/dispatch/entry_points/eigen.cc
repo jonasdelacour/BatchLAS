@@ -1,9 +1,9 @@
-// The public syev / ormqr entry points' instantiations, outside the vendor TUs.
+// The public ormqr entry point's instantiations, outside the vendor TUs.
 //
-// These two differ from every other op S5 moves. Their public templates are
-// already DEFINED in headers -- functions/syev.hh and functions/ormqr.hh, each
-// forwarding to its *_dispatch, which resolves a Route and may call a native
-// kernel instead of the vendor. So there was never a definition to relocate.
+// ormqr differs from every other op S5 moves. Its public template is already
+// DEFINED in a header -- functions/ormqr.hh, forwarding to its *_dispatch,
+// which resolves a Route and may call a native kernel instead of the vendor.
+// So there was never a definition to relocate.
 //
 // What did live in the vendor TUs was their explicit INSTANTIATION, which is
 // just as binding: with the instantiation in cusolver.cc, `syev<Backend::CUDA,

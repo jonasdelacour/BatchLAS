@@ -754,10 +754,9 @@ namespace {
 // type-aware retiling of unmqr_hb2st_wave, which moves the same occupancy limit
 // and would re-open the geometry question from scratch.
 //
-// internal::is_complex rather than the base_type/is_same_v dance used in
-// include/batchlas/blas/functions/syev.hh: that idiom exists because is_complex is not
-// visible from a public header, and here it is (math-helpers.hh, used by
-// conj_if above).
+// internal::is_complex rather than a base_type/is_same_v dance (the idiom public
+// headers use, where is_complex is not visible): here it is visible
+// (math-helpers.hh, used by conj_if above).
 template <typename T>
 constexpr int32_t sb2st_back_tile_for(int32_t n) {
     if constexpr (internal::is_complex<T>::value) {

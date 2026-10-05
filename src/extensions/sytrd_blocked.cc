@@ -889,7 +889,8 @@ Event sytrd_blocked_impl(Queue& ctx,
                             // to a multiple of 2, so the scratch is
                             // ~n2^2*batch*8 bytes against a GLOBAL_MEM_SIZE/4
                             // budget, ~6.0 GiB on a 24 GiB 4090: n=448 batch=585
-                            // (the cfloat blocked/vendor crossover, syev.hh:594)
+                            // (the old cfloat blocked/vendor crossover, now a row of
+                            // tuned/syev.cfloat.<device>.txt)
                             // needs 0.75 GiB and n=512 batch=1024 needs 1.76 GiB,
                             // i.e. >=3.4x headroom. The ceiling is crossed around
                             // n2^2*batch > 8.0e8 elements -- forced blocked at
