@@ -1,7 +1,7 @@
 #pragma once
 
 // Native batched GETRS declarations: the composed tier (row permutation + two routed
-// trsm) and the fused narrow-RHS tier; windows in route_getrs.hh. evidence: docs/perf/lu.md
+// trsm) and the fused narrow-RHS tier; selected in src/ops/getrs/getrs.cc. evidence: docs/perf/lu.md
 
 #include "../util/internal-api.hh"
 #include <batchlas/blas/enums.hh>

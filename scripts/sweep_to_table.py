@@ -266,6 +266,28 @@ TRSM = OpSpec(
 )
 
 
+def getrs_key(r):
+    try:
+        key = (int(r["n"]), int(r["nrhs"]), int(r["batch"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+    return key if min(key) >= 1 else None
+
+
+# getrs (docs/design/flat-select-p5/getrs.md): work ~ n^2 nrhs batch; transA is not a key (the
+# old predicates never read it). sm_89 and sm_120 are both the transcribed old routing.
+GETRS_CHOICES = ("cta", "blocked", "vendor")
+GETRS = OpSpec(
+    op="getrs",
+    keys="n:log:2 nrhs:log batch:log",
+    row_ops=("getrs",),
+    row_key=getrs_key,
+    arm_spelling={c: c for c in GETRS_CHOICES},
+    arm_route={c: (("vendor:vendor",) if c == "vendor" else (f"native:{c}",)) for c in GETRS_CHOICES},
+    candidate_order=list(GETRS_CHOICES),
+)
+
+
 def parse_keys(spec):
     """'# keys:' text -> [(name, is_log, weight)]; a :log weight defaults to 1."""
     out = []
@@ -636,7 +658,7 @@ def potrf_offgrid(texts, points):
 
 
 POTRF.review = potrf_offgrid
-OPS = [POTRF, POSV, TRSM]
+OPS = [POTRF, POSV, TRSM, GETRS]
 OP_BY_NAME = {s.op: s for s in OPS}
 
 

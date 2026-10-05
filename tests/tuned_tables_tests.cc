@@ -4,6 +4,7 @@
 
 #include <batchlas/util/env.hh>
 
+#include "../src/ops/getrs/choice.hh"
 #include "../src/ops/posv/choice.hh"
 #include "../src/ops/potrf/choice.hh"
 #include "../src/ops/trsm/choice.hh"
@@ -56,6 +57,13 @@ std::vector<std::string> candidates(const std::string& op, const std::string& dt
         if (dtype == "double") return spellings(trsm::candidates<double>());
         if (dtype == "cfloat") return spellings(trsm::candidates<std::complex<float>>());
         if (dtype == "cdouble") return spellings(trsm::candidates<std::complex<double>>());
+    }
+    namespace getrs = batchlas::ops::getrs;
+    if (op == "getrs") {
+        if (dtype == "float") return spellings(getrs::candidates<float>());
+        if (dtype == "double") return spellings(getrs::candidates<double>());
+        if (dtype == "cfloat") return spellings(getrs::candidates<std::complex<float>>());
+        if (dtype == "cdouble") return spellings(getrs::candidates<std::complex<double>>());
     }
     return {};
 }
@@ -190,6 +198,7 @@ void expect_tables_declare(const std::string& op, const Names& names) {
 TEST(TunedTables, PotrfTablesDeclareChoiceKeyNames) { expect_tables_declare("potrf", batchlas::ops::potrf::key_names); }
 TEST(TunedTables, PosvTablesDeclareChoiceKeyNames) { expect_tables_declare("posv", batchlas::ops::posv::key_names); }
 TEST(TunedTables, TrsmTablesDeclareChoiceKeyNames) { expect_tables_declare("trsm", batchlas::ops::trsm::key_names); }
+TEST(TunedTables, GetrsTablesDeclareChoiceKeyNames) { expect_tables_declare("getrs", batchlas::ops::getrs::key_names); }
 
 const sel::Table& embedded(const std::string& name) {
     static std::map<std::string, sel::Table> cache;
@@ -241,6 +250,24 @@ TEST(TunedTables, TrsmSm89TablesHoldExactlyTheChoiceGrid) {
         EXPECT_EQ(got, want) << dt;
         EXPECT_EQ(t.rows.size(), want.size()) << dt;
     }
+}
+
+// Likewise getrs's transcriber, whose one transcription is written for sm_89 and sm_120 alike.
+TEST(TunedTables, GetrsTranscribedTablesHoldExactlyTheChoiceGrid) {
+    namespace getrs = batchlas::ops::getrs;
+    std::set<std::string> want;
+    for (int n : getrs::grid_n)
+        for (int r : getrs::grid_nrhs)
+            for (int b : getrs::grid_batch) want.insert(std::to_string(n) + " " + std::to_string(r) + " " + std::to_string(b));
+    for (const char* dev : {"sm_89", "sm_120"})
+        for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
+            const sel::Table& t = embedded(std::string("getrs.") + dt + "." + dev + ".txt");
+            EXPECT_EQ(t.source.rfind("transcribed:", 0), 0u) << t.file;
+            std::set<std::string> got;
+            for (const auto& row : t.rows) got.insert(row.keys[0] + " " + row.keys[1] + " " + row.keys[2]);
+            EXPECT_EQ(got, want) << t.file;
+            EXPECT_EQ(t.rows.size(), want.size()) << t.file;
+        }
 }
 
 // The sparse sm_89 tables (final-review finding): with equal weights, float n=24 batch=512

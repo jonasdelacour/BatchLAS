@@ -812,7 +812,7 @@ Event potrs_fused_launch(Queue& ctx,
 }
 
 // Runtime nrhs -> the compile-time accumulator width. The ladder must match
-// getrs_fused_nr_bucket, and stops at kGetrsFusedMaxRhs (route_getrs.hh).
+// getrs_fused_nr_bucket, and stops at kGetrsFusedMaxRhs (getrs_native.hh).
 template <typename T>
 Event fused_dispatch_nr(Queue& ctx, bool trans, bool conj,
                         const T* A, int lda, int sA, T* B, int ldb, int sB,
@@ -875,9 +875,8 @@ std::size_t getrs_fused_buffer_size(Queue&,
     return 0;
 }
 
-// Every gate RouteTable<Op::getrs,T>::supports() applies is RE-APPLIED here, because
-// this entry point is reachable WITHOUT the table: route_resolve.hh falls through to
-// automatic() when a forced route is unsupported.
+// src/ops/getrs/getrs.cc's can_run(Cta) mirrors these checks (R3); keep the two in step.
+// The entry point is also reachable directly, so every gate is applied here.
 template <typename T>
 Event getrs_fused_dispatch(Queue& ctx,
                            const MatrixView<T, MatrixFormat::Dense>& A,

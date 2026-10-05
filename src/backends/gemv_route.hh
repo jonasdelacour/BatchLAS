@@ -27,7 +27,7 @@ namespace batchlas::backend {
 // of scalars and holds ONE batch and ONE shape, so it cannot represent
 // disagreement between A, x and y -- absence is the honest encoding, and a
 // caller with no shape takes the vendor. Same pattern as gemm_op_shape
-// (gemm_variant.hh:189-197) and getrs_op_shape.
+// (gemm_variant.hh:189-197).
 //
 // THE AGREEMENT CHECKS ARE MADE HERE AND NOWHERE ELSE. There is no
 // gemv_validate_params in this tree: the public entry has never validated
