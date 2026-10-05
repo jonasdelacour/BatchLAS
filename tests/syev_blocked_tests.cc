@@ -294,6 +294,8 @@ TYPED_TEST(SyevBlockedTest, EigenvectorsLowerResidualAndOrtho) {
 TYPED_TEST(SyevBlockedTest, TwoStageProviderEigenvaluesOnlySmoke) {
 	using Scalar = typename TestFixture::ScalarType;
 	using Real = typename base_type<Scalar>::type;
+	// A two_stage pin on NETLIB used to be ignored (NETLIB ran the vendor); it now throws (R6).
+	if (TestFixture::BackendType == Backend::NETLIB) GTEST_SKIP() << "two-stage is a GPU path";
 
 	const int n = 128;
 	const int batch = 8;
@@ -331,6 +333,8 @@ TYPED_TEST(SyevBlockedTest, TwoStageProviderEigenvaluesOnlySmoke) {
 TYPED_TEST(SyevBlockedTest, TwoStageProviderEigenvectorsSmoke) {
 	using Scalar = typename TestFixture::ScalarType;
 	using Real = typename base_type<Scalar>::type;
+	// A two_stage pin on NETLIB used to be ignored (NETLIB ran the vendor); it now throws (R6).
+	if (TestFixture::BackendType == Backend::NETLIB) GTEST_SKIP() << "two-stage is a GPU path";
 
 	const int n = 64;
 	const int batch = 1;
