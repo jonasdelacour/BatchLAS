@@ -111,6 +111,7 @@ Deliberate breaks of `src/ops/getrs/getrs.cc`, each restored and md5-verified
 | B3 Blocked launches the fused kernel | PinnedRunIsTheDirectKernelBitForBit, CtaLaunchesAtItsResidentCapacity, Saturating..., Workspace..., Straddle..., ScopedPinBeatsTheEnvironment, AutoReadsTheTranscribedTable (float/double) |
 | B4 drop the NETLIB gate | NetlibBackendRunsNoNativeFamily |
 | B5 drop the conforming-pair gate | CanRunFalsePinsThrow |
+| B5b drop `A.batch_size() >= 1` (review fix; the batch-0 cases were added for it) | CanRunFalsePinsThrow (x4 dtypes: "cta batch 0 was accepted", "blocked batch 0 was accepted") |
 | B6 SLM capacity x2 | CanRunEqualsLaunch, CtaLaunchesAtItsResidentCapacity |
 | B7 table: float sm_120 n=32 nrhs 1/2 rows vendor-first (`BATCHLAS_TUNED_DIR`) | GetrsCandidates/4 (float) AutoReadsTheTranscribedTable + AutoReadsEveryKeyField, GetrsTranscribedTable.RowsHoldTheOldPreference... |
 

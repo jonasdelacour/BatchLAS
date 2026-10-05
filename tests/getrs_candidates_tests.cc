@@ -560,7 +560,7 @@ TYPED_TEST(GetrsCandidates, UnknownPinsThrow) {
 
 // The named can_run-false shapes (absorbs RouteGetrs.CorrectnessGatesAreNotSpeedGates and
 // FusedGetrsHandsBackAtBothCeilings' table half): empty order or rhs, one past the width,
-// a non-square A, B's rows or batch disagreeing with A.
+// a non-square A, B's rows or batch disagreeing with A, an empty batch on both sides.
 TYPED_TEST(GetrsCandidates, CanRunFalsePinsThrow) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
@@ -571,7 +571,8 @@ TYPED_TEST(GetrsCandidates, CanRunFalsePinsThrow) {
                           {gs::Cta{}, 8, 8, 8, w + 1, 1, 1, "nrhs past the width"},
                           {gs::Cta{}, 8, 10, 8, 2, 1, 1, "A not square"},  {gs::Blocked{}, 8, 10, 8, 2, 1, 1, "A not square"},
                           {gs::Cta{}, 8, 8, 9, 2, 1, 1, "B rows != n"},    {gs::Blocked{}, 8, 8, 9, 2, 1, 1, "B rows != n"},
-                          {gs::Cta{}, 8, 8, 8, 2, 2, 1, "batch mismatch"}, {gs::Blocked{}, 8, 8, 8, 2, 2, 1, "batch mismatch"}};
+                          {gs::Cta{}, 8, 8, 8, 2, 2, 1, "batch mismatch"}, {gs::Blocked{}, 8, 8, 8, 2, 2, 1, "batch mismatch"},
+                          {gs::Cta{}, 8, 8, 8, 2, 0, 0, "batch 0"},        {gs::Blocked{}, 8, 8, 8, 2, 0, 0, "batch 0"}};
     for (const auto& k : cases) {
         UnifiedVector<T> a(std::size_t(std::max(1, k.an * k.ac)) * 2, T(1)), b(std::size_t(std::max(1, k.bn * k.bc)) * 2, T(1));
         const MVof<T> A(a.data(), k.an, k.ac, std::max(1, k.an), std::max(1, k.an * k.ac), k.ab);
