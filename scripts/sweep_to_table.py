@@ -635,8 +635,30 @@ def potrf_offgrid(texts, points):
             print(f"   n={n:<5} " + "  ".join(cells))
 
 
+def geqrf_key(r):
+    try:
+        key = (str(r["form"]), int(r["n"]), int(r["aspect"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+    return key if key[0] in ("sq", "tall", "wide") and min(key[1:]) >= 1 else None
+
+
+# geqrf (docs/design/flat-select-p5/geqrf.md): work ~ n^3 aspect. No sweep source: sm_89 and
+# sm_120 are both transcribed (the old predicates read no architecture).
+GEQRF_CHOICES = ("tiny", "cta", "blocked", "vendor")
+GEQRF = OpSpec(
+    op="geqrf",
+    keys="form:exact n:log:3 aspect:log",
+    row_ops=("geqrf",),
+    row_key=geqrf_key,
+    arm_spelling={c: c for c in GEQRF_CHOICES},
+    arm_route={c: (("vendor:vendor",) if c == "vendor" else (f"native:{c}",)) for c in GEQRF_CHOICES},
+    candidate_order=list(GEQRF_CHOICES),
+)
+
 POTRF.review = potrf_offgrid
 OPS = [POTRF, POSV, TRSM]
+OPS.append(GEQRF)
 OP_BY_NAME = {s.op: s for s in OPS}
 
 

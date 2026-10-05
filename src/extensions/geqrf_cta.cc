@@ -513,7 +513,7 @@ Event geqrf_cta_dispatch(Queue& ctx,
     }
     if (m < n) {
         throw batchlas::invalid_argument(
-            "geqrf_cta: m < n is not supported (route_geqrf.hh's supports() refuses it)");
+            "geqrf_cta: m < n is not supported (geqrf's can_run refuses it)");
     }
     if (A.is_heterogeneous()) {
         // One launch covers the batch with a single (m, n, ld, stride) tuple.

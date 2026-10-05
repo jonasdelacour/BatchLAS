@@ -10,6 +10,7 @@
 
 #include "../math-helpers.hh"
 #include "../queue.hh"
+#include "../ops/geqrf/geqrf.hh"  // geqrf_buffer_size_bound: sized once, run on sub-views
 #include "../util/template-instantiations.hh"
 
 #include <algorithm>
@@ -400,7 +401,7 @@ size_t sytrd_sy2sb_buffer_size(Queue& ctx,
         // linear in nb, so a mismatch silently overruns the BumpAllocator.
         const int32_t ormqr_nb_hint = sy2sb_ormqr_block_size_hint(n, batch, kd_i);
 
-        const size_t geqrf_ws = geqrf_buffer_size<B, T>(ctx, V0, tau_span);
+        const size_t geqrf_ws = geqrf_buffer_size_bound<B, T>(ctx, V0, tau_span);
         const Transpose trans_left = internal::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
         const size_t ormqr_l_ws = ormqr_buffer_size<B, T>(ctx, V0, A_left0, Side::Left, trans_left, tau_span, ormqr_nb_hint);
         const size_t ormqr_r_ws = ormqr_buffer_size<B, T>(ctx, V0, A_right0, Side::Right, Transpose::NoTrans, tau_span, ormqr_nb_hint);
@@ -458,7 +459,7 @@ Event sytrd_sy2sb(Queue& ctx,
     // Must match the shapes queried in sytrd_sy2sb_buffer_size exactly.
     auto A_left0 = a_in({kd_i, SliceEnd()}, {pk0, SliceEnd()});
     auto A_right0 = a_in({pk0, SliceEnd()}, {kd_i, SliceEnd()});
-    const size_t geqrf_ws_bytes = geqrf_buffer_size<B, T>(ctx, V0, Span<T>(tau_panel_buf.data(), static_cast<size_t>(pk0) * static_cast<size_t>(batch)));
+    const size_t geqrf_ws_bytes = geqrf_buffer_size_bound<B, T>(ctx, V0, Span<T>(tau_panel_buf.data(), static_cast<size_t>(pk0) * static_cast<size_t>(batch)));
     const Transpose trans_left = internal::is_complex<T>::value ? Transpose::ConjTrans : Transpose::Trans;
     // Same hint used for the query and for every ormqr call in the loop below.
     // Keep this identical to sytrd_sy2sb_buffer_size or the pool overruns.

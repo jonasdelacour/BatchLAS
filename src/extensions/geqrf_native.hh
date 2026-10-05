@@ -47,6 +47,8 @@ BATCHLAS_INTERNAL_API int geqrf_tiny_max_n_for_slm(std::size_t slm_budget_bytes)
 template <typename T>
 BATCHLAS_INTERNAL_API int geqrf_tiny_max_n();
 
+inline constexpr int kGeqrfTinyWgSize = 64;  // sycl-free for can_run; static_assert in geqrf_tiny.cc
+
 // Zero and constant, hence monotone in (rows, cols, batch) as band_reduction.cc's sizing
 // replay requires. Never dereferences A.data_ptr().
 template <typename T>
@@ -97,7 +99,7 @@ template <typename T>
 BATCHLAS_INTERNAL_API unsigned geqrf_panel_reg_debug_launch(
     Queue& ctx, int m, int n);  // wg | leaf<<16; 0 = no fit
 
-// Empty means "use sycl_gemm::gemm_custom"; inject to route trailing updates through the table.
+// Mandatory: an empty seam throws; geqrf injects the public gemm.
 template <typename T>
 using GeqrfTrailingGemm = std::function<Event(
     Queue&,

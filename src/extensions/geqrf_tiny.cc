@@ -49,6 +49,7 @@ constexpr int geqrf_tiny_worst_regs() {
 // the launch -- 64 lanes is 2 warps in one of the four, 1 x 32 x ceil8(226 + 8) = 7,680 of
 // its 16,384. Both operands are named so raising either is deliberate; GATE 2 still binds.
 constexpr int kGeqrfTinyMaxWg = gn::kGeqrfTinyWg;
+static_assert(gn::kGeqrfTinyWg == kGeqrfTinyWgSize, "geqrf can_run reads kGeqrfTinyWgSize");
 constexpr int kGeqrfTinyWorstRegs = geqrf_tiny_worst_regs();
 static_assert(resident::sm89_fits(kGeqrfTinyWorstRegs, kGeqrfTinyMaxWg),
               "geqrf tiny: regs x wg overflows a register sub-partition -- re-run "

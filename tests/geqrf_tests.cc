@@ -25,7 +25,7 @@
 
 #include "../src/extensions/geqrf_native.hh"
 #include "../src/extensions/orgqr_native.hh"
-#include "../src/backends/geqrf_route.hh"
+#include "../src/ops/geqrf/choice.hh"
 #include "../src/backends/orgqr_route.hh"
 
 #include <algorithm>
@@ -273,22 +273,29 @@ protected:
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
         if (!this->ctx) GTEST_SKIP() << "no queue";
         if (this->ctx->device().type != DeviceType::GPU) {
-            GTEST_SKIP() << "the native geqrf kernels are GPU-only (route_geqrf.hh gate 3)";
+            GTEST_SKIP() << "the native geqrf kernels are GPU-only (geqrf can_run)";
         }
         if (!this->ctx->device().supports_sub_group_size(32)) {
-            GTEST_SKIP() << "device does not offer sub-group size 32 (route_geqrf.hh gate 4)";
+            GTEST_SKIP() << "device does not offer sub-group size 32 (geqrf can_run)";
         }
     }
 
-    // The DEVICE's local-memory budget, spelled as src/backends/geqrf_route.hh spells
-    // it -- NOT device_limits.hh's hardcoded 49152.
+    // The DEVICE's local-memory budget, spelled as select::Device spells it -- NOT
+    // device_limits.hh's hardcoded 49152.
     std::size_t budget() const {
         const std::size_t lm = static_cast<std::size_t>(
             this->ctx->device().get_property(DeviceProperty::LOCAL_MEM_SIZE));
         return lm > 4096 ? lm - 4096 : std::size_t(0);
     }
 
-    // The CTA TIER's predicate: occupancy-scaled, and what supports() advertises.
+    // The blocked driver's mandatory trailing-gemm seam: the public gemm, as geqrf injects it.
+    sycl_geqrf::GeqrfTrailingGemm<T> gemm_seam() const {
+        return [](Queue& c, const MatrixView<T, MatrixFormat::Dense>& ga, const MatrixView<T, MatrixFormat::Dense>& gb,
+                  const MatrixView<T, MatrixFormat::Dense>& gc, T a, T b, Transpose ta, Transpose tb,
+                  ComputePrecision pr) { return gemm<BackendType, T>(c, ga, gb, gc, a, b, ta, tb, pr); };
+    }
+
+    // The CTA TIER's predicate: occupancy-scaled, and what geqrf's can_run asks.
     bool cta_fits(int m, int n) const {
         return sycl_geqrf::geqrf_cta_fits<T>(m, n, budget());
     }
@@ -394,8 +401,8 @@ void check_one(const Problem<T>& p, const char* what) {
     }
 }
 
-// The route pins below MUST use batchlas::ScopedEnvVar (<batchlas/util/env.hh>), not a
-// hand-rolled ::setenv guard. batchlas::settings() snapshots the environment once, before
+// geqrf pins use select::ScopedPin. The orgqr route pins below MUST use
+// batchlas::ScopedEnvVar (<batchlas/util/env.hh>), not a hand-rolled ::setenv guard. batchlas::settings() snapshots the environment once, before
 // main(), so a bare ::setenv is invisible to route resolution and every pinned test here
 // silently measures the vendor. ScopedEnvVar's ctor and dtor call detail::reload_settings(),
 // which is what makes the pin -- and its removal at scope exit -- reach the router.
@@ -494,7 +501,7 @@ TYPED_TEST(GeqrfTest, BlockedResidualAndOrthogonality) {
         const std::size_t ws = sycl_geqrf::geqrf_blocked_buffer_size<T>(*this->ctx, V);
         UnifiedVector<std::byte> w(ws ? ws : 1);
         ASSERT_NO_THROW(
-            (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), w.to_span()));
+            (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), w.to_span(), this->gemm_seam()));
         this->ctx->wait();
         check_one(p, "blocked");
         if (this->HasFailure()) return;
@@ -531,7 +538,7 @@ TYPED_TEST(GeqrfTest, ShortFinalPanelStraddlesTheBlockWidth) {
         const std::size_t ws = sycl_geqrf::geqrf_blocked_buffer_size<T>(*this->ctx, V);
         UnifiedVector<std::byte> wbuf(ws ? ws : 1);
         ASSERT_NO_THROW((void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(),
-                                                              wbuf.to_span()));
+                                                              wbuf.to_span(), this->gemm_seam()));
         this->ctx->wait();
         check_one(p, (s.n % w) ? "blocked/short-final-panel" : "blocked/exact-multiple");
         if (this->HasFailure()) return;
@@ -554,7 +561,7 @@ TYPED_TEST(GeqrfTest, BothPanelLeavesFactoriseCorrectly) {
         UnifiedVector<std::byte> wb(std::max<std::size_t>(
             1, sycl_geqrf::geqrf_blocked_buffer_size<T>(*this->ctx, V)));
         ASSERT_NO_THROW((void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(),
-                                                              wb.to_span()));
+                                                              wb.to_span(), this->gemm_seam()));
         this->ctx->wait();
         check_one(p, "blocked/resident-leaf");
         if (this->HasFailure()) return;
@@ -572,7 +579,7 @@ TYPED_TEST(GeqrfTest, BothPanelLeavesFactoriseCorrectly) {
         UnifiedVector<std::byte> wb(std::max<std::size_t>(
             1, sycl_geqrf::geqrf_blocked_buffer_size<T>(*this->ctx, V)));
         ASSERT_NO_THROW((void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(),
-                                                              wb.to_span()));
+                                                              wb.to_span(), this->gemm_seam()));
         this->ctx->wait();
         check_one(p, "blocked/global-leaf");
     }
@@ -603,7 +610,7 @@ TYPED_TEST(GeqrfTest, RankDeficientColumnsStillFactorise) {
                     : sycl_geqrf::geqrf_cta_buffer_size<T>(*this->ctx, V)));
         if (pass) {
             ASSERT_NO_THROW((void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(),
-                                                                  wb.to_span()));
+                                                                  wb.to_span(), this->gemm_seam()));
         } else {
             ASSERT_TRUE(this->cta_fits(m, n));
             ASSERT_NO_THROW((void)sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, V, p.tau.to_span(),
@@ -639,7 +646,7 @@ TYPED_TEST(GeqrfTest, ComplexRDiagonalIsExactlyReal) {
                 1, s.blocked ? sycl_geqrf::geqrf_blocked_buffer_size<T>(*this->ctx, V)
                              : sycl_geqrf::geqrf_cta_buffer_size<T>(*this->ctx, V)));
             if (s.blocked)
-                (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span());
+                (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span(), this->gemm_seam());
             else
                 (void)sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span());
             this->ctx->wait();
@@ -669,7 +676,7 @@ TYPED_TEST(GeqrfTest, TauConventionSurvivesTheRoutedOrmqr) {
     auto V = view_of(p);
     UnifiedVector<std::byte> wb(std::max<std::size_t>(
         1, sycl_geqrf::geqrf_blocked_buffer_size<T>(*this->ctx, V)));
-    (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span());
+    (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span(), this->gemm_seam());
     this->ctx->wait();
 
     // C = the first n columns of I_m; then C <- Q C, so Q's first n columns come
@@ -827,7 +834,7 @@ TYPED_TEST(GeqrfTest, ConventionMatchesReferenceLapackWithoutAVendor) {
             1, s.blocked ? sycl_geqrf::geqrf_blocked_buffer_size<T>(*this->ctx, V)
                          : sycl_geqrf::geqrf_cta_buffer_size<T>(*this->ctx, V)));
         if (s.blocked) {
-            (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span(), {});
+            (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span(), this->gemm_seam());
         } else {
             (void)sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span());
         }
@@ -921,7 +928,7 @@ TYPED_TEST(GeqrfTest, SubnormalScaleColumnsTakeTheDivisionPath) {
             1, s.blocked ? sycl_geqrf::geqrf_blocked_buffer_size<T>(*this->ctx, V)
                          : sycl_geqrf::geqrf_cta_buffer_size<T>(*this->ctx, V)));
         if (s.blocked) {
-            (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span(), {});
+            (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span(), this->gemm_seam());
         } else {
             (void)sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span());
         }
@@ -991,7 +998,7 @@ TYPED_TEST(GeqrfTest, NativeFactorMatchesTheVendorElementwise) {
                 1, s.blocked ? sycl_geqrf::geqrf_blocked_buffer_size<T>(*this->ctx, V)
                              : sycl_geqrf::geqrf_cta_buffer_size<T>(*this->ctx, V)));
             if (s.blocked)
-                (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span());
+                (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span(), this->gemm_seam());
             else
                 (void)sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span());
             this->ctx->wait();
@@ -1030,33 +1037,42 @@ TYPED_TEST(GeqrfTest, NativeFactorMatchesTheVendorElementwise) {
     }
 }
 
-// G8. m < n, m == n, m > n. route_geqrf.hh gate 2 refuses m < n as a CORRECTNESS gate:
-// a wide view walks the trailing update past the bottom of the panel. The direct entry
-// points are reachable without the table, so both are checked.
+// G8. m < n, m == n, m > n. geqrf's can_run refuses m < n as a CORRECTNESS gate: a wide
+// view walks the trailing update past the bottom of the panel. The direct entry points are
+// reachable without the selector, so both are checked.
 TYPED_TEST(GeqrfTest, WideIsRefusedAndTallAndSquareAreNot) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::BackendType;
-    using Tbl = dispatch::RouteTable<dispatch::Op::geqrf, T>;
-    const dispatch::Route cta{dispatch::Origin::Native, dispatch::Algorithm::CTA};
-    const dispatch::Route blk{dispatch::Origin::Native, dispatch::Algorithm::Blocked};
+    using ops::geqrf::GeqrfChoice;
 
-    // (a) the TABLE refuses m < n on both native arms, and accepts m == n and m > n.
+    // (a) a cta or blocked PIN is refused on m < n (R6: a can_run-false pin throws), and
+    // accepted on m == n and m > n (cta only where it fits).
     {
         auto p = make_problem<T>(24, 40, 2, 11u);           // WIDE
         auto V = view_of(p);
-        const auto s = backend::geqrf_op_shape<B, T>(*this->ctx, V);
-        ASSERT_TRUE(s.has_value());
-        EXPECT_FALSE(Tbl::supports(cta, *s));
-        EXPECT_FALSE(Tbl::supports(blk, *s));
+        for (const GeqrfChoice c : {GeqrfChoice{ops::geqrf::Cta{}}, GeqrfChoice{ops::geqrf::Blocked{}}}) {
+            select::ScopedPin<GeqrfChoice> pin("geqrf", c);
+            EXPECT_THROW(((void)geqrf_buffer_size<B, T>(*this->ctx, V, p.tau.to_span())), std::invalid_argument)
+                << select::to_string(c);
+        }
     }
     const std::pair<int, int> ok[] = {{40, 40}, {64, 40}};
     for (const auto& dims : ok) {
         auto p = make_problem<T>(dims.first, dims.second, 2, 12u);
         auto V = view_of(p);
-        const auto s = backend::geqrf_op_shape<B, T>(*this->ctx, V);
-        ASSERT_TRUE(s.has_value());
-        EXPECT_TRUE(Tbl::supports(blk, *s)) << dims.first << "x" << dims.second;
-        EXPECT_EQ(Tbl::supports(cta, *s), this->cta_fits(dims.first, dims.second));
+        {
+            select::ScopedPin<GeqrfChoice> pin("geqrf", ops::geqrf::Blocked{});
+            EXPECT_NO_THROW(((void)geqrf_buffer_size<B, T>(*this->ctx, V, p.tau.to_span())))
+                << dims.first << "x" << dims.second;
+        }
+        select::ScopedPin<GeqrfChoice> pin("geqrf", ops::geqrf::Cta{});
+        bool accepted = true;
+        try {
+            (void)geqrf_buffer_size<B, T>(*this->ctx, V, p.tau.to_span());
+        } catch (const std::invalid_argument&) {
+            accepted = false;
+        }
+        EXPECT_EQ(accepted, this->cta_fits(dims.first, dims.second)) << dims.first << "x" << dims.second;
     }
 
     // (b) the KERNELS refuse it too, rather than returning wrong numbers.
@@ -1068,7 +1084,7 @@ TYPED_TEST(GeqrfTest, WideIsRefusedAndTallAndSquareAreNot) {
             (void)sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span()),
             std::invalid_argument);
         EXPECT_THROW(
-            (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span()),
+            (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), wb.to_span(), this->gemm_seam()),
             std::invalid_argument);
     }
 }
@@ -1092,7 +1108,7 @@ TYPED_TEST(GeqrfTest, DirectEntryPointsRefuseWhatSupportsRefuses) {
     EXPECT_THROW((void)sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, H, p.tau.to_span(), wb.to_span()),
                  std::invalid_argument);
     EXPECT_THROW(
-        (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, H, p.tau.to_span(), wb.to_span()),
+        (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, H, p.tau.to_span(), wb.to_span(), this->gemm_seam()),
         std::invalid_argument);
 
     // (b) a tau span shorter than k * batch. tau is packed per matrix with stride k OF
@@ -1100,7 +1116,7 @@ TYPED_TEST(GeqrfTest, DirectEntryPointsRefuseWhatSupportsRefuses) {
     Span<T> shortTau(p.tau.data(), p.tau.size() - 1);
     EXPECT_THROW((void)sycl_geqrf::geqrf_cta_dispatch<T>(*this->ctx, V, shortTau, wb.to_span()),
                  std::invalid_argument);
-    EXPECT_THROW((void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, shortTau, wb.to_span()),
+    EXPECT_THROW((void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, shortTau, wb.to_span(), this->gemm_seam()),
                  std::invalid_argument);
 }
 
@@ -1113,39 +1129,9 @@ TYPED_TEST(GeqrfTest, RouteTableAndTheVendorFreeFallback) {
     auto p = make_problem<T>(96, 96, 2, 15u);
     auto V = view_of(p);
 
-    // With NO vendor a supported native route must be handed over (route_resolve.hh:60-63).
-    const auto free_route =
-        backend::geqrf_route<B, T>(*this->ctx, V, /*vendor_available=*/false);
-    ASSERT_TRUE(dispatch::is_native(free_route))
-        << "a vendor-free build has no geqrf route for 96x96; the fallback is broken";
-
-    // preferred() carries a PER-TYPE order floor, so the vendor-present answer at 96x96 is a
-    // per-type fact, not a blanket "vendor": native for float/cfloat/double, vendor for cdouble.
-    // evidence: docs/perf/qr.md#the-shipped-geqrf-window
-    if (!std::getenv("BATCHLAS_GEQRF_ROUTE")) {
-        const auto auto_route =
-            backend::geqrf_route<B, T>(*this->ctx, V, /*vendor_available=*/true);
-        if constexpr (std::is_same_v<T, std::complex<double>>) {
-            EXPECT_TRUE(dispatch::is_vendor(auto_route))
-                << "cdouble 96x96 is 0.49x native and BELOW the cdouble floor of 256; "
-                   "routing it native ships a measured loss";
-        } else {
-            ASSERT_TRUE(dispatch::is_native(auto_route))
-                << "96x96 is inside this type's measured window and Auto took "
-                << dispatch::to_string(auto_route.origin);
-            // The tier is the crossover AND the tile fit, both read from THIS device:
-            // on a device whose tile cannot hold 96x96 the blocked arm is the right
-            // answer for every type, so the expectation is not hardcoded to this box.
-            const bool want_cta = this->cta_fits(96, 96) && !std::is_same_v<T, double>;
-            EXPECT_EQ(auto_route.algo,
-                      want_cta ? dispatch::Algorithm::CTA : dispatch::Algorithm::Blocked)
-                << "the window landed on the wrong native tier at 96x96 -- got "
-                << dispatch::to_string(auto_route.algo)
-                << " (cta_fits(96,96) = " << this->cta_fits(96, 96) << ")";
-        }
-    }
-
-    // The same fallback for orgqr.
+    // geqrf's half (vendor-free fallback, per-type Auto at 96x96) moved to
+    // geqrf_candidates_tests: VendorFreeWalkIsTheOldTieBreak and AutoReadsEveryKeyField.
+    // The vendor-free fallback for orgqr.
     const auto ofree = backend::orgqr_route<B, T>(*this->ctx, V, /*vendor_available=*/false);
     ASSERT_TRUE(dispatch::is_native(ofree))
         << "a vendor-free build has no orgqr route for 96x96";
@@ -1197,116 +1183,6 @@ TYPED_TEST(GeqrfTest, OccupancyTargetIsPinned) {
            "is inert and nothing above this line is discriminating";
 }
 
-// G9b. The native-vs-native tie-break lives in RouteTable::native_tier_preferred, NOT in
-// supports(): both arms must stay supports()-true on both sides of the crossover, or a
-// pinned `cta` falls through to automatic() and measures something else, and the same
-// window in preferred() would flip the vendor-present answer too.
-// evidence: docs/perf/qr.md#cta-vs-blocked-crossover
-TYPED_TEST(GeqrfTest, NativeTierTieBreakPicksTheFasterNativeVendorFree) {
-    using T = typename TestFixture::T;
-    using R = typename TestFixture::R;
-    static constexpr Backend B = TestFixture::BackendType;
-
-    // The crossover route_geqrf.hh declares; both complex types stay on CTA to the top of
-    // their capacity, so for them only the supports() half runs.
-    const bool has_crossover =
-        std::is_same_v<T, float> || (std::is_same_v<T, double> && !test_utils::is_complex<T>::value);
-    const int nc = std::is_same_v<R, float> ? 96 : 48;   // last n that prefers CTA
-
-    if (!has_crossover) {
-        GTEST_SKIP() << "no measured native crossover for this type (route_geqrf.hh: both "
-                        "complex types stay on CTA to the top of their SLM capacity)";
-    }
-
-    // BOTH shapes must be CTA-ELIGIBLE, or "blocked was chosen" proves nothing: the fit
-    // gate, not the tie-break, made the decision. The above-crossover shape is SEARCHED for
-    // rather than hardcoded -- the area ceiling can sit below the crossover.
-    // evidence: docs/perf/qr.md#the-occupancy-rule
-    const int square_cap = this->cta_max_square();
-    int above = 0;
-    if (square_cap > nc) above = nc + 1;
-    if (!this->cta_fits(nc, nc) || above == 0) {
-        GTEST_SKIP() << "this type's CTA area ceiling (largest square " << square_cap
-                     << ") sits at or below the declared column crossover " << nc
-                     << ", so the fit gate answers every shape before the tie-break is "
-                        "consulted and there is nothing here to test";
-    }
-
-    auto p_lo = make_problem<T>(nc, nc, 2, 771u);
-    auto p_hi = make_problem<T>(above, above, 2, 773u);
-    auto V_lo = view_of(p_lo);
-    auto V_hi = view_of(p_hi);
-
-    // (1) The tie-break itself, through the real shape builder.
-    const auto lo_free = backend::geqrf_route<B, T>(*this->ctx, V_lo, /*vendor_available=*/false);
-    const auto hi_free = backend::geqrf_route<B, T>(*this->ctx, V_hi, /*vendor_available=*/false);
-    if (!std::getenv("BATCHLAS_GEQRF_ROUTE")) {
-        EXPECT_EQ(lo_free.algo, dispatch::Algorithm::CTA)
-            << "vendor-free at n=" << nc << " should take the CTA tier (tier_summary.txt has it "
-            << "ahead there); got " << dispatch::to_string(lo_free.algo);
-        EXPECT_EQ(hi_free.algo, dispatch::Algorithm::Blocked)
-            << "vendor-free at n=" << above << " should take the BLOCKED tier -- CTA is measured "
-            << "1.37x-1.43x slower there and both are linked into this build; got "
-            << dispatch::to_string(hi_free.algo);
-    }
-
-    // (2) Neither arm may have lost supports() anywhere -- the half that keeps a pin honest.
-    {
-        const auto sh_lo = backend::geqrf_op_shape<B, T>(*this->ctx, V_lo);
-        const auto sh_hi = backend::geqrf_op_shape<B, T>(*this->ctx, V_hi);
-        ASSERT_TRUE(sh_lo.has_value() && sh_hi.has_value());
-        using Tbl = dispatch::RouteTable<dispatch::Op::geqrf, T>;
-        const dispatch::Route cta{dispatch::Origin::Native, dispatch::Algorithm::CTA};
-        const dispatch::Route blk{dispatch::Origin::Native, dispatch::Algorithm::Blocked};
-        EXPECT_TRUE(Tbl::supports(cta, *sh_hi))
-            << "the CTA arm lost supports() ABOVE the crossover -- the tier window was moved into "
-               "supports(), which makes a forced `cta` fall through to automatic() "
-               "(route_resolve.hh:101) and measure something else. It belongs in "
-               "native_tier_preferred().";
-        EXPECT_TRUE(Tbl::supports(blk, *sh_lo))
-            << "the blocked arm lost supports() BELOW the crossover -- same defect, other "
-               "direction (route_geqrf.hh's 'NO LOWER BOUND ON THE EXTENTS' note).";
-    }
-
-    // (3) The vendor-present answer must AGREE WITH THE TIE-BREAK, not be vendor: whichever arm
-    //     the vendor-present walk lands on must be the arm the vendor-free tie-break picks.
-    //     evidence: docs/perf/qr.md#the-shipped-geqrf-window
-    if (!std::getenv("BATCHLAS_GEQRF_ROUTE")) {
-        const auto sh_lo = backend::geqrf_op_shape<B, T>(*this->ctx, V_lo);
-        const auto sh_hi = backend::geqrf_op_shape<B, T>(*this->ctx, V_hi);
-        ASSERT_TRUE(sh_lo.has_value() && sh_hi.has_value());
-        using Tbl = dispatch::RouteTable<dispatch::Op::geqrf, T>;
-
-        // COVERAGE WARNING, measured not assumed: only the float instantiation can fire here --
-        // the other types' probe shapes sit below their own floors, so `check` takes the vendor
-        // early-exit. Per-type tier cover: RouteGeqrf.PreferredIsTheMeasuredOrderFloorAndTheTallClause.
-        int in_window_here = 0;
-        const auto check = [&](const auto& view, const auto& shape, int64_t n_here) {
-            const dispatch::Route present =
-                backend::geqrf_route<B, T>(*this->ctx, view, /*vendor_available=*/true);
-            if (dispatch::is_vendor(present)) return;   // outside the window: nothing to check
-            ++in_window_here;
-            const dispatch::Route best = Tbl::best_native_tier(shape);
-            EXPECT_EQ(present.algo, best.algo)
-                << "the vendor-present walk landed on a DIFFERENT native tier than the "
-                   "vendor-free tie-break at n=" << n_here << " -- got "
-                << dispatch::to_string(present.algo) << ", tie-break says "
-                << dispatch::to_string(best.algo)
-                << ". preferred() must answer true for exactly one tier; see "
-                   "best_native_tier in route_geqrf.hh.";
-        };
-        check(V_lo, *sh_lo, nc);
-        check(V_hi, *sh_hi, above);
-        // Logged, not RecordProperty'd: this runs in a free helper, not a Test member.
-        if (in_window_here == 0) {
-            GTEST_LOG_(INFO) << "G9b(3) asserted nothing for this type: both probe shapes ("
-                             << nc << ", " << above << ") are below its order floor, so the "
-                                "vendor-present answer is vendor by design. The per-type tier "
-                                "cover is RouteGeqrf.PreferredIsTheMeasuredOrderFloorAndTheTallClause.";
-        }
-    }
-}
-
 // G10. THE FACADE REACHES THE KERNEL, guarded by BIT-EXACTNESS against the direct entry
 // point, not a residual: a residual bound is satisfied by either implementation. The
 // blocked arm must inject the SAME routed gemm the facade injects.
@@ -1316,15 +1192,9 @@ TYPED_TEST(GeqrfTest, FacadeReachesTheCtaKernel) {
     const int m = 40, n = 24, batch = 3;
     ASSERT_TRUE(this->cta_fits(m, n));
 
-    ScopedEnvVar guard("BATCHLAS_GEQRF_ROUTE", "cta");
+    select::ScopedPin<ops::geqrf::GeqrfChoice> guard("geqrf", ops::geqrf::Cta{});
     auto p = make_problem<T>(m, n, batch, 999u);
     auto V = view_of(p);
-
-    // Localises a failure; it is NOT the guard.
-    const auto route = backend::geqrf_route<B, T>(*this->ctx, V, /*vendor_available=*/true);
-    ASSERT_TRUE(dispatch::is_native(route))
-        << "BATCHLAS_GEQRF_ROUTE=cta did not resolve to a native route";
-    ASSERT_EQ(route.algo, dispatch::Algorithm::CTA);
 
     UnifiedVector<std::byte> ws(std::max<std::size_t>(
         1, geqrf_buffer_size<B, T>(*this->ctx, V, p.tau.to_span())));
@@ -1364,14 +1234,9 @@ TYPED_TEST(GeqrfTest, FacadeReachesTheBlockedDriver) {
     static constexpr Backend B = TestFixture::BackendType;
     const int m = 100, n = 70, batch = 3;
 
-    ScopedEnvVar guard("BATCHLAS_GEQRF_ROUTE", "blocked");
+    select::ScopedPin<ops::geqrf::GeqrfChoice> guard("geqrf", ops::geqrf::Blocked{});
     auto p = make_problem<T>(m, n, batch, 998u);
     auto V = view_of(p);
-
-    const auto route = backend::geqrf_route<B, T>(*this->ctx, V, /*vendor_available=*/true);
-    ASSERT_TRUE(dispatch::is_native(route))
-        << "BATCHLAS_GEQRF_ROUTE=blocked did not resolve to a native route";
-    ASSERT_EQ(route.algo, dispatch::Algorithm::Blocked);
 
     UnifiedVector<std::byte> ws(std::max<std::size_t>(
         1, geqrf_buffer_size<B, T>(*this->ctx, V, p.tau.to_span())));
@@ -1423,7 +1288,7 @@ TYPED_TEST(GeqrfTest, FacadeReachesTheNativeOrgqr) {
     auto V = view_of(p);
     UnifiedVector<std::byte> gws(std::max<std::size_t>(
         1, sycl_geqrf::geqrf_blocked_buffer_size<T>(*this->ctx, V)));
-    (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), gws.to_span());
+    (void)sycl_geqrf::geqrf_blocked_dispatch<T>(*this->ctx, V, p.tau.to_span(), gws.to_span(), this->gemm_seam());
     this->ctx->wait();
     const std::vector<T> F(p.buf.begin(), p.buf.end());
 
@@ -1514,30 +1379,6 @@ TYPED_TEST(GeqrfTest, BufferSizeIsMonotoneAndNeverDereferencesTheData) {
     for (size_t i = 0; i + 1 < std::size(bs); ++i) {
         EXPECT_LE(q(257, 96, bs[i]).second, q(257, 96, bs[i + 1]).second)
             << "blocked buffer size decreased as the batch grew";
-    }
-}
-
-// The facade's query must cover EVERY supported native tier, not the one this resolution
-// chose: a chosen-only size turns a query/call disagreement into an UNDER-allocation.
-TYPED_TEST(GeqrfTest, BufferSizeCoversEverySupportedNativeTier) {
-    using T = typename TestFixture::T;
-    static constexpr Backend B = TestFixture::BackendType;
-    const int m = 40, n = 24, batch = 4;
-    ASSERT_TRUE(this->cta_fits(m, n)) << "this shape must be servable by BOTH tiers";
-
-    auto p = make_problem<T>(m, n, batch, 17u);
-    auto V = view_of(p);
-    for (const char* pin : {"cta", "blocked"}) {
-        ScopedEnvVar guard("BATCHLAS_GEQRF_ROUTE", pin);
-        const std::size_t facade = geqrf_buffer_size<B, T>(*this->ctx, V, p.tau.to_span());
-        EXPECT_GE(facade, sycl_geqrf::geqrf_cta_buffer_size<T>(*this->ctx, V)) << pin;
-        EXPECT_GE(facade, sycl_geqrf::geqrf_blocked_buffer_size<T>(*this->ctx, V)) << pin;
-        // And the pinned call actually runs inside it.
-        reset(p);
-        UnifiedVector<std::byte> ws(facade ? facade : 1);
-        EXPECT_NO_THROW(((void)geqrf<B, T>(*this->ctx, V, p.tau.to_span(), ws.to_span()))) << pin;
-        this->ctx->wait();
-        check_one(p, pin);
     }
 }
 
@@ -1757,9 +1598,8 @@ TYPED_TEST(GeqrfTest, TinyZeroColumnGivesExactlyZeroTauAndStaysFinite) {
     }
 }
 
-// T5. The direct entry point re-applies every gate supports() applies and THROWS. A
-// forced route that supports() rejects falls through to automatic() and silently runs the
-// vendor, so a missing gate here is a wrong measurement rather than an error.
+// T5. The direct entry point re-applies every gate can_run applies and THROWS: it is
+// reachable without the selector, so a missing gate here is a wrong answer, not an error.
 TYPED_TEST(GeqrfTest, TinyDirectEntryPointRefusesWhatSupportsRefuses) {
     using T = typename TestFixture::T;
     const int max_n = this->tiny_max_n();
@@ -1789,93 +1629,9 @@ TYPED_TEST(GeqrfTest, TinyDirectEntryPointRefusesWhatSupportsRefuses) {
     }
 }
 
-// T6. Routing. THREE places must know about Algorithm::Tiny before the arm is reachable --
-// the enum, to_string (route_diff.sh and the coverage CSV print it) and
-// parse_algorithm_word (miss it and BATCHLAS_GEQRF_ROUTE=tiny parses to nullopt, the pin is
-// dropped and the arm measures automatic()). The fourth assertion runs the other way: the
-// tier must NOT be preferred, nor become the vendor-free build's choice.
-TYPED_TEST(GeqrfTest, TinyRoutesInsideItsMeasuredWindowAndNowhereElse) {
-    using T = typename TestFixture::T;
-    static constexpr Backend B = TestFixture::BackendType;
-    using Tbl = dispatch::RouteTable<dispatch::Op::geqrf, T>;
-    const int max_n = this->tiny_max_n();
-    ASSERT_GE(max_n, 8);
-
-    const dispatch::Route tiny{dispatch::Origin::Native, dispatch::Algorithm::Tiny};
-    EXPECT_EQ(dispatch::to_string(dispatch::Algorithm::Tiny), "tiny");
-    const auto parsed = dispatch::parse_route_value("tiny");
-    ASSERT_TRUE(parsed.has_value()) << "BATCHLAS_GEQRF_ROUTE=tiny does not parse";
-    EXPECT_TRUE(*parsed == tiny);
-
-    auto square = make_problem<T>(max_n, max_n, 2, 41u);
-    auto Vs = view_of(square);
-    const auto shape = backend::geqrf_op_shape<B, T>(*this->ctx, Vs);
-    ASSERT_TRUE(shape.has_value());
-    EXPECT_EQ(shape->tiny_max_n, max_n) << "the shape builder and the launcher disagree";
-    EXPECT_TRUE(Tbl::supports(tiny, *shape));
-
-    // The window is MEASURED now. At the tier cap it holds for float (21..32) and for
-    // complex<float> (25..32), and is refused for both fp64 types, which lose to the vendor
-    // at every order the tier reaches. evidence: docs/perf/qr.md#the-tiny-geqrf-window
-    constexpr bool windowed =
-        std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>;
-    const bool at_cap = Tbl::tiny_window(*shape);
-    EXPECT_EQ(at_cap, windowed) << "the window and the type list disagree at n = " << max_n;
-
-    EXPECT_EQ(Tbl::native_tier_preferred(tiny, *shape), windowed);
-    EXPECT_EQ(Tbl::preferred(tiny, *shape), windowed);
-    EXPECT_EQ(Tbl::best_native_tier(*shape) == tiny, windowed);
-    EXPECT_EQ(dispatch::resolve_geqrf_route<T>(dispatch::Route{}, *shape,
-                                               /*vendor_available=*/false) == tiny,
-              windowed);
-
-    // EXACTLY ONE native tier answers true inside the window, or the vendor-free walk is an
-    // accident of the order array rather than a stated decision (R8b).
-    int hits = 0;
-    for (const dispatch::Route* it = Tbl::order_begin(); it != Tbl::order_end(); ++it)
-        if (dispatch::is_native(*it) && Tbl::supports(*it, *shape) &&
-            Tbl::native_tier_preferred(*it, *shape))
-            ++hits;
-    EXPECT_EQ(hits, 1) << "R8b: " << hits << " native tiers answered at n = " << max_n;
-
-    // THE HOLE IN THE WINDOW IS DELIBERATE, and it is the part a future reader will want to
-    // "simplify". Orders 17..32 all run the N=32 bucket, so n=17 does 32 iterations for 17
-    // columns; float absorbs that and complex does not. n = 17 is a MEASURED loss for both
-    // (float 0.812x, cfloat 0.553x), so it must be refused even though it is inside the cap.
-    if (windowed && max_n >= 17) {
-        auto hole = make_problem<T>(17, 17, 2, 44u);
-        auto Vh = view_of(hole);
-        const auto hshape = backend::geqrf_op_shape<B, T>(*this->ctx, Vh);
-        ASSERT_TRUE(hshape.has_value());
-        EXPECT_TRUE(Tbl::supports(tiny, *hshape)) << "n = 17 is inside the tier's capacity";
-        EXPECT_FALSE(Tbl::tiny_window(*hshape)) << "n = 17 is a measured loss, not a window";
-        EXPECT_FALSE(Tbl::preferred(tiny, *hshape));
-    }
-
-    // A build with no tiny kernel must not fire the window, whatever the order says.
-    auto absent = *shape;
-    absent.tiny_max_n = 0;
-    EXPECT_FALSE(Tbl::tiny_window(absent));
-    EXPECT_FALSE(Tbl::preferred(tiny, absent));
-
-    // Refused where it must be: tall, and one order past the ceiling.
-    auto tall = make_problem<T>(2 * max_n, max_n, 2, 42u);
-    auto Vt = view_of(tall);
-    const auto tshape = backend::geqrf_op_shape<B, T>(*this->ctx, Vt);
-    ASSERT_TRUE(tshape.has_value());
-    EXPECT_FALSE(Tbl::supports(tiny, *tshape));
-
-    auto over = make_problem<T>(max_n + 1, max_n + 1, 2, 43u);
-    auto Vo = view_of(over);
-    const auto oshape = backend::geqrf_op_shape<B, T>(*this->ctx, Vo);
-    ASSERT_TRUE(oshape.has_value());
-    EXPECT_FALSE(Tbl::supports(tiny, *oshape));
-}
-
-// T7. The facade reaches the kernel, and geqrf_buffer_size does not throw on the way.
-// The buffer-size arm is a separate failure mode: the tiny tier's workspace is
-// legitimately ZERO, so `native_fired` -- not a non-zero size -- is what tells
-// geqrf_buffer_size that a native tier answered.
+// T7. The facade reaches the kernel, and geqrf_buffer_size does not throw on the way: the
+// tiny tier's workspace is legitimately ZERO. (T6, the old window asserts, is now
+// geqrf_candidates_tests' AutoReadsEveryKeyField.)
 TYPED_TEST(GeqrfTest, FacadeReachesTheTinyKernel) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::BackendType;
@@ -1883,14 +1639,9 @@ TYPED_TEST(GeqrfTest, FacadeReachesTheTinyKernel) {
     const int batch = 7;
     ASSERT_GE(n, 8);
 
-    ScopedEnvVar guard("BATCHLAS_GEQRF_ROUTE", "tiny");
+    select::ScopedPin<ops::geqrf::GeqrfChoice> guard("geqrf", ops::geqrf::Tiny{});
     auto p = make_problem<T>(n, n, batch, 991u);
     auto V = view_of(p);
-
-    const auto route = backend::geqrf_route<B, T>(*this->ctx, V, /*vendor_available=*/true);
-    ASSERT_TRUE(dispatch::is_native(route))
-        << "BATCHLAS_GEQRF_ROUTE=tiny did not resolve to a native route";
-    ASSERT_EQ(route.algo, dispatch::Algorithm::Tiny);
 
     const std::size_t need = geqrf_buffer_size<B, T>(*this->ctx, V, p.tau.to_span());
     EXPECT_GE(need, sycl_geqrf::geqrf_tiny_buffer_size<T>(*this->ctx, V));
@@ -2530,7 +2281,7 @@ TYPED_TEST(GeqrfTest, BlockedDriverWithTheRegisterLeaf) {
         const std::size_t ws = sycl_geqrf::geqrf_blocked_buffer_size<T>(*this->ctx, V);
         UnifiedVector<std::byte> w(ws ? ws : 1);
         ASSERT_NO_THROW((void)sycl_geqrf::geqrf_blocked_dispatch<T>(
-            *this->ctx, V, p.tau.to_span(), w.to_span(), {},
+            *this->ctx, V, p.tau.to_span(), w.to_span(), this->gemm_seam(),
             sycl_geqrf::GeqrfPanelLeaf::Register));
         this->ctx->wait();
         check_one(p, "blocked/register-leaf");

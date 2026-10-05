@@ -158,17 +158,8 @@ Event geqrf_blocked_dispatch(Queue& ctx,
                              Span<std::byte> workspace,
                              GeqrfTrailingGemm<T> trailing_gemm,
                              GeqrfPanelLeaf panel_leaf) {
-    // Default the seam to the native kernel so this TU stands alone; the facade injects
-    // the ROUTED gemm. Calling gemm_custom here unconditionally bypasses the route table.
-    if (!trailing_gemm) {
-        trailing_gemm = [](Queue& c,
-                           const MatrixView<T, MatrixFormat::Dense>& ga,
-                           const MatrixView<T, MatrixFormat::Dense>& gb,
-                           const MatrixView<T, MatrixFormat::Dense>& gc,
-                           T galpha, T gbeta, Transpose gta, Transpose gtb,
-                           ComputePrecision gp) {
-            return sycl_gemm::gemm_custom<T>(c, ga, gb, gc, galpha, gbeta, gta, gtb, gp);
-        };
+    if (!trailing_gemm) {  // mandatory: geqrf injects the public gemm, which picks its own kernel
+        throw batchlas::invalid_argument("geqrf_blocked: no trailing gemm injected");
     }
 
     const int m = static_cast<int>(A.rows());
@@ -187,7 +178,7 @@ Event geqrf_blocked_dispatch(Queue& ctx,
     }
     if (m < n) {
         throw batchlas::invalid_argument(
-            "geqrf_blocked: m < n is not supported (route_geqrf.hh's supports() refuses it)");
+            "geqrf_blocked: m < n is not supported (geqrf's can_run refuses it)");
     }
     if (A.is_heterogeneous()) {
         throw batchlas::invalid_argument("geqrf_blocked: heterogeneous batch is not supported");
