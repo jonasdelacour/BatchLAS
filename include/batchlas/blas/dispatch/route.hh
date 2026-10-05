@@ -80,7 +80,7 @@ enum class Op : uint8_t {
     potrf, getrf, getrs, getri, geqrf, orgqr, ormqr, syev, gesvd, spmm, iluk,
     // APPENDED before COUNT, never inserted, for Algorithm::Tiny's reason: this is
     // an installed header behind a SOVERSION. gesv and posv are the two ops with no
-    // vendor arm on any backend (route_gesv.hh).
+    // vendor arm on any backend (src/ops/gesv, src/ops/posv).
     gesv, posv,
     COUNT
 };

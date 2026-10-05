@@ -15,6 +15,7 @@
 #include "../src/ops/gemv/choice.hh"
 #include "../src/ops/ormqr/choice.hh"
 #include "../src/ops/getri/choice.hh"
+#include "../src/ops/gesv/choice.hh"
 #include "../src/select/select.hh"
 
 #include <algorithm>
@@ -121,6 +122,13 @@ std::vector<std::string> candidates(const std::string& op, const std::string& dt
         if (dtype == "double") return spellings(getri::candidates<double>());
         if (dtype == "cfloat") return spellings(getri::candidates<std::complex<float>>());
         if (dtype == "cdouble") return spellings(getri::candidates<std::complex<double>>());
+    }
+    namespace gesv = batchlas::ops::gesv;
+    if (op == "gesv") {
+        if (dtype == "float") return spellings(gesv::candidates<float>());
+        if (dtype == "double") return spellings(gesv::candidates<double>());
+        if (dtype == "cfloat") return spellings(gesv::candidates<std::complex<float>>());
+        if (dtype == "cdouble") return spellings(gesv::candidates<std::complex<double>>());
     }
     return {};
 }
@@ -473,6 +481,7 @@ TEST(TunedTables, OrgqrTablesHoldExactlyTheChoiceGridOnBothDevices) {
 
 TEST(TunedTables, OrmqrTablesDeclareChoiceKeyNames) { expect_tables_declare("ormqr", batchlas::ops::ormqr::key_names); }
 TEST(TunedTables, GetriTablesDeclareChoiceKeyNames) { expect_tables_declare("getri", batchlas::ops::getri::key_names); }
+TEST(TunedTables, GesvTablesDeclareChoiceKeyNames) { expect_tables_declare("gesv", batchlas::ops::gesv::key_names); }
 
 // ormqr's transcriber spells choice.hh's grid by hand (k over grid_m up to m), and one
 // transcription serves both devices: every table holds exactly that grid, both sides, N/T/C.
@@ -560,6 +569,23 @@ TEST(TunedTables, GetriTranscribedTablesHoldExactlyTheChoiceGrid) {
             EXPECT_EQ(got, want) << dt << " " << dev;
             EXPECT_EQ(t.rows.size(), want.size()) << dt << " " << dev;
             EXPECT_EQ(t.source.rfind("transcribed:", 0), 0u) << t.file;
+        }
+}
+
+// gesv's transcriber likewise spells choice.hh's grid by hand: one row per (n, nrhs) cell, on
+// both transcribed devices.
+TEST(TunedTables, GesvTranscribedTablesHoldExactlyTheChoiceGrid) {
+    namespace gesv = batchlas::ops::gesv;
+    std::set<std::string> want;
+    for (int n : gesv::grid_n)
+        for (int r : gesv::grid_nrhs) want.insert(std::to_string(n) + " " + std::to_string(r));
+    for (const char* dev : {"sm_89", "sm_120"})
+        for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
+            const sel::Table& t = embedded(std::string("gesv.") + dt + "." + dev + ".txt");
+            std::set<std::string> got;
+            for (const auto& row : t.rows) got.insert(row.keys[0] + " " + row.keys[1]);
+            EXPECT_EQ(got, want) << dt << " " << dev;
+            EXPECT_EQ(t.rows.size(), want.size()) << dt << " " << dev;
         }
 }
 

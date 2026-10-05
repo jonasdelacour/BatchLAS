@@ -17,7 +17,7 @@
 
 #include "../src/extensions/solve_native.hh"
 #include "../src/extensions/getrf_native.hh"
-#include "../src/backends/gesv_route.hh"
+#include "../src/ops/gesv/choice.hh"
 
 #include <algorithm>
 #include <cmath>
@@ -227,7 +227,7 @@ protected:
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
         if (!this->ctx) GTEST_SKIP() << "no queue";
         if (this->ctx->device().type != DeviceType::GPU)
-            GTEST_SKIP() << "the fused gesv tier is GPU-only (route_gesv.hh)";
+            GTEST_SKIP() << "the fused gesv tier is GPU-only";
         if (!this->ctx->device().supports_sub_group_size(32))
             GTEST_SKIP() << "device does not offer sub-group size 32";
     }
@@ -404,77 +404,8 @@ TYPED_TEST(GesvTest, TinyRefusesShapesAboveItsCeilings) {
                  batchlas::unsupported);
 }
 
-// G7. THE ROUTE, pinned to the MEASURED window and to nothing else. float takes the
-// fused tier over the whole ladder it fits; cfloat stops at 16 because 17..32 beats the
-// composed arm by only 0.97-1.19x (under the 1.11x gate); double and cdouble have none.
-// The n = 64 row is the structural bracket at the top: the tier does not fit there at
-// any type, so the composed arm must answer. evidence: docs/perf/lu.md#p2-the-measured-gesv-window
-//
-// preferred() is asserted all-false DELIBERATELY and permanently: this op passes
-// vendor_available=false, so resolve_route never reaches preferred() -- the window
-// lives in native_tier_preferred. A window written into preferred() here would be the
-// R8b defect with no compensating effect.
-//
-// ARMED BREAK (R9): widen route_gesv.hh's tiny_window_max_n for cfloat from 16 to 32.
-// EXPECTED RED at n = 17 and 32 for cfloat only, reporting tiny where blocked is
-// expected, with float and the n = 64 row GREEN.
-TYPED_TEST(GesvTest, AutoTakesTheMeasuredWindow) {
-    using T = typename TestFixture::T;
-    constexpr Backend B = TestFixture::BackendType;
-    using Tbl = dispatch::RouteTable<dispatch::Op::gesv, T>;
-
-    // The window as the grid measured it, restated here rather than read back from the
-    // header: a test that asks the header what the header says cannot fail.
-    const int win = std::is_same_v<T, float>                ? 32
-                  : std::is_same_v<T, std::complex<float>>  ? 16
-                                                            : 0;
-
-    for (int n : {4, 8, 16, 17, 32, 64}) {
-        auto p = make_system<T>(n, 1, 4, 11u + unsigned(n));
-        auto A = a_view(p);
-        auto Bv = b_view(p);
-        const auto shape = backend::gesv_op_shape<B, T>(*this->ctx, A, Bv);
-        ASSERT_TRUE(shape.has_value()) << "n=" << n;
-
-        EXPECT_FALSE(Tbl::preferred({dispatch::Origin::Native, dispatch::Algorithm::Tiny},
-                                    *shape))
-            << "n=" << n << ": preferred() is not this op's shipping hook";
-        EXPECT_FALSE(Tbl::preferred({dispatch::Origin::Native, dispatch::Algorithm::Blocked},
-                                    *shape));
-
-        const bool fits = (n <= sycl_gesv::gesv_tiny_max_n<T>());
-        const auto want = (fits && n <= win) ? dispatch::Algorithm::Tiny
-                                             : dispatch::Algorithm::Blocked;
-        const auto r = backend::gesv_route<B, T>(*this->ctx, A, Bv);
-        EXPECT_EQ(r.algo, want)
-            << "n=" << n << ": Auto resolved to "
-            << std::string(dispatch::to_string(r.algo));
-        EXPECT_EQ(r.origin, dispatch::Origin::Native);
-    }
-}
-
-// G8. supports() is a CORRECTNESS predicate: it must admit exactly the shapes the
-// launcher accepts, or a forced route reaches an entry point that throws.
-TYPED_TEST(GesvTest, SupportsAgreesWithTheLauncherCeilings) {
-    using T = typename TestFixture::T;
-    constexpr Backend B = TestFixture::BackendType;
-    using Tbl = dispatch::RouteTable<dispatch::Op::gesv, T>;
-    const dispatch::Route tiny{dispatch::Origin::Native, dispatch::Algorithm::Tiny};
-    const int cap = this->cap();
-
-    for (int n : {1, 8, 16, 32, 33, 64}) {
-        for (int nrhs : {1, 4, 5}) {
-            auto p = make_system<T>(n, nrhs, 2, 21u);
-            auto A = a_view(p);
-            auto Bv = b_view(p);
-            const auto shape = backend::gesv_op_shape<B, T>(*this->ctx, A, Bv);
-            ASSERT_TRUE(shape.has_value());
-            const bool want = (n <= cap) && (nrhs <= sycl_gesv::kGesvTinyMaxRhs);
-            EXPECT_EQ(Tbl::supports(tiny, *shape), want)
-                << "n=" << n << " nrhs=" << nrhs;
-        }
-    }
-}
+// G7 (the old window) and G8 (supports() vs the launcher) moved to gesv_candidates_tests:
+// AutoReadsTheTranscribedTables and CanRunEqualsLaunch.
 
 // G9. THE PUBLIC OP end to end against the same residual bound and the same pivot
 // list as the tiny tier on the same data.
@@ -487,7 +418,7 @@ TYPED_TEST(GesvTest, PublicGesvSolvesAndMatchesTheTinyTier) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::BackendType;
     const int cap = this->cap();
-    const ScopedEnvVar pin("BATCHLAS_GESV_ROUTE", "blocked");
+    const select::ScopedPin<ops::gesv::GesvChoice> pin("gesv", ops::gesv::GesvChoice{ops::gesv::Blocked{}});
 
     for (int n : {4, 16, 32}) {
         if (n > cap) continue;
