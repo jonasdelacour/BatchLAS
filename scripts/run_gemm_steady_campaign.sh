@@ -38,7 +38,7 @@ run_case() {
         cmd="BATCHLAS_GEMM_VARIANT=$variant_mode $cmd"
     fi
     if [ -n "$forced_kernel" ]; then
-        cmd="BATCHLAS_GEMM_SYCL_KERNEL=$forced_kernel $cmd"
+        cmd="BATCHLAS_GEMM_ROUTE=$forced_kernel $cmd"
     fi
     if [ "$experimental" = "1" ]; then
         cmd="BATCHLAS_GEMM_EXPERIMENTAL=1 $cmd"
@@ -53,9 +53,9 @@ run_case() {
     fi
 
     if [ -n "$forced_kernel" ]; then
-        export BATCHLAS_GEMM_SYCL_KERNEL="$forced_kernel"
+        export BATCHLAS_GEMM_ROUTE="$forced_kernel"
     else
-        unset BATCHLAS_GEMM_SYCL_KERNEL
+        unset BATCHLAS_GEMM_ROUTE
     fi
 
     if [ "$experimental" = "1" ]; then
@@ -74,7 +74,7 @@ run_case() {
         --csv="$csv_path" | tee "$txt_path"
 
     unset BATCHLAS_GEMM_VARIANT
-    unset BATCHLAS_GEMM_SYCL_KERNEL
+    unset BATCHLAS_GEMM_ROUTE
     unset BATCHLAS_GEMM_EXPERIMENTAL
 }
 
@@ -97,7 +97,7 @@ run_case_dims() {
         cmd="BATCHLAS_GEMM_VARIANT=$variant_mode $cmd"
     fi
     if [ -n "$forced_kernel" ]; then
-        cmd="BATCHLAS_GEMM_SYCL_KERNEL=$forced_kernel $cmd"
+        cmd="BATCHLAS_GEMM_ROUTE=$forced_kernel $cmd"
     fi
     if [ "$experimental" = "1" ]; then
         cmd="BATCHLAS_GEMM_EXPERIMENTAL=1 $cmd"
@@ -112,9 +112,9 @@ run_case_dims() {
     fi
 
     if [ -n "$forced_kernel" ]; then
-        export BATCHLAS_GEMM_SYCL_KERNEL="$forced_kernel"
+        export BATCHLAS_GEMM_ROUTE="$forced_kernel"
     else
-        unset BATCHLAS_GEMM_SYCL_KERNEL
+        unset BATCHLAS_GEMM_ROUTE
     fi
 
     if [ "$experimental" = "1" ]; then
@@ -133,7 +133,7 @@ run_case_dims() {
         --csv="$csv_path" "$@" | tee "$txt_path"
 
     unset BATCHLAS_GEMM_VARIANT
-    unset BATCHLAS_GEMM_SYCL_KERNEL
+    unset BATCHLAS_GEMM_ROUTE
     unset BATCHLAS_GEMM_EXPERIMENTAL
 }
 

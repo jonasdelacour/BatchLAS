@@ -144,18 +144,17 @@ static int register_cuda_heterogeneous_benchmarks = []() {
         [](minibench::State& state) {
             run_heterogeneous_variant(state, []() {
                 return std::make_tuple(
-                    std::make_shared<ScopedEnvVar>("BATCHLAS_GEMM_VARIANT", "vendor")
+                    std::make_shared<ScopedEnvVar>("BATCHLAS_GEMM_ROUTE", "vendor")
                 );
             });
         }));
 
     HeterogeneousGemmSizes(minibench::RegisterBenchmark(
-        "BM_GEMM_heterogeneous_cublasdx<float, Backend::CUDA>",
+        "BM_GEMM_heterogeneous_native<float, Backend::CUDA>",
         [](minibench::State& state) {
             run_heterogeneous_variant(state, []() {
                 return std::make_tuple(
-                    std::make_shared<ScopedEnvVar>("BATCHLAS_GEMM_VARIANT", "cublasdx"),
-                    std::make_shared<ScopedEnvVar>("BATCHLAS_GEMM_CUBLASDX_KERNEL", "cublasdx_nn")
+                    std::make_shared<ScopedEnvVar>("BATCHLAS_GEMM_ROUTE", "native")
                 );
             });
         }));

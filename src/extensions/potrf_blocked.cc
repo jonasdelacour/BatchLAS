@@ -5,7 +5,7 @@
 #include "potrf_native.hh"
 #include "symmetric_product_fold.hh"
 
-#include "../sycl/gemm_kernels.hh"
+#include <batchlas/blas/functions/gemm.hh>
 #include "../sycl/trsm_native.hh"
 
 #include "../queue.hh"
@@ -230,8 +230,8 @@ Event potrf_blocked_dispatch(Queue& ctx,
                              Span<int32_t> info_out,
                              PotrfTrailingGemm<T> trailing_gemm,
                              PotrfPanelSolve<T> panel_solve) {
-    // An empty trailing_gemm still means the native kernel until gemm migrates (plan §1.3);
-    // the panel solve has no default: a hidden native trsm here bypassed trsm's selection.
+    // An empty trailing_gemm means the public gemm on the queue's backend, which makes its own
+    // choice; the panel solve has no default: a hidden native trsm here bypassed trsm's selection.
     if (!trailing_gemm) {
         trailing_gemm = [](Queue& c,
                            const MatrixView<T, MatrixFormat::Dense>& ga,
@@ -239,7 +239,9 @@ Event potrf_blocked_dispatch(Queue& ctx,
                            const MatrixView<T, MatrixFormat::Dense>& gc,
                            T galpha, T gbeta, Transpose gta, Transpose gtb,
                            ComputePrecision gp) {
-            return sycl_gemm::gemm_custom<T>(c, ga, gb, gc, galpha, gbeta, gta, gtb, gp);
+            return with_backend(c, [&](auto Back) {
+                return ::batchlas::gemm<Back.value, T>(c, ga, gb, gc, galpha, gbeta, gta, gtb, gp);
+            });
         };
     }
     if (!panel_solve) {

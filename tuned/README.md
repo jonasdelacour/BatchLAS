@@ -17,6 +17,8 @@ These files are plain git, not LFS, so that table changes stay readable in diffs
 | posv | sm_120 | none yet: the sweep `benchmarks/results/routing/sm120_posv_sweep.jsonl` is converted later; until then sm_120 borrows the sm_89 posv tables and warns once | — |
 | trsm | sm_89 | **transcribed** old router, untimed (`source=transcribed:8b9adeb3`) | `trsm.<dtype>.sm_89.txt`, from `transcribed/trsm.sm_89.csv` |
 | trsm | sm_120 | none yet: a `tools/tune` sweep; until then sm_120 borrows the sm_89 trsm tables and warns once | — |
+| gemm | sm_89 | **transcribed** old routing, untimed (`source=transcribed:424a45bc`) | `gemm.<dtype>.sm_89.txt`, from `transcribed/gemm.sm_89.csv` |
+| gemm | sm_120 | none yet: a `tools/tune` sweep; until then sm_120 borrows the sm_89 gemm tables and warns once | — |
 
 ## How they are produced
 
@@ -54,6 +56,15 @@ tuned/transcribed/trsm.sm_89.csv --sha 8b9adeb3`). On the grid (batch >= 128) th
 preferred every native route, so a row is `cta - | blocked - | vendor -` at order <= 32 and
 `blocked - | vendor -` above. Its batch floor (batch < 8 went to the vendor) and the float
 Side::Right rule (batch < 128 above order 32) sit below the grid and are not transcribed.
+
+The gemm sm_89 tables come from `tools/transcribe/gemm_transcribe.cc`, which links against a
+BUILT 424a45bc tree (the old `select_kernel_variant` lives in libbatchlas_sycl; the build line is
+in its header), then `--transcribe tuned/transcribed/gemm.sm_89.csv --sha 424a45bc`. A row is the
+old vendor-vs-native decision (`route_gemm.hh` preferred(), the predicate the cuBLAS TU's
+re-route consulted) with the old native kernel (`select_kernel_variant`) mapped to its family
+spelling, then the old fallbacks (tiled/direct); `vendor` leads where the old route was the
+vendor. `layout=packed` cells were evaluated on contiguous 16-byte-aligned views, `strided` on
+ld = rows + 1.
 
 A transcribed row reproduces a deleted window; it is not a measurement. It is replaced by a timed
 row when the tuner sweeps that device.

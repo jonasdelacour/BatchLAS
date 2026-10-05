@@ -11,7 +11,6 @@
 #include "level3_shape.hh"
 #include "gemm_variant.hh"
 #include "gemm_heterogeneous.hh"
-#include "../sycl/gemm_kernels.hh"
 
 namespace batchlas {
 
@@ -35,19 +34,15 @@ namespace batchlas {
             // The loop, the m==0/n==0 skips, the k==0 -> scale(beta) substitution
             // and the empty-batch Event live in detail::gemm_heterogeneous_loop
             // (src/backends/gemm_heterogeneous.hh) so that a vendor-free build has
-            // them too; only the per-item terminal is backend-specific. rocBLAS
-            // recurses into gemm_vendor on purpose, so an individual member can
-            // still reach the SYCL kernel. The empty-batch Event is
+            // them too; only the per-item terminal is backend-specific. The
+            // public gemm splits its own heterogeneous batches before choosing,
+            // so this serves direct callers only. The empty-batch Event is
             // create_event_after_external_work() here as it was before -- the work
             // leaves the SYCL queue -- which is what that helper already hardcodes.
             return detail::gemm_heterogeneous_loop<T>(ctx, A, B, C, beta, transA, transB,
                 [&](const auto& A_i, const auto& B_i, const auto& C_i) {
                     return gemm_vendor<Back, T>(ctx, A_i, B_i, C_i, alpha, beta, transA, transB, precision);
                 });
-        }
-
-        if (gemm_use_sycl_custom(ctx, A, B, C, transA, transB, precision)) {
-            return sycl_gemm::gemm_custom(ctx, A, B, C, alpha, beta, transA, transB, precision);
         }
 
         static LinalgHandle<Back> handle;

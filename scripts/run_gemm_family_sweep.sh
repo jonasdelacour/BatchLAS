@@ -40,18 +40,18 @@ for variant in "${variants[@]}"; do
     echo
     echo "=== $variant : NN sweep ==="
     for dims in "${nn_cases[@]}"; do
-        echo "BATCHLAS_GEMM_VARIANT=sycl BATCHLAS_GEMM_SYCL_KERNEL=$variant $nn_bench $dims --backend=$backend --type=$scalar_type --warmup=5"
+        echo "BATCHLAS_GEMM_VARIANT=sycl BATCHLAS_GEMM_ROUTE=$variant $nn_bench $dims --backend=$backend --type=$scalar_type --warmup=5"
         BATCHLAS_GEMM_VARIANT=sycl \
-        BATCHLAS_GEMM_SYCL_KERNEL="$variant" \
+        BATCHLAS_GEMM_ROUTE="$variant" \
         "$nn_bench" $dims --backend="$backend" --type="$scalar_type" --warmup=5
     done
 
     echo
     echo "=== $variant : transpose sweep ==="
     for dims in "${transpose_cases[@]}"; do
-        echo "BATCHLAS_GEMM_VARIANT=sycl BATCHLAS_GEMM_SYCL_KERNEL=$variant $transpose_bench $dims --backend=$backend --type=$scalar_type --warmup=5"
+        echo "BATCHLAS_GEMM_VARIANT=sycl BATCHLAS_GEMM_ROUTE=$variant $transpose_bench $dims --backend=$backend --type=$scalar_type --warmup=5"
         BATCHLAS_GEMM_VARIANT=sycl \
-        BATCHLAS_GEMM_SYCL_KERNEL="$variant" \
+        BATCHLAS_GEMM_ROUTE="$variant" \
         "$transpose_bench" $dims --backend="$backend" --type="$scalar_type" --warmup=5
     done
 done

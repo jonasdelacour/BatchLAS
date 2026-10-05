@@ -266,6 +266,41 @@ TRSM = OpSpec(
 )
 
 
+
+def gemm_key(r):
+    try:
+        key = (str(r["ta"]), str(r["tb"]), str(r["layout"]), int(r["m"]), int(r["n"]), int(r["k"]),
+               int(r["batch"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+    ok = key[0] in ("N", "T", "C") and key[1] in ("N", "T", "C") and key[2] in ("packed", "strided")
+    return key if ok and min(key[3:]) >= 1 else None
+
+
+# gemm (plan section 1.3): work ~ m n k batch, every log key weighs 1. C folds to T for a real
+# scalar; layout = packed | strided. sm_89 is transcribed, sm_120 comes from the tuner (--tuner).
+# candidate_order is the union of the per-dtype candidates<T>() lists, in their common order.
+GEMM_CHOICES = (
+    "direct", "tiled", "small",
+    "reg:m=32:n=32:k=8:u=1", "reg:m=64:n=64:k=8:u=1", "reg:m=64:n=64:k=16:u=1",
+    "reg:m=128:n=32:k=16:u=1", "reg:m=128:n=32:k=32:u=1", "reg:m=128:n=64:k=16:u=1",
+    "reg:m=32:n=128:k=16:u=1", "reg:m=128:n=64:k=32:u=4", "reg:m=128:n=64:k=32:u=2",
+    "reg:m=128:n=128:k=8:u=1",
+    "wide:m=64:n=64:k=16", "wide:m=128:n=32:k=16", "wide:m=32:n=128:k=16", "wide:m=32:n=32:k=16",
+    "wide:m=16:n=16:k=16",
+    "vendor",
+)
+GEMM = OpSpec(
+    op="gemm",
+    keys="ta:exact tb:exact layout:exact m:log n:log k:log batch:log",
+    row_ops=("gemm",),
+    row_key=gemm_key,
+    arm_spelling={c: c for c in GEMM_CHOICES},
+    arm_route={c: (("vendor:vendor",) if c == "vendor" else (f"native:{c}",)) for c in GEMM_CHOICES},
+    candidate_order=list(GEMM_CHOICES),
+    tuner_key=gemm_key,
+)
+
 def parse_keys(spec):
     """'# keys:' text -> [(name, is_log, weight)]; a :log weight defaults to 1."""
     out = []
@@ -636,7 +671,7 @@ def potrf_offgrid(texts, points):
 
 
 POTRF.review = potrf_offgrid
-OPS = [POTRF, POSV, TRSM]
+OPS = [POTRF, POSV, TRSM, GEMM]
 OP_BY_NAME = {s.op: s for s in OPS}
 
 

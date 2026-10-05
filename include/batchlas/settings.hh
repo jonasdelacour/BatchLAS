@@ -170,14 +170,9 @@ struct SelectionSettings {
     // say"; both now read this field, so they cannot see different answers.
     EnvValue gemm_cublasdx_kernel{};
 
-    // BATCHLAS_GEMM_EXPERIMENTAL. Unlocks five GEMM kernel variants marked
-    // experimental. Its parser case-folds and also accepts "yes", which
-    // env_truthy does not -- hence raw.
-    EnvValue gemm_experimental{};
-
-    // BATCHLAS_GEMM_SYCL_KERNEL. Forces one named register-tiled GEMM kernel
-    // (~38 accepted spellings); unset means KernelVariant::Direct. Two reads,
-    // presence and value.
+    // BATCHLAS_GEMM_SYCL_KERNEL. Retired: it no longer selects a kernel. Its names are
+    // BATCHLAS_GEMM_ROUTE aliases (src/ops/gemm/choice.hh), and a set value makes
+    // gemm throw rather than be silently ignored by an old script.
     EnvValue gemm_sycl_kernel{};
 
     // BATCHLAS_GEMV_SEGT = off | auto | 2 | 4 | 8. Segmented-tail width for the

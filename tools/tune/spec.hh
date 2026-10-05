@@ -57,7 +57,10 @@ public:
     virtual std::string normalize_route(const std::string& origin, const std::string& algo) const = 0;
     virtual std::vector<ArmOutcome> run_cell(const CellRequest& req) const = 0;
 
-    std::vector<CellKey> grid(const std::map<std::string, std::vector<std::string>>& overrides) const;
+    // The coarse grid for a dtype: by default the full lattice of axes(). An op whose grid is not a
+    // lattice (gemm's demand-driven shapes) overrides it.
+    virtual std::vector<CellKey> grid(const std::string& dtype,
+                                      const std::map<std::string, std::vector<std::string>>& overrides) const;
 };
 
 inline double dtype_bytes(const std::string& dtype) {

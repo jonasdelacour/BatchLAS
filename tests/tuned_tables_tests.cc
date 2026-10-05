@@ -4,6 +4,7 @@
 
 #include <batchlas/util/env.hh>
 
+#include "../src/ops/gemm/choice.hh"
 #include "../src/ops/posv/choice.hh"
 #include "../src/ops/potrf/choice.hh"
 #include "../src/ops/trsm/choice.hh"
@@ -56,6 +57,13 @@ std::vector<std::string> candidates(const std::string& op, const std::string& dt
         if (dtype == "double") return spellings(trsm::candidates<double>());
         if (dtype == "cfloat") return spellings(trsm::candidates<std::complex<float>>());
         if (dtype == "cdouble") return spellings(trsm::candidates<std::complex<double>>());
+    }
+    namespace gemm = batchlas::ops::gemm;
+    if (op == "gemm") {
+        if (dtype == "float") return spellings(gemm::candidates<float>());
+        if (dtype == "double") return spellings(gemm::candidates<double>());
+        if (dtype == "cfloat") return spellings(gemm::candidates<std::complex<float>>());
+        if (dtype == "cdouble") return spellings(gemm::candidates<std::complex<double>>());
     }
     return {};
 }
@@ -190,6 +198,7 @@ void expect_tables_declare(const std::string& op, const Names& names) {
 TEST(TunedTables, PotrfTablesDeclareChoiceKeyNames) { expect_tables_declare("potrf", batchlas::ops::potrf::key_names); }
 TEST(TunedTables, PosvTablesDeclareChoiceKeyNames) { expect_tables_declare("posv", batchlas::ops::posv::key_names); }
 TEST(TunedTables, TrsmTablesDeclareChoiceKeyNames) { expect_tables_declare("trsm", batchlas::ops::trsm::key_names); }
+TEST(TunedTables, GemmTablesDeclareChoiceKeyNames) { expect_tables_declare("gemm", batchlas::ops::gemm::key_names); }
 
 const sel::Table& embedded(const std::string& name) {
     static std::map<std::string, sel::Table> cache;
@@ -238,6 +247,57 @@ TEST(TunedTables, TrsmSm89TablesHoldExactlyTheChoiceGrid) {
         std::set<std::string> got;
         for (const auto& row : t.rows)
             got.insert(row.keys[0] + " " + row.keys[1] + " " + row.keys[2] + " " + row.keys[3] + " " + row.keys[4]);
+        EXPECT_EQ(got, want) << dt;
+        EXPECT_EQ(t.rows.size(), want.size()) << dt;
+    }
+}
+
+// Likewise gemm's transcriber: one row per demand-grid cell of choice.hh (plan §3): squares for
+// every form and layout, panels (packed from m, n >= 128) and skinny shapes for the issued forms.
+TEST(TunedTables, GemmSm89TablesHoldExactlyTheChoiceGrid) {
+    namespace gemm = batchlas::ops::gemm;
+    for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
+        const bool cplx = dt[0] == 'c';
+        std::vector<std::string_view> forms, panel;
+        if (cplx) {
+            forms.assign(gemm::grid_complex_forms.begin(), gemm::grid_complex_forms.end());
+            panel.assign(gemm::grid_complex_panel_forms.begin(), gemm::grid_complex_panel_forms.end());
+        } else {
+            forms.assign(gemm::grid_real_forms.begin(), gemm::grid_real_forms.end());
+            panel.assign(gemm::grid_real_panel_forms.begin(), gemm::grid_real_panel_forms.end());
+        }
+        std::set<std::string> want;
+        auto add = [&](std::string_view f, const char* layout, int m, int n, int k) {
+            for (int b : gemm::grid_batch)
+                want.insert(std::string(1, f[0]) + " " + f[1] + " " + layout + " " + std::to_string(m) + " " +
+                            std::to_string(n) + " " + std::to_string(k) + " " + std::to_string(b));
+        };
+        for (std::string_view f : forms) {
+            for (int s : gemm::grid_square) {
+                add(f, "strided", s, s, s);
+                add(f, "packed", s, s, s);
+            }
+            if (std::find(panel.begin(), panel.end(), f) == panel.end()) continue;
+            for (int m : gemm::grid_panel_mn)
+                for (int n : gemm::grid_panel_mn)
+                    for (int k : gemm::grid_panel_k) {
+                        add(f, "strided", m, n, k);
+                        if (m >= gemm::grid_packed_panel_min && n >= gemm::grid_packed_panel_min)
+                            add(f, "packed", m, n, k);
+                    }
+            for (int mn : gemm::grid_skinny_mn)
+                for (int k : gemm::grid_skinny_k) {
+                    add(f, "strided", mn, 32, k);
+                    add(f, "strided", 32, mn, k);
+                }
+        }
+        const sel::Table& t = embedded(std::string("gemm.") + dt + ".sm_89.txt");
+        std::set<std::string> got;
+        for (const auto& row : t.rows) {
+            std::string k = row.keys[0];
+            for (std::size_t i = 1; i < row.keys.size(); ++i) k += " " + row.keys[i];
+            got.insert(k);
+        }
         EXPECT_EQ(got, want) << dt;
         EXPECT_EQ(t.rows.size(), want.size()) << dt;
     }

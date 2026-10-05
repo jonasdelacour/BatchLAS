@@ -127,39 +127,8 @@ TEST(RouteVocabulary, UnknownValueIsRejectedNotSilentlyAuto) {
 
 // --- legacy spellings must keep working ------------------------------------
 
-TEST(RouteVocabulary, LegacyGemmVariantSyclSelectsRegisterTiled) {
-    ClearRouteEnv clear(Op::gemm);
-    ScopedEnvVar set("BATCHLAS_GEMM_VARIANT", "sycl");
-
-    const auto parsed = parse_route_env(Op::gemm);
-    ASSERT_TRUE(parsed.found);
-    EXPECT_EQ(parsed.route.algo, Algorithm::RegisterTiled);
-    EXPECT_TRUE(is_native(parsed.route));
-    EXPECT_TRUE(parsed.source.legacy);
-    EXPECT_EQ(parsed.source.variable, "BATCHLAS_GEMM_VARIANT")
-        << "a diagnostic must be able to quote the spelling the user typed";
-}
-
-TEST(RouteVocabulary, LegacyGemmNativeMeansRawCudaNotBatchLAS) {
-    // THE TRAP: legacy BATCHLAS_GEMM_VARIANT=native names the RAW CUDA path, so it
-    // must map to Origin::Vendor -- the opposite of what "native" means in the
-    // canonical vocabulary. evidence: docs/perf/dispatch.md#the-environment-vocabulary
-    for (const char* spelling : {"native", "cuda-native", "direct-cuda"}) {
-        const auto legacy = parse_legacy_route_value(Op::gemm, spelling);
-        ASSERT_TRUE(legacy.has_value()) << spelling;
-        EXPECT_TRUE(is_vendor(*legacy))
-            << "legacy GEMM '" << spelling << "' means the raw CUDA path, i.e. vendor";
-    }
-
-    const auto canonical = parse_route_value("native");
-    ASSERT_TRUE(canonical.has_value());
-    EXPECT_TRUE(is_native(*canonical));
-
-    // And the collision is GEMM-specific -- no other op had that alias.
-    const auto other = parse_legacy_route_value(Op::syev, "native");
-    ASSERT_TRUE(other.has_value());
-    EXPECT_TRUE(is_native(*other));
-}
+// gemm's legacy BATCHLAS_GEMM_VARIANT words (`native` = the vendor, `sycl`/`custom` = native)
+// are flat-selection aliases now: src/ops/gemm/choice.hh legacy_aliases.
 
 TEST(RouteVocabulary, LegacyLevel3CustomMeansTheFusedKernelNotRegisterTiled) {
     // THE SECOND COLLISION: in symm/syrk/syr2k/trmm the legacy "custom" names the
@@ -176,10 +145,6 @@ TEST(RouteVocabulary, LegacyLevel3CustomMeansTheFusedKernelNotRegisterTiled) {
     EXPECT_EQ(canonical->algo, Algorithm::RegisterTiled);
     EXPECT_TRUE(is_native(*canonical));
 
-    const auto gemm_custom = parse_legacy_route_value(Op::gemm, "custom");
-    ASSERT_TRUE(gemm_custom.has_value());
-    EXPECT_EQ(gemm_custom->algo, Algorithm::RegisterTiled);
-    EXPECT_TRUE(is_native(*gemm_custom));
 }
 
 TEST(RouteVocabulary, LegacyLevel3TileSpellingsSurvive) {
@@ -277,7 +242,7 @@ TEST(RouteVocabulary, UnsetDefaultsAreAutoForEveryOp) {
     EXPECT_EQ(legacy_unset_default(Op::symm).origin, Origin::Auto);
     EXPECT_EQ(legacy_unset_default(Op::trmm).origin, Origin::Auto);
 
-    // Auto defers to preferred(); a named route still wins (route_gemm_equivalence_tests.cc).
+    // Auto defers to preferred(); a named route still wins.
     EXPECT_EQ(legacy_unset_default(Op::gemm).algo, Algorithm::Auto);
 }
 

@@ -6,7 +6,7 @@
 #include "getrf_native.hh"
 #include "lu_laswp.hh"
 
-#include "../sycl/gemm_kernels.hh"
+#include <batchlas/blas/functions/gemm.hh>
 #include "../queue.hh"
 #include "../util/template-instantiations.hh"
 
@@ -186,8 +186,7 @@ Event getrf_blocked_dispatch(Queue& ctx,
                              Span<int32_t> info_out,
                              GetrfTrailingGemm<T> trailing_gemm,
                              GetrfPanelSolveTrsm<T> panel_trsm) {
-    // Defaults to the native kernel so a direct caller needs no dispatch
-    // dependency; the facade injects the ROUTED gemm instead.
+    // An empty seam means the public gemm on the queue's backend, which makes its own choice.
     if (!trailing_gemm) {
         trailing_gemm = [](Queue& c,
                            const MatrixView<T, MatrixFormat::Dense>& ga,
@@ -195,7 +194,9 @@ Event getrf_blocked_dispatch(Queue& ctx,
                            const MatrixView<T, MatrixFormat::Dense>& gc,
                            T galpha, T gbeta, Transpose gta, Transpose gtb,
                            ComputePrecision gp) {
-            return sycl_gemm::gemm_custom<T>(c, ga, gb, gc, galpha, gbeta, gta, gtb, gp);
+            return with_backend(c, [&](auto Back) {
+                return ::batchlas::gemm<Back.value, T>(c, ga, gb, gc, galpha, gbeta, gta, gtb, gp);
+            });
         };
     }
 

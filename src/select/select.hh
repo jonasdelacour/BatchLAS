@@ -20,6 +20,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -196,6 +197,12 @@ struct Rules {
     std::span<const Alias> aliases{};
     // Families in generality order (§5.5); the rest follow in candidate-list order.
     std::span<const std::string_view> last_resort{};
+    // Legacy words for a class word (auto|native|vendor), resolved before the class words;
+    // `aliases` stay concrete (an alias to vendor throws when vendor cannot run).
+    std::span<const Alias> class_aliases{};
+    // The op's legacy variable (BATCHLAS_<OP>_VARIANT, read only when _ROUTE is unset) has its
+    // own vocabulary: these map its values first, wherever the pin came from that variable.
+    std::span<const Alias> legacy_aliases{};
 };
 
 // ---- keys and tables (§5.4) -------------------------------------------------------------
@@ -237,12 +244,17 @@ struct Table {
     bool is_override = false;
     std::vector<TableKey> keys;
     std::vector<TableRow> rows;
+    // nearest() results by key text, as row indices (copies may share it); set by parse_table.
+    // gemm tables hold thousands of rows and gemm is called per panel, so the scan is memoized.
+    struct Memo;
+    std::shared_ptr<Memo> memo;
 
     // Rows matching the longest prefix of the :exact keys (in '# keys:' order; exact keys are
     // dropped from the right until some row matches, possibly all of them), then min
     // sum w*|log2(row/key)|, ties lexicographic by the :log keys in declared order.
     // Throws if `key` lacks a table key.
     BATCHLAS_API const TableRow* nearest(const Key& key) const;
+    const TableRow* nearest_scan(const std::vector<std::string>& kv, const std::vector<double>& kl) const;
 };
 
 // Throws std::runtime_error("<file>:<line>: <reason>").
@@ -354,6 +366,15 @@ std::optional<Choice> resolve_pin(std::string_view op, std::string_view dtype, c
                                   const std::array<Choice, N>& candidates, CanRun& can_run, const Rules& rules,
                                   std::string text, const std::string& source) {
     const std::string where = std::string(op) + ": " + source + "=\"" + text + "\"";
+    auto map_once = [&](std::span<const Alias> table) {
+        for (const Alias& a : table)
+            if (text == a.name) {
+                text = std::string(a.spelling);
+                return;
+            }
+    };
+    if (source.ends_with("_VARIANT")) map_once(rules.legacy_aliases);
+    map_once(rules.class_aliases);
     if (text == "auto") return std::nullopt;
     if (text == "native") {
         if (auto c = walk(op, dtype, d, key, candidates, can_run, rules, true)) return c;

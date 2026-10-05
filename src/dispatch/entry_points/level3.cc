@@ -23,9 +23,6 @@
 #include <batchlas/blas/dispatch/no_route.hh>
 #include <batchlas/blas/dispatch/vendor_available.hh>
 
-#include "../../backends/gemm_variant.hh"
-#include "../../backends/gemm_heterogeneous.hh"
-#include "../../sycl/gemm_kernels.hh"
 
 // The four level-3 custom-route gates. They have to run before the
 // vendor-available test, so they live here rather than in cublas.cc.
@@ -42,47 +39,7 @@
 
 namespace batchlas {
 
-template <Backend Back, typename T>
-Event gemm(Queue& ctx,
-           const MatrixView<T, MatrixFormat::Dense>& A,
-           const MatrixView<T, MatrixFormat::Dense>& B,
-           const MatrixView<T, MatrixFormat::Dense>& C,
-           T alpha,
-           T beta,
-           Transpose transA,
-           Transpose transB,
-           ComputePrecision precision) {
-    if constexpr (!dispatch::level3_vendor_available<Back>) {
-        // A heterogeneous batch is handled BEFORE routing -- no strided-batched
-        // call can serve members of differing shape. The recursive call below is
-        // safe: each batch_item() is homogeneous by construction and cannot
-        // re-enter this branch.
-        if (backend::gemm_has_heterogeneous_batch(A, B, C)) {
-            return backend::detail::gemm_heterogeneous_loop<T>(
-                ctx, A, B, C, beta, transA, transB,
-                [&](const MatrixView<T, MatrixFormat::Dense>& a,
-                    const MatrixView<T, MatrixFormat::Dense>& b,
-                    const MatrixView<T, MatrixFormat::Dense>& c) {
-                    return ::batchlas::gemm<Back, T>(ctx, a, b, c, alpha, beta,
-                                                     transA, transB, precision);
-                });
-        }
-
-        // Not a second routing policy: backend::gemm_route is the adapter
-        // cublas.cc consults, over the same RouteTable<Op::gemm, T>, with
-        // vendor_available = false as the only differing input.
-        const auto route = backend::gemm_route<T>(ctx, A, B, C, transA, transB,
-                                                  precision, /*vendor_available=*/false);
-        if (dispatch::is_native(route)) {
-            return sycl_gemm::gemm_custom<T>(ctx, A, B, C, alpha, beta, transA, transB, precision);
-        }
-        // Non-Default precision and degenerate dims have no route without a vendor.
-        dispatch::throw_no_vendor_route<T>(
-            dispatch::Op::gemm, Back, dispatch::kLevel3Library<Back>);
-    } else {
-        return backend::gemm_vendor<Back, T>(ctx, A, B, C, alpha, beta, transA, transB, precision);
-    }
-}
+// gemm lives in src/ops/gemm/gemm.cc (flat kernel selection).
 
 template <Backend Back, typename T>
 Event gemv(Queue& ctx,
@@ -319,7 +276,6 @@ Event trmm(Queue& ctx,
     OP_INSTANTIATE(her2k, B_, std::complex<double>)
 
 #define ALL_TYPE_OPS_ONE(B_, fp)  \
-    OP_INSTANTIATE(gemm, B_, fp)  \
     OP_INSTANTIATE(gemv, B_, fp)  \
     OP_INSTANTIATE(trmm, B_, fp)
 

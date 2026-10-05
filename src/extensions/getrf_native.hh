@@ -66,7 +66,7 @@ BATCHLAS_INTERNAL_API unsigned getrf_blocked_debug_params(Queue& ctx, int n);  /
 template <typename T>
 BATCHLAS_INTERNAL_API unsigned getrf_blocked_debug_leaf(Queue& ctx, int n);
 
-// An empty seam means "use sycl_gemm::gemm_custom" rather than a routed gemm.
+// An empty seam means the public gemm on the queue's backend.
 template <typename T>
 using GetrfTrailingGemm = std::function<Event(
     Queue&,

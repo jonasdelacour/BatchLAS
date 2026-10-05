@@ -1487,8 +1487,19 @@ throwaway JIT pass per cell, 3 reps alternating arm order, medians. BASE is
 against the new libraries. Ratios are time/vendor. Kernel choice was checked with
 `BATCHLAS_KERNEL_TRACE` on every quoted NN cell.
 
-Everything below is keyed on `is_sm120_family(cuda_cc)` in `select_kernel_variant`
-(`src/sycl/gemm_kernels.cc`). cc 0 and cc 89 keep the 4090 ladder, which
+> On the flat-selection line (P3.4) none of the windows in this section is code:
+> `select_kernel_variant` and `is_sm120_family` routing are deleted, and gemm
+> chooses from `tuned/gemm.<dtype>.<device>.txt` (docs/perf/gemm.md#choices-flat-selection-p34).
+> sm_120 has no gemm table yet and borrows the transcribed sm_89 one (R8 warning),
+> so Auto on sm_120 runs what the 4090 router chose. The tiles named below are ordinary
+> candidates (`wide:m=16:n=16:k=16`, `wide:m=32:n=32:k=16`, NN only;
+> `wide:m=64:n=64:k=16`, `wide:m=128:n=32:k=16`, `wide:m=32:n=128:k=16` for the
+> transposed fallback), and the measurements below are the hypotheses the
+> `tools/tune` sm_120 sweep tests. Kernel-name pins (`16x16x16wide`, ...) are
+> `BATCHLAS_GEMM_ROUTE` aliases now.
+
+Everything below was keyed on `is_sm120_family(cuda_cc)` in `select_kernel_variant`
+(`src/sycl/gemm_kernels.cc`) on `worktree-blackwell-tuning`. cc 0 and cc 89 keep the 4090 ladder, which
 `GemmDispatchPolicyTest.Sm120SmallTilesAndTheirEdges` and
 `Sm120TransposedFallbackAndItsEdges` assert shape by shape. None of it changes
 `preferred()`: in a vendor build, Auto still sends complex and transposed float to
@@ -1498,14 +1509,15 @@ and geqrf in float, cfloat and cdouble at n=128-512 measured new/base 0.996-1.00
 
 ### gemm small tiles
 
-> On the flat-selection line both tiles were ported pin-only in P3.2b (reachable
-> only through `BATCHLAS_GEMM_SYCL_KERNEL`). The sm_120 selector windows described
-> below are not in that tree: routing is deferred to flat selection (P3.4).
+> On the flat-selection line both tiles were ported pin-only in P3.2b, and P3.4 made
+> them the `wide:m=16:n=16:k=16` and `wide:m=32:n=32:k=16` candidates (NN only in
+> `can_run`). The sm_120 selector windows described below are not in that tree; the
+> sm_120 tuner sweep ranks the tiles instead.
 
 There are two new NN instantiations of the wide-scalar template
 (`launch_wide_transposed`, 64 threads each): 16x16 with a 2x2 thread tile and 32x32
 with a 4x4 thread tile (`Tiled16x16RegisterK16Wide`, `Tiled32x32RegisterK16Wide`).
-They are forceable as `16x16x16wide` and `32x32x16wide`. On the 4090 the only complex
+They are forceable as `16x16x16wide` and `32x32x16wide` (aliases of the spellings above). On the 4090 the only complex
 register kernel was the 64x64 tile, which at m=n=32 computes 3/4 padding.
 
 Windows (float and complex<float>; `fits16` = max(m,n) <= 16, or min(m,n) <= 8 with

@@ -29,7 +29,6 @@
 #include "trmm_custom_dispatch.hh"
 #include "trmm_triangular_tiles.hh"
 #include "triangular_expand.hh"
-#include "../sycl/gemm_kernels.hh"
 
 // This file contains cuBLAS primitives implementation using MatrixView
 #include "../util/template-instantiations.hh"
@@ -119,33 +118,14 @@ namespace batchlas {
                       Transpose transA,
                       Transpose transB,
                       ComputePrecision precision) {
-        if constexpr (Back == Backend::CUDA) {
-            if constexpr (std::is_same_v<T, float>) {
-                if (gemm_use_cublasdx_custom(ctx, A, B, C, transA, transB, precision)) {
-                    return gemm_cublasdx(ctx, A, B, C, alpha, beta, transA, transB, precision);
-                }
-            }
-        }
-
+        // The library call only: which kernel runs is decided by the public gemm
+        // (src/ops/gemm/gemm.cc), which reaches here through its `vendor` choice. A direct caller's
+        // heterogeneous batch is walked member by member.
         if (gemm_has_heterogeneous_batch(A, B, C)) {
-            // WP2 C1: the dimension check, the loop, the m==0/n==0 skips, the
-            // k==0 -> scale(beta) substitution and the empty-batch Event live in
-            // detail::gemm_heterogeneous_loop (src/backends/gemm_heterogeneous.hh);
-            // none of that was ever about the vendor, and keeping it here is why a
-            // vendor-free build had none of it -- all 17 remaining vendor-free
-            // gemm_tests failures were this. Only the per-item terminal is
-            // backend-specific, and cuBLAS passes gemm_vendor_impl rather than
-            // recursing through gemm_vendor so the route above is not re-run per
-            // member. Its empty-batch Event is create_event_after_external_work(),
-            // what the helper hardcodes, because this work leaves the SYCL queue.
             return detail::gemm_heterogeneous_loop<T>(ctx, A, B, C, beta, transA, transB,
                 [&](const auto& A_i, const auto& B_i, const auto& C_i) {
                     return gemm_vendor_impl<Back, T>(ctx, A_i, B_i, C_i, alpha, beta, transA, transB, precision);
                 });
-        }
-
-        if (gemm_use_sycl_custom(ctx, A, B, C, transA, transB, precision)) {
-            return sycl_gemm::gemm_custom(ctx, A, B, C, alpha, beta, transA, transB, precision);
         }
 
         return gemm_vendor_impl<Back, T>(ctx, A, B, C, alpha, beta, transA, transB, precision);
@@ -254,11 +234,11 @@ namespace batchlas {
             }
 
             if (side == Side::Left) {
-                return gemm_vendor<Back, T>(ctx, expanded, B, C, alpha, beta,
+                return ::batchlas::gemm<Back, T>(ctx, expanded, B, C, alpha, beta,
                                             Transpose::NoTrans, Transpose::NoTrans,
                                             ComputePrecision::Default);
             }
-            return gemm_vendor<Back, T>(ctx, B, expanded, C, alpha, beta,
+            return ::batchlas::gemm<Back, T>(ctx, B, expanded, C, alpha, beta,
                                         Transpose::NoTrans, Transpose::NoTrans,
                                         ComputePrecision::Default);
         }
@@ -434,7 +414,7 @@ namespace batchlas {
             // and HERK owns only one of them.
             // (void) on an Event: deliberate. This Queue is in-order, so the next submission
             // is already ordered after this one and the Event carries nothing the caller needs.
-            (void)gemm_vendor<Back, T>(ctx, A, A, product, T(alpha), T(0),
+            (void)::batchlas::gemm<Back, T>(ctx, A, A, product, T(alpha), T(0),
                                  transA,
                                  transA == Transpose::NoTrans ? Transpose::ConjTrans
                                                               : Transpose::NoTrans,
@@ -500,7 +480,7 @@ namespace batchlas {
 
             MatrixView<T, MatrixFormat::Dense> product(storage.data(), n, n, ld, ld * n, batch);
 
-            (void)gemm_vendor<Back, T>(ctx, A, B, product, alpha, T(0),
+            (void)::batchlas::gemm<Back, T>(ctx, A, B, product, alpha, T(0),
                                  transA,
                                  no_trans ? Transpose::ConjTrans : Transpose::NoTrans,
                                  ComputePrecision::Default);
@@ -709,10 +689,10 @@ namespace batchlas {
             }
 
             if (side == Side::Left) {
-                return gemm_vendor<Back, T>(ctx, expanded, B, C, alpha, T(0),
+                return ::batchlas::gemm<Back, T>(ctx, expanded, B, C, alpha, T(0),
                                             transA, Transpose::NoTrans, ComputePrecision::Default);
             }
-            return gemm_vendor<Back, T>(ctx, B, expanded, C, alpha, T(0),
+            return ::batchlas::gemm<Back, T>(ctx, B, expanded, C, alpha, T(0),
                                         Transpose::NoTrans, transA, ComputePrecision::Default);
         }
 

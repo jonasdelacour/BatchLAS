@@ -1415,7 +1415,10 @@ documented word collisions.
 `Op` and therefore a slot, but no adapter reads it — **a slot is not a working
 variable**. The legacy spellings are `BATCHLAS_{GEMM,SYMM,SYRK,SYR2K,TRMM}_VARIANT`
 and `BATCHLAS_{SYEV,GESVD,ORMQR}_PROVIDER`; the canonical spelling wins when both are
-set.
+set. The flat-selection ops (`potrf`, `posv`, `trsm`, `gemm`) read the same two slots
+but parse them with `src/select/` instead of `parse_route_env`: unset means the tuned
+table, a spelling such as `reg:m=128:n=128:k=8:u=1` pins one kernel, and a pin the
+shape cannot run throws (docs/design/flat-kernel-selection.md §5.3, §12).
 
 **`selection`** — which kernel or algorithm runs, for the knobs that are not part of
 the route vocabulary. Three of these override an explicit API argument, which is the
@@ -1424,9 +1427,8 @@ sharpest form of the problem this section exists to fix.
 | field | variable | type | default |
 | --- | --- | --- | --- |
 | `expand_route` | `BATCHLAS_EXPAND_ROUTE` | `EnvValue` | unset (shape heuristic) |
-| `gemm_cublasdx_kernel` | `BATCHLAS_GEMM_CUBLASDX_KERNEL` | `EnvValue` | unset (vendor fallback) |
-| `gemm_experimental` | `BATCHLAS_GEMM_EXPERIMENTAL` | `EnvValue` | unset (five variants stay locked) |
-| `gemm_sycl_kernel` | `BATCHLAS_GEMM_SYCL_KERNEL` | `EnvValue` | unset (`KernelVariant::Direct`) |
+| `gemm_cublasdx_kernel` | `BATCHLAS_GEMM_CUBLASDX_KERNEL` | `EnvValue` | unset (vendor fallback); level-3 cuBLASDx arms only, gemm itself no longer reads it |
+| `gemm_sycl_kernel` | `BATCHLAS_GEMM_SYCL_KERNEL` | `EnvValue` | unset; **retired**: if set, gemm throws. Its kernel names are `BATCHLAS_GEMM_ROUTE` aliases (`src/ops/gemm/choice.hh`) |
 | `gemv_segt` | `BATCHLAS_GEMV_SEGT` | `EnvValue` | unset (auto) |
 | `gesvd_bidiag` | `BATCHLAS_GESVD_BIDIAG` | `EnvValue` | unset (`bdsdc`) — `normal` **changes numerics** |
 | `getrf_laswp` | `BATCHLAS_GETRF_LASWP` | `EnvValue` | unset (`defer_gather`) |

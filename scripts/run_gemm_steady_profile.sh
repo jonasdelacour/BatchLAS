@@ -29,7 +29,7 @@ run_profile_pair() {
     echo "=== $label ==="
 
     BATCHLAS_GEMM_VARIANT=sycl \
-    BATCHLAS_GEMM_SYCL_KERNEL="$kernel" \
+    BATCHLAS_GEMM_ROUTE="$kernel" \
     "$nsys_bin" profile \
         --trace=cuda,nvtx,osrt \
         --sample=none \
@@ -48,7 +48,7 @@ run_profile_pair() {
         512 512 512 512
 
     BATCHLAS_GEMM_VARIANT=sycl \
-    BATCHLAS_GEMM_SYCL_KERNEL="$kernel" \
+    BATCHLAS_GEMM_ROUTE="$kernel" \
     "$ncu_bin" \
         --section SchedulerStats \
         --section WarpStateStats \

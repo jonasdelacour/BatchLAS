@@ -97,7 +97,7 @@ template <typename T>
 BATCHLAS_INTERNAL_API unsigned geqrf_panel_reg_debug_launch(
     Queue& ctx, int m, int n);  // wg | leaf<<16; 0 = no fit
 
-// Empty means "use sycl_gemm::gemm_custom"; inject to route trailing updates through the table.
+// Empty means the public gemm on the queue's backend (its own table-driven choice).
 template <typename T>
 using GeqrfTrailingGemm = std::function<Event(
     Queue&,

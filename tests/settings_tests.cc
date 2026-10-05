@@ -34,7 +34,6 @@
 #include <batchlas/util/sycl-device-queue.hh>
 
 // The second reader of BATCHLAS_GEMM_VARIANT, and not on the public path.
-#include "../src/backends/gemm_variant.hh"
 
 #include <stdexcept>
 #include <string>
@@ -219,16 +218,11 @@ TEST(SettingsUnsafe, SkipPointerChecksHonoursTheBuildOption) {
 #endif
 }
 
-// (e) The two readers of BATCHLAS_GEMM_VARIANT now read the same string:
-// parse_route_env(Op::gemm) via legacy_variable_for, and gemm_variant_request(),
-// which had its own tolower parser and its own getenv.
-//
-// The SOURCE is what is pinned, not the semantics. Their unset defaults differ on
-// purpose -- Auto against Vendor, recorded at route_gemm_equivalence_tests.cc:28 --
-// and unifying that would be a behaviour change deciding which kernel a bare gemm()
-// runs. The later blocks are the load-bearing ones: one call_once read with the
-// reload hook missing gives a first answer that is right and every one after it
-// stale.
+// (e) BATCHLAS_GEMM_VARIANT has one source: the settings() snapshot, which both
+// parse_route_env(Op::gemm) and gemm's flat-selection pin (select.cc pin_text, the
+// legacy variable) read. The later blocks are the load-bearing ones: one call_once
+// read with the reload hook missing gives a first answer that is right and every
+// one after it stale.
 TEST(SettingsRouting, BothReadersOfGemmVariantSeeTheSameValue) {
     ScopedEnvVar clear_canonical("BATCHLAS_GEMM_ROUTE", nullptr);
 
@@ -240,19 +234,15 @@ TEST(SettingsRouting, BothReadersOfGemmVariantSeeTheSameValue) {
         EXPECT_EQ(parsed.source.variable, "BATCHLAS_GEMM_VARIANT");
         EXPECT_EQ(parsed.source.value, "sycl");
         EXPECT_EQ(gemm_legacy().value(), "sycl");
-        EXPECT_EQ(backend::gemm_variant_request(), backend::GemmVariantRequest::Sycl);
     }
     {
         ScopedEnvVar v("BATCHLAS_GEMM_VARIANT", "cublasdx");
         EXPECT_EQ(parse_route_env(Op::gemm).source.value, "cublasdx");
         EXPECT_EQ(gemm_legacy().value(), "cublasdx");
-        EXPECT_EQ(backend::gemm_variant_request(), backend::GemmVariantRequest::CuBLASDx);
     }
     {
         ScopedEnvVar v("BATCHLAS_GEMM_VARIANT", nullptr);
         EXPECT_FALSE(parse_route_env(Op::gemm).found);
         EXPECT_FALSE(gemm_legacy().is_set());
-        // The documented asymmetry, pinned so a later "cleanup" has to argue with it.
-        EXPECT_EQ(backend::gemm_variant_request(), backend::GemmVariantRequest::Vendor);
     }
 }

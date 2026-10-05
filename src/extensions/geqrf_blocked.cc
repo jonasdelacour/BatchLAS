@@ -7,7 +7,7 @@
 #include "geqrf_panel_reg_device.hh"
 #include "larft_wy.hh"
 
-#include "../sycl/gemm_kernels.hh"
+#include <batchlas/blas/functions/gemm.hh>
 #include "../queue.hh"
 #include "../util/template-instantiations.hh"
 
@@ -158,8 +158,8 @@ Event geqrf_blocked_dispatch(Queue& ctx,
                              Span<std::byte> workspace,
                              GeqrfTrailingGemm<T> trailing_gemm,
                              GeqrfPanelLeaf panel_leaf) {
-    // Default the seam to the native kernel so this TU stands alone; the facade injects
-    // the ROUTED gemm. Calling gemm_custom here unconditionally bypasses the route table.
+    // An empty seam means the public gemm on the queue's backend: never a fixed kernel, which
+    // would bypass gemm's selection.
     if (!trailing_gemm) {
         trailing_gemm = [](Queue& c,
                            const MatrixView<T, MatrixFormat::Dense>& ga,
@@ -167,7 +167,9 @@ Event geqrf_blocked_dispatch(Queue& ctx,
                            const MatrixView<T, MatrixFormat::Dense>& gc,
                            T galpha, T gbeta, Transpose gta, Transpose gtb,
                            ComputePrecision gp) {
-            return sycl_gemm::gemm_custom<T>(c, ga, gb, gc, galpha, gbeta, gta, gtb, gp);
+            return with_backend(c, [&](auto Back) {
+                return ::batchlas::gemm<Back.value, T>(c, ga, gb, gc, galpha, gbeta, gta, gtb, gp);
+            });
         };
     }
 

@@ -2,6 +2,7 @@
 
 #include "../util/resident_capacity.hh"
 
+#include <batchlas/blas/dispatch/route_env.hh>  // legacy_variable_for
 #include <batchlas/settings.hh>
 
 #include <cctype>
@@ -13,8 +14,14 @@
 #include <memory>
 #include <sstream>
 #include <tuple>
+#include <unordered_map>
 
 namespace batchlas::select {
+
+struct Table::Memo {
+    std::mutex mu;
+    std::unordered_map<std::string, std::size_t> row;  // kNoRow: no row matched
+};
 
 namespace {
 
@@ -345,18 +352,42 @@ Table parse_table(std::string_view text, std::string_view file) {
     const Device d = device_from_key(t.device);
     t.family = d.family;
     t.arch_number = d.arch_number;
+    t.memo = std::make_shared<Table::Memo>();
     return t;
 }
+
+namespace {
+constexpr std::size_t kNoRow = static_cast<std::size_t>(-1);
+constexpr std::size_t kMemoCap = 1 << 16;  // distinct shapes per table before the memo resets
+}  // namespace
 
 const TableRow* Table::nearest(const Key& key) const {
     std::vector<std::string> kv(keys.size());
     std::vector<double> kl(keys.size(), 0.0);
+    std::string memo_key;
     for (std::size_t i = 0; i < keys.size(); ++i) {
         const auto it = std::find_if(key.begin(), key.end(), [&](const KeyField& f) { return f.name == keys[i].name; });
         if (it == key.end()) throw std::invalid_argument(file + ": key '" + keys[i].name + "' not supplied by the op");
         kv[i] = it->value;
+        memo_key += it->value;
+        memo_key += '\x1f';
         if (keys[i].log) kl[i] = std::log2(std::max(1.0, std::strtod(it->value.c_str(), nullptr)));
     }
+    if (memo) {
+        std::lock_guard<std::mutex> lock(memo->mu);
+        if (const auto hit = memo->row.find(memo_key); hit != memo->row.end())
+            return hit->second < rows.size() ? &rows[hit->second] : nullptr;
+    }
+    const TableRow* found = nearest_scan(kv, kl);
+    if (memo) {
+        std::lock_guard<std::mutex> lock(memo->mu);
+        if (memo->row.size() >= kMemoCap) memo->row.clear();
+        memo->row.emplace(std::move(memo_key), found ? static_cast<std::size_t>(found - rows.data()) : kNoRow);
+    }
+    return found;
+}
+
+const TableRow* Table::nearest_scan(const std::vector<std::string>& kv, const std::vector<double>& kl) const {
     std::vector<std::size_t> exact;
     for (std::size_t i = 0; i < keys.size(); ++i)
         if (!keys[i].log) exact.push_back(i);
@@ -469,9 +500,14 @@ std::optional<std::string> pin_text(std::string_view op, std::string* source) {
         *source = "ScopedPin";
     } else if (const auto o = op_from_name(op)) {
         const char* raw = settings().routing.canonical_route(*o).get();
+        *source = "BATCHLAS_" + dispatch::op_env_stem(*o) + "_ROUTE";
+        // The legacy variable (gemm's _VARIANT) only when _ROUTE is unset, as parse_route_env did.
+        if ((!raw || trim(raw).empty()) && !dispatch::legacy_variable_for(*o).empty()) {
+            raw = settings().routing.legacy_route(*o).get();
+            *source = std::string(dispatch::legacy_variable_for(*o));
+        }
         if (!raw) return std::nullopt;
         text = raw;
-        *source = "BATCHLAS_" + dispatch::op_env_stem(*o) + "_ROUTE";
     } else {
         return std::nullopt;
     }

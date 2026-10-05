@@ -559,7 +559,7 @@ int Driver::tune() {
         write(meta_line(name));
         std::map<CellKey, Cell> cells;
         std::set<std::string> stalled;
-        std::vector<CellKey> next = spec_.grid(o_.grid);
+        std::vector<CellKey> next = spec_.grid(dtype, o_.grid);
         for (int round = 0; !next.empty(); ++round) {
             std::vector<Cell*> todo;
             for (const CellKey& k : next) {
@@ -631,7 +631,7 @@ int Driver::gate() {
         std::printf("== gate: %zu cells from %s\n", cells.size(), o_.old_csv.c_str());
     } else {
         for (const auto& dtype : o_.dtypes)
-            for (const CellKey& k : spec_.grid(o_.grid)) cells.push_back({dtype, k, ""});
+            for (const CellKey& k : spec_.grid(dtype, o_.grid)) cells.push_back({dtype, k, ""});
     }
     if (!o_.raw.empty()) {
         fs::create_directories(o_.raw);

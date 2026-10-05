@@ -11,7 +11,6 @@
 #include "../linalg-impl.hh"
 #include "../util/resident_capacity.hh"
 #include "device_scalar.hh"
-#include "gemm_kernels.hh"
 
 #include <sycl/sycl.hpp>
 

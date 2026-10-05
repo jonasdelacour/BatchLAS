@@ -104,7 +104,7 @@ BATCHLAS_INTERNAL_API Event potrf_cta_dispatch(Queue& ctx,
                                                Span<int32_t> info,
                                                int min_blocks_per_sm = resident::kMinBlocksPerSm);
 
-// Trailing-update GEMM, injected to reach the ROUTED gemm; empty means gemm_custom.
+// Trailing-update GEMM; empty means the public gemm on the queue's backend.
 template <typename T>
 using PotrfTrailingGemm = std::function<Event(
     Queue&,

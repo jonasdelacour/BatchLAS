@@ -22,7 +22,9 @@ const OpSpec* find_spec(std::string_view op) {
 
 std::vector<const OpSpec*> all_specs() { return registry(); }
 
-std::vector<CellKey> OpSpec::grid(const std::map<std::string, std::vector<std::string>>& overrides) const {
+std::vector<CellKey> OpSpec::grid(const std::string& dtype,
+                                  const std::map<std::string, std::vector<std::string>>& overrides) const {
+    static_cast<void>(dtype);
     auto ax = axes();
     for (const auto& [name, values] : overrides) {
         auto it = std::find_if(ax.begin(), ax.end(), [&](const auto& a) { return a.first == name; });

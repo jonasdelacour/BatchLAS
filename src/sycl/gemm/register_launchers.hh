@@ -11,9 +11,9 @@ namespace batchlas::sycl_gemm {
 // These are exactly the template parameters of launch_register_tiled<>.
 // Gathering them into a structural (C++20 NTTP-usable) type lets a single
 // launcher stand in for what used to be one hand-written forwarder per tile
-// shape: the shape is now written at the `case` label in gemm_custom's switch
-// that is its only caller, so the tuning grid reads as a table instead of as
-// thirty-odd near-identical function bodies scattered across a header.
+// shape: the shapes are the rows of ops::gemm::reg_configs (src/ops/gemm/choice.hh),
+// so the tuning grid reads as a table instead of as thirty-odd near-identical
+// function bodies scattered across a header.
 //
 // The defaults match launch_register_tiled<>'s own defaults with one
 // exception: ThreadTileCols there defaults to ThreadTileRows, whereas here TR

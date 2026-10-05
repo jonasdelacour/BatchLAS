@@ -56,9 +56,13 @@ The structural reason every native tier in this campaign is invisible to the hos
 `supports()` carries `if (!s.is_gpu) return false;` for `geqrf` (`route_geqrf.hh:48`), `orgqr`
 (`route_orgqr.hh:32`), `ormqr` (`route_ormqr.hh:59`), `getrf` (`route_getrf.hh:41`), `getrs`
 (`route_getrs.hh:52`), `getri` (`route_getri.hh:39`), `potrf` (`can_run` in `src/ops/potrf/potrf.cc`), `trsm`
-(`can_run` in `src/ops/trsm/trsm.cc`; before P3.3 `route_trsm.hh:39`) and `gemm` (`route_gemm.hh:34-67`). **`gemv`'s `Direct` arm and `spmm`'s
+(`can_run` in `src/ops/trsm/trsm.cc`; before P3.3 `route_trsm.hh:39`) and `gemm` (before P3.4 `preferred()` in
+`route_gemm.hh:34-67`). **`gemv`'s `Direct` arm and `spmm`'s
 gather are the only two exceptions in the tree** — both run on a `native_cpu` `Device("cpu")`
-queue, which is exactly why `gemv_tests` went 40 failed → 0 vendor-free when nothing else did.
+queue, which is exactly why `gemv_tests` went 40 failed → 0 vendor-free when nothing else did. gemm is a
+partial third: its native `can_run` (`src/ops/gemm/gemm.cc`, P3.4) accepts `is_gpu || !has_vendor_blas`, so a host
+queue with no host BLAS still runs the native kernels, as the old merely-supported fallback did, while a host
+queue with one keeps the vendor.
 
 ### The honest metric: the per-op `NoRouteError` census
 
@@ -100,7 +104,7 @@ native route still runs: `automatic()` accepts a merely *supported* native route
 
 | op | native arms (`order` sequence) | `preferred()` in a vendor-present build | where |
 |---|---|---|---|
-| `gemm` | `RegisterTiled` | GPU, homogeneous, `batch >= 64`; **`double` at `k >= 2`**; `float` NN square `max_dim <= 32`; **complex never** | `route_gemm.hh:34-67` |
+| `gemm` | `Direct`, `Tiled`, `Small`, `Reg` (float), `Wide` | no `preferred()` any more: tuned tables (`tuned/gemm.*.txt`) since flat selection (P3.4); sm_89 transcribes the deleted window: GPU, homogeneous, `batch >= 64`; **`double` at `k >= 2`**; `float` NN square `max_dim <= 48`; **complex never** | `src/ops/gemm/gemm.cc` |
 | `gemv` | `CTA`, `Direct` | one window: `complex<double>`, transposed, `64 <= red_len <= 352`, `out_len >= 256`, `batch >= 320` | `route_gemv.hh:60-71` |
 | `trsm` | `Cta`, `SgLeft`, `Blocked` | no `preferred()` any more: tuned tables (`tuned/trsm.*.txt`) since flat selection (P3.3). The deleted window was native from `batch >= 8`, `float`/`Side::Right` also needing `batch >= 128 \|\| order <= 32` | `src/ops/trsm/trsm.cc` |
 | `potrf` | `Tiny`, `CTA`, `LPanel`, `Blocked` | no `preferred()` any more: tuned tables (`tuned/potrf.*.txt`) since flat selection | `src/ops/potrf/potrf.cc` |
@@ -142,7 +146,9 @@ change that:
   register ladder in `select_kernel_variant` sits inside `if constexpr (is_same_v<T,float>)`, so
   complex falls to `Direct`/`Tiled16`, measured 3.2–7.1× slower than cuBLAS. Widening the
   predicate first is a regression. Order: port the tile → wire the selector → move the
-  predicate — [`gemm.md`](../perf/gemm.md).
+  predicate — [`gemm.md`](../perf/gemm.md). (Since written, the wide tiles serve complex NN and the
+  ConjTrans panel forms; since P3.4 selector and predicate are one table row, and the sm_89 rows
+  still put `vendor` first for complex.)
 * **`getrf`/`getri` in `double` and `complex<double>`.** They earn nothing at any order; the
   windows are `float`/`cfloat`-leaning on purpose — [`lu.md`](../perf/lu.md).
 * **`potrf` in complex (0.311–0.509×) and at `n <= 256` for every type.** The complex cause is

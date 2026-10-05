@@ -56,11 +56,13 @@ Rules, as implemented:
   the vendor-free walk, so flipping it moves nothing in a vendor-present build (`:32-83`). Tables that do not declare
   it get `true`.
 
-`RouteTable<Op, T>` specialisations exist for twelve ops: `gemm`, `gemv`, `trsm`, `getrf`, `getrs`,
+`RouteTable<Op, T>` specialisations exist for eleven ops: `gemv`, `getrf`, `getrs`, `gesv`,
 `getri`, `geqrf`, `orgqr`, `ormqr`, `gesvd` and `spmm` get one header each under `include/batchlas/blas/dispatch/`;
 `syev`'s lives with the op instead, at `include/batchlas/blas/functions/syev.hh:330`. The four level-3 tile ops have
-none. `potrf` had one until flat selection; it now chooses from `tuned/potrf.*.txt` in `src/ops/potrf/potrf.cc`
-([potrf.md](potrf.md#selection-since-flat-kernel-selection-phase-2), docs/design/flat-kernel-selection.md). (`level3_coverage.hh:21` still says only "gemm, gesvd, ormqr and syev" have tables — that comment is stale, the
+none. `potrf`, `posv`, `trsm` and `gemm` had one until flat selection; each now chooses from `tuned/<op>.*.txt` in
+`src/ops/<op>/<op>.cc` ([potrf.md](potrf.md#selection-since-flat-kernel-selection-phase-2),
+[trsm.md](trsm.md#choices-flat-selection-p33), [gemm.md](gemm.md#choices-flat-selection-p34),
+docs/design/flat-kernel-selection.md). (`level3_coverage.hh:21` still says only "gemm, gesvd, ormqr and syev" have tables — that comment is stale, the
 sentence it supports is not.)
 
 ### The vendor-availability gate
@@ -106,6 +108,10 @@ in the vendor-free build.
 | `syr2k` | `TriangularTiles` (float only, one call site, `syr2k_custom_dispatch.cc:193`) | `batch >= 2` | `syr2k_custom_dispatch.cc:95-97, 130-148` |
 | `trmm` | `TriangularTiles` (`Side::Left` only) | `is_gpu && trmm_triangular_supported(...) && (tiles pinned \|\| the route is not the plain vendor)` — **no size threshold** | `trmm_custom_dispatch.cc:141-166` |
 
+Their inner GEMMs go through the public `gemm` since P3.4 (the expansion and fold calls in `src/backends/cublas.cc` —
+hemm x2, herk, her2k, trmm x2 — used to call `gemm_vendor`, which the deleted `gemm_use_sycl_custom` then re-routed to
+the native kernel on some shapes), so they take the gemm table's choice like any other caller.
+
 Correctness gates, all of which must hold before any window is consulted: square `A` and matching batch sizes for
 `symm` (`:41-57`); `transA != ConjTrans`, square `C`, matching batch for `syrk` (`:61-78`) and `syr2k` (`:47-67`);
 `Side::Left`, `Uplo::Lower`, `transA == NoTrans` for `trmm`'s cuBLASDx arm (`:96-112`) and `Side::Left` plus
@@ -132,11 +138,15 @@ scripts and in recorded results' provenance (`:21-26`). The collisions between t
 and must not be "simplified" away (`:150-199`):
 
 * `BATCHLAS_GEMM_VARIANT=native` means the **raw CUDA vendor path**, consumed purely as an exclusion — the opposite of
-  canonical `native`. It maps to `{Vendor, Direct}` (`:178-182`).
+  canonical `native`. It maps to `{Vendor, Direct}` (`:178-182`). gemm no longer reads `route_env.hh` (flat selection,
+  P3.4); `legacy_aliases` in `src/ops/gemm/choice.hh` keep the meaning: on `_VARIANT` only, `native`, `cuda-native`,
+  `direct-cuda`, `cublasdx` and `dx` mean `vendor`, and `sycl`/`custom` mean `native`.
 * `custom` means the fused cuBLASDx kernel in the four level-3 ops (`:185`, mapping to `{Vendor, FusedDevice}`) and
-  the **register-tiled GEMM family** in the canonical parser (`:63`, mapping to `{Native, RegisterTiled}`). Same word,
-  different kernel — and the two spellings therefore do *not* agree even for the same op: `BATCHLAS_SYMM_VARIANT=custom`
-  reaches the fused arm, `BATCHLAS_SYMM_ROUTE=custom` does not.
+  "the native gemm family" in gemm (`BATCHLAS_GEMM_ROUTE=custom` is the class word `native` since P3.4; before it,
+  `{Native, RegisterTiled}`). Same word, different kernel — and the two spellings therefore do *not* agree even for the
+  same op: `BATCHLAS_SYMM_VARIANT=custom` reaches the fused arm, `BATCHLAS_SYMM_ROUTE=custom` does not.
+* For gemm the old `BATCHLAS_GEMM_SYCL_KERNEL` names are `BATCHLAS_GEMM_ROUTE` aliases (`128x128x8` ->
+  `reg:m=128:n=128:k=8:u=1`), and setting the retired variable itself makes gemm throw.
 * `gemm` means the deliberately wrong `DiagFullGemm` measurement route in `syrk`/`syr2k` (`:190-198`), not the `gemm`
   op. `tiles` and `narrow` exist only in the level-3 legacy parser (`:186-189`).
 
@@ -146,7 +156,8 @@ A bare algorithm word implies `Native`, **except** `FusedDevice`, which is vendo
 was simultaneously "no opinion" to one and "pin the tile kernel" to the other (`trmm_custom_dispatch.cc:26-36`). There
 is now one parse and one value, pinned by `tests/route_vocabulary_tests.cc:223-231`. `legacy_unset_default` returns
 `{Auto, Auto}` for every op (`route_env.hh:88-91`, with the WP2 E6 rationale at `:123-144`);
-GEMM used to be the odd one out at `{Vendor, Auto}`, and WP2 E6 removed the asymmetry.
+GEMM used to be the odd one out at `{Vendor, Auto}`, and WP2 E6 removed the asymmetry. (The migrated ops — potrf, posv,
+trsm, gemm — do not consult `legacy_unset_default`; unset means their table.)
 
 ## Measured boundaries
 
@@ -350,7 +361,9 @@ Wrong answers found, how they hid, and what guards them now.
   (`route.hh:61-63`).
 * **The order-walk fallback inverted GEMM's default.** Taking "the first merely supported route" picks Native, because
   the orders list natives first — moving an 8×8×8 batch-1 GEMM from vendor to native. Guarded by
-  `tests/route_gemm_equivalence_tests.cc`, whose `ReplicaIsFaithful` case pins the transcription itself.
+  `tests/route_gemm_equivalence_tests.cc`, whose `ReplicaIsFaithful` case pinned the transcription itself, until P3.4
+  deleted it with `route_gemm.hh`. gemm has no order walk now; its sm_89 tables are the old decision transcribed per
+  grid cell, and the last resort (`direct`, then `vendor`) applies only when no table entry can run.
 * **Two ROCm defects invisible to the CUDA build.** `scripts/rocm_syntax_check.sh` (the ROCm headers live under
   `/opt/rocm/include/roc*/roc*.h`, a subdirectory, which is why a naive probe reads them as absent) caught a `trsm`
   instantiation left in the old parameter order and four orphaned macro-continuation lines. Its gate is "exactly one
