@@ -1,6 +1,6 @@
 #pragma once
 
-// syev's selection vocabulary (docs/design/flat-select-p5/syev.md), header-only.
+// syev's selection vocabulary (docs/design/flat-kernel-selection.md#phase-5-syev), header-only.
 
 #include "../../select/select.hh"
 

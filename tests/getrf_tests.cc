@@ -2409,11 +2409,10 @@ TYPED_TEST(LuTest, VendorFactorFeedsTheNativeSolvers) {
     }
 }
 
-// L12. THE TUNED TABLES AND THE VENDOR-FREE FALLBACK, asked of the REAL shape
-// builder on the REAL device: whether the builder reports a capacity at all
-// here -- an LU versus a NoRouteError in a vendor-free build. getrf's half lives
-// in getrf_candidates_tests (flat selection).
-TYPED_TEST(LuTest, RouteTableAndTheVendorFreeFallback) {
+// L12. GETRS'S FUSED CAPACITY ON THE REAL DEVICE: whether the device reports a
+// capacity at all here. The windows and vendor-free walks are table data, asserted in
+// get{rf,rs,ri}_candidates_tests.
+TYPED_TEST(LuTest, GetrsFusedCapacityOnTheRealDevice) {
     using T = typename TestFixture::T;
 
     // This test asserts what the tables do with NO route pinned, so it has to say

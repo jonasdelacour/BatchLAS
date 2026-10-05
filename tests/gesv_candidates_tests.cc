@@ -1,5 +1,5 @@
 // Every gesv candidate, pinned: docs/design/flat-kernel-selection.md §8 and
-// docs/design/flat-select-p5/gesv.md. The limit oracle reads the driver's own capacity
+// docs/design/flat-kernel-selection.md#phase-5-gesv. The limit oracle reads the driver's own capacity
 // queries; which kernel ran is read back from the select trace or a bit-for-bit comparison
 // with the direct driver, never assumed from the pin being accepted.
 #include <gtest/gtest.h>

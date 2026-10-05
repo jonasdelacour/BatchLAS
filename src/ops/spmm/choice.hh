@@ -1,6 +1,6 @@
 #pragma once
 
-// spmm's selection vocabulary (docs/design/flat-select-p5/spmm.md), header-only.
+// spmm's selection vocabulary (docs/design/flat-kernel-selection.md#phase-5-spmm), header-only.
 
 #include "../../select/select.hh"
 

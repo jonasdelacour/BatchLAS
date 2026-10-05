@@ -73,7 +73,7 @@ against: `source=transcribed:424a45bc` (100 tables: gemm, gemv, geqrf, gesv, ges
 getrs, orgqr, ormqr, spmm, syev), `7e71a6e0` (posv sm_89, 4) and `8b9adeb3` (trsm sm_89, 6). Their
 sources, and the off-grid data-gate scripts that came with them, are retrievable from the parent
 of the deletion commit, e.g. `git show 0bd26dfe:tools/transcribe/posv_transcribe.cc`. A
-`tools/transcribe/...` path below, or in `docs/design/flat-select-p5/` and `docs/perf/`, means
+`tools/transcribe/...` path below, in `docs/perf/`, or in the per-op phase 5 notes (folded into the spec §12; originals at `git show 94cefb3a:docs/design/flat-select-p5/<op>.md`), means
 that git path. The CSVs in `transcribed/` stay, so `--check` still re-derives every table.
 
 The posv sm_89 tables are the first transcribed ones. `tools/transcribe/posv_transcribe.cc` is

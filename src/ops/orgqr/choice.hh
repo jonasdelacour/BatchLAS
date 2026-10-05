@@ -1,6 +1,6 @@
 #pragma once
 
-// orgqr's selection vocabulary (flat-select-p5/orgqr.md), header-only.
+// orgqr's selection vocabulary (flat-kernel-selection.md#phase-5-orgqr), header-only.
 
 #include "../../select/select.hh"
 

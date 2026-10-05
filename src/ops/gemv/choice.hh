@@ -1,6 +1,6 @@
 #pragma once
 
-// gemv's selection vocabulary (docs/design/flat-select-p5/gemv.md), header-only.
+// gemv's selection vocabulary (docs/design/flat-kernel-selection.md#phase-5-gemv), header-only.
 
 #include "../../select/select.hh"
 

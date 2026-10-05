@@ -1,5 +1,5 @@
 // gemv: the whole selection path (docs/design/flat-kernel-selection.md §4.3, rule R1;
-// docs/design/flat-select-p5/gemv.md). public gemv() -> choose() -> std::visit -> launch.
+// docs/design/flat-kernel-selection.md#phase-5-gemv). public gemv() -> choose() -> std::visit -> launch.
 // The kernel for a shape is the first runnable entry of the nearest row in
 // tuned/gemv.<dtype>.<device>.txt; can_run() below only removes entries that cannot run.
 // Direct is one work-item per output (bodies 1/2/4), Cta one sub-group per output (bodies 3/5);

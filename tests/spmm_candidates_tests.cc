@@ -1,5 +1,5 @@
 // Every spmm candidate, pinned: docs/design/flat-kernel-selection.md §8 and
-// docs/design/flat-select-p5/spmm.md. Which kernel ran is read back from the select trace or a
+// docs/design/flat-kernel-selection.md#phase-5-spmm. Which kernel ran is read back from the select trace or a
 // bit-for-bit comparison with the direct driver, never assumed from the pin being accepted.
 // Ports the RouteSpmm.* cases of route_vocabulary_tests that still describe behaviour.
 #include <gtest/gtest.h>

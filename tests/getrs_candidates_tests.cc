@@ -1,5 +1,5 @@
 // Every getrs candidate, pinned: docs/design/flat-kernel-selection.md §8 and
-// docs/design/flat-select-p5/getrs.md. The limit oracle reads the drivers' own capacity
+// docs/design/flat-kernel-selection.md#phase-5-getrs. The limit oracle reads the drivers' own capacity
 // constants; which kernel ran is read back from the select trace or a bit-for-bit comparison
 // with the direct driver, never assumed from the pin being accepted. The factors are built on
 // the host (no getrf in the loop), so the reference never shares code with what it checks.

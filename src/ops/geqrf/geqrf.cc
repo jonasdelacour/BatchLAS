@@ -1,5 +1,5 @@
 // geqrf: the whole selection path (docs/design/flat-kernel-selection.md §4.3, rule R1;
-// docs/design/flat-select-p5/geqrf.md). public geqrf() -> choose() -> std::visit -> launch.
+// docs/design/flat-kernel-selection.md#phase-5-geqrf). public geqrf() -> choose() -> std::visit -> launch.
 // The kernel for a shape is the first runnable entry of the nearest row in
 // tuned/geqrf.<dtype>.<device>.txt; can_run() (can_run.hh) only removes entries that cannot run.
 // Tiny factors a square n <= 32 in registers, Cta holds the whole panel in local memory, and

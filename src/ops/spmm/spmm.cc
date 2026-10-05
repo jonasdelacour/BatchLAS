@@ -1,5 +1,5 @@
 // spmm: the whole selection path (docs/design/flat-kernel-selection.md §4.3, rule R1;
-// docs/design/flat-select-p5/spmm.md). public spmm() -> choose() -> std::visit -> launch.
+// docs/design/flat-kernel-selection.md#phase-5-spmm). public spmm() -> choose() -> std::visit -> launch.
 // The kernel for a shape is the first runnable entry of the nearest row in
 // tuned/spmm.<dtype>.<device>.txt; can_run() below only removes entries that cannot run.
 // Direct is the native batched CSR driver (gather for transA == N, scale + atomic scatter

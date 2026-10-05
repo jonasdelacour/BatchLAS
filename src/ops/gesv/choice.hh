@@ -1,6 +1,6 @@
 #pragma once
 
-// gesv's selection vocabulary (docs/design/flat-select-p5/gesv.md), header-only.
+// gesv's selection vocabulary (docs/design/flat-kernel-selection.md#phase-5-gesv), header-only.
 
 #include "../../select/select.hh"
 

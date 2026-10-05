@@ -70,15 +70,16 @@ the path `Auto` takes.
 Two measurements that are committed in this repository, with their conditions,
 rather than a headline number:
 
-- **`syev`, eigenvectors, float, RTX 4090, CUDA backend** (grid in
-  `include/batchlas/blas/functions/syev.hh`, measured 2026-08-07, µs per matrix, median
+- **`syev`, eigenvectors, float, RTX 4090, CUDA backend** (grid recorded in the
+  header comments of `git show 526601e6^:include/batchlas/blas/functions/syev.hh`; the
+  routing it justified ships as the `tuned/syev.float.*.txt` rows; measured 2026-08-07, µs per matrix, median
   of 5, harness-default block size, one process on the device): at
   `n = 320, batch = 819` BatchLAS's blocked solver runs at 67.8 µs
   vs cuSOLVER's 203.0 µs (**3.0x**); at `n = 448, batch = 585` it is 195.3 vs
   400.6 (**2.1x**). The vendor wins at large `n` — an earlier sweep in the same
   header has it 1.65x ahead at `n = 2048`, on a row the header itself flags as
-  not saturated — and `Auto` routes there accordingly. The header carries the
-  full grids, including the corrections that superseded earlier ones.
+  not saturated — and `Auto` routes there accordingly. That header revision carries
+  the full grids, including the corrections that superseded earlier ones.
 - **`gesvd` vs `cusolverDnXgesvdjBatched`, float, RTX 4090**
   (`benchmarks/results/gesvd_vs_gesvdj_rtx4090.csv`): at `n = 8, batch = 16384`
   BatchLAS's one-sided Jacobi SVD is 0.0064 µs/matrix vs 0.339 µs/matrix; at

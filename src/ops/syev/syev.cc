@@ -1,5 +1,5 @@
 // syev: the whole selection path (docs/design/flat-kernel-selection.md §4.3, rule R1;
-// docs/design/flat-select-p5/syev.md). public syev() -> choose() -> std::visit -> launch.
+// docs/design/flat-kernel-selection.md#phase-5-syev). public syev() -> choose() -> std::visit -> launch.
 // The kernel for a shape is the first runnable entry of the nearest row in
 // tuned/syev.<dtype>.<device>.txt; can_run() below only removes entries that cannot run.
 // Cta, CtaFused and Jacobi are the three n <= 32 sub-group solvers; Blocked (sytrd_blocked +

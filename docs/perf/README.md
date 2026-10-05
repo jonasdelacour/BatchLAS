@@ -1,20 +1,24 @@
 # Routing and performance evidence
 
 Every native kernel in BatchLAS competes with a vendor library, and the choice between them
-is a **measured window**, not a preference. These pages are the record of those measurements:
-what each op's `preferred()` predicate actually is, the grid that justifies each of its
-boundaries, what was built and rejected, and what is still owed.
+is a **measured window**, not a preference. Since flat selection
+([`../design/flat-kernel-selection.md`](../design/flat-kernel-selection.md)) every op ranks its
+kernels from a table, `tuned/<op>.<dtype>.<device>.txt`; most tables are still transcriptions of
+the old per-op `preferred()` predicates (`tuned/README.md` says which). These pages are the record
+of the measurements behind those windows: the grid that justifies each boundary, what was built
+and rejected, and what is still owed. Where a page quotes a `preferred()` or `supports()` predicate
+with a `file:line`, that is the deleted router; the window lives on as table rows.
 
 Read the page for an op before you widen its window, add a tier, or "fix" a route that looks
 conservative. Most of the obvious moves in here have already been made and measured worse.
 
 | page | ops | does anything route natively by default? |
 |---|---|---|
-| [dispatch.md](dispatch.md) | the `Route` vocabulary, the vendor gate, the coverage instrument | n/a — this is the mechanism |
+| [dispatch.md](dispatch.md) | the `BATCHLAS_<OP>_ROUTE` words, the vendor gate, the coverage instrument, measured level-3 boundaries | n/a — this is the mechanism |
 | [gemm.md](gemm.md) | `gemm` | **yes** — `double` broadly, `float` NN squares at `max_dim <= 32`; complex never |
-| [level3.md](level3.md) | `symm` `hemm` `syrk` `herk` `syr2k` `her2k` `trmm` | hand-rolled `if`-chains in the facade, not route tables |
+| [level3.md](level3.md) | `symm` `hemm` `syrk` `herk` `syr2k` `her2k` `trmm` | hand-rolled `if`-chains in `src/backends/*_custom_dispatch.cc`, not tables |
 | [trsm.md](trsm.md) | `trsm` | **yes**, broadly — but see its open debts before trusting a ratio |
-| [potrf.md](potrf.md) | `potrf` | **yes**, per cell — flat selection over `tuned/potrf.<dtype>.<device>.txt`, no route table; five native kernels ship |
+| [potrf.md](potrf.md) | `potrf` | **yes**, per cell — measured tables (sm_120 converted from the route sweep); five native kernels ship |
 | [qr.md](qr.md) | `geqrf` `orgqr` `ormqr` | **yes** — `ormqr` native-first; `geqrf` above a per-type order floor plus a tall-panel clause; `orgqr` to n = 512 |
 | [lu.md](lu.md) | `getrf` `getrs` `getri` | **yes** — four windows, all `float`/`cfloat`-leaning |
 | [gemv.md](gemv.md) | `gemv` | **yes** — one `complex<double>` transposed window |
@@ -24,17 +28,18 @@ conservative. Most of the obvious moves in here have already been made and measu
 ## Two rules these pages are written to
 
 **The shipped code is the authority on *what* ships; the notes are the authority on *why*.**
-Several of these windows were narrowed or widened after the note describing them was written,
-and a few in-tree comments are still stale against their own predicate — `lu.md` lists ten
-source locations that claim `preferred()` is all-false when four windows now ship. Every page
-quotes the predicate with a `file:line`. Read the predicate, not the prose above it.
+Several of these windows were narrowed or widened after the note describing them was written.
+What ships is the op's table plus its `can_run` (`src/ops/<op>/<op>.cc`); read those, not the
+prose, and use the select trace (`BATCHLAS_SELECT_TRACE`) or the coverage `reached` row to see
+which kernel a shape takes.
 
-**`supports()` and `preferred()` are not the same kind of false.** `supports()` is
-correctness: false means the route would return a *wrong answer*. `preferred()` is a measured
-window: false means merely *slower*, and the route stays eligible — vendor-free, an
-un-preferred native route is still the one that runs. Putting a performance threshold in
-`supports()` silently disables the vendor-free fallback and makes "forced native" tests run
-the vendor and pass green. That mistake is documented in `potrf.md`.
+**`can_run` and the table are not the same kind of false** (R3/R4 of the spec). `can_run` is
+correctness: false means the kernel would refuse or return a *wrong answer*, and it mirrors the
+driver's own checks. A table row is speed: a candidate ranked last is merely *slower* and stays
+eligible — vendor-free, the first runnable native entry of the row is the one that runs. Putting
+a performance threshold in `can_run` makes the shape unservable vendor-free and turns a pin into
+a throw. The old router's version of that mistake (a speed threshold in `supports()`) is
+documented in `potrf.md`.
 
 ## Measurement rules
 

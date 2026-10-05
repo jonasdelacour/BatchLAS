@@ -1,6 +1,6 @@
 #pragma once
 
-// geqrf's selection vocabulary (docs/design/flat-select-p5/geqrf.md), header-only.
+// geqrf's selection vocabulary (docs/design/flat-kernel-selection.md#phase-5-geqrf), header-only.
 
 #include "../../select/select.hh"
 

@@ -1,5 +1,5 @@
 // gesv: the whole selection path (docs/design/flat-kernel-selection.md §4.3, rule R1;
-// docs/design/flat-select-p5/gesv.md). public gesv() -> choose() -> std::visit -> launch.
+// docs/design/flat-kernel-selection.md#phase-5-gesv). public gesv() -> choose() -> std::visit -> launch.
 // The kernel for a shape is the first runnable entry of the nearest row in
 // tuned/gesv.<dtype>.<device>.txt; can_run() below only removes entries that cannot run.
 // Tiny is the fused LU factor-and-solve kernel; Blocked composes the public getrf and getrs,

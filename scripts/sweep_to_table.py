@@ -319,7 +319,7 @@ def gemv_key(r):
 
 
 # gemv (phase 5): work ~ out red batch; ConjTrans folds to T. No sweep source: both sm_89 and
-# sm_120 are transcribed old routing (docs/design/flat-select-p5/gemv.md).
+# sm_120 are transcribed old routing (docs/design/flat-kernel-selection.md#phase-5-gemv).
 GEMV_CHOICES = ("cta", "direct", "vendor")
 GEMV = OpSpec(
     op="gemv",
@@ -406,7 +406,7 @@ def getrs_key(r):
     return key if min(key) >= 1 else None
 
 
-# getrs (docs/design/flat-select-p5/getrs.md): work ~ n^2 nrhs batch; transA is not a key (the
+# getrs (docs/design/flat-kernel-selection.md#phase-5-getrs): work ~ n^2 nrhs batch; transA is not a key (the
 # old predicates never read it). sm_89 and sm_120 are both the transcribed old routing.
 GETRS_CHOICES = ("cta", "blocked", "vendor")
 GETRS = OpSpec(
@@ -441,7 +441,7 @@ def gesv_key(r):
     return key if min(key) >= 1 else None
 
 
-# gesv (flat-select-p5/gesv.md): flops 2n^3/3 + 2 n^2 nrhs. No vendor family; the old predicates
+# gesv (flat-kernel-selection.md#phase-5-gesv): flops 2n^3/3 + 2 n^2 nrhs. No vendor family; the old predicates
 # read only n and nrhs. sm_89 and sm_120 are both transcribed (no measurement).
 GESV_TIERS = ("tiny", "blocked")
 GESV = OpSpec(
@@ -486,7 +486,7 @@ def spmm_key(r):
     return key if key[0] in ("N", "T") and key[1] in ("N", "T") and min(key[2:]) >= 1 else None
 
 
-# spmm (docs/design/flat-select-p5/spmm.md): work ~ nnz nrhs batch, nnz ~ m. ConjTrans folds
+# spmm (docs/design/flat-kernel-selection.md#phase-5-spmm): work ~ nnz nrhs batch, nnz ~ m. ConjTrans folds
 # to T on both operands. No sweep source: sm_89, sm_120 and cpu are transcribed.
 SPMM_CHOICES = ("direct", "vendor")
 SPMM = OpSpec(
@@ -500,7 +500,7 @@ SPMM = OpSpec(
 )
 
 
-# syev (docs/design/flat-select-p5/syev.md): work ~ n^3 batch; jobz N|V. No sweep source: the
+# syev (docs/design/flat-kernel-selection.md#phase-5-syev): work ~ n^3 batch; jobz N|V. No sweep source: the
 # sm_89 and sm_120 tables are the same transcription of the old router (it read no architecture).
 SYEV_CHOICES = ("cta", "cta_fused", "jacobi", "blocked", "two_stage", "vendor")
 SYEV = OpSpec(
@@ -905,7 +905,7 @@ def geqrf_key(r):
     return key if key[0] in ("sq", "tall", "wide") and min(key[1:]) >= 1 else None
 
 
-# geqrf (docs/design/flat-select-p5/geqrf.md): work ~ n^3 aspect. No sweep source: sm_89 and
+# geqrf (docs/design/flat-kernel-selection.md#phase-5-geqrf): work ~ n^3 aspect. No sweep source: sm_89 and
 # sm_120 are both transcribed (the old predicates read no architecture).
 GEQRF_CHOICES = ("tiny", "cta", "blocked", "vendor")
 GEQRF = OpSpec(

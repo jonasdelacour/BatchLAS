@@ -379,7 +379,7 @@ The per-type tier cover therefore lives in the pure layer, where shapes are free
 ## The shipped `orgqr` ceiling
 
 Why the old `route_orgqr.hh` `preferred()` was `rows <= 512 && cols <= 512`, every type; the
-transcribed `tuned/orgqr.*.txt` tables carry it unchanged (docs/design/flat-select-p5/orgqr.md).
+transcribed `tuned/orgqr.*.txt` tables carry it unchanged ([flat-kernel-selection.md, Phase 5, orgqr](../design/flat-kernel-selection.md#phase-5-orgqr)).
 Relocated verbatim from that predicate's comment block; the grid it summarises is
 [`small-n-baseline.md`](small-n-baseline.md#orgqr), and the losing cells that bracket it are in
 [`orgqr` grid](#orgqr-grid) above.

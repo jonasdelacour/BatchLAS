@@ -8,7 +8,7 @@ achievable roof**; two cards in the chassis, device 0 drives the display. Ratio 
 
 ## What ships
 
-**Flat selection (phase 5, `docs/design/flat-select-p5/gemv.md`).** `route_gemv.hh` and `src/backends/gemv_route.hh`
+**Flat selection (phase 5, [flat-kernel-selection.md, Phase 5, gemv](../design/flat-kernel-selection.md#phase-5-gemv)).** `route_gemv.hh` and `src/backends/gemv_route.hh`
 are deleted. gemv now decides in `src/ops/gemv/gemv.cc` over the families `cta`, `direct` and `vendor`; the
 `supports()` clauses below are its `can_run()` (plus the x/y length and batch agreement the old shape builder checked),
 and the `preferred()` window is data: `tuned/gemv.<dtype>.{sm_89,sm_120}.txt`, transcribed from the old router with

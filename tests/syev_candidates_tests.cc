@@ -1,5 +1,5 @@
 // Every syev candidate, pinned: docs/design/flat-kernel-selection.md §8 and
-// docs/design/flat-select-p5/syev.md. Inputs have a known spectrum (A = Q diag(lambda) Q^H with a
+// docs/design/flat-kernel-selection.md#phase-5-syev. Inputs have a known spectrum (A = Q diag(lambda) Q^H with a
 // host Householder Q), so no reference goes through the code under test. Which kernel ran is
 // read back from the select trace or a bit-for-bit comparison with the direct driver.
 #include <gtest/gtest.h>
@@ -371,7 +371,7 @@ TYPED_TEST(SyevCandidates, PinnedCandidatesStraddleTheirLimits) {
 }
 
 // uplo's other triangle holds a large finite poison: every candidate must ignore it. Three
-// drivers read it (docs/design/flat-select-p5/syev.md#located-defects); they are listed and
+// drivers read it (docs/design/known-defects.md#14-the-hermitian-drivers-read-the-unreferenced-triangle); they are listed and
 // skipped here, the rest are held to it. The pins reach the drivers whatever Auto picks.
 bool reads_other_triangle(const C& c, int n, Uplo u) {
     if (std::holds_alternative<sy::Cta>(c)) return u == Uplo::Upper;

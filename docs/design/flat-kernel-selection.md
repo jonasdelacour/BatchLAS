@@ -1,14 +1,13 @@
 # Flat kernel selection
 
-Status: **phases 1-2 implemented on branch worktree-flat-select (2026-10-04). §10 gate: passed on
-sm_120; the sm_89 live gate (needs the RTX 4090 box) is still open. See §12 "Gate results".
-Phase 3: P3.0 (select infrastructure), P3.1 (posv, sm_89 table transcribed, sm_120 converted),
-P3.2 (the tuner core, `tools/tune`, with `--gate`), P3.2b (blackwell kernels), P3.3 (trsm, sm_89
-transcribed, sm_120 float/double tuned) and P3.4 (gemm, transcribed) are built; see §12 and §13.
-Phase 5 (2026-10-05, one mega PR on `flat-select-mega`): gemv, geqrf, gesv, gesvd, getrf, getri,
-getrs, orgqr, ormqr, spmm and syev migrated (transcribed), the old dispatch layer, the legacy env
-vocabulary and its aliases deleted; no `RouteTable` is left (§12 "Phase 5"). Every op ships tables
-for every dtype on sm_89 and sm_120 (inventory: `tuned/README.md`).**
+Status: **phases 1-5 implemented; tables: measured/converted/transcribed per `tuned/README.md`;
+retune pending.** Phases 1-2 and P3.0-P3.4 (select infrastructure, posv, the tuner, blackwell
+kernels, trsm, gemm) and phase 5 (gemv, geqrf, gesv, gesvd, getrf, getri, getrs, orgqr, ormqr, spmm
+and syev, plus the rip of the old dispatch layer, the legacy env vocabulary and its aliases) are
+built on `flat-select-mega` (2026-10-05, one PR); no `RouteTable` is left. Every op ships tables for
+every dtype on sm_89 and sm_120. Open: the sm_89 live gate (§12 "Gate results") and phase 4, the
+retune that replaces the transcribed tables with measured ones. As built: §12; decisions: §13.
+
 Plan agreed 2026-10-02; deviations from the sketch are in §12. Written against `main` at `a1063892`. It is meant
 to be executed from `main` in a fresh session, phase by phase. Nothing here depends on PRs #133,
 #135 or #136, or on any branch other than `main`. The only exception is the potrf route-sweep
@@ -674,7 +673,7 @@ The sm_89 gate needs the RTX 4090 box. The sm_120 gate needs the Blackwell box (
 - **gemm's sm_120 table** is open after P3.4 (§12 Phase 3.4).
 - **Other ops may share gemm's grid-z ceiling**: any kernel that puts the batch in SYCL dim 0 of a
   3-D range aborts past 65535 work-groups there. gemm's `can_run` now carries it (§12 Phase 3.4);
-  the migrated ops' kernels were not audited for it.
+  the migrated ops' kernels were not audited for it. ormqr blocked hits it (known-defects #16).
 - **Stale comments on `main`** to fix when touching these files:
   - ~~`potrf_native.hh:4`~~, ~~`coverage.cc:195`~~, ~~`factorization.cc:727-730`~~ (rewritten or
     deleted by phase 5);
@@ -1239,93 +1238,233 @@ Where the code differs from the sketches above, the code wins. These are the dif
    lpanel timings, so on sm_89 the new choices are least certain; run it before merging, or accept
    it as a phase-4 retune item.
 
+### Phase 5, the eleven transcribed ops
+
+These eleven ops share one recipe, so it is stated once:
+
+- **Layout (R1).** `src/ops/<op>/{choice.hh,<op>.cc}` holds the vocabulary and the whole path:
+  public entry -> `choose()` -> one `std::visit` launch. The public entry points moved there out of
+  `src/dispatch/entry_points/` (and, for gesvd, ormqr and syev, out of inline header templates;
+  their installed headers keep only the `BATCHLAS_API` declarations and the `sig::` aliases).
+- **Families.** One per kernel driver, all `NoFields`, the same list for every dtype. The old router
+  chose no knob, so every derived parameter (blocking factor, panel leaf, tiny bucket, CTA packing,
+  WY width, work-group size) stays derived in its driver.
+- **can_run (R3)** is the driver's own refusal, clause for clause. The native terms common to the
+  dense factorizations are a GPU, sub-group 32, a homogeneous batch, extents >= 1, and, where the
+  native kernel packs 1-based int32 pivots into the int64 span, `B != NETLIB` (LAPACKE writes real
+  int64). The vendor term reads `select::Device::has_vendor_solver`, filled from
+  `factorization_vendor_available<B>` (`src/select/vendor.hh`: cuBLAS and cuSOLVER on CUDA), which
+  is the same constant that compiles the Vendor arm. A vendor-free build where nothing can run
+  throws `NoRouteError` through `throw_no_vendor_route`, so coverage keeps its `miss` row.
+- **Workspace (R5).** `<op>_buffer_size` runs the same `choose()` and returns the chosen family's
+  need, not the old `max(every supported tier, vendor)`. A caller that sizes once and then pins a
+  different family re-queries.
+- **Pins (R6).** A pin `can_run` refuses, or an unknown spelling, throws `invalid_argument`. Under
+  the old router both silently meant Auto, and a forced unsupported route fell to the vendor. On a
+  NETLIB queue native pins are now evaluated (and throw) where the old dispatch skipped resolution.
+- **Tables.** The old predicates read no architecture, so one transcription is written for sm_89
+  and sm_120 (spmm also cpu) with identical rows (`tuned_tables_tests` asserts it), all
+  `source=transcribed:424a45bc` (provenance and regeneration: `tuned/README.md`). The grid puts an
+  integer point on both sides of every threshold an old predicate read and is a full product, so
+  the weighted nearest row snaps per axis and reproduces every step exactly. Device capacities
+  (SLM ceilings) are unlimited in the transcription and re-applied by `can_run`; build constants
+  (tiny ceilings) are applied. Each row lists the old vendor-present Auto choice, then the order
+  the old router took once each higher entry was excluded, then the old vendor-free walk.
+- **Coverage.** `chosen_algo` is the choice spelling (§5.6): a vendor row reads `vendor,vendor`
+  where the old one read `vendor,auto`; the backend column is the real one.
+- **Gates**, run per op on GPU 0 of the sm_89 or sm_120 box against the same targets built from
+  `424a45bc`: (a) failing gtest names identical to the base in the vendor and vendor-free trees,
+  plus deliberate breaks of `<op>.cc` each turning a narrow named red set; (b) an off-grid data gate
+  replaying thousands of random points through the old `RouteTable` + `resolve_route` (the
+  transcriber's point mode) and through the converter's `nearest` plus a `can_run` model, at 100%
+  required (a negative control, removing threshold rows, proved each gate can fail); (c) the
+  coverage `reached` row of an Auto call, one process per cell, on the old and new binaries. The
+  per-break red sets and per-cell lists are in the original notes,
+  `git show 94cefb3a:docs/design/flat-select-p5/<op>.md`.
+
+What follows is only what differs per op.
+
 ### Phase 5, gemv
 
-`src/ops/gemv/{choice.hh,gemv.cc}`; families `cta`, `direct`, `vendor`, all `NoFields`. Tables
-`tuned/gemv.<dtype>.<device>.txt`, transcribed from the old router at `424a45bc`. Off-grid data
-gate: 100.00% in all 32 (device, dtype, scenario) cells; the coverage readback matches the old
-binary on 21/26 cells with a vendor (the other 5 crash inside cuBLAS Zgemv in both binaries,
-known-defects #13) and 26/26 vendor-free. As-built notes, deviations and gate detail:
-`docs/design/flat-select-p5/gemv.md`.
+Families `cta` (`gemv_native_cta`, bodies 3/5), `direct` (`gemv_native_direct`, bodies 1/2/4) and
+`vendor` (`gemv_vendor`, `d.has_vendor_blas`). The body split and segment width stay derived
+(`BATCHLAS_GEMV_SEGT` still steers W). `can_run` adds the agreement checks the deleted
+`gemv_op_shape` returned `nullopt` on (A homogeneous, x and y batch equal to A's, `x.size() == red`,
+`y.size() == out`); cta also needs `ops::gemv::device_allows` (`choice.hh`, host-callable: GPU,
+sub-group 32, `trans != N`); direct has no GPU gate (native_cpu). There is still no gemv validator
+(known-defects #1), so a non-conforming call goes to the vendor as before. Keys `trans:exact out:log
+red:log batch:log`; out/red are y's and x's lengths (they swap with trans), ConjTrans folds to T.
+Grid: out 255|256, red 63|64 and 352|353, batch 319|320, 1408 rows. Rankings: `cta|vendor|direct`
+on the 48 complex<double> T cells inside the old window, `vendor|cta|direct` on every other T cell,
+`vendor|direct` under N. Gate (sm_120): (b) 100.00% in all 32 (device, dtype, scenario) cells, and
+removing the red=63 rows drops cdouble to 99.20%; (c) 21/26 vendor cells identical, the other 5
+crash inside cuBLAS Zgemv in both binaries (known-defects #13), 26/26 vendor-free.
 
 ### Phase 5, geqrf
 
-`src/ops/geqrf/{choice.hh,geqrf.cc}`; families `tiny`, `cta`, `blocked`, `vendor`, all `NoFields`.
-Tables `tuned/geqrf.<dtype>.<device>.txt`, transcribed from the old router at `424a45bc`. Off-grid
-data gate: 100.000% in all 16 (dtype, device, vendor) cells at the real capacities, also at a 48 KiB
-budget and at small synthetic capacities; removing two grid edges drops it to ~99% and exits 1.
-`can_run` lives in `src/ops/geqrf/can_run.hh` so a host test can call it. As-built notes, deviations
-and gate detail: `docs/design/flat-select-p5/geqrf.md`.
+Families `tiny` (`m == n`, `n <= geqrf_tiny_max_n_for_slm`), `cta` (`m >= n`, `geqrf_cta_fits`,
+which adds the padded-launch-hole check the old area test lacked; the two agree for every
+`(m, n) <= 512` at the 97,280 B and 45,056 B budgets), `blocked` (`m >= n`, the driver compiled, and
+a CTA panel leaf present: `geqrf_cta_max_elems_for_slm >= 1`) and `vendor`. No native family takes
+a wide shape. `can_run` is in `src/ops/geqrf/can_run.hh` so the host test `GeqrfCanRunDevice` can
+call it with a synthetic `select::Device`; on these boxes it is the only test that can catch a
+dropped `is_gpu`, `has_sg32` or CTA-leaf clause. Keys `form:exact n:log:3 aspect:log` (`form` is
+sq/tall/wide, `aspect = max/min` by integer division; work ~ n^3 aspect). The old tall-panel clause
+`m >= 128 && n >= 32 && m >= A*n` equals `n >= 32 && aspect >= A` for `A >= 4`. Grid points straddle
+the tiny windows, the order floors (64/76/48/256), the tall clause and the CTA/blocked crossover
+(float 96, double 48); 636 rows. Deviations: `geqrf_buffer_size` is the chosen family's only, so the
+three callers that size once at a bounding panel and factor smaller sub-views (`band_reduction.cc`
+twice, `sytrd_sy2sb.cc`) call the internal `geqrf_buffer_size_bound` (`src/ops/geqrf/geqrf.hh`, the
+maximum over every family this device can run; guard `BoundCoversEverySubViewChoice`); an empty
+trailing-gemm seam means the public gemm (P3.4's hunk); the tiny driver has no `max_wg` check, so
+`can_run(tiny)` has none either. Gate: (b) 100.000% in all 16 cells at the real capacities, a 48 KiB
+budget and small synthetic capacities; removing four threshold points drops it to ~99% and exits 1;
+(c) 24/24 vendor, 23/23 vendor-free (the wide cell throws `NoRouteError` in both).
 
 ### Phase 5, gesv
 
-`src/ops/gesv/{choice.hh,gesv.cc}`; families `tiny`, `blocked` (no vendor arm on any backend, like
-posv), all `NoFields`. Tables `tuned/gesv.<dtype>.<device>.txt`, transcribed from the old router at
-`424a45bc`. Off-grid data gate: 100.00% in every cell (2500/2500 per dtype and device): every old
-threshold sits between two adjacent grid points; the coverage readback agrees on 21/21. As-built
-notes, deviations and gate detail: `docs/design/flat-select-p5/gesv.md`.
+Families `tiny` (`gesv_tiny_dispatch`, fused LU factor + solve) and `blocked` (public `getrf` then
+public `getrs`, each child choosing its own kernel); no vendor arm on any backend, so a `vendor` pin
+warns once and runs Auto, as posv. `can_run(tiny)`: `B != NETLIB`, GPU, sub-group 32, homogeneous A
+and B, `n <= gesv_tiny_max_n<T>()` (32, cdouble 16), `nrhs <= kGesvTinyMaxRhs` (4) and
+`max_wg >= kGesvTinyWgSize` (64, new, `static_assert`-ed against the kernel; the old `supports()`
+lacked the driver's work-group check). Heterogeneous and empty problems throw `internal_error`
+before `choose()`. Blocked's workspace is `getrf_buffer_size + getrs_buffer_size` (the launch cuts the
+span at getrf's size). Keys `n:log:3 nrhs:log`; float is `tiny|blocked` for n <= 32, cfloat for
+n <= 16, `blocked` elsewhere. Gate: (b) 2500/2500 in every dtype on both devices; (c) 21/21 through
+`factor_bench gesv --arms=native`.
 
 ### Phase 5, gesvd
 
-`src/ops/gesvd/{choice.hh,gesvd.cc}`; families `jacobi`, `cta`, `blocked`, `vendor`, all `NoFields`.
-Tables `tuned/gesvd.<dtype>.<device>.txt`, transcribed from the old router at `424a45bc`. Off-grid
-data gate: 100.00% in every dtype, vendor and vendor-free, on sm_89 and sm_120 (4000 off-grid
-points); the public `gesvd`/`gesvd_buffer_size` moved out of the installed header. As-built notes,
-deviations and gate detail: `docs/design/flat-select-p5/gesvd.md`.
+Families `jacobi` (`gesvdj_cta`), `cta` (`gesvd_cta`), `blocked` (`gesvd_blocked`) and `vendor`. The
+jobs are canonicalised once (Thin -> All where they coincide) and `can_run`, `key_of`, workspace and
+launch see the same jobs. Native term `is_gpu && m, n, batch >= 1`; jacobi adds `has_sg32 && !herm
+&& max(m,n) <= gesvd_jacobi_max_dim<T>(vectors)` (64; cdouble with vectors 32); cta adds
+`has_sg32 && max(m,n) <= kGesvdCtaMaxDim (32) && !thin && (herm ? m == n : real T)`; blocked adds
+`herm ? m == n && Lower : real T`. Two clauses are deliberately not R3-exact and
+`CanRunEqualsLaunch` documents both: blocked Hermitian Upper is refused although the driver mirrors
+it (opening it needs its own correctness evidence, see known-defects #14), and vendor is
+`has_vendor_solver` alone although cuSOLVER `gesvdjBatched` refuses `max(m,n) > 32`, non-packed
+batches and thin factors at launch (Auto reaches it only where no native family runs, the old
+outcome). The ceilings live in the new sycl-free `src/extensions/gesvd_native.hh`. Keys `herm:exact
+vec:exact m:log:1.5 n:log:1.5` (`herm` N/L/U, `vec` none/all/thin), grid 32|33 and 64|65, 2025 rows.
+The reached row is recorded at launch only, not in `gesvd_buffer_size`. Gate: (b) 100.00% in every
+dtype, vendor and vendor-free, both devices (4000 points); removing the 33 and 65 points drops float
+to 96.8%; (c) 25/27 agree, the other two (cfloat 70x70, cdouble 40x40 general) take the vendor in
+both and get the identical cuSOLVER refusal. Found: known-defects #14 and #15.
 
 ### Phase 5, getrf
 
-`src/ops/getrf/{choice.hh,getrf.cc}`; families `tiny`, `cta`, `blocked`, `vendor`, all `NoFields`.
-Tables `tuned/getrf.<dtype>.<device>.txt`, transcribed from the old router at `424a45bc`. Off-grid
-data gate: 100.00% in every dtype on both devices; the coverage readback agrees on 22/22. As-built
-notes, deviations and gate detail: `docs/design/flat-select-p5/getrf.md`.
+Families `tiny` (n <= `getrf_tiny_max_n<T>()`, 32 or cdouble 16, and `max_wg >= kGetrfTinyWgSize`
+= 64, new), `cta` (n <= `getrf_cta_max_n_for_slm<T>(budget)`), `blocked` (`getrf_blocked_dispatch`
+with the public gemm and trsm injected; needs `getrf_cta_max_n_for_slm<T>(budget, 1) >= 1`, the
+panel leaf's own check rather than the old occupancy-scaled one; both are true on every sm_89 and
+sm_120 dtype) and `vendor`; every native family needs `B != NETLIB` and a square A. The leaf
+(`BATCHLAS_GETRF_LEAF`), laswp mode, blocking factor and tiny bucket stay derived. The trailing
+gemm seam is mandatory (it defaulted to `sycl_gemm::gemm_custom`). Keys `n:log:3 batch:log`; the grid
+straddles the tiny windows (float 5..32, cfloat 5..7 and 9..24), the cdouble ceiling 16, the double
+vendor-free CTA order 32 and the blocked floors (float 256, cfloat 512, or 256 at batch >= 256).
+`factor_bench`'s gesv `composed` arm pins getrf `tiny` only where it fits. Gate: (b) 100.00% in
+every dtype on both devices, vendor-present and vendor-free at three CTA capacities; removing four
+threshold rows drops cfloat to 95.70%; (c) 22/22.
 
 ### Phase 5, getri
 
-`src/ops/getri/{choice.hh,getri.cc}`; families `blocked`, `vendor`, all `NoFields`. Tables
-`tuned/getri.<dtype>.<device>.txt`, transcribed from the old router at `424a45bc`. Off-grid data
-gate: 100.000% in every (device, dtype, vendor) cell, 4000/4000 each; dropping the below-edge grid
-points 127 and 255 drops it to ~98%. The coverage readback agrees on 22/22. As-built notes,
-deviations and gate detail: `docs/design/flat-select-p5/getri.md`.
+Families `blocked` (`getri_blocked_dispatch`: P written into C, then two public trsm calls) and
+`vendor` (`cublas<t>getriBatched`, rocSOLVER, LAPACKE). `can_run(blocked)`: GPU, sub-group 32,
+`B != NETLIB`, the driver compiled, square, n and batch >= 1, homogeneous; the choice is a function
+of A alone because `getri_buffer_size` has no C. `can_run(vendor)` is
+`factorization_vendor_available<B>` itself (a first version also required rocBLAS, which
+`getri_vendor<ROCM>` does not need). Sizing reads metadata only (`SizingReadsMetadataOnly` passes a
+null data pointer). Keys `n:log:3 batch:log`: `batch` is a key the old router never read, kept so a
+retune can split on it; every batch row holds the same ranking. Grid 127|128 (float) and 255|256
+(cfloat); double and cdouble are vendor at every n. Gate: (b) 4000/4000 in every (device, dtype,
+vendor) cell; dropping 127 and 255 drops it to ~98%; (c) 22/22.
 
 ### Phase 5, getrs
 
-`src/ops/getrs/{choice.hh,getrs.cc}`; families `cta`, `blocked`, `vendor`, all `NoFields`. Tables
-`tuned/getrs.<dtype>.<device>.txt`, transcribed from the old router at `424a45bc`. Off-grid data
-gate: 100.000% in all 32 configurations (3300 points each); the coverage readback agrees on 22/22.
-As-built notes, deviations and gate detail: `docs/design/flat-select-p5/getrs.md`.
+Families `cta` (`getrs_fused_dispatch`: `max_wg >= 32`, `nrhs <= kGetrsFusedMaxRhs` (8),
+`n*nrhs <= getrs_fused_max_rhs_elems<T>(slm_budget)`), `blocked` (`getrs_blocked_dispatch` with two
+public trsm) and `vendor`. The native gate is `B != NETLIB`, GPU, sub-group 32, a conforming pair (A
+square, `B.rows == n`, equal batch), no heterogeneous A or B, and n, nrhs, batch >= 1: exactly the old
+`supports()` plus `getrs_op_shape`'s `nullopt` cases, so a non-conforming pair still goes to the
+vendor. Keys `n:log:2 nrhs:log batch:log` (`transA` is not a key; no old predicate read it). Grid n
+31|32, nrhs 2|3, 4|5, 63|64, 127|128 and 8, batch 127|128; 2160 rows (`vendor cta blocked` 13720
+cells, `cta vendor blocked` 1760, `blocked vendor cta` 1800). Gate: (b) 100.000% in all 32
+configurations (3300 points each); (c) 22/22 (7 cta, 3 blocked, 12 vendor; cdouble left out because
+factor_bench's vendor getrf hits known-defects #13).
 
 ### Phase 5, orgqr
 
-`src/ops/orgqr/{choice.hh,orgqr.cc}`; families `blocked`, `vendor`, all `NoFields`. Tables
-`tuned/orgqr.<dtype>.<device>.txt`, transcribed from the old router at `424a45bc`. Off-grid data
-gate: 100.00% in all 32 (dtype, device, vendor) cells for both bands; deleting the 513 rows drops
-float to 98.36%. As-built notes, deviations and gate detail: `docs/design/flat-select-p5/orgqr.md`.
+Families `blocked` (`orgqr_blocked_dispatch`: the identity fill plus the public `ormqr`, so a native
+orgqr is also governed by `BATCHLAS_ORMQR_ROUTE`) and `vendor` (the per-item library loop). Last
+resort `vendor, blocked`, by generality: the vendor runs every shape, including `n > m`, CPU queues
+and heterogeneous batches. `can_run(blocked)`: GPU, the driver compiled, homogeneous, m, n,
+batch >= 1, `n <= m`; the old complex-Trans exclusion is gone because the apply is fixed at
+`(Left, NoTrans)`. Keys `m:log n:log:2`; grid 1..8192 on both axes with 512|513 (the only old
+threshold, native iff `rows <= 512 && cols <= 512`), restricted to `n <= m`, 153 rows. R5 keeps the
+fix for [the orgqr_buffer_size latent defect](../perf/qr.md#the-orgqr_buffer_size-latent-defect).
+Gate: (b) 100.00% in all 32 cells for a full and an edge band; deleting the 513 rows drops float to
+98.36% / 91.92%; (c) 20/20 (11 blocked, 9 vendor).
 
 ### Phase 5, ormqr
 
-`src/ops/ormqr/{choice.hh,ormqr.cc}`; families `blocked`, `vendor`, all `NoFields`. Tables
-`tuned/ormqr.<dtype>.<device>.txt`, transcribed from the old router at `424a45bc`. Off-grid data
-gate: 100.00% in every (dtype, device, vendor) cell (the old predicates read no extent); the
-coverage readback agrees on 18 cells. Blocked's WY width stays derived, so it is not a field.
-As-built notes, deviations and gate detail: `docs/design/flat-select-p5/ormqr.md`.
+Families `blocked` (`ormqr_blocked`: larft plus level-3 WY updates; the WY width stays derived from a
+positive `block_size_hint` clamped to [1, k], else `tuning::ormqr_block_size_for_n`) and `vendor`.
+`can_run`: blocked `is_gpu`, vendor `has_vendor_solver`; the drivers check their own dimensions.
+Keys `side:exact trans:exact m:log k:log q:log batch:log` (`m` the order of Q, `k = min(rows, cols)`,
+`q` the extent of C that Q does not act on); the old predicates read only trans and `is_gpu`, so the
+log keys move no transcribed decision and the gate is 100% by construction; 540 rows. Behaviour
+changes: complex `Transpose::Trans` throws `invalid_argument` from `ormqr` and `ormqr_buffer_size`
+before `choose()` (the old router sent it to cuSOLVER, which failed with status 3; no library caller
+passes it); the vendor arm spells a real ConjTrans as Trans; the vendor-free build passes the real
+vendor availability to `choose` (the old resolver assumed one, docs/perf/qr.md debt 12, resolved);
+the out-of-order-queue sequencing of the old `ormqr_dispatch` is kept. Gate: (c) 18/22 agree, the 4
+complex-T cells differ as intended. Known gap: known-defects #16.
 
 ### Phase 5, spmm
 
-`src/ops/spmm/{choice.hh,spmm.cc}`; families `direct`, `vendor`; tables for sm_89, sm_120 and cpu
-(12), all `NoFields`. Tables `tuned/spmm.<dtype>.<device>.txt`, transcribed from the old router at
-`424a45bc`. Off-grid data gate: 100.000% in every (dtype, device, build) cell over 10 000 off-grid
-points; the rows are constant across the size axes. As-built notes, deviations and gate detail:
-`docs/design/flat-select-p5/spmm.md`.
+Families `direct` (`spmm_native_csr`) and `vendor` (cuSPARSE, rocSPARSE, netlib); last resort
+`vendor, direct`. Derived inside Direct: the body (gather for N, scale + atomic scatter otherwise),
+the gather's column block and the complex pair load. `can_run(direct)`: CSR, the body compiled,
+`one_spmm()` (the old shape builder's checks), no heterogeneous B or C, batch >= 1, no GPU gate (the
+NETLIB native_cpu queue relies on it); the driver has no checks of its own. `can_run(vendor)` is
+`d.has_vendor_blas`, which for spmm carries `sparse_vendor_available<B>` (`select::Device` has no
+sparse flag), plus three terms the old `supports()` lacked: on CUDA, complex with
+`transB == ConjTrans` and nrhs 1 (cuSPARSE returns an unchecked error and leaves C unwritten; the old
+Auto routed some of these, which now run `direct`), and cdouble N/N with one column (a host segfault
+inside cuSPARSE, reachable only through a pin); on NETLIB, any transpose (netlib's host loop throws
+`unsupported`), so NETLIB Auto for transposes moves from a throw onto `direct`. Keys `transA:exact
+transB:exact m:log nrhs:log batch:log` (ConjTrans folds to T; no nnz or density key, because the
+per-item nnz is in device memory and `spmm_buffer_size` runs the same `choose()`); rows are constant
+across the size axes, 500 per table. A third device, `cpu`, is transcribed, because a CPU never
+borrows a GPU table and the old choice depended on transA. cuSPARSE's default algorithm is not
+bit-reproducible, so the candidate tests identify a pinned vendor by its trace line. Gate: (b)
+100.000% on all 12 tables over 10 000 points; (c) 80/80. The CUDA vendor terms and the inherited
+misalignment gap are known-defects #13 and #17.
 
 ### Phase 5, syev
 
-`src/ops/syev/{choice.hh,syev.cc}`; families `cta`, `cta_fused`, `jacobi`, `blocked`, `two_stage`,
-`vendor`, all `NoFields`. Tables `tuned/syev.<dtype>.<device>.txt`, transcribed from the old router
-at `424a45bc`. Off-grid data gate: 100.00% on all 8 (device, dtype) pairs for the first runnable
-choice with and without the vendor and for the whole ranking (24224 lookups); dropping the n = 33
-and 449 rows drops it to 98.08-99.44%. `syev`/`syev_buffer_size` moved out of the installed header.
-As-built notes, deviations and gate detail: `docs/design/flat-select-p5/syev.md`.
+Families `cta` (`syev_cta`), `cta_fused` (`syev_cta_fused`), `jacobi` (`syev_jacobi_cta`), `blocked`,
+`two_stage` and `vendor`, in tie order. The old router had one CTA route and picked its driver
+inside (`syev_choose_small_kernel<T>`, from type and `n <= 8`); that was a choice, so the three
+drivers are families now, and `cta` names `syev_cta` only. `can_run`: native needs a non-NETLIB
+backend, a GPU, a square A and n >= 1; the small three add n <= 32 and `has_sg32`; blocked and
+two_stage add batch >= 1; no heterogeneity term (no driver checks it). Keys `jobz:exact n:log:3
+batch:log`; uplo is not a key (both large-n drivers mirror Upper into Lower), batch is kept for a
+timed table. Grid n 8|9, 24|25, 32|33, 256|257, 320|321, 448|449, 512|513, 1024|1025; 370 rows.
+Transcribed pattern (jobz=V): float `jacobi` n <= 8, `cta_fused` 9-32, `blocked` to 448, `two_stage`
+to 1024, then `vendor`; double `jacobi`, `blocked` to 448, `vendor`; cfloat `cta_fused` n <= 8, `cta`
+to 32, `blocked` to 512, `vendor`; cdouble `cta` to 24, `vendor` 25-32, `blocked` to 256, `vendor`.
+jobz=N goes to `two_stage` above 320 in every dtype. Behaviour changes: a vendor-free build no longer
+throws where the old Auto preferred the vendor (the old `syev_route` assumed one), so 11 vendor-free
+failing names disappeared; non-square A throws `invalid_argument` before `choose()`; ROCm has no
+syev table and borrows the sm tables with the R8 warning (untested); `syev_supports_{cta,blocked,
+two_stage}`, the Python binding's introspection, are out-of-line wrappers over `can_run`. The knobs
+`BATCHLAS_SYEV_SMALL_KERNEL` and `BATCHLAS_SYEV_CTA_MAX_N` and their `Settings` fields were retired
+in the rip. Gate: (b) 100.00% on all 8 (device, dtype) pairs for the first runnable choice with and
+without the vendor and for the whole ranking (24224 lookups); dropping n = 33 and 449 drops it to
+98.08-99.44%; (c) 25/25. Found: known-defects #14 (`OtherTriangleIsNeverRead` carries the skip list).
 
 ### Phase 5 fold, tuned tables
 
