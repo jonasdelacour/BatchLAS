@@ -4,6 +4,7 @@
 
 #include <batchlas/util/env.hh>
 
+#include "../src/ops/getrf/choice.hh"
 #include "../src/ops/posv/choice.hh"
 #include "../src/ops/potrf/choice.hh"
 #include "../src/ops/trsm/choice.hh"
@@ -56,6 +57,13 @@ std::vector<std::string> candidates(const std::string& op, const std::string& dt
         if (dtype == "double") return spellings(trsm::candidates<double>());
         if (dtype == "cfloat") return spellings(trsm::candidates<std::complex<float>>());
         if (dtype == "cdouble") return spellings(trsm::candidates<std::complex<double>>());
+    }
+    namespace getrf = batchlas::ops::getrf;
+    if (op == "getrf") {
+        if (dtype == "float") return spellings(getrf::candidates<float>());
+        if (dtype == "double") return spellings(getrf::candidates<double>());
+        if (dtype == "cfloat") return spellings(getrf::candidates<std::complex<float>>());
+        if (dtype == "cdouble") return spellings(getrf::candidates<std::complex<double>>());
     }
     return {};
 }
@@ -190,6 +198,7 @@ void expect_tables_declare(const std::string& op, const Names& names) {
 TEST(TunedTables, PotrfTablesDeclareChoiceKeyNames) { expect_tables_declare("potrf", batchlas::ops::potrf::key_names); }
 TEST(TunedTables, PosvTablesDeclareChoiceKeyNames) { expect_tables_declare("posv", batchlas::ops::posv::key_names); }
 TEST(TunedTables, TrsmTablesDeclareChoiceKeyNames) { expect_tables_declare("trsm", batchlas::ops::trsm::key_names); }
+TEST(TunedTables, GetrfTablesDeclareChoiceKeyNames) { expect_tables_declare("getrf", batchlas::ops::getrf::key_names); }
 
 const sel::Table& embedded(const std::string& name) {
     static std::map<std::string, sel::Table> cache;
@@ -240,6 +249,33 @@ TEST(TunedTables, TrsmSm89TablesHoldExactlyTheChoiceGrid) {
             got.insert(row.keys[0] + " " + row.keys[1] + " " + row.keys[2] + " " + row.keys[3] + " " + row.keys[4]);
         EXPECT_EQ(got, want) << dt;
         EXPECT_EQ(t.rows.size(), want.size()) << dt;
+    }
+}
+
+// getrf's transcriber likewise, for both devices it writes: one row per (n, batch) of choice.hh,
+// and the sm_89 and sm_120 rows identical (the old predicates read no architecture).
+TEST(TunedTables, GetrfTablesHoldExactlyTheChoiceGridOnBothDevices) {
+    namespace getrf = batchlas::ops::getrf;
+    std::set<std::string> want;
+    for (int n : getrf::grid_n)
+        for (int b : getrf::grid_batch) want.insert(std::to_string(n) + " " + std::to_string(b));
+    for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
+        std::map<std::string, std::string> rows[2];
+        int i = 0;
+        for (const char* dev : {"sm_89", "sm_120"}) {
+            const sel::Table& t = embedded(std::string("getrf.") + dt + "." + dev + ".txt");
+            EXPECT_EQ(t.source.rfind("transcribed:", 0), 0u) << t.file;
+            std::set<std::string> got;
+            for (const auto& row : t.rows) {
+                const std::string key = row.keys[0] + " " + row.keys[1];
+                got.insert(key);
+                for (const auto& e : row.ranked) rows[i][key] += e.spelling + " ";
+            }
+            EXPECT_EQ(got, want) << t.file;
+            EXPECT_EQ(t.rows.size(), want.size()) << t.file;
+            ++i;
+        }
+        EXPECT_EQ(rows[0], rows[1]) << dt << ": the sm_89 and sm_120 transcriptions differ";
     }
 }
 
