@@ -74,6 +74,8 @@ bool one_spmm(const MatrixView<T, MF>& A, const Dense<T>& Bm, const Dense<T>& C,
 // SPARSE library here (device() passes it). Two cuSPARSE terms, both off the old Auto path:
 // a conjugated single-row B is an error status the vendor arm never checks (C unwritten, a silent
 // wrong answer), and complex<double> N/N with one column segfaults on the host (known-defects #13).
+// netlib's spmm throws `unsupported` per item for any transpose (netlib_lapack.cc), so Auto there
+// falls to Direct; an empty batch never reaches the throw.
 template <Backend B, class T, MatrixFormat MF>
 bool can_run(const SpmmChoice& c, const select::Device& d, const MatrixView<T, MF>& A, const Dense<T>& Bm,
              const Dense<T>& C, Transpose transA, Transpose transB) {
@@ -92,7 +94,7 @@ bool can_run(const SpmmChoice& c, const select::Device& d, const MatrixView<T, M
             constexpr bool cx = !std::is_same_v<T, typename base_type<T>::type>;
             constexpr bool zz = std::is_same_v<T, std::complex<double>>;
             const bool nn = transA == Transpose::NoTrans && transB == Transpose::NoTrans;
-            return d.has_vendor_blas &&
+            return d.has_vendor_blas && !(B == Backend::NETLIB && !nn && A.batch_size() > 0) &&
                    !(B == Backend::CUDA && cx && transB == Transpose::ConjTrans && Bm.rows() == 1) &&
                    !(B == Backend::CUDA && zz && nn && C.cols() == 1);
         },

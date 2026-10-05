@@ -7,9 +7,9 @@ old preference with N/T/C spellings). For every point and device table, fold C -
 Table::nearest (scripts/sweep_to_table.py's mirror), and walk the row under can_run's
 assumptions for a valid CSR call: direct always runnable (both bodies compiled; capacities in
 can_run, none for spmm), vendor runnable when present. Compared with the old first choice in
-the vendor-present build and the vendor-free build, and (GPU devices) with spmm.cc's two CUDA
-vendor terms applied, which the old router lacked: those rows count the deliberate R3 fixes, not
-table error. Exit 1 if a table-only cell agrees < 99%.
+the vendor-present build and the vendor-free build, and with spmm.cc's vendor terms applied
+(GPU devices: the two CUDA terms; cpu: netlib refuses every transpose), which the old router
+lacked: those rows count the deliberate R3 fixes, not table error. Exit 1 if a table-only cell agrees < 99%.
 """
 
 import collections
@@ -34,6 +34,11 @@ def cusparse_refuses(p):
     return one and ((cx and p["transB"] == "C") or (p["dtype"] == "cdouble" and nn))
 
 
+def netlib_refuses(p):
+    """spmm.cc can_run's NETLIB vendor term: any transpose on a non-empty batch."""
+    return int(p["batch"]) > 0 and (p["transA"] != "N" or p["transB"] != "N")
+
+
 def main(points_csv, devices=("sm_89", "sm_120", "cpu")):
     tables = {}
     with open(points_csv, newline="") as f:
@@ -56,6 +61,8 @@ def main(points_csv, devices=("sm_89", "sm_120", "cpu")):
             builds = [("vendor", True, True), ("vendor-free", False, False)]
             if dev != "cpu":
                 builds.append(("cuda-can_run", not cusparse_refuses(p), True))
+            else:
+                builds.append(("cpu-can_run", not netlib_refuses(p), True))
             for label, vendor, old_vendor in builds:
                 cell = (p["dtype"], dev, label)
                 tally[cell] += 1
@@ -72,8 +79,8 @@ def main(points_csv, devices=("sm_89", "sm_120", "cpu")):
         if len(cell) == 4:
             print(f"  disagree: {cell} x{n}")
     print(f"points {len(pts)}, worst agreement {worst * 100:.3f}%")
-    table = min(1.0 - bad[c] / tally[c] for c in tally if c[2] != "cuda-can_run")
-    print(f"table-only worst agreement {table * 100:.3f}% (cuda-can_run rows: the intended R3 fixes)")
+    table = min(1.0 - bad[c] / tally[c] for c in tally if not c[2].endswith("-can_run"))
+    print(f"table-only worst agreement {table * 100:.3f}% (*-can_run rows: the intended R3 fixes)")
     return 0 if table >= 0.99 else 1
 
 

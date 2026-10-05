@@ -287,9 +287,6 @@ protected:
     using T = typename Config::ScalarType;
     static constexpr Backend B = Config::BackendVal;
     static constexpr bool kVendor = dispatch::sparse_vendor_available<B>;
-    // netlib's spmm refuses every transpose at run time; can_run does not model it (it never did,
-    // see docs/design/flat-select-p5/spmm.md "known R3 gaps").
-    static constexpr bool kVendorNoTransOnly = B == Backend::NETLIB;
 
     void SetUp() override {
         test_utils::BatchLASTest<Config>::SetUp();
@@ -307,16 +304,19 @@ protected:
         return B == Backend::CUDA && std::is_same_v<T, std::complex<double>> && s.ta == Transpose::NoTrans &&
                s.tb == Transpose::NoTrans && s.nrhs == 1;
     }
+    // netlib: its host loop throws `unsupported` on any transpose, once per (non-empty) batch.
+    static bool vendor_netlib_trans(const Spec& s) {
+        return B == Backend::NETLIB && s.batch > 0 && (s.ta != Transpose::NoTrans || s.tb != Transpose::NoTrans);
+    }
+    static bool vendor_refused(const Spec& s) {
+        return vendor_conj_row(s) || vendor_zz_column(s) || vendor_netlib_trans(s);
+    }
     static bool expect_runs(const C& c, const Spec& s) {
-        return std::holds_alternative<sp::Direct>(c) || (kVendor && !vendor_conj_row(s) && !vendor_zz_column(s));
+        return std::holds_alternative<sp::Direct>(c) || (kVendor && !vendor_refused(s));
     }
     // `vendor` is also the class word: a vendor pin nothing can serve warns and runs Auto (§5.3).
     static bool vendor_word_falls_back(const C& c, const Spec& s) {
         return std::holds_alternative<sp::Vendor>(c) && !expect_runs(c, s);
-    }
-    static bool vendor_refuses(const C& c, const Spec& s) {
-        return std::holds_alternative<sp::Vendor>(c) && kVendorNoTransOnly &&
-               (s.ta != Transpose::NoTrans || s.tb != Transpose::NoTrans);
     }
 
     // Sizes under the current pins, then runs in an arena of exactly that size whose guard
@@ -390,10 +390,6 @@ TYPED_TEST(SpmmCandidates, PinnedCandidatesRunEveryTransposeCombination) {
                             expect_correct(p, what + " (refused vendor pin: Auto)");
                             continue;
                         }
-                        if (TestFixture::vendor_refuses(c, s)) {
-                            EXPECT_ANY_THROW(this->run_pinned(c, p)) << what << ": netlib took a transpose";
-                            continue;
-                        }
                         ASSERT_TRUE(this->pin_accepted(c, p)) << what << " was refused";
                         expect_correct(p, what);
                         ++ran;
@@ -405,8 +401,9 @@ TYPED_TEST(SpmmCandidates, PinnedCandidatesRunEveryTransposeCombination) {
 // The pinned facade runs exactly that family's driver: bit-identical to the direct call. Only the
 // gather (transA == N) is deterministic; the scatter's atomics reorder sums run to run. Long rows
 // make the two families' roundings differ, so a swapped launch arm shows. cuSPARSE's default
-// algorithm is not bit-reproducible run to run (measured on CUDA), so a vendor whose own two runs
-// differ is identified by the trace line alone.
+// algorithm is not bit-reproducible run to run (measured on CUDA), so a pinned vendor run that
+// matches neither of two direct vendor runs is identified by the trace line and by not carrying
+// the gather's exact bits.
 TYPED_TEST(SpmmCandidates, PinnedRunIsTheDirectKernelBitForBit) {
     using T = typename TestFixture::T;
     int compared = 0;
@@ -415,7 +412,7 @@ TYPED_TEST(SpmmCandidates, PinnedRunIsTheDirectKernelBitForBit) {
             for (int nrhs : {2, 9}) {
                 Spec s{40, 33, nrhs, 3, Transpose::NoTrans, tb, 12};
                 s.seed = 4242u + nrhs + unsigned(tb);
-                if (!TestFixture::expect_runs(c, s) || TestFixture::vendor_refuses(c, s)) continue;
+                if (!TestFixture::expect_runs(c, s)) continue;
                 auto pinned = make<T>(s);
                 auto direct = make<T>(s);
                 const std::string what = name(c, s);
@@ -425,19 +422,21 @@ TYPED_TEST(SpmmCandidates, PinnedRunIsTheDirectKernelBitForBit) {
                 if (std::holds_alternative<sp::Vendor>(c)) {
                     auto again = make<T>(s);
                     this->direct(c, again);
-                    bool reproducible = true;
-                    for (std::size_t e = 0; e < again.mem.size(); ++e)
-                        reproducible = reproducible && same_bits(again.mem[e], direct.mem[e]);
-                    if (!reproducible) {
-                        // Then the deterministic gather's exact bits would mean Direct ran.
+                    auto equal = [](const Problem<T>& x, const Problem<T>& y) {
+                        for (std::size_t e = 0; e < x.mem.size(); ++e)
+                            if (!same_bits(x.mem[e], y.mem[e])) return false;
+                        return true;
+                    };
+                    if (!equal(pinned, direct) && !equal(pinned, again)) {
+                        // Two agreeing vendor runs do not prove a third agrees; the
+                        // deterministic gather's exact bits would mean Direct ran.
                         auto gather = make<T>(s);
                         this->direct(C{sp::Direct{}}, gather);
-                        bool same = true;
-                        for (std::size_t e = 0; e < gather.mem.size(); ++e)
-                            same = same && same_bits(gather.mem[e], pinned.mem[e]);
-                        EXPECT_FALSE(same) << what << ": the pinned vendor produced the gather's exact bits";
-                        continue;
+                        EXPECT_FALSE(equal(gather, pinned)) << what << ": the pinned vendor produced the gather's bits";
+                    } else {
+                        ++compared;
                     }
+                    continue;
                 }
                 for (std::size_t e = 0; e < pinned.mem.size(); ++e)
                     ASSERT_TRUE(same_bits(pinned.mem[e], direct.mem[e]))
@@ -457,7 +456,7 @@ TYPED_TEST(SpmmCandidates, SaturatingBatchIsBitIdenticalToItsRepresentative) {
         for (Transpose ta : {Transpose::NoTrans, Transpose::ConjTrans})
             for (Transpose tb : {Transpose::NoTrans, Transpose::Trans}) {
                 Spec s{24, 19, 5, kBatch, ta, tb, 4, kPeriod, 777u};
-                if (!TestFixture::expect_runs(c, s) || TestFixture::vendor_refuses(c, s)) continue;
+                if (!TestFixture::expect_runs(c, s)) continue;
                 auto p = make<T>(s);
                 const std::string what = name(c, s);
                 this->run_pinned(c, p);
@@ -479,7 +478,7 @@ TYPED_TEST(SpmmCandidates, ZeroExtentsAreAccepted) {
         for (Transpose ta : {Transpose::NoTrans, Transpose::Trans})
             for (auto [m, k, nrhs] : {std::tuple{0, 6, 3}, std::tuple{6, 0, 3}, std::tuple{6, 5, 0}}) {
                 Spec s{m, k, nrhs, 2, ta, Transpose::NoTrans};
-                if (!TestFixture::expect_runs(c, s) || TestFixture::vendor_refuses(c, s)) continue;
+                if (!TestFixture::expect_runs(c, s)) continue;
                 auto p = make<T>(s);
                 const std::string what = name(c, s);
                 ASSERT_TRUE(this->pin_accepted(c, p)) << what;
@@ -528,10 +527,37 @@ TYPED_TEST(SpmmCandidates, CanRunEqualsTheOracle) {
     }
 }
 
-// The two Vendor terms (R3): cuSPARSE refuses a ConjTrans single-row B ("opB ==
+// R5: a Direct-routed call sizes exactly 0 bytes and never consults the vendor sizer (whose plan
+// walks the row offsets on the host), on both bodies; the Vendor pin still sizes what the vendor
+// says, so a Direct arm returning the vendor's size shows wherever that size is nonzero.
+TYPED_TEST(SpmmCandidates, DirectSizesNoWorkspace) {
+    using T = typename TestFixture::T;
+    static constexpr Backend B = TestFixture::B;
+    for (Transpose ta : kAllTrans)
+        for (Transpose tb : {Transpose::NoTrans, Transpose::Trans}) {
+            Spec s{40, 33, 9, 3, ta, tb, 12};
+            auto p = make<T>(s);
+            Queue& q = *this->ctx;
+            {
+                const Pin pin("spmm", C{sp::Direct{}});
+                const std::size_t got = spmm_buffer_size<B, T>(q, p.A(), p.B(), p.Cv(), p.alpha, p.beta, ta, tb);
+                EXPECT_EQ(got, 0u) << label(s);
+            }
+            if constexpr (TestFixture::kVendor) {
+                if (!TestFixture::expect_runs(C{sp::Vendor{}}, s)) continue;
+                const Pin pin("spmm", C{sp::Vendor{}});
+                const std::size_t got = spmm_buffer_size<B, T>(q, p.A(), p.B(), p.Cv(), p.alpha, p.beta, ta, tb);
+                const std::size_t want =
+                    backend::spmm_vendor_buffer_size<B, T>(q, p.A(), p.B(), p.Cv(), p.alpha, p.beta, ta, tb);
+                EXPECT_EQ(got, want) << label(s);
+            }
+        }
+}
+
+// The Vendor terms (R3): cuSPARSE refuses a ConjTrans single-row B ("opB ==
 // OPERATION_CONJUGATE_TRANSPOSE is unsupported when B is a single row"), the vendor arm drops the
-// status and C is never written; complex<double> N/N with one column segfaults. Straddled on
-// nrhs 1/2, transA N/T and transB N/T/C; Auto then runs Direct.
+// status and C is never written; complex<double> N/N with one column segfaults; netlib throws on
+// any transpose. Straddled on nrhs 1/2, transA N/T and transB N/T/C; Auto then runs Direct.
 TYPED_TEST(SpmmCandidates, VendorRefusesAConjugatedSingleRowB) {
     using T = typename TestFixture::T;
     if (!TestFixture::kVendor) GTEST_SKIP() << "no vendor in this build";
@@ -539,10 +565,9 @@ TYPED_TEST(SpmmCandidates, VendorRefusesAConjugatedSingleRowB) {
         for (Transpose tb : kAllTrans)
             for (int nrhs : {1, 2}) {
                 Spec s{5, 7, nrhs, 3, ta, tb};
-                const bool refused = TestFixture::vendor_conj_row(s) || TestFixture::vendor_zz_column(s);
+                const bool refused = TestFixture::vendor_refused(s);
                 auto p = make<T>(s);
                 const std::string what = name(C{sp::Vendor{}}, s);
-                if (TestFixture::vendor_refuses(C{sp::Vendor{}}, s)) continue;  // netlib: no transposes
                 // A refused `vendor` pin is the class word's fallback to Auto, not an error (§5.3).
                 EXPECT_EQ(traced_choice([&] { this->run_pinned(C{sp::Vendor{}}, p); }), refused ? "direct" : "vendor")
                     << what;
@@ -622,7 +647,8 @@ TYPED_TEST(SpmmCandidates, LegacyAliasesAndClassWords) {
             auto_pick = this->auto_choice(p, &threw);
         }
         ASSERT_TRUE(auto_pick == "direct" || auto_pick == "vendor") << auto_pick;
-        const std::string vendor_pick = TestFixture::kVendor ? "vendor" : auto_pick;
+        const bool vendor_ok = TestFixture::expect_runs(C{sp::Vendor{}}, s);
+        const std::string vendor_pick = vendor_ok ? "vendor" : auto_pick;
         const std::pair<const char*, std::string> expect[] = {
             {"native:direct", "direct"}, {"NATIVE:DIRECT", "direct"}, {"direct", "direct"}, {"Direct", "direct"},
             {"native", "direct"},        {"vendor", vendor_pick},     {"auto", auto_pick}};
@@ -642,13 +668,9 @@ TYPED_TEST(SpmmCandidates, LegacyAliasesAndClassWords) {
                     &err, &threw);
                 const std::string what = std::string(word) + (via_env ? " via env" : " via ScopedPin") + " " + label(s);
                 EXPECT_EQ(got, spelling) << what;
-                const bool warns = std::string(word) == "vendor" && !TestFixture::kVendor;
+                const bool warns = std::string(word) == "vendor" && !vendor_ok;
                 EXPECT_EQ(err.find("spmm pinned \"vendor\", but no vendor candidate") != std::string::npos, warns)
                     << what << ": " << err;
-                if (got == "vendor" && TestFixture::vendor_refuses(C{sp::Vendor{}}, s)) {
-                    EXPECT_TRUE(threw) << what;
-                    continue;
-                }
                 EXPECT_FALSE(threw) << what;
                 expect_correct(p, what);
             }
@@ -707,7 +729,6 @@ TYPED_TEST(SpmmCandidates, AutoReadsTheTranscribedTables) {
                 auto p = make<T>(s);
                 bool threw = false;
                 EXPECT_EQ(this->auto_choice(p, &threw), want) << label(s) << " on " << tables.front()->file;
-                if (want == "vendor" && TestFixture::vendor_refuses(C{sp::Vendor{}}, s)) continue;
                 EXPECT_FALSE(threw) << label(s);
                 expect_correct(p, "auto " + label(s));
             }
@@ -752,7 +773,9 @@ TYPED_TEST(SpmmCandidates, AutoReadsEveryKeyField) {
         s.seed = 43u;
         auto p = make<T>(s);
         bool threw = false;
-        EXPECT_EQ(traced_choice([&] { this->run(p); }, nullptr, &threw), k.expect) << "the " << k.field << " row";
+        // netlib cannot take a transpose, so there the transposed rows are read on CUDA/ROCm only.
+        const std::string want = TestFixture::vendor_refused(s) ? "direct" : k.expect;
+        EXPECT_EQ(traced_choice([&] { this->run(p); }, nullptr, &threw), want) << "the " << k.field << " row";
     }
 }
 

@@ -72,19 +72,25 @@ cfloat transA=N transB=T), for all three devices.
      returns an error status the vendor arm never checks, C is left unwritten (a silent wrong
      answer: 5 failures per probe, any transA). The old Auto *did* route here (complex transA=T/C
      with transB=C, and cfloat transA=N transB=C), so these shapes now run `direct` instead of
-     producing a wrong answer. This is the only Auto change of the migration.
+     producing a wrong answer. Together with the NETLIB term below, the only Auto changes.
   2. complex<double> `N/N` with one column: segfault on the host inside cuSPARSE (cf.
      known-defects #13, the cuBLASLt unit-dimension crash). Never on the old Auto path (N/N is
      `direct` first), so only a `vendor` pin changes: it now falls back to Auto (the class word's
      §5.3 behaviour) instead of crashing.
   Both terms carry `B == Backend::CUDA`; known-defects.md should gain these two (#13 extension).
-- **Known R3 gaps, inherited unchanged** (the old `supports()` said "the vendor serves
-  everything"): netlib's spmm throws `unsupported` on any transpose (so on a NETLIB queue Auto
-  for transA=T, or cfloat transB=T, still picks `vendor` and throws, exactly as before; the
-  `spmm_tests` refusal-skip stays correct), and cuSPARSE silently mis-handles operands off their
-  natural alignment (`spmm_tests` skips misaligned cases unless pinned native). Modelling either
-  in `can_run` would move routing; left for the vendor-capability phase (cf. trsm's
-  known-defects #12 deviation).
+- **A NETLIB vendor term (R3, review fix)**: `!(B == Backend::NETLIB && !nn && batch > 0)`.
+  netlib's host loop (`netlib_lapack.cc`) throws `unsupported` per item on any transpose, so
+  `can_run` now equals `launch` for every family. On a NETLIB queue Auto for transA=T (any
+  dtype) and cfloat transA=N transB=T/C used to pick `vendor` (first in the cpu row) and throw;
+  it now takes `direct`, the row's second entry, which serves all nine spellings
+  (`DirectHasNoGpuGate`). A `vendor` pin there falls back to Auto (the class word, §5.3)
+  instead of throwing. Side effect: the `spmm_tests` "backend REFUSED ... a MISSING ROUTE"
+  skips on NETLIB transposes now run and pass (same names, skip -> pass).
+- **Known R3 gap, inherited unchanged**: cuSPARSE silently mis-handles operands off their natural
+  alignment (`spmm_tests` skips misaligned cases unless pinned native). Alignment is a property
+  of the pointers, not of the key, and modelling it would move routing; left for the
+  vendor-capability phase (cf. trsm's known-defects #12 deviation). known-defects.md should
+  record it as an explicit R3 waiver.
 
 ## choose / launch / workspace
 
@@ -92,7 +98,9 @@ R1-R5 as in trsm: `choose()` -> `select::choose("spmm", ...)`, a `runtime_error`
 candidate in a vendor-free build becomes `throw_no_vendor_route(Op::spmm, B, kSparseLibrary<B>)`
 (coverage `miss` row kept). `launch` is one `std::visit`. `spmm_buffer_size` calls the same
 `choose()` and returns 0 for `direct`, `spmm_vendor_buffer_size` for `vendor` (R5); the old code
-already skipped the vendor sizer on a native route. No validate_params, as before (a bad shape
+already skipped the vendor sizer on a native route. `DirectSizesNoWorkspace` (review fix) pins
+both: exactly 0 under a Direct pin on all three transA spellings, and the vendor sizer's own
+answer under a Vendor pin. No validate_params, as before (a bad shape
 goes to the vendor). `TraceScope` with the key fields; the coverage row keeps the old field
 mapping (m = A.rows, n = nrhs, k = A.cols, transA/transB unfolded, is_gpu, heterogeneous) and now
 carries the real backend; `native_facts` gives `native_route_existed/supported`.
@@ -106,8 +114,9 @@ carries the real backend; `native_facts` gives `native_route_existed/supported`.
    predicates read no device fact, not even is_gpu).
 2. `Vendor` uses `has_vendor_blas` carrying the sparse flag (above), not `has_vendor_solver`/blas
    as such.
-3. The netlib-transpose and cuSPARSE-alignment R3 gaps above are kept; the two CUDA vendor terms
-   above are added (one moves Auto off a wrong answer, see can_run).
+3. The cuSPARSE-alignment R3 gap above is kept. Three vendor terms are added: the two CUDA terms
+   (one moves Auto off a wrong answer) and the NETLIB transpose term (moves NETLIB Auto off a
+   throw onto Direct), see can_run.
 6. cuSPARSE's `CUSPARSE_SPMM_ALG_DEFAULT` is not bit-reproducible run to run on this box, so
    `spmm_candidates_tests` identifies a pinned vendor by its trace line plus "not the gather's
    exact bits", and its saturating-batch bit-identity check covers Direct only.
@@ -154,7 +163,38 @@ All on GPU 0 (`CUDA_VISIBLE_DEVICES=0`), threadripper02 (sm_120), 2026-10-05.
   **80/80 choose the same family** (direct for N/N, N/T, N/C except cfloat N/T, N/C; vendor for
   every transposed A), no cell only in one build.
 
+### Review round 1 (NETLIB R3 term, R5 sizing test)
+
+Same box, GPU 0, own `build` / `build-vf` trees, same targets as (a).
+
+- (a) Failing gtest names identical to the 424a45bc baseline in both trees (3 in `build`, 22 in
+  `build-vf`, the same lists as above); `spmm_tests`, `spmm_tests_native`,
+  `spmm_candidates_tests` pass in both. `spmm_candidates_tests` passed 10 then 5 repeats per tree.
+  `spmm_tests` on this tree: 396 passed, 12 skipped (all `Misaligned*` on CUDA), zero
+  NETLIB "REFUSED ... MISSING ROUTE" skips left.
+- Deliberate breaks (restored from a saved copy, md5 `e9d844dd...` verified):
+  - NETLIB term removed -> red exactly `PinnedCandidatesRunEveryTransposeCombination`,
+    `VendorRefusesAConjugatedSingleRowB`, `LegacyAliasesAndClassWords`,
+    `AutoReadsTheTranscribedTables`, `AutoReadsEveryKeyField` on the 4 NETLIB configs; CUDA green.
+  - Direct arm of `workspace()` returns `spmm_vendor_buffer_size` -> red exactly
+    `DirectSizesNoWorkspace` on the 4 CUDA configs (cuSPARSE asks 512 bytes); NETLIB green (its
+    vendor sizer is 0, so the guard is vacuous there).
+  - Vendor launch arm runs Direct -> red exactly `PinnedRunIsTheDirectKernelBitForBit` in all 8.
+- Flake fixed: `PinnedRunIsTheDirectKernelBitForBit` failed once in 5 repeats (CUDA float, vendor
+  NN). Two agreeing direct cuSPARSE runs were taken to mean "reproducible", and then the pinned
+  run was required to match them bit for bit. Now a pinned vendor run must match one of the two
+  direct runs or, failing that, must not carry the gather's exact bits.
+- `AutoReadsEveryKeyField` on NETLIB: the transposed probe rows expect `direct` (the vendor can no
+  longer run there), so the transA/transB rows are read on CUDA/ROCm only.
+- (b) data gate rerun on the same 10 000 points: table-only cells 100.000% everywhere (exit 0).
+  The new `cpu-can_run` column (netlib transpose term) reads float 32.44%, double 34.6%, cfloat
+  10.64%, cdouble 34.16%. Every disagreement is a transA=T shape, or a cfloat transA=N shape
+  with transB=T/C, which is exactly where old Auto picked netlib and threw.
+
 ## Doc changes the integrator should make
+
+- `docs/design/known-defects.md`: the two CUDA cuSPARSE vendor terms (#13 extension) and the
+  cuSPARSE misalignment R3 waiver (above).
 
 - `docs/design/flat-kernel-selection.md` §12: a "Phase 5, spmm" paragraph (this file).
 - `docs/perf/spmm.md` cites `route_spmm.hh:...` line numbers for the window and `supports()`
