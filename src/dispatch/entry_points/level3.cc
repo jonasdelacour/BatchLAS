@@ -8,10 +8,6 @@
 #include <batchlas/backend_config.h>
 
 #include <batchlas/blas/functions/gemm.hh>
-#include <batchlas/blas/functions/gemv.hh>
-
-#include "../../backends/gemv_route.hh"
-#include "../../sycl/gemv_native.hh"
 #include <batchlas/blas/functions/symm.hh>
 #include <batchlas/blas/functions/hemm.hh>
 #include <batchlas/blas/functions/herk.hh>
@@ -23,7 +19,6 @@
 #include <batchlas/blas/dispatch/no_route.hh>
 #include <batchlas/blas/dispatch/vendor_available.hh>
 
-
 // The four level-3 custom-route gates. They have to run before the
 // vendor-available test, so they live here rather than in cublas.cc.
 #include "../../backends/symm_custom_dispatch.hh"
@@ -32,7 +27,6 @@
 #include "../../backends/trmm_custom_dispatch.hh"
 #include "../../backends/level3_coverage.hh"
 
-
 #include "../../util/template-instantiations.hh"
 
 #include <complex>
@@ -40,41 +34,6 @@
 namespace batchlas {
 
 // gemm lives in src/ops/gemm/gemm.cc (flat kernel selection).
-
-template <Backend Back, typename T>
-Event gemv(Queue& ctx,
-           const MatrixView<T,MatrixFormat::Dense>& A,
-           const VectorView<T>& X,
-           const VectorView<T>& Y,
-           T alpha,
-           T beta,
-           Transpose transA) {
-    // The gate runs BEFORE the vendor-available test: anything below that test
-    // is unreachable in the vendor-free build. Deliberately no hoisted
-    // validation, unlike trsm -- the native kernel must accept exactly what the
-    // vendor accepts, and a new throw would turn the live silent bug in
-    // docs/design/known-defects.md (defect 1) into a crash.
-    const dispatch::Route route = backend::gemv_route<Back, T>(
-        ctx, A, X, Y, transA,
-        /*vendor_available=*/dispatch::level3_vendor_available<Back>);
-
-    if (dispatch::is_native(route)) {
-        if (route.algo == dispatch::Algorithm::CTA) {
-            return sycl_gemv::gemv_native_cta<T>(ctx, A, X, Y, alpha, beta, transA);
-        }
-        if (route.algo == dispatch::Algorithm::Direct) {
-            return sycl_gemv::gemv_native_direct<T>(ctx, A, X, Y, alpha, beta, transA);
-        }
-    }
-
-    if constexpr (!dispatch::level3_vendor_available<Back>) {
-        // Reached only by what supports() refuses (heterogeneous A, bad extents).
-        dispatch::throw_no_vendor_route<T>(
-            dispatch::Op::gemv, Back, dispatch::kLevel3Library<Back>);
-    } else {
-        return backend::gemv_vendor<Back, T>(ctx, A, X, Y, alpha, beta, transA);
-    }
-}
 
 template <Backend Back, RealScalar T>
 Event symm(Queue& ctx,
@@ -276,7 +235,6 @@ Event trmm(Queue& ctx,
     OP_INSTANTIATE(her2k, B_, std::complex<double>)
 
 #define ALL_TYPE_OPS_ONE(B_, fp)  \
-    OP_INSTANTIATE(gemv, B_, fp)  \
     OP_INSTANTIATE(trmm, B_, fp)
 
 #define LEVEL3_INSTANTIATE(B_)                       \
