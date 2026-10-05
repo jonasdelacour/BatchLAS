@@ -60,7 +60,7 @@ namespace {
 // the same reason DirectSubset is slow there, and the two comparing "evenly" at
 // batch 1 was two starved kernels, not a fair fight.
 //
-// With that fixed (see syev_prefer_vendor in include/batchlas/blas/functions/syev.hh),
+// With that fixed (the vendor rows of tuned/syev.<dtype>.<device>.txt),
 // Direct got up to 15.4x faster and the thresholds below had to be re-measured
 // against it. What survives:
 //

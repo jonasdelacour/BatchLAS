@@ -18,6 +18,7 @@
 #include "../src/ops/gesv/choice.hh"
 #include "../src/ops/gesvd/choice.hh"
 #include "../src/ops/spmm/choice.hh"
+#include "../src/ops/syev/choice.hh"
 #include "../src/select/select.hh"
 
 #include <algorithm>
@@ -145,6 +146,13 @@ std::vector<std::string> candidates(const std::string& op, const std::string& dt
         if (dtype == "double") return spellings(spmm::candidates<double>());
         if (dtype == "cfloat") return spellings(spmm::candidates<std::complex<float>>());
         if (dtype == "cdouble") return spellings(spmm::candidates<std::complex<double>>());
+    }
+    namespace syev = batchlas::ops::syev;
+    if (op == "syev") {
+        if (dtype == "float") return spellings(syev::candidates<float>());
+        if (dtype == "double") return spellings(syev::candidates<double>());
+        if (dtype == "cfloat") return spellings(syev::candidates<std::complex<float>>());
+        if (dtype == "cdouble") return spellings(syev::candidates<std::complex<double>>());
     }
     return {};
 }
@@ -500,6 +508,7 @@ TEST(TunedTables, GetriTablesDeclareChoiceKeyNames) { expect_tables_declare("get
 TEST(TunedTables, GesvTablesDeclareChoiceKeyNames) { expect_tables_declare("gesv", batchlas::ops::gesv::key_names); }
 TEST(TunedTables, GesvdTablesDeclareChoiceKeyNames) { expect_tables_declare("gesvd", batchlas::ops::gesvd::key_names); }
 TEST(TunedTables, SpmmTablesDeclareChoiceKeyNames) { expect_tables_declare("spmm", batchlas::ops::spmm::key_names); }
+TEST(TunedTables, SyevTablesDeclareChoiceKeyNames) { expect_tables_declare("syev", batchlas::ops::syev::key_names); }
 
 // ormqr's transcriber spells choice.hh's grid by hand (k over grid_m up to m), and one
 // transcription serves both devices: every table holds exactly that grid, both sides, N/T/C.
@@ -657,6 +666,23 @@ TEST(TunedTables, SpmmTranscribedTablesHoldExactlyTheChoiceGrid) {
             for (const auto& row : t.rows)
                 got.insert(row.keys[0] + " " + row.keys[1] + " " + row.keys[2] + " " + row.keys[3] + " " +
                            row.keys[4]);
+            EXPECT_EQ(got, want) << dt << " " << dev;
+            EXPECT_EQ(t.rows.size(), want.size()) << dt << " " << dev;
+        }
+}
+
+// syev's transcriber spells choice.hh's grid by hand too; one transcription serves both devices.
+TEST(TunedTables, SyevTablesHoldExactlyTheChoiceGridOnBothDevices) {
+    namespace syev = batchlas::ops::syev;
+    std::set<std::string> want;
+    for (const char* j : {"N", "V"})
+        for (int n : syev::grid_n)
+            for (int b : syev::grid_batch) want.insert(std::string(j) + " " + std::to_string(n) + " " + std::to_string(b));
+    for (const char* dev : {"sm_89", "sm_120"})
+        for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
+            const sel::Table& t = embedded(std::string("syev.") + dt + "." + dev + ".txt");
+            std::set<std::string> got;
+            for (const auto& row : t.rows) got.insert(row.keys[0] + " " + row.keys[1] + " " + row.keys[2]);
             EXPECT_EQ(got, want) << dt << " " << dev;
             EXPECT_EQ(t.rows.size(), want.size()) << dt << " " << dev;
         }

@@ -1441,7 +1441,7 @@ sharpest form of the problem this section exists to fix.
 | `ortho_gram` | `BATCHLAS_ORTHO_GRAM` | `EnvValue` | unset; only `gemm` has an effect |
 | `sb2st_back_wave` | `BATCHLAS_SB2ST_BACK_WAVE` | `EnvValue` | unset (wave on) — **fails open**, and its own disable set is wider than `env_falsy` |
 | `sb2st_subgroup` | `BATCHLAS_SB2ST_SUBGROUP` | `EnvValue` | unset (auto); forced-on throws when `kd > 32` |
-| `syev_small_kernel` | `BATCHLAS_SYEV_SMALL_KERNEL` | `EnvValue` | unset (`cta`, unforced) |
+| `syev_small_kernel` | `BATCHLAS_SYEV_SMALL_KERNEL` | `EnvValue` | retired: no longer read; `syev` warns once if set (pin `BATCHLAS_SYEV_ROUTE=cta\|cta_fused\|jacobi`) |
 | `syev_two_stage_chase` | `BATCHLAS_SYEV_TWO_STAGE_CHASE` | `EnvValue` | unset (Householder) |
 | `syevx_algorithm` | `BATCHLAS_SYEVX_ALGORITHM` | `EnvValue` | unset (`params.method`) — overrides an API argument |
 | `syevx_preconditioner` | `BATCHLAS_SYEVX_PRECONDITIONER` | `EnvValue` | unset — overrides an API argument |
@@ -1471,7 +1471,7 @@ sharpest form of the problem this section exists to fix.
 | `syev_two_stage_kd` | `BATCHLAS_SYEV_TWO_STAGE_KD` | `int` | `32` (then clamped to `[1, n-1]`) |
 | `syev_two_stage_sb2st_block` | `BATCHLAS_SYEV_TWO_STAGE_SB2ST_BLOCK` | `int` | `32` |
 | `sy2sb_ormqr_nb` | `BATCHLAS_SY2SB_ORMQR_NB` | `EnvValue` | unset; three-valued — `off` or `0` means "never hint" |
-| `syev_cta_max_n` | `BATCHLAS_SYEV_CTA_MAX_N` | `EnvValue` | unset (24 for `complex<double>`, else 32; range 0–32) |
+| `syev_cta_max_n` | `BATCHLAS_SYEV_CTA_MAX_N` | `EnvValue` | retired: no longer read; `syev` warns once if set (the window is `tuned/syev.<dtype>.<device>.txt`) |
 | `sytrd_block_size` | `BATCHLAS_SYTRD_BLOCK_SIZE` | `int` | `0` (per `n` and per scalar type) |
 | `trmm_tile_m` | `BATCHLAS_TRMM_TILE_M` | `int` | `0` (a function of `m`; bucketed to 16/32/64/128) |
 | `trsm_outer_nb` | `BATCHLAS_TRSM_OUTER_NB` | `int` | `0` (128 for `Side::Left`, `cta_nb` for `Side::Right`) |

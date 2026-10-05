@@ -491,6 +491,20 @@ SPMM = OpSpec(
 )
 
 
+# syev (docs/design/flat-select-p5/syev.md): work ~ n^3 batch; jobz N|V. No sweep source: the
+# sm_89 and sm_120 tables are the same transcription of the old router (it read no architecture).
+SYEV_CHOICES = ("cta", "cta_fused", "jacobi", "blocked", "two_stage", "vendor")
+SYEV = OpSpec(
+    op="syev",
+    keys="jobz:exact n:log:3 batch:log",
+    row_ops=("syev",),
+    row_key=lambda r: None,
+    arm_spelling={c: c for c in SYEV_CHOICES},
+    arm_route={c: (("vendor:vendor",) if c == "vendor" else (f"native:{c}",)) for c in SYEV_CHOICES},
+    candidate_order=list(SYEV_CHOICES),
+)
+
+
 def parse_keys(spec):
     """'# keys:' text -> [(name, is_log, weight)]; a :log weight defaults to 1."""
     out = []
@@ -882,7 +896,7 @@ GEQRF = OpSpec(
 )
 
 POTRF.review = potrf_offgrid
-OPS = [POTRF, POSV, TRSM, GEMM, GEMV, GEQRF, ORGQR, ORMQR, GETRF, GETRS, GETRI, GESV, GESVD, SPMM]
+OPS = [POTRF, POSV, TRSM, GEMM, GEMV, GEQRF, ORGQR, ORMQR, GETRF, GETRS, GETRI, GESV, GESVD, SPMM, SYEV]
 OP_BY_NAME = {s.op: s for s in OPS}
 
 

@@ -171,7 +171,7 @@ TYPED_TEST(SyevBlockedTest, EigenvaluesOnlyLowerMatchesNetlib) {
 	// (stebz, not stedc), so it needs its own shape coverage: n=8/32 below the
 	// point where Auto would route here at all but reachable by direct call,
 	// n=96 the historical case, n=320 the top of the blocked values-mode region
-	// (syev_saturated_provider_for_n_values). Batch shrinks with n to keep the
+	// (jobz=N rows of tuned/syev.<dtype>.<device>.txt). Batch shrinks with n to keep the
 	// dense host reference solve cheap.
 	struct Shape { int n; int batch; };
 	for (const Shape s : {Shape{8, 16}, Shape{32, 16}, Shape{96, 16}, Shape{320, 4}}) {
@@ -188,9 +188,9 @@ TYPED_TEST(SyevBlockedTest, EigenvaluesOnlyLowerMatchesNetlib) {
 
 		// Reference: the VENDOR solver for this backend, called directly.
 		//
-		// Not the queue-dispatching syev(): on the CUDA fixture that enters
-		// syev_dispatch<CUDA>, and choose_syev_provider sends
-		// (NoEigenVectors && n > 32) straight to BatchLAS_Blocked -- so the
+		// Not the queue-dispatching syev(): on the CUDA fixture its table
+		// (tuned/syev.<dtype>.<device>.txt) sends
+		// (NoEigenVectors && 32 < n <= 320) straight to blocked -- so the
 		// n = 96 and n = 320 arms would compare syev_blocked against itself and
 		// could not fail. Checked by injection: flipping bp.order to Descending
 		// in syev_blocked.cc, or making stebz drop every slot >= local_size,
@@ -294,6 +294,8 @@ TYPED_TEST(SyevBlockedTest, EigenvectorsLowerResidualAndOrtho) {
 TYPED_TEST(SyevBlockedTest, TwoStageProviderEigenvaluesOnlySmoke) {
 	using Scalar = typename TestFixture::ScalarType;
 	using Real = typename base_type<Scalar>::type;
+	// A two_stage pin on NETLIB used to be ignored (NETLIB ran the vendor); it now throws (R6).
+	if (TestFixture::BackendType == Backend::NETLIB) GTEST_SKIP() << "two-stage is a GPU path";
 
 	const int n = 128;
 	const int batch = 8;
@@ -331,6 +333,8 @@ TYPED_TEST(SyevBlockedTest, TwoStageProviderEigenvaluesOnlySmoke) {
 TYPED_TEST(SyevBlockedTest, TwoStageProviderEigenvectorsSmoke) {
 	using Scalar = typename TestFixture::ScalarType;
 	using Real = typename base_type<Scalar>::type;
+	// A two_stage pin on NETLIB used to be ignored (NETLIB ran the vendor); it now throws (R6).
+	if (TestFixture::BackendType == Backend::NETLIB) GTEST_SKIP() << "two-stage is a GPU path";
 
 	const int n = 64;
 	const int batch = 1;
@@ -370,8 +374,8 @@ TYPED_TEST(SyevBlockedTest, TwoStageProviderEigenvectorsSmoke) {
 // depends on it were both untested.
 //
 // This goes through the public `syev` on Auto rather than calling syev_blocked
-// directly, so it also covers the per-type routing in
-// syev_saturated_provider_for_n: at n = 320 that is blocked for float, double
+// directly, so it also covers the per-type rows of
+// tuned/syev.<dtype>.<device>.txt: at n = 320 that is blocked for float, double
 // and complex<float>, and the vendor for complex<double>. Whichever provider
 // Auto picks, the answer must satisfy the same residual and orthogonality
 // bounds.
@@ -429,10 +433,9 @@ TYPED_TEST(SyevBlockedTest, AutoEigenvectorsAtRetunedPanelWidth) {
 // from Auto for complex before, so neither was covered.
 //
 // n = 6 and n = 28 sit one on each side of those two new boundaries. The sizes
-// are driven through the public `syev` so that syev_dispatch's buffer-size query
-// and its solve both run syev_choose_small_kernel -- that selector reads its env
-// override fresh on every call and is documented as having to agree between the
-// two, which is exactly the kind of disagreement a routing change can introduce.
+// are driven through the public `syev` so that its buffer-size query and its
+// solve both run choose() (src/ops/syev/syev.cc) -- the two have to agree, which
+// is exactly the kind of disagreement a routing change can introduce.
 TYPED_TEST(SyevBlockedTest, AutoEigenvectorsSmallNKernelBoundaries) {
 	using Scalar = typename TestFixture::ScalarType;
 	using Real = typename base_type<Scalar>::type;

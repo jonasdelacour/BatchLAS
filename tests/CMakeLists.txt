@@ -97,6 +97,7 @@ set(TEST_TARGETS
     syev_cta_fused_tests
     syev_blocked_tests
     syev_two_stage_tests
+    syev_candidates_tests
 )
 
 set(BATCHLAS_SMOKE_TEST_TARGETS
@@ -185,7 +186,7 @@ set(BATCHLAS_TEST_LABELS_eig
     syev_tests syevx_tests syevx_range_tests syev_cta_tests syev_jacobi_cta_tests
     syev_cta_fused_tests syev_blocked_tests syev_two_stage_tests
     lanczos_tests ritz_values_tests gesvd_tests gesvdj_cta_tests bdsqr_tests bdsdc_tests
-    gesvd_candidates_tests)
+    gesvd_candidates_tests syev_candidates_tests)
 set(BATCHLAS_TEST_LABELS_sparse
     iluk_tests spmm_tests spmm_candidates_tests)
 
