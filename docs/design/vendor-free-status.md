@@ -54,7 +54,7 @@ therefore fail entirely on host rows while every CUDA case in it passes. Two dem
 
 The structural reason every native tier in this campaign is invisible to the host half:
 `supports()` carries `if (!s.is_gpu) return false;` for `geqrf` (`route_geqrf.hh:48`), `orgqr`
-(`route_orgqr.hh:32`), `ormqr` (`route_ormqr.hh:59`), `getrf` (`route_getrf.hh:41`), `getrs`
+(`route_orgqr.hh:32`), `ormqr` (`can_run` in `src/ops/ormqr/ormqr.cc`; before P5 `route_ormqr.hh:59`), `getrf` (`route_getrf.hh:41`), `getrs`
 (`route_getrs.hh:52`), `getri` (`route_getri.hh:39`), `potrf` (`can_run` in `src/ops/potrf/potrf.cc`), `trsm`
 (`can_run` in `src/ops/trsm/trsm.cc`; before P3.3 `route_trsm.hh:39`) and `gemm` (`route_gemm.hh:34-67`). **`gemv`'s `Direct` arm and `spmm`'s
 gather are the only two exceptions in the tree** — both run on a `native_cpu` `Device("cpu")`
@@ -106,7 +106,7 @@ native route still runs: `automatic()` accepts a merely *supported* native route
 | `potrf` | `Tiny`, `CTA`, `LPanel`, `Blocked` | no `preferred()` any more: tuned tables (`tuned/potrf.*.txt`) since flat selection | `src/ops/potrf/potrf.cc` |
 | `geqrf` | `CTA`, `Blocked` | native above a per-type order floor (`float` 64, `cfloat` 48, `double` 96, `cdouble` 256), plus tall panels `rows >= 128 && cols >= 32 && rows >= 4*cols`; the window answers true for **one** tier, resolved through `best_native_tier` so it cannot pre-empt `native_tier_preferred` | `route_geqrf.hh:preferred` |
 | `orgqr` | `Blocked` | native at `rows <= 512 && cols <= 512` | `route_orgqr.hh:preferred` |
-| `ormqr` | `Blocked` | `is_native(r) && supports(r, s)` — native-first, and predates WP5 | `route_ormqr.hh:77-79` |
+| `ormqr` | `Blocked` | no `preferred()` any more: tables transcribed from the old routing (`tuned/ormqr.*.txt`) since flat selection (P5). Every row is `blocked` then `vendor`, the deleted native-first `is_native(r) && supports(r, s)` | `src/ops/ormqr/ormqr.cc` |
 | `getrf` | `CTA`, `Blocked` | `float` order ≥ 256, `cfloat` order ≥ 512 | `route_getrf.hh:67-74` |
 | `getrs` | `CTA`, `Blocked` | CTA at `nrhs <= 2` (all types) and `nrhs <= 4` (`float`); Blocked at `batch >= 128` with `float nrhs >= 64` / `double nrhs >= 128` | `route_getrs.hh:79-98` |
 | `getri` | `Blocked` | `float` order ≥ 128, `cfloat` order ≥ 256 | `route_getri.hh:65-72` |
@@ -271,9 +271,11 @@ measurement:
   written (known-defects #7), and since P3.3 `route_trsm.hh` and `trsm_op_shape` are deleted;
   the native families' `can_run` in `src/ops/trsm/trsm.cc` refuses a heterogeneous A or B, while
   the vendor's still accepts one (known-defects #12).
-* **`resolve_ormqr_route` is called with two arguments** (`ormqr.hh:209`), taking
-  `vendor_available = true`, so `ormqr` never reaches the vendor-free fallback. It gets away
-  with it only because its `preferred()` is native-first. Do not inherit the omission.
+* ~~**`resolve_ormqr_route` is called with two arguments**~~ Resolved in P5 (`docs/perf/qr.md`
+  #12): `resolve_ormqr_route` and `route_ormqr.hh` are deleted, and the flat selection in
+  `src/ops/ormqr/ormqr.cc` reads the real vendor availability (`can_run`'s
+  `d.has_vendor_solver`). Before P5 it took `vendor_available = true` (`ormqr.hh:209`) and got
+  away with it only because its `preferred()` was native-first. Do not inherit the omission.
 * **`cublas.cc`'s `getrs` sits in a TU gated on `BATCHLAS_HAS_CUBLAS`**, so a
   cuBLAS-present / cuSOLVER-absent configure claims a vendor it cannot link. The fix belongs in
   `vendor_available.hh`.

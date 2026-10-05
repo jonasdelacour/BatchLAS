@@ -82,6 +82,9 @@ edited here.
 - `tests/route_vocabulary_tests.cc` (RouteOrgqr, around lines 971-1031) still cites
   `route_ormqr.hh` in comments and one message string. It is left alone because the orgqr agent
   owns that suite. `src/backends/orgqr_route.hh` and `route_orgqr.hh` cite it as well.
+  **Integrator:** make sure the orgqr branch, or the merge, rewrites these citations.
+  `docs/design/vendor-free-status.md` (the `is_gpu` list, the `preferred()` table row, and the
+  `resolve_ormqr_route` debt, now struck through as resolved) was fixed on this branch.
 - The `-ffp-model`/ROCm syntax checks were not run (no ROCm headers on this box).
 
 ## Gate
