@@ -198,3 +198,6 @@ refusal comes from `gesvd_buffer_size`, which records no row.
 - AGENTS.md §9: gesvd no longer has a RouteTable. Its pins are `BATCHLAS_GESVD_ROUTE` /
   `_PROVIDER` with select spellings, and a bad pin throws.
 - known-defects.md: Found #1 (and #2 if wanted).
+- Stale citations of the deleted header: `docs/design/vendor-free-status.md:115`
+  (`route_gesvd.hh:100`, the wide-band rule, which is now the transcribed `blocked|vendor|jacobi`
+  rows for real 33..64) and `docs/design/vendor-independence.md:137` (`GesvdShape`).
