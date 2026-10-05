@@ -5,6 +5,7 @@
 #include <batchlas/util/env.hh>
 
 #include "../src/ops/gemm/choice.hh"
+#include "../src/ops/geqrf/choice.hh"
 #include "../src/ops/posv/choice.hh"
 #include "../src/ops/potrf/choice.hh"
 #include "../src/ops/trsm/choice.hh"
@@ -73,6 +74,13 @@ std::vector<std::string> candidates(const std::string& op, const std::string& dt
         if (dtype == "double") return spellings(gemv::candidates<double>());
         if (dtype == "cfloat") return spellings(gemv::candidates<std::complex<float>>());
         if (dtype == "cdouble") return spellings(gemv::candidates<std::complex<double>>());
+    }
+    namespace geqrf = batchlas::ops::geqrf;
+    if (op == "geqrf") {
+        if (dtype == "float") return spellings(geqrf::candidates<float>());
+        if (dtype == "double") return spellings(geqrf::candidates<double>());
+        if (dtype == "cfloat") return spellings(geqrf::candidates<std::complex<float>>());
+        if (dtype == "cdouble") return spellings(geqrf::candidates<std::complex<double>>());
     }
     return {};
 }
@@ -209,6 +217,7 @@ TEST(TunedTables, PosvTablesDeclareChoiceKeyNames) { expect_tables_declare("posv
 TEST(TunedTables, TrsmTablesDeclareChoiceKeyNames) { expect_tables_declare("trsm", batchlas::ops::trsm::key_names); }
 TEST(TunedTables, GemmTablesDeclareChoiceKeyNames) { expect_tables_declare("gemm", batchlas::ops::gemm::key_names); }
 TEST(TunedTables, GemvTablesDeclareChoiceKeyNames) { expect_tables_declare("gemv", batchlas::ops::gemv::key_names); }
+TEST(TunedTables, GeqrfTablesDeclareChoiceKeyNames) { expect_tables_declare("geqrf", batchlas::ops::geqrf::key_names); }
 
 const sel::Table& embedded(const std::string& name) {
     static std::map<std::string, sel::Table> cache;
@@ -361,6 +370,35 @@ TEST(TunedTables, GemvTranscribedTablesHoldExactlyTheChoiceGrid) {
             EXPECT_EQ(t.source.rfind("transcribed:", 0), 0u) << t.file;
             if (first.empty()) first = ranked;
             else EXPECT_EQ(ranked, first) << dt << ": sm_120 rows differ from sm_89";
+        }
+    }
+}
+
+// geqrf's transcriber likewise: one row per choice.hh grid cell (sq x grid_n, tall x grid_n x
+// grid_aspect, wide x grid_wide_n x grid_wide_aspect), and identical rows on sm_89 and sm_120.
+TEST(TunedTables, GeqrfTablesHoldExactlyTheChoiceGridOnBothDevices) {
+    namespace geqrf = batchlas::ops::geqrf;
+    std::set<std::string> want;
+    for (int n : geqrf::grid_n) want.insert("sq " + std::to_string(n) + " 1");
+    for (int n : geqrf::grid_n)
+        for (int a : geqrf::grid_aspect) want.insert("tall " + std::to_string(n) + " " + std::to_string(a));
+    for (int n : geqrf::grid_wide_n)
+        for (int a : geqrf::grid_wide_aspect) want.insert("wide " + std::to_string(n) + " " + std::to_string(a));
+    for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
+        std::map<std::string, std::string> rows_89;
+        for (const char* dev : {"sm_89", "sm_120"}) {
+            const sel::Table& t = embedded(std::string("geqrf.") + dt + "." + dev + ".txt");
+            std::set<std::string> got;
+            for (const auto& row : t.rows) {
+                const std::string key = row.keys[0] + " " + row.keys[1] + " " + row.keys[2];
+                got.insert(key);
+                std::string ranked;
+                for (const auto& e : row.ranked) ranked += e.spelling + "|";
+                if (std::string(dev) == "sm_89") rows_89[key] = ranked;
+                else EXPECT_EQ(ranked, rows_89[key]) << dt << " " << key << ": sm_120 differs from sm_89";
+            }
+            EXPECT_EQ(got, want) << dt << " " << dev;
+            EXPECT_EQ(t.rows.size(), want.size()) << dt << " " << dev;
         }
     }
 }

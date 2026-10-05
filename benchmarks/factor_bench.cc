@@ -45,6 +45,7 @@
 
 #include "../src/extensions/potrf_native.hh"
 #include "../src/sycl/trsm_native.hh"
+#include "../src/ops/geqrf/choice.hh"
 #include "../src/ops/posv/choice.hh"
 #include "../src/ops/potrf/choice.hh"
 
@@ -249,6 +250,10 @@ static bool pin_parsed_now(OpKind k) {
         if (raw == nullptr) return false;
         return k == OpKind::potrf ? select_pin_parsed<ops::potrf::PotrfChoice>(raw, ops::potrf::aliases)
                                   : select_pin_parsed<ops::posv::PosvChoice>(raw, ops::posv::aliases);
+    }
+    if (k == OpKind::geqrf) {  // flat selection too (src/ops/geqrf/)
+        const char* raw = settings().routing.canonical_route(dispatch_op(k)).get();
+        return raw != nullptr && select_pin_parsed<ops::geqrf::GeqrfChoice>(raw, ops::geqrf::aliases);
     }
     const auto p = dispatch::parse_route_env(dispatch_op(k));
     return p.found && !p.unparsed;

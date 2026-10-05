@@ -1,5 +1,5 @@
-// The public factorization entry points -- geqrf, orgqr, getrf, getrs, getri and gesv
-// (posv is in src/ops/posv/) -- defined once here rather than inside a vendor TU, so
+// The public factorization entry points -- orgqr, getrf, getrs, getri and gesv (posv and
+// geqrf are in src/ops/) -- defined once here rather than inside a vendor TU, so
 // dropping a vendor library does not drop the public symbol.
 // See docs/design/vendor-independence.md#the-entry-point-facade.
 //
@@ -30,9 +30,7 @@
 
 // Routing adapters and native drivers: each is a src/ header over public includes
 // only, so the facade can include it in a vendor-free build.
-#include "../../backends/geqrf_route.hh"
 #include "../../backends/orgqr_route.hh"
-#include "../../extensions/geqrf_native.hh"
 #include "../../extensions/orgqr_native.hh"
 
 #include "../../backends/getrf_route.hh"
@@ -66,19 +64,6 @@ namespace batchlas {
 // These THROW rather than falling through to the vendor, which would silently keep
 // taking the vendor the day a native capability comes off zero.
 template <typename T>
-[[noreturn]] inline void geqrf_throw_native_unimplemented(dispatch::Route route,
-                                                          const char* who) {
-    throw batchlas::internal_error(
-        std::string(who) + ": resolved to a native route (" +
-        std::string(dispatch::to_string(route.origin)) + ":" +
-        std::string(dispatch::to_string(route.algo)) +
-        ") but no native geqrf kernel is linked into this build. "
-        "sycl_geqrf::geqrf_cta_max_m_for_slm / geqrf_cta_max_elems_for_slm / "
-        "geqrf_blocked_available reported a capability the facade cannot "
-        "service.");
-}
-
-template <typename T>
 [[noreturn]] inline void orgqr_throw_native_unimplemented(dispatch::Route route,
                                                           const char* who) {
     throw batchlas::internal_error(
@@ -88,123 +73,6 @@ template <typename T>
         ") but no native orgqr driver is linked into this build. "
         "sycl_orgqr::orgqr_blocked_available reported a capability the facade "
         "cannot service.");
-}
-
-template <Backend B, typename T>
-Event geqrf(Queue& ctx,
-            const MatrixView<T,MatrixFormat::Dense>& A,
-            Span<T> tau,
-            Span<std::byte> work_space) {
-    // Must precede the shape builder, which reads A.rows()/A.cols().
-    geqrf_validate_params<T>(A);
-
-    // Resolved before the vendor-available test, so a vendor-free build routes
-    // natively instead of falling into the `if constexpr` at the end of this body.
-    const dispatch::Route route = backend::geqrf_route<B, T>(
-        ctx, A,
-        /*vendor_available=*/dispatch::factorization_vendor_available<B>);
-
-    if (dispatch::is_native(route)) {
-        // Tiny BEFORE CTA, matching kGeqrfOrder: it is the narrower tier, and its arm
-        // re-applies every supports() gate and throws rather than silently factoring a
-        // leading submatrix.
-        if (route.algo == dispatch::Algorithm::Tiny) {
-            return sycl_geqrf::geqrf_tiny_dispatch<T>(ctx, A, tau, work_space);
-        }
-        if (route.algo == dispatch::Algorithm::CTA) {
-            return sycl_geqrf::geqrf_cta_dispatch<T>(ctx, A, tau, work_space);
-        }
-        if (route.algo == dispatch::Algorithm::Blocked) {
-            // The trailing GEMM goes through the public gemm (flat selection,
-            // src/ops/gemm/gemm.cc): a direct sycl_gemm launcher call would skip the
-            // table and run one fixed native kernel even on the shapes it loses.
-            return sycl_geqrf::geqrf_blocked_dispatch<T>(
-                ctx, A, tau, work_space,
-                [](Queue& c,
-                   const MatrixView<T, MatrixFormat::Dense>& ga,
-                   const MatrixView<T, MatrixFormat::Dense>& gb,
-                   const MatrixView<T, MatrixFormat::Dense>& gc,
-                   T galpha, T gbeta, Transpose gta, Transpose gtb,
-                   ComputePrecision gp) {
-                    return gemm<B, T>(c, ga, gb, gc, galpha, gbeta, gta, gtb, gp);
-                });
-        }
-        geqrf_throw_native_unimplemented<T>(route, "geqrf");
-    }
-
-    if constexpr (!dispatch::factorization_vendor_available<B>) {
-        dispatch::throw_no_vendor_route<T>(
-            dispatch::Op::geqrf, B, dispatch::kFactorizationLibrary<B>);
-    } else {
-        return backend::geqrf_vendor<B, T>(ctx, A, tau, work_space);
-    }
-}
-
-template <Backend B, typename T>
-size_t geqrf_buffer_size(Queue& ctx,
-                         const MatrixView<T,MatrixFormat::Dense>& A,
-                         Span<T> tau) {
-    // Mirrors the call exactly -- same validator, builder, route function and
-    // arguments -- so both resolve to the same Route by construction.
-    geqrf_validate_params<T>(A);
-
-    const dispatch::Route route = backend::geqrf_route<B, T>(
-        ctx, A,
-        /*vendor_available=*/dispatch::factorization_vendor_available<B>);
-
-    // max over EVERY supported native tier and the vendor, not the chosen route:
-    // query and call resolve independently, so a chosen-only size under-allocates
-    // where max() merely over-allocates.
-    //
-    // geqrf ONLY: band_reduction.cc sizes against an (m_max x nb_max) dummy view
-    // and calls with a smaller sub-view, so any native geqrf_*_buffer_size must be
-    // MONOTONE NON-DECREASING in (rows, cols, batch) and must never dereference
-    // A.data_ptr() or tau.data() -- both are nullptr there.
-    //
-    // `native_fired`, not `native_need != 0`: the CTA tier's workspace is
-    // legitimately zero, so the check cannot be read off the size.
-    std::size_t native_need = 0;
-    bool native_fired = false;
-    if (dispatch::is_native(route)) {
-        const auto shape = backend::geqrf_op_shape<B, T>(ctx, A);
-        using Tbl = dispatch::RouteTable<dispatch::Op::geqrf, T>;
-        if (shape) {
-            if (Tbl::supports({dispatch::Origin::Native, dispatch::Algorithm::Tiny}, *shape)) {
-                // The tiny tier's workspace is legitimately ZERO, which is exactly why
-                // the flag above is `native_fired` and not `native_need != 0`: without
-                // this arm a shape only Tiny supports would throw out of
-                // geqrf_throw_native_unimplemented while the call itself succeeds.
-                native_need = std::max(native_need,
-                                       sycl_geqrf::geqrf_tiny_buffer_size<T>(ctx, A));
-                native_fired = true;
-            }
-            if (Tbl::supports({dispatch::Origin::Native, dispatch::Algorithm::CTA}, *shape)) {
-                native_need = std::max(native_need,
-                                       sycl_geqrf::geqrf_cta_buffer_size<T>(ctx, A));
-                native_fired = true;
-            }
-            if (Tbl::supports({dispatch::Origin::Native, dispatch::Algorithm::Blocked},
-                              *shape)) {
-                native_need = std::max(native_need,
-                                       sycl_geqrf::geqrf_blocked_buffer_size<T>(ctx, A));
-                native_fired = true;
-            }
-        }
-        if (!native_fired) {
-            geqrf_throw_native_unimplemented<T>(route, "geqrf_buffer_size");
-        }
-    }
-
-    if constexpr (!dispatch::factorization_vendor_available<B>) {
-        if (!native_fired) {
-            dispatch::throw_no_vendor_route<T>(
-                dispatch::Op::geqrf, B, dispatch::kFactorizationLibrary<B>);
-        }
-        return native_need;
-    } else {
-        return std::max(native_need,
-                        backend::geqrf_vendor_buffer_size<B, T>(ctx, A, tau));
-    }
 }
 
 template <Backend B, typename T>
@@ -715,8 +583,6 @@ size_t gesv_buffer_size(Queue& ctx,
 #define OP_INSTANTIATE(OP, B_, fp) BATCHLAS_INSTANTIATE(sig::OP<fp>, OP, B_, fp)
 
 #define FACTORIZATION_ONE(B_, fp)              \
-    OP_INSTANTIATE(geqrf, B_, fp)              \
-    OP_INSTANTIATE(geqrf_buffer_size, B_, fp)  \
     OP_INSTANTIATE(orgqr, B_, fp)              \
     OP_INSTANTIATE(orgqr_buffer_size, B_, fp)  \
     OP_INSTANTIATE(getrf, B_, fp)              \

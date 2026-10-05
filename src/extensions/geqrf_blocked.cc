@@ -111,10 +111,9 @@ GeqrfBlockedWs<T> geqrf_blocked_layout(Queue& ctx, BumpAllocator& pool,
 }  // namespace
 
 // Co-located with the driver so "the flag is true" and "this TU is compiled" are one fact.
-// RouteTable<Op::geqrf,T>::preferred() now routes native above a per-type order floor
-// (float 64, cfloat 48, double 96, cdouble 256) and for tall panels, so this flag also
-// gates the DEFAULT route and not only vendor-free builds: reporting false here sends
-// every in-window shape back to the vendor.
+// geqrf's can_run reads it, and tuned/geqrf.*.txt ranks blocked first on large and tall
+// shapes, so this flag also gates the DEFAULT choice and not only vendor-free builds:
+// reporting false here sends every such shape back to the vendor.
 // evidence: docs/perf/small-n-baseline.md#geqrf, docs/perf/qr.md#route-arms
 template <> bool geqrf_blocked_available<float>()                { return true; }
 template <> bool geqrf_blocked_available<double>()               { return true; }
@@ -189,7 +188,7 @@ Event geqrf_blocked_dispatch(Queue& ctx,
     }
     if (m < n) {
         throw batchlas::invalid_argument(
-            "geqrf_blocked: m < n is not supported (route_geqrf.hh's supports() refuses it)");
+            "geqrf_blocked: m < n is not supported (geqrf's can_run refuses it)");
     }
     if (A.is_heterogeneous()) {
         throw batchlas::invalid_argument("geqrf_blocked: heterogeneous batch is not supported");

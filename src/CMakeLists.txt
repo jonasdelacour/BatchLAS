@@ -157,6 +157,7 @@ target_sources(batchlas_dispatch_obj PRIVATE select/select.cc "${BATCHLAS_TUNED_
 # in the facade library next to entry_points/. Includes are relative, as for src/select.
 target_sources(batchlas_dispatch_obj PRIVATE ops/potrf/potrf.cc ops/posv/posv.cc ops/trsm/trsm.cc ops/gemm/gemm.cc)
 target_sources(batchlas_dispatch_obj PRIVATE ops/gemv/gemv.cc)
+target_sources(batchlas_dispatch_obj PRIVATE ops/geqrf/geqrf.cc)
 add_subdirectory(extensions)
 add_subdirectory(util)
 add_subdirectory(extra)

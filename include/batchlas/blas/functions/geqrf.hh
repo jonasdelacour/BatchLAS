@@ -57,7 +57,7 @@ using geqrf_vendor_buffer_size = size_t(Queue&,
 //     (band_reduction.cc:595, sytrd_sy2sb.cc:504). Copying potrf.hh:76's
 //     `A.rows() != A.cols()` here would be a wrong edit.
 //
-//   * NO `m >= n` CHECK, even though RouteTable<Op::geqrf,T>::supports() carries
+//   * NO `m >= n` CHECK, even though geqrf's can_run (src/ops/geqrf/geqrf.cc) carries
 //     one. That gate says "the native drivers cannot serve a wide view", which
 //     routes it to the vendor; it does not say the CALL is invalid, and the
 //     vendor serves it. A validator that threw would turn a working call into an
