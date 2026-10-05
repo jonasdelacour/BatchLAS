@@ -27,6 +27,7 @@
 #include <fstream>
 #include <limits>
 #include <map>
+#include <memory>
 #include <optional>
 #include <random>
 #include <sstream>
@@ -790,5 +791,51 @@ TEST(GesvTranscribedTable, RowsHoldTheOldWindowOnBothDevices) {
         }
     }
 }
+
+#if BATCHLAS_HAS_HOST_BACKEND
+// The typed suite skips NETLIB (CPU queue). Tiny refuses the NETLIB backend even on a GPU device:
+// netlib getrf writes true int64 pivots where the kernel packs int32. Blocked solves on the CPU.
+TEST(GesvNetlib, TinyRefusedBlockedSolves) {
+    using T = float;
+    constexpr Backend B = Backend::NETLIB;
+    for (const char* dev : {"gpu", "cpu"}) {
+        std::unique_ptr<Queue> q;
+        try {
+            q = std::make_unique<Queue>(Device(dev), B, true);
+        } catch (const std::exception&) {
+            continue;
+        }
+        if (std::string(dev) == "gpu" &&
+            (q->device().type != DeviceType::GPU || !q->device().supports_sub_group_size(32)))
+            continue;
+        Matrix<T, MatrixFormat::Dense> A(8, 8, 2), Bm(8, 2, 2);
+        const Pin tiny("gesv", C{gs::Tiny{}});
+        try {
+            (void)gesv_buffer_size<B, T>(*q, A.view(), Bm.view());
+            ADD_FAILURE() << dev << ": a Tiny pin was accepted on NETLIB";
+        } catch (const std::invalid_argument& e) {
+            EXPECT_NE(std::string(e.what()).find("cannot run this shape"), std::string::npos) << dev << e.what();
+        }
+        // Blocked's children need netlib LAPACKE, absent from a vendor-free build.
+        if (std::string(dev) != "cpu" || !dispatch::factorization_vendor_available<B>) continue;
+#if BATCHLAS_HAS_CPU_TARGET
+        auto p = make_sys<T>(8, 2, 3, 71u);
+        std::vector<int32_t> info(p.batch, -7);
+        const std::string got = traced_choice([&] {
+            const Pin automatic("gesv", "auto");
+            const std::size_t bytes = gesv_buffer_size<B, T>(*q, p.A(), p.B());
+            UnifiedVector<std::byte> ws(std::max<std::size_t>(bytes, 1));
+            UnifiedVector<int32_t> inf(p.batch, int32_t(-7));
+            (void)gesv<B, T>(*q, p.A(), p.B(), p.piv.to_span(), Span<std::byte>(ws.data(), bytes), inf.to_span());
+            q->wait();
+            info.assign(inf.begin(), inf.end());
+        });
+        EXPECT_EQ(got, "blocked");
+        for (int it = 0; it < p.batch; ++it) ASSERT_EQ(info[it], 0) << "item " << it;
+        for (int it : {0, p.batch - 1}) EXPECT_LE(residual(p, it), tol<T>(p.n)) << "item " << it;
+#endif
+    }
+}
+#endif
 
 }  // namespace
