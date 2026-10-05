@@ -114,6 +114,61 @@ Both steps were re-run on this branch and reproduce the committed CSVs and table
   C++ `Table::nearest` is checked on 12 on/off-grid keys per device by
   `GemvTranscribedTable.RowsHoldTheOldPreference`.
 
-## Gate
+## Gate results (threadripper02, GPU 0 = RTX PRO 6000 Blackwell, sm_120)
 
-See the "Gate results" section appended at the end of the work (below).
+**(a) Correctness.** Same targets built from this branch and from `424a45bc` (a `git archive`
+copy), vendor (`build`) and vendor-free (`build-vf`) trees, run on GPU 0.
+
+| binary | branch | base `424a45bc` |
+|---|---|---|
+| gemv_candidates_tests (vendor / vf) | 68 / 69 passed, 0 failed | n/a |
+| gemv_tests | segfault at `GemvMatrixViewTest/7.SingleGemvNoTranspose` (known-defects #13) | same segfault, same case |
+| gemv_tests `-*/7.*` | 326 passed | 326 passed |
+| gemv_tests, `BATCHLAS_GEMV_ROUTE=native` | 372 passed | 372 passed |
+| gemv_tests (vf) | 372 passed | 372 passed |
+| select_tests (vendor, vf) | 37, 37 | 37, 37 |
+| tuned_tables_tests (vendor, vf) | 13, 13 (+2 gemv tests) | 11, 11 |
+| route_vocabulary_tests | 88 (16 `RouteGemv.*` deleted) | 104 |
+| linalg_layer_tests (vendor, vf) | 22, 22 | 22, 22 |
+| options_api_tests | 17; vf: 16 + `OptionsApi.Blas3OptionsMatchPositional` FAILED | identical |
+| ortho_tests `-*/7.*` | 14; vf: 6 + 8 `Ortho*Test/{0..3}` (Backend 6) FAILED | identical |
+| ortho_tests `*/7.*` with `BATCHLAS_GEMV_ROUTE=native` | 2 passed | 2 passed |
+
+Failing-name diff branch vs base: empty in both trees. In the vendor build the complex<double>
+CUDA cases that would launch `cublasZgemvStridedBatched` are skipped by name after a child-process
+probe (known-defects #13); the vendor-free run covers that instantiation's native paths.
+
+Deliberate breaks (restored from a saved copy, md5 `5a95cd0b...` verified):
+1. `can_run(Cta)` without `transA != NoTrans` -> exactly `CanRunEqualsLaunch`,
+   `CanRunFalsePinsThrow`, `PinnedCandidatesStraddleTheirLimits`, `ScopedPinBeatsTheEnvironment`
+   red, for each of the 4 CUDA types (16 failures; 52 passed).
+2. `key_of` "red" reading the out length -> `AutoReadsEveryKeyField` and
+   `TraceKeyOutRedFollowTrans` red (float/double/cfloat; cdouble `TraceKeyOutRedFollowTrans`);
+   complex<double> `AutoReadsTheTranscribedTable` / `AutoReadsEveryKeyField` then reach the
+   cuBLAS Zgemv and segfault (known-defects #13) rather than failing cleanly.
+
+**(b) Data gate.** Host replay: 3000 random points per dtype, off-grid in every coordinate (one
+third over out, red in [1, 131072], batch in [1, 65536]; two thirds concentrated around the
+window, out in [32, 4096], red in [16, 2048], batch in [32, 4096]), trans drawn from N/T/C. The
+OLD answer is the transcriber binary (`--choices`, the real `RouteTable` + `resolve_route`); the
+NEW answer is the nearest row of each shipped table (`sweep_to_table.nearest`) filtered by a
+can_run model, in four device scenarios (sub-group 32 yes/no x vendor yes/no), for both the
+`sm_89` and `sm_120` tables.
+
+- Agreement: **100.00% in all 32 (device, dtype, scenario) cells** (3000/3000 each); the full
+  ranked list equals the old exclusion-derived ranking at all 3000 points per table.
+- 202 of the 12000 points sit in the old cdouble cta window.
+- Armed: dropping the `red=63` rows from `gemv.cdouble.sm_89.txt` gives 2976/3000 (99.20%) with
+  every disagreement at red in [47, 61] (old vendor, new cta), so the gate catches one missing edge.
+
+**(c) Coverage cross-check.** One Auto gemv per process, `BATCHLAS_COVERAGE_OUT` `reached` row,
+424a45bc binary vs this branch, 26 cells straddling every window edge plus the other dtypes:
+
+- vendor build: 21/26 identical (`native:cta` = `native:cta`, `vendor:auto` = `vendor:vendor`);
+  the other 5 (complex<double> just outside the window, and N) crash inside cuBLAS Zgemv in both
+  binaries before coverage is written (known-defects #13); the branch's select trace names
+  `vendor` for all 5, so both sides took the vendor.
+- vendor-free build: 26/26 identical (cta for every T/C cell, direct for N), those 5 included.
+
+`run_local_checks.sh`: all checks pass except `check_cmake_syntax`, which trips only on CMake's
+generated files under this worktree's untracked `build-vf/` directory.
