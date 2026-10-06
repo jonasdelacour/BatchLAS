@@ -1010,7 +1010,7 @@ Four limits, each measured:
 - **CTA tier only.** The blocked driver's panel leaf keeps the ladder. With the rule in
   the blocked leaf, float 256x64 and 256x128 were 1.02x BASE and 128x128 0.97x; without
   it every blocked cell is 1.00-1.01x (the remaining ~0.5% is the W1/W2 zero fill, see
-  [known-defects #11](../design/known-defects.md#11-native-gemm-reads-c-at-beta-zero)).
+  [known-defects #11](../design/known-defects.md#defect-11-native-gemm-reads-c-at-beta-zero)).
 
 ### geqrf: width rule review fixup
 
@@ -1495,7 +1495,7 @@ against the new libraries. Ratios are time/vendor. Kernel choice was checked wit
 
 > On the flat-selection line (P3.4) none of the windows in this section is code:
 > `select_kernel_variant` and `is_sm120_family` routing are deleted, and gemm
-> chooses from `tuned/gemm.<dtype>.<device>.txt` (docs/perf/gemm.md#choices-flat-selection-p34).
+> chooses from `tuned/gemm.<dtype>.<device>.txt` ([gemm.md](gemm.md#choices-flat-selection-p34)).
 > sm_120's gemm tables are the transcribed sm_89 rows written for sm_120 (no gemm sweep
 > has run), so Auto on sm_120 runs what the 4090 router chose. The tiles named below are ordinary
 > candidates (`wide:m=16:n=16:k=16`, `wide:m=32:n=32:k=16`, NN only;
@@ -1713,7 +1713,7 @@ min(m,n) >= 32 and there are >= 128 64x64 CTAs. The tile is 64x64, except for fl
 with a panel shape: 128x32 NC when n < 64 and m >= 128, 32x128 CN when m < 64 and
 n >= 128. Two things are unchanged: the float K32 family (m >= 128, n >= 32,
 k >= 128) and float SmallBatched (max <= 32). On the 4090 the real-scalar tile was a
-tie with Tiled16 (docs/perf/gemm.md#wide-scalar-transposed-tiles). Here Tiled16 is
+tie with Tiled16 ([gemm.md](gemm.md#wide-scalar-transposed-tiles)). Here Tiled16 is
 2-5x behind cuBLAS on these forms.
 
 Final A/B, `LD_PAD=1`, beta=1, BASE -> new, /vendor:

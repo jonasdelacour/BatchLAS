@@ -18,19 +18,36 @@ later commit messages that measured against it (the original is
 
 ## gesvd: what routes today
 
-`RouteTable<Op::gesvd, T>` in `include/batchlas/blas/dispatch/route_gesvd.hh`. Order
-`kGesvdOrder` = `{Native, Jacobi}`, `{Native, CTA}`, `{Native, Blocked}`, `{Vendor, Auto}`.
+Checked against the tree on 2026-10-06, after
+[flat kernel selection](../design/flat-kernel-selection.md) replaced the `RouteTable` router.
+`gesvd` lives in `src/ops/gesvd/gesvd.cc`; its families are spelled in
+`src/ops/gesvd/choice.hh`. `select::run` takes the first entry that `can_run` admits from the
+nearest row of `tuned/gesvd.<dtype>.<arch>.txt` (arch `sm_89` or `sm_120`), keyed on `herm`
+(N, L or U), `vec` (none, all or thin, taken from the *canonical* jobs) and m, n.
 
-| route | kernel | `supports()` | `preferred()` |
-|---|---|---|---|
-| `native:jacobi` | `gesvdj_cta` (`src/extensions/gesvdj_cta.cc`) | GPU, sub-group 32, not Hermitian, \f$\max(m,n) \le 64\f$ (32 for `complex<double>` with vectors) | real: \f$\max(m,n) \le 32\f$; complex: always |
-| `native:cta` | `gesvd_cta` (`src/extensions/gesvd_blocked.cc`) | GPU, \f$\max(m,n) \le 32\f$, real or Hermitian, no Thin | yes |
-| `native:blocked` | `gesvd_blocked`, `gebrd` + `bdsdc` + `ormbr` | GPU, real (or Hermitian Lower) | yes |
-| `vendor` | `gesvdjBatched` (CUDA) / LAPACKE loop (NETLIB) | always | — |
+| family | kernel | `can_run` (correctness only) |
+|---|---|---|
+| `jacobi` | `gesvdj_cta` (`src/extensions/gesvdj_cta.cc`) | GPU, sub-group 32, not Hermitian, \f$\max(m,n) \le 64\f$ (32 for `complex<double>` with vectors; `gesvd_jacobi_max_dim`) |
+| `cta` | `gesvd_cta` (`src/extensions/gesvd_blocked.cc`) | GPU, sub-group 32, \f$\max(m,n) \le 32\f$, no thin request, real general or square Hermitian |
+| `blocked` | `gesvd_blocked`, `gebrd` + `bdsdc` + `ormbr` | GPU, real general, or square Hermitian Lower |
+| `vendor` | `gesvdjBatched` (CUDA) / LAPACKE loop (NETLIB) | the solver library is linked |
 
-So by default: real input with \f$\max(m,n) \le 32\f$ takes Jacobi; real 33..64 and above
-takes Blocked; complex general input takes Jacobi up to its cap; Hermitian input takes
-CTA. The rows below are the evidence for each of those choices.
+The tables are `source=transcribed:424a45bc`, the old router's preference order replayed per
+grid cell (`tuned/README.md`), so the rules on this page are what they encode:
+
+| input | first family in the row |
+|---|---|
+| real general, \f$\max(m,n) \le 32\f$ | `jacobi` (`cta`, `blocked` behind it) |
+| real general, \f$\max(m,n) \ge 33\f$ | `blocked`; in 33..64 `jacobi` stays in the row behind `vendor`, so a pin reaches it |
+| complex general | `jacobi` up to its ceiling, then `vendor` |
+| Hermitian Lower, square | `cta` to 32, `blocked` above |
+| Hermitian Upper, square | `cta` to 32, `vendor` above |
+| Hermitian, non-square | `vendor` |
+
+`BATCHLAS_GESVD_ROUTE=<family>` (or a `select::ScopedPin`) pins a family; a pin that `can_run`
+refuses throws `invalid_argument`. The pre-flat knob `BATCHLAS_GESVD_PROVIDER`, which some
+sections below name, is how those measurements were taken; it is no longer read. The rows below
+are the evidence for each of the choices above.
 
 ## gesvd: the head-to-head against gesvdjBatched
 
@@ -158,7 +175,7 @@ n=16, parity at n=32. Adding U costs CTA 17x at n=8 (0.065 → 1.126 µs) and Ja
 
 The one regime where CTA wins is **values-only at n ≥ 16 (2.2x at n=32)**, exactly where it
 has no correct digits past \f$\kappa = 10^3\f$. That is not a default; it stays reachable
-with `BATCHLAS_GESVD_PROVIDER=cta`. The earlier plan to gate the promotion on
+with `BATCHLAS_GESVD_ROUTE=cta` (measured as `BATCHLAS_GESVD_PROVIDER=cta`, since retired). The earlier plan to gate the promotion on
 "`gesvdj_cta` ≤ `gesvd_cta` in time at every point" (the impl spec's F.6 exit criterion)
 was superseded by this measurement: the deciding axis is accuracy.
 
@@ -192,10 +209,11 @@ Jacobi is 1.5-1.7x slower than Blocked across 33..64: n=33 pays the full \f$C = 
 (The Blocked ortho row predates the `bdsdc` threshold fix below, which brought 0.144 to
 1.1e-4.) Blocked is faster **and** more accurate below \f$\kappa \approx 10^4\f$, so there is
 no regime-free win and the regime is not knowable from the shape. Hence the wide-band rule:
-for real input Jacobi is `preferred()` only at \f$\max(m,n) \le 32\f$, but it stays in
-`supports()` up to 64, so a vendor-free build still serves the band and
-`BATCHLAS_GESVD_PROVIDER=jacobi` still reaches it. Complex general input in the band
-routes to Jacobi automatically, because the alternative is a throw.
+for real input Jacobi heads the tuned row only at \f$\max(m,n) \le 32\f$, but `can_run`
+admits it up to 64 and it stays in the 33..64 rows behind `blocked` and `vendor`, so
+`BATCHLAS_GESVD_ROUTE=jacobi` still reaches it.
+(Under the old router this was `preferred()` against `supports()`.) Complex general input in
+the band runs Jacobi automatically, because the alternative is a throw.
 
 ## gesvd defect A: the normal equations square kappa
 
@@ -523,12 +541,29 @@ Before the split the ORMQR override at 48 moved both and cost gesvd-with-vectors
 same value is a 1.8% win (1136.7 → 1116.9 µs). The split shipped 16 in every bucket, exactly the
 old values, so it changed no behaviour by itself.
 
+The nb curve that justified the split, `gesvd_blocked` n=512, batch=256, float, RTX 4090,
+`gesvd.gebrd` stage timer (2026-08-06):
+
+| nb | 8 | 12 | 16 | 24 | 32 | 48 |
+|---|---|---|---|---|---|---|
+| `gesvd.gebrd` (ms) | 234.9 | 232.1 | **230.7** | 235.5 | 240.9 | 256.6 |
+
+gebrd's optimum at n=512 is 16 and the curve is flat around it (within 2% from 8 to 24); ormqr's
+is steep over the same range, which is why one shared knob could not serve both.
+
 The retune that used it (`924b3a59`, 2026-08-07, float, A/B'd end to end at the consumers) set
 `GEBRD_BLOCK_SIZE_{SMALL,MEDIUM} = 8` (the small sizes want 8, n ≥ 512 wants 16). gesvd
 before → after for the whole retune (which also moved ORMQR, stedc and sy2sb constants, so
 these are not gebrd-only): n=128 batch=1024 9.2465 → 8.0684 ms (1.146x); n=256 batch=512
 94.987 → 92.016 ms (1.032x); n=512 batch=256 with vectors 1143.3 → 1110.3 ms (1.030x). As with
 all tuning in the tree, this was float-only.
+
+The retune's per-case nb winners, at `jobu = jobvh = None` where `gesvd.gebrd` is about 95% of
+the call: n=128: 8, n=256: 8, n=512: 16, n=1024: 16. The axis is worth 3.5-48% depending on n, so
+nb is flat only near n=512, not everywhere. Shipped, by bucket of
+`tuning::gebrd_block_size_for_n` (n ≤ 64 / ≤ 128 / ≤ 256 / ≤ 512 / above):
+`GEBRD_BLOCK_SIZE_{TINY,SMALL,MEDIUM,LARGE,XLARGE}` = 16, 8, 8, 16, 16. The TINY bucket was not
+in the sweep and keeps the pre-split 16.
 
 ## gesvd: the non-finite generator that corrupted the instrument
 

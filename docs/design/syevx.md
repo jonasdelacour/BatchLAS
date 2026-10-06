@@ -433,7 +433,10 @@ Neither Jacobi form is chosen by `Auto`. On the matrices measured, neither is a 
 [the Jacobi preconditioners](../perf/syevx.md#lobpcg-jacobi-preconditioners)), so picking one
 implicitly would be a regression for somebody. `JacobiShifted` in particular is offered because
 the constant-diagonal case is provably a no-op and the general case is safe, not because it was
-found to pay. (Moved from the `SyevxPreconditioner` comment in `include/batchlas/blas/enums.hh`,
+found to pay. The other half of the reason is on the perf page: it is the only Jacobi form legal
+for `find_largest`. Its measured effect there is neutral on random symmetric input (0.85-1.2x
+iterations) and 0.2-0.9x on graded input, against 2.1-7.3x fewer iterations for plain `Jacobi` on
+graded input. (Moved from the `SyevxPreconditioner` comment in `include/batchlas/blas/enums.hh`,
 2026-09-30.)
 
 ### syevx dispatcher: sparse input and an explicit Filtered request

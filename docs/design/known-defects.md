@@ -27,9 +27,10 @@ verified one. Neither is "in the tree today" in the sense the paragraph above me
 **Citing an entry from code.** A heading that starts with a number (`## 11. ...`) gets a Doxygen
 id with an `autotoc_md` prefix, so its GitHub slug is not a live anchor on the site and
 `check_doc_anchors.py` rejects an `evidence:` pointer to it. An entry that code cites therefore
-carries distinctive unnumbered text (`## Defect 11: ...`, `## Known defects: ...`); the other
-numbered headings keep their numbers until something needs to cite them, because pages link to
-them by their current slugs. Line citations below were refreshed on 2026-10-06 where the code
+starts with distinctive text instead (`## Defect 11: ...`, `## Known defects: ...`). Entries 1, 3,
+11, 12 and 14 are cited and carry the `Defect N:` form (renamed 2026-10-06, every pointer updated
+in the same change); the other entries keep their numbered headings until something needs to cite
+them. Line citations below were refreshed on 2026-10-06 where the code
 still exists; citations into deleted files are marked as such.
 
 The superseded root documents these were filed in are preserved at the git tag
@@ -59,7 +60,7 @@ The superseded root documents these were filed in are preserved at the git tag
 | — | `sytrd_cta` / `syev_cta` Lower ([below](#known-defects-the-cta-sytrd-lower-path)) | the CTA SYTRD Lower path was reported wrong; both CTA paths run Upper and mirror Lower input | worked around; not reproduced |
 | — | `linalg::qr` ([below](#linalgqr-returns-a-wrong-qr-after-an-earlier-call-in-the-process)) | the composed QR returns \f$QR \ne A\f$ after an earlier call in the same process | wrapper withheld; cause not located |
 
-## 1. `ortho`'s transposed arm builds a view that does not describe the memory
+## Defect 1: `ortho`'s transposed arm builds a view that does not describe the memory
 
 `src/extensions/ortho.cc:189-191`, inside the CGS lambda (was `:218-224` when filed):
 
@@ -123,7 +124,7 @@ work packages that found it; the fix is to call the public `syev` and let its se
 The workspace query has to move with the call — `syev_vendor_buffer_size_or_throw` throws in the
 same build, so half a fix is no fix.
 
-## 3. `lanczos` issues a two-column multiply and consumes one column
+## Defect 3: `lanczos` issues a two-column multiply and consumes one column
 
 `src/extensions/lanczos.cc:112-117` (was `:107-111` when filed):
 
@@ -512,7 +513,7 @@ for both (the test then passes for all four types), and dropped it because `gemm
 belongs to `gemm`. The epilogue branch needs a gemm timing A/B before it ships. When it lands,
 delete the memset in `geqrf_blocked.cc`; the test stays as the guard.
 
-## 12. Vendor potrf and trsm accept a heterogeneous batch
+## Defect 12: vendor potrf and trsm accept a heterogeneous batch
 
 potrf's `can_run(Vendor)` is `d.has_vendor` with no heterogeneity term (the native families
 carry `!A.is_heterogeneous()`), and `potrf_vendor` (`src/backends/cusolver.cc:72-77`) passes
@@ -549,7 +550,7 @@ into it nor the cuBLASLt log (algo 13, workspace 0 in both) separated the two. R
   `TrsmNativeBlocked.ComplexDoubleSingleRhsTrailingGemm`. getrf_tests passes with it.
 - **gemv open:** `ortho_tests` still crashes in `gemv_vendor` for complex<double>, as on the parent.
 
-## 14. The Hermitian drivers read the unreferenced triangle
+## Defect 14: the Hermitian drivers read the unreferenced triangle
 
 Located during the phase 5 gesvd and syev migrations; the drivers were not changed by either.
 With large finite poison in the triangle the caller did not name:
@@ -624,7 +625,7 @@ unverified.
 **What would settle it.** Pin the Lower reduction (bypass the `uplo_eff` mirror) on graded input
 with complex data and a poisoned upper triangle, compare against the Upper pipeline item by item,
 and either fix the kernel and drop the mirror or record the failure mode here. Note that the
-mirror itself interacts with [defect 14](#14-the-hermitian-drivers-read-the-unreferenced-triangle):
+mirror itself interacts with [defect 14](#defect-14-the-hermitian-drivers-read-the-unreferenced-triangle):
 `syev_cta` with Upper reads the lower triangle.
 
 ## linalg::qr returns a wrong QR after an earlier call in the process
@@ -741,6 +742,17 @@ Whoever confirms or refutes one moves it into the table or into the section abov
   `src/ops/posv/posv.cc`), which by meaning is `invalid_argument` or `unsupported`. Reclassifying
   either is a behaviour change for callers that catch the current type. Full table:
   [kernel selection throws outside the hierarchy](error-model.md#error-model-kernel-selection-throws-outside-the-hierarchy).
+- **`internal/sytrd_blocked.hh` declares a second, undefined `sytrd_blocked` template**
+  (reported by the factorization header pass, confirmed by the eigen review). It takes
+  `Span<std::byte> ws` by value with no default `block_size`
+  (`include/batchlas/internal/sytrd_blocked.hh:46-53`), while `blas/extensions.hh:1059-1066`
+  declares, and `src/extensions/sytrd_blocked.cc:915` defines, the `const Span<std::byte>&`
+  overload with a default. These are two distinct function templates, not a redeclaration, so a
+  translation unit that sees only the internal header and calls it fails at link time. Fix: make
+  the internal declaration match (or drop it). Related header hygiene from the same passes, not
+  defects: `sytrd_band_reduction_single_step` and its `_buffer_size` are declared twice each in
+  `extensions.hh` with identical signatures, and `OrmqCtaFactorization` (`extensions.hh:989`) is
+  referenced by no entry point, test or source file.
 
 ### Known defects: fixed while documenting
 

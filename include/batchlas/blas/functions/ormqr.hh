@@ -112,6 +112,7 @@ BATCHLAS_API Event ormqr(Queue& ctx,
 ///
 /// Makes the same kernel choice and block width as ormqr() from the same inputs, so
 /// the result is valid for a call with the same arguments and @p block_size_hint.
+/// `evidence: docs/perf/qr.md#ormqr-one-route-resolution-for-the-call-and-its-size-query`
 /// @ingroup qr
 template <Backend B, typename T>
 BATCHLAS_API size_t ormqr_buffer_size(Queue& ctx,

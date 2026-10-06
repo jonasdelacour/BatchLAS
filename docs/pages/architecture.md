@@ -38,6 +38,7 @@ rests on a measurement, the page links the evidence in @ref perf_evidence.
 | Page | What it covers |
 | --- | --- |
 | @subpage design_cpu_target_detection "CPU target detection" | How the build decides whether CPU SYCL kernels exist, and which tests depend on it. |
+| @subpage design_build_performance "Build performance" | Header-structure decisions that keep consumer translation units cheap to compile, such as why the umbrella header excludes device code. |
 
 ## Defects and history
 

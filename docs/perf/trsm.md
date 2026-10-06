@@ -26,7 +26,13 @@ Two windows in the exploration notes were never what shipped:
 * the notes record `float && Side::Left -> order <= 16` (step 9), then `order <= 128` (step 12), then `order <= 128 || q*batch < 524288` (step 13). The shipped predicate was unconditional `return true`; step 16 deleted the work threshold.
 * spec §10 proposed one `trsm_use_native()` predicate carrying `batch*q < 8*CU*32 -> vendor`. Nothing like it shipped — see `### rejected-the-starvation-guard`.
 
-The coverage `reached` row keeps the old mapping (`m = B.rows()`, `n = B.cols()`, `k` = the triangular order) and now carries the real backend instead of `AUTO`.
+### The shape builder and the field mapping
+
+Before P3.3 a shape builder, `trsm_op_shape` in `src/backends/trsm_route.hh`, was the only layer allowed to query the device or read the environment, and it filled an `OpShape` that both the route table and the coverage row read. Both files are deleted. Its jobs are now split inside `src/ops/trsm/trsm.cc`, and only device facts reach the decision, through the memoized `select::describe` (`select::Device`):
+
+* **The selection key** is `key_of`: `side` (`L`/`R`), `trans` (`N`/`T`; ConjTrans folds to `T`, the kernels differ only in a conjugation), `order` = `A.rows()`, `q` = the right-hand-side count (`rhs_count`: `B.cols()` for Side::Left, `B.rows()` for Right) and `batch` = `A.batch_size()`. uplo and diag are not keys.
+* **`can_run`** reads the views directly: the heterogeneous-batch term (`A.is_heterogeneous() || B.is_heterogeneous()`, the field the old builder wrote as `s.heterogeneous_batch`), `order >= 1`, `q >= 1`, batch >= 1, and the device facts `is_gpu`, `has_sg32`, `max_wg` and `has_vendor`. It never dereferences `data_ptr()`.
+* **The coverage `reached` row** keeps the old mapping (`m = B.rows()`, `n = B.cols()`, `k` = the triangular order, plus transA, uplo, side and diag) and now carries the real backend instead of `AUTO`, which retires open debt 18.
 
 ### Tuning knobs and environment
 
@@ -98,7 +104,7 @@ All ratios are `vendor_ms / native_ms`; **>1 means native is faster**. RTX 4090,
 
 ### The step-9 grid
 
-The grid is `benchmarks/trsm_benchmark.cc`'s `TrsmOrthoSizes`: n in {8,16,32,64,128,256} x q in {256,1024,4096} x batch in {128,512,2048}, all four types, both sides. **Not** a square RHS — the library never issues one. The two real call sites (`ortho.cc:202`, `:289`) pass a k x k Cholesky factor as A and an m x k basis as B, so the triangular order is small and the other extent large. Coverage capture confirms it against what the suite issues: `n=10 q=256 batch=1` (4880 calls), `n=10 q=20` (4800), `n=12 q=36 batch=3` (2392), `n=5 q=64 batch=3` (3258) — every one `Side::Right, Lower, Trans, NonUnit`, every one inside V1's capacity of 32.
+The grid is `benchmarks/trsm_benchmark.cc`'s `TrsmOrthoSizes`: n in {8,16,32,64,128,256} x q in {256,1024,4096} x batch in {128,512,2048}, all four types, both sides. **Not** a square RHS — the library never issues one. The two real call sites (`ortho.cc:171`, `:260`) pass a k x k Cholesky factor as A and an m x k basis as B, so the triangular order is small and the other extent large. Coverage capture confirms it against what the suite issues: `n=10 q=256 batch=1` (4880 calls), `n=10 q=20` (4800), `n=12 q=36 batch=3` (2392), `n=5 q=64 batch=3` (3258) — every one `Side::Right, Lower, Trans, NonUnit`, every one inside V1's capacity of 32.
 
 **Nine of the spec's 54 cells are dropped**, by a 6 GB cap rather than by the card: recomputed from `trsm_grid_bytes()` the nine ask 6.4-70.9 GB, and only two of them (70.9 and 34.9 GB) actually exceed this box's 24 GB. (Both the benchmark comment and the step-9 README say "do not fit in 24 GB"; the arithmetic says the cap is what drops the other seven.) The grid *prints* every dropped cell; a grid that shrinks quietly reads exactly like one that covered everything. The cap is computed for `complex<double>` and applied to all types so the type columns stay comparable. An earlier draft of the cap table omitted the harness's pristine copy of B and understated every row by ~2x — read the figures off `trsm_grid_bytes()`, do not re-derive them.
 
@@ -192,7 +198,7 @@ cuBLAS barely moves. **Strided is the only case trsm ever issues, so a square-ma
 A kernel win is not a library win: a 2.16x kernel win in this repo once turned into an 11% gesvd loss. Both A/Bs run with the route **unset**, so `preferred()` is what selects.
 
 * **`Side::Right` (step 9)** — `ortho` at m in {1024,4096}, k in {16..256}, batch in {128,512}, Chol2 and ShiftChol3: **80 cells, 80 at or above parity, 1.147x-2.719x**, within 4.4% of the forced-native leg. (The route header rounds the top to 2.69x; the committed CSVs give 2.719x.)
-* **`Side::Left` (step 12)** — `ortho_benchmark` hardcoded `Transpose::NoTrans` and `ortho.cc:205,289` select the trsm side from exactly that flag, so **the whole `Side::Left` half of the table had never been exercised through a real caller**. `arg4` now selects it. Route unset: 80 cells, best 2.385x, worst **0.986x**, 7 cells fractionally below parity (all >= 0.986). Forced native at order 256 loses 0.783x, and the default correctly tracks the vendor there (4.08 ms default vs 4.07 vendor, 4.35 native) — the predicate declining native is visible end to end. *The notes report "80/80 at or above parity, worst 0.99x"; that is a rounding of 0.986.*
+* **`Side::Left` (step 12)** — `ortho_benchmark` hardcoded `Transpose::NoTrans` and `ortho.cc:174` and `:260` select the trsm side from exactly that flag, so **the whole `Side::Left` half of the table had never been exercised through a real caller**. `arg4` now selects it. Route unset: 80 cells, best 2.385x, worst **0.986x**, 7 cells fractionally below parity (all >= 0.986). Forced native at order 256 loses 0.783x, and the default correctly tracks the vendor there (4.08 ms default vs 4.07 vendor, 4.35 native) — the predicate declining native is visible end to end. *The notes report "80/80 at or above parity, worst 0.99x"; that is a rounding of 0.986.*
 
 Neither A/B has been re-run since step 12, and steps 13 and 16 changed V2 for every type.
 
@@ -348,7 +354,7 @@ Suite state at the end of WP3: `trsm_tests` 91/91 vendor-present; vendor-free 59
 
     **Not explained by debt 1.** These CSVs are from 2026-09-14, long after the barrier (2026-08-21), and the cell is `q*batch = 16,384`, below the `~65k` the racing-kernel caveat is about.
 
-18. **`trsm_op_shape` never sets `s.backend`**, so every trsm coverage row reads `Backend::AUTO` and the vendor-free burn-down is unreadable for trsm. `gemv_op_shape` sets it for exactly this reason (see [the GEMV shape builder contract](gemv.md#gemv-the-shape-builder-contract)). The fix is one assignment plus a `Backend` template parameter on the builder; recorded 2026-09-30 from the note that used to sit in `gemv_route.hh`, not re-verified against a coverage dump. *(Resolved by flat selection, P3.3: `trsm_op_shape` is deleted, and `src/ops/trsm/trsm.cc` builds the coverage row itself and carries the real backend instead of `AUTO`; see *Choices (flat selection, P3.3)* above.)*
+18. **`trsm_op_shape` never sets `s.backend`**, so every trsm coverage row reads `Backend::AUTO` and the vendor-free burn-down is unreadable for trsm. `gemv_op_shape` sets it for exactly this reason (see [the GEMV shape builder contract](gemv.md#gemv-the-shape-builder-contract)). The fix is one assignment plus a `Backend` template parameter on the builder; recorded 2026-09-30 from the note that used to sit in `gemv_route.hh`, not re-verified against a coverage dump. *(Resolved by flat selection, P3.3: `trsm_op_shape` is deleted, and `src/ops/trsm/trsm.cc` builds the coverage row itself and carries the real backend instead of `AUTO`; see [The shape builder and the field mapping](#the-shape-builder-and-the-field-mapping).)*
 
 ---
 

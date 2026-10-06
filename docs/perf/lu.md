@@ -6,6 +6,38 @@ Measurement context, unless stated otherwise: 2x RTX 4090 (sm_89, 128 SMs, 97,28
 
 **Naming.** `experiments/wp8_getrf/`, `wp8_getri/` and `wp8_getrs/` are a misnomer: they are the **WP6/WP7 performance-closure pass**, not WP8 (WP8 is sparse `spmm`, in `experiments/sparse_spmm/`). This page calls that work "the closure pass" throughout.
 
+## LU selection since flat kernel selection (phase 5)
+
+getrf, getrs, getri and gesv no longer route through `RouteTable`. `route_getrf.hh`, `route_getrs.hh`,
+`route_getri.hh`, `route_gesv.hh`, `route_resolve.hh` and the `supports()` / `preferred()` /
+`native_tier_preferred()` predicates quoted below (including every
+`include/batchlas/blas/dispatch/route_*.hh:<line>` block) are **deleted**. The sections that quote them
+are kept as the measurement record that produced the old windows, not as a description of the code.
+What runs is decided per op in `src/ops/<op>/` (docs/design/flat-kernel-selection.md §4):
+
+* **candidates** (`choice.hh`): getrf `tiny`, `cta`, `blocked`, `vendor`; getrs `cta` (the fused
+  narrow-RHS kernel), `blocked`, `vendor`; getri `blocked`, `vendor`; gesv `tiny`, `blocked`;
+* **correctness** is one `can_run` per op in `src/ops/<op>/<op>.cc`, and it is the only gate. Every
+  native kernel family (gesv's `blocked` is a composition of the public getrf and getrs, which choose for
+  themselves) needs a GPU queue, sub-group 32 and `B != NETLIB` (GPU backends pack 1-based int32 pivots, netlib
+  writes int64; see [LU: correctness findings](#lu-correctness-findings)), plus the tier's own
+  capacity, asked of the runtime local-memory budget;
+* **speed** is the first runnable entry of the nearest row of `tuned/<op>.<dtype>.<device>.txt`, keyed on
+  getrf and getri `n:log:3 batch:log`, getrs `n:log:2 nrhs:log batch:log`, gesv `n:log:3 nrhs:log`. The
+  sm_89 rows are the old routers' preference order transcribed cell by cell (untimed,
+  `source=transcribed`), so the windows on this page still decide Auto there, as table rows;
+* **sub-op seams**: the blocked drivers call the public `gemm` and `trsm`, which pick their own kernels;
+  the injected `std::function` seam described under "Route arms" is now mandatory, not a default;
+* **pins**: `BATCHLAS_<OP>_ROUTE=<choice>` names a candidate, and a pin `can_run` refuses throws
+  `invalid_argument` (R6). The silent "a refused pin becomes the other arm" behaviour recorded under
+  [LU: negative results](#lu-negative-results) was the route layer's.
+
+Per-op detail, grids and gate results:
+[getrf](../design/flat-kernel-selection.md#phase-5-getrf),
+[getrs](../design/flat-kernel-selection.md#phase-5-getrs),
+[getri](../design/flat-kernel-selection.md#phase-5-getri) and
+[gesv](../design/flat-kernel-selection.md#phase-5-gesv) in flat-kernel-selection.md.
+
 ## What ships
 
 ### Route arms
@@ -22,7 +54,7 @@ Capacities are asked of the **runtime** local-memory budget, never of `device_li
 
 ### The shipped `preferred()` windows
 
-Four windows ship. Each is native-vs-**vendor**. `supports()` carries no speed term anywhere: a forced route bypasses `preferred()` but never `supports()`, so a speed gate there would make a pinned route fall through to cuBLAS and pass green over a kernel nothing executed.
+*Route-era record: the predicates below are deleted, and the same windows are now rows of `tuned/get??.*.sm_89.txt` ([LU selection since flat kernel selection](#lu-selection-since-flat-kernel-selection-phase-5)).* Four windows shipped. Each is native-vs-**vendor**. `supports()` carries no speed term anywhere: a forced route bypasses `preferred()` but never `supports()`, so a speed gate there would make a pinned route fall through to cuBLAS and pass green over a kernel nothing executed.
 
 `include/batchlas/blas/dispatch/route_getrf.hh:67-74`:
 

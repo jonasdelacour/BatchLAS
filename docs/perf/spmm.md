@@ -1,11 +1,31 @@
 # SPMM: the native batched CSR kernel and the three vendor defects it found (WP8)
 
 Batched CSR `spmm` had no native kernel, no route table and no measurement in this repository before WP8. It now has one native
-route with three kernel bodies, a `preferred()` window that takes the `transA == NoTrans` gather away from cuSPARSE in **every**
+route with three kernel bodies, a routing window (since flat selection, the `tuned/spmm.*` tables) that takes the `transA == NoTrans` gather away from cuSPARSE in **every**
 build, and a measured refusal for the transposed arm. Hardware for every number below: one RTX 4090 (device 1, 128 SMs, 72 MB L2,
 1008 GB/s DRAM roof), CUDA backend, SYCL in-order queue.
 
 ## What ships
+
+### SpMM: choices (flat selection, phase 5)
+
+`route_spmm.hh`, its `RouteTable` and the `SpmmShape` builder are deleted ([flat-kernel-selection.md, Phase 5,
+spmm](../design/flat-kernel-selection.md#phase-5-spmm)). spmm now decides in `src/ops/spmm/spmm.cc` over the two families of
+`src/ops/spmm/choice.hh`, in tie-break order:
+
+| spelling | implementation | `can_run` (correctness only) |
+|---|---|---|
+| `direct` | `sycl_spmm::spmm_native_csr` (the three bodies below; the body, column block and pair load are derived inside) | CSR, the body for this `transA` compiled, `one_spmm()` (the old builder's extent, batch, `ld` and offset-stride checks), no heterogeneous B or C, batch >= 1; no GPU gate |
+| `vendor` | `backend::spmm_vendor` (cuSPARSE, rocSPARSE, netlib) | a sparse vendor library, minus three known-bad shapes: netlib with any transpose, and on CUDA complex `transB = ConjTrans` with one row of B or `complex<double>` N/N with one column (known-defects #13) |
+
+Which one runs is the first runnable entry of the nearest row of `tuned/spmm.<dtype>.<device>.txt`, keyed
+`transA:exact transB:exact m:log nrhs:log batch:log` (ConjTrans folds to `T`; no `nnz` key, for the reason given under
+`supports()` below). The last resort is `vendor`, then `direct`. The sm_89, sm_120 and `cpu` tables are the old router
+transcribed: `direct | vendor` for `transA = N` (complex<float> only at `transB = N`), `vendor | direct` otherwise, constant
+across the size axes. That is the `preferred()` window below, now data. `BATCHLAS_SPMM_ROUTE` takes `auto`, `native`, `vendor`
+or a spelling (`direct`); the old `native:direct` form and a misspelling now throw instead of silently meaning Auto. The
+sections below describe the deleted router and remain the evidence for the window; their `route_spmm.hh` / `route_env.hh`
+line citations are to the parent tree.
 
 ### Route arms
 

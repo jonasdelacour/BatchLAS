@@ -422,8 +422,7 @@ is serial by construction and needs no `-j`.
 `tests/README.md` has the scoping table (`ctest -R '^name$'` for one binary,
 `ctest -L <component>` for a subsystem, `ctest -LE slow` for a broad-but-quick
 pass). Current measured counts on this tree: full `ctest` is **70 tests**;
-`ctest -LE slow` is **65 tests in about 95 s**. (`tests/README.md`'s table
-quotes an older 38-of-45; the counts here are the measured current ones.)
+`ctest -LE slow` is **65 tests in about 95 s**.
 
 Two scoping choices are wrong for a pre-push gate, however convenient:
 

@@ -68,7 +68,8 @@ using gesvd_buffer_size_hermitian = size_t(Queue&, const MatrixView<T, MatrixFor
  * (`tuned/gesvd.<dtype>.<device>.txt`) that can run the call: `jacobi` (one-sided
  * Jacobi, max(m, n) <= 64, or 32 for `complex<double>` with vectors), `cta`
  * (max(m, n) <= 32; no `Thin` request that canonicalisation leaves thin),
- * `blocked` (bidiagonalisation; real input), or
+ * `blocked` (bidiagonalisation for real input; square Hermitian `Lower` input of
+ * any type runs syev_blocked()), or
  * `vendor`, the solver library. Complex general input therefore runs `jacobi` or
  * `vendor`. Pin a family with `BATCHLAS_GESVD_ROUTE`
  * (e.g. `jacobi`, `vendor`). Asynchronous: returns once the work is enqueued.

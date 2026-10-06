@@ -5,7 +5,8 @@
 `gesvdj_cta` kernel: the lane mapping, the local-memory budget, the reduce-scatter trap, the
 scaling rule, the extraction and completion rules, and the traps recorded while building it.
 **Status:** current. Each rule below was re-checked against `src/extensions/gesvdj_cta.cc`,
-`src/extensions/bdsdc.cc` and `include/batchlas/blas/dispatch/route_gesvd.hh` in this tree;
+`src/extensions/bdsdc.cc` and the flat-selection op `src/ops/gesvd/` in this tree (the
+`RouteTable` router some sections name as history was deleted);
 where the shipped kernel departs from the reviewed design the section says so.
 **Sources:** the root `GESVD_PLAN.md` (design sections 4.x) and `GESVD_IMPL_SPEC.md`
 (Parts C and D). The impl spec was pinned to the since-merged `gesvd-batched-plan` worktree
@@ -191,8 +192,9 @@ Recomputed per problem with V resident (plus the work-group-fixed pair table):
 
 Values-only drops one `kTileElems * sizeof(T)` term. The device reports 101,376 B
 (`8bb04f2`; the design assumed 49,152), so `complex<double>` with vectors does not launch at
-C=64 and is capped at 32 (`gesvdj_cta_max_dim`, mirrored in `gesvd_jacobi_max_dim` in
-`route_gesvd.hh`; the two must agree). The others fall to 2 or 1 work-groups per SM against
+C=64 and is capped at 32 (`gesvd_jacobi_max_dim` in `src/extensions/gesvd_native.hh`, read
+both by the kernel's own guard `gesvdj_cta_max_dim` and by `can_run` in
+`src/ops/gesvd/gesvd.cc`, so the two cannot disagree). The others fall to 2 or 1 work-groups per SM against
 10 at C=32; occupancy, not the hard cap, is the binding constraint.
 
 Departures from the reviewed spec, all deliberate:
@@ -446,7 +448,10 @@ side.** With \f$k = \min(m, n)\f$, for \f$m \le n\f$ a thin U (m x k) is exactly
 for \f$m \ge n\f$ a thin \f$V^H\f$ is exactly the full \f$V^H\f$; square input has Thin == All on
 both sides. Entry points therefore canonicalise Thin to All whenever the shapes coincide
 (`canonical_jobu` / `canonical_jobvh`), and only the genuinely thinner side has to be handled,
-or rejected, by any given route.
+or rejected, by any given route. **Trap:** a `*_buffer_size` and its run path must canonicalise
+identically, or the workspace is sized for a different computation than the one performed. Today
+the canonicalisation happens in the op's entry (`src/ops/gesvd/gesvd.cc`), in the netlib binding
+and at each `gesvd_blocked` entry, run and size alike.
 
 LAPACK's 'O' (overwrite A with one of the factors) is deliberately absent. Add it as a further
 enumerator if it is ever wanted: appending keeps the existing ordinals stable for the
@@ -459,18 +464,24 @@ benchmarks that pass jobs as ints.
   partially specialised on `Backend B`, so a throwing definition in the header made a
   `cusolver.cc` definition a redefinition error. This is the house idiom (`syev_vendor`,
   `ormqr_vendor`).
-- **Explicit dispatch branch per route.** The tail of `gesvd_dispatch` is an unguarded
-  `return gesvd_blocked(...)`, so a route without its own branch silently runs the blocked
-  path under another label.
-- **A forced route that `supports()` rejects falls back to Auto with no diagnostic**
-  (`resolve_route`). Forcing `jacobi` on a 128x128 real matrix runs `blocked`; any test or
-  benchmark that forces a route must verify the route taken.
+- **One branch per family, checked by the compiler.** `launch` and `workspace` in
+  `src/ops/gesvd/gesvd.cc` are `std::visit`s over `GesvdChoice`, so a family without its own
+  branch does not compile. (Historical: the old `gesvd_dispatch` ended in an unguarded
+  `return gesvd_blocked(...)`, so a route without its own branch silently ran the blocked path
+  under another label.)
+- **A pin that `can_run` refuses throws.** `BATCHLAS_GESVD_ROUTE=jacobi` on a 128x128 real
+  matrix raises `std::invalid_argument` (`src/select/select.hh`); only the words `native` and
+  `vendor` fall back to the tuned choice, with a warning. (Historical: under the `RouteTable`
+  router a forced route that `supports()` rejected fell back to Auto with no diagnostic, so
+  forcing `jacobi` at 128x128 ran `blocked`.)
 - **The spec's ordering policy is superseded.** It put Jacobi *after* CTA until measured
-  faster in time at every point; `da920c3` promoted it first on the accuracy evidence, and the
-  `Provider` enum it extended was later replaced by `RouteTable<Op::gesvd, T>`
-  ([evidence](../perf/gesvd.md#gesvd-promoting-jacobi-to-the-default-at-n-up-to-32)).
-  The wide-band rule for 33..64 is in `preferred()`, not `supports()`, so it cannot make the
-  band unservable vendor-free.
+  faster in time at every point; `da920c3` promoted it first on the accuracy evidence
+  ([evidence](../perf/gesvd.md#gesvd-promoting-jacobi-to-the-default-at-n-up-to-32)). The
+  `Provider` enum it extended became `RouteTable<Op::gesvd, T>` and then the flat
+  `GesvdChoice`; the order now lives in the rows of `tuned/gesvd.<dtype>.<arch>.txt`. The
+  wide-band rule for 33..64 is a row order, not a `can_run` limit: Jacobi stays admissible to
+  64, so a pin still reaches the band
+  ([evidence](../perf/gesvd.md#gesvd-what-routes-today)).
 
 ## gesvd design: test and benchmark traps
 
@@ -484,7 +495,8 @@ Recorded by the impl spec while wiring the tests and benchmarks; each one fails 
   device kernels that race with those host writes on the same USM memory.
 - **A test that goes through `gesvd` must assert the route taken**, on an observable only the
   intended path produces (for example \f$\|U^H U - I\|\f$ at \f$\kappa = 10^5\f$, which the
-  normal-equations path cannot meet), because a forced route degrades silently.
+  normal-equations path cannot meet). A refused pin now throws, but an unpinned call follows
+  the tuned row, and a retune can move a shape to another family without any test noticing.
 - **Benchmarks wrap A in `bench::pristine`:** structured-mode setup runs once and gesvd
   destroys A, so otherwise every iteration after the first measures a different problem.
   Compute the workspace size before `SetKernel`, which moves from its arguments.

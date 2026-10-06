@@ -281,7 +281,7 @@ The tier plan is in @ref design_syevx. Every tier except Tier 5 exists.
 
 - `SyevxAlgorithm {Auto, Direct, DirectSubset, Filtered, LOBPCG}` on `SyevxParams::method`, with
   the `BATCHLAS_SYEVX_ALGORITHM` override. The environment **wins** over `params.method`
-  (matching `BATCHLAS_SYEV_PROVIDER`), so a whole application can be forced onto one algorithm.
+  (as `BATCHLAS_SYEV_ROUTE` does for syev; at the time, the since-retired `BATCHLAS_SYEV_PROVIDER`), so a whole application can be forced onto one algorithm.
   Tests that pin an algorithm skip under a conflicting override instead of failing, which keeps
   "run the suite under every algorithm" sweeps meaningful.
 - `syevx_select_algorithm` is deterministic in its inputs, so `syevx` and `syevx_buffer_size`

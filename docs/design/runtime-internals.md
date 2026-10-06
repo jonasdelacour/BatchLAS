@@ -495,7 +495,7 @@ intended spelling. Deliberately **not** checked:
 - `stride_ >= ld_ * cols`, which the `Matrix` constructor does check. Two live call sites violate
   it: `src/extensions/ortho.cc`'s transposed CGS view `(A.data_ptr(), i, m, m, A.stride(), batch)`
   (A is `k x m`, `k <= m`, so `A.stride()` is `k*m` against `m*m`; see
-  [known defect 1](known-defects.md#1-orthos-transposed-arm-builds-a-view-that-does-not-describe-the-memory))
+  [known defect 1](known-defects.md#defect-1-orthos-transposed-arm-builds-a-view-that-does-not-describe-the-memory))
   and `syevx_lobpcg`'s workspace-sizing dummy `(p, 3*bv, 3*bv, 3*bv, 3*bv*bv, batch)`. A throw here
   would take out `ortho` and `syevx_lobpcg_buffer_size`, and the check adds nothing against the
   trap: for `V(p, n, n, batch)` the resolved stride equals `ld * cols` exactly.

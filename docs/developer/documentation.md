@@ -116,7 +116,10 @@ Two checks guard it:
   site becomes `results-1`), while GitHub numbers per page, so a cited heading
   that is unique on its page but not on the site would work on GitHub and
   break on the site. Give any heading that code will cite distinctive text:
-  `syevx: the bisection crossover`, not `Results`.
+  `syevx: the bisection crossover`, not `Results`. Do not start a cited heading
+  with a number either: Doxygen gives `## 11. Foo` an `autotoc_md`-prefixed id,
+  so its GitHub slug is not live on the site (the known-defects page uses
+  `## Defect 11: ...` for this reason).
 - `docs/tools/check_doc_anchors.py`, run by `build_docs.sh`, proves the other
   half end to end: for every cited anchor it looks in Doxygen's XML output for
   the section id Doxygen actually generated.
@@ -173,6 +176,56 @@ that mixes a doc comment and a plain one counts. The same doc comments in
 publish those. The exemption is for the contract only: rationale, measurements
 and design history written with `///` are still rationale, and review rejects
 them. Move them to `docs/` and leave a pointer.
+
+### Documenting an op's choices
+
+`src/ops/<op>/choice.hh` is the op's selection vocabulary (see @ref selection and
+@ref design_flat_selection). It is on the site (the Doxyfile lists `src/ops` in `INPUT`, and
+`FILE_PATTERNS` matches no `.cc`), but it lives in `src/`, so its doc comments count toward the
+18% density ceiling. The pattern below keeps the whole vocabulary documented in about four
+comment lines, because it puts almost everything in trailing `///<` comments, which the counter
+scores as code. Every `choice.hh` follows it, so a new op copies the pattern and needs no page
+edits: the `selection_ops` group lists whatever files add themselves to it.
+
+1. **File block, two lines.** `/// @file`, then
+   `/// @brief <op>: <family>, <family>, .... evidence: docs/perf/<page>.md @ingroup selection_ops`.
+   The brief names the families in candidate order (the group page lists it), the evidence
+   pointer names the op's `docs/perf/` page, and `@ingroup selection_ops` puts the file in the
+   group. Keep the line within 120 columns; drop the anchor before dropping the group.
+2. **Each field-less family**: one trailing `///<` on its `struct X : select::NoFields<"x"> {};`
+   line: the driver it runs, then its `can_run` limits beyond the op's common native term
+   (`n <= 32`, `Lower only`, `needs the solver library`).
+3. **A family with fields** (gemm's `reg`/`wide`, potrf's `lpanel`): a preceding `///` block (a
+   trailing `///<` on `struct X {` documents the first member, not the struct) giving the
+   driver, what each field means and which values are legal. A field declared alone gets its
+   own `///<`; on a multi-name declaration (`int m, n, k;`) only the last name would get it, so
+   describe them in the struct block.
+4. **The choice variant**: a trailing `///<` with the common native term (`GPU, sub-group 32,
+   square, no NETLIB`) or, for an op with no vendor family, that a `vendor` pin warns and runs
+   Auto.
+5. **`candidates<T>()`**: `template <class T>  /// Every compiled choice, in tie-break order (§6.3).`
+   A `///` after code on the `template` line attaches to the function and counts as code. A
+   preceding `///` line (potrf, geqrf, gemm) is equivalent for Doxygen and costs one comment line.
+6. **`spec`, `last_resort`, `key_names`, `grid_*`**: a trailing `///<` (on the first or the last
+   line of a multi-line initialiser; both attach), or a short preceding `///` block where the
+   file has the budget. Key comments say what each key measures and why its `:log` weight is
+   what it is (work \f$\sim n^3\f$ means weight 3); grid comments say which old thresholds the
+   grid straddles and that the transcriber (`tuned/README.md`) spells the same grid.
+7. **Section numbers** `§x.y` and rule ids `R1`-`R8` refer to
+   `docs/design/flat-kernel-selection.md`. Cite a section by number with a page-only pointer,
+   `evidence: docs/design/flat-kernel-selection.md (§5.4)`: its numbered headings get
+   `autotoc_md` ids on the site, so a `#54-...` anchor is not live. Cite any other anchor in a
+   plain comment, or wrapped in backticks inside a `///` comment: Doxygen reads `#anchor` in a
+   doc comment as an explicit link request and warns, while the checker's pattern stops at the
+   backtick, so a backticked pointer is still checked.
+8. **Helpers next to the vocabulary** (`can_run.hh`, `vendor.hh`, sizing helpers such as
+   `geqrf.hh`) get the same two-line file block, or a function doc ending in
+   `@ingroup selection_ops`.
+9. **`<op>.cc` is not on the site.** Its comments stay plain: a 2-4 line header (the op, R1,
+   which family runs which driver), `// Correctness only (R3)` above `can_run` naming what each
+   clause guards, `// Exactly the chosen family's need (R5)` above the workspace visitor, and
+   invariants at the line they guard. Measurements and history go to the op's `docs/perf/`
+   page.
 
 ## Adding results
 

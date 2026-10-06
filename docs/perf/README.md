@@ -27,6 +27,10 @@ conservative. Most of the obvious moves in here have already been made and measu
 | [syev.md](syev.md) | `syev` (tiers: Jacobi CTA, fused CTA, blocked, two-stage; vendor) | **yes** — native small-n and blocked windows per type; see its routing sections |
 | [syevx.md](syevx.md) | `syevx` (selected eigenpairs: Direct, DirectSubset, Filtered, LOBPCG, stebz/stein) | n/a — no vendor arm for the selected-range solve; records the tier crossovers |
 | [stedc.md](stedc.md) | `stedc` (divide and conquer, merge kernels) | n/a — no vendor arm; records the merge profile and tuning |
+| [sytrd.md](sytrd.md) | `sytrd_blocked` + `latrd`, `sytrd_sy2sb`, `sytrd_sb2st_hh` and its Q2 back-transform | n/a — internal reductions under `syev`, no vendor arm of their own |
+| [ortho.md](ortho.md) | `ortho` (the Gram product and the algorithm rules) | n/a — no table of its own; the Gram product goes through `syrk` (real, small `k`) or `gemm`, and host devices force Householder |
+| [iluk.md](iluk.md) | `iluk` (ILU(k) numeric phase and apply) | n/a — no vendor arm; host vs device numeric path chosen on batch size inside `src/extensions/iluk.cc` |
+| [tuning.md](tuning.md) | the `tuning_params.hh` constants and `BATCHLAS_TUNE_*` overrides | n/a — kernel parameters, not a routing choice |
 | [gesvd.md](gesvd.md) | `gesvd` | **yes** — `native:jacobi` for real max(m,n) <= 32 and all complex general input, `native:blocked` above, `native:cta` for Hermitian input |
 
 ## Two rules these pages are written to

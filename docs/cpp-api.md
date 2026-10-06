@@ -224,7 +224,8 @@ Queue cpu("cpu");                                   // "cpu", "gpu", "accelerato
 ```
 
 `get_devices` returns the devices in the runtime's order; the string constructor
-takes the first of a type and throws `std::runtime_error` when there is none.
+takes the first of a type, throws `batchlas::device_error` when there is none, and
+throws `batchlas::invalid_argument` for a string other than the three above.
 `get_name()`, `get_vendor()` and `get_property(DeviceProperty::GLOBAL_MEM_SIZE)`
 describe one.
 
@@ -1071,8 +1072,12 @@ hierarchy: a
 `BATCHLAS_<OP>_ROUTE` value that does not parse, names a family not compiled for
 the scalar type, or cannot run the shape throws `std::invalid_argument`; a
 malformed table in `BATCHLAS_TUNED_DIR`, or a call no family can run in a build
-that has the op's vendor library, throws `std::runtime_error`. A
-`catch (const batchlas::exception&)` does not see either.
+that has the op's vendor library, throws `std::runtime_error`. `NoRouteError`
+(the table above) derives from `std::runtime_error` only. A
+`catch (const batchlas::exception&)` sees none of the three. Reclassifying them
+would change what existing handlers catch, so it is recorded as an open item
+rather than done: see
+[kernel selection throws outside the hierarchy](design/error-model.md#error-model-kernel-selection-throws-outside-the-hierarchy).
 
 A boundary that must let nothing escape therefore still needs a
 `catch (const std::exception&)` behind the BatchLAS one. Every message names the
@@ -1221,7 +1226,7 @@ unsynchronised workspace arena and a cached "last event", and the operations tha
 mutate either — `workspace()`, `trim_workspace()`, submissions, `enqueue()`,
 `get_event()`, `create_event_after_external_work()` — compare
 `std::this_thread::get_id()` against the thread that constructed the `Queue` and
-throw `std::runtime_error` if they differ.
+throw `batchlas::api_misuse` (a `std::runtime_error`) if they differ.
 
 Queues built for the same `Device` share a SYCL context, so per-thread queues
 still see each other's USM allocations — what is per-thread is the arena and the
@@ -1247,13 +1252,14 @@ Backend b = ctx.backend();                              // the resolved backend
 the cache. On a **GPU** it takes the vendor's own stack if that backend was
 compiled in — NVIDIA → CUDA, AMD → ROCM, Intel → MKL — and otherwise falls back
 to NETLIB, as every non-GPU device does. `set_backend` throws
-`std::runtime_error` if the *named* backend is not compiled into this build; an
-`AUTO` queue throws only when no compiled backend can serve its device at all.
+`batchlas::unsupported` (a `std::runtime_error`) if the *named* backend is not
+compiled into this build; an `AUTO` queue throws the same type only when no
+compiled backend can serve its device at all.
 
 The backends to name are `CUDA`, `ROCM`, `MKL` and `NETLIB`, plus `AUTO`.
 `Backend::MAGMA` and `Backend::SYCL` are unavailable on every build:
 `Queue::backend_available` reports `false`, and naming either in `set_backend`
-or in a `Queue` constructor throws `std::runtime_error`.
+or in a `Queue` constructor throws `batchlas::unsupported`.
 
 To check first:
 
@@ -1365,7 +1371,7 @@ batchlas::configure(s);                     // before the first Queue
 ```
 
 **`configure()` is only permitted until the first `Queue` is constructed.** After
-that it throws `std::runtime_error` and changes nothing. The deadline is not
+that it throws `batchlas::api_misuse` (a `std::runtime_error`) and changes nothing. The deadline is not
 bureaucracy: a pin changed halfway through a run makes two calls in one process
 disagree about which kernel they used — and several of these knobs are read by a
 `*_buffer_size()` query as well as by the matching solve, some of them changing the

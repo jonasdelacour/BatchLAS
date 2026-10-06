@@ -14,7 +14,7 @@
 /// `cudaMallocManaged` wrap zero-copy in a Span or MatrixView, provided they are reachable from
 /// the Queue's context. Everything here is single-threaded in the same sense as Queue.
 /// @ingroup core
-// Kept out of the umbrella for compile time: see the note at the top of blas/linalg.hh.
+// Kept out of the umbrella for compile time. evidence: docs/design/build-performance.md#build-performance-the-umbrella-header-excludes-device-code
 #include <batchlas/export.hh>
 #include <sycl/sycl.hpp>
 

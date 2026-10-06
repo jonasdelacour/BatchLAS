@@ -111,11 +111,8 @@ inline void trsm_validate_params(
         }
 }
 
-// alpha sits in position 4, immediately after the matrices, to match trmm (see
-// functions/trmm.hh). It used to come last here, so the two triangular routines
-// disagreed on where the scalar went and only one of them could be written from
-// memory; the deleted overloads below turn the old spelling into a diagnostic
-// rather than leaving it to be rediscovered.
+// alpha sits right after the matrices, as in trmm; it used to come last.
+// evidence: docs/cpp-api.md#trsm-alpha-moved-next-to-the-matrices
 /// @brief Batched triangular solve with multiple right-hand sides, in place.
 ///
 /// For every batch item solves
@@ -159,12 +156,8 @@ BATCHLAS_API Event trsm(Queue& ctx,
                         Transpose transA,
                         Diag diag);
 
-// Tombstones for the pre-reorder argument order. Side/Uplo/Transpose/Diag are
-// all enum class, so nothing implicitly converts to or from T and a stale call
-// could never have silently compiled into a wrong answer -- but without these
-// the error would be "no matching function", which does not say what changed.
-// Both spellings need one: deleting only the MatrixView overload would leave a
-// Matrix-argument call binding to the new order with alpha where side belongs.
+// Tombstones for the old order; both spellings need one.
+// evidence: docs/cpp-api.md#trsm-alpha-moved-next-to-the-matrices
 /// @brief Deleted: the old argument order with `alpha` last. Pass `alpha` right
 /// after `B`.
 /// @ingroup blas3

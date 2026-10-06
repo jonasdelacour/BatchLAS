@@ -51,7 +51,7 @@ Invariants that the code keeps next to the call:
 - `svqb_alg` keeps its GEMM. It scales the whole `k x k` before `syev`, so a one-triangle `C` would
   multiply uninitialised workspace.
 - The gate is "`syrk` reaches the Gram tile kernel on this route"
-  (`dispatch::level3_tile_route_available`), not "this is NVIDIA".
+  (`select::level3_tile_route_available`, `src/select/vendor.hh`), not "this is NVIDIA".
 - `BATCHLAS_ORTHO_GRAM=gemm` pins the GEMM, so the substitution stays measurable from one binary
   rather than needing a build of the parent commit.
 
@@ -75,6 +75,6 @@ Householder, whatever it asks for. The LOBPCG soft-locking A/B hit exactly this 
 ## ortho: open debts
 
 - **The transposed CGS arm** builds a view that does not describe the memory; see
-  [known defect 1](../design/known-defects.md#1-orthos-transposed-arm-builds-a-view-that-does-not-describe-the-memory).
+  [known defect 1](../design/known-defects.md#defect-1-orthos-transposed-arm-builds-a-view-that-does-not-describe-the-memory).
 - **No date or raw file** is recorded for the per-precision table above; a re-measure should
   record both (see @ref documentation_conventions).

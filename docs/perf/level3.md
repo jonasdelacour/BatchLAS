@@ -504,10 +504,12 @@ The winning column is `k >= 512` and square-ish; `ortho`'s callers (`syevx_lobpc
 `syevx_filtered`, `lanczos`) all pass `k` = a block size in the tens. **This is what motivated
 `syrk_gram_tiles`**, after which the substitution was re-measured and taken: at k = 32, float
 1.450 -> **0.895** ms (1.62x) and ShiftChol3 1.998 -> **1.298** (1.54x), m = 1024 batch 512.
-`gram_max_k` is 64 for float and 128 for double (`ortho.cc:176`) because of one losing cell: float
+`gram_max_k` is 64 for float and 128 for double (`src/extensions/ortho.cc:143`) because of one losing cell: float
 k=128 is 8.813 -> 9.156 (**0.96x**), double k=128 is 57.39 -> **42.94** (1.34x). `svqb_alg` keeps
 its GEMM: it scales the whole k x k before `syev`, so a one-triangle result would multiply
-uninitialised workspace.
+uninitialised workspace. The full k x precision table (float 1.62/1.12/0.96x, double
+1.02/1.20/1.34x at k = 32/64/128) is on @ref perf_ortho, under
+[the Gram matrix through syrk, per precision](ortho.md#ortho-the-gram-matrix-through-syrk-per-precision).
 
 ### herk on the gram tile kernel
 

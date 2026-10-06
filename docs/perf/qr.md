@@ -4,9 +4,44 @@ Native SYCL `geqrf` (two tiers) and `orgqr` (one tier), the `ormqr` they are bui
 
 All timings: GPU 1 of a 2x RTX 4090 box (sm_89, 128 SMs), `CUDA_VISIBLE_DEVICES=1`, `WARM_S=1.5`, medians of interleaved A/B, cells with relative sd > 10% discarded, nothing timed under `BATCHLAS_KERNEL_TRACE`. "Vendor-free" always means the **build** (`-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF`), never an env var inside a build that still links cuSOLVER: `route_resolve.hh:76-80` falls through to `automatic()` when a forced route is unsupported and `automatic()` returns `{Vendor, Auto}` (:129), so a forced-route A/B inside one build can silently be vendor-vs-vendor. `local_mem_size` here is 101,376 B; every capacity below derives from that minus the standard 4,096 B reserve, i.e. a 97,280 B budget. The generated `device_limits.hh`'s 49,152 is hardcoded for any `nvidia_gpu_sm_*` architecture with no device query at all (`cmake/BatchLASDetectSYCL.cmake:44-45`) and is 2.06x wrong on this box; nothing in this family reads it — `geqrf_cta.cc:33`'s `kGeqrfReferenceSlmBudget = 97280` answers only the "at this repository's reference budget" convenience overloads, and every real decision reads the device through `geqrf_route.hh:51-53`.
 
+## QR selection since flat kernel selection (phase 5)
+
+geqrf, orgqr and ormqr no longer route through `RouteTable`. `route_geqrf.hh`, `route_orgqr.hh`,
+`route_ormqr.hh`, `route_resolve.hh`, the shape builders and the `supports()` / `preferred()` /
+`native_tier_preferred()` predicates that the sections below quote are **deleted**. Those sections are
+kept as the measurement record that produced the old windows, not as a description of the code; a
+`route_*.hh:<line>` citation below names a file that no longer exists. What runs is decided per op in
+`src/ops/<op>/` (docs/design/flat-kernel-selection.md §4):
+
+* **candidates** (`choice.hh`): geqrf `tiny`, `cta`, `blocked`, `vendor`; orgqr `blocked`, `vendor`;
+  ormqr `blocked`, `vendor`;
+* **correctness** is one `can_run` per op, and it is the only gate. geqrf's (`src/ops/geqrf/can_run.hh`)
+  admits a native family only on a GPU with sub-group 32, a homogeneous batch and `m >= n`, plus the
+  tier's own capacity (`geqrf_tiny_max_n_for_slm`, `geqrf_cta_fits`, a CTA panel leaf for `blocked`);
+  orgqr's admits `blocked` on a GPU, homogeneous, `n <= m`; ormqr's is quoted in
+  [ormqr: one route resolution for the call and its size query](#ormqr-one-route-resolution-for-the-call-and-its-size-query);
+* **speed** is the first runnable entry of the nearest row of `tuned/<op>.<dtype>.<device>.txt`, keyed on
+  geqrf `form:exact n:log:3 aspect:log`, orgqr `m:log n:log:2`, ormqr
+  `side:exact trans:exact m:log k:log q:log batch:log`. The sm_89 rows are the old routers' preference
+  order transcribed cell by cell (untimed, `source=transcribed`), so the windows below (the geqrf order
+  floor and tall clause, the CTA/blocked crossover at float 96 / double 48, orgqr's 512 ceiling) still
+  decide Auto there, now as table rows rather than predicates;
+* **pins**: `BATCHLAS_<OP>_ROUTE=<choice>` names a candidate; a pin `can_run` refuses throws
+  `invalid_argument` (R6) instead of falling through to the vendor, so the "a forced route inside a vendor
+  build can silently be vendor-vs-vendor" caveat in the preamble no longer applies. The vendor-free build
+  is still the only way to measure what a vendor-free user gets.
+
+Per-op detail, the transcription grids and the gate results are in
+[flat-kernel-selection.md, Phase 5, geqrf](../design/flat-kernel-selection.md#phase-5-geqrf),
+[orgqr](../design/flat-kernel-selection.md#phase-5-orgqr) and
+[ormqr](../design/flat-kernel-selection.md#phase-5-ormqr).
+
 ## What ships
 
 ### QR: route arms
+
+The geqrf row is the route-era table it was measured against; the same windows are now rows of
+`tuned/geqrf.*.sm_89.txt` (see [QR selection since flat kernel selection](#qr-selection-since-flat-kernel-selection-phase-5)).
 
 | op | arms, in `order` sequence | `preferred()` |
 |---|---|---|
@@ -14,7 +49,7 @@ All timings: GPU 1 of a 2x RTX 4090 box (sm_89, 128 SMs), `CUDA_VISIBLE_DEVICES=
 | `orgqr` | `blocked`, `vendor` (`src/ops/orgqr/choice.hh`; flat selection since phase 5) | no `preferred()` any more: `tuned/orgqr.*.{sm_89,sm_120}.txt` transcribe the old window, native at `rows <= 512 && cols <= 512`, every type |
 | `ormqr` | flat selection since P5: `blocked`, `vendor` (`src/ops/ormqr/choice.hh`), tables transcribed from the old `route_ormqr.hh` | none: every transcribed row is `blocked` then `vendor` (complex Trans: `vendor`), i.e. the old native-first order (`can_run` in `src/ops/ormqr/ormqr.cc`) |
 
-`geqrf` and `orgqr` no longer ship route-neutral. A vendor-present build now takes the native arm inside the windows above; outside them — `geqrf` below its floor and off the tall clause, `orgqr` above n = 512 — it still takes cuSOLVER, and the kernels are then reachable only from a vendor-free build (`route_resolve.hh:38-49`), from `BATCHLAS_GEQRF_ROUTE` / `BATCHLAS_ORGQR_ROUTE`, or from the direct entry points `geqrf_cta_dispatch` / `geqrf_blocked_dispatch` / `orgqr_blocked_dispatch`. The windows are the cells that clear the repository's flip gate on the n = 4..512 grid, bracketed on both sides; the grid, including every excluded cell, is [`small-n-baseline.md`](small-n-baseline.md#geqrf). The 3.24x (`geqrf`) and 7.85x (`orgqr`) geomeans below span the whole grid and so are **still not** what the default build realises — only the in-window part of them is.
+`geqrf` and `orgqr` no longer ship route-neutral. A vendor-present build now takes the native arm inside the windows above; outside them — `geqrf` below its floor and off the tall clause, `orgqr` above n = 512 — it still takes cuSOLVER, and the kernels are then reachable only from a vendor-free build, from `BATCHLAS_GEQRF_ROUTE` / `BATCHLAS_ORGQR_ROUTE`, or from the direct entry points `geqrf_cta_dispatch` / `geqrf_blocked_dispatch` / `orgqr_blocked_dispatch`. The windows are the cells that clear the repository's flip gate on the n = 4..512 grid, bracketed on both sides; the grid, including every excluded cell, is [`small-n-baseline.md`](small-n-baseline.md#geqrf). The 3.24x (`geqrf`) and 7.85x (`orgqr`) geomeans below span the whole grid and so are **still not** what the default build realises — only the in-window part of them is.
 
 `ormqr` is the exception: `preferred()` is native-first, so a supported blocked `ormqr` runs natively in every build. That predates WP5 (no shape ever sent a supported blocked `ormqr` to the vendor) and is why `orgqr`'s native arm — an identity fill plus a routed `ormqr` — works at all.
 
@@ -230,7 +265,17 @@ The control, over 10 shapes x 4 types x up to 2 tiers: **`dF` 3.2e-06 (float) / 
 
 ### The `orgqr_buffer_size` latent defect
 
-`orgqr_buffer_size` gated "did a native tier fire?" on `native_need == 0` — the exact defect the same change had deliberately removed from `geqrf_buffer_size` 170 lines above, with a comment explaining why a **zero workspace is a legitimate answer** (it is exactly what the CTA tier reports). It was unreachable today only because `orgqr_blocked_layout` unconditionally allocates `m*n*batch`, and reachable the moment a specialised in-place `orgqr` lands — which both `orgqr_native.hh` and `orgqr_blocked.cc` explicitly contemplate. Now uses `native_fired`, matching its sibling. Recorded because "a zero-sized workspace means no native route" is the same conflation the CTA tier's zero workspace creates everywhere in this family.
+`orgqr_buffer_size` gated "did a native tier fire?" on `native_need == 0` — the exact defect the same change had deliberately removed from `geqrf_buffer_size` 170 lines above, with a comment explaining why a **zero workspace is a legitimate answer** (it is exactly what the CTA tier reports). It was unreachable today only because `orgqr_blocked_layout` unconditionally allocates `m*n*batch`, and reachable the moment a specialised in-place `orgqr` lands — which both `orgqr_native.hh` and `orgqr_blocked.cc` explicitly contemplate. The route-era fix used `native_fired`, matching its sibling; both are gone with the route layer, and flat selection sizes the chosen family directly (below). Recorded because "a zero-sized workspace means no native route" is the same conflation the CTA tier's zero workspace creates everywhere in this family.
+
+**The vendor's orgqr workspace is batch-linear.** The vendor family is a per-item loop (`backend::orgqr_vendor`, which sizes one item and allocates a block of that size for every item), so its workspace grows with the batch; a native call must never be sized by it. At cdouble n = 64, batch = 8192 the vendor size is ~4.6 GB. This is an arithmetic size, not a timing, and it was stated without a measurement record in the `src/ops/orgqr/orgqr.cc` workspace comment before it moved here. Under flat selection the rule holds by construction: the workspace visitor returns exactly the chosen family's need (R5), so a `blocked` choice never reports the vendor's size.
+
+### ormqr: one route resolution for the call and its size query
+
+`ormqr` and `ormqr_buffer_size` (both in `src/ops/ormqr/ormqr.cc`) make one kernel choice from the same pure inputs: the key `key_of` builds (side, trans, m, k, q, batch), the candidate list in `src/ops/ormqr/choice.hh`, and `can_run`. The call goes through `select::run`, the size query through `select::pick`, and `run` is `pick` plus the trace scope, so a pin, a tuned row and a vendor-free build resolve identically for both. The blocked WY width is the second shared input: `block_size` derives it from A and the caller's `block_size_hint` alone, so the bytes the query reports are the bytes the call checks against before it launches. With nothing pinned (`BATCHLAS_ORMQR_ROUTE` unset) the device's tuned table decides (`tuned/ormqr.<dtype>.<device>.txt`): every real-type row is `blocked` then `vendor`, and the complex tables add vendor-only rows for `trans=T`, a shape `throw_if_undefined` rejects before selection runs.
+
+This replaced the route era's `choose_ormqr_provider`, which returned a forced provider without checking it against the support predicate. A forced value that was neither Vendor nor Blocked ran on the vendor in the call while the size query returned the **blocked** size, so sizing with the public query and calling the public entry point threw `ormqr: insufficient workspace for chosen provider` (2560 bytes against the 276,480 the call demanded, every GPU type). The full history is [the ormqr chooser that forced past supports](dispatch.md#dispatch-the-ormqr-chooser-that-forced-past-supports); flat selection has no third arm to fall into, and a pin that fails `can_run` throws (R6) instead of being replaced.
+
+**Why `block_size_hint` exists.** The tuning table (`tuning::ormqr_block_size_for_n`) is keyed on `A.rows()`, the panel height, which for a tall skinny panel is the wrong dimension. A caller that knows its reflector count k can pick the width; the hint is clamped to `[1, k]` so it never exceeds the number of reflectors, and the vendor family ignores it.
 
 ### The short-final-panel vacuity
 

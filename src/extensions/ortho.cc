@@ -185,7 +185,7 @@ namespace batchlas {
             for (int i = 0; i < k; i++){
                 //View of the first i vectors (either columns or rows of A depending on transA)
                 // Trap: the transposed arm's view does not describe the memory (known defect).
-                // See docs/design/known-defects.md, defect 1.
+                // evidence: docs/design/known-defects.md#defect-1-orthos-transposed-arm-builds-a-view-that-does-not-describe-the-memory
                 auto A_i = transA == Transpose::NoTrans ? 
                       MatrixView<T, fmt>(A.data_ptr(), m, i, m, A.stride(), batch_size) 
                     : MatrixView<T, fmt>(A.data_ptr(), i, m, m, A.stride(), batch_size);

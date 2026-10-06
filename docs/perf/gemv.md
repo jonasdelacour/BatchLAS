@@ -367,7 +367,16 @@ bandwidth that a streaming kernel never sees.
 
 ## GEMV: the shape builder contract
 
-`src/backends/gemv_route.hh` builds `GemvShape` and resolves the route. It lives in `src/` rather than in the route-table header because the
+**History: the builder below was deleted in flat selection phase 5.** Its rules now live in `src/ops/gemv/gemv.cc`.
+`key_of` gives the selection key (`trans`, with ConjTrans folded to `T`, then `out`, `red` and `batch`). The native term of
+`can_run` holds the agreement checks: A homogeneous, batch >= 1, x and y matching A in batch and in `red_len`/`out_len`. When
+that term is false, only `vendor` can run, which is where the builder's `nullopt` used to send the call. `can_run` reads only
+metadata, never `data_ptr()`. The device facts come from the memoized `select::describe`. `select::run` fills the coverage
+row's backend, and `gemv` gives that row the old field mapping (`m`, `n` as stored, `k` repeating `m`, plus `transA`). There
+is still no `gemv_validate_params`. The bullets below are the builder's contract as it was, kept because the rules carried
+over. The env-reader bullet is the exception: `BATCHLAS_GEMV_ROUTE` is now parsed by `select` like every other op's pin.
+
+`src/backends/gemv_route.hh` built `GemvShape` and resolved the route. It lives in `src/` rather than in the route-table header because the
 table must read **only** its arguments — no `getenv`, no SYCL query (`route_resolve.hh`) — so everything that asks the device or the
 environment happens here. Its include set is public headers plus one private kernel header and must not gain `src/queue.hh` or
 `<sycl/sycl.hpp>`: the vendor-free facade includes it (the same rule as `gemm_variant.hh`, see
@@ -421,7 +430,7 @@ quick-returns on `m == 0 || n == 0 || (alpha == 0 && beta == 1)` and leaves `y` 
 wrong answer. `A` is also never read when `alpha == 0`, so a NaN in `A` cannot leak into `y = beta*y`. The two halves
 of the quick return are tested on *opposite arms*, each where the launch could actually write: `n == 0` under
 `NoTrans`, `m == 0` under `Trans` (under `NoTrans`, `m == 0` gives an empty launch and the test would be vacuous).
-**(2)** **No `__restrict__` on any pointer** — `ortho.cc:227-232` passes `A_i` and `A_next` as views into the *same*
+**(2)** **No `__restrict__` on any pointer** — `ortho.cc:198-203` passes `A_i` and `A_next` as views into the *same*
 allocation; they are element-disjoint but alias at the object level, and `__restrict__` promises about the object.
 
 ### Blind guards found and closed
@@ -432,13 +441,13 @@ allocation; they are element-disjoint but alias at the object level, and `__rest
    complex cross-term, got `ConjTrans` backwards, or ignored `ld`/`xinc`/`yinc` passed all forty. Measured: breaks
    `cross`, `conj`, `ld`, `xinc`, `yinc`, `segld`, `segxinc`, `segyinc` each leave all 40 **green** while turning
    coverage cases red (`cross` 84/0, `segld` 20/0, `segxinc` 16/0, `segyinc` 20/0). `ConjTrans` is the **live
-   production path** — `ortho.cc:119-121` selects it for **both** complex types (`ab/README.md` says "all four", but
+   production path** — `ortho.cc:123-124` selects it for **both** complex types (`ab/README.md` says "all four", but
    the ternary is `std::is_same_v<T, std::complex<float_t>> ? ConjTrans : Trans`, and only on the `NoTrans` arm) —
    and it had no coverage and no measurement at all.
 2. **The ninth blind guard — the natural batch stride.** All 232 cases in the suite as it then stood (40 pre-WP7 +
    192 new) used `a_stride == ld*n`,
    `x_stride == size*inc`, `y_stride == size*inc`, so a kernel that *derived* each stride rather than reading it from
-   the view passed the whole suite — while `ortho.cc:218-220` hands the native path `A.stride() == m*A.cols()` against
+   the view passed the whole suite — while `ortho.cc:189-191` hands the native path `A.stride() == m*A.cols()` against
    a view whose `ld*cols` is `m*i`, every CGS iteration. Four `stride_pad` cases, one per body; break `padstride`
    turns exactly 32 red, nothing else.
 3. **The twelfth blind guard — no guard band past `y`.** Body 5's tail sub-group covers `W` outputs and can run past
@@ -487,11 +496,12 @@ Trans conjugates too) exactly the 20 complex plain-Trans cases, since one break 
 
 ### The known bad caller
 
-`src/extensions/ortho.cc:216-224`'s `transA = Trans` branch builds `A_i` as `i × m` with `ld = m` and passes
+`src/extensions/ortho.cc:189-194`'s `transA = Trans` branch builds `A_i` as `i × m` with `ld = m` and passes
 `A(Slice(), i)` — a column of length `A.rows()` — as `x`, so the lengths agree only in the accidental case
 `A.rows() == m`. **It is structurally wrong today, under the vendor**, and WP7 deliberately neither fixed it nor threw
 on it (a new host-level validation throw would turn today's silent misbehaviour into a crash in a live path). The
-length checks in `gemv_op_shape` (`src/backends/gemv_route.hh:39-40`) guarantee it returns `nullopt` → the vendor,
+length checks, once in `gemv_op_shape` (`src/backends/gemv_route.hh`, deleted in flat selection phase 5) and now the
+native term of `can_run` in `src/ops/gemv/gemv.cc`, make both native families unrunnable for it, so it goes to the vendor,
 i.e. it keeps going exactly where it went before WP7 rather than becoming a native out-of-bounds read. Fixing it needs
 the right `A_i`, an `A_next` that is the *i*-th vector rather than the *i*-th column, and an
 `ortho(..., Transpose::Trans)` test that checks orthogonality of the **rows** — which `ortho_tests` does not have,

@@ -848,7 +848,7 @@ Where the code differs from the sketches above, the code wins. These are the dif
     is unchanged, the message is new. `can_run(Blocked)` is `homogeneous`, not the plan's `true`: the
     plan's premise that a failing child surfaces its own error does not hold here, because vendor
     `potrf` and `trsm` accept a heterogeneous batch and solve at the full storage order (known-defects
-    [#12](known-defects.md#12-vendor-potrf-and-trsm-accept-a-heterogeneous-batch)).
+    [#12](known-defects.md#defect-12-vendor-potrf-and-trsm-accept-a-heterogeneous-batch)).
     Under the first draft (`true`) such a call ran silently instead of throwing.
   - **Trace line.** `TraceScope` and `detail::trace_open` take an optional `const Key& fields`; empty
     prints `n= batch=` as before, posv passes `{n, nrhs, batch}`.
