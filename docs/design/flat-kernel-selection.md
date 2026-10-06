@@ -1561,7 +1561,7 @@ in `tuned_tables_tests` holds it.
   constants, `level3_tile_route_available` and `throw_no_vendor_route` in `src/select/vendor.hh` (`batchlas::select`);
   the syev/ormqr `*_vendor_or_throw` shims in `src/ops/{syev,ormqr}/vendor.hh`; `is_sm120_family` next to
   `Device::cuda_compute_capability`; `op_external` inlined at its 19 call sites. `src/dispatch/` is gone too: the
-  level-3 entry points are `src/ops/level3/level3.cc`.
+  level-3 entry points are `src/ops/level3/level3.cc` (deleted by the Hermitian-three wave).
 - `Settings::routing` is `route(std::string_view op)` over the 19 ops that read `BATCHLAS_<OP>_ROUTE` (22 since the Hermitian three; throws for any
   other name); `legacy[]`, `legacy_route()`, `canonical[]` and the inert hemm/herk/her2k/iluk slots are gone, as are
   `selection.gemm_sycl_kernel`, `selection.syev_small_kernel` and `geometry.syev_cta_max_n`.
