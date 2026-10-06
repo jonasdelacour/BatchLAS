@@ -988,27 +988,6 @@ TYPED_TEST(SyrkCandidatesCpu, HeterogeneousBatchHasNoRoute) {
     expect_heterogeneous_has_no_route<TypeParam::BackendVal, typename TypeParam::ScalarType>(*this->ctx);
 }
 
-// herk's opt-in reads syrk's pin, the word `gram` only (case-folded, trimmed, ScopedPin or env).
-TEST(SyrkHerkHook, HerkGramPinnedReadsOnlyTheWordGram) {
-    const ScopedEnvVar clear("BATCHLAS_SYRK_ROUTE", nullptr);
-    EXPECT_FALSE(sk::herk_gram_pinned());
-    for (const char* yes : {"gram", " GRAM ", "Gram"}) {
-        const ScopedEnvVar env("BATCHLAS_SYRK_ROUTE", yes);
-        EXPECT_TRUE(sk::herk_gram_pinned()) << yes;
-    }
-    for (const char* no : {"triangular", "vendor", "native", "auto", "bogus", "gram:1"}) {
-        const ScopedEnvVar env("BATCHLAS_SYRK_ROUTE", no);
-        EXPECT_FALSE(sk::herk_gram_pinned()) << no;
-    }
-    {
-        const Pin pin("syrk", C{sk::Gram{}});
-        EXPECT_TRUE(sk::herk_gram_pinned());
-    }
-    const ScopedEnvVar env("BATCHLAS_SYRK_ROUTE", "gram");
-    const Pin pin("syrk", C{sk::Triangular{}});
-    EXPECT_FALSE(sk::herk_gram_pinned()) << "the ScopedPin wins over the environment";
-}
-
 // The transcription (no GPU): each table holds exactly choice.hh's grid (the full product for N
 // and T, the n axis at k = batch = 1 for C), sm_120's rows equal sm_89's, every row untimed under
 // source=transcribed:ff340fc6, and the keys line is choice.hh's key_names.

@@ -144,11 +144,11 @@ TYPED_TEST(HemmTest, IgnoresUnreferencedTriangleAndImaginaryDiagonal) {
 
     if constexpr (TestFixture::BackendType == Backend::CUDA) {
         {
-            ScopedEnvVar route("BATCHLAS_EXPAND_ROUTE", "expand");
+            ScopedEnvVar route("BATCHLAS_HEMM_ROUTE", "expand");
             sweep("expansion");
         }
         {
-            ScopedEnvVar route("BATCHLAS_EXPAND_ROUTE", "loop");
+            ScopedEnvVar route("BATCHLAS_HEMM_ROUTE", "vendor");
             sweep("vendor-loop");
         }
     }

@@ -154,7 +154,7 @@ add_custom_command(
 )
 target_sources(batchlas_dispatch_obj PRIVATE select/select.cc select/coverage.cc "${BATCHLAS_TUNED_TABLES_CC}")
 # src/ops/<op>/<op>.cc: each holds its op's public entry points. Includes are relative, as for
-# src/select. ops/level3 holds hemm/herk/her2k, which have no kernel selection of their own yet.
+# src/select.
 target_sources(batchlas_dispatch_obj PRIVATE ops/potrf/potrf.cc ops/posv/posv.cc ops/trsm/trsm.cc ops/gemm/gemm.cc)
 target_sources(batchlas_dispatch_obj PRIVATE ops/gemv/gemv.cc)
 target_sources(batchlas_dispatch_obj PRIVATE ops/geqrf/geqrf.cc)
@@ -168,7 +168,7 @@ target_sources(batchlas_dispatch_obj PRIVATE ops/gesvd/gesvd.cc)
 target_sources(batchlas_dispatch_obj PRIVATE ops/spmm/spmm.cc)
 target_sources(batchlas_dispatch_obj PRIVATE ops/syev/syev.cc)
 target_sources(batchlas_dispatch_obj PRIVATE ops/symm/symm.cc)
-target_sources(batchlas_dispatch_obj PRIVATE ops/level3/level3.cc)
+target_sources(batchlas_dispatch_obj PRIVATE ops/hemm/hemm.cc ops/herk/herk.cc ops/her2k/her2k.cc)
 target_sources(batchlas_dispatch_obj PRIVATE ops/syrk/syrk.cc)
 target_sources(batchlas_dispatch_obj PRIVATE ops/syr2k/syr2k.cc)
 target_sources(batchlas_dispatch_obj PRIVATE ops/trmm/trmm.cc)

@@ -31,37 +31,6 @@ namespace batchlas::backend::detail {
 // ../expansion_budget.hh, so that callers outside src/backends/ can consult
 // the same fit predicate this file's routes branch on.
 
-// Where an expansion starts beating a per-batch loop over the vendor's own
-// triangular primitive. Measured on sm_89 against cublas?symm in float over
-// n in 16..2048 x batch in 1..512, and against cublas?hemm in complex64 over
-// n in 16..512 x batch in 1..16: both put the crossover in the same place. The
-// expansion wins by 1.2x to 72x everywhere except batch <= 2 with n <= 128,
-// where the call is launch-bound and the expansion's extra kernel costs more
-// than the loop it replaces -- there it loses by up to 2.5x.
-//
-// TRMM deliberately does not consult this. cublas?trmm has a flat ~110 us floor
-// whatever the shape, so the expansion beats it in every cell measured,
-// including batch 1.
-constexpr int kExpandMinBatch = 4;
-constexpr int kExpandMinDim = 256;
-
-// BATCHLAS_EXPAND_ROUTE pins the choice to "expand" or "loop", so a test can
-// reach whichever route the shape would not have picked. An expansion still has
-// to fit before it can be built, so this only ever narrows expansion_fits.
-inline bool expansion_preferred(int max_dim, int batch) {
-    // Same Settings field as expansion_budget.hh's expansion_route_pin(), so the
-    // two independent parsers can no longer be handed different strings.
-    if (const char* route = batchlas::settings().selection.expand_route.get()) {
-        if (std::string_view(route) == "expand") {
-            return true;
-        }
-        if (std::string_view(route) == "loop") {
-            return false;
-        }
-    }
-    return batch >= kExpandMinBatch || max_dim >= kExpandMinDim;
-}
-
 // Work-group shape for the elementwise expansions below: rows first, so that a
 // group's lanes walk a column and both the load and the store coalesce, and
 // only as many rows as the matrix actually has, so that a batch of tiny

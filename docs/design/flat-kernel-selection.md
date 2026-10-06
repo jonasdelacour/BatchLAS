@@ -1,15 +1,16 @@
 # Flat kernel selection
 
-Status: **phases 1-5 and the level-3 four implemented; tables: measured/converted/transcribed per
+Status: **phases 1-5, the level-3 four and the Hermitian three implemented; tables: measured/converted/transcribed per
 `tuned/README.md`; retune pending.** Phases 1-2 and P3.0-P3.4 (select infrastructure, posv, the
 tuner, blackwell kernels, trsm, gemm) and phase 5 (gemv, geqrf, gesv, gesvd, getrf, getri, getrs,
 orgqr, ormqr, spmm and syev, plus the rip of the old dispatch layer, the legacy env vocabulary and
 its aliases) are built on `flat-select-mega` (2026-10-05, one PR); no `RouteTable` is left. symm,
 syrk, syr2k and trmm followed on `flat-select-level3` (2026-10-06, §12 "Level-3 four"), with
-cuBLASDx deleted, so every op that reads `BATCHLAS_<OP>_ROUTE` selects through `src/select`. Every
+cuBLASDx deleted, and hemm, herk and her2k on `flat-select-l3b` (§12 "Hermitian three"), so every
+op that reads `BATCHLAS_<OP>_ROUTE` selects through `src/select` and no op selects by hand. Every
 op ships tables for every dtype it instantiates on sm_89 and sm_120. Open: the sm_89 live gate (§12
-"Gate results"), phase 4, the retune that replaces the transcribed tables with measured ones, and
-hemm/herk/her2k (§11). As built: §12; decisions: §13.
+"Gate results"), phase 4, and the retune that replaces the transcribed tables with measured ones.
+As built: §12; decisions: §13.
 
 Plan agreed 2026-10-02; deviations from the sketch are in §12. Written against `main` at `a1063892`. It is meant
 to be executed from `main` in a fresh session, phase by phase. Nothing here depends on PRs #133,
@@ -678,17 +679,9 @@ The sm_89 gate needs the RTX 4090 box. The sm_120 gate needs the Blackwell box (
   3-D range aborts past 65535 work-groups there. gemm's `can_run` now carries it (§12 Phase 3.4),
   and so do the level-3 four's native families (confirmed by launch, §12 "Level-3 four"); the
   phase-5 ops' kernels were not audited for it. ormqr blocked hits it (known-defects #16).
-- **hemm, herk and her2k still select by hand** in `cublas.cc` (vendor builds only): expand/fold
-  into the public gemm when `expansion_preferred`, `herk_gemm_preferred` (batch >= 4 && n <= 768)
-  or `her2k_gemm_preferred` (batch >= 2 || n >= 128) and `expansion_fits` hold, else the per-item
-  vendor loop, all honouring `BATCHLAS_EXPAND_ROUTE`; herk's gram opt-in is
-  `BATCHLAS_SYRK_ROUTE=gram`. Migrating them (wave L3b): families hemm `{expand, vendor}`, herk
-  `{gram, fold, vendor}`, her2k `{fold, vendor}`, with `accumulate_hermitian` moved out of
-  `cublas.cc` (the first vendor-free complex hemm/herk/her2k); keys `order:log:2 q:log batch:log`
-  (hemm) and `n:log:2 k:log batch:log` (herk, her2k) with grid points on both sides of 3|4, 255|256,
-  768|769 and 1|2, 127|128; three new `BATCHLAS_<OP>_ROUTE` variables (`RoutingSettings::ops` 19 ->
-  22, `settings_tests`); herk's opt-in becomes `BATCHLAS_HERK_ROUTE=gram`; `BATCHLAS_EXPAND_ROUTE`
-  retires; `sytrd_blocked.cc`'s `her2k_takes_gemm_route` asks her2k's `choose()`.
+- ~~**hemm, herk and her2k still select by hand**~~: migrated (wave L3b, §12 "Hermitian three"):
+  hemm `{expand, vendor}`, herk `{fold, gram, vendor}`, her2k `{fold, vendor}`, `BATCHLAS_EXPAND_ROUTE`
+  retired, herk's gram pinned by `BATCHLAS_HERK_ROUTE=gram`, sytrd's predictor asks her2k's `choose()`.
 - **`select::level3_tile_route_available` is conservative**: float, or any type with cuBLAS.
   Vendor-free, double syrk gram, symm expand and every trmm family now run too; widening it moves
   ortho's and ormqr's vendor-free routes, so it is its own change.
@@ -1617,8 +1610,8 @@ sm_120, no measurement.) Four op branches (`flat-select-l3-{symm,syrk,syr2k,trmm
 - **Layout (R1).** `src/ops/<op>/{choice.hh,<op>.cc}`: validate (`shape::validate_{product,rank_k,
   rank_2k}<std::invalid_argument>`, so an invalid shape throws `invalid_argument` on every backend
   and in a vendor-free build) -> `choose()` -> `TraceScope` -> one `std::visit` launch. syrk and trmm
-  return a no-op event for an empty problem (gemm's precedent). `src/ops/level3/level3.cc` keeps only
-  hemm/herk/her2k. Instantiations moved with each op: symm CUDA and NETLIB (ROCm/MKL symm is
+  return a no-op event for an empty problem (gemm's precedent). `src/ops/level3/level3.cc` kept only
+  hemm/herk/her2k (deleted by the Hermitian-three wave below). Instantiations moved with each op: symm CUDA and NETLIB (ROCm/MKL symm is
   `src/extensions/symm.cc`), syrk and syr2k CUDA/ROCm/NETLIB real types, trmm CUDA/ROCm/NETLIB all
   four types.
 - **Families** are `NoFields`: the old routers chose no knob. Derived knobs stay derived
@@ -1669,7 +1662,7 @@ Per op, what differs:
   can_run term; the exact `trans` key keeps real ConjTrans on the vendor where the old rule put it
   (C rows cover the n axis only, at k = batch = 1). herk's opt-in reads
   `ops::syrk::herk_gram_pinned()` (exactly `gram`) and no longer throws on a syrk word it does not
-  understand. Old rule: `syrk_custom_dispatch.cc:22-209`, `cublas.cc:544-580`.
+  understand (until the Hermitian-three wave made it herk's own `gram` family). Old rule: `syrk_custom_dispatch.cc:22-209`, `cublas.cc:544-580`.
 - **syr2k.** `triangular` = `syr2k_triangular_tiles<float>`, also `max_wg >= 256`, the same tile-grid
   ceiling, and `transA != ConjTrans`: real ConjTrans stays on the vendor (the kernel would read it as
   Trans and answer correctly; opening it is a routing change). The bit-for-bit pinned-run test is
@@ -1684,7 +1677,7 @@ Per op, what differs:
   ran at the storage order. The vendor family refuses a heterogeneous operand too (known-defects #12):
   without it, Auto turned main's throw inside the old expand window into the loop's wrong answer
   (2.56 at n = 16, batch 4).
-  symm no longer reads `BATCHLAS_EXPAND_ROUTE` (hemm, herk, her2k still do). Old rule:
+  symm no longer reads `BATCHLAS_EXPAND_ROUTE` (hemm, herk, her2k did until the Hermitian-three wave). Old rule:
   `symm_custom_dispatch.cc:36-191`, `triangular_expand.hh:45-63`.
 - **trmm.** `triangular` = `trmm_triangular_tiles<T>` (`trmm_tiles_supported`: Side::Left),
   `expand` = `expand_triangular<T>` + the public `gemm` at beta 0, moved out of `trmm_vendor_impl`,
@@ -1779,10 +1772,86 @@ gtest case names compared by re-running every failing suite in both trees):
 
 **Kept on purpose.** `select::level3_tile_route_available` keeps its value (float, or any type with
 cuBLAS) for sytrd_blocked, ortho, ormqr_blocked and coverage; widening it would move ortho's and
-ormqr's vendor-free routes. hemm, herk and her2k still select by hand in `cublas.cc` (expand/fold
-into gemm when `expansion_preferred` / `herk_gemm_preferred` / `her2k_gemm_preferred` and
-`expansion_fits` hold, else the vendor loop), honour `BATCHLAS_EXPAND_ROUTE`, and have no
-`BATCHLAS_<OP>_ROUTE`; their migration is the follow-up in §11.
+ormqr's vendor-free routes. hemm, herk and her2k were left selecting by hand in `cublas.cc`; they
+followed in the next block.
+
+### Hermitian three (hemm, herk, her2k)
+
+(2026-10-06, branch `flat-select-l3b` on `flat-select-level3`; maintainer: tables transcribed for sm_89
+and sm_120 from today's rules, no measurement, `BATCHLAS_EXPAND_ROUTE` retired.) The last three ops
+choosing by hand move to `src/ops/{hemm,herk,her2k}/{choice.hh,<op>.cc}` with the level-3 recipe above
+(validate -> `choose()` -> `TraceScope` -> one `std::visit`; an empty problem is a no-op under any pin).
+`src/ops/level3/level3.cc` is deleted. Every old-code `file:line` below refers to `8cf7fd86`.
+
+| op | candidates (complex only) | keys (rows per table) | Auto rows (old rule) | last resort |
+|---|---|---|---|---|
+| hemm | `expand, vendor` | `order:log:2 q:log batch:log` (1960) | `expand` iff batch >= 4 or max(m, n) >= 256 (`expansion_preferred`), else `vendor` | `expand, vendor` |
+| herk | `fold, gram, vendor` | `n:log:2 k:log batch:log` (900) | `fold` iff batch >= 4 and n <= 768 (`herk_gemm_preferred`), else `vendor` | `fold, gram, vendor` |
+| her2k | `fold, vendor` | `n:log:2 k:log batch:log` (900) | `fold` iff batch >= 2 or n >= 128 (`her2k_gemm_preferred`), else `vendor` | `fold, vendor` |
+
+- **Families.** `expand` = `expand_mirrored<T, /*Conjugate=*/true>` into a queue lease + the public
+  `gemm` (hemm's old arm, `cublas.cc:194-231`). `fold` = the public `gemm` over the whole n x n
+  product into a lease + `accumulate_hermitian<T, TwoSided>` (herk `false`, her2k `true`;
+  `cublas.cc:388-419`, `:458-480`), moved verbatim to the portable `src/backends/accumulate_hermitian.hh`,
+  so both run vendor-free. `gram` = `syrk_gram_tiles<T, /*Conjugate=*/true>`: herk's old opt-in through
+  `BATCHLAS_SYRK_ROUTE=gram` (`cublas.cc:381-386`, `ops::syrk::herk_gram_pinned()`, deleted) is now
+  herk's own family, pinned by `BATCHLAS_HERK_ROUTE=gram`; herk reads no syrk pin. `vendor` is the
+  per-item `cublas?{hemm,herk,her2k}` / `cblas_?` loop, all that `hemm_vendor`/`herk_vendor`/
+  `her2k_vendor` still hold. `fold` is listed before `gram` because a transcribed row names the
+  non-Auto natives in candidate order, and the fold won every gram shape measured
+  (docs/perf/level3.md#herk-on-the-gram-tile-kernel): a vendor-free Auto takes `fold`.
+- **can_run (R3).** Natives: `B == Backend::CUDA`, `d.is_gpu`, every operand homogeneous, extents and
+  batch >= 1, batch <= 65535 (expand_mirrored and accumulate_hermitian put it in grid z, gram in grid
+  y; 65536 throws `exceed limit`, `GridBatchCeiling`), `max_wg >= 256`; `expand`/`fold` also
+  `expansion_fits` (the old arms' own capacity term, `BATCHLAS_EXPAND_MAX_BYTES` still lowers it);
+  `gram` also `syrk_gram_supported(..., conjugated)` (n <= 128: past it the kernel answers wrongly),
+  `max_wg >= gram_threads(n)` (complex: 64 or 160) and the SLM tile. Vendor: `d.has_vendor_blas` and
+  homogeneous (the loops run each item at the top-level extents, as for the level-3 four).
+- **Behaviour changes.** At batch 65536 every old fold/expand arm aborted (`Number of work-groups
+  exceed limit`); Auto now takes the vendor (vendor-free: `NoRouteError`). A heterogeneous operand has
+  no route (the old fold/expand threw or answered at the storage order; the loops answered wrongly).
+  Where `fold` cannot fit its scratch at n <= 128 the row's next native is `gram`, not the loop (old:
+  the loop). Coverage rows exist now (the old `cublas.cc` branches recorded none) and the static
+  `linked` rows say `native` on CUDA. `BATCHLAS_EXPAND_ROUTE` is read by nothing: `Settings::
+  selection.expand_route`, `expansion_preferred`, `kExpandMin{Batch,Dim}`, `expansion_route_pin`,
+  `her2k_gemm_preferred`, `her2k_takes_gemm_route` and `herk_gemm_preferred` are deleted.
+  `RoutingSettings::ops` is 22.
+- **sytrd.** `sytrd_blocked.cc`'s cfloat trailing update asks `ops::her2k::fold_chosen<B, T>` (her2k's
+  own `choose()`, pins included) instead of re-deriving the old predicate, so a `BATCHLAS_HER2K_ROUTE=
+  vendor` pin keeps the GEMM pair (`SytrdBlockedComplexFloatCudaTest.Her2kTrailingUpdateFollowsHer2kChoice`,
+  new: the complex her2k path had no sytrd test). The capacity notes moved to
+  docs/perf/dispatch.md#her2k-in-sytrd.
+- **Tables.** `source=transcribed:8cf7fd86`, CSVs `tuned/transcribed/{hemm,herk,her2k}.csv` (both
+  devices, identical rows), from a temporary Python transcriber holding byte-for-byte copies of the
+  three predicates and the three decision lines (`--fidelity` against `git show 8cf7fd86:` passed);
+  provenance in `tuned/README.md`. Grids straddle every threshold: hemm extents 255|256 and batch
+  1|2|3|4|5; herk/her2k n 127|128|129 and 767|768|769, batch 1|2|3|4|5, plus a coarse log grid.
+- **Gates** (sm_120 box). (b) Data gate, 2500 random log-uniform off-grid points per (op, dtype,
+  device) plus 1250-point batch and extent bands: 100.00% agreement with the old vendor-present Auto
+  everywhere, on-grid 100%. Vendor-free the old build threw at every point; the new choice is `expand`
+  (hemm) or `fold` (herk, her2k) at all of them. Negative controls fail the gate: hemm batch 4|5 rows
+  dropped 91.92% (band), order/q = 256 rows 86.16% (extent band); herk batch 4|5 rows 88.72-89.76%, n
+  767|768 rows 90.48%; her2k batch 2|3 rows 92.16%, n 128|129 rows 91.20%. (c) Coverage cross-check,
+  one process per cell against `ff340fc6` binaries (old: no hemm/herk/her2k row, so a nested
+  `reached,gemm` row marks expand/fold): 48/54 cells identical (27 cells x 2 dtypes, both sides of
+  every threshold), the other 6 are batch 65536 (old threw, now `vendor`). Vendor-free: 48 gains
+  (old `NoRouteError`, now `expand`/`fold`), 6 batch-65536 cells throw in both.
+  (a) Deliberate breaks, each turning a narrow named red set, restored and md5-verified: hemm `q` key
+  from `C.cols()` regardless of side (`AutoReadsTheTranscribedTable`, `TraceKeyIsOrderAndQ`); herk
+  `gram` without its one-tile term (`PinnedCandidatesStraddleTheirLimits`, `CanRunEqualsLaunch`,
+  `CanRunFalsePinsThrow`, `EveryCombinationOnEveryCandidate`); herk without the grid ceiling
+  (`GridBatchCeiling`); herk `fold` budget ignored (`FoldFitStraddlesTheScratchBudget`,
+  `CanRunFalsePinsThrow`); hemm vendor taking a heterogeneous batch (`HeterogeneousBatchHasNoRoute`, GPU
+  and CPU); `fold_chosen` inverted (`Her2kCandidates.FoldChosenIsTheCallsChoice` and the sytrd test);
+  the fold's diagonal left complex (herk's correctness cases only: her2k's TwoSided sum is real on
+  the diagonal by construction). Family-wide correctness breaks (hemm's expansion without the
+  conjugate, her2k's fold reading op(B)^T) turn every correctness case of that family red.
+  Regression (`ctest -LE slow`): vendor tree the same five failing suites as `ff340fc6` (lanczos,
+  gemv, ortho, cond, syev_blocked) with the same case names; vendor-free tree: no case that passes on `ff340fc6` fails; hemm/herk/her2k_tests now fail only their NETLIB instantiations (no netlib in this tree; every CUDA case newly passes), `options_api_tests` now passes, and the three new route-native reruns fail exactly the names their unpinned suites fail, as the level-3 four's do. `sweep_to_table.py --check` passes on all 156 tables; `run_local_checks.sh` is clean apart from `check_cmake_syntax` reading generated files under `build-vf/`.
+- **Deviations.** The transcriber is Python, not C++ (the rules are one-line predicates; the fidelity
+  check is the same byte comparison). herk's candidate order is `fold, gram, vendor` (the sketch listed
+  `{gram, fold, vendor}`), so vendor-free rows never prefer the slower gram. hemm keys on `order`/`q`
+  (the sketch's suggestion) rather than symm's `form`/`m`/`n`: the old rule read only max(m, n, k).
 
 ## 13. Phase 3 decisions (maintainer, 2026-10-04)
 

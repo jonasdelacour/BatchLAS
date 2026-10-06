@@ -299,6 +299,8 @@ Two routing variables are not op-keyed. `BATCHLAS_EXPAND_ROUTE=expand|loop` pins
 mirrored-expansion decision for `symm`/`hemm`/`herk`/`her2k`/`trmm` and is consulted **before** the
 measured window (`src/backends/triangular_expand.hh:50-60`), so a pin overrides the measurement — a
 call-site guard that replicates only half of such a predicate is a shipped-and-fixed defect.
+(Retired since: symm and trmm pin `expand` through their own `BATCHLAS_<OP>_ROUTE`, and since the
+Hermitian-three wave hemm, herk and her2k do too; `BATCHLAS_EXPAND_ROUTE` is read by nothing.)
 `BATCHLAS_COVERAGE_OUT` turns the dynamic instrument on. Two per-op ad-hoc knobs
 (`BATCHLAS_ORTHO_GRAM`, `BATCHLAS_ORMQR_IMPL`) have not been folded into this vocabulary
 (`route_env.hh:3-6`).

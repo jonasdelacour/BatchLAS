@@ -12,7 +12,10 @@ flat tables (`src/ops/<op>/`; families, `can_run` and keys in
 transcribed per grid cell at `ff340fc6`, so the boundaries on this page still describe Auto. "What
 ships" describes `ff340fc6` and earlier: the `*_custom_dispatch.cc` gates, `level3_coverage.hh`,
 `level3_fused.hh` and every cuBLASDx arm it names are deleted, and its file:line citations refer
-to those commits. hemm, herk and her2k still choose in `cublas.cc` as described here.
+to those commits. hemm, herk and her2k followed (Hermitian-three wave, §12 "Hermitian three"): hemm
+`expand | vendor`, herk `fold | gram | vendor`, her2k `fold | vendor`, their `cublas.cc` predicates
+transcribed at `8cf7fd86` and deleted with `BATCHLAS_EXPAND_ROUTE`; the expansion and the fold
+(`accumulate_hermitian.hh`) are portable SYCL in front of the public gemm, so they run vendor-free.
 
 ## What ships
 
@@ -259,8 +262,9 @@ The conjugating path through the same kernel was built and **measured and reject
 float it loses to the existing GEMM-plus-Hermitian-fold at every Gram shape — 0.217 vs **0.206**
 ms at n=32 batch 2048, 2.08 vs **1.57** at n=128 batch 512. A complex multiply is four real ones,
 so herk is compute bound where real syrk is bandwidth bound, and cuBLAS's cgemm is better at
-compute. The route stays reachable as `BATCHLAS_SYRK_ROUTE=gram` so it stays measurable and the
-conjugation stays under test (`syrk_custom_dispatch.hh:16-24`).
+compute. The route stays reachable, now as herk's own `gram` family (`BATCHLAS_HERK_ROUTE=gram`;
+it was `BATCHLAS_SYRK_ROUTE=gram`), so it stays measurable and the conjugation stays under test.
+The transcribed rows rank it after `fold`, so Auto never takes it while the fold can run.
 
 ### trmm for the WY block factor
 

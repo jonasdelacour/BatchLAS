@@ -62,7 +62,7 @@ namespace batchlas::backend {
 // DECLARATION ONLY. The public `herk<Back, T>` used to be DEFINED inside each
 // vendor TU, so dropping a vendor library dropped the public entry point along
 // with the vendor path. WP0 S5 moves that definition to
-// src/ops/level3/level3.cc; what stays behind is the vendor
+// src/ops/herk/herk.cc; what stays behind is the vendor
 // implementation, named as such. Each vendor wrapper TU defines this primary
 // template for its own Backend value and instantiates it there.
 template <Backend Back, ComplexScalar T>

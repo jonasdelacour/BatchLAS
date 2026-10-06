@@ -124,9 +124,9 @@ Two families sit outside this table and must not be read from it:
   (`src/ops/level3/level3.cc:47`, `:126`, `:157`, `:189`), and they run **before** the vendor-available test — so anything below that
   gate is unreachable vendor-free. `symm` has no tile kernel at all; its portable arm is a
   mirrored expansion feeding the public `gemm`.
-* **`hemm`, `herk`, `her2k` have no native arm in the facade whatsoever** — vendor or throw
-  (`src/ops/level3/level3.cc:68-115`). Their expansion routes are reachable only from inside
-  `cublas.cc`.
+* ~~**`hemm`, `herk`, `her2k` have no native arm in the facade whatsoever**~~ — fixed by the
+  Hermitian-three wave (flat-kernel-selection.md §12): hemm `expand`, herk `fold`/`gram` and her2k
+  `fold` run vendor-free on CUDA.
 
 ### Vendor-first by measurement, not by absence
 

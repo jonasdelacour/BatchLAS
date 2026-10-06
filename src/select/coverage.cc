@@ -165,9 +165,10 @@ void append_static_rows(std::ostringstream& out) {
         {"symm",  level3_vendor_available<B>,        tiles_f32},
         {"syrk",  level3_vendor_available<B>,        tiles_f32},
         {"syr2k", level3_vendor_available<B>,        tiles_f32},
-        {"hemm",  level3_vendor_available<B>,        false},
-        {"herk",  level3_vendor_available<B>,        false},
-        {"her2k", level3_vendor_available<B>,        false},
+        // hemm/herk/her2k: the expansion or fold feeding the public gemm, CUDA only.
+        {"hemm",  level3_vendor_available<B>,        B == Backend::CUDA},
+        {"herk",  level3_vendor_available<B>,        B == Backend::CUDA},
+        {"her2k", level3_vendor_available<B>,        B == Backend::CUDA},
         {"geqrf", factorization_vendor_available<B>, true},
         {"orgqr", factorization_vendor_available<B>, true},
         {"getrf", factorization_vendor_available<B>, true},

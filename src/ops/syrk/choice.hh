@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
-#include <string>
 #include <string_view>
 #include <type_traits>
 #include <variant>
@@ -68,13 +67,6 @@ inline constexpr int gram_threads(std::int64_t n) {
 template <class T>
 constexpr std::int64_t gram_slm_bytes(std::int64_t n) {
     return std::int64_t(32) * gram_tile(n) * std::int64_t(sizeof(T));
-}
-
-// herk's opt-in to the conjugating gram kernel: syrk's pin is exactly `gram`.
-inline bool herk_gram_pinned() {
-    std::string source;
-    const auto text = select::detail::pin_text("syrk", &source);
-    return text && *text == "gram";
 }
 
 }  // namespace batchlas::ops::syrk

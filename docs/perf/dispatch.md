@@ -46,9 +46,9 @@ symm, syrk, syr2k and trmm select like every other op since the level-3 flat-sel
 (`src/ops/<op>/{choice.hh,<op>.cc}`; families, `can_run` terms, keys and tables in
 `docs/design/flat-kernel-selection.md` §12 "Level-3 four"). Their tables are transcribed from the
 hand-written gates described below, so on-grid Auto is unchanged; the gates themselves, the
-`*_custom_dispatch.cc` files and the cuBLASDx fused arms are deleted. hemm, herk and her2k still
-choose in `cublas.cc` (vendor builds only), between an expansion or fold into the public `gemm` and
-the vendor loop.
+`*_custom_dispatch.cc` files and the cuBLASDx fused arms are deleted. hemm, herk and her2k followed
+in the Hermitian-three wave (§12 "Hermitian three"): their `cublas.cc` rules, transcribed at
+`8cf7fd86`, are table rows too, and `cublas.cc` keeps only their per-item vendor loops.
 
 | op | families (spelling) | old gate, float CUDA GPU (`ff340fc6`) | old source |
 |---|---|---|---|
@@ -56,14 +56,18 @@ the vendor loop.
 | `syrk` | `gram` (n <= 128, float and double), `triangular` (float), `vendor` | `prefer_gram \|\| prefer_triangular \|\| cublasdx_heuristic` | `syrk_custom_dispatch.cc` |
 | `syr2k` | `triangular` (float), `vendor` | `batch >= 2` | `syr2k_custom_dispatch.cc` |
 | `trmm` | `triangular` (`Side::Left`), `expand` (expansion + public `gemm`), `vendor` (the loop) | `trmm_triangular_supported(...)`, **no size threshold**; Right went to an expand-or-loop vendor | `trmm_custom_dispatch.cc`, `cublas.cc` |
+| `hemm` | `expand` (conjugating mirrored expansion + public `gemm`), `vendor` | `expansion_preferred(max(m, n, k), batch)` (`8cf7fd86`) | `cublas.cc` |
+| `herk` | `fold` (public `gemm` + `accumulate_hermitian<false>`), `gram` (n <= 128, pin only in the old code), `vendor` | `herk_gemm_preferred` = `batch >= 4 && n <= 768` (`8cf7fd86`) | `cublas.cc` |
+| `her2k` | `fold` (one public `gemm` + `accumulate_hermitian<true>`), `vendor` | `her2k_gemm_preferred` = `batch >= 2 \|\| n >= 128` (`8cf7fd86`) | `expansion_budget.hh` |
 
 Their inner GEMMs go through the public `gemm`, so they take the gemm table's choice like any other caller.
 
 Correctness, now `can_run` terms: every native family needs a CUDA GPU queue, a homogeneous batch
 (every tile kernel indexes operands as `base + batch * stride`), extents >= 1 and batch <= 65535
 (the batch is the grid's z or y dimension). syrk/syr2k `triangular` also bound the tile count (grid
-y), `gram` needs n <= 128, symm/trmm `expand` need `expansion_fits`, trmm `triangular` needs
-`Side::Left`, and syr2k keeps real `ConjTrans` on the vendor.
+y), `gram` needs n <= 128, symm/trmm/hemm `expand` and herk/her2k `fold` need `expansion_fits`, trmm
+`triangular` needs `Side::Left`, and syr2k keeps real `ConjTrans` on the vendor. The Hermitian
+three's natives also need `max_wg >= 256` (herk `gram`: its own thread count and SLM tile).
 
 ### The level-3 pin words
 
@@ -78,12 +82,17 @@ for the dtype, or cannot run the shape, throws `std::invalid_argument`.
 | `syrk` | `gram`, `triangular`, `vendor` | `triangular` on double throws (not a double candidate); `gram` at n > 128 throws (the kernel answers wrongly there) |
 | `syr2k` | `triangular`, `vendor` | `triangular` on double throws |
 | `trmm` | `triangular`, `expand`, `vendor` | `vendor` is the `cublas?trmm` loop; the old `vendor` (expand+gemm when it fit) is `expand` |
+| `hemm` | `expand`, `vendor` | the old `BATCHLAS_EXPAND_ROUTE=expand\|loop` is `expand`\|`vendor` |
+| `herk` | `fold`, `gram`, `vendor` | `native` = the first native of the row (`fold`); the old opt-in `BATCHLAS_SYRK_ROUTE=gram` is `gram` |
+| `her2k` | `fold`, `vendor` | `native` = `fold` |
 
 `cublasdx` is not a word any more: cuBLASDx was deleted (it never ran here, MathDx being absent), so
 a `cublasdx` pin throws as an unknown family. The legacy `tiles`/`narrow`/`gemm`/`custom` words and
 the old `DiagFullGemm` measurement route are gone too; each op's should-throw tests list them
-(`*CudaCustomTest.RemovedRouteWordsThrow`, `<Op>Candidates.UnknownPinsThrow`). `herk` reaches
-syrk's Gram kernel only through `BATCHLAS_SYRK_ROUTE=gram` (`ops::syrk::herk_gram_pinned()`).
+(`*CudaCustomTest.RemovedRouteWordsThrow`, `<Op>Candidates.UnknownPinsThrow`). herk's Gram kernel is
+herk's own `gram` family (`BATCHLAS_HERK_ROUTE=gram`); herk no longer reads `BATCHLAS_SYRK_ROUTE`, and
+`BATCHLAS_EXPAND_ROUTE` is retired and read by nothing: its `loop` is `vendor` in the op's own
+variable, where `loop` throws as an unknown family.
 
 ## Measured boundaries
 
@@ -111,6 +120,9 @@ bracketing region **batch ≤ 2 with n ≤ 128**, where it loses by **up to 2.5x
 
 `trmm` does not consult this: `cublas?trmm` has a flat ~110 µs floor whatever the shape, so the expansion beat it in
 every cell measured, batch 1 included (`triangular_expand.hh:41-44`).
+
+The predicate, its constants and `BATCHLAS_EXPAND_ROUTE` are deleted: symm's and hemm's tables transcribe the window
+(grid points 255|256 and 3|4), and `BATCHLAS_SYMM_ROUTE` / `BATCHLAS_HEMM_ROUTE` pin either side of it.
 
 ### `syrk` tile boundaries
 
@@ -211,6 +223,10 @@ the vendor's work (`cublas.cc:378-381`). Both predicates check `BATCHLAS_EXPAND_
 (`expansion_budget.hh:95-101`, delegated from `cublas.cc:365-367`), so a pin overrides the measurement — which is
 exactly the seam the `sytrd_blocked` half-guard bug below fell through.
 
+Both predicates and the pin they consulted are deleted (Hermitian-three wave): `tuned/{herk,her2k}.<dtype>.<device>.txt`
+transcribe them at `8cf7fd86` with grid points on both sides of n 768|769, batch 3|4 (herk) and n 127|128, batch 1|2
+(her2k), and `BATCHLAS_HERK_ROUTE` / `BATCHLAS_HER2K_ROUTE` pin `fold` or `vendor`.
+
 **An open A/B, not a settled window.** `her2k_gemm_preferred` was swept over *square* rank-k shapes, but the
 `sytrd_blocked` panel loop issues narrow ones — `k = ib = nb ∈ {16,24,32}` against `n2` up to 480 — where the GEMM is
 near bandwidth-bound and the fold adds an `n2²·batch` write plus read the two direct GEMMs never pay. The halved
@@ -218,6 +234,22 @@ arithmetic may not survive that, and the call site says so in place (`sytrd_bloc
 deliberately excluded from that route for the same reason: it would reach the same fast path, but its scratch is 16
 bytes per element and none of it has been measured (`:811-814`). Guessing is how the 7.8x double inversion below got
 written down in the first place.
+
+### her2k in sytrd
+
+`sytrd_blocked`'s complex trailing update calls her2k only when her2k would take `fold`; its per-item vendor loop is
+structurally the route measured 7.8x slower than the GEMM pair. The call site asks her2k's own `choose()`
+(`ops::her2k::fold_chosen`, pins and the scratch budget included), per panel, because n2 shrinks every iteration and an
+early panel's `n2² x batch` scratch can be refused while later ones fit.
+
+The fold's scratch fits with room at every shape syev routes to blocked. `expanded_ld<complex<float>>(n2)` rounds n2 up
+to a multiple of 2, so the scratch is ~`n2²·batch·8` bytes against a `GLOBAL_MEM_SIZE/4` budget, ~6.0 GiB on a 24 GiB
+4090: n=448 batch=585 (the old cfloat blocked/vendor crossover, now a row of `tuned/syev.cfloat.<device>.txt`) needs
+0.75 GiB and n=512 batch=1024 needs 1.76 GiB, i.e. >=3.4x headroom. The ceiling is crossed around `n2²·batch > 8.0e8`
+elements (forced blocked at n=1024 batch=1024, 7.51 GiB, or n=2048 batch=256, 7.75 GiB), outside the routed region
+but reachable by pinning the provider, and exactly where an unguarded call would invert. The lease is taken per call
+and released before the next panel, so the peak is one panel's scratch. On an out-of-order Queue the fold drains the
+device between its GEMM and its fold, once per panel; the benchmarks all build in-order queues and never see it.
 
 ## Negative results
 
@@ -328,7 +360,8 @@ Wrong answers found, how they hid, and what guards them now.
 * **A guard that modelled half its predicate.** `sytrd_blocked`'s her2k guard replicated only the size ceiling, so
   under `BATCHLAS_EXPAND_ROUTE=loop` the call site concluded her2k would take its batched-GEMM route while
   `her2k_gemm_preferred` returned false and sent it to a per-batch loop — one sequential launch per batch member, for
-  every panel with n2 > 128. Both halves now live together in `expansion_budget.hh:85-101`.
+  every panel with n2 > 128. The call site now asks her2k's own `choose()` (`ops::her2k::fold_chosen`), so it
+  cannot model less than the call decides ("her2k in sytrd").
 
 ## The coverage instrument
 
@@ -397,7 +430,8 @@ names moved to `BACKEND_COMMON_SOURCES` (`src/backends/CMakeLists.txt:136-141`).
    (flat selection phase 5). `native` now takes the tile kernel, and
    `SyrkCudaCustomTest.AutoAndNativeRoutesLeaveTheOtherHalfUntouched` poisons the other triangle under it.
 3. ~~The four level-3 ops still have no tables~~: they do (level-3 flat-selection wave), transcribed from the old
-   windows, untimed; measuring them is the phase-4 retune. hemm, herk and her2k still have none.
+   windows, untimed; measuring them is the phase-4 retune. hemm, herk and her2k have theirs too (transcribed at
+   `8cf7fd86`, Hermitian-three wave).
 4. ~~`symm` has no `expansion_fits()` ceiling~~: symm's `expand` family checks it in `can_run`.
 5. ~~Heterogeneous `symm` is unmeasured and untested~~: measured on `ff340fc6` (a heterogeneous B or C made the
    expansion's gemm throw; a heterogeneous A ran at the storage order); `expand` and `vendor` now refuse any

@@ -997,8 +997,43 @@ TRMM = OpSpec(
     candidate_order=list(TRMM_CHOICES),
 )
 
+# hemm, herk, her2k (the Hermitian three, flat-kernel-selection.md §12): complex only; no sweep
+# source, sm_89 and sm_120 are both the transcription of 8cf7fd86's rules (they read no arch).
+# hemm: order = A's order, q = C's other extent, work ~ order^2 q batch. herk/her2k: work ~ n^2 k batch.
+HEMM_CHOICES = ("expand", "vendor")
+HEMM = OpSpec(
+    op="hemm",
+    keys="order:log:2 q:log batch:log",
+    row_ops=("hemm",),
+    row_key=lambda r: None,
+    arm_spelling={c: c for c in HEMM_CHOICES},
+    arm_route={c: (("vendor:vendor",) if c == "vendor" else (f"native:{c}",)) for c in HEMM_CHOICES},
+    candidate_order=list(HEMM_CHOICES),
+)
+HERK_CHOICES = ("fold", "gram", "vendor")
+HERK = OpSpec(
+    op="herk",
+    keys="n:log:2 k:log batch:log",
+    row_ops=("herk",),
+    row_key=lambda r: None,
+    arm_spelling={c: c for c in HERK_CHOICES},
+    arm_route={c: (("vendor:vendor",) if c == "vendor" else (f"native:{c}",)) for c in HERK_CHOICES},
+    candidate_order=list(HERK_CHOICES),
+)
+HER2K_CHOICES = ("fold", "vendor")
+HER2K = OpSpec(
+    op="her2k",
+    keys="n:log:2 k:log batch:log",
+    row_ops=("her2k",),
+    row_key=lambda r: None,
+    arm_spelling={c: c for c in HER2K_CHOICES},
+    arm_route={c: (("vendor:vendor",) if c == "vendor" else (f"native:{c}",)) for c in HER2K_CHOICES},
+    candidate_order=list(HER2K_CHOICES),
+)
+
 POTRF.review = potrf_offgrid
-OPS = [POTRF, POSV, TRSM, GEMM, GEMV, GEQRF, ORGQR, ORMQR, GETRF, GETRS, GETRI, GESV, GESVD, SPMM, SYEV, SYMM, SYRK, SYR2K, TRMM]
+OPS = [POTRF, POSV, TRSM, GEMM, GEMV, GEQRF, ORGQR, ORMQR, GETRF, GETRS, GETRI, GESV, GESVD, SPMM, SYEV, SYMM, SYRK, SYR2K, TRMM,
+       HEMM, HERK, HER2K]
 OP_BY_NAME = {s.op: s for s in OPS}
 
 

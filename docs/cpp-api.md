@@ -1407,11 +1407,11 @@ curve at a single point.
 | --- | --- | --- | --- |
 | `route(op)` (`values`, in `RoutingSettings::ops` order) | `BATCHLAS_<OP>_ROUTE` | `EnvValue` per op | unset (the op's tuned table) |
 
-The 19 ops: `gemm`, `gemv`, `trsm`, `trmm`, `symm`, `syrk`, `syr2k`, `potrf`, `posv`,
-`getrf`, `getrs`, `getri`, `gesv`, `geqrf`, `orgqr`, `ormqr`, `syev`, `gesvd`, `spmm`.
+The 22 ops: `gemm`, `gemv`, `trsm`, `trmm`, `symm`, `syrk`, `syr2k`, `hemm`, `herk`, `her2k`,
+`potrf`, `posv`, `getrf`, `getrs`, `getri`, `gesv`, `geqrf`, `orgqr`, `ormqr`, `syev`, `gesvd`, `spmm`.
 `route(op)` throws `std::invalid_argument` for any other name. Values are `auto`,
 `native`, `vendor` or a choice spelling from the op's `src/ops/<op>/choice.hh`
-(`lpanel:panel=8`, `reg:m=128:n=128:k=8:u=1`, `triangular`, `gram`, `expand`, ...),
+(`lpanel:panel=8`, `reg:m=128:n=128:k=8:u=1`, `triangular`, `gram`, `expand`, `fold`, ...),
 parsed by `src/select/` for every op. Case and surrounding whitespace are ignored. An unknown value, or a choice the shape cannot
 run, throws (docs/design/flat-kernel-selection.md §5.3, §12). The old per-op
 spellings `BATCHLAS_<OP>_VARIANT` and `BATCHLAS_<OP>_PROVIDER` are no longer read.
@@ -1422,7 +1422,6 @@ sharpest form of the problem this section exists to fix.
 
 | field | variable | type | default |
 | --- | --- | --- | --- |
-| `expand_route` | `BATCHLAS_EXPAND_ROUTE` | `EnvValue` | unset (shape heuristic); `expand` or `loop`, read by hemm, herk and her2k only |
 | `gemv_segt` | `BATCHLAS_GEMV_SEGT` | `EnvValue` | unset (auto) |
 | `gesvd_bidiag` | `BATCHLAS_GESVD_BIDIAG` | `EnvValue` | unset (`bdsdc`) — `normal` **changes numerics** |
 | `getrf_laswp` | `BATCHLAS_GETRF_LASWP` | `EnvValue` | unset (`defer_gather`) |
