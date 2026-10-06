@@ -371,9 +371,11 @@ TEST(SytrdBlockedComplexFloatCudaTest, Her2kTrailingUpdateFollowsHer2kChoice) {
     }
     EXPECT_EQ(vendor_calls, 0) << "her2k pinned to its vendor loop: the predictor must keep the GEMM pair";
     ASSERT_EQ(folded.size(), paired.size());
+    // NaN-keeping: std::max(worst, NaN) returns worst, so a NaN tridiagonal would pass.
     double worst = 0, scale = 0;
     for (std::size_t i = 0; i < folded.size(); ++i) {
-        worst = std::max(worst, double(std::abs(folded[i] - paired[i])));
+        const double diff = double(std::abs(folded[i] - paired[i]));
+        if (std::isnan(diff) || diff > worst) worst = diff;
         scale = std::max(scale, double(std::abs(paired[i])));
     }
     EXPECT_LE(worst, 1e-3 * std::max(scale, 1.0)) << "the her2k and GEMM-pair tridiagonals disagree";

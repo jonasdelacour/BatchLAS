@@ -104,13 +104,15 @@ Event expand_gemm(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T a
     BumpAllocator pool(ws.span());
     auto storage = pool.allocate<T>(q, std::size_t(ld) * std::size_t(n) * std::size_t(batch));
     const MV<T> full(storage.data(), n, n, ld, ld * n, batch);
-    Event expansion;
+    // BLAS: beta = 0 makes C output only, but the native direct and tiled gemms read it (0 * NaN;
+    // known-defects.md #11), and a vendor-free gemm lands on them at small shapes.
+    if (beta == T(0)) C.fill(q, T(0));
     {
         BATCHLAS_KERNEL_TRACE_SCOPE("hemm.expand");
-        expansion = backend::detail::expand_mirrored<T, /*Conjugate=*/true>(q, full, A, uplo);
+        (void)backend::detail::expand_mirrored<T, /*Conjugate=*/true>(q, full, A, uplo);
     }
     // An out-of-order queue orders nothing between the expansion and a vendor gemm's stream.
-    if (!q.in_order()) expansion.wait();
+    if (!q.in_order()) q.wait();
     if (side == Side::Left)
         return gemm<B, T>(q, full, Bm, C, alpha, beta, Transpose::NoTrans, Transpose::NoTrans,
                           ComputePrecision::Default);

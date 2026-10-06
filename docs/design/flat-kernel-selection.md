@@ -1821,8 +1821,8 @@ choosing by hand move to `src/ops/{hemm,herk,her2k}/{choice.hh,<op>.cc}` with th
 - **Behaviour changes.** At batch 65536 every old fold/expand arm aborted (`Number of work-groups
   exceed limit`); Auto now takes the vendor (vendor-free: `NoRouteError`). A heterogeneous operand has
   no route (the old fold/expand threw or answered at the storage order; the loops answered wrongly).
-  Where `fold` cannot fit its scratch at n <= 128 the row's next native is `gram`, not the loop (old:
-  the loop). Coverage rows exist now (the old `cublas.cc` branches recorded none) and the static
+  Where `fold` cannot fit its scratch, Auto takes the loop as the old code did (a fold row ranks
+  `fold | vendor | gram`); vendor-free it takes `gram` at n <= 128 (old: `NoRouteError`). Coverage rows exist now (the old `cublas.cc` branches recorded none) and the static
   `linked` rows say `native` on CUDA. `BATCHLAS_EXPAND_ROUTE` is read by nothing: `Settings::
   selection.expand_route`, `expansion_preferred`, `kExpandMin{Batch,Dim}`, `expansion_route_pin`,
   `her2k_gemm_preferred`, `her2k_takes_gemm_route` and `herk_gemm_preferred` are deleted.
@@ -1875,6 +1875,23 @@ choosing by hand move to `src/ops/{hemm,herk,her2k}/{choice.hh,<op>.cc}` with th
   `BetaZeroDoesNotReadC` instances red. Twelve breaks in all, each restored and md5-verified, each a
   narrow named red set except the two family-wide correctness breaks (hemm expansion without the
   conjugate; her2k's mirrored term with the wrong sign).
+- **Review fixes** (same branch). (1) herk's fold rows were `fold | gram | vendor`, so where the
+  fold could not fit (`expansion_fits`; e.g. cdouble n = 127|128 at batch 32768 on a 24 GB card, or
+  any `BATCHLAS_EXPAND_MAX_BYTES` cap) Auto ran the untimed gram kernel where the old code ran the
+  loop. Rows now rank `vendor` second (`fold | vendor | gram`; vendor-free unchanged), the data gate
+  replays every point with expand/fold refused for capacity (old: the loop; it fails the old tables
+  at 65% on-grid, the new ones pass 100.00%), and `HerkCandidates.AutoTakesTheVendorWhenTheFoldCannotFit`
+  straddles the budget on both sides of n = 128. (2) Vendor-free, complex gemm rows skip `vendor` to
+  `direct`/`tiled`, which read C at beta = 0 (known-defects.md #11): hemm returned NaN for a NaN C
+  at beta = 0 and the fold's beta = 0 gemm read a never-zeroed arena lease. hemm now zero-fills C at
+  beta = 0 and the fold its lease; `BetaZeroDoesNotReadC` adds an 8 x 8 shape, NaN bytes in the arena
+  and the inner gemm pinned to `direct` and `tiled`, so it bites in the vendor tree too. (3)
+  `Her2kTrailingUpdateFollowsHer2kChoice` compared with `std::max` (a NaN tridiagonal passed); it now
+  keeps NaN. Breaks, restored and md5-verified: no C fill in hemm (`HemmCandidates/{2,3}.BetaZeroDoesNotReadC`),
+  no lease fill in herk / her2k (`{Herk,Her2k}Candidates/{2,3}.BetaZeroDoesNotReadC`), the old herk
+  row order (`HerkCandidates/{2,3}.AutoTakesTheVendorWhenTheFoldCannotFit`, `HerkTranscribedTable`),
+  her2k's fold writing NaN (every her2k correctness case and the sytrd test; with the old `std::max`
+  the sytrd test stayed green).
 - **Deviations.** The transcriber is Python, not C++ (the rules are one-line predicates; the fidelity
   check is the same byte comparison). herk's candidate order is `fold, gram, vendor` (the sketch listed
   `{gram, fold, vendor}`), so vendor-free rows never prefer the slower gram. hemm keys on `order`/`q`

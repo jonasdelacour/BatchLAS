@@ -13,7 +13,8 @@ transcribed per grid cell at `ff340fc6`, so the boundaries on this page still de
 ships" describes `ff340fc6` and earlier: the `*_custom_dispatch.cc` gates, `level3_coverage.hh`,
 `level3_fused.hh` and every cuBLASDx arm it names are deleted, and its file:line citations refer
 to those commits. hemm, herk and her2k followed (Hermitian-three wave, §12 "Hermitian three"): hemm
-`expand | vendor`, herk `fold | gram | vendor`, her2k `fold | vendor`, their `cublas.cc` predicates
+`expand | vendor`, herk `fold | gram | vendor` (a fold row ranks `fold | vendor | gram`), her2k
+`fold | vendor`, their `cublas.cc` predicates
 transcribed at `8cf7fd86` and deleted with `BATCHLAS_EXPAND_ROUTE`; the expansion and the fold
 (`accumulate_hermitian.hh`) are portable SYCL in front of the public gemm, so they run vendor-free.
 

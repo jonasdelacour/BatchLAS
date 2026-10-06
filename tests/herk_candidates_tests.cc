@@ -52,6 +52,15 @@ using cd = std::complex<double>;
 // A max that keeps a NaN: std::max(w, NaN) returns w, so a NaN result would pass.
 double worse(double w, double x) { return std::isnan(x) || x > w ? x : w; }
 
+// NaN bytes (0xff) in the queue's arena where the next lease starts: a released lease hands its
+// bytes to the next one, so a scratch region the op never writes reads this.
+void poison_arena(Queue& q, std::size_t bytes) {
+    auto ws = q.workspace(bytes);
+    const auto s = ws.span();
+    q->memset(s.data(), 0xff, s.size());
+    q.wait();
+}
+
 template <typename T>
 bool same_bits(T a, T b) {
     return std::memcmp(&a, &b, sizeof(T)) == 0;
@@ -446,6 +455,31 @@ TYPED_TEST(HerkCandidates, FoldFitStraddlesTheScratchBudget) {
     }
 }
 
+// Auto on a fold row whose fold cannot fit its scratch takes what the old code took, the vendor
+// loop, not the untimed gram (both sides of gram's n <= 128 and of the budget). Vendor-free the
+// next native runs: gram at n <= 128, nothing past it.
+TYPED_TEST(HerkCandidates, AutoTakesTheVendorWhenTheFoldCannotFit) {
+    using T = typename TestFixture::T;
+    for (Spec s : {Spec{128, 9, 4}, Spec{129, 9, 4, Uplo::Upper, Transpose::ConjTrans}, Spec{33, 40, 5}}) {
+        s.seed = 19;
+        const std::size_t bytes = backend::detail::expanded_workspace_bytes<T>(*this->ctx, s.n, s.batch);
+        for (std::size_t cap : {bytes, bytes - 1}) {
+            const ScopedEnvVar budget("BATCHLAS_EXPAND_MAX_BYTES", std::to_string(cap).c_str());
+            auto p = make_prob<T>(s);
+            const std::string what = label(s) + " budget " + std::to_string(cap) + " of " + std::to_string(bytes);
+            std::string want = cap == bytes ? "fold" : (TestFixture::kVendor ? "vendor" : "gram");
+            if (want == "gram" && s.n > backend::detail::kGramMaxTile) {
+                const ScopedEnvVar clear("BATCHLAS_HERK_ROUTE", nullptr);
+                EXPECT_THROW(this->run(p), batchlas::NoRouteError) << what;
+                EXPECT_TRUE(untouched(p)) << what;
+                continue;
+            }
+            EXPECT_EQ(this->auto_choice(p), want) << what;
+            EXPECT_TRUE(correct(p)) << what;
+        }
+    }
+}
+
 // Every (uplo, trans) on every candidate, and Auto on the same shapes.
 TYPED_TEST(HerkCandidates, EveryCombinationOnEveryCandidate) {
     using T = typename TestFixture::T;
@@ -469,7 +503,10 @@ TYPED_TEST(HerkCandidates, EveryCombinationOnEveryCandidate) {
 }
 
 // BLAS: beta = 0 makes C output only. NaN in C's triangle (the diagonal too) must not reach the
-// result under any family or Auto: 0 * NaN is NaN, so a finite poison could not tell.
+// result under any family or Auto: 0 * NaN is NaN, so a finite poison could not tell. The fold's
+// gemm writes a never-zeroed arena lease at beta = 0, and the native direct and tiled gemms read
+// it (known-defects.md #11), so the arena holds NaN bytes first and the inner gemm also runs
+// pinned to those two (vendor-free Auto reaches them at n = 8; the vendor tree never does).
 TYPED_TEST(HerkCandidates, BetaZeroDoesNotReadC) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
@@ -478,8 +515,11 @@ TYPED_TEST(HerkCandidates, BetaZeroDoesNotReadC) {
     for (const C& c : hk::candidates<T>())
         if (!this->vendor_word_falls_back(c)) pins.push_back(c);
     const R nan = std::numeric_limits<R>::quiet_NaN();
-    for (const Spec& s : {Spec{40, 9, 5}, Spec{100, 33, 3, Uplo::Upper, Transpose::ConjTrans}})
+    for (const char* gemm_route : {static_cast<const char*>(nullptr), "direct", "tiled"})
+    for (const Spec& s : {Spec{40, 9, 5}, Spec{100, 33, 3, Uplo::Upper, Transpose::ConjTrans}, Spec{8, 8, 4}})
         for (const auto& c : pins) {
+            const ScopedEnvVar inner("BATCHLAS_GEMM_ROUTE", gemm_route);
+            poison_arena(*this->ctx, 4 * backend::detail::expanded_workspace_bytes<T>(*this->ctx, s.n, s.batch));
             auto p = make_prob<T>(s);
             p.beta = R(0);
             for (int it = 0; it < s.batch; ++it)
@@ -490,7 +530,8 @@ TYPED_TEST(HerkCandidates, BetaZeroDoesNotReadC) {
             std::optional<Pin> pin;
             if (c) pin.emplace("herk", *c);
             this->run(p);
-            EXPECT_TRUE(correct(p)) << (c ? select::to_string(*c) : std::string("auto")) << " " << label(s);
+            EXPECT_TRUE(correct(p)) << (c ? select::to_string(*c) : std::string("auto")) << " " << label(s)
+                                    << " gemm " << (gemm_route ? gemm_route : "auto");
         }
 }
 
@@ -1025,8 +1066,9 @@ TYPED_TEST(HerkCandidatesCpu, HeterogeneousBatchHasNoRoute) {
 }
 
 // The transcription (no GPU): each table holds exactly choice.hh's grid, sm_89 and sm_120 alike,
-// names the transcribed commit and choice.hh's keys; a row is the old Auto choice, then fold and
-// gram (n <= 128) in candidate order, vendor last unless it was the Auto choice.
+// names the transcribed commit and choice.hh's keys; a row is the old Auto choice, then vendor
+// (the old code's fallback when the fold could not fit; gram was pin-only), then the remaining
+// natives in candidate order (gram only at n <= 128).
 TEST(HerkTranscribedTable, HoldsTheChoiceGridAndTheOldRule) {
     std::set<std::string> want;
     for (int n : hk::grid_n)
@@ -1052,10 +1094,8 @@ TEST(HerkTranscribedTable, HoldsTheChoiceGridAndTheOldRule) {
                 got.insert(k);
                 EXPECT_FALSE(row.timed) << t.file << ":" << row.line;
                 const int n = std::stoi(row.keys[0]), b = std::stoi(row.keys[2]);
-                const std::string natives = n <= 128 ? "fold|gram" : "fold";
-                const std::string expect = old_auto(n, b) == "fold"
-                                               ? natives + "|vendor"
-                                               : "vendor|" + natives;
+                const std::string gram = n <= 128 ? "|gram" : "";
+                const std::string expect = (old_auto(n, b) == "fold" ? "fold|vendor" : "vendor|fold") + gram;
                 std::string ranked;
                 for (const auto& x : row.ranked) ranked += (ranked.empty() ? "" : "|") + x.spelling;
                 EXPECT_EQ(ranked, expect) << t.file << ":" << row.line;

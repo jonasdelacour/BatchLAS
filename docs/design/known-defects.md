@@ -34,7 +34,7 @@ The superseded root documents these were filed in are preserved at the git tag
 | 8 | `src/backends/syrk_custom_dispatch.cc` | ~~a forced native `syrk` lands on a route that writes both triangles~~ | **closed in the phase 5 rip: `native` is the tile kernel** |
 | 9 | `src/backends/syr2k_custom_dispatch.cc` | ~~a forced native `syr2k` throws a cuBLASDx message it did not ask for~~ | **closed in the phase 5 rip** |
 | 10 | grid `latrd` (`src/extensions/latrd_lower_panel.cc`, the grid kernel's column-update / sumsq pair) | a cross-sub-group read-after-write on `Ab(r, i)` with no barrier between the two loops | **fixed; armed 20/20 red on deletion under the amplified geometry; residual rate at the default geometry not bounded** |
-| 11 | `src/sycl/gemm/epilogue_linear.hh`, `src/sycl/gemm_kernels.cc` (`launch_direct`) | native GEMM reads `C` at `beta == 0` | `NaN` from an unzeroed arena; worked around in `geqrf_blocked` |
+| 11 | `src/sycl/gemm/epilogue_linear.hh`, `src/sycl/gemm_kernels.cc` (`launch_direct`) | native GEMM reads `C` at `beta == 0` | `NaN` from an unzeroed arena or a NaN `C`; worked around in `geqrf_blocked`, hemm `expand`, herk/her2k `fold`; symm/trmm `expand` exposed |
 | 12 | `src/ops/potrf/potrf.cc`, `src/ops/trsm/trsm.cc` (each `can_run(Vendor)`), `src/backends/cusolver.cc:72-77` | vendor `potrf` and `trsm` accept a heterogeneous batch and run at the full storage order (symm, syrk, syr2k, trmm, hemm, herk, her2k: fixed, their vendor refuses one) | silent wrong answer on a direct heterogeneous call; posv refuses it upstream |
 | 13 | `src/backends/cublas.cc` (`gemm_vendor_impl`, `gemv_vendor`), cuBLASLt; cuSPARSE spmm | complex<double> gemm/gemv with a unit dimension segfault inside cuBLASLt on one box, root cause unknown; two cuSPARSE spmm shapes misbehave | gemm worked around; gemv crashes `ortho_tests`; spmm refused in `can_run` |
 | 14 | `gesvd_cta` (Upper), `gesvd_blocked` (Lower, n <= 32), `syev_cta` (Upper), `syev_blocked` (Lower, n <= 32), `syev_two_stage` (Lower) | the Hermitian drivers read the triangle the caller did not name | **wrong answer under Auto** for gesvd Hermitian Upper n <= 32 and syev cfloat n 9..32, cdouble n <= 32 with Upper |
@@ -488,6 +488,17 @@ unwritten scratch region to a native `beta = 0` GEMM is exposed.
 **The workaround.** `geqrf_blocked_dispatch` zero-fills W1 and W2 once per call
 (`src/extensions/geqrf_blocked.cc`). The first panel writes the whole W extent, so later
 panels read finite values.
+
+**The Hermitian three (2026-10-06).** Once they ran vendor-free, hemm `expand` and herk/her2k
+`fold` reached it too: complex gemm rows rank `vendor` first, so vendor-free Auto takes the next
+entry, `direct` or `tiled` at small shapes. hemm passed the caller's beta to a gemm writing `C`,
+so beta = 0 with NaN in `C` returned NaN (reproduced with `BATCHLAS_GEMM_ROUTE=tiled`); the fold
+ran its beta = 0 gemm into a never-zeroed arena lease. hemm now zero-fills `C` when beta == 0
+(`src/ops/hemm/hemm.cc`), and the fold zero-fills its lease (`src/ops/{herk,her2k}/*.cc`).
+Guard: `{Hemm,Herk,Her2k}Candidates.BetaZeroDoesNotReadC`, which now adds an 8 x 8 shape, NaN
+bytes in the queue's arena, and the inner gemm pinned to `direct` and `tiled`, so it bites in the
+vendor tree too. symm `expand` (caller's beta) and trmm `expand` (beta = 0 into the caller's `C`)
+have the same shape by inspection and are not patched; delete all of these when `gemm` is fixed.
 
 **What fixing it needs** (owned by the `gemm` package): do not read `C` when `beta == 0` in
 `LinearEpilogue` and in `launch_direct`. The resumed geqrf work package had a two-line patch

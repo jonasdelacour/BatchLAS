@@ -51,6 +51,15 @@ using cd = std::complex<double>;
 // A max that keeps a NaN: std::max(w, NaN) returns w, so a NaN result would pass.
 double worse(double w, double x) { return std::isnan(x) || x > w ? x : w; }
 
+// NaN bytes (0xff) in the queue's arena where the next lease starts: a released lease hands its
+// bytes to the next one, so a scratch region the op never writes reads this.
+void poison_arena(Queue& q, std::size_t bytes) {
+    auto ws = q.workspace(bytes);
+    const auto s = ws.span();
+    q->memset(s.data(), 0xff, s.size());
+    q.wait();
+}
+
 template <typename T>
 bool same_bits(T a, T b) {
     return std::memcmp(&a, &b, sizeof(T)) == 0;
@@ -460,6 +469,10 @@ TYPED_TEST(Her2kCandidates, EveryCombinationOnEveryCandidate) {
             }
 }
 
+// BLAS: beta = 0 makes C output only, so NaN in C's triangle must not reach the result. The fold's
+// gemm writes a never-zeroed arena lease at beta = 0 that the native direct and tiled gemms read
+// (known-defects.md #11): the arena holds NaN bytes first, and the inner gemm also runs pinned to
+// those two (vendor-free Auto reaches them at n = 8; the vendor tree never does).
 TYPED_TEST(Her2kCandidates, BetaZeroDoesNotReadC) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
@@ -468,8 +481,11 @@ TYPED_TEST(Her2kCandidates, BetaZeroDoesNotReadC) {
     for (const C& c : h2::candidates<T>())
         if (!this->vendor_word_falls_back(c)) pins.push_back(c);
     const R nan = std::numeric_limits<R>::quiet_NaN();
-    for (const Spec& s : {Spec{40, 9, 5}, Spec{100, 33, 1, Uplo::Upper, Transpose::ConjTrans}})
+    for (const char* gemm_route : {static_cast<const char*>(nullptr), "direct", "tiled"})
+    for (const Spec& s : {Spec{40, 9, 5}, Spec{100, 33, 1, Uplo::Upper, Transpose::ConjTrans}, Spec{8, 8, 2}})
         for (const auto& c : pins) {
+            const ScopedEnvVar inner("BATCHLAS_GEMM_ROUTE", gemm_route);
+            poison_arena(*this->ctx, 4 * backend::detail::expanded_workspace_bytes<T>(*this->ctx, s.n, s.batch));
             auto p = make_prob<T>(s);
             p.beta = R(0);
             for (int it = 0; it < s.batch; ++it)
@@ -480,7 +496,8 @@ TYPED_TEST(Her2kCandidates, BetaZeroDoesNotReadC) {
             std::optional<Pin> pin;
             if (c) pin.emplace("her2k", *c);
             this->run(p);
-            EXPECT_TRUE(correct(p)) << (c ? select::to_string(*c) : std::string("auto")) << " " << label(s);
+            EXPECT_TRUE(correct(p)) << (c ? select::to_string(*c) : std::string("auto")) << " " << label(s)
+                                    << " gemm " << (gemm_route ? gemm_route : "auto");
         }
 }
 

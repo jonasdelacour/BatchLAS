@@ -111,6 +111,10 @@ Event fold(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, T alpha, f
     BumpAllocator pool(ws.span());
     auto storage = pool.allocate<T>(q, std::size_t(ld) * std::size_t(n) * std::size_t(batch));
     const MV<T> product(storage.data(), n, n, ld, ld * n, batch);
+    // The lease is never zeroed and the native direct/tiled gemms read C at beta = 0
+    // (known-defects.md #11): stale NaN in the arena would reach C.
+    q->memset(storage.data(), 0, storage.size() * sizeof(T));
+    if (!q.in_order()) q.wait();
     (void)gemm<B, T>(q, A, Bm, product, alpha, T(0), transA,
                      transA == Transpose::NoTrans ? Transpose::ConjTrans : Transpose::NoTrans,
                      ComputePrecision::Default);

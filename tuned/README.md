@@ -147,12 +147,15 @@ and wrote one CSV per op for both devices, then
 
     python3 scripts/sweep_to_table.py --transcribe tuned/transcribed/{hemm,herk,her2k}.csv --sha 8cf7fd86 --date 2026-10-06
 
-A row is the old Auto choice, then the other natives in candidate order (herk: `fold`, then `gram`
-where n <= 128; `gram` was pin-only in the old code), `vendor` last unless it was the Auto choice.
+A row is the old Auto choice, then `vendor` unless it was the Auto choice (the old code's fallback
+when the expansion or fold could not fit), then the other natives in candidate order (herk: `fold`,
+then `gram` where n <= 128; `gram` was pin-only in the old code, so it never precedes `vendor`).
+Vendor-free the vendor entry is skipped and the next native runs.
 Grids: hemm order and q `1..4096` with 255|256 and batch `1,2,3,4,5,8,128..32768`; herk and her2k n
 `1..4096` with 127|128|129 and 767|768|769, k `1,8,64,512,4096`, the same batches. Its off-grid data
-gate (2500 log-uniform points per op, dtype and device plus threshold bands) agreed 100.00% with the
-old rule; details in `docs/design/flat-kernel-selection.md` §12 "Hermitian three".
+gate (2500 log-uniform points per op, dtype and device plus threshold bands, each point also
+replayed with `expand`/`fold` refused for capacity, where the old code took the loop) agreed 100.00%
+with the old rule; details in `docs/design/flat-kernel-selection.md` §12 "Hermitian three".
 
 A transcribed row reproduces a deleted window; it is not a measurement. It is replaced by a timed
 row when the tuner sweeps that device.

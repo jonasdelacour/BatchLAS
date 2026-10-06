@@ -438,6 +438,8 @@ TYPED_TEST(HemmCandidates, EveryCombinationOnEveryCandidate) {
 
 // BLAS: beta = 0 makes C output only. NaN in every element of C must not reach the result under
 // any family or Auto (expand's gemm included): 0 * NaN is NaN, so a finite poison could not tell.
+// The native direct and tiled gemms read C at beta = 0 (known-defects.md #11), so expand's gemm
+// also runs pinned to those two (vendor-free Auto reaches them at 8 x 8; the vendor tree never does).
 TYPED_TEST(HemmCandidates, BetaZeroDoesNotReadC) {
     using T = typename TestFixture::T;
     using R = typename T::value_type;
@@ -446,8 +448,11 @@ TYPED_TEST(HemmCandidates, BetaZeroDoesNotReadC) {
     for (const C& c : hm::candidates<T>())
         if (!TestFixture::vendor_word_falls_back(c)) pins.push_back(c);
     const R nan = std::numeric_limits<R>::quiet_NaN();
-    for (const Spec& s : {Spec{Side::Left, Uplo::Lower, 40, 9, 5}, Spec{Side::Right, Uplo::Upper, 7, 100, 2}})
+    for (const char* gemm_route : {static_cast<const char*>(nullptr), "direct", "tiled"})
+    for (const Spec& s : {Spec{Side::Left, Uplo::Lower, 40, 9, 5}, Spec{Side::Right, Uplo::Upper, 7, 100, 2},
+                          Spec{Side::Left, Uplo::Upper, 8, 8, 4}})
         for (const auto& c : pins) {
+            const ScopedEnvVar inner("BATCHLAS_GEMM_ROUTE", gemm_route);
             auto p = make_prob<T>(s);
             p.beta = T(0);
             for (int it = 0; it < s.batch; ++it)
@@ -457,7 +462,8 @@ TYPED_TEST(HemmCandidates, BetaZeroDoesNotReadC) {
             std::optional<Pin> pin;
             if (c) pin.emplace("hemm", *c);
             this->run(p);
-            expect_hemm(p, (c ? select::to_string(*c) : std::string("auto")) + " beta = 0 " + label(s));
+            expect_hemm(p, (c ? select::to_string(*c) : std::string("auto")) + " beta = 0 " + label(s) + " gemm " +
+                               (gemm_route ? gemm_route : "auto"));
         }
 }
 
