@@ -1,7 +1,5 @@
 #pragma once
 
-// trsm's selection vocabulary (flat-kernel-selection-phase3-plan.md §1.2), header-only.
-
 #include "../../select/select.hh"
 
 #include <array>
@@ -20,12 +18,9 @@ using TrsmChoice = std::variant<Cta, SgLeft, Blocked, Vendor>;
 
 // Every compiled choice, once, in tie-break order (§6.3): native first, vendor last.
 template <class T>
-constexpr auto candidates() {
-    return std::array<TrsmChoice, 4>{Cta{}, SgLeft{}, Blocked{}, Vendor{}};
-}
+constexpr auto candidates() { return select::all_of<TrsmChoice>(); }
 
-inline constexpr std::array<std::string_view, 2> last_resort{"blocked", "vendor"};
-inline constexpr select::Rules rules{last_resort};  // §5.5: Blocked runs every GPU shape, Vendor everything else (CPU).
+inline constexpr select::OpSpec spec{Op::trsm, select::Lib::level3};  // §5.5: Blocked runs every GPU shape, Vendor everything else (CPU).
 
 // q: B.cols (Left) or B.rows (Right); ConjTrans folds to T; no uplo/diag key. Work ~ order^2 q batch.
 inline constexpr std::array<std::string_view, 5> key_names{

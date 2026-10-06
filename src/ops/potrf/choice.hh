@@ -1,8 +1,5 @@
 #pragma once
 
-// potrf's selection vocabulary (docs/design/flat-kernel-selection.md §4.2). Header-only, so
-// tests and benchmarks name the same choices the library runs.
-
 #include "../../select/select.hh"
 
 #include <array>
@@ -38,8 +35,8 @@ constexpr auto candidates() {
         return std::array<PotrfChoice, 5>{Tiny{}, Cta{}, Lpanel{8}, Blocked{}, Vendor{}};
 }
 
-inline constexpr std::array<std::string_view, 2> last_resort{"blocked", "vendor"};
-inline constexpr select::Rules rules{last_resort};  // §5.5: Blocked runs every Lower shape on a GPU, Vendor everything else.
+// §5.5 (the default last resort): Blocked runs every Lower shape on a GPU, Vendor everything else.
+inline constexpr select::OpSpec spec{Op::potrf, select::Lib::solver};
 
 // Table keys: the exact-match key first, then the log-distance keys (§5.4). n weighs 3: work
 // grows as n^3 and linearly in batch, so the distance approximates log-cost.

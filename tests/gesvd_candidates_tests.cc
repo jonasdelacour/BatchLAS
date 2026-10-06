@@ -406,7 +406,7 @@ TYPED_TEST(GesvdCandidates, DISABLED_HermitianFamiliesIgnoreTheUnreferencedTrian
 }
 
 // The vendor inside cuSOLVER's envelope (packed, max(m, n) <= 32, no thin factor); outside it the
-// pin is accepted (can_run is has_vendor_solver alone) and the library refuses at launch.
+// pin is accepted (can_run is has_vendor alone) and the library refuses at launch.
 TYPED_TEST(GesvdCandidates, VendorPinRunsInsideItsEnvelope) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;

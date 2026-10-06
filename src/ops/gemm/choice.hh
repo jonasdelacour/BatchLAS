@@ -138,11 +138,9 @@ constexpr auto candidates() {
     }
 }
 
-
-
 // Generality order (§5.5): direct serves every GPU shape, vendor everything else (CPU, precision).
 inline constexpr std::array<std::string_view, 2> last_resort{"direct", "vendor"};
-inline constexpr select::Rules rules{last_resort};
+inline constexpr select::OpSpec spec{Op::gemm, select::Lib::level3, {last_resort}};
 
 // C folds to T for a real scalar. layout: packed = A, B, C contiguous with 16-byte bases.
 // Work ~ m n k batch, so every log key weighs 1.

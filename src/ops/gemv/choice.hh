@@ -1,7 +1,5 @@
 #pragma once
 
-// gemv's selection vocabulary (docs/design/flat-kernel-selection.md#phase-5-gemv), header-only.
-
 #include "../../select/select.hh"
 
 #include <array>
@@ -17,20 +15,18 @@ struct Vendor : select::NoFields<"vendor"> {};  // backend::gemv_vendor
 
 using GemvChoice = std::variant<Cta, Direct, Vendor>;
 
-template <class T>
-constexpr auto candidates() {
-    return std::array<GemvChoice, 3>{Cta{}, Direct{}, Vendor{}};  // the old ladder
-}
+template <class T>  // the old ladder
+constexpr auto candidates() { return select::all_of<GemvChoice>(); }
 
 // can_run's device terms (host-callable for tests). Cta body 3 is reqd_sub_group_size(32).
 inline bool device_allows(const GemvChoice& c, const select::Device& d, bool transposed) {
     if (std::holds_alternative<Cta>(c)) return d.is_gpu && d.has_sg32 && transposed;
-    if (std::holds_alternative<Vendor>(c)) return d.has_vendor_blas;
+    if (std::holds_alternative<Vendor>(c)) return d.has_vendor;
     return true;
 }
 
-inline constexpr std::array<std::string_view, 2> last_resort{"vendor", "direct"};
-inline constexpr select::Rules rules{last_resort};  // CPU: vendor, else Direct (no GPU gate)
+inline constexpr std::array<std::string_view, 2> last_resort{"vendor", "direct"};  // CPU: vendor, else Direct (no GPU gate)
+inline constexpr select::OpSpec spec{Op::gemv, select::Lib::level3, {last_resort}};
 
 // out/red: y's and x's lengths (they swap with trans); ConjTrans folds to T. Work ~ out red batch.
 inline constexpr std::array<std::string_view, 4> key_names{"trans:exact", "out:log", "red:log", "batch:log"};

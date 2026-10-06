@@ -225,15 +225,8 @@ bool can_run(const PotrfChoice& c, const select::Device& d, const MatrixView<T, 
                n <= lpanel_max_n_for_slm<T>(d.slm_budget, d.max_wg);
       },
       [&](Blocked)       { return native_ok && uplo == Uplo::Lower && cta_max_n_for_slm<T>(d.slm_budget) >= 1; },
-      [&](Vendor)        { return d.has_vendor_solver; },
+      [&](Vendor)        { return d.has_vendor; },   // spec.vendor's library is compiled in
   }, c);
-}
-
-template <Backend B, class T>
-PotrfChoice choose(Queue& q, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo) {
-  const auto d = select::device_of<B>(q);
-  auto ok = [&](const PotrfChoice& c) { return can_run<T>(c, d, A, uplo); };
-  return select::choose<PotrfChoice>("potrf", dtype_name<T>(), d, key_of(A, uplo), candidates<T>(), ok);
 }
 
 template <Backend B, class T>
@@ -248,7 +241,10 @@ void launch(Queue& q, const PotrfChoice& c, const MatrixView<T, MatrixFormat::De
             /*trailing_gemm=*/[&](auto&&... a) { gemm<B, T>(q, a...); },   // public gemm: decides for itself
             /*panel_solve=*/  [&](auto&&... a) { trsm<B, T>(q, a...); });  // public trsm: decides for itself
       },
-      [&](Vendor)          { backend::potrf_vendor<B, T>(q, A, uplo, ws, info); },
+      [&](Vendor) -> Event {
+        if constexpr (select::has_library<B>(spec.vendor)) return backend::potrf_vendor<B, T>(q, A, uplo, ws, info);
+        else select::no_vendor<B, T>(spec);   // NoRouteError + a coverage `miss` row
+      },
   }, c);
 }
 
@@ -263,18 +259,21 @@ template <Backend B, typename T>
 Event potrf(Queue& q, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo, Span<std::byte> ws,
             Span<int32_t> info) {
   potrf_validate_params(A, uplo);
-  const auto c = ops::potrf::choose<B, T>(q, A, uplo);
-  auto shape = select::square_shape<B, T>(A.rows(), A.batch_size());   // coverage key: scalar, backend
-  shape.uplo = uplo;                                                     // ... and uplo, never inferred
-  select::TraceScope trace("potrf", c, shape);   // prints, records coverage, indents children
-  ops::potrf::launch<B, T>(q, c, A, uplo, ws, info);
-  return q.get_event();
+  // device_of, choose (NoRouteError when vendor-free and nothing runs), the trace line and coverage
+  // row (scalar and backend filled in; uplo is part of the key, never inferred), then launch inside it.
+  return select::run<B, T>(
+      ops::potrf::spec, q, ops::potrf::key_of(A, uplo), ops::potrf::candidates<T>(),
+      [&](const auto& c, const auto& d) { return ops::potrf::can_run<T>(c, d, A, uplo); },
+      {.m = A.rows(), .n = A.rows(), .k = A.rows(), .batch = A.batch_size(), .uplo = uplo}, {},
+      [&](const auto& c) { return ops::potrf::launch<B, T>(q, c, A, uplo, ws, info); });
 }
 
 template <Backend B, typename T>
 size_t potrf_buffer_size(Queue& q, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo) {
   potrf_validate_params(A, uplo);
-  return ops::potrf::workspace<T>(ops::potrf::choose<B, T>(q, A, uplo), q, A, uplo);   // R5
+  const auto c = select::pick<B, T>(ops::potrf::spec, q, ops::potrf::key_of(A, uplo), ops::potrf::candidates<T>(),
+                                    [&](const auto& k, const auto& d) { return ops::potrf::can_run<T>(k, d, A, uplo); });
+  return ops::potrf::workspace<T>(c, q, A, uplo);   // R5
 }
 ```
 
@@ -320,11 +319,12 @@ struct Device {
   std::string key;          // table key: "sm_120", "sm_89", "gfx90a", "cpu", "intel_<id>"
   std::string family;       // "sm", "gfx", "intel", "cpu": borrowing stays inside a family first
   int arch_number;          // 120, 89, 90 (gfx90a), 0 for cpu
-  bool is_gpu, has_sg32, has_vendor_solver;
+  bool is_gpu, has_sg32;
+  bool has_vendor;          // the asking op's library group (OpSpec::vendor) is compiled in
   int64_t slm_budget;       // resident::device_slm_budget(LOCAL_MEM_SIZE), as today
   int max_wg;
 };
-template <Backend B> Device device_of(Queue& q);   // computed once per Queue device and cached
+template <Backend B> const Device& device_of(const Queue& q, Lib vendor = Lib::none);   // memoized
 ```
 
 Facts are filled in from the same queries `potrf_op_shape` makes today (`potrf_route.hh:20-62`).
@@ -1585,6 +1585,32 @@ in `tuned_tables_tests` holds it.
   `<batchlas.hh>`) includes `<batchlas/no_route.hh>`, as main's gesvd/ormqr/syev headers did for
   the old path; spelling migration `batchlas::dispatch::NoRouteError` -> `batchlas::NoRouteError`
   (`docs/cpp-api.md`). `examples/consumer` static-asserts it with only the umbrella included.
+
+### After phase 5, one run() per op (2026-10-06)
+
+The fifteen op files had grown the same plumbing around their four real functions (`key_of`,
+`can_run`, `launch`, `workspace`): a private `overloaded`, a `choose` wrapper with a try/catch that
+turned "nothing runnable" into `NoRouteError`, a `native_facts` wrapper, a device helper, the
+`square_shape` + `TraceScope` sequence and a 20-line instantiation block. That now lives once in
+`select.hh`:
+
+- **`select::OpSpec`** in each `choice.hh`: the `Op`, the `select::Lib` its Vendor family calls
+  (`level3`, `factorization`, `solver`, `sparse`, or `none` for gesv/posv) and its `Rules`, which
+  default to `{"blocked", "vendor"}`. gemm, gemv, spmm, getri and orgqr keep their own order.
+- **`select::run`** opens the trace/coverage scope around `launch(choice)`; **`select::pick`** is
+  the choice alone, for `*_buffer_size`. Both raise `NoRouteError` for a vendor-free miss, so the
+  per-op catch is gone. `select::no_vendor<B, T>(spec)` is the Vendor arm's `else`.
+- **`Device::has_vendor`** replaces `has_vendor_solver` and `has_vendor_blas`. The two flags had
+  carried four library groups (getrf/getrs/geqrf/orgqr/ormqr passed the factorization group in the
+  solver slot, spmm the sparse group in the BLAS slot). The phase notes above use the old names.
+- **`select::all_of<Choice>()`** is `candidates<T>()` for every field-less op: declaration order is
+  the tie-break order (unchanged for all thirteen). Only gemm and potrf list knobs by hand.
+- `coverage::Shape` is built with designated initializers; `square_shape` is gone.
+  `select::on_in_order_queue` replaces three copies of the in-order wrapper (ormqr, syev, gesvd).
+- One behaviour moved: ormqr's insufficient-workspace check now runs inside the trace scope, as
+  syev's and gesvd's already did, so that throw leaves a coverage `reached` row.
+
+Routing is unchanged: `scripts/route_diff.sh` captured identical `reached` rows before and after.
 
 ## 13. Phase 3 decisions (maintainer, 2026-10-04)
 

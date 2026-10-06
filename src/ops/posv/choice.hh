@@ -1,7 +1,5 @@
 #pragma once
 
-// posv's selection vocabulary (flat-kernel-selection-phase3-plan.md §1.1), header-only.
-
 #include "../../select/select.hh"
 
 #include <array>
@@ -19,13 +17,10 @@ using PosvChoice = std::variant<Tiny, Cta, Blocked>;
 
 // Tie-break order (§6.3). No vendor family: a `vendor` pin warns and falls back to Auto.
 template <class T>
-constexpr auto candidates() {
-    return std::array<PosvChoice, 3>{Tiny{}, Cta{}, Blocked{}};
-}
+constexpr auto candidates() { return select::all_of<PosvChoice>(); }
 
 // Blocked runs every shape the validator accepts; a failing child reports its own error.
-inline constexpr std::array<std::string_view, 1> last_resort{"blocked"};
-inline constexpr select::Rules rules{last_resort};
+inline constexpr select::OpSpec spec{Op::posv, select::Lib::none};
 
 inline constexpr std::array<std::string_view, 4> key_names{  // work: n^3/3 + 2 n^2 nrhs
     "uplo:exact", "n:log:3", "nrhs:log", "batch:log"};

@@ -1,15 +1,11 @@
-// syev: the whole selection path (docs/design/flat-kernel-selection.md §4.3, rule R1;
-// docs/design/flat-kernel-selection.md#phase-5-syev). public syev() -> choose() -> std::visit -> launch.
-// The kernel for a shape is the first runnable entry of the nearest row in
-// tuned/syev.<dtype>.<device>.txt; can_run() below only removes entries that cannot run.
-// Cta, CtaFused and Jacobi are the three n <= 32 sub-group solvers; Blocked (sytrd_blocked +
-// stedc) and TwoStage (sy2sb + sb2st + stedc) serve every n and call their sub-ops directly.
+// syev (flat-kernel-selection.md §4.3, R1; docs/design/flat-kernel-selection.md#phase-5-syev): select::run
+// takes the first entry of the nearest tuned/syev.<dtype>.<device>.txt row that can_run() admits. Cta,
+// CtaFused and Jacobi are the three n <= 32 sub-group solvers; Blocked (sytrd_blocked + stedc) and
+// TwoStage (sy2sb + sb2st + stedc) serve every n and call their sub-ops directly.
 
 #include <batchlas/backend_config.h>
 
 #include <batchlas/blas/functions/syev.hh>
-#include <batchlas/no_route.hh>
-#include "../../select/vendor.hh"
 #include <batchlas/settings.hh>
 
 #include "choice.hh"
@@ -17,7 +13,6 @@
 #include "../../select/select.hh"
 #include "../../util/template-instantiations.hh"
 
-#include <algorithm>
 #include <complex>
 #include <cstddef>
 #include <cstdint>
@@ -29,10 +24,7 @@
 namespace batchlas {
 namespace ops::syev {
 
-template <class... F>
-struct overloaded : F... { using F::operator()...; };
-template <class... F>
-overloaded(F...) -> overloaded<F...>;
+using select::overloaded;
 
 template <class T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
@@ -66,31 +58,8 @@ bool can_run(const SyevChoice& c, const select::Device& d, const MV<T>& A) {
         [&](Jacobi) { return small; },
         [&](Blocked) { return large; },
         [&](TwoStage) { return large; },
-        [&](Vendor) { return d.has_vendor_solver; },
+        [&](Vendor) { return d.has_vendor; },
     }, c);
-}
-
-template <Backend B, class T>
-SyevChoice choose(Queue& q, const MV<T>& A, JobType jobz) {
-    const select::Device& d = select::device_of<B>(q);
-    auto ok = [&](const SyevChoice& c) { return can_run<B, T>(c, d, A); };
-    try {
-        return select::choose("syev", select::dtype_name<T>(), d, key_of<T>(A, jobz), candidates<T>(), ok, rules);
-    } catch (const std::runtime_error&) {
-        // Vendor-free burn-down reads coverage `miss` rows; a plain runtime_error records none.
-        const auto all = candidates<T>();
-        if (!select::solver_vendor_available<B> && std::none_of(all.begin(), all.end(), ok))
-            select::throw_no_vendor_route<T>(Op::syev, B, select::kSolverLibrary<B>);
-        throw;
-    }
-}
-
-// The coverage row's native flags (§5.6): computed only when coverage records a row.
-template <Backend B, class T>
-select::NativeFacts native_facts(Queue& q, const MV<T>& A) {
-    if (!coverage::dynamic_enabled()) return {};
-    const select::Device& d = select::device_of<B>(q);
-    return select::native_facts(candidates<T>(), [&](const SyevChoice& c) { return can_run<B, T>(c, d, A); });
 }
 
 // Deliberately slower and more robust than the CTA STEQR defaults: syev runs inside syevx,
@@ -144,7 +113,7 @@ void validate(const MV<T>& A, const char* who) {
 // Capability only, for the Python binding's introspection: the same can_run, no backend.
 template <class T>
 bool supports(const Queue& q, const MV<T>& A, const SyevChoice& c) {
-    return can_run<Backend::AUTO, T>(c, select::describe(q.device(), Backend::AUTO, false, false), A);
+    return can_run<Backend::AUTO, T>(c, select::describe(q.device(), Backend::AUTO, false), A);
 }
 
 }  // namespace ops::syev
@@ -153,33 +122,29 @@ template <Backend Back, typename T>
 Event syev(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<typename base_type<T>::type> eigenvalues,
            JobType jobtype, Uplo uplo, Span<std::byte> workspace, Span<int32_t> info) {
     ops::syev::validate<T>(A, "syev");
-    const auto c = ops::syev::choose<Back, T>(ctx, A, jobtype);
-    auto shape = select::square_shape<Back, T>(A.rows(), A.batch_size());
-    shape.n = A.cols();
-    shape.uplo = uplo;
-    const select::Key trace_key = ops::syev::key_of<T>(A, jobtype);
-    select::TraceScope trace("syev", c, shape, ops::syev::native_facts<Back, T>(ctx, A), trace_key);
-    if (workspace.size() < ops::syev::workspace<Back, T>(ctx, c, A, eigenvalues, jobtype, uplo))
-        throw batchlas::workspace_error("syev: insufficient workspace for chosen provider");
-    // std::optional, not a plain `Queue`: the default Queue constructor builds a real
-    // sycl::queue on device 0. Blocked and TwoStage require an in-order queue.
-    Queue* run_q = &ctx;
-    std::optional<Queue> in_order_q;
-    if (!ctx.in_order()) {
-        in_order_q.emplace(ctx, true);
-        Event dep = ctx.get_event();
-        in_order_q->enqueue(dep);
-        run_q = &*in_order_q;
-    }
-    return ops::syev::launch<Back, T>(*run_q, c, A, eigenvalues, jobtype, uplo, workspace, info);
+    const coverage::Shape shape{.m = A.rows(), .n = A.cols(), .k = A.rows(), .batch = A.batch_size(), .uplo = uplo};
+    const select::Key key = ops::syev::key_of<T>(A, jobtype);
+    return select::run<Back, T>(
+        ops::syev::spec, ctx, key, ops::syev::candidates<T>(),
+        [&](const auto& c, const auto& d) { return ops::syev::can_run<Back, T>(c, d, A); }, shape, key,
+        [&](const auto& c) {
+            if (workspace.size() < ops::syev::workspace<Back, T>(ctx, c, A, eigenvalues, jobtype, uplo))
+                throw batchlas::workspace_error("syev: insufficient workspace for chosen provider");
+            // Blocked and TwoStage require an in-order queue.
+            return select::on_in_order_queue(ctx, [&](Queue& q) {
+                return ops::syev::launch<Back, T>(q, c, A, eigenvalues, jobtype, uplo, workspace, info);
+            });
+        });
 }
 
 template <Backend Back, typename T>
 size_t syev_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                         Span<typename base_type<T>::type> eigenvalues, JobType jobtype, Uplo uplo) {
     ops::syev::validate<T>(A, "syev_buffer_size");
-    return ops::syev::workspace<Back, T>(ctx, ops::syev::choose<Back, T>(ctx, A, jobtype), A, eigenvalues, jobtype,
-                                         uplo);
+    const auto c = select::pick<Back, T>(
+        ops::syev::spec, ctx, ops::syev::key_of<T>(A, jobtype), ops::syev::candidates<T>(),
+        [&](const auto& k, const auto& d) { return ops::syev::can_run<Back, T>(k, d, A); });
+    return ops::syev::workspace<Back, T>(ctx, c, A, eigenvalues, jobtype, uplo);
 }
 
 namespace blas::dispatch::detail {
@@ -209,29 +174,9 @@ SYEV_SUPPORTS_INSTANTIATE(std::complex<double>)
 
 }  // namespace blas::dispatch::detail
 
-#define SYEV_INSTANTIATE(B_, fp)                                    \
-    BATCHLAS_INSTANTIATE(sig::syev<fp>, syev, B_, fp)               \
-    BATCHLAS_INSTANTIATE(sig::syev_buffer_size<fp>, syev_buffer_size, B_, fp)
-
-#define SYEV_ALL(B_)                          \
-    SYEV_INSTANTIATE(B_, float)               \
-    SYEV_INSTANTIATE(B_, double)              \
-    SYEV_INSTANTIATE(B_, std::complex<float>) \
-    SYEV_INSTANTIATE(B_, std::complex<double>)
-
-// Keyed on the device family, not the vendor library: without the library the Vendor arm
-// compiles to a throw, so the symbol exists in every build with the device.
-#if BATCHLAS_HAS_CUDA_BACKEND
-SYEV_ALL(Backend::CUDA)
-#endif
-#if BATCHLAS_HAS_ROCM_BACKEND
-SYEV_ALL(Backend::ROCM)
-#endif
-#if BATCHLAS_HAS_HOST_BACKEND
-SYEV_ALL(Backend::NETLIB)
-#endif
-
-#undef SYEV_ALL
+#define SYEV_INSTANTIATE(B_, fp) \
+    BATCHLAS_INSTANTIATE_OP(B_, fp, syev) BATCHLAS_INSTANTIATE_OP(B_, fp, syev_buffer_size)
+BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(SYEV_INSTANTIATE)
 #undef SYEV_INSTANTIATE
 
 }  // namespace batchlas
