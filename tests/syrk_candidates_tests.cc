@@ -374,7 +374,8 @@ TYPED_TEST(SyrkCandidates, EveryCombinationOnEveryCandidate) {
                     if (want) EXPECT_TRUE(correct(p)) << name(c, s);
                 }
                 auto p = make_prob<T>(s);
-                if (t == Transpose::ConjTrans && !TestFixture::kVendor) {
+                const bool no_native = t == Transpose::ConjTrans || (!TestFixture::kFloat && s.n > 128);
+                if (no_native && !TestFixture::kVendor) {
                     EXPECT_THROW(this->run(p), batchlas::NoRouteError) << label(s);
                     continue;
                 }
