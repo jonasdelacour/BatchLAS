@@ -147,7 +147,6 @@ if(BATCHLAS_HAS_CUDA_BACKEND)
     list(APPEND BACKEND_COMMON_SOURCES
         symm_custom_dispatch.cc
         syrk_custom_dispatch.cc
-        syr2k_custom_dispatch.cc
         trmm_custom_dispatch.cc
     )
 endif()

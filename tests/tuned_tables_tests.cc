@@ -21,6 +21,7 @@
 #include "../src/ops/syev/choice.hh"
 #include "../src/ops/symm/choice.hh"
 #include "../src/ops/syrk/choice.hh"
+#include "../src/ops/syr2k/choice.hh"
 #include "../src/select/select.hh"
 
 #include <algorithm>
@@ -165,6 +166,11 @@ std::vector<std::string> candidates(const std::string& op, const std::string& dt
     if (op == "syrk") {
         if (dtype == "float") return spellings(syrk::candidates<float>());
         if (dtype == "double") return spellings(syrk::candidates<double>());
+    }
+    namespace syr2k = batchlas::ops::syr2k;
+    if (op == "syr2k") {  // real-only: there is no complex syr2k table
+        if (dtype == "float") return spellings(syr2k::candidates<float>());
+        if (dtype == "double") return spellings(syr2k::candidates<double>());
     }
     return {};
 }

@@ -1,5 +1,5 @@
-// The public hemm/herk/her2k/syr2k/trmm entry points (symm, syrk: src/ops/<op>), defined outside
-// every vendor TU so the API links in a build with no vendor library. The float CUDA tile
+// The public hemm/herk/her2k/trmm entry points (symm, syrk, syr2k: src/ops/<op>), defined
+// outside every vendor TU so the API links in a build with no vendor library. The float CUDA tile
 // routes are chosen by rule in src/backends/*_custom_dispatch.cc (BATCHLAS_<OP>_ROUTE);
 // everything else goes to backend::<op>_vendor<B, T>, or throws NoRouteError when no
 // vendor library is compiled in.
@@ -10,7 +10,6 @@
 #include <batchlas/blas/functions/hemm.hh>
 #include <batchlas/blas/functions/herk.hh>
 #include <batchlas/blas/functions/her2k.hh>
-#include <batchlas/blas/functions/syr2k.hh>
 #include <batchlas/blas/functions/trmm.hh>
 
 #include <batchlas/no_route.hh>
@@ -18,7 +17,6 @@
 
 // The level-3 custom-route gates. They have to run before the
 // vendor-available test, so they live here rather than in cublas.cc.
-#include "../../backends/syr2k_custom_dispatch.hh"
 #include "../../backends/trmm_custom_dispatch.hh"
 #include "../../backends/level3_coverage.hh"
 
@@ -82,37 +80,6 @@ Event her2k(Queue& ctx,
     }
 }
 
-template <Backend Back, RealScalar T>
-Event syr2k(Queue& ctx,
-            const MatrixView<T, MatrixFormat::Dense>& A,
-            const MatrixView<T, MatrixFormat::Dense>& B,
-            const MatrixView<T, MatrixFormat::Dense>& C,
-            T alpha,
-            T beta,
-            Uplo uplo,
-            Transpose transA) {
-    // Native tile gate, CUDA + float only. evidence: docs/perf/level3.md#the-shipped-predicates
-    if constexpr (Back == Backend::CUDA && std::is_same_v<T, float>) {
-        if (backend::syr2k_use_cuda_custom(ctx, A, B, C, uplo, transA)) {
-            return backend::syr2k_cuda_custom(ctx, A, B, C, alpha, beta, uplo, transA);
-        }
-        // Record the decline: a shape moving OFF a native kernel shows up only here.
-        backend::detail::record_level3_route(
-            Op::syr2k, "vendor",
-            C.rows(), C.cols(),
-            transA == Transpose::NoTrans ? A.cols() : A.rows(),
-            A.batch_size(), backend::detail::kNativeUnknown,
-            {uplo, Side::Left, Diag::NonUnit, transA});
-    }
-
-    if constexpr (!select::level3_vendor_available<Back>) {
-        select::throw_no_vendor_route<T>(
-            Op::syr2k, Back, select::kLevel3Library<Back>);
-    } else {
-        return backend::syr2k_vendor<Back, T>(ctx, A, B, C, alpha, beta, uplo, transA);
-    }
-}
-
 template <Backend Back, typename T>
 Event trmm(Queue& ctx,
            const MatrixView<T, MatrixFormat::Dense>& A,
@@ -149,12 +116,7 @@ Event trmm(Queue& ctx,
 
 #define OP_INSTANTIATE(OP, B_, fp) BATCHLAS_INSTANTIATE(sig::OP<fp>, OP, B_, fp)
 
-// syr2k is RealScalar-constrained and hemm/herk/her2k
-// ComplexScalar-constrained, hence the split.
-#define REAL_ONLY_OPS(B_)             \
-    OP_INSTANTIATE(syr2k, B_, float)  \
-    OP_INSTANTIATE(syr2k, B_, double)
-
+// hemm/herk/her2k are ComplexScalar-constrained, hence the split.
 #define COMPLEX_ONLY_OPS(B_)                            \
     OP_INSTANTIATE(hemm,  B_, std::complex<float>)      \
     OP_INSTANTIATE(hemm,  B_, std::complex<double>)     \
@@ -171,7 +133,6 @@ Event trmm(Queue& ctx,
     ALL_TYPE_OPS_ONE(B_, double)                     \
     ALL_TYPE_OPS_ONE(B_, std::complex<float>)        \
     ALL_TYPE_OPS_ONE(B_, std::complex<double>)       \
-    REAL_ONLY_OPS(B_)                                \
     COMPLEX_ONLY_OPS(B_)
 
 // Keyed on the DEVICE FAMILY, not on the vendor library: the bodies above
@@ -188,8 +149,6 @@ ALL_TYPE_OPS_ONE(Backend::ROCM, float)
 ALL_TYPE_OPS_ONE(Backend::ROCM, double)
 ALL_TYPE_OPS_ONE(Backend::ROCM, std::complex<float>)
 ALL_TYPE_OPS_ONE(Backend::ROCM, std::complex<double>)
-OP_INSTANTIATE(syr2k, Backend::ROCM, float)
-OP_INSTANTIATE(syr2k, Backend::ROCM, double)
 #endif
 
 #if BATCHLAS_HAS_HOST_BACKEND
@@ -199,7 +158,6 @@ LEVEL3_INSTANTIATE(Backend::NETLIB)
 #undef LEVEL3_INSTANTIATE
 #undef ALL_TYPE_OPS_ONE
 #undef COMPLEX_ONLY_OPS
-#undef REAL_ONLY_OPS
 #undef OP_INSTANTIATE
 
 }  // namespace batchlas

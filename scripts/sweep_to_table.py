@@ -963,8 +963,21 @@ SYRK = OpSpec(
     candidate_order=list(SYRK_CHOICES),
 )
 
+# syr2k (docs/design/flat-select-l3/syr2k.md): work ~ n^2 k batch; real dtypes only. No sweep source:
+# sm_89 and sm_120 are the same transcription of ff340fc6's hand-written rule (it read no architecture).
+SYR2K_CHOICES = ("triangular", "vendor")
+SYR2K = OpSpec(
+    op="syr2k",
+    keys="n:log:2 k:log batch:log",
+    row_ops=("syr2k",),
+    row_key=lambda r: None,
+    arm_spelling={c: c for c in SYR2K_CHOICES},
+    arm_route={c: (("vendor:vendor",) if c == "vendor" else (f"native:{c}",)) for c in SYR2K_CHOICES},
+    candidate_order=list(SYR2K_CHOICES),
+)
+
 POTRF.review = potrf_offgrid
-OPS = [POTRF, POSV, TRSM, GEMM, GEMV, GEQRF, ORGQR, ORMQR, GETRF, GETRS, GETRI, GESV, GESVD, SPMM, SYEV, SYMM, SYRK]
+OPS = [POTRF, POSV, TRSM, GEMM, GEMV, GEQRF, ORGQR, ORMQR, GETRF, GETRS, GETRI, GESV, GESVD, SPMM, SYEV, SYMM, SYRK, SYR2K]
 OP_BY_NAME = {s.op: s for s in OPS}
 
 

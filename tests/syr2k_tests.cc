@@ -11,10 +11,6 @@
 
 #include "test_utils.hh"
 
-#if BATCHLAS_HAS_CUDA_BACKEND
-#include "../src/backends/syr2k_cublasdx_fused.hh"
-#endif
-
 using namespace batchlas;
 
 template <typename T, Backend B>
@@ -151,81 +147,6 @@ int main(int argc, char** argv) {
 }
 
 #if BATCHLAS_HAS_CUDA_BACKEND
-TEST(Syr2kCudaCustomTest, ForcedCuBLASDxPathMatchesVendor) {
-    Queue ctx;
-    if (ctx.device().type != DeviceType::GPU) {
-        GTEST_SKIP() << "CUDA custom syr2k test requires a GPU device";
-    }
-
-    const int n = 128;
-    const int k = 96;
-    const int batch = 64;
-    const float alpha = 0.95f;
-    const float beta = -0.1f;
-    const float tol = test_utils::tolerance<float>() * 4096.0f;
-
-    for (auto transA : {Transpose::NoTrans, Transpose::Trans}) {
-        const int a_rows = transA == Transpose::NoTrans ? n : k;
-        const int a_cols = transA == Transpose::NoTrans ? k : n;
-        Matrix<float, MatrixFormat::Dense> A = Matrix<float, MatrixFormat::Dense>::Random(a_rows, a_cols, false, batch, 13);
-        Matrix<float, MatrixFormat::Dense> B = Matrix<float, MatrixFormat::Dense>::Random(a_rows, a_cols, false, batch, 31);
-        Matrix<float, MatrixFormat::Dense> C0 = Matrix<float, MatrixFormat::Dense>::Random(n, n, false, batch, 43);
-
-        for (auto uplo : {Uplo::Lower, Uplo::Upper}) {
-            Matrix<float, MatrixFormat::Dense> C_custom(n, n, batch);
-            Matrix<float, MatrixFormat::Dense> C_vendor(n, n, batch);
-
-            MatrixView<float, MatrixFormat::Dense>::copy(ctx, C_custom.view(), C0.view()).wait();
-            MatrixView<float, MatrixFormat::Dense>::copy(ctx, C_vendor.view(), C0.view()).wait();
-
-            {
-                ScopedEnvVar force_route("BATCHLAS_SYR2K_ROUTE", "cublasdx");
-                try {
-                    syr2k(ctx,
-                                         A.view(),
-                                         B.view(),
-                                         C_custom.view(),
-                                         {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = transA}).wait();
-                } catch (const std::runtime_error& err) {
-#if BATCHLAS_HAS_CUBLAS
-                    // syr2k_cublasdx::available() is defined in a TU compiled
-                    // only when cuBLAS is present; without it there is nothing
-                    // to assert absent.
-                    EXPECT_FALSE(batchlas::backend::syr2k_cublasdx::available());
-#endif
-                    EXPECT_NE(std::string(err.what()).find("BATCHLAS_SYR2K_ROUTE=cublasdx"), std::string::npos);
-                    return;
-                }
-            }
-
-            {
-                ScopedEnvVar vendor_route("BATCHLAS_SYR2K_ROUTE", "vendor");
-                syr2k(ctx,
-                                     A.view(),
-                                     B.view(),
-                                     C_vendor.view(),
-                                     {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = transA}).wait();
-            }
-
-            C_custom.view().symmetrize(ctx, uplo).wait();
-            C_vendor.view().symmetrize(ctx, uplo).wait();
-
-            for (int b = 0; b < batch; ++b) {
-                for (int j = 0; j < n; ++j) {
-                    for (int i = 0; i < n; ++i) {
-                        ASSERT_NEAR(C_custom(i, j, b), C_vendor(i, j, b), tol)
-                            << "trans=" << static_cast<int>(transA)
-                            << ", uplo=" << static_cast<int>(uplo)
-                            << ", batch=" << b
-                            << ", row=" << i
-                            << ", col=" << j;
-                    }
-                }
-            }
-        }
-    }
-}
-
 namespace {
 
 struct Syr2kShape {
@@ -519,7 +440,7 @@ TEST(Syr2kCudaCustomTest, RemovedRouteWordsThrow) {
         GTEST_SKIP() << "CUDA custom syr2k test requires a GPU device";
     }
     Matrix<float, MatrixFormat::Dense> A(16, 8, 2), B(16, 8, 2), C(16, 16, 2);
-    for (const char* word : {"tiles", "narrow", "gemm", "custom", "dx", "fused", "diag_full_gemm", "triangular_tiles", "gram_tiles", "expand_gemm", "fused_device", "register_tiled", "native:auto", "vendor:auto", "bogus", "gram", "expand"}) {
+    for (const char* word : {"tiles", "narrow", "gemm", "custom", "dx", "fused", "diag_full_gemm", "triangular_tiles", "gram_tiles", "expand_gemm", "fused_device", "register_tiled", "native:auto", "vendor:auto", "bogus", "gram", "expand", "cublasdx", "cta", "tiny"}) {
         ScopedEnvVar route("BATCHLAS_SYR2K_ROUTE", word);
         EXPECT_THROW(syr2k(ctx, A.view(), B.view(), C.view(), {.alpha = 1.0f, .beta = 0.0f}).wait(), std::invalid_argument) << word;
     }
