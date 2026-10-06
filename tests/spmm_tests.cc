@@ -9,6 +9,7 @@
 #include <complex>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <exception>
 #include <limits>
 #include <string>
@@ -174,6 +175,13 @@ protected:
         int c_stride_pad = 0;
         int ldb_pad = 0;
         int ldc_pad = 0;
+
+        // Every item gets the same A, B and C, and every result must be
+        // bit-identical to item 0's.
+        bool identical_items = false;
+        // Bits 1/2/4: A's values, B or C start one R past their natural
+        // alignment -- legal for std::complex<R>, and it rules out the pair load.
+        int misalign = 0;
     };
 
     // Builds the fixture, asserts the decision surface of every view, runs the
@@ -228,6 +236,7 @@ protected:
 
         for (int b = 0; b < c.batch; ++b) {
             const SpmmPattern& it = items[static_cast<size_t>(b)];
+            const int ib = c.identical_items ? 0 : b;
             const int nnz_b = static_cast<int>(it.ci.size());
             const size_t ro_base = static_cast<size_t>(b) * offset_stride;
             const size_t v_base = static_cast<size_t>(b) * matrix_stride;
@@ -242,7 +251,7 @@ protected:
                 a_ci[v_base + static_cast<size_t>(p)] = it.ci[static_cast<size_t>(p)];
                 a_val[v_base + static_cast<size_t>(p)] =
                     c.a_starts_nan ? nan_v
-                                   : spmm_cov_value<S>(b * 104729 + p * 31 + 7);
+                                   : spmm_cov_value<S>(ib * 104729 + p * 31 + 7);
             }
             // Slots above this item's own nnz; the default fill is in range
             // either way, so an over-read is visible.
@@ -274,7 +283,8 @@ protected:
                     b_data[static_cast<size_t>(b) * str_b +
                            static_cast<size_t>(col) * ldb + static_cast<size_t>(row)] =
                         dead_col ? nan_v
-                                 : spmm_cov_value<S>(b * 7919 + col * 131 + row + 3);
+                                 : spmm_cov_value<S>((c.identical_items ? 0 : b) * 7919 +
+                                                     col * 131 + row + 3);
                 }
             }
         }
@@ -289,22 +299,42 @@ protected:
         UnifiedVector<S> c_data(c_live + kGuard);
         std::vector<S> c_initial(c_live);
         for (size_t t = 0; t < c_live; ++t) {
+            const size_t seed_t = c.identical_items ? t % static_cast<size_t>(str_c) : t;
             const S v = c.c_starts_nan
                             ? nan_v
-                            : spmm_cov_value<S>(static_cast<int>(t) * 29 + 11);
+                            : spmm_cov_value<S>(static_cast<int>(seed_t) * 29 + 11);
             c_data[t] = v;
             c_initial[t] = v;
         }
         const S guard_v = static_cast<S>(R(-98765));
         for (int t = 0; t < kGuard; ++t) c_data[c_live + static_cast<size_t>(t)] = guard_v;
 
+        // ---- misaligned copies, when asked for ---------------------------------
+        UnifiedVector<S> a_shift, b_shift, c_shift;
+        const auto shifted = [](UnifiedVector<S>& store, const UnifiedVector<S>& src) {
+            store.resize(src.size() + 1);
+            S* p = reinterpret_cast<S*>(reinterpret_cast<R*>(store.data()) + 1);
+            std::memcpy(static_cast<void*>(p), src.data(), src.size() * sizeof(S));
+            return p;
+        };
+        S* const a_ptr = (c.misalign & 1) ? shifted(a_shift, a_val) : a_val.data();
+        S* const b_ptr = (c.misalign & 2) ? shifted(b_shift, b_data) : b_data.data();
+        S* const c_ptr = (c.misalign & 4) ? shifted(c_shift, c_data) : c_data.data();
+        if constexpr (test_utils::is_complex<S>::value) {
+            for (const S* p : {a_ptr, b_ptr, c_ptr}) {
+                const bool off = reinterpret_cast<std::uintptr_t>(p) % sizeof(S) != 0;
+                ASSERT_EQ(off, (c.misalign & (p == a_ptr ? 1 : p == b_ptr ? 2 : 4)) != 0)
+                    << "the misalignment this case names is not the one it built";
+            }
+        }
+
         // ---- views, and the assertions that keep this case from being vacuous
-        MatrixView<S, MatrixFormat::CSR> A_view(a_val.data(), a_ro.data(), a_ci.data(),
+        MatrixView<S, MatrixFormat::CSR> A_view(a_ptr, a_ro.data(), a_ci.data(),
                                                 c.m, c.kA, NonZeros{max_nnz},
                                                 matrix_stride, offset_stride, c.batch);
-        MatrixView<S, MatrixFormat::Dense> B_view(b_data.data(), b_rows, b_cols, ldb,
+        MatrixView<S, MatrixFormat::Dense> B_view(b_ptr, b_rows, b_cols, ldb,
                                                   str_b, c.batch);
-        MatrixView<S, MatrixFormat::Dense> C_view(c_data.data(), out_rows, c.nrhs, ldc,
+        MatrixView<S, MatrixFormat::Dense> C_view(c_ptr, out_rows, c.nrhs, ldc,
                                                   str_c, c.batch);
 
         // matrix_stride and offset_stride are ADJACENT ints among nine positional
@@ -341,6 +371,11 @@ protected:
         const bool route_pinned = pin_text.find("native") != std::string_view::npos ||
                                   pin_text == "direct" || pin_text == "cta" ||
                                   pin_text == "blocked";
+        if (c.misalign != 0 && !route_pinned && BackendType != Backend::NETLIB) {
+            GTEST_SKIP() << "cuSPARSE rejects an operand off its natural alignment "
+                            "(\"matB had an illegal value: NULL pointer\") and the "
+                            "vendor arm does not check the status; pin the native route";
+        }
         UnifiedVector<std::byte> ws;
         try {
             const size_t need = spmm_buffer_size(*(this->ctx), A_view, B_view, C_view,
@@ -360,6 +395,9 @@ protected:
             }
             FAIL() << "spmm threw on backend "
                    << test_utils::backend_to_string(BackendType) << ": " << e.what();
+        }
+        if (c.misalign & 4) {
+            std::memcpy(static_cast<void*>(c_data.data()), c_ptr, c_data.size() * sizeof(S));
         }
 
         // ---- the reference, written FROM THE DEFINITION ----------------------
@@ -465,6 +503,21 @@ protected:
                         << "C pad slot " << t << " of batch " << b << " was written";
                 }
             }
+        }
+
+        // Same inputs, same reduction order: a difference is a race or an
+        // item-indexing bug, however small.
+        if (c.identical_items) {
+            int differing = 0;
+            for (int b = 1; b < c.batch; ++b) {
+                for (int col = 0; col < c.nrhs; ++col) {
+                    const size_t o0 = static_cast<size_t>(col) * ldc;
+                    const size_t ob = static_cast<size_t>(b) * str_c + o0;
+                    differing += std::memcmp(&c_data[ob], &c_data[o0],
+                                             static_cast<size_t>(out_rows) * sizeof(S)) != 0;
+                }
+            }
+            EXPECT_EQ(differing, 0) << "item columns not bit-identical to item 0's";
         }
 
         for (int t = 0; t < kGuard; ++t) {
@@ -925,6 +978,62 @@ TYPED_TEST(SpmmCoverageTest, LargeBatchLanczosShapeTrans) {
     c.alpha = static_cast<S>(1.0); c.beta = static_cast<S>(-1.0);
     this->run_case(c);
 }
+
+// --- 12b. The complex pair load: saturating batch, and its alignment fallback ---
+// nrhs = 9 straddles every type's column block; ConjTrans B and the pads make
+// the loaded addresses non-natural. evidence: docs/perf/blackwell.md#cfloat-spmm-under-the-precise-fp-model
+
+#define BATCHLAS_SPMM_PAIR_CASE(c, S)                                             \
+    c.m = 40; c.kA = 40; c.nrhs = 9; c.nnz_per_row = 4;                         \
+    c.ldb_pad = 3; c.ldc_pad = 2; c.b_stride_pad = 5; c.c_stride_pad = 7;       \
+    if constexpr (test_utils::is_complex<S>::value) {                             \
+        c.alpha = S(0.5, 1.25); c.beta = S(-0.75, 0.5);                           \
+    } else {                                                                      \
+        c.alpha = static_cast<S>(0.5); c.beta = static_cast<S>(-0.75);            \
+    }
+
+TYPED_TEST(SpmmCoverageTest, SaturatingBatchBitIdentical) {
+    using S = typename TestFixture::ScalarType;
+    typename TestFixture::Case c;
+    BATCHLAS_SPMM_PAIR_CASE(c, S)
+    c.batch = 1024; c.identical_items = true;
+    this->run_case(c);
+}
+
+TYPED_TEST(SpmmCoverageTest, SaturatingBatchBitIdenticalConjTransB) {
+    using S = typename TestFixture::ScalarType;
+    typename TestFixture::Case c;
+    BATCHLAS_SPMM_PAIR_CASE(c, S)
+    c.batch = 1024; c.identical_items = true;
+    c.transB = Transpose::ConjTrans;
+    this->run_case(c);
+}
+
+TYPED_TEST(SpmmCoverageTest, MisalignedAValues) {
+    using S = typename TestFixture::ScalarType;
+    typename TestFixture::Case c;
+    BATCHLAS_SPMM_PAIR_CASE(c, S)
+    c.batch = 3; c.misalign = 1;
+    this->run_case(c);
+}
+
+TYPED_TEST(SpmmCoverageTest, MisalignedBConjTrans) {
+    using S = typename TestFixture::ScalarType;
+    typename TestFixture::Case c;
+    BATCHLAS_SPMM_PAIR_CASE(c, S)
+    c.batch = 3; c.misalign = 2; c.transB = Transpose::ConjTrans;
+    this->run_case(c);
+}
+
+TYPED_TEST(SpmmCoverageTest, MisalignedC) {
+    using S = typename TestFixture::ScalarType;
+    typename TestFixture::Case c;
+    BATCHLAS_SPMM_PAIR_CASE(c, S)
+    c.batch = 3; c.misalign = 4;
+    this->run_case(c);
+}
+
+#undef BATCHLAS_SPMM_PAIR_CASE
 
 // --- 13. The degenerate extent ---
 // nrhs == 0 is legal and C must come back COMPLETELY untouched, not scaled by

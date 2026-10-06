@@ -7,9 +7,10 @@
 namespace batchlas::sycl_gemm {
 
 // One row of the register-tiled GEMM dispatch table: launch_register_tiled<>'s
-// template parameters as a structural NTTP, written at gemm_custom's case label.
-// TRAP: TC defaults to 4 here but to ThreadTileRows there, so every row states
-// TR and TC. evidence: docs/perf/gemm.md#gemm-the-register-tiled-launcher-table
+// template parameters as a structural NTTP. The rows are ops::gemm::reg_configs
+// (src/ops/gemm/choice.hh). TRAP: TC defaults to 4 here but to ThreadTileRows
+// there, so every row states TR and TC.
+// evidence: docs/perf/gemm.md#gemm-the-register-tiled-launcher-table
 struct RegTile {
     int M;              // TileM
     int N;              // TileN

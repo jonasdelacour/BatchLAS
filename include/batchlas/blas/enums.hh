@@ -349,11 +349,12 @@ namespace batchlas {
 
     /// @brief Algorithm family of the partial symmetric/Hermitian eigensolver `syevx`.
     ///
-    /// Set per call through SyevxParams::method, or process-wide through
-    /// `BATCHLAS_SYEVX_ALGORITHM` (`auto|direct|direct_subset|filtered|lobpcg`).
-    /// **The environment variable wins** over SyevxParams::method, as
-    /// `BATCHLAS_SYEV_PROVIDER` does for syev, so a whole application can be forced
-    /// onto one algorithm for diagnosis.
+    /// `Auto` picks on matrix format, size and the requested fraction of the spectrum
+    /// (`syevx_select_algorithm`). Set per call through SyevxParams::method, or
+    /// process-wide through `BATCHLAS_SYEVX_ALGORITHM`
+    /// (`auto|direct|direct_subset|filtered|lobpcg`). **The environment variable wins**
+    /// over SyevxParams::method, as a `BATCHLAS_<OP>_ROUTE` pin does for the routed
+    /// ops, so a whole application can be forced onto one algorithm for diagnosis.
     ///
     /// A choice the input cannot use degrades instead of failing: DirectSubset on
     /// complex or sparse input runs Direct (dense) or LOBPCG (CSR), and Direct or
@@ -477,7 +478,7 @@ namespace batchlas {
     /// @brief Internal compute precision of a GEMM (the cuBLAS `cublasComputeType_t`).
     ///
     /// Anything but `Default` is served only by the vendor library: the native GEMM
-    /// routes do not support it. On cuBLAS, a single-precision scalar accepts
+    /// kernels do not support it. On cuBLAS, a single-precision scalar accepts
     /// F32, F16, BF16 and TF32, a double-precision scalar only F64; any other
     /// combination throws batchlas::unsupported.
     enum class ComputePrecision {

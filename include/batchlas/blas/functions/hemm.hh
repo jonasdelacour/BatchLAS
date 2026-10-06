@@ -59,7 +59,7 @@ using hemm_vendor = Event(Queue&,
 /// @param uplo   which triangle of `A` holds the data
 /// @return event of the last enqueued kernel; `C` is valid once it completes
 /// @pre All operands have the same batch size and conforming shapes per item.
-/// @throws batchlas::dispatch::NoRouteError in a build without the vendor BLAS
+/// @throws batchlas::NoRouteError in a build without the vendor BLAS
 ///         for `Ba`: hemm has no native implementation.
 /// @note Not instantiated for `Backend::ROCM` (rocBLAS has no wrapper here).
 /// @see symm, HemmOptions, @ref md_docs_2cpp-api
@@ -79,7 +79,8 @@ BATCHLAS_API Event hemm(Queue& ctx,
 
 namespace batchlas::backend {
 
-// Declaration only: each vendor TU defines and instantiates it for its Backend.
+// DECLARATION ONLY: each vendor TU defines and instantiates it for its Backend;
+// the public hemm is defined in src/ops/level3/level3.cc.
 // evidence: docs/design/vendor-independence.md#the-entry-point-facade
 /// @brief Vendor-library implementation of hemm (cuBLAS, host BLAS).
 ///

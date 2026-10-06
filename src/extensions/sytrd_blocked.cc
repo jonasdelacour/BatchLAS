@@ -1,5 +1,5 @@
 #include <batchlas/blas/device.hh>
-#include <batchlas/blas/dispatch/route_compiled.hh>
+#include "../select/vendor.hh"
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/matrix.hh>
@@ -53,7 +53,7 @@ enum class SytrdTrailingUpdateMode {
 };
 
 // Override for the trailing update; unset means the per-backend default below.
-// "syr2k" and "her2k" both name the Rank2k route. Anything unrecognised silently
+// "syr2k" and "her2k" both select Rank2k mode. Anything unrecognised silently
 // means Default, so a typo'd pin is a default-against-default A/B.
 inline SytrdTrailingUpdateMode sytrd_trailing_update_mode() {
     const char* v = batchlas::settings().selection.sytrd_trailing_update.get();
@@ -783,7 +783,7 @@ Event sytrd_blocked_impl(Queue& ctx,
     // evidence: docs/perf/sytrd.md#sytrd-the-rank-2k-trailing-update-in-the-blocked-reduction
     // evidence: docs/perf/syev.md#syev-her2k-trailing-update-for-complex-float-wp3
     constexpr bool rank2k_trailing_update_supported =
-        dispatch::level3_tile_route_available<B, T> &&
+        select::level3_tile_route_available<B, T> &&
         (std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>);
     const bool use_rank2k_trailing_update =
         rank2k_trailing_update_supported &&

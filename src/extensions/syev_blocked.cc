@@ -223,8 +223,8 @@ Event syev_blocked(Queue& ctx,
         if (!want_vectors) {
             // Eigenvalues only: bisection straight off the tridiagonal, instead of an
             // eigenvector D&C whose Z is discarded (`blocked` owns 32 < n <= 320 in values
-            // mode, syev.hh syev_saturated_algorithm_for_n_values). STEDC cannot simply be
-            // asked for NoEigenVectors -- see the NOTE below. STEDC and STEBZ
+            // mode, the jobz=N rows of tuned/syev.<dtype>.<device>.txt). STEDC cannot simply
+            // be asked for NoEigenVectors -- see the NOTE below. STEDC and STEBZ
             // (order=Ascending) both return ascending eigenvalues.
             // evidence: docs/perf/syev.md#syev-stebz-values-only-in-the-blocked-solver-wp1
             BATCHLAS_KERNEL_TRACE_SCOPE("syev_blocked.stebz_evals");

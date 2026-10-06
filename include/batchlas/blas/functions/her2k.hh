@@ -60,7 +60,7 @@ using her2k_vendor = Event(Queue&,
 /// @param transA  `Transpose::NoTrans` or `Transpose::ConjTrans`
 /// @return event of the last enqueued kernel; `C` is valid once it completes
 /// @pre All operands have the same batch size and conforming shapes per item.
-/// @throws batchlas::dispatch::NoRouteError in a build without the vendor BLAS
+/// @throws batchlas::NoRouteError in a build without the vendor BLAS
 ///         for `Ba`: her2k has no native implementation.
 /// @note Not instantiated for `Backend::ROCM`.
 /// @see syr2k, herk, Her2kOptions, @ref md_docs_2cpp-api
@@ -80,7 +80,8 @@ BATCHLAS_API Event her2k(Queue& ctx,
 
 namespace batchlas::backend {
 
-// Declaration only: each vendor TU defines and instantiates it for its Backend.
+// DECLARATION ONLY: each vendor TU defines and instantiates it for its Backend;
+// the public her2k is defined in src/ops/level3/level3.cc.
 // evidence: docs/design/vendor-independence.md#the-entry-point-facade
 /// @brief Vendor-library implementation of her2k (cuBLAS, host BLAS).
 ///

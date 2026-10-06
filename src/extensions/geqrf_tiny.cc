@@ -162,7 +162,7 @@ Event geqrf_tiny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int n, int bat
                 // evidence: docs/perf/qr.md#the-stack-frame-is-the-gate-for-this-kernel-not-the-spill-counter
 #pragma clang loop unroll(full)
                 for (int j = 0; j < N; ++j) {
-                    // n is one scalar for the whole batch (supports() refuses a heterogeneous
+                    // n is one scalar for the whole batch (can_run refuses a heterogeneous
                     // view), so every predicate below is uniform and so is the barrier sequence.
                     if (j >= n) continue;
 
@@ -261,7 +261,7 @@ Event geqrf_tiny_launch(Queue& ctx, T* a_ptr, int ld, int stride, int n, int bat
 template <typename T>
 int geqrf_tiny_max_n_for_slm(std::size_t slm_budget_bytes) {
     // A walk with a break, not a max: per-work-group bytes are NOT monotone in N, and
-    // supports() advertises the contiguous range n <= max_n, so the ceiling must be the
+    // can_run advertises the contiguous range n <= max_n, so the ceiling must be the
     // largest N at which every smaller bucket also fits.
     const std::size_t slice = resident::occupancy_budget(slm_budget_bytes);
     constexpr int ceiling = geqrf_tiny_type_ceiling<T>();
@@ -270,11 +270,6 @@ int geqrf_tiny_max_n_for_slm(std::size_t slm_budget_bytes) {
     if (ceiling < 16 || geqrf_tiny_wg_bytes<T, 16>() > slice) return 8;
     if (ceiling < 32 || geqrf_tiny_wg_bytes<T, 32>() > slice) return 16;
     return 32;
-}
-
-template <typename T>
-int geqrf_tiny_max_n() {
-    return geqrf_tiny_max_n_for_slm<T>(gn::kGeqrfTinyReferenceSlm);
 }
 
 template <typename T>
@@ -312,8 +307,8 @@ Event geqrf_tiny_dispatch(Queue& ctx,
     const int n = static_cast<int>(A.cols());
     const int batch = static_cast<int>(A.batch_size());
 
-    // A forced route that supports() rejects falls through to automatic() and silently
-    // runs the vendor, so every gate supports() applies is RE-APPLIED here and throws.
+    // Direct callers reach this without the selector, so every gate can_run applies is
+    // RE-APPLIED here and throws (a pin the selector refuses throws there instead).
     if (m < 1 || n < 1 || batch < 1) {
         throw batchlas::invalid_argument("geqrf_tiny: degenerate extents");
     }
@@ -375,7 +370,6 @@ Event geqrf_tiny_dispatch(Queue& ctx,
 // Per scalar type only; the ladder above pulls the <T, N, C> cross-product in implicitly.
 #define BATCHLAS_GEQRF_TINY_INSTANTIATE(T)                                                     \
     template int geqrf_tiny_max_n_for_slm<T>(std::size_t);                                     \
-    template int geqrf_tiny_max_n<T>();                                                        \
     template unsigned geqrf_tiny_debug_launch<T>(Queue&, int);                                 \
     template std::size_t geqrf_tiny_buffer_size<T>(                                            \
         Queue&, const MatrixView<T, MatrixFormat::Dense>&);                                    \

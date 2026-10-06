@@ -11,6 +11,7 @@
 
 #include "../math-helpers.hh"
 #include "../queue.hh"
+#include "../ops/geqrf/geqrf.hh"  // geqrf_buffer_size_bound: sized once, run on sub-views
 
 #include <algorithm>
 #include <cstdint>
@@ -1049,7 +1050,7 @@ size_t sytrd_band_reduction_single_step_buffer_size_core(Queue& ctx,
 
     MatrixView<T, MatrixFormat::Dense> dummyB(nullptr, m_max, nb_max, m_max, m_max * nb_max, batch);
     Span<T> dummyTau(nullptr, static_cast<size_t>(nb_max) * static_cast<size_t>(batch));
-    bytes += geqrf_buffer_size<B, T>(ctx, dummyB, dummyTau);
+    bytes += geqrf_buffer_size_bound<B, T>(ctx, dummyB, dummyTau);
 
     MatrixView<T, MatrixFormat::Dense> dummySym(nullptr, m_max, m_max, m_max, m_max * m_max, batch);
     bytes += ormqr_buffer_size<B, T>(ctx, dummyB, dummySym, Side::Left, Transpose::ConjTrans, dummyTau);
@@ -1192,7 +1193,7 @@ size_t sytrd_band_reduction_bandr1_buffer_size_core(Queue& ctx,
 
     MatrixView<T, MatrixFormat::Dense> dummyB(nullptr, m_max, nb_max, m_max, m_max * nb_max, batch);
     Span<T> dummyTau(nullptr, static_cast<size_t>(nb_max) * static_cast<size_t>(batch));
-    bytes += geqrf_buffer_size<B, T>(ctx, dummyB, dummyTau);
+    bytes += geqrf_buffer_size_bound<B, T>(ctx, dummyB, dummyTau);
 
     MatrixView<T, MatrixFormat::Dense> dummySym(nullptr, m_max, m_max, m_max, m_max * m_max, batch);
     bytes += ormqr_buffer_size<B, T>(ctx, dummyB, dummySym, Side::Left, Transpose::ConjTrans, dummyTau);

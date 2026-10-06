@@ -5,6 +5,7 @@
 #include <batchlas/util/sycl-device-queue.hh>
 
 #include <cstdlib>
+#include <stdexcept>
 #include <string>
 
 #include "test_utils.hh"
@@ -148,7 +149,7 @@ TYPED_TEST(SyrkTest, NarrowShapesMatchGemmReference) {
 }
 
 // The poison tests further down are CUDA-only: they force a route with
-// BATCHLAS_SYRK_VARIANT and skip without a GPU, so no *backend* other than CUDA
+// BATCHLAS_SYRK_ROUTE and skip without a GPU, so no *backend* other than CUDA
 // has ever had "syrk leaves the other triangle alone" checked. This one is typed
 // over every backend the build has. It is the contract SyrkOptions::uplo names,
 // and it is exactly what the generic gemm fallback in src/extensions/syrk.cc got
@@ -234,15 +235,23 @@ TEST(SyrkCudaCustomTest, ForcedCuBLASDxPathMatchesVendor) {
             MatrixView<float, MatrixFormat::Dense>::copy(ctx, C_vendor.view(), C0.view()).wait();
 
             {
-                ScopedEnvVar force_variant("BATCHLAS_SYRK_VARIANT", "cublasdx");
-                syrk(ctx,
-                                    A.view(),
-                                    C_custom.view(),
-                                    {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = transA}).wait();
+                // Without MathDx no fused kernel runs, and the pin throws rather than
+                // fall back to a route that writes both triangles.
+                ScopedEnvVar force_route("BATCHLAS_SYRK_ROUTE", "cublasdx");
+                try {
+                    syrk(ctx,
+                         A.view(),
+                         C_custom.view(),
+                         {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = transA}).wait();
+                } catch (const std::runtime_error& err) {
+                    EXPECT_NE(std::string(err.what()).find("BATCHLAS_SYRK_ROUTE=cublasdx"), std::string::npos)
+                        << err.what();
+                    return;
+                }
             }
 
             {
-                ScopedEnvVar vendor_variant("BATCHLAS_SYRK_VARIANT", "vendor");
+                ScopedEnvVar vendor_route("BATCHLAS_SYRK_ROUTE", "vendor");
                 syrk(ctx,
                                     A.view(),
                                     C_vendor.view(),
@@ -363,14 +372,14 @@ TEST(SyrkCudaCustomTest, TriangularTilesLeaveTheOtherHalfUntouched) {
                 poison_unreferenced_triangle(C_vendor, uplo);
 
                 {
-                    ScopedEnvVar force_variant("BATCHLAS_SYRK_VARIANT", "triangular");
+                    ScopedEnvVar force_route("BATCHLAS_SYRK_ROUTE", "triangular");
                     syrk(ctx,
                          A.view(),
                          C_custom.view(),
                          {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = transA}).wait();
                 }
                 {
-                    ScopedEnvVar vendor_variant("BATCHLAS_SYRK_VARIANT", "vendor");
+                    ScopedEnvVar vendor_route("BATCHLAS_SYRK_ROUTE", "vendor");
                     syrk(ctx,
                          A.view(),
                          C_vendor.view(),
@@ -383,7 +392,7 @@ TEST(SyrkCudaCustomTest, TriangularTilesLeaveTheOtherHalfUntouched) {
     }
 }
 
-TEST(SyrkCudaCustomTest, AutoRouteLeavesTheOtherHalfUntouched) {
+TEST(SyrkCudaCustomTest, AutoAndNativeRoutesLeaveTheOtherHalfUntouched) {
     Queue ctx;
     if (ctx.device().type != DeviceType::GPU) {
         GTEST_SKIP() << "CUDA custom syrk test requires a GPU device";
@@ -425,9 +434,20 @@ TEST(SyrkCudaCustomTest, AutoRouteLeavesTheOtherHalfUntouched) {
                  A.view(),
                  C_auto.view(),
                  {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = Transpose::NoTrans}).wait();
+            Matrix<float, MatrixFormat::Dense> C_native =
+                Matrix<float, MatrixFormat::Dense>::Random(shape.n, shape.n, false, shape.batch, 43);
+            poison_unreferenced_triangle(C_native, uplo);
+            {
+                // `native` is a tile kernel, never the both-triangles GEMM it used to reach.
+                ScopedEnvVar native_route("BATCHLAS_SYRK_ROUTE", "native");
+                syrk(ctx,
+                     A.view(),
+                     C_native.view(),
+                     {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = Transpose::NoTrans}).wait();
+            }
 
             {
-                ScopedEnvVar vendor_variant("BATCHLAS_SYRK_VARIANT", "vendor");
+                ScopedEnvVar vendor_route("BATCHLAS_SYRK_ROUTE", "vendor");
                 syrk(ctx,
                      A.view(),
                      C_vendor.view(),
@@ -435,7 +455,22 @@ TEST(SyrkCudaCustomTest, AutoRouteLeavesTheOtherHalfUntouched) {
             }
 
             expect_triangle_respected(C_auto, C_vendor, uplo, Transpose::NoTrans, tol);
+            expect_triangle_respected(C_native, C_vendor, uplo, Transpose::NoTrans, tol);
         }
     }
 }
+// BATCHLAS_SYRK_ROUTE takes only its own words; the removed legacy spellings (and any typo)
+// throw rather than silently meaning Auto.
+TEST(SyrkCudaCustomTest, RemovedRouteWordsThrow) {
+    Queue ctx;
+    if (ctx.device().type != DeviceType::GPU) {
+        GTEST_SKIP() << "CUDA custom syrk test requires a GPU device";
+    }
+    Matrix<float, MatrixFormat::Dense> A(16, 8, 2), C(16, 16, 2);
+    for (const char* word : {"tiles", "narrow", "gemm", "custom", "dx", "fused", "diag_full_gemm", "triangular_tiles", "gram_tiles", "expand_gemm", "fused_device", "register_tiled", "native:auto", "vendor:auto", "bogus", "expand"}) {
+        ScopedEnvVar route("BATCHLAS_SYRK_ROUTE", word);
+        EXPECT_THROW(syrk(ctx, A.view(), C.view(), {.alpha = 1.0f, .beta = 0.0f}).wait(), std::invalid_argument) << word;
+    }
+}
+
 #endif

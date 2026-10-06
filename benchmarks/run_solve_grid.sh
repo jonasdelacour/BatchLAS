@@ -14,8 +14,8 @@
 # Everything else follows run_factor_grid.sh: one process per cell (the sticky
 # SLM carve-out), a batch ladder around the nominal so an unsaturated reading is
 # visible rather than assumed, and a resolved-route readback per arm, because
-# `pin_parsed` only says the pin was UNDERSTOOD -- an unsupported pin still
-# falls through to automatic() with pin_parsed=1.
+# `pin_parsed` only says the pin was UNDERSTOOD; the readback says what ran
+# (a pin the shape cannot run throws instead; see the `reason` column).
 #
 # env: FACTOR_BENCH, GPU (default 1), REPS (default 7), ORDERS, NRHS_LIST,
 #      BATCHES, ARMS, NO_ROUTE_READBACK=1 to skip the (slow) coverage runs.

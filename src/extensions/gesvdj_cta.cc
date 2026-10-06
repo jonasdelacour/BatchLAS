@@ -5,6 +5,7 @@
 #include <batchlas/util/kernel-heuristics.hh>
 #include <batchlas/util/mempool.hh>
 #include <batchlas/util/group-invoke.hh>
+#include "gesvd_native.hh"
 #include "sg_compat.hh"
 #include <batchlas/backend_config.h>
 #include "../math-helpers.hh"
@@ -793,17 +794,15 @@ inline void gesvdj_cta_impl(Queue& ctx,
     });
 }
 
-// Largest max(m, n) accepted, per scalar type; local memory sets it, and
-// complex<double> with a V tile does not launch at C=64. Must agree with
-// gesvd_jacobi_max_dim in route_gesvd.hh.
+// Largest max(m, n) this kernel accepts, per scalar type. Local memory sets it,
+// and occupancy rather than the hard cap binds: complex<double> with a V tile
+// does not launch at C=64, and values-only (no V tile) halves the budget, so the
+// cap is job-dependent. The values live in gesvd_native.hh so gesvd's can_run
+// states the same ceiling.
 // evidence: docs/design/gesvd.md#gesvdj_cta-local-memory-budget-formula
 template <typename T>
 constexpr int32_t gesvdj_cta_max_dim(bool want_vectors) {
-    if constexpr (std::is_same_v<T, std::complex<double>>) {
-        return want_vectors ? 32 : 64;
-    } else {
-        return 64;
-    }
+    return static_cast<int32_t>(sycl_gesvd::gesvd_jacobi_max_dim<T>(want_vectors));
 }
 
 inline bool want_vectors_for_cap(SvdVectors jobu, SvdVectors jobvh) {

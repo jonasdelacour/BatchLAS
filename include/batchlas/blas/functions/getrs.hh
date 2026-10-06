@@ -52,9 +52,11 @@ using getrs_vendor_buffer_size = size_t(Queue&,
 ///
 /// Checks only non-negative extents. Squareness of A, `A.rows() == B.rows()`,
 /// equal batch sizes and the pivot span's length are checked by the option
-/// overloads; on this path a non-conforming pair is routed to the vendor.
+/// overloads; on this path a non-conforming pair fails every native can_run and
+/// goes to the vendor.
 /// @throws batchlas::invalid_argument on negative extents
 /// @ingroup factorizations
+// Runs before selection in src/ops/getrs/getrs.cc reads A.rows()/B.cols().
 // Deliberately minimal; rejecting more would change a working call into an error.
 // evidence: docs/design/vendor-independence.md#positional-validators-reject-only-what-no-route-can-serve
 template <typename T>
@@ -91,8 +93,8 @@ inline void getrs_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
 /// @pre `A.rows() == A.cols() == B.rows()`, equal batch sizes, and
 ///      `pivots.size() >= n * batch` (checked by the option overloads only)
 /// @throws batchlas::invalid_argument on negative extents
-/// @throws batchlas::dispatch::NoRouteError if no native route supports the
-///         shape and the vendor library was not built in
+/// @throws batchlas::NoRouteError if no native kernel can run the shape and the
+///         vendor library was not built in
 /// @see GetrsOptions
 /// @ingroup factorizations
 template <Backend Back, typename T>
@@ -116,9 +118,10 @@ BATCHLAS_API size_t getrs_buffer_size(Queue& ctx,
 
 namespace batchlas::backend {
 
-/// @brief Vendor arm of getrs(); called by the entry-point facade, not by users.
+/// @brief Vendor arm of getrs(); called by getrs() when it selects the `vendor`
+///        kernel family, not by users.
 /// @ingroup dispatch
-// Declaration only: the public getrs lives in src/dispatch/entry_points/factorization.cc.
+// DECLARATION ONLY: the public getrs is defined in src/ops/getrs/getrs.cc.
 // evidence: docs/design/vendor-independence.md#the-entry-point-facade
 template <Backend Back, typename T>
 BATCHLAS_API Event getrs_vendor(Queue& ctx,

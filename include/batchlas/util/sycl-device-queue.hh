@@ -157,6 +157,12 @@ enum class DeviceProperty
     NUMBER_OF_PROPERTIES         ///< Number of properties (not a property).
 };
 
+/// @brief True for consumer Blackwell (RTX 50xx / RTX PRO 6000, sm_120/121).
+/// @param cuda_cc a value of Device::cuda_compute_capability()
+/// @ingroup core
+// evidence: docs/perf/blackwell.md
+constexpr bool is_sm120_family(int cuda_cc) { return cuda_cc >= 120 && cuda_cc < 130; }
+
 /// @brief A handle to one SYCL device: its type and its index among devices of that type.
 ///
 /// @code
@@ -222,6 +228,12 @@ struct BATCHLAS_API Device{
     // get_property(MAX_SUB_GROUP_SIZE): a false accept aborts a
     // [[sycl::reqd_sub_group_size]] launch. evidence: docs/perf/gemv.md#the-sub-route-gates
     bool supports_sub_group_size(size_t size) const;
+
+    /// @brief CUDA compute capability as major*10+minor (89 = sm_89, 120 = sm_120), or 0 for a
+    /// non-CUDA device. Memoized per device; for per-architecture routing windows.
+    // Parsed from info::device::version, because ext_oneapi_architecture reports
+    // "unknown" for sm_100/sm_120 on current DPC++.
+    int cuda_compute_capability() const;
 
 
 

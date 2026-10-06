@@ -210,9 +210,9 @@ TYPED_TEST(SyevTest, EmptyInfoSpanChangesNeitherAnswerNorWorkspace) {
 // `syev` itself.
 //
 // There is no knob that forces non-convergence on the public entry point:
-// syev_dispatch pins detail::syev_cta_steqr_params (max_sweeps = 400) for the
-// CTA route and default-constructed StedcParams for Blocked and TwoStage
-// (blas/functions/syev.hh:127, :466, :474), and SyevOptions carries only jobz
+// syev pins its CTA STEQR parameters (max_sweeps = 400) for the small-n
+// kernels and default-constructed StedcParams for Blocked and TwoStage
+// (src/ops/syev/syev.cc cta_steqr_params, launch), and SyevOptions carries only jobz
 // and uplo. So the honest forcing point is syev_cta, which IS what `syev` routes
 // n <= 32 to, called with its own SteqrParams.
 //

@@ -50,7 +50,7 @@ constexpr std::size_t kPotrfReferenceSlmBudget = 97280;
 constexpr int kPotrfMaxL = 256;
 constexpr int kPotrfElemsPerItem = 24;
 
-// Called by BOTH the capability query and the launcher, so the ceiling supports() advertises
+// Called by BOTH the capability query and the launcher, so the ceiling can_run() advertises
 // cannot disagree with what the kernel allocates: under-estimating here advertises an order whose
 // launch fails at enqueue. lda = n | 1 is odd so a stride-lda row read is conflict-free; the 256
 // over-covers *fail plus alignment slack. evidence: docs/perf/potrf.md#the-slm-budget-and-the-fit-ceilings
@@ -291,7 +291,7 @@ Event potrf_cta_dispatch(Queue& ctx,
     const int n = static_cast<int>(A.rows());
     const int batch = static_cast<int>(A.batch_size());
 
-    // supports()'s gates, re-applied: this entry point is reachable without the table.
+    // can_run()'s gates (src/ops/potrf/potrf.cc), re-applied: this entry point is public.
     if (A.rows() != A.cols()) {
         throw batchlas::invalid_argument("potrf_cta: A must be square");
     }
@@ -314,7 +314,7 @@ Event potrf_cta_dispatch(Queue& ctx,
     }
 
     // The OCCUPANCY slice, not the whole budget: at the default target this gate is the
-    // same predicate supports() advertises, so a routed order cannot fail at enqueue. The
+    // same predicate can_run() advertises, so a chosen order cannot fail at enqueue. The
     // blocked driver passes the target ITS block width was clamped against, which above
     // kPotrfOccupancyNbMaxOrder is 1 -- the leaf's order and its gate stay one decision.
     const std::size_t device_budget = resident::device_slm_budget(

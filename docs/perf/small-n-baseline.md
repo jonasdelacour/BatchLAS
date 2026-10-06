@@ -226,7 +226,7 @@ wide arm, and re-measure orgqr single-arm before quoting one in a gate.
 ## getrs
 
 Two right-hand-side widths. `nrhs = 1` is inside shipped clause A of
-`route_getrs.hh:97` (`s.nrhs() <= 2`, **every type**, no order or batch bound); `nrhs = 4` is
+`route_getrs.hh:97` (deleted; getrs now reads `tuned/getrs.*.txt`) (`s.nrhs() <= 2`, **every type**, no order or batch bound); `nrhs = 4` is
 inside clause B (float only). Everything below therefore describes **live routed traffic in a
 vendor-present build**, not a hypothetical.
 

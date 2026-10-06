@@ -6,7 +6,6 @@
 #include "getrf_native.hh"
 #include "lu_laswp.hh"
 
-#include "../sycl/gemm_kernels.hh"
 #include "../queue.hh"
 #include "../util/template-instantiations.hh"
 
@@ -134,8 +133,7 @@ GetrfBlockedWs<T> getrf_blocked_layout(Queue& ctx, BumpAllocator& pool, int batc
 
 }  // namespace
 
-// RouteTable<Op::getrf,T>::preferred() is false everywhere: only a vendor-free
-// build or a forced route reaches this driver.
+// Every type has the tier; tuned/getrf.*.txt decides where it runs.
 template <> bool getrf_blocked_available<float>()                { return true; }
 template <> bool getrf_blocked_available<double>()               { return true; }
 template <> bool getrf_blocked_available<std::complex<float>>()  { return true; }
@@ -185,32 +183,17 @@ Event getrf_blocked_dispatch(Queue& ctx,
                              Span<int32_t> info_out,
                              GetrfTrailingGemm<T> trailing_gemm,
                              GetrfPanelSolveTrsm<T> panel_trsm) {
-    // Defaults to the native kernel so a direct caller needs no dispatch
-    // dependency; the facade injects the ROUTED gemm instead.
-    if (!trailing_gemm) {
-        trailing_gemm = [](Queue& c,
-                           const MatrixView<T, MatrixFormat::Dense>& ga,
-                           const MatrixView<T, MatrixFormat::Dense>& gb,
-                           const MatrixView<T, MatrixFormat::Dense>& gc,
-                           T galpha, T gbeta, Transpose gta, Transpose gtb,
-                           ComputePrecision gp) {
-            return sycl_gemm::gemm_custom<T>(c, ga, gb, gc, galpha, gbeta, gta, gtb, gp);
-        };
-    }
-
     const int m = static_cast<int>(A.rows());
     const int n = static_cast<int>(A.cols());
     const int batch = static_cast<int>(A.batch_size());
 
-    // Every RouteTable<Op::getrf,T>::supports() gate, re-applied because this entry
-    // point is reachable without the table: a forced route the table refuses falls
-    // through to automatic(), so a wrong gate here silently measures cuBLAS.
+    // The driver's own gates; src/ops/getrf/getrf.cc's can_run mirrors them (R3).
     if (m < 1 || n < 1 || batch < 1) {
         throw batchlas::invalid_argument("getrf_blocked: degenerate extents");
     }
     if (m != n) {
         throw batchlas::invalid_argument(
-            "getrf_blocked: A must be square (route_getrf.hh's supports() refuses m != n)");
+            "getrf_blocked: A must be square (getrf.cc's can_run refuses m != n)");
     }
     if (A.is_heterogeneous()) {
         throw batchlas::invalid_argument("getrf_blocked: heterogeneous batch is not supported");
@@ -235,15 +218,21 @@ Event getrf_blocked_dispatch(Queue& ctx,
         if (getrf_cta_max_n_for_slm<T>(budget, 1) < 1) {
             throw batchlas::unsupported(
                 "getrf_blocked: this device's local-memory budget cannot host the panel "
-                "leaf's argmax slots, so the tier is unavailable (route_getrf.hh's "
-                "supports() refuses the Blocked arm when cta_max_n is 0)");
+                "leaf's argmax slots, so the tier is unavailable (getrf.cc's can_run "
+                "refuses the Blocked family here too)");
         }
+    }
+    if (!trailing_gemm) {
+        throw batchlas::invalid_argument(
+            "getrf_blocked: the trailing-update gemm seam is empty. Inject the public "
+            "batchlas::gemm (src/ops/getrf/getrf.cc does; a direct caller must too) -- "
+            "gemm, not this driver, chooses the gemm kernel.");
     }
     if (!panel_trsm) {
         throw batchlas::invalid_argument(
             "getrf_blocked: the panel-solve trsm seam is empty. Inject the ROUTED "
             "batchlas::trsm (the facade does; a direct caller must too) -- this driver "
-            "deliberately has no native fallback for it, so that the router, and not this "
+            "deliberately has no native fallback for it, so that trsm, and not this "
             "file, chooses the trsm arm.");
     }
 

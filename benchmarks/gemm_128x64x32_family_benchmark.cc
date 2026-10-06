@@ -41,9 +41,7 @@ void run_family_variant(minibench::State& state, const char* kernel_name) {
                     Transpose::NoTrans,
                     Transpose::NoTrans,
                     [kernel_name](Queue& q, auto&&... xs) {
-                        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
-                        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", kernel_name);
-                        ScopedEnvVar experimental("BATCHLAS_GEMM_EXPERIMENTAL", "1");
+                        ScopedEnvVar pin("BATCHLAS_GEMM_ROUTE", kernel_name);  // a gemm choice spelling
                         (void)gemm(q, std::forward<decltype(xs)>(xs)...);
                     });
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * 2.0 * m * n * k), minibench::Rate);
@@ -59,10 +57,8 @@ void register_family_variant_benchmark(const char* benchmark_name, const char* k
 
 #if BATCHLAS_HAS_CUDA_BACKEND
 static int register_cuda_family_benchmarks = []() {
-    register_family_variant_benchmark<Backend::CUDA>("BM_GEMM_128x64x32_large<float, Backend::CUDA>", "128x64x32large");
-    register_family_variant_benchmark<Backend::CUDA>("BM_GEMM_128x64x32_large_u2<float, Backend::CUDA>", "128x64x32large_u2");
-    register_family_variant_benchmark<Backend::CUDA>("BM_GEMM_128x64x32_large_tt4x8<float, Backend::CUDA>", "128x64x32large_tt4x8");
-    register_family_variant_benchmark<Backend::CUDA>("BM_GEMM_128x64x32_large_tt4x8_u2<float, Backend::CUDA>", "128x64x32large_tt4x8_u2");
+    register_family_variant_benchmark<Backend::CUDA>("BM_GEMM_128x64x32_large<float, Backend::CUDA>", "reg:m=128:n=64:k=32:u=4");
+    register_family_variant_benchmark<Backend::CUDA>("BM_GEMM_128x64x32_large_u2<float, Backend::CUDA>", "reg:m=128:n=64:k=32:u=2");
     return 0;
 }();
 #endif

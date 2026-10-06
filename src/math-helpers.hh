@@ -54,19 +54,6 @@ namespace batchlas {
         }
 
         template <typename T, typename Op = std::plus<T>>
-        Event scan_exclusive_inplace(Queue& ctx, const Span<T>& data, T init = T(0), Op op = Op()) {
-            ctx -> submit([&](sycl::handler& cgh) {
-                auto max_wg_size = ctx.device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE);
-                auto bsize = data.size() > max_wg_size ? max_wg_size : data.size();
-                cgh.parallel_for(sycl::nd_range<1>(sycl::range<1>(bsize), sycl::range<1>(bsize)), [=](sycl::nd_item<1> item) {
-                    auto cta = item.get_group();
-                    sycl::joint_exclusive_scan(cta, data.data(), data.data() + data.size(), data.data(), init, op);
-                });
-            });
-            return ctx.get_event();
-        }
-
-        template <typename T, typename Op = std::plus<T>>
         Event scan_inclusive_inplace(Queue& ctx, const Span<T>& data, Op op = Op()) {
             ctx -> submit([&](sycl::handler& cgh) {
                 auto max_wg_size = ctx.device().get_property(DeviceProperty::MAX_WORK_GROUP_SIZE);

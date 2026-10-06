@@ -1,8 +1,7 @@
 #pragma once
 
-// Native batched POTRF, declarations only: the route table and the vendor-free facade need no
-// <sycl/sycl.hpp>. preferred() is false for every tier. EVERY *_dispatch re-applies
-// supports()'s gates -- a rejected forced route silently runs the vendor. evidence: docs/perf/potrf.md
+// Native batched POTRF, declarations only (no <sycl/sycl.hpp>). EVERY *_dispatch re-checks its
+// limits, and can_run() in src/ops/potrf/potrf.cc must agree exactly. evidence: docs/perf/potrf.md
 
 #include "../util/internal-api.hh"
 #include "../util/resident_capacity.hh"
@@ -22,6 +21,9 @@ namespace batchlas::sycl_potrf {
 template <typename T>
 BATCHLAS_INTERNAL_API int potrf_tiny_max_n();
 
+// The tier's fixed work-group size; potrf_tiny_dispatch refuses a smaller MAX_WORK_GROUP_SIZE.
+inline constexpr int kPotrfTinyWgSize = 64;
+
 // NOT zero: an empty or SHORT caller `info` span means "not requested" and draws scratch.
 template <typename T>
 BATCHLAS_INTERNAL_API std::size_t potrf_tiny_buffer_size(
@@ -38,7 +40,7 @@ BATCHLAS_INTERNAL_API Event potrf_tiny_dispatch(Queue& ctx,
                                                 Span<int32_t> info);
 
 // Per-type CTA capacity for a budget in BYTES: the budget is a device property, and a
-// hardcoded ceiling makes supports() promise an unlaunchable route. `min_blocks_per_sm`
+// hardcoded ceiling makes can_run promise an unlaunchable choice. `min_blocks_per_sm`
 // scales it to the ADVERTISED capacity; 1 asks the residency question, which has a different
 // answer. evidence: docs/perf/potrf.md#potrf-the-occupancy-rule
 template <typename T>
@@ -102,7 +104,7 @@ BATCHLAS_INTERNAL_API Event potrf_cta_dispatch(Queue& ctx,
                                                Span<int32_t> info,
                                                int min_blocks_per_sm = resident::kMinBlocksPerSm);
 
-// Trailing-update GEMM, injected to reach the ROUTED gemm; empty means gemm_custom.
+// Trailing-update GEMM, REQUIRED (empty throws): pass the public gemm.
 template <typename T>
 using PotrfTrailingGemm = std::function<Event(
     Queue&,
@@ -111,7 +113,7 @@ using PotrfTrailingGemm = std::function<Event(
     const MatrixView<T, MatrixFormat::Dense>&,
     T, T, Transpose, Transpose, ComputePrecision)>;
 
-// Injected likewise; empty means sycl_trsm::trsm_native_blocked. ALPHA IS IN POSITION 4.
+// The panel solve, REQUIRED (empty throws): pass the public trsm. ALPHA IS IN POSITION 4.
 template <typename T>
 using PotrfPanelSolve = std::function<Event(
     Queue&,
@@ -137,7 +139,7 @@ BATCHLAS_INTERNAL_API Event potrf_blocked_dispatch(Queue& ctx,
                                                    Uplo uplo,
                                                    Span<std::byte> workspace,
                                                    Span<int32_t> info,
-                                                   PotrfTrailingGemm<T> trailing_gemm = {},
-                                                   PotrfPanelSolve<T> panel_solve = {});
+                                                   PotrfTrailingGemm<T> trailing_gemm,
+                                                   PotrfPanelSolve<T> panel_solve);
 
 }  // namespace batchlas::sycl_potrf

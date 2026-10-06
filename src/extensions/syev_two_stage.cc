@@ -22,6 +22,7 @@
 #include <stdexcept>
 #include <type_traits>
 #include <vector>
+#include "../ops/ormqr/vendor.hh"
 
 namespace batchlas {
 

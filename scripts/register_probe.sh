@@ -41,8 +41,8 @@
 #     per-block form accepts launches the driver refuses.
 #     evidence: docs/perf/lu.md#the-register-cap-that-binds-is-per-sub-partition
 #     Symbols, not line numbers, because the line reference this header carried --
-#     `src/sycl/gemm_kernels.cc:725-735` -- had DRIFTED: that range is a KernelVariant
-#     dispatch switch today, so the reference no longer lands on the rule.
+#     `src/sycl/gemm_kernels.cc:725-735` -- had DRIFTED: that range became a KernelVariant
+#     dispatch switch, so the reference no longer landed on the rule.
 #     An earlier version of this comment went further and called the reference
 #     fabricated -- "a pickaxe for 65536 over that file's whole history returns nothing,
 #     so it has never held the rule in any revision". That is REFUTED, and refuted in an
@@ -50,11 +50,12 @@
 #     pickaxe was run on a string the source has never contained.
 #     `git log -S'65,536' -- src/sycl/gemm_kernels.cc` returns e56c6d8 ("WP2: GEMM --
 #     close the vendor-free envelope, flip the default to Auto"), which introduced it,
-#     and the rule is in that file RIGHT NOW: the Tiled128x128RegisterK8 case at lines
-#     745-751, "Wider scalars overrun the hard 65,536 registers-per-block limit at this
-#     64-accumulator tile (a launch failure, not spilling)". The line numbers moved; the
-#     rule did not. Prefer symbols anyway -- but a search that finds nothing is evidence
-#     about the search string, not about the tree.
+#     and the rule stayed there until P3.4 deleted that KernelVariant switch. It now
+#     lives in two symbols: the `Reg` arm of `can_run` in src/ops/gemm/gemm.cc (register
+#     tiles, the 128x128x8 one among them, are float only, because wider scalars overrun
+#     the 64-accumulator tile: a launch failure, not spilling) and the header of
+#     src/sycl/gemm/register_64x64_k16_wide.hh. Prefer symbols, and remember that a
+#     search that finds nothing is evidence about the search string, not about the tree.
 # Here stack frame is the WRONG gate: a large fraction of perfectly healthy entry
 # functions carry a non-zero stack frame with zero spills, so gating on it rejects them
 # -- and a grep for "spill" that finds nothing reads as "no spill" whether or not the

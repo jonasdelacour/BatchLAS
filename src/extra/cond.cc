@@ -7,6 +7,7 @@
 #include <limits>
 #include <type_traits>
 #include "../queue.hh"
+#include "../ops/syev/vendor.hh"
 namespace batchlas
 {
     template <Backend B, typename T>

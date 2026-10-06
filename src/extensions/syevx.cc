@@ -28,8 +28,11 @@ struct SyevxFillCountsKernel;
 
 namespace {
 
-// Measured against a Direct that really is the vendor solver. Trap: the first
-// grid compared against our batch-starved blocked syev; do not reuse it.
+// MEASURED thresholds (RTX 4090, CUDA backend, float), against a Direct that really
+// is the vendor solver (the vendor rows of tuned/syev.<dtype>.<device>.txt). Trap:
+// the first grid compared against our batch-starved blocked syev; do not reuse it.
+// Eigenvalues-only: Direct wins everywhere. With eigenvectors: DirectSubset wins
+// only at large n AND large batch, so the gate below reads both.
 // evidence: docs/perf/syevx.md#syevx-the-direct-baseline-was-never-cusolver
 constexpr int64_t kSyevxSmallN = 64;
 

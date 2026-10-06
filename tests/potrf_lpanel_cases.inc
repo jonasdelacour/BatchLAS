@@ -403,162 +403,6 @@ TYPED_TEST(PotrfLpanelTest, PaddedLeadingDimensionStrideAndEmptyInfoSpan) {
     }
 }
 
-// The direct entry point re-applies every gate supports() applies, because it is
-// reachable WITHOUT the table; Uplo::Upper is one of them here and is not on the CTA arm.
-TYPED_TEST(PotrfLpanelTest, DirectEntryPointRefusesWhatSupportsRefuses) {
-    using T = typename TestFixture::T;
-    using R = typename TestFixture::R;
-
-    const int cap = this->lp_ceiling();
-    ASSERT_GT(cap, 32);
-    UnifiedVector<int32_t> info(8, int32_t(0));
-
-    // (a) not square.
-    {
-        Matrix<T, MatrixFormat::Dense> A(40, 33, 1);
-        A.fill(make_scalar<T>(R(1), R(0)));
-        UnifiedVector<std::byte> ws(64);
-        EXPECT_THROW((void)sycl_potrf::potrf_lpanel_dispatch<T>(*this->ctx, A.view(), Uplo::Lower,
-                                                          ws.to_span(), info.to_span()),
-                     std::invalid_argument);
-    }
-
-    // (b) Uplo::Upper -- the left-looking update reads the LOWER triangle.
-    {
-        const int n = std::min(40, cap);
-        Matrix<T, MatrixFormat::Dense> A(n, n, 1);
-        A.fill(T{});
-        for (int i = 0; i < n; ++i) A(i, i, 0) = make_scalar<T>(R(2), R(0));
-        UnifiedVector<std::byte> ws(
-            sycl_potrf::potrf_lpanel_buffer_size<T>(*this->ctx, A.view()));
-        EXPECT_THROW((void)sycl_potrf::potrf_lpanel_dispatch<T>(*this->ctx, A.view(), Uplo::Upper,
-                                                          ws.to_span(), info.to_span()),
-                     std::invalid_argument);
-    }
-
-    // (c) one order past the ceiling: a HARD capacity, not a slow path.
-    {
-        const int n = cap + 1;
-        Matrix<T, MatrixFormat::Dense> A(n, n, 1);
-        A.fill(T{});
-        for (int i = 0; i < n; ++i) A(i, i, 0) = make_scalar<T>(R(2), R(0));
-        EXPECT_EQ(this->geom(n, 1).nb, 0)
-            << "debug_launch says order " << n << " fits, one past the advertised ceiling";
-        UnifiedVector<std::byte> ws(
-            sycl_potrf::potrf_lpanel_buffer_size<T>(*this->ctx, A.view()));
-        EXPECT_THROW((void)sycl_potrf::potrf_lpanel_dispatch<T>(*this->ctx, A.view(), Uplo::Lower,
-                                                          ws.to_span(), info.to_span()),
-                     std::invalid_argument);
-    }
-}
-
-// THE WINDOW, AND THE R8b INVARIANT THAT GUARDS IT. `preferred()` now answers true inside
-// one measured window; outside it, and for every type and `uplo` that has no grid, `Auto`
-// must still take the vendor. The arm COUNTS below are the real guard: automatic() returns
-// on the first supports && preferred hit, so two arms answering is a silent mis-route.
-// evidence: docs/perf/potrf.md#the-measured-lpanel-window
-TYPED_TEST(PotrfLpanelTest, RouteWindowIsExactlyTheMeasuredOne) {
-    using T = typename TestFixture::T;
-    using R = typename TestFixture::R;
-    static constexpr Backend B = TestFixture::BackendType;
-    using Tbl = dispatch::RouteTable<dispatch::Op::potrf, T>;
-    const dispatch::Route lp{dispatch::Origin::Native, dispatch::Algorithm::LPanel};
-
-    // This case asserts what the TABLE does with no route pinned, so it has to say so:
-    // ctest's potrf_tests_native variant runs this same binary with
-    // BATCHLAS_POTRF_ROUTE=native in the environment, which forces every resolve below
-    // native and turns the vendor-present assertion red. Empty reads as unset.
-    const ScopedEnvVar clear_potrf("BATCHLAS_POTRF_ROUTE", "");
-
-    // The vocabulary: a missing to_string case prints "?" in every coverage row, and a
-    // missing parse case is SILENT -- the pin becomes nullopt and the arm measures Auto.
-    EXPECT_EQ(dispatch::to_string(dispatch::Algorithm::LPanel), "lpanel");
-    ASSERT_TRUE(dispatch::parse_algorithm_word("lpanel").has_value());
-    EXPECT_EQ(*dispatch::parse_algorithm_word("lpanel"), dispatch::Algorithm::LPanel);
-    // APPENDED, never inserted: route.hh is installed behind a SOVERSION.
-    EXPECT_EQ(static_cast<int>(dispatch::Algorithm::LPanel), 14);
-
-    // float and complex<float> are the types the grid covers; double and complex<double>
-    // keep the pre-P3 walk, so this same body asserts BOTH outcomes.
-    constexpr bool measured =
-        std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>;
-    const int cta_last = std::is_same_v<T, float> ? 35 : 32;
-
-    for (int n : {32, 33, 64, 256, 257, 384}) {
-        if (n > this->lp_ceiling() && n > this->ceiling()) continue;
-
-        Matrix<T, MatrixFormat::Dense> A(n, n, 4);
-        A.fill(T{});
-        for (int b = 0; b < 4; ++b)
-            for (int i = 0; i < n; ++i) A(i, i, b) = make_scalar<T>(R(1), R(0));
-
-        const auto lower = backend::potrf_op_shape<B, T>(*this->ctx, A.view(), Uplo::Lower);
-        const auto upper = backend::potrf_op_shape<B, T>(*this->ctx, A.view(), Uplo::Upper);
-        ASSERT_TRUE(lower.has_value());
-        ASSERT_TRUE(upper.has_value());
-
-        EXPECT_FALSE(Tbl::supports(lp, *upper)) << "LPanel must refuse Upper, n=" << n;
-        EXPECT_EQ(Tbl::supports(lp, *lower), n <= this->lp_ceiling()) << "n=" << n;
-
-        // Two windows now: the register tier owns n <= 32 and LPanel 32 < n <= 256, so a
-        // measured type has exactly one preferred tier at BOTH, and only above 256 is
-        // there none. evidence: docs/perf/potrf.md#the-tiny-potrf-window
-        const bool in_lpanel = measured && n > 32 && n <= 256;
-        const bool in_tiny = measured && n <= 32 && n <= lower->tiny_max_n;
-        const bool in_window = in_lpanel || in_tiny;
-        // UPPER is not `measured`-gated: the register tier's Upper grid covers all four
-        // types at every order it holds, which is why it is the wider of the two windows.
-        // LPanel above 32 is still Lower-only. evidence: docs/perf/potrf.md#the-tiny-potrf-window
-        const bool in_tiny_upper = n <= 32 && n <= upper->tiny_max_n;
-
-        int pref_hits = 0;
-        int pref_hits_upper = 0;
-        int tier_hits = 0;
-        for (const dispatch::Route* r = Tbl::order_begin(); r != Tbl::order_end(); ++r) {
-            if (!dispatch::is_native(*r)) continue;
-            if (Tbl::supports(*r, *lower) && Tbl::preferred(*r, *lower)) ++pref_hits;
-            if (Tbl::supports(*r, *upper) && Tbl::preferred(*r, *upper)) ++pref_hits_upper;
-            if (Tbl::supports(*r, *lower) && Tbl::native_tier_preferred(*r, *lower)) ++tier_hits;
-        }
-        EXPECT_EQ(pref_hits, in_window ? 1 : 0) << "n=" << n;
-        EXPECT_EQ(pref_hits_upper, in_tiny_upper ? 1 : 0)
-            << "Upper is the tiny tier's window and nothing else's, n=" << n;
-        EXPECT_EQ(tier_hits, 1) << "n=" << n << ": the vendor-free walk is an accident of the "
-                                   "order array rather than a stated decision";
-
-        const auto route = backend::potrf_route<B, T>(*this->ctx, A.view(), Uplo::Lower,
-                                                      /*vendor_available=*/true);
-        if (in_window) {
-            ASSERT_TRUE(dispatch::is_native(route)) << "n=" << n;
-            // Tiny owns n <= 32, then the CTA/LPanel split at cta_last inside LPanel's window.
-            EXPECT_EQ(route.algo, in_tiny ? dispatch::Algorithm::Tiny
-                                : (n <= cta_last) ? dispatch::Algorithm::CTA
-                                                  : dispatch::Algorithm::LPanel) << "n=" << n;
-        } else {
-            EXPECT_TRUE(dispatch::is_vendor(route))
-                << "a shape OUTSIDE the measured window left the vendor, n=" << n;
-        }
-        const auto up_route = backend::potrf_route<B, T>(*this->ctx, A.view(), Uplo::Upper,
-                                                         /*vendor_available=*/true);
-        if (in_tiny_upper) {
-            ASSERT_TRUE(dispatch::is_native(up_route)) << "n=" << n;
-            EXPECT_EQ(up_route.algo, dispatch::Algorithm::Tiny) << "n=" << n;
-        } else {
-            EXPECT_TRUE(dispatch::is_vendor(up_route))
-                << "above the tiny tier Upper has no grid, so it stays vendor, n=" << n;
-        }
-
-        const auto free_route = backend::potrf_route<B, T>(*this->ctx, A.view(), Uplo::Lower,
-                                                           /*vendor_available=*/false);
-        const bool lpanel_owns = measured && n > cta_last && n <= this->lp_ceiling();
-        const dispatch::Algorithm want = in_tiny ? dispatch::Algorithm::Tiny
-                                       : lpanel_owns ? dispatch::Algorithm::LPanel
-                                       : (n <= this->ceiling()) ? dispatch::Algorithm::CTA
-                                                                : dispatch::Algorithm::Blocked;
-        EXPECT_EQ(free_route.algo, want) << "vendor-free walk, n=" << n;
-    }
-}
-
 // The facade reaches the kernel under an explicit pin, and potrf_buffer_size covers the
 // tier. Bit-exactness against the direct call observes EXECUTION; a residual would not.
 TYPED_TEST(PotrfLpanelTest, FacadeReachesTheLpanelKernel) {
@@ -570,7 +414,7 @@ TYPED_TEST(PotrfLpanelTest, FacadeReachesTheLpanelKernel) {
     ASSERT_GT(n, 32);
     const int batch = 3;
 
-    const ScopedEnvVar route_pin("BATCHLAS_POTRF_ROUTE", "lpanel");
+    const select::ScopedPin<ops::potrf::PotrfChoice> route_pin("potrf", ops::potrf::Lpanel{8});
 
     Matrix<T, MatrixFormat::Dense> A(n, n, batch);
     Matrix<T, MatrixFormat::Dense> direct(n, n, batch);
@@ -581,15 +425,9 @@ TYPED_TEST(PotrfLpanelTest, FacadeReachesTheLpanelKernel) {
         this->load_triangle(direct, b, n, ref[b], Uplo::Lower, make_scalar<T>(R(0), R(0)));
     }
 
-    // The route assertion LOCALISES a failure -- which link broke -- but is NOT the guard.
-    const auto route = backend::potrf_route<B, T>(*this->ctx, A.view(), Uplo::Lower,
-                                                  /*vendor_available=*/true);
-    ASSERT_TRUE(dispatch::is_native(route));
-    ASSERT_EQ(route.algo, dispatch::Algorithm::LPanel);
-
     const std::size_t bytes = potrf_buffer_size<B, T>(*this->ctx, A.view(), Uplo::Lower);
     ASSERT_GE(bytes, sycl_potrf::potrf_lpanel_buffer_size<T>(*this->ctx, A.view()))
-        << "potrf_buffer_size does not cover the LPanel tier it just resolved to";
+        << "potrf_buffer_size does not cover the LPanel tier the pin chose";
     UnifiedVector<std::byte> ws(bytes);
     UnifiedVector<int32_t> info(batch, int32_t(-7));
     (void)potrf<B, T>(*this->ctx, A.view(), Uplo::Lower, ws.to_span(), info.to_span());

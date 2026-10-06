@@ -23,11 +23,6 @@ inline void Gemm128x32x32FamilyTransposeSizes(minibench::Benchmark* b) {
     b->Args({256, 128, 256, 1024});
 }
 
-inline void Gemm128x32x32FamilyLargeSplitKSizes(minibench::Benchmark* b) {
-    b->Args({256, 256, 256, 1024});
-    b->Args({512, 512, 512, 512});
-}
-
 template <Backend B>
 void run_family_variant(minibench::State& state, const char* kernel_name, Transpose transA, Transpose transB) {
     const size_t m = state.range(0);
@@ -54,9 +49,7 @@ void run_family_variant(minibench::State& state, const char* kernel_name, Transp
                     transA,
                     transB,
                     [kernel_name](Queue& q, auto&&... xs) {
-                        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
-                        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", kernel_name);
-                        ScopedEnvVar experimental("BATCHLAS_GEMM_EXPERIMENTAL", "1");
+                        ScopedEnvVar pin("BATCHLAS_GEMM_ROUTE", kernel_name);  // a gemm choice spelling
                         (void)gemm(q, std::forward<decltype(xs)>(xs)...);
                     });
     state.SetMetric("GFLOPS", static_cast<double>(batch) * (1e-9 * 2.0 * m * n * k), minibench::Rate);
@@ -76,23 +69,9 @@ void register_family_variant_benchmark(const char* benchmark_name,
 
 #if BATCHLAS_HAS_CUDA_BACKEND
 static int register_cuda_family_benchmarks = []() {
-    register_family_variant_benchmark<Backend::CUDA>("BM_GEMM_128x32x32_s2_u1<float, Backend::CUDA>", "128x32x32_s2_u1",
+    register_family_variant_benchmark<Backend::CUDA>("BM_GEMM_128x32x32_s2_u1<float, Backend::CUDA>", "reg:m=128:n=32:k=32:u=1",
                                                      Gemm128x32x32FamilyNnSizes);
-    register_family_variant_benchmark<Backend::CUDA>("BM_GEMM_128x32x32_s2_u1_aligned<float, Backend::CUDA>", "128x32x32_s2_u1_aligned",
-                                                     Gemm128x32x32FamilyNnSizes);
-    register_family_variant_benchmark<Backend::CUDA>("BM_GEMM_128x32x32_s2_u1_generic<float, Backend::CUDA>", "128x32x32_s2_u1_generic",
-                                                     Gemm128x32x32FamilyNnSizes);
-    register_family_variant_benchmark<Backend::CUDA>("BM_GEMM_128x32x32_s2_u2<float, Backend::CUDA>", "128x32x32_s2_u2",
-                                                     Gemm128x32x32FamilyNnSizes);
-    register_family_variant_benchmark<Backend::CUDA>("BM_GEMM_128x32x32_s2_u2_tt8x4<float, Backend::CUDA>", "128x32x32_s2_u2_tt8x4",
-                                                     Gemm128x32x32FamilyNnSizes);
-    register_family_variant_benchmark<Backend::CUDA>("BM_GEMM_128x32x32_s2_u2_tt4x8<float, Backend::CUDA>", "128x32x32_s2_u2_tt4x8",
-                                                     Gemm128x32x32FamilyNnSizes);
-    register_family_variant_benchmark<Backend::CUDA>("BM_GEMM_128x32x32_persistent<float, Backend::CUDA>", "128x32x32_persistent",
-                                                     Gemm128x32x32FamilyLargeSplitKSizes);
-    register_family_variant_benchmark<Backend::CUDA>("BM_GEMM_128x32x32_splitk4<float, Backend::CUDA>", "128x32x32_splitk4",
-                                                     Gemm128x32x32FamilyLargeSplitKSizes);
-    register_family_variant_benchmark<Backend::CUDA>("BM_GEMM_128x32x32_s2_u1_tn<float, Backend::CUDA>", "128x32x32_s2_u1_tn",
+    register_family_variant_benchmark<Backend::CUDA>("BM_GEMM_128x32x32_s2_u1_tn<float, Backend::CUDA>", "reg:m=128:n=32:k=32:u=1",
                                                      Gemm128x32x32FamilyTransposeSizes,
                                                      Transpose::Trans,
                                                      Transpose::NoTrans);
@@ -102,25 +81,9 @@ static int register_cuda_family_benchmarks = []() {
 
 #if BATCHLAS_HAS_ROCM_BACKEND
 static int register_rocm_family_benchmarks = []() {
-    register_family_variant_benchmark<Backend::ROCM>("BM_GEMM_128x32x32_s1_u1<float, Backend::ROCM>", "128x32x32_s1_u1",
+    register_family_variant_benchmark<Backend::ROCM>("BM_GEMM_128x32x32_s2_u1<float, Backend::ROCM>", "reg:m=128:n=32:k=32:u=1",
                                                      Gemm128x32x32FamilyNnSizes);
-    register_family_variant_benchmark<Backend::ROCM>("BM_GEMM_128x32x32_s2_u1<float, Backend::ROCM>", "128x32x32_s2_u1",
-                                                     Gemm128x32x32FamilyNnSizes);
-    register_family_variant_benchmark<Backend::ROCM>("BM_GEMM_128x32x32_s2_u1_aligned<float, Backend::ROCM>", "128x32x32_s2_u1_aligned",
-                                                     Gemm128x32x32FamilyNnSizes);
-    register_family_variant_benchmark<Backend::ROCM>("BM_GEMM_128x32x32_s2_u1_generic<float, Backend::ROCM>", "128x32x32_s2_u1_generic",
-                                                     Gemm128x32x32FamilyNnSizes);
-    register_family_variant_benchmark<Backend::ROCM>("BM_GEMM_128x32x32_s2_u2<float, Backend::ROCM>", "128x32x32_s2_u2",
-                                                     Gemm128x32x32FamilyNnSizes);
-    register_family_variant_benchmark<Backend::ROCM>("BM_GEMM_128x32x32_s2_u2_tt8x4<float, Backend::ROCM>", "128x32x32_s2_u2_tt8x4",
-                                                     Gemm128x32x32FamilyNnSizes);
-    register_family_variant_benchmark<Backend::ROCM>("BM_GEMM_128x32x32_s2_u2_tt4x8<float, Backend::ROCM>", "128x32x32_s2_u2_tt4x8",
-                                                     Gemm128x32x32FamilyNnSizes);
-    register_family_variant_benchmark<Backend::ROCM>("BM_GEMM_128x32x32_persistent<float, Backend::ROCM>", "128x32x32_persistent",
-                                                     Gemm128x32x32FamilyLargeSplitKSizes);
-    register_family_variant_benchmark<Backend::ROCM>("BM_GEMM_128x32x32_splitk4<float, Backend::ROCM>", "128x32x32_splitk4",
-                                                     Gemm128x32x32FamilyLargeSplitKSizes);
-    register_family_variant_benchmark<Backend::ROCM>("BM_GEMM_128x32x32_s2_u1_tn<float, Backend::ROCM>", "128x32x32_s2_u1_tn",
+    register_family_variant_benchmark<Backend::ROCM>("BM_GEMM_128x32x32_s2_u1_tn<float, Backend::ROCM>", "reg:m=128:n=32:k=32:u=1",
                                                      Gemm128x32x32FamilyTransposeSizes,
                                                      Transpose::Trans,
                                                      Transpose::NoTrans);

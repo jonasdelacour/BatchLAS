@@ -44,12 +44,12 @@ using orgqr_vendor_buffer_size = size_t(Queue&,
 
 /// @brief Validates the arguments of the positional orgqr() entry point.
 ///
-/// Checks only non-negative extents. `n <= m` is not checked (an n > m view is
-/// routed to the vendor); the length of `tau` is checked by the option overloads.
+/// Checks only non-negative extents. `n <= m` is not checked: an n > m view is
+/// served by the vendor kernel, the only one whose `can_run` admits it
+/// (src/ops/orgqr/orgqr.cc). The length of `tau` is checked by the option overloads.
 /// @throws batchlas::invalid_argument on negative extents
 /// @ingroup qr
-// Deliberately no n <= m check: an n > m view is meaningless but is routed to
-// the vendor today, and rejecting it is a user-visible behaviour change.
+// Deliberately no n <= m check: rejecting such a view is a user-visible behaviour change.
 // evidence: docs/design/vendor-independence.md#positional-validators-reject-only-what-no-route-can-serve
 template <typename T>
 inline void orgqr_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
@@ -80,8 +80,9 @@ inline void orgqr_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
 /// @pre `A.cols() <= A.rows()`; not checked by any overload
 /// @pre `tau.size() >= min(m, n) * batch` (checked by the option overloads only)
 /// @throws batchlas::invalid_argument on negative extents
-/// @throws batchlas::dispatch::NoRouteError if no native route supports the
-///         shape and the vendor library was not built in
+/// @throws batchlas::NoRouteError if no native kernel can run the shape (the
+///         blocked kernel needs a GPU queue, a homogeneous batch and n <= m)
+///         and the vendor library was not built in
 /// @ingroup qr
 template <Backend B, typename T>
 BATCHLAS_API Event orgqr(Queue& ctx,
@@ -101,9 +102,9 @@ BATCHLAS_API size_t orgqr_buffer_size(Queue& ctx,
 
 namespace batchlas::backend {
 
-/// @brief Vendor arm of orgqr(); called by the entry-point facade, not by users.
+/// @brief Vendor arm of orgqr(); called by the public orgqr(), not by users.
 /// @ingroup dispatch
-// Declaration only: the public orgqr lives in src/dispatch/entry_points/factorization.cc.
+// Declaration only: the public orgqr lives in src/ops/orgqr/orgqr.cc.
 // evidence: docs/design/vendor-independence.md#the-entry-point-facade
 template <Backend B, typename T>
 BATCHLAS_API Event orgqr_vendor(Queue& ctx,

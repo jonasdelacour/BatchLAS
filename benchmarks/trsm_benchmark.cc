@@ -1,6 +1,6 @@
 #include <batchlas/util/minibench.hh>
 #include <batchlas/blas/linalg.hh>
-#include <batchlas/blas/dispatch/route_env.hh>
+#include <batchlas/settings.hh>
 #include <batchlas/backend_config.h>
 #include "bench_utils.hh"
 
@@ -91,24 +91,18 @@ inline void TrsmOrthoStarvedSizes(Benchmark* b) {
     }
 }
 
-// An unrecognised BATCHLAS_TRSM_ROUTE silently measures the default route on both
-// sides of an A/B and reports 1.0, so announce the parse once per process.
+// Announce the pin once per process. A spelling trsm does not know, or one the shape
+// cannot run, throws std::invalid_argument at the first call (flat selection, R6).
 static void trsm_announce_route_env() {
     static bool done = false;
     if (done) return;
     done = true;
-    const auto p = batchlas::dispatch::parse_route_env(batchlas::dispatch::Op::trsm);
-    if (p.unparsed) {
-        std::fprintf(stderr,
-                     "\n*** BATCHLAS_TRSM_ROUTE=\"%s\" WAS NOT UNDERSTOOD. This run measures the\n"
-                     "*** default route. Accepted: vendor | native | cta | blocked | native:cta\n\n",
-                     p.source.value.c_str());
-    } else if (p.found) {
-        std::fprintf(stderr, "trsm route forced: %s -> %s:%s\n", p.source.value.c_str(),
-                     std::string(batchlas::dispatch::to_string(p.route.origin)).c_str(),
-                     std::string(batchlas::dispatch::to_string(p.route.algo)).c_str());
+    const char* raw = batchlas::settings().routing.route("trsm").get();
+    if (raw && *raw) {
+        std::fprintf(stderr, "trsm route pinned: BATCHLAS_TRSM_ROUTE=%s (choices: %s)\n", raw,
+                     "auto | native | vendor | cta | sg_left | blocked");
     } else {
-        std::fprintf(stderr, "trsm route: unset (resolver's choice)\n");
+        std::fprintf(stderr, "trsm route: unset (the tuned table's choice)\n");
     }
 }
 

@@ -1018,6 +1018,7 @@ run*.
 | `batchlas::convergence_error` | `batchlas::error` | An iterative kernel did not converge, or a factorisation broke down on the data: an eigen/SVD sweep budget exhausted, a bidiagonal QR that never deflated, an ILU(k) pivot that was zero with no usable shift. LAPACK's `info > 0`. | **With different parameters, not with the same ones.** A looser tolerance, a higher sweep cap, a different algorithm or rescaled input may converge; the identical call will not. Prefer the per-item `info` spans below, which say *which* item failed. |
 | `batchlas::internal_error` | `batchlas::error` | BatchLAS is internally inconsistent: a resolver picked a native route no linked kernel serves, a capability query and the facade that reads it disagree, a branch documented "unreachable" was reached. | **No**, and it is not fixable from the call site. It is a bug here; report it with the message, which names the two things that disagreed. |
 | `batchlas::api_misuse` | `batchlas::error` | The call is well-formed but arrives in the wrong state or order: a `Queue` used from a thread other than its owner, `attach_to_current_thread()` with a workspace lease outstanding, `configure()` after a `Queue` already exists, a sizing-mode `BumpAllocator` query asked of a real pool. | **No.** Reorder the calls, or confine the object to one thread. |
+| `batchlas::NoRouteError` (`<batchlas/no_route.hh>`) | `std::runtime_error` | Nothing in this build serves the call: no native kernel for the shape and no vendor library compiled in, typically a `-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF` build. `op()`, `backend()` and `scalar()` say which call. `<batchlas.hh>` brings it in. Renamed from `batchlas::dispatch::NoRouteError` (`<batchlas/blas/dispatch/no_route.hh>`, removed). | **Not in this build.** Re-enable the vendor library, or use a shape a native kernel serves. |
 
 Three properties of `batchlas::exception` are load-bearing, and each of them
 fails *silently* if broken — which is why `tests/error_model_tests.cc` asserts
@@ -1278,7 +1279,7 @@ programmatic equivalent and no way for an embedding application to lock it down.
 
 ```cpp
 Settings s = batchlas::settings();          // start from what the environment said
-s.routing.canonical[size_t(dispatch::Op::gemm)] = EnvValue::of("native");
+s.routing.route("gemm") = EnvValue::of("native");
 s.geometry.trsm_outer_nb = 64;
 s.diagnostics.dump_bandr1.step = false;
 batchlas::configure(s);                     // before the first Queue
@@ -1411,22 +1412,22 @@ Where a table gives a default in parentheses, the field is a sentinel (`""`, `0`
 their curves are tuned, and materialising one into a scalar here would pin a tuned
 curve at a single point.
 
-**`routing`** — the route vocabulary, as raw strings, because
-`dispatch::parse_route_env(Op)` remains the single parser and keeps all three of its
-documented word collisions.
+**`routing`** — `BATCHLAS_<OP>_ROUTE`, one raw string per op.
 
 | field | variable | type | default |
 | --- | --- | --- | --- |
-| `canonical[Op]`, `canonical_route(op)` | `BATCHLAS_<OP>_ROUTE` | `EnvValue` per `dispatch::Op` | unset (→ `Route{Auto, Auto}` at the adapter) |
-| `legacy[Op]`, `legacy_route(op)` | `BATCHLAS_<OP>_VARIANT`, `BATCHLAS_<OP>_PROVIDER` | `EnvValue` per `dispatch::Op` | unset |
+| `route(op)` (`values`, in `RoutingSettings::ops` order) | `BATCHLAS_<OP>_ROUTE` | `EnvValue` per op | unset (the op's tuned table, or the level-3 rules) |
 
-`BATCHLAS_<OP>_ROUTE` works for the 17 ops that have a route adapter: `gemm`, `gemv`,
-`trsm`, `trmm`, `symm`, `syrk`, `syr2k`, `potrf`, `getrf`, `getrs`, `getri`, `geqrf`,
-`orgqr`, `ormqr`, `syev`, `gesvd`, `spmm`. `hemm`, `herk`, `her2k` and `iluk` have an
-`Op` and therefore a slot, but no adapter reads it — **a slot is not a working
-variable**. The legacy spellings are `BATCHLAS_{GEMM,SYMM,SYRK,SYR2K,TRMM}_VARIANT`
-and `BATCHLAS_{SYEV,GESVD,ORMQR}_PROVIDER`; the canonical spelling wins when both are
-set.
+The 19 ops: `gemm`, `gemv`, `trsm`, `trmm`, `symm`, `syrk`, `syr2k`, `potrf`, `posv`,
+`getrf`, `getrs`, `getri`, `gesv`, `geqrf`, `orgqr`, `ormqr`, `syev`, `gesvd`, `spmm`.
+`route(op)` throws `std::invalid_argument` for any other name. Values are `auto`,
+`native`, `vendor` or a choice spelling from the op's `src/ops/<op>/choice.hh`
+(`lpanel:panel=8`, `reg:m=128:n=128:k=8:u=1`, ...), parsed by `src/select/`; the
+level-3 ops `trmm`, `symm`, `syrk` and `syr2k` take `auto`, `native`, `vendor`,
+`cublasdx` and their kernel words (`triangular`, `gram`, `expand`). Case and
+surrounding whitespace are ignored. An unknown value, or a choice the shape cannot
+run, throws (docs/design/flat-kernel-selection.md §5.3, §12). The old per-op
+spellings `BATCHLAS_<OP>_VARIANT` and `BATCHLAS_<OP>_PROVIDER` are no longer read.
 
 **`selection`** — which kernel or algorithm runs, for the knobs that are not part of
 the route vocabulary. Three of these override an explicit API argument, which is the
@@ -1435,9 +1436,7 @@ sharpest form of the problem this section exists to fix.
 | field | variable | type | default |
 | --- | --- | --- | --- |
 | `expand_route` | `BATCHLAS_EXPAND_ROUTE` | `EnvValue` | unset (shape heuristic) |
-| `gemm_cublasdx_kernel` | `BATCHLAS_GEMM_CUBLASDX_KERNEL` | `EnvValue` | unset (vendor fallback) |
-| `gemm_experimental` | `BATCHLAS_GEMM_EXPERIMENTAL` | `EnvValue` | unset (five variants stay locked) |
-| `gemm_sycl_kernel` | `BATCHLAS_GEMM_SYCL_KERNEL` | `EnvValue` | unset (`KernelVariant::Direct`) |
+| `gemm_cublasdx_kernel` | `BATCHLAS_GEMM_CUBLASDX_KERNEL` | `EnvValue` | unset (vendor fallback); level-3 cuBLASDx arms only, gemm itself no longer reads it |
 | `gemv_segt` | `BATCHLAS_GEMV_SEGT` | `EnvValue` | unset (auto) |
 | `gesvd_bidiag` | `BATCHLAS_GESVD_BIDIAG` | `EnvValue` | unset (`bdsdc`) — `normal` **changes numerics** |
 | `getrf_laswp` | `BATCHLAS_GETRF_LASWP` | `EnvValue` | unset (`defer_gather`) |
@@ -1450,7 +1449,6 @@ sharpest form of the problem this section exists to fix.
 | `ortho_gram` | `BATCHLAS_ORTHO_GRAM` | `EnvValue` | unset; only `gemm` has an effect |
 | `sb2st_back_wave` | `BATCHLAS_SB2ST_BACK_WAVE` | `EnvValue` | unset (wave on) — **fails open**, and its own disable set is wider than `env_falsy` |
 | `sb2st_subgroup` | `BATCHLAS_SB2ST_SUBGROUP` | `EnvValue` | unset (auto); forced-on throws when `kd > 32` |
-| `syev_small_kernel` | `BATCHLAS_SYEV_SMALL_KERNEL` | `EnvValue` | unset (`cta`, unforced) |
 | `syev_two_stage_chase` | `BATCHLAS_SYEV_TWO_STAGE_CHASE` | `EnvValue` | unset (Householder) |
 | `syevx_algorithm` | `BATCHLAS_SYEVX_ALGORITHM` | `EnvValue` | unset (`params.method`) — overrides an API argument |
 | `syevx_preconditioner` | `BATCHLAS_SYEVX_PRECONDITIONER` | `EnvValue` | unset — overrides an API argument |
@@ -1463,6 +1461,7 @@ sharpest form of the problem this section exists to fix.
 | `sytrd_fuse_panel_update` | `BATCHLAS_SYTRD_FUSE_PANEL_UPDATE` | `std::optional<bool>` | `nullopt` (tuned per `n`) — the tri-state knob |
 | `sytrd_impl` | `BATCHLAS_SYTRD_IMPL` | `EnvValue` | unset (legacy); only `device` has an effect |
 | `sytrd_trailing_update` | `BATCHLAS_SYTRD_TRAILING_UPDATE` | `EnvValue` | unset (per backend) |
+| `tuned_dir` | `BATCHLAS_TUNED_DIR` | `EnvValue` | unset (built-in select tables only) |
 
 **`geometry`** — launch geometry, block widths and iteration counts.
 
@@ -1479,7 +1478,6 @@ sharpest form of the problem this section exists to fix.
 | `syev_two_stage_kd` | `BATCHLAS_SYEV_TWO_STAGE_KD` | `int` | `32` (then clamped to `[1, n-1]`) |
 | `syev_two_stage_sb2st_block` | `BATCHLAS_SYEV_TWO_STAGE_SB2ST_BLOCK` | `int` | `32` |
 | `sy2sb_ormqr_nb` | `BATCHLAS_SY2SB_ORMQR_NB` | `EnvValue` | unset; three-valued — `off` or `0` means "never hint" |
-| `syev_cta_max_n` | `BATCHLAS_SYEV_CTA_MAX_N` | `EnvValue` | unset (24 for `complex<double>`, else 32; range 0–32) |
 | `sytrd_block_size` | `BATCHLAS_SYTRD_BLOCK_SIZE` | `int` | `0` (per `n` and per scalar type) |
 | `trmm_tile_m` | `BATCHLAS_TRMM_TILE_M` | `int` | `0` (a function of `m`; bucketed to 16/32/64/128) |
 | `trsm_outer_nb` | `BATCHLAS_TRSM_OUTER_NB` | `int` | `0` (128 for `Side::Left`, `cta_nb` for `Side::Right`) |
@@ -1523,6 +1521,7 @@ changes a numeric result; several cost a full pipeline drain.
 | `kernel_trace` | `BATCHLAS_KERNEL_TRACE`, `BATCHLAS_TRACE_KERNELS` | `bool` | `false` — likewise; implies profiling |
 | `kernel_trace_path` | `BATCHLAS_KERNEL_TRACE_PATH`, `BATCHLAS_TRACE_PATH` | `std::string` | `"batchlas_kernels.trace.json"` — first **non-empty** wins |
 | `coverage_out` | `BATCHLAS_COVERAGE_OUT` | `EnvValue` | unset (coverage off) |
+| `select_trace` | `BATCHLAS_SELECT_TRACE` | `bool` | `false` |
 | `debug_filter_degree` | `BATCHLAS_DEBUG_FILTER_DEGREE` | `bool` | `false` — presence alone enables, empty string included |
 | `debug_sytrd_small` | `BATCHLAS_DEBUG_SYTRD_SMALL` | `bool` | `false` |
 | `gesvd_profile` | `BATCHLAS_GESVD_PROFILE` | `bool` | `false` (drains per stage) |

@@ -297,6 +297,16 @@ jobs:
         # and this is the only thing that notices.
         run: python3 .github/ci/check_lfs_pointers.py
 
+  tuned-tables:
+    name: Tuned selection tables are fresh (warning only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: The kernel hash and header parser still work
+        run: python3 .github/ci/check_tuned_tables.py --self-test
+      - name: Stale tables are reported (flat-kernel-selection.md §6.5; never fails)
+        run: python3 .github/ci/check_tuned_tables.py
+
   # ---------------------------------------------------------------------------
   # THE PRIMARY GATE. Everything above this line is text scanning.
   # ---------------------------------------------------------------------------

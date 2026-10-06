@@ -31,6 +31,7 @@
 #include "two_stage_common.hh"
 #include "sytrd_sb2st_hh.hh"
 #include <vector>
+#include "../ops/ormqr/vendor.hh"
 
 namespace batchlas {
 

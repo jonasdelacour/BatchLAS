@@ -519,8 +519,8 @@ def main() -> None:
     parser.add_argument("--csv-compare", default=None, help="CSV output path for compared provider (defaults based on --type/--jobz)")
     parser.add_argument("--output", default=None, help="optional path to save the plot (defaults based on --type/--jobz)")
 
-    parser.add_argument("--provider-base", default="VENDOR", help="baseline BATCHLAS_SYEV_PROVIDER")
-    parser.add_argument("--provider-compare", default="CTA", help="compared BATCHLAS_SYEV_PROVIDER")
+    parser.add_argument("--route-base", default="vendor", help="baseline BATCHLAS_SYEV_ROUTE")
+    parser.add_argument("--route-compare", default="cta", help="compared BATCHLAS_SYEV_ROUTE")
     parser.add_argument("--label-base", default="cuSOLVER", help="display label for baseline series")
     parser.add_argument("--label-compare", default="BatchLAS", help="display label for compared series")
 
@@ -601,7 +601,7 @@ def main() -> None:
             batches=args.batches,
             common_args=common_args,
             bench_args=point_args,
-            env={"BATCHLAS_SYEV_PROVIDER": args.provider_base},
+            env={"BATCHLAS_SYEV_ROUTE": args.route_base},
         )
         _run_benchmark_pairs(
             binary=args.bench_bin,
@@ -610,7 +610,7 @@ def main() -> None:
             batches=args.batches,
             common_args=common_args,
             bench_args=point_args,
-            env={"BATCHLAS_SYEV_PROVIDER": args.provider_compare},
+            env={"BATCHLAS_SYEV_ROUTE": args.route_compare},
         )
 
     if not os.path.isfile(args.csv_base):
@@ -622,14 +622,14 @@ def main() -> None:
     df_compare = load_results(args.csv_compare)
 
     # Disambiguate real vs complex results for plotting.
-    df_base = _filter_by_scalar_type(df_base, args.dtype, label=args.provider_base)
-    df_compare = _filter_by_scalar_type(df_compare, args.dtype, label=args.provider_compare)
+    df_base = _filter_by_scalar_type(df_base, args.dtype, label=args.route_base)
+    df_compare = _filter_by_scalar_type(df_compare, args.dtype, label=args.route_compare)
 
     plot_provider_compare_vs_n(
         df_base,
         df_compare,
-        base_provider=args.provider_base,
-        compare_provider=args.provider_compare,
+        base_provider=args.route_base,
+        compare_provider=args.route_compare,
         base_label=args.label_base,
         compare_label=args.label_compare,
         n_values=args.n,

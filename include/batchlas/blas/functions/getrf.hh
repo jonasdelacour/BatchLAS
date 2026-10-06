@@ -46,10 +46,12 @@ using getrf_vendor_buffer_size = size_t(Queue&,
 /// @brief Validates the arguments of the positional getrf() entry point.
 ///
 /// Checks only non-negative extents. Squareness and the pivot span's length are
-/// checked by the option overloads, not here: a non-square view is routed to
-/// the vendor rather than rejected.
+/// checked by the option overloads, not here: every native kernel's can_run
+/// refuses a non-square view, which sends it to the vendor rather than rejecting
+/// it (in a vendor-free build: batchlas::NoRouteError).
 /// @throws batchlas::invalid_argument on negative extents
 /// @ingroup factorizations
+// Runs in src/ops/getrf/getrf.cc before kernel selection reads A.rows()/A.cols().
 // Deliberately no squareness or pivots-length check; adding either is a
 // user-visible behaviour change.
 // evidence: docs/design/vendor-independence.md#positional-validators-reject-only-what-no-route-can-serve
@@ -76,7 +78,7 @@ inline void getrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
 /// backend writes genuine 1-based int64 instead. Pass the span unchanged to
 /// getrs() / getri() on the same backend; do not read or compare the entries
 /// across backends. Complex pivots are chosen on `|Re| + |Im|` natively and on
-/// the modulus by cuBLAS, so pivot sequences can differ between routes while
+/// the modulus by cuBLAS, so pivot sequences can differ between kernels while
 /// both factorizations are valid.
 ///
 /// Asynchronous: A, @p pivots and @p info are readable after the returned event
@@ -97,8 +99,8 @@ inline void getrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
 /// @pre a non-empty @p info holds at least `A.batch_size()` elements; a shorter
 ///      one is silently ignored by this overload
 /// @throws batchlas::invalid_argument on negative extents
-/// @throws batchlas::dispatch::NoRouteError if no native route supports the
-///         shape and the vendor library was not built in
+/// @throws batchlas::NoRouteError if no native kernel can run the shape and the
+///         vendor library was not built in
 /// @note The workspace size does not depend on whether @p info is requested.
 /// @ingroup factorizations
 // evidence: docs/design/vendor-independence.md#per-item-info-spans-for-potrf-getrf-and-getri
@@ -121,7 +123,7 @@ inline Event getrf(Queue& ctx,
 }
 
 /// @brief Workspace, in bytes, that getrf() needs for this shape on this queue.
-/// @param ctx  queue the factorization will run on (routing reads its device)
+/// @param ctx  queue the factorization will run on (kernel selection reads its device)
 /// @param A    batch of n x n matrices to be factorized
 /// @return bytes to pass as the `work_space` span of getrf()
 /// @ingroup factorizations
@@ -134,9 +136,10 @@ BATCHLAS_API size_t getrf_buffer_size(Queue& ctx,
 
 namespace batchlas::backend {
 
-/// @brief Vendor arm of getrf(); called by the entry-point facade, not by users.
+/// @brief Vendor arm of getrf(); called by getrf() when it selects the `vendor`
+///        kernel family, not by users.
 /// @ingroup dispatch
-// Declaration only: the public getrf lives in src/dispatch/entry_points/factorization.cc.
+// DECLARATION ONLY: the public getrf is defined in src/ops/getrf/getrf.cc.
 // evidence: docs/design/vendor-independence.md#the-entry-point-facade
 template <Backend B, typename T>
 BATCHLAS_API Event getrf_vendor(Queue& ctx,

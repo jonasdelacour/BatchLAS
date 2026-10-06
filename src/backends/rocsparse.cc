@@ -78,6 +78,7 @@ namespace batchlas {
     } // namespace backend
 
     // ONLY `backend::spmm_vendor` (CSR only), via raw BATCHLAS_INSTANTIATE: there is no _BACKEND_FORMAT_OP.
+    // The public spmm is instantiated in src/ops/spmm/spmm.cc; naming it here would collide at link time.
     // evidence: docs/design/runtime-internals.md#runtime-internals-vendor-tus-instantiate-only-vendor-symbols
     #define ROCSPARSE_OPS(B, fp) \
         BATCHLAS_INSTANTIATE(sig::spmm_vendor<BATCHLAS_UNPAREN fp BATCHLAS_COMMA MatrixFormat::CSR>, \

@@ -949,7 +949,7 @@ existing 16-wide local tile with a transposed store (the trick the float
 (2) predicated edges (E4's predicated leg for the 128x128 kernel is the
 model) so `m, n` need not be multiples of 64; (3) a `k = 32` fast path
 that keeps both operand tiles resident (`64 x 32 + 32 x 64` elements) and
-skips the k-loop. Selector: `select_kernel_variant` in `gemm_kernels.cc`
+skips the k-loop. (Superseded by P3.4: the shipped wide tiles are `wide:m=..:n=..:k=..` candidates in `src/ops/gemm/choice.hh`, ranked by `tuned/gemm.*.txt`; `select_kernel_variant` and `route_gemm.hh` are deleted.) Selector: `select_kernel_variant` in `gemm_kernels.cc`
 gains the new variants with gates `min_dim >= 32 && ctas >= 64`, complex
 any transpose; `route_gemm.hh` `preferred()` widens for complex from the
 measured grid. The panel-shape (a) with `k = m` gets a split-K A/B
@@ -958,8 +958,8 @@ scratch and reduce - measure before shipping.
 
 **Files.** `src/sycl/gemm/register_64x64_k16_wide_{tn,nt,cn,nc}.hh` (or one
 header with a layout template), `gemm_kernels.cc` selector, `route_gemm.hh`,
-`scripts/gemm_demand.py` (its `preferred()` replica has drifted - refresh
-it in the same PR). Instantiations: 4 layouts x 4 types = 16 kernels in
+`scripts/gemm_demand.py` (its `preferred()` replica had drifted; superseded:
+P3.4 removed both the replica and `route_gemm.hh`). Instantiations: 4 layouts x 4 types = 16 kernels in
 `batchlas_sycl` (the largest library: measure the link delta, budget 15%).
 
 **Tests.** `tests/gemm_tests.cc`: every `(transA, transB)` x type at `m, n,

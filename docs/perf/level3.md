@@ -10,73 +10,81 @@ in place. All measurements: RTX 4090 / sm_89, CUDA 13.2, `RelWithDebInfo`, one d
 
 ### Route arms
 
-| op | Origin x Algorithm arms | scalar types served |
-|---|---|---|
-| `symm` | `{Native, ExpandGemm}`, `{Vendor, FusedDevice}`, `{Vendor, Auto}` | **float only** |
-| `hemm` | expand-then-gemm inside `hemm_vendor`; per-batch `cublas?hemm` loop | complex only (BLAS has no real `?hemm`) |
-| `syrk` | `{Native, GramTiles}`, `{Native, TriangularTiles}`, `{Vendor, FusedDevice}`, `{Vendor, DiagFullGemm}`, `{Vendor, Auto}` | float via the facade; `GramTiles` also double/complex, but only from `cublas.cc` |
-| `herk` | GEMM-into-scratch + `accumulate_hermitian<false>`; per-batch `cublas?herk` loop; opt-in `GramTiles` | complex only |
-| `syr2k` | `{Native, TriangularTiles}`, `{Vendor, FusedDevice}`, `{Vendor, DiagFullGemm}`, `{Vendor, Auto}` | **float only** — `syr2k_triangular_tiles` has one call site in the tree |
-| `her2k` | GEMM-into-scratch + `accumulate_hermitian<true>`; per-batch `cublas?her2k` loop | complex only |
-| `trmm` | `{Native, TriangularTiles}`, `{Vendor, FusedDevice}`, `{Vendor, Auto}` (expand-then-gemm) | float via the facade; the tile kernel is type-generic, double/complex reach it only from `cublas.cc` |
+These four ops have no tuned table: they choose by hand-written rules in
+`src/backends/*_custom_dispatch.cc`, called from the public entry points in
+`src/ops/level3/level3.cc` (float, CUDA only). Each arm is named by its `BATCHLAS_<OP>_ROUTE` word
+([the level-3 pin words](dispatch.md#the-level-3-pin-words)); `auto` picks among them.
 
-`{Vendor, FusedDevice}` is the cuBLASDx fused kernel and **has never run in this build**: MathDx
+| op | arms (pin words) | scalar types served |
+|---|---|---|
+| `symm` | `expand` (= `native`), `cublasdx`, `vendor` | **float only** |
+| `hemm` | expand-then-gemm inside `hemm_vendor`; per-batch `cublas?hemm` loop | complex only (BLAS has no real `?hemm`) |
+| `syrk` | `gram`, `triangular` (`native` = the one Auto would take), `cublasdx`, `vendor` | float via `src/ops/level3/level3.cc`; `gram` also double/complex, but only from `cublas.cc` |
+| `herk` | GEMM-into-scratch + `accumulate_hermitian<false>`; per-batch `cublas?herk` loop; opt-in gram tiles via `BATCHLAS_SYRK_ROUTE=gram` | complex only |
+| `syr2k` | `triangular` (= `native`), `cublasdx`, `vendor` | **float only** — `syr2k_triangular_tiles` has one call site in the tree |
+| `her2k` | GEMM-into-scratch + `accumulate_hermitian<true>`; per-batch `cublas?her2k` loop | complex only |
+| `trmm` | `triangular` (= `native` where it fits), `cublasdx`, `vendor` (expand-then-gemm) | float via `src/ops/level3/level3.cc`; the tile kernel is type-generic, double/complex reach it only from `cublas.cc` |
+
+`cublasdx` is the cuBLASDx fused kernel and **has never run in this build**: MathDx
 is absent (`BATCHLAS_HAS_CUBLASDX 0`), so `cublasdx_variant_needs_fallback` is unconditionally
-true (`cublasdx_dispatch_common.hh`, see [the fused-tail hook](#level-3-the-cublasdx-fused-tail-hook)) and every "cublasdx" route ever measured here is its fallback.
-`{Vendor, DiagFullGemm}` is a deliberately **wrong** route that stores both triangles, kept only
-so the arithmetic the triangular kernels save is measurable; `Auto` must never select it
-(`route.hh:38-86`).
+true (`cublasdx_dispatch_common.hh`, see [the fused-tail hook](#level-3-the-cublasdx-fused-tail-hook)) and every "cublasdx" route
+measured here before phase 5 was its fallback; a `cublasdx` pin now throws instead. Until flat selection phase 5 the
+arms were spelled as `Route{Origin, Algorithm}` pairs (`{Native, ExpandGemm}`, `{Native, GramTiles}`,
+`{Native, TriangularTiles}`, `{Vendor, FusedDevice}`, `{Vendor, Auto}`), which is the vocabulary the measurement
+notes below still use. That vocabulary also had `{Vendor, DiagFullGemm}`, a deliberately **wrong** route that stored
+both triangles, kept only so the arithmetic the triangular kernels save was measurable; phase 5 deleted it.
 
 ### The shipped predicates
 
-Quoted as implemented, not as the notes describe them. Line numbers as of 2026-09-30; the function
-names are the stable reference.
+Quoted as implemented, not as the notes describe them. Function names are the reference; line
+numbers drift and are left out.
 
 ```cpp
-// syrk_custom_dispatch.cc:75-84 syrk_prefer_triangular_tiles, n and k taken from C.rows() and the transA-selected extent
+// syrk_custom_dispatch.cc syrk_prefer_triangular_tiles, n and k taken from C.rows() and the transA-selected extent
 if (detail::triangular_tiles_per_side(n) < 3 || k < detail::kTriangularTileK) return false;
 return (long long)A.batch_size() * detail::triangular_tile_count(n) >= 160;
-bool syrk_prefer_gram_tiles(C) { return C.rows() <= detail::kGramMaxTile; }   // :88-90, == 128
-return min_dim*2 >= max_dim && tiled_work >= 8;   // :92-107 syrk_prefer_cuda_custom_heuristic, and n >= 16
+bool syrk_prefer_gram_tiles(C) { return C.rows() <= detail::kGramMaxTile; }   // == 128
+return min_dim*2 >= max_dim && tiled_work >= 8;   // syrk_prefer_cuda_custom_heuristic, and n >= 16
 
-bool syr2k_prefer_triangular_tiles(A) { return A.batch_size() >= 2; }  // syr2k_...cc:69-71
+bool syr2k_prefer_triangular_tiles(A) { return A.batch_size() >= 2; }  // syr2k_custom_dispatch.cc
 
-// trmm_custom_dispatch.cc:112-125 trmm_use_cuda_custom -- there is NO shape threshold
-if (detail::is_gpu_queue(ctx) && trmm_triangular_supported(A, B, C, side) &&
-    (trmm_triangular_requested() || !dispatch::is_plain_vendor(trmm_route_request()))) return true;
+// trmm_custom_dispatch.cc trmm_use_cuda_custom -- there is NO shape threshold
+if (pin == Level3Pin::Cublasdx || pin == Level3Pin::Triangular) return true;
+if (pin == Level3Pin::Vendor || !detail::is_gpu_queue(ctx)) return false;
+if (trmm_triangular_supported(A, B, C, side)) return true;
 
-return batch >= kExpandMinBatch /*4*/ || max_dim >= kExpandMinDim /*256*/;  // triangular_expand.hh:28-29,42
-return batch >= 4 && n <= 768;    // cublas.cc:261             herk
-return batch >= 2 || n >= 128;    // expansion_budget.hh:67    her2k
+return batch >= kExpandMinBatch /*4*/ || max_dim >= kExpandMinDim /*256*/;  // triangular_expand.hh expansion_preferred
+return batch >= 4 && n <= 768;    // cublas.cc                 herk
+return batch >= 2 || n >= 128;    // expansion_budget.hh       her2k
 ```
 
 `triangular_tiles_per_side(n) = ceil(n/128)`, `kTriangularTileK = 8`
-(`triangular_tiles.hh:95-100`), so `>= 3` means **n >= 257**, not the n >= 384 that the
+(`triangular_tiles.hh`), so `>= 3` means **n >= 257**, not the n >= 384 that the
 measurement supports (the function's comment cited n >= 384 as the measured win until the
-2026-09-30 comment pass). `expansion_fits` (`expansion_budget.hh:38`) is
+2026-09-30 comment pass). `expansion_fits` (`expansion_budget.hh`) is
 two hard ceilings, not a tuned one: the SYCL global range must fit an `int` (fails at 2^31
 elements — a thrown `sycl::exception` at n=2048 batch=512), and the scratch must fit a quarter of
 global memory.
 
 ### Where the decision actually happens
 
-**The four gates are float-and-CUDA only** — `src/dispatch/entry_points/level3.cc:188, 379, 417,
-456` each wrap the gate in `if constexpr (Back == Backend::CUDA && std::is_same_v<T, float>)`.
+**The four gates are float-and-CUDA only** — the `symm`, `syrk`, `syr2k` and `trmm` entry points in
+`src/ops/level3/level3.cc` each wrap the gate in `if constexpr (Back == Backend::CUDA && std::is_same_v<T, float>)`.
 **And the thresholds above are GATE-ONLY, so the effective route is wider than the predicate
 reads**: once `syrk_use_cuda_custom` returns true for any reason, `syrk_cuda_custom`'s `Auto` arm
 takes `syrk_triangular_tiles` unconditionally after the gram test fails
-(`syrk_custom_dispatch.cc:180-192`), with no second preference check — so a square n = 256 shape
+(`syrk_cuda_custom`), with no second preference check — so a square n = 256 shape
 passes the third disjunct, reaches the tile kernel, and `n >= 257` never runs. Reading these as a
 `preferred()` window is wrong in both directions (see
 [why the four ops are instrumented](#level-3-why-the-four-ops-are-instrumented-rather-than-routed)), and is why these
-four ops have **no `RouteTable`** and are instrumented at each terminal instead.
+four ops have **no tuned table** (no `select::choose`) and are instrumented at each terminal instead.
 
 ### Level-3: non-float routes live only in cublas.cc
 
 Two native arms exist for non-float, reachable **only** when cuBLAS is compiled because they live
 in `cublas.cc`: `syrk` gram tiles in `syrk_vendor` (n <= 128 only) and `trmm` triangular tiles in
 `trmm_vendor` (`Side::Left`, homogeneous). `syr2k` has **nothing** non-float. Hence WP1 S7 refused
-to flip `level3_tile_kernels_compiled` to a bare `true` (`route_compiled.hh:63-64`):
+to flip `level3_tile_kernels_compiled` to a bare `true`; the surviving constant is in `src/select/vendor.hh`:
 
 ```cpp
 template <Backend B, typename T>
@@ -86,7 +94,7 @@ inline constexpr bool level3_tile_route_available =
 
 **Where the float gate went (WP1 S6).** `symm_vendor`, `syrk_vendor`, `syr2k_vendor` and
 `trmm_vendor` in `cublas.cc` used to open with the float custom-route gate. WP1 S6 moved it to the
-facade (`src/dispatch/entry_points/level3.cc`): it has to run *before* the vendor-available test,
+facade (now `src/ops/level3/level3.cc`): it has to run *before* the vendor-available test,
 and `cublas.cc` is compiled only when cuBLAS exists, so leaving the gate there made the tile
 kernels linkable everywhere but callable nowhere in a vendor-free build. The non-float arms above
 stayed, which is the reachability gap this section describes.
@@ -102,8 +110,7 @@ Why the non-float arms need no threshold of their own:
   routing was ever float. The alternative is the same expansion-plus-GEMM as for float, which is
   strictly more work than the GEMM it wraps, so there is nothing to weigh.
 * Both honour `=vendor` pins (`syrk_route_prefers_vendor`, `trmm_route_prefers_vendor`): the
-  float router reads the variable through the route vocabulary, but double and complex need the
-  one bit too, or `=vendor` would silently measure the new route and report it as the old one.
+  float router reads the whole pin word, but double and complex need the one bit too, or `=vendor` would silently measure the new route and report it as the old one.
 
 ## Boundaries and their evidence
 
@@ -508,7 +515,7 @@ The conjugating path through the same kernel was built and **measured and reject
 float it loses to the existing GEMM-plus-Hermitian-fold at every Gram shape — 0.217 vs **0.206**
 ms at n=32 batch 2048, 2.08 vs **1.57** at n=128 batch 512. A complex multiply is four real ones,
 so herk is compute bound where real syrk is bandwidth bound, and cuBLAS's cgemm is better at
-compute. The route stays reachable as `BATCHLAS_SYRK_VARIANT=gram` so it stays measurable and the
+compute. The route stays reachable as `BATCHLAS_SYRK_ROUTE=gram` so it stays measurable and the
 conjugation stays under test (`syrk_route_requests_gram`, `syrk_custom_dispatch.hh`).
 
 ### trmm for the WY block factor
@@ -670,25 +677,24 @@ timing cannot (an unsaturated benchmark's ratios are overhead, and routing a sha
 scope).
 
 The dispatch coverage table can, and `scripts/route_diff.sh` diffs it, but it was blind to these
-four ops: `dispatch::resolve_route` records every op that goes through it, and these have no
-`RouteTable<Op, T>` (only gemm, gesvd, ormqr and syev do). WP0 gave them the route *vocabulary*
-(`parse_route_env`, `is_plain_vendor`) but never the *resolver*; their thresholds are hand-rolled
-if-chains. So each terminal records the branch actually taken, beside a `return` and never in place
-of one, inert unless `BATCHLAS_COVERAGE_OUT` is set.
+four ops: the shared selector (then `dispatch::resolve_route`, now `select::run`) records every op
+that goes through it, and these four never did; their thresholds are hand-rolled if-chains. So each
+terminal records the branch actually taken (`record_level3_route`, spelled with the pin word),
+beside a `return` and never in place of one, inert unless `BATCHLAS_COVERAGE_OUT` is set.
 
-A `RouteTable` would **not** be equivalent, because the thresholds are gate-only (see
+A table would **not** be equivalent, because the thresholds are gate-only (see
 [where the decision actually happens](#where-the-decision-actually-happens)): transcribing them
-into `preferred()` rejects the tile route for 129 <= n <= 383 at every batch and sends n = 256 to a
-route that writes both triangles. Measuring first, transcribing later.
+into the old `preferred()` rejected the tile route for 129 <= n <= 383 at every batch and sent
+n = 256 to a route that writes both triangles. Measuring first, transcribing later; moving them to
+`tuned/` is still an open debt in [dispatch.md](dispatch.md).
 
 The record's details are load-bearing: `native_supported` is a tri-state (see
 [the coverage instrument itself](#the-coverage-instrument-itself)); `uplo`/`side`/`diag`/`transA`
 are part of the coverage key, so two calls differing only in `uplo` do not collapse into one row
 (trmm's poison-test history is why that matters); and the scalar is hardcoded F32/CUDA because
 every entry point in `{symm,syrk,syr2k,trmm}_custom_dispatch.hh` takes `MatrixView<float>`. If that
-stops being true the signature has to grow, and a caller that forgets will not compile. A forced
-`FusedDevice` request that lands on the GEMM fallback is recorded as the route *taken*
-(`DiagFullGemm`), or the table would lie about what ran.
+stops being true the signature has to grow, and a caller that forgets will not compile. The row
+records the route *taken*, not the one asked for, or the table would lie about what ran.
 
 ### Level-3: the cuBLASDx fused-tail hook
 
@@ -712,11 +718,11 @@ verbatim: descriptor fields, trace scope names and the three exits unchanged.
 **Three outcomes, not two** (`FusedResult::Outcome`): `Ran`; `NoKernel` (no compatible fused
 variant in this build); `DeviceUnsupported` (the kernel exists but the device refused it,
 `cudaErrorNotSupported`). A hard launch failure is neither and throws from the CUDA TU. The four
-ops genuinely disagree on the reaction, so it stays in each dispatcher: symm and syrk fall back to
-their GEMM shims, trmm to the vendor (throwing a different message for each outcome only when
-forced), and syr2k throws on `NoKernel` (open debt 2 below). syr2k must also **not** fall back to
-`syr2k_cublasdx_fallback_gemm` on `DeviceUnsupported`: that routine takes no uplo and writes both
-triangles, and since every level-3 test uses a single uplo per call nothing would catch it.
+ops genuinely disagree on the reaction, so it stays in each dispatcher. Since phase 5 the fused
+kernel is reached only through a `cublasdx` pin, and a pin it cannot serve throws
+(`throw_forced_cublasdx_unavailable`). syr2k in particular has no uplo-respecting fallback for a
+fused kernel that did not run: its old GEMM fallback took no uplo and wrote both triangles, and
+since every level-3 test uses a single uplo per call nothing would have caught it.
 
 ### Level-3: the sideways vendor seam
 
@@ -728,8 +734,8 @@ not work, and it fails quietly: every fallback site is reached *after* a gate th
 true. `symm_vendor` calls `symm_use_cuda_custom`, which returns true; `symm_cuda_custom` decides the
 shape is unsupported; a public `symm` from there re-enters `symm_use_cuda_custom` with the same
 environment and views and gets true again. **Unbounded recursion**, reachable with
-`BATCHLAS_SYMM_ROUTE=custom` on a CPU queue, where `route_common.hh`'s `should_use_cublasdx`
-returns true for a forced custom variant before the problem-supported test.
+`BATCHLAS_SYMM_ROUTE=cublasdx` on a CPU queue, where `symm_use_cuda_custom` returns true for the
+pin before the problem-supported test.
 
 So the sideways terminal has its own seam: forward to the vendor where one is compiled, throw the
 ordinary `NoRouteError` (the same diagnostic the facade throws) where none is. The `.cc` is in
@@ -763,22 +769,21 @@ reaches its own `batchlas::detail` helpers unqualified, and introducing a
 
 ### Level-3: one route parse per variable
 
-Each op now has exactly one `*_route_request()` that parses its environment variable through
-`dispatch::parse_route_env`; legacy spellings are unchanged and pinned by
-`tests/route_vocabulary_tests.cc`. Before WP0, `BATCHLAS_TRMM_VARIANT` was read by two parsers
-that disagreed on its vocabulary: `parse_cublasdx_variant_request` understood
-`vendor`/`cublasdx|dx|custom`/`auto` and returned Auto for anything else, while
-`trmm_triangular_requested` looked for `triangular|tiles`. So `=triangular` was simultaneously "no
-opinion" and "pin the tile kernel", and the two had to be consulted together at four call sites.
-The private `SyrkRoute`/`Syr2kRoute` enums went the same way: they named the six things
-`dispatch::Route` names in a spelling only one file understood.
+Each op has exactly one parse of its environment variable: `detail::level3_pin`
+(`src/backends/route_common.hh`) turns `BATCHLAS_<OP>_ROUTE` into a `Level3Pin`, case-folded and
+trimmed, and a word the op does not take throws ([the level-3 pin words](dispatch.md#the-level-3-pin-words)).
+Before WP0, `BATCHLAS_TRMM_VARIANT` was read by two parsers that disagreed on its vocabulary:
+`parse_cublasdx_variant_request` understood `vendor`/`cublasdx|dx|custom`/`auto` and returned Auto
+for anything else, while `trmm_triangular_requested` looked for `triangular|tiles`. So
+`=triangular` was simultaneously "no opinion" and "pin the tile kernel", and the two had to be
+consulted together at four call sites. WP0 folded them into one route parse per op; phase 5
+replaced that with the pin words and dropped the `_VARIANT` spellings.
 
-Two legacy words do **not** mean what the canonical vocabulary reads them as in these files:
-`custom` is the fused cuBLASDx kernel (not the register-tiled GEMM family), and `gemm` is a vendor
-route (`DiagFullGemm`, the full n x n GEMM that writes both triangles, kept only to measure what
-the triangular routes save; Auto never selects it). `=vendor` must keep meaning the vendor even
-where the tile kernel is the default, because it is the only "before" a measurement can be taken
-against.
+Two legacy words did **not** mean what the canonical vocabulary read them as in these files:
+`custom` was the fused cuBLASDx kernel (not the register-tiled GEMM family), and `gemm` was the
+both-triangles `DiagFullGemm` measurement route. Both now throw
+(`*CudaCustomTest.RemovedRouteWordsThrow`). `=vendor` must keep meaning the vendor even where the
+tile kernel is the default, because it is the only "before" a measurement can be taken against.
 
 ### Level-3: scratch expansions and their ceilings
 
@@ -829,22 +834,18 @@ Settings field.
 
 ### Forced-route defects
 
-1. **`BATCHLAS_SYRK_ROUTE=native` produces a wrong answer.** `{Native, Auto}` passes
-   `syrk_use_cuda_custom`, then fails every arm inside `syrk_cuda_custom` (`gram` requires
-   `origin == Auto`; the tile arm requires `algo == TriangularTiles || origin == Auto`) and lands
-   on `syrk_cublasdx_fallback_gemm` at the end of `syrk_cuda_custom` — the `DiagFullGemm`
-   route, which **writes both triangles**. `WP1_LEVEL3_SPEC.md` describes this fall-through as
-   landing "into raw cuBLAS"; after WP1 S2 the terminal is the public `gemm`, so the note's
-   destination is stale, but the defect is unchanged and unfixed.
-2. **`BATCHLAS_SYR2K_ROUTE=native` throws a cuBLASDx message it did not ask for**
-   (`syr2k_cuda_custom`, after `syr2k_fused_try`); the throw is not guarded by `forced`. Pre-existing,
-   preserved exactly rather than quietly improved.
+1. ~~`BATCHLAS_SYRK_ROUTE=native` produces a wrong answer~~ (it fell through to the
+   both-triangles `DiagFullGemm` route) and
+2. ~~`BATCHLAS_SYR2K_ROUTE=native` throws a cuBLASDx message it did not ask for~~: fixed in flat
+   selection phase 5, which replaced the route vocabulary with per-op words
+   ([dispatch.md](dispatch.md#the-level-3-pin-words)) and deleted `DiagFullGemm`. `native` takes
+   the tile kernel; `SyrkCudaCustomTest.AutoAndNativeRoutesLeaveTheOtherHalfUntouched` holds it.
 
 ### Routing and reachability
 
 3. **`symm` has no `expansion_fits` ceiling** where hemm, herk and her2k all have one:
-   `symm_cublasdx_fallback_gemm` allocates the k x k x batch scratch unconditionally
-   (`symm_cublasdx_fallback_gemm`), so a large enough symm hits the 2^31-element SYCL range
+   `symm_expand_gemm` allocates the k x k x batch scratch unconditionally
+   (`symm_custom_dispatch.cc`), so a large enough symm hits the 2^31-element SYCL range
    failure instead of falling back. Adding the check *is* a route change and needs measuring.
 4. **`double` symm has no expansion route at all** — the facade gate is float-only and
    `symm_vendor` forwards to a per-batch `cublasDsymm` loop, while complex `hemm` and float

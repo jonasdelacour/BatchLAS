@@ -15,7 +15,7 @@ template <typename T>
 bool spmm_gather_available();  // compiled into this build; not a device query
 
 template <typename T>
-bool spmm_scatter_available();  // independent of gather; each gates supports()
+bool spmm_scatter_available();  // independent of gather; each gates can_run
 
 template <typename T>
 Event spmm_native_csr(Queue& ctx,  // all nine (transA, transB) spellings, dispatched on transA

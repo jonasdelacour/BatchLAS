@@ -36,7 +36,8 @@ using gemm_vendor = gemm<T>;
 /// `active_rows` / `active_cols` is handled by this same entry point on every
 /// backend: an item with m == 0 or n == 0 is skipped, an item with k == 0
 /// computes \f$C_b := \beta C_b\f$, and an all-skipped batch still returns a
-/// valid Event. There is no separate `gemm_heterogeneous` in C++.
+/// valid Event. There is no separate `gemm_heterogeneous` in C++ (the Python
+/// binding's one exists to coerce a list of differently-shaped arrays).
 ///
 /// Also callable as `gemm(ctx, A, B, C, GemmOptions<T>{...})`, with owning
 /// `Matrix` arguments, and without `Back` (taken from `ctx.backend()`).
@@ -55,9 +56,9 @@ using gemm_vendor = gemm<T>;
 ///                   Other values are honoured only by the vendor library path.
 /// @return event of the last enqueued kernel; `C` is valid once it completes
 /// @pre `A`, `B` and `C` have the same batch size and conforming shapes per item.
-/// @throws batchlas::dispatch::NoRouteError in a build without the vendor BLAS
-///         for `Back` when no native route supports the call (a non-Default
-///         `precision`, or a degenerate homogeneous m, n or k of zero).
+/// @throws batchlas::NoRouteError in a build without the vendor BLAS for `Back`
+///         when no native kernel can run the call (a non-Default `precision`,
+///         or a degenerate homogeneous m, n or k of zero).
 /// @see GemmOptions, @ref md_docs_2cpp-api
 /// @ingroup blas3
 template <Backend Back, typename T>
@@ -75,12 +76,13 @@ BATCHLAS_API Event gemm(Queue& ctx,
 
 namespace batchlas::backend {
 
-// Declaration only: each vendor TU defines and instantiates it for its Backend.
+// DECLARATION ONLY: each vendor TU defines and instantiates it for its Backend;
+// the public gemm is defined in src/ops/gemm/gemm.cc.
 // evidence: docs/design/vendor-independence.md#the-entry-point-facade
 /// @brief Vendor-library implementation of gemm (cuBLAS, rocBLAS, host BLAS).
 ///
-/// Not an entry point: batchlas::gemm calls it when it routes to the vendor.
-/// Same arguments and semantics as batchlas::gemm.
+/// Not an entry point: batchlas::gemm calls it when it selects the `vendor`
+/// kernel family. Same arguments and semantics as batchlas::gemm.
 /// @ingroup dispatch
 template <Backend Back, typename T>
 BATCHLAS_API Event gemm_vendor(Queue& ctx,

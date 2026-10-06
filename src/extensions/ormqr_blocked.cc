@@ -1,5 +1,5 @@
 #include <batchlas/blas/device.hh>
-#include <batchlas/blas/dispatch/route_compiled.hh>
+#include "../select/vendor.hh"
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/internal/ormqr_blocked.hh>
@@ -56,7 +56,7 @@ inline bool wy_trmm_applicable(int ib) {
     }
     // Ask whether the tile kernel is linked, not what the backend is: a
     // vendor-free build is still Backend::CUDA but need not compile that TU.
-    constexpr bool route_has_tile_kernel = dispatch::level3_tile_route_available<B, T>;
+    constexpr bool route_has_tile_kernel = select::level3_tile_route_available<B, T>;
     constexpr bool type_beats_gemm_at_this_m = !internal::is_complex<T>::value;
     return route_has_tile_kernel && type_beats_gemm_at_this_m && ib <= 64;
 }

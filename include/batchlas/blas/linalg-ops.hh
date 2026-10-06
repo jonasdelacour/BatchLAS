@@ -350,7 +350,7 @@ inline Eigh<T> eigh(Queue& ctx,
 /// @param trans  op(A)
 /// @return       new n x nrhs x batch matrix
 /// @throws batchlas::exception (NoTrans) when an extent (n, nrhs or batch) is below
-///         1: no route serves a degenerate shape
+///         1: `gesv` has no kernel for an empty problem
 template <typename T>
 inline Matrix<T, MatrixFormat::Dense> solve(Queue& ctx,
                                             const MatrixView<T, MatrixFormat::Dense>& A,

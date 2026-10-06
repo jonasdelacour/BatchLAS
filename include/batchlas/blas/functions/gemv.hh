@@ -54,9 +54,8 @@ using gemv_vendor = Event(Queue&,
 /// @param transA  op() applied to `A`
 /// @return event of the last enqueued kernel; `Y` is valid once it completes
 /// @pre `A`, `X` and `Y` have the same batch size and conforming lengths.
-/// @throws batchlas::dispatch::NoRouteError in a build without the vendor BLAS
-///         for `B` when the native kernels do not support the call (for example a
-///         heterogeneous `A`).
+/// @throws batchlas::NoRouteError in a build without the vendor BLAS for `B`
+///         when no native kernel can run the call (for example a heterogeneous `A`).
 /// @note No argument validation is done up front: a shape the native kernels
 ///       refuse goes to the vendor library, which reports it.
 /// @see GemvOptions, @ref md_docs_2cpp-api
@@ -75,12 +74,13 @@ BATCHLAS_API Event gemv(Queue& ctx,
 
 namespace batchlas::backend {
 
-// Declaration only: each vendor TU defines and instantiates it for its Backend.
+// DECLARATION ONLY: each vendor TU defines and instantiates it for its Backend;
+// the public gemv is defined in src/ops/gemv/gemv.cc.
 // evidence: docs/design/vendor-independence.md#the-entry-point-facade
 /// @brief Vendor-library implementation of gemv (cuBLAS, rocBLAS, host BLAS).
 ///
-/// Not an entry point: batchlas::gemv calls it when it routes to the vendor.
-/// Same arguments and semantics as batchlas::gemv.
+/// Not an entry point: batchlas::gemv calls it when it selects the `vendor`
+/// kernel family. Same arguments and semantics as batchlas::gemv.
 /// @ingroup dispatch
 template <Backend B, typename T>
 BATCHLAS_API Event gemv_vendor(Queue& ctx,

@@ -1,0 +1,37 @@
+# op=potrf dtype=double device=sm_89 batchlas=unknown kernels=unknown date=2026-10-04
+# source=benchmarks/results/routing/sm89_potrf_archive.jsonl (converted, kernel_current rows only; repeated medians averaged)
+# keys: uplo:exact n:log:3 batch:log
+uplo=L n=1 batch=32768 | vendor 0.05775 | tiny 0.08076
+uplo=L n=2 batch=32768 | tiny 0.08077 | vendor 0.09353
+uplo=L n=3 batch=32768 | tiny 0.08090 | vendor 0.1318
+uplo=L n=4 batch=32768 | tiny 0.08063 | vendor 0.1692 | cta 0.1972
+uplo=L n=5 batch=32768 | tiny 0.08120 | vendor 0.2077
+uplo=L n=6 batch=32768 | tiny 0.08155 | vendor 0.2453
+uplo=L n=7 batch=32768 | tiny 0.08139 | vendor 0.2843
+uplo=L n=8 batch=32768 | tiny 0.08115 | cta 0.3000 | vendor 0.3216
+uplo=L n=9 batch=32768 | vendor 0.3679 | tiny 0.4211
+uplo=L n=10 batch=32768 | vendor 0.3999 | tiny 0.4180
+uplo=L n=11 batch=32768 | tiny 0.4180 | vendor 0.4386
+uplo=L n=12 batch=32768 | tiny 0.4181 | vendor 0.4785 | cta 0.9081
+uplo=L n=13 batch=32768 | tiny 0.4207 | vendor 0.5186
+uplo=L n=14 batch=32768 | tiny 0.4221 | vendor 0.5582
+uplo=L n=15 batch=32768 | tiny 0.4237 | vendor 0.5979
+uplo=L n=16 batch=32768 | tiny 0.4237 | vendor 0.6377 | cta 1.016
+uplo=L n=17 batch=32768 | vendor 1.410 | tiny 2.564
+uplo=L n=18 batch=32768 | vendor 1.460 | tiny 2.565
+uplo=L n=20 batch=32768 | vendor 1.510 | cta 1.630 | tiny 2.561
+uplo=L n=24 batch=32768 | vendor 1.666 | cta 1.729 | tiny 2.563
+uplo=L n=28 batch=32768 | vendor 1.823 | cta 2.344 | tiny 2.566
+uplo=L n=32 batch=32768 | vendor 1.974 | cta 2.443 | tiny 2.569
+uplo=L n=128 batch=2048 | vendor 2.150 | blocked 3.751
+uplo=L n=256 batch=256 | vendor 1.811 | blocked 2.209
+uplo=L n=256 batch=1024 | vendor 6.863 | blocked 8.047
+uplo=L n=512 batch=256 | blocked 11.70 | vendor 11.67
+uplo=L n=512 batch=1024 | blocked 45.75 | vendor 45.32
+uplo=U n=1 batch=32768 | tiny 0.08350 | vendor 0.3249
+uplo=U n=2 batch=32768 | tiny 0.08443 | vendor 0.3628
+uplo=U n=4 batch=32768 | tiny 0.08431 | vendor 0.4414
+uplo=U n=8 batch=32768 | tiny 0.08585 | vendor 0.5999
+uplo=U n=10 batch=32768 | tiny 0.4205 | vendor 0.6802
+uplo=U n=12 batch=32768 | tiny 0.4248 | vendor 0.7679
+uplo=U n=16 batch=32768 | tiny 0.4354 | vendor 1.013

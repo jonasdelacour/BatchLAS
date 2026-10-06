@@ -1,0 +1,116 @@
+// getri (flat-kernel-selection.md §4.3, R1): select::run takes the first entry of the nearest
+// tuned/getri.<dtype>.<device>.txt row that can_run() admits. Blocked writes P into C and solves with two
+// public trsm calls (each picks its own kernel); Vendor is cublas<t>getriBatched / rocsolver / LAPACKE.
+//
+// getri_buffer_size has no C, so the key and can_run read A alone and both entry points reach the same
+// choice (R5). Sizing runs under BumpAllocator::measuring() (inv.cc): nothing here touches the workspace
+// or dereferences A.data_ptr().
+
+#include <batchlas/backend_config.h>
+
+#include <batchlas/blas/functions/getri.hh>
+#include <batchlas/blas/functions/trsm.hh>
+
+#include "choice.hh"
+#include "../../select/select.hh"
+#include "../../extensions/getri_native.hh"
+#include "../../util/template-instantiations.hh"
+
+#include <complex>
+#include <cstddef>
+#include <cstdint>
+#include <stdexcept>
+#include <variant>
+
+namespace batchlas {
+namespace ops::getri {
+
+using select::overloaded;
+
+template <class T>
+using MV = MatrixView<T, MatrixFormat::Dense>;
+
+template <class T>
+select::Key key_of(const MV<T>& A) {
+    return {{"n", A.rows()}, {"batch", A.batch_size()}};
+}
+
+// Correctness only (R3): false means the driver would throw or answer wrongly. Blocked's clauses
+// are getri_blocked_dispatch's own checks on A (C, the pivot span and aliasing are argument
+// errors the driver reports itself), plus the pivot format: GPU backends pack 1-based int32 into
+// the int64 span and netlib writes genuine int64, so a NETLIB backend on a GPU queue would read
+// netlib's pivots wrongly. evidence: docs/perf/lu.md#correctness-findings
+// Vendor: exactly the launch's own guard. Not d.has_vendor && d.has_vendor: on ROCm
+// rocSOLVER and rocBLAS are separate options, and getri_vendor<ROCM> needs only rocSOLVER.
+template <Backend B, class T>
+bool can_run(const GetriChoice& c, const select::Device& d, const MV<T>& A) {
+    return std::visit(overloaded{
+        [&](Blocked) {
+            return d.is_gpu && d.has_sg32 && B != Backend::NETLIB && sycl_getri::getri_blocked_available<T>() &&
+                   A.rows() == A.cols() && A.rows() >= 1 && A.batch_size() >= 1 && !A.is_heterogeneous();
+        },
+        [&](Vendor) { return select::factorization_vendor_available<B>; },
+    }, c);
+}
+
+template <Backend B, class T>
+Event launch(Queue& q, const GetriChoice& c, const MV<T>& A, const MV<T>& C, Span<int64_t> pivots,
+             Span<std::byte> ws, Span<int32_t> info) {
+    return std::visit(overloaded{
+        [&](Blocked) {
+            return sycl_getri::getri_blocked_dispatch<T>(
+                q, A, C, pivots, ws, info,
+                [](Queue& c2, const MV<T>& ta, const MV<T>& tb, T talpha, Side tside, Uplo tuplo, Transpose ttrans,
+                   Diag tdiag) { return trsm<B, T>(c2, ta, tb, talpha, tside, tuplo, ttrans, tdiag); });
+        },
+        [&](Vendor) -> Event {
+            if constexpr (select::has_library<B>(spec.vendor))
+                return backend::getri_vendor<B, T>(q, A, C, pivots, ws, info);
+            else select::no_vendor<B, T>(spec);
+        },
+    }, c);
+}
+
+// Exactly the chosen family's need (R5); Blocked's trsm calls take no workspace.
+template <Backend B, class T>
+std::size_t workspace(Queue& q, const GetriChoice& c, const MV<T>& A) {
+    return std::visit(overloaded{
+        [&](Blocked) { return sycl_getri::getri_blocked_buffer_size<T>(q, A); },
+        [&](Vendor) -> std::size_t {
+            if constexpr (select::has_library<B>(spec.vendor))
+                return backend::getri_vendor_buffer_size<B, T>(q, A);
+            else select::no_vendor<B, T>(spec);
+        },
+    }, c);
+}
+
+}  // namespace ops::getri
+
+template <Backend Back, typename T>
+Event getri(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& C,
+            Span<int64_t> pivots, Span<std::byte> work_space, Span<int32_t> info) {
+    getri_validate_params<T>(A, C);
+    // The coverage row's key: m = k = order, n = A.cols (equal unless the vendor takes a non-square A).
+    const coverage::Shape shape{.m = A.rows(), .n = A.cols(), .k = A.rows(), .batch = A.batch_size()};
+    const select::Key key = ops::getri::key_of<T>(A);
+    return select::run<Back, T>(
+        ops::getri::spec, ctx, key, ops::getri::candidates<T>(),
+        [&](const auto& c, const auto& d) { return ops::getri::can_run<Back, T>(c, d, A); }, shape, key,
+        [&](const auto& c) { return ops::getri::launch<Back, T>(ctx, c, A, C, pivots, work_space, info); });
+}
+
+template <Backend Back, typename T>
+size_t getri_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
+    getri_validate_params<T>(A);
+    const auto c = select::pick<Back, T>(
+        ops::getri::spec, ctx, ops::getri::key_of<T>(A), ops::getri::candidates<T>(),
+        [&](const auto& k, const auto& d) { return ops::getri::can_run<Back, T>(k, d, A); });
+    return ops::getri::workspace<Back, T>(ctx, c, A);
+}
+
+#define GETRI_INSTANTIATE(B_, fp) \
+    BATCHLAS_INSTANTIATE_OP(B_, fp, getri) BATCHLAS_INSTANTIATE_OP(B_, fp, getri_buffer_size)
+BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(GETRI_INSTANTIATE)
+#undef GETRI_INSTANTIATE
+
+}  // namespace batchlas

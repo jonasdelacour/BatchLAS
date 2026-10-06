@@ -64,8 +64,6 @@ set(BENCHMARK_TARGETS
     sytrd_sb2st_benchmark
     sb2st_hh_benchmark
     syev_two_stage_benchmark
-    cusolverdx_heev_benchmark
-    cusolverdx_htev_benchmark
     htev_compare_benchmark
 )
 
@@ -96,28 +94,12 @@ function(batchlas_add_benchmark_target target_name)
         target_link_libraries(${target_name} PRIVATE ${BATCHLAS_NETLIB_LINK_LIBRARIES})
         target_include_directories(${target_name} SYSTEM PRIVATE ${BATCHLAS_NETLIB_INCLUDE_DIRS})
     endif()
-    # CUDA headers: these #include ../src/backends/cusolverdx.hh, which reaches
-    # <cuda_runtime_api.h>. CUDA::cudart is wanted here for its include dir; it
-    # used to arrive via batchlas_backends_cuda's PUBLIC link, which now has to
-    # be PRIVATE so the installed export carries no find_dependency(CUDAToolkit)
-    # and no absolute /usr/local/cuda-* path. Same compensation as the one in
-    # tests/CMakeLists.txt.
-    if(BATCHLAS_HAS_CUDA_BACKEND AND TARGET CUDA::cudart
-       AND target_name MATCHES "^(cusolverdx_heev_benchmark|cusolverdx_htev_benchmark|htev_compare_benchmark)$")
-        target_link_libraries(${target_name} PRIVATE CUDA::cudart)
-    endif()
     batchlas_register_benchmark(${target_name})
 endfunction()
 
 foreach(test ${BENCHMARK_TARGETS})
     batchlas_add_benchmark_target(${test})
 endforeach()
-
-function(batchlas_add_device_blas_variant_target target_name source)
-    add_executable(${target_name} ${source})
-    batchlas_configure_binary_target(${target_name})
-    batchlas_register_benchmark(${target_name})
-endfunction()
 
 function(batchlas_add_device_blas_vector_target target_name mode policy)
     add_executable(${target_name} device_blas_level2_benchmark.cc)

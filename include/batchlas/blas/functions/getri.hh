@@ -48,8 +48,10 @@ using getri_vendor_buffer_size = size_t(Queue&,
 /// @brief Validates A for getri_buffer_size(): non-negative extents only.
 /// @throws batchlas::invalid_argument on negative extents
 /// @ingroup factorizations
-// Two arities because the query takes A alone and its route is a function of A
-// alone; neither checks squareness, agreement of A and C, or the pivots length.
+// Runs before choose() in src/ops/getri/getri.cc, because the key reads A.rows()/A.cols().
+// Two arities because the query takes A alone and getri's key and can_run are
+// functions of A alone; neither checks squareness, agreement of A and C, or the
+// pivots length (a non-square A fails can_run(Blocked) and goes to the vendor).
 // evidence: docs/design/vendor-independence.md#positional-validators-reject-only-what-no-route-can-serve
 template <typename T>
 inline void getri_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
@@ -96,8 +98,8 @@ inline void getri_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
 /// @pre A and C square of the same order and batch, and
 ///      `pivots.size() >= n * batch` (checked by the option overloads only)
 /// @throws batchlas::invalid_argument on negative extents
-/// @throws batchlas::dispatch::NoRouteError if no native route supports the
-///         shape and the vendor library was not built in
+/// @throws batchlas::NoRouteError if no native kernel can run the shape and the
+///         vendor library was not built in
 /// @note The workspace size does not depend on whether @p info is requested.
 /// @ingroup factorizations
 // evidence: docs/design/vendor-independence.md#per-item-info-spans-for-potrf-getrf-and-getri
@@ -123,7 +125,7 @@ inline Event getri(Queue& ctx,
 
 /// @brief Workspace, in bytes, that getri() needs for A on this queue.
 ///
-/// Takes A alone: the route, and therefore the size, depends only on A.
+/// Takes A alone: the kernel choice, and therefore the size, depends only on A.
 /// @ingroup factorizations
 template <Backend B, typename T>
 BATCHLAS_API size_t getri_buffer_size(Queue& ctx,
@@ -134,9 +136,10 @@ BATCHLAS_API size_t getri_buffer_size(Queue& ctx,
 
 namespace batchlas::backend {
 
-/// @brief Vendor arm of getri(); called by the entry-point facade, not by users.
+/// @brief Vendor arm of getri(); called by getri() when it selects the `vendor`
+///        kernel family, not by users.
 /// @ingroup dispatch
-// Declaration only: the public getri lives in src/dispatch/entry_points/factorization.cc.
+// DECLARATION ONLY: the public getri is defined in src/ops/getri/getri.cc.
 // evidence: docs/design/vendor-independence.md#the-entry-point-facade
 template <Backend B, typename T>
 BATCHLAS_API Event getri_vendor(Queue& ctx,

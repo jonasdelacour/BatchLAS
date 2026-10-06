@@ -2,8 +2,8 @@
 
 #include <batchlas/backend_config.h>
 
-#include <batchlas/blas/dispatch/no_route.hh>
-#include <batchlas/blas/dispatch/vendor_available.hh>
+#include <batchlas/no_route.hh>
+#include "../select/vendor.hh"
 
 #if BATCHLAS_HAS_CUBLAS
 #include "symm_custom_dispatch.hh"
@@ -20,9 +20,9 @@ namespace batchlas::backend::detail {
 namespace {
 #if !BATCHLAS_HAS_CUBLAS
 // The same NoRouteError the facade throws, so both failure sites read alike.
-[[noreturn]] void no_vendor(dispatch::Op op) {
-    dispatch::throw_no_vendor_route<float>(
-        op, Backend::CUDA, dispatch::kLevel3Library<Backend::CUDA>);
+[[noreturn]] void no_vendor(Op op) {
+    select::throw_no_vendor_route<float>(
+        op, Backend::CUDA, select::kLevel3Library<Backend::CUDA>);
 }
 #endif
 } // namespace
@@ -39,7 +39,7 @@ Event symm_vendor_fallback(Queue& ctx,
     return symm_vendor_cuda_raw(ctx, A, B, C, alpha, beta, side, uplo);
 #else
     (void)ctx; (void)A; (void)B; (void)C; (void)alpha; (void)beta; (void)side; (void)uplo;
-    no_vendor(dispatch::Op::symm);
+    no_vendor(Op::symm);
 #endif
 }
 
@@ -54,7 +54,7 @@ Event syrk_vendor_fallback(Queue& ctx,
     return syrk_vendor_cuda_raw(ctx, A, C, alpha, beta, uplo, transA);
 #else
     (void)ctx; (void)A; (void)C; (void)alpha; (void)beta; (void)uplo; (void)transA;
-    no_vendor(dispatch::Op::syrk);
+    no_vendor(Op::syrk);
 #endif
 }
 
@@ -70,7 +70,7 @@ Event syr2k_vendor_fallback(Queue& ctx,
     return syr2k_vendor_cuda_raw(ctx, A, B, C, alpha, beta, uplo, transA);
 #else
     (void)ctx; (void)A; (void)B; (void)C; (void)alpha; (void)beta; (void)uplo; (void)transA;
-    no_vendor(dispatch::Op::syr2k);
+    no_vendor(Op::syr2k);
 #endif
 }
 
@@ -88,7 +88,7 @@ Event trmm_vendor_fallback(Queue& ctx,
 #else
     (void)ctx; (void)A; (void)B; (void)C; (void)alpha; (void)side; (void)uplo;
     (void)transA; (void)diag;
-    no_vendor(dispatch::Op::trmm);
+    no_vendor(Op::trmm);
 #endif
 }
 

@@ -28,10 +28,9 @@ with the campaign's changes reverted; its coverage dump holds only `linked` rows
 `reached` rows** for `gemv`, i.e. it never calls the op it was once blamed on.
 
 `BATCHLAS_ENABLE_VENDOR_BLAS` is a master switch over per-library options
-(`cmake/BatchLASOptions.cmake:180-198`), and the vendor list deliberately includes
-**cuBLASDx/cuSOLVERDx**: they are third-party NVIDIA source that ships only for NVIDIA, so a
-vendor-independence measurement that let them through would be measuring the wrong thing
-(`:185-189`). MathDx is absent on this box (`BATCHLAS_HAS_CUBLASDX 0`), so every "cublasdx"
+(`BATCHLAS_VENDOR_LIBRARIES` in `cmake/BatchLASOptions.cmake`), and the vendor list deliberately
+includes **cuBLASDx**: it is third-party NVIDIA source that ships only for NVIDIA, so a
+vendor-independence measurement that let it through would be measuring the wrong thing. MathDx is absent on this box (`BATCHLAS_HAS_CUBLASDX 0`), so every "cublasdx"
 route in the tree is silently its fallback.
 
 Both pass counts are the last **recorded** runs, not re-run for this document. Treat them as
@@ -52,18 +51,20 @@ therefore fail entirely on host rows while every CUDA case in it passes. Two dem
   joined the run and passes 368/368 vendor-free, while the 22 failing names stayed
   byte-identical to the post-WP7 set. Read alone, the number says WP8 did nothing.
 
-The structural reason every native tier in this campaign is invisible to the host half:
-`supports()` carries `if (!s.is_gpu) return false;` for `geqrf` (`route_geqrf.hh:48`), `orgqr`
-(`route_orgqr.hh:32`), `ormqr` (`route_ormqr.hh:59`), `getrf` (`route_getrf.hh:41`), `getrs`
-(`route_getrs.hh:52`), `getri` (`route_getri.hh:39`), `potrf` (`route_potrf.hh:38`), `trsm`
-(`route_trsm.hh:39`) and `gemm` (`route_gemm.hh:34-67`). **`gemv`'s `Direct` arm and `spmm`'s
+The structural reason every native tier in this campaign is invisible to the host half: the
+native families' `can_run` requires `d.is_gpu` for `geqrf`, `orgqr`, `ormqr`, `getrf`, `getrs`,
+`getri`, `potrf`, `trsm`, `syev` and `gesvd` (each in `src/ops/<op>/<op>.cc`, geqrf's in
+`can_run.hh`; before flat selection the same clause sat in each op's `supports()`). **`gemv`'s `Direct` arm and `spmm`'s
 gather are the only two exceptions in the tree** — both run on a `native_cpu` `Device("cpu")`
-queue, which is exactly why `gemv_tests` went 40 failed → 0 vendor-free when nothing else did.
+queue, which is exactly why `gemv_tests` went 40 failed → 0 vendor-free when nothing else did. gemm is a
+partial third: its native `can_run` (`src/ops/gemm/gemm.cc`, P3.4) accepts `is_gpu || !has_vendor_blas`, so a host
+queue with no host BLAS still runs the native kernels, as the old merely-supported fallback did, while a host
+queue with one keeps the vendor.
 
 ### The honest metric: the per-op `NoRouteError` census
 
 Every vendor-free failure is a `NoRouteError` naming an op, a scalar type and the switch that
-would restore it (`no_route.hh:36-53`, `:62-72`). Counting those over
+would restore it (`include/batchlas/no_route.hh`). Counting those over
 
 ```
 ctest --test-dir build-novendor -LE slow --rerun-failed --output-on-failure
@@ -87,43 +88,45 @@ failing *set* of suite names; do not diff the pass count.
 
 The static `linked` half of the coverage instrument is not a substitute. It answers "does this
 build have a native route *registered* for this (op, scalar, backend)", not "is there a native
-kernel", and it is stale in both directions: `src/dispatch/coverage.cc:168` still reports
-`trsm` as having no native route, two work packages after WP3 shipped one. Read the `reached`
-rows and the resolved route.
+kernel", and it was stale in both directions: the WP8-era table (`src/dispatch/coverage.cc`, now
+`src/select/coverage.cc`) reported `trsm` as having no native route two work packages after WP3
+shipped one. Read the `reached` rows and the chosen family.
 
 ## What has a native kernel, and what routes to it by default
 
-Every public dense op and `spmm` now has a native SYCL kernel. What differs is whether
-`preferred()` sends traffic to it in a **vendor-present** build. Vendor-free, an un-preferred
-native route still runs: `automatic()` accepts a merely *supported* native route when
-`vendor_available == false` (`route_resolve.hh:34-51`).
+Every public dense op and `spmm` now has a native SYCL kernel. What differs is whether the op's
+table ranks it first in a **vendor-present** build. Vendor-free, the vendor entry cannot run, so
+the first runnable native entry of the row runs (flat selection R4; `can_run` is correctness only).
+Every op below selects in `src/ops/<op>/<op>.cc` over `tuned/<op>.<dtype>.<device>.txt`; "transcribed"
+means the rows reproduce the deleted `preferred()` window (`tuned/README.md`).
 
-| op | native arms (`order` sequence) | `preferred()` in a vendor-present build | where |
-|---|---|---|---|
-| `gemm` | `RegisterTiled` | GPU, homogeneous, `batch >= 64`; **`double` at `k >= 2`**; `float` NN square `max_dim <= 32`; **complex never** | `route_gemm.hh:34-67` |
-| `gemv` | `CTA`, `Direct` | one window: `complex<double>`, transposed, `64 <= red_len <= 352`, `out_len >= 256`, `batch >= 320` | `route_gemv.hh:60-71` |
-| `trsm` | `CTA`, `Blocked` | native from `batch >= 8`; `float`/`Side::Right` additionally needs `batch >= 128 \|\| order <= 32`; everything else true | `route_trsm.hh:64-80` |
-| `potrf` | `CTA`, `Blocked` | **false everywhere** | `route_potrf.hh:65-69` |
-| `geqrf` | `CTA`, `Blocked` | native above a per-type order floor (`float` 64, `cfloat` 48, `double` 96, `cdouble` 256), plus tall panels `rows >= 128 && cols >= 32 && rows >= 4*cols`; the window answers true for **one** tier, resolved through `best_native_tier` so it cannot pre-empt `native_tier_preferred` | `route_geqrf.hh:preferred` |
-| `orgqr` | `Blocked` | native at `rows <= 512 && cols <= 512` | `route_orgqr.hh:preferred` |
-| `ormqr` | `Blocked` | `is_native(r) && supports(r, s)` — native-first, and predates WP5 | `route_ormqr.hh:77-79` |
-| `getrf` | `CTA`, `Blocked` | `float` order ≥ 256, `cfloat` order ≥ 512 | `route_getrf.hh:67-74` |
-| `getrs` | `CTA`, `Blocked` | CTA at `nrhs <= 2` (all types) and `nrhs <= 4` (`float`); Blocked at `batch >= 128` with `float nrhs >= 64` / `double nrhs >= 128` | `route_getrs.hh:79-98` |
-| `getri` | `Blocked` | `float` order ≥ 128, `cfloat` order ≥ 256 | `route_getri.hh:65-72` |
-| `spmm` | `Direct` | CSR and `transA == NoTrans`, minus `complex<float>` with `transB != NoTrans` | `route_spmm.hh:65-75` |
-| `syev` | `CTA`, `Blocked`, `TwoStage` | a measured per-`n` grid, `Backend::CUDA` only | `syev.hh:357-385` |
-| `gesvd` | `Jacobi`, `CTA`, `Blocked` | the wide-band rule ([evidence](../perf/gesvd.md#gesvd-the-wide-band-33-to-64), @ref perf_gesvd) | `route_gesvd.hh:100` |
+| op | native families | native-first rows, vendor-present (tables) |
+|---|---|---|
+| `gemm` | `direct`, `tiled`, `small`, `reg`, `wide` | transcribed on both devices: GPU, homogeneous, `batch >= 64`; **`double` at `k >= 2`**; `float` NN square `max_dim <= 48`; **complex never** |
+| `gemv` | `cta`, `direct` | transcribed: `complex<double>`, transposed, `64 <= red <= 352`, `out >= 256`, `batch >= 320` |
+| `trsm` | `cta`, `sg_left`, `blocked` | sm_120 float/double tuned (the first `sg_left` picks); the rest transcribed: native from `batch >= 8`, `float`/`Side::Right` also needing `batch >= 128 \|\| order <= 32` |
+| `potrf` | `tiny`, `cta`, `lpanel`, `blocked` | measured per cell |
+| `posv` | `tiny`, `cta`, `blocked` (no vendor family) | always native; sm_120 converted from the route sweep |
+| `geqrf` | `tiny`, `cta`, `blocked` | transcribed: above a per-type order floor (`float` 64, `cfloat` 48, `double` 76, `cdouble` 256), plus tall panels `n >= 32 && aspect >= 4` (8 for 64-bit types) |
+| `orgqr` | `blocked` | transcribed: `rows <= 512 && cols <= 512` |
+| `ormqr` | `blocked` | transcribed: every row is `blocked` then `vendor` |
+| `getrf` | `tiny`, `cta`, `blocked` | transcribed: the tiny windows, `float` order >= 256, `cfloat` order >= 512 (>= 256 at batch >= 256) |
+| `getrs` | `cta`, `blocked` | transcribed: cta at `nrhs <= 2` (all types) and `nrhs <= 4` (`float`); blocked at `batch >= 128` with `float nrhs >= 64` / `double nrhs >= 128` |
+| `getri` | `blocked` | transcribed: `float` order >= 128, `cfloat` order >= 256 |
+| `gesv` | `tiny`, `blocked` (no vendor family) | always native |
+| `spmm` | `direct` | transcribed: CSR and `transA == NoTrans`, minus `complex<float>` with `transB != NoTrans` |
+| `syev` | `cta`, `cta_fused`, `jacobi`, `blocked`, `two_stage` | transcribed from the old CUDA grid (pattern in flat-kernel-selection.md §12, Phase 5, syev) |
+| `gesvd` | `jacobi`, `cta`, `blocked` | transcribed: the wide-band rule (real 33..64 is `blocked\|vendor\|jacobi`; [evidence](../perf/gesvd.md#gesvd-the-wide-band-33-to-64)) |
 
 Two families sit outside this table and must not be read from it:
 
-* **`symm`, `syrk`, `syr2k`, `trmm` have no `RouteTable` and never call `resolve_route`.** Their
-  thresholds are hand-rolled `if`-chains in the facade, guarded
-  `Back == Backend::CUDA && std::is_same_v<T, float>` (`entry_points/level3.cc:189`, `:380`,
-  `:418`, `:457`), and they run **before** the vendor-available test — so anything below that
+* **`symm`, `syrk`, `syr2k`, `trmm` have no table.** Their thresholds are hand-rolled
+  `if`-chains, guarded `Back == Backend::CUDA && std::is_same_v<T, float>`
+  (`src/ops/level3/level3.cc:47`, `:126`, `:157`, `:189`), and they run **before** the vendor-available test — so anything below that
   gate is unreachable vendor-free. `symm` has no tile kernel at all; its portable arm is a
   mirrored expansion feeding the public `gemm`.
 * **`hemm`, `herk`, `her2k` have no native arm in the facade whatsoever** — vendor or throw
-  (`entry_points/level3.cc:210-361`). Their expansion routes are reachable only from inside
+  (`src/ops/level3/level3.cc:68-115`). Their expansion routes are reachable only from inside
   `cublas.cc`.
 
 ### Vendor-first by measurement, not by absence
@@ -142,7 +145,9 @@ change that:
   register ladder in `select_kernel_variant` sits inside `if constexpr (is_same_v<T,float>)`, so
   complex falls to `Direct`/`Tiled16`, measured 3.2–7.1× slower than cuBLAS. Widening the
   predicate first is a regression. Order: port the tile → wire the selector → move the
-  predicate — [`gemm.md`](../perf/gemm.md).
+  predicate — [`gemm.md`](../perf/gemm.md). (Since written, the wide tiles serve complex NN and the
+  ConjTrans panel forms; since P3.4 selector and predicate are one table row, and the sm_89 rows
+  still put `vendor` first for complex.)
 * **`getrf`/`getri` in `double` and `complex<double>`.** They earn nothing at any order; the
   windows are `float`/`cfloat`-leaning on purpose — [`lu.md`](../perf/lu.md).
 * **`potrf` in complex (0.311–0.509×) and at `n <= 256` for every type.** The complex cause is
@@ -151,7 +156,7 @@ change that:
 
 And these are vendor-first because **no decision was taken**, which is a different debt:
 
-* **`geqrf` and `orgqr` — PARTLY TAKEN.** `preferred()` now routes native inside the measured
+* **`geqrf` and `orgqr` — PARTLY TAKEN.** The (transcribed) tables route native inside the measured
   windows in the table above: `geqrf` above a per-type order floor and on tall panels, `orgqr`
   to n = 512. What remains vendor-first is what the grid says loses — `geqrf` below the floor
   (down to 0.02× at `double` n = 8) and `orgqr` above n = 512 — so the residue of the **3.24×**
@@ -160,12 +165,11 @@ And these are vendor-first because **no decision was taken**, which is a differe
   is the smallest tall panel ever measured and not a bracketed boundary, and the same clause is
   type-independent while `double`/`cdouble` 128x32 measure **0.68×**
   ([`small-n-baseline.md`](../perf/small-n-baseline.md#geqrf)).
-* **`potrf`.** `preferred()` all-false, though vendor-free `potrf` works at every order and
-  `float` at `n >= 1024` is **1.13–1.40× faster than cuSOLVER**. `potrf` also still has not
-  declared `native_tier_preferred`, although it has the same two native tiers and the same
-  all-false `preferred()` as `getrf` — so its vendor-free tier choice is a static order walk
-  that cannot follow a crossover. Whether that choice is wrong is unmeasured; measuring it is
-  the first step, not fixing it.
+* **`potrf`.** *Superseded by flat selection* (docs/design/flat-kernel-selection.md): potrf
+  has no `preferred()` or `native_tier_preferred` any more. Auto and the vendor-free tier choice
+  both read the measured ranking in `tuned/potrf.<dtype>.<device>.txt`, so a crossover the sweep
+  saw is followed. When this was written, `preferred()` was all-false although vendor-free
+  `potrf` works at every order and `float` at `n >= 1024` is **1.13–1.40× faster than cuSOLVER**.
 
 ## M1 — self-sufficient. Not reached.
 
@@ -175,26 +179,26 @@ And these are vendor-first because **no decision was taken**, which is a differe
 **What it still needs**, in descending census order:
 
 1. **The host (`Backend::NETLIB`) path — this is WP9, and it is most of the residue.** Every
-   native tier except `gemv`'s `Direct` and `spmm`'s gather refuses a non-GPU queue in
-   `supports()`. All 32 vendor-free `trsm` failures, all 12 `sytrd_blocked`, all 8 remaining
+   native family except `gemv`'s `direct`, `spmm`'s and (with no host BLAS) `gemm`'s refuses a
+   non-GPU queue in `can_run`. All 32 vendor-free `trsm` failures, all 12 `sytrd_blocked`, all 8 remaining
    `ortho_tests` (naming `geqrf`) and 20 of `cond_tests`' failures (naming `getri`) are this and
    nothing else.
 2. **`syev`, 87 — the largest single entry, and part of it is a routing-vocabulary defect rather
    than a missing kernel.** Four call sites reach into `dispatch::detail` and demand the
-   *vendor* `syev` instead of resolving a route, so they throw vendor-free by construction
-   regardless of what `syev`'s three native tiers support: `src/extra/cond.cc:52`,
-   `src/extra/norm.cc:45`, `src/extensions/syevx_lobpcg.cc:532` and `:1282`. The recorded
+   *vendor* `syev` instead of calling the public one, so they throw vendor-free by construction
+   regardless of what `syev`'s three native tiers support: `src/extra/cond.cc:54`,
+   `src/extra/norm.cc:46`, `src/extensions/syevx_lobpcg.cc:540` and `:1101`. The recorded
    measurement attributes 6 of `cond_tests`' 30 vendor-free failures to the `cond.cc` one. The
-   fix is to call the routed `syev` and let `resolve_route` decide.
+   fix is to call the public `syev` and let its selection decide (known-defects #2).
 3. **`hemm` 12, `herk` 16, `her2k` 12 — no native arm exists.** The facade is vendor-or-throw for
    all three.
 4. **Level-3 non-float: `trmm` 16, `syrk` 12, `syr2k` 10, `symm` 8.** `syrk`'s gram branch and
    `trmm`'s tile branch for `double`/complex are reachable only from `cublas.cc`, and **`syr2k`
    has no non-float tile route at all** — `syr2k_triangular_tiles` has exactly one call site in
    the tree, inside the float-only dispatcher. `double` `symm` has no expansion route at all.
-5. **`geqrf` 44, `ormqr` 24, `getri` 16** — host rows as above, plus the shapes each table's
-   `supports()` refuses.
-6. **`potrf` refuses `Uplo::Upper`** in the blocked driver (`route_potrf.hh:55`), and that is
+5. **`geqrf` 44, `ormqr` 24, `getri` 16** — host rows as above, plus the shapes each op's
+   native `can_run` refuses.
+6. **`potrf` refuses `Uplo::Upper`** in the blocked driver (`can_run` in `src/ops/potrf/potrf.cc`), and that is
    the correctness kind of false, not the slower kind. `syev` shows the cheap route: mirror the
    upper triangle and run the Lower pipeline.
 
@@ -231,7 +235,7 @@ merely *correct*?
 market is well served by MKL and OpenBLAS, both still reachable through the existing backends,
 and BatchLAS's purpose is batched GPU work. Spending WP2-grade tuning effort on CPU SYCL
 kernels would be the worst value in this campaign. Mechanically it is small: `gemv` and `spmm`
-already demonstrate that dropping the `is_gpu` clause from `supports()` is all a tier needs to
+already demonstrate that dropping the `is_gpu` clause from `can_run` is all a family needs to
 serve the host queue, and it moved the vendor-present burn-down by zero both times.
 
 Two traps for whoever picks it up: `Backend::INTEL` is hard-wired false and oneMKL cannot be
@@ -268,12 +272,15 @@ measurement:
   not guarded by `forced`.
 * **`symm` has no `expansion_fits()` ceiling** where `hemm`/`herk`/`her2k` all have one, so a
   large enough `symm` hits the 2³¹-element SYCL range failure instead of falling back.
-* **`trsm`'s heterogeneous-batch correctness gate can never fire.** `supports()` rejects the
-  field at `route_trsm.hh:43`, but `trsm_op_shape` never *writes* it, so it keeps `OpShape`'s
-  default `false`. A documented intention, not an enforced one.
-* **`resolve_ormqr_route` is called with two arguments** (`ormqr.hh:209`), taking
-  `vendor_available = true`, so `ormqr` never reaches the vendor-free fallback. It gets away
-  with it only because its `preferred()` is native-first. Do not inherit the omission.
+* ~~**`trsm`'s heterogeneous-batch correctness gate can never fire.**~~ Withdrawn: the field was
+  written (known-defects #7), and since P3.3 `route_trsm.hh` and `trsm_op_shape` are deleted;
+  the native families' `can_run` in `src/ops/trsm/trsm.cc` refuses a heterogeneous A or B, while
+  the vendor's still accepts one (known-defects #12).
+* ~~**`resolve_ormqr_route` is called with two arguments**~~ Resolved in P5 (`docs/perf/qr.md`
+  #12): `resolve_ormqr_route` and `route_ormqr.hh` are deleted, and the flat selection in
+  `src/ops/ormqr/ormqr.cc` reads the real vendor availability (`can_run`'s
+  `d.has_vendor_solver`). Before P5 it took `vendor_available = true` (`ormqr.hh:209`) and got
+  away with it only because its `preferred()` was native-first. Do not inherit the omission.
 * **`cublas.cc`'s `getrs` sits in a TU gated on `BATCHLAS_HAS_CUBLAS`**, so a
   cuBLAS-present / cuSOLVER-absent configure claims a vendor it cannot link. The fix belongs in
   `vendor_available.hh`.

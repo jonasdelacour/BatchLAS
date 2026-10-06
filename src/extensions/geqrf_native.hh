@@ -31,12 +31,6 @@ BATCHLAS_INTERNAL_API int64_t geqrf_cta_max_elems_for_slm(
     std::size_t slm_budget_bytes, int min_blocks_per_sm = kGeqrfMinBlocksPerSm);
 
 template <typename T>
-int geqrf_cta_max_m();
-
-template <typename T>
-int64_t geqrf_cta_max_elems();
-
-template <typename T>
 BATCHLAS_INTERNAL_API bool geqrf_blocked_available();
 
 // TINY tier (square m == n <= 32): the ONE predicate for its ceiling -- the shape builder, the
@@ -44,11 +38,7 @@ BATCHLAS_INTERNAL_API bool geqrf_blocked_available();
 template <typename T>
 BATCHLAS_INTERNAL_API int geqrf_tiny_max_n_for_slm(std::size_t slm_budget_bytes);
 
-template <typename T>
-BATCHLAS_INTERNAL_API int geqrf_tiny_max_n();
-
-// Zero and constant, hence monotone in (rows, cols, batch) as band_reduction.cc's sizing
-// replay requires. Never dereferences A.data_ptr().
+// Zero and constant (monotone, as band_reduction.cc's sizing replay needs); never reads A.
 template <typename T>
 BATCHLAS_INTERNAL_API std::size_t geqrf_tiny_buffer_size(
     Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A);
@@ -88,8 +78,7 @@ BATCHLAS_INTERNAL_API int geqrf_panel_reg_max_m();
 template <typename T>   // THE ONE fit predicate: launcher, driver and tests all share it
 BATCHLAS_INTERNAL_API bool geqrf_panel_reg_fits(int m, int n, int device_max_wg = 1024);
 
-// SHOULD it, not CAN it: a measured window strictly inside `fits`.
-// evidence: docs/perf/qr.md#the-panel-height-window
+// SHOULD, not CAN: a window strictly inside `fits`. evidence: docs/perf/qr.md#the-panel-height-window
 template <typename T>
 BATCHLAS_INTERNAL_API bool geqrf_panel_reg_preferred(int m, int n, int device_max_wg = 1024);
 
@@ -97,7 +86,7 @@ template <typename T>
 BATCHLAS_INTERNAL_API unsigned geqrf_panel_reg_debug_launch(
     Queue& ctx, int m, int n);  // wg | leaf<<16; 0 = no fit
 
-// Empty means "use sycl_gemm::gemm_custom"; inject to route trailing updates through the table.
+// REQUIRED (empty throws): pass the public gemm, which makes its own table-driven choice.
 template <typename T>
 using GeqrfTrailingGemm = std::function<Event(
     Queue&,
@@ -117,7 +106,7 @@ BATCHLAS_INTERNAL_API Event geqrf_blocked_dispatch(Queue& ctx,
                                                    const MatrixView<T, MatrixFormat::Dense>& A,
                                                    Span<T> tau,
                                                    Span<std::byte> workspace,
-                                                   GeqrfTrailingGemm<T> trailing_gemm = {},
+                                                   GeqrfTrailingGemm<T> trailing_gemm,
                                                    GeqrfPanelLeaf panel_leaf =
                                                        GeqrfPanelLeaf::Auto);
 
@@ -142,8 +131,5 @@ BATCHLAS_INTERNAL_API bool geqrf_cta_fits(
 // The RESIDENCY predicate, at the whole budget: what chooses the resident leaf, not the tier.
 template <typename T>
 BATCHLAS_INTERNAL_API bool geqrf_leaf_fits(int m, int n, std::size_t slm_budget_bytes);
-
-template <typename T>
-BATCHLAS_INTERNAL_API unsigned geqrf_cta_debug_launch(Queue& ctx, int m, int n);  // G | wg<<16
 
 }  // namespace batchlas::sycl_geqrf

@@ -14,15 +14,6 @@ namespace batchlas {
 
 namespace {
 
-template <typename T>
-inline T conj_if_needed(const T& x) {
-    if constexpr (internal::is_complex<T>::value) {
-        return T(x.real(), -x.imag());
-    } else {
-        return x;
-    }
-}
-
 inline int32_t gebrd_blocked_resolved_nb(int32_t block_size) {
     return std::max<int32_t>(1, block_size);
 }

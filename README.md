@@ -110,7 +110,8 @@ rather than a headline number:
   runs at 67.8 µs vs cuSOLVER's 203.0 µs (**3.0x**); at `n = 448, batch = 585`
   it is 195.3 vs 400.6 (**2.1x**). The vendor wins at large `n` — an earlier
   sweep has it 1.65x ahead at `n = 2048`, on a row flagged as not saturated —
-  and `Auto` routes there accordingly. The full grids, including the
+  and `Auto` routes there accordingly (the routing it justified ships as the
+  `tuned/syev.float.*.txt` rows). The full grids, including the
   corrections that superseded earlier ones, are on the
   [syev evidence page](docs/perf/syev.md#syev-the-blocked-over-cusolver-headline-measurement).
 - **`gesvd` vs `cusolverDnXgesvdjBatched`, float, RTX 4090**
@@ -539,6 +540,10 @@ ls <prefix>/include/blas
 ## Development Notes
 
 - The top-level `batchlas` target is an interface facade over split component libraries.
+- Each op's entry point, choices and launchers live in `src/ops/<op>/`; the shared
+  selection machinery (table lookup, vendor availability, trace and coverage) is in
+  `src/select/`, and the per-device tables it reads are in `tuned/`. The design is
+  [docs/design/flat-kernel-selection.md](docs/design/flat-kernel-selection.md).
 - Implementation notes, measurements and design rationale live in the documentation
   site, not in root markdown files: `docs/perf/` for routing windows and measured
   grids, `docs/design/` for design decisions and known defects, `docs/algorithms/`

@@ -50,7 +50,7 @@ constexpr int potrf_lpanel_nb_for(int hint) {
     return (hint == 0) ? PotrfLpanelConst<T>::NB : hint;
 }
 
-// Called by BOTH the capability query and the launcher, so the ceiling supports() advertises
+// Called by BOTH the capability query and the launcher, so the ceiling can_run() advertises
 // cannot disagree with what the kernel allocates. sA is the n x NB panel at ld = n -- no odd
 // padding, because lane `row` reads sA[row + i*n], already stride 1 across lanes -- sB is the
 // NB x NB broadcast block, and the 256 over-covers *fail plus alignment slack.
@@ -197,8 +197,11 @@ Event potrf_lpanel_launch(Queue& ctx,
 
     ctx->submit([&](sycl::handler& h) {
         sycl::local_accessor<D, 1> panel(sycl::range<1>(panel_elems), h);
-        sycl::local_accessor<D, 1> block(
-            sycl::range<1>(static_cast<std::size_t>(G) * NB * NB), h);
+        // Declared as 16-byte vectors so the body's vector sB reads are aligned; same bytes.
+        static_assert((NB * NB * sizeof(D)) % sizeof(sycl::vec<float, 4>) == 0);
+        sycl::local_accessor<sycl::vec<float, 4>, 1> block(
+            sycl::range<1>(static_cast<std::size_t>(G) * NB * NB * sizeof(D) /
+                           sizeof(sycl::vec<float, 4>)), h);
         sycl::local_accessor<int, 1> fail(sycl::range<1>(static_cast<std::size_t>(G)), h);
 
         h.parallel_for<PotrfLpanelKernel<T, NB>>(
@@ -218,7 +221,8 @@ Event potrf_lpanel_launch(Queue& ctx,
                 const bool live = (matrix_id < batch);
 
                 D* sA = &panel[0] + static_cast<std::ptrdiff_t>(slot) * slda * NB;
-                D* sB = &block[0] + static_cast<std::ptrdiff_t>(slot) * NB * NB;
+                D* sB = reinterpret_cast<D*>(&block[0]) +
+                        static_cast<std::ptrdiff_t>(slot) * NB * NB;
                 int* fl = &fail[0] + slot;
 
                 // Built from data_ptr() + b*stride, never MatrixView::operator()(Slice,Slice):
@@ -253,7 +257,7 @@ Event potrf_lpanel_dispatch(Queue& ctx,
     const int n = static_cast<int>(A.rows());
     const int batch = static_cast<int>(A.batch_size());
 
-    // supports()'s gates, re-applied: this entry point is reachable without the table.
+    // can_run()'s gates (src/ops/potrf/potrf.cc), re-applied: this entry point is public.
     if (A.rows() != A.cols()) {
         throw batchlas::invalid_argument("potrf_lpanel: A must be square");
     }
@@ -267,7 +271,7 @@ Event potrf_lpanel_dispatch(Queue& ctx,
         // blocked driver already refuses it, so refusing here preserves the status quo.
         throw batchlas::invalid_argument(
             "potrf_lpanel: Uplo::Upper is not implemented; see "
-            "RouteTable<Op::potrf, T>::supports, LPanel arm");
+            "can_run in src/ops/potrf/potrf.cc");
     }
     if (A.is_heterogeneous()) {
         throw batchlas::invalid_argument("potrf_lpanel: heterogeneous batch is not supported");

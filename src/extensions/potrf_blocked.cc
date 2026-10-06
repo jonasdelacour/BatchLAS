@@ -5,7 +5,6 @@
 #include "potrf_native.hh"
 #include "symmetric_product_fold.hh"
 
-#include "../sycl/gemm_kernels.hh"
 #include "../sycl/trsm_native.hh"
 
 #include "../queue.hh"
@@ -230,26 +229,13 @@ Event potrf_blocked_dispatch(Queue& ctx,
                              Span<int32_t> info_out,
                              PotrfTrailingGemm<T> trailing_gemm,
                              PotrfPanelSolve<T> panel_solve) {
-    // Both seams default to the NATIVE kernels; the facade injects the ROUTED ones.
+    // Both seams are required: a hidden default here would bypass the child op's selection.
     if (!trailing_gemm) {
-        trailing_gemm = [](Queue& c,
-                           const MatrixView<T, MatrixFormat::Dense>& ga,
-                           const MatrixView<T, MatrixFormat::Dense>& gb,
-                           const MatrixView<T, MatrixFormat::Dense>& gc,
-                           T galpha, T gbeta, Transpose gta, Transpose gtb,
-                           ComputePrecision gp) {
-            return sycl_gemm::gemm_custom<T>(c, ga, gb, gc, galpha, gbeta, gta, gtb, gp);
-        };
+        throw batchlas::invalid_argument(
+            "potrf_blocked: trailing_gemm is required (pass the public gemm, as src/ops/potrf/potrf.cc does)");
     }
     if (!panel_solve) {
-        panel_solve = [](Queue& c,
-                         const MatrixView<T, MatrixFormat::Dense>& ta,
-                         const MatrixView<T, MatrixFormat::Dense>& tb,
-                         T talpha, Side tside, Uplo tuplo, Transpose ttrans, Diag tdiag) {
-            // V2, not V1: it degenerates to a single V1 solve when the order fits the CTA.
-            return sycl_trsm::trsm_native_blocked<T>(c, ta, tb, talpha, tside, tuplo,
-                                                     ttrans, tdiag);
-        };
+        throw batchlas::invalid_argument("potrf_blocked: panel_solve is required (pass the public trsm)");
     }
 
     const int n = static_cast<int>(A.rows());
@@ -264,7 +250,7 @@ Event potrf_blocked_dispatch(Queue& ctx,
     if (uplo != Uplo::Lower) {
         throw batchlas::invalid_argument(
             "potrf_blocked: Uplo::Upper is not implemented; the driver factors the "
-            "lower triangle only; see RouteTable<Op::potrf, T>::supports, Blocked arm)");
+            "lower triangle only; see can_run in src/ops/potrf/potrf.cc)");
     }
     if (A.is_heterogeneous()) {
         throw batchlas::invalid_argument("potrf_blocked: heterogeneous batch is not supported");

@@ -1,7 +1,7 @@
 #pragma once
 
-// Native batched ORGQR: one tier, Algorithm::Blocked -- ormqr applied to an identity.
-// preferred() is true to n = 512 on both extents, so this is the DEFAULT route inside
+// Native batched ORGQR: one tier, the `blocked` choice -- ormqr applied to an identity.
+// tuned/orgqr.*.txt picks it to n = 512 on both extents, so it is the DEFAULT inside
 // that window, not a vendor-free fallback. evidence: docs/perf/qr.md#the-shipped-orgqr-ceiling
 
 #include "../util/internal-api.hh"
@@ -19,13 +19,8 @@ namespace batchlas::sycl_orgqr {
 template <typename T>
 BATCHLAS_INTERNAL_API bool orgqr_blocked_available();
 
-// Test hook. evidence: docs/perf/qr.md#block-width-evidence
-template <typename T>
-int orgqr_blocked_debug_block_size(Queue& ctx, int m,
-                                   int n);  // multiple of 16; >= 32 for complex (gemm min_dim)
-
-// Must be the ROUTED ormqr: a native entry point called from a driver TU bypasses
-// RouteTable<Op::ormqr>. Positional argument order; absent injection throws.
+// Must be the SELECTED ormqr: a native entry point called from a driver TU bypasses
+// ormqr's choose(). Positional argument order; absent injection throws.
 template <typename T>
 using OrgqrApplyQ = std::function<Event(
     Queue&,
@@ -52,8 +47,8 @@ BATCHLAS_INTERNAL_API std::size_t orgqr_blocked_buffer_size(Queue& ctx,
                                                             Span<T> tau,
                                                             OrgqrApplyQBufferSize<T> apply_q_buffer_size = {});
 
-// Reachable without the route table, so it re-checks every supports() gate itself --
-// a rejected forced route otherwise falls through and silently runs the vendor.
+// Callable directly (tests, benchmarks), bypassing select::choose, so it re-checks every
+// can_run gate itself and throws rather than computing a wrong Q.
 template <typename T>
 BATCHLAS_INTERNAL_API Event orgqr_blocked_dispatch(Queue& ctx,
                                                    const MatrixView<T, MatrixFormat::Dense>& A,

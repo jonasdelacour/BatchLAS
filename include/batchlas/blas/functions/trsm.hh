@@ -34,12 +34,12 @@ using trsm_vendor = Event(Queue&,
 }  // namespace sig
 
 
-/// @brief Host-side argument check that trsm runs on every backend before routing.
+/// @brief Host-side argument check that trsm runs on every backend before kernel selection.
 ///
 /// With m = `B.rows()` and n = `B.cols()`, requires m, n >= 0; valid enum values
 /// for `side`, `uplo`, `transA` and `diag`; `A` square of order m (Left) or n
-/// (Right) with `A.ld()` >= max(1, order); and `B.ld()` >= max(1, m). Reads only
-/// the views' shape metadata, never their data.
+/// (Right) with `A.ld()` >= max(1, order); `B.ld()` >= max(1, m); and `A` and `B`
+/// with the same batch size. Reads only the views' shape metadata, never their data.
 /// @param A       triangular operand
 /// @param B       right-hand sides
 /// @param side    Side::Left or Side::Right
@@ -100,13 +100,22 @@ inline void trsm_validate_params(
         }
 
         if (ldb < std::max(1, m)) {
-                throw batchlas::invalid_argument("TRSM: ldb must be >= max(1, m). Got ldb=" + 
+                throw batchlas::invalid_argument("TRSM: ldb must be >= max(1, m). Got ldb=" +
                                         std::to_string(ldb) + ", m=" + std::to_string(m));
+        }
+        // Every kernel walks one batch count over both operands; a mismatch indexes past one.
+        if (A.batch_size() != B.batch_size()) {
+                throw batchlas::invalid_argument("TRSM: A and B must have the same batch size. Got " +
+                                        std::to_string(A.batch_size()) + " and " +
+                                        std::to_string(B.batch_size()));
         }
 }
 
-// alpha follows the matrices, as in trmm; the deleted overloads below reject the
-// old alpha-last order. evidence: docs/cpp-api.md#trsm-alpha-moved-next-to-the-matrices
+// alpha sits in position 4, immediately after the matrices, to match trmm (see
+// functions/trmm.hh). It used to come last here, so the two triangular routines
+// disagreed on where the scalar went and only one of them could be written from
+// memory; the deleted overloads below turn the old spelling into a diagnostic
+// rather than leaving it to be rediscovered.
 /// @brief Batched triangular solve with multiple right-hand sides, in place.
 ///
 /// For every batch item solves
@@ -131,11 +140,11 @@ inline void trsm_validate_params(
 /// @param transA  op() applied to `A`
 /// @param diag    whether `A` has an implicit unit diagonal
 /// @return event of the last enqueued kernel; `B` holds \f$X\f$ once it completes
-/// @pre `A` and `B` have the same batch size.
-/// @throws batchlas::invalid_argument from trsm_validate_params, before anything
+/// @throws batchlas::invalid_argument from trsm_validate_params (bad shape, `ld`,
+///         enum value, or `A` and `B` batch sizes that differ), before anything
 ///         is enqueued
-/// @throws batchlas::dispatch::NoRouteError in a build without the vendor BLAS
-///         for `Back` when no native tier supports the shape
+/// @throws batchlas::NoRouteError in a build without the vendor BLAS for `Back`
+///         when no native kernel can run the shape
 /// @note On `Backend::NETLIB`, `alpha == 0` still reads `B`, so a NaN in `B`
 ///       survives (known defect 5, @ref md_docs_2design_2known-defects).
 /// @see trmm, TrsmOptions, @ref md_docs_2perf_2trsm, @ref md_docs_2cpp-api
@@ -150,8 +159,12 @@ BATCHLAS_API Event trsm(Queue& ctx,
                         Transpose transA,
                         Diag diag);
 
-// Both spellings need a tombstone: deleting only the MatrixView one would let a
-// Matrix-argument call bind to the new order with alpha where side belongs.
+// Tombstones for the pre-reorder argument order. Side/Uplo/Transpose/Diag are
+// all enum class, so nothing implicitly converts to or from T and a stale call
+// could never have silently compiled into a wrong answer -- but without these
+// the error would be "no matching function", which does not say what changed.
+// Both spellings need one: deleting only the MatrixView overload would leave a
+// Matrix-argument call binding to the new order with alpha where side belongs.
 /// @brief Deleted: the old argument order with `alpha` last. Pass `alpha` right
 /// after `B`.
 /// @ingroup blas3
@@ -174,12 +187,14 @@ Event trsm(Queue&,
 
 namespace batchlas::backend {
 
-// Declaration only: each vendor TU defines and instantiates it for its Backend.
-// evidence: docs/design/vendor-independence.md#the-entry-point-facade
+// Declaration only: each vendor wrapper TU defines and instantiates it for its
+// own Backend; the public trsm is defined in src/ops/trsm/trsm.cc, so dropping a
+// vendor library drops only this path. evidence: docs/design/vendor-independence.md#the-entry-point-facade
 /// @brief Vendor-library implementation of trsm (cuBLAS, rocBLAS, host BLAS).
 ///
-/// Not an entry point: batchlas::trsm calls it after validation and routing.
-/// Same semantics as batchlas::trsm, but `alpha` is the last argument.
+/// Not an entry point: batchlas::trsm calls it after validation, when kernel
+/// selection picks the Vendor family. Same semantics as batchlas::trsm, but
+/// `alpha` is the last argument.
 /// @ingroup dispatch
 template <Backend Back, typename T>
 BATCHLAS_API Event trsm_vendor(Queue& ctx,

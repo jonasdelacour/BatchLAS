@@ -18,8 +18,11 @@
 #
 # Output: the harness's own CSV columns plus `resolved_route`, which is read
 # back per arm from BATCHLAS_COVERAGE_OUT and is the ONLY column that says what
-# actually ran. The harness's `pin_parsed` says the pin was UNDERSTOOD; an
-# unsupported pin still falls through to automatic() with pin_parsed=1.
+# actually ran. The harness's `pin_parsed` says the pin was UNDERSTOOD. Under
+# flat selection (potrf) a concrete pin the shape cannot run is refused: that
+# arm's row has bad=1 and reason "pin refused: ...", and the other arms still
+# run. The class words `native` and `vendor` instead fall back to the automatic
+# choice with a one-line warning and pin_parsed=1, so read resolved_route.
 #
 # env:
 #   FACTOR_BENCH  path to the factor_bench binary (required unless it is found

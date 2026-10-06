@@ -11,7 +11,7 @@
 
 namespace batchlas::sycl_gemv {
 
-// Compiled into this build? Not a device query -- gates supports() for native.
+// Compiled into this build? Not a device query -- gates can_run for native.
 template <typename T>
 BATCHLAS_INTERNAL_API bool gemv_direct_available();
 

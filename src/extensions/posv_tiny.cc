@@ -40,6 +40,7 @@ namespace tn = ::batchlas::tiny_native;
 namespace sd = ::batchlas::sycl_device;
 
 constexpr int kTinyWg = tn::kTinyWgSize;
+static_assert(kTinyWg == kPosvTinyWgSize, "src/ops/posv/posv.cc's can_run reads kPosvTinyWgSize");
 
 // A launch ABORT, not a slowdown, so it is encoded to fail at COMPILE time. Probed worst is
 // 255 (cdouble N=16 NR=4), the ISA ceiling, and that cell SPILLS.
@@ -443,7 +444,7 @@ std::size_t posv_tiny_buffer_size(Queue& ctx,
     });
 }
 
-// Every supports() gate is re-applied here; there is no vendor posv to fall through to.
+// Every can_run gate is re-applied here; direct callers reach this without the selector.
 template <typename T>
 Event posv_tiny_dispatch(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& A,

@@ -40,6 +40,7 @@ namespace sd = ::batchlas::sycl_device;
 // The shared tiny-tier work-group. A wider group makes the launch tail COARSER, not finer.
 // evidence: docs/perf/lu.md#the-work-group-ab
 constexpr int kTinyWg = tn::kTinyWgSize;
+static_assert(kTinyWg == kGetrfTinyWgSize, "getrf.cc's can_run reads kGetrfTinyWgSize");
 
 // A launch ABORT, not a slowdown, so it is encoded to fail at COMPILE time; per SUB-PARTITION,
 // not per block. evidence: docs/perf/lu.md#the-register-probe-at-wg--64
@@ -324,7 +325,7 @@ Span<int32_t> getrf_tiny_layout(Queue& ctx, BumpAllocator& pool, int batch) {
 
 }  // namespace
 
-// The ONE place the ceiling is spelled: a fork lets supports() promise what the launcher refuses.
+// The ONE place the ceiling is spelled: a fork lets can_run promise what the launcher refuses.
 template <typename T>
 int getrf_tiny_max_n() {
     return tiny_cap<T>();
@@ -339,8 +340,8 @@ std::size_t getrf_tiny_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat:
     });
 }
 
-// Every supports() gate is re-applied here: a forced route that fails one falls through
-// to the vendor and passes green regardless.
+// Every can_run gate is re-applied here: the driver is also reached directly
+// (tests), and can_run must equal it exactly (R3).
 template <typename T>
 Event getrf_tiny_dispatch(Queue& ctx,
                           const MatrixView<T, MatrixFormat::Dense>& A,
@@ -356,7 +357,7 @@ Event getrf_tiny_dispatch(Queue& ctx,
     }
     if (m != n) {
         throw batchlas::invalid_argument(
-            "getrf_tiny: A must be square (route_getrf.hh's supports() refuses m != n)");
+            "getrf_tiny: A must be square (getrf.cc's can_run refuses m != n)");
     }
     if (A.is_heterogeneous()) {
         // Not merely unsupported: the unrolled body's `if (j >= n) continue` skips a

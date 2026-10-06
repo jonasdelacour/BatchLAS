@@ -1,80 +1,38 @@
+// The gemm kernels' launchers, one per family of src/ops/gemm/choice.hh. Which family runs is
+// decided only in src/ops/gemm/gemm.cc; nothing here selects, and nothing falls back to another
+// kernel: a launcher handed a form or config it does not instantiate throws.
+
 #include "gemm_kernels.hh"
 
 #include "gemm/accessors.hh"
-#include "gemm/persistent.hh"
 #include "gemm/register_128x128.hh"
 #include "gemm/register_64x64_k16_wide.hh"
 #include "gemm/register_launchers.hh"
 #include "gemm/register_wide_transposed.hh"
 #include "gemm/small_batched.hh"
-#include "gemm/split_k.hh"
 #include "gemm/tiled_general.hh"
 
 #include "../linalg-impl.hh"
+#include "../ops/gemm/choice.hh"
 #include "../queue.hh"
 
 #include <algorithm>
-#include <cstdlib>
+#include <optional>
 #include <string>
 #include <sycl/sycl.hpp>
-#include <batchlas/settings.hh>
 
 namespace batchlas::sycl_gemm {
 
 namespace {
 
-// Its own truthiness dialect -- case-folded and accepting "yes", which
-// env_truthy does not -- so the field carries the raw value and the parser stays
-// here rather than being narrowed onto the shared helper.
-inline bool experimental_kernel_variants_enabled() {
-    const char* raw = batchlas::settings().selection.gemm_experimental.get();
-    if (!raw) {
-        return false;
-    }
+namespace og = ::batchlas::ops::gemm;
 
-    std::string value(raw);
-    for (char& ch : value) {
-        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-    }
-
-    return value == "1" || value == "true" || value == "on" || value == "yes";
-}
-
-inline bool is_experimental_kernel_variant(KernelVariant variant) {
-    switch (variant) {
-    case KernelVariant::Tiled128x32RegisterK32Persistent:
-    case KernelVariant::Tiled128x32RegisterK32SplitK4:
-    case KernelVariant::Tiled128x32RegisterK32S1U4:
-    case KernelVariant::Tiled128x64RegisterK32LargeTT4x8:
-    case KernelVariant::Tiled128x64RegisterK32LargeTT4x8U2:
-        return true;
-    default:
-        return false;
-    }
-}
-
-inline bool is_squareish_shape(int m, int n, int k) {
-    const int max_dim = std::max({m, n, k});
-    const int min_dim = std::min({m, n, k});
-    return min_dim * 2 >= max_dim;
-}
-
-inline bool is_large_square_bucket(int m, int n, int k) {
-    return is_squareish_shape(m, n, k) && std::max({m, n, k}) >= 512 && std::min({m, n, k}) >= 256;
-}
-
-inline bool is_full_512_square_bucket(int m, int n, int k) {
-    return std::min({m, n, k}) >= 512;
-}
+static_assert(og::kSmallMaxDim == sycl_gemm_small::kSmallMaxDim && og::kSmallWg == sycl_gemm_small::kSmallWg &&
+                  og::kSmallTiledMaxDim == sycl_gemm_small::kSmallTiledMaxDim,
+              "choice.hh's small limits must match small_batched.hh");
 
 template <typename T>
 class GemmDirectKernel;
-
-template <typename T, int Tile>
-class GemmTiledKernel;
-
-template <typename T, int TileM, int TileN, int TileK, int WorkPerThread>
-class GemmRegisterTiledKernel;
 
 template <typename T>
 inline int ceil_div(int value, int divisor) {
@@ -83,281 +41,54 @@ inline int ceil_div(int value, int divisor) {
 
 inline const char* kernel_trace_name(KernelVariant variant) {
     switch (variant) {
-    case KernelVariant::Direct:
-        return "gemm_sycl_direct";
-    case KernelVariant::Tiled16:
-        return "gemm_sycl_tiled16";
-    case KernelVariant::Tiled32x32Register:
-        return "gemm_sycl_register_32x32";
-    case KernelVariant::Tiled64x64Register:
-        return "gemm_sycl_register_64x64";
-    case KernelVariant::Tiled64x64RegisterK16:
-        return "gemm_sycl_register_64x64_k16";
-    // GUARD: these variants hard-wire OpA/OpB -- since the launcher collapse
-    // they do so in the RegTile row at their own `case` label rather than in a
-    // per-shape forwarder -- so the dispatcher must guard each with its own
-    // transpose combination or it silently computes the wrong answer, and
-    // ConjTrans is a distinct enum value that a `Trans` guard does not cover.
-    // All are forceable by name.
-    case KernelVariant::Tiled64x64RegisterK16TN:
-        return "gemm_sycl_register_64x64_k16_tn";
-    case KernelVariant::Tiled64x64RegisterK16NT:
-        return "gemm_sycl_register_64x64_k16_nt";
-    case KernelVariant::Tiled64x64RegisterK16TT:
-        return "gemm_sycl_register_64x64_k16_tt";
-    case KernelVariant::Tiled128x32RegisterK16:
-        return "gemm_sycl_register_128x32_k16";
-    case KernelVariant::Tiled128x32RegisterK16TN:
-        return "gemm_sycl_register_128x32_k16_tn";
-    case KernelVariant::Tiled128x32RegisterK16NT:
-        return "gemm_sycl_register_128x32_k16_nt";
-    case KernelVariant::Tiled128x32RegisterK16TT:
-        return "gemm_sycl_register_128x32_k16_tt";
-    case KernelVariant::Tiled128x32RegisterK32TN:
-        return "gemm_sycl_register_128x32_k32_tn";
-    case KernelVariant::Tiled128x32RegisterK32NT:
-        return "gemm_sycl_register_128x32_k32_nt";
-    case KernelVariant::Tiled128x32RegisterK32TT:
-        return "gemm_sycl_register_128x32_k32_tt";
-    case KernelVariant::Tiled128x64RegisterK16TN:
-        return "gemm_sycl_register_128x64_k16_tn";
-    case KernelVariant::Tiled128x64RegisterK16NT:
-        return "gemm_sycl_register_128x64_k16_nt";
-    case KernelVariant::Tiled128x64RegisterK16TT:
-        return "gemm_sycl_register_128x64_k16_tt";
-    case KernelVariant::Tiled128x32RegisterK32:
-        return "gemm_sycl_register_128x32_k32";
-    case KernelVariant::Tiled128x32RegisterK32S1U1:
-        return "gemm_sycl_register_128x32_k32_s1_u1";
-    case KernelVariant::Tiled128x32RegisterK32S2U1:
-        return "gemm_sycl_register_128x32_k32_s2_u1";
-    case KernelVariant::Tiled128x32RegisterK32S2U1Aligned:
-        return "gemm_sycl_register_128x32_k32_s2_u1_aligned";
-    case KernelVariant::Tiled128x32RegisterK32S2U1Generic:
-        return "gemm_sycl_register_128x32_k32_s2_u1_generic";
-    case KernelVariant::Tiled128x32RegisterK32S2U2:
-        return "gemm_sycl_register_128x32_k32_s2_u2";
-    case KernelVariant::Tiled128x32RegisterK32S2U2TT8x4:
-        return "gemm_sycl_register_128x32_k32_s2_u2_tt8x4";
-    case KernelVariant::Tiled128x32RegisterK32S2U2TT4x8:
-        return "gemm_sycl_register_128x32_k32_s2_u2_tt4x8";
-    case KernelVariant::Tiled128x32RegisterK32Persistent:
-        return "gemm_sycl_register_128x32_k32_persistent";
-    case KernelVariant::Tiled128x32RegisterK32SplitK4:
-        return "gemm_sycl_register_128x32_k32_splitk4";
-    case KernelVariant::Tiled128x32RegisterK32S1U4:
-        return "gemm_sycl_register_128x32_k32_s1_u4";
-    case KernelVariant::Tiled128x64RegisterK32Large:
-        return "gemm_sycl_register_128x64_k32_large";
-    case KernelVariant::Tiled128x64RegisterK32LargeU2:
-        return "gemm_sycl_register_128x64_k32_large_u2";
-    case KernelVariant::Tiled128x64RegisterK32LargeTT4x8:
-        return "gemm_sycl_register_128x64_k32_large_tt4x8";
-    case KernelVariant::Tiled128x64RegisterK32LargeTT4x8U2:
-        return "gemm_sycl_register_128x64_k32_large_tt4x8_u2";
-    case KernelVariant::Tiled128x128RegisterK8:
-        return "gemm_sycl_register_128x128_k8";
-    case KernelVariant::Tiled64x64RegisterK16Wide:
-        return "gemm_sycl_register_64x64_k16_wide";
-    case KernelVariant::Tiled64x64RegisterK16WideCN:
-        return "gemm_sycl_register_64x64_k16_wide_cn";
-    case KernelVariant::Tiled64x64RegisterK16WideNC:
-        return "gemm_sycl_register_64x64_k16_wide_nc";
-    case KernelVariant::Tiled128x32RegisterK16WideNC:
-        return "gemm_sycl_register_128x32_k16_wide_nc";
-    case KernelVariant::Tiled32x128RegisterK16WideCN:
-        return "gemm_sycl_register_32x128_k16_wide_cn";
-    case KernelVariant::Tiled32x128RegisterK16:
-        return "gemm_sycl_register_32x128_k16";
-    case KernelVariant::Tiled32x128RegisterK16TN:
-        return "gemm_sycl_register_32x128_k16_tn";
-    case KernelVariant::Tiled32x128RegisterK16TT:
-        return "gemm_sycl_register_32x128_k16_tt";
-    case KernelVariant::SmallBatched:
-        return "gemm_sycl_small_batched";
+    case KernelVariant::Direct: return "gemm_sycl_direct";
+    case KernelVariant::Tiled16: return "gemm_sycl_tiled16";
+    case KernelVariant::Tiled32x32Register: return "gemm_sycl_register_32x32";
+    case KernelVariant::Tiled64x64Register: return "gemm_sycl_register_64x64";
+    case KernelVariant::Tiled64x64RegisterK16: return "gemm_sycl_register_64x64_k16";
+    case KernelVariant::Tiled64x64RegisterK16TN: return "gemm_sycl_register_64x64_k16_tn";
+    case KernelVariant::Tiled64x64RegisterK16NT: return "gemm_sycl_register_64x64_k16_nt";
+    case KernelVariant::Tiled64x64RegisterK16TT: return "gemm_sycl_register_64x64_k16_tt";
+    case KernelVariant::Tiled128x32RegisterK16: return "gemm_sycl_register_128x32_k16";
+    case KernelVariant::Tiled128x32RegisterK16TN: return "gemm_sycl_register_128x32_k16_tn";
+    case KernelVariant::Tiled128x32RegisterK16NT: return "gemm_sycl_register_128x32_k16_nt";
+    case KernelVariant::Tiled128x32RegisterK16TT: return "gemm_sycl_register_128x32_k16_tt";
+    case KernelVariant::Tiled128x32RegisterK32TN: return "gemm_sycl_register_128x32_k32_tn";
+    case KernelVariant::Tiled128x32RegisterK32NT: return "gemm_sycl_register_128x32_k32_nt";
+    case KernelVariant::Tiled128x32RegisterK32TT: return "gemm_sycl_register_128x32_k32_tt";
+    case KernelVariant::Tiled128x64RegisterK16TN: return "gemm_sycl_register_128x64_k16_tn";
+    case KernelVariant::Tiled128x64RegisterK16NT: return "gemm_sycl_register_128x64_k16_nt";
+    case KernelVariant::Tiled128x64RegisterK16TT: return "gemm_sycl_register_128x64_k16_tt";
+    case KernelVariant::Tiled128x32RegisterK32S2U1Aligned: return "gemm_sycl_register_128x32_k32_s2_u1_aligned";
+    case KernelVariant::Tiled128x32RegisterK32S2U1Generic: return "gemm_sycl_register_128x32_k32_s2_u1_generic";
+    case KernelVariant::Tiled128x64RegisterK32Large: return "gemm_sycl_register_128x64_k32_large";
+    case KernelVariant::Tiled128x64RegisterK32LargeU2: return "gemm_sycl_register_128x64_k32_large_u2";
+    case KernelVariant::Tiled128x128RegisterK8: return "gemm_sycl_register_128x128_k8";
+    case KernelVariant::Tiled64x64RegisterK16Wide: return "gemm_sycl_register_64x64_k16_wide";
+    case KernelVariant::Tiled64x64RegisterK16WideCN: return "gemm_sycl_register_64x64_k16_wide_cn";
+    case KernelVariant::Tiled64x64RegisterK16WideNC: return "gemm_sycl_register_64x64_k16_wide_nc";
+    case KernelVariant::Tiled128x32RegisterK16WideNC: return "gemm_sycl_register_128x32_k16_wide_nc";
+    case KernelVariant::Tiled32x128RegisterK16WideCN: return "gemm_sycl_register_32x128_k16_wide_cn";
+    case KernelVariant::Tiled32x128RegisterK16: return "gemm_sycl_register_32x128_k16";
+    case KernelVariant::Tiled32x128RegisterK16TN: return "gemm_sycl_register_32x128_k16_tn";
+    case KernelVariant::Tiled32x128RegisterK16TT: return "gemm_sycl_register_32x128_k16_tt";
+    case KernelVariant::SmallBatched: return "gemm_sycl_small_batched";
+    case KernelVariant::Tiled32x32RegisterK16Wide: return "gemm_sycl_register_32x32_k16_wide";
+    case KernelVariant::Tiled16x16RegisterK16Wide: return "gemm_sycl_register_16x16_k16_wide";
     }
-
     return "gemm_sycl_unknown";
 }
 
-inline bool kernel_variant_matches_name(KernelVariant variant, const std::string& name) {
+// The unpredicated leg's name where both legs used to share one, so a fast-leg predicate stuck
+// at false shows in the kernel trace (the 128x32x32 NN legs have always been named apart).
+const char* aligned_trace_name(KernelVariant variant) {
     switch (variant) {
-    case KernelVariant::Direct:
-        return name == "direct";
-    case KernelVariant::Tiled16:
-        return name == "tiled16" || name == "tile16";
-    case KernelVariant::Tiled32x32Register:
-        return name == "register32" || name == "reg32" || name == "32x32";
-    case KernelVariant::Tiled64x64Register:
-        return name == "register64" || name == "reg64" || name == "64x64";
-    case KernelVariant::Tiled64x64RegisterK16:
-        return name == "register64k16" || name == "reg64k16" || name == "64x64x16";
-    case KernelVariant::Tiled64x64RegisterK16TN:
-        return name == "register64k16tn" || name == "reg64k16tn" || name == "64x64x16tn";
-    case KernelVariant::Tiled64x64RegisterK16NT:
-        return name == "register64k16nt" || name == "reg64k16nt" || name == "64x64x16nt";
-    case KernelVariant::Tiled64x64RegisterK16TT:
-        return name == "register64k16tt" || name == "reg64k16tt" || name == "64x64x16tt";
-    case KernelVariant::Tiled128x32RegisterK16:
-        return name == "register128x32k16" || name == "reg128x32k16" || name == "128x32x16";
-    case KernelVariant::Tiled128x32RegisterK16TN:
-        return name == "register128x32k16tn" || name == "reg128x32k16tn" || name == "128x32x16tn";
-    case KernelVariant::Tiled128x32RegisterK16NT:
-        return name == "register128x32k16nt" || name == "reg128x32k16nt" || name == "128x32x16nt";
-    case KernelVariant::Tiled128x32RegisterK16TT:
-        return name == "register128x32k16tt" || name == "reg128x32k16tt" || name == "128x32x16tt";
-    case KernelVariant::Tiled128x32RegisterK32TN:
-        return name == "register128x32k32tn" || name == "reg128x32k32tn" || name == "128x32x32tn" ||
-            name == "128x32x32_s2_u1_tn";
-    case KernelVariant::Tiled128x32RegisterK32NT:
-        return name == "register128x32k32nt" || name == "reg128x32k32nt" || name == "128x32x32nt" ||
-            name == "128x32x32_s2_u1_nt";
-    case KernelVariant::Tiled128x32RegisterK32TT:
-        return name == "register128x32k32tt" || name == "reg128x32k32tt" || name == "128x32x32tt" ||
-            name == "128x32x32_s2_u1_tt";
-    case KernelVariant::Tiled128x64RegisterK16TN:
-        return name == "register128x64k16tn" || name == "reg128x64k16tn" || name == "128x64x16tn";
-    case KernelVariant::Tiled128x64RegisterK16NT:
-        return name == "register128x64k16nt" || name == "reg128x64k16nt" || name == "128x64x16nt";
-    case KernelVariant::Tiled128x64RegisterK16TT:
-        return name == "register128x64k16tt" || name == "reg128x64k16tt" || name == "128x64x16tt";
-    case KernelVariant::Tiled128x32RegisterK32:
-        return false;
-    case KernelVariant::Tiled128x32RegisterK32S1U1:
-        return name == "register128x32k32s1u1" || name == "reg128x32k32s1u1" || name == "128x32x32_s1_u1";
-    case KernelVariant::Tiled128x32RegisterK32S2U1:
-        return name == "register128x32k32" || name == "reg128x32k32" || name == "128x32x32" ||
-            name == "register128x32k32s2u1" || name == "reg128x32k32s2u1" || name == "128x32x32_s2_u1";
-    case KernelVariant::Tiled128x32RegisterK32S2U1Aligned:
-        return name == "register128x32k32s2u1aligned" || name == "reg128x32k32s2u1aligned" ||
-            name == "128x32x32_s2_u1_aligned";
-    case KernelVariant::Tiled128x32RegisterK32S2U1Generic:
-        return name == "register128x32k32s2u1generic" || name == "reg128x32k32s2u1generic" ||
-            name == "128x32x32_s2_u1_generic";
-    case KernelVariant::Tiled128x32RegisterK32S2U2:
-        return name == "register128x32k32s2u2" || name == "reg128x32k32s2u2" || name == "128x32x32_s2_u2";
-    case KernelVariant::Tiled128x32RegisterK32S2U2TT8x4:
-        return name == "register128x32k32s2u2tt8x4" || name == "reg128x32k32s2u2tt8x4" ||
-            name == "128x32x32_s2_u2_tt8x4";
-    case KernelVariant::Tiled128x32RegisterK32S2U2TT4x8:
-        return name == "register128x32k32s2u2tt4x8" || name == "reg128x32k32s2u2tt4x8" ||
-            name == "128x32x32_s2_u2_tt4x8";
-    case KernelVariant::Tiled128x32RegisterK32Persistent:
-        return name == "register128x32k32persistent" || name == "reg128x32k32persistent" ||
-            name == "128x32x32_persistent";
-    case KernelVariant::Tiled128x32RegisterK32SplitK4:
-        return name == "register128x32k32splitk4" || name == "reg128x32k32splitk4" ||
-            name == "128x32x32_splitk4";
-    case KernelVariant::Tiled128x32RegisterK32S1U4:
-        return name == "register128x32k32s1u4" || name == "reg128x32k32s1u4" || name == "reg128x32k32u4" ||
-            name == "128x32x32_s1_u4";
-    case KernelVariant::Tiled128x64RegisterK32Large:
-        return name == "register128x64k32large" || name == "reg128x64k32large" || name == "128x64x32large";
-    case KernelVariant::Tiled128x64RegisterK32LargeU2:
-        return name == "register128x64k32largeu2" || name == "reg128x64k32largeu2" || name == "128x64x32large_u2";
-    case KernelVariant::Tiled128x64RegisterK32LargeTT4x8:
-        return name == "register128x64k32largett4x8" || name == "reg128x64k32largett4x8" ||
-            name == "128x64x32large_tt4x8";
-    case KernelVariant::Tiled128x64RegisterK32LargeTT4x8U2:
-        return name == "register128x64k32largett4x8u2" || name == "reg128x64k32largett4x8u2" ||
-            name == "128x64x32large_tt4x8_u2";
-    case KernelVariant::Tiled128x128RegisterK8:
-        return name == "register128x128k8" || name == "reg128x128k8" || name == "128x128x8";
-    case KernelVariant::Tiled64x64RegisterK16Wide:
-        return name == "register64x64k16wide" || name == "reg64x64k16wide" ||
-            name == "64x64x16wide";
-    case KernelVariant::Tiled64x64RegisterK16WideCN:
-        return name == "register64x64k16widecn" || name == "reg64x64k16widecn" ||
-            name == "64x64x16wide_cn";
-    case KernelVariant::Tiled64x64RegisterK16WideNC:
-        return name == "register64x64k16widenc" || name == "reg64x64k16widenc" ||
-            name == "64x64x16wide_nc";
-    case KernelVariant::Tiled128x32RegisterK16WideNC:
-        return name == "register128x32k16widenc" || name == "reg128x32k16widenc" ||
-            name == "128x32x16wide_nc";
-    case KernelVariant::Tiled32x128RegisterK16WideCN:
-        return name == "register32x128k16widecn" || name == "reg32x128k16widecn" ||
-            name == "32x128x16wide_cn";
-    case KernelVariant::Tiled32x128RegisterK16:
-        return name == "register32x128k16" || name == "reg32x128k16" || name == "32x128x16";
-    case KernelVariant::Tiled32x128RegisterK16TN:
-        return name == "register32x128k16tn" || name == "reg32x128k16tn" || name == "32x128x16tn";
-    case KernelVariant::Tiled32x128RegisterK16TT:
-        return name == "register32x128k16tt" || name == "reg32x128k16tt" || name == "32x128x16tt";
-    case KernelVariant::SmallBatched:
-        return name == "small" || name == "smallbatched";
+    case KernelVariant::Tiled128x64RegisterK32Large: return "gemm_sycl_register_128x64_k32_large_aligned";
+    case KernelVariant::Tiled128x64RegisterK32LargeU2: return "gemm_sycl_register_128x64_k32_large_u2_aligned";
+    case KernelVariant::Tiled128x128RegisterK8: return "gemm_sycl_register_128x128_k8_aligned";
+    case KernelVariant::Tiled64x64RegisterK16Wide: return "gemm_sycl_register_64x64_k16_wide_aligned";
+    default: return kernel_trace_name(variant);
     }
-
-    return false;
-}
-
-inline KernelVariant forced_kernel_variant() {
-    const char* raw = batchlas::settings().selection.gemm_sycl_kernel.get();
-    if (!raw || raw[0] == '\0') {
-        return KernelVariant::Direct;
-    }
-
-    std::string name(raw);
-    for (char& ch : name) {
-        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-    }
-
-    for (KernelVariant variant : {KernelVariant::Direct,
-                                  KernelVariant::Tiled16,
-                                  KernelVariant::Tiled32x32Register,
-                                  KernelVariant::Tiled64x64Register,
-                                  KernelVariant::Tiled64x64RegisterK16,
-                                  KernelVariant::Tiled64x64RegisterK16TN,
-                                  KernelVariant::Tiled64x64RegisterK16NT,
-                                  KernelVariant::Tiled64x64RegisterK16TT,
-                                  KernelVariant::Tiled128x32RegisterK16,
-                                  KernelVariant::Tiled128x32RegisterK16TN,
-                                  KernelVariant::Tiled128x32RegisterK16NT,
-                                  KernelVariant::Tiled128x32RegisterK16TT,
-                                  KernelVariant::Tiled128x32RegisterK32TN,
-                                  KernelVariant::Tiled128x32RegisterK32NT,
-                                  KernelVariant::Tiled128x32RegisterK32TT,
-                                  KernelVariant::Tiled128x64RegisterK16TN,
-                                  KernelVariant::Tiled128x64RegisterK16NT,
-                                  KernelVariant::Tiled128x64RegisterK16TT,
-                                  KernelVariant::Tiled128x32RegisterK32,
-                                  KernelVariant::Tiled128x32RegisterK32S1U1,
-                                  KernelVariant::Tiled128x32RegisterK32S2U1,
-                                  KernelVariant::Tiled128x32RegisterK32S2U1Aligned,
-                                  KernelVariant::Tiled128x32RegisterK32S2U1Generic,
-                                  KernelVariant::Tiled128x32RegisterK32S2U2,
-                                  KernelVariant::Tiled128x32RegisterK32S2U2TT8x4,
-                                  KernelVariant::Tiled128x32RegisterK32S2U2TT4x8,
-                                  KernelVariant::Tiled128x32RegisterK32Persistent,
-                                  KernelVariant::Tiled128x32RegisterK32SplitK4,
-                                  KernelVariant::Tiled128x32RegisterK32S1U4,
-                                  KernelVariant::Tiled128x64RegisterK32Large,
-                                  KernelVariant::Tiled128x64RegisterK32LargeU2,
-                                  KernelVariant::Tiled128x64RegisterK32LargeTT4x8,
-                                  KernelVariant::Tiled128x64RegisterK32LargeTT4x8U2,
-                                  KernelVariant::Tiled128x128RegisterK8,
-                                  KernelVariant::Tiled64x64RegisterK16Wide,
-                                  KernelVariant::Tiled64x64RegisterK16WideCN,
-                                  KernelVariant::Tiled64x64RegisterK16WideNC,
-                                  KernelVariant::Tiled128x32RegisterK16WideNC,
-                                  KernelVariant::Tiled32x128RegisterK16WideCN,
-                                  KernelVariant::Tiled32x128RegisterK16,
-                                  KernelVariant::Tiled32x128RegisterK16TN,
-                                  KernelVariant::Tiled32x128RegisterK16TT,
-                                  KernelVariant::SmallBatched}) {
-        if (kernel_variant_matches_name(variant, name)) {
-            return variant;
-        }
-    }
-
-    return KernelVariant::Direct;
-}
-
-// The presence half of the same field forced_kernel_variant() parses, so the
-// two can no longer be handed different strings.
-inline bool has_forced_kernel_variant() {
-    const char* raw = batchlas::settings().selection.gemm_sycl_kernel.get();
-    return raw && raw[0] != '\0';
 }
 
 template <typename T>
@@ -465,446 +196,191 @@ Event launch_tiled(Queue& ctx,
         ctx, A, B, C, alpha, beta, kernel_trace_name);
 }
 
+
+// ---- register-tiled (float) ------------------------------------------------------------
+
+enum Form { kNN, kNT, kTN, kTT };
+
+// The trace identity of reg_configs[I] at a form: every (config, form) pair the table
+// instantiates is one of the old named variants. `aligned` names the NN unpredicated leg.
+constexpr KernelVariant reg_variant(std::size_t i, Form f, bool aligned) {
+    using K = KernelVariant;
+    switch (i) {
+    case 0: return K::Tiled32x32Register;
+    case 1: return K::Tiled64x64Register;
+    case 2: return f == kNN ? K::Tiled64x64RegisterK16 : f == kTN ? K::Tiled64x64RegisterK16TN
+                   : f == kNT ? K::Tiled64x64RegisterK16NT : K::Tiled64x64RegisterK16TT;
+    case 3: return f == kNN ? K::Tiled128x32RegisterK16 : f == kTN ? K::Tiled128x32RegisterK16TN
+                   : f == kNT ? K::Tiled128x32RegisterK16NT : K::Tiled128x32RegisterK16TT;
+    case 4: return f == kNN ? (aligned ? K::Tiled128x32RegisterK32S2U1Aligned : K::Tiled128x32RegisterK32S2U1Generic)
+                   : f == kTN ? K::Tiled128x32RegisterK32TN : f == kNT ? K::Tiled128x32RegisterK32NT
+                              : K::Tiled128x32RegisterK32TT;
+    case 5: return f == kTN ? K::Tiled128x64RegisterK16TN : f == kNT ? K::Tiled128x64RegisterK16NT
+                            : K::Tiled128x64RegisterK16TT;
+    case 6: return f == kNN ? K::Tiled32x128RegisterK16 : f == kTN ? K::Tiled32x128RegisterK16TN
+                            : K::Tiled32x128RegisterK16TT;
+    case 7: return K::Tiled128x64RegisterK32Large;
+    case 8: return K::Tiled128x64RegisterK32LargeU2;
+    default: return K::Tiled128x128RegisterK8;
+    }
+}
+
+template <int I, Form F>
+Event launch_reg_cfg(Queue& ctx, const MatrixView<float, MatrixFormat::Dense>& A,
+                     const MatrixView<float, MatrixFormat::Dense>& B, const MatrixView<float, MatrixFormat::Dense>& C,
+                     float alpha, float beta) {
+    constexpr og::RegCfg c = og::reg_configs[I];
+    constexpr Transpose OA = (F == kTN || F == kTT) ? Transpose::Trans : Transpose::NoTrans;
+    constexpr Transpose OB = (F == kNT || F == kTT) ? Transpose::Trans : Transpose::NoTrans;
+    if constexpr (c.m == 128 && c.n == 128) {
+        static_assert(F == kNN && c.threads() == 256, "the 128x128 kernel is NN only, 256 threads");
+        // The leg is derived: the unpredicated path whenever the layout allows it.
+        if (can_use_128x128_fast_path<float>(A, B, C))
+            return launch_register_128x128_k8<float, true>(ctx, A, B, C, alpha, beta, aligned_trace_name);
+        return launch_register_128x128_k8<float, false>(ctx, A, B, C, alpha, beta, kernel_trace_name);
+    } else {
+        constexpr bool aligned_leg = F == kNN && c.aligned_leg;
+        constexpr RegTile P{c.m, c.n, c.k, c.tr, c.tc, 4, 4, c.u, c.stages, OA, OB, aligned_leg};
+        static_assert(RegisterTilePolicy<P.M, P.N, P.K, P.TR, P.TC>::ThreadsPerGroup == c.threads(),
+                      "choice.hh's thread count must match the tile");
+        return launch_reg<float, P>(ctx, A, B, C, alpha, beta, kernel_trace_name(reg_variant(I, F, false)),
+                                    aligned_leg ? aligned_trace_name(reg_variant(I, F, true)) : nullptr);
+    }
+}
+
+// ---- wide (every scalar) ---------------------------------------------------------------
+
+constexpr KernelVariant wide_variant(std::size_t i, char form) {
+    using K = KernelVariant;
+    switch (i) {
+    case 0: return form == 'N' ? K::Tiled64x64RegisterK16Wide : form == 'A' ? K::Tiled64x64RegisterK16WideCN
+                                                                            : K::Tiled64x64RegisterK16WideNC;
+    case 1: return K::Tiled128x32RegisterK16WideNC;
+    case 2: return K::Tiled32x128RegisterK16WideCN;
+    case 3: return K::Tiled32x32RegisterK16Wide;
+    default: return K::Tiled16x16RegisterK16Wide;
+    }
+}
+
+// form: 'N' = NN, 'A' = ConjTrans A (CN), 'B' = ConjTrans B (NC).
+template <typename T, int I, char Fm>
+Event launch_wide_cfg(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
+                      const MatrixView<T, MatrixFormat::Dense>& B, const MatrixView<T, MatrixFormat::Dense>& C,
+                      T alpha, T beta) {
+    constexpr og::WideCfg c = og::wide_configs[I];
+    if constexpr (Fm == 'N' && c.m == 64 && c.n == 64) {
+        // The NN 64x64 tile is its own kernel; its leg is derived from the layout.
+        if (can_use_64x64_k16_wide_fast_path<T>(A, B, C))
+            return launch_register_64x64_k16_wide<T, true>(ctx, A, B, C, alpha, beta, aligned_trace_name);
+        return launch_register_64x64_k16_wide<T, false>(ctx, A, B, C, alpha, beta, kernel_trace_name);
+    } else {
+        constexpr Transpose OA = Fm == 'A' ? Transpose::ConjTrans : Transpose::NoTrans;
+        constexpr Transpose OB = Fm == 'B' ? Transpose::ConjTrans : Transpose::NoTrans;
+        return launch_wide_transposed<T, WideTile{c.m, c.n, c.k, c.ttm, c.ttn, OA, OB}>(
+            ctx, A, B, C, alpha, beta, kernel_trace_name(wide_variant(I, Fm)));
+    }
+}
+
+[[noreturn]] void refuse(const std::string& what) {
+    throw batchlas::unsupported("gemm: " + what + " (the choice's can_run should have refused it)");
+}
+
 } // namespace
 
 template <typename T>
-KernelVariant select_kernel_variant(const MatrixView<T, MatrixFormat::Dense>& A,
-                                    const MatrixView<T, MatrixFormat::Dense>& B,
-                                    const MatrixView<T, MatrixFormat::Dense>& C,
-                                    Transpose transA,
-                                    Transpose transB) {
-    static_cast<void>(C);
-    if (has_forced_kernel_variant()) {
-        return forced_kernel_variant();
-    }
-    const auto [m, k] = get_effective_dims(A, transA);
-    const auto [_, n] = get_effective_dims(B, transB);
-    static_cast<void>(_);
-    const int max_dim = std::max({m, n, k});
-    const int min_dim = std::min({m, n, k});
-    if (transA != Transpose::NoTrans || transB != Transpose::NoTrans) {
-        // Wide-scalar transposed panel tiles, COMPLEX ONLY: double is excluded on
-        // measurement (no gain over Tiled16). The arm is Tiled16, never the vendor:
-        // preferred() refuses complex, so only vendor-free or a forced sycl gets here.
-        // evidence: docs/perf/gemm.md#wide-scalar-transposed-tiles
-        if constexpr (is_std_complex_v<T>) {
-            switch (wide_transposed_tile_for(transA, transB, m, n, k, A.batch_size())) {
-            case WideTransposedTile::NC128x32:
-                return KernelVariant::Tiled128x32RegisterK16WideNC;
-            case WideTransposedTile::CN32x128:
-                return KernelVariant::Tiled32x128RegisterK16WideCN;
-            case WideTransposedTile::None:
-                break;
-            }
-        }
-        if constexpr (std::is_same_v<T, float>) {
-            if (transA == Transpose::Trans && transB == Transpose::NoTrans && m >= 128 && n >= 32 && k >= 128) {
-                return KernelVariant::Tiled128x32RegisterK32TN;
-            }
-            if (transA == Transpose::NoTrans && transB == Transpose::Trans && m >= 128 && n >= 32 && k >= 128) {
-                return KernelVariant::Tiled128x32RegisterK32NT;
-            }
-            if (transA == Transpose::Trans && transB == Transpose::Trans && m >= 128 && n >= 32 && k >= 128) {
-                return KernelVariant::Tiled128x32RegisterK32TT;
-            }
-        }
-        if constexpr (std::is_same_v<T, float>) {
-            if (max_dim <= 32) return KernelVariant::SmallBatched;
-        }
-        return max_dim <= 32 ? KernelVariant::Direct : KernelVariant::Tiled16;
-    }
-    if constexpr (std::is_same_v<T, float>) {
-        // evidence: docs/perf/gemm.md#the-small-batched-kernel
-        if (max_dim <= 32) return KernelVariant::SmallBatched;
-        if (max_dim <= sycl_gemm_small::kSmallMaxDim && min_dim > 32) {
-            return KernelVariant::SmallBatched;
-        }
-        // Full 128x128 output tiles with deep k go to the 64-accumulator
-        // kernel. evidence: docs/perf/gemm.md#the-128x128-float-kernel
-        if (m >= 128 && n >= 128 && k >= 128 && can_use_128x128_fast_path<T>(A, B, C)) {
-            return KernelVariant::Tiled128x128RegisterK8;
-        }
-        if (m >= 128 && n >= 128 && k >= 128 && is_squareish_shape(m, n, k)) {
-            if (can_use_aligned_nn_fast_path<T, 128, 32, 32, 4, 4>(A, B, C)) {
-                if (is_large_square_bucket(m, n, k)) {
-                    return is_full_512_square_bucket(m, n, k)
-                        ? KernelVariant::Tiled128x64RegisterK32Large
-                        : KernelVariant::Tiled128x64RegisterK32LargeU2;
-                }
-                return KernelVariant::Tiled128x32RegisterK32S2U1Aligned;
-            }
-            return KernelVariant::Tiled128x128RegisterK8;
-        }
-        // can_use_128x128_fast_path is a LEG predicate, not a KERNEL predicate:
-        // the dispatcher re-evaluates it and picks the predicated leg itself, so
-        // using it as a routing gate hands a failing call to a different, much
-        // slower kernel instead. Each bound below has a measured counterexample.
-        // evidence: docs/perf/gemm.md#the-strided-ld-defect-and-the-routing-fix
-        const int mn_min = std::min(m, n);
-        if (max_dim >= 128 && k >= 8 && mn_min >= 64 && (mn_min >= 128 || k < 128)) {
-            return KernelVariant::Tiled128x128RegisterK8;
-        }
-        if (m >= 128 && n >= 32 && k >= 128) {
-            return KernelVariant::Tiled128x32RegisterK16;
-        }
-        if (n >= 128 && m >= 32 && k >= 128) {
-            return KernelVariant::Tiled32x128RegisterK16;
-        }
-        if (min_dim >= 64 && k >= 128) {
-            return KernelVariant::Tiled64x64RegisterK16;
-        }
-        if (min_dim >= 64 && max_dim >= 128) {
-            return KernelVariant::Tiled64x64Register;
-        }
-        if (min_dim >= 32 && max_dim >= 64) {
-            return KernelVariant::Tiled32x32Register;
-        }
-        return max_dim <= 48 ? KernelVariant::Direct : KernelVariant::Tiled16;
-    }
-
-    // Wide scalars (double, complex) have no register kernel below this point
-    // and otherwise fall straight to Tiled16. Deliberately conservative: the
-    // unpredicated path only (the predicated one has never been timed against
-    // Tiled16) and min_dim >= 256, the smallest measured dimension.
-    // evidence: docs/perf/gemm.md#the-wide-scalar-kernel
-    if constexpr (!std::is_same_v<T, float>) {
-        if (min_dim >= 256 && can_use_64x64_k16_wide_fast_path<T>(A, B, C)) {
-            return KernelVariant::Tiled64x64RegisterK16Wide;
-        }
-    }
-
-    // The gate is a CTA count, not a batch size: that is what the crossover
-    // against Tiled16 tracks, and it is set to admit no measured loss rather
-    // than to maximise the geomean. NN is implied here -- every transposed form
-    // returned above. A regression would be silent: nothing in ctest asserts on
-    // kernel choice or throughput, and route_diff.sh records resolver Routes,
-    // not KernelVariant. evidence: docs/perf/gemm.md#the-cta-count-gate-for-complex
-    if constexpr (is_std_complex_v<T>) {
-        using Real = typename T::value_type;
-        constexpr int64_t kMinCtas = std::is_same_v<Real, float> ? 64 : 128;
-        const int64_t ctas = static_cast<int64_t>((m + 63) / 64) *
-                             static_cast<int64_t>((n + 63) / 64) *
-                             static_cast<int64_t>(A.batch_size());
-        if (min_dim >= 32 && ctas >= kMinCtas) {
-            return KernelVariant::Tiled64x64RegisterK16Wide;
-        }
-    }
-
-    if constexpr (std::is_same_v<T, double>) {
-        // The Direct/Tiled16 crossover for double is at 24, not 32.
-        // evidence: docs/perf/gemm.md#gemm-evidence-for-each-boundary
-        return max_dim <= 24 ? KernelVariant::Direct : KernelVariant::Tiled16;
-    }
-
-    return max_dim <= 64 ? KernelVariant::Direct : KernelVariant::Tiled16;
+Event gemm_direct(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
+                  const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta, Transpose transA, Transpose transB) {
+    return launch_direct<T>(ctx, A, B, C, alpha, beta, transA, transB);
 }
 
 template <typename T>
-Event gemm_custom(Queue& ctx,
-                  const MatrixView<T, MatrixFormat::Dense>& A,
-                  const MatrixView<T, MatrixFormat::Dense>& B,
-                  const MatrixView<T, MatrixFormat::Dense>& C,
-                  T alpha,
-                  T beta,
-                  Transpose transA,
-                  Transpose transB,
-                  ComputePrecision precision) {
-    static_cast<void>(precision);
-    if (A.batch_size() != B.batch_size() || A.batch_size() != C.batch_size()) {
-        throw batchlas::invalid_argument("GEMM SYCL custom path requires matching batch sizes");
-    }
-
-    const auto [m, k] = get_effective_dims(A, transA);
-    const auto [k_b, n] = get_effective_dims(B, transB);
-    if (k != k_b || C.rows() != m || C.cols() != n) {
-        throw batchlas::invalid_argument("GEMM SYCL custom path received incompatible matrix dimensions");
-    }
-
-    const KernelVariant variant = select_kernel_variant(A, B, C, transA, transB);
-    if (is_experimental_kernel_variant(variant) && !experimental_kernel_variants_enabled()) {
-        throw batchlas::unsupported(
-            "Requested experimental GEMM SYCL kernel variant without BATCHLAS_GEMM_EXPERIMENTAL enabled");
-    }
-
-    switch (variant) {
-    case KernelVariant::Direct:
-        return launch_direct(ctx, A, B, C, alpha, beta, transA, transB);
-    case KernelVariant::Tiled16:
-        return launch_tiled<T, 16>(ctx, A, B, C, alpha, beta, transA, transB);
-    case KernelVariant::Tiled32x32Register:
-        return launch_reg<T, RegTile{32, 32, 8, 2, 2}>(ctx, A, B, C, alpha, beta, kernel_trace_name(variant));
-    case KernelVariant::Tiled64x64Register:
-        return launch_reg<T, RegTile{64, 64, 8, 4, 4}>(ctx, A, B, C, alpha, beta, kernel_trace_name(variant));
-    case KernelVariant::Tiled64x64RegisterK16:
-        return launch_reg<T, RegTile{64, 64, 16, 4, 4}>(ctx, A, B, C, alpha, beta, kernel_trace_name(variant));
-    case KernelVariant::Tiled64x64RegisterK16TN:
-        if (transA == Transpose::Trans && transB == Transpose::NoTrans) {
-            return launch_reg<T, RegTile{64, 64, 16, 4, 4, 4, 4, 1, 1, Transpose::Trans, Transpose::NoTrans}>(
-                ctx, A, B, C, alpha, beta, kernel_trace_name(variant));
-        }
-        return launch_tiled<T, 16>(ctx, A, B, C, alpha, beta, transA, transB);
-    case KernelVariant::Tiled64x64RegisterK16NT:
-        if (transA == Transpose::NoTrans && transB == Transpose::Trans) {
-            return launch_reg<T, RegTile{64, 64, 16, 4, 4, 4, 4, 1, 1, Transpose::NoTrans, Transpose::Trans}>(
-                ctx, A, B, C, alpha, beta, kernel_trace_name(variant));
-        }
-        return launch_tiled<T, 16>(ctx, A, B, C, alpha, beta, transA, transB);
-    case KernelVariant::Tiled64x64RegisterK16TT:
-        if (transA == Transpose::Trans && transB == Transpose::Trans) {
-            return launch_reg<T, RegTile{64, 64, 16, 4, 4, 4, 4, 1, 1, Transpose::Trans, Transpose::Trans}>(
-                ctx, A, B, C, alpha, beta, kernel_trace_name(variant));
-        }
-        return launch_tiled<T, 16>(ctx, A, B, C, alpha, beta, transA, transB);
-    case KernelVariant::Tiled128x32RegisterK16:
-        return launch_reg<T, RegTile{128, 32, 16, 4, 4, 4, 4, 1, 2}>(ctx, A, B, C, alpha, beta, kernel_trace_name(variant));
-    case KernelVariant::Tiled128x32RegisterK16TN:
-        if (transA == Transpose::Trans && transB == Transpose::NoTrans) {
-            return launch_reg<T, RegTile{128, 32, 16, 4, 4, 4, 4, 1, 2, Transpose::Trans, Transpose::NoTrans}>(
-                ctx, A, B, C, alpha, beta, kernel_trace_name(variant));
-        }
-        return launch_tiled<T, 16>(ctx, A, B, C, alpha, beta, transA, transB);
-    case KernelVariant::Tiled128x32RegisterK16NT:
-        if (transA == Transpose::NoTrans && transB == Transpose::Trans) {
-            return launch_reg<T, RegTile{128, 32, 16, 4, 4, 4, 4, 1, 2, Transpose::NoTrans, Transpose::Trans}>(
-                ctx, A, B, C, alpha, beta, kernel_trace_name(variant));
-        }
-        return launch_tiled<T, 16>(ctx, A, B, C, alpha, beta, transA, transB);
-    case KernelVariant::Tiled128x32RegisterK16TT:
-        if (transA == Transpose::Trans && transB == Transpose::Trans) {
-            return launch_reg<T, RegTile{128, 32, 16, 4, 4, 4, 4, 1, 2, Transpose::Trans, Transpose::Trans}>(
-                ctx, A, B, C, alpha, beta, kernel_trace_name(variant));
-        }
-        return launch_tiled<T, 16>(ctx, A, B, C, alpha, beta, transA, transB);
-    case KernelVariant::Tiled128x32RegisterK32TN:
-        if (transA == Transpose::Trans && transB == Transpose::NoTrans) {
-            return launch_reg<T, RegTile{128, 32, 32, 4, 4, 4, 4, 1, 2, Transpose::Trans, Transpose::NoTrans}>(
-                ctx, A, B, C, alpha, beta, kernel_trace_name(variant));
-        }
-        return launch_tiled<T, 16>(ctx, A, B, C, alpha, beta, transA, transB);
-    case KernelVariant::Tiled128x32RegisterK32NT:
-        if (transA == Transpose::NoTrans && transB == Transpose::Trans) {
-            return launch_reg<T, RegTile{128, 32, 32, 4, 4, 4, 4, 1, 2, Transpose::NoTrans, Transpose::Trans}>(
-                ctx, A, B, C, alpha, beta, kernel_trace_name(variant));
-        }
-        return launch_tiled<T, 16>(ctx, A, B, C, alpha, beta, transA, transB);
-    case KernelVariant::Tiled128x32RegisterK32TT:
-        if (transA == Transpose::Trans && transB == Transpose::Trans) {
-            return launch_reg<T, RegTile{128, 32, 32, 4, 4, 4, 4, 1, 2, Transpose::Trans, Transpose::Trans}>(
-                ctx, A, B, C, alpha, beta, kernel_trace_name(variant));
-        }
-        return launch_tiled<T, 16>(ctx, A, B, C, alpha, beta, transA, transB);
-    case KernelVariant::Tiled128x64RegisterK16TN:
-        if (transA == Transpose::Trans && transB == Transpose::NoTrans) {
-            return launch_reg<T, RegTile{128, 64, 16, 4, 4, 4, 4, 1, 1, Transpose::Trans, Transpose::NoTrans}>(
-                ctx, A, B, C, alpha, beta, kernel_trace_name(variant));
-        }
-        return launch_tiled<T, 16>(ctx, A, B, C, alpha, beta, transA, transB);
-    case KernelVariant::Tiled128x64RegisterK16NT:
-        if (transA == Transpose::NoTrans && transB == Transpose::Trans) {
-            return launch_reg<T, RegTile{128, 64, 16, 4, 4, 4, 4, 1, 1, Transpose::NoTrans, Transpose::Trans}>(
-                ctx, A, B, C, alpha, beta, kernel_trace_name(variant));
-        }
-        return launch_tiled<T, 16>(ctx, A, B, C, alpha, beta, transA, transB);
-    case KernelVariant::Tiled128x64RegisterK16TT:
-        if (transA == Transpose::Trans && transB == Transpose::Trans) {
-            return launch_reg<T, RegTile{128, 64, 16, 4, 4, 4, 4, 1, 1, Transpose::Trans, Transpose::Trans}>(
-                ctx, A, B, C, alpha, beta, kernel_trace_name(variant));
-        }
-        return launch_tiled<T, 16>(ctx, A, B, C, alpha, beta, transA, transB);
-    // Both of these names resolve to the s2_u1 shape, which takes the
-    // unpredicated instantiation when the layout allows it. The trace scope
-    // reports which side it took, so the two sub-variant names go in
-    // explicitly rather than being derived from the case label.
-    case KernelVariant::Tiled128x32RegisterK32:
-    case KernelVariant::Tiled128x32RegisterK32S2U1:
-        return launch_reg<T, RegTile{128, 32, 32, 4, 4, 4, 4, 1, 2, Transpose::NoTrans, Transpose::NoTrans, true}>(
-            ctx, A, B, C, alpha, beta,
-            kernel_trace_name(KernelVariant::Tiled128x32RegisterK32S2U1Generic),
-            kernel_trace_name(KernelVariant::Tiled128x32RegisterK32S2U1Aligned));
-    case KernelVariant::Tiled128x32RegisterK32S1U1:
-        return launch_reg<T, RegTile{128, 32, 32, 4, 4, 4, 4, 1, 1}>(ctx, A, B, C, alpha, beta, kernel_trace_name(variant));
-    case KernelVariant::Tiled128x32RegisterK32S2U1Aligned:
-        return launch_reg<T, RegTile{128, 32, 32, 4, 4, 4, 4, 1, 2, Transpose::NoTrans, Transpose::NoTrans, false, true}>(
-            ctx, A, B, C, alpha, beta, kernel_trace_name(variant));
-    case KernelVariant::Tiled128x32RegisterK32S2U1Generic:
-        return launch_reg<T, RegTile{128, 32, 32, 4, 4, 4, 4, 1, 2}>(ctx, A, B, C, alpha, beta, kernel_trace_name(variant));
-    case KernelVariant::Tiled128x32RegisterK32S2U2:
-        return launch_reg<T, RegTile{128, 32, 32, 4, 4, 4, 4, 2, 2}>(ctx, A, B, C, alpha, beta, kernel_trace_name(variant));
-    case KernelVariant::Tiled128x32RegisterK32S2U2TT8x4:
-        return launch_reg<T, RegTile{128, 32, 32, 8, 4, 4, 4, 2, 2}>(ctx, A, B, C, alpha, beta, kernel_trace_name(variant));
-    case KernelVariant::Tiled128x32RegisterK32S2U2TT4x8:
-        return launch_reg<T, RegTile{128, 32, 32, 4, 8, 4, 4, 2, 2}>(ctx, A, B, C, alpha, beta, kernel_trace_name(variant));
-    case KernelVariant::Tiled128x32RegisterK32Persistent:
-        return launch_register_128x32_k32_persistent(ctx, A, B, C, alpha, beta, transA, transB, kernel_trace_name);
-    case KernelVariant::Tiled128x32RegisterK32SplitK4:
-        return launch_register_128x32_k32_split_k4(ctx, A, B, C, alpha, beta, transA, transB, kernel_trace_name);
-    case KernelVariant::Tiled128x32RegisterK32S1U4:
-        return launch_reg<T, RegTile{128, 32, 32, 4, 4, 4, 4, 4, 1}>(ctx, A, B, C, alpha, beta, kernel_trace_name(variant));
-    case KernelVariant::Tiled128x64RegisterK32Large:
-        return launch_reg<T, RegTile{128, 64, 32, 8, 4, 4, 4, 4, 2, Transpose::NoTrans, Transpose::NoTrans, true}>(
-            ctx, A, B, C, alpha, beta, kernel_trace_name(variant));
-    case KernelVariant::Tiled128x64RegisterK32LargeU2:
-        return launch_reg<T, RegTile{128, 64, 32, 8, 4, 4, 4, 2, 2, Transpose::NoTrans, Transpose::NoTrans, true}>(
-            ctx, A, B, C, alpha, beta, kernel_trace_name(variant));
-    case KernelVariant::Tiled128x64RegisterK32LargeTT4x8:
-        return launch_reg<T, RegTile{128, 64, 32, 4, 8, 4, 4, 4, 2, Transpose::NoTrans, Transpose::NoTrans, true}>(
-            ctx, A, B, C, alpha, beta, kernel_trace_name(variant));
-    case KernelVariant::Tiled128x64RegisterK32LargeTT4x8U2:
-        return launch_reg<T, RegTile{128, 64, 32, 4, 8, 4, 4, 2, 2, Transpose::NoTrans, Transpose::NoTrans, true}>(
-            ctx, A, B, C, alpha, beta, kernel_trace_name(variant));
-    case KernelVariant::Tiled128x128RegisterK8:
-        // float only, NN only. Wider scalars overrun the hard 65,536
-        // registers-per-block limit at this 64-accumulator tile (a launch
-        // failure, not spilling), and the kernel reads A as m x k and B as
-        // k x n so it cannot serve a transposed operand. The selector respects
-        // both, but the variant is forceable by name, so fall back rather than
-        // compute the wrong thing.
-        if constexpr (std::is_same_v<T, float>) {
-            if (transA == Transpose::NoTrans && transB == Transpose::NoTrans) {
-                if (can_use_128x128_fast_path<T>(A, B, C)) {
-                    return launch_register_128x128_k8<T, true>(
-                        ctx, A, B, C, alpha, beta, kernel_trace_name);
-                }
-                return launch_register_128x128_k8<T, false>(
-                    ctx, A, B, C, alpha, beta, kernel_trace_name);
-            }
-        }
-        return launch_tiled<T, 16>(ctx, A, B, C, alpha, beta, transA, transB);
-    case KernelVariant::Tiled64x64RegisterK16Wide:
-        // NN only: the kernel reads A as m x k and B as k x n directly, so it
-        // cannot serve a transposed operand. Every scalar fits its 4x4 tile.
-        // Forceable by name, so fall back rather than compute the wrong thing.
-        if (transA == Transpose::NoTrans && transB == Transpose::NoTrans) {
-            if (can_use_64x64_k16_wide_fast_path<T>(A, B, C)) {
-                return launch_register_64x64_k16_wide<T, true>(
-                    ctx, A, B, C, alpha, beta, kernel_trace_name);
-            }
-            return launch_register_64x64_k16_wide<T, false>(
-                ctx, A, B, C, alpha, beta, kernel_trace_name);
-        }
-        return launch_tiled<T, 16>(ctx, A, B, C, alpha, beta, transA, transB);
-    // GUARD, as for every hard-wired-transpose variant above, with the one
-    // widening wide_trans_matches<T> licenses: for a REAL scalar conj is the
-    // identity, so a ConjTrans instantiation is a correct Trans. For complex it
-    // is not, and running it unguarded would silently drop the conjugation and
-    // return a plausible wrong matrix. All four are forceable by name, so they
-    // fall back rather than compute the wrong thing.
-    case KernelVariant::Tiled64x64RegisterK16WideCN:
-        if (wide_trans_matches<T>(transA, Transpose::ConjTrans) && transB == Transpose::NoTrans) {
-            return launch_wide_transposed<
-                T, WideTile{64, 64, 16, 4, 4, Transpose::ConjTrans, Transpose::NoTrans}>(
-                ctx, A, B, C, alpha, beta, kernel_trace_name(variant));
-        }
-        return launch_tiled<T, 16>(ctx, A, B, C, alpha, beta, transA, transB);
-    case KernelVariant::Tiled64x64RegisterK16WideNC:
-        if (transA == Transpose::NoTrans && wide_trans_matches<T>(transB, Transpose::ConjTrans)) {
-            return launch_wide_transposed<
-                T, WideTile{64, 64, 16, 4, 4, Transpose::NoTrans, Transpose::ConjTrans}>(
-                ctx, A, B, C, alpha, beta, kernel_trace_name(variant));
-        }
-        return launch_tiled<T, 16>(ctx, A, B, C, alpha, beta, transA, transB);
-    // The potrf trailing update: m_trailing x W x nb with W = 32, so a 32-wide
-    // n tile wastes nothing. evidence: docs/perf/gemm.md#wide-scalar-transposed-tiles
-    case KernelVariant::Tiled128x32RegisterK16WideNC:
-        if (transA == Transpose::NoTrans && wide_trans_matches<T>(transB, Transpose::ConjTrans)) {
-            return launch_wide_transposed<
-                T, WideTile{128, 32, 16, 4, 4, Transpose::NoTrans, Transpose::ConjTrans}>(
-                ctx, A, B, C, alpha, beta, kernel_trace_name(variant));
-        }
-        return launch_tiled<T, 16>(ctx, A, B, C, alpha, beta, transA, transB);
-    // The geqrf panel update W1 = V^H A22: nb x n2 x m_panel with nb = 32.
-    case KernelVariant::Tiled32x128RegisterK16WideCN:
-        if (wide_trans_matches<T>(transA, Transpose::ConjTrans) && transB == Transpose::NoTrans) {
-            return launch_wide_transposed<
-                T, WideTile{32, 128, 16, 4, 4, Transpose::ConjTrans, Transpose::NoTrans}>(
-                ctx, A, B, C, alpha, beta, kernel_trace_name(variant));
-        }
-        return launch_tiled<T, 16>(ctx, A, B, C, alpha, beta, transA, transB);
-    case KernelVariant::Tiled32x128RegisterK16:
-        return launch_reg<T, RegTile{32, 128, 16, 4, 4}>(ctx, A, B, C, alpha, beta, kernel_trace_name(variant));
-    case KernelVariant::Tiled32x128RegisterK16TN:
-        if (transA == Transpose::Trans && transB == Transpose::NoTrans) {
-            return launch_reg<T, RegTile{32, 128, 16, 4, 4, 4, 4, 1, 1, Transpose::Trans, Transpose::NoTrans}>(
-                ctx, A, B, C, alpha, beta, kernel_trace_name(variant));
-        }
-        return launch_tiled<T, 16>(ctx, A, B, C, alpha, beta, transA, transB);
-    case KernelVariant::Tiled32x128RegisterK16TT:
-        if (transA == Transpose::Trans && transB == Transpose::Trans) {
-            return launch_reg<T, RegTile{32, 128, 16, 4, 4, 4, 4, 1, 1, Transpose::Trans, Transpose::Trans}>(
-                ctx, A, B, C, alpha, beta, kernel_trace_name(variant));
-        }
-        return launch_tiled<T, 16>(ctx, A, B, C, alpha, beta, transA, transB);
-    case KernelVariant::SmallBatched:
-        // Forceable for any shape; it serves only what it can hold.
-        if constexpr (!is_std_complex_v<T>) {
-            if (std::max({m, n, k}) <= sycl_gemm_small::kSmallMaxDim) {
-                BATCHLAS_KERNEL_TRACE_SCOPE("gemm_sycl_small_batched");
-                return sycl_gemm_small::small_batched<T>(ctx, A, B, C, alpha, beta,
-                                                         transA, transB, m, n, k);
-            }
-        }
-        return launch_direct(ctx, A, B, C, alpha, beta, transA, transB);
-    }
-
-    return ctx.get_event();
+Event gemm_tiled(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
+                 const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta, Transpose transA, Transpose transB) {
+    return launch_tiled<T, 16>(ctx, A, B, C, alpha, beta, transA, transB);
 }
 
-template KernelVariant select_kernel_variant<float>(const MatrixView<float, MatrixFormat::Dense>&,
-                                                    const MatrixView<float, MatrixFormat::Dense>&,
-                                                    const MatrixView<float, MatrixFormat::Dense>&,
-                                                    Transpose,
-                                                    Transpose);
-template KernelVariant select_kernel_variant<double>(const MatrixView<double, MatrixFormat::Dense>&,
-                                                     const MatrixView<double, MatrixFormat::Dense>&,
-                                                     const MatrixView<double, MatrixFormat::Dense>&,
-                                                     Transpose,
-                                                     Transpose);
-template KernelVariant select_kernel_variant<std::complex<float>>(const MatrixView<std::complex<float>, MatrixFormat::Dense>&,
-                                                                  const MatrixView<std::complex<float>, MatrixFormat::Dense>&,
-                                                                  const MatrixView<std::complex<float>, MatrixFormat::Dense>&,
-                                                                  Transpose,
-                                                                  Transpose);
-template KernelVariant select_kernel_variant<std::complex<double>>(const MatrixView<std::complex<double>, MatrixFormat::Dense>&,
-                                                                   const MatrixView<std::complex<double>, MatrixFormat::Dense>&,
-                                                                   const MatrixView<std::complex<double>, MatrixFormat::Dense>&,
-                                                                   Transpose,
-                                                                   Transpose);
+template <typename T>
+Event gemm_small(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
+                 const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta, Transpose transA, Transpose transB) {
+    const auto [m, k] = get_effective_dims(A, transA);
+    const auto [k_b, n] = get_effective_dims(B, transB);
+    static_cast<void>(k_b);
+    if (std::max({m, n, k}) > sycl_gemm_small::kSmallMaxDim) refuse("small serves max(m, n, k) <= 64");
+    BATCHLAS_KERNEL_TRACE_SCOPE("gemm_sycl_small_batched");
+    return sycl_gemm_small::small_batched<T>(ctx, A, B, C, alpha, beta, transA, transB, m, n, k);
+}
 
-template Event gemm_custom<float>(Queue&,
-                                  const MatrixView<float, MatrixFormat::Dense>&,
-                                  const MatrixView<float, MatrixFormat::Dense>&,
-                                  const MatrixView<float, MatrixFormat::Dense>&,
-                                  float,
-                                  float,
-                                  Transpose,
-                                  Transpose,
-                                  ComputePrecision);
-template Event gemm_custom<double>(Queue&,
-                                   const MatrixView<double, MatrixFormat::Dense>&,
-                                   const MatrixView<double, MatrixFormat::Dense>&,
-                                   const MatrixView<double, MatrixFormat::Dense>&,
-                                   double,
-                                   double,
-                                   Transpose,
-                                   Transpose,
-                                   ComputePrecision);
-template Event gemm_custom<std::complex<float>>(Queue&,
-                                                const MatrixView<std::complex<float>, MatrixFormat::Dense>&,
-                                                const MatrixView<std::complex<float>, MatrixFormat::Dense>&,
-                                                const MatrixView<std::complex<float>, MatrixFormat::Dense>&,
-                                                std::complex<float>,
-                                                std::complex<float>,
-                                                Transpose,
-                                                Transpose,
-                                                ComputePrecision);
-template Event gemm_custom<std::complex<double>>(Queue&,
-                                                 const MatrixView<std::complex<double>, MatrixFormat::Dense>&,
-                                                 const MatrixView<std::complex<double>, MatrixFormat::Dense>&,
-                                                 const MatrixView<std::complex<double>, MatrixFormat::Dense>&,
-                                                 std::complex<double>,
-                                                 std::complex<double>,
-                                                 Transpose,
-                                                 Transpose,
-                                                 ComputePrecision);
+Event gemm_reg(Queue& ctx, int tm, int tn, int tk, int u, const MatrixView<float, MatrixFormat::Dense>& A,
+               const MatrixView<float, MatrixFormat::Dense>& B, const MatrixView<float, MatrixFormat::Dense>& C,
+               float alpha, float beta, Transpose transA, Transpose transB) {
+    // A real scalar's ConjTrans is its Trans, so the forms fold C -> T.
+    const bool ta = transA != Transpose::NoTrans, tb = transB != Transpose::NoTrans;
+    std::optional<Event> out;
+    static_for<static_cast<int>(og::reg_configs.size())>([&](auto I) {
+        constexpr og::RegCfg c = og::reg_configs[I];
+        if (out || c.m != tm || c.n != tn || c.k != tk || c.u != u) return;
+        if constexpr (c.forms.nn)
+            if (!ta && !tb) out = launch_reg_cfg<I, kNN>(ctx, A, B, C, alpha, beta);
+        if constexpr (c.forms.nt)
+            if (!ta && tb) out = launch_reg_cfg<I, kNT>(ctx, A, B, C, alpha, beta);
+        if constexpr (c.forms.tn)
+            if (ta && !tb) out = launch_reg_cfg<I, kTN>(ctx, A, B, C, alpha, beta);
+        if constexpr (c.forms.tt)
+            if (ta && tb) out = launch_reg_cfg<I, kTT>(ctx, A, B, C, alpha, beta);
+    });
+    if (!out)
+        refuse("reg:m=" + std::to_string(tm) + ":n=" + std::to_string(tn) + ":k=" + std::to_string(tk) +
+               ":u=" + std::to_string(u) + " has no instantiation for this transpose form");
+    return std::move(*out);
+}
+
+template <typename T>
+Event gemm_wide(Queue& ctx, int tm, int tn, int tk, const MatrixView<T, MatrixFormat::Dense>& A,
+                const MatrixView<T, MatrixFormat::Dense>& B, const MatrixView<T, MatrixFormat::Dense>& C, T alpha,
+                T beta, Transpose transA, Transpose transB) {
+    const bool nn = transA == Transpose::NoTrans && transB == Transpose::NoTrans;
+    const bool cn = wide_trans_matches<T>(transA, Transpose::ConjTrans) && transB == Transpose::NoTrans;
+    const bool nc = transA == Transpose::NoTrans && wide_trans_matches<T>(transB, Transpose::ConjTrans);
+    std::optional<Event> out;
+    static_for<static_cast<int>(og::wide_configs.size())>([&](auto I) {
+        constexpr og::WideCfg c = og::wide_configs[I];
+        if (out || c.m != tm || c.n != tn || c.k != tk) return;
+        if constexpr (c.nn)
+            if (nn) out = launch_wide_cfg<T, I, 'N'>(ctx, A, B, C, alpha, beta);
+        if constexpr (c.cn)
+            if (cn) out = launch_wide_cfg<T, I, 'A'>(ctx, A, B, C, alpha, beta);
+        if constexpr (c.nc)
+            if (nc) out = launch_wide_cfg<T, I, 'B'>(ctx, A, B, C, alpha, beta);
+    });
+    if (!out)
+        refuse("wide:m=" + std::to_string(tm) + ":n=" + std::to_string(tn) + ":k=" + std::to_string(tk) +
+               " has no instantiation for this transpose form");
+    return std::move(*out);
+}
+
+#define GEMM_LAUNCHERS(T)                                                                                       \
+    template Event gemm_direct<T>(Queue&, const MatrixView<T, MatrixFormat::Dense>&,                           \
+                                  const MatrixView<T, MatrixFormat::Dense>&, const MatrixView<T, MatrixFormat::Dense>&, \
+                                  T, T, Transpose, Transpose);                                                  \
+    template Event gemm_tiled<T>(Queue&, const MatrixView<T, MatrixFormat::Dense>&,                            \
+                                 const MatrixView<T, MatrixFormat::Dense>&, const MatrixView<T, MatrixFormat::Dense>&, \
+                                 T, T, Transpose, Transpose);                                                   \
+    template Event gemm_wide<T>(Queue&, int, int, int, const MatrixView<T, MatrixFormat::Dense>&,             \
+                                const MatrixView<T, MatrixFormat::Dense>&, const MatrixView<T, MatrixFormat::Dense>&, \
+                                T, T, Transpose, Transpose);
+
+GEMM_LAUNCHERS(float)
+GEMM_LAUNCHERS(double)
+GEMM_LAUNCHERS(std::complex<float>)
+GEMM_LAUNCHERS(std::complex<double>)
+#undef GEMM_LAUNCHERS
+
+template Event gemm_small<float>(Queue&, const MatrixView<float, MatrixFormat::Dense>&,
+                                 const MatrixView<float, MatrixFormat::Dense>&,
+                                 const MatrixView<float, MatrixFormat::Dense>&, float, float, Transpose, Transpose);
+template Event gemm_small<double>(Queue&, const MatrixView<double, MatrixFormat::Dense>&,
+                                  const MatrixView<double, MatrixFormat::Dense>&,
+                                  const MatrixView<double, MatrixFormat::Dense>&, double, double, Transpose,
+                                  Transpose);
 
 } // namespace batchlas::sycl_gemm

@@ -315,7 +315,7 @@ namespace batchlas {
 
     // Explicit instantiations: ONLY the `backend::`-qualified vendor entry
     // points. The public spmm / spmm_buffer_size definitions and their
-    // instantiations live in src/dispatch/entry_points/sparse.cc, so naming them
+    // instantiations live in src/ops/spmm/spmm.cc, so naming them
     // here would be a duplicate symbol.
     //
     // Signatures come from the `sig` namespace beside the public declaration

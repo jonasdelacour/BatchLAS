@@ -45,10 +45,6 @@
     #include <rocsolver/rocsolver.h>
 #endif
 
-#ifdef USE_MAGMA
-    #include <magma_v2.h>
-#endif
-
 #if BATCHLAS_HAS_MKL_BACKEND
     #include <oneapi/mkl/blas.hpp>
     #include <oneapi/mkl/lapack.hpp>

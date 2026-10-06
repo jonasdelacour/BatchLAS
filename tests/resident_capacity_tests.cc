@@ -54,7 +54,7 @@ TEST(ResidentCapacity, SyntheticFootprintIsActuallyNonMonotone) {
     EXPECT_EQ(synth_bytes(389), 49792u);
 }
 
-// THE ARMED PROPERTY. supports() spells capacity as the contiguous `order <= cta_max_n`, so
+// THE ARMED PROPERTY. can_run spells capacity as the contiguous `order <= cta_max_n`, so
 // the ceiling must be the largest n at which EVERY order up to n fits -- not the largest n
 // that happens to fit. A walk that skipped a miss advertises orders that cannot launch.
 TEST(ResidentCapacity, CeilingIsContiguousAcrossTheNonMonotoneHole) {
@@ -149,7 +149,7 @@ TEST(ResidentCapacity, PackingIsBoundedByAllThreeLimits) {
 }
 
 // 3. THE SHIPPED CEILINGS, PER TYPE. Pinned in BOTH scales: the occupancy-scaled figure is
-// what supports() advertises, the unscaled one is what a blocked driver's panel can be held
+// what can_run advertises, the unscaled one is what a blocked driver's panel can be held
 // at. evidence: docs/perf/potrf.md#the-shipped-ceilings-pinned-in-both-scales
 
 template <typename T> struct Ceilings;
@@ -198,7 +198,7 @@ TYPED_TEST(CapacityCeilingTest, ShippedCeilingsAtTheReferenceBudget) {
 
 // The advertised capacity must be a strict subset of what a work-group can hold, or the
 // occupancy target is not being applied; and the fit predicates must agree with their own
-// ceilings, or supports() and the entry-point gate can disagree.
+// ceilings, or can_run and the entry-point gate can disagree.
 TYPED_TEST(CapacityCeilingTest, AdvertisedIsStrictlyInsideResident) {
     using T = TypeParam;
     constexpr std::size_t kRef = 97280;

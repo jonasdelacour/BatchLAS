@@ -1,0 +1,1411 @@
+# op=gemv dtype=cdouble device=sm_120 batchlas=424a45bc kernels=unknown date=2026-10-05 source=transcribed:424a45bc
+# transcriber_csv=tuned/transcribed/gemv.sm_120.csv (the old router's preference order per grid cell, untimed)
+# keys: trans:exact out:log red:log batch:log
+trans=N out=1 red=1 batch=1 | vendor - | direct -
+trans=N out=1 red=1 batch=16 | vendor - | direct -
+trans=N out=1 red=1 batch=128 | vendor - | direct -
+trans=N out=1 red=1 batch=319 | vendor - | direct -
+trans=N out=1 red=1 batch=320 | vendor - | direct -
+trans=N out=1 red=1 batch=1024 | vendor - | direct -
+trans=N out=1 red=1 batch=8192 | vendor - | direct -
+trans=N out=1 red=1 batch=32768 | vendor - | direct -
+trans=N out=1 red=8 batch=1 | vendor - | direct -
+trans=N out=1 red=8 batch=16 | vendor - | direct -
+trans=N out=1 red=8 batch=128 | vendor - | direct -
+trans=N out=1 red=8 batch=319 | vendor - | direct -
+trans=N out=1 red=8 batch=320 | vendor - | direct -
+trans=N out=1 red=8 batch=1024 | vendor - | direct -
+trans=N out=1 red=8 batch=8192 | vendor - | direct -
+trans=N out=1 red=8 batch=32768 | vendor - | direct -
+trans=N out=1 red=32 batch=1 | vendor - | direct -
+trans=N out=1 red=32 batch=16 | vendor - | direct -
+trans=N out=1 red=32 batch=128 | vendor - | direct -
+trans=N out=1 red=32 batch=319 | vendor - | direct -
+trans=N out=1 red=32 batch=320 | vendor - | direct -
+trans=N out=1 red=32 batch=1024 | vendor - | direct -
+trans=N out=1 red=32 batch=8192 | vendor - | direct -
+trans=N out=1 red=32 batch=32768 | vendor - | direct -
+trans=N out=1 red=63 batch=1 | vendor - | direct -
+trans=N out=1 red=63 batch=16 | vendor - | direct -
+trans=N out=1 red=63 batch=128 | vendor - | direct -
+trans=N out=1 red=63 batch=319 | vendor - | direct -
+trans=N out=1 red=63 batch=320 | vendor - | direct -
+trans=N out=1 red=63 batch=1024 | vendor - | direct -
+trans=N out=1 red=63 batch=8192 | vendor - | direct -
+trans=N out=1 red=63 batch=32768 | vendor - | direct -
+trans=N out=1 red=64 batch=1 | vendor - | direct -
+trans=N out=1 red=64 batch=16 | vendor - | direct -
+trans=N out=1 red=64 batch=128 | vendor - | direct -
+trans=N out=1 red=64 batch=319 | vendor - | direct -
+trans=N out=1 red=64 batch=320 | vendor - | direct -
+trans=N out=1 red=64 batch=1024 | vendor - | direct -
+trans=N out=1 red=64 batch=8192 | vendor - | direct -
+trans=N out=1 red=64 batch=32768 | vendor - | direct -
+trans=N out=1 red=128 batch=1 | vendor - | direct -
+trans=N out=1 red=128 batch=16 | vendor - | direct -
+trans=N out=1 red=128 batch=128 | vendor - | direct -
+trans=N out=1 red=128 batch=319 | vendor - | direct -
+trans=N out=1 red=128 batch=320 | vendor - | direct -
+trans=N out=1 red=128 batch=1024 | vendor - | direct -
+trans=N out=1 red=128 batch=8192 | vendor - | direct -
+trans=N out=1 red=128 batch=32768 | vendor - | direct -
+trans=N out=1 red=352 batch=1 | vendor - | direct -
+trans=N out=1 red=352 batch=16 | vendor - | direct -
+trans=N out=1 red=352 batch=128 | vendor - | direct -
+trans=N out=1 red=352 batch=319 | vendor - | direct -
+trans=N out=1 red=352 batch=320 | vendor - | direct -
+trans=N out=1 red=352 batch=1024 | vendor - | direct -
+trans=N out=1 red=352 batch=8192 | vendor - | direct -
+trans=N out=1 red=352 batch=32768 | vendor - | direct -
+trans=N out=1 red=353 batch=1 | vendor - | direct -
+trans=N out=1 red=353 batch=16 | vendor - | direct -
+trans=N out=1 red=353 batch=128 | vendor - | direct -
+trans=N out=1 red=353 batch=319 | vendor - | direct -
+trans=N out=1 red=353 batch=320 | vendor - | direct -
+trans=N out=1 red=353 batch=1024 | vendor - | direct -
+trans=N out=1 red=353 batch=8192 | vendor - | direct -
+trans=N out=1 red=353 batch=32768 | vendor - | direct -
+trans=N out=1 red=1024 batch=1 | vendor - | direct -
+trans=N out=1 red=1024 batch=16 | vendor - | direct -
+trans=N out=1 red=1024 batch=128 | vendor - | direct -
+trans=N out=1 red=1024 batch=319 | vendor - | direct -
+trans=N out=1 red=1024 batch=320 | vendor - | direct -
+trans=N out=1 red=1024 batch=1024 | vendor - | direct -
+trans=N out=1 red=1024 batch=8192 | vendor - | direct -
+trans=N out=1 red=1024 batch=32768 | vendor - | direct -
+trans=N out=1 red=4096 batch=1 | vendor - | direct -
+trans=N out=1 red=4096 batch=16 | vendor - | direct -
+trans=N out=1 red=4096 batch=128 | vendor - | direct -
+trans=N out=1 red=4096 batch=319 | vendor - | direct -
+trans=N out=1 red=4096 batch=320 | vendor - | direct -
+trans=N out=1 red=4096 batch=1024 | vendor - | direct -
+trans=N out=1 red=4096 batch=8192 | vendor - | direct -
+trans=N out=1 red=4096 batch=32768 | vendor - | direct -
+trans=N out=1 red=32768 batch=1 | vendor - | direct -
+trans=N out=1 red=32768 batch=16 | vendor - | direct -
+trans=N out=1 red=32768 batch=128 | vendor - | direct -
+trans=N out=1 red=32768 batch=319 | vendor - | direct -
+trans=N out=1 red=32768 batch=320 | vendor - | direct -
+trans=N out=1 red=32768 batch=1024 | vendor - | direct -
+trans=N out=1 red=32768 batch=8192 | vendor - | direct -
+trans=N out=1 red=32768 batch=32768 | vendor - | direct -
+trans=N out=8 red=1 batch=1 | vendor - | direct -
+trans=N out=8 red=1 batch=16 | vendor - | direct -
+trans=N out=8 red=1 batch=128 | vendor - | direct -
+trans=N out=8 red=1 batch=319 | vendor - | direct -
+trans=N out=8 red=1 batch=320 | vendor - | direct -
+trans=N out=8 red=1 batch=1024 | vendor - | direct -
+trans=N out=8 red=1 batch=8192 | vendor - | direct -
+trans=N out=8 red=1 batch=32768 | vendor - | direct -
+trans=N out=8 red=8 batch=1 | vendor - | direct -
+trans=N out=8 red=8 batch=16 | vendor - | direct -
+trans=N out=8 red=8 batch=128 | vendor - | direct -
+trans=N out=8 red=8 batch=319 | vendor - | direct -
+trans=N out=8 red=8 batch=320 | vendor - | direct -
+trans=N out=8 red=8 batch=1024 | vendor - | direct -
+trans=N out=8 red=8 batch=8192 | vendor - | direct -
+trans=N out=8 red=8 batch=32768 | vendor - | direct -
+trans=N out=8 red=32 batch=1 | vendor - | direct -
+trans=N out=8 red=32 batch=16 | vendor - | direct -
+trans=N out=8 red=32 batch=128 | vendor - | direct -
+trans=N out=8 red=32 batch=319 | vendor - | direct -
+trans=N out=8 red=32 batch=320 | vendor - | direct -
+trans=N out=8 red=32 batch=1024 | vendor - | direct -
+trans=N out=8 red=32 batch=8192 | vendor - | direct -
+trans=N out=8 red=32 batch=32768 | vendor - | direct -
+trans=N out=8 red=63 batch=1 | vendor - | direct -
+trans=N out=8 red=63 batch=16 | vendor - | direct -
+trans=N out=8 red=63 batch=128 | vendor - | direct -
+trans=N out=8 red=63 batch=319 | vendor - | direct -
+trans=N out=8 red=63 batch=320 | vendor - | direct -
+trans=N out=8 red=63 batch=1024 | vendor - | direct -
+trans=N out=8 red=63 batch=8192 | vendor - | direct -
+trans=N out=8 red=63 batch=32768 | vendor - | direct -
+trans=N out=8 red=64 batch=1 | vendor - | direct -
+trans=N out=8 red=64 batch=16 | vendor - | direct -
+trans=N out=8 red=64 batch=128 | vendor - | direct -
+trans=N out=8 red=64 batch=319 | vendor - | direct -
+trans=N out=8 red=64 batch=320 | vendor - | direct -
+trans=N out=8 red=64 batch=1024 | vendor - | direct -
+trans=N out=8 red=64 batch=8192 | vendor - | direct -
+trans=N out=8 red=64 batch=32768 | vendor - | direct -
+trans=N out=8 red=128 batch=1 | vendor - | direct -
+trans=N out=8 red=128 batch=16 | vendor - | direct -
+trans=N out=8 red=128 batch=128 | vendor - | direct -
+trans=N out=8 red=128 batch=319 | vendor - | direct -
+trans=N out=8 red=128 batch=320 | vendor - | direct -
+trans=N out=8 red=128 batch=1024 | vendor - | direct -
+trans=N out=8 red=128 batch=8192 | vendor - | direct -
+trans=N out=8 red=128 batch=32768 | vendor - | direct -
+trans=N out=8 red=352 batch=1 | vendor - | direct -
+trans=N out=8 red=352 batch=16 | vendor - | direct -
+trans=N out=8 red=352 batch=128 | vendor - | direct -
+trans=N out=8 red=352 batch=319 | vendor - | direct -
+trans=N out=8 red=352 batch=320 | vendor - | direct -
+trans=N out=8 red=352 batch=1024 | vendor - | direct -
+trans=N out=8 red=352 batch=8192 | vendor - | direct -
+trans=N out=8 red=352 batch=32768 | vendor - | direct -
+trans=N out=8 red=353 batch=1 | vendor - | direct -
+trans=N out=8 red=353 batch=16 | vendor - | direct -
+trans=N out=8 red=353 batch=128 | vendor - | direct -
+trans=N out=8 red=353 batch=319 | vendor - | direct -
+trans=N out=8 red=353 batch=320 | vendor - | direct -
+trans=N out=8 red=353 batch=1024 | vendor - | direct -
+trans=N out=8 red=353 batch=8192 | vendor - | direct -
+trans=N out=8 red=353 batch=32768 | vendor - | direct -
+trans=N out=8 red=1024 batch=1 | vendor - | direct -
+trans=N out=8 red=1024 batch=16 | vendor - | direct -
+trans=N out=8 red=1024 batch=128 | vendor - | direct -
+trans=N out=8 red=1024 batch=319 | vendor - | direct -
+trans=N out=8 red=1024 batch=320 | vendor - | direct -
+trans=N out=8 red=1024 batch=1024 | vendor - | direct -
+trans=N out=8 red=1024 batch=8192 | vendor - | direct -
+trans=N out=8 red=1024 batch=32768 | vendor - | direct -
+trans=N out=8 red=4096 batch=1 | vendor - | direct -
+trans=N out=8 red=4096 batch=16 | vendor - | direct -
+trans=N out=8 red=4096 batch=128 | vendor - | direct -
+trans=N out=8 red=4096 batch=319 | vendor - | direct -
+trans=N out=8 red=4096 batch=320 | vendor - | direct -
+trans=N out=8 red=4096 batch=1024 | vendor - | direct -
+trans=N out=8 red=4096 batch=8192 | vendor - | direct -
+trans=N out=8 red=4096 batch=32768 | vendor - | direct -
+trans=N out=8 red=32768 batch=1 | vendor - | direct -
+trans=N out=8 red=32768 batch=16 | vendor - | direct -
+trans=N out=8 red=32768 batch=128 | vendor - | direct -
+trans=N out=8 red=32768 batch=319 | vendor - | direct -
+trans=N out=8 red=32768 batch=320 | vendor - | direct -
+trans=N out=8 red=32768 batch=1024 | vendor - | direct -
+trans=N out=8 red=32768 batch=8192 | vendor - | direct -
+trans=N out=8 red=32768 batch=32768 | vendor - | direct -
+trans=N out=64 red=1 batch=1 | vendor - | direct -
+trans=N out=64 red=1 batch=16 | vendor - | direct -
+trans=N out=64 red=1 batch=128 | vendor - | direct -
+trans=N out=64 red=1 batch=319 | vendor - | direct -
+trans=N out=64 red=1 batch=320 | vendor - | direct -
+trans=N out=64 red=1 batch=1024 | vendor - | direct -
+trans=N out=64 red=1 batch=8192 | vendor - | direct -
+trans=N out=64 red=1 batch=32768 | vendor - | direct -
+trans=N out=64 red=8 batch=1 | vendor - | direct -
+trans=N out=64 red=8 batch=16 | vendor - | direct -
+trans=N out=64 red=8 batch=128 | vendor - | direct -
+trans=N out=64 red=8 batch=319 | vendor - | direct -
+trans=N out=64 red=8 batch=320 | vendor - | direct -
+trans=N out=64 red=8 batch=1024 | vendor - | direct -
+trans=N out=64 red=8 batch=8192 | vendor - | direct -
+trans=N out=64 red=8 batch=32768 | vendor - | direct -
+trans=N out=64 red=32 batch=1 | vendor - | direct -
+trans=N out=64 red=32 batch=16 | vendor - | direct -
+trans=N out=64 red=32 batch=128 | vendor - | direct -
+trans=N out=64 red=32 batch=319 | vendor - | direct -
+trans=N out=64 red=32 batch=320 | vendor - | direct -
+trans=N out=64 red=32 batch=1024 | vendor - | direct -
+trans=N out=64 red=32 batch=8192 | vendor - | direct -
+trans=N out=64 red=32 batch=32768 | vendor - | direct -
+trans=N out=64 red=63 batch=1 | vendor - | direct -
+trans=N out=64 red=63 batch=16 | vendor - | direct -
+trans=N out=64 red=63 batch=128 | vendor - | direct -
+trans=N out=64 red=63 batch=319 | vendor - | direct -
+trans=N out=64 red=63 batch=320 | vendor - | direct -
+trans=N out=64 red=63 batch=1024 | vendor - | direct -
+trans=N out=64 red=63 batch=8192 | vendor - | direct -
+trans=N out=64 red=63 batch=32768 | vendor - | direct -
+trans=N out=64 red=64 batch=1 | vendor - | direct -
+trans=N out=64 red=64 batch=16 | vendor - | direct -
+trans=N out=64 red=64 batch=128 | vendor - | direct -
+trans=N out=64 red=64 batch=319 | vendor - | direct -
+trans=N out=64 red=64 batch=320 | vendor - | direct -
+trans=N out=64 red=64 batch=1024 | vendor - | direct -
+trans=N out=64 red=64 batch=8192 | vendor - | direct -
+trans=N out=64 red=64 batch=32768 | vendor - | direct -
+trans=N out=64 red=128 batch=1 | vendor - | direct -
+trans=N out=64 red=128 batch=16 | vendor - | direct -
+trans=N out=64 red=128 batch=128 | vendor - | direct -
+trans=N out=64 red=128 batch=319 | vendor - | direct -
+trans=N out=64 red=128 batch=320 | vendor - | direct -
+trans=N out=64 red=128 batch=1024 | vendor - | direct -
+trans=N out=64 red=128 batch=8192 | vendor - | direct -
+trans=N out=64 red=128 batch=32768 | vendor - | direct -
+trans=N out=64 red=352 batch=1 | vendor - | direct -
+trans=N out=64 red=352 batch=16 | vendor - | direct -
+trans=N out=64 red=352 batch=128 | vendor - | direct -
+trans=N out=64 red=352 batch=319 | vendor - | direct -
+trans=N out=64 red=352 batch=320 | vendor - | direct -
+trans=N out=64 red=352 batch=1024 | vendor - | direct -
+trans=N out=64 red=352 batch=8192 | vendor - | direct -
+trans=N out=64 red=352 batch=32768 | vendor - | direct -
+trans=N out=64 red=353 batch=1 | vendor - | direct -
+trans=N out=64 red=353 batch=16 | vendor - | direct -
+trans=N out=64 red=353 batch=128 | vendor - | direct -
+trans=N out=64 red=353 batch=319 | vendor - | direct -
+trans=N out=64 red=353 batch=320 | vendor - | direct -
+trans=N out=64 red=353 batch=1024 | vendor - | direct -
+trans=N out=64 red=353 batch=8192 | vendor - | direct -
+trans=N out=64 red=353 batch=32768 | vendor - | direct -
+trans=N out=64 red=1024 batch=1 | vendor - | direct -
+trans=N out=64 red=1024 batch=16 | vendor - | direct -
+trans=N out=64 red=1024 batch=128 | vendor - | direct -
+trans=N out=64 red=1024 batch=319 | vendor - | direct -
+trans=N out=64 red=1024 batch=320 | vendor - | direct -
+trans=N out=64 red=1024 batch=1024 | vendor - | direct -
+trans=N out=64 red=1024 batch=8192 | vendor - | direct -
+trans=N out=64 red=1024 batch=32768 | vendor - | direct -
+trans=N out=64 red=4096 batch=1 | vendor - | direct -
+trans=N out=64 red=4096 batch=16 | vendor - | direct -
+trans=N out=64 red=4096 batch=128 | vendor - | direct -
+trans=N out=64 red=4096 batch=319 | vendor - | direct -
+trans=N out=64 red=4096 batch=320 | vendor - | direct -
+trans=N out=64 red=4096 batch=1024 | vendor - | direct -
+trans=N out=64 red=4096 batch=8192 | vendor - | direct -
+trans=N out=64 red=4096 batch=32768 | vendor - | direct -
+trans=N out=64 red=32768 batch=1 | vendor - | direct -
+trans=N out=64 red=32768 batch=16 | vendor - | direct -
+trans=N out=64 red=32768 batch=128 | vendor - | direct -
+trans=N out=64 red=32768 batch=319 | vendor - | direct -
+trans=N out=64 red=32768 batch=320 | vendor - | direct -
+trans=N out=64 red=32768 batch=1024 | vendor - | direct -
+trans=N out=64 red=32768 batch=8192 | vendor - | direct -
+trans=N out=64 red=32768 batch=32768 | vendor - | direct -
+trans=N out=255 red=1 batch=1 | vendor - | direct -
+trans=N out=255 red=1 batch=16 | vendor - | direct -
+trans=N out=255 red=1 batch=128 | vendor - | direct -
+trans=N out=255 red=1 batch=319 | vendor - | direct -
+trans=N out=255 red=1 batch=320 | vendor - | direct -
+trans=N out=255 red=1 batch=1024 | vendor - | direct -
+trans=N out=255 red=1 batch=8192 | vendor - | direct -
+trans=N out=255 red=1 batch=32768 | vendor - | direct -
+trans=N out=255 red=8 batch=1 | vendor - | direct -
+trans=N out=255 red=8 batch=16 | vendor - | direct -
+trans=N out=255 red=8 batch=128 | vendor - | direct -
+trans=N out=255 red=8 batch=319 | vendor - | direct -
+trans=N out=255 red=8 batch=320 | vendor - | direct -
+trans=N out=255 red=8 batch=1024 | vendor - | direct -
+trans=N out=255 red=8 batch=8192 | vendor - | direct -
+trans=N out=255 red=8 batch=32768 | vendor - | direct -
+trans=N out=255 red=32 batch=1 | vendor - | direct -
+trans=N out=255 red=32 batch=16 | vendor - | direct -
+trans=N out=255 red=32 batch=128 | vendor - | direct -
+trans=N out=255 red=32 batch=319 | vendor - | direct -
+trans=N out=255 red=32 batch=320 | vendor - | direct -
+trans=N out=255 red=32 batch=1024 | vendor - | direct -
+trans=N out=255 red=32 batch=8192 | vendor - | direct -
+trans=N out=255 red=32 batch=32768 | vendor - | direct -
+trans=N out=255 red=63 batch=1 | vendor - | direct -
+trans=N out=255 red=63 batch=16 | vendor - | direct -
+trans=N out=255 red=63 batch=128 | vendor - | direct -
+trans=N out=255 red=63 batch=319 | vendor - | direct -
+trans=N out=255 red=63 batch=320 | vendor - | direct -
+trans=N out=255 red=63 batch=1024 | vendor - | direct -
+trans=N out=255 red=63 batch=8192 | vendor - | direct -
+trans=N out=255 red=63 batch=32768 | vendor - | direct -
+trans=N out=255 red=64 batch=1 | vendor - | direct -
+trans=N out=255 red=64 batch=16 | vendor - | direct -
+trans=N out=255 red=64 batch=128 | vendor - | direct -
+trans=N out=255 red=64 batch=319 | vendor - | direct -
+trans=N out=255 red=64 batch=320 | vendor - | direct -
+trans=N out=255 red=64 batch=1024 | vendor - | direct -
+trans=N out=255 red=64 batch=8192 | vendor - | direct -
+trans=N out=255 red=64 batch=32768 | vendor - | direct -
+trans=N out=255 red=128 batch=1 | vendor - | direct -
+trans=N out=255 red=128 batch=16 | vendor - | direct -
+trans=N out=255 red=128 batch=128 | vendor - | direct -
+trans=N out=255 red=128 batch=319 | vendor - | direct -
+trans=N out=255 red=128 batch=320 | vendor - | direct -
+trans=N out=255 red=128 batch=1024 | vendor - | direct -
+trans=N out=255 red=128 batch=8192 | vendor - | direct -
+trans=N out=255 red=128 batch=32768 | vendor - | direct -
+trans=N out=255 red=352 batch=1 | vendor - | direct -
+trans=N out=255 red=352 batch=16 | vendor - | direct -
+trans=N out=255 red=352 batch=128 | vendor - | direct -
+trans=N out=255 red=352 batch=319 | vendor - | direct -
+trans=N out=255 red=352 batch=320 | vendor - | direct -
+trans=N out=255 red=352 batch=1024 | vendor - | direct -
+trans=N out=255 red=352 batch=8192 | vendor - | direct -
+trans=N out=255 red=352 batch=32768 | vendor - | direct -
+trans=N out=255 red=353 batch=1 | vendor - | direct -
+trans=N out=255 red=353 batch=16 | vendor - | direct -
+trans=N out=255 red=353 batch=128 | vendor - | direct -
+trans=N out=255 red=353 batch=319 | vendor - | direct -
+trans=N out=255 red=353 batch=320 | vendor - | direct -
+trans=N out=255 red=353 batch=1024 | vendor - | direct -
+trans=N out=255 red=353 batch=8192 | vendor - | direct -
+trans=N out=255 red=353 batch=32768 | vendor - | direct -
+trans=N out=255 red=1024 batch=1 | vendor - | direct -
+trans=N out=255 red=1024 batch=16 | vendor - | direct -
+trans=N out=255 red=1024 batch=128 | vendor - | direct -
+trans=N out=255 red=1024 batch=319 | vendor - | direct -
+trans=N out=255 red=1024 batch=320 | vendor - | direct -
+trans=N out=255 red=1024 batch=1024 | vendor - | direct -
+trans=N out=255 red=1024 batch=8192 | vendor - | direct -
+trans=N out=255 red=1024 batch=32768 | vendor - | direct -
+trans=N out=255 red=4096 batch=1 | vendor - | direct -
+trans=N out=255 red=4096 batch=16 | vendor - | direct -
+trans=N out=255 red=4096 batch=128 | vendor - | direct -
+trans=N out=255 red=4096 batch=319 | vendor - | direct -
+trans=N out=255 red=4096 batch=320 | vendor - | direct -
+trans=N out=255 red=4096 batch=1024 | vendor - | direct -
+trans=N out=255 red=4096 batch=8192 | vendor - | direct -
+trans=N out=255 red=4096 batch=32768 | vendor - | direct -
+trans=N out=255 red=32768 batch=1 | vendor - | direct -
+trans=N out=255 red=32768 batch=16 | vendor - | direct -
+trans=N out=255 red=32768 batch=128 | vendor - | direct -
+trans=N out=255 red=32768 batch=319 | vendor - | direct -
+trans=N out=255 red=32768 batch=320 | vendor - | direct -
+trans=N out=255 red=32768 batch=1024 | vendor - | direct -
+trans=N out=255 red=32768 batch=8192 | vendor - | direct -
+trans=N out=255 red=32768 batch=32768 | vendor - | direct -
+trans=N out=256 red=1 batch=1 | vendor - | direct -
+trans=N out=256 red=1 batch=16 | vendor - | direct -
+trans=N out=256 red=1 batch=128 | vendor - | direct -
+trans=N out=256 red=1 batch=319 | vendor - | direct -
+trans=N out=256 red=1 batch=320 | vendor - | direct -
+trans=N out=256 red=1 batch=1024 | vendor - | direct -
+trans=N out=256 red=1 batch=8192 | vendor - | direct -
+trans=N out=256 red=1 batch=32768 | vendor - | direct -
+trans=N out=256 red=8 batch=1 | vendor - | direct -
+trans=N out=256 red=8 batch=16 | vendor - | direct -
+trans=N out=256 red=8 batch=128 | vendor - | direct -
+trans=N out=256 red=8 batch=319 | vendor - | direct -
+trans=N out=256 red=8 batch=320 | vendor - | direct -
+trans=N out=256 red=8 batch=1024 | vendor - | direct -
+trans=N out=256 red=8 batch=8192 | vendor - | direct -
+trans=N out=256 red=8 batch=32768 | vendor - | direct -
+trans=N out=256 red=32 batch=1 | vendor - | direct -
+trans=N out=256 red=32 batch=16 | vendor - | direct -
+trans=N out=256 red=32 batch=128 | vendor - | direct -
+trans=N out=256 red=32 batch=319 | vendor - | direct -
+trans=N out=256 red=32 batch=320 | vendor - | direct -
+trans=N out=256 red=32 batch=1024 | vendor - | direct -
+trans=N out=256 red=32 batch=8192 | vendor - | direct -
+trans=N out=256 red=32 batch=32768 | vendor - | direct -
+trans=N out=256 red=63 batch=1 | vendor - | direct -
+trans=N out=256 red=63 batch=16 | vendor - | direct -
+trans=N out=256 red=63 batch=128 | vendor - | direct -
+trans=N out=256 red=63 batch=319 | vendor - | direct -
+trans=N out=256 red=63 batch=320 | vendor - | direct -
+trans=N out=256 red=63 batch=1024 | vendor - | direct -
+trans=N out=256 red=63 batch=8192 | vendor - | direct -
+trans=N out=256 red=63 batch=32768 | vendor - | direct -
+trans=N out=256 red=64 batch=1 | vendor - | direct -
+trans=N out=256 red=64 batch=16 | vendor - | direct -
+trans=N out=256 red=64 batch=128 | vendor - | direct -
+trans=N out=256 red=64 batch=319 | vendor - | direct -
+trans=N out=256 red=64 batch=320 | vendor - | direct -
+trans=N out=256 red=64 batch=1024 | vendor - | direct -
+trans=N out=256 red=64 batch=8192 | vendor - | direct -
+trans=N out=256 red=64 batch=32768 | vendor - | direct -
+trans=N out=256 red=128 batch=1 | vendor - | direct -
+trans=N out=256 red=128 batch=16 | vendor - | direct -
+trans=N out=256 red=128 batch=128 | vendor - | direct -
+trans=N out=256 red=128 batch=319 | vendor - | direct -
+trans=N out=256 red=128 batch=320 | vendor - | direct -
+trans=N out=256 red=128 batch=1024 | vendor - | direct -
+trans=N out=256 red=128 batch=8192 | vendor - | direct -
+trans=N out=256 red=128 batch=32768 | vendor - | direct -
+trans=N out=256 red=352 batch=1 | vendor - | direct -
+trans=N out=256 red=352 batch=16 | vendor - | direct -
+trans=N out=256 red=352 batch=128 | vendor - | direct -
+trans=N out=256 red=352 batch=319 | vendor - | direct -
+trans=N out=256 red=352 batch=320 | vendor - | direct -
+trans=N out=256 red=352 batch=1024 | vendor - | direct -
+trans=N out=256 red=352 batch=8192 | vendor - | direct -
+trans=N out=256 red=352 batch=32768 | vendor - | direct -
+trans=N out=256 red=353 batch=1 | vendor - | direct -
+trans=N out=256 red=353 batch=16 | vendor - | direct -
+trans=N out=256 red=353 batch=128 | vendor - | direct -
+trans=N out=256 red=353 batch=319 | vendor - | direct -
+trans=N out=256 red=353 batch=320 | vendor - | direct -
+trans=N out=256 red=353 batch=1024 | vendor - | direct -
+trans=N out=256 red=353 batch=8192 | vendor - | direct -
+trans=N out=256 red=353 batch=32768 | vendor - | direct -
+trans=N out=256 red=1024 batch=1 | vendor - | direct -
+trans=N out=256 red=1024 batch=16 | vendor - | direct -
+trans=N out=256 red=1024 batch=128 | vendor - | direct -
+trans=N out=256 red=1024 batch=319 | vendor - | direct -
+trans=N out=256 red=1024 batch=320 | vendor - | direct -
+trans=N out=256 red=1024 batch=1024 | vendor - | direct -
+trans=N out=256 red=1024 batch=8192 | vendor - | direct -
+trans=N out=256 red=1024 batch=32768 | vendor - | direct -
+trans=N out=256 red=4096 batch=1 | vendor - | direct -
+trans=N out=256 red=4096 batch=16 | vendor - | direct -
+trans=N out=256 red=4096 batch=128 | vendor - | direct -
+trans=N out=256 red=4096 batch=319 | vendor - | direct -
+trans=N out=256 red=4096 batch=320 | vendor - | direct -
+trans=N out=256 red=4096 batch=1024 | vendor - | direct -
+trans=N out=256 red=4096 batch=8192 | vendor - | direct -
+trans=N out=256 red=4096 batch=32768 | vendor - | direct -
+trans=N out=256 red=32768 batch=1 | vendor - | direct -
+trans=N out=256 red=32768 batch=16 | vendor - | direct -
+trans=N out=256 red=32768 batch=128 | vendor - | direct -
+trans=N out=256 red=32768 batch=319 | vendor - | direct -
+trans=N out=256 red=32768 batch=320 | vendor - | direct -
+trans=N out=256 red=32768 batch=1024 | vendor - | direct -
+trans=N out=256 red=32768 batch=8192 | vendor - | direct -
+trans=N out=256 red=32768 batch=32768 | vendor - | direct -
+trans=N out=1024 red=1 batch=1 | vendor - | direct -
+trans=N out=1024 red=1 batch=16 | vendor - | direct -
+trans=N out=1024 red=1 batch=128 | vendor - | direct -
+trans=N out=1024 red=1 batch=319 | vendor - | direct -
+trans=N out=1024 red=1 batch=320 | vendor - | direct -
+trans=N out=1024 red=1 batch=1024 | vendor - | direct -
+trans=N out=1024 red=1 batch=8192 | vendor - | direct -
+trans=N out=1024 red=1 batch=32768 | vendor - | direct -
+trans=N out=1024 red=8 batch=1 | vendor - | direct -
+trans=N out=1024 red=8 batch=16 | vendor - | direct -
+trans=N out=1024 red=8 batch=128 | vendor - | direct -
+trans=N out=1024 red=8 batch=319 | vendor - | direct -
+trans=N out=1024 red=8 batch=320 | vendor - | direct -
+trans=N out=1024 red=8 batch=1024 | vendor - | direct -
+trans=N out=1024 red=8 batch=8192 | vendor - | direct -
+trans=N out=1024 red=8 batch=32768 | vendor - | direct -
+trans=N out=1024 red=32 batch=1 | vendor - | direct -
+trans=N out=1024 red=32 batch=16 | vendor - | direct -
+trans=N out=1024 red=32 batch=128 | vendor - | direct -
+trans=N out=1024 red=32 batch=319 | vendor - | direct -
+trans=N out=1024 red=32 batch=320 | vendor - | direct -
+trans=N out=1024 red=32 batch=1024 | vendor - | direct -
+trans=N out=1024 red=32 batch=8192 | vendor - | direct -
+trans=N out=1024 red=32 batch=32768 | vendor - | direct -
+trans=N out=1024 red=63 batch=1 | vendor - | direct -
+trans=N out=1024 red=63 batch=16 | vendor - | direct -
+trans=N out=1024 red=63 batch=128 | vendor - | direct -
+trans=N out=1024 red=63 batch=319 | vendor - | direct -
+trans=N out=1024 red=63 batch=320 | vendor - | direct -
+trans=N out=1024 red=63 batch=1024 | vendor - | direct -
+trans=N out=1024 red=63 batch=8192 | vendor - | direct -
+trans=N out=1024 red=63 batch=32768 | vendor - | direct -
+trans=N out=1024 red=64 batch=1 | vendor - | direct -
+trans=N out=1024 red=64 batch=16 | vendor - | direct -
+trans=N out=1024 red=64 batch=128 | vendor - | direct -
+trans=N out=1024 red=64 batch=319 | vendor - | direct -
+trans=N out=1024 red=64 batch=320 | vendor - | direct -
+trans=N out=1024 red=64 batch=1024 | vendor - | direct -
+trans=N out=1024 red=64 batch=8192 | vendor - | direct -
+trans=N out=1024 red=64 batch=32768 | vendor - | direct -
+trans=N out=1024 red=128 batch=1 | vendor - | direct -
+trans=N out=1024 red=128 batch=16 | vendor - | direct -
+trans=N out=1024 red=128 batch=128 | vendor - | direct -
+trans=N out=1024 red=128 batch=319 | vendor - | direct -
+trans=N out=1024 red=128 batch=320 | vendor - | direct -
+trans=N out=1024 red=128 batch=1024 | vendor - | direct -
+trans=N out=1024 red=128 batch=8192 | vendor - | direct -
+trans=N out=1024 red=128 batch=32768 | vendor - | direct -
+trans=N out=1024 red=352 batch=1 | vendor - | direct -
+trans=N out=1024 red=352 batch=16 | vendor - | direct -
+trans=N out=1024 red=352 batch=128 | vendor - | direct -
+trans=N out=1024 red=352 batch=319 | vendor - | direct -
+trans=N out=1024 red=352 batch=320 | vendor - | direct -
+trans=N out=1024 red=352 batch=1024 | vendor - | direct -
+trans=N out=1024 red=352 batch=8192 | vendor - | direct -
+trans=N out=1024 red=352 batch=32768 | vendor - | direct -
+trans=N out=1024 red=353 batch=1 | vendor - | direct -
+trans=N out=1024 red=353 batch=16 | vendor - | direct -
+trans=N out=1024 red=353 batch=128 | vendor - | direct -
+trans=N out=1024 red=353 batch=319 | vendor - | direct -
+trans=N out=1024 red=353 batch=320 | vendor - | direct -
+trans=N out=1024 red=353 batch=1024 | vendor - | direct -
+trans=N out=1024 red=353 batch=8192 | vendor - | direct -
+trans=N out=1024 red=353 batch=32768 | vendor - | direct -
+trans=N out=1024 red=1024 batch=1 | vendor - | direct -
+trans=N out=1024 red=1024 batch=16 | vendor - | direct -
+trans=N out=1024 red=1024 batch=128 | vendor - | direct -
+trans=N out=1024 red=1024 batch=319 | vendor - | direct -
+trans=N out=1024 red=1024 batch=320 | vendor - | direct -
+trans=N out=1024 red=1024 batch=1024 | vendor - | direct -
+trans=N out=1024 red=1024 batch=8192 | vendor - | direct -
+trans=N out=1024 red=1024 batch=32768 | vendor - | direct -
+trans=N out=1024 red=4096 batch=1 | vendor - | direct -
+trans=N out=1024 red=4096 batch=16 | vendor - | direct -
+trans=N out=1024 red=4096 batch=128 | vendor - | direct -
+trans=N out=1024 red=4096 batch=319 | vendor - | direct -
+trans=N out=1024 red=4096 batch=320 | vendor - | direct -
+trans=N out=1024 red=4096 batch=1024 | vendor - | direct -
+trans=N out=1024 red=4096 batch=8192 | vendor - | direct -
+trans=N out=1024 red=4096 batch=32768 | vendor - | direct -
+trans=N out=1024 red=32768 batch=1 | vendor - | direct -
+trans=N out=1024 red=32768 batch=16 | vendor - | direct -
+trans=N out=1024 red=32768 batch=128 | vendor - | direct -
+trans=N out=1024 red=32768 batch=319 | vendor - | direct -
+trans=N out=1024 red=32768 batch=320 | vendor - | direct -
+trans=N out=1024 red=32768 batch=1024 | vendor - | direct -
+trans=N out=1024 red=32768 batch=8192 | vendor - | direct -
+trans=N out=1024 red=32768 batch=32768 | vendor - | direct -
+trans=N out=4096 red=1 batch=1 | vendor - | direct -
+trans=N out=4096 red=1 batch=16 | vendor - | direct -
+trans=N out=4096 red=1 batch=128 | vendor - | direct -
+trans=N out=4096 red=1 batch=319 | vendor - | direct -
+trans=N out=4096 red=1 batch=320 | vendor - | direct -
+trans=N out=4096 red=1 batch=1024 | vendor - | direct -
+trans=N out=4096 red=1 batch=8192 | vendor - | direct -
+trans=N out=4096 red=1 batch=32768 | vendor - | direct -
+trans=N out=4096 red=8 batch=1 | vendor - | direct -
+trans=N out=4096 red=8 batch=16 | vendor - | direct -
+trans=N out=4096 red=8 batch=128 | vendor - | direct -
+trans=N out=4096 red=8 batch=319 | vendor - | direct -
+trans=N out=4096 red=8 batch=320 | vendor - | direct -
+trans=N out=4096 red=8 batch=1024 | vendor - | direct -
+trans=N out=4096 red=8 batch=8192 | vendor - | direct -
+trans=N out=4096 red=8 batch=32768 | vendor - | direct -
+trans=N out=4096 red=32 batch=1 | vendor - | direct -
+trans=N out=4096 red=32 batch=16 | vendor - | direct -
+trans=N out=4096 red=32 batch=128 | vendor - | direct -
+trans=N out=4096 red=32 batch=319 | vendor - | direct -
+trans=N out=4096 red=32 batch=320 | vendor - | direct -
+trans=N out=4096 red=32 batch=1024 | vendor - | direct -
+trans=N out=4096 red=32 batch=8192 | vendor - | direct -
+trans=N out=4096 red=32 batch=32768 | vendor - | direct -
+trans=N out=4096 red=63 batch=1 | vendor - | direct -
+trans=N out=4096 red=63 batch=16 | vendor - | direct -
+trans=N out=4096 red=63 batch=128 | vendor - | direct -
+trans=N out=4096 red=63 batch=319 | vendor - | direct -
+trans=N out=4096 red=63 batch=320 | vendor - | direct -
+trans=N out=4096 red=63 batch=1024 | vendor - | direct -
+trans=N out=4096 red=63 batch=8192 | vendor - | direct -
+trans=N out=4096 red=63 batch=32768 | vendor - | direct -
+trans=N out=4096 red=64 batch=1 | vendor - | direct -
+trans=N out=4096 red=64 batch=16 | vendor - | direct -
+trans=N out=4096 red=64 batch=128 | vendor - | direct -
+trans=N out=4096 red=64 batch=319 | vendor - | direct -
+trans=N out=4096 red=64 batch=320 | vendor - | direct -
+trans=N out=4096 red=64 batch=1024 | vendor - | direct -
+trans=N out=4096 red=64 batch=8192 | vendor - | direct -
+trans=N out=4096 red=64 batch=32768 | vendor - | direct -
+trans=N out=4096 red=128 batch=1 | vendor - | direct -
+trans=N out=4096 red=128 batch=16 | vendor - | direct -
+trans=N out=4096 red=128 batch=128 | vendor - | direct -
+trans=N out=4096 red=128 batch=319 | vendor - | direct -
+trans=N out=4096 red=128 batch=320 | vendor - | direct -
+trans=N out=4096 red=128 batch=1024 | vendor - | direct -
+trans=N out=4096 red=128 batch=8192 | vendor - | direct -
+trans=N out=4096 red=128 batch=32768 | vendor - | direct -
+trans=N out=4096 red=352 batch=1 | vendor - | direct -
+trans=N out=4096 red=352 batch=16 | vendor - | direct -
+trans=N out=4096 red=352 batch=128 | vendor - | direct -
+trans=N out=4096 red=352 batch=319 | vendor - | direct -
+trans=N out=4096 red=352 batch=320 | vendor - | direct -
+trans=N out=4096 red=352 batch=1024 | vendor - | direct -
+trans=N out=4096 red=352 batch=8192 | vendor - | direct -
+trans=N out=4096 red=352 batch=32768 | vendor - | direct -
+trans=N out=4096 red=353 batch=1 | vendor - | direct -
+trans=N out=4096 red=353 batch=16 | vendor - | direct -
+trans=N out=4096 red=353 batch=128 | vendor - | direct -
+trans=N out=4096 red=353 batch=319 | vendor - | direct -
+trans=N out=4096 red=353 batch=320 | vendor - | direct -
+trans=N out=4096 red=353 batch=1024 | vendor - | direct -
+trans=N out=4096 red=353 batch=8192 | vendor - | direct -
+trans=N out=4096 red=353 batch=32768 | vendor - | direct -
+trans=N out=4096 red=1024 batch=1 | vendor - | direct -
+trans=N out=4096 red=1024 batch=16 | vendor - | direct -
+trans=N out=4096 red=1024 batch=128 | vendor - | direct -
+trans=N out=4096 red=1024 batch=319 | vendor - | direct -
+trans=N out=4096 red=1024 batch=320 | vendor - | direct -
+trans=N out=4096 red=1024 batch=1024 | vendor - | direct -
+trans=N out=4096 red=1024 batch=8192 | vendor - | direct -
+trans=N out=4096 red=1024 batch=32768 | vendor - | direct -
+trans=N out=4096 red=4096 batch=1 | vendor - | direct -
+trans=N out=4096 red=4096 batch=16 | vendor - | direct -
+trans=N out=4096 red=4096 batch=128 | vendor - | direct -
+trans=N out=4096 red=4096 batch=319 | vendor - | direct -
+trans=N out=4096 red=4096 batch=320 | vendor - | direct -
+trans=N out=4096 red=4096 batch=1024 | vendor - | direct -
+trans=N out=4096 red=4096 batch=8192 | vendor - | direct -
+trans=N out=4096 red=4096 batch=32768 | vendor - | direct -
+trans=N out=4096 red=32768 batch=1 | vendor - | direct -
+trans=N out=4096 red=32768 batch=16 | vendor - | direct -
+trans=N out=4096 red=32768 batch=128 | vendor - | direct -
+trans=N out=4096 red=32768 batch=319 | vendor - | direct -
+trans=N out=4096 red=32768 batch=320 | vendor - | direct -
+trans=N out=4096 red=32768 batch=1024 | vendor - | direct -
+trans=N out=4096 red=32768 batch=8192 | vendor - | direct -
+trans=N out=4096 red=32768 batch=32768 | vendor - | direct -
+trans=N out=32768 red=1 batch=1 | vendor - | direct -
+trans=N out=32768 red=1 batch=16 | vendor - | direct -
+trans=N out=32768 red=1 batch=128 | vendor - | direct -
+trans=N out=32768 red=1 batch=319 | vendor - | direct -
+trans=N out=32768 red=1 batch=320 | vendor - | direct -
+trans=N out=32768 red=1 batch=1024 | vendor - | direct -
+trans=N out=32768 red=1 batch=8192 | vendor - | direct -
+trans=N out=32768 red=1 batch=32768 | vendor - | direct -
+trans=N out=32768 red=8 batch=1 | vendor - | direct -
+trans=N out=32768 red=8 batch=16 | vendor - | direct -
+trans=N out=32768 red=8 batch=128 | vendor - | direct -
+trans=N out=32768 red=8 batch=319 | vendor - | direct -
+trans=N out=32768 red=8 batch=320 | vendor - | direct -
+trans=N out=32768 red=8 batch=1024 | vendor - | direct -
+trans=N out=32768 red=8 batch=8192 | vendor - | direct -
+trans=N out=32768 red=8 batch=32768 | vendor - | direct -
+trans=N out=32768 red=32 batch=1 | vendor - | direct -
+trans=N out=32768 red=32 batch=16 | vendor - | direct -
+trans=N out=32768 red=32 batch=128 | vendor - | direct -
+trans=N out=32768 red=32 batch=319 | vendor - | direct -
+trans=N out=32768 red=32 batch=320 | vendor - | direct -
+trans=N out=32768 red=32 batch=1024 | vendor - | direct -
+trans=N out=32768 red=32 batch=8192 | vendor - | direct -
+trans=N out=32768 red=32 batch=32768 | vendor - | direct -
+trans=N out=32768 red=63 batch=1 | vendor - | direct -
+trans=N out=32768 red=63 batch=16 | vendor - | direct -
+trans=N out=32768 red=63 batch=128 | vendor - | direct -
+trans=N out=32768 red=63 batch=319 | vendor - | direct -
+trans=N out=32768 red=63 batch=320 | vendor - | direct -
+trans=N out=32768 red=63 batch=1024 | vendor - | direct -
+trans=N out=32768 red=63 batch=8192 | vendor - | direct -
+trans=N out=32768 red=63 batch=32768 | vendor - | direct -
+trans=N out=32768 red=64 batch=1 | vendor - | direct -
+trans=N out=32768 red=64 batch=16 | vendor - | direct -
+trans=N out=32768 red=64 batch=128 | vendor - | direct -
+trans=N out=32768 red=64 batch=319 | vendor - | direct -
+trans=N out=32768 red=64 batch=320 | vendor - | direct -
+trans=N out=32768 red=64 batch=1024 | vendor - | direct -
+trans=N out=32768 red=64 batch=8192 | vendor - | direct -
+trans=N out=32768 red=64 batch=32768 | vendor - | direct -
+trans=N out=32768 red=128 batch=1 | vendor - | direct -
+trans=N out=32768 red=128 batch=16 | vendor - | direct -
+trans=N out=32768 red=128 batch=128 | vendor - | direct -
+trans=N out=32768 red=128 batch=319 | vendor - | direct -
+trans=N out=32768 red=128 batch=320 | vendor - | direct -
+trans=N out=32768 red=128 batch=1024 | vendor - | direct -
+trans=N out=32768 red=128 batch=8192 | vendor - | direct -
+trans=N out=32768 red=128 batch=32768 | vendor - | direct -
+trans=N out=32768 red=352 batch=1 | vendor - | direct -
+trans=N out=32768 red=352 batch=16 | vendor - | direct -
+trans=N out=32768 red=352 batch=128 | vendor - | direct -
+trans=N out=32768 red=352 batch=319 | vendor - | direct -
+trans=N out=32768 red=352 batch=320 | vendor - | direct -
+trans=N out=32768 red=352 batch=1024 | vendor - | direct -
+trans=N out=32768 red=352 batch=8192 | vendor - | direct -
+trans=N out=32768 red=352 batch=32768 | vendor - | direct -
+trans=N out=32768 red=353 batch=1 | vendor - | direct -
+trans=N out=32768 red=353 batch=16 | vendor - | direct -
+trans=N out=32768 red=353 batch=128 | vendor - | direct -
+trans=N out=32768 red=353 batch=319 | vendor - | direct -
+trans=N out=32768 red=353 batch=320 | vendor - | direct -
+trans=N out=32768 red=353 batch=1024 | vendor - | direct -
+trans=N out=32768 red=353 batch=8192 | vendor - | direct -
+trans=N out=32768 red=353 batch=32768 | vendor - | direct -
+trans=N out=32768 red=1024 batch=1 | vendor - | direct -
+trans=N out=32768 red=1024 batch=16 | vendor - | direct -
+trans=N out=32768 red=1024 batch=128 | vendor - | direct -
+trans=N out=32768 red=1024 batch=319 | vendor - | direct -
+trans=N out=32768 red=1024 batch=320 | vendor - | direct -
+trans=N out=32768 red=1024 batch=1024 | vendor - | direct -
+trans=N out=32768 red=1024 batch=8192 | vendor - | direct -
+trans=N out=32768 red=1024 batch=32768 | vendor - | direct -
+trans=N out=32768 red=4096 batch=1 | vendor - | direct -
+trans=N out=32768 red=4096 batch=16 | vendor - | direct -
+trans=N out=32768 red=4096 batch=128 | vendor - | direct -
+trans=N out=32768 red=4096 batch=319 | vendor - | direct -
+trans=N out=32768 red=4096 batch=320 | vendor - | direct -
+trans=N out=32768 red=4096 batch=1024 | vendor - | direct -
+trans=N out=32768 red=4096 batch=8192 | vendor - | direct -
+trans=N out=32768 red=4096 batch=32768 | vendor - | direct -
+trans=N out=32768 red=32768 batch=1 | vendor - | direct -
+trans=N out=32768 red=32768 batch=16 | vendor - | direct -
+trans=N out=32768 red=32768 batch=128 | vendor - | direct -
+trans=N out=32768 red=32768 batch=319 | vendor - | direct -
+trans=N out=32768 red=32768 batch=320 | vendor - | direct -
+trans=N out=32768 red=32768 batch=1024 | vendor - | direct -
+trans=N out=32768 red=32768 batch=8192 | vendor - | direct -
+trans=N out=32768 red=32768 batch=32768 | vendor - | direct -
+trans=T out=1 red=1 batch=1 | vendor - | cta - | direct -
+trans=T out=1 red=1 batch=16 | vendor - | cta - | direct -
+trans=T out=1 red=1 batch=128 | vendor - | cta - | direct -
+trans=T out=1 red=1 batch=319 | vendor - | cta - | direct -
+trans=T out=1 red=1 batch=320 | vendor - | cta - | direct -
+trans=T out=1 red=1 batch=1024 | vendor - | cta - | direct -
+trans=T out=1 red=1 batch=8192 | vendor - | cta - | direct -
+trans=T out=1 red=1 batch=32768 | vendor - | cta - | direct -
+trans=T out=1 red=8 batch=1 | vendor - | cta - | direct -
+trans=T out=1 red=8 batch=16 | vendor - | cta - | direct -
+trans=T out=1 red=8 batch=128 | vendor - | cta - | direct -
+trans=T out=1 red=8 batch=319 | vendor - | cta - | direct -
+trans=T out=1 red=8 batch=320 | vendor - | cta - | direct -
+trans=T out=1 red=8 batch=1024 | vendor - | cta - | direct -
+trans=T out=1 red=8 batch=8192 | vendor - | cta - | direct -
+trans=T out=1 red=8 batch=32768 | vendor - | cta - | direct -
+trans=T out=1 red=32 batch=1 | vendor - | cta - | direct -
+trans=T out=1 red=32 batch=16 | vendor - | cta - | direct -
+trans=T out=1 red=32 batch=128 | vendor - | cta - | direct -
+trans=T out=1 red=32 batch=319 | vendor - | cta - | direct -
+trans=T out=1 red=32 batch=320 | vendor - | cta - | direct -
+trans=T out=1 red=32 batch=1024 | vendor - | cta - | direct -
+trans=T out=1 red=32 batch=8192 | vendor - | cta - | direct -
+trans=T out=1 red=32 batch=32768 | vendor - | cta - | direct -
+trans=T out=1 red=63 batch=1 | vendor - | cta - | direct -
+trans=T out=1 red=63 batch=16 | vendor - | cta - | direct -
+trans=T out=1 red=63 batch=128 | vendor - | cta - | direct -
+trans=T out=1 red=63 batch=319 | vendor - | cta - | direct -
+trans=T out=1 red=63 batch=320 | vendor - | cta - | direct -
+trans=T out=1 red=63 batch=1024 | vendor - | cta - | direct -
+trans=T out=1 red=63 batch=8192 | vendor - | cta - | direct -
+trans=T out=1 red=63 batch=32768 | vendor - | cta - | direct -
+trans=T out=1 red=64 batch=1 | vendor - | cta - | direct -
+trans=T out=1 red=64 batch=16 | vendor - | cta - | direct -
+trans=T out=1 red=64 batch=128 | vendor - | cta - | direct -
+trans=T out=1 red=64 batch=319 | vendor - | cta - | direct -
+trans=T out=1 red=64 batch=320 | vendor - | cta - | direct -
+trans=T out=1 red=64 batch=1024 | vendor - | cta - | direct -
+trans=T out=1 red=64 batch=8192 | vendor - | cta - | direct -
+trans=T out=1 red=64 batch=32768 | vendor - | cta - | direct -
+trans=T out=1 red=128 batch=1 | vendor - | cta - | direct -
+trans=T out=1 red=128 batch=16 | vendor - | cta - | direct -
+trans=T out=1 red=128 batch=128 | vendor - | cta - | direct -
+trans=T out=1 red=128 batch=319 | vendor - | cta - | direct -
+trans=T out=1 red=128 batch=320 | vendor - | cta - | direct -
+trans=T out=1 red=128 batch=1024 | vendor - | cta - | direct -
+trans=T out=1 red=128 batch=8192 | vendor - | cta - | direct -
+trans=T out=1 red=128 batch=32768 | vendor - | cta - | direct -
+trans=T out=1 red=352 batch=1 | vendor - | cta - | direct -
+trans=T out=1 red=352 batch=16 | vendor - | cta - | direct -
+trans=T out=1 red=352 batch=128 | vendor - | cta - | direct -
+trans=T out=1 red=352 batch=319 | vendor - | cta - | direct -
+trans=T out=1 red=352 batch=320 | vendor - | cta - | direct -
+trans=T out=1 red=352 batch=1024 | vendor - | cta - | direct -
+trans=T out=1 red=352 batch=8192 | vendor - | cta - | direct -
+trans=T out=1 red=352 batch=32768 | vendor - | cta - | direct -
+trans=T out=1 red=353 batch=1 | vendor - | cta - | direct -
+trans=T out=1 red=353 batch=16 | vendor - | cta - | direct -
+trans=T out=1 red=353 batch=128 | vendor - | cta - | direct -
+trans=T out=1 red=353 batch=319 | vendor - | cta - | direct -
+trans=T out=1 red=353 batch=320 | vendor - | cta - | direct -
+trans=T out=1 red=353 batch=1024 | vendor - | cta - | direct -
+trans=T out=1 red=353 batch=8192 | vendor - | cta - | direct -
+trans=T out=1 red=353 batch=32768 | vendor - | cta - | direct -
+trans=T out=1 red=1024 batch=1 | vendor - | cta - | direct -
+trans=T out=1 red=1024 batch=16 | vendor - | cta - | direct -
+trans=T out=1 red=1024 batch=128 | vendor - | cta - | direct -
+trans=T out=1 red=1024 batch=319 | vendor - | cta - | direct -
+trans=T out=1 red=1024 batch=320 | vendor - | cta - | direct -
+trans=T out=1 red=1024 batch=1024 | vendor - | cta - | direct -
+trans=T out=1 red=1024 batch=8192 | vendor - | cta - | direct -
+trans=T out=1 red=1024 batch=32768 | vendor - | cta - | direct -
+trans=T out=1 red=4096 batch=1 | vendor - | cta - | direct -
+trans=T out=1 red=4096 batch=16 | vendor - | cta - | direct -
+trans=T out=1 red=4096 batch=128 | vendor - | cta - | direct -
+trans=T out=1 red=4096 batch=319 | vendor - | cta - | direct -
+trans=T out=1 red=4096 batch=320 | vendor - | cta - | direct -
+trans=T out=1 red=4096 batch=1024 | vendor - | cta - | direct -
+trans=T out=1 red=4096 batch=8192 | vendor - | cta - | direct -
+trans=T out=1 red=4096 batch=32768 | vendor - | cta - | direct -
+trans=T out=1 red=32768 batch=1 | vendor - | cta - | direct -
+trans=T out=1 red=32768 batch=16 | vendor - | cta - | direct -
+trans=T out=1 red=32768 batch=128 | vendor - | cta - | direct -
+trans=T out=1 red=32768 batch=319 | vendor - | cta - | direct -
+trans=T out=1 red=32768 batch=320 | vendor - | cta - | direct -
+trans=T out=1 red=32768 batch=1024 | vendor - | cta - | direct -
+trans=T out=1 red=32768 batch=8192 | vendor - | cta - | direct -
+trans=T out=1 red=32768 batch=32768 | vendor - | cta - | direct -
+trans=T out=8 red=1 batch=1 | vendor - | cta - | direct -
+trans=T out=8 red=1 batch=16 | vendor - | cta - | direct -
+trans=T out=8 red=1 batch=128 | vendor - | cta - | direct -
+trans=T out=8 red=1 batch=319 | vendor - | cta - | direct -
+trans=T out=8 red=1 batch=320 | vendor - | cta - | direct -
+trans=T out=8 red=1 batch=1024 | vendor - | cta - | direct -
+trans=T out=8 red=1 batch=8192 | vendor - | cta - | direct -
+trans=T out=8 red=1 batch=32768 | vendor - | cta - | direct -
+trans=T out=8 red=8 batch=1 | vendor - | cta - | direct -
+trans=T out=8 red=8 batch=16 | vendor - | cta - | direct -
+trans=T out=8 red=8 batch=128 | vendor - | cta - | direct -
+trans=T out=8 red=8 batch=319 | vendor - | cta - | direct -
+trans=T out=8 red=8 batch=320 | vendor - | cta - | direct -
+trans=T out=8 red=8 batch=1024 | vendor - | cta - | direct -
+trans=T out=8 red=8 batch=8192 | vendor - | cta - | direct -
+trans=T out=8 red=8 batch=32768 | vendor - | cta - | direct -
+trans=T out=8 red=32 batch=1 | vendor - | cta - | direct -
+trans=T out=8 red=32 batch=16 | vendor - | cta - | direct -
+trans=T out=8 red=32 batch=128 | vendor - | cta - | direct -
+trans=T out=8 red=32 batch=319 | vendor - | cta - | direct -
+trans=T out=8 red=32 batch=320 | vendor - | cta - | direct -
+trans=T out=8 red=32 batch=1024 | vendor - | cta - | direct -
+trans=T out=8 red=32 batch=8192 | vendor - | cta - | direct -
+trans=T out=8 red=32 batch=32768 | vendor - | cta - | direct -
+trans=T out=8 red=63 batch=1 | vendor - | cta - | direct -
+trans=T out=8 red=63 batch=16 | vendor - | cta - | direct -
+trans=T out=8 red=63 batch=128 | vendor - | cta - | direct -
+trans=T out=8 red=63 batch=319 | vendor - | cta - | direct -
+trans=T out=8 red=63 batch=320 | vendor - | cta - | direct -
+trans=T out=8 red=63 batch=1024 | vendor - | cta - | direct -
+trans=T out=8 red=63 batch=8192 | vendor - | cta - | direct -
+trans=T out=8 red=63 batch=32768 | vendor - | cta - | direct -
+trans=T out=8 red=64 batch=1 | vendor - | cta - | direct -
+trans=T out=8 red=64 batch=16 | vendor - | cta - | direct -
+trans=T out=8 red=64 batch=128 | vendor - | cta - | direct -
+trans=T out=8 red=64 batch=319 | vendor - | cta - | direct -
+trans=T out=8 red=64 batch=320 | vendor - | cta - | direct -
+trans=T out=8 red=64 batch=1024 | vendor - | cta - | direct -
+trans=T out=8 red=64 batch=8192 | vendor - | cta - | direct -
+trans=T out=8 red=64 batch=32768 | vendor - | cta - | direct -
+trans=T out=8 red=128 batch=1 | vendor - | cta - | direct -
+trans=T out=8 red=128 batch=16 | vendor - | cta - | direct -
+trans=T out=8 red=128 batch=128 | vendor - | cta - | direct -
+trans=T out=8 red=128 batch=319 | vendor - | cta - | direct -
+trans=T out=8 red=128 batch=320 | vendor - | cta - | direct -
+trans=T out=8 red=128 batch=1024 | vendor - | cta - | direct -
+trans=T out=8 red=128 batch=8192 | vendor - | cta - | direct -
+trans=T out=8 red=128 batch=32768 | vendor - | cta - | direct -
+trans=T out=8 red=352 batch=1 | vendor - | cta - | direct -
+trans=T out=8 red=352 batch=16 | vendor - | cta - | direct -
+trans=T out=8 red=352 batch=128 | vendor - | cta - | direct -
+trans=T out=8 red=352 batch=319 | vendor - | cta - | direct -
+trans=T out=8 red=352 batch=320 | vendor - | cta - | direct -
+trans=T out=8 red=352 batch=1024 | vendor - | cta - | direct -
+trans=T out=8 red=352 batch=8192 | vendor - | cta - | direct -
+trans=T out=8 red=352 batch=32768 | vendor - | cta - | direct -
+trans=T out=8 red=353 batch=1 | vendor - | cta - | direct -
+trans=T out=8 red=353 batch=16 | vendor - | cta - | direct -
+trans=T out=8 red=353 batch=128 | vendor - | cta - | direct -
+trans=T out=8 red=353 batch=319 | vendor - | cta - | direct -
+trans=T out=8 red=353 batch=320 | vendor - | cta - | direct -
+trans=T out=8 red=353 batch=1024 | vendor - | cta - | direct -
+trans=T out=8 red=353 batch=8192 | vendor - | cta - | direct -
+trans=T out=8 red=353 batch=32768 | vendor - | cta - | direct -
+trans=T out=8 red=1024 batch=1 | vendor - | cta - | direct -
+trans=T out=8 red=1024 batch=16 | vendor - | cta - | direct -
+trans=T out=8 red=1024 batch=128 | vendor - | cta - | direct -
+trans=T out=8 red=1024 batch=319 | vendor - | cta - | direct -
+trans=T out=8 red=1024 batch=320 | vendor - | cta - | direct -
+trans=T out=8 red=1024 batch=1024 | vendor - | cta - | direct -
+trans=T out=8 red=1024 batch=8192 | vendor - | cta - | direct -
+trans=T out=8 red=1024 batch=32768 | vendor - | cta - | direct -
+trans=T out=8 red=4096 batch=1 | vendor - | cta - | direct -
+trans=T out=8 red=4096 batch=16 | vendor - | cta - | direct -
+trans=T out=8 red=4096 batch=128 | vendor - | cta - | direct -
+trans=T out=8 red=4096 batch=319 | vendor - | cta - | direct -
+trans=T out=8 red=4096 batch=320 | vendor - | cta - | direct -
+trans=T out=8 red=4096 batch=1024 | vendor - | cta - | direct -
+trans=T out=8 red=4096 batch=8192 | vendor - | cta - | direct -
+trans=T out=8 red=4096 batch=32768 | vendor - | cta - | direct -
+trans=T out=8 red=32768 batch=1 | vendor - | cta - | direct -
+trans=T out=8 red=32768 batch=16 | vendor - | cta - | direct -
+trans=T out=8 red=32768 batch=128 | vendor - | cta - | direct -
+trans=T out=8 red=32768 batch=319 | vendor - | cta - | direct -
+trans=T out=8 red=32768 batch=320 | vendor - | cta - | direct -
+trans=T out=8 red=32768 batch=1024 | vendor - | cta - | direct -
+trans=T out=8 red=32768 batch=8192 | vendor - | cta - | direct -
+trans=T out=8 red=32768 batch=32768 | vendor - | cta - | direct -
+trans=T out=64 red=1 batch=1 | vendor - | cta - | direct -
+trans=T out=64 red=1 batch=16 | vendor - | cta - | direct -
+trans=T out=64 red=1 batch=128 | vendor - | cta - | direct -
+trans=T out=64 red=1 batch=319 | vendor - | cta - | direct -
+trans=T out=64 red=1 batch=320 | vendor - | cta - | direct -
+trans=T out=64 red=1 batch=1024 | vendor - | cta - | direct -
+trans=T out=64 red=1 batch=8192 | vendor - | cta - | direct -
+trans=T out=64 red=1 batch=32768 | vendor - | cta - | direct -
+trans=T out=64 red=8 batch=1 | vendor - | cta - | direct -
+trans=T out=64 red=8 batch=16 | vendor - | cta - | direct -
+trans=T out=64 red=8 batch=128 | vendor - | cta - | direct -
+trans=T out=64 red=8 batch=319 | vendor - | cta - | direct -
+trans=T out=64 red=8 batch=320 | vendor - | cta - | direct -
+trans=T out=64 red=8 batch=1024 | vendor - | cta - | direct -
+trans=T out=64 red=8 batch=8192 | vendor - | cta - | direct -
+trans=T out=64 red=8 batch=32768 | vendor - | cta - | direct -
+trans=T out=64 red=32 batch=1 | vendor - | cta - | direct -
+trans=T out=64 red=32 batch=16 | vendor - | cta - | direct -
+trans=T out=64 red=32 batch=128 | vendor - | cta - | direct -
+trans=T out=64 red=32 batch=319 | vendor - | cta - | direct -
+trans=T out=64 red=32 batch=320 | vendor - | cta - | direct -
+trans=T out=64 red=32 batch=1024 | vendor - | cta - | direct -
+trans=T out=64 red=32 batch=8192 | vendor - | cta - | direct -
+trans=T out=64 red=32 batch=32768 | vendor - | cta - | direct -
+trans=T out=64 red=63 batch=1 | vendor - | cta - | direct -
+trans=T out=64 red=63 batch=16 | vendor - | cta - | direct -
+trans=T out=64 red=63 batch=128 | vendor - | cta - | direct -
+trans=T out=64 red=63 batch=319 | vendor - | cta - | direct -
+trans=T out=64 red=63 batch=320 | vendor - | cta - | direct -
+trans=T out=64 red=63 batch=1024 | vendor - | cta - | direct -
+trans=T out=64 red=63 batch=8192 | vendor - | cta - | direct -
+trans=T out=64 red=63 batch=32768 | vendor - | cta - | direct -
+trans=T out=64 red=64 batch=1 | vendor - | cta - | direct -
+trans=T out=64 red=64 batch=16 | vendor - | cta - | direct -
+trans=T out=64 red=64 batch=128 | vendor - | cta - | direct -
+trans=T out=64 red=64 batch=319 | vendor - | cta - | direct -
+trans=T out=64 red=64 batch=320 | vendor - | cta - | direct -
+trans=T out=64 red=64 batch=1024 | vendor - | cta - | direct -
+trans=T out=64 red=64 batch=8192 | vendor - | cta - | direct -
+trans=T out=64 red=64 batch=32768 | vendor - | cta - | direct -
+trans=T out=64 red=128 batch=1 | vendor - | cta - | direct -
+trans=T out=64 red=128 batch=16 | vendor - | cta - | direct -
+trans=T out=64 red=128 batch=128 | vendor - | cta - | direct -
+trans=T out=64 red=128 batch=319 | vendor - | cta - | direct -
+trans=T out=64 red=128 batch=320 | vendor - | cta - | direct -
+trans=T out=64 red=128 batch=1024 | vendor - | cta - | direct -
+trans=T out=64 red=128 batch=8192 | vendor - | cta - | direct -
+trans=T out=64 red=128 batch=32768 | vendor - | cta - | direct -
+trans=T out=64 red=352 batch=1 | vendor - | cta - | direct -
+trans=T out=64 red=352 batch=16 | vendor - | cta - | direct -
+trans=T out=64 red=352 batch=128 | vendor - | cta - | direct -
+trans=T out=64 red=352 batch=319 | vendor - | cta - | direct -
+trans=T out=64 red=352 batch=320 | vendor - | cta - | direct -
+trans=T out=64 red=352 batch=1024 | vendor - | cta - | direct -
+trans=T out=64 red=352 batch=8192 | vendor - | cta - | direct -
+trans=T out=64 red=352 batch=32768 | vendor - | cta - | direct -
+trans=T out=64 red=353 batch=1 | vendor - | cta - | direct -
+trans=T out=64 red=353 batch=16 | vendor - | cta - | direct -
+trans=T out=64 red=353 batch=128 | vendor - | cta - | direct -
+trans=T out=64 red=353 batch=319 | vendor - | cta - | direct -
+trans=T out=64 red=353 batch=320 | vendor - | cta - | direct -
+trans=T out=64 red=353 batch=1024 | vendor - | cta - | direct -
+trans=T out=64 red=353 batch=8192 | vendor - | cta - | direct -
+trans=T out=64 red=353 batch=32768 | vendor - | cta - | direct -
+trans=T out=64 red=1024 batch=1 | vendor - | cta - | direct -
+trans=T out=64 red=1024 batch=16 | vendor - | cta - | direct -
+trans=T out=64 red=1024 batch=128 | vendor - | cta - | direct -
+trans=T out=64 red=1024 batch=319 | vendor - | cta - | direct -
+trans=T out=64 red=1024 batch=320 | vendor - | cta - | direct -
+trans=T out=64 red=1024 batch=1024 | vendor - | cta - | direct -
+trans=T out=64 red=1024 batch=8192 | vendor - | cta - | direct -
+trans=T out=64 red=1024 batch=32768 | vendor - | cta - | direct -
+trans=T out=64 red=4096 batch=1 | vendor - | cta - | direct -
+trans=T out=64 red=4096 batch=16 | vendor - | cta - | direct -
+trans=T out=64 red=4096 batch=128 | vendor - | cta - | direct -
+trans=T out=64 red=4096 batch=319 | vendor - | cta - | direct -
+trans=T out=64 red=4096 batch=320 | vendor - | cta - | direct -
+trans=T out=64 red=4096 batch=1024 | vendor - | cta - | direct -
+trans=T out=64 red=4096 batch=8192 | vendor - | cta - | direct -
+trans=T out=64 red=4096 batch=32768 | vendor - | cta - | direct -
+trans=T out=64 red=32768 batch=1 | vendor - | cta - | direct -
+trans=T out=64 red=32768 batch=16 | vendor - | cta - | direct -
+trans=T out=64 red=32768 batch=128 | vendor - | cta - | direct -
+trans=T out=64 red=32768 batch=319 | vendor - | cta - | direct -
+trans=T out=64 red=32768 batch=320 | vendor - | cta - | direct -
+trans=T out=64 red=32768 batch=1024 | vendor - | cta - | direct -
+trans=T out=64 red=32768 batch=8192 | vendor - | cta - | direct -
+trans=T out=64 red=32768 batch=32768 | vendor - | cta - | direct -
+trans=T out=255 red=1 batch=1 | vendor - | cta - | direct -
+trans=T out=255 red=1 batch=16 | vendor - | cta - | direct -
+trans=T out=255 red=1 batch=128 | vendor - | cta - | direct -
+trans=T out=255 red=1 batch=319 | vendor - | cta - | direct -
+trans=T out=255 red=1 batch=320 | vendor - | cta - | direct -
+trans=T out=255 red=1 batch=1024 | vendor - | cta - | direct -
+trans=T out=255 red=1 batch=8192 | vendor - | cta - | direct -
+trans=T out=255 red=1 batch=32768 | vendor - | cta - | direct -
+trans=T out=255 red=8 batch=1 | vendor - | cta - | direct -
+trans=T out=255 red=8 batch=16 | vendor - | cta - | direct -
+trans=T out=255 red=8 batch=128 | vendor - | cta - | direct -
+trans=T out=255 red=8 batch=319 | vendor - | cta - | direct -
+trans=T out=255 red=8 batch=320 | vendor - | cta - | direct -
+trans=T out=255 red=8 batch=1024 | vendor - | cta - | direct -
+trans=T out=255 red=8 batch=8192 | vendor - | cta - | direct -
+trans=T out=255 red=8 batch=32768 | vendor - | cta - | direct -
+trans=T out=255 red=32 batch=1 | vendor - | cta - | direct -
+trans=T out=255 red=32 batch=16 | vendor - | cta - | direct -
+trans=T out=255 red=32 batch=128 | vendor - | cta - | direct -
+trans=T out=255 red=32 batch=319 | vendor - | cta - | direct -
+trans=T out=255 red=32 batch=320 | vendor - | cta - | direct -
+trans=T out=255 red=32 batch=1024 | vendor - | cta - | direct -
+trans=T out=255 red=32 batch=8192 | vendor - | cta - | direct -
+trans=T out=255 red=32 batch=32768 | vendor - | cta - | direct -
+trans=T out=255 red=63 batch=1 | vendor - | cta - | direct -
+trans=T out=255 red=63 batch=16 | vendor - | cta - | direct -
+trans=T out=255 red=63 batch=128 | vendor - | cta - | direct -
+trans=T out=255 red=63 batch=319 | vendor - | cta - | direct -
+trans=T out=255 red=63 batch=320 | vendor - | cta - | direct -
+trans=T out=255 red=63 batch=1024 | vendor - | cta - | direct -
+trans=T out=255 red=63 batch=8192 | vendor - | cta - | direct -
+trans=T out=255 red=63 batch=32768 | vendor - | cta - | direct -
+trans=T out=255 red=64 batch=1 | vendor - | cta - | direct -
+trans=T out=255 red=64 batch=16 | vendor - | cta - | direct -
+trans=T out=255 red=64 batch=128 | vendor - | cta - | direct -
+trans=T out=255 red=64 batch=319 | vendor - | cta - | direct -
+trans=T out=255 red=64 batch=320 | vendor - | cta - | direct -
+trans=T out=255 red=64 batch=1024 | vendor - | cta - | direct -
+trans=T out=255 red=64 batch=8192 | vendor - | cta - | direct -
+trans=T out=255 red=64 batch=32768 | vendor - | cta - | direct -
+trans=T out=255 red=128 batch=1 | vendor - | cta - | direct -
+trans=T out=255 red=128 batch=16 | vendor - | cta - | direct -
+trans=T out=255 red=128 batch=128 | vendor - | cta - | direct -
+trans=T out=255 red=128 batch=319 | vendor - | cta - | direct -
+trans=T out=255 red=128 batch=320 | vendor - | cta - | direct -
+trans=T out=255 red=128 batch=1024 | vendor - | cta - | direct -
+trans=T out=255 red=128 batch=8192 | vendor - | cta - | direct -
+trans=T out=255 red=128 batch=32768 | vendor - | cta - | direct -
+trans=T out=255 red=352 batch=1 | vendor - | cta - | direct -
+trans=T out=255 red=352 batch=16 | vendor - | cta - | direct -
+trans=T out=255 red=352 batch=128 | vendor - | cta - | direct -
+trans=T out=255 red=352 batch=319 | vendor - | cta - | direct -
+trans=T out=255 red=352 batch=320 | vendor - | cta - | direct -
+trans=T out=255 red=352 batch=1024 | vendor - | cta - | direct -
+trans=T out=255 red=352 batch=8192 | vendor - | cta - | direct -
+trans=T out=255 red=352 batch=32768 | vendor - | cta - | direct -
+trans=T out=255 red=353 batch=1 | vendor - | cta - | direct -
+trans=T out=255 red=353 batch=16 | vendor - | cta - | direct -
+trans=T out=255 red=353 batch=128 | vendor - | cta - | direct -
+trans=T out=255 red=353 batch=319 | vendor - | cta - | direct -
+trans=T out=255 red=353 batch=320 | vendor - | cta - | direct -
+trans=T out=255 red=353 batch=1024 | vendor - | cta - | direct -
+trans=T out=255 red=353 batch=8192 | vendor - | cta - | direct -
+trans=T out=255 red=353 batch=32768 | vendor - | cta - | direct -
+trans=T out=255 red=1024 batch=1 | vendor - | cta - | direct -
+trans=T out=255 red=1024 batch=16 | vendor - | cta - | direct -
+trans=T out=255 red=1024 batch=128 | vendor - | cta - | direct -
+trans=T out=255 red=1024 batch=319 | vendor - | cta - | direct -
+trans=T out=255 red=1024 batch=320 | vendor - | cta - | direct -
+trans=T out=255 red=1024 batch=1024 | vendor - | cta - | direct -
+trans=T out=255 red=1024 batch=8192 | vendor - | cta - | direct -
+trans=T out=255 red=1024 batch=32768 | vendor - | cta - | direct -
+trans=T out=255 red=4096 batch=1 | vendor - | cta - | direct -
+trans=T out=255 red=4096 batch=16 | vendor - | cta - | direct -
+trans=T out=255 red=4096 batch=128 | vendor - | cta - | direct -
+trans=T out=255 red=4096 batch=319 | vendor - | cta - | direct -
+trans=T out=255 red=4096 batch=320 | vendor - | cta - | direct -
+trans=T out=255 red=4096 batch=1024 | vendor - | cta - | direct -
+trans=T out=255 red=4096 batch=8192 | vendor - | cta - | direct -
+trans=T out=255 red=4096 batch=32768 | vendor - | cta - | direct -
+trans=T out=255 red=32768 batch=1 | vendor - | cta - | direct -
+trans=T out=255 red=32768 batch=16 | vendor - | cta - | direct -
+trans=T out=255 red=32768 batch=128 | vendor - | cta - | direct -
+trans=T out=255 red=32768 batch=319 | vendor - | cta - | direct -
+trans=T out=255 red=32768 batch=320 | vendor - | cta - | direct -
+trans=T out=255 red=32768 batch=1024 | vendor - | cta - | direct -
+trans=T out=255 red=32768 batch=8192 | vendor - | cta - | direct -
+trans=T out=255 red=32768 batch=32768 | vendor - | cta - | direct -
+trans=T out=256 red=1 batch=1 | vendor - | cta - | direct -
+trans=T out=256 red=1 batch=16 | vendor - | cta - | direct -
+trans=T out=256 red=1 batch=128 | vendor - | cta - | direct -
+trans=T out=256 red=1 batch=319 | vendor - | cta - | direct -
+trans=T out=256 red=1 batch=320 | vendor - | cta - | direct -
+trans=T out=256 red=1 batch=1024 | vendor - | cta - | direct -
+trans=T out=256 red=1 batch=8192 | vendor - | cta - | direct -
+trans=T out=256 red=1 batch=32768 | vendor - | cta - | direct -
+trans=T out=256 red=8 batch=1 | vendor - | cta - | direct -
+trans=T out=256 red=8 batch=16 | vendor - | cta - | direct -
+trans=T out=256 red=8 batch=128 | vendor - | cta - | direct -
+trans=T out=256 red=8 batch=319 | vendor - | cta - | direct -
+trans=T out=256 red=8 batch=320 | vendor - | cta - | direct -
+trans=T out=256 red=8 batch=1024 | vendor - | cta - | direct -
+trans=T out=256 red=8 batch=8192 | vendor - | cta - | direct -
+trans=T out=256 red=8 batch=32768 | vendor - | cta - | direct -
+trans=T out=256 red=32 batch=1 | vendor - | cta - | direct -
+trans=T out=256 red=32 batch=16 | vendor - | cta - | direct -
+trans=T out=256 red=32 batch=128 | vendor - | cta - | direct -
+trans=T out=256 red=32 batch=319 | vendor - | cta - | direct -
+trans=T out=256 red=32 batch=320 | vendor - | cta - | direct -
+trans=T out=256 red=32 batch=1024 | vendor - | cta - | direct -
+trans=T out=256 red=32 batch=8192 | vendor - | cta - | direct -
+trans=T out=256 red=32 batch=32768 | vendor - | cta - | direct -
+trans=T out=256 red=63 batch=1 | vendor - | cta - | direct -
+trans=T out=256 red=63 batch=16 | vendor - | cta - | direct -
+trans=T out=256 red=63 batch=128 | vendor - | cta - | direct -
+trans=T out=256 red=63 batch=319 | vendor - | cta - | direct -
+trans=T out=256 red=63 batch=320 | vendor - | cta - | direct -
+trans=T out=256 red=63 batch=1024 | vendor - | cta - | direct -
+trans=T out=256 red=63 batch=8192 | vendor - | cta - | direct -
+trans=T out=256 red=63 batch=32768 | vendor - | cta - | direct -
+trans=T out=256 red=64 batch=1 | vendor - | cta - | direct -
+trans=T out=256 red=64 batch=16 | vendor - | cta - | direct -
+trans=T out=256 red=64 batch=128 | vendor - | cta - | direct -
+trans=T out=256 red=64 batch=319 | vendor - | cta - | direct -
+trans=T out=256 red=64 batch=320 | cta - | vendor - | direct -
+trans=T out=256 red=64 batch=1024 | cta - | vendor - | direct -
+trans=T out=256 red=64 batch=8192 | cta - | vendor - | direct -
+trans=T out=256 red=64 batch=32768 | cta - | vendor - | direct -
+trans=T out=256 red=128 batch=1 | vendor - | cta - | direct -
+trans=T out=256 red=128 batch=16 | vendor - | cta - | direct -
+trans=T out=256 red=128 batch=128 | vendor - | cta - | direct -
+trans=T out=256 red=128 batch=319 | vendor - | cta - | direct -
+trans=T out=256 red=128 batch=320 | cta - | vendor - | direct -
+trans=T out=256 red=128 batch=1024 | cta - | vendor - | direct -
+trans=T out=256 red=128 batch=8192 | cta - | vendor - | direct -
+trans=T out=256 red=128 batch=32768 | cta - | vendor - | direct -
+trans=T out=256 red=352 batch=1 | vendor - | cta - | direct -
+trans=T out=256 red=352 batch=16 | vendor - | cta - | direct -
+trans=T out=256 red=352 batch=128 | vendor - | cta - | direct -
+trans=T out=256 red=352 batch=319 | vendor - | cta - | direct -
+trans=T out=256 red=352 batch=320 | cta - | vendor - | direct -
+trans=T out=256 red=352 batch=1024 | cta - | vendor - | direct -
+trans=T out=256 red=352 batch=8192 | cta - | vendor - | direct -
+trans=T out=256 red=352 batch=32768 | cta - | vendor - | direct -
+trans=T out=256 red=353 batch=1 | vendor - | cta - | direct -
+trans=T out=256 red=353 batch=16 | vendor - | cta - | direct -
+trans=T out=256 red=353 batch=128 | vendor - | cta - | direct -
+trans=T out=256 red=353 batch=319 | vendor - | cta - | direct -
+trans=T out=256 red=353 batch=320 | vendor - | cta - | direct -
+trans=T out=256 red=353 batch=1024 | vendor - | cta - | direct -
+trans=T out=256 red=353 batch=8192 | vendor - | cta - | direct -
+trans=T out=256 red=353 batch=32768 | vendor - | cta - | direct -
+trans=T out=256 red=1024 batch=1 | vendor - | cta - | direct -
+trans=T out=256 red=1024 batch=16 | vendor - | cta - | direct -
+trans=T out=256 red=1024 batch=128 | vendor - | cta - | direct -
+trans=T out=256 red=1024 batch=319 | vendor - | cta - | direct -
+trans=T out=256 red=1024 batch=320 | vendor - | cta - | direct -
+trans=T out=256 red=1024 batch=1024 | vendor - | cta - | direct -
+trans=T out=256 red=1024 batch=8192 | vendor - | cta - | direct -
+trans=T out=256 red=1024 batch=32768 | vendor - | cta - | direct -
+trans=T out=256 red=4096 batch=1 | vendor - | cta - | direct -
+trans=T out=256 red=4096 batch=16 | vendor - | cta - | direct -
+trans=T out=256 red=4096 batch=128 | vendor - | cta - | direct -
+trans=T out=256 red=4096 batch=319 | vendor - | cta - | direct -
+trans=T out=256 red=4096 batch=320 | vendor - | cta - | direct -
+trans=T out=256 red=4096 batch=1024 | vendor - | cta - | direct -
+trans=T out=256 red=4096 batch=8192 | vendor - | cta - | direct -
+trans=T out=256 red=4096 batch=32768 | vendor - | cta - | direct -
+trans=T out=256 red=32768 batch=1 | vendor - | cta - | direct -
+trans=T out=256 red=32768 batch=16 | vendor - | cta - | direct -
+trans=T out=256 red=32768 batch=128 | vendor - | cta - | direct -
+trans=T out=256 red=32768 batch=319 | vendor - | cta - | direct -
+trans=T out=256 red=32768 batch=320 | vendor - | cta - | direct -
+trans=T out=256 red=32768 batch=1024 | vendor - | cta - | direct -
+trans=T out=256 red=32768 batch=8192 | vendor - | cta - | direct -
+trans=T out=256 red=32768 batch=32768 | vendor - | cta - | direct -
+trans=T out=1024 red=1 batch=1 | vendor - | cta - | direct -
+trans=T out=1024 red=1 batch=16 | vendor - | cta - | direct -
+trans=T out=1024 red=1 batch=128 | vendor - | cta - | direct -
+trans=T out=1024 red=1 batch=319 | vendor - | cta - | direct -
+trans=T out=1024 red=1 batch=320 | vendor - | cta - | direct -
+trans=T out=1024 red=1 batch=1024 | vendor - | cta - | direct -
+trans=T out=1024 red=1 batch=8192 | vendor - | cta - | direct -
+trans=T out=1024 red=1 batch=32768 | vendor - | cta - | direct -
+trans=T out=1024 red=8 batch=1 | vendor - | cta - | direct -
+trans=T out=1024 red=8 batch=16 | vendor - | cta - | direct -
+trans=T out=1024 red=8 batch=128 | vendor - | cta - | direct -
+trans=T out=1024 red=8 batch=319 | vendor - | cta - | direct -
+trans=T out=1024 red=8 batch=320 | vendor - | cta - | direct -
+trans=T out=1024 red=8 batch=1024 | vendor - | cta - | direct -
+trans=T out=1024 red=8 batch=8192 | vendor - | cta - | direct -
+trans=T out=1024 red=8 batch=32768 | vendor - | cta - | direct -
+trans=T out=1024 red=32 batch=1 | vendor - | cta - | direct -
+trans=T out=1024 red=32 batch=16 | vendor - | cta - | direct -
+trans=T out=1024 red=32 batch=128 | vendor - | cta - | direct -
+trans=T out=1024 red=32 batch=319 | vendor - | cta - | direct -
+trans=T out=1024 red=32 batch=320 | vendor - | cta - | direct -
+trans=T out=1024 red=32 batch=1024 | vendor - | cta - | direct -
+trans=T out=1024 red=32 batch=8192 | vendor - | cta - | direct -
+trans=T out=1024 red=32 batch=32768 | vendor - | cta - | direct -
+trans=T out=1024 red=63 batch=1 | vendor - | cta - | direct -
+trans=T out=1024 red=63 batch=16 | vendor - | cta - | direct -
+trans=T out=1024 red=63 batch=128 | vendor - | cta - | direct -
+trans=T out=1024 red=63 batch=319 | vendor - | cta - | direct -
+trans=T out=1024 red=63 batch=320 | vendor - | cta - | direct -
+trans=T out=1024 red=63 batch=1024 | vendor - | cta - | direct -
+trans=T out=1024 red=63 batch=8192 | vendor - | cta - | direct -
+trans=T out=1024 red=63 batch=32768 | vendor - | cta - | direct -
+trans=T out=1024 red=64 batch=1 | vendor - | cta - | direct -
+trans=T out=1024 red=64 batch=16 | vendor - | cta - | direct -
+trans=T out=1024 red=64 batch=128 | vendor - | cta - | direct -
+trans=T out=1024 red=64 batch=319 | vendor - | cta - | direct -
+trans=T out=1024 red=64 batch=320 | cta - | vendor - | direct -
+trans=T out=1024 red=64 batch=1024 | cta - | vendor - | direct -
+trans=T out=1024 red=64 batch=8192 | cta - | vendor - | direct -
+trans=T out=1024 red=64 batch=32768 | cta - | vendor - | direct -
+trans=T out=1024 red=128 batch=1 | vendor - | cta - | direct -
+trans=T out=1024 red=128 batch=16 | vendor - | cta - | direct -
+trans=T out=1024 red=128 batch=128 | vendor - | cta - | direct -
+trans=T out=1024 red=128 batch=319 | vendor - | cta - | direct -
+trans=T out=1024 red=128 batch=320 | cta - | vendor - | direct -
+trans=T out=1024 red=128 batch=1024 | cta - | vendor - | direct -
+trans=T out=1024 red=128 batch=8192 | cta - | vendor - | direct -
+trans=T out=1024 red=128 batch=32768 | cta - | vendor - | direct -
+trans=T out=1024 red=352 batch=1 | vendor - | cta - | direct -
+trans=T out=1024 red=352 batch=16 | vendor - | cta - | direct -
+trans=T out=1024 red=352 batch=128 | vendor - | cta - | direct -
+trans=T out=1024 red=352 batch=319 | vendor - | cta - | direct -
+trans=T out=1024 red=352 batch=320 | cta - | vendor - | direct -
+trans=T out=1024 red=352 batch=1024 | cta - | vendor - | direct -
+trans=T out=1024 red=352 batch=8192 | cta - | vendor - | direct -
+trans=T out=1024 red=352 batch=32768 | cta - | vendor - | direct -
+trans=T out=1024 red=353 batch=1 | vendor - | cta - | direct -
+trans=T out=1024 red=353 batch=16 | vendor - | cta - | direct -
+trans=T out=1024 red=353 batch=128 | vendor - | cta - | direct -
+trans=T out=1024 red=353 batch=319 | vendor - | cta - | direct -
+trans=T out=1024 red=353 batch=320 | vendor - | cta - | direct -
+trans=T out=1024 red=353 batch=1024 | vendor - | cta - | direct -
+trans=T out=1024 red=353 batch=8192 | vendor - | cta - | direct -
+trans=T out=1024 red=353 batch=32768 | vendor - | cta - | direct -
+trans=T out=1024 red=1024 batch=1 | vendor - | cta - | direct -
+trans=T out=1024 red=1024 batch=16 | vendor - | cta - | direct -
+trans=T out=1024 red=1024 batch=128 | vendor - | cta - | direct -
+trans=T out=1024 red=1024 batch=319 | vendor - | cta - | direct -
+trans=T out=1024 red=1024 batch=320 | vendor - | cta - | direct -
+trans=T out=1024 red=1024 batch=1024 | vendor - | cta - | direct -
+trans=T out=1024 red=1024 batch=8192 | vendor - | cta - | direct -
+trans=T out=1024 red=1024 batch=32768 | vendor - | cta - | direct -
+trans=T out=1024 red=4096 batch=1 | vendor - | cta - | direct -
+trans=T out=1024 red=4096 batch=16 | vendor - | cta - | direct -
+trans=T out=1024 red=4096 batch=128 | vendor - | cta - | direct -
+trans=T out=1024 red=4096 batch=319 | vendor - | cta - | direct -
+trans=T out=1024 red=4096 batch=320 | vendor - | cta - | direct -
+trans=T out=1024 red=4096 batch=1024 | vendor - | cta - | direct -
+trans=T out=1024 red=4096 batch=8192 | vendor - | cta - | direct -
+trans=T out=1024 red=4096 batch=32768 | vendor - | cta - | direct -
+trans=T out=1024 red=32768 batch=1 | vendor - | cta - | direct -
+trans=T out=1024 red=32768 batch=16 | vendor - | cta - | direct -
+trans=T out=1024 red=32768 batch=128 | vendor - | cta - | direct -
+trans=T out=1024 red=32768 batch=319 | vendor - | cta - | direct -
+trans=T out=1024 red=32768 batch=320 | vendor - | cta - | direct -
+trans=T out=1024 red=32768 batch=1024 | vendor - | cta - | direct -
+trans=T out=1024 red=32768 batch=8192 | vendor - | cta - | direct -
+trans=T out=1024 red=32768 batch=32768 | vendor - | cta - | direct -
+trans=T out=4096 red=1 batch=1 | vendor - | cta - | direct -
+trans=T out=4096 red=1 batch=16 | vendor - | cta - | direct -
+trans=T out=4096 red=1 batch=128 | vendor - | cta - | direct -
+trans=T out=4096 red=1 batch=319 | vendor - | cta - | direct -
+trans=T out=4096 red=1 batch=320 | vendor - | cta - | direct -
+trans=T out=4096 red=1 batch=1024 | vendor - | cta - | direct -
+trans=T out=4096 red=1 batch=8192 | vendor - | cta - | direct -
+trans=T out=4096 red=1 batch=32768 | vendor - | cta - | direct -
+trans=T out=4096 red=8 batch=1 | vendor - | cta - | direct -
+trans=T out=4096 red=8 batch=16 | vendor - | cta - | direct -
+trans=T out=4096 red=8 batch=128 | vendor - | cta - | direct -
+trans=T out=4096 red=8 batch=319 | vendor - | cta - | direct -
+trans=T out=4096 red=8 batch=320 | vendor - | cta - | direct -
+trans=T out=4096 red=8 batch=1024 | vendor - | cta - | direct -
+trans=T out=4096 red=8 batch=8192 | vendor - | cta - | direct -
+trans=T out=4096 red=8 batch=32768 | vendor - | cta - | direct -
+trans=T out=4096 red=32 batch=1 | vendor - | cta - | direct -
+trans=T out=4096 red=32 batch=16 | vendor - | cta - | direct -
+trans=T out=4096 red=32 batch=128 | vendor - | cta - | direct -
+trans=T out=4096 red=32 batch=319 | vendor - | cta - | direct -
+trans=T out=4096 red=32 batch=320 | vendor - | cta - | direct -
+trans=T out=4096 red=32 batch=1024 | vendor - | cta - | direct -
+trans=T out=4096 red=32 batch=8192 | vendor - | cta - | direct -
+trans=T out=4096 red=32 batch=32768 | vendor - | cta - | direct -
+trans=T out=4096 red=63 batch=1 | vendor - | cta - | direct -
+trans=T out=4096 red=63 batch=16 | vendor - | cta - | direct -
+trans=T out=4096 red=63 batch=128 | vendor - | cta - | direct -
+trans=T out=4096 red=63 batch=319 | vendor - | cta - | direct -
+trans=T out=4096 red=63 batch=320 | vendor - | cta - | direct -
+trans=T out=4096 red=63 batch=1024 | vendor - | cta - | direct -
+trans=T out=4096 red=63 batch=8192 | vendor - | cta - | direct -
+trans=T out=4096 red=63 batch=32768 | vendor - | cta - | direct -
+trans=T out=4096 red=64 batch=1 | vendor - | cta - | direct -
+trans=T out=4096 red=64 batch=16 | vendor - | cta - | direct -
+trans=T out=4096 red=64 batch=128 | vendor - | cta - | direct -
+trans=T out=4096 red=64 batch=319 | vendor - | cta - | direct -
+trans=T out=4096 red=64 batch=320 | cta - | vendor - | direct -
+trans=T out=4096 red=64 batch=1024 | cta - | vendor - | direct -
+trans=T out=4096 red=64 batch=8192 | cta - | vendor - | direct -
+trans=T out=4096 red=64 batch=32768 | cta - | vendor - | direct -
+trans=T out=4096 red=128 batch=1 | vendor - | cta - | direct -
+trans=T out=4096 red=128 batch=16 | vendor - | cta - | direct -
+trans=T out=4096 red=128 batch=128 | vendor - | cta - | direct -
+trans=T out=4096 red=128 batch=319 | vendor - | cta - | direct -
+trans=T out=4096 red=128 batch=320 | cta - | vendor - | direct -
+trans=T out=4096 red=128 batch=1024 | cta - | vendor - | direct -
+trans=T out=4096 red=128 batch=8192 | cta - | vendor - | direct -
+trans=T out=4096 red=128 batch=32768 | cta - | vendor - | direct -
+trans=T out=4096 red=352 batch=1 | vendor - | cta - | direct -
+trans=T out=4096 red=352 batch=16 | vendor - | cta - | direct -
+trans=T out=4096 red=352 batch=128 | vendor - | cta - | direct -
+trans=T out=4096 red=352 batch=319 | vendor - | cta - | direct -
+trans=T out=4096 red=352 batch=320 | cta - | vendor - | direct -
+trans=T out=4096 red=352 batch=1024 | cta - | vendor - | direct -
+trans=T out=4096 red=352 batch=8192 | cta - | vendor - | direct -
+trans=T out=4096 red=352 batch=32768 | cta - | vendor - | direct -
+trans=T out=4096 red=353 batch=1 | vendor - | cta - | direct -
+trans=T out=4096 red=353 batch=16 | vendor - | cta - | direct -
+trans=T out=4096 red=353 batch=128 | vendor - | cta - | direct -
+trans=T out=4096 red=353 batch=319 | vendor - | cta - | direct -
+trans=T out=4096 red=353 batch=320 | vendor - | cta - | direct -
+trans=T out=4096 red=353 batch=1024 | vendor - | cta - | direct -
+trans=T out=4096 red=353 batch=8192 | vendor - | cta - | direct -
+trans=T out=4096 red=353 batch=32768 | vendor - | cta - | direct -
+trans=T out=4096 red=1024 batch=1 | vendor - | cta - | direct -
+trans=T out=4096 red=1024 batch=16 | vendor - | cta - | direct -
+trans=T out=4096 red=1024 batch=128 | vendor - | cta - | direct -
+trans=T out=4096 red=1024 batch=319 | vendor - | cta - | direct -
+trans=T out=4096 red=1024 batch=320 | vendor - | cta - | direct -
+trans=T out=4096 red=1024 batch=1024 | vendor - | cta - | direct -
+trans=T out=4096 red=1024 batch=8192 | vendor - | cta - | direct -
+trans=T out=4096 red=1024 batch=32768 | vendor - | cta - | direct -
+trans=T out=4096 red=4096 batch=1 | vendor - | cta - | direct -
+trans=T out=4096 red=4096 batch=16 | vendor - | cta - | direct -
+trans=T out=4096 red=4096 batch=128 | vendor - | cta - | direct -
+trans=T out=4096 red=4096 batch=319 | vendor - | cta - | direct -
+trans=T out=4096 red=4096 batch=320 | vendor - | cta - | direct -
+trans=T out=4096 red=4096 batch=1024 | vendor - | cta - | direct -
+trans=T out=4096 red=4096 batch=8192 | vendor - | cta - | direct -
+trans=T out=4096 red=4096 batch=32768 | vendor - | cta - | direct -
+trans=T out=4096 red=32768 batch=1 | vendor - | cta - | direct -
+trans=T out=4096 red=32768 batch=16 | vendor - | cta - | direct -
+trans=T out=4096 red=32768 batch=128 | vendor - | cta - | direct -
+trans=T out=4096 red=32768 batch=319 | vendor - | cta - | direct -
+trans=T out=4096 red=32768 batch=320 | vendor - | cta - | direct -
+trans=T out=4096 red=32768 batch=1024 | vendor - | cta - | direct -
+trans=T out=4096 red=32768 batch=8192 | vendor - | cta - | direct -
+trans=T out=4096 red=32768 batch=32768 | vendor - | cta - | direct -
+trans=T out=32768 red=1 batch=1 | vendor - | cta - | direct -
+trans=T out=32768 red=1 batch=16 | vendor - | cta - | direct -
+trans=T out=32768 red=1 batch=128 | vendor - | cta - | direct -
+trans=T out=32768 red=1 batch=319 | vendor - | cta - | direct -
+trans=T out=32768 red=1 batch=320 | vendor - | cta - | direct -
+trans=T out=32768 red=1 batch=1024 | vendor - | cta - | direct -
+trans=T out=32768 red=1 batch=8192 | vendor - | cta - | direct -
+trans=T out=32768 red=1 batch=32768 | vendor - | cta - | direct -
+trans=T out=32768 red=8 batch=1 | vendor - | cta - | direct -
+trans=T out=32768 red=8 batch=16 | vendor - | cta - | direct -
+trans=T out=32768 red=8 batch=128 | vendor - | cta - | direct -
+trans=T out=32768 red=8 batch=319 | vendor - | cta - | direct -
+trans=T out=32768 red=8 batch=320 | vendor - | cta - | direct -
+trans=T out=32768 red=8 batch=1024 | vendor - | cta - | direct -
+trans=T out=32768 red=8 batch=8192 | vendor - | cta - | direct -
+trans=T out=32768 red=8 batch=32768 | vendor - | cta - | direct -
+trans=T out=32768 red=32 batch=1 | vendor - | cta - | direct -
+trans=T out=32768 red=32 batch=16 | vendor - | cta - | direct -
+trans=T out=32768 red=32 batch=128 | vendor - | cta - | direct -
+trans=T out=32768 red=32 batch=319 | vendor - | cta - | direct -
+trans=T out=32768 red=32 batch=320 | vendor - | cta - | direct -
+trans=T out=32768 red=32 batch=1024 | vendor - | cta - | direct -
+trans=T out=32768 red=32 batch=8192 | vendor - | cta - | direct -
+trans=T out=32768 red=32 batch=32768 | vendor - | cta - | direct -
+trans=T out=32768 red=63 batch=1 | vendor - | cta - | direct -
+trans=T out=32768 red=63 batch=16 | vendor - | cta - | direct -
+trans=T out=32768 red=63 batch=128 | vendor - | cta - | direct -
+trans=T out=32768 red=63 batch=319 | vendor - | cta - | direct -
+trans=T out=32768 red=63 batch=320 | vendor - | cta - | direct -
+trans=T out=32768 red=63 batch=1024 | vendor - | cta - | direct -
+trans=T out=32768 red=63 batch=8192 | vendor - | cta - | direct -
+trans=T out=32768 red=63 batch=32768 | vendor - | cta - | direct -
+trans=T out=32768 red=64 batch=1 | vendor - | cta - | direct -
+trans=T out=32768 red=64 batch=16 | vendor - | cta - | direct -
+trans=T out=32768 red=64 batch=128 | vendor - | cta - | direct -
+trans=T out=32768 red=64 batch=319 | vendor - | cta - | direct -
+trans=T out=32768 red=64 batch=320 | cta - | vendor - | direct -
+trans=T out=32768 red=64 batch=1024 | cta - | vendor - | direct -
+trans=T out=32768 red=64 batch=8192 | cta - | vendor - | direct -
+trans=T out=32768 red=64 batch=32768 | cta - | vendor - | direct -
+trans=T out=32768 red=128 batch=1 | vendor - | cta - | direct -
+trans=T out=32768 red=128 batch=16 | vendor - | cta - | direct -
+trans=T out=32768 red=128 batch=128 | vendor - | cta - | direct -
+trans=T out=32768 red=128 batch=319 | vendor - | cta - | direct -
+trans=T out=32768 red=128 batch=320 | cta - | vendor - | direct -
+trans=T out=32768 red=128 batch=1024 | cta - | vendor - | direct -
+trans=T out=32768 red=128 batch=8192 | cta - | vendor - | direct -
+trans=T out=32768 red=128 batch=32768 | cta - | vendor - | direct -
+trans=T out=32768 red=352 batch=1 | vendor - | cta - | direct -
+trans=T out=32768 red=352 batch=16 | vendor - | cta - | direct -
+trans=T out=32768 red=352 batch=128 | vendor - | cta - | direct -
+trans=T out=32768 red=352 batch=319 | vendor - | cta - | direct -
+trans=T out=32768 red=352 batch=320 | cta - | vendor - | direct -
+trans=T out=32768 red=352 batch=1024 | cta - | vendor - | direct -
+trans=T out=32768 red=352 batch=8192 | cta - | vendor - | direct -
+trans=T out=32768 red=352 batch=32768 | cta - | vendor - | direct -
+trans=T out=32768 red=353 batch=1 | vendor - | cta - | direct -
+trans=T out=32768 red=353 batch=16 | vendor - | cta - | direct -
+trans=T out=32768 red=353 batch=128 | vendor - | cta - | direct -
+trans=T out=32768 red=353 batch=319 | vendor - | cta - | direct -
+trans=T out=32768 red=353 batch=320 | vendor - | cta - | direct -
+trans=T out=32768 red=353 batch=1024 | vendor - | cta - | direct -
+trans=T out=32768 red=353 batch=8192 | vendor - | cta - | direct -
+trans=T out=32768 red=353 batch=32768 | vendor - | cta - | direct -
+trans=T out=32768 red=1024 batch=1 | vendor - | cta - | direct -
+trans=T out=32768 red=1024 batch=16 | vendor - | cta - | direct -
+trans=T out=32768 red=1024 batch=128 | vendor - | cta - | direct -
+trans=T out=32768 red=1024 batch=319 | vendor - | cta - | direct -
+trans=T out=32768 red=1024 batch=320 | vendor - | cta - | direct -
+trans=T out=32768 red=1024 batch=1024 | vendor - | cta - | direct -
+trans=T out=32768 red=1024 batch=8192 | vendor - | cta - | direct -
+trans=T out=32768 red=1024 batch=32768 | vendor - | cta - | direct -
+trans=T out=32768 red=4096 batch=1 | vendor - | cta - | direct -
+trans=T out=32768 red=4096 batch=16 | vendor - | cta - | direct -
+trans=T out=32768 red=4096 batch=128 | vendor - | cta - | direct -
+trans=T out=32768 red=4096 batch=319 | vendor - | cta - | direct -
+trans=T out=32768 red=4096 batch=320 | vendor - | cta - | direct -
+trans=T out=32768 red=4096 batch=1024 | vendor - | cta - | direct -
+trans=T out=32768 red=4096 batch=8192 | vendor - | cta - | direct -
+trans=T out=32768 red=4096 batch=32768 | vendor - | cta - | direct -
+trans=T out=32768 red=32768 batch=1 | vendor - | cta - | direct -
+trans=T out=32768 red=32768 batch=16 | vendor - | cta - | direct -
+trans=T out=32768 red=32768 batch=128 | vendor - | cta - | direct -
+trans=T out=32768 red=32768 batch=319 | vendor - | cta - | direct -
+trans=T out=32768 red=32768 batch=320 | vendor - | cta - | direct -
+trans=T out=32768 red=32768 batch=1024 | vendor - | cta - | direct -
+trans=T out=32768 red=32768 batch=8192 | vendor - | cta - | direct -
+trans=T out=32768 red=32768 batch=32768 | vendor - | cta - | direct -

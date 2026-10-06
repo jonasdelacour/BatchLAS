@@ -6,11 +6,11 @@
 // runtime variable moves it to local memory). Rows n..N-1 pad with Lc(s,s)=1.
 
 #include "trsm_native.hh"
+#include "trsm_canonical.hh"
 
 #include "../linalg-impl.hh"
 #include "../util/resident_capacity.hh"
 #include "device_scalar.hh"
-#include "gemm_kernels.hh"
 
 #include <sycl/sycl.hpp>
 
@@ -25,28 +25,6 @@
 namespace batchlas::sycl_trsm {
 
 namespace {
-
-// The 24 (side, uplo, transA, diag) combinations fold into ONE recurrence over a
-// canonical unit-lower Lc. evidence: docs/perf/trsm.md#design-v1-v2-and-the-canonical-fold
-struct Canonical {
-    bool do_trans;
-    bool do_conj;
-    bool op_is_lower;
-    bool unit;
-    bool fwd;
-};
-
-inline Canonical canonicalise(Side side, Uplo uplo, Transpose transA, Diag diag) {
-    Canonical c{};
-    c.do_trans = (transA != Transpose::NoTrans);
-    c.do_conj = (transA == Transpose::ConjTrans);
-    c.op_is_lower = (uplo == Uplo::Lower) ? !c.do_trans : c.do_trans;
-    c.unit = (diag == Diag::Unit);
-    // fwd is the direction the canonical recurrence marches. Getting this
-    // backwards is silent: it solves a different triangle and still returns.
-    c.fwd = (side == Side::Left) ? c.op_is_lower : !c.op_is_lower;
-    return c;
-}
 
 // Smallest compile-time bucket >= n, or 0 for none: a narrower bucket would
 // silently solve the leading NxN system. evidence: docs/perf/trsm.md#the-bucket-ladder-that-truncated
@@ -109,20 +87,14 @@ Event trsm_native_v1(Queue& ctx,
 
     // Both operands are named so the assert is driven by the ladder it guards:
     // adding a rung above kMaxWg now fails to compile instead of aborting at launch.
-    constexpr int kMaxWg = 256;
+    constexpr int kMaxWg = kTrsmV1MaxWg;
     constexpr int kWorstRegsPerThread = 226;   // complex<double>, N=32
     // 256 lanes is 8 warps, 2 per sub-partition: 2 x 32 x ceil8(226) = 14,848 of 16,384.
     // evidence: docs/perf/lu.md#the-register-cap-that-binds-is-per-sub-partition
     static_assert(resident::sm89_fits(kWorstRegsPerThread, kMaxWg),
                   "the work-group ceiling is set by registers per sub-partition, not by "
                   "occupancy; re-run scripts/register_probe.sh before raising it");
-    int wg = 32;
-    for (int cand : {kMaxWg, 128, 64, 32}) {
-        if (cand > max_wg) continue;
-        wg = cand;
-        const int64_t groups_c = (q + cand - 1) / cand;
-        if (static_cast<int64_t>(bs) * groups_c >= static_cast<int64_t>(4) * cu) break;
-    }
+    const int wg = trsm_v1_ladder_wg(max_wg, cu, q, bs);
 
     const int groups = (q + wg - 1) / wg;
     const size_t tri_elems = static_cast<size_t>(N) * (N + 1) / 2;
@@ -393,17 +365,8 @@ Event trsm_native_blocked(Queue& ctx,
                           Transpose transA,
                           Diag diag,
                           TrsmTrailingGemm<T> trailing_gemm) {
-    // Default to the native kernel so this TU stands alone; the facade passes the ROUTED gemm.
     if (!trailing_gemm) {
-        trailing_gemm = [](Queue& c,
-                           const MatrixView<T, MatrixFormat::Dense>& ga,
-                           const MatrixView<T, MatrixFormat::Dense>& gb,
-                           const MatrixView<T, MatrixFormat::Dense>& gc,
-                           T galpha, T gbeta, Transpose gta, Transpose gtb,
-                           ComputePrecision gp) {
-            return sycl_gemm::gemm_custom<T>(c, ga, gb, gc, galpha, gbeta,
-                                             gta, gtb, gp);
-        };
+        throw batchlas::invalid_argument("trsm_native_blocked: trailing_gemm is required (pass the public gemm)");
     }
     const Canonical can = canonicalise(side, uplo, transA, diag);
     const int n = static_cast<int>(A.rows());

@@ -6,9 +6,6 @@
 #include "level3_fused.hh"
 #include "level3_vendor_fallback.hh"
 
-#include <batchlas/blas/dispatch/route.hh>
-#include <batchlas/blas/dispatch/route_env.hh>
-
 #include "../util/kernel-trace.hh"
 
 #include <cctype>
@@ -23,18 +20,12 @@ namespace {
 
 constexpr int kTrmmCublasDxTile = 32;
 
-// The ONE parse of BATCHLAS_TRMM_VARIANT; do not add a second reader.
-// evidence: docs/perf/level3.md#level-3-one-route-parse-per-variable
-dispatch::Route trmm_route_request() {
-    const auto parsed = dispatch::parse_route_env(dispatch::Op::trmm);
-    return parsed.found ? parsed.route
-                        : dispatch::legacy_unset_default(dispatch::Op::trmm);
-}
-
-// BATCHLAS_TRMM_VARIANT=triangular pins the tile kernel, =vendor the expansion
-// plus GEMM it replaces, so the two stay independently measurable.
-bool trmm_triangular_requested() {
-    return trmm_route_request().algo == dispatch::Algorithm::TriangularTiles;
+// BATCHLAS_TRMM_ROUTE: vendor, the expansion plus GEMM; triangular or native, the
+// tile kernel; cublasdx, the fused MathDx kernel (throws when it cannot run).
+detail::Level3Pin trmm_pin() {
+    using detail::Level3Pin;
+    return detail::level3_pin("trmm", {Level3Pin::Native, Level3Pin::Vendor, Level3Pin::Triangular,
+                                       Level3Pin::Cublasdx});
 }
 
 // Every left-side float problem with a homogeneous batch (base + batch*stride
@@ -95,18 +86,17 @@ bool trmm_prefer_cuda_custom_heuristic(const MatrixView<float, MatrixFormat::Den
 }
 
 [[noreturn]] void throw_forced_trmm_unavailable(const std::string& reason) {
-    detail::throw_forced_cublasdx_unavailable("BATCHLAS_TRMM_VARIANT", "TRMM", reason);
+    detail::throw_forced_cublasdx_unavailable("trmm", reason);
 }
 
 } // namespace
 
 bool trmm_route_prefers_vendor() {
-    const auto r = trmm_route_request();
-    return dispatch::is_plain_vendor(r);
+    return trmm_pin() == detail::Level3Pin::Vendor;
 }
 
 bool trmm_cuda_custom_forced() {
-    return trmm_route_request().algo == dispatch::Algorithm::FusedDevice;
+    return trmm_pin() == detail::Level3Pin::Cublasdx;
 }
 
 bool trmm_use_cuda_custom(const Queue& ctx,
@@ -117,20 +107,15 @@ bool trmm_use_cuda_custom(const Queue& ctx,
                           Uplo uplo,
                           Transpose transA,
                           Diag) {
-    // `=vendor` must keep meaning the vendor: it is the only "before" to measure against.
-    if (detail::is_gpu_queue(ctx) && trmm_triangular_supported(A, B, C, side) &&
-        (trmm_triangular_requested() ||
-         !dispatch::is_plain_vendor(trmm_route_request()))) {
-        return true;
-    }
-    const auto request = trmm_route_request();
-    const bool problem_supported = trmm_problem_supported(A, B, C, side, uplo, transA);
-    return detail::should_use_cublasdx(ctx,
-                                       request,
-                                       dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto},
-                                       dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::FusedDevice},
-                                       problem_supported,
-                                       problem_supported && trmm_prefer_cuda_custom_heuristic(A, B));
+    // `vendor` keeps meaning the vendor even though the tile kernel is the default:
+    // it is the "before" a measurement is taken against.
+    using detail::Level3Pin;
+    const Level3Pin pin = trmm_pin();
+    if (pin == Level3Pin::Cublasdx || pin == Level3Pin::Triangular) return true;
+    if (pin == Level3Pin::Vendor || !detail::is_gpu_queue(ctx)) return false;
+    if (trmm_triangular_supported(A, B, C, side)) return true;
+    return pin == Level3Pin::Auto && trmm_problem_supported(A, B, C, side, uplo, transA) &&
+           trmm_prefer_cuda_custom_heuristic(A, B);
 }
 
 Event trmm_cuda_custom(Queue& ctx,
@@ -142,52 +127,60 @@ Event trmm_cuda_custom(Queue& ctx,
                        Uplo uplo,
                        Transpose transA,
                        Diag diag) {
-    // Coverage record: beside every return, never in place of one. uplo/diag are
-    // in the key on purpose. evidence: docs/perf/level3.md#the-trmm-poison-test
-    const auto rec = [&](dispatch::Route taken, bool native_supported) {
-        detail::record_level3_route(dispatch::Op::trmm, taken,
+    // uplo/diag are in the coverage key on purpose. evidence: docs/perf/level3.md#the-trmm-poison-test
+    const auto rec = [&](const char* taken, bool native_supported) {
+        detail::record_level3_route(Op::trmm, taken,
                                     C.rows(), C.cols(), A.rows(),
                                     A.batch_size(), native_supported,
                                     {uplo, side, diag, transA});
     };
 
-    const bool forced = trmm_cuda_custom_forced();
+    using detail::Level3Pin;
+    const Level3Pin pin = trmm_pin();
+    const bool forced = pin == Level3Pin::Cublasdx;
     if (!detail::is_gpu_queue(ctx)) {
         if (forced) {
             throw_forced_trmm_unavailable("the active queue is not a GPU queue");
         }
-        rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto}, false);
+        if (pin == Level3Pin::Triangular) {
+            throw std::invalid_argument("trmm: BATCHLAS_TRMM_ROUTE=triangular needs a GPU queue");
+        }
+        rec("vendor", false);
         return detail::trmm_vendor_fallback(ctx, A, B, C, alpha, side, uplo, transA, diag);
     }
-    // Auto takes the tile kernel wherever it fits.
-    if (trmm_triangular_supported(A, B, C, side) &&
-        (trmm_triangular_requested() ||
-         (!forced && !dispatch::is_plain_vendor(trmm_route_request())))) {
-        rec(dispatch::Route{dispatch::Origin::Native, dispatch::Algorithm::TriangularTiles}, true);
+    // The tile kernel is the only route that respects the triangle rather than
+    // expanding it, so it is what the automatic choice takes wherever it fits.
+    if (!forced && trmm_triangular_supported(A, B, C, side)) {
+        rec("triangular", true);
         return detail::trmm_triangular_tiles(ctx, A, B, C, alpha, uplo, transA, diag);
+    }
+    if (pin == Level3Pin::Triangular) {
+        throw std::invalid_argument("trmm: BATCHLAS_TRMM_ROUTE=triangular serves only left-side "
+                                    "problems with a homogeneous batch");
     }
     if (!trmm_problem_supported(A, B, C, side, uplo, transA)) {
         if (forced) {
             throw_forced_trmm_unavailable("only left/lower/notrans float problems with matching dense batches are currently supported");
         }
-        rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto}, false);
+        rec("vendor", false);
         return detail::trmm_vendor_fallback(ctx, A, B, C, alpha, side, uplo, transA, diag);
     }
 
-    // Both non-Ran outcomes fall back to the vendor, with distinct messages when forced.
-    auto fused = detail::trmm_fused_try(ctx, A, B, C, alpha, side, uplo, transA, diag);
-    if (fused.outcome == detail::FusedResult::Outcome::Ran) {
-        rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::FusedDevice}, true);
-        return std::move(fused.event);
-    }
-    if (forced) {
-        if (fused.outcome == detail::FusedResult::Outcome::NoKernel) {
-            throw_forced_trmm_unavailable("no compatible fused kernel is available in this build for the requested problem");
+    if (pin == Level3Pin::Auto || forced) {
+        auto fused = detail::trmm_fused_try(ctx, A, B, C, alpha, side, uplo, transA, diag);
+        if (fused.outcome == detail::FusedResult::Outcome::Ran) {
+            rec("cublasdx", true);
+            return std::move(fused.event);
         }
-        throw_forced_trmm_unavailable("the current device or matrix layout does not satisfy the fused kernel requirements");
+        if (forced) {
+            if (fused.outcome == detail::FusedResult::Outcome::NoKernel) {
+                throw_forced_trmm_unavailable("no compatible fused kernel is available in this build for the requested problem");
+            }
+            throw_forced_trmm_unavailable("the current device or matrix layout does not satisfy the fused kernel requirements");
+        }
     }
 
-    rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto}, true);
+    rec("vendor", true);
     return detail::trmm_vendor_fallback(ctx, A, B, C, alpha, side, uplo, transA, diag);
 }
 

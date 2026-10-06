@@ -48,8 +48,10 @@ using geqrf_vendor_buffer_size = size_t(Queue&,
 /// valid; the length of @p tau is checked by the option overloads.
 /// @throws batchlas::invalid_argument on negative extents
 /// @ingroup qr
+// Runs in src/ops/geqrf/geqrf.cc before the selection key reads A.rows()/A.cols().
 // Deliberately no squareness check (rectangular A is the point of geqrf), no
-// m >= n check (a wide view routes to the vendor) and no tau-length check.
+// m >= n check (can_run sends a wide view to the vendor, which serves it) and no
+// tau-length check.
 // evidence: docs/design/vendor-independence.md#positional-validators-reject-only-what-no-route-can-serve
 template <typename T>
 inline void geqrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
@@ -81,8 +83,8 @@ inline void geqrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
 /// @return event of the last enqueued kernel
 /// @pre `tau.size() >= min(m, n) * A.batch_size()` (checked by the option overloads only)
 /// @throws batchlas::invalid_argument on negative extents
-/// @throws batchlas::dispatch::NoRouteError if no native route supports the
-///         shape (native routes need m >= n) and the vendor library was not built in
+/// @throws batchlas::NoRouteError if no native kernel can run the shape (the
+///         native kernels need m >= n) and the vendor library was not built in
 /// @ingroup qr
 template <Backend B, typename T>
 BATCHLAS_API Event geqrf(Queue& ctx,
@@ -102,9 +104,10 @@ BATCHLAS_API size_t geqrf_buffer_size(Queue& ctx,
 
 namespace batchlas::backend {
 
-/// @brief Vendor arm of geqrf(); called by the entry-point facade, not by users.
+/// @brief Vendor arm of geqrf(); called by geqrf() when it selects the `vendor`
+///        kernel family, not by users.
 /// @ingroup dispatch
-// Declaration only: the public geqrf lives in src/dispatch/entry_points/factorization.cc.
+// DECLARATION ONLY: the public geqrf is defined in src/ops/geqrf/geqrf.cc.
 // evidence: docs/design/vendor-independence.md#the-entry-point-facade
 template <Backend B, typename T>
 BATCHLAS_API Event geqrf_vendor(Queue& ctx,

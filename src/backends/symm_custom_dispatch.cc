@@ -9,9 +9,6 @@
 #include <batchlas/blas/functions/gemm.hh>
 #include "triangular_expand.hh"
 
-#include <batchlas/blas/dispatch/route.hh>
-#include <batchlas/blas/dispatch/route_env.hh>
-
 #include "../util/kernel-trace.hh"
 
 #include <batchlas/util/mempool.hh>
@@ -24,12 +21,13 @@ namespace batchlas::backend {
 
 namespace {
 
-// Legacy "custom" means the FUSED kernel here, not the register-tiled GEMM.
-// evidence: docs/perf/level3.md#level-3-one-route-parse-per-variable
-dispatch::Route symm_route_request() {
-    const auto parsed = dispatch::parse_route_env(dispatch::Op::symm);
-    return parsed.found ? parsed.route
-                        : dispatch::legacy_unset_default(dispatch::Op::symm);
+// BATCHLAS_SYMM_ROUTE: vendor, cublasdx (the fused MathDx kernel; throws when it
+// cannot run), expand or native (the mirrored expansion plus the public gemm, symm's
+// only native route).
+detail::Level3Pin symm_pin() {
+    using detail::Level3Pin;
+    return detail::level3_pin("symm", {Level3Pin::Native, Level3Pin::Vendor, Level3Pin::Expand,
+                                       Level3Pin::Cublasdx});
 }
 
 bool symm_problem_supported(const MatrixView<float, MatrixFormat::Dense>& A,
@@ -70,7 +68,7 @@ bool symm_prefer_cuda_custom_heuristic(const MatrixView<float, MatrixFormat::Den
     return detail::expansion_preferred(max_dim, A.batch_size());
 }
 
-Event symm_cublasdx_fallback_gemm(Queue& ctx,
+Event symm_expand_gemm(Queue& ctx,
                                   const MatrixView<float, MatrixFormat::Dense>& A,
                                   const MatrixView<float, MatrixFormat::Dense>& B,
                                   const MatrixView<float, MatrixFormat::Dense>& C,
@@ -133,14 +131,13 @@ bool symm_use_cuda_custom(const Queue& ctx,
                           const MatrixView<float, MatrixFormat::Dense>& C,
                           Side side,
                           Uplo) {
-    const auto request = symm_route_request();
-    const bool problem_supported = symm_problem_supported(A, B, C, side);
-    return detail::should_use_cublasdx(ctx,
-                                       request,
-                                       dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto},
-                                       dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::FusedDevice},
-                                       problem_supported,
-                                       problem_supported && symm_prefer_cuda_custom_heuristic(A, B, C, side));
+    using detail::Level3Pin;
+    const Level3Pin pin = symm_pin();
+    if (pin == Level3Pin::Cublasdx) return true;
+    if (pin == Level3Pin::Vendor || !detail::is_gpu_queue(ctx) || !symm_problem_supported(A, B, C, side)) {
+        return false;
+    }
+    return pin != Level3Pin::Auto || symm_prefer_cuda_custom_heuristic(A, B, C, side);
 }
 
 Event symm_cuda_custom(Queue& ctx,
@@ -151,30 +148,37 @@ Event symm_cuda_custom(Queue& ctx,
                        float beta,
                        Side side,
                        Uplo uplo) {
-    // Coverage record: beside every return, never in place of one (level3_coverage.hh).
-    const auto rec = [&](dispatch::Route taken, bool native_supported) {
-        detail::record_level3_route(dispatch::Op::symm, taken,
+    const auto rec = [&](const char* taken, bool native_supported) {
+        detail::record_level3_route(Op::symm, taken,
                                     C.rows(), C.cols(), A.rows(),
                                     A.batch_size(), native_supported,
                                     {uplo, side, Diag::NonUnit, Transpose::NoTrans});
     };
 
+    using detail::Level3Pin;
+    const Level3Pin pin = symm_pin();
+    const bool forced = pin == Level3Pin::Cublasdx;
     if (!symm_problem_supported(A, B, C, side)) {
-        rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto}, false);
+        if (forced) {
+            detail::throw_forced_cublasdx_unavailable("symm", "the problem shape is unsupported");
+        }
+        rec("vendor", false);
         return detail::symm_vendor_fallback(ctx, A, B, C, alpha, beta, side, uplo);
     }
 
-    // Both non-Ran outcomes fall back to the expansion for symm.
-    auto fused = detail::symm_fused_try(ctx, A, B, C, alpha, beta, side, uplo);
-    if (fused.outcome == detail::FusedResult::Outcome::Ran) {
-        rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::FusedDevice}, true);
-        return std::move(fused.event);
+    if (pin == Level3Pin::Auto || forced) {
+        auto fused = detail::symm_fused_try(ctx, A, B, C, alpha, beta, side, uplo);
+        if (fused.outcome == detail::FusedResult::Outcome::Ran) {
+            rec("cublasdx", true);
+            return std::move(fused.event);
+        }
+        if (forced) {
+            detail::throw_forced_cublasdx_unavailable("symm", "no fused kernel ran for this problem");
+        }
     }
 
-    // ExpandGemm: the expansion is native; it is NOT a claim that the GEMM is.
-    rec(dispatch::Route{dispatch::Origin::Native, dispatch::Algorithm::ExpandGemm}, true);
-    return symm_cublasdx_fallback_gemm(ctx, A, B, C, alpha, beta, side, uplo);
+    rec("expand", true);
+    return symm_expand_gemm(ctx, A, B, C, alpha, beta, side, uplo);
 }
-
 
 } // namespace batchlas::backend

@@ -1,0 +1,235 @@
+# op=gesv dtype=cfloat device=sm_89 batchlas=424a45bc kernels=unknown date=2026-10-05 source=transcribed:424a45bc
+# transcriber_csv=tuned/transcribed/gesv.sm_89.csv (the old router's preference order per grid cell, untimed)
+# keys: n:log:3 nrhs:log
+n=1 nrhs=1 | tiny - | blocked -
+n=1 nrhs=2 | tiny - | blocked -
+n=1 nrhs=4 | tiny - | blocked -
+n=1 nrhs=5 | tiny - | blocked -
+n=1 nrhs=8 | tiny - | blocked -
+n=1 nrhs=16 | tiny - | blocked -
+n=1 nrhs=64 | tiny - | blocked -
+n=1 nrhs=256 | tiny - | blocked -
+n=2 nrhs=1 | tiny - | blocked -
+n=2 nrhs=2 | tiny - | blocked -
+n=2 nrhs=4 | tiny - | blocked -
+n=2 nrhs=5 | tiny - | blocked -
+n=2 nrhs=8 | tiny - | blocked -
+n=2 nrhs=16 | tiny - | blocked -
+n=2 nrhs=64 | tiny - | blocked -
+n=2 nrhs=256 | tiny - | blocked -
+n=3 nrhs=1 | tiny - | blocked -
+n=3 nrhs=2 | tiny - | blocked -
+n=3 nrhs=4 | tiny - | blocked -
+n=3 nrhs=5 | tiny - | blocked -
+n=3 nrhs=8 | tiny - | blocked -
+n=3 nrhs=16 | tiny - | blocked -
+n=3 nrhs=64 | tiny - | blocked -
+n=3 nrhs=256 | tiny - | blocked -
+n=4 nrhs=1 | tiny - | blocked -
+n=4 nrhs=2 | tiny - | blocked -
+n=4 nrhs=4 | tiny - | blocked -
+n=4 nrhs=5 | tiny - | blocked -
+n=4 nrhs=8 | tiny - | blocked -
+n=4 nrhs=16 | tiny - | blocked -
+n=4 nrhs=64 | tiny - | blocked -
+n=4 nrhs=256 | tiny - | blocked -
+n=6 nrhs=1 | tiny - | blocked -
+n=6 nrhs=2 | tiny - | blocked -
+n=6 nrhs=4 | tiny - | blocked -
+n=6 nrhs=5 | tiny - | blocked -
+n=6 nrhs=8 | tiny - | blocked -
+n=6 nrhs=16 | tiny - | blocked -
+n=6 nrhs=64 | tiny - | blocked -
+n=6 nrhs=256 | tiny - | blocked -
+n=8 nrhs=1 | tiny - | blocked -
+n=8 nrhs=2 | tiny - | blocked -
+n=8 nrhs=4 | tiny - | blocked -
+n=8 nrhs=5 | tiny - | blocked -
+n=8 nrhs=8 | tiny - | blocked -
+n=8 nrhs=16 | tiny - | blocked -
+n=8 nrhs=64 | tiny - | blocked -
+n=8 nrhs=256 | tiny - | blocked -
+n=12 nrhs=1 | tiny - | blocked -
+n=12 nrhs=2 | tiny - | blocked -
+n=12 nrhs=4 | tiny - | blocked -
+n=12 nrhs=5 | tiny - | blocked -
+n=12 nrhs=8 | tiny - | blocked -
+n=12 nrhs=16 | tiny - | blocked -
+n=12 nrhs=64 | tiny - | blocked -
+n=12 nrhs=256 | tiny - | blocked -
+n=16 nrhs=1 | tiny - | blocked -
+n=16 nrhs=2 | tiny - | blocked -
+n=16 nrhs=4 | tiny - | blocked -
+n=16 nrhs=5 | tiny - | blocked -
+n=16 nrhs=8 | tiny - | blocked -
+n=16 nrhs=16 | tiny - | blocked -
+n=16 nrhs=64 | tiny - | blocked -
+n=16 nrhs=256 | tiny - | blocked -
+n=17 nrhs=1 | blocked -
+n=17 nrhs=2 | blocked -
+n=17 nrhs=4 | blocked -
+n=17 nrhs=5 | blocked -
+n=17 nrhs=8 | blocked -
+n=17 nrhs=16 | blocked -
+n=17 nrhs=64 | blocked -
+n=17 nrhs=256 | blocked -
+n=20 nrhs=1 | blocked -
+n=20 nrhs=2 | blocked -
+n=20 nrhs=4 | blocked -
+n=20 nrhs=5 | blocked -
+n=20 nrhs=8 | blocked -
+n=20 nrhs=16 | blocked -
+n=20 nrhs=64 | blocked -
+n=20 nrhs=256 | blocked -
+n=24 nrhs=1 | blocked -
+n=24 nrhs=2 | blocked -
+n=24 nrhs=4 | blocked -
+n=24 nrhs=5 | blocked -
+n=24 nrhs=8 | blocked -
+n=24 nrhs=16 | blocked -
+n=24 nrhs=64 | blocked -
+n=24 nrhs=256 | blocked -
+n=28 nrhs=1 | blocked -
+n=28 nrhs=2 | blocked -
+n=28 nrhs=4 | blocked -
+n=28 nrhs=5 | blocked -
+n=28 nrhs=8 | blocked -
+n=28 nrhs=16 | blocked -
+n=28 nrhs=64 | blocked -
+n=28 nrhs=256 | blocked -
+n=32 nrhs=1 | blocked -
+n=32 nrhs=2 | blocked -
+n=32 nrhs=4 | blocked -
+n=32 nrhs=5 | blocked -
+n=32 nrhs=8 | blocked -
+n=32 nrhs=16 | blocked -
+n=32 nrhs=64 | blocked -
+n=32 nrhs=256 | blocked -
+n=33 nrhs=1 | blocked -
+n=33 nrhs=2 | blocked -
+n=33 nrhs=4 | blocked -
+n=33 nrhs=5 | blocked -
+n=33 nrhs=8 | blocked -
+n=33 nrhs=16 | blocked -
+n=33 nrhs=64 | blocked -
+n=33 nrhs=256 | blocked -
+n=40 nrhs=1 | blocked -
+n=40 nrhs=2 | blocked -
+n=40 nrhs=4 | blocked -
+n=40 nrhs=5 | blocked -
+n=40 nrhs=8 | blocked -
+n=40 nrhs=16 | blocked -
+n=40 nrhs=64 | blocked -
+n=40 nrhs=256 | blocked -
+n=48 nrhs=1 | blocked -
+n=48 nrhs=2 | blocked -
+n=48 nrhs=4 | blocked -
+n=48 nrhs=5 | blocked -
+n=48 nrhs=8 | blocked -
+n=48 nrhs=16 | blocked -
+n=48 nrhs=64 | blocked -
+n=48 nrhs=256 | blocked -
+n=64 nrhs=1 | blocked -
+n=64 nrhs=2 | blocked -
+n=64 nrhs=4 | blocked -
+n=64 nrhs=5 | blocked -
+n=64 nrhs=8 | blocked -
+n=64 nrhs=16 | blocked -
+n=64 nrhs=64 | blocked -
+n=64 nrhs=256 | blocked -
+n=96 nrhs=1 | blocked -
+n=96 nrhs=2 | blocked -
+n=96 nrhs=4 | blocked -
+n=96 nrhs=5 | blocked -
+n=96 nrhs=8 | blocked -
+n=96 nrhs=16 | blocked -
+n=96 nrhs=64 | blocked -
+n=96 nrhs=256 | blocked -
+n=128 nrhs=1 | blocked -
+n=128 nrhs=2 | blocked -
+n=128 nrhs=4 | blocked -
+n=128 nrhs=5 | blocked -
+n=128 nrhs=8 | blocked -
+n=128 nrhs=16 | blocked -
+n=128 nrhs=64 | blocked -
+n=128 nrhs=256 | blocked -
+n=192 nrhs=1 | blocked -
+n=192 nrhs=2 | blocked -
+n=192 nrhs=4 | blocked -
+n=192 nrhs=5 | blocked -
+n=192 nrhs=8 | blocked -
+n=192 nrhs=16 | blocked -
+n=192 nrhs=64 | blocked -
+n=192 nrhs=256 | blocked -
+n=256 nrhs=1 | blocked -
+n=256 nrhs=2 | blocked -
+n=256 nrhs=4 | blocked -
+n=256 nrhs=5 | blocked -
+n=256 nrhs=8 | blocked -
+n=256 nrhs=16 | blocked -
+n=256 nrhs=64 | blocked -
+n=256 nrhs=256 | blocked -
+n=384 nrhs=1 | blocked -
+n=384 nrhs=2 | blocked -
+n=384 nrhs=4 | blocked -
+n=384 nrhs=5 | blocked -
+n=384 nrhs=8 | blocked -
+n=384 nrhs=16 | blocked -
+n=384 nrhs=64 | blocked -
+n=384 nrhs=256 | blocked -
+n=512 nrhs=1 | blocked -
+n=512 nrhs=2 | blocked -
+n=512 nrhs=4 | blocked -
+n=512 nrhs=5 | blocked -
+n=512 nrhs=8 | blocked -
+n=512 nrhs=16 | blocked -
+n=512 nrhs=64 | blocked -
+n=512 nrhs=256 | blocked -
+n=768 nrhs=1 | blocked -
+n=768 nrhs=2 | blocked -
+n=768 nrhs=4 | blocked -
+n=768 nrhs=5 | blocked -
+n=768 nrhs=8 | blocked -
+n=768 nrhs=16 | blocked -
+n=768 nrhs=64 | blocked -
+n=768 nrhs=256 | blocked -
+n=1024 nrhs=1 | blocked -
+n=1024 nrhs=2 | blocked -
+n=1024 nrhs=4 | blocked -
+n=1024 nrhs=5 | blocked -
+n=1024 nrhs=8 | blocked -
+n=1024 nrhs=16 | blocked -
+n=1024 nrhs=64 | blocked -
+n=1024 nrhs=256 | blocked -
+n=1536 nrhs=1 | blocked -
+n=1536 nrhs=2 | blocked -
+n=1536 nrhs=4 | blocked -
+n=1536 nrhs=5 | blocked -
+n=1536 nrhs=8 | blocked -
+n=1536 nrhs=16 | blocked -
+n=1536 nrhs=64 | blocked -
+n=1536 nrhs=256 | blocked -
+n=2048 nrhs=1 | blocked -
+n=2048 nrhs=2 | blocked -
+n=2048 nrhs=4 | blocked -
+n=2048 nrhs=5 | blocked -
+n=2048 nrhs=8 | blocked -
+n=2048 nrhs=16 | blocked -
+n=2048 nrhs=64 | blocked -
+n=2048 nrhs=256 | blocked -
+n=3072 nrhs=1 | blocked -
+n=3072 nrhs=2 | blocked -
+n=3072 nrhs=4 | blocked -
+n=3072 nrhs=5 | blocked -
+n=3072 nrhs=8 | blocked -
+n=3072 nrhs=16 | blocked -
+n=3072 nrhs=64 | blocked -
+n=3072 nrhs=256 | blocked -
+n=4096 nrhs=1 | blocked -
+n=4096 nrhs=2 | blocked -
+n=4096 nrhs=4 | blocked -
+n=4096 nrhs=5 | blocked -
+n=4096 nrhs=8 | blocked -
+n=4096 nrhs=16 | blocked -
+n=4096 nrhs=64 | blocked -
+n=4096 nrhs=256 | blocked -

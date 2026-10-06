@@ -57,7 +57,7 @@ using herk_vendor = Event(Queue&,
 /// @param transA  `Transpose::NoTrans` or `Transpose::ConjTrans`
 /// @return event of the last enqueued kernel; `C` is valid once it completes
 /// @pre `A` and `C` have the same batch size and conforming shapes per item.
-/// @throws batchlas::dispatch::NoRouteError in a build without the vendor BLAS
+/// @throws batchlas::NoRouteError in a build without the vendor BLAS
 ///         for `Ba`: herk has no native implementation.
 /// @note Not instantiated for `Backend::ROCM`.
 /// @see syrk, her2k, HerkOptions, @ref md_docs_2cpp-api
@@ -77,6 +77,7 @@ BATCHLAS_API Event herk(Queue& ctx,
 namespace batchlas::backend {
 
 // Declaration only: each vendor TU defines and instantiates it for its Backend.
+// The public herk is defined in src/ops/level3/level3.cc, outside every vendor TU.
 // evidence: docs/design/vendor-independence.md#the-entry-point-facade
 /// @brief Vendor-library implementation of herk (cuBLAS, host BLAS).
 ///

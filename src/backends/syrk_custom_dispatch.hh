@@ -7,11 +7,11 @@
 
 namespace batchlas::backend {
 
-// True unless BATCHLAS_SYRK_VARIANT pins the vendor. Non-float callers need this
-// bit too, or `=vendor` would silently measure the new route.
+// True when BATCHLAS_SYRK_ROUTE=vendor. The float router reads the whole pin;
+// non-float callers need this bit too, or `=vendor` would silently measure the new route.
 bool syrk_route_prefers_vendor();
 
-// True only when BATCHLAS_SYRK_VARIANT names the Gram kernel. herk never takes it
+// True only when BATCHLAS_SYRK_ROUTE=gram. herk never takes the Gram kernel
 // automatically (it loses to GEMM-plus-fold); it stays reachable to stay tested.
 // evidence: docs/perf/level3.md#herk-on-the-gram-tile-kernel
 bool syrk_route_requests_gram();

@@ -46,9 +46,9 @@ using potrf_vendor_buffer_size = size_t(Queue&,
 
 /// @brief Validates the arguments of the positional potrf() entry point.
 ///
-/// Checks only what no route can serve: non-negative extents, a square A and a
+/// Checks only what no kernel can serve: non-negative extents, a square A and a
 /// valid @p uplo. It does not check the length of a non-empty `info` span.
-/// Called by the facade before the routing shape is built.
+/// Called by the public potrf() before the selection key is built.
 /// @throws batchlas::invalid_argument on negative extents, a non-square A or an
 ///         invalid @p uplo.
 /// @ingroup factorizations
@@ -80,7 +80,7 @@ inline void potrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
 /// same value serves both potrf() overloads.
 /// @tparam B  backend; the backend-deducing overload takes it from `ctx.backend()`
 /// @tparam T  scalar type (float, double, std::complex<float>, std::complex<double>)
-/// @param ctx   queue the factorization will run on (routing reads its device)
+/// @param ctx   queue the factorization will run on (kernel selection reads its device)
 /// @param A     batch of n x n matrices to be factorized
 /// @param uplo  triangle that will be factorized
 /// @return bytes to pass as the `workspace` span of potrf()
@@ -117,8 +117,8 @@ BATCHLAS_API size_t potrf_buffer_size(Queue& ctx,
 ///      checked option overloads throw).
 /// @throws batchlas::invalid_argument on negative extents, a non-square A or an
 ///         invalid @p uplo
-/// @throws batchlas::dispatch::NoRouteError if no native route supports the
-///         shape and the vendor library was not built in
+/// @throws batchlas::NoRouteError if no native kernel can run the shape and the
+///         vendor library was not built in
 /// @see PotrfOptions for the option-struct spelling; its checked overloads
 ///      validate the info span, and its arena overloads lease the workspace.
 /// @ingroup factorizations
@@ -147,9 +147,9 @@ inline Event potrf(Queue& ctx,
 
 namespace batchlas::backend {
 
-/// @brief Vendor arm of potrf(); called by the entry-point facade, not by users.
+/// @brief Vendor arm of potrf(); called by the public potrf(), not by users.
 /// @ingroup dispatch
-// Declaration only: the public potrf lives in src/dispatch/entry_points/factorization.cc.
+// Declaration only: the public potrf lives in src/ops/potrf/potrf.cc.
 // evidence: docs/design/vendor-independence.md#the-entry-point-facade
 template <Backend B, typename T>
 BATCHLAS_API Event potrf_vendor(Queue& ctx,

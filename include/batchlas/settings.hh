@@ -19,10 +19,9 @@
 #include <array>
 #include <cstddef>
 #include <optional>
+#include <stdexcept>
 #include <string>
-
-// For dispatch::Op. SYCL-free, and must stay so: this header is installed (see blas/linalg.hh).
-#include <batchlas/blas/dispatch/route.hh>
+#include <string_view>
 
 namespace batchlas {
 
@@ -31,7 +30,8 @@ namespace batchlas {
 /// Distinguishes "unset" from "set to the empty string", and hands back a `const char*` so a
 /// migrated call site keeps the parser it already has.
 /// @ingroup config
-// Unset vs empty is load-bearing (TRACE_PATH fall-through, parse_route_env's legacy turn).
+// Unset vs empty is load-bearing: the TRACE_PATH fall-through, and the route pin reader treats
+// a set-but-empty BATCHLAS_<OP>_ROUTE as unset.
 class EnvValue {
 public:
     /// @brief An unset value.
@@ -71,57 +71,58 @@ private:
     std::string value_;
 };
 
-/// @brief The route vocabulary: `BATCHLAS_<OP>_ROUTE` and its legacy spellings, as raw strings.
+/// @brief The route pins: `BATCHLAS_<OP>_ROUTE`, one raw string per op that selects a kernel.
 ///
-/// `dispatch::parse_route_env(Op)` is the single parser for these, including its documented word
-/// collisions (legacy `BATCHLAS_GEMM_VARIANT=native` selects the vendor path).
+/// Raw strings on purpose: `src/select` parses them (`auto` | `native` | `vendor` | a choice
+/// spelling such as `lpanel:panel=8`), and the level-3 ops (trmm, symm, syrk, syr2k) parse their
+/// own word list. A value an op does not understand throws there. The selection layer is
+/// described in docs/design/flat-kernel-selection.md.
 /// @ingroup config
-// evidence: docs/design/environment.md#environment-routing-is-raw-strings
 struct RoutingSettings {
-    /// @brief `BATCHLAS_<OP>_ROUTE`, indexed by dispatch::Op.
-    /// @note The hemm, herk, her2k and iluk slots are captured but no adapter reads them: a slot
-    ///       is not a working variable.
-    std::array<EnvValue, static_cast<std::size_t>(dispatch::Op::COUNT)> canonical{};
+    /// @brief The ops that read a route variable, by their `<op>` spelling.
+    static constexpr std::array<std::string_view, 19> ops{
+        "gemm", "gemv", "trsm", "trmm", "symm", "syrk", "syr2k", "potrf", "posv", "getrf",
+        "getrs", "getri", "gesv", "geqrf", "orgqr", "ormqr", "syev", "gesvd", "spmm"};
 
-    /// @brief The legacy spellings `BATCHLAS_{GEMM,SYMM,SYRK,SYR2K,TRMM}_VARIANT` and
-    /// `BATCHLAS_{SYEV,GESVD,ORMQR}_PROVIDER`, indexed by dispatch::Op.
-    ///
-    /// The canonical spelling wins when both are set.
-    // legacy[Op::gemm] has two readers with different unset defaults, deliberately (routing evidence).
-    std::array<EnvValue, static_cast<std::size_t>(dispatch::Op::COUNT)> legacy{};
+    /// @brief `BATCHLAS_<OP>_ROUTE`, in `ops` order.
+    std::array<EnvValue, ops.size()> values{};
 
-    /// @brief The captured `BATCHLAS_<OP>_ROUTE` for `op`.
-    const EnvValue& canonical_route(dispatch::Op op) const {
-        return canonical[static_cast<std::size_t>(op)];
+    /// @brief Position of `op` in `ops`, or `ops.size()` when `op` reads no route variable.
+    static constexpr std::size_t index_of(std::string_view op) {
+        for (std::size_t i = 0; i < ops.size(); ++i)
+            if (ops[i] == op) return i;
+        return ops.size();
     }
 
-    /// @brief The captured legacy spelling for `op`.
-    const EnvValue& legacy_route(dispatch::Op op) const {
-        return legacy[static_cast<std::size_t>(op)];
+    /// @brief The captured `BATCHLAS_<OP>_ROUTE` for `op`.
+    /// @throws std::invalid_argument for an op not in `ops`
+    const EnvValue& route(std::string_view op) const { return values[checked(op)]; }
+    /// @brief Mutable access to the captured `BATCHLAS_<OP>_ROUTE` for `op`, as configure() needs.
+    EnvValue& route(std::string_view op) { return values[checked(op)]; }
+
+private:
+    static std::size_t checked(std::string_view op) {
+        const std::size_t i = index_of(op);
+        if (i == ops.size())
+            throw std::invalid_argument("batchlas: no BATCHLAS_<OP>_ROUTE for op '" + std::string(op) + "'");
+        return i;
     }
 };
 
-/// @brief Which kernel or algorithm runs, for the knobs outside the route vocabulary.
+/// @brief Which kernel or algorithm runs, for the knobs outside the route pins.
 ///
 /// Every field changes which code path executes. `syevx_algorithm` and `syevx_preconditioner`
 /// override an explicit SyevxParams field, and `gesvd_bidiag` changes numerics.
 /// @ingroup config
 // evidence: docs/design/environment.md#environment-knobs-that-override-an-explicit-argument
 struct SelectionSettings {
-    /// `BATCHLAS_EXPAND_ROUTE` = `expand` | `loop`: pins the scratch-expansion route.
+    /// `BATCHLAS_EXPAND_ROUTE` = `expand` | `loop`: pins the scratch-expansion route. Not
+    /// op-keyed, so RoutingSettings does not hold it.
     EnvValue expand_route{};
 
-    /// `BATCHLAS_GEMM_CUBLASDX_KERNEL`: kernel inside the vendor route (~20 spellings); unset is
-    /// `CuBLASDxGemmVariant::VendorFallback`.
+    /// `BATCHLAS_GEMM_CUBLASDX_KERNEL`: kernel inside the level-3 cuBLASDx paths (~20
+    /// spellings); unset is `CuBLASDxGemmVariant::VendorFallback`. gemm never reaches cuBLASDx.
     EnvValue gemm_cublasdx_kernel{};
-
-    /// `BATCHLAS_GEMM_EXPERIMENTAL`: unlocks five experimental GEMM variants. Case-folded, and
-    /// also accepts `yes`.
-    EnvValue gemm_experimental{};
-
-    /// `BATCHLAS_GEMM_SYCL_KERNEL`: forces one named register-tiled GEMM kernel (~38 spellings);
-    /// unset is `KernelVariant::Direct`.
-    EnvValue gemm_sycl_kernel{};
 
     /// `BATCHLAS_GEMV_SEGT` = `off` | `auto` | `2` | `4` | `8`: segmented-tail width of the
     /// native gemv.
@@ -180,10 +181,6 @@ struct SelectionSettings {
     /// or the device lacks sub-group size 32.
     EnvValue sb2st_subgroup{};
 
-    /// `BATCHLAS_SYEV_SMALL_KERNEL` = `cta` | `fused` | `cta_fused` | `jacobi`. is_set()
-    /// distinguishes "forced cta" from unset.
-    EnvValue syev_small_kernel{};
-
     /// `BATCHLAS_SYEV_TWO_STAGE_CHASE`: only the exact value `givens` has an effect.
     /// @warning Read by both the solve and its `*_buffer_size` query; do not let a ScopedEnvVar
     ///          straddle a sizing/solve pair.
@@ -236,6 +233,10 @@ struct SelectionSettings {
     /// `BATCHLAS_SYTRD_TRAILING_UPDATE` = `gemm` | `syr2k` | `her2k` | `rank2k`, either case;
     /// `syr2k` and `her2k` select one route.
     EnvValue sytrd_trailing_update{};
+
+    /// `BATCHLAS_TUNED_DIR`: a directory of select tables (`src/select/select.hh`); a
+    /// file there replaces the built-in table of the same name.
+    EnvValue tuned_dir{};
 };
 
 /// @brief Launch geometry, block widths, iteration counts and tuning thresholds.
@@ -297,12 +298,6 @@ struct GeometrySettings {
     /// `BATCHLAS_SY2SB_ORMQR_NB`: unset, `off` or `0` (never hint), or a positive value clamped to
     /// 0..1024. Wins over `BATCHLAS_TUNE_SY2SB_ORMQR_NB`.
     EnvValue sy2sb_ormqr_nb{};
-
-    /// `BATCHLAS_SYEV_CTA_MAX_N`: 0..32 (`strtol`, anything else rejected); default 24 for
-    /// `complex<double>`, 32 (= off) otherwise. Lowering it sends small projected solves to the
-    /// vendor.
-    // Opt-in: flips a marginal ILUKTests case. evidence: docs/perf/syev.md#syev-the-lobpcg-projected-solve-knob
-    EnvValue syev_cta_max_n{};
 
     /// `BATCHLAS_SYTRD_BLOCK_SIZE`. 0 = unset; the default is n-bucketed and type-dependent.
     /// Wins over `BATCHLAS_TUNE_SYTRD_BLOCK_SIZE`.
@@ -393,6 +388,10 @@ struct DiagnosticsSettings {
     /// `BATCHLAS_COVERAGE_OUT`: dispatch coverage is written to `<value>.<pid>` at exit.
     EnvValue coverage_out{};
 
+    /// `BATCHLAS_SELECT_TRACE` (env_truthy): one stderr line per `select::choose` decision
+    /// (`src/select/select.hh`).
+    bool select_trace = false;
+
     /// `BATCHLAS_DEBUG_FILTER_DEGREE`: presence only, so any value including the empty string
     /// enables it. Prints one line per batch item per iteration.
     bool debug_filter_degree = false;
@@ -481,7 +480,7 @@ struct UnsafeSettings {
 /// @endcode
 /// @ingroup config
 struct Settings {
-    RoutingSettings routing{};          ///< Route vocabulary.
+    RoutingSettings routing{};          ///< Route pins (`BATCHLAS_<OP>_ROUTE`).
     SelectionSettings selection{};      ///< Kernel and algorithm selection.
     GeometrySettings geometry{};        ///< Launch geometry and tuning thresholds.
     DiagnosticsSettings diagnostics{};  ///< Tracing, dumping, profiling, opt-in checks.

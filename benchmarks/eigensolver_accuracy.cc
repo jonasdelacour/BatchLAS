@@ -60,20 +60,18 @@ const char* scheme_name(SteqrUpdateScheme scheme) {
     return (scheme == SteqrUpdateScheme::PG) ? "pg" : "exp";
 }
 
+// The pinned syev family: BATCHLAS_SYEV_ROUTE's words (src/ops/syev/choice.hh).
 std::string syev_dispatch_impl_name() {
-    const char* raw = std::getenv("BATCHLAS_SYEV_PROVIDER");
+    const char* raw = std::getenv("BATCHLAS_SYEV_ROUTE");
     if (!raw || !*raw) return "syev_auto";
 
     const auto key = to_lower(std::string(raw));
     if (key == "vendor") return "syev_vendor";
-    if (key == "cta" || key == "batchlas_cta" || key == "batchlas-cta") return "syev_cta_dispatch";
-    if (key == "blocked" || key == "batchlas_blocked" || key == "batchlas-blocked") {
-        return "syev_blocked_dispatch";
-    }
-    if (key == "two_stage" || key == "two-stage" || key == "batchlas_two_stage" || key == "batchlas-two-stage") {
-        return "syev_two_stage_dispatch";
-    }
-    if (key == "netlib") return "syev_netlib";
+    if (key == "cta") return "syev_cta_dispatch";
+    if (key == "cta_fused") return "syev_cta_fused_dispatch";
+    if (key == "jacobi") return "syev_jacobi_dispatch";
+    if (key == "blocked") return "syev_blocked_dispatch";
+    if (key == "two_stage") return "syev_two_stage_dispatch";
     return "syev_auto";
 }
 

@@ -440,7 +440,7 @@ The shipped `getrf` CTA kernel uses no group collective (only `permute_group_by_
 
 ## Open debts
 
-* **`getrf`'s window has no batch term and was measured only at batch 128-1024.** Below 128 nothing was measured after the gather landed. `getrf_tests`' `RouteTableAndTheVendorFreeFallback` nonetheless asserts `native:blocked` at n=512 **batch=2** for float and cfloat -- a batch the perf grids never measured. The window is applied there on the strength of an order clause alone.
+* **`getrf`'s window has no batch term and was measured only at batch 128-1024.** Below 128 nothing was measured after the gather landed. `getrf_tests`' `RouteTableAndTheVendorFreeFallback` nonetheless asserted `native:blocked` at n=512 **batch=2** for float and cfloat -- a batch the perf grids never measured (before phase 5; the test is now `GetrsFusedCapacityOnTheRealDevice` and the window is the transcribed `tuned/getrf.*.txt` rows, which carry the same batch-free step). The window is applied there on the strength of an order clause alone.
 * **`getri` at `batch <= 32` beats cuBLAS by 1.7x-28x for *every* type**, double and cdouble included, because the vendor's batched `getri` is a per-item loop there. **Unrouted.** A batch clause has to be bracketed at every `(type, order)` it admits, and low batch was measured only at orders 128 and 512. Missing cells, named rather than fitted away: double and cdouble at orders 32, 64, 256, 1024 and 2048, batch 1-64.
 * **`getrs`'s clause-C batch floor of 128 gives up measured wins** (at nrhs=128 the composition wins at batch 32 and 64: float 3.87x-5.96x, double 3.56x-4.31x). It is conservative on purpose -- below 32 the only readings come from the contaminated sweep. Moving it down is one cheap sweep (`experiments/wp8_getri/gen_floor.py`).
 * **`getrs double`'s minimum sits at the largest order clause C measures.** That is n=**1024**, nrhs=128, batch=512: 1.2791 on the 45-cell reading and 1.2858 on the clean pass. n=2048 and above are unmeasured for this clause and are the one place a future order could fall under the bar. (An earlier draft of this page put this cell at "1.274x at n=2048"; no clause-C cell at n=2048 exists.) The *related* risk -- "that cell is the last rung at its order and the batch ladder is falling" -- is **closed**, not open: the clean pass measured batch 1024 at the same cell and got **1.3070**, so the ladder turns back up.
@@ -1482,7 +1482,7 @@ dip. It closes by batch 192 (1.135) and the gate is cleared from 256 up. So the 
 `order >= 512 || (order >= 256 && batch >= 256)`, with 128 (0.922, a LOSS) as the
 bracketing non-winner on the batch axis and 192 as the first winner — 256 is the
 conservative side of a crossover that sits between them. `route_getrs.hh` (`batch < 128`)
-and `route_gemm.hh` (`batch < 64`) are the precedent for a batch term in `preferred()`.
+and `route_gemm.hh` (`batch < 64`; deleted in P3.4, transcribed into `tuned/gemm.*.sm_89.txt`) are the precedent for a batch term in `preferred()`.
 
 **A measurement trap this cost an hour to.** The first probe of batch 128/256 read the two
 leaves as *identical* (3.036 vs 3.016 ms) and was quoted here as a win. It was taken after
@@ -1576,13 +1576,24 @@ credit or debit the register leaf for a tier flip that happened in P7.
 
 ## The fused gesv tier
 
+> **gesv selection since flat kernel selection (phase 5).** `route_gesv.hh`,
+> `src/backends/gesv_route.hh`, `tiny_window_max_n()` and `resolve_gesv_route` are
+> **deleted**; every gesv section below that quotes them is the measurement record
+> that produced the window, not a description of the code. What runs is decided in
+> `src/ops/gesv/gesv.cc`: two fieldless families, `tiny` (`gesv_tiny_dispatch`) and
+> `blocked` (public `getrf`, then public `getrs`), ranked by the transcribed tables
+> `tuned/gesv.<dtype>.{sm_89,sm_120}.txt`, which hold the same window (float
+> `n <= 32`, cfloat `n <= 16`, none for double and cdouble). As-built notes:
+> [flat-kernel-selection.md, Phase 5, gesv](../design/flat-kernel-selection.md#phase-5-gesv).
+
 `src/extensions/gesv_tiny.cc`, one launch for `A X = B` at order `n <= 32` and
 `nrhs <= 4`: `getrf_tiny.cc`'s elimination with the RHS carried in `D rB[NR]`
 alongside `D rA[N]`, forward substitution fused into the elimination loop, back
 substitution in the same kernel. **It is not routed.** `preferred()` is all-false
 and `native_tier_preferred` answers false for `Tiny`, so `Auto` takes the composed
 `getrf; getrs` arm at every shape; the tier is reachable only through
-`BATCHLAS_GESV_ROUTE=native:tiny` or the dispatch entry point directly.
+`BATCHLAS_GESV_ROUTE=native:tiny` (today's spelling: `BATCHLAS_GESV_ROUTE=tiny`; `native:tiny`
+now throws) or the dispatch entry point directly.
 
 Two structural facts separate this op from every other one in this file.
 

@@ -24,10 +24,11 @@ set(TEST_TARGETS
     mempool_tests
     backend_dispatch_tests
     options_api_tests
-    route_vocabulary_tests
     resident_capacity_tests
-    route_gemm_equivalence_tests
     settings_tests
+    select_tests
+    tuned_tables_tests
+    tune_tests
     error_model_tests
     linalg_layer_tests
     gemm_tests
@@ -39,7 +40,17 @@ set(TEST_TARGETS
     matrix_view_tests
     trsm_tests
     potrf_tests
+    potrf_candidates_tests
+    posv_candidates_tests
+    trsm_candidates_tests
+    gemm_candidates_tests
+    gemv_candidates_tests
+    getrf_candidates_tests
+    getrs_candidates_tests
+    getri_candidates_tests
+    gesv_candidates_tests
     geqrf_tests
+    geqrf_candidates_tests
     getrf_tests
     gesv_tests
     posv_tests
@@ -50,10 +61,13 @@ set(TEST_TARGETS
     ormqr_tests
     ormqr_cta_tests
     ormqr_blocked_tests
+    ormqr_candidates_tests
     orgqr_tests
+    orgqr_candidates_tests
     transpose_tests
     iluk_tests
     spmm_tests
+    spmm_candidates_tests
     symm_tests
     hemm_tests
     herk_tests
@@ -63,6 +77,7 @@ set(TEST_TARGETS
     syev_tests
     gesvd_tests
     gesvdj_cta_tests
+    gesvd_candidates_tests
     bdsqr_tests
     bdsdc_tests
     steqr_tests
@@ -81,6 +96,7 @@ set(TEST_TARGETS
     syev_cta_fused_tests
     syev_blocked_tests
     syev_two_stage_tests
+    syev_candidates_tests
 )
 
 set(BATCHLAS_SMOKE_TEST_TARGETS
@@ -96,12 +112,6 @@ set(BATCHLAS_SMOKE_TEST_TARGETS
     # is wrong in a way that is hard to trace back here.
     backend_dispatch_tests
     options_api_tests
-    # The route vocabulary pins the legacy BATCHLAS_*_VARIANT / _PROVIDER
-    # spellings onto the new Route type. Those spellings appear in committed
-    # benchmark scripts and in the provenance of recorded results, so a silent
-    # change of meaning would invalidate measurements rather than fail loudly.
-    route_vocabulary_tests
-    route_gemm_equivalence_tests
     # settings() decides which kernel runs and whether arguments are checked, for
     # every op at once, and it is read once per process -- so a regression here is
     # not one suite going red, it is the whole suite silently measuring the default
@@ -148,17 +158,20 @@ endif()
 set(BATCHLAS_TEST_LABELS_util
     sg_partition_tests util_span_tests util_vector_tests util_device_queue_tests
     mempool_tests matrix_tests matrix_view_tests minibench_cli_tests
-    backend_dispatch_tests options_api_tests route_vocabulary_tests
-    route_gemm_equivalence_tests settings_tests error_model_tests
-    linalg_layer_tests)
+    backend_dispatch_tests options_api_tests
+    settings_tests error_model_tests
+    linalg_layer_tests select_tests tuned_tables_tests tune_tests)
 set(BATCHLAS_TEST_LABELS_blas
     device_blas_tests gemm_tests gemv_tests symm_tests hemm_tests herk_tests her2k_tests
     syrk_tests syr2k_tests
-    trmm_tests trsm_tests potrf_tests geqrf_tests getrf_tests resident_capacity_tests
-    gesv_tests posv_tests
+    trmm_tests trsm_tests potrf_tests potrf_candidates_tests geqrf_tests getrf_tests resident_capacity_tests
+    geqrf_candidates_tests
+    gesv_tests posv_tests posv_candidates_tests trsm_candidates_tests gemm_candidates_tests
+    gemv_candidates_tests getrf_candidates_tests getrs_candidates_tests getri_candidates_tests gesv_candidates_tests
     transpose_tests norm_tests cond_tests inverse_tests)
 set(BATCHLAS_TEST_LABELS_ortho
-    ortho_tests ormqr_tests ormqr_cta_tests ormqr_blocked_tests orgqr_tests)
+    ortho_tests ormqr_tests ormqr_cta_tests ormqr_blocked_tests orgqr_tests
+    orgqr_candidates_tests ormqr_candidates_tests)
 set(BATCHLAS_TEST_LABELS_tridiag
     steqr_tests stedc_tests stebz_tests stein_tests
     sytrd_sy2sb_tests sytrd_sb2st_tests sytrd_sb2st_hh_tests
@@ -166,9 +179,10 @@ set(BATCHLAS_TEST_LABELS_tridiag
 set(BATCHLAS_TEST_LABELS_eig
     syev_tests syevx_tests syevx_range_tests syev_cta_tests syev_jacobi_cta_tests
     syev_cta_fused_tests syev_blocked_tests syev_two_stage_tests
-    lanczos_tests ritz_values_tests gesvd_tests gesvdj_cta_tests bdsqr_tests bdsdc_tests)
+    lanczos_tests ritz_values_tests gesvd_tests gesvdj_cta_tests bdsqr_tests bdsdc_tests
+    gesvd_candidates_tests syev_candidates_tests)
 set(BATCHLAS_TEST_LABELS_sparse
-    iluk_tests spmm_tests)
+    iluk_tests spmm_tests spmm_candidates_tests)
 
 # Binaries that dominate the suite. Measured serially on this machine.
 #
@@ -227,6 +241,16 @@ function(batchlas_add_test_target test_name)
                 GTest::gtest_main
                 batchlas_util
         )
+    elseif(test_name STREQUAL "tune_tests")
+        # Host-only: the tuner core (tools/tune/tune_core.cc) and no batchlas library. The
+        # round-trip case runs scripts/sweep_to_table.py, so it needs the interpreter's path.
+        target_sources(${test_name} PRIVATE "${PROJECT_SOURCE_DIR}/tools/tune/tune_core.cc")
+        batchlas_configure_binary_target(${test_name} NO_FACADE LIBRARIES GTest::gtest GTest::gtest_main)
+        find_package(Python3 QUIET COMPONENTS Interpreter)
+        target_compile_definitions(${test_name} PRIVATE
+            BATCHLAS_TUNE_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+            BATCHLAS_TUNE_CMAKE="${CMAKE_COMMAND}"
+            BATCHLAS_TUNE_PYTHON="$<$<BOOL:${Python3_Interpreter_FOUND}>:${Python3_EXECUTABLE}>")
     elseif(test_name STREQUAL "matrix_tests")
         batchlas_configure_binary_target(${test_name}
             LIBRARIES
@@ -279,6 +303,13 @@ function(batchlas_add_test_target test_name)
        AND test_name MATCHES "^(gemm_tests|syr2k_tests|trmm_tests)$")
         target_link_libraries(${test_name} PRIVATE CUDA::cudart)
     endif()
+    # util_device_queue_tests checks Device::cuda_compute_capability() against the
+    # CUDA runtime's own answer, an oracle independent of the SYCL string it parses.
+    if(BATCHLAS_HAS_CUDA_BACKEND AND TARGET CUDA::cudart
+       AND test_name STREQUAL "util_device_queue_tests")
+        target_link_libraries(${test_name} PRIVATE CUDA::cudart)
+        target_compile_definitions(${test_name} PRIVATE BATCHLAS_UTIL_TESTS_HAVE_CUDART=1)
+    endif()
     # options_api_tests reads options.hh back to check that no backend-deducing
     # overload was added without its pointer check -- a rule no runtime test can
     # enforce for an entry point that does not exist yet.
@@ -322,6 +353,12 @@ function(batchlas_add_test_target test_name)
         target_compile_definitions(${test_name} PRIVATE
             BATCHLAS_INCLUDE_DIR_PATH="${PROJECT_SOURCE_DIR}/include/batchlas")
     endif()
+    # tuned_tables_tests compares the embedded set against tuned/*.txt by name and bytes,
+    # so a broken embed step fails instead of leaving nothing to check.
+    if(test_name STREQUAL "tuned_tables_tests")
+        target_compile_definitions(${test_name} PRIVATE
+            BATCHLAS_TUNED_SOURCE_DIR="${PROJECT_SOURCE_DIR}/tuned")
+    endif()
 
     add_test(NAME ${test_name} COMMAND ${test_name})
 
@@ -350,16 +387,15 @@ endfunction()
 # ---------------------------------------------------------------------------
 # Route-pinned reruns.
 #
-# preferred() decides the DEFAULT route, so on a vendor-present box a suite for an
-# op whose window is narrow -- or, like potrf and geqrf/orgqr, deliberately empty
-# -- measures the vendor and validates none of the native kernel it was written
-# for. That is how spmm's whole transposed arm (two of its three kernel bodies)
+# The tuned table decides the DEFAULT kernel, so on a vendor-present box a suite for
+# an op whose tables rank the vendor first measures the vendor and validates none of
+# the native kernel it was written for. That is how spmm's whole transposed arm (two of its three kernel bodies)
 # and every one of gemv's 264 cases came to run cuSPARSE/cuBLAS under ctest while
 # the coverage table reported a native route available: LINKED IS NOT REACHABLE.
 #
-# Each entry below reruns one suite with its op pinned native. The pins are a
-# bare origin, so an op with two native arms resolves through its own order walk
-# rather than naming an arm that may not serve the shape. Labelled route-native
+# Each entry below reruns one suite with its op pinned native. `native` is select's
+# class word: the table walk restricted to native candidates, so an op with several
+# native kernels never names one that cannot serve the shape. Labelled route-native
 # so `ctest -LE route-native` gets the old, shorter run.
 set(BATCHLAS_ROUTE_PINNED_TESTS
     gemm_tests   "BATCHLAS_GEMM_ROUTE=native"
@@ -369,12 +405,9 @@ set(BATCHLAS_ROUTE_PINNED_TESTS
     # '|' separates several pins for one suite, NOT ';': a semicolon inside a
     # quoted entry is a list separator, so it flattens into this list and breaks
     # the name/value pairing below.
-    # ORGQR is pinned here TOO, and it is not redundant: geqrf_tests.cc G9
-    # exercises the orgqr route alongside the geqrf one, and each half is guarded
-    # by its OWN getenv. Without this pin the orgqr half ran unpinned inside the
-    # route-pinned binary, so it asserted the vendor-present default while the
-    # geqrf half was skipped -- an unguarded assertion in a guarded suite.
-    geqrf_tests  "BATCHLAS_GEQRF_ROUTE=native|BATCHLAS_ORGQR_ROUTE=native|BATCHLAS_ORMQR_ROUTE=native"
+    # No ORGQR pin on geqrf_tests: its only orgqr facade call holds a ScopedPin,
+    # which wins over BATCHLAS_ORGQR_ROUTE; orgqr routing is in orgqr_candidates_tests.
+    geqrf_tests  "BATCHLAS_GEQRF_ROUTE=native|BATCHLAS_ORMQR_ROUTE=native"
     orgqr_tests  "BATCHLAS_ORGQR_ROUTE=native|BATCHLAS_ORMQR_ROUTE=native"
     getrf_tests  "BATCHLAS_GETRF_ROUTE=native|BATCHLAS_GETRS_ROUTE=native|BATCHLAS_GETRI_ROUTE=native"
     spmm_tests   "BATCHLAS_SPMM_ROUTE=native"
@@ -428,10 +461,10 @@ endif()
 #   miss,<op>,<scalar>,...       -- a call that found no route, with the library
 #                                   that would have served it.
 #   reached,<op>,...             -- DYNAMIC, per shape_class: the route the
-#                                   resolver actually returned. Recorded by any
+#                                   selection actually took. Recorded by any
 #                                   build whenever BATCHLAS_COVERAGE_OUT is set,
 #                                   which this target sets. No special configure
-#                                   step -- see dispatch/coverage.hh for why the
+#                                   step -- see src/select/coverage.hh for why the
 #                                   compile-time option was removed.
 #
 # scripts/route_diff.sh captures and diffs the `reached` rows, which is how a
@@ -461,6 +494,24 @@ add_test(NAME cmake_detect_sycl_tests
     COMMAND "${CMAKE_COMMAND}" "-DBATCHLAS_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/detect_sycl_arch_tests.cmake")
 set_tests_properties(cmake_detect_sycl_tests PROPERTIES LABELS "util")
+
+# device_calls_tests: scans the built libraries' NVPTX images and fails if any
+# kernel calls a SPIR-V builtin (sycl::fma, barriers, id queries) out of line --
+# what an icpx build without -ffp-model=precise produces, 6-15x slower and green
+# in every functional test. Skips (77) when there is no NVPTX image or no cuobjdump.
+# evidence: docs/perf/blackwell.md#device-call-guard
+find_package(Python3 QUIET COMPONENTS Interpreter)
+if(Python3_Interpreter_FOUND)
+    set(_device_calls_args "${PROJECT_BINARY_DIR}")
+    if(CUDAToolkit_BIN_DIR AND EXISTS "${CUDAToolkit_BIN_DIR}/cuobjdump")
+        list(APPEND _device_calls_args --cuobjdump "${CUDAToolkit_BIN_DIR}/cuobjdump")
+    endif()
+    add_test(NAME device_calls_tests
+        COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/scripts/check_device_calls.py"
+                ${_device_calls_args})
+    set_tests_properties(device_calls_tests PROPERTIES
+        LABELS "util" SKIP_RETURN_CODE 77 TIMEOUT 600)
+endif()
 
 # ---------------------------------------------------------------------------
 # consumer_package_tests: the outside-in guard.

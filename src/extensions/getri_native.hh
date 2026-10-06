@@ -24,8 +24,8 @@ template <typename T>
 BATCHLAS_INTERNAL_API std::size_t getri_blocked_buffer_size(Queue& ctx,
                                                             const MatrixView<T, MatrixFormat::Dense>& A);
 
-// Must be the ROUTED trsm -- a native trsm entry point called from a driver TU
-// bypasses RouteTable<Op::trsm>. alpha comes THIRD, not last. Absent injection throws.
+// Must be the public trsm -- a native trsm entry point called from a driver TU
+// bypasses trsm's selection (src/ops/trsm). alpha comes THIRD, not last. Absent injection throws.
 template <typename T>
 using GetriSolveTrsm = std::function<Event(
     Queue&,
@@ -33,8 +33,8 @@ using GetriSolveTrsm = std::function<Event(
     const MatrixView<T, MatrixFormat::Dense>&,
     T, Side, Uplo, Transpose, Diag)>;
 
-// Reachable without the route table, so it must re-check every
-// RouteTable<Op::getri,T>::supports() gate and throw. A is read-only, A == C is
+// Reachable without choose(), so it must re-check every clause of can_run(Blocked)
+// (src/ops/getri/getri.cc) and throw. A is read-only, A == C is
 // unsupported, and info is exact-zero semantics, not a tolerance. pivots keep getrf's
 // format: a 1-based interchange list, int32 packed into the int64 span on CUDA/ROCm.
 template <typename T>

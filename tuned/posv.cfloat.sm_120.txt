@@ -1,0 +1,830 @@
+# op=posv dtype=cfloat device=sm_120 batchlas=886537e8 kernels=unknown date=2026-10-04
+# source=benchmarks/results/routing/sm120_posv_sweep.jsonl (converted, passes 1+2, resumed rows replace earlier duplicates)
+# keys: uplo:exact n:log:3 nrhs:log batch:log
+uplo=L n=1 nrhs=1 batch=128 | tiny 0.009840 | cta 0.01205 | blocked 0.01591
+uplo=L n=1 nrhs=1 batch=512 | tiny 0.009664 | cta 0.01214 | blocked 0.01666
+uplo=L n=1 nrhs=1 batch=2048 | tiny 0.009810 | cta 0.01437 | blocked 0.01888
+uplo=L n=1 nrhs=1 batch=8192 | tiny 0.009709 | cta 0.01895 | blocked 0.02617
+uplo=L n=1 nrhs=1 batch=32768 | tiny 0.01350 | cta 0.04399 | blocked 0.06195
+uplo=L n=1 nrhs=2 batch=128 | tiny 0.01109 | cta 0.01260 | blocked 0.01632   # noisy
+uplo=L n=1 nrhs=2 batch=512 | tiny 0.01069 | cta 0.01323 | blocked 0.01692
+uplo=L n=1 nrhs=2 batch=2048 | tiny 0.01038 | cta 0.01342 | blocked 0.01815
+uplo=L n=1 nrhs=2 batch=8192 | tiny 0.01091 | cta 0.02008 | blocked 0.02644
+uplo=L n=1 nrhs=2 batch=32768 | tiny 0.01453 | cta 0.04763 | blocked 0.06230
+uplo=L n=1 nrhs=4 batch=128 | tiny 0.01194 | cta 0.01305 | blocked 0.01593
+uplo=L n=1 nrhs=4 batch=512 | tiny 0.01196 | cta 0.01397 | blocked 0.01721   # noisy
+uplo=L n=1 nrhs=4 batch=2048 | tiny 0.01127 | cta 0.01414 | blocked 0.01805   # noisy
+uplo=L n=1 nrhs=4 batch=8192 | tiny 0.01174 | cta 0.02320 | blocked 0.02608
+uplo=L n=1 nrhs=4 batch=32768 | tiny 0.01709 | cta 0.06189 | blocked 0.06256
+uplo=L n=1 nrhs=8 batch=128 | cta 0.01436 | blocked 0.01501
+uplo=L n=1 nrhs=8 batch=512 | cta 0.01546 | blocked 0.01652   # noisy
+uplo=L n=1 nrhs=8 batch=2048 | blocked 0.01851 | cta 0.02102
+uplo=L n=1 nrhs=8 batch=8192 | blocked 0.02599 | cta 0.03783
+uplo=L n=1 nrhs=8 batch=32768 | blocked 0.06198 | cta 0.1157
+uplo=L n=1 nrhs=16 batch=128 | blocked 0.01564
+uplo=L n=1 nrhs=16 batch=512 | blocked 0.01590
+uplo=L n=1 nrhs=16 batch=2048 | blocked 0.01801   # noisy
+uplo=L n=1 nrhs=16 batch=8192 | blocked 0.02626
+uplo=L n=1 nrhs=16 batch=32768 | blocked 0.06203
+uplo=L n=1 nrhs=64 batch=128 | blocked 0.01561   # noisy
+uplo=L n=1 nrhs=64 batch=512 | blocked 0.01724
+uplo=L n=1 nrhs=64 batch=2048 | blocked 0.01918
+uplo=L n=1 nrhs=64 batch=8192 | blocked 0.03179
+uplo=L n=1 nrhs=64 batch=32768 | blocked 0.09037
+uplo=L n=2 nrhs=1 batch=128 | tiny 0.01119 | cta 0.01268 | blocked 0.01596
+uplo=L n=2 nrhs=1 batch=512 | tiny 0.01100 | cta 0.01285 | blocked 0.01601   # noisy
+uplo=L n=2 nrhs=1 batch=2048 | tiny 0.01118 | cta 0.01421 | blocked 0.01799   # noisy
+uplo=L n=2 nrhs=1 batch=8192 | tiny 0.01126 | cta 0.02126 | blocked 0.02627
+uplo=L n=2 nrhs=1 batch=32768 | tiny 0.01684 | cta 0.05223 | blocked 0.06202
+uplo=L n=2 nrhs=2 batch=128 | tiny 0.01274 | cta 0.01291 | blocked 0.01615
+uplo=L n=2 nrhs=2 batch=512 | tiny 0.01240 | cta 0.01293 | blocked 0.01606
+uplo=L n=2 nrhs=2 batch=2048 | tiny 0.01195 | cta 0.01402 | blocked 0.01748
+uplo=L n=2 nrhs=2 batch=8192 | tiny 0.01272 | cta 0.02248 | blocked 0.02656
+uplo=L n=2 nrhs=2 batch=32768 | tiny 0.01829 | cta 0.05682 | blocked 0.06241
+uplo=L n=2 nrhs=4 batch=128 | tiny 0.01531 | cta 0.01684 | blocked 0.01991   # noisy
+uplo=L n=2 nrhs=4 batch=512 | tiny 0.01440 | cta 0.01454 | blocked 0.01635
+uplo=L n=2 nrhs=4 batch=2048 | tiny 0.01372 | cta 0.01574 | blocked 0.01737   # noisy
+uplo=L n=2 nrhs=4 batch=8192 | tiny 0.01411 | blocked 0.02644 | cta 0.02813
+uplo=L n=2 nrhs=4 batch=32768 | tiny 0.02215 | blocked 0.06290 | cta 0.08118
+uplo=L n=2 nrhs=8 batch=128 | blocked 0.01529 | cta 0.01654
+uplo=L n=2 nrhs=8 batch=512 | blocked 0.01640 | cta 0.01746   # noisy
+uplo=L n=2 nrhs=8 batch=2048 | blocked 0.01739 | cta 0.02545
+uplo=L n=2 nrhs=8 batch=8192 | blocked 0.02603 | cta 0.05132
+uplo=L n=2 nrhs=8 batch=32768 | blocked 0.06257 | cta 0.1647
+uplo=L n=2 nrhs=16 batch=128 | blocked 0.01625
+uplo=L n=2 nrhs=16 batch=512 | blocked 0.01551
+uplo=L n=2 nrhs=16 batch=2048 | blocked 0.01947   # noisy
+uplo=L n=2 nrhs=16 batch=8192 | blocked 0.02621
+uplo=L n=2 nrhs=16 batch=32768 | blocked 0.06285
+uplo=L n=2 nrhs=64 batch=128 | blocked 0.01594
+uplo=L n=2 nrhs=64 batch=512 | blocked 0.01633
+uplo=L n=2 nrhs=64 batch=2048 | blocked 0.01815
+uplo=L n=2 nrhs=64 batch=8192 | blocked 0.03257
+uplo=L n=2 nrhs=64 batch=32768 | blocked 0.09461
+uplo=L n=3 nrhs=1 batch=128 | tiny 0.01249 | cta 0.01318 | blocked 0.01589
+uplo=L n=3 nrhs=1 batch=512 | tiny 0.01247 | cta 0.01346 | blocked 0.01627   # noisy
+uplo=L n=3 nrhs=1 batch=2048 | tiny 0.01262 | cta 0.01474 | blocked 0.01777
+uplo=L n=3 nrhs=1 batch=8192 | tiny 0.01241 | cta 0.02361 | blocked 0.02636   # noisy
+uplo=L n=3 nrhs=1 batch=32768 | tiny 0.02030 | blocked 0.06314 | cta 0.06339
+uplo=L n=3 nrhs=2 batch=128 | cta 0.01361 | tiny 0.01446 | blocked 0.01622   # noisy
+uplo=L n=3 nrhs=2 batch=512 | cta 0.01370 | tiny 0.01414 | blocked 0.01614
+uplo=L n=3 nrhs=2 batch=2048 | tiny 0.01374 | cta 0.01514 | blocked 0.01761   # noisy
+uplo=L n=3 nrhs=2 batch=8192 | tiny 0.01434 | cta 0.02570 | blocked 0.02685
+uplo=L n=3 nrhs=2 batch=32768 | tiny 0.02249 | blocked 0.06356 | cta 0.07051
+uplo=L n=3 nrhs=4 batch=128 | cta 0.01567 | blocked 0.01615 | tiny 0.01686
+uplo=L n=3 nrhs=4 batch=512 | cta 0.01597 | blocked 0.01625 | tiny 0.01666   # noisy
+uplo=L n=3 nrhs=4 batch=2048 | tiny 0.01598 | blocked 0.01769 | cta 0.01781   # noisy
+uplo=L n=3 nrhs=4 batch=8192 | tiny 0.01650 | blocked 0.02630 | cta 0.03476
+uplo=L n=3 nrhs=4 batch=32768 | tiny 0.02728 | blocked 0.06323 | cta 0.1070
+uplo=L n=3 nrhs=8 batch=128 | blocked 0.01553 | cta 0.01975   # noisy
+uplo=L n=3 nrhs=8 batch=512 | blocked 0.01624 | cta 0.02057   # noisy
+uplo=L n=3 nrhs=8 batch=2048 | blocked 0.01774 | cta 0.03249
+uplo=L n=3 nrhs=8 batch=8192 | blocked 0.02610 | cta 0.06911
+uplo=L n=3 nrhs=8 batch=32768 | blocked 0.06290 | cta 0.2304
+uplo=L n=3 nrhs=16 batch=128 | blocked 0.01573
+uplo=L n=3 nrhs=16 batch=512 | blocked 0.01563
+uplo=L n=3 nrhs=16 batch=2048 | blocked 0.02344   # noisy
+uplo=L n=3 nrhs=16 batch=8192 | blocked 0.02638
+uplo=L n=3 nrhs=16 batch=32768 | blocked 0.06361
+uplo=L n=3 nrhs=64 batch=128 | blocked 0.01563
+uplo=L n=3 nrhs=64 batch=512 | blocked 0.01608
+uplo=L n=3 nrhs=64 batch=2048 | blocked 0.01843
+uplo=L n=3 nrhs=64 batch=8192 | blocked 0.03317
+uplo=L n=3 nrhs=64 batch=32768 | blocked 0.1105
+uplo=L n=4 nrhs=1 batch=128 | tiny 0.01435 | cta 0.01404 | blocked 0.01598   # noisy
+uplo=L n=4 nrhs=1 batch=512 | tiny 0.01419 | cta 0.01430 | blocked 0.01632
+uplo=L n=4 nrhs=1 batch=2048 | tiny 0.01450 | cta 0.01575 | blocked 0.01790
+uplo=L n=4 nrhs=1 batch=8192 | tiny 0.01473 | cta 0.02669 | blocked 0.02671
+uplo=L n=4 nrhs=1 batch=32768 | tiny 0.02447 | blocked 0.06349 | cta 0.07273
+uplo=L n=4 nrhs=2 batch=128 | cta 0.01477 | tiny 0.01676 | blocked 0.01679
+uplo=L n=4 nrhs=2 batch=512 | cta 0.01463 | tiny 0.01619 | blocked 0.01632   # noisy
+uplo=L n=4 nrhs=2 batch=2048 | tiny 0.01566 | cta 0.01613 | blocked 0.01768   # noisy
+uplo=L n=4 nrhs=2 batch=8192 | tiny 0.01657 | blocked 0.02728 | cta 0.02880
+uplo=L n=4 nrhs=2 batch=32768 | tiny 0.02741 | blocked 0.06398 | cta 0.08100
+uplo=L n=4 nrhs=4 batch=128 | blocked 0.01639 | cta 0.01708 | tiny 0.01967   # noisy
+uplo=L n=4 nrhs=4 batch=512 | blocked 0.01662 | cta 0.01741 | tiny 0.01953   # noisy
+uplo=L n=4 nrhs=4 batch=2048 | blocked 0.01777 | tiny 0.01868 | cta 0.02019   # noisy
+uplo=L n=4 nrhs=4 batch=8192 | tiny 0.01921 | blocked 0.02677 | cta 0.04039
+uplo=L n=4 nrhs=4 batch=32768 | tiny 0.03362 | blocked 0.06446 | cta 0.1271
+uplo=L n=4 nrhs=8 batch=128 | blocked 0.01620 | cta 0.02233
+uplo=L n=4 nrhs=8 batch=512 | blocked 0.01577 | cta 0.02261
+uplo=L n=4 nrhs=8 batch=2048 | blocked 0.01792 | cta 0.03790
+uplo=L n=4 nrhs=8 batch=8192 | blocked 0.02675 | cta 0.08375
+uplo=L n=4 nrhs=8 batch=32768 | blocked 0.06420 | cta 0.2815
+uplo=L n=4 nrhs=16 batch=128 | blocked 0.01593
+uplo=L n=4 nrhs=16 batch=512 | blocked 0.01567   # noisy
+uplo=L n=4 nrhs=16 batch=2048 | blocked 0.01751
+uplo=L n=4 nrhs=16 batch=8192 | blocked 0.02725
+uplo=L n=4 nrhs=16 batch=32768 | blocked 0.06628
+uplo=L n=4 nrhs=64 batch=128 | blocked 0.01579
+uplo=L n=4 nrhs=64 batch=512 | blocked 0.01638
+uplo=L n=4 nrhs=64 batch=2048 | blocked 0.02023
+uplo=L n=4 nrhs=64 batch=8192 | blocked 0.03769
+uplo=L n=4 nrhs=64 batch=32768 | blocked 0.1373
+uplo=L n=6 nrhs=1 batch=128 | cta 0.01565 | blocked 0.01668 | tiny 0.01772
+uplo=L n=6 nrhs=1 batch=512 | cta 0.01596 | blocked 0.01692 | tiny 0.01741
+uplo=L n=6 nrhs=1 batch=2048 | tiny 0.01784 | cta 0.01789 | blocked 0.01865   # noisy
+uplo=L n=6 nrhs=1 batch=8192 | tiny 0.01842 | blocked 0.02765 | cta 0.03214
+uplo=L n=6 nrhs=1 batch=32768 | tiny 0.03333 | blocked 0.06713 | cta 0.09388
+uplo=L n=6 nrhs=2 batch=128 | cta 0.01626 | blocked 0.01701 | tiny 0.02071   # noisy
+uplo=L n=6 nrhs=2 batch=512 | cta 0.01626 | blocked 0.01685 | tiny 0.02020
+uplo=L n=6 nrhs=2 batch=2048 | cta 0.01871 | blocked 0.01847 | tiny 0.01971
+uplo=L n=6 nrhs=2 batch=8192 | tiny 0.02092 | blocked 0.02815 | cta 0.03542
+uplo=L n=6 nrhs=2 batch=32768 | tiny 0.03816 | blocked 0.06775 | cta 0.1067
+uplo=L n=6 nrhs=4 batch=128 | blocked 0.01675 | cta 0.01977 | tiny 0.02457
+uplo=L n=6 nrhs=4 batch=512 | blocked 0.01728 | cta 0.02057 | tiny 0.02475
+uplo=L n=6 nrhs=4 batch=2048 | blocked 0.01852 | tiny 0.02371 | cta 0.02457
+uplo=L n=6 nrhs=4 batch=8192 | tiny 0.02469 | blocked 0.02774 | cta 0.05279
+uplo=L n=6 nrhs=4 batch=32768 | tiny 0.04817 | blocked 0.06827 | cta 0.1738   # noisy
+uplo=L n=6 nrhs=8 batch=128 | blocked 0.01621 | cta 0.02775   # noisy
+uplo=L n=6 nrhs=8 batch=512 | blocked 0.01626 | cta 0.02829
+uplo=L n=6 nrhs=8 batch=2048 | blocked 0.01857 | cta 0.05034
+uplo=L n=6 nrhs=8 batch=8192 | blocked 0.02775 | cta 0.1165
+uplo=L n=6 nrhs=8 batch=32768 | blocked 0.06902 | cta 0.4089
+uplo=L n=6 nrhs=16 batch=128 | blocked 0.01626   # noisy
+uplo=L n=6 nrhs=16 batch=512 | blocked 0.01607
+uplo=L n=6 nrhs=16 batch=2048 | blocked 0.01789
+uplo=L n=6 nrhs=16 batch=8192 | blocked 0.02837
+uplo=L n=6 nrhs=16 batch=32768 | blocked 0.07377
+uplo=L n=6 nrhs=64 batch=128 | blocked 0.01603
+uplo=L n=6 nrhs=64 batch=512 | blocked 0.01888   # noisy
+uplo=L n=6 nrhs=64 batch=2048 | blocked 0.02611
+uplo=L n=6 nrhs=64 batch=8192 | blocked 0.04842   # noisy
+uplo=L n=6 nrhs=64 batch=32768 | blocked 0.2169
+uplo=L n=8 nrhs=1 batch=128 | cta 0.01698 | blocked 0.01722 | tiny 0.02114
+uplo=L n=8 nrhs=1 batch=512 | cta 0.01692 | blocked 0.01706 | tiny 0.02081
+uplo=L n=8 nrhs=1 batch=2048 | blocked 0.01880 | cta 0.01952 | tiny 0.02129   # noisy
+uplo=L n=8 nrhs=1 batch=8192 | tiny 0.02221 | blocked 0.02861 | cta 0.03754
+uplo=L n=8 nrhs=1 batch=32768 | tiny 0.04303 | blocked 0.07036 | cta 0.1141
+uplo=L n=8 nrhs=2 batch=128 | cta 0.01760 | blocked 0.01724 | tiny 0.02454
+uplo=L n=8 nrhs=2 batch=512 | cta 0.01758 | blocked 0.01712 | tiny 0.02384
+uplo=L n=8 nrhs=2 batch=2048 | blocked 0.01850 | cta 0.02050 | tiny 0.02314
+uplo=L n=8 nrhs=2 batch=8192 | tiny 0.02478 | blocked 0.02886 | cta 0.04154
+uplo=L n=8 nrhs=2 batch=32768 | tiny 0.04847 | blocked 0.07139 | cta 0.1324
+uplo=L n=8 nrhs=4 batch=128 | blocked 0.01710 | cta 0.02240 | tiny 0.03015
+uplo=L n=8 nrhs=4 batch=512 | blocked 0.01736 | cta 0.02303 | tiny 0.03000   # noisy
+uplo=L n=8 nrhs=4 batch=2048 | blocked 0.01856 | cta 0.02825 | tiny 0.02868
+uplo=L n=8 nrhs=4 batch=8192 | blocked 0.02841 | tiny 0.03003 | cta 0.06532
+uplo=L n=8 nrhs=4 batch=32768 | tiny 0.06379 | blocked 0.07143 | cta 0.2190
+uplo=L n=8 nrhs=8 batch=128 | blocked 0.01591 | cta 0.03238   # noisy
+uplo=L n=8 nrhs=8 batch=512 | blocked 0.01661 | cta 0.03384
+uplo=L n=8 nrhs=8 batch=2048 | blocked 0.01865 | cta 0.06214
+uplo=L n=8 nrhs=8 batch=8192 | blocked 0.02890 | cta 0.1476
+uplo=L n=8 nrhs=8 batch=32768 | blocked 0.07349 | cta 0.5347
+uplo=L n=8 nrhs=16 batch=128 | blocked 0.01671
+uplo=L n=8 nrhs=16 batch=512 | blocked 0.01668
+uplo=L n=8 nrhs=16 batch=2048 | blocked 0.01931
+uplo=L n=8 nrhs=16 batch=8192 | blocked 0.03310
+uplo=L n=8 nrhs=16 batch=32768 | blocked 0.1009
+uplo=L n=8 nrhs=64 batch=128 | blocked 0.01787
+uplo=L n=8 nrhs=64 batch=512 | blocked 0.02495
+uplo=L n=8 nrhs=64 batch=2048 | blocked 0.04112
+uplo=L n=8 nrhs=64 batch=8192 | blocked 0.1100
+uplo=L n=8 nrhs=64 batch=32768 | blocked 0.4897
+uplo=L n=12 nrhs=1 batch=128 | cta 0.02247 | blocked 0.02532 | tiny 0.02866
+uplo=L n=12 nrhs=1 batch=512 | cta 0.02280 | blocked 0.02546 | tiny 0.02738
+uplo=L n=12 nrhs=1 batch=2048 | cta 0.02633 | tiny 0.02760 | blocked 0.02867
+uplo=L n=12 nrhs=1 batch=8192 | tiny 0.03223 | cta 0.05951 | blocked 0.06087
+uplo=L n=12 nrhs=1 batch=32768 | tiny 0.1109 | blocked 0.1858 | cta 0.2005
+uplo=L n=12 nrhs=2 batch=128 | cta 0.02337 | blocked 0.02542 | tiny 0.03334
+uplo=L n=12 nrhs=2 batch=512 | cta 0.02351 | blocked 0.02548 | tiny 0.03177
+uplo=L n=12 nrhs=2 batch=2048 | cta 0.02779 | blocked 0.02773 | tiny 0.03103
+uplo=L n=12 nrhs=2 batch=8192 | tiny 0.03644 | blocked 0.06127 | cta 0.06558
+uplo=L n=12 nrhs=2 batch=32768 | tiny 0.1381 | blocked 0.1945 | cta 0.2329
+uplo=L n=12 nrhs=4 batch=128 | blocked 0.02530 | cta 0.03063 | tiny 0.04163
+uplo=L n=12 nrhs=4 batch=512 | blocked 0.02553 | cta 0.03140 | tiny 0.03970
+uplo=L n=12 nrhs=4 batch=2048 | blocked 0.02850 | cta 0.03965 | tiny 0.03997
+uplo=L n=12 nrhs=4 batch=8192 | blocked 0.06131 | tiny 0.07821 | cta 0.1028
+uplo=L n=12 nrhs=4 batch=32768 | blocked 0.1875 | tiny 0.2037 | cta 0.3686
+uplo=L n=12 nrhs=8 batch=128 | blocked 0.02512 | cta 0.04717
+uplo=L n=12 nrhs=8 batch=512 | blocked 0.02533 | cta 0.04800
+uplo=L n=12 nrhs=8 batch=2048 | blocked 0.02921 | cta 0.09058
+uplo=L n=12 nrhs=8 batch=8192 | blocked 0.06173 | cta 0.2253
+uplo=L n=12 nrhs=8 batch=32768 | blocked 0.1958 | cta 0.8666
+uplo=L n=12 nrhs=16 batch=128 | blocked 0.02543
+uplo=L n=12 nrhs=16 batch=512 | blocked 0.02684
+uplo=L n=12 nrhs=16 batch=2048 | blocked 0.03301
+uplo=L n=12 nrhs=16 batch=8192 | blocked 0.06789
+uplo=L n=12 nrhs=16 batch=32768 | blocked 0.2505
+uplo=L n=12 nrhs=64 batch=128 | blocked 0.02741
+uplo=L n=12 nrhs=64 batch=512 | blocked 0.03556
+uplo=L n=12 nrhs=64 batch=2048 | blocked 0.05977
+uplo=L n=12 nrhs=64 batch=8192 | blocked 0.1620
+uplo=L n=12 nrhs=64 batch=32768 | blocked 0.6669
+uplo=L n=16 nrhs=1 batch=128 | cta 0.02480 | blocked 0.02579 | tiny 0.03655
+uplo=L n=16 nrhs=1 batch=512 | cta 0.02572 | blocked 0.02636 | tiny 0.03538   # noisy
+uplo=L n=16 nrhs=1 batch=2048 | cta 0.03049 | blocked 0.02976 | tiny 0.03581
+uplo=L n=16 nrhs=1 batch=8192 | tiny 0.04249 | blocked 0.06490 | cta 0.07355
+uplo=L n=16 nrhs=1 batch=32768 | tiny 0.1764 | blocked 0.2113 | cta 0.2683
+uplo=L n=16 nrhs=2 batch=128 | cta 0.02640 | blocked 0.02639 | tiny 0.04377
+uplo=L n=16 nrhs=2 batch=512 | cta 0.02605 | blocked 0.02572 | tiny 0.04155
+uplo=L n=16 nrhs=2 batch=2048 | blocked 0.02938 | cta 0.03259 | tiny 0.04123
+uplo=L n=16 nrhs=2 batch=8192 | blocked 0.06578 | cta 0.08261 | tiny 0.08279
+uplo=L n=16 nrhs=2 batch=32768 | blocked 0.2175 | tiny 0.2454 | cta 0.3104
+uplo=L n=16 nrhs=4 batch=128 | blocked 0.02643 | cta 0.03626 | tiny 0.05609
+uplo=L n=16 nrhs=4 batch=512 | blocked 0.02670 | cta 0.03729 | tiny 0.05391
+uplo=L n=16 nrhs=4 batch=2048 | blocked 0.03001 | cta 0.04845 | tiny 0.05408
+uplo=L n=16 nrhs=4 batch=8192 | blocked 0.06628 | tiny 0.1060 | cta 0.1304
+uplo=L n=16 nrhs=4 batch=32768 | blocked 0.2142 | tiny 0.3625 | cta 0.5040   # noisy
+uplo=L n=16 nrhs=8 batch=128 | blocked 0.02673 | cta 0.05838
+uplo=L n=16 nrhs=8 batch=512 | blocked 0.02689 | cta 0.05940
+uplo=L n=16 nrhs=8 batch=2048 | blocked 0.03282 | cta 0.1161
+uplo=L n=16 nrhs=8 batch=8192 | blocked 0.07400 | cta 0.2945
+uplo=L n=16 nrhs=8 batch=32768 | blocked 0.2757 | cta 1.177
+uplo=L n=16 nrhs=16 batch=128 | blocked 0.02795
+uplo=L n=16 nrhs=16 batch=512 | blocked 0.03023
+uplo=L n=16 nrhs=16 batch=2048 | blocked 0.04460
+uplo=L n=16 nrhs=16 batch=8192 | blocked 0.1025
+uplo=L n=16 nrhs=16 batch=32768 | blocked 0.4615
+uplo=L n=16 nrhs=64 batch=128 | blocked 0.03157
+uplo=L n=16 nrhs=64 batch=512 | blocked 0.05121
+uplo=L n=16 nrhs=64 batch=2048 | blocked 0.1345
+uplo=L n=16 nrhs=64 batch=8192 | blocked 0.4617
+uplo=L n=16 nrhs=64 batch=32768 | blocked 1.817
+uplo=L n=20 nrhs=1 batch=128 | tiny 0.03959 | cta 0.03887 | blocked 0.06071
+uplo=L n=20 nrhs=1 batch=512 | tiny 0.03843 | cta 0.03922 | blocked 0.06056
+uplo=L n=20 nrhs=1 batch=2048 | tiny 0.04025 | cta 0.04733 | blocked 0.07120
+uplo=L n=20 nrhs=1 batch=8192 | tiny 0.1156 | cta 0.1288 | blocked 0.2239
+uplo=L n=20 nrhs=1 batch=32768 | tiny 0.4351 | cta 0.5715 | blocked 0.9642
+uplo=L n=20 nrhs=2 batch=128 | cta 0.04218 | tiny 0.04809 | blocked 0.06107
+uplo=L n=20 nrhs=2 batch=512 | cta 0.04209 | tiny 0.04607 | blocked 0.06092
+uplo=L n=20 nrhs=2 batch=2048 | tiny 0.04676 | cta 0.05156 | blocked 0.07118
+uplo=L n=20 nrhs=2 batch=8192 | tiny 0.1387 | cta 0.1454 | blocked 0.2297
+uplo=L n=20 nrhs=2 batch=32768 | tiny 0.5100 | cta 0.6477 | blocked 0.9727
+uplo=L n=20 nrhs=4 batch=128 | cta 0.05540 | blocked 0.06049 | tiny 0.06335
+uplo=L n=20 nrhs=4 batch=512 | cta 0.05664 | blocked 0.06092 | tiny 0.06184
+uplo=L n=20 nrhs=4 batch=2048 | tiny 0.06352 | blocked 0.07151 | cta 0.07246
+uplo=L n=20 nrhs=4 batch=8192 | tiny 0.1840 | cta 0.2103 | blocked 0.2278
+uplo=L n=20 nrhs=4 batch=32768 | tiny 0.7555 | cta 0.8861 | blocked 0.9518
+uplo=L n=20 nrhs=8 batch=128 | blocked 0.06079 | cta 0.08395
+uplo=L n=20 nrhs=8 batch=512 | blocked 0.06158 | cta 0.08513
+uplo=L n=20 nrhs=8 batch=2048 | blocked 0.07557 | cta 0.1642
+uplo=L n=20 nrhs=8 batch=8192 | blocked 0.2405 | cta 0.4370
+uplo=L n=20 nrhs=8 batch=32768 | blocked 1.105 | cta 1.820
+uplo=L n=20 nrhs=16 batch=128 | blocked 0.06104
+uplo=L n=20 nrhs=16 batch=512 | blocked 0.06536
+uplo=L n=20 nrhs=16 batch=2048 | blocked 0.08618
+uplo=L n=20 nrhs=16 batch=8192 | blocked 0.2654
+uplo=L n=20 nrhs=16 batch=32768 | blocked 1.291
+uplo=L n=20 nrhs=64 batch=128 | blocked 0.06574
+uplo=L n=20 nrhs=64 batch=512 | blocked 0.08964
+uplo=L n=20 nrhs=64 batch=2048 | blocked 0.1957
+uplo=L n=20 nrhs=64 batch=8192 | blocked 0.7594
+uplo=L n=20 nrhs=64 batch=32768 | blocked 2.962
+uplo=L n=24 nrhs=1 batch=128 | cta 0.04198 | tiny 0.04819 | blocked 0.06210
+uplo=L n=24 nrhs=1 batch=512 | cta 0.04203 | tiny 0.04672 | blocked 0.06174
+uplo=L n=24 nrhs=1 batch=2048 | tiny 0.05072 | cta 0.05351 | blocked 0.07560
+uplo=L n=24 nrhs=1 batch=8192 | tiny 0.1438 | cta 0.1499 | blocked 0.2391
+uplo=L n=24 nrhs=1 batch=32768 | tiny 0.5716 | cta 0.7066 | blocked 1.119
+uplo=L n=24 nrhs=2 batch=128 | cta 0.04645 | tiny 0.05791 | blocked 0.06364
+uplo=L n=24 nrhs=2 batch=512 | cta 0.04576 | tiny 0.05544 | blocked 0.06230
+uplo=L n=24 nrhs=2 batch=2048 | tiny 0.05678 | cta 0.05599 | blocked 0.07305
+uplo=L n=24 nrhs=2 batch=8192 | tiny 0.1660 | cta 0.1656 | blocked 0.2397
+uplo=L n=24 nrhs=2 batch=32768 | tiny 0.7360 | cta 0.8035 | blocked 1.128
+uplo=L n=24 nrhs=4 batch=128 | cta 0.06102 | blocked 0.06162 | tiny 0.07656
+uplo=L n=24 nrhs=4 batch=512 | cta 0.06312 | blocked 0.06286 | tiny 0.07502
+uplo=L n=24 nrhs=4 batch=2048 | blocked 0.07375 | tiny 0.07725 | cta 0.08086
+uplo=L n=24 nrhs=4 batch=8192 | tiny 0.2270 | blocked 0.2463 | cta 0.2487
+uplo=L n=24 nrhs=4 batch=32768 | tiny 0.9450 | blocked 1.135 | cta 1.136
+uplo=L n=24 nrhs=8 batch=128 | blocked 0.06229 | cta 0.09547
+uplo=L n=24 nrhs=8 batch=512 | blocked 0.06327 | cta 0.09652
+uplo=L n=24 nrhs=8 batch=2048 | blocked 0.07828 | cta 0.1898
+uplo=L n=24 nrhs=8 batch=8192 | blocked 0.2634 | cta 0.5270
+uplo=L n=24 nrhs=8 batch=32768 | blocked 1.216 | cta 2.139
+uplo=L n=24 nrhs=16 batch=128 | blocked 0.06504
+uplo=L n=24 nrhs=16 batch=512 | blocked 0.06865
+uplo=L n=24 nrhs=16 batch=2048 | blocked 0.09176
+uplo=L n=24 nrhs=16 batch=8192 | blocked 0.2989
+uplo=L n=24 nrhs=16 batch=32768 | blocked 1.464
+uplo=L n=24 nrhs=64 batch=128 | blocked 0.07010
+uplo=L n=24 nrhs=64 batch=512 | blocked 0.09436
+uplo=L n=24 nrhs=64 batch=2048 | blocked 0.2189
+uplo=L n=24 nrhs=64 batch=8192 | blocked 0.9044
+uplo=L n=24 nrhs=64 batch=32768 | blocked 3.719
+uplo=L n=28 nrhs=1 batch=128 | cta 0.04528 | tiny 0.05647 | blocked 0.06324
+uplo=L n=28 nrhs=1 batch=512 | cta 0.04747 | tiny 0.05598 | blocked 0.06498
+uplo=L n=28 nrhs=1 batch=2048 | tiny 0.05910 | cta 0.05793 | blocked 0.07719
+uplo=L n=28 nrhs=1 batch=8192 | tiny 0.1738 | cta 0.1809 | blocked 0.2629
+uplo=L n=28 nrhs=1 batch=32768 | tiny 0.7782 | cta 0.8812 | blocked 1.315
+uplo=L n=28 nrhs=2 batch=128 | cta 0.04916 | blocked 0.06369 | tiny 0.06824
+uplo=L n=28 nrhs=2 batch=512 | cta 0.04953 | blocked 0.06373 | tiny 0.06584
+uplo=L n=28 nrhs=2 batch=2048 | cta 0.06155 | tiny 0.06766 | blocked 0.07517
+uplo=L n=28 nrhs=2 batch=8192 | tiny 0.2041 | cta 0.2002 | blocked 0.2633
+uplo=L n=28 nrhs=2 batch=32768 | tiny 0.8901 | cta 0.9948 | blocked 1.311
+uplo=L n=28 nrhs=4 batch=128 | blocked 0.06327 | cta 0.06773 | tiny 0.08865
+uplo=L n=28 nrhs=4 batch=512 | blocked 0.06417 | cta 0.06980 | tiny 0.08638
+uplo=L n=28 nrhs=4 batch=2048 | blocked 0.07599 | tiny 0.08955 | cta 0.09007
+uplo=L n=28 nrhs=4 batch=8192 | tiny 0.2712 | blocked 0.2732 | cta 0.2980
+uplo=L n=28 nrhs=4 batch=32768 | tiny 1.099 | blocked 1.276 | cta 1.363
+uplo=L n=28 nrhs=8 batch=128 | blocked 0.06365 | cta 0.1077
+uplo=L n=28 nrhs=8 batch=512 | blocked 0.06558 | cta 0.1104
+uplo=L n=28 nrhs=8 batch=2048 | blocked 0.08286 | cta 0.2189
+uplo=L n=28 nrhs=8 batch=8192 | blocked 0.3055 | cta 0.6285
+uplo=L n=28 nrhs=8 batch=32768 | blocked 1.411 | cta 2.578
+uplo=L n=28 nrhs=16 batch=128 | blocked 0.06383
+uplo=L n=28 nrhs=16 batch=512 | blocked 0.07067
+uplo=L n=28 nrhs=16 batch=2048 | blocked 0.1002
+uplo=L n=28 nrhs=16 batch=8192 | blocked 0.3513
+uplo=L n=28 nrhs=16 batch=32768 | blocked 1.669
+uplo=L n=28 nrhs=64 batch=128 | blocked 0.07153
+uplo=L n=28 nrhs=64 batch=512 | blocked 0.09977
+uplo=L n=28 nrhs=64 batch=2048 | blocked 0.2431
+uplo=L n=28 nrhs=64 batch=8192 | blocked 1.075
+uplo=L n=28 nrhs=64 batch=32768 | blocked 4.220
+uplo=L n=32 nrhs=1 batch=128 | cta 0.04795 | blocked 0.06485 | tiny 0.06608
+uplo=L n=32 nrhs=1 batch=512 | cta 0.05763 | tiny 0.06806 | blocked 0.07103   # noisy
+uplo=L n=32 nrhs=1 batch=2048 | cta 0.06136 | tiny 0.06819 | blocked 0.07798
+uplo=L n=32 nrhs=1 batch=8192 | cta 0.2075 | tiny 0.2383 | blocked 0.2906
+uplo=L n=32 nrhs=1 batch=32768 | tiny 0.9239 | cta 0.9849 | blocked 1.420
+uplo=L n=32 nrhs=2 batch=128 | cta 0.05178 | blocked 0.06525 | tiny 0.07822
+uplo=L n=32 nrhs=2 batch=512 | cta 0.05246 | blocked 0.06517 | tiny 0.07549
+uplo=L n=32 nrhs=2 batch=2048 | cta 0.06725 | blocked 0.07794 | tiny 0.07795
+uplo=L n=32 nrhs=2 batch=8192 | cta 0.2278 | tiny 0.2863 | blocked 0.2874
+uplo=L n=32 nrhs=2 batch=32768 | tiny 1.026 | cta 1.096 | blocked 1.390
+uplo=L n=32 nrhs=4 batch=128 | blocked 0.06471 | cta 0.07295 | tiny 0.1008
+uplo=L n=32 nrhs=4 batch=512 | blocked 0.06536 | cta 0.07497 | tiny 0.09777
+uplo=L n=32 nrhs=4 batch=2048 | blocked 0.07826 | cta 0.09897 | tiny 0.1016
+uplo=L n=32 nrhs=4 batch=8192 | blocked 0.2919 | cta 0.3310 | tiny 0.4690
+uplo=L n=32 nrhs=4 batch=32768 | blocked 1.392 | cta 1.540 | tiny 1.619
+uplo=L n=32 nrhs=8 batch=128 | blocked 0.06551 | cta 0.1186
+uplo=L n=32 nrhs=8 batch=512 | blocked 0.06555 | cta 0.1212
+uplo=L n=32 nrhs=8 batch=2048 | blocked 0.08539 | cta 0.2442
+uplo=L n=32 nrhs=8 batch=8192 | blocked 0.3258 | cta 0.7106
+uplo=L n=32 nrhs=8 batch=32768 | blocked 1.575 | cta 2.943
+uplo=L n=32 nrhs=16 batch=128 | blocked 0.06698
+uplo=L n=32 nrhs=16 batch=512 | blocked 0.07375
+uplo=L n=32 nrhs=16 batch=2048 | blocked 0.1021
+uplo=L n=32 nrhs=16 batch=8192 | blocked 0.3949
+uplo=L n=32 nrhs=16 batch=32768 | blocked 1.831
+uplo=L n=32 nrhs=64 batch=128 | blocked 0.07476
+uplo=L n=32 nrhs=64 batch=512 | blocked 0.1162   # noisy
+uplo=L n=32 nrhs=64 batch=2048 | blocked 0.2721
+uplo=L n=32 nrhs=64 batch=8192 | blocked 1.215
+uplo=L n=32 nrhs=64 batch=32768 | blocked 4.571
+uplo=L n=36 nrhs=1 batch=128 | cta 0.07228 | blocked 0.09540   # noisy
+uplo=L n=36 nrhs=1 batch=512 | cta 0.07385 | blocked 0.09455
+uplo=L n=36 nrhs=1 batch=2048 | cta 0.1047 | blocked 0.1274
+uplo=L n=36 nrhs=1 batch=8192 | cta 0.3535 | blocked 0.4524
+uplo=L n=36 nrhs=1 batch=32768 | cta 1.592 | blocked 2.047
+uplo=L n=36 nrhs=2 batch=128 | cta 0.07360 | blocked 0.09840
+uplo=L n=36 nrhs=2 batch=512 | cta 0.08281 | blocked 0.1201
+uplo=L n=36 nrhs=2 batch=2048 | cta 0.1104 | blocked 0.2177
+uplo=L n=36 nrhs=2 batch=8192 | cta 0.3777 | blocked 0.6693
+uplo=L n=36 nrhs=2 batch=32768 | cta 1.752 | blocked 3.032
+uplo=L n=36 nrhs=4 batch=128 | cta 0.09745 | blocked 0.09687
+uplo=L n=36 nrhs=4 batch=512 | cta 0.1074 | blocked 0.1190
+uplo=L n=36 nrhs=4 batch=2048 | cta 0.1497 | blocked 0.2188
+uplo=L n=36 nrhs=4 batch=8192 | cta 0.5258 | blocked 0.7169
+uplo=L n=36 nrhs=4 batch=32768 | cta 2.237 | blocked 2.970
+uplo=L n=36 nrhs=8 batch=128 | blocked 0.09824 | cta 0.1507
+uplo=L n=36 nrhs=8 batch=512 | blocked 0.1205 | cta 0.1579
+uplo=L n=36 nrhs=8 batch=2048 | blocked 0.2090 | cta 0.3173
+uplo=L n=36 nrhs=8 batch=8192 | blocked 0.7296 | cta 0.9589
+uplo=L n=36 nrhs=8 batch=32768 | blocked 3.280 | cta 3.939
+uplo=L n=36 nrhs=16 batch=128 | blocked 0.1001
+uplo=L n=36 nrhs=16 batch=512 | blocked 0.1290
+uplo=L n=36 nrhs=16 batch=2048 | blocked 0.2188
+uplo=L n=36 nrhs=16 batch=8192 | blocked 0.8194
+uplo=L n=36 nrhs=16 batch=32768 | blocked 3.605
+uplo=L n=36 nrhs=64 batch=128 | blocked 0.1095
+uplo=L n=36 nrhs=64 batch=512 | blocked 0.1676
+uplo=L n=36 nrhs=64 batch=2048 | blocked 0.4681
+uplo=L n=36 nrhs=64 batch=8192 | blocked 2.120
+uplo=L n=36 nrhs=64 batch=32768 | blocked 8.180
+uplo=L n=40 nrhs=1 batch=128 | cta 0.07540 | blocked 0.09853   # noisy
+uplo=L n=40 nrhs=1 batch=512 | cta 0.08084 | blocked 0.09915
+uplo=L n=40 nrhs=1 batch=2048 | cta 0.1094 | blocked 0.1299
+uplo=L n=40 nrhs=1 batch=8192 | cta 0.4060 | blocked 0.4926
+uplo=L n=40 nrhs=1 batch=32768 | cta 1.757 | blocked 2.195
+uplo=L n=40 nrhs=2 batch=128 | cta 0.08065 | blocked 0.1040
+uplo=L n=40 nrhs=2 batch=512 | cta 0.08763 | blocked 0.1219
+uplo=L n=40 nrhs=2 batch=2048 | cta 0.1193 | blocked 0.2234
+uplo=L n=40 nrhs=2 batch=8192 | cta 0.4211 | blocked 0.7054
+uplo=L n=40 nrhs=2 batch=32768 | cta 1.946 | blocked 3.168
+uplo=L n=40 nrhs=4 batch=128 | blocked 0.09985 | cta 0.1049
+uplo=L n=40 nrhs=4 batch=512 | cta 0.1160 | blocked 0.1222
+uplo=L n=40 nrhs=4 batch=2048 | cta 0.1608 | blocked 0.2077
+uplo=L n=40 nrhs=4 batch=8192 | cta 0.6166 | blocked 0.7759
+uplo=L n=40 nrhs=4 batch=32768 | cta 2.472 | blocked 3.098
+uplo=L n=40 nrhs=8 batch=128 | blocked 0.1075 | cta 0.1685   # noisy
+uplo=L n=40 nrhs=8 batch=512 | blocked 0.1245 | cta 0.1722
+uplo=L n=40 nrhs=8 batch=2048 | blocked 0.2029 | cta 0.3444
+uplo=L n=40 nrhs=8 batch=8192 | blocked 0.7965 | cta 1.097
+uplo=L n=40 nrhs=8 batch=32768 | blocked 3.442 | cta 4.370
+uplo=L n=40 nrhs=16 batch=128 | blocked 0.1045
+uplo=L n=40 nrhs=16 batch=512 | blocked 0.1315
+uplo=L n=40 nrhs=16 batch=2048 | blocked 0.2348
+uplo=L n=40 nrhs=16 batch=8192 | blocked 0.8921
+uplo=L n=40 nrhs=16 batch=32768 | blocked 3.901
+uplo=L n=40 nrhs=64 batch=128 | blocked 0.1160
+uplo=L n=40 nrhs=64 batch=512 | blocked 0.1742
+uplo=L n=40 nrhs=64 batch=2048 | blocked 0.5171
+uplo=L n=40 nrhs=64 batch=8192 | blocked 2.301
+uplo=L n=40 nrhs=64 batch=32768 | blocked 8.706
+uplo=L n=48 nrhs=1 batch=128 | cta 0.08076 | blocked 0.1049
+uplo=L n=48 nrhs=1 batch=512 | cta 0.08835 | blocked 0.1090
+uplo=L n=48 nrhs=1 batch=2048 | cta 0.1341 | blocked 0.1564
+uplo=L n=48 nrhs=1 batch=8192 | cta 0.5265 | blocked 0.6201
+uplo=L n=48 nrhs=1 batch=32768 | cta 2.164 | blocked 2.678
+uplo=L n=48 nrhs=2 batch=128 | cta 0.09136 | blocked 0.1165   # noisy
+uplo=L n=48 nrhs=2 batch=512 | cta 0.09563 | blocked 0.1313
+uplo=L n=48 nrhs=2 batch=2048 | cta 0.1433 | blocked 0.2275
+uplo=L n=48 nrhs=2 batch=8192 | cta 0.5376 | blocked 0.8263
+uplo=L n=48 nrhs=2 batch=32768 | cta 2.385 | blocked 3.625
+uplo=L n=48 nrhs=4 batch=128 | blocked 0.1099 | cta 0.1180
+uplo=L n=48 nrhs=4 batch=512 | cta 0.1342 | blocked 0.1359
+uplo=L n=48 nrhs=4 batch=2048 | cta 0.1938 | blocked 0.2347
+uplo=L n=48 nrhs=4 batch=8192 | cta 0.7798 | blocked 0.9666
+uplo=L n=48 nrhs=4 batch=32768 | cta 3.021 | blocked 3.581
+uplo=L n=48 nrhs=8 batch=128 | blocked 0.1111 | cta 0.1873
+uplo=L n=48 nrhs=8 batch=512 | blocked 0.1334 | cta 0.1994
+uplo=L n=48 nrhs=8 batch=2048 | blocked 0.2267 | cta 0.4068
+uplo=L n=48 nrhs=8 batch=8192 | blocked 0.9340 | cta 1.331
+uplo=L n=48 nrhs=8 batch=32768 | blocked 4.034 | cta 5.284
+uplo=L n=48 nrhs=16 batch=128 | blocked 0.1167
+uplo=L n=48 nrhs=16 batch=512 | blocked 0.1424
+uplo=L n=48 nrhs=16 batch=2048 | blocked 0.2749
+uplo=L n=48 nrhs=16 batch=8192 | blocked 1.072
+uplo=L n=48 nrhs=16 batch=32768 | blocked 4.685
+uplo=L n=48 nrhs=64 batch=128 | blocked 0.1339   # noisy
+uplo=L n=48 nrhs=64 batch=512 | blocked 0.2009
+uplo=L n=48 nrhs=64 batch=2048 | blocked 0.6146
+uplo=L n=48 nrhs=64 batch=8192 | blocked 2.660
+uplo=L n=48 nrhs=64 batch=32768 | blocked 10.06
+uplo=L n=56 nrhs=1 batch=128 | cta 0.09555 | blocked 0.1336
+uplo=L n=56 nrhs=1 batch=512 | cta 0.1192 | blocked 0.1524   # noisy
+uplo=L n=56 nrhs=1 batch=2048 | cta 0.1545 | blocked 0.1996
+uplo=L n=56 nrhs=1 batch=8192 | cta 0.6839 | blocked 0.8869
+uplo=L n=56 nrhs=1 batch=32768 | cta 2.674 | blocked 3.723
+uplo=L n=56 nrhs=2 batch=128 | cta 0.1055 | blocked 0.1433
+uplo=L n=56 nrhs=2 batch=512 | cta 0.1230 | blocked 0.1703
+uplo=L n=56 nrhs=2 batch=2048 | cta 0.1759 | blocked 0.2853
+uplo=L n=56 nrhs=2 batch=8192 | cta 0.7309 | blocked 1.180
+uplo=L n=56 nrhs=2 batch=32768 | cta 2.980 | blocked 4.654
+uplo=L n=56 nrhs=4 batch=128 | cta 0.1436 | blocked 0.1414
+uplo=L n=56 nrhs=4 batch=512 | cta 0.1655 | blocked 0.1726
+uplo=L n=56 nrhs=4 batch=2048 | cta 0.2347 | blocked 0.2871
+uplo=L n=56 nrhs=4 batch=8192 | cta 0.9980 | blocked 1.263
+uplo=L n=56 nrhs=4 batch=32768 | cta 3.763 | blocked 4.597
+uplo=L n=56 nrhs=8 batch=128 | blocked 0.1429 | cta 0.2267
+uplo=L n=56 nrhs=8 batch=512 | blocked 0.1705 | cta 0.2457
+uplo=L n=56 nrhs=8 batch=2048 | blocked 0.2676 | cta 0.4873
+uplo=L n=56 nrhs=8 batch=8192 | blocked 1.219 | cta 1.689
+uplo=L n=56 nrhs=8 batch=32768 | blocked 5.130 | cta 6.531
+uplo=L n=56 nrhs=16 batch=128 | blocked 0.1462
+uplo=L n=56 nrhs=16 batch=512 | blocked 0.1847
+uplo=L n=56 nrhs=16 batch=2048 | blocked 0.3316
+uplo=L n=56 nrhs=16 batch=8192 | blocked 1.444
+uplo=L n=56 nrhs=16 batch=32768 | blocked 5.744
+uplo=L n=56 nrhs=64 batch=128 | blocked 0.1604
+uplo=L n=56 nrhs=64 batch=512 | blocked 0.2480
+uplo=L n=56 nrhs=64 batch=2048 | blocked 0.7384
+uplo=L n=56 nrhs=64 batch=8192 | blocked 3.226
+uplo=L n=56 nrhs=64 batch=32768 | blocked 12.12
+uplo=L n=64 nrhs=1 batch=128 | cta 0.1025 | blocked 0.1381
+uplo=L n=64 nrhs=1 batch=512 | cta 0.1227 | blocked 0.1525
+uplo=L n=64 nrhs=1 batch=2048 | cta 0.1809 | blocked 0.2286
+uplo=L n=64 nrhs=1 batch=8192 | cta 0.8036 | blocked 1.009
+uplo=L n=64 nrhs=1 batch=32768 | cta 3.118 | blocked 4.244
+uplo=L n=64 nrhs=2 batch=128 | cta 0.1156 | blocked 0.1504
+uplo=L n=64 nrhs=2 batch=512 | cta 0.1327 | blocked 0.1748
+uplo=L n=64 nrhs=2 batch=2048 | cta 0.2065 | blocked 0.3178
+uplo=L n=64 nrhs=2 batch=8192 | cta 0.8552 | blocked 1.289
+uplo=L n=64 nrhs=2 batch=32768 | cta 3.459 | blocked 5.102
+uplo=L n=64 nrhs=4 batch=128 | blocked 0.1461 | cta 0.1577
+uplo=L n=64 nrhs=4 batch=512 | blocked 0.1754 | cta 0.1837
+uplo=L n=64 nrhs=4 batch=2048 | cta 0.2758 | blocked 0.3205
+uplo=L n=64 nrhs=4 batch=8192 | cta 1.150 | blocked 1.302
+uplo=L n=64 nrhs=4 batch=32768 | cta 4.328 | blocked 5.387
+uplo=L n=64 nrhs=8 batch=128 | blocked 0.1479 | cta 0.2523
+uplo=L n=64 nrhs=8 batch=512 | blocked 0.1724 | cta 0.2736
+uplo=L n=64 nrhs=8 batch=2048 | blocked 0.2967 | cta 0.5584
+uplo=L n=64 nrhs=8 batch=8192 | blocked 1.432 | cta 1.945
+uplo=L n=64 nrhs=8 batch=32768 | blocked 5.606 | cta 7.449
+uplo=L n=64 nrhs=16 batch=128 | blocked 0.1489
+uplo=L n=64 nrhs=16 batch=512 | blocked 0.1886
+uplo=L n=64 nrhs=16 batch=2048 | blocked 0.3753
+uplo=L n=64 nrhs=16 batch=8192 | blocked 1.573
+uplo=L n=64 nrhs=16 batch=32768 | blocked 6.291
+uplo=L n=64 nrhs=64 batch=128 | blocked 0.1683
+uplo=L n=64 nrhs=64 batch=512 | blocked 0.2647
+uplo=L n=64 nrhs=64 batch=2048 | blocked 0.8128
+uplo=L n=64 nrhs=64 batch=8192 | blocked 3.539
+uplo=L n=64 nrhs=64 batch=32768 | blocked 13.12
+uplo=L n=80 nrhs=1 batch=128 | cta 0.1389 | blocked 0.1756
+uplo=L n=80 nrhs=1 batch=512 | cta 0.1656 | blocked 0.2006
+uplo=L n=80 nrhs=1 batch=2048 | cta 0.3364 | blocked 0.3930
+uplo=L n=80 nrhs=1 batch=8192 | cta 1.382 | blocked 1.676
+uplo=L n=80 nrhs=1 batch=32768 | cta 5.363 | blocked 6.685
+uplo=L n=80 nrhs=2 batch=128 | cta 0.1522 | blocked 0.1982
+uplo=L n=80 nrhs=2 batch=512 | cta 0.1775 | blocked 0.2607
+uplo=L n=80 nrhs=2 batch=2048 | cta 0.3723 | blocked 0.5723
+uplo=L n=80 nrhs=2 batch=8192 | cta 1.430 | blocked 2.201
+uplo=L n=80 nrhs=2 batch=32768 | cta 5.771 | blocked 8.702
+uplo=L n=80 nrhs=4 batch=128 | blocked 0.1952 | cta 0.2064
+uplo=L n=80 nrhs=4 batch=512 | cta 0.2369 | blocked 0.2440
+uplo=L n=80 nrhs=4 batch=2048 | cta 0.4589 | blocked 0.5777
+uplo=L n=80 nrhs=4 batch=8192 | cta 1.827 | blocked 2.272
+uplo=L n=80 nrhs=4 batch=32768 | cta 6.873 | blocked 8.989
+uplo=L n=80 nrhs=8 batch=128 | blocked 0.1994 | cta 0.3265
+uplo=L n=80 nrhs=8 batch=512 | blocked 0.2491 | cta 0.3549
+uplo=L n=80 nrhs=8 batch=2048 | blocked 0.5489 | cta 0.8158
+uplo=L n=80 nrhs=8 batch=8192 | blocked 2.434 | cta 2.810
+uplo=L n=80 nrhs=8 batch=32768 | blocked 9.551 | cta 10.93
+uplo=L n=80 nrhs=16 batch=128 | blocked 0.2020
+uplo=L n=80 nrhs=16 batch=512 | blocked 0.2686
+uplo=L n=80 nrhs=16 batch=2048 | blocked 0.6618
+uplo=L n=80 nrhs=16 batch=8192 | blocked 2.795
+uplo=L n=80 nrhs=16 batch=32768 | blocked 11.06
+uplo=L n=80 nrhs=64 batch=128 | blocked 0.2293
+uplo=L n=80 nrhs=64 batch=512 | blocked 0.3938
+uplo=L n=80 nrhs=64 batch=2048 | blocked 1.407
+uplo=L n=80 nrhs=64 batch=8192 | blocked 5.678
+uplo=L n=80 nrhs=64 batch=32768 | blocked 22.26
+uplo=L n=96 nrhs=1 batch=128 | cta 0.1677 | blocked 0.2111
+uplo=L n=96 nrhs=1 batch=512 | cta 0.2051 | blocked 0.2480
+uplo=L n=96 nrhs=1 batch=2048 | cta 0.4489 | blocked 0.5261
+uplo=L n=96 nrhs=1 batch=8192 | cta 1.818 | blocked 2.275
+uplo=L n=96 nrhs=1 batch=32768 | cta 6.842 | blocked 8.786
+uplo=L n=96 nrhs=2 batch=128 | cta 0.1868 | blocked 0.2363
+uplo=L n=96 nrhs=2 batch=512 | cta 0.2200 | blocked 0.2897
+uplo=L n=96 nrhs=2 batch=2048 | cta 0.4826 | blocked 0.6874
+uplo=L n=96 nrhs=2 batch=8192 | cta 1.892 | blocked 2.740
+uplo=L n=96 nrhs=2 batch=32768 | cta 7.582 | blocked 10.77
+uplo=L n=96 nrhs=4 batch=128 | blocked 0.2377 | cta 0.2587
+uplo=L n=96 nrhs=4 batch=512 | cta 0.2948 | blocked 0.2895
+uplo=L n=96 nrhs=4 batch=2048 | cta 0.6103 | blocked 0.7141
+uplo=L n=96 nrhs=4 batch=8192 | cta 2.311 | blocked 2.715
+uplo=L n=96 nrhs=4 batch=32768 | cta 9.058 | blocked 11.16
+uplo=L n=96 nrhs=8 batch=128 | blocked 0.2291 | cta 0.3985
+uplo=L n=96 nrhs=8 batch=512 | blocked 0.2943 | cta 0.4414
+uplo=L n=96 nrhs=8 batch=2048 | blocked 0.6794 | cta 1.059
+uplo=L n=96 nrhs=8 batch=8192 | blocked 2.987 | cta 3.588
+uplo=L n=96 nrhs=8 batch=32768 | blocked 11.57 | cta 13.67
+uplo=L n=96 nrhs=16 batch=128 | blocked 0.2435
+uplo=L n=96 nrhs=16 batch=512 | blocked 0.3160
+uplo=L n=96 nrhs=16 batch=2048 | blocked 0.8083
+uplo=L n=96 nrhs=16 batch=8192 | blocked 3.320
+uplo=L n=96 nrhs=16 batch=32768 | blocked 13.16
+uplo=L n=96 nrhs=64 batch=128 | blocked 0.2756
+uplo=L n=96 nrhs=64 batch=512 | blocked 0.4705
+uplo=L n=96 nrhs=64 batch=2048 | blocked 1.686
+uplo=L n=96 nrhs=64 batch=8192 | blocked 6.600
+uplo=L n=96 nrhs=64 batch=32768 | blocked 25.54
+uplo=L n=112 nrhs=1 batch=128 | cta 0.2020 | blocked 0.2467
+uplo=L n=112 nrhs=1 batch=512 | cta 0.2558 | blocked 0.3018
+uplo=L n=112 nrhs=1 batch=2048 | cta 0.6440 | blocked 0.7226
+uplo=L n=112 nrhs=1 batch=8192 | cta 2.773 | blocked 3.288
+uplo=L n=112 nrhs=1 batch=32768 | cta 10.48 | blocked 12.73
+uplo=L n=112 nrhs=2 batch=128 | cta 0.2306 | blocked 0.2954
+uplo=L n=112 nrhs=2 batch=512 | cta 0.2746 | blocked 0.3981
+uplo=L n=112 nrhs=2 batch=2048 | cta 0.9274 | blocked 2.296   # noisy
+uplo=L n=112 nrhs=2 batch=8192 | cta 2.834 | blocked 4.064
+uplo=L n=112 nrhs=2 batch=32768 | cta 11.44 | blocked 16.21
+uplo=L n=112 nrhs=4 batch=128 | blocked 0.2947 | cta 0.3140
+uplo=L n=112 nrhs=4 batch=512 | cta 0.3616 | blocked 0.3709
+uplo=L n=112 nrhs=4 batch=2048 | cta 0.8503 | blocked 1.028
+uplo=L n=112 nrhs=4 batch=8192 | cta 3.367 | blocked 4.096
+uplo=L n=112 nrhs=4 batch=32768 | cta 13.18 | blocked 16.45
+uplo=L n=112 nrhs=8 batch=128 | blocked 0.2825 | cta 0.4758
+uplo=L n=112 nrhs=8 batch=512 | blocked 0.3780 | cta 0.5361
+uplo=L n=112 nrhs=8 batch=2048 | blocked 0.9882 | cta 1.398
+uplo=L n=112 nrhs=8 batch=8192 | blocked 4.450 | cta 4.877
+uplo=L n=112 nrhs=8 batch=32768 | blocked 16.94 | cta 18.95
+uplo=L n=112 nrhs=16 batch=128 | blocked 0.2816
+uplo=L n=112 nrhs=16 batch=512 | blocked 0.4105
+uplo=L n=112 nrhs=16 batch=2048 | blocked 1.136
+uplo=L n=112 nrhs=16 batch=8192 | blocked 4.797
+uplo=L n=112 nrhs=16 batch=32768 | blocked 19.09
+uplo=L n=112 nrhs=64 batch=128 | blocked 0.3319
+uplo=L n=112 nrhs=64 batch=512 | blocked 0.6138
+uplo=L n=112 nrhs=64 batch=2048 | blocked 2.285
+uplo=L n=112 nrhs=64 batch=8192 | blocked 9.175
+uplo=L n=128 nrhs=1 batch=128 | cta 0.2396 | blocked 0.2912
+uplo=L n=128 nrhs=1 batch=512 | cta 0.3046 | blocked 0.3677
+uplo=L n=128 nrhs=1 batch=2048 | cta 0.8153 | blocked 0.9059
+uplo=L n=128 nrhs=1 batch=8192 | cta 3.188 | blocked 3.841
+uplo=L n=128 nrhs=2 batch=128 | cta 0.2621 | blocked 0.3277
+uplo=L n=128 nrhs=2 batch=512 | cta 0.3343 | blocked 0.4445
+uplo=L n=128 nrhs=2 batch=2048 | cta 0.8622 | blocked 1.164
+uplo=L n=128 nrhs=2 batch=8192 | cta 3.552 | blocked 4.875
+uplo=L n=128 nrhs=4 batch=128 | blocked 0.3298 | cta 0.3617
+uplo=L n=128 nrhs=4 batch=512 | cta 0.4321 | blocked 0.4366
+uplo=L n=128 nrhs=4 batch=2048 | cta 1.054 | blocked 1.212
+uplo=L n=128 nrhs=4 batch=8192 | cta 4.226 | blocked 4.756
+uplo=L n=128 nrhs=8 batch=128 | blocked 0.3267 | cta 0.5690
+uplo=L n=128 nrhs=8 batch=512 | blocked 0.4428 | cta 0.6358
+uplo=L n=128 nrhs=8 batch=2048 | blocked 1.181 | cta 1.681
+uplo=L n=128 nrhs=8 batch=8192 | blocked 4.982 | cta 5.954
+uplo=L n=128 nrhs=16 batch=128 | blocked 0.3181
+uplo=L n=128 nrhs=16 batch=512 | blocked 0.4753
+uplo=L n=128 nrhs=16 batch=2048 | blocked 1.327
+uplo=L n=128 nrhs=16 batch=8192 | blocked 5.639
+uplo=L n=128 nrhs=64 batch=128 | blocked 0.3735
+uplo=L n=128 nrhs=64 batch=512 | blocked 0.6914
+uplo=L n=128 nrhs=64 batch=2048 | blocked 2.623
+uplo=L n=128 nrhs=64 batch=8192 | blocked 10.30
+uplo=L n=160 nrhs=1 batch=128 | cta 0.2873 | blocked 0.3758
+uplo=L n=160 nrhs=1 batch=512 | cta 0.4101 | blocked 0.5195
+uplo=L n=160 nrhs=1 batch=2048 | cta 1.587 | blocked 1.645
+uplo=L n=160 nrhs=1 batch=8192 | cta 5.763 | blocked 6.645
+uplo=L n=160 nrhs=2 batch=128 | cta 0.3059 | blocked 0.4380
+uplo=L n=160 nrhs=2 batch=512 | cta 0.4314 | blocked 0.6207
+uplo=L n=160 nrhs=2 batch=2048 | cta 1.679 | blocked 2.009
+uplo=L n=160 nrhs=2 batch=8192 | cta 6.345 | blocked 7.966
+uplo=L n=160 nrhs=4 batch=128 | cta 0.3398 | blocked 0.4332
+uplo=L n=160 nrhs=4 batch=512 | cta 0.4673 | blocked 0.6239
+uplo=L n=160 nrhs=4 batch=2048 | cta 1.847 | blocked 2.085
+uplo=L n=160 nrhs=4 batch=8192 | cta 6.759 | blocked 7.848
+uplo=L n=160 nrhs=8 batch=128 | blocked 0.4159 | cta 0.4630
+uplo=L n=160 nrhs=8 batch=512 | cta 0.6215 | blocked 0.6478
+uplo=L n=160 nrhs=8 batch=2048 | blocked 2.069 | cta 2.423
+uplo=L n=160 nrhs=8 batch=8192 | blocked 8.182 | cta 8.719
+uplo=L n=160 nrhs=16 batch=128 | blocked 0.4309
+uplo=L n=160 nrhs=16 batch=512 | blocked 0.6846
+uplo=L n=160 nrhs=16 batch=2048 | blocked 2.294
+uplo=L n=160 nrhs=16 batch=8192 | blocked 9.348
+uplo=L n=160 nrhs=64 batch=128 | blocked 0.5053
+uplo=L n=160 nrhs=64 batch=512 | blocked 1.084
+uplo=L n=160 nrhs=64 batch=2048 | blocked 4.222
+uplo=L n=160 nrhs=64 batch=8192 | blocked 15.92
+uplo=L n=192 nrhs=1 batch=128 | cta 0.3590 | blocked 0.4603
+uplo=L n=192 nrhs=1 batch=512 | cta 0.5639 | blocked 0.6886
+uplo=L n=192 nrhs=1 batch=2048 | cta 2.312 | blocked 2.444
+uplo=L n=192 nrhs=1 batch=8192 | cta 8.334 | blocked 9.461
+uplo=L n=192 nrhs=2 batch=128 | cta 0.3890 | blocked 0.5241
+uplo=L n=192 nrhs=2 batch=512 | cta 0.5892 | blocked 0.8370
+uplo=L n=192 nrhs=2 batch=2048 | cta 2.408 | blocked 2.837
+uplo=L n=192 nrhs=2 batch=8192 | cta 9.027 | blocked 11.20
+uplo=L n=192 nrhs=4 batch=128 | cta 0.4207 | blocked 0.5256
+uplo=L n=192 nrhs=4 batch=512 | cta 0.6542 | blocked 0.8537
+uplo=L n=192 nrhs=4 batch=2048 | cta 2.643 | blocked 2.963
+uplo=L n=192 nrhs=4 batch=8192 | cta 9.548 | blocked 10.98
+uplo=L n=192 nrhs=8 batch=128 | blocked 0.5175 | cta 0.5816
+uplo=L n=192 nrhs=8 batch=512 | cta 0.8538 | blocked 0.8829
+uplo=L n=192 nrhs=8 batch=2048 | blocked 2.960 | cta 3.342
+uplo=L n=192 nrhs=8 batch=8192 | blocked 11.47 | cta 12.05
+uplo=L n=192 nrhs=16 batch=128 | blocked 0.5279
+uplo=L n=192 nrhs=16 batch=512 | blocked 0.9199
+uplo=L n=192 nrhs=16 batch=2048 | blocked 3.210
+uplo=L n=192 nrhs=16 batch=8192 | blocked 13.07
+uplo=L n=192 nrhs=64 batch=128 | blocked 0.6108
+uplo=L n=192 nrhs=64 batch=512 | blocked 1.342
+uplo=L n=192 nrhs=64 batch=2048 | blocked 5.289
+uplo=L n=192 nrhs=64 batch=8192 | blocked 20.87
+uplo=L n=224 nrhs=1 batch=128 | cta 0.4457 | blocked 0.5590
+uplo=L n=224 nrhs=1 batch=512 | cta 0.8318 | blocked 0.9432
+uplo=L n=224 nrhs=1 batch=2048 | cta 3.459 | blocked 3.620
+uplo=L n=224 nrhs=1 batch=8192 | cta 12.70 | blocked 14.02
+uplo=L n=224 nrhs=2 batch=128 | cta 0.4839 | blocked 0.6500
+uplo=L n=224 nrhs=2 batch=512 | cta 0.8726 | blocked 1.153
+uplo=L n=224 nrhs=2 batch=2048 | cta 3.578 | blocked 4.196
+uplo=L n=224 nrhs=2 batch=8192 | cta 13.59 | blocked 16.69
+uplo=L n=224 nrhs=4 batch=128 | cta 0.5272 | blocked 0.6523
+uplo=L n=224 nrhs=4 batch=512 | cta 0.9481 | blocked 1.156
+uplo=L n=224 nrhs=4 batch=2048 | cta 3.879 | blocked 4.368
+uplo=L n=224 nrhs=4 batch=8192 | cta 14.12 | blocked 16.44
+uplo=L n=224 nrhs=8 batch=128 | blocked 0.6375 | cta 0.7186
+uplo=L n=224 nrhs=8 batch=512 | cta 1.179 | blocked 1.208
+uplo=L n=224 nrhs=8 batch=2048 | blocked 4.284 | cta 4.700
+uplo=L n=224 nrhs=8 batch=8192 | cta 17.18 | blocked 16.93
+uplo=L n=224 nrhs=16 batch=128 | blocked 0.6414
+uplo=L n=224 nrhs=16 batch=512 | blocked 1.259
+uplo=L n=224 nrhs=16 batch=2048 | blocked 4.566
+uplo=L n=224 nrhs=16 batch=8192 | blocked 18.63
+uplo=L n=224 nrhs=64 batch=128 | blocked 0.7875
+uplo=L n=224 nrhs=64 batch=512 | blocked 1.871
+uplo=L n=224 nrhs=64 batch=2048 | blocked 7.553
+uplo=L n=224 nrhs=64 batch=8192 | blocked 29.04
+uplo=L n=256 nrhs=1 batch=128 | cta 0.5358 | blocked 0.6699
+uplo=L n=256 nrhs=1 batch=512 | cta 1.098 | blocked 1.198
+uplo=L n=256 nrhs=1 batch=2048 | cta 4.539 | blocked 4.736
+uplo=L n=256 nrhs=2 batch=128 | cta 0.5865 | blocked 0.7846
+uplo=L n=256 nrhs=2 batch=512 | cta 1.189 | blocked 1.466
+uplo=L n=256 nrhs=2 batch=2048 | cta 4.689 | blocked 5.378
+uplo=L n=256 nrhs=4 batch=128 | cta 0.6386 | blocked 0.7843
+uplo=L n=256 nrhs=4 batch=512 | cta 1.269 | blocked 1.475
+uplo=L n=256 nrhs=4 batch=2048 | cta 4.931 | blocked 5.433
+uplo=L n=256 nrhs=8 batch=128 | blocked 0.7554 | cta 0.8595
+uplo=L n=256 nrhs=8 batch=512 | cta 1.491 | blocked 1.491
+uplo=L n=256 nrhs=8 batch=2048 | blocked 5.482 | cta 6.019
+uplo=L n=256 nrhs=16 batch=128 | blocked 0.7755
+uplo=L n=256 nrhs=16 batch=512 | blocked 1.587
+uplo=L n=256 nrhs=16 batch=2048 | blocked 5.893
+uplo=L n=256 nrhs=64 batch=128 | blocked 0.9047
+uplo=L n=256 nrhs=64 batch=512 | blocked 2.250   # noisy
+uplo=L n=256 nrhs=64 batch=2048 | blocked 8.835
+uplo=L n=288 nrhs=1 batch=128 | cta 0.5961 | blocked 0.7926
+uplo=L n=288 nrhs=1 batch=512 | cta 1.490 | blocked 1.690
+uplo=L n=288 nrhs=1 batch=2048 | cta 6.808 | blocked 7.112
+uplo=L n=288 nrhs=2 batch=128 | cta 0.6345 | blocked 0.9235
+uplo=L n=288 nrhs=2 batch=512 | cta 1.576 | blocked 2.016
+uplo=L n=288 nrhs=2 batch=2048 | cta 7.013 | blocked 7.870
+uplo=L n=288 nrhs=4 batch=128 | cta 0.6713 | blocked 0.9253
+uplo=L n=288 nrhs=4 batch=512 | cta 1.643 | blocked 2.021
+uplo=L n=288 nrhs=4 batch=2048 | cta 7.315 | blocked 7.947
+uplo=L n=288 nrhs=8 batch=128 | cta 0.7364 | blocked 0.8968
+uplo=L n=288 nrhs=8 batch=512 | cta 2.075 | blocked 2.029
+uplo=L n=288 nrhs=8 batch=2048 | blocked 8.038 | cta 8.536
+uplo=L n=288 nrhs=16 batch=128 | blocked 0.9374
+uplo=L n=288 nrhs=16 batch=512 | blocked 2.170
+uplo=L n=288 nrhs=16 batch=2048 | blocked 8.558
+uplo=L n=288 nrhs=64 batch=128 | blocked 1.121
+uplo=L n=288 nrhs=64 batch=512 | blocked 3.037
+uplo=L n=288 nrhs=64 batch=2048 | blocked 12.24
+uplo=L n=320 nrhs=1 batch=128 | cta 0.7028 | blocked 0.9144
+uplo=L n=320 nrhs=1 batch=512 | cta 1.896 | blocked 2.135
+uplo=L n=320 nrhs=1 batch=2048 | cta 8.519 | blocked 8.872
+uplo=L n=320 nrhs=2 batch=128 | cta 0.7491 | blocked 1.066
+uplo=L n=320 nrhs=2 batch=512 | cta 1.995 | blocked 2.528
+uplo=L n=320 nrhs=2 batch=2048 | cta 8.746 | blocked 9.768
+uplo=L n=320 nrhs=4 batch=128 | cta 0.7939 | blocked 1.070
+uplo=L n=320 nrhs=4 batch=512 | cta 2.071 | blocked 2.526
+uplo=L n=320 nrhs=4 batch=2048 | cta 9.078 | blocked 9.850
+uplo=L n=320 nrhs=8 batch=128 | cta 0.8706 | blocked 1.044
+uplo=L n=320 nrhs=8 batch=512 | cta 2.570 | blocked 2.541
+uplo=L n=320 nrhs=8 batch=2048 | blocked 9.884 | cta 10.44
+uplo=L n=320 nrhs=16 batch=128 | blocked 1.082
+uplo=L n=320 nrhs=16 batch=512 | blocked 2.700
+uplo=L n=320 nrhs=16 batch=2048 | blocked 10.58
+uplo=L n=320 nrhs=64 batch=128 | blocked 1.274
+uplo=L n=320 nrhs=64 batch=512 | blocked 3.631
+uplo=L n=320 nrhs=64 batch=2048 | blocked 14.74
+uplo=L n=384 nrhs=1 batch=128 | cta 0.9579 | blocked 1.198
+uplo=L n=384 nrhs=1 batch=512 | cta 2.965 | blocked 3.320
+uplo=L n=384 nrhs=1 batch=2048 | cta 14.05 | blocked 14.54
+uplo=L n=384 nrhs=2 batch=128 | cta 1.023 | blocked 1.409
+uplo=L n=384 nrhs=2 batch=512 | cta 3.093 | blocked 3.768
+uplo=L n=384 nrhs=2 batch=2048 | cta 14.32 | blocked 15.71
+uplo=L n=384 nrhs=4 batch=128 | cta 1.087 | blocked 1.419
+uplo=L n=384 nrhs=4 batch=512 | cta 3.198 | blocked 3.763
+uplo=L n=384 nrhs=4 batch=2048 | cta 14.72 | blocked 15.77
+uplo=L n=384 nrhs=8 batch=128 | cta 1.193 | blocked 1.382
+uplo=L n=384 nrhs=8 batch=512 | cta 3.835 | blocked 3.793
+uplo=L n=384 nrhs=8 batch=2048 | blocked 15.91 | cta 16.63
+uplo=L n=384 nrhs=16 batch=128 | blocked 1.424
+uplo=L n=384 nrhs=16 batch=512 | blocked 3.974
+uplo=L n=384 nrhs=16 batch=2048 | blocked 16.66
+uplo=L n=384 nrhs=64 batch=128 | blocked 1.685
+uplo=L n=384 nrhs=64 batch=512 | blocked 5.150
+uplo=L n=384 nrhs=64 batch=2048 | blocked 22.08
+uplo=L n=448 nrhs=1 batch=128 | cta 1.314 | blocked 1.548
+uplo=L n=448 nrhs=1 batch=512 | cta 4.418 | blocked 4.878
+uplo=L n=448 nrhs=1 batch=2048 | cta 21.24 | blocked 21.83
+uplo=L n=448 nrhs=2 batch=128 | cta 1.432 | blocked 1.836
+uplo=L n=448 nrhs=2 batch=512 | cta 4.574 | blocked 5.442
+uplo=L n=448 nrhs=2 batch=2048 | cta 21.55 | blocked 23.40
+uplo=L n=448 nrhs=4 batch=128 | cta 1.535 | blocked 1.857
+uplo=L n=448 nrhs=4 batch=512 | cta 4.729 | blocked 5.450
+uplo=L n=448 nrhs=4 batch=2048 | cta 22.04 | blocked 23.50
+uplo=L n=448 nrhs=8 batch=128 | cta 1.628 | blocked 1.824
+uplo=L n=448 nrhs=8 batch=512 | cta 5.518 | blocked 5.455
+uplo=L n=448 nrhs=8 batch=2048 | blocked 23.69 | cta 24.48
+uplo=L n=448 nrhs=16 batch=128 | blocked 1.824
+uplo=L n=448 nrhs=16 batch=512 | blocked 5.696
+uplo=L n=448 nrhs=16 batch=2048 | blocked 24.67
+uplo=L n=448 nrhs=64 batch=128 | blocked 2.201
+uplo=L n=448 nrhs=64 batch=512 | blocked 7.168
+uplo=L n=448 nrhs=64 batch=2048 | blocked 31.33
+uplo=L n=512 nrhs=1 batch=128 | cta 1.767 | blocked 1.979
+uplo=L n=512 nrhs=1 batch=512 | cta 6.115 | blocked 6.638
+uplo=L n=512 nrhs=2 batch=128 | cta 1.926 | blocked 2.305
+uplo=L n=512 nrhs=2 batch=512 | cta 6.082 | blocked 7.102   # noisy
+uplo=L n=512 nrhs=4 batch=128 | cta 2.036 | blocked 2.352
+uplo=L n=512 nrhs=4 batch=512 | cta 6.194 | blocked 7.054
+uplo=L n=512 nrhs=8 batch=128 | cta 2.071 | blocked 2.284
+uplo=L n=512 nrhs=8 batch=512 | cta 7.228 | blocked 7.099   # noisy
+uplo=L n=512 nrhs=16 batch=128 | blocked 2.301
+uplo=L n=512 nrhs=16 batch=512 | blocked 7.364   # noisy
+uplo=L n=512 nrhs=64 batch=128 | blocked 2.820
+uplo=L n=512 nrhs=64 batch=512 | blocked 8.879
+uplo=L n=640 nrhs=1 batch=128 | cta 2.939 | blocked 3.365
+uplo=L n=640 nrhs=1 batch=512 | cta 11.76 | blocked 12.15
+uplo=L n=640 nrhs=2 batch=128 | cta 3.104 | blocked 3.829
+uplo=L n=640 nrhs=2 batch=512 | cta 11.78 | blocked 12.70
+uplo=L n=640 nrhs=4 batch=128 | cta 3.279 | blocked 3.937
+uplo=L n=640 nrhs=4 batch=512 | cta 11.80 | blocked 12.50
+uplo=L n=640 nrhs=8 batch=128 | cta 3.263 | blocked 3.826
+uplo=L n=640 nrhs=8 batch=512 | cta 13.29 | blocked 13.22
+uplo=L n=640 nrhs=16 batch=128 | blocked 3.838
+uplo=L n=640 nrhs=16 batch=512 | blocked 13.19
+uplo=L n=640 nrhs=64 batch=128 | blocked 4.667
+uplo=L n=640 nrhs=64 batch=512 | blocked 15.78
+uplo=L n=768 nrhs=1 batch=128 | cta 4.637 | blocked 5.178
+uplo=L n=768 nrhs=1 batch=512 | cta 19.27 | blocked 19.77
+uplo=L n=768 nrhs=2 batch=128 | cta 4.831 | blocked 5.740
+uplo=L n=768 nrhs=2 batch=512 | cta 19.13 | blocked 20.35
+uplo=L n=768 nrhs=4 batch=128 | cta 5.116 | blocked 5.927
+uplo=L n=768 nrhs=4 batch=512 | cta 19.05 | blocked 20.01
+uplo=L n=768 nrhs=8 batch=128 | cta 5.057 | blocked 5.771
+uplo=L n=768 nrhs=8 batch=512 | cta 21.27 | blocked 21.25
+uplo=L n=768 nrhs=16 batch=128 | blocked 5.758
+uplo=L n=768 nrhs=16 batch=512 | blocked 20.99
+uplo=L n=768 nrhs=64 batch=128 | blocked 6.882
+uplo=L n=768 nrhs=64 batch=512 | blocked 24.15
+uplo=L n=1024 nrhs=1 batch=128 | cta 9.431 | blocked 10.27   # noisy
+uplo=L n=1024 nrhs=2 batch=128 | cta 10.27 | blocked 11.63
+uplo=L n=1024 nrhs=4 batch=128 | cta 9.863 | blocked 11.06
+uplo=L n=1024 nrhs=8 batch=128 | cta 10.14 | blocked 11.17   # noisy
+uplo=L n=1024 nrhs=16 batch=128 | blocked 11.56
+uplo=L n=1024 nrhs=64 batch=128 | blocked 12.51

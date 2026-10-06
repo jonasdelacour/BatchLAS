@@ -8,15 +8,16 @@
 #include <type_traits>
 #include <cstdlib>
 #include <string>
+#include <cstring>
 
 #include <batchlas/backend_config.h>
 #include <batchlas/util/env.hh>
 #if BATCHLAS_HAS_CUDA_BACKEND
 #include "../src/backends/gemm_cublasdx_dispatch.hh"
-#include "../src/backends/gemm_variant.hh"
 #endif
+#include "../src/select/vendor.hh"
+#include "../src/ops/gemm/choice.hh"
 #include "../src/sycl/gemm_kernels.hh"
-#include <batchlas/blas/dispatch/route_gemm.hh>
 #include <complex>
 #include <utility>
 #include "test_utils.hh"
@@ -24,6 +25,46 @@
 using namespace batchlas;
 
 namespace {
+
+// A gemm pin by name (a family spelling or a class word); an unknown or can_run-false name
+// throws.
+struct GemmPin {
+    explicit GemmPin(const char* word) : pin("gemm", std::string_view(word)) {}
+    select::ScopedPin<ops::gemm::GemmChoice> pin;
+};
+
+// A CPU queue with a host BLAS keeps it (can_run): native pins throw there, so the
+// forced-kernel comparisons below run where the native families do.
+bool NativePinsRun(Queue& ctx) { return ctx.device().type == DeviceType::GPU || !batchlas::select::kHasNetlib; }
+#define SKIP_UNLESS_NATIVE(ctx) \
+    if (!NativePinsRun(ctx)) GTEST_SKIP() << "a CPU queue with a host BLAS runs no native gemm"
+
+// A pin that can_run refuses throws before any kernel runs, and leaves C bit for bit.
+template <typename T>
+void ExpectPinRefused(Queue& ctx, const char* word, int m, int n, int k, Transpose ta, Transpose tb) {
+    SCOPED_TRACE(::testing::Message() << word << " " << m << "x" << n << "x" << k << " ta=" << int(ta)
+                                      << " tb=" << int(tb));
+    auto A = Matrix<T>::Random(ta == Transpose::NoTrans ? m : k, ta == Transpose::NoTrans ? k : m, false, 2);
+    auto B = Matrix<T>::Random(tb == Transpose::NoTrans ? k : n, tb == Transpose::NoTrans ? n : k, false, 2);
+    auto C = Matrix<T>::Random(m, n, false, 2);
+    auto C0 = C.clone();
+    const GemmPin pin(word);
+    try {
+        (void)gemm(ctx, A.view(), B.view(), C.view(),
+                   {.alpha = T(2), .beta = T(-1), .transA = ta, .transB = tb});
+        ctx.wait();
+        ADD_FAILURE() << "accepted";
+    } catch (const std::invalid_argument& e) {
+        const std::string w = e.what();  // can_run false, or no such candidate for this scalar (R6)
+        EXPECT_TRUE(w.find("cannot run this shape") != std::string::npos ||
+                    w.find("is not a compiled gemm") != std::string::npos)
+            << w;
+    }
+    for (int b = 0; b < 2; ++b)
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < m; ++i)
+                ASSERT_EQ(std::memcmp(&C(i, j, b), &C0(i, j, b), sizeof(T)), 0) << "a refused pin wrote C";
+}
 
 template <typename T>
 ::testing::AssertionResult AssertBatchedBufferNear(const UnifiedVector<T>& actual,
@@ -97,9 +138,8 @@ template <typename T>
 // transB so a caller only states the logical m/n/k; alpha and beta default to
 // the accumulate-into-C form (1, 1) that almost every kernel test wants, and
 // are exposed so the predicated-edge cases can exercise a non-trivial scaling.
-// Callers that need an experimental kernel unlocked wrap the call in their own
-// ScopedEnvVar("BATCHLAS_GEMM_EXPERIMENTAL", "1"), which keeps that opt-in
-// visible in the test that depends on it.
+// The name is a gemm pin spelling (src/ops/gemm/choice.hh), so a form the kernel
+// does not instantiate throws instead of being computed as another form.
 template <typename ScalarType, Backend BackendType>
 void RunForcedSyclGemmKernelCompare(Queue& ctx,
                                     const char* kernel_name,
@@ -112,6 +152,7 @@ void RunForcedSyclGemmKernelCompare(Queue& ctx,
                                     typename batchlas::base_type<ScalarType>::type tol_scale = 75,
                                     ScalarType alpha = ScalarType(1),
                                     ScalarType beta = ScalarType(1)) {
+    SKIP_UNLESS_NATIVE(ctx);
     const int a_rows = transA == Transpose::NoTrans ? m : k;
     const int a_cols = transA == Transpose::NoTrans ? k : m;
     const int b_rows = transB == Transpose::NoTrans ? k : n;
@@ -123,8 +164,7 @@ void RunForcedSyclGemmKernelCompare(Queue& ctx,
     auto C_ref = C.clone();
 
     {
-        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
-        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", kernel_name);
+        const GemmPin force_kernel(kernel_name);
         (void)gemm(ctx,
                           A.view(),
                           B.view(),
@@ -133,7 +173,7 @@ void RunForcedSyclGemmKernelCompare(Queue& ctx,
     }
 
     {
-        ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
+        const GemmPin vendor_variant("vendor");
         (void)gemm(ctx,
                           A.view(),
                           B.view(),
@@ -145,79 +185,6 @@ void RunForcedSyclGemmKernelCompare(Queue& ctx,
 
     auto tol = test_utils::tolerance<ScalarType>() * tol_scale;
     ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, m, n, batch_size, tol));
-}
-
-template <typename ScalarType, Backend BackendType>
-void RunForcedCuBLASDxGemmKernelCompare(Queue& ctx,
-                                        const char* kernel_name,
-                                        int m,
-                                        int n,
-                                        int k,
-                                        int batch_size,
-                                        Transpose transA,
-                                        Transpose transB,
-                                        typename batchlas::base_type<ScalarType>::type tol_scale = 75) {
-    if constexpr (BackendType != Backend::CUDA) {
-        GTEST_SKIP() << "cuBLASDx GEMM kernels are only available on the CUDA backend";
-    }
-
-    if constexpr (!std::is_same_v<ScalarType, float>) {
-        GTEST_SKIP() << "cuBLASDx GEMM kernels are only implemented for float in this first slice";
-    }
-
-    const int a_rows = transA == Transpose::NoTrans ? m : k;
-    const int a_cols = transA == Transpose::NoTrans ? k : m;
-    const int b_rows = transB == Transpose::NoTrans ? k : n;
-    const int b_cols = transB == Transpose::NoTrans ? n : k;
-
-    auto A = Matrix<ScalarType>::Random(a_rows, a_cols, false, batch_size);
-    auto B = Matrix<ScalarType>::Random(b_rows, b_cols, false, batch_size);
-    auto C = Matrix<ScalarType>::Random(m, n, false, batch_size);
-    auto C_ref = C.clone();
-
-    {
-        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "cublasdx");
-        ScopedEnvVar force_kernel("BATCHLAS_GEMM_CUBLASDX_KERNEL", kernel_name);
-        (void)gemm(ctx,
-                          A.view(),
-                          B.view(),
-                          C.view(),
-                          {.alpha = ScalarType(1), .beta = ScalarType(1), .transA = transA, .transB = transB});
-    }
-
-    {
-        ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
-        (void)gemm(ctx,
-                          A.view(),
-                          B.view(),
-                          C_ref.view(),
-                          {.alpha = ScalarType(1), .beta = ScalarType(1), .transA = transA, .transB = transB});
-    }
-
-    ctx.wait();
-
-    auto tol = test_utils::tolerance<ScalarType>() * tol_scale;
-    ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, m, n, batch_size, tol));
-}
-
-batchlas::sycl_gemm::KernelVariant SelectSyclKernelVariantForTest(int m,
-                                                                  int n,
-                                                                  int k,
-                                                                  Transpose transA,
-                                                                  Transpose transB,
-                                                                  int a_ld = 0,
-                                                                  int b_ld = 0,
-                                                                  int c_ld = 0) {
-    const int a_rows = transA == Transpose::NoTrans ? m : k;
-    const int a_cols = transA == Transpose::NoTrans ? k : m;
-    const int b_rows = transB == Transpose::NoTrans ? k : n;
-    const int b_cols = transB == Transpose::NoTrans ? n : k;
-
-    Matrix<float> A(a_rows, a_cols, 1, a_ld);
-    Matrix<float> B(b_rows, b_cols, 1, b_ld);
-    Matrix<float> C(m, n, 1, c_ld);
-
-    return batchlas::sycl_gemm::select_kernel_variant<float>(A.view(), B.view(), C.view(), transA, transB);
 }
 
 } // namespace
@@ -285,67 +252,45 @@ protected:
 
 TYPED_TEST_SUITE(GemmTest, GemmTestTypes);
 
-// Every float NN shape with a full 128x128 output tile and a usable operand
-// layout now goes to the 64-accumulator kernel. It measured 69-97% faster than
-// the 128x32/128x64 kernels these cases used to select, at 88-102% of cuBLAS.
-TEST(GemmDispatchPolicyTest, Selects128x128K8ForSmallSquareFloatNN) {
-    EXPECT_EQ(SelectSyclKernelVariantForTest(128, 128, 128, Transpose::NoTrans, Transpose::NoTrans),
-              batchlas::sycl_gemm::KernelVariant::Tiled128x128RegisterK8);
+// The old GemmDispatchPolicyTest asserts, against the transcribed sm_89 float table that replaced
+// select_kernel_variant (read with Table::nearest, so every device checks them). The native pick
+// is the first non-vendor entry: what Auto runs vendor-free and what `native` resolves to.
+// A padded ld (272, 258) is layout=strided. The vendor-vs-native order is not asserted here
+// (gemm_candidates_tests.cc AutoReadsTheSm89TranscribedTable runs it).
+TEST(GemmDispatchPolicyTest, Sm89TableKeepsTheOldNativeSelector) {
+    struct Row { const char* ta; const char* layout; int m, n, k; const char* native; };
+    const Row rows[] = {
+        {"N", "packed", 128, 128, 128, "reg:m=128:n=128:k=8:u=1"},
+        {"N", "packed", 256, 256, 256, "reg:m=128:n=128:k=8:u=1"},
+        {"N", "packed", 512, 512, 512, "reg:m=128:n=128:k=8:u=1"},
+        {"N", "packed", 512, 256, 512, "reg:m=128:n=128:k=8:u=1"},
+        {"N", "strided", 256, 256, 256, "reg:m=128:n=128:k=8:u=1"},  // ld 272 and ld 258
+        {"T", "packed", 256, 128, 256, "reg:m=128:n=32:k=32:u=1"},
+        {"T", "strided", 256, 128, 256, "reg:m=128:n=32:k=32:u=1"},
+        // Off-grid: the old selector chose 128x32x16 for packed 512x64x512 NN; the nearest
+        // transcribed row is m=512 n=128 k=128, so the table now names 128x128x8.
+        {"N", "packed", 512, 64, 512, "reg:m=128:n=128:k=8:u=1"},
+        {"N", "strided", 512, 64, 512, "reg:m=128:n=32:k=16:u=1"},
+    };
+    const auto tables = select::tables_in_borrow_order("gemm", "float", select::device_from_key("sm_89"));
+    ASSERT_FALSE(tables.empty());
+    const select::Table& t = *tables.front();
+    ASSERT_EQ(t.device, "sm_89");
+    EXPECT_EQ(t.source.rfind("transcribed:", 0), 0u) << t.file;
+    for (const Row& r : rows) {
+        const select::Key key{{"ta", r.ta}, {"tb", "N"}, {"layout", r.layout}, {"m", r.m},
+                              {"n", r.n},   {"k", r.k},  {"batch", 1}};
+        const select::TableRow* row = t.nearest(key);
+        ASSERT_NE(row, nullptr);
+        const std::string what = t.file + ":" + std::to_string(row->line);
+        const auto it = std::find_if(row->ranked.begin(), row->ranked.end(),
+                                     [](const auto& e) { return e.spelling != "vendor"; });
+        ASSERT_NE(it, row->ranked.end()) << what;
+        EXPECT_EQ(it->spelling, r.native) << what << " ta=" << r.ta << " " << r.layout << " " << r.m << "x" << r.n
+                                          << "x" << r.k;
+    }
 }
 
-TEST(GemmDispatchPolicyTest, Selects128x128K8ForMediumSquareFloatNN) {
-    EXPECT_EQ(SelectSyclKernelVariantForTest(256, 256, 256, Transpose::NoTrans, Transpose::NoTrans),
-              batchlas::sycl_gemm::KernelVariant::Tiled128x128RegisterK8);
-}
-
-TEST(GemmDispatchPolicyTest, Selects128x128K8ForLargeSquareFloatNN) {
-    EXPECT_EQ(SelectSyclKernelVariantForTest(512, 512, 512, Transpose::NoTrans, Transpose::NoTrans),
-              batchlas::sycl_gemm::KernelVariant::Tiled128x128RegisterK8);
-}
-
-TEST(GemmDispatchPolicyTest, Selects128x128K8ForLargeNearSquareFloatNN) {
-    EXPECT_EQ(SelectSyclKernelVariantForTest(512, 256, 512, Transpose::NoTrans, Transpose::NoTrans),
-              batchlas::sycl_gemm::KernelVariant::Tiled128x128RegisterK8);
-}
-
-// A padded leading dimension is not an obstacle for this kernel: it needs the
-// operands 16-byte aligned, not contiguous, and ld=272 is a multiple of 4.
-TEST(GemmDispatchPolicyTest, Selects128x128K8ForPaddedLeadingDimensionFloatNN) {
-    EXPECT_EQ(SelectSyclKernelVariantForTest(256, 256, 256, Transpose::NoTrans, Transpose::NoTrans, 272),
-              batchlas::sycl_gemm::KernelVariant::Tiled128x128RegisterK8);
-}
-
-// An ld that breaks 16-byte alignment must still fall back, since the
-// unpredicated path's 128-bit accesses would be misaligned.
-// WP2 E4 moved this. It used to pin the generic 128x32x32 route, on the
-// grounds that the 128x128 kernel's PREDICATED path had never been benchmarked
-// against it. Measured now, at exactly this shape class -- dimensions that tile
-// perfectly but a leading dimension that does not, so both kernels are in their
-// slow mode -- the predicated path wins by a very large margin:
-//
-//   n=256 ld+2  generic 7 237 -> predicated 23 966  (3.31x)
-//   n=512 ld+2  generic 8 399 -> predicated 36 862  (4.39x)
-//
-// This is the shape class that matters most for it, too: a panel is a sub-view
-// carrying its parent's leading dimension, so unaligned ld is what BatchLAS's
-// own factorisations hand to gemm. See docs/perf/gemm.md#float-nn-at-max_dim-32.
-TEST(GemmDispatchPolicyTest, SelectsPredicated128x128ForUnalignedLeadingDimensionFloatNN) {
-    EXPECT_EQ(SelectSyclKernelVariantForTest(256, 256, 256, Transpose::NoTrans, Transpose::NoTrans, 258),
-              batchlas::sycl_gemm::KernelVariant::Tiled128x128RegisterK8);
-}
-
-TEST(GemmDispatchPolicyTest, KeepsTransposeHeavyCasesOnK32TransposeAlias) {
-    EXPECT_EQ(SelectSyclKernelVariantForTest(256, 128, 256, Transpose::Trans, Transpose::NoTrans),
-              batchlas::sycl_gemm::KernelVariant::Tiled128x32RegisterK32TN);
-}
-
-TEST(GemmDispatchPolicyTest, KeepsSkinnyTallNNOnLegacyK16PathUntilBenchmarked) {
-    EXPECT_EQ(SelectSyclKernelVariantForTest(512, 64, 512, Transpose::NoTrans, Transpose::NoTrans),
-              batchlas::sycl_gemm::KernelVariant::Tiled128x32RegisterK16);
-}
-
-// Guarded on the LIBRARY, not the family: cublasdx_gemm_select_variant lives
-// in gemm_cublasdx_dispatch.cc, which is compiled only when cuBLAS is found.
 #if BATCHLAS_HAS_CUBLAS
 TEST(GemmCuBLASDxDispatchPolicyTest, SelectsCuBLASDxNNWhenRequested) {
     Matrix<float> A(128, 128, 1);
@@ -398,6 +343,58 @@ TYPED_TEST(GemmTest, BatchedGemm) {
 
     auto tol = test_utils::tolerance<ScalarType>();
     ASSERT_TRUE(AssertBatchedBufferNear(this->C_data, this->A_data, this->rows, this->cols, this->batch_size, tol));
+}
+
+// A heterogeneous batch is split into homogeneous items, each chosen on its own: a
+// native pin applies per item (the deleted cuBLASDx heterogeneous kernel's case), and
+// an item the pinned family cannot run refuses the whole call.
+TYPED_TEST(GemmTest, HeterogeneousBatchedGemmNativePinAppliesPerItem) {
+    using ScalarType = typename TestFixture::ScalarType;
+    using Real = typename batchlas::base_type<ScalarType>::type;
+    SKIP_UNLESS_NATIVE(*this->ctx);
+    constexpr int batch = 2, mm = 64, mn = 64, mk = 32;
+    auto A = Matrix<ScalarType>::Random(mm, mk, false, batch);
+    auto B = Matrix<ScalarType>::Random(mk, mn, false, batch);
+    auto C = Matrix<ScalarType>::Random(mm, mn, false, batch);
+    auto C0 = C.clone();
+    UnifiedVector<int> ar(batch), ac(batch), br(batch), bc(batch), cr(batch), cc(batch);
+    ar[0] = 32, ac[0] = 32, br[0] = 32, bc[0] = 32, cr[0] = 32, cc[0] = 32;
+    ar[1] = 64, ac[1] = 32, br[1] = 32, bc[1] = 64, cr[1] = 64, cc[1] = 64;
+    A.set_active_dims(ar.to_span(), ac.to_span());
+    B.set_active_dims(br.to_span(), bc.to_span());
+    C.set_active_dims(cr.to_span(), cc.to_span());
+    const ScalarType alpha = ScalarType(Real(1.5)), beta = ScalarType(Real(-0.5));
+    for (const char* word : {"tiled", "direct", "wide:m=64:n=64:k=16"}) {
+        SCOPED_TRACE(word);
+        for (int b = 0; b < batch; ++b)
+            for (int j = 0; j < mn; ++j)
+                for (int i = 0; i < mm; ++i) C(i, j, b) = C0(i, j, b);
+        {
+            const GemmPin pin(word);
+            (void)gemm(*(this->ctx), A.view(), B.view(), C.view(), alpha, beta, Transpose::NoTrans,
+                       Transpose::NoTrans, ComputePrecision::Default);
+            this->ctx->wait();
+        }
+        for (int b = 0; b < batch; ++b)
+            for (int j = 0; j < cc[b]; ++j)
+                for (int i = 0; i < cr[b]; ++i) {
+                    ScalarType ref = beta * C0(i, j, b);
+                    for (int l = 0; l < ac[b]; ++l) ref += alpha * A(i, l, b) * B(l, j, b);
+                    ASSERT_LE(std::abs(C(i, j, b) - ref), test_utils::tolerance<ScalarType>() * 100)
+                        << "item " << b << " (" << i << "," << j << ")";
+                }
+    }
+    if constexpr (!test_utils::is_complex<ScalarType>::value) {
+        const GemmPin pin("small");  // item 1 is 64 x 64 x 32: small runs it; a 65 would not
+        (void)gemm(*(this->ctx), A.view(), B.view(), C.view(), alpha, beta, Transpose::NoTrans, Transpose::NoTrans,
+                   ComputePrecision::Default);
+        this->ctx->wait();
+    } else {
+        const GemmPin pin("small");
+        EXPECT_THROW(((void)gemm(*(this->ctx), A.view(), B.view(), C.view(), alpha, beta, Transpose::NoTrans,
+                                 Transpose::NoTrans, ComputePrecision::Default)),
+                     std::invalid_argument);
+    }
 }
 
 TYPED_TEST(GemmTest, HeterogeneousBatchedGemmUsesPerItemActiveDimensions) {
@@ -590,97 +587,11 @@ TYPED_TEST(GemmTest, HeterogeneousBatchedGemmZeroInnerDimensionScalesCByBeta) {
     }
 }
 
-TYPED_TEST(GemmTest, HeterogeneousBatchedGemmForcedCuBLASDxVariant) {
-    using ScalarType = typename TestFixture::ScalarType;
-    constexpr Backend BackendType = TestFixture::BackendType;
-
-    if constexpr (BackendType != Backend::CUDA) {
-        GTEST_SKIP() << "heterogeneous cuBLASDx GEMM is only available on the CUDA backend";
-    }
-    if constexpr (!std::is_same_v<ScalarType, float>) {
-        GTEST_SKIP() << "heterogeneous cuBLASDx GEMM is only implemented for float in this slice";
-    }
-
-    constexpr int batch_size = 2;
-    constexpr int max_m = 64;
-    constexpr int max_n = 64;
-    constexpr int max_k = 32;
-
-    auto A = Matrix<ScalarType>::Zeros(max_m, max_k, batch_size);
-    auto B = Matrix<ScalarType>::Zeros(max_k, max_n, batch_size);
-    auto C = Matrix<ScalarType>::Random(max_m, max_n, false, batch_size);
-    auto C_ref = C.clone();
-
-    UnifiedVector<int> a_rows(batch_size);
-    UnifiedVector<int> a_cols(batch_size);
-    UnifiedVector<int> b_rows(batch_size);
-    UnifiedVector<int> b_cols(batch_size);
-    UnifiedVector<int> c_rows(batch_size);
-    UnifiedVector<int> c_cols(batch_size);
-
-    a_rows[0] = 32; a_cols[0] = 32;
-    b_rows[0] = 32; b_cols[0] = 32;
-    c_rows[0] = 32; c_cols[0] = 32;
-
-    a_rows[1] = 64; a_cols[1] = 32;
-    b_rows[1] = 32; b_cols[1] = 64;
-    c_rows[1] = 64; c_cols[1] = 64;
-
-    A.set_active_dims(a_rows.to_span(), a_cols.to_span());
-    B.set_active_dims(b_rows.to_span(), b_cols.to_span());
-    C.set_active_dims(c_rows.to_span(), c_cols.to_span());
-    C_ref.set_active_dims(c_rows.to_span(), c_cols.to_span());
-
-    for (int batch_index = 0; batch_index < batch_size; ++batch_index) {
-        for (int col = 0; col < A.cols(batch_index); ++col) {
-            for (int row = 0; row < A.rows(batch_index); ++row) {
-                A(row, col, batch_index) = static_cast<ScalarType>(1 + row + col + 3 * batch_index);
-            }
-        }
-        for (int col = 0; col < B.cols(batch_index); ++col) {
-            for (int row = 0; row < B.rows(batch_index); ++row) {
-                B(row, col, batch_index) = static_cast<ScalarType>(1 + row + 2 * col + 5 * batch_index);
-            }
-        }
-    }
-
-    {
-        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "cublasdx");
-        ScopedEnvVar force_kernel("BATCHLAS_GEMM_CUBLASDX_KERNEL", "cublasdx_nn");
-        (void)gemm(*(this->ctx), A.view(), B.view(), C.view(), ScalarType(1), ScalarType(1),
-                                        Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
-    }
-
-    {
-        ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
-        (void)gemm(*(this->ctx), A.view(), B.view(), C_ref.view(), ScalarType(1), ScalarType(1),
-                                        Transpose::NoTrans, Transpose::NoTrans, ComputePrecision::Default);
-    }
-
-    this->ctx->wait();
-
-    auto tol = test_utils::tolerance<ScalarType>() * 100;
-    for (int batch_index = 0; batch_index < batch_size; ++batch_index) {
-        for (int col = 0; col < C.cols(batch_index); ++col) {
-            for (int row = 0; row < C.rows(batch_index); ++row) {
-                const auto actual = C(row, col, batch_index);
-                const auto expected = C_ref(row, col, batch_index);
-                if constexpr (test_utils::is_complex<ScalarType>::value) {
-                    ASSERT_NEAR(actual.real(), expected.real(), tol);
-                    ASSERT_NEAR(actual.imag(), expected.imag(), tol);
-                } else {
-                    ASSERT_NEAR(actual, expected, tol);
-                }
-            }
-        }
-    }
-}
-
 TYPED_TEST(GemmTest, BatchedGemmForcedSyclVariant) {
     using ScalarType = typename TestFixture::ScalarType;
     constexpr Backend BackendType = TestFixture::BackendType;
 
-    ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+    const GemmPin force_variant("native");
 
     constexpr int size = 32;
     constexpr int batch_size = 4;
@@ -695,7 +606,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclVariant) {
                       C.view(),
                       {.alpha = ScalarType(1), .beta = ScalarType(0)});
 
-    ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
+    const GemmPin vendor_variant("vendor");
     (void)gemm(*(this->ctx),
                       A.view(),
                       B.view(),
@@ -720,7 +631,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclVariantLargeSquare) {
     auto C_ref = C.clone();
 
     {
-        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+        const GemmPin force_variant("native");
         (void)gemm(*(this->ctx),
                           A.view(),
                           B.view(),
@@ -729,7 +640,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclVariantLargeSquare) {
     }
 
     {
-        ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
+        const GemmPin vendor_variant("vendor");
         (void)gemm(*(this->ctx),
                           A.view(),
                           B.view(),
@@ -750,7 +661,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister64Kernel) {
         GTEST_SKIP() << "64x64 SYCL register kernel is only selected for float in this first slice";
     }
 
-    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "reg64",
+    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "reg:m=64:n=64:k=8:u=1",
                                                             128, 128, 128, 2,
                                                             Transpose::NoTrans, Transpose::NoTrans);
 }
@@ -763,7 +674,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister64K16Kernel) {
         GTEST_SKIP() << "64x64x16 SYCL register kernel is only selected for float in this slice";
     }
 
-    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "reg64k16",
+    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "reg:m=64:n=64:k=16:u=1",
                                                             128, 128, 128, 2,
                                                             Transpose::NoTrans, Transpose::NoTrans);
 }
@@ -776,7 +687,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K16Kernel) {
         GTEST_SKIP() << "128x32x16 SYCL register kernel is only selected for float in this slice";
     }
 
-    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "reg128x32k16",
+    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "reg:m=128:n=32:k=16:u=1",
                                                             128, 128, 128, 2,
                                                             Transpose::NoTrans, Transpose::NoTrans);
 }
@@ -789,208 +700,10 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K32Kernel) {
         GTEST_SKIP() << "128x32x32 SYCL register kernel is only selected for float in this slice";
     }
 
-    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "reg128x32k32",
+    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "reg:m=128:n=32:k=32:u=1",
                                                             128, 128, 128, 2,
                                                             Transpose::NoTrans, Transpose::NoTrans);
 }
-
-TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K32S2U1Kernel) {
-    using ScalarType = typename TestFixture::ScalarType;
-    constexpr Backend BackendType = TestFixture::BackendType;
-
-    if constexpr (!std::is_same_v<ScalarType, float>) {
-        GTEST_SKIP() << "128x32x32_s2_u1 SYCL register kernel is only selected for float in this slice";
-    }
-
-    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "reg128x32k32s2u1",
-                                                            128, 128, 128, 2,
-                                                            Transpose::NoTrans, Transpose::NoTrans);
-}
-
-TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K32S2U2Kernel) {
-    using ScalarType = typename TestFixture::ScalarType;
-    constexpr Backend BackendType = TestFixture::BackendType;
-
-    if constexpr (!std::is_same_v<ScalarType, float>) {
-        GTEST_SKIP() << "128x32x32_s2_u2 SYCL register kernel is only selected for float in this slice";
-    }
-
-    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "reg128x32k32s2u2",
-                                                            128, 128, 128, 2,
-                                                            Transpose::NoTrans, Transpose::NoTrans);
-}
-
-TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K32S1U1Kernel) {
-    using ScalarType = typename TestFixture::ScalarType;
-    constexpr Backend BackendType = TestFixture::BackendType;
-
-    if constexpr (!std::is_same_v<ScalarType, float>) {
-        GTEST_SKIP() << "128x32x32_s1_u1 SYCL register kernel is only selected for float in this slice";
-    }
-
-    if constexpr (BackendType == Backend::CUDA) {
-        GTEST_SKIP() << "128x32x32_s1_u1 is experimental-only until the single-stage K32 path is correct on CUDA";
-    }
-
-    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "128x32x32_s1_u1",
-                                                            128, 128, 128, 2,
-                                                            Transpose::NoTrans, Transpose::NoTrans);
-}
-
-TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K32S2U1AlignedKernel) {
-    using ScalarType = typename TestFixture::ScalarType;
-    constexpr Backend BackendType = TestFixture::BackendType;
-
-    if constexpr (!std::is_same_v<ScalarType, float>) {
-        GTEST_SKIP() << "128x32x32_s2_u1_aligned SYCL register kernel is only selected for float in this slice";
-    }
-
-    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "128x32x32_s2_u1_aligned",
-                                                            128, 128, 128, 2,
-                                                            Transpose::NoTrans, Transpose::NoTrans);
-}
-
-#if BATCHLAS_HAS_CUDA_BACKEND
-TYPED_TEST(GemmTest, BatchedGemmForcedCuBLASDxNNKernel) {
-    using ScalarType = typename TestFixture::ScalarType;
-    constexpr Backend BackendType = TestFixture::BackendType;
-
-    if constexpr (!std::is_same_v<ScalarType, float>) {
-        GTEST_SKIP() << "cuBLASDx GEMM kernels are only implemented for float in this slice";
-    }
-
-    if (!batchlas::backend::cublasdx_gemm_variant_available(batchlas::backend::cublasdx_gemm::CuBLASDxGemmVariant::CuBLASDx32x32x32NN)) {
-        GTEST_SKIP() << "cuBLASDx GEMM kernels are not available in this build";
-    }
-
-    RunForcedCuBLASDxGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "cublasdx_nn",
-                                                                128, 128, 128, 2,
-                                                                Transpose::NoTrans, Transpose::NoTrans,
-                                                                150);
-}
-
-TYPED_TEST(GemmTest, BatchedGemmForcedCuBLASDxTNKernel) {
-    using ScalarType = typename TestFixture::ScalarType;
-    constexpr Backend BackendType = TestFixture::BackendType;
-
-    if constexpr (!std::is_same_v<ScalarType, float>) {
-        GTEST_SKIP() << "cuBLASDx GEMM kernels are only implemented for float in this slice";
-    }
-
-    if (!batchlas::backend::cublasdx_gemm_variant_available(batchlas::backend::cublasdx_gemm::CuBLASDxGemmVariant::CuBLASDx32x32x32TN)) {
-        GTEST_SKIP() << "cuBLASDx GEMM kernels are not available in this build";
-    }
-
-    RunForcedCuBLASDxGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "cublasdx_tn",
-                                                                128, 128, 128, 2,
-                                                                Transpose::Trans, Transpose::NoTrans,
-                                                                150);
-}
-
-TYPED_TEST(GemmTest, BatchedGemmForcedCuBLASDxNTKernel) {
-    using ScalarType = typename TestFixture::ScalarType;
-    constexpr Backend BackendType = TestFixture::BackendType;
-
-    if constexpr (!std::is_same_v<ScalarType, float>) {
-        GTEST_SKIP() << "cuBLASDx GEMM kernels are only implemented for float in this slice";
-    }
-
-    if (!batchlas::backend::cublasdx_gemm_variant_available(batchlas::backend::cublasdx_gemm::CuBLASDxGemmVariant::CuBLASDx32x32x32NT)) {
-        GTEST_SKIP() << "cuBLASDx GEMM kernels are not available in this build";
-    }
-
-    RunForcedCuBLASDxGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "cublasdx_nt",
-                                                                128, 128, 128, 2,
-                                                                Transpose::NoTrans, Transpose::Trans,
-                                                                150);
-}
-
-TYPED_TEST(GemmTest, BatchedGemmForcedCuBLASDxTTKernel) {
-    using ScalarType = typename TestFixture::ScalarType;
-    constexpr Backend BackendType = TestFixture::BackendType;
-
-    if constexpr (!std::is_same_v<ScalarType, float>) {
-        GTEST_SKIP() << "cuBLASDx GEMM kernels are only implemented for float in this slice";
-    }
-
-    if (!batchlas::backend::cublasdx_gemm_variant_available(batchlas::backend::cublasdx_gemm::CuBLASDxGemmVariant::CuBLASDx32x32x32TT)) {
-        GTEST_SKIP() << "cuBLASDx GEMM kernels are not available in this build";
-    }
-
-    RunForcedCuBLASDxGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "cublasdx_tt",
-                                                                128, 128, 128, 2,
-                                                                Transpose::Trans, Transpose::Trans,
-                                                                150);
-}
-
-TYPED_TEST(GemmTest, BatchedGemmForcedCuBLASDx64NNKernel) {
-    using ScalarType = typename TestFixture::ScalarType;
-    constexpr Backend BackendType = TestFixture::BackendType;
-
-    if constexpr (!std::is_same_v<ScalarType, float>) {
-        GTEST_SKIP() << "cuBLASDx GEMM kernels are only implemented for float in this slice";
-    }
-
-    if (!batchlas::backend::cublasdx_gemm_variant_available(batchlas::backend::cublasdx_gemm::CuBLASDxGemmVariant::CuBLASDx64x64x32NN)) {
-        GTEST_SKIP() << "cuBLASDx GEMM kernels are not available in this build";
-    }
-
-    RunForcedCuBLASDxGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "cublasdx64_nn",
-                                                                256, 256, 256, 2,
-                                                                Transpose::NoTrans, Transpose::NoTrans,
-                                                                200);
-}
-
-TYPED_TEST(GemmTest, BatchedGemmCuBLASDxLargeSquareDoesNotThrow) {
-    using ScalarType = typename TestFixture::ScalarType;
-    constexpr Backend BackendType = TestFixture::BackendType;
-
-    if constexpr (BackendType != Backend::CUDA) {
-        GTEST_SKIP() << "cuBLASDx GEMM kernels are only available on the CUDA backend";
-    }
-
-    if constexpr (!std::is_same_v<ScalarType, float>) {
-        GTEST_SKIP() << "cuBLASDx GEMM kernels are only implemented for float in this slice";
-    }
-
-    if (!batchlas::backend::cublasdx_gemm_variant_available(batchlas::backend::cublasdx_gemm::CuBLASDxGemmVariant::CuBLASDx32x32x32NN)) {
-        GTEST_SKIP() << "cuBLASDx GEMM kernels are not available in this build";
-    }
-
-    constexpr int m = 512;
-    constexpr int n = 512;
-    constexpr int k = 512;
-    constexpr int batch_size = 2;
-
-    auto A = Matrix<ScalarType>::Random(m, k, false, batch_size);
-    auto B = Matrix<ScalarType>::Random(k, n, false, batch_size);
-    auto C = Matrix<ScalarType>::Random(m, n, false, batch_size);
-    auto C_ref = C.clone();
-
-    ASSERT_NO_THROW({
-        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "cublasdx");
-        (void)gemm(*(this->ctx),
-                          A.view(),
-                          B.view(),
-                          C.view(),
-                          {.alpha = ScalarType(1), .beta = ScalarType(1)});
-    });
-
-    {
-        ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
-        (void)gemm(*(this->ctx),
-                          A.view(),
-                          B.view(),
-                          C_ref.view(),
-                          {.alpha = ScalarType(1), .beta = ScalarType(1)});
-    }
-
-    this->ctx->wait();
-
-    auto tol = test_utils::tolerance<ScalarType>() * 200;
-    ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, m, n, batch_size, tol));
-}
-#endif // BATCHLAS_HAS_CUDA_BACKEND
 
 TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K32S2U1GenericKernel) {
     using ScalarType = typename TestFixture::ScalarType;
@@ -1000,78 +713,8 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K32S2U1GenericKernel) {
         GTEST_SKIP() << "128x32x32_s2_u1_generic SYCL register kernel is only selected for float in this slice";
     }
 
-    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "128x32x32_s2_u1_generic",
+    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "reg:m=128:n=32:k=32:u=1",
                                                             130, 96, 130, 2,
-                                                            Transpose::NoTrans, Transpose::NoTrans,
-                                                            100);
-}
-
-TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K32S2U1LegacyAliasGenericFallback) {
-    using ScalarType = typename TestFixture::ScalarType;
-    constexpr Backend BackendType = TestFixture::BackendType;
-
-    if constexpr (!std::is_same_v<ScalarType, float>) {
-        GTEST_SKIP() << "128x32x32_s2_u1 legacy alias is only selected for float in this slice";
-    }
-
-    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "128x32x32_s2_u1",
-                                                            130, 96, 130, 2,
-                                                            Transpose::NoTrans, Transpose::NoTrans,
-                                                            100);
-}
-
-TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K32S2U2TT8x4Kernel) {
-    using ScalarType = typename TestFixture::ScalarType;
-    constexpr Backend BackendType = TestFixture::BackendType;
-
-    if constexpr (!std::is_same_v<ScalarType, float>) {
-        GTEST_SKIP() << "128x32x32_s2_u2_tt8x4 SYCL register kernel is only selected for float in this slice";
-    }
-
-    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "128x32x32_s2_u2_tt8x4",
-                                                            128, 128, 128, 2,
-                                                            Transpose::NoTrans, Transpose::NoTrans);
-}
-
-TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K32S2U2TT4x8Kernel) {
-    using ScalarType = typename TestFixture::ScalarType;
-    constexpr Backend BackendType = TestFixture::BackendType;
-
-    if constexpr (!std::is_same_v<ScalarType, float>) {
-        GTEST_SKIP() << "128x32x32_s2_u2_tt4x8 SYCL register kernel is only selected for float in this slice";
-    }
-
-    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "128x32x32_s2_u2_tt4x8",
-                                                            128, 128, 128, 2,
-                                                            Transpose::NoTrans, Transpose::NoTrans);
-}
-
-TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K32PersistentKernel) {
-    using ScalarType = typename TestFixture::ScalarType;
-    constexpr Backend BackendType = TestFixture::BackendType;
-
-    if constexpr (!std::is_same_v<ScalarType, float>) {
-        GTEST_SKIP() << "128x32x32_persistent SYCL register kernel is only selected for float in this slice";
-    }
-
-    ScopedEnvVar experimental("BATCHLAS_GEMM_EXPERIMENTAL", "1");
-    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "128x32x32_persistent",
-                                                            256, 256, 256, 2,
-                                                            Transpose::NoTrans, Transpose::NoTrans,
-                                                            100);
-}
-
-TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K32SplitK4Kernel) {
-    using ScalarType = typename TestFixture::ScalarType;
-    constexpr Backend BackendType = TestFixture::BackendType;
-
-    if constexpr (!std::is_same_v<ScalarType, float>) {
-        GTEST_SKIP() << "128x32x32_splitk4 SYCL register kernel is only selected for float in this slice";
-    }
-
-    ScopedEnvVar experimental("BATCHLAS_GEMM_EXPERIMENTAL", "1");
-    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "128x32x32_splitk4",
-                                                            256, 256, 256, 2,
                                                             Transpose::NoTrans, Transpose::NoTrans,
                                                             100);
 }
@@ -1084,7 +727,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister32x128K16Kernel) {
         GTEST_SKIP() << "32x128x16 SYCL register kernel is only selected for float in this slice";
     }
 
-    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "reg32x128k16",
+    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "reg:m=32:n=128:k=16:u=1",
                                                             128, 128, 128, 2,
                                                             Transpose::NoTrans, Transpose::NoTrans);
 }
@@ -1104,7 +747,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclVariantTransposed) {
     auto C_ref = C.clone();
 
     {
-        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+        const GemmPin force_variant("native");
         (void)gemm(*(this->ctx),
                           A.view(),
                           B.view(),
@@ -1113,7 +756,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclVariantTransposed) {
     }
 
     {
-        ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
+        const GemmPin vendor_variant("vendor");
         (void)gemm(*(this->ctx),
                           A.view(),
                           B.view(),
@@ -1131,7 +774,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclTiledVariantLargeTransposed) {
     using ScalarType = typename TestFixture::ScalarType;
     constexpr Backend BackendType = TestFixture::BackendType;
 
-    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "tiled16",
+    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "tiled",
                                                             96, 80, 64, 2,
                                                             Transpose::Trans, Transpose::Trans);
 }
@@ -1144,7 +787,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K16TTKernel) {
         GTEST_SKIP() << "128x32x16 TT SYCL register kernel is only selected for float in this slice";
     }
 
-    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "reg128x32k16tt",
+    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "reg:m=128:n=32:k=16:u=1",
                                                             128, 128, 128, 2,
                                                             Transpose::Trans, Transpose::Trans);
 }
@@ -1157,7 +800,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K16TNKernel) {
         GTEST_SKIP() << "128x32x16 TN SYCL register kernel is only selected for float in this slice";
     }
 
-    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "reg128x32k16tn",
+    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "reg:m=128:n=32:k=16:u=1",
                                                             128, 128, 128, 2,
                                                             Transpose::Trans, Transpose::NoTrans);
 }
@@ -1170,7 +813,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K16NTKernel) {
         GTEST_SKIP() << "128x32x16 NT SYCL register kernel is only selected for float in this slice";
     }
 
-    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "reg128x32k16nt",
+    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "reg:m=128:n=32:k=16:u=1",
                                                             128, 128, 128, 2,
                                                             Transpose::NoTrans, Transpose::Trans);
 }
@@ -1183,20 +826,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K32TNKernel) {
         GTEST_SKIP() << "128x32x32 TN SYCL register kernel is only selected for float in this slice";
     }
 
-    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "reg128x32k32tn",
-                                                            128, 128, 128, 2,
-                                                            Transpose::Trans, Transpose::NoTrans);
-}
-
-TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K32S2U1TNCanonicalAlias) {
-    using ScalarType = typename TestFixture::ScalarType;
-    constexpr Backend BackendType = TestFixture::BackendType;
-
-    if constexpr (!std::is_same_v<ScalarType, float>) {
-        GTEST_SKIP() << "128x32x32_s2_u1_tn SYCL register kernel is only selected for float in this slice";
-    }
-
-    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "128x32x32_s2_u1_tn",
+    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "reg:m=128:n=32:k=32:u=1",
                                                             128, 128, 128, 2,
                                                             Transpose::Trans, Transpose::NoTrans);
 }
@@ -1209,7 +839,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K32NTKernel) {
         GTEST_SKIP() << "128x32x32 NT SYCL register kernel is only selected for float in this slice";
     }
 
-    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "reg128x32k32nt",
+    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "reg:m=128:n=32:k=32:u=1",
                                                             128, 128, 128, 2,
                                                             Transpose::NoTrans, Transpose::Trans);
 }
@@ -1222,7 +852,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister32x128K16TNKernel) {
         GTEST_SKIP() << "32x128x16 TN SYCL register kernel is only selected for float in this slice";
     }
 
-    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "reg32x128k16tn",
+    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "reg:m=32:n=128:k=16:u=1",
                                                             128, 128, 128, 2,
                                                             Transpose::Trans, Transpose::NoTrans);
 }
@@ -1235,7 +865,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister32x128K16TTKernel) {
         GTEST_SKIP() << "32x128x16 TT SYCL register kernel is only selected for float in this slice";
     }
 
-    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "reg32x128k16tt",
+    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "reg:m=32:n=128:k=16:u=1",
                                                             128, 128, 128, 2,
                                                             Transpose::Trans, Transpose::Trans);
 }
@@ -1248,7 +878,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister64x64K16TTKernel) {
         GTEST_SKIP() << "64x64x16 TT SYCL register kernel is only selected for float in this slice";
     }
 
-    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "reg64k16tt",
+    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "reg:m=64:n=64:k=16:u=1",
                                                             128, 128, 128, 2,
                                                             Transpose::Trans, Transpose::Trans);
 }
@@ -1261,7 +891,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x64K16TTKernel) {
         GTEST_SKIP() << "128x64x16 TT SYCL register kernel is only selected for float in this slice";
     }
 
-    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "reg128x64k16tt",
+    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "reg:m=128:n=64:k=16:u=1",
                                                             128, 128, 128, 2,
                                                             Transpose::Trans, Transpose::Trans);
 }
@@ -1274,7 +904,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x32K32TTKernel) {
         GTEST_SKIP() << "128x32x32 TT SYCL register kernel is only selected for float in this slice";
     }
 
-    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "reg128x32k32tt",
+    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "reg:m=128:n=32:k=32:u=1",
                                                             128, 128, 128, 2,
                                                             Transpose::Trans, Transpose::Trans);
 }
@@ -1287,7 +917,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x64K32LargeKernel) {
         GTEST_SKIP() << "128x64x32 large SYCL register kernel is only selected for float in this slice";
     }
 
-    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "reg128x64k32large",
+    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "reg:m=128:n=64:k=32:u=4",
                                                             256, 256, 256, 2,
                                                             Transpose::NoTrans, Transpose::NoTrans,
                                                             100);
@@ -1301,38 +931,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x64K32LargeU2Kernel) {
         GTEST_SKIP() << "128x64x32 large-u2 SYCL register kernel is only selected for float in this slice";
     }
 
-    ScopedEnvVar experimental("BATCHLAS_GEMM_EXPERIMENTAL", "1");
-    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "reg128x64k32largeu2",
-                                                            256, 256, 256, 2,
-                                                            Transpose::NoTrans, Transpose::NoTrans,
-                                                            100);
-}
-
-TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x64K32LargeTT4x8Kernel) {
-    using ScalarType = typename TestFixture::ScalarType;
-    constexpr Backend BackendType = TestFixture::BackendType;
-
-    if constexpr (!std::is_same_v<ScalarType, float>) {
-        GTEST_SKIP() << "128x64x32 large-tt4x8 SYCL register kernel is only selected for float in this slice";
-    }
-
-    ScopedEnvVar experimental("BATCHLAS_GEMM_EXPERIMENTAL", "1");
-    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "reg128x64k32largett4x8",
-                                                            256, 256, 256, 2,
-                                                            Transpose::NoTrans, Transpose::NoTrans,
-                                                            100);
-}
-
-TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x64K32LargeTT4x8U2Kernel) {
-    using ScalarType = typename TestFixture::ScalarType;
-    constexpr Backend BackendType = TestFixture::BackendType;
-
-    if constexpr (!std::is_same_v<ScalarType, float>) {
-        GTEST_SKIP() << "128x64x32 large-tt4x8-u2 SYCL register kernel is only selected for float in this slice";
-    }
-
-    ScopedEnvVar experimental("BATCHLAS_GEMM_EXPERIMENTAL", "1");
-    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "reg128x64k32largett4x8u2",
+    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "reg:m=128:n=64:k=32:u=2",
                                                             256, 256, 256, 2,
                                                             Transpose::NoTrans, Transpose::NoTrans,
                                                             100);
@@ -1354,7 +953,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x128K8KernelAligned) {
 
     // 256 is an exact multiple of both 128 and 8, so this takes the
     // unpredicated path.
-    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "128x128x8",
+    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "reg:m=128:n=128:k=8:u=1",
                                                             256, 256, 256, 2,
                                                             Transpose::NoTrans, Transpose::NoTrans,
                                                             100);
@@ -1373,7 +972,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x128K8KernelRagged) {
     // of 128 and k is not a multiple of 8, so every tile edge is predicated
     // and the k loop has a partial final step. The non-trivial alpha/beta also
     // keeps the epilogue from degenerating into a plain accumulate.
-    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "128x128x8",
+    RunForcedSyclGemmKernelCompare<ScalarType, BackendType>(*(this->ctx), "reg:m=128:n=128:k=8:u=1",
                                                             200, 130, 70, 3,
                                                             Transpose::NoTrans, Transpose::NoTrans,
                                                             100, ScalarType(2), ScalarType(-1));
@@ -1384,7 +983,8 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x128K8KernelRagged) {
 // false for a NaN, so a NaN result would pass it.
 template <typename ScalarType>
 void Run128x128Compare(Queue& ctx, int m, int n, int k, int batch_size, ScalarType alpha,
-                       ScalarType beta, bool nan_c, const char* kernel = "128x128x8") {
+                       ScalarType beta, bool nan_c, const char* kernel = "reg:m=128:n=128:k=8:u=1") {
+    SKIP_UNLESS_NATIVE(ctx);
     SCOPED_TRACE(::testing::Message() << m << "x" << n << "x" << k << " b" << batch_size
                                       << " beta=" << beta << " nan_c=" << nan_c);
     auto A = Matrix<ScalarType>::Random(m, k, false, batch_size);
@@ -1398,12 +998,11 @@ void Run128x128Compare(Queue& ctx, int m, int n, int k, int batch_size, ScalarTy
     }
     auto C_ref = C.clone();
     {
-        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
-        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", kernel);
+        const GemmPin force_kernel(kernel);
         (void)gemm(ctx, A.view(), B.view(), C.view(), {.alpha = alpha, .beta = beta});
     }
     {
-        ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
+        const GemmPin vendor_variant("vendor");
         (void)gemm(ctx, A.view(), B.view(), C_ref.view(), {.alpha = alpha, .beta = beta});
     }
     ctx.wait();
@@ -1484,7 +1083,7 @@ TYPED_TEST(GemmTest, Forced128x128K8BetaZeroNaNC) {
 // there is deliberately no float-only skip here.
 //
 // The oracle is Tiled16, not the vendor. Every other forced-kernel test in
-// this file compares against BATCHLAS_GEMM_VARIANT=vendor, which is the
+// this file compares against BATCHLAS_GEMM_ROUTE=vendor, which is the
 // stronger oracle where a vendor exists -- but this kernel's entire reason to
 // exist is the vendor-free build, and there the forced-vendor arm degrades
 // back to a native route. A test whose reference silently becomes the thing
@@ -1494,6 +1093,7 @@ TYPED_TEST(GemmTest, Forced128x128K8BetaZeroNaNC) {
 // the same thing either way.
 TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister64x64K16WideAligned) {
     using ScalarType = typename TestFixture::ScalarType;
+    SKIP_UNLESS_NATIVE(*this->ctx);
     constexpr Backend BackendType = TestFixture::BackendType;
 
     // Exact multiple of 64 in m and n and of 16 in k, so the unpredicated
@@ -1506,14 +1106,12 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister64x64K16WideAligned) {
     auto C_ref = C.clone();
 
     {
-        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
-        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "64x64x16wide");
+        const GemmPin force_kernel("wide:m=64:n=64:k=16");
         (void)gemm(*(this->ctx), A.view(), B.view(), C.view(),
              {.alpha = ScalarType(2), .beta = ScalarType(-1)});
     }
     {
-        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
-        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "tiled16");
+        const GemmPin force_kernel("tiled");
         (void)gemm(*(this->ctx), A.view(), B.view(), C_ref.view(),
              {.alpha = ScalarType(2), .beta = ScalarType(-1)});
     }
@@ -1525,6 +1123,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister64x64K16WideAligned) {
 
 TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister64x64K16WideRagged) {
     using ScalarType = typename TestFixture::ScalarType;
+    SKIP_UNLESS_NATIVE(*this->ctx);
     constexpr Backend BackendType = TestFixture::BackendType;
 
     // Deliberately ragged in all three dimensions: m and n are not multiples
@@ -1543,14 +1142,12 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister64x64K16WideRagged) {
     // cannot see an epilogue defect, and the epilogue is where the two paths
     // differ most.
     {
-        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
-        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "64x64x16wide");
+        const GemmPin force_kernel("wide:m=64:n=64:k=16");
         (void)gemm(*(this->ctx), A.view(), B.view(), C.view(),
              {.alpha = ScalarType(2), .beta = ScalarType(-1)});
     }
     {
-        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
-        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "tiled16");
+        const GemmPin force_kernel("tiled");
         (void)gemm(*(this->ctx), A.view(), B.view(), C_ref.view(),
              {.alpha = ScalarType(2), .beta = ScalarType(-1)});
     }
@@ -1575,7 +1172,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclVariantConjugateTranspose) {
     auto C_ref = Matrix<ScalarType>::Zeros(m, n, batch_size);
 
     {
-        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
+        const GemmPin force_variant("native");
         (void)gemm(*(this->ctx),
                           A.view(),
                           B.view(),
@@ -1584,7 +1181,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclVariantConjugateTranspose) {
     }
 
     {
-        ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
+        const GemmPin vendor_variant("vendor");
         (void)gemm(*(this->ctx),
                           A.view(),
                           B.view(),
@@ -1597,214 +1194,6 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclVariantConjugateTranspose) {
     auto tol = test_utils::tolerance<ScalarType>() * 50;
     ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, m, n, batch_size, tol));
 }
-
-// ---------------------------------------------------------------------------
-// The Route adapter, on live views.
-//
-// tests/route_gemm_equivalence_tests.cc proves the DECISION -- resolve_gemm_route
-// over an OpShape -- matches what gemm_use_sycl_custom used to compute. It says
-// nothing about the step that now feeds it: gemm_op_shape(), which turns three
-// MatrixViews and a Queue into that OpShape. These tests cover exactly that
-// seam, because a bug there would be silent: the numerical comparisons above
-// force BATCHLAS_GEMM_VARIANT=sycl and diff against vendor, so an adapter that
-// wrongly returned Vendor for both arms would compare vendor with vendor and
-// still pass.
-// ---------------------------------------------------------------------------
-
-// gemm_variant.hh, which declares backend::gemm_route<>, is included only inside
-// the BATCHLAS_HAS_CUDA_BACKEND block at the top of this file. Without this guard
-// the helper and the six tests below are a hard compile error on any CPU-only or
-// ROCm-only configure, taking the whole gemm_tests target -- including its
-// pre-existing numerical coverage -- with them.
-#if BATCHLAS_HAS_CUDA_BACKEND
-namespace {
-
-template <typename ScalarType>
-batchlas::dispatch::Route route_for(Queue& ctx, int m, int n, int k, int batch,
-                                    Transpose transA = Transpose::NoTrans,
-                                    Transpose transB = Transpose::NoTrans,
-                                    ComputePrecision precision = ComputePrecision::Default,
-                                    bool vendor_available = true) {
-    const int a_rows = transA == Transpose::NoTrans ? m : k;
-    const int a_cols = transA == Transpose::NoTrans ? k : m;
-    const int b_rows = transB == Transpose::NoTrans ? k : n;
-    const int b_cols = transB == Transpose::NoTrans ? n : k;
-    Matrix<ScalarType> A(a_rows, a_cols, batch);
-    Matrix<ScalarType> B(b_rows, b_cols, batch);
-    Matrix<ScalarType> C(m, n, batch);
-    return batchlas::backend::gemm_route<ScalarType>(
-        ctx, A.view(), B.view(), C.view(), transA, transB, precision, vendor_available);
-}
-
-} // namespace
-
-TYPED_TEST(GemmTest, RouteAdapterUnsetTakesVendorForTinyShape) {
-    using ScalarType = typename TestFixture::ScalarType;
-    ScopedEnvVar clear_canonical("BATCHLAS_GEMM_ROUTE", "");
-    ScopedEnvVar clear_legacy("BATCHLAS_GEMM_VARIANT", "");
-
-    // 8x8x8 at batch 1 is far outside every measured window, and GEMM's unset
-    // default is Vendor. This is the cell that caught the order-walk fallback
-    // bug: taking "first merely supported" would answer Native here.
-    EXPECT_TRUE(batchlas::dispatch::is_vendor(
-        route_for<ScalarType>(*(this->ctx), 8, 8, 8, 1)));
-}
-
-TYPED_TEST(GemmTest, RouteAdapterAutoHonoursTheMeasuredWindow) {
-    using ScalarType = typename TestFixture::ScalarType;
-    if (this->ctx->device().type != DeviceType::GPU) {
-        GTEST_SKIP() << "the measured window is GPU-only";
-    }
-    ScopedEnvVar clear_canonical("BATCHLAS_GEMM_ROUTE", "");
-    ScopedEnvVar request("BATCHLAS_GEMM_VARIANT", "auto");
-
-    // The in-window shape differs per type, and after WP2 E4 that difference is
-    // the point rather than an inconvenience: float's window is now only
-    // max_dim <= 32, while double's still runs to 512.
-    if constexpr (test_utils::is_complex<ScalarType>::value) {
-        // Complex is excluded outright, and this is NOT merely an unmeasured
-        // window. select_kernel_variant's register ladder for complex is
-        // reachable only through Tiled64x64RegisterK16Wide, which requires
-        // min_dim >= 256 and an aligned NN shape; widening preferred() without
-        // that gate firing routes complex to Tiled16, measured 3.2-7.1x slower
-        // than cuBLAS. See docs/perf/gemm.md#gemm-evidence-for-each-boundary.
-        EXPECT_TRUE(batchlas::dispatch::is_vendor(
-            route_for<ScalarType>(*(this->ctx), 256, 256, 256, 128)));
-    } else if constexpr (std::is_same_v<ScalarType, float>) {
-        const auto in_window = route_for<ScalarType>(*(this->ctx), 32, 32, 32, 128);
-        EXPECT_TRUE(batchlas::dispatch::is_native(in_window));
-        EXPECT_EQ(in_window.algo, batchlas::dispatch::Algorithm::RegisterTiled);
-
-        // The 4x4-tiled small kernel's window: 33..48 native from batch 64,
-        // 49 and up still vendor. See docs/perf/gemm.md#the-small-tiled-kernel.
-        // ARMED BREAK (R9): route_gemm.hh back to `max_dim <= 32`.
-        // EXPECTED: the 48^3 batch-64 assertion goes RED. Observed.
-        EXPECT_TRUE(batchlas::dispatch::is_native(route_for<ScalarType>(*(this->ctx), 48, 48, 48, 64)));
-        EXPECT_TRUE(batchlas::dispatch::is_native(route_for<ScalarType>(*(this->ctx), 33, 33, 33, 128)));
-        EXPECT_TRUE(batchlas::dispatch::is_vendor(route_for<ScalarType>(*(this->ctx), 49, 49, 49, 128)));
-        EXPECT_TRUE(batchlas::dispatch::is_vendor(route_for<ScalarType>(*(this->ctx), 48, 48, 48, 63)));
-
-        // WP2 E4 retired float's 128..512 NN window and its whole transposed
-        // window. Both are asserted here in their NEW direction, so the change
-        // is pinned rather than merely absent -- a removed assertion cannot
-        // detect a silent revert. Measured 0.40-0.98x (NN) and 0.34-0.55x
-        // (transposed) of cuBLAS; see docs/perf/gemm.md#float-nn-at-max_dim-32.
-        EXPECT_TRUE(batchlas::dispatch::is_vendor(
-            route_for<ScalarType>(*(this->ctx), 256, 256, 256, 128)));
-        EXPECT_TRUE(batchlas::dispatch::is_vendor(
-            route_for<ScalarType>(*(this->ctx), 256, 256, 256, 128, Transpose::Trans,
-                                  Transpose::NoTrans)));
-    } else {
-        const auto in_window = route_for<ScalarType>(*(this->ctx), 256, 256, 256, 128);
-        EXPECT_TRUE(batchlas::dispatch::is_native(in_window));
-        EXPECT_EQ(in_window.algo, batchlas::dispatch::Algorithm::RegisterTiled);
-    }
-
-    // 1024^3 used to be outside the window for every type. WP2 E5 removed
-    // double's upper bound -- measured 1.13x at 1024^3 and 1.14x at 2048^3, and
-    // the gap comes from an FP64 issue-rate ceiling that does not vary with
-    // size -- so double now claims it and everything else still declines.
-    if constexpr (std::is_same_v<ScalarType, double>) {
-        EXPECT_TRUE(batchlas::dispatch::is_native(
-            route_for<ScalarType>(*(this->ctx), 1024, 1024, 1024, 128)));
-
-        // E5 also dropped the squareness requirement for double: a panel update
-        // (large m and n, small k) is the shape BatchLAS itself issues most,
-        // measured 1.10-1.41x. And the one shape it must still decline is k=1,
-        // a rank-1 update, where cuBLAS has a dedicated path and native is
-        // 0.49x.
-        EXPECT_TRUE(batchlas::dispatch::is_native(
-            route_for<ScalarType>(*(this->ctx), 992, 992, 32, 128)));
-        EXPECT_TRUE(batchlas::dispatch::is_vendor(
-            route_for<ScalarType>(*(this->ctx), 512, 512, 1, 128)));
-    } else {
-        EXPECT_TRUE(batchlas::dispatch::is_vendor(
-            route_for<ScalarType>(*(this->ctx), 1024, 1024, 1024, 128)));
-    }
-}
-
-TYPED_TEST(GemmTest, RouteAdapterForcedSyclBypassesTheWindowButNotCorrectness) {
-    using ScalarType = typename TestFixture::ScalarType;
-    ScopedEnvVar clear_canonical("BATCHLAS_GEMM_ROUTE", "");
-    ScopedEnvVar request("BATCHLAS_GEMM_VARIANT", "sycl");
-
-    // Non-square, batch 1, possibly not even a GPU: every speed condition is
-    // false and the route is still Native, because forcing is what `preferred`
-    // exists to be overridden by.
-    EXPECT_TRUE(batchlas::dispatch::is_native(
-        route_for<ScalarType>(*(this->ctx), 7, 5, 3, 1)));
-
-    // But a non-default precision is a CORRECTNESS condition, and forcing must
-    // not be able to run the kernel where it would compute the wrong answer.
-    EXPECT_TRUE(batchlas::dispatch::is_vendor(
-        route_for<ScalarType>(*(this->ctx), 7, 5, 3, 1, Transpose::NoTrans,
-                              Transpose::NoTrans, ComputePrecision::F32)));
-}
-
-TYPED_TEST(GemmTest, RouteAdapterLegacyNativeStillMeansTheRawVendorPath) {
-    using ScalarType = typename TestFixture::ScalarType;
-    if (this->ctx->device().type != DeviceType::GPU) {
-        GTEST_SKIP() << "the measured window is GPU-only";
-    }
-    ScopedEnvVar clear_canonical("BATCHLAS_GEMM_ROUTE", "");
-    ScopedEnvVar request("BATCHLAS_GEMM_VARIANT", "native");
-
-    // The collision documented on parse_legacy_route_value, reaching all the
-    // way through the adapter: on a shape that Auto would send to the native
-    // kernel, the legacy spelling "native" must still land on the vendor.
-    EXPECT_TRUE(batchlas::dispatch::is_vendor(
-        route_for<ScalarType>(*(this->ctx), 256, 256, 256, 128)));
-}
-
-TYPED_TEST(GemmTest, RouteAdapterMismatchedViewsTakeVendor) {
-    using ScalarType = typename TestFixture::ScalarType;
-    ScopedEnvVar clear_canonical("BATCHLAS_GEMM_ROUTE", "");
-    ScopedEnvVar request("BATCHLAS_GEMM_VARIANT", "sycl");
-
-    // OpShape is a POD of scalars and cannot say "these views disagree", so
-    // gemm_op_shape returns nullopt instead. Even a forced native request has
-    // to yield here -- this is the batch-size / k==k_b / m==C.rows() arm of the
-    // old gemm_custom_problem_supported.
-    {
-        Matrix<ScalarType> A(64, 64, 4);
-        Matrix<ScalarType> B(64, 64, 4);
-        Matrix<ScalarType> C(32, 64, 4);   // wrong rows
-        EXPECT_TRUE(batchlas::dispatch::is_vendor(batchlas::backend::gemm_route<ScalarType>(
-            *(this->ctx), A.view(), B.view(), C.view(), Transpose::NoTrans, Transpose::NoTrans,
-            ComputePrecision::Default)));
-    }
-    {
-        Matrix<ScalarType> A(64, 64, 4);
-        Matrix<ScalarType> B(64, 64, 8);   // batch mismatch
-        Matrix<ScalarType> C(64, 64, 4);
-        EXPECT_TRUE(batchlas::dispatch::is_vendor(batchlas::backend::gemm_route<ScalarType>(
-            *(this->ctx), A.view(), B.view(), C.view(), Transpose::NoTrans, Transpose::NoTrans,
-            ComputePrecision::Default)));
-    }
-}
-
-TYPED_TEST(GemmTest, RouteAdapterWithoutAVendorFallsBackToSupportedNative) {
-    using ScalarType = typename TestFixture::ScalarType;
-    ScopedEnvVar clear_canonical("BATCHLAS_GEMM_ROUTE", "");
-    ScopedEnvVar clear_legacy("BATCHLAS_GEMM_VARIANT", "");
-
-    // The configuration this whole work package is building toward. The same
-    // 8x8x8 that takes the vendor above has to be served natively once there is
-    // no vendor to take -- supported-but-unpreferred means slower, not wrong.
-    EXPECT_TRUE(batchlas::dispatch::is_native(
-        route_for<ScalarType>(*(this->ctx), 8, 8, 8, 1, Transpose::NoTrans,
-                              Transpose::NoTrans, ComputePrecision::Default,
-                              /*vendor_available=*/false)));
-
-    // ...but not where it would be wrong. A non-default precision has no native
-    // route at all, so even with no vendor available the answer stays Vendor,
-    // which is the honest "there is nothing that can serve this" signal.
-    EXPECT_TRUE(batchlas::dispatch::is_vendor(
-        route_for<ScalarType>(*(this->ctx), 8, 8, 8, 1, Transpose::NoTrans,
-                              Transpose::NoTrans, ComputePrecision::F32,
-                              /*vendor_available=*/false)));
-}
-#endif // BATCHLAS_HAS_CUDA_BACKEND
 
 // ---------------------------------------------------------------------------
 // The 128x128x8 kernel on genuine SUB-VIEWS.
@@ -1828,6 +1217,7 @@ TYPED_TEST(GemmTest, RouteAdapterWithoutAVendorFallsBackToSupportedNative) {
 // ---------------------------------------------------------------------------
 TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x128K8SubViewAlignedLeg) {
     using ScalarType = typename TestFixture::ScalarType;
+    SKIP_UNLESS_NATIVE(*this->ctx);
     constexpr Backend BackendType = TestFixture::BackendType;
 
     if constexpr (!std::is_same_v<ScalarType, float>) {
@@ -1852,13 +1242,12 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x128K8SubViewAlignedLeg) {
     ASSERT_NE(Asub(PA).ld(), Asub(PA).rows());
 
     {
-        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
-        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "128x128x8");
+        const GemmPin force_kernel("reg:m=128:n=128:k=8:u=1");
         (void)gemm(*(this->ctx), Asub(PA), Bsub(PB), Csub(PC),
              {.alpha = ScalarType(2), .beta = ScalarType(-1)});
     }
     {
-        ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
+        const GemmPin vendor_variant("vendor");
         (void)gemm(*(this->ctx), Asub(PA), Bsub(PB), Csub(PC_ref),
              {.alpha = ScalarType(2), .beta = ScalarType(-1)});
     }
@@ -1876,6 +1265,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x128K8SubViewAlignedLeg) {
 // sub-block, while the sub-block itself is right. Observed.
 TYPED_TEST(GemmTest, Forced128x128K8SubViewStagedEpilogue) {
     using ScalarType = typename TestFixture::ScalarType;
+    SKIP_UNLESS_NATIVE(*this->ctx);
     if constexpr (!std::is_same_v<ScalarType, float>) {
         GTEST_SKIP() << "128x128x8 SYCL register kernel is float-only";
     } else {
@@ -1888,13 +1278,12 @@ TYPED_TEST(GemmTest, Forced128x128K8SubViewStagedEpilogue) {
         auto Bsub = [&](Matrix<ScalarType>& M) { return M.view()(Slice(0, k), Slice(0, n)); };
         auto Csub = [&](Matrix<ScalarType>& M) { return M.view()(Slice(r0, r0 + m), Slice(0, n)); };
         {
-            ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
-            ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "128x128x8");
+            const GemmPin force_kernel("reg:m=128:n=128:k=8:u=1");
             (void)gemm(*(this->ctx), Asub(PA), Bsub(PB), Csub(PC),
                        {.alpha = ScalarType(2), .beta = ScalarType(-1)});
         }
         {
-            ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
+            const GemmPin vendor_variant("vendor");
             (void)gemm(*(this->ctx), Asub(PA), Bsub(PB), Csub(PC_ref),
                        {.alpha = ScalarType(2), .beta = ScalarType(-1)});
         }
@@ -1906,6 +1295,7 @@ TYPED_TEST(GemmTest, Forced128x128K8SubViewStagedEpilogue) {
 
 TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x128K8SubViewPredicatedLeg) {
     using ScalarType = typename TestFixture::ScalarType;
+    SKIP_UNLESS_NATIVE(*this->ctx);
     constexpr Backend BackendType = TestFixture::BackendType;
 
     if constexpr (!std::is_same_v<ScalarType, float>) {
@@ -1927,13 +1317,12 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x128K8SubViewPredicatedLeg)
     auto Csub = [&](Matrix<ScalarType>& M) { return M.view()(Slice(r0, r0 + m), Slice(0, n)); };
 
     {
-        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
-        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "128x128x8");
+        const GemmPin force_kernel("reg:m=128:n=128:k=8:u=1");
         (void)gemm(*(this->ctx), Asub(PA), Bsub(PB), Csub(PC),
              {.alpha = ScalarType(2), .beta = ScalarType(-1)});
     }
     {
-        ScopedEnvVar vendor_variant("BATCHLAS_GEMM_VARIANT", "vendor");
+        const GemmPin vendor_variant("vendor");
         (void)gemm(*(this->ctx), Asub(PA), Bsub(PB), Csub(PC_ref),
              {.alpha = ScalarType(2), .beta = ScalarType(-1)});
     }
@@ -1953,6 +1342,7 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister128x128K8SubViewPredicatedLeg)
 // (ld == rows), so it cannot see an ld-dependent staging defect.
 TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister64x64K16WideSubViewPredicatedLeg) {
     using ScalarType = typename TestFixture::ScalarType;
+    SKIP_UNLESS_NATIVE(*this->ctx);
     constexpr Backend BackendType = TestFixture::BackendType;
 
     constexpr int P = 512;
@@ -1970,20 +1360,18 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister64x64K16WideSubViewPredicatedL
     auto Csub = [&](Matrix<ScalarType>& M) { return M.view()(Slice(r0, r0 + m), Slice(0, n)); };
 
     {
-        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
-        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "64x64x16wide");
+        const GemmPin force_kernel("wide:m=64:n=64:k=16");
         (void)gemm(*(this->ctx), Asub(PA), Bsub(PB), Csub(PC),
              {.alpha = ScalarType(2), .beta = ScalarType(-1)});
     }
     {
         // Reference is Tiled16, NOT the vendor -- matching WideAligned (:2063)
         // and WideRagged (:2094). A vendor reference is INERT in exactly the
-        // vendor-free build this kernel exists for: resolve_route falls back to
-        // a supported native route when no vendor is present, which for this
+        // vendor-free build this kernel exists for: a vendor pin falls back to
+        // the automatic choice when no vendor is present, which for this
         // shape is the kernel under test, so the test would compare it against
         // itself and pass over any defect.
-        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
-        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "tiled16");
+        const GemmPin force_kernel("tiled");
         (void)gemm(*(this->ctx), Asub(PA), Bsub(PB), Csub(PC_ref),
              {.alpha = ScalarType(2), .beta = ScalarType(-1)});
     }
@@ -1991,60 +1379,6 @@ TYPED_TEST(GemmTest, BatchedGemmForcedSyclRegister64x64K16WideSubViewPredicatedL
 
     auto tol = test_utils::tolerance<ScalarType>() * 100;
     ASSERT_TRUE(AssertBatchedMatrixNear(PC, PC_ref, P, P, batch_size, tol));
-}
-
-// ---------------------------------------------------------------------------
-// The transposed register launchers hard-wire OpA/OpB, so forcing one with a
-// DIFFERENT transpose combination than it was instantiated for silently
-// computes the wrong answer. ConjTrans is the dangerous case: it is a distinct
-// enum value (NoTrans=0, Trans=1, ConjTrans=2), so a launcher instantiated with
-// `Trans` drops the conjugation entirely and still returns a plausible matrix.
-//
-// This test forces 64x64x16tn -- instantiated <Trans, NoTrans> -- on a
-// ConjTrans/NoTrans (CN) shape, which is the single most common transposed form
-// in real complex demand (789 of 2245 complex<float> calls). Without the
-// dispatch guard it runs the TN kernel unconjugated and FAILS for complex; with
-// the guard it falls back to Tiled16 and passes.
-//
-// The extents are >= 64x64 deliberately: the pre-existing ConjTrans test at
-// :2130 is 18x14x12 and cannot reach a 64x64 macro tile at all, so it was
-// structurally unable to catch this -- the same "blind by construction" failure
-// this project has hit twice before.
-//
-// The reference is Tiled16, never the vendor: a vendor reference is inert in a
-// vendor-free build, where the fallback would be the kernel under test.
-// ---------------------------------------------------------------------------
-TYPED_TEST(GemmTest, ForcedTransposedLauncherRejectsMismatchedTransposeForm) {
-    using ScalarType = typename TestFixture::ScalarType;
-    constexpr Backend BackendType = TestFixture::BackendType;
-
-    constexpr int m = 96, n = 96, k = 80;   // large enough to reach a 64x64 tile
-    constexpr int batch_size = 2;
-
-    // C = alpha * conj(A)^T * B + beta * C, with A stored k x m.
-    auto A = Matrix<ScalarType>::Random(k, m, false, batch_size);
-    auto B = Matrix<ScalarType>::Random(k, n, false, batch_size);
-    auto C = Matrix<ScalarType>::Random(m, n, false, batch_size);
-    auto C_ref = C.clone();
-
-    {
-        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
-        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "64x64x16tn");
-        (void)gemm(*(this->ctx), A.view(), B.view(), C.view(),
-             {.alpha = ScalarType(2), .beta = ScalarType(-1),
-              .transA = Transpose::ConjTrans, .transB = Transpose::NoTrans});
-    }
-    {
-        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
-        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "tiled16");
-        (void)gemm(*(this->ctx), A.view(), B.view(), C_ref.view(),
-             {.alpha = ScalarType(2), .beta = ScalarType(-1),
-              .transA = Transpose::ConjTrans, .transB = Transpose::NoTrans});
-    }
-    this->ctx->wait();
-
-    auto tol = test_utils::tolerance<ScalarType>() * 100;
-    ASSERT_TRUE(AssertBatchedMatrixNear(C, C_ref, m, n, batch_size, tol));
 }
 
 // ===========================================================================
@@ -2091,6 +1425,7 @@ void RunForcedWideTransposedAgainstTiled16(Queue& ctx,
                                            int parent = 512,
                                            int row_offset = 3,
                                            int batch_size = 3) {
+    SKIP_UNLESS_NATIVE(ctx);
     const int a_rows = transA == Transpose::NoTrans ? m : k;
     const int a_cols = transA == Transpose::NoTrans ? k : m;
     const int b_rows = transB == Transpose::NoTrans ? k : n;
@@ -2112,14 +1447,12 @@ void RunForcedWideTransposedAgainstTiled16(Queue& ctx,
     };
 
     {
-        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
-        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", kernel_name);
+        const GemmPin force_kernel(kernel_name);
         (void)gemm(ctx, Av(PA), Bv(PB), Cv(PC),
              {.alpha = ScalarType(2), .beta = beta, .transA = transA, .transB = transB});
     }
     {
-        ScopedEnvVar force_variant("BATCHLAS_GEMM_VARIANT", "sycl");
-        ScopedEnvVar force_kernel("BATCHLAS_GEMM_SYCL_KERNEL", "tiled16");
+        const GemmPin force_kernel("tiled");
         (void)gemm(ctx, Av(PA), Bv(PB), Cv(PC_ref),
              {.alpha = ScalarType(2), .beta = beta, .transA = transA, .transB = transB});
     }
@@ -2136,19 +1469,165 @@ void RunForcedWideTransposedAgainstTiled16(Queue& ctx,
 TYPED_TEST(GemmTest, WideTransposedCN64Ragged) {
     using ScalarType = typename TestFixture::ScalarType;
     RunForcedWideTransposedAgainstTiled16<ScalarType>(
-        *(this->ctx), "64x64x16wide_cn", 100, 70, 90,
+        *(this->ctx), "wide:m=64:n=64:k=16", 100, 70, 90,
         Transpose::ConjTrans, Transpose::NoTrans, ScalarType(-1));
 }
 
 TYPED_TEST(GemmTest, WideTransposedCN64BetaZero) {
     using ScalarType = typename TestFixture::ScalarType;
     RunForcedWideTransposedAgainstTiled16<ScalarType>(
-        *(this->ctx), "64x64x16wide_cn", 100, 70, 90,
+        *(this->ctx), "wide:m=64:n=64:k=16", 100, 70, 90,
         Transpose::ConjTrans, Transpose::NoTrans, ScalarType(0));
 }
 
-// The small batched kernel (max(m, n, k) <= 64, real scalars; complex falls back to
-// Direct under the same name). Ragged edges in every bucket, both transposes of each
+// The small NN wide tiles (32x32 and 16x16 macro tiles). Ragged
+// in every dimension, k from 1 to past two staged blocks, both betas, sub-views
+// of a wider parent (inherited ld, offset base).
+// ARMED BREAK: pass beta = T(0) to the 16x16 tile only. OBSERVED on this branch:
+// red only on GemmTest/{4..7} (CUDA), only the 16x16x16wide beta=-1 cases.
+TYPED_TEST(GemmTest, SmallWideNNTilesMatchTiled16) {
+    using ScalarType = typename TestFixture::ScalarType;
+    const char* kernels[] = {"wide:m=32:n=32:k=16", "wide:m=16:n=16:k=16"};
+    const int shapes[][3] = {{32, 32, 1}, {32, 32, 70}, {29, 31, 257}, {16, 16, 33},
+                             {13, 7, 100}, {32, 17, 8}, {40, 70, 65}, {5, 3, 16}};
+    for (const char* kname : kernels) {
+        for (const auto& s : shapes) {
+            for (ScalarType beta : {ScalarType(-1), ScalarType(0)}) {
+                SCOPED_TRACE(std::string(kname) + " m=" + std::to_string(s[0]) + " n=" +
+                             std::to_string(s[1]) + " k=" + std::to_string(s[2]));
+                RunForcedWideTransposedAgainstTiled16<ScalarType>(
+                    *(this->ctx), kname, s[0], s[1], s[2],
+                    Transpose::NoTrans, Transpose::NoTrans, beta, 300, 3, 3);
+            }
+        }
+    }
+}
+
+// The small wide tiles are NN-only, so can_run refuses every transposed form and
+// the pin throws (it used to fall back to Tiled16 silently).
+TYPED_TEST(GemmTest, SmallWideTilesRefuseTransposedRequest) {
+    using ScalarType = typename TestFixture::ScalarType;
+    SKIP_UNLESS_NATIVE(*this->ctx);
+    const Transpose pairs[][2] = {{Transpose::ConjTrans, Transpose::NoTrans},
+                                  {Transpose::NoTrans, Transpose::Trans},
+                                  {Transpose::Trans, Transpose::ConjTrans}};
+    for (const char* kname : {"wide:m=32:n=32:k=16", "wide:m=16:n=16:k=16"})
+        for (const auto& p : pairs) ExpectPinRefused<ScalarType>(*this->ctx, kname, 29, 21, 70, p[0], p[1]);
+}
+
+// The register launchers hard-wire OpA/OpB, so running one on a form it was not
+// instantiated for computes the wrong answer (a `Trans` launcher on ConjTrans
+// drops the conjugation). Before P3.4, 18 NN-only register variants did that on
+// a forced transposed call. can_run now lists each config's forms (every config
+// is covered by gemm_candidates_tests.cc TransposedPinOnAMissingInstantiation):
+// the TN config serves a float CN call (a real ConjTrans is its Trans) and is
+// refused for every other scalar (reg is float-only); NN-only configs are
+// refused on NT, CN and TC. The reference is Tiled16, never the vendor.
+TYPED_TEST(GemmTest, ForcedTransposedLauncherRejectsMismatchedTransposeForm) {
+    using ScalarType = typename TestFixture::ScalarType;
+    SKIP_UNLESS_NATIVE(*this->ctx);
+    constexpr int m = 96, n = 96, k = 80;  // large enough to reach a 64x64 tile
+    const Transpose T = Transpose::Trans, N = Transpose::NoTrans, Cj = Transpose::ConjTrans;
+    if constexpr (!std::is_same_v<ScalarType, float>) {
+        ExpectPinRefused<ScalarType>(*this->ctx, "reg:m=64:n=64:k=16:u=1", m, n, k, Cj, N);
+    } else {
+        RunForcedWideTransposedAgainstTiled16<ScalarType>(*this->ctx, "reg:m=64:n=64:k=16:u=1", m, n, k, Cj, N, ScalarType(-1),
+                                                          128, 3, 2);
+        for (const char* nn_only : {"reg:m=32:n=32:k=8:u=1", "reg:m=64:n=64:k=8:u=1", "reg:m=128:n=128:k=8:u=1", "reg:m=128:n=64:k=32:u=4", "reg:m=128:n=64:k=32:u=2"}) {
+            ExpectPinRefused<ScalarType>(*this->ctx, nn_only, m, n, k, N, T);
+            ExpectPinRefused<ScalarType>(*this->ctx, nn_only, m, n, k, Cj, N);
+            ExpectPinRefused<ScalarType>(*this->ctx, nn_only, m, n, k, T, Cj);
+        }
+        ExpectPinRefused<ScalarType>(*this->ctx, "reg:m=128:n=64:k=16:u=1", m, n, k, N, N);  // no NN instantiation
+        ExpectPinRefused<ScalarType>(*this->ctx, "reg:m=32:n=128:k=16:u=1", m, n, k, N, T);    // no NT instantiation
+    }
+}
+
+// beta = 0 must not read C: NaN in the C sub-view has to vanish. The reference
+// runs tiled16 on a zeroed C, since tiled16 may read C (known-defects.md #11).
+// AssertBatchedMatrixNear passes a NaN, hence the explicit finite check.
+// ARMED BREAK: `prior = *p` unconditionally in the launch_wide_transposed
+// epilogue. OBSERVED: red only on this test, GemmTest/{4..7}.
+TYPED_TEST(GemmTest, SmallWideBetaZeroNeverReadsC) {
+    using ScalarType = typename TestFixture::ScalarType;
+    SKIP_UNLESS_NATIVE(*this->ctx);
+    using Real = typename batchlas::base_type<ScalarType>::type;
+    constexpr int parent = 300, off = 3, batch = 3, m = 29, n = 21, k = 70;
+    for (const char* kname : {"wide:m=32:n=32:k=16", "wide:m=16:n=16:k=16"}) {
+        SCOPED_TRACE(kname);
+        auto PA = Matrix<ScalarType>::Random(parent, parent, false, batch);
+        auto PB = Matrix<ScalarType>::Random(parent, parent, false, batch);
+        auto PC = Matrix<ScalarType>::Random(parent, parent, false, batch);
+        auto PC_ref = PC.clone();
+        for (int b = 0; b < batch; ++b)
+            for (int c = 0; c < n; ++c)
+                for (int r = off; r < off + m; ++r) {
+                    PC(r, c, b) = ScalarType(std::numeric_limits<Real>::quiet_NaN());
+                    PC_ref(r, c, b) = ScalarType(0);
+                }
+        auto sub = [&](Matrix<ScalarType>& M, int rows, int cols) {
+            return M.view()(Slice(off, off + rows), Slice(0, cols));
+        };
+        const GemmOptions<ScalarType> opts{.alpha = ScalarType(2), .beta = ScalarType(0)};
+        {
+            const GemmPin force_kernel(kname);
+            (void)gemm(*(this->ctx), sub(PA, m, k), sub(PB, k, n), sub(PC, m, n), opts);
+        }
+        {
+            const GemmPin force_kernel("tiled");
+            (void)gemm(*(this->ctx), sub(PA, m, k), sub(PB, k, n), sub(PC_ref, m, n), opts);
+        }
+        this->ctx->wait();
+        for (int b = 0; b < batch; ++b)
+            for (int c = 0; c < n; ++c)
+                for (int r = off; r < off + m; ++r)
+                    ASSERT_TRUE(std::isfinite(std::abs(PC(r, c, b))))
+                        << "b=" << b << " r=" << r << " c=" << c;
+        auto tol = test_utils::tolerance<ScalarType>() * 100;
+        ASSERT_TRUE(AssertBatchedMatrixNear(PC, PC_ref, parent, parent, batch, tol));
+    }
+}
+
+// Saturating batch for the shared-memory staged tiles: every item holds the
+// same matrices, so every result must be bit-identical to item 0.
+TYPED_TEST(GemmTest, SmallWideSaturatingBatchIsBitIdentical) {
+    using ScalarType = typename TestFixture::ScalarType;
+    SKIP_UNLESS_NATIVE(*this->ctx);
+    constexpr int m = 31, n = 29, k = 300, batch = 2048;
+    auto A1 = Matrix<ScalarType>::Random(m, k, false, 1);
+    auto B1 = Matrix<ScalarType>::Random(k, n, false, 1);
+    auto C1 = Matrix<ScalarType>::Random(m, n, false, 1);
+    Matrix<ScalarType> A(m, k, batch), B(k, n, batch);
+    auto a1 = A1.data(), b1 = B1.data(), c1 = C1.data();
+    for (const char* kname : {"wide:m=32:n=32:k=16", "wide:m=16:n=16:k=16"}) {
+        Matrix<ScalarType> C(m, n, batch);
+        auto a = A.data(), b = B.data(), c = C.data();
+        for (int item = 0; item < batch; ++item) {
+            for (int i = 0; i < m * k; ++i) a[item * m * k + i] = a1[i];
+            for (int i = 0; i < k * n; ++i) b[item * k * n + i] = b1[i];
+            for (int i = 0; i < m * n; ++i) c[item * m * n + i] = c1[i];
+        }
+        {
+            const GemmPin force_kernel(kname);
+            (void)gemm(*(this->ctx), A.view(), B.view(), C.view(),
+                 {.alpha = ScalarType(2), .beta = ScalarType(-1)});
+        }
+        this->ctx->wait();
+        c = C.data();
+        int mismatched = 0;
+        for (int item = 1; item < batch; ++item) {
+            for (int i = 0; i < m * n; ++i) {
+                if (std::memcmp(&c[item * m * n + i], &c[i], sizeof(ScalarType)) != 0) {
+                    ++mismatched;
+                }
+            }
+        }
+        EXPECT_EQ(mismatched, 0) << kname;
+    }
+}
+
+// The small batched kernel (max(m, n, k) <= 64, real scalars; a complex or a 65 pin
+// throws -- it used to fall back to Direct). Ragged edges in every bucket, both transposes of each
 // operand, beta = 0 (the C read is skipped) and beta != 0, and batch 67 so the last
 // work-group holds a partial set of matrices.
 // ARMED BREAK (R9): drop `c < n` from small_batched.hh's epilogue guard.
@@ -2159,6 +1638,13 @@ TYPED_TEST(GemmTest, SmallBatchedMatchesVendorOnRaggedShapes) {
     const int shapes[][3] = {{1, 1, 1}, {5, 3, 7}, {8, 8, 8}, {13, 9, 16},
                              {16, 16, 16}, {17, 32, 5}, {31, 29, 23}, {32, 32, 32},
                              {33, 40, 64}, {48, 50, 61}, {64, 64, 64}, {64, 7, 3}};
+    SKIP_UNLESS_NATIVE(*this->ctx);
+    if constexpr (test_utils::is_complex<ScalarType>::value) {
+        ExpectPinRefused<ScalarType>(*this->ctx, "small", 13, 9, 16, Transpose::NoTrans, Transpose::NoTrans);
+        return;
+    }
+    ExpectPinRefused<ScalarType>(*this->ctx, "small", 65, 8, 8, Transpose::NoTrans, Transpose::NoTrans);
+    ExpectPinRefused<ScalarType>(*this->ctx, "small", 8, 8, 65, Transpose::Trans, Transpose::NoTrans);
     for (Transpose ta : ops) {
         for (Transpose tb : ops) {
             for (const auto& s : shapes) {
@@ -2201,6 +1687,7 @@ TYPED_TEST(GemmTest, SmallTiledMatchesVendor) {
 // compared, so a store past the view's rows or columns is caught.
 TYPED_TEST(GemmTest, SmallBatchedStridedSubviewWritesOnlyItsView) {
     using ScalarType = typename TestFixture::ScalarType;
+    if constexpr (test_utils::is_complex<ScalarType>::value) GTEST_SKIP() << "small is real-only (refusal above)";
     RunForcedWideTransposedAgainstTiled16<ScalarType>(
         *(this->ctx), "small", 29, 31, 17, Transpose::NoTrans, Transpose::NoTrans,
         ScalarType(1), /*parent=*/64, /*row_offset=*/3, /*batch_size=*/5);
@@ -2219,7 +1706,7 @@ TYPED_TEST(GemmTest, SmallBatchedStridedSubviewWritesOnlyItsView) {
 TYPED_TEST(GemmTest, WideTransposedNC64Ragged) {
     using ScalarType = typename TestFixture::ScalarType;
     RunForcedWideTransposedAgainstTiled16<ScalarType>(
-        *(this->ctx), "64x64x16wide_nc", 100, 70, 90,
+        *(this->ctx), "wide:m=64:n=64:k=16", 100, 70, 90,
         Transpose::NoTrans, Transpose::ConjTrans, ScalarType(-1));
 }
 
@@ -2230,7 +1717,7 @@ TYPED_TEST(GemmTest, WideTransposedNC64Ragged) {
 TYPED_TEST(GemmTest, WideTransposedNC128x32PotrfTrailingShape) {
     using ScalarType = typename TestFixture::ScalarType;
     RunForcedWideTransposedAgainstTiled16<ScalarType>(
-        *(this->ctx), "128x32x16wide_nc", 200, 32, 96,
+        *(this->ctx), "wide:m=128:n=32:k=16", 200, 32, 96,
         Transpose::NoTrans, Transpose::ConjTrans, ScalarType(1));
 }
 
@@ -2241,7 +1728,7 @@ TYPED_TEST(GemmTest, WideTransposedNC128x32PotrfTrailingShape) {
 TYPED_TEST(GemmTest, WideTransposedNC128x32PotrfDiagonalBlockShape) {
     using ScalarType = typename TestFixture::ScalarType;
     RunForcedWideTransposedAgainstTiled16<ScalarType>(
-        *(this->ctx), "128x32x16wide_nc", 32, 32, 96,
+        *(this->ctx), "wide:m=128:n=32:k=16", 32, 32, 96,
         Transpose::NoTrans, Transpose::ConjTrans, ScalarType(0));
 }
 
@@ -2251,183 +1738,56 @@ TYPED_TEST(GemmTest, WideTransposedNC128x32PotrfDiagonalBlockShape) {
 TYPED_TEST(GemmTest, WideTransposedCN32x128GeqrfPanelShape) {
     using ScalarType = typename TestFixture::ScalarType;
     RunForcedWideTransposedAgainstTiled16<ScalarType>(
-        *(this->ctx), "32x128x16wide_cn", 32, 200, 140,
+        *(this->ctx), "wide:m=32:n=128:k=16", 32, 200, 140,
         Transpose::ConjTrans, Transpose::NoTrans, ScalarType(0));
 }
 
 // ---------------------------------------------------------------------------
-// THE WIDENING AND THE GUARD, which are one line read two ways.
+// THE WIDENING AND THE GUARD, which are one line of can_run read two ways.
 //
-// wide_trans_matches<T> lets ONE ConjTrans instantiation serve a Trans request
-// for a REAL scalar, because conj is the identity there -- that is what makes a
-// single variant able to serve potrf_blocked.cc's kTrailingTransB<T>, which is
+// wide_form<T> lets ONE ConjTrans instantiation serve a Trans request for a
+// REAL scalar, because conj is the identity there -- that is what makes a
+// single config able to serve potrf_blocked.cc's kTrailingTransB<T>, which is
 // ConjTrans for complex and Trans for real. For a COMPLEX scalar the same
 // substitution conjugates an operand that must not be conjugated and returns a
-// plausible wrong matrix, so it must be refused and the call must fall back.
-//
-// One test covers both directions because the two types disagree about what
-// the right ANSWER is, not about what the right BEHAVIOUR is: for real, the
-// kernel runs and must agree with Tiled16; for complex it falls back to Tiled16
-// and agrees trivially. Removing the guard leaves real passing and turns
-// complex red, which is exactly the asymmetry asserted here.
+// plausible wrong matrix, so the pin must be refused (it used to fall back).
+// Removing the guard leaves real passing and turns complex red.
 // ---------------------------------------------------------------------------
 TYPED_TEST(GemmTest, WideTransposedRealTransWideningAndComplexRefusal) {
     using ScalarType = typename TestFixture::ScalarType;
-    RunForcedWideTransposedAgainstTiled16<ScalarType>(
-        *(this->ctx), "128x32x16wide_nc", 100, 32, 96,
-        Transpose::NoTrans, Transpose::Trans, ScalarType(-1));
+    SKIP_UNLESS_NATIVE(*this->ctx);
+    if constexpr (test_utils::is_complex<ScalarType>::value)
+        ExpectPinRefused<ScalarType>(*this->ctx, "wide:m=128:n=32:k=16", 100, 32, 96, Transpose::NoTrans,
+                                     Transpose::Trans);
+    else
+        RunForcedWideTransposedAgainstTiled16<ScalarType>(*(this->ctx), "wide:m=128:n=32:k=16", 100, 32, 96,
+                                                          Transpose::NoTrans, Transpose::Trans, ScalarType(-1));
 }
 
 // The mirror of the above on the A leg: a Trans request against a ConjTrans
 // instantiation of the CN tile.
 TYPED_TEST(GemmTest, WideTransposedRealTransWideningOnALeg) {
     using ScalarType = typename TestFixture::ScalarType;
-    RunForcedWideTransposedAgainstTiled16<ScalarType>(
-        *(this->ctx), "32x128x16wide_cn", 32, 100, 90,
-        Transpose::Trans, Transpose::NoTrans, ScalarType(-1));
+    SKIP_UNLESS_NATIVE(*this->ctx);
+    if constexpr (test_utils::is_complex<ScalarType>::value)
+        ExpectPinRefused<ScalarType>(*this->ctx, "wide:m=32:n=128:k=16", 32, 100, 90, Transpose::Trans,
+                                     Transpose::NoTrans);
+    else
+        RunForcedWideTransposedAgainstTiled16<ScalarType>(*(this->ctx), "wide:m=32:n=128:k=16", 32, 100, 90,
+                                                          Transpose::Trans, Transpose::NoTrans, ScalarType(-1));
 }
 
-// A NoTrans request against a transposing instantiation must fall back for
-// EVERY type, real included: the widening is Trans <-> ConjTrans only, and an
-// untransposed operand read as transposed is wrong for a real scalar too.
+// A NoTrans request against a config with only transposing instantiations is
+// refused for EVERY type, real included: the widening is Trans <-> ConjTrans
+// only. A spelling names a config, and the call's form picks the instantiation,
+// so on NN it runs the NN tile.
 TYPED_TEST(GemmTest, WideTransposedRefusesNoTransRequest) {
     using ScalarType = typename TestFixture::ScalarType;
-    RunForcedWideTransposedAgainstTiled16<ScalarType>(
-        *(this->ctx), "64x64x16wide_cn", 100, 70, 90,
-        Transpose::NoTrans, Transpose::NoTrans, ScalarType(-1));
-}
-
-// ---------------------------------------------------------------------------
-// THE SELECTOR WINDOW, and its edges.
-//
-// Pinned because a selector regression is otherwise completely invisible:
-// nothing else in ctest asserts on kernel choice, and route_diff.sh records
-// resolver Routes, not KernelVariants. Every case below is a cell that was
-// actually measured -- the admitted ones won, the refused ones lost -- so this
-// test is the grid's boundary written down. docs/perf/gemm.md#wide-scalar-transposed-tiles
-//
-// SelectSyclKernelVariantForTest above is hard-wired to float and so cannot ask
-// this question of the types that motivate the family at all. This one is
-// templated; the two coexist rather than the float one being replaced, because
-// every existing dispatch-policy assertion is float and rewriting them is not
-// this change's business.
-// ---------------------------------------------------------------------------
-namespace {
-
-template <typename T>
-batchlas::sycl_gemm::KernelVariant SelectSyclKernelVariantForTestT(int m,
-                                                                   int n,
-                                                                   int k,
-                                                                   Transpose transA,
-                                                                   Transpose transB,
-                                                                   int batch = 64) {
-    const int a_rows = transA == Transpose::NoTrans ? m : k;
-    const int a_cols = transA == Transpose::NoTrans ? k : m;
-    const int b_rows = transB == Transpose::NoTrans ? k : n;
-    const int b_cols = transB == Transpose::NoTrans ? n : k;
-
-    Matrix<T> A(a_rows, a_cols, batch, 0);
-    Matrix<T> B(b_rows, b_cols, batch, 0);
-    Matrix<T> C(m, n, batch, 0);
-
-    return batchlas::sycl_gemm::select_kernel_variant<T>(A.view(), B.view(), C.view(),
-                                                         transA, transB);
-}
-
-}  // namespace
-
-namespace {
-using batchlas::sycl_gemm::KernelVariant;
-constexpr Transpose kN = Transpose::NoTrans;
-constexpr Transpose kC = Transpose::ConjTrans;
-}  // namespace
-
-TEST(GemmDispatchPolicyTest, ComplexTransposedTakesTheWideTransposedTile) {
-    // The potrf trailing update and the geqrf panel update. Both types, because
-    // the selector's arm is Tiled16 in both and both beat it.
-    EXPECT_EQ(SelectSyclKernelVariantForTestT<std::complex<float>>(256, 32, 96, kN, kC, 1024),
-              KernelVariant::Tiled128x32RegisterK16WideNC);
-    EXPECT_EQ(SelectSyclKernelVariantForTestT<std::complex<double>>(256, 32, 96, kN, kC, 1024),
-              KernelVariant::Tiled128x32RegisterK16WideNC);
-    EXPECT_EQ(SelectSyclKernelVariantForTestT<std::complex<float>>(32, 256, 512, kC, kN, 1024),
-              KernelVariant::Tiled32x128RegisterK16WideCN);
-    EXPECT_EQ(SelectSyclKernelVariantForTestT<std::complex<double>>(32, 256, 512, kC, kN, 1024),
-              KernelVariant::Tiled32x128RegisterK16WideCN);
-    // RAGGED against the macro tile, which is what the blocked drivers issue and
-    // what the first grid missed entirely by sweeping only exact multiples. The
-    // tile still beats Tiled16 here (1.68-3.52x); it is only against the VENDOR
-    // that raggedness destroys the margin.
-    EXPECT_EQ(SelectSyclKernelVariantForTestT<std::complex<double>>(32, 224, 256, kC, kN, 1024),
-              KernelVariant::Tiled32x128RegisterK16WideCN);
-    EXPECT_EQ(SelectSyclKernelVariantForTestT<std::complex<float>>(200, 32, 96, kN, kC, 1024),
-              KernelVariant::Tiled128x32RegisterK16WideNC);
-}
-
-TEST(GemmDispatchPolicyTest, WideTransposedSelectorRefusesEveryMeasuredLoser) {
-    // An UNDERFILLED macro tile, which is where the measured losses against
-    // Tiled16 are: the potrf W x W fold (m = 32 against a 128-row tile) at
-    // 0.46-0.90x, and the geqrf n = 64 cell at batch 64 (0.87x).
-    //
-    // n = 16 is refused for a DIFFERENT reason and is a known, recorded cost:
-    // it measured 1.79x of Tiled16, a win, but on a single cell, and it is
-    // exactly the shape potrf complex<double> issues (W = 16). Admitting a
-    // one-cell window is what this campaign has already been burned by.
-    EXPECT_EQ(SelectSyclKernelVariantForTestT<std::complex<double>>(32, 32, 96, kN, kC, 1024),
-              KernelVariant::Tiled16);
-    EXPECT_EQ(SelectSyclKernelVariantForTestT<std::complex<double>>(512, 16, 64, kN, kC, 1024),
-              KernelVariant::Tiled16);
-    EXPECT_EQ(SelectSyclKernelVariantForTestT<std::complex<double>>(32, 64, 512, kC, kN, 1024),
-              KernelVariant::Tiled16);
-    // k = 1: 0.56x of Tiled16, the rank-1 exception the double window carries too.
-    EXPECT_EQ(SelectSyclKernelVariantForTestT<std::complex<double>>(512, 32, 1, kN, kC, 1024),
-              KernelVariant::Tiled16);
-    // Too few CTAs to fill the machine.
-    EXPECT_EQ(SelectSyclKernelVariantForTestT<std::complex<double>>(128, 32, 96, kN, kC, 8),
-              KernelVariant::Tiled16);
-    // Trans, not ConjTrans: the instantiations are ConjTrans and
-    // wide_trans_matches refuses to substitute for a COMPLEX scalar, so
-    // admitting it would name a kernel that then silently falls back.
-    EXPECT_EQ(SelectSyclKernelVariantForTestT<std::complex<double>>(
-                  256, 32, 96, kN, Transpose::Trans, 1024),
-              KernelVariant::Tiled16);
-    // REAL scalars are excluded on measurement: on these cells the tile runs at
-    // 0.92-1.00x of Tiled16, which is already 1.11x of cuBLAS there.
-    EXPECT_EQ(SelectSyclKernelVariantForTestT<double>(256, 32, 96, kN, kC, 1024),
-              KernelVariant::Tiled16);
-    EXPECT_EQ(SelectSyclKernelVariantForTestT<float>(256, 32, 96, kN, kC, 1024),
-              KernelVariant::Tiled16);
-}
-
-// complex stays on the VENDOR route, and that is a measured decision, not an
-// omission. A complex<double> window on exactly these tiles was written,
-// measured and withdrawn: it cleared R8's 1.11x bar only where n was an exact
-// multiple of the macro tile, and at the ragged n the blocked drivers actually
-// issue (224, 192, 160, ...) it ran at 0.64-0.99x of cuBLAS -- with an
-// end-to-end geqrf complex<double> A/B of 0.971x.
-// evidence: docs/perf/gemm.md#wide-scalar-transposed-tiles
-TEST(GemmDispatchPolicyTest, ComplexTransposedStaysOnTheVendorRoute) {
-    batchlas::dispatch::OpShape s;
-    s.op = batchlas::dispatch::Op::gemm;
-    s.is_gpu = true;
-    s.batch = 1024;
-    s.k = 96;
-    const batchlas::dispatch::Route native{batchlas::dispatch::Origin::Native,
-                                           batchlas::dispatch::Algorithm::RegisterTiled};
-    for (auto dims : {std::pair<int64_t, int64_t>{256, 32},
-                      std::pair<int64_t, int64_t>{32, 256},
-                      std::pair<int64_t, int64_t>{1024, 128}}) {
-        for (auto forms : {std::pair<Transpose, Transpose>{kN, kC},
-                           std::pair<Transpose, Transpose>{kC, kN}}) {
-            s.m = dims.first; s.n = dims.second;
-            s.transA = forms.first; s.transB = forms.second;
-            EXPECT_FALSE((batchlas::dispatch::RouteTable<batchlas::dispatch::Op::gemm,
-                                                         std::complex<float>>::preferred(native, s)))
-                << s.describe();
-            EXPECT_FALSE((batchlas::dispatch::RouteTable<batchlas::dispatch::Op::gemm,
-                                                         std::complex<double>>::preferred(native, s)))
-                << s.describe();
-        }
-    }
+    SKIP_UNLESS_NATIVE(*this->ctx);
+    ExpectPinRefused<ScalarType>(*this->ctx, "wide:m=128:n=32:k=16", 100, 70, 90, Transpose::NoTrans, Transpose::NoTrans);
+    ExpectPinRefused<ScalarType>(*this->ctx, "wide:m=32:n=128:k=16", 100, 70, 90, Transpose::NoTrans, Transpose::NoTrans);
+    RunForcedWideTransposedAgainstTiled16<ScalarType>(*(this->ctx), "wide:m=64:n=64:k=16", 100, 70, 90,
+                                                      Transpose::NoTrans, Transpose::NoTrans, ScalarType(-1));
 }
 
 int main(int argc, char **argv) {

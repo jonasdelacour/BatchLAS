@@ -15,6 +15,11 @@
 # tests/known-failures.txt. Only these two arguments involve a build at all;
 # everything above still runs on a bare checkout. The documentation site is
 # built into build/docs when Doxygen 1.18+ is available, and skipped otherwise.
+#
+# BATCHLAS_BUILD_DIR=build .github/ci/run_local_checks.sh
+#                                                  # ...plus the device-call scan
+# of that build's NVPTX images (scripts/check_device_calls.py). CI has no SYCL
+# build, so this too runs only locally; it skips when the build has no CUDA target.
 set -eu
 
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -42,6 +47,10 @@ run python3 "$here/check_evidence_anchors.py"
 # Checks the INDEX, so it catches a raw benchmark file before it is committed, not after.
 run python3 "$here/check_lfs_pointers.py" --self-test
 run python3 "$here/check_lfs_pointers.py"
+# Stale tuned tables are a warning (flat-kernel-selection.md §6.5): the check always exits 0;
+# only its self-test can fail.
+run python3 "$here/check_tuned_tables.py" --self-test
+run python3 "$here/check_tuned_tables.py"
 # Plans and write-ups outside docs/ are what the documentation site replaced.
 run python3 "$here/check_markdown_locations.py" --self-test
 run python3 "$here/check_markdown_locations.py"
@@ -65,6 +74,15 @@ else
 fi
 if [ "$#" -gt 0 ]; then
     run python3 "$here/check_exported_package.py" --package "$1"
+fi
+if [ -n "${BATCHLAS_BUILD_DIR:-}" ]; then
+    printf '\n== device-call scan of %s\n' "$BATCHLAS_BUILD_DIR"
+    _rc=0
+    python3 "$here/../../scripts/check_device_calls.py" "$BATCHLAS_BUILD_DIR" || _rc=$?
+    # 77 = nothing to scan (CPU-only build or no cuobjdump), not a failure.
+    if [ "$_rc" -ne 0 ] && [ "$_rc" -ne 77 ]; then
+        status=1
+    fi
 fi
 if [ "$#" -gt 1 ]; then
     # consumer_package_tests is 'slow'-labelled, so the normal local loop --

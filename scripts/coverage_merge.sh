@@ -2,7 +2,7 @@
 #
 # Merge the per-process coverage shards into one table.
 #
-# dispatch/coverage.cc writes $BATCHLAS_COVERAGE_OUT.<pid>, one file per
+# src/select/coverage.cc writes $BATCHLAS_COVERAGE_OUT.<pid>, one file per
 # process, because a ctest run is 53 separate binaries and a single shared file
 # meant each one truncated the last (see the comment on emit()). This collapses
 # the shards.

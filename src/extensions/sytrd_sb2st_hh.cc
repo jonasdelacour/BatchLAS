@@ -674,6 +674,8 @@ namespace {
 // means "no opinion"; every unswept cell and every real type returns 0, so real
 // scalars take byte-for-byte the path they took before. Only cfloat n == 512 was
 // measured, so the bucket is an equality; do not stretch it across n.
+// internal::is_complex rather than a base_type/is_same_v dance (the idiom public
+// headers use, where is_complex is not visible): here it is visible (math-helpers.hh).
 // evidence: docs/perf/sytrd.md#sytrd-sb2st-per-type-wave-geometry
 template <typename T>
 constexpr int32_t sb2st_back_tile_for(int32_t n) {

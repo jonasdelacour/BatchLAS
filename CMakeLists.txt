@@ -22,6 +22,7 @@ endif()
 
 if(BATCHLAS_BUILD_BENCHMARKS)
     add_subdirectory(benchmarks)
+    add_subdirectory(tools/tune)
     if(BATCHLAS_ENABLE_TUNING)
         batchlas_enable_tuning_targets()
     endif()

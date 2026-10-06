@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# NN and transposed sweeps of the 128x32 register family, pinned by BATCHLAS_GEMM_ROUTE spelling
+# (src/ops/gemm/choice.hh). The old s2u1 name is an alias of k32 and s2u2 was deleted in P3.4.
 
 build_dir=${1:-build}
 backend=${BATCHLAS_BENCH_BACKEND:-CUDA}
@@ -18,10 +20,8 @@ if [ ! -x "$transpose_bench" ]; then
 fi
 
 variants=(
-    reg128x32k16
-    reg128x32k32
-    reg128x32k32s2u1
-    reg128x32k32s2u2
+    "reg:m=128:n=32:k=16:u=1"
+    "reg:m=128:n=32:k=32:u=1"
 )
 
 nn_cases=(
@@ -40,18 +40,16 @@ for variant in "${variants[@]}"; do
     echo
     echo "=== $variant : NN sweep ==="
     for dims in "${nn_cases[@]}"; do
-        echo "BATCHLAS_GEMM_VARIANT=sycl BATCHLAS_GEMM_SYCL_KERNEL=$variant $nn_bench $dims --backend=$backend --type=$scalar_type --warmup=5"
-        BATCHLAS_GEMM_VARIANT=sycl \
-        BATCHLAS_GEMM_SYCL_KERNEL="$variant" \
+        echo "BATCHLAS_GEMM_ROUTE=$variant $nn_bench $dims --backend=$backend --type=$scalar_type --warmup=5"
+        BATCHLAS_GEMM_ROUTE="$variant" \
         "$nn_bench" $dims --backend="$backend" --type="$scalar_type" --warmup=5
     done
 
     echo
     echo "=== $variant : transpose sweep ==="
     for dims in "${transpose_cases[@]}"; do
-        echo "BATCHLAS_GEMM_VARIANT=sycl BATCHLAS_GEMM_SYCL_KERNEL=$variant $transpose_bench $dims --backend=$backend --type=$scalar_type --warmup=5"
-        BATCHLAS_GEMM_VARIANT=sycl \
-        BATCHLAS_GEMM_SYCL_KERNEL="$variant" \
+        echo "BATCHLAS_GEMM_ROUTE=$variant $transpose_bench $dims --backend=$backend --type=$scalar_type --warmup=5"
+        BATCHLAS_GEMM_ROUTE="$variant" \
         "$transpose_bench" $dims --backend="$backend" --type="$scalar_type" --warmup=5
     done
 done

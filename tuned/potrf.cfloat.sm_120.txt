@@ -1,0 +1,147 @@
+# op=potrf dtype=cfloat device=sm_120 batchlas=a1063892 kernels=unknown date=2026-10-04
+# source=benchmarks/results/routing/sm120_potrf_sweep.jsonl + benchmarks/results/routing/sm120_potrf_sweep_edges.jsonl (converted, passes 1+2)
+# keys: uplo:exact n:log:3 batch:log
+uplo=L n=1 batch=128 | tiny 0.007892 | lpanel:panel=8 0.007717 | cta 0.008778 | blocked 0.01241 | vendor 0.01431
+uplo=L n=1 batch=512 | lpanel:panel=8 0.007751 | tiny 0.008017 | cta 0.008673 | blocked 0.01261 | vendor 0.01444
+uplo=L n=1 batch=2048 | lpanel:panel=8 0.007617 | tiny 0.007857 | cta 0.008954 | blocked 0.01292 | vendor 0.01620
+uplo=L n=1 batch=8192 | tiny 0.008683 | lpanel:panel=8 0.009409 | cta 0.01424 | vendor 0.02156 | blocked 0.02227
+uplo=L n=1 batch=32768 | tiny 0.01149 | lpanel:panel=8 0.01601 | cta 0.03302 | vendor 0.04051 | blocked 0.05389
+uplo=L n=2 batch=128 | tiny 0.008007 | lpanel:panel=8 0.007797 | cta 0.009288 | blocked 0.01289 | vendor 0.01462
+uplo=L n=2 batch=512 | tiny 0.007847 | lpanel:panel=8 0.007686 | cta 0.009164 | blocked 0.01317 | vendor 0.01441
+uplo=L n=2 batch=2048 | tiny 0.008282 | lpanel:panel=8 0.008408 | cta 0.009975 | blocked 0.01449 | vendor 0.01717
+uplo=L n=2 batch=8192 | tiny 0.008483 | lpanel:panel=8 0.01063 | cta 0.01617 | vendor 0.02360 | blocked 0.02425
+uplo=L n=2 batch=32768 | tiny 0.01185 | lpanel:panel=8 0.01929 | cta 0.04063 | vendor 0.04940 | blocked 0.06203
+uplo=L n=3 batch=128 | tiny 0.008092 | lpanel:panel=8 0.008408 | cta 0.009890 | blocked 0.01380 | vendor 0.01487
+uplo=L n=3 batch=512 | tiny 0.007962 | lpanel:panel=8 0.008422 | cta 0.009799 | blocked 0.01341 | vendor 0.01489   # noisy
+uplo=L n=3 batch=2048 | tiny 0.008212 | lpanel:panel=8 0.008778 | cta 0.01045 | blocked 0.01519 | vendor 0.01773
+uplo=L n=3 batch=8192 | tiny 0.008708 | lpanel:panel=8 0.01211 | cta 0.01811 | blocked 0.02600 | vendor 0.02619
+uplo=L n=3 batch=32768 | tiny 0.01197 | lpanel:panel=8 0.02507 | cta 0.04759 | vendor 0.05823 | blocked 0.06876
+uplo=L n=4 batch=128 | tiny 0.008197 | lpanel:panel=8 0.009049 | cta 0.01071 | blocked 0.01436 | vendor 0.01500
+uplo=L n=4 batch=512 | tiny 0.008477 | lpanel:panel=8 0.009049 | cta 0.01054 | blocked 0.01448 | vendor 0.01564
+uplo=L n=4 batch=2048 | tiny 0.008478 | lpanel:panel=8 0.009614 | cta 0.01122 | blocked 0.01580 | vendor 0.01818
+uplo=L n=4 batch=8192 | tiny 0.008833 | lpanel:panel=8 0.01359 | cta 0.01988 | blocked 0.02791 | vendor 0.02799
+uplo=L n=4 batch=32768 | tiny 0.01260 | lpanel:panel=8 0.03209 | cta 0.05499 | vendor 0.06609 | blocked 0.07672
+uplo=L n=6 batch=128 | tiny 0.008703 | lpanel:panel=8 0.01050 | cta 0.01169 | blocked 0.01521 | vendor 0.01585
+uplo=L n=6 batch=512 | tiny 0.008768 | lpanel:panel=8 0.01073 | cta 0.01169 | blocked 0.01553 | vendor 0.01604
+uplo=L n=6 batch=2048 | tiny 0.008738 | lpanel:panel=8 0.01124 | cta 0.01240 | blocked 0.01675 | vendor 0.01895
+uplo=L n=6 batch=8192 | tiny 0.009524 | lpanel:panel=8 0.01831 | cta 0.02347 | blocked 0.03148 | vendor 0.03299
+uplo=L n=6 batch=32768 | tiny 0.01432 | lpanel:panel=8 0.04747 | cta 0.06758 | vendor 0.08329 | blocked 0.08974
+uplo=L n=8 batch=128 | tiny 0.008613 | lpanel:panel=8 0.01198 | cta 0.01244 | vendor 0.01593 | blocked 0.01597
+uplo=L n=8 batch=512 | tiny 0.008723 | lpanel:panel=8 0.01187 | cta 0.01252 | blocked 0.01637 | vendor 0.01655
+uplo=L n=8 batch=2048 | tiny 0.008924 | lpanel:panel=8 0.01335 | cta 0.01346 | blocked 0.01818 | vendor 0.02059
+uplo=L n=8 batch=8192 | tiny 0.009669 | lpanel:panel=8 0.02336 | cta 0.02617 | blocked 0.03417 | vendor 0.03742
+uplo=L n=8 batch=32768 | tiny 0.01518 | lpanel:panel=8 0.06570 | cta 0.07718 | blocked 0.09890 | vendor 0.09938
+uplo=L n=12 batch=128 | tiny 0.01134 | lpanel:panel=8 0.01481 | vendor 0.01756 | cta 0.01905 | blocked 0.02279
+uplo=L n=12 batch=512 | tiny 0.01142 | lpanel:panel=8 0.01481 | vendor 0.01754 | cta 0.01922 | blocked 0.02323
+uplo=L n=12 batch=2048 | tiny 0.01174 | lpanel:panel=8 0.01640 | cta 0.02138 | vendor 0.02277 | blocked 0.02610
+uplo=L n=12 batch=8192 | tiny 0.01862 | lpanel:panel=8 0.03183 | vendor 0.04579 | cta 0.05217 | blocked 0.06016
+uplo=L n=12 batch=32768 | tiny 0.04045 | lpanel:panel=8 0.1012 | vendor 0.1342 | cta 0.1778 | blocked 0.1999
+uplo=L n=16 batch=128 | tiny 0.01162 | lpanel:panel=8 0.01755 | vendor 0.01840 | cta 0.02094 | blocked 0.02478
+uplo=L n=16 batch=512 | tiny 0.01147 | lpanel:panel=8 0.01761 | vendor 0.01827 | cta 0.02085 | blocked 0.02455
+uplo=L n=16 batch=2048 | tiny 0.01209 | lpanel:panel=8 0.02010 | cta 0.02375 | vendor 0.02520 | blocked 0.02819
+uplo=L n=16 batch=8192 | tiny 0.02052 | lpanel:panel=8 0.04085 | vendor 0.05499 | cta 0.05884 | blocked 0.06681
+uplo=L n=16 batch=32768 | tiny 0.05383 | lpanel:panel=8 0.1541 | vendor 0.1708 | cta 0.2216 | blocked 0.2397
+uplo=L n=20 batch=128 | tiny 0.01991 | lpanel:panel=8 0.02091 | vendor 0.02454 | cta 0.02779 | blocked 0.03124
+uplo=L n=20 batch=512 | tiny 0.02010 | lpanel:panel=8 0.02099 | vendor 0.02665 | cta 0.02774 | blocked 0.03146
+uplo=L n=20 batch=2048 | tiny 0.02200 | lpanel:panel=8 0.02508 | cta 0.03190 | blocked 0.03634 | vendor 0.04568
+uplo=L n=20 batch=8192 | lpanel:panel=8 0.05378 | tiny 0.07102 | cta 0.08647 | blocked 0.09462 | vendor 0.1257
+uplo=L n=20 batch=32768 | lpanel:panel=8 0.2356 | tiny 0.3118 | cta 0.3625 | blocked 0.3870 | vendor 0.4887
+uplo=L n=24 batch=128 | tiny 0.02016 | lpanel:panel=8 0.02371 | vendor 0.02589 | cta 0.02917 | blocked 0.03313
+uplo=L n=24 batch=512 | tiny 0.02047 | lpanel:panel=8 0.02408 | vendor 0.02791 | cta 0.02934 | blocked 0.03324
+uplo=L n=24 batch=2048 | tiny 0.02273 | lpanel:panel=8 0.02850 | cta 0.03378 | blocked 0.03856 | vendor 0.04784
+uplo=L n=24 batch=8192 | lpanel:panel=8 0.06326 | tiny 0.07286 | cta 0.09283 | blocked 0.1008 | vendor 0.1349
+uplo=L n=24 batch=32768 | lpanel:panel=8 0.3013 | tiny 0.3611 | cta 0.4304 | blocked 0.4499 | vendor 0.5604
+uplo=L n=28 batch=128 | tiny 0.02052 | vendor 0.02667 | lpanel:panel=8 0.02825 | cta 0.03613 | blocked 0.03987
+uplo=L n=28 batch=512 | tiny 0.02089 | lpanel:panel=8 0.02819 | vendor 0.02868 | cta 0.03642 | blocked 0.04035
+uplo=L n=28 batch=2048 | tiny 0.02357 | lpanel:panel=8 0.03456 | cta 0.04292 | blocked 0.04719 | vendor 0.05040
+uplo=L n=28 batch=8192 | tiny 0.07746 | lpanel:panel=8 0.08457 | cta 0.1444 | vendor 0.1456 | blocked 0.1520
+uplo=L n=28 batch=32768 | lpanel:panel=8 0.4015 | tiny 0.4156 | cta 0.6313 | blocked 0.6531 | vendor 0.6770
+uplo=L n=32 batch=128 | tiny 0.02034 | vendor 0.02759 | lpanel:panel=8 0.03098 | cta 0.03898 | blocked 0.04243
+uplo=L n=32 batch=512 | tiny 0.02119 | vendor 0.03008 | lpanel:panel=8 0.03123 | cta 0.03941 | blocked 0.04358
+uplo=L n=32 batch=2048 | tiny 0.02406 | lpanel:panel=8 0.03777 | vendor 0.05278 | cta 0.07441 | blocked 0.07915
+uplo=L n=32 batch=8192 | tiny 0.08893 | lpanel:panel=8 0.1054 | vendor 0.1594 | cta 0.1888 | blocked 0.1960
+uplo=L n=32 batch=32768 | tiny 0.4431 | lpanel:panel=8 0.4459 | vendor 0.6894 | cta 0.8360 | blocked 0.8562
+uplo=L n=36 batch=128 | lpanel:panel=8 0.03380 | vendor 0.03500 | cta 0.05441 | blocked 0.08144
+uplo=L n=36 batch=512 | lpanel:panel=8 0.03844 | vendor 0.04046 | cta 0.05483 | blocked 0.08911
+uplo=L n=36 batch=2048 | lpanel:panel=8 0.05655 | vendor 0.08252 | cta 0.1083 | blocked 0.1595
+uplo=L n=36 batch=8192 | lpanel:panel=8 0.2163 | vendor 0.2778 | cta 0.3226 | blocked 0.4824
+uplo=L n=36 batch=32768 | lpanel:panel=8 0.9152 | vendor 1.345 | cta 1.440 | blocked 1.937
+uplo=L n=40 batch=128 | vendor 0.03605 | lpanel:panel=8 0.03718 | cta 0.05904 | blocked 0.08374
+uplo=L n=40 batch=512 | lpanel:panel=8 0.04127 | vendor 0.04117 | cta 0.05905 | blocked 0.09005
+uplo=L n=40 batch=2048 | lpanel:panel=8 0.06046 | vendor 0.08527 | cta 0.1170 | blocked 0.1373
+uplo=L n=40 batch=8192 | lpanel:panel=8 0.2472 | vendor 0.3028 | cta 0.4265 | blocked 0.4951
+uplo=L n=40 batch=32768 | lpanel:panel=8 1.030 | vendor 1.488 | cta 1.752 | blocked 2.036
+uplo=L n=48 batch=128 | vendor 0.03756 | lpanel:panel=8 0.04569 | cta 0.05452 | blocked 0.09089
+uplo=L n=48 batch=512 | vendor 0.04394 | lpanel:panel=8 0.05101 | cta 0.05869 | blocked 0.09431
+uplo=L n=48 batch=2048 | lpanel:panel=8 0.07315 | vendor 0.09028 | blocked 0.1516 | cta 0.1579
+uplo=L n=48 batch=8192 | lpanel:panel=8 0.3293 | vendor 0.3531 | blocked 0.5666 | cta 0.5733
+uplo=L n=48 batch=32768 | lpanel:panel=8 1.275 | vendor 1.682 | cta 2.286 | blocked 2.290
+uplo=L n=56 batch=128 | vendor 0.04664 | lpanel:panel=8 0.05646 | blocked 0.09894
+uplo=L n=56 batch=512 | vendor 0.05956 | lpanel:panel=8 0.06176 | blocked 0.1046
+uplo=L n=56 batch=2048 | lpanel:panel=8 0.09196 | vendor 0.1389 | blocked 0.1707
+uplo=L n=56 batch=8192 | lpanel:panel=8 0.4083 | vendor 0.5918 | blocked 0.6481
+uplo=L n=56 batch=32768 | lpanel:panel=8 1.581 | blocked 2.739 | vendor 2.914
+uplo=L n=64 batch=128 | vendor 0.04906 | lpanel:panel=8 0.06610 | blocked 0.1101
+uplo=L n=64 batch=512 | vendor 0.06184 | lpanel:panel=8 0.07250 | blocked 0.1178
+uplo=L n=64 batch=2048 | lpanel:panel=8 0.1165 | vendor 0.1511 | blocked 0.2344
+uplo=L n=64 batch=8192 | lpanel:panel=8 0.4714 | vendor 0.6184 | blocked 0.7881
+uplo=L n=64 batch=32768 | lpanel:panel=8 1.913 | vendor 3.142 | blocked 3.466
+uplo=L n=80 batch=128 | vendor 0.06506 | lpanel:panel=8 0.08450 | blocked 0.1662
+uplo=L n=80 batch=512 | vendor 0.08566 | lpanel:panel=8 0.09908 | blocked 0.1839
+uplo=L n=80 batch=2048 | vendor 0.2475 | lpanel:panel=8 0.2631 | blocked 0.3858   # noisy
+uplo=L n=80 batch=8192 | lpanel:panel=8 0.9380 | vendor 1.148 | blocked 1.521
+uplo=L n=80 batch=32768 | lpanel:panel=8 3.708 | vendor 5.499 | blocked 6.270
+uplo=L n=96 batch=128 | vendor 0.07708 | lpanel:panel=8 0.1113 | blocked 0.1836
+uplo=L n=96 batch=512 | vendor 0.1047 | lpanel:panel=8 0.1273 | blocked 0.2154
+uplo=L n=96 batch=2048 | vendor 0.3306 | lpanel:panel=8 0.3481 | blocked 0.5053
+uplo=L n=96 batch=8192 | lpanel:panel=8 1.213 | vendor 1.635 | blocked 2.005
+uplo=L n=96 batch=32768 | lpanel:panel=8 4.818 | vendor 7.498 | blocked 8.302
+uplo=L n=112 batch=128 | vendor 0.09123 | lpanel:panel=8 0.1462 | blocked 0.2502
+uplo=L n=112 batch=512 | vendor 0.1352 | lpanel:panel=8 0.1676 | blocked 0.2945
+uplo=L n=112 batch=2048 | vendor 0.4693 | lpanel:panel=8 0.5150 | blocked 0.7589
+uplo=L n=112 batch=8192 | lpanel:panel=8 2.039 | vendor 2.512 | blocked 3.149
+uplo=L n=112 batch=32768 | lpanel:panel=8 7.751 | vendor 10.76 | blocked 12.56
+uplo=L n=128 batch=128 | vendor 0.1058 | lpanel:panel=8 0.1810 | blocked 0.2687
+uplo=L n=128 batch=512 | vendor 0.1652 | lpanel:panel=8 0.2072 | blocked 0.3485
+uplo=L n=128 batch=2048 | vendor 0.5817 | lpanel:panel=8 0.6214 | blocked 0.9167
+uplo=L n=128 batch=8192 | lpanel:panel=8 2.477 | vendor 3.176 | blocked 3.804
+uplo=L n=128 batch=32768 | lpanel:panel=8 9.346 | vendor 13.65 | blocked 15.13
+uplo=L n=160 batch=128 | vendor 0.1445 | lpanel:panel=8 0.2686 | blocked 0.3668
+uplo=L n=160 batch=512 | vendor 0.2770 | lpanel:panel=8 0.3375 | blocked 0.5190
+uplo=L n=160 batch=2048 | vendor 1.123 | lpanel:panel=8 1.166 | blocked 1.627
+uplo=L n=160 batch=8192 | lpanel:panel=8 4.569 | vendor 6.079 | blocked 6.759
+uplo=L n=192 batch=128 | vendor 0.1831 | lpanel:panel=8 0.3693 | blocked 0.4758
+uplo=L n=192 batch=512 | vendor 0.4060 | lpanel:panel=8 0.5053 | blocked 0.7384
+uplo=L n=192 batch=2048 | lpanel:panel=8 1.721 | vendor 1.781 | blocked 2.571
+uplo=L n=192 batch=8192 | lpanel:panel=8 6.485 | vendor 9.322 | blocked 10.44
+uplo=L n=224 batch=128 | vendor 0.2344 | lpanel:panel=8 0.4881 | blocked 0.6075
+uplo=L n=224 batch=512 | vendor 0.5959 | lpanel:panel=8 0.7042 | blocked 1.043
+uplo=L n=224 batch=2048 | lpanel:panel=8 2.753 | vendor 2.841 | blocked 3.787
+uplo=L n=224 batch=8192 | lpanel:panel=8 10.01 | vendor 13.99 | blocked 15.03
+uplo=L n=256 batch=128 | vendor 0.2868 | lpanel:panel=8 0.6297 | blocked 0.7636
+uplo=L n=256 batch=512 | vendor 0.7761 | lpanel:panel=8 0.9388 | blocked 1.386
+uplo=L n=256 batch=2048 | lpanel:panel=8 3.683 | vendor 3.838 | blocked 5.166
+uplo=L n=256 batch=8192 | lpanel:panel=8 13.36 | vendor 18.48 | blocked 20.49
+uplo=L n=288 batch=128 | vendor 0.3639 | blocked 0.6903 | lpanel:panel=8 0.8086
+uplo=L n=288 batch=512 | vendor 1.134 | lpanel:panel=8 1.769 | blocked 1.835
+uplo=L n=288 batch=2048 | lpanel:panel=8 5.665 | vendor 5.529 | blocked 7.613
+uplo=L n=320 batch=128 | vendor 0.4335 | blocked 0.8722 | lpanel:panel=8 0.9944
+uplo=L n=320 batch=512 | vendor 1.451 | lpanel:panel=8 2.215 | blocked 2.235
+uplo=L n=320 batch=2048 | lpanel:panel=8 7.082 | vendor 7.345 | blocked 9.123
+uplo=L n=384 batch=128 | vendor 0.6369 | blocked 1.118
+uplo=L n=384 batch=512 | vendor 2.395 | blocked 3.385
+uplo=L n=384 batch=2048 | vendor 12.37 | blocked 14.82
+uplo=L n=448 batch=128 | vendor 0.9154 | blocked 1.491
+uplo=L n=448 batch=512 | vendor 3.661 | blocked 4.694
+uplo=L n=448 batch=2048 | vendor 19.07 | blocked 20.41
+uplo=L n=512 batch=128 | vendor 1.261 | blocked 1.958
+uplo=L n=512 batch=512 | vendor 5.034 | blocked 6.258
+uplo=L n=512 batch=2048 | vendor 27.03 | blocked 28.73
+uplo=L n=640 batch=128 | vendor 2.388 | blocked 3.175
+uplo=L n=640 batch=512 | vendor 9.760 | blocked 11.21
+uplo=L n=768 batch=128 | vendor 3.980 | blocked 4.837
+uplo=L n=768 batch=512 | vendor 16.21 | blocked 18.06
+uplo=L n=1024 batch=128 | vendor 8.217 | blocked 9.560
+uplo=L n=1024 batch=512 | vendor 36.06 | blocked 39.36
+uplo=L n=1280 batch=128 | vendor 15.74 | blocked 17.02
+uplo=L n=1536 batch=128 | vendor 26.32 | blocked 27.69   # noisy

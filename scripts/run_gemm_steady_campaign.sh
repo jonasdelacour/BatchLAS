@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# One gemm_steady_benchmark CSV per pinned gemm choice. Pins are BATCHLAS_GEMM_ROUTE spellings
+# (src/ops/gemm/choice.hh): `vendor`, `native` (the best native entry of the table), or a
+# family spelling. A spelling whose form is not instantiated throws instead of timing Auto.
+# The P3.4-deleted s2_u2 and persistent cases are gone with their kernels.
 
 build_dir=${1:-build}
 output_prefix=${2:-output/gemm_steady_phase1_cuda}
@@ -20,11 +24,11 @@ fi
 output_dir=$(dirname "$output_prefix")
 mkdir -p "$output_dir"
 
+# run_case LABEL ROUTE [m n k batch]
 run_case() {
     label=$1
-    variant_mode=$2
-    forced_kernel=$3
-    experimental=$4
+    route=$2
+    shift 2
 
     csv_path="${output_prefix}_${label}.csv"
     txt_path="${output_prefix}_${label}.txt"
@@ -32,98 +36,9 @@ run_case() {
     echo
     echo "=== $label ==="
     echo "csv=$csv_path"
+    echo "BATCHLAS_GEMM_ROUTE=$route TERM=dumb $bench --backend=$backend --type=$scalar_type --warmup=$warmup --min_iters=$min_iters --max_iters=$max_iters --min_time=$min_time --csv=$csv_path $*"
 
-    cmd="TERM=dumb $bench --backend=$backend --type=$scalar_type --warmup=$warmup --min_iters=$min_iters --max_iters=$max_iters --min_time=$min_time --csv=$csv_path"
-    if [ -n "$variant_mode" ]; then
-        cmd="BATCHLAS_GEMM_VARIANT=$variant_mode $cmd"
-    fi
-    if [ -n "$forced_kernel" ]; then
-        cmd="BATCHLAS_GEMM_SYCL_KERNEL=$forced_kernel $cmd"
-    fi
-    if [ "$experimental" = "1" ]; then
-        cmd="BATCHLAS_GEMM_EXPERIMENTAL=1 $cmd"
-    fi
-
-    echo "$cmd"
-
-    if [ -n "$variant_mode" ]; then
-        export BATCHLAS_GEMM_VARIANT="$variant_mode"
-    else
-        unset BATCHLAS_GEMM_VARIANT
-    fi
-
-    if [ -n "$forced_kernel" ]; then
-        export BATCHLAS_GEMM_SYCL_KERNEL="$forced_kernel"
-    else
-        unset BATCHLAS_GEMM_SYCL_KERNEL
-    fi
-
-    if [ "$experimental" = "1" ]; then
-        export BATCHLAS_GEMM_EXPERIMENTAL=1
-    else
-        unset BATCHLAS_GEMM_EXPERIMENTAL
-    fi
-
-    TERM=dumb "$bench" \
-        --backend="$backend" \
-        --type="$scalar_type" \
-        --warmup="$warmup" \
-        --min_iters="$min_iters" \
-        --max_iters="$max_iters" \
-        --min_time="$min_time" \
-        --csv="$csv_path" | tee "$txt_path"
-
-    unset BATCHLAS_GEMM_VARIANT
-    unset BATCHLAS_GEMM_SYCL_KERNEL
-    unset BATCHLAS_GEMM_EXPERIMENTAL
-}
-
-run_case_dims() {
-    label=$1
-    variant_mode=$2
-    forced_kernel=$3
-    experimental=$4
-    shift 4
-
-    csv_path="${output_prefix}_${label}.csv"
-    txt_path="${output_prefix}_${label}.txt"
-
-    echo
-    echo "=== $label ==="
-    echo "csv=$csv_path"
-
-    cmd="TERM=dumb $bench --backend=$backend --type=$scalar_type --warmup=$warmup --min_iters=$min_iters --max_iters=$max_iters --min_time=$min_time --csv=$csv_path $*"
-    if [ -n "$variant_mode" ]; then
-        cmd="BATCHLAS_GEMM_VARIANT=$variant_mode $cmd"
-    fi
-    if [ -n "$forced_kernel" ]; then
-        cmd="BATCHLAS_GEMM_SYCL_KERNEL=$forced_kernel $cmd"
-    fi
-    if [ "$experimental" = "1" ]; then
-        cmd="BATCHLAS_GEMM_EXPERIMENTAL=1 $cmd"
-    fi
-
-    echo "$cmd"
-
-    if [ -n "$variant_mode" ]; then
-        export BATCHLAS_GEMM_VARIANT="$variant_mode"
-    else
-        unset BATCHLAS_GEMM_VARIANT
-    fi
-
-    if [ -n "$forced_kernel" ]; then
-        export BATCHLAS_GEMM_SYCL_KERNEL="$forced_kernel"
-    else
-        unset BATCHLAS_GEMM_SYCL_KERNEL
-    fi
-
-    if [ "$experimental" = "1" ]; then
-        export BATCHLAS_GEMM_EXPERIMENTAL=1
-    else
-        unset BATCHLAS_GEMM_EXPERIMENTAL
-    fi
-
-    TERM=dumb "$bench" \
+    BATCHLAS_GEMM_ROUTE="$route" TERM=dumb "$bench" \
         --backend="$backend" \
         --type="$scalar_type" \
         --warmup="$warmup" \
@@ -131,18 +46,11 @@ run_case_dims() {
         --max_iters="$max_iters" \
         --min_time="$min_time" \
         --csv="$csv_path" "$@" | tee "$txt_path"
-
-    unset BATCHLAS_GEMM_VARIANT
-    unset BATCHLAS_GEMM_SYCL_KERNEL
-    unset BATCHLAS_GEMM_EXPERIMENTAL
 }
 
 echo "backend=$backend type=$scalar_type build_dir=$build_dir output_prefix=$output_prefix"
 
-run_case vendor vendor "" 0
-run_case sycl_default sycl "" 0
-run_case s2_u1_aligned sycl 128x32x32_s2_u1_aligned 0
-run_case s2_u2 sycl 128x32x32_s2_u2 0
-run_case k32_large sycl 128x64x32large 0
-run_case_dims persistent_256 sycl 128x32x32_persistent 1 256 256 256 1024
-run_case_dims persistent_512 sycl 128x32x32_persistent 1 512 512 512 512
+run_case vendor vendor
+run_case native_default native
+run_case reg_128x32x32 "reg:m=128:n=32:k=32:u=1"
+run_case reg_128x64x32_u4 "reg:m=128:n=64:k=32:u=4"

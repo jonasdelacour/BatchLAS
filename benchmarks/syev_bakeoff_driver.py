@@ -252,7 +252,7 @@ def phase_a():
                 # gap rather than pretending jobz=0 was covered.
                 if jobz == 1:
                     measure("smalln:vendor", "syev_benchmark", [n, b, 16, 0], dtype, b,
-                            env_extra={"BATCHLAS_SYEV_PROVIDER": "vendor"},
+                            env_extra={"BATCHLAS_SYEV_ROUTE": "vendor"},
                             meta={"kernel": "vendor", "n": n, "jobz": 1, "wg": 0},
                             want="BM_SYEV<")
                 else:
@@ -310,7 +310,7 @@ def phase_b():
                 # cuSOLVER reference at the same shape (eigenvectors only -- see above)
                 if jobz == 1:
                     measure("vendor_ref", "syev_benchmark", [n, b, 16, 0], dtype, b,
-                            env_extra={"BATCHLAS_SYEV_PROVIDER": "vendor"},
+                            env_extra={"BATCHLAS_SYEV_ROUTE": "vendor"},
                             meta={"knob": "vendor", "n": n, "jobz": 1}, want="BM_SYEV<")
 
 

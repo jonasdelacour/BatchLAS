@@ -18,33 +18,4 @@ enum class CuBLASDxGemmVariant {
     CuBLASDx64x64x32TT,
 };
 
-struct GemmLaunchDescriptor {
-    const float* a_ptr;
-    const float* b_ptr;
-    float* c_ptr;
-    const int* m_batch;
-    const int* n_batch;
-    const int* k_batch;
-    int lda;
-    int ldb;
-    int ldc;
-    int stride_a;
-    int stride_b;
-    int stride_c;
-    int m;
-    int n;
-    int k;
-    int batch;
-    float alpha;
-    float beta;
-    bool heterogeneous;
-    bool packet_a;
-    bool packet_b;
-    bool aligned_fast_path;
-};
-
-cudaError_t launch_float(CuBLASDxGemmVariant variant,
-                         const GemmLaunchDescriptor& desc,
-                         cudaStream_t stream);
-
 } // namespace batchlas::backend::cublasdx_gemm
