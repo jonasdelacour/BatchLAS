@@ -27,28 +27,9 @@
 // kernels reading it have only been enqueued.
 namespace batchlas::backend::detail {
 
-// expanded_ld, expanded_workspace_bytes and expansion_fits moved to
-// ../expansion_budget.hh, so that callers outside src/backends/ can consult
-// the same fit predicate this file's routes branch on.
-
-// Work-group shape for the elementwise expansions below: rows first, so that a
-// group's lanes walk a column and both the load and the store coalesce, and
-// only as many rows as the matrix actually has, so that a batch of tiny
-// matrices does not retire mostly-idle groups.
-struct ExpandGroupShape {
-    int rows;
-    int cols;
-};
-
-inline ExpandGroupShape expand_group_shape(int n) {
-    constexpr int kItemsPerGroup = 256;
-    constexpr int kMaxGroupRows = 32;
-    int rows = 1;
-    while (rows < kMaxGroupRows && rows < n) {
-        rows *= 2;
-    }
-    return {rows, kItemsPerGroup / rows};
-}
+// expanded_ld, expanded_workspace_bytes, expansion_fits, expand_group_shape and
+// expand_grid_fits live in ../expansion_budget.hh, so that callers outside
+// src/backends/ can consult the same fit predicates this file's launches need.
 
 // Materialise the dense matrix that A's referenced triangle stands for: zeros
 // opposite it, and ones on the diagonal when the caller declared it unit --

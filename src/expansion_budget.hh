@@ -71,4 +71,34 @@ inline bool expansion_fits(const Queue& ctx, int n, int batch, std::size_t bytes
     return bytes <= budget;
 }
 
+// Work-group shape of expand_triangular and accumulate_hermitian: rows first, so that a
+// group's lanes walk a column and both the load and the store coalesce, and
+// only as many rows as the matrix actually has, so that a batch of tiny
+// matrices does not retire mostly-idle groups.
+struct ExpandGroupShape {
+    int rows;
+    int cols;
+};
+
+inline ExpandGroupShape expand_group_shape(int n) {
+    constexpr int kItemsPerGroup = 256;
+    constexpr int kMaxGroupRows = 32;
+    int rows = 1;
+    while (rows < kMaxGroupRows && rows < n) {
+        rows *= 2;
+    }
+    return {rows, kItemsPerGroup / rows};
+}
+
+// The padded range of an expand_group_shape launch fits an int (-fsycl-id-queries-fit-in-int
+// throws at submit otherwise); tighter than expansion_fits' n^2 batch term.
+// evidence: docs/perf/level3.md#the-padded-launch-range
+inline bool expand_grid_fits(int n, int batch) {
+    const auto shape = expand_group_shape(n);
+    const std::size_t range = static_cast<std::size_t>(batch) *
+                              static_cast<std::size_t>(::batchlas::internal::ceil_div(n, shape.cols) * shape.cols) *
+                              static_cast<std::size_t>(::batchlas::internal::ceil_div(n, shape.rows) * shape.rows);
+    return range <= static_cast<std::size_t>(std::numeric_limits<int>::max());
+}
+
 }  // namespace batchlas::backend::detail

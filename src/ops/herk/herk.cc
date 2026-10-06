@@ -54,7 +54,7 @@ select::Key key_of(const MV<T>& A, const MV<T>& C, Transpose transA) {
 // Correctness only (R3); shapes were validated at entry (transA is NoTrans or ConjTrans). Both
 // natives take one (n, k, ld, stride) per launch, so no heterogeneous operand, and put the batch
 // in a grid dimension capped at 65535. The fold's n x n x batch scratch must fit
-// (expansion_fits); gram's one tile must cover C (n <= 128) with its thread count and SLM tile.
+// (expansion_fits) and its padded launch range an int (expand_grid_fits); gram's one tile must cover C (n <= 128) with its thread count and SLM tile.
 // Every vendor loop (cuBLAS, netlib) runs each item at the top-level (n, k), a wrong answer for a
 // heterogeneous batch, so no family takes one.
 template <Backend B, class T>
@@ -66,7 +66,7 @@ bool can_run(const HerkChoice& c, const select::Device& d, Queue& q, const MV<T>
                         batch <= kMaxGridBatch;
     return std::visit(overloaded{
         [&](Fold) {
-            return native && d.max_wg >= kFoldWg &&
+            return native && d.max_wg >= kFoldWg && backend::detail::expand_grid_fits(int(n), int(batch)) &&
                    backend::detail::expansion_fits(
                        q, int(n), int(batch), backend::detail::expanded_workspace_bytes<T>(q, int(n), int(batch)));
         },

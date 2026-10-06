@@ -1810,7 +1810,11 @@ choosing by hand move to `src/ops/{hemm,herk,her2k}/{choice.hh,<op>.cc}` with th
 - **can_run (R3).** Natives: `B == Backend::CUDA`, `d.is_gpu`, every operand homogeneous, extents and
   batch >= 1, batch <= 65535 (expand_mirrored and accumulate_hermitian put it in grid z, gram in grid
   y; 65536 throws `exceed limit`, `GridBatchCeiling`), `max_wg >= 256`; `expand`/`fold` also
-  `expansion_fits` (the old arms' own capacity term, `BATCHLAS_EXPAND_MAX_BYTES` still lowers it);
+  `expansion_fits` (the old arms' own capacity term, `BATCHLAS_EXPAND_MAX_BYTES` still lowers it),
+  and `fold` `expand_grid_fits` (accumulate_hermitian's padded range must fit an int: at batch
+  65535 it overflows from n = 169, inside the element term's n <= 181; found by the test stage
+  with a launch at the ceiling, trmm `expand` had the same window and gets the same term;
+  docs/perf/level3.md#the-padded-launch-range);
   `gram` also `syrk_gram_supported(..., conjugated)` (n <= 128: past it the kernel answers wrongly),
   `max_wg >= gram_threads(n)` (complex: 64 or 160) and the SLM tile. Vendor: `d.has_vendor_blas` and
   homogeneous (the loops run each item at the top-level extents, as for the level-3 four).
@@ -1855,6 +1859,22 @@ choosing by hand move to `src/ops/{hemm,herk,her2k}/{choice.hh,<op>.cc}` with th
   conjugate, her2k's fold reading op(B)^T) turn every correctness case of that family red.
   Regression (`ctest -LE slow`): vendor tree the same five failing suites as `ff340fc6` (lanczos,
   gemv, ortho, cond, syev_blocked) with the same case names; vendor-free tree: no case that passes on `ff340fc6` fails; hemm/herk/her2k_tests now fail only their NETLIB instantiations (no netlib in this tree; every CUDA case newly passes), `options_api_tests` now passes, and the three new route-native reruns fail exactly the names their unpinned suites fail, as the level-3 four's do. `sweep_to_table.py --check` passes on all 156 tables; `run_local_checks.sh` is clean apart from `check_cmake_syntax` reading generated files under `build-vf/`.
+- **Test stage** (same branch, after the implementation commit). New cases: `BetaZeroDoesNotReadC` in
+  the three candidate suites (NaN in C, beta = 0, every family and Auto; BLAS makes C output-only),
+  `{Herk,Her2k}Candidates.FoldGridCeiling`, `TrmmCandidates.ExpandGridCeiling` and
+  `HemmCandidates.ExpandElementCeiling` (launches at the capacity ceiling, batch 65535). The ceiling
+  launches found a defect inherited from `8cf7fd86`: `expansion_fits` admits n^2 batch <= INT_MAX,
+  but the fold's and trmm expand's padded range overflows an int from n = 169 at batch 65535, so
+  n in 169..181 passed `can_run` and threw at submit after the gemm ran. herk/her2k `fold` and trmm
+  `expand` now also need `expand_grid_fits` (docs/perf/level3.md#the-padded-launch-range); symm/hemm
+  `expand` (expand_mirrored, tiled) run at order 181 and keep the element term alone. A deliberate
+  break of the fold's beta = 0 guard first turned nothing red: `rel_error` folded errors with
+  `std::max(worst, x)`, which returns `worst` for a NaN `x`, so a NaN result passed every correctness
+  check in herk, her2k and syrk candidates (the diagonal's imaginary-part check caught only that
+  element). They now use a NaN-keeping max (`worse`), and the break turns exactly the four
+  `BetaZeroDoesNotReadC` instances red. Twelve breaks in all, each restored and md5-verified, each a
+  narrow named red set except the two family-wide correctness breaks (hemm expansion without the
+  conjugate; her2k's mirrored term with the wrong sign).
 - **Deviations.** The transcriber is Python, not C++ (the rules are one-line predicates; the fidelity
   check is the same byte comparison). herk's candidate order is `fold, gram, vendor` (the sketch listed
   `{gram, fold, vendor}`), so vendor-free rows never prefer the slower gram. hemm keys on `order`/`q`

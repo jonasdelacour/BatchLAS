@@ -51,9 +51,9 @@ select::Key key_of(const MV<T>& A, const MV<T>& C, Transpose transA) {
 
 // Correctness only (R3); shapes were validated at entry (transA is NoTrans or ConjTrans). The
 // fold takes one (n, k, ld, stride) per launch, so no heterogeneous operand, puts the batch in
-// grid z (65535) and needs its n x n x batch scratch to fit (expansion_fits). Every vendor loop
-// (cuBLAS, netlib) runs each item at the top-level (n, k), a wrong answer for a heterogeneous
-// batch, so no family takes one.
+// grid z (65535), needs its n x n x batch scratch to fit (expansion_fits) and its padded launch
+// range an int (expand_grid_fits). Every vendor loop (cuBLAS, netlib) runs each item at the
+// top-level (n, k), a wrong answer for a heterogeneous batch, so no family takes one.
 template <Backend B, class T>
 bool can_run(const Her2kChoice& c, const select::Device& d, Queue& q, const MV<T>& A, const MV<T>& Bm,
              const MV<T>& C, Transpose transA) {
@@ -62,7 +62,7 @@ bool can_run(const Her2kChoice& c, const select::Device& d, Queue& q, const MV<T
     return std::visit(overloaded{
         [&](Fold) {
             return B == Backend::CUDA && d.is_gpu && homogeneous && d.max_wg >= kFoldWg && n >= 1 && k >= 1 &&
-                   batch >= 1 && batch <= kMaxGridBatch &&
+                   batch >= 1 && batch <= kMaxGridBatch && backend::detail::expand_grid_fits(int(n), int(batch)) &&
                    backend::detail::expansion_fits(
                        q, int(n), int(batch), backend::detail::expanded_workspace_bytes<T>(q, int(n), int(batch)));
         },

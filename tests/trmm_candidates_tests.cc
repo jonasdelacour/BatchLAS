@@ -530,6 +530,42 @@ TYPED_TEST(TrmmCandidates, CanRunEqualsLaunch) {
     EXPECT_EQ(disagreements, 0);
 }
 
+// expand's capacity at batch 65535 (AGENTS §8.9, a launch at the ceiling): expand_triangular's
+// padded range overflows an int from order 169 (expand_grid_fits), inside expansion_fits' n^2
+// batch term (order <= 181); before the term the pin was accepted there and threw at submit. Order
+// 168 launches and answers, 169 and 181 are refused and write nothing, and Auto does not take
+// expand. One dtype exercises the term (each launch costs GBs); skipped where the memory budget
+// refuses order 168 first.
+TYPED_TEST(TrmmCandidates, ExpandGridCeiling) {
+    using T = typename TestFixture::T;
+    if constexpr (!std::is_same_v<T, float>) {
+        GTEST_SKIP() << "one dtype exercises the term; each launch costs GBs";
+    } else {
+        Queue& q = *this->ctx;
+        const int batch = int(tm::kMaxGridBatch);
+        const std::size_t budget = q.device().get_property(DeviceProperty::GLOBAL_MEM_SIZE) / 4;
+        if (backend::detail::expanded_workspace_bytes<T>(q, 168, batch) > budget)
+            GTEST_SKIP() << "the memory budget refuses order 168 at batch 65535 on this device";
+        for (int n : {168, 169, 181}) {
+            Spec s{Side::Left, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, n, 1, batch};
+            s.period = 1;
+            auto p = make_prob<T>(s);
+            const bool accepted = this->pin_accepted(C{tm::Expand{}}, p);
+            EXPECT_EQ(accepted, n == 168) << name(C{tm::Expand{}}, s);
+            if (accepted) {
+                expect_trmm(p, name(C{tm::Expand{}}, s));
+                continue;
+            }
+            EXPECT_TRUE(same_bits(p.mem[p.ci(0, 0, 0)], p.mem0[p.ci(0, 0, 0)])) << "order " << n << ": a refused pin wrote C";
+            if (n != 169) continue;
+            const ScopedEnvVar clear("BATCHLAS_TRMM_ROUTE", nullptr);
+            auto r = make_prob<T>(s);
+            EXPECT_NE(traced_choice([&] { this->run(r); }), "expand") << name(C{tm::Expand{}}, s);
+            expect_trmm(r, "auto at order 169 batch 65535");
+        }
+    }
+}
+
 // Both native launches put the batch in grid z: a pin launches at 65535 and is refused at 65536,
 // where the direct launch throws; Auto then takes the vendor (vendor-free: no route).
 TYPED_TEST(TrmmCandidates, GridBatchCeiling) {

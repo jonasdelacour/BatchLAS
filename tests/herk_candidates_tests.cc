@@ -49,6 +49,9 @@ template <typename T>
 using MVof = MatrixView<T, MatrixFormat::Dense>;
 using cd = std::complex<double>;
 
+// A max that keeps a NaN: std::max(w, NaN) returns w, so a NaN result would pass.
+double worse(double w, double x) { return std::isnan(x) || x > w ? x : w; }
+
 template <typename T>
 bool same_bits(T a, T b) {
     return std::memcmp(&a, &b, sizeof(T)) == 0;
@@ -154,12 +157,13 @@ double rel_error(const Prob<T>& p, int it) {
             }
             cd c0 = wide(p.mem0[p.ci(it, i, j)]);
             if (i == j) c0 = cd(c0.real(), 0.0);
+            if (p.beta == 0) c0 = 0;  // BLAS: beta = 0 makes C output only
             cd want = double(p.alpha) * acc + double(p.beta) * c0;
             if (i == j) want = cd(want.real(), 0.0);
             const cd got = wide(p.mem[p.ci(it, i, j)]);
             if (i == j && got.imag() != 0.0) return std::numeric_limits<double>::infinity();
             const double den = std::abs(double(p.alpha)) * mag + std::abs(double(p.beta) * c0) + 1e-30;
-            worst = std::max(worst, std::abs(got - want) / den);
+            worst = worse(worst, std::abs(got - want) / den);
         }
     return worst;
 }
@@ -464,6 +468,32 @@ TYPED_TEST(HerkCandidates, EveryCombinationOnEveryCandidate) {
             }
 }
 
+// BLAS: beta = 0 makes C output only. NaN in C's triangle (the diagonal too) must not reach the
+// result under any family or Auto: 0 * NaN is NaN, so a finite poison could not tell.
+TYPED_TEST(HerkCandidates, BetaZeroDoesNotReadC) {
+    using T = typename TestFixture::T;
+    using R = typename TestFixture::R;
+    const ScopedEnvVar clear("BATCHLAS_HERK_ROUTE", nullptr);
+    std::vector<std::optional<C>> pins{std::nullopt};
+    for (const C& c : hk::candidates<T>())
+        if (!this->vendor_word_falls_back(c)) pins.push_back(c);
+    const R nan = std::numeric_limits<R>::quiet_NaN();
+    for (const Spec& s : {Spec{40, 9, 5}, Spec{100, 33, 3, Uplo::Upper, Transpose::ConjTrans}})
+        for (const auto& c : pins) {
+            auto p = make_prob<T>(s);
+            p.beta = R(0);
+            for (int it = 0; it < s.batch; ++it)
+                for (int j = 0; j < s.n; ++j)
+                    for (int i = 0; i < s.n; ++i)
+                        if (p.ref(i, j)) p.mem[p.ci(it, i, j)] = T(nan, nan);
+            p.mem0.assign(p.mem.begin(), p.mem.end());
+            std::optional<Pin> pin;
+            if (c) pin.emplace("herk", *c);
+            this->run(p);
+            EXPECT_TRUE(correct(p)) << (c ? select::to_string(*c) : std::string("auto")) << " " << label(s);
+        }
+}
+
 // The pinned facade runs exactly that family's code: bit-identical to the direct call.
 TYPED_TEST(HerkCandidates, PinnedRunIsTheDirectKernelBitForBit) {
     using T = typename TestFixture::T;
@@ -571,6 +601,72 @@ TYPED_TEST(HerkCandidates, GridBatchCeiling) {
     } else {
         const ScopedEnvVar clear("BATCHLAS_HERK_ROUTE", nullptr);
         EXPECT_THROW(this->run(p), batchlas::NoRouteError);
+    }
+}
+
+// The fold's capacity at batch 65535 (AGENTS §8.9, a launch at the ceiling): accumulate_hermitian's
+// padded range overflows an int from n = 169 (expand_grid_fits), inside expansion_fits' n^2 batch
+// term (n <= 181). n = 168 must launch and answer; 169 and 181 are refused before the gemm runs,
+// and Auto takes the vendor there. Where the memory budget refuses n = 168 first (a 24 GB card),
+// the grid term is not the binding one and there is nothing to launch.
+TYPED_TEST(HerkCandidates, FoldGridCeiling) {
+    using T = typename TestFixture::T;
+    using R = typename TestFixture::R;
+    static constexpr Backend B = TestFixture::B;
+    Queue& q = *this->ctx;
+    const int batch = int(hk::kMaxGridBatch), k = 3;
+    ASSERT_TRUE(backend::detail::expand_grid_fits(168, batch));
+    ASSERT_FALSE(backend::detail::expand_grid_fits(169, batch));
+    const std::size_t budget = q.device().get_property(DeviceProperty::GLOBAL_MEM_SIZE) / 4;
+    if (backend::detail::expanded_workspace_bytes<T>(q, 168, batch) > budget)
+        GTEST_SKIP() << "the memory budget refuses n = 168 at batch 65535 on this device";
+    for (int n : {168, 169, 181}) {
+        UnifiedVector<T> a(std::size_t(n) * k * batch), c(std::size_t(n) * n * batch, T(-3, 7));
+        for (std::size_t e = 0; e < a.size(); ++e) a[e] = T(R(0.25) * R(e % 7) - R(0.5), R(0.125) * R(e % 5 + e % 3));
+        const MVof<T> A(a.data(), n, k, n, n * k, batch), Cm(c.data(), n, n, n, n * n, batch);
+        auto call = [&] {
+            (void)herk<B, T>(q, A, Cm, R(1.25), R(0), Uplo::Lower, Transpose::NoTrans);
+            q.wait();
+        };
+        auto worst = [&] {
+            double w = 0;
+            for (int it : {0, batch / 2, batch - 1})
+                for (int j = 0; j < n; ++j)
+                    for (int i = j; i < n; ++i) {
+                        const std::size_t ab = std::size_t(it) * n * k;
+                        cd want = 0;
+                        for (int l = 0; l < k; ++l) want += wide(a[ab + i + l * n]) * std::conj(wide(a[ab + j + l * n]));
+                        want *= 1.25;
+                        if (i == j) want = cd(want.real(), 0.0);
+                        w = worse(w, std::abs(wide(c[std::size_t(it) * n * n + i + std::size_t(j) * n]) - want));
+                    }
+            return w;
+        };
+        const std::string what = "n = " + std::to_string(n) + " batch = 65535";
+        if (n == 168) {
+            const Pin pin("herk", C{hk::Fold{}});
+            ASSERT_NO_THROW(call()) << what << ": inside both terms, the fold must launch";
+            EXPECT_LE(worst(), tol<T>(k)) << what;
+            continue;
+        }
+        {
+            const Pin pin("herk", C{hk::Fold{}});
+            try {
+                call();
+                ADD_FAILURE() << what << ": the fold was accepted";
+            } catch (const std::invalid_argument& e) {
+                EXPECT_NE(std::string(e.what()).find("cannot run this shape"), std::string::npos) << what << ": " << e.what();
+            }
+        }
+        EXPECT_TRUE(same_bits(c[0], T(-3, 7))) << what << ": a refused pin wrote C";
+        if (n != 169) continue;
+        const ScopedEnvVar clear("BATCHLAS_HERK_ROUTE", nullptr);
+        if constexpr (TestFixture::kVendor) {
+            EXPECT_EQ(traced_choice(call), "vendor") << what;
+            EXPECT_LE(worst(), tol<T>(k)) << what << " under Auto";
+        } else {
+            EXPECT_THROW(call(), batchlas::NoRouteError) << what;
+        }
     }
 }
 

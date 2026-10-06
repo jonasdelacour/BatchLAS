@@ -48,6 +48,9 @@ template <typename T>
 using MVof = MatrixView<T, MatrixFormat::Dense>;
 using cd = std::complex<double>;
 
+// A max that keeps a NaN: std::max(w, NaN) returns w, so a NaN result would pass.
+double worse(double w, double x) { return std::isnan(x) || x > w ? x : w; }
+
 template <typename T>
 bool same_bits(T a, T b) {
     return std::memcmp(&a, &b, sizeof(T)) == 0;
@@ -170,7 +173,7 @@ void expect_hemm(const Prob<T>& p, const std::string& what) {
                     acc += x;
                     mag += std::abs(x);
                 }
-                const cd c0 = wide(p.mem0[p.at(p.c, it, i, j)]);
+                const cd c0 = p.beta == T(0) ? cd(0) : wide(p.mem0[p.at(p.c, it, i, j)]);  // beta = 0: C is output only
                 const cd want = alpha * acc + beta * c0;
                 const double bound = tol<T>(k) * (std::abs(alpha) * mag + std::abs(beta * c0)) + 1e-30;
                 const cd got = wide(p.mem[p.at(p.c, it, i, j)]);
@@ -433,6 +436,31 @@ TYPED_TEST(HemmCandidates, EveryCombinationOnEveryCandidate) {
     }
 }
 
+// BLAS: beta = 0 makes C output only. NaN in every element of C must not reach the result under
+// any family or Auto (expand's gemm included): 0 * NaN is NaN, so a finite poison could not tell.
+TYPED_TEST(HemmCandidates, BetaZeroDoesNotReadC) {
+    using T = typename TestFixture::T;
+    using R = typename T::value_type;
+    const ScopedEnvVar clear("BATCHLAS_HEMM_ROUTE", nullptr);
+    std::vector<std::optional<C>> pins{std::nullopt};
+    for (const C& c : hm::candidates<T>())
+        if (!TestFixture::vendor_word_falls_back(c)) pins.push_back(c);
+    const R nan = std::numeric_limits<R>::quiet_NaN();
+    for (const Spec& s : {Spec{Side::Left, Uplo::Lower, 40, 9, 5}, Spec{Side::Right, Uplo::Upper, 7, 100, 2}})
+        for (const auto& c : pins) {
+            auto p = make_prob<T>(s);
+            p.beta = T(0);
+            for (int it = 0; it < s.batch; ++it)
+                for (int j = 0; j < s.n; ++j)
+                    for (int i = 0; i < s.m; ++i) p.mem[p.at(p.c, it, i, j)] = T(nan, nan);
+            p.mem0.assign(p.mem.begin(), p.mem.end());
+            std::optional<Pin> pin;
+            if (c) pin.emplace("hemm", *c);
+            this->run(p);
+            expect_hemm(p, (c ? select::to_string(*c) : std::string("auto")) + " beta = 0 " + label(s));
+        }
+}
+
 // The pinned facade runs exactly that family's code: bit-identical to the direct call.
 TYPED_TEST(HemmCandidates, PinnedRunIsTheDirectKernelBitForBit) {
     using T = typename TestFixture::T;
@@ -556,6 +584,59 @@ TYPED_TEST(HemmCandidates, GridBatchCeiling) {
         } else {
             EXPECT_THROW(call(), batchlas::NoRouteError);
         }
+    }
+}
+
+// expansion_fits' element term at batch 65535 (AGENTS §8.9, a launch at the ceiling): order 181
+// is the last with order^2 batch <= INT_MAX. expand_mirrored's tiled range stays far below an int
+// there (it is not the padded range herk's fold and trmm's expand hit from 169), so order 181
+// launches and answers and 182 is refused. Skipped where the memory budget refuses 181 first.
+TYPED_TEST(HemmCandidates, ExpandElementCeiling) {
+    using T = typename TestFixture::T;
+    using R = typename T::value_type;
+    static constexpr Backend B = TestFixture::B;
+    Queue& q = *this->ctx;
+    const int batch = int(hm::kMaxGridBatch);
+    const std::size_t budget = q.device().get_property(DeviceProperty::GLOBAL_MEM_SIZE) / 4;
+    if (backend::detail::expanded_workspace_bytes<T>(q, 181, batch) > budget)
+        GTEST_SKIP() << "the memory budget refuses order 181 at batch 65535 on this device";
+    const T alpha(1.25, -0.5);
+    for (int k : {181, 182}) {
+        UnifiedVector<T> a(std::size_t(k) * k * batch), b(std::size_t(k) * batch), c(std::size_t(k) * batch, T(-3, 7));
+        for (std::size_t e = 0; e < a.size(); ++e) a[e] = T(R(0.25) * R(e % 7) - R(0.5), R(0.125) * R(e % 5 + e % 3));
+        for (std::size_t e = 0; e < b.size(); ++e) b[e] = T(R(0.5) - R(0.125) * R(e % 9), R(0.25) * R(e % 4) - R(0.3));
+        const MVof<T> A(a.data(), k, k, k, k * k, batch), Bm(b.data(), k, 1, k, k, batch), Cm(c.data(), k, 1, k, k, batch);
+        const Pin pin("hemm", C{hm::Expand{}});
+        auto call = [&] {
+            (void)hemm<B, T>(q, A, Bm, Cm, alpha, T(0), Side::Left, Uplo::Upper);
+            q.wait();
+        };
+        if (k == 182) {
+            try {
+                call();
+                ADD_FAILURE() << "order 182 batch 65535: expand was accepted";
+            } catch (const std::invalid_argument& e) {
+                EXPECT_NE(std::string(e.what()).find("cannot run this shape"), std::string::npos) << e.what();
+            }
+            EXPECT_TRUE(same_bits(c[0], T(-3, 7))) << "a refused pin wrote C";
+            continue;
+        }
+        ASSERT_NO_THROW(call()) << "order 181 batch 65535: inside the element term, expand must launch";
+        double worst = 0;
+        for (int it : {0, batch / 2, batch - 1})
+            for (int i = 0; i < k; ++i) {
+                const std::size_t ab = std::size_t(it) * k * k;
+                cd want = 0;
+                for (int t = 0; t < k; ++t) {
+                    const cd h = i == t ? cd(double(a[ab + i + std::size_t(i) * k].real()), 0.0)
+                                 : i < t ? wide(a[ab + i + std::size_t(t) * k])
+                                         : std::conj(wide(a[ab + t + std::size_t(i) * k]));
+                    want += h * wide(b[std::size_t(it) * k + t]);
+                }
+                want *= wide(alpha);
+                worst = worse(worst, std::abs(wide(c[std::size_t(it) * k + i]) - want) / (std::abs(want) + 1.0));
+            }
+        EXPECT_LE(worst, tol<T>(k)) << "order 181 at the element ceiling";
     }
 }
 

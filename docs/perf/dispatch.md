@@ -65,7 +65,8 @@ Their inner GEMMs go through the public `gemm`, so they take the gemm table's ch
 Correctness, now `can_run` terms: every native family needs a CUDA GPU queue, a homogeneous batch
 (every tile kernel indexes operands as `base + batch * stride`), extents >= 1 and batch <= 65535
 (the batch is the grid's z or y dimension). syrk/syr2k `triangular` also bound the tile count (grid
-y), `gram` needs n <= 128, symm/trmm/hemm `expand` and herk/her2k `fold` need `expansion_fits`, trmm
+y), `gram` needs n <= 128, symm/trmm/hemm `expand` and herk/her2k `fold` need `expansion_fits` (trmm
+`expand` and the folds also `expand_grid_fits`, docs/perf/level3.md#the-padded-launch-range), trmm
 `triangular` needs `Side::Left`, and syr2k keeps real `ConjTrans` on the vendor. The Hermitian
 three's natives also need `max_wg >= 256` (herk `gram`: its own thread count and SLM tile).
 

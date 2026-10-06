@@ -47,6 +47,9 @@ using Pin = select::ScopedPin<C>;
 template <typename T>
 using MVof = MatrixView<T, MatrixFormat::Dense>;
 
+// A max that keeps a NaN: std::max(w, NaN) returns w, so a NaN result would pass.
+double worse(double w, double x) { return std::isnan(x) || x > w ? x : w; }
+
 template <typename T>
 bool same_bits(T a, T b) {
     return std::memcmp(&a, &b, sizeof(T)) == 0;
@@ -144,7 +147,7 @@ double rel_error(const Prob<T>& p, int it) {
             const double c0 = double(p.mem0[p.ci(it, i, j)]);
             const double want = double(p.alpha) * acc + double(p.beta) * c0;
             const double den = std::abs(double(p.alpha)) * mag + std::abs(double(p.beta) * c0) + 1e-30;
-            worst = std::max(worst, std::abs(double(p.mem[p.ci(it, i, j)]) - want) / den);
+            worst = worse(worst, std::abs(double(p.mem[p.ci(it, i, j)]) - want) / den);
         }
     return worst;
 }

@@ -48,6 +48,9 @@ template <typename T>
 using MVof = MatrixView<T, MatrixFormat::Dense>;
 using cd = std::complex<double>;
 
+// A max that keeps a NaN: std::max(w, NaN) returns w, so a NaN result would pass.
+double worse(double w, double x) { return std::isnan(x) || x > w ? x : w; }
+
 template <typename T>
 bool same_bits(T a, T b) {
     return std::memcmp(&a, &b, sizeof(T)) == 0;
@@ -164,12 +167,13 @@ double rel_error(const Prob<T>& p, int it) {
             }
             cd c0 = wide(p.mem0[p.at(p.c, it, i, j)]);
             if (i == j) c0 = cd(c0.real(), 0.0);
+            if (p.beta == 0) c0 = 0;  // BLAS: beta = 0 makes C output only
             cd want = acc + double(p.beta) * c0;
             if (i == j) want = cd(want.real(), 0.0);
             const cd got = wide(p.mem[p.at(p.c, it, i, j)]);
             if (i == j && got.imag() != 0.0) return std::numeric_limits<double>::infinity();
             const double den = mag + std::abs(double(p.beta) * c0) + 1e-30;
-            worst = std::max(worst, std::abs(got - want) / den);
+            worst = worse(worst, std::abs(got - want) / den);
         }
     return worst;
 }
@@ -456,6 +460,30 @@ TYPED_TEST(Her2kCandidates, EveryCombinationOnEveryCandidate) {
             }
 }
 
+TYPED_TEST(Her2kCandidates, BetaZeroDoesNotReadC) {
+    using T = typename TestFixture::T;
+    using R = typename TestFixture::R;
+    const ScopedEnvVar clear("BATCHLAS_HER2K_ROUTE", nullptr);
+    std::vector<std::optional<C>> pins{std::nullopt};
+    for (const C& c : h2::candidates<T>())
+        if (!this->vendor_word_falls_back(c)) pins.push_back(c);
+    const R nan = std::numeric_limits<R>::quiet_NaN();
+    for (const Spec& s : {Spec{40, 9, 5}, Spec{100, 33, 1, Uplo::Upper, Transpose::ConjTrans}})
+        for (const auto& c : pins) {
+            auto p = make_prob<T>(s);
+            p.beta = R(0);
+            for (int it = 0; it < s.batch; ++it)
+                for (int j = 0; j < s.n; ++j)
+                    for (int i = 0; i < s.n; ++i)
+                        if (p.ref(i, j)) p.mem[p.at(p.c, it, i, j)] = T(nan, nan);
+            p.mem0.assign(p.mem.begin(), p.mem.end());
+            std::optional<Pin> pin;
+            if (c) pin.emplace("her2k", *c);
+            this->run(p);
+            EXPECT_TRUE(correct(p)) << (c ? select::to_string(*c) : std::string("auto")) << " " << label(s);
+        }
+}
+
 TYPED_TEST(Her2kCandidates, PinnedRunIsTheDirectKernelBitForBit) {
     using T = typename TestFixture::T;
     int compared = 0;
@@ -540,6 +568,75 @@ TYPED_TEST(Her2kCandidates, GridBatchCeiling) {
     } else {
         const ScopedEnvVar clear("BATCHLAS_HER2K_ROUTE", nullptr);
         EXPECT_THROW(this->run(r), batchlas::NoRouteError);
+    }
+}
+
+// The fold's capacity at batch 65535 (AGENTS §8.9, a launch at the ceiling), as herk's: the padded
+// range of accumulate_hermitian<true> overflows an int from n = 169 (expand_grid_fits), inside
+// expansion_fits' n^2 batch term. n = 168 launches and answers; 169 and 181 are refused before the
+// gemm runs; Auto takes the vendor. Skipped where the memory budget refuses n = 168 first.
+TYPED_TEST(Her2kCandidates, FoldGridCeiling) {
+    using T = typename TestFixture::T;
+    using R = typename TestFixture::R;
+    static constexpr Backend B = TestFixture::B;
+    Queue& q = *this->ctx;
+    const int batch = int(h2::kMaxGridBatch), k = 2;
+    const std::size_t budget = q.device().get_property(DeviceProperty::GLOBAL_MEM_SIZE) / 4;
+    if (backend::detail::expanded_workspace_bytes<T>(q, 168, batch) > budget)
+        GTEST_SKIP() << "the memory budget refuses n = 168 at batch 65535 on this device";
+    const T alpha(1.25, -0.5);
+    for (int n : {168, 169, 181}) {
+        UnifiedVector<T> a(std::size_t(n) * k * batch), b(std::size_t(n) * k * batch), c(std::size_t(n) * n * batch, T(-3, 7));
+        for (std::size_t e = 0; e < a.size(); ++e) {
+            a[e] = T(R(0.25) * R(e % 7) - R(0.5), R(0.125) * R(e % 5 + e % 3));
+            b[e] = T(R(0.5) - R(0.125) * R(e % 9), R(0.25) * R(e % 4) - R(0.3));
+        }
+        const MVof<T> A(a.data(), n, k, n, n * k, batch), Bm(b.data(), n, k, n, n * k, batch);
+        const MVof<T> Cm(c.data(), n, n, n, n * n, batch);
+        auto call = [&] {
+            (void)her2k<B, T>(q, A, Bm, Cm, alpha, R(0), Uplo::Upper, Transpose::NoTrans);
+            q.wait();
+        };
+        auto worst = [&] {
+            double w = 0;
+            for (int it : {0, batch / 2, batch - 1})
+                for (int j = 0; j < n; ++j)
+                    for (int i = 0; i <= j; ++i) {
+                        const std::size_t ab = std::size_t(it) * n * k;
+                        cd want = 0;
+                        for (int l = 0; l < k; ++l)
+                            want += wide(alpha) * wide(a[ab + i + l * n]) * std::conj(wide(b[ab + j + l * n])) +
+                                    std::conj(wide(alpha)) * wide(b[ab + i + l * n]) * std::conj(wide(a[ab + j + l * n]));
+                        if (i == j) want = cd(want.real(), 0.0);
+                        w = worse(w, std::abs(wide(c[std::size_t(it) * n * n + i + std::size_t(j) * n]) - want));
+                    }
+            return w;
+        };
+        const std::string what = "n = " + std::to_string(n) + " batch = 65535";
+        if (n == 168) {
+            const Pin pin("her2k", C{h2::Fold{}});
+            ASSERT_NO_THROW(call()) << what << ": inside both terms, the fold must launch";
+            EXPECT_LE(worst(), tol<T>(k)) << what;
+            continue;
+        }
+        {
+            const Pin pin("her2k", C{h2::Fold{}});
+            try {
+                call();
+                ADD_FAILURE() << what << ": the fold was accepted";
+            } catch (const std::invalid_argument& e) {
+                EXPECT_NE(std::string(e.what()).find("cannot run this shape"), std::string::npos) << what << ": " << e.what();
+            }
+        }
+        EXPECT_TRUE(same_bits(c[0], T(-3, 7))) << what << ": a refused pin wrote C";
+        if (n != 169) continue;
+        const ScopedEnvVar clear("BATCHLAS_HER2K_ROUTE", nullptr);
+        if constexpr (TestFixture::kVendor) {
+            EXPECT_EQ(traced_choice(call), "vendor") << what;
+            EXPECT_LE(worst(), tol<T>(k)) << what << " under Auto";
+        } else {
+            EXPECT_THROW(call(), batchlas::NoRouteError) << what;
+        }
     }
 }
 
