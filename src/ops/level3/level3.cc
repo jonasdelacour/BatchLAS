@@ -1,5 +1,5 @@
-// The public symm/hemm/herk/her2k/syrk/syr2k/trmm entry points, defined outside every
-// vendor TU so the API links in a build with no vendor library. The float CUDA tile
+// The public hemm/herk/her2k/syrk/syr2k/trmm entry points, defined outside every
+// vendor TU so the API links in a build with no vendor library (symm: src/ops/symm). The float CUDA tile
 // routes are chosen by rule in src/backends/*_custom_dispatch.cc (BATCHLAS_<OP>_ROUTE);
 // everything else goes to backend::<op>_vendor<B, T>, or throws NoRouteError when no
 // vendor library is compiled in.
@@ -7,7 +7,6 @@
 #include <batchlas/backend_config.h>
 
 #include <batchlas/blas/functions/gemm.hh>
-#include <batchlas/blas/functions/symm.hh>
 #include <batchlas/blas/functions/hemm.hh>
 #include <batchlas/blas/functions/herk.hh>
 #include <batchlas/blas/functions/her2k.hh>
@@ -18,9 +17,8 @@
 #include <batchlas/no_route.hh>
 #include "../../select/vendor.hh"
 
-// The four level-3 custom-route gates. They have to run before the
+// The level-3 custom-route gates. They have to run before the
 // vendor-available test, so they live here rather than in cublas.cc.
-#include "../../backends/symm_custom_dispatch.hh"
 #include "../../backends/syrk_custom_dispatch.hh"
 #include "../../backends/syr2k_custom_dispatch.hh"
 #include "../../backends/trmm_custom_dispatch.hh"
@@ -34,35 +32,7 @@ namespace batchlas {
 
 // gemm lives in src/ops/gemm/gemm.cc (flat kernel selection).
 
-template <Backend Back, RealScalar T>
-Event symm(Queue& ctx,
-           const MatrixView<T, MatrixFormat::Dense>& A,
-           const MatrixView<T, MatrixFormat::Dense>& B,
-           const MatrixView<T, MatrixFormat::Dense>& C,
-           T alpha,
-           T beta,
-           Side side,
-           Uplo uplo) {
-    // Native tile gate, CUDA + float only. evidence: docs/perf/level3.md#the-shipped-predicates
-    if constexpr (Back == Backend::CUDA && std::is_same_v<T, float>) {
-        if (backend::symm_use_cuda_custom(ctx, A, B, C, side, uplo)) {
-            return backend::symm_cuda_custom(ctx, A, B, C, alpha, beta, side, uplo);
-        }
-        // Record the decline: a shape moving OFF a native kernel shows up only here.
-        backend::detail::record_level3_route(
-            Op::symm, "vendor",
-            C.rows(), C.cols(), A.rows(), A.batch_size(),
-            backend::detail::kNativeUnknown,
-            {uplo, side, Diag::NonUnit, Transpose::NoTrans});
-    }
-
-    if constexpr (!select::level3_vendor_available<Back>) {
-        select::throw_no_vendor_route<T>(
-            Op::symm, Back, select::kLevel3Library<Back>);
-    } else {
-        return backend::symm_vendor<Back, T>(ctx, A, B, C, alpha, beta, side, uplo);
-    }
-}
+// symm lives in src/ops/symm/symm.cc (flat kernel selection).
 
 template <Backend Back, ComplexScalar T>
 Event hemm(Queue& ctx,
@@ -211,11 +181,9 @@ Event trmm(Queue& ctx,
 
 #define OP_INSTANTIATE(OP, B_, fp) BATCHLAS_INSTANTIATE(sig::OP<fp>, OP, B_, fp)
 
-// symm/syrk/syr2k are RealScalar-constrained and hemm/herk/her2k
+// syrk/syr2k are RealScalar-constrained and hemm/herk/her2k
 // ComplexScalar-constrained, hence the split.
 #define REAL_ONLY_OPS(B_)             \
-    OP_INSTANTIATE(symm,  B_, float)  \
-    OP_INSTANTIATE(symm,  B_, double) \
     OP_INSTANTIATE(syrk,  B_, float)  \
     OP_INSTANTIATE(syrk,  B_, double) \
     OP_INSTANTIATE(syr2k, B_, float)  \
