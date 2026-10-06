@@ -152,7 +152,8 @@ Event symm(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const Matrix
 #define SYMM_INSTANTIATE(B_, fp) BATCHLAS_INSTANTIATE(sig::symm<fp>, symm, B_, fp)
 
 // Keyed on the device family, not the vendor library: without the library the Vendor arm
-// compiles to a throw. rocblas.cc has no symm wrapper, so ROCm instantiates none (as before).
+// compiles to a throw. ROCm/MKL symm is src/extensions/symm.cc; this file instantiates CUDA and
+// NETLIB only (as before).
 #if BATCHLAS_HAS_CUDA_BACKEND
 SYMM_INSTANTIATE(Backend::CUDA, float)
 SYMM_INSTANTIATE(Backend::CUDA, double)

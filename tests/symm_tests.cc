@@ -6,9 +6,17 @@
 #include <string>
 #include "test_utils.hh"
 #include "../src/ops/symm/choice.hh"
+#include "../src/select/vendor.hh"
 
 // The forced-route tests pin through select::ScopedPin (docs/design/flat-select-l3/symm.md).
 using SymmPin = batchlas::select::ScopedPin<batchlas::ops::symm::SymmChoice>;
+
+// Vendor-free, a `vendor` pin warns and falls back to Auto, which is expand: the reference
+// would then be the code under test. symm_candidates_tests checks expand against a host
+// reference in that tree.
+inline constexpr bool kVendorReference = batchlas::select::level3_vendor_available<batchlas::Backend::CUDA>;
+#define SKIP_WITHOUT_VENDOR_REFERENCE() \
+    if (!kVendorReference) GTEST_SKIP() << "vendor-free: the vendor reference would be expand itself"
 
 using namespace batchlas;
 
@@ -99,6 +107,7 @@ int main(int argc, char** argv) {
 
 #if BATCHLAS_HAS_CUDA_BACKEND
 TEST(SymmCudaCustomTest, ForcedExpandPathMatchesVendor) {
+    SKIP_WITHOUT_VENDOR_REFERENCE();
     Queue ctx;
     if (ctx.device().type != DeviceType::GPU) {
         GTEST_SKIP() << "CUDA custom symm test requires a GPU device";
@@ -160,6 +169,7 @@ TEST(SymmCudaCustomTest, ForcedExpandPathMatchesVendor) {
 // a time, so the sizes that matter are the ones where that tiling is ragged and
 // the ones where the storage's leading dimension is not the matrix width.
 TEST(SymmCudaCustomTest, ForcedExpandPathIgnoresUnreferencedTriangle) {
+    SKIP_WITHOUT_VENDOR_REFERENCE();
     Queue ctx;
     if (ctx.device().type != DeviceType::GPU) {
         GTEST_SKIP() << "CUDA custom symm test requires a GPU device";
@@ -237,6 +247,7 @@ TEST(SymmCudaCustomTest, ForcedExpandPathIgnoresUnreferencedTriangle) {
 // stream, which only exists on an in-order queue; the out-of-order case takes a
 // different ordering path and is not otherwise exercised.
 TEST(SymmCudaCustomTest, ForcedExpandPathOrdersExpansionOnOutOfOrderQueue) {
+    SKIP_WITHOUT_VENDOR_REFERENCE();
     Queue ordered;
     if (ordered.device().type != DeviceType::GPU) {
         GTEST_SKIP() << "CUDA custom symm test requires a GPU device";

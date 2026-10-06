@@ -113,6 +113,10 @@ a fieldless family throw `invalid_argument`. Behaviour changes against ff340fc6:
 - an `expand` pin on a CPU queue, a heterogeneous batch, a batch over 65535 or a scratch over the
   budget throws (it used to go to the vendor silently, or throw from the gemm).
 - symm no longer reads `BATCHLAS_EXPAND_ROUTE` (hemm, herk, her2k still do).
+- double now honours `BATCHLAS_SYMM_ROUTE` in vendor-present builds. The old gate in `level3.cc:47`
+  was `T == float`, so every double word (`expand`, `native`, even an unknown one) was silently
+  ignored and the call went to the vendor. Now `expand` and `native` run expand+gemm for double,
+  and an unknown word throws. Double Auto is unchanged (the double tables rank `vendor` first).
 - invalid shapes throw `invalid_argument` before `choose()` on every backend (netlib used to throw
   `runtime_error` from inside its host task).
 - coverage: `chosen_algo` is the spelling (`expand`, `vendor`) as before; the scalar and backend
@@ -137,7 +141,9 @@ batch stride that is not `ld * cols`, rows != cols, alpha 1.5, beta -0.75, A's u
 and every pad hold a large finite poison, and everything outside C is compared bit for bit.
 
 `symm_tests.cc`: the three ForcedExpand* cases pin through `ScopedPin`; RemovedRouteWordsThrow adds
-`cublasdx`.
+`cublasdx`. The ForcedExpand* cases skip in a vendor-free build: their reference is a `vendor` pin,
+which there falls back to Auto (= expand), so they would compare expand against itself (AGENTS.md
+§8 rule 7). symm_candidates_tests covers expand against a host reference in that tree.
 
 ### Deliberate breaks
 
@@ -173,8 +179,9 @@ Run on the sm_120 box (RTX PRO 6000 Blackwell). The base is `ff340fc6`, built in
 | vendor | none | none (symm_candidates_tests 37 passed, the rest skip on the CPU) |
 | vendor-free | symm_tests: SymmTest/0-3.MatchesSymmetrizedGemmReference, SymmCudaCustomTest.ForcedExpandPath{MatchesVendor,IgnoresUnreferencedTriangle,OrdersExpansionOnOutOfOrderQueue}; options_api_tests: OptionsApi.Blas3OptionsMatchPositional | symm_tests: SymmTest/0,1 (NETLIB float, double: no netlib in this tree, so no route, as before) |
 
-Vendor-free, the CUDA symm cases and OptionsApi.Blas3OptionsMatchPositional now pass, because expand
-serves them. `python3 scripts/sweep_to_table.py --check` passes on every file. The comment-density
+Vendor-free, SymmTest/2,3 (CUDA) and OptionsApi.Blas3OptionsMatchPositional now pass, because expand
+serves them. The three ForcedExpand* cases now skip there (their vendor reference would be expand
+itself); they had passed only vacuously in the first version of this branch. `python3 scripts/sweep_to_table.py --check` passes on every file. The comment-density
 gate passes.
 
 Live check: one Auto call per process (`BATCHLAS_COVERAGE_OUT`; the old double path records no row,
