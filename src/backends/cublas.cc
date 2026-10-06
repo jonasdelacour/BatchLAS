@@ -12,7 +12,6 @@
 #include <string>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/functions/ormqr.hh>
-#include <batchlas/blas/dispatch/op.hh>
 #include <complex>
 
 #include "gemm_cublasdx_dispatch.hh"
@@ -20,7 +19,6 @@
 #include "level3_shape.hh"
 #include "gemm_variant.hh"
 #include "gemm_heterogeneous.hh"
-#include "level3_coverage.hh"
 #include "symm_custom_dispatch.hh"
 #include "syr2k_custom_dispatch.hh"
 #include "syrk_custom_dispatch.hh"
@@ -29,7 +27,6 @@
 #include "trmm_custom_dispatch.hh"
 #include "trmm_triangular_tiles.hh"
 #include "triangular_expand.hh"
-#include "../sycl/gemm_kernels.hh"
 
 // This file contains cuBLAS primitives implementation using MatrixView
 #include "../util/template-instantiations.hh"
@@ -68,6 +65,20 @@ namespace batchlas {
 
         auto [m, k] = get_effective_dims(A, transA);
         auto [kB, n] = get_effective_dims(B, transB);
+        // Workaround: cdouble m or n == 1 through the Ex calls segfaults in cuBLASLt (known-defects #13).
+        if constexpr (std::is_same_v<T, std::complex<double>>) {
+            if (m == 1 || n == 1) {
+                cublasZgemmStridedBatched(handle,
+                    enum_convert<BackendLibrary::CUBLAS>(transA), enum_convert<BackendLibrary::CUBLAS>(transB),
+                    m, n, k, reinterpret_cast<const cuDoubleComplex*>(&alpha),
+                    reinterpret_cast<const cuDoubleComplex*>(A.data_ptr()), A.ld(), A.stride(),
+                    reinterpret_cast<const cuDoubleComplex*>(B.data_ptr()), B.ld(), B.stride(),
+                    reinterpret_cast<const cuDoubleComplex*>(&beta),
+                    reinterpret_cast<cuDoubleComplex*>(C.data_ptr()), C.ld(), C.stride(),
+                    std::max(1, A.batch_size()));
+                return ctx.create_event_after_external_work();
+            }
+        }
         if (A.batch_size() <= 1) {
             cublasGemmEx(handle,
                 enum_convert<BackendLibrary::CUBLAS>(transA), enum_convert<BackendLibrary::CUBLAS>(transB),
@@ -105,33 +116,14 @@ namespace batchlas {
                       Transpose transA,
                       Transpose transB,
                       ComputePrecision precision) {
-        if constexpr (Back == Backend::CUDA) {
-            if constexpr (std::is_same_v<T, float>) {
-                if (gemm_use_cublasdx_custom(ctx, A, B, C, transA, transB, precision)) {
-                    return gemm_cublasdx(ctx, A, B, C, alpha, beta, transA, transB, precision);
-                }
-            }
-        }
-
+        // The library call only: which kernel runs is decided by the public gemm
+        // (src/ops/gemm/gemm.cc), which reaches here through its `vendor` choice. A direct caller's
+        // heterogeneous batch is walked member by member.
         if (gemm_has_heterogeneous_batch(A, B, C)) {
-            // WP2 C1: the dimension check, the loop, the m==0/n==0 skips, the
-            // k==0 -> scale(beta) substitution and the empty-batch Event live in
-            // detail::gemm_heterogeneous_loop (src/backends/gemm_heterogeneous.hh);
-            // none of that was ever about the vendor, and keeping it here is why a
-            // vendor-free build had none of it -- all 17 remaining vendor-free
-            // gemm_tests failures were this. Only the per-item terminal is
-            // backend-specific, and cuBLAS passes gemm_vendor_impl rather than
-            // recursing through gemm_vendor so the route above is not re-run per
-            // member. Its empty-batch Event is create_event_after_external_work(),
-            // what the helper hardcodes, because this work leaves the SYCL queue.
             return detail::gemm_heterogeneous_loop<T>(ctx, A, B, C, beta, transA, transB,
                 [&](const auto& A_i, const auto& B_i, const auto& C_i) {
                     return gemm_vendor_impl<Back, T>(ctx, A_i, B_i, C_i, alpha, beta, transA, transB, precision);
                 });
-        }
-
-        if (gemm_use_sycl_custom(ctx, A, B, C, transA, transB, precision)) {
-            return sycl_gemm::gemm_custom(ctx, A, B, C, alpha, beta, transA, transB, precision);
         }
 
         return gemm_vendor_impl<Back, T>(ctx, A, B, C, alpha, beta, transA, transB, precision);
@@ -180,7 +172,7 @@ namespace batchlas {
                       Side side,
                       Uplo uplo) {
                 // WP1 S6: the float custom-route gate moved to the facade
-                // (src/dispatch/entry_points/level3.cc). It has to run BEFORE
+                // (src/ops/level3/level3.cc). It has to run BEFORE
                 // the vendor-available test, and this TU is compiled only when
                 // cuBLAS exists -- so leaving it here made the tile kernels
                 // linkable everywhere but callable nowhere.
@@ -240,11 +232,11 @@ namespace batchlas {
             }
 
             if (side == Side::Left) {
-                return gemm_vendor<Back, T>(ctx, expanded, B, C, alpha, beta,
+                return ::batchlas::gemm<Back, T>(ctx, expanded, B, C, alpha, beta,
                                             Transpose::NoTrans, Transpose::NoTrans,
                                             ComputePrecision::Default);
             }
-            return gemm_vendor<Back, T>(ctx, B, expanded, C, alpha, beta,
+            return ::batchlas::gemm<Back, T>(ctx, B, expanded, C, alpha, beta,
                                         Transpose::NoTrans, Transpose::NoTrans,
                                         ComputePrecision::Default);
         }
@@ -420,7 +412,7 @@ namespace batchlas {
             // and HERK owns only one of them.
             // (void) on an Event: deliberate. This Queue is in-order, so the next submission
             // is already ordered after this one and the Event carries nothing the caller needs.
-            (void)gemm_vendor<Back, T>(ctx, A, A, product, T(alpha), T(0),
+            (void)::batchlas::gemm<Back, T>(ctx, A, A, product, T(alpha), T(0),
                                  transA,
                                  transA == Transpose::NoTrans ? Transpose::ConjTrans
                                                               : Transpose::NoTrans,
@@ -486,7 +478,7 @@ namespace batchlas {
 
             MatrixView<T, MatrixFormat::Dense> product(storage.data(), n, n, ld, ld * n, batch);
 
-            (void)gemm_vendor<Back, T>(ctx, A, B, product, alpha, T(0),
+            (void)::batchlas::gemm<Back, T>(ctx, A, B, product, alpha, T(0),
                                  transA,
                                  no_trans ? Transpose::ConjTrans : Transpose::NoTrans,
                                  ComputePrecision::Default);
@@ -559,7 +551,7 @@ namespace batchlas {
                       Transpose transA) {
         if constexpr (Back == Backend::CUDA) {
                 // WP1 S6: the float custom-route gate moved to the facade
-                // (src/dispatch/entry_points/level3.cc). It has to run BEFORE
+                // (src/ops/level3/level3.cc). It has to run BEFORE
                 // the vendor-available test, and this TU is compiled only when
                 // cuBLAS exists -- so leaving it here made the tile kernels
                 // linkable everywhere but callable nowhere.
@@ -632,11 +624,11 @@ namespace batchlas {
                 if constexpr (std::is_same_v<T, float>) {
                     return syr2k_cuda_custom(ctx, A, B, C, alpha, beta, uplo, transA);
                 } else {
-                    throw batchlas::unsupported("BATCHLAS_SYR2K_VARIANT=cublasdx only supports float");
+                    throw batchlas::unsupported("BATCHLAS_SYR2K_ROUTE=cublasdx only supports float");
                 }
             }
                 // WP1 S6: the float custom-route gate moved to the facade
-                // (src/dispatch/entry_points/level3.cc). It has to run BEFORE
+                // (src/ops/level3/level3.cc). It has to run BEFORE
                 // the vendor-available test, and this TU is compiled only when
                 // cuBLAS exists -- so leaving it here made the tile kernels
                 // linkable everywhere but callable nowhere.
@@ -695,10 +687,10 @@ namespace batchlas {
             }
 
             if (side == Side::Left) {
-                return gemm_vendor<Back, T>(ctx, expanded, B, C, alpha, T(0),
+                return ::batchlas::gemm<Back, T>(ctx, expanded, B, C, alpha, T(0),
                                             transA, Transpose::NoTrans, ComputePrecision::Default);
             }
-            return gemm_vendor<Back, T>(ctx, B, expanded, C, alpha, T(0),
+            return ::batchlas::gemm<Back, T>(ctx, B, expanded, C, alpha, T(0),
                                         Transpose::NoTrans, transA, ComputePrecision::Default);
         }
 
@@ -732,11 +724,11 @@ namespace batchlas {
                 if constexpr (std::is_same_v<T, float>) {
                     return trmm_cuda_custom(ctx, A, B, C, alpha, side, uplo, transA, diag);
                 } else {
-                    throw batchlas::unsupported("BATCHLAS_TRMM_VARIANT=cublasdx only supports float");
+                    throw batchlas::unsupported("BATCHLAS_TRMM_ROUTE=cublasdx only supports float");
                 }
             }
                 // WP1 S6: the float custom-route gate moved to the facade
-                // (src/dispatch/entry_points/level3.cc). It has to run BEFORE
+                // (src/ops/level3/level3.cc). It has to run BEFORE
                 // the vendor-available test, and this TU is compiled only when
                 // cuBLAS exists -- so leaving it here made the tile kernels
                 // linkable everywhere but callable nowhere.
@@ -756,18 +748,6 @@ namespace batchlas {
         }
 
         return trmm_vendor_impl<Back, T>(ctx, A, B, C, alpha, side, uplo, transA, diag);
-    }
-
-    Event gemm_vendor_cuda_raw(Queue& ctx,
-                               const MatrixView<float, MatrixFormat::Dense>& A,
-                               const MatrixView<float, MatrixFormat::Dense>& B,
-                               const MatrixView<float, MatrixFormat::Dense>& C,
-                               float alpha,
-                               float beta,
-                               Transpose transA,
-                               Transpose transB,
-                               ComputePrecision precision) {
-        return gemm_vendor_impl<Backend::CUDA, float>(ctx, A, B, C, alpha, beta, transA, transB, precision);
     }
 
     Event symm_vendor_cuda_raw(Queue& ctx,
@@ -866,15 +846,16 @@ namespace batchlas {
             T* B_ptr = B.data_ptr();
             const int m = B.rows();
             const int nrhs = B.cols();
-            const int lda = A.ld();
-            const int ldb = B.ld();
-            const int strideA = A.stride();
-            const int strideB = B.stride();
+            // 64-bit: b * strideA passes 2^31 at cfloat order 512, batch 8193 (an int wrapped).
+            const std::int64_t lda = A.ld();
+            const std::int64_t ldb = B.ld();
+            const std::int64_t strideA = A.stride();
+            const std::int64_t strideB = B.stride();
             const int work_dim = (side == Side::Left) ? nrhs : m;
 
             ctx->parallel_for(sycl::range<2>(static_cast<size_t>(batch_size), static_cast<size_t>(work_dim)),
                               [=](sycl::id<2> tid) {
-                                  const int b = static_cast<int>(tid[0]);
+                                  const std::int64_t b = static_cast<std::int64_t>(tid[0]);
                                   const int p = static_cast<int>(tid[1]);
 
                                   const T* Ab = A_ptr + b * strideA;
@@ -1047,49 +1028,47 @@ namespace batchlas {
                 Transpose trans,
                 Span<T> tau,
                 Span<std::byte> workspace) {
-        return op_external("cusolver.ormqr_vendor", [&] {
-            static LinalgHandle<B> handle;
-            handle.setStream(ctx);
-            auto m = C.rows();
-            auto n = C.cols();
-            auto k = std::min(A.rows(), A.cols());
-            auto batch_size = A.batch_size();
-            BumpAllocator pool(workspace);
-            if (batch_size == 1) {
-                int lwork;
-                call_backend<T, BackendLibrary::CUSOLVER, B>(
-                    cusolverDnSormqr_bufferSize, cusolverDnDormqr_bufferSize,
-                    cusolverDnCunmqr_bufferSize, cusolverDnZunmqr_bufferSize,
-                    handle,
-                    enum_convert<BackendLibrary::CUSOLVER>(side),
-                    enum_convert<BackendLibrary::CUSOLVER>(trans),
-                    m, n, k,
-                    A.data_ptr(), A.ld(),
-                    tau.data(),
-                    C.data_ptr(), C.ld(),
-                    &lwork);
-                auto device_ws = pool.allocate<T>(ctx, lwork);
-                auto info = pool.allocate<int>(ctx, 1);
-                call_backend<T, BackendLibrary::CUSOLVER, B>(
-                    cusolverDnSormqr, cusolverDnDormqr,
-                    cusolverDnCunmqr, cusolverDnZunmqr,
-                    handle,
-                    enum_convert<BackendLibrary::CUSOLVER>(side),
-                    enum_convert<BackendLibrary::CUSOLVER>(trans),
-                    m, n, k,
-                    A.data_ptr(), A.ld(),
-                    tau.data(),
-                    C.data_ptr(), C.ld(),
-                    device_ws.data(), lwork, info.data());
-            } else {
-                size_t single_ws = ormqr_vendor_buffer_size<B>(ctx, A.batch_item(0), C.batch_item(0), side, trans, tau.subspan(0, k));
-                for (int i = 0; i < batch_size; ++i) {
-                    auto sub_ws = pool.allocate<std::byte>(ctx, single_ws);
-                    (void)ormqr_vendor<B>(ctx, A.batch_item(i), C.batch_item(i), side, trans, tau.subspan(i * k, k), sub_ws);
-                }
+        static LinalgHandle<B> handle;
+        handle.setStream(ctx);
+        auto m = C.rows();
+        auto n = C.cols();
+        auto k = std::min(A.rows(), A.cols());
+        auto batch_size = A.batch_size();
+        BumpAllocator pool(workspace);
+        if (batch_size == 1) {
+            int lwork;
+            call_backend<T, BackendLibrary::CUSOLVER, B>(
+                cusolverDnSormqr_bufferSize, cusolverDnDormqr_bufferSize,
+                cusolverDnCunmqr_bufferSize, cusolverDnZunmqr_bufferSize,
+                handle,
+                enum_convert<BackendLibrary::CUSOLVER>(side),
+                enum_convert<BackendLibrary::CUSOLVER>(trans),
+                m, n, k,
+                A.data_ptr(), A.ld(),
+                tau.data(),
+                C.data_ptr(), C.ld(),
+                &lwork);
+            auto device_ws = pool.allocate<T>(ctx, lwork);
+            auto info = pool.allocate<int>(ctx, 1);
+            call_backend<T, BackendLibrary::CUSOLVER, B>(
+                cusolverDnSormqr, cusolverDnDormqr,
+                cusolverDnCunmqr, cusolverDnZunmqr,
+                handle,
+                enum_convert<BackendLibrary::CUSOLVER>(side),
+                enum_convert<BackendLibrary::CUSOLVER>(trans),
+                m, n, k,
+                A.data_ptr(), A.ld(),
+                tau.data(),
+                C.data_ptr(), C.ld(),
+                device_ws.data(), lwork, info.data());
+        } else {
+            size_t single_ws = ormqr_vendor_buffer_size<B>(ctx, A.batch_item(0), C.batch_item(0), side, trans, tau.subspan(0, k));
+            for (int i = 0; i < batch_size; ++i) {
+                auto sub_ws = pool.allocate<std::byte>(ctx, single_ws);
+                (void)ormqr_vendor<B>(ctx, A.batch_item(i), C.batch_item(i), side, trans, tau.subspan(i * k, k), sub_ws);
             }
-            return ctx.create_event_after_external_work();
-        });
+        }
+        return ctx.create_event_after_external_work();
     }
 
     template <Backend B, typename T>
@@ -1099,32 +1078,30 @@ namespace batchlas {
                              Side side,
                              Transpose trans,
                              Span<T> tau) {
-        return op_external("cusolver.ormqr_vendor_buffer_size", [&] {
-            static LinalgHandle<B> handle;
-            handle.setStream(ctx);
-            auto m = C.rows();
-            auto n = C.cols();
-            auto k = std::min(A.rows(), A.cols());
-            auto batch_size = A.batch_size();
-            if (batch_size == 1) {
-                int lwork;
-                call_backend<T, BackendLibrary::CUSOLVER, B>(
-                    cusolverDnSormqr_bufferSize, cusolverDnDormqr_bufferSize,
-                    cusolverDnCunmqr_bufferSize, cusolverDnZunmqr_bufferSize,
-                    handle,
-                    enum_convert<BackendLibrary::CUSOLVER>(side),
-                    enum_convert<BackendLibrary::CUSOLVER>(trans),
-                    m, n, k,
-                    A.data_ptr(), A.ld(),
-                    tau.data(),
-                    C.data_ptr(), C.ld(),
-                    &lwork);
-                return BumpAllocator::allocation_size<T>(ctx, lwork) + BumpAllocator::allocation_size<int>(ctx, 1); // +1 for info
-            }
+        static LinalgHandle<B> handle;
+        handle.setStream(ctx);
+        auto m = C.rows();
+        auto n = C.cols();
+        auto k = std::min(A.rows(), A.cols());
+        auto batch_size = A.batch_size();
+        if (batch_size == 1) {
+            int lwork;
+            call_backend<T, BackendLibrary::CUSOLVER, B>(
+                cusolverDnSormqr_bufferSize, cusolverDnDormqr_bufferSize,
+                cusolverDnCunmqr_bufferSize, cusolverDnZunmqr_bufferSize,
+                handle,
+                enum_convert<BackendLibrary::CUSOLVER>(side),
+                enum_convert<BackendLibrary::CUSOLVER>(trans),
+                m, n, k,
+                A.data_ptr(), A.ld(),
+                tau.data(),
+                C.data_ptr(), C.ld(),
+                &lwork);
+            return BumpAllocator::allocation_size<T>(ctx, lwork) + BumpAllocator::allocation_size<int>(ctx, 1); // +1 for info
+        }
 
-            size_t single = BumpAllocator::allocation_size<std::byte>(ctx, ormqr_vendor_buffer_size<B>(ctx, A.batch_item(0), C.batch_item(0), side, trans, tau.subspan(0, k)));
-            return single * batch_size;
-        });
+        size_t single = BumpAllocator::allocation_size<std::byte>(ctx, ormqr_vendor_buffer_size<B>(ctx, A.batch_item(0), C.batch_item(0), side, trans, tau.subspan(0, k)));
+        return single * batch_size;
     }
 
     template <Backend B, typename T>
@@ -1325,7 +1302,7 @@ namespace batchlas {
 
     // Only the `backend::`-qualified vendor entry points are instantiated here.
     // WP0b moved every public `batchlas::<op>` out of the vendor TUs and into
-    // src/dispatch/entry_points/, so a public row in this table would be a
+    // src/ops/, so a public row in this table would be a
     // duplicate definition rather than a convenience.
     #define CUBLAS_OPS(B, fp) \
         BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, gemm_vendor) \

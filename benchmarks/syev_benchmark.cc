@@ -1,6 +1,7 @@
 #include <batchlas/util/minibench.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/util/env.hh>
+#include <batchlas/settings.hh>
 #include "bench_utils.hh"
 
 #include <cstdlib>

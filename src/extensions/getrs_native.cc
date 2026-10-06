@@ -1,6 +1,6 @@
 // Native batched GETRS: the row interchange plus two ROUTED trsm solves the
-// facade injects. Ships ROUTE-NEUTRAL (preferred() is false at every shape) so a
-// vendor-free build has a getrs. This TU must share no device symbol with the
+// facade injects. Auto takes it where tuned/getrs.* ranks it first, and a vendor-free
+// build always has a getrs. This TU must share no device symbol with the
 // getrf pair -- hence EXTENSIONS_FACTORIZATION_SOURCES and lu_laswp.hh's tag.
 // evidence: docs/perf/lu.md#getrs-composition-window-evidence
 
@@ -211,8 +211,8 @@ int getrs_perm_spelling_debug(Queue& ctx, int n, int nrhs) {
     return getrs_perm_gather_fits<T>(n, budget) ? 1 : 0;
 }
 
-// Capability flag, true for all four types; preferred() is false at every shape,
-// so a vendor-present build still takes cublas?getrsBatched.
+// Capability flag, true for all four types; which family Auto takes is the
+// tuned/getrs.* table's call.
 template <> bool getrs_blocked_available<float>()                { return true; }
 template <> bool getrs_blocked_available<double>()               { return true; }
 template <> bool getrs_blocked_available<std::complex<float>>()  { return true; }
@@ -246,8 +246,8 @@ Event getrs_blocked_dispatch(Queue& ctx,
     const int nrhs = static_cast<int>(B.cols());
     const int batch = static_cast<int>(A.batch_size());
 
-    // supports()'s gates, re-applied: this entry point is reachable WITHOUT the
-    // table, and an unsupported forced route falls through to automatic().
+    // src/ops/getrs/getrs.cc's can_run(Blocked) mirrors these checks (R3); keep the
+    // two in step. The entry point is also reachable directly.
     if (n < 1 || nrhs < 1 || batch < 1) {
         throw batchlas::invalid_argument("getrs_blocked: degenerate extents");
     }

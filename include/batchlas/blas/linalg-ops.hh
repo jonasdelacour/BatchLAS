@@ -293,13 +293,12 @@ inline Eigh<T> eigh(Queue& ctx,
 // parameter (blas/functions/gesv.hh), so only NoTrans can reach it and Trans /
 // ConjTrans keep the hand-composed getrf + getrs. No shape gate guards the gesv
 // call either: gesv itself picks between its fused kernel and that same composition
-// (dispatch/route_gesv.hh), and a copy of that window here would drift from it.
+// (src/ops/gesv/), and a copy of that window here would drift from it.
 //
-// BEHAVIOUR CHANGE, deliberate: route_gesv's supports() refuses every route when an
-// extent is degenerate (n, nrhs or batch < 1), and the entry point then throws
-// (solve_throw_unroutable). The old hand-composed body enqueued nothing instead.
+// BEHAVIOUR CHANGE, deliberate: gesv throws when an extent is degenerate (n, nrhs or
+// batch < 1; src/ops/gesv/gesv.cc). The old hand-composed body enqueued nothing instead.
 // This makes `solve` agree with `solve_spd`, which has thrown on the identical
-// guard in route_posv.hh since P2.
+// guard (posv's empty-problem throw, src/ops/posv/posv.cc) since P2.
 template <typename T>
 inline Matrix<T, MatrixFormat::Dense> solve(Queue& ctx,
                                             const MatrixView<T, MatrixFormat::Dense>& A,

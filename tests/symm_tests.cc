@@ -94,7 +94,7 @@ int main(int argc, char** argv) {
 }
 
 #if BATCHLAS_HAS_CUDA_BACKEND
-TEST(SymmCudaCustomTest, ForcedCuBLASDxPathMatchesVendor) {
+TEST(SymmCudaCustomTest, ForcedExpandPathMatchesVendor) {
     Queue ctx;
     if (ctx.device().type != DeviceType::GPU) {
         GTEST_SKIP() << "CUDA custom symm test requires a GPU device";
@@ -119,7 +119,7 @@ TEST(SymmCudaCustomTest, ForcedCuBLASDxPathMatchesVendor) {
             MatrixView<float, MatrixFormat::Dense>::copy(ctx, C_vendor.view(), C0.view()).wait();
 
             {
-                ScopedEnvVar force_variant("BATCHLAS_SYMM_VARIANT", "cublasdx");
+                ScopedEnvVar force_route("BATCHLAS_SYMM_ROUTE", "expand");
                 symm(ctx,
                                     A.view(),
                                     B.view(),
@@ -128,7 +128,7 @@ TEST(SymmCudaCustomTest, ForcedCuBLASDxPathMatchesVendor) {
             }
 
             {
-                ScopedEnvVar vendor_variant("BATCHLAS_SYMM_VARIANT", "vendor");
+                ScopedEnvVar vendor_route("BATCHLAS_SYMM_ROUTE", "vendor");
                 symm(ctx,
                                     A.view(),
                                     B.view(),
@@ -155,7 +155,7 @@ TEST(SymmCudaCustomTest, ForcedCuBLASDxPathMatchesVendor) {
 // The custom path expands the referenced triangle into scratch a 32x32 tile at
 // a time, so the sizes that matter are the ones where that tiling is ragged and
 // the ones where the storage's leading dimension is not the matrix width.
-TEST(SymmCudaCustomTest, ForcedCuBLASDxPathIgnoresUnreferencedTriangle) {
+TEST(SymmCudaCustomTest, ForcedExpandPathIgnoresUnreferencedTriangle) {
     Queue ctx;
     if (ctx.device().type != DeviceType::GPU) {
         GTEST_SKIP() << "CUDA custom symm test requires a GPU device";
@@ -201,12 +201,12 @@ TEST(SymmCudaCustomTest, ForcedCuBLASDxPathIgnoresUnreferencedTriangle) {
                 MatrixView<float, MatrixFormat::Dense>::copy(ctx, C_vendor.view(), C0.view()).wait();
 
                 {
-                    ScopedEnvVar force_variant("BATCHLAS_SYMM_VARIANT", "cublasdx");
+                    ScopedEnvVar force_route("BATCHLAS_SYMM_ROUTE", "expand");
                     symm(ctx, A.view(), B.view(), C_custom.view(),
                          {.alpha = alpha, .beta = beta, .side = side, .uplo = uplo}).wait();
                 }
                 {
-                    ScopedEnvVar vendor_variant("BATCHLAS_SYMM_VARIANT", "vendor");
+                    ScopedEnvVar vendor_route("BATCHLAS_SYMM_ROUTE", "vendor");
                     symm(ctx, A.view(), B.view(), C_vendor.view(),
                          {.alpha = alpha, .beta = beta, .side = side, .uplo = uplo}).wait();
                 }
@@ -232,7 +232,7 @@ TEST(SymmCudaCustomTest, ForcedCuBLASDxPathIgnoresUnreferencedTriangle) {
 // The expansion and the GEMM that consumes it are ordered by the queue's native
 // stream, which only exists on an in-order queue; the out-of-order case takes a
 // different ordering path and is not otherwise exercised.
-TEST(SymmCudaCustomTest, ForcedCuBLASDxPathOrdersExpansionOnOutOfOrderQueue) {
+TEST(SymmCudaCustomTest, ForcedExpandPathOrdersExpansionOnOutOfOrderQueue) {
     Queue ordered;
     if (ordered.device().type != DeviceType::GPU) {
         GTEST_SKIP() << "CUDA custom symm test requires a GPU device";
@@ -257,12 +257,12 @@ TEST(SymmCudaCustomTest, ForcedCuBLASDxPathOrdersExpansionOnOutOfOrderQueue) {
             MatrixView<float, MatrixFormat::Dense>::copy(ctx, C_vendor.view(), C0.view()).wait();
 
             {
-                ScopedEnvVar force_variant("BATCHLAS_SYMM_VARIANT", "cublasdx");
+                ScopedEnvVar force_route("BATCHLAS_SYMM_ROUTE", "expand");
                 symm(ctx, A.view(), B.view(), C_custom.view(),
                      {.alpha = alpha, .beta = beta, .side = side, .uplo = uplo}).wait();
             }
             {
-                ScopedEnvVar vendor_variant("BATCHLAS_SYMM_VARIANT", "vendor");
+                ScopedEnvVar vendor_route("BATCHLAS_SYMM_ROUTE", "vendor");
                 symm(ctx, A.view(), B.view(), C_vendor.view(),
                      {.alpha = alpha, .beta = beta, .side = side, .uplo = uplo}).wait();
             }
@@ -283,4 +283,19 @@ TEST(SymmCudaCustomTest, ForcedCuBLASDxPathOrdersExpansionOnOutOfOrderQueue) {
         }
     }
 }
+// BATCHLAS_SYMM_ROUTE takes only its own words; the removed legacy spellings (and any typo)
+// throw rather than silently meaning Auto.
+TEST(SymmCudaCustomTest, RemovedRouteWordsThrow) {
+    Queue ctx;
+    if (ctx.device().type != DeviceType::GPU) {
+        GTEST_SKIP() << "CUDA custom symm test requires a GPU device";
+    }
+    const int n = 16;
+    Matrix<float, MatrixFormat::Dense> A(n, n, 2), B(n, n, 2), C(n, n, 2);
+    for (const char* word : {"tiles", "narrow", "gemm", "custom", "dx", "fused", "diag_full_gemm", "triangular_tiles", "gram_tiles", "expand_gemm", "fused_device", "register_tiled", "native:auto", "vendor:auto", "bogus", "triangular", "gram"}) {
+        ScopedEnvVar route("BATCHLAS_SYMM_ROUTE", word);
+        EXPECT_THROW(symm(ctx, A.view(), B.view(), C.view(), {.alpha = 1.0f, .beta = 0.0f}).wait(), std::invalid_argument) << word;
+    }
+}
+
 #endif

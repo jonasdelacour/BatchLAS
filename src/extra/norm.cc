@@ -6,6 +6,7 @@
 #include "../linalg-impl.hh"
 #include "../queue.hh"
 #include "../math-helpers.hh"
+#include "../ops/syev/vendor.hh"
 
 namespace batchlas
 {   

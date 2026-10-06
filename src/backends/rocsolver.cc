@@ -10,7 +10,6 @@
 
 #include <batchlas/blas/functions/syev.hh>
 #include <batchlas/blas/functions/ormqr.hh>
-#include <batchlas/blas/dispatch/op.hh>
 
 namespace batchlas {
 
@@ -115,45 +114,43 @@ namespace batchlas {
                       Transpose trans,
                       Span<T> tau,
                       Span<std::byte> workspace) {
-        return op_external("rocsolver.ormqr_vendor", [&] {
-            static_cast<void>(workspace);
-            static LinalgHandle<B> handle;
-            handle.setStream(ctx);
-            auto m = C.rows();
-            auto n = C.cols();
-            auto k = std::min(A.rows(), A.cols());
-            if (A.batch_size() == 1) {
-                call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_sormqr, rocsolver_dormqr,
-                                                             rocsolver_cunmqr, rocsolver_zunmqr,
-                                                             handle,
-                                                             enum_convert<BackendLibrary::ROCSOLVER>(side),
-                                                             enum_convert<BackendLibrary::ROCSOLVER>(trans),
-                                                             m, n, k,
-                                                             A.data_ptr(), A.ld(),
-                                                             tau.data(),
-                                                             C.data_ptr(), C.ld());
-            } else {
-                Queue sub_queue(ctx.device(), false);
-                for (int i = 0; i < A.batch_size(); ++i) {
-                    // (void) on an Event: deliberate, but NOT because of queue ordering --
-                    // Queue(device, false) above is explicitly OUT-OF-ORDER, so these
-                    // per-item submissions are not ordered against each other and must
-                    // not be assumed to be. What makes dropping the Events safe is the
-                    // explicit sub_queue.wait() after the loop: it joins all of them
-                    // before this function returns, and the caller's ordering then comes
-                    // from create_event_after_external_work().
-                    (void)ormqr_vendor<B, T>(sub_queue,
-                                       A.batch_item(i),
-                                       C.batch_item(i),
-                                       side,
-                                       trans,
-                                       tau.subspan(i * k, k),
-                                       {});
-                }
-                sub_queue.wait();
+        static_cast<void>(workspace);
+        static LinalgHandle<B> handle;
+        handle.setStream(ctx);
+        auto m = C.rows();
+        auto n = C.cols();
+        auto k = std::min(A.rows(), A.cols());
+        if (A.batch_size() == 1) {
+            call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_sormqr, rocsolver_dormqr,
+                                                         rocsolver_cunmqr, rocsolver_zunmqr,
+                                                         handle,
+                                                         enum_convert<BackendLibrary::ROCSOLVER>(side),
+                                                         enum_convert<BackendLibrary::ROCSOLVER>(trans),
+                                                         m, n, k,
+                                                         A.data_ptr(), A.ld(),
+                                                         tau.data(),
+                                                         C.data_ptr(), C.ld());
+        } else {
+            Queue sub_queue(ctx.device(), false);
+            for (int i = 0; i < A.batch_size(); ++i) {
+                // (void) on an Event: deliberate, but NOT because of queue ordering --
+                // Queue(device, false) above is explicitly OUT-OF-ORDER, so these
+                // per-item submissions are not ordered against each other and must
+                // not be assumed to be. What makes dropping the Events safe is the
+                // explicit sub_queue.wait() after the loop: it joins all of them
+                // before this function returns, and the caller's ordering then comes
+                // from create_event_after_external_work().
+                (void)ormqr_vendor<B, T>(sub_queue,
+                                   A.batch_item(i),
+                                   C.batch_item(i),
+                                   side,
+                                   trans,
+                                   tau.subspan(i * k, k),
+                                   {});
             }
-            return ctx.create_event_after_external_work();
-        });
+            sub_queue.wait();
+        }
+        return ctx.create_event_after_external_work();
     }
 
     template <Backend B, typename T>
@@ -163,15 +160,13 @@ namespace batchlas {
                                     Side side,
                                     Transpose trans,
                                     Span<T> tau) {
-        return op_external("rocsolver.ormqr_vendor_buffer_size", [&] {
-            static_cast<void>(ctx);
-            static_cast<void>(A);
-            static_cast<void>(C);
-            static_cast<void>(side);
-            static_cast<void>(trans);
-            static_cast<void>(tau);
-            return static_cast<size_t>(0);
-        });
+        static_cast<void>(ctx);
+        static_cast<void>(A);
+        static_cast<void>(C);
+        static_cast<void>(side);
+        static_cast<void>(trans);
+        static_cast<void>(tau);
+        return static_cast<size_t>(0);
     }
 
     } // namespace backend
@@ -377,30 +372,28 @@ namespace batchlas {
                       Uplo uplo,
                       Span<std::byte> workspace,
                       Span<int32_t> info_out) {
-        return op_external("rocsolver.syev_vendor", [&] {
-            static LinalgHandle<B> handle;
-            handle.setStream(ctx);
-            BumpAllocator pool(workspace);
-            // rocSOLVER's info is documented per-item LAPACK semantics (see the note
-            // on potrf_vendor above, which already uses info_target). It was
-            // allocated, passed and dropped. Routing the caller's span in only ever
-            // REMOVES a pool draw, so syev_vendor_buffer_size keeps its
-            // unconditional int term and its result does not change.
-            auto info = detail::info_target(ctx, pool, info_out, static_cast<size_t>(A.batch_size()));
-            auto ws = pool.allocate<typename base_type<T>::type>(ctx, A.rows() * A.batch_size());
-            if (A.batch_size() == 1) {
-                call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_ssyev, rocsolver_dsyev, rocsolver_cheev, rocsolver_zheev,
-                    handle, jobtype, uplo,
-                    A.rows(), A.data_ptr(), A.ld(), eigenvalues.data(), ws.data(),
-                    info.data());
-            } else {
-                call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_ssyev_strided_batched, rocsolver_dsyevd_strided_batched,
-                    rocsolver_cheevd_strided_batched, rocsolver_zheevd_strided_batched,
-                    handle, jobtype, uplo,
-                    A.rows(), A.data_ptr(), A.ld(), A.stride(), eigenvalues.data(), A.rows(), ws.data(), A.rows(), info.data(), A.batch_size());
-            }
-            return ctx.create_event_after_external_work();
-        });
+        static LinalgHandle<B> handle;
+        handle.setStream(ctx);
+        BumpAllocator pool(workspace);
+        // rocSOLVER's info is documented per-item LAPACK semantics (see the note
+        // on potrf_vendor above, which already uses info_target). It was
+        // allocated, passed and dropped. Routing the caller's span in only ever
+        // REMOVES a pool draw, so syev_vendor_buffer_size keeps its
+        // unconditional int term and its result does not change.
+        auto info = detail::info_target(ctx, pool, info_out, static_cast<size_t>(A.batch_size()));
+        auto ws = pool.allocate<typename base_type<T>::type>(ctx, A.rows() * A.batch_size());
+        if (A.batch_size() == 1) {
+            call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_ssyev, rocsolver_dsyev, rocsolver_cheev, rocsolver_zheev,
+                handle, jobtype, uplo,
+                A.rows(), A.data_ptr(), A.ld(), eigenvalues.data(), ws.data(),
+                info.data());
+        } else {
+            call_backend<T, BackendLibrary::ROCSOLVER, B>(rocsolver_ssyev_strided_batched, rocsolver_dsyevd_strided_batched,
+                rocsolver_cheevd_strided_batched, rocsolver_zheevd_strided_batched,
+                handle, jobtype, uplo,
+                A.rows(), A.data_ptr(), A.ld(), A.stride(), eigenvalues.data(), A.rows(), ws.data(), A.rows(), info.data(), A.batch_size());
+        }
+        return ctx.create_event_after_external_work();
     }
 
     template <Backend B, typename T>
@@ -409,10 +402,8 @@ namespace batchlas {
                                    Span<typename base_type<T>::type> /*eigenvalues*/,
                                    JobType /*jobtype*/,
                                    Uplo /*uplo*/) {
-        return op_external("rocsolver.syev_vendor_buffer_size", [&] {
-            return BumpAllocator::allocation_size<typename base_type<T>::type>(ctx, A.rows() * A.batch_size()) +
-                   BumpAllocator::allocation_size<int>(ctx, A.batch_size());
-        });
+        return BumpAllocator::allocation_size<typename base_type<T>::type>(ctx, A.rows() * A.batch_size()) +
+               BumpAllocator::allocation_size<int>(ctx, A.batch_size());
     }
 
     // gesvd has no rocSOLVER binding yet. This stub exists because
@@ -453,7 +444,7 @@ namespace batchlas {
     // Every row names a `backend::`-qualified `_vendor` symbol, and that is the
     // WP0b invariant rather than an oversight: the public potrf/syev/geqrf/
     // getrf/getrs/getri/ormqr/orgqr definitions moved out of the vendor TUs into
-    // src/dispatch/entry_points/{factorization,eigen}.cc, which instantiate them
+    // src/ops/<op>/<op>.cc, which instantiate them
     // keyed on the device family instead of on any vendor library. A
     // BATCHLAS_INSTANTIATE_OP row for a public op here would collide with those.
     // _BACKEND_OP still looks the alias up as `sig::OP` -- only the FUNCTION is

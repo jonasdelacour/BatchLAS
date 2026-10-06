@@ -6,11 +6,11 @@
 // runtime variable moves it to local memory). Rows n..N-1 pad with Lc(s,s)=1.
 
 #include "trsm_native.hh"
+#include "trsm_canonical.hh"
 
 #include "../linalg-impl.hh"
 #include "../util/resident_capacity.hh"
 #include "device_scalar.hh"
-#include "gemm_kernels.hh"
 
 #include <sycl/sycl.hpp>
 
@@ -25,28 +25,6 @@
 namespace batchlas::sycl_trsm {
 
 namespace {
-
-// The 24 (side, uplo, transA, diag) combinations fold into ONE recurrence over a
-// canonical unit-lower Lc. evidence: docs/perf/trsm.md#design-v1-v2-and-the-canonical-fold
-struct Canonical {
-    bool do_trans;
-    bool do_conj;
-    bool op_is_lower;
-    bool unit;
-    bool fwd;
-};
-
-inline Canonical canonicalise(Side side, Uplo uplo, Transpose transA, Diag diag) {
-    Canonical c{};
-    c.do_trans = (transA != Transpose::NoTrans);
-    c.do_conj = (transA == Transpose::ConjTrans);
-    c.op_is_lower = (uplo == Uplo::Lower) ? !c.do_trans : c.do_trans;
-    c.unit = (diag == Diag::Unit);
-    // fwd is the direction the canonical recurrence marches. Getting this
-    // backwards is silent: it solves a different triangle and still returns.
-    c.fwd = (side == Side::Left) ? c.op_is_lower : !c.op_is_lower;
-    return c;
-}
 
 // Smallest compile-time bucket >= n, or 0 for none: a narrower bucket would
 // silently solve the leading NxN system. evidence: docs/perf/trsm.md#the-bucket-ladder-that-truncated
@@ -392,17 +370,8 @@ Event trsm_native_blocked(Queue& ctx,
                           Transpose transA,
                           Diag diag,
                           TrsmTrailingGemm<T> trailing_gemm) {
-    // Default to the native kernel so this TU stands alone; the facade passes the ROUTED gemm.
     if (!trailing_gemm) {
-        trailing_gemm = [](Queue& c,
-                           const MatrixView<T, MatrixFormat::Dense>& ga,
-                           const MatrixView<T, MatrixFormat::Dense>& gb,
-                           const MatrixView<T, MatrixFormat::Dense>& gc,
-                           T galpha, T gbeta, Transpose gta, Transpose gtb,
-                           ComputePrecision gp) {
-            return sycl_gemm::gemm_custom<T>(c, ga, gb, gc, galpha, gbeta,
-                                             gta, gtb, gp);
-        };
+        throw batchlas::invalid_argument("trsm_native_blocked: trailing_gemm is required (pass the public gemm)");
     }
     const Canonical can = canonicalise(side, uplo, transA, diag);
     const int n = static_cast<int>(A.rows());

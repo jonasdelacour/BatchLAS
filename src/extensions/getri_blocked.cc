@@ -1,7 +1,7 @@
 // Native batched GETRI. With A = F^{-1} L U (F the interchange sequence applied
 // FORWARDS), A^-1 = U^-1 L^-1 F: set C := F, then two ROUTED triangular solves.
 // F is traced straight into C from ipiv, so there is no permutation kernel, no
-// perm[] array and no workspace. preferred() is false for every shape.
+// perm[] array and no workspace. Auto takes it only where tuned/getri.* ranks it first.
 // evidence: docs/perf/lu.md#getri-window-evidence
 
 #include "getri_native.hh"
@@ -162,9 +162,9 @@ Event getri_blocked_dispatch(Queue& ctx,
     const int n = static_cast<int>(A.rows());
     const int batch = static_cast<int>(A.batch_size());
 
-    // Every RouteTable<Op::getri,T>::supports() gate is re-applied: this entry point
-    // is reachable without the table, and an unsupported forced route falls through
-    // to automatic() -- a wrong gate here makes a pinned-route test measure cuBLAS.
+    // can_run(Blocked) in src/ops/getri/getri.cc is re-applied, bar its pivot-format
+    // (Backend) clause, which this Backend-free driver cannot see: it is reachable
+    // without choose(), and R3 requires the two to agree.
     if (n < 1 || batch < 1) {
         throw batchlas::invalid_argument("getri_blocked: degenerate extents");
     }
@@ -183,7 +183,7 @@ Event getri_blocked_dispatch(Queue& ctx,
         throw batchlas::unsupported("getri_blocked: device does not offer sub-group size 32");
     }
 
-    // Ungateable by the route: GetriShape is a function of A alone, so C is unchecked.
+    // Not in can_run: getri's choice is a function of A alone, so C is checked here.
     if (C.rows() != n || C.cols() != n) {
         throw batchlas::invalid_argument("getri_blocked: C must be square of A's order");
     }

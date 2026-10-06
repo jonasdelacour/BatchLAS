@@ -4,6 +4,7 @@
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-span.hh>
+#include <batchlas/no_route.hh>  // NoRouteError: what every op throws when this build cannot serve it
 #include <complex>
 
 // Include all function headers

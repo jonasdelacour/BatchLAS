@@ -12,12 +12,13 @@
 #include <batchlas/blas/functions/getri.hh>
 #include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/blas/functions/trsm.hh>
-#include <batchlas/blas/dispatch/vendor_available.hh>
+#include "../src/select/vendor.hh"
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
+#include <batchlas/settings.hh>
 
 #include "test_utils.hh"
 
@@ -32,9 +33,8 @@
 #include "../src/extensions/getrf_native.hh"
 #include "../src/extensions/getrs_native.hh"
 #include "../src/extensions/getri_native.hh"
-#include "../src/backends/getrf_route.hh"
-#include "../src/backends/getrs_route.hh"
-#include "../src/backends/getri_route.hh"
+#include "../src/ops/getrs/choice.hh"
+#include "../src/ops/getri/choice.hh"
 
 #include <algorithm>
 #include <cmath>
@@ -387,13 +387,13 @@ protected:
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
         if (!this->ctx) GTEST_SKIP() << "no queue";
         if (this->ctx->device().type != DeviceType::GPU)
-            GTEST_SKIP() << "the native LU kernels are GPU-only (route_getrf.hh gate 2)";
+            GTEST_SKIP() << "the native LU kernels are GPU-only (getrf.cc can_run)";
         if (!this->ctx->device().supports_sub_group_size(32))
-            GTEST_SKIP() << "device does not offer sub-group size 32 (route_getrf.hh gate 3)";
+            GTEST_SKIP() << "device does not offer sub-group size 32 (getrf.cc can_run)";
     }
 
     // The DEVICE's local-memory budget, spelled exactly as
-    // src/backends/getrf_route.hh spells it, NOT device_limits.hh's hardcoded 49152.
+    // select::Device::slm_budget spells it, NOT device_limits.hh's hardcoded 49152.
     std::size_t budget() const {
         const std::size_t lm = static_cast<std::size_t>(
             this->ctx->device().get_property(DeviceProperty::LOCAL_MEM_SIZE));
@@ -439,6 +439,18 @@ protected:
                   T al, Side sd, Uplo ul, Transpose tr, Diag dg) {
             return trsm<BackendType, T>(c, ta, tb, al, sd, ul, tr, dg);
         };
+    }
+    // getrs selects in src/ops/getrs/: a pin its can_run refuses throws from the sizing call.
+    bool getrs_pin_accepted(const ops::getrs::GetrsChoice& c, const MatrixView<T, MatrixFormat::Dense>& A,
+                            const MatrixView<T, MatrixFormat::Dense>& Bv, Transpose op) {
+        const select::ScopedPin<ops::getrs::GetrsChoice> pin("getrs", c);
+        try {
+            (void)getrs_buffer_size<BackendType, T>(*this->ctx, A, Bv, op);
+            return true;
+        } catch (const std::invalid_argument& e) {
+            if (std::string(e.what()).find("cannot run this shape") == std::string::npos) throw;
+            return false;
+        }
     }
     sycl_getri::GetriSolveTrsm<T> getri_seam() const {
         return [](Queue& c, const MatrixView<T, MatrixFormat::Dense>& ta,
@@ -899,8 +911,8 @@ TYPED_TEST(LuTest, FusedGetrsLaunchHoleAt48KiB) {
             << budget << " B, but that capacity asks the runtime for "
             << fused_capacity_bytes(cap, sz)
             << " B once the 48 KB hole pad is applied -- an UNLAUNCHABLE capacity, which is "
-               "route_getrs.hh's fused_max_elems and therefore a supports() that promises a "
-               "route the facade cannot service";
+               "the bound getrs's can_run(cta) reads and therefore a pin it accepts that "
+               "the driver cannot service";
     }
     // Coarse ladder past the band, including this device's own budget.
     for (std::size_t budget : {std::size_t(4096), std::size_t(16384), std::size_t(32768),
@@ -1691,7 +1703,7 @@ TYPED_TEST(LuTest, BlockedDriverTakesTheRegisterLeafUnderTheKnob) {
 
     // AND THE DEFAULT IS THE REGISTER LEAF. Every P4 ratio on the page was measured
     // against a driver that takes it with the variable UNSET, so a silent revert of
-    // the default would leave the window in route_getrf.hh scored against an arm
+    // the default would leave the transcribed getrf rows scored against an arm
     // nothing runs. evidence: docs/perf/lu.md#the-register-leaf-ab
     {
         const ScopedEnvVar unset("BATCHLAS_GETRF_LEAF", nullptr);
@@ -2191,7 +2203,7 @@ TYPED_TEST(LuTest, GetrsPermSpellingDecisionSurface) {
 }
 
 // L8d. THE GATHER BUYS NO WORKSPACE, AT ANY WIDTH. The facade takes the workspace
-// maximum over EVERY NATIVE TIER THAT supports() the shape, not over the tier the
+// maximum over EVERY NATIVE TIER WHOSE can_run ACCEPTS the shape, not over the tier the
 // route named, so a gather that bought an out-of-place RHS here would bill every
 // narrow call that routes to the FUSED tier and needs nothing.
 TYPED_TEST(LuTest, GetrsPermGatherBuysNoWorkspace) {
@@ -2279,14 +2291,14 @@ TYPED_TEST(LuTest, GetriInvertsAndLeavesTheFactorUntouched) {
 }
 
 // L10 / L11. THE DROP-IN CONTRACT, BOTH DIRECTIONS. getrf, getrs and getri carry
-// INDEPENDENT env variables and INDEPENDENT preferred() windows, so every mixture
+// INDEPENDENT env variables and INDEPENDENT tuned tables, so every mixture
 // of native and vendor arms is reachable in a shipped build. The two getrf
 // implementations are NOT required to agree on the PIVOTS they choose: cuBLAS
 // pivots on the modulus for complex.
 TYPED_TEST(LuTest, NativeFactorFeedsTheVendorSolvers) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::BackendType;
-    if constexpr (!dispatch::factorization_vendor_available<B>) {
+    if constexpr (!batchlas::select::factorization_vendor_available<B>) {
         GTEST_SKIP() << "no factorization vendor in this build";
     } else {
         const int n = 72, batch = 3, nrhs = 4;
@@ -2337,7 +2349,7 @@ TYPED_TEST(LuTest, NativeFactorFeedsTheVendorSolvers) {
 TYPED_TEST(LuTest, VendorFactorFeedsTheNativeSolvers) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::BackendType;
-    if constexpr (!dispatch::factorization_vendor_available<B>) {
+    if constexpr (!batchlas::select::factorization_vendor_available<B>) {
         GTEST_SKIP() << "no factorization vendor in this build";
     } else {
         const int n = 72, batch = 3, nrhs = 4;
@@ -2397,191 +2409,44 @@ TYPED_TEST(LuTest, VendorFactorFeedsTheNativeSolvers) {
     }
 }
 
-// L12. THE ROUTE TABLE AND THE VENDOR-FREE FALLBACK, asked of the REAL shape
-// builder on the REAL device. route_vocabulary_tests.cc exercises the table
-// against SYNTHETIC shapes; what it cannot see is whether the builder reports a
-// capacity at all here -- an LU versus a NoRouteError in a vendor-free build.
-TYPED_TEST(LuTest, RouteTableAndTheVendorFreeFallback) {
+// L12. GETRS'S FUSED CAPACITY ON THE REAL DEVICE: whether the device reports a
+// capacity at all here. The windows and vendor-free walks are table data, asserted in
+// get{rf,rs,ri}_candidates_tests.
+TYPED_TEST(LuTest, GetrsFusedCapacityOnTheRealDevice) {
     using T = typename TestFixture::T;
-    constexpr Backend B = TestFixture::BackendType;
 
     // This test asserts what the tables do with NO route pinned, so it has to say
     // so: an inherited BATCHLAS_GET*_ROUTE -- exported in a shell, or set by the
     // route-pinned ctest rerun -- otherwise forces the answer and the test reports
     // a window defect that is really just its own environment. Empty reads as
-    // unset in parse_route_env.
+    // unset in select's pin reader.
     ScopedEnvVar clear_getrf("BATCHLAS_GETRF_ROUTE", "");
     ScopedEnvVar clear_getrs("BATCHLAS_GETRS_ROUTE", "");
     ScopedEnvVar clear_getri("BATCHLAS_GETRI_ROUTE", "");
 
-    auto small = make_dominant_permuted<T>(std::min(40, std::max(2, this->cta_max_n())), 2, 5u);
     auto large = make_dominant_permuted<T>(512, 2, 6u);
-    auto Vs = view_of(small);
     auto Vl = view_of(large);
 
-    const auto shape = backend::getrf_op_shape<B, T>(*this->ctx, Vs);
-    ASSERT_TRUE(shape.has_value());
-    EXPECT_EQ(shape->backend, B) << "the builder must SET s.backend or every coverage row for "
-                                    "this op reads Backend::AUTO";
-    EXPECT_GE(shape->cta_max_n, 1) << "the CTA capacity is 0 on this device, so the tier is "
-                                      "advertised as absent";
-    EXPECT_TRUE(shape->blocked_available);
+    // getrf, getrs and getri all select from transcribed tables now: their windows and
+    // vendor-free walks are asserted in get{rf,rs,ri}_candidates_tests.
 
-    for (auto* V : {&Vs, &Vl}) {
-        const auto free_r = backend::getrf_route<B, T>(*this->ctx, *V, /*vendor_available=*/false);
-        EXPECT_TRUE(dispatch::is_native(free_r))
-            << "getrf has NO route in a vendor-free build at n=" << V->rows();
-        EXPECT_TRUE(free_r.algo == dispatch::Algorithm::CTA ||
-                    free_r.algo == dispatch::Algorithm::Blocked);
-    }
-    {
-        auto Bv = make_rhs<T>(large.n, 3, large.batch, 77u);
-        auto Bview = view_of(Bv);
-        for (Transpose op : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans}) {
-            const auto r = backend::getrs_route<B, T>(*this->ctx, Vl, Bview, op, false);
-            EXPECT_TRUE(dispatch::is_native(r)) << "getrs has no vendor-free route, transA="
-                                                << int(op);
-        }
-        const auto ri = backend::getri_route<B, T>(*this->ctx, Vl, false);
-        EXPECT_TRUE(dispatch::is_native(ri)) << "getri has no vendor-free route";
-    }
-
-    // THE SHIPPED WINDOWS, met here at BATCH 2; neither carries a batch term.
-    //   getrf: native:blocked for float at order >= 256; cfloat at >= 512, or
-    //          >= 256 when batch >= 256 (P4).
-    //   getri: native:blocked for float at order >= 128, cfloat at >= 256.
-    //   double and cdouble earn no window in either op, at any order.
-    // evidence: docs/perf/lu.md#getrf-window-evidence
-    //           docs/perf/lu.md#getri-window-evidence
-    if constexpr (dispatch::factorization_vendor_available<B>) {
-        constexpr bool kF  = std::is_same_v<T, float>;
-        constexpr bool kCF = std::is_same_v<T, std::complex<float>>;
-
-        // Vs (order <= 40) is below EVERY boundary of both windows, for every
-        // type: this is what catches a window that forgets its lower bound.
-        EXPECT_TRUE(dispatch::is_vendor(
-            backend::getrf_route<B, T>(*this->ctx, Vs, /*vendor_available=*/true)))
-            << "getrf routed NATIVE at n=" << Vs.rows()
-            << ", below every measured boundary";
-        EXPECT_TRUE(dispatch::is_vendor(
-            backend::getri_route<B, T>(*this->ctx, Vs, /*vendor_available=*/true)));
-
-        // THE CFLOAT EDGE P4 MOVED, on BOTH of its axes: n=256 at batch 256 is in;
-        // the same order at batch 2 is out, because 256..511 LOSES at small batch; and
-        // n=192 is out at any batch. Asserting only n=512 cannot fail when the floor
-        // slides back to 512, and asserting only the order cannot fail when the batch
-        // term is dropped. evidence: docs/perf/lu.md#the-cfloat-window-moves-to-256
-        {
-            auto in_band   = make_dominant_permuted<T>(256, 256, 9501u);
-            auto small_bat = make_dominant_permuted<T>(256, 2, 9502u);
-            auto out_band  = make_dominant_permuted<T>(192, 256, 9503u);
-            auto Vin  = view_of(in_band);
-            auto Vsb  = view_of(small_bat);
-            auto Vout = view_of(out_band);
-            const auto r_in  = backend::getrf_route<B, T>(*this->ctx, Vin, true);
-            const auto r_sb  = backend::getrf_route<B, T>(*this->ctx, Vsb, true);
-            const auto r_out = backend::getrf_route<B, T>(*this->ctx, Vout, true);
-            if constexpr (kCF) {
-                EXPECT_TRUE(dispatch::is_native(r_in) &&
-                            r_in.algo == dispatch::Algorithm::Blocked)
-                    << "cfloat n=256 batch=256 is inside the window P4 measured "
-                       "(1.285 there, 1.146-1.295 at the saturating rungs)";
-                EXPECT_TRUE(dispatch::is_vendor(r_sb))
-                    << "cfloat n=256 batch=2 is OUTSIDE it: the 256..511 band reads 0.92 "
-                       "at batch 128 and the clause carries a batch >= 256 term";
-            } else if constexpr (!kF) {
-                EXPECT_TRUE(dispatch::is_vendor(r_in))
-                    << "only float and cfloat earned a getrf window";
-            }
-            if constexpr (!kF) {
-                EXPECT_TRUE(dispatch::is_vendor(r_out))
-                    << "n=192 is the bracketing NON-winner below the cfloat floor";
-            }
-        }
-
-        // Vl is n = 512: inside both windows for float and cfloat, outside for the doubles.
-        const auto rf512 = backend::getrf_route<B, T>(*this->ctx, Vl, true);
-        const auto ri512 = backend::getri_route<B, T>(*this->ctx, Vl, true);
-        if constexpr (kF || kCF) {
-            EXPECT_TRUE(dispatch::is_native(rf512) &&
-                        rf512.algo == dispatch::Algorithm::Blocked)
-                << "getrf n=512 batch=2 is inside the measured window for this type "
-                   "and must resolve native:blocked";
-            EXPECT_TRUE(dispatch::is_native(ri512) &&
-                        ri512.algo == dispatch::Algorithm::Blocked)
-                << "getri n=512 batch=2 is inside the measured window for this type";
-        } else {
-            EXPECT_TRUE(dispatch::is_vendor(rf512))
-                << "double and cdouble earned NO getrf window: their best cell "
-                   "anywhere is 1.067 and 1.012";
-            EXPECT_TRUE(dispatch::is_vendor(ri512))
-                << "double and cdouble earned NO getri window: cdouble n=512 LOSES "
-                   "at 0.954 and double n=1024 is 1.155 and falling";
-        }
-    }
-
-    // ---- GETRS'S MEASURED WINDOW, ASKED OF THE REAL SHAPE BUILDER ----------
-    // route_vocabulary_tests.cc pins the same window against SYNTHETIC shapes. What it
-    // cannot see is whether the BUILDER on THIS DEVICE reports capacities at all: one
-    // returning 0 for fused_max_elems makes every window assertion there hold
-    // vacuously. So the capacities first, then the window.
-    // evidence: docs/perf/lu.md#getrs-fused-window-evidence
+    // ---- GETRS'S FUSED TIER ON THIS DEVICE --------------------------------
+    // The window itself is the transcribed table's (getrs_candidates_tests). What only a real
+    // device shows is whether the fused capacity is there at all: a zero capacity makes every
+    // cta row unrunnable and the table's cta entries silently mean the next one.
     {
         auto rhs1 = make_rhs<T>(large.n, 1, large.batch, 5151u);
         auto V1 = view_of(rhs1);
-        const auto gs = backend::getrs_op_shape<B, T>(*this->ctx, Vl, V1,
-                                                      Transpose::NoTrans);
-        ASSERT_TRUE(gs.has_value());
-        EXPECT_GT(gs->fused_max_elems, 0)
-            << "the builder reports NO resident-RHS capacity on this device, so the "
-               "fused tier is advertised as absent and every window assertion in "
-               "route_vocabulary_tests.cc holds vacuously";
-        EXPECT_EQ(gs->fused_max_nrhs, int64_t(sycl_getrs::kGetrsFusedMaxRhs));
-        EXPECT_GE(gs->fused_max_elems, int64_t(large.n))
-            << "n=" << large.n << " at nrhs=1 must fit, or the window below is about "
-               "a route this device cannot take";
-
-        if constexpr (dispatch::factorization_vendor_available<B>) {
-            // INSIDE the window, all three transpose modes.
-            for (Transpose op : {Transpose::NoTrans, Transpose::Trans,
-                                 Transpose::ConjTrans}) {
-                const auto r = backend::getrs_route<B, T>(*this->ctx, Vl, V1, op,
-                                                          /*vendor_available=*/true);
-                EXPECT_TRUE(dispatch::is_native(r) && r.algo == dispatch::Algorithm::CTA)
-                    << "nrhs=1 with a vendor present, transA=" << int(op)
-                    << ": the measured window is nrhs<=2 for every type";
-            }
-            // OUTSIDE it -- above the widest instantiation -- the vendor.
-            auto rhsw = make_rhs<T>(large.n, int(sycl_getrs::kGetrsFusedMaxRhs) + 8,
-                                    large.batch, 5252u);
-            auto Vw2 = view_of(rhsw);
-            EXPECT_TRUE(dispatch::is_vendor(backend::getrs_route<B, T>(
-                *this->ctx, Vl, Vw2, Transpose::NoTrans, /*vendor_available=*/true)));
-        }
+        EXPECT_GE(sycl_getrs::getrs_fused_max_rhs_elems<T>(this->budget()), std::size_t(large.n))
+            << "n=" << large.n << " at nrhs=1 must fit the resident-RHS capacity";
+        for (Transpose op : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans})
+            EXPECT_TRUE(this->getrs_pin_accepted(ops::getrs::Cta{}, Vl, V1, op)) << "transA=" << int(op);
+        auto rhsw = make_rhs<T>(large.n, int(sycl_getrs::kGetrsFusedMaxRhs) + 8, large.batch, 5252u);
+        auto Vw2 = view_of(rhsw);
+        EXPECT_FALSE(this->getrs_pin_accepted(ops::getrs::Cta{}, Vl, Vw2, Transpose::NoTrans))
+            << "above the widest instantiated accumulator";
     }
 
-    // supports() is CORRECTNESS ONLY. A non-square view has no shape at all, and
-    // a heterogeneous batch is refused outright.
-    {
-        UnifiedVector<T> wide(size_t(40) * 64, mk<T>(1.0, 0.0));
-        UnifiedVector<T*> wp(1, nullptr);
-        MatrixView<T, MatrixFormat::Dense> W(wide.data(), 40, 64, 40, 40 * 64, 1, wp.data());
-        EXPECT_FALSE((backend::getrf_op_shape<B, T>(*this->ctx, W).has_value()))
-            << "a non-square view must not describe a getrf";
-    }
-    {
-        using Tbl = dispatch::RouteTable<dispatch::Op::getrf, T>;
-        auto s = *shape;
-        s.heterogeneous_batch = true;
-        EXPECT_FALSE(Tbl::supports({dispatch::Origin::Native, dispatch::Algorithm::CTA}, s));
-        EXPECT_FALSE(Tbl::supports({dispatch::Origin::Native, dispatch::Algorithm::Blocked}, s));
-        s = *shape;
-        s.is_gpu = false;
-        EXPECT_FALSE(Tbl::supports({dispatch::Origin::Native, dispatch::Algorithm::Blocked}, s));
-        s = *shape;
-        s.batch = 0;
-        EXPECT_FALSE(Tbl::supports({dispatch::Origin::Native, dispatch::Algorithm::CTA}, s));
-    }
 }
 
 // L13. THE FACADE REACHES THE NATIVE KERNELS, ASSERTED BIT-EXACTLY. A route
@@ -2601,15 +2466,9 @@ TYPED_TEST(LuTest, FacadeReachesTheNativeKernelsBitExactly) {
         auto direct = make_dominant_permuted<T>(n, batch, 1234u);
         auto viafac = make_dominant_permuted<T>(n, batch, 1234u);
 
-        // THE PIN IS VERIFIED, NEVER ASSUMED: an unrecognised value, or one supports()
-        // refuses, silently resolves to the VENDOR and this test compares it with itself.
+        // A getrf pin that cannot run throws (flat selection, R6) instead of falling to the
+        // vendor, so the bit-exact comparison below is against the pinned tier.
         auto Vf = view_of(viafac);
-        const auto route = backend::getrf_route<B, T>(
-            *this->ctx, Vf, dispatch::factorization_vendor_available<B>);
-        ASSERT_TRUE(dispatch::is_native(route)) << "the '" << pin << "' pin did not take";
-        ASSERT_EQ(route.algo, std::strcmp(pin, "cta") == 0 ? dispatch::Algorithm::CTA
-                                                           : dispatch::Algorithm::Blocked)
-            << "the '" << pin << "' pin resolved to the other native tier";
 
         if (std::strcmp(pin, "cta") == 0) this->run_cta(direct);
         else                              this->run_blocked(direct);
@@ -2638,14 +2497,12 @@ TYPED_TEST(LuTest, FacadeReachesTheNativeKernelsBitExactly) {
         this->run_blocked(p);
         auto A = view_of(p);
 
-        ScopedEnvVar g("BATCHLAS_GETRS_ROUTE", "blocked");
+        // A pin its can_run refuses throws, so the comparison below is never vendor vs native.
+        const select::ScopedPin<ops::getrs::GetrsChoice> g("getrs", ops::getrs::Blocked{});
         auto r1 = make_rhs<T>(n, 3, batch, 88u);
         auto r2 = make_rhs<T>(n, 3, batch, 88u);
         auto V1 = view_of(r1);
         auto V2 = view_of(r2);
-        const auto rr = backend::getrs_route<B, T>(*this->ctx, A, V2, Transpose::Trans,
-                                                   dispatch::factorization_vendor_available<B>);
-        ASSERT_TRUE(dispatch::is_native(rr)) << "the getrs pin did not take";
 
         UnifiedVector<std::byte> w1(std::max<std::size_t>(
             1, sycl_getrs::getrs_blocked_buffer_size<T>(*this->ctx, A, V1, Transpose::Trans)));
@@ -2666,7 +2523,8 @@ TYPED_TEST(LuTest, FacadeReachesTheNativeKernelsBitExactly) {
         this->run_blocked(p);
         auto A = view_of(p);
 
-        ScopedEnvVar g("BATCHLAS_GETRI_ROUTE", "blocked");
+        // A ScopedPin throws when Blocked cannot run this shape, so it needs no readback.
+        const select::ScopedPin<ops::getri::GetriChoice> g("getri", ops::getri::Blocked{});
         Lu<T> c1, c2;
         alloc(c1, n, batch, 7, 13);
         alloc(c2, n, batch, 7, 13);
@@ -2675,10 +2533,6 @@ TYPED_TEST(LuTest, FacadeReachesTheNativeKernelsBitExactly) {
         UnifiedVector<int32_t> i1(size_t(batch), -12345), i2(size_t(batch), -12345);
         auto C1 = view_of(c1);
         auto C2 = view_of(c2);
-        const auto rr = backend::getri_route<B, T>(*this->ctx, A,
-                                                   dispatch::factorization_vendor_available<B>);
-        ASSERT_TRUE(dispatch::is_native(rr)) << "the getri pin did not take";
-
         UnifiedVector<std::byte> w1(std::max<std::size_t>(
             1, sycl_getri::getri_blocked_buffer_size<T>(*this->ctx, A)));
         (void)sycl_getri::getri_blocked_dispatch<T>(*this->ctx, A, C1, p.piv.to_span(), w1.to_span(),
@@ -2695,7 +2549,7 @@ TYPED_TEST(LuTest, FacadeReachesTheNativeKernelsBitExactly) {
     }
 }
 
-// L14. THE DIRECT ENTRY POINTS REFUSE WHAT supports() REFUSES. They are reachable
+// L14. THE DIRECT ENTRY POINTS REFUSE WHAT can_run REFUSES. They are reachable
 // WITHOUT the table, so every gate has to be re-applied there or a pinned-route
 // caller walks into an unlaunchable configuration.
 TYPED_TEST(LuTest, DirectEntryPointsRefuseWhatSupportsRefuses) {
@@ -2727,6 +2581,12 @@ TYPED_TEST(LuTest, DirectEntryPointsRefuseWhatSupportsRefuses) {
                                                        ws.to_span(), Span<int32_t>{}),
                      std::invalid_argument);
     }
+    // An empty trailing-update seam. NOT defaulted to gemm_custom any more.
+    EXPECT_THROW((void)sycl_getrf::getrf_blocked_dispatch<T>(*this->ctx, A, p.piv.to_span(),
+                                                       ws.to_span(), Span<int32_t>{},
+                                                       sycl_getrf::GetrfTrailingGemm<T>{},
+                                                       this->trsm_seam()),
+                 std::invalid_argument);
     // An empty panel-solve seam. NOT defaulted to a native trsm.
     EXPECT_THROW((void)sycl_getrf::getrf_blocked_dispatch<T>(*this->ctx, A, p.piv.to_span(),
                                                        ws.to_span(), Span<int32_t>{},
@@ -2785,7 +2645,7 @@ TYPED_TEST(LuTest, DirectEntryPointsRefuseWhatSupportsRefuses) {
 // L15. THE WORKSPACE QUERY COVERS EVERY SUPPORTED ROUTE, AND DEREFERENCES
 // NOTHING: getrf_buffer_size and getri_buffer_size are reached from inside a
 // layout function under BumpAllocator::measuring() (src/extensions/inv.cc), where
-// A arrives with a NULL data pointer. The facade's figure is max(native, vendor).
+// A arrives with a NULL data pointer. getrf's figure is exactly the chosen tier's (R5).
 TYPED_TEST(LuTest, BufferSizeCoversEveryRouteAndNeverDereferences) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::BackendType;
@@ -2807,17 +2667,13 @@ TYPED_TEST(LuTest, BufferSizeCoversEveryRouteAndNeverDereferences) {
         ScopedEnvVar g("BATCHLAS_GETRF_ROUTE", pin);
         auto p = make_dominant_permuted<T>(n, batch, 2u);
         auto V = view_of(p);
-        const auto route = backend::getrf_route<B, T>(
-            *this->ctx, V, dispatch::factorization_vendor_available<B>);
-        ASSERT_TRUE(dispatch::is_native(route)) << "pin '" << pin << "' did not take";
-
         const std::size_t need = getrf_buffer_size<B, T>(*this->ctx, V);
         const std::size_t native_need =
-            (route.algo == dispatch::Algorithm::CTA)
+            (std::strcmp(pin, "cta") == 0)
                 ? sycl_getrf::getrf_cta_buffer_size<T>(*this->ctx, V)
                 : sycl_getrf::getrf_blocked_buffer_size<T>(*this->ctx, V);
-        EXPECT_GE(need, native_need)
-            << "pin '" << pin << "': the facade's figure is smaller than the arm it resolved to";
+        EXPECT_EQ(need, native_need)
+            << "pin '" << pin << "': the facade's figure is not the pinned tier's own (R5)";
 
         // Serve EXACTLY that many bytes: a short workspace is a silent heap overflow.
         UnifiedVector<std::byte> ws(std::max<std::size_t>(1, need));
@@ -2951,14 +2807,13 @@ TYPED_TEST(LuTest, FusedGetrsAtBlockBoundariesAndTheNbSwitch) {
 
 // F3. THE TWO CEILINGS: THE WIDTH THE BUILD INSTANTIATED (kGetrsFusedMaxRhs = 8)
 // AND THE DEVICE'S RESIDENT-RHS CAPACITY. BOTH MUST HAND BACK, NOT PRODUCE
-// GARBAGE. Both live in supports() and never in preferred(), because above either
-// the kernel does not launch -- and a SPEED threshold in supports() would make a
-// pinned `native:cta` fall through to automatic() and measure the vendor instead.
+// GARBAGE. Both live in can_run() and never in a table, because above either the
+// kernel does not launch -- and a pinned `cta` past them throws (R6) rather than
+// measuring another kernel.
 TYPED_TEST(LuTest, FusedGetrsHandsBackAtBothCeilings) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::BackendType;
-    using Tbl = dispatch::RouteTable<dispatch::Op::getrs, T>;
-    const dispatch::Route cta{dispatch::Origin::Native, dispatch::Algorithm::CTA};
+    const ops::getrs::GetrsChoice cta = ops::getrs::Cta{};
     const int maxr = int(sycl_getrs::kGetrsFusedMaxRhs);
     const int n = 40, batch = 2;
 
@@ -2972,11 +2827,8 @@ TYPED_TEST(LuTest, FusedGetrsHandsBackAtBothCeilings) {
     for (int nrhs : {maxr, maxr + 1}) {
         auto rhs = make_rhs<T>(n, nrhs, batch, 1010u + unsigned(nrhs));
         auto Bv = view_of(rhs);
-        const auto shape = backend::getrs_op_shape<B, T>(*this->ctx, A, Bv, Transpose::NoTrans);
-        ASSERT_TRUE(shape.has_value());
-        EXPECT_EQ(Tbl::supports(cta, *shape), nrhs <= maxr)
-            << "supports({Native, CTA}) at nrhs=" << nrhs << " with fused_max_nrhs="
-            << shape->fused_max_nrhs;
+        EXPECT_EQ(this->getrs_pin_accepted(cta, A, Bv, Transpose::NoTrans), nrhs <= maxr)
+            << "can_run(cta) at nrhs=" << nrhs << " with kGetrsFusedMaxRhs=" << maxr;
 
         UnifiedVector<std::byte> ws(std::max<std::size_t>(
             1, sycl_getrs::getrs_fused_buffer_size<T>(*this->ctx, A, Bv, Transpose::NoTrans)));
@@ -3002,11 +2854,7 @@ TYPED_TEST(LuTest, FusedGetrsHandsBackAtBothCeilings) {
         auto Bv = view_of(rhs);
         for (Transpose op : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans}) {
             reset_rhs(rhs);
-            const auto r = backend::getrs_route<B, T>(
-                *this->ctx, A, Bv, op, dispatch::factorization_vendor_available<B>);
-            EXPECT_FALSE(dispatch::is_native(r) && r.algo == dispatch::Algorithm::CTA)
-                << "nrhs=" << nrhs << " routed to the fused tier, which is not instantiated "
-                   "that wide";
+            // Auto: the fused driver throws past its width, so a run that returns took another tier.
             UnifiedVector<std::byte> ws(std::max<std::size_t>(
                 1, getrs_buffer_size<B, T>(*this->ctx, A, Bv, op)));
             ASSERT_NO_THROW(((void)getrs<B, T>(*this->ctx, A, Bv, op, p.piv.to_span(), ws.to_span())));
@@ -3040,12 +2888,8 @@ TYPED_TEST(LuTest, FusedGetrsHandsBackAtBothCeilings) {
                                                   int64_t(order) * order, 2, nullptr);
             MatrixView<T, MatrixFormat::Dense> Bn(nullptr, order, nrhs, order,
                                                   int64_t(order) * nrhs, 2, nullptr);
-            const auto shape = backend::getrs_op_shape<B, T>(*this->ctx, An, Bn,
-                                                             Transpose::NoTrans);
-            ASSERT_TRUE(shape.has_value());
-            EXPECT_EQ(Tbl::supports(cta, *shape), order == fit)
-                << "supports({Native, CTA}) at n=" << order << " nrhs=" << nrhs
-                << " against fused_max_elems=" << shape->fused_max_elems;
+            EXPECT_EQ(this->getrs_pin_accepted(cta, An, Bn, Transpose::NoTrans), order == fit)
+                << "can_run(cta) at n=" << order << " nrhs=" << nrhs << " against a capacity of " << cap;
             if (order == over) {
                 UnifiedVector<std::byte> ws(1);
                 EXPECT_THROW((void)sycl_getrs::getrs_fused_dispatch<T>(
@@ -3106,7 +2950,7 @@ TYPED_TEST(LuTest, FusedGetrsConsumesEveryFactorProducer) {
         if (this->HasFailure()) return;
         solve_and_check(p, "NATIVE CTA getrf's");
     }
-    if constexpr (dispatch::factorization_vendor_available<B>) {
+    if constexpr (batchlas::select::factorization_vendor_available<B>) {
         // VENDOR getrf. Its pivot CHOICE differs from ours for complex types, which is why
         // the oracle is a residual against the ORIGINAL A and not a factor comparison.
         auto p = make_dominant_permuted<T>(n, batch, 3737u);
@@ -3230,11 +3074,9 @@ TYPED_TEST(LuTest, FusedGetrsOnSingularAndNearlySingularFactors) {
     }
 }
 
-// F6. THE FACADE REACHES THE FUSED KERNEL, ASSERTED BIT-EXACTLY, AND THE
-// VENDOR-FREE DEFAULT LANDS ON IT. The comparison is BIT-EXACT against the direct
-// entry point, which no vendor and no other native tier can reproduce; the route
-// half also pins that a pinned `blocked` still reaches the COMPOSED tier.
-// evidence: docs/perf/lu.md#getrs-fused-window-evidence
+// F6. THE FACADE REACHES THE FUSED KERNEL, ASSERTED BIT-EXACTLY. The comparison is
+// BIT-EXACT against the direct entry point, which no vendor and no other native tier
+// can reproduce. evidence: docs/perf/lu.md#getrs-fused-window-evidence
 TYPED_TEST(LuTest, FacadeReachesTheFusedGetrsBitExactly) {
     using T = typename TestFixture::T;
     constexpr Backend B = TestFixture::BackendType;
@@ -3252,18 +3094,12 @@ TYPED_TEST(LuTest, FacadeReachesTheFusedGetrsBitExactly) {
     auto A = view_of(p);
 
     for (Transpose op : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans}) {
-        ScopedEnvVar g("BATCHLAS_GETRS_ROUTE", "cta");
+        // A ScopedPin that can_run refuses throws, so the pin cannot silently mean another tier.
+        const select::ScopedPin<ops::getrs::GetrsChoice> g("getrs", ops::getrs::Cta{});
         auto r1 = make_rhs<T>(n, nrhs, batch, 7171u);
         auto r2 = make_rhs<T>(n, nrhs, batch, 7171u);
         auto V1 = view_of(r1);
         auto V2 = view_of(r2);
-
-        // THE PIN IS VERIFIED, NEVER ASSUMED.
-        const auto route = backend::getrs_route<B, T>(
-            *this->ctx, A, V2, op, dispatch::factorization_vendor_available<B>);
-        ASSERT_TRUE(dispatch::is_native(route)) << "the 'cta' getrs pin did not take";
-        ASSERT_EQ(route.algo, dispatch::Algorithm::CTA)
-            << "the 'cta' getrs pin resolved to the other native tier";
 
         UnifiedVector<std::byte> w1(std::max<std::size_t>(
             1, sycl_getrs::getrs_fused_buffer_size<T>(*this->ctx, A, V1, op)));
@@ -3281,78 +3117,12 @@ TYPED_TEST(LuTest, FacadeReachesTheFusedGetrsBitExactly) {
                    "entry point at element " << i << " -- something else served this call";
     }
 
-    // The other pin must still reach the COMPOSED tier, not the fused route ahead of
-    // it in kGetrsOrder.
-    {
-        ScopedEnvVar g("BATCHLAS_GETRS_ROUTE", "blocked");
-        auto rhs = make_rhs<T>(n, nrhs, batch, 7272u);
-        auto Bv = view_of(rhs);
-        const auto route = backend::getrs_route<B, T>(
-            *this->ctx, A, Bv, Transpose::NoTrans, dispatch::factorization_vendor_available<B>);
-        ASSERT_TRUE(dispatch::is_native(route));
-        EXPECT_EQ(route.algo, dispatch::Algorithm::Blocked)
-            << "the 'blocked' getrs pin resolved to the FUSED tier; the composed arm is now "
-               "unreachable and every test that pins it measures something else";
-    }
-
-    // The AUTOMATIC route, on both sides of the fused tier's capability.
-    {
-        auto narrow = make_rhs<T>(n, 1, batch, 7373u);
-        auto wide   = make_rhs<T>(n, int(sycl_getrs::kGetrsFusedMaxRhs) + 1, batch, 7474u);
-        auto Vn = view_of(narrow);
-        auto Vw = view_of(wide);
-        const auto rn = backend::getrs_route<B, T>(*this->ctx, A, Vn, Transpose::NoTrans, false);
-        const auto rw = backend::getrs_route<B, T>(*this->ctx, A, Vw, Transpose::NoTrans, false);
-        EXPECT_TRUE(dispatch::is_native(rn));
-        EXPECT_EQ(rn.algo, dispatch::Algorithm::CTA)
-            << "a vendor-free build did not take the fused tier at nrhs=1, which is the entire "
-               "point of native_tier_preferred";
-        EXPECT_TRUE(dispatch::is_native(rw));
-        EXPECT_EQ(rw.algo, dispatch::Algorithm::Blocked)
-            << "a vendor-free build routed nrhs=" << (sycl_getrs::kGetrsFusedMaxRhs + 1)
-            << " to the fused tier, which is not instantiated that wide";
-
-        // THE VENDOR-PRESENT ROUTE, BOTH sides of the window: an assertion that only pins
-        // the inside cannot fail when someone widens the clause.
-        // evidence: docs/perf/lu.md#getrs-fused-window-evidence
-        if constexpr (dispatch::factorization_vendor_available<B>) {
-            const auto rv = backend::getrs_route<B, T>(
-                *this->ctx, A, Vn, Transpose::NoTrans, /*vendor_available=*/true);
-            EXPECT_TRUE(dispatch::is_native(rv) && rv.algo == dispatch::Algorithm::CTA)
-                << "nrhs=1 is INSIDE the measured window (geomean 2.26x over 111 cells, "
-                   "min 1.24x, flat across every batch ladder at seven orders) and must "
-                   "route to the fused tier even with cuBLAS present";
-
-            // OUTSIDE the window, the vendor still takes it: nrhs = 8 is inside the tier's
-            // CAPABILITY and outside its measured WINDOW, a pair supports() must not merge.
-            auto w8 = make_rhs<T>(n, int(sycl_getrs::kGetrsFusedMaxRhs), batch, 7575u);
-            auto V8 = view_of(w8);
-            EXPECT_TRUE(dispatch::is_vendor(backend::getrs_route<B, T>(
-                *this->ctx, A, V8, Transpose::NoTrans, /*vendor_available=*/true)))
-                << "nrhs=" << sycl_getrs::kGetrsFusedMaxRhs << " is OUTSIDE the window "
-                   "(geomean 0.819x over 24 cells, 13 losses) and must take the vendor";
-
-            // ... and clause B is FLOAT ONLY. nrhs = 4 splits by type, the half of the window
-            // most likely to be widened by someone who drops the type test.
-            auto w4 = make_rhs<T>(n, 4, batch, 7676u);
-            auto V4 = view_of(w4);
-            const auto r4 = backend::getrs_route<B, T>(
-                *this->ctx, A, V4, Transpose::NoTrans, /*vendor_available=*/true);
-            if constexpr (std::is_same_v<T, float>) {
-                EXPECT_TRUE(dispatch::is_native(r4) && r4.algo == dispatch::Algorithm::CTA)
-                    << "float nrhs=4 is clause B: full batch ladders at seven orders, "
-                       "every one a flat win, min 1.13x";
-            } else {
-                EXPECT_TRUE(dispatch::is_vendor(r4))
-                    << "only FLOAT is in the window at nrhs=4; double dips to 0.940x at "
-                       "n=128 batch 2048, cfloat to 0.976x at n=1024 batch 16, cdouble to "
-                       "0.577x at n=32 -- and a mid-ladder dip cannot be gated away";
-            }
-        }
-    }
+    // Which tier Auto picks on either side of the old window is getrs_candidates_tests'
+    // AutoReadsTheTranscribedTable; the blocked pin's bit-exactness is its
+    // PinnedRunIsTheDirectKernelBitForBit.
 }
 
-// F7. THE FUSED DIRECT ENTRY POINT REFUSES WHAT supports() REFUSES, AND ITS
+// F7. THE FUSED DIRECT ENTRY POINT REFUSES WHAT can_run REFUSES, AND ITS
 // WORKSPACE QUERY DEREFERENCES NOTHING. The workspace is ZERO in every mode for
 // this tier by design (the RHS is permuted and solved in LOCAL memory, in place),
 // and the facade's figure is a max over BOTH native tiers; the query and the call
@@ -3421,11 +3191,7 @@ TYPED_TEST(LuTest, FusedGetrsDirectEntryPointRefusesWhatSupportsRefuses) {
     // Serve EXACTLY the facade's figure under the CTA pin. A short workspace is a
     // silent heap overflow, not a throw.
     {
-        ScopedEnvVar g("BATCHLAS_GETRS_ROUTE", "cta");
-        const auto route = backend::getrs_route<B, T>(
-            *this->ctx, A, Bv, Transpose::NoTrans, dispatch::factorization_vendor_available<B>);
-        ASSERT_TRUE(dispatch::is_native(route) && route.algo == dispatch::Algorithm::CTA)
-            << "the 'cta' pin did not take, so this sizing check measures another route";
+        const select::ScopedPin<ops::getrs::GetrsChoice> g("getrs", ops::getrs::Cta{});
         const std::size_t need = getrs_buffer_size<B, T>(*this->ctx, A, Bv, Transpose::NoTrans);
         EXPECT_GE(need, sycl_getrs::getrs_fused_buffer_size<T>(*this->ctx, A, Bv,
                                                                Transpose::NoTrans));
@@ -3443,7 +3209,7 @@ TYPED_TEST(LuTest, FusedGetrsDirectEntryPointRefusesWhatSupportsRefuses) {
 }
 
 // ===========================================================================
-// THE REGISTER-RESIDENT TIER (Algorithm::Tiny, src/extensions/getrf_tiny.cc).
+// THE REGISTER-RESIDENT TIER (the `tiny` choice, src/extensions/getrf_tiny.cc).
 // One matrix per SubGroupPartition<N>, N in {8, 16, 32}, row r in lane r's
 // registers, no local memory and no barriers. These cases guard the three
 // properties a functional test otherwise stays green through: a padded row must
@@ -3922,8 +3688,8 @@ TYPED_TEST(LuTest, TinyBreaksAnExactCabs1TieTowardsTheLowestRow) {
     }
 }
 
-// T8. THE DIRECT ENTRY POINT REFUSES WHAT supports() REFUSES. A forced route that
-// supports() rejects falls through to the vendor and passes green regardless, so
+// T8. THE DIRECT ENTRY POINT REFUSES WHAT can_run REFUSES. The entry point is
+// reachable without the selector and nothing else would catch a missing gate, so
 // each gate is re-applied inside the dispatch and throws.
 TYPED_TEST(LuTest, TinyDirectEntryPointRefusesWhatSupportsRefuses) {
     using T = typename TestFixture::T;
@@ -3967,152 +3733,6 @@ TYPED_TEST(LuTest, TinyDirectEntryPointRefusesWhatSupportsRefuses) {
     }
 }
 
-// T9. ROUTING. Tiny is in the order array FIRST and its supports() gate answers on the
-// tier's own ceiling. Its window is MEASURED -- float 5..32, cfloat 5..7 and 9..24 -- so this
-// case asserts the window from both sides rather than "never preferred", which is what it
-// said while the grid was outstanding. fp64 has no window on this part at any order.
-// evidence: docs/perf/lu.md#the-tiny-getrf-window
-TYPED_TEST(LuTest, TinyRoutesInsideItsMeasuredWindowAndNowhereElse) {
-    using T = typename TestFixture::T;
-    constexpr Backend B = TestFixture::BackendType;
-    using Tbl = dispatch::RouteTable<dispatch::Op::getrf, T>;
-    const dispatch::Route tiny{dispatch::Origin::Native, dispatch::Algorithm::Tiny};
-
-    // The window, per type, transcribed from the grid and NOT from the predicate.
-    constexpr bool kWindowed =
-        std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>;
-    const int in_n  = std::is_same_v<T, float> ? 8 : 9;    // float n=8 1.256x, cfloat 9 1.993x
-    const int out_n = std::is_same_v<T, float> ? 4 : 8;    // float n=4 0.99x, cfloat 8 1.086x
-
-    auto p = make_dominant_permuted<T>(std::min(in_n, this->tiny_max_n()), 3, 21u);
-    auto V = view_of(p);
-    const auto shape = backend::getrf_op_shape<B, T>(*this->ctx, V);
-    ASSERT_TRUE(shape.has_value());
-    EXPECT_EQ(shape->tiny_max_n, this->tiny_max_n())
-        << "the shape builder and the kernel disagree about the tier's ceiling";
-
-    EXPECT_TRUE(Tbl::supports(tiny, *shape));
-    EXPECT_EQ(Tbl::preferred(tiny, *shape), kWindowed)
-        << "order " << in_n << " is inside the measured window for this type";
-    EXPECT_EQ(Tbl::native_tier_preferred(tiny, *shape), kWindowed)
-        << "the vendor-free walk must land on the same tier the window picks";
-
-    // Exactly ONE tier may answer true, or the order array becomes the decision (R8b).
-    if (kWindowed) {
-        int hits = 0;
-        for (const auto* it = Tbl::order_begin(); it != Tbl::order_end(); ++it)
-            if (Tbl::preferred(*it, *shape)) ++hits;
-        EXPECT_EQ(hits, 1);
-    }
-
-    // BELOW the window: a measured non-winner, and the route must not move there.
-    {
-        auto q = make_dominant_permuted<T>(out_n, 3, 23u);
-        auto QV = view_of(q);
-        const auto qs = backend::getrf_op_shape<B, T>(*this->ctx, QV);
-        ASSERT_TRUE(qs.has_value());
-        EXPECT_TRUE(Tbl::supports(tiny, *qs)) << "the TIER still holds this order";
-        EXPECT_FALSE(Tbl::preferred(tiny, *qs))
-            << "order " << out_n << " is a measured non-winner and must stay on the vendor";
-        ScopedEnvVar unpinned("BATCHLAS_GETRF_ROUTE", nullptr);
-        const auto def = backend::getrf_route<B, T>(*this->ctx, QV,
-                                                    dispatch::factorization_vendor_available<B>);
-        EXPECT_NE(def.algo, dispatch::Algorithm::Tiny)
-            << "automatic() took Tiny below its measured floor";
-        if constexpr (kWindowed) {
-            // A tie with the vendor, but ~3x the CTA tier: the native walk takes Tiny.
-            ScopedEnvVar pin("BATCHLAS_GETRF_ROUTE", "native");
-            const auto nat = backend::getrf_route<B, T>(*this->ctx, QV,
-                                                        /*vendor_available=*/false);
-            EXPECT_EQ(nat.algo, dispatch::Algorithm::Tiny)
-                << "the vendor-free walk left Tiny for CTA at order " << out_n;
-        }
-    }
-
-    // THE UPPER EDGE, cfloat only, at the column bucket's measured edge: n = 24 (1.15x)
-    // is in, n = 25 (1.03x) is out -- and at 25 and 32 the vendor-free walk still takes
-    // Tiny, 1.2-1.5x over the better of CTA and Blocked. evidence: docs/perf/lu.md#the-column-bucket
-    // ARMED BREAK (R9): cfloat tiny_window upper edge 24 -> 32. EXPECTED: n=25 preferred, red.
-    // ARMED BREAK (R9): tiny_native back to `tiny_window || n <= 8`. EXPECTED: n=25/32 walk
-    // leaves Tiny, red.
-    if constexpr (std::is_same_v<T, std::complex<float>>) {
-        const auto shape_at = [&](int n, uint32_t seed) {
-            auto q = make_dominant_permuted<T>(n, 3, seed);
-            auto QV = view_of(q);
-            return backend::getrf_op_shape<B, T>(*this->ctx, QV);
-        };
-        const auto s24 = shape_at(24, 24u);
-        ASSERT_TRUE(s24.has_value());
-        EXPECT_TRUE(Tbl::preferred(tiny, *s24)) << "cfloat n=24 measured 1.15x";
-        const dispatch::Route blocked{dispatch::Origin::Native, dispatch::Algorithm::Blocked};
-        const dispatch::Route cta{dispatch::Origin::Native, dispatch::Algorithm::CTA};
-        for (int n : {25, 32}) {
-            const auto qs = shape_at(n, 25u + static_cast<uint32_t>(n));
-            ASSERT_TRUE(qs.has_value());
-            EXPECT_TRUE(Tbl::supports(tiny, *qs));
-            EXPECT_FALSE(Tbl::preferred(tiny, *qs)) << "cfloat n=" << n << " ties the vendor";
-            EXPECT_TRUE(Tbl::native_tier_preferred(tiny, *qs))
-                << "cfloat n=" << n << ": Tiny is the fastest native tier";
-            EXPECT_FALSE(Tbl::native_tier_preferred(blocked, *qs));
-            EXPECT_FALSE(Tbl::native_tier_preferred(cta, *qs));
-        }
-    }
-
-    // Each correctness gate, one at a time.
-    for (auto mutate : std::vector<std::function<void(dispatch::GetrfShape&)>>{
-             [](dispatch::GetrfShape& s) { s.tiny_max_n = 0; },
-             [](dispatch::GetrfShape& s) { s.is_gpu = false; },
-             [](dispatch::GetrfShape& s) { s.has_sg32 = false; },
-             [](dispatch::GetrfShape& s) { s.heterogeneous_batch = true; },
-             [](dispatch::GetrfShape& s) { s.m = s.n + 1; },
-             [](dispatch::GetrfShape& s) { s.k = s.tiny_max_n + 1; },
-             [](dispatch::GetrfShape& s) { s.backend = Backend::NETLIB; }}) {
-        dispatch::GetrfShape s = *shape;
-        mutate(s);
-        EXPECT_FALSE(Tbl::supports(tiny, s));
-    }
-
-    // INSIDE the window the default route MOVES -- that is the change -- and the
-    // vendor-free walk must land on the same tier rather than on an arm the grid
-    // measured slower.
-    {
-        ScopedEnvVar unpinned("BATCHLAS_GETRF_ROUTE", nullptr);
-        const auto def = backend::getrf_route<B, T>(*this->ctx, V,
-                                                    dispatch::factorization_vendor_available<B>);
-        if (kWindowed) {
-            EXPECT_EQ(def.algo, dispatch::Algorithm::Tiny)
-                << "automatic() did not reach the Tiny tier inside its measured window";
-        } else {
-            EXPECT_NE(def.algo, dispatch::Algorithm::Tiny)
-                << "fp64 has no measured window on this part and must not route here";
-        }
-    }
-    {
-        ScopedEnvVar pin("BATCHLAS_GETRF_ROUTE", "native");
-        const auto nat = backend::getrf_route<B, T>(*this->ctx, V, /*vendor_available=*/false);
-        if (kWindowed) {
-            EXPECT_EQ(nat.algo, dispatch::Algorithm::Tiny)
-                << "the vendor-free walk disagrees with the window; native_tier_preferred "
-                   "and preferred() must name the same tier";
-        } else {
-            EXPECT_NE(nat.algo, dispatch::Algorithm::Tiny)
-                << "the vendor-free walk reached an unmeasured Tiny tier for fp64";
-        }
-    }
-    {
-        ScopedEnvVar pin("BATCHLAS_GETRF_ROUTE", "tiny");
-        const auto forced = backend::getrf_route<B, T>(
-            *this->ctx, V, dispatch::factorization_vendor_available<B>);
-        ASSERT_TRUE(dispatch::is_native(forced)) << "the 'tiny' pin did not take";
-        EXPECT_EQ(forced.algo, dispatch::Algorithm::Tiny)
-            << "BATCHLAS_GETRF_ROUTE=tiny did not parse -- parse_algorithm_word is the "
-               "third place that has to know the arm, and a miss is silent";
-    }
-    EXPECT_EQ(dispatch::to_string(dispatch::Algorithm::Tiny), "tiny")
-        << "to_string is the coverage CSV's chosen_algo column and route_diff.sh's "
-           "printed name";
-}
-
 // T10. THE FACADE REACHES THE TINY KERNEL, ASSERTED BIT-EXACTLY. A route assertion
 // plus a residual can stay green while every number comes from the vendor, so the
 // comparison is bit-exact against the direct entry point -- factor AND pivots --
@@ -4128,17 +3748,13 @@ TYPED_TEST(LuTest, FacadeReachesTheTinyKernelBitExactly) {
     auto direct = make_dominant_permuted<T>(n, batch, 5150u);
     auto viafac = make_dominant_permuted<T>(n, batch, 5150u);
 
-    auto Vf = view_of(viafac);
-    const auto route = backend::getrf_route<B, T>(*this->ctx, Vf,
-                                                  dispatch::factorization_vendor_available<B>);
-    ASSERT_TRUE(dispatch::is_native(route) && route.algo == dispatch::Algorithm::Tiny)
-        << "the 'tiny' pin did not take, so this test compares the vendor with itself";
+    auto Vf = view_of(viafac);  // a 'tiny' pin that cannot run throws rather than reach the vendor
 
     this->run_tiny(direct);
 
     const std::size_t need = getrf_buffer_size<B, T>(*this->ctx, Vf);
-    EXPECT_GE(need, sycl_getrf::getrf_tiny_buffer_size<T>(*this->ctx, Vf))
-        << "getrf_buffer_size does not cover the Tiny tier's info scratch";
+    EXPECT_EQ(need, sycl_getrf::getrf_tiny_buffer_size<T>(*this->ctx, Vf))
+        << "getrf_buffer_size is not exactly the Tiny tier's info scratch (R5)";
     UnifiedVector<std::byte> ws(std::max<std::size_t>(1, need));
     ASSERT_NO_THROW(((void)getrf<B, T>(*this->ctx, Vf, viafac.piv.to_span(), ws.to_span(),
                                  viafac.info.to_span())));

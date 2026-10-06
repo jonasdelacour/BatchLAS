@@ -130,12 +130,6 @@ void bdsdc_build_gk(Queue& ctx,
     });
 }
 
-// sigma_i = lambda[N-1-i] (descending) or lambda[N-n+i] (ascending).
-template <typename T>
-inline int32_t bdsdc_src_column(int32_t i, int32_t n, bool sort_desc) {
-    return sort_desc ? (2 * n - 1 - i) : (n + i);
-}
-
 template <Backend B, typename T>
 void bdsdc_extract_values(Queue& ctx,
                           const BdsdcWorkspace<T>& ws,

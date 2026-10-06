@@ -48,11 +48,6 @@ inline ConstStridedView<T> make_strided(const T* ptr, int inc) {
     return ConstStridedView<T>{ptr, inc};
 }
 
-template <typename T>
-inline ConstStridedView<T> make_const_strided(T* ptr, int inc) {
-    return ConstStridedView<T>{ptr, inc};
-}
-
 template <typename Ops, typename T>
 inline void lartv_impl(int nrot, StridedView<T> x, StridedView<T> y, ConstStridedView<typename Ops::Real> c,
                        ConstStridedView<T> s) {

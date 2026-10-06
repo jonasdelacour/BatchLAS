@@ -1,5 +1,13 @@
 # Vendor independence: how dispatch works
 
+> **Historical (WP0/WP1 design).** The `Route{Origin, Algorithm}` vocabulary, `RouteTable`, the
+> resolver and the legacy `_VARIANT`/`_PROVIDER` spellings described below were deleted by flat
+> kernel selection phase 5 (docs/design/flat-kernel-selection.md): ops now choose from tuned tables in
+> `src/ops/<op>/`, the vendor gate lives in `src/select/vendor.hh`, `NoRouteError` in
+> `<batchlas/no_route.hh>` and the coverage instrument in `src/select/coverage.hh`. What still holds
+> is the vendor-free build itself and the `if constexpr` gate; [`docs/perf/dispatch.md`](../perf/dispatch.md)
+> is the current page.
+
 BatchLAS configures, compiles, links, loads and runs with no vendor math library. `cmake -B
 build-novendor -DBATCHLAS_ENABLE_VENDOR_BLAS=OFF -DBATCHLAS_ENABLE_CUDA=ON` yields
 `BATCHLAS_HAS_CUDA_BACKEND 1` with every CUDA math library at `0` — a CUDA device with no cuBLAS,
@@ -63,7 +71,8 @@ Three rules follow, and each has cost this codebase something:
 * **Never put a speed threshold in `supports()`.** A forced route bypasses `preferred()` — that is
   what forcing is for — but never `supports()` (`route_resolve.hh:76`). A speed cutoff there makes a
   pinned route fall through to `automatic()`, so the test that pinned it silently measures something
-  else. `route_potrf.hh` and `route_geqrf.hh` both warn against this at their own tables. Conversely,
+  else. `route_geqrf.hh` warns against this at its own table (potrf's `can_run` in
+  `src/ops/potrf/potrf.cc` follows the same rule). Conversely,
   moving a measured window into `supports()` leaves a working shape with **no supported route at all**
   the moment the vendor goes away.
 * **Never fix a vendor-free tier choice in `preferred()`.** `preferred()` is consulted by the loop
@@ -111,7 +120,8 @@ build *is* the vendor. `BATCHLAS_SPMM_ROUTE=cta` resolves to `{Native, CTA}`, `s
 because no CTA body exists, and the run silently measures cuSPARSE. A **misspelled** value is worse:
 `parse_route_value` fails, the resulting `ParsedRouteEnv::unparsed` flag is discarded at every
 adapter's `parsed.found ? parsed.route : legacy_unset_default(...)` (`gemv_route.hh:151`,
-`trsm_route.hh:75`, `spmm_route.hh:102`, and eight more identically), and every decision goes to the
+`spmm_route.hh:102`, and others identically; trsm's `trsm_route.hh:75` was one until P3.3, and a
+flat-selected op now throws on an unparsable pin), and every decision goes to the
 vendor with no message. Confirm a pin with the resolved-route column, never with the exit status.
 
 ## Route tables and shape structs
@@ -119,7 +129,9 @@ vendor with no message. Confirm a pin with the resolved-route column, never with
 Thirteen ops have a `RouteTable<Op, T>` specialisation: `gemm`, `gemv`, `trsm`, `potrf`, `getrf`,
 `getrs`, `getri`, `geqrf`, `orgqr`, `ormqr`, `gesvd` and `spmm` get one header each under
 `include/batchlas/blas/dispatch/`; `syev`'s lives with the op, in
-`include/batchlas/blas/functions/syev.hh`.
+`include/batchlas/blas/functions/syev.hh`. Since flat selection, `potrf` and `trsm` have none
+(their headers and builders are deleted; see `flat-kernel-selection.md` §12); the `trsm` references
+below describe the code before P3.3.
 
 Each table is paired with a **shape builder** — `src/backends/<op>_route.hh`, or the op header for
 `gemm`/`gesvd`/`syev`/`ormqr` — which is where everything impure happens: the `getenv`, the SYCL
@@ -244,7 +256,7 @@ native driver is instantiated per scalar type with no `Backend` parameter, so it
 `gemm<B, T>` itself; the facade passes a lambda. `trsm`'s blocked driver takes its trailing GEMM this
 way (`level3.cc:155-165`), `potrf`/`getrf`/`getrs`/`getri` take routed `gemm`/`trsm`, and `orgqr`'s
 native arm takes a routed `ormqr` (`factorization.cc:18-21`, `:60-65`). The alternative — the driver
-calling `sycl_gemm::gemm_custom` directly — bypasses `RouteTable<Op::gemm>` and pins the native GEMM
+calling `sycl_gemm::gemm_custom` directly (deleted in P3.4) — bypasses gemm's selection and pins the native GEMM
 even on shapes it is measured to lose; see [`docs/perf/trsm.md`](../perf/trsm.md) and
 [`docs/perf/gemm.md`](../perf/gemm.md).
 
@@ -292,8 +304,8 @@ call-site guard that replicates only half of such a predicate is a shipped-and-f
 (`route_env.hh:3-6`).
 
 The vocabulary is pinned by `tests/route_vocabulary_tests.cc`, including every legacy spelling and
-every collision above; the GEMM transcription itself is pinned by
-`tests/route_gemm_equivalence_tests.cc`.
+every collision above; the GEMM transcription itself was pinned by
+`tests/route_gemm_equivalence_tests.cc` until P3.4 deleted it with `route_gemm.hh`. gemm no longer reads `route_env.hh`; `legacy_aliases` in `src/ops/gemm/choice.hh` keep the `BATCHLAS_GEMM_VARIANT=native` -> vendor collision, and `BATCHLAS_GEMM_ROUTE=custom` is the class word `native` (docs/design/flat-kernel-selection.md §12 Phase 3.4).
 
 ## The coverage instrument
 

@@ -55,7 +55,7 @@ using potrf_vendor_buffer_size = size_t(Queue&,
 //
 // It runs in the facade, ahead of the shape builder, because the builder reads
 // A.rows()/A.cols() and must not describe a non-conforming view. Same hoist as
-// trsm's (entry_points/level3.cc:167-174).
+// trsm's (src/ops/trsm/trsm.cc:127).
 //
 // SCOPE IS DELIBERATELY MINIMAL: exactly what the shape builder needs. In
 // particular this does NOT check the length of a non-empty `info` span. A short
@@ -131,7 +131,7 @@ namespace batchlas::backend {
 // DECLARATION ONLY -- see the note on gemm_vendor in gemm.hh. The public
 // `potrf` used to be defined inside each vendor TU, so dropping a vendor library
 // dropped the public entry point with it; WP0 S5 moves that definition to
-// src/dispatch/entry_points/factorization.cc and leaves the vendor
+// src/ops/potrf/potrf.cc and leaves the vendor
 // implementation here, named as such.
 template <Backend B, typename T>
 BATCHLAS_API Event potrf_vendor(Queue& ctx,

@@ -26,7 +26,7 @@ constexpr std::size_t occupancy_budget(std::size_t slm_budget_bytes,
 }
 
 // Largest n that fits the slice AND for which every smaller n fits too. THE SECOND CLAUSE IS
-// LOAD-BEARING: hole padding makes bytes(n) non-monotone while supports() spells capacity as a
+// LOAD-BEARING: hole padding makes bytes(n) non-monotone while can_run spells capacity as a
 // contiguous `order <= cta_max_n`, so `continue` would advertise a range with a hole in it.
 // bytes_per_matrix must use 64-bit products: (m|1)*n overflows int at a reachable height.
 template <typename BytesFn>

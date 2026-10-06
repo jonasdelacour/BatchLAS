@@ -40,11 +40,23 @@
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-vector.hh>
 
-#include <batchlas/blas/dispatch/route_env.hh>
+#include <batchlas/settings.hh>
+
+#include "../src/extensions/getrf_native.hh"
+#include "../src/extensions/potrf_native.hh"
+#include "../src/sycl/trsm_native.hh"
+#include "../src/ops/geqrf/choice.hh"
+#include "../src/ops/orgqr/choice.hh"
+#include "../src/ops/getrf/choice.hh"
+#include "../src/ops/getrs/choice.hh"
+#include "../src/ops/gesv/choice.hh"
+#include "../src/ops/posv/choice.hh"
+#include "../src/ops/potrf/choice.hh"
 
 #include <lapacke.h>
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <complex>
@@ -54,6 +66,7 @@
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -184,18 +197,6 @@ static const char* leaf_variable(OpKind op) {
         default: return nullptr;
     }
 }
-static dispatch::Op dispatch_op(OpKind k) {
-    switch (k) {
-        case OpKind::potrf: return dispatch::Op::potrf;
-        case OpKind::getrf: return dispatch::Op::getrf;
-        case OpKind::getrs: return dispatch::Op::getrs;
-        case OpKind::geqrf: return dispatch::Op::geqrf;
-        case OpKind::orgqr: return dispatch::Op::orgqr;
-        case OpKind::gesv:  return dispatch::Op::gesv;
-        case OpKind::posv:  return dispatch::Op::posv;
-    }
-    return dispatch::Op::COUNT;
-}
 static const char* op_text(OpKind k) {
     switch (k) {
         case OpKind::potrf: return "potrf";
@@ -209,20 +210,36 @@ static const char* op_text(OpKind k) {
     return "?";
 }
 
-// PIN_PARSED SAYS THE VALUE WAS UNDERSTOOD, NOT THAT THE ROUTE TOOK. Route
-// resolution falls through to automatic() when a forced route does not support
-// the shape, so `--route=cta` on an order the CTA tier cannot hold reports
-// pin_parsed=1 and then silently runs whatever automatic() picks -- in a vendor
-// build, the vendor. The RESOLVED route is a separate readback:
-// run_factor_grid.sh re-runs each cell once, untimed, with BATCHLAS_COVERAGE_OUT
-// set and greps the `reached,` row. Never read this column as "the route ran".
+// PIN_PARSED SAYS THE VALUE WAS UNDERSTOOD, NOT THAT THE ROUTE TOOK: the resolved
+// route is a separate readback (run_factor_grid.sh re-runs each cell once, untimed, with
+// BATCHLAS_COVERAGE_OUT set and greps the `reached,` row). Every op here is flat-selected
+// (src/ops/<op>/): a pin is auto, native, vendor or a choice spelling (`lpanel:panel=8`), and
+// one that cannot run THROWS. The coverage readback carries the spelling in chosen_algo,
+// e.g. `native:lpanel:panel=8`.
 //
-// It is queried INSIDE the ScopedEnvVar scope on purpose: settings() is a
-// pre-main snapshot, so a raw ::setenv is invisible to it and only
-// ScopedEnvVar's reload_settings() makes the pin readable at all.
+// It is queried INSIDE the ScopedEnvVar scope on purpose: settings() is a pre-main
+// snapshot, and only ScopedEnvVar's reload_settings() makes the pin readable at all.
+template <class Choice>
+static bool select_pin_parsed(OpKind k) {
+    const char* raw = settings().routing.route(op_text(k)).get();
+    if (raw == nullptr) return false;
+    std::string text = raw;
+    for (char& ch : text) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    if (text == "auto" || text == "native" || text == "vendor") return true;
+    return select::parse<Choice>(text).has_value();
+}
+
 static bool pin_parsed_now(OpKind k) {
-    const auto p = dispatch::parse_route_env(dispatch_op(k));
-    return p.found && !p.unparsed;
+    switch (k) {
+        case OpKind::potrf: return select_pin_parsed<ops::potrf::PotrfChoice>(k);
+        case OpKind::getrf: return select_pin_parsed<ops::getrf::GetrfChoice>(k);
+        case OpKind::getrs: return select_pin_parsed<ops::getrs::GetrsChoice>(k);
+        case OpKind::geqrf: return select_pin_parsed<ops::geqrf::GeqrfChoice>(k);
+        case OpKind::orgqr: return select_pin_parsed<ops::orgqr::OrgqrChoice>(k);
+        case OpKind::gesv:  return select_pin_parsed<ops::gesv::GesvChoice>(k);
+        case OpKind::posv:  return select_pin_parsed<ops::posv::PosvChoice>(k);
+    }
+    return false;
 }
 
 // ------------------------------------------------------------- inputs
@@ -461,6 +478,7 @@ struct Arm {
     int info_nonzero = 0;
     int bad = 0;
     std::string reason;
+    bool refused = false;  // a pin this shape cannot run: the arm is reported, never timed
 };
 
 // P4 needs an A/B the route pin cannot express: both arms are the SAME route
@@ -478,15 +496,19 @@ struct Arm {
 // measure whatever the composed ops happened to route to, which is the "diff the
 // ROUTE, not the timing" defect; these pins make the composition explicit and
 // `pin_parsed_now` still proves the OUTER pin landed.
+// A potrf or getrf pin the shape cannot run throws, so `composed` pins tiny only inside its
+// ceiling (16 for cdouble) and the best runnable native tier above it; trsm `cta` likewise.
 static std::vector<std::pair<std::string, std::string>>
-composed_pins(OpKind op, const std::string& arm_name) {
+composed_pins(OpKind op, const std::string& arm_name, bool potrf_tiny_fits, bool trsm_cta_fits,
+              bool getrf_tiny_fits) {
     if (op == OpKind::gesv) {
         if (arm_name == "vendor")
             return {{"BATCHLAS_GETRF_ROUTE", "vendor"}, {"BATCHLAS_GETRS_ROUTE", "vendor"}};
         if (arm_name == "native")
             return {{"BATCHLAS_GETRF_ROUTE", "native"}, {"BATCHLAS_GETRS_ROUTE", "native"}};
         if (arm_name == "composed")
-            return {{"BATCHLAS_GETRF_ROUTE", "tiny"}, {"BATCHLAS_GETRS_ROUTE", "cta"}};
+            return {{"BATCHLAS_GETRF_ROUTE", getrf_tiny_fits ? "tiny" : "native"},
+                    {"BATCHLAS_GETRS_ROUTE", "cta"}};
     }
     if (op == OpKind::posv) {
         if (arm_name == "vendor")
@@ -494,7 +516,8 @@ composed_pins(OpKind op, const std::string& arm_name) {
         if (arm_name == "native")
             return {{"BATCHLAS_POTRF_ROUTE", "native"}, {"BATCHLAS_TRSM_ROUTE", "native"}};
         if (arm_name == "composed")
-            return {{"BATCHLAS_POTRF_ROUTE", "tiny"}, {"BATCHLAS_TRSM_ROUTE", "cta"}};
+            return {{"BATCHLAS_POTRF_ROUTE", potrf_tiny_fits ? "tiny" : "native"},
+                    {"BATCHLAS_TRSM_ROUTE", trsm_cta_fits ? "cta" : "native"}};
     }
     return {};
 }
@@ -528,6 +551,17 @@ static void flag(Arm& a, const char* why) {
     a.reason += why;
 }
 
+// A refused pin (std::invalid_argument from choose()) costs only that arm, never the cell.
+// The message goes in a CSV field, so its commas and quotes are replaced.
+static void refuse(Arm& a, const std::invalid_argument& e) {
+    std::string why = std::string("pin refused: ") + e.what();
+    for (char& ch : why)
+        if (ch == ',') ch = ';';
+        else if (ch == '"') ch = '\'';
+    a.refused = true;
+    flag(a, why.c_str());
+}
+
 static void gate(Arm& a, double tol, int reps) {
     if (!std::isfinite(a.residual)) flag(a, "residual_nonfinite");
     else if (a.residual > tol) flag(a, "residual");
@@ -557,7 +591,7 @@ struct Cfg {
 static Uplo up_of(const Cfg& c) { return c.upper ? Uplo::Upper : Uplo::Lower; }
 
 static void emit(const Cfg& c, const Arm& a, std::FILE* csv) {
-    char buf[512];
+    char buf[2048];
     std::snprintf(buf, sizeof(buf),
                   "%s,%s,%d,%d,%d,%d,%s,%s,%d,%.6f,%.6f,%.4f,%d,%.3e,%.3e,%d,%d,%s\n",
                   op_text(c.op), c.type.c_str(), c.m, c.n, c.nrhs, c.batch,
@@ -681,7 +715,8 @@ static int run(const Cfg& c) {
         }
         a.pin = (pin == "native" && !c.route_pin.empty()) ? c.route_pin : pin;
         if (is_solve_op(c.op)) {
-            a.sub_pins = composed_pins(c.op, pin);
+            a.sub_pins = composed_pins(c.op, pin, n <= sycl_potrf::potrf_tiny_max_n<T>(), n <= sycl_trsm::trsm_cta_max_n<T>(),
+                                       n <= sycl_getrf::getrf_tiny_max_n<T>());
             if (a.pin == pin) a.pin = solve_outer_pin(pin);
         }
         arms.push_back(a);
@@ -699,14 +734,18 @@ static int run(const Cfg& c) {
         ArmEnv pinned(var, arms[i], leaf_variable(c.op));
         arms[i].pin_parsed = pin_parsed_now(c.op);
         size_t need = 0;
-        switch (c.op) {
-            case OpKind::potrf: need = potrf_buffer_size<BE, T>(*q, Av, up_of(c)); break;
-            case OpKind::getrf: need = getrf_buffer_size<BE, T>(*q, Av); break;
-            case OpKind::getrs: need = getrs_buffer_size<BE, T>(*q, Av, Xv, Transpose::NoTrans); break;
-            case OpKind::geqrf: need = geqrf_buffer_size<BE, T>(*q, Av, tau.to_span()); break;
-            case OpKind::orgqr: need = orgqr_buffer_size<BE, T>(*q, Av, tau.to_span()); break;
-            case OpKind::gesv: need = gesv_buffer_size<BE, T>(*q, Av, Xv); break;
-            case OpKind::posv: need = posv_buffer_size<BE, T>(*q, Av, Xv, up_of(c)); break;
+        try {
+            switch (c.op) {
+                case OpKind::potrf: need = potrf_buffer_size<BE, T>(*q, Av, up_of(c)); break;
+                case OpKind::getrf: need = getrf_buffer_size<BE, T>(*q, Av); break;
+                case OpKind::getrs: need = getrs_buffer_size<BE, T>(*q, Av, Xv, Transpose::NoTrans); break;
+                case OpKind::geqrf: need = geqrf_buffer_size<BE, T>(*q, Av, tau.to_span()); break;
+                case OpKind::orgqr: need = orgqr_buffer_size<BE, T>(*q, Av, tau.to_span()); break;
+                case OpKind::gesv: need = gesv_buffer_size<BE, T>(*q, Av, Xv); break;
+                case OpKind::posv: need = posv_buffer_size<BE, T>(*q, Av, Xv, up_of(c)); break;
+            }
+        } catch (const std::invalid_argument& e) {
+            refuse(arms[i], e);
         }
         wneed = std::max(wneed, need);
     }
@@ -729,6 +768,17 @@ static int run(const Cfg& c) {
         }
         q->wait();
     };
+    // One arm's run under its pin; false (and the arm refused) if the pin throws.
+    auto run_arm = [&](Arm& a) {
+        if (a.refused) return false;
+        try {
+            call();
+            return true;
+        } catch (const std::invalid_argument& e) {
+            refuse(a, e);
+            return false;
+        }
+    };
 
     // TIME-BASED WARM-UP, DISCARDED, and INTERLEAVED in the timed loop's arm order -- measured,
     // not stylistic: a per-arm warm-up made arm 0's first timed rep 2.2x slow every time and
@@ -738,9 +788,10 @@ static int run(const Cfg& c) {
         const auto w0 = std::chrono::steady_clock::now();
         do {
             for (size_t i = 0; i < arms.size(); ++i) {
+                if (arms[i].refused) continue;
                 ArmEnv pinned(var, arms[i], leaf_variable(c.op));
                 reset();
-                call();
+                (void)run_arm(arms[i]);
             }
         } while (std::chrono::duration<double>(std::chrono::steady_clock::now() - w0).count() < budget);
     }
@@ -750,10 +801,11 @@ static int run(const Cfg& c) {
     std::vector<std::vector<double>> ms(arms.size());
     for (int r = 0; r < c.reps; ++r) {
         for (size_t i = 0; i < arms.size(); ++i) {
+            if (arms[i].refused) continue;
             ArmEnv pinned(var, arms[i], leaf_variable(c.op));
             reset();
             const auto t0 = std::chrono::steady_clock::now();
-            call();
+            if (!run_arm(arms[i])) continue;
             const auto t1 = std::chrono::steady_clock::now();
             ms[i].push_back(std::chrono::duration<double, std::milli>(t1 - t0).count());
         }
@@ -775,12 +827,13 @@ static int run(const Cfg& c) {
     // that arm's route -- so a fast wrong answer cannot be reported as a win.
     for (size_t i = 0; i < arms.size(); ++i) {
         Arm& a = arms[i];
+        if (a.refused) continue;
         a.st = stat_of(ms[i]);
         {
             ArmEnv pinned(var, a, leaf_variable(c.op));
             for (int b = 0; b < batch; ++b) info[b] = 0;
             reset();
-            call();
+            if (!run_arm(a)) continue;
         }
         switch (c.op) {
             case OpKind::potrf:

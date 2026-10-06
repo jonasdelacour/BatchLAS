@@ -2,7 +2,6 @@
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/backend_config.h>
-#include <batchlas/blas/dispatch/route.hh>
 
 #include <cstdlib>
 #include <set>
@@ -292,7 +291,7 @@ TEST(DeviceTest, CudaComputeCapabilityOnNvidiaGpu) {
 // Straddle both edges of the family window: sm_120 and sm_121 are in; sm_89,
 // sm_100 (datacenter Blackwell) and a future sm_130 are out.
 TEST(DeviceTest, Sm120FamilyWindow) {
-    using batchlas::dispatch::is_sm120_family;
+    using batchlas::is_sm120_family;
     static_assert(!is_sm120_family(0) && !is_sm120_family(89) && !is_sm120_family(100));
     EXPECT_FALSE(is_sm120_family(119));
     EXPECT_TRUE(is_sm120_family(120));

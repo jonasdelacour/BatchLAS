@@ -1,7 +1,7 @@
 #pragma once
 
 // Native batched GETRS declarations: the composed tier (row permutation + two routed
-// trsm) and the fused narrow-RHS tier; windows in route_getrs.hh. evidence: docs/perf/lu.md
+// trsm) and the fused narrow-RHS tier; selected in src/ops/getrs/getrs.cc. evidence: docs/perf/lu.md
 
 #include "../util/internal-api.hh"
 #include <batchlas/blas/enums.hh>
@@ -77,7 +77,7 @@ BATCHLAS_INTERNAL_API Event getrs_fused_dispatch(Queue& ctx,
                                                  Span<int64_t> pivots,
                                                  Span<std::byte> workspace);
 
-// posv's CTA arm: both Cholesky solves in one kernel, same capacity and ceiling as above.
+// posv's `cta` choice (src/ops/posv/): both Cholesky solves in one kernel, same capacity and ceiling.
 template <typename T>
 BATCHLAS_INTERNAL_API Event potrs_fused_dispatch(Queue& ctx,
                                                  const MatrixView<T, MatrixFormat::Dense>& A,

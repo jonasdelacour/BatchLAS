@@ -13,9 +13,8 @@
 // returns true, `symm_cuda_custom` runs, decides the shape is unsupported --
 // and a public `symm` call from there re-enters `symm_use_cuda_custom` with the
 // same environment and the same views. It returns true again. Unbounded
-// recursion, reachable today with BATCHLAS_SYMM_ROUTE=custom on a CPU queue,
-// where route_common.hh's should_use_cublasdx returns true for a forced custom
-// variant BEFORE the problem_supported test.
+// recursion, reachable with BATCHLAS_SYMM_ROUTE=cublasdx on a CPU queue, where
+// symm_use_cuda_custom returns true for the pin BEFORE the problem_supported test.
 //
 // So the sideways terminal needs its own seam: forward to the vendor where one
 // is compiled, and throw the ordinary NoRouteError where none is. That is what

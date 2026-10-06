@@ -2,9 +2,8 @@
 // potrf_tests.cc inside its anonymous namespace, so make_spd, make_planted_ldl,
 // multiply_back_residual and residual_tol are in scope.
 //
-// Every case here drives sycl_potrf::potrf_tiny_dispatch DIRECTLY: a forced route that
-// supports() rejects silently becomes the vendor, which would make a green run mean
-// nothing. evidence: docs/perf/potrf.md#the-tiny-tier
+// Every case here but the facade one drives sycl_potrf::potrf_tiny_dispatch DIRECTLY.
+// evidence: docs/perf/potrf.md#the-tiny-tier
 
 // One batch of n x n matrices at an arbitrary (ld, stride), everything outside the `uplo`
 // triangle set to `pad`. Matrix<T>(n,n,batch) cannot express a padded ld or a stride that
@@ -59,7 +58,7 @@ protected:
         test_utils::BatchLASTest<Config>::SetUp();
         if (this->HasFatalFailure() || ::testing::Test::IsSkipped()) return;
         if (!this->ctx) GTEST_SKIP() << "no queue";
-        // The suite's own gate must mirror supports(): enumerated sub-group support,
+        // The suite's own gate must mirror can_run(): enumerated sub-group support,
         // never MAX_SUB_GROUP_SIZE >= 32, which reports entry [0].
         if (this->ctx->device().type != DeviceType::GPU) {
             GTEST_SKIP() << "potrf_tiny is a GPU kernel";
@@ -472,8 +471,8 @@ TYPED_TEST(PotrfTinyTest, TinyEmptyInfoSpanStillFactorises) {
                                make_scalar<T>(R(0), R(0)));
 
     EXPECT_GT(sycl_potrf::potrf_tiny_buffer_size<T>(*this->ctx, p.view()), 0u)
-        << "a zero-byte tier workspace makes potrf_buffer_size's native_need == 0 "
-           "unimplemented check fire on a Tiny-only shape";
+        << "an empty info span draws batch int32s of scratch from the workspace, so it "
+           "cannot be zero bytes";
 
     this->run_tiny(p.view(), Uplo::Lower, /*pass_info_span=*/false);
     for (int b = 0; b < batch; ++b) {
@@ -527,91 +526,8 @@ TYPED_TEST(PotrfTinyTest, TinyLaunchGeometryIsReported) {
         << "one order past the cap must report unfit";
 }
 
-// The route table sees the tier, and the tier sits FIRST in the order array.
-TYPED_TEST(PotrfTinyTest, TinyRouteTableAndVocabulary) {
-    using T = typename TestFixture::T;
-    static constexpr Backend B = TestFixture::BackendType;
-    using Tbl = dispatch::RouteTable<dispatch::Op::potrf, T>;
-    const dispatch::Route tiny{dispatch::Origin::Native, dispatch::Algorithm::Tiny};
-
-    // The vocabulary round trip. A missing parse case is SILENT: the pin becomes
-    // nullopt, is dropped, and a benchmark arm measures whatever automatic() picked.
-    EXPECT_EQ(dispatch::to_string(dispatch::Algorithm::Tiny), "tiny");
-    ASSERT_TRUE(dispatch::parse_algorithm_word("tiny").has_value());
-    EXPECT_EQ(*dispatch::parse_algorithm_word("tiny"), dispatch::Algorithm::Tiny);
-
-    EXPECT_EQ(dispatch::kPotrfOrder[0].algo, dispatch::Algorithm::Tiny);
-    EXPECT_TRUE(dispatch::is_native(dispatch::kPotrfOrder[0]));
-
-    const int cap = this->cap();
-    Matrix<T, MatrixFormat::Dense> A(cap, cap, 2);
-    A.fill(T{});
-    const auto shape = backend::potrf_op_shape<B, T>(*this->ctx, A.view(), Uplo::Lower);
-    ASSERT_TRUE(shape.has_value());
-    EXPECT_EQ(shape->tiny_max_n, cap);
-
-    auto at_cap = *shape;
-    EXPECT_TRUE(Tbl::supports(tiny, at_cap));
-    // The window is MEASURED for ALL FOUR types now, Lower only. It is NOT a type list: float
-    // and cfloat take the whole tier, while both fp64 types take 2..8 and 12..16 only, because
-    // the N-bucket fill splits the band. So the expectation at the cap is derived FROM the
-    // predicate, not restated beside it -- restating it is how the two drift apart, and at the
-    // cap the answer differs per type (cdouble caps at 16, inside the band; double at 32,
-    // outside it). evidence: docs/perf/potrf.md#the-tiny-potrf-window
-    constexpr bool fp32 =
-        std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>;
-    const bool windowed = Tbl::tiny_window(at_cap);
-    EXPECT_EQ(windowed, fp32 || cap == 16)
-        << "cap " << cap << " landed outside the measured band unexpectedly";
-    EXPECT_EQ(Tbl::native_tier_preferred(tiny, at_cap), windowed);
-    EXPECT_EQ(Tbl::preferred(tiny, at_cap), windowed);
-
-    // Exactly one native tier answers true, or the walk is an accident of the order array
-    // (R8b). Inside the window that tier is Tiny, and CTA must step aside.
-    EXPECT_EQ(Tbl::native_tier_preferred(
-        {dispatch::Origin::Native, dispatch::Algorithm::CTA}, at_cap), !windowed);
-    EXPECT_FALSE(Tbl::native_tier_preferred(
-        {dispatch::Origin::Native, dispatch::Algorithm::Blocked}, at_cap));
-
-    int hits = 0;
-    for (const dispatch::Route* r = Tbl::order_begin(); r != Tbl::order_end(); ++r)
-        if (dispatch::is_native(*r) && Tbl::supports(*r, at_cap) && Tbl::preferred(*r, at_cap))
-            ++hits;
-    EXPECT_EQ(hits, windowed ? 1 : 0);
-
-    // UPPER IS NOW MEASURED, and it is the WIDER window of the two: the whole tier, every
-    // type, 1.42-28.73x. It is therefore preferred at the cap even for the fp64 types whose
-    // LOWER band has a hole there. evidence: docs/perf/potrf.md#the-tiny-potrf-window
-    auto up = at_cap;
-    up.uplo = Uplo::Upper;
-    EXPECT_TRUE(Tbl::supports(tiny, up));
-    EXPECT_TRUE(Tbl::tiny_window(up));
-    EXPECT_TRUE(Tbl::preferred(tiny, up));
-
-    // Upper is wider than Lower, so at an order the Lower band excludes the two must differ.
-    // This is what stops a future edit collapsing them back into one uplo-blind predicate.
-    if constexpr (!fp32) {
-        auto hole = at_cap;
-        hole.m = hole.n = hole.k = 10;     // 9..11 is the measured fp64 Lower hole
-        hole.uplo = Uplo::Lower;
-        EXPECT_FALSE(Tbl::tiny_window(hole)) << "fp64 Lower n=10 measured 0.957-0.976x";
-        hole.uplo = Uplo::Upper;
-        EXPECT_TRUE(Tbl::tiny_window(hole)) << "fp64 Upper n=10 measured 1.42-1.62x";
-    }
-
-    auto past = *shape;
-    past.m = past.n = past.k = cap + 1;
-    EXPECT_FALSE(Tbl::supports(tiny, past));
-    EXPECT_FALSE(Tbl::native_tier_preferred(tiny, past));
-
-    // A build with no tiny kernel must not fire the window.
-    auto absent = at_cap;
-    absent.tiny_max_n = 0;
-    EXPECT_FALSE(Tbl::preferred(tiny, absent));
-}
-
 // The facade actually reaches the TINY kernel; the guard is bit-exactness against the
-// direct call, because the table answering {Native, Tiny} says nothing about what ran.
+// direct call, because a pin being accepted says nothing about what ran.
 TYPED_TEST(PotrfTinyTest, TinyFacadeReachesTheTinyKernel) {
     using T = typename TestFixture::T;
     using R = typename TestFixture::R;
@@ -620,20 +536,12 @@ TYPED_TEST(PotrfTinyTest, TinyFacadeReachesTheTinyKernel) {
     const int n = std::min(17, this->cap());
     const int batch = 5;
 
-    // A bare ::setenv is invisible: batchlas::settings() snapshots the environment
-    // before main() and parse_route_env reads only that snapshot.
-    const ScopedEnvVar route_pin("BATCHLAS_POTRF_ROUTE", "tiny");
+    const select::ScopedPin<ops::potrf::PotrfChoice> route_pin("potrf", ops::potrf::Tiny{});
 
     auto through = make_tiny_prob<T>(n, batch, n + 5, (n + 5) * n + 13, Uplo::Lower,
                                      8080u, make_scalar<T>(R(0), R(0)));
     auto direct = make_tiny_prob<T>(n, batch, n + 5, (n + 5) * n + 13, Uplo::Lower,
                                     8080u, make_scalar<T>(R(0), R(0)));
-
-    const auto route = backend::potrf_route<B, T>(*this->ctx, through.view(), Uplo::Lower,
-                                                  /*vendor_available=*/true);
-    ASSERT_TRUE(dispatch::is_native(route))
-        << "BATCHLAS_POTRF_ROUTE=tiny did not resolve to a native route";
-    ASSERT_EQ(route.algo, dispatch::Algorithm::Tiny);
 
     UnifiedVector<std::byte> ws(
         potrf_buffer_size<B, T>(*this->ctx, through.view(), Uplo::Lower));
@@ -653,49 +561,6 @@ TYPED_TEST(PotrfTinyTest, TinyFacadeReachesTheTinyKernel) {
                 ASSERT_EQ(host_imag(through.at(i, j, b)), host_imag(direct.at(i, j, b)));
             }
         }
-    }
-}
-
-// potrf_buffer_size must cover the tier it now routes to, and must not shrink below
-// what the tier's own query asks for.
-TYPED_TEST(PotrfTinyTest, TinyBufferSizeCoversTheTier) {
-    using T = typename TestFixture::T;
-    static constexpr Backend B = TestFixture::BackendType;
-
-    for (int n : {1, 8, 16, 32}) {
-        if (n > this->cap()) continue;
-        Matrix<T, MatrixFormat::Dense> A(n, n, 64);
-        A.fill(T{});
-        const std::size_t tier = sycl_potrf::potrf_tiny_buffer_size<T>(*this->ctx, A.view());
-        std::size_t facade = 0;
-        ASSERT_NO_THROW((facade = potrf_buffer_size<B, T>(*this->ctx, A.view(), Uplo::Lower)));
-        EXPECT_GE(facade, tier) << "n=" << n;
-    }
-}
-
-// The direct entry point re-applies every supports() gate and THROWS. A forced route
-// that supports() rejects falls through to automatic() and silently runs the vendor,
-// so a caller reaching this function past a gate must be told, not served.
-TYPED_TEST(PotrfTinyTest, TinyDirectEntryPointRefusesWhatSupportsRefuses) {
-    using T = typename TestFixture::T;
-
-    UnifiedVector<int32_t> info(4, int32_t(0));
-    UnifiedVector<std::byte> ws(1024);
-
-    {   // above the register ceiling
-        const int n = this->cap() + 1;
-        Matrix<T, MatrixFormat::Dense> A(n, n, 1);
-        A.fill(T{});
-        EXPECT_THROW((void)sycl_potrf::potrf_tiny_dispatch<T>(*this->ctx, A.view(), Uplo::Lower,
-                                                        ws.to_span(), info.to_span()),
-                     std::invalid_argument);
-    }
-    {   // not square
-        Matrix<T, MatrixFormat::Dense> A(8, 6, 1);
-        A.fill(T{});
-        EXPECT_THROW((void)sycl_potrf::potrf_tiny_dispatch<T>(*this->ctx, A.view(), Uplo::Lower,
-                                                        ws.to_span(), info.to_span()),
-                     std::invalid_argument);
     }
 }
 

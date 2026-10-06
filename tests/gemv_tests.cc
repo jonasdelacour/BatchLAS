@@ -10,12 +10,12 @@
 #include <algorithm>
 #include "test_utils.hh"
 #include "../src/sycl/gemv_native.hh"
-#include "../src/backends/gemv_route.hh"
 #include <utility>
 // The WRITE side of the knob this file pins. settings() snapshots the environment
 // once, before main(), so a bare ::setenv in a test body is read by nothing;
 // ScopedEnvVar is the guard that reloads that snapshot at both ends of a scope.
 #include <batchlas/util/env.hh>
+#include <batchlas/settings.hh>
 
 using namespace batchlas;
 
@@ -854,7 +854,7 @@ TYPED_TEST(GemvCoverageTest, PaddedBatchStrideSegmented) {
 // Body 5, the segmented TRANSPOSED CTA kernel, GemvSegTKernel<T, W>. Its gate is on
 // red_len (= m under Trans/ConjTrans), not out_len as body 4's is, and it is per scalar
 // type: float <= 32, cfloat <= 16, double <= 48, cdouble <= 64. Bodies 3 and 5 both
-// resolve to native:cta, so a break shows only under build-novendor or a pinned route.
+// resolve to the cta choice, so a break shows only under build-novendor or a pinned route.
 // evidence: docs/perf/gemv.md#the-body-5-gates
 
 // Which kernel runs, asserted at both sides of every boundary of the per-type tables.
@@ -907,16 +907,6 @@ TYPED_TEST(GemvCoverageTest, SegTransCasesAreReachable) {
                         "batch before trusting any break result.";
     }
     const int64_t kItems = kItems8;
-    UnifiedVector<S> a(16 * 8), x(8), y(16);
-    UnifiedVector<S*> pa(1);
-    MatrixView<S, MatrixFormat::Dense> Av(a.data(), 8, 16, 8, 8 * 16, 1, pa.data());
-    VectorView<S> Xv(x.data(), 8, 1, Inc{1}, Stride{8});
-    VectorView<S> Yv(y.data(), 16, 1, Inc{1}, Stride{16});
-    const auto rt = backend::gemv_route<TestFixture::BackendType, S>(
-        *this->ctx, Av, Xv, Yv, Transpose::Trans, /*vendor_available=*/false);
-    std::cout << "[ROUTE] gemv Trans (vendor_available=false) resolves to "
-              << dispatch::to_string(rt.origin) << ":" << dispatch::to_string(rt.algo)
-              << std::endl;
 
     // Every m used by a body-5 case below; 40 and 44 are inside the double gates only.
     for (int m : {1, 3, 5, 16}) {

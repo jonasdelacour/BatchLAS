@@ -9,6 +9,12 @@ float + cfloat). Worst batchlas/vendor time ratios: cfloat gemm 3.0x geomean (15
 32x32x1024), trsm float 1.5x (11x at n=32 q=8), getrs cfloat 1.8x (10x at nrhs=16),
 potrf cfloat 1.6x (9.5x at n=256), geqrf skinny 2-3.7x.
 
+> **Routing on this page is historical.** Every `RouteTable`, `preferred()`,
+> `native_tier_preferred` and `route_<op>.hh` clause quoted below was deleted by flat kernel
+> selection (phases 2-5, `docs/design/flat-kernel-selection.md`). Each op now takes the first
+> runnable entry of the nearest row of `tuned/<op>.<dtype>.<device>.txt`. The kernels and the
+> measurements stand.
+
 ## Result
 
 Same campaign re-run on the tuned branch: `cuda-blackwell-tuned` (worktree-blackwell-tuning
@@ -472,6 +478,14 @@ n=512 b=512; cfloat half that). Routes were confirmed with `BATCHLAS_COVERAGE_OU
 `~/.claude/jobs/698ef31c/tmp/wp-potrf/` (`lp_ab_v1.csv`, `v2_ab.csv`, `final_ab.csv`,
 `nbw_base.csv`, `nbw2_base.csv`, `bw_new.csv`, `posv_base.csv`).
 
+**potrf routing below is historical.** Flat selection deleted `route_potrf.hh`, its sm_120 edges
+and its `native_tier_preferred` cap. potrf now takes the first runnable entry of the nearest row of
+`tuned/potrf.<dtype>.sm_120.txt`, converted from the sm_120 route sweeps
+([potrf.md](potrf.md#selection-since-flat-kernel-selection-phase-2)). The kernel and tuning-constant
+results stand. posv's `RouteTable` windows are deleted too: posv reads `tuned/posv.<dtype>.<device>.txt`
+([potrf.md](potrf.md#posv-selection-since-flat-kernel-selection-phase-3)); the sm_120 posv tables are converted
+from the sm_120 posv seed sweep (`benchmarks/results/routing/sm120_posv_sweep.jsonl`).
+
 ### potrf LPanel vector sB
 
 `potrf_lpanel_body`'s left-looking update read its lane-uniform sB operand with one
@@ -583,7 +597,7 @@ The remaining posv losses are nrhs > 8 at small n (float 32/16 0.52, 64/16 0.68,
 0.79), which run `potrf=tiny|lpanel` plus the native trsm. Pinning only
 `BATCHLAS_TRSM_ROUTE=vendor` makes the same composition 1.26x faster than the vendor
 arm at 32/16 and 1.09x at 128/16, so the whole loss is the trsm kernel, which the trsm
-package owns. posv routing is left unchanged.
+package owns. posv routing was left unchanged here (it has since moved to flat selection, see above).
 
 ## LU (getrf, getrs, gesv)
 
@@ -1274,6 +1288,11 @@ rung and stayed within 3% (`~/.claude/jobs/698ef31c/tmp/wp-trsm/r_ortho.log`).
 
 ### trsm sub-group Left kernel
 
+> On the flat-selection line the kernel was ported pin-only in P3.2b (direct C++
+> entry `sycl_trsm::trsm_native_sg_left_dispatch`). The `trsm_left_use_sg` routing
+> and the sm_120 windows described below are not in that tree: routing is
+> deferred to flat selection (P3.3).
+
 `trsm_sg_left.cc` handles Side::Left at orders 1..32. Each lane is a (matrix, canonical
 row r) pair, so a sub-group holds 32/N matrices for the buckets N in {4, 8, 16, 32}.
 Each lane carries QC right-hand sides: 4 for q <= 4, 8 for q <= 8, else 16
@@ -1474,8 +1493,19 @@ throwaway JIT pass per cell, 3 reps alternating arm order, medians. BASE is
 against the new libraries. Ratios are time/vendor. Kernel choice was checked with
 `BATCHLAS_KERNEL_TRACE` on every quoted NN cell.
 
-Everything below is keyed on `is_sm120_family(cuda_cc)` in `select_kernel_variant`
-(`src/sycl/gemm_kernels.cc`). cc 0 and cc 89 keep the 4090 ladder, which
+> On the flat-selection line (P3.4) none of the windows in this section is code:
+> `select_kernel_variant` and `is_sm120_family` routing are deleted, and gemm
+> chooses from `tuned/gemm.<dtype>.<device>.txt` (docs/perf/gemm.md#choices-flat-selection-p34).
+> sm_120's gemm tables are the transcribed sm_89 rows written for sm_120 (no gemm sweep
+> has run), so Auto on sm_120 runs what the 4090 router chose. The tiles named below are ordinary
+> candidates (`wide:m=16:n=16:k=16`, `wide:m=32:n=32:k=16`, NN only;
+> `wide:m=64:n=64:k=16`, `wide:m=128:n=32:k=16`, `wide:m=32:n=128:k=16` for the
+> transposed fallback), and the measurements below are the hypotheses the
+> `tools/tune` sm_120 sweep tests. Kernel-name pins (`16x16x16wide`, ...) are
+> `BATCHLAS_GEMM_ROUTE` aliases now.
+
+Everything below was keyed on `is_sm120_family(cuda_cc)` in `select_kernel_variant`
+(`src/sycl/gemm_kernels.cc`) on `worktree-blackwell-tuning`. cc 0 and cc 89 keep the 4090 ladder, which
 `GemmDispatchPolicyTest.Sm120SmallTilesAndTheirEdges` and
 `Sm120TransposedFallbackAndItsEdges` assert shape by shape. None of it changes
 `preferred()`: in a vendor build, Auto still sends complex and transposed float to
@@ -1485,10 +1515,15 @@ and geqrf in float, cfloat and cdouble at n=128-512 measured new/base 0.996-1.00
 
 ### gemm small tiles
 
+> On the flat-selection line both tiles were ported pin-only in P3.2b, and P3.4 made
+> them the `wide:m=16:n=16:k=16` and `wide:m=32:n=32:k=16` candidates (NN only in
+> `can_run`). The sm_120 selector windows described below are not in that tree; the
+> sm_120 tuner sweep ranks the tiles instead.
+
 There are two new NN instantiations of the wide-scalar template
 (`launch_wide_transposed`, 64 threads each): 16x16 with a 2x2 thread tile and 32x32
 with a 4x4 thread tile (`Tiled16x16RegisterK16Wide`, `Tiled32x32RegisterK16Wide`).
-They are forceable as `16x16x16wide` and `32x32x16wide`. On the 4090 the only complex
+They are forceable as `16x16x16wide` and `32x32x16wide` (aliases of the spellings above). On the 4090 the only complex
 register kernel was the 64x64 tile, which at m=n=32 computes 3/4 padding.
 
 Windows (float and complex<float>; `fits16` = max(m,n) <= 16, or min(m,n) <= 8 with

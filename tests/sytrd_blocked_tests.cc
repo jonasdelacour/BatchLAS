@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "test_utils.hh"
+#include "../src/ops/syev/vendor.hh"
 
 using namespace batchlas;
 

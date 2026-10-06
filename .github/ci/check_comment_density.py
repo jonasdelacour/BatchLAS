@@ -464,7 +464,7 @@ REMEDY_CASES = [
      "real include/batchlas/blas/functions/syev.hh, k == r == 1: naming 1 and "
      "then calling 1 insufficient is the defect this pins"),
     ("eq_small", 3, 11, 18.0, "delete 2 comment line(s)", "does NOT clear",
-     "real include/batchlas/blas/dispatch/op.hh, k == r == 2"),
+     "a 3-of-11 header (the deleted dispatch/op.hh), k == r == 2"),
     ("eq_all_comment", 4, 4, 18.0, "delete 4 comment line(s)", "does NOT clear",
      "the all-comment 4/4 arithmetic row, now checked for what it prints"),
     ("diff_sg_compat", 58, 301, 18.0,

@@ -3,6 +3,7 @@
 
 #include <batchlas/backend_config.h>
 #include <batchlas/util/env.hh>
+#include <batchlas/settings.hh>
 
 #include <algorithm>
 #include <complex>

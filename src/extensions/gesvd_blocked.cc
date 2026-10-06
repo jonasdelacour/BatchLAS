@@ -8,6 +8,7 @@
 
 #include "../math-helpers.hh"
 #include "../util/template-instantiations.hh"
+#include "gesvd_native.hh"
 #include "info_span.hh"
 #include "stedc_internal.hh"
 
@@ -248,16 +249,6 @@ SteqrParams<T> gesvd_cta_steqr_params() {
     params.cta_shift_strategy = SteqrShiftStrategy::Wilkinson;
     params.sort = true;
     params.sort_order = SortOrder::Ascending;
-    return params;
-}
-
-template <typename T>
-SteqrParams<T> gesvd_blocked_steqr_params() {
-    SteqrParams<T> params{};
-    params.max_sweeps = 400;
-    params.sort = true;
-    params.sort_order = SortOrder::Ascending;
-    params.back_transform = false;
     return params;
 }
 
@@ -1555,14 +1546,14 @@ Event gesvd_cta(Queue& ctx,
                 const Span<std::byte>& ws,
                 Span<int32_t> info) {
     validate_gesvd_dims(a_in, singular_values, u_out, vh_out, jobu, jobvh, "gesvd_cta");
-    if (std::max(a_in.rows(), a_in.cols()) > 32) {
+    if (std::max(a_in.rows(), a_in.cols()) > sycl_gesvd::kGesvdCtaMaxDim) {
         throw batchlas::invalid_argument("gesvd_cta: currently supports max(m, n) <= 32");
     }
     // Mode CTA always takes the normal-equations branch, whose
     // patch_zero_left_vectors writes m columns of U unconditionally. Refuse a
-    // genuinely thin request rather than overrun. Dispatch never gets here --
-    // gesvd_supports_cta already declines, and a forced-but-unsupported
-    // provider resets to Auto -- so this guards DIRECT callers.
+    // genuinely thin request rather than overrun. can_run (src/ops/gesvd/gesvd.cc)
+    // refuses canonical Thin, so Auto never gets here and a `cta` pin throws;
+    // this guards DIRECT callers.
     {
         const int64_t k = std::min<int64_t>(a_in.rows(), a_in.cols());
         if (canonical_jobu(jobu, a_in.rows(), k) == SvdVectors::Thin ||
@@ -1599,14 +1590,14 @@ Event gesvd_cta(Queue& ctx,
     if (a_in.rows() != a_in.cols()) {
         throw batchlas::invalid_argument("gesvd_cta: Hermitian path requires square matrices");
     }
-    if (std::max(a_in.rows(), a_in.cols()) > 32) {
+    if (std::max(a_in.rows(), a_in.cols()) > sycl_gesvd::kGesvdCtaMaxDim) {
         throw batchlas::invalid_argument("gesvd_cta: currently supports max(m, n) <= 32");
     }
     // Mode CTA always takes the normal-equations branch, whose
     // patch_zero_left_vectors writes m columns of U unconditionally. Refuse a
-    // genuinely thin request rather than overrun. Dispatch never gets here --
-    // gesvd_supports_cta already declines, and a forced-but-unsupported
-    // provider resets to Auto -- so this guards DIRECT callers.
+    // genuinely thin request rather than overrun. can_run (src/ops/gesvd/gesvd.cc)
+    // refuses canonical Thin, so Auto never gets here and a `cta` pin throws;
+    // this guards DIRECT callers.
     {
         const int64_t k = std::min<int64_t>(a_in.rows(), a_in.cols());
         if (canonical_jobu(jobu, a_in.rows(), k) == SvdVectors::Thin ||
@@ -1638,7 +1629,7 @@ size_t gesvd_cta_buffer_size(Queue& ctx,
                              SvdVectors jobu,
                              SvdVectors jobvh) {
     validate_gesvd_dims(a, singular_values, u_out, vh_out, jobu, jobvh, "gesvd_cta_buffer_size");
-    if (std::max(a.rows(), a.cols()) > 32) {
+    if (std::max(a.rows(), a.cols()) > sycl_gesvd::kGesvdCtaMaxDim) {
         throw batchlas::invalid_argument("gesvd_cta_buffer_size: currently supports max(m, n) <= 32");
     }
     {
@@ -1673,7 +1664,7 @@ size_t gesvd_cta_buffer_size(Queue& ctx,
     if (a.rows() != a.cols()) {
         throw batchlas::invalid_argument("gesvd_cta_buffer_size: Hermitian path requires square matrices");
     }
-    if (std::max(a.rows(), a.cols()) > 32) {
+    if (std::max(a.rows(), a.cols()) > sycl_gesvd::kGesvdCtaMaxDim) {
         throw batchlas::invalid_argument("gesvd_cta_buffer_size: currently supports max(m, n) <= 32");
     }
     {

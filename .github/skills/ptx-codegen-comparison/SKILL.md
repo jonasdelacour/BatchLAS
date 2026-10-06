@@ -36,7 +36,7 @@ This skill is designed around the workflow used to compare cuBLASDx GEMM and SYC
 ## Prerequisites
 
 - A reproducible benchmark command for the kernel family under investigation.
-- A way to pin the competing variants, for example `BATCHLAS_GEMM_VARIANT=sycl` vs `BATCHLAS_GEMM_VARIANT=native`.
+- A way to pin the competing variants, for example `BATCHLAS_GEMM_ROUTE=native` vs `BATCHLAS_GEMM_ROUTE=vendor`.
 - CUDA device-code tools such as `cuobjdump`, `c++filt`, and the dpcpp-cuda `llc` backend.
 - A build configured with CUDA enabled and benchmarks built.
 
@@ -49,8 +49,8 @@ Run the same benchmark case for both variants and record the timings.
 For GEMM in this repo:
 
 ```bash
-BATCHLAS_GEMM_VARIANT=sycl /home/jonaslacour/BatchLAS/build/benchmarks/gemm_benchmark 4096 4096 4096 32 --backend=CUDA --type=float --warmup=5
-BATCHLAS_GEMM_VARIANT=native /home/jonaslacour/BatchLAS/build/benchmarks/gemm_benchmark 4096 4096 4096 32 --backend=CUDA --type=float --warmup=5
+BATCHLAS_GEMM_ROUTE=native /home/jonaslacour/BatchLAS/build/benchmarks/gemm_benchmark 4096 4096 4096 32 --backend=CUDA --type=float --warmup=5
+BATCHLAS_GEMM_ROUTE=vendor /home/jonaslacour/BatchLAS/build/benchmarks/gemm_benchmark 4096 4096 4096 32 --backend=CUDA --type=float --warmup=5
 ```
 
 Record:
@@ -67,11 +67,11 @@ Before reading PTX, verify that both runs are hitting the intended variant.
 
 For GEMM in BatchLAS:
 
-- Variant routing lives in `src/backends/gemm_variant.hh`.
-- cuBLASDx kernel selection lives in `src/backends/gemm_cublasdx_dispatch.cc`.
+- Kernel selection lives in `src/ops/gemm/{choice.hh,gemm.cc}` (flat selection: the tuned table's first runnable choice).
+- cuBLASDx kernel selection lives in `src/backends/gemm_cublasdx_dispatch.cc`; only the level-3 fused paths reach it, gemm does not.
 - SYCL register-tiled kernel instantiations live in `src/sycl/gemm/register_tiled_common.hh` and `src/sycl/gemm/register_launchers.hh`.
 
-If needed, use the available environment selectors such as `BATCHLAS_GEMM_CUBLASDX_KERNEL` to pin the cuBLASDx path.
+Pin the gemm kernel with `BATCHLAS_GEMM_ROUTE=<choice>` (e.g. `reg:m=128:n=32:k=32:u=1`, `wide:m=64:n=64:k=16`, `tiled`, `vendor`) and confirm it with `BATCHLAS_SELECT_TRACE=1`. `BATCHLAS_GEMM_CUBLASDX_KERNEL` only affects the level-3 cuBLASDx paths.
 
 ### 3. Configure A PTX Inspection Build
 

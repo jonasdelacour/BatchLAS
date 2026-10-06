@@ -88,8 +88,14 @@ inline void trsm_validate_params(
         }
 
         if (ldb < std::max(1, m)) {
-                throw batchlas::invalid_argument("TRSM: ldb must be >= max(1, m). Got ldb=" + 
+                throw batchlas::invalid_argument("TRSM: ldb must be >= max(1, m). Got ldb=" +
                                         std::to_string(ldb) + ", m=" + std::to_string(m));
+        }
+        // Every kernel walks one batch count over both operands; a mismatch indexes past one.
+        if (A.batch_size() != B.batch_size()) {
+                throw batchlas::invalid_argument("TRSM: A and B must have the same batch size. Got " +
+                                        std::to_string(A.batch_size()) + " and " +
+                                        std::to_string(B.batch_size()));
         }
 }
 
@@ -136,7 +142,7 @@ namespace batchlas::backend {
 // DECLARATION ONLY. The public `trsm<Back, T>` used to be DEFINED inside each
 // vendor TU, so dropping a vendor library dropped the public entry point along
 // with the vendor path. WP0 S5 moves that definition to
-// src/dispatch/entry_points/level3.cc; what stays behind is the vendor
+// src/ops/trsm/trsm.cc; what stays behind is the vendor
 // implementation, named as such. Each vendor wrapper TU defines this primary
 // template for its own Backend value and instantiates it there.
 template <Backend Back, typename T>

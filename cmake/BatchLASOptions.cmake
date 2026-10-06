@@ -140,13 +140,11 @@ option(BATCHLAS_ALLOW_UNSAFE_ENV
 
 # There is deliberately NO BATCHLAS_ENABLE_COVERAGE option.
 #
-# The per-call half of the coverage instrument (dispatch/coverage.hh) is gated
-# at runtime on $BATCHLAS_COVERAGE_OUT instead. It was a build option briefly,
-# and that could not work: the gate sits in resolve_route, an inline function
-# template, so a consumer TU compiled without the macro interposes its own
-# uninstrumented copy over the library's and recording silently stops. A
-# compile-time switch on a header template is only sound when every TU in the
-# process agrees on it, which a library cannot enforce. See coverage.hh.
+# The per-call half of the coverage instrument (src/select/coverage.hh) is gated
+# at runtime on $BATCHLAS_COVERAGE_OUT instead. A compile-time switch on an inline
+# header function is only sound when every TU in the process agrees on it, which a
+# library cannot enforce: a consumer TU compiled without the macro interposes its
+# own uninstrumented copy and recording silently stops.
 
 set(BATCHLAS_MATHDX_ROOT "" CACHE PATH "Path to an unpacked NVIDIA MathDx package root")
 set(BATCHLAS_CPU_TARGET "auto" CACHE STRING "CPU SYCL target override: auto|native_cpu|spir64_x86_64|none")
@@ -241,12 +239,12 @@ option(BATCHLAS_ENABLE_VENDOR_BLAS
     "Build against vendor math libraries (cuBLAS/cuSOLVER/cuSPARSE, roc*, oneMKL, netlib, MathDx)"
     ON)
 
-# CUBLASDX/CUSOLVERDX are counted as vendor: they are third-party NVIDIA source
-# shipped in the MathDx package, they exist only for NVIDIA, and so they can
-# never be the portable path. A vendor-independence measurement that let them
+# CUBLASDX is counted as vendor: it is third-party NVIDIA source shipped in
+# the MathDx package, it exists only for NVIDIA, and so it can never be the
+# portable path. A vendor-independence measurement that let them
 # through would be measuring the wrong thing.
 set(BATCHLAS_VENDOR_LIBRARIES
-    CUBLAS CUSOLVER CUSPARSE CUBLASDX CUSOLVERDX
+    CUBLAS CUSOLVER CUSPARSE CUBLASDX
     ROCBLAS ROCSOLVER ROCSPARSE
     LAPACKE CBLAS ONEMKL)
 

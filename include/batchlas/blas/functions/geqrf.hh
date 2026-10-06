@@ -43,10 +43,10 @@ using geqrf_vendor_buffer_size = size_t(Queue&,
 
 // Validation for the POSITIONAL entry point, which had none.
 //
-// It runs in the facade (src/dispatch/entry_points/factorization.cc), AHEAD of
+// It runs in the facade (src/ops/geqrf/geqrf.cc), AHEAD of
 // the shape builder, because the builder reads A.rows()/A.cols() and must not
 // describe a non-conforming view. Same hoist, and same reason, as potrf's
-// (potrf.hh:66-84) and trsm's (entry_points/level3.cc:167-174).
+// (potrf.hh:66-84) and trsm's (src/ops/trsm/trsm.cc:127).
 //
 // SCOPE IS DELIBERATELY MINIMAL -- EXACTLY WHAT THE SHAPE BUILDER NEEDS, and for
 // geqrf that is one line. Three things it deliberately does NOT check, each for a
@@ -57,7 +57,7 @@ using geqrf_vendor_buffer_size = size_t(Queue&,
 //     (band_reduction.cc:595, sytrd_sy2sb.cc:504). Copying potrf.hh:76's
 //     `A.rows() != A.cols()` here would be a wrong edit.
 //
-//   * NO `m >= n` CHECK, even though RouteTable<Op::geqrf,T>::supports() carries
+//   * NO `m >= n` CHECK, even though geqrf's can_run (src/ops/geqrf/geqrf.cc) carries
 //     one. That gate says "the native drivers cannot serve a wide view", which
 //     routes it to the vendor; it does not say the CALL is invalid, and the
 //     vendor serves it. A validator that threw would turn a working call into an
@@ -99,7 +99,7 @@ namespace batchlas::backend {
 // DECLARATION ONLY -- see the note on gemm_vendor in gemm.hh. The public
 // `geqrf` used to be defined inside each vendor TU, so dropping a vendor library
 // dropped the public entry point with it; WP0 S5 moves that definition to
-// src/dispatch/entry_points/factorization.cc and leaves the vendor
+// src/ops/geqrf/geqrf.cc and leaves the vendor
 // implementation here, named as such.
 template <Backend B, typename T>
 BATCHLAS_API Event geqrf_vendor(Queue& ctx,

@@ -731,7 +731,7 @@ Event gemv_native_cta(Queue& ctx,
             "BatchLAS: gemv_native_cta called with transA = NoTrans. The CTA body "
             "reduces down a column and serves only Trans/ConjTrans; NoTrans is "
             "already fully coalesced with one work-item per output row and is the "
-            "Direct body's job (Algorithm::Direct).");
+            "`direct` choice's job (BATCHLAS_GEMV_ROUTE=direct).");
     }
     if (gemv_quick_return(A.rows(), A.cols(), alpha, beta)) return ctx.get_event();
 

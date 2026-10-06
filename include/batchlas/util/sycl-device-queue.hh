@@ -129,6 +129,10 @@ enum class DeviceProperty
     NUMBER_OF_PROPERTIES
 };
 
+// Consumer Blackwell (RTX 50xx / RTX PRO 6000, sm_120/121), given
+// Device::cuda_compute_capability(). evidence: docs/perf/blackwell.md
+constexpr bool is_sm120_family(int cuda_cc) { return cuda_cc >= 120 && cuda_cc < 130; }
+
 struct BATCHLAS_API Device{
     static std::vector<Device> get_devices(DeviceType type);
 

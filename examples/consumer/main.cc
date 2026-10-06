@@ -38,6 +38,8 @@
 #include <cmath>
 #include <cstdio>
 #include <exception>
+#include <stdexcept>
+#include <type_traits>
 
 using batchlas::Matrix;
 using batchlas::MatrixFormat;
@@ -61,6 +63,10 @@ float& at(const View& v, int i, int j, int b) {
 }
 
 }  // namespace
+
+// What a vendor-free build throws for a call it cannot serve; catching it must not need a
+// second include.
+static_assert(std::is_base_of_v<std::runtime_error, batchlas::NoRouteError>);
 
 int main() try {
     // Owning, USM-backed operands. (rows, cols, batch_size) packs them: ld is

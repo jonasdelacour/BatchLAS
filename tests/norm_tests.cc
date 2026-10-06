@@ -9,6 +9,7 @@
 #include <chrono>
 #include <batchlas/blas/extra.hh>
 #include "test_utils.hh"
+#include "../src/ops/syev/vendor.hh"
 
 using namespace batchlas;
 

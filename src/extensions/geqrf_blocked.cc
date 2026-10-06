@@ -7,7 +7,6 @@
 #include "geqrf_panel_reg_device.hh"
 #include "larft_wy.hh"
 
-#include "../sycl/gemm_kernels.hh"
 #include "../queue.hh"
 #include "../util/template-instantiations.hh"
 
@@ -111,10 +110,9 @@ GeqrfBlockedWs<T> geqrf_blocked_layout(Queue& ctx, BumpAllocator& pool,
 }  // namespace
 
 // Co-located with the driver so "the flag is true" and "this TU is compiled" are one fact.
-// RouteTable<Op::geqrf,T>::preferred() now routes native above a per-type order floor
-// (float 64, cfloat 48, double 96, cdouble 256) and for tall panels, so this flag also
-// gates the DEFAULT route and not only vendor-free builds: reporting false here sends
-// every in-window shape back to the vendor.
+// geqrf's can_run reads it, and tuned/geqrf.*.txt ranks blocked first on large and tall
+// shapes, so this flag also gates the DEFAULT choice and not only vendor-free builds:
+// reporting false here sends every such shape back to the vendor.
 // evidence: docs/perf/small-n-baseline.md#geqrf, docs/perf/qr.md#route-arms
 template <> bool geqrf_blocked_available<float>()                { return true; }
 template <> bool geqrf_blocked_available<double>()               { return true; }
@@ -158,17 +156,11 @@ Event geqrf_blocked_dispatch(Queue& ctx,
                              Span<std::byte> workspace,
                              GeqrfTrailingGemm<T> trailing_gemm,
                              GeqrfPanelLeaf panel_leaf) {
-    // Default the seam to the native kernel so this TU stands alone; the facade injects
-    // the ROUTED gemm. Calling gemm_custom here unconditionally bypasses the route table.
     if (!trailing_gemm) {
-        trailing_gemm = [](Queue& c,
-                           const MatrixView<T, MatrixFormat::Dense>& ga,
-                           const MatrixView<T, MatrixFormat::Dense>& gb,
-                           const MatrixView<T, MatrixFormat::Dense>& gc,
-                           T galpha, T gbeta, Transpose gta, Transpose gtb,
-                           ComputePrecision gp) {
-            return sycl_gemm::gemm_custom<T>(c, ga, gb, gc, galpha, gbeta, gta, gtb, gp);
-        };
+        throw batchlas::invalid_argument(
+            "geqrf_blocked: the trailing-update gemm seam is empty. Inject the public "
+            "batchlas::gemm (src/ops/geqrf/geqrf.cc does; a direct caller must too) -- "
+            "gemm, not this driver, chooses the gemm kernel.");
     }
 
     const int m = static_cast<int>(A.rows());
@@ -179,15 +171,14 @@ Event geqrf_blocked_dispatch(Queue& ctx,
     // The caller wins; the environment only fills in Auto, so a pin cannot be redirected.
     if (panel_leaf == GeqrfPanelLeaf::Auto) panel_leaf = geqrf_panel_leaf_from_env();
 
-    // Re-applies every gate supports() applies: this entry point is reachable without the
-    // table, and an unsupported forced route falls back to automatic(), so a gate that is
-    // wrong here silently measures the vendor instead.
+    // Re-applies every gate can_run applies: this entry point is reachable without the
+    // selector, so a gate missing here would launch a shape the kernel cannot run.
     if (m < 1 || n < 1 || batch < 1) {
         throw batchlas::invalid_argument("geqrf_blocked: degenerate extents");
     }
     if (m < n) {
         throw batchlas::invalid_argument(
-            "geqrf_blocked: m < n is not supported (route_geqrf.hh's supports() refuses it)");
+            "geqrf_blocked: m < n is not supported (geqrf's can_run refuses it)");
     }
     if (A.is_heterogeneous()) {
         throw batchlas::invalid_argument("geqrf_blocked: heterogeneous batch is not supported");

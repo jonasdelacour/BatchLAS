@@ -13,7 +13,6 @@
 #include "../sycl/device_scalar.hh"
 #include "../util/resident_capacity.hh"
 
-#include <batchlas/blas/dispatch/route.hh>
 
 #include <sycl/sycl.hpp>
 
@@ -123,7 +122,7 @@ constexpr int getrs_fused_regs_for(int nrhs, FusedBody body, int cuda_cc) {
     const auto pick = [&](const int* nt, const int* tr, const int* po) {
         return body == FusedBody::kTrans ? tr[i] : body == FusedBody::kNoTrans ? nt[i] : po[i];
     };
-    if (dispatch::is_sm120_family(cuda_cc)) {
+    if (batchlas::is_sm120_family(cuda_cc)) {
         using R = GetrsFusedRegs120<T>;
         return pick(R::notrans, R::trans, R::potrs);
     }
@@ -812,7 +811,7 @@ Event potrs_fused_launch(Queue& ctx,
 }
 
 // Runtime nrhs -> the compile-time accumulator width. The ladder must match
-// getrs_fused_nr_bucket, and stops at kGetrsFusedMaxRhs (route_getrs.hh).
+// getrs_fused_nr_bucket, and stops at kGetrsFusedMaxRhs (getrs_native.hh).
 template <typename T>
 Event fused_dispatch_nr(Queue& ctx, bool trans, bool conj,
                         const T* A, int lda, int sA, T* B, int ldb, int sB,
@@ -839,7 +838,7 @@ template <> bool getrs_fused_available<std::complex<float>>()  { return true; }
 template <> bool getrs_fused_available<std::complex<double>>() { return true; }
 
 // THE CAPACITY, IN RHS ELEMENTS (n * nrhs). The RHS vector is resident, so this is a
-// HARD launch ceiling -- a supports() question and not a preferred() one. The budget is
+// HARD launch ceiling -- a can_run question and not a table one. The budget is
 // asked of the DEVICE, and the largest nb the tier ever uses is charged, not this
 // call's. getrs_hole_padded is NOT monotone, so the largest admissible request is the
 // budget when it exceeds kGetrsHoleHi and min(budget, kGetrsHoleLo) otherwise.
@@ -875,9 +874,8 @@ std::size_t getrs_fused_buffer_size(Queue&,
     return 0;
 }
 
-// Every gate RouteTable<Op::getrs,T>::supports() applies is RE-APPLIED here, because
-// this entry point is reachable WITHOUT the table: route_resolve.hh falls through to
-// automatic() when a forced route is unsupported.
+// src/ops/getrs/getrs.cc's can_run(Cta) mirrors these checks (R3); keep the two in step.
+// The entry point is also reachable directly, so every gate is applied here.
 template <typename T>
 Event getrs_fused_dispatch(Queue& ctx,
                            const MatrixView<T, MatrixFormat::Dense>& A,
@@ -931,13 +929,13 @@ Event getrs_fused_dispatch(Queue& ctx,
             " exceeds this device's resident-RHS capacity (" +
             std::to_string(getrs_fused_max_rhs_elems<T>(budget)) +
             " elements). This is a CAPACITY ceiling, not a speed one: route the "
-            "call to Algorithm::Blocked instead.");
+            "call to the `blocked` choice instead (BATCHLAS_GETRS_ROUTE=blocked).");
     }
     if (nrhs > kGetrsFusedMaxRhs) {
         throw batchlas::invalid_argument(
             "getrs_fused: nrhs = " + std::to_string(nrhs) + " is above the widest "
             "instantiated accumulator (" + std::to_string(kGetrsFusedMaxRhs) +
-            "). Route to Algorithm::Blocked.");
+            "). Use the `blocked` choice (BATCHLAS_GETRS_ROUTE=blocked).");
     }
 
     // PACKED 1-BASED int32 -- the format cublas.cc and rocsolver.cc read through
@@ -962,7 +960,7 @@ Event getrs_fused_dispatch(Queue& ctx,
         n, nrhs, batch, wg, nb);
 }
 
-// Every gate RouteTable<Op::posv,T>::supports() applies to the CTA arm is re-applied here.
+// src/ops/posv/posv.cc's can_run(Cta) mirrors these checks; keep the two in step.
 template <typename T>
 Event potrs_fused_dispatch(Queue& ctx,
                            const MatrixView<T, MatrixFormat::Dense>& A,
@@ -995,7 +993,7 @@ Event potrs_fused_dispatch(Queue& ctx,
         throw batchlas::invalid_argument(
             "potrs_fused: n * nrhs = " + std::to_string(need) + " (nrhs " +
             std::to_string(nrhs) + ") is past the resident-RHS capacity; route posv to "
-            "Algorithm::Blocked.");
+            "the `blocked` choice (BATCHLAS_POSV_ROUTE=blocked).");
     }
 
     const int nb = getrs_fused_nb(n);

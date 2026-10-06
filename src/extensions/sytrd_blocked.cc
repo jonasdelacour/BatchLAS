@@ -1,5 +1,5 @@
 #include <batchlas/blas/device.hh>
-#include <batchlas/blas/dispatch/route_compiled.hh>
+#include "../select/vendor.hh"
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/functions.hh>
 #include <batchlas/blas/matrix.hh>
@@ -826,7 +826,7 @@ Event sytrd_blocked_impl(Queue& ctx,
     // route", not anything about NVIDIA. Asked properly, so a vendor-free build
     // -- same Backend::CUDA, tile TU absent -- gets the right answer.
     constexpr bool rank2k_trailing_update_supported =
-        dispatch::level3_tile_route_available<B, T> &&
+        select::level3_tile_route_available<B, T> &&
         (std::is_same_v<T, float> || std::is_same_v<T, std::complex<float>>);
     const bool use_rank2k_trailing_update =
         rank2k_trailing_update_supported &&
@@ -889,7 +889,8 @@ Event sytrd_blocked_impl(Queue& ctx,
                             // to a multiple of 2, so the scratch is
                             // ~n2^2*batch*8 bytes against a GLOBAL_MEM_SIZE/4
                             // budget, ~6.0 GiB on a 24 GiB 4090: n=448 batch=585
-                            // (the cfloat blocked/vendor crossover, syev.hh:594)
+                            // (the old cfloat blocked/vendor crossover, now a row of
+                            // tuned/syev.cfloat.<device>.txt)
                             // needs 0.75 GiB and n=512 batch=1024 needs 1.76 GiB,
                             // i.e. >=3.4x headroom. The ceiling is crossed around
                             // n2^2*batch > 8.0e8 elements -- forced blocked at

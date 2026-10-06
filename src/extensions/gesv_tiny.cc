@@ -46,6 +46,7 @@ namespace tn = ::batchlas::tiny_native;
 namespace sd = ::batchlas::sycl_device;
 
 constexpr int kTinyWg = tn::kTinyWgSize;
+static_assert(kTinyWg == kGesvTinyWgSize, "gesv.cc's can_run reads kGesvTinyWgSize");
 
 // A launch ABORT, not a slowdown, so it is encoded to fail at COMPILE time. NOW PROBED: worst
 // is cdouble N=16 NR=4 at 182 registers, frame 0, spill 0; every gesv tiny kernel is clean. The
@@ -448,9 +449,9 @@ std::size_t gesv_tiny_buffer_size(Queue& ctx,
     });
 }
 
-// Every supports() gate is re-applied here. For gesv the usual consequence of missing one
-// is worse than elsewhere: there is no batched vendor gesv to fall through to, so a route
-// this entry point refuses has nowhere to land.
+// Every can_run gate is re-applied here, because direct callers reach this without the
+// selector. There is no batched vendor gesv, so a refused shape must take another native
+// family (src/ops/gesv/choice.hh).
 template <typename T>
 Event gesv_tiny_dispatch(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& A,

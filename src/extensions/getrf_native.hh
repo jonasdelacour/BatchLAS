@@ -27,15 +27,14 @@ BATCHLAS_INTERNAL_API int getrf_cta_max_n_for_slm(
     int min_blocks_per_sm = resident::kMinBlocksPerSm);
 
 template <typename T>
-int getrf_cta_max_n();
-
-template <typename T>
 BATCHLAS_INTERNAL_API bool getrf_blocked_available();
 
 // THE REGISTER-RESIDENT TIER, and the ONE place its ceiling is spelled: a compile-time
 // property of the kernel, so no budget enters. evidence: docs/perf/lu.md#one-spelling-per-ceiling
 template <typename T>
 BATCHLAS_INTERNAL_API int getrf_tiny_max_n();
+
+inline constexpr int kGetrfTinyWgSize = 64;  // getrf_tiny_dispatch refuses a smaller MAX_WORK_GROUP_SIZE
 
 // NOT zero: a short or empty `info` span means "not requested" and draws pool scratch.
 template <typename T>
@@ -66,7 +65,7 @@ BATCHLAS_INTERNAL_API unsigned getrf_blocked_debug_params(Queue& ctx, int n);  /
 template <typename T>
 BATCHLAS_INTERNAL_API unsigned getrf_blocked_debug_leaf(Queue& ctx, int n);
 
-// An empty seam means "use sycl_gemm::gemm_custom" rather than a routed gemm.
+// Mandatory: getrf_blocked_dispatch throws on an empty seam (inject the public gemm).
 template <typename T>
 using GetrfTrailingGemm = std::function<Event(
     Queue&,
@@ -96,8 +95,8 @@ BATCHLAS_INTERNAL_API Event getrf_blocked_dispatch(Queue& ctx,
                                                    Span<int64_t> pivots,
                                                    Span<std::byte> workspace,
                                                    Span<int32_t> info,
-                                                   GetrfTrailingGemm<T> trailing_gemm = {},
-                                                   GetrfPanelSolveTrsm<T> panel_trsm = {});
+                                                   GetrfTrailingGemm<T> trailing_gemm,
+                                                   GetrfPanelSolveTrsm<T> panel_trsm);
 
 // Budgets an explicit SLM tree argmax: sycl::reduce_over_group fails to launch at
 // specific byte counts near 48 KB. evidence: docs/perf/lu.md#the-48-kb-launch-hole

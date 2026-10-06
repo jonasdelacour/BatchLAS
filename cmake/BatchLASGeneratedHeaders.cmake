@@ -133,7 +133,7 @@ function(batchlas_enable_tuning_targets)
     set(BATCHLAS_TUNE_BACKEND "CUDA" CACHE STRING "Backend to pass to tuning benchmarks (e.g., CUDA/ROCM/NETLIB/MKL)")
     set(BATCHLAS_TUNE_TYPE "float" CACHE STRING "Type to pass to tuning benchmarks (e.g., float/double)")
 
-    add_custom_target(batchlas_tune
+    add_custom_target(batchlas_tune_constants
         COMMAND "${CMAKE_COMMAND}" -E make_directory "${PROJECT_BINARY_DIR}/tuning"
         COMMAND "${Python3_EXECUTABLE}"
             "${PROJECT_SOURCE_DIR}/evaluation/tuning/tune.py"
@@ -162,7 +162,7 @@ function(batchlas_enable_tuning_targets)
                 --profile "${_BATCHLAS_TUNING_OUT}"
                 --out "${PROJECT_BINARY_DIR}/include/batchlas/tuning_params.hh"
                 ${BATCHLAS_TUNING_HEADER_FALLBACK_ARGS}
-            DEPENDS batchlas_tune
+            DEPENDS batchlas_tune_constants
             WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
             COMMENT "Generating tuning constants header from ${_BATCHLAS_TUNING_OUT}"
             VERBATIM

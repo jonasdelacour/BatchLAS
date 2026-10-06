@@ -1,0 +1,35 @@
+# op=potrf dtype=cdouble device=sm_89 batchlas=unknown kernels=unknown date=2026-10-04
+# source=benchmarks/results/routing/sm89_potrf_archive.jsonl (converted, kernel_current rows only; repeated medians averaged)
+# keys: uplo:exact n:log:3 batch:log
+uplo=L n=1 batch=32768 | vendor 0.09200 | tiny 0.1298
+uplo=L n=2 batch=32768 | tiny 0.1320 | vendor 0.1679
+uplo=L n=3 batch=32768 | tiny 0.1301 | vendor 0.2452
+uplo=L n=4 batch=32768 | tiny 0.1301 | vendor 0.3233 | cta 0.3335
+uplo=L n=5 batch=32768 | tiny 0.1305 | vendor 0.4021
+uplo=L n=6 batch=32768 | tiny 0.1307 | vendor 0.4819
+uplo=L n=7 batch=32768 | tiny 0.1314 | vendor 0.5623
+uplo=L n=8 batch=32768 | tiny 0.1311 | cta 0.4703 | vendor 0.6432
+uplo=L n=9 batch=32768 | vendor 0.7392 | tiny 0.8228
+uplo=L n=10 batch=32768 | tiny 0.8290 | vendor 0.8089
+uplo=L n=11 batch=32768 | tiny 0.8309 | vendor 0.8901
+uplo=L n=12 batch=32768 | tiny 0.8313 | vendor 0.9699 | cta 1.657
+uplo=L n=13 batch=32768 | tiny 0.8339 | vendor 1.053
+uplo=L n=14 batch=32768 | tiny 0.8357 | vendor 1.131
+uplo=L n=15 batch=32768 | tiny 0.8389 | vendor 1.213
+uplo=L n=16 batch=32768 | tiny 0.8376 | vendor 1.295 | cta 1.787
+uplo=L n=20 batch=32768 | cta 2.968 | vendor 4.411
+uplo=L n=24 batch=32768 | cta 3.313 | vendor 4.742
+uplo=L n=28 batch=32768 | cta 4.527 | vendor 5.083
+uplo=L n=32 batch=32768 | cta 5.369 | vendor 5.397
+uplo=L n=128 batch=2048 | vendor 7.636 | blocked 13.24
+uplo=L n=256 batch=256 | vendor 6.491 | blocked 7.791
+uplo=L n=256 batch=1024 | vendor 25.74 | blocked 31.78
+uplo=L n=512 batch=256 | vendor 43.72 | blocked 48.73
+uplo=L n=512 batch=1024 | vendor 174.5 | blocked 194.6
+uplo=U n=1 batch=32768 | tiny 0.1393 | vendor 0.4108
+uplo=U n=2 batch=32768 | tiny 0.1396 | vendor 0.4942
+uplo=U n=4 batch=32768 | tiny 0.1408 | vendor 0.6601
+uplo=U n=8 batch=32768 | tiny 0.1567 | vendor 0.9891
+uplo=U n=10 batch=32768 | tiny 0.8596 | vendor 1.206
+uplo=U n=12 batch=32768 | tiny 0.8706 | vendor 1.466
+uplo=U n=16 batch=32768 | tiny 0.8924 | vendor 1.896

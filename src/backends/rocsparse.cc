@@ -84,7 +84,7 @@ namespace batchlas {
     //
     // Only the `backend::`-qualified vendor entry points are named here: the
     // public spmm / spmm_buffer_size are defined and instantiated in
-    // src/dispatch/entry_points/sparse.cc, so a vendor TU that instantiated them
+    // src/ops/spmm/spmm.cc, so a vendor TU that instantiated them
     // too would collide at link time. There is no BATCHLAS_INSTANTIATE_BACKEND_
     // FORMAT_OP -- _FORMAT_OP expands to an unqualified op and so cannot spell
     // `backend::spmm_vendor` -- hence the raw BATCHLAS_INSTANTIATE below, with

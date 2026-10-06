@@ -1,8 +1,7 @@
 // Native batched GEQRF: the CTA tier, and the panel leaf both native tiers share. The device
 // body lives in geqrf_cta_device.hh because geqrf_blocked.cc's panel step runs the SAME code
-// against a global accessor -- correctness fixes belong there. preferred() ships a per-type
-// order-floor plus tall-panel window and best_native_tier() can resolve it to THIS arm, so it
-// is reachable in a vendor build, not only vendor-free or under a pin.
+// against a global accessor -- correctness fixes belong there. Whether Auto picks THIS arm is
+// the tuned/geqrf.* table's call; a pin (BATCHLAS_GEQRF_ROUTE=cta) reaches it on any build.
 // evidence: docs/perf/qr.md#route-arms
 
 #include "geqrf_native.hh"
@@ -28,10 +27,6 @@ namespace sycl_geqrf {
 namespace {
 
 namespace gn = ::batchlas::geqrf_native;
-
-// Convenience capacity overloads only; every real decision reads LOCAL_MEM_SIZE from the
-// device, never device_limits.hh's hardcoded constant. evidence: docs/perf/qr.md#cta-capacity
-constexpr std::size_t kGeqrfReferenceSlmBudget = 97280;
 
 // Exactly m*n scalars with NO leading-dimension padding: both hot access patterns are
 // bank-conflict-free at any ld, and the missing pad keeps the element ceiling monotone.
@@ -316,7 +311,7 @@ BATCHLAS_GEQRF_PANEL_REG_CELL_ASSERT(sycl_device::Cx<double>);
 
 // CAPABILITY. The capacity is an AREA -- the tile is m*n scalars, so per-extent ceilings
 // would admit panels needing many times the budget. A speed threshold here rather than in
-// preferred() would remove the vendor-free route. evidence: docs/perf/qr.md#cta-capacity
+// the table would remove the vendor-free route. evidence: docs/perf/qr.md#cta-capacity
 // The occupancy rule enters as a division of the budget, and the hole clamp is applied
 // AFTER it: a scaled budget can land inside the band even when the whole one did not,
 // and a budget inside the band cannot host a tile inside it.
@@ -331,16 +326,6 @@ template <typename T>
 int geqrf_cta_max_m_for_slm(std::size_t slm_budget_bytes, int min_blocks_per_sm) {
     const int64_t e = geqrf_cta_max_elems_for_slm<T>(slm_budget_bytes, min_blocks_per_sm);
     return static_cast<int>(std::min<int64_t>(e, 0x7fffffff));
-}
-
-template <typename T>
-int geqrf_cta_max_m() {
-    return geqrf_cta_max_m_for_slm<T>(kGeqrfReferenceSlmBudget);
-}
-
-template <typename T>
-int64_t geqrf_cta_max_elems() {
-    return geqrf_cta_max_elems_for_slm<T>(kGeqrfReferenceSlmBudget);
 }
 
 // The TIER's fit predicate, occupancy-scaled by default: the table's capacity, the CTA
@@ -482,21 +467,8 @@ Event geqrf_panel_factorize(Queue& ctx,
         p.wg, 1);
 }
 
-// Test hook: low 16 bits G (panels per work-group), high 16 the work-group width;
-// 0 when the panel is not resident. See geqrf_native.hh.
-template <typename T>
-unsigned geqrf_cta_debug_launch(Queue& ctx, int m, int n) {
-    const auto dev = ctx.device();
-    const std::size_t budget = resident::device_slm_budget(
-        dev.get_property(DeviceProperty::LOCAL_MEM_SIZE));
-    if (!geqrf_leaf_fits<T>(m, n, budget)) return 0u;
-    const int max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));
-    const auto p = geqrf_leaf_launch<T>(m, n, resident::occupancy_budget(budget), max_wg);
-    return (static_cast<unsigned>(p.wg) << 16) | static_cast<unsigned>(p.G);
-}
-
-// The CTA tier's direct entry point. Every gate supports() applies to the CTA arm is
-// re-applied here, because a forced route reaches this without the table.
+// The CTA tier's direct entry point. Every gate can_run applies to the CTA arm is
+// re-applied here, because direct callers reach this without the selector.
 template <typename T>
 Event geqrf_cta_dispatch(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& A,
@@ -513,7 +485,7 @@ Event geqrf_cta_dispatch(Queue& ctx,
     }
     if (m < n) {
         throw batchlas::invalid_argument(
-            "geqrf_cta: m < n is not supported (route_geqrf.hh's supports() refuses it)");
+            "geqrf_cta: m < n is not supported (geqrf's can_run refuses it)");
     }
     if (A.is_heterogeneous()) {
         // One launch covers the batch with a single (m, n, ld, stride) tuple.
@@ -537,7 +509,7 @@ Event geqrf_cta_dispatch(Queue& ctx,
 
     const std::size_t budget = resident::device_slm_budget(
         dev.get_property(DeviceProperty::LOCAL_MEM_SIZE));
-    // The occupancy-scaled gate, matching supports().
+    // The occupancy-scaled gate, matching can_run.
     if (!geqrf_cta_fits<T>(m, n, budget)) {
         throw batchlas::invalid_argument(
             "geqrf_cta: " + std::to_string(m) + " x " + std::to_string(n) +
@@ -569,11 +541,8 @@ Event geqrf_cta_dispatch(Queue& ctx,
 #define BATCHLAS_GEQRF_CTA_INSTANTIATE(T)                                                     \
     template int geqrf_cta_max_m_for_slm<T>(std::size_t, int);                                \
     template int64_t geqrf_cta_max_elems_for_slm<T>(std::size_t, int);                        \
-    template int geqrf_cta_max_m<T>();                                                        \
-    template int64_t geqrf_cta_max_elems<T>();                                                \
     template bool geqrf_cta_fits<T>(int, int, std::size_t, int);                              \
     template bool geqrf_leaf_fits<T>(int, int, std::size_t);                                  \
-    template unsigned geqrf_cta_debug_launch<T>(Queue&, int, int);                            \
     template std::size_t geqrf_cta_buffer_size<T>(Queue&,                                     \
                                                   const MatrixView<T, MatrixFormat::Dense>&); \
     template int geqrf_panel_reg_cols<T>();                                                   \

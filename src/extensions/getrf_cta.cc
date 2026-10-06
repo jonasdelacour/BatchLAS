@@ -1,9 +1,8 @@
 // Native batched GETRF: the CTA tier and the panel leaf both tiers share -- stage the tile into
 // local memory, factor by ?GETF2's right-looking rank-1 recurrence with partial pivoting, store
 // back. The device body lives in getrf_cta_device.hh because getrf_blocked.cc's panel step runs
-// the SAME code from global memory, so a fix must not miss one residency. preferred()'s shipped
-// window admits Blocked ONLY (`r.algo != Blocked` returns false), so this arm is reached by the
-// vendor-free walk or a pin, never by a vendor build's preference.
+// the SAME code from global memory, so a fix must not miss one residency. Whether Auto picks
+// THIS arm is the tuned/getrf.* table's call; BATCHLAS_GETRF_ROUTE=cta pins it.
 // evidence: docs/perf/lu.md#getrf-window-evidence
 
 #include "getrf_native.hh"
@@ -284,7 +283,7 @@ bool getrf_leaf_fits(int m, int n, std::size_t slm_budget_bytes) {
     return getrf_hole_padded(getrf_slm_bytes<T>(m, n)) <= slm_budget_bytes;
 }
 
-// The TIER's admission test, and so occupancy-scaled by default: what supports()
+// The TIER's admission test, and so occupancy-scaled by default: what can_run
 // advertises and what getrf_cta_dispatch refuses must be one predicate. The blocked
 // driver asks getrf_leaf_fits instead, at the whole budget -- a different question.
 template <typename T>
@@ -311,11 +310,6 @@ int getrf_cta_max_n_for_slm(std::size_t slm_budget_bytes, int min_blocks_per_sm)
             return getrf_hole_padded(getrf_slm_bytes<T>(n, n));
         },
         slm_budget_bytes, min_blocks_per_sm, hi);
-}
-
-template <typename T>
-int getrf_cta_max_n() {
-    return getrf_cta_max_n_for_slm<T>(kGetrfReferenceSlmBudget);
 }
 
 // ONE term: the fallback `info` span for a caller that supplied none -- an empty OR SHORT span
@@ -390,8 +384,8 @@ unsigned getrf_cta_debug_launch(Queue& ctx, int m, int n) {
     return (static_cast<unsigned>(p.wg) << 16) | static_cast<unsigned>(p.G);
 }
 
-// Direct entry point. Every supports() gate is re-applied here, because a forced
-// route that fails one falls through to the vendor and passes green regardless.
+// Direct entry point. Every can_run gate is re-applied here: the driver is also
+// reached directly (tests), and can_run must equal it exactly (R3).
 template <typename T>
 Event getrf_cta_dispatch(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& A,
@@ -406,9 +400,9 @@ Event getrf_cta_dispatch(Queue& ctx,
         throw batchlas::invalid_argument("getrf_cta: degenerate extents");
     }
     if (m != n) {
-        // Contract, not fit: supports() refuses m != n and the two must agree.
+        // Contract, not fit: can_run refuses m != n and the two must agree.
         throw batchlas::invalid_argument(
-            "getrf_cta: A must be square (route_getrf.hh's supports() refuses m != n)");
+            "getrf_cta: A must be square (getrf.cc's can_run refuses m != n)");
     }
     if (A.is_heterogeneous()) {
         // One (n, ld, stride) tuple at CAPACITY extents covers the whole batch.
@@ -433,8 +427,8 @@ Event getrf_cta_dispatch(Queue& ctx,
 
     const std::size_t budget = resident::device_slm_budget(
         dev.get_property(DeviceProperty::LOCAL_MEM_SIZE));
-    // The occupancy-scaled gate, matching supports(): an order this refuses is one the
-    // table never routes here, and one that would leave a single block resident per SM.
+    // The occupancy-scaled gate, matching can_run: an order this refuses is one the
+    // selector never picks here, and one that would leave a single block resident per SM.
     if (!getrf_cta_fits<T>(n, budget)) {
         throw batchlas::invalid_argument(
             "getrf_cta: order " + std::to_string(n) +
@@ -475,7 +469,6 @@ Event getrf_cta_dispatch(Queue& ctx,
 // Per scalar type only, no Backend cross-product: this build is device-link-bound.
 #define BATCHLAS_GETRF_CTA_INSTANTIATE(T)                                                     \
     template int getrf_cta_max_n_for_slm<T>(std::size_t, int);                                \
-    template int getrf_cta_max_n<T>();                                                        \
     template bool getrf_cta_fits<T>(int, std::size_t, int);                                   \
     template bool getrf_leaf_fits<T>(int, int, std::size_t);                                  \
     template unsigned getrf_cta_debug_launch<T>(Queue&, int, int);                            \
