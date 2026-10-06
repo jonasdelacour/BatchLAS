@@ -13,7 +13,7 @@ record. Every `file:line` is this branch's.
   - `triangular`: `detail::trmm_triangular_tiles<T>` (Side::Left only). Its row tile
     (`trmm_row_tile`, `BATCHLAS_TRMM_TILE_M`) stays derived.
   - `expand`: `expand_triangular<T>` into a Queue workspace lease, then the public `gemm` at
-    beta 0 (`launch_expand`, `trmm.cc:106`). This body was the first half of cublas.cc's
+    beta 0 (`launch_expand`, `trmm.cc:107`). This body was the first half of cublas.cc's
     `trmm_vendor_impl`, which is now the `cublas?trmm` loop only (D3).
   - `vendor`: `backend::trmm_vendor<B, T>`, never `*_vendor_cuda_raw` or the level-3 fallback.
 - **Removed from the live path:** level3.cc's float gate and `record_level3_route` decline row;
@@ -21,14 +21,14 @@ record. Every `file:line` is this branch's.
   `trmm_custom_dispatch.{cc,hh}` and `trmm_vendor_cuda_raw` stay in the tree, dead and
   unreferenced from any live path, for the integration commit to delete (D8).
 
-## can_run (R3), `trmm.cc:59-75`
+## can_run (R3), `trmm.cc:59-76`
 
 | family | terms |
 |---|---|
 | common native | `B == Backend::CUDA` (D6), `d.is_gpu`, A, B and C homogeneous, `d.max_wg >= 256`, C extents >= 1, `1 <= batch <= 65535` |
 | triangular | + `detail::trmm_tiles_supported(A, B, C, side)` (Side::Left, shapes, homogeneous) |
 | expand | + `expansion_fits(q, order, batch, expanded_workspace_bytes)` (n^2 batch <= INT_MAX; bytes <= GLOBAL_MEM/4 or `BATCHLAS_EXPAND_MAX_BYTES`) |
-| vendor | `d.has_vendor_blas`, and on CUDA a homogeneous batch |
+| vendor | `d.has_vendor_blas`, and a homogeneous batch (every backend) |
 
 - **Grid ceiling, measured** on the main binary (`ff340fc6`), float Left (tile kernel) and
   float/cdouble Right (expansion), order 1-3: batch 65535 runs and is correct; batch 65536
@@ -40,12 +40,17 @@ record. Every `file:line` is this branch's.
   homogeneity term on `expand` stays. The vendor loop, reached on main only with
   `BATCHLAS_EXPAND_MAX_BYTES=0`, runs every item at the full storage order: wrong for
   Upper/Left (maxrel 0.92) and Lower/Right (0.76); right only where the extra storage is
-  never referenced (Lower/Left). **Deviation:** the vendor family refuses a heterogeneous
-  batch on CUDA, so Auto keeps throwing (now `runtime_error` "no runnable kernel", or
-  `NoRouteError` vendor-free) instead of moving to a silent wrong answer. ROCm and NETLIB
-  vendors keep accepting one, as before. For `known-defects.md` (integrator): the cuBLAS
-  trmm loop shares known-defect #12's full-storage-order behaviour.
-- **Empty problem.** `trmm.cc:158` returns a no-op event for batch 0 or an empty C under any
+  never referenced (Lower/Left). The rocBLAS loop (`rocblas.cc:227-247`) and the netlib loop
+  (`netlib_lapack.cc:865` onwards) do the same: one `(m, n)` from `validate_product`, which
+  checks only the top-level extents, passed to every item. **Deviation:** the vendor family
+  refuses a heterogeneous batch on every backend (`trmm.cc:74`), so Auto throws
+  (`runtime_error` "no runnable kernel", or `NoRouteError` vendor-free) instead of reaching a
+  silent wrong answer. On CUDA this keeps main's throw. On NETLIB and ROCm it is a change:
+  main handed the batch to the loop, which gave a wrong answer (a cuBLAS measurement, and the
+  same code shape by reading on the other two). With this term no trmm vendor loop is ever
+  handed a heterogeneous batch, so trmm needs no `known-defects.md` entry. Entry #12
+  (potrf/trsm) still stands.
+- **Empty problem.** `trmm.cc:159` returns a no-op event for batch 0 or an empty C under any
   pin (the gemm precedent, `src/ops/gemm/gemm.cc:202`). Measured on main: batch 0 threw a
   `sycl::exception` from the tile kernel and from the expansion; on this branch before the
   return it reached the cuBLAS loop, which faulted (`CUBLAS error: 7`, then an abort).
@@ -108,9 +113,10 @@ run this shape".
   none); the scalar and backend columns are the real ones (the old recorder wrote F32/CUDA).
 - `cublasdx` throws `invalid_argument` (was `batchlas::unsupported`, or a forced attempt).
 - Batch > 65535 goes to the vendor (was a `sycl::exception` from either native launch).
-- A heterogeneous batch on CUDA throws `runtime_error` "no runnable kernel" (was
-  `invalid_argument` from the expansion's gemm, or a wrong answer from the loop when the
-  expansion did not fit).
+- A heterogeneous batch throws `runtime_error` "no runnable kernel" (`NoRouteError`
+  vendor-free) on every backend. On CUDA it was `invalid_argument` from the expansion's gemm,
+  or a wrong answer from the loop when the expansion did not fit. On NETLIB and ROCm it was a
+  silent wrong answer from the vendor loop.
 - An empty problem is a no-op (batch 0 threw a `sycl::exception`).
 - A native pin on a NETLIB (CPU) queue throws "cannot run this shape"; the old router never
   read `BATCHLAS_TRMM_ROUTE` off CUDA.
@@ -128,8 +134,14 @@ run this shape".
   InvalidShapesThrowBeforeChoose, EmptyProblemIsANoOp, HeterogeneousBatchHasNoRoute,
   ClassWordsAndSpellings, ScopedPinBeatsTheEnvironment, AutoReadsTheTranscribedTable,
   AutoReadsEveryKeyField, TraceKeyQFollowsSide, VendorOnlyTableFallsToTheLastResort,
-  CoverageRowCarriesBackendKeyAndNativeFlags, CpuQueueRunsNoNativeFamily (NETLIB), and the
-  GPU-free TrmmTranscribedTable.RowsHoldTheChoiceGridAndTheOldPreference.
+  CoverageRowCarriesBackendKeyAndNativeFlags, CpuQueueRunsNoNativeFamily and
+  HeterogeneousBatchHasNoRoute (NETLIB, `TrmmCandidatesCpu`), and the GPU-free
+  TrmmTranscribedTable.RowsHoldTheChoiceGridAndTheOldPreference.
+- AutoReadsEveryKeyField's synthetic table is built so that each fixed field reddens its own
+  probe in the vendor build: side=L reddens only `side (Right)`, side=R only `side (Left)`.
+  Vendor-free, only `expand` can run on Side::Right, so the three Right probes cannot tell
+  rows apart. Side and q on Right are then covered by TraceKeyQFollowsSide, through the
+  trace key.
 - `tests/trmm_tests.cc`: ForcedCuBLASDxPathMatchesVendor and its `trmm_cublasdx_fused.hh`
   include deleted; the no-scratch sweep runs only with a vendor library (vendor-free there
   is no no-scratch route for Side::Right).
@@ -148,7 +160,12 @@ md5-verified. Red sets, per CUDA dtype (all four go red unless noted):
 | grid ceiling term dropped | GridBatchCeiling |
 | vendor arm flips uplo | every test that runs the vendor: 8 candidates tests, CpuQueueRunsNoNativeFamily (NETLIB), trmm_tests NETLIB and the CUDA no-scratch sweep |
 | coverage k = C.rows() | CoverageRowCarriesBackendKeyAndNativeFlags |
-| vendor accepts heterogeneous | HeterogeneousBatchHasNoRoute |
+| vendor accepts heterogeneous (term dropped; run before the NETLIB case existed) | HeterogeneousBatchHasNoRoute |
+| vendor refuses heterogeneous on CUDA only (`B != Backend::CUDA \|\|` restored) | TrmmCandidatesCpu.HeterogeneousBatchHasNoRoute (NETLIB, 4 dtypes) and nothing else |
+| key side always `L` | AutoReadsEveryKeyField (only its `side (Right)` probe), TraceKeyQFollowsSide; vendor-free: TraceKeyQFollowsSide only |
+| key side always `R` | AutoReadsEveryKeyField (only its `side (Left)` probe), TraceKeyQFollowsSide, AutoReadsTheTranscribedTable, ClassWordsAndSpellings, CoverageRowCarriesBackendKeyAndNativeFlags, ExpandFitStraddlesTheScratchBudget (vendor-free: the same without the last) |
+| key order always 8 | AutoReadsEveryKeyField (only `order (Left)` and `order (Right)`), TraceKeyQFollowsSide |
+| key batch always 1 | AutoReadsEveryKeyField (only `batch`), TraceKeyQFollowsSide |
 | expand Left ignores transA | EveryCombinationOnEveryCandidate, ExpandFitStraddlesTheScratchBudget, PinnedRunIsTheDirectKernelBitForBit, SaturatingBatchIsBitIdenticalToItsRepresentative |
 | tables: expand dropped from Right rows | AutoReadsTheTranscribedTable, CoverageRowCarriesBackendKeyAndNativeFlags, TrmmTranscribedTable |
 
@@ -164,7 +181,7 @@ error_model_tests, ormqr_tests and ormqr_blocked_tests.
   AllCombinations and IgnoresUnreferencedTriangleAndUnitDiagonal for all four dtypes. Main
   failed them on every dtype except float Left. The netlib-less NETLIB instantiations of
   trmm_tests, options_api Blas3OptionsMatchPositional, ormqr_tests and ormqr_blocked_tests
-  fail identically in both. trmm_candidates_tests passes all 81 cases in both trees.
+  fail identically in both. trmm_candidates_tests passes all 85 cases in both trees.
 
 ## Conflict notes for the integrator
 

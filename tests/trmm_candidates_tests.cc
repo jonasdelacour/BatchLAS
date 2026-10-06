@@ -243,6 +243,40 @@ struct TableGuard {
     ~TableGuard() { select::testing::use_embedded_tables(); }
 };
 
+// A heterogeneous operand has no route on any backend: one native launch has one order (the
+// expansion's gemm throws), and every vendor loop runs each item at the top-level (m, n), so the
+// vendor is refused too. Every pin throws (the vendor class word falls back to Auto), and Auto
+// throws runtime_error, or NoRouteError without a vendor library.
+template <Backend B, class T>
+void expect_heterogeneous_has_no_route(Queue& ctx) {
+    using R = RealOf<T>;
+    const int n = 16, q = 3, batch = 4;
+    Matrix<T, MatrixFormat::Dense> A(n, n, batch), Bm(n, q, batch), Cm(n, q, batch);
+    A.fill(mk<T>(R(0.5), R(0)));
+    Bm.fill(mk<T>(R(1), R(0.5)));
+    UnifiedVector<int> act(batch), cols(batch);
+    for (int b = 0; b < batch; ++b) act[b] = n - b, cols[b] = q - (b % 2);
+    const auto hetA = A.view().with_active_dims(act.to_span(), act.to_span());
+    const auto hetB = Bm.view().with_active_dims(act.to_span(), cols.to_span());
+    const auto hetC = Cm.view().with_active_dims(act.to_span(), cols.to_span());
+    ASSERT_TRUE(hetA.is_heterogeneous());
+    auto call = [&] {
+        (void)trmm<B, T>(ctx, hetA, hetB, hetC, T(1), Side::Left, Uplo::Upper, Transpose::NoTrans, Diag::NonUnit);
+        ctx.wait();
+    };
+    auto expect_no_route = [&](const std::string& what) {
+        if constexpr (select::level3_vendor_available<B>) EXPECT_THROW(call(), std::runtime_error) << what;
+        else EXPECT_THROW(call(), batchlas::NoRouteError) << what;
+    };
+    for (const C& c : tm::candidates<T>()) {
+        const Pin pin("trmm", c);
+        if (std::holds_alternative<tm::Vendor>(c)) expect_no_route("vendor pin");
+        else EXPECT_THROW(call(), std::invalid_argument) << select::to_string(c);
+    }
+    const ScopedEnvVar clear("BATCHLAS_TRMM_ROUTE", nullptr);
+    expect_no_route("auto");
+}
+
 template <typename T, Backend B>
 struct Cfg {
     using ScalarType = T;
@@ -615,46 +649,9 @@ TYPED_TEST(TrmmCandidates, EmptyProblemIsANoOp) {
         ASSERT_TRUE(same_bits(p.mem[e], p.mem0[e])) << "an empty problem wrote element " << e;
 }
 
-// A heterogeneous operand: no native family can run it (one launch has one order; the
-// expansion's gemm throws), and on CUDA the vendor loop would run every item at the full
-// storage order, so it is refused too: every pin throws, and Auto has no route.
+// A heterogeneous operand on CUDA (expect_heterogeneous_has_no_route).
 TYPED_TEST(TrmmCandidates, HeterogeneousBatchHasNoRoute) {
-    using T = typename TestFixture::T;
-    using R = RealOf<T>;
-    static constexpr Backend B = TestFixture::B;
-    const int n = 16, q = 3, batch = 4;
-    Matrix<T, MatrixFormat::Dense> A(n, n, batch), Bm(n, q, batch), Cm(n, q, batch);
-    A.fill(mk<T>(R(0.5), R(0)));
-    Bm.fill(mk<T>(R(1), R(0.5)));
-    UnifiedVector<int> act(batch), cols(batch);
-    for (int b = 0; b < batch; ++b) act[b] = n - b, cols[b] = q - (b % 2);
-    const auto hetA = A.view().with_active_dims(act.to_span(), act.to_span());
-    const auto hetB = Bm.view().with_active_dims(act.to_span(), cols.to_span());
-    const auto hetC = Cm.view().with_active_dims(act.to_span(), cols.to_span());
-    ASSERT_TRUE(hetA.is_heterogeneous());
-    for (const C& c : tm::candidates<T>()) {
-        const Pin pin("trmm", c);
-        if (std::holds_alternative<tm::Vendor>(c)) {  // the class word falls back to Auto, which has no route
-            auto call = [&] {
-                (void)trmm<B, T>(*this->ctx, hetA, hetB, hetC, T(1), Side::Left, Uplo::Upper, Transpose::NoTrans,
-                                 Diag::NonUnit);
-            };
-            if constexpr (TestFixture::kVendor) EXPECT_THROW(call(), std::runtime_error);
-            else EXPECT_THROW(call(), batchlas::NoRouteError);
-            continue;
-        }
-        EXPECT_THROW(((void)trmm<B, T>(*this->ctx, hetA, hetB, hetC, T(1), Side::Left, Uplo::Upper,
-                                       Transpose::NoTrans, Diag::NonUnit)),
-                     std::invalid_argument)
-            << select::to_string(c);
-    }
-    const ScopedEnvVar clear("BATCHLAS_TRMM_ROUTE", nullptr);
-    auto call = [&] {
-        (void)trmm<B, T>(*this->ctx, hetA, hetB, hetC, T(1), Side::Left, Uplo::Upper, Transpose::NoTrans, Diag::NonUnit);
-        this->ctx->wait();
-    };
-    if constexpr (TestFixture::kVendor) EXPECT_THROW(call(), std::runtime_error);
-    else EXPECT_THROW(call(), batchlas::NoRouteError);
+    expect_heterogeneous_has_no_route<TestFixture::B, typename TestFixture::T>(*this->ctx);
 }
 
 // §5.3: spellings (case-folded) and the class words, via ScopedPin and via the environment.
@@ -744,7 +741,11 @@ TYPED_TEST(TrmmCandidates, AutoReadsTheTranscribedTable) {
 
 // key_of's every field reaches choose(): a synthetic table whose winner changes with side,
 // order, q on each side, and batch alone. A fixed field in key_of, or q from the wrong extent
-// of B, turns exactly its probe red.
+// of B, turns exactly its probe(s) red: side=L sends the Right probes to L rows, whose first
+// Right-runnable entry is vendor, so only the base Right probe moves; side=R sends the Left
+// probes to R rows, which lead with triangular, so only the base Left probe moves. Vendor-free,
+// expand is the only family that runs on Right, so the Right probes are blind there; side and
+// q on Right are then covered through the trace key by TraceKeyQFollowsSide.
 TYPED_TEST(TrmmCandidates, AutoReadsEveryKeyField) {
     using T = typename TestFixture::T;
     const ScopedEnvVar clear("BATCHLAS_TRMM_ROUTE", nullptr);
@@ -756,22 +757,22 @@ TYPED_TEST(TrmmCandidates, AutoReadsEveryKeyField) {
     files.emplace_back("trmm." + dtype + "." + dev + ".txt",
                        "# op=trmm dtype=" + dtype + " device=" + dev + " kernels=unknown\n"
                        "# keys: side:exact order:log:2 q:log batch:log\n"
-                       "side=L order=8 q=8 batch=8 | expand 1 | triangular 2\n"
+                       "side=L order=8 q=8 batch=8 | vendor 1 | expand 2\n"
                        "side=L order=8 q=8 batch=4096 | triangular 1 | expand 2\n"
-                       "side=L order=8 q=512 batch=8 | triangular 1 | expand 2\n"
-                       "side=L order=128 q=8 batch=8 | triangular 1 | expand 2\n"
-                       "side=R order=8 q=8 batch=8 | expand 1\n"
-                       "side=R order=8 q=512 batch=8 | vendor 1 | expand 2\n"
-                       "side=R order=128 q=8 batch=8 | vendor 1 | expand 2\n");
+                       "side=L order=8 q=512 batch=8 | triangular 1 | vendor 2 | expand 3\n"
+                       "side=L order=128 q=8 batch=8 | triangular 1 | vendor 2 | expand 3\n"
+                       "side=R order=8 q=8 batch=8 | triangular 1 | expand 2\n"
+                       "side=R order=8 q=512 batch=8 | triangular 1 | vendor 2 | expand 3\n"
+                       "side=R order=128 q=8 batch=8 | triangular 1 | vendor 2 | expand 3\n");
     const TableGuard restore;
     select::testing::set_builtin_tables(std::move(files));
     const char* v = TestFixture::kVendor ? "vendor" : "expand";
     struct Probe { Side side; int n, q, batch; const char* expect; const char* field; };
-    const Probe probes[] = {{Side::Left, 8, 8, 8, "expand", "base"},
+    const Probe probes[] = {{Side::Left, 8, 8, 8, v, "side (Left)"},
                             {Side::Left, 8, 8, 4096, "triangular", "batch"},
                             {Side::Left, 8, 512, 8, "triangular", "q (Left: B.cols)"},
-                            {Side::Left, 128, 8, 8, "triangular", "order"},
-                            {Side::Right, 8, 8, 8, "expand", "side"},
+                            {Side::Left, 128, 8, 8, "triangular", "order (Left)"},
+                            {Side::Right, 8, 8, 8, "expand", "side (Right)"},
                             {Side::Right, 8, 512, 8, v, "q (Right: B.rows)"},
                             {Side::Right, 128, 8, 8, v, "order (Right: A.rows)"}};
     for (const auto& k : probes) {
@@ -911,6 +912,14 @@ TYPED_TEST(TrmmCandidatesCpu, CpuQueueRunsNoNativeFamily) {
     } else {
         EXPECT_THROW(call(), batchlas::NoRouteError);
     }
+}
+
+// The netlib loop shares the vendor loops' single top-level (m, n), so a heterogeneous batch has
+// no route on a CPU queue either.
+TYPED_TEST(TrmmCandidatesCpu, HeterogeneousBatchHasNoRoute) {
+    if (!this->ctx) GTEST_SKIP() << "no queue";
+    if (this->ctx->device().type == DeviceType::GPU) GTEST_SKIP() << "a GPU queue";
+    expect_heterogeneous_has_no_route<TypeParam::BackendVal, typename TypeParam::ScalarType>(*this->ctx);
 }
 
 // The transcribed tables (no GPU): every dtype on sm_89 and sm_120 holds exactly choice.hh's

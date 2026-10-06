@@ -53,8 +53,9 @@ select::Key key_of(const MV<T>& A, const MV<T>& B, Side side) {
 
 // Correctness only (R3); shapes were validated at entry. Both native launches address every item
 // as base + b * stride at one (order, q), so neither takes a heterogeneous batch (the expansion's
-// gemm throws on one), and both put the batch in grid z. On CUDA the vendor loop runs every item
-// at the full storage order, a wrong answer for a heterogeneous batch, so it is refused there too.
+// gemm throws on one), and both put the batch in grid z. Every vendor loop (cuBLAS, rocBLAS,
+// netlib) runs each item at the top-level (m, n), a wrong answer for a heterogeneous batch, so
+// the vendor is refused one on every backend too.
 template <Backend B, class T>
 bool can_run(const TrmmChoice& c, const select::Device& d, Queue& q, const MV<T>& A, const MV<T>& Bm,
              const MV<T>& C, Side side) {
@@ -70,7 +71,7 @@ bool can_run(const TrmmChoice& c, const select::Device& d, Queue& q, const MV<T>
             return backend::detail::expansion_fits(q, k, batch,
                                                    backend::detail::expanded_workspace_bytes<T>(q, k, batch));
         },
-        [&](Vendor) { return d.has_vendor_blas && (B != Backend::CUDA || homogeneous); },
+        [&](Vendor) { return d.has_vendor_blas && homogeneous; },
     }, c);
 }
 
