@@ -22,6 +22,7 @@
 #include "../src/ops/symm/choice.hh"
 #include "../src/ops/syrk/choice.hh"
 #include "../src/ops/syr2k/choice.hh"
+#include "../src/ops/trmm/choice.hh"
 #include "../src/select/select.hh"
 
 #include <algorithm>
@@ -171,6 +172,13 @@ std::vector<std::string> candidates(const std::string& op, const std::string& dt
     if (op == "syr2k") {  // real-only: there is no complex syr2k table
         if (dtype == "float") return spellings(syr2k::candidates<float>());
         if (dtype == "double") return spellings(syr2k::candidates<double>());
+    }
+    namespace trmm = batchlas::ops::trmm;
+    if (op == "trmm") {
+        if (dtype == "float") return spellings(trmm::candidates<float>());
+        if (dtype == "double") return spellings(trmm::candidates<double>());
+        if (dtype == "cfloat") return spellings(trmm::candidates<std::complex<float>>());
+        if (dtype == "cdouble") return spellings(trmm::candidates<std::complex<double>>());
     }
     return {};
 }

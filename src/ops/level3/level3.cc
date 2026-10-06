@@ -1,34 +1,23 @@
-// The public hemm/herk/her2k/trmm entry points (symm, syrk, syr2k: src/ops/<op>), defined
-// outside every vendor TU so the API links in a build with no vendor library. The float CUDA tile
-// routes are chosen by rule in src/backends/*_custom_dispatch.cc (BATCHLAS_<OP>_ROUTE);
-// everything else goes to backend::<op>_vendor<B, T>, or throws NoRouteError when no
-// vendor library is compiled in.
+// The public hemm/herk/her2k entry points, defined outside every vendor TU so the API
+// links in a build with no vendor library. They go straight to backend::<op>_vendor<B, T>
+// (whose expand/fold-into-gemm arms are still hand-written in cublas.cc), or throw
+// NoRouteError when no vendor library is compiled in. symm, syrk, syr2k and trmm use
+// flat kernel selection: src/ops/<op>/<op>.cc.
 
 #include <batchlas/backend_config.h>
 
-#include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/blas/functions/hemm.hh>
 #include <batchlas/blas/functions/herk.hh>
 #include <batchlas/blas/functions/her2k.hh>
-#include <batchlas/blas/functions/trmm.hh>
 
 #include <batchlas/no_route.hh>
 #include "../../select/vendor.hh"
-
-// The level-3 custom-route gates. They have to run before the
-// vendor-available test, so they live here rather than in cublas.cc.
-#include "../../backends/trmm_custom_dispatch.hh"
-#include "../../backends/level3_coverage.hh"
 
 #include "../../util/template-instantiations.hh"
 
 #include <complex>
 
 namespace batchlas {
-
-// gemm lives in src/ops/gemm/gemm.cc (flat kernel selection).
-
-// symm lives in src/ops/symm/symm.cc (flat kernel selection).
 
 template <Backend Back, ComplexScalar T>
 Event hemm(Queue& ctx,
@@ -80,44 +69,13 @@ Event her2k(Queue& ctx,
     }
 }
 
-template <Backend Back, typename T>
-Event trmm(Queue& ctx,
-           const MatrixView<T, MatrixFormat::Dense>& A,
-           const MatrixView<T, MatrixFormat::Dense>& B,
-           const MatrixView<T, MatrixFormat::Dense>& C,
-           T alpha,
-           Side side,
-           Uplo uplo,
-           Transpose transA,
-           Diag diag) {
-    // Native tile gate, CUDA + float only. evidence: docs/perf/level3.md#the-shipped-predicates
-    if constexpr (Back == Backend::CUDA && std::is_same_v<T, float>) {
-        if (backend::trmm_use_cuda_custom(ctx, A, B, C, side, uplo, transA, diag)) {
-            return backend::trmm_cuda_custom(ctx, A, B, C, alpha, side, uplo, transA, diag);
-        }
-        // Record the decline: a shape moving OFF a native kernel shows up only here.
-        backend::detail::record_level3_route(
-            Op::trmm, "vendor",
-            C.rows(), C.cols(), A.rows(), A.batch_size(),
-            backend::detail::kNativeUnknown, {uplo, side, diag, transA});
-    }
-
-    if constexpr (!select::level3_vendor_available<Back>) {
-        select::throw_no_vendor_route<T>(
-            Op::trmm, Back, select::kLevel3Library<Back>);
-    } else {
-        return backend::trmm_vendor<Back, T>(ctx, A, B, C, alpha, side, uplo, transA, diag);
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Explicit instantiations, one block per device family.
 // ---------------------------------------------------------------------------
 
 #define OP_INSTANTIATE(OP, B_, fp) BATCHLAS_INSTANTIATE(sig::OP<fp>, OP, B_, fp)
 
-// hemm/herk/her2k are ComplexScalar-constrained, hence the split.
-#define COMPLEX_ONLY_OPS(B_)                            \
+#define LEVEL3_INSTANTIATE(B_)                          \
     OP_INSTANTIATE(hemm,  B_, std::complex<float>)      \
     OP_INSTANTIATE(hemm,  B_, std::complex<double>)     \
     OP_INSTANTIATE(herk,  B_, std::complex<float>)      \
@@ -125,30 +83,12 @@ Event trmm(Queue& ctx,
     OP_INSTANTIATE(her2k, B_, std::complex<float>)      \
     OP_INSTANTIATE(her2k, B_, std::complex<double>)
 
-#define ALL_TYPE_OPS_ONE(B_, fp)  \
-    OP_INSTANTIATE(trmm, B_, fp)
-
-#define LEVEL3_INSTANTIATE(B_)                       \
-    ALL_TYPE_OPS_ONE(B_, float)                      \
-    ALL_TYPE_OPS_ONE(B_, double)                     \
-    ALL_TYPE_OPS_ONE(B_, std::complex<float>)        \
-    ALL_TYPE_OPS_ONE(B_, std::complex<double>)       \
-    COMPLEX_ONLY_OPS(B_)
-
 // Keyed on the DEVICE FAMILY, not on the vendor library: the bodies above
 // compile to a throw when the library is absent, so the public entry point is a
-// symbol in every build that has the device.
+// symbol in every build that has the device. rocblas.cc has no hemm/herk/her2k
+// wrapper, so ROCm instantiates none of them.
 #if BATCHLAS_HAS_CUDA_BACKEND
 LEVEL3_INSTANTIATE(Backend::CUDA)
-#endif
-
-#if BATCHLAS_HAS_ROCM_BACKEND
-// rocblas.cc has no hemm/herk/her2k/symm wrapper, so the ROCm backend
-// instantiates only the ops it implements.
-ALL_TYPE_OPS_ONE(Backend::ROCM, float)
-ALL_TYPE_OPS_ONE(Backend::ROCM, double)
-ALL_TYPE_OPS_ONE(Backend::ROCM, std::complex<float>)
-ALL_TYPE_OPS_ONE(Backend::ROCM, std::complex<double>)
 #endif
 
 #if BATCHLAS_HAS_HOST_BACKEND
@@ -156,8 +96,6 @@ LEVEL3_INSTANTIATE(Backend::NETLIB)
 #endif
 
 #undef LEVEL3_INSTANTIATE
-#undef ALL_TYPE_OPS_ONE
-#undef COMPLEX_ONLY_OPS
 #undef OP_INSTANTIATE
 
 }  // namespace batchlas
