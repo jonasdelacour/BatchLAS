@@ -8,6 +8,8 @@ disable-model-invocation: false
 
 # PTX Codegen Comparison
 
+> **Historical framing.** cuBLASDx (the MathDx probe, every fused kernel and `gemm_cublasdx*`) was deleted in the level-3 flat-selection wave, so a cuBLASDx-vs-SYCL comparison can no longer be built from this tree (the last commit that has it is `eeacaaa9`). The workflow below still applies to any two variants you can pin: compare a native family against `vendor`, or two native spellings (`BATCHLAS_<OP>_ROUTE=<spelling>`).
+
 Use this skill when a BatchLAS CUDA-backend kernel is slower in one implementation path than another and you need to determine whether the gap comes from worse generated device code, a launch/configuration mismatch, or a downstream lowering issue.
 
 This skill is designed around the workflow used to compare cuBLASDx GEMM and SYCL GEMM in BatchLAS, but the same process applies to other kernels as long as you can identify matching variants and extract the relevant device artifacts.
@@ -68,10 +70,9 @@ Before reading PTX, verify that both runs are hitting the intended variant.
 For GEMM in BatchLAS:
 
 - Kernel selection lives in `src/ops/gemm/{choice.hh,gemm.cc}` (flat selection: the tuned table's first runnable choice).
-- cuBLASDx kernel selection lives in `src/backends/gemm_cublasdx_dispatch.cc`; only the level-3 fused paths reach it, gemm does not.
 - SYCL register-tiled kernel instantiations live in `src/sycl/gemm/register_tiled_common.hh` and `src/sycl/gemm/register_launchers.hh`.
 
-Pin the gemm kernel with `BATCHLAS_GEMM_ROUTE=<choice>` (e.g. `reg:m=128:n=32:k=32:u=1`, `wide:m=64:n=64:k=16`, `tiled`, `vendor`) and confirm it with `BATCHLAS_SELECT_TRACE=1`. `BATCHLAS_GEMM_CUBLASDX_KERNEL` only affects the level-3 cuBLASDx paths.
+Pin the gemm kernel with `BATCHLAS_GEMM_ROUTE=<choice>` (e.g. `reg:m=128:n=32:k=32:u=1`, `wide:m=64:n=64:k=16`, `tiled`, `vendor`) and confirm it with `BATCHLAS_SELECT_TRACE=1`.
 
 ### 3. Configure A PTX Inspection Build
 

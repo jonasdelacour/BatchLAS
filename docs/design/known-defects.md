@@ -51,7 +51,7 @@ The superseded root documents these were filed in are preserved at the git tag
 | 9 | `src/backends/syr2k_custom_dispatch.cc` | ~~a forced native `syr2k` throws a cuBLASDx message it did not ask for~~ | **closed in the phase 5 rip** |
 | 10 | grid `latrd` (`src/extensions/latrd_lower_panel.cc`, the grid kernel's column-update / sumsq pair) | a cross-sub-group read-after-write on `Ab(r, i)` with no barrier between the two loops | **fixed; armed 20/20 red on deletion under the amplified geometry; residual rate at the default geometry not bounded** |
 | 11 | `src/sycl/gemm/epilogue_linear.hh`, `src/sycl/gemm_kernels.cc` (`launch_direct`) | native GEMM reads `C` at `beta == 0` | `NaN` from an unzeroed arena; worked around in `geqrf_blocked` |
-| 12 | `src/ops/potrf/potrf.cc`, `src/ops/trsm/trsm.cc` (each `can_run(Vendor)`), `src/backends/cusolver.cc:72-77` | vendor `potrf` and vendor `trsm` accept a heterogeneous batch and run at the full storage order | silent wrong answer on a direct heterogeneous call; posv refuses it upstream |
+| 12 | `src/ops/potrf/potrf.cc`, `src/ops/trsm/trsm.cc` (each `can_run(Vendor)`), `src/backends/cusolver.cc:72-77` | vendor `potrf` and `trsm` accept a heterogeneous batch and run at the full storage order (symm, syrk, syr2k, trmm: fixed, their vendor refuses one) | silent wrong answer on a direct heterogeneous call; posv refuses it upstream |
 | 13 | `src/backends/cublas.cc` (`gemm_vendor_impl`, `gemv_vendor`), cuBLASLt; cuSPARSE spmm | complex<double> gemm/gemv with a unit dimension segfault inside cuBLASLt on one box, root cause unknown; two cuSPARSE spmm shapes misbehave | gemm worked around; gemv crashes `ortho_tests`; spmm refused in `can_run` |
 | 14 | `gesvd_cta` (Upper), `gesvd_blocked` (Lower, n <= 32), `syev_cta` (Upper), `syev_blocked` (Lower, n <= 32), `syev_two_stage` (Lower) | the Hermitian drivers read the triangle the caller did not name | **wrong answer under Auto** for gesvd Hermitian Upper n <= 32 and syev cfloat n 9..32, cdouble n <= 32 with Upper |
 | 15 | cuSOLVER `gesvdjBatched` | values-only, non-square input faults with `CUDA_ERROR_ILLEGAL_ADDRESS` | pinned vendor only; Auto never sends the shape there |
@@ -260,8 +260,9 @@ take the vendor, or throw `NoRouteError` vendor-free. Armed: dropping the term f
 **CLOSED in the phase 5 rip (2026-10-05).** The `DiagFullGemm` route is deleted, so
 `BATCHLAS_SYRK_ROUTE=native` and `BATCHLAS_SYR2K_ROUTE=native` take the tile kernel, which writes
 only the named triangle (guard: `SyrkCudaCustomTest.AutoAndNativeRoutesLeaveTheOtherHalfUntouched`),
-and a `cublasdx` pin that cannot run throws a message about the kernel it asked for. The filing
-below is kept as it was; its line numbers describe the deleted code.
+and a `cublasdx` pin that cannot run throws a message about the kernel it asked for. Since the
+level-3 flat-selection wave both dispatchers are deleted and `cublasdx` is an unknown family. The
+filing below is kept as it was; its line numbers describe the deleted code.
 
 Both were pre-existing, both were preserved deliberately rather than quietly improved, and both
 were reachable only through an environment pin.
@@ -530,6 +531,21 @@ test `PosvCandidates.HeterogeneousBatchIsRefusedUnderEveryPin`). The potrf and t
 are unfixed: the fix is a `!A.is_heterogeneous()` term on potrf's Vendor `can_run` (or a per-item
 loop) and the same term on trsm's Vendor `can_run`, each a routing
 change for its own phase. No test constructs a heterogeneous potrf or trsm.
+
+**Level-3 four: CLOSED (level-3 flat-selection wave).** Every symm, syrk, syr2k and trmm vendor
+loop (cuBLAS, rocBLAS, netlib) runs each item at the top-level extents from
+`shape::validate_product` / `validate_rank_k` / `validate_rank_2k`, which never check
+heterogeneity. Measured on `ff340fc6` for symm: with only A heterogeneous (active orders
+16/14/12/10 in a 16 x 16 batch of 4) the cuBLAS loop answered off the active-order reference by 3.8,
+and a batch heterogeneous in all three operands by 2.56; syrk and syr2k by reading
+(`cublas.cc` `syrk_vendor_impl`, `syr2k_vendor_impl`). The first draft of the migration refused it
+for trmm only, so symm's Auto went from main's throw (the old expansion's gemm rejected a
+heterogeneous B or C inside the old expand window) to the loop's silent answer. Now every one of
+the four refuses a heterogeneous operand in `can_run(Vendor)` as well as in its native families, so
+Auto throws `runtime_error` (`NoRouteError` vendor-free) on every backend:
+`{Symm,Syrk,Syr2k,Trmm}Candidates{,Cpu}.HeterogeneousBatchHasNoRoute`.
+`SymmCandidates.HeterogeneousBatchHasNoRoute` also keeps the A-only wrong answer of the direct
+expansion as the reason `expand` carries the term.
 
 ## 13. complex<double> cuBLAS calls with a unit dimension segfault inside cuBLASLt
 

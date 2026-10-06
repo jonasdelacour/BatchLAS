@@ -514,6 +514,28 @@ SYEV = OpSpec(
 )
 
 
+def symm_key(r):
+    try:
+        key = (str(r["form"]), int(r["m"]), int(r["n"]), int(r["batch"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+    return key if key[0] in ("sq", "tall", "wide") and min(key[1:]) >= 1 else None
+
+
+# symm (docs/design/flat-kernel-selection.md §12): C is m x n; form = sq|tall|wide of (m, n) lines the
+# old squareish test up with an axis. Real-only. sm_89 and sm_120: one transcription (no arch read).
+SYMM_CHOICES = ("expand", "vendor")
+SYMM = OpSpec(
+    op="symm",
+    keys="form:exact m:log n:log batch:log",
+    row_ops=("symm",),
+    row_key=symm_key,
+    arm_spelling={c: c for c in SYMM_CHOICES},
+    arm_route={"expand": ("native:expand",), "vendor": ("vendor:vendor",)},
+    candidate_order=list(SYMM_CHOICES),
+)
+
+
 def parse_keys(spec):
     """'# keys:' text -> [(name, is_log, weight)]; a :log weight defaults to 1."""
     out = []
@@ -918,8 +940,65 @@ GEQRF = OpSpec(
     candidate_order=list(GEQRF_CHOICES),
 )
 
+def syrk_key(r):
+    try:
+        key = (str(r["form"]), str(r["trans"]), int(r["n"]), int(r["k"]), int(r["batch"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+    ok = key[0] in ("sq", "tall", "wide") and key[1] in ("N", "T", "C") and min(key[2:]) >= 1
+    return key if ok else None
+
+
+# syrk (level-3 flat selection): form = sq|tall|wide of (n, k), k = op(A)'s inner extent, trans =
+# N|T|C (the old rule sent C to the vendor); work ~ n^2 k batch. No sweep source: sm_89 and sm_120
+# are both transcribed (the old rule read no arch).
+SYRK_CHOICES = ("gram", "triangular", "vendor")
+SYRK = OpSpec(
+    op="syrk",
+    keys="form:exact trans:exact n:log:2 k:log batch:log",
+    row_ops=("syrk",),
+    row_key=syrk_key,
+    arm_spelling={c: c for c in SYRK_CHOICES},
+    arm_route={c: (("vendor:vendor",) if c == "vendor" else (f"native:{c}",)) for c in SYRK_CHOICES},
+    candidate_order=list(SYRK_CHOICES),
+)
+
+# syr2k (docs/design/flat-kernel-selection.md §12): work ~ n^2 k batch; real dtypes only. No sweep source:
+# sm_89 and sm_120 are the same transcription of ff340fc6's hand-written rule (it read no architecture).
+SYR2K_CHOICES = ("triangular", "vendor")
+SYR2K = OpSpec(
+    op="syr2k",
+    keys="n:log:2 k:log batch:log",
+    row_ops=("syr2k",),
+    row_key=lambda r: None,
+    arm_spelling={c: c for c in SYR2K_CHOICES},
+    arm_route={c: (("vendor:vendor",) if c == "vendor" else (f"native:{c}",)) for c in SYR2K_CHOICES},
+    candidate_order=list(SYR2K_CHOICES),
+)
+
+def trmm_key(r):
+    try:
+        key = (str(r["side"]), int(r["order"]), int(r["q"]), int(r["batch"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+    return key if key[0] in ("L", "R") and min(key[1:]) >= 1 else None
+
+
+# trmm (level-3 flat selection): work ~ order^2 q batch; triangular serves Side::Left only. No
+# sweep source: sm_89 and sm_120 are both transcribed (the old rule read only the side).
+TRMM_CHOICES = ("triangular", "expand", "vendor")
+TRMM = OpSpec(
+    op="trmm",
+    keys="side:exact order:log:2 q:log batch:log",
+    row_ops=("trmm",),
+    row_key=trmm_key,
+    arm_spelling={c: c for c in TRMM_CHOICES},
+    arm_route={c: (("vendor:vendor",) if c == "vendor" else (f"native:{c}",)) for c in TRMM_CHOICES},
+    candidate_order=list(TRMM_CHOICES),
+)
+
 POTRF.review = potrf_offgrid
-OPS = [POTRF, POSV, TRSM, GEMM, GEMV, GEQRF, ORGQR, ORMQR, GETRF, GETRS, GETRI, GESV, GESVD, SPMM, SYEV]
+OPS = [POTRF, POSV, TRSM, GEMM, GEMV, GEQRF, ORGQR, ORMQR, GETRF, GETRS, GETRI, GESV, GESVD, SPMM, SYEV, SYMM, SYRK, SYR2K, TRMM]
 OP_BY_NAME = {s.op: s for s in OPS}
 
 

@@ -146,7 +146,6 @@ option(BATCHLAS_ALLOW_UNSAFE_ENV
 # library cannot enforce: a consumer TU compiled without the macro interposes its
 # own uninstrumented copy and recording silently stops.
 
-set(BATCHLAS_MATHDX_ROOT "" CACHE PATH "Path to an unpacked NVIDIA MathDx package root")
 set(BATCHLAS_CPU_TARGET "auto" CACHE STRING "CPU SYCL target override: auto|native_cpu|spir64_x86_64|none")
 set(BATCHLAS_TEST_TARGET_SET "all" CACHE STRING "Subset of tests to generate: all|smoke")
 set(BATCHLAS_TUNING_PROFILE "" CACHE FILEPATH "Optional tuning profile JSON to generate compile-time tuning constants")
@@ -236,15 +235,11 @@ set(BATCHLAS_ENABLE_SYCL ON)
 # yet and the family flags keep their existing derivation, so this step is
 # bit-identical; the decoupling itself is S2/S3.
 option(BATCHLAS_ENABLE_VENDOR_BLAS
-    "Build against vendor math libraries (cuBLAS/cuSOLVER/cuSPARSE, roc*, oneMKL, netlib, MathDx)"
+    "Build against vendor math libraries (cuBLAS/cuSOLVER/cuSPARSE, roc*, oneMKL, netlib)"
     ON)
 
-# CUBLASDX is counted as vendor: it is third-party NVIDIA source shipped in
-# the MathDx package, it exists only for NVIDIA, and so it can never be the
-# portable path. A vendor-independence measurement that let them
-# through would be measuring the wrong thing.
 set(BATCHLAS_VENDOR_LIBRARIES
-    CUBLAS CUSOLVER CUSPARSE CUBLASDX
+    CUBLAS CUSOLVER CUSPARSE
     ROCBLAS ROCSOLVER ROCSPARSE
     LAPACKE CBLAS ONEMKL)
 

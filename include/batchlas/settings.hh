@@ -73,12 +73,11 @@ private:
 
 /// @brief The route pins: `BATCHLAS_<OP>_ROUTE`, one raw string per op that selects a kernel.
 ///
-/// Raw strings on purpose: `src/select` parses them (`auto` | `native` | `vendor` | a choice
-/// spelling such as `lpanel:panel=8`), and an op whose selection is still hand-written parses
-/// its own word list. Values are trimmed and case-folded; a set-but-empty value means `auto`. A
-/// value the op does not understand throws `std::invalid_argument`. Under `src/select`, `native`
-/// and `vendor` warn and fall back to `auto` when nothing in that class can run the call. The
-/// selection layer is described in docs/design/flat-kernel-selection.md.
+/// Raw strings on purpose: `src/select` parses them for every op (`auto` | `native` | `vendor` |
+/// a choice spelling such as `lpanel:panel=8`). Values are trimmed and case-folded; a set-but-empty
+/// value means `auto`. A value the op does not understand throws `std::invalid_argument`; only
+/// `native` and `vendor` warn and fall back to `auto` when nothing in that class can run the call.
+/// The selection layer is described in docs/design/flat-kernel-selection.md.
 /// @ingroup config
 struct RoutingSettings {
     /// @brief The ops that read a route variable, by their `<op>` spelling.
@@ -118,17 +117,18 @@ private:
 /// @ingroup config
 // evidence: docs/design/environment.md#environment-knobs-that-override-an-explicit-argument
 struct SelectionSettings {
-    /// `BATCHLAS_EXPAND_ROUTE` = `expand` | `loop`: pins the scratch-expansion route. Not
-    /// op-keyed, so RoutingSettings does not hold it.
+    /// `BATCHLAS_EXPAND_ROUTE` = `expand` | `loop`: pins the scratch-expansion route of hemm, herk
+    /// and her2k, so a test can reach the arm the shape would not have picked (symm and trmm pin
+    /// `expand` through their `BATCHLAS_<OP>_ROUTE`). Not op-keyed, so RoutingSettings does not
+    /// hold it.
+    // Read at two sites (src/expansion_budget.hh, src/backends/triangular_expand.hh) by two
+    // independent parsers that currently agree; both read this one field.
     EnvValue expand_route{};
-
-    /// `BATCHLAS_GEMM_CUBLASDX_KERNEL`: kernel inside the level-3 cuBLASDx paths (~20
-    /// spellings); unset is `CuBLASDxGemmVariant::VendorFallback`. gemm never reaches cuBLASDx.
-    EnvValue gemm_cublasdx_kernel{};
 
     /// `BATCHLAS_GEMV_SEGT` = `off` | `auto` | `2` | `4` | `8`: segmented-tail width of the
     /// native gemv.
     // Never latch it in a static: a later setenv goes unseen and tests pass on the default arm.
+    // That prohibition is why detail::reload_settings() exists.
     EnvValue gemv_segt{};
 
     /// `BATCHLAS_GESVD_BIDIAG` = `bdsdc` | `normal` | `bdsqr`.

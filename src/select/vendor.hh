@@ -87,9 +87,9 @@ constexpr const char* library_name(Lib l) {
     }
 }
 
-/// Is the level-3 tile kernel (syrk gram/triangular, syr2k and trmm triangular, symm expand)
-/// linked for (B, T)? Portable SYCL wired only for CUDA; float is reachable vendor-free, while
-/// the double/complex tile branches need cuBLAS.
+// Is a level-3 tile kernel linked for (B, T)? Kept at its pre-flat-selection value (float, or
+// cuBLAS) for sytrd_blocked, ortho, ormqr_blocked and coverage: double syrk gram, symm expand and
+// every trmm family now run vendor-free too, but widening this moves ortho's and ormqr's routes.
 // evidence: docs/design/vendor-independence.md#the-vendor-gate-why-the-tile-route-predicate-is-per-backend-and-scalar
 template <Backend B, typename T>
 inline constexpr bool level3_tile_route_available =

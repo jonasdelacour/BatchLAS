@@ -57,10 +57,12 @@ using symm_vendor = Event(Queue&,
 /// @param uplo   which triangle of `A` holds the data
 /// @return event of the last enqueued kernel; `C` is valid once it completes
 /// @pre All operands have the same batch size and conforming shapes per item.
-/// @throws batchlas::NoRouteError in a build without the vendor BLAS
-///         for `Ba`, unless the call is `Backend::CUDA`, `float` and inside the
-///         native kernel's shape window (@ref md_docs_2perf_2level3).
-/// @note Not instantiated for `Backend::ROCM`.
+/// @throws batchlas::NoRouteError in a build without the vendor BLAS for `Ba`,
+///         unless the call is `Backend::CUDA` on a GPU, with homogeneous operands,
+///         batch <= 65535 and an expansion scratch that fits (the `expand` choice;
+///         @ref md_docs_2perf_2level3).
+/// @note `Backend::ROCM` and `Backend::MKL` are served by src/extensions/symm.cc
+///       (symmetrize a copy of `A`, then gemm), outside the tuned selection.
 /// @see hemm, SymmOptions, @ref md_docs_2cpp-api
 /// @ingroup blas3
 template <Backend Ba, RealScalar T>
@@ -79,7 +81,7 @@ BATCHLAS_API Event symm(Queue& ctx,
 namespace batchlas::backend {
 
 // Declaration only: each vendor TU defines and instantiates it for its Backend.
-// The public symm is defined in src/ops/level3/level3.cc, outside every vendor TU.
+// The public symm is defined in src/ops/symm/symm.cc, outside every vendor TU.
 // evidence: docs/design/vendor-independence.md#the-entry-point-facade
 /// @brief Vendor-library implementation of symm (cuBLAS, host BLAS).
 ///

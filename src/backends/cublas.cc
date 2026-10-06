@@ -14,18 +14,12 @@
 #include <batchlas/blas/functions/ormqr.hh>
 #include <complex>
 
-#include "gemm_cublasdx_dispatch.hh"
 #include "batch_launch.hh"
 #include "level3_shape.hh"
 #include "gemm_variant.hh"
 #include "gemm_heterogeneous.hh"
-#include "symm_custom_dispatch.hh"
-#include "syr2k_custom_dispatch.hh"
-#include "syrk_custom_dispatch.hh"
 #include "syrk_gram_tiles.hh"
-#include "cublasdx_dispatch_common.hh"
-#include "trmm_custom_dispatch.hh"
-#include "trmm_triangular_tiles.hh"
+#include "../ops/syrk/choice.hh"
 #include "triangular_expand.hh"
 
 // This file contains cuBLAS primitives implementation using MatrixView
@@ -171,12 +165,7 @@ namespace batchlas {
                       T beta,
                       Side side,
                       Uplo uplo) {
-                // WP1 S6: the float custom-route gate moved to the facade
-                // (src/ops/level3/level3.cc). It has to run BEFORE
-                // the vendor-available test, and this TU is compiled only when
-                // cuBLAS exists -- so leaving it here made the tile kernels
-                // linkable everywhere but callable nowhere.
-
+        // The expand family is symm's own (src/ops/symm/symm.cc); this is the per-item cublas?symm loop only.
         return symm_vendor_impl<Back, T>(ctx, A, B, C, alpha, beta, side, uplo);
     }
 
@@ -384,13 +373,13 @@ namespace batchlas {
         const int batch = C.batch_size();
 
         // The same single-tile Gram kernel as syrk, with the ^H conjugating
-        // whichever operand carries it. Opt-in only: see syrk_route_requests_gram
-        // for the measurement that keeps it off the automatic path -- a complex
+        // whichever operand carries it. Opt-in only (BATCHLAS_SYRK_ROUTE=gram): a complex
         // multiply is four real ones, so this shape is compute bound for herk
         // where it is bandwidth bound for syrk, and the GEMM-plus-fold below
         // wins on every Gram shape measured.
+        // evidence: docs/perf/level3.md#herk-on-the-gram-tile-kernel
         if constexpr (Back == Backend::CUDA) {
-            if (detail::is_gpu_queue(ctx) && syrk_route_requests_gram() &&
+            if (detail::is_gpu_queue(ctx) && ops::syrk::herk_gram_pinned() &&
                 detail::syrk_gram_supported(A, C, transA, /*conjugated=*/true)) {
                 return detail::syrk_gram_tiles<T, true>(ctx, A, C, T(alpha), T(beta), uplo, transA);
             }
@@ -549,33 +538,8 @@ namespace batchlas {
                       T beta,
                       Uplo uplo,
                       Transpose transA) {
-        if constexpr (Back == Backend::CUDA) {
-                // WP1 S6: the float custom-route gate moved to the facade
-                // (src/ops/level3/level3.cc). It has to run BEFORE
-                // the vendor-available test, and this TU is compiled only when
-                // cuBLAS exists -- so leaving it here made the tile kernels
-                // linkable everywhere but callable nowhere.
-            //
-            // The NON-float gram route below stays: it is reachable only from
-            // here, so double and complex syrk still have no native route in a
-            // vendor-free build. That is why WP1 S7 refuses to flip
-            // level3_tile_kernels_compiled to a bare `true`.
-            if constexpr (!std::is_same_v<T, float>) {
-                // Everything that is not float reaches the single-tile Gram
-                // kernel only. It is the one route here whose staging and
-                // fragment loads are not written around a 128-bit packet, so it
-                // is the one that generalises; the 128x128 triangular kernel
-                // stays float. Below kGramMaxTile the alternative is
-                // syrk_vendor_impl's host loop over one cublasXsyrk per batch
-                // member, which at large batch is two orders of magnitude off
-                // anything batched, so there is no threshold to tune.
-                if (detail::is_gpu_queue(ctx) && !syrk_route_prefers_vendor() &&
-                    detail::syrk_gram_supported(A, C, transA, /*conjugated=*/false)) {
-                    return detail::syrk_gram_tiles<T, false>(ctx, A, C, alpha, beta, uplo, transA);
-                }
-            }
-        }
-
+        // The gram and triangular tile kernels are syrk's own families (src/ops/syrk/syrk.cc);
+        // this is the per-item cublas?syrk loop only.
         return syrk_vendor_impl<Back, T>(ctx, A, C, alpha, beta, uplo, transA);
     }
 
@@ -619,21 +583,7 @@ namespace batchlas {
                        T beta,
                        Uplo uplo,
                        Transpose transA) {
-        if constexpr (Back == Backend::CUDA) {
-            if (syr2k_cuda_custom_forced()) {
-                if constexpr (std::is_same_v<T, float>) {
-                    return syr2k_cuda_custom(ctx, A, B, C, alpha, beta, uplo, transA);
-                } else {
-                    throw batchlas::unsupported("BATCHLAS_SYR2K_ROUTE=cublasdx only supports float");
-                }
-            }
-                // WP1 S6: the float custom-route gate moved to the facade
-                // (src/ops/level3/level3.cc). It has to run BEFORE
-                // the vendor-available test, and this TU is compiled only when
-                // cuBLAS exists -- so leaving it here made the tile kernels
-                // linkable everywhere but callable nowhere.
-        }
-
+        // The tile route is chosen in src/ops/syr2k/syr2k.cc; this is the library loop only.
         return syr2k_vendor_impl<Back, T>(ctx, A, B, C, alpha, beta, uplo, transA);
     }
 
@@ -651,51 +601,10 @@ namespace batchlas {
         handle.setStream(ctx);
 
         const auto [m, n, k] = shape::validate_product<std::invalid_argument>("TRMM", A, B, C, side);
+        (void)k;
 
-        // One expansion plus one strided-batched GEMM beats the per-batch
-        // cublas?trmm loop everywhere it fits. Measured in float on sm_89 over
-        // square shapes, k in 16..1024 and batch in 1..512 (49 cells, 1.15x to
-        // 162x) and over skewed ones, k in 256..2048 against 1..128 right-hand
-        // sides (64 cells, 1.22x to 32x). Not one cell went the other way, not
-        // even batch 1, so the only question left is whether the scratch fits.
-        const std::size_t expansion_bytes = detail::expanded_workspace_bytes<T>(ctx, k, A.batch_size());
-        if (detail::expansion_fits(ctx, k, A.batch_size(), expansion_bytes)) {
-            const int ld = detail::expanded_ld<T>(k);
-
-            auto ws = ctx.workspace(expansion_bytes);
-            BumpAllocator pool(ws.span());
-            auto storage = pool.allocate<T>(ctx, static_cast<std::size_t>(ld) *
-                                                     static_cast<std::size_t>(k) *
-                                                     static_cast<std::size_t>(A.batch_size()));
-
-            MatrixView<T, MatrixFormat::Dense> expanded(storage.data(), k, k, ld, ld * k, A.batch_size());
-
-            // The GEMM cannot be pointed at the caller's A. TRMM must not read
-            // the opposite triangle, nor the diagonal under Diag::Unit, so that
-            // storage is not part of the operand and may hold anything at all;
-            // the expansion supplies the zeros and the ones the caller was
-            // entitled to leave out.
-            Event expansion = detail::expand_triangular<T>(ctx, expanded, A, uplo, diag);
-
-            // The GEMM runs on the queue's native stream, which an in-order
-            // queue shares with the expansion kernel. An out-of-order queue
-            // orders nothing across the SYCL/native boundary and offers no event
-            // to hang the vendor launch off, so there the dependency has to be
-            // waited out.
-            if (!ctx.in_order()) {
-                expansion.wait();
-            }
-
-            if (side == Side::Left) {
-                return ::batchlas::gemm<Back, T>(ctx, expanded, B, C, alpha, T(0),
-                                            transA, Transpose::NoTrans, ComputePrecision::Default);
-            }
-            return ::batchlas::gemm<Back, T>(ctx, B, expanded, C, alpha, T(0),
-                                        Transpose::NoTrans, transA, ComputePrecision::Default);
-        }
-
-        // Slower, but it needs no scratch, so it is what an expansion too large
-        // for the device falls back to.
+        // The per-batch cublas?trmm loop only: the expansion plus gemm is trmm's own
+        // `expand` family (src/ops/trmm/trmm.cc). It needs no scratch.
         auto launch_single = [&](const MatrixView<T, MatrixFormat::Dense>& A_i,
                                  const MatrixView<T, MatrixFormat::Dense>& B_i,
                                  const MatrixView<T, MatrixFormat::Dense>& C_i) {
@@ -719,79 +628,7 @@ namespace batchlas {
                       Uplo uplo,
                       Transpose transA,
                       Diag diag) {
-        if constexpr (Back == Backend::CUDA) {
-            if (trmm_cuda_custom_forced()) {
-                if constexpr (std::is_same_v<T, float>) {
-                    return trmm_cuda_custom(ctx, A, B, C, alpha, side, uplo, transA, diag);
-                } else {
-                    throw batchlas::unsupported("BATCHLAS_TRMM_ROUTE=cublasdx only supports float");
-                }
-            }
-                // WP1 S6: the float custom-route gate moved to the facade
-                // (src/ops/level3/level3.cc). It has to run BEFORE
-                // the vendor-available test, and this TU is compiled only when
-                // cuBLAS exists -- so leaving it here made the tile kernels
-                // linkable everywhere but callable nowhere.
-            //
-            // The NON-float tile route below stays, and is reachable only from
-            // here -- see the syrk note and WP1 S7.
-            if constexpr (!std::is_same_v<T, float>) {
-                // The tile kernel is type-generic; only its routing was ever
-                // float. The alternative for double and complex is the same
-                // expansion-plus-GEMM as for float, which is strictly more work
-                // than the GEMM it wraps, so there is nothing to weigh here.
-                if (detail::is_gpu_queue(ctx) && !trmm_route_prefers_vendor() &&
-                    detail::trmm_tiles_supported(A, B, C, side)) {
-                    return detail::trmm_triangular_tiles(ctx, A, B, C, alpha, uplo, transA, diag);
-                }
-            }
-        }
-
         return trmm_vendor_impl<Back, T>(ctx, A, B, C, alpha, side, uplo, transA, diag);
-    }
-
-    Event symm_vendor_cuda_raw(Queue& ctx,
-                               const MatrixView<float, MatrixFormat::Dense>& A,
-                               const MatrixView<float, MatrixFormat::Dense>& B,
-                               const MatrixView<float, MatrixFormat::Dense>& C,
-                               float alpha,
-                               float beta,
-                               Side side,
-                               Uplo uplo) {
-        return symm_vendor_impl<Backend::CUDA, float>(ctx, A, B, C, alpha, beta, side, uplo);
-    }
-
-    Event syrk_vendor_cuda_raw(Queue& ctx,
-                               const MatrixView<float, MatrixFormat::Dense>& A,
-                               const MatrixView<float, MatrixFormat::Dense>& C,
-                               float alpha,
-                               float beta,
-                               Uplo uplo,
-                               Transpose transA) {
-        return syrk_vendor_impl<Backend::CUDA, float>(ctx, A, C, alpha, beta, uplo, transA);
-    }
-
-    Event syr2k_vendor_cuda_raw(Queue& ctx,
-                                const MatrixView<float, MatrixFormat::Dense>& A,
-                                const MatrixView<float, MatrixFormat::Dense>& B,
-                                const MatrixView<float, MatrixFormat::Dense>& C,
-                                float alpha,
-                                float beta,
-                                Uplo uplo,
-                                Transpose transA) {
-        return syr2k_vendor_impl<Backend::CUDA, float>(ctx, A, B, C, alpha, beta, uplo, transA);
-    }
-
-    Event trmm_vendor_cuda_raw(Queue& ctx,
-                               const MatrixView<float, MatrixFormat::Dense>& A,
-                               const MatrixView<float, MatrixFormat::Dense>& B,
-                               const MatrixView<float, MatrixFormat::Dense>& C,
-                               float alpha,
-                               Side side,
-                               Uplo uplo,
-                               Transpose transA,
-                               Diag diag) {
-        return trmm_vendor_impl<Backend::CUDA, float>(ctx, A, B, C, alpha, side, uplo, transA, diag);
     }
 
     template <Backend B, typename T>

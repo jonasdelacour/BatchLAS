@@ -16,7 +16,7 @@ conservative. Most of the obvious moves in here have already been made and measu
 |---|---|---|
 | [dispatch.md](dispatch.md) | the `BATCHLAS_<OP>_ROUTE` words, the vendor gate, the coverage instrument, measured level-3 boundaries | n/a — this is the mechanism |
 | [gemm.md](gemm.md) | `gemm` | **yes** — `double` broadly, `float` NN squares at `max_dim <= 32`; complex never |
-| [level3.md](level3.md) | `symm` `hemm` `syrk` `herk` `syr2k` `her2k` `trmm` | hand-rolled `if`-chains in `src/backends/*_custom_dispatch.cc`, not tables |
+| [level3.md](level3.md) | `symm` `hemm` `syrk` `herk` `syr2k` `her2k` `trmm` | symm/syrk/syr2k/trmm: flat selection, tables transcribed from the old `if`-chains; hemm/herk/her2k: hand-written in `cublas.cc` |
 | [trsm.md](trsm.md) | `trsm` | **yes**, broadly — but see its open debts before trusting a ratio |
 | [potrf.md](potrf.md) | `potrf` | **yes**, per cell — measured tables (sm_120 converted from the route sweep); five native kernels ship |
 | [qr.md](qr.md) | `geqrf` `orgqr` `ormqr` | **yes** — `ormqr` native-first; `geqrf` above a per-type order floor plus a tall-panel clause; `orgqr` to n = 512 |

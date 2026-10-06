@@ -19,6 +19,10 @@
 #include "../src/ops/gesvd/choice.hh"
 #include "../src/ops/spmm/choice.hh"
 #include "../src/ops/syev/choice.hh"
+#include "../src/ops/symm/choice.hh"
+#include "../src/ops/syrk/choice.hh"
+#include "../src/ops/syr2k/choice.hh"
+#include "../src/ops/trmm/choice.hh"
 #include "../src/select/select.hh"
 
 #include <algorithm>
@@ -153,6 +157,28 @@ std::vector<std::string> candidates(const std::string& op, const std::string& dt
         if (dtype == "double") return spellings(syev::candidates<double>());
         if (dtype == "cfloat") return spellings(syev::candidates<std::complex<float>>());
         if (dtype == "cdouble") return spellings(syev::candidates<std::complex<double>>());
+    }
+    namespace symm = batchlas::ops::symm;  // real-only
+    if (op == "symm") {
+        if (dtype == "float") return spellings(symm::candidates<float>());
+        if (dtype == "double") return spellings(symm::candidates<double>());
+    }
+    namespace syrk = batchlas::ops::syrk;  // real-only: syrk has no complex instantiation
+    if (op == "syrk") {
+        if (dtype == "float") return spellings(syrk::candidates<float>());
+        if (dtype == "double") return spellings(syrk::candidates<double>());
+    }
+    namespace syr2k = batchlas::ops::syr2k;
+    if (op == "syr2k") {  // real-only: there is no complex syr2k table
+        if (dtype == "float") return spellings(syr2k::candidates<float>());
+        if (dtype == "double") return spellings(syr2k::candidates<double>());
+    }
+    namespace trmm = batchlas::ops::trmm;
+    if (op == "trmm") {
+        if (dtype == "float") return spellings(trmm::candidates<float>());
+        if (dtype == "double") return spellings(trmm::candidates<double>());
+        if (dtype == "cfloat") return spellings(trmm::candidates<std::complex<float>>());
+        if (dtype == "cdouble") return spellings(trmm::candidates<std::complex<double>>());
     }
     return {};
 }
@@ -374,11 +400,17 @@ TEST(TunedTables, TrsmTranscribedTablesHoldExactlyTheChoiceGrid) {
 TEST(TunedTables, EveryOpShipsATableForEveryDtypeOnEveryShippedDevice) {
     std::set<std::string> names;
     for (const auto& e : sel::embedded_tables()) names.insert(std::string(e.name));
+    // symm, syrk and syr2k are RealScalar-constrained: no complex instantiation, so no complex table.
+    const std::set<std::string> real_only{"symm", "syrk", "syr2k"};
     for (const char* op : {"potrf", "posv", "trsm", "gemm", "gemv", "geqrf", "orgqr", "ormqr", "getrf", "getrs",
-                           "getri", "gesv", "gesvd", "spmm", "syev"})
+                           "getri", "gesv", "gesvd", "spmm", "syev", "symm", "syrk", "syr2k", "trmm"})
         for (const char* dev : {"sm_89", "sm_120", "cpu"})
             for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
                 if (std::string(dev) == "cpu" && std::string(op) != "spmm") continue;
+                if (dt[0] == 'c' && real_only.count(op)) {
+                    EXPECT_FALSE(names.count(std::string(op) + "." + dt + "." + dev + ".txt")) << op << " " << dt;
+                    continue;
+                }
                 EXPECT_TRUE(names.count(std::string(op) + "." + dt + "." + dev + ".txt"))
                     << op << " " << dt << " " << dev;
             }

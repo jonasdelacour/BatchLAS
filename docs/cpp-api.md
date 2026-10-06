@@ -1334,9 +1334,10 @@ Three environment variables expose the choice (all in [Configuration](#configura
 | `BATCHLAS_TUNED_DIR=<dir>` | A same-named table file in `<dir>` replaces the built-in one; trace lines then say `override`. |
 
 Nested ops decide for themselves: a blocked factorisation calls the *public*
-`gemm` and `trsm`, which consult their own tables. Not every op has a table yet;
-the ops that still choose by hand (some level-3 routines) are the ones absent
-from @ref selection_tables. The design, its rules and the record of what was
+`gemm` and `trsm`, which consult their own tables. Every one of the 19 ops listed
+under `routing` in [Configuration](#configuration) has a table for each scalar type
+it instantiates (symm, syrk and syr2k are real-only); hemm, herk and her2k are not
+selected by table and do not appear in @ref selection_tables. The design, its rules and the record of what was
 built are in [flat kernel selection](design/flat-kernel-selection.md); why the
 previous `RouteTable` layer was replaced is in its section 1.
 
@@ -1501,22 +1502,20 @@ curve at a single point.
 
 | field | variable | type | default |
 | --- | --- | --- | --- |
-| `route(op)` (`values`, in `RoutingSettings::ops` order) | `BATCHLAS_<OP>_ROUTE` | `EnvValue` per op | unset (the op's tuned table, or the level-3 rules) |
+| `route(op)` (`values`, in `RoutingSettings::ops` order) | `BATCHLAS_<OP>_ROUTE` | `EnvValue` per op | unset (the op's tuned table) |
 
 The 19 ops: `gemm`, `gemv`, `trsm`, `trmm`, `symm`, `syrk`, `syr2k`, `potrf`, `posv`,
 `getrf`, `getrs`, `getri`, `gesv`, `geqrf`, `orgqr`, `ormqr`, `syev`, `gesvd`, `spmm`.
 `route(op)` throws `std::invalid_argument` for any other name. Values are `auto`,
 `native`, `vendor` or a choice spelling from the op's `src/ops/<op>/choice.hh`
-(`lpanel:panel=8`, `reg:m=128:n=128:k=8:u=1`, ...), parsed by `src/select/`; a
-level-3 op that still selects by hand parses its own words instead (`auto`,
-`native`, `vendor`, `cublasdx` and its kernel words such as `triangular`, `gram`,
-`expand`). Case and surrounding whitespace are ignored. An unknown value, or a
-choice the shape cannot run, throws; `native` and `vendor` fall back to `auto`
-with a warning when nothing of that kind can run. What each word selects is in
-[Which kernel runs](#which-kernel-runs-flat-kernel-selection) and, in full, in
-[flat kernel selection](design/flat-kernel-selection.md) (sections 5.3 and 12).
-The old per-op spellings `BATCHLAS_<OP>_VARIANT` and `BATCHLAS_<OP>_PROVIDER` are
-no longer read.
+(`lpanel:panel=8`, `reg:m=128:n=128:k=8:u=1`, `triangular`, `gram`, `expand`, ...),
+parsed by `src/select/` for every op. Case and surrounding whitespace are ignored. An
+unknown value, or a choice the shape cannot run, throws; `native` and `vendor` fall
+back to `auto` with a warning when nothing of that kind can run. What each word
+selects is in [Which kernel runs](#which-kernel-runs-flat-kernel-selection) and, in
+full, in [flat kernel selection](design/flat-kernel-selection.md) (sections 5.3 and
+12). The old per-op spellings `BATCHLAS_<OP>_VARIANT` and `BATCHLAS_<OP>_PROVIDER`
+are no longer read.
 
 **`selection`** — which kernel or algorithm runs, for the knobs that are not part of
 the route vocabulary. Three of these override an explicit API argument, which is the
@@ -1524,8 +1523,7 @@ sharpest form of the problem this section exists to fix.
 
 | field | variable | type | default |
 | --- | --- | --- | --- |
-| `expand_route` | `BATCHLAS_EXPAND_ROUTE` | `EnvValue` | unset (shape heuristic) |
-| `gemm_cublasdx_kernel` | `BATCHLAS_GEMM_CUBLASDX_KERNEL` | `EnvValue` | unset (vendor fallback); level-3 cuBLASDx arms only, gemm itself no longer reads it |
+| `expand_route` | `BATCHLAS_EXPAND_ROUTE` | `EnvValue` | unset (shape heuristic); `expand` or `loop`, read by hemm, herk and her2k only |
 | `gemv_segt` | `BATCHLAS_GEMV_SEGT` | `EnvValue` | unset (auto) |
 | `gesvd_bidiag` | `BATCHLAS_GESVD_BIDIAG` | `EnvValue` | unset (`bdsdc`) — `normal` **changes numerics** |
 | `getrf_laswp` | `BATCHLAS_GETRF_LASWP` | `EnvValue` | unset (`defer_gather`) |

@@ -54,9 +54,10 @@ using syrk_vendor = Event(Queue&,
 /// @param transA  `Transpose::NoTrans` or `Transpose::Trans`
 /// @return event of the last enqueued kernel; `C` is valid once it completes
 /// @pre `A` and `C` have the same batch size and conforming shapes per item.
-/// @throws batchlas::NoRouteError in a build without the vendor BLAS
-///         for `Ba`, unless the call is `Backend::CUDA`, `float` and inside the
-///         native kernel's shape window (@ref md_docs_2perf_2level3).
+/// @throws batchlas::NoRouteError in a build without the vendor BLAS for `Ba`,
+///         unless the call is `Backend::CUDA` on a GPU, with homogeneous operands,
+///         batch <= 65535, and either `T` is `float` (the `triangular` tiles) or the
+///         `gram` tile admits the shape (@ref md_docs_2perf_2level3).
 /// @see herk, syr2k, SyrkOptions, @ref md_docs_2cpp-api
 /// @ingroup blas3
 template <Backend Ba, RealScalar T>
@@ -74,7 +75,7 @@ BATCHLAS_API Event syrk(Queue& ctx,
 namespace batchlas::backend {
 
 // Declaration only: each vendor TU defines and instantiates it for its Backend.
-// The public syrk is defined in src/ops/level3/level3.cc, outside every vendor TU.
+// The public syrk is defined in src/ops/syrk/syrk.cc, outside every vendor TU.
 // evidence: docs/design/vendor-independence.md#the-entry-point-facade
 /// @brief Vendor-library implementation of syrk (cuBLAS, rocBLAS, host BLAS).
 ///

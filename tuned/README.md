@@ -15,9 +15,9 @@ These files are plain git, not LFS, so that table changes stay readable in diffs
 ## What is here
 
 The inventory below is as of 2026-10-06; the generated selection-tables page is always current.
-Every op ships a table for every dtype (float, double, cfloat, cdouble) on sm_89 and sm_120, and
-spmm also on the CPU, so none of these devices borrows (R8); any other device borrows and warns
-once. `tuned_tables_tests` (`EveryOpShipsATableForEveryDtypeOnEveryShippedDevice`) holds this
+Every op ships a table for every dtype it instantiates (float, double, cfloat, cdouble; symm, syrk
+and syr2k are real-only) on sm_89 and sm_120, and spmm also on the CPU, so none of these devices
+borrows (R8); any other device borrows and warns once. `tuned_tables_tests` (`EveryOpShipsATableForEveryDtypeOnEveryShippedDevice`) holds this
 inventory. Three kinds of source:
 
 - **measured**: timed by the tuner (`source=tuner:<raw jsonl>`, raw in `benchmarks/results/tuning/`);
@@ -44,10 +44,14 @@ inventory. Three kinds of source:
 | gesvd | all | transcribed `424a45bc` (`gesvd.csv`, both devices) | transcribed (same CSV) | — |
 | spmm | all | transcribed `424a45bc` (`spmm.sm_89.csv`) | transcribed `424a45bc` (`spmm.sm_120.csv`) | transcribed (`spmm.cpu.csv`) |
 | syev | all | transcribed `424a45bc` (`syev.sm_89.csv`) | transcribed `424a45bc` (`syev.sm_120.csv`) | — |
+| symm | float, double | transcribed `ff340fc6` (`symm.csv`, both devices) | transcribed (same CSV) | — |
+| syrk | float, double | transcribed `ff340fc6` (`syrk.csv`, both devices) | transcribed (same CSV) | — |
+| syr2k | float, double | transcribed `ff340fc6` (`syr2k.csv`, both devices) | transcribed (same CSV) | — |
+| trmm | all | transcribed `ff340fc6` (`trmm.csv`, both devices) | transcribed (same CSV) | — |
 
-124 files: 60 per GPU device (15 ops x 4 dtypes) and 4 cpu. Timed: 10 on sm_120 (potrf x 4 and posv
-x 4 converted, trsm float and double measured) and the 4 sm_89 potrf tables; the other 110 replay an
-old router.
+144 files: 70 per GPU device (16 ops x 4 dtypes, plus symm, syrk and syr2k x 2) and 4 cpu. Timed:
+10 on sm_120 (potrf x 4 and posv x 4 converted, trsm float and double measured) and the 4 sm_89
+potrf tables; the other 130 replay an old router.
 
 ## How they are produced
 
@@ -75,9 +79,11 @@ how to add an op.
 **The transcribers are deleted** (phase 5 rip). Each one compiled against a tree that still had
 the old router, so none could build here. The tables carry the old-router commit each was compiled
 against: `source=transcribed:424a45bc` (100 tables: gemm, gemv, geqrf, gesv, gesvd, getrf, getri,
-getrs, orgqr, ormqr, spmm, syev), `7e71a6e0` (posv sm_89, 4) and `8b9adeb3` (trsm sm_89, 6). Their
-sources, and the off-grid data-gate scripts that came with them, are retrievable from the parent
-of the deletion commit, e.g. `git show 0bd26dfe:tools/transcribe/posv_transcribe.cc`. A
+getrs, orgqr, ormqr, spmm, syev), `7e71a6e0` (posv sm_89, 4), `8b9adeb3` (trsm sm_89, 6) and
+`ff340fc6` (symm, syrk, syr2k, trmm: 20). Their sources, and the off-grid data-gate scripts that
+came with them, are retrievable from the parent of the deletion commit, e.g.
+`git show 0bd26dfe:tools/transcribe/posv_transcribe.cc`; the level-3 four's from the last merge of
+their wave, `git show eeacaaa9:tools/transcribe/<op>_transcribe.cc` and `<op>_gate.py`. A
 `tools/transcribe/...` path below, in `docs/perf/`, or in the per-op phase 5 notes (folded into the spec §12; originals at `git show 94cefb3a:docs/design/flat-select-p5/<op>.md`), means
 that git path. The CSVs in `transcribed/` stay, so `--check` still re-derives every table.
 
@@ -119,6 +125,19 @@ for sm_120 (neither transcriber reads a device fact; its device argument only la
 
 The second command leaves `trsm.{float,double}.sm_120.txt` alone: `--transcribe` never overwrites
 a tuner table.
+
+The level-3 four (symm, syrk, syr2k, trmm) were transcribed at `ff340fc6`, the last commit with
+their hand-written rules. Each `<op>_transcribe.cc` is host-only C++ holding byte-for-byte copies
+of the old predicate bodies (`<op>_gate.py --fidelity` diffs them against `git show ff340fc6:`;
+build lines in the file headers), evaluated at every cell of `src/ops/<op>/choice.hh`'s grid with
+capacities unlimited (`can_run` re-applies them). It writes one CSV for both devices, then
+`python3 scripts/sweep_to_table.py --transcribe tuned/transcribed/<op>.csv --sha ff340fc6`. A row
+is the old vendor-present Auto choice, then every other structurally runnable candidate of that
+dtype, `vendor` last unless it was the Auto choice. symm and syrk key on `form` (sq|tall|wide); a
+cell whose extents contradict its form holds the decision at the form's representative shape.
+`<op>_gate.py --data` replays random off-grid points through the old rules and through
+`sweep_to_table.nearest` plus a `can_run` model: 100% agreement for every op, dtype and device
+(details: `docs/design/flat-kernel-selection.md` §12 "Level-3 four").
 
 A transcribed row reproduces a deleted window; it is not a measurement. It is replaced by a timed
 row when the tuner sweeps that device.

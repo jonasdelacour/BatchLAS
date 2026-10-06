@@ -207,76 +207,6 @@ int main(int argc, char** argv) {
 }
 
 #if BATCHLAS_HAS_CUDA_BACKEND
-TEST(SyrkCudaCustomTest, ForcedCuBLASDxPathMatchesVendor) {
-    Queue ctx;
-    if (ctx.device().type != DeviceType::GPU) {
-        GTEST_SKIP() << "CUDA custom syrk test requires a GPU device";
-    }
-
-    const int n = 128;
-    const int k = 96;
-    const int batch = 64;
-    const float alpha = 1.05f;
-    const float beta = -0.2f;
-    const float tol = test_utils::tolerance<float>() * 2048.0f;
-
-    for (auto transA : {Transpose::NoTrans, Transpose::Trans}) {
-        const int a_rows = transA == Transpose::NoTrans ? n : k;
-        const int a_cols = transA == Transpose::NoTrans ? k : n;
-
-        Matrix<float, MatrixFormat::Dense> A = Matrix<float, MatrixFormat::Dense>::Random(a_rows, a_cols, false, batch, 17);
-        Matrix<float, MatrixFormat::Dense> C0 = Matrix<float, MatrixFormat::Dense>::Random(n, n, false, batch, 23);
-
-        for (auto uplo : {Uplo::Lower, Uplo::Upper}) {
-            Matrix<float, MatrixFormat::Dense> C_custom(n, n, batch);
-            Matrix<float, MatrixFormat::Dense> C_vendor(n, n, batch);
-
-            MatrixView<float, MatrixFormat::Dense>::copy(ctx, C_custom.view(), C0.view()).wait();
-            MatrixView<float, MatrixFormat::Dense>::copy(ctx, C_vendor.view(), C0.view()).wait();
-
-            {
-                // Without MathDx no fused kernel runs, and the pin throws rather than
-                // fall back to a route that writes both triangles.
-                ScopedEnvVar force_route("BATCHLAS_SYRK_ROUTE", "cublasdx");
-                try {
-                    syrk(ctx,
-                         A.view(),
-                         C_custom.view(),
-                         {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = transA}).wait();
-                } catch (const std::runtime_error& err) {
-                    EXPECT_NE(std::string(err.what()).find("BATCHLAS_SYRK_ROUTE=cublasdx"), std::string::npos)
-                        << err.what();
-                    return;
-                }
-            }
-
-            {
-                ScopedEnvVar vendor_route("BATCHLAS_SYRK_ROUTE", "vendor");
-                syrk(ctx,
-                                    A.view(),
-                                    C_vendor.view(),
-                                    {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = transA}).wait();
-            }
-
-            C_custom.view().symmetrize(ctx, uplo).wait();
-            C_vendor.view().symmetrize(ctx, uplo).wait();
-
-            for (int b = 0; b < batch; ++b) {
-                for (int j = 0; j < n; ++j) {
-                    for (int i = 0; i < n; ++i) {
-                        ASSERT_NEAR(C_custom(i, j, b), C_vendor(i, j, b), tol)
-                            << "trans=" << static_cast<int>(transA)
-                            << ", uplo=" << static_cast<int>(uplo)
-                            << ", batch=" << b
-                            << ", row=" << i
-                            << ", col=" << j;
-                    }
-                }
-            }
-        }
-    }
-}
-
 namespace {
 
 // syrk names one triangle of C, and BLAS forbids the other one from being
@@ -406,10 +336,10 @@ TEST(SyrkCudaCustomTest, AutoAndNativeRoutesLeaveTheOtherHalfUntouched) {
 
     // What this guards is the routing, not any one kernel: whichever route a
     // shape picks, the unreferenced half of C belongs to the caller. The
-    // shapes straddle every threshold the router has -- 512x64 batch 32 is
-    // past both of the triangular kernel's, 512x512 batch 4 clears the tile
-    // width but not the block count, 256x256 clears neither, and the two small
-    // ones sit where the launch is the whole cost.
+    // shapes sit on both sides of the transcribed table's steps
+    // (tuned/syrk.float.*.txt): 512x64 batch 32 is a tall triangular row,
+    // 512x512 batch 4 and 256x256 squareish triangular rows, and the two
+    // small ones gram rows.
     const Shape shapes[] = {{512, 64, 32}, {512, 512, 4}, {256, 256, 8},
                             {128, 128, 2}, {96, 96, 1}};
     const float alpha = 1.25f;
@@ -467,7 +397,7 @@ TEST(SyrkCudaCustomTest, RemovedRouteWordsThrow) {
         GTEST_SKIP() << "CUDA custom syrk test requires a GPU device";
     }
     Matrix<float, MatrixFormat::Dense> A(16, 8, 2), C(16, 16, 2);
-    for (const char* word : {"tiles", "narrow", "gemm", "custom", "dx", "fused", "diag_full_gemm", "triangular_tiles", "gram_tiles", "expand_gemm", "fused_device", "register_tiled", "native:auto", "vendor:auto", "bogus", "expand"}) {
+    for (const char* word : {"tiles", "narrow", "gemm", "custom", "dx", "fused", "diag_full_gemm", "triangular_tiles", "gram_tiles", "expand_gemm", "fused_device", "register_tiled", "native:auto", "vendor:auto", "bogus", "expand", "cublasdx"}) {
         ScopedEnvVar route("BATCHLAS_SYRK_ROUTE", word);
         EXPECT_THROW(syrk(ctx, A.view(), C.view(), {.alpha = 1.0f, .beta = 0.0f}).wait(), std::invalid_argument) << word;
     }

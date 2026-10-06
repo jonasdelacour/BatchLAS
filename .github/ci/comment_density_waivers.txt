@@ -21,8 +21,10 @@
 # docs/developer/documentation.md#writing-api-documentation.
 
 # ---------------------------------------------------------------------
-# BURN-DOWN ASSESSMENT, 2026-10-06. 31 files remain waived, down from 137
-# on 2026-09-15. Two changes did it, and neither deleted interface:
+# BURN-DOWN ASSESSMENT, 2026-10-06. 24 files remain waived, down from 137
+# on 2026-09-15. Two changes did most of it, and neither deleted interface
+# (a further 7 lines went with the files they waived when the level-3
+# cuBLASDx fused and *_custom_dispatch sources were deleted):
 #   - the public-API doc-comment exemption (2026-09-30) stopped counting the
 #     Doxygen contract in include/batchlas/, which moved every waived public
 #     header under the ceiling (sycl_interop.hh, settings.hh and error.hh were
@@ -60,13 +62,6 @@ benchmarks/her2k_benchmark.cc                         # predates the small-n com
 benchmarks/herk_benchmark.cc                          # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#small-n-comment-density-burn-down); untouched by this campaign
 benchmarks/ortho_benchmark.cc                         # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#small-n-comment-density-burn-down); untouched by this campaign
 benchmarks/syevx_benchmark.cc                         # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#small-n-comment-density-burn-down); untouched by this campaign
-src/backends/cublasdx_dispatch_common.hh              # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#small-n-comment-density-burn-down); untouched by this campaign
-src/backends/level3_fused.hh                          # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#small-n-comment-density-burn-down); untouched by this campaign
-src/backends/level3_fused_absent.cc                   # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#small-n-comment-density-burn-down); untouched by this campaign
-src/backends/level3_vendor_fallback.hh                # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#small-n-comment-density-burn-down); untouched by this campaign
-src/backends/syr2k_custom_dispatch.cc                 # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#small-n-comment-density-burn-down); untouched by this campaign
-src/backends/syrk_custom_dispatch.cc                  # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#small-n-comment-density-burn-down); untouched by this campaign
-src/backends/syrk_custom_dispatch.hh                  # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#small-n-comment-density-burn-down); untouched by this campaign
 src/backends/trmm_triangular_tiles.hh                 # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#small-n-comment-density-burn-down); untouched by this campaign
 src/expansion_budget.hh                               # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#small-n-comment-density-burn-down); untouched by this campaign
 src/extensions/getri_native.hh                        # predates the small-n comment budget (waived 2026-09-11, see docs/design/small-n-factorization-plan.md#small-n-comment-density-burn-down); untouched by this campaign

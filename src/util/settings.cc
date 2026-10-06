@@ -81,7 +81,6 @@ void load_routing(RoutingSettings& r) {
 
 void load_selection(SelectionSettings& s) {
     s.expand_route = raw("BATCHLAS_EXPAND_ROUTE");
-    s.gemm_cublasdx_kernel = raw("BATCHLAS_GEMM_CUBLASDX_KERNEL");
     s.gemv_segt = raw("BATCHLAS_GEMV_SEGT");
     s.gesvd_bidiag = raw("BATCHLAS_GESVD_BIDIAG");
     s.geqrf_leaf = raw("BATCHLAS_GEQRF_LEAF");

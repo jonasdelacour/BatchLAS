@@ -43,6 +43,7 @@ set(TEST_TARGETS
     potrf_candidates_tests
     posv_candidates_tests
     trsm_candidates_tests
+    symm_candidates_tests
     gemm_candidates_tests
     gemv_candidates_tests
     getrf_candidates_tests
@@ -74,6 +75,7 @@ set(TEST_TARGETS
     her2k_tests
     syrk_tests
     syr2k_tests
+    syr2k_candidates_tests
     syev_tests
     gesvd_tests
     gesvdj_cta_tests
@@ -84,6 +86,7 @@ set(TEST_TARGETS
     stebz_tests
     stein_tests
     trmm_tests
+    trmm_candidates_tests
     stedc_tests
     ritz_values_tests
     sytrd_sy2sb_tests
@@ -97,6 +100,7 @@ set(TEST_TARGETS
     syev_blocked_tests
     syev_two_stage_tests
     syev_candidates_tests
+    syrk_candidates_tests
 )
 
 set(BATCHLAS_SMOKE_TEST_TARGETS
@@ -163,8 +167,8 @@ set(BATCHLAS_TEST_LABELS_util
     linalg_layer_tests select_tests tuned_tables_tests tune_tests)
 set(BATCHLAS_TEST_LABELS_blas
     device_blas_tests gemm_tests gemv_tests symm_tests hemm_tests herk_tests her2k_tests
-    syrk_tests syr2k_tests
-    trmm_tests trsm_tests potrf_tests potrf_candidates_tests geqrf_tests getrf_tests resident_capacity_tests
+    syrk_tests syr2k_tests symm_candidates_tests syrk_candidates_tests syr2k_candidates_tests
+    trmm_tests trmm_candidates_tests trsm_tests potrf_tests potrf_candidates_tests geqrf_tests getrf_tests resident_capacity_tests
     geqrf_candidates_tests
     gesv_tests posv_tests posv_candidates_tests trsm_candidates_tests gemm_candidates_tests
     gemv_candidates_tests getrf_candidates_tests getrs_candidates_tests getri_candidates_tests gesv_candidates_tests
@@ -297,12 +301,6 @@ function(batchlas_add_test_target test_name)
     if(BATCHLAS_HAS_HOST_BACKEND AND test_name STREQUAL "getrf_tests")
         target_compile_definitions(${test_name} PRIVATE BATCHLAS_GETRF_TESTS_HAVE_LAPACKE=1)
     endif()
-    # CUDA headers: these #include src/backends/*cublasdx*.hh, which reaches
-    # <cuda_runtime_api.h>. CUDA::cudart is wanted here for its include dir.
-    if(BATCHLAS_HAS_CUDA_BACKEND AND TARGET CUDA::cudart
-       AND test_name MATCHES "^(gemm_tests|syr2k_tests|trmm_tests)$")
-        target_link_libraries(${test_name} PRIVATE CUDA::cudart)
-    endif()
     # util_device_queue_tests checks Device::cuda_compute_capability() against the
     # CUDA runtime's own answer, an oracle independent of the SYCL string it parses.
     if(BATCHLAS_HAS_CUDA_BACKEND AND TARGET CUDA::cudart
@@ -411,6 +409,10 @@ set(BATCHLAS_ROUTE_PINNED_TESTS
     orgqr_tests  "BATCHLAS_ORGQR_ROUTE=native|BATCHLAS_ORMQR_ROUTE=native"
     getrf_tests  "BATCHLAS_GETRF_ROUTE=native|BATCHLAS_GETRS_ROUTE=native|BATCHLAS_GETRI_ROUTE=native"
     spmm_tests   "BATCHLAS_SPMM_ROUTE=native"
+    symm_tests   "BATCHLAS_SYMM_ROUTE=native"
+    syrk_tests   "BATCHLAS_SYRK_ROUTE=native"
+    syr2k_tests  "BATCHLAS_SYR2K_ROUTE=native"
+    trmm_tests   "BATCHLAS_TRMM_ROUTE=native"
 )
 
 function(batchlas_add_route_pinned_test test_name env)

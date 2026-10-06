@@ -6,14 +6,23 @@ The shipped code is the authority on *what* ships; the exploration notes
 in place. All measurements: RTX 4090 / sm_89, CUDA 13.2, `RelWithDebInfo`, one dedicated GPU
 (`experiments/gpu_guard.sh`), at saturating batch unless the cell says otherwise.
 
+**Status (level-3 flat-selection wave, 2026-10-06).** symm, syrk, syr2k and trmm now select through
+flat tables (`src/ops/<op>/`; families, `can_run` and keys in
+`docs/design/flat-kernel-selection.md` §12 "Level-3 four"). Their tables are the predicates below,
+transcribed per grid cell at `ff340fc6`, so the boundaries on this page still describe Auto. "What
+ships" describes `ff340fc6` and earlier: the `*_custom_dispatch.cc` gates, `level3_coverage.hh`,
+`level3_fused.hh` and every cuBLASDx arm it names are deleted, and its file:line citations refer
+to those commits. hemm, herk and her2k still choose in `cublas.cc` as described here.
+
 ## What ships
 
 ### Route arms
 
-These four ops have no tuned table: they choose by hand-written rules in
+Up to `ff340fc6` symm, syrk, syr2k and trmm had no tuned table: they chose by hand-written rules in
 `src/backends/*_custom_dispatch.cc`, called from the public entry points in
-`src/ops/level3/level3.cc` (float, CUDA only). Each arm is named by its `BATCHLAS_<OP>_ROUTE` word
-([the level-3 pin words](dispatch.md#the-level-3-pin-words)); `auto` picks among them.
+`src/ops/level3/level3.cc` (float, CUDA only), and each arm was named by its `BATCHLAS_<OP>_ROUTE`
+word; `auto` picked among them. The table below is that state. Today's families and spellings are
+in [the level-3 pin words](dispatch.md#the-level-3-pin-words).
 
 | op | arms (pin words) | scalar types served |
 |---|---|---|
@@ -36,8 +45,9 @@ both triangles, kept only so the arithmetic the triangular kernels save was meas
 
 ### The shipped predicates
 
-Quoted as implemented, not as the notes describe them. Function names are the reference; line
-numbers drift and are left out.
+Historical: the predicates as implemented up to `ff340fc6`, not as the notes describe them.
+Function names are the reference; line numbers drift and are left out. They are what the
+transcribed symm/syrk/syr2k/trmm tables reproduce (hemm/herk/her2k's still run).
 
 ```cpp
 // syrk_custom_dispatch.cc syrk_prefer_triangular_tiles, n and k taken from C.rows() and the transA-selected extent
@@ -77,7 +87,8 @@ takes `syrk_triangular_tiles` unconditionally after the gram test fails
 passes the third disjunct, reaches the tile kernel, and `n >= 257` never runs. Reading these as a
 `preferred()` window is wrong in both directions (see
 [why the four ops are instrumented](#level-3-why-the-four-ops-are-instrumented-rather-than-routed)), and is why these
-four ops have **no tuned table** (no `select::choose`) and are instrumented at each terminal instead.
+four ops had **no tuned table** (no `select::choose`) until the level-3 flat-selection wave and were
+instrumented at each terminal instead.
 
 ### Level-3: non-float routes live only in cublas.cc
 
@@ -109,7 +120,7 @@ Why the non-float arms need no threshold of their own:
 * **trmm, non-float -> tile kernel wherever it fits.** The kernel is type-generic; only its
   routing was ever float. The alternative is the same expansion-plus-GEMM as for float, which is
   strictly more work than the GEMM it wraps, so there is nothing to weigh.
-* Both honour `=vendor` pins (`syrk_route_prefers_vendor`, `trmm_route_prefers_vendor`): the
+* Both honoured `=vendor` pins (`syrk_route_prefers_vendor`, `trmm_route_prefers_vendor`): the
   float router reads the whole pin word, but double and complex need the one bit too, or `=vendor` would silently measure the new route and report it as the old one.
 
 ## Boundaries and their evidence
@@ -668,6 +679,14 @@ beta == 0 meaning C is not read, so an uninitialised or poisoned C cannot turn t
 Why the level-3 family is laid out the way it is. Each item is a decision a future edit could
 undo by accident.
 
+**Status.** The first four items (terminal instrumentation, the cuBLASDx fused-tail hook, the
+sideways vendor seam and the `Level3Pin` parse) are history: `level3_coverage.hh`,
+`level3_fused*.{hh,cc}`, `level3_vendor_fallback.{hh,cc}`, the `*_custom_dispatch` files and
+`Level3Pin` were deleted in the level-3 flat-selection wave, and the four ops now record coverage
+through `select::TraceScope` and parse pins in `src/select` like every other op. They describe
+`ff340fc6` and earlier and are kept for the lessons. The last two items (`level3_shape.hh`,
+`triangular_expand.hh` and `expansion_budget.hh`) describe code that still ships.
+
 ### Level-3: why the four ops are instrumented rather than routed
 
 `src/backends/level3_coverage.hh`. WP1 changed where symm/syrk/syr2k/trmm terminate, and the only
@@ -687,8 +706,9 @@ beside a `return` and never in place of one, inert unless `BATCHLAS_COVERAGE_OUT
 A table would **not** be equivalent, because the thresholds are gate-only (see
 [where the decision actually happens](#where-the-decision-actually-happens)): transcribing them
 into the old `preferred()` rejected the tile route for 129 <= n <= 383 at every batch and sent
-n = 256 to a route that writes both triangles. Measuring first, transcribing later; moving them to
-`tuned/` is still an open debt in [dispatch.md](dispatch.md).
+n = 256 to a route that writes both triangles. Measuring first, transcribing later; the level-3
+flat-selection wave did move them to `tuned/`, transcribing the gates per grid cell at `ff340fc6`
+rather than as a `preferred()` window ([dispatch.md](dispatch.md)).
 
 The record's details are load-bearing: `native_supported` is a tri-state (see
 [the coverage instrument itself](#the-coverage-instrument-itself)); `uplo`/`side`/`diag`/`transA`
@@ -771,9 +791,10 @@ reaches its own `batchlas::detail` helpers unqualified, and introducing a
 
 ### Level-3: one route parse per variable
 
-Each op has exactly one parse of its environment variable: `detail::level3_pin`
-(`src/backends/route_common.hh`) turns `BATCHLAS_<OP>_ROUTE` into a `Level3Pin`, case-folded and
-trimmed, and a word the op does not take throws ([the level-3 pin words](dispatch.md#the-level-3-pin-words)).
+Each op has exactly one parse of its environment variable. Up to `ff340fc6` that was
+`detail::level3_pin` (`src/backends/route_common.hh`), which turned `BATCHLAS_<OP>_ROUTE` into a
+`Level3Pin`; today it is `src/select`'s, as for every other op, and a spelling the op does not take
+throws ([the level-3 pin words](dispatch.md#the-level-3-pin-words)).
 Before WP0, `BATCHLAS_TRMM_VARIANT` was read by two parsers that disagreed on its vocabulary:
 `parse_cublasdx_variant_request` understood `vendor`/`cublasdx|dx|custom`/`auto` and returned Auto
 for anything else, while `trmm_triangular_requested` looked for `triangular|tiles`. So
@@ -817,9 +838,10 @@ loads; the caller's ld is irrelevant because the expansion writes every element.
 
 **Why `expansion_budget.hh` lives outside `src/backends/`.** `src/extensions/sytrd_blocked.cc`
 must know whether her2k will take its batched-GEMM route or its per-batch host loop before it
-decides to call her2k at all, and it cannot include `triangular_expand.hh` (that pulls
-`cublasdx_dispatch_common.hh`, whose `<cuda_runtime_api.h>` is unguarded, while `sytrd_blocked.cc`
-is also built for ROCm and the host). One definition, not a copy: a reimplemented ceiling drifts
+decides to call her2k at all, and it could not include `triangular_expand.hh` (that pulled
+`cublasdx_dispatch_common.hh`, whose `<cuda_runtime_api.h>` was unguarded, while `sytrd_blocked.cc`
+is also built for ROCm and the host; `cublasdx_dispatch_common.hh` is deleted now, but the split
+stays). One definition, not a copy: a reimplemented ceiling drifts
 silently, and the caller believes it got the fast route and gets the host loop.
 
 **The bug that put `expansion_route_pin` there too.** `sytrd_blocked`'s her2k guard originally
@@ -845,18 +867,15 @@ Settings field.
 
 ### Routing and reachability
 
-3. **`symm` has no `expansion_fits` ceiling** where hemm, herk and her2k all have one:
-   `symm_expand_gemm` allocates the k x k x batch scratch unconditionally
-   (`symm_custom_dispatch.cc`), so a large enough symm hits the 2^31-element SYCL range
-   failure instead of falling back. Adding the check *is* a route change and needs measuring.
-4. **`double` symm has no expansion route at all** — the facade gate is float-only and
-   `symm_vendor` forwards to a per-batch `cublasDsymm` loop, while complex `hemm` and float
-   `symm` both get the expansion. Pre-existing.
-5. **Heterogeneous `symm` is unmeasured** — `symm_problem_supported` does not reject it, unlike
-   syrk's and syr2k's, so after WP1 S2 its expanded GEMM reaches `gemm_heterogeneous_vendor_impl`
-   rather than a strided-batched call on max dims. Probably a correctness *improvement*, untested.
-6. **`trmm`'s tile kernel is `Side::Left` only** — the right-side branch still expands. syev uses
-   Left only; `ormbr` has the same WY update, is not wired, and feeds gesvd.
+3. ~~`symm` has no `expansion_fits` ceiling~~: closed by the level-3 flat-selection wave; symm's
+   `expand` family checks it in `can_run`, and a shape over the budget takes the vendor.
+4. ~~`double` symm has no expansion route at all~~: `expand` serves double too (the double table
+   still ranks `vendor` first, as the old rule did; vendor-free it runs `expand`).
+5. ~~Heterogeneous `symm` is unmeasured~~: measured on `ff340fc6`; a heterogeneous B or C made the
+   expansion's gemm throw and a heterogeneous A ran at the storage order. `expand` now refuses
+   every heterogeneous operand, and so does the vendor (its loop answers at the storage order; known-defects #12).
+6. **`trmm`'s tile kernel is `Side::Left` only** — the right side takes the `expand` family. syev
+   uses Left only; `ormbr` has the same WY update, is not wired, and feeds gesvd.
 7. **ROCm has no `symm`, `hemm`, `herk` or `her2k`** — `rocblas.cc` instantiates only gemm, gemv,
    trsm, syrk, syr2k, trmm (`entry_points/level3.cc:398`); wiring the trmm tile kernel there
    is where `wy_trmm_applicable` would be re-measured.
@@ -886,7 +905,10 @@ symm/hemm measured loss region (`batch <= 2 && n <= 128`) and the shipped consta
 
 Post-WP8 `NoRouteError` census over `ctest -LE slow`: `trmm` 16, `herk` 16, `syrk` 12, `her2k` 12,
 `hemm` 12, `syr2k` 10, `symm` 8 — the double and complex arms trapped in `cublas.cc` plus the ops
-with no native arm. The suite pass count cannot show movement here; read the per-op census.
+with no native arm. The suite pass count cannot show movement here; read the per-op census. The
+level-3 flat-selection wave closed trmm (every dtype, both sides), symm (float and double), float
+syrk and syr2k entirely and double syrk at n <= 128; hemm, herk, her2k, double syrk above n = 128
+and double syr2k remain.
 
 ### Instrumentation and harness
 
