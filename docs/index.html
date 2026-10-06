@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BatchLAS — SYCL-first batched linear algebra library</title>
+<meta name="description" content="SYCL-first batched linear algebra library — batched eigensolver, SVD, and BLAS with CUDA and ROCm backends, faster than cuSOLVER for small matrices">
+<meta name="keywords" content="BatchLAS, sycl, cuda, rocm, gpu, eigensolver, batched blas, lapack, hpc, linear algebra, numerical computing">
+<meta name="author" content="jonasdelacour">
+<link rel="canonical" href="https://jonasdelacour.github.io/BatchLAS/">
+<link rel="icon" type="image/png" href="https://raw.githubusercontent.com/jonasdelacour/BatchLAS/main/BatchLAS_logo_transparent.png">
+
+<meta property="og:title" content="BatchLAS — SYCL-first batched linear algebra library">
+<meta property="og:description" content="SYCL-first batched linear algebra library — batched eigensolver, SVD, and BLAS with CUDA and ROCm backends, faster than cuSOLVER for small matrices">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://jonasdelacour.github.io/BatchLAS/">
+<meta property="og:image" content="https://raw.githubusercontent.com/jonasdelacour/BatchLAS/main/BatchLAS_logo_transparent.png">
+<meta property="og:site_name" content="BatchLAS">
+
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="BatchLAS — SYCL-first batched linear algebra library">
+<meta name="twitter:description" content="SYCL-first batched linear algebra library — batched eigensolver, SVD, and BLAS with CUDA and ROCm backends, faster than cuSOLVER for small matrices">
+<meta name="twitter:image" content="https://raw.githubusercontent.com/jonasdelacour/BatchLAS/main/BatchLAS_logo_transparent.png">
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareSourceCode",
+  "name": "BatchLAS",
+  "description": "SYCL-first batched linear algebra library — batched eigensolver, SVD, and BLAS with CUDA and ROCm backends, faster than cuSOLVER for small matrices",
+  "codeRepository": "https://github.com/jonasdelacour/BatchLAS",
+  "programmingLanguage": ["C++", "SYCL", "Python"],
+  "license": "https://opensource.org/licenses/MIT",
+  "author": {"@type": "Person", "name": "jonasdelacour"}
+}
+</script>
+
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1b1f24; --muted: #57606a; --border: #d8dee4;
+    --accent: #0b5cad; --accent-fg: #ffffff; --code-bg: #f4f6f8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1216; --fg: #e6edf3; --muted: #9aa5b1; --border: #2d333b;
+      --accent: #4c9be8; --accent-fg: #0f1216; --code-bg: #161b22;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--fg); }
+  body {
+    font: 17px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  main { max-width: 820px; margin: 0 auto; padding: 48px 16px 64px; }
+  header { text-align: center; margin-bottom: 40px; }
+  header img { width: 168px; height: auto; }
+  h1 { font-size: 2.6rem; margin: 12px 0 4px; letter-spacing: -0.02em; }
+  .tagline { color: var(--muted); font-size: 1.15rem; margin: 0 auto 24px; max-width: 640px; }
+  .cta {
+    display: inline-block; background: var(--accent); color: var(--accent-fg);
+    padding: 12px 22px; border-radius: 8px; text-decoration: none; font-weight: 600;
+  }
+  .cta:hover { opacity: 0.9; }
+  h2 { font-size: 1.35rem; margin: 40px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  a { color: var(--accent); }
+  ul { padding-left: 1.2em; }
+  li { margin: 4px 0; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.88em; }
+  pre {
+    background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px;
+    padding: 14px 16px; overflow-x: auto; line-height: 1.45;
+  }
+  :not(pre) > code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+  .note { color: var(--muted); font-size: 0.92rem; }
+  footer { margin-top: 56px; color: var(--muted); font-size: 0.9rem; text-align: center; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <img src="https://raw.githubusercontent.com/jonasdelacour/BatchLAS/main/BatchLAS_logo_transparent.png" alt="BatchLAS logo" width="168" height="168">
+    <h1>BatchLAS</h1>
+    <p class="tagline">A SYCL-first batched linear algebra library for GPUs: batched eigensolvers, SVD, factorizations and BLAS, with CUDA, ROCm, netlib and oneMKL backends.</p>
+    <a class="cta" href="https://github.com/jonasdelacour/BatchLAS">View BatchLAS on GitHub</a>
+  </header>
+
+  <section>
+    <h2>What is BatchLAS?</h2>
+    <p><strong>BatchLAS</strong> is a C++20 library for solving many small and medium dense linear algebra problems at once on the GPU. It is written <strong>SYCL-first</strong>: its own kernels are portable SYCL, and optional vendor backends plug in for <strong>CUDA</strong> (cuBLAS / cuSOLVER), <strong>ROCm</strong>, <strong>netlib</strong> BLAS/LAPACK and <strong>oneMKL</strong>. The backend is chosen from the device a queue runs on, so the same code targets different hardware.</p>
+    <p>An optional pybind11-based <strong>Python package</strong> exposes the library to NumPy dense arrays and SciPy sparse matrices.</p>
+  </section>
+
+  <section>
+    <h2>Features</h2>
+    <ul>
+      <li><strong>Batched BLAS:</strong> <code>gemm</code>, <code>gemv</code>, <code>symm</code>, <code>syrk</code>, <code>syr2k</code>, <code>trmm</code>, <code>trsm</code>, plus Hermitian <code>hemm</code>, <code>herk</code>, <code>her2k</code></li>
+      <li><strong>Batched LAPACK-style factorizations:</strong> Cholesky (<code>potrf</code>), LU (<code>getrf</code>, <code>getrs</code>, <code>getri</code>), QR (<code>geqrf</code>, <code>orgqr</code>, <code>ormqr</code>)</li>
+      <li><strong>Batched eigensolver and SVD:</strong> symmetric <code>syev</code>, partial <code>syevx</code>, and <code>gesvd</code> (one-sided Jacobi)</li>
+      <li><strong>Sparse and spectral:</strong> <code>spmm</code>, <code>lanczos</code>, tridiagonal <code>steqr</code> / <code>stedc</code>, <code>ritz_values</code>, <code>iluk</code> preconditioning</li>
+      <li><strong>Orthogonalization and utilities:</strong> <code>ortho</code> with several algorithms, matrix generators, norms, condition numbers</li>
+      <li><strong>Python bindings</strong> with NumPy/SciPy interop and twelve example notebooks</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Performance vs cuSOLVER</h2>
+    <p>BatchLAS's <code>Auto</code> mode routes each call &mdash; per routine, matrix size and batch size &mdash; between its own kernels and the vendor library, so where cuSOLVER is faster for a shape, that is the path taken. For batches of small matrices, BatchLAS's own kernels often win. Measurements committed in the repository (float, NVIDIA RTX 4090, CUDA backend, large batch):</p>
+    <ul>
+      <li><strong>Batched symmetric eigensolver (<code>syev</code>, with eigenvectors):</strong> at <code>n&nbsp;=&nbsp;320</code>, batch 819: 67.8&nbsp;µs vs cuSOLVER's 203.0&nbsp;µs per matrix (<strong>3.0×</strong>); at <code>n&nbsp;=&nbsp;448</code>, batch 585: <strong>2.1×</strong>. cuSOLVER wins at large <code>n</code>, and <code>Auto</code> routes there.</li>
+      <li><strong>Batched SVD (<code>gesvd</code> vs <code>cusolverDnXgesvdjBatched</code>):</strong> at <code>n&nbsp;=&nbsp;8</code>, batch 16384: 0.0064 vs 0.339&nbsp;µs per matrix; at <code>n&nbsp;=&nbsp;32</code>: 0.468 vs 0.768&nbsp;µs.</li>
+    </ul>
+    <p class="note">These are single-machine numbers; see the <a href="https://github.com/jonasdelacour/BatchLAS#performance">Performance section of the README</a> for full conditions and how to reproduce them.</p>
+  </section>
+
+  <section>
+    <h2>Quick start</h2>
+    <p>Build with a SYCL-capable compiler (DPC++ / Clang) using the CMake presets:</p>
+<pre><code>git clone https://github.com/jonasdelacour/BatchLAS.git
+cd BatchLAS
+cmake --preset dev
+cmake --build --preset dev</code></pre>
+    <p>Calling the C++ API &mdash; the backend comes from the queue, and options are structs with defaults:</p>
+<pre><code>#include &lt;batchlas.hh&gt;
+using namespace batchlas;
+
+Queue ctx(Device::default_device());          // backend resolved from the device
+auto e = linalg::eigh(ctx, A.view());         // batched eigenvalues + eigenvectors
+gemm(ctx, A.view(), B.view(), C.view(), {.alpha = 2.0f});
+ctx.wait();                                   // results readable after this</code></pre>
+    <p>Link from CMake with <code>find_package(BatchLAS CONFIG REQUIRED)</code> and <code>target_link_libraries(my_app PRIVATE BatchLAS::batchlas)</code>. See the <a href="https://github.com/jonasdelacour/BatchLAS/blob/main/docs/cpp-api.md">C++ API reference</a> for the full conventions.</p>
+  </section>
+
+  <section>
+    <h2>Source code and documentation</h2>
+    <p>BatchLAS is open source under the MIT License. Source, issues, build instructions and documentation are on GitHub:</p>
+    <p><a class="cta" href="https://github.com/jonasdelacour/BatchLAS">github.com/jonasdelacour/BatchLAS</a></p>
+  </section>
+
+  <footer>
+    BatchLAS &middot; SYCL batched linear algebra &middot; MIT License
+  </footer>
+</main>
+</body>
+</html>
