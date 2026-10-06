@@ -52,11 +52,13 @@ points are in @ref md_docs_2cpp-api.
 @defgroup linalg Convenience layer (batchlas::linalg)
 @brief Value-returning, NumPy-like wrappers over the entry points.
 
-@defgroup dispatch Dispatch and routing
-@brief How a call picks a Route{Origin, Algorithm}: RouteTable, supports(), preferred(), env overrides.
+@defgroup dispatch Backend dispatch and vendor seams
+@brief How a call reaches a backend: the Queue's backend, owning-argument forwarding, and the
+`backend::*_vendor` declarations the vendor families call.
 
-Design record: @ref md_docs_2design_2vendor-independence. Measurements behind
-each window: @ref perf_evidence.
+Which kernel runs for a shape is decided by flat kernel selection (developer docs:
+@ref selection; design: @ref design_flat_selection; per-op families and tables:
+@ref selection_tables). Measurements behind each op's choices: @ref perf_evidence.
 
 @defgroup workspace Workspace and memory
 @brief The per-Queue workspace arena, leases and BumpAllocator sizing.

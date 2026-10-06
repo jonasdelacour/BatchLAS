@@ -86,8 +86,12 @@ INPUT                  = docs/pages/index.md \
                          evaluation/README.md \
                          evaluation/tuning/README.md \
                          tests/README.md \
+                         tuned/README.md \
+                         tools/tune/README.md \
                          include/batchlas.hh \
                          include/batchlas \
+                         src/select \
+                         src/ops \
                          $(BATCHLAS_DOCS_GENERATED)
 INPUT_ENCODING         = UTF-8
 FILE_PATTERNS          = *.hh *.h *.md *.dox

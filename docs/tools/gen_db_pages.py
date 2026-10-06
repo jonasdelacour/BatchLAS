@@ -306,7 +306,7 @@ def selection_page(root):
         "kernel *families* the op can run (and the knobs each one takes), the table keys a call",
         "is matched on, and the tuner's grid; `tuned/<op>.<dtype>.<device>.txt` ranks the families",
         "per measured shape and `select::choose` takes the first runnable entry of the nearest",
-        "row. The design is @ref md_docs_2design_2flat-kernel-selection; the measurements behind",
+        "row. The design is @ref design_flat_selection; the measurements behind",
         "each op's families are on its evidence page.",
         "",
         "**Provenance** of a table: *measured* (timed by `tools/tune`), *converted* (from timed",
