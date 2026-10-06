@@ -4,8 +4,8 @@
 > `stride`, CSR strides), the owning `Matrix` versus the non-owning `MatrixView`, the
 > device-side `KernelMatrixView`, heterogeneous batches, the vector types, and the strong
 > integer types that keep positional arguments apart.
-> **Status:** current; checked against `include/batchlas/blas/matrix.hh` and `src/matrix.cc`
-> on 2026-09-30.
+> **Status:** current; checked against `include/batchlas/blas/matrix.hh`, `src/matrix.cc` and
+> `src/util/sycl-util-impl.cc` on 2026-10-06.
 
 Every entry point takes a `MatrixView`: a pointer, a shape, a leading dimension and a batch
 stride, over memory the caller owns. `Matrix` is the owning container that produces such
@@ -16,10 +16,11 @@ this page records why the model looks the way it does and what each type guarant
 ## Matrix model: why column-major
 
 Dense storage is column-major, as in LAPACK and the vendor BLAS/LAPACK libraries
-(cuBLAS, cuSOLVER, rocBLAS, rocSOLVER, CBLAS with `CblasColMajor`). Every vendor route passes
+(cuBLAS, cuSOLVER, rocBLAS, rocSOLVER, CBLAS with `CblasColMajor`). Every vendor kernel passes
 a `MatrixView`'s pointer, `ld` and stride straight through, with no transposition or copy, and
-the native kernels follow the same convention so the two kinds of route are interchangeable
-behind one `Route`. The `Layout` enum exists only to label host CBLAS/LAPACKE calls; there is
+the native kernels follow the same convention, so kernel selection can pick either kind for the
+same arguments without a layout conversion (see
+[flat kernel selection](flat-kernel-selection.md)). The `Layout` enum exists only to label host CBLAS/LAPACKE calls; there is
 no row-major `Matrix`.
 
 Row-major data is handled at the edge rather than inside the model: `gemm` by the operand
@@ -265,6 +266,9 @@ and swallow runtime errors (they are hints). For the same reason `MatrixView::fi
   items included, which on a sub-block view means neighbouring data.
 - `KernelMatrixView`'s slicing operators check the slice with `assert("...")`, which is always
   true, so an empty or inverted slice is not diagnosed.
+- `UnifiedVector`'s move assignment overwrites its pointer without freeing the previous
+  allocation, so moving into a non-empty `UnifiedVector` (and therefore into a non-empty
+  `Matrix` or `Vector`) leaks it. The header documents it as a trap.
 - `fill_diagonal(ctx, Span, k)` builds a `VectorView` of length `n` over a span that, for
   `k != 0` and one shared diagonal, holds only `n - |k|` values; the view's debug length assert
   can fire on a valid call.

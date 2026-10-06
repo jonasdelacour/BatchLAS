@@ -279,6 +279,25 @@ the reference BLAS `?trmm` is in place on `B`. `trsm` takes two and is in place:
 the solution replaces `B`. Expecting `trmm` to have updated `B`, or expecting
 `trsm` to have left it alone, gives a wrong answer, not a compile error.
 
+#### trsm: alpha moved next to the matrices
+
+In the positional spelling, `trsm`'s `alpha` sits in position 4, immediately
+after the matrices, to match `trmm`
+(`trsm<B>(ctx, A, B, alpha, side, uplo, trans, diag)`). It used to come last, so
+the two triangular routines disagreed on where the scalar went and only one of
+them could be written from memory. Two `= delete` overloads with the old order
+(`Side, Uplo, Transpose, Diag, T` after the matrices) turn the old spelling into
+a "call to deleted function" diagnostic that points at the tombstone, rather
+than "no matching function". A stale call
+could never have compiled into a wrong answer, because `Side`, `Uplo`,
+`Transpose` and `Diag` are all `enum class` and nothing converts to or from `T`.
+Both spellings need a tombstone: deleting only the `MatrixView` one would leave a
+`Matrix`-argument call binding to the new order with `alpha` where `side`
+belongs. The vendor wrapper `backend::trsm_vendor` still takes `alpha` last,
+which is why the `sig::*_vendor` aliases are spelled out per op rather than
+aliased to the public signature. The option-struct spelling
+(`trsm(ctx, A, B, {.alpha = ...})`) is unaffected.
+
 **"`uplo` triangle only" means the other triangle comes back exactly as it went
 in — including uninitialised.** `syrk`, `herk`, `syr2k` and `her2k` write the
 named half of `C` and do not touch the other one, and a freshly constructed
@@ -301,7 +320,7 @@ Zeroing `C` first (`Matrix::Zeros`, `view().fill_zeros(ctx)`) makes the other
 half defined, not symmetric — mirror it as well.
 
 **`gemm` handles a heterogeneous batch natively.** When the items of a batch
-carry differing `active_rows`/`active_cols`, `gemm` detects that and routes to
+carry differing `active_rows`/`active_cols`, `gemm` detects that and takes
 the heterogeneous path itself, on every backend — there is no separate entry
 point to reach for, and there has never been a `gemm` that could not do this.
 (A `gemm_heterogeneous` alias used to exist in the C++ headers; it forwarded to
@@ -1001,7 +1020,7 @@ default translator dispatches on the `std::` base, and BatchLAS registers no
 exception translator of its own.
 
 What the new types buy is **discrimination**. Before them, "your shapes are
-wrong", "no route serves this device", "the workspace is too small" and "the
+wrong", "no kernel serves this device", "the workspace is too small" and "the
 iteration did not converge" were three `std::runtime_error`s and one
 `std::invalid_argument`, told apart only by reading the message. In a batched
 solver that is the difference between *retry this batch smaller* and *abort the
@@ -1012,11 +1031,11 @@ run*.
 | `batchlas::invalid_argument` | `std::invalid_argument` | The call violates the API contract: a non-square view where a square one is required, mismatched batch sizes, a span shorter than the batch, a negative dimension, a null or non-USM pointer, an `ld` that is neither `0` nor at least `rows`, an enum value with no meaning here. | **No.** Nothing about the machine or the data will make these arguments legal. |
 | `batchlas::out_of_range` | `std::out_of_range` | An index is outside its container: `V.at(i, j, b)`, `V(i, j, b)`, `batch_item(b)`. Kept separate from the row above only so Python element access keeps raising `IndexError`. | **No.** |
 | `batchlas::error` | `std::runtime_error` | Base of the five below. Catch it for "the call failed at runtime, for some reason that is not a bad argument". | — |
-| `batchlas::unsupported` | `batchlas::error` | No route, kernel or backend **in this build on this device** serves the request: a complex type on a real-only native path, `Uplo::Upper` where only `Lower` is implemented, a device with no sub-group 32 under a CTA kernel, a backend that was not compiled in, an order past a kernel's register capacity. | **Not as asked** — but a different route, backend, scalar type or shape may work. This is the one to catch when you want to fall back. |
+| `batchlas::unsupported` | `batchlas::error` | No kernel or backend **in this build on this device** serves the request: a complex type on a real-only native path, `Uplo::Upper` where only `Lower` is implemented, a device with no sub-group 32 under a CTA kernel, a backend that was not compiled in, an order past a kernel's register capacity. | **Not as asked** — but a different kernel family (a `BATCHLAS_<OP>_ROUTE` pin), backend, scalar type or shape may work. This is the one to catch when you want to fall back. |
 | `batchlas::device_error` | `batchlas::error` | The device or its vendor runtime failed: a cuBLAS/cuSOLVER/rocBLAS status code, a launch failure, a handle that would not initialise, a `sycl::malloc_device` that returned null, no device of the requested type. | **Sometimes** — and this is the only class where a retry is ever right. A transient launch failure or an allocation lost to another process can clear; a status code that repeats will not. |
 | `batchlas::workspace_error` | `batchlas::error` | The scratch handed in is too small, or the arena ran out of it. Every routine's `*_buffer_size()` is the contract; this is what fires when the buffer actually passed does not honour it. | **Yes — retry smaller.** Re-query `*_buffer_size()` and pass that many bytes, or halve the batch: a batched solve's workspace scales with the batch. |
 | `batchlas::convergence_error` | `batchlas::error` | An iterative kernel did not converge, or a factorisation broke down on the data: an eigen/SVD sweep budget exhausted, a bidiagonal QR that never deflated, an ILU(k) pivot that was zero with no usable shift. LAPACK's `info > 0`. | **With different parameters, not with the same ones.** A looser tolerance, a higher sweep cap, a different algorithm or rescaled input may converge; the identical call will not. Prefer the per-item `info` spans below, which say *which* item failed. |
-| `batchlas::internal_error` | `batchlas::error` | BatchLAS is internally inconsistent: a resolver picked a native route no linked kernel serves, a capability query and the facade that reads it disagree, a branch documented "unreachable" was reached. | **No**, and it is not fixable from the call site. It is a bug here; report it with the message, which names the two things that disagreed. |
+| `batchlas::internal_error` | `batchlas::error` | BatchLAS is internally inconsistent: kernel selection picked a family that no linked kernel serves, a capability query and the entry point that reads it disagree, a branch documented "unreachable" was reached. One caller-reachable case today: `gesv` and `posv` (so `linalg::solve` and `linalg::solve_spd`) throw it for an empty problem, `n`, `nrhs` or `batch` below 1, and for a heterogeneous batch. | **No**, and it is not fixable from the call site. It is a bug here; report it with the message, which names the two things that disagreed. |
 | `batchlas::api_misuse` | `batchlas::error` | The call is well-formed but arrives in the wrong state or order: a `Queue` used from a thread other than its owner, `attach_to_current_thread()` with a workspace lease outstanding, `configure()` after a `Queue` already exists, a sizing-mode `BumpAllocator` query asked of a real pool. | **No.** Reorder the calls, or confine the object to one thread. |
 | `batchlas::NoRouteError` (`<batchlas/no_route.hh>`) | `std::runtime_error` | Nothing in this build serves the call: no native kernel for the shape and no vendor library compiled in, typically a `-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF` build. `op()`, `backend()` and `scalar()` say which call. `<batchlas.hh>` brings it in. Renamed from `batchlas::dispatch::NoRouteError` (`<batchlas/blas/dispatch/no_route.hh>`, removed). | **Not in this build.** Re-enable the vendor library, or use a shape a native kernel serves. |
 
@@ -1046,6 +1065,14 @@ Two failure classes stay **outside** the hierarchy on purpose, so
 - **`sycl::exception`**, raised by the SYCL runtime itself — including everything
   the device reports asynchronously at `ctx.wait_and_throw()`. It is not ours to
   reclassify.
+
+Kernel selection (`src/select/`) also throws plain `std::` types, outside the
+hierarchy: a
+`BATCHLAS_<OP>_ROUTE` value that does not parse, names a family not compiled for
+the scalar type, or cannot run the shape throws `std::invalid_argument`; a
+malformed table in `BATCHLAS_TUNED_DIR`, or a call no family can run in a build
+that has the op's vendor library, throws `std::runtime_error`. A
+`catch (const batchlas::exception&)` does not see either.
 
 A boundary that must let nothing escape therefore still needs a
 `catch (const std::exception&)` behind the BatchLAS one. Every message names the
@@ -1154,10 +1181,13 @@ Three properties are worth relying on:
   leave at zero cannot distinguish "the solver wrote 0" from "nothing wrote it";
   fill it with `-1` and a surviving `-1` is a defect rather than a silent pass.
 
-Two limits to know about. `stedc`'s status covers its own merges, not the leaf
-`steqr` solves underneath it — a leaf that runs out of sweeps is not reported
-through `stedc`'s `info` today. And `stein` (inverse iteration, reached through
-`syevx`'s `DirectSubset` route) runs a fixed iteration count with no convergence
+`stedc`'s status covers both its merges and the leaf `steqr` solves underneath
+them: a leaf that runs out of sweeps raises the caller's `info` for the item it
+belongs to (see [stedc: convergence reporting through
+info](perf/stedc.md#stedc-convergence-reporting-through-info)).
+
+One limit to know about. `stein` (inverse iteration, reached through
+`syevx`'s `DirectSubset` path) runs a fixed iteration count with no convergence
 test at all, so it has nothing to report; LAPACK's `?stein` counts the vectors
 that failed, and BatchLAS does not measure it.
 
@@ -1255,6 +1285,55 @@ with_backend(ctx, [&](auto Back) {
 Use it rather than hardcoding `Backend::CUDA` in code that has to run on more
 than one backend.
 
+### Which kernel runs: flat kernel selection
+
+The backend says *which library build* a call goes to; it does not say which
+kernel runs. Inside every entry point, after argument validation, the op picks
+one **kernel family** for this call — a native kernel such as `tiny`, `cta`,
+`lpanel:panel=8` or `blocked`, or `vendor` (the cuBLAS/cuSOLVER/rocBLAS/host
+LAPACK call) — and then launches exactly that. The whole decision for an op is
+one file, `src/ops/<op>/<op>.cc`, with its vocabulary in `src/ops/<op>/choice.hh`.
+
+- **Tables, per device.** Each op ships ranked tables
+  `tuned/<op>.<dtype>.<arch>.txt`, where `<arch>` is the device key (`sm_89`,
+  `sm_120`, ..., `cpu`), embedded at
+  build time. A call looks up the nearest measured shape and takes the first
+  family in that row whose correctness predicate (`can_run`) admits the call;
+  when none does it tries the next table in borrow order, and then the op's fixed
+  last-resort order. A GPU with no table of its own borrows the nearest one and
+  prints a one-line warning per op, such as
+  `batchlas: potrf has no float table for sm_86; borrowing sm_89 (run tools/tune to tune this %device)`;
+  the CPU never borrows a GPU table.
+  @ref selection_tables shows, for every op, its families and which family ranks
+  first where; `tuned/README.md` says how each table was produced.
+- **Correctness is never traded for speed.** `can_run` is false only where the
+  kernel would throw or answer wrongly, so any family it admits gives the right
+  answer; the table only orders them by measured (or, for transcribed tables,
+  formerly preferred) speed.
+- **Sizing agrees with running.** `*_buffer_size` makes the same choice as the
+  call it sizes, given the same arguments and the same environment, and returns
+  what that family needs.
+- **Nothing runnable.** When no family can run the call and the op's vendor
+  library is not compiled in (a `-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF` build), the
+  call throws `batchlas::NoRouteError`; see *What gets thrown*. With the library
+  compiled in, an exhausted walk throws `std::runtime_error` with the message
+  `<op>: no runnable kernel on <%device>`.
+
+Three environment variables expose the choice (all in [Configuration](#configuration)):
+
+| variable | effect |
+| --- | --- |
+| `BATCHLAS_<OP>_ROUTE` | Pins the op: `auto`, `native` (best runnable non-vendor family in the row), `vendor`, or a family spelling from the op's `choice.hh` (`lpanel:panel=8`, `blocked`, ...). A spelling that does not parse, is not compiled for the scalar type, or cannot run this shape throws `std::invalid_argument`; `native` and `vendor` fall back to `auto` with a warning when nothing of that kind can run. |
+| `BATCHLAS_SELECT_TRACE=1` | Prints one line per call to stderr: op, scalar, shape, the chosen family, its time and the runner-up's (for a measured row), and which table answered (or `pinned`, `last resort`), indented for nested calls (a blocked `potrf` shows its `trsm` and `gemm` underneath). |
+| `BATCHLAS_TUNED_DIR=<dir>` | A same-named table file in `<dir>` replaces the built-in one; trace lines then say `override`. |
+
+Nested ops decide for themselves: a blocked factorisation calls the *public*
+`gemm` and `trsm`, which consult their own tables. Not every op has a table yet;
+the ops that still choose by hand (some level-3 routines) are the ones absent
+from @ref selection_tables. The design, its rules and the record of what was
+built are in [flat kernel selection](design/flat-kernel-selection.md); why the
+previous `RouteTable` layer was replaced is in its section 1.
+
 ## Configuration
 
 Everything BatchLAS reads out of the process environment lands in one typed struct.
@@ -1287,12 +1366,12 @@ batchlas::configure(s);                     // before the first Queue
 
 **`configure()` is only permitted until the first `Queue` is constructed.** After
 that it throws `std::runtime_error` and changes nothing. The deadline is not
-bureaucracy: a route changed halfway through a run makes two calls in one process
+bureaucracy: a pin changed halfway through a run makes two calls in one process
 disagree about which kernel they used — and several of these knobs are read by a
 `*_buffer_size()` query as well as by the matching solve, some of them changing the
 size, so a change taken mid-run under-sizes a workspace the caller has already
 allocated. `Queue`'s constructor is the latch because it is the earliest point at
-which a dispatch decision can already have been made.
+which a kernel choice can already have been made.
 
 An explicit `configure()` is the last word: it beats whatever the environment said at
 the moment you call it. It installs the struct as it stands; a later
@@ -1339,7 +1418,7 @@ Two cautions carried over from the call sites this replaced:
 
 ### `BATCHLAS_ALLOW_UNSAFE_ENV`
 
-Most of the knobs pick a route, a launch geometry or a dump path: setting one by
+Most of the knobs pick a kernel, a launch geometry or a dump path: setting one by
 accident costs a measurement, not a result. A few are different in kind, because they
 remove a check rather than change one, and those live in `Settings::unsafe` behind a
 CMake option:
@@ -1422,12 +1501,16 @@ The 19 ops: `gemm`, `gemv`, `trsm`, `trmm`, `symm`, `syrk`, `syr2k`, `potrf`, `p
 `getrf`, `getrs`, `getri`, `gesv`, `geqrf`, `orgqr`, `ormqr`, `syev`, `gesvd`, `spmm`.
 `route(op)` throws `std::invalid_argument` for any other name. Values are `auto`,
 `native`, `vendor` or a choice spelling from the op's `src/ops/<op>/choice.hh`
-(`lpanel:panel=8`, `reg:m=128:n=128:k=8:u=1`, ...), parsed by `src/select/`; the
-level-3 ops `trmm`, `symm`, `syrk` and `syr2k` take `auto`, `native`, `vendor`,
-`cublasdx` and their kernel words (`triangular`, `gram`, `expand`). Case and
-surrounding whitespace are ignored. An unknown value, or a choice the shape cannot
-run, throws (docs/design/flat-kernel-selection.md §5.3, §12). The old per-op
-spellings `BATCHLAS_<OP>_VARIANT` and `BATCHLAS_<OP>_PROVIDER` are no longer read.
+(`lpanel:panel=8`, `reg:m=128:n=128:k=8:u=1`, ...), parsed by `src/select/`; a
+level-3 op that still selects by hand parses its own words instead (`auto`,
+`native`, `vendor`, `cublasdx` and its kernel words such as `triangular`, `gram`,
+`expand`). Case and surrounding whitespace are ignored. An unknown value, or a
+choice the shape cannot run, throws; `native` and `vendor` fall back to `auto`
+with a warning when nothing of that kind can run. What each word selects is in
+[Which kernel runs](#which-kernel-runs-flat-kernel-selection) and, in full, in
+[flat kernel selection](design/flat-kernel-selection.md) (sections 5.3 and 12).
+The old per-op spellings `BATCHLAS_<OP>_VARIANT` and `BATCHLAS_<OP>_PROVIDER` are
+no longer read.
 
 **`selection`** — which kernel or algorithm runs, for the knobs that are not part of
 the route vocabulary. Three of these override an explicit API argument, which is the
@@ -1444,7 +1527,7 @@ sharpest form of the problem this section exists to fix.
 | `getrs_laswp` | `BATCHLAS_GETRS_LASWP` | `EnvValue` | unset (`nrhs` gate) |
 | `iluk_device` | `BATCHLAS_ILUK_DEVICE` | `EnvValue` | unset (`batch >= 32`); only `0`/`1` are inspected |
 | `latrd_impl` | `BATCHLAS_LATRD_IMPL` | `EnvValue` | unset (legacy) |
-| `ormqr_impl` | `BATCHLAS_ORMQR_IMPL` | `EnvValue` | unset (legacy); only `device` has an effect |
+| `ormqr_impl` | `BATCHLAS_ORMQR_IMPL` | `EnvValue` | unset (legacy); only `%device` has an effect |
 | `ormqr_wy` | `BATCHLAS_ORMQR_WY` | `EnvValue` | unset (measured) |
 | `ortho_gram` | `BATCHLAS_ORTHO_GRAM` | `EnvValue` | unset; only `gemm` has an effect |
 | `sb2st_back_wave` | `BATCHLAS_SB2ST_BACK_WAVE` | `EnvValue` | unset (wave on) — **fails open**, and its own disable set is wider than `env_falsy` |
@@ -1459,7 +1542,7 @@ sharpest form of the problem this section exists to fix.
 | `syevx_soft_lock` | `BATCHLAS_SYEVX_SOFT_LOCK` | `EnvValue` | unset; its parser is inverted, so `=off` reads as on |
 | `sytrd_force_local_small` | `BATCHLAS_SYTRD_FORCE_LOCAL_SMALL` | `bool` | `false` |
 | `sytrd_fuse_panel_update` | `BATCHLAS_SYTRD_FUSE_PANEL_UPDATE` | `std::optional<bool>` | `nullopt` (tuned per `n`) — the tri-state knob |
-| `sytrd_impl` | `BATCHLAS_SYTRD_IMPL` | `EnvValue` | unset (legacy); only `device` has an effect |
+| `sytrd_impl` | `BATCHLAS_SYTRD_IMPL` | `EnvValue` | unset (legacy); only `%device` has an effect |
 | `sytrd_trailing_update` | `BATCHLAS_SYTRD_TRAILING_UPDATE` | `EnvValue` | unset (per backend) |
 | `tuned_dir` | `BATCHLAS_TUNED_DIR` | `EnvValue` | unset (built-in select tables only) |
 

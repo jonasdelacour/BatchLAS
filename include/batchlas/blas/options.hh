@@ -596,7 +596,7 @@ inline Event potrf(Queue& ctx, const MA& A, const PotrfOptions& opts, Span<std::
 ///              factor, the other triangle is not referenced
 /// @param opts  uplo (default Lower) and an optional per-item `info` span
 /// @return      event of the last enqueued kernel
-/// @pre   A matrix that is not positive definite yields a non-zero `info` entry and
+/// @note  A matrix that is not positive definite yields a non-zero `info` entry and
 ///        an undefined factor for that item; no exception.
 /// @throws batchlas::invalid_argument if `A` is not square or `opts.info` is non-empty
 ///         and shorter than the batch

@@ -1,8 +1,9 @@
 #pragma once
 
-// What this build links and what a run reached, as CSV in $BATCHLAS_COVERAGE_OUT.<pid>; the
-// columns are a contract with scripts/, tools/tune and benchviz. The gate is a runtime bool in
-// one TU. evidence: docs/perf/dispatch.md#the-coverage-instrument
+/// @file
+/// @brief What this build links and what a run reached, as CSV in BATCHLAS_COVERAGE_OUT.pid; the
+/// columns are a contract with scripts/, tools/tune and benchviz. @ingroup selection
+// evidence: docs/perf/dispatch.md#dispatch-the-coverage-instrument
 
 #include <batchlas/export.hh>
 #include <batchlas/no_route.hh>
@@ -10,7 +11,7 @@
 #include <cstdint>
 #include <string>
 
-namespace batchlas::coverage {
+namespace batchlas::coverage {  /** @addtogroup selection */ /** @{ */
 
 struct Shape {  // the row key: different triangles or operands are different rows
     Op op = Op::COUNT;
@@ -36,8 +37,8 @@ struct Shape {  // the row key: different triangles or operands are different ro
     }
 };
 
-// A `reached` row: origin "native"/"vendor" and the choice spelling. native_route_supported
-// is 1, 0, or -1 when the call site cannot tell.
+/// A `reached` row: origin "native"/"vendor" and the choice spelling. native_route_supported
+/// is 1, 0, or -1 when the call site cannot tell.
 BATCHLAS_API void record_choice(Op op, ScalarKind scalar, Backend backend, const Shape& shape,
                                 const char* origin, const char* spelling, bool native_route_existed,
                                 int native_route_supported);
@@ -47,9 +48,9 @@ BATCHLAS_API void record_miss(  // a call that found nothing to run; always reco
 
 BATCHLAS_API std::string static_table();  // the `linked` rows: what this build contains
 
-// Set once from $BATCHLAS_COVERAGE_OUT; tests toggle it across the DSO boundary.
+/// Set once from $BATCHLAS_COVERAGE_OUT; tests toggle it across the DSO boundary (a runtime bool in one TU).
 BATCHLAS_API extern bool g_dynamic_enabled;
 
 inline bool dynamic_enabled() { return g_dynamic_enabled; }
 
-} // namespace batchlas::coverage
+/** @} */ } // namespace batchlas::coverage

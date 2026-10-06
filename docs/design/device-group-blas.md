@@ -5,7 +5,9 @@
 > how the executor type decides the collective scope, the local-memory workspace
 > protocol, and the register and local-memory caveats of the sub-group fast paths.
 > **Status:** current. Written 2026-09-30 from the headers under
-> `include/batchlas/blas/device/`; no measurements are recorded here.
+> `include/batchlas/blas/device/`; revised 2026-10-06 after the flat kernel selection
+> merge (the 3-D launch race and the relation to `src/select/` added). No
+> measurements are recorded here.
 
 The device group BLAS is a set of function templates that run **inside** a SYCL
 kernel. A group of work-items (a work-group, a sub-group, or the work-group of an
@@ -104,13 +106,36 @@ per call, and only when all of these hold:
 `DeviceBlasPolicy` is ignored by the level-1 operations, `ger` and `trmv`, which have a
 single implementation.
 
-**Three-dimensional launches.** With an `nd_item<3>`, dimensions 1 and 2 of the
-work-group id index output tiles (128 x 64 for the register-tiled paths, 32 x 8
-work-items per group), so several work-groups share one output matrix. When no fast
-path applies to a call, `gemm`, `syrk`/`herk` and `syr2k`/`her2k` run the generic
-path in **tile-group (0, 0) only**: every group running the generic loop over the
-whole output would race. The result is correct but computed by one work-group, so a
-3-D launch that misses its fast path is slow rather than wrong.
+### Device group BLAS: the 3-D launch generic fallback
+
+With an `nd_item<3>`, dimensions 1 and 2 of the work-group id index output tiles
+(128 x 64 for the register-tiled paths, 32 x 8 work-items per group), so several
+work-groups share one output matrix. Only the tiled kernels (register-tiled, aligned
+GEMM, complex rank-k / rank-2k) read those dimensions; every other path covers the **whole** output from inside one
+work-group. So when no tiled path applies, `gemm`, `syrk`/`herk` and
+`syr2k`/`her2k` run the generic path in **tile-group (0, 0) only**: every group
+running the generic loop over the whole output would race on `C` (a later group would
+read a `C` that an earlier group already scaled by `beta`). The result is correct but
+computed by one work-group, so a 3-D launch that misses its fast path is slow rather
+than wrong. The guard sits in the dispatch functions of `group_blas_gemm.hh` and
+`group_blas_rankk.hh`, which cite this section.
+
+The guard is narrower than the hazard. Read from the dispatch code on 2026-10-06, not
+reproduced by a test:
+
+* In `gemm`, the non-register sub-group path (`detail::subgroup::gemm`, taken for
+  `float` when the register-tiled path is not, e.g. no workspace or a work-group that
+  is not 256 wide) is tried **before** the tile-group guard, and it partitions tiles
+  by the work-group-local sub-group id. Every tile-group then runs it over the whole
+  output.
+* `symm` and `trmm` have no tile-group guard at all: their non-register sub-group path
+  and their generic path both run in every work-group of a 3-D launch.
+
+With `beta == 0` every group writes the same values and the race is benign; with
+`beta != 0`, or an in-place `trmm`, the output is wrong. Until this is fixed, launch
+these operations in 3-D only with the shape and workspace that admit the
+register-tiled path, or with a single tile-group (global range equal to the local
+range in dimensions 1 and 2).
 
 ## Device group BLAS: the workspace protocol
 
@@ -190,7 +215,20 @@ In the library: `src/extensions/latrd_lower_panel.cc`, `larft_wy.hh`,
 `ormqr_cta.cc`, `ormqr_blocked.cc`, `sytrd_blocked.cc`, and `src/math-helpers.hh`.
 Tests: `tests/device_blas_tests.cc` (every operation against a host reference, and the
 `Auto` and `Generic` policies against each other). Benchmarks:
-`benchmarks/device_blas_level{1,2,3}_benchmark.cc`.
+`benchmarks/device_blas_level{2,3}_benchmark.cc` (there is no level-1 benchmark).
+
+## Device group BLAS: relation to flat kernel selection
+
+Host-side operations choose a kernel per call through the flat kernel selection layer
+(`src/select/`, one `src/ops/<op>/` directory per operation, per-device tables under
+`tuned/`; see `docs/design/flat-kernel-selection.md`). The device group BLAS is
+**outside** that layer. A call to `batchlas::device::gemm` from inside a kernel is
+never looked up in a table, traced or pinned by `BATCHLAS_<OP>_ROUTE`; its only choice
+is the in-kernel one described above (executor type, `DeviceBlasPolicy`, scalar type,
+work-group shape and workspace), and that choice is fixed in the header, not tuned per
+device. A host op that launches a kernel built on these templates is selected like any
+other host kernel; which device-BLAS path then runs inside it follows from how that
+kernel was launched.
 
 ## Device group BLAS: open debts
 
@@ -198,5 +236,10 @@ Tests: `tests/device_blas_tests.cc` (every operation against a host reference, a
   shape, the minimum extents, the `float`-only type list) are design constants, not
   measured windows.
 * No triangular solve and no `hemm`.
+* The 3-D tile-group race in `gemm` (non-register sub-group path), `symm` and `trmm`;
+  see [the 3-D launch generic fallback](#device-group-blas-the-3-d-launch-generic-fallback).
+  What would settle it: a `device_blas_tests` case per op with an `nd_item<3>` launch of
+  at least 2 x 2 tile-groups, `beta != 0`, and no workspace (so the register path is
+  ineligible), compared against the host reference.
 * The tiled `symv` / `hemv` path cannot take an `nd_item` executor, unlike `gemv`, which
   unwraps one to its work-group.

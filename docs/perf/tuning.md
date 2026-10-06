@@ -59,7 +59,8 @@ Two rules that came out of that retune and bind the next one:
   through `syev`, overruling stedc's own benchmark, which measures the merge in isolation and
   disagrees with its consumer.
 - **A constant that the heuristic already matches stays 0.** The sb2st back-transform geometry
-  spans 3.6x across its grid at n = 1024, but the shape-adaptive heuristic already picks the
+  (the wave-parallel path, about 53% of `syev` at n = 1024, as recorded in the header before
+  2026-09-30) spans 3.6x across its grid at n = 1024, but the shape-adaptive heuristic already picks the
   winner to within 0.6%, so freezing it into buckets would only lose adaptivity on unmeasured
   shapes. The sb2st bench stays in the default space as a tripwire.
 
@@ -85,8 +86,12 @@ variables are `BATCHLAS_TUNE_{ORMQR_BLOCK_SIZE, GEBRD_BLOCK_SIZE, SB2ST_BACK_TIL
 SY2SB_ORMQR_NB, SYTRD_BLOCK_SIZE, LATRD_WG_HINT, STEDC_RECURSION_THRESHOLD, STEDC_MERGE_VARIANT,
 STEDC_THREADS_PER_ROOT, STEDC_WG_MULTIPLIER}`.
 
-The contract, which matches `BATCHLAS_SY2SB_ORMQR_NB` in `src/extensions/sytrd_sy2sb.cc` and
-`BATCHLAS_SYEV_TWO_STAGE_KD` in `src/extensions/two_stage_common.hh`:
+The contract below was originally described as matching `BATCHLAS_SY2SB_ORMQR_NB` and
+`BATCHLAS_SYEV_TWO_STAGE_KD`. As of 2026-10-06 neither does: `BATCHLAS_SY2SB_ORMQR_NB` is
+three-valued (`0` or `off` means "never hint", values above 1024 are ignored;
+`sy2sb_ormqr_nb_env` in `src/extensions/sytrd_sy2sb.cc`), and `BATCHLAS_SYEV_TWO_STAGE_KD` goes
+through `env_positive_int_or` in `src/util/settings.cc`, which accepts `"16x"`. The
+`BATCHLAS_TUNE_*` contract is:
 
 - **Parser.** `strtol` with an explicit reject: unset, empty, unparseable, trailing garbage,
   non-positive or above `INT32_MAX` all return the compiled constant, bit-for-bit the
@@ -120,8 +125,19 @@ template (`_emit_header` in `evaluation/tuning/generate_tuning_header.py`). Any 
 accessor, to `tuning_env_override`, or to the `#include <batchlas/settings.hh>` that brings in
 `EnvValue` must land in the template too, or the next retune emits a header that no longer
 compiles or silently reverts the change. The same holds for the Doxygen documentation and the
-evidence pointers in the header: the template carries only short comments, so a regeneration
-drops them unless the template is updated first.
+evidence pointers in the header: the template carries them verbatim, so a comment edit in the
+header must be copied into the template too.
+
+As of 2026-10-06 the template is the committed header with each constant replaced by its
+placeholder, plus one extra line, `// Source profile: <path>`, after the "GENERATED" banner.
+Regenerating with the committed constants reproduces the header exactly apart from that line.
+The rebuild also fixed a latent defect: the template is a Python f-string, and it spelled the
+C++ character literal `'\0'` with a single backslash, which Python turns into a raw NUL byte. Two
+NULs reached every regenerated header (inside `tuning_env_override`). DPC++ clang still compiles
+them, with a `-Wnull-character` warning per literal ("null character(s) preserved in char
+literal"), but the file stops being plain text: git treats it as binary and diffs nothing. The
+committed header never showed it because retunes were ported by hand (see "The committed header wins", below). Check a template edit by
+regenerating with the committed constants and diffing.
 
 **The committed header wins.** CMake also generates a `tuning_params.hh` into the build tree from
 `cmake/tuning_params.h.in`, but `include/` precedes the build tree on the include path, so the

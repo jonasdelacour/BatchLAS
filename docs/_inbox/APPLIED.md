@@ -1,0 +1,53 @@
+# Applied inbox items
+
+- APPLIED by H1-matrix: A2-syevx: For whoever owns include/batchlas/blas/enums.hh (lines ~326-327) (SyevxAlgorithm enumerator docs state DirectSubset and Filtered as implemented; verified against src/extensions/syevx*.cc)
+- APPLIED by R-H6: A4-tridiag item 3 (stale SteqrUpdateScheme 'PG is the current default' in extensions.hh; the enum doc now names EXP as the default)
+- APPLIED by R-H6: H5-factor-api: For the owner of include/batchlas/blas/extensions.hh (ormbr contract copied onto the extensions.hh declaration)
+- APPLIED by R-H3: H4-blas-api.md "-> docs/cpp-api.md: trsm: alpha moved next to the matrices" (new heading #### trsm: alpha moved next to the matrices under Dense BLAS)
+- APPLIED by S4b-eigen: S3-factor: syev: the Upper-to-Lower mirror for Lower-only providers (merged into docs/perf/syev.md under that heading; uplo_mirror.hh:4 now resolves)
+- APPLIED by S4b-eigen: A1-syev: For whoever owns src/extensions/sytrd_blocked.cc (~line 813) (OPEN note gone; sytrd_blocked.cc points at syev.md#syev-her2k-trailing-update-for-complex-float-wp3)
+- APPLIED by S4b-eigen: A1-syev: For whoever owns src/extensions/syev_blocked.cc (line 259) (stale function name gone; comment now cites the jobz=N rows of tuned/syev.<dtype>.<device>.txt)
+- APPLIED by S4b-eigen: A1-syev: For whoever owns src/extensions/two_stage_common.hh (choose_two_stage_kd, lines ~41-103) (invariant + pointer only)
+- APPLIED by S4b-eigen: A5-misc: docs/perf/syev.md (syev shard) (three cited headings kept; the Jacobi plan is described as never committed)
+- APPLIED by S4b-eigen: A4-tridiag: item 5, stedc recursive driver forwards jobz to the leaf (recorded at docs/perf/stedc.md#stedc-eigenvalues-only-still-builds-eigenvectors)
+- APPLIED by S4b-eigen: A4-tridiag: item 2, SYEV_RETUNE_RESULTS section 14 summary (docs/perf/stedc.md#stedc-current-tuning-values)
+- APPLIED by S6-rest: S4b-eigen: known defects: the CTA SYTRD Lower path
+- APPLIED by S6-rest: S4b-eigen: known defects: stedc recursive driver forwards jobz to the leaf (already a candidate; cross-linked to the stedc page)
+- APPLIED by S6-rest: H3-conventions: linalg::qr returns a wrong QR after an earlier call in the process
+- APPLIED by S6-rest: S2-kernels: stale line citations into the route builders (route files deleted in P3.3; citations marked historical; the trsm_op_shape backend item recorded as superseded)
+- APPLIED by S6-rest: S2-kernels: src/util/queue-impl.cc line 367 (the route-builder citation replaced by the select::describe wording; no line citation left)
+- APPLIED by S6-rest: H7-dispatch-device: kernel-heuristics: the power-of-two rounding assumes a 32-bit long
+- APPLIED by S6-rest: H7-dispatch-device: miniacc --help used to exit (as 'Known defects: fixed while documenting')
+- APPLIED by S6-rest: S1-level3: trmm generic recursion reads the whole square of A
+- APPLIED by S6-rest: H1-matrix: matrix and vector container defects
+- APPLIED by S6-rest: S4a-syevx: citable anchors for the numbered defects (partial: #11 renamed to 'Defect 11: ...' and the line citations of #1/#3 refreshed; #1/#3/#14 kept numbered because other pages and a test link their current slugs, see docs/_inbox/S6-rest.md)
+- APPLIED by S6-rest: H2-core: For whoever owns docs/design/known-defects.md (environment parser defects, as a candidates entry)
+- APPLIED by S6-rest: H7-device: device group BLAS: the 3-D tile-group race in gemm, symm and trmm (candidates entry linking device-group-blas.md)
+- APPLIED by S6-rest: H6-eigen-api: open items francis_sweep and tridiagonal_solver Q.ld() (candidates entries in known-defects.md)
+- APPLIED by S6-rest: A3-gesvd: known-defects candidate gesvdj_cta C=64 rescale (already present in the candidates list)
+- APPLIED by R-H3 (reviewer): R-H6.md "-> docs/cpp-api.md: stale claim in Convergence status" (stedc leaf status now reported; stein the only limit)
+- APPLIED by R-H2: H1-matrix: symbol visibility: enums used as template arguments
+- APPLIED by R-H2: H1-matrix: symbol visibility: the export attribute on the Matrix class template
+- APPLIED by R-H2: H3-conventions: symbol visibility: BinaryOp is a template-argument enum too
+- APPLIED by R-H2: H2-core: For whoever owns evaluation/tuning/generate_tuning_header.py (no page)
+- APPLIED by R-H2: A4-tridiag: item 1 (tuning_params.hh and generator stedc comments shrunk to trap + pointer)
+- APPLIED by R-H2: A2-syevx: For whoever owns include/batchlas/settings.hh (BATCHLAS_SYEVX_FILTER_DEGREE_AUTO pointer)
+- APPLIED by S6-rest-review: H1-matrix: UnifiedVector move assignment leaks (candidates entry in known-defects.md)
+- APPLIED by S6-rest-review: R-H2: candidate row "kernel selection throws outside the error hierarchy" (candidates entry in known-defects.md)
+- APPLIED by S6-rest-review: S4b-eigen: tridiagonal_solver addresses Q with stride n (already present as a candidates entry, from H6)
+- APPLIED by C1-select: H5-factor-api -> docs/design/vendor-independence.md: Positional validators: reject only what no route can serve (rewritten for src/ops/<op>/<op>.cc and can_run)
+- APPLIED by C1-select: H5-factor-api -> docs/design/vendor-independence.md: Per-item info spans for potrf, getrf and getri
+- APPLIED by C1-select: H6-eigen-api -> docs/design/vendor-independence.md: info spans on syev, gesvd and steqr: forwarder or default
+- APPLIED by C1-select: H7-dispatch-device -> docs/perf/dispatch.md: Dispatch: the ormqr chooser that forced past supports (as history, under Correctness findings)
+- APPLIED by C1-select: H7-dispatch-device -> docs/design/vendor-independence.md: The vendor gate: why the tile route predicate is per backend and scalar (src/select/vendor.hh now points here)
+- APPLIED by C1-select: H7-dispatch-device -> docs/design/vendor-independence.md: The vendor gate: history of the per-library predicates (per-op split added to What is still open)
+- APPLIED by C1-select: H7-dispatch-device -> docs/design/vendor-independence.md: Coverage instrument: why the compile-time gate was rejected
+- APPLIED by C1-select: H7-dispatch-device -> docs/design/vendor-independence.md: stale statements to update (no new heading) (route-era sections moved under History: the RouteTable layer; line citations dropped)
+- APPLIED by C1-select: H4-blas-api -> docs/design/vendor-independence.md: optional addition under the existing "The entry-point facade"
+- APPLIED by C1-select: S2-kernels -> docs/design/vendor-independence.md: stale line citations for the parsed.found spelling (citations removed; the adapters are deleted)
+- APPLIED by C1-select: S1-level3 -> docs/perf/dispatch.md: note on duplicated level-3 material (pointer to level3.md as the newer record added; restated figures kept as the routing-window record)
+- APPLIED by C1-select: S4a-syevx -> docs/perf/gemv.md, docs/perf/trsm.md, docs/perf/dispatch.md: stale ortho.cc line citations (dispatch.md part only: it cites no ortho.cc line numbers; nothing to change)
+- APPLIED by C1-select: R-H2 -> docs/design/flat-kernel-selection.md: (no new heading; correction to section 5.3) (correction paragraph after section 5.3, linking environment.md)
+- APPLIED by C1-select: R-H6 -> docs/design/vendor-independence.md: info spans on syev, gesvd and steqr: forwarder or default (section added with the cusolverdx.cc correction)
+- APPLIED by C2-ops (review): C1-select -> per-op shards owning src/ops/<op>/choice.hh: join selection_ops (as a file-level `@ingroup selection_ops` on each choice.hh/can_run.hh/vendor.hh, not @addtogroup)
+- APPLIED by C1-select (review): C2-ops -> docs/design/flat-kernel-selection.md: Which inputs the old routers read, per op (as "Phase 5, which inputs the old routers read, per op" in section 12)

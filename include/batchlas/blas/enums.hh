@@ -27,13 +27,13 @@ namespace batchlas {
     /// @brief Real type underlying a scalar: `T` itself for a real `T`, `R` for `std::complex<R>`.
     template<typename T>
     struct base_type {
-        using type = T;
+        using type = T;  ///< The real type.
     };
 
     /// @brief Specialisation that strips `std::complex`.
     template<typename T>
     struct base_type<std::complex<T>> {
-        using type = T;
+        using type = T;  ///< The component type `R` of `std::complex<R>`.
     };
 
     /// @brief Shorthand for `base_type<T>::type`: the precision of `T` (tolerances, norms, eigenvalues).
@@ -247,7 +247,7 @@ namespace batchlas {
 
     /// @brief Rewrites a U job of Thin to All when both request the same shape (k == m).
     ///
-    /// A route that cannot produce a genuinely thin factor then still serves every
+    /// A kernel that cannot produce a genuinely thin factor then still serves every
     /// Thin request that asks for nothing smaller.
     /// @param job  the requested U job
     /// @param m    rows of the input
@@ -349,12 +349,12 @@ namespace batchlas {
 
     /// @brief Algorithm family of the partial symmetric/Hermitian eigensolver `syevx`.
     ///
-    /// `Auto` picks on matrix format, size and the requested fraction of the spectrum
-    /// (`syevx_select_algorithm`). Set per call through SyevxParams::method, or
+    /// `Auto` picks on matrix format, n, batch size and jobz; the number of requested
+    /// eigenpairs enters no threshold (`syevx_select_algorithm`). Set per call through SyevxParams::method, or
     /// process-wide through `BATCHLAS_SYEVX_ALGORITHM`
     /// (`auto|direct|direct_subset|filtered|lobpcg`). **The environment variable wins**
-    /// over SyevxParams::method, as a `BATCHLAS_<OP>_ROUTE` pin does for the routed
-    /// ops, so a whole application can be forced onto one algorithm for diagnosis.
+    /// over SyevxParams::method, as a `BATCHLAS_<OP>_ROUTE` kernel pin does for the
+    /// other ops, so a whole application can be forced onto one algorithm for diagnosis.
     ///
     /// A choice the input cannot use degrades instead of failing: DirectSubset on
     /// complex or sparse input runs Direct (dense) or LOBPCG (CSR), and Direct or

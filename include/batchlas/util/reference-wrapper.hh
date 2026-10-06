@@ -1,4 +1,12 @@
 #pragma once
+
+/// @file
+/// @brief batchlas::ReferenceWrapper, a write-through `std::reference_wrapper`.
+///
+/// Installed with the rest of `include/batchlas` (the install rule copies the
+/// tree wholesale); no public header includes it. Not a stable interface.
+/// @ingroup internal_helpers
+
 #include <functional>
 #include <iostream>
 

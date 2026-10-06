@@ -75,7 +75,7 @@ Event launch(Queue& q, const OrgqrChoice& c, const MV<T>& A, Span<T> tau, Span<s
 }
 
 // Exactly the chosen family's need (R5). The vendor's is batch-linear (a per-item loop), so a
-// native call must never be sized by it: at cdouble n=64 batch=8192 that is ~4.6 GB.
+// native call must never be sized by it (gigabytes at saturating batch).
 // evidence: docs/perf/qr.md#the-orgqr_buffer_size-latent-defect
 template <Backend B, class T>
 std::size_t workspace(Queue& q, const OrgqrChoice& c, const MV<T>& A, Span<T> tau) {

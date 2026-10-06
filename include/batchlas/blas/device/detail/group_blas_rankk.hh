@@ -411,9 +411,8 @@ inline constexpr void dispatch_rank2k(const Exec& exec,
             detail::subgroup::rank2k_register_tiled(exec, a, operand, transform, register_workspace);
             return;
         }
-        // For 3D nd_item launches without a fast path, multiple work-groups would
-        // independently iterate over all output cells in the generic fallback, causing
-        // data races. Restrict the generic fallback to the primary work-group only.
+        // 3-D launch, no fast path: only tile-group (0, 0) runs the generic loop, else the groups race.
+        // evidence: docs/design/device-group-blas.md#device-group-blas-the-3-d-launch-generic-fallback
         if constexpr (std::is_same_v<std::remove_cvref_t<Exec>, sycl::nd_item<3>>) {
             if (detail::subgroup::matrix_tile_group_row(exec) == 0 &&
                 detail::subgroup::matrix_tile_group_col(exec) == 0) {
@@ -447,9 +446,8 @@ inline constexpr void dispatch_rankk(const Exec& exec,
             detail::subgroup::rankk_register_tiled(exec, a, operand, transform, register_workspace);
             return;
         }
-        // For 3D nd_item launches without a fast path, multiple work-groups would
-        // independently iterate over all output cells in the generic fallback, causing
-        // data races. Restrict the generic fallback to the primary work-group only.
+        // 3-D launch, no fast path: only tile-group (0, 0) runs the generic loop, else the groups race.
+        // evidence: docs/design/device-group-blas.md#device-group-blas-the-3-d-launch-generic-fallback
         if constexpr (std::is_same_v<std::remove_cvref_t<Exec>, sycl::nd_item<3>>) {
             if (detail::subgroup::matrix_tile_group_row(exec) == 0 &&
                 detail::subgroup::matrix_tile_group_col(exec) == 0) {

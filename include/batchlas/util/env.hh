@@ -14,8 +14,8 @@
 
 namespace batchlas {
 
-// Declared, not included: settings.hh pulls in the route vocabulary, and this header is reached
-// by nearly every device TU.
+// Declared, not included: this header is reached by nearly every device TU, and the declaration
+// is all ScopedEnvVar needs.
 namespace detail {
 BATCHLAS_API void reload_settings();
 }

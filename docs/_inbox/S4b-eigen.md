@@ -31,3 +31,26 @@ Add a row: `[sytrd.md](sytrd.md)` | `sytrd_blocked` + `latrd`, `sytrd_sy2sb`, `s
 and its Q2 back-transform (`@ref perf_sytrd`) | n/a: internal reductions under `syev`, no vendor
 arm of their own. The steqr page now has the label `perf_steqr` (it had none). Both need a
 `\subpage` entry wherever the perf section page lists its children. No code site points here.
+
+## -> .github/ci/comment_density_waivers.txt (coordinator): S4b-eigen waivers now free
+
+Second pass (after the flat-selection merge). These waiver lines are dead weight; every file is
+under 18% (`check_comment_density.py --all` reports them as "waived but now UNDER"):
+stedc.cc (:136), stedc_internal.hh (:137), stedc_levels_plan.hh (:138), stedc_merge_kernels.hh
+(:139), stedc_secular.hh (:140), steqr_cta_device.hh (:142), syev_blocked.cc (:143),
+syev_cta_fused.cc (:144), syev_jacobi_cta.cc (:145), sytrd_cta_device.hh (:152, now 7.9%),
+sytrd_sb2st_hh.cc (:153), sytrd_sb2st_hh.hh (:154, now 16.2%), sytrd_sy2sb.cc (:155),
+two_stage_common.hh (:157), latrd_lower_panel.cc (:132). Still needed:
+`src/extensions/uplo_mirror.hh` (:158), 4 comment lines over 7 code lines, all traps (in place,
+imaginary diagonal, ODR declaration-only) plus the pointer; suggested reason: "short header whose
+remaining lines are traps; narrative in docs/perf/syev.md#syev-the-upper-to-lower-mirror-for-lower-only-providers".
+No code site points here.
+
+## -> docs/design/known-defects.md: tridiagonal_solver addresses Q with stride n
+
+Seen while checking H6's open items against `src/extensions/tridiag_solver.cc` (owned by
+S4b-eigen; no code change made). H6 recorded it: the rotation update addresses Q as
+`Q[k*m+l]` (stride n) while the identity fill uses `Q.ld()`, so a Q with `ld() != n` gets a wrong
+answer; QR steps are capped at six per eigenvalue with no convergence report; nothing in `src/`
+calls it. The public doc says `@pre Q.ld() == n`. Suggested row: "located, documented as a
+precondition, unfixed; no caller". No code site points here.

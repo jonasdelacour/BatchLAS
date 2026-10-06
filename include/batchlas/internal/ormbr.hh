@@ -3,7 +3,8 @@
 /// @file
 /// @brief Apply Q or P from a bidiagonal reduction (ormbr). Kernel helper, not API.
 ///
-/// Installed only because public headers include it; not a stable interface.
+/// Installed with the rest of `include/batchlas` (the install rule copies the
+/// tree wholesale); no public header includes it. Not a stable interface.
 /// The declarations here repeat the documented ones in `batchlas/blas/extensions.hh`
 /// (batchlas::ormbr, batchlas::ormbr_buffer_size) without default arguments.
 ///

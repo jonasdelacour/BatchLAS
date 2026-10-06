@@ -228,8 +228,11 @@ namespace batchlas {
      * @param info      per-item convergence status (0 = converged, > 0 LAPACK-like), or an
      *                  empty span to not request it; see @ref md_docs_2cpp-api
      * @return event of the last enqueued kernel
-     * @throws std::invalid_argument for `SyevxSelect::Value` (use the `m`-taking overload)
-     *         or a non-extremal range on a path that cannot answer one.
+     * @throws batchlas::invalid_argument for `SyevxSelect::Value` (use the `m`-taking
+     *         overload); an `Index` block outside [0, n) or with `neigs != iu - il + 1`;
+     *         a non-extremal range with CSR input or an explicit LOBPCG/Filtered `method`;
+     *         an ILU(k) or `Jacobi` preconditioner with `find_largest`, or conflicting
+     *         preconditioner fields.
      * @see @ref perf_syevx, @ref design_syevx_range
      */
     template <Backend B, typename T, MatrixFormat MFormat>
@@ -300,7 +303,7 @@ namespace batchlas {
 
     /**
      * @brief Required workspace, in bytes, for syevx(); arguments as for the call minus
-     *        `workspace`. Unlike the solve, this accepts `SyevxSelect::Value`: sizing
+     *        the workspace. Unlike the solve, this accepts `SyevxSelect::Value`: sizing
      *        writes no counts.
      */
     template <Backend B, typename T, MatrixFormat MFormat>
@@ -405,7 +408,8 @@ namespace batchlas {
      *        concrete, implemented algorithm. Never returns `Auto`, and is deterministic
      *        so that `syevx` and `syevx_buffer_size` always agree on the choice.
      *
-     * @param format Matrix format of A (sparse formats always use LOBPCG)
+     * @param format Matrix format of A (sparse formats run LOBPCG unless `Filtered` is
+     *        requested explicitly)
      * @param n Matrix dimension
      * @param neigs Number of requested eigenpairs
      * @param requested Algorithm requested via SyevxParams::method
@@ -414,8 +418,9 @@ namespace batchlas {
      * @param batch_size Load-bearing: the subset solver starves at small batch
      * @param select Excludes the algorithms that cannot answer the requested range
      * @return the algorithm syevx() will run
-     * @throws std::invalid_argument for sparse input, or an explicit LOBPCG/Filtered
-     *         `method`, with a non-extremal range.
+     * @throws batchlas::invalid_argument for sparse input, or an explicit LOBPCG/Filtered
+     *         `method`, with a non-extremal range. The same request made through
+     *         `BATCHLAS_SYEVX_ALGORITHM` degrades to `Direct` with a one-time warning.
      * @see @ref perf_syevx for the measured thresholds behind the choice
      */
     BATCHLAS_API SyevxAlgorithm syevx_select_algorithm(MatrixFormat format,
@@ -433,8 +438,8 @@ namespace batchlas {
      *
      * @param requested SyevxParams::preconditioner_type
      * @param iluk_configured Whether an ILU(k) factor was supplied or requested
-     * @param find_largest An environment default illegal for the requested end degrades to
-     *        `None`; an explicit request throws.
+     * @param find_largest An environment default of `Jacobi` degrades to `None` when this
+     *        is true; an explicit request is returned as is (syevx() rejects it earlier).
      * @return the preconditioner family syevx() will build or use
      */
     SyevxPreconditioner syevx_select_preconditioner(SyevxPreconditioner requested,
@@ -919,8 +924,9 @@ namespace batchlas {
      * @brief Eigenvalues, and optionally eigenvectors, of a batch of symmetric tridiagonal
      *        matrices by implicit QR/QL iteration (LAPACK `?steqr`).
      *
-     * Real `T` only. Picks the CTA kernel (steqr_cta()) for small n and the work-group
-     * kernel otherwise; steqr_buffer_size() covers both.
+     * Real `T` only. Runs the CTA kernel (steqr_cta()) when n is at most the device's
+     * largest sub-group size (never on ROCm) and the work-group kernel otherwise;
+     * steqr_buffer_size() returns the larger of the two needs.
      *
      * @param ctx         queue the work is enqueued on
      * @param d           diagonal, n entries per batch item
@@ -935,6 +941,7 @@ namespace batchlas {
      * @param info        per-item convergence status (0 = converged, > 0 LAPACK-like), or
      *                    empty to not request it; see @ref md_docs_2cpp-api
      * @throws batchlas::invalid_argument if `eigvects` is not n x n with the same batch
+     * @throws batchlas::convergence_error as steqr_cta() does, when the CTA kernel runs
      * @return event of the last enqueued kernel
      * @see @ref algo_steqr
      */
@@ -948,6 +955,9 @@ namespace batchlas {
      * @brief steqr() pinned to the CTA kernel: one sub-group partition per matrix, for small
      *        n (runtime-dispatched to compile-time specialised kernels). Parameters as for
      *        steqr().
+     * @throws batchlas::invalid_argument unless 1 <= n <= 32
+     * @throws batchlas::convergence_error if `BATCHLAS_STEQR_CTA_CHECK` is set and an item
+     *         ran out of sweeps (the check waits on the queue; unset, nothing is thrown)
      */
     template <Backend B, typename T>
     BATCHLAS_API Event steqr_cta(Queue& ctx, const VectorView<T>& d, const VectorView<T>& e,
@@ -1581,7 +1591,14 @@ namespace batchlas {
      *
      * Overwrites `c` with `op(Q) * c`, `c * op(Q)`, `op(P) * c` or `c * op(P)` according to
      * `vect`, `side` and `trans`, where `Q`/`P` are the reflectors that gebrd_blocked() (or
-     * gebrd_unblocked()) left in `a` and `tau`.
+     * gebrd_unblocked()) left in `a` and `tau`, as LAPACK `?ormbr` / `?unmbr`: `'Q'` is of
+     * order `a.rows()`, `'P'` of order `a.cols()`.
+     *
+     * @pre `tau` is unit-stride and packed by batch
+     * @throws batchlas::invalid_argument on mismatched batch sizes or orders, a `vect`
+     *         other than `'Q'`/`'P'`, or a short or strided `tau`
+     * @throws batchlas::unsupported for `Transpose::Trans` with complex `T` and `'P'`
+     *         (use `ConjTrans`)
      */
     template <Backend B, typename T>
     BATCHLAS_API Event ormbr(Queue& ctx,
@@ -1609,6 +1626,9 @@ namespace batchlas {
      * @brief Blocked native SVD for real dense matrices: GEBRD-style dense -> bidiagonal,
      *        then BDSQR (or BDSDC when explicitly selected), then ORMBR-style
      *        back-transforms for full U and V^H.
+     * @pre in-order Queue
+     * @throws batchlas::invalid_argument for an out-of-order Queue or mis-shaped outputs
+     * @throws batchlas::unsupported for complex input (use the Hermitian overload)
      */
     template <Backend B, typename T>
     BATCHLAS_API Event gesvd_blocked(Queue& ctx,
@@ -1659,8 +1679,17 @@ namespace batchlas {
                                                   Uplo hermitian_uplo);
 
     /**
-     * @brief CTA-oriented native SVD for very small real square matrices; scope matches
-     *        the blocked path but is intended for `1 <= n <= 32` and small batches.
+     * @brief CTA-oriented native SVD for small matrices, `max(m, n) <= 32`: bidiagonal
+     *        reduction, then the eigenproblem of \f$ B^T B \f$ (the normal equations).
+     *        Real input, rectangular either way.
+     *
+     * The normal equations square the condition number; use gesvdj_cta() where small
+     * singular values matter.
+     * @pre in-order Queue
+     * @throws batchlas::invalid_argument for `max(m, n) > 32`, a genuinely `Thin` U or
+     *         V^H, or an out-of-order Queue
+     * @throws batchlas::unsupported for complex input (use the Hermitian overload)
+     * @see @ref perf_gesvd
      */
     template <Backend B, typename T>
     BATCHLAS_API Event gesvd_cta(Queue& ctx,
@@ -1860,9 +1889,9 @@ namespace batchlas {
      * @param jobz        whether `eigvects` receives the eigenvectors
      * @param params      leaf size, merge driver and tuning overrides
      * @param eigvects    n x n eigenvector output per item
-     * @param info        per-item convergence status of the merges, or empty; see
-     *                    @ref md_docs_2cpp-api. A leaf steqr() that runs out of sweeps is
-     *                    not reported through it.
+     * @param info        per-item convergence status, or empty; see @ref md_docs_2cpp-api.
+     *                    Raised by a merge whose secular solve hits its iteration cap and
+     *                    by a leaf steqr() that runs out of sweeps.
      * @return event of the last enqueued kernel
      * @see @ref perf_stedc
      */

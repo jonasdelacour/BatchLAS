@@ -12,8 +12,8 @@
 //                    collective (the chunks run one instruction stream). On
 //                    NVIDIA this lets the shuffles use a constant full mask.
 //
-// The typed front end reduces everything to 32-bit word primitives from one backend
-// per target (backend_*.hh); kernels call collectives unqualified, so ADL picks these.
+// Typed front end over per-target 32-bit word primitives (backend_*.hh). Kernels call collectives
+// unqualified: ADL picks these for a partition, sycl::'s for a sub_group or work-group.
 // TRAP: judge changes here by real-kernel A/B (steqr / syev_cta benchmarks, n=5..16,
 // batch 16384), never by microbenchmark. evidence: docs/perf/steqr.md#full-warp-partition
 

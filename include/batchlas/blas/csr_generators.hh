@@ -6,11 +6,12 @@
 #include <complex>
 #include <stdexcept>
 
-namespace batchlas {
-namespace csr_generators {
-
 /// @file
-/// @brief Random CSR test-matrix generators.
+/// @brief Random CSR test-matrix generators (`batchlas::csr_generators`).
+
+namespace batchlas {
+/// @brief Random sparse test-matrix generators.
+namespace csr_generators {
 
 /// @brief Generates a batch of random sparse symmetric (real) or Hermitian (complex) n x n CSR matrices.
 ///
@@ -26,7 +27,8 @@ namespace csr_generators {
 /// @param n               matrix order
 /// @param density         target fraction of stored entries over the full n x n
 ///                        matrix, diagonal included; clamped to [0, 1]. The count is
-///                        rounded up to at least n and to an even off-diagonal count.
+///                        rounded to nearest, raised to at least n, its off-diagonal part
+///                        rounded up to even, and capped at n * n.
 /// @param batch_size      number of matrices
 /// @param seed            RNG seed; equal seeds give identical matrices
 /// @param diagonal_boost  margin added to each diagonal above its off-diagonal row sum

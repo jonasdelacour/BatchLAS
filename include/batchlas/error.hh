@@ -11,6 +11,10 @@
 /// reason), `catch (const batchlas::exception&)` (anything BatchLAS diagnosed), and
 /// `catch (const std::exception&)` (that, plus `std::bad_alloc` and `sycl::exception`, which are
 /// deliberately not wrapped).
+/// @note Not yet covered: the kernel-selection layer throws plain `std::invalid_argument` for a
+///       bad `BATCHLAS_<OP>_ROUTE` pin and `std::runtime_error` when no kernel can run, and
+///       batchlas::NoRouteError (`<batchlas/no_route.hh>`) derives from `std::runtime_error` only.
+///       None of them matches `catch (const batchlas::exception&)`.
 /// @see @ref design_error_model
 /// @ingroup errors
 // Every class here must carry BATCHLAS_API even with no out-of-line member, or catch-by-type
@@ -105,14 +109,14 @@ public:
         : detail::exception_bridge<std::runtime_error>(what_arg) {}
 };
 
-/// @brief No route, kernel, backend or vendor entry point in this build on this device serves
-/// the request.
+/// @brief No kernel, backend or vendor entry point in this build on this device serves the
+/// request.
 ///
 /// Examples: a complex type on a real-only native path, `Uplo::Upper` where only `Lower` is
 /// implemented, a device with no sub-group size 32 under a CTA kernel, a backend that was not
 /// compiled in, an order above a kernel's register capacity.
 ///
-/// Not retryable as asked, but a different route, backend, scalar type or shape may succeed:
+/// Not retryable as asked, but a different kernel pin, backend, scalar type or shape may succeed:
 /// this is the class to catch to fall back to another algorithm.
 /// @ingroup errors
 class BATCHLAS_API unsupported : public error {
@@ -171,11 +175,12 @@ public:
 
 /// @brief BatchLAS is internally inconsistent.
 ///
-/// A route resolver picked a native arm no linked kernel serves, a capability query and the
-/// facade that reads it disagree, an internal seam was not injected, a branch documented
-/// "unreachable" was reached. Never the caller's fault, never retryable and never fixable from
-/// the call site: report it with the message, which names the route and the two things that
-/// disagreed.
+/// A kernel was chosen that its own guard then refuses, an internal phase produced a structure
+/// the next one cannot use, an internal seam was not injected, a branch documented "unreachable"
+/// was reached. Never retryable and, with one exception, never the caller's fault: report it with
+/// the message, which names the op and the two things that disagreed.
+/// @note The exception: gesv and posv throw it for an empty or heterogeneous batch, which no
+///       kernel serves.
 /// @ingroup errors
 class BATCHLAS_API internal_error : public error {
 public:
@@ -186,8 +191,8 @@ public:
 /// @brief A well-formed call arrived in a state, order or thread where it is not valid.
 ///
 /// A Queue used from a thread other than its owner, `attach_to_current_thread()` with a workspace
-/// lease outstanding, `configure()` after a Queue already exists, a sizing-mode-only BumpAllocator
-/// query asked of a real pool.
+/// lease outstanding, `configure()` after a Queue already exists, a BumpAllocator query asked of
+/// the wrong kind of pool (`required_bytes()` of a real pool, `remaining()` of a sizing one).
 ///
 /// Not retryable as-is: reorder the calls or confine the object to one thread. Distinct from
 /// invalid_argument because no argument is wrong.

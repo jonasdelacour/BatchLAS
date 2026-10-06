@@ -45,10 +45,12 @@ template <typename T> using syev_vendor_buffer_size = syev_buffer_size<T>;
  *        matrices (LAPACK `?syev` / `?heev`).
  *
  * Computes \f$ A = Q \Lambda Q^H \f$ for every batch item from its `uplo` triangle.
- * The kernel is chosen per call from the device's tuned table (src/ops/syev/syev.cc):
- * on a GPU queue a native tier (the n <= 32 sub-group solvers `cta`, `cta_fused` and
- * `jacobi`; `blocked` or `two_stage` above), otherwise the vendor solver. Pin it with
- * `BATCHLAS_SYEV_ROUTE`. Asynchronous: returns once the work is enqueued.
+ * The kernel family is the first entry of the nearest row of the device's tuned table
+ * (`tuned/syev.<dtype>.<device>.txt`) that can run the call: on a GPU queue a native
+ * tier (the n <= 32 sub-group solvers `cta`, `cta_fused` and `jacobi`, which need
+ * sub-group size 32; `blocked` or `two_stage` at any n), otherwise `vendor`, the
+ * solver library. Pin a family with `BATCHLAS_SYEV_ROUTE` (e.g. `two_stage`, `vendor`).
+ * Asynchronous: returns once the work is enqueued.
  *
  * @tparam B  backend (NETLIB always runs the vendor LAPACKE path)
  * @tparam T  float, double, std::complex<float> or std::complex<double>
@@ -66,10 +68,14 @@ template <typename T> using syev_vendor_buffer_size = syev_buffer_size<T>;
  *                    nothing; syev_buffer_size() is the same either way.
  * @return event of the last enqueued kernel
  * @throws batchlas::invalid_argument if `descrA` is not square
- * @throws batchlas::workspace_error if `workspace` is smaller than the chosen kernel needs
+ * @throws batchlas::workspace_error if the workspace span is smaller than the chosen kernel needs
  * @throws batchlas::NoRouteError when no native kernel can run (e.g. a CPU queue) in a
  *         build without the solver library
- * @see @ref perf_syev, @ref md_docs_2cpp-api (convergence status)
+ * @throws std::invalid_argument if `BATCHLAS_SYEV_ROUTE` names a family that is not
+ *         compiled or cannot run this call (the words `native` and `vendor` instead
+ *         fall back to the tuned choice with a warning)
+ * @see @ref selection_tables (which family ranks first where), @ref perf_syev,
+ *      @ref md_docs_2cpp-api (convergence status)
  * @ingroup eigen
  */
 template <Backend B, typename T>
@@ -116,15 +122,13 @@ BATCHLAS_API size_t syev_buffer_size(Queue& ctx,
 
 namespace batchlas::backend {
 
-// Defined and instantiated by each backend wrapper TU (cuSOLVER / rocSOLVER / LAPACKE).
-// `info_out` is the caller's per-item status span, or empty. Defaulted rather than
-// forwarded, unlike the public `syev`: a default belongs to the declaration, not the
-// function type, so sig::syev_vendor still matches, and the internal six-argument
-// callers (norm.cc, cond.cc, syevx_lobpcg.cc) need no forwarder.
+// Defined per backend TU (cuSOLVER / rocSOLVER / LAPACKE). `info_out` is DEFAULTED, unlike
+// syev's forwarder: a default is not part of the function type, so sig::syev_vendor still
+// matches and six-argument callers (norm.cc, cond.cc, syevx_lobpcg.cc) need no forwarder.
 // evidence: docs/design/vendor-independence.md#info-spans-on-syev-gesvd-and-steqr-forwarder-or-default
 /**
  * @brief The vendor solver's syev (cuSOLVER, rocSOLVER or a LAPACKE loop), as syev()'s
- *        vendor kernel calls it; same contract as syev().
+ *        `vendor` family calls it; same contract as syev(), with `info_out` as `info`.
  * @ingroup dispatch
  */
 template <Backend B, typename T>

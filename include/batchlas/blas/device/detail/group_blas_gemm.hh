@@ -363,9 +363,8 @@ inline constexpr std::size_t gemm_workspace_elements(const DeviceBlasLaunchInfo&
     }
 
     if (detail::subgroup::can_use_matrix_register_fast_path<T>(launch, row_extent, col_extent, contract_extent, Policy)) {
-        // can_use_matrix_register_fast_path already checks register_matrix_workspace_supported_v<T>.
-        // Allocate full GemmWorkspace if it fits (to allow aligned-nn-large fallback at runtime),
-        // otherwise allocate only the smaller RegisterMatrixWorkspace.
+        // Size for GemmWorkspace when it fits: the call may still take the aligned-NN path at run time.
+        // The predicate already requires register_matrix_workspace_supported_v<T>, so the else arm is safe.
         if constexpr (detail::subgroup::gemm_workspace_supported_v<T>) {
             return detail::workspace_elements_v<T, detail::subgroup::GemmWorkspace<T>>;
         } else {
@@ -404,9 +403,8 @@ inline constexpr void dispatch_gemm(const Exec& exec,
             detail::subgroup::gemm(exec, a, operand, transform);
             return;
         }
-        // For 3D nd_item launches without a fast path, multiple work-groups would
-        // independently iterate over all output cells in the generic fallback, causing
-        // data races. Restrict the generic fallback to the primary work-group only.
+        // 3-D launch, no fast path: only tile-group (0, 0) runs the generic loop, else the groups race.
+        // evidence: docs/design/device-group-blas.md#device-group-blas-the-3-d-launch-generic-fallback
         if constexpr (std::is_same_v<std::remove_cvref_t<Exec>, sycl::nd_item<3>>) {
             if (detail::subgroup::matrix_tile_group_row(exec) == 0 &&
                 detail::subgroup::matrix_tile_group_col(exec) == 0) {
@@ -428,7 +426,7 @@ inline constexpr void dispatch_gemm(const Exec& exec,
 ///
 /// With \f$\mathrm{op}(A)\f$ m x k and \f$\mathrm{op}(B)\f$ k x n, `C` is m x n.
 /// Path selection, first eligible wins: the aligned NN kernel (`float`, a
-/// workspace, 256 work-items, extents multiples of the 128 x 32 x 32 tile,
+/// workspace, 256 work-items, m a multiple of 128, n of 64 and k of 32,
 /// 4-element-aligned `A` and `B`), the register-tiled kernel (`float`, a
 /// workspace, 256 work-items, m >= 4, n >= 8, k >= 32), the sub-group kernel
 /// (`float`, sub-group size admitted by the policy, m >= 8 and n, k at least

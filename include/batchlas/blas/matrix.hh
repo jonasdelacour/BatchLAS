@@ -48,9 +48,9 @@ namespace batchlas {
     /// @see @ref matrix-model-strong-types-for-positional-integers
     /// @ingroup matrix
     struct NonZeros {
-        int value;
-        explicit constexpr NonZeros(int v) : value(v) {}
-        constexpr operator int() const = delete;   // no silent decay back to int
+        int value;  ///< The wrapped value.
+        explicit constexpr NonZeros(int v) : value(v) {}  ///< Wraps @p v.
+        constexpr operator int() const = delete;   ///< Deleted: no silent decay back to int.
     };
     static_assert(std::is_trivially_copyable_v<NonZeros>, "NonZeros must stay trivially copyable");
 
@@ -63,9 +63,9 @@ namespace batchlas {
     /// @see @ref matrix-model-strong-types-for-positional-integers
     /// @ingroup matrix
     struct Inc {
-        int value;
-        explicit constexpr Inc(int v = 1) : value(v) {}
-        constexpr operator int() const = delete;
+        int value;  ///< The wrapped value.
+        explicit constexpr Inc(int v = 1) : value(v) {}  ///< Wraps @p v.
+        constexpr operator int() const = delete;  ///< Deleted: no silent decay back to int.
     };
     static_assert(std::is_trivially_copyable_v<Inc>, "Inc must stay trivially copyable");
 
@@ -73,9 +73,9 @@ namespace batchlas {
     /// @see Inc
     /// @ingroup matrix
     struct Stride {
-        int value;
-        explicit constexpr Stride(int v = 0) : value(v) {}
-        constexpr operator int() const = delete;
+        int value;  ///< The wrapped value.
+        explicit constexpr Stride(int v = 0) : value(v) {}  ///< Wraps @p v.
+        constexpr operator int() const = delete;  ///< Deleted: no silent decay back to int.
     };
     static_assert(std::is_trivially_copyable_v<Stride>, "Stride must stay trivially copyable");
 
@@ -83,9 +83,9 @@ namespace batchlas {
     /// @see Inc
     /// @ingroup matrix
     struct Ld {
-        int value;
-        explicit constexpr Ld(int v = 0) : value(v) {}
-        constexpr operator int() const = delete;
+        int value;  ///< The wrapped value.
+        explicit constexpr Ld(int v = 0) : value(v) {}  ///< Wraps @p v.
+        constexpr operator int() const = delete;  ///< Deleted: no silent decay back to int.
     };
     static_assert(std::is_trivially_copyable_v<Ld>, "Ld must stay trivially copyable");
 
@@ -93,9 +93,9 @@ namespace batchlas {
     /// @see Inc
     /// @ingroup matrix
     struct BatchSize {
-        int value;
-        explicit constexpr BatchSize(int v = 1) : value(v) {}
-        constexpr operator int() const = delete;
+        int value;  ///< The wrapped value.
+        explicit constexpr BatchSize(int v = 1) : value(v) {}  ///< Wraps @p v.
+        constexpr operator int() const = delete;  ///< Deleted: no silent decay back to int.
     };
     static_assert(std::is_trivially_copyable_v<BatchSize>, "BatchSize must stay trivially copyable");
 
@@ -110,11 +110,15 @@ namespace batchlas {
     /// the last index). Slicing is dense-only and never copies.
     /// @ingroup matrix
     struct Slice { //Default Slice selects entire matrix
-        int64_t start = std::numeric_limits<int64_t>::min();
-        int64_t end = std::numeric_limits<int64_t>::max();
+        int64_t start = std::numeric_limits<int64_t>::min();  ///< First index; negative counts from the end. The default (min) with a default end means the whole dimension.
+        int64_t end = std::numeric_limits<int64_t>::max();    ///< One past the last index; negative counts from the end; max means the end of the dimension.
+        /// @brief [@p start, dim).
         Slice(int64_t start, SliceEnd) : start(start), end(std::numeric_limits<int64_t>::max()) {}
+        /// @brief [@p start, @p end); either bound may be negative (counted from the end).
         Slice(int64_t start, int64_t end) : start(start), end(end) {}
+        /// @brief [@p start, dim) (implicit, so an integer can stand in for a Slice).
         Slice(int64_t start) : Slice(start, SliceEnd()) {}
+        /// @brief The whole dimension.
         Slice() = default;
     };
 
@@ -202,7 +206,7 @@ namespace batchlas {
             return out;
         }
 
-        inline auto data() const { return data_; }
+        inline auto data() const { return data_; }  ///< Base pointer of item 0.
         /// @brief Row count (the capacity on a heterogeneous batch).
         inline auto rows() const { return rows_; }
         /// @brief Active row count of batch item @p batch_index.
@@ -211,9 +215,9 @@ namespace batchlas {
         inline auto cols() const { return cols_; }
         /// @brief Active column count of batch item @p batch_index.
         inline auto cols(int batch_index) const { return active_cols_ ? active_cols_[batch_index] : cols_; }
-        inline auto batch_size() const { return batch_size_; }
-        inline auto ld() const { return ld_; }
-        inline auto stride() const { return stride_; }
+        inline auto batch_size() const { return batch_size_; }  ///< Number of batch items.
+        inline auto ld() const { return ld_; }                  ///< Dense leading dimension, in elements.
+        inline auto stride() const { return stride_; }          ///< Dense batch stride, in elements.
         /// @brief CSR per-item non-zero *capacity*; over-counts every item smaller than the largest.
         inline auto nnz() const { return nnz_; }
         /// @brief CSR non-zeros actually stored by batch item @p b, read from its row offsets.
@@ -244,11 +248,15 @@ namespace batchlas {
             requires DenseMatrixFormat<MF>
         VectorView<T> operator()(Slice rows_slice, int32_t col) const;
 
+        /// @brief A null 0 x 0 view with batch size 1.
         KernelMatrixView() = default;
+        /// @name Copy and move (trivial: the view is captured by value)
+        /// @{
         KernelMatrixView(const KernelMatrixView&) = default;
         KernelMatrixView& operator=(const KernelMatrixView&) = default;
         KernelMatrixView(KernelMatrixView&&) = default;
         KernelMatrixView& operator=(KernelMatrixView&&) = default;
+        /// @}
 
         /// @brief Dense view over raw device-accessible memory.
         /// @param data        base of batch item 0
@@ -266,7 +274,7 @@ namespace batchlas {
               ld_(ld > 0 ? ld : rows), stride_(stride > 0 ? stride : (ld > 0 ? ld : rows) * cols) {}
     };
 
-    // --- Slice utilities (de-duplication) ---------------------------------
+    /// @cond BATCHLAS_DETAIL
     namespace detail {
         inline std::pair<int64_t,int64_t> normalize_slice_component(Slice s, int64_t dim) {
             int64_t len;
@@ -392,6 +400,7 @@ namespace batchlas {
         }
     }
 
+    // Out-of-line KernelMatrixView members: documented at their declarations.
     template <typename T, MatrixFormat MType>
     template <MatrixFormat MF>
         requires DenseMatrixFormat<MF>
@@ -431,6 +440,7 @@ namespace batchlas {
         T* col_data = data_ + r_start + col * ld_;
         return VectorView<T>(col_data, static_cast<int>(r_len), batch_size_, 1, stride_);
     }
+    /// @endcond
 
     static_assert(std::is_trivially_copyable_v<KernelMatrixView<float, MatrixFormat::Dense>>, "KernelMatrixView Dense must be trivially copyable");
     static_assert(std::is_trivially_copyable_v<KernelMatrixView<float, MatrixFormat::CSR>>,   "KernelMatrixView CSR must be trivially copyable");
@@ -461,7 +471,7 @@ namespace batchlas {
     template <typename T, MatrixFormat MType>
     class BATCHLAS_API Matrix {
     public:
-        friend class MatrixView<T, MType>;
+        friend class MatrixView<T, MType>;  ///< Views share the private storage and backend handle.
 
         /// @brief Allocates an uninitialised dense batch.
         /// @param rows        rows per item
@@ -658,12 +668,17 @@ namespace batchlas {
             requires DenseMatrixFormat<M>
         Matrix<T, MType> to_row_major() const;
 
+        /// @brief Frees the storage; views of it dangle afterwards.
         ~Matrix();
 
+        /// @name Copy and move
+        /// Copies are deep (values, active extents, CSR arrays); moves transfer the storage.
+        /// @{
         Matrix(const Matrix& other) = default;
         Matrix& operator=(const Matrix& other) = default;
         Matrix(Matrix&&) noexcept = default;
         Matrix& operator=(Matrix&&) noexcept = default;
+        /// @}
 
         /// @brief Deep copy in this matrix's own layout (ld, stride, CSR strides, active extents).
         Matrix<T, MType> clone() const {
@@ -767,9 +782,12 @@ namespace batchlas {
         /// @brief The backend descriptor, created on first use.
         BackendMatrixHandle<T, MType>& operator*();
 
-        /// @brief Shape (capacity extents on a heterogeneous batch). Public for historical
-        ///        reasons; read through rows(), cols(), batch_size() and never write.
+        /// @name Public shape fields
+        /// Rows, columns and batch size (capacity extents on a heterogeneous batch). Public for
+        /// historical reasons; read through rows(), cols(), batch_size() and never write.
+        /// @{
         int rows_, cols_, batch_size_;
+        /// @}
 
         /// @name USM memory hints
         /// Hints for this matrix's storage (and CSR index arrays) on the device of @p ctx.
@@ -824,7 +842,7 @@ namespace batchlas {
         int cols(int batch_index) const {
             return detail::dense_active_cols(cols_, active_cols_.to_span(), batch_index);
         }
-        int batch_size() const { return batch_size_; }
+        int batch_size() const { return batch_size_; }  ///< Number of batch items.
         /// @brief Allocated rows per item; equal to rows().
         int rows_capacity() const { return rows_; }
         /// @brief Allocated columns per item; equal to cols().
@@ -1077,11 +1095,16 @@ namespace batchlas {
         /// @throws batchlas::unsupported for CSR views
         static Event copy(Queue& ctx, const MatrixView<T, MType>& dest, const MatrixView<T, MType>& src);
 
+        /// @name Copy and move
+        /// Shallow: the copy aliases the same memory and shares the backend handle.
+        /// @{
         MatrixView(const MatrixView&) = default;
         MatrixView& operator=(const MatrixView&) = default;
         MatrixView(MatrixView&&) noexcept = default;
         MatrixView& operator=(MatrixView&&) noexcept = default;
+        /// @}
 
+        /// @brief Releases nothing but the shared backend handle; the viewed memory is untouched.
         ~MatrixView() = default;
 
         /// @brief Creates the backend descriptor now instead of on first use; idempotent.
@@ -1095,10 +1118,14 @@ namespace batchlas {
         /// @brief batch_item(@p i).
         MatrixView<T, MType> operator[](int i) const;
 
-        /// @brief Shape (capacity extents on a heterogeneous batch). Read through the accessors; never write.
+        /// @name Public shape fields
+        /// Rows, columns and batch size (capacity extents on a heterogeneous batch). Read
+        /// through the accessors; never write.
+        /// @{
         // Must stay initialised: the entry points' USM check reads these extents to decide
         // whether a null data pointer is legal on a default-constructed view.
         int rows_ = 0, cols_ = 0, batch_size_ = 0;
+        /// @}
 
         /// @brief The viewed value storage, from item 0 to the end of the last item.
         Span<T> data() const { return data_; }
@@ -1127,7 +1154,7 @@ namespace batchlas {
         T* data_ptr() const { return data_.data(); }
 
 
-        int batch_size() const { return batch_size_; }
+        int batch_size() const { return batch_size_; }  ///< Number of batch items.
         /// @brief Rows per item (the capacity on a heterogeneous batch).
         int rows() const { return rows_; }
         /// @brief Active rows of item @p batch_index.
@@ -1290,6 +1317,8 @@ namespace batchlas {
             return VectorView<T>(data_ptr() + offset, static_cast<int>(c_len), batch_size_, ld_, stride_);
         }
 
+        /// @brief Part of column @p col of every item as a batched VectorView (inc = 1, stride = stride()).
+        /// @throws batchlas::invalid_argument if the slice is empty
         template <MatrixFormat M = MType>
             requires DenseMatrixFormat<M>
         VectorView<T> operator()(Slice rows, int32_t col) const {
@@ -1690,10 +1719,10 @@ namespace batchlas {
     /// @ingroup matrix
     template <typename T>
     struct Vector {
-        using value_type = T;
-        using pointer = T*;
-        using reference = T&;
-        using const_reference = const T&;
+        using value_type = T;               ///< Element type.
+        using pointer = T*;                 ///< Pointer to an element.
+        using reference = T&;               ///< Reference to an element.
+        using const_reference = const T&;   ///< Const reference to an element.
 
             /// @brief Elements needed to hold the layout: `(batch_size-1)*stride + (size-1)*inc + 1`, or 0 when empty.
             static constexpr std::size_t required_span_length(int size, int inc, int stride, int batch_size) {
@@ -1756,7 +1785,9 @@ namespace batchlas {
             return vec;
         }
 
-        // Bare-int spellings deleted so the old argument order is a compile error.
+        /// @name Deleted bare-int factory spellings
+        /// Spell the layout `Stride{s}, Inc{i}`; the old argument order is a compile error.
+        /// @{
         // standard_basis's third argument really is batch_size, so it stays legal.
         static Vector<T> zeros(int size, int batch_size, int stride, int inc) = delete;
         static Vector<T> ones(int size, int batch_size, int stride, int inc) = delete;
@@ -1765,6 +1796,7 @@ namespace batchlas {
         static Vector<T> ones(int size, int batch_size, int stride) = delete;
         static Vector<T> random(int size, int batch_size, int stride) = delete;
         static Vector<T> standard_basis(int size, int index, int batch_size, int stride) = delete;
+        /// @}
 
         /// @brief The whole storage, gaps included.
         Span<T> data() const { return data_.to_span(); }
@@ -1783,13 +1815,13 @@ namespace batchlas {
         Event prefetch(const Queue& ctx) const {
             return data_.to_span().prefetch(ctx);
         }
-        T* data_ptr() const { return data_.data(); }
-        int size() const { return size_; }
+        T* data_ptr() const { return data_.data(); }  ///< Pointer to entry 0 of item 0.
+        int size() const { return size_; }             ///< Entries per item.
         /// @brief Element distance between entries.
         int inc() const { return inc_; }
         /// @brief Element distance between items.
         int stride() const { return stride_; }
-        int batch_size() const { return batch_size_; }
+        int batch_size() const { return batch_size_; }  ///< Number of batch items.
 
         /// @brief Copy with every element converted by `static_cast<U>`, in this layout.
         template <typename U>
@@ -1817,10 +1849,14 @@ namespace batchlas {
             VectorView<T>(*this).stream_formatted_to(os, max_elements);
         }
 
+        /// @name Backend descriptor
+        /// The backend-library vector descriptor (internal_helpers), created on first use.
+        /// @{
         BackendVectorHandle<T>* operator->();
         BackendVectorHandle<T>& operator*();
         const BackendVectorHandle<T>* operator->() const;
         const BackendVectorHandle<T>& operator*()  const;
+        /// @}
 
     private:
         UnifiedVector<T> data_;
@@ -1845,10 +1881,10 @@ namespace batchlas {
     template <typename T>
     class BATCHLAS_API VectorView {
     public:
-        using value_type = T;
-        using pointer = T*;
-        using reference = T&;
-        using const_reference = const T&;
+        using value_type = T;               ///< Element type.
+        using pointer = T*;                 ///< Pointer to an element.
+        using reference = T&;               ///< Reference to an element.
+        using const_reference = const T&;   ///< Const reference to an element.
 
         /// @brief Elements needed to hold the layout: `(batch_size-1)*stride + (size-1)*inc + 1`, or 0 when empty.
         static constexpr std::size_t required_span_length(int size, int inc, int stride, int batch_size) {
@@ -1885,10 +1921,13 @@ namespace batchlas {
         /// Same as the positional forms, with inc and stride spelled `Inc{}` / `Stride{}`.
         /// @{
         // Additive on purpose: the in-repo positional constructions are all correct.
+        /// @brief Views a Span; see the positional Span overload.
         VectorView(Span<T> data, int size, int batch_size, Inc inc, Stride stride = Stride{0})
             : VectorView(data, size, batch_size, inc.value, stride.value) {}
+        /// @brief Views a UnifiedVector's storage.
         VectorView(UnifiedVector<T>& data, int size, int batch_size, Inc inc, Stride stride = Stride{0})
             : VectorView(data, size, batch_size, inc.value, stride.value) {}
+        /// @brief Views raw memory (no length check).
         VectorView(T* data, int size, int batch_size, Inc inc, Stride stride = Stride{0})
             : VectorView(data, size, batch_size, inc.value, stride.value) {}
         /// @}
@@ -1897,10 +1936,14 @@ namespace batchlas {
         VectorView(const Vector<T>& vec)
             : data_(vec.data()), size_(vec.size()), inc_(vec.inc()), stride_(vec.stride()), batch_size_(vec.batch_size()) {}
 
+        /// @name Copy and move
+        /// Shallow: the copy aliases the same memory.
+        /// @{
         VectorView(const VectorView<T>&) = default;
         VectorView& operator=(const VectorView<T>&) = default;
         VectorView(VectorView<T>&&) noexcept = default;
         VectorView& operator=(VectorView<T>&&) noexcept = default;
+        /// @}
 
         /// @brief The viewed storage, from entry 0 of item 0 to the last entry of the last item.
         Span<T> data() const { return data_; }
@@ -1922,13 +1965,13 @@ namespace batchlas {
             return data_.prefetch(ctx);
         }
         /// @}
-        T* data_ptr() const { return data_.data(); }
-        int size() const { return size_; }
+        T* data_ptr() const { return data_.data(); }  ///< Pointer to entry 0 of item 0.
+        int size() const { return size_; }             ///< Entries per item.
         /// @brief Element distance between entries.
         int inc() const { return inc_; }
         /// @brief Element distance between items.
         int stride() const { return stride_; }
-        int batch_size() const { return batch_size_; }
+        int batch_size() const { return batch_size_; }  ///< Number of batch items.
 
         /// @brief Owning copy with every element converted by `static_cast<U>`, in this layout; host loop.
         template <typename U>
@@ -2037,14 +2080,19 @@ namespace batchlas {
             return os;
         }
 
+        /// @brief stream_formatted_to(@p os, @p max_elements).
         void print(std::ostream& os = std::cout, int max_elements = 10) const {
             stream_formatted_to(os, max_elements);
         }
 
+        /// @name Backend descriptor
+        /// The backend-library vector descriptor (internal_helpers), created on first use.
+        /// @{
         BackendVectorHandle<T>* operator->();
         BackendVectorHandle<T>& operator*();
         const BackendVectorHandle<T>* operator->() const;
         const BackendVectorHandle<T>& operator*() const;
+        /// @}
 
     private:
         Span<T> data_;

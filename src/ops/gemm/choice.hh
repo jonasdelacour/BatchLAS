@@ -1,7 +1,8 @@
 #pragma once
 
-// gemm's selection vocabulary (flat-kernel-selection-phase3-plan.md §1.3), header-only and
-// sycl-free, so tests, the tuner and the transcribed tables name the choices the library runs.
+/// @file
+/// @brief gemm: direct, tiled, small, reg, wide, vendor. evidence: docs/perf/gemm.md @ingroup selection_ops
+// Sycl-free on purpose: tests and the tuner include it to name the choices the library runs.
 
 #include "../../select/select.hh"
 
@@ -16,18 +17,22 @@ namespace batchlas::ops::gemm {
 
 // Fields are the knobs a selector chooses. Derived in the launcher, never fields: the transpose
 // instantiation, the aligned vs predicated leg, the small bucket, TR/TC/stages (tables below).
-struct Direct : select::NoFields<"direct"> {};  // one work-item per element, any form
-struct Tiled : select::NoFields<"tiled"> {};    // 16x16 shared-memory tile, any form
-struct Small : select::NoFields<"small"> {};    // several matrices per work-group, real, max dim <= 64
-struct Reg {                                    // register-tiled, float
-    int m = 0, n = 0, k = 0, u = 1;             // macro tile and k unroll
+struct Direct : select::NoFields<"direct"> {};  ///< gemm_direct: one work-item per element, any form; max_wg >= 64
+struct Tiled : select::NoFields<"tiled"> {};    ///< gemm_tiled: 16x16 shared-memory tile, any form; max_wg >= 256
+struct Small : select::NoFields<"small"> {};    ///< gemm_small: several matrices per work-group; real, see small_fits
+/// gemm_reg, float only: m x n x k macro tile with k unroll u; must name a reg_configs entry that
+/// instantiates the call's transpose form, and max_wg must cover its threads().
+struct Reg {
+    int m = 0, n = 0, k = 0, u = 1;
     static constexpr std::string_view name = "reg";
     static constexpr std::array<std::string_view, 4> fields{"m", "n", "k", "u"};
     std::array<int, 4> values() const { return {m, n, k, u}; }
     static Reg from(std::array<int, 4> v) { return {v[0], v[1], v[2], v[3]}; }
     bool operator==(const Reg&) const = default;
 };
-struct Wide {  // 16-byte-granule tiles for every scalar
+/// gemm_wide, every scalar: 16-byte-granule m x n x k tiles; must name a wide_configs entry that
+/// instantiates the call's form, and max_wg must cover its threads().
+struct Wide {
     int m = 0, n = 0, k = 0;
     static constexpr std::string_view name = "wide";
     static constexpr std::array<std::string_view, 3> fields{"m", "n", "k"};
@@ -35,17 +40,17 @@ struct Wide {  // 16-byte-granule tiles for every scalar
     static Wide from(std::array<int, 3> v) { return {v[0], v[1], v[2]}; }
     bool operator==(const Wide&) const = default;
 };
-struct Vendor : select::NoFields<"vendor"> {};
+struct Vendor : select::NoFields<"vendor"> {};  ///< backend::gemm_vendor; needs the level-3 library
 
-using GemmChoice = std::variant<Direct, Tiled, Small, Reg, Wide, Vendor>;
+using GemmChoice = std::variant<Direct, Tiled, Small, Reg, Wide, Vendor>;  ///< natives: GPU or vendor-free host, Default precision
 
-// Transpose forms an instantiation exists for, after the real-scalar C->T fold.
+/// Transpose forms an instantiation exists for, after the real-scalar C->T fold.
 struct Forms {
     bool nn = false, nt = false, tn = false, tt = false;
 };
 
-// One compiled register config: tr/tc thread tile, stages, the forms instantiated, and whether
-// NN takes the unpredicated leg when the layout allows (derived per call, never a gate).
+/// One compiled register config: tr/tc thread tile, stages, the forms instantiated, and whether
+/// NN takes the unpredicated leg when the layout allows (derived per call, never a gate).
 struct RegCfg {
     int m, n, k, u, tr, tc, stages;
     Forms forms;
@@ -65,8 +70,8 @@ inline constexpr std::array<RegCfg, 10> reg_configs{{
     {128, 128, 8, 1, 8, 8, 2, {true, false, false, false}, true},  // its own kernel (register_128x128.hh)
 }};
 
-// One compiled wide config. NN, CN (ConjTrans A) and NC (ConjTrans B) instantiations; a real
-// Trans is served by a ConjTrans one (conj is the identity), a complex Trans is not.
+/// One compiled wide config. NN, CN (ConjTrans A) and NC (ConjTrans B) instantiations; a real
+/// Trans is served by a ConjTrans one (conj is the identity), a complex Trans is not.
 struct WideCfg {
     int m, n, k, ttm, ttn;
     bool nn, cn, nc;
@@ -85,8 +90,8 @@ inline constexpr int kSmallMaxDim = 64;
 inline constexpr int kSmallWg = 128;
 inline constexpr int kSmallTiledMaxDim = 56;  // float NN above 32: one matrix per (NB/4)^2 lanes
 
-// The work-group `small` launches: the batched kernel's 128 lanes, or the float NN tiled leg's
-// (NB/4)^2 with NB = 48 or 56 (small_batched.hh).
+/// The work-group `small` launches: the batched kernel's 128 lanes, or the float NN tiled leg's
+/// (NB/4)^2 with NB = 48 or 56 (small_batched.hh).
 template <class T>
 constexpr int small_wg(bool nn, int max_dim) {
     if (!std::is_same_v<T, float> || !nn || max_dim <= 32 || max_dim > kSmallTiledMaxDim) return kSmallWg;
@@ -95,18 +100,18 @@ constexpr int small_wg(bool nn, int max_dim) {
 }
 inline constexpr int kDirectWg = 64;
 inline constexpr int kTiledWg = 256;
-// direct, tiled, reg and wide put the batch in SYCL dim 0 = CUDA grid z (65535); small is 1-D.
+/// direct, tiled, reg and wide put the batch in SYCL dim 0 = CUDA grid z (65535); small is 1-D.
 inline constexpr std::int64_t kMaxGridBatch = 65535;
 
 template <class T>
 inline constexpr bool is_complex_v = !std::is_same_v<T, float> && !std::is_same_v<T, double>;
 
-// small's batched leg is [[sycl::reqd_sub_group_size(32)]]; only the float NN tiled leg is not.
+/// small's batched leg is [[sycl::reqd_sub_group_size(32)]]; only the float NN tiled leg is not.
 template <class T>
 constexpr bool small_needs_sg32(bool nn, int max_dim) {
     return !(std::is_same_v<T, float> && nn && max_dim > 32 && max_dim <= kSmallTiledMaxDim);
 }
-// The shape-and-device half of small's can_run, here so tests can probe synthetic devices.
+/// The shape-and-device half of small's can_run, here so tests can probe synthetic devices.
 template <class T>
 bool small_fits(const select::Device& d, bool nn, std::int64_t max_dim) {
     if (is_complex_v<T> || max_dim < 1 || max_dim > kSmallMaxDim) return false;
@@ -114,7 +119,7 @@ bool small_fits(const select::Device& d, bool nn, std::int64_t max_dim) {
     return d.max_wg >= small_wg<T>(nn, mx) && (d.has_sg32 || !small_needs_sg32<T>(nn, mx));
 }
 
-// Every compiled choice, once, in tie-break order (§6.3): simpler first, vendor last.
+/// Every compiled choice, once, in tie-break order (§6.3): simpler first, vendor last.
 template <class T>
 constexpr auto candidates() {
     constexpr std::array<Wide, 5> wides{Wide{64, 64, 16}, Wide{128, 32, 16}, Wide{32, 128, 16}, Wide{32, 32, 16},
@@ -138,18 +143,18 @@ constexpr auto candidates() {
     }
 }
 
-// Generality order (§5.5): direct serves every GPU shape, vendor everything else (CPU, precision).
+/// Generality order (§5.5): direct serves every GPU shape, vendor everything else (CPU, precision).
 inline constexpr std::array<std::string_view, 2> last_resort{"direct", "vendor"};
-inline constexpr select::OpSpec spec{Op::gemm, select::Lib::level3, {last_resort}};
+inline constexpr select::OpSpec spec{Op::gemm, select::Lib::level3, {last_resort}};  ///< op, vendor library, rules
 
-// C folds to T for a real scalar. layout: packed = A, B, C contiguous with 16-byte bases.
-// Work ~ m n k batch, so every log key weighs 1.
+/// Table keys: ta, tb (N|T|C; C folds to T for a real scalar) and layout (packed = A, B, C
+/// contiguous with 16-byte bases) exact; m, n, k, batch log, each weight 1 (work ~ m n k batch).
 inline constexpr std::array<std::string_view, 7> key_names{"ta:exact", "tb:exact", "layout:exact", "m:log",
                                                            "n:log",    "k:log",    "batch:log"};
 
-// The tuner's demand-driven grid (plan §3); the transcriber (tuned/README.md) spells it again.
-// Squares for every form and both layouts; panels and skinny shapes for the issued forms only,
-// packed panels from m, n >= 128.
+/// The tuner's demand-driven grid; the transcriber (tuned/README.md) spells it again. Squares for
+/// every form and both layouts; panels and skinny shapes for the issued forms only, packed panels
+/// from m, n >= 128. evidence: docs/design/flat-kernel-selection-phase3-plan.md (§3)
 inline constexpr std::array<int, 14> grid_square{8, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024};
 inline constexpr std::array<int, 7> grid_panel_mn{32, 64, 128, 256, 512, 1024, 2048};
 inline constexpr std::array<int, 6> grid_panel_k{8, 16, 32, 64, 96, 128};

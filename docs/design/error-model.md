@@ -42,6 +42,26 @@ every failure BatchLAS diagnoses, not every failure a BatchLAS call can produce:
 A consumer that must not let anything escape still needs a `catch (const std::exception&)`
 behind the BatchLAS handler.
 
+## error model: kernel selection throws outside the hierarchy
+
+Unlike the two cases above, this one is a gap, not a decision. Flat kernel selection
+(`src/select/`, see `docs/design/flat-kernel-selection.md`) landed after the hierarchy and throws
+plain `std::` types, so none of the following matches `catch (const batchlas::exception&)`:
+
+| site | thrown | when |
+| --- | --- | --- |
+| `select::detail::resolve_pin` (`src/select/select.hh`) | `std::invalid_argument` | a `BATCHLAS_<OP>_ROUTE` (or `ScopedPin`) value that does not parse, is not a compiled candidate for the op and type, or cannot run the shape. The class words `native` and `vendor` warn and fall back to automatic selection instead |
+| `select::detail::walk` | `std::runtime_error` | no candidate in any table row or the last-resort list can run the call |
+| `select::detail::validate`, `parse_table` | `std::runtime_error` | a tuned table (built in, or from `BATCHLAS_TUNED_DIR`) names a spelling the op does not know |
+| `select::throw_no_vendor_route` (`src/select/vendor.hh`) | `batchlas::NoRouteError` (`include/batchlas/no_route.hh`), a `std::runtime_error` only | the build has no vendor library for an op that has no native kernel for the request, typically `-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF` |
+
+The ops that still parse their own pin words outside `src/select` follow the same pattern: an
+unknown word throws `std::invalid_argument`, while a recognised pin that this build cannot serve
+throws `batchlas::unsupported`. By meaning, the first two rows are `invalid_argument` and
+`unsupported` and the last is `unsupported`; reclassifying them is a behaviour change for any
+caller that catches the `std::` type, so it belongs in its own commit. The header's file
+documentation carries the same note.
+
 ## error model: the three tag-base rules
 
 `batchlas::exception` is an empty tag whose only job is to make
@@ -91,10 +111,15 @@ reached by a different road; it is recorded in
 
 `error` has no direct thrower: every site adjudicated during the migration fitted one of the five
 children. It is kept as a catchable base and as the home for a future failure that fits none of
-them. `internal_error` covers the sites that used to throw `std::logic_error` (a resolver that
-picked a native arm no linked kernel serves, a capability query and the facade that reads it
-disagreeing, an uninjected internal seam, a branch documented unreachable). Each of those is an
-invariant of the library, not a statement about the arguments. `api_misuse` differs from
+them. `internal_error` covers the sites that used to throw `std::logic_error` (at the time: a
+route resolver that picked a native arm no linked kernel serves, a capability query and the
+facade that reads it disagreeing, an uninjected internal seam, a branch documented unreachable;
+the route resolver has since been replaced by flat kernel selection, whose own throws are listed
+[above](#error-model-kernel-selection-throws-outside-the-hierarchy)). Each of those is an
+invariant of the library, not a statement about the arguments. One later site bends the rule:
+`gesv` and `posv` (`src/ops/gesv/gesv.cc`, `src/ops/posv/posv.cc`) throw `internal_error` for an
+empty problem or a heterogeneous batch before selection runs, so a pin cannot take either; by
+meaning those are `invalid_argument` or `unsupported`. `api_misuse` differs from
 `invalid_argument` because no argument is wrong: only when and from where the call was made.
 
 ## error model: batch-wide convergence errors

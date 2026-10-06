@@ -1,14 +1,7 @@
 #pragma once
 
-// Device-side building blocks of the CTA (sub-group-partition) SYTRD reduction.
-//
-// Shared by:
-//   - sytrd_cta.cc      : the standalone tridiagonalization kernel
-//   - syev_cta_fused.cc : the monolithic SYEV kernel, which runs the same
-//                         reduction on a tile it then keeps resident
-//
-// A single definition keeps the fused and partitioned SYEV paths numerically
-// identical, so a benchmark between them measures fusion and nothing else.
+// Device-side CTA SYTRD, shared by sytrd_cta.cc and syev_cta_fused.cc: one definition keeps
+// the fused and partitioned syev numerically identical, so comparing them measures fusion only.
 
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/group-invoke.hh>
@@ -40,18 +33,9 @@ namespace batchlas {
         }
     }
 
-    // Unblocked symmetric tridiagonal reduction (LAPACK SYTD2-style) for very small matrices.
-    //
-    // This is intended as a building block for batched eigensolvers: it overwrites A with the
-    // tridiagonal (diag + first offdiag) and stores Householder reflectors in the same layout
-    // as LAPACK's {s,d}sytd2.
-    //
-    // References:
-    // - DSYTD2 reference algorithm (unblocked) in LAPACK.
-
+    // XOR-butterfly reductions: the group size must be a power of two.
     template <typename T, typename Group>
     inline T group_reduce_sum(const Group& g, T v) {
-        // Butterfly reduction using XOR shuffles; assumes power-of-two group size.
         for (uint32_t offset = static_cast<uint32_t>(g.get_local_linear_range() / 2);
              offset > 0;
              offset >>= 1) {
@@ -71,10 +55,8 @@ namespace batchlas {
         return v;
     }
 
-    // NOTE: DPC++'s CUDA path for non-uniform group collectives currently has
-    // limitations for floating-point reductions on chunked partitions.
-    // This reduction uses XOR shuffles (butterfly), which is O(log P) and keeps
-    // the result replicated in all lanes.
+    // Shuffles, not reduce_over_group: DPC++'s CUDA path cannot reduce floating point over a
+    // chunked partition. The result is replicated in every lane.
     template <typename T, typename Group>
     inline T group_reduce_sum_select_from_group(const Group& g, T v) {
         const uint32_t lanes = static_cast<uint32_t>(g.get_local_linear_range());
@@ -97,16 +79,8 @@ namespace batchlas {
         }
     }
 
-    // Generate a Householder reflector H = I - tau * v v^T for a vector [alpha; x].
-    // Mirrors DLARFG for the real case.
-    //
-    // Input:
-    //  - alpha: scalar (lane==alpha_lane)
-    //  - x elements in other lanes (inactive lanes must pass 0)
-    // Output:
-    //  - alpha overwritten with beta
-    //  - x elements overwritten with v (scaled), and the implicit element becomes 1
-    //  - tau returned
+    // DLARFG over a partition: alpha lives in lane alpha_lane, x in the others (inactive lanes
+    // pass 0). Overwrites alpha with beta and x with the scaled v (implicit 1); returns tau.
     template <typename T, typename Partition>
     inline T larfg_small(const Partition& part,
                          int32_t len,
@@ -117,17 +91,13 @@ namespace batchlas {
                          bool x_active) {
         using Real = typename base_type<T>::type;
 
-        // Compute xnorm.
         const Real xsq = x_active ? abs2_if_complex(x) : Real(0);
         const Real sumsq = group_reduce_sum_select_from_group(part, xsq);
-        // `sumsq` is already replicated across the partition, so evaluate the
-        // reflector scalars redundantly instead of serializing onto the leader.
+        // sumsq is replicated, so every lane computes the scalars instead of serialising on a leader.
         const Real xnorm = sycl::sqrt(sumsq);
 
         T tau = T(0);
 
-        // Ensure every lane sees the correct alpha value regardless of where
-        // alpha lives inside the partition.
         const T alpha_leader = select_from_group(part, alpha, static_cast<uint32_t>(alpha_lane));
 
         T beta_b = alpha_leader;
@@ -142,7 +112,6 @@ namespace batchlas {
 
         tau = tau_b;
 
-        // Apply scaling to x and set alpha=beta.
         if (lane == alpha_lane) {
             alpha = beta_b;
         } else if (x_active && tau != T(0)) {
@@ -152,27 +121,11 @@ namespace batchlas {
         return tau;
     }
 
-    // LAPACK SYTD2-style reduction of the *upper* triangle of a
-    // partition-resident tile to tridiagonal form.
-    //
-    // `A_local` points at this problem's P x P tile (column-major, leading
-    // dimension LDA); the tile must hold the full symmetric/Hermitian matrix,
-    // zero-padded outside the leading n x n block. `V_local` and `W_local` are
-    // this problem's two length-P scratch vectors.
-    //
-    // On return the tile holds the tridiagonal in its diagonal and
-    // superdiagonal, and the Householder reflector for index i in rows 0..i-1 of
-    // column i+1 (with an implicit 1 at row i) -- exactly LAPACK's
-    // {s,d}sytd2 / {c,z}hetd2 packing. So the caller can read
-    //   d(i)   = A_local[i + i*LDA]
-    //   e(i)   = A_local[i + (i+1)*LDA]
-    // straight off the tile: iteration k only ever touches the leading k x k
-    // block, so column k is final once iteration k has run.
-    //
-    // The return value is this lane's tau: lane i holds tau(i) for i < n-1, and
-    // zero elsewhere. Keeping it in a register (rather than a shared array) is
-    // free -- tau is partition-uniform where it is produced -- and it is the
-    // form the back-transform wants, which broadcasts tau(ii) per reflector.
+    // SYTD2 on the UPPER triangle of a partition-resident P x P tile (column-major, LDA), which
+    // must hold the full Hermitian matrix zero-padded past n; V_local/W_local are length-P
+    // scratch. Leaves {s,d}sytd2 / {c,z}hetd2 packing: d(i) = A[i,i], e(i) = A[i,i+1], reflector
+    // i in rows 0..i-1 of column i+1. Returns this lane's tau(lane) (zero for lane >= n-1).
+    // Step k touches only the leading k x k block, so column k is final once step k has run.
     template <typename T, int32_t LDA, typename LocalPtr, typename Partition>
     inline T sytd2_cta_upper_partition(const Partition& part,
                                        LocalPtr A_local,
@@ -182,13 +135,12 @@ namespace batchlas {
                                        int32_t lane) {
         T tau_lane = T(0);
 
-        // For k = n-1 .. 1, annihilate A(0:k-2, k).
+        // Step k annihilates A(0:k-2, k); [x; alpha] is column k, rows 0..k-1.
         for (int32_t k = n - 1; k >= 1; --k) {
-            const int32_t m = k;          // active submatrix size (0..m-1)
+            const int32_t m = k;
             const int32_t alpha_row = k - 1;
             const int32_t col = k;
 
-            // Vector [x; alpha] lives in column 'col' rows [0..m-1], alpha at row alpha_row.
             const bool in_vec = (lane < m);
             const bool is_alpha = (lane == alpha_row);
             const bool x_active = (lane < (m - 1));
@@ -204,13 +156,11 @@ namespace batchlas {
                 }
             }
 
-            // Form reflector.
             const T taui = larfg_small<T>(part, m, lane, alpha_row, alpha, x, x_active);
 
-            // Write back scaled vector and beta (alpha).
+            // Both triangles are written: the rank-2 update below reads the full block.
             if (x_active) {
                 A_local[lane + col * LDA] = x;
-                // Keep Hermitian/symmetric storage consistent.
                 A_local[col + lane * LDA] = conj_if_complex(x);
             }
             if (is_alpha) {
@@ -220,7 +170,6 @@ namespace batchlas {
             }
 
             if (taui != T(0)) {
-                // Build v (length m) with v(m-1)=1.
                 const T v_lane = (lane < m)
                                     ? ((lane == alpha_row) ? T(1) : A_local[lane + col * LDA])
                                     : T(0);
@@ -234,7 +183,7 @@ namespace batchlas {
                 }
                 group_barrier(part);
 
-                // Compute x := tau * A(0:m-1,0:m-1) * v, store in W_local.
+                // DSYTD2: x = tau*A*v, w = x - (tau/2)(v^H x) v, A -= v w^H + w v^H.
                 T y = T(0);
                 if (lane < m) {
                     for (int32_t c = 0; c < m; ++c) {
@@ -247,19 +196,15 @@ namespace batchlas {
                 W_local[lane] = y;
                 group_barrier(part);
 
-                // dot = v^H x
                 const T dot_lane = (lane < m) ? (conj_if_complex(V_local[lane]) * W_local[lane]) : T(0);
                 const T dot = group_reduce_sum_select_from_group(part, dot_lane);
                 const T alpha2 = T(-0.5) * taui * dot;
 
-                // w := x + alpha2 * v
                 if (lane < m) {
                     W_local[lane] = W_local[lane] + alpha2 * V_local[lane];
                 }
                 group_barrier(part);
 
-                // Rank-2 update on the leading m x m block (Hermitian-safe):
-                // A := A - v*w^H - w*v^H
                 if (lane < m) {
                     const T v_r = V_local[lane];
                     const T w_r = W_local[lane];
@@ -272,16 +217,13 @@ namespace batchlas {
                 }
                 group_barrier(part);
 
-                // Restore superdiagonal element and keep symmetry consistent.
                 if (is_alpha) {
                     A_local[alpha_row + col * LDA] = alpha;
                     A_local[col + alpha_row * LDA] = conj_if_complex(alpha);
                 }
                 group_barrier(part);
             } else {
-                // If tau==0, ensure we don't leave a "1" in A.
                 if (is_alpha) {
-                    // alpha already stored.
                     A_local[col + alpha_row * LDA] = conj_if_complex(alpha);
                 }
             }

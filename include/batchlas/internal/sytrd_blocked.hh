@@ -3,7 +3,8 @@
 /// @file
 /// @brief Blocked Hermitian tridiagonal reduction (sytrd/hetrd). Kernel helper, not API.
 ///
-/// Installed only because public headers include it; not a stable interface.
+/// Installed with the rest of `include/batchlas` (the install rule copies the
+/// tree wholesale); no public header includes it. Not a stable interface.
 /// sytrd_blocked_buffer_size() repeats the documented declaration in
 /// `batchlas/blas/extensions.hh` without its default `block_size`.
 /// @ingroup internal_helpers

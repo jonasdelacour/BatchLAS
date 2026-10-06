@@ -230,7 +230,8 @@ struct BATCHLAS_API Device{
     bool supports_sub_group_size(size_t size) const;
 
     /// @brief CUDA compute capability as major*10+minor (89 = sm_89, 120 = sm_120), or 0 for a
-    /// non-CUDA device. Memoized per device; for per-architecture routing windows.
+    /// non-CUDA device. Memoized per device. Kernel selection derives its device key from it
+    /// (`sm_89`), which picks the per-device table in `tuned/`.
     // Parsed from info::device::version, because ext_oneapi_architecture reports
     // "unknown" for sm_100/sm_120 on current DPC++.
     int cuda_compute_capability() const;
@@ -254,7 +255,7 @@ struct EventImpl;
 // Per-member BATCHLAS_API is forced (GCC rejects [[nodiscard]] plus a GNU attribute on the
 // class-key). evidence: docs/design/symbol-visibility.md#symbol-visibility-event-carries-per-member-exports
 struct [[nodiscard]] Event {
-    std::unique_ptr<EventImpl> impl_;  ///< Implementation; null for a default-constructed or moved-from Event.
+    std::unique_ptr<EventImpl> impl_;  ///< Implementation; null only for a moved-from Event.
 
     /// @brief An empty Event, already complete.
     BATCHLAS_API Event();
@@ -264,6 +265,7 @@ struct [[nodiscard]] Event {
     BATCHLAS_API Event(Event&& other);
     BATCHLAS_API Event& operator=(Event&& other);
     /// @brief Block until the work this Event tracks has completed.
+    /// @pre The Event is not moved-from.
     BATCHLAS_API void wait() const;
     BATCHLAS_API EventImpl* operator->() const;
     BATCHLAS_API EventImpl& operator*() const;
@@ -285,7 +287,8 @@ struct QueueImpl;
 /// Queue sibling(ctx, /*in_order=*/true);       // shares ctx's context and device
 /// @endcode
 /// Every entry point takes its backend from the Queue and leases its default workspace from the
-/// Queue's arena (see WorkspaceLease). Movable, not copyable.
+/// Queue's arena (see WorkspaceLease). Movable, not copyable. Constructing the first Queue in
+/// the process closes batchlas::configure().
 /// @warning A Queue is single-threaded: it owns an unsynchronised arena and a cached last event,
 ///          and workspace(), trim_workspace(), submissions, enqueue(), get_event() and
 ///          create_event_after_external_work() throw batchlas::api_misuse when called from a
@@ -320,7 +323,7 @@ struct BATCHLAS_API Queue{
     QueueImpl& operator*() const;
 
     /// @brief Order all later work on this Queue after `event`, without a host wait.
-    /// A default-constructed Event is ignored.
+    /// A moved-from Event is ignored; a default-constructed one is already complete.
     void enqueue(Event& event);
     /// @brief An Event that completes after everything enqueued on this Queue so far.
     Event get_event() const;
@@ -371,6 +374,7 @@ struct BATCHLAS_API Queue{
 
     /// @brief The backend calls dispatch to; never Backend::AUTO (an AUTO Queue resolves once, on
     /// first query, from the device vendor and the compiled-in backends).
+    /// @throws batchlas::unsupported if AUTO finds no compiled-in backend that serves the device
     batchlas::Backend backend() const;
     /// @brief The backend as requested, possibly Backend::AUTO.
     batchlas::Backend requested_backend() const { return backend_; }

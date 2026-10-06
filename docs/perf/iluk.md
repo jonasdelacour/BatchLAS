@@ -6,9 +6,10 @@
 > **Machine:** RTX 4090 (sm_89), CUDA 13.2, /opt/dpcpp-cuda, as far as the source records;
 > the original comments give no date, harness or raw file for any figure below.
 
-ILU(k) has no `RouteTable` (`Op::iluk` exists but only for `op_name`, see
-[vendor independence](../design/vendor-independence.md)); the one routing decision is host versus
-device for the numeric phase, taken on batch size alone. Every batch item shares one sparsity
+ILU(k) does not take part in flat kernel selection: it has no `src/ops/iluk/`, no tuned table
+and no `BATCHLAS_ILUK_ROUTE` (see [flat kernel selection](../design/flat-kernel-selection.md); before
+phase 5 it likewise had no `RouteTable`). The one routing decision is host versus device for the
+numeric phase, taken on batch size alone, inside `src/extensions/iluk.cc`. Every batch item shares one sparsity
 pattern, and both paths exploit that: everything that depends only on the pattern is computed
 once on the host, and only the per-item arithmetic scales with the batch.
 

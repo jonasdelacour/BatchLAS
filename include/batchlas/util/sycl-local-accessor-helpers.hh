@@ -2,6 +2,13 @@
 // Copyright (c) 2025 Jonas deLacour
 #pragma once
 
+/// @file
+/// @brief util::get_raw_ptr() for `sycl::local_accessor`, used to pass device-BLAS workspaces.
+///
+/// Installed with the rest of `include/batchlas` (the install rule copies the
+/// tree wholesale); no public header includes it. Not a stable interface.
+/// @ingroup internal_helpers
+
 #include <sycl/sycl.hpp>
 
 namespace batchlas {

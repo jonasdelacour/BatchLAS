@@ -5,7 +5,9 @@
 > kept every parser as it was, the table of variables with their parser dialects and traps, the
 > `unsafe` group and its CMake gate, `configure()` and `reload_settings()` semantics, and the
 > shared parsers and `ScopedEnvVar` in `include/batchlas/util/env.hh`.
-> **Status:** current. Introduced in `b52e07b0` (2026-09-09). The user-facing guide, with a
+> **Status:** current. Introduced in `b52e07b0` (2026-09-09); the routing group and the variable
+> table were updated on 2026-10-06 for flat kernel selection, which retired the legacy route
+> variables and several selection knobs. The user-facing guide, with a
 > field/variable/default table per group, is [Configuration](../cpp-api.md#configuration); this
 > page is the design record and the parser reference. API reference: the `config` group.
 
@@ -20,7 +22,7 @@ somebody exported for a benchmark last week. The debugging value of the knobs is
 was removed: what changed is that the read happens once, in one place, and is overridable.
 
 `settings()` reads the environment once under `std::call_once`. It is thread-safe and safe to
-call from a static initialiser (dispatch coverage does). The reference it returns is valid for
+call from a static initialiser (the selection coverage in `src/select/coverage.cc` does). The reference it returns is valid for
 the life of the process, but its contents change under `configure()` and
 `detail::reload_settings()`, so a field must not be cached across a call that could do either.
 Read `settings().group.field` where the code used to call `std::getenv`, and do not hoist it into
@@ -34,7 +36,8 @@ The one rule that shaped `settings.hh`: move where the string comes from, not ho
 The tree contains seven mutually incompatible boolean dialects:
 
 1. `env_truthy`: exactly `{1, true, TRUE, on, ON}`;
-2. a case-folding variant that also accepts `yes` (`BATCHLAS_GEMM_EXPERIMENTAL`);
+2. a case-folding variant that also accepts `yes` (`BATCHLAS_GEMM_EXPERIMENTAL`, no longer read
+   since flat kernel selection deleted the gemm variant machinery);
 3. first character in `{1, t, T, y, Y}` (`SYEVX_INSTR_HOST`, `SYEVX_PROJECTED_VENDOR`,
    `STEQR_CTA_CHECK`): `true` works, `on` does not;
 4. an inverted first-character form: on unless the first character is in `{0, n, N, f, F}`
@@ -57,8 +60,9 @@ unset variable), so migrating such a site is replacing `std::getenv("BATCHLAS_FO
 `settings().group.foo.get()` and nothing else. `EnvValue` also keeps "unset" apart from "set to
 the empty string", which is load-bearing: `kernel-trace.hh` falls through from
 `BATCHLAS_KERNEL_TRACE_PATH` to `BATCHLAS_TRACE_PATH` only when the first is set but empty, and
-`parse_route_env` treats a set-but-empty canonical route variable as absent so the legacy
-spelling still gets a turn.
+the route-pin reader (`select::detail::pin_text`) treats a set-but-empty `BATCHLAS_<OP>_ROUTE`
+as `auto`. (Before flat kernel selection, `parse_route_env` treated a set-but-empty canonical
+route variable as absent so that the legacy spelling still got a turn.)
 
 ## environment: the variables and their parser dialects
 
@@ -68,12 +72,10 @@ harnesses (`BATCHLAS_TEST_BACKEND`, `BATCHLAS_BENCH_*`, ...) are deliberately ab
 
 | variable | field | parser | notes |
 | --- | --- | --- | --- |
-| `BATCHLAS_<OP>_ROUTE` | `routing.canonical[op]` | raw, `dispatch::parse_route_env` | hemm, herk, her2k, iluk slots are inert |
-| `BATCHLAS_{GEMM,SYMM,SYRK,SYR2K,TRMM}_VARIANT`, `BATCHLAS_{SYEV,GESVD,ORMQR}_PROVIDER` | `routing.legacy[op]` | raw, `parse_route_env` | canonical wins when both are set |
+| `BATCHLAS_<OP>_ROUTE` | `routing.route(op)`, one slot per entry of `RoutingSettings::ops` | raw; trimmed and case-folded by the op's pin reader | `auto`, `native`, `vendor` or a choice spelling; see [route pins](#environment-route-pins-are-raw-strings) |
+| `BATCHLAS_TUNED_DIR` | `selection.tuned_dir` | raw, a directory path | a table file there (named op, type, device key, as `gemm.float.sm_89.txt`) replaces the built-in table of that name; other files are skipped with a warning |
 | `BATCHLAS_EXPAND_ROUTE` | `selection.expand_route` | raw, two agreeing parsers | `expand` or `loop` |
 | `BATCHLAS_GEMM_CUBLASDX_KERNEL` | `selection.gemm_cublasdx_kernel` | raw | ~20 spellings; read for presence and value |
-| `BATCHLAS_GEMM_EXPERIMENTAL` | `selection.gemm_experimental` | raw, case-folding + `yes` | unlocks five experimental GEMM variants |
-| `BATCHLAS_GEMM_SYCL_KERNEL` | `selection.gemm_sycl_kernel` | raw | ~38 spellings; unset is `KernelVariant::Direct` |
 | `BATCHLAS_GEMV_SEGT` | `selection.gemv_segt` | raw | `off`, `auto`, 2, 4, 8; must not be latched |
 | `BATCHLAS_GESVD_BIDIAG` | `selection.gesvd_bidiag` | raw | changes numerics, see [below](#environment-knobs-that-override-an-explicit-argument) |
 | `BATCHLAS_GETRF_LEAF` | `selection.getrf_leaf` | raw, re-read per call | `slm` or `reg` (default) |
@@ -88,7 +90,6 @@ harnesses (`BATCHLAS_TEST_BACKEND`, `BATCHLAS_BENCH_*`, ...) are deliberately ab
 | `BATCHLAS_ORTHO_GRAM` | `selection.ortho_gram` | raw | only `gemm` has an effect |
 | `BATCHLAS_SB2ST_BACK_WAVE` | `selection.sb2st_back_wave` | raw, wider disable set | fails open, see [below](#environment-sb2st-back-wave-fails-open) |
 | `BATCHLAS_SB2ST_SUBGROUP` | `selection.sb2st_subgroup` | raw, case-folded | `auto`, `on`, `off`; forced on throws when kd > 32 or no sub-group 32 |
-| `BATCHLAS_SYEV_SMALL_KERNEL` | `selection.syev_small_kernel` | raw | `cta`, `fused`, `cta_fused`, `jacobi`; `is_set()` separates "forced cta" from unset |
 | `BATCHLAS_SYEV_TWO_STAGE_CHASE` | `selection.syev_two_stage_chase` | raw | only `givens`; read by solve and sizing query |
 | `BATCHLAS_SYEVX_ALGORITHM` | `selection.syevx_algorithm` | raw | overrides `SyevxParams::method` |
 | `BATCHLAS_SYEVX_PRECONDITIONER` | `selection.syevx_preconditioner` | raw | overrides a `SyevxParams` field |
@@ -111,8 +112,7 @@ harnesses (`BATCHLAS_TEST_BACKEND`, `BATCHLAS_BENCH_*`, ...) are deliberately ab
 | `BATCHLAS_POTRF_NB`, `BATCHLAS_POTRF_W` | `geometry.potrf_nb`, `potrf_w` | int, 0 = unset | type-dependent defaults at the call site |
 | `BATCHLAS_SYEV_TWO_STAGE_KD` | `geometry.syev_two_stage_kd` | `env_positive_int_or` | 32, clamped to `[1, n-1]` at the call site |
 | `BATCHLAS_SYEV_TWO_STAGE_SB2ST_BLOCK` | `geometry.syev_two_stage_sb2st_block` | `env_positive_int_or` | 32; read by four solve/sizing pairs |
-| `BATCHLAS_SY2SB_ORMQR_NB` | `geometry.sy2sb_ormqr_nb` | raw, three-valued | unset, `off`/0 = never hint, positive clamped to 0..1024 |
-| `BATCHLAS_SYEV_CTA_MAX_N` | `geometry.syev_cta_max_n` | raw, `strtol`, reject outside 0..32 | 24 for `complex<double>`, else 32 (= off); [evidence](../perf/syev.md#syev-the-lobpcg-projected-solve-knob) |
+| `BATCHLAS_SY2SB_ORMQR_NB` | `geometry.sy2sb_ormqr_nb` | raw, three-valued | unset, `off`/0 = never hint, positive forced (clamped to kd); unparseable, negative or above 1024 reads as unset |
 | `BATCHLAS_SYTRD_BLOCK_SIZE` | `geometry.sytrd_block_size` | int, 0 = unset | n-bucketed and type-dependent default |
 | `BATCHLAS_TRMM_TILE_M` | `geometry.trmm_tile_m` | int, 0 = unset | bucketed to 16, 32, 64, 128 |
 | `BATCHLAS_TRSM_OUTER_NB` | `geometry.trsm_outer_nb` | int, 0 = unset, not latched | 128 for `Side::Left`, the CTA nb for `Side::Right` |
@@ -123,11 +123,12 @@ harnesses (`BATCHLAS_TEST_BACKEND`, `BATCHLAS_BENCH_*`, ...) are deliberately ab
 | `BATCHLAS_SYEVX_FILTER_DEGREE` | `geometry.syevx_filter_degree` | int, > 0 only | top of a four-level chain; disables the auto degree |
 | `BATCHLAS_SYEVX_INIT_POWER` | `geometry.syevx_init_power` | `std::optional<int>` | 0 = no power iterations |
 | `BATCHLAS_SYEVX_LOCK_FACTOR` | `geometry.syevx_lock_factor` | `atof`, > 0 only | 0.1; the only non-integer knob |
-| `BATCHLAS_TUNE_*` (eleven) | `geometry.tune.*` | raw, `tuning_env_override` | see @ref perf_tuning |
+| `BATCHLAS_TUNE_{ORMQR_BLOCK_SIZE, GEBRD_BLOCK_SIZE, SB2ST_BACK_TILE, SB2ST_BACK_SUBS, SY2SB_ORMQR_NB, SYTRD_BLOCK_SIZE, LATRD_WG_HINT, STEDC_RECURSION_THRESHOLD, STEDC_MERGE_VARIANT, STEDC_THREADS_PER_ROOT, STEDC_WG_MULTIPLIER}` | `geometry.tune.*` | raw, `tuning_env_override` | see @ref perf_tuning |
 | `BATCHLAS_QUEUE_PROFILING`, `BATCHLAS_BENCH_PROFILING` | `diagnostics.profiling` | `env_truthy`, ORed | kernel trace implies it |
 | `BATCHLAS_KERNEL_TRACE`, `BATCHLAS_TRACE_KERNELS` | `diagnostics.kernel_trace` | `env_truthy`, ORed | |
 | `BATCHLAS_KERNEL_TRACE_PATH`, `BATCHLAS_TRACE_PATH` | `diagnostics.kernel_trace_path` | first non-empty | default `batchlas_kernels.trace.json`; written at exit |
 | `BATCHLAS_COVERAGE_OUT` | `diagnostics.coverage_out` | raw | written at exit as `<value>.<pid>` |
+| `BATCHLAS_SELECT_TRACE` | `diagnostics.select_trace` | `env_truthy` | one stderr line per kernel-selection decision |
 | `BATCHLAS_DEBUG_FILTER_DEGREE` | `diagnostics.debug_filter_degree` | presence only | the empty string enables it |
 | `BATCHLAS_DEBUG_SYTRD_SMALL` | `diagnostics.debug_sytrd_small` | `env_truthy` | prints once |
 | `BATCHLAS_GESVD_PROFILE` | `diagnostics.gesvd_profile` | `env_truthy` | drains per stage |
@@ -142,27 +143,46 @@ harnesses (`BATCHLAS_TEST_BACKEND`, `BATCHLAS_BENCH_*`, ...) are deliberately ab
 | `BATCHLAS_LATRD_GRID_FORCE_UNSAFE` | `unsafe.latrd_grid_force_unsafe` | `env_truthy` | can deadlock |
 | `BATCHLAS_BLAS_HEALTH` | `unsafe.blas_health` | `off`, `warn`, `error` | only `off` is gated |
 
-## environment: routing is raw strings
+## environment: route pins are raw strings
 
-The routing group holds raw strings because `dispatch::parse_route_env(Op)` is the single route
-parser, and it handles three documented word collisions: legacy `BATCHLAS_GEMM_VARIANT=native`
-selects the *vendor* path, the opposite of canonical `native`; legacy `custom` means the fused
-cuBLASDx kernel for the level-3 tile ops and the register-tiled family for gemm; syrk/syr2k legacy
-`gemm` selects a deliberately wrong both-triangles baseline. `tests/route_vocabulary_tests.cc`
-pins every one. `parse_route_env` kept its parsers and lost only its two `std::getenv` calls.
+`Settings::routing` holds one raw `EnvValue` per op that reads a `BATCHLAS_<OP>_ROUTE` variable,
+in the order of `RoutingSettings::ops`. `settings.cc` synthesises the names (`"BATCHLAS_"` +
+upper-cased op + `"_ROUTE"`), so a grep for `BATCHLAS_*` string literals misses them. The strings
+stay raw because the parser belongs to the selection layer, not to the settings: `src/select`
+(`select::detail::pin_text` and `resolve_pin`) trims and case-folds the value, reads an empty one as
+`auto`, and accepts `auto`, `native` (the best runnable non-vendor candidate), `vendor`, or a
+choice spelling of that op (`lpanel:panel=8`). A spelling that does not parse, is not a compiled
+candidate for the op and scalar type, or cannot run the shape throws `std::invalid_argument`;
+`native` and `vendor` instead warn once and fall back to `auto` when nothing in their class can run
+the call. A test pins with `ScopedPin` (`src/select/select.hh`), a thread-local slot that wins over
+the environment. An op whose selection is still hand-written reads the same slot and parses its own
+word list. The design and the pin rules are in `docs/design/flat-kernel-selection.md` (sections
+5.3 and 12).
 
-**Four slots are inert.** `hemm`, `herk`, `her2k` and `iluk` have no `parse_route_env` call site
-anywhere in `src/`, `include/`, `tests/` or `benchmarks/`; `Op::hemm/herk/her2k` appear only as
-coverage labels. `op_env_stem()` can spell `BATCHLAS_HEMM_ROUTE` and the array captures it, but no
-adapter reads it. The array is indexed by `Op` rather than listing 17 named fields so that wiring
-one later is a one-line change at the adapter. A slot is not a working variable.
+`RoutingSettings::route(op)` throws `std::invalid_argument` for an op that has no slot; adding an
+op that reads a pin means adding its spelling to `RoutingSettings::ops`, nothing else in
+`settings.cc`.
 
-**`BATCHLAS_GEMM_VARIANT` has two readers.** `legacy[Op::gemm]` is read by `parse_route_env(Op::gemm)`,
-which defaults to `{Auto, Auto}`, and by `gemm_variant_request()` in `src/backends/gemm_variant.hh`,
-which defaults to `GemmVariantRequest::Vendor`. Both read the one field, so they can no longer
-disagree about what the user typed. They keep their own defaults for the unset case on purpose:
-unifying those is a behaviour change (it moves which kernel a bare `gemm()` call runs) and was not
-part of this work.
+**Historical: the route vocabulary before flat kernel selection.** Until phase 5 of flat kernel
+selection (`0bd26dfe`, "delete the old dispatch layer, the legacy route vocabulary and dead code"),
+the routing group held two arrays indexed by `Op`: `canonical` for `BATCHLAS_<OP>_ROUTE` and
+`legacy` for `BATCHLAS_{GEMM,SYMM,SYRK,SYR2K,TRMM}_VARIANT` and `BATCHLAS_{SYEV,GESVD,ORMQR}_PROVIDER`,
+with the canonical spelling winning when both were set. `dispatch::parse_route_env(Op)` was the
+single parser and handled three word collisions: legacy `BATCHLAS_GEMM_VARIANT=native` selected the
+*vendor* path, the opposite of canonical `native`; legacy `custom` meant the fused cuBLASDx kernel
+for the level-3 tile ops and the register-tiled family for gemm; syrk/syr2k legacy `gemm` selected a
+deliberately wrong both-triangles baseline (`tests/route_vocabulary_tests.cc` pinned every one).
+Four slots (`hemm`, `herk`, `her2k`, `iluk`) were captured but read by nothing.
+`BATCHLAS_GEMM_VARIANT` had two readers with different unset defaults (`parse_route_env` defaulted
+to `{Auto, Auto}`, `gemm_variant_request()` to `GemmVariantRequest::Vendor`), kept apart because
+unifying them would have moved which kernel a bare `gemm()` ran. The legacy variables,
+`BATCHLAS_GEMM_SYCL_KERNEL` (~38 spellings, unset was `KernelVariant::Direct`) and
+`BATCHLAS_GEMM_EXPERIMENTAL` (unlocked five experimental GEMM variants) are no longer read, and
+neither are `BATCHLAS_SYEV_SMALL_KERNEL` (`cta`, `fused`, `cta_fused`, `jacobi`; its `is_set()`
+separated "forced cta" from unset) or `BATCHLAS_SYEV_CTA_MAX_N` (`strtol`, rejected outside 0..32;
+24 for `complex<double>`, else 32 = off; [evidence](../perf/syev.md#syev-the-lobpcg-projected-solve-knob)),
+whose `Settings` fields were retired with them; see
+[gemm](../perf/gemm.md) for that layer's record.
 
 ## environment: knobs that override an explicit argument
 
@@ -203,7 +223,8 @@ per call. `SYTRD_IMPL` is latched today while its near-twin `LATRD_IMPL` deliber
 
 Twenty geometry knobs cannot carry a scalar default because their default is a function:
 n-bucketed (every `BATCHLAS_TUNE_*`, and the sb2st/sytrd/latrd block widths), type-dependent
-(`potrf`'s nb 128/96/96/64 and w 128/32/32/16 for float/double/cfloat/cdouble; syev's CTA max n),
+(`potrf`'s nb 128/96/96/64 and w 128/32/32/16 for float/double/cfloat/cdouble; syev's CTA max n
+before it was retired),
 argument-dependent (trsm's outer nb depends on `Side`, trmm's tile on m, syevx's extra directions
 on the eigenvalue count), or device-dependent (the expansion byte budget is
 `GLOBAL_MEM_SIZE / 4`). For those the field is a sentinel (0, or an unset `EnvValue`) and the
@@ -282,7 +303,7 @@ change that belongs in its own commit:
 ## environment: files written from the environment
 
 Three diagnostics knobs open a filesystem path for writing inside library code, two of them from
-an `atexit` handler: the kernel trace writes `kernel_trace_path`, the dispatch coverage writes
+an `atexit` handler: the kernel trace writes `kernel_trace_path`, the selection coverage writes
 `$BATCHLAS_COVERAGE_OUT.<pid>`, and the band-reduction dump calls `create_directories()` under
 `$BATCHLAS_DUMP_BANDR1_DIR`. An embedding application that inherits a hostile environment gets
 directories created and files written at a path it never chose; `configure()` is what lets it
@@ -404,8 +425,10 @@ all fall back to the computed default there. Those sites had each grown their ow
 site is routed through the plain `env_int_or`.
 
 `env.hh` declares `detail::reload_settings()` instead of including `settings.hh`, because
-`settings.hh` pulls in the route vocabulary and `env.hh` is reached by nearly every device
-translation unit; a declaration is all `ScopedEnvVar` needs.
+`env.hh` is reached by nearly every device translation unit and a declaration is all
+`ScopedEnvVar` needs. (The original reason, that `settings.hh` pulled in the route vocabulary, went
+away with the legacy routing arrays; `settings.hh` now includes only standard headers and
+`export.hh`.)
 
 ## environment: ScopedEnvVar
 

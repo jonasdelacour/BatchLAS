@@ -100,3 +100,14 @@ identical items in `fill_triangular_random` / `fill_tridiag_toeplitz`, `fill_ran
 padding, a no-op slice assert in `KernelMatrixView`, a length assert in
 `fill_diagonal(ctx, Span, k)` that can fire for `k != 0`). The owner may want a row per defect
 in the known-defects table pointing there.
+
+## -> docs/design/known-defects.md: UnifiedVector move assignment leaks
+
+Added 2026-10-06 to `docs/design/matrix-model.md#matrix-model-open-debts`: `UnifiedVector`'s
+move assignment (`include/batchlas/util/sycl-vector.hh`) overwrites `data_` without freeing the
+previous allocation, so moving into a non-empty `UnifiedVector`, `Matrix` or `Vector` leaks USM
+shared memory. A row in the known-defects table pointing at the matrix-model open debts would
+make it findable.
+
+Code sites that now point here: `include/batchlas/util/sycl-vector.hh` (`@trap` on the move
+assignment, `@ref matrix-model-open-debts`).

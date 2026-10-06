@@ -1,4 +1,12 @@
-# Flat kernel selection
+# Flat kernel selection {#design_flat_selection}
+
+> **Covers:** how every op chooses the kernel that runs: kernel families and `can_run`, the
+> per-device tuned tables, pins, the trace and coverage rows, the tuner, and the record of how
+> the old `RouteTable` layer was replaced.
+> **Status:** current. The code reference is the @ref selection group (`src/select/`), every
+> op's families and shipped tables are on the generated @ref selection_tables page, and the table
+> files are described in @ref tuned_tables_readme. A "§n" below is a numbered section of this
+> page; "plan §n" is the phase-3 plan, @ref design_flat_selection_phase3_plan (history).
 
 Status: **phases 1-5 implemented; tables: measured/converted/transcribed per `tuned/README.md`;
 retune pending.** Phases 1-2 and P3.0-P3.4 (select infrastructure, posv, the tuner, blackwell
@@ -358,6 +366,13 @@ There are two compatibility notes:
 
 A pin whose `can_run` is false throws. Today it silently falls back to Auto.
 
+Correction (2026-10-06): "read on every call" means read from the settings snapshot on every call.
+`select::detail::pin_text` reads `settings().routing`, which is captured once from the environment;
+a raw `::setenv` between calls is not seen until `detail::reload_settings()` runs (`ScopedEnvVar`
+triggers it). A harness that switches pins with plain `setenv` inside one process gets the first
+value for every arm. See [route pins are raw strings](environment.md#environment-route-pins-are-raw-strings)
+and [what a settings reload does not cover](environment.md#environment-what-a-settings-reload-does-not-cover).
+
 ### 5.4 Tables and lookup
 
 Text format (one file per op × dtype × device):
@@ -683,7 +698,8 @@ The sm_89 gate needs the RTX 4090 box. The sm_120 gate needs the Blackwell box (
 
 Where the code differs from the sketches above, the code wins. These are the differences.
 
-**Phase 1, `src/select/`:**
+### Phase 1, `src/select/`
+
 - **The class words `native` and `vendor` fall back to Auto with a warning** (once per op and
   word) when nothing in their class can run the shape. They do not throw. These are the two
   exceptions to R6. Bare `native` keeps today's meaning, which the `route-native` re-run of
@@ -705,7 +721,8 @@ Where the code differs from the sketches above, the code wins. These are the dif
   last-resort order are op data, not helper code. Phase 5: `Rules{last_resort}`, no aliases.
 - Zero-field families use `NoFields<"name">`, as §4.2 allows.
 
-**Phase 2, potrf:**
+### Phase 2, potrf
+
 - No `struct Key` in `choice.hh`; `key_of` in `potrf.cc` builds a `select::Key`. `key_names`
   stays in `choice.hh`.
 - `aliases`, `last_resort` and `rules` live in `choice.hh`, so tests and `factor_bench` use the
@@ -745,7 +762,8 @@ Where the code differs from the sketches above, the code wins. These are the dif
 - **Not done in phase 2:** the `potrf.hh:51-53` stale line numbers (§11) are not fixed. The sm_89
   half of the §10 gate is not run (see "Gate results").
 
-**After the final review:**
+### Phase 2, after the final review
+
 - **Weighted `:log` keys.** A key spec may give a `:log` key a weight, `<name>:log:<w>` (a positive
   integer or decimal, default 1), and `nearest()` minimises `Σ w·|log2(row/key)|`; the tie rule is
   unchanged. potrf declares `uplo:exact n:log:3 batch:log`: its work grows as `n^3` and linearly in
@@ -772,7 +790,8 @@ Where the code differs from the sketches above, the code wins. These are the dif
   there. `factor_bench` reports a refused pin as that arm's `bad=1` row
   (`pin refused: ...`) and keeps running the other arms.
 
-**Phase 3.0 (select infrastructure):**
+### Phase 3.0, select infrastructure
+
 - **Exact keys drop one at a time, from the right.** §5.4 described an all-or-nothing exact-key
   filter. `Table::nearest` now keeps the rows matching the longest prefix of the `:exact` keys in
   `# keys:` order, so with `side:exact trans:exact` a missing (R,T) keeps the `side=R` rows; the
@@ -783,7 +802,10 @@ Where the code differs from the sketches above, the code wins. These are the dif
 - **Untimed rows** (`<spelling> -`) and `source=transcribed:<hex sha>` (§5.4, §13).
 - **`Device::has_vendor_blas`** beside `has_vendor_solver`, both part of `describe()`'s memo key.
 
-**Phase 3.1, posv** (`src/ops/posv/{choice.hh,posv.cc}`, plan §1.1):
+### Phase 3.1, posv
+
+`src/ops/posv/{choice.hh,posv.cc}`, plan §1.1:
+
 - Families `Tiny`, `Cta`, `Blocked`, all `NoFields`, the same for every dtype; aliases
   `native:{tiny,cta,blocked}`; `last_resort {"blocked"}`; `# keys: uplo:exact n:log:3 nrhs:log batch:log`.
   No vendor family: bare `native` is Auto, `vendor` warns and falls back to Auto. The old names are
@@ -849,7 +871,10 @@ Where the code differs from the sketches above, the code wins. These are the dif
   - `factor_bench`'s posv pins go through select via a `select_pin_parsed<Choice>` shared with potrf;
     a refused pin is that arm's `bad=1` row.
 
-**Phase 3.2, the tuner core** (`tools/tune/`, usage and raw schema in `tools/tune/README.md`):
+### Phase 3.2, the tuner core
+
+`tools/tune/`; usage and raw schema are in @ref tune_tool_readme.
+
 - `batchlas_tune` builds with the benchmarks. Specs for potrf and posv (`<op>_spec.cc` behind
   `spec.hh`'s `OpSpec`); trsm and gemm specs land with their PRs. The host-only logic (tie rule,
   rotation, bisection and the refinement round, attempt selection and the re-measure rule,
@@ -915,7 +940,10 @@ Where the code differs from the sketches above, the code wins. These are the dif
   n=64 and the n=512 flip need a re-run on an otherwise idle box before anything is read into
   them.
 
-**Phase 3.3, trsm** (`src/ops/trsm/{choice.hh,trsm.cc}`, plan §1.2):
+### Phase 3.3, trsm
+
+`src/ops/trsm/{choice.hh,trsm.cc}`, plan §1.2:
+
 - Families `Cta`, `SgLeft` (spelling `sg_left`, P3.2b's `trsm_native_sg_left_dispatch`, its own
   family as the P3.2b note asks), `Blocked`, `Vendor`, all `NoFields`, the same for every dtype;
   aliases `native:{cta,blocked}`; `last_resort {"blocked","vendor"}`;
@@ -1081,8 +1109,11 @@ Where the code differs from the sketches above, the code wins. These are the dif
   grid, since the sm_89 rows are side/order-determined and identical for N, T and C, and the
   26-cell cross-check covered all three; it starts to matter only once a timed table differs.
 
-**Phase 3.4, gemm** (`src/ops/gemm/{choice.hh,gemm.cc}`, plan §1.3; per-kernel detail in
-`docs/perf/gemm.md#choices-flat-selection-p34`):
+### Phase 3.4, gemm
+
+`src/ops/gemm/{choice.hh,gemm.cc}`, plan §1.3; per-kernel detail in
+[the gemm evidence page](../perf/gemm.md#choices-flat-selection-p34):
+
 - Families `direct`, `tiled`, `small` (real only), `reg:m=..:n=..:k=..:u=..` (float only, 10
   configs), `wide:m=..:n=..:k=..` (5 configs, every scalar), `vendor`. Candidates: float 19,
   double 9, cfloat/cdouble 8. `# keys: ta:exact tb:exact layout:exact m:log n:log k:log batch:log`,
@@ -1231,13 +1262,17 @@ Where the code differs from the sketches above, the code wins. These are the dif
   of the heterogeneous benchmark became `native`. Not in `can_run`, unchanged from before: the
   direct kernel's `int` batch offsets can overflow at large batch x stride (§11).
 
-**Behaviour changes visible to callers:**
+### Phases 1-3, behaviour changes visible to callers
+
 - A bad pin throws. `factor_bench`'s posv `composed` arm therefore pins potrf to `tiny` only up to
   the type's tiny ceiling (16 for cdouble, 32 otherwise) and to `native` above it.
 - The vendor coverage readback is `vendor:vendor`, not `vendor:auto`. benchviz matches
   `startswith("vendor")` and the converter accepts both.
 
-**Data findings from the converter** (for the gate and phase 4):
+### Phases 1-3, data findings from the converter
+
+For the gate and phase 4:
+
 - The sm_89 archive has no current-era `lpanel` timings, so the sm_89 tables never pick `lpanel`,
   although `docs/perf/potrf.md#the-measured-lpanel-window` measured it winning there.
 - The sm_120 sweeps have `uplo=U` rows for float only. The other sm_120 dtypes serve Upper from
@@ -1248,7 +1283,8 @@ Where the code differs from the sketches above, the code wins. These are the dif
   batch were never measured. With `n:log:3` it maps to the n=640 batch=2048 row (`blocked`). The
   grid is still unfilled there (phase 4).
 
-**Gate results (2026-10-04, threadripper02, sm_120):**
+### Phases 2-3, gate results (2026-10-04, threadripper02, sm_120)
+
 1. Correctness: `select_tests`, `tuned_tables_tests`, `potrf_candidates_tests`, `potrf_tests`,
    `potrf_tests_native`, `posv_tests`, `route_vocabulary_tests` pass in the vendor build and in a
    `-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF` build. In the vendor-free build, `posv_tests`
@@ -1314,6 +1350,15 @@ These eleven ops share one recipe, so it is stated once:
   `git show 94cefb3a:docs/design/flat-select-p5/<op>.md`.
 
 What follows is only what differs per op.
+
+### Phase 5, which inputs the old routers read, per op
+
+The table keys were chosen to cover every input the pre-flat routers' predicates read, plus the
+work estimate. getri: the old router read only n (batch >= 1 was a correctness term, now in
+`can_run`). gesv: the order and nrhs (batch only as >= 1). orgqr: m and n only, no batch and no
+architecture, so its table has no batch key. The resulting `key_names` in
+`src/ops/{getri,gesv,orgqr}/choice.hh` are `n:log:3 batch:log` (getri: the work grows with batch),
+`n:log:3 nrhs:log` and `m:log n:log:2`.
 
 ### Phase 5, gemv
 
@@ -1614,7 +1659,8 @@ Routing is unchanged: `scripts/route_diff.sh` captured identical `reached` rows 
 
 ## 13. Phase 3 decisions (maintainer, 2026-10-04)
 
-The full plan, with file:line maps, is in `flat-kernel-selection-phase3-plan.md`. These decisions were made after it:
+The full plan, with file:line maps, is in `flat-kernel-selection-phase3-plan.md`
+(@ref design_flat_selection_phase3_plan). These decisions were made after it:
 - **Stack.** P3.0 select infrastructure → P3.1 posv → P3.2 tuner core (`tools/tune`, plus a `--gate` mode, pulled forward from phase 4) → P3.2b blackwell kernels → P3.3 trsm → P3.4 gemm. Each PR is based on the one before it.
 - **sm_89 tables are transcribed old routing.** For posv, trsm and gemm, today's router is evaluated at every grid cell. Its preference order becomes an untimed ranked row (`tiny - | cta - | blocked -`, header `source=transcribed:<sha>`). This departs from §3 "ranked list with times" until a phase-4 retune on the 4090. On-grid cells are unchanged by construction. The sm_89 gate times only the off-grid cells where the nearest transcribed row disagrees with the old predicate.
 - **Blackwell kernels before trsm/gemm.** The kernels from `worktree-blackwell-tuning` (`trsm_sg_left.cc`, 2 wide gemm configs) are ported first, as kernels only, with every `is_sm120_family`/`cuda_cc` predicate dropped. The sweeps then rank them as ordinary candidates.

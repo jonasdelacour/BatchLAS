@@ -27,26 +27,47 @@ sources quoted them, and there is no file to follow.
 
 ## syev: what ships today
 
-Read the predicate, not this prose. Every line below was checked against the tree when this
-page was written.
+Read the table and the code, not this prose. Every line below was checked against the tree on
+2026-10-06, after [flat kernel selection](../design/flat-kernel-selection.md) replaced the
+`RouteTable` router.
 
-| decision | predicate | rule |
+**How the family is chosen.** `syev` lives in `src/ops/syev/syev.cc`. Its families are spelled
+in `src/ops/syev/choice.hh`: `cta`, `cta_fused`, `jacobi` (the three n ≤ 32 sub-group solvers),
+`blocked`, `two_stage` and `vendor`. `select::choose` takes the first entry that `can_run` admits
+from the nearest row of `tuned/syev.<dtype>.<arch>.txt` (arch `sm_89` or `sm_120`), keyed on `jobz`, `n` and `batch`.
+`can_run` is correctness only: the native families need a non-NETLIB GPU backend and a square A
+with n ≥ 1, and the small three also need n ≤ 32 and a 32-wide sub-group. Uplo is not a key:
+Upper is [mirrored into Lower](#syev-the-upper-to-lower-mirror-for-lower-only-providers).
+
+**The tables are transcribed, not timed.** Every syev table (all four dtypes, sm_89 and sm_120)
+is `source=transcribed:424a45bc`: the old router's preference order replayed per grid cell
+(`tuned/README.md`; [Phase 5, syev](../design/flat-kernel-selection.md#phase-5-syev) on the design page). The rules below are therefore the
+measured rules of the 2026-08 campaign on this page, unchanged. Rows are identical across batch,
+because the old rule was keyed on n alone. A retune with `tools/tune/` is what would make batch
+matter.
+
+| decision | where | rule |
 |---|---|---|
-| eigenvectors, n > 32 | `syev_saturated_algorithm_for_n<T>`, `include/batchlas/blas/functions/syev.hh:283` | float: blocked to 448, two-stage 449..1024, vendor above. double: blocked to 448, then vendor. complex<float>: blocked to 512, then vendor. complex<double>: blocked to 256, then vendor |
-| eigenvalues only, n > 32 | `syev_saturated_algorithm_for_n_values`, `syev.hh:309` | blocked to 320, two-stage above, every type |
-| n ≤ 32 kernel | `syev_choose_small_kernel`, `syev.hh:238` | double: Jacobi. float: Jacobi to 8, `cta_fused` above. complex<float>: `cta_fused` to 8, `cta` above. complex<double>: `cta` |
-| n ≤ 32 vendor handover, eigenvectors | `syev_cta_max_n_default_for`, `syev.hh:191` | 24 for complex<double>, 32 (off) otherwise. `BATCHLAS_SYEV_CTA_MAX_N` overrides |
-| backend scope | `RouteTable<Op::syev,T>::preferred`, `syev.hh:392` | CUDA only. Other backends keep the historical order walk |
-| legacy batch-keyed rule | `syev_prefer_vendor`, `syev.hh:181` | dead for n > 32. Kept so widening the n > 32 branch cannot drop it |
-| values-only blocked solve | `syev_blocked.cc:254` and `:414` | `stebz` bisection off the tridiagonal, no `stedc` |
-| complex panel width | `sytrd_block_size_default<T>`, `src/extensions/syev_blocked.cc:88` | 32 for complex at 256 < n ≤ 512, harness value otherwise |
-| complex trailing update | `rank2k_trailing_update_supported`, `src/extensions/sytrd_blocked.cc:828` | float and complex<float> take the rank-2k (`syr2k`/`her2k`) path. double and complex<double> keep the GEMM pair |
-| sb2st back-transform geometry | `sb2st_back_tile_for` / `sb2st_back_subs_for`, `src/extensions/sytrd_sb2st_hh.cc:762,772` | complex<float> at n = 512: tile 2, subs 4. Otherwise the shape-adaptive heuristic |
-| block sizes | `include/batchlas/tuning_params.hh:61,131` | ORMQR 16/16/24/48/56, SYTRD 8/8/16/8/48 (buckets n ≤ 64/128/256/512/else) |
-| sy2sb WY width | `SY2SB_ORMQR_NB_LARGE = 32`, `tuning_params.hh:128` | n ≤ 512 bucket only. The other buckets use the shape gate in `sytrd_sy2sb.cc` |
-| stedc | `tuning_params.hh:149,177,199` | leaf threshold 32, merge variant 2 (FusedCta), threads-per-root 8, wg multiplier 8 |
-| stedc leaf cap | `plan_stedc_levels`, `src/extensions/stedc_levels_plan.hh:26` | leaf ≤ threshold, a hard cap |
-| two-stage band width | `choose_two_stage_kd`, `src/extensions/two_stage_common.hh:40` | kd = 32 |
+| eigenvectors, n > 32 | `jobz=V` rows of `tuned/syev.<dtype>.<arch>.txt` | float: blocked to 448, two-stage 449..1024, vendor above. double: blocked to 448, then vendor. complex<float>: blocked to 512, then vendor. complex<double>: blocked to 256, then vendor |
+| eigenvalues only, n > 32 | `jobz=N` rows | blocked to 320, two-stage above, every type |
+| n ≤ 32 family | rows with n ≤ 32, both modes | double: `jacobi`. float: `jacobi` to 8, `cta_fused` above. complex<float>: `cta_fused` to 8, `cta` above. complex<double>: `cta` |
+| n ≤ 32 vendor handover, eigenvectors | `jobz=V`, complex<double>, n = 25..32 | `vendor` first, `cta` second. Every other type stays native to 32 |
+| backend scope | `can_run`, `src/ops/syev/syev.cc` | any GPU backend with a sub-group of 32. ROCm has no table and borrows the sm tables with a warning (untested) |
+| values-only blocked solve | the two `syev_blocked.stebz_evals` scopes in `src/extensions/syev_blocked.cc` | `stebz` bisection off the tridiagonal, no `stedc` |
+| complex panel width | `sytrd_block_size_default<T>`, `src/extensions/syev_blocked.cc` | 32 for complex at 256 < n ≤ 512, harness value otherwise |
+| complex trailing update | `rank2k_trailing_update_supported`, `src/extensions/sytrd_blocked.cc` | float and complex<float> take the rank-2k (`syr2k`/`her2k`) path on the CUDA backend (complex<float> needs cuBLAS: `select::level3_tile_route_available`). double, complex<double> and every other backend keep the GEMM pair |
+| sb2st back-transform geometry | `sb2st_back_tile_for` / `sb2st_back_subs_for`, `src/extensions/sytrd_sb2st_hh.cc` | complex<float> at n = 512: tile 2, subs 4. Otherwise the shape-adaptive heuristic |
+| block sizes | `ORMQR_BLOCK_SIZE_*`, `SYTRD_BLOCK_SIZE_*`, `include/batchlas/tuning_params.hh` | ORMQR 16/16/24/48/56, SYTRD 8/8/16/8/48 (buckets n ≤ 64/128/256/512/else) |
+| sy2sb WY width | `SY2SB_ORMQR_NB_LARGE = 32`, `tuning_params.hh` | n ≤ 512 bucket only. The other buckets use the shape gate in `sytrd_sy2sb.cc` |
+| stedc | `STEDC_*`, `tuning_params.hh` | leaf threshold 32, merge variant 2 (FusedCta), threads-per-root 8, wg multiplier 8 |
+| stedc leaf cap | `plan_stedc_levels`, `src/extensions/stedc_levels_plan.hh` | leaf ≤ threshold, a hard cap |
+| two-stage band width | `choose_two_stage_kd`, `src/extensions/two_stage_common.hh` | kd = 32 |
+
+**Pinning a family.** `BATCHLAS_SYEV_ROUTE=<family>` (case-folded; also `native`, `vendor`,
+`auto`) or a `select::ScopedPin`. A pin that `can_run` refuses, or an unknown word, throws
+`invalid_argument`. The pre-flat knobs `BATCHLAS_SYEV_PROVIDER`, `BATCHLAS_SYEV_SMALL_KERNEL` and
+`BATCHLAS_SYEV_CTA_MAX_N` were retired with the old layer and are no longer read. Sections below
+that name them describe how the measurement was taken at the time.
 
 ## syev: eigenvector routing at saturation
 
@@ -319,7 +340,7 @@ saturation. At n = 64 the crossover needs batch around 16384, where blocked wins
 this grid shows the vendor 1.11× ahead. Small batch flatters the vendor, whose fixed launch cost
 is lowest.
 
-### syev: Uplo::Upper by mirroring
+### syev: the Upper-to-Lower mirror for Lower-only providers
 
 `sytrd_blocked` threw on `Uplo::Upper`, and the blocked and two-stage support predicates
 rejected it, so every Upper call went to cuSOLVER whatever the shape. Upper also had no test
@@ -346,6 +367,19 @@ Upper variant of `sytrd_blocked`, `sytrd_sy2sb` and `sytrd_sb2st` could recover 
 0.3–2.0%, at the price of an Upper variant of every reduction kernel. It was rejected on these
 numbers.
 
+**How the mirror is built** (`src/extensions/uplo_mirror.{hh,cc}`, `mirror_upper_to_lower`).
+`syev_blocked` and `syev_two_stage`, and everything under them (`sytrd_blocked`, `sytrd_sy2sb`,
+`sytrd_sb2st`), implement Lower only. Writing the upper triangle into the lower one,
+\f$A_{ji} := \overline{A_{ij}}\f$, gives a matrix whose lower triangle describes exactly the
+input operator, so the Lower path returns identical eigenvalues and eigenvectors. In place is safe:
+`syev` documents A as overwritten, and the Lower path destroys A during the reduction anyway. The
+diagonal is left alone; for complex input its imaginary part is not forced to zero, which matches
+what the Lower path already assumes of a Hermitian input. The header is declaration-only, with
+explicit instantiations in `uplo_mirror.cc`, because a SYCL kernel name class must have exactly
+one definition in the program: defining the kernel inline in the header and calling it from both
+`syev_blocked.cc` and `syev_two_stage.cc` produced "definition with same mangled name" ODR
+errors.
+
 The tests are two cases in `tests/syev_blocked_tests.cc`, one per call site, over all four
 types. The obvious test would be vacuous: `Matrix::Random(..., symmetric=true)` is symmetric,
 so Upper and Lower are interchangeable. The fixture therefore poisons the strictly-lower
@@ -355,8 +389,11 @@ of the same matrix gives a spectrum that differs by more than 1.0, so the test f
 
 ## syev: small-n kernel choice
 
-The three CTA-family kernels are `syev_cta`, `syev_cta_fused` and `syev_jacobi_cta`. Force one
-with `BATCHLAS_SYEV_SMALL_KERNEL=cta|fused|jacobi`.
+The three CTA-family kernels are `syev_cta`, `syev_cta_fused` and `syev_jacobi_cta`; since flat
+kernel selection each is its own family (`cta`, `cta_fused`, `jacobi`). Force one with
+`BATCHLAS_SYEV_ROUTE=cta|cta_fused|jacobi`. The measurements below used the retired
+`BATCHLAS_SYEV_SMALL_KERNEL=cta|fused|jacobi`, which selected the kernel inside the old single
+CTA route.
 
 ### syev: the 2026-08-03 small-n bake-off
 
@@ -389,7 +426,8 @@ CSV `name` column.
 precision. The two winners were both unreachable from `Auto`. The values-mode cells have no
 vendor column because `syev_benchmark` had no `jobz` argument then. Routing these winners made
 BatchLAS beat cuSOLVER across the whole n = 4..32 range for the real types, by 1.1×–3.9× over
-`syev_cta`. That is now the real branch of `syev_choose_small_kernel`. Double uses Jacobi
+`syev_cta`. That rule was the real branch of `syev_choose_small_kernel` and is now the n ≤ 32
+rows of `tuned/syev.{float,double}.*.txt`. Double uses Jacobi
 everywhere. Float uses Jacobi to n = 8 and `cta_fused` above. The float rule rests on the vector
 cells, because the two values-mode cells at n = 16 and 32 are neutral. n = 9..15 was not in this
 sweep. The shipped rule gives the whole 9..32 range to `cta_fused`.
@@ -441,7 +479,9 @@ at 8 takes essentially all of it. For complex<double>, fused is ahead of `cta` b
 
 ### syev: the complex double vendor handover
 
-`syev_cta_max_n_default_for` returns 24 for complex<double> only. Measured 2026-08-07,
+The complex<double> `jobz=V` rows of `tuned/syev.cdouble.*.txt` put `vendor` first for
+n = 25..32 (transcribed from `syev_cta_max_n_default_for`, which returned 24 for complex<double>
+only). Measured 2026-08-07,
 eigenvectors, median of 3:
 
 | n | batch | cta | cta_fused | vendor | winner |
@@ -546,7 +586,9 @@ Working Notes 169/170 (threshold form, backward error, convergence test); Golub 
 
 ### syev: the LOBPCG projected-solve knob
 
-`BATCHLAS_SYEV_CTA_MAX_N` (0..32, default 32 = off) sends small eigenvector solves above the
+*Historical: the knob was retired with the old router (2026-10-05). Its shipped default (off)
+is what the transcribed tables encode; the A/B below would now be run by pinning the projected
+solve's family.* `BATCHLAS_SYEV_CTA_MAX_N` (0..32, default 32 = off) sent small eigenvector solves above the
 threshold to the vendor. It was introduced after one point showed the vendor ahead: n = 30,
 batch = 8, float, eigenvectors, CTA 229.6 µs/call against cuSOLVER 103.7 (2.21×). nsys
 attributed 29.4% of all LOBPCG GPU time to that projected Rayleigh–Ritz solve, roughly 16% end
@@ -987,9 +1029,10 @@ Besides the performance result, it also rewrote the live n ≤ 32 CTA kernels (`
 `ormqr_cta.cc`, `syev_cta.cc`, and the sub-group-to-work-group partition in `sg_compat.hh`), and
 `Auto` routes there. That effect was never measured. If the partition refactor is wanted, it
 should come back as its own change with n ≤ 32 numbers attached. A rebase trap also applies:
-`syev_cta_max_n_for_vectors` rejects any value above 32, so after a clean rebase `Auto` still
-cannot route above 32 and the branch appears to do nothing. Benchmark through the forced
-provider. This is now listed among the measured dead ends in `AGENTS.md`.
+`syev_cta_max_n_for_vectors` rejected any value above 32, so after a clean rebase `Auto` still
+could not route above 32 and the branch appeared to do nothing. Benchmark through the forced
+provider. Under flat selection the same cap is `kSmallMaxN = 32` in the small families'
+`can_run` (`src/ops/syev/syev.cc`), and the tables have no small-family entry above 32. This is now listed among the measured dead ends in `AGENTS.md`.
 
 ### syev: harness unblockers (WP0)
 
@@ -1237,13 +1280,16 @@ list in a work package that was never committed; this section replaces it.
 - **A routing-audit benchmark** (`BM_SYEV_RoutingAudit`). It would run `Auto`'s choice and its
   runner-up for every routed shape and report every losing cell, so a stale table becomes a red
   row rather than an archaeology project. It was proposed twice and not built. The winner table
-  was also meant to be emitted as generated data rather than hand-typed.
+  was also meant to be emitted as generated data rather than hand-typed. *Partly superseded:* the
+winner table is now generated data (`tuned/syev.*.txt`), and the tuner (`tools/tune/`) times every
+family per cell, but the syev tables are still the untimed transcription until it is run.
 - **A grid-resident whole solve at batch 1** (ideation #8). This would be one persistent kernel
   per matrix across all SMs, for n = 256–1024 at batch 1, where the vendor once led by up to
   15.3×. It is speculative and should wait until the cheap fixes have bounded what is left of
   that gap.
 - **Values-mode n ≤ 32** has no vendor comparison. The bake-off predates the `jobz` argument.
-- **rocSOLVER** keeps the historical order walk. Nothing was measured there.
+- **rocSOLVER**: ROCm has no syev table and borrows the sm tables with a warning. Nothing was
+  measured there.
 
 ## syev: rejected ideas
 
@@ -1255,7 +1301,7 @@ list in a work package that was never committed; this section replaces it.
 | wide two-stage kd (96–128) after split-WY fix | kd = 32 still optimal at n ≥ 256; the nb hint hurts wide kd | [kd sweep](#syev-the-two-stage-band-width-kd) |
 | freeze `SB2ST_BACK_*` into buckets | heuristic already within 0.6% | [retune](#syev-the-2026-08-07-constant-retune) |
 | adopt stedc's own tpr/wgm winners | cost syev 2.7% at n = 256 | [retune](#syev-the-2026-08-07-constant-retune) |
-| native Upper reductions | could recover at most the mirror's 0.3–2.0% | [Upper](#syev-uploupper-by-mirroring) |
+| native Upper reductions | could recover at most the mirror's 0.3–2.0% | [Upper](#syev-the-upper-to-lower-mirror-for-lower-only-providers) |
 | the float small-n rule applied to complex | Jacobi is 4–6× off the pace at n ≥ 20 in complex | [complex small n](#syev-complex-small-n-kernels) |
 | a batch floor on the values-only rule | sent n = 1024 at batch 254 to the vendor at 2.75× | [values routing](#syev-eigenvalues-only-routing) |
 | split `latrd_grid_min_n` per mode | same crossover in both modes | [latrd gate](#syev-latrd-grid-gate-confirmed-in-eigenvector-mode) |
@@ -1275,8 +1321,9 @@ list in a work package that was never committed; this section replaces it.
   benchmark processes sharing the device.
 - **JIT.** Discard the first run of a fresh process. SYCL JIT has fabricated a 3.7× loss on this
   box, and contention has produced spurious 3.6× "wins".
-- **Provider spellings.** `BATCHLAS_SYEV_PROVIDER` takes `two_stage` or `two-stage`. `TWOSTAGE`
-  silently degrades to `Auto`.
+- **Provider spellings** (historical). The retired `BATCHLAS_SYEV_PROVIDER` took `two_stage` or
+  `two-stage`, and `TWOSTAGE` silently degraded to `Auto`. Its successor
+  `BATCHLAS_SYEV_ROUTE` throws on an unknown word, so this trap is closed.
 - **`--name` is a substring filter.** It corrupted the original eigenvector grid, and two small-n
   benchmark binaries register two benchmarks each. Key on the CSV `name` column.
 - **An incremental build is not trustworthy across a revert that changes a widely-included
@@ -1318,12 +1365,11 @@ to fetch the data (see [the raw-data rules](README.md#new-raw-data-lives-in-benc
 Reproduce one shape (positional `n batch nb fuse jobz uplo`; `nb = 0` means the shipped default):
 
 ```
-CUDA_VISIBLE_DEVICES=1 BATCHLAS_SYEV_PROVIDER=blocked \
+CUDA_VISIBLE_DEVICES=1 BATCHLAS_SYEV_ROUTE=blocked \
   ./build/benchmarks/syev_benchmark --backend=CUDA --type=float,cfloat \
   --warmup=2 --min_iters=5 64,128,192,256,320 1024 0 0 0 0
 
-BATCHLAS_SYEV_PROVIDER=blocked|two_stage|vendor|cta
-BATCHLAS_SYEV_SMALL_KERNEL=cta|fused|jacobi
+BATCHLAS_SYEV_ROUTE=blocked|two_stage|vendor|cta|cta_fused|jacobi
 BATCHLAS_LATRD_IMPL=legacy|grid          BATCHLAS_LATRD_GRID_MIN_N=<n>
 BATCHLAS_SB2ST_BACK_TILE_W=<1,2,4,8>     BATCHLAS_SB2ST_BACK_SUBS=<4,8,16>
 BATCHLAS_EXPAND_MAX_BYTES=<bytes>        # force the her2k host-loop fallback

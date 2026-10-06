@@ -314,7 +314,8 @@ loses no more than 1% at batch 4,096-8,192.
 ## Small-n syev routing (measured, not shipped)
 
 With its tuned multiplier, the fused kernel at `P = 8` now beats Jacobi on real float from
-n = 7 up. Moving the `syev_choose_small_kernel` boundary from 8 | 9 to 6 | 7 would pay the
+n = 7 up. Moving the float `jacobi` | `cta_fused` boundary (then `syev_choose_small_kernel`, now
+the n ≤ 32 rows of `tuned/syev.float.*.txt`) from 8 | 9 to 6 | 7 would pay the
 times below, but it did not ship. Jacobi is the accuracy-oriented kernel: its relative
 off-diagonal threshold keeps the small eigenvalues of graded SPD input to relative accuracy,
 and the fused kernel is only normwise accurate. The A/B measured time and normwise error
@@ -322,7 +323,8 @@ and the fused kernel is only normwise accurate. The A/B measured time and normwi
 boundary stays at 8 | 9 until that trade is measured and accepted. Complex float keeps the
 fused kernel for n <= 8, where it already won.
 
-Public `syev`, both small-n kernels forced through `BATCHLAS_SYEV_SMALL_KERNEL`, batch 65,536,
+Public `syev`, both small-n kernels forced through `BATCHLAS_SYEV_SMALL_KERNEL` (retired; today
+`BATCHLAS_SYEV_ROUTE=jacobi|cta_fused`), batch 65,536,
 7 interleaved rounds (5 for complex), spreads 2-8%. The ratio is Jacobi / fused, so above 1
 the fused kernel is faster:
 

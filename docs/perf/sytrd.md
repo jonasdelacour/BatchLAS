@@ -22,7 +22,7 @@ occupancy problems before they are arithmetic problems.
 | value | kernel |
 | --- | --- |
 | unset, or anything else | Legacy (the default below `latrd_grid_min_n`; bit-for-bit unchanged) |
-| `device` | Device: the device-BLAS variant (`device::hemv`, `her2k`, ...). Measured slower; no figures were recorded with the claim |
+| `%device` | Device: the device-BLAS variant (`device::hemv`, `her2k`, ...). Measured slower; no figures were recorded with the claim |
 | `grid` | Grid: several work-groups per matrix (below) |
 
 It is re-read on every call, not latched, so one process can A/B the kernels by changing the
@@ -437,7 +437,7 @@ cost the fast path.
 
 - **The 25% local-memory headroom** in `sytrd_sb2st_cta.cc` (`lmem_budget = lmem_bytes * 3 / 4`,
   "for compiler/runtime usage") is an unmeasured guess.
-- **`BATCHLAS_LATRD_IMPL=device`** is recorded as slower with no figures; re-measure before
+- **`BATCHLAS_LATRD_IMPL=%device`** is recorded as slower with no figures; re-measure before
   deleting or reviving it.
 - **Overlapping \f$Q_1 Q_2\f$ with `stedc`** (see the Q2 design above) needs an out-of-order
   queue; unmeasured.

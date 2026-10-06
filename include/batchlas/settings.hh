@@ -74,9 +74,11 @@ private:
 /// @brief The route pins: `BATCHLAS_<OP>_ROUTE`, one raw string per op that selects a kernel.
 ///
 /// Raw strings on purpose: `src/select` parses them (`auto` | `native` | `vendor` | a choice
-/// spelling such as `lpanel:panel=8`), and the level-3 ops (trmm, symm, syrk, syr2k) parse their
-/// own word list. A value an op does not understand throws there. The selection layer is
-/// described in docs/design/flat-kernel-selection.md.
+/// spelling such as `lpanel:panel=8`), and an op whose selection is still hand-written parses
+/// its own word list. Values are trimmed and case-folded; a set-but-empty value means `auto`. A
+/// value the op does not understand throws `std::invalid_argument`. Under `src/select`, `native`
+/// and `vendor` warn and fall back to `auto` when nothing in that class can run the call. The
+/// selection layer is described in docs/design/flat-kernel-selection.md.
 /// @ingroup config
 struct RoutingSettings {
     /// @brief The ops that read a route variable, by their `<op>` spelling.
@@ -295,8 +297,9 @@ struct GeometrySettings {
     /// pairs.
     int syev_two_stage_sb2st_block = 32;
 
-    /// `BATCHLAS_SY2SB_ORMQR_NB`: unset, `off` or `0` (never hint), or a positive value clamped to
-    /// 0..1024. Wins over `BATCHLAS_TUNE_SY2SB_ORMQR_NB`.
+    /// `BATCHLAS_SY2SB_ORMQR_NB`: unset, `off` or `0` (never hint), or a positive forced value
+    /// (clamped to kd at the call site). A value that does not parse, is negative or is above 1024
+    /// reads as unset. Wins over `BATCHLAS_TUNE_SY2SB_ORMQR_NB`.
     EnvValue sy2sb_ormqr_nb{};
 
     /// `BATCHLAS_SYTRD_BLOCK_SIZE`. 0 = unset; the default is n-bucketed and type-dependent.

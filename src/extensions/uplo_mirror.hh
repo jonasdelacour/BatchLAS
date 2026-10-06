@@ -1,11 +1,7 @@
-// Mirror the upper triangle of a Hermitian/symmetric matrix into its lower triangle, so the
-// Lower-only syev providers can serve Uplo::Upper: O(n^2) in front of an O(n^3) solve.
+// A := its upper triangle mirrored into the lower, in place, so Lower-only syev drivers serve
+// Upper. The complex diagonal's imaginary part is NOT zeroed. Declaration only: an inline kernel
+// here is an ODR error once two TUs call it; instantiations are in uplo_mirror.cc.
 // evidence: docs/perf/syev.md#syev-the-upper-to-lower-mirror-for-lower-only-providers
-//
-// In place is safe because syev documents A as overwritten. The diagonal is left alone, and a
-// complex diagonal's imaginary part is NOT zeroed -- the Lower path assumes the same of its input.
-// DECLARATION ONLY: defining the kernel inline here gives an ODR "same mangled name" error once
-// two TUs call it; the explicit instantiations live in uplo_mirror.cc.
 #pragma once
 
 #include <batchlas/blas/matrix.hh>

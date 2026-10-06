@@ -8,7 +8,10 @@
 > **Status:** current. Each section was re-checked against
 > `include/batchlas/blas/queue-dispatch.hh`, `include/batchlas/blas/options.hh`,
 > `include/batchlas/blas/extra.hh` and `include/batchlas/blas/linalg-ops.hh` on
-> 2026-09-30, when the rationale moved here out of those headers' comments.
+> 2026-09-30, when the rationale moved here out of those headers' comments, and
+> again on 2026-10-06 after flat kernel selection replaced the RouteTable layer
+> (the conventions here are unchanged by it; only where an entry point picks its
+> kernel moved, to `src/ops/<op>/`).
 
 The user-facing rules (which spelling each entry point takes, the option-struct
 fields and defaults, the USM contract as a caller sees it) are in
@@ -41,6 +44,19 @@ the backend from the queue; `gemm<B>(ctx, ...)` fixes it at compile time.
 `src/extensions/` is templated on `Backend` and must use the second: the runtime
 spelling would silently use `ctx.backend()` instead of the `B` the algorithm was
 instantiated for.
+
+**The backend is not the kernel.** `with_backend` and the `<Backend>` template
+argument choose only which instantiation is called. Which kernel that
+instantiation then runs (a native family or the vendor library) is decided inside
+the entry point, after validation, by flat kernel selection: the op's file under
+`src/ops/<op>/` asks its per-device table, keeps the first ranked family whose
+correctness predicate admits the call, and launches it. (A few level-3 ops still
+choose by hand in their backend dispatcher; the ops with tables are the ones
+@ref selection_tables lists.) Naming a backend
+therefore never pins a kernel; `BATCHLAS_<OP>_ROUTE` does. See
+[flat kernel selection](flat-kernel-selection.md), @ref selection_tables, and the
+user-facing summary in
+[the C++ API guide](../cpp-api.md#which-kernel-runs-flat-kernel-selection).
 
 ## api conventions: the variadic dispatch overload and its requires-clause
 
@@ -245,8 +261,11 @@ parameter: such an overload would be ambiguous with the positional call.
 **Sizing must branch exactly as the call does.** `ormqr` sizes with the same
 `block_size_hint` the call uses (the hint picks the panel width the workspace is
 sized for), and `gesvd` takes the same Hermitian-or-general branch for the query
-as for the call, because the two branches pick providers independently and can
-need different scratch.
+as for the call, because the two branches select their kernels independently and
+can need different scratch. Inside each op, sizing and running call the same
+selection (`select::pick` and `select::run`), so a `*_buffer_size` returns what
+the chosen kernel needs and nothing more; the caller's job is only to ask with
+the same arguments.
 
 **Releasing an arena lease on an out-of-order queue drains the queue**, so every
 arena spelling blocks until the device is idle on such a queue; pass your own
@@ -337,15 +356,21 @@ view would otherwise be factorised as `rows() x rows()`.
 `gesv` has no `Transpose` parameter (`blas/functions/gesv.hh`), so only `NoTrans`
 can reach it; `Trans` and `ConjTrans` keep the hand-composed `getrf` + `getrs`.
 **The branch is not stylistic; do not flatten it.** There is also no shape gate
-around the `gesv` call: `gesv` itself chooses between its fused kernel and that
-same composition (`dispatch/route_gesv.hh`), and a copy of that window in
-`batchlas::linalg` would drift from it.
+around the `gesv` call: `gesv` itself chooses between its fused kernel (`tiny`)
+and that same composition (`blocked`) through its own selection table
+(`src/ops/gesv/gesv.cc`; see [flat kernel selection](flat-kernel-selection.md)
+and @ref selection_tables), and a copy of that choice in `batchlas::linalg` would
+drift from the table.
 
-**A deliberate behaviour change.** `route_gesv`'s `supports()` refuses every
-route when an extent is degenerate (`n`, `nrhs` or `batch` < 1), and the entry
-point then throws (`solve_throw_unroutable`). The earlier hand-composed body
-enqueued nothing instead. The change makes `solve` agree with `solve_spd`, which
-has thrown on the identical guard in `route_posv.hh` since the P2 work package.
+**A deliberate behaviour change.** `gesv` refuses an empty problem (`n`, `nrhs`
+or `batch` < 1) before selection runs, so not even a pin can take it, and throws
+`batchlas::internal_error` (`throw_if_unservable` in `src/ops/gesv/gesv.cc`). The
+earlier hand-composed body enqueued nothing instead. The change makes `solve`
+agree with `solve_spd`, which has thrown on the identical guard since the P2 work
+package (today `throw_if_unservable` in `src/ops/posv/posv.cc`; before flat
+kernel selection, `route_posv.hh`'s `supports()` in the removed RouteTable layer,
+with `route_gesv.hh` and `solve_throw_unroutable` playing the same part for
+`gesv`).
 
 ### api conventions: linalg::solve_spd is a separate entry point
 
@@ -353,8 +378,10 @@ has thrown on the identical guard in `route_posv.hh` since the P2 work package.
 not stylistic. LU with partial pivoting is backward stable for any nonsingular
 `A`, so `solve` is the safe default and stays the one every existing caller
 reaches. `solve_spd` trades that generality for roughly half the arithmetic and
-makes the SPD claim the caller's; a matrix that is not positive definite comes
-back as a non-zero `info` and an undefined `X`, as LAPACK's `?POSV` does.
+makes the SPD claim the caller's; a matrix that is not positive definite gives
+an undefined `X`, as LAPACK's `?POSV` does. `posv` reports it as a non-zero
+`info` when asked, but `solve_spd` passes an empty span, so through this wrapper
+nothing is reported.
 
 ## api conventions: cond generators default to CGS2
 

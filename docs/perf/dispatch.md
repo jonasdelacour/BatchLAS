@@ -1,5 +1,14 @@
 # Dispatch: the vendor gate, the level-3 route arms and the coverage instrument (WP0, WP1)
 
+> **Covers:** the vendor-availability gate, the coverage instrument and the buffer-size rule every
+> op shares; the hand-written selection (gates, windows, pin words) of the level-3 ops that have no
+> `src/ops/<op>/choice.hh`; and the WP0/WP1 measurements and negative results behind them.
+> **Status:** current for the vendor gate, the coverage instrument, the buffer-size rule and the
+> level-3 pin words. Everything about `Route`, `RouteTable` or the facade is history (deleted by
+> flat kernel selection phase 5). How table-selected ops choose: @ref design_flat_selection and
+> @ref selection; which ops select from tables, with their families: @ref selection_tables.
+> **Machine:** RTX 4090 (sm_89), CUDA 13.2, /opt/dpcpp-cuda, unless a section says otherwise.
+
 The durable record of two work packages: **WP0**, which moved the public op definitions out of the vendor
 translation units and built the coverage instrument, and **WP1**, which freed the four level-3 tile dispatchers
 (`symm`/`syrk`/`syr2k`/`trmm`) from the cuBLAS object library. The `Route{Origin, Algorithm}` vocabulary, the
@@ -43,7 +52,12 @@ coverage table.
 
 ### Level-3 route arms
 
-The four level-3 dispatchers have **no tables**: their thresholds are hand-rolled `if`-chains. The gates live in the
+This section and the two after it describe the level-3 ops that **still select by hand**: an op whose
+`src/ops/<op>/` has no `choice.hh` (@ref selection_tables lists the ones that do). When such an op gains a
+`choice.hh`, its families and tables move to that page and the windows below become the measurement
+record its first table is seeded from; they stay here as evidence.
+
+As of 2026-10-06 the four level-3 dispatchers have **no tables**: their thresholds are hand-rolled `if`-chains. The gates live in the
 public entry points (`src/ops/level3/level3.cc`), guarded `Back == Backend::CUDA && std::is_same_v<T, float>`, and run
 **before** the vendor-available test, so they are reachable vendor-free.
 
@@ -94,6 +108,10 @@ variable meant Auto there but Vendor for GEMM). WP2 E6 removed that asymmetry, a
 the `_VARIANT` spellings and the route vocabulary altogether; `Level3Pin` replaced it.
 
 ## Measured boundaries
+
+These are the routing windows of the hand-selected level-3 ops. The kernels' own design and the
+per-dtype kernel tables are owned by [`level3.md`](level3.md); where a figure appears on both pages,
+level3.md is the newer record.
 
 All figures RTX 4090 / sm_89, CUDA 13.2, `RelWithDebInfo`, one dedicated GPU via `experiments/gpu_guard.sh`. Batch is
 always large enough to saturate; batch = 1 is not a design target.
@@ -224,7 +242,9 @@ written down in the first place.
 
 ## Negative results
 
-Built, measured, rejected. These cost as much to establish as the wins.
+Built, measured, rejected. These cost as much to establish as the wins. Items 1, 8 and 9 concern the
+deleted route layer (`RouteTable`, `route_compiled.hh`, `resolve_route`) and are kept as history; the
+lesson of each carried over to flat selection.
 
 1. **The `split-tu` WP1 design** — split each level-3 TU into portable and CUDA halves, transcribing the gate
    thresholds into `RouteTable::preferred`. Killed by a *confirmed silent route change*: the live thresholds are
@@ -274,11 +294,11 @@ contract that is invisible until an op that respects the triangle replaces one t
    `syrk`'s non-float gram branch and `trmm`'s non-float tile branch stayed in `cublas.cc`, and `syr2k` has no
    non-float tile route at all) and too wide in **backend** (the facade gate is guarded on `Backend::CUDA`). It took a
    scalar parameter instead (`:37-64`).
-9. **A compile-time coverage gate.** `resolve_route` is an inline function template, so every TU instantiates its own
+9. **A compile-time coverage gate.** `resolve_route` was an inline function template, so every TU instantiated its own
    weak copy, and ELF resolves the executable's weak symbols ahead of a shared library's. A test compiled without the
    macro interposed its uninstrumented copy over the library's instrumented one; the run produced a coverage file with
    a correct header and **zero `reached` rows** (`coverage.hh:27-49`). The gate is now a runtime bool in exactly one
-   TU, and `cmake/BatchLASOptions.cmake:109` records that the option was deliberately never added.
+   TU, and `cmake/BatchLASOptions.cmake:141` records that the option was deliberately never added.
 
 ## Correctness findings
 
@@ -333,6 +353,40 @@ Wrong answers found, how they hid, and what guards them now.
   `her2k_gemm_preferred` returned false and sent it to a per-batch loop — one sequential launch per batch member, for
   every panel with n2 > 128. Both halves now live together in `expansion_budget.hh:85-101`.
 
+### Dispatch: the ormqr chooser that forced past supports
+
+History (route era; `route_ormqr.hh` and its `choose_ormqr_provider` predecessor are deleted).
+`RouteTable<Op::ormqr>` replaced the smallest of the three Provider-based choosers, and it is where the
+cost of conflating "forced" with "supported" was easiest to see. `choose_ormqr_provider` opened with
+
+    Provider chosen = normalize_ormqr_vendor_like(policy.forced);
+    if (chosen != Provider::Auto) return chosen;
+
+so a forced provider was returned **without ever being checked against `ormqr_supports_blocked`**. Two
+defects followed, both fixed by construction rather than by remembering a check:
+
+1. **Forcing could run an unsupported kernel.** `ormqr_supports_blocked` is false for complex with
+   `Transpose::Trans` and on any non-GPU queue, but `ormqr_dispatch`'s tail was
+   `if (chosen == Vendor) vendor else blocked`, so `BATCHLAS_ORMQR_PROVIDER=blocked` ran the blocked
+   path on exactly the inputs the predicate exists to exclude.
+2. **The buffer size and the call could disagree.** For a forced value that is neither Vendor nor
+   Blocked (`cta`, `two_stage`, `jacobi`, all of which parsed), `ormqr_dispatch` fell into its `else`
+   arm and reset to Vendor, while `ormqr_buffer_size_dispatch`'s tail
+   (`if (chosen == Vendor) vendor_size; return blocked_size`) returned the blocked size; the caller then
+   hit "ormqr: insufficient workspace for chosen provider" from the call it had just sized for (the
+   2560 vs 276480 byte instance above).
+
+Both share the Provider enum's root: "the user asked for this" and "this can serve the shape" were the
+same value. Splitting `supports()` from the forced request made the first impossible; resolving once
+through a pure table made the second impossible. Flat selection keeps both properties: a pin that
+fails `can_run` throws (R6), and `ormqr_buffer_size` runs the same `select::pick` as the call (R5).
+
+Two table details that went with it: the order `{Native, Blocked}, {Vendor, Auto}` is what the shared
+`std::array<Provider, 6>` came to for ormqr (`BatchLAS_CTA`, `_TwoStage`, `_Jacobi` were listed but
+matched no branch, so they were inert padding). And ormqr had **no measured window**: no shape ever
+sent a supported blocked call to the vendor, so `preferred()` equalled "native and supported"; its
+transcribed tables today rank `blocked` then `vendor` in every row.
+
 ## Dispatch: buffer-size queries and the route they size
 
 **Current rule (flat selection R5, [flat-kernel-selection.md](../design/flat-kernel-selection.md)).** Every
@@ -367,9 +421,10 @@ simply what "exactly the chosen family's need" means.
 
 ## Dispatch: the coverage instrument
 
-Two tables, answering different questions (`src/select/coverage.hh`). **static** (`linked`) iterates the route predicates
-with no kernel run — exact, instant, no GPU needed — and answers *"is the kernel in the build"*, the planning
-question. **dynamic** (`reached`) counts `(op, scalar, backend, shape_class)` and records the chosen route plus
+Two tables, answering different questions (`src/select/coverage.hh`), plus `miss` rows for calls nothing could
+serve. **static** (`linked`) lists, per op and backend, the vendor gate and whether a native kernel is linked, with
+no kernel run — exact, instant, no GPU needed — and answers *"is the kernel in the build"*, the planning
+question. **dynamic** (`reached`) counts `(op, scalar, backend, shape_class)` and records the chosen family spelling plus
 `native_route_existed` / `native_route_supported`, answering *"did a call get there"*, the burn-down question. Reading
 either as the other is how `VENDOR_FREE_BASELINE.md` came to claim a working vendor-free `gemm`
 (`src/select/coverage.cc`, `append_static_rows`). **Linked is not reachable**, and a symbol being present is never evidence it

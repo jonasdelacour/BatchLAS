@@ -1,8 +1,9 @@
 # Symbol visibility: what BATCHLAS_API must cover {#design_symbol_visibility}
 
-> **Covers:** how `BATCHLAS_API` is defined, and the classes in the core headers whose export
-> annotation is placed in a way that looks arbitrary but is forced: the exception classes, the
-> workspace lease, `Event`, and two inline `Queue` members.
+> **Covers:** how `BATCHLAS_API` is defined, and the public entities whose export annotation is
+> placed in a way that looks arbitrary but is forced: the enums used as template arguments
+> (`Backend`, `MatrixFormat`, `BinaryOp`), the `Matrix` class templates, the exception classes,
+> the workspace lease, `Event`, and two inline `Queue` members.
 > **Status:** current. Visibility machinery from the WP3c change (`src/CMakeLists.txt`,
 > "WP3c BEGIN"); the per-class findings were recorded in the header comments they replace.
 
@@ -20,6 +21,50 @@ default visibility.
 The consequence for header authors: a missing annotation is invisible in the default (split)
 build and breaks only the release shape or a consumer's link. Each section below is a case where
 the placement of the annotation is the fix.
+
+## symbol visibility: enums used as template arguments
+
+Clang and GCC give a template instantiation the **minimum** of the template's own visibility and
+the visibility of its template **arguments**. `Backend` and `MatrixFormat` are non-type template
+parameters across the whole public surface (207 `template <Backend ...>` declarations alone), so
+under `-fvisibility=hidden` an unannotated enum drags every one of those instantiations to hidden,
+and `BATCHLAS_API` on the function is inert.
+
+Measured, not assumed: annotating the function alone left `batchlas::gemm<Backend::CUDA, float>`
+as a local `t` symbol; annotating the enum flipped it to an exported `W`. 63% of the symbols a
+consumer links (688 of 1,083) were affected. The failure mode is an undefined reference at the
+consumer's link, never a compile diagnostic, so nothing in-tree would have caught it: no test links
+a monolithic install.
+
+Only the enums that appear as template arguments need this. Adding a template parameterised on
+another enum in `include/batchlas/blas/enums.hh` means annotating that enum too.
+
+## symbol visibility: BinaryOp is a template-argument enum too
+
+`batchlas::linalg::BinaryOp` (`include/batchlas/blas/linalg-ops.hh`) carries `BATCHLAS_API` for
+the same reason `Backend` and `MatrixFormat` do
+([enums used as template arguments](#symbol-visibility-enums-used-as-template-arguments)): it is
+the third enum in the public surface used as a template *argument*. Without the annotation, all
+four `elementwise_into<float, BinaryOp::*>` specialisations stayed hidden while their
+`BATCHLAS_API` declaration looked correct. It was found by set-diffing the library's exported
+symbols against what consumers actually link, not by reading: nothing about the declaration looks
+wrong.
+
+## symbol visibility: the export attribute on the Matrix class template
+
+`BATCHLAS_API` is on the **class template** `Matrix` (and on `MatrixView` and `VectorView`), not
+on the 313 explicit instantiations in `src/matrix.cc`, and the difference is 291 symbols. Only 22
+of those lines are `template class ...;`. The other 291 individually instantiate **member
+templates** (the constrained constructors, the Identity / Random / Zeros / Ones / Diagonal /
+Triangular / TriDiagToeplitz / RandomSparseHermitian factories, `convert_to`, `to_row_major` /
+`to_column_major`, and `MatrixView`'s `at` / `deep_copy` / `fill_*` / `symmetrize` / `hermitize` /
+`triangularize`), which a whole-class instantiation does not reach. A class-level attribute
+propagates to every member and every specialisation and so covers all 313; annotating the
+instantiation block would cover 22.
+
+Separately, an attribute on an explicit instantiation is not portable. Measured: g++ 13 rejects
+`template class __attribute__((visibility("default"))) F<double,1>;` with "'F' is not a class
+template", where clang accepts it.
 
 ## symbol visibility: exception typeinfo must be exported
 

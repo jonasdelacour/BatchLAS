@@ -32,7 +32,9 @@ namespace batchlas
     ///       triangle is read).
     /// @throws batchlas::invalid_argument for Spectral on a non-square `A`
     /// @throws batchlas::unsupported for Spectral on a non-dense format or when no
-    ///         vendor `syev` is available
+    ///         backend with a vendor `syev` is compiled in
+    /// @throws batchlas::NoRouteError for Spectral when the chosen backend's solver
+    ///         library is not compiled in (the vendor `syev` is called directly)
     template <typename T, MatrixFormat MF>
     BATCHLAS_API Event norm(Queue &ctx,
                            const MatrixView<T, MF> &A,
@@ -67,8 +69,9 @@ namespace batchlas
     /// @pre  `A` is square and nonsingular
     /// @throws batchlas::invalid_argument for Spectral on a non-square `A`
     /// @throws batchlas::unsupported for Spectral on a non-dense format
-    /// @note The Spectral path calls the vendor `syev` directly and throws in a
-    ///       vendor-free build; see @ref md_docs_2design_2known-defects (defect 2).
+    /// @note The Spectral path calls the vendor `syev` directly, bypassing syev's
+    ///       kernel selection, and throws batchlas::NoRouteError in a vendor-free
+    ///       build; see @ref md_docs_2design_2known-defects (defect 2).
     template <Backend B, typename T, MatrixFormat MF>
     BATCHLAS_API Event cond(Queue &ctx,
                            const MatrixView<T, MF> &A,

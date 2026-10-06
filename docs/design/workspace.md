@@ -93,7 +93,8 @@ has to keep the lease alive until it has waited on the work itself, or pass its 
 Two things the drain does not cover:
 
 - **Derived queues.** It waits on the queue the lease was taken from and nothing else. The
-  dispatchers that need ordering (`syev`, `gesvd`, `ormqr`, `iluk`) build a derived in-order
+  ops that need ordering (`syev`, `gesvd` and `ormqr` through `select::on_in_order_queue` in
+  `src/select/select.hh`, and `iluk` in `src/extensions/iluk.cc`) build a derived in-order
   `Queue` from an out-of-order `ctx` and submit their kernels there, while the lease, taken by the
   convenience overload above them, belongs to `ctx`. Waiting on `ctx` says nothing about work on
   the derived queue; what makes that safe is the derived queue being destroyed, and so drained,

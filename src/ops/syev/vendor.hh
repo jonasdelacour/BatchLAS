@@ -1,8 +1,8 @@
 #pragma once
 
-// The syev vendor call gated on the library being compiled in: with it absent the
-// call is never instantiated, so there is no symbol to link, and the call throws
-// NoRouteError instead.
+/// @file
+/// @brief The syev vendor call for callers that bypass selection, gated on the library. @ingroup selection_ops
+// Without the library the call is never instantiated (no symbol to link); it throws NoRouteError instead.
 
 #include <batchlas/blas/functions/syev.hh>
 
@@ -13,7 +13,7 @@
 
 namespace batchlas::blas::dispatch::detail {
 
-template <Backend B, typename T, typename... Args>
+template <Backend B, typename T, typename... Args>  /// backend::syev_vendor. @throws NoRouteError without the library.
 Event syev_vendor_or_throw(Args&&... args) {
     if constexpr (!batchlas::select::solver_vendor_available<B>) {
         batchlas::select::throw_no_vendor_route<T>(batchlas::Op::syev, B, batchlas::select::kSolverLibrary<B>);
@@ -22,7 +22,7 @@ Event syev_vendor_or_throw(Args&&... args) {
     }
 }
 
-template <Backend B, typename T, typename... Args>
+template <Backend B, typename T, typename... Args>  /// Its workspace size. @throws NoRouteError without the library.
 std::size_t syev_vendor_buffer_size_or_throw(Args&&... args) {
     if constexpr (!batchlas::select::solver_vendor_available<B>) {
         batchlas::select::throw_no_vendor_route<T>(batchlas::Op::syev, B, batchlas::select::kSolverLibrary<B>);

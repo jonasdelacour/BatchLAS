@@ -1,5 +1,12 @@
 #pragma once
 
+/// @file
+/// @brief Leader-only invocation and leader broadcast for SYCL groups and sub-group partitions.
+///
+/// Installed with the rest of `include/batchlas` (the install rule copies the
+/// tree wholesale); no public header includes it. Not a stable interface.
+/// @ingroup internal_helpers
+
 #include <sycl/sycl.hpp>
 
 #include <functional>

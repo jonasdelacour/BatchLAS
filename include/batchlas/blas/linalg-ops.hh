@@ -349,8 +349,8 @@ inline Eigh<T> eigh(Queue& ctx,
 /// @param B      n x nrhs per item, same batch size
 /// @param trans  op(A)
 /// @return       new n x nrhs x batch matrix
-/// @throws batchlas::exception (NoTrans) when an extent (n, nrhs or batch) is below
-///         1: `gesv` has no kernel for an empty problem
+/// @throws batchlas::internal_error for NoTrans when an extent (n, nrhs or batch)
+///         is below 1: `gesv` has no kernel for an empty problem
 template <typename T>
 inline Matrix<T, MatrixFormat::Dense> solve(Queue& ctx,
                                             const MatrixView<T, MatrixFormat::Dense>& A,
@@ -367,7 +367,7 @@ inline Matrix<T, MatrixFormat::Dense> solve(Queue& ctx,
     Span<int64_t> pivots(reinterpret_cast<int64_t*>(pivot_bytes.data()), n_pivots);
 
     // Not stylistic, do not flatten: gesv has no Transpose parameter. No shape gate
-    // here either; gesv routes itself. Degenerate extents throw (deliberate).
+    // here either; gesv selects its own kernel. Degenerate extents throw (deliberate).
     // evidence: docs/design/api-conventions.md#api-conventions-linalgsolve-keeps-its-transpose-branch
     if (trans == Transpose::NoTrans) {
         // Released before the pivot lease (reverse order): the arena reuses it at once.
@@ -392,7 +392,8 @@ inline Matrix<T, MatrixFormat::Dense> solve(Queue& ctx,
 /// @param B     n x nrhs per item
 /// @param uplo  triangle of A that is read
 /// @return      new n x nrhs x batch matrix
-/// @throws batchlas::exception when an extent (n, nrhs or batch) is below 1
+/// @throws batchlas::internal_error when an extent (n, nrhs or batch) is below 1:
+///         `posv` has no kernel for an empty problem
 template <typename T>
 inline Matrix<T, MatrixFormat::Dense> solve_spd(Queue& ctx,
                                                 const MatrixView<T, MatrixFormat::Dense>& A,
@@ -493,8 +494,10 @@ struct Svd {
 /// @return         U, singular values, Vh and per-item info
 /// @throws batchlas::invalid_argument for SvdVectors::None; call batchlas::gesvd
 ///         directly for values only
-/// @note Complex input can throw at run time: no blocked route has a complex path,
-///       and the cta route rejects max(m, n) > 32.
+/// @note Complex input the one-sided Jacobi kernel cannot take (beyond its size
+///       limit, or on a device without sub-group 32) needs the vendor library: no
+///       other native gesvd kernel takes complex general input,
+///       so a build without it throws batchlas::NoRouteError.
 template <typename T>
 inline Svd<T> svd(Queue& ctx,
                   const MatrixView<T, MatrixFormat::Dense>& A,

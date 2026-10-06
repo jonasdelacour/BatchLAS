@@ -3,10 +3,13 @@
 > **Covers:** the private runtime under `src/`: the `Queue` implementation (`src/queue.hh`,
 > `src/util/queue-impl.cc`), the per-queue workspace arena, the settings loader
 > (`src/util/settings.cc`), the per-item `info` span, the layout checks in `src/matrix.cc`,
-> the explicit-instantiation macros (`src/util/template-instantiations.hh`) and the
-> symbol-visibility rules that private headers must follow.
-> **Status:** current. Assembled 2026-09-30 from the source comments it replaces; each
-> section is cited from the code by an `evidence:` pointer.
+> the explicit-instantiation macros (`src/util/template-instantiations.hh`), the
+> symbol-visibility rules that private headers must follow, how the library is cut into object
+> libraries at build time, and how the tuned selection tables get into the binary
+> (`cmake/BatchLASEmbedTables.cmake`).
+> **Status:** current. Assembled 2026-09-30 from the source comments it replaces; revised
+> 2026-10-06 for flat kernel selection (`src/select/`, `src/ops/`), which replaced the
+> `src/dispatch/` layer. Cited sections are pointed at from the code by `evidence:` pointers.
 
 This page is the design record for code that callers never see but every entry point runs
 through. The caller-facing contracts are in the public headers (`<batchlas/settings.hh>`,
@@ -185,28 +188,38 @@ silently add or drop exported symbols. Those files keep their hand-written block
 Every explicit-instantiation table in a vendor TU (`cusolver.cc`, `rocblas.cc`, `rocsolver.cc`,
 `rocsparse.cc`, `netlib_lapack.cc`, and the cuBLAS/cuSPARSE ones) names only
 `backend::`-qualified `*_vendor` symbols, and that is the invariant rather than an oversight.
-WP0b moved every public entry point (`gemm`, `gemv`, `trsm`, `trmm`, `syrk`, `syr2k`, `potrf`,
-`syev`, `geqrf`, `getrf`, `getrs`, `getri`, `ormqr`, `orgqr`, `spmm` and their `*_buffer_size`
-queries) into `src/dispatch/entry_points/`, which instantiate them keyed on the **device family**
-rather than on any vendor library. A public-op row in a vendor TU would be a duplicate symbol
-against those. See [the entry-point facade](vendor-independence.md#the-entry-point-facade).
+The public entry points and their `*_buffer_size` queries are instantiated in the op files of
+flat kernel selection, `src/ops/<op>/<op>.cc` (the level-3 family shares one TU under
+`src/ops/`), which are compiled into `batchlas_dispatch_obj` in every build and instantiate
+keyed on the **device family** rather than on any vendor library: the vendor call inside is
+`if constexpr`-gated, so the public symbol exists even when the library does not. A public-op
+row in a vendor TU would be a duplicate symbol against those, and a vendor-free build would lose
+the op. The convention is per op, not per list: an op added under `src/ops/` follows it with no
+change here. Design record: [flat kernel selection](flat-kernel-selection.md).
+
+*History.* WP0b first moved the public entry points out of the vendor TUs into
+`src/dispatch/entry_points/`, keyed the same way
+([the entry-point facade](vendor-independence.md#the-entry-point-facade)); the phase 5 rip of flat
+kernel selection deleted that directory and the op files took over its role.
 
 - `sig::trsm_vendor` is deliberately **not** an alias of `sig::trsm`: the vendor order puts
   `alpha` last (as cuBLAS defines it), the public `trsm` takes it third. The two orders coexisted
   while each TU declared its own public `trsm`; one declaration now serves every backend, so the
   vendor forms have to agree with each other.
-- `gesvd` has no entry-point TU: its public forms are inline in `functions/gesvd.hh`, so only its
-  vendor arm is instantiated anywhere. `rocsolver.cc` defines a throwing `gesvd_vendor` stub
-  because that header is declaration-only (it used to define a generic throwing template, which
-  is what blocked a cuSOLVER implementation); without the stub a ROCM build fails to link rather
-  than failing at the call.
+- `gesvd_vendor` is declared in `functions/gesvd.hh` and defined only by the backends that have
+  one. `rocsolver.cc` defines a throwing `gesvd_vendor` stub because that header is
+  declaration-only (it used to define a generic throwing template, which is what blocked a
+  cuSOLVER implementation); without the stub a ROCM build fails to link rather than failing at
+  the call. (Until phase 5 gesvd had no entry-point TU at all; its public forms now live in
+  `src/ops/gesvd/gesvd.cc` like every other op's.)
 - The netlib `gemm` moved into `backend` under its vendor name instead of being deleted: unlike
   `cublas.cc` and `rocblas.cc`, that TU had no separate `gemm_vendor` to forward to; its public
   `gemm` *was* the CBLAS call. Its `gesvd_vendor` was moved verbatim from `functions/gesvd.hh`,
   including the synchronous `ctx.wait()` (LAPACKE `?gesvd` needs `A` on the host, and this path is
   the reference implementation, not a fast one).
 - `rocblas.cc` carries no `symm`/`hemm`/`herk`/`her2k` wrapper at all, which is the omission the
-  ROCM arm of `src/dispatch/entry_points/level3.cc` mirrors exactly.
+  ROCM arm of the level-3 op TU under `src/ops/` mirrors exactly: it instantiates only the
+  level-3 ops rocBLAS implements.
 - ROCm 6.3 changed `rocblas_[sdcz]trmm` to the 14-argument out-of-place form
   (`..., A, lda, B, ldb, C, ldc`, `B` input, `C` output); the old 16-argument variant with a
   duplicate output pair was removed. The `rocblas_float_complex`/`rocblas_double_complex` casts
@@ -347,16 +360,24 @@ value below its own default; `BATCHLAS_KERNEL_TRACE_PATH` then `BATCHLAS_TRACE_P
 **non-empty** wins, while `BATCHLAS_DUMP_BANDR1_DIR=` (set, empty) yields an empty root, not the
 default.
 
-**Synthesised route variables.** The canonical routing variable names are built as
-`"BATCHLAS_" + upper(op) + "_ROUTE"`, exactly as `parse_route_env` built them, which is why a grep
-for `BATCHLAS_*` string literals misses thirteen live routing variables: no literal for them
-exists anywhere in the tree.
+**Synthesised route variables.** The routing variable names are built as
+`"BATCHLAS_" + upper(op) + "_ROUTE"` for every op in `RoutingSettings::ops`
+(`<batchlas/settings.hh>`), which is why a grep for `BATCHLAS_*` string literals misses every one
+of them: no literal exists anywhere in the tree. The loader only captures the strings; the
+selection layer reads them as pins (`pin_text` in `src/select/select.cc`, after any `ScopedPin`),
+spelling the variable name the same way for its diagnostics. An op that reads a pin has to be in
+that list; an op missing from it silently has no environment pin. What a value means (an
+unknown value throws, `native` and `vendor` fall back to `auto` with a warning when nothing in
+that class can run) is documented on `RoutingSettings` and in
+[flat kernel selection](flat-kernel-selection.md). The old `parse_route_env`, deleted with the
+route tables, built the same names.
 
 **Initialisation.** The mutable snapshot and the last `configure()` value are function-local
-statics, initialised on first use rather than in static-initialisation order, because dispatch
-coverage reads its variable from a namespace-scope dynamic initialiser (`src/dispatch/coverage.cc`
+statics, initialised on first use rather than in static-initialisation order, because selection
+coverage reads its variable from a namespace-scope dynamic initialiser (`src/select/coverage.cc`
 runs at static init, before `main` and so before any `configure()`; `settings()` is documented
-safe to call there, and that is the site that requires it). The only flag that can race is
+safe to call there, and that is the site that requires it; before phase 5 the same site was
+`src/dispatch/coverage.cc`). The only flag that can race is
 "a Queue has been constructed", which is atomic because a Queue may be built on another thread.
 
 **`configure()` closes at the first Queue.** `batchlas::configure()` is permitted only until the
@@ -545,3 +566,93 @@ read straight from the environment for the diagnostic and is not captured into `
 owns only this library's knobs. The mode (`BATCHLAS_BLAS_HEALTH`: `off | warn | error`) is a
 parsed enum on `settings().unsafe`; `off` suppresses the only detection of a wrong host `dgemm`,
 so the unsafe gate refuses it, while `error` is stricter than the default and is let through.
+
+## Runtime internals: build-time structure of the library
+
+`src/CMakeLists.txt` cuts the library into OBJECT libraries, one per area, so that an edit
+recompiles one area's objects:
+
+| object library | holds |
+| --- | --- |
+| `batchlas_core_obj` | `matrix.cc`, `csr_generators.cc`; also the target `generate_export_header()` is keyed on (see @ref design_symbol_visibility) |
+| `batchlas_dispatch_obj` | flat kernel selection: `src/select/*.cc`, every `src/ops/<op>/<op>.cc`, and the generated tuned-tables TU (next section) |
+| `batchlas_backends_obj`, `batchlas_backends_cuda_obj`, `batchlas_backends_rocm_obj` | the vendor wrapper TUs; the CUDA and ROCm ones exist only when at least one vendor library of that family is enabled |
+| `batchlas_extensions_*_obj` (eigen, factorization, symmetric, tridiag, sytrd, latrd, stedc, cta) | the native drivers under `src/extensions/` |
+| `batchlas_sycl_obj` | the native SYCL kernels under `src/sycl/` |
+| `batchlas_util_obj`, `batchlas_extra_obj` | `src/util/` (queue, settings, SYCL utilities) and `src/extra/` (norms, cond, transpose, random matrices) |
+
+Decisions and traps that go with the cut:
+
+- **Selection is compiled unconditionally.** `batchlas_dispatch_obj` has no vendor condition;
+  the vendor calls inside it are `if constexpr`-gated on the `BATCHLAS_HAS_*` macros. That is
+  what makes `-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF` a complete library rather than a link error.
+- **A vendor object library with no sources is a hard CMake error,** which is why the CUDA and
+  ROCm backend libraries are created only when one of their vendor libraries is on. "There is a
+  CUDA device" is not sufficient: with every CUDA math library off the source list is empty, and
+  that empty library was the first thing a vendor-free configure used to hit.
+- **`batchlas_extensions_cta_obj` is the only object library built without the CPU targets**
+  (`NO_CPU_TARGETS`): its kernels are GPU-only (32-lane CTA tiers, the tiny tiers), so a
+  native-CPU image of them would be dead weight. Nothing warns if a source moves out of that list;
+  it silently acquires a CPU image. `batchlas_sycl_obj` keeps the CPU target on purpose, because
+  the native-CPU image is what makes a vendor-free CPU build complete.
+- **A source must sit with the sources whose device symbols it calls.** The shared library is the
+  device-link unit, so a kernel driver and the TU defining the device functions it shares (for
+  example `potrf_blocked.cc` and `potrf_cta.cc`, which share `potrf_cta_body`) must be in the same
+  object library. Splitting them links today only because the helpers are inline templates, and
+  fails with `ptxas fatal: Unresolved extern function` once one is marked `SYCL_EXTERNAL`. The
+  rationale for each placement is in the comments of `src/extensions/CMakeLists.txt`.
+- **The tiny-kernel TUs** (`getrf_tiny.cc`, `gesv_tiny.cc`, `posv_tiny.cc`, `trsm_sg_left.cc`) build
+  with `-mllvm -pragma-unroll-threshold=262144`; without it LLVM declines `#pragma unroll`
+  silently and the register arrays go to the stack.
+- **Split by default, monolithic for release.** Each object library becomes its own shared
+  library in the default (split) build, and `BATCHLAS_MONOLITHIC_LIBRARY` links them all into one
+  `libbatchlas.so`. The build is device-link-bound and the device link is per shared library, so
+  the split keeps a one-file edit's relink small; the merged link is a single long
+  `sycl-post-link` (measured 575 s for a 273 MiB `.so` on the RTX 4090 box, out of an 11 m 38 s
+  `-j16` build). Hidden visibility applies only to the monolithic build, for the reasons in
+  [symbol visibility for private headers](#runtime-internals-symbol-visibility-for-private-headers)
+  and the vague-linkage note there: in split mode the process-wide inline state would split into
+  one copy per `.so`.
+
+## Runtime internals: embedded tuned tables
+
+The tuned selection tables (`tuned/<op>.<dtype>.<device>.txt`, format and provenance in the
+`tuned/README.md` and [flat kernel selection](flat-kernel-selection.md)) are compiled into the library, so an installed
+BatchLAS needs no data files at run time.
+
+**Generation.** `src/CMakeLists.txt` globs `tuned/*.txt` with `CONFIGURE_DEPENDS`, so adding or
+removing a table reconfigures, and runs `cmake/BatchLASEmbedTables.cmake` in script mode as a
+custom command whose `DEPENDS` are the tables, so editing one regenerates. The script writes one
+TU, `<build>/generated/select/tuned_tables.cc`, that defines
+`select::embedded_tables()` (declared in `src/select/select.hh`) over a sorted array of
+`{file name, text}` pairs, and it is compiled into `batchlas_dispatch_obj`.
+
+- **Misnamed files are a configure error.** A file not named `<op>.<dtype>.<device>.txt` stops the
+  build, because the loader skips any other name and such a table would otherwise silently never
+  be used.
+- **Raw-string delimiter.** Each table is embedded as `R"batchlas_tbl(...)batchlas_tbl"`; a table
+  containing the delimiter is a configure error rather than a broken TU.
+- **One `char` array per table, length from `sizeof`.** A `string_view` built from a bare literal
+  runs a constexpr `strlen`, and roughly 0.5 MB of tables exceeds clang's constexpr step limit.
+  (The design spec's sketch says "a `constexpr std::string_view` per table"; the array is what
+  shipped, for this reason.) C++23 `#embed` is not available in DPC++.
+- **Zero tables is valid:** the array keeps a sentinel entry and the span is empty.
+- **An unchanged table set does not touch the generated file,** so its timestamp holds and the TU
+  is not recompiled; regeneration on every configure would cost a device link of
+  `batchlas_dispatch_obj`'s library.
+
+**Staleness.** `cmake/BatchLASTunedStaleness.cmake` recomputes, at configure time, the
+kernel-source hash that each table's header records (`kernels=<hash>`, over the source list in
+`tools/tune/<op>_spec.cc`) and warns when they differ. It is a warning only: a stale table stays
+in use, since a slightly stale ranking is still better than none. `.github/ci/check_tuned_tables.py`
+and the tuner compute the same hash.
+
+**Run time.** Tables are parsed lazily, per `(op, dtype)`, on the first selection that needs
+them, and cached together with the `BATCHLAS_TUNED_DIR` value and a generation counter. A file in
+`BATCHLAS_TUNED_DIR` with the same name replaces the embedded one (the trace tag then says
+`override`); a non-table file there is skipped with a one-time warning. The cache, its mutex
+and the parsed tables are deliberately leaked, like the other process-wide selection state:
+`choose()` may run from static destructors, and the coverage writer runs from `atexit`, so
+neither may find the tables already destroyed. Tests swap
+the embedded set with `select::testing::set_builtin_tables` and restore it with
+`use_embedded_tables`, each of which bumps the generation so no cached parse survives.
