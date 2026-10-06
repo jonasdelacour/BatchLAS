@@ -5,7 +5,10 @@
 #include "level3_fused.hh"
 #include "level3_vendor_fallback.hh"
 
-// The terminal GEMM is the PUBLIC entry point, whose header is vendor-free.
+// WP1 S2: the expansions' terminal GEMM is the PUBLIC entry point, not
+// gemm_cublasdx. Vendor-free by inspection -- gemm.hh reaches only
+// sycl-device-queue.hh, sycl-span.hh, matrix.hh, enums.hh and
+// queue-dispatch.hh.
 #include <batchlas/blas/functions/gemm.hh>
 #include "triangular_expand.hh"
 
@@ -63,8 +66,8 @@ bool symm_prefer_cuda_custom_heuristic(const MatrixView<float, MatrixFormat::Den
         return false;
     }
 
-    // Skewed shapes excluded: the k x k expansion stops paying once k dwarfs m, n.
-    // evidence: docs/perf/level3.md#symm-and-hemm-expansion-crossover
+    // Skewed shapes are excluded above because the expansion always costs a
+    // full k x k pass, which stops paying for itself once k dwarfs m and n.
     return detail::expansion_preferred(max_dim, A.batch_size());
 }
 
@@ -79,8 +82,11 @@ Event symm_expand_gemm(Queue& ctx,
     const int n = A.rows();
     const int ld = detail::expanded_ld<float>(n);
 
-    // Arena scratch, never a local Matrix: it would be freed while still enqueued.
-    // evidence: docs/perf/level3.md#level-3-scratch-expansions-and-their-ceilings
+    // Scratch comes from the queue's arena rather than a local Matrix. A Matrix
+    // is a fresh managed allocation whose pages are migrated to the device on
+    // first touch, which at n=512 batch=512 costs an order of magnitude more
+    // than the GEMM it feeds, and it would be freed on return while the kernels
+    // reading it have only been enqueued.
     auto ws = ctx.workspace(detail::expanded_workspace_bytes<float>(ctx, n, A.batch_size()));
     BumpAllocator pool(ws.span());
     auto storage = pool.allocate<float>(ctx, static_cast<std::size_t>(ld) *
@@ -95,7 +101,10 @@ Event symm_expand_gemm(Queue& ctx,
         expansion = detail::expand_mirrored<float, /*Conjugate=*/false>(ctx, expanded, A, uplo);
     }
 
-    // Out-of-order queues order nothing across the SYCL/native boundary.
+    // The GEMM runs on the queue's native stream, which an in-order queue shares
+    // with the expansion kernel. An out-of-order queue orders nothing across the
+    // SYCL/native boundary and offers no event to hang the vendor launch off, so
+    // there the dependency has to be waited out.
     if (!ctx.in_order()) {
         expansion.wait();
     }

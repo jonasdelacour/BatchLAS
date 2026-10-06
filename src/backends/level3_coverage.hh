@@ -2,7 +2,6 @@
 
 // The coverage row for the route a level-3 dispatcher (symm, syrk, syr2k, trmm) took.
 // They choose by rule, not select::choose, so each terminal records beside its return.
-// evidence: docs/perf/level3.md#level-3-why-the-four-ops-are-instrumented-rather-than-routed
 
 #include "../select/coverage.hh"
 
@@ -13,9 +12,9 @@
 
 namespace batchlas::backend::detail {
 
-// Whether a native kernel could have served THIS shape; kNativeUnknown (-1) when the
-// gate declined before the dispatcher ran, so "none" and "vendor preferred" look alike.
-// evidence: docs/perf/level3.md#the-coverage-instrument-itself
+// Whether a native kernel could have served THIS shape. A tri-state: when the gate
+// declines before the dispatcher runs, the caller cannot tell "nothing native
+// serves this" from "the vendor was preferred", and records kNativeUnknown (-1).
 enum : int { kNativeUnsupported = 0, kNativeSupported = 1, kNativeUnknown = -1 };
 
 struct Level3Variant {  // part of the coverage key

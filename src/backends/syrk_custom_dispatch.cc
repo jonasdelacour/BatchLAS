@@ -58,10 +58,27 @@ bool syrk_triangular_supported(const MatrixView<float, MatrixFormat::Dense>& A,
     return !A.is_heterogeneous() && !C.is_heterogeneous();
 }
 
-// Where skipping off-triangle tiles beats the full GEMM: at least three tiles a
-// side (n >= 257) and >= 160 blocks to fill the device; k does not enter.
-// Gate-only: see syrk_use_cuda_custom for why n = 256 still reaches the kernel.
-// evidence: docs/perf/level3.md#syrk-triangular-tiles
+// Where skipping the tiles outside the triangle starts paying for the
+// tile-masked kernel's lower per-tile rate. Two conditions, both measured on
+// RTX 4090 / sm_89 in float over n in 64..2048 x batch in 1..512, against the
+// full n x n batched GEMM this replaces:
+//
+//   - n has to be past 256. A tile grid narrower than three 128-wide tiles a
+//     side is more than half diagonal, and a diagonal tile is computed whole
+//     and then masked, so at n = 256 only one tile in four is saved. That does
+//     not cover the gap to cuBLAS per tile: n = 256 measured anywhere between
+//     0.84x and 1.22x depending on where its grid happened to fall against a
+//     wave boundary, which is no win at all. From n = 384 up every saturated
+//     shape won, and the win grows with n as the diagonal thins out -- 1.45x
+//     at n = 512 batch 512, 1.63x at n = 1024 batch 64, 1.71x at n = 2048
+//     batch 16.
+//   - the grid has to fill the device. The 128 SMs hold two of these
+//     256-thread blocks apiece, and below ~160 blocks the triangular route
+//     lost (1.14x slower at 144 blocks, 1.25x at 136) where from 168 up it won
+//     (0.71x).
+//
+// k does not enter: it only deepens each block's reduction, which moves both
+// routes together.
 bool syrk_prefer_triangular_tiles(const MatrixView<float, MatrixFormat::Dense>& A,
                                   const MatrixView<float, MatrixFormat::Dense>& C,
                                   Transpose transA) {
@@ -73,8 +90,11 @@ bool syrk_prefer_triangular_tiles(const MatrixView<float, MatrixFormat::Dense>& 
     return static_cast<long long>(A.batch_size()) * detail::triangular_tile_count(n) >= 160;
 }
 
-// The Gram kernel serves n within one tile, where the alternative is a host
-// loop over cublasSsyrk; no threshold to tune. evidence: docs/perf/level3.md#syrk-gram-tiles
+// The single-tile kernel's whole premise is that the tile is sized to n, so it
+// serves exactly the range the triangular grid cannot: n no wider than one
+// tile. Inside that range it is not a close call and there is no threshold to
+// tune -- the alternative is a host loop over cublasSsyrk, which at large batch
+// is one to two orders of magnitude off anything batched.
 bool syrk_prefer_gram_tiles(const MatrixView<float, MatrixFormat::Dense>& C) {
     return C.rows() <= detail::kGramMaxTile;
 }
@@ -120,10 +140,15 @@ bool syrk_use_cuda_custom(const Queue& ctx,
         !syrk_problem_supported(A, C, transA) || !syrk_triangular_supported(A, C)) {
         return false;
     }
-    // Only the two tile kernels respect the triangle, so only they may replace
-    // the vendor. The third disjunct deliberately admits shapes below the
-    // triangular window (e.g. n = 256): there the rival is a ~9 us-per-item loop.
-    // evidence: docs/perf/level3.md#where-the-decision-actually-happens
+    // The two tile-masked kernels are the only custom routes that respect the
+    // triangle, so they are the only ones the automatic choice may leave the
+    // vendor for. Between them they cover the range: `gram` below one tile,
+    // `triangular` from three tiles a side up. Its own threshold says where it
+    // beats the full n x n GEMM; below that the question is instead whether it
+    // beats a host loop over cublasSsyrk, which the cuBLASDx heuristic already
+    // answers -- one launch per batch member costs about 9 us, so anything with
+    // a batch at all is better off here even where the tile grid is half
+    // diagonal.
     return syrk_prefer_gram_tiles(C) ||
         syrk_prefer_triangular_tiles(A, C, transA) ||
         syrk_prefer_cuda_custom_heuristic(A, C, transA);

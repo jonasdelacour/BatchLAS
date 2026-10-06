@@ -1,7 +1,20 @@
-// The four cuBLASDx fused level-3 tails; the only level-3 TU that reaches a CUDA
-// header (built only when BATCHLAS_HAS_CUBLAS). Lifted verbatim and untested on
-// a MathDx-less box, so do not tidy. Reactions to failure stay in the dispatchers.
-// evidence: docs/perf/level3.md#level-3-the-cublasdx-fused-tail-hook
+// The four cuBLASDx fused level-3 tails, lifted verbatim out of the dispatchers.
+//
+// This is the ONLY level-3 TU that reaches a CUDA header. It is compiled only
+// when BATCHLAS_HAS_CUBLAS (src/backends/CMakeLists.txt); the vendor-free build
+// gets level3_fused_absent.cc instead, which answers NoKernel.
+//
+// Lifted verbatim on purpose. Every one of these tails is unreachable in this
+// build -- MathDx is absent, so *_cublasdx::available() is false and
+// cublasdx_variant_needs_fallback is unconditionally true -- which makes moving
+// them zero-route-risk but also means a mistake here would not be caught by any
+// test on this machine. So nothing is "tidied" in transit: the descriptor
+// fields, the trace scope names and the three exits are exactly as they were.
+//
+// What does NOT move is each op's REACTION to a failed launch, because the four
+// disagree: syr2k throws where the others fall back, trmm throws only when
+// forced, and symm/syrk fall back to different shims. Those stay in the
+// dispatchers, driven by FusedResult::Outcome.
 
 #include "level3_fused.hh"
 

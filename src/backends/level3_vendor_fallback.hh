@@ -1,10 +1,29 @@
 #pragma once
 
-// The seam where a level-3 tile route gives up and asks for the vendor: the
-// vendor where one is compiled, NoRouteError where none is.
-// Trap: never call the PUBLIC symm/syrk/syr2k/trmm from a fallback site. The
-// gate already said yes, re-entry says yes again: unbounded recursion.
-// evidence: docs/perf/level3.md#level-3-the-sideways-vendor-seam
+// The seam where a level-3 tile route gives up and asks for the vendor.
+//
+// WHY IT IS NOT SIMPLY THE PUBLIC symm/syrk/syr2k/trmm -- the single most
+// valuable finding of the WP1 design pass, and it is a real bug if ignored.
+//
+// The obvious move is to make the four dispatchers' `*_vendor_cuda_raw(...)`
+// fallbacks call the PUBLIC entry point, exactly as their downward GEMM
+// terminal becomes the public gemm. It does not work, and it does not fail
+// loudly: every one of those fallback sites is reached AFTER a gate that
+// already returned true. `symm_vendor` calls `symm_use_cuda_custom`, that
+// returns true, `symm_cuda_custom` runs, decides the shape is unsupported --
+// and a public `symm` call from there re-enters `symm_use_cuda_custom` with the
+// same environment and the same views. It returns true again. Unbounded
+// recursion, reachable with BATCHLAS_SYMM_ROUTE=cublasdx on a CPU queue, where
+// symm_use_cuda_custom returns true for the pin BEFORE the problem_supported test.
+//
+// So the sideways terminal needs its own seam: forward to the vendor where one
+// is compiled, and throw the ordinary NoRouteError where none is. That is what
+// lets the four TUs stop naming cuBLAS symbols without pretending a vendor-free
+// build can serve every shape.
+//
+// Portable by construction -- enums, matrix views and the queue, nothing else.
+// The #if that picks vendor-or-throw is in the .cc, so the four dispatchers
+// contain no preprocessor of their own.
 
 #include "../queue.hh"
 
@@ -13,8 +32,12 @@
 
 namespace batchlas::backend::detail {
 
-// Signatures copied VERBATIM from the *_custom_dispatch.hh headers, never
-// regenerated from the public ones: vendor and public argument orders differ.
+// Signatures are copied VERBATIM from {symm,syrk,syr2k,trmm}_custom_dispatch.hh
+// rather than regenerated from the public declarations. That is deliberate: the
+// vendor forms and the public forms genuinely disagree -- trsm's vendor form
+// takes `alpha` last while the public form takes it third -- and the last time
+// a facade was generated from public declarations instead of lifted verbatim it
+// would have passed `alpha` where `side` was expected on every backend.
 
 Event symm_vendor_fallback(Queue& ctx,
                            const MatrixView<float, MatrixFormat::Dense>& A,

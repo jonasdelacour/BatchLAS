@@ -28,8 +28,11 @@ detail::Level3Pin trmm_pin() {
                                        Level3Pin::Cublasdx});
 }
 
-// Every left-side float problem with a homogeneous batch (base + batch*stride
-// indexing); uplo, trans and diag are loop bounds and a staging mask.
+// Every left-side float problem with a homogeneous batch. The kernel indexes
+// both operands as base + batch * stride, which a batch of unrelated pointers
+// or differing shapes is out of reach of; everything else it handles, because
+// uplo, trans and diag are loop bounds and a staging mask rather than separate
+// kernels.
 bool trmm_triangular_supported(const MatrixView<float, MatrixFormat::Dense>& A,
                                const MatrixView<float, MatrixFormat::Dense>& B,
                                const MatrixView<float, MatrixFormat::Dense>& C,
@@ -52,8 +55,25 @@ bool trmm_triangular_supported(const MatrixView<float, MatrixFormat::Dense>& A,
     return C.rows() > 0 && C.cols() > 0;
 }
 
-// No m threshold, deliberately: the rival here is the expansion, not a GEMM.
-// evidence: docs/perf/level3.md#trmm-tiles-have-no-threshold
+// There is no threshold here, and the first cut of this router had one because
+// it asked the wrong question. Whether trmm beats the *gemm* spelling of the
+// same product depends strongly on m -- see the header of
+// trmm_triangular_tiles.hh -- but that is a question for the caller. What this
+// router chooses between is the tile kernel and the expansion-plus-GEMM, and
+// against that the tile kernel wins nearly everywhere, including exactly the
+// m = 128..256 band a gemm-calibrated threshold had excluded.
+//
+// Measured in float on RTX 4090 / sm_89, tile against vendor, at batch sizes
+// that saturate (ms):
+//
+//   m=128 nC=512  batch 1024   0.698 vs 0.784
+//   m=128 nC=1024 batch 512    0.686 vs 0.687
+//   m=256 nC=256  batch 512    0.536 vs 0.692
+//   m=256 nC=1024 batch 256    0.915 vs 0.855   <- the one loss, 7%
+//
+// Gating on m therefore cost up to 1.29x on the shapes it was meant to protect.
+// The single 7% cell is not worth a special case that would have to be
+// re-tuned every time either route changes.
 
 bool trmm_problem_supported(const MatrixView<float, MatrixFormat::Dense>& A,
                             const MatrixView<float, MatrixFormat::Dense>& B,
@@ -127,7 +147,9 @@ Event trmm_cuda_custom(Queue& ctx,
                        Uplo uplo,
                        Transpose transA,
                        Diag diag) {
-    // uplo/diag are in the coverage key on purpose. evidence: docs/perf/level3.md#the-trmm-poison-test
+    // uplo/diag are carried into the coverage key: trmm has a prior incident where
+    // the tempting fix was the wrong-answer one, and a row that cannot tell uplo
+    // apart cannot catch that coming back.
     const auto rec = [&](const char* taken, bool native_supported) {
         detail::record_level3_route(Op::trmm, taken,
                                     C.rows(), C.cols(), A.rows(),

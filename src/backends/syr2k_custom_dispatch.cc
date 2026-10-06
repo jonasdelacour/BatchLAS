@@ -57,9 +57,23 @@ bool syr2k_triangular_supported(const MatrixView<float, MatrixFormat::Dense>& A,
     return !A.is_heterogeneous() && !B.is_heterogeneous() && !C.is_heterogeneous();
 }
 
-// The vendor route is one cublasSsyr2k launch per batch member: from batch 2
-// the kernel won every measured shape, and batch 1 has no threshold in n.
-// evidence: docs/perf/level3.md#syr2k-triangular-tiles
+// Where the fused kernel beats the vendor. The vendor route is a host loop over
+// cublasSsyr2k, one launch per batch member, against one launch for the whole
+// batch here, so the two are only ever close at a batch of one and the vendor
+// pays double from two members up.
+//
+// Measured on RTX 4090 / sm_89 in float over n in 8..3072 x k in 4..2048 x
+// batch in 1..1024. From batch 2 the kernel won every shape in the grid: 1.06x
+// at n = 3072, 1.12x at n = 1024, 1.3-1.4x through the middle, and up to 226x
+// where n is small enough that the whole cost is the launch. Neither n nor k
+// nor the tile count enters, because none of them changes which side of that
+// per-launch difference a shape falls on.
+//
+// A batch of one does not sort by anything: the vendor wins by 1.18-1.60x below
+// n = 1280 and again by 1.16x at n = 3072, the kernel wins by 1.02-1.71x
+// between, and by 4-10x the vendor wins on a deep k with a small n, where the
+// kernel has a single block and cuBLAS splits the reduction. There is no
+// threshold in n to be had, so the batch of one is left with the vendor.
 bool syr2k_prefer_triangular_tiles(const MatrixView<float, MatrixFormat::Dense>& A) {
     return A.batch_size() >= 2;
 }
@@ -85,7 +99,9 @@ bool syr2k_use_cuda_custom(const Queue& ctx,
         !syr2k_problem_supported(A, B, C, transA) || !syr2k_triangular_supported(A, B, C)) {
         return false;
     }
-    // Only the tile kernel respects the triangle, so it is Auto's only non-vendor choice.
+    // The tile-masked kernel is the only custom route that respects the
+    // triangle, so it is the only one the automatic choice may leave the vendor
+    // for, and its own threshold is the whole decision.
     return syr2k_prefer_triangular_tiles(A);
 }
 
