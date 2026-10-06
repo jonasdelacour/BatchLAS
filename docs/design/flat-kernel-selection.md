@@ -682,7 +682,8 @@ The sm_89 gate needs the RTX 4090 box. The sm_120 gate needs the Blackwell box (
   phase-5 ops' kernels were not audited for it. ormqr blocked hits it (known-defects #16).
 - ~~**hemm, herk and her2k still select by hand**~~: migrated (wave L3b, §12 "Hermitian three"):
   hemm `{expand, vendor}`, herk `{fold, gram, vendor}`, her2k `{fold, vendor}`, `BATCHLAS_EXPAND_ROUTE`
-  retired, herk's gram pinned by `BATCHLAS_HERK_ROUTE=gram`, sytrd's predictor asks her2k's `choose()`.
+  retired, herk's gram pinned by `BATCHLAS_HERK_ROUTE=gram`, sytrd's predictor asks her2k's `select::pick`
+  (`ops::her2k::fold_chosen`).
 - **Policy inside one op is still hand-written.** With no op-level router left, these speed rules
   stay outside the tables (R4 covers op choices, not steps inside a family): geqrf's register panel
   leaf (`geqrf_panel_reg_preferred`, `m <= kGeqrfPanelRegPolicyRows = 128`, `geqrf_cta.cc`, read by

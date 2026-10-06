@@ -871,10 +871,10 @@ Event sytrd_blocked_impl(Queue& ctx,
                 if constexpr (rank2k_trailing_update_supported) {
                     if (use_rank2k_trailing_update) {
                         if constexpr (internal::is_complex<T>::value) {
-                            // Ask her2k's own choose() (pins included) whether it takes `fold`.
-                            // Anything else is its per-item vendor loop, structurally the route
-                            // measured 7.8x slower than the GEMM pair above, so keep the pair
-                            // then. Per panel, not hoisted: n2 shrinks every iteration, so an
+                            // Ask her2k's own select::pick (fold_chosen, pins included) whether it
+                            // takes `fold`. Anything else is its per-item vendor loop, structurally
+                            // the route measured 7.8x slower than the GEMM pair above, so keep the
+                            // pair then. Per panel, not hoisted: n2 shrinks every iteration, so an
                             // early panel's fold scratch (n2^2 x batch, expansion_fits) can be
                             // refused while later ones fit. The lease is per call, so the peak is
                             // one panel's scratch. evidence: docs/perf/dispatch.md#her2k-in-sytrd

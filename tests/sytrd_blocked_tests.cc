@@ -327,7 +327,7 @@ TEST(SytrdBlockedFloatCudaTest, Syr2kTrailingUpdateMatchesNetlibReference) {
     }
 }
 
-// The cfloat trailing update calls her2k only where her2k's own choose() would take `fold`
+// The cfloat trailing update calls her2k only where her2k's own select::pick would take `fold`
 // (ops::her2k::fold_chosen); otherwise it keeps the GEMM pair. Auto at batch 8 folds, so her2k is
 // called (a her2k select-trace line per wide panel); pinned to its vendor loop, the predictor says
 // no and her2k is never called. Both tridiagonals agree to rounding. Vendor-free, the tile-route

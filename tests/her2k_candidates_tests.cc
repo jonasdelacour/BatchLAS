@@ -828,7 +828,7 @@ TYPED_TEST(Her2kCandidates, AutoReadsTheTranscribedTable) {
         }
 }
 
-// key_of's every field reaches choose(): a synthetic table whose winner changes with n, k and batch.
+// key_of's every field reaches select::pick: a synthetic table whose winner changes with n, k, batch.
 TYPED_TEST(Her2kCandidates, AutoReadsEveryKeyField) {
     using T = typename TestFixture::T;
     if (!TestFixture::kVendor) GTEST_SKIP() << "only fold can run vendor-free, so no row can steer Auto";
@@ -881,8 +881,9 @@ TYPED_TEST(Her2kCandidates, VendorFreeLastResortIsFold) {
     }
 }
 
-// sytrd_blocked's predictor is her2k's own choose(): it agrees with the traced choice over cells
-// straddling the old rule and the scratch budget, follows the pins, and throws on a bad one.
+// sytrd_blocked's predictor is her2k's own select::pick (ops::her2k::fold_chosen): it agrees with
+// the traced choice over cells straddling the old rule and the scratch budget, follows the pins,
+// and throws on a bad one.
 TYPED_TEST(Her2kCandidates, FoldChosenIsTheCallsChoice) {
     using T = typename TestFixture::T;
     const ScopedEnvVar clear("BATCHLAS_HER2K_ROUTE", nullptr);
