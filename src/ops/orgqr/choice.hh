@@ -1,7 +1,5 @@
 #pragma once
 
-// orgqr's selection vocabulary (flat-kernel-selection.md#phase-5-orgqr), header-only.
-
 #include "../../select/select.hh"
 
 #include <array>
@@ -17,12 +15,10 @@ struct Vendor : select::NoFields<"vendor"> {};    // backend::orgqr_vendor
 using OrgqrChoice = std::variant<Blocked, Vendor>;
 
 template <class T>
-constexpr auto candidates() {
-    return std::array<OrgqrChoice, 2>{Blocked{}, Vendor{}};
-}
+constexpr auto candidates() { return select::all_of<OrgqrChoice>(); }
 
-inline constexpr std::array<std::string_view, 2> last_resort{"vendor", "blocked"};
-inline constexpr select::Rules rules{last_resort};  // §5.5: Vendor runs every shape it is given (n > m, CPU, heterogeneous).
+inline constexpr std::array<std::string_view, 2> last_resort{"vendor", "blocked"};  // §5.5: Vendor runs every shape it is given (n > m, CPU, heterogeneous).
+inline constexpr select::OpSpec spec{Op::orgqr, select::Lib::factorization, {last_resort}};
 
 // The old predicates read m and n only (no batch, no arch). Work ~ m n^2.
 inline constexpr std::array<std::string_view, 2> key_names{"m:log", "n:log:2"};

@@ -18,12 +18,10 @@ using HemmChoice = std::variant<Expand, Vendor>;
 
 // Complex only (BLAS has no real ?hemm); fieldless: the expansion's ld and tile are derived.
 template <class T>
-constexpr auto candidates() {
-    return std::array<HemmChoice, 2>{Expand{}, Vendor{}};
-}
+constexpr auto candidates() { return select::all_of<HemmChoice>(); }
 
 inline constexpr std::array<std::string_view, 2> last_resort{"expand", "vendor"};
-inline constexpr select::Rules rules{last_resort};
+inline constexpr select::OpSpec spec{Op::hemm, select::Lib::level3, {last_resort}};
 
 // order = A's order (m on the left, n on the right); q = C's other extent. Work ~ order^2 q batch.
 inline constexpr std::array<std::string_view, 3> key_names{"order:log:2", "q:log", "batch:log"};

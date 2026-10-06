@@ -230,15 +230,8 @@ bool can_run(const PotrfChoice& c, const select::Device& d, const MatrixView<T, 
                n <= lpanel_max_n_for_slm<T>(d.slm_budget, d.max_wg);
       },
       [&](Blocked)       { return native_ok && uplo == Uplo::Lower && cta_max_n_for_slm<T>(d.slm_budget) >= 1; },
-      [&](Vendor)        { return d.has_vendor_solver; },
+      [&](Vendor)        { return d.has_vendor; },   // spec.vendor's library is compiled in
   }, c);
-}
-
-template <Backend B, class T>
-PotrfChoice choose(Queue& q, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo) {
-  const auto d = select::device_of<B>(q);
-  auto ok = [&](const PotrfChoice& c) { return can_run<T>(c, d, A, uplo); };
-  return select::choose<PotrfChoice>("potrf", dtype_name<T>(), d, key_of(A, uplo), candidates<T>(), ok);
 }
 
 template <Backend B, class T>
@@ -253,7 +246,10 @@ void launch(Queue& q, const PotrfChoice& c, const MatrixView<T, MatrixFormat::De
             /*trailing_gemm=*/[&](auto&&... a) { gemm<B, T>(q, a...); },   // public gemm: decides for itself
             /*panel_solve=*/  [&](auto&&... a) { trsm<B, T>(q, a...); });  // public trsm: decides for itself
       },
-      [&](Vendor)          { backend::potrf_vendor<B, T>(q, A, uplo, ws, info); },
+      [&](Vendor) -> Event {
+        if constexpr (select::has_library<B>(spec.vendor)) return backend::potrf_vendor<B, T>(q, A, uplo, ws, info);
+        else select::no_vendor<B, T>(spec);   // NoRouteError + a coverage `miss` row
+      },
   }, c);
 }
 
@@ -268,18 +264,21 @@ template <Backend B, typename T>
 Event potrf(Queue& q, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo, Span<std::byte> ws,
             Span<int32_t> info) {
   potrf_validate_params(A, uplo);
-  const auto c = ops::potrf::choose<B, T>(q, A, uplo);
-  auto shape = select::square_shape<B, T>(A.rows(), A.batch_size());   // coverage key: scalar, backend
-  shape.uplo = uplo;                                                     // ... and uplo, never inferred
-  select::TraceScope trace("potrf", c, shape);   // prints, records coverage, indents children
-  ops::potrf::launch<B, T>(q, c, A, uplo, ws, info);
-  return q.get_event();
+  // device_of, choose (NoRouteError when vendor-free and nothing runs), the trace line and coverage
+  // row (scalar and backend filled in; uplo is part of the key, never inferred), then launch inside it.
+  return select::run<B, T>(
+      ops::potrf::spec, q, ops::potrf::key_of(A, uplo), ops::potrf::candidates<T>(),
+      [&](const auto& c, const auto& d) { return ops::potrf::can_run<T>(c, d, A, uplo); },
+      {.m = A.rows(), .n = A.rows(), .k = A.rows(), .batch = A.batch_size(), .uplo = uplo}, {},
+      [&](const auto& c) { return ops::potrf::launch<B, T>(q, c, A, uplo, ws, info); });
 }
 
 template <Backend B, typename T>
 size_t potrf_buffer_size(Queue& q, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo) {
   potrf_validate_params(A, uplo);
-  return ops::potrf::workspace<T>(ops::potrf::choose<B, T>(q, A, uplo), q, A, uplo);   // R5
+  const auto c = select::pick<B, T>(ops::potrf::spec, q, ops::potrf::key_of(A, uplo), ops::potrf::candidates<T>(),
+                                    [&](const auto& k, const auto& d) { return ops::potrf::can_run<T>(k, d, A, uplo); });
+  return ops::potrf::workspace<T>(c, q, A, uplo);   // R5
 }
 ```
 
@@ -325,11 +324,12 @@ struct Device {
   std::string key;          // table key: "sm_120", "sm_89", "gfx90a", "cpu", "intel_<id>"
   std::string family;       // "sm", "gfx", "intel", "cpu": borrowing stays inside a family first
   int arch_number;          // 120, 89, 90 (gfx90a), 0 for cpu
-  bool is_gpu, has_sg32, has_vendor_solver;
+  bool is_gpu, has_sg32;
+  bool has_vendor;          // the asking op's library group (OpSpec::vendor) is compiled in
   int64_t slm_budget;       // resident::device_slm_budget(LOCAL_MEM_SIZE), as today
   int max_wg;
 };
-template <Backend B> Device device_of(Queue& q);   // computed once per Queue device and cached
+template <Backend B> const Device& device_of(const Queue& q, Lib vendor = Lib::none);   // memoized
 ```
 
 Facts are filled in from the same queries `potrf_op_shape` makes today (`potrf_route.hh:20-62`).
@@ -1605,6 +1605,32 @@ in `tuned_tables_tests` holds it.
   the old path; spelling migration `batchlas::dispatch::NoRouteError` -> `batchlas::NoRouteError`
   (`docs/cpp-api.md`). `examples/consumer` static-asserts it with only the umbrella included.
 
+### After phase 5, one run() per op (2026-10-06)
+
+The fifteen op files had grown the same plumbing around their four real functions (`key_of`,
+`can_run`, `launch`, `workspace`): a private `overloaded`, a `choose` wrapper with a try/catch that
+turned "nothing runnable" into `NoRouteError`, a `native_facts` wrapper, a device helper, the
+`square_shape` + `TraceScope` sequence and a 20-line instantiation block. That now lives once in
+`select.hh`:
+
+- **`select::OpSpec`** in each `choice.hh`: the `Op`, the `select::Lib` its Vendor family calls
+  (`level3`, `factorization`, `solver`, `sparse`, or `none` for gesv/posv) and its `Rules`, which
+  default to `{"blocked", "vendor"}`. gemm, gemv, spmm, getri and orgqr keep their own order.
+- **`select::run`** opens the trace/coverage scope around `launch(choice)`; **`select::pick`** is
+  the choice alone, for `*_buffer_size`. Both raise `NoRouteError` for a vendor-free miss, so the
+  per-op catch is gone. `select::no_vendor<B, T>(spec)` is the Vendor arm's `else`.
+- **`Device::has_vendor`** replaces `has_vendor_solver` and `has_vendor_blas`. The two flags had
+  carried four library groups (getrf/getrs/geqrf/orgqr/ormqr passed the factorization group in the
+  solver slot, spmm the sparse group in the BLAS slot). The phase notes above use the old names.
+- **`select::all_of<Choice>()`** is `candidates<T>()` for every field-less op: declaration order is
+  the tie-break order (unchanged for all thirteen). Only gemm and potrf list knobs by hand.
+- `coverage::Shape` is built with designated initializers; `square_shape` is gone.
+  `select::on_in_order_queue` replaces three copies of the in-order wrapper (ormqr, syev, gesvd).
+- One behaviour moved: ormqr's insufficient-workspace check now runs inside the trace scope, as
+  syev's and gesvd's already did, so that throw leaves a coverage `reached` row.
+
+Routing is unchanged: `scripts/route_diff.sh` captured identical `reached` rows before and after.
+
 ### Level-3 four (symm, syrk, syr2k, trmm)
 
 (2026-10-06; maintainer: migrate the last four hand-written routers, tables transcribed for sm_89 and
@@ -1616,14 +1642,15 @@ sm_120, no measurement.) Four op branches (`flat-select-l3-{symm,syrk,syr2k,trmm
 **The shared recipe** (phase 5's, with these level-3 specifics):
 - **Layout (R1).** `src/ops/<op>/{choice.hh,<op>.cc}`: validate (`shape::validate_{product,rank_k,
   rank_2k}<std::invalid_argument>`, so an invalid shape throws `invalid_argument` on every backend
-  and in a vendor-free build) -> `choose()` -> `TraceScope` -> one `std::visit` launch. syrk and trmm
-  return a no-op event for an empty problem (gemm's precedent). `src/ops/level3/level3.cc` kept only
+  and in a vendor-free build) -> `select::run` (the "one run() per op" shape above: `spec` is
+  `{Op::<op>, select::Lib::level3, {last_resort}}`) -> one `std::visit` launch. syrk, syr2k, symm and
+  trmm return a no-op event for an empty problem (gemm's precedent). `src/ops/level3/level3.cc` kept only
   hemm/herk/her2k (deleted by the Hermitian-three wave below). Instantiations moved with each op: symm CUDA and NETLIB (ROCm/MKL symm is
   `src/extensions/symm.cc`), syrk and syr2k CUDA/ROCm/NETLIB real types, trmm CUDA/ROCm/NETLIB all
   four types.
 - **Families** are `NoFields`: the old routers chose no knob. Derived knobs stay derived
   (`trmm_row_tile` and `BATCHLAS_TRMM_TILE_M`, gram's NTile by n, the triangular aligned/predicated
-  leg). The vendor family calls `backend::<op>_vendor<B, T>` under `level3_vendor_available<B>`, never
+  leg). The vendor family calls `backend::<op>_vendor<B, T>` under `has_library<B>(spec.vendor)`, never
   the public entry, so the recursion that `level3_vendor_fallback.hh` existed to avoid cannot happen.
   Float-only kernels are instantiated only inside `if constexpr (std::is_same_v<T, float>)` arms.
 - **can_run (R3).** Every native family: `B == Backend::CUDA` (the old reach; ROCm and the host stay
@@ -1631,7 +1658,7 @@ sm_120, no measurement.) Four op branches (`flat-select-l3-{symm,syrk,syr2k,trmm
   last term is confirmed by launch for every native kernel: the batch is SYCL dim 0 (grid z, grid y
   for gram's 2-D range), batch 65535 runs and is correct, 65536 throws `Number of work-groups exceed
   limit`. Where the old Auto took a native kernel past 65535 it aborted; it now takes the vendor
-  (vendor-free: `NoRouteError`). Vendor: `d.has_vendor_blas`.
+  (vendor-free: `NoRouteError`). Vendor: `d.has_vendor` (the level-3 library).
 - **Keys and the `form` axis.** symm and syrk carry an exact `form` key, `sq|tall|wide`
   (`2*min >= max` is sq, else tall if a > 2b), so the old squareish ratio test lines up with a grid
   axis. Without it the modelled gate reached only 97.25% (symm) and 99.3-99.6% (syrk). A grid cell
@@ -1787,8 +1814,16 @@ followed in the next block.
 (2026-10-06, branch `flat-select-l3b` on `flat-select-level3`; maintainer: tables transcribed for sm_89
 and sm_120 from today's rules, no measurement, `BATCHLAS_EXPAND_ROUTE` retired.) The last three ops
 choosing by hand move to `src/ops/{hemm,herk,her2k}/{choice.hh,<op>.cc}` with the level-3 recipe above
-(validate -> `choose()` -> `TraceScope` -> one `std::visit`; an empty problem is a no-op under any pin).
-`src/ops/level3/level3.cc` is deleted. Every old-code `file:line` below refers to `8cf7fd86`.
+(validate -> `select::run` with `spec{Op::<op>, select::Lib::level3, {last_resort}}` -> one
+`std::visit`; candidates are `select::all_of`; an empty problem is a no-op under any pin).
+`src/ops/level3/level3.cc` is deleted. Every old-code `file:line` below refers to `8cf7fd86`. The
+branch was first written against the per-op `choose()`/`TraceScope`/`native_facts` plumbing and
+ported to `select::run`/`select::pick` when `flat-select-level3` merged main `66dd7d21` (one run()
+per op, above). Routing did not move: `BATCHLAS_SELECT_TRACE` of the six hemm/herk/her2k suites and
+sytrd_blocked (5415 lines incl. gemm children) is byte-identical to a build of `0d0b78db`, and the
+data gate below passes unchanged. Port breaks, restored and md5-verified: herk's `OpSpec` naming no
+library (`HerkCandidates/{2,3}`, `HerkCandidatesCpu`, `HerkTest/{0,1}` only); `fold_chosen` asking
+`pick` with `can_run` dropped (`Her2kCandidates/{2,3}.FoldChosenIsTheCallsChoice` only).
 
 | op | candidates (complex only) | keys (rows per table) | Auto rows (old rule) | last resort |
 |---|---|---|---|---|
@@ -1816,7 +1851,7 @@ choosing by hand move to `src/ops/{hemm,herk,her2k}/{choice.hh,<op>.cc}` with th
   with a launch at the ceiling, trmm `expand` had the same window and gets the same term;
   docs/perf/level3.md#the-padded-launch-range);
   `gram` also `syrk_gram_supported(..., conjugated)` (n <= 128: past it the kernel answers wrongly),
-  `max_wg >= gram_threads(n)` (complex: 64 or 160) and the SLM tile. Vendor: `d.has_vendor_blas` and
+  `max_wg >= gram_threads(n)` (complex: 64 or 160) and the SLM tile. Vendor: `d.has_vendor` (the level-3 group) and
   homogeneous (the loops run each item at the top-level extents, as for the level-3 four).
 - **Behaviour changes.** At batch 65536 every old fold/expand arm aborted (`Number of work-groups
   exceed limit`); Auto now takes the vendor (vendor-free: `NoRouteError`). A heterogeneous operand has
@@ -1828,7 +1863,7 @@ choosing by hand move to `src/ops/{hemm,herk,her2k}/{choice.hh,<op>.cc}` with th
   `her2k_gemm_preferred`, `her2k_takes_gemm_route` and `herk_gemm_preferred` are deleted.
   `RoutingSettings::ops` is 22.
 - **sytrd.** `sytrd_blocked.cc`'s cfloat trailing update asks `ops::her2k::fold_chosen<B, T>` (her2k's
-  own `choose()`, pins included) instead of re-deriving the old predicate, so a `BATCHLAS_HER2K_ROUTE=
+  own `select::pick`, pins included) instead of re-deriving the old predicate, so a `BATCHLAS_HER2K_ROUTE=
   vendor` pin keeps the GEMM pair (`SytrdBlockedComplexFloatCudaTest.Her2kTrailingUpdateFollowsHer2kChoice`,
   new: the complex her2k path had no sytrd test). The capacity notes moved to
   docs/perf/dispatch.md#her2k-in-sytrd.

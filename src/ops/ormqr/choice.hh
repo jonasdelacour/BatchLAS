@@ -1,7 +1,5 @@
 #pragma once
 
-// ormqr's selection vocabulary (docs/design/flat-kernel-selection.md §4.2), header-only.
-
 #include "../../select/select.hh"
 
 #include <array>
@@ -17,12 +15,9 @@ struct Vendor : select::NoFields<"vendor"> {};    // backend::ormqr_vendor
 using OrmqrChoice = std::variant<Blocked, Vendor>;
 
 template <class T>
-constexpr auto candidates() {
-    return std::array<OrmqrChoice, 2>{Blocked{}, Vendor{}};
-}
+constexpr auto candidates() { return select::all_of<OrmqrChoice>(); }
 
-inline constexpr std::array<std::string_view, 2> last_resort{"blocked", "vendor"};
-inline constexpr select::Rules rules{last_resort};  // §5.5: Blocked runs every GPU shape but complex Trans, Vendor the rest.
+inline constexpr select::OpSpec spec{Op::ormqr, select::Lib::factorization};  // §5.5: Blocked runs every GPU shape but complex Trans, Vendor the rest.
 
 // m = order of Q, k = reflectors, q = C's other extent (work ~ m k q batch); T and C stay apart.
 inline constexpr std::array<std::string_view, 6> key_names{

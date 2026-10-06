@@ -377,7 +377,7 @@ TYPED_TEST(Syr2kCandidates, PinnedChoiceRunsItsOwnKernel) {
             ASSERT_TRUE(same_bits(p.mem[e], q.mem[e])) << "pinned vendor != syr2k_vendor at element " << e;
     }
     if constexpr (!TestFixture::kFloat) return;
-    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    ::testing::GTEST_FLAG(death_test_style) = "threadsafe";
     const std::string path = ::testing::TempDir() + "syr2k_ktrace.json";
     std::filesystem::remove(path);
     const ScopedEnvVar on("BATCHLAS_KERNEL_TRACE", "1");
@@ -780,7 +780,7 @@ TYPED_TEST(Syr2kCandidates, VendorFreeLastResortIsTriangular) {
 TYPED_TEST(Syr2kCandidates, NoRouteRecordsAMissRow) {
     using T = typename TestFixture::T;
     if constexpr (TestFixture::kVendor || TestFixture::kFloat) GTEST_SKIP() << "a route exists";
-    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    ::testing::GTEST_FLAG(death_test_style) = "threadsafe";
     const std::string dir = ::testing::TempDir() + "syr2k_miss";
     std::filesystem::remove_all(dir);
     std::filesystem::create_directories(dir);
@@ -814,7 +814,7 @@ TYPED_TEST(Syr2kCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
     if constexpr (!TestFixture::kFloat && !TestFixture::kVendor) GTEST_SKIP() << "no route";
-    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    ::testing::GTEST_FLAG(death_test_style) = "threadsafe";
     const std::string dt(select::dtype_name<T>());
     const std::string dir = ::testing::TempDir() + "syr2k_cov." + dt;
     std::filesystem::remove_all(dir);

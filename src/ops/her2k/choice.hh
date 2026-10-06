@@ -1,7 +1,5 @@
 #pragma once
 
-// her2k's selection vocabulary (docs/design/flat-kernel-selection.md §12), header-only.
-
 #include "../../select/select.hh"
 
 #include <batchlas/blas/enums.hh>
@@ -21,12 +19,10 @@ struct Vendor : select::NoFields<"vendor"> {};  // backend::her2k_vendor (cublas
 using Her2kChoice = std::variant<Fold, Vendor>;
 
 template <class T>
-constexpr auto candidates() {
-    return std::array<Her2kChoice, 2>{Fold{}, Vendor{}};
-}
+constexpr auto candidates() { return select::all_of<Her2kChoice>(); }
 
 inline constexpr std::array<std::string_view, 2> last_resort{"fold", "vendor"};
-inline constexpr select::Rules rules{last_resort};
+inline constexpr select::OpSpec spec{Op::her2k, select::Lib::level3, {last_resort}};
 
 // n = C's order, k = op(A)'s inner extent. Work ~ n^2 k batch.
 inline constexpr std::array<std::string_view, 3> key_names{"n:log:2", "k:log", "batch:log"};
@@ -40,8 +36,8 @@ inline constexpr std::array<int, 10> grid_batch{1, 2, 3, 4, 5, 8, 128, 1024, 819
 inline constexpr std::int64_t kMaxGridBatch = 65535;  // accumulate_hermitian: batch in grid z
 inline constexpr int kFoldWg = 256;                   // accumulate_hermitian's group
 
-// Whether her2k(q, A, B, C, transA) would run `fold`: the call's own choose(), pins included (a
-// bad pin throws). sytrd_blocked asks before calling her2k. Defined in her2k.cc.
+// Would her2k(q, A, B, C, transA) run `fold`? Its own select::pick, pins included (a bad pin throws);
+// sytrd_blocked asks before calling her2k. Defined in her2k.cc.
 template <Backend Bk, class T>
 bool fold_chosen(Queue& q, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
                  const MatrixView<T, MatrixFormat::Dense>& C, Transpose transA);

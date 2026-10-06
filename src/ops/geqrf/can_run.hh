@@ -15,10 +15,7 @@
 
 namespace batchlas::ops::geqrf {
 
-template <class... F>
-struct overloaded : F... { using F::operator()...; };
-template <class... F>
-overloaded(F...) -> overloaded<F...>;
+using select::overloaded;
 
 template <class T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
@@ -39,7 +36,7 @@ bool can_run(const GeqrfChoice& c, const select::Device& d, const MV<T>& A) {
             return native && sycl_geqrf::geqrf_blocked_available<T>() &&
                    sycl_geqrf::geqrf_cta_max_elems_for_slm<T>(budget) >= 1;
         },
-        [&](Vendor) { return d.has_vendor_solver; },
+        [&](Vendor) { return d.has_vendor; },
     }, c);
 }
 

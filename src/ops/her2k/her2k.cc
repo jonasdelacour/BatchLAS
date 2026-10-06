@@ -1,17 +1,13 @@
-// her2k: the whole selection path (docs/design/flat-kernel-selection.md §4.3, rule R1;
-// §12 "Hermitian three"). public her2k() -> choose() -> std::visit -> launch. The kernel for a
-// shape is the first runnable entry of the nearest row in tuned/her2k.<dtype>.<device>.txt;
-// can_run() below only removes entries that cannot run. Fold runs one public gemm whose product
-// alpha * op(A) op(B)^H carries both terms (the second is its conjugate transpose) and folds it
-// into C's referenced triangle; Vendor is the per-item cublas?her2k / cblas_?her2k loop.
+// her2k (flat-kernel-selection.md §4.3, R1; §12 "Hermitian three"): select::run takes the first entry
+// of the nearest tuned/her2k.<dtype>.<device>.txt row that can_run() admits. Fold runs one public gemm
+// whose product alpha * op(A) op(B)^H carries both terms (the second is its conjugate transpose) and
+// folds it into C's referenced triangle; Vendor is the per-item cublas?her2k / cblas_?her2k loop.
 
 #include <batchlas/backend_config.h>
 
 #include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/blas/functions/her2k.hh>
-#include <batchlas/no_route.hh>
 #include <batchlas/util/mempool.hh>
-#include "../../select/vendor.hh"
 
 #include "choice.hh"
 #include "../../backends/accumulate_hermitian.hh"
@@ -21,7 +17,6 @@
 #include "../../util/kernel-trace.hh"
 #include "../../util/template-instantiations.hh"
 
-#include <algorithm>
 #include <complex>
 #include <cstddef>
 #include <cstdint>
@@ -31,10 +26,7 @@
 namespace batchlas {
 namespace ops::her2k {
 
-template <class... F>
-struct overloaded : F... { using F::operator()...; };
-template <class... F>
-overloaded(F...) -> overloaded<F...>;
+using select::overloaded;
 
 template <class T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
@@ -66,38 +58,16 @@ bool can_run(const Her2kChoice& c, const select::Device& d, Queue& q, const MV<T
                    backend::detail::expansion_fits(
                        q, int(n), int(batch), backend::detail::expanded_workspace_bytes<T>(q, int(n), int(batch)));
         },
-        [&](Vendor) { return d.has_vendor_blas && homogeneous; },
+        [&](Vendor) { return d.has_vendor && homogeneous; },
     }, c);
-}
-
-template <Backend B, class T>
-Her2kChoice choose(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, Transpose transA) {
-    const select::Device& d = select::device_of<B>(q);
-    auto ok = [&](const Her2kChoice& c) { return can_run<B, T>(c, d, q, A, Bm, C, transA); };
-    try {
-        return select::choose("her2k", select::dtype_name<T>(), d, key_of<T>(A, C, transA), candidates<T>(), ok,
-                              rules);
-    } catch (const std::runtime_error&) {
-        // Vendor-free burn-down reads coverage `miss` rows; a plain runtime_error records none.
-        const auto all = candidates<T>();
-        if (!select::level3_vendor_available<B> && std::none_of(all.begin(), all.end(), ok))
-            select::throw_no_vendor_route<T>(Op::her2k, B, select::kLevel3Library<B>);
-        throw;
-    }
 }
 
 template <Backend Bk, class T>
 bool fold_chosen(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, Transpose transA) {
-    return std::holds_alternative<Fold>(choose<Bk, T>(q, A, Bm, C, transA));
-}
-
-// The coverage row's native flags (§5.6): computed only when coverage records a row.
-template <Backend B, class T>
-select::NativeFacts native_facts(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, Transpose transA) {
-    if (!coverage::dynamic_enabled()) return {};
-    const select::Device& d = select::device_of<B>(q);
-    return select::native_facts(candidates<T>(),
-                                [&](const Her2kChoice& c) { return can_run<B, T>(c, d, q, A, Bm, C, transA); });
+    const Her2kChoice c = select::pick<Bk, T>(
+        spec, q, key_of<T>(A, C, transA), candidates<T>(),
+        [&](const auto& k, const auto& d) { return can_run<Bk, T>(k, d, q, A, Bm, C, transA); });
+    return std::holds_alternative<Fold>(c);
 }
 
 // The gemm writes both triangles of the n x n product, so it cannot write C; the fold reads the
@@ -130,10 +100,9 @@ Event launch(Queue& q, const Her2kChoice& c, const MV<T>& A, const MV<T>& Bm, co
     return std::visit(overloaded{
         [&](Fold) { return fold<B, T>(q, A, Bm, C, alpha, beta, uplo, transA); },
         [&](Vendor) -> Event {
-            if constexpr (select::level3_vendor_available<B>)
+            if constexpr (select::has_library<B>(spec.vendor))
                 return backend::her2k_vendor<B, T>(q, A, Bm, C, alpha, beta, uplo, transA);
-            else
-                select::throw_no_vendor_route<T>(Op::her2k, B, select::kLevel3Library<B>);
+            else select::no_vendor<B, T>(spec);
         },
     }, c);
 }
@@ -148,36 +117,27 @@ Event her2k(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const Matri
     backend::shape::validate_rank_2k<std::invalid_argument>("HER2K", A, B, C, transA, /*hermitian=*/true);
     // An empty problem launches nothing under any pin, as syr2k's does (the cuBLAS loop faults on one).
     if (C.batch_size() == 0 || C.rows() == 0) return ctx.create_event_after_external_work();
-    const auto c = ops::her2k::choose<Back, T>(ctx, A, B, C, transA);
     // The coverage key, as syr2k's: m = n = C's order, k = op(A)'s inner extent.
-    auto shape = select::square_shape<Back, T>(C.rows(), C.batch_size());
-    shape.k = ops::her2k::inner<T>(A, transA);
-    shape.uplo = uplo;
-    shape.side = Side::Left;
-    shape.diag = Diag::NonUnit;
-    shape.transA = transA;
-    const select::Key trace_key = ops::her2k::key_of<T>(A, C, transA);
-    select::TraceScope trace("her2k", c, shape, ops::her2k::native_facts<Back, T>(ctx, A, B, C, transA), trace_key);
-    return ops::her2k::launch<Back, T>(ctx, c, A, B, C, alpha, beta, uplo, transA);
+    const coverage::Shape shape{.m = C.rows(), .n = C.rows(), .k = ops::her2k::inner<T>(A, transA),
+                                .batch = C.batch_size(), .transA = transA, .uplo = uplo};
+    const select::Key key = ops::her2k::key_of<T>(A, C, transA);
+    return select::run<Back, T>(
+        ops::her2k::spec, ctx, key, ops::her2k::candidates<T>(),
+        [&](const auto& c, const auto& d) { return ops::her2k::can_run<Back, T>(c, d, ctx, A, B, C, transA); },
+        shape, key,
+        [&](const auto& c) { return ops::her2k::launch<Back, T>(ctx, c, A, B, C, alpha, beta, uplo, transA); });
 }
-
-#define HER2K_INSTANTIATE(B_, fp)                                                         \
-    BATCHLAS_INSTANTIATE(sig::her2k<fp>, her2k, B_, fp)                                    \
-    template bool ops::her2k::fold_chosen<B_, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, \
-                                                 const MatrixView<fp, MatrixFormat::Dense>&,          \
-                                                 const MatrixView<fp, MatrixFormat::Dense>&, Transpose);
 
 // Keyed on the device family, not the vendor library: without the library the Vendor arm
 // compiles to a throw. rocblas.cc has no her2k wrapper, so ROCm instantiates none (as before).
-#if BATCHLAS_HAS_CUDA_BACKEND
-HER2K_INSTANTIATE(Backend::CUDA, std::complex<float>)
-HER2K_INSTANTIATE(Backend::CUDA, std::complex<double>)
-#endif
-#if BATCHLAS_HAS_HOST_BACKEND
-HER2K_INSTANTIATE(Backend::NETLIB, std::complex<float>)
-HER2K_INSTANTIATE(Backend::NETLIB, std::complex<double>)
-#endif
-
+#define HER2K_INSTANTIATE(B_, fp)                                                                         \
+    BATCHLAS_INSTANTIATE_OP(B_, fp, her2k)                                                                \
+    template bool ops::her2k::fold_chosen<B_, BATCHLAS_UNPAREN fp>(                                       \
+        Queue&, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&,                              \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&,                                      \
+        const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, Transpose);
+BATCHLAS_IF_CUDA(BATCHLAS_FOR_EACH_COMPLEX_TYPE_1(HER2K_INSTANTIATE, Backend::CUDA))
+BATCHLAS_IF_HOST(BATCHLAS_FOR_EACH_COMPLEX_TYPE_1(HER2K_INSTANTIATE, Backend::NETLIB))
 #undef HER2K_INSTANTIATE
 
 }  // namespace batchlas

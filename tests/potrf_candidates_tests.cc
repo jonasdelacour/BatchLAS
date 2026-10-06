@@ -574,7 +574,7 @@ TYPED_TEST(PotrfCandidates, CoverageRowCarriesNativeFlags) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
     constexpr bool kVendor = batchlas::select::solver_vendor_available<B>;  // vendor-free, Upper has no route
-    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    ::testing::GTEST_FLAG(death_test_style) = "threadsafe";
     const int up = std::max(this->limit(C{pc::Tiny{}}, Uplo::Upper), this->limit(C{pc::Cta{}}, Uplo::Upper)) + 1;
     const std::string dir = ::testing::TempDir() + "potrf_cov." + std::string(select::dtype_name<T>());
     std::filesystem::remove_all(dir);

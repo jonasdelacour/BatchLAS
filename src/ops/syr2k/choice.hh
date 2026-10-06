@@ -1,7 +1,5 @@
 #pragma once
 
-// syr2k's selection vocabulary (docs/design/flat-kernel-selection.md §12), header-only.
-
 #include "../../select/select.hh"
 
 #include <array>
@@ -27,7 +25,8 @@ constexpr auto candidates() {
 }
 
 inline constexpr std::array<std::string_view, 2> last_resort{"triangular", "vendor"};
-inline constexpr select::Rules rules{last_resort};  // §5.5: triangular runs every homogeneous GPU shape.
+// §5.5: triangular runs every homogeneous GPU shape.
+inline constexpr select::OpSpec spec{Op::syr2k, select::Lib::level3, {last_resort}};
 
 // n = C's order, k = op(A)'s inner extent. Work ~ n^2 k batch.
 inline constexpr std::array<std::string_view, 3> key_names{"n:log:2", "k:log", "batch:log"};

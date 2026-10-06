@@ -1,14 +1,10 @@
-// syrk: the whole selection path (docs/design/flat-kernel-selection.md §4.3, rule R1).
-// public syrk() -> choose() -> std::visit -> launch. The kernel for a shape is the first
-// runnable entry of the nearest row in tuned/syrk.<dtype>.<device>.txt; can_run() below only
-// removes entries that cannot run. Gram puts all of C in one tile sized to n (n <= 128) and
-// stages A once; Triangular walks 128-wide tiles of the requested triangle only (float).
+// syrk (flat-kernel-selection.md §4.3, R1; §12): select::run takes the first entry of the nearest
+// tuned/syrk.<dtype>.<device>.txt row that can_run() admits. Gram puts all of C in one tile sized to n
+// (n <= 128) and stages A once; Triangular walks 128-wide tiles of the requested triangle only (float).
 
 #include <batchlas/backend_config.h>
 
 #include <batchlas/blas/functions/syrk.hh>
-#include <batchlas/no_route.hh>
-#include "../../select/vendor.hh"
 
 #include "choice.hh"
 #include "../../backends/level3_shape.hh"
@@ -17,7 +13,6 @@
 #include "../../select/select.hh"
 #include "../../util/template-instantiations.hh"
 
-#include <algorithm>
 #include <cstdint>
 #include <stdexcept>
 #include <type_traits>
@@ -26,10 +21,7 @@
 namespace batchlas {
 namespace ops::syrk {
 
-template <class... F>
-struct overloaded : F... { using F::operator()...; };
-template <class... F>
-overloaded(F...) -> overloaded<F...>;
+using select::overloaded;
 
 template <class T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
@@ -70,33 +62,8 @@ bool can_run(const SyrkChoice& c, const select::Device& d, const MV<T>& A, const
             return native && std::is_same_v<T, float> && d.max_wg >= kTriangularWg &&
                    triangular_groups(n, backend::detail::kTriangularTile) <= kMaxGridTiles;
         },
-        [&](Vendor) { return d.has_vendor_blas && homogeneous; },
+        [&](Vendor) { return d.has_vendor && homogeneous; },
     }, c);
-}
-
-template <Backend B, class T>
-SyrkChoice choose(Queue& q, const MV<T>& A, const MV<T>& C, Transpose transA) {
-    const select::Device& d = select::device_of<B>(q);
-    auto ok = [&](const SyrkChoice& c) { return can_run<B, T>(c, d, A, C, transA); };
-    try {
-        return select::choose("syrk", select::dtype_name<T>(), d, key_of<T>(A, C, transA), candidates<T>(), ok,
-                              rules);
-    } catch (const std::runtime_error&) {
-        // Vendor-free burn-down reads coverage `miss` rows; a plain runtime_error records none.
-        const auto all = candidates<T>();
-        if (!select::level3_vendor_available<B> && std::none_of(all.begin(), all.end(), ok))
-            select::throw_no_vendor_route<T>(Op::syrk, B, select::kLevel3Library<B>);
-        throw;
-    }
-}
-
-// The coverage row's native flags (§5.6): computed only when coverage records a row.
-template <Backend B, class T>
-select::NativeFacts native_facts(Queue& q, const MV<T>& A, const MV<T>& C, Transpose transA) {
-    if (!coverage::dynamic_enabled()) return {};
-    const select::Device& d = select::device_of<B>(q);
-    return select::native_facts(candidates<T>(),
-                                [&](const SyrkChoice& c) { return can_run<B, T>(c, d, A, C, transA); });
 }
 
 // The native arms compile only for CUDA (the kernels are not instantiated anywhere else), and
@@ -118,10 +85,9 @@ Event launch(Queue& q, const SyrkChoice& c, const MV<T>& A, const MV<T>& C, T al
                 throw std::logic_error("syrk: triangular is a float CUDA kernel");
         },
         [&](Vendor) -> Event {
-            if constexpr (select::level3_vendor_available<B>)
+            if constexpr (select::has_library<B>(spec.vendor))
                 return backend::syrk_vendor<B, T>(q, A, C, alpha, beta, uplo, transA);
-            else
-                select::throw_no_vendor_route<T>(Op::syrk, B, select::kLevel3Library<B>);
+            else select::no_vendor<B, T>(spec);
         },
     }, c);
 }
@@ -135,36 +101,18 @@ Event syrk(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const Matrix
     (void)backend::shape::validate_rank_k<std::invalid_argument>("SYRK", A, C, transA, /*hermitian=*/false);
     // An empty batch launches nothing under any pin, as gemm's does.
     if (C.batch_size() == 0) return ctx.create_event_after_external_work();
-    const auto c = ops::syrk::choose<Back, T>(ctx, A, C, transA);
     // The coverage row's key, as the old router recorded it: m = n = C's order, k = op(A)'s inner extent.
-    auto shape = select::square_shape<Back, T>(C.rows(), A.batch_size());
-    shape.k = ops::syrk::inner<T>(A, transA);
-    shape.uplo = uplo;
-    shape.transA = transA;
-    const select::Key trace_key = ops::syrk::key_of<T>(A, C, transA);
-    select::TraceScope trace("syrk", c, shape, ops::syrk::native_facts<Back, T>(ctx, A, C, transA), trace_key);
-    return ops::syrk::launch<Back, T>(ctx, c, A, C, alpha, beta, uplo, transA);
+    const coverage::Shape shape{.m = C.rows(), .n = C.rows(), .k = ops::syrk::inner<T>(A, transA),
+                                .batch = A.batch_size(), .transA = transA, .uplo = uplo};
+    const select::Key key = ops::syrk::key_of<T>(A, C, transA);
+    return select::run<Back, T>(
+        ops::syrk::spec, ctx, key, ops::syrk::candidates<T>(),
+        [&](const auto& c, const auto& d) { return ops::syrk::can_run<Back, T>(c, d, A, C, transA); }, shape, key,
+        [&](const auto& c) { return ops::syrk::launch<Back, T>(ctx, c, A, C, alpha, beta, uplo, transA); });
 }
 
-#define SYRK_INSTANTIATE(B_, fp) BATCHLAS_INSTANTIATE(sig::syrk<fp>, syrk, B_, fp)
-
-#define SYRK_ALL(B_)            \
-    SYRK_INSTANTIATE(B_, float) \
-    SYRK_INSTANTIATE(B_, double)
-
-// Keyed on the device family, not the vendor library: without the library the Vendor arm
-// compiles to a throw, so the symbol exists in every build with the device.
-#if BATCHLAS_HAS_CUDA_BACKEND
-SYRK_ALL(Backend::CUDA)
-#endif
-#if BATCHLAS_HAS_ROCM_BACKEND
-SYRK_ALL(Backend::ROCM)
-#endif
-#if BATCHLAS_HAS_HOST_BACKEND
-SYRK_ALL(Backend::NETLIB)
-#endif
-
-#undef SYRK_ALL
+#define SYRK_INSTANTIATE(B_, fp) BATCHLAS_INSTANTIATE_OP(B_, fp, syrk)
+BATCHLAS_INSTANTIATE_REAL_ALL_BACKENDS(SYRK_INSTANTIATE)
 #undef SYRK_INSTANTIATE
 
 }  // namespace batchlas

@@ -1,7 +1,5 @@
 #pragma once
 
-// getrf's selection vocabulary (flat-kernel-selection.md §4.2, phase 5), header-only.
-
 #include "../../select/select.hh"
 
 #include <array>
@@ -19,12 +17,9 @@ struct Vendor : select::NoFields<"vendor"> {};    // backend::getrf_vendor (cuBL
 using GetrfChoice = std::variant<Tiny, Cta, Blocked, Vendor>;
 
 template <class T>  // every compiled choice once, in tie-break order (§6.3)
-constexpr auto candidates() {
-    return std::array<GetrfChoice, 4>{Tiny{}, Cta{}, Blocked{}, Vendor{}};
-}
+constexpr auto candidates() { return select::all_of<GetrfChoice>(); }
 
-inline constexpr std::array<std::string_view, 2> last_resort{"blocked", "vendor"};
-inline constexpr select::Rules rules{last_resort};  // §5.5: Blocked runs every square GPU shape, Vendor everything else (CPU).
+inline constexpr select::OpSpec spec{Op::getrf, select::Lib::factorization};  // §5.5: Blocked runs every square GPU shape, Vendor everything else (CPU).
 
 inline constexpr std::array<std::string_view, 2> key_names{"n:log:3", "batch:log"};  // work ~ n^3 batch
 

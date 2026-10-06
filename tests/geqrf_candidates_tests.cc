@@ -730,7 +730,7 @@ TYPED_TEST(GeqrfCandidates, VendorFreeWalkIsTheOldTieBreak) {
 TYPED_TEST(GeqrfCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
-    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    ::testing::GTEST_FLAG(death_test_style) = "threadsafe";
     const std::string dir = ::testing::TempDir() + "geqrf_cov." + std::string(select::dtype_name<T>());
     std::filesystem::remove_all(dir);
     std::filesystem::create_directories(dir);
@@ -867,7 +867,7 @@ TYPED_TEST(GeqrfCanRunDevice, DeviceClausesRefuseTheNativeFamilies) {
     auto nosg = ok;  nosg.has_sg32 = false;
     for (const select::Device* d : {&cpu, &nosg})
         for (const C& c : {tiny, cta, blocked}) EXPECT_FALSE(runs(*d, sq, c)) << select::to_string(c);
-    auto vendor_cpu = cpu;  vendor_cpu.has_vendor_solver = true;
+    auto vendor_cpu = cpu;  vendor_cpu.has_vendor = true;
     EXPECT_TRUE(runs(vendor_cpu, sq, vendor));
 
     // Blocked needs one CTA element of SLM, not the fit: straddle the smallest such budget.

@@ -667,7 +667,7 @@ TYPED_TEST(SyevCandidates, VendorFreeLastResortIsBlocked) {
 TYPED_TEST(SyevCandidates, CoverageRowCarriesChoiceAndNativeFlags) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
-    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    ::testing::GTEST_FLAG(death_test_style) = "threadsafe";
     const std::string dir = ::testing::TempDir() + "syev_cov." + std::string(select::dtype_name<T>());
     std::filesystem::remove_all(dir);
     std::filesystem::create_directories(dir);

@@ -201,10 +201,9 @@ Device device_from_key(std::string_view key) {
     return d;
 }
 
-const Device& describe(const batchlas::Device& dev, Backend b, bool has_vendor_solver, bool has_vendor_blas) {
-    static auto* memo = new std::map<std::tuple<int, std::size_t, int, bool, bool>, Device>();
-    const auto k = std::make_tuple(static_cast<int>(dev.type), dev.idx, static_cast<int>(b), has_vendor_solver,
-                                   has_vendor_blas);
+const Device& describe(const batchlas::Device& dev, Backend b, bool has_vendor) {
+    static auto* memo = new std::map<std::tuple<int, std::size_t, int, bool>, Device>();
+    const auto k = std::make_tuple(static_cast<int>(dev.type), dev.idx, static_cast<int>(b), has_vendor);
     {
         std::lock_guard<std::mutex> lock(state_mutex());
         if (auto it = memo->find(k); it != memo->end()) return it->second;
@@ -219,8 +218,7 @@ const Device& describe(const batchlas::Device& dev, Backend b, bool has_vendor_s
     Device d = device_from_key(key);
     d.is_gpu = is_gpu;
     d.has_sg32 = dev.supports_sub_group_size(32);
-    d.has_vendor_solver = has_vendor_solver;
-    d.has_vendor_blas = has_vendor_blas;
+    d.has_vendor = has_vendor;
     d.slm_budget = static_cast<std::int64_t>(resident::device_slm_budget(
         static_cast<std::size_t>(dev.get_property(DeviceProperty::LOCAL_MEM_SIZE))));
     d.max_wg = static_cast<int>(dev.get_property(DeviceProperty::MAX_WORK_GROUP_SIZE));

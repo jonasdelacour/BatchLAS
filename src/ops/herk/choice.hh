@@ -18,15 +18,13 @@ struct Vendor : select::NoFields<"vendor"> {};  // backend::herk_vendor (cublas?
 
 using HerkChoice = std::variant<Fold, Gram, Vendor>;
 
-// Complex only. Fold before gram: a transcribed row lists the non-Auto natives in this order, and
+// Complex only; declaration order. Fold before gram: a transcribed row lists the natives in this order, and
 // the fold won every gram shape measured (docs/perf/level3.md#herk-on-the-gram-tile-kernel).
 template <class T>
-constexpr auto candidates() {
-    return std::array<HerkChoice, 3>{Fold{}, Gram{}, Vendor{}};
-}
+constexpr auto candidates() { return select::all_of<HerkChoice>(); }
 
 inline constexpr std::array<std::string_view, 3> last_resort{"fold", "gram", "vendor"};
-inline constexpr select::Rules rules{last_resort};
+inline constexpr select::OpSpec spec{Op::herk, select::Lib::level3, {last_resort}};
 
 // n = C's order, k = op(A)'s inner extent. Work ~ n^2 k batch.
 inline constexpr std::array<std::string_view, 3> key_names{"n:log:2", "k:log", "batch:log"};

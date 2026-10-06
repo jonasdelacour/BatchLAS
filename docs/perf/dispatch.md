@@ -239,7 +239,7 @@ written down in the first place.
 ### her2k in sytrd
 
 `sytrd_blocked`'s complex trailing update calls her2k only when her2k would take `fold`; its per-item vendor loop is
-structurally the route measured 7.8x slower than the GEMM pair. The call site asks her2k's own `choose()`
+structurally the route measured 7.8x slower than the GEMM pair. The call site asks her2k's own `select::pick`
 (`ops::her2k::fold_chosen`, pins and the scratch budget included), per panel, because n2 shrinks every iteration and an
 early panel's `n2² x batch` scratch can be refused while later ones fit.
 
@@ -362,7 +362,7 @@ Wrong answers found, how they hid, and what guards them now.
 * **A guard that modelled half its predicate.** `sytrd_blocked`'s her2k guard replicated only the size ceiling, so
   under `BATCHLAS_EXPAND_ROUTE=loop` the call site concluded her2k would take its batched-GEMM route while
   `her2k_gemm_preferred` returned false and sent it to a per-batch loop — one sequential launch per batch member, for
-  every panel with n2 > 128. The call site now asks her2k's own `choose()` (`ops::her2k::fold_chosen`), so it
+  every panel with n2 > 128. The call site now asks her2k's own `select::pick` (`ops::her2k::fold_chosen`), so it
   cannot model less than the call decides ("her2k in sytrd").
 
 ## The coverage instrument
