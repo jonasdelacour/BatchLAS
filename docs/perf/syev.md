@@ -19,7 +19,7 @@ This page replaces six root-level notes: `SYEV_RETUNE_RESULTS.md`, `SYEV_RETUNE_
 `include/batchlas/blas/functions/syev.hh`, which were cut in `526601e6`. The research profile
 those plans were derived from (`SYEV_PERF_RESEARCH.md`, branch `worktree-syev-perf-research`,
 commit `faa4f39`) was never merged; its figures survive here only where a later measurement
-reproduced them. `JACOBI_EIGENSOLVER_PLAN.md`, which the sources cite for the Jacobi accuracy
+reproduced them. `JACOBI_EIGENSOLVER_PLAN.md`, which the sources used to cite for the Jacobi accuracy
 and early speed figures, was never committed to any branch. Its figures are quoted here as the
 sources quoted them, and there is no file to follow.
 
@@ -403,7 +403,7 @@ over the tridiagonalising paths. The float column is the better predictor for a 
 datacenter GPU. The double rule should be gated on measured FP64 throughput rather than on the
 scalar type, and re-measured before it is trusted on such hardware.
 
-Accuracy is a bonus here, not the justification. The (uncommitted) Jacobi plan's §13.1 records
+Accuracy is a bonus here, not the justification. The Jacobi plan (never committed; no file to follow, see the page header) recorded
 Jacobi resolving graded-SPD eigenvalues to a relative error of 4.5e-07 where `syev_cta` returns
 2.7e+28. Jacobi also wins outright on speed.
 
@@ -459,6 +459,90 @@ This is an FP64-rate artifact and the most machine-specific number here: 1/64-ra
 throttles the CTA kernel far harder than it throttles cuSOLVER. complex<float> does not cross
 over (`cta` still beats the vendor 1.23× at n = 32 and 1.38× at n = 28), so the rule is
 deliberately not "all complex".
+
+### syev: the fused CTA kernel design
+
+`syev_cta` runs the classical pipeline as three launches, `sytrd_cta` (A to d, e and reflectors),
+`steqr_cta` (d, e to w and Z) and `ormqx_cta` (Z to \f$Q_{house} Z\f$), plus two pack kernels and a
+copy on the eigenvector path. For n ≤ 32 each stage is far too small to amortise a launch: the
+whole problem fits in one sub-group partition, and the pipeline spends most of its time writing
+intermediates (d, e, tau, Z, the packed reflector matrix) to global memory only to read them
+back. `syev_cta_fused` keeps one problem resident in one partition from load to store: global
+traffic is one read of A plus one write of eigenvalues and eigenvectors, against about seven
+round trips. The stages are the *same code* as the standalone kernels (`sytrd_cta_device.hh`,
+`steqr_cta_device.hh`), so the two paths are numerically identical and a head-to-head benchmark
+measures fusion and nothing else.
+
+Design points, all matching `syev_cta`:
+
+- The reduction always runs the `Uplo::Upper` path; a Lower input is symmetrised while the tile
+  is loaded, which is free here (the pipeline needs a separate global pass).
+- Hermitian input is reduced to a real tridiagonal by a diagonal unitary similarity
+  \f$T' = S^H T S\f$ with \f$S_0 = 1\f$, \f$S_{i+1} = S_i\,\bar e_i / |e_i|\f$; every lane replays
+  the recurrence (n broadcasts, no scratch), and S is reapplied before the back-transform.
+- Eigenvalues are sorted by rank: each lane computes its eigenvalue's slot (ties broken by
+  index) and writes there, with no scratch and no sort kernel.
+
+**Real input takes LAPACK DSYEV's route.** `DORGTR` generates Q explicitly and `DSTEQR` is
+seeded with it, so the sweeps accumulate straight onto Q: since the accumulator update is a
+right-multiplication by each rotation, \f$Q_{house}(G_1 G_2 \cdots) = Q_{house} Z_{steqr}\f$,
+which is what a separate back-transform would compute. The reflector store and the rotation
+accumulator become the same tile and are never live at once. That halves the kernel's local
+memory and is what makes n = 32 with eigenvectors competitive. With
+\f$Q = H(n-2)\cdots H(0)\f$, \f$H(k) = I - \tau_k v_k v_k^H\f$ and \f$v_k\f$ supported on rows
+0..k with \f$v_k(k) = 1\f$, the partial products satisfy
+\f$Q_k(:,k) = e_k - \tau_k v_k\f$ and \f$Q_k(:,c<k) = H(k)\,Q_{k-1}(:,c)\f$: column k is
+generated at step k and no step touches a column above its own index, so reflector k' > k (in
+tile column k'+1) is intact when its turn comes. This is `DORG2L`'s recurrence without its
+column shift. Lane c owns column c in registers throughout, so the reflector dots need no
+cross-lane reduction (the trick of `ormqx_cta`'s LEFT specialisation).
+
+The shared tile carries the accumulator's padding: it is indexed by row in the sweeps but by
+column when eigenvectors are written (lane j owns column j), and with a leading dimension of
+exactly P = 32 every lane of that column read hits the same bank (32-way serialisation); P + 1
+makes consecutive lanes differ by 1 mod 32. **Hermitian input keeps two tiles**: its accumulator
+is real (the sweeps run on \f$T'\f$), half the width of the complex reflector tile, so merging
+them would cost local memory and force the hottest loop to rotate complex columns; the
+reflectors are applied afterwards as a QL-ordered `ormqx_cta(QL, Left, NoTrans)`.
+
+### syev: the Jacobi kernel design and its accuracy argument
+
+`syev_jacobi_cta` is partition-resident cyclic two-sided Jacobi: one `SubGroupPartition<P>` owns
+one problem, and A and (optionally) Z live in local memory for the whole solve, so a full
+eigendecomposition is one launch with no global traffic beyond the load and the store. It is the
+accuracy-oriented alternative to `sytrd_cta` → `steqr_cta` → `ormqx_cta`. With the *relative*
+off-diagonal threshold, a rotation is applied only when
+\f$|a_{pq}| > \mathrm{tol}\cdot\sqrt{|a_{pp}|\,|a_{qq}|}\f$ (Demmel and Veselić; LAWN 169
+Remark 2.2), and Jacobi's eigenvalue error is governed by the condition number of the
+column-equilibrated matrix rather than of the matrix itself, so graded or badly scaled inputs come
+out with small relative error where a tridiagonalising method loses the small eigenvalues. The
+classical absolute test \f$|a_{pq}| \le \mathrm{tol}\cdot\max|a_{kl}|\f$ would forfeit that. The
+guarantee is proved for symmetric positive definite input; indefinite matrices are handled
+correctly but do not inherit the bound. Only truly denormal or zero off-diagonals are treated as
+unconditionally converged, which guards against churn when a diagonal entry passes through zero on
+an indefinite matrix (the relative test then demands \f$a_{pq} = 0\f$ exactly).
+
+The pivot schedule is the round-robin ("circle method") pairing over an index space padded to
+even size: m − 1 rounds of m/2 disjoint pairs cover all pairs once. It is a permutation of a
+serial sweep into commuting pairs, so by Hari and Begović Kovač (ETNA 46, 2017, Thm 2.11) it
+produces the same matrix as cyclic-by-rows after each sweep and inherits its convergence.
+
+Kernel details that were measured choices (undated, no figures recorded): the local leading
+dimension is padded to P + 1, because the row-update phase has lane = column, and at LD = 32
+every lane lands in one bank (32-way serialisation); the rotation (c, s) pair is stored as one
+`vec<Real, 2>` so the update loops issue one LDS load instead of two, since before packing the
+broadcast coefficient loads outnumbered the matrix accesses in the inner loop; and the
+round-robin pairs are precomputed once per work-group into packed 16-bit slots, because computing
+them inline cost three integer modulos per pair per lane per phase and dominated the inner loops.
+The sweep loop originally kept no convergence record (a break on a zero-rotation sweep and an
+exhausted `max_sweeps` were indistinguishable afterwards); it now records `rot_count == 0` as the
+converged bit.
+
+References: Demmel and Veselić, "Jacobi's Method is More Accurate than QR", SIAM J. Matrix Anal.
+Appl. 13(4), 1992 (accuracy theorem, relative stopping criterion); Drmač and Veselić, LAPACK
+Working Notes 169/170 (threshold form, backward error, convergence test); Golub and Van Loan,
+*Matrix Computations*, Alg. 8.5.1 (2×2 rotation formulas). The speed and accuracy picture is
+[the 2026-08-03 small-n bake-off](#syev-the-2026-08-03-small-n-bake-off).
 
 ### syev: the LOBPCG projected-solve knob
 
@@ -637,8 +721,25 @@ corrections therefore live at the consumer, where the next retune cannot overwri
 
 ### syev: complex panel width in the 256 to 512 bucket
 
-`sytrd_block_size_default<T>` (`src/extensions/syev_blocked.cc:88`) returns 32 for complex at
-256 < n ≤ 512. The harness value of 8 there costs complex 1.16×–1.20×. The other complex buckets
+`sytrd_block_size_default<T>` (`src/extensions/syev_blocked.cc`) returns 32 for complex at
+256 < n ≤ 512. The harness value of 8 there costs complex 1.16×–1.20×: a complex panel column
+moves twice the bytes and does four times the flops per element, so it wants a wider panel to
+amortise the \f$O(n)\f$ barrier-and-reduction chain `latrd_lower_panel` runs per column.
+Measured 2026-08-07, device 1, complex<float>, eigenvectors, blocked provider, µs/matrix, median
+of 5, one process on the device:
+
+| n / batch | nb=8 | nb=16 | nb=24 | nb=32 | nb=48 | nb=64 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 320 / 819 | 197.25 | 173.24 | **166.27** | 168.55 | 175.92 | 190.95 |
+| 384 / 682 | 364.10 | 320.00 | 307.88 | **304.06** | 315.64 | 331.66 |
+| 448 / 585 | 623.76 | 556.80 | 543.73 | **540.06** | 556.76 | 581.45 |
+| 512 / 512 | 942.68 | 838.73 | 815.30 | **802.74** | 811.89 | 827.70 |
+
+nb = 32 is the optimum or within 1.5% of it at every n in the bucket. Float, same sweep at
+n = 512 (nb 8 / 16 / 24 / 32 / 48): 327.31 / 313.92 / 315.96 / 320.83 / 340.21, a 1.04× spread
+inside the 1.10× neutral band, so float keeps the harness value. The override lives at the
+consumer, not in `tuning_params.hh`, because that header is regenerated from a float-only bench
+and would silently drop a complex bucket on the next retune. The other complex buckets
 were measured and are not changed. n ≤ 128 prefers 8 (nb 8 against 16: 2.36 vs 2.37 at n = 64,
 5.92 vs 6.07 at n = 96, noise). 128 < n ≤ 256 prefers 16 (n = 192: 33.83 at 16 against 36.09 at
 8). n > 512 is within 1.03× of the committed 48 at nb = 32, below the neutral band.
@@ -685,7 +786,8 @@ explains why:
 | nb hint off (ms) | 453.6 | 391.1 | 420.0 | 448.1 | 531.0 | 662.4 |
 | hint gives | 1.019× | 1.057× | 1.064× | 1.034× | 0.981× | **0.926×** |
 
-The hint helps narrow bands and hurts wide ones, as `sytrd_sy2sb.cc` predicts: LARFT work is
+The hint helps narrow bands and hurts wide ones, as the sy2sb evidence predicts
+([sytrd: the dense-to-band ormqr block-width hint](sytrd.md#sytrd-the-dense-to-band-ormqr-block-width-hint)): LARFT work is
 \f$O(m k\,n_b)\f$ and doubles with \f$n_b\f$. Removing the split-WY penalty did not free wide kd.
 It made wide kd relatively worse.
 
@@ -702,6 +804,16 @@ At n = 1024 / batch = 128 the `latrd` implementation makes no difference (475.5 
 batch 128 already saturates 128 SMs), and two-stage wins by 1.29×, better than the recorded
 1.13×. Two-stage wins where the batch saturates the device and loses where grid-`latrd` rescues
 blocked.
+
+**Why the literature expected a split per mode.** Eigenvector mode once forced kd = 1, because
+the Givens stage 2 discards \f$Q_2\f$; the Householder chase retains it, so both modes now reduce
+at a real band width and share `choose_two_stage_kd`. The tuning literature has the optimum going
+*up* with eigenvectors: Gates, Tomov and Dongarra (2018) measure 32/64 on GPU without vectors and
+96/128 with, and MAGMA's `get_nb.cpp` uses band nb = 128, because the extra back-transform favours
+a wide band while only stage 2's \f$O(n^2 n_b)\f$ work favours a narrow one. The table above did
+not reproduce that here, so splitting the rule per mode is a tuning question, not a correctness
+one. The chase choice behind "both modes" is at
+[sytrd: the Householder chase against the Givens chase](sytrd.md#sytrd-the-householder-chase-against-the-givens-chase).
 
 ### syev: latrd grid gate confirmed in eigenvector mode
 
@@ -1076,6 +1188,17 @@ its own fix, the two stage-2 kernels would fall from 1353 ms to 704 ms. That is 
 complex two-stage solve, about 650 µs/matrix against 973.8, ahead of blocked (698) and the vendor
 (707) at n = 512. It would close the one region where complex eigenvectors still lose to
 cuSOLVER. Any routing change waits for the measurement.
+
+### syev: open debt, stebz reports no convergence status
+
+The values-mode paths of `syev_blocked` and `syev_two_stage` solve the tridiagonal with `stebz`
+bisection, which records no status: its three loop exits (tolerance met, iteration budget
+exhausted, midpoint stopped advancing) are indistinguishable afterwards. Both tiers therefore
+clear `info` to 0 for every item, a conservative answer rather than an unwritten span (the
+caller cannot tell those apart). `stebz` needs a convergence flag of its own. Likewise, the
+secular solver's budget-exhaustion arm uses a literal the tuning parameter does not reach
+([stedc: open debts](stedc.md#stedc-open-debts)). The source comments pointed at a `deferred`
+list in a work package that was never committed; this section replaces it.
 
 ### syev: remaining unmeasured items
 

@@ -1,13 +1,8 @@
 #pragma once
 
-// WP1 S5: ../linalg-impl.hh was the ONLY thing in this header that reached
-// CUDA (its line 23 includes <cuda_runtime.h> under BATCHLAS_HAS_CUDA_BACKEND).
-// Nothing here needs it: MatrixView, get_effective_dims, Queue and DeviceType
-// all come from the three portable headers below. Dropping it makes the whole
-// Route adapter -- gemm_op_shape, gemm_route_request, gemm_route,
-// gemm_use_sycl_custom -- includable from the vendor-independent facade, which
-// is what lets the facade's gemm gain a native arm without duplicating any
-// routing logic.
+// Must stay includable from the vendor-free facade: portable headers only, never
+// ../linalg-impl.hh (it reaches <cuda_runtime.h>).
+// evidence: docs/perf/gemm.md#gemm-the-route-adapter-and-its-environment-readers
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/util/sycl-device-queue.hh>
@@ -59,32 +54,10 @@ inline bool gemm_batch_dimensions_compatible(const MatrixView<T, MatrixFormat::D
     return true;
 }
 
-// The host loop a batch whose members do not share a shape falls back to.
-//
-// No vendor GEMM -- strided-batched or pointer-batched -- can be handed such a
-// batch at all, because every one of them takes a single m/n/k for the whole
-// call, so the batch becomes one single-matrix GEMM per member. cuBLAS, rocBLAS
-// and oneMKL each wrote that loop out; what actually differs between them is
-// only two things, and both are parameters here rather than something this
-// helper decides:
-//
-//   gemm_one   -- which single-matrix GEMM to issue. The backends do not agree:
-//                 cuBLAS calls its vendor_impl directly (recursing through
-//                 gemm_vendor would re-run the route selection per member),
-//                 while rocBLAS and MKL recurse into gemm_vendor on purpose so
-//                 that a member can still reach the SYCL kernel.
-//   on_empty   -- which Event a batch that launched nothing hands back. cuBLAS
-//                 and rocBLAS fabricate one with
-//                 create_event_after_external_work() because their work leaves
-//                 the SYCL queue; MKL, whose GEMM is submitted to the queue,
-//                 hands back the queue's own get_event(). Unifying the two
-//                 would change what a caller may wait on, so it stays a
-//                 per-backend decision.
-//
-// A member with m or n zero has nothing to compute and is skipped outright; a
-// member with k zero is a pure scaling of C, which no GEMM spells, so it goes
-// to scale(). Both are carried over verbatim from the three loops this
-// replaces, including the "launched nothing at all" case they all guard.
+// Per-member host loop for a heterogeneous batch, with the empty-batch Event as
+// a parameter (on_empty). Same skip / k == 0 semantics as
+// detail::gemm_heterogeneous_loop, which is what the backends call today.
+// evidence: docs/perf/gemm.md#gemm-the-heterogeneous-batch-loop
 template <typename T, typename GemmOne, typename OnEmpty>
 inline Event gemm_over_heterogeneous_batch(Queue& ctx,
                                            const MatrixView<T, MatrixFormat::Dense>& A,
@@ -129,13 +102,10 @@ enum class GemmVariantRequest {
     Auto,
 };
 
-// BATCHLAS_GEMM_VARIANT has TWO readers with two vocabularies and two unset
-// defaults: dispatch::parse_route_env(Op::gemm) reaches it through the legacy
-// table and defaults to {Auto,Auto}, while this one defaults to Vendor. Both now
-// read the SAME captured string -- routing.legacy_route(Op::gemm) is where
-// parse_route_env reads it too -- so the two can no longer be handed different
-// values. Unifying the two DEFAULTS would be a behaviour change (it moves which
-// kernel a bare gemm() call runs) and is deliberately not done here.
+// TRAP: BATCHLAS_GEMM_VARIANT has two readers, two vocabularies and two unset
+// defaults -- this one (Vendor) and parse_route_env(Op::gemm) ({Auto,Auto}). Both
+// read the same captured string; unifying the defaults would change what a bare
+// gemm() runs. evidence: docs/perf/gemm.md#gemm-the-route-adapter-and-its-environment-readers
 inline GemmVariantRequest gemm_variant_request() {
     const char* raw =
         batchlas::settings().routing.legacy_route(dispatch::Op::gemm).get();
@@ -225,29 +195,12 @@ inline bool gemm_use_cublasdx_custom(const Queue& ctx,
     return gemm_batch_dimensions_compatible(A, B, C, transA, transB);
 }
 
-// ---------------------------------------------------------------------------
-// The Route adapter.
-//
-// Everything below turns the views + the environment into the two pure inputs
-// dispatch::resolve_gemm_route() wants, and nothing else. The decision itself
-// now lives in include/batchlas/blas/dispatch/route_gemm.hh, split three ways
-// (env read / correctness / measured window) per docs/design/vendor-independence.md S4, and
-// is proven route-identical to the code this replaces by
-// tests/route_gemm_equivalence_tests.cc.
-//
-// It is deliberately wired HERE rather than at the call sites: mkl.cc:64 and
-// rocblas.cc:62 call gemm_use_sycl_custom too, and neither TU can be compiled
-// on this machine. Substituting at the one definition moves all three call
-// sites at once and leaves the two unbuildable ones textually untouched.
-// ---------------------------------------------------------------------------
+// The Route adapter: views + environment -> the pure inputs of
+// dispatch::resolve_gemm_route(), and nothing else. The decision lives in
+// route_gemm.hh. evidence: docs/perf/gemm.md#gemm-the-route-adapter-and-its-environment-readers
 
-// The shape, or nullopt when the three views cannot describe one GEMM at all.
-//
-// OpShape is a POD of scalars, so it cannot represent "these views disagree
-// with each other" -- and disagreement is precisely what the batch-size, k==k_b
-// and m==C.rows() checks inside gemm_custom_problem_supported were testing.
-// Absence of a shape is the honest encoding, and it reaches the same outcome:
-// the old predicate returned false, and a caller with no shape takes the vendor.
+// nullopt when the three views disagree (OpShape cannot say so); such a call
+// takes the vendor.
 template <typename T>
 inline std::optional<dispatch::OpShape> gemm_op_shape(
     const Queue& ctx,
@@ -282,9 +235,8 @@ inline std::optional<dispatch::OpShape> gemm_op_shape(
     return s;
 }
 
-// What the environment asked for, in the canonical vocabulary. GEMM's unset
-// default is Vendor, unlike the four level-3 ops' Auto -- see the note on
-// dispatch::legacy_unset_default.
+// What the environment asked for, in the canonical vocabulary; unset falls to
+// dispatch::legacy_unset_default(Op::gemm).
 inline dispatch::Route gemm_route_request() {
     const auto parsed = dispatch::parse_route_env(dispatch::Op::gemm);
     return parsed.found ? parsed.route : dispatch::legacy_unset_default(dispatch::Op::gemm);

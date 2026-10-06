@@ -196,6 +196,35 @@ varies per `(backend, scalar)`: the float tile routes are reachable everywhere, 
 non-float gram branch and `trmm`'s non-float tile branch live in `cublas.cc`, and `syr2k` has no
 non-float tile route at all.
 
+## Vendor independence: headers keyed on the library axis
+
+The same rule applies to includes and types in the private `src/linalg-impl.hh` (WP0 S1/S2). Its
+vendor includes (`<cublas_v2.h>`, `<cusolverDn.h>`, `<cusparse.h>` and the ROCm equivalents) are
+guarded by `BATCHLAS_HAS_<LIB>`, not by `BATCHLAS_HAS_<FAMILY>_BACKEND`. They used to be guarded by
+the family flag, which conflated "can a queue target this device family" with "is this vendor's
+math library installed": a CUDA SYCL device with no CUDA math libraries is a coherent configuration,
+exactly the one vendor independence aims at, and under the old guard it still tried to include
+`<cublas_v2.h>`. `cuda_runtime.h` deliberately stays on the family flag: it is the CUDA *runtime*,
+needed for streams and device queries by anything targeting an NVIDIA device, and not a math
+library. `<cuComplex.h>` is included explicitly on the same flag: the pointer-cast helpers use
+`cuComplex`/`cuDoubleComplex`, which used to arrive transitively through `cublas_v2.h` and so made
+those helpers silently depend on cuBLAS.
+
+The CUDA handle types follow suit. `cublasComputeType_t` comes from `cublas_v2.h`, and the handle
+triple needs cuBLAS, cuSPARSE and cuSOLVER all three, so those declarations sit under
+`BATCHLAS_HAS_CUBLAS` (and the other library flags): under `BATCHLAS_HAS_CUDA_BACKEND` alone, which
+can be true with any of them absent, naming those types does not compile. The CUDA device with one or
+more math libraries absent still gets a `LinalgHandle<Backend::CUDA>` specialisation with no vendor
+handles to own, because the type must be **complete**: a *native* TU declares one
+(`src/extensions/ortho.cc` has `static LinalgHandle<B> handle;` with `B` deduced from the queue), and
+the primary template is declared without a definition, so leaving the specialisation out makes an
+`ortho` build fail on an incomplete type in a file that calls no vendor code at all.
+
+The counterpart for symbols is in the facade below: public instantiations are keyed on the **device
+family** (the bodies compile to a throw when the library is absent), while the vendor TUs instantiate
+only their `backend::*_vendor` symbols; see
+[the runtime-internals note](runtime-internals.md#runtime-internals-vendor-tus-instantiate-only-vendor-symbols).
+
 ## The entry-point facade
 
 The original obstacle to vendor independence was not routing at all — it was **definition ownership**.
@@ -229,7 +258,7 @@ Five properties of this layer are load-bearing:
 * **An instantiation binds as hard as a definition.** `syev` and `ormqr` were already *defined* in
   headers, but their explicit instantiations lived in `cusolver.cc`/`cublas.cc`, which is enough to
   make them vanish from a build without those libraries; moving the instantiation is the whole change
-  for those two (`eigen.cc:1-15`). `gesvd` needs no facade TU at all: its public template is `inline`
+  for those two (`src/dispatch/entry_points/eigen.cc`). `gesvd` needs no facade TU at all: its public template is `inline`
   in `functions/gesvd.hh:422-444` and forwards to `gesvd_dispatch`.
 * **The route gate runs before the vendor-available test.** Anything below `if constexpr
   (!<group>_vendor_available<Back>)` is unreachable in the vendor-free build, which is the build the

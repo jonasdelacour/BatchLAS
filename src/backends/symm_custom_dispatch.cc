@@ -5,10 +5,7 @@
 #include "level3_fused.hh"
 #include "level3_vendor_fallback.hh"
 
-// WP1 S2: the expansions' terminal GEMM is the PUBLIC entry point, not
-// gemm_cublasdx. Vendor-free by inspection -- gemm.hh reaches only
-// sycl-device-queue.hh, sycl-span.hh, matrix.hh, enums.hh and
-// queue-dispatch.hh.
+// The terminal GEMM is the PUBLIC entry point, whose header is vendor-free.
 #include <batchlas/blas/functions/gemm.hh>
 #include "triangular_expand.hh"
 
@@ -27,11 +24,8 @@ namespace batchlas::backend {
 
 namespace {
 
-// The private three-value enum is gone; the same three states are Route's
-// Origin::Vendor / {Vendor, FusedDevice} / Origin::Auto. Legacy spellings are
-// unchanged and pinned by tests/route_vocabulary_tests.cc -- note that "custom"
-// means the FUSED kernel here, not the register-tiled GEMM family the canonical
-// vocabulary reads it as. See parse_legacy_route_value.
+// Legacy "custom" means the FUSED kernel here, not the register-tiled GEMM.
+// evidence: docs/perf/level3.md#level-3-one-route-parse-per-variable
 dispatch::Route symm_route_request() {
     const auto parsed = dispatch::parse_route_env(dispatch::Op::symm);
     return parsed.found ? parsed.route
@@ -71,8 +65,8 @@ bool symm_prefer_cuda_custom_heuristic(const MatrixView<float, MatrixFormat::Den
         return false;
     }
 
-    // Skewed shapes are excluded above because the expansion always costs a
-    // full k x k pass, which stops paying for itself once k dwarfs m and n.
+    // Skewed shapes excluded: the k x k expansion stops paying once k dwarfs m, n.
+    // evidence: docs/perf/level3.md#symm-and-hemm-expansion-crossover
     return detail::expansion_preferred(max_dim, A.batch_size());
 }
 
@@ -87,11 +81,8 @@ Event symm_cublasdx_fallback_gemm(Queue& ctx,
     const int n = A.rows();
     const int ld = detail::expanded_ld<float>(n);
 
-    // Scratch comes from the queue's arena rather than a local Matrix. A Matrix
-    // is a fresh managed allocation whose pages are migrated to the device on
-    // first touch, which at n=512 batch=512 costs an order of magnitude more
-    // than the GEMM it feeds, and it would be freed on return while the kernels
-    // reading it have only been enqueued.
+    // Arena scratch, never a local Matrix: it would be freed while still enqueued.
+    // evidence: docs/perf/level3.md#level-3-scratch-expansions-and-their-ceilings
     auto ws = ctx.workspace(detail::expanded_workspace_bytes<float>(ctx, n, A.batch_size()));
     BumpAllocator pool(ws.span());
     auto storage = pool.allocate<float>(ctx, static_cast<std::size_t>(ld) *
@@ -106,10 +97,7 @@ Event symm_cublasdx_fallback_gemm(Queue& ctx,
         expansion = detail::expand_mirrored<float, /*Conjugate=*/false>(ctx, expanded, A, uplo);
     }
 
-    // The GEMM runs on the queue's native stream, which an in-order queue shares
-    // with the expansion kernel. An out-of-order queue orders nothing across the
-    // SYCL/native boundary and offers no event to hang the vendor launch off, so
-    // there the dependency has to be waited out.
+    // Out-of-order queues order nothing across the SYCL/native boundary.
     if (!ctx.in_order()) {
         expansion.wait();
     }
@@ -163,8 +151,7 @@ Event symm_cuda_custom(Queue& ctx,
                        float beta,
                        Side side,
                        Uplo uplo) {
-    // WP1 S0 instrumentation -- beside every return, never in place of one, and
-    // inert unless BATCHLAS_COVERAGE_OUT is set. See level3_coverage.hh.
+    // Coverage record: beside every return, never in place of one (level3_coverage.hh).
     const auto rec = [&](dispatch::Route taken, bool native_supported) {
         detail::record_level3_route(dispatch::Op::symm, taken,
                                     C.rows(), C.cols(), A.rows(),
@@ -177,19 +164,14 @@ Event symm_cuda_custom(Queue& ctx,
         return detail::symm_vendor_fallback(ctx, A, B, C, alpha, beta, side, uplo);
     }
 
-    // The fused tail lives in level3_fused_cuda.cc now (WP1 S3). Both of its
-    // non-Ran outcomes mean the same thing for symm -- fall back to the
-    // expansion -- but they are kept distinct at the seam because syr2k and
-    // trmm react to them differently.
+    // Both non-Ran outcomes fall back to the expansion for symm.
     auto fused = detail::symm_fused_try(ctx, A, B, C, alpha, beta, side, uplo);
     if (fused.outcome == detail::FusedResult::Outcome::Ran) {
         rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::FusedDevice}, true);
         return std::move(fused.event);
     }
 
-    // symm's only portable kernel is the mirrored expansion; everything after
-    // it is a GEMM. ExpandGemm names that honestly -- and note it is NOT a
-    // claim that the GEMM is native, which is what WP1 S5 has to make true.
+    // ExpandGemm: the expansion is native; it is NOT a claim that the GEMM is.
     rec(dispatch::Route{dispatch::Origin::Native, dispatch::Algorithm::ExpandGemm}, true);
     return symm_cublasdx_fallback_gemm(ctx, A, B, C, alpha, beta, side, uplo);
 }

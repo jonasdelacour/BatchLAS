@@ -8,75 +8,78 @@
 #include <string_view>
 #include <type_traits>
 
-// WHY TWO OF THE ENUMS BELOW CARRY BATCHLAS_API.
-//
-// Clang and GCC give a template instantiation the MINIMUM of the template's own
-// visibility and the visibility of its template ARGUMENTS. `Backend` and
-// `MatrixFormat` are used as non-type template parameters across the whole
-// public surface -- 207 `template <Backend ...>` declarations alone -- so under
-// -fvisibility=hidden an unannotated enum drags every one of those
-// instantiations to hidden, and BATCHLAS_API on the function is INERT.
-//
-// Measured, not assumed: annotating the function alone left
-// `batchlas::gemm<Backend::CUDA, float>` as a local `t` symbol; annotating the
-// enum flipped it to an exported `W`. 63% of the symbols a consumer links --
-// 688 of 1,083 -- were affected. The failure mode is an undefined reference at
-// consumer link, never a compile diagnostic, so nothing in-tree would have
-// caught it: no test links a monolithic install.
-//
-// Only the enums that appear as template arguments need this. Adding a template
-// parameterised on another enum in this header means annotating that one too.
+/// @file
+/// @brief Enumerations, scalar traits and scalar concepts shared by every public header.
+///
+/// Every enum here has a `constexpr std::string_view to_string(E)` next to its
+/// definition that returns the enumerator's own spelling, and one templated
+/// `operator<<` at the end of the namespace prints all of them.
 
-// Every public enum below carries a `constexpr std::string_view to_string(E)`
-// right next to its definition, and a single templated `operator<<` at the end
-// of the namespace picks all of them up through ADL. The returned text is the
-// enumerator's own spelling, so a printed value can be pasted back into source.
-//
-// The stream operator is a template on the stream type deliberately: this header
-// is pulled into device code by nearly every other one, and templating it means
-// only <iosfwd> is needed here rather than all of <ostream>.
+// Backend and MatrixFormat carry BATCHLAS_API because they are non-type template
+// arguments: an instantiation gets the minimum visibility of its arguments, so an
+// unannotated enum hides every instantiation on it and consumers fail to link.
+// Annotate any further enum that becomes a template argument.
+// evidence: docs/design/symbol-visibility.md#symbol-visibility-enums-used-as-template-arguments
 namespace batchlas {
+    /// @addtogroup enums
+    /// @{
+
+    /// @brief Real type underlying a scalar: `T` itself for a real `T`, `R` for `std::complex<R>`.
     template<typename T>
     struct base_type {
         using type = T;
     };
 
+    /// @brief Specialisation that strips `std::complex`.
     template<typename T>
     struct base_type<std::complex<T>> {
         using type = T;
     };
 
+    /// @brief Shorthand for `base_type<T>::type`: the precision of `T` (tolerances, norms, eigenvalues).
     template<typename T>
     using float_t = typename base_type<T>::type;
 
+    /// @brief True for `std::complex<R>`, false otherwise.
     template <typename T>
     struct is_std_complex : std::false_type {};
 
+    /// @brief Specialisation for `std::complex<R>`.
     template <typename T>
     struct is_std_complex<std::complex<T>> : std::true_type {};
 
+    /// @brief Value of is_std_complex<T>.
     template <typename T>
     inline constexpr bool is_std_complex_v = is_std_complex<T>::value;
 
+    /// @brief A real floating-point scalar (`float`, `double`).
     template <typename T>
     concept RealScalar = std::floating_point<T>;
 
+    /// @brief A `std::complex` scalar (`std::complex<float>`, `std::complex<double>`).
     template <typename T>
     concept ComplexScalar = is_std_complex_v<T>;
 
+    /// @brief Any scalar the numerical entry points accept: real or complex floating point.
     template <typename T>
     concept FloatingOrComplexScalar = RealScalar<T> || ComplexScalar<T>;
 
+    /// @brief Storage format of a Matrix / MatrixView, used as a template argument.
+    ///
+    /// Only `Dense` and `CSR` have storage implementations; the other enumerators
+    /// name formats and are not instantiated by the library.
+    /// @see @ref design_matrix_model
     enum class BATCHLAS_API MatrixFormat {
-        Dense,
-        CSR,    // Compressed Sparse Row
-        CSC,    // Compressed Sparse Column
-        COO,    // Coordinate
-        SELL,   // Sliced ELLPACK
-        BSR,    // Blocked Sparse Row
-        BLOCKED_ELL // Blocked ELLPACK
+        Dense,        ///< Column-major dense storage with leading dimension and batch stride.
+        CSR,          ///< Compressed Sparse Row.
+        CSC,          ///< Compressed Sparse Column.
+        COO,          ///< Coordinate.
+        SELL,         ///< Sliced ELLPACK.
+        BSR,          ///< Blocked Sparse Row.
+        BLOCKED_ELL   ///< Blocked ELLPACK.
     };
 
+    /// @brief Spelling of @p v as in source.
     inline constexpr std::string_view to_string(MatrixFormat v) {
         switch (v) {
             case MatrixFormat::Dense:       return "Dense";
@@ -90,23 +93,32 @@ namespace batchlas {
         return "MatrixFormat(?)";
     }
 
+    /// @brief Constrains a member or overload to dense storage.
     template <MatrixFormat F>
     concept DenseMatrixFormat = F == MatrixFormat::Dense;
 
+    /// @brief Constrains a member or overload to CSR storage.
     template <MatrixFormat F>
     concept CsrMatrixFormat = F == MatrixFormat::CSR;
 
+    /// @brief Library family an entry point dispatches to, used as a template argument.
+    ///
+    /// Callers normally do not spell it: the queue-taking entry points take the
+    /// backend from the batchlas::Queue (Queue::backend(), Queue::set_backend()).
+    /// Only the backends compiled into the build (`BATCHLAS_HAS_*_BACKEND`) are
+    /// available; Queue::backend_available() reports which.
     enum class BATCHLAS_API Backend {
-        AUTO,
-        CUDA,
-        ROCM,
-        MKL,
-        MAGMA,
-        SYCL,
-        NETLIB
+        AUTO,    ///< A request, not a backend: the Queue resolves it from its device on first query.
+        CUDA,    ///< NVIDIA GPU: cuBLAS / cuSOLVER / cuSPARSE and the native SYCL kernels.
+        ROCM,    ///< AMD GPU: rocBLAS / rocSOLVER / rocSPARSE and the native SYCL kernels.
+        MKL,     ///< Intel GPU through oneMKL.
+        MAGMA,   ///< Reserved; no dispatch target, never available.
+        SYCL,    ///< Reserved; no dispatch target, never available.
+        NETLIB   ///< Host CBLAS / LAPACKE; the fallback for any device.
         // Add more as needed
     };
 
+    /// @brief Spelling of @p v as in source.
     inline constexpr std::string_view to_string(Backend v) {
         switch (v) {
             case Backend::AUTO:   return "AUTO";
@@ -120,19 +132,21 @@ namespace batchlas {
         return "Backend(?)";
     }
 
+    /// @brief A vendor library inside a Backend; selects library-specific type and handle mappings.
     enum class BackendLibrary {
-        CUBLAS,     //Belongs to CUDA backend
-        CUSPARSE,   //Belongs to CUDA backend
-        CUSOLVER,   //Belongs to CUDA backend
-        ROCBLAS,    //Belongs to ROCM backend
-        ROCSPARSE,  //Belongs to ROCM backend
-        ROCSOLVER,  //Belongs to ROCM backend
-        MAGMA,      //Belongs to MAGMA backend
-        MKL,        //Belongs to MKL backend
-        CBLAS,      //Belongs to NETLIB backend
-        LAPACKE     //Belongs to NETLIB backend
+        CUBLAS,     ///< Backend::CUDA.
+        CUSPARSE,   ///< Backend::CUDA.
+        CUSOLVER,   ///< Backend::CUDA.
+        ROCBLAS,    ///< Backend::ROCM.
+        ROCSPARSE,  ///< Backend::ROCM.
+        ROCSOLVER,  ///< Backend::ROCM.
+        MAGMA,      ///< Backend::MAGMA.
+        MKL,        ///< Backend::MKL.
+        CBLAS,      ///< Backend::NETLIB.
+        LAPACKE     ///< Backend::NETLIB.
     };
 
+    /// @brief Spelling of @p v as in source.
     inline constexpr std::string_view to_string(BackendLibrary v) {
         switch (v) {
             case BackendLibrary::CUBLAS:    return "CUBLAS";
@@ -149,12 +163,14 @@ namespace batchlas {
         return "BackendLibrary(?)";
     }
 
+    /// @brief The operator op() applied to an operand: op(A) = A, A^T or A^H.
     enum class Transpose {
-        NoTrans,
-        Trans,
-        ConjTrans
+        NoTrans,   ///< op(A) = A.
+        Trans,     ///< op(A) = A^T.
+        ConjTrans  ///< op(A) = A^H (the same as Trans for real scalars).
     };
 
+    /// @brief Spelling of @p v as in source.
     inline constexpr std::string_view to_string(Transpose v) {
         switch (v) {
             case Transpose::NoTrans:   return "NoTrans";
@@ -164,11 +180,13 @@ namespace batchlas {
         return "Transpose(?)";
     }
 
+    /// @brief Whether an eigensolver computes eigenvectors (LAPACK `jobz`).
     enum class JobType {
-        EigenVectors,
-        NoEigenVectors
+        EigenVectors,    ///< Eigenvalues and eigenvectors (`jobz = 'V'`).
+        NoEigenVectors   ///< Eigenvalues only (`jobz = 'N'`).
     };
 
+    /// @brief Spelling of @p v as in source.
     inline constexpr std::string_view to_string(JobType v) {
         switch (v) {
             case JobType::EigenVectors:   return "EigenVectors";
@@ -177,36 +195,29 @@ namespace batchlas {
         return "JobType(?)";
     }
 
-    // SVD vector output policy, LAPACK jobu/jobvt semantics.
-    //
-    // With k = min(m, n), for an m x n input:
-    //   None  -- the factor is not computed and its MatrixView is not touched.
-    //   All   -- LAPACK 'A'. U is m x m, V^H is n x n.
-    //   Thin  -- LAPACK 'S'. U is m x k (the first k left singular vectors),
-    //            V^H is k x n (the first k right singular vectors, conjugated).
-    //
-    // Thin exists because All is unusable on tall-skinny input: a 10000 x 32
-    // problem has to materialise a 10000 x 10000 U, 400 MB per matrix in float,
-    // so batch=4 needs 1.6 GB for a factor whose last 9968 columns are an
-    // arbitrary orthonormal completion the caller did not ask for.
-    //
-    // The key identity, which most of the implementation rests on: Thin and All
-    // DIFFER ON AT MOST ONE SIDE. For m <= n, k == m, so a thin U (m x k) is
-    // exactly a full U (m x m); for m >= n, k == n, so a thin V^H is exactly a
-    // full V^H. Square input has Thin == All on both sides. Entry points
-    // therefore canonicalise Thin to All whenever the shapes coincide (see
-    // canonical_jobu / canonical_jobvh below) and only the genuinely thinner
-    // side has to be handled -- or rejected -- by any given route.
-    //
-    // LAPACK's 'O' (overwrite A with one of the factors) is deliberately absent;
-    // add it as a further enumerator if it is ever wanted, since appending keeps
-    // the existing ordinals stable for the benchmarks that pass jobs as ints.
+    /// @brief Which singular vectors gesvd computes for one factor (LAPACK `jobu` / `jobvt`).
+    ///
+    /// For an m x n input with k = min(m, n):
+    /// | Value  | LAPACK | U       | V^H     |
+    /// | ------ | ------ | ------- | ------- |
+    /// | `None` | 'N'    | not computed; its MatrixView is not touched | same |
+    /// | `All`  | 'A'    | m x m   | n x n   |
+    /// | `Thin` | 'S'    | m x k, the first k left vectors | k x n, the first k right vectors, conjugated |
+    ///
+    /// Thin and All differ on at most one side: for m <= n a thin U is the full U,
+    /// for m >= n a thin V^H is the full V^H, and for square input they coincide on
+    /// both. Entry points canonicalise with canonical_jobu() / canonical_jobvh().
+    /// LAPACK's 'O' (overwrite A) is not offered.
+    /// @see @ref design_gesvd
+    // Append new enumerators only: benchmarks pass jobs as ints, so the ordinals are stable API.
+    // evidence: docs/design/gesvd.md#gesvd-design-why-svdvectorsthin-exists
     enum class SvdVectors {
-        None,
-        All,
-        Thin
+        None,  ///< Do not compute this factor.
+        All,   ///< Full square factor (LAPACK 'A').
+        Thin   ///< Economy factor with k = min(m, n) vectors (LAPACK 'S').
     };
 
+    /// @brief Spelling of @p v as in source.
     inline constexpr std::string_view to_string(SvdVectors v) {
         switch (v) {
             case SvdVectors::None: return "None";
@@ -216,36 +227,58 @@ namespace batchlas {
         return "SvdVectors(?)";
     }
 
-    // Number of columns of U / rows of V^H implied by a job, given the input
-    // shape and k = min(m, n). None yields 0: nothing is written.
+    /// @brief Number of columns of U that @p job writes.
+    /// @param job  the U job
+    /// @param m    rows of the input
+    /// @param k    min(m, n)
+    /// @return m for All, k for Thin, 0 for None (nothing is written)
     inline constexpr int64_t svd_u_cols(SvdVectors job, int64_t m, int64_t k) {
         return job == SvdVectors::All ? m : (job == SvdVectors::Thin ? k : 0);
     }
 
+    /// @brief Number of rows of V^H that @p job writes.
+    /// @param job  the V^H job
+    /// @param n    columns of the input
+    /// @param k    min(m, n)
+    /// @return n for All, k for Thin, 0 for None (nothing is written)
     inline constexpr int64_t svd_vh_rows(SvdVectors job, int64_t n, int64_t k) {
         return job == SvdVectors::All ? n : (job == SvdVectors::Thin ? k : 0);
     }
 
-    // Rewrite Thin to All when the two request the same shape, so that a route
-    // which cannot produce a genuinely thin factor still serves every request
-    // where "thin" is not actually asking for anything smaller. Call these once
-    // at each entry point, and pass the canonical values onward -- in
-    // particular, the buffer_size and the run path must canonicalise
-    // identically or the workspace is sized for a different computation than
-    // the one performed.
+    /// @brief Rewrites a U job of Thin to All when both request the same shape (k == m).
+    ///
+    /// A route that cannot produce a genuinely thin factor then still serves every
+    /// Thin request that asks for nothing smaller.
+    /// @param job  the requested U job
+    /// @param m    rows of the input
+    /// @param k    min(m, n)
+    /// @return All if @p job is Thin and k == m, otherwise @p job
+    /// @trap Call once per entry point and pass the result on: a `*_buffer_size` and
+    ///       its run path must canonicalise identically, or the workspace is sized
+    ///       for a different computation than the one performed.
     inline constexpr SvdVectors canonical_jobu(SvdVectors job, int64_t m, int64_t k) {
         return (job == SvdVectors::Thin && k == m) ? SvdVectors::All : job;
     }
 
+    /// @brief Rewrites a V^H job of Thin to All when both request the same shape (k == n).
+    /// @param job  the requested V^H job
+    /// @param n    columns of the input
+    /// @param k    min(m, n)
+    /// @return All if @p job is Thin and k == n, otherwise @p job
+    /// @see canonical_jobu() for the calling rule.
     inline constexpr SvdVectors canonical_jobvh(SvdVectors job, int64_t n, int64_t k) {
         return (job == SvdVectors::Thin && k == n) ? SvdVectors::All : job;
     }
 
+    /// @brief Which triangle of a symmetric, Hermitian or triangular operand is referenced.
+    /// @trap In an option struct write `PotrfOptions{}`, never a bare `{}`: `{}` can
+    ///       select the positional overload, whose `Uplo{}` is `Upper`.
     enum class Uplo {
-        Upper,
-        Lower
+        Upper,  ///< The upper triangle (i <= j).
+        Lower   ///< The lower triangle (i >= j).
     };
 
+    /// @brief Spelling of @p v as in source.
     inline constexpr std::string_view to_string(Uplo v) {
         switch (v) {
             case Uplo::Upper: return "Upper";
@@ -254,11 +287,13 @@ namespace batchlas {
         return "Uplo(?)";
     }
 
+    /// @brief Whether a triangular operand's diagonal is read or assumed to be one.
     enum class Diag {
-        NonUnit,
-        Unit
+        NonUnit,  ///< The stored diagonal is used.
+        Unit      ///< The diagonal is taken as 1 and not read.
     };
 
+    /// @brief Spelling of @p v as in source.
     inline constexpr std::string_view to_string(Diag v) {
         switch (v) {
             case Diag::NonUnit: return "NonUnit";
@@ -267,11 +302,13 @@ namespace batchlas {
         return "Diag(?)";
     }
 
+    /// @brief Side on which a special operand multiplies: op(A) * B or B * op(A).
     enum class Side {
-        Left,
-        Right
+        Left,   ///< The special operand is on the left.
+        Right   ///< The special operand is on the right.
     };
 
+    /// @brief Spelling of @p v as in source.
     inline constexpr std::string_view to_string(Side v) {
         switch (v) {
             case Side::Left:  return "Left";
@@ -280,11 +317,13 @@ namespace batchlas {
         return "Side(?)";
     }
 
+    /// @brief Order in which eigenvalues (and their vectors) are returned.
     enum class SortOrder {
-        Ascending,
-        Descending
+        Ascending,   ///< Smallest first.
+        Descending   ///< Largest first.
     };
 
+    /// @brief Spelling of @p v as in source.
     inline constexpr std::string_view to_string(SortOrder v) {
         switch (v) {
             case SortOrder::Ascending:  return "Ascending";
@@ -293,11 +332,13 @@ namespace batchlas {
         return "SortOrder(?)";
     }
 
+    /// @brief Order in which a sequence of plane rotations is applied (steqr sweeps).
     enum class ApplyOrder {
-        Forward,
-        Backward
+        Forward,   ///< First rotation first (a QR sweep).
+        Backward   ///< Last rotation first (a QL sweep).
     };
 
+    /// @brief Spelling of @p v as in source.
     inline constexpr std::string_view to_string(ApplyOrder v) {
         switch (v) {
             case ApplyOrder::Forward:  return "Forward";
@@ -306,28 +347,31 @@ namespace batchlas {
         return "ApplyOrder(?)";
     }
 
-    // Algorithm family used by `syevx` (partial symmetric eigensolve).
-    //
-    // `Auto` picks based on matrix format, size and the requested fraction of the
-    // spectrum; see `syevx_select_algorithm`. Set per call via SyevxParams::method,
-    // or globally via BATCHLAS_SYEVX_ALGORITHM
-    // (auto|direct|direct_subset|filtered|lobpcg).
-    //
-    // Precedence: the environment variable WINS over SyevxParams::method, matching
-    // the BATCHLAS_SYEV_PROVIDER convention, so that a whole application can be
-    // forced onto one algorithm for diagnosis or benchmarking.
-    //
-    // A choice that is not available for the given scalar type or matrix format
-    // degrades to the nearest implemented one rather than failing: DirectSubset
-    // needs a real type and dense input, and Filtered is not implemented at all.
+    /// @brief Algorithm family of the partial symmetric/Hermitian eigensolver `syevx`.
+    ///
+    /// Set per call through SyevxParams::method, or process-wide through
+    /// `BATCHLAS_SYEVX_ALGORITHM` (`auto|direct|direct_subset|filtered|lobpcg`).
+    /// **The environment variable wins** over SyevxParams::method, as
+    /// `BATCHLAS_SYEV_PROVIDER` does for syev, so a whole application can be forced
+    /// onto one algorithm for diagnosis.
+    ///
+    /// A choice the input cannot use degrades instead of failing: DirectSubset on
+    /// complex or sparse input runs Direct (dense) or LOBPCG (CSR), and Direct or
+    /// DirectSubset on CSR runs LOBPCG. A non-extremal SyevxSelect range is never
+    /// degraded to a different part of the spectrum: on CSR input, or with an
+    /// explicit LOBPCG or Filtered, it throws batchlas::invalid_argument (under the
+    /// environment override the dense case runs Direct instead). `syevx` and
+    /// `syevx_buffer_size` resolve the choice identically.
+    /// @see @ref perf_syevx for the routing thresholds, @ref design_syevx for the tiers.
     enum class SyevxAlgorithm {
-        Auto,           // Heuristic selection (default)
-        Direct,         // Full syev + select the requested eigenpairs
-        DirectSubset,   // Two-stage reduction + subset tridiagonal solve (Tier 2, not yet implemented)
-        Filtered,       // Chebyshev-filtered subspace iteration (Tier 3, not yet implemented)
-        LOBPCG          // Locally Optimal Block Preconditioned Conjugate Gradient
+        Auto,           ///< Heuristic selection on format, n, batch size and jobz (the default).
+        Direct,         ///< Full syev on a copy of A, then select the requested eigenpairs.
+        DirectSubset,   ///< Two-stage reduction, bisection + inverse iteration on the subset (real, dense).
+        Filtered,       ///< Chebyshev-filtered subspace iteration (dense and CSR); only when asked for.
+        LOBPCG          ///< Locally Optimal Block Preconditioned Conjugate Gradient; the CSR default.
     };
 
+    /// @brief Spelling of @p v as in source.
     inline constexpr std::string_view to_string(SyevxAlgorithm v) {
         switch (v) {
             case SyevxAlgorithm::Auto:          return "Auto";
@@ -339,25 +383,23 @@ namespace batchlas {
         return "SyevxAlgorithm(?)";
     }
 
-    // How `syevx` chooses which part of the spectrum to return.
-    //
-    // `Extremal` is the historical behaviour and the default: `neigs` eigenpairs
-    // from one end, chosen by SyevxParams::find_largest, returned descending for
-    // the largest and ascending for the smallest. It is a special case of `Index`
-    // -- [n-neigs, n-1] or [0, neigs-1] -- and is normalized to one internally by
-    // `syevx_resolve_range`; it exists as a distinct value so that no existing
-    // caller's behaviour depends on a default that changed meaning.
-    //
-    // Deliberately NOT `EigenRangeType`, whose `All` member -- the natural default
-    // -- means "every eigenvalue", which is not what syevx's default does.
-    // `EigenRangeType` stays the tridiagonal-layer vocabulary; `SyevxSelect` is the
-    // user-facing one, and the two are converted in exactly one place.
+    /// @brief Which part of the spectrum `syevx` returns.
+    ///
+    /// `Extremal` (the default) returns `neigs` eigenpairs from one end, chosen by
+    /// SyevxParams::find_largest: descending for the largest, ascending for the
+    /// smallest. It is the Index range [n-neigs, n-1] or [0, neigs-1] and is
+    /// normalised to one internally.
+    /// @note Deliberately not `EigenRangeType`, whose natural default `All` means
+    ///       "every eigenvalue"; that type stays the tridiagonal-layer vocabulary.
+    /// @see @ref design_syevx_range
+    // evidence: docs/design/syevx-range-selection.md#syevx-range-syevxselect-rather-than-eigenrangetype
     enum class SyevxSelect {
-        Extremal,  // neigs from one end; SyevxParams::find_largest picks the end
-        Index,     // SyevxParams::il .. iu inclusive, 0-based, ascending spectrum
-        Value      // every eigenvalue in the half-open interval (vl, vu]
+        Extremal,  ///< `neigs` eigenpairs from one end; SyevxParams::find_largest picks the end.
+        Index,     ///< SyevxParams::il .. iu inclusive, 0-based in the ascending spectrum.
+        Value      ///< Every eigenvalue in the half-open interval (vl, vu].
     };
 
+    /// @brief Spelling of @p v as in source.
     inline constexpr std::string_view to_string(SyevxSelect v) {
         switch (v) {
             case SyevxSelect::Extremal: return "Extremal";
@@ -367,53 +409,32 @@ namespace batchlas {
         return "SyevxSelect(?)";
     }
 
-    // Preconditioner family used by the LOBPCG path of `syevx`. Set per call via
-    // SyevxParams::preconditioner_type; `Auto` picks ILU(k) when a factor has been
-    // supplied (or requested via SyevxParams::build_preconditioner) and otherwise
-    // takes the default from BATCHLAS_SYEVX_PRECONDITIONER
-    // (auto|none|jacobi|jacobi_shifted|iluk), defaulting to `None`.
-    //
-    // The two Jacobi forms are different operators despite the shared name, and the
-    // difference is not cosmetic (measured iteration counts, single precision,
-    // n = 64..512, k = 2..16):
-    //
-    //   `Jacobi` = diag(A)^{-1} approximates A^{-1}, so -- exactly like ILU(k) -- it
-    //   is only valid for the SMALLEST eigenpairs, and `find_largest` is rejected
-    //   with it. On strongly graded (nearly diagonal) matrices it is worth 2-7x
-    //   fewer iterations; on a random symmetric matrix, whose diagonal is neither
-    //   dominant nor sign-definite, it is not a valid preconditioner at all, so the
-    //   implementation falls back to the identity per batch item whose diagonal is
-    //   not uniformly positive rather than diverging.
-    //
-    //   `JacobiShifted` = (diag(A) - lambda I)^{-1} takes its shift from the current
-    //   Ritz value, which makes it valid at BOTH ends -- it targets whatever is near
-    //   lambda. But it degenerates precisely where the unshifted form wins: as
-    //   diag(A) -> A the operator becomes the exact inverse of (A - lambda I) and
-    //   the preconditioned residual converges to X itself, so the new search
-    //   direction is annihilated by the subsequent orthogonalization against X.
-    //   Measured neutral (0.85-1.2x) on random symmetric input and 0.2-0.9x on
-    //   graded input. It is offered because the constant-diagonal case is provably
-    //   a no-op and the general case is safe, not because it was found to pay.
-    //
-    // Neither is chosen by `Auto`: on the matrices measured here neither is a free
-    // win, so picking one implicitly would be a regression for somebody.
-    //
-    // Precedence differs deliberately from SyevxAlgorithm: the environment variable
-    // only supplies the *default*, it does not override an explicit request. An
-    // algorithm can always be substituted for another; a preconditioner cannot --
-    // an ILU(k) factor a caller built and handed in has no substitute, and silently
-    // ignoring it (or, worse, silently ignoring a request for it) would be a
-    // correctness surprise rather than a performance one.
-    //
-    // Only the LOBPCG algorithm uses this; the direct and filtered paths ignore it.
+    /// @brief Preconditioner of the LOBPCG path of `syevx`; the other algorithms ignore it.
+    ///
+    /// Set per call through SyevxParams::preconditioner_type. `Auto` picks ILU(k)
+    /// when a factor was supplied (or requested through
+    /// SyevxParams::build_preconditioner), otherwise the default from
+    /// `BATCHLAS_SYEVX_PRECONDITIONER` (`auto|none|jacobi|jacobi_shifted|iluk`),
+    /// otherwise `None`. Unlike SyevxAlgorithm, **the environment variable only
+    /// supplies the default** and never overrides an explicit request.
+    ///
+    /// The two Jacobi forms are different operators. `Jacobi` approximates A^{-1},
+    /// so, like ILU(k), it is valid only for the smallest eigenpairs and
+    /// `find_largest` is rejected with it; on a batch item whose diagonal is not
+    /// uniformly positive it falls back to the identity. `JacobiShifted` shifts by
+    /// the current Ritz value and is valid at either end. `Auto` never picks either.
+    /// @see @ref perf_syevx for the measured iteration counts.
+    // evidence: docs/perf/syevx.md#lobpcg-jacobi-preconditioners
+    // evidence: docs/design/syevx.md#syevx-why-the-preconditioner-environment-variable-is-only-a-default
     enum class SyevxPreconditioner {
-        Auto,           // ILU(k) if configured, else the environment default, else None
-        None,           // Unpreconditioned
-        Jacobi,         // diag(A)^{-1}; dense and CSR, smallest-first only
-        JacobiShifted,  // (diag(A) - lambda I)^{-1}; dense and CSR, either end
-        ILUK            // Supplied or syevx-built ILU(k) factor; CSR and smallest-first only
+        Auto,           ///< ILU(k) if configured, else the environment default, else None.
+        None,           ///< Unpreconditioned.
+        Jacobi,         ///< diag(A)^{-1}; dense and CSR, smallest eigenpairs only.
+        JacobiShifted,  ///< (diag(A) - lambda I)^{-1}; dense and CSR, either end.
+        ILUK            ///< Supplied or syevx-built ILU(k) factor; CSR, smallest eigenpairs only.
     };
 
+    /// @brief Spelling of @p v as in source.
     inline constexpr std::string_view to_string(SyevxPreconditioner v) {
         switch (v) {
             case SyevxPreconditioner::Auto:          return "Auto";
@@ -425,17 +446,19 @@ namespace batchlas {
         return "SyevxPreconditioner(?)";
     }
 
+    /// @brief Algorithm used by `ortho` to orthonormalise the columns of a batch of blocks.
     enum class OrthoAlgorithm {
-        Chol2,          //Default
-        Cholesky,       //Rarely sufficient
-        ShiftChol3,     //More stable than Chol2
-        Householder,    
-        CGS2,           //Classical Gram-Schmidt with 2 iterations
-        SVQB,       
-        SVQB2,          //2 Iterations of SVQB
-        NUM_ALGORITHMS  //Used to determine the number of algorithms
+        Chol2,          ///< CholeskyQR applied twice; the default.
+        Cholesky,       ///< One CholeskyQR pass; rarely accurate enough on its own.
+        ShiftChol3,     ///< Shifted CholeskyQR3; more robust than Chol2 on ill-conditioned blocks.
+        Householder,    ///< Householder QR.
+        CGS2,           ///< Classical Gram-Schmidt with one reorthogonalisation pass.
+        SVQB,           ///< SVQB (orthonormalisation through the Gram matrix's eigendecomposition).
+        SVQB2,          ///< SVQB applied twice.
+        NUM_ALGORITHMS  ///< Count of the enumerators above, not an algorithm.
     };
 
+    /// @brief Spelling of @p v as in source.
     inline constexpr std::string_view to_string(OrthoAlgorithm v) {
         switch (v) {
             case OrthoAlgorithm::Chol2:          return "Chol2";
@@ -451,16 +474,22 @@ namespace batchlas {
     }
 
 
-    //Some of the types are not supported by all backends, compilation errors will make this apparent
+    /// @brief Internal compute precision of a GEMM (the cuBLAS `cublasComputeType_t`).
+    ///
+    /// Anything but `Default` is served only by the vendor library: the native GEMM
+    /// routes do not support it. On cuBLAS, a single-precision scalar accepts
+    /// F32, F16, BF16 and TF32, a double-precision scalar only F64; any other
+    /// combination throws batchlas::unsupported.
     enum class ComputePrecision {
-        Default, //Use same precision as input
-        F32,
-        F64,
-        F16,
-        BF16,
-        TF32
+        Default, ///< The precision of the scalar type.
+        F32,     ///< 32-bit float accumulation.
+        F64,     ///< 64-bit float accumulation.
+        F16,     ///< Half-precision inputs, 32-bit accumulation (`CUBLAS_COMPUTE_32F_FAST_16F`).
+        BF16,    ///< bfloat16 inputs, 32-bit accumulation (`CUBLAS_COMPUTE_32F_FAST_16BF`).
+        TF32     ///< TensorFloat-32 inputs, 32-bit accumulation (`CUBLAS_COMPUTE_32F_FAST_TF32`).
     };
 
+    /// @brief Spelling of @p v as in source.
     inline constexpr std::string_view to_string(ComputePrecision v) {
         switch (v) {
             case ComputePrecision::Default: return "Default";
@@ -473,11 +502,13 @@ namespace batchlas {
         return "ComputePrecision(?)";
     }
 
+    /// @brief How a VectorView is reinterpreted as a MatrixView: 1 x n or n x 1.
     enum class VectorOrientation {
-        Row,
-        Column
+        Row,     ///< A 1 x n matrix; `ld` is the vector's `inc`.
+        Column   ///< An n x 1 matrix; requires `inc == 1`.
     };
 
+    /// @brief Spelling of @p v as in source.
     inline constexpr std::string_view to_string(VectorOrientation v) {
         switch (v) {
             case VectorOrientation::Row:    return "Row";
@@ -486,14 +517,16 @@ namespace batchlas {
         return "VectorOrientation(?)";
     }
 
+    /// @brief Matrix norm computed by `norm` and used by the condition estimators.
     enum class NormType {
-        Frobenius, //Most commonly used
-        One,       //Maximum absolute column sum
-        Inf,       //Maximum absolute row sum
-        Max,       //Maximum absolute value
-        Spectral   //Spectral (L2) norm, symmetric/Hermitian only
+        Frobenius, ///< sqrt(sum |a_ij|^2).
+        One,       ///< Maximum absolute column sum.
+        Inf,       ///< Maximum absolute row sum.
+        Max,       ///< Maximum absolute entry (not a consistent norm).
+        Spectral   ///< Largest singular value; symmetric/Hermitian input only.
     };
 
+    /// @brief Spelling of @p v as in source.
     inline constexpr std::string_view to_string(NormType v) {
         switch (v) {
             case NormType::Frobenius: return "Frobenius";
@@ -505,11 +538,16 @@ namespace batchlas {
         return "NormType(?)";
     }
 
+    /// @brief Storage order argument of the host CBLAS / LAPACKE calls.
+    ///
+    /// BatchLAS matrices are always column-major; this only labels host-library calls.
+    /// @see @ref design_matrix_model
     enum class Layout {
-        RowMajor,
-        ColMajor
+        RowMajor,  ///< Row-major (CblasRowMajor).
+        ColMajor   ///< Column-major (CblasColMajor).
     };
 
+    /// @brief Spelling of @p v as in source.
     inline constexpr std::string_view to_string(Layout v) {
         switch (v) {
             case Layout::RowMajor: return "RowMajor";
@@ -518,13 +556,19 @@ namespace batchlas {
         return "Layout(?)";
     }
 
-    // One stream operator for every enum above, found by ADL because they all
-    // live in this namespace. Constrained on `to_string` being callable so that
-    // an enum added later without a printer simply does not get an `operator<<`
-    // rather than getting one that fails to compile inside its own body.
+    /// @brief Prints any BatchLAS enum as its enumerator spelling, via its to_string().
+    ///
+    /// Found by ADL. The printed text can be pasted back into source.
+    /// @param os     output stream
+    /// @param value  enumerator to print
+    /// @return @p os
+    // Templated on the stream so this header needs only <iosfwd>; it is pulled into device code.
+    // Constrained on to_string so an enum without a printer gets no operator<< rather than a broken one.
     template <typename CharT, typename Traits, typename E>
         requires std::is_enum_v<E> && requires(E e) { to_string(e); }
     std::basic_ostream<CharT, Traits>& operator<<(std::basic_ostream<CharT, Traits>& os, E value) {
         return os << to_string(value);
     }
+
+    /// @}
 }

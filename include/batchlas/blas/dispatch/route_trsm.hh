@@ -1,35 +1,48 @@
 #pragma once
 
-// TRSM's routing table: the native CTA and blocked arms, the vendor arm, and the
-// window between them (docs/perf/trsm.md). supports() is correctness only -- a
-// speed cutoff there makes trsm THROW on a vendor-free build, not merely run slow.
+/// @file
+/// @brief TRSM's routing table: the native CTA and blocked arms, the vendor arm, and the window between them.
+///
+/// supports() is correctness only: a speed cutoff there makes trsm THROW on a
+/// vendor-free build, not merely run slow.
+/// @ingroup dispatch
 
 #include <batchlas/blas/dispatch/route.hh>
 #include <batchlas/blas/dispatch/route_resolve.hh>
 
 namespace batchlas::dispatch {
 
-// Defined in the kernel TU; called by the shape builder, never by this table.
+/// @brief Largest triangle order the CTA trsm kernel accepts on this build; 0 when not linked.
+///
+/// Defined in the kernel TU; called by the shape builder, never by the table.
+/// @ingroup dispatch
 template <typename T>
 int trsm_cta_max_n();
 
+/// @brief TRSM routing shape: k is the triangle's order, and the build's capacities.
+/// @ingroup dispatch
 struct TrsmShape : OpShape {
-    // Zero means this build has no native kernel.
-    int cta_max_n = 0;
+    int cta_max_n = 0;   ///< CTA capacity; zero means this build has no native kernel
 
-    // Must describe the build: claiming Blocked when unlinked routes to nothing.
-    bool blocked_available = false;
+    bool blocked_available = false;   ///< must describe the build: claiming Blocked when unlinked routes to nothing
 
-    int64_t tri_order() const { return k; }
-    int64_t rhs_count() const { return side == Side::Left ? n : m; }
+    int64_t tri_order() const { return k; }                            ///< order of the triangular matrix
+    int64_t rhs_count() const { return side == Side::Left ? n : m; }   ///< right-hand sides
 };
 
+/// @brief TRSM walk order: CTA, Blocked, the vendor.
+/// @ingroup dispatch
 inline constexpr Route kTrsmOrder[] = {
     {Origin::Native, Algorithm::CTA},
     {Origin::Native, Algorithm::Blocked},
     {Origin::Vendor, Algorithm::Auto},
 };
 
+/// @brief TRSM routes: `{Native, CTA}`, `{Native, Blocked}` and the vendor.
+///
+/// preferred(): native at batch >= 8, except float Side::Right below batch 128
+/// with order > 32. Evidence: @ref md_docs_2perf_2trsm "docs/perf/trsm.md".
+/// @ingroup dispatch
 template <typename T>
 struct RouteTable<Op::trsm, T> {
     static bool supports(Route r, const TrsmShape& s) {
@@ -85,8 +98,10 @@ struct RouteTable<Op::trsm, T> {
     }
 };
 
-// Call THIS, not resolve_route_uninstrumented: it records trsm's coverage row, so
-// an added record_level3_route call would double-count.
+/// @brief resolve_route() for trsm.
+/// @trap Call THIS, not resolve_route_uninstrumented(): it records trsm's coverage row,
+///       so an added record_level3_route call would double-count.
+/// @ingroup dispatch
 template <typename T>
 inline Route resolve_trsm_route(Route forced, const TrsmShape& s,
                                 bool vendor_available = true) {

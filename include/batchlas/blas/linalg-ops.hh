@@ -6,15 +6,11 @@
 #include <utility>
 
 #include <batchlas/blas/enums.hh>
-// Needed here, not merely by our includers: the qualified ids in the forwards
-// below bind at template-definition context.
+// Needed here: the qualified ids in the forwards below bind at definition context.
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/extra.hh>
-// svd() below calls gesvd and gesvd_buffer_size directly. Reached transitively
-// before this file grew that call; named here so it cannot break again.
+// Called directly by svd(), solve() and solve_spd(); never rely on them transitively.
 #include <batchlas/blas/functions/gesvd.hh>
-// solve() and solve_spd() below call gesv/posv and their buffer_size queries
-// directly; named here for the same reason gesvd.hh is, not relied on transitively.
 #include <batchlas/blas/functions/gesv.hh>
 #include <batchlas/blas/functions/posv.hh>
 #include <batchlas/blas/matrix.hh>
@@ -23,23 +19,37 @@
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-vector.hh>
 
-// batchlas::linalg -- the convenience layer: elementwise operations, and
-// value-returning wrappers that allocate their own result. Free functions only.
-// Membership rule: value-returning, backend from the Queue, workspace from the
-// arena => linalg::; out-parameter, workspace yours => batchlas::.
-// See docs/cpp-api.md#the-linalg-convenience-layer.
+/// @file
+/// @brief The batchlas::linalg convenience layer: elementwise operations and value-returning wrappers.
+/// @ingroup linalg
+
+/**
+ * @addtogroup linalg
+ * @details
+ * Free functions only, no operator overloads. Membership rule: value-returning,
+ * backend from the Queue, workspace from the Queue's arena => `linalg::`;
+ * out-parameter, workspace yours => `batchlas::`.
+ *
+ * Every function here **enqueues and returns without waiting**, including the
+ * value-returning ones: a returned matrix is readable only after `ctx.wait()`.
+ * The exceptions are norm(), cond() and svd(), which wait. Inputs are never
+ * modified, except by the `_into` forms (which write their last matrix argument)
+ * and scale(). A value-returning call allocates its result, so prefer the `_into`
+ * forms in an inner loop. User guide: @ref md_docs_2cpp-api (the `linalg` section);
+ * design notes: @ref design_api_conventions.
+ */
+
 namespace batchlas::linalg {
+
+/// @addtogroup linalg
+/// @{
 
 // ---- elementwise -----------------------------------------------------------
 
-// BATCHLAS_API for the same reason Backend and MatrixFormat carry it -- see the
-// note at the top of blas/enums.hh. This is the third enum in the public surface
-// used as a template ARGUMENT, and an instantiation takes the minimum of the
-// template's visibility and its arguments'. Without it, all four
-// elementwise_into<float, BinaryOp::*> specialisations stayed hidden while
-// their BATCHLAS_API declaration looked correct. Found by set-diffing the
-// library's exported symbols against what consumers actually link, not by
-// reading: nothing about the declaration looks wrong.
+/// @brief Elementwise operation selected by elementwise_into().
+// BATCHLAS_API is load-bearing: an enum used as a template argument must be
+// exported or every instantiation over it is hidden (see blas/enums.hh).
+// evidence: docs/design/symbol-visibility.md#symbol-visibility-binaryop-is-a-template-argument-enum-too
 enum class BATCHLAS_API BinaryOp { Add, Subtract, Multiply, Divide };
 
 // Signature aliases for explicit instantiation; see BATCHLAS_INSTANTIATE in
@@ -70,15 +80,28 @@ using triangular_mask_into = Event(Queue&,
                                    int64_t);
 }  // namespace sig
 
-// C = op(A, B), elementwise, for matching shapes. Aliasing C with A or B is
-// allowed: each work-item reads and writes one element.
+/// @brief Elementwise \f$C := A \circ B\f$ for \f$\circ\f$ = Op, per batch item.
+/// @tparam T   scalar type
+/// @tparam Op  Add, Subtract, Multiply (Hadamard) or Divide
+/// @param ctx  queue the kernel is enqueued on
+/// @param A    first operand
+/// @param B    second operand, same shape and batch size as `A`
+/// @param C    output of the same shape; may alias `A` or `B`
+/// @return     event of the enqueued kernel
 template <typename T, BinaryOp Op>
 BATCHLAS_API Event elementwise_into(Queue& ctx,
                                     const MatrixView<T, MatrixFormat::Dense>& A,
                                     const MatrixView<T, MatrixFormat::Dense>& B,
                                     const MatrixView<T, MatrixFormat::Dense>& C);
 
-// C = alpha*A + beta*B.
+/// @brief \f$C := \alpha A + \beta B\f$, elementwise, per batch item.
+/// @param ctx    queue the kernel is enqueued on
+/// @param alpha  scale of `A`
+/// @param A      first operand
+/// @param beta   scale of `B`
+/// @param B      second operand, same shape and batch size as `A`
+/// @param C      output of the same shape; may alias `A` or `B`
+/// @return       event of the enqueued kernel
 template <typename T>
 BATCHLAS_API Event axpby_into(Queue& ctx,
                               T alpha,
@@ -87,12 +110,19 @@ BATCHLAS_API Event axpby_into(Queue& ctx,
                               const MatrixView<T, MatrixFormat::Dense>& B,
                               const MatrixView<T, MatrixFormat::Dense>& C);
 
+/// @brief In-place scaling \f$A := \alpha A\f$.
+/// @return event of the enqueued kernel
 template <typename T>
 BATCHLAS_API Event scale(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, T alpha);
 
-// C = A with everything outside the requested triangle zeroed. `k` follows
-// NumPy: 0 keeps the main diagonal, > 0 moves the boundary toward the upper
-// right, < 0 toward the lower left. Aliasing C with A is allowed.
+/// @brief \f$C :=\f$ A with everything outside the requested triangle zeroed.
+/// @param ctx   queue the kernel is enqueued on
+/// @param A     input, m x n per item
+/// @param C     output of the same shape; may alias `A`
+/// @param uplo  Upper keeps the part on and above diagonal `k`, Lower on and below
+/// @param k     diagonal offset, as NumPy `triu`/`tril`: 0 is the main diagonal,
+///              > 0 toward the upper right, < 0 toward the lower left
+/// @return      event of the enqueued kernel
 template <typename T>
 BATCHLAS_API Event triangular_mask_into(Queue& ctx,
                                         const MatrixView<T, MatrixFormat::Dense>& A,
@@ -100,6 +130,7 @@ BATCHLAS_API Event triangular_mask_into(Queue& ctx,
                                         Uplo uplo,
                                         int64_t k = 0);
 
+/// @brief \f$C := A + B\f$ elementwise; see elementwise_into().
 template <typename T>
 inline Event add_into(Queue& ctx,
                       const MatrixView<T, MatrixFormat::Dense>& A,
@@ -108,6 +139,7 @@ inline Event add_into(Queue& ctx,
     return elementwise_into<T, BinaryOp::Add>(ctx, A, B, C);
 }
 
+/// @brief \f$C := A - B\f$ elementwise; see elementwise_into().
 template <typename T>
 inline Event subtract_into(Queue& ctx,
                            const MatrixView<T, MatrixFormat::Dense>& A,
@@ -116,7 +148,7 @@ inline Event subtract_into(Queue& ctx,
     return elementwise_into<T, BinaryOp::Subtract>(ctx, A, B, C);
 }
 
-// Elementwise (Hadamard), not matrix multiplication -- see matmul for that.
+/// @brief \f$C := A \odot B\f$ elementwise (Hadamard), not the matrix product; see matmul().
 template <typename T>
 inline Event multiply_into(Queue& ctx,
                            const MatrixView<T, MatrixFormat::Dense>& A,
@@ -125,6 +157,7 @@ inline Event multiply_into(Queue& ctx,
     return elementwise_into<T, BinaryOp::Multiply>(ctx, A, B, C);
 }
 
+/// @brief \f$C := A \oslash B\f$ elementwise; see elementwise_into().
 template <typename T>
 inline Event divide_into(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& A,
@@ -133,6 +166,8 @@ inline Event divide_into(Queue& ctx,
     return elementwise_into<T, BinaryOp::Divide>(ctx, A, B, C);
 }
 
+/// @}
+
 namespace detail {
 template <typename T>
 inline Matrix<T, MatrixFormat::Dense> like(const MatrixView<T, MatrixFormat::Dense>& A) {
@@ -140,17 +175,21 @@ inline Matrix<T, MatrixFormat::Dense> like(const MatrixView<T, MatrixFormat::Den
 }
 }  // namespace detail
 
+/// @addtogroup linalg
+/// @{
+
+/// @brief Returns a new matrix \f$A + B\f$ (elementwise).
 template <typename T>
 inline Matrix<T, MatrixFormat::Dense> add(Queue& ctx,
                                           const MatrixView<T, MatrixFormat::Dense>& A,
                                           const MatrixView<T, MatrixFormat::Dense>& B) {
     auto C = detail::like(A);
-    // (void) on an Event: deliberate. This Queue is in-order, so the next submission
-    // is already ordered after this one and the Event carries nothing the caller needs.
+    // (void) on an Event is deliberate: the in-order Queue already orders the next call.
     (void)add_into<T>(ctx, A, B, C.view());
     return C;
 }
 
+/// @brief Returns a new matrix \f$A - B\f$ (elementwise).
 template <typename T>
 inline Matrix<T, MatrixFormat::Dense> subtract(Queue& ctx,
                                                const MatrixView<T, MatrixFormat::Dense>& A,
@@ -160,6 +199,7 @@ inline Matrix<T, MatrixFormat::Dense> subtract(Queue& ctx,
     return C;
 }
 
+/// @brief Returns a new matrix \f$A \odot B\f$ (Hadamard, not matmul()).
 template <typename T>
 inline Matrix<T, MatrixFormat::Dense> multiply(Queue& ctx,
                                                const MatrixView<T, MatrixFormat::Dense>& A,
@@ -169,6 +209,7 @@ inline Matrix<T, MatrixFormat::Dense> multiply(Queue& ctx,
     return C;
 }
 
+/// @brief Returns a new matrix \f$A \oslash B\f$ (elementwise).
 template <typename T>
 inline Matrix<T, MatrixFormat::Dense> divide(Queue& ctx,
                                              const MatrixView<T, MatrixFormat::Dense>& A,
@@ -178,6 +219,7 @@ inline Matrix<T, MatrixFormat::Dense> divide(Queue& ctx,
     return C;
 }
 
+/// @brief Returns a new matrix \f$\alpha A\f$; `A` is not modified (scale() works in place).
 template <typename T>
 inline Matrix<T, MatrixFormat::Dense> scaled(Queue& ctx,
                                              const MatrixView<T, MatrixFormat::Dense>& A,
@@ -189,17 +231,21 @@ inline Matrix<T, MatrixFormat::Dense> scaled(Queue& ctx,
 
 // ---- value-returning wrappers ---------------------------------------------
 
-// Deliberately NOT GemmOptions: matmul allocates C, so a caller-supplied `beta`
-// would read uninitialised memory. Omitting it makes naming it a compile error.
+/// @brief Options for matmul(). Deliberately has no `beta`: C is freshly allocated.
 template <typename T>
 struct MatmulOptions {
-    T alpha = T(1);
-    Transpose transA = Transpose::NoTrans;
-    Transpose transB = Transpose::NoTrans;
-    ComputePrecision precision = ComputePrecision::Default;
+    T alpha = T(1);                                          ///< scale of the product
+    Transpose transA = Transpose::NoTrans;                   ///< op(A)
+    Transpose transB = Transpose::NoTrans;                   ///< op(B)
+    ComputePrecision precision = ComputePrecision::Default;  ///< internal compute type
 };
 
-// C = alpha * op(A) * op(B), allocated here and fully written.
+/// @brief Returns a new matrix \f$C = \alpha\,\mathrm{op}(A)\,\mathrm{op}(B)\f$.
+/// @param ctx   queue; supplies the backend
+/// @param A     `op(A)` is m x k per item
+/// @param B     `op(B)` is k x n per item, same batch size
+/// @param opts  alpha, transA, transB, precision
+/// @return      m x n x batch matrix, fully written once the queue is waited on
 template <typename T>
 inline Matrix<T, MatrixFormat::Dense> matmul(Queue& ctx,
                                              const MatrixView<T, MatrixFormat::Dense>& A,
@@ -219,9 +265,16 @@ inline Matrix<T, MatrixFormat::Dense> matmul(Queue& ctx,
     return C;
 }
 
+/// @brief Default triangle of the linalg wrappers that read one.
 inline constexpr Uplo kDefaultUplo = Uplo::Lower;
 
-// Cholesky factor of A, as a new matrix. A is not modified.
+/// @brief Returns the Cholesky factor of a Hermitian positive-definite A; A is not modified.
+/// @param ctx   queue; supplies the backend and the arena
+/// @param A     n x n per item; the `uplo` triangle is read
+/// @param uplo  Lower gives \f$L\f$ with \f$A = LL^H\f$, Upper gives \f$U\f$ with \f$A = U^HU\f$
+/// @return      new matrix holding the factor in the `uplo` triangle; the other
+///              triangle holds a copy of A's
+/// @note  No status is reported; a non-positive-definite item yields an undefined factor.
 template <typename T>
 inline Matrix<T, MatrixFormat::Dense> cholesky(Queue& ctx,
                                                const MatrixView<T, MatrixFormat::Dense>& A,
@@ -232,7 +285,11 @@ inline Matrix<T, MatrixFormat::Dense> cholesky(Queue& ctx,
     return L;
 }
 
-// Eigenvalues of a symmetric/Hermitian A, ascending. A is not modified.
+/// @brief Returns the eigenvalues of a symmetric/Hermitian A, ascending per item; A is not modified.
+/// @param ctx   queue; supplies the backend and the arena
+/// @param A     n x n per item; the `uplo` triangle is read
+/// @param uplo  triangle of A that is read
+/// @return      real vector of `n * batch_size` values, item b at offset `b * n`
 template <typename T>
 inline UnifiedVector<typename base_type<T>::type> eigvalsh(Queue& ctx,
                                                            const MatrixView<T, MatrixFormat::Dense>& A,
@@ -245,19 +302,22 @@ inline UnifiedVector<typename base_type<T>::type> eigvalsh(Queue& ctx,
     return W;
 }
 
+/// @brief Result of eigh().
 template <typename T>
 struct Eigh {
-    UnifiedVector<typename base_type<T>::type> values;
-    Matrix<T, MatrixFormat::Dense> vectors;
-    // Per-item convergence status, one int32 per batch item: 0 converged, > 0
-    // LAPACK-like. The value-returning layer ALWAYS asks for it -- a caller here
-    // has no workspace of their own and no other way to find out, and at batch
-    // 16384 a single non-converged item is otherwise invisible: `values` and
-    // `vectors` come back looking exactly like a converged solve.
+    UnifiedVector<typename base_type<T>::type> values;  ///< ascending, `n` per batch item
+    Matrix<T, MatrixFormat::Dense> vectors;             ///< eigenvectors as columns, n x n per item
+    /// Per-item convergence status: 0 converged, > 0 LAPACK-like. Always filled;
+    /// check it, since a non-converged item otherwise looks like a converged one.
     UnifiedVector<int32_t> info;
 };
 
-// Eigenvalues and eigenvectors of a symmetric/Hermitian A. A is not modified.
+/// @brief Eigenvalues and eigenvectors of a symmetric/Hermitian A; A is not modified.
+/// @param ctx   queue; supplies the backend and the arena
+/// @param A     n x n per item; the `uplo` triangle is read
+/// @param uplo  triangle of A that is read
+/// @return      values, vectors and per-item info, valid after the queue is waited on
+/// @throws batchlas::invalid_argument if `A` is not square
 template <typename T>
 inline Eigh<T> eigh(Queue& ctx,
                     const MatrixView<T, MatrixFormat::Dense>& A,
@@ -265,41 +325,32 @@ inline Eigh<T> eigh(Queue& ctx,
     UnifiedVector<typename base_type<T>::type> W(static_cast<size_t>(A.rows()) *
                                                  static_cast<size_t>(A.batch_size()));
     UnifiedVector<int32_t> info(static_cast<size_t>(A.batch_size()));
-    // Kept from the SyevOptions overload this used to go through: the positional
-    // spelling below has no squareness check of its own, and a non-square view
-    // otherwise reaches the backend and gets factorised as rows() x rows().
-    // Qualified, because `detail::` here would find batchlas::linalg::detail.
+    // The positional syev below does not check squareness. Qualified: `detail::`
+    // here would find batchlas::linalg::detail.
     ::batchlas::detail::require_square("eigh", "A", A);
     auto V = detail::like(A);
     (void)MatrixView<T, MatrixFormat::Dense>::copy(ctx, V.view(), A);
-    // Spelled positionally rather than through the SyevOptions overload because
-    // SyevOptions carries no `info` field (unlike PotrfOptions); the workspace
-    // lease is taken here exactly as that overload takes it.
+    // Positional because SyevOptions has no `info` field.
     auto lease = ctx.workspace(
         syev_buffer_size(ctx, V.view(), W.to_span(), JobType::EigenVectors, uplo));
     (void)syev(ctx, V.view(), W.to_span(), JobType::EigenVectors, uplo, lease.span(),
                info.to_span());
-    // `info` is written by the kernels and read by the caller after they wait, so
-    // it does not need a wait here -- it is moved into the result and outlives the
-    // call, unlike the local scratch in svd() below.
+    // No wait needed: `info` is moved into the result (unlike svd()'s local scratch).
     return Eigh<T>{std::move(W), std::move(V), std::move(info)};
 }
 
-// Solve op(A) X = B for X by LU with partial pivoting. Neither A nor B is modified.
-// Pivots and workspace both come from the arena: a local would be freed before the
-// kernels run.
-//
-// THE `trans` BRANCH IS NOT STYLISTIC -- do not flatten it. `gesv` has no Transpose
-// parameter (blas/functions/gesv.hh), so only NoTrans can reach it and Trans /
-// ConjTrans keep the hand-composed getrf + getrs. No shape gate guards the gesv
-// call either: gesv itself picks between its fused kernel and that same composition
-// (dispatch/route_gesv.hh), and a copy of that window here would drift from it.
-//
-// BEHAVIOUR CHANGE, deliberate: route_gesv's supports() refuses every route when an
-// extent is degenerate (n, nrhs or batch < 1), and the entry point then throws
-// (solve_throw_unroutable). The old hand-composed body enqueued nothing instead.
-// This makes `solve` agree with `solve_spd`, which has thrown on the identical
-// guard in route_posv.hh since P2.
+/// @brief Solves \f$\mathrm{op}(A_i)X_i = B_i\f$ by LU with partial pivoting; returns X.
+///
+/// Neither A nor B is modified; pivots and workspace come from the arena. No
+/// status is reported: a singular or near-singular item yields a plausible-looking
+/// but wrong X, so check the residual where conditioning is not known.
+/// @param ctx    queue; supplies the backend and the arena
+/// @param A      n x n per item
+/// @param B      n x nrhs per item, same batch size
+/// @param trans  op(A)
+/// @return       new n x nrhs x batch matrix
+/// @throws batchlas::exception (NoTrans) when an extent (n, nrhs or batch) is below
+///         1: no route serves a degenerate shape
 template <typename T>
 inline Matrix<T, MatrixFormat::Dense> solve(Queue& ctx,
                                             const MatrixView<T, MatrixFormat::Dense>& A,
@@ -315,9 +366,11 @@ inline Matrix<T, MatrixFormat::Dense> solve(Queue& ctx,
     auto pivot_bytes = ctx.workspace(n_pivots * sizeof(int64_t));
     Span<int64_t> pivots(reinterpret_cast<int64_t*>(pivot_bytes.data()), n_pivots);
 
+    // Not stylistic, do not flatten: gesv has no Transpose parameter. No shape gate
+    // here either; gesv routes itself. Degenerate extents throw (deliberate).
+    // evidence: docs/design/api-conventions.md#api-conventions-linalgsolve-keeps-its-transpose-branch
     if (trans == Transpose::NoTrans) {
-        // Acquired after the pivot lease and released before it -- reverse order,
-        // the case the arena returns immediately.
+        // Released before the pivot lease (reverse order): the arena reuses it at once.
         auto lease = ctx.workspace(gesv_buffer_size(ctx, LU.view(), X.view()));
         (void)gesv(ctx, LU.view(), X.view(), pivots, lease.span(), Span<int32_t>{});
         return X;
@@ -328,18 +381,18 @@ inline Matrix<T, MatrixFormat::Dense> solve(Queue& ctx,
     return X;
 }
 
-// Solve A X = B for Hermitian positive-definite A by Cholesky. Neither A nor B is
-// modified.
-//
-// SPELLED ON `posv`, NOT ON `solve` ABOVE, and the difference is not stylistic: LU
-// with partial pivoting is backward stable for any nonsingular A, so `solve` is the
-// safe default and stays the one every existing caller reaches. This entry point
-// trades that generality for roughly half the arithmetic and makes the SPD claim the
-// caller's; a matrix that is not positive definite comes back as a non-zero `info`
-// and an undefined X, exactly as LAPACK's ?POSV does.
-//
-// The workspace is an arena lease, as everywhere in this layer: a local Span would
-// be freed before the kernels it feeds have run.
+/// @brief Solves \f$A_iX_i = B_i\f$ for Hermitian positive-definite A by Cholesky; returns X.
+///
+/// About half the arithmetic of solve(), which stays the safe default: the SPD
+/// claim is the caller's. A matrix that is not positive definite gives an
+/// undefined X for that item, as LAPACK `?POSV`, and nothing is reported.
+/// Neither A nor B is modified; the workspace comes from the arena.
+/// @param ctx   queue; supplies the backend and the arena
+/// @param A     n x n per item; the `uplo` triangle is read
+/// @param B     n x nrhs per item
+/// @param uplo  triangle of A that is read
+/// @return      new n x nrhs x batch matrix
+/// @throws batchlas::exception when an extent (n, nrhs or batch) is below 1
 template <typename T>
 inline Matrix<T, MatrixFormat::Dense> solve_spd(Queue& ctx,
                                                 const MatrixView<T, MatrixFormat::Dense>& A,
@@ -356,7 +409,7 @@ inline Matrix<T, MatrixFormat::Dense> solve_spd(Queue& ctx,
     return X;
 }
 
-// A with everything below (triu) or above (tril) the k-th diagonal zeroed.
+/// @brief Returns a copy of A with everything below diagonal `k` zeroed (NumPy `triu`).
 template <typename T>
 inline Matrix<T, MatrixFormat::Dense> triu(Queue& ctx,
                                            const MatrixView<T, MatrixFormat::Dense>& A,
@@ -366,6 +419,7 @@ inline Matrix<T, MatrixFormat::Dense> triu(Queue& ctx,
     return C;
 }
 
+/// @brief Returns a copy of A with everything above diagonal `k` zeroed (NumPy `tril`).
 template <typename T>
 inline Matrix<T, MatrixFormat::Dense> tril(Queue& ctx,
                                            const MatrixView<T, MatrixFormat::Dense>& A,
@@ -376,18 +430,20 @@ inline Matrix<T, MatrixFormat::Dense> tril(Queue& ctx,
 }
 
 // ---- forwarding aliases ----------------------------------------------------
-// Every call below must stay EXPLICITLY qualified with ::batchlas::: linalg is
-// nested inside batchlas, so `return inv(ctx, A);` here is infinite recursion.
+// Every call below must stay qualified with ::batchlas::: linalg is nested inside
+// batchlas, so `return inv(ctx, A);` here is infinite recursion.
 
-// A^-1, as a new matrix. A is not modified. Square only (getrf's precondition).
+/// @brief Returns \f$A^{-1}\f$ as a new matrix; A is not modified.
+/// @pre `A` is square
 template <typename T>
 inline Matrix<T, MatrixFormat::Dense> inv(Queue& ctx,
                                           const MatrixView<T, MatrixFormat::Dense>& A) {
     return ::batchlas::inv(ctx, A);
 }
 
-// Plain transpose, NOT the conjugate transpose. Real only: transpose_impl does
-// not conjugate, so the `requires` makes a complex call a compile error.
+/// @brief Returns \f$A^T\f$ as a new matrix. Real `T` only.
+///
+/// Plain transpose; a complex call is a compile error because nothing conjugates.
 template <typename T>
     requires RealScalar<T>
 inline Matrix<T, MatrixFormat::Dense> transpose(Queue& ctx,
@@ -395,8 +451,8 @@ inline Matrix<T, MatrixFormat::Dense> transpose(Queue& ctx,
     return ::batchlas::transpose<T, MatrixFormat::Dense>(ctx, A);
 }
 
-// One norm per batch item. THIS ONE WAITS: ::batchlas::norm calls .wait()
-// internally; its out-parameter form stays asynchronous.
+/// @brief Returns one norm per batch item. **Blocks** until the result is ready.
+/// @see batchlas::norm for the asynchronous out-parameter form
 template <typename T>
 inline UnifiedVector<typename base_type<T>::type> norm(
         Queue& ctx,
@@ -405,8 +461,9 @@ inline UnifiedVector<typename base_type<T>::type> norm(
     return ::batchlas::norm<T, MatrixFormat::Dense>(ctx, A, norm_type);
 }
 
-// Condition number per batch item, ||A|| * ||A^-1|| (eigenvalue ratio for
-// Spectral). WAITS, like norm. Real only.
+/// @brief Returns \f$\|A_i\|\,\|A_i^{-1}\|\f$ per item (eigenvalue-magnitude ratio for Spectral).
+///
+/// **Blocks** until the result is ready. Real `T` only.
 template <typename T>
     requires RealScalar<T>
 inline UnifiedVector<T> cond(Queue& ctx,
@@ -417,19 +474,27 @@ inline UnifiedVector<T> cond(Queue& ctx,
 
 // ---- composites ------------------------------------------------------------
 
+/// @brief Result of svd().
 template <typename T>
 struct Svd {
-    Matrix<T, MatrixFormat::Dense> U;                   // m x m (All) or m x k (Thin)
-    UnifiedVector<typename base_type<T>::type> values;  // k = min(m, n) per batch item
-    Matrix<T, MatrixFormat::Dense> Vh;                  // n x n (All) or k x n (Thin)
-    // Per-item convergence status; see Eigh::info above. Always requested, for
-    // the same reason.
+    Matrix<T, MatrixFormat::Dense> U;                   ///< m x m (All) or m x k (Thin)
+    UnifiedVector<typename base_type<T>::type> values;  ///< k = min(m, n) per batch item
+    Matrix<T, MatrixFormat::Dense> Vh;                  ///< n x n (All) or k x n (Thin)
+    /// Per-item convergence status, as Eigh::info. Always filled.
     UnifiedVector<int32_t> info;
 };
 
-// Singular value decomposition. A is not modified -- gesvd overwrites its input,
-// so it gets a copy. Complex input can throw at run time: no blocked route has a
-// complex path, and the cta route rejects max(m, n) > 32.
+/// @brief Singular value decomposition \f$A_i = U_i\Sigma_iV_i^H\f$; A is not modified.
+///
+/// **Blocks** before returning (its internal copy of A must outlive the kernels).
+/// @param ctx      queue; supplies the backend and the arena
+/// @param A        m x n per item
+/// @param vectors  All or Thin
+/// @return         U, singular values, Vh and per-item info
+/// @throws batchlas::invalid_argument for SvdVectors::None; call batchlas::gesvd
+///         directly for values only
+/// @note Complex input can throw at run time: no blocked route has a complex path,
+///       and the cta route rejects max(m, n) > 32.
 template <typename T>
 inline Svd<T> svd(Queue& ctx,
                   const MatrixView<T, MatrixFormat::Dense>& A,
@@ -455,27 +520,28 @@ inline Svd<T> svd(Queue& ctx,
                                                  static_cast<size_t>(batch));
 
     UnifiedVector<int32_t> info(static_cast<size_t>(batch));
-    // Positional, not GesvdOptions: that struct carries no `info` field. The
-    // workspace lease mirrors what the option overload takes.
+    // Positional because GesvdOptions has no `info` field.
     auto lease = ctx.workspace(::batchlas::gesvd_buffer_size(
         ctx, work.view(), S.to_span(), U.view(), Vh.view(), vectors, vectors));
     (void)::batchlas::gesvd(ctx, work.view(), S.to_span(), U.view(), Vh.view(), vectors, vectors,
                       lease.span(), info.to_span());
 
-    // `work` is local scratch gesvd reads and overwrites, and ~Matrix frees its
-    // USM without waiting: returning early frees it under enqueued kernels.
+    // ~Matrix frees `work` without waiting; returning early frees it under the kernels.
     ctx.wait();
     return Svd<T>{std::move(U), std::move(S), std::move(Vh), std::move(info)};
 }
 
+/// @brief Result of lu().
 template <typename T>
 struct Lu {
-    Matrix<T, MatrixFormat::Dense> factors;  // L and U packed; L's unit diagonal is implicit
-    UnifiedVector<int64_t> pivots;           // rows * batch_size, LAPACK ipiv convention
+    Matrix<T, MatrixFormat::Dense> factors;  ///< L and U packed; L's unit diagonal is implicit
+    UnifiedVector<int64_t> pivots;           ///< rows * batch_size, in getrf()'s pivot format
 };
 
-// LU factorisation with partial pivoting. A is not modified. Square only. The
-// pivots are a UnifiedVector, not an arena lease as in `solve`: they outlive it.
+/// @brief LU factorisation with partial pivoting, \f$A_i = P_iL_iU_i\f$; A is not modified.
+/// @pre `A` is square
+/// @return packed factors and pivots, valid after the queue is waited on
+// Pivots are a UnifiedVector, not an arena lease as in solve(): they outlive the call.
 template <typename T>
 inline Lu<T> lu(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
     auto LU = detail::like(A);
@@ -486,9 +552,10 @@ inline Lu<T> lu(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
     return Lu<T>{std::move(LU), std::move(pivots)};
 }
 
-// linalg::qr is deliberately absent: geqrf + triangular_mask_into + orgqr
-// returned Q R != A once an earlier linalg::qr test had run in the same process,
-// and passed alone; cause unknown (repro: tests/linalg_layer_tests.cc, 4x).
+// linalg::qr is deliberately absent: an unexplained cross-Queue wrong answer.
+// evidence: docs/design/known-defects.md#linalgqr-returns-a-wrong-qr-after-an-earlier-call-in-the-process
 
+
+/// @}
 
 }  // namespace batchlas::linalg

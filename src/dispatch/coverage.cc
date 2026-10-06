@@ -172,10 +172,7 @@ void append_static_rows(std::ostringstream& out) {
     const Entry entries[] = {
         {"gemm",  level3_vendor_available<B>,        true},
         {"gemv",  level3_vendor_available<B>,        true},
-        // WP3 shipped trsm_native_cta and trsm_native_blocked, and
-        // trsm_blocked_available<T>() is true for all four scalar types, so by
-        // this column's own meaning -- is the kernel IN THIS BUILD -- the row was
-        // stale in the direction that makes the burn-down look worse than it is.
+        // Native trsm is linked for all four scalar types. evidence: docs/perf/dispatch.md#dispatch-the-coverage-instrument
         {"trsm",  level3_vendor_available<B>,        true},
         {"trmm",  level3_vendor_available<B>,        tiles_f32},
         // symm has no tile kernel; its portable path is the mirrored expansion

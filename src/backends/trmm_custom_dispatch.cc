@@ -23,17 +23,8 @@ namespace {
 
 constexpr int kTrmmCublasDxTile = 32;
 
-// ONE VARIABLE, TWO PARSERS. BATCHLAS_TRMM_VARIANT used to be read twice, by
-// parsers that did not agree on its vocabulary: parse_cublasdx_variant_request
-// understood vendor / cublasdx|dx|custom / auto and returned Auto for anything
-// else, while trmm_triangular_requested separately looked for triangular|tiles.
-// So `=triangular` was simultaneously "no opinion" to one reader and "pin the
-// tile kernel" to the other, and the two had to be consulted together at four
-// call sites for the pair to mean anything. That is the mangling this work
-// package is named after, in its smallest form.
-//
-// Now there is one parse and one value. Legacy spellings are unchanged and
-// pinned by tests/route_vocabulary_tests.cc.
+// The ONE parse of BATCHLAS_TRMM_VARIANT; do not add a second reader.
+// evidence: docs/perf/level3.md#level-3-one-route-parse-per-variable
 dispatch::Route trmm_route_request() {
     const auto parsed = dispatch::parse_route_env(dispatch::Op::trmm);
     return parsed.found ? parsed.route
@@ -46,11 +37,8 @@ bool trmm_triangular_requested() {
     return trmm_route_request().algo == dispatch::Algorithm::TriangularTiles;
 }
 
-// Every left-side float problem with a homogeneous batch. The kernel indexes
-// both operands as base + batch * stride, which a batch of unrelated pointers
-// or differing shapes is out of reach of; everything else it handles, because
-// uplo, trans and diag are loop bounds and a staging mask rather than separate
-// kernels.
+// Every left-side float problem with a homogeneous batch (base + batch*stride
+// indexing); uplo, trans and diag are loop bounds and a staging mask.
 bool trmm_triangular_supported(const MatrixView<float, MatrixFormat::Dense>& A,
                                const MatrixView<float, MatrixFormat::Dense>& B,
                                const MatrixView<float, MatrixFormat::Dense>& C,
@@ -73,25 +61,8 @@ bool trmm_triangular_supported(const MatrixView<float, MatrixFormat::Dense>& A,
     return C.rows() > 0 && C.cols() > 0;
 }
 
-// There is no threshold here, and the first cut of this router had one because
-// it asked the wrong question. Whether trmm beats the *gemm* spelling of the
-// same product depends strongly on m -- see the header of
-// trmm_triangular_tiles.hh -- but that is a question for the caller. What this
-// router chooses between is the tile kernel and the expansion-plus-GEMM, and
-// against that the tile kernel wins nearly everywhere, including exactly the
-// m = 128..256 band a gemm-calibrated threshold had excluded.
-//
-// Measured in float on RTX 4090 / sm_89, tile against vendor, at batch sizes
-// that saturate (ms):
-//
-//   m=128 nC=512  batch 1024   0.698 vs 0.784
-//   m=128 nC=1024 batch 512    0.686 vs 0.687
-//   m=256 nC=256  batch 512    0.536 vs 0.692
-//   m=256 nC=1024 batch 256    0.915 vs 0.855   <- the one loss, 7%
-//
-// Gating on m therefore cost up to 1.29x on the shapes it was meant to protect.
-// The single 7% cell is not worth a special case that would have to be
-// re-tuned every time either route changes.
+// No m threshold, deliberately: the rival here is the expansion, not a GEMM.
+// evidence: docs/perf/level3.md#trmm-tiles-have-no-threshold
 
 bool trmm_problem_supported(const MatrixView<float, MatrixFormat::Dense>& A,
                             const MatrixView<float, MatrixFormat::Dense>& B,
@@ -146,10 +117,7 @@ bool trmm_use_cuda_custom(const Queue& ctx,
                           Uplo uplo,
                           Transpose transA,
                           Diag) {
-    // `=vendor` has to keep meaning the vendor even though the tile kernel is
-    // now the default: it is the only "before" a measurement can be taken
-    // against, and a pin that silently returns the new route would report the
-    // new route as the old one.
+    // `=vendor` must keep meaning the vendor: it is the only "before" to measure against.
     if (detail::is_gpu_queue(ctx) && trmm_triangular_supported(A, B, C, side) &&
         (trmm_triangular_requested() ||
          !dispatch::is_plain_vendor(trmm_route_request()))) {
@@ -174,14 +142,8 @@ Event trmm_cuda_custom(Queue& ctx,
                        Uplo uplo,
                        Transpose transA,
                        Diag diag) {
-    // WP1 S0 instrumentation -- beside every return, never in place of one, and
-    // inert unless BATCHLAS_COVERAGE_OUT is set. See level3_coverage.hh.
-    //
-    // trmm is the op with the documented prior incident where the tempting 8x
-    // "fix" was the wrong-answer one and the guarding test could not fail by
-    // construction, so uplo/diag are deliberately carried into the shape here:
-    // a route row that cannot distinguish uplo is a row that cannot catch that
-    // class of defect coming back.
+    // Coverage record: beside every return, never in place of one. uplo/diag are
+    // in the key on purpose. evidence: docs/perf/level3.md#the-trmm-poison-test
     const auto rec = [&](dispatch::Route taken, bool native_supported) {
         detail::record_level3_route(dispatch::Op::trmm, taken,
                                     C.rows(), C.cols(), A.rows(),
@@ -197,8 +159,7 @@ Event trmm_cuda_custom(Queue& ctx,
         rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::Auto}, false);
         return detail::trmm_vendor_fallback(ctx, A, B, C, alpha, side, uplo, transA, diag);
     }
-    // The tile kernel is the only route that respects the triangle rather than
-    // expanding it, so it is what the automatic choice takes wherever it fits.
+    // Auto takes the tile kernel wherever it fits.
     if (trmm_triangular_supported(A, B, C, side) &&
         (trmm_triangular_requested() ||
          (!forced && !dispatch::is_plain_vendor(trmm_route_request())))) {
@@ -213,9 +174,7 @@ Event trmm_cuda_custom(Queue& ctx,
         return detail::trmm_vendor_fallback(ctx, A, B, C, alpha, side, uplo, transA, diag);
     }
 
-    // The fused tail lives in level3_fused_cuda.cc now (WP1 S3). trmm is the op
-    // whose two non-Ran outcomes differ from each other: both fall back to the
-    // vendor, but each throws a DIFFERENT message when the route was forced.
+    // Both non-Ran outcomes fall back to the vendor, with distinct messages when forced.
     auto fused = detail::trmm_fused_try(ctx, A, B, C, alpha, side, uplo, transA, diag);
     if (fused.outcome == detail::FusedResult::Outcome::Ran) {
         rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::FusedDevice}, true);

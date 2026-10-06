@@ -1,5 +1,11 @@
 #pragma once
 
+/// @file
+/// @brief Blocked (WY) application of Q from geqrf reflectors. Kernel helper, not API.
+///
+/// Installed only because public headers include it; not a stable interface.
+/// @ingroup internal_helpers
+
 #include <batchlas/export.hh>
 #include <batchlas/blas/enums.hh>
 #include <batchlas/blas/matrix.hh>
@@ -9,18 +15,17 @@
 
 namespace batchlas {
 
-// Blocked application of Q from a QR factorization using the classic WY representation:
-//   H = I - V T V^H   (LAPACK LARFT/LARFB style)
-// and level-3 BLAS (GEMM).
-//
-// Intended for medium sizes where the CTA kernels are not applicable.
-//
-// Notes:
-// - Assumes reflectors come from GEQRF (QR, Forward/Columnwise, unit-lower V).
-// - Supports batched inputs via strided-batch views.
-// - Requires an in-order Queue for correct sequencing across the packing/LARFT/GEMM steps.
-// - Workspace is required for explicit V, T, and intermediate W buffers.
-
+/// @brief Blocked native arm of ormqr(): applies Q with the compact WY form.
+///
+/// Groups the geqrf() reflectors (forward, columnwise, unit-lower V) into panels
+/// of @p block_size and applies each as \f$ I - V T V^H \f$ (LAPACK
+/// `larft`/`larfb`) with level-3 GEMMs. Same result as ormqr(); batched through
+/// strided-batch views.
+/// @pre @p ctx is in-order (the pack / larft / GEMM steps are not separately ordered)
+/// @pre @p workspace holds at least ormqr_blocked_buffer_size() bytes (V, T and W)
+/// @throws batchlas::invalid_argument on mismatched batch or order, a short @p tau,
+///         or an out-of-order @p ctx
+/// @ingroup internal_helpers
 template <Backend B, typename T>
 BATCHLAS_API Event ormqr_blocked(Queue& ctx,
                                  const MatrixView<T, MatrixFormat::Dense>& a,
@@ -31,6 +36,8 @@ BATCHLAS_API Event ormqr_blocked(Queue& ctx,
                                  Span<std::byte> workspace,
                                  int32_t block_size = tuning::ORMQR_BLOCK_SIZE_MEDIUM);
 
+/// @brief Workspace, in bytes, that ormqr_blocked() needs for this @p block_size.
+/// @ingroup internal_helpers
 template <Backend B, typename T>
 BATCHLAS_API size_t ormqr_blocked_buffer_size(Queue& ctx,
                                               const MatrixView<T, MatrixFormat::Dense>& a,

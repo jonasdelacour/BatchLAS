@@ -92,10 +92,8 @@ size_t spmm_buffer_size(Queue& ctx,
         ctx, A, B_mat, C, transA, transB,
         /*vendor_available=*/dispatch::sparse_vendor_available<B>);
 
-    // max() over every supported native tier, not the resolved one, so a
-    // query/call disagreement over- rather than under-allocates. `native_fired`
-    // cannot be `native_need != 0`: the native need is exactly zero. Nothing
-    // here may touch device memory: row_offsets()/nnz() are not host-reachable.
+    // max() over every supported native tier; `native_fired`, since the native need is exactly zero.
+    // Nothing here may touch device memory: row_offsets()/nnz() are not host-reachable.
     std::size_t native_need = 0;
     bool native_fired = false;
     if (dispatch::is_native(route)) {
@@ -122,13 +120,8 @@ size_t spmm_buffer_size(Queue& ctx,
         }
         return native_need;
     } else {
-        // A NATIVE-routed call does not ask the vendor to size it. The vendor
-        // sizer builds an SpmmCsrBatchPlan, which walks the CSR row offsets from
-        // the host -- on device USM a blocking full-array copy plus a queue drain,
-        // on shared USM an unsynchronised read that also migrates the offsets.
-        // Running it here made the sizing query for a route with a zero-byte
-        // workspace touch device memory, contradicting the contract three lines
-        // above it and leaving the vendor-free path dependent on cuSPARSE.
+        // A NATIVE-routed call is never sized by the vendor: its plan walks row offsets from the host.
+        // evidence: docs/perf/dispatch.md#dispatch-buffer-size-queries-and-the-route-they-size
         if (dispatch::is_native(route) && native_fired) {
             return native_need;
         }

@@ -1,8 +1,8 @@
 #pragma once
 
-// GESV routing: {Native, Tiny} is the fused kernel, {Native, Blocked} the `getrf; getrs`
-// composition. THE ORDER ARRAY CARRIES NO VENDOR ENTRY -- no vendor ships a batched gesv,
-// so {Vendor, Auto} is only resolve_route's terminal "nothing serves this" answer.
+/// @file
+/// @brief GESV's routing table: `{Native, Tiny}` is the fused kernel, `{Native, Blocked}` the `getrf; getrs` composition.
+/// @ingroup dispatch
 
 #include <batchlas/blas/dispatch/route.hh>
 #include <batchlas/blas/dispatch/route_resolve.hh>
@@ -13,23 +13,35 @@
 
 namespace batchlas::dispatch {
 
+/// @brief GESV routing shape: m is the order, n the number of right-hand sides.
+/// @ingroup dispatch
 struct GesvShape : OpShape {
-    bool has_sg32 = false;   // the fused kernel carries reqd_sub_group_size(32)
+    bool has_sg32 = false;   ///< the fused kernel carries reqd_sub_group_size(32)
 
-    int64_t tiny_max_n = 0;
-    int64_t tiny_max_nrhs = 0;
+    int64_t tiny_max_n = 0;      ///< fused kernel's largest order; 0 = absent
+    int64_t tiny_max_nrhs = 0;   ///< fused kernel's largest nrhs; 0 = absent
 
-    bool composed_available = false;
+    bool composed_available = false;   ///< the getrf + getrs composition is linked
 
-    int64_t order() const { return m; }
-    int64_t nrhs() const { return n; }
+    int64_t order() const { return m; }   ///< order of A
+    int64_t nrhs() const { return n; }    ///< right-hand sides
 };
 
+/// @brief GESV walk order.
+/// @invariant No vendor entry: no vendor ships a batched gesv, so `{Vendor, Auto}` is
+///            only resolve_route()'s terminal "nothing serves this" answer.
+/// @ingroup dispatch
 inline constexpr Route kGesvOrder[] = {
     {Origin::Native, Algorithm::Tiny},
     {Origin::Native, Algorithm::Blocked},
 };
 
+/// @brief GESV routes: `{Native, Tiny}` (fused) and `{Native, Blocked}` (composition); no vendor.
+///
+/// preferred() is permanently all-false; resolve_gesv_route() passes
+/// `vendor_available = false`, so native_tier_preferred() is the shipping window.
+/// Evidence: @ref md_docs_2perf_2lu "docs/perf/lu.md".
+/// @ingroup dispatch
 template <typename T>
 struct RouteTable<Op::gesv, T> {
     // Correctness only: a forced route bypasses preferred() but never supports().
@@ -88,8 +100,11 @@ struct RouteTable<Op::gesv, T> {
     }
 };
 
-// `vendor_available` is not a parameter: passing true would let automatic() answer
-// {Vendor, Auto} for a shape the composed arm serves perfectly well.
+/// @brief resolve_route() for gesv, always on the vendor-free walk.
+///
+/// `vendor_available` is not a parameter: passing true would let the automatic
+/// walk answer `{Vendor, Auto}` for a shape the composed arm serves perfectly well.
+/// @ingroup dispatch
 template <typename T>
 inline Route resolve_gesv_route(Route forced, const GesvShape& s) {
     return resolve_route<Op::gesv, T>(forced, s, /*vendor_available=*/false);

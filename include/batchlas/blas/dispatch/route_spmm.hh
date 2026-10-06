@@ -1,8 +1,10 @@
 #pragma once
 
-// Routing table for spmm (sparse CSR times dense): route order, correctness gates
-// and the preferred() window. Pure -- device and environment queries live in
-// src/backends/spmm_route.hh. evidence: docs/perf/spmm.md
+/// @file
+/// @brief SPMM's routing table (sparse CSR times dense). Pure: device and environment
+///        queries live in src/backends/spmm_route.hh.
+/// @ingroup dispatch
+// evidence: docs/perf/spmm.md
 
 #include <batchlas/blas/dispatch/route.hh>
 #include <batchlas/blas/dispatch/route_resolve.hh>
@@ -13,28 +15,38 @@
 
 namespace batchlas::dispatch {
 
-// Never shadow an OpShape field: resolve_route slices this struct to OpShape for
-// the coverage table, so a shadowing member is silently not copied.
+/// @brief SPMM routing shape: OpShape plus the sparse format and the linked kernel bodies.
+///
+/// No nnz field, deliberately: the honest per-item nnz(b) reads device memory, and
+/// the shape builder also runs inside spmm_buffer_size, where that is a segfault.
+/// @trap Never shadow an OpShape field: resolve_route() slices this struct to OpShape
+///       for the coverage table, so a shadowing member is silently not copied.
+/// @ingroup dispatch
 struct SpmmShape : OpShape {
-    MatrixFormat format = MatrixFormat::Dense;
+    MatrixFormat format = MatrixFormat::Dense;   ///< format of A; only CSR has a native route
 
-    bool gather_available = false;   // the transA == NoTrans body
-    bool scatter_available = false;  // the transA != NoTrans bodies (scale + scatter)
+    bool gather_available = false;   ///< the transA == NoTrans body is linked
+    bool scatter_available = false;  ///< the transA != NoTrans bodies (scale + scatter) are linked
 
-    // out_rows/red_rows swap with transA, so predicates must never spell m or k.
-    int64_t nrhs() const { return n; }
+    int64_t nrhs() const { return n; }   ///< columns of B and C
+    /// @brief Rows of C. out_rows/red_rows swap with transA, so predicates must never spell m or k.
     int64_t out_rows() const { return transA == Transpose::NoTrans ? m : k; }
+    /// @brief Reduction length; the counterpart of out_rows().
     int64_t red_rows() const { return transA == Transpose::NoTrans ? k : m; }
 };
 
-// No nnz field, deliberately: the honest per-item nnz(b) reads device memory, and
-// this shape builder also runs inside spmm_buffer_size, where that is a segfault.
-
+/// @brief SPMM walk order: the native CSR kernel, then the vendor.
+/// @ingroup dispatch
 inline constexpr Route kSpmmOrder[] = {
     {Origin::Native, Algorithm::Direct},
     {Origin::Vendor, Algorithm::Auto},
 };
 
+/// @brief SPMM routes: `{Native, Direct}` (CSR gather / scatter) and the vendor.
+///
+/// preferred(): the native NoTrans gather everywhere, minus complex<float> with
+/// transB. Evidence: @ref md_docs_2perf_2spmm "docs/perf/spmm.md".
+/// @ingroup dispatch
 template <typename T>
 struct RouteTable<Op::spmm, T> {
     // Correctness only: a speed gate here drops the row from the vendor-free walk.
@@ -80,6 +92,8 @@ struct RouteTable<Op::spmm, T> {
     }
 };
 
+/// @brief resolve_route() for spmm.
+/// @ingroup dispatch
 template <typename T>
 inline Route resolve_spmm_route(Route forced, const SpmmShape& s,
                                 bool vendor_available = true) {

@@ -43,19 +43,34 @@ using gesvd_vendor_buffer_size = size_t(Queue&,
                                         SvdVectors, SvdVectors);
 }  // namespace sig
 
-// A is overwritten during factorization. General real-matrix support accepts
-// rectangular inputs with full-vector outputs (U and V^H). Hermitian overloads
-// remain square-only.
-// `info` is the per-item convergence status: one int32 per batch item, 0 when the
-// item converged and > 0 LAPACK-like (the number of off-diagonal elements that
-// failed to converge, or 1 where the tier that ran tracks only the fact of
-// failure). gesvd is one of the routines where LAPACK returns info > 0, and until
-// now a non-converged item in a large batch was invisible -- the call returned,
-// ctx.wait() returned, and the caller read singular values that were simply wrong.
-//
-// An EMPTY span means "not requested" and costs nothing: `info` is the CALLER's
-// USM, written in place by whichever kernel already knows the answer, so no tier
-// needs workspace for it and gesvd_buffer_size is the same either way.
+/**
+ * @brief Singular value decomposition of a batch of matrices (LAPACK `?gesvd`).
+ *
+ * Computes \f$ A = U \Sigma V^H \f$ for every m x n batch item, with the
+ * \f$ k = \min(m, n) \f$ singular values in descending order. The route (native
+ * one-sided Jacobi, CTA or blocked bidiagonal; or the vendor solver) is chosen by
+ * `RouteTable<Op::gesvd, T>` and can be pinned with `BATCHLAS_GESVD_ROUTE`.
+ * Asynchronous: returns once the work is enqueued.
+ *
+ * @param ctx             queue the work is enqueued on
+ * @param A               batch of m x n matrices; overwritten (destroyed)
+ * @param singular_values k real singular values per batch item, packed, descending
+ * @param U               left singular vectors: m x m for `SvdVectors::All`, m x k for
+ *                        `Thin`; unused for `None`
+ * @param Vh              \f$ V^H \f$: n x n for `All`, k x n for `Thin`; unused for `None`
+ * @param jobu            which columns of `U` to compute
+ * @param jobvh           which rows of `Vh` to compute
+ * @param workspace       at least gesvd_buffer_size() bytes for the same arguments
+ * @param info            per-item convergence status: 0 converged, > 0 LAPACK-like. An
+ *                        EMPTY span means "not requested" and costs nothing;
+ *                        gesvd_buffer_size() is the same either way.
+ * @return event of the last enqueued kernel
+ * @throws batchlas::workspace_error if `workspace` is smaller than the chosen route needs
+ * @throws batchlas::dispatch::NoRouteError when the vendor route is chosen in a build
+ *         without the solver library
+ * @see @ref perf_gesvd, @ref design_gesvd, @ref md_docs_2cpp-api (convergence status)
+ * @ingroup svd
+ */
 template <Backend B, typename T>
 BATCHLAS_API Event gesvd(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& A,
@@ -67,6 +82,11 @@ BATCHLAS_API Event gesvd(Queue& ctx,
                          Span<std::byte> workspace,
                          Span<int32_t> info);
 
+/**
+ * @brief gesvd() of Hermitian input: only the `hermitian_uplo` triangle of the square
+ *        `A` is read. Other parameters as for the general form.
+ * @ingroup svd
+ */
 template <Backend B, typename T>
 BATCHLAS_API Event gesvd(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& A,
@@ -79,14 +99,11 @@ BATCHLAS_API Event gesvd(Queue& ctx,
                          Span<std::byte> workspace,
                          Span<int32_t> info);
 
-// Old-arity forwarders, one per overload, rather than a defaulted trailing
-// parameter -- the same shape as potrf.hh:110 and functions/syev.hh, and for the
-// same reason: sig::gesvd_vendor below is a function *type* and cannot carry a
-// default, so leaving the declarations default-free too keeps alias and
-// declaration parameter-for-parameter identical. The two forwarders keep every
-// existing eight- and nine-argument call site -- the GesvdOptions spellings in
-// blas/options.hh among them -- compiling unchanged. Arity plus the Uplo/Span
-// type difference at parameter 8 keeps all four overloads unambiguous.
+// Old-arity forwarders, not a defaulted `info`, as in functions/syev.hh: the sig:: alias
+// is a function TYPE and cannot carry a default. Arity plus the Uplo/Span type at
+// parameter 8 keeps all four overloads unambiguous.
+// evidence: docs/design/vendor-independence.md#info-spans-on-syev-gesvd-and-steqr-forwarder-or-default
+/** @brief gesvd() without the convergence status (`info` empty). @ingroup svd */
 template <Backend B, typename T>
 inline Event gesvd(Queue& ctx,
             const MatrixView<T, MatrixFormat::Dense>& A,
@@ -99,6 +116,7 @@ inline Event gesvd(Queue& ctx,
     return gesvd<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh, workspace, Span<int32_t>{});
 }
 
+/** @brief Hermitian gesvd() without the convergence status (`info` empty). @ingroup svd */
 template <Backend B, typename T>
 inline Event gesvd(Queue& ctx,
             const MatrixView<T, MatrixFormat::Dense>& A,
@@ -113,6 +131,13 @@ inline Event gesvd(Queue& ctx,
                        Span<int32_t>{});
 }
 
+/**
+ * @brief Workspace, in bytes, that gesvd() needs for the same arguments.
+ *
+ * Canonicalises `jobu`/`jobvh` and resolves the route exactly as the call does, so the
+ * size is for the tier that will run. `info` does not affect it.
+ * @ingroup svd
+ */
 template <Backend B, typename T>
 BATCHLAS_API size_t gesvd_buffer_size(Queue& ctx,
                                       const MatrixView<T, MatrixFormat::Dense>& A,
@@ -122,6 +147,7 @@ BATCHLAS_API size_t gesvd_buffer_size(Queue& ctx,
                                       SvdVectors jobu,
                                       SvdVectors jobvh);
 
+/** @brief Workspace, in bytes, for the Hermitian gesvd(). @ingroup svd */
 template <Backend B, typename T>
 BATCHLAS_API size_t gesvd_buffer_size(Queue& ctx,
                                       const MatrixView<T, MatrixFormat::Dense>& A,
@@ -136,25 +162,16 @@ BATCHLAS_API size_t gesvd_buffer_size(Queue& ctx,
 
 namespace batchlas::backend {
 
-// Vendor path for gesvd.
-//
-// DECLARATION ONLY. Each backend wrapper TU (cuSOLVER / rocSOLVER / LAPACKE)
-// defines this primary template for its own Backend value and explicitly
-// instantiates it there -- the same mechanism syev_vendor (functions/syev.hh)
-// and ormqr_vendor (functions/ormqr.hh) use.
-//
-// It used to be *defined* here: a NETLIB LAPACKE loop plus a throw for every
-// other backend. That made a CUDA definition in src/backends/cusolver.cc a
-// redefinition error rather than an override, which is why there was never a
-// cuSOLVER SVD binding. The LAPACKE body now lives in
-// src/backends/netlib_lapack.cc.
-// `info_out` is the caller's per-item status span, or empty. cuSOLVER's
-// gesvdjBatched already returns an info array and this library dropped it; netlib
-// captured LAPACKE's scalar info per item and threw it away in a batch-wide
-// exception. Defaulted rather than forwarded, exactly as syev_vendor's is and for
-// the reason spelled out there (functions/syev.hh): a default is a property of
-// the declaration, not of the function type, so sig::gesvd_vendor still names the
-// full nine-parameter signature that the vendor TUs instantiate.
+// DECLARATION ONLY: each backend wrapper TU (cuSOLVER / rocSOLVER / LAPACKE) defines and
+// instantiates it for its own Backend. A definition here makes theirs a redefinition error.
+// evidence: docs/design/gesvd.md#gesvd-design-vendor-binding-and-dispatch
+// `info_out` (caller's status span, or empty) is defaulted, as in syev_vendor, so
+// sig::gesvd_vendor still names the full nine-parameter signature.
+/**
+ * @brief The vendor solver's SVD (cuSOLVER `gesvdjBatched` or a LAPACKE loop), as
+ *        gesvd()'s vendor route calls it; same contract as the general gesvd().
+ * @ingroup dispatch
+ */
 template <Backend B, typename T>
 BATCHLAS_API Event gesvd_vendor(Queue& ctx,
                                 const MatrixView<T, MatrixFormat::Dense>& A,
@@ -166,6 +183,7 @@ BATCHLAS_API Event gesvd_vendor(Queue& ctx,
                                 Span<std::byte> workspace,
                                 Span<int32_t> info_out = Span<int32_t>());
 
+/** @brief Workspace, in bytes, for backend::gesvd_vendor(). @ingroup dispatch */
 template <Backend B, typename T>
 BATCHLAS_API size_t gesvd_vendor_buffer_size(Queue& ctx,
                                              const MatrixView<T, MatrixFormat::Dense>& A,
@@ -180,11 +198,8 @@ BATCHLAS_API size_t gesvd_vendor_buffer_size(Queue& ctx,
 
 namespace batchlas::blas::dispatch::detail {
 
-// The vendor call, gated on the vendor actually being compiled in.
-//
-// Without this, a build with no cuSOLVER / rocSOLVER / netlib library leaves backend::gesvd_vendor<B, T> undefined and the LINK fails -- which is
-// the state WP0 exists to remove. Being `if constexpr`, the vendor call is not
-// compiled at all when the library is absent, so there is no symbol to satisfy.
+// `if constexpr`, not a runtime check: with the vendor absent the call is never
+// compiled, so there is no undefined backend::gesvd_vendor symbol to fail the link.
 template <Backend B, typename T, typename... Args>
 Event gesvd_vendor_or_throw(Args&&... args) {
     if constexpr (!batchlas::dispatch::solver_vendor_available<B>) {
@@ -212,13 +227,9 @@ namespace batchlas::blas::dispatch {
 namespace detail {
 
 // The routing inputs, in one place so the call and its buffer-size query cannot
-// build different ones.
-//
-// `jobu`/`jobvh` must already be canonicalised -- both entry points do that
-// first, and the old predicates re-canonicalised internally precisely because
-// one that disagreed with the caller about what "Thin" means would reject
-// shapes it can serve. Doing it once, before the shape exists, removes the
-// possibility of disagreement rather than papering over it.
+// build different ones. `jobu`/`jobvh` must already be canonicalised (both entry
+// points do it first): a predicate that disagreed with the caller about what "Thin"
+// means would reject shapes it can serve.
 template <typename T>
 inline batchlas::dispatch::GesvdShape gesvd_op_shape(const Queue& ctx,
                                                      const MatrixView<T, MatrixFormat::Dense>& A,
@@ -238,7 +249,7 @@ inline batchlas::dispatch::GesvdShape gesvd_op_shape(const Queue& ctx,
     try {
         s.is_gpu = ctx.device().type == DeviceType::GPU;
     } catch (...) {
-        // query_caps was best-effort and never threw; keep that contract.
+        // best-effort, never throws; leave default
     }
     try {
         s.max_sub_group =
@@ -249,9 +260,9 @@ inline batchlas::dispatch::GesvdShape gesvd_op_shape(const Queue& ctx,
     return s;
 }
 
-// One resolution per call, shared by gesvd_dispatch and its buffer-size query.
-// Replaces choose_gesvd_provider; the wide-band Jacobi rule it carried is now
-// `preferred` in route_gesvd.hh, so it can no longer make a route ineligible.
+// One resolution per call, shared by gesvd_dispatch and its buffer-size query. The
+// wide-band Jacobi rule is in `preferred` (route_gesvd.hh), so it cannot make a route
+// ineligible. evidence: docs/perf/gesvd.md#gesvd-the-wide-band-33-to-64
 template <typename T>
 inline batchlas::dispatch::Route gesvd_route(const Queue& ctx,
                                              const MatrixView<T, MatrixFormat::Dense>& A,
@@ -289,8 +300,7 @@ inline Event gesvd_dispatch(Queue& ctx,
     }
 
     namespace d = batchlas::dispatch;
-    // NETLIB has no native gesvd route at all, so the resolution is skipped
-    // rather than overridden after the fact.
+    // NETLIB has no native gesvd route; skip resolution rather than override it.
     const d::Route chosen = (B == Backend::NETLIB)
         ? d::Route{d::Origin::Vendor, d::Algorithm::Auto}
         : detail::gesvd_route<T>(ctx, A, jobu, jobvh, hermitian_uplo);
@@ -314,12 +324,9 @@ inline Event gesvd_dispatch(Queue& ctx,
         throw batchlas::workspace_error("gesvd: insufficient workspace for chosen provider");
     }
 
-    // std::optional, not a plain `Queue`: the default Queue constructor is not inert, it
-    // builds a real sycl::queue on Device::default_device(). A by-value declaration here
-    // would pay that construction (and, on a multi-GPU box, touch device 0) on every gesvd
-    // call, including the common in-order path that never looks at it. It also cannot be
-    // sunk into the if-block -- run_q escapes to the calls below, so the queue has to
-    // outlive the branch.
+    // std::optional, not a plain `Queue`: the default Queue constructor builds a real
+    // sycl::queue on device 0, which a by-value declaration would pay on every call.
+    // It cannot be sunk into the if-block either -- run_q escapes to the calls below.
     Queue* run_q = &ctx;
     std::optional<Queue> in_order_q;
     if (!ctx.in_order()) {
@@ -335,10 +342,10 @@ inline Event gesvd_dispatch(Queue& ctx,
         return detail::gesvd_vendor_or_throw<B, T>(*run_q, A, singular_values, U, Vh, jobu, jobvh, workspace, info);
     }
 
-    // The explicit branch is not optional: the tail of this function is an
-    // unguarded `return gesvd_blocked(...)`, so a provider without its own
-    // branch silently executes the blocked normal-equation path -- the exact
-    // defect this kernel exists to remove -- while every label says otherwise.
+    // The explicit branch is not optional: the tail is an unguarded
+    // `return gesvd_blocked(...)`, so a route without its own branch silently runs
+    // the blocked path under another label.
+    // evidence: docs/design/gesvd.md#gesvd-design-vendor-binding-and-dispatch
     if (chosen.algo == d::Algorithm::Jacobi) {
         return gesvdj_cta<B, T>(*run_q, A, singular_values, U, Vh, jobu, jobvh, workspace,
                                 GesvdjParams<T>(), info);
@@ -372,8 +379,7 @@ inline size_t gesvd_buffer_size_dispatch(Queue& ctx,
     }
 
     namespace d = batchlas::dispatch;
-    // NETLIB has no native gesvd route at all, so the resolution is skipped
-    // rather than overridden after the fact.
+    // NETLIB has no native gesvd route; skip resolution rather than override it.
     const d::Route chosen = (B == Backend::NETLIB)
         ? d::Route{d::Origin::Vendor, d::Algorithm::Auto}
         : detail::gesvd_route<T>(ctx, A, jobu, jobvh, hermitian_uplo);

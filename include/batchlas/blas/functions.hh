@@ -6,7 +6,10 @@
 #include <batchlas/util/sycl-span.hh>
 #include <complex>
 
-// Include all function headers
+/// @file
+/// @brief All positional dense entry points (`blas/functions/*.hh`) plus their option-struct spellings.
+/// @ingroup api
+
 #include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/blas/functions/gemv.hh>
 #include <batchlas/blas/functions/geqrf.hh>
@@ -38,5 +41,5 @@ namespace batchlas {
 
 #endif // BATCHLAS_BLAS_CUBLAS_MATRIXVIEW_HH
 
-// Option-struct spellings of everything declared above.
+// Last: the option overloads name every positional declaration above.
 #include <batchlas/blas/options.hh>

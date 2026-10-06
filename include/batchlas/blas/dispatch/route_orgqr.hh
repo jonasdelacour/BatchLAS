@@ -1,26 +1,39 @@
 #pragma once
 
-// orgqr routing: the one native arm is an identity fill plus a ROUTED ormqr, so supports()
-// transcribes ormqr's gates and pinning orgqr needs BATCHLAS_ORMQR_ROUTE set as well.
+/// @file
+/// @brief ORGQR's routing table.
+///
+/// The one native arm is an identity fill plus a ROUTED ormqr, so supports()
+/// transcribes ormqr's gates, and pinning orgqr needs `BATCHLAS_ORMQR_ROUTE` set as well.
+/// @ingroup dispatch
 
 #include <batchlas/blas/dispatch/route.hh>
 #include <batchlas/blas/dispatch/route_resolve.hh>
 
 namespace batchlas::dispatch {
 
+/// @brief ORGQR routing shape: Q is m x n, built from k reflectors.
+/// @ingroup dispatch
 struct OrgqrShape : OpShape {
-    bool blocked_available = false;  // the ORGQR driver, not ormqr_blocked (already true)
+    bool blocked_available = false;  ///< the ORGQR driver is linked (not ormqr_blocked, which always is)
 
-    int64_t rows() const { return m; }
-    int64_t cols() const { return n; }
-    int64_t reflectors() const { return k; }
+    int64_t rows() const { return m; }         ///< m
+    int64_t cols() const { return n; }         ///< n
+    int64_t reflectors() const { return k; }   ///< k
 };
 
+/// @brief ORGQR walk order: the native driver, then the vendor.
+/// @ingroup dispatch
 inline constexpr Route kOrgqrOrder[] = {
     {Origin::Native, Algorithm::Blocked},
     {Origin::Vendor, Algorithm::Auto},
 };
 
+/// @brief ORGQR routes: `{Native, Blocked}` and the vendor.
+///
+/// preferred(): native up to 512 on both extents, every type. Evidence:
+/// @ref md_docs_2perf_2qr "docs/perf/qr.md".
+/// @ingroup dispatch
 template <typename T>
 struct RouteTable<Op::orgqr, T> {
     static bool supports(Route r, const OrgqrShape& s) {
@@ -67,6 +80,8 @@ struct RouteTable<Op::orgqr, T> {
     }
 };
 
+/// @brief resolve_route() for orgqr.
+/// @ingroup dispatch
 template <typename T>
 inline Route resolve_orgqr_route(Route forced, const OrgqrShape& s,
                                  bool vendor_available = true) {  // facade always passes it

@@ -226,10 +226,9 @@ Event geqrf_panel_global_launch(Queue& ctx,
     return ctx.get_event();
 }
 
-// v1 ships FALSE. The register leaf is built, tested and reachable by explicit request, but Auto
-// must not move until R8's interleaved A/B has a measured grid behind it -- this campaign has
-// already shipped one flip that was a 0.848x loss.
-// evidence: docs/perf/qr.md#the-register-panel-leaf-wp6--p5
+// TRUE only together with geqrf_panel_reg_preferred's height window: true WITHOUT that policy
+// turned five guards red. False restores the pre-register-leaf Auto answer.
+// evidence: docs/perf/qr.md#the-panel-height-window
 constexpr bool kGeqrfAutoPrefersRegisterLeaf = true;
 
 template <typename T, int NW> class GeqrfPanelRegKernel;
@@ -434,8 +433,8 @@ Event geqrf_panel_factorize(Queue& ctx,
     const bool reg_ok = geqrf_panel_reg_fits<T>(m, n, max_wg);
     const bool reg_pref = geqrf_panel_reg_preferred<T>(m, n, max_wg);
 
-    // Auto's answer is EXACTLY what it was before the register leaf existed while the constant
-    // above is false; that is what makes this revision a no-op for every shipped route.
+    // Auto takes the register leaf only inside the preferred height window; outside it, the
+    // resident-or-global answer is unchanged.
     GeqrfPanelLeaf chosen = leaf;
     if (chosen == GeqrfPanelLeaf::Auto) {
         chosen = (kGeqrfAutoPrefersRegisterLeaf && reg_pref)

@@ -461,6 +461,12 @@ The shipped `getrf` CTA kernel uses no group collective (only `permute_group_by_
 * **A latent vendor gate defect**, recorded not fixed: `cublas.cc`'s `getrs` sits in a TU gated on `BATCHLAS_HAS_CUBLAS`, so a cuBLAS-present / cuSOLVER-absent configure claims a vendor it cannot link. The fix belongs in `vendor_available.hh`.
 * **NETLIB `getri`'s `std::copy(..., n*n, ...)` ignores `ld`** -- pre-existing, not fixed.
 * **P4's register panel leaf is the DEFAULT panel leaf**, measured over 156 paired cells (1.01-2.13x; the only loss is double `n = 32`, at all three of its rungs), and it moved cfloat's `getrf` floor from 512 to 256 at batch >= 256. `BATCHLAS_GETRF_LEAF=slm` still selects the older local-memory panel. [The A/B](#lu-the-register-leaf-ab), [the window](#the-cfloat-window-moves-to-256). Two things that grid found and did NOT fix: float `n = 65` takes CTA in a vendor-free build where blocked is 1.62x faster, and the float window below 256 is a batch question, not an order one ([which native tier serves 33 to 256](#which-native-tier-serves-33-to-256)).
+* **`getrf_panel_reg.cc` keeps its own copy of the sub-partition gate.** Every other site
+  that used the per-block `regs x wg <= 65536` spelling now calls
+  `resident::sm89_max_work_group` / `sm89_fits` (`src/util/resident_capacity.hh`);
+  `getrf_panel_reg.cc` still defines `kRegsPerPartition`, `kPartitionsPerBlock` and its own
+  `panel_reg_wg_ceiling`. They agree today, but two spellings of one launch gate can drift;
+  collapsing them is owed.
 * **The two later steps of P4 are not attempted.** The recursive panel (outer `nb = 128` split into 32-wide register leaves, so the trailing GEMM's `k` is 128 rather than 32) and the right-hand interchange gather are both untouched, and `nb` is still 32 for every type. The recursive step is the one that would actually move the trailing GEMM into `Tiled128x128RegisterK8` territory; the leaf swap alone does not.
 * **The P4 leaf is now measured against the vendor at 150 paired cells** ([the register leaf A/B](#lu-the-register-leaf-ab)), but the PHASE SPLIT behind it is still the **pre-gather, double-only** profile (`nsys_splits.txt`, `lose_getrf_double_128`) that says "48.5% of a double n = 128 call is the panel". No float or cfloat `getrf` phase split exists at any order, so the A/B says the leaf is 1.3-2.1x faster without saying which phase paid. The nsys split is still owed.
 
@@ -1244,6 +1250,12 @@ anyone has run** — the only runtime abort this section records is the cdouble 
 one above, at a different site. A reviewer applying the deleted `regs > 128` test would
 have cleared every row of it without computing anything, since the largest count in the
 table is 86.
+
+The cdouble `Trans` `nrhs` 5..8 row is over the limit only on paper: the 672-lane width
+needs `n >= 1025`, and `getrs_fused_dispatch` throws `invalid_argument` on `n * nrhs` past
+the resident-RHS capacity long before that. Moving to the sub-partition spelling narrowed
+seven cells, the widest by 96 lanes, which restores the `kGetrsFusedRegMargin` headroom on
+the two rows that sat exactly at the limit.
 
 The site now calls the shared helper, `resident::sm89_max_work_group(regs)`
 (`src/extensions/getrs_fused.cc:99`), which is this rule in one place:
@@ -2043,7 +2055,7 @@ ncu, cfloat n = 32: 426 M -> 315 M warp instructions, 1.12 -> 0.83 ms. It is sti
 latency-bound -- 33% warps active at 128 registers, short-scoreboard the largest stall
 (3.9 cycles per issue) -- so what is left is the argmax butterfly's serial chain, not
 traffic. The same row, with B's pivot row appended, serves `gesv_tiny`'s forward
-substitution; `posv_tiny` uses the transposed pattern (docs/perf/potrf.md#the-posv-local-memory-transpose).
+substitution; `posv_tiny` uses the transposed pattern ([potrf.md: the posv local-memory transpose](potrf.md#the-posv-local-memory-transpose)).
 
 The launch bound was re-swept for every (type, NC) and transcribed per cell
 (`getrf_tiny_min_blocks`): cfloat 12 at NC 18/20/26/28, 16 at 22/24, 8 at 30/32; float

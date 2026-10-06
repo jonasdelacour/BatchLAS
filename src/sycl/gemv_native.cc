@@ -107,13 +107,10 @@ inline int gemv_seg_trans_min_items(int cu, int w) {
     return (w >= 8 ? 16 : 64) * c;
 }
 
-// Bodies 3 and 5 are one route, so BATCHLAS_GEMV_ROUTE cannot separate them.
-// Never latch this in a function-local static: a value cached there makes a
-// later change invisible, and the test then passes green on the default arm.
-// Reading settings() per call keeps that property -- the snapshot is re-read by
-// detail::reload_settings(), so a ScopedEnvVar around the A/B is still seen --
-// but a static here would defeat it again exactly as a cached read did.
-//   BATCHLAS_GEMV_SEGT = off | auto (default) | 2|4|8 (force body 5 at that W)
+// BATCHLAS_GEMV_SEGT = off | auto (default) | 2|4|8 (force body 5 at that W);
+// bodies 3 and 5 share a route. Read settings() per call, NEVER latch in a static:
+// a latched value makes the A/B measure the default arm twice.
+// evidence: docs/perf/gemv.md#the-sub-route-gates
 enum class SegTMode { kAuto, kOff, kForce2, kForce4, kForce8 };
 
 inline SegTMode gemv_segt_mode() {

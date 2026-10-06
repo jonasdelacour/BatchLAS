@@ -74,8 +74,11 @@ componentwise identical).
 Two hazards created by narrowing the reduction group were fixed along the way and are kept:
 
 - **Löwner product range.** A lane multiplies `dd/width` factors before any reduction, so going
-  from width 32 to width 4 makes each serial product 8x longer, and it can leave float range. The
-  product is accumulated as a (mantissa, exponent) pair with `frexp` renormalization. Rescaling is
+  from width 32 to width 4 makes each serial product 8x longer, and it can leave float range: at
+  n = 64 the naive product overflowed to Inf or underflowed to 0, which poisoned v, then Q, then
+  the eigenvalues, and the resulting invalid sort permutation faulted downstream in
+  `permuted_copy`. The product is accumulated as a (mantissa, exponent) pair with `frexp`
+  renormalization, which keeps the mantissa in [0.5, 1) at any width. Rescaling is
   by exact powers of two, so wherever the naive product was in range the result is bit-for-bit the
   same.
 - **Uniform trip counts.** `dd` is rarely a multiple of `parts_per_wg` (deflation makes it
@@ -86,9 +89,9 @@ Two hazards created by narrowing the reduction group were fixed along the way an
 **Numerical note.** Narrowing the reduction group reassociates both reductions. That is safe
 because neither involves cancellation: the Löwner reduction is a product of ratios and `nrm2` a
 sum of squares, so only benign relative error accumulates. This differs from the failed "fast
-path" recorded in the fused merge kernel (`src/extensions/stedc_merge_kernels.cc`, the comment
-above the root solve; the log cited it as lines 44-52, it has since moved), which changed where
-the poles were stored during the solve and produced a bimodal orthogonality distribution.
+path" in the fused merge kernel ([stedc: the rejected private-pole fast path](#stedc-the-rejected-private-pole-fast-path)),
+which changed where the poles were stored during the solve and produced a bimodal orthogonality
+distribution.
 Orthogonality must still be validated, not assumed; see
 [stedc: validation protocol for merge changes](#stedc-validation-protocol-for-merge-changes).
 
@@ -288,6 +291,112 @@ leaf solve while every merge consumes leaf eigenvectors, a direct
 computed; this needs a test before it is filed as a defect. The matching algorithm is boundary-row divide and conquer
 ([stedc: literature on the merge](#stedc-literature-on-the-merge), Zhan & Zhang).
 
+## stedc: the level-synchronous driver
+
+`src/extensions/stedc.cc` has two drivers over one size-uniform merge. The merge takes P
+independent sub-problems of size s whose halves are already solved and combines each into one
+size-s eigendecomposition. The recursive driver calls it with P = batch (one tree node at a
+time): it walks the merge tree depth-first, so the \f$2^l\f$ sibling merges at level l are
+enqueued one after another, each with only `batch` work-groups. Near the leaves that is nowhere
+near enough work to fill a GPU, and the tree costs \f$O(2^L)\f$ launches.
+
+The level-synchronous ("flattened") driver turns the tree inside out: every node at a level is
+merged by one launch over `nodes * batch` work-groups, so launches drop to \f$O(L)\f$ and the
+narrowest level is the widest in the batch dimension. To keep every level size-uniform (one
+strided-batched GEMM and one work-group-per-node kernel per level), the problem is padded from n
+to \f$N = \text{leaf}\cdot 2^L\f$ with a diagonal tail above the input's Gershgorin bound; the
+padded eigenvalues sort last and their eigenvectors stay in the padded subspace, so the answer is
+the leading n × n block. Padding is nil whenever \f$2^L\f$ divides n. Padding costs
+\f$(N/n)^3\f$ in the top-level GEMM, which is why the planner prefers the tree that pads least, but
+only below the leaf cap ([stedc: the leaf cap at the sub-group width](#stedc-the-leaf-cap-at-the-sub-group-width)).
+
+Two layout choices were measured (RTX 4090, undated):
+
+- **Merges write into their parent's sub-blocks.** A node's accumulated eigenvector block is
+  diag(left child, right child). Every merge writes its result directly into its parent's two
+  diagonal sub-blocks (even and odd children as two strided-batched calls, since both halves of
+  a batched view stay affine with doubled stride), leaving only the off-diagonal zero blocks to
+  materialise; deflation's Givens rotations need those because they mix columns across the split.
+  One extra launch per level, about 2/3 of the assembly traffic saved: at worst neutral and up to
+  5% ahead of copying.
+- **Leaves are copied, not written in place.** Writing the leaves into their parents' sub-blocks
+  doubles the leading dimension of every leaf block, and the coalescing that costs the CTA STEQR
+  kernel outweighs the copy: 10% slower at n = 64.
+
+## stedc: the leaf cap at the sub-group width
+
+`plan_stedc_levels` (`src/extensions/stedc_levels_plan.hh`) never lets a leaf exceed the tuned
+threshold, which is the device sub-group width: `steqr` takes the fast `steqr_cta` path only for
+n ≤ that width and falls to `steqr_wg` above it, about 14× slower one step over the edge (batch
+10416, eigenvectors: n = 32 0.26 µs, n = 36 3.76 µs, n = 40 4.87 µs, n = 80 54.4 µs). The
+recursive driver got this for free by bisecting; the planner has to state it. Weighting leaf width
+against padding instead of bounding it is what regressed n = 320 and 640 (leaf 40 chosen over leaf
+20, 3.25× and 1.51× on `syev`): the padding term dominates the score, so a zero-padding wide leaf
+always won. The plan lives in its own header so host-only tests can assert on it, because a bad
+leaf is a performance defect that produces correct eigenvalues. Full history and the threshold
+sweep: [syev: the stedc merge-variant and leaf-cliff regression](syev.md#syev-the-stedc-merge-variant-and-leaf-cliff-regression).
+
+## stedc: the absolute deflation tolerance
+
+Deflation uses LAPACK's absolute tolerance \f$\mathrm{tol} = 8\varepsilon\max(\|D\|_\infty, \|z\|_\infty)\f$
+for both small-\f$|z|\f$ deflation and eigenvalue-proximity (Givens) deflation, computed before the
+Givens loop. The previous code used a relative tolerance \f$64\varepsilon\max(1, |D_j|, |D_{j+1}|)\f$
+for proximity deflation, which massively under-deflated clustered small-magnitude eigenvalues and
+produced pairs of near-parallel eigenvectors (good residual, bad orthogonality): a bimodal
+orthogonality distribution. An earlier fix had promoted the Löwner-rescale ratio product to double
+to suppress that distribution; once the tolerance was corrected, native-T accumulation matched
+double to the reported digits (residual, orthogonality and relative error, n = 16..256), and the
+double accumulation was reverted. Undated.
+
+## stedc: the rejected private-pole fast path
+
+The fused merge kernel (`src/extensions/stedc_merge_kernels.cc`) initialises each column j of
+`Q_bid` with the poles and runs the secular solver in place on column k, so
+`apply_shift_to_poles` updates `Q_bid(:, k)` directly. A previous "fast path" kept the poles in a
+private `T d_priv[128]` array and copied back to `Q_bid` after the solve. It produced a bimodal
+orthogonality distribution for float STEDC at n ≤ 64 against the baseline 3-kernel path; the
+in-place form matches the baseline exactly. Undated.
+
+## stedc: convergence reporting through info
+
+Every secular root solver computes whether its iteration met the tolerance. Before per-item
+status existed, that flag was destroyed: `sec_solve_ext_roc` ended in `(void)converged;` and
+`sec_solve_roc` in `assert(converged && ...)`, which is a no-op in a release device build, so a
+root that hit the iteration cap returned a silently wrong eigenvalue. In one solver the two exit
+reasons (tolerance met, budget exhausted) were a single condition and could not be told apart;
+they are now split, and only the tolerance arm is convergence. The flag is an out-parameter,
+**not defaulted**: the solvers are `SYCL_EXTERNAL`, so the flag is threaded from every call site
+by hand, and a default would let a new call site drop the status silently. The partition solvers
+carry it in their result struct instead, so the six thin wrappers needed no signature change.
+Reports from several threads of one item go through an atomic `fetch_max`, which is exactly the
+"did any root fail" reduction.
+
+The public `stedc` clears `info` once and everything below only raises it, which lets the
+recursive driver's two half-solves and the level driver's L merges accumulate into the same slots.
+A caller that runs `stedc` more than once over the same items in one operation (for example
+`gesvd`'s two tridiagonal solves) must call the no-clear entry point. The recursive driver's leaf
+goes through `steqr_dispatch` for the same reason: calling the public `steqr` there had dropped
+leaf non-convergence for every shape that reaches that driver. The level driver's single leaf
+call solves \f$2^L \cdot \text{batch}\f$ problems, so it gets its own per-leaf status array,
+folded down afterwards (leaf j belongs to item \f$j / 2^L\f$), sized unconditionally so a
+workspace sized without `info` is not too small for a call made with it.
+
+The host-backend choice between device and host secular routines is asked as "is the queue a GPU
+device" (`is_gpu`), not `B != Backend::NETLIB`: the reason the host path exists is that the host
+runtime cannot safely invoke the ROCm-style root routines inside SYCL kernels, a property of the
+device. The outcome is unchanged today, since NETLIB is the only backend on a host device.
+
+## stedc: open debts
+
+- **`max_sec_iter` does not reach one exit arm.** In `stedc_secular.cc` the tolerance/budget split
+  uses a hardcoded iteration literal (100) on one arm; `StedcParams::max_sec_iter` does not reach
+  it.
+- **Direct eigenvalues-only calls** still build eigenvectors, and the recursive driver's jobz
+  forwarding is an unverified hazard; see
+  [stedc: eigenvalues-only still builds eigenvectors](#stedc-eigenvalues-only-still-builds-eigenvectors).
+- **The heavy-deflation test** asserts only finite and sorted
+  ([the heavy-deflation test gap](#stedc-the-heavy-deflation-test-gap)).
+
 ## stedc: what is already good
 
 The secular root solver (`solve_root_roc_generic` in `stedc_merge_cta.cc`) is the rocSOLVER
@@ -341,9 +450,10 @@ over the previous `main`; see [Cumulative result](../perf/steqr.md#cumulative-re
 
 ## stedc: validation protocol for merge changes
 
-Check **orthogonality**, not just residuals. The comment on the fused merge kernel's root solve
-(`src/extensions/stedc_merge_kernels.cc`) records a regression that passed residual checks while
-producing a bimodal orthogonality distribution for float STEDC at n <= 64.
+Check **orthogonality**, not just residuals. Two regressions passed residual checks while
+producing a bimodal orthogonality distribution for float STEDC at n <= 64:
+[the private-pole fast path](#stedc-the-rejected-private-pole-fast-path) and
+[the relative deflation tolerance](#stedc-the-absolute-deflation-tolerance).
 
 - `tests/stedc_tests.cc`: the correctness gate (with the weak heavy-deflation guard noted above).
 - `benchmarks/orthogonality_accuracy.cc`, `benchmarks/eigensolver_accuracy.cc`: compare the

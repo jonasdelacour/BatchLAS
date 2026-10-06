@@ -1,5 +1,9 @@
 #pragma once
 
+/// @file
+/// @brief Batched application of Q from geqrf reflectors (ormqr/unmqr) and its workspace query.
+/// @ingroup qr
+
 #include <batchlas/export.hh>
 #include <algorithm>
 #include <optional>
@@ -41,9 +45,8 @@ using ormqr_buffer_size = size_t(Queue&,
                                  Side, Transpose, Span<T>,
                                  int32_t);
 
-// The vendor entry points deliberately do NOT take the block-size hint: it
-// selects a WY panel width in the blocked implementation and means nothing to a
-// vendor kernel. So these are spelled out rather than aliased to the two above.
+// The vendor signatures deliberately drop the block-size hint (a WY panel width
+// means nothing to a vendor kernel), so they are spelled out, not aliased.
 template <typename T>
 using ormqr_vendor = Event(Queue&,
                            const MatrixView<T, MatrixFormat::Dense>&,
@@ -58,7 +61,41 @@ using ormqr_vendor_buffer_size = size_t(Queue&,
 }  // namespace sig
 
 
-// Public API
+/// @brief Batched multiplication by the orthogonal/unitary Q from geqrf().
+///
+/// As LAPACK `?ormqr` / `?unmqr`. A holds, below its diagonal, the
+/// \f$ k = \min(A_{rows}, A_{cols}) \f$ reflectors that geqrf() wrote, with
+/// \f$ Q = H_1 \cdots H_k \f$ of order `A.rows()`. For every batch item C is
+/// overwritten with
+/// \f$ \mathrm{op}(Q)\, C \f$ (`Side::Left`) or \f$ C\, \mathrm{op}(Q) \f$
+/// (`Side::Right`), where \f$ \mathrm{op}(Q) \f$ is Q for `NoTrans` and
+/// \f$ Q^H \f$ (\f$ Q^T \f$ for real T) otherwise. Q is never formed.
+///
+/// Asynchronous: C is readable after the returned event is waited on. On an
+/// out-of-order @p ctx the work runs on an internal in-order queue that first
+/// waits for everything already submitted to @p ctx.
+/// @tparam B  backend; the backend-deducing overload takes it from `ctx.backend()`
+/// @tparam T  scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @param ctx              queue the kernels are enqueued on
+/// @param A                batch of geqrf() outputs holding the reflectors; not modified
+/// @param C                batch of matrices to multiply; overwritten with the product
+/// @param side             apply Q from the left or the right
+/// @param trans            apply Q (`NoTrans`) or its (conjugate) transpose
+/// @param tau              reflector scalars from geqrf(), `k * batch` elements
+/// @param workspace        device-accessible scratch of at least ormqr_buffer_size() bytes,
+///                         sized with the same @p block_size_hint
+/// @param block_size_hint  WY panel width for the blocked route; 0 lets the tuning
+///                         table choose. Clamped to [1, k]; ignored by the vendor route.
+/// @return event of the last enqueued kernel
+/// @pre `A.rows() == C.rows()` for `Side::Left`, `A.rows() == C.cols()` for
+///      `Side::Right`, and A and C share a batch size
+/// @pre `tau.size() >= k * batch` (checked by the option overloads)
+/// @throws batchlas::workspace_error if @p workspace is smaller than the chosen route needs
+/// @throws batchlas::invalid_argument on non-conforming operands (blocked route)
+/// @throws batchlas::dispatch::NoRouteError if the vendor route is chosen and the
+///         vendor library was not built in
+/// @see OrmqrOptions
+/// @ingroup qr
 template <Backend B, typename T>
 BATCHLAS_API Event ormqr(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& A,
@@ -69,6 +106,11 @@ BATCHLAS_API Event ormqr(Queue& ctx,
                          Span<std::byte> workspace,
                          int32_t block_size_hint = 0);
 
+/// @brief Workspace, in bytes, that ormqr() needs for these operands on this queue.
+///
+/// Resolves the same route and block width as ormqr() from the same inputs, so
+/// the result is valid for a call with the same arguments and @p block_size_hint.
+/// @ingroup qr
 template <Backend B, typename T>
 BATCHLAS_API size_t ormqr_buffer_size(Queue& ctx,
                                       const MatrixView<T, MatrixFormat::Dense>& A,
@@ -82,7 +124,8 @@ BATCHLAS_API size_t ormqr_buffer_size(Queue& ctx,
 
 namespace batchlas::backend {
 
-// Implemented by backend wrapper TUs (e.g. cuSOLVER / rocSOLVER / LAPACKE).
+/// @brief Vendor arm of ormqr() (cuSOLVER / rocSOLVER / LAPACKE); not for direct use.
+/// @ingroup dispatch
 template <Backend B, typename T>
 BATCHLAS_API Event ormqr_vendor(Queue& ctx,
                                 const MatrixView<T, MatrixFormat::Dense>& A,
@@ -92,6 +135,8 @@ BATCHLAS_API Event ormqr_vendor(Queue& ctx,
                                 Span<T> tau,
                                 Span<std::byte> workspace);
 
+/// @brief Workspace query of the vendor arm of ormqr().
+/// @ingroup dispatch
 template <Backend B, typename T>
 BATCHLAS_API size_t ormqr_vendor_buffer_size(Queue& ctx,
                                              const MatrixView<T, MatrixFormat::Dense>& A,
@@ -105,11 +150,10 @@ BATCHLAS_API size_t ormqr_vendor_buffer_size(Queue& ctx,
 
 namespace batchlas::blas::dispatch::detail {
 
-// The vendor call, gated on the vendor actually being compiled in.
-//
-// Without this, a build with no cuBLAS / rocSOLVER / netlib library leaves backend::ormqr_vendor<B, T> undefined and the LINK fails -- which is
-// the state WP0 exists to remove. Being `if constexpr`, the vendor call is not
-// compiled at all when the library is absent, so there is no symbol to satisfy.
+/// @brief Calls ormqr_vendor(), or throws NoRouteError when no vendor library is built in.
+/// @ingroup dispatch
+// Must stay `if constexpr`: a vendor-free build has no ormqr_vendor symbol to link.
+// evidence: docs/design/vendor-independence.md#the-vendor-gate
 template <Backend B, typename T, typename... Args>
 Event ormqr_vendor_or_throw(Args&&... args) {
     if constexpr (!batchlas::dispatch::factorization_vendor_available<B>) {
@@ -120,6 +164,8 @@ Event ormqr_vendor_or_throw(Args&&... args) {
     }
 }
 
+/// @brief Calls ormqr_vendor_buffer_size(), or throws NoRouteError when no vendor library is built in.
+/// @ingroup dispatch
 template <Backend B, typename T, typename... Args>
 size_t ormqr_vendor_buffer_size_or_throw(Args&&... args) {
     if constexpr (!batchlas::dispatch::factorization_vendor_available<B>) {
@@ -136,9 +182,9 @@ namespace batchlas::blas::dispatch {
 
 namespace detail {
 
-// The routing inputs, in one place so the call and its buffer-size query cannot
-// build different ones. `side` is not read: ormqr_supports_blocked ignored it
-// too, and it is carried only so the shape describes the call faithfully.
+/// @brief Routing shape of an ormqr() call; shared by the call and its size query.
+/// @ingroup dispatch
+// `side` is carried for fidelity but no predicate reads it.
 template <typename T>
 inline batchlas::dispatch::OpShape ormqr_op_shape(const Queue& ctx,
                                                   const MatrixView<T, MatrixFormat::Dense>& A,
@@ -157,12 +203,12 @@ inline batchlas::dispatch::OpShape ormqr_op_shape(const Queue& ctx,
     return s;
 }
 
-// One resolution per call, shared by ormqr_dispatch and its buffer-size query.
-//
-// This replaces choose_ormqr_provider, which returned a forced provider without
-// checking it against ormqr_supports_blocked -- see route_ormqr.hh for the two
-// defects that followed. The unset default for ormqr is Auto, unlike GEMM's
-// Vendor.
+/// @brief Resolves the ormqr() route from `BATCHLAS_ORMQR_ROUTE` and the call's shape.
+///
+/// The one resolution shared by ormqr_dispatch() and ormqr_buffer_size_dispatch().
+/// With the variable unset the request is Auto (unlike gemm, whose default is Vendor).
+/// @ingroup dispatch
+// evidence: docs/perf/qr.md#ormqr-one-route-resolution-for-the-call-and-its-size-query
 template <typename T>
 inline batchlas::dispatch::Route ormqr_route(const Queue& ctx,
                                              const MatrixView<T, MatrixFormat::Dense>& A,
@@ -174,13 +220,13 @@ inline batchlas::dispatch::Route ormqr_route(const Queue& ctx,
     return d::resolve_ormqr_route<T>(forced, ormqr_op_shape<T>(ctx, A, side, trans));
 }
 
-// Resolve the WY block width used by the blocked provider.
-//
-// `block_size_hint > 0` lets a caller that knows the *reflector count* k pick the
-// width; the tuning table is keyed on A.rows() (the panel height), which for a
-// tall skinny panel is the wrong dimension entirely. Clamped to k = min(rows,cols)
-// so the hint can never exceed the number of reflectors, and computed from A alone
-// so the buffer-size query and the call always agree.
+/// @brief WY block width for the blocked ormqr route.
+///
+/// A positive @p block_size_hint is clamped to [1, k], k = min(rows, cols);
+/// otherwise the tuning table picks a width from `A.rows()`.
+/// @ingroup dispatch
+// Computed from A alone so the size query and the call agree. The hint exists
+// because the table is keyed on panel height, the wrong axis for tall panels.
 template <typename T>
 inline int32_t resolve_ormqr_block_size(const MatrixView<T, MatrixFormat::Dense>& A,
                                         int32_t block_size_hint) {
@@ -193,6 +239,8 @@ inline int32_t resolve_ormqr_block_size(const MatrixView<T, MatrixFormat::Dense>
 
 } // namespace detail
 
+/// @brief Routed implementation behind ormqr(); see ormqr() for the contract.
+/// @ingroup dispatch
 template <Backend B, typename T>
 inline Event ormqr_dispatch(Queue& ctx,
                            const MatrixView<T, MatrixFormat::Dense>& A,
@@ -207,9 +255,7 @@ inline Event ormqr_dispatch(Queue& ctx,
 
     const int32_t block_size = detail::resolve_ormqr_block_size<T>(A, block_size_hint);
 
-    // No third arm. The resolver returns either a vendor route or a supported
-    // native one, so the old `else { chosen = Vendor; ... }` branch -- the one
-    // that disagreed with ormqr_buffer_size -- has nothing left to catch.
+    // Two arms only: the resolver returns a vendor route or a supported native one.
     const size_t need_ws = use_vendor
         ? detail::ormqr_vendor_buffer_size_or_throw<B, T>(ctx, A, C, side, trans, tau)
         : ormqr_blocked_buffer_size<B, T>(ctx, A, C, side, trans, tau, block_size);
@@ -218,12 +264,9 @@ inline Event ormqr_dispatch(Queue& ctx,
         throw batchlas::workspace_error("ormqr: insufficient workspace for chosen provider");
     }
 
-    // std::optional, not a plain `Queue`: the default Queue constructor is not inert, it
-    // builds a real sycl::queue on Device::default_device(). A by-value declaration here
-    // would pay that construction (and, on a multi-GPU box, touch device 0) on every ormqr
-    // call, including the common in-order path that never looks at it. It also cannot be
-    // sunk into the if-block -- run_q escapes to the calls below, so the queue has to
-    // outlive the branch.
+    // std::optional, not a plain Queue: the default Queue constructor builds a real
+    // sycl::queue on Device::default_device(), which every call (even in-order ones)
+    // would pay. It must outlive the if-block because run_q escapes.
     Queue* run_q = &ctx;
     std::optional<Queue> in_order_q;
     if (!ctx.in_order()) {
@@ -243,6 +286,8 @@ inline Event ormqr_dispatch(Queue& ctx,
     return e;
 }
 
+/// @brief Routed implementation behind ormqr_buffer_size().
+/// @ingroup dispatch
 template <Backend B, typename T>
 inline size_t ormqr_buffer_size_dispatch(Queue& ctx,
                                         const MatrixView<T, MatrixFormat::Dense>& A,
@@ -251,12 +296,8 @@ inline size_t ormqr_buffer_size_dispatch(Queue& ctx,
                                         Transpose trans,
                                         Span<T> tau,
                                         int32_t block_size_hint = 0) {
-    // The SAME resolution ormqr_dispatch performs, from the same pure inputs.
-    // Previously these two disagreed: a forced provider that was neither Vendor
-    // nor Blocked reached ormqr_dispatch's `else` arm and ran on the vendor,
-    // while this function fell past its single `if` and returned the BLOCKED
-    // size -- so sizing a workspace here and passing it there could throw
-    // "insufficient workspace for chosen provider".
+    // Must perform exactly ormqr_dispatch's resolution, from the same inputs.
+    // evidence: docs/perf/qr.md#ormqr-one-route-resolution-for-the-call-and-its-size-query
     const batchlas::dispatch::Route chosen = detail::ormqr_route<T>(ctx, A, side, trans);
 
     const int32_t block_size = detail::resolve_ormqr_block_size<T>(A, block_size_hint);
@@ -299,11 +340,7 @@ inline size_t ormqr_buffer_size(Queue& ctx,
 
 namespace batchlas {
 
-// Owning-argument and backend-deducing overloads: `f(ctx, Matrix, ...)` accepts
-// owning containers where the primary takes views, and `f(ctx, ...)` uses
-// ctx.backend(). See BATCHLAS_ACCEPT_OWNING and BATCHLAS_DISPATCH_ON_QUEUE in
-// blas/queue-dispatch.hh.
-
+// Owning-container and backend-deducing overloads; see blas/queue-dispatch.hh.
 BATCHLAS_ACCEPT_OWNING(ormqr)
 BATCHLAS_ACCEPT_OWNING(ormqr_buffer_size)
 

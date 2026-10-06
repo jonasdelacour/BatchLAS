@@ -18,48 +18,17 @@
 
 namespace batchlas {
 
-// Kernel name tag. Must live outside the anonymous namespace so it does not
-// depend on internal-linkage entities.
+// Kernel name tag: outside the anonymous namespace so it does not depend on
+// internal-linkage entities.
 template <typename T, size_t P, size_t C, bool ComputeV>
 class GesvdjCTAKernel;
 
-// ---------------------------------------------------------------------------
-// One-sided (Hestenes) Jacobi SVD, partition-resident.
-//
-// One SubGroupPartition<P> owns one problem; the working matrix and (optionally)
-// the accumulated right factor live in local memory for the whole solve, so a
-// full SVD is a single kernel launch.
-//
-// WHY THIS EXISTS. The pre-existing gesvd_cta / gesvd_blocked paths form the
-// tridiagonal of B^T B explicitly (gesvd_blocked.cc:220) and recover
-// sigma = sqrt(lambda). That squares the condition number: measured relative
-// error in the singular values is 7.8e-3 at kappa=10 and 2.13 at kappa=1e6
-// (float, n=32), against cuSOLVER gesvdjBatched's 4.1e-6 and 9.3e-3, and the
-// computed U/V stop being orthogonal at all by kappa=1e4 (benchmarks/gesvd_relacc.cc).
-// evidence: docs/perf/gesvd.md#gesvd-defect-a-the-normal-equations-square-kappa
-//
-// One-sided Jacobi avoids that because sigma_i is a COLUMN NORM of the rotated
-// A, never the square root of a difference of large numbers, and the rotations
-// applied to A are orthogonal. The 2x2 Gram of a pivot pair is recomputed fresh
-// from the current columns every time, so its rounding error is columnwise
-// relative -- which is what makes the threshold
-//     |a_pq| > tol * sqrt(|a_pp| * |a_qq|)
-// a genuine relative test and delivers the Demmel-Veselic bound
-//     |d sigma_i| / sigma_i <= O(eps) * kappa(A_c).
-//
-// Structurally this is syev_jacobi_cta with Phase 2 (the A <- U^H A row update)
-// deleted -- that deletion is exactly the difference between two-sided and
-// one-sided Jacobi -- plus a Gram phase, column norms, and an SVD epilogue.
-//
-// References:
-// - Hestenes, "Inversion of matrices by biorthogonalization", 1958.
-// - Demmel & Veselic, SIAM J. Matrix Anal. Appl. 13(4), 1992.
-// - Drmac & Veselic, LAPACK Working Notes 169/170 (threshold form, SVA
-//   recurrence, convergence test).
-// - Golub & Van Loan, Matrix Computations, Alg. 8.5.1 (2x2 rotation).
-// - The design decision and its review:
-//   evidence: docs/design/gesvd.md#gesvdj_cta-the-lane-equals-row-mapping-decision
-// ---------------------------------------------------------------------------
+// One-sided (Hestenes) Jacobi SVD. One SubGroupPartition<P> owns one problem;
+// A and (optionally) V stay in local memory for the whole solve, one launch.
+// sigma is a column norm of the rotated A, never sqrt(lambda) of B^T B, which
+// is what keeps relative accuracy (Demmel-Veselic; LAWN 169/170).
+// evidence: docs/design/gesvd.md#gesvd-design-why-one-sided-jacobi
+// evidence: docs/design/gesvd.md#gesvdj_cta-the-lane-equals-row-mapping-decision
 
 namespace {
 
@@ -132,9 +101,8 @@ inline Real part_min_g(const Group& g, Real v) {
     return v;
 }
 
-// Round-robin ("chess tournament") pairing; identical to syev_jacobi_cta.cc:115.
-// For even mp, round t in [0, mp-2] gives mp/2 disjoint pairs and the mp-1
-// rounds cover every index pair exactly once.
+// Round-robin pairing, identical to syev_jacobi_cta's: for even mp the mp-1
+// rounds of mp/2 disjoint pairs cover every index pair exactly once.
 inline void round_robin_pair_g(int32_t mp, int32_t t, int32_t k, int32_t& p, int32_t& q) {
     const int32_t ring = mp - 1;
     if (k == 0) {
@@ -176,18 +144,10 @@ inline void gesvdj_cta_impl(Queue& ctx,
         const auto dev = ctx->get_device();
         const int32_t sg_size = 32;
 
-        // LD is odd, which is what makes the conj-transposed writeback
-        // conflict-free: lane i reads [r + c_i*LD] with c_i a permutation, and
-        // gcd(LD,32)=1 turns c -> c*LD mod 32 into a bijection. With LD == P the
-        // same access serialises 32 ways.
-        // P is the PARTITION WIDTH (lanes). C is the TILE CAPACITY (rows and
-        // columns of the resident matrix). They are equal on every rung that
-        // existed before n > 32 support, and C > P means each lane owns
-        // kRPL = C/P rows rather than one.
-        //
-        // Splitting them is what keeps the n <= 32 path byte-identical: at
-        // C == P every generalised expression below reduces syntactically to
-        // what it was.
+        // P = partition width (lanes), C = tile capacity; C > P means each lane
+        // owns kRPL = C/P rows. LD = C+1 is odd so the V^H writeback is
+        // bank-conflict-free.
+        // evidence: docs/design/gesvd.md#gesvdj_cta-local-memory-budget-formula
         static_assert(C % P == 0, "tile capacity must be a whole number of partition widths");
         static_assert(C <= 64, "int16 pair packing p|(q<<8) overflows above C=127; 64 is the tested cap");
         constexpr size_t kRPL = C / P;                       // rows per lane
@@ -197,20 +157,15 @@ inline void gesvdj_cta_impl(Queue& ctx,
         constexpr size_t kTileElems = static_cast<size_t>(LD) * C;
         constexpr size_t kRotSlots = (C / 2 > 0) ? (C / 2) : 1;
         constexpr size_t kPairSlots = (C - 1) * kRotSlots;
-        // Pairs processed per Gram reduce-scatter. Fixed at P/2 (capped by the
-        // slot count for the small rungs) because the scatter lands pair k in
-        // lanes 2k, 2k+1 -- more than P/2 pairs in flight has nowhere to land.
+        // At most P/2 pairs per reduce-scatter: pair k lands in lanes 2k, 2k+1.
         constexpr size_t kGramChunk = (kRotSlots < P / 2) ? kRotSlots : (P / 2 > 0 ? P / 2 : 1);
         constexpr size_t kChunks = kRotSlots / kGramChunk;
         static_assert(kChunks * kGramChunk == kRotSlots, "round must split evenly into Gram chunks");
         constexpr bool kNeedPhase = internal::is_complex<T>::value;
 
-        // Local-memory budget. Note this clamps probs_per_wg DIRECTLY rather
-        // than the multiplier: syev_jacobi_cta.cc:193-201 clamps the multiplier
-        // but usage is probs_per_wg * bytes_per_prob, and since
-        // base_wg_size = lcm(P,32) = 32 for every supported P the two differ by
-        // 32/P -- an under-count of up to 8x at P=4. Harmless there with one
-        // small tile; not harmless with two resident tiles.
+        // Clamp probs_per_wg DIRECTLY, not the multiplier as syev_jacobi_cta
+        // does: that under-counts by 32/P, a launch failure with two tiles.
+        // evidence: docs/design/gesvd.md#gesvdj_cta-local-memory-budget-formula
         const int32_t probs_per_warp = sg_size / static_cast<int32_t>(P);
         constexpr size_t kPairTabBytes = kPairSlots * sizeof(int16_t);
         const size_t bytes_per_prob =
@@ -242,8 +197,7 @@ inline void gesvdj_cta_impl(Queue& ctx,
         const int32_t global_size = num_wg * wg_size;
         const int32_t wg_sz = wg_size;
 
-        // Conditionally unused accessors are sized 1, never 0, and their base is
-        // forced to 0 (the trap at syev_jacobi_cta.cc:207-208).
+        // Conditionally unused accessors are sized 1, never 0, base forced to 0.
         auto A_local = sycl::local_accessor<T, 1>(
             sycl::range<1>(static_cast<size_t>(probs_per_wg) * kTileElems), cgh);
         auto V_local = sycl::local_accessor<T, 1>(
@@ -260,22 +214,17 @@ inline void gesvdj_cta_impl(Queue& ctx,
 
         const int32_t RR = rows;
         const int32_t CC = cols;
-        // Columns of the left factor actually emitted: RR for All, CC for Thin.
-        // Kernel-uniform, so every partition-wide reduction below stays uniform
-        // and no barrier structure depends on it.
+        // Left-factor columns emitted (RR All, CC Thin); kernel-uniform, so no
+        // reduction or barrier depends on it.
         const int32_t LC = left_cols;
-        // Pivot index space padded to even so the round-robin schedule is well
-        // defined; a padded index is never paired with a real one because pairs
-        // touching index >= CC are skipped.
+        // Padded to even for the round-robin; pairs touching >= CC are skipped.
         const int32_t mp = (CC % 2 == 0) ? CC : (CC + 1);
         const int32_t max_sweeps = std::max<int32_t>(int32_t(1), static_cast<int32_t>(params.max_sweeps));
         const bool want_left_f = want_left;
         const bool transposed_f = transposed;
 
-        // Relative off-diagonal threshold (Demmel & Veselic; LAWN 169 Remark
-        // 2.2). The classical absolute test |a_pq| <= tol*max|a_kl| would
-        // forfeit the entire relative-accuracy advantage that motivates this
-        // kernel.
+        // Relative threshold (LAWN 169 Remark 2.2); an absolute test would
+        // forfeit the relative accuracy this kernel exists for.
         const Real tol = params.tol_multiplier * static_cast<Real>(CC) * std::numeric_limits<Real>::epsilon();
         const Real tiny = std::numeric_limits<Real>::min();
         const Real tau_big = Real(1) / sycl::sqrt(std::numeric_limits<Real>::epsilon());
@@ -285,18 +234,11 @@ inline void gesvdj_cta_impl(Queue& ctx,
         int32_t* SW = (params.sweep_counts.size() >= static_cast<size_t>(batch_size))
                           ? params.sweep_counts.data()
                           : nullptr;
-        // A local of the submit lambda for the same reason as S and SW; nullptr
-        // when status was not requested, which makes info_store a no-op.
+        // nullptr when status was not requested, making info_store a no-op.
         int32_t* const info_dev = info;
 
-        // The 32 here is load-bearing and was previously only checked on the
-        // host, which cannot constrain what the compiler picks. The exact-norm
-        // reduction and the Gram reduce-scatter below are hardcoded 5- and
-        // (4+1)-step butterflies, probs_per_warp is sg_size/P with sg_size
-        // fixed at 32, and part_id assumes the same -- every one of those is
-        // silently wrong at any other sub-group width. Sibling CTA kernels
-        // (steqr_cta, syev_cta_fused, sytrd_sb2st_cta) all carry the attribute;
-        // this one and syev_jacobi_cta did not.
+        // reqd_sub_group_size(32) is load-bearing: the 5- and (4+1)-step
+        // butterflies, probs_per_warp and part_id are silently wrong otherwise.
         cgh.parallel_for<GesvdjCTAKernel<T, P, C, ComputeV>>(
             sycl::nd_range<1>(global_size, wg_size),
             [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(32)]] {
@@ -307,14 +249,9 @@ inline void gesvdj_cta_impl(Queue& ctx,
                 const int32_t pairs_per_round = mp / 2;
                 const int32_t rounds = mp - 1;
 
-                // Pair table, shared by the whole work-group. Filled and read
-                // with the COMPILE-TIME stride kRotSlots (not pairs_per_round):
-                // those differ whenever CC < P, and a mismatch makes the
-                // unrolled k loop dereference garbage column indices. Unused
-                // slots get a sentinel that fails the `< CC` test.
-                //
-                // This must precede the `prob_id >= nb` early return, since it
-                // ends in a work-group barrier.
+                // Pair table: stride kRotSlots (not pairs_per_round, they differ
+                // when CC < P); unused slots hold a sentinel failing `< CC`. Must
+                // precede the `prob_id >= nb` return: it ends in a wg barrier.
                 for (int32_t idx = local_id; idx < rounds * static_cast<int32_t>(kRotSlots); idx += wg_sz) {
                     const int32_t t = idx / static_cast<int32_t>(kRotSlots);
                     const int32_t k = idx - t * static_cast<int32_t>(kRotSlots);
@@ -351,29 +288,16 @@ inline void gesvdj_cta_impl(Queue& ctx,
                 const int32_t base_r = part_id * static_cast<int32_t>(kRotSlots);
                 const int32_t base_p = part_id * static_cast<int32_t>(C);
 
-                // ---- Load. lane = ROW. ----
-                // Lane-as-row makes the global read A_prob(lane,c) (address
-                // c*ld + lane) coalesced; lane-as-column would stride by ld.
-                // For m < n we read A_prob(c,lane) instead, i.e. transpose at
-                // load time -- free, since the tile is a few KB, and it avoids
-                // gesvd_blocked's out-of-place transpose + recursion.
-                // The pad region is written as exact zero so a padded pair's
-                // Gram is identically 0 and falls below any threshold.
-                // Lane owns rows lane, lane+P, lane+2P, ... At kRPL == 1 this
-                // is textually the single-row loop it replaces. The global read
-                // stays coalesced for every rr: A_prob(row, c) is at
-                // c*ld + lane + rr*P, contiguous across lanes.
+                // ---- Load. lane = ROW (rows lane, lane+P, ...), coalesced. ----
+                // m < n is transposed at load time. The pad is exact zero so a
+                // padded pair's Gram is 0 and falls below any threshold.
                 for (int32_t rr = 0; rr < static_cast<int32_t>(kRPL); ++rr) {
                     const int32_t row = lane + rr * static_cast<int32_t>(P);
                     for (int32_t c = 0; c < static_cast<int32_t>(C); ++c) {
                         T v = T(0);
                         if (row < RR && c < CC) {
-                            // For m < n we solve A^H, not A^T. A^H = U' S V'^H gives
-                            // A = V' S U'^H, so U = V' and Vh = U'^H -- the SAME role
-                            // mapping as the m >= n case, just swapped between the
-                            // two outputs. Solving A^T instead would give
-                            // A = conj(V') S U'^T, whose conjugations differ, and is
-                            // wrong for complex (it is invisible in real arithmetic).
+                            // Solve A^H, not A^T: A^T is wrong for complex only.
+                            // evidence: docs/design/gesvd.md#gesvdj_cta-rank-deficiency-thin-and-m--n
                             v = transposed_f ? conj_if_complex_g(A_prob(c, row)) : A_prob(row, c);
                         }
                         A_local[base_a + row + c * LD] = v;
@@ -384,16 +308,9 @@ inline void gesvdj_cta_impl(Queue& ctx,
                 }
                 group_barrier(part);
 
-                // ---- Exact column norms (S0). ----
-                // Reduce-scatter of P values over P lanes: 5 steps, no trailing
-                // all-reduce needed because V == L here. Leaves lane c holding
-                // ||A_c||^2.
-                // x stays Real[P], NOT Real[C]. Widening it to 64 would cost 64
-                // Real registers per lane and force a sixth reduction step; the
-                // hardcoded 5 steps are correct because the LANE count is still
-                // 32. Instead the C columns are covered in C/P passes of the
-                // unchanged 32-wide reduce-scatter, and each lane's kRPL rows are
-                // summed into x[c] before the butterfly runs.
+                // ---- Exact column norms: lane c ends holding ||A_c||^2. ----
+                // P values over P lanes: 5 scatter steps, no all-reduce. x stays
+                // Real[P] (not Real[C]); C columns take C/P passes.
                 auto exact_norms = [&]() {
                     for (int32_t h = 0; h < static_cast<int32_t>(kRPL); ++h) {
                         const int32_t col0 = h * static_cast<int32_t>(P);
@@ -428,19 +345,11 @@ inline void gesvdj_cta_impl(Queue& ctx,
                 exact_norms();
                 group_barrier(part);
 
-                // ---- Global rescale (C.6). ----
-                // A SINGLE global power-of-two factor. Per-column equilibration
-                // would be a different matrix: scaling A by D gives
-                // A*D = U S W^H, so A = U S (D^-1 W)^H and D^-1 W is not
-                // orthogonal. kappa(A_c) is an ANALYSIS quantity, delivered by
-                // the rotation/threshold formulas already being per-pair
-                // scale-invariant, not by performing a scaling. LAPACK ?GESVJ
-                // likewise scales only by a scalar.
-                //
-                // Centre on the geometric mean rather than the max: in float
-                // that tolerates a column-norm ratio of ~1.7e38 instead of
-                // ~9.2e18, and graded matrices -- the class the whole accuracy
-                // argument is about -- are exactly where the ratio is large.
+                // ---- Global rescale: ONE power-of-two factor, centred on the
+                // geometric mean. Per-column equilibration is not a factorisation
+                // of A. Only columns < P feed nmax/nmin (the C=64 rung's upper
+                // half does not); beta stays exact either way.
+                // evidence: docs/design/gesvd.md#gesvdj_cta-global-power-of-two-scaling
                 Real my_n2 = (lane < CC) ? Nrm_local[base_n + lane] : Real(0);
                 const Real nmax = part_max_g(part, my_n2);
                 const Real nmin_in = (lane < CC && my_n2 > Real(0))
@@ -449,9 +358,7 @@ inline void gesvdj_cta_impl(Queue& ctx,
                 const Real nmin = part_min_g(part, nmin_in);
 
                 if (nmax == Real(0)) {
-                    // Identically zero input: sigma = 0 and any orthonormal
-                    // U/V is admissible. Fall through with beta = 1; the
-                    // completion path fills U and V is already the identity.
+                    // Zero input: beta = 1; completion fills U, V is identity.
                 }
                 Real beta = Real(1);
                 if (nmax > Real(0) && nmin <= nmax) {
@@ -460,10 +367,8 @@ inline void gesvdj_cta_impl(Queue& ctx,
                 }
                 const Real inv_beta = Real(1) / beta;
 
-                // ---- Global rescale ----
-                // de Rijk pre-ordering was implemented here and REMOVED: it saved
-                // no sweeps, and even an untaken branch for it cost 13% of wall
-                // clock through register pressure. Do not re-add it behind a flag.
+                // Do not add de Rijk pre-ordering here, even behind a flag: it
+                // saved no sweeps and an untaken branch cost 13%.
                 // evidence: docs/perf/gesvd.md#gesvdj_cta-tier-2-preconditioning-tested-and-rejected
                 if (beta != Real(1)) {
                     for (int32_t rr = 0; rr < static_cast<int32_t>(kRPL); ++rr) {
@@ -477,17 +382,10 @@ inline void gesvdj_cta_impl(Queue& ctx,
                     group_barrier(part);
                 }
 
-                // ---- Sweeps ----
-                // Termination requires TWO consecutive zero-rotation sweeps.
-                // The second is the verification sweep: norms are recomputed
-                // exactly at every sweep start, but within a sweep they are
-                // maintained by the analytic recurrence and can drift, and a
-                // drifted (inflated) a_pp raises the threshold so a genuinely
-                // non-negligible a_pq is skipped. Without the re-check the loop
-                // exits and sigma is a column norm of a NON-CONVERGED A -- a
-                // silent wrong answer that sigma-comes-from-A does not prevent.
-                // The verification sweep applies no rotations, so it costs only
-                // the Gram + threshold pass.
+                // ---- Sweeps. Terminate only after TWO consecutive zero-rotation
+                // sweeps: in-sweep norms drift, and one clean sweep can be a
+                // drifted threshold skipping a live a_pq (silent wrong sigma).
+                // evidence: docs/design/gesvd.md#gesvdj_cta-sweep-convergence-and-extraction-rules
                 int32_t zero_sweeps = 0;
                 int32_t sweeps_used = 0;
                 for (int32_t sweep = 0; sweep < max_sweeps; ++sweep) {
@@ -502,31 +400,15 @@ inline void gesvdj_cta_impl(Queue& ctx,
                     for (int32_t t = 0; t < rounds; ++t) {
                         const int32_t tab_base = t * static_cast<int32_t>(kRotSlots);
 
-                        // The round is processed in CHUNKS of kGramChunk = P/2
-                        // pairs. That constant is what keeps the Gram
-                        // reduce-scatter, the k_of_lane = lane>>1 mapping and
-                        // the `lane % 2 == 0` guards below EXACTLY as they were:
-                        // the scatter lands chunk-local pair k in lanes 2k and
-                        // 2k+1, which needs at most P/2 pairs in flight. A round
-                        // at C=64 has 32 pairs, so it takes two chunks; at C=32
-                        // there is one chunk and this loop disappears.
-                        //
-                        // Chunking is safe because a round's pairs are a perfect
-                        // matching: chunks touch disjoint columns, so the
-                        // Gram/apply of one cannot disturb another, and the Nrm
-                        // writes never collide.
-                        //
-                        // It is also what stops the register arrays growing with
-                        // C. Holding a whole C=64 round would need
-                        // ap[32][2] + aq[32][2] + g[32] = 160 live T; chunked it
-                        // is 16*2 + 16*2 + 16 = 80, against 48 at C=32.
+                        // Chunks of kGramChunk pairs (two at C=64). Safe because
+                        // a round is a perfect matching: chunks touch disjoint
+                        // columns. Also caps live registers (80 T, not 160).
                         for (int32_t ch = 0; ch < static_cast<int32_t>(kChunks); ++ch) {
                         const int32_t tab_base = t * static_cast<int32_t>(kRotSlots)
                                                + ch * static_cast<int32_t>(kGramChunk);
 
-                        // Pair indices for the chunk, held in registers.
                         // Every index into pk/qk/ap/aq/g must be compile-time or
-                        // the arrays spill to local memory.
+                        // the arrays spill.
                         int32_t pk[kGramChunk];
                         int32_t qk[kGramChunk];
                         T ap[kGramChunk][kRPL];
@@ -541,8 +423,7 @@ inline void gesvdj_cta_impl(Queue& ctx,
                             const bool ok = (pk[k] < CC) && (qk[k] < CC);
                             const int32_t ip = ok ? pk[k] : 0;
                             const int32_t iq = ok ? qk[k] : 0;
-                            // conj(A_p) * A_q, accumulated over this lane's rows
-                            // BEFORE the butterfly, which then sums across lanes.
+                            // conj(A_p)*A_q over this lane's rows, then across lanes.
                             T acc = T(0);
 #pragma unroll
                             for (int32_t rr = 0; rr < static_cast<int32_t>(kRPL); ++rr) {
@@ -554,15 +435,8 @@ inline void gesvdj_cta_impl(Queue& ctx,
                             g[k] = ok ? acc : T(0);
                         }
 
-                        // Reduce-scatter: kGramChunk dot products in
-                        // log2(kGramChunk) scatter steps PLUS log2(P/kGramChunk)
-                        // all-reduce steps. At P=32, kGramChunk=16, that is 4 + 1.
-                        //
-                        // Writing it as five halving steps is WRONG and silently
-                        // sums each dot product over only half the rows: the
-                        // fifth `half` is 0 so its inner loop never runs. This
-                        // was found by adversarial review before the kernel was
-                        // written.
+                        // Reduce-scatter is 4 scatter + 1 all-reduce step at P=32.
+                        // Five halving steps silently sum over half the rows.
                         // evidence: docs/design/gesvd.md#gesvdj_cta-the-reduce-scatter-g3-trap
 #pragma unroll
                         for (int32_t step = 0; step < 4; ++step) {
@@ -578,19 +452,12 @@ inline void gesvdj_cta_impl(Queue& ctx,
                                 g[j] = own + xor_shuffle_g(part, send, mask);
                             }
                         }
-                        // Final stage is an ALL-REDUCE over the surviving lane
-                        // pair, not another halving.
+                        // Final ALL-REDUCE: g[0] = a_{p_k q_k}, k = lane>>1.
                         g[0] = g[0] + xor_shuffle_g(part, g[0], 1u);
-                        // g[0] now holds a_{p_k q_k} for k = lane>>1, replicated
-                        // in lanes 2k and 2k+1.
 
                         const int32_t k_of_lane = lane >> 1;
-                        // Slot index within the ROUND, which is what
-                        // pairs_per_round counts.
                         const int32_t slot = ch * static_cast<int32_t>(kGramChunk) + k_of_lane;
-                        // Re-read the pair from LDS rather than indexing pk[]
-                        // with the runtime index k_of_lane: a runtime index into
-                        // a register array spills the whole array.
+                        // Re-read from LDS: a runtime index into pk[] would spill it.
                         const int32_t pq_l = static_cast<int32_t>(Pair_local[tab_base + k_of_lane]);
                         const int32_t kp = pq_l & 0xFF;
                         const int32_t kq = (pq_l >> 8) & 0xFF;
@@ -631,9 +498,8 @@ inline void gesvdj_cta_impl(Queue& ctx,
                                 }
                                 c_rot = Real(1) / sycl::sqrt(Real(1) + tt * tt);
                                 s_rot = tt * c_rot;
-                                // A rotation that rounds to the identity never
-                                // annihilates a_pq, so counting it would keep
-                                // the sweep loop alive for all max_sweeps.
+                                // An identity rotation must not count, or every
+                                // problem burns all max_sweeps.
                                 if (s_rot == Real(0)) active = false;
                             } else {
                                 active = false;
@@ -646,21 +512,10 @@ inline void gesvdj_cta_impl(Queue& ctx,
                             d_rot = T(1);
                         }
 
-                        // Analytic norm recurrence (LAPACK ?GESVJ maintains SVA
-                        // the same way). Exact in exact arithmetic: with
-                        // t^2 + 2*tau*t - 1 = 0 the updated norms are
-                        // a_pp - t*a_pq and a_qq + t*a_pq.
-                        // Even lanes only, so each column is written once.
+                        // Analytic norm recurrence (as ?GESVJ's SVA), even lanes
+                        // only. BOTH sides clamp at zero: a negative q side NaNs
+                        // the rank sort into an out-of-bounds LDS index.
                         if (active && (lane % 2 == 0)) {
-                            // BOTH updates are clamped at zero. Clamping only the
-                            // p side (the obvious cancelling one) lets the q side
-                            // go negative on a badly conditioned problem; sqrt of
-                            // that is NaN, every rank comparison against NaN is
-                            // false, two columns then receive the same rank, and
-                            // the Inv_local entry nobody wrote is read as a
-                            // garbage column index -- an out-of-bounds LDS access,
-                            // not a wrong number. Observed as
-                            // CUDA_ERROR_ILLEGAL_ADDRESS at kappa >= 1e4.
                             Nrm_local[base_n + kp] = sycl::fmax(app - tt * gr, Real(0));
                             Nrm_local[base_n + kq] = sycl::fmax(aqq + tt * gr, Real(0));
                         }
@@ -673,31 +528,21 @@ inline void gesvdj_cta_impl(Queue& ctx,
                         }
                         group_barrier(part);
 
-                        // Counted on even lanes only. Must be executed by ALL
-                        // lanes -- it is a butterfly XOR reduction and a
-                        // non-participating lane poisons the result.
+                        // Every lane must execute this butterfly.
                         const int32_t round_active =
                             part_sum_g(part, (active && (lane % 2 == 0)) ? int32_t(1) : int32_t(0));
                         rot_count += round_active;
                         if (round_active == 0) continue;
 
-                        // ---- A <- A*U, V <- V*U. lane owns rows lane+rr*P. ----
-                        // ap[k][rr]/aq[k][rr] are still live from the Gram phase;
-                        // that is kRPL*32 LDS loads per chunk this mapping saves
-                        // and no other does. There is deliberately NO second
-                        // phase: syev_jacobi_cta's A <- U^H A row update is what
-                        // makes it two-sided, and deleting it is what makes this
-                        // one-sided.
+                        // ---- A <- A*U, V <- V*U, reusing ap/aq from the Gram.
+                        // Deliberately no A <- U^H A phase: that is two-sided.
 #pragma unroll
                         for (int32_t k = 0; k < static_cast<int32_t>(kGramChunk); ++k) {
                             const sycl::vec<Real, 2> cs =
                                 Rcs_local[base_r + ch * static_cast<int32_t>(kGramChunk) + k];
                             const Real ck = cs[0];
                             const Real sk = cs[1];
-                            // Warp-uniform skip: every lane reads the same slot,
-                            // so a converged pair is genuinely free rather than
-                            // predicated-off. Jacobi's last sweeps are almost
-                            // entirely such rounds.
+                            // Warp-uniform skip: converged pairs are free.
                             if (sk == Real(0)) continue;
 
                             T u11 = T(ck);
@@ -737,48 +582,26 @@ inline void gesvdj_cta_impl(Queue& ctx,
                     }
                 }
 
-                // ---- Epilogue ----
-                // sigma comes from A, ALWAYS. Nrm_local's incrementally
-                // maintained values exist only to choose rotations, where an
-                // error perturbs the schedule; reading sigma from them instead
-                // is a one-line shortcut that passes every existing test and
-                // reintroduces the normal-equations defect through the side
-                // door.
+                // ---- Epilogue. sigma comes from A, ALWAYS: the incremental
+                // Nrm_local only chooses rotations; reading sigma from it passes
+                // every test and reintroduces the normal-equations defect.
                 exact_norms();
                 group_barrier(part);
 
 
-                // Rank sort, descending, ties broken on index so the
-                // permutation is a bijection. Descending is the gesvd contract:
-                // finalize_values_only produces it by index reversal
-                // (gesvd_blocked.cc:305), and both has_tiny_singular_values and
-                // patch_zero_left_vectors read sb[0] as sigma_max.
                 if (SW != nullptr && lane == 0) {
                     SW[prob_id] = sweeps_used;
                 }
-                // The convergence predicate is `zero_sweeps >= 2`, NOT
-                // `sweeps_used < max_sweeps`: termination here requires TWO
-                // consecutive zero-rotation sweeps (see the verification-sweep note
-                // above), so an item that used fewer than max_sweeps can still have
-                // left the loop without the second clean sweep. zero_sweeps is
-                // partition-uniform -- rot_count is reduced across the partition --
-                // so lane 0 may report for the item.
-                // A STORE, not a raise: this kernel is the single writer for the
-                // item, so a converged item is set to 0 here rather than by a
-                // separate clear kernel that could race with it.
+                // Converged means `zero_sweeps >= 2`, not `sweeps_used <
+                // max_sweeps`. zero_sweeps is partition-uniform, so lane 0 reports.
+                // A STORE, not a raise: this kernel is the item's single writer.
                 if (lane == 0) {
                     detail::info_store(info_dev, prob_id, (zero_sweeps < 2) ? 1 : 0);
                 }
 
-                // Seed the permutation with the identity BEFORE the sort. The
-                // sort writes Inv_local[rank] for each column, which covers every
-                // slot only if the ranks are a bijection. That holds for any
-                // finite input, but a defensive identity means a hypothetical
-                // rank collision degrades to a wrong permutation rather than to
-                // a garbage column index used to address local memory.
-                // This is the ONE place where lane is a COLUMN index rather
-                // than a row index, so it is the only place that needs a
-                // columns-per-lane loop: lane owns columns lane, lane+P, ...
+                // Rank sort, DESCENDING (the gesvd contract), ties on index. The
+                // identity seed makes a rank collision a wrong permutation, not
+                // a garbage LDS index. Here lane is a COLUMN index.
                 for (int32_t cc = 0; cc < static_cast<int32_t>(kRPL); ++cc) {
                     const int32_t col = lane + cc * static_cast<int32_t>(P);
                     Inv_local[base_p + col] = static_cast<int16_t>(col);
@@ -798,10 +621,8 @@ inline void gesvdj_cta_impl(Queue& ctx,
                         }
                         Inv_local[base_p + rank] = static_cast<int16_t>(col);
                     }
-                    // Output columns CC..RR-1 of the left factor have no source
-                    // column; park them on the free tile columns CC..RR-1, which
-                    // the pad guarantees are zero and which no real column
-                    // occupies. Disjoint from the rank slots above (0..CC-1).
+                    // Left columns CC..RR-1 park on the zero pad columns,
+                    // disjoint from the rank slots 0..CC-1.
                     if (col >= CC && col < RR) {
                         Inv_local[base_p + col] = static_cast<int16_t>(col);
                     }
@@ -809,10 +630,8 @@ inline void gesvdj_cta_impl(Queue& ctx,
                 group_barrier(part);
 
                 const Real sigma_max = (CC > 0) ? (inv_beta * sycl::sqrt(Nrm_local[base_n + static_cast<int32_t>(Inv_local[base_p])])) : Real(0);
-                // Relative to sigma_max only. gesvd_blocked.cc:317 uses
-                // eps*fmax(1, sigma_max), which declares EVERY sigma zero on a
-                // uniformly small input (sigma_max = 1e-10) and fabricates every
-                // U column.
+                // Relative to sigma_max only; eps*fmax(1, sigma_max) would zero
+                // every sigma of a uniformly small input.
                 const Real tol_zero = zero_mult * std::numeric_limits<Real>::epsilon() * sigma_max;
 
                 for (int32_t cc = 0; cc < static_cast<int32_t>(kRPL); ++cc) {
@@ -826,17 +645,14 @@ inline void gesvdj_cta_impl(Queue& ctx,
 
                 // ---- Left factor: U_c = A_c / sigma_c ----
                 if (want_left_f) {
-                    // Normalise the accepted columns in place. A has been fully
-                    // consumed into sigma by now, so overwriting it is safe.
+                    // Normalise in place; A is fully consumed into sigma.
                     for (int32_t cc = 0; cc < static_cast<int32_t>(kRPL); ++cc) {
                         const int32_t col = lane + cc * static_cast<int32_t>(P);
                         if (col >= CC) continue;
                         const Real n2_c = Nrm_local[base_n + col];
                         const Real s_c = inv_beta * sycl::sqrt(n2_c);
                         if (s_c > tol_zero && n2_c > Real(0)) {
-                            // Divide by the norm of the SCALED column, which is
-                            // sqrt(n2_c) -- not by sigma, which is that times
-                            // 1/beta.
+                            // Divide by the SCALED norm sqrt(n2_c), not sigma.
                             const Real inv_s = Real(1) / sycl::sqrt(n2_c);
                             for (int32_t r = 0; r < static_cast<int32_t>(C); ++r) {
                                 A_local[base_a + r + col * LD] = A_local[base_a + r + col * LD] * T(inv_s);
@@ -845,15 +661,8 @@ inline void gesvdj_cta_impl(Queue& ctx,
                     }
                     group_barrier(part);
 
-                    // Completion. Columns CC..RR-1, and any column whose sigma
-                    // is below tol_zero, are not determined by A. Fill them from
-                    // the orthogonal complement of the columns already accepted.
-                    // patch_zero_left_vectors solves the same problem by copying
-                    // from a second tridiagonal eigensolve, which is not
-                    // available inside a fused kernel, so this is new code.
-                    //
-                    // Gated on a warp-uniform predicate: a well-conditioned
-                    // square input pays one compare and skips the branch.
+                    // Completion of columns CC..RR-1 and any sigma <= tol_zero,
+                    // behind a warp-uniform gate.
                     int32_t deficient_here = 0;
                     for (int32_t cc = 0; cc < static_cast<int32_t>(kRPL); ++cc) {
                         const int32_t col = lane + cc * static_cast<int32_t>(P);
@@ -863,35 +672,16 @@ inline void gesvdj_cta_impl(Queue& ctx,
                     }
                     const int32_t any_def = part_sum_g(part, deficient_here);
 
-                    // LC, not RR: a Thin request wants only the CC columns the
-                    // solve already produced, so the completion block is skipped
-                    // outright unless a column came out numerically deficient
-                    // (any_def > 0), which still has to be repaired.
+                    // LC, not RR: Thin skips completion unless a column is deficient.
                     if (any_def > 0 || LC > CC) {
-                        // The trial index cursor RUNS ACROSS dst; it is not reset
-                        // per column. That is what makes this terminate.
-                        //
-                        // With a per-column restart and an "accept if residual
-                        // norm > 1/2" rule (the original design), the last
-                        // columns are never filled: once d dimensions remain out
-                        // of RR, a canonical basis vector's residual norm^2 is
-                        // only about d/RR, so at d = 1, RR = 32 every trial
-                        // measures ~0.03 and is rejected. The column is then left
-                        // zero and U is not orthogonal -- which is exactly how
-                        // this showed up (defect exactly 1.0 on a 32x8 input).
-                        //
-                        // Running the cursor and accepting above 1/(2*RR) is
-                        // provably sufficient: when d vectors are still needed
-                        // and the cursor has consumed j0 canonical vectors, the
-                        // remaining ones must contain one with residual norm^2 >=
-                        // d/(RR - j0) >= 1/RR, so some trial always passes.
+                        // The trial cursor RUNS ACROSS dst (never reset), with
+                        // acceptance above 1/(2*RR): that is what terminates.
+                        // evidence: docs/design/gesvd.md#gesvdj_cta-rank-deficiency-thin-and-m--n
                         const Real accept_tol = Real(1) / (Real(2) * static_cast<Real>(RR));
                         int32_t jcur = 0;
 
                         for (int32_t dst = 0; dst < LC; ++dst) {
                             const int32_t cdst = static_cast<int32_t>(Inv_local[base_p + dst]);
-                            // With LC == CC this never fires, so only genuinely
-                            // deficient columns are rebuilt.
                             bool needs = (dst >= CC);
                             if (!needs) {
                                 needs = (inv_beta * sycl::sqrt(Nrm_local[base_n + cdst])) <= tol_zero;
@@ -901,21 +691,14 @@ inline void gesvdj_cta_impl(Queue& ctx,
                             bool filled = false;
                             while (jcur < RR && !filled) {
                                 const int32_t j = jcur++;
-                                // The trial vector is distributed over the
-                                // lane's kRPL rows. Each lane sums its own rows
-                                // FIRST and the butterfly then sums across
-                                // lanes -- the butterfly itself stays 32-wide.
                                 T v[kRPL];
 #pragma unroll
                                 for (int32_t rr = 0; rr < static_cast<int32_t>(kRPL); ++rr) {
                                     const int32_t row = lane + rr * static_cast<int32_t>(P);
                                     v[rr] = (row == j) ? T(1) : T(0);
                                 }
-                                // TWO passes of classical Gram-Schmidt. One pass
-                                // against an ill-conditioned accepted set loses
-                                // exactly the orthogonality this patch exists to
-                                // provide, in the near-deficient case that
-                                // triggers it.
+                                // TWO CGS passes: one loses orthogonality exactly
+                                // in the near-deficient case that triggers this.
                                 for (int32_t pass = 0; pass < 2; ++pass) {
                                     for (int32_t d2 = 0; d2 < dst; ++d2) {
                                         const int32_t c2 = static_cast<int32_t>(Inv_local[base_p + d2]);
@@ -956,12 +739,9 @@ inline void gesvdj_cta_impl(Queue& ctx,
                     }
                     group_barrier(part);
 
-                    // Writeback. Two orientations, each chosen so its own output
-                    // coalesces.
+                    // Writeback, each orientation coalescing its own output.
                     if (!transposed_f) {
-                        // U(lane, dst): global address dst*ld + lane, so
-                        // consecutive lanes are contiguous.
-                        // dst is the output COLUMN, so Thin truncates the loop.
+                        // U(lane, dst): dst is the output COLUMN, Thin truncates it.
                         for (int32_t rr = 0; rr < static_cast<int32_t>(kRPL); ++rr) {
                             const int32_t row = lane + rr * static_cast<int32_t>(P);
                             if (row >= RR) continue;
@@ -971,15 +751,9 @@ inline void gesvdj_cta_impl(Queue& ctx,
                             }
                         }
                     } else {
-                        // Vh(lane, r) = conj(L(r, c_lane)): lane is the OUTPUT
-                        // ROW. The LDS read [r + c*LD] is conflict-free because
-                        // LD is odd and c is a permutation.
-                        //
-                        // In THIS orientation lane is the rank index (what dst
-                        // is above) while r runs over the output's columns, so
-                        // the thin restriction lands on `lane`, not on `r`.
-                        // Truncating r instead would emit a factor of the wrong
-                        // shape while still writing something plausible.
+                        // Vh(lane, r) = conj(L(r, c_lane)): lane is the OUTPUT ROW,
+                        // so Thin bounds `lane`, never `r` (wrong shape, plausible
+                        // numbers).
                         for (int32_t cc = 0; cc < static_cast<int32_t>(kRPL); ++cc) {
                             const int32_t dst = lane + cc * static_cast<int32_t>(P);
                             if (dst >= LC) continue;
@@ -1019,18 +793,10 @@ inline void gesvdj_cta_impl(Queue& ctx,
     });
 }
 
-// Largest max(m, n) this kernel accepts, per scalar type.
-//
-// The limit is local memory, and the binding constraint is OCCUPANCY rather
-// than the hard cap. Per-problem LDS at C=64 with the V tile resident is
-// 37,952 B for float, 71,744 B for double and complex<float>, and 138,816 B
-// for complex<double>; this device reports 101,376 B, so complex<double> with
-// vectors does not launch at all and the others fall to 2 or 1 work-groups per
-// SM against 10 at C=32.
-//
-// Values-only halves it (no V tile), which is why the cap is job-dependent.
-// The specific numbers here are set by measurement, not by the limit -- see
-// the table in gesvd_supports_jacobi.
+// Largest max(m, n) accepted, per scalar type; local memory sets it, and
+// complex<double> with a V tile does not launch at C=64. Must agree with
+// gesvd_jacobi_max_dim in route_gesvd.hh.
+// evidence: docs/design/gesvd.md#gesvdj_cta-local-memory-budget-formula
 template <typename T>
 constexpr int32_t gesvdj_cta_max_dim(bool want_vectors) {
     if constexpr (std::is_same_v<T, std::complex<double>>) {
@@ -1062,10 +828,7 @@ void validate_gesvdj_dims(const MatrixView<T, MatrixFormat::Dense>& a,
     if (singular_values.size() < static_cast<std::size_t>(k) * static_cast<std::size_t>(batch)) {
         throw batchlas::invalid_argument(std::string(where) + ": singular_values span too small");
     }
-    // Guard on "is computed at all" rather than "== All", and take the expected
-    // column/row count from the job, so Thin is checked against m x k / k x n.
-    // Testing `== All` here would let a Thin request through with an
-    // unvalidated, probably wrongly-sized, output view.
+    // Guard on `!= None`, not `== All`, or Thin skips validation.
     jobu = canonical_jobu(jobu, m, k);
     jobvh = canonical_jobvh(jobvh, n, k);
     if (jobu != SvdVectors::None) {
@@ -1135,30 +898,21 @@ Event gesvdj_cta(Queue& ctx,
     const bool want_u = (jobu != SvdVectors::None);
     const bool want_vh = (jobvh != SvdVectors::None);
     // The R-sized factor lands in U when m >= n and in Vh when m < n, because
-    // A^T = U' S V'^H gives A = V' S U'^H.
+    // A^H = U' S V'^H gives A = V' S U'^H.
     const bool want_left = transposed ? want_vh : want_u;
     const bool want_right = transposed ? want_u : want_vh;
 
-    // How many columns of the RR-sized left factor to produce. The solve yields
-    // CC of them for free -- they are the rotated, normalised columns of A --
-    // and any beyond that have to be manufactured by an in-kernel Gram-Schmidt
-    // against canonical basis vectors. A Thin request wants exactly those CC, so
-    // left_cols == CC skips that block entirely.
-    //
-    // Only the left factor can be thin: the right factor is CC x CC, and Thin
-    // never shrinks it (the same m<=n / m>=n coincidence that canonicalisation
-    // exploits).
+    // Left-factor columns to emit: the solve yields CC for free, the rest come
+    // from in-kernel completion. Only the left factor can be thin.
     const SvdVectors job_left = transposed ? jobvh : jobu;
     const int32_t left_cols = (job_left == SvdVectors::All) ? RR : CC;
 
     auto* s_ptr = singular_values.data();
 
-    // No clear: the kernel STORES every item's status. `info` is caller USM and
-    // needs no workspace, which is why gesvdj_cta_buffer_size still returns 0.
+    // No clear: the kernel STORES every item's status (caller USM, no workspace).
     int32_t* info_ptr = detail::info_ptr(info, a_in.batch_size());
 
-    // (P, C): P lanes per partition, C the tile capacity. Every rung here has
-    // C == P, i.e. one row per lane -- the shape this kernel has always had.
+    // (P, C): P lanes per partition, C the tile capacity.
     auto launch = [&](auto P_tag, auto C_tag) {
         constexpr size_t Pv = decltype(P_tag)::value;
         constexpr size_t Cv = decltype(C_tag)::value;
@@ -1175,8 +929,7 @@ Event gesvdj_cta(Queue& ctx,
     constexpr auto k32 = std::integral_constant<size_t, 32>{};
     constexpr auto k64 = std::integral_constant<size_t, 64>{};
 
-    // P is capped at 32 by the sub-group width; above that the tile capacity C
-    // grows instead and each lane takes kRPL = C/P rows.
+    // P caps at 32 (sub-group width); above that C grows, kRPL = C/P rows/lane.
     const int32_t md = std::max(m, n);
     if (md <= 4) {
         launch(k4, k4);

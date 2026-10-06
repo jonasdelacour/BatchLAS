@@ -67,6 +67,11 @@ refuted as an algorithm step** ([scaling](#gesvdj_cta-global-power-of-two-scalin
 measured to save nothing and cost 13% through register pressure, and removed
 ([evidence](../perf/gesvd.md#gesvdj_cta-tier-2-preconditioning-tested-and-rejected)).
 
+References cited by the kernel: Hestenes, "Inversion of matrices by biorthogonalization"
+(1958); Demmel & Veselić, SIAM J. Matrix Anal. Appl. 13(4) (1992); Drmač & Veselić, LAPACK
+Working Notes 169/170 (threshold form, SVA recurrence, convergence test); Golub & Van Loan,
+*Matrix Computations*, Alg. 8.5.1 (the 2x2 rotation).
+
 ## gesvd design: why bdsdc goes through Golub-Kahan
 
 Above the Jacobi cap the Blocked path bidiagonalises (`gebrd`), solves the bidiagonal SVD,
@@ -257,8 +262,19 @@ lane-sequential sum would give \f$\sim m\varepsilon\f$, the same order as the th
 up as threshold churn and an inflated sweep count.
 
 At C=64 a round has 32 pairs and runs as two chunks. Chunking is safe because a round's
-pairs are a perfect matching (chunks touch disjoint columns), and it holds the register
-arrays at 80 live T instead of 160.
+pairs are a perfect matching (chunks touch disjoint columns, so neither the Gram/apply of
+one chunk nor the `Nrm_local` writes can disturb another), and it holds the register arrays
+at 80 live T (`ap[16][2] + aq[16][2] + g[16]`) instead of the 160 a whole C=64 round would
+need, against 48 at C=32. Keeping the chunk at `P/2` is also what leaves the reduce-scatter,
+the `k_of_lane = lane >> 1` mapping and the even-lane guards textually unchanged from the
+C=32 kernel.
+
+The exact-norm reduction likewise keeps its accumulator at `Real x[P]`, not `Real x[C]`, on
+the C=64 rung. Widening it would cost 64 `Real` registers per lane and a sixth reduction
+step; the hard-coded 5 steps stay correct because the *lane* count is still 32. The C
+columns are instead covered in C/P passes of the unchanged 32-wide reduce-scatter, each lane
+first summing its kRPL rows into `x[c]`. The same "sum own rows first, then a 32-wide
+butterfly" rule applies to every dot product in the completion path.
 
 ## gesvdj_cta: global power-of-two scaling
 
@@ -311,8 +327,10 @@ two is exact); the overflow headroom argument above holds only for the first 32 
   mid-sweep refresh when a norm shrinks by more than `drift_refresh_ratio`, plus one
   verification sweep. *Superseded in the shipped kernel* by exact norms recomputed at the start
   of every sweep and termination only after **two consecutive** zero-rotation sweeps; the
-  per-item `info` convergence status tests exactly that predicate. `GesvdjParams` has no
-  `drift_refresh_ratio` or `derijk` field.
+  per-item `info` convergence status tests exactly that predicate (`zero_sweeps >= 2`, not
+  `sweeps_used < max_sweeps`: an item can leave the loop early without its second clean
+  sweep). The verification sweep applies no rotations, so it costs only the Gram and
+  threshold pass. `GesvdjParams` has no `drift_refresh_ratio` or `derijk` field.
 - **\f$\sigma\f$ comes from A, always.** A final exact column norm, times \f$1/\beta\f$. The
   incrementally maintained `Nrm_local` exists only to choose rotations; reading \f$\sigma\f$ from
   it is a one-line shortcut that passes every existing test and reintroduces the
@@ -414,6 +432,25 @@ invisible in real arithmetic, wrong for complex.
   is sized at compile time. `gesvdjBatched` shares the cliff; it caps throughput at 17-31.
 - **A is destroyed** (it becomes the rotated matrix), per the gesvd contract; benchmarks wrap
   it in `bench::pristine`.
+
+## gesvd design: why SvdVectors::Thin exists
+
+`SvdVectors` (`include/batchlas/blas/enums.hh`) follows LAPACK `jobu`/`jobvt`: `None`, `All`
+('A') and `Thin` ('S'). Thin exists because All is unusable on tall-skinny input: a
+10000 x 32 problem has to materialise a 10000 x 10000 U, 400 MB per matrix in float, so
+batch=4 needs 1.6 GB for a factor whose last 9968 columns are an arbitrary orthonormal
+completion the caller did not ask for.
+
+The identity most of the implementation rests on: **Thin and All differ on at most one
+side.** With \f$k = \min(m, n)\f$, for \f$m \le n\f$ a thin U (m x k) is exactly the full U, and
+for \f$m \ge n\f$ a thin \f$V^H\f$ is exactly the full \f$V^H\f$; square input has Thin == All on
+both sides. Entry points therefore canonicalise Thin to All whenever the shapes coincide
+(`canonical_jobu` / `canonical_jobvh`), and only the genuinely thinner side has to be handled,
+or rejected, by any given route.
+
+LAPACK's 'O' (overwrite A with one of the factors) is deliberately absent. Add it as a further
+enumerator if it is ever wanted: appending keeps the existing ordinals stable for the
+benchmarks that pass jobs as ints.
 
 ## gesvd design: vendor binding and dispatch
 

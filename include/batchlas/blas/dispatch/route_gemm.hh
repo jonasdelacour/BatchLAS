@@ -1,19 +1,28 @@
 #pragma once
 
-// GEMM's routing table, pure -- the env read lives in route_env.hh. A speed
-// cutoff in supports() would strand shapes with no route at all in a vendor-free
-// build; preferred() is the measured window. docs/perf/dispatch.md
+/// @file
+/// @brief GEMM's routing table. The environment read lives in route_env.hh.
+/// @ingroup dispatch
 
 #include <batchlas/blas/dispatch/route.hh>
 #include <batchlas/blas/dispatch/route_resolve.hh>
 
 namespace batchlas::dispatch {
 
+/// @brief GEMM walk order: the register-tiled family, then the vendor.
+/// @ingroup dispatch
 inline constexpr Route kGemmOrder[] = {
     {Origin::Native, Algorithm::RegisterTiled},
     {Origin::Vendor, Algorithm::Auto},
 };
 
+/// @brief GEMM routes: `{Native, RegisterTiled}` and the vendor.
+///
+/// supports(): positive m, n, k and `ComputePrecision::Default`. preferred():
+/// GPU, homogeneous batch >= 64, real types only; float square NN with
+/// max_dim <= 48, double any shape with k >= 2. Evidence:
+/// @ref md_docs_2perf_2gemm "docs/perf/gemm.md" (and docs/perf/dispatch.md).
+/// @ingroup dispatch
 template <typename T>
 struct RouteTable<Op::gemm, T> {
     static bool supports(Route r, const OpShape& s) {
@@ -73,7 +82,8 @@ struct RouteTable<Op::gemm, T> {
     }
 };
 
-// A default-constructed `forced` means "no opinion"; see route_env.hh.
+/// @brief resolve_route() for gemm; a default-constructed `forced` means "no opinion" (see route_env.hh).
+/// @ingroup dispatch
 template <typename T>
 inline Route resolve_gemm_route(Route forced, const OpShape& s,
                                 bool vendor_available = true) {

@@ -1,18 +1,9 @@
 #pragma once
 
-// What a call does when nothing can serve it.
-//
-// Before WP0 S5 this question had no runtime form: an op with no vendor library
-// simply failed to LINK, because the public entry point was defined inside the
-// vendor TU. Now the entry point always exists, so "there is no implementation
-// for this (op, backend, scalar) in this build" has to be a value the program
-// can carry and a message a user can act on.
-//
-// NoRouteError is that message. It names the op, the backend, the scalar type
-// and the shape, and it says which build switch would bring an implementation
-// back -- because the overwhelmingly common cause is a deliberate
-// -DBATCHLAS_ENABLE_VENDOR_BLAS=OFF, and the user needs to know whether they
-// hit a gap in BatchLAS's native coverage or simply turned the vendor off.
+/// @file
+/// @brief What a call does when nothing can serve it: NoRouteError.
+/// @ingroup dispatch
+// evidence: docs/design/vendor-independence.md#the-entry-point-facade
 
 #include <stdexcept>
 #include <string>
@@ -22,15 +13,27 @@
 
 namespace batchlas::dispatch {
 
+/// @brief Thrown when no route, native or vendor, exists for an (op, backend, scalar) in this build.
+///
+/// The common cause is a deliberate `-DBATCHLAS_ENABLE_VENDOR_BLAS=OFF` build
+/// meeting an op or shape with no native kernel. `what()` names the op, the
+/// scalar type and the caller's detail (usually "built without <library>"), and
+/// says which build switch restores the op. The backend is carried but
+/// deliberately not printed.
+/// @ingroup dispatch
 class NoRouteError : public std::runtime_error {
 public:
+    /// @param op       the op that has no route
+    /// @param backend  the device family of the call
+    /// @param scalar   the scalar type of the call
+    /// @param detail   appended in parentheses; empty for none
     NoRouteError(Op op, Backend backend, ScalarKind scalar, std::string detail)
         : std::runtime_error(build_message(op, backend, scalar, detail)),
           op_(op), backend_(backend), scalar_(scalar) {}
 
-    Op op() const { return op_; }
-    Backend backend() const { return backend_; }
-    ScalarKind scalar() const { return scalar_; }
+    Op op() const { return op_; }                    ///< the op that has no route
+    Backend backend() const { return backend_; }     ///< the device family of the call
+    ScalarKind scalar() const { return scalar_; }    ///< the scalar type of the call
 
 private:
     static std::string build_message(Op op, Backend backend, ScalarKind scalar,
@@ -57,15 +60,20 @@ private:
     ScalarKind scalar_;
 };
 
-// The single funnel for "nothing can serve this call". Raised by the facade's
-// availability gate (dispatch/vendor_available.hh) and by the *_or_throw shims.
+/// @brief The single funnel for "nothing can serve this call": records a coverage miss and throws.
+///
+/// Raised by the facade's availability gate (vendor_available.hh) and by the
+/// `*_or_throw` shims. The miss is recorded unconditionally, unlike the per-call
+/// route counters: it is rare by construction and is the row that matters most.
+/// @tparam T        scalar type of the call
+/// @param op        the op
+/// @param backend   the device family
+/// @param library   the absent library, e.g. kFactorizationLibrary<B>
+/// @throws NoRouteError always
+/// @ingroup dispatch
 template <typename T>
 [[noreturn]] inline void throw_no_vendor_route(Op op, Backend backend,
                                                const char* library) {
-    // Every no-route path funnels through here, so this is the one place the
-    // coverage table has to be told about a gap. Recorded unconditionally --
-    // unlike the per-call route counters, a miss is rare by construction and
-    // is the row that matters most for the burn-down.
     coverage::record_miss(op, scalar_kind_of<T>, backend, library);
     throw NoRouteError(op, backend, scalar_kind_of<T>,
                        std::string("built without ") + library);

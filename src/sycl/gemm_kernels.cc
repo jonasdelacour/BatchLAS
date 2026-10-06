@@ -483,13 +483,9 @@ KernelVariant select_kernel_variant(const MatrixView<T, MatrixFormat::Dense>& A,
     const int max_dim = std::max({m, n, k});
     const int min_dim = std::min({m, n, k});
     if (transA != Transpose::NoTrans || transB != Transpose::NoTrans) {
-        // The wide-scalar transposed panel tiles, COMPLEX ONLY. double is
-        // excluded on measurement, not on principle: on the same cells the tile
-        // runs at 0.92-1.00x of Tiled16, which is already 1.11x of cuBLAS there,
-        // so there is nothing to win. float keeps its own 128x32K32 family.
-        // The arm here is Tiled16, never the vendor: preferred() refuses complex,
-        // so a complex shape only reaches this function in a vendor-free build or
-        // under a forced BATCHLAS_GEMM_VARIANT=sycl.
+        // Wide-scalar transposed panel tiles, COMPLEX ONLY: double is excluded on
+        // measurement (no gain over Tiled16). The arm is Tiled16, never the vendor:
+        // preferred() refuses complex, so only vendor-free or a forced sycl gets here.
         // evidence: docs/perf/gemm.md#wide-scalar-transposed-tiles
         if constexpr (is_std_complex_v<T>) {
             switch (wide_transposed_tile_for(transA, transB, m, n, k, A.batch_size())) {
@@ -518,8 +514,7 @@ KernelVariant select_kernel_variant(const MatrixView<T, MatrixFormat::Dense>& A,
         return max_dim <= 32 ? KernelVariant::Direct : KernelVariant::Tiled16;
     }
     if constexpr (std::is_same_v<T, float>) {
-        // 1.8-8x over Direct at batch 32768, and 2.1-3.5x over Tiled16 / 1.1x over the
-        // 32x32 register tile on the squares above. evidence: docs/perf/gemm.md#the-small-batched-kernel
+        // evidence: docs/perf/gemm.md#the-small-batched-kernel
         if (max_dim <= 32) return KernelVariant::SmallBatched;
         if (max_dim <= sycl_gemm_small::kSmallMaxDim && min_dim > 32) {
             return KernelVariant::SmallBatched;

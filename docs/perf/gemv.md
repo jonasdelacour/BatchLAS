@@ -357,6 +357,47 @@ bandwidth that a streaming kernel never sees.
   not a regression**: 0.164 µs total (0.077 µs `sub_group_sizes`, 0.067 µs `getenv` plus two `std::string`
   constructions), 2–3% of a minimal batched launch.
 
+## GEMV: the shape builder contract
+
+`src/backends/gemv_route.hh` builds `GemvShape` and resolves the route. It lives in `src/` rather than in the route-table header because the
+table must read **only** its arguments — no `getenv`, no SYCL query (`route_resolve.hh`) — so everything that asks the device or the
+environment happens here. Its include set is public headers plus one private kernel header and must not gain `src/queue.hh` or
+`<sycl/sycl.hpp>`: the vendor-free facade includes it (the same rule as `gemm_variant.hh`, see
+[the GEMM route adapter](gemm.md#gemm-the-route-adapter-and-its-environment-readers)). What the code comments used to spell out, moved here
+2026-09-30:
+
+* **`nullopt` means "these three views do not describe one GEMV".** `OpShape` is a POD holding one batch and one shape, so it cannot represent
+  disagreement between `A`, `x` and `y`; absence is the honest encoding, and a caller with no shape takes the vendor. Same pattern as
+  `gemm_op_shape` and `getrs_op_shape`.
+* **These are the only agreement checks in the tree.** There is no `gemv_validate_params`: the public entry has never validated anything, and
+  WP7 deliberately did not add a throw (it would turn silent bugs into crashes in live paths, and make WP7 unattributable for them). So the
+  checks are not duplicated safety; they are the only thing between a non-conforming call and a native kernel indexing off the end of a buffer,
+  and their answer is "hand it to the vendor", which is where every such call went before WP7. One non-conforming call is live and known — see
+  [The known bad caller](#the-known-bad-caller).
+* **Batch agreement.** cuBLAS's strided-batched call reads `A.batch_size()` items out of all three views with each view's own stride, so a
+  disagreement is a buffer overrun in the vendor too; but the vendor is where it went before, and moving the failure onto a new kernel would
+  have made WP7 own it.
+* **Nothing in the builder may dereference `data_ptr()`.** `rows()`, `cols()`, `size()`, `inc()`, `batch_size()` and `is_heterogeneous()` are
+  metadata; a data read is an immediate segfault in a sizing path.
+* **Lengths swap with `transA`**: `red_len` is `n` under `NoTrans` and `m` otherwise, `out_len` the other one (`GemvShape::out_len()/red_len()`).
+* **`s.backend` is set.** A builder that leaves it unset makes every coverage row read `Backend::AUTO`; trsm's builder is the example (see
+  the TRSM page's open debts). `resolve_route` slices the shape straight into the coverage table.
+* **Field mapping.** `m` and `n` are A's extents as stored, not as transposed; the table derives `out_len`/`red_len` from them and `transA`. `k`
+  repeats `m` so `max_dim()`/`min_dim()` range over the two real extents rather than over a zero.
+* **`transA` is the field that separates gemv's kernels, and its omission would be silent.** `coverage.cc`'s `variant_key` carries it; the two
+  values are not a flag on one kernel but body 1 versus bodies 2/3 — different access patterns, routes and measured behaviour (the one cuBLAS
+  slow region in the whole baseline is `Trans`-only). Dropping the line collapses them into one first-writer-wins coverage row and makes
+  `route_diff` blind to the distinction.
+* **`has_sg32` is enumerated**, via `Device::supports_sub_group_size` walking `sycl::info::device::sub_group_sizes`, never
+  `get_property(MAX_SUB_GROUP_SIZE)` (see the route arms at the top of this page for why that is wrong in both directions).
+* **Only `A` can be heterogeneous.** `VectorView` has no active-size concept, which is also why gemv cannot have gemm's heterogeneous walker.
+  The gate and its writer landed together (the rule `potrf_route.hh` states).
+* **Capabilities are asked of the kernel TU** (`gemv_direct_available`, `gemv_cta_available`), so the table describes the build and not the
+  design.
+* **The environment read is in `gemv_route` and nowhere else.** `parse_route_env(Op::gemv)` synthesises `BATCHLAS_GEMV_ROUTE` from
+  `op_env_stem`; no registry entry is needed, and `legacy_variable_for(Op::gemv)` correctly falls to `default: return {}` because no legacy gemv
+  variable ever shipped. Adding a case there would invent a legacy spelling.
+
 ## GEMV: correctness findings
 
 Across every timed sweep here `relerr` is exactly 0 (468 baseline rows, 840 A/B rows, 2052 audit rows, 1152 repair
@@ -442,7 +483,7 @@ Trans conjugates too) exactly the 20 complex plain-Trans cases, since one break 
 `A(Slice(), i)` — a column of length `A.rows()` — as `x`, so the lengths agree only in the accidental case
 `A.rows() == m`. **It is structurally wrong today, under the vendor**, and WP7 deliberately neither fixed it nor threw
 on it (a new host-level validation throw would turn today's silent misbehaviour into a crash in a live path). The
-length checks in `gemv_op_shape` (`src/backends/gemv_route.hh:73-75`) guarantee it returns `nullopt` → the vendor,
+length checks in `gemv_op_shape` (`src/backends/gemv_route.hh:39-40`) guarantee it returns `nullopt` → the vendor,
 i.e. it keeps going exactly where it went before WP7 rather than becoming a native out-of-bounds read. Fixing it needs
 the right `A_i`, an `A_next` that is the *i*-th vector rather than the *i*-th column, and an
 `ortho(..., Transpose::Trans)` test that checks orthogonality of the **rows** — which `ortho_tests` does not have,

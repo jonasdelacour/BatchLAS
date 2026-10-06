@@ -4,6 +4,14 @@
 
 namespace batchlas::device {
 
+/// @addtogroup device
+/// @{
+
+/// @brief Sets every element of `x` to `value`, cooperatively across `group`.
+/// @tparam Group  `sycl::group`, `sycl::sub_group` or an `nd_item`; every work-item must call
+/// @param group  executor whose work-items share the elements
+/// @param x      single vector (`batch_size() == 1`), written in place
+/// @param value  fill value
 template <typename Group, typename T>
 inline constexpr void fill(const Group& group,
                            const VectorView<T>& x,
@@ -17,6 +25,10 @@ inline constexpr void fill(const Group& group,
     }
 }
 
+/// @brief Sets every element of the dense matrix `a` to `value`; the padding rows between `a.rows()` and `a.ld()` are not touched.
+/// @param group  executor whose work-items share the elements
+/// @param a      single matrix, written in place
+/// @param value  fill value
 template <typename Group, typename T>
 inline constexpr void fill(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -32,5 +44,7 @@ inline constexpr void fill(const Group& group,
         a(row, col) = value;
     }
 }
+
+/// @}
 
 } // namespace batchlas::device

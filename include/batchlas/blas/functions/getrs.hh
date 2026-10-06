@@ -1,5 +1,9 @@
 #pragma once
 
+/// @file
+/// @brief Batched solve with LU factors from getrf (getrs) and its workspace query.
+/// @ingroup factorizations
+
 #include <batchlas/export.hh>
 #include <stdexcept>
 #include <string>
@@ -27,8 +31,7 @@ using getrs_buffer_size = size_t(Queue&,
                                  const MatrixView<T, MatrixFormat::Dense>&,
                                  Transpose);
 
-// backend::getrs_vendor's signature, spelled out from the definition rather than
-// aliased to sig::getrs: a vendor parameter list can differ from the public one.
+// Vendor signatures are spelled out, not aliased: a vendor parameter list can differ.
 template <typename T>
 using getrs_vendor = Event(Queue&,
                            const MatrixView<T,MatrixFormat::Dense>&,
@@ -37,8 +40,6 @@ using getrs_vendor = Event(Queue&,
                            Span<int64_t>,
                            Span<std::byte>);
 
-// backend::getrs_vendor_buffer_size's signature, spelled out from the definition rather than
-// aliased to sig::getrs_buffer_size: a vendor parameter list can differ from the public one.
 template <typename T>
 using getrs_vendor_buffer_size = size_t(Queue&,
                                         const MatrixView<T,MatrixFormat::Dense>&,
@@ -47,20 +48,15 @@ using getrs_vendor_buffer_size = size_t(Queue&,
 }  // namespace sig
 
 
-// WP6: the one thing that is invalid for EVERY route, checked once, hoisted above
-// the shape builder in src/dispatch/entry_points/factorization.cc because the
-// builder reads A.rows()/B.cols(). Modelled on geqrf_validate_params
-// (geqrf.hh:71-77) and it obeys geqrf.hh:55-70's rule: validate only what no route
-// could serve.
-//
-// WHAT IT DELIBERATELY DOES NOT CHECK: squareness of A, A.rows() == B.rows(),
-// equal batch, and the pivot span's length. All four ARE checked on the arena
-// spellings (options.hh:646-650) and the first three make
-// backend::getrs_op_shape return nullopt, which routes the call to the vendor.
-// Routing a call away from the native arms is not the same as rejecting it, and a
-// validator that threw would turn a currently-working positional call into an
-// error -- the behaviour change potrf.hh:59-65 rules out of scope for a
-// scaffolding step.
+/// @brief Validates the arguments of the positional getrs() entry point.
+///
+/// Checks only non-negative extents. Squareness of A, `A.rows() == B.rows()`,
+/// equal batch sizes and the pivot span's length are checked by the option
+/// overloads; on this path a non-conforming pair is routed to the vendor.
+/// @throws batchlas::invalid_argument on negative extents
+/// @ingroup factorizations
+// Deliberately minimal; rejecting more would change a working call into an error.
+// evidence: docs/design/vendor-independence.md#positional-validators-reject-only-what-no-route-can-serve
 template <typename T>
 inline void getrs_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
                                   const MatrixView<T, MatrixFormat::Dense>& B) {
@@ -74,6 +70,31 @@ inline void getrs_validate_params(const MatrixView<T, MatrixFormat::Dense>& A,
 }
 
 
+/// @brief Batched solve of \f$ \mathrm{op}(A) X = B \f$ using the LU factors from getrf().
+///
+/// A and @p pivots must be exactly what getrf() produced on the same backend
+/// (see getrf() for the packed 1-based int32 pivot format). \f$ \mathrm{op}(A) \f$
+/// is A, \f$ A^T \f$ or \f$ A^H \f$ for `NoTrans`, `Trans`, `ConjTrans`.
+/// B is overwritten with X. No singularity check is made: a zero U(i,i)
+/// (reported by getrf's `info`) produces infinities or NaNs in that item.
+///
+/// Asynchronous: B is readable after the returned event is waited on.
+/// @tparam Back  backend; the backend-deducing overload takes it from `ctx.backend()`
+/// @tparam T     scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @param ctx         queue the kernels are enqueued on
+/// @param A           batch of n x n LU factors from getrf(); not modified
+/// @param B           batch of n x nrhs right-hand sides; overwritten with X
+/// @param transA      which of A, A^T, A^H to solve with
+/// @param pivots      pivots from getrf(), `n * batch` entries
+/// @param work_space  device-accessible scratch of at least getrs_buffer_size() bytes
+/// @return event of the last enqueued kernel
+/// @pre `A.rows() == A.cols() == B.rows()`, equal batch sizes, and
+///      `pivots.size() >= n * batch` (checked by the option overloads only)
+/// @throws batchlas::invalid_argument on negative extents
+/// @throws batchlas::dispatch::NoRouteError if no native route supports the
+///         shape and the vendor library was not built in
+/// @see GetrsOptions
+/// @ingroup factorizations
 template <Backend Back, typename T>
 BATCHLAS_API Event getrs(Queue& ctx,
                         const MatrixView<T, MatrixFormat::Dense>& A,
@@ -82,6 +103,8 @@ BATCHLAS_API Event getrs(Queue& ctx,
                         Span<int64_t> pivots,
                         Span<std::byte> work_space);
 
+/// @brief Workspace, in bytes, that getrs() needs for these operands on this queue.
+/// @ingroup factorizations
 template <Backend Back, typename T>
 BATCHLAS_API size_t getrs_buffer_size(Queue& ctx,
                                       const MatrixView<T, MatrixFormat::Dense>& A,
@@ -93,13 +116,10 @@ BATCHLAS_API size_t getrs_buffer_size(Queue& ctx,
 
 namespace batchlas::backend {
 
-// The vendor path for getrs.
-//
-// DECLARATION ONLY -- see the note on gemm_vendor in gemm.hh. The public
-// `getrs` used to be defined inside each vendor TU, so dropping a vendor library
-// dropped the public entry point with it; WP0 S5 moves that definition to
-// src/dispatch/entry_points/factorization.cc and leaves the vendor
-// implementation here, named as such.
+/// @brief Vendor arm of getrs(); called by the entry-point facade, not by users.
+/// @ingroup dispatch
+// Declaration only: the public getrs lives in src/dispatch/entry_points/factorization.cc.
+// evidence: docs/design/vendor-independence.md#the-entry-point-facade
 template <Backend Back, typename T>
 BATCHLAS_API Event getrs_vendor(Queue& ctx,
                                 const MatrixView<T,MatrixFormat::Dense>& A,
@@ -109,6 +129,8 @@ BATCHLAS_API Event getrs_vendor(Queue& ctx,
                                 Span<std::byte> work_space);
 
 
+/// @brief Workspace query of the vendor arm of getrs().
+/// @ingroup dispatch
 template <Backend Back, typename T>
 BATCHLAS_API size_t getrs_vendor_buffer_size(Queue& ctx,
                                              const MatrixView<T,MatrixFormat::Dense>& A,
@@ -119,11 +141,7 @@ BATCHLAS_API size_t getrs_vendor_buffer_size(Queue& ctx,
 
 namespace batchlas {
 
-// Owning-argument and backend-deducing overloads: `f(ctx, Matrix, ...)` accepts
-// owning containers where the primary takes views, and `f(ctx, ...)` uses
-// ctx.backend(). See BATCHLAS_ACCEPT_OWNING and BATCHLAS_DISPATCH_ON_QUEUE in
-// blas/queue-dispatch.hh.
-
+// Owning-container and backend-deducing overloads; see blas/queue-dispatch.hh.
 BATCHLAS_ACCEPT_OWNING(getrs)
 BATCHLAS_ACCEPT_OWNING(getrs_buffer_size)
 

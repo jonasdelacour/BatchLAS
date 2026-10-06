@@ -28,6 +28,14 @@ inline constexpr T broadcast_from_leader_impl(const Group& group, T value) {
 
 } // namespace detail
 
+/// @addtogroup internal_helpers
+/// @{
+
+/// @brief Calls `fn(args...)` on the group's leader work-item only.
+///
+/// No barrier and no broadcast: other work-items do not see side effects until
+/// the caller synchronises.
+/// @tparam Group  any type with `leader()`: a SYCL group, sub-group, or sub-group partition
 template <typename Group, typename Fn, typename... Args>
 inline constexpr void invoke_one(const Group& group, Fn&& fn, Args&&... args) {
     if (group.leader()) {
@@ -35,6 +43,11 @@ inline constexpr void invoke_one(const Group& group, Fn&& fn, Args&&... args) {
     }
 }
 
+/// @brief Returns the leader's `value` on every work-item of `group`. Collective.
+///
+/// Uses the group's `sg_leader_broadcast` when one is found by ADL (sub-group
+/// partitions), else `sycl::group_broadcast`.
+/// @pre `T` is trivially copyable.
 template <typename Group, typename T>
 inline constexpr T broadcast_from_leader(const Group& group, T value) {
     static_assert(std::is_trivially_copyable_v<T>,
@@ -42,6 +55,9 @@ inline constexpr T broadcast_from_leader(const Group& group, T value) {
     return detail::broadcast_from_leader_impl(group, value);
 }
 
+/// @brief Calls `fn(args...)` on the leader and returns its result on every work-item. Collective.
+/// @return the leader's result; non-leaders contribute a value-initialised placeholder that is discarded
+/// @pre the result type is trivially copyable.
 template <typename Group, typename Fn, typename... Args>
 inline constexpr auto invoke_one_broadcast(const Group& group, Fn&& fn, Args&&... args)
     -> std::invoke_result_t<Fn, Args...> {
@@ -56,5 +72,7 @@ inline constexpr auto invoke_one_broadcast(const Group& group, Fn&& fn, Args&&..
 
     return detail::broadcast_from_leader_impl(group, value);
 }
+
+/// @}
 
 } // namespace batchlas

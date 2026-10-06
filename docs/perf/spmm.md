@@ -364,6 +364,25 @@ Un-preferred is not unsupported.
    `lanczos_tests` — which *does* consume the moved gather — was re-run under `BATCHLAS_SPMM_ROUTE=vendor` and produced the same
    two failing cases (`LanczosTestBase.LanczosTest`, `LanczosTestBase.ToeplitzEigenpairs`), so it is pre-existing and not WP8's.
 
+## SpMM: the kernel contract
+
+What `src/sycl/spmm_native.hh` used to state in full above its declarations (moved 2026-09-30; the header keeps a one-line list of the
+traps). The operation is \f$C := \alpha\,\mathrm{op}(A)\,\mathrm{op}(B) + \beta C\f$ with `A` batched CSR (one strided slab per item) and `B`,
+`C` dense column-major; three kernel bodies sit behind the one `{Native, Direct}` route and are picked on `transA`.
+
+* **CSR indexing** (`src/matrix.cc`): row offsets are **item-local**, indexed `b*offset_stride()`; values and column indices are indexed
+  `b*matrix_stride()`. `A.nnz()` is the batch-maximum **capacity**, not a count, so the only legal bound on the nonzero loop is
+  `row_offsets[ro+i+1]` — slots above an item's own nnz are uninitialised. Getting this wrong is correct at batch 1 and wrong at batch 2. The
+  same capacity-vs-count confusion is the cuSPARSE defect in [Three vendor defects, found here and fixed](#three-vendor-defects-found-here-and-fixed).
+* **`beta == 0` must not read `C`**: callers pass never-zeroed `BumpAllocator` memory, so an unconditional `beta*C_old` returns NaN. Dually,
+  `alpha == 0` leaves `A` and `B` unread but still requires `C = beta*C` (deliberately *not* reference `?GEMV`'s `alpha == 0 && beta == 1`
+  quick return).
+* **No `__restrict__` on any pointer, and no body materialises a pointer array**: LOBPCG passes `X`, `P`, `R` as element-disjoint slices of one
+  buffer, which alias at the object level.
+* **The transposed arm scatters through global atomics**: summation order varies run to run, so no test may compare two runs bitwise, and its
+  FP64 instantiations carry an `atomic64` device requirement the FP32 ones do not.
+* **`B` and `C` carry their own `ld` and batch stride**; the bodies read them from the view and never derive them as `ld*cols`.
+
 ## SpMM: correctness findings
 
 ### Three vendor defects, found here and fixed

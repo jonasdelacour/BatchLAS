@@ -43,16 +43,9 @@ namespace batchlas {
         Span<std::byte> orgqr_ws;
     };
 
-    // ONE rule, asked in one place, by the op AND by every size query.
-    //
-    // `B == Backend::NETLIB` meant "there are no device kernels here", which is a
-    // property of the DEVICE, not of the backend enum; asked directly it stays
-    // correct for a host queue reached through any backend. But the op and its
-    // three sizing copies must ask the SAME question: sized as Chol2 and then run
-    // as Householder, ortho_layout carves tau/geqrf_ws/orgqr_ws out of a
-    // BumpAllocator that was never sized for them -- a workspace overrun. Today's
-    // outcome is unchanged (NETLIB is the only backend on a host device here), so
-    // this is a by-construction guarantee, not a bug fix.
+    // ONE rule, asked by the op AND by every size query (a mismatch overruns the
+    // workspace). It asks about the DEVICE, not the backend enum.
+    // evidence: docs/perf/ortho.md#ortho-host-devices-force-householder
     inline bool ortho_force_householder(const Queue& ctx) {
         return ctx.device().type != DeviceType::GPU;
     }
@@ -137,48 +130,11 @@ namespace batchlas {
         auto potrf_workspace = wsl.potrf_ws;
         auto ATA_stride = k * k;
 
-        // C = A^H A is a Gram matrix, which is exactly what syrk spells, and it
-        // does half the arithmetic a GEMM does. PR #61 measured this
-        // substitution and rejected it -- correctly at the time, because syrk
-        // reached no batched kernel at these shapes and fell to a host loop over
-        // cublasXsyrk: 96x slower in float, and 115 ms against a 0.9 ms GEMM in
-        // double. `syrk_gram_tiles` is that missing kernel.
-        //
-        // Two conditions, both measured rather than assumed (RTX 4090 / sm_89,
-        // batches that saturate):
-        //
-        //   k          the single-tile Gram kernel lives at k <= 128, but the
-        //              useful limit differs by precision and the end-to-end
-        //              numbers say so (m = 1024, batch 512, Chol2):
-        //
-        //                k    float           double
-        //                32   1.62x           1.02x
-        //                64   1.12x           1.20x
-        //                128  0.96x  <- loss  1.34x
-        //
-        //              Float at k = 128 is a wash because the SGEMM it replaces
-        //              is already against both the compute and the bandwidth
-        //              roof, so there is nothing for the halved arithmetic to
-        //              buy. FP64 runs at 1/64 rate on this part, so double is
-        //              squarely compute bound and the halving lands in full --
-        //              and it grows with k, where float's shrinks. Hence 64 for
-        //              float and 128 for double, not one number for both.
-        //              Above those, double and complex are still on the host
-        //              loop, which at k = 256 loses to the GEMM by 2x.
-        //   real only  a complex multiply is four real ones, so herk is compute
-        //              bound where syrk is bandwidth bound, and the existing
-        //              GEMM-plus-Hermitian-fold beats the tile kernel at every
-        //              Gram shape. Complex keeps the GEMM.
-        //
-        // Only the lower triangle is produced. Everything downstream of these
-        // two call sites reads exactly that -- potrf and trsm both default to
-        // Uplo::Lower, and shift_chol_alg's shift kernel touches only the
-        // diagonal. svqb_alg is the exception and keeps its GEMM: it scales the
-        // whole k x k before handing it to syev, so a half-written C would leave
-        // it multiplying uninitialised workspace.
-        // BATCHLAS_ORTHO_GRAM=gemm pins the old spelling, so the substitution
-        // stays measurable from one binary rather than needing a build of the
-        // parent commit to compare against.
+        // Gram C = A^H A via syrk (real T, k <= 64 float / 128 double), else GEMM.
+        // evidence: docs/perf/ortho.md#ortho-the-gram-matrix-through-syrk-per-precision
+        // syrk writes only the lower triangle; potrf/trsm/shift read only that.
+        // svqb_alg must keep its GEMM (it scales the whole k x k). A/B with
+        // BATCHLAS_ORTHO_GRAM=gemm.
         constexpr bool gram_is_real = !internal::is_complex<T>::value;
         const bool gram_pinned_to_gemm = [] {
             const char* raw = batchlas::settings().selection.ortho_gram.get();
@@ -228,6 +184,8 @@ namespace batchlas {
             auto normalize_wg_size = std::min(get_kernel_max_wg_size<OrthoNormalizeVector<B, T>>(ctx), size_t(m));
             for (int i = 0; i < k; i++){
                 //View of the first i vectors (either columns or rows of A depending on transA)
+                // Trap: the transposed arm's view does not describe the memory (known defect).
+                // See docs/design/known-defects.md, defect 1.
                 auto A_i = transA == Transpose::NoTrans ? 
                       MatrixView<T, fmt>(A.data_ptr(), m, i, m, A.stride(), batch_size) 
                     : MatrixView<T, fmt>(A.data_ptr(), i, m, m, A.stride(), batch_size);

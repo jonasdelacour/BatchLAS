@@ -1,4 +1,4 @@
-# STEQR: the CTA tridiagonal solver (`steqr_cta`)
+# STEQR: the CTA tridiagonal solver (`steqr_cta`) {#perf_steqr}
 
 `steqr_cta` solves one tridiagonal problem per chunk of `P` lanes, `P` in {4, 8, 16, 32}, so a
 warp holds `32/P` problems. The same device solve (`steqr_cta_solve`, in
@@ -176,6 +176,21 @@ scaled items.
 - **The lockstep solver on NVPTX** (every phase voted, the padded chase), in one round:
   float n=4 0.69x, n=8 0.81x, n=12 0.78x, n=16 0.78x. Step 3 measured it at 1.2-1.25x slower
   in float too.
+- **The NVPTX convergence fast path** (`BATCHLAS_SGP_NVPTX_CONVERGENCE_FAST_PATH`,
+  `src/extensions/sg_partition/backend_nvptx.hh`). For a non-immediate member mask ptxas guards
+  each basic block's collectives with MATCH.ANY + REDUX.OR + VOTEU.ANY + BRA.DIV, whatever the
+  mask's source (DPC++ `chunked_partition` and CUDA `tiled_partition` too); MATCH.ANY slows with
+  the number of distinct masks, 32 / P, but the check is shared by all collectives of a block.
+  The fast path tests `activemask` first and uses the immediate full mask when all 32 lanes are
+  present, which needs no check, but that test cannot be shared across collectives. It wins only
+  where collectives are sparse; in the collective-dense CTA eigensolvers it measured slower than
+  the shared check (no figures recorded in the source), so it is off by default.
+- **`redux.sync` with a per-chunk mask.** ptxas serialises the warp for it, slower than the
+  butterfly; the backend uses `redux.sync` (sm_80+) only with the full mask.
+
+Partition-primitive changes (`src/extensions/sg_partition/`) are judged by real-kernel A/B, the
+`steqr` / `syev_cta` benchmarks at n = 5..16, batch 16,384, never by a microbenchmark: full-warp
+and maskless rewrites that won microbenchmarks lost in these kernels.
 
 ## Interleaved Q tile (measured negative)
 
@@ -325,6 +340,57 @@ the fused kernel is faster:
 - **Below saturation** (n = 8, batch 8,192) the two are within noise: 0.97 at a 13% spread.
 - **complex float n = 2** is faster on Jacobi (0.62). It is launch-bound, at 19-31 us with
   13-15% spreads, and was left alone.
+
+## CTA STEQR: chase micro-structure decisions
+
+The device building blocks live in `src/extensions/steqr_cta_device.hh` because two translation
+units need the *same* code: `steqr_cta.cc` (the standalone solver) and `syev_cta_fused.cc` (which
+runs the solve in place between tridiagonalisation and back-transform). A single definition is
+what makes a fused-versus-partitioned comparison measure fusion rather than two drifting solvers.
+The choices below shaped the hot loop; none of them came with a recorded before/after figure
+(undated, from the source comments), so treat them as reasons, not measurements.
+
+- **Givens rotation.** On the in-range path the specialised rotation is algebraically
+  `internal::lartg()`, but forms \f$1/\sqrt{f^2+g^2}\f$ with a hardware reciprocal square root
+  plus one Newton step instead of one IEEE square root and two IEEE divisions: the chase calls it
+  \f$O(n^2)\f$ times per problem, and div/sqrt expansion dominated the instruction mix. The range
+  guard keeps \f$|f|, |g|\f$ inside \f$(\sqrt{\mathrm{safmin}}, \sqrt{\mathrm{safmax}/2})\f$;
+  anything else, NaN included, takes the scaled reference. \f$g = 0\f$ must return exactly
+  \f$(1, 0, f)\f$, forced by a final select rather than an early return so an identity rotation
+  does not diverge from its neighbours; the result is bitwise the early return's.
+- **Q cache leading dimension.** `LDQ == P` suits the standalone solver (indexed only by
+  lane = row, conflict-free); a consumer that later reads the tile by column (the fused SYEV
+  back-transform) wants `P + 1` so consecutive lanes land in different banks.
+- **Padding rows are zeroed, not skipped**, so the chase runs unguarded on all P lanes and the
+  innermost loop loses a divergent branch.
+- **Streaming rotation apply.** Successive rotations of a chase share a column (rotation k writes
+  columns (a, b), rotation k+1 reads b again), so the shared column stays in a register, halving
+  shared-memory traffic and address arithmetic of the eigenvector update. The element index only
+  moves by ±P, so it is a register advanced by a compile-time constant, one integer add, with the
+  partner column reached through the load/store immediate offset.
+- **Butterfly all-reduce.** The block and sub-problem boundary searches run once per sweep; they
+  replaced shared-memory plus leader-lane serial loops with XOR-shuffle butterflies (log2 P
+  shuffles, every lane active, no local memory, no barriers).
+- **Registers carried along the chase.** The chase walks physical indices downward one step at a
+  time, so iteration v+1's (d, e) pair is the pair iteration v just produced; carrying it halves
+  the cross-lane shuffles in the hottest loop. Of five candidate register updates only two survive
+  an iteration (d(hi), e(hi) are final once the bulge has passed); d(lo), e(lo), e(lo−1) are
+  carried and written once after the chase, as selects, because exactly one lane is ever the
+  target and an `if` is a guaranteed divergence (a BSSY/BSYNC pair) per rotation.
+- **Snapshots before the chase.** The chase writes lane `hi` at iteration v but only reads lanes
+  below it, so every broadcast sees the pre-chase value. Shuffling from immutable snapshots makes
+  that visible to the compiler; reading `diag`/`offdiag` directly orders each SHFL after the
+  previous iteration's conditional write and chains it onto the `lartg` dependency path.
+- **Unconditional shuffles.** Shuffles run with a clamped source and the value is selected after:
+  a shuffle under a condition not provably warp-uniform costs a MATCH/VOTE/BRA.DIV wrapper per
+  call and breaks full-warp lockstep.
+- **Seeded running pair.** The first rotation uses \f$(d_m - \mu, e_{m-1})\f$ and later ones the
+  running (eprev, bulge) pair; seeding the pair with the initial values removes a loop-carried
+  bool, two selects and a branch per iteration.
+- **QL versus QR as LAPACK `dsteqr` chooses** (QL if \f$|D_l| \le |D_{lend}|\f$), so a graded
+  block converges its small end first. The inverted rule took about 2× the steps and lost relative
+  accuracy on graded input. QR runs as QL on the mirrored block, so chunks that pick different
+  directions share one loop nest ([Algorithm: choosing QR versus QL](../algorithms/steqr.md#steqr-choosing-qr-versus-ql)).
 
 ## Cumulative result
 

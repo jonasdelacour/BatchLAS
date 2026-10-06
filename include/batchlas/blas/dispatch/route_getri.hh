@@ -1,8 +1,8 @@
 #pragma once
 
-// GETRI routing: one native arm (a host-driven composition over the routed
-// trsm) then the vendor; a native arm must not write A. Shape fields are
-// potrf's: s.m == s.n == s.k == the order. docs/perf/lu.md
+/// @file
+/// @brief GETRI's routing table: one native arm, a host-driven composition over the routed trsm, then the vendor.
+/// @ingroup dispatch
 
 #include <batchlas/blas/dispatch/route.hh>
 #include <batchlas/blas/dispatch/route_resolve.hh>
@@ -11,20 +11,28 @@
 
 namespace batchlas::dispatch {
 
+/// @brief GETRI routing shape; as potrf's, `m == n == k ==` the order.
+/// @ingroup dispatch
 struct GetriShape : OpShape {
-    // Is the getri DRIVER compiled in this build -- not merely the routed trsm.
-    bool blocked_available = false;
+    bool blocked_available = false;   ///< the getri DRIVER is compiled in, not merely the routed trsm
 
-    bool has_sg32 = false;
+    bool has_sg32 = false;   ///< sub-group size 32 is available
 
-    int64_t order() const { return k; }
+    int64_t order() const { return k; }   ///< order of A
 };
 
+/// @brief GETRI walk order: the native composition, then the vendor.
+/// @ingroup dispatch
 inline constexpr Route kGetriOrder[] = {
     {Origin::Native, Algorithm::Blocked},
     {Origin::Vendor, Algorithm::Auto},
 };
 
+/// @brief GETRI routes: `{Native, Blocked}` and the vendor.
+///
+/// The native arm must not write A. preferred(): float from order 128, cfloat
+/// from 256, no batch term. Evidence: @ref md_docs_2perf_2lu "docs/perf/lu.md".
+/// @ingroup dispatch
 template <typename T>
 struct RouteTable<Op::getri, T> {
     // Gates transcribe trsm's supports(): an omission is a wrong answer.
@@ -77,6 +85,8 @@ struct RouteTable<Op::getri, T> {
     }
 };
 
+/// @brief resolve_route() for getri.
+/// @ingroup dispatch
 template <typename T>
 inline Route resolve_getri_route(Route forced, const GetriShape& s,
                                  bool vendor_available = true) {

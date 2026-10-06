@@ -1,6 +1,9 @@
 #pragma once
 
-// GEQRF's routing table. evidence: docs/perf/qr.md
+/// @file
+/// @brief GEQRF's routing table.
+/// @ingroup dispatch
+// evidence: docs/perf/qr.md
 
 #include <batchlas/blas/dispatch/route.hh>
 #include <batchlas/blas/dispatch/route_resolve.hh>
@@ -11,26 +14,29 @@
 
 namespace batchlas::dispatch {
 
+/// @brief GEQRF routing shape: m x n input, k = min(m, n) reflectors, plus tier capacities.
+/// @ingroup dispatch
 struct GeqrfShape : OpShape {
-    // CTA capacity is the AREA m*n and must come from the device, not device_limits.hh.
+    /// CTA capacity: rows. The capacity is the AREA m*n and must come from the device, not device_limits.hh.
     int cta_max_m = 0;
-    int64_t cta_max_elems = 0;
+    int64_t cta_max_elems = 0;  ///< CTA capacity: m*n elements
 
-    int tiny_max_n = 0;   // an ORDER, not an area: the tier owns no local memory; 0 = absent
+    int tiny_max_n = 0;   ///< tiny tier's largest ORDER (not an area: the tier owns no local memory); 0 = absent
 
-    // Must describe the BUILD: a Blocked route that is not linked throws.
+    /// Blocked driver linked. Must describe the BUILD: a Blocked route that is not linked throws.
     bool blocked_available = false;
 
-    // MUST come from sycl::info::device::sub_group_sizes: OpShape::max_sub_group reports
-    // entry [0], not the max, so it admits a device that rejects the sg32 launch.
+    /// Sub-group size 32 is available. MUST come from `sycl::info::device::sub_group_sizes`:
+    /// OpShape::max_sub_group reports entry [0], not the max, so it admits a device that rejects the sg32 launch.
     bool has_sg32 = false;
 
-    int64_t rows() const { return m; }
-    int64_t cols() const { return n; }
-    int64_t reflectors() const { return k; }   // k is min(rows, cols)
+    int64_t rows() const { return m; }         ///< m
+    int64_t cols() const { return n; }         ///< n
+    int64_t reflectors() const { return k; }   ///< k = min(rows, cols)
 };
 
-// Walk order is this array, never Algorithm's numeric value; Tiny first, the narrowest tier.
+/// @brief GEQRF walk order: Tiny first (the narrowest tier), then CTA, Blocked, the vendor.
+/// @ingroup dispatch
 inline constexpr Route kGeqrfOrder[] = {
     {Origin::Native, Algorithm::Tiny},
     {Origin::Native, Algorithm::CTA},
@@ -38,6 +44,14 @@ inline constexpr Route kGeqrfOrder[] = {
     {Origin::Vendor, Algorithm::Auto},
 };
 
+/// @brief GEQRF routes: `{Native, Tiny}`, `{Native, CTA}`, `{Native, Blocked}` and the vendor.
+///
+/// supports(): tall or square (m >= n), GPU with sub-group 32, homogeneous
+/// batch, and the tier's capacity. preferred(): the tiny window at square
+/// n <= 32 (float and cfloat), else a per-type order floor or a tall-panel
+/// clause, answering for exactly one native tier. native_tier_preferred(): the
+/// CTA/Blocked crossover in n. Evidence: @ref md_docs_2perf_2qr "docs/perf/qr.md".
+/// @ingroup dispatch
 template <typename T>
 struct RouteTable<Op::geqrf, T> {
     // Correctness only: a speed cutoff here deletes the native arm from vendor-free builds.
@@ -89,7 +103,7 @@ struct RouteTable<Op::geqrf, T> {
         } else if constexpr (std::is_same_v<T, std::complex<float>>) {
             return (n >= 5 && n <= 8) || (n >= 11 && n <= 16) || (n >= 24 && n <= 32);
         } else {
-            return false;                            // fp64 measured 0.14-1.13x; no window
+            return false;                            // fp64: measured, no window
         }
     }
 
@@ -188,7 +202,9 @@ struct RouteTable<Op::geqrf, T> {
     }
 };
 
-// Pass vendor_available (factorization_vendor_available<B>): the default skips the walk.
+/// @brief resolve_route() for geqrf.
+/// @trap Pass `vendor_available` (factorization_vendor_available<B>): the default `true` skips the vendor-free walk.
+/// @ingroup dispatch
 template <typename T>
 inline Route resolve_geqrf_route(Route forced, const GeqrfShape& s,
                                  bool vendor_available = true) {

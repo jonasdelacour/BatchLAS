@@ -343,6 +343,265 @@ so validate fp64 references against a known-good BLAS first.
    narrow at `kd = 1`, and Q1's `ormqr` narrowed cleanly. The square-matrix assumption did exist,
    in `apply_phase_rows`, and caused an out-of-bounds write on an n x k block. Fixed.
 
+## syevx implementation notes
+
+Rationale that used to live as comment blocks in `src/extensions/syevx*.cc`, `stein.cc` and
+`stebz.cc` (moved 2026-09-30). The code keeps the invariant and points here. Measurements stay on
+@ref perf_syevx, and range-selection rules on @ref design_syevx_range.
+
+### syevx dispatcher: problem arguments are validated before dispatch
+
+Preconditioner and range arguments describe the *problem*, not the algorithm, so
+`validate_syevx_preconditioner_params` and `validate_syevx_range_params` run in `syevx` and
+`syevx_buffer_size` before `syevx_select_algorithm`. The preconditioner checks used to live
+inside `syevx_lobpcg`. That was equivalent only while every path led there. Once dense input
+routed to Direct/DirectSubset, an illegal combination on a dense matrix silently reached a solver
+that ignores preconditioners (see [Tier 0](../perf/syevx.md#syevx-tier-0-dispatch-and-the-direct-path)).
+
+Two range rules from the plan are deliberately not in the validator:
+
+- **"`select == Extremal` and `order` contradicts `find_largest`" is not implemented.**
+  `SortOrder` has only `Ascending` and `Descending`, and `SyevxParams::order` defaults to
+  `Ascending`, so an explicit `Ascending` cannot be told from an unset one. The rule as written
+  would reject the library's own defaults (Extremal + `find_largest = true` + Ascending), which is
+  nearly every existing call, and the Python `SyevxOptions` sends every field on every call.
+  `order` is documented as ignored for Extremal instead (see
+  [normalization and validation](syevx-range-selection.md#syevx-range-normalization-and-validation)).
+- **"A non-extremal range may not resolve to LOBPCG or Filtered, and sparse input may not ask for
+  one" lives in `syevx_select_algorithm`**, because it has to distinguish an explicit
+  `SyevxParams::method` (throws) from a `BATCHLAS_SYEVX_ALGORITHM` override (degrades), and the
+  selector is the only place that sees both.
+
+The `value_range_reportable` argument of the range validator is false only for the solve
+overloads that have no `m` output. The sizing entry points pass true: they write no counts, and
+rejecting a Value range there would make sizing a Value-range solve impossible. A short `m` span
+is also rejected on the host, because the device write it causes has no diagnostic in a release
+build (`Span::operator[]`'s assert is compiled out).
+
+### syevx dispatcher: which preconditioner is legal at which end
+
+- **ILU(k)** approximates \f$A^{-1}\f$, so it accelerates only the smallest eigenpairs. For the
+  largest it damps exactly what is sought. `find_largest` with an ILU(k) factor throws.
+- **`Jacobi`** \f$= \mathrm{diag}(A)^{-1}\f$ is an approximate \f$A^{-1}\f$ as well, only cruder, so
+  it inherits the restriction verbatim. This is measured, not theoretical: forcing it on with
+  `find_largest` turned 21 to 47 iterations into 127 to 300, that is non-convergence at the cap
+  (see [the Jacobi preconditioners](../perf/syevx.md#lobpcg-jacobi-preconditioners)).
+- **`JacobiShifted`** \f$= (\mathrm{diag}(A) - \lambda I)^{-1}\f$ is a different operator. Its shift
+  is the *current Ritz value*, so it is a diagonal approximation to \f$(A - \lambda I)^{-1}\f$ and
+  amplifies whatever is near \f$\lambda\f$, which is the wanted end by construction at either end
+  of the spectrum. Allowing it with `find_largest` is deliberate, backed by the same sweep (0.85x
+  to 1.2x on random symmetric input either way).
+- An explicit `preconditioner_type` must agree with the ILU(k) fields. Anything else silently
+  drops one of the two requests: either a factor the caller built at real cost is never applied,
+  or a family is requested that has nothing behind it. Both combinations throw.
+
+### syevx dispatcher: environment override versus explicit request
+
+`algorithm_from_env` resolves `BATCHLAS_SYEVX_ALGORITHM` against `SyevxParams::method` and
+reports through `from_env` which of the two won. The distinction is load-bearing: an environment
+default **degrades** where an explicit request **throws**. The variable exists so that a whole
+application or test suite can be forced onto one algorithm for diagnosis, and aborting on the
+first call it cannot serve would make that sweep impossible rather than informative.
+
+- A non-extremal range under `BATCHLAS_SYEVX_ALGORITHM=lobpcg` or `filtered` degrades to Direct
+  with a once-per-process warning. The substitute is always Direct, the universal fallback (every
+  scalar type, every range, every `jobz`), not the shape heuristics, because a diagnostic sweep
+  wants one substitute rather than a shape-dependent one. The rule is recorded as
+  [throw, do not degrade](syevx-range-selection.md#syevx-range-throw-do-not-degrade).
+- **Trap:** the environment wins whenever the variable is set at all, including to an
+  unrecognized value. That parses to `Auto`, that is "ignore `params.method` and use the
+  heuristics". This is pre-existing behaviour and is preserved deliberately.
+- `syevx_select_preconditioner` applies the same asymmetry to `BATCHLAS_SYEVX_PRECONDITIONER`. A
+  configured ILU(k) factor wins over any environment default, because it is the strongest signal
+  of intent and was paid for before the call. `ILUK` from the environment is not actionable:
+  there is no factor, and `syevx` will not build one behind the caller's back, which would need
+  CSR input and `find_largest = false`, neither of which the environment can know. `Jacobi` from
+  the environment is dropped for `find_largest` calls instead of throwing.
+
+### syevx: why the preconditioner environment variable is only a default
+
+Precedence for `SyevxPreconditioner` differs deliberately from `SyevxAlgorithm`.
+`BATCHLAS_SYEVX_ALGORITHM` overrides `params.method`; `BATCHLAS_SYEVX_PRECONDITIONER` only supplies
+the *default* that `Auto` resolves to, and never overrides an explicit `preconditioner_type`. An
+algorithm can always be substituted for another, because that changes only performance. A
+preconditioner cannot: an ILU(k) factor a caller built and handed in has no substitute, and
+silently ignoring it, or silently ignoring a request for one, would be a correctness surprise
+rather than a performance one. Only the LOBPCG path uses the preconditioner; Direct, DirectSubset
+and Filtered ignore it.
+
+Neither Jacobi form is chosen by `Auto`. On the matrices measured, neither is a free win (see
+[the Jacobi preconditioners](../perf/syevx.md#lobpcg-jacobi-preconditioners)), so picking one
+implicitly would be a regression for somebody. `JacobiShifted` in particular is offered because
+the constant-diagonal case is provably a no-op and the general case is safe, not because it was
+found to pay. (Moved from the `SyevxPreconditioner` comment in `include/batchlas/blas/enums.hh`,
+2026-09-30.)
+
+### syevx dispatcher: sparse input and an explicit Filtered request
+
+Direct and DirectSubset tridiagonalize a dense A and are not defined on CSR, so an explicit
+request for them on sparse input degrades to LOBPCG. `Filtered` is not a dense path:
+`syevx_filtered` is instantiated for every `MatrixFormat` (`BATCHLAS_FOR_EACH_MATRIX_FORMAT_2`)
+and has real CSR branches through `spmm`, because a Chebyshev iteration needs nothing from A but
+the ability to multiply by it. So an explicit `Filtered` on CSR is honoured. `Auto`, and every
+dense-only request, still lands on LOBPCG.
+
+This branch used to `return LOBPCG` unconditionally, above the explicit-method switch. It silently
+discarded `params.method = Filtered` on sparse input, which is the one thing the rest of the
+selector is careful never to do, and it meant every "run the suite forced onto Filtered" sweep
+passed on CSR inputs without once running Filtered. The measurement that exposed it is in
+[Filtered vs LOBPCG on CSR](../perf/syevx.md#syevx-filtered-vs-lobpcg-on-csr). The branch must
+stay below the non-extremal range check, or sparse input with an interior range would get LOBPCG's
+extremal answer instead of an exception.
+
+The LOBPCG and Filtered arms take no `m` argument. They only ever see an Extremal range, so the
+count is static, and `syevx` fills `m` itself with the resolved block size. The fill is submitted
+*before* the solve, so the solve's Event, which is what the caller waits on, covers it on the
+in-order queue the library assumes. It aliases nothing the solvers touch.
+
+### syevx Direct: the range is checked at its own entry point
+
+`syevx_direct` and `syevx_direct_subset` are public entry points in their own right: the test
+suite calls them directly, and so may a caller who wants to pin the algorithm. So they re-check an
+Index or Value range themselves. An out-of-range index block would otherwise reach a device kernel
+that indexes an n-entry eigenvalue array with `il..iu`. `syevx_resolve_range` clamps as a second
+line of defence, so the throw is about telling the caller rather than memory safety, and both are
+wanted. The wording and exception type (`std::invalid_argument`, not the `std::runtime_error`
+the shape checks use) match `validate_syevx_range_params`. DirectSubset validates before the
+reduction for a second reason: `stebz` would otherwise reject the range two layers down, after
+the whole \f$O(n^3)\f$ reduction had run.
+
+`neigs` above `n` is accepted by both: it is a capacity, clamped inside `syevx_resolve_range`, and
+the tail of `W` and `V` goes unwritten. For `syevx_direct` this was the one place an existing
+call's outcome changed from a throw to a success when capacity semantics landed. `neigs = 0` is
+still rejected by DirectSubset, because `stein` requires `k >= 1`.
+
+### syevx DirectSubset: reported as converged, with a caveat
+
+`syevx_direct_subset` clears `info` to 0 ("converged") for every item. `sytrd_sy2sb` and
+`sytrd_sb2st` are direct, but the two tridiagonal solvers are not: `stebz` bisects to a tolerance
+and cannot tell its three loop exits apart afterwards, and `stein` runs a **fixed** number of
+inverse iterations with no convergence test at all (LAPACK's `?stein` reports how many vectors
+failed; nothing here measures it). A real flag would need a residual check, which is new
+arithmetic rather than surfacing something that exists, so it was left out of the work package
+that added `info` and recorded as deferred. Writing 0 rather than leaving the span untouched is
+the deliberate part: an uninitialised span is worse than a conservative one, because the caller
+cannot tell "converged" from "never written".
+
+### stein: one work-item per vector
+
+Phase 1 of `stein` solves \f$(T - \lambda I)x = b\f$ a few times from a deterministic
+pseudo-random start, with a tridiagonal LU with partial pivoting (LAPACK `dgttrf`/`dgttrs`). The
+factorization depends on \f$\lambda\f$, so it is per vector and serial in `n`, hence one work-item
+rather than one work-group per vector. That is affordable because for medium `n` the tridiagonal
+stage is far off the critical path (see
+[medium matrices](#syevx-for-batches-of-medium-matrices)). Phase 2 reorthogonalizes vectors whose
+eigenvalues form a cluster by modified Gram-Schmidt: inverse iteration alone does not deliver
+orthogonality on clusters, and that \f$O(nk^2)\f$-within-clusters cost is the price bisection pays
+relative to MRRR. The per-item `kb` bounds of both phases are in
+[stein's per-item count bound](syevx-range-selection.md#syevx-range-steins-per-item-count-bound).
+
+### syevx Filtered: the scaled Chebyshev filter
+
+One outer iteration of `syevx_filtered`:
+
+```
+Y = p_m(A) X            Chebyshev filter, m matvecs
+Y = ortho(Y)
+H = Y^H A Y             projected problem
+H = Z diag(theta) Z^H   syev
+X = Y Z                 Ritz vectors
+```
+
+\f$p_m\f$ is the degree-\f$m\f$ Chebyshev polynomial of the spectrum mapped so that the *unwanted*
+interval falls in \f$[-1, 1]\f$, where \f$|T_m| \le 1\f$, while the wanted end falls outside, where
+\f$T_m\f$ grows like \f$\cosh(m\,\mathrm{acosh}\,x)\f$. A handful of iterations does what many
+unpreconditioned Krylov steps could not. The cut is the first *unwanted* Ritz value, so the damped
+interval is exactly the part of the spectrum being rejected.
+
+Why this rather than more LOBPCG: the filter needs no preconditioner and no factorization, only
+matvecs. Unpreconditioned LOBPCG is documented to stagnate (see
+[Chebyshev-Davidson](#chebyshev-davidson-consider-as-the-lobpcg-replacement-for-unpreconditioned-problems)),
+and the ILU(k) preconditioner `syevx_lobpcg` can build is valid only for the smallest eigenpairs.
+Filtering has no such restriction.
+
+**The recurrence is the scaled Zhou/Saad form**, not the textbook one:
+
+\f[
+Y_1 = \frac{\sigma_1}{e}(A - cI)X, \qquad
+Y_{j+1} = \frac{2\sigma'}{e}(A - cI)Y_j - \sigma\sigma' Y_{j-1}.
+\f]
+
+\f$T_m\f$ evaluated directly overflows quickly: with a spectrum reaching \f$x = 3\f$ on the mapped
+axis, \f$T_{25}(3) \approx 10^{38}\f$, which is float infinity. Carrying the \f$\sigma\f$ factors keeps
+every intermediate near unit magnitude. The block is orthonormalized immediately afterwards, so the
+overall scale is irrelevant; only the ratio between wanted and unwanted components matters.
+
+The block has guard directions (`extra_directions`, default `max(2, k/4)`): without any, the cut
+sits exactly at the edge of the wanted block and the last wanted pair converges slowly. The start
+block comes from a hash of the index, so it does not depend on host RNG state and is reproducible
+across runs and backends. The per-iteration host read of the convergence flag is a known cost, see
+[Tier 3 status](../perf/syevx.md#syevx-tier-3-filtered).
+
+### syevx Filtered: normalising the filter and capping its degree
+
+**Normalise at the extreme Ritz value.** `far`, the point where the scaled polynomial equals 1,
+must be the extreme *Ritz* value, not the Gershgorin bound. Gershgorin overestimates the spectral
+radius of a random symmetric matrix badly (\f$O(n)\f$ against the true \f$O(\sqrt n)\f$), and
+normalising there divides by \f$T_m\f$ of a point far outside the spectrum. At degree 40 that
+underflows the whole block to zero, and orthogonalizing a zero block yields NaN. Normalising at the
+wanted end keeps \f$p \approx 1\f$ exactly where the wanted vectors live.
+
+**Cap the degree by precision.** The filter amplifies the most-wanted direction over the
+least-wanted one by
+
+\f[
+\frac{\cosh(d\,\mathrm{acosh}\,y_{far})}{\cosh(d\,\mathrm{acosh}\,y_{edge})}.
+\f]
+
+Once that ratio exceeds what the working precision holds, the least-wanted columns are numerically
+swamped, the block is rank-deficient, and the Cholesky-based `ortho` returns NaN rather than a slow
+answer. Bounding \f$d\f$ keeps every outer iteration well-conditioned; the lost sharpness is
+recovered by another iteration, which is cheap by comparison. The cap is
+
+\f[
+d_{cap} = \frac{-\tfrac14 \log \epsilon}{\mathrm{acosh}\,y_{far} - \mathrm{acosh}\,y_{edge}},
+\f]
+
+a ratio budget of \f$\epsilon^{-1/4}\f$ (about 300 in float). A budget of \f$\epsilon^{-1/2}\f$ was
+measured to be too generous: the block still went rank-deficient and Chol2 returned NaN at
+degree 40. When \f$y_{edge} \le 1\f$ the least-wanted direction is inside the damped band, where
+\f$|T_d| \le 1\f$. That is the *worst* case for the ratio, not a case to skip: growth is then the
+full \f$\cosh(d\,\mathrm{acosh}\,y_{far})\f$, so the edge term is taken as 0. The first version
+waived the cap there. Each item's cap is reduced by **min** across the batch so the recurrence
+length, and with it every GEMM shape, stays uniform.
+
+### syevx Filtered: the problem-derived degree
+
+Behind `BATCHLAS_SYEVX_FILTER_DEGREE_AUTO=1` (off by default; see
+[the measurement](../perf/syevx.md#syevx-automatic-chebyshev-filter-degree)). Inside the damped
+band \f$|T_d| \le 1\f$. The least-amplified *wanted* direction sits at mapped coordinate
+\f$y_{edge} > 1\f$ and grows like \f$\cosh(d\,\mathrm{acosh}\,y_{edge}) \approx e^{d r}/2\f$ with
+\f$r = \mathrm{acosh}\,y_{edge}\f$. One outer iteration therefore shrinks the unwanted content by
+about \f$e^{-dr}\f$, and the degree that would finish in one more iteration is
+
+\f[
+d_{need} = \frac{\log(\text{worst residual} / \text{target})}{r},
+\f]
+
+in the scaled units the convergence test uses. This is the geometry the precision cap already
+computes, and the cap stays an upper bound on top of it, because it guards the measured failure
+mode (rank-deficient block, NaN from Cholesky). The per-item \f$d_{need}\f$ is clamped to
+`[kAutoDegreeMin, kAutoDegreeMax] = [10, 40]` and reduced by **max** across the batch, then trimmed
+by the batch-minimum cap. The lower bound is the old constant, so turning the derivation on never
+makes a step *less* selective than before. The upper bound is the usual ChASE-style ceiling: past
+roughly 40 the extra matvecs stop paying for themselves and the precision cap tends to bind anyway.
+
+Degree precedence: `BATCHLAS_SYEVX_FILTER_DEGREE` > `params.filter_degree` > derived >
+`kDefaultFilterDegree`. Either explicit value pins the degree and turns the derivation off, and
+`BATCHLAS_SYEVX_FILTER_DEGREE_AUTO=0` restores the constant exactly. **Trap:** that variable and
+`BATCHLAS_SYEVX_BOUNDS_LEGACY` are parsed with `atoi`, not `env_truthy`, so `true` and `on` read
+as false. Kept as is, so no existing spelling changes meaning.
+
 ## syevx sources
 
 Bisection, inverse iteration, MRRR:

@@ -1,6 +1,6 @@
 #pragma once
 
-// The REGISTER panel leaf (WP6 / P5): one panel ROW per work-item, the m x N panel in registers
+// The REGISTER panel leaf: one panel ROW per work-item, the m x N panel in registers
 // between one coalesced load and one store. LarfgScalars/geqrf_larfg_scalars are reused VERBATIM,
 // because tau's real-beta convention is a contract ormqr/orgqr/ormbr/sy2sb read.
 // evidence: docs/perf/qr.md#the-register-panel-leaf-wp6--p5

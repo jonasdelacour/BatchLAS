@@ -15,42 +15,22 @@
 #include <string_view>
 #include <batchlas/settings.hh>
 
-// Scratch expansions that turn a matrix whose meaning lives in one triangle
-// into an ordinary dense operand a batched GEMM can read.
-//
-// SYMM, HEMM and TRMM all need this: BLAS forbids any of them from touching the
-// unreferenced triangle, so pointing a GEMM at the caller's A is wrong even
-// when the caller happens to have zeroed it. The expansion is written into a
-// workspace lease rather than a fresh Matrix -- a Matrix is a managed
-// allocation whose pages migrate on first touch, which at n=512 batch=512 costs
-// several times the GEMM it feeds, and it would be freed on return while the
-// kernels reading it have only been enqueued.
+// Scratch expansions that turn a one-triangle operand (SYMM, HEMM, TRMM) into a
+// dense one a batched GEMM can read; the caller's unreferenced storage is never
+// read. Scratch is a workspace lease, never a fresh Matrix (freed while enqueued).
+// Sizing and the fit ceiling live in ../expansion_budget.hh.
+// evidence: docs/perf/level3.md#level-3-scratch-expansions-and-their-ceilings
 namespace batchlas::backend::detail {
 
-// expanded_ld, expanded_workspace_bytes and expansion_fits moved to
-// ../expansion_budget.hh, so that callers outside src/backends/ can consult
-// the same fit predicate this file's routes branch on.
-
-// Where an expansion starts beating a per-batch loop over the vendor's own
-// triangular primitive. Measured on sm_89 against cublas?symm in float over
-// n in 16..2048 x batch in 1..512, and against cublas?hemm in complex64 over
-// n in 16..512 x batch in 1..16: both put the crossover in the same place. The
-// expansion wins by 1.2x to 72x everywhere except batch <= 2 with n <= 128,
-// where the call is launch-bound and the expansion's extra kernel costs more
-// than the loop it replaces -- there it loses by up to 2.5x.
-//
-// TRMM deliberately does not consult this. cublas?trmm has a flat ~110 us floor
-// whatever the shape, so the expansion beats it in every cell measured,
-// including batch 1.
+// Expansion vs the per-batch vendor loop (symm/hemm). The constants are
+// deliberately more conservative than the measured loss region. TRMM does not
+// consult this. evidence: docs/perf/level3.md#symm-and-hemm-expansion-crossover
 constexpr int kExpandMinBatch = 4;
 constexpr int kExpandMinDim = 256;
 
-// BATCHLAS_EXPAND_ROUTE pins the choice to "expand" or "loop", so a test can
-// reach whichever route the shape would not have picked. An expansion still has
-// to fit before it can be built, so this only ever narrows expansion_fits.
+// BATCHLAS_EXPAND_ROUTE pins "expand" or "loop"; it only ever narrows expansion_fits.
 inline bool expansion_preferred(int max_dim, int batch) {
-    // Same Settings field as expansion_budget.hh's expansion_route_pin(), so the
-    // two independent parsers can no longer be handed different strings.
+    // Same Settings field as expansion_route_pin(), so the two cannot disagree.
     if (const char* route = batchlas::settings().selection.expand_route.get()) {
         if (std::string_view(route) == "expand") {
             return true;
@@ -62,10 +42,8 @@ inline bool expansion_preferred(int max_dim, int batch) {
     return batch >= kExpandMinBatch || max_dim >= kExpandMinDim;
 }
 
-// Work-group shape for the elementwise expansions below: rows first, so that a
-// group's lanes walk a column and both the load and the store coalesce, and
-// only as many rows as the matrix actually has, so that a batch of tiny
-// matrices does not retire mostly-idle groups.
+// Work-group shape for the elementwise expansions: lanes walk a column (both
+// sides coalesce), and no more rows than the matrix has (tiny matrices).
 struct ExpandGroupShape {
     int rows;
     int cols;
@@ -81,10 +59,8 @@ inline ExpandGroupShape expand_group_shape(int n) {
     return {rows, kItemsPerGroup / rows};
 }
 
-// Materialise the dense matrix that A's referenced triangle stands for: zeros
-// opposite it, and ones on the diagonal when the caller declared it unit --
-// storage that TRMM is not allowed to read, and that therefore may hold
-// anything at all.
+// Dense op of a triangular A: zeros opposite, ones on a unit diagonal. That
+// storage is never read, so it may hold anything.
 template <typename T>
 Event expand_triangular(Queue& ctx,
                         const MatrixView<T, MatrixFormat::Dense>& out,
@@ -153,16 +129,9 @@ inline T mirror_of(T value) {
     }
 }
 
-// Materialise the full symmetric (Conjugate = false) or Hermitian
-// (Conjugate = true) matrix that A's referenced triangle stands for, so a plain
-// batched GEMM can read it as an ordinary dense operand.
-//
-// One tile pair per work group, staged through local memory. The mirrored half
-// is the reason: the mirror of a coalesced column read is a row write, one
-// cache line per element, and at these sizes the expansion is pure bandwidth.
-// Going through a tile keeps the read and both writes coalesced and moves
-// 1.5 n^2 of traffic, against the 3 n^2 of a copy followed by an in-place
-// symmetrize.
+// Full symmetric (Conjugate = false) or Hermitian (true) matrix from A's
+// referenced triangle. One tile pair per work-group through local memory, so the
+// read and both writes coalesce. evidence: docs/perf/level3.md#level-3-scratch-expansions-and-their-ceilings
 template <typename T, bool Conjugate>
 Event expand_mirrored(Queue& ctx,
                       const MatrixView<T, MatrixFormat::Dense>& out,
@@ -180,10 +149,8 @@ Event expand_mirrored(Queue& ctx,
     const std::size_t stride_a = static_cast<std::size_t>(A.stride());
     const std::size_t stride_o = static_cast<std::size_t>(out.stride());
 
-    // The tile grid covers both triangles and the groups on the unreferenced
-    // side exit before their first barrier. Half the groups retire empty, which
-    // is cheaper than putting the integer square root of an unranked triangular
-    // index in front of every work item.
+    // Groups on the unreferenced side exit before their first barrier (cheaper
+    // than a triangular-index sqrt per work-item).
     const sycl::range<3> global(static_cast<std::size_t>(batch),
                                 static_cast<std::size_t>(tiles) * kMirrorGroupCols,
                                 static_cast<std::size_t>(tiles) * kMirrorTile);
@@ -222,12 +189,8 @@ Event expand_mirrored(Queue& ctx,
             sycl::group_barrier(item.get_group());
 
             if (ti == tj) {
-                // The two writes below would collide on a diagonal tile, so pick
-                // the referenced member of each mirrored pair instead. The
-                // diagonal itself is the one element a Hermitian matrix pins
-                // rather than mirrors: A = A^H forces its imaginary part to
-                // zero, so whatever the caller stored there is not part of the
-                // operand.
+                // Diagonal tile: pick the referenced member of each pair (the
+                // two writes would collide). A Hermitian diagonal is forced real.
                 for (int c = c0; c < kMirrorTile; c += kMirrorGroupCols) {
                     const int i = src_row0 + r;
                     const int j = src_col0 + c;

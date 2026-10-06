@@ -287,6 +287,22 @@ inline constexpr void dispatch_symm(const Exec& exec,
 
 } // namespace detail
 
+/// @addtogroup device
+/// @{
+
+/// @brief Symmetric matrix-matrix product \f$ C := \alpha\,A\,B + \beta\,C \f$ (Left) or \f$ C := \alpha\,B\,A + \beta\,C \f$ (Right), reading only the `UploV` triangle of `A`.
+///
+/// There is no device `hemm`. The fast paths are as for trmm(), except that
+/// `B` and `C` must not overlap.
+/// @tparam SideV  side `A` multiplies from
+/// @tparam UploV  stored triangle of `A`
+/// @tparam Group  `sycl::group`, `sycl::sub_group` or an `nd_item`; every work-item must call
+/// @param group      executor
+/// @param a          single square matrix, order `B.rows()` (Left) or `B.cols()` (Right)
+/// @param operand    `B`, `C` (same shape as `B`, not overlapping it), `alpha`, `beta`
+/// @param workspace  local memory of symm_workspace_elements() elements, or `nullptr`
+/// @pre `C` holds finite values even when `beta == 0`.
+/// @note On the generic path each `C` element is written by the group leader; barrier before other work-items read `C`.
 template <Side SideV = Side::Left, Uplo UploV = Uplo::Upper, typename Group, typename T>
 inline constexpr void symm(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -295,6 +311,7 @@ inline constexpr void symm(const Group& group,
     detail::dispatch_symm<detail::SymmetricTransformTag<SideV, UploV, false>, DeviceBlasPolicy::Auto>(group, a, operand, workspace);
 }
 
+/// @brief As symm(), with an explicit DeviceBlasPolicy.
 template <DeviceBlasPolicy Policy,
           Side SideV = Side::Left,
           Uplo UploV = Uplo::Upper,
@@ -307,6 +324,11 @@ inline constexpr void symm(const Group& group,
     detail::dispatch_symm<detail::SymmetricTransformTag<SideV, UploV, false>, Policy>(group, a, operand, workspace);
 }
 
+/// @brief Local memory, in elements of `T`, that symm() can use; 0 means pass `nullptr`.
+/// @param launch description of the launch the call runs in
+/// @param row_extent rows of `C`
+/// @param col_extent columns of `C`
+/// @return element count, or 0 when no staged path applies
 template <typename T, Side SideV = Side::Left, Uplo UploV = Uplo::Upper>
 inline constexpr std::size_t symm_workspace_elements(const DeviceBlasLaunchInfo& launch,
                                                      int row_extent,
@@ -314,6 +336,11 @@ inline constexpr std::size_t symm_workspace_elements(const DeviceBlasLaunchInfo&
     return detail::symm_workspace_elements<detail::SymmetricTransformTag<SideV, UploV, false>, DeviceBlasPolicy::Auto, T>(launch, row_extent, col_extent);
 }
 
+/// @brief Local memory, in elements of `T`, that symm() can use under `Policy`; 0 means pass `nullptr`.
+/// @param launch description of the launch the call runs in
+/// @param row_extent rows of `C`
+/// @param col_extent columns of `C`
+/// @return element count, or 0 when no staged path applies
 template <typename T, DeviceBlasPolicy Policy, Side SideV = Side::Left, Uplo UploV = Uplo::Upper>
 inline constexpr std::size_t symm_workspace_elements(const DeviceBlasLaunchInfo& launch,
                                                      int row_extent,
@@ -321,6 +348,7 @@ inline constexpr std::size_t symm_workspace_elements(const DeviceBlasLaunchInfo&
     return detail::symm_workspace_elements<detail::SymmetricTransformTag<SideV, UploV, false>, Policy, T>(launch, row_extent, col_extent);
 }
 
+/// @brief As symm(), with the operands passed separately instead of in an operand struct.
 template <Side SideV = Side::Left, Uplo UploV = Uplo::Upper, typename Group, typename T>
 inline constexpr void symm(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -332,6 +360,7 @@ inline constexpr void symm(const Group& group,
     symm<SideV, UploV>(group, a, make_matmat_operand(b, c, alpha, beta), workspace);
 }
 
+/// @brief As symm(), with an explicit DeviceBlasPolicy and the operands passed separately.
 template <DeviceBlasPolicy Policy,
           Side SideV = Side::Left,
           Uplo UploV = Uplo::Upper,
@@ -346,5 +375,7 @@ inline constexpr void symm(const Group& group,
                            T* workspace = nullptr) {
     symm<Policy, SideV, UploV>(group, a, make_matmat_operand(b, c, alpha, beta), workspace);
 }
+
+/// @}
 
 } // namespace batchlas::device

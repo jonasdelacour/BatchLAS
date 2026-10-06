@@ -7,50 +7,55 @@
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
 
+/// @file
+/// @brief BumpAllocator, the linear sub-allocator over a workspace span, and workspace_bytes().
+/// @see @ref design_workspace
+/// @ingroup workspace
+
 namespace batchlas {
 
+/// @brief Linear (bump) sub-allocator over a caller-supplied workspace buffer.
+///
+/// Each allocate() carves the next suitably aligned slice off the front of the buffer; nothing
+/// is ever freed individually. Every alignment is `max(16, MEM_BASE_ADDR_ALIGN / 8, alignof(T))`.
+///
+/// A pool made by measuring() is a *sizing* pool: it runs the same arithmetic over a fictitious
+/// region and reports through required_bytes() the buffer size the same call sequence needs.
+/// That is how every `*_buffer_size` query is computed (see workspace_bytes()).
+/// @warning Size a workspace with measuring() and required_bytes(), never by re-summing
+///          allocation_size() by hand: the capacity check uses the rounded size while the cursor
+///          advances by the raw size, so an exactly simulated total is too small.
+/// @ingroup workspace
+// evidence: docs/design/workspace.md#workspace-the-bumpallocator-alignment-trap
 struct BumpAllocator {
+    /// @brief A pool over `byte_size` bytes starting at `data`.
     template <typename T>
     BumpAllocator(T* data, size_t byte_size): data(data), byte_size(byte_size){}
 
+    /// @brief A pool over the bytes of `span`.
     template <typename T>
     BumpAllocator(Span<T> span): data(span.data()), byte_size(span.size()*sizeof(T)){}
 
-    // ---- sizing mode -------------------------------------------------------
-    //
-    // A pool over a fictitious, maximally-aligned, effectively unbounded region.
-    // It runs the same bump arithmetic as a real pool and reports the smallest
-    // buffer that will satisfy the same call sequence: give a real pool
-    // required_bytes() and every allocation succeeds, with at most one alignment
-    // quantum to spare.
-    //
-    // That holds because every alignment this allocator uses is
-    // max(device_align, alignof(T)) and device_align is at least 16 while every
-    // T we allocate has alignof(T) <= 16: the alignment is therefore a single
-    // uniform value, and the layout depends only on offsets relative to the
-    // start of the pool. The fake base is aligned far beyond any device
-    // requirement, and a real pool's base is device-aligned, so both produce the
-    // same offsets.
-    //
-    // The pointers handed out are non-null and correctly aligned so that views
-    // can be constructed over them, but they address nothing: dereferencing one
-    // faults immediately rather than corrupting memory. Sizing code must
-    // therefore build views over workspace only, never touch their contents,
-    // and never launch a kernel.
+    /// @brief A sizing pool: an effectively unbounded, maximally aligned fictitious region.
+    ///
+    /// Give a real pool required_bytes() and the same call sequence succeeds, with at most one
+    /// alignment quantum to spare.
+    /// @warning The pointers it hands out are non-null and aligned (views can be built over them)
+    ///          but unbacked: sizing code must never touch their contents, launch a kernel, or
+    ///          test `data() != nullptr` to mean "a workspace was passed".
+    // Exact because every alignment is one uniform value (device_align >= 16 >= alignof(T)), so
+    // offsets from the base match a real pool's. evidence: docs/design/workspace.md#workspace-bumpallocator-sizing-mode
     static BumpAllocator measuring() { return BumpAllocator(measure_tag{}); }
 
+    /// @brief True for a pool made by measuring().
     inline bool is_measuring() const { return measuring_; }
 
-    // Bytes a real pool must be given for this call sequence to succeed. Only
-    // meaningful in sizing mode.
-    //
-    // Rounded up to the coarsest alignment the sequence asked for. Sizing
-    // results have always been alignment multiples -- they were sums of
-    // allocation_size terms, each of which is rounded -- and callers depend on
-    // that: several of them add a callee's size straight into their own total
-    // and then re-serve it via allocate<std::byte>(), which rounds again. Handing
-    // back an unrounded figure silently under-provisions every such caller by up
-    // to one quantum.
+    /// @brief Bytes a real pool must be given for the call sequence so far to succeed.
+    ///
+    /// Rounded up to the coarsest alignment the sequence asked for.
+    /// @throws batchlas::api_misuse on a pool not made by measuring()
+    // Rounding is load-bearing: callers add a callee's size into their total and re-serve it
+    // with allocate<std::byte>(), which rounds again.
     inline size_t required_bytes() const {
         if (!measuring_) {
             throw batchlas::api_misuse("BumpAllocator::required_bytes() on a real pool; use BumpAllocator::measuring().");
@@ -59,15 +64,15 @@ struct BumpAllocator {
         return (high_water_ + align_quantum_ - 1) & ~(align_quantum_ - 1);
     }
 
+    /// @brief Alignment in bytes of an allocation of `T` on `device`.
     template<typename T>
     constexpr inline static auto alignment(const Device& device){
-        //It is common for GPU vendors to require 16 byte alignment of pointers (equal to 4 floats).
-        //It seems however that this property can't be immediately queried through the sycl runtime, 
-        //hence the hardcoded value of 16.
+        // 16-byte floor: vendors commonly require it and SYCL cannot query it.
         auto device_align_bytes = std::max((size_t)16, (size_t)device.get_property(DeviceProperty::MEM_BASE_ADDR_ALIGN)/8);
         return std::max(device_align_bytes, static_cast<std::uintptr_t>(alignof(T)));
     }
 
+    /// @brief Bytes `size` elements of `T` occupy, rounded up to alignment<T>(); 0 for `size == 0`.
     template<typename T>
     constexpr inline static size_t allocation_size(const Device& device, size_t size){
         if (size == 0) return 0; // Handle zero size allocation gracefully
@@ -75,9 +80,16 @@ struct BumpAllocator {
         return (total_size + alignment<T>(device) - 1) & ~(alignment<T>(device) - 1);
     }
 
+    /// @brief allocation_size() for the Queue's device.
     template<typename T>
     constexpr inline static size_t allocation_size(Queue& ctx, size_t size)   {return allocation_size<T>(ctx.device(), size);}
 
+    /// @brief Carve `size` elements of `T`, aligned to alignment<T>(), off the front of the pool.
+    /// @tparam T element type
+    /// @param device device whose alignment rule applies
+    /// @param size   number of elements; 0 returns an empty Span and consumes nothing
+    /// @return the allocated elements (uninitialised; unbacked in a sizing pool)
+    /// @throws batchlas::workspace_error if the pool has fewer than allocation_size<T>() bytes left
     template<typename T>
     constexpr inline Span<T> allocate(const Device& device, size_t size){
         if (size == 0) return {};
@@ -93,12 +105,8 @@ struct BumpAllocator {
         }
 
         if (measuring_) {
-            // What a real pool must be *given* for this call to succeed, which is
-            // more than what it goes on to consume. The capacity check above tests
-            // the alignment-rounded alloc_size against the bytes left measured from
-            // the unaligned cursor, while the cursor only advances by the raw
-            // extent -- so a pool sized by the advance alone fails its own check on
-            // any allocation whose extent is not a multiple of the alignment.
+            // Record what a real pool must be GIVEN, not what it consumes: the check above uses
+            // the rounded size from the unaligned cursor, the advance below only the raw extent.
             const auto base = static_cast<std::byte*>(measure_base_);
             const size_t need_for_check = static_cast<size_t>(static_cast<std::byte*>(data) - base) + alloc_size;
             const size_t need_for_data  = static_cast<size_t>(static_cast<std::byte*>(aligned) - base) + size * sizeof(T);
@@ -114,23 +122,26 @@ struct BumpAllocator {
         return Span(ptr, size);
     }
 
+    /// @brief allocate() with the Queue's device.
     template<typename T>
     constexpr inline Span<T> allocate(Queue& ctx, size_t size) {return allocate<T>(ctx.device(), size);}
 
-    // The still-unclaimed tail of the pool. Lets a callee sub-allocate without the
-    // caller having to know its size up front; pair with consume() to hand the
-    // bytes it actually took back to this allocator.
+    /// @brief The still-unclaimed tail of the pool.
+    ///
+    /// Lets a callee sub-allocate without the caller knowing its size up front; pair with
+    /// consume() to hand back the bytes it actually took.
+    /// @throws batchlas::api_misuse on a sizing pool, whose extent is fictitious
     inline Span<std::byte> remaining() const {
         if (measuring_) {
-            // A sizing pool has no tail to hand out: its extent is fictitious, so
-            // any callee that sizes itself against remaining().size() would size
-            // against a number that means nothing. Such call sites have to be
-            // converted deliberately (see iluk / syevx_lobpcg), not implicitly.
+            // Callees sized against remaining().size() must be converted deliberately
+            // (see iluk / syevx_lobpcg), never implicitly.
             throw batchlas::api_misuse("BumpAllocator::remaining() is not available in sizing mode.");
         }
         return Span<std::byte>(static_cast<std::byte*>(data), byte_size);
     }
 
+    /// @brief Advance the pool by `bytes` (after a callee used remaining()).
+    /// @throws batchlas::workspace_error if fewer than `bytes` remain
     inline void consume(size_t bytes) {
         if (bytes > byte_size) {
             throw batchlas::workspace_error("BumpAllocator::consume called with more bytes than remain.");
@@ -143,14 +154,12 @@ struct BumpAllocator {
 
         struct measure_tag {};
 
-        // Aligned to 4 GiB -- past any conceivable MEM_BASE_ADDR_ALIGN -- and far
-        // outside any mapping, so a stray dereference faults instead of corrupting.
+        // 4 GiB-aligned (past any MEM_BASE_ADDR_ALIGN) and unmapped: a stray dereference faults.
         static constexpr std::uintptr_t kMeasureBase = std::uintptr_t(1) << 32;
 
         explicit BumpAllocator(measure_tag)
             : data(reinterpret_cast<void*>(kMeasureBase)),
-              // Large enough that no real sizing request trips the capacity check,
-              // small enough that base + byte_size cannot wrap.
+              // No real request trips the check, and base + byte_size cannot wrap.
               byte_size(std::numeric_limits<size_t>::max() / 4),
               measuring_(true),
               measure_base_(reinterpret_cast<void*>(kMeasureBase)) {}
@@ -163,27 +172,22 @@ struct BumpAllocator {
         size_t align_quantum_ = 0;
 };
 
-// Bytes a workspace layout needs, obtained by replaying the layout against a
-// sizing pool. This is the whole point of sizing mode: an algorithm describes
-// its workspace exactly once, in a `*_layout` function, and both its
-// `*_buffer_size` entry point and its implementation go through that one
-// description. Neither can drift from the other because there is only one.
-//
-//   template <Backend B, typename T>
-//   FooWorkspace<T> foo_layout(Queue& ctx, BumpAllocator& pool, <shape args>) {
-//       return { pool.allocate<T>(ctx, n * batch), ... };
-//   }
-//
-//   size_t foo_buffer_size(Queue& ctx, ...) {
-//       return workspace_bytes([&](BumpAllocator& p) { return foo_layout<B,T>(ctx, p, ...); });
-//   }
-//
-// A layout function must be pure with respect to the workspace: it may read the
-// *caller's* views (shapes, and their contents -- those are real), and it may
-// build views over what it allocates, but it must never read or write workspace
-// memory and never launch a kernel. In sizing mode the workspace addresses it
-// hands out are unbacked. Nested size queries must be asked about the caller's
-// views, not about workspace-derived ones, for the same reason.
+/// @brief Bytes a workspace layout needs, obtained by replaying it against a sizing pool.
+///
+/// An algorithm describes its workspace once, in a `*_layout` function, and both its
+/// `*_buffer_size` entry point and its implementation go through it, so they cannot drift:
+/// @code
+/// size_t foo_buffer_size(Queue& ctx, ...) {
+///     return workspace_bytes([&](BumpAllocator& p) { return foo_layout<B, T>(ctx, p, ...); });
+/// }
+/// @endcode
+/// @param layout callable taking a `BumpAllocator&`; its result is discarded
+/// @return BumpAllocator::required_bytes() of the sizing pool after `layout` ran
+/// @pre `layout` is pure with respect to the workspace: it may read the caller's views and build
+///      views over what it allocates, but never reads or writes workspace memory, never launches
+///      a kernel, and asks nested size queries about the caller's views only.
+/// @see @ref design_workspace
+/// @ingroup workspace
 template <typename Fn>
 inline size_t workspace_bytes(Fn&& layout) {
     auto sizer = BumpAllocator::measuring();
@@ -193,19 +197,8 @@ inline size_t workspace_bytes(Fn&& layout) {
 
 }  // namespace batchlas
 
-// Transitional compatibility shim: these used to be declared at global scope
-// and now live in namespace batchlas. A consumer with a name of its own here
-// defines BATCHLAS_NO_GLOBAL_NAMES to switch the block off; the block goes away
-// entirely once nothing in tree depends on it.
-//
-// workspace_bytes is shimmed even though it is a function rather than a type,
-// and it is the one name in this header that HAS to be: every other unqualified
-// spelling a consumer might use survives the move through ADL on its argument,
-// but workspace_bytes takes only a lambda, whose associated namespace is
-// wherever the consumer wrote it. Without the using-declaration below,
-// `workspace_bytes([](auto& s){ ... })` at global scope stops compiling -- and
-// the doc comment above sells exactly that spelling as the way to write a
-// *_buffer_size entry point.
+// Transitional global-scope shim; define BATCHLAS_NO_GLOBAL_NAMES to switch it off.
+// workspace_bytes MUST be shimmed: its only argument is a lambda, so ADL cannot find it.
 #ifndef BATCHLAS_NO_GLOBAL_NAMES
 using batchlas::BumpAllocator;
 using batchlas::workspace_bytes;

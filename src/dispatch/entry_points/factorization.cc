@@ -156,17 +156,10 @@ size_t geqrf_buffer_size(Queue& ctx,
         ctx, A,
         /*vendor_available=*/dispatch::factorization_vendor_available<B>);
 
-    // max over EVERY supported native tier and the vendor, not the chosen route:
-    // query and call resolve independently, so a chosen-only size under-allocates
-    // where max() merely over-allocates.
-    //
-    // geqrf ONLY: band_reduction.cc sizes against an (m_max x nb_max) dummy view
-    // and calls with a smaller sub-view, so any native geqrf_*_buffer_size must be
-    // MONOTONE NON-DECREASING in (rows, cols, batch) and must never dereference
-    // A.data_ptr() or tau.data() -- both are nullptr there.
-    //
-    // `native_fired`, not `native_need != 0`: the CTA tier's workspace is
-    // legitimately zero, so the check cannot be read off the size.
+    // max over EVERY supported native tier and the vendor, not the chosen route; `native_fired`, not
+    // `native_need != 0` (CTA and Tiny need zero). geqrf ONLY: every native sizer must be MONOTONE in
+    // (rows, cols, batch) and never dereference A/tau (band_reduction.cc sizes on a nullptr dummy).
+    // evidence: docs/perf/dispatch.md#dispatch-buffer-size-queries-and-the-route-they-size
     std::size_t native_need = 0;
     bool native_fired = false;
     if (dispatch::is_native(route)) {
@@ -174,10 +167,7 @@ size_t geqrf_buffer_size(Queue& ctx,
         using Tbl = dispatch::RouteTable<dispatch::Op::geqrf, T>;
         if (shape) {
             if (Tbl::supports({dispatch::Origin::Native, dispatch::Algorithm::Tiny}, *shape)) {
-                // The tiny tier's workspace is legitimately ZERO, which is exactly why
-                // the flag above is `native_fired` and not `native_need != 0`: without
-                // this arm a shape only Tiny supports would throw out of
-                // geqrf_throw_native_unimplemented while the call itself succeeds.
+                // Zero bytes, but the arm must fire, or a Tiny-only shape throws here and runs in the call.
                 native_need = std::max(native_need,
                                        sycl_geqrf::geqrf_tiny_buffer_size<T>(ctx, A));
                 native_fired = true;
@@ -299,13 +289,8 @@ size_t orgqr_buffer_size(Queue& ctx,
         }
         return native_need;
     } else {
-        // A native-routed call is not sized by the vendor. orgqr's vendor arm is a
-        // per-item loop, so its buffer size is batch-LINEAR (single * batch_size):
-        // at cdouble n=64 batch=8192 that is the ~4.6 GB the comment on the vendor
-        // sizer names, and the caller allocates whatever this returns -- so the
-        // native arm could OOM on a shape it serves in a few megabytes. The query
-        // and the call share one orgqr_route() with identical arguments, so the
-        // max() was only ever guarding a getenv change between the two.
+        // A native-routed call is not sized by the vendor: orgqr's vendor size is batch-LINEAR (GBs).
+        // evidence: docs/perf/qr.md#the-orgqr_buffer_size-latent-defect
         if (dispatch::is_native(route) && native_fired) {
             return native_need;
         }
@@ -733,9 +718,7 @@ size_t potrf_buffer_size(Queue& ctx,
         const auto shape = backend::potrf_op_shape<B, T>(ctx, A, uplo);
         using Tbl = dispatch::RouteTable<dispatch::Op::potrf, T>;
         if (shape) {
-            // The Tiny tier's workspace is NOT zero -- it draws the same `batch` int32s
-            // of info scratch the CTA tier does -- which is what keeps the
-            // `native_need == 0` unimplemented check above honest at n <= 32.
+            // Tiny draws `batch` int32s of info scratch: NON-zero, which keeps `native_need == 0` honest.
             if (Tbl::supports({dispatch::Origin::Native, dispatch::Algorithm::Tiny}, *shape)) {
                 native_need = std::max(native_need,
                                        sycl_potrf::potrf_tiny_buffer_size<T>(ctx, A));
@@ -749,10 +732,8 @@ size_t potrf_buffer_size(Queue& ctx,
                 native_need = std::max(
                     native_need, sycl_potrf::potrf_blocked_buffer_size<T>(ctx, A, uplo));
             }
-            // P3 made {Native, LPanel} reachable from Auto, so it must be sized here
-            // too. Without this arm, a device whose CTA capacity is 0 refuses CTA AND
-            // Blocked (which inherits CTA's presence gate), leaving native_need == 0 and
-            // throwing for exactly the shapes potrf() then runs on LPanel.
+            // LPanel is reachable from Auto: without this arm a CTA-capacity-0 device throws here
+            // for shapes potrf() runs. evidence: docs/perf/dispatch.md#dispatch-buffer-size-queries-and-the-route-they-size
             if (Tbl::supports({dispatch::Origin::Native, dispatch::Algorithm::LPanel},
                               *shape)) {
                 native_need = std::max(

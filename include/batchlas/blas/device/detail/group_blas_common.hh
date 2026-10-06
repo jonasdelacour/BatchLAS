@@ -17,123 +17,168 @@
 
 namespace batchlas::device {
 
+/// @addtogroup device
+/// @{
+
+/// @brief Which implementation family a device BLAS call may use.
+///
+/// Level-1 operations, `ger` and `trmv` have one implementation and ignore it.
+/// @see @ref design_device_group_blas
 enum class DeviceBlasPolicy {
-    Auto,
-    Generic,
-    Subgroup16,
-    Subgroup32,
+    Auto,        ///< any eligible path; the sub-group fast paths accept sub-group size 16 or 32
+    Generic,     ///< the portable group-reduction path only; never stages through local memory
+    Subgroup16,  ///< fast paths only when the actual sub-group size is 16
+    Subgroup32,  ///< fast paths only when the actual sub-group size is 32
 };
 
+/// @brief Kind of launch a DeviceBlasLaunchInfo describes.
 enum class DeviceBlasLaunchKind {
-    Group,
-    NdItem1D,
-    NdItem3D,
+    Group,     ///< the call receives a `sycl::group` (or `sycl::sub_group`)
+    NdItem1D,  ///< the call receives a `sycl::nd_item<1>`
+    NdItem3D,  ///< the call receives a `sycl::nd_item<3>` whose dimensions 1 and 2 index output tiles
 };
 
+/// @brief Host-side description of a launch, for the `*_workspace_elements` queries.
+///
+/// A query evaluates the same eligibility predicates as the call, so the
+/// description must match the launch actually made. Build it with
+/// make_group_launch_info(), make_nd_item_1d_launch_info() or
+/// make_nd_item_3d_launch_info().
 struct DeviceBlasLaunchInfo {
-    int local_size = 1;
-    int subgroup_size = 1;
-    DeviceBlasLaunchKind kind = DeviceBlasLaunchKind::Group;
+    int local_size = 1;     ///< work-items per work-group (per sub-group for a sub-group executor)
+    int subgroup_size = 1;  ///< sub-group size of the kernel; 1 for DeviceBlasLaunchKind::Group
+    DeviceBlasLaunchKind kind = DeviceBlasLaunchKind::Group;  ///< executor the call receives
 };
 
+/// @brief Launch description for a call that receives a `sycl::group`.
+/// @param local_size  work-items in the executor; clamped to at least 1
 inline constexpr DeviceBlasLaunchInfo make_group_launch_info(int local_size) {
     return DeviceBlasLaunchInfo{std::max(1, local_size), 1, DeviceBlasLaunchKind::Group};
 }
 
+/// @brief Launch description for a call that receives a `sycl::nd_item<1>`.
+/// @param local_size     work-group size; clamped to at least 1
+/// @param subgroup_size  sub-group size the kernel runs with; clamped to at least 1
 inline constexpr DeviceBlasLaunchInfo make_nd_item_1d_launch_info(int local_size, int subgroup_size) {
     return DeviceBlasLaunchInfo{std::max(1, local_size), std::max(1, subgroup_size), DeviceBlasLaunchKind::NdItem1D};
 }
 
+/// @brief Launch description for a call that receives a `sycl::nd_item<3>` (tiled output).
+/// @param local_size     work-group size; the register-tiled paths require 256
+/// @param subgroup_size  sub-group size the kernel runs with; clamped to at least 1
 inline constexpr DeviceBlasLaunchInfo make_nd_item_3d_launch_info(int local_size, int subgroup_size) {
     return DeviceBlasLaunchInfo{std::max(1, local_size), std::max(1, subgroup_size), DeviceBlasLaunchKind::NdItem3D};
 }
 
+/// @brief Operands of a matrix-vector operation: \f$ y := \alpha\,\mathrm{op}(A)\,x + \beta\,y \f$.
+/// @see make_matvec_operand()
 template <typename T>
 struct MatrixVectorOperand {
-    VectorView<T> x{};
-    VectorView<T> y{};
-    T alpha = T(1);
-    T beta = T(0);
+    VectorView<T> x{};   ///< input vector
+    VectorView<T> y{};   ///< output vector; read (scaled by `beta`) and overwritten
+    T alpha = T(1);      ///< scale of the product
+    T beta = T(0);       ///< scale of the input `y`; 0 still reads `y`
 };
 
+/// @brief Operands of a matrix-matrix operation: \f$ C := \alpha\,(\ldots B \ldots) + \beta\,C \f$.
+/// @see make_matmat_operand()
 template <typename T>
 struct MatrixMatrixOperand {
-    KernelMatrixView<T, MatrixFormat::Dense> b{};
-    KernelMatrixView<T, MatrixFormat::Dense> c{};
-    T alpha = T(1);
-    T beta = T(0);
+    KernelMatrixView<T, MatrixFormat::Dense> b{};  ///< second input matrix
+    KernelMatrixView<T, MatrixFormat::Dense> c{};  ///< output matrix; read (scaled by `beta`) and overwritten
+    T alpha = T(1);                                ///< scale of the product
+    T beta = T(0);                                 ///< scale of the input `C`; 0 still reads `C`
 };
 
+/// @brief Operands of a rank-k update: \f$ C := \alpha\,\mathrm{op}(A)\,\mathrm{op}(A)^{T|H} + \beta\,C \f$.
+/// @see make_rankk_operand()
 template <typename T>
 struct RankKOperand {
-    KernelMatrixView<T, MatrixFormat::Dense> c{};
-    T alpha = T(1);
-    T beta = T(0);
+    KernelMatrixView<T, MatrixFormat::Dense> c{};  ///< square output; only the `uplo` triangle is touched
+    T alpha = T(1);                                ///< scale of the product
+    T beta = T(0);                                 ///< scale of the input `C`; 0 still reads `C`
 };
 
+/// @brief Operands of a rank-1 update: \f$ A := A + \alpha\,x\,y^{T} \f$ (conjugations per call).
+/// @see make_rank1_update_operand()
 template <typename T>
 struct Rank1UpdateOperand {
-    VectorView<T> y{};
-    KernelMatrixView<T, MatrixFormat::Dense> a{};
-    T alpha = T(1);
+    VectorView<T> y{};                             ///< right vector, length `a.cols()`
+    KernelMatrixView<T, MatrixFormat::Dense> a{};  ///< matrix updated in place
+    T alpha = T(1);                                ///< scale of the outer product
 };
 
+/// @brief Runtime transpose mode of a matrix-vector operation.
 struct MatrixVectorTransform {
-    Transpose trans = Transpose::NoTrans;
+    Transpose trans = Transpose::NoTrans;  ///< op() applied to `A`
 };
 
+/// @brief Compile-time transpose mode of a matrix-vector operation.
 template <Transpose TransV>
 struct MatrixVectorTransformTag {
-    static constexpr Transpose trans = TransV;
+    static constexpr Transpose trans = TransV;  ///< op() applied to `A`
 };
 
+/// @brief Runtime transpose modes of a general matrix-matrix product.
 struct GeneralMatrixTransform {
-    Transpose trans_a = Transpose::NoTrans;
-    Transpose trans_b = Transpose::NoTrans;
+    Transpose trans_a = Transpose::NoTrans;  ///< op() applied to `A`
+    Transpose trans_b = Transpose::NoTrans;  ///< op() applied to `B`
 };
 
+/// @brief Compile-time transpose modes of a general matrix-matrix product.
 template <Transpose TransAV, Transpose TransBV>
 struct GeneralMatrixTransformTag {
-    static constexpr Transpose trans_a = TransAV;
-    static constexpr Transpose trans_b = TransBV;
+    static constexpr Transpose trans_a = TransAV;  ///< op() applied to `A`
+    static constexpr Transpose trans_b = TransBV;  ///< op() applied to `B`
 };
 
+/// @brief Mode of a triangular product (trmv, trmm).
 struct TriangularTransform {
-    Side side = Side::Left;
-    Uplo uplo = Uplo::Upper;
-    Transpose trans = Transpose::NoTrans;
-    Diag diag = Diag::NonUnit;
+    Side side = Side::Left;                ///< `A` multiplies from the left or the right
+    Uplo uplo = Uplo::Upper;               ///< which triangle of `A` is stored
+    Transpose trans = Transpose::NoTrans;  ///< op() applied to `A`
+    Diag diag = Diag::NonUnit;             ///< Unit: the diagonal is taken as 1 and not read
 };
 
+/// @brief Mode of a symmetric or Hermitian product (symv, hemv, symm).
 struct SymmetricTransform {
-    Side side = Side::Left;
-    Uplo uplo = Uplo::Upper;
-    bool hermitian = false;
+    Side side = Side::Left;   ///< `A` multiplies from the left or the right
+    Uplo uplo = Uplo::Upper;  ///< which triangle of `A` is stored and read
+    bool hermitian = false;   ///< mirror with conjugation
 };
 
+/// @brief Conjugation mode of a rank-1 update (ger, geru, gerc).
 struct OuterProductTransform {
-    bool conjugate_x = false;
-    bool conjugate_y = false;
+    bool conjugate_x = false;  ///< use \f$\bar{x}\f$
+    bool conjugate_y = false;  ///< use \f$\bar{y}\f$
 };
 
+/// @brief Compile-time conjugation mode of a rank-1 update.
 template <bool ConjugateXV, bool ConjugateYV>
 struct OuterProductTransformTag {
-    static constexpr bool conjugate_x = ConjugateXV;
-    static constexpr bool conjugate_y = ConjugateYV;
+    static constexpr bool conjugate_x = ConjugateXV;  ///< use \f$\bar{x}\f$
+    static constexpr bool conjugate_y = ConjugateYV;  ///< use \f$\bar{y}\f$
 };
 
+/// @brief Mode of a symmetric or Hermitian rank-2k update (syr2k, her2k).
 struct SymmetricRank2kTransform {
-    Uplo uplo = Uplo::Upper;
-    Transpose trans = Transpose::NoTrans;
-    bool hermitian = false;
+    Uplo uplo = Uplo::Upper;               ///< triangle of `C` that is updated
+    Transpose trans = Transpose::NoTrans;  ///< NoTrans: \f$A B^{T}\f$; otherwise \f$A^{T} B\f$
+    bool hermitian = false;                ///< conjugate transposes and conjugate `alpha` on the second term
 };
 
+/// @brief Mode of a symmetric or Hermitian rank-k update (syrk, herk).
 struct SymmetricRankKTransform {
-    Uplo uplo = Uplo::Upper;
-    Transpose trans = Transpose::NoTrans;
-    bool hermitian = false;
+    Uplo uplo = Uplo::Upper;               ///< triangle of `C` that is updated
+    Transpose trans = Transpose::NoTrans;  ///< NoTrans: \f$A A^{T}\f$; otherwise \f$A^{T} A\f$
+    bool hermitian = false;                ///< use conjugate transposes
 };
 
+/// @brief Builds a MatrixVectorOperand.
+/// @param x      input vector
+/// @param y      output vector
+/// @param alpha  scale of the product
+/// @param beta   scale of the input `y`
 template <typename T>
 inline constexpr MatrixVectorOperand<T> make_matvec_operand(const VectorView<T>& x,
                                                             const VectorView<T>& y,
@@ -142,6 +187,11 @@ inline constexpr MatrixVectorOperand<T> make_matvec_operand(const VectorView<T>&
     return MatrixVectorOperand<T>{x, y, alpha, beta};
 }
 
+/// @brief Builds a MatrixMatrixOperand.
+/// @param b      second input matrix
+/// @param c      output matrix
+/// @param alpha  scale of the product
+/// @param beta   scale of the input `C`
 template <typename T>
 inline constexpr MatrixMatrixOperand<T> make_matmat_operand(const KernelMatrixView<T, MatrixFormat::Dense>& b,
                                                             const KernelMatrixView<T, MatrixFormat::Dense>& c,
@@ -150,6 +200,10 @@ inline constexpr MatrixMatrixOperand<T> make_matmat_operand(const KernelMatrixVi
     return MatrixMatrixOperand<T>{b, c, alpha, beta};
 }
 
+/// @brief Builds a RankKOperand.
+/// @param c      square output matrix
+/// @param alpha  scale of the product
+/// @param beta   scale of the input `C`
 template <typename T>
 inline constexpr RankKOperand<T> make_rankk_operand(const KernelMatrixView<T, MatrixFormat::Dense>& c,
                                                     T alpha = T(1),
@@ -157,12 +211,18 @@ inline constexpr RankKOperand<T> make_rankk_operand(const KernelMatrixView<T, Ma
     return RankKOperand<T>{c, alpha, beta};
 }
 
+/// @brief Builds a Rank1UpdateOperand.
+/// @param y      right vector
+/// @param a      matrix updated in place
+/// @param alpha  scale of the outer product
 template <typename T>
 inline constexpr Rank1UpdateOperand<T> make_rank1_update_operand(const VectorView<T>& y,
                                                                  const KernelMatrixView<T, MatrixFormat::Dense>& a,
                                                                  T alpha = T(1)) {
     return Rank1UpdateOperand<T>{y, a, alpha};
 }
+
+/// @}
 
 namespace detail {
 

@@ -1,7 +1,7 @@
-// P4: the REGISTER-RESIDENT GETRF panel leaf, a DROP-IN for getrf_panel_factorize and not
+// The REGISTER-RESIDENT GETRF panel leaf, a DROP-IN for getrf_panel_factorize and not
 // a tier -- same ipiv contract, same read-modify-written `info`, same cabs1 pivot metric,
-// so the two must agree on ipiv EXACTLY. BATCHLAS_GETRF_LEAF picks the arm and the default
-// is still the local-memory leaf: no grid has been measured yet. Same device-code cluster
+// so the two must agree on ipiv EXACTLY. BATCHLAS_GETRF_LEAF picks the arm; the default is
+// this leaf (getrf_blocked.cc, evidence: docs/perf/lu.md#lu-the-register-leaf-ab). Same device-code cluster
 // as getrf_cta.cc (EXTENSIONS_CTA_SOURCES), which is where lu_cabs1 and lu_zero live.
 // evidence: docs/perf/lu.md#the-register-panel-leaf
 
@@ -41,9 +41,8 @@ constexpr int kPartitionsPerBlock = 4;
 constexpr int kPanelRegWgQuantum = 32;   // one row per work-item, rounded to a sub-group
 constexpr int kPanelRegMaxRows = 512;    // the tallest panel this kernel is written for
 
-// MEASURED ON THIS KERNEL and not inherited from the tiny tier, every cell at 0 stack
-// frame and 0 spill -- and cdouble at NB = 32 is PRESENT, against the plan's assumption
-// that it would need NB = 16. evidence: docs/perf/lu.md#the-register-panel-leaf-register-probe
+// Probed on THIS kernel, not inherited from the tiny tier; every cell 0 frame, 0 spill.
+// evidence: docs/perf/lu.md#the-register-panel-leaf-register-probe
 constexpr int kPanelRegHeadroomPct = 15;
 
 template <typename T>

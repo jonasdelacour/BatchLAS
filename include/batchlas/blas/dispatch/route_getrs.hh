@@ -1,7 +1,9 @@
 #pragma once
 
-// GETRS routing table. {Native, CTA} is the fused narrow-RHS kernel (getrs_fused.cc);
-// {Native, Blocked} is the composition (getrs_native.cc): laswp + 2 trsm.
+/// @file
+/// @brief GETRS's routing table: `{Native, CTA}` is the fused narrow-RHS kernel (getrs_fused.cc),
+///        `{Native, Blocked}` the composition laswp + 2 trsm (getrs_native.cc).
+/// @ingroup dispatch
 
 #include <batchlas/blas/dispatch/route.hh>
 #include <batchlas/blas/dispatch/route_resolve.hh>
@@ -11,29 +13,40 @@
 
 namespace batchlas::dispatch {
 
+/// @brief GETRS routing shape: m is the order, n the number of right-hand sides.
+/// @ingroup dispatch
 struct GetrsShape : OpShape {
-    bool blocked_available = false;
+    bool blocked_available = false;   ///< the composition is linked
 
-    // From sub_group_sizes: the fused kernels carry reqd_sub_group_size(32), so a
-    // {64}-only device cannot launch them.
+    /// Sub-group size 32 is available, from `sub_group_sizes`: the fused kernels carry
+    /// reqd_sub_group_size(32), so a {64}-only device cannot launch them.
     bool has_sg32 = false;
 
-    // Bounds n*nrhs, not n: the fused kernel holds the whole RHS block in local memory.
+    /// Fused capacity in n*nrhs elements, not n: the kernel holds the whole RHS block in local memory.
     int64_t fused_max_elems = 0;
 
-    // The widest nrhs the fused kernel is instantiated for: a build fact, not a device one.
+    /// The widest nrhs the fused kernel is instantiated for: a build fact, not a device one.
     int64_t fused_max_nrhs = 0;
 
-    int64_t order() const { return m; }
-    int64_t nrhs() const { return n; }
+    int64_t order() const { return m; }   ///< order of A
+    int64_t nrhs() const { return n; }    ///< right-hand sides
 };
 
+/// @brief GETRS walk order: fused, composition, the vendor.
+/// @ingroup dispatch
 inline constexpr Route kGetrsOrder[] = {
     {Origin::Native, Algorithm::CTA},
     {Origin::Native, Algorithm::Blocked},
     {Origin::Vendor, Algorithm::Auto},
 };
 
+/// @brief GETRS routes: `{Native, CTA}` (fused), `{Native, Blocked}` (composition) and the vendor.
+///
+/// preferred(): the fused kernel at order >= 32 and narrow nrhs; the
+/// composition at batch >= 128 and wide nrhs for float and double.
+/// native_tier_preferred() puts the fused kernel first wherever it fits.
+/// Evidence: @ref md_docs_2perf_2lu "docs/perf/lu.md".
+/// @ingroup dispatch
 template <typename T>
 struct RouteTable<Op::getrs, T> {
     // Correctness only: a forced route bypasses preferred() but never supports(), so a
@@ -117,6 +130,8 @@ struct RouteTable<Op::getrs, T> {
     }
 };
 
+/// @brief resolve_route() for getrs.
+/// @ingroup dispatch
 template <typename T>
 inline Route resolve_getrs_route(Route forced, const GetrsShape& s,
                                  bool vendor_available = true) {

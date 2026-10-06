@@ -1,18 +1,5 @@
-// The public syev / ormqr entry points' instantiations, outside the vendor TUs.
-//
-// These two differ from every other op S5 moves. Their public templates are
-// already DEFINED in headers -- functions/syev.hh and functions/ormqr.hh, each
-// forwarding to its *_dispatch, which resolves a Route and may call a native
-// kernel instead of the vendor. So there was never a definition to relocate.
-//
-// What did live in the vendor TUs was their explicit INSTANTIATION, which is
-// just as binding: with the instantiation in cusolver.cc, `syev<Backend::CUDA,
-// float>` had no out-of-line symbol in a build without cuSOLVER, even though
-// every line of code implementing it was vendor-independent. Moving the
-// instantiation here is the whole change.
-//
-// The backend::*_vendor instantiations stay behind in the vendor TUs, as for
-// every other op.
+// Instantiations only: syev/ormqr are defined in their headers, and an instantiation in a vendor TU
+// binds as hard as a definition. evidence: docs/design/vendor-independence.md#the-entry-point-facade
 
 #include <batchlas/backend_config.h>
 
@@ -39,10 +26,8 @@ namespace batchlas {
     EIGEN_ONE(B_, std::complex<float>)             \
     EIGEN_ONE(B_, std::complex<double>)
 
-// Keyed on the DEVICE FAMILY, not on the vendor library. The bodies above
-// compile to a throw when the library is absent, so the public entry point
-// exists as a symbol in every build that has the device -- which is exactly what
-// stopped being true when the definitions lived in the vendor TUs.
+// Keyed on the DEVICE FAMILY, not the vendor library: the bodies compile to a throw
+// when the library is absent, so the symbol exists in every build with the device.
 #if BATCHLAS_HAS_CUDA_BACKEND
 EIGEN_ALL(Backend::CUDA)
 #endif

@@ -28,8 +28,8 @@ The superseded root documents these were filed in are preserved at the git tag
 | 2 | `src/extra/cond.cc:46,52,127` | reaches into `dispatch::detail` and demands the **vendor** `syev` instead of resolving a route | throws in a vendor-free build |
 | 3 | `src/extensions/lanczos.cc:107-111` | the level-3 call carries two right-hand-side columns and one is consumed | 2x work, right answer |
 | 4 | `src/backends/rocsparse.cc:30-31,62-63` | `ConjTrans` maps to the conjugating enum for **real** scalars | inferred wrong answers on AMD; unobservable here |
-| 5 | `src/backends/netlib_lapack.cc:508,520,537,549` | `trsm` reads `B` when `alpha == 0` | `NaN` from unwritten workspace |
-| 6 | `src/backends/netlib_lapack.cc:1389` | `getri` copies `n*n` contiguous elements and ignores both `ld`s | wrong answer at padded `ld` |
+| 5 | `src/backends/netlib_lapack.cc:485,497,514,526` | `trsm` reads `B` when `alpha == 0` | `NaN` from unwritten workspace |
+| 6 | `src/backends/netlib_lapack.cc:1253` | `getri` copies `n*n` contiguous elements and ignores both `ld`s | wrong answer at padded `ld` |
 | 7 | `src/backends/trsm_route.hh:51` | ~~the heterogeneous-batch rejection has no writer~~ | **not a defect — the field IS written; entry closed 2026-09-15** |
 | 8 | `src/backends/syrk_custom_dispatch.cc:261` | a forced native `syrk` lands on a route that writes both triangles | wrong answer, forced routes only |
 | 9 | `src/backends/syr2k_custom_dispatch.cc:210` | a forced native `syr2k` throws a cuBLASDx message it did not ask for | misleading diagnostic |
@@ -157,7 +157,7 @@ suite is what exposed the cuSPARSE version.
 
 ## 5. netlib `trsm` reads `B` when `alpha == 0`
 
-`src/backends/netlib_lapack.cc:508`, `:520`, `:537`, `:549` — all four arms of the host solve:
+`src/backends/netlib_lapack.cc:485`, `:497`, `:514`, `:526` — all four arms of the host solve:
 
 ```cpp
 T x = alpha * Bb.at(i, j, 0) - sum;
@@ -168,7 +168,7 @@ zero without reading it in that case, and the reason matters here: callers hand 
 `BumpAllocator` allocation that is **not zeroed**, and `0 * NaN` is `NaN`, so an operand that
 should have dropped out of the arithmetic poisons the result instead.
 
-**Why it was left.** The identical defect in `spmm` (`netlib_lapack.cc:248,272` — `A` read at
+**Why it was left.** The identical defect in `spmm` (`netlib_lapack.cc:228,252` — `A` read at
 `alpha == 0`, `C` read at `beta == 0`) was fixed by the work package that owns `spmm`; `trsm`'s
 belongs to `trsm` and was out of that package's scope. The native `trsm` bodies already make the
 guarantee. See [`../perf/spmm.md`](../perf/spmm.md) for the fixed sibling.
@@ -180,7 +180,7 @@ something that survives multiplication by zero.
 
 ## 6. netlib `getri` ignores the leading dimension
 
-`src/backends/netlib_lapack.cc:1389`:
+`src/backends/netlib_lapack.cc:1253`:
 
 ```cpp
 std::copy(Ab.data_ptr(), Ab.data_ptr() + n * n, Cb.data_ptr());
@@ -189,7 +189,7 @@ std::copy(Ab.data_ptr(), Ab.data_ptr() + n * n, Cb.data_ptr());
 Both views are copied as `n*n` contiguous elements. Neither `Ab.ld()` nor `Cb.ld()` is consulted,
 so any padded leading dimension gives a wrong answer (and, if `C` is the tighter of the two, a
 write past its last column). Pre-existing, recorded in [`../perf/lu.md`](../perf/lu.md), not
-fixed. The correct form is the per-column `std::copy_n` already used 400 lines above at `:995`.
+fixed. The correct form is the per-column `std::copy_n` already used above at `:842`.
 
 ## 7. CLOSED — `trsm`'s heterogeneous-batch rejection *can* fire
 
@@ -456,6 +456,30 @@ and `factorization_vendor_available<Backend::CUDA>` is `BATCHLAS_HAS_CUBLAS`
 (`include/batchlas/blas/dispatch/vendor_available.hh:42`). Gate and definition agree. Marked
 `unverified` rather than deleted: the stated mismatch could not be reproduced, but the entry may
 be describing an earlier `getrs` that did call cuSOLVER.
+
+## Known defects: unverified candidates from the documentation pass
+
+Two observations made while migrating the design notes into `docs/` (2026-09-30). Each is located
+to a line but **not confirmed by a test**; neither is numbered above until it is. Whoever confirms
+or refutes one moves it into the table or into the section above.
+
+- **`gesvdj_cta`'s global rescale ignores columns 32..63 on the C=64 rung** (reported by the gesvd
+  migration). The `nmax`/`nmin` reductions read `Nrm_local[base_n + lane]` only for `lane < CC`
+  (`src/extensions/gesvdj_cta.cc:353`), so on the 64-column rung the upper half of the columns does
+  not influence `beta`. Correctness is unaffected (`beta` is a power of two, and the scaling is
+  undone exactly), but the overflow/underflow headroom for graded input with 33 to 64 columns is
+  narrower than the design claims. Design record:
+  [global power-of-two scaling](gesvd.md#gesvdj_cta-global-power-of-two-scaling). What would
+  settle it: graded 33..64-column input whose largest column norm sits in columns 32..63, near the
+  overflow threshold, compared against the n <= 32 behaviour.
+- **The recursive `stedc` driver may merge from unset leaf eigenvectors under `NoEigenVectors`**
+  (reported by the tridiagonal migration). `stedc_impl` forwards the caller's `jobz` to the leaf
+  `steqr_dispatch` (`src/extensions/stedc.cc:575`), while the merges always consume the leaf
+  eigenvectors; the level-synchronous driver ignores `jobz` (`:694`). A direct
+  `stedc(..., JobType::NoEigenVectors, ...)` with `StedcAlgorithm::Recursive` could therefore merge
+  from vectors that were never written. `syev` does not reach this, as far as the reporter could
+  see. What would settle it: that direct call, compared against the eigenvalues-only reference,
+  with the eigenvector buffer poisoned beforehand.
 
 ## The recurring failure mode: guards that cannot fail
 

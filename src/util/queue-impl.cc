@@ -12,16 +12,8 @@ class QueueEnqueueNoopKernel;
 class QueueExternalWorkBarrierKernel;
 }
 
-// Everything from here to the end of the file is namespace batchlas. These are
-// the out-of-line definitions of Queue/Event/Device, declared in
-// <batchlas/util/sycl-device-queue.hh>, and a member can only be defined out of
-// line in the namespace its class was declared in -- the compatibility shim at
-// the bottom of that header introduces the NAME into the global namespace, which
-// is enough to spell the type but not to define its members.
-//
-// The anonymous namespace above deliberately stays at global scope: it holds
-// SYCL kernel name tags, and moving them renames every kernel mangled from them
-// for no benefit. They are still found from in here by ordinary lookup.
+// Out-of-line members must be in namespace batchlas; the kernel-name tags above stay global on
+// purpose. evidence: docs/design/runtime-internals.md#runtime-internals-namespace-placement-of-out-of-line-definitions
 namespace batchlas {
 
 Event::Event() : impl_(std::make_unique<EventImpl>(sycl::event())) {}
@@ -56,17 +48,8 @@ EventImpl* Event::operator ->() const {return impl_.get();}
 EventImpl& Event::operator *() const {return *impl_;}
 
 
-// batchlas::configure() is permitted only until the first Queue exists, and this
-// is where that door closes. The reason is on configure() in
-// <batchlas/settings.hh>: routing and geometry settings are read by
-// *_buffer_size() queries as well as by the matching solve, so a change taken
-// after work has started lets two calls in one process disagree about how much
-// scratch a solve needs.
-//
-// The call goes in the three ROOT constructors. Queue(Device, Backend, bool)
-// delegates to Queue(Device, bool) and so is covered; the move constructor is
-// defaulted, and a Queue that can be moved from is one that was already
-// constructed. note_queue_constructed() is idempotent and noexcept.
+// configure() closes at the first Queue; every ROOT constructor must call note_queue_constructed().
+// evidence: docs/design/runtime-internals.md#runtime-internals-the-settings-loader
 Queue::Queue() : device_(Device::default_device()), in_order_(true) {
     batchlas::detail::note_queue_constructed();
     impl_ = std::make_unique<QueueImpl>(device_, in_order_);
@@ -142,14 +125,8 @@ batchlas::Backend Queue::backend() const {
 Queue::~Queue() = default;
 Queue::Queue(Queue&& other) = default;
 
-// Written out rather than `= default` on purpose. Move-assignment destroys the
-// destination's QueueImpl without running ~Queue, so per-queue state has to be
-// torn down on this path too. It is: the workspace arena is a member of
-// QueueImpl, so overwriting impl_ below runs ~QueueImpl, which drains the queue
-// and frees the arena's blocks. Keeping this written out documents that the
-// requirement exists and gives it somewhere to live if state is ever added
-// outside QueueImpl -- storing it in a side table keyed on impl_ would be a bug,
-// since a later heap reuse of the same address would inherit the entry.
+// Written out on purpose: this path skips ~Queue, so per-queue state must live in QueueImpl (never a
+// side table keyed on impl_). evidence: docs/design/runtime-internals.md#runtime-internals-the-per-queue-workspace-arena
 Queue& Queue::operator=(Queue&& other) {
     if (this == &other) return *this;
     device_ = other.device_;
@@ -211,24 +188,8 @@ void WorkspaceLease::release() noexcept { release_(/*diagnose_out_of_order=*/tru
 void WorkspaceLease::release_(bool diagnose_out_of_order) noexcept {
     if (!queue_) return;
 
-    // Every release funnels through here, which is why the out-of-order-queue
-    // wait lives here rather than at the call sites: reclaiming hands these bytes
-    // to the next borrow, and on an out-of-order queue nothing stops the runtime
-    // from running that borrow's kernels alongside the ones still reading ours.
-    // An in-order queue orders them for us, so it must not pay for this.
-    //
-    // Conditioned on the release actually reclaiming. A return that lands under
-    // a live lease only flips a flag -- the bytes are not re-servable until the
-    // loans above come back, and the release that pops them drains then -- so
-    // paying a full device sync for it buys nothing. Before this was scoped,
-    // every convenience overload holding a scope-bound lease drained the device
-    // twice on a nested call.
-    //
-    // Note what this does not order against: work submitted to a *derived*
-    // in-order queue (gesvd, iluk build one from ctx and run the kernels there
-    // while the lease belongs to ctx). Waiting on ctx does not wait on that; the
-    // derived queue's destructor does. See the comment on release() in
-    // util/workspace.hh.
+    // Drain an OUT-OF-ORDER queue only when this release makes bytes re-servable. Does not order
+    // against a derived queue. evidence: docs/design/runtime-internals.md#runtime-internals-the-per-queue-workspace-arena
     if (!queue_->in_order() && queue_->impl_->arena_.release_reclaims(seq_)) {
         try {
             queue_->wait();

@@ -26,25 +26,9 @@
 
 using namespace sycl;
 
-// Everything from here to the end of the file is namespace batchlas, and all of
-// it has to be. Three separate rules force it, and only the first fails loudly:
-//
-//   - the out-of-line members of UnifiedVector<T> and Span<T> must be defined in
-//     the namespace their class was declared in;
-//   - so must the explicit instantiations below, which name their templates by an
-//     unqualified-id;
-//   - the operator<< for ReferenceWrapper/UnifiedVector/Span are declared ONLY as
-//     in-class friend templates, so each one is a member of the namespace
-//     enclosing the class that befriends it. Those classes moved into batchlas,
-//     so these definitions must too. Left at global scope they would silently
-//     define an unrelated ::operator<< that nothing can call, and the explicit
-//     instantiations at the bottom would instantiate the wrong template -- an
-//     undefined reference in a consumer, with nothing failing here.
-//
-// The std::array operator<< below comes along for the ride. It is used only from
-// inside this file (by the Span element loop), where ordinary lookup still finds
-// it; note that it is no longer reachable by ADL on std::array, which is why it
-// must not be relied on from another TU.
+// MUST be namespace batchlas to the end of file: at global scope the friend operator<< would
+// SILENTLY define unrelated functions (consumer link error only). The std::array operator<< is
+// file-local (no ADL). evidence: docs/design/runtime-internals.md#runtime-internals-namespace-placement-of-out-of-line-definitions
 namespace batchlas {
 
 template <typename U>
@@ -326,16 +310,9 @@ template struct UnifiedVector<float>;
 template struct UnifiedVector<double>;
 template struct UnifiedVector<std::complex<float>>;
 template struct UnifiedVector<std::complex<double>>;
-// The attribute is repeated HERE, unlike every sibling above, because
-// std::byte is `enum class byte : unsigned char` and libstdc++ declares it with
-// no visibility attribute of its own -- so under -fvisibility=hidden it takes
-// the TU default, which is hidden, and an instantiation takes the MINIMUM of
-// the template's visibility and its arguments'. The class-level BATCHLAS_API on
-// UnifiedVector is therefore not enough for this one specialisation, and unlike
-// Backend/MatrixFormat/BinaryOp we cannot annotate the argument: it is not ours.
-// The siblings need nothing because their arguments are builtins or our own
-// class types. Removing this line silently un-exports resize, both constructors
-// and the destructor, and the only symptom is a consumer link error.
+// BATCHLAS_API repeated HERE only: std::byte is hidden, and an instantiation takes the MINIMUM
+// visibility of template and arguments. Removing it silently un-exports this specialisation.
+// evidence: docs/design/runtime-internals.md#runtime-internals-symbol-visibility-for-private-headers
 template struct BATCHLAS_API UnifiedVector<std::byte>;
 template struct UnifiedVector<bool>;
 template struct UnifiedVector<std::array<double,2>>;

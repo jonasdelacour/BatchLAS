@@ -1,5 +1,9 @@
 #pragma once
 
+/// @file
+/// @brief Batched Householder QR factorization (geqrf) and its workspace query.
+/// @ingroup qr
+
 #include <batchlas/export.hh>
 #include <stdexcept>
 #include <string>
@@ -25,49 +29,28 @@ using geqrf_buffer_size = size_t(Queue&,
                                  const MatrixView<T, MatrixFormat::Dense>&,
                                  Span<T>);
 
-// backend::geqrf_vendor's signature, spelled out from the definition rather than
-// aliased to sig::geqrf: a vendor parameter list can differ from the public one.
+// Vendor signatures are spelled out, not aliased: a vendor parameter list can differ.
 template <typename T>
 using geqrf_vendor = Event(Queue&,
                            const MatrixView<T,MatrixFormat::Dense>&,
                            Span<T>,
                            Span<std::byte>);
 
-// backend::geqrf_vendor_buffer_size's signature, spelled out from the definition rather than
-// aliased to sig::geqrf_buffer_size: a vendor parameter list can differ from the public one.
 template <typename T>
 using geqrf_vendor_buffer_size = size_t(Queue&,
                                         const MatrixView<T,MatrixFormat::Dense>&,
                                         Span<T>);
 }  // namespace sig
 
-// Validation for the POSITIONAL entry point, which had none.
-//
-// It runs in the facade (src/dispatch/entry_points/factorization.cc), AHEAD of
-// the shape builder, because the builder reads A.rows()/A.cols() and must not
-// describe a non-conforming view. Same hoist, and same reason, as potrf's
-// (potrf.hh:66-84) and trsm's (entry_points/level3.cc:167-174).
-//
-// SCOPE IS DELIBERATELY MINIMAL -- EXACTLY WHAT THE SHAPE BUILDER NEEDS, and for
-// geqrf that is one line. Three things it deliberately does NOT check, each for a
-// stated reason:
-//
-//   * NO SQUARENESS CHECK. Rectangular A is the entire point of geqrf
-//     (options.hh:727-730), and the library's own callers pass tall panels
-//     (band_reduction.cc:595, sytrd_sy2sb.cc:504). Copying potrf.hh:76's
-//     `A.rows() != A.cols()` here would be a wrong edit.
-//
-//   * NO `m >= n` CHECK, even though RouteTable<Op::geqrf,T>::supports() carries
-//     one. That gate says "the native drivers cannot serve a wide view", which
-//     routes it to the vendor; it does not say the CALL is invalid, and the
-//     vendor serves it. A validator that threw would turn a working call into an
-//     error.
-//
-//   * NO tau LENGTH CHECK. options.hh:718-719 already does
-//     require_span_at_least on the arena spellings; turning a currently-tolerated
-//     short span into a throw on the positional one is a user-visible behaviour
-//     change and belongs in its own commit with its own test. potrf.hh:59-65
-//     states the rule.
+/// @brief Validates the arguments of the positional geqrf() entry point.
+///
+/// Checks only non-negative extents. Rectangular A of either orientation is
+/// valid; the length of @p tau is checked by the option overloads.
+/// @throws batchlas::invalid_argument on negative extents
+/// @ingroup qr
+// Deliberately no squareness check (rectangular A is the point of geqrf), no
+// m >= n check (a wide view routes to the vendor) and no tau-length check.
+// evidence: docs/design/vendor-independence.md#positional-validators-reject-only-what-no-route-can-serve
 template <typename T>
 inline void geqrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
     if (A.rows() < 0 || A.cols() < 0) {
@@ -78,12 +61,37 @@ inline void geqrf_validate_params(const MatrixView<T, MatrixFormat::Dense>& A) {
 }
 
 
+/// @brief Batched Householder QR factorization \f$ A = Q R \f$.
+///
+/// For every m x n batch item, as LAPACK `?geqrf`: on return the upper
+/// triangle (upper trapezoid if m < n) of A holds R, and the part below the
+/// diagonal holds the Householder vectors \f$ v_i \f$ with an implied unit
+/// leading entry. With \f$ k = \min(m, n) \f$,
+/// \f$ Q = H_1 H_2 \cdots H_k \f$, \f$ H_i = I - \tau_i v_i v_i^H \f$.
+/// Pass A and @p tau unchanged to orgqr() to form Q or to ormqr() to apply it.
+///
+/// Asynchronous: A and @p tau are readable after the returned event is waited on.
+/// @tparam B  backend; the backend-deducing overload takes it from `ctx.backend()`
+/// @tparam T  scalar type (float, double, std::complex<float>, std::complex<double>)
+/// @param ctx         queue the kernels are enqueued on
+/// @param A           batch of m x n matrices; overwritten with R and the reflectors
+/// @param tau         reflector scalars, `k * batch` elements; item b's
+///                    \f$ \tau_i \f$ is `tau[b * k + i]`
+/// @param work_space  device-accessible scratch of at least geqrf_buffer_size() bytes
+/// @return event of the last enqueued kernel
+/// @pre `tau.size() >= min(m, n) * A.batch_size()` (checked by the option overloads only)
+/// @throws batchlas::invalid_argument on negative extents
+/// @throws batchlas::dispatch::NoRouteError if no native route supports the
+///         shape (native routes need m >= n) and the vendor library was not built in
+/// @ingroup qr
 template <Backend B, typename T>
 BATCHLAS_API Event geqrf(Queue& ctx,
                          const MatrixView<T,MatrixFormat::Dense>& A,
                          Span<T> tau,
                          Span<std::byte> work_space);
 
+/// @brief Workspace, in bytes, that geqrf() needs for this shape on this queue.
+/// @ingroup qr
 template <Backend B, typename T>
 BATCHLAS_API size_t geqrf_buffer_size(Queue& ctx,
                                       const MatrixView<T,MatrixFormat::Dense>& A,
@@ -94,13 +102,10 @@ BATCHLAS_API size_t geqrf_buffer_size(Queue& ctx,
 
 namespace batchlas::backend {
 
-// The vendor path for geqrf.
-//
-// DECLARATION ONLY -- see the note on gemm_vendor in gemm.hh. The public
-// `geqrf` used to be defined inside each vendor TU, so dropping a vendor library
-// dropped the public entry point with it; WP0 S5 moves that definition to
-// src/dispatch/entry_points/factorization.cc and leaves the vendor
-// implementation here, named as such.
+/// @brief Vendor arm of geqrf(); called by the entry-point facade, not by users.
+/// @ingroup dispatch
+// Declaration only: the public geqrf lives in src/dispatch/entry_points/factorization.cc.
+// evidence: docs/design/vendor-independence.md#the-entry-point-facade
 template <Backend B, typename T>
 BATCHLAS_API Event geqrf_vendor(Queue& ctx,
                                 const MatrixView<T,MatrixFormat::Dense>& A,
@@ -108,6 +113,8 @@ BATCHLAS_API Event geqrf_vendor(Queue& ctx,
                                 Span<std::byte> work_space);
 
 
+/// @brief Workspace query of the vendor arm of geqrf().
+/// @ingroup dispatch
 template <Backend B, typename T>
 BATCHLAS_API size_t geqrf_vendor_buffer_size(Queue& ctx,
                                              const MatrixView<T,MatrixFormat::Dense>& A,
@@ -117,11 +124,7 @@ BATCHLAS_API size_t geqrf_vendor_buffer_size(Queue& ctx,
 
 namespace batchlas {
 
-// Owning-argument and backend-deducing overloads: `f(ctx, Matrix, ...)` accepts
-// owning containers where the primary takes views, and `f(ctx, ...)` uses
-// ctx.backend(). See BATCHLAS_ACCEPT_OWNING and BATCHLAS_DISPATCH_ON_QUEUE in
-// blas/queue-dispatch.hh.
-
+// Owning-container and backend-deducing overloads; see blas/queue-dispatch.hh.
 BATCHLAS_ACCEPT_OWNING(geqrf)
 BATCHLAS_ACCEPT_OWNING(geqrf_buffer_size)
 

@@ -1,8 +1,14 @@
 #pragma once
 
-// One environment vocabulary for route selection: BATCHLAS_<OP>_ROUTE, taking an
-// origin, an algorithm, or both joined by a colon. The legacy per-op spellings map
-// onto it and must keep working: benchmark scripts and recorded results use them.
+/// @file
+/// @brief The route-selection environment vocabulary: `BATCHLAS_<OP>_ROUTE=origin[:algorithm]`.
+///
+/// A value is an origin (`auto`, `native`/`batchlas`, `vendor`/`netlib`), an
+/// algorithm (implying Native, except `fused_device`, which is Vendor), or
+/// both joined by a colon. The legacy per-op spellings (`BATCHLAS_GEMM_VARIANT`,
+/// `BATCHLAS_SYEV_PROVIDER`, ...) are read only when the canonical variable is
+/// unset, and must keep working: benchmark scripts and recorded results use them.
+/// @ingroup dispatch
 // evidence: docs/perf/dispatch.md#the-environment-vocabulary
 
 #include <cctype>
@@ -18,12 +24,17 @@
 
 namespace batchlas::dispatch {
 
+/// @addtogroup dispatch
+/// @{
+
+/// @brief ASCII lower-casing, as applied to every route value before parsing.
 inline std::string route_lowercase(std::string s) {
     for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     return s;
 }
 
-// "netlib" is an origin, not an algorithm: netlib LAPACK is somebody else's code.
+/// @brief Parses an origin word; `nullopt` when it is not one.
+/// @note "netlib" is an origin, not an algorithm: netlib LAPACK is somebody else's code.
 inline std::optional<Origin> parse_origin_word(std::string_view w) {
     if (w == "auto") return Origin::Auto;
     if (w == "vendor" || w == "netlib") return Origin::Vendor;
@@ -31,6 +42,8 @@ inline std::optional<Origin> parse_origin_word(std::string_view w) {
     return std::nullopt;
 }
 
+/// @brief Parses an algorithm word, including its aliases (`sycl` and `custom` for RegisterTiled,
+///        `gemm` for DiagFullGemm, ...); `nullopt` when it is not one.
 inline std::optional<Algorithm> parse_algorithm_word(std::string_view w) {
     if (w == "auto") return Algorithm::Auto;
     if (w == "direct") return Algorithm::Direct;
@@ -51,7 +64,9 @@ inline std::optional<Algorithm> parse_algorithm_word(std::string_view w) {
     return std::nullopt;
 }
 
-// Unrecognised text yields nullopt rather than Auto, so a typo is visible.
+/// @brief Parses a canonical `BATCHLAS_<OP>_ROUTE` value.
+/// @param raw  `origin`, `algorithm` or `origin:algorithm`, case-insensitive
+/// @return the route; `nullopt` for empty or unrecognised text (never Auto, so a typo is visible)
 inline std::optional<Route> parse_route_value(std::string_view raw) {
     const std::string v = route_lowercase(std::string(raw));
     if (v.empty()) return std::nullopt;
@@ -74,6 +89,8 @@ inline std::optional<Route> parse_route_value(std::string_view raw) {
     return std::nullopt;
 }
 
+/// @brief The pre-Route variable an op still honours, or empty when it never had one.
+/// @trap Do not add a case for an op that never had a legacy spelling: that invents one.
 inline std::string_view legacy_variable_for(Op op) {
     switch (op) {
         case Op::gemm:  return "BATCHLAS_GEMM_VARIANT";
@@ -88,21 +105,24 @@ inline std::string_view legacy_variable_for(Op op) {
     }
 }
 
-// Every op's unset default is Auto, i.e. whatever preferred() says; GEMM's former
-// Vendor default is gone. evidence: docs/perf/gemm.md#the-auto-flip
+/// @brief The route an op resolves from when no variable is set: `{Auto, Auto}` for every op.
+// GEMM's former Vendor default is gone. evidence: docs/perf/gemm.md#the-auto-flip
 inline Route legacy_unset_default(Op op) {
     static_cast<void>(op);
     return Route{Origin::Auto, Algorithm::Auto};
 }
 
-// The legacy vocabulary collides with the canonical one, load-bearingly: legacy
-// `native` is the raw CUDA VENDOR path (the opposite of canonical "native"), and
-// legacy `custom` is the fused cuBLASDx kernel, not the register-tiled GEMM family.
-// Do not "simplify" these away; pinned by tests/route_vocabulary_tests.cc.
+/// @brief True for symm, syrk, syr2k and trmm: the ops whose legacy parser knows `custom`, `tiles`, `narrow`, `gemm`.
 inline bool is_level3_tile_op(Op op) {
     return op == Op::symm || op == Op::syrk || op == Op::syr2k || op == Op::trmm;
 }
 
+/// @brief Parses a legacy variable's value, falling back to the canonical parser.
+/// @trap The legacy vocabulary collides with the canonical one, load-bearingly: legacy
+///       `native` for gemm is the raw CUDA VENDOR path (the opposite of canonical
+///       `native`), and legacy `custom` is the fused cuBLASDx kernel, not the
+///       register-tiled GEMM family. Do not "simplify" these away; pinned by
+///       tests/route_vocabulary_tests.cc.
 inline std::optional<Route> parse_legacy_route_value(Op op, std::string_view raw) {
     const std::string v = route_lowercase(std::string(raw));
 
@@ -128,20 +148,21 @@ inline std::optional<Route> parse_legacy_route_value(Op op, std::string_view raw
     return parse_route_value(v);
 }
 
+/// @brief Result of reading an op's route variables.
 struct ParsedRouteEnv {
-    Route route{};
-    RouteRequestSource source{};
-    bool found = false;      // a variable was set (and parsed)
-    bool unparsed = false;   // a variable was set but its value was not understood
+    Route route{};                 ///< the parsed route; meaningful only when `found`
+    RouteRequestSource source{};   ///< which variable, and its raw value
+    bool found = false;      ///< a variable was set (and parsed)
+    bool unparsed = false;   ///< a variable was set but its value was not understood
 };
 
-// A set-but-unrecognised route word is reported HERE rather than by each adapter.
-// Every one of the ten call sites spells the fallback `parsed.found ? parsed.route
-// : legacy_unset_default(op)`, which collapses "set but not understood" into
-// "unset" -- so BATCHLAS_GEMM_ROUTE=regsiter_tiled silently resolves to the vendor
-// and an A/B driven by that variable measures the vendor on both sides with no
-// diagnostic. That is precisely the failure this vocabulary was introduced to end.
-// Warn once per variable: these are read per call, and gemv reads one per gemv.
+/// @brief Prints a one-time stderr warning for a set-but-unrecognised route variable.
+///
+/// Reported here rather than by each adapter: every call site spells the
+/// fallback `parsed.found ? parsed.route : legacy_unset_default(op)`, which
+/// collapses "set but not understood" into "unset", so without this a typo
+/// silently resolves to Auto and an A/B driven by it measures the same route
+/// twice. Once per variable, because these are read per call.
 inline void warn_unparsed_route_env(const RouteRequestSource& src) {
     static std::set<std::string> warned;
     if (!warned.insert(src.variable).second) return;
@@ -152,14 +173,14 @@ inline void warn_unparsed_route_env(const RouteRequestSource& src) {
                  src.variable.c_str(), src.value.c_str());
 }
 
-// Canonical variable first, then the legacy one; on found=false the CALLER supplies the
-// default. The two reads below are the ONLY string source for the route vocabulary.
-// Both variable NAMES are still composed here -- canonical from op_env_stem, legacy from
-// the table above -- because RouteRequestSource carries the name into the diagnostic and
-// tests assert on the literal (tests/trmm_tests.cc on "BATCHLAS_TRMM_VARIANT"); only the
-// VALUE comes from the settings() snapshot. Every parser below is untouched because
-// tests/route_vocabulary_tests.cc pins their vocabulary spelling by spelling, including
-// the three load-bearing word collisions above.
+/// @brief Reads `op`'s route request: the canonical variable first, then the legacy one.
+///
+/// Values come from the batchlas::settings() snapshot, not from `getenv`; the
+/// variable NAMES are composed here because RouteRequestSource carries them into
+/// diagnostics and tests assert on the literals. An unrecognised value warns once
+/// (warn_unparsed_route_env()) and sets `unparsed`.
+/// @return `found == false` when neither variable is set or parsed; the CALLER then
+///         supplies the default (legacy_unset_default()).
 inline ParsedRouteEnv parse_route_env(Op op) {
     ParsedRouteEnv out;
 
@@ -194,5 +215,7 @@ inline ParsedRouteEnv parse_route_env(Op op) {
     }
     return out;
 }
+
+/// @}
 
 } // namespace batchlas::dispatch

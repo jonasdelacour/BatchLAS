@@ -34,6 +34,43 @@ using spmm_vendor_buffer_size = spmm_buffer_size<T, F>;
 }  // namespace sig
 
 
+/// @brief Batched sparse-times-dense matrix multiply.
+///
+/// For every batch item computes
+/// \f[ C := \alpha \, \mathrm{op}(A) \, \mathrm{op}(B) + \beta \, C \f]
+/// with `A` sparse (CSR) and `B`, `C` dense; \f$\mathrm{op}(X)\f$ is
+/// \f$X\f$, \f$X^T\f$ or \f$X^H\f$ according to `transA` / `transB`. With
+/// \f$\mathrm{op}(A)\f$ m x k and \f$\mathrm{op}(B)\f$ k x n, `C` is m x n.
+///
+/// Takes a caller-supplied workspace, sized by spmm_buffer_size with the same
+/// arguments. Lease it from the queue's arena with `ctx.workspace(bytes)`. Also
+/// callable with owning `Matrix` arguments and without `B` (taken from
+/// `ctx.backend()`); spell a partial explicit call `spmm<Backend::CUDA>(...)`
+/// and let `T` and `MFormat` deduce.
+///
+/// @tparam B        backend the call is compiled for; must match `ctx`'s device
+/// @tparam T        scalar type: `float`, `double`, `std::complex<float>` or `std::complex<double>`
+/// @tparam MFormat  storage format of `A`; only `MatrixFormat::CSR` is instantiated
+/// @param ctx        queue the work is enqueued on
+/// @param A          batch of sparse matrices; not modified
+/// @param descrB     batch of dense k x n (NoTrans) or n x k matrices; not modified
+/// @param descrC     batch of dense m x n matrices; input scaled by `beta`, overwritten with the result
+/// @param alpha      scale of the product
+/// @param beta       scale of the input `C`
+/// @param transA     op() applied to `A`
+/// @param transB     op() applied to `B`
+/// @param workspace  device-accessible scratch of at least spmm_buffer_size bytes
+/// @return event of the last enqueued kernel; `C` is valid once it completes
+/// @pre All operands have the same batch size and conforming shapes per item.
+/// @throws batchlas::dispatch::NoRouteError in a build without the vendor
+///         sparse library for `B` when the native kernel does not support the call
+///         (a heterogeneous batch, or negative extents).
+/// @note No argument validation is done up front: a shape the native kernel
+///       refuses goes to the vendor library, which reports it.
+/// @note On `Backend::ROCM` a real `T` with `ConjTrans` is suspected to give wrong
+///       results (known defect 4, @ref md_docs_2design_2known-defects); use `Trans`.
+/// @see spmm_buffer_size, @ref md_docs_2perf_2spmm
+/// @ingroup sparse
 template <Backend B, typename T, MatrixFormat MFormat>
 BATCHLAS_API Event spmm(Queue& ctx,
                  const MatrixView<T, MFormat>& A,
@@ -45,6 +82,25 @@ BATCHLAS_API Event spmm(Queue& ctx,
                  Transpose transB,
                  Span<std::byte> workspace);
 
+/// @brief Bytes of workspace spmm needs for these arguments.
+///
+/// Resolves the same route as spmm and returns that route's need; a natively
+/// routed call needs zero bytes and is sized without touching device memory.
+/// Pass exactly the arguments the spmm call will get.
+/// @tparam B        backend the call is compiled for
+/// @tparam T        scalar type
+/// @tparam MFormat  storage format of `A`; only `MatrixFormat::CSR` is instantiated
+/// @param ctx     queue the call will run on
+/// @param A       the sparse operand of the spmm call
+/// @param B_mat   the dense operand of the spmm call
+/// @param C       the output of the spmm call
+/// @param alpha   the spmm call's `alpha`
+/// @param beta    the spmm call's `beta`
+/// @param transA  the spmm call's `transA`
+/// @param transB  the spmm call's `transB`
+/// @return required workspace size in bytes (may be 0)
+/// @throws batchlas::dispatch::NoRouteError under the same conditions as spmm
+/// @ingroup sparse
 template <Backend B, typename T, MatrixFormat MFormat>
 BATCHLAS_API size_t spmm_buffer_size(Queue& ctx,
                                      const MatrixView<T, MFormat>& A,
@@ -60,9 +116,13 @@ BATCHLAS_API size_t spmm_buffer_size(Queue& ctx,
 
 namespace batchlas::backend {
 
-// The vendor path for spmm -- declaration only; see the note on gemm_vendor in
-// gemm.hh. Unlike the dense ops, spmm carries a MatrixFormat template
-// parameter, so its instantiations are hand-written in each vendor TU.
+// Declaration only (see gemm_vendor). spmm carries a MatrixFormat parameter, so
+// its instantiations are hand-written in each vendor TU.
+// evidence: docs/design/vendor-independence.md#the-entry-point-facade
+/// @brief Vendor-library implementation of spmm (cuSPARSE, rocSPARSE, host).
+///
+/// Not an entry point: batchlas::spmm calls it. Same arguments and semantics.
+/// @ingroup dispatch
 template <Backend B, typename T, MatrixFormat MFormat>
 BATCHLAS_API Event spmm_vendor(Queue& ctx,
                                const MatrixView<T, MFormat>& A,
@@ -74,6 +134,8 @@ BATCHLAS_API Event spmm_vendor(Queue& ctx,
                                Transpose transB,
                                Span<std::byte> workspace);
 
+/// @brief Workspace bytes spmm_vendor needs; called by batchlas::spmm_buffer_size.
+/// @ingroup dispatch
 template <Backend B, typename T, MatrixFormat MFormat>
 BATCHLAS_API size_t spmm_vendor_buffer_size(Queue& ctx,
                                             const MatrixView<T, MFormat>& A,
@@ -88,10 +150,8 @@ BATCHLAS_API size_t spmm_vendor_buffer_size(Queue& ctx,
 
 namespace batchlas {
 
-// Owning-argument and backend-deducing overloads: `f(ctx, Matrix, ...)` accepts
-// owning containers where the primary takes views, and `f(ctx, ...)` uses
-// ctx.backend(). See BATCHLAS_ACCEPT_OWNING and BATCHLAS_DISPATCH_ON_QUEUE in
-// blas/queue-dispatch.hh.
+// Owning-argument (`f(ctx, Matrix, ...)`) and backend-deducing (`f(ctx, ...)`)
+// overloads; see blas/queue-dispatch.hh.
 
 BATCHLAS_ACCEPT_OWNING(spmm)
 BATCHLAS_ACCEPT_OWNING(spmm_buffer_size)

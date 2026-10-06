@@ -599,7 +599,7 @@ confirmed the routing move: at target 2 the default `Auto` route goes `native:ct
 native:blocked` for float `512x32`, `384x32`, `256x64`, for cfloat `256x32`, and for
 double `256x32`. **Measured, the move costs nothing.**
 
-Raw rows: [`benchmarks/results/p7_occupancy_geqrf_tall.csv`](../../benchmarks/results/p7_occupancy_geqrf_tall.csv)
+Raw rows: `benchmarks/results/p7_occupancy_geqrf_tall.csv`
 (144 rows, 9-11 reps, interleaved, `rel_sd <= 0.05`, residual and `||Q^H Q - I||` checked
 on items 0 and batch-1 in double promotion). Ratio is `blocked_ms / cta_ms`, so **> 1
 means CTA ahead**, matching [cta-vs-blocked-crossover](#cta-vs-blocked-crossover).
@@ -1792,3 +1792,50 @@ dip is not one: CTA is the best native tier there (batch 16384: CTA 1.72x, Block
 **Still losing:** float and cfloat 17..20 (best 0.80 / 0.83), and n = 33..40 on CTA
 (float 0.78 / 0.90, cfloat 0.69 at 33). cfloat n = 4 ties; an N = 4 geqrf tiny bucket
 would need its own register probe (`GeqrfTinyRegs` has no slot for it).
+
+## QR: the shared WY machinery in larft_wy.hh
+
+`src/extensions/larft_wy.hh` holds `larft` (the `ib x ib` triangular factor `T` of a block
+of Householder reflectors, Forward/Columnwise) and `pack_v` (the unit-lower `V` panel
+materialised from `geqrf`'s packed output). This section is the history and the measurements
+behind its three non-obvious decisions; the header keeps only the invariants.
+
+### larft_wy.hh: why the WY helpers are shared
+
+Before WP5 both routines existed in **two private copies inside `ormqr_blocked.cc`**, plus a
+third in `sytrd_sy2sb.cc` (around line 233) that its own loop no longer reaches, because that
+loop goes through `ormqr`. WP5 needed both for the blocked `geqrf` trailing update, and its
+brief asked for them to be factored out rather than copied again. The bodies in the header are
+`ormqr_blocked.cc`'s, moved verbatim, and `ormqr_blocked.cc` calls them there. The
+`sytrd_sy2sb.cc` copy was deliberately left in place: deleting unreachable code there is a
+separate change with its own justification, and it is not a further reusable primitive.
+
+The work-group ladder and its thresholds in `larft_forward_columnwise_batched` are `ormqr`'s,
+moved unchanged. The legacy (manual group-reduction) `larft` is the default in `ormqr` and the
+only implementation `geqrf` uses; the device-BLAS one is reached only through
+`BATCHLAS_ORMQR_IMPL`.
+
+### larft_wy.hh: UseDevice is a template parameter
+
+As a runtime `bool`, `use_device` instantiated **both** implementations for every
+`(Tag, T, WG)` the ladder reaches. `geqrf` passes a literal `false`, so
+`larft_forward_columnwise_wg_device<GeqrfWyTag, ...>` was 32 entry functions (4 types x 4
+work-group rungs x 2 forms, base and `_with_offset`) compiled, ptxas'd and device-linked into
+`batchlas_extensions_cta` (then the slowest-linking library in the tree, ~125 s) that could
+never launch: nsys showed no `(bool)1` variant in any WP5 run. They included the
+highest-register kernel of the WP5 set (cdouble, 90 registers, 208 B stack frame). With
+`UseDevice` a template parameter the entry-function count fell 880 -> 848 and the device link
+125.45 s -> 116.63 s (recorded under Negative results above). The runtime-selecting wrapper
+remains only for `ormqr`, whose choice really is a getenv; any caller passing a literal must
+use the `_t` form.
+
+### larft_wy.hh: pack_v indexes the row fastest
+
+`sycl::id<3>` makes dim 2 the fastest-varying index and both operands are column-major. With
+the **column** in dim 2 a warp read `a_ptr` at `ld_a * sizeof(T)` apart and wrote `v_out` at
+`ld_v_out * sizeof(T)` apart: 32 sectors per warp instead of 4, on both sides. Measured before
+the swap: **63.7 us median per instance** for a 17.3 MB job (float `m = n = 1024`, batch 128,
+`nb = 32`), **3.4x the DRAM floor**. The amplification was muted only because the 8.7 MB panel
+is L2-resident on the 72 MB L2; it degrades toward the full 8x at larger `m` or batch. The
+same fix covered `OrgqrIdentityKernel` and `OrgqrCopyBackKernel`; the end-to-end A/B is in
+the Negative results section above.

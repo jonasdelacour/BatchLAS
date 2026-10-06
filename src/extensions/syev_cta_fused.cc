@@ -40,48 +40,14 @@ inline constexpr int32_t kSyevCtaFusedAutoWgMultiplier =
     (std::is_same_v<T, float> && (P == 8 || P == 16)) ? 2 : 1;
 
 // ---------------------------------------------------------------------------
-// Monolithic (fused) CTA symmetric/Hermitian eigensolver.
-//
-// syev_cta runs the classical three-stage pipeline as three kernel launches:
-//
-//     sytrd_cta   A -> (d, e, reflectors)      [tile loaded, reduced, stored]
-//     steqr_cta   (d, e) -> (w, Z)             [Z loaded, rotated, stored]
-//     ormqx_cta   Z -> Q_house * Z             [Z loaded, transformed, stored]
-//
-// plus, on the eigenvector path, two pack kernels and a copy. For n <= 32 each
-// of those stages is far too small to amortize a launch: the whole problem fits
-// in one sub-group partition, so the pipeline spends most of its time writing
-// intermediates (d, e, tau, Z, the packed reflector matrix) to global memory
-// only to read them straight back.
-//
-// This kernel keeps one problem resident in a single partition from load to
-// store, so the intermediates never materialize: global traffic is exactly one
-// read of A plus one write of the eigenvectors and eigenvalues, against ~7
-// round trips for the pipeline.
-//
-// The stages themselves are the *same code* as the standalone kernels
-// (sytrd_cta_device.hh / steqr_cta_device.hh), so a head-to-head benchmark
-// isolates the cost of the partitioning.
-//
-// Real input takes LAPACK DSYEV's route: the reflectors are expanded into an
-// explicit Q_house in place (DORGTR/DORG2L) and the QL/QR sweeps are then seeded
-// with it, so the rotations accumulate straight onto Q and there is no separate
-// back-transform pass. The point of doing it in place is local memory: the
-// reflector store and the rotation accumulator become the same tile and are
-// never live at once, which is what keeps occupancy up at P == 32. Hermitian
-// input keeps the two separate -- its accumulator is real while its reflectors
-// are complex -- and applies the reflectors afterwards.
-//
-// Notes on the algorithm, all matching syev_cta:
-//  - The reduction always runs the Uplo::Upper path; a Uplo::Lower input is
-//    symmetrized while loading the tile, which in this design is free (the
-//    pipeline needs a separate pass over global memory to do the same).
-//  - For Hermitian input the complex tridiagonal is reduced to a real one by a
-//    diagonal unitary similarity T' = S^H T S; the phase S is reapplied to the
-//    eigenvectors before the back-transform.
-//  - Eigenvalues are sorted by computing each lane's rank and writing its
-//    eigenvalue/eigenvector to that slot, which needs no scratch and no
-//    separate sort kernel.
+// Monolithic (fused) CTA symmetric/Hermitian eigensolver: one problem stays resident
+// in one partition from load to store (sytrd -> steqr -> back-transform), so no
+// intermediate touches global memory. The stages are the SAME code as the standalone
+// kernels (sytrd_cta_device.hh / steqr_cta_device.hh): keep it that way, so a
+// head-to-head benchmark measures fusion and nothing else. Real input seeds the
+// sweeps with an in-place Q_house (DSYEV's route); Hermitian input applies the
+// reflectors afterwards. The reduction always runs Uplo::Upper.
+// evidence: docs/perf/syev.md#syev-the-fused-cta-kernel-design
 // ---------------------------------------------------------------------------
 
 namespace {
@@ -119,22 +85,12 @@ inline void syev_cta_fused_impl(Queue& ctx,
         // CTA path assumes warp-sized sub-groups on NVIDIA.
         const int32_t sg_size = 32;
 
-        // On the real eigenvector path the reflector tile and the rotation
-        // accumulator are the *same* tile (stage 2a builds Q_house in place over
-        // the reflectors), so only one tile is ever allocated and it carries the
-        // accumulator's padding.
-        //
-        // That padding matters: the accumulator is indexed by row during the
-        // QL/QR sweeps but by column when the eigenvectors are written out (lane
-        // j owns column j). With a leading dimension of exactly P == 32 every
-        // lane of that column read hits the same bank and the access serializes
-        // 32 ways; P+1 makes consecutive lanes differ by 1 (mod 32).
-        //
-        // The complex path keeps two tiles: its accumulator is real (the sweeps
-        // run on the real tridiagonal T' = S^H T S) and so is half the width of
-        // the complex reflector tile, which means merging them would cost local
-        // memory rather than save it, and would force the hottest loop in the
-        // solver to rotate complex columns.
+        // Real eigenvector path: the reflector tile and the rotation accumulator are the
+        // SAME tile (stage 2a builds Q_house in place), so it carries the accumulator's
+        // P+1 padding: it is read by column on write-out, and LD == 32 would serialize
+        // that 32 ways on bank conflicts. The complex path keeps two tiles (real
+        // accumulator, complex reflectors).
+        // evidence: docs/perf/syev.md#syev-the-fused-cta-kernel-design
         constexpr bool kFusedOrgql = ComputeVectors && !kComplex;
         constexpr int32_t LDQ = static_cast<int32_t>(P) + 1;
         constexpr int32_t LDA = kFusedOrgql ? LDQ : static_cast<int32_t>(P);
@@ -157,9 +113,7 @@ inline void syev_cta_fused_impl(Queue& ctx,
             wg_size = base_wg_size * wg_size_multiplier;
         }
 
-        // Clamp by local memory. On the real path this is one tile plus two
-        // length-P scratch vectors, i.e. the same footprint the standalone
-        // sytrd_cta kernel already has -- fusing costs nothing here.
+        // Clamp by local memory (real path: one tile + two length-P vectors, as sytrd_cta).
         {
             const std::size_t local_mem_bytes = dev.get_info<sycl::info::device::local_mem_size>();
             const std::size_t bytes_per_prob = (kATileElems + 2 * static_cast<std::size_t>(P)) * sizeof(T)
@@ -193,9 +147,7 @@ inline void syev_cta_fused_impl(Queue& ctx,
         const bool ascending = (params.sort_order == SortOrder::Ascending);
 
         Real* W = w_ptr;
-        // Same reason as W: a local of the submit lambda, so the kernel's `[=]`
-        // copies a pointer rather than reaching through the enclosing `[&]`.
-        // nullptr when status was not requested, which makes info_store a no-op.
+        // A local so `[=]` copies a pointer; nullptr (status not requested) makes info_store a no-op.
         int32_t* const info_dev = info;
 
         cgh.parallel_for<SyevCtaFusedKernel<T, P, ComputeVectors>>(
@@ -217,9 +169,7 @@ inline void syev_cta_fused_impl(Queue& ctx,
 
                 const int32_t lane = static_cast<int32_t>(part.get_local_linear_id());
                 const int32_t prob_id = wg_id * probs_per_wg + part_id;
-                // Clamp, do not return: a chunk past the batch end runs every stage
-                // on a zero matrix (no reflector, all 1x1 blocks, no chase) and
-                // writes nothing.
+                // Clamp, do not return: a dead chunk runs every stage on a zero matrix and writes nothing.
                 const bool live = prob_id < nb;
                 auto A_prob = A_view.batch_item(live ? prob_id : 0);
 
@@ -229,18 +179,13 @@ inline void syev_cta_fused_impl(Queue& ctx,
                 const int32_t base_q = kSeparateQTile ? (part_id * static_cast<int32_t>(kQTileElems)) : 0;
 
                 // ---- Stage 0: load and symmetrize into the resident tile. ----
-                //
-                // The reduction below reads the full symmetric matrix, so the
-                // requested triangle is mirrored on the way in. The pipeline
-                // needs a separate global pass to do this for Uplo::Lower;
-                // here it costs nothing.
+                // The reduction reads the full matrix, so the requested triangle is
+                // mirrored on the way in.
                 for (int32_t c = 0; c < static_cast<int32_t>(P); ++c) {
                     T v = T(0);
                     if (live && lane < nn && c < nn) {
                         if (lane == c) {
-                            // Hermitian diagonals are real by definition; force
-                            // it so a caller's round-off cannot leak an
-                            // imaginary part into the tridiagonal.
+                            // Hermitian diagonals are real: drop the caller's imaginary round-off.
                             v = T(real_part_f(A_prob(lane, c)));
                         } else if (is_upper) {
                             v = (lane < c) ? A_prob(lane, c) : conj_if_complex(A_prob(c, lane));
@@ -256,9 +201,8 @@ inline void syev_cta_fused_impl(Queue& ctx,
                 const T tau_lane = sytd2_cta_upper_partition<T, LDA>(
                     part, &A_local[base_a], &V_local[base_v], &W_local[base_w], nn, lane);
 
-                // Read the tridiagonal off the tile. Everything above the
-                // superdiagonal is left alone: it is the packed reflector store
-                // that stage 3 consumes.
+                // Read the tridiagonal off the tile; above the superdiagonal is the packed
+                // reflector store that stage 3 consumes.
                 const T d_c = (lane < nn) ? A_local[base_a + lane + lane * LDA] : T(0);
                 const T e_c = (lane < (nn - 1)) ? A_local[base_a + lane + (lane + 1) * LDA] : T(0);
 
@@ -267,11 +211,8 @@ inline void syev_cta_fused_impl(Queue& ctx,
                 T phase = T(1);
 
                 if constexpr (kComplex) {
-                    // Hermitian tridiagonal -> real symmetric tridiagonal via a
-                    // diagonal unitary similarity T' = S^H T S, with
-                    //   S(0) = 1,  S(i+1) = S(i) * conj(e(i)) / |e(i)|.
-                    // Every lane forms its own S by replaying the recurrence,
-                    // which is n broadcasts total and needs no scratch.
+                    // Hermitian -> real tridiagonal via T' = S^H T S; every lane replays
+                    // S(0) = 1, S(i+1) = S(i) * conj(e(i)) / |e(i)| itself (no scratch).
                     offdiag = (lane < (nn - 1)) ? sycl::hypot(e_c.real(), e_c.imag()) : Real(0);
                     for (int32_t i = 0; i < nn - 1; ++i) {
                         const T e_i = select_from_group(part, e_c, static_cast<uint32_t>(i));
@@ -284,12 +225,8 @@ inline void syev_cta_fused_impl(Queue& ctx,
                     offdiag = real_part_f(e_c);
                 }
 
-                // ---- Ordering (shared by every accumulator layout). ----
-                //
-                // Rather than permuting anything, each lane works out the slot
-                // its eigenvalue belongs in and writes there. Index order breaks
-                // ties, so the permutation is well defined even with repeated
-                // eigenvalues.
+                // ---- Ordering: each lane writes its eigenvalue to its rank slot; index
+                // order breaks ties, so repeated eigenvalues still give a bijection. ----
                 const auto slot_of = [&](Real wj) {
                     if (!do_sort) return lane;
                     int32_t rank = 0;
@@ -309,11 +246,9 @@ inline void syev_cta_fused_impl(Queue& ctx,
                     const bool failed = steqr_cta_solve<Real, P>(solve_part, diag, offdiag, qcache, nn,
                                              max_sweeps, zero_threshold,
                                              shift_strategy, update_scheme);
-                    // The bool steqr_cta_solve has always returned and this tier has
-                    // always dropped one line later. A STORE, not a raise: exactly one
-                    // of the three arms below runs per problem, so this kernel is the
-                    // single writer for the item and needs no separate clear (which
-                    // would be a second submission, and racy on an out-of-order queue).
+                    // A STORE, not a raise: exactly one of the three arms below runs per
+                    // problem, so this kernel is the item's single writer and needs no
+                    // separate clear (a second submission, racy out of order).
                     if (live && lane == 0) detail::info_store(info_dev, prob_id, failed ? 1 : 0);
 
                     const int32_t dst = slot_of(diag);
@@ -323,33 +258,14 @@ inline void syev_cta_fused_impl(Queue& ctx,
                 } else if constexpr (kFusedOrgql) {
                     // ---- Stage 2a: form Q_house explicitly, in place. ----
                     //
-                    // This is the structure LAPACK's DSYEV uses: DORGTR generates
-                    // Q explicitly and DSTEQR is then *seeded* with it, so the
-                    // sweeps accumulate directly onto Q. Since the accumulator
-                    // update is a right-multiplication by each rotation,
-                    //   Q_house * (G1 G2 ...) == Q_house * Z_steqr,
-                    // which is exactly what a separate back-transform pass would
-                    // compute -- but the reflector tile and the accumulator are
-                    // now the same tile, never live at once. That halves this
-                    // kernel's local memory and is what makes n == 32 with
-                    // eigenvectors competitive.
-                    //
-                    // Q = H(n-2)...H(0), H(k) = I - tau_k v_k v_k^H with v_k
-                    // supported on rows 0..k and v_k(k) = 1. H(k) is the identity
-                    // outside rows/cols 0..k, so the partial products satisfy
-                    //   Q_k(:, k)   = H(k) e_k = e_k - tau_k v_k
-                    //   Q_k(:, c<k) = H(k) Q_{k-1}(:, c)
-                    // Column k is therefore *generated* at step k and no step
-                    // touches a column above its own index -- reflector k' > k,
-                    // which lives in tile column k'+1, is still intact when its
-                    // turn comes. This is LAPACK's DORG2L recurrence; we skip its
-                    // column shift by reading v_k from column k+1 directly.
-                    //
-                    // Lane c owns column c in registers for the whole build, so
-                    // the reflector dot products are register-local and need no
-                    // cross-lane reduction -- the same trick as ormqx_cta's LEFT
-                    // specialization. Every subscript into Qc is a compile-time
-                    // constant so the array really stays in registers.
+                    // DSYEV's structure: DORGTR builds Q, DSTEQR is seeded with it, and
+                    // the sweeps accumulate straight onto Q (no back-transform pass).
+                    // Q = H(n-2)...H(0); column k is GENERATED at step k and no step
+                    // touches a column above its own index, so reflector k' > k (tile
+                    // column k'+1) is still intact when its turn comes (DORG2L without
+                    // its column shift). Lane c owns column c in registers; every
+                    // subscript into Qc must stay a compile-time constant.
+                    // evidence: docs/perf/syev.md#syev-the-fused-cta-kernel-design
                     Real Qc[P];
 #pragma unroll
                     for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
@@ -436,12 +352,8 @@ inline void syev_cta_fused_impl(Queue& ctx,
                         }
                     }
                 } else {
-                    // ---- Stage 2: sweeps on a separate real accumulator. ----
-                    //
-                    // Hermitian input: the sweeps run on the real tridiagonal, so
-                    // the accumulator is real and cannot share the complex
-                    // reflector tile. The reflectors are applied afterwards, in
-                    // stage 3.
+                    // ---- Stage 2: sweeps on a separate real accumulator (Hermitian input;
+                    // reflectors are applied afterwards, in stage 3). ----
                     QSharedCache<Real, P, LDQ, true, decltype(Q_local)> qcache(Q_local, base_q, lane, nn);
 
                     for (int32_t c = 0; c < static_cast<int32_t>(P); ++c) {
@@ -460,23 +372,17 @@ inline void syev_cta_fused_impl(Queue& ctx,
                     }
 
                     // ---- Stage 3: back-transform, Z := Q_house * Z. ----
-                    //
-                    // Lane j owns column j of Z in registers for the whole stage,
-                    // exactly as ormqx_cta's LEFT specialization does. The indices
-                    // into C_col are compile-time constants so the array stays in
-                    // registers; indexing it with the reflector support would push
-                    // it to local memory and turn each of the ~n^2 accesses into a
-                    // dependent round trip.
+                    // Lane j owns column j of Z in registers (as ormqx_cta LEFT). Indices
+                    // into C_col must stay compile-time constants, or the array spills
+                    // to local memory.
                     T C_col[P];
 #pragma unroll
                     for (int32_t r = 0; r < static_cast<int32_t>(P); ++r) {
                         C_col[r] = T(0);
                     }
 
-                    // Lift the real eigenvectors of T' back through the diagonal
-                    // phase: Zc(r, :) = S(r) * Z(r, :). S lives in lane r's
-                    // register, so stage it once before V_local is reused for
-                    // reflectors.
+                    // Lift through the phase: Zc(r, :) = S(r) * Z(r, :). Stage S before
+                    // V_local is reused for reflectors.
                     V_local[base_v + lane] = phase;
                     group_barrier(part);
 
@@ -491,17 +397,13 @@ inline void syev_cta_fused_impl(Queue& ctx,
                     }
                     group_barrier(part);
 
-                    // Reflectors of the upper-path SYTD2 form a QL factorization:
-                    // Q = H(n-2) ... H(0), and applying Q on the left in ascending
-                    // order is what ormqx_cta(QL, Left, NoTrans) does. Reflector ii
-                    // lives in rows 0..ii-1 of tile column ii+1 with an implicit 1
-                    // at row ii, and its tau is in lane ii.
+                    // Upper-path SYTD2 reflectors form a QL factorization (ormqx_cta QL,
+                    // Left, NoTrans). Reflector ii: rows 0..ii-1 of tile column ii+1,
+                    // implicit 1 at row ii, tau in lane ii.
                     for (int32_t ii = 0; ii < nn - 1; ++ii) {
                         const T tau_ii = select_from_group(part, tau_lane, static_cast<uint32_t>(ii));
 
-                        // Stage v indexed by absolute row and explicitly zeroed
-                        // outside its support, so the update below runs over the
-                        // full compile-time row range with no predication.
+                        // v zeroed outside its support: the update runs unpredicated over all P rows.
                         T vv = T(0);
                         if (lane < ii) {
                             vv = A_local[base_a + lane + (ii + 1) * LDA];
@@ -601,9 +503,8 @@ Event syev_cta_fused(Queue& ctx,
     const bool upper = (uplo == Uplo::Upper);
     const bool vectors = (jobz == JobType::EigenVectors);
 
-    // No clear: the kernel STORES every item's status, converged or not (see the
-    // note at the solve sites). `info` is the caller's USM and needs no workspace,
-    // which is why syev_cta_fused_buffer_size still returns 0.
+    // No clear: the kernel STORES every item's status. `info` is caller USM, so
+    // syev_cta_fused_buffer_size still returns 0.
     int32_t* info_ptr = detail::info_ptr(info, batch64);
 
     auto launch = [&](auto P_tag) {

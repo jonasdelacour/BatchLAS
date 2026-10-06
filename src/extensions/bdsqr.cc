@@ -163,20 +163,11 @@ bool bdsqr_implicit_qr_attempt(Queue& ctx,
                         continue;
                     }
 
-                    // ---- Zero-diagonal deflation (LAPACK DBDSQR's zero-shift branch).
-                    //
-                    // Without this the sweep below STAGNATES. If db[l] is zero
-                    // then f = -mu and g = db[l]*eb[l] = 0, so lartg returns the
-                    // identity rotation, every subsequent rotation in the chase
-                    // is also trivial, and nothing is annihilated -- the loop
-                    // spins to maxit and bdsqr reports "did not converge".
-                    //
-                    // A zero on the diagonal means the block has an exact zero
-                    // singular value. The fix is a sequence of LEFT rotations
-                    // that chases the offending superdiagonal entry along row i
-                    // and off the end of the block, leaving a zero row to
-                    // deflate. This is a zero-SHIFT step, so it is also the
-                    // numerically safe way to handle it.
+                    // ---- Zero-diagonal deflation (DBDSQR's zero-shift chase).
+                    // Required: with db[l] == 0, g = 0, lartg returns the
+                    // identity and the sweep spins to maxit. Chase the entry
+                    // off the block with zero-shift rotations to deflate.
+                    // evidence: docs/perf/gesvd.md#gesvd-bdsqr-the-missing-zero-shift-chase
                     {
                         int32_t zrow = -1;
                         for (int32_t i = l; i <= m; ++i) {
@@ -204,12 +195,10 @@ bool bdsqr_implicit_qr_attempt(Queue& ctx,
                                     }
                                 }
                             } else if (m > l) {
-                                // Zero at the BOTTOM of the block. The rightward
-                                // chase has nothing to do here, so handling only
-                                // that case leaves eb[l..m-1] untouched while
-                                // still advancing past the block -- the sweep
-                                // then never converges. Chase LEFTWARDS with
-                                // RIGHT rotations instead, emptying column m.
+                                // Zero at the BOTTOM: the rightward chase does
+                                // nothing here and the sweep never converges.
+                                // Chase LEFTWARDS with RIGHT rotations, emptying
+                                // column m.
                                 Real f2 = eb[m - 1];
                                 eb[m - 1] = Real(0);
                                 for (int32_t j = m - 1; j >= l; --j) {

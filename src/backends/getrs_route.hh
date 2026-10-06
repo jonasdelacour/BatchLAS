@@ -1,15 +1,9 @@
 #pragma once
 
-// The GETRS shape builder and route resolution.
-//
-// Lives in src/ rather than in the route table header for route_resolve.hh:19-21's
-// reason: the table must read ONLY its arguments -- no getenv, no SYCL query -- so
-// everything that has to ask the device or the environment happens here.
-//
-// The include set is public headers plus one private kernel header, and must NOT
-// gain src/queue.hh or <sycl/sycl.hpp>: gemm_variant.hh:1-9 records that dropping
-// the last such include is what made the routing adapters includable from the
-// vendor-free facade, and this header is included by that facade.
+// The GETRS shape builder and route resolution. The route table reads ONLY its arguments,
+// so every getenv and device query happens here (route_resolve.hh).
+// This header is included by the vendor-free facade: it must NOT gain src/queue.hh or
+// <sycl/sycl.hpp> (gemm_variant.hh).
 
 #include <batchlas/blas/dispatch/route_env.hh>
 #include <batchlas/blas/dispatch/route_getrs.hh>
@@ -23,20 +17,11 @@
 
 namespace batchlas::backend {
 
-// nullopt means "these views do not describe one GETRS". OpShape is a POD of
-// scalars and holds ONE shape, so it cannot represent disagreement between A and
-// B -- absence is the honest encoding, and a caller with no shape takes the
-// vendor. Same pattern as gemm_op_shape (gemm_variant.hh:189-197).
-//
-// THE THREE STRUCTURAL AGREEMENTS ARE TESTED HERE AND NOWHERE ELSE IN THE ROUTING
-// LAYER: A square, A.rows() == B.rows(), and equal batch. They duplicate
-// options.hh:646-650's checks deliberately (the potrf_route.hh:43-47 rule): the
-// builder must not describe a non-conforming pair even if a future caller reaches
-// it without the arena spelling.
-//
-// NOTHING BELOW MAY DEREFERENCE data_ptr(). rows()/cols()/batch_size()/
-// is_heterogeneous() are metadata and are safe; a data read is an immediate
-// segfault in a sizing path.
+// nullopt means "these views do not describe one GETRS" (OpShape holds ONE shape); a
+// caller with no shape takes the vendor. The three structural agreements (A square,
+// A.rows() == B.rows(), equal batch) deliberately duplicate options.hh's checks, so the
+// builder never describes a non-conforming pair (the potrf_route.hh rule).
+// NOTHING BELOW MAY DEREFERENCE data_ptr(): this runs in sizing paths.
 template <Backend B, typename T>
 inline std::optional<dispatch::GetrsShape> getrs_op_shape(
     const Queue& ctx,
@@ -53,10 +38,7 @@ inline std::optional<dispatch::GetrsShape> getrs_op_shape(
     s.op = dispatch::Op::getrs;
     s.scalar = dispatch::scalar_kind_of<T>;
 
-    // SET. trsm's builder (trsm_route.hh:40-56) and ormqr's (ormqr.hh:182-192) do
-    // not, which is why every trsm and every ormqr coverage row reads
-    // Backend::AUTO and the burn-down is unreadable for them. resolve_route slices
-    // this straight into the coverage table (route_resolve.hh).
+    // SET: resolve_route copies it into the coverage table; unset, every row reads AUTO.
     s.backend = B;
 
     // FIELD MAPPING -- getrs's own. m is the ORDER of the factored matrix, n is
@@ -66,16 +48,9 @@ inline std::optional<dispatch::GetrsShape> getrs_op_shape(
     s.k = A.rows();
     s.batch = A.batch_size();
 
-    // THE ONE LU OP WITH A LIVE VARIANT, AND THE LINE THAT MAKES ITS COVERAGE ROWS
-    // SEPARABLE. coverage.cc:52-58's variant_key carries uplo/side/diag/transA/
-    // transB; getrf and getri set NONE of them, so their rows collapse to
-    // shape_class alone (first-writer-wins, coverage.cc) and route_diff
-    // cannot tell one LU call from another. transA is the only field in this family
-    // that separates anything. Dropping this line would be silent.
-    //
-    // It is also a genuine algorithm fork, not just a label: NoTrans applies P
-    // first and solves L then U, while Trans/ConjTrans solves U^T/U^H then L^T/L^H
-    // and applies P^T LAST, on the output, in reverse. See route_getrs.hh.
+    // The only field that separates LU coverage rows (coverage.cc's variant_key); dropping
+    // it is silent. Also a real algorithm fork: NoTrans applies P first, Trans/ConjTrans
+    // applies P^T last, on the output, in reverse (route_getrs.hh).
     s.transA = transA;
 
     s.is_gpu = (ctx.device().type == DeviceType::GPU);
@@ -89,25 +64,15 @@ inline std::optional<dispatch::GetrsShape> getrs_op_shape(
     // launch -- and OpShape has one flag, so the honest reduction is OR.
     s.heterogeneous_batch = A.is_heterogeneous() || Bmat.is_heterogeneous();
 
-    // The capability. TRUE for all four scalar types -- the driver is linked
-    // (src/extensions/getrs_native.cc), so supports() admits the native arm and a
-    // vendor-free build takes it for every shape. A vendor-PRESENT build still
-    // gets {Vendor, Auto} everywhere, because preferred() is all-false, not
-    // because the arm is missing.
+    // A capability, TRUE for all four types: supports() admits the native arm everywhere;
+    // whether a vendor-present build takes it is preferred()'s question.
     s.blocked_available = sycl_getrs::getrs_blocked_available<T>();
 
-    // THE FUSED TIER'S TWO CAPACITY NUMBERS, and the local-memory one is ASKED OF
-    // THE DEVICE rather than taken from a constant -- route_potrf.hh's
-    // rule, and getrf_route.hh does the same for cta_max_n. The 4096 B reserve is
-    // the one cmake/BatchLASDetectSYCL.cmake:57-67 applies to every other
-    // device-BLAS sizing decision in this library, and the formula behind the
-    // number lives in src/extensions/getrs_fused.cc beside the launcher so the
-    // ceiling this table advertises and the allocation that launcher makes cannot
-    // disagree (route_trsm.hh:62-72).
-    //
-    // BOTH ARE ZERO WHEN THE KERNEL IS ABSENT, which correctly makes the CTA route
-    // unsupported rather than selectable-but-unimplemented -- TrsmShape::cta_max_n's
-    // convention.
+    // The fused tier's capacity: local memory is ASKED OF THE DEVICE, minus the library-wide
+    // 4096 B reserve, and the formula lives beside the launcher (getrs_fused.cc) so the
+    // advertised ceiling and the allocation cannot disagree. BOTH ZERO when the kernel is
+    // absent, which makes CTA unsupported rather than selectable-but-unimplemented.
+    // evidence: docs/perf/lu.md#getrs-fused-window-evidence
     if (sycl_getrs::getrs_fused_available<T>()) {
         const std::size_t local_mem = ctx.device().get_property(DeviceProperty::LOCAL_MEM_SIZE);
         const std::size_t budget = (local_mem > 4096) ? (local_mem - 4096) : 0;
@@ -118,20 +83,10 @@ inline std::optional<dispatch::GetrsShape> getrs_op_shape(
     return s;
 }
 
-// Resolve a route for one call. Reads the environment; everything shape-derived
-// comes from the builder above.
-//
-// THE ENV READ IS HERE AND ONLY HERE. parse_route_env(Op::getrs) synthesises
-// "BATCHLAS_GETRS_ROUTE" from op_env_stem (route_env.hh) -- no registry
-// entry exists or is needed, and legacy_variable_for(Op::getrs) correctly falls to
-// `default: return {}` (route_env.hh:119) because no legacy getrs variable ever
-// shipped. Adding a case there would INVENT a legacy spelling.
-//
-// CALLED FROM EXACTLY TWO PLACES -- getrs and getrs_buffer_size -- WITH THE SAME
-// ARGUMENTS, which is what makes them reach the same route by construction rather
-// than by a comment asking for it (factorization.cc:8-10). The double resolution
-// is real: options.hh:651 sizes and :652 calls, two getenv reads inside one API
-// call.
+// Resolve a route for one call. THE ENV READ IS HERE AND ONLY HERE: BATCHLAS_GETRS_ROUTE,
+// with no legacy spelling (adding a legacy_variable_for case would INVENT one).
+// Called from exactly two places, getrs and getrs_buffer_size, with the same arguments,
+// so sizing and running reach the same route by construction (two getenv reads per call).
 template <Backend B, typename T>
 inline dispatch::Route getrs_route(
     const Queue& ctx,

@@ -50,13 +50,10 @@ inline bool device_has_sub_group_size(const Queue& ctx, int32_t target_size) {
     return false;
 }
 
-// `kernel_max_wg` is the largest work-group this particular kernel can launch on
-// this device, which is generally smaller than the device maximum: sm_89 owns its
-// registers in four sub-partitions of 16384, so the merge kernel's ~80 registers
-// per work-item cap it at 16384/(32*80) = 6 warps per partition, 768 work-items --
-// 1024 throws outright. Callers pass the kernel-specific bound; 0 means "unknown",
-// in which case only the device limit applies. This matters now that the tuning
-// tables ask for wide work-groups.
+// `kernel_max_wg` is the largest work-group THIS kernel can launch on this device,
+// generally below the device maximum (register file per sub-partition: the merge
+// kernel caps at 768 on sm_89, and 1024 throws). 0 means unknown: device limit only.
+// evidence: docs/perf/stedc.md#stedc-the-work-group-multiplier-after-the-barriers-went
 inline int32_t choose_wg_size(const sycl::device& dev,
                               int32_t base_wg_size,
                               int32_t requested_mul,
@@ -817,27 +814,15 @@ inline T nrm2_column(const Adapter& adapter,
     return scl * sycl::sqrt(sumsq);
 }
 
-// Löwner rescale. `first`/`stride` select which eigen-indices this reduction
-// group owns: (0, 1) makes the whole work-group walk every index sequentially
-// (the original behaviour, kept for the WG variant), while (part_id,
-// parts_per_wg) hands one index to each sub-group partition so all of them run
-// concurrently with no work-group barrier in the loop.
+// Löwner rescale. `first`/`stride` select which eigen-indices this reduction group
+// owns: (0, 1) walks every index (WG reference variant), (part_id, parts_per_wg)
+// gives one index per partition with no work-group barrier. Iteration `eid` reads
+// row `eid` of Q (never written here) and writes only v(eid).
 //
-// The outer indices are independent: iteration `eid` reads row `eid` of Q (never
-// written here) and writes only v(eid).
-//
-// The product is accumulated as a (mantissa, exponent) pair rather than a plain
-// T. This is required, not cosmetic: a lane multiplies dd/width factors before
-// any reduction, so narrowing the reduction group from the work-group (width 32)
-// to a partition (width 4) lengthens each serial product 8x. At n=64 the naive
-// product overflows to Inf / underflows to 0, which poisons v, then Q, then the
-// eigenvalues, and the resulting invalid sort permutation faults downstream in
-// permuted_copy. frexp renormalization keeps the mantissa in [0.5, 1) so the
-// accumulation cannot leave range at any width.
-//
-// Because frexp scaling is by exact powers of two, mant * 2^expo reproduces the
-// naive product bit-for-bit wherever the naive product was in range, so the WG
-// reference path's values are unchanged.
+// The product is a (mantissa, exponent) pair, REQUIRED: narrow partitions lengthen
+// each serial product and the naive one leaves float range at n=64. frexp scaling is
+// by exact powers of two, so in-range results are bit-identical to the naive product.
+// evidence: docs/perf/stedc.md#stedc-partition-parallel-rescale-and-normalize
 template <typename T, typename Adapter, typename QBatch, typename VView>
 inline void maybe_rescale_vectors(bool do_rescale,
                                   const Adapter& adapter,

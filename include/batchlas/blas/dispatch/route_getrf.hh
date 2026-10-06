@@ -1,6 +1,9 @@
 #pragma once
 
-// GETRF's routing table. evidence: docs/perf/lu.md
+/// @file
+/// @brief GETRF's routing table.
+/// @ingroup dispatch
+// evidence: docs/perf/lu.md
 
 #include <batchlas/blas/dispatch/route.hh>
 #include <batchlas/blas/dispatch/route_resolve.hh>
@@ -10,23 +13,27 @@
 
 namespace batchlas::dispatch {
 
+/// @brief GETRF routing shape: square, k is the order, plus tier capacities.
+/// @ingroup dispatch
 struct GetrfShape : OpShape {
-    // Device-queried; 0 = absent. MUST include the pivot-search SLM scratch or the wide types
-    // ask past the cap and the launch is rejected. evidence: docs/perf/lu.md#one-spelling-per-ceiling
+    /// CTA tier's largest order, device-queried; 0 = absent. MUST include the pivot-search SLM
+    /// scratch or the wide types ask past the cap and the launch is rejected.
+    // evidence: docs/perf/lu.md#one-spelling-per-ceiling
     int cta_max_n = 0;
 
-    bool blocked_available = false;
+    bool blocked_available = false;   ///< blocked driver linked
 
-    int tiny_max_n = 0;   // compile-time {8,16,32} ladder (no local memory); 0 = absent
+    int tiny_max_n = 0;   ///< tiny tier's largest order: a compile-time {8,16,32} ladder (no local memory); 0 = absent
 
-    // MUST come from sycl::info::device::sub_group_sizes: OpShape::max_sub_group reports
-    // entry [0], not the max, so it admits a device that rejects the sg32 launch.
+    /// Sub-group size 32 is available. MUST come from `sycl::info::device::sub_group_sizes`:
+    /// OpShape::max_sub_group reports entry [0], not the max, so it admits a device that rejects the sg32 launch.
     bool has_sg32 = false;
 
-    int64_t order() const { return k; }
+    int64_t order() const { return k; }   ///< order of A
 };
 
-// Walk order is this array, never Algorithm's numeric value; Tiny first, the narrower tier.
+/// @brief GETRF walk order: Tiny first (the narrower tier), then CTA, Blocked, the vendor.
+/// @ingroup dispatch
 inline constexpr Route kGetrfOrder[] = {
     {Origin::Native, Algorithm::Tiny},
     {Origin::Native, Algorithm::CTA},
@@ -34,6 +41,13 @@ inline constexpr Route kGetrfOrder[] = {
     {Origin::Vendor, Algorithm::Auto},
 };
 
+/// @brief GETRF routes: `{Native, Tiny}`, `{Native, CTA}`, `{Native, Blocked}` and the vendor.
+///
+/// supports(): square, GPU with sub-group 32, homogeneous batch, not NETLIB
+/// (pivot layout), and the tier's capacity. preferred(): disjoint per-tier
+/// windows for float and cfloat; double and cdouble prefer the vendor.
+/// Evidence: @ref md_docs_2perf_2lu "docs/perf/lu.md".
+/// @ingroup dispatch
 template <typename T>
 struct RouteTable<Op::getrf, T> {
     // Correctness only: a speed threshold here removes getrf's vendor-free route.
@@ -85,8 +99,7 @@ struct RouteTable<Op::getrf, T> {
         return false;   // double and cdouble earn nothing at any order
     }
 
-    // Bounds are measured EDGES. n = 4 ties the vendor at the DRAM roof, cfloat 8 falls
-    // under the gate, cfloat 25..32 ties the vendor (0.97-1.10x) and stays out.
+    // Bounds are measured EDGES, including the holes at cfloat 8 and above 24.
     // evidence: docs/perf/lu.md#the-column-bucket
     static bool tiny_window(const GetrfShape& s) {
         if (!tiny_fits(s)) return false;
@@ -143,7 +156,9 @@ struct RouteTable<Op::getrf, T> {
     }
 };
 
-// vendor_available is factorization_vendor_available<B>, NOT the solver one.
+/// @brief resolve_route() for getrf.
+/// @trap `vendor_available` is factorization_vendor_available<B>, NOT the solver one.
+/// @ingroup dispatch
 template <typename T>
 inline Route resolve_getrf_route(Route forced, const GetrfShape& s,
                                  bool vendor_available = true) {

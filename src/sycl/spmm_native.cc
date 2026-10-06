@@ -1,6 +1,6 @@
 // Native batched CSR SpMM kernels: gather (transA == NoTrans), plus scale and
-// scatter (transposed). spmm_native.hh carries the CSR indexing contract and the
-// beta == 0 / alpha == 0 semantics. evidence: docs/perf/spmm.md
+// scatter (transposed). CSR indexing and beta == 0 / alpha == 0 semantics:
+// evidence: docs/perf/spmm.md#spmm-the-kernel-contract
 
 #include "spmm_native.hh"
 

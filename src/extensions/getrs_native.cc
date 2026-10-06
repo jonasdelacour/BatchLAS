@@ -1,6 +1,6 @@
 // Native batched GETRS: the row interchange plus two ROUTED trsm solves the
-// facade injects. Ships ROUTE-NEUTRAL (preferred() is false at every shape) so a
-// vendor-free build has a getrs. This TU must share no device symbol with the
+// facade injects: the wide-nrhs composition window, and a vendor-free build's getrs
+// wherever the fused tier does not fit. This TU must share no device symbol with the
 // getrf pair -- hence EXTENSIONS_FACTORIZATION_SOURCES and lu_laswp.hh's tag.
 // evidence: docs/perf/lu.md#getrs-composition-window-evidence
 

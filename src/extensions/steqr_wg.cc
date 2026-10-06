@@ -375,21 +375,11 @@ Event steqr_wg(Queue& ctx,
                       params.zero_threshold);
     }
 
-    // Per-item convergence status.
-    //
-    // steqr_wg has never recorded whether it actually finished: the inner sweep
-    // loop in steqr_wg_impl exits early on `deflatable` and silently otherwise,
-    // and this driver runs a FIXED n-1 passes with no test at all. So the honest
-    // predicate is the post-hoc one steqr_legacy already computes -- an
-    // off-diagonal that survived every pass -- except counted per item rather
-    // than reduced into one batch-global flag. The count is what LAPACK's
-    // `info` means for ?steqr: the number of off-diagonal elements that did not
-    // converge to zero.
-    //
-    // It costs no workspace and does not change steqr_wg_buffer_size: `info` is
-    // the caller's USM, written in place, and an empty span skips the launch.
-    // No zeroing here: `steqr` (and `stedc`, for a leaf solve) has already cleared
-    // the span, and info_report only ever raises. See info_span.hh.
+    // Per-item convergence status. The driver runs a FIXED n-1 passes with no test, so
+    // the honest predicate is post hoc (as steqr_legacy): count, per item, the
+    // off-diagonals that survived every pass -- LAPACK ?steqr's `info`. No workspace
+    // (caller USM; an empty span skips the launch) and no zeroing: `steqr`/`stedc`
+    // already cleared the span, and info_report only raises. See info_span.hh.
     if (int32_t* info_out = detail::info_ptr(info, batch_size)) {
         ctx->submit([&](sycl::handler& cgh) {
             cgh.parallel_for(sycl::range<1>(static_cast<size_t>(batch_size)), [=](sycl::id<1> id) {

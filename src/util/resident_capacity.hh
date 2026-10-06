@@ -70,11 +70,8 @@ constexpr int pack_matrices_per_wg(std::size_t bytes_per_matrix,
 // are owned by FOUR sub-partitions of 16,384 and a block's warps are dealt over them round-robin,
 // so what must fit is ceil(warps / 4) x 32 x allocated_regs <= 16,384. The per-block spelling
 // `regs x wg <= 65536` agrees only when the warp count is a multiple of four and is strictly
-// looser otherwise -- it accepts launches the driver refuses. Every gate that was on the
-// per-block spelling now routes through here; getrf_panel_reg.cc still carries its own copy
-// of these constants and its own panel_reg_wg_ceiling, which agrees with sm89_max_work_group
-// but has not been collapsed into it.
-// evidence: docs/perf/lu.md#the-register-cap-that-binds-is-per-sub-partition
+// looser otherwise -- it accepts launches the driver refuses. getrf_panel_reg.cc still has its
+// own copy (an open debt). evidence: docs/perf/lu.md#the-register-cap-that-binds-is-per-sub-partition
 inline constexpr int kRegsPerBlock = 65536;
 inline constexpr int kRegsPerPartition = 16384;
 inline constexpr int kPartitionsPerBlock = 4;

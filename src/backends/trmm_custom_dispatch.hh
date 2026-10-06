@@ -9,10 +9,8 @@ namespace batchlas::backend {
 
 bool trmm_cuda_custom_forced();
 
-// True when BATCHLAS_TRMM_VARIANT pins the vendor. The float router reads the
-// variable through its own enum; double and complex reach only the tile kernel,
-// so they need just this one bit of it -- but they do need it, or `=vendor`
-// would silently measure the new route and report it as the old one.
+// True when BATCHLAS_TRMM_VARIANT pins the vendor. Non-float callers need this
+// bit too, or `=vendor` would silently measure the new route.
 bool trmm_route_prefers_vendor();
 
 bool trmm_use_cuda_custom(const Queue& ctx,

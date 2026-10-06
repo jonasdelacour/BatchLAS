@@ -1,55 +1,36 @@
 #pragma once
 
-// ORMQR's routing table.
-//
-// The op it replaces is the smallest of the three Provider-based choosers, and
-// it is where the cost of conflating "forced" with "supported" is easiest to
-// see. `choose_ormqr_provider` opened with
-//
-//     Provider chosen = normalize_ormqr_vendor_like(policy.forced);
-//     if (chosen != Provider::Auto) return chosen;
-//
-// -- a forced provider was returned WITHOUT ever being checked against
-// ormqr_supports_blocked. Two things followed from that, both fixed here by
-// construction rather than by remembering to add a check:
-//
-//   1. FORCING COULD RUN AN UNSUPPORTED KERNEL. ormqr_supports_blocked is false
-//      for complex with Transpose::Trans, and on any non-GPU queue. But
-//      ormqr_dispatch's tail is `if (chosen == Vendor) vendor else blocked`, so
-//      BATCHLAS_ORMQR_PROVIDER=blocked ran the blocked path on exactly the
-//      inputs the predicate exists to exclude.
-//
-//   2. THE BUFFER SIZE AND THE CALL COULD DISAGREE. For a forced value that is
-//      neither Vendor nor Blocked -- cta, two_stage, jacobi, all of which
-//      parse -- ormqr_dispatch fell into its `else` arm and reset chosen to
-//      Vendor, while ormqr_buffer_size_dispatch's tail is `if (chosen ==
-//      Vendor) vendor_size; return blocked_size`, and so returned the BLOCKED
-//      size. A caller that sized its workspace with ormqr_buffer_size then hit
-//      "ormqr: insufficient workspace for chosen provider" from the very call
-//      it had just sized for.
-//
-// Both come from the same root as the Provider enum itself: a value that means
-// "the user asked for this" and a value that means "this can serve the shape"
-// were the same value. Splitting `supports` from the forced request makes the
-// first impossible, and resolving once through a pure table makes the second
-// impossible.
+/// @file
+/// @brief ORMQR's routing table.
+///
+/// It replaced a chooser that returned a forced provider without checking
+/// support, so forcing could run the blocked kernel on excluded inputs and the
+/// buffer-size query could size a different route than the call ran. Splitting
+/// supports() from the forced request, and resolving once through a pure
+/// table, makes both impossible by construction.
+/// @ingroup dispatch
+// evidence: docs/perf/dispatch.md#dispatch-the-ormqr-chooser-that-forced-past-supports
 
 #include <batchlas/blas/dispatch/route.hh>
 #include <batchlas/blas/dispatch/route_resolve.hh>
 
 namespace batchlas::dispatch {
 
-// Blocked, then the vendor. This is what the shared std::array<Provider, 6>
-// order came to for ormqr: BatchLAS_CTA, _TwoStage and _Jacobi were listed but
-// matched by no branch in the chooser, so they were inert padding.
+/// @brief ORMQR walk order: the blocked kernel, then the vendor.
+/// @ingroup dispatch
 inline constexpr Route kOrmqrOrder[] = {
     {Origin::Native, Algorithm::Blocked},
     {Origin::Vendor, Algorithm::Auto},
 };
 
+/// @brief ORMQR routes: `{Native, Blocked}` and the vendor.
+///
+/// supports(): GPU queue, and for complex T not a plain `Transpose::Trans`.
+/// preferred() equals "native and supported": no measured window exists.
+/// Evidence: @ref md_docs_2perf_2qr "docs/perf/qr.md".
+/// @ingroup dispatch
 template <typename T>
 struct RouteTable<Op::ormqr, T> {
-    // ---- CORRECTNESS ------------------------------------------------------
     // Verbatim ormqr_supports_blocked, and nothing else.
     static bool supports(Route r, const OpShape& s) {
         if (is_vendor(r)) return true;
@@ -66,14 +47,8 @@ struct RouteTable<Op::ormqr, T> {
         return true;
     }
 
-    // ---- MEASURED WINDOW --------------------------------------------------
-    // ormqr has none: no shape ever sent a supported blocked call to the vendor.
-    // The old chooser expressed that by putting BatchLAS_Blocked ahead of Vendor
-    // in the order and testing only its support predicate, so "preferred" and
-    // "supported" coincide. Kept as a distinct function rather than collapsed,
-    // because the day someone measures a crossover this is where it goes -- and
-    // putting it in `supports` instead would make that crossover a correctness
-    // claim, which is the trap this split exists to prevent.
+    // No measured window: preferred == supported. Kept separate because a future
+    // crossover goes HERE; in supports() it would become a correctness claim.
     static bool preferred(Route r, const OpShape& s) {
         return is_native(r) && supports(r, s);
     }
@@ -84,6 +59,8 @@ struct RouteTable<Op::ormqr, T> {
     }
 };
 
+/// @brief resolve_route() for ormqr.
+/// @ingroup dispatch
 template <typename T>
 inline Route resolve_ormqr_route(Route forced, const OpShape& s,
                                  bool vendor_available = true) {

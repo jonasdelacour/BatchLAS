@@ -148,9 +148,8 @@ RealT<T> row_scale(const T* values, const uint8_t* keep_flags, int len) {
     return scale;
 }
 
-// `candidates` is caller-owned scratch reused across rows. Allocating it per row
-// put a heap allocation in the innermost loop, which became the limiting factor
-// once the batch loop was parallelised.
+// `candidates` is caller-owned scratch: no heap allocation in the inner loop.
+// evidence: docs/perf/iluk.md#iluk-host-numeric-phase-cost-findings
 template <typename T>
 void apply_drop_and_fill_control(T* row_values,
                                  uint8_t* keep_flags,
@@ -295,12 +294,8 @@ LevelSchedule build_level_schedule(const std::vector<int>& row_offsets,
     return out;
 }
 
-// Which numeric path to take. The device path has a fixed cost per call -- one
-// kernel launch per dependency level, plus a few host round trips -- that does not
-// shrink for small problems, while the host path costs time proportional to the
-// batch. Measured on a 2D Laplacian the two cross at roughly 32 elements.
-// BATCHLAS_ILUK_DEVICE forces either side, which is also how the two are checked
-// against each other.
+// Host or device numeric path; BATCHLAS_ILUK_DEVICE pins either (tests compare the two).
+// evidence: docs/perf/iluk.md#iluk-the-host-versus-device-crossover
 bool iluk_prefer_device(int batch_size) {
     // First-character '0'/'1' only: "true"/"on"/"yes" all fall through to the
     // shape default. Narrower than env_truthy, and left that way.
@@ -370,12 +365,8 @@ HostFactor<T> compute_iluk(const MatrixView<T, MatrixFormat::CSR>& A, const ILUK
     const auto ci = A.col_indices();
     const auto symbolic_rows = symbolic_iluk_pattern_single(ro, ci, n, 0, 0, params.levels_of_fill);
 
-    // Flatten the symbolic pattern into CSR-style arrays shared by the whole batch.
-    // Keeping it as vector<vector<int>>, and the per-batch values as
-    // vector<vector<T>>, meant one heap allocation per row per batch element --
-    // n * batch_size of them. That is invisible at batch 1 and is the dominant cost
-    // once the batch loop below runs on several threads, since they all contend on
-    // the same allocator.
+    // Flat CSR-style arrays shared by the batch: never a heap allocation per row per item.
+    // evidence: docs/perf/iluk.md#iluk-host-numeric-phase-cost-findings
     std::vector<int> sym_ro(static_cast<std::size_t>(n) + 1, 0);
     for (int i = 0; i < n; ++i) {
         sym_ro[static_cast<std::size_t>(i + 1)] =
@@ -413,16 +404,9 @@ HostFactor<T> compute_iluk(const MatrixView<T, MatrixFormat::CSR>& A, const ILUK
 
     const auto a_vals = A.data();
 
-    // Batch elements share a sparsity pattern but nothing else: each one's numeric
-    // phase reads only its own slice of A and writes only its own slice of
-    // sym_values, so the batch loop is embarrassingly parallel. It is also the part
-    // that scales with batch size -- at batch 1024 it dominated everything else the
-    // solver did.
-    //
-    // `col_to_slot` and `candidates` are per-thread scratch. col_to_slot maps a
-    // column index to its slot in the row being assembled: an O(1) lookup in place
-    // of a binary search per touched entry, with -1 meaning the column is outside
-    // this row's pattern.
+    // Each item touches only its own slices, so the batch loop is parallel. `col_to_slot` and
+    // `candidates` are per-thread scratch; col_to_slot is column -> slot in this row, -1 = outside.
+    // evidence: docs/perf/iluk.md#iluk-host-numeric-phase-cost-findings
     auto factor_batch_element = [&](int b, std::vector<int>& col_to_slot,
                                     std::vector<std::pair<RealT<T>, int>>& candidates) {
         T* values = sym_values.data() + static_cast<std::size_t>(b) * stride;
@@ -589,15 +573,8 @@ void write_host_factor(const HostFactor<T>& host,
     }
 }
 
-// ---------------------------------------------------------------------------
-// Device factorization
-//
-// The batch shares one sparsity pattern, so every *index* the numeric phase
-// needs -- which slot each elimination reads, which slot it updates, which rows
-// may run concurrently -- depends only on that pattern and can be computed once
-// on the host regardless of batch size. What is left for the device is pure
-// arithmetic over each batch element's values, which is what actually scales.
-// ---------------------------------------------------------------------------
+// Device factorization: every INDEX depends only on the shared pattern and is built once on the
+// host; the device does only per-item arithmetic. evidence: docs/perf/iluk.md#iluk-the-device-factorization
 
 template <Backend B, typename T> struct ILUKSparsityCheckKernel;
 template <Backend B, typename T> struct ILUKZeroKernel;
@@ -760,9 +737,7 @@ UnifiedVector<U> to_device(const std::vector<U>& src) {
     return dst;
 }
 
-// The symbolic index arrays are small but numerous, and one managed allocation
-// each turned out to dominate the cost of factorizing a single small system.
-// Packing them into one buffer keeps that fixed overhead to a single allocation.
+// All symbolic index arrays in ONE allocation (one each dominated small-system cost).
 struct PackedInts {
     UnifiedVector<int> buffer;
     std::vector<int> offsets;
@@ -918,15 +893,9 @@ DeviceFactorOut<T> run_device_numeric(Queue& ctx,
     const T diagonal_shift = params.diagonal_shift;
     const bool modified_ilu = params.modified_ilu;
 
-    // One kernel launch per dependency level. The launch count follows the
-    // factor's depth, which is a property of the pattern, so it does not grow
-    // with the batch -- the batch only makes each launch wider.
-    // Level kernels must run in order, but that ordering is the queue's job. Waiting
-    // on the host between levels cost one round trip per level -- 53 of them for a
-    // 4096-row ILU(1) factor -- which is why an in-order queue is used here instead.
-    // std::optional for the same reason as the syev/gesvd/ormqr dispatchers: the
-    // Queue constructor builds a real sycl::queue, so declaring it by value pays
-    // that construction on the common in-order path, which never uses it.
+    // One launch per dependency level, ordered by an IN-ORDER queue, never host waits between levels.
+    // optional: constructing a Queue builds a sycl::queue the in-order path never needs.
+    // evidence: docs/perf/iluk.md#iluk-the-device-factorization
     std::optional<Queue> ordered;
     if (!ctx.in_order()) {
         ordered.emplace(ctx, /*in_order=*/true);

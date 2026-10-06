@@ -21,9 +21,7 @@ using trsm = Event(Queue&,
                    const MatrixView<T, MatrixFormat::Dense>&,
                    T, Side, Uplo, Transpose, Diag);
 
-// backend::trsm_vendor's signature. NOT an alias for sig::trsm: the vendor
-// parameter order can differ from the public one -- trsm's alpha moves to
-// the end -- so each is spelled out from the definition it describes.
+// NOT an alias for sig::trsm: the vendor signature puts alpha last.
 template <typename T>
 using trsm_vendor = Event(Queue&,
                           const MatrixView<T,MatrixFormat::Dense>&,
@@ -36,6 +34,20 @@ using trsm_vendor = Event(Queue&,
 }  // namespace sig
 
 
+/// @brief Host-side argument check that trsm runs on every backend before routing.
+///
+/// With m = `B.rows()` and n = `B.cols()`, requires m, n >= 0; valid enum values
+/// for `side`, `uplo`, `transA` and `diag`; `A` square of order m (Left) or n
+/// (Right) with `A.ld()` >= max(1, order); and `B.ld()` >= max(1, m). Reads only
+/// the views' shape metadata, never their data.
+/// @param A       triangular operand
+/// @param B       right-hand sides
+/// @param side    Side::Left or Side::Right
+/// @param uplo    Uplo::Lower or Uplo::Upper
+/// @param transA  NoTrans, Trans or ConjTrans
+/// @param diag    Diag::NonUnit or Diag::Unit
+/// @throws batchlas::invalid_argument naming the first violated requirement
+/// @ingroup blas3
 template <typename T>
 inline void trsm_validate_params(
                         const MatrixView<T, MatrixFormat::Dense>& A,
@@ -93,11 +105,41 @@ inline void trsm_validate_params(
         }
 }
 
-// alpha sits in position 4, immediately after the matrices, to match trmm (see
-// functions/trmm.hh). It used to come last here, so the two triangular routines
-// disagreed on where the scalar went and only one of them could be written from
-// memory; the deleted overloads below turn the old spelling into a diagnostic
-// rather than leaving it to be rediscovered.
+// alpha follows the matrices, as in trmm; the deleted overloads below reject the
+// old alpha-last order. evidence: docs/cpp-api.md#trsm-alpha-moved-next-to-the-matrices
+/// @brief Batched triangular solve with multiple right-hand sides, in place.
+///
+/// For every batch item solves
+/// \f[ \mathrm{op}(A) \, X = \alpha B \quad (\texttt{Side::Left}), \qquad
+///     X \, \mathrm{op}(A) = \alpha B \quad (\texttt{Side::Right}) \f]
+/// and overwrites `B` with \f$X\f$. `A` is triangular (`uplo`), unit or
+/// non-unit diagonal (`diag`), and \f$\mathrm{op}(A)\f$ is one of
+/// \f$A, A^T, A^H\f$. `B` is m x n; `A` is m x m (Left) or n x n (Right).
+/// No singularity check is made: a zero on a non-unit diagonal gives Inf/NaN.
+///
+/// Also callable as `trsm(ctx, A, B, TrsmOptions<T>{...})`, with owning
+/// `Matrix` arguments, and without `Back` (taken from `ctx.backend()`).
+///
+/// @tparam Back  backend the call is compiled for; must match `ctx`'s device
+/// @tparam T     scalar type: `float`, `double`, `std::complex<float>` or `std::complex<double>`
+/// @param ctx     queue the work is enqueued on
+/// @param A       batch of triangular matrices; only the `uplo` triangle is read
+/// @param B       batch of m x n right-hand sides; overwritten with the solution
+/// @param alpha   scale of the right-hand side
+/// @param side    whether op(A) is applied from the left or the right
+/// @param uplo    which triangle of `A` holds the data
+/// @param transA  op() applied to `A`
+/// @param diag    whether `A` has an implicit unit diagonal
+/// @return event of the last enqueued kernel; `B` holds \f$X\f$ once it completes
+/// @pre `A` and `B` have the same batch size.
+/// @throws batchlas::invalid_argument from trsm_validate_params, before anything
+///         is enqueued
+/// @throws batchlas::dispatch::NoRouteError in a build without the vendor BLAS
+///         for `Back` when no native tier supports the shape
+/// @note On `Backend::NETLIB`, `alpha == 0` still reads `B`, so a NaN in `B`
+///       survives (known defect 5, @ref md_docs_2design_2known-defects).
+/// @see trmm, TrsmOptions, @ref md_docs_2perf_2trsm, @ref md_docs_2cpp-api
+/// @ingroup blas3
 template <Backend Back, typename T>
 BATCHLAS_API Event trsm(Queue& ctx,
                         const MatrixView<T, MatrixFormat::Dense>& A,
@@ -108,18 +150,19 @@ BATCHLAS_API Event trsm(Queue& ctx,
                         Transpose transA,
                         Diag diag);
 
-// Tombstones for the pre-reorder argument order. Side/Uplo/Transpose/Diag are
-// all enum class, so nothing implicitly converts to or from T and a stale call
-// could never have silently compiled into a wrong answer -- but without these
-// the error would be "no matching function", which does not say what changed.
-// Both spellings need one: deleting only the MatrixView overload would leave a
-// Matrix-argument call binding to the new order with alpha where side belongs.
+// Both spellings need a tombstone: deleting only the MatrixView one would let a
+// Matrix-argument call bind to the new order with alpha where side belongs.
+/// @brief Deleted: the old argument order with `alpha` last. Pass `alpha` right
+/// after `B`.
+/// @ingroup blas3
 template <Backend Back, typename T>
 Event trsm(Queue&,
            const MatrixView<T, MatrixFormat::Dense>&,
            const MatrixView<T, MatrixFormat::Dense>&,
            Side, Uplo, Transpose, Diag, T) = delete;
 
+/// @brief Deleted: the old argument order with `alpha` last, owning-Matrix spelling.
+/// @ingroup blas3
 template <Backend Back, typename T>
 Event trsm(Queue&,
            const Matrix<T, MatrixFormat::Dense>&,
@@ -131,14 +174,13 @@ Event trsm(Queue&,
 
 namespace batchlas::backend {
 
-// The vendor path for trsm.
-//
-// DECLARATION ONLY. The public `trsm<Back, T>` used to be DEFINED inside each
-// vendor TU, so dropping a vendor library dropped the public entry point along
-// with the vendor path. WP0 S5 moves that definition to
-// src/dispatch/entry_points/level3.cc; what stays behind is the vendor
-// implementation, named as such. Each vendor wrapper TU defines this primary
-// template for its own Backend value and instantiates it there.
+// Declaration only: each vendor TU defines and instantiates it for its Backend.
+// evidence: docs/design/vendor-independence.md#the-entry-point-facade
+/// @brief Vendor-library implementation of trsm (cuBLAS, rocBLAS, host BLAS).
+///
+/// Not an entry point: batchlas::trsm calls it after validation and routing.
+/// Same semantics as batchlas::trsm, but `alpha` is the last argument.
+/// @ingroup dispatch
 template <Backend Back, typename T>
 BATCHLAS_API Event trsm_vendor(Queue& ctx,
                                const MatrixView<T,MatrixFormat::Dense>& A,
@@ -153,10 +195,8 @@ BATCHLAS_API Event trsm_vendor(Queue& ctx,
 
 namespace batchlas {
 
-// Owning-argument and backend-deducing overloads: `f(ctx, Matrix, ...)` accepts
-// owning containers where the primary takes views, and `f(ctx, ...)` uses
-// ctx.backend(). See BATCHLAS_ACCEPT_OWNING and BATCHLAS_DISPATCH_ON_QUEUE in
-// blas/queue-dispatch.hh.
+// Owning-argument (`f(ctx, Matrix, ...)`) and backend-deducing (`f(ctx, ...)`)
+// overloads; see blas/queue-dispatch.hh.
 
 BATCHLAS_ACCEPT_OWNING(trsm)
 

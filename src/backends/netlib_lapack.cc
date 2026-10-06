@@ -31,27 +31,9 @@ namespace batchlas{
 
     namespace detail {
 
-    // ---------------------------------------------------------------------
-    // Host BLAS double-precision health check.
-    //
-    // Some OpenBLAS builds ship a CPU-dispatch kernel that computes dgemm
-    // wrongly on the machine auto-detection picks it for; the known case is
-    // OpenBLAS 0.3.20's "Cooperlake" kernel on recent Intel parts, off by
-    // O(1)-O(100) at some sizes while sgemm is fine. Everything layered on top
-    // silently inherits the garbage.
-    //
-    // cmake/BatchLASBlasHealthCheck.cmake detects this at configure time and
-    // records the OPENBLAS_CORETYPE value that repairs it, but a configure-time
-    // answer is stale by construction: an install tree is routinely consumed on
-    // a machine other than the one that built it. So the recorded value is
-    // compiled in as BATCHLAS_REQUIRED_OPENBLAS_CORETYPE and we re-run a cheap
-    // version of the same probe here, once, on first double-precision use.
-    //
-    // Deliberately no setenv(): OpenBLAS reads OPENBLAS_CORETYPE in its library
-    // constructor, which has already run by the time any BatchLAS code
-    // executes, so setting it from here would look like it worked and change
-    // nothing. Only the environment of the process before it starts can fix it.
-    // ---------------------------------------------------------------------
+    // Host BLAS dgemm health check, re-run at first double use (the configure-time answer is stale
+    // on another machine). Deliberately NO setenv(): OpenBLAS already read OPENBLAS_CORETYPE.
+    // evidence: docs/design/runtime-internals.md#runtime-internals-the-host-blas-dgemm-health-check
 
 #ifndef BATCHLAS_REQUIRED_OPENBLAS_CORETYPE
 #define BATCHLAS_REQUIRED_OPENBLAS_CORETYPE ""
@@ -63,23 +45,13 @@ namespace batchlas{
         double worst_error = 0.0;
     };
 
-    // off | warn (default) | error, now a parsed enum on settings().unsafe.
-    //
-    // `off` skips the probe entirely, which suppresses the ONLY detection of a
-    // host BLAS that computes dgemm incorrectly, so it is a genuine safety
-    // override and the BATCHLAS_ALLOW_UNSAFE_ENV gate refuses it. `error` is
-    // STRICTER than the default and is let through -- the gate refuses the
-    // unsafe DIRECTION, not every value that differs from the default.
+    // off | warn (default) | error; `off` is refused by the unsafe gate, `error` is let through.
     inline batchlas::UnsafeSettings::BlasHealth host_blas_health_mode() {
         return batchlas::settings().unsafe.blas_health;
     }
 
-    // Port of the configure-time probe in cmake/BatchLASBlasHealthCheck.cmake.
-    // The naive reference is evaluated on a strided sample of C (at most 32x32
-    // entries per size) so the whole thing costs a few milliseconds: a broken
-    // kernel is wrong by O(1)+ across the result, not in one isolated entry.
-    // Sizes are the ones that expose the known defect (n=64 and n=256 happen to
-    // be correct there, so a single small size proves nothing).
+    // Port of cmake/BatchLASBlasHealthCheck.cmake on a strided sample of C. The sizes are the ones
+    // that expose the known defect: n=64 and n=256 happen to be correct there.
     inline HostBlasDoubleHealth probe_host_dgemm() {
         HostBlasDoubleHealth health;
         static const int sizes[] = {128, 200, 512};
@@ -138,9 +110,7 @@ namespace batchlas{
 
     inline std::string host_blas_double_health_message(const HostBlasDoubleHealth& health) {
         const std::string required = BATCHLAS_REQUIRED_OPENBLAS_CORETYPE;
-        // OpenBLAS's OWN variable, not a BATCHLAS_* knob: read straight from the
-        // environment for the diagnostic message and deliberately NOT captured
-        // into Settings, which owns only this library's own knobs.
+        // OpenBLAS's own variable: deliberately NOT captured into Settings.
         const char* current_env = std::getenv("OPENBLAS_CORETYPE");
         const std::string current = current_env ? current_env : "";
 
@@ -192,9 +162,7 @@ namespace batchlas{
         static_cast<void>(warned);
     }
 
-    // No-op for anything that is not double precision: a broken dgemm kernel
-    // does not make single precision wrong, and a float-only user should not be
-    // told to change their environment.
+    // Double precision only: a broken dgemm does not make single precision wrong.
     template <typename T>
     inline void host_blas_double_guard() {
         if constexpr (std::is_same_v<T, double> || std::is_same_v<T, std::complex<double>>) {
@@ -328,10 +296,7 @@ namespace batchlas{
 
     } // namespace backend
     
-    // The netlib gemm is the vendor implementation, so it moves into
-    // `backend` under its vendor name rather than being deleted: unlike
-    // cublas.cc and rocblas.cc, this TU had no separate gemm_vendor to forward
-    // to -- its public `gemm` WAS the CBLAS call.
+    // The netlib gemm IS the vendor implementation (the CBLAS call), hence gemm_vendor here.
     namespace backend {
 
     template <Backend B, typename T>
@@ -998,11 +963,7 @@ namespace batchlas{
         return op_external("lapacke.syev_buffer_size", [&] { return static_cast<size_t>(0); });
     }
 
-    // Moved verbatim from include/batchlas/blas/functions/gesvd.hh, which used to *define*
-    // the primary template (and therefore made a cuSOLVER definition a
-    // redefinition error). Semantics are unchanged, including the synchronous
-    // ctx.wait() -- LAPACKE ?gesvd needs A on the host and this path is the
-    // reference implementation, not a fast one.
+    // Synchronous ctx.wait() is deliberate: LAPACKE ?gesvd needs A on the host; this is the reference path.
     template <Backend B, typename T>
     Event gesvd_vendor(Queue& ctx,
                        const MatrixView<T, MatrixFormat::Dense>& A,
@@ -1479,20 +1440,11 @@ namespace batchlas{
     } // namespace backend
 
 
-    // Explicit instantiations. Signatures live in the `sig` namespace beside each
-    // public declaration (include/batchlas/blas/functions/*.hh), so changing one is a single
-    // header edit rather than one edit per backend TU.
+    // ONLY `backend::*_vendor` rows: a public-op row would duplicate src/dispatch/entry_points/.
+    // evidence: docs/design/runtime-internals.md#runtime-internals-vendor-tus-instantiate-only-vendor-symbols
     #define B_ Backend::NETLIB
 
-    // WP0b moved every public entry point out of the vendor TUs into
-    // src/dispatch/entry_points/, so the tables below name only the
-    // `backend::<op>_vendor` symbols this file still defines. Adding a public
-    // op row back here would collide with those TUs at link time.
-    //
-    // There is no BATCHLAS_INSTANTIATE_BACKEND_FORMAT_OP: _FORMAT_OP emits an
-    // unqualified op name, and the sparse bodies here are backend::spmm_vendor,
-    // so the two CSR rows go through a local shim that carries both the
-    // `backend::` qualification and the comma escape.
+    // Local shim: there is no _BACKEND_FORMAT_OP for backend::spmm_vendor.
     #define NETLIB_FORMAT_BACKEND_OP(B, fp, F, OP) \
         BATCHLAS_INSTANTIATE(sig::OP<BATCHLAS_UNPAREN fp BATCHLAS_COMMA F>, backend::OP, B, BATCHLAS_UNPAREN fp, F)
 

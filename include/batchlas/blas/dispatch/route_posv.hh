@@ -1,7 +1,9 @@
 #pragma once
 
-// POSV routing: Tiny is the fused kernel, CTA is potrf + one fused solve, Blocked is
-// potrf + two trsm. evidence: docs/perf/potrf.md#the-fused-potrs-solve
+/// @file
+/// @brief POSV's routing table: Tiny is the fused kernel, CTA is potrf + one fused solve, Blocked is potrf + two trsm.
+/// @ingroup dispatch
+// evidence: docs/perf/potrf.md#the-fused-potrs-solve
 
 #include <batchlas/blas/dispatch/route.hh>
 #include <batchlas/blas/dispatch/route_resolve.hh>
@@ -12,29 +14,37 @@
 
 namespace batchlas::dispatch {
 
+/// @brief POSV routing shape: m is the order, n the number of right-hand sides.
+/// @ingroup dispatch
 struct PosvShape : OpShape {
-    bool has_sg32 = false;
+    bool has_sg32 = false;   ///< sub-group size 32 is available
 
-    int64_t tiny_max_n = 0;
-    int64_t tiny_max_nrhs = 0;
+    int64_t tiny_max_n = 0;      ///< fused kernel's largest order; 0 = absent
+    int64_t tiny_max_nrhs = 0;   ///< fused kernel's largest nrhs; 0 = absent
 
-    // potrf's own arms plus trsm; the composition cannot run without a potrf.
-    bool composed_available = false;
+    bool composed_available = false;   ///< potrf's own arms plus trsm; the composition cannot run without a potrf
 
-    // The fused solve's device-queried capacity in n * nrhs elements; 0 = absent.
-    int64_t fused_max_rhs_elems = 0;
-    int64_t fused_max_nrhs = 0;
+    int64_t fused_max_rhs_elems = 0;   ///< fused solve's device-queried capacity in n * nrhs elements; 0 = absent
+    int64_t fused_max_nrhs = 0;        ///< fused solve's widest nrhs
 
-    int64_t order() const { return m; }
-    int64_t nrhs() const { return n; }
+    int64_t order() const { return m; }   ///< order of A
+    int64_t nrhs() const { return n; }    ///< right-hand sides
 };
 
+/// @brief POSV walk order; no vendor entry (no vendor ships a batched posv).
+/// @ingroup dispatch
 inline constexpr Route kPosvOrder[] = {
     {Origin::Native, Algorithm::Tiny},
     {Origin::Native, Algorithm::CTA},
     {Origin::Native, Algorithm::Blocked},
 };
 
+/// @brief POSV routes: `{Native, Tiny}`, `{Native, CTA}`, `{Native, Blocked}`; no vendor.
+///
+/// preferred() is permanently all-false; resolve_posv_route() passes
+/// `vendor_available = false`, so native_tier_preferred() is the shipping window.
+/// Evidence: @ref md_docs_2perf_2potrf "docs/perf/potrf.md".
+/// @ingroup dispatch
 template <typename T>
 struct RouteTable<Op::posv, T> {
     static bool supports(Route r, const PosvShape& s) {
@@ -90,9 +100,8 @@ struct RouteTable<Op::posv, T> {
         return 32;
     }
 
-    // Measured against CTA for float and cfloat only; fp64 keeps the tier ceiling. Float
-    // tiny wins every cell; cfloat above 24 is tiny only at nrhs > 2 (1.19-1.24x), nrhs = 2
-    // ties (1.01-1.08x) and nrhs = 1 is CTA's (1.03-1.13x).
+    // Measured against CTA for float and cfloat only; fp64 keeps the tier ceiling.
+    // cfloat above 24 is tiny only at nrhs > 2.
     // evidence: docs/perf/potrf.md#the-posv-local-memory-transpose
     static bool tiny_window(const PosvShape& s) {
         if (s.order() < 1 || s.order() > tiny_window_max_n()) return false;
@@ -109,6 +118,8 @@ struct RouteTable<Op::posv, T> {
     }
 };
 
+/// @brief resolve_route() for posv, always on the vendor-free walk (there is no vendor arm).
+/// @ingroup dispatch
 template <typename T>
 inline Route resolve_posv_route(Route forced, const PosvShape& s) {
     return resolve_route<Op::posv, T>(forced, s, /*vendor_available=*/false);

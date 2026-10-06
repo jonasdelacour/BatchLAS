@@ -275,7 +275,8 @@ vendor-free. The unaligned-`ld` cases gain most: n=256 ld+2 7 237 → 23 966 (**
 BatchLAS's own factorisations hand to `gemm`, since a panel is a sub-view carrying its parent's `ld`. Only the *generic* leg changed; the aligned
 leg is a different tuned route and was never in the measurement.
 
-**One in-tree claim aged out.** `register_128x128.hh:33-35` still records "43.6 TFLOP/s against cuBLAS SGEMM's 43.9" at 512³b512, i.e. parity.
+**One in-tree claim aged out.** `register_128x128.hh` used to record "43.6 TFLOP/s against cuBLAS SGEMM's 43.9" at 512³b512, i.e. parity
+(the claim has since been removed from the header).
 Re-measured, the native half reproduces exactly (43.5); the cuBLAS half does not — it now measures **47.3**. A ratio recorded against a vendor is
 only as durable as that vendor's version.
 
@@ -778,6 +779,104 @@ The cache entry is now named `BATCHLAS_DEVICE_GEMM_TILE_CAP_BYTES` and defaults 
 configure time: a cached legacy `45056` is dropped with a status line, and any other cached value is carried across to the new name with a
 deprecation warning, so a deliberate override is never silently lost.
 
+## GEMM: design notes behind the source comments
+
+Rationale that used to be written out at the code sites in `src/backends/` and `src/sycl/`. Each code site now keeps the invariant or trap on
+one or two lines and points here. Moved 2026-09-30; the wording below is the original comment's substance.
+
+### GEMM: the heterogeneous-batch loop
+
+A heterogeneous batch is one whose members differ in shape, so no strided-batched or pointer-batched vendor call can serve it: every such call
+takes a single m/n/k for the whole batch, so every backend has to walk the batch and issue one single-matrix GEMM per member. That loop used to
+live inside `gemm_heterogeneous_vendor_impl` in `src/backends/cublas.cc`, a cuBLAS-gated TU, and it carries three semantics that are not about
+the vendor at all:
+
+* members with `m == 0` or `n == 0` are **skipped**, not launched;
+* a member with `k == 0` is not a GEMM but a scale, `C := beta*C`, issued through `scale()` (pure SYCL, `src/matrix.cc`), so that branch needs
+  no vendor;
+* if nothing launched, the caller still gets a valid `Event` (`create_event_after_external_work()`).
+
+In a vendor-free build those three behaviours simply did not exist, which is why all 17 remaining vendor-free `gemm_tests` failures were
+heterogeneous batch (see the correctness findings above). WP2 C1 hoisted the loop into `src/backends/gemm_heterogeneous.hh` as
+`detail::gemm_heterogeneous_loop`, so the vendor-free facade reuses it verbatim instead of growing a second, subtly different copy — this
+codebase has already paid twice for restating one behaviour in two places. **The per-item terminal is the only parameter**: `cublas.cc` passes
+`gemm_vendor_impl` (recursing through `gemm_vendor` would re-run route selection per member), `rocblas.cc` recurses into `gemm_vendor` on purpose
+so a member can still reach the SYCL kernel, and the facade (`src/dispatch/entry_points/level3.cc`) passes the public `gemm`. Validation, the
+skips, the scale and the empty-batch Event are fixed in the helper so they cannot diverge per backend.
+
+`src/backends/gemm_variant.hh` also holds an older generalisation, `gemm_over_heterogeneous_batch`, whose empty-batch Event is a second
+parameter (`on_empty`). Its comment recorded the per-backend difference that motivated it: cuBLAS and rocBLAS fabricate the Event with
+`create_event_after_external_work()` because their work leaves the SYCL queue, while oneMKL, whose GEMM is submitted to the queue, handed back
+the queue's own `get_event()`; unifying the two would change what a caller may wait on. As of 2026-09-30 **nothing calls it** (the tree has no
+`mkl.cc`; cuBLAS and rocBLAS use `gemm_heterogeneous_loop`) — see the open debts below.
+
+### GEMM: the route adapter and its environment readers
+
+The second half of `src/backends/gemm_variant.hh` turns the views plus the environment into the two pure inputs
+`dispatch::resolve_gemm_route()` wants, and nothing else. The decision lives in `include/batchlas/blas/dispatch/route_gemm.hh`, split three ways
+(environment read / correctness / measured window) per [the vendor-independence design](../design/vendor-independence.md), and is proven
+route-identical to the code it replaced by `tests/route_gemm_equivalence_tests.cc`. It was deliberately wired at the one definition of
+`gemm_use_sycl_custom` rather than at the call sites, because the other callers (the MKL and rocBLAS backends) could not be compiled on the
+development machine: substituting at the definition moved every call site at once and left the unbuildable ones textually untouched.
+
+**Includability.** WP1 S5 removed `../linalg-impl.hh` from this header: it was the only include that reached CUDA (it includes
+`<cuda_runtime.h>` under `BATCHLAS_HAS_CUDA_BACKEND`), and nothing in the header needs it — `MatrixView`, `get_effective_dims`, `Queue` and
+`DeviceType` all come from the portable public headers. Dropping it made the whole adapter (`gemm_op_shape`, `gemm_route_request`, `gemm_route`,
+`gemm_use_sycl_custom`) includable from the vendor-free facade, which is how the facade's `gemm` gained a native arm without duplicating any
+routing logic. The other route builders (`gemv_route.hh`, `spmm_route.hh`) are included by the same facade and carry the same rule: never add
+`src/queue.hh` or `<sycl/sycl.hpp>`.
+
+**`gemm_op_shape` returns `nullopt`** when the three views disagree (batch sizes, `k != k_b`, `m != C.rows()`, `n != C.cols()`). `OpShape` is a
+POD of scalars and cannot represent disagreement, and disagreement is exactly what the old `gemm_custom_problem_supported` checks tested; absence
+reaches the same outcome, since the old predicate returned false and a caller with no shape takes the vendor. `gemv_op_shape`,
+`spmm_op_shape` and `trsm_op_shape` follow the same pattern.
+
+**`BATCHLAS_GEMM_VARIANT` has two readers** with two vocabularies and two unset defaults: `dispatch::parse_route_env(Op::gemm)` reaches it
+through the legacy table and defaults to `{Auto, Auto}`, while `gemm_variant_request()` defaults to `Vendor` (and maps `native` to the raw CUDA
+path, the opposite of the canonical `native`). Both read the **same** captured string (`settings().routing.legacy_route(Op::gemm)`), so they can
+no longer be handed different values. Unifying the two defaults would change which kernel a bare `gemm()` call runs and is deliberately not
+done. *(Stale, corrected 2026-09-30: the comment on `gemm_route_request` said GEMM's unset default was `Vendor`, "unlike the four level-3 ops'
+Auto"; since WP2 E6 the canonical unset default is `{Auto, Auto}` for every op, see the route arms at the top of this page.)*
+
+### GEMM: the register-tiled launcher table
+
+`src/sycl/gemm/register_launchers.hh`. `RegTile` holds exactly the template parameters of `launch_register_tiled<>` as a structural (C++20
+NTTP-usable) type, so a single launcher `launch_reg<T, RegTile{...}>` replaces what used to be one hand-written forwarder per tile shape. The
+shape is written at the `case` label in `gemm_custom`'s switch that is its only caller, so the tuning grid reads as a table instead of thirty-odd
+near-identical function bodies. **Trap:** the defaults match `launch_register_tiled<>`'s with one exception — there `ThreadTileCols` defaults to
+`ThreadTileRows`, here `TR` and `TC` default independently to 4 — so every row states `TR` and `TC` explicitly.
+
+The trace-scope name is passed in (`trace`, and `trace_aligned` for the unpredicated instantiation). `launch_register_tiled` used to take a
+`const char*(*)(KernelVariant)` and recover the variant from its own tile parameters through a constexpr inverse lookup that existed only to
+name this scope; the caller already knows the variant.
+
+### GEMM: the POD device scalar
+
+`src/sycl/device_scalar.hh`. `std::complex` must never reach device code: its `operator*` is Annex-G conformant, which means an `isnan` branch
+and a call to `__mulsc3` / `__muldc3` in the inner loop. Launchers re-type operands **and** scalars to the plain aggregate `Cx<R>` at the
+pointer boundary (layout-compatible with `std::complex`, which is what licenses the `reinterpret_cast`), so no `std::complex` crosses into a
+kernel body. Verified in the PTX of the GEMM instantiations that use it: zero `__mulsc3`, zero `__muldc3`, zero `call.uni`.
+
+The types started inside `src/sycl/gemm/register_64x64_k16_wide.hh` and were lifted out when TRSM needed them, rather than have a TRSM TU
+include a GEMM kernel header for 25 lines of type plumbing. The GEMM header includes the new one and aliases the names, so no GEMM code changed;
+`scripts/register_probe.sh` still reports 56 / 76 / 80 / 132 registers with zero spill for the wide-scalar kernels (see
+[The wide scalar kernel](#the-wide-scalar-kernel)).
+
+TRSM added arithmetic GEMM does not need — division, conjugation and a finiteness test (both components, since they go non-finite
+independently). **Division is Smith's algorithm**, not the textbook \f$1/(c+di) = (c-di)/(c^2+d^2)\f$: squaring overflows to infinity for
+\f$|c|\f$ or \f$|d|\f$ above about \f$10^{19}\f$ in float or \f$10^{154}\f$ in double, and the result is then 0, silently, for an input whose
+true reciprocal is representable; underflow at the small end loses the value the same way. Dividing through by the larger component first
+means nothing larger than \f$\max(|c|,|d|)\f$ is squared. Verified against exact arithmetic including at \f$10^{200}\f$, where the textbook form
+returns 0 and Smith's returns the correct \f$5\cdot10^{-201}\f$.
+
+POTRF added the real-component helpers (`dev_real`, `dev_from_real`, `dev_mul_real`, `dev_div_real`): a Cholesky diagonal is real by
+construction, so scaling and dividing by it must not go through the complex paths — `dev_div(a, Cx{d,0})` runs Smith's algorithm (three
+divisions and two FMAs for what is two divisions) and `dev_mul(a, Cx{s,0})` is four FMAs for two multiplies. They are also the shared spelling of
+a `real_part` that exists privately in at least eight TUs (`ritz_values.cc`, `syev_jacobi_cta.cc`, `syev_cta_fused.cc`, `ortho.cc`,
+`sytrd_sb2st.cc`, `lanczos.cc`, `band_reduction.cc`, `sytrd_sb2st_cta.cc`). **The division/reciprocal asymmetry is deliberate**: reference
+`?trsm` divides (`B(i,j)/A(j,j)`) while reference `?potf2` scales by a precomputed reciprocal (`sscal(1/ajj, ...)`); potrf's panel solve is the
+trsm and its column scale is the potf2, and unifying them would move one of the two off its LAPACK rounding.
+
 ## Open debts
 
 * **Complex is still vendor-dependent in a cuBLAS build, and that is now a measured result rather than a gap.** The transposed wide-scalar
@@ -819,6 +918,10 @@ deprecation warning, so a deliberate override is never silently lost.
   transposed shape, which is why the complex campaign needed the standalone `experiments/wp4_complex/gpu1/cx_gemm_bench.cpp`; and
   `Tiled128x32RegisterK32` is unreachable from the selector *and* rejected by name while `launch_register_128x32_k32_variant` has no caller — two
   dead enum entries worth deleting so the enum count matches the reachable count.
+* **`gemm_over_heterogeneous_batch` has no caller** (found 2026-09-30). It is the `on_empty`-parameterised heterogeneous loop in
+  `src/backends/gemm_variant.hh`; every live backend and the facade use `detail::gemm_heterogeneous_loop` instead. Either delete it or, if an
+  MKL backend returns, route that backend's `get_event()` empty-batch case through it. See
+  [the heterogeneous-batch loop](#gemm-the-heterogeneous-batch-loop).
 * **TF32 is reachable but unmeasured.** `experiments/sycl_vs_cuda/tf32_smoke.cpp` compiles `joint_matrix` with `precision::tf32` for sm_89 and
   its PTX carries 64 real `mma.sync...m16n16k8.f32.tf32.tf32.f32` instructions with correct results — reachability only, no staging and no reuse,
   so no throughput number. Whether a *tuned* SYCL `joint_matrix` GEMM reaches cuBLAS's ~78 TFLOP/s is not measured, and `supports()` rejects
@@ -876,6 +979,9 @@ the panel-update shapes (large m, n, small k) are unmeasured here, and the kerne
 m and n to the bucket. double measured at parity with Direct / Tiled16 (fp64 is
 compute-bound at 1/64 rate) and is not routed. `preferred()` is untouched: only float
 NN `max_dim <= 32` was already native.
+
+The selector comment summarised the table as: 1.8–8× over `Direct` at batch 32768, and
+2.1–3.5× over `Tiled16` / 1.1× over the 32×32 register tile on the squares above 32.
 
 The NB = 64 bucket is shared-load bound (one broadcast `ld.shared` per FMA); 40..48
 still lose to cuBLAS. **Superseded for NN 33..56** — see the next section.

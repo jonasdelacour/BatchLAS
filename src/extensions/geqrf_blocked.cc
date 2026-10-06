@@ -111,10 +111,9 @@ GeqrfBlockedWs<T> geqrf_blocked_layout(Queue& ctx, BumpAllocator& pool,
 }  // namespace
 
 // Co-located with the driver so "the flag is true" and "this TU is compiled" are one fact.
-// RouteTable<Op::geqrf,T>::preferred() now routes native above a per-type order floor
-// (float 64, cfloat 48, double 96, cdouble 256) and for tall panels, so this flag also
-// gates the DEFAULT route and not only vendor-free builds: reporting false here sends
-// every in-window shape back to the vendor.
+// preferred() routes native above a per-type order floor and for tall panels
+// (route_geqrf.hh), so this flag also gates the DEFAULT route: false sends every
+// in-window shape back to the vendor.
 // evidence: docs/perf/small-n-baseline.md#geqrf, docs/perf/qr.md#qr-route-arms
 template <> bool geqrf_blocked_available<float>()                { return true; }
 template <> bool geqrf_blocked_available<double>()               { return true; }
@@ -233,7 +232,7 @@ Event geqrf_blocked_dispatch(Queue& ctx,
         const int n2 = n - j2;          // trailing columns; ZERO on the last panel
 
         // PER PANEL and a POLICY request: panels shrink as j0 advances, so a tall first panel
-        // keeps today's leaf. Gating on `fits` here measures 0.38-0.93x at mp >= 144; any other
+        // keeps the non-register leaf. Gating on `fits` alone loses above the policy height; any other
         // forced leaf throws. evidence: docs/perf/qr.md#the-panel-height-window
         const GeqrfPanelLeaf leaf_here =
             (panel_leaf == GeqrfPanelLeaf::Register &&

@@ -1,26 +1,11 @@
-// Mirror the upper triangle of a Hermitian/symmetric matrix into its lower triangle.
+// Mirror the upper triangle of a Hermitian/symmetric matrix into its lower triangle, so the
+// Lower-only syev providers can serve Uplo::Upper: O(n^2) in front of an O(n^3) solve.
+// evidence: docs/perf/syev.md#syev-the-upper-to-lower-mirror-for-lower-only-providers
 //
-// WHY THIS EXISTS. syev_blocked and syev_two_stage (and everything under them: sytrd_blocked,
-// sytrd_sy2sb, sytrd_sb2st) implement Uplo::Lower only -- sytrd_blocked threw outright on
-// Upper. So every Uplo::Upper call fell back to the vendor no matter how much faster our own
-// providers were at that shape. That is a routing loss caused by a missing O(n^2) step in
-// front of an O(n^3) solve.
-//
-// For a Hermitian matrix the two triangles carry the same operator: A[j][i] == conj(A[i][j]).
-// Writing the upper triangle into the lower one therefore yields a matrix whose LOWER
-// triangle describes exactly the input operator, and the existing Lower path then produces
-// identical eigenvalues and eigenvectors. Cost is O(n^2 * batch) against the solve's
-// O(n^3 * batch), i.e. below noise at every size where routing matters.
-//
-// In-place is safe here: `syev` documents A as overwritten (include/batchlas/blas/functions/syev.hh),
-// and the Lower path destroys A during the reduction regardless. The diagonal is left alone;
-// for complex input its imaginary part is not forced to zero, matching what the Lower path
-// already assumes of a Hermitian input.
-//
-// DECLARATION ONLY. The definition lives in uplo_mirror.cc with explicit instantiations,
-// because a SYCL kernel name class must have exactly one definition across the program --
-// defining it inline in a header and calling it from both syev_blocked.cc and
-// syev_two_stage.cc produced "definition with same mangled name" ODR errors.
+// In place is safe because syev documents A as overwritten. The diagonal is left alone, and a
+// complex diagonal's imaginary part is NOT zeroed -- the Lower path assumes the same of its input.
+// DECLARATION ONLY: defining the kernel inline here gives an ODR "same mangled name" error once
+// two TUs call it; the explicit instantiations live in uplo_mirror.cc.
 #pragma once
 
 #include <batchlas/blas/matrix.hh>

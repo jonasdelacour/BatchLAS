@@ -17,9 +17,8 @@ using syrk = Event(Queue&,
                    const MatrixView<T, MatrixFormat::Dense>&,
                    T, T, Uplo, Transpose);
 
-// backend::syrk_vendor's signature. NOT an alias for sig::syrk: the vendor
-// parameter order can differ from the public one -- trsm's alpha moves to
-// the end -- so each is spelled out from the definition it describes.
+// Spelled out, not aliased to sig::syrk: a vendor parameter order may differ
+// from the public one (trsm's alpha is last).
 template <typename T>
 using syrk_vendor = Event(Queue&,
                           const MatrixView<T, MatrixFormat::Dense>&,
@@ -31,6 +30,35 @@ using syrk_vendor = Event(Queue&,
 }  // namespace sig
 
 
+/// @brief Batched symmetric rank-k update.
+///
+/// For every batch item computes
+/// \f[ C := \alpha A A^T + \beta C \quad (\texttt{NoTrans},\ A \text{ is } n \times k), \qquad
+///     C := \alpha A^T A + \beta C \quad (\texttt{Trans},\ A \text{ is } k \times n) \f]
+/// with `C` symmetric n x n. Only the triangle of `C` named by `uplo` is written;
+/// the other triangle is left exactly as it was, uninitialised memory included
+/// (use `MatrixView::symmetrize` to mirror it).
+///
+/// Constrained to real `T`; the complex spelling is herk. Also callable as
+/// `syrk(ctx, A, C, SyrkOptions<T>{...})`, with owning `Matrix` arguments, and
+/// without `Ba` (taken from `ctx.backend()`).
+///
+/// @tparam Ba  backend the call is compiled for; must match `ctx`'s device
+/// @tparam T   `float` or `double`
+/// @param ctx     queue the work is enqueued on
+/// @param A       batch of n x k (NoTrans) or k x n (Trans) matrices; not modified
+/// @param C       batch of n x n matrices; the `uplo` triangle is updated in place
+/// @param alpha   scale of the product
+/// @param beta    scale of the input `C`
+/// @param uplo    which triangle of `C` is written
+/// @param transA  `Transpose::NoTrans` or `Transpose::Trans`
+/// @return event of the last enqueued kernel; `C` is valid once it completes
+/// @pre `A` and `C` have the same batch size and conforming shapes per item.
+/// @throws batchlas::dispatch::NoRouteError in a build without the vendor BLAS
+///         for `Ba`, unless the call is `Backend::CUDA`, `float` and inside the
+///         native kernel's shape window (@ref md_docs_2perf_2level3).
+/// @see herk, syr2k, SyrkOptions, @ref md_docs_2cpp-api
+/// @ingroup blas3
 template <Backend Ba, RealScalar T>
 BATCHLAS_API Event syrk(Queue& ctx,
                         const MatrixView<T, MatrixFormat::Dense>& A,
@@ -45,14 +73,12 @@ BATCHLAS_API Event syrk(Queue& ctx,
 
 namespace batchlas::backend {
 
-// The vendor path for syrk.
-//
-// DECLARATION ONLY. The public `syrk<Back, T>` used to be DEFINED inside each
-// vendor TU, so dropping a vendor library dropped the public entry point along
-// with the vendor path. WP0 S5 moves that definition to
-// src/dispatch/entry_points/level3.cc; what stays behind is the vendor
-// implementation, named as such. Each vendor wrapper TU defines this primary
-// template for its own Backend value and instantiates it there.
+// Declaration only: each vendor TU defines and instantiates it for its Backend.
+// evidence: docs/design/vendor-independence.md#the-entry-point-facade
+/// @brief Vendor-library implementation of syrk (cuBLAS, rocBLAS, host BLAS).
+///
+/// Not an entry point: batchlas::syrk calls it. Same arguments and semantics.
+/// @ingroup dispatch
 template <Backend Back, RealScalar T>
 BATCHLAS_API Event syrk_vendor(Queue& ctx,
                                const MatrixView<T, MatrixFormat::Dense>& A,
@@ -66,10 +92,8 @@ BATCHLAS_API Event syrk_vendor(Queue& ctx,
 
 namespace batchlas {
 
-// Owning-argument and backend-deducing overloads: `f(ctx, Matrix, ...)` accepts
-// owning containers where the primary takes views, and `f(ctx, ...)` uses
-// ctx.backend(). See BATCHLAS_ACCEPT_OWNING and BATCHLAS_DISPATCH_ON_QUEUE in
-// blas/queue-dispatch.hh.
+// Owning-argument (`f(ctx, Matrix, ...)`) and backend-deducing (`f(ctx, ...)`)
+// overloads; see blas/queue-dispatch.hh.
 
 BATCHLAS_ACCEPT_OWNING(syrk)
 

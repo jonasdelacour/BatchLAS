@@ -1,19 +1,9 @@
-// The one place BatchLAS calls std::getenv.
-//
-// Everything about WHY this file exists is on <batchlas/settings.hh>. What is
-// here is the load itself, and the one rule that governs it: each field is
-// produced by the SAME parser its call site used before, so that migrating a
-// call site is a change of where the string comes from and never a change of
-// what the string means. Where a site had a bespoke parser the field is an
-// EnvValue and the parser stays at the site; this file only captures the string.
-//
-// The order of the assignments below follows the order of the fields in the
-// header, so the two read side by side.
+// The one place BatchLAS calls std::getenv. RULE: each field uses the SAME parser its call site
+// used (bespoke parsers stay at the site; the field is an EnvValue). Field order follows the header.
+// evidence: docs/design/runtime-internals.md#runtime-internals-the-settings-loader
 
 #include <batchlas/settings.hh>
-// Direct, not inherited: this is the one throwing TU that never reaches
-// <batchlas/util/sycl-device-queue.hh>, which is where every other one picks
-// the exception hierarchy up.
+// Direct: this throwing TU never reaches sycl-device-queue.hh, where others get error.hh.
 #include <batchlas/error.hh>
 
 #include <batchlas/backend_config.h>
@@ -29,10 +19,7 @@
 #include <string>
 #include <string_view>
 
-// Set by cmake/BatchLASOptions.cmake through cmake/backend_config.h.in
-// (#cmakedefine01, so it is 0 or 1 whenever that header has been regenerated).
-// Defaulted here so this file still compiles against an older generated header,
-// and so the SAFE reading is the one you get when nobody has said otherwise.
+// From backend_config.h.in; defaulted to the SAFE reading for an older generated header.
 #ifndef BATCHLAS_ALLOW_UNSAFE_ENV
 #define BATCHLAS_ALLOW_UNSAFE_ENV 0
 #endif
@@ -41,18 +28,13 @@ namespace batchlas {
 
 namespace {
 
-// The single mutable copy. A function-local static, so it is initialised on
-// first use rather than in static-initialisation order: dispatch coverage reads
-// its variable from a namespace-scope dynamic initialiser, and that has to work.
+// Function-local static: dispatch coverage reads settings from a static initialiser.
 Settings& mutable_settings() {
     static Settings s;
     return s;
 }
 
-// What configure() was last given, if anything. Held separately from
-// mutable_settings() so that reload_settings() can tell "the environment is the
-// authority here" from "the caller took the wheel", and re-apply the latter.
-// Same function-local-static reasoning as above.
+// What configure() last set, kept apart so reload_settings() can re-apply it.
 std::optional<Settings>& configured_settings() {
     static std::optional<Settings> s;
     return s;
@@ -60,21 +42,10 @@ std::optional<Settings>& configured_settings() {
 
 std::once_flag g_load_once;
 
-// Closes configure(). std::atomic rather than a plain bool because a Queue may
-// legitimately be constructed on a thread other than the one that would call
-// configure(), and this is the one flag in this file that can race.
+// Closes configure(). Atomic: a Queue may be built on another thread.
 std::atomic<bool> g_queue_constructed{false};
 
-// ---------------------------------------------------------------------------
-// The unsafe gate.
-//
-// One warning per VARIABLE per process, not per load: reload_settings() runs
-// once per ScopedEnvVar construction and destruction, so a per-load warning
-// would print thousands of lines in the test suite. These flags are deliberately
-// never reset.
-//
-// Compiled out entirely when the option is ON: nothing is refused then, so an
-// unused warning helper would only earn a -Wunused-function diagnostic.
+// The unsafe gate: one warning per VARIABLE per process (reloads are frequent); never reset.
 #if !BATCHLAS_ALLOW_UNSAFE_ENV
 std::once_flag g_warn_skip_pointer_checks;
 std::once_flag g_warn_latrd_force_unsafe;
@@ -93,27 +64,17 @@ void warn_unsafe_ignored(const char* variable, const char* consequence) {
 
 EnvValue raw(const char* name) { return EnvValue(std::getenv(name)); }
 
-// env_string_or() maps a set-but-empty variable to the fallback. Two of the
-// string knobs here must NOT do that -- see the call sites in the loader -- so
-// the plain read is spelled out rather than reached through a helper whose
-// empty-string rule is the opposite of what those sites want.
+// Not env_string_or(): two knobs below must NOT map set-but-empty to the fallback.
 const char* raw_or_null(const char* name) { return std::getenv(name); }
 
 void load_routing(RoutingSettings& r) {
-    // Both arrays are indexed by Op and both are rebuilt from scratch, so a
-    // reload cannot leave a stale entry behind for a variable that has since
-    // been unset.
+    // Rebuilt from scratch so a reload cannot keep an entry for a since-unset variable.
     for (std::size_t i = 0; i < static_cast<std::size_t>(dispatch::Op::COUNT); ++i) {
         const auto op = static_cast<dispatch::Op>(i);
 
-        // The canonical name is SYNTHESISED, exactly as parse_route_env
-        // synthesised it: "BATCHLAS_" + the upper-cased op name + "_ROUTE".
-        // This is why a grep for BATCHLAS_* string literals misses thirteen live
-        // routing variables -- no literal for them exists anywhere in the tree.
+        // SYNTHESISED name: a grep for BATCHLAS_* literals misses these routing variables.
         r.canonical[i] = raw(("BATCHLAS_" + dispatch::op_env_stem(op) + "_ROUTE").c_str());
 
-        // legacy_variable_for() returns an empty view for the ops that never had
-        // a legacy spelling; the entry stays unset for those.
         const std::string_view legacy = dispatch::legacy_variable_for(op);
         r.legacy[i] = legacy.empty() ? EnvValue::unset() : raw(std::string(legacy).c_str());
     }
@@ -152,9 +113,7 @@ void load_selection(SelectionSettings& s) {
 
     s.sytrd_force_local_small = env_truthy(std::getenv("BATCHLAS_SYTRD_FORCE_LOCAL_SMALL"));
 
-    // The tri-state. Both questions are asked of ONE read of the value, which is
-    // what the call site does; asking getenv twice would be a different program
-    // if the environment changed in between.
+    // Tri-state from ONE read of the value, as the call site does.
     {
         const char* v = std::getenv("BATCHLAS_SYTRD_FUSE_PANEL_UPDATE");
         if (env_truthy(v)) {
@@ -168,11 +127,7 @@ void load_selection(SelectionSettings& s) {
 }
 
 void load_geometry(GeometrySettings& g) {
-    // env_positive_int_or is the call sites' own reader for the first three, and
-    // is byte-for-byte equivalent to the bare-atoi form the rest of this group
-    // used: both mean "unparseable or <= 0 is unset". The one input class that
-    // differs is an integer literal too large for int, where atoi is undefined
-    // and stoi-in-a-try lands on the fallback -- a change in the safe direction.
+    // env_positive_int_or == the old bare-atoi form ("<= 0 is unset") except on int overflow (safe side).
     g.latrd_grid_groups = env_positive_int_or("BATCHLAS_LATRD_GRID_GROUPS", 0);
     g.latrd_grid_min_n = env_positive_int_or("BATCHLAS_LATRD_GRID_MIN_N", 768);
     g.latrd_grid_wg = env_positive_int_or("BATCHLAS_LATRD_GRID_WG", 0);
@@ -201,9 +156,7 @@ void load_geometry(GeometrySettings& g) {
     g.expand_max_bytes = raw("BATCHLAS_EXPAND_MAX_BYTES");            // strtoull, size_t
     g.gesvd_blocked_gebrd_min = raw("BATCHLAS_GESVD_BLOCKED_GEBRD_MIN");  // atoi, 0 < default
 
-    // syevx / LOBPCG. Each of these reproduces its call site's atoi form rather
-    // than env.hh's, because two of them accept 0 as a MEANING and one accepts a
-    // value below its own default.
+    // syevx / LOBPCG keep their call sites' atoi forms: some accept 0 as a MEANING.
     {
         const char* v = std::getenv("BATCHLAS_SYEVX_CHECK_EVERY");
         const int parsed = v ? std::atoi(v) : 0;
@@ -256,9 +209,7 @@ void load_diagnostics(DiagnosticsSettings& d) {
     d.kernel_trace = env_truthy(std::getenv("BATCHLAS_KERNEL_TRACE")) ||
                      env_truthy(std::getenv("BATCHLAS_TRACE_KERNELS"));
 
-    // First NON-EMPTY wins, then the built-in default. The emptiness test is the
-    // point: BATCHLAS_KERNEL_TRACE_PATH= (set, empty) falls through to
-    // BATCHLAS_TRACE_PATH rather than producing an empty filename.
+    // First NON-EMPTY wins: a set-but-empty variable falls through, never an empty filename.
     d.kernel_trace_path = "batchlas_kernels.trace.json";
     if (const char* p = raw_or_null("BATCHLAS_KERNEL_TRACE_PATH"); p && *p) {
         d.kernel_trace_path = p;
@@ -275,15 +226,11 @@ void load_diagnostics(DiagnosticsSettings& d) {
     d.gesvd_profile = env_truthy(std::getenv("BATCHLAS_GESVD_PROFILE"));
     d.cta_debug_sync = env_truthy(std::getenv("BATCHLAS_CTA_DEBUG_SYNC"));
 
-    // The call site hand-rolls env_truthy's exact spelling set; this is the same
-    // function, not a widening.
     d.syevx_trace = env_truthy(std::getenv("BATCHLAS_SYEVX_TRACE"));
 
     d.steqr_cta_check = raw("BATCHLAS_STEQR_CTA_CHECK");
 
-    // Note the asymmetry with kernel_trace_path above: bandr1_dump_root() returns
-    // std::string(v) for ANY set value, so BATCHLAS_DUMP_BANDR1_DIR= (set, empty)
-    // yields an empty root, not the default. Preserved.
+    // Deliberate asymmetry with the trace path: ANY set value, empty included, is taken.
     d.dump_bandr1.dir = "output/bandr1_dumps";
     if (const char* v = raw_or_null("BATCHLAS_DUMP_BANDR1_DIR")) {
         d.dump_bandr1.dir = v;
@@ -298,13 +245,9 @@ void load_diagnostics(DiagnosticsSettings& d) {
 }
 
 void load_unsafe(UnsafeSettings& u) {
-    // Every field is first read EXACTLY as its call site read it, and only then
-    // gated. Reading first is what lets the warning name a variable that was
-    // actually set, rather than one that merely exists.
+    // Read exactly as the call site did, THEN gate, so a warning names a variable actually set.
 
-    // !(v && *v && *v != '0') is "checks enabled", so the negation is "skip".
-    // ANY non-empty value not starting with '0' skips -- including "false",
-    // "off" and "no". Not env_truthy; see the header.
+    // ANY non-empty value not starting with '0' skips, "false"/"off"/"no" included. Not env_truthy.
     {
         const char* v = std::getenv("BATCHLAS_SKIP_POINTER_CHECKS");
         u.skip_pointer_checks = (v && *v && *v != '0');
@@ -379,8 +322,7 @@ void configure(const Settings& s) {
             "solve needs, so changing them mid-run would let two calls in one process "
             "disagree. Call configure() before constructing any Queue.");
     }
-    // Burn the one-time load first, so a later settings() cannot overwrite what
-    // was just configured.
+    // Burn the one-time load first, or a later settings() would overwrite this.
     (void)settings();
     mutable_settings() = s;
     configured_settings() = s;
@@ -389,28 +331,10 @@ void configure(const Settings& s) {
 namespace detail {
 
 void reload_settings() {
-    // settings() first, for the same reason configure() does it: the load must
-    // have happened once before this overwrite, or std::call_once would run it
-    // afterwards and discard the reload.
+    // settings() first, as in configure(), or call_once would later discard this reload.
     (void)settings();
-    // A reload re-reads the environment ON TOP OF what configure() last set,
-    // rather than on top of the defaults. Both halves of that matter, and each
-    // one is a defect the other way round:
-    //
-    //  * Starting from the DEFAULTS discarded configure() entirely, and a
-    //    ScopedEnvVar on a COMPLETELY UNRELATED variable -- built anywhere in an
-    //    embedding application's own harness -- was enough to do it, silently.
-    //    That is the ambient-state defect this work package exists to remove.
-    //  * Ignoring the environment once configure() had been called made every
-    //    ScopedEnvVar in the process a no-op, which turns an A/B test into two
-    //    runs of the same arm that agree by construction. Twelve guards in this
-    //    tree have already failed that way; tests/settings_tests.cc's own
-    //    regression case (c) is exactly it, and it calls configure() in case (a)
-    //    first, so the whole binary would have gone quietly green.
-    //
-    // So configure() is the base and an explicitly set variable still wins over
-    // it. A caller who wants a knob pinned against the environment sets it in
-    // the Settings AND does not export it; a test that pins one gets its pin.
+    // Environment ON TOP OF configure(), never on top of defaults, and never ignored: each
+    // alternative is a shipped defect. evidence: docs/design/runtime-internals.md#runtime-internals-the-settings-loader
     if (configured_settings().has_value()) {
         mutable_settings() = *configured_settings();
     }

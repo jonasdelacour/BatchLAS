@@ -1,20 +1,51 @@
 #pragma once
 
-// The one route resolver, shared by every op's RouteTable; it reads only its
-// arguments. See docs/design/vendor-independence.md#the-resolver
+/// @file
+/// @brief The one route resolver, shared by every op's RouteTable.
+///
+/// The resolver and every table read only their arguments (no `getenv`, no SYCL
+/// query, no operand data), which is what makes an op and its `*_buffer_size`
+/// query reach the same route by construction.
+/// @ingroup dispatch
+// evidence: docs/design/vendor-independence.md#the-resolver
 
 #include <batchlas/blas/dispatch/coverage.hh>
 #include <batchlas/blas/dispatch/route.hh>
 
 namespace batchlas::dispatch {
 
+/// @brief Per-op routing table; each op specialises it in `route_<op>.hh`.
+///
+/// A specialisation provides, as static members:
+/// - `order_begin()` / `order_end()`: the walk order, a constexpr array of Route.
+///   The order, not Algorithm's numeric value, decides ties.
+/// - `bool supports(Route r, const Shape& s)`: **correctness only.** False means
+///   `r` would compute a wrong answer, or index out of bounds, for `s`. A forced
+///   route bypasses preferred() but never supports(). Never put a speed
+///   threshold here: it makes a pinned route silently fall through to the
+///   automatic choice, and in a vendor-free build it leaves a working shape with
+///   no supported route at all.
+/// - `bool preferred(Route r, const Shape& s)`: **a measured speed window,
+///   vendor included.** False means merely slower; the route stays eligible.
+///   Consulted on every automatic walk, in every build, so it must not be used
+///   to choose between two native tiers. Where several native tiers exist,
+///   exactly one may answer true for a given shape, because the walk returns on
+///   the first `supports && preferred` hit.
+/// - optionally `bool native_tier_preferred(Route r, const Shape& s)`: **native
+///   against native**, consulted only on the vendor-free walk and on a bare
+///   `native` pin. Absent means `true`.
+///
+/// Every table must be pure. Its window and evidence are on the op's
+/// `docs/perf/` page, named in each specialisation's brief.
+/// @see resolve_route(), @ref md_docs_2design_2vendor-independence
 template <Op O, typename T>
 struct RouteTable;
 
-// Optional third predicate for ops with several native routes: among the native
-// routes that can serve s, is r the better one? A speed threshold in supports()
-// would break forcing, and in preferred() would move vendor-present traffic too;
-// an absent hook means `true`. evidence: docs/perf/qr.md#the-third-predicate
+/// @brief The table's `native_tier_preferred(r, s)` if it declares one, else `true`.
+///
+/// Defaults to `true`, not `false`, so a table that has not thought about the
+/// question keeps its old answer: its two vendor-free passes become identical.
+// evidence: docs/perf/qr.md#the-third-predicate
 template <typename Table, typename Shape>
 inline bool native_tier_preferred_or_default(Route r, const Shape& s) {
     if constexpr (requires { Table::native_tier_preferred(r, s); }) {
@@ -24,7 +55,30 @@ inline bool native_tier_preferred_or_default(Route r, const Shape& s) {
     }
 }
 
-// `Shape` is deduced: an op routing on more than OpShape passes a derived struct.
+/// @brief Pure route resolution, without the coverage record; call resolve_route() instead.
+///
+/// Rules, in order:
+/// 1. `forced.origin == Auto`: the automatic walk. The first route in the table's
+///    order that is both supported and preferred wins. Only when
+///    `vendor_available` is false does the walk then accept a merely supported
+///    native route: first one that native_tier_preferred() also accepts, then any.
+///    Falling through returns `{Vendor, Auto}`, the "nothing serves this" answer
+///    the caller turns into a diagnostic.
+/// 2. A forced vendor route is returned when `vendor_available` and supports()
+///    hold, else the automatic walk.
+/// 3. A forced bare origin (`{Native, Auto}`) resolves to that origin's routes in
+///    order: supported and preferred, then supported and native_tier_preferred,
+///    then supported; else the automatic walk.
+/// 4. Any other forced route is returned when supported, else the automatic walk,
+///    never the vendor directly.
+/// @tparam Shape  deduced: OpShape, or the op's derived shape
+/// @param forced            the request from the environment or options; default = no opinion
+/// @param s                 the call's shape
+/// @param vendor_available  the `*_vendor_available<B>` of the op's library group
+/// @return the chosen route; `{Vendor, Auto}` may mean "no route" when the vendor is absent
+/// @trap Rule 4 is silent: a pin the shape cannot take resolves to the automatic
+///       choice, which in a vendor-present build is usually the vendor. Confirm a pin
+///       from the resolved route, never from the exit status.
 template <Op O, typename T, typename Shape>
 inline Route resolve_route_uninstrumented(Route forced, const Shape& s,
                                           bool vendor_available = true) {
@@ -54,16 +108,9 @@ inline Route resolve_route_uninstrumented(Route forced, const Shape& s,
         return automatic();
     }
 
-    // A requested vendor still has to exist: GEMM's unset default IS Vendor, so
-    // an ordinary call arrives here rather than at `automatic` above.
-    //
-    // supports() is consulted here too. The rule at the top of this file is that a
-    // forced route bypasses preferred() but NEVER supports(); every table happens
-    // to open its vendor arm with an unconditional `return true`, so this was
-    // harmless -- but is_vendor() is also true for {Vendor, FusedDevice}, which
-    // already reaches the dispatch tail unchecked, and the first table to grow a
-    // real vendor-side capability gate would otherwise have forcing select a route
-    // that cannot run.
+    // A forced vendor must exist, and must pass supports() like any forced route:
+    // is_vendor() also admits {Vendor, FusedDevice}, and a table may one day gate
+    // its vendor arm on a real capability.
     if (is_vendor(forced)) {
         return (vendor_available && Table::supports(forced, s)) ? forced : automatic();
     }
@@ -75,12 +122,9 @@ inline Route resolve_route_uninstrumented(Route forced, const Shape& s,
                 return *r;
             }
         }
-        // The native-tier tie-break belongs here too, not only in the vendor-free
-        // walk. Without it, pinning a bare `native` on a vendor-present box picks
-        // the FIRST merely-supported arm, which for an op whose preferred() is
-        // all-false (geqrf, orgqr, potrf) is a different tier than the vendor-free
-        // build actually takes -- so benchmarking or bisecting the native path
-        // with the env var measures a route that never ships.
+        // The tie-break belongs here too: without it a bare `native` pin on a
+        // vendor-present box lands on a different tier than the vendor-free build
+        // takes wherever preferred() is false, and measures a route that never ships.
         for (const Route* r = Table::order_begin(); r != Table::order_end(); ++r) {
             if (r->origin == forced.origin && Table::supports(*r, s) &&
                 native_tier_preferred_or_default<Table>(*r, s)) {
@@ -100,8 +144,17 @@ inline Route resolve_route_uninstrumented(Route forced, const Shape& s,
     return automatic();
 }
 
-// The instrumented entry point, and the ONLY one ops should call; `s` is sliced
-// to OpShape on purpose. evidence: docs/design/vendor-independence.md#vendor-independence-the-coverage-instrument
+/// @brief Resolves the route for one call of `O` on scalar `T`; the only resolver ops should call.
+///
+/// Same result as resolve_route_uninstrumented(). When coverage is on
+/// (`$BATCHLAS_COVERAGE_OUT` set) it also records one `reached` row, with `s`
+/// sliced to OpShape on purpose.
+/// @param forced            the request; a default Route means "no opinion"
+/// @param s                 the call's shape (OpShape or the op's derived shape)
+/// @param vendor_available  whether the op's vendor library is compiled in for this backend
+/// @return the chosen route
+/// @see RouteTable, coverage::record_if_enabled()
+// evidence: docs/design/vendor-independence.md#vendor-independence-the-coverage-instrument
 template <Op O, typename T, typename Shape>
 inline Route resolve_route(Route forced, const Shape& s, bool vendor_available = true) {
     const Route chosen = resolve_route_uninstrumented<O, T, Shape>(forced, s, vendor_available);

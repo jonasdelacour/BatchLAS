@@ -54,16 +54,8 @@ namespace batchlas {
         static LinalgHandle<B> handle;
         handle.setStream(ctx);
         BumpAllocator pool(workspace);
-        // THE VENDOR PATH SIZES ITSELF FROM THE VENDOR QUERY, never from the
-        // public one. Unqualified lookup here escaped `batchlas::backend` and
-        // found `batchlas::potrf_buffer_size` -- the FACADE (potrf.hh:44-47,
-        // src/dispatch/entry_points/factorization.cc). While facade == vendor
-        // the loop was invisible; the moment the public query starts returning
-        // max(native, vendor) it hands a batch-1 cuSOLVER call the NATIVE
-        // workspace size, and it does so SILENTLY: the pool was sized by the
-        // same public query and both terms are alignment multiples, so
-        // `pool.allocate` below fits exactly and only cusolverDnXpotrf sees the
-        // wrong number -- as its workspace-size argument.
+        // Keep `backend::`: the VENDOR query, never the public facade one (unqualified lookup found
+        // the facade and silently passed cuSOLVER a native size). evidence: docs/perf/dispatch.md#dispatch-buffer-size-queries-and-the-route-they-size
         auto Lwork = backend::potrf_vendor_buffer_size<B, T>(ctx, descrA, uplo)
                      - BumpAllocator::allocation_size<int>(ctx, 1);
         if (descrA.batch_size() == 1) {
@@ -526,17 +518,8 @@ namespace batchlas {
 
     } // namespace backend
 
-    // Explicit instantiations. Signatures live in the `sig` namespace beside each
-    // public declaration (include/batchlas/blas/functions/*.hh), so changing one is a single
-    // header edit rather than one edit per backend TU.
-    //
-    // Every row names a `backend::`-qualified `_vendor` symbol, and that is the
-    // invariant: WP0b moved the public potrf / potrf_buffer_size / syev /
-    // syev_buffer_size definitions out of this TU into
-    // src/dispatch/entry_points/{factorization,eigen}.cc, so instantiating an
-    // unqualified public op here would be a duplicate symbol against them.
-    // gesvd needs no entry-point TU -- its public forms are inline in
-    // functions/gesvd.hh -- so only its vendor arm appears anywhere.
+    // ONLY `backend::*_vendor` rows: a public-op row would duplicate src/dispatch/entry_points/.
+    // evidence: docs/design/runtime-internals.md#runtime-internals-vendor-tus-instantiate-only-vendor-symbols
     #define CUSOLVER_OPS(B, fp) \
         BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, potrf_vendor) \
         BATCHLAS_INSTANTIATE_BACKEND_OP(B, fp, potrf_vendor_buffer_size) \

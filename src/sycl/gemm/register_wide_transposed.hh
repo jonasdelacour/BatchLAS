@@ -3,18 +3,9 @@
 // A register-tiled GEMM for TRANSPOSED and CONJUGATE-TRANSPOSED operands with
 // a wide scalar (double, complex<float>, complex<double>).
 //
-// It exists because neither existing family can serve these shapes correctly
-// AND fast: register_tiled_common.hh carries Transpose OpA/OpB but multiplies
-// through std::complex operator*, which is Annex-G conformant and costs an
-// isnan branch plus a __mulsc3 / __muldc3 call per multiply (see
-// ../device_scalar.hh); register_64x64_k16_wide.hh keeps std::complex out of
-// device code but reads A as m x k and B as k x n and is NN only.
-//
-// The macro tile is a PARAMETER, not 64x64, because the demand is not square:
-// every complex transposed shape the blocked drivers issue has a dimension of
-// 16 or 32 (a panel width), so a square tile wastes half or three quarters of
-// itself. The tile-to-driver mapping, the shapes, what is deliberately not
-// built and the grid that must be run before any selector row opens are all in
+// register_tiled_common.hh goes through Annex-G std::complex operator*, and
+// register_64x64_k16_wide.hh is NN only. The macro tile is a PARAMETER matched
+// to a panel width (16 or 32), not square.
 // evidence: docs/perf/gemm.md#wide-scalar-transposed-tiles
 
 #include "../../linalg-impl.hh"

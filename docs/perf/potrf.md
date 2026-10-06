@@ -2103,7 +2103,7 @@ survived only where potrf resolved native.
 ## The posv tiny launch bound
 
 **2026-09-27.** The same `.minnctapersm` bound as getrf's tiny tier
-(docs/perf/lu.md#the-tiny-launch-bound), applied to `posv_tiny` through the functor
+([lu.md: the tiny launch bound](lu.md#the-tiny-launch-bound)), applied to `posv_tiny` through the functor
 `PosvTinyBody`. Swept per (type, bucket, RHS width) over MinBlocks {1, 8, 12, 16},
 batch 32768, tiny arm, ms (uncapped -> chosen):
 
@@ -2140,9 +2140,9 @@ cfloat n = 12 nrhs = 4 ties (0.99), cfloat n = 17 at every width (CTA 0.86-1.08)
 
 ## The posv local-memory transpose
 
-**2026-09-27, second pass.** The three levers of docs/perf/lu.md#the-column-bucket applied
+**2026-09-27, second pass.** The three levers of [lu.md: the column bucket](lu.md#the-column-bucket) applied
 to `posv_tiny`: the column bucket NC ({12, 16} under N = 16, {20, 24, 28, 32} under N = 32),
-an NR = 2 RHS bucket with every RHS loop stopping at nrhs (docs/perf/lu.md#the-rhs-pad-column-cost),
+an NR = 2 RHS bucket with every RHS loop stopping at nrhs ([lu.md: the RHS pad-column cost](lu.md#the-rhs-pad-column-cost)),
 and local memory for the two cross-lane reads that scale with n:
 
 * **The Cholesky column.** Step j broadcast L(k, j) from lane k to every lane, `n - j - 1`

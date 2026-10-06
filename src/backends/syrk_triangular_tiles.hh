@@ -1,31 +1,10 @@
 #pragma once
 
-// A 128x128x8 register-tiled SYRK that visits only the half of C the caller
-// asked for.
-//
-// Routing SYRK at a batched GEMM is correct but does twice the arithmetic BLAS
-// specifies: C = alpha*A*A^T is symmetric, the caller names one triangle, and
-// every 128x128 output tile strictly outside that triangle is computed and then
-// discarded. Here the grid is indexed over the triangular tile set instead, so
-// a tile outside the triangle is never launched. Tiles on the diagonal are the
-// only ones computed in full, and their epilogue drops the elements that fall
-// in the unreferenced half -- BLAS forbids writing them, and with beta != 0 it
-// forbids reading them too.
-//
-// The inner loop and shared-memory layout are those of
-// src/sycl/gemm/register_128x128.hh, and for the same reasons: an aligned
-// shared stride so the fragment loads become LDS.128, both operands staged
-// [k][row] so a thread's 8 values are contiguous, and the 8x8 thread tile split
-// into two 4-wide bands so an LDS.128 is bank-conflict free.
-//
-// What differs is staging. SYRK's two operands are the same matrix read at two
-// different row offsets, so there is no separate B, and the access pattern
-// depends only on the transpose mode:
-//
-//   NoTrans  A is n x k, so a column of A is contiguous in the output row
-//            index and both tiles stage with one vector load per thread.
-//   Trans    A is k x n, so the contiguous direction is k and both tiles stage
-//            transposed, four consecutive k per thread scattered into shared.
+// A 128x128x8 register-tiled SYRK over the triangular tile set: tiles outside
+// the requested triangle are never launched, and diagonal tiles mask their
+// epilogue (the other half is neither read nor written). Inner loop as in
+// src/sycl/gemm/register_128x128.hh; both operands are A at two row offsets.
+// evidence: docs/perf/level3.md#syrk-and-syr2k-triangular-tiles-kernel-design
 
 #include "triangular_tiles.hh"
 

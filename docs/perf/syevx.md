@@ -23,7 +23,7 @@ are in @ref design_syevx. The LAPACK-style `Index`/`Value` range selection is in
 
 ## syevx: routing thresholds as they stand
 
-The dense `Auto` rule, quoted from `syevx_select_algorithm` (`src/extensions/syevx.cc:416-454`):
+The dense `Auto` rule, quoted from `syevx_select_algorithm` (`src/extensions/syevx.cc:299-317`):
 
 | condition | route |
 |---|---|
@@ -240,7 +240,7 @@ and should not be claimed.
 ### syevx: automatic Chebyshev filter degree
 
 `syevx_filtered` uses the constant `kDefaultFilterDegree = 10`
-(`src/extensions/syevx_filtered.cc:77`) unless the degree is pinned
+(`src/extensions/syevx_filtered.cc:55`) unless the degree is pinned
 (`BATCHLAS_SYEVX_FILTER_DEGREE` or `params.filter_degree`). A per-matrix degree derived from the
 problem exists behind `BATCHLAS_SYEVX_FILTER_DEGREE_AUTO=1` and **cannot ship on**. RTX 4090,
 float, `n = 1024`, `neigs = 8`, ratio derived / fixed-10 (above 1 means the derived degree wins):
@@ -257,6 +257,17 @@ that some matrix forces a low degree tends to 1, the whole batch runs at that de
 outer iteration count explodes, which gives the plateau at about 0.48x. A fix would change the
 batch reduction (for example a quantile instead of the min, which keeps the batched GEMM shape),
 not the formula. The date of this measurement is not recorded in the source comment.
+
+**Stale-claim warning (found 2026-09-30 while moving the comments, not re-measured).** The code
+does not reduce the *derived* degree by min. Read from `syevx_filtered.cc` (the loop after the
+interval kernel): the per-item derived needs are reduced by **max**, clamped to `[10, 40]`, and
+then trimmed by the **min** of the per-item precision caps, which applies with or without the
+derivation (see
+[the degree cap](../design/syevx.md#syevx-filtered-normalising-the-filter-and-capping-its-degree)).
+Since the derived degree is never below the fixed 10, "some matrix forces a low degree" cannot be
+what makes auto lose at batch >= 4; a batch-max of the *needs*, which runs every matrix at the most
+demanding item's degree, fits the code better. The mechanism above should be treated as
+unverified until a per-iteration degree trace at batch 8 settles it.
 
 The constant 10 itself has never been tuned on this hardware. It is a mid-range guess: too low
 and each outer iteration barely separates the spectrum, too high and the extra matvecs are
@@ -352,6 +363,36 @@ filtered solver fails. `Filtered` is reachable only explicitly (`params.method` 
 **Known cost:** the convergence test reads a device flag on the host once per outer iteration.
 That is the same defect as [LOBPCG's host synchronization](#lobpcg-host-synchronization-only-at-convergence-checks),
 but it costs one sync per outer iteration, not per matvec.
+
+The derivations behind both numerical findings, and the degree precedence, are in
+[the Filtered design notes](../design/syevx.md#syevx-filtered-the-scaled-chebyshev-filter).
+
+### syevx: the parallel Gershgorin bounds kernel
+
+`syevx_filtered` starts from Gershgorin bounds: row \f$i\f$ contributes
+\f$[a_{ii} - \sum_{j \ne i}|a_{ij}|,\ a_{ii} + \sum_{j \ne i}|a_{ij}|]\f$, and `lo`/`hi` are the
+min/max over rows. They are cheap, need no matvec, and only have to be conservative: a loose
+interval costs filter sharpness, never correctness.
+
+The legacy kernel ran this as **one work-item per matrix** walking all \f$n^2\f$ elements with a
+column-major stride, so every load was its own sector. It was measured at **80.2 % of the whole
+solve at `n = 1024`**, and independent of batch. (RTX 4090; the date, dtype and batch of that
+profile are not recorded in the source comment.)
+
+The shipped kernel gives each work-item one row (`kBoundsWG = 64` rows per work-group), so at a
+fixed `j` a work-group reads a contiguous run of a column: fully coalesced. Row-groups per matrix
+scale as `n / 64`, so parallelism grows linearly while work grows as \f$n^2\f$. The per-(matrix,
+row-group) partial `[min, max]` goes to a second reduce kernel.
+
+- **Bit-identical, not merely equivalent.** The inner `j` loop stays serial and ascending, so
+  each row's radius is accumulated in exactly the legacy order and the per-row endpoints are
+  bit-identical. Only the outer min/max is re-associated, and min/max is exact under any
+  association. Keep that loop order if the kernel is touched.
+- `BATCHLAS_SYEVX_BOUNDS_LEGACY=1` restores the serial kernel for A/B.
+- **Workspace lockstep.** The partials (`2 * ceil(n/64) * batch` reals) are a `UnifiedVector`
+  outside the `BumpAllocator`, the same pattern as `converged` and `degree_cap`, so the sequence
+  of pool allocations, and `syevx_filtered_buffer_size`, are byte-for-byte unchanged. The filter
+  degree allocates nothing either: the recurrence reuses `Y`/`Yprev` whatever its length.
 
 ### syevx: pre-existing bugs found while building the tiers
 
@@ -646,7 +687,13 @@ small-`k` end of the projected solve. That was never measured.
 - **A second sparse operator family** (mesh/stencil) before `Auto` could route sparse input to
   Filtered, and a spectral-gap experiment that actually closes the gap.
 - **The Filtered degree**: `kDefaultFilterDegree = 10` is untuned, and the auto-degree batch
-  reduction needs a design change before it can ship.
+  reduction needs a design change before it can ship. Its loss mechanism is itself unverified
+  (see the stale-claim warning in
+  [the automatic degree section](#syevx-automatic-chebyshev-filter-degree)).
+- **The projected-syev provider sweep** (SYEVX_PLAN s7.11), listed as "now possible" in s13 and
+  still undone as a sweep: only the `n = 30` point and the LOBPCG-level CTA-max-n A/B exist (see
+  [the projected syev provider](#lobpcg-the-projected-syev-provider)), and `syev_jacobi_cta` as a
+  provider for the small-`k` end was never measured.
 - **Above `n = 2048`** the DirectSubset gate is extrapolated, not measured.
 - **Not done in LOBPCG:** the batch-wide staircase, warm starts, the Chebyshev preconditioner,
   and capturing the iteration in a SYCL graph.

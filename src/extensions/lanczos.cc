@@ -51,6 +51,8 @@ namespace batchlas {
         auto betas = pool.allocate<T>(ctx, n*batch_size);
         
         //Batched SpMV is not supported so we have to represent our vector as a dense matrix padded with an extra column (to prevent fallback to SpMV)
+        // Known defect: both columns are multiplied, one is consumed.
+        // See docs/design/known-defects.md, defect 3.
         auto padded_output = MatrixView(V_vectormem.data(), n, 2, n, 2*n, batch_size, pool.allocate<T*>(ctx, batch_size).data());
         auto padded_vector = MatrixView(Vmem.data(), n, 2, n, (n+1)*n, batch_size);
         

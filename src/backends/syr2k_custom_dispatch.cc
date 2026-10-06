@@ -6,10 +6,7 @@
 #include "level3_fused.hh"
 #include "level3_vendor_fallback.hh"
 
-// WP1 S2: the expansions' terminal GEMM is the PUBLIC entry point, not
-// gemm_cublasdx. Vendor-free by inspection -- gemm.hh reaches only
-// sycl-device-queue.hh, sycl-span.hh, matrix.hh, enums.hh and
-// queue-dispatch.hh.
+// The terminal GEMM is the PUBLIC entry point, whose header is vendor-free.
 #include <batchlas/blas/functions/gemm.hh>
 
 #include <batchlas/blas/dispatch/route.hh>
@@ -26,18 +23,9 @@ namespace batchlas::backend {
 
 namespace {
 
-// BATCHLAS_SYR2K_VARIANT selects a route. The custom routes are named
-// separately so each stays independently measurable and testable: `triangular`
-// is the tile-masked kernel that computes only the requested half of C,
-// `cublasdx` the fused kernel, and `gemm` the pair of full n x n batched GEMMs
-// the triangular route replaces.
-//
-// `gemm` computes and stores both triangles, which is not what SYR2K means: the
-// half the caller did not name is the caller's storage. It exists to measure
-// what the triangular route saves, and the automatic choice never selects it --
-// reaching it takes naming it here.
-// The private Syr2kRoute enum is gone; see the note in syrk_custom_dispatch.cc.
-// Legacy spellings are unchanged and pinned by tests/route_vocabulary_tests.cc.
+// BATCHLAS_SYR2K_VARIANT: `triangular` (tile kernel), `cublasdx` (fused), `gemm`
+// (two full GEMMs that write BOTH triangles; measurement only, never Auto).
+// evidence: docs/perf/level3.md#level-3-one-route-parse-per-variable
 dispatch::Route syr2k_route_request() {
     const auto parsed = dispatch::parse_route_env(dispatch::Op::syr2k);
     return parsed.found ? parsed.route
@@ -75,23 +63,9 @@ bool syr2k_triangular_supported(const MatrixView<float, MatrixFormat::Dense>& A,
     return !A.is_heterogeneous() && !B.is_heterogeneous() && !C.is_heterogeneous();
 }
 
-// Where the fused kernel beats the vendor. The vendor route is a host loop over
-// cublasSsyr2k, one launch per batch member, against one launch for the whole
-// batch here, so the two are only ever close at a batch of one and the vendor
-// pays double from two members up.
-//
-// Measured on RTX 4090 / sm_89 in float over n in 8..3072 x k in 4..2048 x
-// batch in 1..1024. From batch 2 the kernel won every shape in the grid: 1.06x
-// at n = 3072, 1.12x at n = 1024, 1.3-1.4x through the middle, and up to 226x
-// where n is small enough that the whole cost is the launch. Neither n nor k
-// nor the tile count enters, because none of them changes which side of that
-// per-launch difference a shape falls on.
-//
-// A batch of one does not sort by anything: the vendor wins by 1.18-1.60x below
-// n = 1280 and again by 1.16x at n = 3072, the kernel wins by 1.02-1.71x
-// between, and by 4-10x the vendor wins on a deep k with a small n, where the
-// kernel has a single block and cuBLAS splits the reduction. There is no
-// threshold in n to be had, so the batch of one is left with the vendor.
+// The vendor route is one cublasSsyr2k launch per batch member: from batch 2
+// the kernel won every measured shape, and batch 1 has no threshold in n.
+// evidence: docs/perf/level3.md#syr2k-triangular-tiles
 bool syr2k_prefer_triangular_tiles(const MatrixView<float, MatrixFormat::Dense>& A) {
     return A.batch_size() >= 2;
 }
@@ -106,10 +80,8 @@ Event syr2k_cublasdx_fallback_gemm(Queue& ctx,
     const Transpose transB = transA == Transpose::NoTrans ? Transpose::Trans : Transpose::NoTrans;
     BATCHLAS_KERNEL_TRACE_SCOPE("syr2k_cuda_custom.gemm_fallback");
 
-    // The second product accumulates into the C the first one wrote, so the two
-    // have to be ordered. An in-order queue already orders them: both run on
-    // its native stream. An out-of-order queue orders nothing across the
-    // SYCL/native boundary, so there the first has to be waited out.
+    // The second product accumulates into the first's C; out-of-order queues
+    // order nothing across the SYCL/native boundary, so wait there.
     Event first = ::batchlas::gemm<Backend::CUDA, float>(ctx, A, B, C, alpha, beta, transA, transB, ComputePrecision::Default);
     if (!ctx.in_order()) {
         first.wait();
@@ -141,9 +113,7 @@ bool syr2k_use_cuda_custom(const Queue& ctx,
         !syr2k_problem_supported(A, B, C, transA) || !syr2k_triangular_supported(A, B, C)) {
         return false;
     }
-    // The tile-masked kernel is the only custom route that respects the
-    // triangle, so it is the only one the automatic choice may leave the vendor
-    // for, and its own threshold is the whole decision.
+    // Only the tile kernel respects the triangle, so it is Auto's only non-vendor choice.
     return syr2k_prefer_triangular_tiles(A);
 }
 
@@ -155,8 +125,7 @@ Event syr2k_cuda_custom(Queue& ctx,
                         float beta,
                         Uplo uplo,
                         Transpose transA) {
-    // WP1 S0 instrumentation -- beside every return, never in place of one, and
-    // inert unless BATCHLAS_COVERAGE_OUT is set. See level3_coverage.hh.
+    // Coverage record: beside every return, never in place of one (level3_coverage.hh).
     const auto rec = [&](dispatch::Route taken, bool native_supported) {
         detail::record_level3_route(dispatch::Op::syr2k, taken,
                                     C.rows(), C.cols(),
@@ -196,11 +165,8 @@ Event syr2k_cuda_custom(Queue& ctx,
         return detail::syr2k_vendor_fallback(ctx, A, B, C, alpha, beta, uplo, transA);
     }
 
-    // The fused tail lives in level3_fused_cuda.cc now (WP1 S3). syr2k is the
-    // op that does NOT fall back on NoKernel -- it throws, and the throw is not
-    // guarded by `forced`, so a non-fused named route reaching here gets a
-    // cuBLASDx message it did not ask for. Pre-existing; preserved exactly
-    // rather than quietly improved, and recorded in docs/perf/level3.md.
+    // Looks wrong, is preserved: syr2k throws on NoKernel even when not forced.
+    // evidence: docs/perf/level3.md#forced-route-defects
     auto fused = detail::syr2k_fused_try(ctx, A, B, C, alpha, beta, uplo, transA);
     if (fused.outcome == detail::FusedResult::Outcome::Ran) {
         rec(dispatch::Route{dispatch::Origin::Vendor, dispatch::Algorithm::FusedDevice}, true);
@@ -210,14 +176,8 @@ Event syr2k_cuda_custom(Queue& ctx,
         throw_forced_syr2k_unavailable("no compatible fused kernel is available in this build for the requested problem");
     }
 
-    // DeviceUnsupported only: the kernel existed but the device refused it.
-    //
-    // This must NOT fall back to syr2k_cublasdx_fallback_gemm. That routine takes
-    // no uplo and writes BOTH triangles of C (see its header), which is not what
-    // SYR2K means -- it is reachable only by naming Algorithm::DiagFullGemm above,
-    // as a deliberate opt-in. Reaching it from a refusal the caller did not ask
-    // for silently overwrites the triangle the caller owns, and every level-3 test
-    // uses a single uplo per call, so nothing would catch it. Throw, as before.
+    // DeviceUnsupported: must NOT fall back to syr2k_cublasdx_fallback_gemm,
+    // which writes BOTH triangles and no single-uplo test would catch it.
     throw_forced_syr2k_unavailable(
         "the fused kernel exists but this device refused to launch it; "
         "no uplo-respecting fused fallback exists, so the request cannot be served");

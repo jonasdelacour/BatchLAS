@@ -548,7 +548,18 @@ docs into the type names, where it is harder to correct.
   `stebz_buffer_size(ctx, n, batch, StebzParams<float>{})`.
 
 When you pass an empty option struct *together with* an explicit workspace, name
-the type: `potrf(ctx, A.view(), PotrfOptions{}, ws)`.
+the type: `potrf(ctx, A.view(), PotrfOptions{}, ws)`. A bare `{}` there is a
+compile error by design; see
+[the bare-braces trap](design/api-conventions.md#api-conventions-the-bare-braces-potrf-trap).
+
+**Owning arguments are accepted where a view is.** Every positional entry point
+that takes a `MatrixView` or `VectorView` also takes the owning `Matrix` or
+`Vector`, in any position and mixed with views, on both the `f(ctx, ...)` and
+the `f<Backend>(ctx, ...)` spellings; the option-struct overloads take a `Matrix`
+or a `MatrixView` for each matrix argument. The two argument lists that do not work are a
+bare `{}` (name the type) and a call that names some template arguments but not
+all, such as `spmm<Back, T>(ctx, A, ...)` with an owning `A` (write
+`spmm<Back>(ctx, ...)` and let both deduce).
 
 `T` is deduced from the matrix arguments, never from the option struct, so on an
 option-struct call let it deduce — `syev<B>(ctx, ...)`, or `syev(ctx, ...)` to
@@ -1676,7 +1687,8 @@ ctx.wait();                                         // required before reading a
 ```
 
 These allocate and return, but they do not wait: like every other entry point
-they enqueue.
+they enqueue. The exceptions are `linalg::norm`, `linalg::cond` and
+`linalg::svd`, which wait before returning.
 
 Elementwise arithmetic:
 
@@ -1695,12 +1707,24 @@ forms where clarity matters more than controlling allocation — setup, tests,
 exploration. In an inner loop, use the `_into` forms so the caller owns and
 reuses the output.
 
-Two behaviours to watch:
+Behaviours to watch:
 
-- `matmul` ignores `opts.beta` and forces `beta = 0`; the result is freshly
-  allocated.
+- `matmul` takes a `MatmulOptions`, which has no `beta` field: the result is
+  freshly allocated, so naming `beta` is a compile error rather than a read of
+  uninitialised memory.
 - `multiply` is elementwise (Hadamard). Use `matmul` for the matrix product. For
   square operands both readings are shape-valid.
+- `eigh` and `svd` return a per-item `info` vector beside the result (`0` =
+  converged), always filled; check it, because a non-converged item otherwise
+  looks exactly like a converged one. `solve`, `solve_spd` and `cholesky` report
+  nothing (see *Convergence status* above).
+- There is no `linalg::qr`. Compose `geqrf` and `orgqr` yourself; the wrapper is
+  withheld because of an unexplained wrong-answer defect (see
+  [Known defects](design/known-defects.md)).
+
+Why the layer and the option structs are shaped this way (the membership rule,
+the overload traps, the pointer and shape checks) is recorded in
+[API conventions](design/api-conventions.md).
 
 ---
 

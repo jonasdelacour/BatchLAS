@@ -18,9 +18,8 @@ using her2k = Event(Queue&,
                     const MatrixView<T, MatrixFormat::Dense>&,
                     T, float_t<T>, Uplo, Transpose);
 
-// backend::her2k_vendor's signature. NOT an alias for sig::her2k: the vendor
-// parameter order can differ from the public one -- trsm's alpha moves to
-// the end -- so each is spelled out from the definition it describes.
+// Spelled out, not aliased to sig::her2k: a vendor parameter order may differ
+// from the public one (trsm's alpha is last).
 template <typename T>
 using her2k_vendor = Event(Queue&,
                           const MatrixView<T, MatrixFormat::Dense>&,
@@ -33,18 +32,39 @@ using her2k_vendor = Event(Queue&,
 }  // namespace sig
 
 
-// C = alpha * A * B^H + conj(alpha) * B * A^H + beta * C (Transpose::NoTrans,
-// A and B are n x k) or
-// C = alpha * A^H * B + conj(alpha) * B^H * A + beta * C (Transpose::ConjTrans,
-// A and B are k x n), with C Hermitian n x n: only the triangle named by `uplo`
-// is written, and the diagonal comes out real.
-//
-// The conjugate on the second term is what makes the sum Hermitian, and is the
-// whole of the difference from syr2k -- the second term is the conjugate
-// transpose of the first, not a copy of it with the operands swapped. It is
-// also why alpha may be complex here while herk's must be real: the pair
-// alpha * A * B^H and its own conjugate transpose is Hermitian for any alpha.
-// beta scales an already-Hermitian C and so is still real.
+/// @brief Batched Hermitian rank-2k update.
+///
+/// For every batch item computes, with `A` and `B` n x k (`NoTrans`) or k x n
+/// (`ConjTrans`) and `C` Hermitian n x n,
+/// \f[ C := \alpha A B^H + \bar\alpha B A^H + \beta C \quad (\texttt{NoTrans}) \f]
+/// \f[ C := \alpha A^H B + \bar\alpha B^H A + \beta C \quad (\texttt{ConjTrans}) \f]
+/// Only the triangle of `C` named by `uplo` is written; the other is left as it
+/// was (use `MatrixView::hermitize` to mirror it). The diagonal comes out real.
+///
+/// The second term is the conjugate transpose of the first, not a copy with the
+/// operands swapped; that is what makes the sum Hermitian for any complex
+/// `alpha`, and is the whole difference from syr2k. `beta` scales an
+/// already-Hermitian `C` and so is real. Also callable as
+/// `her2k(ctx, A, B, C, Her2kOptions<T>{...})`, with owning `Matrix` arguments,
+/// and without `Ba` (taken from `ctx.backend()`).
+///
+/// @tparam Ba  backend the call is compiled for; must match `ctx`'s device
+/// @tparam T   `std::complex<float>` or `std::complex<double>`
+/// @param ctx     queue the work is enqueued on
+/// @param A       batch of n x k (NoTrans) or k x n (ConjTrans) matrices; not modified
+/// @param B       batch with the same shape as `A`; not modified
+/// @param C       batch of n x n matrices; the `uplo` triangle is updated in place
+/// @param alpha   complex scale of \f$A B^H\f$ (its conjugate scales the mirror term)
+/// @param beta    real scale of the input `C`
+/// @param uplo    which triangle of `C` is written
+/// @param transA  `Transpose::NoTrans` or `Transpose::ConjTrans`
+/// @return event of the last enqueued kernel; `C` is valid once it completes
+/// @pre All operands have the same batch size and conforming shapes per item.
+/// @throws batchlas::dispatch::NoRouteError in a build without the vendor BLAS
+///         for `Ba`: her2k has no native implementation.
+/// @note Not instantiated for `Backend::ROCM`.
+/// @see syr2k, herk, Her2kOptions, @ref md_docs_2cpp-api
+/// @ingroup blas3
 template <Backend Ba, ComplexScalar T>
 BATCHLAS_API Event her2k(Queue& ctx,
                          const MatrixView<T, MatrixFormat::Dense>& A,
@@ -60,14 +80,12 @@ BATCHLAS_API Event her2k(Queue& ctx,
 
 namespace batchlas::backend {
 
-// The vendor path for her2k.
-//
-// DECLARATION ONLY. The public `her2k<Back, T>` used to be DEFINED inside each
-// vendor TU, so dropping a vendor library dropped the public entry point along
-// with the vendor path. WP0 S5 moves that definition to
-// src/dispatch/entry_points/level3.cc; what stays behind is the vendor
-// implementation, named as such. Each vendor wrapper TU defines this primary
-// template for its own Backend value and instantiates it there.
+// Declaration only: each vendor TU defines and instantiates it for its Backend.
+// evidence: docs/design/vendor-independence.md#the-entry-point-facade
+/// @brief Vendor-library implementation of her2k (cuBLAS, host BLAS).
+///
+/// Not an entry point: batchlas::her2k calls it. Same arguments and semantics.
+/// @ingroup dispatch
 template <Backend Back, ComplexScalar T>
 BATCHLAS_API Event her2k_vendor(Queue& ctx,
                                 const MatrixView<T, MatrixFormat::Dense>& A,
@@ -82,10 +100,8 @@ BATCHLAS_API Event her2k_vendor(Queue& ctx,
 
 namespace batchlas {
 
-// Owning-argument and backend-deducing overloads: `f(ctx, Matrix, ...)` accepts
-// owning containers where the primary takes views, and `f(ctx, ...)` uses
-// ctx.backend(). See BATCHLAS_ACCEPT_OWNING and BATCHLAS_DISPATCH_ON_QUEUE in
-// blas/queue-dispatch.hh.
+// Owning-argument (`f(ctx, Matrix, ...)`) and backend-deducing (`f(ctx, ...)`)
+// overloads; see blas/queue-dispatch.hh.
 
 BATCHLAS_ACCEPT_OWNING(her2k)
 

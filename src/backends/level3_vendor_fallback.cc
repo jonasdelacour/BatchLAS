@@ -12,23 +12,14 @@
 #include "trmm_custom_dispatch.hh"
 #endif
 
-// This TU is in BACKEND_COMMON_SOURCES, so it is compiled in EVERY
-// configuration -- including the one with no CUDA object library at all. It is
-// the only file in the level-3 family that names a vendor symbol, which is what
-// lets the four dispatchers leave the cuBLAS gate without being rewritten.
-//
-// The #if is here rather than in the callers on purpose. An `if constexpr`
-// cannot discard a file-scope #include, only a #if can, so putting the guard in
-// the dispatchers would leave their CUDA includes behind and defeat the point.
+// Compiled in EVERY configuration; the only level-3 file naming a vendor symbol.
+// The #if lives here, not in the dispatchers, because only #if drops an #include.
 
 namespace batchlas::backend::detail {
 
 namespace {
 #if !BATCHLAS_HAS_CUBLAS
-// One diagnostic shape for all four, naming the op and the library that would
-// have served it -- the same NoRouteError the facade throws, so a vendor-free
-// failure reads identically whether it came from the entry point or from a
-// tile route giving up half way down.
+// The same NoRouteError the facade throws, so both failure sites read alike.
 [[noreturn]] void no_vendor(dispatch::Op op) {
     dispatch::throw_no_vendor_route<float>(
         op, Backend::CUDA, dispatch::kLevel3Library<Backend::CUDA>);

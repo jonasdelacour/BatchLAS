@@ -1,6 +1,9 @@
 #pragma once
 
-// POTRF's routing table. evidence: docs/perf/potrf.md
+/// @file
+/// @brief POTRF's routing table.
+/// @ingroup dispatch
+// evidence: docs/perf/potrf.md
 
 #include <batchlas/blas/dispatch/route.hh>
 #include <batchlas/blas/dispatch/route_resolve.hh>
@@ -10,20 +13,24 @@
 
 namespace batchlas::dispatch {
 
+/// @brief POTRF routing shape: square, k is the order, plus tier capacities.
+/// @ingroup dispatch
 struct PotrfShape : OpShape {
-    int cta_max_n = 0;    // device-queried local-memory ceiling; 0 = tier absent from this build
-    int tiny_max_n = 0;   // compile-time ceiling (the tier owns no local memory); 0 = absent
-    int lpanel_max_n = 0;  // SLM slice AND MAX_WORK_GROUP_SIZE (one work-item per row)
+    int cta_max_n = 0;    ///< device-queried local-memory ceiling; 0 = tier absent from this build
+    int tiny_max_n = 0;   ///< compile-time ceiling (the tier owns no local memory); 0 = absent
+    int lpanel_max_n = 0;  ///< bounded by the SLM slice AND MAX_WORK_GROUP_SIZE (one work-item per row)
 
-    bool blocked_available = false;
+    bool blocked_available = false;   ///< blocked driver linked
 
-    // MUST come from sycl::info::device::sub_group_sizes: OpShape::max_sub_group reports
-    // entry [0], not the max, so it admits a device that rejects the sg32 launch.
+    /// Sub-group size 32 is available. MUST come from `sycl::info::device::sub_group_sizes`:
+    /// OpShape::max_sub_group reports entry [0], not the max, so it admits a device that rejects the sg32 launch.
     bool has_sg32 = false;
 
-    int64_t order() const { return k; }
+    int64_t order() const { return k; }   ///< order of A
 };
 
+/// @brief POTRF walk order: Tiny, CTA, LPanel, Blocked, the vendor.
+/// @ingroup dispatch
 inline constexpr Route kPotrfOrder[] = {
     {Origin::Native, Algorithm::Tiny},
     {Origin::Native, Algorithm::CTA},
@@ -32,6 +39,14 @@ inline constexpr Route kPotrfOrder[] = {
     {Origin::Vendor, Algorithm::Auto},
 };
 
+/// @brief POTRF routes: `{Native, Tiny}`, `{Native, CTA}`, `{Native, LPanel}`, `{Native, Blocked}` and the vendor.
+///
+/// supports(): square, GPU with sub-group 32, homogeneous batch, the tier's
+/// capacity; LPanel and Blocked are Lower-only. preferred(): the register tier
+/// at n <= 32, and CTA/LPanel at 32 < n <= 256 for Lower float and cfloat,
+/// each answering for exactly one tier. Evidence:
+/// @ref md_docs_2perf_2potrf "docs/perf/potrf.md".
+/// @ingroup dispatch
 template <typename T>
 struct RouteTable<Op::potrf, T> {
     // Correctness only: a speed threshold here removes potrf's vendor-free route.
@@ -105,7 +120,7 @@ struct RouteTable<Op::potrf, T> {
         if (s.tiny_max_n < 1) return false;
         const int64_t n = s.order();
         if (n < 1 || n > static_cast<int64_t>(s.tiny_max_n) || n > 32) return false;
-        if (s.uplo == Uplo::Upper) return true;       // whole tier, every type: 1.42-28.73x
+        if (s.uplo == Uplo::Upper) return true;       // whole tier, every type
         if constexpr (lpanel_types()) return true;    // Lower, float/cfloat: the whole tier
         else return (n >= 2 && n <= 8) || (n >= 12 && n <= 16);   // Lower fp64: fill splits it
     }
@@ -157,7 +172,9 @@ struct RouteTable<Op::potrf, T> {
     }
 };
 
-// vendor_available is solver_vendor_available<B>, NOT the factorization one: differ on CUDA.
+/// @brief resolve_route() for potrf.
+/// @trap `vendor_available` is solver_vendor_available<B>, NOT the factorization one; they differ on CUDA.
+/// @ingroup dispatch
 template <typename T>
 inline Route resolve_potrf_route(Route forced, const PotrfShape& s,
                                  bool vendor_available = true) {

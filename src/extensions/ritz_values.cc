@@ -17,19 +17,7 @@ namespace batchlas {
     template <Backend B, typename T, MatrixFormat MFormat>
     struct RitzValuesKernel {};
 
-    /**
-     * @brief Computes the Ritz values given a matrix and trial vectors
-     * 
-     * Ritz values are approximations to eigenvalues computed from the Rayleigh quotient:
-     * For each column v_j of V: ritz_value[j] = (v_j^T * A * v_j) / (v_j^T * v_j)
-     * 
-     * @param ctx Execution context/device queue
-     * @param A Matrix (can be sparse or dense)
-     * @param V Trial vectors (dense matrix, columns are trial eigenvectors)
-     * @param ritz_vals Output vector for Ritz values
-     * @param workspace Pre-allocated workspace buffer
-     * @return Event Event to track operation completion
-     */
+    // ritz_vals[j] = (v_j^H A v_j) / (v_j^H v_j); contract in blas/extensions.hh.
     template <Backend B, typename T, MatrixFormat MFormat>
     Event ritz_values(Queue& ctx,
                       const MatrixView<T, MFormat>& A,
@@ -154,15 +142,6 @@ namespace batchlas {
         return last_event;
     }
 
-    /**
-     * @brief Computes the required workspace size for ritz_values
-     * 
-     * @param ctx Execution context/device queue
-     * @param A Matrix (can be sparse or dense)
-     * @param V Trial vectors (dense matrix)
-     * @param ritz_vals Output vector for Ritz values
-     * @return size_t Required workspace size in bytes
-     */
     template <Backend B, typename T, MatrixFormat MFormat>
     size_t ritz_values_buffer_size(Queue& ctx,
                                  const MatrixView<T, MFormat>& A,

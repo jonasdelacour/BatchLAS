@@ -1,11 +1,8 @@
 #pragma once
 
-// Native batched GEMV declarations. Bodies and windows: docs/perf/gemv.md
-//
-// gemv is the one native tier NOT gated on is_gpu: the Direct arm must build for
-// native_cpu, so this TU stays out of any NO_CPU_TARGETS object library.
-// Reference-BLAS quick-return is matched exactly -- m == 0, n == 0 or
-// (alpha == 0 && beta == 1) leaves Y untouched, and A is unread when alpha == 0.
+// Native batched GEMV. No is_gpu gate: Direct must build for native_cpu, so keep
+// this TU out of NO_CPU_TARGETS. evidence: docs/perf/gemv.md#the-five-kernel-bodies
+// m == 0, n == 0 or (alpha == 0 && beta == 1) leaves Y untouched; A unread at alpha == 0.
 
 #include "../util/internal-api.hh"
 #include <batchlas/blas/enums.hh>
@@ -40,8 +37,7 @@ Event gemv_native_cta(Queue& ctx,
                       T beta,
                       Transpose transA);
 
-// TEST-ONLY, via the same gate the launcher uses: 1 = one sub-group per output,
-// W >= 2 = the segmented kernel at that W. Pass A.cols() * A.batch_size().
+// TEST-ONLY, launcher's own gate: 1 = body 3, W >= 2 = body 5 at W; pass A.cols()*batch.
 template <typename T>
 BATCHLAS_INTERNAL_API int gemv_seg_trans_width_debug(Queue& ctx, int red_len, int64_t out_len_times_batch);
 

@@ -77,19 +77,8 @@ namespace batchlas {
 
     } // namespace backend
 
-    // Explicit instantiations. Signatures live in the `sig` namespace beside each
-    // public declaration (include/batchlas/blas/functions/*.hh), so changing one is a single
-    // header edit rather than one edit per backend TU. CSR is the only sparse
-    // format rocSPARSE is wired up for here.
-    //
-    // Only the `backend::`-qualified vendor entry points are named here: the
-    // public spmm / spmm_buffer_size are defined and instantiated in
-    // src/dispatch/entry_points/sparse.cc, so a vendor TU that instantiated them
-    // too would collide at link time. There is no BATCHLAS_INSTANTIATE_BACKEND_
-    // FORMAT_OP -- _FORMAT_OP expands to an unqualified op and so cannot spell
-    // `backend::spmm_vendor` -- hence the raw BATCHLAS_INSTANTIATE below, with
-    // BATCHLAS_COMMA smuggling the format argument past macro splitting and
-    // BATCHLAS_UNPAREN stripping the parentheses the type driver hands out.
+    // ONLY `backend::spmm_vendor` (CSR only), via raw BATCHLAS_INSTANTIATE: there is no _BACKEND_FORMAT_OP.
+    // evidence: docs/design/runtime-internals.md#runtime-internals-vendor-tus-instantiate-only-vendor-symbols
     #define ROCSPARSE_OPS(B, fp) \
         BATCHLAS_INSTANTIATE(sig::spmm_vendor<BATCHLAS_UNPAREN fp BATCHLAS_COMMA MatrixFormat::CSR>, \
                              backend::spmm_vendor, B, BATCHLAS_UNPAREN fp, MatrixFormat::CSR) \

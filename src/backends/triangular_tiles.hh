@@ -1,18 +1,10 @@
 #pragma once
 
-// The tile grid the triangular-output kernels share.
-//
-// SYRK and SYR2K both write one triangle of a symmetric n x n C, and both do it
-// by indexing a 128x128 tile grid over the triangular tile set rather than the
-// square one, so that a tile lying entirely outside the requested triangle is
-// never launched. The decode, the tile geometry it counts, and the 128-bit
-// vector type the staging rides on live here so the two kernels cannot drift
-// apart on which half of the grid they visit.
+// The triangular tile grid, packet type and MAC helpers the level-3 tile
+// kernels share, in one place so they cannot drift on which half they visit.
+// evidence: docs/perf/level3.md#syrk-and-syr2k-triangular-tiles-kernel-design
 
-// std::conj below needs <complex>. It compiled without it only because every
-// consumer in the CUDA build happens to include <complex> earlier through
-// linalg-impl.hh; including this header first, or from a non-CUDA translation
-// unit, fails with "no member named 'conj' in namespace 'std'".
+// <complex> is needed for std::conj even if a CUDA consumer included it first.
 #include <complex>
 #include <type_traits>
 #include <sycl/sycl.hpp>
@@ -53,23 +45,9 @@ inline T conj_if(const T& value) {
     }
 }
 
-// accum + a * b, written out rather than delegated to std::complex.
-//
-// `std::complex<float>::operator*` lowers to the __mulsc3 libcall, which
-// implements C99 Annex G -- a branch on Inf and NaN around every single
-// multiply. In the innermost loop of a GEMM that is ruinous and it is invisible
-// in the source: the first complex build of the Gram kernel ran at 1.2 TFLOP/s
-// against float's 13.8, and at n = 128 took 38 ms where a cuBLAS GEMM took 1.5.
-// Four real multiplies and two adds is the whole operation, and it folds to the
-// four FMAs a complex MAC should be; there is no exceptional case here worth a
-// branch, because a NaN in the input is already a NaN in the answer.
-//
-// Returns the new accumulator rather than updating one through a reference.
-// That is not a style choice: taking the address of an element of the
-// register-resident accumulator array is enough for the compiler to stop
-// believing it can stay in registers, and the array goes to local memory. It
-// cost 43% on float at m = 512 (0.659 -> 0.944 ms) when this was first written
-// with a `T&` out-parameter, with no other change.
+// accum + a * b, written out: std::complex operator* is the __mulsc3 libcall.
+// Returns by value on purpose: a `T&` into the accumulator array spills it.
+// evidence: docs/perf/level3.md#level-3-the-complex-mac-and-return-by-value-rules
 template <typename T>
 inline T accumulate(const T& accum, const T& a, const T& b) {
     if constexpr (is_std_complex_v<T>) {
@@ -97,18 +75,9 @@ inline void tile_store4(T* p, const TileVec4<T>& in) {
     }
 }
 
-// Four contiguous elements into registers.
-//
-// For float the 4-wide packet is exactly a 128-bit LDS and the reinterpret is
-// how we get one. For anything wider it is not: four doubles are 32 bytes and
-// four complex<double> are 64, which no load form covers, and -- worse -- the
-// reinterpret asserts an alignment `sycl::local_accessor` never promised, since
-// it aligns to T and not to 4*sizeof(T). So wider scalars stay scalar. This is
-// the only thing standing between these kernels and a misaligned access in
-// double, and it is silent when wrong.
-//
-// Returned by value for the same reason `accumulate` is: an out-parameter array
-// reference is an address the fragment registers do not survive.
+// Four contiguous elements into registers, by value. Trap: 128-bit only for
+// float; a wider reinterpret assumes an alignment local_accessor never promised.
+// evidence: docs/perf/level3.md#level-3-the-complex-mac-and-return-by-value-rules
 template <typename T>
 inline TileVec4<T> tile_load4(const T* p) {
     if constexpr (sizeof(T) == sizeof(float)) {

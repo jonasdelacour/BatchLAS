@@ -4,7 +4,7 @@
 head-to-head against cuSOLVER `gesvdjBatched`, the four defects that decided the plan, the
 one-sided Jacobi kernel (`gesvdj_cta`), the bidiagonal solvers for the blocked path
 (`bdsdc`, `bdsqr`, normal equations), the preconditioning tier that was tested and rejected,
-and the instrument bugs found along the way.
+the gebrd panel width, and the instrument bugs found along the way.
 **Status:** current for routing and the kernels in the tree; sections marked *historical*
 record the state before a later change and say which change superseded them.
 **Machine:** 2x RTX 4090 (sm_89), one GPU pinned per run (`CUDA_VISIBLE_DEVICES=1`,
@@ -387,7 +387,17 @@ float, full vectors:
 `BATCHLAS_GESVD_BIDIAG=normal` restores the normal equations, `=bdsqr` the sequential
 sweep. `bdsqr` keeps one advantage: zero-shift QR keeps relative accuracy for tiny
 \f$\sigma\f$ where divide and conquer does not (\f$\kappa=10^6\f$, n=64: relerr 0.198 vs 0.497),
-at 300-400x the cost.
+at 300-400x the cost. That cost is structural, not a tuning problem: `bdsqr` runs one
+*thread* per matrix with the whole sweep serial inside it, and values-only `bdsqr` at n=128
+(59 ms) is already 7x the entire normal-equations pipeline including its back-transforms.
+
+Workspace consequence: the bidiagonal solver's own workspace (for `bdsdc`, a
+\f$2k \times 2k\f$ eigenvector matrix per item plus `stedc` at order \f$2k\f$) is the dominant
+term of `gesvd_native_buffer_size` on a direct solve. `bdsqr`'s used to fit inside the
+tridiagonal path's over-allocation by accident; `bdsdc`'s does not, which is why the sizing
+function mirrors the run path's direct-solve branch exactly. The per-item eigenvector matrix is
+about 4x what the tridiagonal path allocates; `BATCHLAS_GESVD_BIDIAG=normal` trades that memory
+back for the squared condition number.
 
 **Values floor above 32.** `bdsdc` cannot fix \f$\sigma\f$ at \f$\kappa = 10^6\f$ (0.52
 relative): that is `gebrd`'s own backward-stability floor, since it perturbs A by
@@ -466,12 +476,17 @@ panel-serial bidiagonalisation. float, batch=256, full vectors, ms:
 
 Blocked n=40 was 1.25 ms, so the blocked curve is continuous across the CTA hand-off. Blocked
 won at every n from 33 up in both types; the old threshold of 128 was never a measured
-tuning constant. n=127 cost 101x what n=128 cost. Double, batch=256: n=64 107.8 → 10.6 ms (10.2x), n=127 646.9 →
+tuning constant. n=127 cost 101x what n=128 cost, and n=64 cost 16x what a problem eight
+times larger cost. Double, batch=256: n=64 107.8 → 10.6 ms (10.2x), n=127 646.9 →
 36.8 ms (17.6x). Accuracy unchanged (n=64, \f$\kappa=10^4\f$, float, 512 samples: ortho 1.78e-5 →
-1.79e-5, residual 1.29e-6 → 1.32e-6). The plan set the threshold to 33 (`50fb37a`).
-*Superseded* by `fea82ed`: the threshold is now **1**, because tall input with
-\f$n \le 32 < m\f$ fails both CTA predicates and lands here. m=1024, batch=128, float,
-`jobu=None jobvh=All`, µs per matrix:
+1.79e-5, residual 1.29e-6 → 1.32e-6). The plan set the threshold to 33 (`50fb37a`), on the
+reasoning that the CTA path takes over below it.
+*Superseded* by `fea82ed`: the threshold is now **1**, because that reasoning holds only for
+square input. The CTA and Jacobi predicates both require \f$\max(m,n) \le 32\f$, so tall input
+with \f$n \le 32 < m\f$ fails both and lands here, where the m rows make the level-2 path
+ruinous. No benchmark covered that band (it needs \f$\min(m,n) \le 32\f$ to reach it and
+\f$m > 32\f$ to be slow) because every gesvd benchmark built a square `Random(n, n)` until the
+m/n split. m=1024, batch=128, float, `jobu=None jobvh=All`, µs per matrix:
 
 | n | 8 | 16 | 24 | 32 |
 |---|---|---|---|---|
@@ -479,9 +494,41 @@ tuning constant. n=127 cost 101x what n=128 cost. Double, batch=256: n=64 107.8 
 | blocked | 2.15 | 5.69 | 9.42 | 14.15 |
 | speedup | 64x | 106x | 163x | 179x |
 
-Square input is faster blocked too (8x8 0.935 → 0.370 µs, 32x32 48.67 → 1.84 µs).
-The current grid is in the comment above `gesvd_use_blocked_gebrd`
-(`src/extensions/gesvd_blocked.cc`); `BATCHLAS_GESVD_BLOCKED_GEBRD_MIN` overrides it.
+Square input is faster blocked too (8x8 0.935 → 0.370 µs, 32x32 48.67 → 1.84 µs, 26x), so
+there is no n at which the unblocked path is the right choice and the threshold is a floor,
+not a tuned constant. The threshold lives in `gesvd_use_blocked_gebrd`
+(`src/extensions/gesvd_blocked.cc`). `BATCHLAS_GESVD_BLOCKED_GEBRD_MIN` overrides it, which is
+how the tables above were taken; set it above the largest n to get the unblocked path back.
+The setting is parsed with bare `atoi` on purpose: an unparseable value yields 0, which is
+*below* the default of 1 and so silently widens the blocked path rather than falling back to
+the unblocked one. Routing it through `env_int_or` would change that.
+
+## gesvd: the gebrd panel-width split from ORMQR
+
+`gebrd_blocked`'s panel width is `tuning::gebrd_block_size_for_n` (`GEBRD_BLOCK_SIZE_*` in
+`include/batchlas/tuning_params.hh`). Until `ca349b73` (2026-08-06) `gesvd` sized its
+bidiagonal reduction from `ORMQR_BLOCK_SIZE_*`, an unrelated kernel with the opposite gradient
+(flat for gebrd, 2.16x between 16 and 56 for ormqr), so one knob pinned the steep parameter at
+the flat one's optimum. Only 2 of the 13 `ormqr_block_size_for_n` call sites were gebrd (the
+solve and its buffer-size twin, which must move together). Verified orthogonal after the split,
+gesvd n=512, batch=256, float, RTX 4090:
+
+| setting | gebrd | left back-transform |
+|---|---|---|
+| baseline | 230.1 ms | 18.33 ms |
+| `BATCHLAS_TUNE_GEBRD_BLOCK_SIZE=48` | 260.8 ms | 18.39 ms (only gebrd moves) |
+| `BATCHLAS_TUNE_ORMQR_BLOCK_SIZE=48` | 230.7 ms | 14.78 ms (only ormqr moves) |
+
+Before the split the ORMQR override at 48 moved both and cost gesvd-with-vectors 7.9%; after it, the
+same value is a 1.8% win (1136.7 → 1116.9 µs). The split shipped 16 in every bucket, exactly the
+old values, so it changed no behaviour by itself.
+
+The retune that used it (`924b3a59`, 2026-08-07, float, A/B'd end to end at the consumers) set
+`GEBRD_BLOCK_SIZE_{SMALL,MEDIUM} = 8` (the small sizes want 8, n ≥ 512 wants 16). gesvd
+before → after for the whole retune (which also moved ORMQR, stedc and sy2sb constants, so
+these are not gebrd-only): n=128 batch=1024 9.2465 → 8.0684 ms (1.146x); n=256 batch=512
+94.987 → 92.016 ms (1.032x); n=512 batch=256 with vectors 1143.3 → 1110.3 ms (1.030x). As with
+all tuning in the tree, this was float-only.
 
 ## gesvd: the non-finite generator that corrupted the instrument
 
@@ -523,6 +570,11 @@ is worse because it is invisible.
 - **Graded-matrix harness arm and a meaningful `ok` predicate** in `gesvd_relacc` (defect C).
 - **The n=32 → 33 cliff for real input.** A \f$C = 48\f$ rung would help 33..48 but needs
   \f$P = 16\f$ (three rows per lane); a separate measured change.
+- **Rescale headroom on the C=64 rung.** `gesvdj_cta`'s global rescale reduces `nmax`/`nmin`
+  over columns `lane < CC` only, so columns 32..63 do not influence \f$\beta\f$. Correctness is
+  unaffected (\f$\beta\f$ is a power of two), but the overflow/underflow headroom for graded
+  33..64 input is narrower than the scaling argument in @ref design_gesvd claims. Observed,
+  not measured; a fix would cover all C columns in C/P passes, as the exact-norm reduction does.
 - **`complex<double>` with vectors** stops at 32 (local memory; see @ref design_gesvd).
 - **Tall-skinny route** (QR, then SVD of R, then \f$U = Q U_R\f$): the `gesvdaStridedBatched`
   domain, where cuSOLVER's offering is only approximate. `SvdVectors::Thin` (`2fcc1db`,

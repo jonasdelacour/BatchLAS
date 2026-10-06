@@ -10,7 +10,7 @@ windows), plus the dispatch machinery every op uses. The same four ops' kernel d
 [`level3.md`](level3.md); this page is the routing half. Measured windows for `gemm`, `trsm`, `potrf`,
 `geqrf`/`orgqr`, `getrf`/`getrs`/`getri`, `gemv` and `spmm` live with their own packages.
 
-## The three axes
+## Dispatch: the three axes
 
 Three questions were previously answered by one enum. They are now separate:
 
@@ -39,7 +39,7 @@ NVIDIA, so vendor independence must be measurable without them (`route.hh:20-57`
 
 ## What ships
 
-### The resolver
+### Dispatch: the resolver as shipped
 
 `dispatch::resolve_route<Op, T>` (`route_resolve.hh:85-103`) wraps a pure `resolve_route_uninstrumented` (`:89-176`).
 Rules, as implemented:
@@ -146,6 +146,17 @@ was simultaneously "no opinion" to one and "pin the tile kernel" to the other (`
 is now one parse and one value, pinned by `tests/route_vocabulary_tests.cc:223-231`. `legacy_unset_default` returns
 `{Auto, Auto}` for every op (`route_env.hh:88-91`, with the WP2 E6 rationale at `:123-144`);
 GEMM used to be the odd one out at `{Vendor, Auto}`, and WP2 E6 removed the asymmetry.
+
+`parse_cublasdx_variant_request`, which used to live in `src/backends/route_common.hh`, turned a
+`BATCHLAS_<OP>_VARIANT` string into one of three per-op enum values and was the last of the five
+non-communicating environment mechanisms the WP0 plan named. All four callers now go through
+`dispatch::parse_route_env`, so the asymmetry it documented (an **unset** variable meant Auto there but Vendor for
+GEMM) was recorded once, on `dispatch::legacy_unset_default`, before WP2 E6 removed it. `route_common.hh` itself is the
+backend-neutral half of the old `cublasdx_dispatch_common.hh`, carved out because that header includes
+`<cuda_runtime_api.h>` for `cudaStream_t`, which made every consumer (including `triangular_expand.hh` and the
+portable symm/syrk/syr2k/trmm route selectors) CUDA-only. Names were kept unchanged so the split was a pure relocation;
+`should_use_cublasdx` now reads oddly, since it decides between a vendor route and *any* custom route, and renaming it
+is owed as its own commit.
 
 ## Measured boundaries
 
@@ -385,6 +396,45 @@ Wrong answers found, how they hid, and what guards them now.
   `her2k_gemm_preferred` returned false and sent it to a per-batch loop — one sequential launch per batch member, for
   every panel with n2 > 128. Both halves now live together in `expansion_budget.hh:85-101`.
 
+## Dispatch: buffer-size queries and the route they size
+
+The facade's `*_buffer_size` queries (`src/dispatch/entry_points/`) follow four rules. Each exists because breaking it
+gave a wrong or failing workspace.
+
+1. **Size the max over every supported tier, not the chosen route.** A query and its call resolve independently, so a
+   chosen-only size under-allocates wherever they disagree, while `max()` merely over-allocates. The `ormqr` 108x
+   disagreement under [Correctness findings](#correctness-findings) is what that looks like.
+2. **Detect "a native tier answered" with a flag, not with the size.** The CTA and Tiny `geqrf` tiers and the native
+   `spmm` legitimately need **zero** bytes, so `native_need != 0` cannot tell "no native tier supports this shape" from
+   "one does and needs nothing"; without the flag a shape only Tiny supports throws from
+   `geqrf_throw_native_unimplemented` while the call itself succeeds. `potrf` reads `native_need == 0` instead, which
+   is honest only while every potrf tier has a non-zero workspace (Tiny and CTA both draw `batch` int32s of info
+   scratch). `potrf`'s `{Native, LPanel}` became reachable from Auto in P3 and has to be sized too: a device whose CTA
+   capacity is 0 refuses CTA and Blocked (which inherits CTA's presence gate), leaving `native_need == 0` and throwing
+   for exactly the shapes `potrf()` then runs on LPanel.
+3. **A native-routed call is not sized by the vendor.** Two vendor sizers are unusable for a native call.
+   `orgqr`'s vendor arm is a per-item loop, so its size is batch-**linear** (single × batch): about **4.6 GB** at
+   cdouble n=64, batch 8192, which the caller would allocate for a shape the native arm serves in a few megabytes
+   (see [the orgqr latent defect](qr.md#the-orgqr_buffer_size-latent-defect)). `spmm`'s vendor sizer builds an
+   `SpmmCsrBatchPlan` that walks the CSR row offsets from the host: on device USM a blocking full-array copy plus a
+   queue drain, on shared USM an unsynchronised read that also migrates the offsets. Running it made the sizing query
+   for a zero-workspace route touch device memory and left the vendor-free path dependent on cuSPARSE. Query and call
+   share one route function with identical arguments, so the `max()` there only ever guarded a `getenv` change between
+   the two.
+4. **The vendor path sizes itself from the vendor query, never from the public one.** In `src/backends/cusolver.cc`
+   `potrf_vendor` sized its workspace with an unqualified `potrf_buffer_size`, and lookup escaped
+   `batchlas::backend` to find the **facade** query. While facade == vendor this was invisible; once the public query
+   returned `max(native, vendor)` it handed a batch-1 cuSOLVER call the native workspace size, silently: the pool was
+   sized by the same public query and both terms are alignment multiples, so `pool.allocate` fits exactly and only
+   `cusolverDnXpotrf` sees the wrong number, as its workspace-size argument. The call is now spelled
+   `backend::potrf_vendor_buffer_size`.
+
+`geqrf` has one more constraint: `band_reduction.cc` sizes against an `(m_max x nb_max)` dummy view and calls with a
+smaller sub-view, so every native `geqrf_*_buffer_size` must be monotone non-decreasing in (rows, cols, batch) and must
+never dereference `A.data_ptr()` or `tau.data()`, both `nullptr` there. `getri_buffer_size` runs under
+`BumpAllocator::measuring()` (`inv.cc` replays its layout through it), so everything reachable from it must be pure
+with respect to the workspace.
+
 ## Dispatch: the coverage instrument
 
 Two tables, answering different questions (`coverage.hh:11-25`). **static** (`linked`) iterates the route predicates
@@ -469,13 +519,18 @@ names moved to `BACKEND_COMMON_SOURCES` (`src/backends/CMakeLists.txt:136-141`).
 7. **Level-3 non-float is still cuBLAS-only.** `syrk`'s gram branch and `trmm`'s tile branch for double/complex are
    reachable only from `cublas.cc`, and **`syr2k` has no non-float tile route at all** — `syr2k_triangular_tiles` has
    exactly one call site in the tree, in the float-only dispatcher.
-8. **The static coverage table's `trsm` row is hardcoded `false`** (`src/dispatch/coverage.cc:168`) after WP3 shipped
-   a native `trsm`. The `linked` half answers "does this build have a native route *registered*", not "is there a
-   native kernel", and it is stale in both directions. Read the `reached` rows and the resolved route.
-9. **A stale comment claims a build option that does not exist.** `route_resolve.hh:85-103` says `record_if_enabled`
-   "compiles to nothing unless the build was configured with `-DBATCHLAS_ENABLE_COVERAGE=ON`"; the gate has been a
-   runtime bool since the weak-symbol incident, and `cmake/BatchLASOptions.cmake:109` states the option was
-   deliberately never added (`tests/route_vocabulary_tests.cc:742` repeats the stale claim). And a coverage row cannot
+8. **RESOLVED (re-checked 2026-09-30): the static coverage table's `trsm` row was hardcoded `false`**
+   (`src/dispatch/coverage.cc`) after WP3 shipped a native `trsm`. WP3 shipped `trsm_native_cta` and
+   `trsm_native_blocked`, and `trsm_blocked_available<T>()` is true for all four scalar types, so by the column's own
+   meaning (is the kernel in this build) the row was stale in the direction that makes the burn-down look worse than
+   it is. The row now reads `true`. The general caution stands: the `linked` half answers "does this build have a
+   native route *registered*", not "is traffic reaching it". Read the `reached` rows and the resolved route.
+9. **Partly resolved (re-checked 2026-09-30): a stale comment claimed a build option that does not exist.**
+   `route_resolve.hh` used to say `record_if_enabled` "compiles to nothing unless the build was configured with
+   `-DBATCHLAS_ENABLE_COVERAGE=ON`"; neither it nor `tests/route_vocabulary_tests.cc` carries that claim any more, and
+   `include/batchlas/blas/dispatch/coverage.hh` now names the flag only as the historical cause of the weak-symbol
+   incident. The gate is a runtime bool, and `cmake/BatchLASOptions.cmake:109` states the option was deliberately
+   never added. What remains open: a coverage row cannot
    confirm that a particular shape ran: rows are keyed on a power-of-two `shape_class`, first-writer-wins, so the
    m/n/k/batch columns can report a *different* call's shape. Prove a shape with a break that is red only for it.
 10. **`symm_benchmark`, `syrk_benchmark` and `syr2k_benchmark` abort before printing anything** — a SYCL scheduler

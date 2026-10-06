@@ -1,44 +1,11 @@
 #pragma once
 
-// A batched TRMM that actually skips the zero half of A.
-//
-// Until now nothing in this tree did. `src/extensions/trmm.cc` recurses only
-// until the block is 256 wide and then calls the very GEMM it is meant to
-// replace, so for any ib in {16,32,64,128,256} -- which is every block size
-// ormqr and ormbr use -- the triangular structure was never exploited at all.
-// On CUDA the operation does not even reach that recursion: `trmm_vendor_impl`
-// expands the triangle into a k x k x batch scratch buffer and hands the result
-// to a full GEMM, paying an extra write and an extra read of the expansion for
-// the privilege of doing twice the arithmetic. PR #61 measured the consequence
-// and correctly refused to use trmm anywhere.
-//
-// The structure worth exploiting is in the k loop, not in a mask. For
-// C = alpha * op(A) * B with op(A) upper triangular, output row i only ever
-// touches op(A)_{i,p} for p >= i, so an output tile starting at row m0 can
-// start its reduction at p = m0 and skip everything before it -- a loop bound
-// rather than a predicate, so the arithmetic is not done and then discarded.
-// Only the one k-tile straddling the diagonal needs masking, and that mask
-// lives in the A staging where the tile is small and read once.
-//
-// How much that saves depends entirely on how many row tiles m covers, and it
-// is worth being precise because it is not the textbook 2x: with R row tiles
-// the reduction shrinks to (R+1)/2R of the square, so 1.0x at R = 1, 1.33x at
-// R = 2, and only 1.78x by R = 8. Getting R above 1 is the single thing that
-// decides whether this beats a GEMM -- see `trmm_row_tile`, which is where the
-// scalar type enters.
-//
-// Which end of the reduction is skipped comes from uplo and trans together:
-// transposing an upper triangle gives a lower one, so the kernel keys off
-// `lower_eff = (uplo == Lower) != transposed` and nothing else.
-//
-// The tile is sized to m rather than fixed at 128, for the same reason the Gram
-// SYRK kernel next door sizes its tile to n: ormqr's W2 = T^H W1 has m = ib in
-// the tens, and a 128-row tile would spend four times the arithmetic on it.
-//
-// Shared layout, staging and the packet swizzle are those of
-// syrk_gram_tiles.hh -- an aligned stride so the fragment loads issue as
-// LDS.128, and a packet rotation by reduction-row group so the staging writes
-// that have to transpose do not all land in the same bank.
+// A batched left-side TRMM that skips the zero half of op(A) with a k-loop
+// bound, not a mask: an output tile rooted at row m0 reduces only over the p its
+// triangle reaches; only the diagonal k-tile is masked, in the A staging. The
+// saving is (R+1)/2R for R row tiles, so the row tile is sized to m (see
+// trmm_row_tile). Layout, staging and swizzle follow syrk_gram_tiles.hh.
+// evidence: docs/perf/level3.md#trmm-triangular-tiles-kernel-design
 
 #include "triangular_tiles.hh"
 
@@ -61,11 +28,8 @@ namespace batchlas::backend::detail {
 inline constexpr int kTrmmTileN = 128;
 inline constexpr int kTrmmTileK = 16;
 
-// Threads per side of the tile, and hence the per-thread tile. A 128-wide side
-// gets 16 lanes of 8; anything narrower keeps the 4-wide band the vectorized
-// fragment load is built on and drops lanes instead. That is what fixes the
-// 16-row tile at 4 lanes: ThreadRows must stay a multiple of 4, and 16/8 = 2 is
-// not one, so the lanes go rather than the band.
+// Threads per side of the tile. Narrow sides drop lanes, never the 4-wide band:
+// ThreadRows must stay a multiple of 4 (hence 4 lanes for the 16-row tile).
 inline constexpr int trmm_lanes(int tile) {
     if (tile >= 64) return 16;
     return tile >= 32 ? 8 : 4;
@@ -88,19 +52,9 @@ Event launch_trmm_triangular_tiles(Queue& ctx,
     constexpr int TileN = kTrmmTileN;
     constexpr int TileK = kTrmmTileK;
     constexpr int LocalRows = trmm_lanes(TileM);
-    // A complex scalar halves how many elements the shared path delivers per
-    // clock while leaving the FMA rate per element alone, so the fragment-to-
-    // FFMA ratio that is comfortable in float becomes the binding constraint:
-    // a 4x8 thread tile reads 12 complex and issues 32 complex MACs, which
-    // needs 2.67 MAC per load against a capability of 2. Widening the thread
-    // tile to 4x16 takes it to 3.2 and puts the kernel back on the FMA pipe.
-    // Halving the lane count is what pays for it, and the row tiling -- where
-    // the triangle saving lives -- is left untouched.
-    //
-    // Only at the 64-row tile, though. At the 32-row tile the block is already
-    // down to 64 threads and halving the lanes again costs more in outstanding
-    // loads than the ratio buys -- that end is bandwidth bound, not FMA bound,
-    // and measured 0.374 -> 0.424 ms at m = 32.
+    // Complex at TileM >= 64 halves the column lanes (4x16 thread tile) to raise
+    // MACs per shared load; not at 32 rows, where it measured slower.
+    // evidence: docs/perf/level3.md#trmm-triangular-tiles-kernel-design
     constexpr int LocalCols = (is_std_complex_v<T> && TileM >= 64)
                                   ? trmm_lanes(TileN) / 2
                                   : trmm_lanes(TileN);
@@ -199,15 +153,9 @@ Event launch_trmm_triangular_tiles(Queue& ctx,
                 const int p_end = lower_eff ? sycl::min(m, m0 + TileM) : m;
 
                 for (int p0 = p_begin; p0 < p_end; p0 += TileK) {
-                    // op(A): rows [m0, m0+TileM) against reduction [p0, p0+TileK),
-                    // with the triangle, the unit diagonal and the edges of the
-                    // matrix all resolved here, so the inner loop sees a dense
-                    // tile and the zero half is never multiplied.
-                    // op(A) is read down i when it is not transposed and down p
-                    // when it is, and the staging assignment has to follow -- a
-                    // warp walking i over a transposed A strides by lda and each
-                    // lane pulls its own 32-byte sector, which measured as the
-                    // dominant cost before the split.
+                    // op(A) tile: triangle, unit diagonal and edges resolved
+                    // here, so the inner loop sees a dense tile. The staging
+                    // assignment must follow op(A)'s contiguous direction.
                     if (transposed) {
                         for (int flat = tid; flat < PacketsA; flat += Threads) {
                             const int i = m0 + flat / (TileK / 4);
@@ -219,10 +167,7 @@ Event launch_trmm_triangular_tiles(Queue& ctx,
                                 const int p = p0 + pp0 + e;
                                 T value = T(0);
                                 if (i < m && p < m) {
-                                    // ConjTrans means op(A) = A^H, so the
-                                    // element is conjugated on the way in. The
-                                    // unit diagonal is a literal 1 and has
-                                    // nothing to conjugate.
+                                    // ConjTrans conjugates on the way in; a unit 1 has nothing to conjugate.
                                     if (i == p) {
                                         value = unit
                                             ? T(1)
@@ -243,12 +188,8 @@ Event launch_trmm_triangular_tiles(Queue& ctx,
                         const int ii0 = (flat % PacksA) * 4;
                         const int p = p0 + pp;
                         const int phys = swizzle_a(ii0 >> 2, pp) << 2;
-                        // The four rows a thread stages are adjacent in shared,
-                        // so they go back as one 128-bit store. Writing them
-                        // singly would put every lane of the warp on one of only
-                        // eight banks -- the row stride is a multiple of 32, so
-                        // it drops out, and a single-element store cannot spread
-                        // wider than the packet index does.
+                        // One packet store, not four scalar ones: single stores
+                        // would put the warp on eight banks.
                         TileVec4<T> packet;
 #pragma unroll
                         for (int e = 0; e < 4; ++e) {
@@ -269,9 +210,7 @@ Event launch_trmm_triangular_tiles(Queue& ctx,
                     }
                     }
 
-                    // B: reduction rows [p0, p0+TileK) against columns
-                    // [n0, n0+TileN). B is contiguous down its row index, so a
-                    // thread takes four adjacent reduction rows of one column.
+                    // B tile: four adjacent reduction rows of one column per thread.
                     for (int flat = tid; flat < PacketsB; flat += Threads) {
                         const int col = flat / (TileK / 4);
                         const int pp0 = (flat % (TileK / 4)) * 4;
@@ -345,10 +284,8 @@ Event launch_trmm_triangular_tiles(Queue& ctx,
     return ctx.get_event();
 }
 
-// Everything the kernel needs from the problem, independent of scalar type and
-// of the queue. Left side only: the right-side product C = alpha * B * op(A)
-// puts the triangle on the column index, which is a different k-loop bound and
-// a different staging assignment, not a transpose of this one.
+// Problem-side support. Left side only: Side::Right puts the triangle on the
+// column index, a different loop bound and staging, not a transpose of this one.
 template <typename T>
 bool trmm_tiles_supported(const MatrixView<T, MatrixFormat::Dense>& A,
                           const MatrixView<T, MatrixFormat::Dense>& B,
@@ -372,68 +309,26 @@ bool trmm_tiles_supported(const MatrixView<T, MatrixFormat::Dense>& A,
     return C.rows() > 0 && C.cols() > 0;
 }
 
-// How wide a row tile to cut m into, which is the kernel's one real trade-off.
-//
-// R = m/TileM row tiles shrink the reduction to (R+1)/2R of the square, so a
-// smaller tile does strictly less arithmetic: 1.0x at R = 1, 0.75x at R = 2,
-// 0.5625x at R = 8. It also re-reads B, because each row tile stages its own
-// copy of the reduction range it needs -- (R+1)/2 times over in the worst case,
-// though in practice much of that is L2 hits.
-//
-// Which of the two dominates is decided by the scalar type, not by the shape:
-//
-//   float   is bandwidth bound at these sizes -- intensity is m/4 flop per byte
-//           against a ridge near 40 -- so paying B twice to save a quarter of
-//           the arithmetic is a bad trade, and the widest tile that fits wins.
-//   double  runs at 1/64 rate on this part, which puts the ridge near 1.4 flop
-//           per byte and the problem far on the compute side of it. There the
-//           arithmetic is the whole cost and B's re-read is close to free, so
-//           the narrowest tile wins. Complex is the same argument: a complex
-//           multiply is four real ones.
-//
-// This is why one threshold cannot serve both, and why the first version of
-// this kernel -- tuned on float alone, one tile for m <= 128 -- could not beat
-// a GEMM at m = 128 in any type: R = 1 saves nothing at all.
-//
-// The 32-row tile used to be the floor, which left ormqr's WY update -- m = ib,
-// in the tens -- with R = 1 and no saving at all, and at m = 16 with half the
-// tile masked off at the epilogue after the arithmetic had already been issued.
-// A 16-row tile fixes both, and measured through ormqr_blocked_benchmark
-// (n 256/512, batch 128-256, ib 16/32/64) it goes exactly where the argument
-// above says it should -- tile16 against tile32:
-//
-//   double           1.007x - 1.022x   wins at every ib, including 64
-//   complex<double>  0.995x - 1.040x   wins to ib 32, a wash at 64
-//   complex<float>   0.993x - 1.026x   wins to ib 32, a wash at 64
-//   float            0.966x - 0.997x   loses everywhere, as predicted
-//
-// float losing is the B re-read, which is the same reason 32 loses to 64 for it
-// further up. The thresholds below are that table.
+// How wide a row tile to cut m into: less arithmetic ((R+1)/2R) against more
+// B re-reads. The scalar type decides: bandwidth-bound float wants the widest
+// tile, compute-bound double and complex the narrowest. The thresholds below
+// are the measured tile16/tile32/64/128 tables, sm_89 only.
+// evidence: docs/perf/level3.md#trmm-choosing-the-row-tile-by-scalar-type
 template <typename T>
 inline int trmm_row_tile(int m) {
     constexpr bool complex_t = is_std_complex_v<T>;
     constexpr bool wide = sizeof(typename base_type<T>::type) > 4 || complex_t;
     if constexpr (wide) {
-        // Complex stops at 32 because its 64-row cell measured a wash either
-        // way (0.993x in complex<float>), and the wider tile keeps more of the
-        // block: at TileM 16 the launch is down to 64 threads.
         if (m <= (complex_t ? 32 : 64)) {
             return 16;
         }
-        // Never 128. Beyond the argument above, a 128x128 tile is an 8x8 thread
-        // tile, which in complex<double> is 256 registers of accumulator alone
-        // -- 256 threads x 256 is the entire 65536 a work-group gets, and the
-        // runtime rejects the launch rather than spilling.
+        // Never 128: complex<double> 8x8 accumulators exhaust the work-group
+        // register file and the runtime rejects the launch rather than spilling.
         return m <= 64 ? 32 : 64;
     } else {
         if (m <= 32) {
             return 32;
         }
-        // Measured, float, against the GEMM (ms): at m = 128 nC = 512 batch
-        // 1024, TileM 32/64/128 gives 0.663 / 0.658 / 0.699 against a GEMM's
-        // 0.674 -- so 128 loses and 64 wins. 32 is worse than 64 everywhere,
-        // which is the B re-read showing up. Only at m = 1024 does 128 come
-        // back ahead (1.146 vs 1.180).
         return m <= 512 ? 64 : 128;
     }
 }
@@ -447,10 +342,7 @@ Event trmm_triangular_tiles(Queue& ctx,
                             Transpose transA,
                             Diag diag) {
     const int m = static_cast<int>(C.rows());
-    // BATCHLAS_TRMM_TILE_M pins the row tile so the trade-off below can be
-    // swept from one binary.
-    // 0 means "unset" at this site; the real default is a function of m and is
-    // applied on the next line. Not latched, as before.
+    // BATCHLAS_TRMM_TILE_M pins the row tile for sweeps; 0 = unset (not latched).
     const int forced = batchlas::settings().geometry.trmm_tile_m;
 
     const int tile_m = forced ? forced : trmm_row_tile<T>(m);

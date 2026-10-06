@@ -1,11 +1,8 @@
 #pragma once
 
-// The TRSM shape builder and route resolution.
-//
-// This lives in src/ rather than in the route table header for one reason:
-// route_resolve.hh:19-20 requires the table to read ONLY its arguments -- no
-// getenv, no SYCL query -- so everything that has to ask the device or the
-// environment happens here, and the table sees a plain struct.
+// The TRSM shape builder and route resolution: every device and environment
+// query, so the route table stays pure.
+// evidence: docs/perf/trsm.md#the-shape-builder-and-the-field-mapping
 
 #include <batchlas/blas/dispatch/route_env.hh>
 #include <batchlas/blas/dispatch/route_trsm.hh>
@@ -19,14 +16,8 @@
 
 namespace batchlas::backend {
 
-// nullopt means "these two views do not describe one TRSM". OpShape is a POD of
-// scalars and cannot represent disagreement, so absence is the honest encoding;
-// a caller with no shape takes the vendor. Same pattern as gemm_op_shape
-// (src/backends/gemm_variant.hh).
-//
-// NOTE the batch check. trsm_validate_params (functions/trsm.hh:39) does NOT
-// compare A.batch_size() to B.batch_size(), so this is the only place that
-// disagreement is caught before a kernel would index off the end of one of them.
+// nullopt = "these views do not describe one TRSM" -> the vendor. The batch
+// check is the only one in the tree: trsm_validate_params does not compare them.
 template <typename T>
 inline std::optional<dispatch::TrsmShape> trsm_op_shape(
     const Queue& ctx,
@@ -40,14 +31,12 @@ inline std::optional<dispatch::TrsmShape> trsm_op_shape(
     dispatch::TrsmShape s;
     s.op = dispatch::Op::trsm;
     s.scalar = dispatch::scalar_kind_of<T>;
-    // m, n are B's extents; k is the TRIANGULAR ORDER. s.n is NOT the triangular
-    // order, which is why the table only ever reads tri_order() / rhs_count().
+    // m, n are B's extents; k is the TRIANGULAR ORDER (read via tri_order()).
     s.m = B.rows();
     s.n = B.cols();
     s.k = A.rows();
     s.batch = A.batch_size();
-    // supports() refuses a heterogeneous batch; without this the field keeps
-    // OpShape's default false and that correctness gate can never fire.
+    // Without this, supports()'s heterogeneous refusal can never fire.
     s.heterogeneous_batch = A.is_heterogeneous() || B.is_heterogeneous();
     s.side = side;
     s.uplo = uplo;
@@ -59,8 +48,7 @@ inline std::optional<dispatch::TrsmShape> trsm_op_shape(
     return s;
 }
 
-// Resolve a route for one call. Reads the environment; everything shape-derived
-// comes from the builder above.
+// Resolve a route for one call; the only env read.
 template <typename T>
 inline dispatch::Route trsm_route(
     const Queue& ctx,

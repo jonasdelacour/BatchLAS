@@ -24,6 +24,42 @@ template <typename T>
 using gemm_vendor = gemm<T>;
 }  // namespace sig
 
+/// @brief Batched general matrix-matrix multiply.
+///
+/// For every batch item \f$b\f$ computes
+/// \f[ C_b := \alpha \, \mathrm{op}(A_b) \, \mathrm{op}(B_b) + \beta \, C_b \f]
+/// where \f$\mathrm{op}(X)\f$ is \f$X\f$, \f$X^T\f$ or \f$X^H\f$ according to
+/// `transA` / `transB`. With \f$\mathrm{op}(A)\f$ of size m x k and
+/// \f$\mathrm{op}(B)\f$ of size k x n, `C` is m x n.
+///
+/// **Heterogeneous batch.** A batch whose items carry differing
+/// `active_rows` / `active_cols` is handled by this same entry point on every
+/// backend: an item with m == 0 or n == 0 is skipped, an item with k == 0
+/// computes \f$C_b := \beta C_b\f$, and an all-skipped batch still returns a
+/// valid Event. There is no separate `gemm_heterogeneous` in C++.
+///
+/// Also callable as `gemm(ctx, A, B, C, GemmOptions<T>{...})`, with owning
+/// `Matrix` arguments, and without `Back` (taken from `ctx.backend()`).
+///
+/// @tparam Back  backend the call is compiled for; must match `ctx`'s device
+/// @tparam T     scalar type: `float`, `double`, `std::complex<float>` or `std::complex<double>`
+/// @param ctx        queue the work is enqueued on
+/// @param A          batch of matrices, m x k (NoTrans) or k x m (Trans/ConjTrans)
+/// @param B          batch of matrices, k x n (NoTrans) or n x k (Trans/ConjTrans)
+/// @param C          batch of m x n matrices; input scaled by `beta`, overwritten with the result
+/// @param alpha      scale of the product
+/// @param beta       scale of the input `C`
+/// @param transA     op() applied to `A`
+/// @param transB     op() applied to `B`
+/// @param precision  compute precision; `ComputePrecision::Default` computes in `T`.
+///                   Other values are honoured only by the vendor library path.
+/// @return event of the last enqueued kernel; `C` is valid once it completes
+/// @pre `A`, `B` and `C` have the same batch size and conforming shapes per item.
+/// @throws batchlas::dispatch::NoRouteError in a build without the vendor BLAS
+///         for `Back` when no native route supports the call (a non-Default
+///         `precision`, or a degenerate homogeneous m, n or k of zero).
+/// @see GemmOptions, @ref md_docs_2cpp-api
+/// @ingroup blas3
 template <Backend Back, typename T>
 BATCHLAS_API Event gemm(Queue& ctx,
                         const MatrixView<T, MatrixFormat::Dense>& A,
@@ -35,36 +71,17 @@ BATCHLAS_API Event gemm(Queue& ctx,
                         Transpose transB,
                         ComputePrecision precision = ComputePrecision::Default);
 
-// There is no separate gemm_heterogeneous entry point. `gemm` handles a
-// heterogeneous batch -- one where the items carry differing active_rows /
-// active_cols -- natively on every backend: each of them tests
-// gemm_has_heterogeneous_batch(A, B, C) and routes accordingly. The alias that
-// used to live here forwarded to `gemm` with an unchanged argument list, so the
-// only thing the second name added was the impression that plain `gemm` did not
-// support heterogeneous batches.
-//
-// (The Python binding keeps a `gemm_heterogeneous` name, and that one is not
-// redundant: it coerces a list of differently-shaped arrays, which `gemm` does
-// not.)
-
 }  // namespace batchlas
 
 namespace batchlas::backend {
 
-// The vendor path for gemm.
-//
-// DECLARATION ONLY, and that is the point of WP0 S5. Until now the *public*
-// `gemm<Back, T>` was DEFINED inside each vendor TU -- cublas.cc:1568,
-// rocblas.cc:99, netlib_lapack.cc:288 -- so dropping a vendor TU dropped the
-// public entry point with it. No amount of enum or CMake work fixes that: the
-// definition has to leave the vendor file. It now lives in
-// src/dispatch/entry_points/level3.cc, and what remains behind is this: one
-// vendor implementation per backend, named as such.
-//
-// Each vendor wrapper TU defines this primary template for its own Backend
-// value and explicitly instantiates it there -- the same mechanism
-// syev_vendor (functions/syev.hh) and ormqr_vendor (functions/ormqr.hh) have
-// used all along.
+// Declaration only: each vendor TU defines and instantiates it for its Backend.
+// evidence: docs/design/vendor-independence.md#the-entry-point-facade
+/// @brief Vendor-library implementation of gemm (cuBLAS, rocBLAS, host BLAS).
+///
+/// Not an entry point: batchlas::gemm calls it when it routes to the vendor.
+/// Same arguments and semantics as batchlas::gemm.
+/// @ingroup dispatch
 template <Backend Back, typename T>
 BATCHLAS_API Event gemm_vendor(Queue& ctx,
                                const MatrixView<T, MatrixFormat::Dense>& A,
@@ -80,10 +97,8 @@ BATCHLAS_API Event gemm_vendor(Queue& ctx,
 
 namespace batchlas {
 
-// Owning-argument and backend-deducing overloads: `f(ctx, Matrix, ...)` accepts
-// owning containers where the primary takes views, and `f(ctx, ...)` uses
-// ctx.backend(). See BATCHLAS_ACCEPT_OWNING and BATCHLAS_DISPATCH_ON_QUEUE in
-// blas/queue-dispatch.hh.
+// Owning-argument (`f(ctx, Matrix, ...)`) and backend-deducing (`f(ctx, ...)`)
+// overloads; see blas/queue-dispatch.hh.
 
 BATCHLAS_ACCEPT_OWNING(gemm)
 

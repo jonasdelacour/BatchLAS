@@ -1,14 +1,7 @@
 #pragma once
 
-// CUDA-specific route helpers.
-//
-// The backend-neutral half of what used to live here now sits in
-// route_common.hh; this header keeps only what genuinely needs CUDA, and
-// re-includes the portable half so existing consumers see the same set of names
-// as before. Anything portable that needs ceil_div / parse_cublasdx_variant_request
-// / is_gpu_queue / should_use_cublasdx / throw_forced_cublasdx_unavailable should
-// include route_common.hh directly rather than this file, or it will drag in
-// <cuda_runtime_api.h> and become CUDA-only for no reason.
+// CUDA-only route helpers. Portable code includes route_common.hh instead: this header
+// pulls in <cuda_runtime_api.h>. evidence: docs/perf/dispatch.md#the-environment-vocabulary
 
 #include "route_common.hh"
 

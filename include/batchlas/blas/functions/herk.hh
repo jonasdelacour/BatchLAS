@@ -17,9 +17,8 @@ using herk = Event(Queue&,
                    const MatrixView<T, MatrixFormat::Dense>&,
                    float_t<T>, float_t<T>, Uplo, Transpose);
 
-// backend::herk_vendor's signature. NOT an alias for sig::herk: the vendor
-// parameter order can differ from the public one -- trsm's alpha moves to
-// the end -- so each is spelled out from the definition it describes.
+// Spelled out, not aliased to sig::herk: a vendor parameter order may differ
+// from the public one (trsm's alpha is last).
 template <typename T>
 using herk_vendor = Event(Queue&,
                           const MatrixView<T, MatrixFormat::Dense>&,
@@ -31,18 +30,38 @@ using herk_vendor = Event(Queue&,
 }  // namespace sig
 
 
-// C = alpha * A * A^H + beta * C (Transpose::NoTrans, A is n x k) or
-// C = alpha * A^H * A + beta * C (Transpose::ConjTrans, A is k x n), with C
-// Hermitian n x n: only the triangle named by `uplo` is written, and the
-// diagonal comes out real -- A A^H is Hermitian and alpha and beta are real, so
-// an imaginary part on C's diagonal is neither read nor produced.
-//
-// alpha and beta are real, not T. That is the BLAS signature rather than an
-// approximation of it: a complex alpha would make alpha * A * A^H
-// non-Hermitian, so there is no such operation to express. cublas?herk and
-// cblas_?herk both take the real scalar directly.
-//
-// Constrained to complex scalars; the real spelling of this is syrk.
+/// @brief Batched Hermitian rank-k update.
+///
+/// For every batch item computes
+/// \f[ C := \alpha A A^H + \beta C \quad (\texttt{NoTrans},\ A \text{ is } n \times k), \qquad
+///     C := \alpha A^H A + \beta C \quad (\texttt{ConjTrans},\ A \text{ is } k \times n) \f]
+/// with `C` Hermitian n x n. Only the triangle of `C` named by `uplo` is written;
+/// the other triangle is left exactly as it was (use `MatrixView::hermitize` to
+/// mirror it). The diagonal comes out real: an imaginary part on `C`'s diagonal
+/// is neither read nor produced.
+///
+/// `alpha` and `beta` are real (`float_t<T>`), as in BLAS `?herk`: a complex
+/// alpha would make \f$\alpha A A^H\f$ non-Hermitian. Constrained to complex `T`;
+/// the real spelling is syrk. Also callable as
+/// `herk(ctx, A, C, HerkOptions<T>{...})`, with owning `Matrix` arguments, and
+/// without `Ba` (taken from `ctx.backend()`).
+///
+/// @tparam Ba  backend the call is compiled for; must match `ctx`'s device
+/// @tparam T   `std::complex<float>` or `std::complex<double>`
+/// @param ctx     queue the work is enqueued on
+/// @param A       batch of n x k (NoTrans) or k x n (ConjTrans) matrices; not modified
+/// @param C       batch of n x n matrices; the `uplo` triangle is updated in place
+/// @param alpha   real scale of the product
+/// @param beta    real scale of the input `C`
+/// @param uplo    which triangle of `C` is written
+/// @param transA  `Transpose::NoTrans` or `Transpose::ConjTrans`
+/// @return event of the last enqueued kernel; `C` is valid once it completes
+/// @pre `A` and `C` have the same batch size and conforming shapes per item.
+/// @throws batchlas::dispatch::NoRouteError in a build without the vendor BLAS
+///         for `Ba`: herk has no native implementation.
+/// @note Not instantiated for `Backend::ROCM`.
+/// @see syrk, her2k, HerkOptions, @ref md_docs_2cpp-api
+/// @ingroup blas3
 template <Backend Ba, ComplexScalar T>
 BATCHLAS_API Event herk(Queue& ctx,
                         const MatrixView<T, MatrixFormat::Dense>& A,
@@ -57,14 +76,12 @@ BATCHLAS_API Event herk(Queue& ctx,
 
 namespace batchlas::backend {
 
-// The vendor path for herk.
-//
-// DECLARATION ONLY. The public `herk<Back, T>` used to be DEFINED inside each
-// vendor TU, so dropping a vendor library dropped the public entry point along
-// with the vendor path. WP0 S5 moves that definition to
-// src/dispatch/entry_points/level3.cc; what stays behind is the vendor
-// implementation, named as such. Each vendor wrapper TU defines this primary
-// template for its own Backend value and instantiates it there.
+// Declaration only: each vendor TU defines and instantiates it for its Backend.
+// evidence: docs/design/vendor-independence.md#the-entry-point-facade
+/// @brief Vendor-library implementation of herk (cuBLAS, host BLAS).
+///
+/// Not an entry point: batchlas::herk calls it. Same arguments and semantics.
+/// @ingroup dispatch
 template <Backend Back, ComplexScalar T>
 BATCHLAS_API Event herk_vendor(Queue& ctx,
                                const MatrixView<T, MatrixFormat::Dense>& A,
@@ -78,10 +95,8 @@ BATCHLAS_API Event herk_vendor(Queue& ctx,
 
 namespace batchlas {
 
-// Owning-argument and backend-deducing overloads: `f(ctx, Matrix, ...)` accepts
-// owning containers where the primary takes views, and `f(ctx, ...)` uses
-// ctx.backend(). See BATCHLAS_ACCEPT_OWNING and BATCHLAS_DISPATCH_ON_QUEUE in
-// blas/queue-dispatch.hh.
+// Owning-argument (`f(ctx, Matrix, ...)`) and backend-deducing (`f(ctx, ...)`)
+// overloads; see blas/queue-dispatch.hh.
 
 BATCHLAS_ACCEPT_OWNING(herk)
 

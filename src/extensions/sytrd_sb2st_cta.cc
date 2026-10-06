@@ -365,7 +365,8 @@ Event btrd_lower_inplace_subgroup(Queue& q,
     const size_t cw_bytes_per_wg =
         size_t(cw_len_host) * (sizeof(Real) + sizeof(T)) * size_t(probs_per_wg);
 
-    // Leave headroom (25%) for compiler/runtime usage.
+    // Leave headroom (25%) for compiler/runtime usage. Unmeasured guess.
+    // evidence: docs/perf/sytrd.md#sytrd-open-debts
     const size_t lmem_budget = (lmem_bytes * 3) / 4;
 
     // The C/WORK rotation scratch is the *first* claim on local memory: it is touched

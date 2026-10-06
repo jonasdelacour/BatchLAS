@@ -1,34 +1,48 @@
 #pragma once
 
-// GEMV's routing table: pure predicates over GemvShape (device- and env-dependent facts
-// live in src/backends/gemv_route.hh). Windows and evidence: docs/perf/gemv.md.
+/// @file
+/// @brief GEMV's routing table: pure predicates over GemvShape.
+///
+/// Device- and environment-dependent facts are gathered by the shape builder in
+/// src/backends/gemv_route.hh.
+/// @ingroup dispatch
 
 #include <batchlas/blas/dispatch/route.hh>
 #include <batchlas/blas/dispatch/route_resolve.hh>
 
 namespace batchlas::dispatch {
 
-// Do not shadow OpShape's transA or is_gpu: resolve_route slices this struct to
-// OpShape, so a shadowing member is dropped and every gemv coverage row is wrong.
+/// @brief GEMV routing shape: OpShape plus the build's kernel availability.
+/// @trap Do not shadow OpShape's `transA` or `is_gpu`: resolve_route() slices this
+///       struct to OpShape, so a shadowing member is dropped from every coverage row.
+/// @ingroup dispatch
 struct GemvShape : OpShape {
-    bool direct_available = false;   // not linked => unsupported, not unimplemented
-    bool cta_available = false;
+    bool direct_available = false;   ///< Direct kernel linked; not linked means unsupported, not unimplemented
+    bool cta_available = false;      ///< CTA kernel linked
 
-    // Enumerated from sub_group_sizes; MAX_SUB_GROUP_SIZE reports sub_group_sizes()[0].
+    /// Sub-group size 32 is available; enumerated from `sub_group_sizes`, because
+    /// `MAX_SUB_GROUP_SIZE` reports `sub_group_sizes()[0]`.
     bool has_sg32 = false;
 
-    // Predicates must use these: which of m and n is which swaps with transA.
+    /// @brief Output length; predicates must use this, since which of m and n it is swaps with transA.
     int64_t out_len() const { return transA == Transpose::NoTrans ? m : n; }
+    /// @brief Reduction length; the counterpart of out_len().
     int64_t red_len() const { return transA == Transpose::NoTrans ? n : m; }
 };
 
-// A capability ladder, tighter first, not a preference list.
+/// @brief GEMV walk order: a capability ladder, tighter first, not a preference list.
+/// @ingroup dispatch
 inline constexpr Route kGemvOrder[] = {
     {Origin::Native, Algorithm::CTA},
     {Origin::Native, Algorithm::Direct},
     {Origin::Vendor, Algorithm::Auto},
 };
 
+/// @brief GEMV routes: `{Native, CTA}`, `{Native, Direct}` and the vendor.
+///
+/// preferred() is a single window, complex<double> transposed CTA; everything
+/// else prefers the vendor. Evidence: @ref md_docs_2perf_2gemv "docs/perf/gemv.md".
+/// @ingroup dispatch
 template <typename T>
 struct RouteTable<Op::gemv, T> {
     static bool supports(Route r, const GemvShape& s) {
@@ -76,6 +90,8 @@ struct RouteTable<Op::gemv, T> {
     }
 };
 
+/// @brief resolve_route() for gemv.
+/// @ingroup dispatch
 template <typename T>
 inline Route resolve_gemv_route(Route forced, const GemvShape& s,
                                 bool vendor_available = true) {

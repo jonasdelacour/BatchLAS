@@ -3,14 +3,10 @@
 // solves with L still in registers. Zero local memory, zero barriers, every cross-lane
 // value a sub-group shuffle. evidence: docs/perf/potrf.md#the-fused-posv-tier
 //
-// THE ASYMMETRY THAT DECIDES THE DESIGN, and it is the one place the plan's text is
-// wrong. P2 says the backward solve needs no transpose "because every lane holds a full
-// row". It does not follow: lane r holds ROW r of L, so `L y = b` reads L(r, i) = rA[i]
-// locally and is a cheap right-looking sweep, but `L^H x = y` needs L(i, r) -- COLUMN
-// access -- which no lane has. This kernel buys that with an explicit on-the-fly
-// transpose: at step i, lane i broadcasts rA[0..i-1] and lane r keeps the one element
-// where c == r. It costs N(N-1)/2 shuffles, independent of nrhs, i.e. the same order as
-// the factorization itself. evidence: docs/perf/potrf.md#posv-the-backward-solve-costs-a-transpose
+// THE ASYMMETRY THAT DECIDES THE DESIGN: lane r holds ROW r of L, so `L y = b` is local,
+// but `L^H x = y` needs L(i, r) -- COLUMN access no lane has. Hence an on-the-fly
+// transpose: at step i, lane i broadcasts rA[0..i-1] and lane r keeps element c == r;
+// N(N-1)/2 shuffles, independent of nrhs. evidence: docs/perf/potrf.md#posv-the-backward-solve-costs-a-transpose
 
 #include "solve_native.hh"
 
@@ -45,9 +41,8 @@ namespace sd = ::batchlas::sycl_device;
 
 constexpr int kTinyWg = tn::kTinyWgSize;
 
-// A launch ABORT, not a slowdown, so it is encoded to fail at COMPILE time. NOW PROBED, and
-// the old assumed 256 was a tell: it is above the 255-register ISA ceiling, so no kernel could
-// ever have reported it. Measured worst is 255 (cdouble N=16 NR=4), which SPILLS.
+// A launch ABORT, not a slowdown, so it is encoded to fail at COMPILE time. Probed worst is
+// 255 (cdouble N=16 NR=4), the ISA ceiling, and that cell SPILLS.
 // evidence: docs/perf/potrf.md#the-posv-tiny-tier-is-not-register-resident-for-cdouble
 constexpr int kWorstRegsPerThread = 255;
 // The bound is per SUB-PARTITION: 64 lanes is 2 warps in one of the four, 1 x 32 x 256 =

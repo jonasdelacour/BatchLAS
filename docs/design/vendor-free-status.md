@@ -112,7 +112,7 @@ native route still runs: `automatic()` accepts a merely *supported* native route
 | `getri` | `Blocked` | `float` order ≥ 128, `cfloat` order ≥ 256 | `route_getri.hh:65-72` |
 | `spmm` | `Direct` | CSR and `transA == NoTrans`, minus `complex<float>` with `transB != NoTrans` | `route_spmm.hh:65-75` |
 | `syev` | `CTA`, `Blocked`, `TwoStage` | a measured per-`n` grid, `Backend::CUDA` only | `syev.hh:357-385` |
-| `gesvd` | `Jacobi`, `CTA`, `Blocked` | the wide-band rule | `route_gesvd.hh:100` |
+| `gesvd` | `Jacobi`, `CTA`, `Blocked` | the wide-band rule ([evidence](../perf/gesvd.md#gesvd-the-wide-band-33-to-64), @ref perf_gesvd) | `route_gesvd.hh:100` |
 
 Two families sit outside this table and must not be read from it:
 

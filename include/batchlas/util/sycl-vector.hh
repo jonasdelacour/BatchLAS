@@ -4,28 +4,54 @@
 #include <batchlas/util/sycl-span.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 
+/// @file
+/// @brief batchlas::UnifiedVector, an owning growable array in USM shared memory.
+
 namespace batchlas {
 
+/// @brief Owning, growable array of `T` in USM shared memory (`sycl::malloc_shared`).
+///
+/// The storage is allocated in the shared context of Device::default_device(),
+/// so it is readable and writable from the host and from that device. Copying
+/// deep-copies on the host; moving transfers ownership. Converts implicitly to
+/// Span<T>, which is how it is passed to entry points. Growth reallocates, so
+/// any Span or pointer taken earlier is invalidated.
+/// @tparam T  element type (trivially copyable: growth uses memcpy)
+/// @ingroup matrix
 template <typename T>
 struct BATCHLAS_API UnifiedVector
-{   
+{
     using value_type = T;
     using pointer = T*;
     using size_t = std::size_t;
-    //Constructors implementations depend on sycl, so they are not defined here
+    /// @brief Allocates @p size uninitialised elements.
+    /// @throws std::bad_alloc if the allocation fails
     UnifiedVector(size_t size);
+    /// @brief Allocates @p size elements set to @p value (filled on the host).
     UnifiedVector(size_t size, T value);
+    /// @brief Deep copy of @p other's first `size()` elements into a new allocation.
     UnifiedVector(const UnifiedVector<T> &other);
     UnifiedVector<T> &operator=(const UnifiedVector<T> &other);
     ~UnifiedVector();
 
+    /// @brief Sets the size; reallocates (keeping the contents) only when @p new_size exceeds the capacity.
     void resize(size_t new_size);
+    /// @brief Grows to @p new_size, setting the new elements to @p value.
+    /// @note A no-op unless @p new_size exceeds the capacity: it neither shrinks nor
+    ///       grows within the existing capacity (unlike the one-argument resize()).
     void resize(size_t new_size, T value);
+    /// @brief Grows a ring buffer to @p new_size, unrolling its live segment to the front.
+    ///
+    /// The live data starts at @p front and ends with the @p seg_size elements at
+    /// @p back, wrapping when back < front. After the call it is contiguous from
+    /// index 0 and the rest is value-initialised. No-op unless @p new_size exceeds
+    /// the capacity.
     void resize(size_t new_size, size_t front, size_t back, size_t seg_size);
 
+    /// @brief Ensures a capacity of at least @p new_capacity, keeping the contents and the size.
     void reserve(size_t new_capacity);
 
-    //Movement semantics can be defined here
+    /// @brief An empty vector with no allocation.
     UnifiedVector() : size_(0), capacity_(0), data_(nullptr) {}
     UnifiedVector(UnifiedVector<T> &&other) : size_(other.size_), capacity_(other.capacity_), data_(other.data_) {
         other.size_ = 0;
@@ -43,29 +69,38 @@ struct BATCHLAS_API UnifiedVector
         return *this;
     }
 
+    /// @brief A Span over the first `size()` elements.
     inline constexpr operator Span<T>() const { return Span<T>(data_, size_); }
+    /// @brief A Span over the first `size()` elements.
     inline constexpr Span<T> to_span() const { return Span<T>(data_, size_); }
+    /// @brief A Span over elements [@p offset, @p offset + @p count); not bounds-checked.
     inline constexpr Span<T> subspan(size_t offset, size_t count) const { return Span<T>(data_ + offset, count); }
+    /// @brief A Span over elements [@p offset, size()).
     inline constexpr Span<T> subspan(size_t offset) const { return Span<T>(data_ + offset, size_ - offset); }
+    /// @brief Sets every element to @p data, on the host.
     inline constexpr void fill(T data) { std::fill(begin(), end(), data); }
     inline constexpr T *data() const { return data_; }
     inline constexpr size_t size() const { return size_; }
     inline constexpr size_t capacity() const { return capacity_; }
-    
-    
+
+
+    /// @brief Sets the size to 0 and keeps the allocation.
     inline constexpr void clear() { size_ = 0; }
 
+    /// @brief Element @p index; prints and asserts (debug build) when out of range.
     inline constexpr T &operator[](size_t index) { if(index >= size_) printf("Index: %zu, Size: %zu\n", index, size_); assert (index < size_); return data_[index]; }
     inline constexpr const T &operator[](size_t index) const { if (index >= size_) printf("Index: %zu, Size: %zu\n", index, size_); assert (index < size_); return data_[index]; }
 
     inline constexpr T &at(size_t index) { assert(index < size_); return data_[index]; }
     inline constexpr const T &at(size_t index) const { assert(index < size_); return data_[index]; }
 
+    /// @brief Element-wise comparison with Span::operator== semantics.
     inline constexpr bool operator==(const UnifiedVector<T> &other) const {
         return Span<T>(*this) == Span<T>(other);
     }
 
-    inline constexpr void push_back(const T &value) { 
+    /// @brief Appends @p value, doubling the capacity when full (which invalidates earlier Spans).
+    inline constexpr void push_back(const T &value) {
         if(size_ == capacity_){
             size_t new_capacity = capacity_ == 0 ? 1 : 2*capacity_;
             reserve(new_capacity);
@@ -104,6 +139,8 @@ private:
     pointer data_;
 };
 
+/// @brief Swaps the storage of two vectors without copying; found by ADL.
+/// @ingroup matrix
 template <typename T>
 inline constexpr void swap(UnifiedVector<T> &lhs, UnifiedVector<T> &rhs) {
     lhs.swap(rhs);
@@ -111,13 +148,9 @@ inline constexpr void swap(UnifiedVector<T> &lhs, UnifiedVector<T> &rhs) {
 
 }  // namespace batchlas
 
-// Transitional compatibility shim: UnifiedVector used to be declared at global
-// scope and now lives in namespace batchlas. A consumer with a name of its own
-// here defines BATCHLAS_NO_GLOBAL_NAMES to switch the block off; the block goes
-// away entirely once nothing in tree depends on it. The free swap() above is
-// deliberately NOT shimmed -- ADL on UnifiedVector finds it, including through
-// the `using std::swap; swap(a, b);` idiom, and a global `swap` is exactly the
-// kind of collision this move exists to remove.
+// Transitional shim: UnifiedVector used to live at global scope; define
+// BATCHLAS_NO_GLOBAL_NAMES to drop it. swap() is deliberately not shimmed: ADL
+// finds it, and a global `swap` is exactly the collision the move removed.
 #ifndef BATCHLAS_NO_GLOBAL_NAMES
 using batchlas::UnifiedVector;
 #endif

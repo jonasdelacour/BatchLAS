@@ -44,6 +44,24 @@ inline constexpr void dispatch_trmv(const Group& group,
 
 } // namespace detail
 
+/// @addtogroup device
+/// @{
+
+/// @brief Triangular matrix-vector product \f$ y := \alpha\,\mathrm{op}(A)\,x + \beta\,y \f$, `A` triangular.
+///
+/// Out of place, unlike BLAS `trmv`: `A` is read only on its `UploV` triangle
+/// (and not on the diagonal when `DiagV` is `Unit`). `x` and `y` may be the same
+/// vector: rows are visited in the order that never overwrites an entry a later
+/// row still reads.
+/// @tparam UploV   stored triangle of `A`
+/// @tparam TransV  op() applied to `A`
+/// @tparam DiagV   `Unit`: the diagonal is taken as 1
+/// @tparam Group   `sycl::group`, `sycl::sub_group` or an `nd_item`; every work-item must call
+/// @param group    executor
+/// @param a        single n x n matrix
+/// @param operand  `x`, `y` (each of length at least n), `alpha`, `beta`
+/// @pre `y` holds finite values even when `beta == 0`.
+/// @note Each `y` element is written by the group leader; barrier before other work-items read it.
 template <Uplo UploV = Uplo::Upper,
           Transpose TransV = Transpose::NoTrans,
           Diag DiagV = Diag::NonUnit,
@@ -55,6 +73,7 @@ inline constexpr void trmv(const Group& group,
     detail::dispatch_trmv<detail::TriangularTransformTag<Side::Left, UploV, TransV, DiagV>>(group, a, operand);
 }
 
+/// @brief As trmv(), with an explicit DeviceBlasPolicy (ignored: one implementation).
 template <DeviceBlasPolicy Policy,
           Uplo UploV = Uplo::Upper,
           Transpose TransV = Transpose::NoTrans,
@@ -68,6 +87,7 @@ inline constexpr void trmv(const Group& group,
     trmv<UploV, TransV, DiagV>(group, a, operand);
 }
 
+/// @brief As trmv(), with the operands passed separately instead of in an operand struct.
 template <Uplo UploV = Uplo::Upper,
           Transpose TransV = Transpose::NoTrans,
           Diag DiagV = Diag::NonUnit,
@@ -82,6 +102,7 @@ inline constexpr void trmv(const Group& group,
     trmv<UploV, TransV, DiagV>(group, a, make_matvec_operand(x, y, alpha, beta));
 }
 
+/// @brief As trmv(), with an explicit DeviceBlasPolicy and the operands passed separately (ignored: one implementation).
 template <DeviceBlasPolicy Policy,
           Uplo UploV = Uplo::Upper,
           Transpose TransV = Transpose::NoTrans,
@@ -97,5 +118,7 @@ inline constexpr void trmv(const Group& group,
     (void)Policy;
     trmv<UploV, TransV, DiagV>(group, a, x, y, alpha, beta);
 }
+
+/// @}
 
 } // namespace batchlas::device

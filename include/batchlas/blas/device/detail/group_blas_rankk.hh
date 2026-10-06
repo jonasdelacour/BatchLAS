@@ -464,6 +464,25 @@ inline constexpr void dispatch_rankk(const Exec& exec,
 
 } // namespace detail
 
+/// @addtogroup device
+/// @{
+
+/// @brief Symmetric rank-k update \f$ C := \alpha\,A\,A^{T} + \beta\,C \f$ (NoTrans) or \f$ C := \alpha\,A^{T} A + \beta\,C \f$, on the `UploV` triangle of `C` only.
+///
+/// The other triangle of `C` is neither read nor written. Fast paths:
+/// register-tiled for `float` and a tiled kernel for `std::complex<float>`,
+/// both needing an `nd_item` executor and a workspace; with an `nd_item<3>`
+/// and no fast path only tile-group (0, 0) computes.
+/// @tparam UploV   triangle of `C` updated
+/// @tparam TransV  NoTrans: `A` is n x k; otherwise `A` is k x n
+/// @tparam Group   `sycl::group`, `sycl::sub_group` or an `nd_item`; every work-item must call
+/// @param group      executor
+/// @param a          single input matrix
+/// @param operand    `C` (n x n), `alpha`, `beta`
+/// @param workspace  local memory of syrk_workspace_elements() elements, or `nullptr`
+/// @pre `C` holds finite values even when `beta == 0`; `C` does not alias `A`.
+/// @note Each `C` element has one writer; barrier before other work-items read `C`.
+/// @see herk()
 template <Uplo UploV = Uplo::Upper, Transpose TransV = Transpose::NoTrans, typename Group, typename T>
 inline constexpr void syrk(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -472,6 +491,7 @@ inline constexpr void syrk(const Group& group,
     detail::dispatch_rankk<detail::SymmetricRankTransformTag<UploV, TransV, false>, DeviceBlasPolicy::Auto>(group, a, operand, workspace);
 }
 
+/// @brief As syrk(), with an explicit DeviceBlasPolicy.
 template <DeviceBlasPolicy Policy,
           Uplo UploV = Uplo::Upper,
           Transpose TransV = Transpose::NoTrans,
@@ -484,6 +504,11 @@ inline constexpr void syrk(const Group& group,
     detail::dispatch_rankk<detail::SymmetricRankTransformTag<UploV, TransV, false>, Policy>(group, a, operand, workspace);
 }
 
+/// @brief Local memory, in elements of `T`, that syrk() can use for this launch and shape.
+/// @param launch           description of the launch the call runs in
+/// @param extent           n, the order of `C`
+/// @param contract_extent  k
+/// @return element count, or 0 when no staged path applies (then pass `nullptr`)
 template <typename T, Uplo UploV = Uplo::Upper, Transpose TransV = Transpose::NoTrans>
 inline constexpr std::size_t syrk_workspace_elements(const DeviceBlasLaunchInfo& launch,
                                                      int extent,
@@ -491,6 +516,11 @@ inline constexpr std::size_t syrk_workspace_elements(const DeviceBlasLaunchInfo&
     return detail::rankk_workspace_elements<detail::SymmetricRankTransformTag<UploV, TransV, false>, DeviceBlasPolicy::Auto, T>(launch, extent, contract_extent);
 }
 
+/// @brief Local memory, in elements of `T`, that syrk() can use under `Policy`; 0 means pass `nullptr`.
+/// @param launch description of the launch the call runs in
+/// @param extent order of the matrix
+/// @param contract_extent contraction length k
+/// @return element count, or 0 when no staged path applies
 template <typename T,
           DeviceBlasPolicy Policy,
           Uplo UploV = Uplo::Upper,
@@ -501,6 +531,7 @@ inline constexpr std::size_t syrk_workspace_elements(const DeviceBlasLaunchInfo&
     return detail::rankk_workspace_elements<detail::SymmetricRankTransformTag<UploV, TransV, false>, Policy, T>(launch, extent, contract_extent);
 }
 
+/// @brief As syrk(), with the operands passed separately instead of in an operand struct.
 template <Uplo UploV = Uplo::Upper, Transpose TransV = Transpose::NoTrans, typename Group, typename T>
 inline constexpr void syrk(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -511,6 +542,7 @@ inline constexpr void syrk(const Group& group,
     syrk<UploV, TransV>(group, a, make_rankk_operand(c, alpha, beta), workspace);
 }
 
+/// @brief As syrk(), with an explicit DeviceBlasPolicy and the operands passed separately.
 template <DeviceBlasPolicy Policy,
           Uplo UploV = Uplo::Upper,
           Transpose TransV = Transpose::NoTrans,
@@ -525,6 +557,15 @@ inline constexpr void syrk(const Group& group,
     syrk<Policy, UploV, TransV>(group, a, make_rankk_operand(c, alpha, beta), workspace);
 }
 
+/// @brief Hermitian rank-k update \f$ C := \alpha\,A\,A^{H} + \beta\,C \f$ (NoTrans) or \f$ C := \alpha\,A^{H} A + \beta\,C \f$, on the `UploV` triangle.
+///
+/// For real `T` this is exactly syrk(). `alpha` and `beta` are `T`, not real
+/// as in BLAS; the imaginary part of every diagonal element of `C` is set to
+/// zero, but a non-real `alpha` still gives a non-Hermitian off-diagonal.
+/// @param group      executor (see syrk())
+/// @param a          single input matrix
+/// @param operand    `C`, `alpha`, `beta`
+/// @param workspace  local memory of herk_workspace_elements() elements, or `nullptr`
 template <Uplo UploV = Uplo::Upper, Transpose TransV = Transpose::NoTrans, typename Group, typename T>
 inline constexpr void herk(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -533,6 +574,7 @@ inline constexpr void herk(const Group& group,
     detail::dispatch_rankk<detail::SymmetricRankTransformTag<UploV, TransV, ComplexScalar<T>>, DeviceBlasPolicy::Auto>(group, a, operand, workspace);
 }
 
+/// @brief As herk(), with an explicit DeviceBlasPolicy.
 template <DeviceBlasPolicy Policy,
           Uplo UploV = Uplo::Upper,
           Transpose TransV = Transpose::NoTrans,
@@ -545,6 +587,11 @@ inline constexpr void herk(const Group& group,
     detail::dispatch_rankk<detail::SymmetricRankTransformTag<UploV, TransV, ComplexScalar<T>>, Policy>(group, a, operand, workspace);
 }
 
+/// @brief Local memory, in elements of `T`, that herk() can use; 0 means pass `nullptr`.
+/// @param launch description of the launch the call runs in
+/// @param extent order of the matrix
+/// @param contract_extent contraction length k
+/// @return element count, or 0 when no staged path applies
 template <typename T, Uplo UploV = Uplo::Upper, Transpose TransV = Transpose::NoTrans>
 inline constexpr std::size_t herk_workspace_elements(const DeviceBlasLaunchInfo& launch,
                                                      int extent,
@@ -552,6 +599,11 @@ inline constexpr std::size_t herk_workspace_elements(const DeviceBlasLaunchInfo&
     return detail::rankk_workspace_elements<detail::SymmetricRankTransformTag<UploV, TransV, ComplexScalar<T>>, DeviceBlasPolicy::Auto, T>(launch, extent, contract_extent);
 }
 
+/// @brief Local memory, in elements of `T`, that herk() can use under `Policy`; 0 means pass `nullptr`.
+/// @param launch description of the launch the call runs in
+/// @param extent order of the matrix
+/// @param contract_extent contraction length k
+/// @return element count, or 0 when no staged path applies
 template <typename T,
           DeviceBlasPolicy Policy,
           Uplo UploV = Uplo::Upper,
@@ -562,6 +614,7 @@ inline constexpr std::size_t herk_workspace_elements(const DeviceBlasLaunchInfo&
     return detail::rankk_workspace_elements<detail::SymmetricRankTransformTag<UploV, TransV, ComplexScalar<T>>, Policy, T>(launch, extent, contract_extent);
 }
 
+/// @brief As herk(), with the operands passed separately instead of in an operand struct.
 template <Uplo UploV = Uplo::Upper, Transpose TransV = Transpose::NoTrans, typename Group, typename T>
 inline constexpr void herk(const Group& group,
                            const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -572,6 +625,7 @@ inline constexpr void herk(const Group& group,
     herk<UploV, TransV>(group, a, make_rankk_operand(c, alpha, beta), workspace);
 }
 
+/// @brief As herk(), with an explicit DeviceBlasPolicy and the operands passed separately.
 template <DeviceBlasPolicy Policy,
           Uplo UploV = Uplo::Upper,
           Transpose TransV = Transpose::NoTrans,
@@ -586,6 +640,17 @@ inline constexpr void herk(const Group& group,
     herk<Policy, UploV, TransV>(group, a, make_rankk_operand(c, alpha, beta), workspace);
 }
 
+/// @brief Symmetric rank-2k update \f$ C := \alpha\,(A B^{T} + B A^{T}) + \beta\,C \f$ (NoTrans) or \f$ C := \alpha\,(A^{T} B + B^{T} A) + \beta\,C \f$, on the `UploV` triangle.
+///
+/// Paths and executor rules as for syrk().
+/// @tparam UploV   triangle of `C` updated
+/// @tparam TransV  NoTrans: `A` and `B` are n x k; otherwise k x n
+/// @param group      executor (see syrk())
+/// @param a          first single input matrix
+/// @param operand    `B` (same shape as `A`), `C` (n x n), `alpha`, `beta`
+/// @param workspace  local memory of syr2k_workspace_elements() elements, or `nullptr`
+/// @pre `C` holds finite values even when `beta == 0`; `C` does not alias `A` or `B`.
+/// @see her2k()
 template <Uplo UploV = Uplo::Upper, Transpose TransV = Transpose::NoTrans, typename Group, typename T>
 inline constexpr void syr2k(const Group& group,
                             const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -594,6 +659,7 @@ inline constexpr void syr2k(const Group& group,
     detail::dispatch_rank2k<detail::SymmetricRankTransformTag<UploV, TransV, false>, DeviceBlasPolicy::Auto>(group, a, operand, workspace);
 }
 
+/// @brief As syr2k(), with an explicit DeviceBlasPolicy.
 template <DeviceBlasPolicy Policy,
           Uplo UploV = Uplo::Upper,
           Transpose TransV = Transpose::NoTrans,
@@ -606,6 +672,11 @@ inline constexpr void syr2k(const Group& group,
     detail::dispatch_rank2k<detail::SymmetricRankTransformTag<UploV, TransV, false>, Policy>(group, a, operand, workspace);
 }
 
+/// @brief Local memory, in elements of `T`, that syr2k() can use; 0 means pass `nullptr`.
+/// @param launch description of the launch the call runs in
+/// @param extent order of the matrix
+/// @param contract_extent contraction length k
+/// @return element count, or 0 when no staged path applies
 template <typename T, Uplo UploV = Uplo::Upper, Transpose TransV = Transpose::NoTrans>
 inline constexpr std::size_t syr2k_workspace_elements(const DeviceBlasLaunchInfo& launch,
                                                       int extent,
@@ -613,6 +684,11 @@ inline constexpr std::size_t syr2k_workspace_elements(const DeviceBlasLaunchInfo
     return detail::rank2k_workspace_elements<detail::SymmetricRankTransformTag<UploV, TransV, false>, DeviceBlasPolicy::Auto, T>(launch, extent, contract_extent);
 }
 
+/// @brief Local memory, in elements of `T`, that syr2k() can use under `Policy`; 0 means pass `nullptr`.
+/// @param launch description of the launch the call runs in
+/// @param extent order of the matrix
+/// @param contract_extent contraction length k
+/// @return element count, or 0 when no staged path applies
 template <typename T,
           DeviceBlasPolicy Policy,
           Uplo UploV = Uplo::Upper,
@@ -623,6 +699,7 @@ inline constexpr std::size_t syr2k_workspace_elements(const DeviceBlasLaunchInfo
     return detail::rank2k_workspace_elements<detail::SymmetricRankTransformTag<UploV, TransV, false>, Policy, T>(launch, extent, contract_extent);
 }
 
+/// @brief As syr2k(), with the operands passed separately instead of in an operand struct.
 template <Uplo UploV = Uplo::Upper, Transpose TransV = Transpose::NoTrans, typename Group, typename T>
 inline constexpr void syr2k(const Group& group,
                             const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -634,6 +711,7 @@ inline constexpr void syr2k(const Group& group,
     syr2k<UploV, TransV>(group, a, make_matmat_operand(b, c, alpha, beta), workspace);
 }
 
+/// @brief As syr2k(), with an explicit DeviceBlasPolicy and the operands passed separately.
 template <DeviceBlasPolicy Policy,
           Uplo UploV = Uplo::Upper,
           Transpose TransV = Transpose::NoTrans,
@@ -649,6 +727,14 @@ inline constexpr void syr2k(const Group& group,
     syr2k<Policy, UploV, TransV>(group, a, make_matmat_operand(b, c, alpha, beta), workspace);
 }
 
+/// @brief Hermitian rank-2k update \f$ C := \alpha\,A B^{H} + \bar{\alpha}\,B A^{H} + \beta\,C \f$ (NoTrans) or \f$ \alpha\,A^{H} B + \bar{\alpha}\,B^{H} A + \beta\,C \f$, on the `UploV` triangle.
+///
+/// For real `T` this is exactly syr2k(). The imaginary part of every diagonal
+/// element of `C` is set to zero; `beta` is `T`, not real as in BLAS.
+/// @param group      executor (see syrk())
+/// @param a          first single input matrix
+/// @param operand    `B`, `C`, `alpha`, `beta`
+/// @param workspace  local memory of her2k_workspace_elements() elements, or `nullptr`
 template <Uplo UploV = Uplo::Upper, Transpose TransV = Transpose::NoTrans, typename Group, typename T>
 inline constexpr void her2k(const Group& group,
                             const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -657,6 +743,7 @@ inline constexpr void her2k(const Group& group,
     detail::dispatch_rank2k<detail::SymmetricRankTransformTag<UploV, TransV, ComplexScalar<T>>, DeviceBlasPolicy::Auto>(group, a, operand, workspace);
 }
 
+/// @brief As her2k(), with an explicit DeviceBlasPolicy.
 template <DeviceBlasPolicy Policy,
           Uplo UploV = Uplo::Upper,
           Transpose TransV = Transpose::NoTrans,
@@ -669,6 +756,11 @@ inline constexpr void her2k(const Group& group,
     detail::dispatch_rank2k<detail::SymmetricRankTransformTag<UploV, TransV, ComplexScalar<T>>, Policy>(group, a, operand, workspace);
 }
 
+/// @brief Local memory, in elements of `T`, that her2k() can use; 0 means pass `nullptr`.
+/// @param launch description of the launch the call runs in
+/// @param extent order of the matrix
+/// @param contract_extent contraction length k
+/// @return element count, or 0 when no staged path applies
 template <typename T, Uplo UploV = Uplo::Upper, Transpose TransV = Transpose::NoTrans>
 inline constexpr std::size_t her2k_workspace_elements(const DeviceBlasLaunchInfo& launch,
                                                       int extent,
@@ -676,6 +768,11 @@ inline constexpr std::size_t her2k_workspace_elements(const DeviceBlasLaunchInfo
     return detail::rank2k_workspace_elements<detail::SymmetricRankTransformTag<UploV, TransV, ComplexScalar<T>>, DeviceBlasPolicy::Auto, T>(launch, extent, contract_extent);
 }
 
+/// @brief Local memory, in elements of `T`, that her2k() can use under `Policy`; 0 means pass `nullptr`.
+/// @param launch description of the launch the call runs in
+/// @param extent order of the matrix
+/// @param contract_extent contraction length k
+/// @return element count, or 0 when no staged path applies
 template <typename T,
           DeviceBlasPolicy Policy,
           Uplo UploV = Uplo::Upper,
@@ -686,6 +783,7 @@ inline constexpr std::size_t her2k_workspace_elements(const DeviceBlasLaunchInfo
     return detail::rank2k_workspace_elements<detail::SymmetricRankTransformTag<UploV, TransV, ComplexScalar<T>>, Policy, T>(launch, extent, contract_extent);
 }
 
+/// @brief As her2k(), with the operands passed separately instead of in an operand struct.
 template <Uplo UploV = Uplo::Upper, Transpose TransV = Transpose::NoTrans, typename Group, typename T>
 inline constexpr void her2k(const Group& group,
                             const KernelMatrixView<T, MatrixFormat::Dense>& a,
@@ -697,6 +795,7 @@ inline constexpr void her2k(const Group& group,
     her2k<UploV, TransV>(group, a, make_matmat_operand(b, c, alpha, beta), workspace);
 }
 
+/// @brief As her2k(), with an explicit DeviceBlasPolicy and the operands passed separately.
 template <DeviceBlasPolicy Policy,
           Uplo UploV = Uplo::Upper,
           Transpose TransV = Transpose::NoTrans,
@@ -711,5 +810,7 @@ inline constexpr void her2k(const Group& group,
                             T* workspace = nullptr) {
     her2k<Policy, UploV, TransV>(group, a, make_matmat_operand(b, c, alpha, beta), workspace);
 }
+
+/// @}
 
 } // namespace batchlas::device

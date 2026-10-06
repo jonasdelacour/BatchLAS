@@ -18,6 +18,7 @@ namespace util {
  * @tparam Dims The dimensionality of the accessor
  * @param accessor The local accessor to get a pointer from
  * @return T* Raw pointer to the local accessor's storage
+ * @ingroup internal_helpers
  */
 template <typename T, int Dims = 1>
 inline T* get_raw_ptr(const sycl::local_accessor<T, Dims>& accessor) {
