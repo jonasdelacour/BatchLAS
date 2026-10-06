@@ -35,7 +35,7 @@ The superseded root documents these were filed in are preserved at the git tag
 | 9 | `src/backends/syr2k_custom_dispatch.cc` | ~~a forced native `syr2k` throws a cuBLASDx message it did not ask for~~ | **closed in the phase 5 rip** |
 | 10 | grid `latrd` (`src/extensions/latrd_lower_panel.cc`, the grid kernel's column-update / sumsq pair) | a cross-sub-group read-after-write on `Ab(r, i)` with no barrier between the two loops | **fixed; armed 20/20 red on deletion under the amplified geometry; residual rate at the default geometry not bounded** |
 | 11 | `src/sycl/gemm/epilogue_linear.hh`, `src/sycl/gemm_kernels.cc` (`launch_direct`) | native GEMM reads `C` at `beta == 0` | `NaN` from an unzeroed arena; worked around in `geqrf_blocked` |
-| 12 | `src/ops/potrf/potrf.cc`, `src/ops/trsm/trsm.cc` (each `can_run(Vendor)`), `src/backends/cusolver.cc:72-77` | vendor `potrf` and vendor `trsm` accept a heterogeneous batch and run at the full storage order | silent wrong answer on a direct heterogeneous call; posv refuses it upstream |
+| 12 | `src/ops/potrf/potrf.cc`, `src/ops/trsm/trsm.cc`, `src/ops/symm/symm.cc` (each `can_run(Vendor)`), `src/backends/cusolver.cc:72-77` | vendor `potrf`, `trsm` and `symm` accept a heterogeneous batch and run at the full storage order | silent wrong answer on a direct heterogeneous call; posv refuses it upstream |
 | 13 | `src/backends/cublas.cc` (`gemm_vendor_impl`, `gemv_vendor`), cuBLASLt; cuSPARSE spmm | complex<double> gemm/gemv with a unit dimension segfault inside cuBLASLt on one box, root cause unknown; two cuSPARSE spmm shapes misbehave | gemm worked around; gemv crashes `ortho_tests`; spmm refused in `can_run` |
 | 14 | `gesvd_cta` (Upper), `gesvd_blocked` (Lower, n <= 32), `syev_cta` (Upper), `syev_blocked` (Lower, n <= 32), `syev_two_stage` (Lower) | the Hermitian drivers read the triangle the caller did not name | **wrong answer under Auto** for gesvd Hermitian Upper n <= 32 and syev cfloat n 9..32, cdouble n <= 32 with Upper |
 | 15 | cuSOLVER `gesvdjBatched` | values-only, non-square input faults with `CUDA_ERROR_ILLEGAL_ADDRESS` | pinned vendor only; Auto never sends the shape there |
@@ -241,8 +241,9 @@ take the vendor, or throw `NoRouteError` vendor-free. Armed: dropping the term f
 **CLOSED in the phase 5 rip (2026-10-05).** The `DiagFullGemm` route is deleted, so
 `BATCHLAS_SYRK_ROUTE=native` and `BATCHLAS_SYR2K_ROUTE=native` take the tile kernel, which writes
 only the named triangle (guard: `SyrkCudaCustomTest.AutoAndNativeRoutesLeaveTheOtherHalfUntouched`),
-and a `cublasdx` pin that cannot run throws a message about the kernel it asked for. The filing
-below is kept as it was; its line numbers describe the deleted code.
+and a `cublasdx` pin that cannot run throws a message about the kernel it asked for. Since the
+level-3 flat-selection wave both dispatchers are deleted and `cublasdx` is an unknown family. The
+filing below is kept as it was; its line numbers describe the deleted code.
 
 Both were pre-existing, both were preserved deliberately rather than quietly improved, and both
 were reachable only through an environment pin.
@@ -511,6 +512,15 @@ test `PosvCandidates.HeterogeneousBatchIsRefusedUnderEveryPin`). The potrf and t
 are unfixed: the fix is a `!A.is_heterogeneous()` term on potrf's Vendor `can_run` (or a per-item
 loop) and the same term on trsm's Vendor `can_run`, each a routing
 change for its own phase. No test constructs a heterogeneous potrf or trsm.
+
+**symm (level-3 flat-selection wave, measured on `ff340fc6`).** The per-item `cublas?symm` loop
+also runs each item at the storage order: with only A heterogeneous (active orders 16/14/12/10 in a
+16 x 16 batch of 4) it answers off the active-order reference by 3.8, as did the old expansion. symm's
+`expand` family now refuses any heterogeneous operand, but `can_run(Vendor)` is still
+`d.has_vendor_blas`, so Auto hands a heterogeneous symm to this loop.
+`SymmCandidates.HeterogeneousBatchHasNoNativeRoute` keeps the A-only wrong answer of the direct
+expansion as a check. trmm is not affected: its vendor family refuses a heterogeneous batch on every
+backend (all three trmm loops share the defect). The syrk and syr2k vendor loops were not audited.
 
 ## 13. complex<double> cuBLAS calls with a unit dimension segfault inside cuBLASLt
 
