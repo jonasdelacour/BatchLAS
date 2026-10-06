@@ -1,5 +1,5 @@
 // symm: the whole selection path (docs/design/flat-kernel-selection.md §4.3, rule R1;
-// docs/design/flat-select-l3/symm.md). public symm() -> choose() -> std::visit -> launch.
+// docs/design/flat-kernel-selection.md §12). public symm() -> choose() -> std::visit -> launch.
 // The kernel for a shape is the first runnable entry of the nearest row in
 // tuned/symm.<dtype>.<device>.txt; can_run() below only removes entries that cannot run.
 // Expand mirrors A's referenced triangle into a dense scratch copy and hands it to the

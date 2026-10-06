@@ -10,6 +10,14 @@
 #include <string>
 
 #include "test_utils.hh"
+#include "../src/select/vendor.hh"
+
+// Vendor-free, a `vendor` pin warns and falls back to Auto, which is the tile kernel: the
+// reference would then be the code under test (AGENTS.md section 8 rule 7).
+// syr2k_candidates_tests checks the tile kernel against a host reference in that tree.
+inline constexpr bool kVendorReference = batchlas::select::level3_vendor_available<batchlas::Backend::CUDA>;
+#define SKIP_WITHOUT_VENDOR_REFERENCE() \
+    if (!kVendorReference) GTEST_SKIP() << "vendor-free: the vendor reference would be the tile kernel itself"
 
 using namespace batchlas;
 
@@ -267,6 +275,7 @@ TEST(Syr2kCudaCustomTest, TriangularTilesLeaveTheOtherHalfUntouched) {
     if (ctx.device().type != DeviceType::GPU) {
         GTEST_SKIP() << "CUDA custom syr2k test requires a GPU device";
     }
+    SKIP_WITHOUT_VENDOR_REFERENCE();
 
     // 256x64 is whole 128 tiles with a k the 8-deep staging fills exactly, so
     // it takes the unpredicated path; 200x53 breaks both and takes the
@@ -290,6 +299,7 @@ TEST(Syr2kCudaCustomTest, AutoRouteLeavesTheOtherHalfUntouched) {
     if (ctx.device().type != DeviceType::GPU) {
         GTEST_SKIP() << "CUDA custom syr2k test requires a GPU device";
     }
+    SKIP_WITHOUT_VENDOR_REFERENCE();
 
     // What this guards is the routing, not any one kernel: whichever route a
     // shape picks, the unreferenced half of C belongs to the caller. The router
@@ -326,6 +336,7 @@ TEST(Syr2kCudaCustomTest, AdversarialShapesLeaveTheOtherHalfUntouched) {
     if (ctx.device().type != DeviceType::GPU) {
         GTEST_SKIP() << "CUDA custom syr2k test requires a GPU device";
     }
+    SKIP_WITHOUT_VENDOR_REFERENCE();
 
     struct Case {
         Syr2kShape shape;
@@ -364,6 +375,7 @@ TEST(Syr2kCudaCustomTest, BetaNeverReadsOutsideTheTriangle) {
     if (ctx.device().type != DeviceType::GPU) {
         GTEST_SKIP() << "CUDA custom syr2k test requires a GPU device";
     }
+    SKIP_WITHOUT_VENDOR_REFERENCE();
 
     const Syr2kShape shapes[] = {{256, 64, 4}, {200, 53, 3}, {129, 9, 2}};
     const float alpha = 1.25f;

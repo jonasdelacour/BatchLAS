@@ -1,5 +1,5 @@
 // Every trmm candidate, pinned: docs/design/flat-kernel-selection.md §8 and
-// docs/design/flat-select-l3/trmm.md. The limit oracle reads the kernels' own predicates and
+// docs/design/flat-kernel-selection.md §12. The limit oracle reads the kernels' own predicates and
 // capacities; which kernel ran is read back from the select trace or a bit-for-bit comparison
 // with the direct launch, never assumed from the pin being accepted.
 #include <gtest/gtest.h>

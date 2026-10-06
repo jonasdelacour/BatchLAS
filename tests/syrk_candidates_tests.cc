@@ -1,5 +1,5 @@
 // Every syrk candidate, pinned: docs/design/flat-kernel-selection.md §8 and
-// docs/design/flat-select-l3/syrk.md. The limit oracle reads the kernels' own constants; which
+// docs/design/flat-kernel-selection.md §12. The limit oracle reads the kernels' own constants; which
 // kernel ran is read back from the select trace or a bit-for-bit comparison with the direct
 // kernel call, never assumed from the pin being accepted.
 #include <gtest/gtest.h>

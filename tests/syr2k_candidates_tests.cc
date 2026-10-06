@@ -1,5 +1,5 @@
 // Every syr2k candidate, pinned: docs/design/flat-kernel-selection.md §8 and
-// docs/design/flat-select-l3/syr2k.md. Which kernel ran is read back from the select trace, the
+// docs/design/flat-kernel-selection.md §12. Which kernel ran is read back from the select trace, the
 // kernel trace or a bit-for-bit comparison with the direct vendor call, never assumed from the
 // pin being accepted.
 #include <gtest/gtest.h>
@@ -376,7 +376,7 @@ TYPED_TEST(Syr2kCandidates, SaturatingBatchIsBitIdentical) {
 
 // The grid terms (R3, AGENTS §8.9): the batch is grid z, so a pin launches at 65535 and is
 // refused at 65536 (without the term that launch throws from the driver; the break is in
-// docs/design/flat-select-l3/syr2k.md). Auto past it takes the vendor (no route vendor-free).
+// docs/design/flat-kernel-selection.md §12). Auto past it takes the vendor (no route vendor-free).
 // The tile list is grid y: a launch at n = 46208 (361 tiles a side, 65341 tiles), a refusal at
 // 46209 (65703 tiles).
 TYPED_TEST(Syr2kCandidates, GridCeilingsAreCanRunTerms) {
@@ -867,6 +867,11 @@ TEST(Syr2kTranscribedTable, RowsAreTheGridAndHoldTheOldRule) {
             EXPECT_EQ(t.source, "transcribed:ff340fc6") << t.file;
             std::string keys = "# keys:";
             for (auto k : s2::key_names) keys += " " + std::string(k);
+            const std::string file = "syr2k." + std::string(dt) + "." + dev + ".txt";
+            const auto& all = select::embedded_tables();
+            const auto e = std::find_if(all.begin(), all.end(), [&](const auto& x) { return x.name == file; });
+            ASSERT_NE(e, all.end()) << file;
+            EXPECT_NE(std::string(e->text).find("\n" + keys + "\n"), std::string::npos) << file;
             ASSERT_EQ(t.rows.size(), s2::grid_n.size() * s2::grid_k.size() * s2::grid_batch.size()) << t.file;
             std::size_t i = 0;
             for (int n : s2::grid_n)
@@ -874,7 +879,9 @@ TEST(Syr2kTranscribedTable, RowsAreTheGridAndHoldTheOldRule) {
                     for (int b : s2::grid_batch) {
                         const select::TableRow& row = t.rows[i++];
                         const std::string want_key = std::to_string(n) + " " + std::to_string(k) + " " + std::to_string(b);
-                        (void)want_key;
+                        ASSERT_EQ(row.keys.size(), 3u) << t.file << ":" << row.line;
+                        EXPECT_EQ(row.keys[0] + " " + row.keys[1] + " " + row.keys[2], want_key)
+                            << t.file << ":" << row.line;
                         std::vector<std::string> ranked;
                         for (const auto& e : row.ranked) ranked.push_back(e.spelling);
                         const std::vector<std::string> want =

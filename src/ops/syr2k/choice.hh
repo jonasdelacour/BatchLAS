@@ -1,6 +1,6 @@
 #pragma once
 
-// syr2k's selection vocabulary (docs/design/flat-select-l3/syr2k.md), header-only.
+// syr2k's selection vocabulary (docs/design/flat-kernel-selection.md §12), header-only.
 
 #include "../../select/select.hh"
 

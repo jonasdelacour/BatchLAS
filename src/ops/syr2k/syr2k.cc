@@ -1,5 +1,5 @@
 // syr2k: the whole selection path (docs/design/flat-kernel-selection.md §4.3, rule R1;
-// docs/design/flat-select-l3/syr2k.md). public syr2k() -> choose() -> std::visit -> launch.
+// docs/design/flat-kernel-selection.md §12). public syr2k() -> choose() -> std::visit -> launch.
 // The kernel for a shape is the first runnable entry of the nearest row in
 // tuned/syr2k.<dtype>.<device>.txt; can_run() below only removes entries that cannot run.
 // Triangular is the 128x128x8 tile-masked kernel that writes only the requested half of C.

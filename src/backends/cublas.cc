@@ -14,19 +14,12 @@
 #include <batchlas/blas/functions/ormqr.hh>
 #include <complex>
 
-#include "gemm_cublasdx_dispatch.hh"
 #include "batch_launch.hh"
 #include "level3_shape.hh"
 #include "gemm_variant.hh"
 #include "gemm_heterogeneous.hh"
-#include "symm_custom_dispatch.hh"
-#include "syr2k_custom_dispatch.hh"
-#include "syrk_custom_dispatch.hh"
 #include "syrk_gram_tiles.hh"
 #include "../ops/syrk/choice.hh"
-#include "cublasdx_dispatch_common.hh"
-#include "trmm_custom_dispatch.hh"
-#include "trmm_triangular_tiles.hh"
 #include "triangular_expand.hh"
 
 // This file contains cuBLAS primitives implementation using MatrixView
@@ -641,50 +634,6 @@ namespace batchlas {
                       Transpose transA,
                       Diag diag) {
         return trmm_vendor_impl<Back, T>(ctx, A, B, C, alpha, side, uplo, transA, diag);
-    }
-
-    Event symm_vendor_cuda_raw(Queue& ctx,
-                               const MatrixView<float, MatrixFormat::Dense>& A,
-                               const MatrixView<float, MatrixFormat::Dense>& B,
-                               const MatrixView<float, MatrixFormat::Dense>& C,
-                               float alpha,
-                               float beta,
-                               Side side,
-                               Uplo uplo) {
-        return symm_vendor_impl<Backend::CUDA, float>(ctx, A, B, C, alpha, beta, side, uplo);
-    }
-
-    Event syrk_vendor_cuda_raw(Queue& ctx,
-                               const MatrixView<float, MatrixFormat::Dense>& A,
-                               const MatrixView<float, MatrixFormat::Dense>& C,
-                               float alpha,
-                               float beta,
-                               Uplo uplo,
-                               Transpose transA) {
-        return syrk_vendor_impl<Backend::CUDA, float>(ctx, A, C, alpha, beta, uplo, transA);
-    }
-
-    Event syr2k_vendor_cuda_raw(Queue& ctx,
-                                const MatrixView<float, MatrixFormat::Dense>& A,
-                                const MatrixView<float, MatrixFormat::Dense>& B,
-                                const MatrixView<float, MatrixFormat::Dense>& C,
-                                float alpha,
-                                float beta,
-                                Uplo uplo,
-                                Transpose transA) {
-        return syr2k_vendor_impl<Backend::CUDA, float>(ctx, A, B, C, alpha, beta, uplo, transA);
-    }
-
-    Event trmm_vendor_cuda_raw(Queue& ctx,
-                               const MatrixView<float, MatrixFormat::Dense>& A,
-                               const MatrixView<float, MatrixFormat::Dense>& B,
-                               const MatrixView<float, MatrixFormat::Dense>& C,
-                               float alpha,
-                               Side side,
-                               Uplo uplo,
-                               Transpose transA,
-                               Diag diag) {
-        return trmm_vendor_impl<Backend::CUDA, float>(ctx, A, B, C, alpha, side, uplo, transA, diag);
     }
 
     template <Backend B, typename T>

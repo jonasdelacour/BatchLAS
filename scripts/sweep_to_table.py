@@ -522,7 +522,7 @@ def symm_key(r):
     return key if key[0] in ("sq", "tall", "wide") and min(key[1:]) >= 1 else None
 
 
-# symm (docs/design/flat-select-l3/symm.md): C is m x n; form = sq|tall|wide of (m, n) lines the
+# symm (docs/design/flat-kernel-selection.md §12): C is m x n; form = sq|tall|wide of (m, n) lines the
 # old squareish test up with an axis. Real-only. sm_89 and sm_120: one transcription (no arch read).
 SYMM_CHOICES = ("expand", "vendor")
 SYMM = OpSpec(
@@ -963,7 +963,7 @@ SYRK = OpSpec(
     candidate_order=list(SYRK_CHOICES),
 )
 
-# syr2k (docs/design/flat-select-l3/syr2k.md): work ~ n^2 k batch; real dtypes only. No sweep source:
+# syr2k (docs/design/flat-kernel-selection.md §12): work ~ n^2 k batch; real dtypes only. No sweep source:
 # sm_89 and sm_120 are the same transcription of ff340fc6's hand-written rule (it read no architecture).
 SYR2K_CHOICES = ("triangular", "vendor")
 SYR2K = OpSpec(

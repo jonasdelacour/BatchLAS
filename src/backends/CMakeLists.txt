@@ -1,37 +1,10 @@
 set(BACKEND_COMMON_SOURCES
     backend_handle_instantiations.cc
-    # WP1 S1. The seam where a level-3 tile route gives up and asks for the
-    # vendor. Compiled in EVERY configuration -- including the one with no CUDA
-    # object library at all -- because it is what lets the four *_custom_dispatch
-    # TUs stop naming cuBLAS symbols. Its own #if picks vendor-or-throw; see
-    # level3_vendor_fallback.hh for why this cannot just call the public entry
-    # point (it would recurse: every call site is reached AFTER a gate that
-    # already returned true).
-    level3_vendor_fallback.cc
 )
 
 set(BACKEND_HOST_SOURCES)
 set(BACKEND_CUDA_SOURCES)
 set(BACKEND_ROCM_SOURCES)
-
-# WP1 S3. The cuBLASDx fused level-3 tails, behind a portable hook
-# (level3_fused.hh). Exactly one of these two is ever compiled, so the four
-# dispatchers link in every configuration while only ONE level-3 TU reaches a
-# CUDA header at all.
-#
-# A hook rather than #if inside the dispatchers, because an `if constexpr`
-# cannot discard a file-scope #include -- only a #if can -- so fencing in place
-# would have left them striped with preprocessor AND still pulling
-# <cuda_runtime_api.h> through the *_cublasdx_fused.hh headers.
-#
-# This block sits AFTER the set() calls above on purpose: appending to
-# BACKEND_CUDA_SOURCES before `set(BACKEND_CUDA_SOURCES)` clears it would drop
-# the file silently, with no error and no cuBLASDx route in the build.
-if(BATCHLAS_HAS_CUBLAS)
-    list(APPEND BACKEND_CUDA_SOURCES level3_fused_cuda.cc)
-else()
-    list(APPEND BACKEND_COMMON_SOURCES level3_fused_absent.cc)
-endif()
 
 # WP0 S3: gate each vendor translation unit on ITS OWN library, not on the
 # device family. netlib_lapack.cc calls LAPACKE and CBLAS, so it belongs to
@@ -87,68 +60,6 @@ endif()
 # per-TU split.
 if(BATCHLAS_HAS_CUBLAS AND BATCHLAS_HAS_CUSOLVER AND BATCHLAS_HAS_CUSPARSE)
     list(APPEND BACKEND_CUDA_SOURCES cusparse.cc)
-endif()
-
-# The cuBLASDx TUs are gated on cuBLAS, NOT on BATCHLAS_HAS_CUBLASDX. That looks
-# wrong and is deliberate: they compile with MathDx absent and
-# BATCHLAS_ENABLE_CUBLASDX_WRAPPER OFF, because each carries its own #if and
-# still emits the fallback definitions that gemm_cublasdx_dispatch.cc and the
-# four *_custom_dispatch.cc TUs call (gemm_cublasdx.cu holds only
-# cublasdx_gemm::available()). Gating them on BATCHLAS_HAS_CUBLASDX would remove
-# symbols live callers reference, and the link fails.
-if(BATCHLAS_HAS_CUBLAS)
-    list(APPEND BACKEND_CUDA_SOURCES
-        gemm_cublasdx.cu
-        symm_cublasdx_fused.cu
-        syrk_cublasdx_fused.cu
-        syr2k_cublasdx_fused.cu
-        trmm_cublasdx_fused.cu
-    )
-endif()
-
-# gemm_cublasdx_dispatch.cc stays gated with the fused level-3 kernels whose
-# cuBLASDx variant machinery it hosts.
-if(BATCHLAS_HAS_CUBLAS)
-    list(APPEND BACKEND_CUDA_SOURCES
-        gemm_cublasdx_dispatch.cc
-    )
-endif()
-
-# WP1 S4. The four portable expand-then-gemm / tile-masked level-3 routes leave
-# the CUDA object library. They were never CUDA -- the standalone-compile check
-# on triangular_expand.hh and the *_tiles.hh family established that long ago --
-# they were merely tied to it by three terminals, all of which are now gone:
-# *_vendor_cuda_raw (S1), gemm_cublasdx (S2) and the cuBLASDx fused tail (S3).
-# Verified on the objects, not asserted: `nm -C` over all four .o files finds no
-# CUDA symbol at all, and the sources contain no CUDA include and no
-# preprocessor.
-#
-# THE GATE IS RELAXED BY MOVING THE NAMES, NOT BY DELETING THE if(). Deleting it
-# would be the natural-looking edit and would defeat the entire work package:
-# BACKEND_CUDA_SOURCES feeds batchlas_backends_cuda_obj, which
-# src/CMakeLists.txt:17-19 does not even CREATE unless a CUDA math library is
-# present -- exactly the configuration that fails in a vendor-free build. The
-# four TUs would silently stop being compiled in the one build WP1 exists for.
-#
-# Compiling them everywhere does not yet make them REACHABLE anywhere: their
-# only callers are the four gates in cublas.cc, which is still cuBLAS-gated.
-# That is S6.
-#
-# ...but not on a box with no CUDA device backend at all. Three of the four name
-# ::batchlas::gemm<Backend::CUDA, float> for their expansion's terminal GEMM, and
-# that instantiation lives behind #if BATCHLAS_HAS_CUDA_BACKEND in
-# ops/level3/level3.cc -- so compiling them into the always-built
-# object library left batchlas_backends.so carrying an undefined reference on any
-# CPU-only or ROCm-only configure. The gate below is the DEVICE FAMILY, not the
-# library: the vendor-free build WP1 exists for is HAS_CUDA_BACKEND=1 with
-# HAS_CUBLAS=0, so it still compiles all four. Their only callers are gates that
-# are themselves guarded on Backend::CUDA, so nothing loses a route.
-if(BATCHLAS_HAS_CUDA_BACKEND)
-    list(APPEND BACKEND_COMMON_SOURCES
-        symm_custom_dispatch.cc
-        syrk_custom_dispatch.cc
-        trmm_custom_dispatch.cc
-    )
 endif()
 
 if(BATCHLAS_HAS_ROCBLAS)

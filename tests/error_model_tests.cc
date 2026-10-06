@@ -404,11 +404,11 @@ TEST(ErrorModelSites, SizingPoolRejectsRemainingAsApiMisuse) {
 // ---------------------------------------------------------------------------
 // Message text other tests match on.
 //
-// Four live catch sites assert on the TEXT of a message, not only its type
-// (tests/matrix_tests.cc:1076, tests/options_api_tests.cc:592,
-// tests/syr2k_tests.cc:189, tests/trmm_tests.cc:126). A type migration must not
-// reword them. Only the one needing no queue and no device is re-checked here;
-// the other three are guarded where they live.
+// Two live catch sites assert on the TEXT of a message, not only its type
+// (tests/matrix_tests.cc:1076, tests/options_api_tests.cc:592; the syr2k and trmm
+// cuBLASDx sites went with cuBLASDx). A type migration must not reword them. Only
+// the one needing no queue and no device is re-checked here; the other is guarded
+// where it lives.
 // ---------------------------------------------------------------------------
 
 TEST(ErrorModelSites, MessagesSurviveTheTypeChange) {

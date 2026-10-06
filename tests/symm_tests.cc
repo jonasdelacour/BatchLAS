@@ -8,7 +8,7 @@
 #include "../src/ops/symm/choice.hh"
 #include "../src/select/vendor.hh"
 
-// The forced-route tests pin through select::ScopedPin (docs/design/flat-select-l3/symm.md).
+// The forced-route tests pin through select::ScopedPin (docs/design/flat-kernel-selection.md §12).
 using SymmPin = batchlas::select::ScopedPin<batchlas::ops::symm::SymmChoice>;
 
 // Vendor-free, a `vendor` pin warns and falls back to Auto, which is expand: the reference

@@ -57,10 +57,10 @@ template <Backend B>
 inline constexpr const char* kSparseLibrary =
     B == Backend::CUDA ? "cuSPARSE" : B == Backend::ROCM ? "rocSPARSE" : "netlib CBLAS/LAPACKE";
 
-// Is the level-3 tile kernel (syrk gram/triangular, syr2k and trmm triangular, symm
-// expand) linked for (B, T)? The kernels are portable SYCL but wired only for CUDA;
-// float is reachable vendor-free, while the double/complex tile branches live in
-// cublas.cc and need cuBLAS.
+// Is a level-3 tile kernel linked for (B, T)? This keeps its pre-flat-selection value
+// (float, or any type with cuBLAS) for its consumers (sytrd_blocked, ortho, ormqr_blocked,
+// coverage): vendor-free, double syrk gram, symm expand and every trmm family now run too,
+// but widening this would move ortho's and ormqr's vendor-free routes, a separate change.
 template <Backend B, typename T>
 inline constexpr bool level3_tile_route_available =
     B == Backend::CUDA && (std::is_same_v<T, float> || bool(BATCHLAS_HAS_CUBLAS));

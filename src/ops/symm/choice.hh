@@ -1,6 +1,6 @@
 #pragma once
 
-// symm's selection vocabulary (docs/design/flat-select-l3/symm.md), header-only.
+// symm's selection vocabulary (docs/design/flat-kernel-selection.md §12), header-only.
 
 #include "../../select/select.hh"
 
@@ -33,7 +33,7 @@ inline std::string_view form_of(std::int64_t a, std::int64_t b) {
     return 2 * std::min(a, b) >= std::max(a, b) ? "sq" : (a > 2 * b ? "tall" : "wide");
 }
 
-// The transcriber's grid: 255|256 and 3|4 straddle the old thresholds (flat-select-l3/symm.md).
+// The transcriber's grid: 255|256 and 3|4 straddle the old thresholds (flat-kernel-selection.md §12).
 inline constexpr std::array<std::string_view, 3> grid_form{"sq", "tall", "wide"};
 inline constexpr std::array<int, 14> grid_mn{1, 2, 4, 8, 16, 32, 64, 128, 255, 256, 512, 1024, 2048, 4096};
 inline constexpr std::array<int, 9> grid_batch{1, 2, 3, 4, 8, 128, 1024, 8192, 32768};

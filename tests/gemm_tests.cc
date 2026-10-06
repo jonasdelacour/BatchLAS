@@ -12,9 +12,6 @@
 
 #include <batchlas/backend_config.h>
 #include <batchlas/util/env.hh>
-#if BATCHLAS_HAS_CUDA_BACKEND
-#include "../src/backends/gemm_cublasdx_dispatch.hh"
-#endif
 #include "../src/select/vendor.hh"
 #include "../src/ops/gemm/choice.hh"
 #include "../src/sycl/gemm_kernels.hh"
@@ -290,16 +287,6 @@ TEST(GemmDispatchPolicyTest, Sm89TableKeepsTheOldNativeSelector) {
                                           << "x" << r.k;
     }
 }
-
-#if BATCHLAS_HAS_CUBLAS
-TEST(GemmCuBLASDxDispatchPolicyTest, SelectsCuBLASDxNNWhenRequested) {
-    Matrix<float> A(128, 128, 1);
-    Matrix<float> B(128, 128, 1);
-    Matrix<float> C(128, 128, 1);
-    EXPECT_EQ(batchlas::backend::cublasdx_gemm_select_variant(A.view(), B.view(), C.view(), Transpose::NoTrans, Transpose::NoTrans),
-              batchlas::backend::cublasdx_gemm::CuBLASDxGemmVariant::CuBLASDx32x32x32NN);
-}
-#endif // BATCHLAS_HAS_CUBLAS
 
 // Test GEMM operation using identity matrix (C = A * I = A)
 TYPED_TEST(GemmTest, GemmWithIdentityMatrix) {

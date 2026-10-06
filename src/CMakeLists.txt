@@ -154,7 +154,7 @@ add_custom_command(
 )
 target_sources(batchlas_dispatch_obj PRIVATE select/select.cc select/coverage.cc "${BATCHLAS_TUNED_TABLES_CC}")
 # src/ops/<op>/<op>.cc: each holds its op's public entry points. Includes are relative, as for
-# src/select. ops/level3 holds symm/hemm/herk/her2k/syrk/syr2k/trmm.
+# src/select. ops/level3 holds hemm/herk/her2k, which have no kernel selection of their own yet.
 target_sources(batchlas_dispatch_obj PRIVATE ops/potrf/potrf.cc ops/posv/posv.cc ops/trsm/trsm.cc ops/gemm/gemm.cc)
 target_sources(batchlas_dispatch_obj PRIVATE ops/gemv/gemv.cc)
 target_sources(batchlas_dispatch_obj PRIVATE ops/geqrf/geqrf.cc)
@@ -435,22 +435,11 @@ if(TARGET batchlas_backends_cuda_obj)
         set_property(TARGET ${_batchlas_backends_cuda_lib} PROPERTY CUDA_ARCHITECTURES ${BATCHLAS_CUDA_ARCHITECTURES})
     endif()
 
-    if(BATCHLAS_MATHDX_TARGETS)
-        target_link_libraries(${_batchlas_backends_cuda_lib} PRIVATE ${BATCHLAS_MATHDX_TARGETS})
-    endif()
-    if(BATCHLAS_MATHDX_INCLUDE_DIRS)
-        target_include_directories(batchlas_backends_cuda_obj PRIVATE ${BATCHLAS_MATHDX_INCLUDE_DIRS})
-    endif()
     if(BATCHLAS_KEEP_CUDA_INTERMEDIATES)
         target_compile_options(batchlas_backends_cuda_obj PRIVATE
             $<$<COMPILE_LANGUAGE:CUDA>:--keep>
             $<$<COMPILE_LANGUAGE:CUDA>:--keep-dir=${CMAKE_BINARY_DIR}/cuda-intermediates>
         )
-    endif()
-
-    if(BATCHLAS_ENABLE_CUBLASDX_WRAPPER)
-        target_compile_definitions(batchlas_backends_cuda_obj PRIVATE BATCHLAS_ENABLE_CUBLASDX_WRAPPER=1)
-        target_compile_options(batchlas_backends_cuda_obj PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>)
     endif()
 
     # PRIVATE: PUBLIC exported CUDA::cudart/cublas/cusolver/cusparse into the
@@ -521,10 +510,6 @@ if(BATCHLAS_MONOLITHIC_LIBRARY)
     add_custom_target(batchlas_components DEPENDS batchlas)
 else()
     add_custom_target(batchlas_components DEPENDS ${BATCHLAS_COMPONENT_TARGETS})
-endif()
-
-if(BATCHLAS_ENABLE_CUBLASDX_WRAPPER)
-    target_compile_definitions(batchlas INTERFACE BATCHLAS_ENABLE_CUBLASDX_WRAPPER=1)
 endif()
 
 # Create namespaced alias

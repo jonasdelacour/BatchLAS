@@ -301,12 +301,6 @@ function(batchlas_add_test_target test_name)
     if(BATCHLAS_HAS_HOST_BACKEND AND test_name STREQUAL "getrf_tests")
         target_compile_definitions(${test_name} PRIVATE BATCHLAS_GETRF_TESTS_HAVE_LAPACKE=1)
     endif()
-    # CUDA headers: these #include src/backends/*cublasdx*.hh, which reaches
-    # <cuda_runtime_api.h>. CUDA::cudart is wanted here for its include dir.
-    if(BATCHLAS_HAS_CUDA_BACKEND AND TARGET CUDA::cudart
-       AND test_name MATCHES "^(gemm_tests|syr2k_tests|trmm_tests)$")
-        target_link_libraries(${test_name} PRIVATE CUDA::cudart)
-    endif()
     # util_device_queue_tests checks Device::cuda_compute_capability() against the
     # CUDA runtime's own answer, an oracle independent of the SYCL string it parses.
     if(BATCHLAS_HAS_CUDA_BACKEND AND TARGET CUDA::cudart
@@ -415,6 +409,10 @@ set(BATCHLAS_ROUTE_PINNED_TESTS
     orgqr_tests  "BATCHLAS_ORGQR_ROUTE=native|BATCHLAS_ORMQR_ROUTE=native"
     getrf_tests  "BATCHLAS_GETRF_ROUTE=native|BATCHLAS_GETRS_ROUTE=native|BATCHLAS_GETRI_ROUTE=native"
     spmm_tests   "BATCHLAS_SPMM_ROUTE=native"
+    symm_tests   "BATCHLAS_SYMM_ROUTE=native"
+    syrk_tests   "BATCHLAS_SYRK_ROUTE=native"
+    syr2k_tests  "BATCHLAS_SYR2K_ROUTE=native"
+    trmm_tests   "BATCHLAS_TRMM_ROUTE=native"
 )
 
 function(batchlas_add_route_pinned_test test_name env)

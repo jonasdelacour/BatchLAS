@@ -400,11 +400,17 @@ TEST(TunedTables, TrsmTranscribedTablesHoldExactlyTheChoiceGrid) {
 TEST(TunedTables, EveryOpShipsATableForEveryDtypeOnEveryShippedDevice) {
     std::set<std::string> names;
     for (const auto& e : sel::embedded_tables()) names.insert(std::string(e.name));
+    // symm, syrk and syr2k are RealScalar-constrained: no complex instantiation, so no complex table.
+    const std::set<std::string> real_only{"symm", "syrk", "syr2k"};
     for (const char* op : {"potrf", "posv", "trsm", "gemm", "gemv", "geqrf", "orgqr", "ormqr", "getrf", "getrs",
-                           "getri", "gesv", "gesvd", "spmm", "syev"})
+                           "getri", "gesv", "gesvd", "spmm", "syev", "symm", "syrk", "syr2k", "trmm"})
         for (const char* dev : {"sm_89", "sm_120", "cpu"})
             for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
                 if (std::string(dev) == "cpu" && std::string(op) != "spmm") continue;
+                if (dt[0] == 'c' && real_only.count(op)) {
+                    EXPECT_FALSE(names.count(std::string(op) + "." + dt + "." + dev + ".txt")) << op << " " << dt;
+                    continue;
+                }
                 EXPECT_TRUE(names.count(std::string(op) + "." + dt + "." + dev + ".txt"))
                     << op << " " << dt << " " << dev;
             }
