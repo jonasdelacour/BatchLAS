@@ -1414,7 +1414,10 @@ The 22 ops: `gemm`, `gemv`, `trsm`, `trmm`, `symm`, `syrk`, `syr2k`, `hemm`, `he
 (`lpanel:panel=8`, `reg:m=128:n=128:k=8:u=1`, `triangular`, `gram`, `expand`, `fold`, ...),
 parsed by `src/select/` for every op. Case and surrounding whitespace are ignored. An unknown value, or a choice the shape cannot
 run, throws (docs/design/flat-kernel-selection.md §5.3, §12). The old per-op
-spellings `BATCHLAS_<OP>_VARIANT` and `BATCHLAS_<OP>_PROVIDER` are no longer read.
+spellings `BATCHLAS_<OP>_VARIANT` and `BATCHLAS_<OP>_PROVIDER` are no longer read, and
+neither is `BATCHLAS_EXPAND_ROUTE` (retired: pin `expand`/`fold` or `vendor` through
+`BATCHLAS_{SYMM,TRMM,HEMM,HERK,HER2K}_ROUTE`). herk's Gram kernel is `BATCHLAS_HERK_ROUTE=gram`;
+herk does not read `BATCHLAS_SYRK_ROUTE`.
 
 **`selection`** — which kernel or algorithm runs, for the knobs that are not part of
 the route vocabulary. Three of these override an explicit API argument, which is the

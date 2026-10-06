@@ -7,7 +7,8 @@ orgqr, ormqr, spmm and syev, plus the rip of the old dispatch layer, the legacy 
 its aliases) are built on `flat-select-mega` (2026-10-05, one PR); no `RouteTable` is left. symm,
 syrk, syr2k and trmm followed on `flat-select-level3` (2026-10-06, §12 "Level-3 four"), with
 cuBLASDx deleted, and hemm, herk and her2k on `flat-select-l3b` (§12 "Hermitian three"), so every
-op that reads `BATCHLAS_<OP>_ROUTE` selects through `src/select` and no op selects by hand. Every
+op that reads `BATCHLAS_<OP>_ROUTE` selects through `src/select` and no op-level router is
+hand-written (policy picks inside one op remain, §11). Every
 op ships tables for every dtype it instantiates on sm_89 and sm_120. Open: the sm_89 live gate (§12
 "Gate results"), phase 4, and the retune that replaces the transcribed tables with measured ones.
 As built: §12; decisions: §13.
@@ -682,6 +683,12 @@ The sm_89 gate needs the RTX 4090 box. The sm_120 gate needs the Blackwell box (
 - ~~**hemm, herk and her2k still select by hand**~~: migrated (wave L3b, §12 "Hermitian three"):
   hemm `{expand, vendor}`, herk `{fold, gram, vendor}`, her2k `{fold, vendor}`, `BATCHLAS_EXPAND_ROUTE`
   retired, herk's gram pinned by `BATCHLAS_HERK_ROUTE=gram`, sytrd's predictor asks her2k's `choose()`.
+- **Policy inside one op is still hand-written.** With no op-level router left, these speed rules
+  stay outside the tables (R4 covers op choices, not steps inside a family): geqrf's register panel
+  leaf (`geqrf_panel_reg_preferred`, `m <= kGeqrfPanelRegPolicyRows = 128`, `geqrf_cta.cc`, read by
+  `geqrf_blocked.cc`), iluk's device/host split (`iluk_prefer_device`, `batch >= 32`; iluk has no
+  route variable), and the `settings().selection` knobs. Each becomes a family field only when the
+  tuner can sweep it, as for `Blocked`'s `nb`/`W` above.
 - **`select::level3_tile_route_available` is conservative**: float, or any type with cuBLAS.
   Vendor-free, double syrk gram, symm expand and every trmm family now run too; widening it moves
   ortho's and ormqr's vendor-free routes, so it is its own change.
@@ -1555,7 +1562,7 @@ in `tuned_tables_tests` holds it.
   the syev/ormqr `*_vendor_or_throw` shims in `src/ops/{syev,ormqr}/vendor.hh`; `is_sm120_family` next to
   `Device::cuda_compute_capability`; `op_external` inlined at its 19 call sites. `src/dispatch/` is gone too: the
   level-3 entry points are `src/ops/level3/level3.cc`.
-- `Settings::routing` is `route(std::string_view op)` over the 19 ops that read `BATCHLAS_<OP>_ROUTE` (throws for any
+- `Settings::routing` is `route(std::string_view op)` over the 19 ops that read `BATCHLAS_<OP>_ROUTE` (22 since the Hermitian three; throws for any
   other name); `legacy[]`, `legacy_route()`, `canonical[]` and the inert hemm/herk/her2k/iluk slots are gone, as are
   `selection.gemm_sycl_kernel`, `selection.syev_small_kernel` and `geometry.syev_cta_max_n`.
 - No aliases: `select::Rules` keeps only `last_resort`; every op's `aliases` array and gemm's `class_aliases` /

@@ -41,7 +41,8 @@ so the arithmetic the triangular kernels save is measurable; `Auto` must never s
 ### The shipped predicates
 
 Historical: the predicates as implemented up to `ff340fc6`, not as the notes describe them. They
-are what the transcribed symm/syrk/syr2k/trmm tables reproduce (hemm/herk/her2k's still run).
+are what the transcribed symm/syrk/syr2k/trmm tables reproduce; the hemm/herk/her2k lines ran until
+`8cf7fd86` and are what those three tables reproduce.
 
 ```cpp
 // syrk_custom_dispatch.cc:109-118, n and k taken from C.rows() and the transA-selected extent

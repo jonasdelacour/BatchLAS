@@ -209,7 +209,7 @@ FMA peak on these shapes while a complex accumulator costs twice the registers.
 
 ### `herk` and `her2k` crossovers
 
-Not moved by WP1 — both still live inside the cuBLAS-gated TU — but they are the same expansion decision and the
+Not moved by WP1 — both lived inside the cuBLAS-gated TU until the Hermitian-three wave — but they are the same expansion decision and the
 constants are easy to confuse with the ones above.
 
 | predicate | shipped condition | evidence | bracketing non-winner |
@@ -283,7 +283,8 @@ Built, measured, rejected. These cost as much to establish as the wins.
 5. **Complex Gram tiles (`herk`).** Loses to the existing GEMM-plus-Hermitian-fold at every Gram shape: 0.217 vs 0.206
    ms at n=32/batch 2048; 2.08 vs 1.57 at n=128/batch 512. A complex multiply is four real ones, so herk is compute
    bound where real syrk is bandwidth bound. `herk` keeps its route; the conjugating path stays reachable as
-   `BATCHLAS_SYRK_ROUTE=gram` so it stays measurable and tested.
+   herk's own `gram` family (`BATCHLAS_HERK_ROUTE=gram`; it was `BATCHLAS_SYRK_ROUTE=gram` until the Hermitian-three
+   wave) so it stays measurable and tested.
 6. **`syr2k` for the `sytrd_blocked` trailing update, in `double`.** 7.7x and 7.4x slower at n2=256/batch 1024, 1.9x
    slower at n2=512/batch 512; 1.55x *faster* only at n2=2048/batch 32. Double wins only where the batch is small
    enough that per-item launch cost amortises — the opposite of the regime that matters. The route stays CUDA + float.
@@ -452,7 +453,8 @@ names moved to `BACKEND_COMMON_SOURCES` (`src/backends/CMakeLists.txt:136-141`).
     `level3_tile_route_available` would assert something false.
 12. **Unverified windows, in one place:** the 257 ≤ n ≤ 383 band admitted by `syrk_prefer_triangular_tiles`; the
     batch-3 and `128 < n < 256` bands refused by `expansion_preferred`; and `syrk_prefer_cuda_custom_heuristic`'s
-    `tiled_work >= 8` and 2:1 aspect ratio, none of which has a bracketing grid in these sources.
+    `tiled_work >= 8` and 2:1 aspect ratio, none of which has a bracketing grid in these sources. The predicates
+    are deleted, but the transcribed syrk, symm and hemm tables reproduce these bands, so they are still unverified.
 
 ## Raw evidence
 

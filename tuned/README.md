@@ -140,8 +140,8 @@ cell whose extents contradict its form holds the decision at the form's represen
 The Hermitian three (hemm, herk, her2k) were transcribed at `8cf7fd86`, the last commit with their
 `cublas.cc` rules (`expansion_preferred`, `herk_gemm_preferred`, `her2k_gemm_preferred`, each
 evaluated unpinned and with capacities unlimited; `can_run` re-applies `expansion_fits`). The
-transcriber was a temporary Python script outside the tree (the rules are three one-line
-predicates): it held byte-for-byte copies of the predicate bodies and the decision lines, checked
+transcriber was a temporary Python script outside the tree (`l3b_transcribe.py` in the wave's job
+directory, not kept; the rules are three one-line predicates): it held byte-for-byte copies of the predicate bodies and the decision lines, checked
 against `git show 8cf7fd86:` by a `--fidelity` mode, read the grid from `src/ops/<op>/choice.hh`,
 and wrote one CSV per op for both devices, then
 
