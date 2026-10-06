@@ -9,6 +9,7 @@
 #include <batchlas/blas/enums.hh>
 #include <batchlas/no_route.hh>
 
+#include <cstdint>
 #include <string>
 #include <type_traits>
 
@@ -56,6 +57,31 @@ inline constexpr const char* kSolverLibrary =
 template <Backend B>
 inline constexpr const char* kSparseLibrary =
     B == Backend::CUDA ? "cuSPARSE" : B == Backend::ROCM ? "rocSPARSE" : "netlib CBLAS/LAPACKE";
+
+// The library group an op's Vendor family calls; an op names exactly one (OpSpec::vendor).
+enum class Lib : std::uint8_t { none, level3, factorization, solver, sparse };
+
+template <Backend B>
+constexpr bool has_library(Lib l) {
+    switch (l) {
+        case Lib::level3: return level3_vendor_available<B>;
+        case Lib::factorization: return factorization_vendor_available<B>;
+        case Lib::solver: return solver_vendor_available<B>;
+        case Lib::sparse: return sparse_vendor_available<B>;
+        case Lib::none: return false;
+    }
+    return false;
+}
+
+template <Backend B>
+constexpr const char* library_name(Lib l) {
+    switch (l) {
+        case Lib::factorization: return kFactorizationLibrary<B>;
+        case Lib::solver: return kSolverLibrary<B>;
+        case Lib::sparse: return kSparseLibrary<B>;
+        default: return kLevel3Library<B>;
+    }
+}
 
 // Is the level-3 tile kernel (syrk gram/triangular, syr2k and trmm triangular, symm
 // expand) linked for (B, T)? The kernels are portable SYCL but wired only for CUDA;

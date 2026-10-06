@@ -1,7 +1,5 @@
 #pragma once
 
-// syev's selection vocabulary (docs/design/flat-kernel-selection.md#phase-5-syev), header-only.
-
 #include "../../select/select.hh"
 
 #include <array>
@@ -22,12 +20,9 @@ using SyevChoice = std::variant<Cta, CtaFused, Jacobi, Blocked, TwoStage, Vendor
 
 // Every compiled choice, once, in tie-break order (§6.3): native first, vendor last.
 template <class T>
-constexpr auto candidates() {
-    return std::array<SyevChoice, 6>{Cta{}, CtaFused{}, Jacobi{}, Blocked{}, TwoStage{}, Vendor{}};
-}
+constexpr auto candidates() { return select::all_of<SyevChoice>(); }
 
-inline constexpr std::array<std::string_view, 2> last_resort{"blocked", "vendor"};
-inline constexpr select::Rules rules{last_resort};  // §5.5: Blocked runs every square GPU shape, Vendor everything else (CPU).
+inline constexpr select::OpSpec spec{Op::syev, select::Lib::solver};  // §5.5: Blocked runs every square GPU shape, Vendor everything else (CPU).
 
 // jobz N|V; uplo is no key (Upper mirrors into Lower). Work ~ n^3 batch.
 inline constexpr std::array<std::string_view, 3> key_names{"jobz:exact", "n:log:3", "batch:log"};

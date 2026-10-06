@@ -1,7 +1,5 @@
 #pragma once
 
-// geqrf's selection vocabulary (docs/design/flat-kernel-selection.md#phase-5-geqrf), header-only.
-
 #include "../../select/select.hh"
 
 #include <array>
@@ -21,13 +19,10 @@ using GeqrfChoice = std::variant<Tiny, Cta, Blocked, Vendor>;
 
 // Every compiled choice, once, in tie-break order (§6.3): narrowest first, vendor last.
 template <class T>
-constexpr auto candidates() {
-    return std::array<GeqrfChoice, 4>{Tiny{}, Cta{}, Blocked{}, Vendor{}};
-}
+constexpr auto candidates() { return select::all_of<GeqrfChoice>(); }
 
 // Generality order (§5.5): Blocked runs every m >= n shape on a GPU, Vendor everything else.
-inline constexpr std::array<std::string_view, 2> last_resort{"blocked", "vendor"};
-inline constexpr select::Rules rules{last_resort};
+inline constexpr select::OpSpec spec{Op::geqrf, select::Lib::factorization};
 
 // form: sq | tall (m > n) | wide (m < n); aspect = max(m,n) / min(m,n). Work ~ n^3 * aspect.
 inline constexpr std::array<std::string_view, 3> key_names{"form:exact", "n:log:3", "aspect:log"};

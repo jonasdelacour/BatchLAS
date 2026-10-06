@@ -1,7 +1,5 @@
 #pragma once
 
-// gesvd's selection vocabulary (flat-kernel-selection.md §4.2, phase 5), header-only.
-
 #include "../../select/select.hh"
 
 #include <array>
@@ -17,13 +15,10 @@ struct Vendor : select::NoFields<"vendor"> {};    // backend::gesvd_vendor
 
 using GesvdChoice = std::variant<Jacobi, Cta, Blocked, Vendor>;
 
-template <class T>
-constexpr auto candidates() {  // tie-break order (§6.3): native first, vendor last
-    return std::array<GesvdChoice, 4>{Jacobi{}, Cta{}, Blocked{}, Vendor{}};
-}
+template <class T>  // tie-break order (§6.3): native first, vendor last
+constexpr auto candidates() { return select::all_of<GesvdChoice>(); }
 
-inline constexpr std::array<std::string_view, 2> last_resort{"blocked", "vendor"};
-inline constexpr select::Rules rules{last_resort};  // §5.5: Blocked serves the most GPU shapes, Vendor the rest
+inline constexpr select::OpSpec spec{Op::gesvd, select::Lib::solver};  // §5.5: Blocked serves the most GPU shapes, Vendor the rest
 
 // herm N|L|U; vec none|all|thin from the CANONICAL jobs (the only job facts a gate reads).
 inline constexpr std::array<std::string_view, 4> key_names{"herm:exact", "vec:exact", "m:log:1.5", "n:log:1.5"};

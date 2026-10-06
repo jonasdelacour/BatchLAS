@@ -1,23 +1,18 @@
-// trsm: the whole selection path (docs/design/flat-kernel-selection.md §4.3, rule R1;
-// flat-kernel-selection-phase3-plan.md §1.2). public trsm() -> choose() -> std::visit -> launch.
-// The kernel for a shape is the first runnable entry of the nearest row in
-// tuned/trsm.<dtype>.<device>.txt; can_run() below only removes entries that cannot run.
-// Cta and SgLeft are register-resident solvers for order <= 32; Blocked solves 32-wide diagonal
-// blocks with Cta and updates the rest with the public gemm, which picks its own kernel.
+// trsm (flat-kernel-selection.md §4.3, R1; flat-kernel-selection-phase3-plan.md §1.2): select::run takes
+// the first entry of the nearest tuned/trsm.<dtype>.<device>.txt row that can_run() admits. Cta and SgLeft
+// are register-resident solvers for order <= 32; Blocked solves 32-wide diagonal blocks with Cta and
+// updates the rest with the public gemm, which picks its own kernel.
 
 #include <batchlas/backend_config.h>
 
 #include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/blas/functions/trsm.hh>
-#include <batchlas/no_route.hh>
-#include "../../select/vendor.hh"
 
 #include "choice.hh"
 #include "../../select/select.hh"
 #include "../../sycl/trsm_native.hh"
 #include "../../util/template-instantiations.hh"
 
-#include <algorithm>
 #include <complex>
 #include <cstdint>
 #include <variant>
@@ -25,10 +20,7 @@
 namespace batchlas {
 namespace ops::trsm {
 
-template <class... F>
-struct overloaded : F... { using F::operator()...; };
-template <class... F>
-overloaded(F...) -> overloaded<F...>;
+using select::overloaded;
 
 template <class T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
@@ -64,32 +56,8 @@ bool can_run(const TrsmChoice& c, const select::Device& d, const MV<T>& A, const
                    d.max_wg >= sycl_trsm::kTrsmSgLeftWgSize;
         },
         [&](Blocked) { return native && v1_fits && sycl_trsm::trsm_blocked_available<T>() && cta_max >= 1; },
-        [&](Vendor) { return d.has_vendor_blas; },
+        [&](Vendor) { return d.has_vendor; },
     }, c);
-}
-
-template <Backend B, class T>
-TrsmChoice choose(Queue& q, const MV<T>& A, const MV<T>& Bm, Side side, Transpose transA) {
-    const select::Device& d = select::device_of<B>(q);
-    auto ok = [&](const TrsmChoice& c) { return can_run<T>(c, d, A, Bm, side); };
-    try {
-        return select::choose("trsm", select::dtype_name<T>(), d, key_of<T>(A, Bm, side, transA), candidates<T>(),
-                              ok, rules);
-    } catch (const std::runtime_error&) {
-        // Vendor-free burn-down reads coverage `miss` rows; a plain runtime_error records none.
-        const auto all = candidates<T>();
-        if (!select::level3_vendor_available<B> && std::none_of(all.begin(), all.end(), ok))
-            select::throw_no_vendor_route<T>(Op::trsm, B, select::kLevel3Library<B>);
-        throw;
-    }
-}
-
-// The coverage row's native flags (§5.6): computed only when coverage records a row.
-template <Backend B, class T>
-select::NativeFacts native_facts(Queue& q, const MV<T>& A, const MV<T>& Bm, Side side) {
-    if (!coverage::dynamic_enabled()) return {};
-    const select::Device& d = select::device_of<B>(q);
-    return select::native_facts(candidates<T>(), [&](const TrsmChoice& c) { return can_run<T>(c, d, A, Bm, side); });
 }
 
 template <Backend B, class T>
@@ -110,10 +78,9 @@ Event launch(Queue& q, const TrsmChoice& c, const MV<T>& A, const MV<T>& Bm, T a
                 });
         },
         [&](Vendor) -> Event {
-            if constexpr (select::level3_vendor_available<B>)
+            if constexpr (select::has_library<B>(spec.vendor))
                 return backend::trsm_vendor<B, T>(q, A, Bm, side, uplo, transA, diag, alpha);
-            else
-                select::throw_no_vendor_route<T>(Op::trsm, B, select::kLevel3Library<B>);
+            else select::no_vendor<B, T>(spec);
         },
     }, c);
 }
@@ -124,42 +91,20 @@ Event launch(Queue& q, const TrsmChoice& c, const MV<T>& A, const MV<T>& Bm, T a
 template <Backend Back, typename T>
 Event trsm(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
            T alpha, Side side, Uplo uplo, Transpose transA, Diag diag) {
+    namespace o = ops::trsm;
     trsm_validate_params(A, B, side, uplo, transA, diag);
-    const auto c = ops::trsm::choose<Back, T>(ctx, A, B, side, transA);
     // The coverage row's key: m, n are B's extents and k the triangular order, as before.
-    auto shape = select::square_shape<Back, T>(A.rows(), A.batch_size());
-    shape.m = B.rows();
-    shape.n = B.cols();
-    shape.side = side;
-    shape.uplo = uplo;
-    shape.transA = transA;
-    shape.diag = diag;
-    const select::Key trace_key = ops::trsm::key_of<T>(A, B, side, transA);
-    select::TraceScope trace("trsm", c, shape, ops::trsm::native_facts<Back, T>(ctx, A, B, side), trace_key);
-    return ops::trsm::launch<Back, T>(ctx, c, A, B, alpha, side, uplo, transA, diag);
+    const coverage::Shape shape{.m = B.rows(), .n = B.cols(), .k = A.rows(), .batch = A.batch_size(),
+                                .transA = transA, .uplo = uplo, .side = side, .diag = diag};
+    const select::Key key = o::key_of<T>(A, B, side, transA);
+    return select::run<Back, T>(
+        o::spec, ctx, key, o::candidates<T>(),
+        [&](const auto& c, const auto& d) { return o::can_run<T>(c, d, A, B, side); }, shape, key,
+        [&](const auto& c) { return o::launch<Back, T>(ctx, c, A, B, alpha, side, uplo, transA, diag); });
 }
 
-#define TRSM_INSTANTIATE(B_, fp) BATCHLAS_INSTANTIATE(sig::trsm<fp>, trsm, B_, fp)
-
-#define TRSM_ALL(B_)                          \
-    TRSM_INSTANTIATE(B_, float)               \
-    TRSM_INSTANTIATE(B_, double)              \
-    TRSM_INSTANTIATE(B_, std::complex<float>) \
-    TRSM_INSTANTIATE(B_, std::complex<double>)
-
-// Keyed on the device family, not the vendor library: without the library the Vendor arm
-// compiles to a throw, so the symbol exists in every build with the device.
-#if BATCHLAS_HAS_CUDA_BACKEND
-TRSM_ALL(Backend::CUDA)
-#endif
-#if BATCHLAS_HAS_ROCM_BACKEND
-TRSM_ALL(Backend::ROCM)
-#endif
-#if BATCHLAS_HAS_HOST_BACKEND
-TRSM_ALL(Backend::NETLIB)
-#endif
-
-#undef TRSM_ALL
+#define TRSM_INSTANTIATE(B_, fp) BATCHLAS_INSTANTIATE_OP(B_, fp, trsm)
+BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(TRSM_INSTANTIATE)
 #undef TRSM_INSTANTIATE
 
 }  // namespace batchlas

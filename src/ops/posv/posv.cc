@@ -1,9 +1,7 @@
-// posv: the whole selection path (docs/design/flat-kernel-selection.md §4.3, rule R1;
-// flat-kernel-selection-phase3-plan.md §1.1). public posv() -> choose() -> std::visit -> launch.
-// The kernel for a shape is the first runnable entry of the nearest row in
-// tuned/posv.<dtype>.<device>.txt; can_run() below only removes entries that cannot run.
-// Tiny is the fused factor-and-solve kernel; Cta and Blocked compose the public potrf with
-// one fused solve (Cta) or two public trsm calls (Blocked), and each child picks its own kernel.
+// posv (flat-kernel-selection.md §4.3, R1; flat-kernel-selection-phase3-plan.md §1.1): select::run takes
+// the first entry of the nearest tuned/posv.<dtype>.<device>.txt row that can_run() admits. Tiny is the
+// fused factor-and-solve kernel; Cta and Blocked compose the public potrf with one fused solve (Cta) or
+// two public trsm calls (Blocked), and each child picks its own kernel.
 
 #include <batchlas/backend_config.h>
 
@@ -26,10 +24,7 @@
 namespace batchlas {
 namespace ops::posv {
 
-template <class... F>
-struct overloaded : F... { using F::operator()...; };
-template <class... F>
-overloaded(F...) -> overloaded<F...>;
+using select::overloaded;
 
 template <class T>
 select::Key key_of(const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
@@ -60,23 +55,6 @@ bool can_run(const PosvChoice& c, const select::Device& d, const MatrixView<T, M
         },
         [&](Blocked) { return homogeneous; },
     }, c);
-}
-
-template <Backend B, class T>
-PosvChoice choose(Queue& q, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& Bm,
-                  Uplo uplo) {
-    const select::Device& d = select::device_of<B>(q);
-    return select::choose("posv", select::dtype_name<T>(), d, key_of(A, Bm, uplo), candidates<T>(),
-                          [&](const PosvChoice& c) { return can_run<T>(c, d, A, Bm); }, rules);
-}
-
-// The coverage row's native flags (§5.6): computed only when coverage records a row.
-template <Backend B, class T>
-select::NativeFacts native_facts(Queue& q, const MatrixView<T, MatrixFormat::Dense>& A,
-                                 const MatrixView<T, MatrixFormat::Dense>& Bm) {
-    if (!coverage::dynamic_enabled()) return {};
-    const select::Device& d = select::device_of<B>(q);
-    return select::native_facts(candidates<T>(), [&](const PosvChoice& c) { return can_run<T>(c, d, A, Bm); });
 }
 
 template <Backend B, class T>
@@ -138,48 +116,32 @@ void throw_if_unservable(const MatrixView<T, MatrixFormat::Dense>& A, const Matr
 template <Backend Back, typename T>
 Event posv(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
            Uplo uplo, Span<std::byte> work_space, Span<int32_t> info) {
+    namespace o = ops::posv;
     posv_validate_params<T>(A, B, uplo);
-    ops::posv::throw_if_unservable<T>(A, B, "posv");
-    const auto c = ops::posv::choose<Back, T>(ctx, A, B, uplo);
+    o::throw_if_unservable<T>(A, B, "posv");
     // The coverage row's key: m = k = order, n = nrhs, and uplo (the only field separating rows).
-    auto shape = select::square_shape<Back, T>(A.rows(), A.batch_size());
-    shape.n = B.cols();
-    shape.uplo = uplo;
-    const select::Key trace_key{{"n", A.rows()}, {"nrhs", B.cols()}, {"batch", A.batch_size()}};
-    select::TraceScope trace("posv", c, shape, ops::posv::native_facts<Back, T>(ctx, A, B), trace_key);
-    return ops::posv::launch<Back, T>(ctx, c, A, B, uplo, work_space, info);
+    const coverage::Shape shape{.m = A.rows(), .n = B.cols(), .k = A.rows(), .batch = A.batch_size(), .uplo = uplo};
+    return select::run<Back, T>(
+        o::spec, ctx, o::key_of(A, B, uplo), o::candidates<T>(),
+        [&](const auto& c, const auto& d) { return o::can_run<T>(c, d, A, B); }, shape,
+        {{"n", A.rows()}, {"nrhs", B.cols()}, {"batch", A.batch_size()}},
+        [&](const auto& c) { return o::launch<Back, T>(ctx, c, A, B, uplo, work_space, info); });
 }
 
 template <Backend Back, typename T>
 size_t posv_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                         const MatrixView<T, MatrixFormat::Dense>& B, Uplo uplo) {
+    namespace o = ops::posv;
     posv_validate_params<T>(A, B, uplo);
-    ops::posv::throw_if_unservable<T>(A, B, "posv_buffer_size");
-    return ops::posv::workspace<Back, T>(ctx, ops::posv::choose<Back, T>(ctx, A, B, uplo), A, B, uplo);
+    o::throw_if_unservable<T>(A, B, "posv_buffer_size");
+    const auto c = select::pick<Back, T>(o::spec, ctx, o::key_of(A, B, uplo), o::candidates<T>(),
+                                         [&](const auto& k, const auto& d) { return o::can_run<T>(k, d, A, B); });
+    return o::workspace<Back, T>(ctx, c, A, B, uplo);
 }
 
-#define POSV_INSTANTIATE(B_, fp)                                    \
-    BATCHLAS_INSTANTIATE(sig::posv<fp>, posv, B_, fp)               \
-    BATCHLAS_INSTANTIATE(sig::posv_buffer_size<fp>, posv_buffer_size, B_, fp)
-
-#define POSV_ALL(B_)                          \
-    POSV_INSTANTIATE(B_, float)               \
-    POSV_INSTANTIATE(B_, double)              \
-    POSV_INSTANTIATE(B_, std::complex<float>) \
-    POSV_INSTANTIATE(B_, std::complex<double>)
-
 // Keyed on the device family: posv has no vendor arm, so every build with the device has it.
-#if BATCHLAS_HAS_CUDA_BACKEND
-POSV_ALL(Backend::CUDA)
-#endif
-#if BATCHLAS_HAS_ROCM_BACKEND
-POSV_ALL(Backend::ROCM)
-#endif
-#if BATCHLAS_HAS_HOST_BACKEND
-POSV_ALL(Backend::NETLIB)
-#endif
-
-#undef POSV_ALL
+#define POSV_INSTANTIATE(B_, fp) BATCHLAS_INSTANTIATE_OP(B_, fp, posv) BATCHLAS_INSTANTIATE_OP(B_, fp, posv_buffer_size)
+BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(POSV_INSTANTIATE)
 #undef POSV_INSTANTIATE
 
 }  // namespace batchlas

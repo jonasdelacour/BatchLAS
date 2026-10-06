@@ -1,15 +1,11 @@
-// gemm: the whole selection path (docs/design/flat-kernel-selection.md §4.3, rule R1;
-// flat-kernel-selection-phase3-plan.md §1.3). public gemm() -> choose() -> std::visit -> launch.
-// The kernel for a shape is the first runnable entry of the nearest row in
-// tuned/gemm.<dtype>.<device>.txt; can_run() below only removes entries that cannot run.
-// A heterogeneous batch never reaches choose(): it is split into homogeneous items first, and
-// each item makes its own choice.
+// gemm (flat-kernel-selection.md §4.3, R1; flat-kernel-selection-phase3-plan.md §1.3): select::run takes
+// the first entry of the nearest tuned/gemm.<dtype>.<device>.txt row that can_run() admits. A
+// heterogeneous batch never reaches choose(): it is split into homogeneous items first, and each item
+// makes its own choice.
 
 #include <batchlas/backend_config.h>
 
 #include <batchlas/blas/functions/gemm.hh>
-#include <batchlas/no_route.hh>
-#include "../../select/vendor.hh"
 #include <batchlas/settings.hh>
 
 #include "choice.hh"
@@ -28,10 +24,7 @@
 namespace batchlas {
 namespace ops::gemm {
 
-template <class... F>
-struct overloaded : F... { using F::operator()...; };
-template <class... F>
-overloaded(F...) -> overloaded<F...>;
+using select::overloaded;
 
 template <class T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
@@ -101,7 +94,7 @@ bool can_run(const GemmChoice& c, const select::Device& d, const MV<T>& A, const
     const Dims s = dims_of<T>(A, B, ta, tb);
     // The kernels also run on a host SYCL device, but a CPU with a host BLAS keeps it (maintainer
     // decision, plan §13); without one (a vendor-free host queue) they are its only gemm, as before.
-    const bool device = d.is_gpu || !d.has_vendor_blas;
+    const bool device = d.is_gpu || !d.has_vendor;
     const bool native = device && precision == ComputePrecision::Default && s.m > 0 && s.n > 0 && s.k > 0 &&
                         A.batch_size() >= 1 && !A.is_heterogeneous() && !B.is_heterogeneous() &&
                         !C.is_heterogeneous();
@@ -125,35 +118,8 @@ bool can_run(const GemmChoice& c, const select::Device& d, const MV<T>& A, const
                                            [&](const WideCfg& g) { return g.m == w.m && g.n == w.n && g.k == w.k; });
             return grid && cfg != wide_configs.end() && wide_form<T>(*cfg, ta, tb) && d.max_wg >= cfg->threads();
         },
-        [&](Vendor) { return d.has_vendor_blas; },
+        [&](Vendor) { return d.has_vendor; },
     }, c);
-}
-
-template <Backend B, class T>
-GemmChoice choose(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, Transpose ta, Transpose tb,
-                  ComputePrecision precision) {
-    const select::Device& d = select::device_of<B>(q);
-    auto ok = [&](const GemmChoice& c) { return can_run<T>(c, d, A, Bm, C, ta, tb, precision); };
-    try {
-        return select::choose("gemm", select::dtype_name<T>(), d, key_of<T>(A, Bm, C, ta, tb), candidates<T>(), ok,
-                              rules);
-    } catch (const std::runtime_error&) {
-        // Vendor-free burn-down reads coverage `miss` rows; a plain runtime_error records none.
-        const auto all = candidates<T>();
-        if (!select::level3_vendor_available<B> && std::none_of(all.begin(), all.end(), ok))
-            select::throw_no_vendor_route<T>(Op::gemm, B, select::kLevel3Library<B>);
-        throw;
-    }
-}
-
-// The coverage row's native flags (§5.6): computed only when coverage records a row.
-template <Backend B, class T>
-select::NativeFacts native_facts(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, Transpose ta,
-                                 Transpose tb, ComputePrecision precision) {
-    if (!coverage::dynamic_enabled()) return {};
-    const select::Device& d = select::device_of<B>(q);
-    return select::native_facts(candidates<T>(),
-                                [&](const GemmChoice& c) { return can_run<T>(c, d, A, Bm, C, ta, tb, precision); });
 }
 
 template <Backend B, class T>
@@ -173,10 +139,9 @@ Event launch(Queue& q, const GemmChoice& c, const MV<T>& A, const MV<T>& Bm, con
         },
         [&](const Wide& w) { return sycl_gemm::gemm_wide<T>(q, w.m, w.n, w.k, A, Bm, C, alpha, beta, ta, tb); },
         [&](Vendor) -> Event {
-            if constexpr (select::level3_vendor_available<B>)
+            if constexpr (select::has_library<B>(spec.vendor))
                 return backend::gemm_vendor<B, T>(q, A, Bm, C, alpha, beta, ta, tb, precision);
-            else
-                select::throw_no_vendor_route<T>(Op::gemm, B, select::kLevel3Library<B>);
+            else select::no_vendor<B, T>(spec);
         },
     }, c);
 }
@@ -188,6 +153,7 @@ template <Backend Back, typename T>
 Event gemm(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
            const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta, Transpose transA, Transpose transB,
            ComputePrecision precision) {
+    namespace o = ops::gemm;
     if (A.is_heterogeneous() || B.is_heterogeneous() || C.is_heterogeneous()) {
         // Items are homogeneous by construction, so the recursion is one level deep.
         return backend::detail::gemm_heterogeneous_loop<T>(
@@ -197,43 +163,22 @@ Event gemm(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const Matrix
                 return gemm<Back, T>(ctx, a, b, c, alpha, beta, transA, transB, precision);
             });
     }
-    ops::gemm::validate<T>(A, B, C, transA, transB);
+    o::validate<T>(A, B, C, transA, transB);
     // An empty batch launches nothing under any pin, as the old native range did.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
-    const auto c = ops::gemm::choose<Back, T>(ctx, A, B, C, transA, transB, precision);
-    const auto d = ops::gemm::dims_of<T>(A, B, transA, transB);
-    auto shape = select::square_shape<Back, T>(d.m, A.batch_size());
-    shape.n = d.n;
-    shape.k = d.k;
-    shape.transA = transA;
-    shape.transB = transB;
-    const select::Key trace_key = ops::gemm::key_of<T>(A, B, C, transA, transB);
-    select::TraceScope trace("gemm", c, shape,
-                             ops::gemm::native_facts<Back, T>(ctx, A, B, C, transA, transB, precision), trace_key);
-    return ops::gemm::launch<Back, T>(ctx, c, A, B, C, alpha, beta, transA, transB, precision);
+    const auto d = o::dims_of<T>(A, B, transA, transB);
+    const coverage::Shape shape{.m = d.m, .n = d.n, .k = d.k, .batch = A.batch_size(), .transA = transA,
+                                .transB = transB};
+    const select::Key key = o::key_of<T>(A, B, C, transA, transB);
+    return select::run<Back, T>(
+        o::spec, ctx, key, o::candidates<T>(),
+        [&](const auto& c, const auto& dev) { return o::can_run<T>(c, dev, A, B, C, transA, transB, precision); },
+        shape, key,
+        [&](const auto& c) { return o::launch<Back, T>(ctx, c, A, B, C, alpha, beta, transA, transB, precision); });
 }
 
-#define GEMM_INSTANTIATE(B_, fp) BATCHLAS_INSTANTIATE(sig::gemm<fp>, gemm, B_, fp)
-
-#define GEMM_ALL(B_)                          \
-    GEMM_INSTANTIATE(B_, float)               \
-    GEMM_INSTANTIATE(B_, double)              \
-    GEMM_INSTANTIATE(B_, std::complex<float>) \
-    GEMM_INSTANTIATE(B_, std::complex<double>)
-
-// Keyed on the device family, not the vendor library: without the library the Vendor arm
-// compiles to a throw, so the symbol exists in every build with the device.
-#if BATCHLAS_HAS_CUDA_BACKEND
-GEMM_ALL(Backend::CUDA)
-#endif
-#if BATCHLAS_HAS_ROCM_BACKEND
-GEMM_ALL(Backend::ROCM)
-#endif
-#if BATCHLAS_HAS_HOST_BACKEND
-GEMM_ALL(Backend::NETLIB)
-#endif
-
-#undef GEMM_ALL
+#define GEMM_INSTANTIATE(B_, fp) BATCHLAS_INSTANTIATE_OP(B_, fp, gemm)
+BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(GEMM_INSTANTIATE)
 #undef GEMM_INSTANTIATE
 
 }  // namespace batchlas

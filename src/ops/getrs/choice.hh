@@ -1,7 +1,5 @@
 #pragma once
 
-// getrs's selection vocabulary (docs/design/flat-kernel-selection.md §4.2), header-only.
-
 #include "../../select/select.hh"
 
 #include <array>
@@ -18,12 +16,9 @@ struct Vendor : select::NoFields<"vendor"> {};    // backend::getrs_vendor
 using GetrsChoice = std::variant<Cta, Blocked, Vendor>;
 
 template <class T>
-constexpr auto candidates() {
-    return std::array<GetrsChoice, 3>{Cta{}, Blocked{}, Vendor{}};
-}
+constexpr auto candidates() { return select::all_of<GetrsChoice>(); }
 
-inline constexpr std::array<std::string_view, 2> last_resort{"blocked", "vendor"};
-inline constexpr select::Rules rules{last_resort};
+inline constexpr select::OpSpec spec{Op::getrs, select::Lib::factorization};
 
 inline constexpr std::array<std::string_view, 3> key_names{"n:log:2", "nrhs:log", "batch:log"};  // work ~ n^2 nrhs batch
 

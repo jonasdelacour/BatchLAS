@@ -1,17 +1,13 @@
-// geqrf: the whole selection path (docs/design/flat-kernel-selection.md §4.3, rule R1;
-// docs/design/flat-kernel-selection.md#phase-5-geqrf). public geqrf() -> choose() -> std::visit -> launch.
-// The kernel for a shape is the first runnable entry of the nearest row in
-// tuned/geqrf.<dtype>.<device>.txt; can_run() (can_run.hh) only removes entries that cannot run.
-// Tiny factors a square n <= 32 in registers, Cta holds the whole panel in local memory, and
-// Blocked factors nb-wide panels with Cta's device function and updates the trailing matrix
+// geqrf (flat-kernel-selection.md §4.3, R1; docs/design/flat-kernel-selection.md#phase-5-geqrf):
+// select::run takes the first entry of the nearest tuned/geqrf.<dtype>.<device>.txt row that can_run()
+// (can_run.hh) admits. Tiny factors a square n <= 32 in registers, Cta holds the whole panel in local
+// memory, and Blocked factors nb-wide panels with Cta's device function and updates the trailing matrix
 // with the public gemm, which picks its own kernel.
 
 #include <batchlas/backend_config.h>
 
 #include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/blas/functions/geqrf.hh>
-#include <batchlas/no_route.hh>
-#include "../../select/vendor.hh"
 
 #include "can_run.hh"
 #include "choice.hh"
@@ -35,36 +31,6 @@ select::Key key_of(const MV<T>& A) {
     return {{"form", m == n ? "sq" : (m > n ? "tall" : "wide")}, {"n", n}, {"aspect", aspect_of(m, n)}};
 }
 
-// geqrf's vendor group is cuBLAS + cuSOLVER on CUDA (factorization_vendor_available), carried in
-// has_vendor_solver; select's default for that flag is cuSOLVER alone.
-template <Backend B>
-const select::Device& device(Queue& q) {
-    return select::device_of<B>(q, select::factorization_vendor_available<B>);
-}
-
-template <Backend B, class T>
-GeqrfChoice choose(Queue& q, const MV<T>& A) {
-    const select::Device& d = device<B>(q);
-    auto ok = [&](const GeqrfChoice& c) { return can_run<T>(c, d, A); };
-    try {
-        return select::choose("geqrf", select::dtype_name<T>(), d, key_of<T>(A), candidates<T>(), ok, rules);
-    } catch (const std::runtime_error&) {
-        // Vendor-free burn-down reads coverage `miss` rows; a plain runtime_error records none.
-        const auto all = candidates<T>();
-        if (!select::factorization_vendor_available<B> && std::none_of(all.begin(), all.end(), ok))
-            select::throw_no_vendor_route<T>(Op::geqrf, B, select::kFactorizationLibrary<B>);
-        throw;
-    }
-}
-
-// The coverage row's native flags (§5.6): computed only when coverage records a row.
-template <Backend B, class T>
-select::NativeFacts native_facts(Queue& q, const MV<T>& A) {
-    if (!coverage::dynamic_enabled()) return {};
-    const select::Device& d = device<B>(q);
-    return select::native_facts(candidates<T>(), [&](const GeqrfChoice& c) { return can_run<T>(c, d, A); });
-}
-
 template <Backend B, class T>
 Event launch(Queue& q, const GeqrfChoice& c, const MV<T>& A, Span<T> tau, Span<std::byte> ws) {
     return std::visit(overloaded{
@@ -81,10 +47,9 @@ Event launch(Queue& q, const GeqrfChoice& c, const MV<T>& A, Span<T> tau, Span<s
                 });
         },
         [&](Vendor) -> Event {
-            if constexpr (select::factorization_vendor_available<B>)
+            if constexpr (select::has_library<B>(spec.vendor))
                 return backend::geqrf_vendor<B, T>(q, A, tau, ws);
-            else
-                select::throw_no_vendor_route<T>(Op::geqrf, B, select::kFactorizationLibrary<B>);
+            else select::no_vendor<B, T>(spec);
         },
     }, c);
 }
@@ -98,10 +63,9 @@ std::size_t workspace(Queue& q, const GeqrfChoice& c, const MV<T>& A, Span<T> ta
         [&](Cta) { return sycl_geqrf::geqrf_cta_buffer_size<T>(q, A); },
         [&](Blocked) { return sycl_geqrf::geqrf_blocked_buffer_size<T>(q, A); },
         [&](Vendor) -> std::size_t {
-            if constexpr (select::factorization_vendor_available<B>)
+            if constexpr (select::has_library<B>(spec.vendor))
                 return backend::geqrf_vendor_buffer_size<B, T>(q, A, tau);
-            else
-                select::throw_no_vendor_route<T>(Op::geqrf, B, select::kFactorizationLibrary<B>);
+            else select::no_vendor<B, T>(spec);
         },
     }, c);
 }
@@ -110,60 +74,43 @@ std::size_t workspace(Queue& q, const GeqrfChoice& c, const MV<T>& A, Span<T> ta
 
 template <Backend Back, typename T>
 Event geqrf(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<T> tau, Span<std::byte> work_space) {
+    namespace o = ops::geqrf;
     geqrf_validate_params<T>(A);
-    const auto c = ops::geqrf::choose<Back, T>(ctx, A);
     // The coverage row's key: m, n and k = min(m, n), as the old shape builder set them.
-    auto shape = select::square_shape<Back, T>(A.cols(), A.batch_size());
-    shape.m = A.rows();
-    shape.k = std::min(A.rows(), A.cols());
-    const select::Key trace_key = ops::geqrf::key_of<T>(A);
-    select::TraceScope trace("geqrf", c, shape, ops::geqrf::native_facts<Back, T>(ctx, A), trace_key);
-    return ops::geqrf::launch<Back, T>(ctx, c, A, tau, work_space);
+    const coverage::Shape shape{.m = A.rows(), .n = A.cols(), .k = std::min(A.rows(), A.cols()),
+                                .batch = A.batch_size()};
+    const select::Key key = o::key_of<T>(A);
+    return select::run<Back, T>(
+        o::spec, ctx, key, o::candidates<T>(), [&](const auto& c, const auto& d) { return o::can_run<T>(c, d, A); },
+        shape, key, [&](const auto& c) { return o::launch<Back, T>(ctx, c, A, tau, work_space); });
 }
 
 template <Backend Back, typename T>
 size_t geqrf_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<T> tau) {
+    namespace o = ops::geqrf;
     geqrf_validate_params<T>(A);
-    return ops::geqrf::workspace<Back, T>(ctx, ops::geqrf::choose<Back, T>(ctx, A), A, tau);
+    const auto c = select::pick<Back, T>(o::spec, ctx, o::key_of<T>(A), o::candidates<T>(),
+                                         [&](const auto& k, const auto& d) { return o::can_run<T>(k, d, A); });
+    return o::workspace<Back, T>(ctx, c, A, tau);
 }
 
 template <Backend Back, typename T>
 std::size_t geqrf_buffer_size_bound(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<T> tau) {
     geqrf_validate_params<T>(A);
-    const select::Device& d = ops::geqrf::device<Back>(ctx);
+    const select::Device& d = select::device_of<Back>(ctx, ops::geqrf::spec.vendor);
     std::size_t need = 0;
     for (const auto& c : ops::geqrf::candidates<T>()) {
         const bool vendor = select::family_of(c) == "vendor";
-        if (vendor ? d.has_vendor_solver : d.is_gpu)
-            need = std::max(need, ops::geqrf::workspace<Back, T>(ctx, c, A, tau));
+        if (vendor ? d.has_vendor : d.is_gpu) need = std::max(need, ops::geqrf::workspace<Back, T>(ctx, c, A, tau));
     }
     return need;
 }
 
-#define GEQRF_INSTANTIATE(B_, fp)                                               \
-    BATCHLAS_INSTANTIATE(sig::geqrf<fp>, geqrf, B_, fp)                         \
-    BATCHLAS_INSTANTIATE(sig::geqrf_buffer_size<fp>, geqrf_buffer_size, B_, fp) \
-    template std::size_t geqrf_buffer_size_bound<B_, fp>(Queue&, const MatrixView<fp, MatrixFormat::Dense>&, Span<fp>);
-
-#define GEQRF_ALL(B_)                          \
-    GEQRF_INSTANTIATE(B_, float)               \
-    GEQRF_INSTANTIATE(B_, double)              \
-    GEQRF_INSTANTIATE(B_, std::complex<float>) \
-    GEQRF_INSTANTIATE(B_, std::complex<double>)
-
-// Keyed on the device family, not the vendor library: without the library the Vendor arm
-// compiles to a throw, so the symbol exists in every build with the device.
-#if BATCHLAS_HAS_CUDA_BACKEND
-GEQRF_ALL(Backend::CUDA)
-#endif
-#if BATCHLAS_HAS_ROCM_BACKEND
-GEQRF_ALL(Backend::ROCM)
-#endif
-#if BATCHLAS_HAS_HOST_BACKEND
-GEQRF_ALL(Backend::NETLIB)
-#endif
-
-#undef GEQRF_ALL
+#define GEQRF_INSTANTIATE(B_, fp)                                                                              \
+    BATCHLAS_INSTANTIATE_OP(B_, fp, geqrf) BATCHLAS_INSTANTIATE_OP(B_, fp, geqrf_buffer_size)                \
+    template std::size_t geqrf_buffer_size_bound<B_, BATCHLAS_UNPAREN fp>(                                     \
+        Queue&, const MatrixView<BATCHLAS_UNPAREN fp, MatrixFormat::Dense>&, Span<BATCHLAS_UNPAREN fp>);
+BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(GEQRF_INSTANTIATE)
 #undef GEQRF_INSTANTIATE
 
 }  // namespace batchlas

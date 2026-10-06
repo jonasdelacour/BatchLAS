@@ -1,22 +1,17 @@
-// gemv: the whole selection path (docs/design/flat-kernel-selection.md §4.3, rule R1;
-// docs/design/flat-kernel-selection.md#phase-5-gemv). public gemv() -> choose() -> std::visit -> launch.
-// The kernel for a shape is the first runnable entry of the nearest row in
-// tuned/gemv.<dtype>.<device>.txt; can_run() below only removes entries that cannot run.
-// Direct is one work-item per output (bodies 1/2/4), Cta one sub-group per output (bodies 3/5);
-// which body runs is derived inside the driver. evidence: docs/perf/gemv.md
+// gemv (flat-kernel-selection.md §4.3, R1; docs/design/flat-kernel-selection.md#phase-5-gemv): select::run
+// takes the first entry of the nearest tuned/gemv.<dtype>.<device>.txt row that can_run() admits. Direct
+// is one work-item per output (bodies 1/2/4), Cta one sub-group per output (bodies 3/5); which body runs
+// is derived inside the driver. evidence: docs/perf/gemv.md
 
 #include <batchlas/backend_config.h>
 
 #include <batchlas/blas/functions/gemv.hh>
-#include <batchlas/no_route.hh>
-#include "../../select/vendor.hh"
 
 #include "choice.hh"
 #include "../../select/select.hh"
 #include "../../sycl/gemv_native.hh"
 #include "../../util/template-instantiations.hh"
 
-#include <algorithm>
 #include <complex>
 #include <cstdint>
 #include <variant>
@@ -24,10 +19,7 @@
 namespace batchlas {
 namespace ops::gemv {
 
-template <class... F>
-struct overloaded : F... { using F::operator()...; };
-template <class... F>
-overloaded(F...) -> overloaded<F...>;
+using select::overloaded;
 
 template <class T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
@@ -71,41 +63,15 @@ bool can_run(const GemvChoice& c, const select::Device& d, const MV<T>& A, const
 }
 
 template <Backend B, class T>
-GemvChoice choose(Queue& q, const MV<T>& A, const VectorView<T>& X, const VectorView<T>& Y, Transpose transA) {
-    const select::Device& d = select::device_of<B>(q);
-    auto ok = [&](const GemvChoice& c) { return can_run<T>(c, d, A, X, Y, transA); };
-    try {
-        return select::choose("gemv", select::dtype_name<T>(), d, key_of<T>(A, transA), candidates<T>(), ok, rules);
-    } catch (const std::runtime_error&) {
-        // Vendor-free burn-down reads coverage `miss` rows; a plain runtime_error records none.
-        const auto all = candidates<T>();
-        if (!select::level3_vendor_available<B> && std::none_of(all.begin(), all.end(), ok))
-            select::throw_no_vendor_route<T>(Op::gemv, B, select::kLevel3Library<B>);
-        throw;
-    }
-}
-
-// The coverage row's native flags (§5.6): computed only when coverage records a row.
-template <Backend B, class T>
-select::NativeFacts native_facts(Queue& q, const MV<T>& A, const VectorView<T>& X, const VectorView<T>& Y,
-                                 Transpose transA) {
-    if (!coverage::dynamic_enabled()) return {};
-    const select::Device& d = select::device_of<B>(q);
-    return select::native_facts(candidates<T>(),
-                                [&](const GemvChoice& c) { return can_run<T>(c, d, A, X, Y, transA); });
-}
-
-template <Backend B, class T>
 Event launch(Queue& q, const GemvChoice& c, const MV<T>& A, const VectorView<T>& X, const VectorView<T>& Y,
              T alpha, T beta, Transpose transA) {
     return std::visit(overloaded{
         [&](Cta) { return sycl_gemv::gemv_native_cta<T>(q, A, X, Y, alpha, beta, transA); },
         [&](Direct) { return sycl_gemv::gemv_native_direct<T>(q, A, X, Y, alpha, beta, transA); },
         [&](Vendor) -> Event {
-            if constexpr (select::level3_vendor_available<B>)
+            if constexpr (select::has_library<B>(spec.vendor))
                 return backend::gemv_vendor<B, T>(q, A, X, Y, alpha, beta, transA);
-            else
-                select::throw_no_vendor_route<T>(Op::gemv, B, select::kLevel3Library<B>);
+            else select::no_vendor<B, T>(spec);
         },
     }, c);
 }
@@ -116,37 +82,19 @@ Event launch(Queue& q, const GemvChoice& c, const MV<T>& A, const VectorView<T>&
 template <Backend Back, typename T>
 Event gemv(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const VectorView<T>& X, const VectorView<T>& Y,
            T alpha, T beta, Transpose transA) {
-    const auto c = ops::gemv::choose<Back, T>(ctx, A, X, Y, transA);
+    namespace o = ops::gemv;
     // The coverage row's key, as before: m, n are A's stored extents, k repeats m.
-    auto shape = select::square_shape<Back, T>(A.rows(), A.batch_size());
-    shape.n = A.cols();
-    shape.transA = transA;
-    const select::Key trace_key = ops::gemv::key_of<T>(A, transA);
-    select::TraceScope trace("gemv", c, shape, ops::gemv::native_facts<Back, T>(ctx, A, X, Y, transA), trace_key);
-    return ops::gemv::launch<Back, T>(ctx, c, A, X, Y, alpha, beta, transA);
+    const coverage::Shape shape{.m = A.rows(), .n = A.cols(), .k = A.rows(), .batch = A.batch_size(),
+                                .transA = transA};
+    const select::Key key = o::key_of<T>(A, transA);
+    return select::run<Back, T>(
+        o::spec, ctx, key, o::candidates<T>(),
+        [&](const auto& c, const auto& d) { return o::can_run<T>(c, d, A, X, Y, transA); }, shape, key,
+        [&](const auto& c) { return o::launch<Back, T>(ctx, c, A, X, Y, alpha, beta, transA); });
 }
 
-#define GEMV_INSTANTIATE(B_, fp) BATCHLAS_INSTANTIATE(sig::gemv<fp>, gemv, B_, fp)
-
-#define GEMV_ALL(B_)                          \
-    GEMV_INSTANTIATE(B_, float)               \
-    GEMV_INSTANTIATE(B_, double)              \
-    GEMV_INSTANTIATE(B_, std::complex<float>) \
-    GEMV_INSTANTIATE(B_, std::complex<double>)
-
-// Keyed on the device family, not the vendor library: without the library the Vendor arm
-// compiles to a throw, so the symbol exists in every build with the device.
-#if BATCHLAS_HAS_CUDA_BACKEND
-GEMV_ALL(Backend::CUDA)
-#endif
-#if BATCHLAS_HAS_ROCM_BACKEND
-GEMV_ALL(Backend::ROCM)
-#endif
-#if BATCHLAS_HAS_HOST_BACKEND
-GEMV_ALL(Backend::NETLIB)
-#endif
-
-#undef GEMV_ALL
+#define GEMV_INSTANTIATE(B_, fp) BATCHLAS_INSTANTIATE_OP(B_, fp, gemv)
+BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(GEMV_INSTANTIATE)
 #undef GEMV_INSTANTIATE
 
 }  // namespace batchlas

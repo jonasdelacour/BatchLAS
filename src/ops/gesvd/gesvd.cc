@@ -1,16 +1,12 @@
-// gesvd: the whole selection path (docs/design/flat-kernel-selection.md §4.3, rule R1).
-// public gesvd() -> choose() -> std::visit -> launch. The kernel for a shape is the first
-// runnable entry of the nearest row in tuned/gesvd.<dtype>.<device>.txt; can_run() below only
-// removes entries that cannot run. Jacobi is one-sided Jacobi in local memory; Cta forms the
-// normal equations and solves them with syev_cta; Blocked bidiagonalises (or, Hermitian, runs
-// syev_blocked); Vendor is the solver library (cuSOLVER gesvdjBatched, LAPACKE on the host).
+// gesvd (flat-kernel-selection.md §4.3, R1): select::run takes the first entry of the nearest
+// tuned/gesvd.<dtype>.<device>.txt row that can_run() admits. Jacobi is one-sided Jacobi in local memory;
+// Cta forms the normal equations and solves them with syev_cta; Blocked bidiagonalises (or, Hermitian,
+// runs syev_blocked); Vendor is the solver library (cuSOLVER gesvdjBatched, LAPACKE on the host).
 
 #include <batchlas/backend_config.h>
 
 #include <batchlas/blas/extensions.hh>
 #include <batchlas/blas/functions/gesvd.hh>
-#include <batchlas/no_route.hh>
-#include "../../select/vendor.hh"
 #include <batchlas/settings.hh>
 
 #include "choice.hh"
@@ -29,10 +25,7 @@
 namespace batchlas {
 namespace ops::gesvd {
 
-template <class... F>
-struct overloaded : F... { using F::operator()...; };
-template <class... F>
-overloaded(F...) -> overloaded<F...>;
+using select::overloaded;
 
 template <class T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
@@ -80,31 +73,8 @@ bool can_run(const GesvdChoice& c, const select::Device& d, const MV<T>& A, cons
             return native && d.has_sg32 && md <= sycl_gesvd::kGesvdCtaMaxDim && !j.thin() && form;
         },
         [&](Blocked) { return native && (j.herm ? square && *j.herm == Uplo::Lower : kReal); },
-        [&](Vendor) { return d.has_vendor_solver; },
+        [&](Vendor) { return d.has_vendor; },
     }, c);
-}
-
-template <Backend B, class T>
-GesvdChoice choose(Queue& q, const MV<T>& A, const Job& j) {
-    const select::Device& d = select::device_of<B>(q);
-    auto ok = [&](const GesvdChoice& c) { return can_run<T>(c, d, A, j); };
-    try {
-        return select::choose("gesvd", select::dtype_name<T>(), d, key_of<T>(A, j), candidates<T>(), ok, rules);
-    } catch (const std::runtime_error&) {
-        // Vendor-free burn-down reads coverage `miss` rows; a plain runtime_error records none.
-        const auto all = candidates<T>();
-        if (!select::solver_vendor_available<B> && std::none_of(all.begin(), all.end(), ok))
-            select::throw_no_vendor_route<T>(Op::gesvd, B, select::kSolverLibrary<B>);
-        throw;
-    }
-}
-
-// The coverage row's native flags (§5.6): computed only when coverage records a row.
-template <Backend B, class T>
-select::NativeFacts native_facts(Queue& q, const MV<T>& A, const Job& j) {
-    if (!coverage::dynamic_enabled()) return {};
-    const select::Device& d = select::device_of<B>(q);
-    return select::native_facts(candidates<T>(), [&](const GesvdChoice& c) { return can_run<T>(c, d, A, j); });
 }
 
 // Exactly the chosen family's need (R5).
@@ -122,10 +92,9 @@ std::size_t workspace(Queue& q, const GesvdChoice& c, const MV<T>& A, SV<T> s, c
                           : gesvd_blocked_buffer_size<B, T>(q, A, s, U, Vh, j.jobu, j.jobvh);
         },
         [&](Vendor) -> std::size_t {
-            if constexpr (select::solver_vendor_available<B>)
+            if constexpr (select::has_library<B>(spec.vendor))
                 return backend::gesvd_vendor_buffer_size<B, T>(q, A, s, U, Vh, j.jobu, j.jobvh);
-            else
-                select::throw_no_vendor_route<T>(Op::gesvd, B, select::kSolverLibrary<B>);
+            else select::no_vendor<B, T>(spec);
         },
     }, c);
 }
@@ -146,10 +115,9 @@ Event launch(Queue& q, const GesvdChoice& c, const MV<T>& A, SV<T> s, const MV<T
                           : gesvd_blocked<B, T>(q, A, s, U, Vh, j.jobu, j.jobvh, ws, info);
         },
         [&](Vendor) -> Event {
-            if constexpr (select::solver_vendor_available<B>)
+            if constexpr (select::has_library<B>(spec.vendor))
                 return backend::gesvd_vendor<B, T>(q, A, s, U, Vh, j.jobu, j.jobvh, ws, info);
-            else
-                select::throw_no_vendor_route<T>(Op::gesvd, B, select::kSolverLibrary<B>);
+            else select::no_vendor<B, T>(spec);
         },
     }, c);
 }
@@ -158,34 +126,29 @@ template <Backend B, class T>
 Event run(Queue& ctx, const MV<T>& A, SV<T> s, const MV<T>& U, const MV<T>& Vh, SvdVectors jobu, SvdVectors jobvh,
           std::optional<Uplo> herm, Span<std::byte> ws, Span<int32_t> info) {
     const Job j = canonical<T>(A, jobu, jobvh, herm);
-    const GesvdChoice c = choose<B, T>(ctx, A, j);
     // The coverage row's key: m, n, k = min(m, n); uplo is the Hermitian triangle (general: Lower).
-    // Opened before sizing, so a driver that refuses the shape still leaves its row, as before.
-    auto shape = select::square_shape<B, T>(std::min<std::int64_t>(A.rows(), A.cols()), A.batch_size());
-    shape.m = A.rows();
-    shape.n = A.cols();
-    shape.uplo = herm.value_or(Uplo::Lower);
-    select::TraceScope trace("gesvd", c, shape, native_facts<B, T>(ctx, A, j), key_of<T>(A, j));
-    if (ws.size() < workspace<B, T>(ctx, c, A, s, U, Vh, j))
-        throw batchlas::workspace_error("gesvd: insufficient workspace for chosen provider");
-    // The native drivers need an in-order queue. std::optional, not a Queue: the default
-    // constructor builds a real sycl::queue on the default device.
-    Queue* run_q = &ctx;
-    std::optional<Queue> in_order_q;
-    if (!ctx.in_order()) {
-        in_order_q.emplace(ctx, true);
-        Event dep = ctx.get_event();
-        in_order_q->enqueue(dep);
-        run_q = &*in_order_q;
-    }
-    return launch<B, T>(*run_q, c, A, s, U, Vh, j, ws, info);
+    // The scope opens before sizing, so a driver that refuses the shape still leaves its row, as before.
+    const coverage::Shape shape{.m = A.rows(), .n = A.cols(), .k = std::min<std::int64_t>(A.rows(), A.cols()),
+                                .batch = A.batch_size(), .uplo = herm.value_or(Uplo::Lower)};
+    const select::Key key = key_of<T>(A, j);
+    return select::run<B, T>(
+        spec, ctx, key, candidates<T>(), [&](const auto& c, const auto& d) { return can_run<T>(c, d, A, j); }, shape,
+        key, [&](const auto& c) {
+            if (ws.size() < workspace<B, T>(ctx, c, A, s, U, Vh, j))
+                throw batchlas::workspace_error("gesvd: insufficient workspace for chosen provider");
+            // The native drivers need an in-order queue.
+            return select::on_in_order_queue(ctx,
+                                             [&](Queue& q) { return launch<B, T>(q, c, A, s, U, Vh, j, ws, info); });
+        });
 }
 
 template <Backend B, class T>
 std::size_t size(Queue& ctx, const MV<T>& A, SV<T> s, const MV<T>& U, const MV<T>& Vh, SvdVectors jobu,
                  SvdVectors jobvh, std::optional<Uplo> herm) {
     const Job j = canonical<T>(A, jobu, jobvh, herm);
-    return workspace<B, T>(ctx, choose<B, T>(ctx, A, j), A, s, U, Vh, j);
+    const auto c = select::pick<B, T>(spec, ctx, key_of<T>(A, j), candidates<T>(),
+                                      [&](const auto& k, const auto& d) { return can_run<T>(k, d, A, j); });
+    return workspace<B, T>(ctx, c, A, s, U, Vh, j);
 }
 
 }  // namespace ops::gesvd
@@ -219,31 +182,12 @@ size_t gesvd_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A
     return ops::gesvd::size<B, T>(ctx, A, singular_values, U, Vh, jobu, jobvh, hermitian_uplo);
 }
 
-#define GESVD_INSTANTIATE(B_, fp)                                                               \
-    BATCHLAS_INSTANTIATE(sig::gesvd<fp>, gesvd, B_, fp)                                         \
-    BATCHLAS_INSTANTIATE(sig::gesvd_hermitian<fp>, gesvd, B_, fp)                               \
-    BATCHLAS_INSTANTIATE(sig::gesvd_buffer_size<fp>, gesvd_buffer_size, B_, fp)                 \
-    BATCHLAS_INSTANTIATE(sig::gesvd_buffer_size_hermitian<fp>, gesvd_buffer_size, B_, fp)
-
-#define GESVD_ALL(B_)                          \
-    GESVD_INSTANTIATE(B_, float)               \
-    GESVD_INSTANTIATE(B_, double)              \
-    GESVD_INSTANTIATE(B_, std::complex<float>) \
-    GESVD_INSTANTIATE(B_, std::complex<double>)
-
-// Keyed on the device family, not the vendor library: without the library the Vendor arm
-// compiles to a throw, so the symbol exists in every build with the device.
-#if BATCHLAS_HAS_CUDA_BACKEND
-GESVD_ALL(Backend::CUDA)
-#endif
-#if BATCHLAS_HAS_ROCM_BACKEND
-GESVD_ALL(Backend::ROCM)
-#endif
-#if BATCHLAS_HAS_HOST_BACKEND
-GESVD_ALL(Backend::NETLIB)
-#endif
-
-#undef GESVD_ALL
+#define GESVD_INSTANTIATE(B_, fp)                                                                       \
+    BATCHLAS_INSTANTIATE_OP(B_, fp, gesvd) BATCHLAS_INSTANTIATE_OP(B_, fp, gesvd_buffer_size)             \
+    BATCHLAS_INSTANTIATE(sig::gesvd_hermitian<BATCHLAS_UNPAREN fp>, gesvd, B_, BATCHLAS_UNPAREN fp)     \
+    BATCHLAS_INSTANTIATE(sig::gesvd_buffer_size_hermitian<BATCHLAS_UNPAREN fp>, gesvd_buffer_size, B_, \
+                         BATCHLAS_UNPAREN fp)
+BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(GESVD_INSTANTIATE)
 #undef GESVD_INSTANTIATE
 
 }  // namespace batchlas

@@ -867,7 +867,7 @@ TYPED_TEST(GeqrfCanRunDevice, DeviceClausesRefuseTheNativeFamilies) {
     auto nosg = ok;  nosg.has_sg32 = false;
     for (const select::Device* d : {&cpu, &nosg})
         for (const C& c : {tiny, cta, blocked}) EXPECT_FALSE(runs(*d, sq, c)) << select::to_string(c);
-    auto vendor_cpu = cpu;  vendor_cpu.has_vendor_solver = true;
+    auto vendor_cpu = cpu;  vendor_cpu.has_vendor = true;
     EXPECT_TRUE(runs(vendor_cpu, sq, vendor));
 
     // Blocked needs one CTA element of SLM, not the fit: straddle the smallest such budget.

@@ -1,25 +1,20 @@
-// spmm: the whole selection path (docs/design/flat-kernel-selection.md §4.3, rule R1;
-// docs/design/flat-kernel-selection.md#phase-5-spmm). public spmm() -> choose() -> std::visit -> launch.
-// The kernel for a shape is the first runnable entry of the nearest row in
-// tuned/spmm.<dtype>.<device>.txt; can_run() below only removes entries that cannot run.
-// Direct is the native batched CSR driver (gather for transA == N, scale + atomic scatter
-// otherwise); Vendor is cuSPARSE / rocSPARSE / netlib.
+// spmm (flat-kernel-selection.md §4.3, R1; docs/design/flat-kernel-selection.md#phase-5-spmm): select::run
+// takes the first entry of the nearest tuned/spmm.<dtype>.<device>.txt row that can_run() admits. Direct
+// is the native batched CSR driver (gather for transA == N, scale + atomic scatter otherwise); Vendor is
+// cuSPARSE / rocSPARSE / netlib.
 //
-// Nothing on the selection path may read device memory: row_offsets(), col_indices() and the
-// per-item nnz can be device-only, and spmm_buffer_size runs this same choose().
+// Nothing on the selection path may read device memory: row_offsets(), col_indices() and the per-item nnz
+// can be device-only, and spmm_buffer_size runs this same choose().
 
 #include <batchlas/backend_config.h>
 
 #include <batchlas/blas/functions/spmm.hh>
-#include <batchlas/no_route.hh>
-#include "../../select/vendor.hh"
 
 #include "choice.hh"
 #include "../../select/select.hh"
 #include "../../sycl/spmm_native.hh"
 #include "../../util/template-instantiations.hh"
 
-#include <algorithm>
 #include <complex>
 #include <cstddef>
 #include <cstdint>
@@ -30,10 +25,7 @@
 namespace batchlas {
 namespace ops::spmm {
 
-template <class... F>
-struct overloaded : F... { using F::operator()...; };
-template <class... F>
-overloaded(F...) -> overloaded<F...>;
+using select::overloaded;
 
 template <class T>
 using Dense = MatrixView<T, MatrixFormat::Dense>;
@@ -70,10 +62,10 @@ bool one_spmm(const MatrixView<T, MF>& A, const Dense<T>& Bm, const Dense<T>& C,
 // group collective, and the NETLIB (native_cpu) queue relies on it. One launch covers the batch
 // with one (ld, stride) per dense operand, so neither may be heterogeneous; a CSR view varies per
 // item only through nnz(b), which the bodies bound by row_offsets. m, k or nrhs 0 is a legal call
-// (the driver quick-returns on the host); an empty batch is not. `d.has_vendor_blas` carries the
-// SPARSE library here (device() passes it). Two cuSPARSE terms, both off the old Auto path:
-// a conjugated single-row B is an error status the vendor arm never checks (C unwritten, a silent
-// wrong answer), and complex<double> N/N with one column segfaults on the host (known-defects #13).
+// (the driver quick-returns on the host); an empty batch is not. Two cuSPARSE terms, both off
+// the old Auto path: a conjugated single-row B is an error status the vendor arm never checks (C
+// unwritten, a silent wrong answer), and complex<double> N/N with one column segfaults on the host
+// (known-defects #13).
 // netlib's spmm throws `unsupported` per item for any transpose (netlib_lapack.cc), so Auto there
 // falls to Direct; an empty batch never reaches the throw.
 template <Backend B, class T, MatrixFormat MF>
@@ -94,44 +86,11 @@ bool can_run(const SpmmChoice& c, const select::Device& d, const MatrixView<T, M
             constexpr bool cx = !std::is_same_v<T, typename base_type<T>::type>;
             constexpr bool zz = std::is_same_v<T, std::complex<double>>;
             const bool nn = transA == Transpose::NoTrans && transB == Transpose::NoTrans;
-            return d.has_vendor_blas && !(B == Backend::NETLIB && !nn && A.batch_size() > 0) &&
+            return d.has_vendor && !(B == Backend::NETLIB && !nn && A.batch_size() > 0) &&
                    !(B == Backend::CUDA && cx && transB == Transpose::ConjTrans && Bm.rows() == 1) &&
                    !(B == Backend::CUDA && zz && nn && C.cols() == 1);
         },
     }, c);
-}
-
-template <Backend B>
-const select::Device& device(const Queue& q) {
-    return select::device_of<B>(q, select::solver_vendor_available<B>, select::sparse_vendor_available<B>);
-}
-
-template <Backend B, class T, MatrixFormat MF>
-SpmmChoice choose(Queue& q, const MatrixView<T, MF>& A, const Dense<T>& Bm, const Dense<T>& C, Transpose transA,
-                  Transpose transB) {
-    const select::Device& d = device<B>(q);
-    auto ok = [&](const SpmmChoice& c) { return can_run<B, T, MF>(c, d, A, Bm, C, transA, transB); };
-    try {
-        return select::choose("spmm", select::dtype_name<T>(), d, key_of<T, MF>(A, C, transA, transB),
-                              candidates<T>(), ok, rules);
-    } catch (const std::runtime_error&) {
-        // Vendor-free burn-down reads coverage `miss` rows; a plain runtime_error records none.
-        const auto all = candidates<T>();
-        if (!select::sparse_vendor_available<B> && std::none_of(all.begin(), all.end(), ok))
-            select::throw_no_vendor_route<T>(Op::spmm, B, select::kSparseLibrary<B>);
-        throw;
-    }
-}
-
-// The coverage row's native flags (§5.6): computed only when coverage records a row.
-template <Backend B, class T, MatrixFormat MF>
-select::NativeFacts native_facts(Queue& q, const MatrixView<T, MF>& A, const Dense<T>& Bm, const Dense<T>& C,
-                                 Transpose transA, Transpose transB) {
-    if (!coverage::dynamic_enabled()) return {};
-    const select::Device& d = device<B>(q);
-    return select::native_facts(candidates<T>(), [&](const SpmmChoice& c) {
-        return can_run<B, T, MF>(c, d, A, Bm, C, transA, transB);
-    });
 }
 
 template <Backend B, class T, MatrixFormat MF>
@@ -145,10 +104,9 @@ Event launch(Queue& q, const SpmmChoice& c, const MatrixView<T, MF>& A, const De
                 throw batchlas::internal_error("spmm: direct chosen for a non-CSR view");  // can_run refuses
         },
         [&](Vendor) -> Event {
-            if constexpr (select::sparse_vendor_available<B>)
+            if constexpr (select::has_library<B>(spec.vendor))
                 return backend::spmm_vendor<B, T, MF>(q, A, Bm, C, alpha, beta, transA, transB, ws);
-            else
-                select::throw_no_vendor_route<T>(Op::spmm, B, select::kSparseLibrary<B>);
+            else select::no_vendor<B, T>(spec);
         },
     }, c);
 }
@@ -161,10 +119,9 @@ std::size_t workspace(Queue& q, const SpmmChoice& c, const MatrixView<T, MF>& A,
     return std::visit(overloaded{
         [&](Direct) -> std::size_t { return 0; },
         [&](Vendor) -> std::size_t {
-            if constexpr (select::sparse_vendor_available<B>)
+            if constexpr (select::has_library<B>(spec.vendor))
                 return backend::spmm_vendor_buffer_size<B, T, MF>(q, A, Bm, C, alpha, beta, transA, transB);
-            else
-                select::throw_no_vendor_route<T>(Op::spmm, B, select::kSparseLibrary<B>);
+            else select::no_vendor<B, T>(spec);
         },
     }, c);
 }
@@ -177,50 +134,34 @@ template <Backend Back, typename T, MatrixFormat MFormat>
 Event spmm(Queue& ctx, const MatrixView<T, MFormat>& A, const MatrixView<T, MatrixFormat::Dense>& B_mat,
            const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta, Transpose transA, Transpose transB,
            Span<std::byte> workspace) {
-    const auto c = ops::spmm::choose<Back, T, MFormat>(ctx, A, B_mat, C, transA, transB);
+    namespace o = ops::spmm;
     // The coverage row's key, as the old shape builder wrote it: m, k = A as stored, n = nrhs.
-    auto shape = select::square_shape<Back, T>(A.rows(), A.batch_size());
-    shape.k = A.cols();
-    shape.n = C.cols();
-    shape.transA = transA;
-    shape.transB = transB;
-    const select::Key trace_key = ops::spmm::key_of<T, MFormat>(A, C, transA, transB);
-    select::TraceScope trace("spmm", c, shape,
-                             ops::spmm::native_facts<Back, T, MFormat>(ctx, A, B_mat, C, transA, transB), trace_key);
-    return ops::spmm::launch<Back, T, MFormat>(ctx, c, A, B_mat, C, alpha, beta, transA, transB, workspace);
+    const coverage::Shape shape{.m = A.rows(), .n = C.cols(), .k = A.cols(), .batch = A.batch_size(),
+                                .transA = transA, .transB = transB};
+    const select::Key key = o::key_of<T, MFormat>(A, C, transA, transB);
+    return select::run<Back, T>(
+        o::spec, ctx, key, o::candidates<T>(),
+        [&](const auto& c, const auto& d) { return o::can_run<Back, T, MFormat>(c, d, A, B_mat, C, transA, transB); },
+        shape, key, [&](const auto& c) {
+            return o::launch<Back, T, MFormat>(ctx, c, A, B_mat, C, alpha, beta, transA, transB, workspace);
+        });
 }
 
 template <Backend Back, typename T, MatrixFormat MFormat>
 size_t spmm_buffer_size(Queue& ctx, const MatrixView<T, MFormat>& A, const MatrixView<T, MatrixFormat::Dense>& B_mat,
                         const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta, Transpose transA,
                         Transpose transB) {
-    const auto c = ops::spmm::choose<Back, T, MFormat>(ctx, A, B_mat, C, transA, transB);
-    return ops::spmm::workspace<Back, T, MFormat>(ctx, c, A, B_mat, C, alpha, beta, transA, transB);
+    namespace o = ops::spmm;
+    const auto c = select::pick<Back, T>(
+        o::spec, ctx, o::key_of<T, MFormat>(A, C, transA, transB), o::candidates<T>(),
+        [&](const auto& k, const auto& d) { return o::can_run<Back, T, MFormat>(k, d, A, B_mat, C, transA, transB); });
+    return o::workspace<Back, T, MFormat>(ctx, c, A, B_mat, C, alpha, beta, transA, transB);
 }
 
-#define SPMM_ONE(B_, fp, F)                                               \
-    BATCHLAS_INSTANTIATE(sig::spmm<fp BATCHLAS_COMMA F>, spmm, B_, fp, F) \
-    BATCHLAS_INSTANTIATE(sig::spmm_buffer_size<fp BATCHLAS_COMMA F>, spmm_buffer_size, B_, fp, F)
-
-#define SPMM_ALL(B_)                                     \
-    SPMM_ONE(B_, float, MatrixFormat::CSR)               \
-    SPMM_ONE(B_, double, MatrixFormat::CSR)              \
-    SPMM_ONE(B_, std::complex<float>, MatrixFormat::CSR) \
-    SPMM_ONE(B_, std::complex<double>, MatrixFormat::CSR)
-
-// Keyed on the device family, not the vendor library: without the library the Vendor arm
-// compiles to a throw, so the symbol exists in every build with the device.
-#if BATCHLAS_HAS_CUDA_BACKEND
-SPMM_ALL(Backend::CUDA)
-#endif
-#if BATCHLAS_HAS_ROCM_BACKEND
-SPMM_ALL(Backend::ROCM)
-#endif
-#if BATCHLAS_HAS_HOST_BACKEND
-SPMM_ALL(Backend::NETLIB)
-#endif
-
-#undef SPMM_ALL
-#undef SPMM_ONE
+#define SPMM_INSTANTIATE(B_, fp)                                    \
+    BATCHLAS_INSTANTIATE_FORMAT_OP(B_, fp, MatrixFormat::CSR, spmm) \
+    BATCHLAS_INSTANTIATE_FORMAT_OP(B_, fp, MatrixFormat::CSR, spmm_buffer_size)
+BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(SPMM_INSTANTIATE)
+#undef SPMM_INSTANTIATE
 
 }  // namespace batchlas

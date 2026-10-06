@@ -1,7 +1,5 @@
 #pragma once
 
-// getri's selection vocabulary, header-only. Both families are fieldless (the driver derives wg).
-
 #include "../../select/select.hh"
 
 #include <array>
@@ -13,16 +11,14 @@ namespace batchlas::ops::getri {
 struct Blocked : select::NoFields<"blocked"> {};  // getri_blocked_dispatch: P into C + two public trsm
 struct Vendor : select::NoFields<"vendor"> {};    // backend::getri_vendor
 
-using GetriChoice = std::variant<Blocked, Vendor>;
+using GetriChoice = std::variant<Blocked, Vendor>;  // both fieldless: the driver derives wg
 
-template <class T>
-constexpr auto candidates() {  // tie-break order (§6.3): native first
-    return std::array<GetriChoice, 2>{Blocked{}, Vendor{}};
-}
+template <class T>  // tie-break order (§6.3): native first
+constexpr auto candidates() { return select::all_of<GetriChoice>(); }
 
 // Generality order (§5.5): Vendor also runs CPU, NETLIB and heterogeneous batches.
 inline constexpr std::array<std::string_view, 2> last_resort{"vendor", "blocked"};
-inline constexpr select::Rules rules{last_resort};
+inline constexpr select::OpSpec spec{Op::getri, select::Lib::factorization, {last_resort}};
 
 // Work ~ n^3 batch; the old router read only n (batch >= 1 was a correctness term).
 inline constexpr std::array<std::string_view, 2> key_names{"n:log:3", "batch:log"};
