@@ -514,6 +514,28 @@ SYEV = OpSpec(
 )
 
 
+def symm_key(r):
+    try:
+        key = (str(r["form"]), int(r["m"]), int(r["n"]), int(r["batch"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+    return key if key[0] in ("sq", "tall", "wide") and min(key[1:]) >= 1 else None
+
+
+# symm (docs/design/flat-select-l3/symm.md): C is m x n; form = sq|tall|wide of (m, n) lines the
+# old squareish test up with an axis. Real-only. sm_89 and sm_120: one transcription (no arch read).
+SYMM_CHOICES = ("expand", "vendor")
+SYMM = OpSpec(
+    op="symm",
+    keys="form:exact m:log n:log batch:log",
+    row_ops=("symm",),
+    row_key=symm_key,
+    arm_spelling={c: c for c in SYMM_CHOICES},
+    arm_route={"expand": ("native:expand",), "vendor": ("vendor:vendor",)},
+    candidate_order=list(SYMM_CHOICES),
+)
+
+
 def parse_keys(spec):
     """'# keys:' text -> [(name, is_log, weight)]; a :log weight defaults to 1."""
     out = []
@@ -919,7 +941,7 @@ GEQRF = OpSpec(
 )
 
 POTRF.review = potrf_offgrid
-OPS = [POTRF, POSV, TRSM, GEMM, GEMV, GEQRF, ORGQR, ORMQR, GETRF, GETRS, GETRI, GESV, GESVD, SPMM, SYEV]
+OPS = [POTRF, POSV, TRSM, GEMM, GEMV, GEQRF, ORGQR, ORMQR, GETRF, GETRS, GETRI, GESV, GESVD, SPMM, SYEV, SYMM]
 OP_BY_NAME = {s.op: s for s in OPS}
 
 

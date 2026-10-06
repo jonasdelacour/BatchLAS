@@ -19,6 +19,7 @@
 #include "../src/ops/gesvd/choice.hh"
 #include "../src/ops/spmm/choice.hh"
 #include "../src/ops/syev/choice.hh"
+#include "../src/ops/symm/choice.hh"
 #include "../src/select/select.hh"
 
 #include <algorithm>
@@ -153,6 +154,11 @@ std::vector<std::string> candidates(const std::string& op, const std::string& dt
         if (dtype == "double") return spellings(syev::candidates<double>());
         if (dtype == "cfloat") return spellings(syev::candidates<std::complex<float>>());
         if (dtype == "cdouble") return spellings(syev::candidates<std::complex<double>>());
+    }
+    namespace symm = batchlas::ops::symm;  // real-only
+    if (op == "symm") {
+        if (dtype == "float") return spellings(symm::candidates<float>());
+        if (dtype == "double") return spellings(symm::candidates<double>());
     }
     return {};
 }
