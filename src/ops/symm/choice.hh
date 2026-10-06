@@ -18,7 +18,6 @@ struct Vendor : select::NoFields<"vendor"> {};  // backend::symm_vendor (cublas?
 
 using SymmChoice = std::variant<Expand, Vendor>;
 
-// symm is real-only (RealScalar); float and double share the list.
 template <class T>
 constexpr auto candidates() {
     return std::array<SymmChoice, 2>{Expand{}, Vendor{}};
@@ -27,16 +26,14 @@ constexpr auto candidates() {
 inline constexpr std::array<std::string_view, 2> last_resort{"expand", "vendor"};
 inline constexpr select::Rules rules{last_resort};
 
-// C's shape (m x n) and the batch; side is not a key (the old rule never read it). form is
-// exact so the old squareish test 2*min(m,n) >= max(m,n) lines up with an axis.
+// C's m x n and batch (side was never read); form lines the old squareish test up with an axis.
 inline constexpr std::array<std::string_view, 4> key_names{"form:exact", "m:log", "n:log", "batch:log"};
 
 inline std::string_view form_of(std::int64_t a, std::int64_t b) {
     return 2 * std::min(a, b) >= std::max(a, b) ? "sq" : (a > 2 * b ? "tall" : "wide");
 }
 
-// The transcriber's grid (tuned/README.md): 255|256 straddles the old max-dimension threshold,
-// 3|4 the batch one. A cell whose (m, n) contradicts its form holds its form representative's row.
+// The transcriber's grid: 255|256 and 3|4 straddle the old thresholds (flat-select-l3/symm.md).
 inline constexpr std::array<std::string_view, 3> grid_form{"sq", "tall", "wide"};
 inline constexpr std::array<int, 14> grid_mn{1, 2, 4, 8, 16, 32, 64, 128, 255, 256, 512, 1024, 2048, 4096};
 inline constexpr std::array<int, 9> grid_batch{1, 2, 3, 4, 8, 128, 1024, 8192, 32768};
