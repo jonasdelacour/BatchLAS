@@ -5,6 +5,10 @@
 #include <cstdlib>
 #include <string>
 #include "test_utils.hh"
+#include "../src/ops/symm/choice.hh"
+
+// The forced-route tests pin through select::ScopedPin (docs/design/flat-select-l3/symm.md).
+using SymmPin = batchlas::select::ScopedPin<batchlas::ops::symm::SymmChoice>;
 
 using namespace batchlas;
 
@@ -119,7 +123,7 @@ TEST(SymmCudaCustomTest, ForcedExpandPathMatchesVendor) {
             MatrixView<float, MatrixFormat::Dense>::copy(ctx, C_vendor.view(), C0.view()).wait();
 
             {
-                ScopedEnvVar force_route("BATCHLAS_SYMM_ROUTE", "expand");
+                const SymmPin force_route("symm", batchlas::ops::symm::Expand{});
                 symm(ctx,
                                     A.view(),
                                     B.view(),
@@ -128,7 +132,7 @@ TEST(SymmCudaCustomTest, ForcedExpandPathMatchesVendor) {
             }
 
             {
-                ScopedEnvVar vendor_route("BATCHLAS_SYMM_ROUTE", "vendor");
+                const SymmPin vendor_route("symm", batchlas::ops::symm::Vendor{});
                 symm(ctx,
                                     A.view(),
                                     B.view(),
@@ -201,12 +205,12 @@ TEST(SymmCudaCustomTest, ForcedExpandPathIgnoresUnreferencedTriangle) {
                 MatrixView<float, MatrixFormat::Dense>::copy(ctx, C_vendor.view(), C0.view()).wait();
 
                 {
-                    ScopedEnvVar force_route("BATCHLAS_SYMM_ROUTE", "expand");
+                    const SymmPin force_route("symm", batchlas::ops::symm::Expand{});
                     symm(ctx, A.view(), B.view(), C_custom.view(),
                          {.alpha = alpha, .beta = beta, .side = side, .uplo = uplo}).wait();
                 }
                 {
-                    ScopedEnvVar vendor_route("BATCHLAS_SYMM_ROUTE", "vendor");
+                    const SymmPin vendor_route("symm", batchlas::ops::symm::Vendor{});
                     symm(ctx, A.view(), B.view(), C_vendor.view(),
                          {.alpha = alpha, .beta = beta, .side = side, .uplo = uplo}).wait();
                 }
@@ -257,12 +261,12 @@ TEST(SymmCudaCustomTest, ForcedExpandPathOrdersExpansionOnOutOfOrderQueue) {
             MatrixView<float, MatrixFormat::Dense>::copy(ctx, C_vendor.view(), C0.view()).wait();
 
             {
-                ScopedEnvVar force_route("BATCHLAS_SYMM_ROUTE", "expand");
+                const SymmPin force_route("symm", batchlas::ops::symm::Expand{});
                 symm(ctx, A.view(), B.view(), C_custom.view(),
                      {.alpha = alpha, .beta = beta, .side = side, .uplo = uplo}).wait();
             }
             {
-                ScopedEnvVar vendor_route("BATCHLAS_SYMM_ROUTE", "vendor");
+                const SymmPin vendor_route("symm", batchlas::ops::symm::Vendor{});
                 symm(ctx, A.view(), B.view(), C_vendor.view(),
                      {.alpha = alpha, .beta = beta, .side = side, .uplo = uplo}).wait();
             }
@@ -292,7 +296,7 @@ TEST(SymmCudaCustomTest, RemovedRouteWordsThrow) {
     }
     const int n = 16;
     Matrix<float, MatrixFormat::Dense> A(n, n, 2), B(n, n, 2), C(n, n, 2);
-    for (const char* word : {"tiles", "narrow", "gemm", "custom", "dx", "fused", "diag_full_gemm", "triangular_tiles", "gram_tiles", "expand_gemm", "fused_device", "register_tiled", "native:auto", "vendor:auto", "bogus", "triangular", "gram"}) {
+    for (const char* word : {"tiles", "narrow", "gemm", "custom", "dx", "fused", "diag_full_gemm", "triangular_tiles", "gram_tiles", "expand_gemm", "fused_device", "register_tiled", "native:auto", "vendor:auto", "bogus", "triangular", "gram", "cublasdx"}) {
         ScopedEnvVar route("BATCHLAS_SYMM_ROUTE", word);
         EXPECT_THROW(symm(ctx, A.view(), B.view(), C.view(), {.alpha = 1.0f, .beta = 0.0f}).wait(), std::invalid_argument) << word;
     }
