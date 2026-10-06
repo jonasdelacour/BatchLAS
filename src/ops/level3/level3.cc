@@ -1,4 +1,4 @@
-// The public symm/hemm/herk/her2k/syrk/syr2k/trmm entry points, defined outside every
+// The public symm/hemm/herk/her2k/syr2k/trmm entry points (syrk: src/ops/syrk), defined outside every
 // vendor TU so the API links in a build with no vendor library. The float CUDA tile
 // routes are chosen by rule in src/backends/*_custom_dispatch.cc (BATCHLAS_<OP>_ROUTE);
 // everything else goes to backend::<op>_vendor<B, T>, or throws NoRouteError when no
@@ -11,7 +11,6 @@
 #include <batchlas/blas/functions/hemm.hh>
 #include <batchlas/blas/functions/herk.hh>
 #include <batchlas/blas/functions/her2k.hh>
-#include <batchlas/blas/functions/syrk.hh>
 #include <batchlas/blas/functions/syr2k.hh>
 #include <batchlas/blas/functions/trmm.hh>
 
@@ -21,7 +20,6 @@
 // The four level-3 custom-route gates. They have to run before the
 // vendor-available test, so they live here rather than in cublas.cc.
 #include "../../backends/symm_custom_dispatch.hh"
-#include "../../backends/syrk_custom_dispatch.hh"
 #include "../../backends/syr2k_custom_dispatch.hh"
 #include "../../backends/trmm_custom_dispatch.hh"
 #include "../../backends/level3_coverage.hh"
@@ -115,36 +113,6 @@ Event her2k(Queue& ctx,
 }
 
 template <Backend Back, RealScalar T>
-Event syrk(Queue& ctx,
-           const MatrixView<T, MatrixFormat::Dense>& A,
-           const MatrixView<T, MatrixFormat::Dense>& C,
-           T alpha,
-           T beta,
-           Uplo uplo,
-           Transpose transA) {
-    // Native tile gate, CUDA + float only. evidence: docs/perf/level3.md#the-shipped-predicates
-    if constexpr (Back == Backend::CUDA && std::is_same_v<T, float>) {
-        if (backend::syrk_use_cuda_custom(ctx, A, C, uplo, transA)) {
-            return backend::syrk_cuda_custom(ctx, A, C, alpha, beta, uplo, transA);
-        }
-        // Record the decline: a shape moving OFF a native kernel shows up only here.
-        backend::detail::record_level3_route(
-            Op::syrk, "vendor",
-            C.rows(), C.cols(),
-            transA == Transpose::NoTrans ? A.cols() : A.rows(),
-            A.batch_size(), backend::detail::kNativeUnknown,
-            {uplo, Side::Left, Diag::NonUnit, transA});
-    }
-
-    if constexpr (!select::level3_vendor_available<Back>) {
-        select::throw_no_vendor_route<T>(
-            Op::syrk, Back, select::kLevel3Library<Back>);
-    } else {
-        return backend::syrk_vendor<Back, T>(ctx, A, C, alpha, beta, uplo, transA);
-    }
-}
-
-template <Backend Back, RealScalar T>
 Event syr2k(Queue& ctx,
             const MatrixView<T, MatrixFormat::Dense>& A,
             const MatrixView<T, MatrixFormat::Dense>& B,
@@ -211,13 +179,11 @@ Event trmm(Queue& ctx,
 
 #define OP_INSTANTIATE(OP, B_, fp) BATCHLAS_INSTANTIATE(sig::OP<fp>, OP, B_, fp)
 
-// symm/syrk/syr2k are RealScalar-constrained and hemm/herk/her2k
+// symm/syr2k are RealScalar-constrained and hemm/herk/her2k
 // ComplexScalar-constrained, hence the split.
 #define REAL_ONLY_OPS(B_)             \
     OP_INSTANTIATE(symm,  B_, float)  \
     OP_INSTANTIATE(symm,  B_, double) \
-    OP_INSTANTIATE(syrk,  B_, float)  \
-    OP_INSTANTIATE(syrk,  B_, double) \
     OP_INSTANTIATE(syr2k, B_, float)  \
     OP_INSTANTIATE(syr2k, B_, double)
 
@@ -254,8 +220,6 @@ ALL_TYPE_OPS_ONE(Backend::ROCM, float)
 ALL_TYPE_OPS_ONE(Backend::ROCM, double)
 ALL_TYPE_OPS_ONE(Backend::ROCM, std::complex<float>)
 ALL_TYPE_OPS_ONE(Backend::ROCM, std::complex<double>)
-OP_INSTANTIATE(syrk,  Backend::ROCM, float)
-OP_INSTANTIATE(syrk,  Backend::ROCM, double)
 OP_INSTANTIATE(syr2k, Backend::ROCM, float)
 OP_INSTANTIATE(syr2k, Backend::ROCM, double)
 #endif
