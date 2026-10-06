@@ -153,7 +153,6 @@ template <Backend Back, typename T>
 Event gemm(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
            const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta, Transpose transA, Transpose transB,
            ComputePrecision precision) {
-    namespace o = ops::gemm;
     if (A.is_heterogeneous() || B.is_heterogeneous() || C.is_heterogeneous()) {
         // Items are homogeneous by construction, so the recursion is one level deep.
         return backend::detail::gemm_heterogeneous_loop<T>(
@@ -163,18 +162,22 @@ Event gemm(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const Matrix
                 return gemm<Back, T>(ctx, a, b, c, alpha, beta, transA, transB, precision);
             });
     }
-    o::validate<T>(A, B, C, transA, transB);
+    ops::gemm::validate<T>(A, B, C, transA, transB);
     // An empty batch launches nothing under any pin, as the old native range did.
     if (A.batch_size() == 0) return ctx.create_event_after_external_work();
-    const auto d = o::dims_of<T>(A, B, transA, transB);
+    const auto d = ops::gemm::dims_of<T>(A, B, transA, transB);
     const coverage::Shape shape{.m = d.m, .n = d.n, .k = d.k, .batch = A.batch_size(), .transA = transA,
                                 .transB = transB};
-    const select::Key key = o::key_of<T>(A, B, C, transA, transB);
+    const select::Key key = ops::gemm::key_of<T>(A, B, C, transA, transB);
     return select::run<Back, T>(
-        o::spec, ctx, key, o::candidates<T>(),
-        [&](const auto& c, const auto& dev) { return o::can_run<T>(c, dev, A, B, C, transA, transB, precision); },
+        ops::gemm::spec, ctx, key, ops::gemm::candidates<T>(),
+        [&](const auto& c, const auto& dev) {
+            return ops::gemm::can_run<T>(c, dev, A, B, C, transA, transB, precision);
+        },
         shape, key,
-        [&](const auto& c) { return o::launch<Back, T>(ctx, c, A, B, C, alpha, beta, transA, transB, precision); });
+        [&](const auto& c) {
+            return ops::gemm::launch<Back, T>(ctx, c, A, B, C, alpha, beta, transA, transB, precision);
+        });
 }
 
 #define GEMM_INSTANTIATE(B_, fp) BATCHLAS_INSTANTIATE_OP(B_, fp, gemm)

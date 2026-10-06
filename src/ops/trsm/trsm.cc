@@ -91,16 +91,15 @@ Event launch(Queue& q, const TrsmChoice& c, const MV<T>& A, const MV<T>& Bm, T a
 template <Backend Back, typename T>
 Event trsm(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
            T alpha, Side side, Uplo uplo, Transpose transA, Diag diag) {
-    namespace o = ops::trsm;
     trsm_validate_params(A, B, side, uplo, transA, diag);
     // The coverage row's key: m, n are B's extents and k the triangular order, as before.
     const coverage::Shape shape{.m = B.rows(), .n = B.cols(), .k = A.rows(), .batch = A.batch_size(),
                                 .transA = transA, .uplo = uplo, .side = side, .diag = diag};
-    const select::Key key = o::key_of<T>(A, B, side, transA);
+    const select::Key key = ops::trsm::key_of<T>(A, B, side, transA);
     return select::run<Back, T>(
-        o::spec, ctx, key, o::candidates<T>(),
-        [&](const auto& c, const auto& d) { return o::can_run<T>(c, d, A, B, side); }, shape, key,
-        [&](const auto& c) { return o::launch<Back, T>(ctx, c, A, B, alpha, side, uplo, transA, diag); });
+        ops::trsm::spec, ctx, key, ops::trsm::candidates<T>(),
+        [&](const auto& c, const auto& d) { return ops::trsm::can_run<T>(c, d, A, B, side); }, shape, key,
+        [&](const auto& c) { return ops::trsm::launch<Back, T>(ctx, c, A, B, alpha, side, uplo, transA, diag); });
 }
 
 #define TRSM_INSTANTIATE(B_, fp) BATCHLAS_INSTANTIATE_OP(B_, fp, trsm)

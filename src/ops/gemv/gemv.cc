@@ -82,15 +82,14 @@ Event launch(Queue& q, const GemvChoice& c, const MV<T>& A, const VectorView<T>&
 template <Backend Back, typename T>
 Event gemv(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const VectorView<T>& X, const VectorView<T>& Y,
            T alpha, T beta, Transpose transA) {
-    namespace o = ops::gemv;
     // The coverage row's key, as before: m, n are A's stored extents, k repeats m.
     const coverage::Shape shape{.m = A.rows(), .n = A.cols(), .k = A.rows(), .batch = A.batch_size(),
                                 .transA = transA};
-    const select::Key key = o::key_of<T>(A, transA);
+    const select::Key key = ops::gemv::key_of<T>(A, transA);
     return select::run<Back, T>(
-        o::spec, ctx, key, o::candidates<T>(),
-        [&](const auto& c, const auto& d) { return o::can_run<T>(c, d, A, X, Y, transA); }, shape, key,
-        [&](const auto& c) { return o::launch<Back, T>(ctx, c, A, X, Y, alpha, beta, transA); });
+        ops::gemv::spec, ctx, key, ops::gemv::candidates<T>(),
+        [&](const auto& c, const auto& d) { return ops::gemv::can_run<T>(c, d, A, X, Y, transA); }, shape, key,
+        [&](const auto& c) { return ops::gemv::launch<Back, T>(ctx, c, A, X, Y, alpha, beta, transA); });
 }
 
 #define GEMV_INSTANTIATE(B_, fp) BATCHLAS_INSTANTIATE_OP(B_, fp, gemv)

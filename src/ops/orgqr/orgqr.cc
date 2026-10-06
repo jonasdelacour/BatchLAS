@@ -93,26 +93,25 @@ std::size_t workspace(Queue& q, const OrgqrChoice& c, const MV<T>& A, Span<T> ta
 
 template <Backend Back, typename T>
 Event orgqr(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<T> tau, Span<std::byte> workspace) {
-    namespace o = ops::orgqr;
     orgqr_validate_params<T>(A);
     // The coverage row's key, as the old builder set it: k = min(m, n) reflectors, (Left, NoTrans).
     const coverage::Shape shape{.m = A.rows(), .n = A.cols(), .k = std::min(A.rows(), A.cols()),
                                 .batch = A.batch_size(), .transA = Transpose::NoTrans, .side = Side::Left};
-    select::Key trace_key = o::key_of<T>(A);
+    select::Key trace_key = ops::orgqr::key_of<T>(A);
     trace_key.emplace_back("batch", A.batch_size());
     return select::run<Back, T>(
-        o::spec, ctx, o::key_of<T>(A), o::candidates<T>(),
-        [&](const auto& c, const auto& d) { return o::can_run<T>(c, d, A); }, shape, trace_key,
-        [&](const auto& c) { return o::launch<Back, T>(ctx, c, A, tau, workspace); });
+        ops::orgqr::spec, ctx, ops::orgqr::key_of<T>(A), ops::orgqr::candidates<T>(),
+        [&](const auto& c, const auto& d) { return ops::orgqr::can_run<T>(c, d, A); }, shape, trace_key,
+        [&](const auto& c) { return ops::orgqr::launch<Back, T>(ctx, c, A, tau, workspace); });
 }
 
 template <Backend Back, typename T>
 size_t orgqr_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<T> tau) {
-    namespace o = ops::orgqr;
     orgqr_validate_params<T>(A);
-    const auto c = select::pick<Back, T>(o::spec, ctx, o::key_of<T>(A), o::candidates<T>(),
-                                         [&](const auto& k, const auto& d) { return o::can_run<T>(k, d, A); });
-    return o::workspace<Back, T>(ctx, c, A, tau);
+    const auto c = select::pick<Back, T>(
+        ops::orgqr::spec, ctx, ops::orgqr::key_of<T>(A), ops::orgqr::candidates<T>(),
+        [&](const auto& k, const auto& d) { return ops::orgqr::can_run<T>(k, d, A); });
+    return ops::orgqr::workspace<Back, T>(ctx, c, A, tau);
 }
 
 #define ORGQR_INSTANTIATE(B_, fp) \

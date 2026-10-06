@@ -109,21 +109,21 @@ Event launch(Queue& q, const OrmqrChoice& c, const MV<T>& A, const MV<T>& C, Sid
 template <Backend Back, typename T>
 Event ormqr(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& C,
             Side side, Transpose trans, Span<T> tau, Span<std::byte> workspace, int32_t block_size_hint) {
-    namespace o = ops::ormqr;
-    o::throw_if_undefined<T>(trans, "ormqr");
+    ops::ormqr::throw_if_undefined<T>(trans, "ormqr");
     // The coverage row's key, as the old builder had it (m, n = A's extents, k = reflectors), plus
     // the backend, which that builder never set.
     const coverage::Shape shape{.m = A.rows(), .n = A.cols(), .k = std::min(A.rows(), A.cols()),
                                 .batch = A.batch_size(), .transA = trans, .side = side};
-    const select::Key key = o::key_of<T>(A, C, side, trans);
+    const select::Key key = ops::ormqr::key_of<T>(A, C, side, trans);
     return select::run<Back, T>(
-        o::spec, ctx, key, o::candidates<T>(),
-        [&](const auto& c, const auto& d) { return o::can_run<T>(c, d, trans); }, shape, key, [&](const auto& c) {
-            if (workspace.size() < o::workspace<Back, T>(ctx, c, A, C, side, trans, tau, block_size_hint))
+        ops::ormqr::spec, ctx, key, ops::ormqr::candidates<T>(),
+        [&](const auto& c, const auto& d) { return ops::ormqr::can_run<T>(c, d, trans); }, shape, key,
+        [&](const auto& c) {
+            if (workspace.size() < ops::ormqr::workspace<Back, T>(ctx, c, A, C, side, trans, tau, block_size_hint))
                 throw batchlas::workspace_error("ormqr: insufficient workspace for chosen provider");
             // Both families sequence several launches.
             return select::on_in_order_queue(ctx, [&](Queue& q) {
-                return o::launch<Back, T>(q, c, A, C, side, trans, tau, workspace, block_size_hint);
+                return ops::ormqr::launch<Back, T>(q, c, A, C, side, trans, tau, workspace, block_size_hint);
             });
         });
 }
@@ -132,11 +132,11 @@ template <Backend Back, typename T>
 size_t ormqr_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                          const MatrixView<T, MatrixFormat::Dense>& C, Side side, Transpose trans, Span<T> tau,
                          int32_t block_size_hint) {
-    namespace o = ops::ormqr;
-    o::throw_if_undefined<T>(trans, "ormqr_buffer_size");
-    const auto c = select::pick<Back, T>(o::spec, ctx, o::key_of<T>(A, C, side, trans), o::candidates<T>(),
-                                         [&](const auto& k, const auto& d) { return o::can_run<T>(k, d, trans); });
-    return o::workspace<Back, T>(ctx, c, A, C, side, trans, tau, block_size_hint);
+    ops::ormqr::throw_if_undefined<T>(trans, "ormqr_buffer_size");
+    const auto c = select::pick<Back, T>(
+        ops::ormqr::spec, ctx, ops::ormqr::key_of<T>(A, C, side, trans), ops::ormqr::candidates<T>(),
+        [&](const auto& k, const auto& d) { return ops::ormqr::can_run<T>(k, d, trans); });
+    return ops::ormqr::workspace<Back, T>(ctx, c, A, C, side, trans, tau, block_size_hint);
 }
 
 #define ORMQR_INSTANTIATE(B_, fp) \

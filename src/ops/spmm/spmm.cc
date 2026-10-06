@@ -134,16 +134,17 @@ template <Backend Back, typename T, MatrixFormat MFormat>
 Event spmm(Queue& ctx, const MatrixView<T, MFormat>& A, const MatrixView<T, MatrixFormat::Dense>& B_mat,
            const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta, Transpose transA, Transpose transB,
            Span<std::byte> workspace) {
-    namespace o = ops::spmm;
     // The coverage row's key, as the old shape builder wrote it: m, k = A as stored, n = nrhs.
     const coverage::Shape shape{.m = A.rows(), .n = C.cols(), .k = A.cols(), .batch = A.batch_size(),
                                 .transA = transA, .transB = transB};
-    const select::Key key = o::key_of<T, MFormat>(A, C, transA, transB);
+    const select::Key key = ops::spmm::key_of<T, MFormat>(A, C, transA, transB);
     return select::run<Back, T>(
-        o::spec, ctx, key, o::candidates<T>(),
-        [&](const auto& c, const auto& d) { return o::can_run<Back, T, MFormat>(c, d, A, B_mat, C, transA, transB); },
+        ops::spmm::spec, ctx, key, ops::spmm::candidates<T>(),
+        [&](const auto& c, const auto& d) {
+            return ops::spmm::can_run<Back, T, MFormat>(c, d, A, B_mat, C, transA, transB);
+        },
         shape, key, [&](const auto& c) {
-            return o::launch<Back, T, MFormat>(ctx, c, A, B_mat, C, alpha, beta, transA, transB, workspace);
+            return ops::spmm::launch<Back, T, MFormat>(ctx, c, A, B_mat, C, alpha, beta, transA, transB, workspace);
         });
 }
 
@@ -151,11 +152,12 @@ template <Backend Back, typename T, MatrixFormat MFormat>
 size_t spmm_buffer_size(Queue& ctx, const MatrixView<T, MFormat>& A, const MatrixView<T, MatrixFormat::Dense>& B_mat,
                         const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta, Transpose transA,
                         Transpose transB) {
-    namespace o = ops::spmm;
     const auto c = select::pick<Back, T>(
-        o::spec, ctx, o::key_of<T, MFormat>(A, C, transA, transB), o::candidates<T>(),
-        [&](const auto& k, const auto& d) { return o::can_run<Back, T, MFormat>(k, d, A, B_mat, C, transA, transB); });
-    return o::workspace<Back, T, MFormat>(ctx, c, A, B_mat, C, alpha, beta, transA, transB);
+        ops::spmm::spec, ctx, ops::spmm::key_of<T, MFormat>(A, C, transA, transB), ops::spmm::candidates<T>(),
+        [&](const auto& k, const auto& d) {
+            return ops::spmm::can_run<Back, T, MFormat>(k, d, A, B_mat, C, transA, transB);
+        });
+    return ops::spmm::workspace<Back, T, MFormat>(ctx, c, A, B_mat, C, alpha, beta, transA, transB);
 }
 
 #define SPMM_INSTANTIATE(B_, fp)                                    \

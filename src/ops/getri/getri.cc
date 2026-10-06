@@ -89,24 +89,23 @@ std::size_t workspace(Queue& q, const GetriChoice& c, const MV<T>& A) {
 template <Backend Back, typename T>
 Event getri(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& C,
             Span<int64_t> pivots, Span<std::byte> work_space, Span<int32_t> info) {
-    namespace o = ops::getri;
     getri_validate_params<T>(A, C);
     // The coverage row's key: m = k = order, n = A.cols (equal unless the vendor takes a non-square A).
     const coverage::Shape shape{.m = A.rows(), .n = A.cols(), .k = A.rows(), .batch = A.batch_size()};
-    const select::Key key = o::key_of<T>(A);
+    const select::Key key = ops::getri::key_of<T>(A);
     return select::run<Back, T>(
-        o::spec, ctx, key, o::candidates<T>(),
-        [&](const auto& c, const auto& d) { return o::can_run<Back, T>(c, d, A); }, shape, key,
-        [&](const auto& c) { return o::launch<Back, T>(ctx, c, A, C, pivots, work_space, info); });
+        ops::getri::spec, ctx, key, ops::getri::candidates<T>(),
+        [&](const auto& c, const auto& d) { return ops::getri::can_run<Back, T>(c, d, A); }, shape, key,
+        [&](const auto& c) { return ops::getri::launch<Back, T>(ctx, c, A, C, pivots, work_space, info); });
 }
 
 template <Backend Back, typename T>
 size_t getri_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A) {
-    namespace o = ops::getri;
     getri_validate_params<T>(A);
-    const auto c = select::pick<Back, T>(o::spec, ctx, o::key_of<T>(A), o::candidates<T>(),
-                                         [&](const auto& k, const auto& d) { return o::can_run<Back, T>(k, d, A); });
-    return o::workspace<Back, T>(ctx, c, A);
+    const auto c = select::pick<Back, T>(
+        ops::getri::spec, ctx, ops::getri::key_of<T>(A), ops::getri::candidates<T>(),
+        [&](const auto& k, const auto& d) { return ops::getri::can_run<Back, T>(k, d, A); });
+    return ops::getri::workspace<Back, T>(ctx, c, A);
 }
 
 #define GETRI_INSTANTIATE(B_, fp) \

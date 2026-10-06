@@ -96,27 +96,26 @@ void throw_if_unservable(const MV<T>& A, const MV<T>& Bm, const char* who) {
 template <Backend Back, typename T>
 Event gesv(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
            Span<int64_t> pivots, Span<std::byte> work_space, Span<int32_t> info) {
-    namespace o = ops::gesv;
     gesv_validate_params<T>(A, B);
-    o::throw_if_unservable<T>(A, B, "gesv");
+    ops::gesv::throw_if_unservable<T>(A, B, "gesv");
     // The coverage row's key: m = k = order, n = nrhs (the old GesvShape's spelling).
     const coverage::Shape shape{.m = A.rows(), .n = B.cols(), .k = A.rows(), .batch = A.batch_size()};
     return select::run<Back, T>(
-        o::spec, ctx, o::key_of<T>(A, B), o::candidates<T>(),
-        [&](const auto& c, const auto& d) { return o::can_run<Back, T>(c, d, A, B); }, shape,
+        ops::gesv::spec, ctx, ops::gesv::key_of<T>(A, B), ops::gesv::candidates<T>(),
+        [&](const auto& c, const auto& d) { return ops::gesv::can_run<Back, T>(c, d, A, B); }, shape,
         {{"n", A.rows()}, {"nrhs", B.cols()}, {"batch", A.batch_size()}},
-        [&](const auto& c) { return o::launch<Back, T>(ctx, c, A, B, pivots, work_space, info); });
+        [&](const auto& c) { return ops::gesv::launch<Back, T>(ctx, c, A, B, pivots, work_space, info); });
 }
 
 template <Backend Back, typename T>
 size_t gesv_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                         const MatrixView<T, MatrixFormat::Dense>& B) {
-    namespace o = ops::gesv;
     gesv_validate_params<T>(A, B);
-    o::throw_if_unservable<T>(A, B, "gesv_buffer_size");
-    const auto c = select::pick<Back, T>(o::spec, ctx, o::key_of<T>(A, B), o::candidates<T>(),
-                                         [&](const auto& k, const auto& d) { return o::can_run<Back, T>(k, d, A, B); });
-    return o::workspace<Back, T>(ctx, c, A, B);
+    ops::gesv::throw_if_unservable<T>(A, B, "gesv_buffer_size");
+    const auto c = select::pick<Back, T>(
+        ops::gesv::spec, ctx, ops::gesv::key_of<T>(A, B), ops::gesv::candidates<T>(),
+        [&](const auto& k, const auto& d) { return ops::gesv::can_run<Back, T>(k, d, A, B); });
+    return ops::gesv::workspace<Back, T>(ctx, c, A, B);
 }
 
 // Keyed on the device family: gesv has no vendor arm, so every build with the device has it.

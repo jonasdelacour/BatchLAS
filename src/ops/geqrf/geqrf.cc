@@ -74,24 +74,24 @@ std::size_t workspace(Queue& q, const GeqrfChoice& c, const MV<T>& A, Span<T> ta
 
 template <Backend Back, typename T>
 Event geqrf(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<T> tau, Span<std::byte> work_space) {
-    namespace o = ops::geqrf;
     geqrf_validate_params<T>(A);
     // The coverage row's key: m, n and k = min(m, n), as the old shape builder set them.
     const coverage::Shape shape{.m = A.rows(), .n = A.cols(), .k = std::min(A.rows(), A.cols()),
                                 .batch = A.batch_size()};
-    const select::Key key = o::key_of<T>(A);
+    const select::Key key = ops::geqrf::key_of<T>(A);
     return select::run<Back, T>(
-        o::spec, ctx, key, o::candidates<T>(), [&](const auto& c, const auto& d) { return o::can_run<T>(c, d, A); },
-        shape, key, [&](const auto& c) { return o::launch<Back, T>(ctx, c, A, tau, work_space); });
+        ops::geqrf::spec, ctx, key, ops::geqrf::candidates<T>(),
+        [&](const auto& c, const auto& d) { return ops::geqrf::can_run<T>(c, d, A); }, shape, key,
+        [&](const auto& c) { return ops::geqrf::launch<Back, T>(ctx, c, A, tau, work_space); });
 }
 
 template <Backend Back, typename T>
 size_t geqrf_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<T> tau) {
-    namespace o = ops::geqrf;
     geqrf_validate_params<T>(A);
-    const auto c = select::pick<Back, T>(o::spec, ctx, o::key_of<T>(A), o::candidates<T>(),
-                                         [&](const auto& k, const auto& d) { return o::can_run<T>(k, d, A); });
-    return o::workspace<Back, T>(ctx, c, A, tau);
+    const auto c = select::pick<Back, T>(
+        ops::geqrf::spec, ctx, ops::geqrf::key_of<T>(A), ops::geqrf::candidates<T>(),
+        [&](const auto& k, const auto& d) { return ops::geqrf::can_run<T>(k, d, A); });
+    return ops::geqrf::workspace<Back, T>(ctx, c, A, tau);
 }
 
 template <Backend Back, typename T>

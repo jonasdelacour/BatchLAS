@@ -106,23 +106,22 @@ std::size_t workspace(Queue& q, const PotrfChoice& c, const MatrixView<T, Matrix
 template <Backend B, typename T>
 Event potrf(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo, Span<std::byte> workspace,
             Span<int32_t> info) {
-    namespace o = ops::potrf;
     potrf_validate_params<T>(A, uplo);
     // uplo is part of the coverage key; never inferred.
     const coverage::Shape shape{.m = A.rows(), .n = A.rows(), .k = A.rows(), .batch = A.batch_size(), .uplo = uplo};
     return select::run<B, T>(
-        o::spec, ctx, o::key_of(A, uplo), o::candidates<T>(),
-        [&](const auto& c, const auto& d) { return o::can_run<T>(c, d, A, uplo); }, shape, {},
-        [&](const auto& c) { return o::launch<B, T>(ctx, c, A, uplo, workspace, info); });
+        ops::potrf::spec, ctx, ops::potrf::key_of(A, uplo), ops::potrf::candidates<T>(),
+        [&](const auto& c, const auto& d) { return ops::potrf::can_run<T>(c, d, A, uplo); }, shape, {},
+        [&](const auto& c) { return ops::potrf::launch<B, T>(ctx, c, A, uplo, workspace, info); });
 }
 
 template <Backend B, typename T>
 size_t potrf_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo) {
-    namespace o = ops::potrf;
     potrf_validate_params<T>(A, uplo);
-    const auto c = select::pick<B, T>(o::spec, ctx, o::key_of(A, uplo), o::candidates<T>(),
-                                      [&](const auto& k, const auto& d) { return o::can_run<T>(k, d, A, uplo); });
-    return o::workspace<B, T>(ctx, c, A, uplo);
+    const auto c = select::pick<B, T>(
+        ops::potrf::spec, ctx, ops::potrf::key_of(A, uplo), ops::potrf::candidates<T>(),
+        [&](const auto& k, const auto& d) { return ops::potrf::can_run<T>(k, d, A, uplo); });
+    return ops::potrf::workspace<B, T>(ctx, c, A, uplo);
 }
 
 #define POTRF_INSTANTIATE(B_, fp) \

@@ -258,14 +258,14 @@ size_t workspace(const PotrfChoice& c, Queue& q, const MatrixView<T, MatrixForma
 template <Backend B, typename T>
 Event potrf(Queue& q, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo, Span<std::byte> ws,
             Span<int32_t> info) {
-  namespace o = ops::potrf;
   potrf_validate_params(A, uplo);
   // device_of, choose (NoRouteError when vendor-free and nothing runs), the trace line and coverage
   // row (scalar and backend filled in; uplo is part of the key, never inferred), then launch inside it.
-  return select::run<B, T>(o::spec, q, o::key_of(A, uplo), o::candidates<T>(),
-      [&](const auto& c, const auto& d) { return o::can_run<T>(c, d, A, uplo); },
+  return select::run<B, T>(
+      ops::potrf::spec, q, ops::potrf::key_of(A, uplo), ops::potrf::candidates<T>(),
+      [&](const auto& c, const auto& d) { return ops::potrf::can_run<T>(c, d, A, uplo); },
       {.m = A.rows(), .n = A.rows(), .k = A.rows(), .batch = A.batch_size(), .uplo = uplo}, {},
-      [&](const auto& c) { return o::launch<B, T>(q, c, A, uplo, ws, info); });
+      [&](const auto& c) { return ops::potrf::launch<B, T>(q, c, A, uplo, ws, info); });
 }
 
 template <Backend B, typename T>

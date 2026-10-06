@@ -116,27 +116,26 @@ void throw_if_unservable(const MatrixView<T, MatrixFormat::Dense>& A, const Matr
 template <Backend Back, typename T>
 Event posv(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
            Uplo uplo, Span<std::byte> work_space, Span<int32_t> info) {
-    namespace o = ops::posv;
     posv_validate_params<T>(A, B, uplo);
-    o::throw_if_unservable<T>(A, B, "posv");
+    ops::posv::throw_if_unservable<T>(A, B, "posv");
     // The coverage row's key: m = k = order, n = nrhs, and uplo (the only field separating rows).
     const coverage::Shape shape{.m = A.rows(), .n = B.cols(), .k = A.rows(), .batch = A.batch_size(), .uplo = uplo};
     return select::run<Back, T>(
-        o::spec, ctx, o::key_of(A, B, uplo), o::candidates<T>(),
-        [&](const auto& c, const auto& d) { return o::can_run<T>(c, d, A, B); }, shape,
+        ops::posv::spec, ctx, ops::posv::key_of(A, B, uplo), ops::posv::candidates<T>(),
+        [&](const auto& c, const auto& d) { return ops::posv::can_run<T>(c, d, A, B); }, shape,
         {{"n", A.rows()}, {"nrhs", B.cols()}, {"batch", A.batch_size()}},
-        [&](const auto& c) { return o::launch<Back, T>(ctx, c, A, B, uplo, work_space, info); });
+        [&](const auto& c) { return ops::posv::launch<Back, T>(ctx, c, A, B, uplo, work_space, info); });
 }
 
 template <Backend Back, typename T>
 size_t posv_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                         const MatrixView<T, MatrixFormat::Dense>& B, Uplo uplo) {
-    namespace o = ops::posv;
     posv_validate_params<T>(A, B, uplo);
-    o::throw_if_unservable<T>(A, B, "posv_buffer_size");
-    const auto c = select::pick<Back, T>(o::spec, ctx, o::key_of(A, B, uplo), o::candidates<T>(),
-                                         [&](const auto& k, const auto& d) { return o::can_run<T>(k, d, A, B); });
-    return o::workspace<Back, T>(ctx, c, A, B, uplo);
+    ops::posv::throw_if_unservable<T>(A, B, "posv_buffer_size");
+    const auto c = select::pick<Back, T>(
+        ops::posv::spec, ctx, ops::posv::key_of(A, B, uplo), ops::posv::candidates<T>(),
+        [&](const auto& k, const auto& d) { return ops::posv::can_run<T>(k, d, A, B); });
+    return ops::posv::workspace<Back, T>(ctx, c, A, B, uplo);
 }
 
 // Keyed on the device family: posv has no vendor arm, so every build with the device has it.

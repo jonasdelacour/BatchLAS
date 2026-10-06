@@ -132,8 +132,8 @@ Event run(Queue& ctx, const MV<T>& A, SV<T> s, const MV<T>& U, const MV<T>& Vh, 
                                 .batch = A.batch_size(), .uplo = herm.value_or(Uplo::Lower)};
     const select::Key key = key_of<T>(A, j);
     return select::run<B, T>(
-        spec, ctx, key, candidates<T>(), [&](const auto& c, const auto& d) { return can_run<T>(c, d, A, j); }, shape,
-        key, [&](const auto& c) {
+        spec, ctx, key, candidates<T>(), [&](const auto& c, const auto& d) { return can_run<T>(c, d, A, j); },
+        shape, key, [&](const auto& c) {
             if (ws.size() < workspace<B, T>(ctx, c, A, s, U, Vh, j))
                 throw batchlas::workspace_error("gesvd: insufficient workspace for chosen provider");
             // The native drivers need an in-order queue.

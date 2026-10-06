@@ -93,26 +93,25 @@ std::size_t workspace(Queue& q, const GetrsChoice& c, const MV<T>& A, const MV<T
 template <Backend Back, typename T>
 Event getrs(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
             Transpose transA, Span<int64_t> pivots, Span<std::byte> work_space) {
-    namespace o = ops::getrs;
     getrs_validate_params<T>(A, B);
     // The coverage row's key: m = k = order, n = nrhs, and transA (the field separating rows).
     const coverage::Shape shape{.m = A.rows(), .n = B.cols(), .k = A.rows(), .batch = A.batch_size(),
                                 .transA = transA};
-    const select::Key key = o::key_of<T>(A, B);
+    const select::Key key = ops::getrs::key_of<T>(A, B);
     return select::run<Back, T>(
-        o::spec, ctx, key, o::candidates<T>(),
-        [&](const auto& c, const auto& d) { return o::can_run<Back, T>(c, d, A, B); }, shape, key,
-        [&](const auto& c) { return o::launch<Back, T>(ctx, c, A, B, transA, pivots, work_space); });
+        ops::getrs::spec, ctx, key, ops::getrs::candidates<T>(),
+        [&](const auto& c, const auto& d) { return ops::getrs::can_run<Back, T>(c, d, A, B); }, shape, key,
+        [&](const auto& c) { return ops::getrs::launch<Back, T>(ctx, c, A, B, transA, pivots, work_space); });
 }
 
 template <Backend Back, typename T>
 size_t getrs_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                          const MatrixView<T, MatrixFormat::Dense>& B, Transpose transA) {
-    namespace o = ops::getrs;
     getrs_validate_params<T>(A, B);
-    const auto c = select::pick<Back, T>(o::spec, ctx, o::key_of<T>(A, B), o::candidates<T>(),
-                                         [&](const auto& k, const auto& d) { return o::can_run<Back, T>(k, d, A, B); });
-    return o::workspace<Back, T>(ctx, c, A, B, transA);
+    const auto c = select::pick<Back, T>(
+        ops::getrs::spec, ctx, ops::getrs::key_of<T>(A, B), ops::getrs::candidates<T>(),
+        [&](const auto& k, const auto& d) { return ops::getrs::can_run<Back, T>(k, d, A, B); });
+    return ops::getrs::workspace<Back, T>(ctx, c, A, B, transA);
 }
 
 #define GETRS_INSTANTIATE(B_, fp) \

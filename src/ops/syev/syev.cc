@@ -121,18 +121,18 @@ bool supports(const Queue& q, const MV<T>& A, const SyevChoice& c) {
 template <Backend Back, typename T>
 Event syev(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<typename base_type<T>::type> eigenvalues,
            JobType jobtype, Uplo uplo, Span<std::byte> workspace, Span<int32_t> info) {
-    namespace o = ops::syev;
-    o::validate<T>(A, "syev");
+    ops::syev::validate<T>(A, "syev");
     const coverage::Shape shape{.m = A.rows(), .n = A.cols(), .k = A.rows(), .batch = A.batch_size(), .uplo = uplo};
-    const select::Key key = o::key_of<T>(A, jobtype);
+    const select::Key key = ops::syev::key_of<T>(A, jobtype);
     return select::run<Back, T>(
-        o::spec, ctx, key, o::candidates<T>(), [&](const auto& c, const auto& d) { return o::can_run<Back, T>(c, d, A); },
-        shape, key, [&](const auto& c) {
-            if (workspace.size() < o::workspace<Back, T>(ctx, c, A, eigenvalues, jobtype, uplo))
+        ops::syev::spec, ctx, key, ops::syev::candidates<T>(),
+        [&](const auto& c, const auto& d) { return ops::syev::can_run<Back, T>(c, d, A); }, shape, key,
+        [&](const auto& c) {
+            if (workspace.size() < ops::syev::workspace<Back, T>(ctx, c, A, eigenvalues, jobtype, uplo))
                 throw batchlas::workspace_error("syev: insufficient workspace for chosen provider");
             // Blocked and TwoStage require an in-order queue.
             return select::on_in_order_queue(ctx, [&](Queue& q) {
-                return o::launch<Back, T>(q, c, A, eigenvalues, jobtype, uplo, workspace, info);
+                return ops::syev::launch<Back, T>(q, c, A, eigenvalues, jobtype, uplo, workspace, info);
             });
         });
 }
@@ -140,11 +140,11 @@ Event syev(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<typenam
 template <Backend Back, typename T>
 size_t syev_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                         Span<typename base_type<T>::type> eigenvalues, JobType jobtype, Uplo uplo) {
-    namespace o = ops::syev;
-    o::validate<T>(A, "syev_buffer_size");
-    const auto c = select::pick<Back, T>(o::spec, ctx, o::key_of<T>(A, jobtype), o::candidates<T>(),
-                                         [&](const auto& k, const auto& d) { return o::can_run<Back, T>(k, d, A); });
-    return o::workspace<Back, T>(ctx, c, A, eigenvalues, jobtype, uplo);
+    ops::syev::validate<T>(A, "syev_buffer_size");
+    const auto c = select::pick<Back, T>(
+        ops::syev::spec, ctx, ops::syev::key_of<T>(A, jobtype), ops::syev::candidates<T>(),
+        [&](const auto& k, const auto& d) { return ops::syev::can_run<Back, T>(k, d, A); });
+    return ops::syev::workspace<Back, T>(ctx, c, A, eigenvalues, jobtype, uplo);
 }
 
 namespace blas::dispatch::detail {
