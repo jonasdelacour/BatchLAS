@@ -1,4 +1,4 @@
-// The public symm/hemm/herk/her2k/syrk/syr2k/trmm entry points, defined outside every
+// The public symm/hemm/herk/her2k/syrk/syr2k entry points (trmm: src/ops/trmm), defined outside every
 // vendor TU so the API links in a build with no vendor library. The float CUDA tile
 // routes are chosen by rule in src/backends/*_custom_dispatch.cc (BATCHLAS_<OP>_ROUTE);
 // everything else goes to backend::<op>_vendor<B, T>, or throws NoRouteError when no
@@ -13,7 +13,6 @@
 #include <batchlas/blas/functions/her2k.hh>
 #include <batchlas/blas/functions/syrk.hh>
 #include <batchlas/blas/functions/syr2k.hh>
-#include <batchlas/blas/functions/trmm.hh>
 
 #include <batchlas/no_route.hh>
 #include "../../select/vendor.hh"
@@ -23,7 +22,6 @@
 #include "../../backends/symm_custom_dispatch.hh"
 #include "../../backends/syrk_custom_dispatch.hh"
 #include "../../backends/syr2k_custom_dispatch.hh"
-#include "../../backends/trmm_custom_dispatch.hh"
 #include "../../backends/level3_coverage.hh"
 
 #include "../../util/template-instantiations.hh"
@@ -175,35 +173,7 @@ Event syr2k(Queue& ctx,
     }
 }
 
-template <Backend Back, typename T>
-Event trmm(Queue& ctx,
-           const MatrixView<T, MatrixFormat::Dense>& A,
-           const MatrixView<T, MatrixFormat::Dense>& B,
-           const MatrixView<T, MatrixFormat::Dense>& C,
-           T alpha,
-           Side side,
-           Uplo uplo,
-           Transpose transA,
-           Diag diag) {
-    // Native tile gate, CUDA + float only. evidence: docs/perf/level3.md#the-shipped-predicates
-    if constexpr (Back == Backend::CUDA && std::is_same_v<T, float>) {
-        if (backend::trmm_use_cuda_custom(ctx, A, B, C, side, uplo, transA, diag)) {
-            return backend::trmm_cuda_custom(ctx, A, B, C, alpha, side, uplo, transA, diag);
-        }
-        // Record the decline: a shape moving OFF a native kernel shows up only here.
-        backend::detail::record_level3_route(
-            Op::trmm, "vendor",
-            C.rows(), C.cols(), A.rows(), A.batch_size(),
-            backend::detail::kNativeUnknown, {uplo, side, diag, transA});
-    }
-
-    if constexpr (!select::level3_vendor_available<Back>) {
-        select::throw_no_vendor_route<T>(
-            Op::trmm, Back, select::kLevel3Library<Back>);
-    } else {
-        return backend::trmm_vendor<Back, T>(ctx, A, B, C, alpha, side, uplo, transA, diag);
-    }
-}
+// trmm lives in src/ops/trmm/trmm.cc (flat kernel selection).
 
 // ---------------------------------------------------------------------------
 // Explicit instantiations, one block per device family.
@@ -229,14 +199,7 @@ Event trmm(Queue& ctx,
     OP_INSTANTIATE(her2k, B_, std::complex<float>)      \
     OP_INSTANTIATE(her2k, B_, std::complex<double>)
 
-#define ALL_TYPE_OPS_ONE(B_, fp)  \
-    OP_INSTANTIATE(trmm, B_, fp)
-
 #define LEVEL3_INSTANTIATE(B_)                       \
-    ALL_TYPE_OPS_ONE(B_, float)                      \
-    ALL_TYPE_OPS_ONE(B_, double)                     \
-    ALL_TYPE_OPS_ONE(B_, std::complex<float>)        \
-    ALL_TYPE_OPS_ONE(B_, std::complex<double>)       \
     REAL_ONLY_OPS(B_)                                \
     COMPLEX_ONLY_OPS(B_)
 
@@ -250,10 +213,6 @@ LEVEL3_INSTANTIATE(Backend::CUDA)
 #if BATCHLAS_HAS_ROCM_BACKEND
 // rocblas.cc has no hemm/herk/her2k/symm wrapper, so the ROCm backend
 // instantiates only the ops it implements.
-ALL_TYPE_OPS_ONE(Backend::ROCM, float)
-ALL_TYPE_OPS_ONE(Backend::ROCM, double)
-ALL_TYPE_OPS_ONE(Backend::ROCM, std::complex<float>)
-ALL_TYPE_OPS_ONE(Backend::ROCM, std::complex<double>)
 OP_INSTANTIATE(syrk,  Backend::ROCM, float)
 OP_INSTANTIATE(syrk,  Backend::ROCM, double)
 OP_INSTANTIATE(syr2k, Backend::ROCM, float)
@@ -265,7 +224,6 @@ LEVEL3_INSTANTIATE(Backend::NETLIB)
 #endif
 
 #undef LEVEL3_INSTANTIATE
-#undef ALL_TYPE_OPS_ONE
 #undef COMPLEX_ONLY_OPS
 #undef REAL_ONLY_OPS
 #undef OP_INSTANTIATE

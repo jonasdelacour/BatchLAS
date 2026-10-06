@@ -918,8 +918,29 @@ GEQRF = OpSpec(
     candidate_order=list(GEQRF_CHOICES),
 )
 
+def trmm_key(r):
+    try:
+        key = (str(r["side"]), int(r["order"]), int(r["q"]), int(r["batch"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+    return key if key[0] in ("L", "R") and min(key[1:]) >= 1 else None
+
+
+# trmm (level-3 flat selection): work ~ order^2 q batch; triangular serves Side::Left only. No
+# sweep source: sm_89 and sm_120 are both transcribed (the old rule read only the side).
+TRMM_CHOICES = ("triangular", "expand", "vendor")
+TRMM = OpSpec(
+    op="trmm",
+    keys="side:exact order:log:2 q:log batch:log",
+    row_ops=("trmm",),
+    row_key=trmm_key,
+    arm_spelling={c: c for c in TRMM_CHOICES},
+    arm_route={c: (("vendor:vendor",) if c == "vendor" else (f"native:{c}",)) for c in TRMM_CHOICES},
+    candidate_order=list(TRMM_CHOICES),
+)
+
 POTRF.review = potrf_offgrid
-OPS = [POTRF, POSV, TRSM, GEMM, GEMV, GEQRF, ORGQR, ORMQR, GETRF, GETRS, GETRI, GESV, GESVD, SPMM, SYEV]
+OPS = [POTRF, POSV, TRSM, GEMM, GEMV, GEQRF, ORGQR, ORMQR, GETRF, GETRS, GETRI, GESV, GESVD, SPMM, SYEV, TRMM]
 OP_BY_NAME = {s.op: s for s in OPS}
 
 

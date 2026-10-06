@@ -9,10 +9,7 @@
 #include <string>
 
 #include "test_utils.hh"
-
-#if BATCHLAS_HAS_CUDA_BACKEND
-#include "../src/backends/trmm_cublasdx_fused.hh"
-#endif
+#include "../src/select/vendor.hh"
 
 using namespace batchlas;
 
@@ -98,62 +95,6 @@ int main(int argc, char **argv) {
 }
 
 #if BATCHLAS_HAS_CUDA_BACKEND
-TEST(TrmmCudaCustomTest, ForcedCuBLASDxPathMatchesVendor) {
-    Queue ctx;
-    if (ctx.device().type != DeviceType::GPU) {
-        GTEST_SKIP() << "CUDA custom trmm test requires a GPU device";
-    }
-
-    const int n = 128;
-    const int batch = 64;
-    const float alpha = 0.9f;
-    const float tol = test_utils::tolerance<float>() * 4096.0f;
-
-    for (auto diag : {Diag::NonUnit, Diag::Unit}) {
-        Matrix<float> A = Matrix<float, MatrixFormat::Dense>::RandomTriangular(n, Uplo::Lower, diag, batch, 7);
-        Matrix<float> B = Matrix<float, MatrixFormat::Dense>::Random(n, n, false, batch, 19);
-        Matrix<float> C_custom(n, n, batch);
-        Matrix<float> C_vendor(n, n, batch);
-
-        {
-            ScopedEnvVar force_route("BATCHLAS_TRMM_ROUTE", "cublasdx");
-            try {
-                trmm(ctx,
-                                    A.view(),
-                                    B.view(),
-                                    C_custom.view(),
-                                    {.alpha = alpha, .diag = diag}).wait();
-            } catch (const std::runtime_error& err) {
-#if BATCHLAS_HAS_CUBLAS
-                EXPECT_FALSE(batchlas::backend::trmm_cublasdx::available());
-#endif
-                EXPECT_NE(std::string(err.what()).find("BATCHLAS_TRMM_ROUTE=cublasdx"), std::string::npos);
-                return;
-            }
-        }
-
-        {
-            ScopedEnvVar vendor_route("BATCHLAS_TRMM_ROUTE", "vendor");
-            trmm(ctx,
-                                A.view(),
-                                B.view(),
-                                C_vendor.view(),
-                                {.alpha = alpha, .diag = diag}).wait();
-        }
-
-        for (int b = 0; b < batch; ++b) {
-            for (int j = 0; j < n; ++j) {
-                for (int i = 0; i < n; ++i) {
-                    ASSERT_NEAR(C_custom(i, j, b), C_vendor(i, j, b), tol)
-                        << "diag=" << static_cast<int>(diag)
-                        << ", batch=" << b
-                        << ", row=" << i
-                        << ", col=" << j;
-                }
-            }
-        }
-    }
-}
 // BATCHLAS_TRMM_ROUTE takes only its own words; the removed legacy spellings (and any typo)
 // throw rather than silently meaning Auto.
 TEST(TrmmCudaCustomTest, RemovedRouteWordsThrow) {
@@ -162,7 +103,7 @@ TEST(TrmmCudaCustomTest, RemovedRouteWordsThrow) {
         GTEST_SKIP() << "CUDA custom trmm test requires a GPU device";
     }
     Matrix<float, MatrixFormat::Dense> A(16, 16, 2), B(16, 4, 2), C(16, 4, 2);
-    for (const char* word : {"tiles", "narrow", "gemm", "custom", "dx", "fused", "diag_full_gemm", "triangular_tiles", "gram_tiles", "expand_gemm", "fused_device", "register_tiled", "native:auto", "vendor:auto", "bogus", "gram", "expand"}) {
+    for (const char* word : {"tiles", "narrow", "gemm", "custom", "dx", "fused", "diag_full_gemm", "triangular_tiles", "gram_tiles", "expand_gemm", "fused_device", "register_tiled", "native:auto", "vendor:auto", "bogus", "gram", "cublasdx"}) {
         ScopedEnvVar route("BATCHLAS_TRMM_ROUTE", word);
         EXPECT_THROW(trmm(ctx, A.view(), B.view(), C.view(), {.alpha = 1.0f}).wait(), std::invalid_argument) << word;
     }
@@ -185,9 +126,9 @@ TEST(TrmmCudaCustomTest, RemovedRouteWordsThrow) {
 //
 // A ragged dimension and a non-square B are in the shapes because the CUDA
 // backend materialises the triangle into packed scratch with a leading
-// dimension of its own. The sweep runs twice there: capping the scratch budget
-// at zero bytes sends it down the no-scratch route it otherwise only reaches
-// when the expansion will not fit on the device, which no test shape does.
+// dimension of its own (the `expand` family). The sweep runs twice there: capping the scratch budget
+// at zero bytes sends Side::Right down the vendor loop it otherwise only reaches
+// when the expansion will not fit on the device, which no test shape does (so vendor builds only).
 TYPED_TEST(TrmmTest, IgnoresUnreferencedTriangleAndUnitDiagonal) {
     using T = typename TestFixture::ScalarType;
     using real_t = typename base_type<T>::type;
@@ -260,7 +201,7 @@ TYPED_TEST(TrmmTest, IgnoresUnreferencedTriangleAndUnitDiagonal) {
 
     sweep("default");
 
-    if constexpr (TestFixture::BackendType == Backend::CUDA) {
+    if constexpr (TestFixture::BackendType == Backend::CUDA && select::level3_vendor_available<Backend::CUDA>) {
         ScopedEnvVar no_scratch("BATCHLAS_EXPAND_MAX_BYTES", "0");
         sweep("no-scratch");
     }
