@@ -5,6 +5,7 @@
   --data BIN          off-grid data gate: random points through the old rule (BIN points mode)
                       and through sweep_to_table.nearest + a can_run model on tuned/syrk.*
   --drop-n N          negative control: delete the rows at n=N before the lookup
+  --drop-trans X      negative control: delete the rows at trans=X (N|T|C) before the lookup
 
 Python 3 standard library only; run from anywhere.
 """
@@ -68,9 +69,9 @@ def can_run(c, dtype, n, vendor):
     return vendor
 
 
-def new_choice(rows, keyspec, dtype, n, k, b, vendor):
-    row = stt.nearest(rows, (form_of(n, k), n, k, b), keyspec)
-    for c, _ in row[1]:
+def new_choice(rows, keyspec, dtype, t, n, k, b, vendor):
+    row = stt.nearest(rows, (form_of(n, k), t, n, k, b), keyspec)
+    for c, _ in (row[1] if row else []):
         if can_run(c, dtype, n, vendor):
             return c
     for c in LAST_RESORT:
@@ -83,18 +84,24 @@ def loguni(rng, hi):
     return max(1, min(hi, int(round(2 ** rng.uniform(0, math.log2(hi))))))
 
 
-def data(binary, count, seed, drop_n):
+def on_grid(t, n, k, b):
+    if t == "C":
+        return n in GRID_N and k == 1 and b == 1
+    return n in GRID_N and k in GRID_K and b in GRID_B
+
+
+def data(binary, count, seed, drop_n, drop_trans):
     rng = random.Random(seed)
     ok_all = True
     for dtype in ("float", "double"):
         pts = []
         while len(pts) < count:
-            n, k, b = loguni(rng, 4096), loguni(rng, 4096), loguni(rng, 32768)
-            if n in GRID_N and k in GRID_K and b in GRID_B:
+            t, n, k, b = rng.choice("NTC"), loguni(rng, 4096), loguni(rng, 4096), loguni(rng, 32768)
+            if on_grid(t, n, k, b):
                 continue
-            pts.append((n, k, b))
+            pts.append((t, n, k, b))
         with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
-            f.write("".join(f"{dtype} {n} {k} {b}\n" for n, k, b in pts))
+            f.write("".join(f"{dtype} {t} {n} {k} {b}\n" for t, n, k, b in pts))
             path = f.name
         out = subprocess.run([binary, "points", path], capture_output=True, text=True, check=True).stdout.split("\n")
         os.unlink(path)
@@ -103,23 +110,25 @@ def data(binary, count, seed, drop_n):
         for dev in ("sm_89", "sm_120"):
             _, keyspec, rows = stt.parse_table(open(stt.table_path("syrk", dtype, dev)).read())
             if drop_n:
-                rows = [r for r in rows if r[0][1] != drop_n]
+                rows = [r for r in rows if r[0][2] != drop_n]
+            if drop_trans:
+                rows = [r for r in rows if r[0][1] != drop_trans]
             agree_a, served, agree_b, gains, mism = 0, 0, 0, Counter(), []
-            for (n, k, b), (ovp, ovf) in zip(pts, old):
-                nvp = new_choice(rows, keyspec, dtype, n, k, b, True)
-                nvf = new_choice(rows, keyspec, dtype, n, k, b, False)
+            for (t, n, k, b), (ovp, ovf) in zip(pts, old):
+                nvp = new_choice(rows, keyspec, dtype, t, n, k, b, True)
+                nvf = new_choice(rows, keyspec, dtype, t, n, k, b, False)
                 if nvp == ovp:
                     agree_a += 1
                 else:
-                    mism.append(f"A {dtype} n={n} k={k} batch={b}: old {ovp} new {nvp}")
+                    mism.append(f"A {dtype} {t} n={n} k={k} batch={b}: old {ovp} new {nvp}")
                 if ovf != "throw":
                     served += 1
                     if nvf == ovf:
                         agree_b += 1
                     else:
-                        mism.append(f"B {dtype} n={n} k={k} batch={b}: old {ovf} new {nvf}")
+                        mism.append(f"B {dtype} {t} n={n} k={k} batch={b}: old {ovf} new {nvf}")
                 else:
-                    gains[nvf] += 1
+                    gains[(t == "C" and "C:" or "") + nvf] += 1
             pa = 100.0 * agree_a / len(pts)
             pb = 100.0 * agree_b / served if served else 100.0
             ok = pa >= 99.0 and pb >= 99.0
@@ -141,12 +150,13 @@ def main():
     ap.add_argument("--count", type=int, default=2000)
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--drop-n", type=int, default=0)
+    ap.add_argument("--drop-trans", default="")
     a = ap.parse_args()
     ok = True
     if a.fidelity:
         ok &= fidelity()
     if a.data:
-        ok &= data(a.data, a.count, a.seed, a.drop_n)
+        ok &= data(a.data, a.count, a.seed, a.drop_n, a.drop_trans)
     sys.exit(0 if ok else 1)
 
 

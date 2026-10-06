@@ -920,18 +920,20 @@ GEQRF = OpSpec(
 
 def syrk_key(r):
     try:
-        key = (str(r["form"]), int(r["n"]), int(r["k"]), int(r["batch"]))
+        key = (str(r["form"]), str(r["trans"]), int(r["n"]), int(r["k"]), int(r["batch"]))
     except (KeyError, TypeError, ValueError):
         return None
-    return key if key[0] in ("sq", "tall", "wide") and min(key[1:]) >= 1 else None
+    ok = key[0] in ("sq", "tall", "wide") and key[1] in ("N", "T", "C") and min(key[2:]) >= 1
+    return key if ok else None
 
 
-# syrk (level-3 flat selection): form = sq|tall|wide of (n, k), k = op(A)'s inner extent; work ~
-# n^2 k batch. No sweep source: sm_89 and sm_120 are both transcribed (the old rule read no arch).
+# syrk (level-3 flat selection): form = sq|tall|wide of (n, k), k = op(A)'s inner extent, trans =
+# N|T|C (the old rule sent C to the vendor); work ~ n^2 k batch. No sweep source: sm_89 and sm_120
+# are both transcribed (the old rule read no arch).
 SYRK_CHOICES = ("gram", "triangular", "vendor")
 SYRK = OpSpec(
     op="syrk",
-    keys="form:exact n:log:2 k:log batch:log",
+    keys="form:exact trans:exact n:log:2 k:log batch:log",
     row_ops=("syrk",),
     row_key=syrk_key,
     arm_spelling={c: c for c in SYRK_CHOICES},

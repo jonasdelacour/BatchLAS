@@ -388,8 +388,8 @@ namespace batchlas {
         // whichever operand carries it. Opt-in only (BATCHLAS_SYRK_ROUTE=gram): a complex
         // multiply is four real ones, so this shape is compute bound for herk
         // where it is bandwidth bound for syrk, and the GEMM-plus-fold below
-        // wins on every Gram shape measured (RTX 4090, cfloat: 0.217 vs 0.206 ms
-        // at n=32 batch 2048, 2.08 vs 1.57 ms at n=128 batch 512).
+        // wins on every Gram shape measured.
+        // evidence: docs/perf/level3.md#herk-on-the-gram-tile-kernel
         if constexpr (Back == Backend::CUDA) {
             if (detail::is_gpu_queue(ctx) && ops::syrk::herk_gram_pinned() &&
                 detail::syrk_gram_supported(A, C, transA, /*conjugated=*/true)) {

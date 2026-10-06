@@ -6,6 +6,7 @@
 
 #include <batchlas/blas/functions/syrk.hh>
 #include <batchlas/no_route.hh>
+#include <batchlas/sycl_interop.hh>
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
@@ -230,7 +231,8 @@ void use_syrk_table(const std::string& dtype, const std::string& dev, const std:
         if (t.name.rfind("syrk.", 0) != 0) files.emplace_back(std::string(t.name), std::string(t.text));
     files.emplace_back("syrk." + dtype + "." + dev + ".txt", "# op=syrk dtype=" + dtype + " device=" + dev +
                                                                  " kernels=unknown\n"
-                                                                 "# keys: form:exact n:log:2 k:log batch:log\n" +
+                                                                 "# keys: form:exact trans:exact n:log:2 k:log "
+                                                                 "batch:log\n" +
                                                                  rows);
     select::testing::set_builtin_tables(std::move(files));
 }
@@ -259,11 +261,12 @@ protected:
     }
 
     // ---- the limit oracle: the kernels' own constants, not syrk.cc's can_run ----
+    // Real C is T to both kernels, so trans never refuses one.
     static bool expect_runs(const C& c, const Spec& s) {
         if (std::holds_alternative<sk::Vendor>(c)) return kVendor;
-        if (s.trans == Transpose::ConjTrans || s.batch > 65535) return false;
+        if (s.batch > 65535) return false;
         if (std::holds_alternative<sk::Gram>(c)) return s.n <= backend::detail::kGramMaxTile;
-        return kFloat;
+        return kFloat && backend::detail::triangular_tile_count(s.n) <= 65535;
     }
     // The Vendor choice spells the class word `vendor`, which falls back to Auto where no vendor
     // can run instead of throwing (§5.3).
@@ -341,7 +344,7 @@ TYPED_TEST(SyrkCandidates, PinnedCandidatesStraddleTheirLimits) {
     using T = typename TestFixture::T;
     for (const C& c : sk::candidates<T>())
         for (Spec s : kStraddle)
-            for (Transpose t : {Transpose::NoTrans, Transpose::Trans})
+            for (Transpose t : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans})
                 for (Uplo u : {Uplo::Lower, Uplo::Upper}) {
                     s.trans = t;
                     s.uplo = u;
@@ -355,9 +358,8 @@ TYPED_TEST(SyrkCandidates, PinnedCandidatesStraddleTheirLimits) {
                 }
 }
 
-// Every (uplo, trans) on every candidate, ConjTrans included: the tile kernels take the BLAS
-// syrk spelling minus C (syrk_gram_supported refuses it), so ConjTrans pins throw and Auto
-// takes the vendor, which reads real C as T.
+// Every (uplo, trans) on every candidate, ConjTrans included: real C is T, so every kernel runs
+// it. Auto keeps C on the vendor (the trans=C rows); vendor-free it takes the native kernel.
 TYPED_TEST(SyrkCandidates, EveryCombinationOnEveryCandidate) {
     using T = typename TestFixture::T;
     for (const Spec base : {Spec{48, 37, 3}, Spec{200, 53, 2}})
@@ -374,13 +376,14 @@ TYPED_TEST(SyrkCandidates, EveryCombinationOnEveryCandidate) {
                     if (want) EXPECT_TRUE(correct(p)) << name(c, s);
                 }
                 auto p = make_prob<T>(s);
-                const bool no_native = t == Transpose::ConjTrans || (!TestFixture::kFloat && s.n > 128);
+                const bool no_native = !TestFixture::kFloat && s.n > 128;
                 if (no_native && !TestFixture::kVendor) {
                     EXPECT_THROW(this->run(p), batchlas::NoRouteError) << label(s);
                     continue;
                 }
                 const std::string got = this->auto_choice(p);
-                if (t == Transpose::ConjTrans) EXPECT_EQ(got, "vendor") << label(s);
+                if (t == Transpose::ConjTrans)
+                    EXPECT_EQ(got, TestFixture::kVendor ? "vendor" : (s.n <= 128 ? "gram" : "triangular")) << label(s);
                 EXPECT_TRUE(correct(p)) << "auto " << label(s) << " -> " << got;
             }
 }
@@ -423,21 +426,23 @@ TYPED_TEST(SyrkCandidates, SaturatingBatchIsBitIdentical) {
 // §8.2 (R3) over the straddle set: a pin is accepted exactly when the family's own kernel,
 // called directly, runs and answers correctly. Gram past its one tile does not throw: it answers
 // wrongly, which is why its pin now throws there (the old BATCHLAS_SYRK_ROUTE=gram ran it).
+// ConjTrans is in the set: real C is T, so it must be accepted wherever T is.
 TYPED_TEST(SyrkCandidates, CanRunEqualsLaunch) {
     using T = typename TestFixture::T;
     for (const C& c : sk::candidates<T>()) {
         if (this->vendor_word_falls_back(c)) continue;
-        for (Spec s : kStraddle) {
-            s.uplo = Uplo::Upper;
-            s.trans = Transpose::Trans;
-            auto p = make_prob<T>(s);
-            const bool accepted = this->pin_accepted(c, p);
-            auto d = make_prob<T>(s);
-            std::string why;
-            const bool launched = this->direct(c, d, &why);
-            const bool right = launched && correct(d);
-            EXPECT_EQ(accepted, right) << name(c, s) << (launched ? "" : " (direct: " + why + ")");
-        }
+        for (Spec s : kStraddle)
+            for (Transpose t : {Transpose::Trans, Transpose::ConjTrans}) {
+                s.uplo = Uplo::Upper;
+                s.trans = t;
+                auto p = make_prob<T>(s);
+                const bool accepted = this->pin_accepted(c, p);
+                auto d = make_prob<T>(s);
+                std::string why;
+                const bool launched = this->direct(c, d, &why);
+                const bool right = launched && correct(d);
+                EXPECT_EQ(accepted, right) << name(c, s) << (launched ? "" : " (direct: " + why + ")");
+            }
     }
 }
 
@@ -479,6 +484,85 @@ TYPED_TEST(SyrkCandidates, GridBatchCeiling) {
     }
 }
 
+// The tile-count term (AGENTS §8.9): triangular puts its T(T+1)/2 tiles (T = ceil(n/128)) in a
+// grid dimension capped at 65535. At the last order whose tile count fits, the pin launches and
+// writes C's last tile; one past it the direct launch throws, the pin is refused and writes
+// nothing, and Auto takes the vendor (vendor-free: no route). k = 8, batch 1, C on the device.
+TYPED_TEST(SyrkCandidates, TriangularTileGridCeiling) {
+    static constexpr Backend B = TestFixture::B;
+    if constexpr (!TestFixture::kFloat) {
+        GTEST_SKIP() << "triangular is a float kernel";
+    } else {
+        int last = 1;
+        while (backend::detail::triangular_tile_count(last + 1) <= 65535) ++last;
+        auto& q = batchlas::sycl_queue(*this->ctx);
+        const std::size_t need = std::size_t(last + 1) * std::size_t(last + 1) * sizeof(float);
+        if (q.get_device().template get_info<sycl::info::device::global_mem_size>() < need + (std::size_t(4) << 30))
+            GTEST_SKIP() << "needs " << (need >> 30) << " GiB of device memory";
+        const int k = 8;
+        for (const int n : {last, last + 1}) {
+            UnifiedVector<float> a(std::size_t(n) * k);
+            for (int l = 0; l < k; ++l)
+                for (int i = 0; i < n; ++i) a[std::size_t(l) * n + i] = float((i * 7 + l * 3) % 11 - 5) / 4;
+            float* c = sycl::malloc_device<float>(std::size_t(n) * n, q);
+            ASSERT_NE(c, nullptr);
+            q.fill(c, poison<float>(), std::size_t(n) * n).wait();
+            UnifiedVector<float*> ap(1, nullptr), cp(1, nullptr);
+            const MVof<float> A(a.data(), n, k, n, n * k, 1, ap.data());
+            const MVof<float> Cm(c, n, n, n, n * n, 1, cp.data());
+            auto at = [&](int i, int j) {
+                float v = 0;
+                q.memcpy(&v, c + std::size_t(j) * n + i, sizeof v).wait();
+                return v;
+            };
+            auto want = [&](int i, int j) {  // multiples of 1/16: exact in float
+                float s = 0;
+                for (int l = 0; l < k; ++l) s += a[std::size_t(l) * n + i] * a[std::size_t(l) * n + j];
+                return s;
+            };
+            auto call = [&] {
+                (void)syrk<B, float>(*this->ctx, A, Cm, 1.0f, 0.0f, Uplo::Lower, Transpose::NoTrans);
+                this->ctx->wait();
+            };
+            bool accepted = true;
+            try {
+                const Pin pin("syrk", C{sk::Triangular{}});
+                call();
+            } catch (const std::invalid_argument& e) {
+                EXPECT_NE(std::string(e.what()).find("cannot run this shape"), std::string::npos) << e.what();
+                accepted = false;
+            }
+            if (n == last) {
+                EXPECT_TRUE(accepted) << "n=" << n;
+                for (const auto& [i, j] : std::initializer_list<std::pair<int, int>>{
+                         {n - 1, n - 1}, {n - 1, 0}, {0, 0}, {n - 1, n - 129}, {n - 200, n - 300}})
+                    EXPECT_EQ(at(i, j), want(i, j)) << "n=" << n << " C(" << i << "," << j << ")";
+                EXPECT_EQ(at(0, n - 1), poison<float>()) << "wrote the upper triangle";
+            } else {
+                EXPECT_FALSE(accepted) << "n=" << n;
+                EXPECT_EQ(at(n - 1, n - 1), poison<float>()) << "a refused pin wrote";
+                try {
+                    (void)backend::detail::syrk_triangular_tiles<float>(*this->ctx, A, Cm, 1.0f, 0.0f, Uplo::Lower,
+                                                                        Transpose::NoTrans);
+                    this->ctx->wait();
+                    ADD_FAILURE() << "the direct launch past the ceiling ran, n=" << n;
+                } catch (const std::exception& e) {
+                    EXPECT_NE(std::string(e.what()).find("exceed limit"), std::string::npos) << e.what();
+                }
+                const ScopedEnvVar clear("BATCHLAS_SYRK_ROUTE", nullptr);
+                if constexpr (TestFixture::kVendor) {
+                    EXPECT_EQ(traced_choice(call), "vendor");
+                    EXPECT_EQ(at(n - 1, n - 1), want(n - 1, n - 1));
+                    EXPECT_EQ(at(n - 1, 0), want(n - 1, 0));
+                } else {
+                    EXPECT_THROW(call(), batchlas::NoRouteError);
+                }
+            }
+            sycl::free(c, q);
+        }
+    }
+}
+
 // R6: a spelling that names nothing compiled throws instead of meaning Auto, via ScopedPin and
 // via the environment. Includes every removed level-3 word and the other ops' family words.
 TYPED_TEST(SyrkCandidates, UnknownPinsThrow) {
@@ -502,12 +586,11 @@ TYPED_TEST(SyrkCandidates, UnknownPinsThrow) {
 TYPED_TEST(SyrkCandidates, CanRunFalsePinsThrow) {
     using T = typename TestFixture::T;
     struct Case { C c; Spec s; const char* msg; };
+    // Triangular's float limit (the tile grid) is TriangularTileGridCeiling's: it needs 8.5 GB.
     std::vector<Case> cases{{sk::Gram{}, {129, 8, 2}, "cannot run this shape"},
                             {sk::Gram{}, {4096, 1, 1}, "cannot run this shape"},
-                            {sk::Gram{}, {16, 8, 2, Uplo::Lower, Transpose::ConjTrans}, "cannot run this shape"}};
-    if constexpr (TestFixture::kFloat)
-        cases.push_back({sk::Triangular{}, {16, 8, 2, Uplo::Upper, Transpose::ConjTrans}, "cannot run this shape"});
-    else
+                            {sk::Gram{}, {129, 8, 2, Uplo::Upper, Transpose::ConjTrans}, "cannot run this shape"}};
+    if constexpr (!TestFixture::kFloat)
         cases.push_back({sk::Triangular{}, {300, 8, 2}, "is not a compiled syrk double candidate"});
     for (const auto& k : cases) {
         auto p = make_prob<T>(k.s);
@@ -642,8 +725,9 @@ TYPED_TEST(SyrkCandidates, ScopedPinBeatsTheEnvironment) {
 
 // Auto against the transcribed table, on each side of every threshold the old rule read:
 // gram 128|129, triangular-if-squareish above, the batch floor of the 3-tile band (26|27) and of
-// the 13-tile band (1|2), n 256|257, k 7|8, all three forms. Vendor-free, `vendor` is taken by
-// the row's next entry (float: triangular) or nothing (double).
+// the 13-tile band (1|2), n 256|257, k 7|8, all three forms, N and T alike; C is the vendor
+// everywhere. Vendor-free, `vendor` is taken by the row's next entry (float: triangular; C at
+// n <= 128: gram) or nothing (double).
 TYPED_TEST(SyrkCandidates, AutoReadsTheTranscribedTable) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
@@ -660,10 +744,11 @@ TYPED_TEST(SyrkCandidates, AutoReadsTheTranscribedTable) {
                         {300, 700, 27, "triangular", "vendor"}, {1600, 64, 1, "vendor", "vendor"},
                         {1600, 64, 2, "triangular", "vendor"}};
     for (const Row& r : rows)
-        for (Transpose t : {Transpose::NoTrans, Transpose::Trans}) {
+        for (Transpose t : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans}) {
             Spec s{r.n, r.k, r.batch, Uplo::Lower, t};
-            std::string want = TestFixture::kFloat ? r.f : r.d;
-            if (want == "vendor" && !TestFixture::kVendor) want = TestFixture::kFloat ? "triangular" : "";
+            std::string want = t == Transpose::ConjTrans ? "vendor" : (TestFixture::kFloat ? r.f : r.d);
+            if (want == "vendor" && !TestFixture::kVendor)
+                want = t == Transpose::ConjTrans && r.n <= 128 ? "gram" : (TestFixture::kFloat ? "triangular" : "");
             auto p = make_prob<T>(s);
             if (want.empty()) {
                 const ScopedEnvVar clear("BATCHLAS_SYRK_ROUTE", nullptr);
@@ -675,9 +760,9 @@ TYPED_TEST(SyrkCandidates, AutoReadsTheTranscribedTable) {
         }
 }
 
-// key_of's every field reaches choose(): a synthetic table whose winner changes with form, n,
-// k (op(A)'s inner extent, so Trans reads A.rows) and batch alone. Breaking a field in key_of
-// turns exactly its probe red. Double alternates gram with the vendor, so it needs one.
+// key_of's every field reaches choose(): a synthetic table whose winner changes with form,
+// trans, n, k (op(A)'s inner extent, so Trans reads A.rows) and batch alone. Breaking a field in
+// key_of turns exactly its probe red. Double alternates gram with the vendor, so it needs one.
 TYPED_TEST(SyrkCandidates, AutoReadsEveryKeyField) {
     using T = typename TestFixture::T;
     if (!TestFixture::kFloat && !TestFixture::kVendor) GTEST_SKIP() << "double's only alternative is the vendor";
@@ -687,18 +772,24 @@ TYPED_TEST(SyrkCandidates, AutoReadsEveryKeyField) {
     const std::string alt = TestFixture::kFloat ? "triangular" : "vendor";
     const std::string ga = " | gram 1 | " + alt + " 2\n", ag = " | " + alt + " 1 | gram 2\n";
     const TableGuard restore;
+    // N: gram only at the base cell. T: alt at the base cell, gram at k=100 and on the wide row.
+    // C: one row, at batch 1024, where N and T both say alt.
     use_syrk_table(dtype, dev,
-                   "form=sq n=64 k=64 batch=16" + ga + "form=sq n=64 k=64 batch=1024" + ag +
-                       "form=sq n=96 k=64 batch=16" + ag + "form=sq n=64 k=100 batch=16" + ag +
-                       "form=tall n=64 k=16 batch=16" + ag + "form=wide n=16 k=64 batch=16" + ag);
+                   "form=sq trans=N n=64 k=64 batch=16" + ga + "form=sq trans=N n=64 k=64 batch=1024" + ag +
+                       "form=sq trans=N n=96 k=64 batch=16" + ag + "form=sq trans=N n=64 k=100 batch=16" + ag +
+                       "form=tall trans=N n=64 k=16 batch=16" + ag + "form=wide trans=N n=16 k=64 batch=16" + ag +
+                       "form=sq trans=T n=64 k=64 batch=16" + ag + "form=sq trans=T n=64 k=100 batch=16" + ga +
+                       "form=wide trans=T n=16 k=64 batch=16" + ga + "form=sq trans=C n=64 k=64 batch=1024" + ga);
     struct Probe { int n, k, batch; Transpose t; std::string expect; const char* field; };
     const Probe probes[] = {{64, 64, 16, Transpose::NoTrans, "gram", "base"},
                             {64, 64, 1024, Transpose::NoTrans, alt, "batch"},
                             {96, 64, 16, Transpose::NoTrans, alt, "n"},
                             {64, 100, 16, Transpose::NoTrans, alt, "k (NoTrans: A.cols)"},
-                            {64, 100, 16, Transpose::Trans, alt, "k (Trans: A.rows)"},
+                            {64, 100, 16, Transpose::Trans, "gram", "k (Trans: A.rows)"},
                             {64, 16, 16, Transpose::NoTrans, alt, "form tall"},
-                            {16, 64, 16, Transpose::Trans, alt, "form wide"}};
+                            {16, 64, 16, Transpose::Trans, "gram", "form wide"},
+                            {64, 64, 16, Transpose::Trans, alt, "trans T"},
+                            {64, 64, 1024, Transpose::ConjTrans, "gram", "trans C"}};
     for (const auto& k : probes) {
         auto p = make_prob<T>(Spec{k.n, k.k, k.batch, Uplo::Upper, k.t});
         EXPECT_EQ(traced_choice([&] { this->run(p); }), k.expect) << "the " << k.field << " probe";
@@ -706,13 +797,14 @@ TYPED_TEST(SyrkCandidates, AutoReadsEveryKeyField) {
     }
 }
 
-// The trace line prints syrk's key: form, n = C's order, k = op(A)'s inner extent, batch.
+// The trace line prints syrk's key: form, trans, n = C's order, k = op(A)'s inner extent, batch.
 TYPED_TEST(SyrkCandidates, TraceLineCarriesTheKey) {
     using T = typename TestFixture::T;
-    for (Transpose t : {Transpose::NoTrans, Transpose::Trans}) {
+    for (Transpose t : {Transpose::NoTrans, Transpose::Trans, Transpose::ConjTrans}) {
         auto p = make_prob<T>(Spec{12, 37, 5, Uplo::Upper, t});
         const std::string line = traced_line([&] { this->run(p); });
-        EXPECT_NE(line.find("form=wide n=12 k=37 batch=5 ->"), std::string::npos) << line;
+        const std::string key = std::string("form=wide trans=") + trans_s(t) + " n=12 k=37 batch=5 ->";
+        EXPECT_NE(line.find(key), std::string::npos) << line;
         EXPECT_TRUE(correct(p));
     }
 }
@@ -725,7 +817,7 @@ TYPED_TEST(SyrkCandidates, VendorFreeLastResort) {
     const std::string dtype(select::dtype_name<T>());
     const std::string dev = select::device_of<TestFixture::B>(*this->ctx).key;
     const TableGuard restore;
-    use_syrk_table(dtype, dev, "form=tall n=200 k=8 batch=128 | vendor 1\n");
+    use_syrk_table(dtype, dev, "form=tall trans=N n=200 k=8 batch=128 | vendor 1\n");
     for (const Spec& s : {Spec{200, 9, 3}, Spec{64, 9, 3}}) {
         auto p = make_prob<T>(s);
         std::string want = "vendor";
@@ -893,17 +985,19 @@ TEST(SyrkHerkHook, HerkGramPinnedReadsOnlyTheWordGram) {
     EXPECT_FALSE(sk::herk_gram_pinned()) << "the ScopedPin wins over the environment";
 }
 
-// The transcription (no GPU): each table holds exactly choice.hh's full product grid, sm_120's
-// rows equal sm_89's, every row untimed under source=transcribed:ff340fc6, and the keys line is
-// choice.hh's key_names.
+// The transcription (no GPU): each table holds exactly choice.hh's grid (the full product for N
+// and T, the n axis at k = batch = 1 for C), sm_120's rows equal sm_89's, every row untimed under
+// source=transcribed:ff340fc6, and the keys line is choice.hh's key_names.
 TEST(SyrkTranscribedTable, RowsAreExactlyTheChoiceGridOnBothDevices) {
     std::set<std::string> want;
     for (const char* f : {"sq", "tall", "wide"})
-        for (int n : sk::grid_n)
-            for (int k : sk::grid_k)
-                for (int b : sk::grid_batch)
-                    want.insert(std::string(f) + " " + std::to_string(n) + " " + std::to_string(k) + " " +
-                                std::to_string(b));
+        for (std::string_view t : sk::grid_trans)
+            for (int n : sk::grid_n)
+                for (int k : sk::grid_k)
+                    for (int b : sk::grid_batch)
+                        if (t != "C" || (k == 1 && b == 1))
+                            want.insert(std::string(f) + " " + std::string(t) + " " + std::to_string(n) + " " +
+                                        std::to_string(k) + " " + std::to_string(b));
     std::string keys = "# keys:";
     for (auto k : sk::key_names) keys += " " + std::string(k);
     for (const char* dt : {"float", "double"}) {
@@ -916,7 +1010,9 @@ TEST(SyrkTranscribedTable, RowsAreExactlyTheChoiceGridOnBothDevices) {
             EXPECT_EQ(t.source, "transcribed:ff340fc6") << t.file;
             std::set<std::string> got;
             for (const auto& row : t.rows) {
-                const std::string key = row.keys[0] + " " + row.keys[1] + " " + row.keys[2] + " " + row.keys[3];
+                ASSERT_EQ(row.keys.size(), 5u) << t.file << ":" << row.line;
+                const std::string key =
+                    row.keys[0] + " " + row.keys[1] + " " + row.keys[2] + " " + row.keys[3] + " " + row.keys[4];
                 got.insert(key);
                 EXPECT_FALSE(row.timed) << t.file << ":" << row.line;
                 std::string ranked;
@@ -939,26 +1035,31 @@ TEST(SyrkTranscribedTable, RowsAreExactlyTheChoiceGridOnBothDevices) {
 
 // Spot rows through Table::nearest, off the grid: the old rule's decision at the snapped cell.
 TEST(SyrkTranscribedTable, OffGridRowsHoldTheOldRule) {
-    struct Row { const char* dtype; int n, k, batch; const char* ranked; };
-    const Row rows[] = {{"float", 100, 3000, 7, "gram|triangular|vendor|"},
-                        {"float", 140, 150, 9, "triangular|vendor|"},
-                        {"float", 140, 30, 9, "vendor|triangular|"},
-                        {"float", 400, 50, 20, "triangular|vendor|"},
-                        {"float", 400, 50, 12, "vendor|triangular|"},
-                        {"float", 3000, 4, 32768, "vendor|triangular|"},
-                        {"float", 3000, 9000, 1, "triangular|vendor|"},
-                        {"double", 100, 3, 50000, "gram|vendor|"},
-                        {"double", 140, 140, 50, "vendor|"}};
+    struct Row { const char* dtype; const char* t; int n, k, batch; const char* ranked; };
+    const Row rows[] = {{"float", "N", 100, 3000, 7, "gram|triangular|vendor|"},
+                        {"float", "T", 140, 150, 9, "triangular|vendor|"},
+                        {"float", "N", 140, 30, 9, "vendor|triangular|"},
+                        {"float", "T", 400, 50, 20, "triangular|vendor|"},
+                        {"float", "N", 400, 50, 12, "vendor|triangular|"},
+                        {"float", "N", 3000, 4, 32768, "vendor|triangular|"},
+                        {"float", "T", 3000, 9000, 1, "triangular|vendor|"},
+                        {"float", "C", 100, 3000, 7, "vendor|gram|triangular|"},
+                        {"float", "C", 3000, 9000, 1, "vendor|triangular|"},
+                        {"double", "N", 100, 3, 50000, "gram|vendor|"},
+                        {"double", "T", 140, 140, 50, "vendor|"},
+                        {"double", "C", 100, 3, 50000, "vendor|gram|"},
+                        {"double", "C", 140, 140, 50, "vendor|"}};
     for (const Row& r : rows) {
         const auto tables = select::tables_in_borrow_order("syrk", r.dtype, select::device_from_key("sm_89"));
         ASSERT_FALSE(tables.empty());
-        const select::Key key{{"form", sk::form_of(r.n, r.k)}, {"n", r.n}, {"k", r.k}, {"batch", r.batch}};
+        const select::Key key{
+            {"form", sk::form_of(r.n, r.k)}, {"trans", r.t}, {"n", r.n}, {"k", r.k}, {"batch", r.batch}};
         const select::TableRow* row = tables.front()->nearest(key);
         ASSERT_NE(row, nullptr);
         std::string ranked;
         for (const auto& e : row->ranked) ranked += e.spelling + "|";
-        EXPECT_EQ(ranked, r.ranked) << r.dtype << " n=" << r.n << " k=" << r.k << " batch=" << r.batch << " (line "
-                                    << row->line << ")";
+        EXPECT_EQ(ranked, r.ranked) << r.dtype << " " << r.t << " n=" << r.n << " k=" << r.k << " batch=" << r.batch
+                                    << " (line " << row->line << ")";
     }
 }
 

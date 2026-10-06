@@ -6,7 +6,7 @@
 //
 // Build (repo root): g++ -std=c++20 -O2 -I. -o syrk_transcribe tools/transcribe/syrk_transcribe.cc
 // Grid:  ./syrk_transcribe grid > tuned/transcribed/syrk.csv
-// Point: ./syrk_transcribe points FILE   (lines "dtype n k batch") -> "vendor_present vendor_free"
+// Point: ./syrk_transcribe points FILE  (lines "dtype N|T|C n k batch") -> "vendor_present vendor_free"
 #ifndef SYRK_FACADE_PASS
 
 #include <algorithm>
@@ -372,7 +372,7 @@ namespace {
 
 using namespace batchlas;
 
-// src/ops/syrk/choice.hh's grid and form rule, spelled again here.
+// src/ops/syrk/choice.hh's grid and form rule, spelled again here. C cells: the n axis only.
 const std::array<int, 30> kN{1,   2,   4,   8,   16,  32,  64,   128,  129,  256,  257,  384,  385,  512,  513,
                              640, 641, 768, 769, 896, 897, 1024, 1025, 1152, 1153, 1536, 1537, 2176, 2177, 4096};
 const std::array<int, 6> kK{1, 7, 8, 64, 512, 4096};
@@ -389,23 +389,29 @@ int rep_k(const std::string& form, int n) {
     return 2 * n + 1;
 }
 
+Transpose trans_of(const std::string& t) {
+    return t == "N" ? Transpose::NoTrans : (t == "T" ? Transpose::Trans : Transpose::ConjTrans);
+}
+
 template <class T>
-std::string old_auto(int n, int k, int batch, bool vendor) {
+std::string old_auto(int n, int k, int batch, Transpose t, bool vendor) {
     Queue q;
-    const MatrixView<T, MatrixFormat::Dense> A{n, k, batch}, C{n, n, batch};
+    const MatrixView<T, MatrixFormat::Dense> A = t == Transpose::NoTrans ? MatrixView<T, MatrixFormat::Dense>{n, k, batch}
+                                                                         : MatrixView<T, MatrixFormat::Dense>{k, n, batch};
+    const MatrixView<T, MatrixFormat::Dense> C{n, n, batch};
     try {
-        if (vendor) return vp::syrk<Backend::CUDA, T>(q, A, C, T(1), T(0), Uplo::Lower, Transpose::NoTrans);
-        return vf::syrk<Backend::CUDA, T>(q, A, C, T(1), T(0), Uplo::Lower, Transpose::NoTrans);
+        if (vendor) return vp::syrk<Backend::CUDA, T>(q, A, C, T(1), T(0), Uplo::Lower, t);
+        return vf::syrk<Backend::CUDA, T>(q, A, C, T(1), T(0), Uplo::Lower, t);
     } catch (const NoRoute&) {
         return "throw";
     }
 }
 
 // Old choice first; then every other candidate that can run a homogeneous GPU cell with
-// unlimited capacity, in candidate order; vendor last unless it is the old choice.
+// unlimited capacity, in candidate order; vendor last unless it is the old choice (gram: n only).
 template <class T>
-std::string ranked(int n, int k, int batch) {
-    const std::string first = old_auto<T>(n, k, batch, true);
+std::string ranked(int n, int k, int batch, Transpose t) {
+    const std::string first = old_auto<T>(n, k, batch, t, true);
     const MatrixView<T, MatrixFormat::Dense> A{n, k, batch}, C{n, n, batch};
     std::vector<std::string> out{first};
     const bool gram = backend::detail::syrk_gram_supported(A, C, Transpose::NoTrans, false);
@@ -421,13 +427,14 @@ template <class T>
 void grid(const char* dtype) {
     for (const char* dev : {"sm_89", "sm_120"})
         for (const std::string form : {"sq", "tall", "wide"})
-            for (int n : kN)
-                for (int k : kK)
-                    for (int b : kBatch) {
-                        const int ke = form_of(n, k) == form ? k : rep_k(form, n);
-                        std::printf("syrk,%s,%s,%s,%d,%d,%d,%s\n", dtype, dev, form.c_str(), n, k, b,
-                                    ranked<T>(n, ke, b).c_str());
-                    }
+            for (const std::string tr : {"N", "T", "C"})
+                for (int n : kN)
+                    for (int k : tr == "C" ? std::vector<int>{1} : std::vector<int>(kK.begin(), kK.end()))
+                        for (int b : tr == "C" ? std::vector<int>{1} : std::vector<int>(kBatch.begin(), kBatch.end())) {
+                            const int ke = form_of(n, k) == form ? k : rep_k(form, n);
+                            std::printf("syrk,%s,%s,%s,%s,%d,%d,%d,%s\n", dtype, dev, form.c_str(), tr.c_str(), n,
+                                        k, b, ranked<T>(n, ke, b, trans_of(tr)).c_str());
+                        }
 }
 
 }  // namespace
@@ -435,19 +442,21 @@ void grid(const char* dtype) {
 int main(int argc, char** argv) {
     const std::string mode = argc > 1 ? argv[1] : "";
     if (mode == "grid") {
-        std::printf("op,dtype,device,form,n,k,batch,ranked\n");
+        std::printf("op,dtype,device,form,trans,n,k,batch,ranked\n");
         grid<float>("float");
         grid<double>("double");
         return 0;
     }
     if (mode == "points" && argc > 2) {
         std::ifstream in(argv[2]);
-        std::string dtype;
+        std::string dtype, tr;
         int n, k, b;
-        while (in >> dtype >> n >> k >> b) {
+        while (in >> dtype >> tr >> n >> k >> b) {
             const bool f = dtype == "float";
-            std::printf("%s %s\n", (f ? old_auto<float>(n, k, b, true) : old_auto<double>(n, k, b, true)).c_str(),
-                        (f ? old_auto<float>(n, k, b, false) : old_auto<double>(n, k, b, false)).c_str());
+            const Transpose t = trans_of(tr);
+            std::printf("%s %s\n",
+                        (f ? old_auto<float>(n, k, b, t, true) : old_auto<double>(n, k, b, t, true)).c_str(),
+                        (f ? old_auto<float>(n, k, b, t, false) : old_auto<double>(n, k, b, t, false)).c_str());
         }
         return 0;
     }
