@@ -42,46 +42,55 @@ coverage table.
 
 ### Level-3 route arms
 
-The four level-3 dispatchers have **no tables**: their thresholds are hand-rolled `if`-chains. The gates live in the
-public entry points (`src/ops/level3/level3.cc`), guarded `Back == Backend::CUDA && std::is_same_v<T, float>`, and run
-**before** the vendor-available test, so they are reachable vendor-free.
+symm, syrk, syr2k and trmm select like every other op since the level-3 flat-selection wave
+(`src/ops/<op>/{choice.hh,<op>.cc}`; families, `can_run` terms, keys and tables in
+`docs/design/flat-kernel-selection.md` §12 "Level-3 four"). Their tables are transcribed from the
+hand-written gates described below, so on-grid Auto is unchanged; the gates themselves, the
+`*_custom_dispatch.cc` files and the cuBLASDx fused arms are deleted. hemm, herk and her2k still
+choose in `cublas.cc` (vendor builds only), between an expansion or fold into the public `gemm` and
+the vendor loop.
 
-| op | native arms | gate (float, CUDA, GPU queue) | source |
+| op | families (spelling) | old gate, float CUDA GPU (`ff340fc6`) | old source |
 |---|---|---|---|
-| `symm` | `expand` (mirrored expansion + public `gemm`) — **no tile kernel** | `squareish && shared_dim == k && expansion_preferred(max_dim, batch)` | `symm_custom_dispatch.cc` |
-| `syrk` | `gram`, `triangular` | `prefer_gram \|\| prefer_triangular \|\| cublasdx_heuristic` | `syrk_custom_dispatch.cc` |
-| `syr2k` | `triangular` (float only) | `batch >= 2` | `syr2k_custom_dispatch.cc` |
-| `trmm` | `triangular` (`Side::Left` only) | `trmm_triangular_supported(...)` — **no size threshold** | `trmm_custom_dispatch.cc` |
+| `symm` | `expand` (mirrored expansion + public `gemm`, float and double), `vendor` | `squareish && expansion_preferred(max_dim, batch)` | `symm_custom_dispatch.cc` |
+| `syrk` | `gram` (n <= 128, float and double), `triangular` (float), `vendor` | `prefer_gram \|\| prefer_triangular \|\| cublasdx_heuristic` | `syrk_custom_dispatch.cc` |
+| `syr2k` | `triangular` (float), `vendor` | `batch >= 2` | `syr2k_custom_dispatch.cc` |
+| `trmm` | `triangular` (`Side::Left`), `expand` (expansion + public `gemm`), `vendor` (the loop) | `trmm_triangular_supported(...)`, **no size threshold**; Right went to an expand-or-loop vendor | `trmm_custom_dispatch.cc`, `cublas.cc` |
 
 Their inner GEMMs go through the public `gemm`, so they take the gemm table's choice like any other caller.
 
-Correctness gates, all of which must hold before any window is consulted: square `A` and matching batch sizes for
-`symm`; `transA != ConjTrans`, square `C`, matching batch for `syrk` and `syr2k`; `Side::Left`, `Uplo::Lower`,
-`transA == NoTrans` for `trmm`'s cuBLASDx arm and `Side::Left` plus homogeneous batch for its tile arm. Every tile
-kernel refuses a heterogeneous batch, because it indexes operands as `base + batch * stride`.
+Correctness, now `can_run` terms: every native family needs a CUDA GPU queue, a homogeneous batch
+(every tile kernel indexes operands as `base + batch * stride`), extents >= 1 and batch <= 65535
+(the batch is the grid's z or y dimension). syrk/syr2k `triangular` also bound the tile count (grid
+y), `gram` needs n <= 128, symm/trmm `expand` need `expansion_fits`, trmm `triangular` needs
+`Side::Left`, and syr2k keeps real `ConjTrans` on the vendor.
 
 ### The level-3 pin words
 
-`BATCHLAS_<OP>_ROUTE` for these four ops is parsed by `detail::level3_pin` (`src/backends/route_common.hh`):
-lowercased and trimmed like select's pins, unset or empty is `auto`, and any other word the op does not take throws
-`std::invalid_argument`.
+`BATCHLAS_<OP>_ROUTE` for these four ops is parsed by `src/select` like every other op's: `auto`,
+`native`, `vendor` (class words; with nothing of their class runnable they fall back to Auto with
+a warning) or a family spelling, lowercased and trimmed. A spelling that is not a compiled candidate
+for the dtype, or cannot run the shape, throws `std::invalid_argument`.
 
-| op | words besides `auto` | meaning |
+| op | spellings | notes |
 |---|---|---|
-| `symm` | `native`, `expand`, `vendor`, `cublasdx` | `native` = `expand` |
-| `syrk` | `native`, `triangular`, `gram`, `vendor`, `cublasdx` | `native` = the tile kernel Auto would take |
-| `syr2k` | `native`, `triangular`, `vendor`, `cublasdx` | `native` = `triangular` |
-| `trmm` | `native`, `triangular`, `vendor`, `cublasdx` | `native` = `triangular` where it fits, else the vendor |
+| `symm` | `expand`, `vendor` | `native` = `expand` |
+| `syrk` | `gram`, `triangular`, `vendor` | `triangular` on double throws (not a double candidate); `gram` at n > 128 throws (the kernel answers wrongly there) |
+| `syr2k` | `triangular`, `vendor` | `triangular` on double throws |
+| `trmm` | `triangular`, `expand`, `vendor` | `vendor` is the `cublas?trmm` loop; the old `vendor` (expand+gemm when it fit) is `expand` |
 
-`vendor` keeps meaning the vendor even though the tile kernels are the default: it is the "before" a measurement is
-taken against. `cublasdx` names the fused MathDx kernel and throws when it cannot run (MathDx is absent on this box,
-so it always throws here). A named tile kernel that cannot serve the shape (a heterogeneous batch) throws; `native`
-falls back to the vendor there. The deliberately wrong both-triangles `DiagFullGemm` measurement route and the legacy
-`tiles`/`narrow`/`gemm`/`custom` words were deleted with the route vocabulary; `syrk`/`syr2k`/`trmm`/`symm` tests
-assert that each of them now throws (`*CudaCustomTest.RemovedRouteWordsThrow`). `herk` reaches syrk's Gram kernel
-only through `BATCHLAS_SYRK_ROUTE=gram`.
+`cublasdx` is not a word any more: cuBLASDx was deleted (it never ran here, MathDx being absent), so
+a `cublasdx` pin throws as an unknown family. The legacy `tiles`/`narrow`/`gemm`/`custom` words and
+the old `DiagFullGemm` measurement route are gone too; each op's should-throw tests list them
+(`*CudaCustomTest.RemovedRouteWordsThrow`, `<Op>Candidates.UnknownPinsThrow`). `herk` reaches
+syrk's Gram kernel only through `BATCHLAS_SYRK_ROUTE=gram` (`ops::syrk::herk_gram_pinned()`).
 
 ## Measured boundaries
+
+These measurements are the evidence behind the old hand-written gates; the transcribed level-3
+tables reproduce those gates, so they still describe today's Auto. File:line citations into
+`*_custom_dispatch.cc`, `level3_vendor_fallback.hh` and `level3_coverage.hh` on this page refer to
+the commits measured (up to `ff340fc6`); those files are deleted.
 
 All figures RTX 4090 / sm_89, CUDA 13.2, `RelWithDebInfo`, one dedicated GPU via `experiments/gpu_guard.sh`. Batch is
 always large enough to saturate; batch = 1 is not a design target.
@@ -279,8 +288,8 @@ Wrong answers found, how they hid, and what guards them now.
   call the same `choose()` (flat selection, rule R5).
 * **`{Vendor, FusedDevice}` satisfies `is_vendor` but is not "the plain vendor call".** The level-3 dispatchers'
   `request == Vendor` tests meant `cublasSsyrk` specifically; rendering them as `is_vendor()` makes a forced cuBLASDx
-  request answer yes to "did the caller ask for the vendor?". The level-3 pin words now keep `vendor` and `cublasdx`
-  apart (`Level3Pin` in `src/backends/route_common.hh`).
+  request answer yes to "did the caller ask for the vendor?". The level-3 pin words kept `vendor` and `cublasdx`
+  apart (`Level3Pin`, deleted with cuBLASDx in the level-3 flat-selection wave).
 * **The order-walk fallback inverted GEMM's default.** Taking "the first merely supported route" picks Native, because
   the orders list natives first — moving an 8×8×8 batch-1 GEMM from vendor to native. Guarded by
   `tests/route_gemm_equivalence_tests.cc`, whose `ReplicaIsFaithful` case pinned the transcription itself, until P3.4
@@ -332,11 +341,11 @@ either as the other is how `VENDOR_FREE_BASELINE.md` came to claim a working ven
 runs.
 
 `native_route_supported` is a **tri-state** (`1` yes, `0` no, `-1` the call site could not tell); the third value is
-load-bearing, because a declining gate never enters `*_cuda_custom` and so conflates "nothing native serves this
-shape" with "something does but the heuristic preferred the vendor" (`src/backends/level3_coverage.hh`). Every
-other op records its row from `select::TraceScope`; the four level-3 ops record directly at each terminal, beside every
-`return` and never in place of one, with the route word (`triangular`, `gram`, `expand`, `cublasdx`, `vendor`) as the
-algorithm. `uplo`/`side`/`diag`/`transA` are part of the coverage **key**, not decoration.
+load-bearing: the old level-3 gates never entered `*_cuda_custom` on a decline, and so conflated "nothing native
+serves this shape" with "something does but the heuristic preferred the vendor" (`level3_coverage.hh`, deleted). Every
+op, the level-3 four included since their flat-selection wave, records its row from `select::TraceScope`, with the
+choice spelling (`triangular`, `gram`, `expand`, `vendor`, ...) as the algorithm. `uplo`/`side`/`diag`/`transA` are
+part of the level-3 coverage **key**, not decoration.
 
 `scripts/route_diff.sh capture|compare` is the only tool that sees vendor-to-vendor route changes: the kernel trace
 cannot (its `Record` holds a `sycl::event`) and timing cannot (an unsaturated ratio is overhead, and routing a shape
@@ -387,20 +396,15 @@ names moved to `BACKEND_COMMON_SOURCES` (`src/backends/CMakeLists.txt:136-141`).
 2. ~~`BATCHLAS_SYR2K_ROUTE=native` throws a cuBLASDx message it did not ask for~~: fixed by the level-3 pin words
    (flat selection phase 5). `native` now takes the tile kernel, and
    `SyrkCudaCustomTest.AutoAndNativeRoutesLeaveTheOtherHalfUntouched` poisons the other triangle under it.
-3. **The four level-3 ops still have no tables.** Their windows are hand-rolled; moving them to `tuned/` is the change
-   that once moved n = 256 onto the wrong kernel and needs its own measurement.
-4. **`symm` has no `expansion_fits()` ceiling** where `hemm`/`herk`/`her2k` all have one (`cublas.cc:297-298`, `:517`,
-   `:611`) — `symm_expand_gemm` allocates the expansion workspace unconditionally
-   (`symm_expand_gemm` in `symm_custom_dispatch.cc`). A real gap; adding it *is* a route change and needs its own measurement.
-5. **Heterogeneous `symm` is unmeasured and untested.** `symm_problem_supported` does not reject a heterogeneous
-   batch, unlike its syrk and syr2k counterparts, so after WP1 S2 its expanded GEMM reaches
-   `gemm_heterogeneous_vendor_impl` where it previously reached the strided-batched call on max dims. Probably a
-   correctness *improvement*; flagged, not silently shipped.
-6. **MathDx-present boxes are untestable here** (`BATCHLAS_HAS_CUBLASDX 0`, `mathdx_DIR-NOTFOUND`). WP1 S2 changes
-   their inner-GEMM selection: stated, not measured, not claimed as verified.
-7. **Level-3 non-float is still cuBLAS-only.** `syrk`'s gram branch and `trmm`'s tile branch for double/complex are
-   reachable only from `cublas.cc`, and **`syr2k` has no non-float tile route at all** — `syr2k_triangular_tiles` has
-   exactly one call site in the tree, in the float-only dispatcher.
+3. ~~The four level-3 ops still have no tables~~: they do (level-3 flat-selection wave), transcribed from the old
+   windows, untimed; measuring them is the phase-4 retune. hemm, herk and her2k still have none.
+4. ~~`symm` has no `expansion_fits()` ceiling~~: symm's `expand` family checks it in `can_run`.
+5. ~~Heterogeneous `symm` is unmeasured and untested~~: measured on `ff340fc6` (a heterogeneous B or C made the
+   expansion's gemm throw; a heterogeneous A ran at the storage order); `expand` and `vendor` now refuse any
+   heterogeneous operand (`HeterogeneousBatchHasNoRoute`).
+6. ~~MathDx-present boxes are untestable here~~: cuBLASDx is deleted.
+7. ~~Level-3 non-float is still cuBLAS-only~~: double syrk `gram`, double symm `expand` and every trmm family run
+   vendor-free. **`syr2k` still has no non-float native route** — `syr2k_triangular_tiles` is float only.
 8. ~~The static coverage table's `trsm` row is hardcoded `false`~~: it reads `true` (WP3).
 9. **A coverage row cannot confirm that a particular shape ran**: rows are keyed on a power-of-two `shape_class`,
    first-writer-wins, so the m/n/k/batch columns can report a *different* call's shape. Prove a shape with a break

@@ -1,0 +1,363 @@
+# op=trmm dtype=float device=sm_120 batchlas=ff340fc6 kernels=unknown date=2026-10-06 source=transcribed:ff340fc6
+# transcriber_csv=tuned/transcribed/trmm.csv (the old router's preference order per grid cell, untimed)
+# keys: side:exact order:log:2 q:log batch:log
+side=L order=1 q=1 batch=1 | triangular - | expand - | vendor -
+side=L order=1 q=1 batch=128 | triangular - | expand - | vendor -
+side=L order=1 q=1 batch=1024 | triangular - | expand - | vendor -
+side=L order=1 q=1 batch=32768 | triangular - | expand - | vendor -
+side=L order=1 q=16 batch=1 | triangular - | expand - | vendor -
+side=L order=1 q=16 batch=128 | triangular - | expand - | vendor -
+side=L order=1 q=16 batch=1024 | triangular - | expand - | vendor -
+side=L order=1 q=16 batch=32768 | triangular - | expand - | vendor -
+side=L order=1 q=128 batch=1 | triangular - | expand - | vendor -
+side=L order=1 q=128 batch=128 | triangular - | expand - | vendor -
+side=L order=1 q=128 batch=1024 | triangular - | expand - | vendor -
+side=L order=1 q=128 batch=32768 | triangular - | expand - | vendor -
+side=L order=1 q=1024 batch=1 | triangular - | expand - | vendor -
+side=L order=1 q=1024 batch=128 | triangular - | expand - | vendor -
+side=L order=1 q=1024 batch=1024 | triangular - | expand - | vendor -
+side=L order=1 q=1024 batch=32768 | triangular - | expand - | vendor -
+side=L order=1 q=4096 batch=1 | triangular - | expand - | vendor -
+side=L order=1 q=4096 batch=128 | triangular - | expand - | vendor -
+side=L order=1 q=4096 batch=1024 | triangular - | expand - | vendor -
+side=L order=1 q=4096 batch=32768 | triangular - | expand - | vendor -
+side=L order=16 q=1 batch=1 | triangular - | expand - | vendor -
+side=L order=16 q=1 batch=128 | triangular - | expand - | vendor -
+side=L order=16 q=1 batch=1024 | triangular - | expand - | vendor -
+side=L order=16 q=1 batch=32768 | triangular - | expand - | vendor -
+side=L order=16 q=16 batch=1 | triangular - | expand - | vendor -
+side=L order=16 q=16 batch=128 | triangular - | expand - | vendor -
+side=L order=16 q=16 batch=1024 | triangular - | expand - | vendor -
+side=L order=16 q=16 batch=32768 | triangular - | expand - | vendor -
+side=L order=16 q=128 batch=1 | triangular - | expand - | vendor -
+side=L order=16 q=128 batch=128 | triangular - | expand - | vendor -
+side=L order=16 q=128 batch=1024 | triangular - | expand - | vendor -
+side=L order=16 q=128 batch=32768 | triangular - | expand - | vendor -
+side=L order=16 q=1024 batch=1 | triangular - | expand - | vendor -
+side=L order=16 q=1024 batch=128 | triangular - | expand - | vendor -
+side=L order=16 q=1024 batch=1024 | triangular - | expand - | vendor -
+side=L order=16 q=1024 batch=32768 | triangular - | expand - | vendor -
+side=L order=16 q=4096 batch=1 | triangular - | expand - | vendor -
+side=L order=16 q=4096 batch=128 | triangular - | expand - | vendor -
+side=L order=16 q=4096 batch=1024 | triangular - | expand - | vendor -
+side=L order=16 q=4096 batch=32768 | triangular - | expand - | vendor -
+side=L order=32 q=1 batch=1 | triangular - | expand - | vendor -
+side=L order=32 q=1 batch=128 | triangular - | expand - | vendor -
+side=L order=32 q=1 batch=1024 | triangular - | expand - | vendor -
+side=L order=32 q=1 batch=32768 | triangular - | expand - | vendor -
+side=L order=32 q=16 batch=1 | triangular - | expand - | vendor -
+side=L order=32 q=16 batch=128 | triangular - | expand - | vendor -
+side=L order=32 q=16 batch=1024 | triangular - | expand - | vendor -
+side=L order=32 q=16 batch=32768 | triangular - | expand - | vendor -
+side=L order=32 q=128 batch=1 | triangular - | expand - | vendor -
+side=L order=32 q=128 batch=128 | triangular - | expand - | vendor -
+side=L order=32 q=128 batch=1024 | triangular - | expand - | vendor -
+side=L order=32 q=128 batch=32768 | triangular - | expand - | vendor -
+side=L order=32 q=1024 batch=1 | triangular - | expand - | vendor -
+side=L order=32 q=1024 batch=128 | triangular - | expand - | vendor -
+side=L order=32 q=1024 batch=1024 | triangular - | expand - | vendor -
+side=L order=32 q=1024 batch=32768 | triangular - | expand - | vendor -
+side=L order=32 q=4096 batch=1 | triangular - | expand - | vendor -
+side=L order=32 q=4096 batch=128 | triangular - | expand - | vendor -
+side=L order=32 q=4096 batch=1024 | triangular - | expand - | vendor -
+side=L order=32 q=4096 batch=32768 | triangular - | expand - | vendor -
+side=L order=64 q=1 batch=1 | triangular - | expand - | vendor -
+side=L order=64 q=1 batch=128 | triangular - | expand - | vendor -
+side=L order=64 q=1 batch=1024 | triangular - | expand - | vendor -
+side=L order=64 q=1 batch=32768 | triangular - | expand - | vendor -
+side=L order=64 q=16 batch=1 | triangular - | expand - | vendor -
+side=L order=64 q=16 batch=128 | triangular - | expand - | vendor -
+side=L order=64 q=16 batch=1024 | triangular - | expand - | vendor -
+side=L order=64 q=16 batch=32768 | triangular - | expand - | vendor -
+side=L order=64 q=128 batch=1 | triangular - | expand - | vendor -
+side=L order=64 q=128 batch=128 | triangular - | expand - | vendor -
+side=L order=64 q=128 batch=1024 | triangular - | expand - | vendor -
+side=L order=64 q=128 batch=32768 | triangular - | expand - | vendor -
+side=L order=64 q=1024 batch=1 | triangular - | expand - | vendor -
+side=L order=64 q=1024 batch=128 | triangular - | expand - | vendor -
+side=L order=64 q=1024 batch=1024 | triangular - | expand - | vendor -
+side=L order=64 q=1024 batch=32768 | triangular - | expand - | vendor -
+side=L order=64 q=4096 batch=1 | triangular - | expand - | vendor -
+side=L order=64 q=4096 batch=128 | triangular - | expand - | vendor -
+side=L order=64 q=4096 batch=1024 | triangular - | expand - | vendor -
+side=L order=64 q=4096 batch=32768 | triangular - | expand - | vendor -
+side=L order=128 q=1 batch=1 | triangular - | expand - | vendor -
+side=L order=128 q=1 batch=128 | triangular - | expand - | vendor -
+side=L order=128 q=1 batch=1024 | triangular - | expand - | vendor -
+side=L order=128 q=1 batch=32768 | triangular - | expand - | vendor -
+side=L order=128 q=16 batch=1 | triangular - | expand - | vendor -
+side=L order=128 q=16 batch=128 | triangular - | expand - | vendor -
+side=L order=128 q=16 batch=1024 | triangular - | expand - | vendor -
+side=L order=128 q=16 batch=32768 | triangular - | expand - | vendor -
+side=L order=128 q=128 batch=1 | triangular - | expand - | vendor -
+side=L order=128 q=128 batch=128 | triangular - | expand - | vendor -
+side=L order=128 q=128 batch=1024 | triangular - | expand - | vendor -
+side=L order=128 q=128 batch=32768 | triangular - | expand - | vendor -
+side=L order=128 q=1024 batch=1 | triangular - | expand - | vendor -
+side=L order=128 q=1024 batch=128 | triangular - | expand - | vendor -
+side=L order=128 q=1024 batch=1024 | triangular - | expand - | vendor -
+side=L order=128 q=1024 batch=32768 | triangular - | expand - | vendor -
+side=L order=128 q=4096 batch=1 | triangular - | expand - | vendor -
+side=L order=128 q=4096 batch=128 | triangular - | expand - | vendor -
+side=L order=128 q=4096 batch=1024 | triangular - | expand - | vendor -
+side=L order=128 q=4096 batch=32768 | triangular - | expand - | vendor -
+side=L order=256 q=1 batch=1 | triangular - | expand - | vendor -
+side=L order=256 q=1 batch=128 | triangular - | expand - | vendor -
+side=L order=256 q=1 batch=1024 | triangular - | expand - | vendor -
+side=L order=256 q=1 batch=32768 | triangular - | expand - | vendor -
+side=L order=256 q=16 batch=1 | triangular - | expand - | vendor -
+side=L order=256 q=16 batch=128 | triangular - | expand - | vendor -
+side=L order=256 q=16 batch=1024 | triangular - | expand - | vendor -
+side=L order=256 q=16 batch=32768 | triangular - | expand - | vendor -
+side=L order=256 q=128 batch=1 | triangular - | expand - | vendor -
+side=L order=256 q=128 batch=128 | triangular - | expand - | vendor -
+side=L order=256 q=128 batch=1024 | triangular - | expand - | vendor -
+side=L order=256 q=128 batch=32768 | triangular - | expand - | vendor -
+side=L order=256 q=1024 batch=1 | triangular - | expand - | vendor -
+side=L order=256 q=1024 batch=128 | triangular - | expand - | vendor -
+side=L order=256 q=1024 batch=1024 | triangular - | expand - | vendor -
+side=L order=256 q=1024 batch=32768 | triangular - | expand - | vendor -
+side=L order=256 q=4096 batch=1 | triangular - | expand - | vendor -
+side=L order=256 q=4096 batch=128 | triangular - | expand - | vendor -
+side=L order=256 q=4096 batch=1024 | triangular - | expand - | vendor -
+side=L order=256 q=4096 batch=32768 | triangular - | expand - | vendor -
+side=L order=512 q=1 batch=1 | triangular - | expand - | vendor -
+side=L order=512 q=1 batch=128 | triangular - | expand - | vendor -
+side=L order=512 q=1 batch=1024 | triangular - | expand - | vendor -
+side=L order=512 q=1 batch=32768 | triangular - | expand - | vendor -
+side=L order=512 q=16 batch=1 | triangular - | expand - | vendor -
+side=L order=512 q=16 batch=128 | triangular - | expand - | vendor -
+side=L order=512 q=16 batch=1024 | triangular - | expand - | vendor -
+side=L order=512 q=16 batch=32768 | triangular - | expand - | vendor -
+side=L order=512 q=128 batch=1 | triangular - | expand - | vendor -
+side=L order=512 q=128 batch=128 | triangular - | expand - | vendor -
+side=L order=512 q=128 batch=1024 | triangular - | expand - | vendor -
+side=L order=512 q=128 batch=32768 | triangular - | expand - | vendor -
+side=L order=512 q=1024 batch=1 | triangular - | expand - | vendor -
+side=L order=512 q=1024 batch=128 | triangular - | expand - | vendor -
+side=L order=512 q=1024 batch=1024 | triangular - | expand - | vendor -
+side=L order=512 q=1024 batch=32768 | triangular - | expand - | vendor -
+side=L order=512 q=4096 batch=1 | triangular - | expand - | vendor -
+side=L order=512 q=4096 batch=128 | triangular - | expand - | vendor -
+side=L order=512 q=4096 batch=1024 | triangular - | expand - | vendor -
+side=L order=512 q=4096 batch=32768 | triangular - | expand - | vendor -
+side=L order=1024 q=1 batch=1 | triangular - | expand - | vendor -
+side=L order=1024 q=1 batch=128 | triangular - | expand - | vendor -
+side=L order=1024 q=1 batch=1024 | triangular - | expand - | vendor -
+side=L order=1024 q=1 batch=32768 | triangular - | expand - | vendor -
+side=L order=1024 q=16 batch=1 | triangular - | expand - | vendor -
+side=L order=1024 q=16 batch=128 | triangular - | expand - | vendor -
+side=L order=1024 q=16 batch=1024 | triangular - | expand - | vendor -
+side=L order=1024 q=16 batch=32768 | triangular - | expand - | vendor -
+side=L order=1024 q=128 batch=1 | triangular - | expand - | vendor -
+side=L order=1024 q=128 batch=128 | triangular - | expand - | vendor -
+side=L order=1024 q=128 batch=1024 | triangular - | expand - | vendor -
+side=L order=1024 q=128 batch=32768 | triangular - | expand - | vendor -
+side=L order=1024 q=1024 batch=1 | triangular - | expand - | vendor -
+side=L order=1024 q=1024 batch=128 | triangular - | expand - | vendor -
+side=L order=1024 q=1024 batch=1024 | triangular - | expand - | vendor -
+side=L order=1024 q=1024 batch=32768 | triangular - | expand - | vendor -
+side=L order=1024 q=4096 batch=1 | triangular - | expand - | vendor -
+side=L order=1024 q=4096 batch=128 | triangular - | expand - | vendor -
+side=L order=1024 q=4096 batch=1024 | triangular - | expand - | vendor -
+side=L order=1024 q=4096 batch=32768 | triangular - | expand - | vendor -
+side=L order=2048 q=1 batch=1 | triangular - | expand - | vendor -
+side=L order=2048 q=1 batch=128 | triangular - | expand - | vendor -
+side=L order=2048 q=1 batch=1024 | triangular - | expand - | vendor -
+side=L order=2048 q=1 batch=32768 | triangular - | expand - | vendor -
+side=L order=2048 q=16 batch=1 | triangular - | expand - | vendor -
+side=L order=2048 q=16 batch=128 | triangular - | expand - | vendor -
+side=L order=2048 q=16 batch=1024 | triangular - | expand - | vendor -
+side=L order=2048 q=16 batch=32768 | triangular - | expand - | vendor -
+side=L order=2048 q=128 batch=1 | triangular - | expand - | vendor -
+side=L order=2048 q=128 batch=128 | triangular - | expand - | vendor -
+side=L order=2048 q=128 batch=1024 | triangular - | expand - | vendor -
+side=L order=2048 q=128 batch=32768 | triangular - | expand - | vendor -
+side=L order=2048 q=1024 batch=1 | triangular - | expand - | vendor -
+side=L order=2048 q=1024 batch=128 | triangular - | expand - | vendor -
+side=L order=2048 q=1024 batch=1024 | triangular - | expand - | vendor -
+side=L order=2048 q=1024 batch=32768 | triangular - | expand - | vendor -
+side=L order=2048 q=4096 batch=1 | triangular - | expand - | vendor -
+side=L order=2048 q=4096 batch=128 | triangular - | expand - | vendor -
+side=L order=2048 q=4096 batch=1024 | triangular - | expand - | vendor -
+side=L order=2048 q=4096 batch=32768 | triangular - | expand - | vendor -
+side=R order=1 q=1 batch=1 | expand - | vendor -
+side=R order=1 q=1 batch=128 | expand - | vendor -
+side=R order=1 q=1 batch=1024 | expand - | vendor -
+side=R order=1 q=1 batch=32768 | expand - | vendor -
+side=R order=1 q=16 batch=1 | expand - | vendor -
+side=R order=1 q=16 batch=128 | expand - | vendor -
+side=R order=1 q=16 batch=1024 | expand - | vendor -
+side=R order=1 q=16 batch=32768 | expand - | vendor -
+side=R order=1 q=128 batch=1 | expand - | vendor -
+side=R order=1 q=128 batch=128 | expand - | vendor -
+side=R order=1 q=128 batch=1024 | expand - | vendor -
+side=R order=1 q=128 batch=32768 | expand - | vendor -
+side=R order=1 q=1024 batch=1 | expand - | vendor -
+side=R order=1 q=1024 batch=128 | expand - | vendor -
+side=R order=1 q=1024 batch=1024 | expand - | vendor -
+side=R order=1 q=1024 batch=32768 | expand - | vendor -
+side=R order=1 q=4096 batch=1 | expand - | vendor -
+side=R order=1 q=4096 batch=128 | expand - | vendor -
+side=R order=1 q=4096 batch=1024 | expand - | vendor -
+side=R order=1 q=4096 batch=32768 | expand - | vendor -
+side=R order=16 q=1 batch=1 | expand - | vendor -
+side=R order=16 q=1 batch=128 | expand - | vendor -
+side=R order=16 q=1 batch=1024 | expand - | vendor -
+side=R order=16 q=1 batch=32768 | expand - | vendor -
+side=R order=16 q=16 batch=1 | expand - | vendor -
+side=R order=16 q=16 batch=128 | expand - | vendor -
+side=R order=16 q=16 batch=1024 | expand - | vendor -
+side=R order=16 q=16 batch=32768 | expand - | vendor -
+side=R order=16 q=128 batch=1 | expand - | vendor -
+side=R order=16 q=128 batch=128 | expand - | vendor -
+side=R order=16 q=128 batch=1024 | expand - | vendor -
+side=R order=16 q=128 batch=32768 | expand - | vendor -
+side=R order=16 q=1024 batch=1 | expand - | vendor -
+side=R order=16 q=1024 batch=128 | expand - | vendor -
+side=R order=16 q=1024 batch=1024 | expand - | vendor -
+side=R order=16 q=1024 batch=32768 | expand - | vendor -
+side=R order=16 q=4096 batch=1 | expand - | vendor -
+side=R order=16 q=4096 batch=128 | expand - | vendor -
+side=R order=16 q=4096 batch=1024 | expand - | vendor -
+side=R order=16 q=4096 batch=32768 | expand - | vendor -
+side=R order=32 q=1 batch=1 | expand - | vendor -
+side=R order=32 q=1 batch=128 | expand - | vendor -
+side=R order=32 q=1 batch=1024 | expand - | vendor -
+side=R order=32 q=1 batch=32768 | expand - | vendor -
+side=R order=32 q=16 batch=1 | expand - | vendor -
+side=R order=32 q=16 batch=128 | expand - | vendor -
+side=R order=32 q=16 batch=1024 | expand - | vendor -
+side=R order=32 q=16 batch=32768 | expand - | vendor -
+side=R order=32 q=128 batch=1 | expand - | vendor -
+side=R order=32 q=128 batch=128 | expand - | vendor -
+side=R order=32 q=128 batch=1024 | expand - | vendor -
+side=R order=32 q=128 batch=32768 | expand - | vendor -
+side=R order=32 q=1024 batch=1 | expand - | vendor -
+side=R order=32 q=1024 batch=128 | expand - | vendor -
+side=R order=32 q=1024 batch=1024 | expand - | vendor -
+side=R order=32 q=1024 batch=32768 | expand - | vendor -
+side=R order=32 q=4096 batch=1 | expand - | vendor -
+side=R order=32 q=4096 batch=128 | expand - | vendor -
+side=R order=32 q=4096 batch=1024 | expand - | vendor -
+side=R order=32 q=4096 batch=32768 | expand - | vendor -
+side=R order=64 q=1 batch=1 | expand - | vendor -
+side=R order=64 q=1 batch=128 | expand - | vendor -
+side=R order=64 q=1 batch=1024 | expand - | vendor -
+side=R order=64 q=1 batch=32768 | expand - | vendor -
+side=R order=64 q=16 batch=1 | expand - | vendor -
+side=R order=64 q=16 batch=128 | expand - | vendor -
+side=R order=64 q=16 batch=1024 | expand - | vendor -
+side=R order=64 q=16 batch=32768 | expand - | vendor -
+side=R order=64 q=128 batch=1 | expand - | vendor -
+side=R order=64 q=128 batch=128 | expand - | vendor -
+side=R order=64 q=128 batch=1024 | expand - | vendor -
+side=R order=64 q=128 batch=32768 | expand - | vendor -
+side=R order=64 q=1024 batch=1 | expand - | vendor -
+side=R order=64 q=1024 batch=128 | expand - | vendor -
+side=R order=64 q=1024 batch=1024 | expand - | vendor -
+side=R order=64 q=1024 batch=32768 | expand - | vendor -
+side=R order=64 q=4096 batch=1 | expand - | vendor -
+side=R order=64 q=4096 batch=128 | expand - | vendor -
+side=R order=64 q=4096 batch=1024 | expand - | vendor -
+side=R order=64 q=4096 batch=32768 | expand - | vendor -
+side=R order=128 q=1 batch=1 | expand - | vendor -
+side=R order=128 q=1 batch=128 | expand - | vendor -
+side=R order=128 q=1 batch=1024 | expand - | vendor -
+side=R order=128 q=1 batch=32768 | expand - | vendor -
+side=R order=128 q=16 batch=1 | expand - | vendor -
+side=R order=128 q=16 batch=128 | expand - | vendor -
+side=R order=128 q=16 batch=1024 | expand - | vendor -
+side=R order=128 q=16 batch=32768 | expand - | vendor -
+side=R order=128 q=128 batch=1 | expand - | vendor -
+side=R order=128 q=128 batch=128 | expand - | vendor -
+side=R order=128 q=128 batch=1024 | expand - | vendor -
+side=R order=128 q=128 batch=32768 | expand - | vendor -
+side=R order=128 q=1024 batch=1 | expand - | vendor -
+side=R order=128 q=1024 batch=128 | expand - | vendor -
+side=R order=128 q=1024 batch=1024 | expand - | vendor -
+side=R order=128 q=1024 batch=32768 | expand - | vendor -
+side=R order=128 q=4096 batch=1 | expand - | vendor -
+side=R order=128 q=4096 batch=128 | expand - | vendor -
+side=R order=128 q=4096 batch=1024 | expand - | vendor -
+side=R order=128 q=4096 batch=32768 | expand - | vendor -
+side=R order=256 q=1 batch=1 | expand - | vendor -
+side=R order=256 q=1 batch=128 | expand - | vendor -
+side=R order=256 q=1 batch=1024 | expand - | vendor -
+side=R order=256 q=1 batch=32768 | expand - | vendor -
+side=R order=256 q=16 batch=1 | expand - | vendor -
+side=R order=256 q=16 batch=128 | expand - | vendor -
+side=R order=256 q=16 batch=1024 | expand - | vendor -
+side=R order=256 q=16 batch=32768 | expand - | vendor -
+side=R order=256 q=128 batch=1 | expand - | vendor -
+side=R order=256 q=128 batch=128 | expand - | vendor -
+side=R order=256 q=128 batch=1024 | expand - | vendor -
+side=R order=256 q=128 batch=32768 | expand - | vendor -
+side=R order=256 q=1024 batch=1 | expand - | vendor -
+side=R order=256 q=1024 batch=128 | expand - | vendor -
+side=R order=256 q=1024 batch=1024 | expand - | vendor -
+side=R order=256 q=1024 batch=32768 | expand - | vendor -
+side=R order=256 q=4096 batch=1 | expand - | vendor -
+side=R order=256 q=4096 batch=128 | expand - | vendor -
+side=R order=256 q=4096 batch=1024 | expand - | vendor -
+side=R order=256 q=4096 batch=32768 | expand - | vendor -
+side=R order=512 q=1 batch=1 | expand - | vendor -
+side=R order=512 q=1 batch=128 | expand - | vendor -
+side=R order=512 q=1 batch=1024 | expand - | vendor -
+side=R order=512 q=1 batch=32768 | expand - | vendor -
+side=R order=512 q=16 batch=1 | expand - | vendor -
+side=R order=512 q=16 batch=128 | expand - | vendor -
+side=R order=512 q=16 batch=1024 | expand - | vendor -
+side=R order=512 q=16 batch=32768 | expand - | vendor -
+side=R order=512 q=128 batch=1 | expand - | vendor -
+side=R order=512 q=128 batch=128 | expand - | vendor -
+side=R order=512 q=128 batch=1024 | expand - | vendor -
+side=R order=512 q=128 batch=32768 | expand - | vendor -
+side=R order=512 q=1024 batch=1 | expand - | vendor -
+side=R order=512 q=1024 batch=128 | expand - | vendor -
+side=R order=512 q=1024 batch=1024 | expand - | vendor -
+side=R order=512 q=1024 batch=32768 | expand - | vendor -
+side=R order=512 q=4096 batch=1 | expand - | vendor -
+side=R order=512 q=4096 batch=128 | expand - | vendor -
+side=R order=512 q=4096 batch=1024 | expand - | vendor -
+side=R order=512 q=4096 batch=32768 | expand - | vendor -
+side=R order=1024 q=1 batch=1 | expand - | vendor -
+side=R order=1024 q=1 batch=128 | expand - | vendor -
+side=R order=1024 q=1 batch=1024 | expand - | vendor -
+side=R order=1024 q=1 batch=32768 | expand - | vendor -
+side=R order=1024 q=16 batch=1 | expand - | vendor -
+side=R order=1024 q=16 batch=128 | expand - | vendor -
+side=R order=1024 q=16 batch=1024 | expand - | vendor -
+side=R order=1024 q=16 batch=32768 | expand - | vendor -
+side=R order=1024 q=128 batch=1 | expand - | vendor -
+side=R order=1024 q=128 batch=128 | expand - | vendor -
+side=R order=1024 q=128 batch=1024 | expand - | vendor -
+side=R order=1024 q=128 batch=32768 | expand - | vendor -
+side=R order=1024 q=1024 batch=1 | expand - | vendor -
+side=R order=1024 q=1024 batch=128 | expand - | vendor -
+side=R order=1024 q=1024 batch=1024 | expand - | vendor -
+side=R order=1024 q=1024 batch=32768 | expand - | vendor -
+side=R order=1024 q=4096 batch=1 | expand - | vendor -
+side=R order=1024 q=4096 batch=128 | expand - | vendor -
+side=R order=1024 q=4096 batch=1024 | expand - | vendor -
+side=R order=1024 q=4096 batch=32768 | expand - | vendor -
+side=R order=2048 q=1 batch=1 | expand - | vendor -
+side=R order=2048 q=1 batch=128 | expand - | vendor -
+side=R order=2048 q=1 batch=1024 | expand - | vendor -
+side=R order=2048 q=1 batch=32768 | expand - | vendor -
+side=R order=2048 q=16 batch=1 | expand - | vendor -
+side=R order=2048 q=16 batch=128 | expand - | vendor -
+side=R order=2048 q=16 batch=1024 | expand - | vendor -
+side=R order=2048 q=16 batch=32768 | expand - | vendor -
+side=R order=2048 q=128 batch=1 | expand - | vendor -
+side=R order=2048 q=128 batch=128 | expand - | vendor -
+side=R order=2048 q=128 batch=1024 | expand - | vendor -
+side=R order=2048 q=128 batch=32768 | expand - | vendor -
+side=R order=2048 q=1024 batch=1 | expand - | vendor -
+side=R order=2048 q=1024 batch=128 | expand - | vendor -
+side=R order=2048 q=1024 batch=1024 | expand - | vendor -
+side=R order=2048 q=1024 batch=32768 | expand - | vendor -
+side=R order=2048 q=4096 batch=1 | expand - | vendor -
+side=R order=2048 q=4096 batch=128 | expand - | vendor -
+side=R order=2048 q=4096 batch=1024 | expand - | vendor -
+side=R order=2048 q=4096 batch=32768 | expand - | vendor -

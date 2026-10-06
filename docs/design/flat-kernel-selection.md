@@ -1,12 +1,15 @@
 # Flat kernel selection
 
-Status: **phases 1-5 implemented; tables: measured/converted/transcribed per `tuned/README.md`;
-retune pending.** Phases 1-2 and P3.0-P3.4 (select infrastructure, posv, the tuner, blackwell
-kernels, trsm, gemm) and phase 5 (gemv, geqrf, gesv, gesvd, getrf, getri, getrs, orgqr, ormqr, spmm
-and syev, plus the rip of the old dispatch layer, the legacy env vocabulary and its aliases) are
-built on `flat-select-mega` (2026-10-05, one PR); no `RouteTable` is left. Every op ships tables for
-every dtype on sm_89 and sm_120. Open: the sm_89 live gate (§12 "Gate results") and phase 4, the
-retune that replaces the transcribed tables with measured ones. As built: §12; decisions: §13.
+Status: **phases 1-5 and the level-3 four implemented; tables: measured/converted/transcribed per
+`tuned/README.md`; retune pending.** Phases 1-2 and P3.0-P3.4 (select infrastructure, posv, the
+tuner, blackwell kernels, trsm, gemm) and phase 5 (gemv, geqrf, gesv, gesvd, getrf, getri, getrs,
+orgqr, ormqr, spmm and syev, plus the rip of the old dispatch layer, the legacy env vocabulary and
+its aliases) are built on `flat-select-mega` (2026-10-05, one PR); no `RouteTable` is left. symm,
+syrk, syr2k and trmm followed on `flat-select-level3` (2026-10-06, §12 "Level-3 four"), with
+cuBLASDx deleted, so every op that reads `BATCHLAS_<OP>_ROUTE` selects through `src/select`. Every
+op ships tables for every dtype it instantiates on sm_89 and sm_120. Open: the sm_89 live gate (§12
+"Gate results"), phase 4, the retune that replaces the transcribed tables with measured ones, and
+hemm/herk/her2k (§11). As built: §12; decisions: §13.
 
 Plan agreed 2026-10-02; deviations from the sketch are in §12. Written against `main` at `a1063892`. It is meant
 to be executed from `main` in a fresh session, phase by phase. Nothing here depends on PRs #133,
@@ -672,8 +675,23 @@ The sm_89 gate needs the RTX 4090 box. The sm_120 gate needs the Blackwell box (
   not a `can_run` term; fix it with 64-bit offsets rather than a capacity gate.
 - **gemm's sm_120 table** is open after P3.4 (§12 Phase 3.4).
 - **Other ops may share gemm's grid-z ceiling**: any kernel that puts the batch in SYCL dim 0 of a
-  3-D range aborts past 65535 work-groups there. gemm's `can_run` now carries it (§12 Phase 3.4);
-  the migrated ops' kernels were not audited for it. ormqr blocked hits it (known-defects #16).
+  3-D range aborts past 65535 work-groups there. gemm's `can_run` now carries it (§12 Phase 3.4),
+  and so do the level-3 four's native families (confirmed by launch, §12 "Level-3 four"); the
+  phase-5 ops' kernels were not audited for it. ormqr blocked hits it (known-defects #16).
+- **hemm, herk and her2k still select by hand** in `cublas.cc` (vendor builds only): expand/fold
+  into the public gemm when `expansion_preferred`, `herk_gemm_preferred` (batch >= 4 && n <= 768)
+  or `her2k_gemm_preferred` (batch >= 2 || n >= 128) and `expansion_fits` hold, else the per-item
+  vendor loop, all honouring `BATCHLAS_EXPAND_ROUTE`; herk's gram opt-in is
+  `BATCHLAS_SYRK_ROUTE=gram`. Migrating them (wave L3b): families hemm `{expand, vendor}`, herk
+  `{gram, fold, vendor}`, her2k `{fold, vendor}`, with `accumulate_hermitian` moved out of
+  `cublas.cc` (the first vendor-free complex hemm/herk/her2k); keys `order:log:2 q:log batch:log`
+  (hemm) and `n:log:2 k:log batch:log` (herk, her2k) with grid points on both sides of 3|4, 255|256,
+  768|769 and 1|2, 127|128; three new `BATCHLAS_<OP>_ROUTE` variables (`RoutingSettings::ops` 19 ->
+  22, `settings_tests`); herk's opt-in becomes `BATCHLAS_HERK_ROUTE=gram`; `BATCHLAS_EXPAND_ROUTE`
+  retires; `sytrd_blocked.cc`'s `her2k_takes_gemm_route` asks her2k's `choose()`.
+- **`select::level3_tile_route_available` is conservative**: float, or any type with cuBLAS.
+  Vendor-free, double syrk gram, symm expand and every trmm family now run too; widening it moves
+  ortho's and ormqr's vendor-free routes, so it is its own change.
 - **Stale comments on `main`** to fix when touching these files:
   - ~~`potrf_native.hh:4`~~, ~~`coverage.cc:195`~~, ~~`factorization.cc:727-730`~~ (rewritten or
     deleted by phase 5);
@@ -1550,7 +1568,7 @@ in `tuned_tables_tests` holds it.
 - No aliases: `select::Rules` keeps only `last_resort`; every op's `aliases` array and gemm's `class_aliases` /
   `legacy_aliases` are deleted, and each op's should-throw test lists the removed spellings. `BATCHLAS_<OP>_VARIANT`,
   `BATCHLAS_<OP>_PROVIDER` and `BATCHLAS_GEMM_SYCL_KERNEL` are not read (tests assert that setting them changes nothing).
-- The level-3 four parse their own `BATCHLAS_<OP>_ROUTE` words (`src/backends/route_common.hh`, `level3_pin`), throw on
+- (Superseded by §12 "Level-3 four".) The level-3 four parse their own `BATCHLAS_<OP>_ROUTE` words (`src/backends/route_common.hh`, `level3_pin`), throw on
   an unknown word, and record coverage with `record_choice` (`vendor:vendor`, `native:triangular`, ...). The
   deliberately wrong `DiagFullGemm` measurement route is deleted; `native` now takes the tile kernel (it used to fall
   to `DiagFullGemm` for syrk and to an unrequested cuBLASDx throw for syr2k), and a `cublasdx` pin that cannot run
@@ -1568,7 +1586,8 @@ in `tuned_tables_tests` holds it.
   `getrf_cta_max_n`, `orgqr_blocked_debug_block_size`); unused internal templates; the unbuilt
   `benchmarks/gemm_custom.cc`; and, once `gemm_cublasdx()` was gone, `cublasdx_gemm::launch_float`,
   `variant_supported`, `GemmLaunchDescriptor` and the cuBLASDx GEMM kernel templates.
-  `gemm_cublasdx.cu` keeps only `cublasdx_gemm::available()`, which the level-3 fused gate reads;
+  `gemm_cublasdx.cu` keeps only `cublasdx_gemm::available()`, which the level-3 fused gate reads (all of
+  cuBLASDx went with the level-3 four, §12);
   it no longer includes `<cublasdx.hpp>`, so it compiles the same with or without MathDx. With
   the cuSolverDx wrapper gone, its build plumbing is gone too: the `BATCHLAS_ENABLE_CUSOLVERDX`
   option, the `cusolverdx.hpp` probe and `mathdx::cusolverdx` link, and the installed
@@ -1611,6 +1630,186 @@ turned "nothing runnable" into `NoRouteError`, a `native_facts` wrapper, a devic
   syev's and gesvd's already did, so that throw leaves a coverage `reached` row.
 
 Routing is unchanged: `scripts/route_diff.sh` captured identical `reached` rows before and after.
+
+### Level-3 four (symm, syrk, syr2k, trmm)
+
+(2026-10-06; maintainer: migrate the last four hand-written routers, tables transcribed for sm_89 and
+sm_120, no measurement.) Four op branches (`flat-select-l3-{symm,syrk,syr2k,trmm}`, all from
+`ff340fc6`) merged into `flat-select-level3`, then one integration pass deleted the old layer. Every
+`file:line` of old code below refers to `ff340fc6`. The per-op notes this block replaces are at
+`git show eeacaaa9:docs/design/flat-select-l3/<op>.md` (the last merge).
+
+**The shared recipe** (phase 5's, with these level-3 specifics):
+- **Layout (R1).** `src/ops/<op>/{choice.hh,<op>.cc}`: validate (`shape::validate_{product,rank_k,
+  rank_2k}<std::invalid_argument>`, so an invalid shape throws `invalid_argument` on every backend
+  and in a vendor-free build) -> `select::run` (the "one run() per op" shape above: `spec` is
+  `{Op::<op>, select::Lib::level3, {last_resort}}`) -> one `std::visit` launch. syrk, syr2k, symm and
+  trmm return a no-op event for an empty problem (gemm's precedent). `src/ops/level3/level3.cc` keeps only
+  hemm/herk/her2k. Instantiations moved with each op: symm CUDA and NETLIB (ROCm/MKL symm is
+  `src/extensions/symm.cc`), syrk and syr2k CUDA/ROCm/NETLIB real types, trmm CUDA/ROCm/NETLIB all
+  four types.
+- **Families** are `NoFields`: the old routers chose no knob. Derived knobs stay derived
+  (`trmm_row_tile` and `BATCHLAS_TRMM_TILE_M`, gram's NTile by n, the triangular aligned/predicated
+  leg). The vendor family calls `backend::<op>_vendor<B, T>` under `has_library<B>(spec.vendor)`, never
+  the public entry, so the recursion that `level3_vendor_fallback.hh` existed to avoid cannot happen.
+  Float-only kernels are instantiated only inside `if constexpr (std::is_same_v<T, float>)` arms.
+- **can_run (R3).** Every native family: `B == Backend::CUDA` (the old reach; ROCm and the host stay
+  vendor), `d.is_gpu`, every operand homogeneous, extents and batch >= 1, and `batch <= 65535`. That
+  last term is confirmed by launch for every native kernel: the batch is SYCL dim 0 (grid z, grid y
+  for gram's 2-D range), batch 65535 runs and is correct, 65536 throws `Number of work-groups exceed
+  limit`. Where the old Auto took a native kernel past 65535 it aborted; it now takes the vendor
+  (vendor-free: `NoRouteError`). Vendor: `d.has_vendor` (the level-3 library).
+- **Keys and the `form` axis.** symm and syrk carry an exact `form` key, `sq|tall|wide`
+  (`2*min >= max` is sq, else tall if a > 2b), so the old squareish ratio test lines up with a grid
+  axis. Without it the modelled gate reached only 97.25% (symm) and 99.3-99.6% (syrk). A grid cell
+  whose extents contradict its form holds the decision of the form representative R_f, so the grid
+  is a full product and the weighted nearest row snaps per axis.
+- **Tables.** `source=transcribed:ff340fc6`, one CSV per op in `tuned/transcribed/` written for both
+  devices with identical rows (the old rules read no architecture). Real-only ops ship float and
+  double only. A row is the old vendor-present Auto choice, then every other candidate of that dtype
+  that is structurally runnable at the cell, in candidate order, with `vendor` last unless it was the
+  Auto choice. A vendor-free build therefore takes a native kernel from the row instead of the last
+  resort. The transcribers held byte-for-byte copies of the old predicates, checked against
+  `git show ff340fc6:` by each op's `--fidelity` gate. Provenance: `tuned/README.md`.
+- **Pins (R6).** `BATCHLAS_<OP>_ROUTE` goes through `select::` like every other op: `auto`,
+  `native`, `vendor` and the op's spellings. `cublasdx`, every word of another level-3 op and the
+  removed legacy words throw `invalid_argument`. So does a pin on a dtype, queue or shape its family
+  cannot serve; the old gates were float-only and ignored every word for other dtypes.
+- **Coverage.** `chosen_algo` is the spelling. The scalar and backend columns are now real (the old
+  `record_level3_route` hard-coded F32/CUDA), and double/complex calls record rows (the old
+  `cublas.cc` branches recorded none). trmm Right-side Auto reads `native:expand` where it read
+  `vendor:vendor`.
+
+| op | candidates | keys (grid rows per table) | Auto rows | last resort |
+|---|---|---|---|---|
+| syrk | float `gram, triangular, vendor`; double `gram, vendor` | `form:exact trans:exact n:log:2 k:log batch:log` (18450) | n <= 128 `gram`; above, `triangular` iff squareish or (n >= 257, k >= 8, batch*T(T+1)/2 >= 160, T = ceil(n/128)), else `vendor`; trans C `vendor` first; double above 128 `vendor` | `triangular, gram, vendor` |
+| syr2k | float `triangular, vendor`; double `vendor` | `n:log:2 k:log batch:log` (455) | float batch >= 2 `triangular`, batch 1 `vendor`; double `vendor` | `triangular, vendor` |
+| symm | `expand, vendor` (float, double) | `form:exact m:log n:log batch:log` (5292) | float `expand` iff sq and (batch >= 4 or max(m,n) >= 256); double `vendor` | `expand, vendor` |
+| trmm | `triangular, expand, vendor` (all four) | `side:exact order:log:2 q:log batch:log` (360) | Left `triangular`, Right `expand` | `expand, triangular, vendor` |
+
+Per op, what differs:
+- **syrk.** `gram` = `syrk_gram_tiles<T,false>` (n <= 128: the tile is all of C; past it the kernel
+  does not throw, it answers wrongly, so a `gram` pin at n > 128 now throws where it used to run),
+  also needing `max_wg >= gram_threads(n)` and the SLM tile. `triangular` = `syrk_triangular_tiles<float>`,
+  also `max_wg >= 256` (its 16 x 16 group) and `T(T+1)/2 <= 65535` tiles (grid y; n = 46208 runs, 46209 throws in the direct call; the old
+  rule launched there and threw). ConjTrans is passed as Trans (syrk is real-only), so it is not a
+  can_run term; the exact `trans` key keeps real ConjTrans on the vendor where the old rule put it
+  (C rows cover the n axis only, at k = batch = 1). herk's opt-in reads
+  `ops::syrk::herk_gram_pinned()` (exactly `gram`) and no longer throws on a syrk word it does not
+  understand. Old rule: `syrk_custom_dispatch.cc:22-209`, `cublas.cc:544-580`.
+- **syr2k.** `triangular` = `syr2k_triangular_tiles<float>`, also `max_wg >= 256`, the same tile-grid
+  ceiling, and `transA != ConjTrans`: real ConjTrans stays on the vendor (the kernel would read it as
+  Trans and answer correctly; opening it is a routing change). The bit-for-bit pinned-run test is
+  `PinnedChoiceRunsItsOwnKernel`: the tile kernel is header-only, so calling it from the test would
+  compile a second kernel with the same SYCL name; the triangular pin is identified by the kernel
+  trace instead. Old rule: `syr2k_custom_dispatch.cc:29-106`.
+- **symm.** `expand` = `expand_mirrored<T,false>` into a queue workspace lease + the public `gemm`
+  (lifted from `symm_custom_dispatch.cc:74-133`, generalised to T, so double gains a native route),
+  also `max_wg >= 256` (expand_mirrored's 8 x 32 group) and `expansion_fits(q, k, batch, bytes)`
+  (new: closes level3.md debt 3; `BATCHLAS_EXPAND_MAX_BYTES` still lowers it). The homogeneity term
+  is new: on `ff340fc6` a heterogeneous B or C made the expansion's gemm throw, and a heterogeneous A
+  ran at the storage order. The vendor family refuses a heterogeneous operand too (known-defects #12):
+  without it, Auto turned main's throw inside the old expand window into the loop's wrong answer
+  (2.56 at n = 16, batch 4).
+  symm no longer reads `BATCHLAS_EXPAND_ROUTE` (hemm, herk, her2k still do). Old rule:
+  `symm_custom_dispatch.cc:36-191`, `triangular_expand.hh:45-63`.
+- **trmm.** `triangular` = `trmm_triangular_tiles<T>` (`trmm_tiles_supported`: Side::Left),
+  `expand` = `expand_triangular<T>` + the public `gemm` at beta 0, moved out of `trmm_vendor_impl`,
+  which is now the `cublas?trmm` loop only. Both need `max_wg >= 256`; expand also `expansion_fits`;
+  triangular also `ceil(m/tile_m) * ceil(q/128) <= 65535` tiles in grid y (`trmm_tile_groups`, the
+  launch's own row tile including `BATCHLAS_TRMM_TILE_M`; float order 16 runs q = 8388480, and at
+  8388481 the direct call throws, where the old rule launched and threw; `TriangularTileGridCeiling`).
+  **Behaviour change:** `BATCHLAS_TRMM_ROUTE=vendor` used to mean expand+gemm when the scratch fit;
+  it now means the loop, and `expand` reproduces the old meaning. The vendor family refuses a
+  heterogeneous batch on every backend: every trmm vendor loop (cuBLAS, rocBLAS, netlib) runs each
+  item at the top-level (m, n), which is wrong for Upper/Left (maxrel 0.92) and Lower/Right (0.76);
+  measured on cuBLAS, by reading on the other two. Auto now throws there (`runtime_error`, or
+  `NoRouteError` vendor-free); main threw on CUDA and answered wrongly on NETLIB and ROCm. Old rule:
+  `trmm_custom_dispatch.cc:21-207`, `cublas.cc:661-751`.
+
+**Vendor-free gains:** every float syrk GPU shape and double syrk n <= 128 (real ConjTrans
+included), float syr2k at batch 1, float and double symm, trmm in every dtype on both sides.
+
+**Gates** (sm_120 box, each against the same targets built from `ff340fc6`):
+- (b) off-grid data gate, 2500-3000 random log-uniform points per (dtype, device), plus a
+  threshold-band sample for symm: 100.00% agreement with the old vendor-present Auto choice for every
+  op, dtype and device, and 100.00% vendor-free wherever the old build served. Negative controls fail
+  the gate: symm batch=4 rows dropped 97.73% (band), m=256/n=256 rows 86.97%; syrk trans=C rows
+  72.10% (float), n=129 rows 97.57%; syr2k batch=1 rows 95.56% (batch 2 snaps to the batch=3 row,
+  so dropping batch=2 alone changes nothing); trmm side=L rows 49-51% (side=R rows cannot fail:
+  a Right point snaps to an L row, `triangular` is refused and `expand` is next).
+- (c) coverage `reached` row of an Auto call, one process per cell: symm 60/60 identical vendor,
+  24 identical + 36 gains vendor-free; syrk 26/26 vendor, 14 identical + 12 gains vendor-free;
+  syr2k 21/22 float (the 22nd is batch 65536: main threw, now vendor) and 22 double now record
+  `vendor:vendor`; trmm 20/24 identical, 3 the expected Right rename, 1 batch 65536.
+- (a) failing gtest names: no name fails that passes on `ff340fc6`, per branch and after
+  integration ("Integration gate" below). Deliberate breaks of each `<op>.cc` (form_of with 3*min, k or q from the wrong
+  extent, the fits/homogeneity/grid/tile terms dropped, the vendor arm's uplo flipped, coverage k
+  wrong, side fixed in key_of, ...) each turned a narrow named red set, restored and md5-verified.
+
+**Deviations from the design.** There was no serial scaffold commit, so each branch carried its own
+share (the `level3.cc` move, the CMake line, the OpSpec, the registry entry, the test target) and the
+integration merges resolved those as the union. syrk gained the `trans` key and the tile-count term,
+syr2k and trmm the `max_wg` and tile-count terms, none in the design. The empty-problem
+no-op is new for all four (symm and syr2k after the final review: their cuBLAS loop threw CUBLAS
+error 7 on a batch of 0). Every vendor family refuses a heterogeneous operand (final review; syrk
+and syr2k vendor loops answered one wrongly on main as well).
+
+**Integration review fixes.** syr2k: `Syr2kTranscribedTable` now asserts the `# keys:` line and each
+row's key (it built both and asserted neither), and the four `Syr2kCudaCustomTest` cases whose
+reference is a `vendor` pin skip in a vendor-free build (there the pin falls back to Auto, the tile
+kernel, so they compared it with itself; symm's ForcedExpand* cases skip the same way).
+
+**Final review fixes** (each with a deliberate break that turned only its named tests red, restored
+and md5-verified): every level-3 vendor family refuses a heterogeneous operand (break: drop the
+term -> `{Symm,Syrk,Syr2k}Candidates{,Cpu}.HeterogeneousBatchHasNoRoute`); symm and syr2k return
+early on an empty problem (`SymmCandidates.EmptyProblemIsANoOp`, `Syr2kCandidates.EmptyBatchIsANoOp`);
+trmm `triangular` carries the grid-y tile term (`TrmmCandidates.TriangularTileGridCeiling`, order
+16 and 65 in float, both sides of the ceiling); syrk `triangular` and symm `expand` carry
+`max_wg >= 256` (no current device can turn that term red, as for posv `tiny`). Final regression
+(`ctest -LE slow`, both trees): the same failing ctest names and gtest case names as the
+integration gate above.
+
+**Deleted with the old layer** (each proven unreferenced after the merges):
+- `src/backends/{symm,syrk,trmm}_custom_dispatch.{cc,hh}`, `syr2k_custom_dispatch.hh` (syr2k's
+  branch deleted its `.cc`), `level3_vendor_fallback.{cc,hh}`, `level3_coverage.hh`, the four
+  `*_vendor_cuda_raw` functions in `cublas.cc`, and from `route_common.hh` everything but `ceil_div`
+  and `is_gpu_queue`: `Level3Pin`, `level3_pin`, `level3_pin_word`, `level3_upper`,
+  `throw_forced_cublasdx_unavailable`. The level-3 pin-word vocabulary is gone; the op words are
+  ordinary spellings.
+- **cuBLASDx (D2: deleted, not kept as a family).** It had never run: MathDx is absent on both
+  boxes, so every `cublasdx` route was its fallback. Gone: `level3_fused{.hh,_cuda.cc,_absent.cc}`,
+  `{symm,syrk,syr2k,trmm}_cublasdx_fused.{cu,hh}`, `gemm_cublasdx{.cu,.hh,_kernels.hh,_dispatch.{cc,hh}}`,
+  `cublasdx_{dispatch,fused}_common.hh`, `Settings::selection.gemm_cublasdx_kernel`
+  (`BATCHLAS_GEMM_CUBLASDX_KERNEL` is not read), `GemmCuBLASDxDispatchPolicyTest`, the `CUDA::cudart`
+  link that gemm/syr2k/trmm tests had for cuBLASDx headers, and the build plumbing: the MathDx probe
+  (`find_package(mathdx)`, `BATCHLAS_MATHDX_ROOT`), `BATCHLAS_ENABLE_CUBLASDX_WRAPPER`, the `CUBLASDX`
+  entry of `BATCHLAS_VENDOR_LIBRARIES` (so the `BATCHLAS_ENABLE_CUBLASDX` option) and the installed
+  `BATCHLAS_HAS_CUBLASDX` macro in `backend_config.h` (nothing read it).
+- `tools/transcribe/` again (the four transcribers and gate scripts), after recording provenance.
+- Added: route-native reruns of `{symm,syrk,syr2k,trmm}_tests` (label `route-native`).
+
+**Integration gate** (sm_120 box, `ctest -LE slow`, 96 tests, against `ff340fc6`'s 88; failing
+gtest case names compared by re-running every failing suite in both trees):
+- vendor tree: the same five failing suites as `ff340fc6` (lanczos, gemv and ortho segfaults
+  (known-defects #13), cond, syev_blocked) with the same case names; every new and route-native
+  level-3 suite passes.
+- vendor-free tree: no case that passes on `ff340fc6` fails. Gone: `options_api_tests` (all of it),
+  symm CUDA float/double, syrk CUDA double and its two `SyrkCudaCustomTest` cases, trmm CUDA in all
+  four dtypes; the vendor-referenced symm and syr2k CUDA cases now skip. The four new route-native
+  reruns fail exactly the names their unpinned suites fail (the NETLIB instantiations, no netlib in
+  this tree; syr2k double CUDA has no route), as `trsm_tests_native` and `orgqr_tests_native`
+  already did.
+- `sweep_to_table.py --check` passes on all 144 tables; `run_local_checks.sh` is clean apart from
+  `check_cmake_syntax` reading generated files under `build-vf/`; the level-3 op TUs syntax-check
+  with ROCm forced on (only the script's expected `get_native` error).
+
+**Kept on purpose.** `select::level3_tile_route_available` keeps its value (float, or any type with
+cuBLAS) for sytrd_blocked, ortho, ormqr_blocked and coverage; widening it would move ortho's and
+ormqr's vendor-free routes. hemm, herk and her2k still select by hand in `cublas.cc` (expand/fold
+into gemm when `expansion_preferred` / `herk_gemm_preferred` / `her2k_gemm_preferred` and
+`expansion_fits` hold, else the vendor loop), honour `BATCHLAS_EXPAND_ROUTE`, and have no
+`BATCHLAS_<OP>_ROUTE`; their migration is the follow-up in §11.
 
 ## 13. Phase 3 decisions (maintainer, 2026-10-04)
 

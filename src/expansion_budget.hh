@@ -17,10 +17,8 @@
 // because callers outside the backend need the *same* predicate the backend
 // uses to pick its route: src/extensions/sytrd_blocked.cc has to know whether
 // her2k will take its batched-GEMM route or its per-batch host loop before it
-// decides to call her2k at all. triangular_expand.hh cannot be included from
-// there -- it pulls cublasdx_dispatch_common.hh, whose <cuda_runtime_api.h> is
-// unguarded, and sytrd_blocked.cc is also instantiated for ROCm and the host
-// backend. Nothing below touches CUDA.
+// decides to call her2k at all, without pulling in the SYCL expansion kernels.
+// Nothing below touches CUDA.
 //
 // One definition, not a copy: a call site that reimplemented these ceilings
 // would drift from the backend's, and the failure mode of disagreeing is
@@ -29,7 +27,7 @@ namespace batchlas::backend::detail {
 
 // Leading dimension of an expanded copy. The caller's own ld is irrelevant --
 // the expansion writes every element -- so pack the columns and pad only to
-// 16 bytes, which is the alignment the vendor and cuBLASDx GEMM kernels want
+// 16 bytes, which is the alignment the vendor and native GEMM kernels want
 // before they will use packet loads.
 template <typename T>
 int expanded_ld(int n) {

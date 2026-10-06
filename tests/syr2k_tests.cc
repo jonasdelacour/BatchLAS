@@ -10,10 +10,14 @@
 #include <string>
 
 #include "test_utils.hh"
+#include "../src/select/vendor.hh"
 
-#if BATCHLAS_HAS_CUDA_BACKEND
-#include "../src/backends/syr2k_cublasdx_fused.hh"
-#endif
+// Vendor-free, a `vendor` pin warns and falls back to Auto, which is the tile kernel: the
+// reference would then be the code under test (AGENTS.md section 8 rule 7).
+// syr2k_candidates_tests checks the tile kernel against a host reference in that tree.
+inline constexpr bool kVendorReference = batchlas::select::level3_vendor_available<batchlas::Backend::CUDA>;
+#define SKIP_WITHOUT_VENDOR_REFERENCE() \
+    if (!kVendorReference) GTEST_SKIP() << "vendor-free: the vendor reference would be the tile kernel itself"
 
 using namespace batchlas;
 
@@ -151,81 +155,6 @@ int main(int argc, char** argv) {
 }
 
 #if BATCHLAS_HAS_CUDA_BACKEND
-TEST(Syr2kCudaCustomTest, ForcedCuBLASDxPathMatchesVendor) {
-    Queue ctx;
-    if (ctx.device().type != DeviceType::GPU) {
-        GTEST_SKIP() << "CUDA custom syr2k test requires a GPU device";
-    }
-
-    const int n = 128;
-    const int k = 96;
-    const int batch = 64;
-    const float alpha = 0.95f;
-    const float beta = -0.1f;
-    const float tol = test_utils::tolerance<float>() * 4096.0f;
-
-    for (auto transA : {Transpose::NoTrans, Transpose::Trans}) {
-        const int a_rows = transA == Transpose::NoTrans ? n : k;
-        const int a_cols = transA == Transpose::NoTrans ? k : n;
-        Matrix<float, MatrixFormat::Dense> A = Matrix<float, MatrixFormat::Dense>::Random(a_rows, a_cols, false, batch, 13);
-        Matrix<float, MatrixFormat::Dense> B = Matrix<float, MatrixFormat::Dense>::Random(a_rows, a_cols, false, batch, 31);
-        Matrix<float, MatrixFormat::Dense> C0 = Matrix<float, MatrixFormat::Dense>::Random(n, n, false, batch, 43);
-
-        for (auto uplo : {Uplo::Lower, Uplo::Upper}) {
-            Matrix<float, MatrixFormat::Dense> C_custom(n, n, batch);
-            Matrix<float, MatrixFormat::Dense> C_vendor(n, n, batch);
-
-            MatrixView<float, MatrixFormat::Dense>::copy(ctx, C_custom.view(), C0.view()).wait();
-            MatrixView<float, MatrixFormat::Dense>::copy(ctx, C_vendor.view(), C0.view()).wait();
-
-            {
-                ScopedEnvVar force_route("BATCHLAS_SYR2K_ROUTE", "cublasdx");
-                try {
-                    syr2k(ctx,
-                                         A.view(),
-                                         B.view(),
-                                         C_custom.view(),
-                                         {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = transA}).wait();
-                } catch (const std::runtime_error& err) {
-#if BATCHLAS_HAS_CUBLAS
-                    // syr2k_cublasdx::available() is defined in a TU compiled
-                    // only when cuBLAS is present; without it there is nothing
-                    // to assert absent.
-                    EXPECT_FALSE(batchlas::backend::syr2k_cublasdx::available());
-#endif
-                    EXPECT_NE(std::string(err.what()).find("BATCHLAS_SYR2K_ROUTE=cublasdx"), std::string::npos);
-                    return;
-                }
-            }
-
-            {
-                ScopedEnvVar vendor_route("BATCHLAS_SYR2K_ROUTE", "vendor");
-                syr2k(ctx,
-                                     A.view(),
-                                     B.view(),
-                                     C_vendor.view(),
-                                     {.alpha = alpha, .beta = beta, .uplo = uplo, .trans = transA}).wait();
-            }
-
-            C_custom.view().symmetrize(ctx, uplo).wait();
-            C_vendor.view().symmetrize(ctx, uplo).wait();
-
-            for (int b = 0; b < batch; ++b) {
-                for (int j = 0; j < n; ++j) {
-                    for (int i = 0; i < n; ++i) {
-                        ASSERT_NEAR(C_custom(i, j, b), C_vendor(i, j, b), tol)
-                            << "trans=" << static_cast<int>(transA)
-                            << ", uplo=" << static_cast<int>(uplo)
-                            << ", batch=" << b
-                            << ", row=" << i
-                            << ", col=" << j;
-                    }
-                }
-            }
-        }
-    }
-}
-
 namespace {
 
 struct Syr2kShape {
@@ -346,6 +275,7 @@ TEST(Syr2kCudaCustomTest, TriangularTilesLeaveTheOtherHalfUntouched) {
     if (ctx.device().type != DeviceType::GPU) {
         GTEST_SKIP() << "CUDA custom syr2k test requires a GPU device";
     }
+    SKIP_WITHOUT_VENDOR_REFERENCE();
 
     // 256x64 is whole 128 tiles with a k the 8-deep staging fills exactly, so
     // it takes the unpredicated path; 200x53 breaks both and takes the
@@ -369,6 +299,7 @@ TEST(Syr2kCudaCustomTest, AutoRouteLeavesTheOtherHalfUntouched) {
     if (ctx.device().type != DeviceType::GPU) {
         GTEST_SKIP() << "CUDA custom syr2k test requires a GPU device";
     }
+    SKIP_WITHOUT_VENDOR_REFERENCE();
 
     // What this guards is the routing, not any one kernel: whichever route a
     // shape picks, the unreferenced half of C belongs to the caller. The router
@@ -405,6 +336,7 @@ TEST(Syr2kCudaCustomTest, AdversarialShapesLeaveTheOtherHalfUntouched) {
     if (ctx.device().type != DeviceType::GPU) {
         GTEST_SKIP() << "CUDA custom syr2k test requires a GPU device";
     }
+    SKIP_WITHOUT_VENDOR_REFERENCE();
 
     struct Case {
         Syr2kShape shape;
@@ -443,6 +375,7 @@ TEST(Syr2kCudaCustomTest, BetaNeverReadsOutsideTheTriangle) {
     if (ctx.device().type != DeviceType::GPU) {
         GTEST_SKIP() << "CUDA custom syr2k test requires a GPU device";
     }
+    SKIP_WITHOUT_VENDOR_REFERENCE();
 
     const Syr2kShape shapes[] = {{256, 64, 4}, {200, 53, 3}, {129, 9, 2}};
     const float alpha = 1.25f;
@@ -519,7 +452,7 @@ TEST(Syr2kCudaCustomTest, RemovedRouteWordsThrow) {
         GTEST_SKIP() << "CUDA custom syr2k test requires a GPU device";
     }
     Matrix<float, MatrixFormat::Dense> A(16, 8, 2), B(16, 8, 2), C(16, 16, 2);
-    for (const char* word : {"tiles", "narrow", "gemm", "custom", "dx", "fused", "diag_full_gemm", "triangular_tiles", "gram_tiles", "expand_gemm", "fused_device", "register_tiled", "native:auto", "vendor:auto", "bogus", "gram", "expand"}) {
+    for (const char* word : {"tiles", "narrow", "gemm", "custom", "dx", "fused", "diag_full_gemm", "triangular_tiles", "gram_tiles", "expand_gemm", "fused_device", "register_tiled", "native:auto", "vendor:auto", "bogus", "gram", "expand", "cublasdx", "cta", "tiny"}) {
         ScopedEnvVar route("BATCHLAS_SYR2K_ROUTE", word);
         EXPECT_THROW(syr2k(ctx, A.view(), B.view(), C.view(), {.alpha = 1.0f, .beta = 0.0f}).wait(), std::invalid_argument) << word;
     }

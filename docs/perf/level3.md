@@ -6,6 +6,14 @@ The shipped code is the authority on *what* ships; the exploration notes
 in place. All measurements: RTX 4090 / sm_89, CUDA 13.2, `RelWithDebInfo`, one dedicated GPU
 (`experiments/gpu_guard.sh`), at saturating batch unless the cell says otherwise.
 
+**Status (level-3 flat-selection wave, 2026-10-06).** symm, syrk, syr2k and trmm now select through
+flat tables (`src/ops/<op>/`; families, `can_run` and keys in
+`docs/design/flat-kernel-selection.md` §12 "Level-3 four"). Their tables are the predicates below,
+transcribed per grid cell at `ff340fc6`, so the boundaries on this page still describe Auto. "What
+ships" describes `ff340fc6` and earlier: the `*_custom_dispatch.cc` gates, `level3_coverage.hh`,
+`level3_fused.hh` and every cuBLASDx arm it names are deleted, and its file:line citations refer
+to those commits. hemm, herk and her2k still choose in `cublas.cc` as described here.
+
 ## What ships
 
 ### Route arms
@@ -29,7 +37,8 @@ so the arithmetic the triangular kernels save is measurable; `Auto` must never s
 
 ### The shipped predicates
 
-Quoted as implemented, not as the notes describe them.
+Historical: the predicates as implemented up to `ff340fc6`, not as the notes describe them. They
+are what the transcribed symm/syrk/syr2k/trmm tables reproduce (hemm/herk/her2k's still run).
 
 ```cpp
 // syrk_custom_dispatch.cc:109-118, n and k taken from C.rows() and the transA-selected extent
@@ -398,18 +407,15 @@ none of BatchLAS present; fixed with `alignas(16) T alpha_aligned = alpha` (`cub
 
 ### Routing and reachability
 
-3. **`symm` has no `expansion_fits` ceiling** where hemm, herk and her2k all have one:
-   `symm_expand_gemm` allocates the k x k x batch scratch unconditionally
-   (`symm_custom_dispatch.cc`), so a large enough symm hits the 2^31-element SYCL range
-   failure instead of falling back. Adding the check *is* a route change and needs measuring.
-4. **`double` symm has no expansion route at all** — the facade gate is float-only and
-   `symm_vendor` forwards to a per-batch `cublasDsymm` loop, while complex `hemm` and float
-   `symm` both get the expansion. Pre-existing.
-5. **Heterogeneous `symm` is unmeasured** — `symm_problem_supported` does not reject it, unlike
-   syrk's and syr2k's, so after WP1 S2 its expanded GEMM reaches `gemm_heterogeneous_vendor_impl`
-   rather than a strided-batched call on max dims. Probably a correctness *improvement*, untested.
-6. **`trmm`'s tile kernel is `Side::Left` only** — the right-side branch still expands. syev uses
-   Left only; `ormbr` has the same WY update, is not wired, and feeds gesvd.
+3. ~~`symm` has no `expansion_fits` ceiling~~: closed by the level-3 flat-selection wave; symm's
+   `expand` family checks it in `can_run`, and a shape over the budget takes the vendor.
+4. ~~`double` symm has no expansion route at all~~: `expand` serves double too (the double table
+   still ranks `vendor` first, as the old rule did; vendor-free it runs `expand`).
+5. ~~Heterogeneous `symm` is unmeasured~~: measured on `ff340fc6`; a heterogeneous B or C made the
+   expansion's gemm throw and a heterogeneous A ran at the storage order. `expand` now refuses
+   every heterogeneous operand, and so does the vendor (its loop answers at the storage order; known-defects #12).
+6. **`trmm`'s tile kernel is `Side::Left` only** — the right side takes the `expand` family. syev
+   uses Left only; `ormbr` has the same WY update, is not wired, and feeds gesvd.
 7. **ROCm has no `symm`, `hemm`, `herk` or `her2k`** — `rocblas.cc` instantiates only gemm, gemv,
    trsm, syrk, syr2k, trmm (`entry_points/level3.cc:398`); wiring the trmm tile kernel there
    is where `wy_trmm_applicable` would be re-measured.
@@ -429,7 +435,10 @@ symm/hemm measured loss region (`batch <= 2 && n <= 128`) and the shipped consta
 
 Post-WP8 `NoRouteError` census over `ctest -LE slow`: `trmm` 16, `herk` 16, `syrk` 12, `her2k` 12,
 `hemm` 12, `syr2k` 10, `symm` 8 — the double and complex arms trapped in `cublas.cc` plus the ops
-with no native arm. The suite pass count cannot show movement here; read the per-op census.
+with no native arm. The suite pass count cannot show movement here; read the per-op census. The
+level-3 flat-selection wave closed trmm (every dtype, both sides), symm (float and double), float
+syrk and syr2k entirely and double syrk at n <= 128; hemm, herk, her2k, double syrk above n = 128
+and double syr2k remain.
 
 ### Instrumentation and harness
 
