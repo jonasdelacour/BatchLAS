@@ -10,7 +10,7 @@
 #include <batchlas/backend_config.h>
 #include <batchlas/tuning_params.hh>
 
-#include "../expansion_budget.hh"
+#include "../ops/her2k/choice.hh"
 #include "../math-helpers.hh"
 #include "../queue.hh"
 #include "../util/template-instantiations.hh"
@@ -801,8 +801,8 @@ Event sytrd_blocked_impl(Queue& ctx,
     // at n=256 batch=1024, i.e. the whole win inverts.
     //
     // complex<float> is admitted too, because her2k is a different function
-    // with a different backend route, not syr2k with a conjugate. Its fast route
-    // (cublas.cc:644-665) is one batched gemm_vendor into scratch followed by
+    // with a different route, not syr2k with a conjugate. Its `fold` family
+    // (src/ops/her2k/her2k.cc) is one batched public gemm into scratch followed by
     // accumulate_hermitian<TwoSided=true>, which is *half* the arithmetic of the
     // two GEMMs it replaces rather than twice it: alpha*A*B^H and
     // conj(alpha)*B*A^H are conjugate transposes of one another, so the fold
@@ -810,7 +810,8 @@ Event sytrd_blocked_impl(Queue& ctx,
     // GEMM is 34.6% of the cfloat solve at n=256 and 14.4% at n=512, and the
     // trailing update is roughly half of that.
     //
-    // OPEN: the crossover behind her2k_gemm_preferred (cublas.cc:415-428) was
+    // OPEN: her2k's fold window (tuned/her2k.cfloat.<device>.txt, transcribed from
+    // the old batch >= 2 || n >= 128 rule) was
     // swept over square rank-k shapes. The panel loop issues a *narrow* one --
     // k = ib = nb in {16,24,32} against n2 up to 480 -- where the GEMM is near
     // bandwidth-bound and the fold adds an n2^2*batch write plus read the two
@@ -870,45 +871,14 @@ Event sytrd_blocked_impl(Queue& ctx,
                 if constexpr (rank2k_trailing_update_supported) {
                     if (use_rank2k_trailing_update) {
                         if constexpr (internal::is_complex<T>::value) {
-                            // her2k's fast route needs an n2 x n2 x batch scratch
-                            // expansion; when that does not fit it drops to a host
-                            // loop over cublasCher2k (cublas.cc:676-691), which is
-                            // structurally the same route measured 7.8x slower
-                            // than the GEMM pair above. So ask the backend's own
-                            // predicate first and keep the GEMM pair as the answer
-                            // when it says no -- a call site that guessed here
-                            // would reinstate that inversion silently.
-                            //
-                            // Per panel, not hoisted: n2 shrinks every iteration,
-                            // so an early panel can fail to fit while later ones
-                            // fit, and taking the GEMM pair for just those panels
-                            // is the correct behaviour.
-                            //
-                            // It fits with room at every shape syev routes to
-                            // blocked. expanded_ld<complex<float>>(n2) rounds n2 up
-                            // to a multiple of 2, so the scratch is
-                            // ~n2^2*batch*8 bytes against a GLOBAL_MEM_SIZE/4
-                            // budget, ~6.0 GiB on a 24 GiB 4090: n=448 batch=585
-                            // (the old cfloat blocked/vendor crossover, now a row of
-                            // tuned/syev.cfloat.<device>.txt)
-                            // needs 0.75 GiB and n=512 batch=1024 needs 1.76 GiB,
-                            // i.e. >=3.4x headroom. The ceiling is crossed around
-                            // n2^2*batch > 8.0e8 elements -- forced blocked at
-                            // n=1024 batch=1024 (7.51 GiB) or n=2048 batch=256
-                            // (7.75 GiB) -- which is outside the routed region but
-                            // reachable by pinning the provider, and is exactly
-                            // where an unguarded call would invert.
-                            //
-                            // The lease is taken per panel inside her2k_vendor and
-                            // released before the next one, so the peak is one
-                            // panel's scratch, not the loop's sum. On an
-                            // out-of-order Queue that route also drains the device
-                            // between its GEMM and its fold (cublas.cc:661-663),
-                            // once per panel; the benchmarks all build in-order
-                            // queues and never see it.
-                            const std::size_t her2k_scratch_bytes =
-                                backend::detail::expanded_workspace_bytes<T>(ctx, n2, batch);
-                            if (backend::detail::her2k_takes_gemm_route(ctx, n2, batch, her2k_scratch_bytes)) {
+                            // Ask her2k's own select::pick (fold_chosen, pins included) whether it
+                            // takes `fold`. Anything else is its per-item vendor loop, structurally
+                            // the route measured 7.8x slower than the GEMM pair above, so keep the
+                            // pair then. Per panel, not hoisted: n2 shrinks every iteration, so an
+                            // early panel's fold scratch (n2^2 x batch, expansion_fits) can be
+                            // refused while later ones fit. The lease is per call, so the peak is
+                            // one panel's scratch. evidence: docs/perf/dispatch.md#her2k-in-sytrd
+                            if (ops::her2k::fold_chosen<B, T>(ctx, V2, W2, A22, Transpose::NoTrans)) {
                                 BATCHLAS_KERNEL_TRACE_SCOPE("sytrd_blocked.update_vw_her2k");
                                 // (void) on an Event: deliberate. This Queue is in-order, so the next submission
                                 // is already ordered after this one and the Event carries nothing the caller needs.
@@ -940,7 +910,7 @@ Event sytrd_blocked_impl(Queue& ctx,
                         // depended on.
                         //
                         // her2k additionally forces imag(diag) = 0 on the block it
-                        // writes (cublas.cc:492), which the GEMM pair does not --
+                        // writes (accumulate_hermitian), which the GEMM pair does not --
                         // it leaves whatever roundoff accumulated there. That is
                         // the correct value for a Hermitian operand and it is
                         // unobservable downstream: syev_blocked.cc:217 takes

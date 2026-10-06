@@ -47,6 +47,9 @@ using Pin = select::ScopedPin<C>;
 template <typename T>
 using MVof = MatrixView<T, MatrixFormat::Dense>;
 
+// A max that keeps a NaN: std::max(w, NaN) returns w, so a NaN result would pass.
+double worse(double w, double x) { return std::isnan(x) || x > w ? x : w; }
+
 template <typename T>
 bool same_bits(T a, T b) {
     return std::memcmp(&a, &b, sizeof(T)) == 0;
@@ -144,7 +147,7 @@ double rel_error(const Prob<T>& p, int it) {
             const double c0 = double(p.mem0[p.ci(it, i, j)]);
             const double want = double(p.alpha) * acc + double(p.beta) * c0;
             const double den = std::abs(double(p.alpha)) * mag + std::abs(double(p.beta) * c0) + 1e-30;
-            worst = std::max(worst, std::abs(double(p.mem[p.ci(it, i, j)]) - want) / den);
+            worst = worse(worst, std::abs(double(p.mem[p.ci(it, i, j)]) - want) / den);
         }
     return worst;
 }
@@ -986,27 +989,6 @@ TYPED_TEST(SyrkCandidatesCpu, HeterogeneousBatchHasNoRoute) {
     if (!this->ctx) GTEST_SKIP() << "no queue";
     if (this->ctx->device().type == DeviceType::GPU) GTEST_SKIP() << "a GPU queue";
     expect_heterogeneous_has_no_route<TypeParam::BackendVal, typename TypeParam::ScalarType>(*this->ctx);
-}
-
-// herk's opt-in reads syrk's pin, the word `gram` only (case-folded, trimmed, ScopedPin or env).
-TEST(SyrkHerkHook, HerkGramPinnedReadsOnlyTheWordGram) {
-    const ScopedEnvVar clear("BATCHLAS_SYRK_ROUTE", nullptr);
-    EXPECT_FALSE(sk::herk_gram_pinned());
-    for (const char* yes : {"gram", " GRAM ", "Gram"}) {
-        const ScopedEnvVar env("BATCHLAS_SYRK_ROUTE", yes);
-        EXPECT_TRUE(sk::herk_gram_pinned()) << yes;
-    }
-    for (const char* no : {"triangular", "vendor", "native", "auto", "bogus", "gram:1"}) {
-        const ScopedEnvVar env("BATCHLAS_SYRK_ROUTE", no);
-        EXPECT_FALSE(sk::herk_gram_pinned()) << no;
-    }
-    {
-        const Pin pin("syrk", C{sk::Gram{}});
-        EXPECT_TRUE(sk::herk_gram_pinned());
-    }
-    const ScopedEnvVar env("BATCHLAS_SYRK_ROUTE", "gram");
-    const Pin pin("syrk", C{sk::Triangular{}});
-    EXPECT_FALSE(sk::herk_gram_pinned()) << "the ScopedPin wins over the environment";
 }
 
 // The transcription (no GPU): each table holds exactly choice.hh's grid (the full product for N

@@ -199,11 +199,11 @@ TYPED_TEST(Her2kTest, IgnoresUnreferencedTriangleOfC) {
 
     if constexpr (TestFixture::BackendType == Backend::CUDA) {
         {
-            ScopedEnvVar route("BATCHLAS_EXPAND_ROUTE", "expand");
-            sweep("gemm");
+            ScopedEnvVar route("BATCHLAS_HER2K_ROUTE", "fold");
+            sweep("fold");
         }
         {
-            ScopedEnvVar route("BATCHLAS_EXPAND_ROUTE", "loop");
+            ScopedEnvVar route("BATCHLAS_HER2K_ROUTE", "vendor");
             sweep("vendor-loop");
         }
     }

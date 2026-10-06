@@ -11,7 +11,7 @@ These files are plain git, not LFS, so that table changes stay readable in diffs
 ## What is here
 
 Every op ships a table for every dtype it instantiates (float, double, cfloat, cdouble; symm, syrk
-and syr2k are real-only) on sm_89 and sm_120, and spmm also on the CPU, so none of these devices
+and syr2k are real-only, hemm, herk and her2k complex-only) on sm_89 and sm_120, and spmm also on the CPU, so none of these devices
 borrows (R8); any other device borrows and warns once. `tuned_tables_tests` (`EveryOpShipsATableForEveryDtypeOnEveryShippedDevice`) holds this
 inventory. Three kinds of source:
 
@@ -43,10 +43,13 @@ inventory. Three kinds of source:
 | syrk | float, double | transcribed `ff340fc6` (`syrk.csv`, both devices) | transcribed (same CSV) | — |
 | syr2k | float, double | transcribed `ff340fc6` (`syr2k.csv`, both devices) | transcribed (same CSV) | — |
 | trmm | all | transcribed `ff340fc6` (`trmm.csv`, both devices) | transcribed (same CSV) | — |
+| hemm | cfloat, cdouble | transcribed `8cf7fd86` (`hemm.csv`, both devices) | transcribed (same CSV) | — |
+| herk | cfloat, cdouble | transcribed `8cf7fd86` (`herk.csv`, both devices) | transcribed (same CSV) | — |
+| her2k | cfloat, cdouble | transcribed `8cf7fd86` (`her2k.csv`, both devices) | transcribed (same CSV) | — |
 
-144 files: 70 per GPU device (16 ops x 4 dtypes, plus symm, syrk and syr2k x 2) and 4 cpu. Timed:
-10 on sm_120 (potrf x 4 and posv x 4 converted, trsm float and double measured) and the 4 sm_89
-potrf tables; the other 130 replay an old router.
+156 files: 76 per GPU device (16 ops x 4 dtypes, plus symm, syrk and syr2k x 2 real, plus hemm,
+herk and her2k x 2 complex) and 4 cpu. Timed: 10 on sm_120 (potrf x 4 and posv x 4 converted, trsm
+float and double measured) and the 4 sm_89 potrf tables; the other 142 replay an old router.
 
 ## How they are produced
 
@@ -75,7 +78,7 @@ how to add an op.
 the old router, so none could build here. The tables carry the old-router commit each was compiled
 against: `source=transcribed:424a45bc` (100 tables: gemm, gemv, geqrf, gesv, gesvd, getrf, getri,
 getrs, orgqr, ormqr, spmm, syev), `7e71a6e0` (posv sm_89, 4), `8b9adeb3` (trsm sm_89, 6) and
-`ff340fc6` (symm, syrk, syr2k, trmm: 20). Their sources, and the off-grid data-gate scripts that
+`ff340fc6` (symm, syrk, syr2k, trmm: 20) and `8cf7fd86` (hemm, herk, her2k: 12). Their sources, and the off-grid data-gate scripts that
 came with them, are retrievable from the parent of the deletion commit, e.g.
 `git show 0bd26dfe:tools/transcribe/posv_transcribe.cc`; the level-3 four's from the last merge of
 their wave, `git show eeacaaa9:tools/transcribe/<op>_transcribe.cc` and `<op>_gate.py`. A
@@ -133,6 +136,26 @@ cell whose extents contradict its form holds the decision at the form's represen
 `<op>_gate.py --data` replays random off-grid points through the old rules and through
 `sweep_to_table.nearest` plus a `can_run` model: 100% agreement for every op, dtype and device
 (details: `docs/design/flat-kernel-selection.md` §12 "Level-3 four").
+
+The Hermitian three (hemm, herk, her2k) were transcribed at `8cf7fd86`, the last commit with their
+`cublas.cc` rules (`expansion_preferred`, `herk_gemm_preferred`, `her2k_gemm_preferred`, each
+evaluated unpinned and with capacities unlimited; `can_run` re-applies `expansion_fits`). The
+transcriber was a temporary Python script outside the tree (`l3b_transcribe.py` in the wave's job
+directory, not kept; the rules are three one-line predicates): it held byte-for-byte copies of the predicate bodies and the decision lines, checked
+against `git show 8cf7fd86:` by a `--fidelity` mode, read the grid from `src/ops/<op>/choice.hh`,
+and wrote one CSV per op for both devices, then
+
+    python3 scripts/sweep_to_table.py --transcribe tuned/transcribed/{hemm,herk,her2k}.csv --sha 8cf7fd86 --date 2026-10-06
+
+A row is the old Auto choice, then `vendor` unless it was the Auto choice (the old code's fallback
+when the expansion or fold could not fit), then the other natives in candidate order (herk: `fold`,
+then `gram` where n <= 128; `gram` was pin-only in the old code, so it never precedes `vendor`).
+Vendor-free the vendor entry is skipped and the next native runs.
+Grids: hemm order and q `1..4096` with 255|256 and batch `1,2,3,4,5,8,128..32768`; herk and her2k n
+`1..4096` with 127|128|129 and 767|768|769, k `1,8,64,512,4096`, the same batches. Its off-grid data
+gate (2500 log-uniform points per op, dtype and device plus threshold bands, each point also
+replayed with `expand`/`fold` refused for capacity, where the old code took the loop) agreed 100.00%
+with the old rule; details in `docs/design/flat-kernel-selection.md` §12 "Hermitian three".
 
 A transcribed row reproduces a deleted window; it is not a measurement. It is replaced by a timed
 row when the tuner sweeps that device.

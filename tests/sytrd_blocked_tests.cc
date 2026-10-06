@@ -20,6 +20,7 @@
 
 #include "test_utils.hh"
 #include "../src/ops/syev/vendor.hh"
+#include "../src/select/vendor.hh"
 
 using namespace batchlas;
 
@@ -324,6 +325,60 @@ TEST(SytrdBlockedFloatCudaTest, Syr2kTrailingUpdateMatchesNetlibReference) {
             }
         }
     }
+}
+
+// The cfloat trailing update calls her2k only where her2k's own select::pick would take `fold`
+// (ops::her2k::fold_chosen); otherwise it keeps the GEMM pair. Auto at batch 8 folds, so her2k is
+// called (a her2k select-trace line per wide panel); pinned to its vendor loop, the predictor says
+// no and her2k is never called. Both tridiagonals agree to rounding. Vendor-free, the tile-route
+// gate keeps cfloat on the GEMM pair either way.
+TEST(SytrdBlockedComplexFloatCudaTest, Her2kTrailingUpdateFollowsHer2kChoice) {
+    using Scalar = std::complex<float>;
+    constexpr Backend B = Backend::CUDA;
+    Queue probe;
+    if (probe.device().type != DeviceType::GPU) GTEST_SKIP() << "requires a GPU device";
+    const int n = 192, batch = 8, nb = 32;
+    auto ctx = std::make_shared<Queue>(Device("gpu"), true);
+    const auto A0 = Matrix<Scalar, MatrixFormat::Dense>::Random(n, n, /*hermitian=*/true, batch, /*seed=*/777);
+    auto run = [&](const char* her2k_route, std::vector<Scalar>& out) {
+        const ScopedEnvVar route("BATCHLAS_HER2K_ROUTE", her2k_route);
+        const ScopedEnvVar trace("BATCHLAS_SELECT_TRACE", "1");
+        Matrix<Scalar, MatrixFormat::Dense> A = A0;
+        Vector<Scalar> d(n, batch), e(n - 1, batch), tau(n - 1, batch);
+        const size_t ws_bytes = sytrd_blocked_buffer_size<B, Scalar>(*ctx, A.view(), d, e, tau, Uplo::Lower, nb);
+        UnifiedVector<std::byte> ws(ws_bytes, std::byte{0});
+        ::testing::internal::CaptureStderr();
+        sytrd_blocked<B, Scalar>(*ctx, A.view(), d, e, tau, Uplo::Lower, ws.to_span(), nb).wait();
+        const std::string err = ::testing::internal::GetCapturedStderr();
+        out.clear();
+        for (int b = 0; b < batch; ++b)
+            for (int i = 0; i < n; ++i) {
+                out.push_back(d(i, b));
+                if (i < n - 1) out.push_back(Scalar(std::abs(e(i, b)), 0.0f));
+            }
+        int calls = 0;
+        for (std::size_t at = err.find("her2k "); at != std::string::npos; at = err.find("her2k ", at + 1))
+            calls += at == 0 || err[at - 1] == '\n';
+        return calls;
+    };
+    std::vector<Scalar> folded, paired;
+    const int fold_calls = run(nullptr, folded);
+    const int vendor_calls = run("vendor", paired);
+    if constexpr (select::level3_tile_route_available<B, Scalar>) {
+        EXPECT_GT(fold_calls, 0) << "Auto folds at batch 8, so the trailing update should call her2k";
+    } else {
+        EXPECT_EQ(fold_calls, 0) << "vendor-free: the tile-route gate keeps the GEMM pair";
+    }
+    EXPECT_EQ(vendor_calls, 0) << "her2k pinned to its vendor loop: the predictor must keep the GEMM pair";
+    ASSERT_EQ(folded.size(), paired.size());
+    // NaN-keeping: std::max(worst, NaN) returns worst, so a NaN tridiagonal would pass.
+    double worst = 0, scale = 0;
+    for (std::size_t i = 0; i < folded.size(); ++i) {
+        const double diff = double(std::abs(folded[i] - paired[i]));
+        if (std::isnan(diff) || diff > worst) worst = diff;
+        scale = std::max(scale, double(std::abs(paired[i])));
+    }
+    EXPECT_LE(worst, 1e-3 * std::max(scale, 1.0)) << "the her2k and GEMM-pair tridiagonals disagree";
 }
 
 TEST(SytrdBlockedComplexDoubleCudaTest, TridiagonalSpectrumMatchesNetlibReference) {

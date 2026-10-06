@@ -12,7 +12,11 @@ flat tables (`src/ops/<op>/`; families, `can_run` and keys in
 transcribed per grid cell at `ff340fc6`, so the boundaries on this page still describe Auto. "What
 ships" describes `ff340fc6` and earlier: the `*_custom_dispatch.cc` gates, `level3_coverage.hh`,
 `level3_fused.hh` and every cuBLASDx arm it names are deleted, and its file:line citations refer
-to those commits. hemm, herk and her2k still choose in `cublas.cc` as described here.
+to those commits. hemm, herk and her2k followed (Hermitian-three wave, §12 "Hermitian three"): hemm
+`expand | vendor`, herk `fold | gram | vendor` (a fold row ranks `fold | vendor | gram`), her2k
+`fold | vendor`, their `cublas.cc` predicates
+transcribed at `8cf7fd86` and deleted with `BATCHLAS_EXPAND_ROUTE`; the expansion and the fold
+(`accumulate_hermitian.hh`) are portable SYCL in front of the public gemm, so they run vendor-free.
 
 ## What ships
 
@@ -38,7 +42,8 @@ so the arithmetic the triangular kernels save is measurable; `Auto` must never s
 ### The shipped predicates
 
 Historical: the predicates as implemented up to `ff340fc6`, not as the notes describe them. They
-are what the transcribed symm/syrk/syr2k/trmm tables reproduce (hemm/herk/her2k's still run).
+are what the transcribed symm/syrk/syr2k/trmm tables reproduce; the hemm/herk/her2k lines ran until
+`8cf7fd86` and are what those three tables reproduce.
 
 ```cpp
 // syrk_custom_dispatch.cc:109-118, n and k taken from C.rows() and the transA-selected extent
@@ -63,7 +68,8 @@ return batch >= 2 || n >= 128;    // expansion_budget.hh:115   her2k
 function's comment cites as the measured win. `expansion_fits` (`expansion_budget.hh:66-79`) is
 two hard ceilings, not a tuned one: the SYCL global range must fit an `int` (fails at 2^31
 elements — a thrown `sycl::exception` at n=2048 batch=512), and the scratch must fit a quarter of
-global memory.
+global memory. Its element term counts n^2 batch, not the padded range the launches use; see
+[the padded launch range](#the-padded-launch-range).
 
 ### Where the decision actually happens
 
@@ -259,8 +265,9 @@ The conjugating path through the same kernel was built and **measured and reject
 float it loses to the existing GEMM-plus-Hermitian-fold at every Gram shape — 0.217 vs **0.206**
 ms at n=32 batch 2048, 2.08 vs **1.57** at n=128 batch 512. A complex multiply is four real ones,
 so herk is compute bound where real syrk is bandwidth bound, and cuBLAS's cgemm is better at
-compute. The route stays reachable as `BATCHLAS_SYRK_ROUTE=gram` so it stays measurable and the
-conjugation stays under test (`syrk_custom_dispatch.hh:16-24`).
+compute. The route stays reachable, now as herk's own `gram` family (`BATCHLAS_HERK_ROUTE=gram`;
+it was `BATCHLAS_SYRK_ROUTE=gram`), so it stays measurable and the conjugation stays under test.
+The transcribed rows rank it after `fold`, so Auto never takes it while the fold can run.
 
 ### trmm for the WY block factor
 
@@ -393,6 +400,35 @@ vendor" (`level3_coverage.hh:47-61`).
 load; `std::complex<double>` is 8-byte aligned, so passing the parameter's address faults whenever
 it lands 8 mod 16 — shape-dependent, so most calls survive. Reproducible against cuBLAS 13.2 with
 none of BatchLAS present; fixed with `alignas(16) T alpha_aligned = alpha` (`cublas.cc:640`).
+
+### The padded launch range
+
+(2026-10-06, `flat-select-l3b` test stage, RTX PRO 6000 Blackwell, sm_120, 96 GB.)
+`expansion_fits`' element term admits n^2 batch <= INT_MAX, but `accumulate_hermitian` (herk and
+her2k `fold`) and `expand_triangular` (trmm `expand`) launch with `expand_group_shape(n)`: a
+global range of batch x ceil(n/8)*8 x ceil(n/32)*32 for n >= 32, and the kernels are built with
+`-fsycl-id-queries-fit-in-int`. At batch 65535 that range overflows from n = 169, while the
+element term holds to n = 181. Measured with real operands (cfloat herk/her2k, float trmm,
+pinned): n = 168 runs and matches the host reference; n = 169 and 181 passed `can_run` and threw
+`provided range/offset exceeds the maximum value storable in an int` at submit, after the fold's
+gemm had run; n = 182 was refused. The old arms at `8cf7fd86` had the same window. `can_run` now
+also requires `expand_grid_fits(n, batch)` (`expansion_budget.hh`) for those three families; the
+tests are `{Herk,Her2k}Candidates.FoldGridCeiling` and `TrmmCandidates.ExpandGridCeiling`.
+`expand_mirrored` (symm/hemm `expand`) uses 32 x 32 tiles with 8 x 32 groups, a range of
+batch x ceil(n/32)^2 x 256, far below an int at the element ceiling: hemm at order 181, batch
+65535 runs and answers (`HemmCandidates.ExpandElementCeiling`), so symm/hemm keep the element
+term alone. On a 24 GB card the memory term (a quarter of global memory) refuses these shapes
+first, so the window is reachable only on large-memory devices.
+
+### The NaN that std::max swallowed
+
+(2026-10-06, `flat-select-l3b` test stage.) herk, her2k and syrk candidate suites computed the worst
+relative error as `worst = std::max(worst, err)`. `std::max(w, NaN)` returns `w`, so an output of
+NaN contributed nothing and the case passed; only herk/her2k's diagonal check (imaginary part
+nonzero) could see a NaN, and only on the diagonal. Found when a deliberate break of
+`accumulate_hermitian`'s `beta != 0` guard (reading a NaN C at beta = 0) left every test green. The
+suites now fold with `worse()`, which keeps a NaN. `gesvd_candidates_tests.cc:184` has the same
+pattern and was not changed.
 
 ## Open debts
 

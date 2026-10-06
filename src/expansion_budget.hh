@@ -10,19 +10,11 @@
 #include <cstddef>
 #include <cstdlib>
 #include <limits>
-#include <string_view>
 
-// Sizing and the fit ceiling for the scratch expansions in
-// src/backends/triangular_expand.hh. They live here, outside src/backends/,
-// because callers outside the backend need the *same* predicate the backend
-// uses to pick its route: src/extensions/sytrd_blocked.cc has to know whether
-// her2k will take its batched-GEMM route or its per-batch host loop before it
-// decides to call her2k at all, without pulling in the SYCL expansion kernels.
-// Nothing below touches CUDA.
-//
-// One definition, not a copy: a call site that reimplemented these ceilings
-// would drift from the backend's, and the failure mode of disagreeing is
-// silent -- the caller believes it got the fast route and gets the host loop.
+// Sizing and the fit ceiling for the scratch expansions (src/backends/triangular_expand.hh)
+// and the herk/her2k fold's product (src/backends/accumulate_hermitian.hh). The expanding
+// families' can_run (src/ops/{symm,hemm,trmm,herk,her2k}) call expansion_fits, so a family is
+// refused exactly where its scratch cannot be built. Nothing below touches CUDA.
 namespace batchlas::backend::detail {
 
 // Leading dimension of an expanded copy. The caller's own ld is irrelevant --
@@ -79,48 +71,34 @@ inline bool expansion_fits(const Queue& ctx, int n, int batch, std::size_t bytes
     return bytes <= budget;
 }
 
-// BATCHLAS_EXPAND_ROUTE pins the scratch-expansion route so a test can reach
-// whichever one the shape would not have picked: 1 = "expand", 0 = "loop",
-// -1 = unset. src/backends/cublas.cc:rankk_route_pin delegates here rather than
-// parsing it a second time.
-//
-// It lives beside expansion_fits for the same reason expansion_fits does, and
-// the reason is a bug that was actually shipped: sytrd_blocked's her2k guard
-// originally replicated only the size ceiling, so under
-// BATCHLAS_EXPAND_ROUTE=loop the call site concluded her2k would take its
-// batched-GEMM route while her2k_gemm_preferred returned false and sent it to
-// the per-batch cublas?her2k loop -- one sequential launch per batch member,
-// for every panel with n2 > 128. A guard that models only half the predicate it
-// is guarding against is worse than none, because it reads as if it had been
-// checked.
-inline int expansion_route_pin() {
-    if (const char* route = batchlas::settings().selection.expand_route.get()) {
-        if (std::string_view(route) == "expand") return 1;
-        if (std::string_view(route) == "loop") return 0;
+// Work-group shape of expand_triangular and accumulate_hermitian: rows first, so that a
+// group's lanes walk a column and both the load and the store coalesce, and
+// only as many rows as the matrix actually has, so that a batch of tiny
+// matrices does not retire mostly-idle groups.
+struct ExpandGroupShape {
+    int rows;
+    int cols;
+};
+
+inline ExpandGroupShape expand_group_shape(int n) {
+    constexpr int kItemsPerGroup = 256;
+    constexpr int kMaxGroupRows = 32;
+    int rows = 1;
+    while (rows < kMaxGroupRows && rows < n) {
+        rows *= 2;
     }
-    return -1;
+    return {rows, kItemsPerGroup / rows};
 }
 
-// Where HER2K's one-GEMM-plus-fold beats a per-batch loop over cublas?her2k.
-// Its two terms are conjugate transposes of one another, so one GEMM produces
-// both and the mirrored read adds them: half the arithmetic of the two rank-k
-// updates the vendor performs, rather than twice it, which is why this
-// crossover sits so much lower than HERK's. Measured on sm_89: 1.4x to 128x
-// everywhere except batch 1 at n <= 64, where the fold's own launch is not
-// repaid (0.74x at n = 32, 0.89x at n = 64).
-//
-// src/backends/cublas.cc:her2k_gemm_preferred delegates here.
-inline bool her2k_gemm_preferred(int n, int batch) {
-    const int pin = expansion_route_pin();
-    if (pin >= 0) return pin != 0;
-    return batch >= 2 || n >= 128;
-}
-
-// The whole of the condition her2k_vendor uses to choose its batched-GEMM
-// route, so a caller can ask the question the backend will actually answer
-// instead of a half of it that happens to agree most of the time.
-inline bool her2k_takes_gemm_route(const Queue& ctx, int n, int batch, std::size_t bytes) {
-    return her2k_gemm_preferred(n, batch) && expansion_fits(ctx, n, batch, bytes);
+// The padded range of an expand_group_shape launch fits an int (-fsycl-id-queries-fit-in-int
+// throws at submit otherwise); tighter than expansion_fits' n^2 batch term.
+// evidence: docs/perf/level3.md#the-padded-launch-range
+inline bool expand_grid_fits(int n, int batch) {
+    const auto shape = expand_group_shape(n);
+    const std::size_t range = static_cast<std::size_t>(batch) *
+                              static_cast<std::size_t>(::batchlas::internal::ceil_div(n, shape.cols) * shape.cols) *
+                              static_cast<std::size_t>(::batchlas::internal::ceil_div(n, shape.rows) * shape.rows);
+    return range <= static_cast<std::size_t>(std::numeric_limits<int>::max());
 }
 
 }  // namespace batchlas::backend::detail

@@ -46,6 +46,8 @@ select::Key key_of(const MV<T>& A, const MV<T>& B, Side side) {
 // Correctness only (R3); shapes were validated at entry. Both native launches address every item
 // as base + b * stride at one (order, q), so neither takes a heterogeneous batch (the expansion's
 // gemm throws on one), and both put the batch in grid z; triangular puts its tile list in grid y.
+// expand's scratch must fit (expansion_fits) and expand_triangular's padded range an int
+// (expand_grid_fits).
 // Every vendor loop (cuBLAS, rocBLAS, netlib) runs each item at the top-level (m, n), a wrong
 // answer for a heterogeneous batch, so the vendor is refused one on every backend too.
 template <Backend B, class T>
@@ -63,7 +65,8 @@ bool can_run(const TrmmChoice& c, const select::Device& d, Queue& q, const MV<T>
         [&](Expand) {
             if (!native) return false;
             const int k = A.rows(), batch = A.batch_size();
-            return backend::detail::expansion_fits(q, k, batch,
+            return backend::detail::expand_grid_fits(k, batch) &&
+                   backend::detail::expansion_fits(q, k, batch,
                                                    backend::detail::expanded_workspace_bytes<T>(q, k, batch));
         },
         [&](Vendor) { return d.has_vendor && homogeneous; },

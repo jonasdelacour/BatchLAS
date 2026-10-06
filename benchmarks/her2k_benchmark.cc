@@ -7,7 +7,7 @@ using namespace batchlas;
 
 // As herk_benchmark: no batched vendor HER2K exists, so the per-batch loop over
 // cublasCher2k/cublasZher2k is reached from this same binary with
-// BATCHLAS_EXPAND_ROUTE=loop, and gemm_benchmark gives the equal-work floor.
+// BATCHLAS_HER2K_ROUTE=vendor, and gemm_benchmark gives the equal-work floor.
 //
 // HER2K's two terms are conjugate transposes of one another, so the GEMM route
 // computes only one of them and folds it in twice. That halves the arithmetic

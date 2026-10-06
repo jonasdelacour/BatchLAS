@@ -197,11 +197,11 @@ TYPED_TEST(HerkTest, IgnoresUnreferencedTriangleOfC) {
 
     if constexpr (TestFixture::BackendType == Backend::CUDA) {
         {
-            ScopedEnvVar route("BATCHLAS_EXPAND_ROUTE", "expand");
-            sweep("gemm");
+            ScopedEnvVar route("BATCHLAS_HERK_ROUTE", "fold");
+            sweep("fold");
         }
         {
-            ScopedEnvVar route("BATCHLAS_EXPAND_ROUTE", "loop");
+            ScopedEnvVar route("BATCHLAS_HERK_ROUTE", "vendor");
             sweep("vendor-loop");
         }
     }
@@ -388,10 +388,10 @@ TYPED_TEST(HerkTest, MatchesGemmReference) {
 
     sweep("default");
     if constexpr (Ba == Backend::CUDA) {
-        // The Gram kernel is not on herk's automatic path -- it loses to the
-        // GEMM-plus-fold in complex -- so without pinning it the conjugation
-        // this test exists to check would never run.
-        ScopedEnvVar pin("BATCHLAS_SYRK_ROUTE", "gram");
+        // The Gram kernel is never herk's Auto choice -- it loses to the fold
+        // in complex -- so without pinning it the conjugation this test exists
+        // to check would never run.
+        ScopedEnvVar pin("BATCHLAS_HERK_ROUTE", "gram");
         sweep("gram");
     }
 }

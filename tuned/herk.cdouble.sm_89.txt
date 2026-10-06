@@ -1,0 +1,903 @@
+# op=herk dtype=cdouble device=sm_89 batchlas=8cf7fd86 kernels=unknown date=2026-10-06 source=transcribed:8cf7fd86
+# transcriber_csv=tuned/transcribed/herk.csv (the old router's preference order per grid cell, untimed)
+# keys: n:log:2 k:log batch:log
+n=1 k=1 batch=1 | vendor - | fold - | gram -
+n=1 k=1 batch=2 | vendor - | fold - | gram -
+n=1 k=1 batch=3 | vendor - | fold - | gram -
+n=1 k=1 batch=4 | fold - | vendor - | gram -
+n=1 k=1 batch=5 | fold - | vendor - | gram -
+n=1 k=1 batch=8 | fold - | vendor - | gram -
+n=1 k=1 batch=128 | fold - | vendor - | gram -
+n=1 k=1 batch=1024 | fold - | vendor - | gram -
+n=1 k=1 batch=8192 | fold - | vendor - | gram -
+n=1 k=1 batch=32768 | fold - | vendor - | gram -
+n=1 k=8 batch=1 | vendor - | fold - | gram -
+n=1 k=8 batch=2 | vendor - | fold - | gram -
+n=1 k=8 batch=3 | vendor - | fold - | gram -
+n=1 k=8 batch=4 | fold - | vendor - | gram -
+n=1 k=8 batch=5 | fold - | vendor - | gram -
+n=1 k=8 batch=8 | fold - | vendor - | gram -
+n=1 k=8 batch=128 | fold - | vendor - | gram -
+n=1 k=8 batch=1024 | fold - | vendor - | gram -
+n=1 k=8 batch=8192 | fold - | vendor - | gram -
+n=1 k=8 batch=32768 | fold - | vendor - | gram -
+n=1 k=64 batch=1 | vendor - | fold - | gram -
+n=1 k=64 batch=2 | vendor - | fold - | gram -
+n=1 k=64 batch=3 | vendor - | fold - | gram -
+n=1 k=64 batch=4 | fold - | vendor - | gram -
+n=1 k=64 batch=5 | fold - | vendor - | gram -
+n=1 k=64 batch=8 | fold - | vendor - | gram -
+n=1 k=64 batch=128 | fold - | vendor - | gram -
+n=1 k=64 batch=1024 | fold - | vendor - | gram -
+n=1 k=64 batch=8192 | fold - | vendor - | gram -
+n=1 k=64 batch=32768 | fold - | vendor - | gram -
+n=1 k=512 batch=1 | vendor - | fold - | gram -
+n=1 k=512 batch=2 | vendor - | fold - | gram -
+n=1 k=512 batch=3 | vendor - | fold - | gram -
+n=1 k=512 batch=4 | fold - | vendor - | gram -
+n=1 k=512 batch=5 | fold - | vendor - | gram -
+n=1 k=512 batch=8 | fold - | vendor - | gram -
+n=1 k=512 batch=128 | fold - | vendor - | gram -
+n=1 k=512 batch=1024 | fold - | vendor - | gram -
+n=1 k=512 batch=8192 | fold - | vendor - | gram -
+n=1 k=512 batch=32768 | fold - | vendor - | gram -
+n=1 k=4096 batch=1 | vendor - | fold - | gram -
+n=1 k=4096 batch=2 | vendor - | fold - | gram -
+n=1 k=4096 batch=3 | vendor - | fold - | gram -
+n=1 k=4096 batch=4 | fold - | vendor - | gram -
+n=1 k=4096 batch=5 | fold - | vendor - | gram -
+n=1 k=4096 batch=8 | fold - | vendor - | gram -
+n=1 k=4096 batch=128 | fold - | vendor - | gram -
+n=1 k=4096 batch=1024 | fold - | vendor - | gram -
+n=1 k=4096 batch=8192 | fold - | vendor - | gram -
+n=1 k=4096 batch=32768 | fold - | vendor - | gram -
+n=2 k=1 batch=1 | vendor - | fold - | gram -
+n=2 k=1 batch=2 | vendor - | fold - | gram -
+n=2 k=1 batch=3 | vendor - | fold - | gram -
+n=2 k=1 batch=4 | fold - | vendor - | gram -
+n=2 k=1 batch=5 | fold - | vendor - | gram -
+n=2 k=1 batch=8 | fold - | vendor - | gram -
+n=2 k=1 batch=128 | fold - | vendor - | gram -
+n=2 k=1 batch=1024 | fold - | vendor - | gram -
+n=2 k=1 batch=8192 | fold - | vendor - | gram -
+n=2 k=1 batch=32768 | fold - | vendor - | gram -
+n=2 k=8 batch=1 | vendor - | fold - | gram -
+n=2 k=8 batch=2 | vendor - | fold - | gram -
+n=2 k=8 batch=3 | vendor - | fold - | gram -
+n=2 k=8 batch=4 | fold - | vendor - | gram -
+n=2 k=8 batch=5 | fold - | vendor - | gram -
+n=2 k=8 batch=8 | fold - | vendor - | gram -
+n=2 k=8 batch=128 | fold - | vendor - | gram -
+n=2 k=8 batch=1024 | fold - | vendor - | gram -
+n=2 k=8 batch=8192 | fold - | vendor - | gram -
+n=2 k=8 batch=32768 | fold - | vendor - | gram -
+n=2 k=64 batch=1 | vendor - | fold - | gram -
+n=2 k=64 batch=2 | vendor - | fold - | gram -
+n=2 k=64 batch=3 | vendor - | fold - | gram -
+n=2 k=64 batch=4 | fold - | vendor - | gram -
+n=2 k=64 batch=5 | fold - | vendor - | gram -
+n=2 k=64 batch=8 | fold - | vendor - | gram -
+n=2 k=64 batch=128 | fold - | vendor - | gram -
+n=2 k=64 batch=1024 | fold - | vendor - | gram -
+n=2 k=64 batch=8192 | fold - | vendor - | gram -
+n=2 k=64 batch=32768 | fold - | vendor - | gram -
+n=2 k=512 batch=1 | vendor - | fold - | gram -
+n=2 k=512 batch=2 | vendor - | fold - | gram -
+n=2 k=512 batch=3 | vendor - | fold - | gram -
+n=2 k=512 batch=4 | fold - | vendor - | gram -
+n=2 k=512 batch=5 | fold - | vendor - | gram -
+n=2 k=512 batch=8 | fold - | vendor - | gram -
+n=2 k=512 batch=128 | fold - | vendor - | gram -
+n=2 k=512 batch=1024 | fold - | vendor - | gram -
+n=2 k=512 batch=8192 | fold - | vendor - | gram -
+n=2 k=512 batch=32768 | fold - | vendor - | gram -
+n=2 k=4096 batch=1 | vendor - | fold - | gram -
+n=2 k=4096 batch=2 | vendor - | fold - | gram -
+n=2 k=4096 batch=3 | vendor - | fold - | gram -
+n=2 k=4096 batch=4 | fold - | vendor - | gram -
+n=2 k=4096 batch=5 | fold - | vendor - | gram -
+n=2 k=4096 batch=8 | fold - | vendor - | gram -
+n=2 k=4096 batch=128 | fold - | vendor - | gram -
+n=2 k=4096 batch=1024 | fold - | vendor - | gram -
+n=2 k=4096 batch=8192 | fold - | vendor - | gram -
+n=2 k=4096 batch=32768 | fold - | vendor - | gram -
+n=4 k=1 batch=1 | vendor - | fold - | gram -
+n=4 k=1 batch=2 | vendor - | fold - | gram -
+n=4 k=1 batch=3 | vendor - | fold - | gram -
+n=4 k=1 batch=4 | fold - | vendor - | gram -
+n=4 k=1 batch=5 | fold - | vendor - | gram -
+n=4 k=1 batch=8 | fold - | vendor - | gram -
+n=4 k=1 batch=128 | fold - | vendor - | gram -
+n=4 k=1 batch=1024 | fold - | vendor - | gram -
+n=4 k=1 batch=8192 | fold - | vendor - | gram -
+n=4 k=1 batch=32768 | fold - | vendor - | gram -
+n=4 k=8 batch=1 | vendor - | fold - | gram -
+n=4 k=8 batch=2 | vendor - | fold - | gram -
+n=4 k=8 batch=3 | vendor - | fold - | gram -
+n=4 k=8 batch=4 | fold - | vendor - | gram -
+n=4 k=8 batch=5 | fold - | vendor - | gram -
+n=4 k=8 batch=8 | fold - | vendor - | gram -
+n=4 k=8 batch=128 | fold - | vendor - | gram -
+n=4 k=8 batch=1024 | fold - | vendor - | gram -
+n=4 k=8 batch=8192 | fold - | vendor - | gram -
+n=4 k=8 batch=32768 | fold - | vendor - | gram -
+n=4 k=64 batch=1 | vendor - | fold - | gram -
+n=4 k=64 batch=2 | vendor - | fold - | gram -
+n=4 k=64 batch=3 | vendor - | fold - | gram -
+n=4 k=64 batch=4 | fold - | vendor - | gram -
+n=4 k=64 batch=5 | fold - | vendor - | gram -
+n=4 k=64 batch=8 | fold - | vendor - | gram -
+n=4 k=64 batch=128 | fold - | vendor - | gram -
+n=4 k=64 batch=1024 | fold - | vendor - | gram -
+n=4 k=64 batch=8192 | fold - | vendor - | gram -
+n=4 k=64 batch=32768 | fold - | vendor - | gram -
+n=4 k=512 batch=1 | vendor - | fold - | gram -
+n=4 k=512 batch=2 | vendor - | fold - | gram -
+n=4 k=512 batch=3 | vendor - | fold - | gram -
+n=4 k=512 batch=4 | fold - | vendor - | gram -
+n=4 k=512 batch=5 | fold - | vendor - | gram -
+n=4 k=512 batch=8 | fold - | vendor - | gram -
+n=4 k=512 batch=128 | fold - | vendor - | gram -
+n=4 k=512 batch=1024 | fold - | vendor - | gram -
+n=4 k=512 batch=8192 | fold - | vendor - | gram -
+n=4 k=512 batch=32768 | fold - | vendor - | gram -
+n=4 k=4096 batch=1 | vendor - | fold - | gram -
+n=4 k=4096 batch=2 | vendor - | fold - | gram -
+n=4 k=4096 batch=3 | vendor - | fold - | gram -
+n=4 k=4096 batch=4 | fold - | vendor - | gram -
+n=4 k=4096 batch=5 | fold - | vendor - | gram -
+n=4 k=4096 batch=8 | fold - | vendor - | gram -
+n=4 k=4096 batch=128 | fold - | vendor - | gram -
+n=4 k=4096 batch=1024 | fold - | vendor - | gram -
+n=4 k=4096 batch=8192 | fold - | vendor - | gram -
+n=4 k=4096 batch=32768 | fold - | vendor - | gram -
+n=8 k=1 batch=1 | vendor - | fold - | gram -
+n=8 k=1 batch=2 | vendor - | fold - | gram -
+n=8 k=1 batch=3 | vendor - | fold - | gram -
+n=8 k=1 batch=4 | fold - | vendor - | gram -
+n=8 k=1 batch=5 | fold - | vendor - | gram -
+n=8 k=1 batch=8 | fold - | vendor - | gram -
+n=8 k=1 batch=128 | fold - | vendor - | gram -
+n=8 k=1 batch=1024 | fold - | vendor - | gram -
+n=8 k=1 batch=8192 | fold - | vendor - | gram -
+n=8 k=1 batch=32768 | fold - | vendor - | gram -
+n=8 k=8 batch=1 | vendor - | fold - | gram -
+n=8 k=8 batch=2 | vendor - | fold - | gram -
+n=8 k=8 batch=3 | vendor - | fold - | gram -
+n=8 k=8 batch=4 | fold - | vendor - | gram -
+n=8 k=8 batch=5 | fold - | vendor - | gram -
+n=8 k=8 batch=8 | fold - | vendor - | gram -
+n=8 k=8 batch=128 | fold - | vendor - | gram -
+n=8 k=8 batch=1024 | fold - | vendor - | gram -
+n=8 k=8 batch=8192 | fold - | vendor - | gram -
+n=8 k=8 batch=32768 | fold - | vendor - | gram -
+n=8 k=64 batch=1 | vendor - | fold - | gram -
+n=8 k=64 batch=2 | vendor - | fold - | gram -
+n=8 k=64 batch=3 | vendor - | fold - | gram -
+n=8 k=64 batch=4 | fold - | vendor - | gram -
+n=8 k=64 batch=5 | fold - | vendor - | gram -
+n=8 k=64 batch=8 | fold - | vendor - | gram -
+n=8 k=64 batch=128 | fold - | vendor - | gram -
+n=8 k=64 batch=1024 | fold - | vendor - | gram -
+n=8 k=64 batch=8192 | fold - | vendor - | gram -
+n=8 k=64 batch=32768 | fold - | vendor - | gram -
+n=8 k=512 batch=1 | vendor - | fold - | gram -
+n=8 k=512 batch=2 | vendor - | fold - | gram -
+n=8 k=512 batch=3 | vendor - | fold - | gram -
+n=8 k=512 batch=4 | fold - | vendor - | gram -
+n=8 k=512 batch=5 | fold - | vendor - | gram -
+n=8 k=512 batch=8 | fold - | vendor - | gram -
+n=8 k=512 batch=128 | fold - | vendor - | gram -
+n=8 k=512 batch=1024 | fold - | vendor - | gram -
+n=8 k=512 batch=8192 | fold - | vendor - | gram -
+n=8 k=512 batch=32768 | fold - | vendor - | gram -
+n=8 k=4096 batch=1 | vendor - | fold - | gram -
+n=8 k=4096 batch=2 | vendor - | fold - | gram -
+n=8 k=4096 batch=3 | vendor - | fold - | gram -
+n=8 k=4096 batch=4 | fold - | vendor - | gram -
+n=8 k=4096 batch=5 | fold - | vendor - | gram -
+n=8 k=4096 batch=8 | fold - | vendor - | gram -
+n=8 k=4096 batch=128 | fold - | vendor - | gram -
+n=8 k=4096 batch=1024 | fold - | vendor - | gram -
+n=8 k=4096 batch=8192 | fold - | vendor - | gram -
+n=8 k=4096 batch=32768 | fold - | vendor - | gram -
+n=16 k=1 batch=1 | vendor - | fold - | gram -
+n=16 k=1 batch=2 | vendor - | fold - | gram -
+n=16 k=1 batch=3 | vendor - | fold - | gram -
+n=16 k=1 batch=4 | fold - | vendor - | gram -
+n=16 k=1 batch=5 | fold - | vendor - | gram -
+n=16 k=1 batch=8 | fold - | vendor - | gram -
+n=16 k=1 batch=128 | fold - | vendor - | gram -
+n=16 k=1 batch=1024 | fold - | vendor - | gram -
+n=16 k=1 batch=8192 | fold - | vendor - | gram -
+n=16 k=1 batch=32768 | fold - | vendor - | gram -
+n=16 k=8 batch=1 | vendor - | fold - | gram -
+n=16 k=8 batch=2 | vendor - | fold - | gram -
+n=16 k=8 batch=3 | vendor - | fold - | gram -
+n=16 k=8 batch=4 | fold - | vendor - | gram -
+n=16 k=8 batch=5 | fold - | vendor - | gram -
+n=16 k=8 batch=8 | fold - | vendor - | gram -
+n=16 k=8 batch=128 | fold - | vendor - | gram -
+n=16 k=8 batch=1024 | fold - | vendor - | gram -
+n=16 k=8 batch=8192 | fold - | vendor - | gram -
+n=16 k=8 batch=32768 | fold - | vendor - | gram -
+n=16 k=64 batch=1 | vendor - | fold - | gram -
+n=16 k=64 batch=2 | vendor - | fold - | gram -
+n=16 k=64 batch=3 | vendor - | fold - | gram -
+n=16 k=64 batch=4 | fold - | vendor - | gram -
+n=16 k=64 batch=5 | fold - | vendor - | gram -
+n=16 k=64 batch=8 | fold - | vendor - | gram -
+n=16 k=64 batch=128 | fold - | vendor - | gram -
+n=16 k=64 batch=1024 | fold - | vendor - | gram -
+n=16 k=64 batch=8192 | fold - | vendor - | gram -
+n=16 k=64 batch=32768 | fold - | vendor - | gram -
+n=16 k=512 batch=1 | vendor - | fold - | gram -
+n=16 k=512 batch=2 | vendor - | fold - | gram -
+n=16 k=512 batch=3 | vendor - | fold - | gram -
+n=16 k=512 batch=4 | fold - | vendor - | gram -
+n=16 k=512 batch=5 | fold - | vendor - | gram -
+n=16 k=512 batch=8 | fold - | vendor - | gram -
+n=16 k=512 batch=128 | fold - | vendor - | gram -
+n=16 k=512 batch=1024 | fold - | vendor - | gram -
+n=16 k=512 batch=8192 | fold - | vendor - | gram -
+n=16 k=512 batch=32768 | fold - | vendor - | gram -
+n=16 k=4096 batch=1 | vendor - | fold - | gram -
+n=16 k=4096 batch=2 | vendor - | fold - | gram -
+n=16 k=4096 batch=3 | vendor - | fold - | gram -
+n=16 k=4096 batch=4 | fold - | vendor - | gram -
+n=16 k=4096 batch=5 | fold - | vendor - | gram -
+n=16 k=4096 batch=8 | fold - | vendor - | gram -
+n=16 k=4096 batch=128 | fold - | vendor - | gram -
+n=16 k=4096 batch=1024 | fold - | vendor - | gram -
+n=16 k=4096 batch=8192 | fold - | vendor - | gram -
+n=16 k=4096 batch=32768 | fold - | vendor - | gram -
+n=32 k=1 batch=1 | vendor - | fold - | gram -
+n=32 k=1 batch=2 | vendor - | fold - | gram -
+n=32 k=1 batch=3 | vendor - | fold - | gram -
+n=32 k=1 batch=4 | fold - | vendor - | gram -
+n=32 k=1 batch=5 | fold - | vendor - | gram -
+n=32 k=1 batch=8 | fold - | vendor - | gram -
+n=32 k=1 batch=128 | fold - | vendor - | gram -
+n=32 k=1 batch=1024 | fold - | vendor - | gram -
+n=32 k=1 batch=8192 | fold - | vendor - | gram -
+n=32 k=1 batch=32768 | fold - | vendor - | gram -
+n=32 k=8 batch=1 | vendor - | fold - | gram -
+n=32 k=8 batch=2 | vendor - | fold - | gram -
+n=32 k=8 batch=3 | vendor - | fold - | gram -
+n=32 k=8 batch=4 | fold - | vendor - | gram -
+n=32 k=8 batch=5 | fold - | vendor - | gram -
+n=32 k=8 batch=8 | fold - | vendor - | gram -
+n=32 k=8 batch=128 | fold - | vendor - | gram -
+n=32 k=8 batch=1024 | fold - | vendor - | gram -
+n=32 k=8 batch=8192 | fold - | vendor - | gram -
+n=32 k=8 batch=32768 | fold - | vendor - | gram -
+n=32 k=64 batch=1 | vendor - | fold - | gram -
+n=32 k=64 batch=2 | vendor - | fold - | gram -
+n=32 k=64 batch=3 | vendor - | fold - | gram -
+n=32 k=64 batch=4 | fold - | vendor - | gram -
+n=32 k=64 batch=5 | fold - | vendor - | gram -
+n=32 k=64 batch=8 | fold - | vendor - | gram -
+n=32 k=64 batch=128 | fold - | vendor - | gram -
+n=32 k=64 batch=1024 | fold - | vendor - | gram -
+n=32 k=64 batch=8192 | fold - | vendor - | gram -
+n=32 k=64 batch=32768 | fold - | vendor - | gram -
+n=32 k=512 batch=1 | vendor - | fold - | gram -
+n=32 k=512 batch=2 | vendor - | fold - | gram -
+n=32 k=512 batch=3 | vendor - | fold - | gram -
+n=32 k=512 batch=4 | fold - | vendor - | gram -
+n=32 k=512 batch=5 | fold - | vendor - | gram -
+n=32 k=512 batch=8 | fold - | vendor - | gram -
+n=32 k=512 batch=128 | fold - | vendor - | gram -
+n=32 k=512 batch=1024 | fold - | vendor - | gram -
+n=32 k=512 batch=8192 | fold - | vendor - | gram -
+n=32 k=512 batch=32768 | fold - | vendor - | gram -
+n=32 k=4096 batch=1 | vendor - | fold - | gram -
+n=32 k=4096 batch=2 | vendor - | fold - | gram -
+n=32 k=4096 batch=3 | vendor - | fold - | gram -
+n=32 k=4096 batch=4 | fold - | vendor - | gram -
+n=32 k=4096 batch=5 | fold - | vendor - | gram -
+n=32 k=4096 batch=8 | fold - | vendor - | gram -
+n=32 k=4096 batch=128 | fold - | vendor - | gram -
+n=32 k=4096 batch=1024 | fold - | vendor - | gram -
+n=32 k=4096 batch=8192 | fold - | vendor - | gram -
+n=32 k=4096 batch=32768 | fold - | vendor - | gram -
+n=64 k=1 batch=1 | vendor - | fold - | gram -
+n=64 k=1 batch=2 | vendor - | fold - | gram -
+n=64 k=1 batch=3 | vendor - | fold - | gram -
+n=64 k=1 batch=4 | fold - | vendor - | gram -
+n=64 k=1 batch=5 | fold - | vendor - | gram -
+n=64 k=1 batch=8 | fold - | vendor - | gram -
+n=64 k=1 batch=128 | fold - | vendor - | gram -
+n=64 k=1 batch=1024 | fold - | vendor - | gram -
+n=64 k=1 batch=8192 | fold - | vendor - | gram -
+n=64 k=1 batch=32768 | fold - | vendor - | gram -
+n=64 k=8 batch=1 | vendor - | fold - | gram -
+n=64 k=8 batch=2 | vendor - | fold - | gram -
+n=64 k=8 batch=3 | vendor - | fold - | gram -
+n=64 k=8 batch=4 | fold - | vendor - | gram -
+n=64 k=8 batch=5 | fold - | vendor - | gram -
+n=64 k=8 batch=8 | fold - | vendor - | gram -
+n=64 k=8 batch=128 | fold - | vendor - | gram -
+n=64 k=8 batch=1024 | fold - | vendor - | gram -
+n=64 k=8 batch=8192 | fold - | vendor - | gram -
+n=64 k=8 batch=32768 | fold - | vendor - | gram -
+n=64 k=64 batch=1 | vendor - | fold - | gram -
+n=64 k=64 batch=2 | vendor - | fold - | gram -
+n=64 k=64 batch=3 | vendor - | fold - | gram -
+n=64 k=64 batch=4 | fold - | vendor - | gram -
+n=64 k=64 batch=5 | fold - | vendor - | gram -
+n=64 k=64 batch=8 | fold - | vendor - | gram -
+n=64 k=64 batch=128 | fold - | vendor - | gram -
+n=64 k=64 batch=1024 | fold - | vendor - | gram -
+n=64 k=64 batch=8192 | fold - | vendor - | gram -
+n=64 k=64 batch=32768 | fold - | vendor - | gram -
+n=64 k=512 batch=1 | vendor - | fold - | gram -
+n=64 k=512 batch=2 | vendor - | fold - | gram -
+n=64 k=512 batch=3 | vendor - | fold - | gram -
+n=64 k=512 batch=4 | fold - | vendor - | gram -
+n=64 k=512 batch=5 | fold - | vendor - | gram -
+n=64 k=512 batch=8 | fold - | vendor - | gram -
+n=64 k=512 batch=128 | fold - | vendor - | gram -
+n=64 k=512 batch=1024 | fold - | vendor - | gram -
+n=64 k=512 batch=8192 | fold - | vendor - | gram -
+n=64 k=512 batch=32768 | fold - | vendor - | gram -
+n=64 k=4096 batch=1 | vendor - | fold - | gram -
+n=64 k=4096 batch=2 | vendor - | fold - | gram -
+n=64 k=4096 batch=3 | vendor - | fold - | gram -
+n=64 k=4096 batch=4 | fold - | vendor - | gram -
+n=64 k=4096 batch=5 | fold - | vendor - | gram -
+n=64 k=4096 batch=8 | fold - | vendor - | gram -
+n=64 k=4096 batch=128 | fold - | vendor - | gram -
+n=64 k=4096 batch=1024 | fold - | vendor - | gram -
+n=64 k=4096 batch=8192 | fold - | vendor - | gram -
+n=64 k=4096 batch=32768 | fold - | vendor - | gram -
+n=127 k=1 batch=1 | vendor - | fold - | gram -
+n=127 k=1 batch=2 | vendor - | fold - | gram -
+n=127 k=1 batch=3 | vendor - | fold - | gram -
+n=127 k=1 batch=4 | fold - | vendor - | gram -
+n=127 k=1 batch=5 | fold - | vendor - | gram -
+n=127 k=1 batch=8 | fold - | vendor - | gram -
+n=127 k=1 batch=128 | fold - | vendor - | gram -
+n=127 k=1 batch=1024 | fold - | vendor - | gram -
+n=127 k=1 batch=8192 | fold - | vendor - | gram -
+n=127 k=1 batch=32768 | fold - | vendor - | gram -
+n=127 k=8 batch=1 | vendor - | fold - | gram -
+n=127 k=8 batch=2 | vendor - | fold - | gram -
+n=127 k=8 batch=3 | vendor - | fold - | gram -
+n=127 k=8 batch=4 | fold - | vendor - | gram -
+n=127 k=8 batch=5 | fold - | vendor - | gram -
+n=127 k=8 batch=8 | fold - | vendor - | gram -
+n=127 k=8 batch=128 | fold - | vendor - | gram -
+n=127 k=8 batch=1024 | fold - | vendor - | gram -
+n=127 k=8 batch=8192 | fold - | vendor - | gram -
+n=127 k=8 batch=32768 | fold - | vendor - | gram -
+n=127 k=64 batch=1 | vendor - | fold - | gram -
+n=127 k=64 batch=2 | vendor - | fold - | gram -
+n=127 k=64 batch=3 | vendor - | fold - | gram -
+n=127 k=64 batch=4 | fold - | vendor - | gram -
+n=127 k=64 batch=5 | fold - | vendor - | gram -
+n=127 k=64 batch=8 | fold - | vendor - | gram -
+n=127 k=64 batch=128 | fold - | vendor - | gram -
+n=127 k=64 batch=1024 | fold - | vendor - | gram -
+n=127 k=64 batch=8192 | fold - | vendor - | gram -
+n=127 k=64 batch=32768 | fold - | vendor - | gram -
+n=127 k=512 batch=1 | vendor - | fold - | gram -
+n=127 k=512 batch=2 | vendor - | fold - | gram -
+n=127 k=512 batch=3 | vendor - | fold - | gram -
+n=127 k=512 batch=4 | fold - | vendor - | gram -
+n=127 k=512 batch=5 | fold - | vendor - | gram -
+n=127 k=512 batch=8 | fold - | vendor - | gram -
+n=127 k=512 batch=128 | fold - | vendor - | gram -
+n=127 k=512 batch=1024 | fold - | vendor - | gram -
+n=127 k=512 batch=8192 | fold - | vendor - | gram -
+n=127 k=512 batch=32768 | fold - | vendor - | gram -
+n=127 k=4096 batch=1 | vendor - | fold - | gram -
+n=127 k=4096 batch=2 | vendor - | fold - | gram -
+n=127 k=4096 batch=3 | vendor - | fold - | gram -
+n=127 k=4096 batch=4 | fold - | vendor - | gram -
+n=127 k=4096 batch=5 | fold - | vendor - | gram -
+n=127 k=4096 batch=8 | fold - | vendor - | gram -
+n=127 k=4096 batch=128 | fold - | vendor - | gram -
+n=127 k=4096 batch=1024 | fold - | vendor - | gram -
+n=127 k=4096 batch=8192 | fold - | vendor - | gram -
+n=127 k=4096 batch=32768 | fold - | vendor - | gram -
+n=128 k=1 batch=1 | vendor - | fold - | gram -
+n=128 k=1 batch=2 | vendor - | fold - | gram -
+n=128 k=1 batch=3 | vendor - | fold - | gram -
+n=128 k=1 batch=4 | fold - | vendor - | gram -
+n=128 k=1 batch=5 | fold - | vendor - | gram -
+n=128 k=1 batch=8 | fold - | vendor - | gram -
+n=128 k=1 batch=128 | fold - | vendor - | gram -
+n=128 k=1 batch=1024 | fold - | vendor - | gram -
+n=128 k=1 batch=8192 | fold - | vendor - | gram -
+n=128 k=1 batch=32768 | fold - | vendor - | gram -
+n=128 k=8 batch=1 | vendor - | fold - | gram -
+n=128 k=8 batch=2 | vendor - | fold - | gram -
+n=128 k=8 batch=3 | vendor - | fold - | gram -
+n=128 k=8 batch=4 | fold - | vendor - | gram -
+n=128 k=8 batch=5 | fold - | vendor - | gram -
+n=128 k=8 batch=8 | fold - | vendor - | gram -
+n=128 k=8 batch=128 | fold - | vendor - | gram -
+n=128 k=8 batch=1024 | fold - | vendor - | gram -
+n=128 k=8 batch=8192 | fold - | vendor - | gram -
+n=128 k=8 batch=32768 | fold - | vendor - | gram -
+n=128 k=64 batch=1 | vendor - | fold - | gram -
+n=128 k=64 batch=2 | vendor - | fold - | gram -
+n=128 k=64 batch=3 | vendor - | fold - | gram -
+n=128 k=64 batch=4 | fold - | vendor - | gram -
+n=128 k=64 batch=5 | fold - | vendor - | gram -
+n=128 k=64 batch=8 | fold - | vendor - | gram -
+n=128 k=64 batch=128 | fold - | vendor - | gram -
+n=128 k=64 batch=1024 | fold - | vendor - | gram -
+n=128 k=64 batch=8192 | fold - | vendor - | gram -
+n=128 k=64 batch=32768 | fold - | vendor - | gram -
+n=128 k=512 batch=1 | vendor - | fold - | gram -
+n=128 k=512 batch=2 | vendor - | fold - | gram -
+n=128 k=512 batch=3 | vendor - | fold - | gram -
+n=128 k=512 batch=4 | fold - | vendor - | gram -
+n=128 k=512 batch=5 | fold - | vendor - | gram -
+n=128 k=512 batch=8 | fold - | vendor - | gram -
+n=128 k=512 batch=128 | fold - | vendor - | gram -
+n=128 k=512 batch=1024 | fold - | vendor - | gram -
+n=128 k=512 batch=8192 | fold - | vendor - | gram -
+n=128 k=512 batch=32768 | fold - | vendor - | gram -
+n=128 k=4096 batch=1 | vendor - | fold - | gram -
+n=128 k=4096 batch=2 | vendor - | fold - | gram -
+n=128 k=4096 batch=3 | vendor - | fold - | gram -
+n=128 k=4096 batch=4 | fold - | vendor - | gram -
+n=128 k=4096 batch=5 | fold - | vendor - | gram -
+n=128 k=4096 batch=8 | fold - | vendor - | gram -
+n=128 k=4096 batch=128 | fold - | vendor - | gram -
+n=128 k=4096 batch=1024 | fold - | vendor - | gram -
+n=128 k=4096 batch=8192 | fold - | vendor - | gram -
+n=128 k=4096 batch=32768 | fold - | vendor - | gram -
+n=129 k=1 batch=1 | vendor - | fold -
+n=129 k=1 batch=2 | vendor - | fold -
+n=129 k=1 batch=3 | vendor - | fold -
+n=129 k=1 batch=4 | fold - | vendor -
+n=129 k=1 batch=5 | fold - | vendor -
+n=129 k=1 batch=8 | fold - | vendor -
+n=129 k=1 batch=128 | fold - | vendor -
+n=129 k=1 batch=1024 | fold - | vendor -
+n=129 k=1 batch=8192 | fold - | vendor -
+n=129 k=1 batch=32768 | fold - | vendor -
+n=129 k=8 batch=1 | vendor - | fold -
+n=129 k=8 batch=2 | vendor - | fold -
+n=129 k=8 batch=3 | vendor - | fold -
+n=129 k=8 batch=4 | fold - | vendor -
+n=129 k=8 batch=5 | fold - | vendor -
+n=129 k=8 batch=8 | fold - | vendor -
+n=129 k=8 batch=128 | fold - | vendor -
+n=129 k=8 batch=1024 | fold - | vendor -
+n=129 k=8 batch=8192 | fold - | vendor -
+n=129 k=8 batch=32768 | fold - | vendor -
+n=129 k=64 batch=1 | vendor - | fold -
+n=129 k=64 batch=2 | vendor - | fold -
+n=129 k=64 batch=3 | vendor - | fold -
+n=129 k=64 batch=4 | fold - | vendor -
+n=129 k=64 batch=5 | fold - | vendor -
+n=129 k=64 batch=8 | fold - | vendor -
+n=129 k=64 batch=128 | fold - | vendor -
+n=129 k=64 batch=1024 | fold - | vendor -
+n=129 k=64 batch=8192 | fold - | vendor -
+n=129 k=64 batch=32768 | fold - | vendor -
+n=129 k=512 batch=1 | vendor - | fold -
+n=129 k=512 batch=2 | vendor - | fold -
+n=129 k=512 batch=3 | vendor - | fold -
+n=129 k=512 batch=4 | fold - | vendor -
+n=129 k=512 batch=5 | fold - | vendor -
+n=129 k=512 batch=8 | fold - | vendor -
+n=129 k=512 batch=128 | fold - | vendor -
+n=129 k=512 batch=1024 | fold - | vendor -
+n=129 k=512 batch=8192 | fold - | vendor -
+n=129 k=512 batch=32768 | fold - | vendor -
+n=129 k=4096 batch=1 | vendor - | fold -
+n=129 k=4096 batch=2 | vendor - | fold -
+n=129 k=4096 batch=3 | vendor - | fold -
+n=129 k=4096 batch=4 | fold - | vendor -
+n=129 k=4096 batch=5 | fold - | vendor -
+n=129 k=4096 batch=8 | fold - | vendor -
+n=129 k=4096 batch=128 | fold - | vendor -
+n=129 k=4096 batch=1024 | fold - | vendor -
+n=129 k=4096 batch=8192 | fold - | vendor -
+n=129 k=4096 batch=32768 | fold - | vendor -
+n=256 k=1 batch=1 | vendor - | fold -
+n=256 k=1 batch=2 | vendor - | fold -
+n=256 k=1 batch=3 | vendor - | fold -
+n=256 k=1 batch=4 | fold - | vendor -
+n=256 k=1 batch=5 | fold - | vendor -
+n=256 k=1 batch=8 | fold - | vendor -
+n=256 k=1 batch=128 | fold - | vendor -
+n=256 k=1 batch=1024 | fold - | vendor -
+n=256 k=1 batch=8192 | fold - | vendor -
+n=256 k=1 batch=32768 | fold - | vendor -
+n=256 k=8 batch=1 | vendor - | fold -
+n=256 k=8 batch=2 | vendor - | fold -
+n=256 k=8 batch=3 | vendor - | fold -
+n=256 k=8 batch=4 | fold - | vendor -
+n=256 k=8 batch=5 | fold - | vendor -
+n=256 k=8 batch=8 | fold - | vendor -
+n=256 k=8 batch=128 | fold - | vendor -
+n=256 k=8 batch=1024 | fold - | vendor -
+n=256 k=8 batch=8192 | fold - | vendor -
+n=256 k=8 batch=32768 | fold - | vendor -
+n=256 k=64 batch=1 | vendor - | fold -
+n=256 k=64 batch=2 | vendor - | fold -
+n=256 k=64 batch=3 | vendor - | fold -
+n=256 k=64 batch=4 | fold - | vendor -
+n=256 k=64 batch=5 | fold - | vendor -
+n=256 k=64 batch=8 | fold - | vendor -
+n=256 k=64 batch=128 | fold - | vendor -
+n=256 k=64 batch=1024 | fold - | vendor -
+n=256 k=64 batch=8192 | fold - | vendor -
+n=256 k=64 batch=32768 | fold - | vendor -
+n=256 k=512 batch=1 | vendor - | fold -
+n=256 k=512 batch=2 | vendor - | fold -
+n=256 k=512 batch=3 | vendor - | fold -
+n=256 k=512 batch=4 | fold - | vendor -
+n=256 k=512 batch=5 | fold - | vendor -
+n=256 k=512 batch=8 | fold - | vendor -
+n=256 k=512 batch=128 | fold - | vendor -
+n=256 k=512 batch=1024 | fold - | vendor -
+n=256 k=512 batch=8192 | fold - | vendor -
+n=256 k=512 batch=32768 | fold - | vendor -
+n=256 k=4096 batch=1 | vendor - | fold -
+n=256 k=4096 batch=2 | vendor - | fold -
+n=256 k=4096 batch=3 | vendor - | fold -
+n=256 k=4096 batch=4 | fold - | vendor -
+n=256 k=4096 batch=5 | fold - | vendor -
+n=256 k=4096 batch=8 | fold - | vendor -
+n=256 k=4096 batch=128 | fold - | vendor -
+n=256 k=4096 batch=1024 | fold - | vendor -
+n=256 k=4096 batch=8192 | fold - | vendor -
+n=256 k=4096 batch=32768 | fold - | vendor -
+n=512 k=1 batch=1 | vendor - | fold -
+n=512 k=1 batch=2 | vendor - | fold -
+n=512 k=1 batch=3 | vendor - | fold -
+n=512 k=1 batch=4 | fold - | vendor -
+n=512 k=1 batch=5 | fold - | vendor -
+n=512 k=1 batch=8 | fold - | vendor -
+n=512 k=1 batch=128 | fold - | vendor -
+n=512 k=1 batch=1024 | fold - | vendor -
+n=512 k=1 batch=8192 | fold - | vendor -
+n=512 k=1 batch=32768 | fold - | vendor -
+n=512 k=8 batch=1 | vendor - | fold -
+n=512 k=8 batch=2 | vendor - | fold -
+n=512 k=8 batch=3 | vendor - | fold -
+n=512 k=8 batch=4 | fold - | vendor -
+n=512 k=8 batch=5 | fold - | vendor -
+n=512 k=8 batch=8 | fold - | vendor -
+n=512 k=8 batch=128 | fold - | vendor -
+n=512 k=8 batch=1024 | fold - | vendor -
+n=512 k=8 batch=8192 | fold - | vendor -
+n=512 k=8 batch=32768 | fold - | vendor -
+n=512 k=64 batch=1 | vendor - | fold -
+n=512 k=64 batch=2 | vendor - | fold -
+n=512 k=64 batch=3 | vendor - | fold -
+n=512 k=64 batch=4 | fold - | vendor -
+n=512 k=64 batch=5 | fold - | vendor -
+n=512 k=64 batch=8 | fold - | vendor -
+n=512 k=64 batch=128 | fold - | vendor -
+n=512 k=64 batch=1024 | fold - | vendor -
+n=512 k=64 batch=8192 | fold - | vendor -
+n=512 k=64 batch=32768 | fold - | vendor -
+n=512 k=512 batch=1 | vendor - | fold -
+n=512 k=512 batch=2 | vendor - | fold -
+n=512 k=512 batch=3 | vendor - | fold -
+n=512 k=512 batch=4 | fold - | vendor -
+n=512 k=512 batch=5 | fold - | vendor -
+n=512 k=512 batch=8 | fold - | vendor -
+n=512 k=512 batch=128 | fold - | vendor -
+n=512 k=512 batch=1024 | fold - | vendor -
+n=512 k=512 batch=8192 | fold - | vendor -
+n=512 k=512 batch=32768 | fold - | vendor -
+n=512 k=4096 batch=1 | vendor - | fold -
+n=512 k=4096 batch=2 | vendor - | fold -
+n=512 k=4096 batch=3 | vendor - | fold -
+n=512 k=4096 batch=4 | fold - | vendor -
+n=512 k=4096 batch=5 | fold - | vendor -
+n=512 k=4096 batch=8 | fold - | vendor -
+n=512 k=4096 batch=128 | fold - | vendor -
+n=512 k=4096 batch=1024 | fold - | vendor -
+n=512 k=4096 batch=8192 | fold - | vendor -
+n=512 k=4096 batch=32768 | fold - | vendor -
+n=767 k=1 batch=1 | vendor - | fold -
+n=767 k=1 batch=2 | vendor - | fold -
+n=767 k=1 batch=3 | vendor - | fold -
+n=767 k=1 batch=4 | fold - | vendor -
+n=767 k=1 batch=5 | fold - | vendor -
+n=767 k=1 batch=8 | fold - | vendor -
+n=767 k=1 batch=128 | fold - | vendor -
+n=767 k=1 batch=1024 | fold - | vendor -
+n=767 k=1 batch=8192 | fold - | vendor -
+n=767 k=1 batch=32768 | fold - | vendor -
+n=767 k=8 batch=1 | vendor - | fold -
+n=767 k=8 batch=2 | vendor - | fold -
+n=767 k=8 batch=3 | vendor - | fold -
+n=767 k=8 batch=4 | fold - | vendor -
+n=767 k=8 batch=5 | fold - | vendor -
+n=767 k=8 batch=8 | fold - | vendor -
+n=767 k=8 batch=128 | fold - | vendor -
+n=767 k=8 batch=1024 | fold - | vendor -
+n=767 k=8 batch=8192 | fold - | vendor -
+n=767 k=8 batch=32768 | fold - | vendor -
+n=767 k=64 batch=1 | vendor - | fold -
+n=767 k=64 batch=2 | vendor - | fold -
+n=767 k=64 batch=3 | vendor - | fold -
+n=767 k=64 batch=4 | fold - | vendor -
+n=767 k=64 batch=5 | fold - | vendor -
+n=767 k=64 batch=8 | fold - | vendor -
+n=767 k=64 batch=128 | fold - | vendor -
+n=767 k=64 batch=1024 | fold - | vendor -
+n=767 k=64 batch=8192 | fold - | vendor -
+n=767 k=64 batch=32768 | fold - | vendor -
+n=767 k=512 batch=1 | vendor - | fold -
+n=767 k=512 batch=2 | vendor - | fold -
+n=767 k=512 batch=3 | vendor - | fold -
+n=767 k=512 batch=4 | fold - | vendor -
+n=767 k=512 batch=5 | fold - | vendor -
+n=767 k=512 batch=8 | fold - | vendor -
+n=767 k=512 batch=128 | fold - | vendor -
+n=767 k=512 batch=1024 | fold - | vendor -
+n=767 k=512 batch=8192 | fold - | vendor -
+n=767 k=512 batch=32768 | fold - | vendor -
+n=767 k=4096 batch=1 | vendor - | fold -
+n=767 k=4096 batch=2 | vendor - | fold -
+n=767 k=4096 batch=3 | vendor - | fold -
+n=767 k=4096 batch=4 | fold - | vendor -
+n=767 k=4096 batch=5 | fold - | vendor -
+n=767 k=4096 batch=8 | fold - | vendor -
+n=767 k=4096 batch=128 | fold - | vendor -
+n=767 k=4096 batch=1024 | fold - | vendor -
+n=767 k=4096 batch=8192 | fold - | vendor -
+n=767 k=4096 batch=32768 | fold - | vendor -
+n=768 k=1 batch=1 | vendor - | fold -
+n=768 k=1 batch=2 | vendor - | fold -
+n=768 k=1 batch=3 | vendor - | fold -
+n=768 k=1 batch=4 | fold - | vendor -
+n=768 k=1 batch=5 | fold - | vendor -
+n=768 k=1 batch=8 | fold - | vendor -
+n=768 k=1 batch=128 | fold - | vendor -
+n=768 k=1 batch=1024 | fold - | vendor -
+n=768 k=1 batch=8192 | fold - | vendor -
+n=768 k=1 batch=32768 | fold - | vendor -
+n=768 k=8 batch=1 | vendor - | fold -
+n=768 k=8 batch=2 | vendor - | fold -
+n=768 k=8 batch=3 | vendor - | fold -
+n=768 k=8 batch=4 | fold - | vendor -
+n=768 k=8 batch=5 | fold - | vendor -
+n=768 k=8 batch=8 | fold - | vendor -
+n=768 k=8 batch=128 | fold - | vendor -
+n=768 k=8 batch=1024 | fold - | vendor -
+n=768 k=8 batch=8192 | fold - | vendor -
+n=768 k=8 batch=32768 | fold - | vendor -
+n=768 k=64 batch=1 | vendor - | fold -
+n=768 k=64 batch=2 | vendor - | fold -
+n=768 k=64 batch=3 | vendor - | fold -
+n=768 k=64 batch=4 | fold - | vendor -
+n=768 k=64 batch=5 | fold - | vendor -
+n=768 k=64 batch=8 | fold - | vendor -
+n=768 k=64 batch=128 | fold - | vendor -
+n=768 k=64 batch=1024 | fold - | vendor -
+n=768 k=64 batch=8192 | fold - | vendor -
+n=768 k=64 batch=32768 | fold - | vendor -
+n=768 k=512 batch=1 | vendor - | fold -
+n=768 k=512 batch=2 | vendor - | fold -
+n=768 k=512 batch=3 | vendor - | fold -
+n=768 k=512 batch=4 | fold - | vendor -
+n=768 k=512 batch=5 | fold - | vendor -
+n=768 k=512 batch=8 | fold - | vendor -
+n=768 k=512 batch=128 | fold - | vendor -
+n=768 k=512 batch=1024 | fold - | vendor -
+n=768 k=512 batch=8192 | fold - | vendor -
+n=768 k=512 batch=32768 | fold - | vendor -
+n=768 k=4096 batch=1 | vendor - | fold -
+n=768 k=4096 batch=2 | vendor - | fold -
+n=768 k=4096 batch=3 | vendor - | fold -
+n=768 k=4096 batch=4 | fold - | vendor -
+n=768 k=4096 batch=5 | fold - | vendor -
+n=768 k=4096 batch=8 | fold - | vendor -
+n=768 k=4096 batch=128 | fold - | vendor -
+n=768 k=4096 batch=1024 | fold - | vendor -
+n=768 k=4096 batch=8192 | fold - | vendor -
+n=768 k=4096 batch=32768 | fold - | vendor -
+n=769 k=1 batch=1 | vendor - | fold -
+n=769 k=1 batch=2 | vendor - | fold -
+n=769 k=1 batch=3 | vendor - | fold -
+n=769 k=1 batch=4 | vendor - | fold -
+n=769 k=1 batch=5 | vendor - | fold -
+n=769 k=1 batch=8 | vendor - | fold -
+n=769 k=1 batch=128 | vendor - | fold -
+n=769 k=1 batch=1024 | vendor - | fold -
+n=769 k=1 batch=8192 | vendor - | fold -
+n=769 k=1 batch=32768 | vendor - | fold -
+n=769 k=8 batch=1 | vendor - | fold -
+n=769 k=8 batch=2 | vendor - | fold -
+n=769 k=8 batch=3 | vendor - | fold -
+n=769 k=8 batch=4 | vendor - | fold -
+n=769 k=8 batch=5 | vendor - | fold -
+n=769 k=8 batch=8 | vendor - | fold -
+n=769 k=8 batch=128 | vendor - | fold -
+n=769 k=8 batch=1024 | vendor - | fold -
+n=769 k=8 batch=8192 | vendor - | fold -
+n=769 k=8 batch=32768 | vendor - | fold -
+n=769 k=64 batch=1 | vendor - | fold -
+n=769 k=64 batch=2 | vendor - | fold -
+n=769 k=64 batch=3 | vendor - | fold -
+n=769 k=64 batch=4 | vendor - | fold -
+n=769 k=64 batch=5 | vendor - | fold -
+n=769 k=64 batch=8 | vendor - | fold -
+n=769 k=64 batch=128 | vendor - | fold -
+n=769 k=64 batch=1024 | vendor - | fold -
+n=769 k=64 batch=8192 | vendor - | fold -
+n=769 k=64 batch=32768 | vendor - | fold -
+n=769 k=512 batch=1 | vendor - | fold -
+n=769 k=512 batch=2 | vendor - | fold -
+n=769 k=512 batch=3 | vendor - | fold -
+n=769 k=512 batch=4 | vendor - | fold -
+n=769 k=512 batch=5 | vendor - | fold -
+n=769 k=512 batch=8 | vendor - | fold -
+n=769 k=512 batch=128 | vendor - | fold -
+n=769 k=512 batch=1024 | vendor - | fold -
+n=769 k=512 batch=8192 | vendor - | fold -
+n=769 k=512 batch=32768 | vendor - | fold -
+n=769 k=4096 batch=1 | vendor - | fold -
+n=769 k=4096 batch=2 | vendor - | fold -
+n=769 k=4096 batch=3 | vendor - | fold -
+n=769 k=4096 batch=4 | vendor - | fold -
+n=769 k=4096 batch=5 | vendor - | fold -
+n=769 k=4096 batch=8 | vendor - | fold -
+n=769 k=4096 batch=128 | vendor - | fold -
+n=769 k=4096 batch=1024 | vendor - | fold -
+n=769 k=4096 batch=8192 | vendor - | fold -
+n=769 k=4096 batch=32768 | vendor - | fold -
+n=1024 k=1 batch=1 | vendor - | fold -
+n=1024 k=1 batch=2 | vendor - | fold -
+n=1024 k=1 batch=3 | vendor - | fold -
+n=1024 k=1 batch=4 | vendor - | fold -
+n=1024 k=1 batch=5 | vendor - | fold -
+n=1024 k=1 batch=8 | vendor - | fold -
+n=1024 k=1 batch=128 | vendor - | fold -
+n=1024 k=1 batch=1024 | vendor - | fold -
+n=1024 k=1 batch=8192 | vendor - | fold -
+n=1024 k=1 batch=32768 | vendor - | fold -
+n=1024 k=8 batch=1 | vendor - | fold -
+n=1024 k=8 batch=2 | vendor - | fold -
+n=1024 k=8 batch=3 | vendor - | fold -
+n=1024 k=8 batch=4 | vendor - | fold -
+n=1024 k=8 batch=5 | vendor - | fold -
+n=1024 k=8 batch=8 | vendor - | fold -
+n=1024 k=8 batch=128 | vendor - | fold -
+n=1024 k=8 batch=1024 | vendor - | fold -
+n=1024 k=8 batch=8192 | vendor - | fold -
+n=1024 k=8 batch=32768 | vendor - | fold -
+n=1024 k=64 batch=1 | vendor - | fold -
+n=1024 k=64 batch=2 | vendor - | fold -
+n=1024 k=64 batch=3 | vendor - | fold -
+n=1024 k=64 batch=4 | vendor - | fold -
+n=1024 k=64 batch=5 | vendor - | fold -
+n=1024 k=64 batch=8 | vendor - | fold -
+n=1024 k=64 batch=128 | vendor - | fold -
+n=1024 k=64 batch=1024 | vendor - | fold -
+n=1024 k=64 batch=8192 | vendor - | fold -
+n=1024 k=64 batch=32768 | vendor - | fold -
+n=1024 k=512 batch=1 | vendor - | fold -
+n=1024 k=512 batch=2 | vendor - | fold -
+n=1024 k=512 batch=3 | vendor - | fold -
+n=1024 k=512 batch=4 | vendor - | fold -
+n=1024 k=512 batch=5 | vendor - | fold -
+n=1024 k=512 batch=8 | vendor - | fold -
+n=1024 k=512 batch=128 | vendor - | fold -
+n=1024 k=512 batch=1024 | vendor - | fold -
+n=1024 k=512 batch=8192 | vendor - | fold -
+n=1024 k=512 batch=32768 | vendor - | fold -
+n=1024 k=4096 batch=1 | vendor - | fold -
+n=1024 k=4096 batch=2 | vendor - | fold -
+n=1024 k=4096 batch=3 | vendor - | fold -
+n=1024 k=4096 batch=4 | vendor - | fold -
+n=1024 k=4096 batch=5 | vendor - | fold -
+n=1024 k=4096 batch=8 | vendor - | fold -
+n=1024 k=4096 batch=128 | vendor - | fold -
+n=1024 k=4096 batch=1024 | vendor - | fold -
+n=1024 k=4096 batch=8192 | vendor - | fold -
+n=1024 k=4096 batch=32768 | vendor - | fold -
+n=2048 k=1 batch=1 | vendor - | fold -
+n=2048 k=1 batch=2 | vendor - | fold -
+n=2048 k=1 batch=3 | vendor - | fold -
+n=2048 k=1 batch=4 | vendor - | fold -
+n=2048 k=1 batch=5 | vendor - | fold -
+n=2048 k=1 batch=8 | vendor - | fold -
+n=2048 k=1 batch=128 | vendor - | fold -
+n=2048 k=1 batch=1024 | vendor - | fold -
+n=2048 k=1 batch=8192 | vendor - | fold -
+n=2048 k=1 batch=32768 | vendor - | fold -
+n=2048 k=8 batch=1 | vendor - | fold -
+n=2048 k=8 batch=2 | vendor - | fold -
+n=2048 k=8 batch=3 | vendor - | fold -
+n=2048 k=8 batch=4 | vendor - | fold -
+n=2048 k=8 batch=5 | vendor - | fold -
+n=2048 k=8 batch=8 | vendor - | fold -
+n=2048 k=8 batch=128 | vendor - | fold -
+n=2048 k=8 batch=1024 | vendor - | fold -
+n=2048 k=8 batch=8192 | vendor - | fold -
+n=2048 k=8 batch=32768 | vendor - | fold -
+n=2048 k=64 batch=1 | vendor - | fold -
+n=2048 k=64 batch=2 | vendor - | fold -
+n=2048 k=64 batch=3 | vendor - | fold -
+n=2048 k=64 batch=4 | vendor - | fold -
+n=2048 k=64 batch=5 | vendor - | fold -
+n=2048 k=64 batch=8 | vendor - | fold -
+n=2048 k=64 batch=128 | vendor - | fold -
+n=2048 k=64 batch=1024 | vendor - | fold -
+n=2048 k=64 batch=8192 | vendor - | fold -
+n=2048 k=64 batch=32768 | vendor - | fold -
+n=2048 k=512 batch=1 | vendor - | fold -
+n=2048 k=512 batch=2 | vendor - | fold -
+n=2048 k=512 batch=3 | vendor - | fold -
+n=2048 k=512 batch=4 | vendor - | fold -
+n=2048 k=512 batch=5 | vendor - | fold -
+n=2048 k=512 batch=8 | vendor - | fold -
+n=2048 k=512 batch=128 | vendor - | fold -
+n=2048 k=512 batch=1024 | vendor - | fold -
+n=2048 k=512 batch=8192 | vendor - | fold -
+n=2048 k=512 batch=32768 | vendor - | fold -
+n=2048 k=4096 batch=1 | vendor - | fold -
+n=2048 k=4096 batch=2 | vendor - | fold -
+n=2048 k=4096 batch=3 | vendor - | fold -
+n=2048 k=4096 batch=4 | vendor - | fold -
+n=2048 k=4096 batch=5 | vendor - | fold -
+n=2048 k=4096 batch=8 | vendor - | fold -
+n=2048 k=4096 batch=128 | vendor - | fold -
+n=2048 k=4096 batch=1024 | vendor - | fold -
+n=2048 k=4096 batch=8192 | vendor - | fold -
+n=2048 k=4096 batch=32768 | vendor - | fold -
+n=4096 k=1 batch=1 | vendor - | fold -
+n=4096 k=1 batch=2 | vendor - | fold -
+n=4096 k=1 batch=3 | vendor - | fold -
+n=4096 k=1 batch=4 | vendor - | fold -
+n=4096 k=1 batch=5 | vendor - | fold -
+n=4096 k=1 batch=8 | vendor - | fold -
+n=4096 k=1 batch=128 | vendor - | fold -
+n=4096 k=1 batch=1024 | vendor - | fold -
+n=4096 k=1 batch=8192 | vendor - | fold -
+n=4096 k=1 batch=32768 | vendor - | fold -
+n=4096 k=8 batch=1 | vendor - | fold -
+n=4096 k=8 batch=2 | vendor - | fold -
+n=4096 k=8 batch=3 | vendor - | fold -
+n=4096 k=8 batch=4 | vendor - | fold -
+n=4096 k=8 batch=5 | vendor - | fold -
+n=4096 k=8 batch=8 | vendor - | fold -
+n=4096 k=8 batch=128 | vendor - | fold -
+n=4096 k=8 batch=1024 | vendor - | fold -
+n=4096 k=8 batch=8192 | vendor - | fold -
+n=4096 k=8 batch=32768 | vendor - | fold -
+n=4096 k=64 batch=1 | vendor - | fold -
+n=4096 k=64 batch=2 | vendor - | fold -
+n=4096 k=64 batch=3 | vendor - | fold -
+n=4096 k=64 batch=4 | vendor - | fold -
+n=4096 k=64 batch=5 | vendor - | fold -
+n=4096 k=64 batch=8 | vendor - | fold -
+n=4096 k=64 batch=128 | vendor - | fold -
+n=4096 k=64 batch=1024 | vendor - | fold -
+n=4096 k=64 batch=8192 | vendor - | fold -
+n=4096 k=64 batch=32768 | vendor - | fold -
+n=4096 k=512 batch=1 | vendor - | fold -
+n=4096 k=512 batch=2 | vendor - | fold -
+n=4096 k=512 batch=3 | vendor - | fold -
+n=4096 k=512 batch=4 | vendor - | fold -
+n=4096 k=512 batch=5 | vendor - | fold -
+n=4096 k=512 batch=8 | vendor - | fold -
+n=4096 k=512 batch=128 | vendor - | fold -
+n=4096 k=512 batch=1024 | vendor - | fold -
+n=4096 k=512 batch=8192 | vendor - | fold -
+n=4096 k=512 batch=32768 | vendor - | fold -
+n=4096 k=4096 batch=1 | vendor - | fold -
+n=4096 k=4096 batch=2 | vendor - | fold -
+n=4096 k=4096 batch=3 | vendor - | fold -
+n=4096 k=4096 batch=4 | vendor - | fold -
+n=4096 k=4096 batch=5 | vendor - | fold -
+n=4096 k=4096 batch=8 | vendor - | fold -
+n=4096 k=4096 batch=128 | vendor - | fold -
+n=4096 k=4096 batch=1024 | vendor - | fold -
+n=4096 k=4096 batch=8192 | vendor - | fold -
+n=4096 k=4096 batch=32768 | vendor - | fold -

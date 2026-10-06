@@ -119,14 +119,13 @@ means the rows reproduce the deleted `preferred()` window (`tuned/README.md`).
 
 Two families sit outside this table and must not be read from it:
 
-* **`symm`, `syrk`, `syr2k`, `trmm` have no table.** Their thresholds are hand-rolled
-  `if`-chains, guarded `Back == Backend::CUDA && std::is_same_v<T, float>`
-  (`src/ops/level3/level3.cc:47`, `:126`, `:157`, `:189`), and they run **before** the vendor-available test — so anything below that
-  gate is unreachable vendor-free. `symm` has no tile kernel at all; its portable arm is a
-  mirrored expansion feeding the public `gemm`.
-* **`hemm`, `herk`, `her2k` have no native arm in the facade whatsoever** — vendor or throw
-  (`src/ops/level3/level3.cc:68-115`). Their expansion routes are reachable only from inside
-  `cublas.cc`.
+* ~~**`symm`, `syrk`, `syr2k`, `trmm` have no table.**~~ Fixed by the level-3 flat-selection wave
+  (flat-kernel-selection.md §12 "Level-3 four"): the float-and-CUDA `if`-chains are transcribed
+  tables, and vendor-free rows list every runnable native. `symm` still has no tile kernel; its
+  portable arm is the mirrored expansion feeding the public `gemm`.
+* ~~**`hemm`, `herk`, `her2k` have no native arm in the facade whatsoever**~~ — fixed by the
+  Hermitian-three wave (flat-kernel-selection.md §12): hemm `expand`, herk `fold`/`gram` and her2k
+  `fold` run vendor-free on CUDA.
 
 ### Vendor-first by measurement, not by absence
 
@@ -189,12 +188,14 @@ And these are vendor-first because **no decision was taken**, which is a differe
    `src/extra/norm.cc:46`, `src/extensions/syevx_lobpcg.cc:540` and `:1101`. The recorded
    measurement attributes 6 of `cond_tests`' 30 vendor-free failures to the `cond.cc` one. The
    fix is to call the public `syev` and let its selection decide (known-defects #2).
-3. **`hemm` 12, `herk` 16, `her2k` 12 — no native arm exists.** The facade is vendor-or-throw for
-   all three.
-4. **Level-3 non-float: `trmm` 16, `syrk` 12, `syr2k` 10, `symm` 8.** `syrk`'s gram branch and
-   `trmm`'s tile branch for `double`/complex are reachable only from `cublas.cc`, and **`syr2k`
-   has no non-float tile route at all** — `syr2k_triangular_tiles` has exactly one call site in
-   the tree, inside the float-only dispatcher. `double` `symm` has no expansion route at all.
+3. ~~**`hemm` 12, `herk` 16, `her2k` 12 — no native arm exists.**~~ Closed by the Hermitian-three
+   wave: on CUDA hemm `expand` and herk/her2k `fold` run vendor-free; their remaining vendor-free
+   failures are the NETLIB instantiations (item 1).
+4. **Level-3 non-float: `trmm` 16, `syrk` 12, `syr2k` 10, `symm` 8.** Mostly closed by the
+   level-3 four's migration (flat-kernel-selection.md §12 "Level-3 four"): double syrk `gram`
+   (n <= 128), double symm `expand` and every trmm family in all four types now run vendor-free.
+   Still open: **`syr2k` has no non-float native family** (`triangular` is float only), and
+   double syrk above n = 128 has none either.
 5. **`geqrf` 44, `ormqr` 24, `getri` 16** — host rows as above, plus the shapes each op's
    native `can_run` refuses.
 6. **`potrf` refuses `Uplo::Upper`** in the blocked driver (`can_run` in `src/ops/potrf/potrf.cc`), and that is
@@ -263,14 +264,13 @@ effort.
 Preserved rather than fixed in passing, because each is a route change that needs its own
 measurement:
 
-* **`BATCHLAS_SYRK_ROUTE=native` returns a wrong answer.** `{Native, Auto}` passes
-  `syrk_use_cuda_custom`, fails every arm inside `syrk_cuda_custom`, and lands on the
-  `DiagFullGemm` fallback — **which writes both triangles**, clobbering the one the caller did
-  not name. **No test in the tree sets `BATCHLAS_SYRK_ROUTE`.**
-* **`BATCHLAS_SYR2K_ROUTE=native` throws a cuBLASDx message it did not ask for**; the throw is
-  not guarded by `forced`.
-* **`symm` has no `expansion_fits()` ceiling** where `hemm`/`herk`/`her2k` all have one, so a
-  large enough `symm` hits the 2³¹-element SYCL range failure instead of falling back.
+* ~~**`BATCHLAS_SYRK_ROUTE=native` returns a wrong answer.**~~ Closed (known-defects #8): the
+  `DiagFullGemm` route and `syrk_custom_dispatch.cc` are deleted; `native` is the first native
+  family of syrk's table row.
+* ~~**`BATCHLAS_SYR2K_ROUTE=native` throws a cuBLASDx message it did not ask for**~~ Closed
+  (known-defects #9): cuBLASDx is deleted.
+* ~~**`symm` has no `expansion_fits()` ceiling**~~ Closed by the level-3 four: symm `expand`
+  carries `expansion_fits` in `can_run`, as hemm `expand` and herk/her2k `fold` do.
 * ~~**`trsm`'s heterogeneous-batch correctness gate can never fire.**~~ Withdrawn: the field was
   written (known-defects #7), and since P3.3 `route_trsm.hh` and `trsm_op_shape` are deleted;
   the native families' `can_run` in `src/ops/trsm/trsm.cc` refuses a heterogeneous A or B, while

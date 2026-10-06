@@ -225,13 +225,21 @@ TEST(SettingsRouting, OnlyTheRouteVariableIsRead) {
     EXPECT_FALSE(gemm_pin(&source).has_value());
     EXPECT_FALSE(select::detail::pin_text("syev", &source).has_value());
 
-    EXPECT_EQ(RoutingSettings::ops.size(), 19u);
+    EXPECT_EQ(RoutingSettings::ops.size(), 22u);
     for (const std::string_view op : RoutingSettings::ops) EXPECT_NO_THROW((void)settings().routing.route(op));
-    for (const char* op : {"hemm", "herk", "her2k", "iluk", "nosuchop"})
+    for (const char* op : {"hemm", "herk", "her2k"})
+        EXPECT_NE(RoutingSettings::index_of(op), RoutingSettings::ops.size()) << op;
+    for (const char* op : {"iluk", "nosuchop", "expand"})
         EXPECT_THROW((void)settings().routing.route(op), std::invalid_argument) << op;
     EXPECT_FALSE(select::detail::pin_text("iluk", &source).has_value());
 
     // Every op's variable is synthesised from its name.
     ScopedEnvVar syr2k("BATCHLAS_SYR2K_ROUTE", "triangular");
     EXPECT_EQ(settings().routing.route("syr2k").value(), "triangular");
+    ScopedEnvVar herk("BATCHLAS_HERK_ROUTE", "gram");
+    EXPECT_EQ(settings().routing.route("herk").value(), "gram");
+    // BATCHLAS_EXPAND_ROUTE is retired: hemm/herk/her2k read only their own route variable.
+    ScopedEnvVar expand("BATCHLAS_EXPAND_ROUTE", "loop");
+    EXPECT_FALSE(select::detail::pin_text("hemm", &source).has_value());
+    EXPECT_FALSE(select::detail::pin_text("her2k", &source).has_value());
 }

@@ -99,7 +99,9 @@ end to end — the low end of the plan's 1.05–1.12× estimate, not the middle.
 
 ### The fallback, quantified
 
-Forcing the host-loop route (`BATCHLAS_EXPAND_ROUTE=loop`) at n₂=480, k=32, batch 512:
+Forcing the host-loop route (`BATCHLAS_EXPAND_ROUTE=loop`) at n₂=480, k=32, batch 512
+(that variable is retired; `BATCHLAS_HER2K_ROUTE=vendor` pins the loop for her2k, and `sytrd_blocked`
+then keeps its GEMM pair, docs/perf/dispatch.md#her2k-in-sytrd):
 
 | route | time | vs GEMM pair |
 |---|---|---|

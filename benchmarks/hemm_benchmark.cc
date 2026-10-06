@@ -7,7 +7,7 @@ using namespace batchlas;
 
 // There is no batched vendor HEMM to compare against -- cuBLAS ships only the
 // single-matrix cublasChemm/cublasZhemm. The per-batch loop over those is the
-// route this same binary takes with BATCHLAS_EXPAND_MAX_BYTES=0, so running it
+// route this same binary takes with BATCHLAS_HEMM_ROUTE=vendor, so running it
 // twice measures both implementations without a second benchmark, and
 // gemm_benchmark at the same complex type and shape gives the equal-work floor.
 template <typename T, Backend B>

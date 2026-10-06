@@ -97,9 +97,9 @@ private:
 // RAW STRINGS on purpose: src/select parses them for every op (auto | native | vendor |
 // a choice spelling such as lpanel:panel=8). A value an op does not understand throws there.
 struct RoutingSettings {
-    static constexpr std::array<std::string_view, 19> ops{
-        "gemm", "gemv", "trsm", "trmm", "symm", "syrk", "syr2k", "potrf", "posv", "getrf",
-        "getrs", "getri", "gesv", "geqrf", "orgqr", "ormqr", "syev", "gesvd", "spmm"};
+    static constexpr std::array<std::string_view, 22> ops{
+        "gemm", "gemv", "trsm", "trmm", "symm", "syrk", "syr2k", "hemm", "herk", "her2k", "potrf",
+        "posv", "getrf", "getrs", "getri", "gesv", "geqrf", "orgqr", "ormqr", "syev", "gesvd", "spmm"};
 
     // BATCHLAS_<OP>_ROUTE, in `ops` order.
     std::array<EnvValue, ops.size()> values{};
@@ -135,14 +135,6 @@ private:
 // syevx_preconditioner override SyevxParams; gesvd_bidiag changes NUMERICS, not
 // just speed -- its "normal" arm squares the condition number).
 struct SelectionSettings {
-    // BATCHLAS_EXPAND_ROUTE = expand | loop. Pins hemm/herk/her2k's scratch-expansion
-    // route so a test can reach the arm the shape would not have picked (symm and trmm
-    // pin `expand` through BATCHLAS_<OP>_ROUTE instead). Read at two sites
-    // (src/expansion_budget.hh and src/backends/triangular_expand.hh) with two
-    // independent parsers that currently agree; both read this one field. Not
-    // op-keyed, so RoutingSettings does not hold it.
-    EnvValue expand_route{};
-
     // BATCHLAS_GEMV_SEGT = off | auto | 2 | 4 | 8. Segmented-tail width for the
     // native gemv. Its call site carries an explicit prohibition on latching the
     // getenv in a function-local static, because a cached read makes a later

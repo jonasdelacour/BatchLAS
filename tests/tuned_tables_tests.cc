@@ -23,6 +23,9 @@
 #include "../src/ops/syrk/choice.hh"
 #include "../src/ops/syr2k/choice.hh"
 #include "../src/ops/trmm/choice.hh"
+#include "../src/ops/hemm/choice.hh"
+#include "../src/ops/herk/choice.hh"
+#include "../src/ops/her2k/choice.hh"
 #include "../src/select/select.hh"
 
 #include <algorithm>
@@ -179,6 +182,21 @@ std::vector<std::string> candidates(const std::string& op, const std::string& dt
         if (dtype == "double") return spellings(trmm::candidates<double>());
         if (dtype == "cfloat") return spellings(trmm::candidates<std::complex<float>>());
         if (dtype == "cdouble") return spellings(trmm::candidates<std::complex<double>>());
+    }
+    namespace hemm = batchlas::ops::hemm;  // hemm, herk, her2k: complex only
+    if (op == "hemm") {
+        if (dtype == "cfloat") return spellings(hemm::candidates<std::complex<float>>());
+        if (dtype == "cdouble") return spellings(hemm::candidates<std::complex<double>>());
+    }
+    namespace herk = batchlas::ops::herk;
+    if (op == "herk") {
+        if (dtype == "cfloat") return spellings(herk::candidates<std::complex<float>>());
+        if (dtype == "cdouble") return spellings(herk::candidates<std::complex<double>>());
+    }
+    namespace her2k = batchlas::ops::her2k;
+    if (op == "her2k") {
+        if (dtype == "cfloat") return spellings(her2k::candidates<std::complex<float>>());
+        if (dtype == "cdouble") return spellings(her2k::candidates<std::complex<double>>());
     }
     return {};
 }
@@ -400,14 +418,17 @@ TEST(TunedTables, TrsmTranscribedTablesHoldExactlyTheChoiceGrid) {
 TEST(TunedTables, EveryOpShipsATableForEveryDtypeOnEveryShippedDevice) {
     std::set<std::string> names;
     for (const auto& e : sel::embedded_tables()) names.insert(std::string(e.name));
-    // symm, syrk and syr2k are RealScalar-constrained: no complex instantiation, so no complex table.
+    // symm, syrk and syr2k are RealScalar-constrained: no complex instantiation, so no complex table;
+    // hemm, herk and her2k are ComplexScalar-constrained, so no real one.
     const std::set<std::string> real_only{"symm", "syrk", "syr2k"};
+    const std::set<std::string> complex_only{"hemm", "herk", "her2k"};
     for (const char* op : {"potrf", "posv", "trsm", "gemm", "gemv", "geqrf", "orgqr", "ormqr", "getrf", "getrs",
-                           "getri", "gesv", "gesvd", "spmm", "syev", "symm", "syrk", "syr2k", "trmm"})
+                           "getri", "gesv", "gesvd", "spmm", "syev", "symm", "syrk", "syr2k", "trmm", "hemm",
+                           "herk", "her2k"})
         for (const char* dev : {"sm_89", "sm_120", "cpu"})
             for (const char* dt : {"float", "double", "cfloat", "cdouble"}) {
                 if (std::string(dev) == "cpu" && std::string(op) != "spmm") continue;
-                if (dt[0] == 'c' && real_only.count(op)) {
+                if ((dt[0] == 'c' && real_only.count(op)) || (dt[0] != 'c' && complex_only.count(op))) {
                     EXPECT_FALSE(names.count(std::string(op) + "." + dt + "." + dev + ".txt")) << op << " " << dt;
                     continue;
                 }
