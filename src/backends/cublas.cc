@@ -619,21 +619,7 @@ namespace batchlas {
                        T beta,
                        Uplo uplo,
                        Transpose transA) {
-        if constexpr (Back == Backend::CUDA) {
-            if (syr2k_cuda_custom_forced()) {
-                if constexpr (std::is_same_v<T, float>) {
-                    return syr2k_cuda_custom(ctx, A, B, C, alpha, beta, uplo, transA);
-                } else {
-                    throw batchlas::unsupported("BATCHLAS_SYR2K_ROUTE=cublasdx only supports float");
-                }
-            }
-                // WP1 S6: the float custom-route gate moved to the facade
-                // (src/ops/level3/level3.cc). It has to run BEFORE
-                // the vendor-available test, and this TU is compiled only when
-                // cuBLAS exists -- so leaving it here made the tile kernels
-                // linkable everywhere but callable nowhere.
-        }
-
+        // The tile route is chosen in src/ops/syr2k/syr2k.cc; this is the library loop only.
         return syr2k_vendor_impl<Back, T>(ctx, A, B, C, alpha, beta, uplo, transA);
     }
 
