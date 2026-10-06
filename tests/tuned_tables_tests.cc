@@ -20,6 +20,7 @@
 #include "../src/ops/spmm/choice.hh"
 #include "../src/ops/syev/choice.hh"
 #include "../src/ops/symm/choice.hh"
+#include "../src/ops/syrk/choice.hh"
 #include "../src/select/select.hh"
 
 #include <algorithm>
@@ -159,6 +160,11 @@ std::vector<std::string> candidates(const std::string& op, const std::string& dt
     if (op == "symm") {
         if (dtype == "float") return spellings(symm::candidates<float>());
         if (dtype == "double") return spellings(symm::candidates<double>());
+    }
+    namespace syrk = batchlas::ops::syrk;  // real-only: syrk has no complex instantiation
+    if (op == "syrk") {
+        if (dtype == "float") return spellings(syrk::candidates<float>());
+        if (dtype == "double") return spellings(syrk::candidates<double>());
     }
     return {};
 }

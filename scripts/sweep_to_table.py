@@ -940,8 +940,31 @@ GEQRF = OpSpec(
     candidate_order=list(GEQRF_CHOICES),
 )
 
+def syrk_key(r):
+    try:
+        key = (str(r["form"]), str(r["trans"]), int(r["n"]), int(r["k"]), int(r["batch"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+    ok = key[0] in ("sq", "tall", "wide") and key[1] in ("N", "T", "C") and min(key[2:]) >= 1
+    return key if ok else None
+
+
+# syrk (level-3 flat selection): form = sq|tall|wide of (n, k), k = op(A)'s inner extent, trans =
+# N|T|C (the old rule sent C to the vendor); work ~ n^2 k batch. No sweep source: sm_89 and sm_120
+# are both transcribed (the old rule read no arch).
+SYRK_CHOICES = ("gram", "triangular", "vendor")
+SYRK = OpSpec(
+    op="syrk",
+    keys="form:exact trans:exact n:log:2 k:log batch:log",
+    row_ops=("syrk",),
+    row_key=syrk_key,
+    arm_spelling={c: c for c in SYRK_CHOICES},
+    arm_route={c: (("vendor:vendor",) if c == "vendor" else (f"native:{c}",)) for c in SYRK_CHOICES},
+    candidate_order=list(SYRK_CHOICES),
+)
+
 POTRF.review = potrf_offgrid
-OPS = [POTRF, POSV, TRSM, GEMM, GEMV, GEQRF, ORGQR, ORMQR, GETRF, GETRS, GETRI, GESV, GESVD, SPMM, SYEV, SYMM]
+OPS = [POTRF, POSV, TRSM, GEMM, GEMV, GEQRF, ORGQR, ORMQR, GETRF, GETRS, GETRI, GESV, GESVD, SPMM, SYEV, SYMM, SYRK]
 OP_BY_NAME = {s.op: s for s in OPS}
 
 

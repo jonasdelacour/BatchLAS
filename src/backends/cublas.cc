@@ -23,6 +23,7 @@
 #include "syr2k_custom_dispatch.hh"
 #include "syrk_custom_dispatch.hh"
 #include "syrk_gram_tiles.hh"
+#include "../ops/syrk/choice.hh"
 #include "cublasdx_dispatch_common.hh"
 #include "trmm_custom_dispatch.hh"
 #include "trmm_triangular_tiles.hh"
@@ -384,13 +385,13 @@ namespace batchlas {
         const int batch = C.batch_size();
 
         // The same single-tile Gram kernel as syrk, with the ^H conjugating
-        // whichever operand carries it. Opt-in only: see syrk_route_requests_gram
-        // for the measurement that keeps it off the automatic path -- a complex
+        // whichever operand carries it. Opt-in only (BATCHLAS_SYRK_ROUTE=gram): a complex
         // multiply is four real ones, so this shape is compute bound for herk
         // where it is bandwidth bound for syrk, and the GEMM-plus-fold below
         // wins on every Gram shape measured.
+        // evidence: docs/perf/level3.md#herk-on-the-gram-tile-kernel
         if constexpr (Back == Backend::CUDA) {
-            if (detail::is_gpu_queue(ctx) && syrk_route_requests_gram() &&
+            if (detail::is_gpu_queue(ctx) && ops::syrk::herk_gram_pinned() &&
                 detail::syrk_gram_supported(A, C, transA, /*conjugated=*/true)) {
                 return detail::syrk_gram_tiles<T, true>(ctx, A, C, T(alpha), T(beta), uplo, transA);
             }
@@ -549,33 +550,8 @@ namespace batchlas {
                       T beta,
                       Uplo uplo,
                       Transpose transA) {
-        if constexpr (Back == Backend::CUDA) {
-                // WP1 S6: the float custom-route gate moved to the facade
-                // (src/ops/level3/level3.cc). It has to run BEFORE
-                // the vendor-available test, and this TU is compiled only when
-                // cuBLAS exists -- so leaving it here made the tile kernels
-                // linkable everywhere but callable nowhere.
-            //
-            // The NON-float gram route below stays: it is reachable only from
-            // here, so double and complex syrk still have no native route in a
-            // vendor-free build. That is why WP1 S7 refuses to flip
-            // level3_tile_kernels_compiled to a bare `true`.
-            if constexpr (!std::is_same_v<T, float>) {
-                // Everything that is not float reaches the single-tile Gram
-                // kernel only. It is the one route here whose staging and
-                // fragment loads are not written around a 128-bit packet, so it
-                // is the one that generalises; the 128x128 triangular kernel
-                // stays float. Below kGramMaxTile the alternative is
-                // syrk_vendor_impl's host loop over one cublasXsyrk per batch
-                // member, which at large batch is two orders of magnitude off
-                // anything batched, so there is no threshold to tune.
-                if (detail::is_gpu_queue(ctx) && !syrk_route_prefers_vendor() &&
-                    detail::syrk_gram_supported(A, C, transA, /*conjugated=*/false)) {
-                    return detail::syrk_gram_tiles<T, false>(ctx, A, C, alpha, beta, uplo, transA);
-                }
-            }
-        }
-
+        // The gram and triangular tile kernels are syrk's own families (src/ops/syrk/syrk.cc);
+        // this is the per-item cublas?syrk loop only.
         return syrk_vendor_impl<Back, T>(ctx, A, C, alpha, beta, uplo, transA);
     }
 
