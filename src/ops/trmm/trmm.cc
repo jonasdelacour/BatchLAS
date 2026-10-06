@@ -53,9 +53,9 @@ select::Key key_of(const MV<T>& A, const MV<T>& B, Side side) {
 
 // Correctness only (R3); shapes were validated at entry. Both native launches address every item
 // as base + b * stride at one (order, q), so neither takes a heterogeneous batch (the expansion's
-// gemm throws on one), and both put the batch in grid z. Every vendor loop (cuBLAS, rocBLAS,
-// netlib) runs each item at the top-level (m, n), a wrong answer for a heterogeneous batch, so
-// the vendor is refused one on every backend too.
+// gemm throws on one), and both put the batch in grid z; triangular puts its tile list in grid y.
+// Every vendor loop (cuBLAS, rocBLAS, netlib) runs each item at the top-level (m, n), a wrong
+// answer for a heterogeneous batch, so the vendor is refused one on every backend too.
 template <Backend B, class T>
 bool can_run(const TrmmChoice& c, const select::Device& d, Queue& q, const MV<T>& A, const MV<T>& Bm,
              const MV<T>& C, Side side) {
@@ -64,7 +64,10 @@ bool can_run(const TrmmChoice& c, const select::Device& d, Queue& q, const MV<T>
     const bool native = kWired && d.is_gpu && homogeneous && d.max_wg >= kNativeWg && C.rows() >= 1 &&
                         C.cols() >= 1 && A.batch_size() >= 1 && A.batch_size() <= kMaxGridBatch;
     return std::visit(overloaded{
-        [&](Triangular) { return native && backend::detail::trmm_tiles_supported(A, Bm, C, side); },
+        [&](Triangular) {
+            return native && backend::detail::trmm_tiles_supported(A, Bm, C, side) &&
+                   backend::detail::trmm_tile_groups<T>(C.rows(), C.cols()) <= kMaxGridTiles;
+        },
         [&](Expand) {
             if (!native) return false;
             const int k = A.rows(), batch = A.batch_size();

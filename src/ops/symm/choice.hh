@@ -40,5 +40,6 @@ inline constexpr std::array<int, 9> grid_batch{1, 2, 3, 4, 8, 128, 1024, 8192, 3
 
 // expand_mirrored puts the batch in SYCL dim 0 = CUDA grid z.
 inline constexpr std::int64_t kMaxGridBatch = 65535;
+inline constexpr int kExpandWg = 256;  // expand_mirrored's work-group: kMirrorGroupCols x kMirrorTile
 
 }  // namespace batchlas::ops::symm

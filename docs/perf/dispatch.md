@@ -400,8 +400,8 @@ names moved to `BACKEND_COMMON_SOURCES` (`src/backends/CMakeLists.txt:136-141`).
    windows, untimed; measuring them is the phase-4 retune. hemm, herk and her2k still have none.
 4. ~~`symm` has no `expansion_fits()` ceiling~~: symm's `expand` family checks it in `can_run`.
 5. ~~Heterogeneous `symm` is unmeasured and untested~~: measured on `ff340fc6` (a heterogeneous B or C made the
-   expansion's gemm throw; a heterogeneous A ran at the storage order); `expand` now refuses any heterogeneous operand
-   (`HeterogeneousBatchHasNoNativeRoute`).
+   expansion's gemm throw; a heterogeneous A ran at the storage order); `expand` and `vendor` now refuse any
+   heterogeneous operand (`HeterogeneousBatchHasNoRoute`).
 6. ~~MathDx-present boxes are untestable here~~: cuBLASDx is deleted.
 7. ~~Level-3 non-float is still cuBLAS-only~~: double syrk `gram`, double symm `expand` and every trmm family run
    vendor-free. **`syr2k` still has no non-float native route** — `syr2k_triangular_tiles` is float only.

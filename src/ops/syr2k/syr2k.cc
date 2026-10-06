@@ -47,20 +47,22 @@ select::Key key_of(const MV<T>& A, const MV<T>& C, Transpose transA) {
 // Correctness only (R3). The kernel is wired for CUDA (the old reach, design D6) and
 // instantiated for float. One launch covers the batch with a single (n, k, ld, stride), so no
 // heterogeneous operand. Real ConjTrans stays with the vendor, as before (the kernel would read
-// it as Trans). The grid terms are the launch's own limits (GridCeilingsAreCanRunTerms).
+// it as Trans). The grid terms are the launch's own limits (GridCeilingsAreCanRunTerms). Every
+// vendor loop (cuBLAS, rocBLAS, netlib) runs each item at the top-level (n, k), a wrong answer for
+// a heterogeneous batch, so the vendor is refused one too.
 template <Backend B, class T>
 bool can_run(const Syr2kChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& Bm, const MV<T>& C,
              Transpose transA) {
     const std::int64_t n = C.rows(), k = inner<T>(A, transA), batch = C.batch_size();
     const std::int64_t side = (n + backend::detail::kTriangularTile - 1) / backend::detail::kTriangularTile;
+    const bool homogeneous = !A.is_heterogeneous() && !Bm.is_heterogeneous() && !C.is_heterogeneous();
     return std::visit(overloaded{
         [&](Triangular) {
             return B == Backend::CUDA && std::is_same_v<T, float> && d.is_gpu && d.max_wg >= 256 &&
-                   transA != Transpose::ConjTrans && !A.is_heterogeneous() && !Bm.is_heterogeneous() &&
-                   !C.is_heterogeneous() && n >= 1 && k >= 1 && batch >= 1 && batch <= kMaxGridBatch &&
-                   side * (side + 1) / 2 <= kMaxGridTiles;
+                   transA != Transpose::ConjTrans && homogeneous && n >= 1 && k >= 1 && batch >= 1 &&
+                   batch <= kMaxGridBatch && side * (side + 1) / 2 <= kMaxGridTiles;
         },
-        [&](Vendor) { return d.has_vendor_blas; },
+        [&](Vendor) { return d.has_vendor_blas && homogeneous; },
     }, c);
 }
 
@@ -116,6 +118,8 @@ template <Backend Back, RealScalar T>
 Event syr2k(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
             const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta, Uplo uplo, Transpose transA) {
     backend::shape::validate_rank_2k<std::invalid_argument>("SYR2K", A, B, C, transA, /*hermitian=*/false);
+    // An empty batch launches nothing under any pin, as syrk's does (the cuBLAS loop faults on one).
+    if (C.batch_size() == 0) return ctx.create_event_after_external_work();
     const auto c = ops::syr2k::choose<Back, T>(ctx, A, B, C, transA);
     // The coverage key the old level-3 recorder wrote: m = n = C's order, k = op(A)'s inner extent.
     auto shape = select::square_shape<Back, T>(C.rows(), C.batch_size());

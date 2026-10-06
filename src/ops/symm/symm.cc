@@ -44,24 +44,25 @@ select::Key key_of(const MV<T>& C) {
 }
 
 // Correctness only (R3). The expansion reads A at its storage order and stride, and the gemm it
-// feeds rejects a heterogeneous B or C against the homogeneous scratch, so no operand may be
-// heterogeneous. Its scratch must fit (expansion_fits: the int-linearised grid and the
+// feeds rejects a heterogeneous B or C against the homogeneous scratch; every vendor loop
+// (cuBLAS, netlib) runs each item at the top-level (m, n). So no family takes a heterogeneous
+// operand. The expansion's scratch must fit (expansion_fits: the int-linearised grid and the
 // BATCHLAS_EXPAND_MAX_BYTES / quarter-of-memory budget), and its batch sits in grid z.
 template <Backend B, class T>
 bool can_run(const SymmChoice& c, const select::Device& d, Queue& q, const MV<T>& A, const MV<T>& Bm,
              const MV<T>& C) {
     constexpr bool kWired = B == Backend::CUDA;  // the old reach: ROCm and the host stay vendor
     const std::int64_t k = A.rows(), batch = A.batch_size();
-    const bool native = kWired && d.is_gpu && !A.is_heterogeneous() && !Bm.is_heterogeneous() &&
-                        !C.is_heterogeneous() && C.rows() >= 1 && C.cols() >= 1 && batch >= 1 &&
-                        batch <= kMaxGridBatch;
+    const bool homogeneous = !A.is_heterogeneous() && !Bm.is_heterogeneous() && !C.is_heterogeneous();
+    const bool native = kWired && d.is_gpu && homogeneous && d.max_wg >= kExpandWg && C.rows() >= 1 &&
+                        C.cols() >= 1 && batch >= 1 && batch <= kMaxGridBatch;
     return std::visit(overloaded{
         [&](Expand) {
             return native && backend::detail::expansion_fits(
                                  q, int(k), int(batch),
                                  backend::detail::expanded_workspace_bytes<T>(q, int(k), int(batch)));
         },
-        [&](Vendor) { return d.has_vendor_blas; },
+        [&](Vendor) { return d.has_vendor_blas && homogeneous; },
     }, c);
 }
 
@@ -137,6 +138,8 @@ template <Backend Back, RealScalar T>
 Event symm(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
            const MatrixView<T, MatrixFormat::Dense>& C, T alpha, T beta, Side side, Uplo uplo) {
     backend::shape::validate_product<std::invalid_argument>("SYMM", A, B, C, side);
+    // An empty problem is a no-op under any pin, as syrk's and trmm's are (the cuBLAS loop faults on one).
+    if (A.batch_size() == 0 || C.rows() == 0 || C.cols() == 0) return ctx.create_event_after_external_work();
     const auto c = ops::symm::choose<Back, T>(ctx, A, B, C);
     // The coverage row's key, as the old record_level3_route wrote it: C's extents and A's order.
     auto shape = select::square_shape<Back, T>(C.rows(), C.batch_size());

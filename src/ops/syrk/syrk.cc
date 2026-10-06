@@ -51,23 +51,26 @@ select::Key key_of(const MV<T>& A, const MV<T>& C, Transpose transA) {
 // are portable SYCL wired only for CUDA (the old reach), take one (n, k, ld, stride) per launch
 // (no heterogeneous batch) and put the batch, and triangular its tile count, in grid dimensions
 // capped at 65535. syrk is real-only, so ConjTrans is Trans to both kernels (the table, not
-// can_run, keeps it on the vendor). Shapes are validated before this runs.
+// can_run, keeps it on the vendor). Every vendor loop (cuBLAS, rocBLAS, netlib) runs each item
+// at the top-level (n, k), a wrong answer for a heterogeneous batch, so no family takes one.
+// Shapes are validated before this runs.
 template <Backend B, class T>
 bool can_run(const SyrkChoice& c, const select::Device& d, const MV<T>& A, const MV<T>& C, Transpose transA) {
     const std::int64_t n = C.rows(), k = inner<T>(A, transA), batch = C.batch_size();
     const Transpose real_trans = transA == Transpose::NoTrans ? Transpose::NoTrans : Transpose::Trans;
-    const bool native = B == Backend::CUDA && d.is_gpu && !A.is_heterogeneous() && !C.is_heterogeneous() &&
-                        n >= 1 && k >= 1 && batch >= 1 && batch <= kMaxGridBatch;
+    const bool homogeneous = !A.is_heterogeneous() && !C.is_heterogeneous();
+    const bool native = B == Backend::CUDA && d.is_gpu && homogeneous && n >= 1 && k >= 1 && batch >= 1 &&
+                        batch <= kMaxGridBatch;
     return std::visit(overloaded{
         [&](Gram) {
             return native && backend::detail::syrk_gram_supported<T>(A, C, real_trans, false) &&
                    d.max_wg >= gram_threads(n) && d.slm_budget >= gram_slm_bytes<T>(n);
         },
         [&](Triangular) {
-            return native && std::is_same_v<T, float> &&
+            return native && std::is_same_v<T, float> && d.max_wg >= kTriangularWg &&
                    triangular_groups(n, backend::detail::kTriangularTile) <= kMaxGridTiles;
         },
-        [&](Vendor) { return d.has_vendor_blas; },
+        [&](Vendor) { return d.has_vendor_blas && homogeneous; },
     }, c);
 }
 

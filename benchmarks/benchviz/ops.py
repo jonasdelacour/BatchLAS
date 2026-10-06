@@ -319,8 +319,9 @@ for _s in (
                        area=lambda m, n, k: (n * n + 2.0 * n * (k or n)) / 3.0)),
     # trmm_benchmark's operands only agree at m = n = k, so trmm stays square.
     _blas("trmm", "Triangular multiply", "trmm_benchmark", "BM_TRMM<", flops_trmm, native="triangular",
-          types=("float",), orders=(16, 32, 64, 128, 256, 512, 1024), footprint=3.0,
-          args=lambda m, n, k, b: [n, n, n, b], notes="native triangular-tile kernel is CUDA float only"),
+          types=("float", "double"), orders=(16, 32, 64, 128, 256, 512, 1024), footprint=3.0,
+          args=lambda m, n, k, b: [n, n, n, b],
+          notes="native triangular-tile kernel is CUDA only (every dtype; the benchmark registers float and double)"),
     _blas("syrk", "Symmetric rank-k update", "syrk_benchmark", "BM_SYRK<", flops_syrk, native="triangular",
           types=("float",), orders=(16, 32, 64, 128, 256, 512, 1024), footprint=3.0,
           args=lambda m, n, k, b: [n, k or n, k or n, b],

@@ -223,6 +223,51 @@ std::string old_auto(int m, int n, int batch) {
     return std::is_same_v<T, float> && sq && (batch >= 4 || std::max(m, n) >= 256) ? "expand" : "vendor";
 }
 
+// A heterogeneous operand has no route on any backend: expand cannot honour per-item extents (it
+// reads A at its storage order; the gemm it feeds rejects a heterogeneous B or C), and
+// every vendor loop (cuBLAS, rocBLAS, netlib) runs each item at the top-level extents. A
+// spelling pin throws invalid_argument (the vendor class word falls back to Auto), Auto throws
+// runtime_error, or NoRouteError without a vendor library, and C is left untouched.
+// On ff340fc6 the cuBLAS loop answered the consistent all-three case off by 2.56.
+template <Backend B, class T>
+void expect_heterogeneous_has_no_route(Queue& ctx) {
+    const int n = 16, batch = 4;
+    auto A = Matrix<T, MatrixFormat::Dense>::Random(n, n, false, batch, 3);
+    auto Bm = Matrix<T, MatrixFormat::Dense>::Random(n, n, false, batch, 5);
+    Matrix<T, MatrixFormat::Dense> Cm(n, n, batch);
+    Cm.fill(T(0.25));
+    UnifiedVector<int> act(batch), cols(batch);
+    for (int b = 0; b < batch; ++b) act[b] = n - 2 * b, cols[b] = n - b;
+    const auto hA = A.view().with_active_dims(act.to_span(), act.to_span());
+    const auto hB = Bm.view().with_active_dims(act.to_span(), cols.to_span());
+    const auto hC = Cm.view().with_active_dims(act.to_span(), cols.to_span());
+    ASSERT_TRUE(hA.is_heterogeneous() && hB.is_heterogeneous() && hC.is_heterogeneous());
+    struct Case { const char* what; MVof<T> a, b, c; };
+    const Case cases[] = {{"A heterogeneous", hA, Bm.view(), Cm.view()},
+                          {"B and C heterogeneous", A.view(), hB, hC},
+                          {"all three, consistent per item", hA, hB, hC}};
+    for (const auto& k : cases) {
+        auto call = [&] {
+            (void)symm<B, T>(ctx, k.a, k.b, k.c, T(1), T(0.5), Side::Left, Uplo::Lower);
+            ctx.wait();
+        };
+        auto expect_no_route = [&](const std::string& what) {
+            if constexpr (select::level3_vendor_available<B>) EXPECT_THROW(call(), std::runtime_error) << what;
+            else EXPECT_THROW(call(), batchlas::NoRouteError) << what;
+        };
+        for (const C& c : sy::candidates<T>()) {
+            const Pin pin("symm", c);
+            if (std::holds_alternative<sy::Vendor>(c)) expect_no_route(std::string(k.what) + ": vendor pin");
+            else EXPECT_THROW(call(), std::invalid_argument) << k.what << ": " << select::to_string(c);
+        }
+        const ScopedEnvVar clear("BATCHLAS_SYMM_ROUTE", nullptr);
+        expect_no_route(std::string(k.what) + ": auto");
+    }
+    for (int b = 0; b < batch; ++b)
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < n; ++i) ASSERT_EQ(Cm(i, j, b), T(0.25)) << "a refused call wrote C";
+}
+
 template <typename T, Backend B>
 struct Cfg {
     using ScalarType = T;
@@ -559,33 +604,17 @@ TYPED_TEST(SymmCandidates, CanRunFalsePinsThrow) {
     }
 }
 
-// A heterogeneous operand: expand cannot honour per-item extents (it reads A at its storage order;
-// the gemm it feeds rejects a heterogeneous B or C, which made the old Auto throw at batch >= 4).
-// Auto takes the vendor (which runs at the storage order, as before); vendor-free there is no route.
-TYPED_TEST(SymmCandidates, HeterogeneousBatchHasNoNativeRoute) {
+// A heterogeneous operand on CUDA (expect_heterogeneous_has_no_route), plus the reason expand
+// carries the term.
+TYPED_TEST(SymmCandidates, HeterogeneousBatchHasNoRoute) {
     using T = typename TestFixture::T;
-    static constexpr Backend B = TestFixture::B;
+    expect_heterogeneous_has_no_route<TestFixture::B, T>(*this->ctx);
     const int n = 16, batch = 4;
     auto A = Matrix<T, MatrixFormat::Dense>::Random(n, n, false, batch, 3);
     auto Bm = Matrix<T, MatrixFormat::Dense>::Random(n, n, false, batch, 5);
-    Matrix<T, MatrixFormat::Dense> Cm(n, n, batch);
-    Cm.fill(T(0));
-    UnifiedVector<int> act(batch), cols(batch);
-    for (int b = 0; b < batch; ++b) act[b] = n - 2 * b, cols[b] = n - b;
+    UnifiedVector<int> act(batch);
+    for (int b = 0; b < batch; ++b) act[b] = n - 2 * b;
     const auto hA = A.view().with_active_dims(act.to_span(), act.to_span());
-    const auto hB = Bm.view().with_active_dims(act.to_span(), cols.to_span());
-    const auto hC = Cm.view().with_active_dims(act.to_span(), cols.to_span());
-    struct Case { const char* what; MVof<T> a, b, c; };
-    const Case cases[] = {{"A heterogeneous", hA, Bm.view(), Cm.view()}, {"B and C heterogeneous", A.view(), hB, hC}};
-    for (const auto& k : cases) {
-        const ScopedEnvVar clear("BATCHLAS_SYMM_ROUTE", nullptr);
-        auto call = [&] {
-            (void)symm<B, T>(*this->ctx, k.a, k.b, k.c, T(1), T(0.5), Side::Left, Uplo::Lower);
-            this->ctx->wait();
-        };
-        if constexpr (TestFixture::kVendor) EXPECT_EQ(traced_choice(call), "vendor") << k.what;
-        else EXPECT_THROW(call(), batchlas::NoRouteError) << k.what;
-    }
     // The A-only case is not a throw but a wrong answer: the expansion mirrors the full storage
     // order, so item 1 (active order 14) picks up rows 14..15 of B.
     Matrix<T, MatrixFormat::Dense> Cd(n, n, batch);
@@ -598,6 +627,35 @@ TYPED_TEST(SymmCandidates, HeterogeneousBatchHasNoNativeRoute) {
         off = std::max(off, std::abs(double(Cd(i, 0, 1)) - want));
     }
     EXPECT_GT(off, 1e-3) << "expand honoured A's active order; the heterogeneity term may be revisited";
+}
+
+// An empty batch or an empty C is a no-op under Auto and every pin, vendor-free too (the cuBLAS
+// loop threw CUBLAS error 7 on a batch of 0).
+TYPED_TEST(SymmCandidates, EmptyProblemIsANoOp) {
+    using T = typename TestFixture::T;
+    static constexpr Backend B = TestFixture::B;
+    UnifiedVector<T> a(256, T(1)), b(256, T(3)), c(256, T(2));
+    struct Case { int m, n, batch; Side side; };
+    const Case cases[] = {{8, 6, 0, Side::Left}, {8, 6, 0, Side::Right}, {8, 0, 2, Side::Left}, {0, 6, 2, Side::Left},
+                          {8, 0, 2, Side::Right}};
+    std::vector<std::optional<C>> pins{std::nullopt};
+    for (const C& k : sy::candidates<T>()) pins.push_back(k);
+    const ScopedEnvVar clear("BATCHLAS_SYMM_ROUTE", nullptr);
+    for (const auto& k : cases) {
+        const int ka = k.side == Side::Left ? k.m : k.n;
+        const MVof<T> A(a.data(), ka, ka, std::max(ka, 1), 64, k.batch);
+        const MVof<T> Bm(b.data(), k.m, k.n, std::max(k.m, 1), 64, k.batch);
+        const MVof<T> Cm(c.data(), k.m, k.n, std::max(k.m, 1), 64, k.batch);
+        for (const auto& p : pins) {
+            std::optional<Pin> pin;
+            if (p) pin.emplace("symm", *p);
+            EXPECT_NO_THROW(((void)symm<B, T>(*this->ctx, A, Bm, Cm, T(1.5), T(-0.75), k.side, Uplo::Lower),
+                             this->ctx->wait()))
+                << (p ? select::to_string(*p) : std::string("auto")) << " m=" << k.m << " n=" << k.n
+                << " batch=" << k.batch << " " << side_s(k.side);
+        }
+    }
+    for (std::size_t e = 0; e < c.size(); ++e) ASSERT_EQ(c[e], T(2)) << "an empty problem wrote element " << e;
 }
 
 // §5.3: spellings (case-folded) and the class words, via ScopedPin and via the environment.
@@ -851,6 +909,14 @@ TYPED_TEST(SymmCandidatesCpu, CpuQueueRunsNoNativeFamily) {
     } else {
         EXPECT_THROW(call(), batchlas::NoRouteError);
     }
+}
+
+// The netlib loop shares the vendor loops' single top-level (m, n), so a heterogeneous batch has
+// no route on a CPU queue either.
+TYPED_TEST(SymmCandidatesCpu, HeterogeneousBatchHasNoRoute) {
+    if (!this->ctx) GTEST_SKIP() << "no queue";
+    if (this->ctx->device().type == DeviceType::GPU) GTEST_SKIP() << "a GPU queue";
+    expect_heterogeneous_has_no_route<TypeParam::BackendVal, typename TypeParam::ScalarType>(*this->ctx);
 }
 
 // The transcription (no GPU): each table holds exactly choice.hh's grid, sm_89 and sm_120 alike,

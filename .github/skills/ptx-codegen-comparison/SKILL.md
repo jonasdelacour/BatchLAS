@@ -8,6 +8,8 @@ disable-model-invocation: false
 
 # PTX Codegen Comparison
 
+> **Historical framing.** cuBLASDx (the MathDx probe, every fused kernel and `gemm_cublasdx*`) was deleted in the level-3 flat-selection wave, so a cuBLASDx-vs-SYCL comparison can no longer be built from this tree (the last commit that has it is `eeacaaa9`). The workflow below still applies to any two variants you can pin: compare a native family against `vendor`, or two native spellings (`BATCHLAS_<OP>_ROUTE=<spelling>`).
+
 Use this skill when a BatchLAS CUDA-backend kernel is slower in one implementation path than another and you need to determine whether the gap comes from worse generated device code, a launch/configuration mismatch, or a downstream lowering issue.
 
 This skill is designed around the workflow used to compare cuBLASDx GEMM and SYCL GEMM in BatchLAS, but the same process applies to other kernels as long as you can identify matching variants and extract the relevant device artifacts.

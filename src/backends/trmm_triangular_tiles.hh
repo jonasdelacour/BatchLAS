@@ -437,6 +437,22 @@ inline int trmm_row_tile(int m) {
         return m <= 512 ? 64 : 128;
     }
 }
+// The row tile the launch below instantiates: BATCHLAS_TRMM_TILE_M (0 = unset, not latched) or
+// trmm_row_tile, rounded up to 16/32/64/128. can_run's grid term reads the same function.
+template <typename T>
+inline int trmm_launch_tile_m(int m) {
+    const int forced = batchlas::settings().geometry.trmm_tile_m;
+    const int tile_m = forced ? forced : trmm_row_tile<T>(m);
+    return tile_m <= 16 ? 16 : (tile_m <= 32 ? 32 : (tile_m <= 64 ? 64 : 128));
+}
+
+// Work-groups in SYCL dim 1 (CUDA grid y, capped at 65535): one per (row tile, column tile).
+template <typename T>
+inline std::int64_t trmm_tile_groups(std::int64_t m, std::int64_t n) {
+    const std::int64_t tile_m = trmm_launch_tile_m<T>(static_cast<int>(m));
+    return ((m + tile_m - 1) / tile_m) * ((n + kTrmmTileN - 1) / kTrmmTileN);
+}
+
 template <typename T>
 Event trmm_triangular_tiles(Queue& ctx,
                             const MatrixView<T, MatrixFormat::Dense>& A,
@@ -446,14 +462,8 @@ Event trmm_triangular_tiles(Queue& ctx,
                             Uplo uplo,
                             Transpose transA,
                             Diag diag) {
-    const int m = static_cast<int>(C.rows());
-    // BATCHLAS_TRMM_TILE_M pins the row tile so the trade-off below can be
-    // swept from one binary.
-    // 0 means "unset" at this site; the real default is a function of m and is
-    // applied on the next line. Not latched, as before.
-    const int forced = batchlas::settings().geometry.trmm_tile_m;
-
-    const int tile_m = forced ? forced : trmm_row_tile<T>(m);
+    // BATCHLAS_TRMM_TILE_M pins the row tile so the trade-off above can be swept from one binary.
+    const int tile_m = trmm_launch_tile_m<T>(static_cast<int>(C.rows()));
     if (tile_m <= 16) {
         return launch_trmm_triangular_tiles<T, 16>(ctx, A, B, C, alpha, uplo, transA, diag);
     }

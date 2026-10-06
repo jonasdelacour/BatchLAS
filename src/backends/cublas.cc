@@ -165,12 +165,7 @@ namespace batchlas {
                       T beta,
                       Side side,
                       Uplo uplo) {
-                // WP1 S6: the float custom-route gate moved to the facade
-                // (src/ops/level3/level3.cc). It has to run BEFORE
-                // the vendor-available test, and this TU is compiled only when
-                // cuBLAS exists -- so leaving it here made the tile kernels
-                // linkable everywhere but callable nowhere.
-
+        // The expand family is symm's own (src/ops/symm/symm.cc); this is the per-item cublas?symm loop only.
         return symm_vendor_impl<Back, T>(ctx, A, B, C, alpha, beta, side, uplo);
     }
 

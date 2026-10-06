@@ -237,6 +237,56 @@ void use_syrk_table(const std::string& dtype, const std::string& dev, const std:
     select::testing::set_builtin_tables(std::move(files));
 }
 
+// A heterogeneous A or C has no route on any backend: one tile launch has one (n, k, ld, stride),
+// and
+// every vendor loop (cuBLAS, rocBLAS, netlib) runs each item at the top-level extents. A
+// spelling pin throws invalid_argument (the vendor class word falls back to Auto), Auto throws
+// runtime_error, or NoRouteError without a vendor library, and C is left untouched.
+template <Backend B, class T>
+void expect_heterogeneous_has_no_route(Queue& ctx) {
+    const int n = 16, k = 8, batch = 4;
+    Matrix<T, MatrixFormat::Dense> A(n, k, batch), Cm(n, n, batch);
+    A.fill(T(0.5));
+    Cm.fill(T(1));
+    UnifiedVector<int> rows(batch), cols(batch);
+    for (int b = 0; b < batch; ++b) rows[b] = n - b, cols[b] = k - (b % 2);
+    const auto hetA = A.view().with_active_dims(rows.to_span(), cols.to_span());
+    const auto hetC = Cm.view().with_active_dims(rows.to_span(), rows.to_span());
+    ASSERT_TRUE(hetA.is_heterogeneous() && hetC.is_heterogeneous());
+    struct Case { const char* what; MVof<T> a, c; };
+    const Case cases[] = {
+        {"A heterogeneous", hetA, Cm.view()}, {"C heterogeneous", A.view(), hetC}, {"both, consistent", hetA, hetC}};
+    for (const auto& kc : cases) {
+        auto call = [&] {
+            (void)syrk<B, T>(ctx, kc.a, kc.c, T(1), T(0), Uplo::Lower, Transpose::NoTrans);
+            ctx.wait();
+        };
+        auto expect_no_route = [&](const std::string& what) {
+            if constexpr (select::level3_vendor_available<B>) EXPECT_THROW(call(), std::runtime_error) << what;
+            else EXPECT_THROW(call(), batchlas::NoRouteError) << what;
+        };
+        for (const C& c : sk::candidates<T>()) {
+            const Pin pin("syrk", c);
+            if (std::holds_alternative<sk::Vendor>(c)) {
+                expect_no_route(std::string(kc.what) + ": vendor pin");
+                continue;
+            }
+            try {
+                call();
+                ADD_FAILURE() << kc.what << " " << select::to_string(c) << " was accepted";
+            } catch (const std::invalid_argument& e) {
+                EXPECT_NE(std::string(e.what()).find("cannot run this shape"), std::string::npos)
+                    << kc.what << " " << select::to_string(c) << ": " << e.what();
+            }
+        }
+        const ScopedEnvVar clear("BATCHLAS_SYRK_ROUTE", nullptr);
+        expect_no_route(std::string(kc.what) + ": auto");
+    }
+    for (int b = 0; b < batch; ++b)
+        for (int j = 0; j < n; ++j)
+            for (int i = 0; i < n; ++i) ASSERT_EQ(Cm(i, j, b), T(1)) << "a refused call wrote C";
+}
+
 template <typename T, Backend B>
 struct Cfg {
     using ScalarType = T;
@@ -605,43 +655,9 @@ TYPED_TEST(SyrkCandidates, CanRunFalsePinsThrow) {
     }
 }
 
-// A heterogeneous A or C: one launch has one (n, k, ld, stride), so no tile kernel can run it;
-// every native pin throws, Auto takes the vendor, vendor-free there is no route.
-TYPED_TEST(SyrkCandidates, HeterogeneousBatchHasNoNativeRoute) {
-    using T = typename TestFixture::T;
-    static constexpr Backend B = TestFixture::B;
-    const int n = 16, k = 8, batch = 4;
-    Matrix<T, MatrixFormat::Dense> A(n, k, batch), Cm(n, n, batch);
-    A.fill(T(0.5));
-    Cm.fill(T(1));
-    UnifiedVector<int> rows(batch), cols(batch);
-    for (int b = 0; b < batch; ++b) rows[b] = n - b, cols[b] = k - (b % 2);
-    const auto hetA = A.view().with_active_dims(rows.to_span(), cols.to_span());
-    const auto hetC = Cm.view().with_active_dims(rows.to_span(), rows.to_span());
-    ASSERT_TRUE(hetA.is_heterogeneous());
-    struct Case { const char* what; MVof<T> a, c; };
-    const Case cases[] = {{"A heterogeneous", hetA, Cm.view()}, {"C heterogeneous", A.view(), hetC}};
-    for (const auto& kc : cases) {
-        for (const C& c : sk::candidates<T>()) {
-            if (std::holds_alternative<sk::Vendor>(c)) continue;
-            const Pin pin("syrk", c);
-            try {
-                (void)syrk<B, T>(*this->ctx, kc.a, kc.c, T(1), T(0), Uplo::Lower, Transpose::NoTrans);
-                this->ctx->wait();
-                ADD_FAILURE() << kc.what << " " << select::to_string(c) << " was accepted";
-            } catch (const std::invalid_argument& e) {
-                EXPECT_NE(std::string(e.what()).find("cannot run this shape"), std::string::npos)
-                    << kc.what << " " << select::to_string(c) << ": " << e.what();
-            }
-        }
-        const ScopedEnvVar clear("BATCHLAS_SYRK_ROUTE", nullptr);
-        auto call = [&] {
-            (void)syrk<B, T>(*this->ctx, kc.a, kc.c, T(1), T(0), Uplo::Lower, Transpose::NoTrans);
-            this->ctx->wait();
-        };
-        if constexpr (TestFixture::kVendor) EXPECT_EQ(traced_choice(call), "vendor") << kc.what;
-        else EXPECT_THROW(call(), batchlas::NoRouteError) << kc.what;
-    }
+// A heterogeneous operand on CUDA (expect_heterogeneous_has_no_route).
+TYPED_TEST(SyrkCandidates, HeterogeneousBatchHasNoRoute) {
+    expect_heterogeneous_has_no_route<TestFixture::B, typename TestFixture::T>(*this->ctx);
 }
 
 // §5.3: spellings (case-folded) and the class words, via ScopedPin and via the environment.
@@ -962,6 +978,14 @@ TYPED_TEST(SyrkCandidatesCpu, CpuQueueRunsNoNativeFamily) {
     } else {
         EXPECT_THROW(call(), batchlas::NoRouteError);
     }
+}
+
+// The netlib loop shares the vendor loops' single top-level (n, k), so a heterogeneous batch has
+// no route on a CPU queue either.
+TYPED_TEST(SyrkCandidatesCpu, HeterogeneousBatchHasNoRoute) {
+    if (!this->ctx) GTEST_SKIP() << "no queue";
+    if (this->ctx->device().type == DeviceType::GPU) GTEST_SKIP() << "a GPU queue";
+    expect_heterogeneous_has_no_route<TypeParam::BackendVal, typename TypeParam::ScalarType>(*this->ctx);
 }
 
 // herk's opt-in reads syrk's pin, the word `gram` only (case-folded, trimmed, ScopedPin or env).

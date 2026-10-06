@@ -27,6 +27,7 @@ inline constexpr std::array<std::string_view, 3> last_resort{"expand", "triangul
 inline constexpr select::Rules rules{last_resort};  // §5.5: Expand serves both sides, Triangular Left only.
 
 inline constexpr std::int64_t kMaxGridBatch = 65535;  // both natives: batch in grid z; 65536 throws
+inline constexpr std::int64_t kMaxGridTiles = 65535;  // triangular: row x column tiles in grid y
 inline constexpr int kNativeWg = 256;  // widest native work-group: the 128-row tile, the expansion
 
 // order = A.rows(); q = B.cols() (Left) or B.rows() (Right). Work ~ order^2 q batch.

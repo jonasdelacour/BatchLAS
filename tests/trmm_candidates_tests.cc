@@ -8,6 +8,7 @@
 #include <batchlas/blas/functions/trmm.hh>
 #include <batchlas/blas/matrix.hh>
 #include <batchlas/no_route.hh>
+#include <batchlas/sycl_interop.hh>
 #include <batchlas/util/env.hh>
 #include <batchlas/util/sycl-device-queue.hh>
 #include <batchlas/util/sycl-span.hh>
@@ -37,6 +38,7 @@
 #include <stdexcept>
 #include <string>
 #include <tuple>
+#include <type_traits>
 #include <variant>
 #include <vector>
 
@@ -554,6 +556,88 @@ TYPED_TEST(TrmmCandidates, GridBatchCeiling) {
         expect_trmm(p, "auto past the grid ceiling");
     } else {
         EXPECT_THROW(this->run(p), batchlas::NoRouteError);
+    }
+}
+
+// The tile-grid term (AGENTS §8.9): triangular puts ceil(order/tile_m) x ceil(q/128) work-groups
+// in grid y, capped at 65535. float's row tile is 32 at order 16 (one row tile) and 64 at order 65
+// (two), so the last q that fits is 65535*128 and 32767*128. There the pin launches and writes C's
+// last column; one column past it the direct launch throws, the pin is refused and writes nothing,
+// and Auto takes expand. B and C live on the device (~2.2 GB at order 65).
+TYPED_TEST(TrmmCandidates, TriangularTileGridCeiling) {
+    static constexpr Backend B = TestFixture::B;
+    if constexpr (!std::is_same_v<typename TestFixture::T, float>) {
+        GTEST_SKIP() << "one dtype exercises the term; each launch costs GBs";
+    } else {
+        const ScopedEnvVar tile("BATCHLAS_TRMM_TILE_M", nullptr);
+        auto& q = batchlas::sycl_queue(*this->ctx);
+        for (const auto [n, row_tiles] : {std::pair{16, 1}, std::pair{65, 2}}) {
+            const int last = int(65535 / row_tiles) * 128;
+            const std::size_t need = 2 * std::size_t(n) * std::size_t(last + 1) * sizeof(float);
+            if (q.get_device().template get_info<sycl::info::device::global_mem_size>() < need + (std::size_t(4) << 30))
+                GTEST_SKIP() << "needs " << (need >> 30) << " GiB of device memory";
+            UnifiedVector<float> a(std::size_t(n) * n, poison<float>());
+            for (int j = 0; j < n; ++j)
+                for (int i = j; i < n; ++i) a[std::size_t(j) * n + i] = float((i * 7 + j * 3) % 11 - 5) / 4;
+            auto want = [&](int i) {  // B is all 1/4: multiples of 1/16, exact in float
+                float s = 0;
+                for (int t = 0; t <= i; ++t) s += a[std::size_t(t) * n + i] * 0.25f;
+                return s;
+            };
+            for (const int cols : {last, last + 1}) {
+                float* b = sycl::malloc_device<float>(std::size_t(n) * cols, q);
+                float* c = sycl::malloc_device<float>(std::size_t(n) * cols, q);
+                ASSERT_TRUE(b != nullptr && c != nullptr);
+                q.fill(b, 0.25f, std::size_t(n) * cols).wait();
+                q.fill(c, poison<float>(), std::size_t(n) * cols).wait();
+                UnifiedVector<float*> ap(1, nullptr), bp(1, nullptr), cp(1, nullptr);
+                const MVof<float> A(a.data(), n, n, n, n * n, 1, ap.data());
+                const MVof<float> Bm(b, n, cols, n, n * cols, 1, bp.data());
+                const MVof<float> Cm(c, n, cols, n, n * cols, 1, cp.data());
+                auto at = [&](int i, int j) {
+                    float v = 0;
+                    q.memcpy(&v, c + std::size_t(j) * n + i, sizeof v).wait();
+                    return v;
+                };
+                auto call = [&] {
+                    (void)trmm<B, float>(*this->ctx, A, Bm, Cm, 1.0f, Side::Left, Uplo::Lower, Transpose::NoTrans,
+                                         Diag::NonUnit);
+                    this->ctx->wait();
+                };
+                const std::string what = "order=" + std::to_string(n) + " q=" + std::to_string(cols);
+                bool accepted = true;
+                try {
+                    const Pin pin("trmm", C{tm::Triangular{}});
+                    call();
+                } catch (const std::invalid_argument& e) {
+                    EXPECT_NE(std::string(e.what()).find("cannot run this shape"), std::string::npos) << e.what();
+                    accepted = false;
+                }
+                if (cols == last) {
+                    EXPECT_TRUE(accepted) << what;
+                    for (const auto& [i, j] : std::initializer_list<std::pair<int, int>>{
+                             {n - 1, cols - 1}, {0, cols - 1}, {n - 1, 0}, {n / 2, cols - 129}})
+                        EXPECT_EQ(at(i, j), want(i)) << what << " C(" << i << "," << j << ")";
+                } else {
+                    EXPECT_FALSE(accepted) << what;
+                    EXPECT_EQ(at(n - 1, cols - 1), poison<float>()) << what << ": a refused pin wrote";
+                    try {
+                        (void)backend::detail::trmm_triangular_tiles<float>(*this->ctx, A, Bm, Cm, 1.0f, Uplo::Lower,
+                                                                            Transpose::NoTrans, Diag::NonUnit);
+                        this->ctx->wait();
+                        ADD_FAILURE() << "the direct launch past the ceiling ran, " << what;
+                    } catch (const std::exception& e) {
+                        EXPECT_NE(std::string(e.what()).find("exceed limit"), std::string::npos) << e.what();
+                    }
+                    const ScopedEnvVar clear("BATCHLAS_TRMM_ROUTE", nullptr);
+                    EXPECT_EQ(traced_choice(call), "expand") << what;
+                    EXPECT_EQ(at(n - 1, cols - 1), want(n - 1)) << what;
+                    EXPECT_EQ(at(0, 0), want(0)) << what;
+                }
+                sycl::free(b, q);
+                sycl::free(c, q);
+            }
+        }
     }
 }
 

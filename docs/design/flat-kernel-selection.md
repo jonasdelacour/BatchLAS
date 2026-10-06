@@ -1664,7 +1664,7 @@ Per op, what differs:
 - **syrk.** `gram` = `syrk_gram_tiles<T,false>` (n <= 128: the tile is all of C; past it the kernel
   does not throw, it answers wrongly, so a `gram` pin at n > 128 now throws where it used to run),
   also needing `max_wg >= gram_threads(n)` and the SLM tile. `triangular` = `syrk_triangular_tiles<float>`,
-  also `T(T+1)/2 <= 65535` tiles (grid y; n = 46208 runs, 46209 throws in the direct call; the old
+  also `max_wg >= 256` (its 16 x 16 group) and `T(T+1)/2 <= 65535` tiles (grid y; n = 46208 runs, 46209 throws in the direct call; the old
   rule launched there and threw). ConjTrans is passed as Trans (syrk is real-only), so it is not a
   can_run term; the exact `trans` key keeps real ConjTrans on the vendor where the old rule put it
   (C rows cover the n axis only, at k = batch = 1). herk's opt-in reads
@@ -1678,14 +1678,20 @@ Per op, what differs:
   trace instead. Old rule: `syr2k_custom_dispatch.cc:29-106`.
 - **symm.** `expand` = `expand_mirrored<T,false>` into a queue workspace lease + the public `gemm`
   (lifted from `symm_custom_dispatch.cc:74-133`, generalised to T, so double gains a native route),
-  also `expansion_fits(q, k, batch, bytes)` (new: closes level3.md debt 3; `BATCHLAS_EXPAND_MAX_BYTES`
-  still lowers it). The homogeneity term is new: on `ff340fc6` a heterogeneous B or C made the
-  expansion's gemm throw, and a heterogeneous A ran at the storage order (known-defects #12 class).
+  also `max_wg >= 256` (expand_mirrored's 8 x 32 group) and `expansion_fits(q, k, batch, bytes)`
+  (new: closes level3.md debt 3; `BATCHLAS_EXPAND_MAX_BYTES` still lowers it). The homogeneity term
+  is new: on `ff340fc6` a heterogeneous B or C made the expansion's gemm throw, and a heterogeneous A
+  ran at the storage order. The vendor family refuses a heterogeneous operand too (known-defects #12):
+  without it, Auto turned main's throw inside the old expand window into the loop's wrong answer
+  (2.56 at n = 16, batch 4).
   symm no longer reads `BATCHLAS_EXPAND_ROUTE` (hemm, herk, her2k still do). Old rule:
   `symm_custom_dispatch.cc:36-191`, `triangular_expand.hh:45-63`.
 - **trmm.** `triangular` = `trmm_triangular_tiles<T>` (`trmm_tiles_supported`: Side::Left),
   `expand` = `expand_triangular<T>` + the public `gemm` at beta 0, moved out of `trmm_vendor_impl`,
-  which is now the `cublas?trmm` loop only. Both need `max_wg >= 256`; expand also `expansion_fits`.
+  which is now the `cublas?trmm` loop only. Both need `max_wg >= 256`; expand also `expansion_fits`;
+  triangular also `ceil(m/tile_m) * ceil(q/128) <= 65535` tiles in grid y (`trmm_tile_groups`, the
+  launch's own row tile including `BATCHLAS_TRMM_TILE_M`; float order 16 runs q = 8388480, and at
+  8388481 the direct call throws, where the old rule launched and threw; `TriangularTileGridCeiling`).
   **Behaviour change:** `BATCHLAS_TRMM_ROUTE=vendor` used to mean expand+gemm when the scratch fit;
   it now means the loop, and `expand` reproduces the old meaning. The vendor family refuses a
   heterogeneous batch on every backend: every trmm vendor loop (cuBLAS, rocBLAS, netlib) runs each
@@ -1717,13 +1723,25 @@ included), float syr2k at batch 1, float and double symm, trmm in every dtype on
 **Deviations from the design.** There was no serial scaffold commit, so each branch carried its own
 share (the `level3.cc` move, the CMake line, the OpSpec, the registry entry, the test target) and the
 integration merges resolved those as the union. syrk gained the `trans` key and the tile-count term,
-syr2k and trmm the `max_wg` and (syr2k) tile-count terms, none in the design. The empty-problem
-no-op is new for syrk and trmm.
+syr2k and trmm the `max_wg` and tile-count terms, none in the design. The empty-problem
+no-op is new for all four (symm and syr2k after the final review: their cuBLAS loop threw CUBLAS
+error 7 on a batch of 0). Every vendor family refuses a heterogeneous operand (final review; syrk
+and syr2k vendor loops answered one wrongly on main as well).
 
 **Integration review fixes.** syr2k: `Syr2kTranscribedTable` now asserts the `# keys:` line and each
 row's key (it built both and asserted neither), and the four `Syr2kCudaCustomTest` cases whose
 reference is a `vendor` pin skip in a vendor-free build (there the pin falls back to Auto, the tile
 kernel, so they compared it with itself; symm's ForcedExpand* cases skip the same way).
+
+**Final review fixes** (each with a deliberate break that turned only its named tests red, restored
+and md5-verified): every level-3 vendor family refuses a heterogeneous operand (break: drop the
+term -> `{Symm,Syrk,Syr2k}Candidates{,Cpu}.HeterogeneousBatchHasNoRoute`); symm and syr2k return
+early on an empty problem (`SymmCandidates.EmptyProblemIsANoOp`, `Syr2kCandidates.EmptyBatchIsANoOp`);
+trmm `triangular` carries the grid-y tile term (`TrmmCandidates.TriangularTileGridCeiling`, order
+16 and 65 in float, both sides of the ceiling); syrk `triangular` and symm `expand` carry
+`max_wg >= 256` (no current device can turn that term red, as for posv `tiny`). Final regression
+(`ctest -LE slow`, both trees): the same failing ctest names and gtest case names as the
+integration gate above.
 
 **Deleted with the old layer** (each proven unreferenced after the merges):
 - `src/backends/{symm,syrk,trmm}_custom_dispatch.{cc,hh}`, `syr2k_custom_dispatch.hh` (syr2k's

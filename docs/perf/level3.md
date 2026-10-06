@@ -413,7 +413,7 @@ none of BatchLAS present; fixed with `alignas(16) T alpha_aligned = alpha` (`cub
    still ranks `vendor` first, as the old rule did; vendor-free it runs `expand`).
 5. ~~Heterogeneous `symm` is unmeasured~~: measured on `ff340fc6`; a heterogeneous B or C made the
    expansion's gemm throw and a heterogeneous A ran at the storage order. `expand` now refuses
-   every heterogeneous operand; the vendor loop's storage-order answer is known-defects #12.
+   every heterogeneous operand, and so does the vendor (its loop answers at the storage order; known-defects #12).
 6. **`trmm`'s tile kernel is `Side::Left` only** — the right side takes the `expand` family. syev
    uses Left only; `ormbr` has the same WY update, is not wired, and feeds gesvd.
 7. **ROCm has no `symm`, `hemm`, `herk` or `her2k`** — `rocblas.cc` instantiates only gemm, gemv,

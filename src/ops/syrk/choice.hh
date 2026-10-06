@@ -53,6 +53,7 @@ inline constexpr std::array<int, 17> grid_batch{1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 
 // (T = ceil(n/128)) in another; each is capped at 65535 work-groups, past which the launch throws.
 inline constexpr std::int64_t kMaxGridBatch = 65535;
 inline constexpr std::int64_t kMaxGridTiles = 65535;
+inline constexpr int kTriangularWg = 256;  // syrk_triangular_tiles' 16 x 16 work-group
 inline constexpr std::int64_t triangular_groups(std::int64_t n, std::int64_t tile) {
     const std::int64_t t = (n + tile - 1) / tile;
     return t * (t + 1) / 2;
