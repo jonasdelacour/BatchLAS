@@ -804,7 +804,7 @@ TEST(TunedTables, Sm89SmallOrdersStayOnSmallOrderRows) {
     EXPECT_EQ(sel::to_string(sel::choose("potrf", "float", sel::device_from_key("sm_89"), f,
                                          batchlas::ops::potrf::candidates<float>(),
                                          [](const batchlas::ops::potrf::PotrfChoice&) { return true; },
-                                         batchlas::ops::potrf::rules)),
+                                         batchlas::ops::potrf::spec.rules)),
               "cta");
 }
 
@@ -816,7 +816,7 @@ std::string pick(const std::string& device, const char* uplo, std::int64_t n, st
     const sel::Key k{{"uplo", uplo}, {"n", n}, {"batch", batch}};
     return sel::to_string(sel::choose("potrf", "float", sel::device_from_key(device), k,
                                       batchlas::ops::potrf::candidates<float>(),
-                                      [](const C&) { return true; }, batchlas::ops::potrf::rules));
+                                      [](const C&) { return true; }, batchlas::ops::potrf::spec.rules));
 }
 
 TEST(TunedTables, ShippedPotrfRowsAreWhatChooseReturns) {

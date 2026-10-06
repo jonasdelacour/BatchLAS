@@ -1,7 +1,5 @@
-// potrf: the whole selection path (docs/design/flat-kernel-selection.md §4.3, rule R1).
-// public potrf() -> choose() -> std::visit -> launch. Which kernel runs for a shape is the
-// first runnable entry of the nearest row in tuned/potrf.<dtype>.<device>.txt; can_run()
-// below only removes entries that cannot run at all. Kernel bodies live in
+// potrf (flat-kernel-selection.md §4.3, R1): select::run takes the first entry of the nearest
+// tuned/potrf.<dtype>.<device>.txt row that can_run() admits. Kernel bodies live in
 // src/extensions/potrf_{tiny,cta,lpanel,blocked}.cc.
 
 #include <batchlas/backend_config.h>
@@ -9,15 +7,12 @@
 #include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/blas/functions/potrf.hh>
 #include <batchlas/blas/functions/trsm.hh>
-#include <batchlas/no_route.hh>
-#include "../../select/vendor.hh"
 
 #include "choice.hh"
 #include "../../select/select.hh"
 #include "../../extensions/potrf_native.hh"
 #include "../../util/template-instantiations.hh"
 
-#include <algorithm>
 #include <complex>
 #include <cstddef>
 #include <variant>
@@ -25,10 +20,7 @@
 namespace batchlas {
 namespace ops::potrf {
 
-template <class... F>
-struct overloaded : F... { using F::operator()...; };
-template <class... F>
-overloaded(F...) -> overloaded<F...>;
+using select::overloaded;
 
 template <class T>
 select::Key key_of(const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo) {
@@ -60,31 +52,8 @@ bool can_run(const PotrfChoice& c, const select::Device& d, const MatrixView<T, 
             return native && uplo == Uplo::Lower && sycl_potrf::potrf_blocked_available<T>() &&
                    sycl_potrf::potrf_cta_max_n_for_slm<T>(budget) >= 1;
         },
-        [&](Vendor) { return d.has_vendor_solver; },
+        [&](Vendor) { return d.has_vendor; },
     }, c);
-}
-
-template <Backend B, class T>
-PotrfChoice choose(Queue& q, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo) {
-    const select::Device& d = select::device_of<B>(q);
-    auto ok = [&](const PotrfChoice& c) { return can_run<T>(c, d, A, uplo); };
-    try {
-        return select::choose("potrf", select::dtype_name<T>(), d, key_of(A, uplo), candidates<T>(), ok, rules);
-    } catch (const std::runtime_error&) {
-        // Vendor-free burn-down reads coverage `miss` rows; a plain runtime_error records none.
-        const auto all = candidates<T>();
-        if (!select::solver_vendor_available<B> && std::none_of(all.begin(), all.end(), ok))
-            select::throw_no_vendor_route<T>(Op::potrf, B, select::kSolverLibrary<B>);
-        throw;
-    }
-}
-
-// The coverage row's native flags (§5.6): computed only when coverage records a row.
-template <Backend B, class T>
-select::NativeFacts native_facts(Queue& q, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo) {
-    if (!coverage::dynamic_enabled()) return {};
-    const select::Device& d = select::device_of<B>(q);
-    return select::native_facts(candidates<T>(), [&](const PotrfChoice& c) { return can_run<T>(c, d, A, uplo); });
 }
 
 template <Backend B, class T>
@@ -109,10 +78,9 @@ Event launch(Queue& q, const PotrfChoice& c, const MatrixView<T, MatrixFormat::D
                 });
         },
         [&](Vendor) -> Event {
-            if constexpr (select::solver_vendor_available<B>)
+            if constexpr (select::has_library<B>(spec.vendor))
                 return backend::potrf_vendor<B, T>(q, A, uplo, ws, info);
-            else
-                select::throw_no_vendor_route<T>(Op::potrf, B, select::kSolverLibrary<B>);
+            else select::no_vendor<B, T>(spec);
         },
     }, c);
 }
@@ -126,10 +94,9 @@ std::size_t workspace(Queue& q, const PotrfChoice& c, const MatrixView<T, Matrix
         [&](const Lpanel&) { return sycl_potrf::potrf_lpanel_buffer_size<T>(q, A); },
         [&](Blocked) { return sycl_potrf::potrf_blocked_buffer_size<T>(q, A, uplo); },
         [&](Vendor) -> std::size_t {
-            if constexpr (select::solver_vendor_available<B>)
+            if constexpr (select::has_library<B>(spec.vendor))
                 return backend::potrf_vendor_buffer_size<B, T>(q, A, uplo);
-            else
-                select::throw_no_vendor_route<T>(Op::potrf, B, select::kSolverLibrary<B>);
+            else select::no_vendor<B, T>(spec);
         },
     }, c);
 }
@@ -140,42 +107,26 @@ template <Backend B, typename T>
 Event potrf(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo, Span<std::byte> workspace,
             Span<int32_t> info) {
     potrf_validate_params<T>(A, uplo);
-    const auto c = ops::potrf::choose<B, T>(ctx, A, uplo);
-    auto shape = select::square_shape<B, T>(A.rows(), A.batch_size());
-    shape.uplo = uplo;  // part of the coverage key; never inferred
-    select::TraceScope trace("potrf", c, shape, ops::potrf::native_facts<B, T>(ctx, A, uplo));
-    return ops::potrf::launch<B, T>(ctx, c, A, uplo, workspace, info);
+    // uplo is part of the coverage key; never inferred.
+    const coverage::Shape shape{.m = A.rows(), .n = A.rows(), .k = A.rows(), .batch = A.batch_size(), .uplo = uplo};
+    return select::run<B, T>(
+        ops::potrf::spec, ctx, ops::potrf::key_of(A, uplo), ops::potrf::candidates<T>(),
+        [&](const auto& c, const auto& d) { return ops::potrf::can_run<T>(c, d, A, uplo); }, shape, {},
+        [&](const auto& c) { return ops::potrf::launch<B, T>(ctx, c, A, uplo, workspace, info); });
 }
 
 template <Backend B, typename T>
 size_t potrf_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Uplo uplo) {
     potrf_validate_params<T>(A, uplo);
-    return ops::potrf::workspace<B, T>(ctx, ops::potrf::choose<B, T>(ctx, A, uplo), A, uplo);
+    const auto c = select::pick<B, T>(
+        ops::potrf::spec, ctx, ops::potrf::key_of(A, uplo), ops::potrf::candidates<T>(),
+        [&](const auto& k, const auto& d) { return ops::potrf::can_run<T>(k, d, A, uplo); });
+    return ops::potrf::workspace<B, T>(ctx, c, A, uplo);
 }
 
-#define POTRF_INSTANTIATE(B_, fp)                                         \
-    BATCHLAS_INSTANTIATE(sig::potrf<fp>, potrf, B_, fp)                   \
-    BATCHLAS_INSTANTIATE(sig::potrf_buffer_size<fp>, potrf_buffer_size, B_, fp)
-
-#define POTRF_ALL(B_)                          \
-    POTRF_INSTANTIATE(B_, float)               \
-    POTRF_INSTANTIATE(B_, double)              \
-    POTRF_INSTANTIATE(B_, std::complex<float>) \
-    POTRF_INSTANTIATE(B_, std::complex<double>)
-
-// Keyed on the device family, not the vendor library: without the library the Vendor arms
-// compile to a throw, so the symbol exists in every build with the device.
-#if BATCHLAS_HAS_CUDA_BACKEND
-POTRF_ALL(Backend::CUDA)
-#endif
-#if BATCHLAS_HAS_ROCM_BACKEND
-POTRF_ALL(Backend::ROCM)
-#endif
-#if BATCHLAS_HAS_HOST_BACKEND
-POTRF_ALL(Backend::NETLIB)
-#endif
-
-#undef POTRF_ALL
+#define POTRF_INSTANTIATE(B_, fp) \
+    BATCHLAS_INSTANTIATE_OP(B_, fp, potrf) BATCHLAS_INSTANTIATE_OP(B_, fp, potrf_buffer_size)
+BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(POTRF_INSTANTIATE)
 #undef POTRF_INSTANTIATE
 
 }  // namespace batchlas

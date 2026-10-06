@@ -1,7 +1,5 @@
 #pragma once
 
-// spmm's selection vocabulary (docs/design/flat-kernel-selection.md#phase-5-spmm), header-only.
-
 #include "../../select/select.hh"
 
 #include <array>
@@ -17,12 +15,10 @@ struct Vendor : select::NoFields<"vendor"> {};  // backend::spmm_vendor (cuSPARS
 using SpmmChoice = std::variant<Direct, Vendor>;
 
 template <class T>
-constexpr auto candidates() {
-    return std::array<SpmmChoice, 2>{Direct{}, Vendor{}};
-}
+constexpr auto candidates() { return select::all_of<SpmmChoice>(); }
 
-inline constexpr std::array<std::string_view, 2> last_resort{"vendor", "direct"};
-inline constexpr select::Rules rules{last_resort};  // vendor: every format; direct: CSR only
+inline constexpr std::array<std::string_view, 2> last_resort{"vendor", "direct"};  // vendor: every format; direct: CSR only
+inline constexpr select::OpSpec spec{Op::spmm, select::Lib::sparse, {last_resort}};
 
 // ConjTrans folds to T; m = A.rows() as stored; no nnz key (device memory). Work ~ m nrhs batch.
 inline constexpr std::array<std::string_view, 5> key_names{

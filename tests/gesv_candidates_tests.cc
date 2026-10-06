@@ -710,7 +710,7 @@ TYPED_TEST(GesvCandidates, AutoReadsEveryKeyField) {
 // threadsafe: the child re-executes the binary, so CUDA is initialised fresh, never forked.
 TYPED_TEST(GesvCandidates, CoverageRowCarriesNativeFlags) {
     using T = typename TestFixture::T;
-    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    ::testing::GTEST_FLAG(death_test_style) = "threadsafe";
     const std::string dir = ::testing::TempDir() + "gesv_cov." + std::string(select::dtype_name<T>());
     std::filesystem::remove_all(dir);
     std::filesystem::create_directories(dir);

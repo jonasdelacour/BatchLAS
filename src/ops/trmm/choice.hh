@@ -1,7 +1,5 @@
 #pragma once
 
-// trmm's selection vocabulary (docs/design/flat-kernel-selection.md §4.2), header-only.
-
 #include "../../select/select.hh"
 
 #include <array>
@@ -19,12 +17,11 @@ struct Vendor : select::NoFields<"vendor"> {};          // backend::trmm_vendor 
 using TrmmChoice = std::variant<Triangular, Expand, Vendor>;
 
 template <class T>
-constexpr auto candidates() {
-    return std::array<TrmmChoice, 3>{Triangular{}, Expand{}, Vendor{}};
-}
+constexpr auto candidates() { return select::all_of<TrmmChoice>(); }
 
 inline constexpr std::array<std::string_view, 3> last_resort{"expand", "triangular", "vendor"};
-inline constexpr select::Rules rules{last_resort};  // §5.5: Expand serves both sides, Triangular Left only.
+// §5.5: Expand serves both sides, Triangular Left only.
+inline constexpr select::OpSpec spec{Op::trmm, select::Lib::level3, {last_resort}};
 
 inline constexpr std::int64_t kMaxGridBatch = 65535;  // both natives: batch in grid z; 65536 throws
 inline constexpr std::int64_t kMaxGridTiles = 65535;  // triangular: row x column tiles in grid y

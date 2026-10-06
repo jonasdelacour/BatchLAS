@@ -497,10 +497,10 @@ delete the memset in `geqrf_blocked.cc`; the test stays as the guard.
 
 ## 12. Vendor potrf and trsm accept a heterogeneous batch
 
-potrf's `can_run(Vendor)` is `d.has_vendor_solver` with no heterogeneity term (the native families
+potrf's `can_run(Vendor)` is `d.has_vendor` with no heterogeneity term (the native families
 carry `!A.is_heterogeneous()`), and `potrf_vendor` (`src/backends/cusolver.cc:72-77`) passes
 `descrA.rows()`, the full storage order, to `cusolverDn?potrf[Batched]`. trsm's `can_run(Vendor)`
-(`src/ops/trsm/trsm.cc`, P3.3; before it `route_trsm.hh:36`) is likewise `d.has_vendor_blas` alone, and the
+(`src/ops/trsm/trsm.cc`, P3.3; before it `route_trsm.hh:36`) is likewise `d.has_vendor` alone, and the
 cuBLAS trsm path has no active-dims handling either. A heterogeneous call therefore factors and
 solves the padded matrix with no error: the leading block of a Cholesky factor is still right, but
 the backward `L^H` solve couples the active rows to the padding through `L21`.
@@ -576,7 +576,7 @@ skip list and enable the gesvd test.
 
 `BATCHLAS_GESVD_ROUTE=vendor`, float 8x4, jobs N/N, batch 3: `CUDA_ERROR_ILLEGAL_ADDRESS`.
 Reproduced on the pre-phase-5 router (`424a45bc`) too. Auto never sends such a shape to the vendor
-(a native family runs first), and gesvd's vendor `can_run` is `has_vendor_solver` alone, as the old
+(a native family runs first), and gesvd's vendor `can_run` is `has_vendor` alone, as the old
 `supports()` was; cuSOLVER's other refusals (`max(m, n) > 32`, non-packed batches, thin factors)
 arrive as launch-time throws. The gesvd candidate tests' vendor envelope excludes the shape.
 

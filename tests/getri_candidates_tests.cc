@@ -745,7 +745,7 @@ TYPED_TEST(GetriCandidates, ShippedRowsRunOnTheirOwnDevice) {
 TYPED_TEST(GetriCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
-    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    ::testing::GTEST_FLAG(death_test_style) = "threadsafe";
     const std::string dir = ::testing::TempDir() + "getri_cov." + std::string(select::dtype_name<T>());
     std::filesystem::remove_all(dir);
     std::filesystem::create_directories(dir);

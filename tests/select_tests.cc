@@ -78,7 +78,8 @@ C choose(const std::string& device, const sel::Key& k, const Pred& ok = kAll, co
 std::string S(const C& c) { return sel::to_string(c); }
 
 batchlas::coverage::Shape shape(std::int64_t n, std::int64_t batch) {
-    return sel::square_shape<batchlas::Backend::CUDA, float>(n, batch);
+    return {.scalar = batchlas::ScalarKind::F32, .backend = batchlas::Backend::CUDA, .m = n, .n = n, .k = n,
+            .batch = batch};
 }
 
 class Select : public ::testing::Test {
@@ -731,27 +732,30 @@ TEST_F(Select, TranscribedRowsWalkInRankOrderAndTraceAsTranscribed) {
               "synth float n=512 batch=8192 -> blocked  transcribed  [sm_89]\n");
 }
 
-// describe() keys its memo on both vendor flags, and device_of fills them from the two
-// compile-time predicates (cuSOLVER for potrf/syev, cuBLAS for the level-3 ops).
-TEST(SelectDevice, VendorFlagsAreSeparateAndPartOfTheMemoKey) {
+// describe() keys its memo on the vendor flag, and device_of fills it from the asking op's
+// library group: each group's own compile-time predicate, none for an op without a vendor.
+TEST(SelectDevice, VendorFlagIsTheOpsLibraryGroupAndPartOfTheMemoKey) {
     const batchlas::Device dev = batchlas::Device::default_device();
     constexpr auto B = batchlas::Backend::CUDA;
-    const sel::Device& none = sel::describe(dev, B, false, false);
-    const sel::Device& blas = sel::describe(dev, B, false, true);
-    const sel::Device& solver = sel::describe(dev, B, true, false);
-    EXPECT_FALSE(none.has_vendor_blas);
-    EXPECT_FALSE(none.has_vendor_solver);
-    EXPECT_TRUE(blas.has_vendor_blas);
-    EXPECT_FALSE(blas.has_vendor_solver);
-    EXPECT_FALSE(solver.has_vendor_blas);
-    EXPECT_TRUE(solver.has_vendor_solver);
-    EXPECT_EQ(&sel::describe(dev, B, false, true), &blas);  // memoized
+    const sel::Device& without = sel::describe(dev, B, false);
+    const sel::Device& with = sel::describe(dev, B, true);
+    EXPECT_FALSE(without.has_vendor);
+    EXPECT_TRUE(with.has_vendor);
+    EXPECT_EQ(&sel::describe(dev, B, true), &with);  // memoized
     batchlas::Queue q(dev, B);
-    const sel::Device& d = sel::device_of<B>(q);
-    EXPECT_EQ(d.has_vendor_blas, batchlas::select::level3_vendor_available<B>);
-    EXPECT_EQ(d.has_vendor_solver, batchlas::select::solver_vendor_available<B>);
-    EXPECT_FALSE(sel::device_of<B>(q, true, false).has_vendor_blas);
-    EXPECT_TRUE(sel::device_of<B>(q, false, true).has_vendor_blas);
+    EXPECT_FALSE(sel::device_of<B>(q).has_vendor);
+    EXPECT_EQ(sel::device_of<B>(q, sel::Lib::level3).has_vendor, sel::level3_vendor_available<B>);
+    EXPECT_EQ(sel::device_of<B>(q, sel::Lib::factorization).has_vendor, sel::factorization_vendor_available<B>);
+    EXPECT_EQ(sel::device_of<B>(q, sel::Lib::solver).has_vendor, sel::solver_vendor_available<B>);
+    EXPECT_EQ(sel::device_of<B>(q, sel::Lib::sparse).has_vendor, sel::sparse_vendor_available<B>);
+}
+
+// A field-less op's candidates<T>() is all_of: declaration order is its tie-break order.
+TEST(SelectDevice, AllOfListsTheVariantInDeclarationOrder) {
+    const auto all = sel::all_of<C>();
+    ASSERT_EQ(all.size(), std::variant_size_v<C>);
+    EXPECT_EQ(S(all.front()), "tiny");
+    EXPECT_EQ(S(all.back()), "vendor");
 }
 
 // The capture mode of run_factor_grid.sh / route_diff.sh: coverage on, trace off, so no
@@ -763,8 +767,8 @@ TEST(SelectCoverageDeathTest, RowCarriesScalarBackendAndUploWithTraceOff) {
         ScopedEnvVar trace("BATCHLAS_SELECT_TRACE", nullptr);
         ScopedEnvVar cov("BATCHLAS_COVERAGE_OUT", out.c_str());
         batchlas::coverage::g_dynamic_enabled = true;  // latched at static init
-        auto s = sel::square_shape<batchlas::Backend::CUDA, std::complex<double>>(64, 1024);
-        s.uplo = batchlas::Uplo::Upper;
+        const batchlas::coverage::Shape s{.scalar = batchlas::ScalarKind::C64, .backend = batchlas::Backend::CUDA,
+                                          .m = 64, .n = 64, .k = 64, .batch = 1024, .uplo = batchlas::Uplo::Upper};
         { sel::TraceScope ts("potrf", C{Cta{}}, s, sel::NativeFacts{true, 0}); }
         std::exit(0);  // emit() runs from atexit
     };

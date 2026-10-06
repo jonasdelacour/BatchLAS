@@ -1,7 +1,5 @@
 #pragma once
 
-// syrk's selection vocabulary (docs/design/flat-kernel-selection.md §12), header-only.
-
 #include "../../select/select.hh"
 
 #include <algorithm>
@@ -29,7 +27,7 @@ constexpr auto candidates() {
 }
 
 inline constexpr std::array<std::string_view, 3> last_resort{"triangular", "gram", "vendor"};
-inline constexpr select::Rules rules{last_resort};
+inline constexpr select::OpSpec spec{Op::syrk, select::Lib::level3, {last_resort}};
 
 // k: op(A)'s inner extent; form: the old squareish ratio as an axis; trans N|T|C. Work ~ n^2 k batch.
 inline constexpr std::array<std::string_view, 5> key_names{"form:exact", "trans:exact", "n:log:2", "k:log",

@@ -1,7 +1,5 @@
 #pragma once
 
-// symm's selection vocabulary (docs/design/flat-kernel-selection.md §12), header-only.
-
 #include "../../select/select.hh"
 
 #include <algorithm>
@@ -19,12 +17,10 @@ struct Vendor : select::NoFields<"vendor"> {};  // backend::symm_vendor (cublas?
 using SymmChoice = std::variant<Expand, Vendor>;
 
 template <class T>
-constexpr auto candidates() {
-    return std::array<SymmChoice, 2>{Expand{}, Vendor{}};
-}
+constexpr auto candidates() { return select::all_of<SymmChoice>(); }
 
 inline constexpr std::array<std::string_view, 2> last_resort{"expand", "vendor"};
-inline constexpr select::Rules rules{last_resort};
+inline constexpr select::OpSpec spec{Op::symm, select::Lib::level3, {last_resort}};
 
 // C's m x n and batch (side was never read); form lines the old squareish test up with an axis.
 inline constexpr std::array<std::string_view, 4> key_names{"form:exact", "m:log", "n:log", "batch:log"};

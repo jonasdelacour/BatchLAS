@@ -1,16 +1,11 @@
-// orgqr: the whole selection path (docs/design/flat-kernel-selection.md §4.3, rule R1).
-// public orgqr() -> choose() -> std::visit -> launch.
-// The kernel for a shape is the first runnable entry of the nearest row in
-// tuned/orgqr.<dtype>.<device>.txt; can_run() below only removes entries that cannot run.
-// Blocked writes an identity and applies Q to it through the public ormqr, which picks its own
-// kernel; Vendor is the library's per-item orgqr loop.
+// orgqr (flat-kernel-selection.md §4.3, R1): select::run takes the first entry of the nearest
+// tuned/orgqr.<dtype>.<device>.txt row that can_run() admits. Blocked writes an identity and applies Q to
+// it through the public ormqr, which picks its own kernel; Vendor is the library's per-item orgqr loop.
 
 #include <batchlas/backend_config.h>
 
 #include <batchlas/blas/functions/orgqr.hh>
 #include <batchlas/blas/functions/ormqr.hh>
-#include <batchlas/no_route.hh>
-#include "../../select/vendor.hh"
 
 #include "choice.hh"
 #include "../../select/select.hh"
@@ -27,10 +22,7 @@
 namespace batchlas {
 namespace ops::orgqr {
 
-template <class... F>
-struct overloaded : F... { using F::operator()...; };
-template <class... F>
-overloaded(F...) -> overloaded<F...>;
+using select::overloaded;
 
 template <class T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
@@ -38,13 +30,6 @@ using MV = MatrixView<T, MatrixFormat::Dense>;
 template <class T>
 select::Key key_of(const MV<T>& A) {
     return {{"m", A.rows()}, {"n", A.cols()}};
-}
-
-// orgqr's vendor is the factorization group (cuBLAS and cuSOLVER on CUDA), the same gate that
-// compiles the Vendor arm below, so its Device carries that group in has_vendor_solver.
-template <Backend B>
-const select::Device& device(const Queue& q) {
-    return select::device_of<B>(q, select::factorization_vendor_available<B>);
 }
 
 // Correctness only (R3): false means the driver would throw. Blocked's clauses are
@@ -58,31 +43,8 @@ bool can_run(const OrgqrChoice& c, const select::Device& d, const MV<T>& A) {
             return d.is_gpu && sycl_orgqr::orgqr_blocked_available<T>() && !A.is_heterogeneous() &&
                    A.rows() >= 1 && A.cols() >= 1 && A.batch_size() >= 1 && A.cols() <= A.rows();
         },
-        [&](Vendor) { return d.has_vendor_solver; },
+        [&](Vendor) { return d.has_vendor; },
     }, c);
-}
-
-template <Backend B, class T>
-OrgqrChoice choose(Queue& q, const MV<T>& A) {
-    const select::Device& d = device<B>(q);
-    auto ok = [&](const OrgqrChoice& c) { return can_run<T>(c, d, A); };
-    try {
-        return select::choose("orgqr", select::dtype_name<T>(), d, key_of<T>(A), candidates<T>(), ok, rules);
-    } catch (const std::runtime_error&) {
-        // Vendor-free burn-down reads coverage `miss` rows; a plain runtime_error records none.
-        const auto all = candidates<T>();
-        if (!select::factorization_vendor_available<B> && std::none_of(all.begin(), all.end(), ok))
-            select::throw_no_vendor_route<T>(Op::orgqr, B, select::kFactorizationLibrary<B>);
-        throw;
-    }
-}
-
-// The coverage row's native flags (§5.6): computed only when coverage records a row.
-template <Backend B, class T>
-select::NativeFacts native_facts(Queue& q, const MV<T>& A) {
-    if (!coverage::dynamic_enabled()) return {};
-    const select::Device& d = device<B>(q);
-    return select::native_facts(candidates<T>(), [&](const OrgqrChoice& c) { return can_run<T>(c, d, A); });
 }
 
 // The apply seams: the public ormqr and its sizing, so the apply picks its own kernel and its
@@ -105,10 +67,9 @@ Event launch(Queue& q, const OrgqrChoice& c, const MV<T>& A, Span<T> tau, Span<s
             return sycl_orgqr::orgqr_blocked_dispatch<T>(q, A, tau, ws, apply_q<B, T>, apply_q_size<B, T>);
         },
         [&](Vendor) -> Event {
-            if constexpr (select::factorization_vendor_available<B>)
+            if constexpr (select::has_library<B>(spec.vendor))
                 return backend::orgqr_vendor<B, T>(q, A, tau, ws);
-            else
-                select::throw_no_vendor_route<T>(Op::orgqr, B, select::kFactorizationLibrary<B>);
+            else select::no_vendor<B, T>(spec);
         },
     }, c);
 }
@@ -121,10 +82,9 @@ std::size_t workspace(Queue& q, const OrgqrChoice& c, const MV<T>& A, Span<T> ta
     return std::visit(overloaded{
         [&](Blocked) { return sycl_orgqr::orgqr_blocked_buffer_size<T>(q, A, tau, apply_q_size<B, T>); },
         [&](Vendor) -> std::size_t {
-            if constexpr (select::factorization_vendor_available<B>)
+            if constexpr (select::has_library<B>(spec.vendor))
                 return backend::orgqr_vendor_buffer_size<B, T>(q, A, tau);
-            else
-                select::throw_no_vendor_route<T>(Op::orgqr, B, select::kFactorizationLibrary<B>);
+            else select::no_vendor<B, T>(spec);
         },
     }, c);
 }
@@ -134,48 +94,29 @@ std::size_t workspace(Queue& q, const OrgqrChoice& c, const MV<T>& A, Span<T> ta
 template <Backend Back, typename T>
 Event orgqr(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<T> tau, Span<std::byte> workspace) {
     orgqr_validate_params<T>(A);
-    const auto c = ops::orgqr::choose<Back, T>(ctx, A);
     // The coverage row's key, as the old builder set it: k = min(m, n) reflectors, (Left, NoTrans).
-    auto shape = select::square_shape<Back, T>(A.rows(), A.batch_size());
-    shape.n = A.cols();
-    shape.k = std::min(A.rows(), A.cols());
-    shape.side = Side::Left;
-    shape.transA = Transpose::NoTrans;
+    const coverage::Shape shape{.m = A.rows(), .n = A.cols(), .k = std::min(A.rows(), A.cols()),
+                                .batch = A.batch_size(), .transA = Transpose::NoTrans, .side = Side::Left};
     select::Key trace_key = ops::orgqr::key_of<T>(A);
     trace_key.emplace_back("batch", A.batch_size());
-    select::TraceScope trace("orgqr", c, shape, ops::orgqr::native_facts<Back, T>(ctx, A), trace_key);
-    return ops::orgqr::launch<Back, T>(ctx, c, A, tau, workspace);
+    return select::run<Back, T>(
+        ops::orgqr::spec, ctx, ops::orgqr::key_of<T>(A), ops::orgqr::candidates<T>(),
+        [&](const auto& c, const auto& d) { return ops::orgqr::can_run<T>(c, d, A); }, shape, trace_key,
+        [&](const auto& c) { return ops::orgqr::launch<Back, T>(ctx, c, A, tau, workspace); });
 }
 
 template <Backend Back, typename T>
 size_t orgqr_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, Span<T> tau) {
     orgqr_validate_params<T>(A);
-    return ops::orgqr::workspace<Back, T>(ctx, ops::orgqr::choose<Back, T>(ctx, A), A, tau);
+    const auto c = select::pick<Back, T>(
+        ops::orgqr::spec, ctx, ops::orgqr::key_of<T>(A), ops::orgqr::candidates<T>(),
+        [&](const auto& k, const auto& d) { return ops::orgqr::can_run<T>(k, d, A); });
+    return ops::orgqr::workspace<Back, T>(ctx, c, A, tau);
 }
 
-#define ORGQR_INSTANTIATE(B_, fp)                                    \
-    BATCHLAS_INSTANTIATE(sig::orgqr<fp>, orgqr, B_, fp)              \
-    BATCHLAS_INSTANTIATE(sig::orgqr_buffer_size<fp>, orgqr_buffer_size, B_, fp)
-
-#define ORGQR_ALL(B_)                          \
-    ORGQR_INSTANTIATE(B_, float)               \
-    ORGQR_INSTANTIATE(B_, double)              \
-    ORGQR_INSTANTIATE(B_, std::complex<float>) \
-    ORGQR_INSTANTIATE(B_, std::complex<double>)
-
-// Keyed on the device family, not the vendor library: without the library the Vendor arm
-// compiles to a throw, so the symbol exists in every build with the device.
-#if BATCHLAS_HAS_CUDA_BACKEND
-ORGQR_ALL(Backend::CUDA)
-#endif
-#if BATCHLAS_HAS_ROCM_BACKEND
-ORGQR_ALL(Backend::ROCM)
-#endif
-#if BATCHLAS_HAS_HOST_BACKEND
-ORGQR_ALL(Backend::NETLIB)
-#endif
-
-#undef ORGQR_ALL
+#define ORGQR_INSTANTIATE(B_, fp) \
+    BATCHLAS_INSTANTIATE_OP(B_, fp, orgqr) BATCHLAS_INSTANTIATE_OP(B_, fp, orgqr_buffer_size)
+BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(ORGQR_INSTANTIATE)
 #undef ORGQR_INSTANTIATE
 
 }  // namespace batchlas

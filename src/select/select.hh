@@ -42,8 +42,7 @@ struct Device {
     int arch_number = 0; // 120, 89, 90 (gfx90a), 0 for cpu
     bool is_gpu = false;
     bool has_sg32 = false;
-    bool has_vendor_solver = false;  // potrf/syev library (solver_vendor_available)
-    bool has_vendor_blas = false;    // level-3 library: gemm/trsm/... (level3_vendor_available)
+    bool has_vendor = false;  // the asking op's library group (OpSpec::vendor) is compiled in
     std::int64_t slm_budget = 0;
     int max_wg = 0;
 };
@@ -51,14 +50,12 @@ struct Device {
 // Key, family and arch only; the capability fields stay default. Tables and tests use it.
 BATCHLAS_API Device device_from_key(std::string_view key);
 
-// Memoized per (device, backend, has_vendor_solver, has_vendor_blas).
-BATCHLAS_API const Device& describe(const batchlas::Device& dev, Backend b, bool has_vendor_solver,
-                                    bool has_vendor_blas);
+// Memoized per (device, backend, has_vendor).
+BATCHLAS_API const Device& describe(const batchlas::Device& dev, Backend b, bool has_vendor);
 
 template <Backend B>
-const Device& device_of(const Queue& q, bool has_vendor_solver = select::solver_vendor_available<B>,
-                        bool has_vendor_blas = select::level3_vendor_available<B>) {
-    return describe(q.device(), B, has_vendor_solver, has_vendor_blas);
+const Device& device_of(const Queue& q, Lib vendor = Lib::none) {
+    return describe(q.device(), B, has_library<B>(vendor));
 }
 
 template <class T>
@@ -87,6 +84,20 @@ struct NoFields {
     std::array<int, 0> values() const { return {}; }
     bool operator==(const NoFields&) const = default;
 };
+
+// Every alternative of a field-less choice variant, in declaration (= tie-break) order.
+template <class Choice>
+constexpr auto all_of() {
+    return [&]<std::size_t... I>(std::index_sequence<I...>) {
+        return std::array<Choice, sizeof...(I)>{Choice{std::variant_alternative_t<I, Choice>{}}...};
+    }(std::make_index_sequence<std::variant_size_v<Choice>>{});
+}
+
+// std::visit over a choice with one lambda per family.
+template <class... F>
+struct overloaded : F... { using F::operator()...; };
+template <class... F>
+overloaded(F...) -> overloaded<F...>;
 
 namespace detail {
 
@@ -413,17 +424,6 @@ Choice choose(std::string_view op, std::string_view dtype, const Device& d, cons
 
 // ---- trace and coverage (§5.6) ----------------------------------------------------------
 
-// The coverage key for a square op; the op sets uplo/side/... on the result.
-template <Backend B, class T>
-coverage::Shape square_shape(std::int64_t n, std::int64_t batch) {
-    coverage::Shape s;
-    s.scalar = scalar_kind_of<T>;
-    s.backend = B;
-    s.m = s.n = s.k = n;
-    s.batch = batch;
-    return s;
-}
-
 // The coverage row's native_route_existed / native_route_supported (tri-state, -1 unknown).
 namespace detail {
 struct NativeFacts {
@@ -466,6 +466,75 @@ public:
 private:
     bool active_ = false;
 };
+
+// ---- an op's whole selection path (§4.3) -------------------------------------------------
+
+inline constexpr std::array<std::string_view, 2> kBlockedThenVendor{"blocked", "vendor"};
+
+// What an op's choice.hh declares once: its name, the library its Vendor family calls (one
+// gate for can_run, the launch arm and the NoRouteError), and its last-resort order.
+struct OpSpec {
+    Op op;
+    Lib vendor = Lib::none;
+    Rules rules{kBlockedThenVendor};
+    constexpr std::string_view name() const { return op_name(op); }
+};
+
+// The Vendor arm of an op without its library: record the miss and throw NoRouteError.
+template <Backend B, class T>
+[[noreturn]] void no_vendor(const OpSpec& op) {
+    throw_no_vendor_route<T>(op.op, B, library_name<B>(op.vendor));
+}
+
+// choose(), with "nothing runnable" in a build without the op's library reported as
+// NoRouteError plus a coverage `miss` row (the vendor-free burn-down reads them).
+// can_run(choice, device) is the op's R3 predicate.
+template <Backend B, class T, class Choice, std::size_t N, class CanRun>
+Choice pick(const OpSpec& op, const Device& d, const Key& key, const std::array<Choice, N>& candidates,
+            CanRun&& can_run) {
+    auto ok = [&](const Choice& c) { return can_run(c, d); };
+    try {
+        return choose(op.name(), dtype_name<T>(), d, key, candidates, ok, op.rules);
+    } catch (const std::runtime_error&) {
+        if (op.vendor != Lib::none && !has_library<B>(op.vendor) &&
+            std::none_of(candidates.begin(), candidates.end(), ok))
+            no_vendor<B, T>(op);
+        throw;
+    }
+}
+
+template <Backend B, class T, class Choice, std::size_t N, class CanRun>
+Choice pick(const OpSpec& op, const Queue& q, const Key& key, const std::array<Choice, N>& candidates,
+            CanRun&& can_run) {
+    return pick<B, T>(op, device_of<B>(q, op.vendor), key, candidates, can_run);
+}
+
+// A public entry point after validation: pick, open the trace/coverage scope (the shape's
+// scalar and backend are filled here; `trace_fields` as for TraceScope), then launch(choice)
+// inside it, so children nest under this line.
+template <Backend B, class T, class Choice, std::size_t N, class CanRun, class Launch>
+decltype(auto) run(const OpSpec& op, Queue& q, const Key& key, const std::array<Choice, N>& candidates,
+                   CanRun&& can_run, coverage::Shape shape, const Key& trace_fields, Launch&& launch) {
+    const Device& d = device_of<B>(q, op.vendor);
+    const Choice c = pick<B, T>(op, d, key, candidates, can_run);
+    shape.scalar = scalar_kind_of<T>;
+    shape.backend = B;
+    NativeFacts facts;
+    if (coverage::dynamic_enabled()) facts = native_facts(candidates, [&](const Choice& k) { return can_run(k, d); });
+    TraceScope trace(op.name(), c, shape, facts, trace_fields);
+    return launch(c);
+}
+
+// Runs f(queue) on q if it is in order, else on an in-order queue that first waits on q's
+// pending work (the multi-launch drivers need one).
+template <class F>
+decltype(auto) on_in_order_queue(Queue& q, F&& f) {
+    if (q.in_order()) return f(q);
+    Queue in_order(q, true);
+    Event dep = q.get_event();
+    in_order.enqueue(dep);
+    return f(in_order);
+}
 
 namespace testing {
 // Replace the embedded tables with {file name, text} pairs; caches are dropped.

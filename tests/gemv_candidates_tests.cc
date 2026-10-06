@@ -574,7 +574,7 @@ TEST(GemvDeviceAllows, CtaNeedsAGpuWithSubGroup32AndATransposedCall) {
         select::Device d;
         d.is_gpu = gpu;
         d.has_sg32 = sg32;
-        d.has_vendor_blas = vendor;
+        d.has_vendor = vendor;
         return d;
     };
     struct Case { select::Device d; bool transposed; bool cta, direct, vendor; const char* what; };
@@ -827,7 +827,7 @@ TYPED_TEST(GemvCandidates, OrthoCallerShapes) {
 TYPED_TEST(GemvCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
-    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    ::testing::GTEST_FLAG(death_test_style) = "threadsafe";
     const std::string dir = ::testing::TempDir() + "gemv_cov." + std::string(select::dtype_name<T>());
     std::filesystem::remove_all(dir);
     std::filesystem::create_directories(dir);

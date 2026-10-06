@@ -1,9 +1,7 @@
-// gesv: the whole selection path (docs/design/flat-kernel-selection.md §4.3, rule R1;
-// docs/design/flat-kernel-selection.md#phase-5-gesv). public gesv() -> choose() -> std::visit -> launch.
-// The kernel for a shape is the first runnable entry of the nearest row in
-// tuned/gesv.<dtype>.<device>.txt; can_run() below only removes entries that cannot run.
-// Tiny is the fused LU factor-and-solve kernel; Blocked composes the public getrf and getrs,
-// and each child picks its own kernel. No vendor ships a batched gesv, so there is no vendor arm.
+// gesv (flat-kernel-selection.md §4.3, R1; docs/design/flat-kernel-selection.md#phase-5-gesv): select::run
+// takes the first entry of the nearest tuned/gesv.<dtype>.<device>.txt row that can_run() admits. Tiny is
+// the fused LU factor-and-solve kernel; Blocked composes the public getrf and getrs, and each child picks
+// its own kernel. No vendor ships a batched gesv, so there is no vendor arm.
 
 #include <batchlas/backend_config.h>
 
@@ -24,10 +22,7 @@
 namespace batchlas {
 namespace ops::gesv {
 
-template <class... F>
-struct overloaded : F... { using F::operator()...; };
-template <class... F>
-overloaded(F...) -> overloaded<F...>;
+using select::overloaded;
 
 template <class T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
@@ -53,21 +48,6 @@ bool can_run(const GesvChoice& c, const select::Device& d, const MV<T>& A, const
         },
         [&](Blocked) { return homogeneous; },
     }, c);
-}
-
-template <Backend B, class T>
-GesvChoice choose(Queue& q, const MV<T>& A, const MV<T>& Bm) {
-    const select::Device& d = select::device_of<B>(q);
-    return select::choose("gesv", select::dtype_name<T>(), d, key_of<T>(A, Bm), candidates<T>(),
-                          [&](const GesvChoice& c) { return can_run<B, T>(c, d, A, Bm); }, rules);
-}
-
-// The coverage row's native flags (§5.6): computed only when coverage records a row.
-template <Backend B, class T>
-select::NativeFacts native_facts(Queue& q, const MV<T>& A, const MV<T>& Bm) {
-    if (!coverage::dynamic_enabled()) return {};
-    const select::Device& d = select::device_of<B>(q);
-    return select::native_facts(candidates<T>(), [&](const GesvChoice& c) { return can_run<B, T>(c, d, A, Bm); });
 }
 
 // Blocked cuts the caller's span at getrf's reported size: BumpAllocator's sizing results are
@@ -118,13 +98,13 @@ Event gesv(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const Matrix
            Span<int64_t> pivots, Span<std::byte> work_space, Span<int32_t> info) {
     gesv_validate_params<T>(A, B);
     ops::gesv::throw_if_unservable<T>(A, B, "gesv");
-    const auto c = ops::gesv::choose<Back, T>(ctx, A, B);
     // The coverage row's key: m = k = order, n = nrhs (the old GesvShape's spelling).
-    auto shape = select::square_shape<Back, T>(A.rows(), A.batch_size());
-    shape.n = B.cols();
-    const select::Key trace_key{{"n", A.rows()}, {"nrhs", B.cols()}, {"batch", A.batch_size()}};
-    select::TraceScope trace("gesv", c, shape, ops::gesv::native_facts<Back, T>(ctx, A, B), trace_key);
-    return ops::gesv::launch<Back, T>(ctx, c, A, B, pivots, work_space, info);
+    const coverage::Shape shape{.m = A.rows(), .n = B.cols(), .k = A.rows(), .batch = A.batch_size()};
+    return select::run<Back, T>(
+        ops::gesv::spec, ctx, ops::gesv::key_of<T>(A, B), ops::gesv::candidates<T>(),
+        [&](const auto& c, const auto& d) { return ops::gesv::can_run<Back, T>(c, d, A, B); }, shape,
+        {{"n", A.rows()}, {"nrhs", B.cols()}, {"batch", A.batch_size()}},
+        [&](const auto& c) { return ops::gesv::launch<Back, T>(ctx, c, A, B, pivots, work_space, info); });
 }
 
 template <Backend Back, typename T>
@@ -132,31 +112,15 @@ size_t gesv_buffer_size(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A,
                         const MatrixView<T, MatrixFormat::Dense>& B) {
     gesv_validate_params<T>(A, B);
     ops::gesv::throw_if_unservable<T>(A, B, "gesv_buffer_size");
-    return ops::gesv::workspace<Back, T>(ctx, ops::gesv::choose<Back, T>(ctx, A, B), A, B);
+    const auto c = select::pick<Back, T>(
+        ops::gesv::spec, ctx, ops::gesv::key_of<T>(A, B), ops::gesv::candidates<T>(),
+        [&](const auto& k, const auto& d) { return ops::gesv::can_run<Back, T>(k, d, A, B); });
+    return ops::gesv::workspace<Back, T>(ctx, c, A, B);
 }
 
-#define GESV_INSTANTIATE(B_, fp)                                    \
-    BATCHLAS_INSTANTIATE(sig::gesv<fp>, gesv, B_, fp)               \
-    BATCHLAS_INSTANTIATE(sig::gesv_buffer_size<fp>, gesv_buffer_size, B_, fp)
-
-#define GESV_ALL(B_)                          \
-    GESV_INSTANTIATE(B_, float)               \
-    GESV_INSTANTIATE(B_, double)              \
-    GESV_INSTANTIATE(B_, std::complex<float>) \
-    GESV_INSTANTIATE(B_, std::complex<double>)
-
 // Keyed on the device family: gesv has no vendor arm, so every build with the device has it.
-#if BATCHLAS_HAS_CUDA_BACKEND
-GESV_ALL(Backend::CUDA)
-#endif
-#if BATCHLAS_HAS_ROCM_BACKEND
-GESV_ALL(Backend::ROCM)
-#endif
-#if BATCHLAS_HAS_HOST_BACKEND
-GESV_ALL(Backend::NETLIB)
-#endif
-
-#undef GESV_ALL
+#define GESV_INSTANTIATE(B_, fp) BATCHLAS_INSTANTIATE_OP(B_, fp, gesv) BATCHLAS_INSTANTIATE_OP(B_, fp, gesv_buffer_size)
+BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(GESV_INSTANTIATE)
 #undef GESV_INSTANTIATE
 
 }  // namespace batchlas

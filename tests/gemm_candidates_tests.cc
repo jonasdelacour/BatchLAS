@@ -663,7 +663,7 @@ TYPED_TEST(GemmCandidates, CanRunEqualsLaunch) {
 // BATCHLAS_KERNEL_TRACE set from the start, so its queue is created with profiling.
 TYPED_TEST(GemmCandidates, PinnedChoiceLaunchesItsOwnKernel) {
     using T = typename TestFixture::T;
-    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    ::testing::GTEST_FLAG(death_test_style) = "threadsafe";
     struct Case { C c; Spec s; std::string kernel; };
     std::vector<Case> cases;
     for (const C& c : og::candidates<T>()) {
@@ -1132,7 +1132,7 @@ TYPED_TEST(GemmCandidates, VendorFreeLastResortIsDirect) {
 TYPED_TEST(GemmCandidates, CoverageRowCarriesBackendKeyAndNativeFlags) {
     using T = typename TestFixture::T;
     static constexpr Backend B = TestFixture::B;
-    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    ::testing::GTEST_FLAG(death_test_style) = "threadsafe";
     const std::string dir = ::testing::TempDir() + "gemm_cov." + std::string(select::dtype_name<T>());
     std::filesystem::remove_all(dir);
     std::filesystem::create_directories(dir);

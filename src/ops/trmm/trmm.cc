@@ -1,17 +1,13 @@
-// trmm: the whole selection path (docs/design/flat-kernel-selection.md §4.3, rule R1).
-// public trmm() -> choose() -> std::visit -> launch. The kernel for a shape is the first
-// runnable entry of the nearest row in tuned/trmm.<dtype>.<device>.txt; can_run() below only
-// removes entries that cannot run. Triangular is the Side::Left tile kernel that skips the zero
-// half of A (trmm_triangular_tiles.hh); Expand materialises op(A)'s triangle into scratch and
+// trmm (flat-kernel-selection.md §4.3, R1; §12): select::run takes the first entry of the nearest
+// tuned/trmm.<dtype>.<device>.txt row that can_run() admits. Triangular is the Side::Left tile kernel that
+// skips the zero half of A (trmm_triangular_tiles.hh); Expand materialises op(A)'s triangle into scratch and
 // hands it to the public gemm; Vendor is cuBLAS / rocBLAS / netlib trmm.
 
 #include <batchlas/backend_config.h>
 
 #include <batchlas/blas/functions/gemm.hh>
 #include <batchlas/blas/functions/trmm.hh>
-#include <batchlas/no_route.hh>
 #include <batchlas/util/mempool.hh>
-#include "../../select/vendor.hh"
 
 #include "choice.hh"
 #include "../../backends/level3_shape.hh"
@@ -21,7 +17,6 @@
 #include "../../select/select.hh"
 #include "../../util/template-instantiations.hh"
 
-#include <algorithm>
 #include <complex>
 #include <cstddef>
 #include <cstdint>
@@ -31,10 +26,7 @@
 namespace batchlas {
 namespace ops::trmm {
 
-template <class... F>
-struct overloaded : F... { using F::operator()...; };
-template <class... F>
-overloaded(F...) -> overloaded<F...>;
+using select::overloaded;
 
 template <class T>
 using MV = MatrixView<T, MatrixFormat::Dense>;
@@ -74,33 +66,8 @@ bool can_run(const TrmmChoice& c, const select::Device& d, Queue& q, const MV<T>
             return backend::detail::expansion_fits(q, k, batch,
                                                    backend::detail::expanded_workspace_bytes<T>(q, k, batch));
         },
-        [&](Vendor) { return d.has_vendor_blas && homogeneous; },
+        [&](Vendor) { return d.has_vendor && homogeneous; },
     }, c);
-}
-
-template <Backend B, class T>
-TrmmChoice choose(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, Side side) {
-    const select::Device& d = select::device_of<B>(q);
-    auto ok = [&](const TrmmChoice& c) { return can_run<B, T>(c, d, q, A, Bm, C, side); };
-    try {
-        return select::choose("trmm", select::dtype_name<T>(), d, key_of<T>(A, Bm, side), candidates<T>(), ok,
-                              rules);
-    } catch (const std::runtime_error&) {
-        // Vendor-free burn-down reads coverage `miss` rows; a plain runtime_error records none.
-        const auto all = candidates<T>();
-        if (!select::level3_vendor_available<B> && std::none_of(all.begin(), all.end(), ok))
-            select::throw_no_vendor_route<T>(Op::trmm, B, select::kLevel3Library<B>);
-        throw;
-    }
-}
-
-// The coverage row's native flags (§5.6): computed only when coverage records a row.
-template <Backend B, class T>
-select::NativeFacts native_facts(Queue& q, const MV<T>& A, const MV<T>& Bm, const MV<T>& C, Side side) {
-    if (!coverage::dynamic_enabled()) return {};
-    const select::Device& d = select::device_of<B>(q);
-    return select::native_facts(candidates<T>(),
-                                [&](const TrmmChoice& c) { return can_run<B, T>(c, d, q, A, Bm, C, side); });
 }
 
 // op(A)'s triangle written densely into a workspace lease (zeros opposite it, ones on a Unit
@@ -141,10 +108,9 @@ Event launch(Queue& q, const TrmmChoice& c, const MV<T>& A, const MV<T>& Bm, con
                 throw std::logic_error("trmm: expand is wired for CUDA only");  // can_run refuses it
         },
         [&](Vendor) -> Event {
-            if constexpr (select::level3_vendor_available<B>)
+            if constexpr (select::has_library<B>(spec.vendor))
                 return backend::trmm_vendor<B, T>(q, A, Bm, C, alpha, side, uplo, transA, diag);
-            else
-                select::throw_no_vendor_route<T>(Op::trmm, B, select::kLevel3Library<B>);
+            else select::no_vendor<B, T>(spec);
         },
     }, c);
 }
@@ -160,41 +126,21 @@ Event trmm(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const Matrix
     // An empty problem is a no-op under any pin: both native launches throw on an empty batch,
     // and the cuBLAS loop faults on one.
     if (A.batch_size() == 0 || C.rows() == 0 || C.cols() == 0) return ctx.create_event_after_external_work();
-    const auto c = ops::trmm::choose<Back, T>(ctx, A, B, C, side);
     // The coverage row's key, as the old level-3 recorder wrote it: C's extents and A's order.
-    auto shape = select::square_shape<Back, T>(A.rows(), A.batch_size());
-    shape.m = C.rows();
-    shape.n = C.cols();
-    shape.uplo = uplo;
-    shape.side = side;
-    shape.diag = diag;
-    shape.transA = transA;
-    const select::Key trace_key = ops::trmm::key_of<T>(A, B, side);
-    select::TraceScope trace("trmm", c, shape, ops::trmm::native_facts<Back, T>(ctx, A, B, C, side), trace_key);
-    return ops::trmm::launch<Back, T>(ctx, c, A, B, C, alpha, side, uplo, transA, diag);
+    const coverage::Shape shape{.m = C.rows(), .n = C.cols(), .k = A.rows(), .batch = A.batch_size(),
+                                .transA = transA, .uplo = uplo, .side = side, .diag = diag};
+    const select::Key key = ops::trmm::key_of<T>(A, B, side);
+    return select::run<Back, T>(
+        ops::trmm::spec, ctx, key, ops::trmm::candidates<T>(),
+        [&](const auto& c, const auto& d) { return ops::trmm::can_run<Back, T>(c, d, ctx, A, B, C, side); },
+        shape, key,
+        [&](const auto& c) {
+            return ops::trmm::launch<Back, T>(ctx, c, A, B, C, alpha, side, uplo, transA, diag);
+        });
 }
 
-#define TRMM_INSTANTIATE(B_, fp) BATCHLAS_INSTANTIATE(sig::trmm<fp>, trmm, B_, fp)
-
-#define TRMM_ALL(B_)                          \
-    TRMM_INSTANTIATE(B_, float)               \
-    TRMM_INSTANTIATE(B_, double)              \
-    TRMM_INSTANTIATE(B_, std::complex<float>) \
-    TRMM_INSTANTIATE(B_, std::complex<double>)
-
-// Keyed on the device family, not the vendor library: without the library the Vendor arm
-// compiles to a throw, so the symbol exists in every build with the device.
-#if BATCHLAS_HAS_CUDA_BACKEND
-TRMM_ALL(Backend::CUDA)
-#endif
-#if BATCHLAS_HAS_ROCM_BACKEND
-TRMM_ALL(Backend::ROCM)
-#endif
-#if BATCHLAS_HAS_HOST_BACKEND
-TRMM_ALL(Backend::NETLIB)
-#endif
-
-#undef TRMM_ALL
+#define TRMM_INSTANTIATE(B_, fp) BATCHLAS_INSTANTIATE_OP(B_, fp, trmm)
+BATCHLAS_INSTANTIATE_SCALAR_ALL_BACKENDS(TRMM_INSTANTIATE)
 #undef TRMM_INSTANTIATE
 
 }  // namespace batchlas
