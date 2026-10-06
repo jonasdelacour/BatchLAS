@@ -153,6 +153,9 @@ template <Backend Back, typename T>
 Event trmm(Queue& ctx, const MatrixView<T, MatrixFormat::Dense>& A, const MatrixView<T, MatrixFormat::Dense>& B,
            const MatrixView<T, MatrixFormat::Dense>& C, T alpha, Side side, Uplo uplo, Transpose transA, Diag diag) {
     (void)backend::shape::validate_product<std::invalid_argument>("TRMM", A, B, C, side);
+    // An empty problem is a no-op under any pin: both native launches throw on an empty batch,
+    // and the cuBLAS loop faults on one.
+    if (A.batch_size() == 0 || C.rows() == 0 || C.cols() == 0) return ctx.create_event_after_external_work();
     const auto c = ops::trmm::choose<Back, T>(ctx, A, B, C, side);
     // The coverage row's key, as the old level-3 recorder wrote it: C's extents and A's order.
     auto shape = select::square_shape<Back, T>(A.rows(), A.batch_size());

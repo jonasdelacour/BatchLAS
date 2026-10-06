@@ -586,6 +586,35 @@ TYPED_TEST(TrmmCandidates, InvalidShapesThrowBeforeChoose) {
         ASSERT_TRUE(same_bits(p.mem[e], p.mem0[e])) << "a refused call wrote element " << e;
 }
 
+// An empty batch, order or rhs count is a no-op under Auto and every pin, vendor-free too
+// (the old native launches threw on an empty batch, and the cuBLAS loop faults on one).
+TYPED_TEST(TrmmCandidates, EmptyProblemIsANoOp) {
+    using T = typename TestFixture::T;
+    static constexpr Backend B = TestFixture::B;
+    auto p = make_prob<T>(Spec{Side::Left, Uplo::Lower, Transpose::NoTrans, Diag::NonUnit, 8, 4, 2});
+    struct Case { int n, q, batch; Side side; };
+    const Case cases[] = {{8, 4, 0, Side::Left}, {8, 4, 0, Side::Right}, {8, 0, 2, Side::Left}, {0, 4, 2, Side::Right}};
+    std::vector<std::optional<C>> pins{std::nullopt};
+    for (const C& c : tm::candidates<T>()) pins.push_back(c);
+    const ScopedEnvVar clear("BATCHLAS_TRMM_ROUTE", nullptr);
+    for (const auto& k : cases) {
+        const int br = k.side == Side::Left ? k.n : k.q, bc = k.side == Side::Left ? k.q : k.n;
+        const MVof<T> A(p.mem.data() + p.a.off, k.n, k.n, p.a.ld, p.a.stride, k.batch);
+        const MVof<T> Bm(p.mem.data() + p.b.off, br, bc, std::max(br, 1), p.b.stride, k.batch);
+        const MVof<T> Cm(p.mem.data() + p.c.off, br, bc, std::max(br, 1), p.c.stride, k.batch);
+        for (const auto& c : pins) {
+            std::optional<Pin> pin;
+            if (c) pin.emplace("trmm", *c);
+            EXPECT_NO_THROW(((void)trmm<B, T>(*this->ctx, A, Bm, Cm, p.alpha, k.side, Uplo::Lower, Transpose::NoTrans,
+                                              Diag::NonUnit), this->ctx->wait()))
+                << (c ? select::to_string(*c) : std::string("auto")) << " n=" << k.n << " q=" << k.q
+                << " batch=" << k.batch;
+        }
+    }
+    for (std::size_t e = 0; e < p.mem.size(); ++e)
+        ASSERT_TRUE(same_bits(p.mem[e], p.mem0[e])) << "an empty problem wrote element " << e;
+}
+
 // A heterogeneous operand: no native family can run it (one launch has one order; the
 // expansion's gemm throws), and on CUDA the vendor loop would run every item at the full
 // storage order, so it is refused too: every pin throws, and Auto has no route.
