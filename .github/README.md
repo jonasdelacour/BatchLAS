@@ -1,11 +1,11 @@
 
 <div align="center">
-  <img src="BatchLAS_logo_transparent.png" alt="BatchLAS Logo" width="200">
+  <img src="https://raw.githubusercontent.com/jonasdelacour/BatchLAS/main/BatchLAS_logo_transparent.png" alt="BatchLAS Logo" width="200">
 </div>
 
 # BatchLAS
 
-BatchLAS is a SYCL-first batched linear algebra library with optional vendor backends for CUDA, ROCm, netlib BLAS/LAPACK, and oneMKL. The repository currently contains the C++ library, an optional pybind11-based Python package, a broad unit-test suite, benchmark executables, tuning scripts, and research notebooks used to validate newer eigensolver and factorization work.
+BatchLAS is a SYCL-first batched linear algebra library with optional vendor backends for CUDA, ROCm and netlib BLAS/LAPACK. The repository currently contains the C++ library, an optional pybind11-based Python package, a broad unit-test suite, benchmark executables and tuning scripts.
 
 ## Current Status
 
@@ -41,15 +41,15 @@ design decisions and their rationale, which code comments cite as
 | directory | what lives there |
 | --- | --- |
 | `docs/guide/` | how to use a feature |
-| `docs/design/` | design decisions and architecture records, including [known defects](docs/design/known-defects.md) |
+| `docs/design/` | design decisions and architecture records, including [known defects](../docs/design/known-defects.md) |
 | `docs/algorithms/` | the mathematics and derivations behind the kernels |
-| `docs/perf/` | the evidence layer: routing windows, measured grids, rejected alternatives ([index](docs/perf/README.md)) |
-| `docs/developer/` | process and tooling, including [the documentation conventions](docs/developer/documentation.md) |
+| `docs/perf/` | the evidence layer: routing windows, measured grids, rejected alternatives ([index](../docs/perf/README.md)) |
+| `docs/developer/` | process and tooling, including [the documentation conventions](../docs/developer/documentation.md) |
 
 The site also generates a *Results database* page over the raw grids in
 `benchmarks/results/` and an *Evidence index* of every code comment that cites a
-page. The C++ calling conventions are in [docs/cpp-api.md](docs/cpp-api.md) and
-running the tests is covered in [tests/README.md](tests/README.md).
+page. The C++ calling conventions are in [docs/cpp-api.md](../docs/cpp-api.md) and
+running the tests is covered in [tests/README.md](../tests/README.md).
 
 ## Using the C++ API
 
@@ -77,7 +77,7 @@ ctx.wait();                                        // required before reading X,
 ```
 
 Three things that are easy to get wrong and are covered in full in
-[docs/cpp-api.md](docs/cpp-api.md):
+[docs/cpp-api.md](../docs/cpp-api.md):
 
 - **Matrices are column-major**, and every pointer you hand to a `MatrixView`
   must be device-accessible (USM). A `std::vector` compiles and then aborts the
@@ -87,11 +87,11 @@ Three things that are easy to get wrong and are covered in full in
 - **A `Queue` is single-threaded.** Use one `Queue` per thread; sharing one
   across threads corrupts its workspace arena.
 
-See **[docs/cpp-api.md](docs/cpp-api.md)** for the data-layout and memory
+See **[docs/cpp-api.md](../docs/cpp-api.md)** for the data-layout and memory
 contract, the full conventions, and the workspace-lifetime caveat on
-out-of-order queues; **[docs/extending.md](docs/extending.md)** covers adding
+out-of-order queues; **[docs/extending.md](../docs/extending.md)** covers adding
 entry points to the library itself. A complete, buildable external consumer
-lives in [`examples/consumer/`](examples/consumer/README.md).
+lives in [`examples/consumer/`](../examples/consumer/README.md).
 
 ## Performance
 
@@ -113,12 +113,12 @@ rather than a headline number:
   and `Auto` routes there accordingly (the routing it justified ships as the
   `tuned/syev.float.*.txt` rows). The full grids, including the
   corrections that superseded earlier ones, are on the
-  [syev evidence page](docs/perf/syev.md#syev-the-blocked-over-cusolver-headline-measurement).
+  [syev evidence page](../docs/perf/syev.md#syev-the-blocked-over-cusolver-headline-measurement).
 - **`gesvd` vs `cusolverDnXgesvdjBatched`, float, RTX 4090**
   (`benchmarks/results/gesvd_vs_gesvdj_rtx4090.csv`): at `n = 8, batch = 16384`
   BatchLAS's one-sided Jacobi SVD is 0.0064 µs/matrix vs 0.339 µs/matrix; at
   `n = 32, batch = 16384` it is 0.468 vs 0.768. Conditions and the rest of the
-  grid are on the [gesvd evidence page](docs/perf/gesvd.md#gesvd-readme-headline-jacobi-vs-gesvdjbatched-per-matrix).
+  grid are on the [gesvd evidence page](../docs/perf/gesvd.md#gesvd-readme-headline-jacobi-vs-gesvdjbatched-per-matrix).
 
 Both of those are single-machine numbers from the "Tested platforms" table below,
 at large batch. Ratios measured on an *unsaturated* device are mostly overhead
@@ -175,13 +175,14 @@ See `python/examples/README.md` for the index, the array/batching conventions, a
 - `benchmarks/`: performance and accuracy benchmark executables
 - `python/`: pybind11 bindings, Python facade, Python tests, and `examples/`
 - `scripts/`: benchmark campaign helpers and result-processing scripts
-- `playground/`: notebooks and exploratory scripts for algorithm work
+- `playground/`: Python reference implementations that the band-reduction and sb2st
+  sources and tests cite
 - `docs/`: the documentation site's pages — the C++ API guide (`docs/cpp-api.md`),
   user guides, design records, algorithm notes and the performance evidence
   (see [Documentation](#documentation)); `docs/Doxyfile` and `docs/theme/` build it
 - `examples/`: a minimal external CMake consumer
-- `experiments/`, `plotting/`, `evaluation/`: research scaffolding; not part of
-  the build and not installed
+- `evaluation/`: the tuning and perf-regression harnesses; not part of the build
+  and not installed
 
 ## Requirements
 
@@ -209,7 +210,6 @@ Common optional dependencies:
 - CUDA Toolkit for NVIDIA backends
 - ROCm for AMD backends
 - LAPACKE and CBLAS for the netlib host backend
-- oneMKL for the optional MKL backend
 - Python 3, pybind11, NumPy, and SciPy for Python bindings
 
 Notes:
@@ -218,7 +218,8 @@ Notes:
 - The CMake logic is primarily written around IntelLLVM/Clang-style SYCL compilers.
 - The default build type is `RelWithDebInfo`, not `Debug`.
 
-For a Linux-oriented environment setup with package suggestions and oneAPI notes, see `AGENTS.md`.
+For a Linux-oriented environment setup with package suggestions and oneAPI notes, see the
+[agent environment guide](../docs/developer/agent-guide.md).
 
 ### Tested platforms
 
@@ -240,7 +241,6 @@ rather than known-good — CI adds no coverage there.
 | CI — GPU gate | the Primary row's toolchain, on a self-hosted runner on that machine | 13.2 | NVIDIA RTX 4090, `sm_89` | Ubuntu 22.04 | Build + `ctest -LE slow` + install on every push and non-fork PR; full `ctest`, packaging and a vendor-free build nightly |
 | CPU only | Intel oneAPI `icpx` 2025.x | — | none (`spir64_x86_64` / `native_cpu`) | Ubuntu 22.04 | Configures and builds; **no NVIDIA support** — see the warning above. Not built by CI |
 | AMD / ROCm | — | — | — | — | Code paths exist; not built or run by anyone here |
-| oneMKL backend | — | — | Intel GPU | — | Code paths exist; not built or run by anyone here |
 | macOS / Windows | — | — | — | — | Untested; no attempt made |
 
 Other NVIDIA architectures should work — the build detects the local GPU and can
@@ -249,7 +249,7 @@ be pointed elsewhere with `-DBATCHLAS_NVIDIA_ARCH=sm_XX` — but nothing but
 
 Because `main` is not green (four known test failures), the GPU job compares
 each run against a checked-in ledger, `tests/known-failures.txt`, rather than
-against `ctest`'s exit code. See **[docs/ci.md](docs/ci.md)** for the full
+against `ctest`'s exit code. See **[docs/ci.md](../docs/ci.md)** for the full
 coverage table, how to stand the self-hosted runner up, how to retire a
 known-failure entry, and the environment trap that makes a runner build a
 CPU-only library and report green.
@@ -320,7 +320,6 @@ Common CMake options:
   search path — see Requirements. The build fails at configure time without it
 - `BATCHLAS_ENABLE_ROCM`: enable ROCm backend support even if no AMD GPU is auto-detected
 - `BATCHLAS_ENABLE_NETLIB`: enable the host netlib backend
-- `BATCHLAS_ENABLE_MKL`: enable the oneMKL backend
 - `BATCHLAS_ENABLE_TUNING`: enable tuning targets; intended for benchmark builds
 - `BATCHLAS_CPU_TARGET`: override SYCL CPU target selection (`auto`, `native_cpu`, `spir64_x86_64`, `none`)
 - `BATCHLAS_TEST_TARGET_SET`: choose `all` or `smoke`
@@ -394,7 +393,7 @@ cmake --build build --target batchlas_benchmarks -j"$(nproc)"   # all of them
 cmake --build build --target gemm_benchmark -j"$(nproc)"        # just one
 ```
 
-The `scripts/` directory contains campaign helpers and archived CSV outputs from prior runs. Tuning support is wired through `BATCHLAS_ENABLE_TUNING` and the optional `BATCHLAS_TUNING_PROFILE` cache entry.
+The `scripts/` directory contains campaign helpers and result-processing scripts. Tuning support is wired through `BATCHLAS_ENABLE_TUNING`.
 
 ## Python Bindings
 
@@ -420,7 +419,7 @@ The extension module is built with pybind11 and linked against the installed or 
 ## Consuming BatchLAS from CMake
 
 A complete, buildable example of everything in this section lives in
-[`examples/consumer/`](examples/consumer/README.md) — start from that rather than from the
+[`examples/consumer/`](../examples/consumer/README.md) — start from that rather than from the
 snippets below.
 
 ### The short version
@@ -552,14 +551,14 @@ ls <prefix>/include/blas
 - Each op's entry point, choices and launchers live in `src/ops/<op>/`; the shared
   selection machinery (table lookup, vendor availability, trace and coverage) is in
   `src/select/`, and the per-device tables it reads are in `tuned/`. The design is
-  [docs/design/flat-kernel-selection.md](docs/design/flat-kernel-selection.md).
+  [docs/design/flat-kernel-selection.md](../docs/design/flat-kernel-selection.md).
 - Implementation notes, measurements and design rationale live in the documentation
-  site, not in root markdown files: `docs/perf/` for routing windows and measured
+  site, not in markdown files outside `docs/`: `docs/perf/` for routing windows and measured
   grids, `docs/design/` for design decisions and known defects, `docs/algorithms/`
   for the mathematics, `docs/developer/` for process and tooling, and
-  [docs/extending.md](docs/extending.md) for adding entry points. `AGENTS.md` is
-  the working guide for the build, testing and measurement rules.
-- `playground/` contains exploratory notebooks and scripts used during algorithm development.
+  [docs/extending.md](../docs/extending.md) for adding entry points. The
+  [agent environment guide](../docs/developer/agent-guide.md) is the working guide for
+  the build, testing and measurement rules.
 
 ## License
 

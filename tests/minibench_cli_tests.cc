@@ -27,12 +27,6 @@ void typed_bench<float, batchlas::Backend::ROCM>(minibench::State&) { ++called_f
 BATCHLAS_BENCH_ROCM(typed_bench, [](auto* b){ b->Args({1}); });
 #endif
 
-#if BATCHLAS_HAS_MKL_BACKEND
-template <>
-void typed_bench<float, batchlas::Backend::MKL>(minibench::State&) { ++called_fc; }
-BATCHLAS_BENCH_MKL(typed_bench, [](auto* b){ b->Args({1}); });
-#endif
-
 #if BATCHLAS_HAS_HOST_BACKEND
 template <>
 void typed_bench<double, batchlas::Backend::NETLIB>(minibench::State&) { ++called_dn; }
@@ -78,13 +72,6 @@ TEST(MiniBenchCliTest, BackendTypeFiltering) {
     EXPECT_GT(called_fc, 0);
 #elif BATCHLAS_HAS_ROCM_BACKEND
     const char* argv[] = {"prog", "--backend=ROCM", "--type=float"};
-    int argc = 3;
-    auto opts = minibench::ParseCommandLine(argc, const_cast<char**>(argv));
-    minibench::RunRegisteredBenchmarks(opts.cfg, "", opts.backends, opts.types);
-    EXPECT_EQ(called_dn, 0);
-    EXPECT_GT(called_fc, 0);
-#elif BATCHLAS_HAS_MKL_BACKEND
-    const char* argv[] = {"prog", "--backend=MKL", "--type=float"};
     int argc = 3;
     auto opts = minibench::ParseCommandLine(argc, const_cast<char**>(argv));
     minibench::RunRegisteredBenchmarks(opts.cfg, "", opts.backends, opts.types);

@@ -143,7 +143,7 @@ trailing update) made the panel 1.16× *slower*, reproducibly:
 
 Those sites are about 6% of the panel's work, so this is not their arithmetic: inlining the
 expanded form everywhere costs enough registers to lose occupancy in the one loop that matters.
-`AGENTS.md` records the general rule ("write out the real arithmetic in the hot loop only").
+`docs/developer/agent-guide.md` records the general rule ("write out the real arithmetic in the hot loop only").
 
 ## sytrd: rejected latrd symv loop shapes
 

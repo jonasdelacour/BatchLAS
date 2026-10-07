@@ -24,8 +24,6 @@ namespace {
 constexpr Backend kGpuBackend = Backend::CUDA;
 #elif BATCHLAS_HAS_ROCM_BACKEND
 constexpr Backend kGpuBackend = Backend::ROCM;
-#elif BATCHLAS_HAS_MKL_BACKEND
-constexpr Backend kGpuBackend = Backend::MKL;
 #endif
 
 struct Options {

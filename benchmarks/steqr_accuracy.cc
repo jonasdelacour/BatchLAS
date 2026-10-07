@@ -34,7 +34,7 @@ using accuracy::to_lower;
 
 struct Options {
     std::string impl = "steqr"; // steqr | steqr_cta | cuda_syev | netlib_syev32 | netlib_steqr | netlib_sterf | netlib_stedc | both | all
-    std::string backend = "CUDA"; // CUDA | ROCM | MKL | NETLIB
+    std::string backend = "CUDA"; // CUDA | ROCM | NETLIB
     std::string dtype = "float"; // float | double
     int n = 32;
     int batch = 128;
@@ -97,7 +97,7 @@ Options parse_args(int argc, char** argv) {
                       << "Options:\n"
                       << "  --impl steqr|steqr_cta|cuda_syev|netlib_syev32|netlib_steqr|netlib_sterf|netlib_stedc|stedc|both|all\n"
                       << "  --scheme pg|exp|pg_guarded\n"
-                      << "  --backend CUDA|ROCM|MKL|NETLIB\n"
+                      << "  --backend CUDA|ROCM|NETLIB\n"
                       << "  --type float|double\n"
                       << "  --n N\n"
                       << "  --batch B\n"
@@ -453,15 +453,6 @@ int run_selected(const Options& opt) {
         return run_accuracy<Backend::ROCM, double>(opt);
 #else
         std::cerr << "ROCM backend not available in this build\n";
-        return 1;
-#endif
-    }
-    if (opt.backend == "MKL") {
-#if BATCHLAS_HAS_MKL_BACKEND
-        if (dtype == "float") return run_accuracy<Backend::MKL, float>(opt);
-        return run_accuracy<Backend::MKL, double>(opt);
-#else
-        std::cerr << "MKL backend not available in this build\n";
         return 1;
 #endif
     }

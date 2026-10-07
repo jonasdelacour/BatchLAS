@@ -2,19 +2,11 @@
 
 include(CMakeFindDependencyMacro)
 
-if(@BATCHLAS_ENABLE_OPENMP@)
-    find_dependency(OpenMP REQUIRED)
-endif()
-
 # No find_dependency(CUDAToolkit) / LAPACK here on purpose. The CUDA and Netlib
 # libraries are linked PRIVATE into the component shared objects (see
 # src/CMakeLists.txt), which already carry the right DT_NEEDED entries, so the
 # exported interface no longer references them and a CPU-only machine can
 # find_package(BatchLAS) against a CUDA-enabled install.
-
-if(@BATCHLAS_HAS_MKL_BACKEND@)
-    find_dependency(MKL CONFIG REQUIRED)
-endif()
 
 # ---------------------------------------------------------------------------
 # Compiler check.

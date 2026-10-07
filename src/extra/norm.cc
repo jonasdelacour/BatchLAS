@@ -84,16 +84,10 @@ namespace batchlas
         }
         #endif
 
-        #if BATCHLAS_HAS_MKL_BACKEND
-        if (!is_gpu && vendor == Vendor::INTEL) {
-            return norm_spectral_vendor_impl<Backend::MKL>(ctx, A, norms);
-        }
-        #endif
-
         #if BATCHLAS_HAS_HOST_BACKEND
         return norm_spectral_vendor_impl<Backend::NETLIB>(ctx, A, norms);
         #else
-        throw batchlas::unsupported("norm: Spectral norm requires a vendor backend (CUDA/ROCM/MKL/NETLIB)");
+        throw batchlas::unsupported("norm: Spectral norm requires a vendor backend (CUDA/ROCM/NETLIB)");
         #endif
     }
 

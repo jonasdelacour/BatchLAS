@@ -35,11 +35,11 @@ inline bool should_run_backend(batchlas::Backend backend) {
     
     // Check if filter matches a known backend
     bool recognized = (backend_filter == "CUDA" || backend_filter == "ROCM" || 
-                       backend_filter == "MKL" || backend_filter == "NETLIB");
+                       backend_filter == "NETLIB");
     
     if (!recognized) {
         std::cerr << "Warning: BATCHLAS_TEST_BACKEND=" << env 
-                  << " is not recognized. Valid values are: CUDA, ROCM, MKL, NETLIB. "
+                  << " is not recognized. Valid values are: CUDA, ROCM, NETLIB. "
                   << "Skipping all tests." << std::endl;
         return false;
     }
@@ -47,7 +47,6 @@ inline bool should_run_backend(batchlas::Backend backend) {
     // Match backend to filter
     if (backend == batchlas::Backend::CUDA && backend_filter == "CUDA") return true;
     if (backend == batchlas::Backend::ROCM && backend_filter == "ROCM") return true;
-    if (backend == batchlas::Backend::MKL && backend_filter == "MKL") return true;
     if (backend == batchlas::Backend::NETLIB && backend_filter == "NETLIB") return true;
     
     return false;  // Filter doesn't match, skip
@@ -104,12 +103,6 @@ struct backend_types {
                    Config<std::complex<float>, batchlas::Backend::ROCM>,
                    Config<std::complex<double>, batchlas::Backend::ROCM>>{},
 #endif
-#if BATCHLAS_HAS_MKL_BACKEND
-        std::tuple<Config<float, batchlas::Backend::MKL>,
-                   Config<double, batchlas::Backend::MKL>,
-                   Config<std::complex<float>, batchlas::Backend::MKL>,
-                   Config<std::complex<double>, batchlas::Backend::MKL>>{},
-#endif
         std::tuple<>{}));
 
     using type = typename tuple_to_types<tuple_type>::type;
@@ -143,14 +136,6 @@ struct backend_types_filtered {
                               Config<std::complex<double>, batchlas::Backend::ROCM>>,
                    std::tuple<>>{},
 #endif
-#if BATCHLAS_HAS_MKL_BACKEND
-        std::tuple<Config<float, batchlas::Backend::MKL>,
-                   Config<double, batchlas::Backend::MKL>>{},
-        std::conditional_t<IncludeComplex,
-                   std::tuple<Config<std::complex<float>, batchlas::Backend::MKL>,
-                              Config<std::complex<double>, batchlas::Backend::MKL>>,
-                   std::tuple<>>{},
-#endif
         std::tuple<>{}));
 
     using type = typename tuple_to_types<tuple_type>::type;
@@ -173,10 +158,6 @@ struct backend_types_complex {
         std::tuple<Config<std::complex<float>, batchlas::Backend::ROCM>,
                    Config<std::complex<double>, batchlas::Backend::ROCM>>{},
 #endif
-#if BATCHLAS_HAS_MKL_BACKEND
-        std::tuple<Config<std::complex<float>, batchlas::Backend::MKL>,
-                   Config<std::complex<double>, batchlas::Backend::MKL>>{},
-#endif
         std::tuple<>{}));
 
     using type = typename tuple_to_types<tuple_type>::type;
@@ -187,8 +168,6 @@ struct backend_types_complex {
 constexpr batchlas::Backend gpu_backend = batchlas::Backend::CUDA;
 #elif BATCHLAS_HAS_ROCM_BACKEND
 constexpr batchlas::Backend gpu_backend = batchlas::Backend::ROCM;
-#elif BATCHLAS_HAS_MKL_BACKEND
-constexpr batchlas::Backend gpu_backend = batchlas::Backend::MKL;
 #endif
 
 // Utility traits and helper functions

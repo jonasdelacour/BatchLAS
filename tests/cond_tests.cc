@@ -33,10 +33,6 @@ struct backend_real_types {
         std::tuple<Config<float, Backend::ROCM>,
                    Config<double, Backend::ROCM>>{},
 #endif
-#if BATCHLAS_HAS_MKL_BACKEND
-        std::tuple<Config<float, Backend::MKL>,
-                   Config<double, Backend::MKL>>{},
-#endif
         std::tuple<>{}));
 
     using type = typename test_utils::tuple_to_types<tuple_type>::type;

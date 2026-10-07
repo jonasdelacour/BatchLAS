@@ -13,7 +13,7 @@
 # Traps: a header added that SHADOWS one later on the -I path can return a stale
 # object (`ccache -C`); NOHASHDIR keeps the first tree's DW_AT_comp_dir, so set
 # BATCHLAS_CCACHE_SHARE_ACROSS_TREES=OFF for source-level debugging.
-# evidence: AGENTS.md section 7 (Build Performance)
+# evidence: docs/developer/agent-guide.md section 7 (Build Performance)
 
 option(BATCHLAS_USE_CCACHE "Cache C++ compilations with ccache when it is available" ON)
 option(BATCHLAS_CCACHE_SHARE_ACROSS_TREES

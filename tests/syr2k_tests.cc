@@ -13,7 +13,7 @@
 #include "../src/select/vendor.hh"
 
 // Vendor-free, a `vendor` pin warns and falls back to Auto, which is the tile kernel: the
-// reference would then be the code under test (AGENTS.md section 8 rule 7).
+// reference would then be the code under test (docs/developer/agent-guide.md section 8 rule 7).
 // syr2k_candidates_tests checks the tile kernel against a host reference in that tree.
 inline constexpr bool kVendorReference = batchlas::select::level3_vendor_available<batchlas::Backend::CUDA>;
 #define SKIP_WITHOUT_VENDOR_REFERENCE() \

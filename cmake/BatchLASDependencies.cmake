@@ -1,37 +1,3 @@
-find_package(OpenMP QUIET)
-
-if(BATCHLAS_ENABLE_MKL)
-    find_package(MKL CONFIG QUIET)
-    if(MKL_FOUND)
-        if(TARGET MKL::MKL_DPCPP)
-            set(_MKL_SYCL_TARGET MKL::MKL_DPCPP)
-        elseif(TARGET MKL::MKL_SYCL)
-            set(_MKL_SYCL_TARGET MKL::MKL_SYCL)
-        else()
-            message(WARNING "oneMKL was found but provides no SYCL interface target (MKL::MKL_DPCPP or MKL::MKL_SYCL). The MKL backend will be disabled.")
-        endif()
-
-        if(DEFINED _MKL_SYCL_TARGET)
-            message(STATUS "Found oneMKL SYCL target: ${_MKL_SYCL_TARGET}")
-            add_library(batchlas_mkl INTERFACE)
-            add_library(batchlas::mkl ALIAS batchlas_mkl)
-            target_link_libraries(batchlas_mkl INTERFACE "${_MKL_SYCL_TARGET}")
-            target_compile_definitions(batchlas_mkl INTERFACE MKL_ILP64)
-            set(BATCHLAS_HAS_MKL_BACKEND TRUE)
-            # axis 3: oneMKL the LIBRARY, as distinct from Backend::MKL the
-            # device family. linalg-impl.hh:20 already uses the family flag to
-            # mean "oneMKL supplies cblas.h", which is a library question.
-            if(BATCHLAS_ENABLE_ONEMKL)
-                set(BATCHLAS_HAS_ONEMKL TRUE)
-            endif()
-        endif()
-    else()
-        message(STATUS "MKL not found via CMake package, falling back to manual search")
-    endif()
-else()
-    message(STATUS "MKL backend disabled")
-endif()
-
 # Probe the NVIDIA math libraries through FindCUDAToolkit: its CUDA:: targets
 # are what the backends link (see BATCHLAS_CUDA_LINK_LIBRARIES below), so the
 # probe and the link cannot disagree. A separate find_library() search used to:
@@ -144,40 +110,6 @@ function(find_rocm_libs)
         message(STATUS "ROCm backend will be enabled")
     else()
         message(STATUS "hipBLAS library not found in ROCm installation")
-    endif()
-endfunction()
-
-function(find_onemkl_libs)
-    set(MKL_ROOT)
-    if(DEFINED ENV{MKLROOT})
-        set(MKL_ROOT "$ENV{MKLROOT}")
-    elseif(EXISTS "/opt/intel/oneapi/mkl")
-        set(MKL_ROOT "/opt/intel/oneapi/mkl")
-    endif()
-
-    if(NOT MKL_ROOT)
-        message(STATUS "Intel oneAPI MKL not found, skipping Intel MKL backend detection")
-        return()
-    endif()
-
-    message(STATUS "Searching for Intel oneAPI MKL in: ${MKL_ROOT}")
-
-    find_library(MKL_CORE_LIBRARY
-        NAMES mkl_core
-        PATHS "${MKL_ROOT}"
-        PATH_SUFFIXES lib lib/intel64
-        NO_DEFAULT_PATH
-        DOC "Intel oneAPI MKL core library"
-    )
-
-    if(MKL_CORE_LIBRARY)
-        message(STATUS "Found MKL core: ${MKL_CORE_LIBRARY}")
-        set(BATCHLAS_HAS_MKL_BACKEND TRUE PARENT_SCOPE)
-        set(BATCHLAS_MKL_MANUAL_INSTALL TRUE PARENT_SCOPE)
-        set(BATCHLAS_MKL_INCLUDE_DIR "${MKL_ROOT}/include" PARENT_SCOPE)
-        message(STATUS "Intel MKL backend will be enabled")
-    else()
-        message(STATUS "Intel MKL library not found")
     endif()
 endfunction()
 
@@ -295,10 +227,6 @@ if(BATCHLAS_DETECTED_AMD_GPU OR BATCHLAS_ENABLE_ROCM)
     find_rocm_libs()
 endif()
 
-if(BATCHLAS_ENABLE_MKL AND NOT MKL_FOUND)
-    find_onemkl_libs()
-endif()
-
 find_netlib_libs()
 
 # Some BLAS builds dispatch to CPU kernels that compute wrong results; find out
@@ -341,12 +269,6 @@ if(BATCHLAS_HAS_CUDA_BACKEND)
     endif()
 endif()
 
-if(BATCHLAS_MKL_INCLUDE_DIR)
-    target_include_directories(batchlas_dep_options INTERFACE
-        $<BUILD_INTERFACE:${BATCHLAS_MKL_INCLUDE_DIR}>
-    )
-endif()
-
 if(BATCHLAS_HAS_HOST_BACKEND)
     target_compile_definitions(batchlas_dep_options INTERFACE BATCHLAS_HAS_HOST_BACKEND=1)
 endif()
@@ -359,11 +281,5 @@ if(BATCHLAS_HAS_ROCM_BACKEND)
         target_include_directories(batchlas_dep_options INTERFACE
             $<BUILD_INTERFACE:${BATCHLAS_ROCM_INCLUDE_DIR}>
         )
-    endif()
-endif()
-if(BATCHLAS_HAS_MKL_BACKEND)
-    target_compile_definitions(batchlas_dep_options INTERFACE BATCHLAS_HAS_MKL_BACKEND=1)
-    if(BATCHLAS_MKL_MANUAL_INSTALL)
-        target_compile_definitions(batchlas_dep_options INTERFACE MKL_ILP64)
     endif()
 endif()

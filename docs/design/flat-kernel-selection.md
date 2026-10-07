@@ -478,7 +478,7 @@ pick for itself:
 ## 6. The tuner: `tools/tune/batchlas_tune`
 
 The tuner produces every number the library runs on, so it follows the measurement rules in
-AGENTS.md §10 without exception.
+docs/developer/agent-guide.md §10 without exception.
 
 ```
 batchlas_tune potrf --dtype float,double,cfloat,cdouble --devices 1 --out tuned/ \
@@ -586,7 +586,7 @@ Conversion rules:
    - runs it on shapes that straddle its `can_run` limits in both directions;
    - checks residual, info and the untouched triangle.
 
-   It follows the AGENTS.md §8 rules: non-natural `ld` and stride, complex data with nonzero
+   It follows the docs/developer/agent-guide.md §8 rules: non-natural `ld` and stride, complex data with nonzero
    imaginary parts, a saturating batch (≥ 1024 identical items, bit-identical results) for the SLM
    tiers, and poison the kernel will accept. The existing tier suites in `potrf_tests.cc`,
    `potrf_tiny_cases.inc` and `potrf_lpanel_cases.inc` already do most of this through
@@ -630,7 +630,7 @@ The `route-native` ctest re-run of `potrf_tests` (`tests/CMakeLists.txt:372-375`
 |---|---|---|
 | 0 | This doc, plus the potrf sweep data copied to `main` | PR merged |
 | 1 | `src/select/` (Device, parsing, pins, `ScopedPin`, Table, `choose`, borrow order, `TraceScope` + coverage row), the CMake embed step, the table-validity and pin/borrow tests on synthetic tables, `scripts/sweep_to_table.py` | `tests/select_tests` green; converter produces `tuned/potrf.*.{sm_120,sm_89}.txt` from the routing data |
-| 2 | potrf migrated as in §4; old potrf routing and its tests deleted (§8); `docs/perf/potrf.md` and the AGENTS.md routing section updated | §10 gate passes on sm_120 and sm_89 |
+| 2 | potrf migrated as in §4; old potrf routing and its tests deleted (§8); `docs/perf/potrf.md` and the docs/developer/agent-guide.md routing section updated | §10 gate passes on sm_120 and sm_89 |
 | 3 | posv (it calls potrf), then trsm and gemm (Blocked's children), each as its own PR with the same gate. gemm folds `select_kernel_variant`'s 43 variants into families with fields (e.g. `tiled:tile=64:k=8`) | each op's gate |
 | 4 | Build `tools/tune`; retune potrf on sm_120, sm_89 and cpu, replacing the converted tables (hashes stamped) | tables no longer stale; gate re-run |
 | 5 | The remaining ops, one PR each; then delete `include/batchlas/blas/dispatch/`, the `src/backends/*_route.hh` adapters, `route_vocabulary_tests.cc`, the legacy env aliases and the route vocabulary docs | no `RouteTable` left |
@@ -920,7 +920,7 @@ Where the code differs from the sketches above, the code wins. These are the dif
 - **Departures from §6:** the flag is `--devices` (a list), not `--device`, and it is required (no
   default can land on a display GPU); when the caller exported `CUDA_VISIBLE_DEVICES`, every
   `--devices` entry must lie inside it. All listed GPUs must report the same device key. Multi-GPU
-  runs one child per GPU behind a per-GPU flock, which departs from AGENTS.md §10 as the seed
+  runs one child per GPU behind a per-GPU flock, which departs from docs/developer/agent-guide.md §10 as the seed
   sweeps did. The guard is built in rather than `gpu_guard.sh`, with the same checks: no foreign
   compute process and utilization ≤ 5% before each child, no foreign process after it (else the
   child's numbers are discarded and it is retried), unparseable process entries counted as
@@ -954,7 +954,7 @@ Where the code differs from the sketches above, the code wins. These are the dif
   pass): n=24 tiny 0.04768 (+1.5%), cta 0.1022 (+4.3%), blocked 0.1691 (+5.8%); n=32 tiny 0.06917
   (-1.4%), cta 0.1223 (-0.7%), blocked 0.1779 (-0.2%). **These numbers are not protocol evidence:**
   they were taken with `--no-guard` while a three-GPU posv measurement sweep ran on the same box
-  (AGENTS.md §10), and with the pre-launcher driver holding its own context on GPU 0. The -5.7% at
+  (docs/developer/agent-guide.md §10), and with the pre-launcher driver holding its own context on GPU 0. The -5.7% at
   n=64 and the n=512 flip need a re-run on an otherwise idle box before anything is read into
   them.
 

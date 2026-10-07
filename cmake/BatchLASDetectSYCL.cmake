@@ -37,24 +37,6 @@ set(BATCHLAS_DETECTED_DEVICE_LIMIT_MIN_GPU_SAFE_SUBGROUPS_PER_WORKGROUP 2)
 set(BATCHLAS_DEVICE_GEMM_TILE_CAP_BYTES 0 CACHE STRING
     "Compile-time local-memory cap for the device GEMM tile variants, in bytes; 0 derives it per architecture")
 
-# Migrate rather than ignore. Dropping the old entry silently would lose a value someone
-# set on purpose; carrying it across unconditionally would resurrect the stale default.
-# 45056 is the only value that is ambiguous between the two, and it WAS the default, so
-# it is read as one.
-if(DEFINED CACHE{BATCHLAS_DEVICE_GEMM_WORKSPACE_CAP_BYTES})
-    set(_batchlas_legacy_cap "$CACHE{BATCHLAS_DEVICE_GEMM_WORKSPACE_CAP_BYTES}")
-    unset(BATCHLAS_DEVICE_GEMM_WORKSPACE_CAP_BYTES CACHE)
-    if("${_batchlas_legacy_cap}" STREQUAL "45056" OR "${_batchlas_legacy_cap}" STREQUAL "0")
-        message(STATUS "Dropping the legacy BATCHLAS_DEVICE_GEMM_WORKSPACE_CAP_BYTES default (${_batchlas_legacy_cap}); the device-GEMM tile cap is now derived per architecture")
-    else()
-        message(WARNING "BATCHLAS_DEVICE_GEMM_WORKSPACE_CAP_BYTES is renamed to BATCHLAS_DEVICE_GEMM_TILE_CAP_BYTES; carrying your override ${_batchlas_legacy_cap} across to the new name")
-        set(BATCHLAS_DEVICE_GEMM_TILE_CAP_BYTES "${_batchlas_legacy_cap}" CACHE STRING
-            "Compile-time local-memory cap for the device GEMM tile variants, in bytes; 0 derives it per architecture"
-            FORCE)
-    endif()
-    unset(_batchlas_legacy_cap)
-endif()
-
 # The configure-time local-memory probe that used to write this is gone: it cost a full
 # SYCL compile, link and run at every fresh configure, and by the end it had no readers at
 # all -- its one former consumer (the tile cap above) is table-derived on purpose, and

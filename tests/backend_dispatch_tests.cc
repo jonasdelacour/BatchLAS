@@ -68,7 +68,7 @@ TEST(BackendDispatch, EnumsStreamFromInsideTheNamespace) {
 TEST(BackendDispatch, AvailabilityMatchesBuildConfiguration) {
     EXPECT_EQ(Queue::backend_available(Backend::CUDA), bool(BATCHLAS_HAS_CUDA_BACKEND));
     EXPECT_EQ(Queue::backend_available(Backend::ROCM), bool(BATCHLAS_HAS_ROCM_BACKEND));
-    EXPECT_EQ(Queue::backend_available(Backend::MKL), bool(BATCHLAS_HAS_MKL_BACKEND));
+    EXPECT_FALSE(Queue::backend_available(Backend::MKL));
     EXPECT_EQ(Queue::backend_available(Backend::NETLIB), bool(BATCHLAS_HAS_HOST_BACKEND));
 
     // AUTO is a request, not a target; MAGMA and SYCL have nothing behind them.

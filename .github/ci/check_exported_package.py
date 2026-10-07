@@ -68,7 +68,6 @@ MACHINE_PINNED_VARS = (
     "BATCHLAS_NETLIB_LINK_LIBRARIES",
     "BATCHLAS_CUDA_LINK_LIBRARIES",
     "BATCHLAS_ROCM_LINK_LIBRARIES",
-    "BATCHLAS_MKL_LINK_LIBRARIES",
 )
 
 # Usage-requirement commands whose arguments end up in the export.

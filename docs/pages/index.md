@@ -3,7 +3,7 @@
 BatchLAS is a SYCL-first library of **batched** dense and sparse linear algebra:
 thousands of small-to-medium problems solved in one call, with native SYCL
 kernels competing against vendor libraries (cuBLAS/cuSOLVER/cuSPARSE, rocBLAS,
-oneMKL, netlib) through measured routing windows.
+netlib) through measured routing windows.
 
 This site is both the reference manual and the project's **record of evidence
 and decisions**. Code comments carry invariants and a pointer

@@ -422,7 +422,7 @@ TYPED_TEST(GetrsCandidates, PinnedCandidatesStraddleTheirLimits) {
     EXPECT_GT(refused, 0);
 }
 
-// R7 / AGENTS.md §8.9: the fused tier LAUNCHED at its device capacity n * nrhs = cap at nrhs 8,
+// R7 / docs/developer/agent-guide.md §8.9: the fused tier LAUNCHED at its device capacity n * nrhs = cap at nrhs 8,
 // and refused one order past it; Blocked serves the refused shape.
 TYPED_TEST(GetrsCandidates, CtaLaunchesAtItsResidentCapacity) {
     using T = typename TestFixture::T;

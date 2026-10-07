@@ -78,15 +78,8 @@ function(batchlas_install_package)
     # root; install(DIRECTORY) above cannot carry it.
     install(FILES "${PROJECT_SOURCE_DIR}/include/batchlas.hh"
         DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
-    # tuning_params.hh is deliberately NOT listed here. src/CMakeLists.txt and
-    # batchlas_dep_options both put ${PROJECT_SOURCE_DIR}/include ahead of
-    # ${PROJECT_BINARY_DIR}/include, so the library is compiled against
-    # include/batchlas/tuning_params.hh (364 lines, with the BATCHLAS_TUNE_*
-    # runtime-override layer) and the configure_file() copy in the binary dir is
-    # never compiled by anything - its own header says so. Installing the binary
-    # copy shipped consumers different constants than the .so was built with and
-    # silently preempted the library's own inline definitions. The source copy is
-    # installed by the install(DIRECTORY) above, which is what we want.
+    # tuning_params.hh is the checked-in source copy, installed by the
+    # install(DIRECTORY) above; there is no generated one any more.
     #
     # These two exist ONLY in the binary tree, so they cannot collide with the
     # source-tree copy of include/batchlas/ installed above. The destination is

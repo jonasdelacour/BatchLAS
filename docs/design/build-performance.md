@@ -4,9 +4,9 @@
 > translation units cheap to compile.
 > **Status:** current. The general build-time facts (device-link-bound builds, the `dev-gpu`
 > presets, the measured dead ends such as Ninja, lld, PCH and unity builds) are in section 7 of
-> `AGENTS.md` and are not repeated here.
+> `docs/developer/agent-guide.md` and are not repeated here.
 
-The BatchLAS build is SYCL device-link-bound, not compile-bound (`AGENTS.md` section 7): the
+The BatchLAS build is SYCL device-link-bound, not compile-bound (`docs/developer/agent-guide.md` section 7): the
 shared library is the unit of device linking, so most build-time work happens in the link of
 each component library, and `-j` cannot shorten it. What the headers can still control is the
 front-end cost each consumer translation unit pays, and that is what this page records.
@@ -31,7 +31,7 @@ in-kernel utilities `util/group-invoke.hh` and `util/sycl-local-accessor-helpers
 too, and are reachable only through `device.hh`).
 
 **Both edges have to stay cut.** These headers form a cycle, so restoring either include
-re-pulls the whole umbrella and the saving vanishes. This is the same cycle that `AGENTS.md`
+re-pulls the whole umbrella and the saving vanishes. This is the same cycle that `docs/developer/agent-guide.md`
 section 7 lists among the measured dead ends ("cutting one edge of a header cycle"): cutting
 *one* edge buys nothing, which is why the umbrella cuts both.
 

@@ -12,11 +12,12 @@ conclusions were quoted from memory. This gate stops the next one.
 
 WHAT IS ALLOWED OUTSIDE docs/
 -----------------------------
-    README.md        in any directory (a directory's own entry point)
-    AGENTS.md        repository root only
-    CLAUDE.md        repository root only
-    LICENSE.md       repository root only
-    .github/**       prompts, skills and templates GitHub or agents read in place
+    README.md          in any directory but the root (a directory's own entry point)
+    .claude/CLAUDE.md  agent memory; it only imports docs/developer/agent-guide.md
+    .github/**         the project README, skills and templates read in place
+
+Nothing at all at the repository root: the project README is .github/README.md,
+which GitHub renders on the repository page.
 
 Everything else goes to docs/<area>/<topic>.md; the table of areas is in
 docs/developer/documentation.md#where-things-go.
@@ -44,20 +45,17 @@ import sys
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 SUFFIXES = (".md", ".markdown")
-ROOT_ONLY = ("AGENTS.md", "CLAUDE.md", "LICENSE.md")
-ANYWHERE = ("README.md",)
+ANYWHERE_BUT_ROOT = ("README.md",)
+ALLOWED_FILES = (".claude/CLAUDE.md",)
 ALLOWED_TREES = ("docs/", ".github/")
 
 
 def allowed(rel):
     """True when a Markdown path may live where it is."""
     rel = rel.replace(os.sep, "/")
-    if rel.startswith(ALLOWED_TREES):
+    if rel.startswith(ALLOWED_TREES) or rel in ALLOWED_FILES:
         return True
-    name = rel.rsplit("/", 1)[-1]
-    if name in ANYWHERE:
-        return True
-    return "/" not in rel and name in ROOT_ONLY
+    return "/" in rel and rel.rsplit("/", 1)[-1] in ANYWHERE_BUT_ROOT
 
 
 def list_markdown(root, tracked_only):
@@ -78,16 +76,19 @@ def list_markdown(root, tracked_only):
 SELF_TEST_CASES = [
     ("docs/perf/syev.md", True, "an evidence page"),
     ("docs/ci.md", True, "a top-level docs page"),
-    ("README.md", True, "the root README"),
-    ("examples/consumer/README.md", True, "a directory README anywhere"),
-    ("AGENTS.md", True, "root AGENTS.md"),
-    ("CLAUDE.md", True, "root CLAUDE.md"),
-    ("LICENSE.md", True, "root LICENSE.md"),
+    (".github/README.md", True, "the project README GitHub renders"),
+    ("examples/consumer/README.md", True, "a directory README"),
+    (".claude/CLAUDE.md", True, "agent memory that imports the guide"),
     (".github/skills/x/SKILL.md", True, "agent skills are read in place"),
+    ("README.md", False, "no Markdown at the root, README included"),
+    ("AGENTS.md", False, "the agent guide lives in docs/developer/"),
+    ("CLAUDE.md", False, "root CLAUDE.md: use .claude/CLAUDE.md"),
+    ("LICENSE.md", False, "no Markdown at the root"),
+    (".claude/notes.md", False, "only .claude/CLAUDE.md is exempt"),
     ("SYEVX_PLAN.md", False, "a root plan file is exactly what this gate stops"),
     ("src/NOTES.md", False, "notes beside the code"),
-    ("tests/AGENTS.md", False, "AGENTS.md is allowed at the root only"),
-    ("benchmarks/LICENSE.md", False, "LICENSE.md is allowed at the root only"),
+    ("tests/AGENTS.md", False, "an AGENTS.md is not exempt anywhere"),
+    ("tests/CLAUDE.md", False, "only .claude/CLAUDE.md is exempt"),
     ("docsx/page.md", False, "a lookalike of docs/ is not docs/"),
     ("src/docs/page.md", False, "a nested docs/ is not the site"),
     ("notes/readme.md", False, "README matching is exact, not case-folded"),
@@ -127,8 +128,8 @@ def main(argv=None):
     offenders = [f for f in files if not allowed(f)]
     for rel in offenders:
         print("%s:1: error: Markdown outside docs/. Move it to docs/<area>/<topic>.md "
-              "(see docs/developer/documentation.md#where-things-go); only README.md, "
-              "root AGENTS.md/CLAUDE.md/LICENSE.md and .github/ are exempt." % rel)
+              "(see docs/developer/documentation.md#where-things-go); only a non-root "
+              "README.md, .claude/CLAUDE.md and .github/ are exempt." % rel)
     print("check_markdown_locations: %d Markdown file(s), %d outside docs/"
           % (len(files), len(offenders)))
     return 1 if offenders else 0

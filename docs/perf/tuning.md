@@ -139,9 +139,10 @@ literal"), but the file stops being plain text: git treats it as binary and diff
 committed header never showed it because retunes were ported by hand (see "The committed header wins", below). Check a template edit by
 regenerating with the committed constants and diffing.
 
-**The committed header wins.** CMake also generates a `tuning_params.hh` into the build tree from
+**The committed header wins.** CMake used to generate a `tuning_params.hh` into the build tree from
 `cmake/tuning_params.h.in`, but `include/` precedes the build tree on the include path, so the
-committed file shadows it on every build and the CMake `batchlas_tuning_header` target is a no-op.
+committed file shadowed it on every build and the CMake `batchlas_tuning_header` target was a no-op;
+both were removed on 2026-10-07.
 A retune takes effect only when its constants are ported into the committed header by hand
 ([evidence](syev.md#syev-the-shadowed-tuning-header)).
 

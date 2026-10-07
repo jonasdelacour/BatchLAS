@@ -75,9 +75,10 @@ own recommended header against ours.
 
 Rules that go with the table:
 
-- **Markdown lives under `docs/`.** Only `README.md` (any directory), the root
-  `AGENTS.md`, `CLAUDE.md` and `LICENSE.md`, and files under `.github/` may live
-  elsewhere. `.github/ci/check_markdown_locations.py` enforces this in CI. A
+- **Markdown lives under `docs/`.** Only a directory `README.md` (never one at
+  the root), `.claude/CLAUDE.md` (which only imports the
+  [agent guide](agent-guide.md)) and files under `.github/` (the project README
+  is `.github/README.md`) may live elsewhere. `.github/ci/check_markdown_locations.py` enforces this in CI. A
   plan file at the repository root is the thing this rule exists to stop: write
   the plan's *conclusions* into the page for its area, and keep task lists out
   of the tree.

@@ -10,7 +10,8 @@
 | @subpage tuned_tables_readme "Tuned selection tables" | The `tuned/` tables: format, provenance, how each one was produced. |
 | @subpage tune_tool_readme "batchlas_tune" | The tuner that measures the selection tables. |
 | @subpage tuning_harness "Tuning harness" | Regenerating the `tuning_params.hh` constants. |
+| @subpage dev_agent_guide "Agent environment guide" | The terse working rules: toolchain, build, testing, measurement, kernel facts. |
 
-The agent-facing environment guide, `AGENTS.md` at the repository root, holds
+The agent-facing environment guide, @ref dev_agent_guide (imported by `.claude/CLAUDE.md`), holds
 the terse rules this site expands on (toolchain, testing policy, measurement
 rules, kernel design facts).

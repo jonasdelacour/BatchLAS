@@ -66,7 +66,7 @@ namespace batchlas {
 template <typename F>
 inline auto with_backend(Queue& ctx, F&& f) {
     static_assert(BATCHLAS_HAS_CUDA_BACKEND || BATCHLAS_HAS_ROCM_BACKEND ||
-                      BATCHLAS_HAS_MKL_BACKEND || BATCHLAS_HAS_HOST_BACKEND,
+                      BATCHLAS_HAS_HOST_BACKEND,
                   "BatchLAS was built with no backends; nothing can be dispatched.");
 
     switch (ctx.backend()) {
@@ -77,10 +77,6 @@ inline auto with_backend(Queue& ctx, F&& f) {
 #if BATCHLAS_HAS_ROCM_BACKEND
         case Backend::ROCM:
             return f(std::integral_constant<Backend, Backend::ROCM>{});
-#endif
-#if BATCHLAS_HAS_MKL_BACKEND
-        case Backend::MKL:
-            return f(std::integral_constant<Backend, Backend::MKL>{});
 #endif
 #if BATCHLAS_HAS_HOST_BACKEND
         case Backend::NETLIB:
@@ -177,8 +173,6 @@ inline constexpr Backend kProbeBackend =
     Backend::CUDA;
 #elif BATCHLAS_HAS_ROCM_BACKEND
     Backend::ROCM;
-#elif BATCHLAS_HAS_MKL_BACKEND
-    Backend::MKL;
 #else
     Backend::NETLIB;
 #endif

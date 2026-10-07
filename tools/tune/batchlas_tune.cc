@@ -12,7 +12,7 @@
 //
 // MULTI-GPU (--devices 1,2,3) runs one child per GPU at a time, each GPU held under a flock for
 // the whole run, cells sharded round-robin and both passes of a cell kept on one GPU. This
-// departs from AGENTS.md §10's one-measuring-process-per-box rule exactly as the potrf and
+// departs from docs/developer/agent-guide.md §10's one-measuring-process-per-box rule exactly as the potrf and
 // posv seed sweeps did (benchmarks/results/routing/README.md); use one device when the box is
 // shared or when a verdict hinges on a few percent.
 //
@@ -66,7 +66,7 @@ constexpr double kTie = 0.03;  // §6.3; scripts/sweep_to_table.py TIE
 struct Opts {
     std::string op;
     std::vector<std::string> dtypes{"float"};
-    std::vector<int> devices;  // required: no default lands on a display GPU (AGENTS.md §13)
+    std::vector<int> devices;  // required: no default lands on a display GPU (docs/developer/agent-guide.md §13)
     std::string repo = BATCHLAS_TUNE_SOURCE_DIR;
     std::string raw, out;
     int reps = 16, passes = 2, ld_pad = 0;
@@ -408,7 +408,7 @@ std::string Driver::preflight() {
         const std::string q = "nvidia-smi --id=" + std::to_string(gpu);
         if (capture(q + " --query-gpu=display_active --format=csv,noheader 2>/dev/null") == "Enabled")
             std::fprintf(stderr, "batchlas_tune: warning: GPU %d drives a display, which slows L2-resident cells "
-                                 "(AGENTS.md §13); prefer a headless GPU\n", gpu);
+                                 "(docs/developer/agent-guide.md §13); prefer a headless GPU\n", gpu);
         if (!o_.allow_idle_foreign || !o_.guard) continue;
         std::vector<std::string> who;
         for (const std::string& pid : apps(gpu).foreign) {
@@ -428,7 +428,7 @@ std::string Driver::preflight() {
             capture("nvidia-smi --id=" + idx + " --query-compute-apps=pid --format=csv,noheader 2>/dev/null"), -1);
         if (!s.foreign.empty())
             std::fprintf(stderr, "batchlas_tune: warning: GPU %s has compute processes [%s]; another measurement on "
-                                 "the box can skew these numbers (AGENTS.md §10)\n", idx.c_str(), join(s.foreign, ",").c_str());
+                                 "the box can skew these numbers (docs/developer/agent-guide.md §10)\n", idx.c_str(), join(s.foreign, ",").c_str());
     }
     return name;
 }

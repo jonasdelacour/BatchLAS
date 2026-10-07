@@ -117,29 +117,12 @@ The output JSON contains:
 
 ## Generating compile-time tuning constants
 
-**The header the library actually compiles is `include/batchlas/tuning_params.hh`,
-not the one under `build/include/`.** Both files exist and declare the same
-symbols, and the compile line lists `-I<repo>/include` *before*
-`-I<repo>/build/include`, so the checked-in header always shadows the generated
-one. Verify with:
+**The header the library compiles is the checked-in `include/batchlas/tuning_params.hh`;
+there is no generated copy.** The CMake `batchlas_tuning_header` target and the
+`configure_file` copy under `build/include/` that the checked-in header always shadowed
+were removed on 2026-10-07, because writing them changed nothing.
 
-```
-g++ -std=c++17 -fsyntax-only -I include -I build/include -x c++ - <<'EOF'
-#include <batchlas/tuning_params.hh>
-static_assert(batchlas::tuning::ORMQR_BLOCK_SIZE_MEDIUM == 24);
-EOF
-```
-
-Consequences, both confirmed on this tree:
-
-- `cmake --build build --target batchlas_tuning_header` writes
-  `build/include/batchlas/tuning_params.hh` and therefore **changes nothing**.
-  It is a no-op for the library.
-- CMake's `configure_file` rewrites that same path from hardcoded defaults on
-  every reconfigure, so even its contents are transient.
-
-To actually move the constants, regenerate and port the values into the
-checked-in header:
+To move the constants, regenerate and port the values into the checked-in header:
 
 ```
 python3 evaluation/tuning/generate_tuning_header.py \
@@ -297,8 +280,7 @@ At runtime, recursion thresholds are clamped to local subproblem size (`threshol
 
 ## Practical workflow
 
-Do not use the `batchlas_tuning_header` CMake target -- see above, it writes a
-header nothing compiles. Drive the scripts directly.
+Drive the scripts directly; there is no CMake target that writes the header.
 
 1) Build the five benchmarks the default space needs (they are ordinary
    benchmark targets; `BATCHLAS_ENABLE_TUNING` is not required):
