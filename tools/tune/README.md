@@ -310,3 +310,12 @@ and syr2k are real-only: `--dtype cfloat` is refused and `--list` prints `-`. sy
 `form`, which `form_of` derives from the extents, so their `grid()` holds only the consistent cells
 of the lattice (`--grid` filters it, as gemm's does). trmm's and symm's `expand` call the public
 gemm, so their deps list gemm's kernels and `gemm.cc`, and their tables should be tuned after gemm's.
+
+syev and gesvd check values-only results against host LAPACKE (`host_reference.hh`; the impl links
+it when the host backend is built, and without it those arms are `bad`). gesvd has no batch key:
+each cell runs at a batch derived from m and n (a power of two in [128, 16384] with
+m n batch <= 2^24), and its grid drops the cells no call keys (Hermitian non-square, square thin).
+Two vendor refusals live in the specs because the library would not report them as a refused pin:
+gesvd's values-only non-square vendor call faults the device (known defect 15), and a spmm `vendor`
+pin that `can_run` refuses falls back to Auto under the class word (known defect 17).
+spmm tunes the GPU tables only; its cpu tables stay transcribed.

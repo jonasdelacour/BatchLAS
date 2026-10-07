@@ -177,7 +177,7 @@ TEST(TuneHash, Sha256KnownVectorsAndTheKernelManifest) {
 
 TEST(TuneHash, EverySpecListsExistingFilesAndAgreesWithTheCiChecker) {
     const std::string repo = BATCHLAS_TUNE_SOURCE_DIR;
-    for (const char* op : {"potrf", "posv", "getrf", "getrs", "getri", "gesv", "gemv", "trmm", "symm", "syrk", "syr2k"}) {
+    for (const char* op : {"potrf", "posv", "getrf", "getrs", "getri", "gesv", "gemv", "trmm", "symm", "syrk", "syr2k", "syev", "gesvd", "spmm"}) {
         const auto list = parse_kernel_list(read_file(fs::path(repo) / "tools/tune" / (std::string(op) + "_spec.cc")));
         ASSERT_FALSE(list.empty()) << op;
         std::string missing;
@@ -319,7 +319,7 @@ TEST(TuneHash, SpecsDeclareTheirFamilies) {
     for (const char* f : {"tiled", "small", "reg", "wide"}) EXPECT_TRUE(block("gemm").family.count(f)) << f;
     EXPECT_TRUE(block("trsm").family.count("sg_left"));
     const KernelBlock posv = block("posv");
-    for (const char* op : {"gemm", "potrf", "posv", "trsm"})  // can_run lives there: every family depends on it
+    for (const char* op : {"gemm", "potrf", "posv", "trsm", "syev", "gesvd", "spmm"})  // can_run lives there
         EXPECT_EQ(block(op).deps_common, std::vector<std::string>{"src/ops/" + std::string(op) + "/" + op + ".cc"}) << op;
     for (const char* f : {"cta", "blocked"}) {
         ASSERT_TRUE(posv.deps.count(f)) << f;
@@ -372,6 +372,26 @@ TEST(TuneHash, SpecsDeclareTheirFamilies) {
         const auto& d = b.deps.at("expand");
         for (const char* g : {"src/sycl/gemm_kernels.cc", "src/ops/gemm/gemm.cc"})
             EXPECT_NE(std::find(d.begin(), d.end(), g), d.end()) << op << " " << g;
+    for (const char* f : {"cta", "cta_fused", "jacobi", "blocked", "two_stage"}) EXPECT_TRUE(block("syev").family.count(f)) << f;
+    for (const char* f : {"jacobi", "cta", "blocked"}) EXPECT_TRUE(block("gesvd").family.count(f)) << f;
+    EXPECT_TRUE(block("spmm").family.count("direct"));
+    // A file two families share is common, never one family's (syev blocked and two_stage both run stedc).
+    for (const char* op : {"syev", "gesvd", "spmm"}) {
+        const KernelBlock b = block(op);
+        std::map<std::string, int> owners;
+        for (const auto& [fam, files] : b.family)
+            for (const auto& f : files) ++owners[f];
+        for (const auto& [f, n] : owners) {
+            EXPECT_EQ(n, 1) << op << " " << f;
+            EXPECT_EQ(std::find(b.common.begin(), b.common.end(), f), b.common.end()) << op << " " << f;
+        }
+    }
+    const KernelBlock syev = block("syev");
+    EXPECT_NE(std::find(syev.common.begin(), syev.common.end(), "src/extensions/stedc.cc"), syev.common.end());
+    for (const char* f : {"blocked", "two_stage"}) {  // both call the public gemm: its kernels count too
+        ASSERT_TRUE(syev.deps.count(f)) << f;
+        const auto& d = syev.deps.at(f);
+        EXPECT_NE(std::find(d.begin(), d.end(), "src/sycl/gemm_kernels.cc"), d.end()) << f;
     }
 }
 
