@@ -94,12 +94,12 @@ what the driver (`tiered_driver.cc`, planning in `schedule.cc`) does with them.
   is spent or the refinement cap is hit. Within a round each GPU takes cells round-robin in
   ascending input bytes.
 - **Refinement rules** (docs/design/tiered-tuning.md, "Engine: refinement convergence rules").
-  A bracket is a flip only when its two winners differ and, at each end, the other end's winner is
+  A bracket is a flip when its two winners differ and, at either end, the other end's winner is
   more than the 3% tie slower (or cannot win there: not runnable, or eliminated without a median);
-  near-tie alternation refines nothing. The preview margin (runner-up within 10%) applies only
+  near-tie alternation (within the tie at both ends) refines nothing. The preview margin (runner-up within 10%) applies only
   between two round-0 cells of this run. `batch` refills only its own axis values, never a
   geometric midpoint. Refinement cells per op and dtype are capped at `refine_cap_factor` x
-  round-0 cells (preview 1.0, coarse 1.0, deep 2.0; round-0 cells counted whether measured now or
+  round-0 cells (preview 3.0, coarse 1.0, deep 2.0; round-0 cells counted whether measured now or
   already current); past it the first cells in `refine_all_axes` order (flips, then margin hedges)
   run, refinement stops, and the run prints `refinement cap hit` and emits `refine_cap`.
 - **Per cell** (`plan_round`): over `--cap-gib` is `skip:cap`; a current record at the same or a

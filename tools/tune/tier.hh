@@ -50,7 +50,7 @@ struct TierParams {
 
 // custom has no fixed protocol (expert overrides): it takes the coarse values as its base.
 inline const TierParams& params(Tier t) {
-    static const TierParams preview{2, 1.1, 3, 6, 0.80, false, 0.02, 0.2, RefineMode::index, 0.10, 1.0};
+    static const TierParams preview{2, 1.1, 3, 6, 0.80, false, 0.02, 0.2, RefineMode::index, 0.10, 3.0};
     static const TierParams coarse{1, 1.1, 4, 12, 0.90, false, 0.02, 0.2, RefineMode::geometric, 0, 1.0};
     static const TierParams deep{1, 1.1, 6, 16, 0.98, true, 0.10, 0.2, RefineMode::geometric, 0, 2.0};
     switch (t) {

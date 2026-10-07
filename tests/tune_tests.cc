@@ -799,6 +799,9 @@ TEST(TuneTier, PrecedenceOrderAndRoundTrip) {
     for (Tier t : {Tier::preview, Tier::coarse, Tier::deep}) EXPECT_EQ(params(t).refine_ratio, 1.1);
     EXPECT_EQ(params(Tier::preview).refine_mode, RefineMode::index);
     EXPECT_EQ(params(Tier::preview).refine_margin, 0.10);
+    EXPECT_EQ(params(Tier::preview).refine_cap_factor, 3.0);
+    EXPECT_EQ(params(Tier::coarse).refine_cap_factor, 1.0);
+    EXPECT_EQ(params(Tier::deep).refine_cap_factor, 2.0);
     EXPECT_EQ(params(Tier::coarse).refine_mode, RefineMode::geometric);
     EXPECT_EQ(params(Tier::deep).refine_margin, 0.0);
     EXPECT_EQ(params(Tier::preview).max_reps, 6);
@@ -1334,20 +1337,20 @@ TEST(TuneGrid, NearTieAlternationIsNoFlip) {
     std::map<CellKey, RefineCell> one_end{{n_cell(1), timed({{"a", 1.0}, {"b", 1.2}})}, {n_cell(16), timed({{"b", 1.0}, {"a", 1.02}})}};
     for (RefineMode mode : {RefineMode::index, RefineMode::geometric}) {
         EXPECT_TRUE(refine_all_axes(ranked, kIndexAxes, 1.1, {mode, 0, &tie}).next.empty()) << "within the tie at both ends";
-        EXPECT_TRUE(refine_all_axes(ranked, kIndexAxes, 1.1, {mode, 0, &one_end}).next.empty()) << "decisive at one end only";
+        EXPECT_EQ(refine_all_axes(ranked, kIndexAxes, 1.1, {mode, 0, &one_end}).next.size(), 1u) << "decisive at one end: a flip";
         ASSERT_EQ(refine_all_axes(ranked, kIndexAxes, 1.1, {mode, 0, &real}).next.size(), 1u);
         EXPECT_EQ(key_arg(refine_all_axes(ranked, kIndexAxes, 1.1, {mode, 0, &real}).next[0]), "mode=x,n=4");
     }
     std::map<CellKey, RefineCell> edge{{n_cell(1), timed({{"a", 1.0}, {"b", 1.0301}})}, {n_cell(16), timed({{"b", 1.0}, {"a", 1.0301}})}};
     EXPECT_EQ(refine_all_axes(ranked, kIndexAxes, 1.1, {RefineMode::index, 0, &edge}).next.size(), 1u) << "just above the tie";
-    edge[n_cell(16)] = timed({{"b", 1.0}, {"a", 1.0299}});
+    edge = {{n_cell(1), timed({{"a", 1.0}, {"b", 1.0299}})}, {n_cell(16), timed({{"b", 1.0}, {"a", 1.0299}})}};
     EXPECT_TRUE(refine_all_axes(ranked, kIndexAxes, 1.1, {RefineMode::index, 0, &edge}).next.empty()) << "just below the tie";
 }
 
 TEST(TuneGrid, UntimedOtherWinnerFlipsOnlyWhenItCannotWinThere) {
     const std::map<CellKey, std::vector<std::string>> ranked{{n_cell(1), {"a", "b"}}, {n_cell(16), {"b"}}};
-    // At n=16 a has no time: not runnable or eliminated there is decisive, unknown is not.
-    std::map<CellKey, RefineCell> cells{{n_cell(1), timed({{"a", 1.0}, {"b", 1.5}})}, {n_cell(16), timed({{"b", 1.0}}, true, {"a"})}};
+    // n=1 is within the tie, so n=16 decides. There a has no time: not runnable or eliminated is decisive, unknown is not.
+    std::map<CellKey, RefineCell> cells{{n_cell(1), timed({{"a", 1.0}, {"b", 1.02}})}, {n_cell(16), timed({{"b", 1.0}}, true, {"a"})}};
     EXPECT_EQ(refine_all_axes(ranked, kIndexAxes, 1.1, {RefineMode::index, 0, &cells}).next.size(), 1u);
     cells[n_cell(16)] = timed({{"b", 1.0}});
     EXPECT_TRUE(refine_all_axes(ranked, kIndexAxes, 1.1, {RefineMode::index, 0, &cells}).next.empty());
@@ -2557,8 +2560,8 @@ TEST(TuneTieredDriver, PlanEstimateIncludesRefinement) {
     const std::string out = testing::internal::GetCapturedStdout();
     ::close(fd);
     const std::string ev = read_file(events);
-    // No history: refine_cap_factor 1.0 x 0.5 x 4 lattice cells.
-    EXPECT_NE(ev.find("\"refine_cells\": 2"), std::string::npos) << ev;
+    // No history: refine_cap_factor 3.0 x 0.5 x 4 lattice cells.
+    EXPECT_NE(ev.find("\"refine_cells\": 6"), std::string::npos) << ev;
     EXPECT_NE(ev.find("\"est_refine_s\""), std::string::npos) << ev;
     EXPECT_NE(out.find("with refinement"), std::string::npos) << out;
     EXPECT_NE(out.find("lattice only"), std::string::npos) << out;

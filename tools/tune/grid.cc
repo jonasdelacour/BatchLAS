@@ -132,7 +132,7 @@ RefineRound refine_all_axes(const std::map<CellKey, std::vector<std::string>>& r
                 const RefineCell *cl = info_of(opts, at(lo.n)), *ch = info_of(opts, at(hi.n));
                 bool flip = lo.winner != hi.winner;
                 if (flip && cl && ch)
-                    flip = decisive(*cl, lo.winner, hi.winner, opts.tie) && decisive(*ch, hi.winner, lo.winner, opts.tie);
+                    flip = decisive(*cl, lo.winner, hi.winner, opts.tie) || decisive(*ch, hi.winner, lo.winner, opts.tie);
                 const bool near = !flip && opts.margin > 0 && cl && ch && cl->lattice && ch->lattice &&
                                   (runner_up_gap(*cl, lo.winner) <= opts.margin || runner_up_gap(*ch, hi.winner) <= opts.margin);
                 if (!flip && !near) continue;

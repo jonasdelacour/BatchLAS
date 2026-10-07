@@ -42,7 +42,7 @@ struct RefineCell {
     bool lattice = false;              // a starting-lattice (round 0) cell of this run
 };
 
-// Flips (both ends decisive by > tie) and margin hedges (two lattice ends) refine; index mode refills
+// Flips (decisive by > tie at either end) and margin hedges (two lattice ends) refine; index mode refills
 // AxisSpec::values, then geometric; `batch` only refills. The rules: the evidence page above.
 struct RefineOpts {
     RefineMode mode = RefineMode::geometric;
