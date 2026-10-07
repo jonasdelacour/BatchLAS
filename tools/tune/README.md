@@ -300,3 +300,13 @@ trsm's choices (plan §2 "Coupling"), which the hash does not follow yet. trsm's
 kernels (not the vendor TU); its `uplo` and `diag` are hidden grid axes fixed at L and N (not table
 keys, plan §1.2), its `trans=T` times ConjTrans for a complex scalar, and trsm has no workspace,
 so a pin is probed by one untimed run instead of a sizing call.
+
+gemv, trmm, symm, syrk and syr2k take no workspace either and are probed the same way. Their
+non-key arguments are fixed: trmm uplo L, trans N, diag N; symm side L, uplo L; syrk uplo L; syr2k
+uplo L, trans N; gemv's `trans=T` times ConjTrans for a complex scalar. Inputs carry large finite
+poison in the triangle an op must not read (A for trmm and symm) or write (C for syrk and syr2k: a
+changed element is a nonzero info), and trmm's output is re-poisoned before every run. symm, syrk
+and syr2k are real-only: `--dtype cfloat` is refused and `--list` prints `-`. symm and syrk key on
+`form`, which `form_of` derives from the extents, so their `grid()` holds only the consistent cells
+of the lattice (`--grid` filters it, as gemm's does). trmm's and symm's `expand` call the public
+gemm, so their deps list gemm's kernels and `gemm.cc`, and their tables should be tuned after gemm's.

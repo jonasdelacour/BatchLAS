@@ -1054,8 +1054,13 @@ int list_main(const std::string& repo) {
         const auto hash = kernel_hash(repo, s->kernel_sources(), &missing);
         std::printf("%s keys: %s kernels=%s\n", s->op().c_str(), join(s->key_names(), " ").c_str(),
                     hash ? hash->c_str() : ("missing " + missing).c_str());
-        for (const char* d : {"float", "double", "cfloat", "cdouble"})
-            std::printf("  %-7s %s\n", d, join(s->candidates(d), " ").c_str());
+        for (const char* d : {"float", "double", "cfloat", "cdouble"}) {
+            try {
+                std::printf("  %-7s %s\n", d, join(s->candidates(d), " ").c_str());
+            } catch (const std::invalid_argument&) {
+                std::printf("  %-7s -\n", d);  // a real-only op
+            }
+        }
     }
     return 0;
 }
@@ -1186,7 +1191,13 @@ int main(int argc, char** argv) {
     if (!tiered && (o.plan || o.budget_h > 0 || o.progress_fd >= 0)) die("--plan, --budget and --progress-fd need --tier");
     for (const std::string& op : o.ops) {
         const OpSpec* s = find_spec(op);
-        for (const auto& d : o.dtypes) (void)s->candidates(d);
+        for (const auto& d : o.dtypes) {
+            try {
+                (void)s->candidates(d);
+            } catch (const std::invalid_argument& e) {
+                die(e.what());
+            }
+        }
         std::ifstream f(o.repo + "/" + s->spec_file());
         std::stringstream ss;
         ss << f.rdbuf();

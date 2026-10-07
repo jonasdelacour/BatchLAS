@@ -177,7 +177,7 @@ TEST(TuneHash, Sha256KnownVectorsAndTheKernelManifest) {
 
 TEST(TuneHash, EverySpecListsExistingFilesAndAgreesWithTheCiChecker) {
     const std::string repo = BATCHLAS_TUNE_SOURCE_DIR;
-    for (const char* op : {"potrf", "posv"}) {
+    for (const char* op : {"potrf", "posv", "gemv", "trmm", "symm", "syrk", "syr2k"}) {
         const auto list = parse_kernel_list(read_file(fs::path(repo) / "tools/tune" / (std::string(op) + "_spec.cc")));
         ASSERT_FALSE(list.empty()) << op;
         std::string missing;
@@ -326,6 +326,25 @@ TEST(TuneHash, SpecsDeclareTheirFamilies) {
         const auto& d = posv.deps.at(f);
         EXPECT_NE(std::find(d.begin(), d.end(), "src/extensions/potrf_cta.cc"), d.end()) << f;
         EXPECT_NE(std::find(d.begin(), d.end(), "src/sycl/trsm_native.cc"), d.end()) << f;
+    }
+    // gemv cta and direct share gemv_native.cc: common only, like gemm direct.
+    for (const char* op : {"gemv", "trmm", "symm", "syrk", "syr2k"}) {
+        const auto dc = block(op).deps_common;
+        EXPECT_NE(std::find(dc.begin(), dc.end(), "src/ops/" + std::string(op) + "/" + op + ".cc"), dc.end()) << op;
+    }
+    for (const char* f : {"triangular", "expand"}) EXPECT_TRUE(block("trmm").family.count(f)) << f;
+    EXPECT_TRUE(block("symm").family.count("expand"));
+    for (const char* f : {"gram", "triangular"}) EXPECT_TRUE(block("syrk").family.count(f)) << f;
+    EXPECT_TRUE(block("syr2k").family.count("triangular"));
+    // syrk's two tile kernels share triangular_tiles.hh: common, never one family's.
+    const auto syrk_common = block("syrk").common;
+    EXPECT_NE(std::find(syrk_common.begin(), syrk_common.end(), "src/backends/triangular_tiles.hh"), syrk_common.end());
+    for (const char* op : {"trmm", "symm"}) {  // expand calls the public gemm: gemm's kernels and can_run count
+        const KernelBlock b = block(op);
+        ASSERT_TRUE(b.deps.count("expand")) << op;
+        const auto& d = b.deps.at("expand");
+        for (const char* g : {"src/sycl/gemm_kernels.cc", "src/ops/gemm/gemm.cc"})
+            EXPECT_NE(std::find(d.begin(), d.end(), g), d.end()) << op << " " << g;
     }
 }
 
@@ -504,7 +523,7 @@ TEST(TuneHash, CmakeStalenessHashAgreesWithTheDriver) {
     const fs::path d = scratch("cmake_hash");
     std::ofstream(d / "hash.cmake") << "include(\"" << repo << "/cmake/BatchLASTunedStaleness.cmake\")\n"
                                     << "_batchlas_tune_kernel_hash(\"${SPEC}\" h)\nmessage(\"HASH=${h}\")\n";
-    for (const char* op : {"potrf", "posv"}) {
+    for (const char* op : {"potrf", "posv", "gemv", "trmm", "symm", "syrk", "syr2k"}) {
         const std::string spec = repo + "/tools/tune/" + op + "_spec.cc";
         const std::string out = run("'" + cmake + "' -DPROJECT_SOURCE_DIR='" + repo + "' -DSPEC='" + spec + "' -P '" +
                                     (d / "hash.cmake").string() + "' 2>&1");
