@@ -209,7 +209,7 @@ std::size_t nearest_row(const std::vector<CellKey>& rows, const CellKey& key, co
 }
 
 ReplayReport replay(const std::vector<ReplayCell>& cells, const std::vector<AxisSpec>& axes, Tier, const TierParams& p,
-                    double tie) {
+                    double tie, const RefineOpts& ro) {
     ReplayReport rep;
     rep.cells = cells.size();
     std::map<CellKey, std::size_t> at;
@@ -224,6 +224,9 @@ ReplayReport replay(const std::vector<ReplayCell>& cells, const std::vector<Axis
     }
 
     std::map<CellKey, std::vector<std::string>> ranked;
+    std::map<CellKey, double> gap;
+    RefineOpts opts = ro;
+    opts.gap = &gap;
     auto measure = [&](const CellKey& key) {
         const ReplayCell& c = cells[at.at(key)];
         RaceState s;
@@ -239,6 +242,18 @@ ReplayReport replay(const std::vector<ReplayCell>& cells, const std::vector<Axis
             if (race_step(s, p, tie) != RaceVerdict::more) break;
         }
         ranked[key] = race_ranking(s, order, tie);
+        std::vector<double> med;
+        for (std::size_t k = 0; k < c.cands.size(); ++k) {
+            std::vector<double> v;
+            for (double x : s.ms[k])
+                if (!std::isnan(x)) v.push_back(x);
+            med.push_back(median(v));
+        }
+        const std::size_t w = std::size_t(std::find(c.cands.begin(), c.cands.end(), ranked[key].front()) - c.cands.begin());
+        double g = std::numeric_limits<double>::infinity();
+        for (std::size_t k = 0; k < c.cands.size(); ++k)
+            if (k != w && !std::isnan(med[k]) && !std::isnan(med[w])) g = std::min(g, std::max(0.0, med[k] / med[w] - 1));
+        gap[key] = g;
     };
 
     std::vector<CellKey> todo;
@@ -248,7 +263,7 @@ ReplayReport replay(const std::vector<ReplayCell>& cells, const std::vector<Axis
     while (!todo.empty()) {
         for (const CellKey& k : todo) measure(k);
         todo.clear();
-        for (CellKey& k : refine_all_axes(ranked, axes, p.refine_ratio).next) {
+        for (CellKey& k : refine_all_axes(ranked, axes, p.refine_ratio, opts).next) {
             if (unavailable.count(k)) continue;
             if (at.count(k)) todo.push_back(std::move(k));
             else unavailable.insert(std::move(k));

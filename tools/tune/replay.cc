@@ -1,5 +1,5 @@
 // tune_replay: runs the tiered tuner's race and bisection against an exhaustive raw sweep, no GPU.
-//   tune_replay --raw <jsonl> --tier ultra|coarse|deep [--confidence x] [--min-reps n] [--max-reps n] [--stride n] [--refine r] [--exhaustive-gpu-h h] [--axis-keep name=v:v] [--axis-stride name=k] [--print-axes]
+//   tune_replay --raw <jsonl> --tier ultra|coarse|deep [--confidence x] [--min-reps n] [--max-reps n] [--stride n] [--refine r] [--exhaustive-gpu-h h] [--axis-keep name=v:v] [--axis-stride name=k] [--refine-mode geometric|index] [--refine-margin m] [--print-axes]
 // Prints the ReplayReport as one JSON line (docs/design/tiered-tuning.md).
 
 #include "replay_core.hh"
@@ -19,6 +19,7 @@ int main(int argc, char** argv) {
     std::optional<double> refine;
     double gpu_h = 0;
     bool print_axes = false;
+    RefineOpts ro;
     std::vector<std::pair<std::string, std::pair<std::string, bool>>> shrink;  // axis, spec, keep
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -34,6 +35,8 @@ int main(int argc, char** argv) {
         else if (a == "--confidence") confidence = std::stod(next());
         else if (a == "--min-reps") min_reps = std::stoi(next());
         else if (a == "--max-reps") max_reps = std::stoi(next());
+        else if (a == "--refine-mode") ro.mode = next() == "index" ? RefineMode::index : RefineMode::geometric;
+        else if (a == "--refine-margin") ro.margin = std::stod(next());
         else if (a == "--print-axes") print_axes = true;
         else if (a == "--axis-keep" || a == "--axis-stride") {
             const std::string v = next();
@@ -55,7 +58,7 @@ int main(int argc, char** argv) {
     const auto tier = parse_tier(tier_name);
     if (raw.empty() || !tier || *tier == Tier::transcribed || *tier == Tier::custom) {
         std::fprintf(stderr, "usage: tune_replay --raw <jsonl> --tier ultra|coarse|deep [--confidence x] [--min-reps n] "
-                             "[--max-reps n] [--stride n] [--refine r] [--exhaustive-gpu-h h] [--axis-keep name=v:v] [--axis-stride name=k] [--print-axes]\n");
+                             "[--max-reps n] [--stride n] [--refine r] [--exhaustive-gpu-h h] [--axis-keep name=v:v] [--axis-stride name=k] [--refine-mode geometric|index] [--refine-margin m] [--print-axes]\n");
         return 2;
     }
     p = params(*tier);
@@ -76,7 +79,7 @@ int main(int argc, char** argv) {
             return 0;
         }
         for (const auto& [name, sv] : shrink) shrink_axis(meta.axes, name, sv.first, sv.second);
-        ReplayReport r = replay(cells, meta.axes, *tier, p);
+        ReplayReport r = replay(cells, meta.axes, *tier, p, 0.03, ro);
         r.est_gpu_h = r.reps_fraction * gpu_h;
         std::string worst;
         for (const std::string& w : r.worst) worst += (worst.empty() ? "" : "; ") + w;

@@ -923,3 +923,45 @@ TEST(TuneReplay, NearestRowMatchesTheConverterRule) {
     // log integers) order, not to the caller's order.
     EXPECT_EQ(pick({{"R", "N", "4", "1"}, {"L", "N", "4", "1"}}, {"Z", "N", "4", "1"}), 1u);
 }
+
+namespace {
+
+const std::vector<AxisSpec> kIndexAxes{{"mode", false, {"x"}}, {"n", true, {"1", "2", "4", "8", "16", "32", "64", "128"}}};
+
+CellKey n_cell(int n) { return {{"mode", "x"}, {"n", std::to_string(n)}}; }
+
+}  // namespace
+
+TEST(TuneGrid, IndexModeRefillsTheLatticeWhereWinnersDiffer) {
+    const RefineOpts index{RefineMode::index};
+    std::map<CellKey, std::vector<std::string>> ranked;
+    for (int n : {1, 16, 128}) ranked[n_cell(n)] = {n <= 8 ? "a" : "b"};
+    auto round = refine_all_axes(ranked, kIndexAxes, 1.1, index);
+    ASSERT_EQ(round.next.size(), 1u);
+    EXPECT_EQ(key_arg(round.next[0]), "mode=x,n=4") << "index 2 between index 0 and 4, not the geometric 4 by luck";
+    ranked[n_cell(4)] = {"a"};
+    round = refine_all_axes(ranked, kIndexAxes, 1.1, index);
+    ASSERT_EQ(round.next.size(), 1u);
+    EXPECT_EQ(key_arg(round.next[0]), "mode=x,n=8");
+    ranked[n_cell(8)] = {"a"};
+    round = refine_all_axes(ranked, kIndexAxes, 1.1, index);  // 8 and 16 are adjacent: the geometric midpoint
+    ASSERT_EQ(round.next.size(), 1u);
+    EXPECT_EQ(key_arg(round.next[0]), "mode=x,n=11");
+    EXPECT_TRUE(refine_all_axes(ranked, kIndexAxes, 0, index).next.size() == 0u) << "adjacent and ratio 0: nothing off the lattice";
+}
+
+TEST(TuneGrid, IndexModeSeesAFlipInsideAStrideFourBracket) {
+    // Winners a at 1, a at 16: the geometric rule sees agreement. Only the margin trigger refines.
+    const std::map<CellKey, std::vector<std::string>> ranked{{n_cell(1), {"a"}}, {n_cell(16), {"a"}}};
+    EXPECT_TRUE(refine_all_axes(ranked, kIndexAxes, 1.1, {RefineMode::index}).next.empty());
+    std::map<CellKey, double> close{{n_cell(1), 0.02}, {n_cell(16), 0.5}}, far{{n_cell(1), 0.30}, {n_cell(16), 0.5}};
+    RefineOpts o{RefineMode::index, 0.05, &close};
+    const auto r = refine_all_axes(ranked, kIndexAxes, 1.1, o);
+    ASSERT_EQ(r.next.size(), 1u);
+    EXPECT_EQ(key_arg(r.next[0]), "mode=x,n=4");
+    o.gap = &far;
+    EXPECT_TRUE(refine_all_axes(ranked, kIndexAxes, 1.1, o).next.empty());
+    o.margin = 0.05, o.gap = &close;
+    o.mode = RefineMode::geometric;
+    EXPECT_EQ(key_arg(refine_all_axes(ranked, kIndexAxes, 1.1, o).next.at(0)), "mode=x,n=4") << "geometric midpoint of 1 and 16";
+}

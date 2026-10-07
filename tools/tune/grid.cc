@@ -1,6 +1,7 @@
 #include "grid.hh"
 
 #include <algorithm>
+#include <limits>
 #include <set>
 
 namespace batchlas::tune {
@@ -63,10 +64,16 @@ std::vector<CellKey> tier_subsample(const std::vector<CellKey>& grid, Tier t) {
 }
 
 RefineRound refine_all_axes(const std::map<CellKey, std::vector<std::string>>& ranked,
-                                     const std::vector<AxisSpec>& axes, double ratio) {
+                            const std::vector<AxisSpec>& axes, double ratio, const RefineOpts& opts) {
     RefineRound out;
-    if (ratio <= 0) return out;
+    const bool plain = opts.mode == RefineMode::geometric && opts.margin <= 0;
+    if (opts.mode == RefineMode::geometric && ratio <= 0) return out;
     std::set<CellKey> seen;
+    auto gap_of = [&](const CellKey& k) -> double {
+        if (!opts.gap) return std::numeric_limits<double>::infinity();
+        const auto it = opts.gap->find(k);
+        return it == opts.gap->end() ? std::numeric_limits<double>::infinity() : it->second;
+    };
     for (const AxisSpec& a : axes) {
         if (!a.log) continue;
         // line = cells equal in every key but a.name, keyed by that remainder
@@ -83,7 +90,29 @@ RefineRound refine_all_axes(const std::map<CellKey, std::vector<std::string>>& r
         }
         for (auto& [rest, pts] : lines) {
             std::sort(pts.begin(), pts.end(), [](const LinePoint& x, const LinePoint& y) { return x.n < y.n; });
-            for (std::int64_t mid : refine_midpoints(pts, ratio)) {
+            std::vector<std::int64_t> mids;
+            if (plain) {
+                mids = refine_midpoints(pts, ratio);
+            } else {
+                auto index_of = [&](std::int64_t n) {
+                    for (std::size_t i = 0; i < a.values.size(); ++i)
+                        if (std::stoll(a.values[i]) == n) return std::int64_t(i);
+                    return std::int64_t(-1);
+                };
+                auto at = [&](std::int64_t n) { return key_with(sample[rest], a.name, std::to_string(n)); };
+                for (std::size_t i = 0; i + 1 < pts.size(); ++i) {
+                    const LinePoint &lo = pts[i], &hi = pts[i + 1];
+                    const bool near = opts.margin > 0 && (gap_of(at(lo.n)) <= opts.margin || gap_of(at(hi.n)) <= opts.margin);
+                    if (lo.winner == hi.winner && !near) continue;
+                    const std::int64_t li = index_of(lo.n), hj = index_of(hi.n);
+                    if (opts.mode == RefineMode::index && li >= 0 && hj - li > 1) {
+                        mids.push_back(std::stoll(a.values[std::size_t((li + hj) / 2)]));
+                    } else if (ratio > 0) {
+                        for (std::int64_t m : refine_midpoints({{lo.n, "lo"}, {hi.n, "hi"}}, ratio)) mids.push_back(m);
+                    }
+                }
+            }
+            for (std::int64_t mid : mids) {
                 CellKey k = key_with(sample[rest], a.name, std::to_string(mid));
                 if (!ranked.count(k)) {
                     if (seen.insert(k).second) out.next.push_back(std::move(k));

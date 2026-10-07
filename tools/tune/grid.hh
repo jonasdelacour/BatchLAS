@@ -34,9 +34,17 @@ std::vector<CellKey> tier_lattice(const std::vector<AxisSpec>& axes, Tier t);
 // For grids that are not lattices: keep a cell when fnv1a64(key_arg(cell)) % stride == 0.
 std::vector<CellKey> tier_subsample(const std::vector<CellKey>& grid, Tier t);
 
-// RefineRound::next = new cells to measure: per log axis and per line (cells equal in every other key), the midpoints
-// between neighbours whose winners (ranked.front()) differ; stalled = midpoint exists without a winner. Ratio 0 = off.
+// index mode bisects in AxisSpec::values (adjacent: geometric); margin > 0 also refines agreeing brackets
+// whose runner-up gap (time / winner time - 1) is <= margin at either end.
+enum class RefineMode { geometric, index };
+struct RefineOpts {
+    RefineMode mode = RefineMode::geometric;
+    double margin = 0;
+    const std::map<CellKey, double>* gap = nullptr;  // per cell; a missing cell has an infinite gap
+};
+
+// RefineRound::next = midpoints between neighbours with different winners; stalled = midpoint without a winner.
 RefineRound refine_all_axes(const std::map<CellKey, std::vector<std::string>>& ranked,
-                                     const std::vector<AxisSpec>& axes, double ratio);
+                            const std::vector<AxisSpec>& axes, double ratio, const RefineOpts& opts = {});
 
 }  // namespace batchlas::tune

@@ -384,6 +384,42 @@ order stride 2 costs 0.31 and 0.60 GPU-h and misranks 7.8% and 9.7%, the same as
 tier. No shrunken grid in this sweep meets the 1% table bound; the baseline does, at 1.72 and 3.35
 GPU-h.
 
+## Engine: replay of index-space refinement
+
+`refine_all_axes` has a second mode (`RefineOpts`, `tune_replay --refine-mode index`). Between two
+measured neighbours at positions i < j of the axis's full value list with j - i > 1 it proposes the value
+at (i + j) / 2, so every proposal is on the `choice.hh` lattice; adjacent neighbours fall back to the
+geometric midpoint at the tier's ratio. `--refine-margin m` also refines a bracket whose two winners
+agree when, at either end, the runner-up's raced median is within m of the winner's (the replay passes
+this per-cell gap in `RefineOpts::gap`). Exact axes are never bisected. Every row uses the ultra race
+parameters, bisection ratio 1.1 and the full axes; `s2` and `s4` are the starting lattice stride on every
+log axis. Same machine, data and metrics as above.
+
+| config | dtype | measured | est_gpu_h | table_misrank % | lattice % | mean_loss | p99_loss | max_loss | tw_loss |
+|---|---|---|---|---|---|---|---|---|---|
+| baseline (s1 geometric 1.1) | float | 4390 | 1.72 | 0.29 | 0.17 | 0.0006 | 0.021 | 0.08 | 0.0004 |
+| baseline (s1 geometric 1.1) | double | 4088 | 3.35 | 0.02 | 0.00 | 0.0004 | 0.014 | 0.08 | 0.0002 |
+| s2 index | float | 1412 | 0.54 | 6.72 | 6.38 | 0.0281 | 0.938 | 2.18 | 0.0112 |
+| s2 index | double | 1096 | 0.92 | 5.78 | 3.60 | 0.0202 | 0.639 | 1.95 | 0.0062 |
+| s2 index margin 0.05 | float | 2542 | 1.06 | 4.25 | 4.45 | 0.0219 | 0.785 | 2.17 | 0.0126 |
+| s2 index margin 0.05 | double | 2214 | 2.11 | 5.22 | 4.78 | 0.0222 | 0.733 | 3.27 | 0.0059 |
+| s2 index margin 0.10 | float | 2818 | 1.17 | 3.59 | 3.59 | 0.0190 | 0.800 | 2.11 | 0.0118 |
+| s2 index margin 0.10 | double | 2363 | 2.22 | 4.34 | 3.85 | 0.0186 | 0.604 | 3.27 | 0.0046 |
+| s4 index | float | 612 | 0.23 | 13.32 | 12.67 | 0.0579 | 1.242 | 2.99 | 0.0526 |
+| s4 index | double | 501 | 0.43 | 10.42 | 7.58 | 0.0487 | 1.037 | 3.10 | 0.0075 |
+| s4 index margin 0.05 | float | 1566 | 0.70 | 11.10 | 10.89 | 0.0598 | 1.404 | 2.77 | 0.0354 |
+| s4 index margin 0.05 | double | 1402 | 1.44 | 6.76 | 6.18 | 0.0242 | 0.716 | 1.41 | 0.0059 |
+| s4 index margin 0.10 | float | 1812 | 0.80 | 9.07 | 9.17 | 0.0477 | 1.304 | 2.76 | 0.0348 |
+| s4 index margin 0.10 | double | 1434 | 1.46 | 6.81 | 6.31 | 0.0247 | 0.716 | 1.31 | 0.0070 |
+
+Reading it: index refinement at stride 2 refills the lattice for 0.54 and 0.92 GPU-h and misranks 6.7%
+and 5.8%, against 7.9% and 9.7% for the geometric stride-2 rows above. The margin trigger buys a few
+points more at about twice the cost (margin 0.10: 3.6% and 4.3% for 1.17 and 2.22 GPU-h). Stride 4 stays
+at 7 to 13%. None of these comes near the 1% table bound that the full lattice meets at 1.72 and 3.35
+GPU-h, and p99 loss stays near 0.6 to 1.4 in every sparse row: the replay can bisect only along `order`
+in the raw files, so the q and batch refills here are limited to cells the raw file holds, and a flip
+between two lattice points on those axes is still left to the nearest-cell rule.
+
 ## Tiered tuning: open risks
 
 - Racing assumes timing noise is roughly stationary within a cell. Clock ramps after idle gaps

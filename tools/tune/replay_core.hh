@@ -48,7 +48,7 @@ struct ReplayReport {
 };
 
 ReplayReport replay(const std::vector<ReplayCell>& cells, const std::vector<AxisSpec>& axes, Tier t,
-                    const TierParams& p, double tie = 0.03);
+                    const TierParams& p, double tie = 0.03, const RefineOpts& ro = {});
 ReplayReport replay(const std::vector<ReplayCell>& cells, const std::vector<AxisSpec>& axes, Tier t, double tie = 0.03);
 
 // "--axis-keep name=v1:v2" / "--axis-stride name=k": shrink one axis's starting lattice in place
