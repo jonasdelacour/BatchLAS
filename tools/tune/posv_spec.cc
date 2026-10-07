@@ -101,6 +101,7 @@ public:
         };
         // kernel-sources-end
         // kernel-deps-begin
+        // family: tiny "src/extensions/tiny_device.hh" "src/extensions/potrf_native.hh"
         // posv cta and blocked call the public potrf and trsm: their native kernels count too.
         // family: cta "src/extensions/potrf_tiny.cc" "src/extensions/potrf_cta.cc" "src/extensions/potrf_cta_device.hh" "src/extensions/potrf_lpanel.cc" "src/extensions/potrf_lpanel_device.hh" "src/extensions/potrf_blocked.cc" "src/extensions/potrf_native.hh" "src/extensions/potrf_slm_hole.hh" "src/ops/potrf/choice.hh"
         // family: cta "src/sycl/trsm_native.cc" "src/sycl/trsm_native.hh" "src/sycl/trsm_sg_left.cc" "src/sycl/trsm_canonical.hh" "src/ops/trsm/choice.hh"

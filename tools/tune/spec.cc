@@ -1,12 +1,6 @@
 #include "spec.hh"
 
-#ifndef BATCHLAS_TUNE_SOURCE_DIR
-#define BATCHLAS_TUNE_SOURCE_DIR "."
-#endif
-
 #include <algorithm>
-#include <fstream>
-#include <sstream>
 #include <stdexcept>
 
 namespace batchlas::tune {
@@ -28,16 +22,10 @@ const OpSpec* find_spec(std::string_view op) {
 
 std::vector<const OpSpec*> all_specs() { return registry(); }
 
-KernelBlock OpSpec::kernel_block() const {
-    std::ifstream f(std::string(BATCHLAS_TUNE_SOURCE_DIR) + "/" + spec_file());
-    if (!f) throw std::runtime_error("cannot read " + spec_file());
-    std::ostringstream ss;
-    ss << f.rdbuf();
-    return parse_kernel_block(ss.str());
-}
+KernelBlock OpSpec::kernel_block(const std::string& repo) const { return kernel_block_from_file(repo, spec_file()); }
 
-std::map<std::string, std::vector<std::string>> OpSpec::family_sources() const {
-    const KernelBlock b = kernel_block();
+std::map<std::string, std::vector<std::string>> OpSpec::family_sources(const std::string& repo) const {
+    const KernelBlock b = kernel_block(repo);
     std::map<std::string, std::vector<std::string>> out = b.family;
     for (const auto& [fam, files] : b.deps) out[fam].insert(out[fam].end(), files.begin(), files.end());
     return out;

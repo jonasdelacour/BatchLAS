@@ -203,6 +203,39 @@ TEST(TuneHash, UnprefixedLinesAreCommon) {
     EXPECT_EQ(parse_kernel_list(spec), b.all);
 }
 
+TEST(TuneHash, MarkersAnchorToTheStartOfTheLine) {
+    const std::string spec = "// kernel-sources-begin\n  // family: cta\n  \"a.cc\",  // family: tiny\n"
+                             "  // common helpers\n  \"b.cc\",\n  // common\n  \"c.cc\",\n"
+                             "// kernel-sources-end\n";
+    const KernelBlock b = parse_kernel_block(spec);
+    EXPECT_EQ(b.family.at("cta"), (std::vector<std::string>{"a.cc", "b.cc"}));
+    EXPECT_EQ(b.family.count("tiny"), 0u);
+    EXPECT_EQ(b.common, (std::vector<std::string>{"c.cc"}));
+}
+
+TEST(TuneHash, KernelBlockFromFileMergesDeps) {
+    const fs::path d = scratch("blockfile");
+    fs::create_directories(d / "tools/tune");
+    std::ofstream(d / "k.hh") << "k";
+    std::ofstream(d / "f.cc") << "f";
+    std::ofstream(d / "dep.cc") << "dep";
+    std::ofstream(d / "tools/tune/x_spec.cc")
+        << "// kernel-sources-begin\n\"k.hh\",\n// family: fam\n\"f.cc\",\n// kernel-sources-end\n"
+           "// kernel-deps-begin\n// family: fam \"dep.cc\"\n// kernel-deps-end\n";
+    const KernelBlock b = kernel_block_from_file(d.string(), "tools/tune/x_spec.cc");
+    EXPECT_EQ(b.common, (std::vector<std::string>{"k.hh"}));
+    EXPECT_EQ(b.family.at("fam"), (std::vector<std::string>{"f.cc"}));
+    EXPECT_EQ(b.deps.at("fam"), (std::vector<std::string>{"dep.cc"}));
+    const auto h = family_hashes(d.string(), b, {"fam"});
+    EXPECT_EQ(h.at("fam"), *kernel_hash(d.string(), {"k.hh", "f.cc", "dep.cc"}));
+    try {
+        kernel_block_from_file(d.string(), "tools/tune/nope_spec.cc");
+        FAIL() << "expected a throw";
+    } catch (const std::runtime_error& e) {
+        EXPECT_NE(std::string(e.what()).find("tools/tune/nope_spec.cc"), std::string::npos);
+    }
+}
+
 TEST(TuneHash, EditingOneFamilyFileChangesOnlyThatFamily) {
     const fs::path d = scratch("famhash");
     std::ofstream(d / "common.hh") << "c";

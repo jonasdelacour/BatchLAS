@@ -126,6 +126,9 @@ struct KernelBlock {
 };
 KernelBlock parse_kernel_block(std::string_view spec_source);
 
+// parse_kernel_block of <repo>/<spec_file>; throws std::runtime_error naming the path if unreadable.
+KernelBlock kernel_block_from_file(const std::string& repo, const std::string& spec_file);
+
 // kernel_hash over common + family files + deps, per family; a family with no section hashes common
 // only. Throws std::runtime_error naming a missing file.
 std::map<std::string, std::string> family_hashes(const std::string& repo, const KernelBlock& b,

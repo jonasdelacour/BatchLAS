@@ -94,6 +94,10 @@ public:
             "src/ops/potrf/choice.hh",
         };
         // kernel-sources-end
+        // kernel-deps-begin
+        // family: tiny "src/extensions/tiny_device.hh"
+        // family: blocked "src/extensions/symmetric_product_fold.hh" "src/sycl/trsm_native.hh"
+        // kernel-deps-end
     }
     std::string spec_file() const override { return "tools/tune/potrf_spec.cc"; }
     std::string normalize_route(const std::string& origin, const std::string& algo) const override {

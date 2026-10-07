@@ -477,15 +477,22 @@ std::vector<std::string> quoted_paths(const std::string& line) {
 
 // "// family: name" -> name; empty when the line is not a family marker.
 std::string family_marker(const std::string& line) {
-    const std::size_t c = line.find("//");
-    if (c == std::string::npos) return {};
-    const std::size_t f = line.find("family:", c);
-    if (f == std::string::npos) return {};
-    std::size_t a = f + 7;
+    std::size_t c = line.find_first_not_of(" \t");
+    if (c == std::string::npos || line.compare(c, 2, "//") != 0) return {};
+    c = line.find_first_not_of(" \t", c + 2);
+    if (c == std::string::npos || line.compare(c, 7, "family:") != 0) return {};
+    std::size_t a = c + 7;
     while (a < line.size() && line[a] == ' ') ++a;
     std::size_t e = a;
     while (e < line.size() && line[e] != ' ' && line[e] != '"') ++e;
     return line.substr(a, e - a);
+}
+
+// A line that is exactly "// common" (trailing words or a path on the line do not count).
+bool is_common_marker(const std::string& line) {
+    const std::size_t a = line.find_first_not_of(" \t");
+    const std::size_t e = line.find_last_not_of(" \t\r");
+    return a != std::string::npos && line.substr(a, e - a + 1) == "// common";
 }
 }  // namespace
 
@@ -519,7 +526,7 @@ KernelBlock parse_kernel_block(std::string_view spec_source) {
         }
         if (!fam.empty())
             section = fam;
-        else if (line.find("// common") != std::string::npos && line.find('"') == std::string::npos)
+        else if (is_common_marker(line))
             section.clear();
         for (std::string& p : quoted_paths(line)) {
             out.all.push_back(p);
@@ -527,6 +534,15 @@ KernelBlock parse_kernel_block(std::string_view spec_source) {
         }
     }
     return out;
+}
+
+KernelBlock kernel_block_from_file(const std::string& repo, const std::string& spec_file) {
+    const std::string path = repo + "/" + spec_file;
+    std::ifstream f(path);
+    if (!f) throw std::runtime_error("cannot read " + path);
+    std::ostringstream ss;
+    ss << f.rdbuf();
+    return parse_kernel_block(ss.str());
 }
 
 std::vector<std::string> parse_kernel_list(std::string_view spec_source) {
